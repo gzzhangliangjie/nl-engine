@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nanite × Lumen 手撸知识库</title>
+<style>
+  :root{
+    --bg:#f6f7f9;
+    --panel:#ffffff;
+    --ink:#1b1f24;
+    --ink-2:#3d4653;
+    --muted:#6b7482;
+    --line:#e4e8ee;
+    --accent:#2f6fed;
+    --accent-soft:#edf2ff;
+    --teal:#0e9384;
+    --teal-soft:#e8f7f4;
+    --amber:#b4690e;
+    --amber-soft:#fdf4e6;
+    --purple:#7a4ddb;
+    --purple-soft:#f2edff;
+    --radius:12px;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75;
+  }
+  /* ---------- layout ---------- */
+  .shell{display:flex;min-height:100vh}
+  aside{
+    width:264px;flex:0 0 264px;background:var(--panel);border-right:1px solid var(--line);
+    position:sticky;top:0;height:100vh;overflow-y:auto;padding:22px 16px 40px;
+  }
+  .brand{font-weight:700;font-size:16px;letter-spacing:.2px;margin:0 0 2px 6px}
+  .brand small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:.4px;margin-top:4px}
+  nav{margin-top:22px}
+  nav a{
+    display:flex;gap:10px;align-items:center;
+    padding:8px 10px;margin-bottom:2px;border-radius:8px;
+    color:var(--ink-2);text-decoration:none;font-size:13.5px;transition:.15s;
+  }
+  nav a .num{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    width:20px;flex:0 0 20px;text-align:right;
+  }
+  nav a:hover{background:#f2f4f8;color:var(--ink)}
+  nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  nav a.active .num{color:var(--accent)}
+  .aside-foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.7}
+  .aside-foot b{color:var(--ink-2);font-weight:600}
+
+  main{flex:1;min-width:0;padding:34px 44px 120px;max-width:1080px}
+  .page{display:none;animation:fade .25s ease}
+  .page.show{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  h1{font-size:28px;line-height:1.35;margin:0 0 8px;letter-spacing:-.3px}
+  h2{font-size:20px;margin:38px 0 12px;letter-spacing:-.2px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:24px 0 8px}
+  h4{font-size:14px;margin:18px 0 6px;color:var(--ink-2)}
+  p{margin:10px 0}
+  .lede{color:var(--muted);font-size:15px;margin:0 0 6px}
+  .kicker{
+    display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:1.2px;
+    color:var(--accent);background:var(--accent-soft);padding:3px 8px;border-radius:5px;
+    margin-bottom:12px;text-transform:uppercase;
+  }
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{
+    font-family:var(--mono);font-size:.88em;background:#eef1f6;
+    padding:1.5px 5px;border-radius:4px;color:#2b3a55;
+  }
+  pre{
+    background:#1d2330;color:#dfe4ee;padding:16px 18px;border-radius:10px;
+    overflow-x:auto;font-family:var(--mono);font-size:12.6px;line-height:1.65;
+    position:relative;margin:14px 0;
+  }
+  pre code{background:none;color:inherit;padding:0;font-size:inherit}
+  pre .cp{
+    position:absolute;top:8px;right:8px;background:#2c3446;color:#9fb0cc;border:0;
+    font-size:11px;padding:4px 8px;border-radius:5px;cursor:pointer;font-family:inherit;
+  }
+  pre .cp:hover{background:#3a455c;color:#fff}
+  .cm{color:#7d8ba3}
+  .ck{color:#8ec9ff}
+  .cs{color:#a5e6a5}
+
+  /* ---------- cards & grid ---------- */
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media(max-width:1000px){.g2,.g3{grid-template-columns:1fr}}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 18px;
+  }
+  .card h4{margin:0 0 6px;font-size:14px;color:var(--ink)}
+  .card p{margin:6px 0;font-size:13.5px;color:var(--ink-2);line-height:1.7}
+  .card .tag{
+    display:inline-block;font-size:11px;font-family:var(--mono);
+    padding:2px 7px;border-radius:4px;background:#f0f3f8;color:var(--muted);margin-right:5px;
+  }
+  .card a{color:var(--accent);text-decoration:none;font-size:13px}
+  .card a:hover{text-decoration:underline}
+
+  /* ---------- callouts ---------- */
+  .note,.warn,.key{
+    border-radius:10px;padding:12px 16px 12px 16px;margin:16px 0;font-size:13.8px;
+    border-left:3px solid;line-height:1.75;
+  }
+  .note{background:var(--accent-soft);border-color:var(--accent);color:#243a63}
+  .warn{background:var(--amber-soft);border-color:var(--amber);color:#5e3a08}
+  .key{background:var(--teal-soft);border-color:var(--teal);color:#0a4f47}
+  .note b,.warn b,.key b{font-weight:700}
+
+  /* ---------- table ---------- */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.4px;background:var(--panel);border-radius:10px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f3f5f9;font-size:12.5px;color:var(--ink-2);font-weight:600;letter-spacing:.2px}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:12px}
+
+  /* ---------- flow diagram ---------- */
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 10px 6px;margin:18px 0;overflow-x:auto}
+  .diagram figcaption{text-align:center;color:var(--muted);font-size:12px;margin:2px 0 10px}
+  svg{display:block;margin:0 auto;max-width:100%;height:auto}
+
+  /* ---------- steps ---------- */
+  .steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
+  .steps>li{
+    position:relative;padding:0 0 18px 42px;border-left:2px solid var(--line);margin-left:12px;
+  }
+  .steps>li:last-child{border-color:transparent;padding-bottom:0}
+  .steps>li::before{
+    counter-increment:s;content:counter(s);
+    position:absolute;left:-13px;top:-2px;width:24px;height:24px;border-radius:50%;
+    background:var(--accent);color:#fff;font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+  }
+  .steps li b{display:block;margin-bottom:2px}
+  .steps li p{margin:2px 0;font-size:13.6px;color:var(--ink-2)}
+
+  /* ---------- checklist ---------- */
+  .check-group{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 18px 14px;margin:16px 0}
+  .check-group>h3{margin:14px 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .check-group>h3 span{font-size:12px;color:var(--muted);font-family:var(--mono);font-weight:400}
+  label.chk{
+    display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed #eef1f5;
+    font-size:13.8px;cursor:pointer;color:var(--ink-2);
+  }
+  label.chk:last-child{border-bottom:none}
+  label.chk input{margin:5px 0 0;accent-color:var(--accent);width:15px;height:15px;flex:0 0 15px}
+  label.chk.done{color:#9aa3b0;text-decoration:line-through}
+  .prog{
+    height:6px;background:#eef1f5;border-radius:99px;overflow:hidden;margin:10px 0 4px;
+  }
+  .prog i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--teal));width:0%}
+
+  /* ---------- resource filter ---------- */
+  .filter{
+    display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0 18px;
+  }
+  .filter input{
+    flex:1;min-width:220px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;
+    font-size:13.5px;font-family:inherit;background:var(--panel);color:var(--ink);outline:none;
+  }
+  .filter input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .chip{
+    padding:5px 11px;border-radius:99px;border:1px solid var(--line);background:var(--panel);
+    font-size:12.5px;cursor:pointer;color:var(--ink-2);
+  }
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .res-item.hide{display:none}
+
+  .badge{display:inline-block;font-size:11px;font-family:var(--mono);padding:2px 6px;border-radius:4px;line-height:1.5}
+  .b-must{background:#fdeaea;color:#b42318}
+  .b-rec{background:var(--teal-soft);color:var(--teal)}
+  .b-opt{background:#f1f3f7;color:var(--muted)}
+
+  /* ---------- glossary ---------- */
+  .gchip{padding:5px 11px;border-radius:99px;border:1px solid var(--line);background:var(--panel);
+    font-size:12.5px;cursor:pointer;color:var(--ink-2)}
+  .gchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .glo-item{display:flex;gap:12px;align-items:baseline;padding:9px 2px;border-bottom:1px dashed #eef1f5;font-size:13.6px;color:var(--ink-2)}
+  .glo-item.hide{display:none}
+  .glo-item b.term{font-family:var(--mono);color:var(--accent);flex:0 0 195px;font-size:12.8px;font-weight:600}
+  .glo-item .zh{font-weight:700;color:var(--ink);flex:0 0 92px;font-size:13.2px}
+  .glo-item .desc{flex:1;line-height:1.55}
+  .glo-item a{color:var(--teal);text-decoration:none;font-size:12px;white-space:nowrap;font-family:var(--mono)}
+  @media(max-width:820px){.glo-item{flex-wrap:wrap}.glo-item b.term{flex:0 0 100%}.glo-item .zh{flex:0 0 auto}}
+
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  @media(max-width:820px){
+    .shell{display:block}
+    aside{position:static;width:100%;height:auto;border-right:0;border-bottom:1px solid var(--line)}
+    nav{display:flex;flex-wrap:wrap;gap:4px}
+    nav a{padding:6px 9px}
+    main{padding:22px 18px 90px}
+    h1{font-size:23px}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside>
+  <div class="brand">Nanite × Lumen<small>手撸实时光照与虚拟几何 · 学习知识库</small></div>
+  <nav id="nav">
+    <a href="#overview"><span class="num">00</span>全局地图与路线</a>
+    <a href="#nanite"><span class="num">01</span>Nanite 虚拟几何</a>
+    <a href="#lumen"><span class="num">02</span>Lumen 动态全局光</a>
+    <a href="#bridge"><span class="num">03</span>两者的接口层</a>
+    <a href="#algo"><span class="num">04</span>关键算法与伪码</a>
+    <a href="#uesrc"><span class="num">05</span>UE 源码导读</a>
+    <a href="#tracks"><span class="num">06</span>三条路线：自制/UE/Unity</a>
+    <a href="#pitfalls"><span class="num">07</span>踩坑清单</a>
+    <a href="#resources"><span class="num">08</span>资源库</a>
+    <a href="#checklist"><span class="num">09</span>里程碑打卡</a>
+    <a href="#glossary"><span class="num">A</span>附录 · 术语字典</a>
+    <a href="#docs"><span class="num">B</span>附录 · 文档跳转</a>
+    <a href="#roadmap"><span class="num">C</span>附录 · 多步路线图</a>
+  </nav>
+  <div class="aside-foot">
+    <b>怎么用</b><br>
+    顺序读 00 → 03 建立心智模型；04 当手册查；06 边做边跳资源。<br><br>
+    <b>配套</b>：地基不够先看 <a href="graphics-handbook.html" style="color:var(--accent);text-decoration:none">图形学基础手册</a>；落地走 <a href="unity-handbook.html" style="color:var(--accent);text-decoration:none">Unity 手册</a>。
+    <div style="margin-top:10px"><b>进度</b><div class="prog"><i id="sideProg"></i></div><span id="sideProgText">0 / 0</span></div>
+  </div>
+</aside>
+
+<main>
+
+<!-- ============ 00 总览 ============ -->
+<section class="page" id="page-overview">
+  <span class="kicker">00 · Overview</span>
+  <h1>用底层图形 API 手撸一套「Nanite + Lumen」</h1>
+  <p class="lede">这不是 Epic 的源码笔记，而是一条自研路线的地图：几何怎么虚拟化、光照怎么动态化、以及两者之间那道最容易被忽略的接缝。</p>
+
+  <h2>先建立三层心智模型</h2>
+  <div class="grid g3">
+    <div class="card">
+      <span class="tag">GEOMETRY</span>
+      <h4>几何层 · Nanite</h4>
+      <p>把网格切成 128 三角的 <code>cluster</code>，逐层简化成 DAG，运行时按屏幕误差选一条「cut」，只画真正需要的簇。</p>
+      <p>产出物：可见性缓冲、每像素 cluster/triangle id。</p>
+    </div>
+    <div class="card">
+      <span class="tag">LIGHTING</span>
+      <h4>光照层 · Lumen</h4>
+      <p>屏幕探针收集入射辐射度，命中点去世界缓存查辐照度，多帧累积收敛，最后逐像素插值 + 降噪。</p>
+      <p>产出物：间接漫反射、间接高光。</p>
+    </div>
+    <div class="card">
+      <span class="tag">GLUE</span>
+      <h4>接缝层 · BVH</h4>
+      <p>虚拟几何没有「LOD n」这种全局索引，光追要求三角稳定存在。这道接缝决定了你整套系统的内存与帧时间上限。</p>
+      <p>常见解：fallback mesh / 逐簇 BLAS 聚合 / 自建 BVH。</p>
+    </div>
+  </div>
+
+  <div class="warn">
+    <b>一句话结论：</b>Nanite 和 Lumen 单独做都有人跑通过，真正难的是中间那一层——光追加速结构怎么从「会随视角变化的簇集合」里长出来。所以本库把 03 章单独拎出来讲。
+  </div>
+
+  <h2>推荐路线（每一阶段都可独立验收）</h2>
+  <table>
+    <thead><tr><th style="width:74px">阶段</th><th>目标</th><th>验收标准</th><th style="width:120px">参考</th></tr></thead>
+    <tbody>
+      <tr><td><b>P0</b></td><td>离线：切簇 + 简化 + 建 DAG，导出二进制资产</td><td>一个 100 万面模型能导出层级，命令行可视化各级簇</td><td>meshoptimizer <code>demo/nanite.cpp</code></td></tr>
+      <tr><td><b>P1</b></td><td>运行时：视锥剔除 + 单级簇硬件光栅化 + indirect draw</td><td>能画出模型，cluster 调试图正确</td><td>Danite / Wbiu</td></tr>
+      <tr><td><b>P2</b></td><td>加 DAG 遍历与屏幕误差选 cut</td><td>近处细远处粗，无裂缝、无闪烁</td><td>JMS55 0.14 博客</td></tr>
+      <tr><td><b>P3</b></td><td>Hi-Z 遮挡剔除（上一帧深度金字塔，两遍）</td><td>被墙挡住的几何不再提交，帧时间明显下降</td><td>IrisVk / Granite HiZ</td></tr>
+      <tr><td><b>P4</b></td><td>可见性缓冲 + 材质解析（替代 GBuffer 直写）</td><td>能把 vis buffer 反解成 albedo/normal/roughness</td><td>Carrot material pass</td></tr>
+      <tr><td><b>P5</b></td><td>软光栅化亚像素三角形</td><td>远景不再因小三角形闪烁，需要 64 位原子</td><td>nanite-webgpu / UE 分享</td></tr>
+      <tr><td><b>P6</b></td><td>Lumen 简化版：屏幕探针 + 世界缓存 + final gather</td><td>室内有颜色渗透，关灯后余晖自然衰减</td><td>bevy_solari / Carrot GI</td></tr>
+      <tr><td><b>P7</b></td><td>打通接缝：簇级 BLAS 聚合进 TLAS</td><td>虚拟几何场景里能追出正确遮挡与反弹</td><td>Carrot《Raytracing》</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note" style="margin-top:14px">上面是<b>自制路线</b>的阶段表。想走 UE 源码精读或 Unity SRP 落地，跳转到 <a href="#tracks" style="color:var(--accent)">06 章 · 三条路线</a>（Unity 另有独立手册）。</div>
+
+  <div class="key">
+    <b>心态上的两个提醒：</b>① 不要一上来做软光栅和 surface cache，这两个是「锦上添花但极耗工程」的部分；② 每加一层都要有可视化调试视图（cluster 着色、LOD 色阶、探针辐照度、射线命中点），否则你会花 80% 时间在猜哪里错了。
+  </div>
+
+  <h2>整体数据流</h2>
+  <figure class="diagram">
+    <svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nanite 与 Lumen 的整体数据流">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+          <path d="M0,0 L7,3.2 L0,6.4 z" fill="#9aa6b8"/>
+        </marker>
+      </defs>
+      <text x="20" y="24" font-size="11" fill="#6b7482" font-family="monospace">OFFLINE</text>
+      <text x="20" y="150" font-size="11" fill="#6b7482" font-family="monospace">RUNTIME</text>
+
+      <rect x="20" y="34" width="150" height="52" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="95" y="57" font-size="12.5" text-anchor="middle" fill="#1b2b4d">源网格</text>
+      <text x="95" y="74" font-size="11" text-anchor="middle" fill="#4a6390">百万面 OBJ/GLTF</text>
+
+      <rect x="210" y="34" width="160" height="52" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="290" y="57" font-size="12.5" text-anchor="middle" fill="#1b2b4d">切簇 + 分组简化</text>
+      <text x="290" y="74" font-size="11" text-anchor="middle" fill="#4a6390">128 tri · QEM · 锁边界</text>
+
+      <rect x="410" y="34" width="160" height="52" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="490" y="57" font-size="12.5" text-anchor="middle" fill="#1b2b4d">构建 Cluster DAG</text>
+      <text x="490" y="74" font-size="11" text-anchor="middle" fill="#4a6390">误差逐级累加</text>
+
+      <rect x="610" y="34" width="150" height="52" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="685" y="57" font-size="12.5" text-anchor="middle" fill="#1b2b4d">量化打包 + 落盘</text>
+      <text x="685" y="74" font-size="11" text-anchor="middle" fill="#4a6390">顶点压缩 / 分页</text>
+
+      <line x1="170" y1="60" x2="206" y2="60" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="370" y1="60" x2="406" y2="60" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="570" y1="60" x2="606" y2="60" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+
+      <rect x="20" y="160" width="130" height="52" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="85" y="183" font-size="12.5" text-anchor="middle" fill="#0a3f3a">实例剔除</text>
+      <text x="85" y="200" font-size="11" text-anchor="middle" fill="#2a6b62">视锥 + 锥体背面</text>
+
+      <rect x="180" y="160" width="150" height="52" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="255" y="183" font-size="12.5" text-anchor="middle" fill="#0a3f3a">DAG 遍历选 cut</text>
+      <text x="255" y="200" font-size="11" text-anchor="middle" fill="#2a6b62">屏幕误差 &lt; 1px</text>
+
+      <rect x="360" y="160" width="140" height="52" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="430" y="183" font-size="12.5" text-anchor="middle" fill="#0a3f3a">Hi-Z 遮挡剔除</text>
+      <text x="430" y="200" font-size="11" text-anchor="middle" fill="#2a6b62">上一帧金字塔</text>
+
+      <rect x="530" y="160" width="160" height="52" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="610" y="183" font-size="12.5" text-anchor="middle" fill="#0a3f3a">硬件 / 软件光栅</text>
+      <text x="610" y="200" font-size="11" text-anchor="middle" fill="#2a6b62">大三角 HW · 小三角 CS</text>
+
+      <rect x="720" y="160" width="160" height="52" rx="8" fill="#f2edff" stroke="#7a4ddb"/>
+      <text x="800" y="183" font-size="12.5" text-anchor="middle" fill="#3c2570">可见性缓冲</text>
+      <text x="800" y="200" font-size="11" text-anchor="middle" fill="#5b3f99">depth | visID (64bit)</text>
+
+      <line x1="150" y1="186" x2="176" y2="186" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="330" y1="186" x2="356" y2="186" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="500" y1="186" x2="526" y2="186" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="690" y1="186" x2="716" y2="186" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+
+      <path d="M685 86 L685 122 L430 122 L430 156" fill="none" stroke="#b9c2d0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+
+      <rect x="720" y="240" width="160" height="46" rx="8" fill="#fdf4e6" stroke="#b4690e"/>
+      <text x="800" y="260" font-size="12" text-anchor="middle" fill="#5e3a08">Lumen 探针 / 世界缓存</text>
+      <text x="800" y="276" font-size="10.5" text-anchor="middle" fill="#8a5a1c">读 GBuffer + 追 TLAS</text>
+      <line x1="800" y1="214" x2="800" y2="236" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar)"/>
+    </svg>
+    <figcaption>几何层先跑完，光照层再消费它的 GBuffer；虚线表示资产同时供光栅化与光追两种用途</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 01 NANITE ============ -->
+<section class="page" id="page-nanite">
+  <span class="kicker">01 · Virtualized Geometry</span>
+  <h1>Nanite：把「LOD」从美术的手工活变成运行时的算法</h1>
+  <p class="lede">核心只有一句话：把模型切成一堆小簇，逐级简化成一张有向无环图，运行时按屏幕误差挑出一组恰好够用的簇来画。</p>
+
+  <h2>1.1 为什么传统 LOD 不够用</h2>
+  <p>传统做法是「一个模型几个 LOD」，选择粒度是整个模型。问题在于：一栋建筑离你 5 米，你只能在地面细节和整栋楼之间二选一——要么浪费几十万面去画看不见的屋顶，要么整栋楼糊成一片。虚拟几何把粒度降到 128 个三角形，于是<strong>同一个模型的不同部位可以处在不同细节级别</strong>。</p>
+
+  <div class="key">
+    <b>关键概念「cut」：</b>在 DAG 上选一组节点，使得从根往下走，每个分支恰好在一个节点处被切断。这组节点就是本帧要画的簇。相邻簇共享边界顶点，所以不会出现裂缝。
+  </div>
+
+  <h2>1.2 三个数字先记住</h2>
+  <table>
+    <thead><tr><th style="width:150px">参数</th><th style="width:110px">典型值</th><th>为什么是这个值</th></tr></thead>
+    <tbody>
+      <tr><td>簇大小</td><td>128 三角 / 128 顶点</td><td>小到剔除粒度足够细，大到顶点数据能塞进 L1、单个 workgroup 能处理完。索引可用 u8 打包，省 4 倍带宽。</td></tr>
+      <tr><td>分组大小</td><td>32 簇一组</td><td>简化必须成组做，否则簇边界被反复锁定，简化质量崩掉。组内简化后再重新切簇。</td></tr>
+      <tr><td>LOD 误差阈值</td><td>1 像素</td><td>「这个簇简化带来的几何误差投影到屏幕上小于 1 像素」就允许用它，肉眼看不出。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>1.3 离线管线的五个步骤</h2>
+  <ol class="steps">
+    <li><b>切簇（clusterize）</b>
+      <p>用 meshoptimizer 的 <code>meshopt_buildMeshlets</code>：按连通性贪心生长，控制每簇三角/顶点上限，输出每簇的索引与顶点索引表。注意它同时给出包围球和法线锥，后面剔除要用。</p>
+    </li>
+    <li><b>聚组（partition）</b>
+      <p>把相邻簇聚成约 32 簇一组。原版 UE 用 METIS 做图划分（考虑簇间邻接权重），meshoptimizer 现在也有自己的 partitioner，可以省掉 METIS 这个重依赖。</p>
+    </li>
+    <li><b>组内简化（simplify）</b>
+      <p>把一组簇当成一个整体做 QEM 边折叠简化到目标误差，<strong>但要把组边界顶点锁住（locked vertices）</strong>——否则父层和子层的接缝会裂开。锁边界的代价是简化率下降，这也是为什么要「成组简化再重切」而不是逐簇简化。</p>
+    </li>
+    <li><b>重切 + 递归</b>
+      <p>简化后的组重新切成 128 三角的簇，作为上一层节点；重复直到剩一个簇（根）。父子关系记录下来就是 DAG（严格说是树 + 多条父边）。</p>
+    </li>
+    <li><b>误差与打包</b>
+      <p>每层记录「本层简化引入的几何误差」，父层误差 = 子层误差 + 本次简化误差（单调不减，这是无缝切换的前提）。顶点位置量化到 16 位、法线八面体编码到 2×8 位、UV 量化，连同包围球/锥、误差、子节点偏移一起写进二进制。</p>
+    </li>
+  </ol>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cluster DAG 层级示意">
+      <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto"><path d="M0,0 L7,3.2 L0,6.4 z" fill="#9aa6b8"/></marker></defs>
+      <rect x="352" y="20" width="176" height="42" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="440" y="46" font-size="12.5" text-anchor="middle" fill="#1b2b4d">根簇（整模型 ~128 tri）</text>
+
+      <rect x="196" y="104" width="150" height="40" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="271" y="129" font-size="12" text-anchor="middle" fill="#1b2b4d">L1 簇</text>
+      <rect x="534" y="104" width="150" height="40" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="609" y="129" font-size="12" text-anchor="middle" fill="#1b2b4d">L1 簇</text>
+
+      <rect x="70" y="188" width="132" height="38" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="136" y="212" font-size="11.5" text-anchor="middle" fill="#0a3f3a">L2 簇（被选中）</text>
+      <rect x="222" y="188" width="132" height="38" rx="8" fill="#ffffff" stroke="#c9d1dd" stroke-dasharray="4 3"/>
+      <text x="288" y="212" font-size="11.5" text-anchor="middle" fill="#8a94a4">L2 簇（跳过）</text>
+      <rect x="410" y="188" width="132" height="38" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="476" y="212" font-size="11.5" text-anchor="middle" fill="#0a3f3a">L2 簇（被选中）</text>
+      <rect x="600" y="188" width="132" height="38" rx="8" fill="#ffffff" stroke="#c9d1dd" stroke-dasharray="4 3"/>
+      <text x="666" y="212" font-size="11.5" text-anchor="middle" fill="#8a94a4">L2 簇（跳过）</text>
+
+      <line x1="416" y1="62" x2="290" y2="100" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar2)"/>
+      <line x1="464" y1="62" x2="590" y2="100" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar2)"/>
+      <line x1="250" y1="144" x2="160" y2="184" stroke="#0e9384" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <line x1="288" y1="144" x2="288" y2="184" stroke="#c9d1dd" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ar2)"/>
+      <line x1="592" y1="144" x2="476" y2="184" stroke="#0e9384" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <line x1="630" y1="144" x2="660" y2="184" stroke="#c9d1dd" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ar2)"/>
+
+      <text x="20" y="248" font-size="11.5" fill="#6b7482">绿色 = 本帧 cut 选中的叶节点；虚线 = 该分支已达到误差要求，不再向下细分</text>
+    </svg>
+    <figcaption>每个分支独立决定「停在哪一层」，这就是虚拟几何相对传统 LOD 的全部优势来源</figcaption>
+  </figure>
+
+  <h2>1.4 运行时：一条 GPU 驱动的流水线</h2>
+  <table>
+    <thead><tr><th style="width:130px">Pass</th><th>做什么</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>实例剔除</td><td>对所有实例做视锥/距离/背面锥剔除</td><td>用 <code>IndirectDispatch</code> 的计数做压缩，下游只处理存活实例</td></tr>
+      <tr><td>DAG 遍历</td><td>从根往下走，算每层簇的屏幕误差</td><td>「persistent threads」模型：一个线程负责一个簇，递归时自己去抢队列；也可用节点栈式遍历</td></tr>
+      <tr><td>遮挡剔除</td><td>用上一帧 Hi-Z 金字塔判断簇包围球是否被挡</td><td>两遍：第一遍只画大簇当遮挡体，第二遍再放开小簇，避免大量误判</td></tr>
+      <tr><td>光栅化</td><td>大三角走硬件，小三角走 compute 软光栅</td><td>阈值通常 1~2 像素边长的三角，具体看 GPU 的 quad 利用率</td></tr>
+      <tr><td>材质解析</td><td>从 vis buffer 反解几何属性，算材质、写 GBuffer</td><td>先做深度预通道（只算位移/遮罩），再只对最终可见像素跑完整材质</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>可见性缓冲为什么这么设计：</b>一个 64 位整数里，高 32 位放深度（浮点位模式），低 32 位放 <code>instanceId &lt;&lt; 8 | triangleId</code>。用 <code>atomicMax</code> 一次操作同时完成深度测试和像素归属写入，不需要深度附件、不需要锁。UE 的原始做法就是这么省下带宽的。
+  </div>
+
+  <h3>软光栅化的三个硬性要求</h3>
+  <ul>
+    <li><strong>64 位原子操作</strong>：Vulkan 要 <code>VK_KHR_shader_atomic_int64</code> / <code>shaderBufferInt64Atomics</code>；WebGPU 没有，所以 nanite-webgpu 只能把深度压成 u16 + 法线 2×u8 塞进 32 位，精度惨烈——这也是它自陈的最大妥协。</li>
+    <li><strong>以 2×2 像素 quad 为单位</strong>走扫描线，保证同一 warp 内的像素对齐，否则吞吐掉一半。</li>
+    <li><strong>溢出队列</strong>：边长超过阈值的大三角会瞬间把工作队列撑爆，要按「每线程固定预算 + 溢出链表」处理，不能无界循环。</li>
+  </ul>
+
+  <h2>1.5 常见的数据布局（省带宽的关键）</h2>
+<pre><code><span class="cm">// 簇头：定长，便于 GPU 随机访问</span>
+<span class="ck">struct</span> Cluster {
+  vec3    center;        <span class="cm">// 局部空间包围球心</span>
+  <span class="ck">float</span>   radius;
+  vec3    coneAxis;      <span class="cm">// 法线锥，背面剔除用</span>
+  <span class="ck">float</span>   coneCutoff;
+  <span class="ck">float</span>   lodError;      <span class="cm">// 本层简化误差（世界单位）</span>
+  <span class="ck">float</span>   parentError;   <span class="cm">// 父层误差，用于判断是否继续下降</span>
+  <span class="ck">uint</span>    vertexOffset;  <span class="cm">// 指向共享顶点池</span>
+  <span class="ck">uint</span>    indexOffset;
+  <span class="ck">uint</span>    childStart;    <span class="cm">// 子节点在 DAG 节点数组里的起始下标</span>
+  <span class="ck">uint8_t</span> childCount;
+  <span class="ck">uint8_t</span> triCount;
+};
+
+<span class="cm">// 顶点：量化后 8 字节，位置 3x11bit + 法线八面体 2x8bit + UV 打包</span>
+<span class="cm">// 索引：每簇 128 个三角 = 384 个 u8 索引，跨簇时查 local vertex table</span></code></pre>
+
+  <div class="warn">
+    <b>别踩：</b>簇共享顶点池会让「按簇加载/流式」变得很麻烦。真要做分页流式，必须把顶点按「页」重新组织并允许跨页引用，这是 Nanite 后期最重的工程之一，第一版建议直接整模型常驻显存。
+  </div>
+</section>
+
+<!-- ============ 02 LUMEN ============ -->
+<section class="page" id="page-lumen">
+  <span class="kicker">02 · Dynamic Global Illumination</span>
+  <h1>Lumen：把「一盏灯照亮整间屋子」变成每帧能算完的事</h1>
+  <p class="lede">它不是一个算法，而是一套缓存层级：屏幕探针负责「看得见的地方」，世界缓存负责「看不见的地方」，SDF/光追负责「到底撞到哪」。</p>
+
+  <h2>2.1 原始问题：为什么 GI 这么贵</h2>
+  <p>渲染方程要求对半球积分，实时里每像素只有 1~2 条射线的预算，而收敛需要成百上千条。所有实时 GI 的本质都是<strong>用时间换采样、用缓存换重复计算</strong>：这一帧算不完的，靠上一帧的结果补；这一像素算不全的，靠邻居插值补。</p>
+
+  <h2>2.2 完整 Lumen 的五个部件</h2>
+  <table>
+    <thead><tr><th style="width:150px">部件</th><th>作用</th><th>自研难度</th></tr></thead>
+    <tbody>
+      <tr><td>Surface Cache<br><span style="color:#6b7482;font-size:12px">（mesh card）</span></td><td>给每个网格生成若干「卡片」参数化表面，把材质和直接光照烘焙到纹理空间，供光线命中时查询。相当于场景的「光照贴图」，但是动态更新的。</td><td><span class="badge b-must">极高</span> 虚拟纹理 + 卡片生成 + 增量更新</td></tr>
+      <tr><td>SDF 场景</td><td>全局有符号距离场 + 每网格 SDF，用于软件光线步进（屏幕外、远距离）</td><td><span class="badge b-rec">高</span> 体素化 + 八叉树 + 步进</td></tr>
+      <tr><td>Screen Probe</td><td>屏幕可见点上放八面体探针（4 级 cascade），收集入射辐射度</td><td><span class="badge b-rec">中</span> 推荐从这里起步</td></tr>
+      <tr><td>World Cache<br><span style="color:#6b7482;font-size:12px">（radiance cache）</span></td><td>世界空间稀疏探针，持久化、增量更新，负责多跳反弹与屏外信息</td><td><span class="badge b-rec">中</span> 一个 GPU hashmap 就够</td></tr>
+      <tr><td>Final Gather + 降噪</td><td>逐像素插值邻近探针，时空滤波收敛</td><td><span class="badge b-rec">中</span> 双边滤波 + 重投影</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2.3 简化版数据流（硬件光追路线，推荐）</h2>
+  <figure class="diagram">
+    <svg viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lumen 简化版数据流">
+      <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto"><path d="M0,0 L7,3.2 L0,6.4 z" fill="#9aa6b8"/></marker></defs>
+      <rect x="20" y="26" width="140" height="48" rx="8" fill="#f2edff" stroke="#7a4ddb"/>
+      <text x="90" y="47" font-size="12" text-anchor="middle" fill="#3c2570">可见性缓冲</text>
+      <text x="90" y="63" font-size="10.5" text-anchor="middle" fill="#5b3f99">反解 GBuffer</text>
+
+      <rect x="196" y="26" width="150" height="48" rx="8" fill="#fdf4e6" stroke="#b4690e"/>
+      <text x="271" y="47" font-size="12" text-anchor="middle" fill="#5e3a08">屏幕探针布局</text>
+      <text x="271" y="63" font-size="10.5" text-anchor="middle" fill="#8a5a1c">4 cascade 八面体</text>
+
+      <rect x="382" y="26" width="140" height="48" rx="8" fill="#fdf4e6" stroke="#b4690e"/>
+      <text x="452" y="47" font-size="12" text-anchor="middle" fill="#5e3a08">每探针追射线</text>
+      <text x="452" y="63" font-size="10.5" text-anchor="middle" fill="#8a5a1c">ray query 打 TLAS</text>
+
+      <rect x="558" y="26" width="150" height="48" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="633" y="47" font-size="12" text-anchor="middle" fill="#0a3f3a">世界缓存查询</text>
+      <text x="633" y="63" font-size="10.5" text-anchor="middle" fill="#2a6b62">hash 网格取辐照度</text>
+
+      <rect x="742" y="26" width="118" height="48" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="801" y="47" font-size="12" text-anchor="middle" fill="#0a3f3a">多跳反馈</text>
+      <text x="801" y="63" font-size="10.5" text-anchor="middle" fill="#2a6b62">写到别的 cell</text>
+
+      <line x1="160" y1="50" x2="192" y2="50" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="346" y1="50" x2="378" y2="50" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="522" y1="50" x2="554" y2="50" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="708" y1="50" x2="738" y2="50" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <path d="M801 74 L801 102 L633 102 L633 78" fill="none" stroke="#b9c2d0" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar3)"/>
+
+      <rect x="20" y="150" width="180" height="48" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="110" y="171" font-size="12" text-anchor="middle" fill="#1b2b4d">逐像素 Final Gather</text>
+      <text x="110" y="187" font-size="10.5" text-anchor="middle" fill="#4a6390">4 邻域探针重心插值</text>
+
+      <rect x="228" y="150" width="160" height="48" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="308" y="171" font-size="12" text-anchor="middle" fill="#1b2b4d">时间累积</text>
+      <text x="308" y="187" font-size="10.5" text-anchor="middle" fill="#4a6390">重投影 + 邻域钳制</text>
+
+      <rect x="416" y="150" width="160" height="48" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="496" y="171" font-size="12" text-anchor="middle" fill="#1b2b4d">空间滤波</text>
+      <text x="496" y="187" font-size="10.5" text-anchor="middle" fill="#4a6390">双边 / à-trous</text>
+
+      <rect x="604" y="150" width="150" height="48" rx="8" fill="#f6f7f9" stroke="#c9d1dd"/>
+      <text x="679" y="171" font-size="12" text-anchor="middle" fill="#3d4653">合成到 HDR</text>
+      <text x="679" y="187" font-size="10.5" text-anchor="middle" fill="#6b7482">+ 反射 + 直接光</text>
+
+      <path d="M633 74 L633 118 L110 118 L110 146" fill="none" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="200" y1="174" x2="224" y2="174" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="388" y1="174" x2="412" y2="174" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <line x1="576" y1="174" x2="600" y2="174" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <text x="20" y="248" font-size="11.5" fill="#6b7482">世界缓存是整条链路里唯一「跨帧存在」的状态；其余都是每帧重算，所以它可以单独降频更新</text>
+      <text x="20" y="270" font-size="11.5" fill="#6b7482">预算分配典型值：探针追踪 ~1.5ms，最终收集 ~0.6ms，降噪 ~0.8ms（1080p / 中端独显）</text>
+    </svg>
+    <figcaption>绿色部分是本方案里最值得先做对的两个东西：世界缓存的哈希与生命周期、探针的屏幕空间重投影</figcaption>
+  </figure>
+
+  <h2>2.4 屏幕探针的关键参数</h2>
+  <table>
+    <thead><tr><th style="width:170px">参数</th><th>取值思路</th></tr></thead>
+    <tbody>
+      <tr><td>探针间距</td><td>第 0 级大约 8~16 像素一个探针，每升一级间距翻倍、方向分辨率也翻倍（探针变大变少）</td></tr>
+      <tr><td>八面体分辨率</td><td>第 0 级 8×8 纹素足够；近处细节靠 final gather 的邻域插值补，不是靠加大探针</td></tr>
+      <tr><td>每探针射线数</td><td>1 条/帧起步，靠时间累积；追求质量再加到 4~8 条并用蓝噪抖动</td></tr>
+      <tr><td>射线最大长度</td><td>超过阈值直接终止并查世界缓存，不要一条射线追到底（会打到很远的东西，纯噪声）</td></tr>
+      <tr><td>重投影</td><td>探针位置用上一帧深度 + 相机矩阵反推，法线/深度差异过大就丢弃历史（防拖影）</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2.5 世界缓存：一个 GPU 上的 hashmap</h2>
+<pre><code><span class="cm">// cell: 世界空间网格，边长 = 探针间距 * 大系数（典型 1~4 米）</span>
+<span class="ck">struct</span> Cell {
+  uvec3  coord;         <span class="cm">// 网格坐标，做 hash key</span>
+  vec3   irradiance;    <span class="cm">// RGB 辐照度（已除 pi 或用 SH）</span>
+  <span class="ck">float</span>  life;          <span class="cm">// 每帧 -1，访问时重置；归零则回收</span>
+  <span class="ck">uint</span>   hashNext;      <span class="cm">// 冲突链（开放寻址也行，但要能回收）</span>
+};
+
+<span class="cm">// 每帧三件事：</span>
+<span class="cm">// 1) 对所有存活 cell 衰减 life，compaction 成紧凑数组提高占用率</span>
+<span class="cm">// 2) 每个 cell 追 1 条向光源的射线（直接光）+ 1 条随机方向射线（查别的 cell，形成多跳）</span>
+<span class="cm">// 3) 新 cell 插入：先查表，冲突则写链首</span></code></pre>
+  <div class="note">
+    <b>为什么不用固定 3D 网格：</b>场景是世界级的，固定网格在垂直方向会浪费 90% 内存。哈希表能只为「真的被射线访问过的地方」分配单元，代价是要处理冲突和回收——这正是 Carrot 那篇 GI 文章里花最多篇幅讲的部分。
+  </div>
+
+  <h2>2.6 三条可选的技术阶梯</h2>
+  <div class="grid g3">
+    <div class="card">
+      <span class="tag">LEVEL 1</span>
+      <h4>DDGI 探针网格</h4>
+      <p>规则的 3D 探针网格 + 八面体深度/辐照度，实现简单、结果稳定，但没有自适应精度，大场景内存爆。</p>
+      <p><b>适合：</b>第一版跑通管线，验证你的 GBuffer 和光追是通的。</p>
+    </div>
+    <div class="card">
+      <span class="tag">LEVEL 2</span>
+      <h4>Screen Probe + World Cache</h4>
+      <p>Lumen GI-1.0 的骨架。屏幕探针解决精度分布，世界缓存解决屏外与多跳。</p>
+      <p><b>适合：</b>真正的目标方案，投入产出比最高。</p>
+    </div>
+    <div class="card">
+      <span class="tag">LEVEL 3</span>
+      <h4>ReSTIR GI / PT</h4>
+      <p>用 reservoir 重采样把有效采样率拉高一个数量级，配合降噪器可接近路径追踪质量。</p>
+      <p><b>适合：</b>最后一步优化，先把 L2 的噪声问题量化清楚再上。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 BRIDGE ============ -->
+<section class="page" id="page-bridge">
+  <span class="kicker">03 · The Seam</span>
+  <h1>接口层：虚拟几何怎么喂给光线追踪</h1>
+  <p class="lede">这是整套系统里唯一没有「标准答案」的地方，也是绝大多数自研项目卡死的地方。</p>
+
+  <h2>3.1 矛盾在哪</h2>
+  <p>光追需要一份<strong>稳定、完整、与视角无关</strong>的三角形集合来建 BLAS；虚拟几何提供的却是一份<strong>每帧变化、只包含可见部分</strong>的簇集合。更麻烦的是，模型的不同部位处在不同层级，你无法用「这个模型的 LOD 索引是 2」这种方式描述它。</p>
+
+  <h2>3.2 三种解法对比</h2>
+  <table>
+    <thead><tr><th style="width:130px">方案</th><th>做法</th><th>优点</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Fallback Mesh</b><br><span class="badge b-rec">UE 的选择</span></td>
+        <td>离线为每个网格生成一份低模（约 1%~5% 面数）专供光追，与渲染用的簇完全解耦</td>
+        <td>实现极简，光追场景一次建好不再变；内存可控</td>
+        <td>光追几何精度低于光栅化，近处反射/阴影会「糊」，需要额外的屏幕空间补偿</td>
+      </tr>
+      <tr>
+        <td><b>逐簇 BLAS 聚合</b><br><span class="badge b-must">Carrot 的选择</span></td>
+        <td>资产管线里预建每个簇的 BLAS；每帧从 GPU 回读「本帧需要的簇列表」，把预建 BLAS 拷进当帧的聚合 BLAS，再生成 TLAS 实例</td>
+        <td>光追精度与光栅化一致，支持流式</td>
+        <td>回读有 CPU 同步开销；预建 BLAS 常驻显存，内存开销大；BLAS 拷贝本身在部分驱动上不便宜</td>
+      </tr>
+      <tr>
+        <td><b>自建 BVH</b><br><span class="badge b-opt">Intel 的路子</span></td>
+        <td>不用硬件光追，自己维护一份压缩几何的 BVH，在 compute 里软件遍历</td>
+        <td>完全掌控精度与内存，不依赖 RT 硬件</td>
+        <td>遍历性能靠自己优化，工作量最大；等于重写一个光追后端</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <b>实测经验：</b>「每帧重建 BLAS」是行不通的——即便在 2024 年的硬件上，对几万个簇重建 BLAS 也要几十毫秒。可用的只有「预建 + 拷贝」或「用低模」。
+  </div>
+
+  <h2>3.3 逐簇聚合的每帧流程</h2>
+  <ol class="steps">
+    <li><b>GPU 侧选出簇列表</b>
+      <p>复用 DAG 遍历的结果，把「本帧确定要画 + 可能对光追有贡献」的簇 id 压缩进一个 buffer。注意要包含屏幕外但影响 GI 的簇，不能只取可见簇。</p>
+    </li>
+    <li><b>回读到 CPU（或 GPU 侧间接）</b>
+      <p>Vulkan 支持 <code>vkCmdBuildAccelerationStructuresIndirectKHR</code>，可以让 GPU 直接驱动 BLAS 构建，省掉回读。但「从预建 BLAS 拷贝」这一路径目前只能由 CPU 发命令，所以多数项目仍保留一次小规模回读。</p>
+    </li>
+    <li><b>聚合 BLAS</b>
+      <p>为本帧的簇集合建一个顶层几何体，用 <code>vkCmdCopyAccelerationStructureKHR</code> 把每个预建 BLAS 拷进对应 offset，这一步是纯显存拷贝，比重建快一个数量级。</p>
+    </li>
+    <li><b>TLAS 实例化</b>
+      <p>每个网格实例指向它自己的聚合 BLAS；实例 transform 用本帧的世界矩阵。这样实例化开销与网格数成正比，与簇数无关。</p>
+    </li>
+    <li><b>射线查询</b>
+      <p>Lumen 侧统一走 <code>rayQueryEXT</code>（compute 里做 GI 更简单，不需要 RT pipeline 的 SBT 那套基础设施）。</p>
+    </li>
+  </ol>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 880 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="簇级 BLAS 聚合流程">
+      <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto"><path d="M0,0 L7,3.2 L0,6.4 z" fill="#9aa6b8"/></marker></defs>
+      <rect x="18" y="60" width="150" height="56" rx="8" fill="#eef3ff" stroke="#2f6fed"/>
+      <text x="93" y="83" font-size="11.5" text-anchor="middle" fill="#1b2b4d">资产管线预建</text>
+      <text x="93" y="100" font-size="10.5" text-anchor="middle" fill="#4a6390">每簇一个 BLAS</text>
+
+      <rect x="196" y="60" width="150" height="56" rx="8" fill="#e8f7f4" stroke="#0e9384"/>
+      <text x="271" y="83" font-size="11.5" text-anchor="middle" fill="#0a3f3a">本帧簇列表</text>
+      <text x="271" y="100" font-size="10.5" text-anchor="middle" fill="#2a6b62">GPU 压缩 buffer</text>
+
+      <rect x="374" y="60" width="150" height="56" rx="8" fill="#fdf4e6" stroke="#b4690e"/>
+      <text x="449" y="83" font-size="11.5" text-anchor="middle" fill="#5e3a08">回读 / 间接构建</text>
+      <text x="449" y="100" font-size="10.5" text-anchor="middle" fill="#8a5a1c">唯一同步点</text>
+
+      <rect x="552" y="60" width="150" height="56" rx="8" fill="#f2edff" stroke="#7a4ddb"/>
+      <text x="627" y="83" font-size="11.5" text-anchor="middle" fill="#3c2570">拷贝进聚合 BLAS</text>
+      <text x="627" y="100" font-size="10.5" text-anchor="middle" fill="#5b3f99">copy，不是 build</text>
+
+      <rect x="730" y="60" width="130" height="56" rx="8" fill="#f6f7f9" stroke="#c9d1dd"/>
+      <text x="795" y="83" font-size="11.5" text-anchor="middle" fill="#3d4653">建 TLAS</text>
+      <text x="795" y="100" font-size="10.5" text-anchor="middle" fill="#6b7482">每实例一个</text>
+
+      <line x1="168" y1="88" x2="192" y2="88" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <line x1="346" y1="88" x2="370" y2="88" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <line x1="524" y1="88" x2="548" y2="88" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <line x1="702" y1="88" x2="726" y2="88" stroke="#9aa6b8" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <text x="18" y="160" font-size="11.5" fill="#6b7482">替代路线：直接用 Fallback Mesh 建一份静态 BLAS，簇只用于光栅化 —— 精度换简单，UE 默认就这么干</text>
+      <text x="18" y="184" font-size="11.5" fill="#6b7482">折中路线：近处网格用聚合 BLAS，远处/小物体用 fallback，按重要性分级</text>
+    </svg>
+    <figcaption>这张图里只有「回读」一步会打断 GPU 流水，其余都是纯 GPU 操作</figcaption>
+  </figure>
+
+  <h2>3.4 工程上的取舍建议</h2>
+  <ul>
+    <li><b>第一版无脑用 fallback mesh。</b>先把 Lumen 的探针、世界缓存、降噪跑通，视觉上「光追几何略糊」你几乎察觉不到，因为 GI 本身就是低频的。</li>
+    <li><b>只对近处做逐簇精度。</b>把场景按距离分层：10 米内用聚合 BLAS 追高精度，之外用 fallback。反射里最容易看出差异的就是近处地面和高光物体。</li>
+    <li><b>把「簇列表」和「光栅化列表」分开。</b>前者要包含屏幕外但对 GI 有贡献的簇，后者只要可见簇；混用会漏光。</li>
+  </ul>
+</section>
+
+<!-- ============ 04 算法伪码 ============ -->
+<section class="page" id="page-algo">
+  <span class="kicker">04 · Reference Code</span>
+  <h1>关键算法伪码</h1>
+  <p class="lede">不追求可直接编译，追求把「公式怎么变成 shader」这一步讲清楚。语法偏 HLSL/GLSL 混合。</p>
+
+  <h2>4.1 屏幕误差 → LOD 选择</h2>
+<pre><code><span class="cm">// 输入：簇的世界空间误差、簇中心到相机距离</span>
+<span class="cm">// 目标：投影到屏幕上的像素误差</span>
+<span class="ck">float</span> projectedError(<span class="ck">float</span> objectError, <span class="ck">float</span> dist, <span class="ck">float</span> projScaleY) {
+    dist = max(dist, 1e-3);
+    <span class="ck">return</span> objectError * projScaleY / dist;   <span class="cm">// projScaleY ≈ viewportHeight / (2*tan(fovY/2))</span>
+}
+
+<span class="cm">// DAG 遍历：一个线程处理一个簇，满足条件就停，否则把子簇压入队列</span>
+<span class="ck">void</span> traverse(uint clusterIdx, vec3 camPos, <span class="ck">float</span> threshold) {
+    Cluster c = clusters[clusterIdx];
+    <span class="ck">float</span> d = distance(camPos, worldCenter(c));
+    <span class="ck">if</span> (projectedError(c.lodError, d, projScaleY) &lt; threshold) {
+        pushDraw(c);              <span class="cm">// 这一层够用了，进光栅化列表</span>
+        <span class="ck">return</span>;
+    }
+    <span class="ck">if</span> (c.childCount == 0) { pushDraw(c); <span class="ck">return</span>; }  <span class="cm">// 已是最精细层</span>
+    <span class="ck">for</span> (uint i = 0; i &lt; c.childCount; ++i)
+        queuePush(c.childStart + i);   <span class="cm">// 否则继续向下</span>
+}</code></pre>
+  <div class="note"><b>为什么用投影误差而不是距离阈值：</b>同一个簇在 4K 屏上需要比 1080p 更精细，用距离就会在换分辨率时爆掉。阈值一般取 1.0，动态分辨率下按实际渲染分辨率缩放。</div>
+
+  <h2>4.2 可见性缓冲写入</h2>
+<pre><code><span class="cm">// 高 32 位：深度（float 位模式当作 uint 比较，正深度下单调一致）</span>
+<span class="cm">// 低 32 位：instanceId(24bit) | triangleId(8bit)</span>
+<span class="ck">uint64_t</span> pack(<span class="ck">float</span> depth, uint instanceId, uint triId) {
+    <span class="ck">return</span> (uint64_t(asuint(depth)) &lt;&lt; 32) | (uint64_t(instanceId) &lt;&lt; 8) | triId;
+}
+<span class="cm">// 硬件光栅：片段着色器里 disable depth test，直接 atomicMax，无深度附件</span>
+<span class="cm">// 软件光栅：同一套 pack + atomicMax，于是两种光栅化天然统一</span>
+imageAtomicMax(visBuffer, pixel, pack(depth, id, tri));</code></pre>
+  <p><b>限制：</b>三角形 id 只有 8 位，所以每簇必须 ≤255 个三角；instanceId 24 位够用（1600 万实例）。若簇更大就改成 16/48 位分配，或存两个通道。</p>
+
+  <h2>4.3 屏幕探针的最终收集</h2>
+<pre><code><span class="cm">// 每个像素找 4 个包围它的探针，按八面体 UV 双线性插值</span>
+vec3 finalGather(vec2 pixelUV, vec3 normal) {
+    vec3 sum = 0; <span class="ck">float</span> wsum = 0;
+    <span class="ck">for</span> (int i = 0; i &lt; 4; ++i) {
+        Probe p = probes[neighborProbe(pixelUV, i)];
+        <span class="ck">float</span> w = p.baryWeight;
+        w *= saturate(dot(normal, p.normal) * 0.5 + 0.5);   <span class="cm">// 法线相似度加权，抑制背面串色</span>
+        w /= (1.0 + length(p.worldPos - pixelWorldPos));     <span class="cm">// 距离加权，抑制远处探针污染</span>
+        sum += sampleOctahedral(p.radiance, normal) * w;
+        wsum += w;
+    }
+    <span class="ck">return</span> sum / max(wsum, 1e-4);
+}</code></pre>
+
+  <h2>4.4 时间累积与防拖影</h2>
+<pre><code>vec3 temporal(vec3 current, vec3 history, <span class="ck">float</span> alpha, vec3 nCur, vec3 nHist, <span class="ck">float</span> dCur, <span class="ck">float</span> dHist) {
+    <span class="cm">// 1) 几何一致性检查：法线/深度差异大就丢弃历史</span>
+    <span class="ck">float</span> nDiff = 1.0 - dot(nCur, nHist);
+    <span class="ck">float</span> dDiff = abs(dCur - dHist) / max(dCur, 1e-4);
+    <span class="ck">if</span> (nDiff &gt; 0.15 || dDiff &gt; 0.05) <span class="ck">return</span> current;
+
+    <span class="cm">// 2) 邻域钳制：把历史限制在当前帧 3x3 的均值±方差内，抑制鬼影</span>
+    vec3 mu = neighborhoodMean(current), sigma = neighborhoodStd(current);
+    history = clamp(history, mu - 1.5 * sigma, mu + 1.5 * sigma);
+
+    <span class="cm">// 3) 指数滑动平均，alpha 越小越稳但越迟钝</span>
+    <span class="ck">return</span> mix(history, current, alpha);   <span class="cm">// 相机静止时 alpha 可降到 0.05</span>
+}</code></pre>
+
+  <h2>4.5 世界缓存查找（开放寻址版）</h2>
+<pre><code>uint hashCell(ivec3 c) {
+    <span class="ck">return</span> (uint(c.x) * 73856093u) ^ (uint(c.y) * 19349663u) ^ (uint(c.z) * 83492791u);
+}
+<span class="ck">bool</span> worldCacheLookup(ivec3 coord, <span class="ck">out</span> vec3 irradiance) {
+    uint slot = hashCell(coord) &amp; (CACHE_SIZE - 1u);
+    <span class="ck">for</span> (uint probe = 0; probe &lt; 8u; ++probe) {          <span class="cm">// 线性探测，最多 8 步</span>
+        Cell cell = cells[slot];
+        <span class="ck">if</span> (cell.life &lt;= 0.0) <span class="ck">return</span> <span class="ck">false</span>;              <span class="cm">// 空槽：miss</span>
+        <span class="ck">if</span> (all(equal(cell.coord, coord))) { irradiance = cell.irradiance; <span class="ck">return</span> <span class="ck">true</span>; }
+        slot = (slot + 1u) &amp; (CACHE_SIZE - 1u);
+    }
+    <span class="ck">return</span> <span class="ck">false</span>;   <span class="cm">// 探测失败就退回环境光，避免黑色空洞</span>
+}</code></pre>
+  <div class="warn"><b>回收的坑：</b>直接让 life 归零会在表里留下「墓碑」，探测链断裂导致明明存在的 cell 查不到。要么定期整体 rehash 压缩，要么用带回退的墓碑标记（值里存一个标志位，探测可穿过但不可插入）。</div>
+</section>
+
+<!-- ============ 05 UE 源码导读 ============ -->
+<section class="page" id="page-uesrc">
+  <span class="kicker">05 · UE Source Map</span>
+  <h1>UE 源码导读：把引擎当词典，不当教材</h1>
+  <p class="lede">源码已经拉下来了。这张地图只回答一个问题：带着什么疑问，去哪个文件找答案。</p>
+
+  <div class="warn">
+    <b>阅读纪律三条：</b>① 别通读——数万行 C++ 加海量 shader permutation，通读必死；② 先把开源实现跑通再进源码，否则你不知道自己在看什么；③ 每次进源码只带「一个待确认的问题」，找到答案就走，记回本库对应章节。
+  </div>
+
+  <h2>5.1 目录全景：哪些地方和你有关</h2>
+  <table>
+    <thead><tr><th style="width:46%">路径（以 5.5 为例）</th><th>内容</th><th style="width:60px">对应章</th></tr></thead>
+    <tbody>
+      <tr><td><code>Engine/Source/Runtime/Renderer/Private/Nanite/</code></td><td>Nanite 运行时 C++：剔除调度、光栅化、材质解析、流送</td><td>01</td></tr>
+      <tr><td><code>Engine/Shaders/Private/Nanite/</code></td><td>Nanite 全部 shader：cluster culling、光栅化、软光栅、vis buffer</td><td>01 / 04</td></tr>
+      <tr><td><code>Engine/Source/Runtime/Renderer/Private/Lumen/</code></td><td>Lumen 运行时：探针、世界缓存、卡片捕获、软硬件光追</td><td>02</td></tr>
+      <tr><td><code>Engine/Shaders/Private/Lumen/</code></td><td>Lumen shader：final gather、radiance cache、卡片光照</td><td>02</td></tr>
+      <tr><td><code>Engine/Source/Runtime/Engine/</code>（Nanite 相关）</td><td>簇编码、资产格式、MeshComponent 集成</td><td>01.3</td></tr>
+      <tr><td><code>Engine/Source/Developer/</code> 下网格处理模块</td><td>离线简化管线（模块名随版本变动，进目录 glob <code>Nanite*</code> 确认）</td><td>01.3</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>两个省心提示：</b>只读源码不需要跑 <code>Setup.bat</code>（那 20~30GB 是编译用的第三方库）；文件名在各版本间会变动，进目录第一件事是 <code>ls | grep -i nanite</code> 确认实际名字。</div>
+
+  <h2>5.2 高价值文件速查</h2>
+  <h3>Nanite 侧</h3>
+  <table>
+    <thead><tr><th style="width:40%">文件</th><th>带着什么问题去读</th></tr></thead>
+    <tbody>
+      <tr><td><code>NaniteCullRaster.cpp</code></td><td>cut 判定的精确数学（投影误差还是别的？）、遮挡两遍的真实开销、实例/簇两级调度怎么排布</td></tr>
+      <tr><td><code>NaniteDrawList.cpp</code></td><td>indirect draw 怎么组织、多视图（阴影/反射）怎么复用一次剔除</td></tr>
+      <tr><td><code>NaniteMaterials.cpp</code></td><td>vis buffer → 材质解析的 pass 结构、深度预通道怎么省材质开销</td></tr>
+      <tr><td><code>NaniteStreamingManager*.cpp</code></td><td>分页与驻留策略（第一版自研可以不读，做流式时再来）</td></tr>
+      <tr><td>Shaders: <code>NaniteClusterCulling*.ush</code></td><td>DAG 遍历在 shader 侧怎么写（persistent threads 还是栈式）</td></tr>
+      <tr><td>Shaders: 光栅化相关 <code>*Rasterizer*.ush</code></td><td>64 位 vis buffer 的实际位分配、软光栅的 binning 与溢出处理</td></tr>
+    </tbody>
+  </table>
+  <h3>Lumen 侧</h3>
+  <table>
+    <thead><tr><th style="width:40%">文件</th><th>带着什么问题去读</th></tr></thead>
+    <tbody>
+      <tr><td><code>LumenScreenProbeGather*.cpp/.ush</code></td><td>cascade 布局参数、探针放置与重投影、final gather 权重</td></tr>
+      <tr><td><code>LumenRadianceCache*.cpp</code></td><td>世界缓存 cell 的生命周期、更新调度（哪些每帧更、哪些降频）</td></tr>
+      <tr><td><code>LumenSceneCardCapture*.cpp</code></td><td>surface cache 卡片捕获——看看它为什么是自研拦路虎</td></tr>
+      <tr><td><code>LumenHardwareRayTracing* / Software*</code></td><td>两条光追路径怎么切换与降级、fallback mesh 何时被用</td></tr>
+      <tr><td><code>LumenReflections.cpp</code></td><td>反射怎么复用 surface cache、和 SSR 怎么混合</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5.3 用 grep 和 console 变量当导航</h2>
+  <p>引擎把所有可调参数都注册成 CVar，<strong>CVar 定义就在实现它的 cpp 里</strong>——这是最好的目录：</p>
+<pre><code><span class="cm"># 找 Lumen 探针相关参数 → 定义处就是实现处</span>
+grep -rn <span class="cs">"r.Lumen.ScreenProbe"</span> Engine/Source/Runtime/Renderer/Private/Lumen/ | head
+
+<span class="cm"># shader 里找 cut 判定公式</span>
+grep -rn <span class="cs">"LODError\|ProjectedError"</span> Engine/Shaders/Private/Nanite/
+
+<span class="cm"># 找 64 位 vis buffer 的位分配</span>
+grep -rn <span class="cs">"InterlockedMax\|atomicMax"</span> Engine/Shaders/Private/Nanite/ | head
+
+<span class="cm"># 运行时反向定位：控制台敲 r.Nanite 抖出全部开关，再回源码搜名字</span></code></pre>
+
+  <h2>5.4 源码阅读任务清单</h2>
+  <p>每完成一条，回本库对应章节核对并把结论记下来——这样读源码才沉淀为你自己的东西：</p>
+  <table>
+    <thead><tr><th>任务</th><th style="width:32%">去哪看</th><th style="width:70px">核对章</th></tr></thead>
+    <tbody>
+      <tr><td>确认 cut 判定的误差投影公式与阈值</td><td>NaniteCullRaster.cpp</td><td>§1.4 / 4.1</td></tr>
+      <tr><td>抄下 vis buffer 的实际位分配（深度几位、id 几位）</td><td>Nanite 光栅 shader</td><td>§4.2</td></tr>
+      <tr><td>确认遮挡剔除两遍的划分标准</td><td>NaniteCullRaster.cpp</td><td>§1.4</td></tr>
+      <tr><td>抄下探针 cascade 的间距/分辨率参数</td><td>LumenScreenProbeGather*</td><td>§2.4</td></tr>
+      <tr><td>确认世界缓存 cell 大小与衰减策略</td><td>LumenRadianceCache*</td><td>§2.5</td></tr>
+      <tr><td>找 fallback mesh 的生成规则与精度等级</td><td>搜 FallbackMesh</td><td>§3.2</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 06 三条路线 ============ -->
+<section class="page" id="page-tracks">
+  <span class="kicker">06 · Learning Tracks</span>
+  <h1>三条路线：自制引擎 / UE 源码 / Unity</h1>
+  <p class="lede">同一个技术栈，三种打开方式。可以只走一条，也可以组合——推荐组合方式放在最后。</p>
+
+  <h2>6.1 怎么选</h2>
+  <table>
+    <thead><tr><th style="width:110px">维度</th><th>A · 自制引擎（本库主线）</th><th>B · UE 源码路线</th><th>C · Unity SRP 路线</th></tr></thead>
+    <tbody>
+      <tr><td>核心动作</td><td>从零实现，全链路自己写</td><td>精读 + 改造业界标杆</td><td>在 SRP 宿主里自研渲染特性</td></tr>
+      <tr><td>学习收获</td><td>原理吃透，无黑盒</td><td>工程化组织、边缘 case、生产级权衡</td><td>SRP / RenderGraph / Burst 工具链 + 贴合日常工作</td></tr>
+      <tr><td>量级</td><td>数月（P0~P7）</td><td>数周（读+改为主）</td><td>1~2 月出 demo 版</td></tr>
+      <tr><td>适合时机</td><td>时间充裕、想彻底搞懂</td><td>源码已在手，随时可开</td><td>想把技术带回实际项目</td></tr>
+      <tr><td>依赖章节</td><td>全部（00~05）</td><td>05 章导读 + 00~03</td><td><a href="unity-handbook.html">Unity 专项手册 →</a></td></tr>
+    </tbody>
+  </table>
+
+  <div class="key">
+    <b>路线无关性：</b>01~05 章的内容（算法、伪码、踩坑、源码导读）对所有路线通用——差别只是「这些知识落到哪个宿主里」。
+  </div>
+
+  <h2>6.2 路线 B：UE 源码精读与改造</h2>
+  <ol class="steps">
+    <li><b>编译源码引擎</b>
+      <p><code>Setup.bat</code>（20~30GB 第三方库）→ <code>GenerateProjectFiles.bat</code> → 编译（数小时，磁盘留 150GB）。只改 shader 时可用控制台 <code>recompileshaders changed</code> 热验证，不必每次重编 C++。</p>
+    </li>
+    <li><b>开官方示例 + CVar 实验</b>
+      <p>载入带 Nanite/Lumen 的示例场景，先当调参工程师：<code>r.Nanite 0/1</code> 对比、逐个翻 <code>r.Lumen.*</code> 质量档位、用 <code>Stat GPU</code> 观察每个 pass 的真实开销。这一步建立「量」的直觉。</p>
+    </li>
+    <li><b>按 05 章导读逐文件精读</b>
+      <p>完成任务清单里的六条，每条都回本库核对结论。</p>
+    </li>
+    <li><b>动手改造三连（由小到大）</b>
+      <p>① 改 cluster 调试图或 LOD 阈值（shader 热改，当天见效）；② 加一个自定义 debug pass（如簇密度热力图）；③ 改 fallback mesh 生成参数，观察 GI 精度变化——正好验证 03 章的接口层理论。</p>
+    </li>
+    <li><b>Capstone</b>
+      <p>给 Nanite 加一个小特性并把改动过程写成博客（贴自己的 diff 与思路可以，<b>大段引擎源码不能公开</b>）。这是渲染岗求职最有说服力的作品。</p>
+    </li>
+  </ol>
+  <div class="warn"><b>EULA 边界：</b>源码版 UE 自用、内部开发没问题；对外发布遵守 royalty 条款；引擎源码本身不能转发或大段公开。</div>
+
+  <h2>6.3 路线 C：Unity SRP 落地</h2>
+  <p>Unity 没有官方 Nanite/Lumen 等价物（Unity 6 的 GPU Resident Drawer + GPU Occlusion Culling 只解决实例级 GPU-driven 剔除，GI 仍是 APV 烘焙探针），所以「Unity 版虚拟几何 + 动态 GI」是真正的自研空间——而且能直接长在你日常的 Unity 工作流上。</p>
+  <table>
+    <thead><tr><th style="width:170px">需求</th><th>Unity 里的对应物</th></tr></thead>
+    <tbody>
+      <tr><td>渲染管线控制</td><td>自定义 SRP / URP 插入 RenderPass（Unity 6 有 RenderGraph API）</td></tr>
+      <tr><td>compute 剔除</td><td><code>ComputeShader</code> + <code>GraphicsBuffer</code>（AppendBuffer 压缩存活簇）</td></tr>
+      <tr><td>indirect 绘制</td><td><code>CommandBuffer.DrawProceduralIndirect</code> / <code>RenderMeshIndirect</code></td></tr>
+      <tr><td>离线预处理</td><td>Burst job + <code>Mesh.AllocateWritableMeshData</code>，AssetPostprocessor 挂进导入管线自动生成簇资产</td></tr>
+      <tr><td>vis buffer 原子写入</td><td>64 位原子各平台支持不一，<b>动手前先写最小用例验证目标平台</b></td></tr>
+      <tr><td>探针 GI</td><td>全部自研——本库 02 章的设计可原样翻译成 Unity compute</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    <b>完整版在独立手册里：</b>Unity 路线内容多（SRP 前置、U0~U7 阶段、Unity 特有坑、资源清单），已单独成册 → <a href="unity-handbook.html"><b>打开 Unity 学习手册</b></a>。本页只放映射总览。
+  </div>
+
+  <h2>6.4 推荐组合</h2>
+  <p>三条路线不用二选一，推荐这个节奏：<b>主线走自制 A（P0~P4 打通基础管线）→ 平行开路线 B 按任务清单精读 UE 源码（每周 1~2 条）→ P5 之后用路线 C 把成熟设计搬进 Unity SRP，最终在你的实际项目里落地</b>。A 给你原理，B 给你工程判断，C 给你产出。</p>
+
+  <h2>6.5 从头搭，还是直接用 Carrot / Bevy？</h2>
+  <p>这是路线 A 的一个变体问题：「魔改现成开源引擎当宿主」算不算第四条路线。直接给判断：</p>
+  <table>
+    <thead><tr><th style="width:120px">选项</th><th>优势</th><th>代价</th><th>适合谁</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>完全从头搭</b></td>
+        <td>无黑盒，每一层都是自己写的；调试能力被逼到极致</td>
+        <td>慢；前期大量时间花在和 Nanite 无关的基建（窗口、RHI、资源加载）上</td>
+        <td>目标是「彻底搞懂原理」的人</td>
+      </tr>
+      <tr>
+        <td><b>魔改 Carrot</b></td>
+        <td>与本题贴合度最高：Nanite+光追接缝已打通，单人项目规模可通读，MIT 协议</td>
+        <td>孤岛项目：文档少、社区小、没有配套教程，很多设计要靠自己读代码反推</td>
+        <td>C++ 熟练、想直接研究接缝层实现的人</td>
+      </tr>
+      <tr>
+        <td><b>魔改 Bevy</b></td>
+        <td>活跃生态 + JMS55 的博客持续更新；meshlet 与 solari 代码质量高、可对照</td>
+        <td>① wgpu 抽象层挡在底层 API 之上，「手撸底层」的体验打折；② meshlet 与 solari <b>没有打通</b>；③ Rust 学习成本</td>
+        <td>接受 wgpu 抽象、想尽快跑起来的人</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="key">
+    <b>我的建议：</b>别在「完全从头」和「直接用现成」之间二选一——它们不是竞争关系，是<b>题目和答案册</b>的关系。正确用法：自己从头搭主线（哪怕只到 P4），卡住时去 Carrot / Bevy 的源码里翻「这一步别人是怎么写的」。反过来，如果你选魔改 Bevy，「把 solari 接上 meshlet」本身就是绝佳的毕业课题——那正是本库 03 章讲的接口层，官方至今没做。
+  </div>
+  <div class="warn">
+    <b>一个容易被低估的点：</b>从头搭的前 30% 时间会花在和 Nanite 毫无关系的基建上（RHI 封装、资源加载、shader 编译管线）。如果这让你烦躁，那就更该走「mini 自研 + 开源当答案册」的混合路线，而不是硬扛全从头，也不是直接住进别人的引擎里。
+  </div>
+</section>
+
+<!-- ============ 07 踩坑 ============ -->
+<section class="page" id="page-pitfalls">
+  <span class="kicker">07 · Pitfalls</span>
+  <h1>踩坑清单</h1>
+  <p class="lede">这些是别人已经踩过、你大概率也会踩的坑，按「现象 → 原因 → 处理」组织。</p>
+
+  <h2>Nanite 侧</h2>
+  <table>
+    <thead><tr><th style="width:150px">现象</th><th>原因</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>LOD 切换处出现裂缝</td><td>简化时没锁边界顶点，或父层簇的边界顶点与子层不是同一批</td><td>简化阶段显式传 locked vertex 集合；父层重切簇时保留边界顶点索引</td></tr>
+      <tr><td>远处几何闪烁/抖动</td><td>小三角形在硬件光栅里 quad 利用率极低，且亚像素覆盖不稳定</td><td>上软光栅；或先把屏幕误差阈值调大，让远处提前切到粗层</td></tr>
+      <tr><td>模型边缘出现细长锯齿条</td><td>簇被剔除但它的相邻簇仍被画，共享三角形归属错误</td><td>确保簇间共享的三角只归一个簇；剔除粒度用簇而不是三角</td></tr>
+      <tr><td>遮挡剔除后出现「漏光」空洞</td><td>Hi-Z 用的是上一帧深度，相机快速移动时遮挡关系已变</td><td>保守化：把包围球在屏幕空间外扩 1~2 像素，或用两遍法（先大簇后小簇）</td></tr>
+      <tr><td>帧时间随实例数线性上涨</td><td>DAG 遍历在 CPU 或每实例一个 dispatch</td><td>改成 persistent threads，一个 dispatch 覆盖整帧所有实例</td></tr>
+      <tr><td>材质解析比光栅化还贵</td><td>对全屏像素都跑了完整材质</td><td>深度预通道 + 只对可见像素跑；复杂材质拆成多 pass</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Lumen 侧</h2>
+  <table>
+    <thead><tr><th style="width:150px">现象</th><th>原因</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>移动时出现「拖影」色块</td><td>探针重投影把不相干的历史搬过来了</td><td>重投影做深度/法线一致性检查；新出现的区域直接丢弃历史（用当前帧单次结果）</td></tr>
+      <tr><td>墙角/接触处漏光</td><td>探针间距大于几何细节，探针「穿过」了墙</td><td>final gather 时用深度加权的邻域测试；接触阴影单独补一个 AO 项</td></tr>
+      <tr><td>整体偏暗或偏亮</td><td>辐照度与辐射度混用，漏了 1/π 或面积因子</td><td>统一约定：缓存存 irradiance（已除 π），探针存 radiance；推导一遍能量守恒再写代码</td></tr>
+      <tr><td>噪点怎么降都糊</td><td>每帧射线太少 + 只用空间滤波</td><td>先加时间累积（这是最便宜的 10 倍采样），再考虑 ReSTIR</td></tr>
+      <tr><td>帧率随世界缓存大小剧烈波动</td><td>每帧遍历全部存活 cell</td><td>按重要性调度：只更新「本帧被访问过」的 cell，其余按轮转降频</td></tr>
+      <tr><td>关闭光源后余晖不消失</td><td>生命值衰减太慢 / 没有清空策略</td><td>cell life 上限设 8~16 帧；光源变化时对影响范围内 cell 打脏标记</td></tr>
+    </tbody>
+  </table>
+
+  <h2>接口层</h2>
+  <table>
+    <thead><tr><th style="width:150px">现象</th><th>原因</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>光追画面比光栅化「少一块」</td><td>簇列表只取了可见簇，屏幕外的遮挡体没进 TLAS</td><td>光追用的簇集合要单独维护，包含视锥外但对 GI 有贡献的物体（比如身后那面墙）</td></tr>
+      <tr><td>反射里出现明显 LOD 跳变</td><td>光追几何其实就是 fallback mesh，精度不匹配</td><td>近处改聚合 BLAS；或对反射做粗糙度相关的模糊掩盖</td></tr>
+      <tr><td>每帧 CPU 卡在回读上</td><td>同步等待 GPU 簇列表</td><td>延迟一帧使用（用上一帧的簇列表建 AS），视觉上几乎无感，彻底消除同步</td></tr>
+      <tr><td>显存爆掉</td><td>预建 BLAS 常驻 + 聚合 BLAS 双份</td><td>只对「大网格」预建；小物体统一用 fallback；聚合 BLAS 用环形缓冲复用</td></tr>
+    </tbody>
+  </table>
+
+  <div class="key"><b>通用调试建议：</b>给每个子系统都做一个「可视化开关」——簇随机着色、LOD 层级色阶、遮挡剔除结果、探针辐照度、射线命中点、世界缓存占用率。这些视图的代码量不到主逻辑的 5%，但能省掉大部分盲猜时间。</div>
+</section>
+
+<!-- ============ 08 资源库 ============ -->
+<section class="page" id="page-resources">
+  <span class="kicker">08 · Library</span>
+  <h1>资源库</h1>
+  <p class="lede">按「代码 / 文章 / 视频演示 / 论文分享」分类，标注了必看程度。点标签筛选。</p>
+
+  <div class="filter">
+    <input id="resSearch" type="text" placeholder="搜索项目名、作者、关键词…">
+    <button class="chip on" data-cat="all">全部</button>
+    <button class="chip" data-cat="code">代码</button>
+    <button class="chip" data-cat="blog">文章</button>
+    <button class="chip" data-cat="video">视频/演示</button>
+    <button class="chip" data-cat="paper">论文/分享</button>
+  </div>
+
+  <div class="grid g2" id="resList">
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-must">必看</span> <span class="tag">C++ / Vulkan</span>
+      <h4>jglrxavpok / Carrot</h4>
+      <p>唯一同时手撸了虚拟几何和全光追照明的引擎，且把两者的接缝写成了长文。GI 用世界空间哈希缓存 + 屏幕探针。</p>
+      <a href="https://github.com/jglrxavpok/Carrot" target="_blank" rel="noopener">github.com/jglrxavpok/Carrot</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-must">必看</span> <span class="tag">Rust / wgpu</span>
+      <h4>bevyengine/bevy · meshlet + solari</h4>
+      <p>同一代码库里的两套参考实现：<code>bevy_pbr::experimental::meshlet</code>（虚拟几何）与 <code>bevy_solari</code>（实时光追 GI）。注意两者尚未打通。</p>
+      <a href="https://github.com/bevyengine/bevy" target="_blank" rel="noopener">github.com/bevyengine/bevy</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-must">必看</span> <span class="tag">C++ / 算法库</span>
+      <h4>zeux / meshoptimizer</h4>
+      <p>切簇、简化、分区的事实标准。<code>demo/nanite.cpp</code> 是作者自己写的完整 Nanite 流程演示，离线部分照抄即可。</p>
+      <a href="https://github.com/zeux/meshoptimizer" target="_blank" rel="noopener">github.com/zeux/meshoptimizer</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-rec">推荐</span> <span class="tag">WGSL / WebGPU</span>
+      <h4>Scthe / nanite-webgpu</h4>
+      <p>含软光栅、billboard impostor、逐 meshlet 剔除，还带 CPU 朴素实现可逐步断点对照。代码量适中，最适合通读。</p>
+      <a href="https://github.com/Scthe/nanite-webgpu" target="_blank" rel="noopener">github.com/Scthe/nanite-webgpu</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-rec">推荐</span> <span class="tag">C++ / Vulkan</span>
+      <h4>CDDing / Danite</h4>
+      <p>用 mesh shader（EXT_mesh_shader）+ METIS + Hi-Z 的学生项目，结构简单、注释直白，适合当第一个能跑起来的骨架。</p>
+      <a href="https://github.com/CDDing/Danite" target="_blank" rel="noopener">github.com/CDDing/Danite</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-opt">参考</span> <span class="tag">C++ / Vulkan</span>
+      <h4>Wbiu / Custom-Virtualized-Geometry-Renderer</h4>
+      <p>QEM 简化 + BVH + indirect draw 全自己写，附 cluster/三角形/光追三种调试视图。</p>
+      <a href="https://github.com/Wbiu/Custom-Virtualized-Geometry-Renderer" target="_blank" rel="noopener">github.com/Wbiu/Custom-Virtualized-Geometry-Renderer</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-opt">参考</span> <span class="tag">C++ / Vulkan</span>
+      <h4>LVSTRI / IrisVk</h4>
+      <p>虚拟几何实现完整，Hi-Z 剔除干净，被 JMS55 列在资源清单里。</p>
+      <a href="https://github.com/LVSTRI/IrisVk" target="_blank" rel="noopener">github.com/LVSTRI/IrisVk</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-rec">推荐</span> <span class="tag">C++ / Vulkan RT</span>
+      <h4>yuphin / Lumen</h4>
+      <p>同名但无关的 Vulkan 光追框架：ReSTIR、ReSTIR GI、ReSTIR PT、DDGI 全部有实现，是抄 GI 采样策略的好地方。</p>
+      <a href="https://github.com/yuphin/Lumen" target="_blank" rel="noopener">github.com/yuphin/Lumen</a>
+    </div>
+
+    <div class="card res-item" data-cat="code">
+      <span class="badge b-opt">参考</span> <span class="tag">TypeScript / three.js</span>
+      <h4>elad12390 / three-virtual-geometry</h4>
+      <p>浏览器里可跑的虚拟几何，附带 <code>vg-bake</code> 离线烘焙工具，适合快速理解 .vgeo 资产结构。</p>
+      <a href="https://github.com/elad12390/three-virtual-geometry" target="_blank" rel="noopener">github.com/elad12390/three-virtual-geometry</a>
+    </div>
+
+    <div class="card res-item" data-cat="blog">
+      <span class="badge b-must">必看</span> <span class="tag">长文</span>
+      <h4>jglrxavpok：Recreating Nanite 系列</h4>
+      <p>The Plan → material pass → Raytracing → GI 世界缓存，一篇一个里程碑，含大量截图与失败记录。光追那篇是接口层的唯一详述。</p>
+      <a href="https://blog.jglrxavpok.eu/2024/08/21/recreating-nanite-raytracing.html" target="_blank" rel="noopener">blog.jglrxavpok.eu</a>
+    </div>
+
+    <div class="card res-item" data-cat="blog">
+      <span class="badge b-must">必看</span> <span class="tag">深度解析</span>
+      <h4>JMS55：Virtual Geometry in Bevy 0.14 / 0.15</h4>
+      <p>讲清了哪些方案试过不行（内存、BVH 剔除、Hi-Z shader 移植），是全网最诚实的实现复盘。</p>
+      <a href="https://jms55.github.io/posts/2024-06-09-virtual-geometry-bevy-0-14/" target="_blank" rel="noopener">jms55.github.io</a>
+    </div>
+
+    <div class="card res-item" data-cat="blog">
+      <span class="badge b-rec">推荐</span> <span class="tag">中文连载</span>
+      <h4>Lumen 源码分析系列（wsyoverflow）</h4>
+      <p>基于 UE5 源码逐部件拆解 surface cache、radiance cache、screen probe、反射，中文里最系统的一份。</p>
+      <a href="https://wsyoverflow.github.io/2025/03/04/Render%20Engine/UE5/Lumen/1.%20Introduction" target="_blank" rel="noopener">wsyoverflow.github.io</a>
+    </div>
+
+    <div class="card res-item" data-cat="blog">
+      <span class="badge b-opt">参考</span> <span class="tag">中文</span>
+      <h4>UE5.1 Lumen 间接光技术分析</h4>
+      <p>把 screen probe / world probe / surface cache / SDF 的分工讲得比官方文档清楚。</p>
+      <a href="https://www.cnblogs.com/Gr-blogs/p/18119521" target="_blank" rel="noopener">cnblogs.com</a>
+    </div>
+
+    <div class="card res-item" data-cat="video">
+      <span class="badge b-must">必看</span> <span class="tag">Epic 官方</span>
+      <h4>Lumen in the Land of Nanite（PS5 实机）</h4>
+      <p>一切的起点。先看它建立「最终画面应该是什么样」的预期，再回头读实现。</p>
+      <a href="https://www.youtube.com/watch?v=qC5KtatMcUw" target="_blank" rel="noopener">youtube.com/watch?v=qC5KtatMcUw</a>
+    </div>
+
+    <div class="card res-item" data-cat="video">
+      <span class="badge b-rec">推荐</span> <span class="tag">在线可玩</span>
+      <h4>nanite-webgpu 在线 Demo</h4>
+      <p>6.4 亿 / 17 亿三角形场景，每个优化开关都能实时切换。理解各模块权重的最高效方式（需 Chrome）。</p>
+      <a href="https://scthe.github.io/nanite-webgpu/" target="_blank" rel="noopener">scthe.github.io/nanite-webgpu</a>
+    </div>
+
+    <div class="card res-item" data-cat="video">
+      <span class="badge b-rec">推荐</span> <span class="tag">在线可玩</span>
+      <h4>three-virtual-geometry Demo</h4>
+      <p>森林、扫描博物馆等场景，能直接调误差阈值和三角形预算。</p>
+      <a href="https://elad12390.github.io/three-virtual-geometry/" target="_blank" rel="noopener">elad12390.github.io/three-virtual-geometry</a>
+    </div>
+
+    <div class="card res-item" data-cat="video">
+      <span class="badge b-opt">参考</span> <span class="tag">视频</span>
+      <h4>Bevy 0.14 虚拟几何演示 / 0.20 Solari 场景</h4>
+      <p>两排兔子对照（普通材质 vs cluster 调试图）；0.20 的 Zorah 场景是 Solari 的成品效果参考。</p>
+      <a href="https://bevyengine.org/news/bevy-0-14/" target="_blank" rel="noopener">bevyengine.org/news/bevy-0-14</a>
+    </div>
+
+    <div class="card res-item" data-cat="paper">
+      <span class="badge b-must">必读</span> <span class="tag">SIGGRAPH 2021</span>
+      <h4>Nanite: A Deep Dive（Brian Karis）</h4>
+      <p>所有实现的共同蓝本：cluster DAG、误差计算、两遍遮挡、软光栅设计动机全在里面。</p>
+      <a href="https://advances.realtimerendering.com/s2021/Karis_Nanite_SIGGRAPH_Advances_2021_final.pdf" target="_blank" rel="noopener">advances.realtimerendering.com（PDF）</a>
+    </div>
+
+    <div class="card res-item" data-cat="paper">
+      <span class="badge b-rec">推荐</span> <span class="tag">GDC 2021</span>
+      <h4>The Technology Behind Lumen in the Land of Nanite</h4>
+      <p>Lumen 的官方架构说明：软件/硬件两条路径、surface cache、final gather 的取舍。</p>
+      <a href="https://www.unrealengine.com/en-US/tech-blog" target="_blank" rel="noopener">unrealengine.com（技术博客）</a>
+    </div>
+
+    <div class="card res-item" data-cat="paper">
+      <span class="badge b-rec">推荐</span> <span class="tag">论文</span>
+      <h4>ReSTIR GI / DDGI</h4>
+      <p>ReSTIR GI（Bitterli et al.）解决间接光采样复用；DDGI（Majercik et al.）是探针网格的经典实现。想上 LEVEL 3 必读。</p>
+      <a href="https://research.nvidia.com/publication/2021-07_restir-gi-path-resampling-real-time-path-tracing" target="_blank" rel="noopener">research.nvidia.com</a>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ 09 打卡 ============ -->
+<section class="page" id="page-checklist">
+  <span class="kicker">09 · Milestones</span>
+  <h1>里程碑打卡</h1>
+  <p class="lede">勾选状态保存在本地浏览器，刷新不丢。每一项都配了「怎么验收」，做完再往下走。</p>
+
+  <div class="check-group" data-group="nanite">
+    <h3>Nanite 侧 <span>0 / 8</span></h3>
+    <label class="chk"><input type="checkbox" data-step="n1"><span>离线切簇：任意模型能输出 128 三角的簇，命令行能打印簇数量与包围球</span></label>
+    <label class="chk"><input type="checkbox" data-step="n2"><span>组内 QEM 简化 + 重切，能生成 3 层以上层级，无裂缝</span></label>
+    <label class="chk"><input type="checkbox" data-step="n3"><span>运行时视锥剔除 + indirect draw，能画出整模型</span></label>
+    <label class="chk"><input type="checkbox" data-step="n4"><span>cluster 调试图：每个簇随机着色，验证切分合理</span></label>
+    <label class="chk"><input type="checkbox" data-step="n5"><span>DAG 遍历 + 屏幕误差选 cut，远近细节自动切换</span></label>
+    <label class="chk"><input type="checkbox" data-step="n6"><span>Hi-Z 遮挡剔除接入，帧时间有明显下降且无漏画</span></label>
+    <label class="chk"><input type="checkbox" data-step="n7"><span>可见性缓冲 + 材质解析，替代直写 GBuffer</span></label>
+    <label class="chk"><input type="checkbox" data-step="n8"><span>软光栅化亚像素三角形，远景不再闪烁</span></label>
+  </div>
+
+  <div class="check-group" data-group="lumen">
+    <h3>Lumen 侧 <span>0 / 7</span></h3>
+    <label class="chk"><input type="checkbox" data-step="l1"><span>GBuffer 可读：位置/法线/材质 id 可视化正确</span></label>
+    <label class="chk"><input type="checkbox" data-step="l2"><span>静态场景 BLAS 建好，ray query 能正确命中并返回距离</span></label>
+    <label class="chk"><input type="checkbox" data-step="l3"><span>屏幕探针布局 + 八面体图，可视化辐照度合理</span></label>
+    <label class="chk"><input type="checkbox" data-step="l4"><span>世界缓存哈希表跑通，能观察到多跳颜色渗透</span></label>
+    <label class="chk"><input type="checkbox" data-step="l5"><span>final gather + 时间累积，画面稳定不拖影</span></label>
+    <label class="chk"><input type="checkbox" data-step="l6"><span>空间滤波接入，噪点达到可接受水平</span></label>
+    <label class="chk"><input type="checkbox" data-step="l7"><span>关灯测试：余晖自然衰减，无残留光斑</span></label>
+  </div>
+
+  <div class="check-group" data-group="bridge">
+    <h3>接口层 <span>0 / 4</span></h3>
+    <label class="chk"><input type="checkbox" data-step="b1"><span>用 fallback mesh 建光追场景，GI 与虚拟几何同屏正确</span></label>
+    <label class="chk"><input type="checkbox" data-step="b2"><span>维护独立的「光追簇列表」，包含屏幕外遮挡体</span></label>
+    <label class="chk"><input type="checkbox" data-step="b3"><span>逐簇 BLAS 预建 + 每帧拷贝聚合，近处反射精度提升可见</span></label>
+    <label class="chk"><input type="checkbox" data-step="b4"><span>延迟一帧使用簇列表，消除 CPU 回读同步</span></label>
+  </div>
+
+  <div class="check-group" data-group="ue-track">
+    <h3>路线 B · UE 源码 <span>0 / 5</span></h3>
+    <label class="chk"><input type="checkbox" data-step="u0"><span>源码版 UE 编译通过，打开 Nanite/Lumen 示例场景</span></label>
+    <label class="chk"><input type="checkbox" data-step="u1"><span>CVar 实验做完：r.Nanite / r.Lumen 开关与质量档位的开销量化</span></label>
+    <label class="chk"><input type="checkbox" data-step="u2"><span>05 章任务清单六条全部完成并记录结论</span></label>
+    <label class="chk"><input type="checkbox" data-step="u3"><span>shader 热改实验：改 LOD 阈值/调试图，recompileshaders 验证</span></label>
+    <label class="chk"><input type="checkbox" data-step="u4"><span>改造三连完成，写出博客或笔记</span></label>
+  </div>
+
+  <div class="check-group" data-group="unity-track">
+    <h3>路线 C · Unity SRP <span>0 / 6</span></h3>
+    <label class="chk"><input type="checkbox" data-step="y1"><span>自定义 SRP 跑通基础 forward 渲染（手册 U0~U1）</span></label>
+    <label class="chk"><input type="checkbox" data-step="y2"><span>GPU Resident Drawer / GPU culling 实验接入（手册 U2）</span></label>
+    <label class="chk"><input type="checkbox" data-step="y3"><span>64 位原子最小用例在目标平台验证通过</span></label>
+    <label class="chk"><input type="checkbox" data-step="y4"><span>Burst 离线切簇工具 + 资产导入管线（手册 U3）</span></label>
+    <label class="chk"><input type="checkbox" data-step="y5"><span>compute 簇剔除 + indirect 绘制，cluster 调试图正确（手册 U4）</span></label>
+    <label class="chk"><input type="checkbox" data-step="y6"><span>探针 GI demo 跑通（手册 U7，复用本库 02 章）</span></label>
+  </div>
+
+  <div class="key" style="margin-top:24px">
+    <b>验收心法：</b>每一阶段都要能「单独关掉」这一层并看到画面退化。如果一个功能你没法关掉验证，说明它和别的层耦合太深，后面的调试会非常痛苦。
+  </div>
+</section>
+
+<!-- ============ 附录 C 多步路线图 ============ -->
+<section class="page" id="page-roadmap">
+  <span class="kicker">Appendix C · Step-by-step Roadmap</span>
+  <h1>多步路线图：从空窗口到 Nanite + Lumen</h1>
+  <p class="lede">14 步、7 个阶段，总周期约 3~4 个月业余时间。铁律：<b>每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步</b>。建议每完成一步打一个 git tag + 存一张截图。卡住的对照资料分三层：本库章节、<b>本地参考代码（<code>E:\UE_STUDY_2026\</code> 下的 Carrot 与 bevy 两个完整仓库）</b>、作者博客——下面每张表的「卡住翻哪」已按此标注。</p>
+
+  <div class="key">
+    <b>本地参考代码速览</b>（两个仓库都是完整提交历史，可用 <code>git log/blame</code> 追每一步的演变过程）：<br>
+    · <code>E:\UE_STUDY_2026\Carrot\</code> —— jglrxavpok 的 C++/Vulkan 引擎，<b>唯一 Nanite+Lumen 双撸完成的项目</b>。核心在 <code>engine/engine/render/</code>（ClusterManager 虚拟几何、VisibilityBuffer、raytracing/ AS 管理）和 <code>engine/resources/shaders/</code>（用 slang 写的 GI 全家桶：探针、世界缓存、SVGF）。<br>
+    · <code>E:\UE_STUDY_2026\bevy\</code> —— Rust/wgpu，<b>代码质量最高的两套单项实现</b>：<code>crates/bevy_pbr/src/meshlet/</code>（虚拟几何全套含离线构建）、<code>crates/bevy_solari/src/realtime/</code>（ReSTIR/世界缓存/探针 GI）。
+  </div>
+
+  <h3 style="margin:20px 0 8px;font-size:15px">步骤 → 本地代码对照总表</h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:62%">本地参考文件（E:\UE_STUDY_2026\ 下）</th><th>对应博客/资料</th></tr></thead>
+    <tbody>
+      <tr><td><b>S0</b></td><td><code>Carrot/engine/engine/vulkan/</code>（Vulkan 封装风格参考，别照抄体量）</td><td>vulkan-tutorial</td></tr>
+      <tr><td><b>S1</b></td><td><code>bevy/crates/bevy_pbr/src/meshlet/from_mesh.rs</code>（离线构建入口）、<code>meshlet/asset.rs</code>（.meshlet_mesh 资产结构）</td><td>JMS55 博客 0.14 篇</td></tr>
+      <tr><td><b>S2</b></td><td><code>Carrot/engine/engine/render/ClusterManager.cpp</code>（聚组+简化+重切全套，C++ 读起来最顺）</td><td>Carrot《Recreating Nanite: The Plan》</td></tr>
+      <tr><td><b>S3</b></td><td><code>bevy/.../meshlet/cull_bvh.wesl</code>（bevy 用两级 BVH 而非 DAG——先想清楚你要哪种）</td><td>JMS55 博客 0.15 篇（讲为什么弃 DAG）</td></tr>
+      <tr><td><b>S4</b></td><td><code>bevy/.../meshlet/cull_instances.wesl → cull_clusters.wesl → fill_counts.wesl</code>（实例→簇→计数的三级剔除链，直接照抄结构）</td><td>—</td></tr>
+      <tr><td><b>S5</b></td><td><code>bevy/.../meshlet/cull_bvh.wesl</code>；UE <code>NaniteCullRaster.cpp</code>（你拉的源码里）</td><td>Karis《Nanite: A Deep Dive》</td></tr>
+      <tr><td><b>S6</b></td><td><code>Carrot/engine/resources/shaders/post-process/visibility-buffer-debug/</code>（两遍结构+调试图参考）</td><td>Carrot《The Plan》</td></tr>
+      <tr><td><b>S7</b></td><td><code>Carrot/engine/engine/render/VisibilityBuffer.cpp</code>；<code>bevy/.../meshlet/visibility_buffer_hardware_raster.wesl</code>、<code>visibility_buffer_resolve.wesl</code>、<code>material_shade_nodes.rs</code></td><td>Carrot《A basic material pass》</td></tr>
+      <tr><td><b>S8</b></td><td><code>Carrot/engine/engine/render/raytracing/AccelerationStructure.cpp</code>、<code>RaytracingScene.cpp</code>（工业级 AS 管理+聚合，本项目最值钱的文件之一）</td><td>Carrot《Recreating Nanite: Raytracing》；卡壳超三天再翻 NVIDIA <b>RTXMG</b>（簇式几何加速 BVH 构建的官方开源实现，MIT）</td></tr>
+      <tr><td><b>S9</b></td><td><code>Carrot/engine/resources/shaders/lighting/direct-raytracing.slang</code>（阴影射线直光）</td><td>—</td></tr>
+      <tr><td><b>S10</b></td><td><code>Carrot/engine/resources/shaders/lighting/gi/read-screen-probes.slang</code>（final gather）；<code>bevy/crates/bevy_solari/src/realtime/prepare.rs</code>（探针布局）+ <code>initial_path.wesl</code></td><td>Carrot GI 长文；UE <code>LumenScreenProbeGather*</code></td></tr>
+      <tr><td><b>S11</b></td><td><code>Carrot/.../lighting/gi/update-cells.slang</code>（世界缓存 cell 更新）；<code>bevy_solari/src/realtime/world_cache_update.wesl</code>、<code>world_cache_query.wesl</code>、<code>world_cache_compact.wesl</code></td><td>Carrot GI 长文</td></tr>
+      <tr><td><b>S12</b></td><td><code>Carrot/.../lighting/svgf.slang</code>（现成 SVGF 实现）+ <code>temporal-denoise.compute.glsl</code></td><td>—</td></tr>
+      <tr><td><b>S13</b></td><td><code>Carrot/engine/resources/pipelines/compute/compute-rt-clusters.json</code>（逐簇 BLAS 聚合的管线定义，同名 shader 在 <code>shaders/compute/</code>）</td><td>Carrot《Raytracing》（此题唯一详解）</td></tr>
+      <tr><td><b>S14</b></td><td><code>bevy_solari/src/realtime/restir.wesl</code> vs <code>no_restir.wesl</code>（两条路线对照！）；<code>bevy/.../meshlet/visibility_buffer_software_raster.wesl</code>（软光栅）</td><td>Scthe 软光栅系列博文</td></tr>
+    </tbody>
+  </table>
+
+  <div class="key">
+    <b>框架选型（跨平台是硬需求，不裸写图形 API）</b>——Nanite+Lumen 对框架有 4 条硬性检查项：<b>compute shader、indirect draw、64 位 buffer 原子操作、硬件光追查询（ray query）</b>。逐个过筛：
+  </div>
+  <table>
+    <thead><tr><th>框架</th><th>后端</th><th>4 项硬性检查</th><th>与参考代码的关系</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td><b>Diligent Engine</b>（C++）</td><td>Vulkan / D3D12 / D3D11 / Metal / OpenGL / WebGPU</td><td>compute ✓ · indirect ✓ · 64bit 原子 ✓（Vulkan/D3D12 后端）· ray query ✓</td><td>与 Carrot 同为 C++，代码可平移理解</td><td>⬇️ 降为备选：多后端优势在你的场景用不上——两套参考代码（Carrot 裸 Vulkan、bevy wgpu）没一家用它，选它反而隔着一层翻译。只有「以后确定要 macOS/移动端商用」时再回头考虑</td></tr>
+      <tr><td><b>wgpu</b>（Rust）</td><td>Vulkan / D3D12 / Metal / GL（WebGPU API）</td><td>compute ✓ · indirect ✓ · 64bit 原子 ✓ · ray query ⚠️ 实验特性（bevy_solari 就是这么跑的）</td><td>与 bevy 参考代码<b>同语言同 API</b>，wesl shader 可直接对照</td><td><b>✅ 备选 B</b>：想跟 bevy 代码零翻译对照就选它；RT 依赖 wgpu 实验分支，仅 Vulkan/DX12</td></tr>
+      <tr><td><b>NVRHI</b>（NVIDIA，C++，MIT）</td><td>Vulkan 1.3 / D3D12 / D3D11（Windows + Linux）</td><td>compute ✓ · indirect ✓ · 64bit 原子 ✓ · RT ✓，另有 <b>Meshlet pipeline 原生支持</b>、自动 barrier 跟踪、自带验证层</td><td><b>RTXDI / RTXGI / Path Tracing / RTX Mega Geometry SDK 全建在它上面</b>——Lumen 侧可直接抄的 MIT 生态</td><td><b>📚 定位：参考答案库，不是底座</b>。RTXDI/RTXGI 源码是 ReSTIR/表面缓存最完整的开源精读材料（卡壳超过三天去读对应模块）；Meshlet pipeline 与自动 barrier 是效率导向加速器，学习目标下不启用。本机 N 卡在裸 Vulkan 下同样能用 Nsight 抓帧——N 卡红利不依赖 NVRHI</td></tr>
+      <tr><td>The Forge（C++，Apache 2.0）</td><td>DX12(Windows) / Vulkan(安卓·SteamDeck) / Metal / 主机（付费授权）</td><td>compute/indirect/RT ✓；<b>GI 中间件闭源不公开</b></td><td>可见性缓冲 2.0 现成实现（Wolfgang Engel 有系列博客）</td><td>⚠️ 商业服务公司驱动：Windows 已移除 Vulkan、开发迁往 Codeberg、GI 核心不开源——当资料读可以，当底座不建议</td></tr>
+      <tr><td>Falcor（NVIDIA，C++）</td><td>Vulkan / D3D12</td><td>全 ✓，ReSTIR/GI/路径追踪示例现成</td><td>Slang 集成最深</td><td>⚠️ 特殊定位：研究原型框架，替你做得太多——适合纯 GI 算法实验，与「手撸」目标冲突</td></tr>
+      <tr><td>bgfx（C++）</td><td>后端最多</td><td>compute/indirect ✓，<b>64bit 原子 ✗、ray query ✗</b></td><td>—</td><td>❌ 出局：Lumen 硬光追和 vis buffer 打包都做不了</td></tr>
+      <tr><td>裸 Vulkan / D3D12（单后端）</td><td>单一后端</td><td>全 ✓</td><td>Carrot 原样，参考代码可逐行对照</td><td><b>✅ 主推 A（定稿）</b>：学习路线参考 Carrot、代码自己写一份。与参考实现逐行对照零翻译；barrier/同步/内存亲手写——这些坑本身就是 S0~S8 的课程内容。纪律：图形调用收敛进独立渲染器模块，将来要换底座随时可换</td></tr>
+    </tbody>
+  </table>
+  <div class="key" style="margin-top:12px">
+    <b>最终技术决策（定稿）：</b><b>裸 Vulkan 1.3 + Slang，参照 Carrot 的架构自己写一份</b>。四条要点：<br>
+    ① <b>「参考 Carrot」= 抄思路不抄代码</b>：先读它某模块怎么组织（ClusterManager / VisibilityBuffer / AS 管理），合上书自己默写，写不出来再回去看——逐行复制等于白学，理解后重写才算产出。<br>
+    ② <b>Slang 与 Carrot 同款</b>，shader 侧无缝对照；不习惯也可以 HLSL + DXC，随你。<br>
+    ③ <b>本机 N 卡的正确用法</b>：Nsight Graphics 对 Vulkan 程序逐 draw 抓帧调试（这比选什么框架重要得多）；NVRHI/RTXDI/RTXGI 源码当「答案册」，卡壳超过三天再精读，平时不碰。<br>
+    ④ <b>渲染器模块纪律</b>：图形调用不散落到业务代码。哪天目标从学习转向产出，把模块换成 NVRHI 或 Diligent，Nanite/Lumen 业务代码不动——选型讨论到这里闭环。<br><br>
+    <b>工程组织建议：</b>只维护两个程序——① <code>nanite-tools</code>：命令行工具，子命令 <code>cluster / simplify / dag / stat</code>，离线产出自定义资产格式 <code>.nmesh</code>（簇数组 + DAG + fallback）；② <code>viewer</code>：运行时程序，P0 先画普通模型，之后每一步都在它上面加一个可开关的模式（<code>--mode cull / dag / hiz / visbuf / shadow / probe / cache</code>），旧模式永远保留当对照。资产格式第一次就定好带版本号，后面加字段不破坏旧文件。
+    <b>着色器语言配套选 Slang</b>：一份 shader 编译到 SPIR-V / DXIL / Metal LIB，天然跨后端——Carrot 本身就用 slang（你本地 <code>Carrot/engine/resources/shaders/</code> 里全是 .slang），语法对 HLSL 用户几乎零成本；框架 A/B 下都能用（Diligent 原生支持 Slang，wgpu 侧用 slangc 编到 WGSL/SPIR-V）。<b>注意 WGSL 没有 64 位标量原子</b>，wgpu 路线下 vis buffer 打包要改成两次 32 位 CAS——这条坑 <a href="unity-handbook.html#pits" style="color:var(--accent);text-decoration:none">Unity 手册踩坑章</a> 同源。
+  </div>
+
+  <div class="key" style="margin-top:12px">
+    <b>实战检阅：用 NVRHI / Slang 造出来的开源项目（2026-11 查证）</b><br>
+    <table style="margin-top:8px">
+      <thead><tr><th style="width:24%">项目</th><th style="width:14%">用的什么</th><th>参考价值</th></tr></thead>
+      <tbody>
+        <tr><td><b>RBDOOM-3-BFG</b><br><span class="mono" style="font-size:11px">RobertBeckebans/RBDOOM-3-BFG</span></td><td>NVRHI（DX12+Vulkan）</td><td>⭐ 最完整的「NVRHI 真实游戏」样本：前 AAA 引擎（id Tech 4）整体移植，PBR + GI + IBL + TAA + SSAO 全套；作者选型时对比过 The-Forge/Diligent/bgfx 后选了 NVRHI，结论「用起来和 OpenGL 一样简单，但缺文档——现在有一个前 AAA 游戏当例子了」；作者还参考了 id Tech 8 的 GI 技术分享实现其中一部分</td></tr>
+        <tr><td><b>NVIDIA RTX SDK 全家</b><br><span class="mono" style="font-size:11px">RTXDI / RTXGI / NRD / RTXMG / OMM</span></td><td>NVRHI + Donut</td><td>官方示例全部跑在 NVRHI 上（D3D12/Vulkan 双后端），MIT 许可；其中 <b>RTX Mega Geometry（RTXMG）</b>做「基于簇的几何系统加速 BVH 构建」——正是 Nanite 侧喂光追的官方答案，与 03 章接口层直接对口</td></tr>
+        <tr><td><b>RTX Remix 运行时</b><br><span class="mono" style="font-size:11px">NVIDIA-Omniverse/RTXRemix</span></td><td>NVRHI + DXVK</td><td>开源运行时：《Portal with RTX》就是它的成品展示——老游戏整体替换成路径追踪管线，ReSTIR DI + ReSTIR GI + NRD 全家桶，等于「Lumen 级光照塞进任意 DX8/9 游戏」的工程活标本</td></tr>
+        <tr><td><b>Falcor</b><br><span class="mono" style="font-size:11px">NVIDIAGameWorks/Falcor</span></td><td>Slang（自建渲染层）</td><td>Slang 的「官方参考实现之家」：整个框架用 Slang 写 shader，内置 ReSTIR PT / RTXDI / NRD / DLSS 集成，大量 SIGGRAPH 论文代码以它为宿主；研究性框架，当算法参考书读</td></tr>
+        <tr><td><b>Valve Source 2</b></td><td>Slang（生产级）</td><td>非开源但最有分量：Valve 把 Source 2 的 shader 系统移植到了 Slang——Slang 生产可用性的最硬背书</td></tr>
+        <tr><td><b>独立引擎一批</b><br><span class="mono" style="font-size:11px">Violet / Lune / prosper / ThatOneLazyGuy/GameEngine</span></td><td>裸 Vulkan + Slang</td><td>社区正在用「和本路线图定稿一模一样的技术栈」造引擎：Violet（Vulkan+Slang+RenderGraph+bindless）、prosper（Vulkan+Slang+SDL3，源自 vkguide.dev）、Lune（Metal/Vulkan+Slang）——证明这条栈个人玩得转，代码量都不大，适合对照</td></tr>
+      </tbody>
+    </table>
+    <b>如实说</b>：NVRHI 生态主流配 HLSL+DXC，Slang 生态主流配 Falcor/裸 Vulkan，「NVRHI+Slang 捆绑」的标杆项目反而没有——所以本库定稿（裸 Vulkan + Slang）恰好是社区独立开发者验证最多、且 Carrot 可逐行对照的那条线；NVRHI 侧的 RBDOOM-3-BFG 和 RTXMG 源码留在「答案册」位置即可。
+  </div>
+
+  <h3 style="margin:24px 0 8px;font-size:15px">阶段 P0 · 渲染地基 <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 1~2 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S0</b></td><td>搭骨架：接入选定框架/后端，窗口 + glTF 加载 + ImGui 面板 + Slang 编译管线跑通</td>
+        <td><code>viewer</code> 能打开窗口，画出带贴图的 Suzanne，相机可拖动，ImGui 可调参数</td>
+        <td>画面正确、可交互；开调试层（VVL / DX12 debug layer）<b>零报错</b>；一份 .slang 编译出 SPIR-V（和 DXIL）</td>
+        <td>RHI 抽象与框架初始化、Slang→SPIR-V/DXIL 编译、同步模型（fence/semaphore 或框架等价物）、GLM、glTF 结构</td>
+        <td><a href="#tracks" style="color:var(--teal)">06 章</a>；Diligent/wgpu 官方示例；vulkan-tutorial；<a href="graphics-handbook.html#path" style="color:var(--teal)">G2</a></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P1 · 离线管线（Nanite 数据侧） <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 2~3 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S1</b></td><td>切簇：meshlet 构建，128 tri/簇，算包围球与初始误差</td>
+        <td><code>nanite-tools cluster model.gltf</code> → 输出 <code>.nmesh</code>；<code>stat</code> 打印簇数/平均簇大小；<code>viewer --mode cluster</code> 按簇随机着色</td>
+        <td>每簇三角数 ≤128 且近似均匀；调试图簇边界清晰、无长条畸形簇</td>
+        <td>meshlet 构建、包围球（Ritter）、初始误差度量（边界边投影）</td>
+        <td><a href="#nanite" style="color:var(--teal)">01 章</a>；meshoptimizer src/meshlet.cpp</td>
+      </tr>
+      <tr>
+        <td><b>S2</b></td><td>聚组 + 组内 QEM 简化 + 重切，迭代多层</td>
+        <td><code>nanite-tools simplify</code>；<code>viewer --mode lod N</code> 手动切换第 N 层渲染</td>
+        <td>每层三角数约减半；<b>任意相邻层拼接无裂缝</b>（边界锁定生效的直接证据）</td>
+        <td>METIS 图分割、QEM 二次误差、边界顶点锁定、重索引</td>
+        <td><a href="#algo" style="color:var(--teal)">04 章</a>；Danite 仓库（METIS 用法）</td>
+      </tr>
+      <tr>
+        <td><b>S3</b></td><td>构建 cluster DAG + fallback mesh，节点记录误差</td>
+        <td><code>nanite-tools dag</code> → DAG 写回 <code>.nmesh</code>；<code>viewer --mode dag-top</code> 只渲染 DAG 最顶层</td>
+        <td>顶层渲染结果 = 一个正确粗模；DAG 遍历能从根走到任意叶</td>
+        <td>图合并、误差自底向上传播（父=max 子）、合并后重分裂</td>
+        <td><a href="#nanite" style="color:var(--teal)">01 章</a>；JMS55 博客 0.14 篇；Carrot《The Plan》</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P2 · 运行时光栅（GPU-driven） <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 3~4 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S4</b></td><td>硬件光栅 + GPU 视锥剔除 + indirect draw</td>
+        <td><code>viewer --mode cull</code>：全簇常驻显存，compute 剔除写 indirect 命令，一次 ExecuteIndirect 绘全部可见簇；HUD 显示剔除统计</td>
+        <td>相机背对/移出视锥时 HUD 绘制簇数骤降；1M+ 三角场景稳定 60fps</td>
+        <td>GPU-driven 管线、indirect 命令、持久剔除、pipeline barrier</td>
+        <td><a href="#nanite" style="color:var(--teal)">01 章</a>；bevy meshlet culling 代码</td>
+      </tr>
+      <tr>
+        <td><b>S5</b></td><td>compute 遍历 DAG，按屏幕误差选 cut</td>
+        <td><code>viewer --mode dag</code>：剔除 pass 换成 DAG 遍历；HUD 实时显示当前总三角数</td>
+        <td>相机拉远三角数<b>连续</b>下降；固定视角下数字稳定不抖（防抖动的时滞逻辑生效）</td>
+        <td>世界误差→屏幕像素投影、遍历策略、LOD 抖动抑制</td>
+        <td><a href="#algo" style="color:var(--teal)">04 章 §4.1</a>；UE <code>NaniteCullRaster.cpp</code></td>
+      </tr>
+      <tr>
+        <td><b>S6</b></td><td>Hi-Z 两遍遮挡剔除：深度 pass → 手写 min 金字塔 → 第二遍剔除绘制</td>
+        <td><code>viewer --mode hiz</code>；ImGui 一键开关 Hi-Z 对比</td>
+        <td>室内/被遮挡场景帧时间明显下降；关掉开关立即回退（退化可单独验证）；遮挡边缘无漏画</td>
+        <td>深度金字塔（compute 手写 min，<b>不能</b>用 GenerateMips）、保守盒测试、两遍光栅</td>
+        <td><a href="#algo" style="color:var(--teal)">04 章</a>；<a href="unity-handbook.html#pits" style="color:var(--teal)">Unity 手册踩坑</a>（GenerateMips 坑同源）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P3 · 可见性缓冲与材质 <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 1~2 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S7</b></td><td>Visibility buffer（64 位 atomic 编码）+ 材质解析 pass + PBR 直光</td>
+        <td><code>viewer --mode visbuf</code>：vis pass 输出 cluster+tri id → 材质 pass vertex pulling 反解 → 多材质 PBR；调试图可切 cluster/三角着色</td>
+        <td>多材质模型着色与直接画 GBuffer 的对照组<b>逐像素一致</b>（用模式开关对比截图）</td>
+        <td>atomicMin 位打包、vertex pulling、材质 ID 间接表、深度精度</td>
+        <td><a href="#nanite" style="color:var(--teal)">01 章</a>；Carrot《A basic material pass》</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P4 · 光追地基（Lumen 前置） <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 2 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S8</b></td><td>BLAS/TLAS + ray query 最小闭环</td>
+        <td><code>viewer --mode rt</code>：fallback mesh 预建 BLAS、TLAS 每帧重建；compute 里从像素发调试射线，命中距离存缓冲可视化成灰度图</td>
+        <td>调试射线可视化与场景深度吻合；HUD 显示 AS 构建/更新耗时</td>
+        <td>VkAccelerationStructureKHR、ray query in compute、AS 构建预算、队列同步</td>
+        <td><a href="#lumen" style="color:var(--teal)">02 章</a>；Vulkan ray tracing examples（nvpro / kbladin）</td>
+      </tr>
+      <tr>
+        <td><b>S9</b></td><td>GBuffer + 直接光 + 阴影射线 + 离线参考模式</td>
+        <td><code>viewer --mode shadow</code>：每像素 1 条阴影射线；<code>--mode reference</code>：每像素 64+ 采样离线积分出「真值图」存盘</td>
+        <td>硬阴影正确；参考图噪声极低——这张图是后面 P5 调 GI 时<b>唯一的裁判</b></td>
+        <td>BRDF 与余弦采样、阴影射线、tone mapping、参考图工作流</td>
+        <td><a href="#lumen" style="color:var(--teal)">02 章</a>；<a href="graphics-handbook.html#path" style="color:var(--teal)">G8 路径追踪</a></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P5 · Lumen 核心 <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 4~6 周，最难的一段</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S10</b></td><td>屏幕探针一跳 GI：4 级 cascade 布点 + 八面体图 + final gather</td>
+        <td><code>viewer --mode probe</code>：探针 pass + 1 条余弦采样射线/探针 + gather 插值；<code>--mode probe-viz</code> 可视化探针辐照度</td>
+        <td>开 GI：天光与一次弹射可见；与 S9 参考图并排对比，误差趋势一致；探针调试图里辐照度方向合理</td>
+        <td>八面体映射、余弦重要性采样、cascade 布局参数、探针插值权重</td>
+        <td><a href="#lumen" style="color:var(--teal)">02 章</a>；UE <code>LumenScreenProbeGather*</code>；bevy_solari</td>
+      </tr>
+      <tr>
+        <td><b>S11</b></td><td>世界缓存（surface cache）：GPU hashmap + 每帧更新 + 二跳</td>
+        <td><code>viewer --mode cache</code>：hash cell 存 irradiance，每帧直光射线+邻居射线更新；gather 二跳查缓存；<code>--mode cache-viz</code> 显示 cell 占用</td>
+        <td><b>红白棋盘颜色渗透出现</b>；关灯后余晖自然衰减（多跳涌现）；cell 回收无闪烁</td>
+        <td>GPU hashmap（线性探测+墓碑）、cell 生命周期、irradiance 编码（RGBE/SH）</td>
+        <td><a href="#algo" style="color:var(--teal)">04 章</a>（含回收坑）；Carrot GI 长文</td>
+      </tr>
+      <tr>
+        <td><b>S12</b></td><td>时空滤波：空间联合双边 + 时间累积 + 历史拒绝</td>
+        <td><code>viewer --mode filter</code>：滤波强度/历史长度 ImGui 可调；可单独关空间或时间对照</td>
+        <td>静止与运动都无拖影鬼影；disocclusion 处无光斑残留；与参考图对比主观可接受</td>
+        <td>SVGF 思想、motion vector、历史有效性（法线/深度差异阈值）</td>
+        <td><a href="#lumen" style="color:var(--teal)">02 章</a>；bevy_solari 降噪 pass</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P6 · 接缝（虚拟几何 × 光追） <span style="font-weight:400;color:var(--muted);font-size:12.5px">约 1~2 周</span></h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S13</b></td><td>簇级 BLAS 聚合 + 延迟一帧回读，光追几何与渲染几何对齐</td>
+        <td><code>viewer --mode final</code>：可见簇列表回读（延迟一帧）→ 拷贝预建 per-cluster BLAS 聚合 → TLAS；GI 反射用的就是当前 cut 的几何</td>
+        <td>LOD 切换处 GI/反射<b>无跳变闪烁</b>；时间线截图证明无 CPU-GPU 同步 stall</td>
+        <td>AS clone/重建、readback 延迟隐藏、BLAS 内存池</td>
+        <td><a href="#bridge" style="color:var(--teal)">03 章</a>；Carrot《Raytracing》（此题唯一详解）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:22px 0 8px;font-size:15px">阶段 P7 · 打磨与增强（可选，持续）</h3>
+  <table>
+    <thead><tr><th style="width:34px">#</th><th style="width:20%">做什么</th><th style="width:24%">可运行产出</th><th style="width:22%">验收效果</th><th>涉及知识</th><th style="width:14%">卡住翻哪</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>S14</b></td><td>按需挑一项：软光栅亚像素三角形 / ReSTIR GI / 探针置信度与自适应分辨率 / 简单场景编辑器</td>
+        <td>各自作为独立模式接入，且带开关</td>
+        <td>软光栅：远景闪烁消失（对比录屏）；ReSTIR：同等帧时间下参考图误差明显下降</td>
+        <td>compute 光栅分箱、Reservoir 重采样、误差自适应</td>
+        <td><a href="#nanite" style="color:var(--teal)">01 章</a> / <a href="#tracks" style="color:var(--teal)">06 章</a>；Scthe 软光栅博文</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="key" style="margin-top:24px">
+    <b>最终交付清单：</b>一个离线工具 <code>nanite-tools</code>（cluster/simplify/dag/stat 四个子命令 + <code>.nmesh</code> 资产格式）+ 一个运行时 <code>viewer</code>（10+ 个可开关模式，S0 的普通渲染到 S13 的完整 Nanite+Lumen 随时对照）+ 一个装满 git tag 和截图的仓库。<b>这个仓库本身就是你最好的简历。</b><br><br>
+    <b>节奏提醒：</b>S1~S3（离线）和 S10~S12（GI）是两个最容易陷进去的坑，各自预留缓冲；任何一步卡住超过三天，回<a href="#pitfalls" style="color:var(--accent);text-decoration:none">08 章踩坑清单</a>或去翻对应的开源实现源码，不要闭门造车。
+  </div>
+</section>
+
+<!-- ============ 附录 A 术语字典 ============ -->
+<section class="page" id="page-glossary">
+  <span class="kicker">Appendix A · Glossary</span>
+  <h1>术语字典</h1>
+  <p class="lede">读博客、看源码、翻资料时的高频术语。每条一句话解释 + 直达本库对应章节，遇到卡壳的词回来查。</p>
+
+  <div class="filter">
+    <input id="gloSearch" type="text" placeholder="搜索术语，如：vis、探针、QEM、BLAS…">
+    <button class="gchip on" data-cat="all">全部</button>
+    <button class="gchip" data-cat="nanite">Nanite</button>
+    <button class="gchip" data-cat="lumen">Lumen</button>
+    <button class="gchip" data-cat="common">通用与接口</button>
+  </div>
+
+  <h3 style="margin:6px 0 2px;font-size:14px;color:var(--muted);font-family:var(--mono)">NANITE · 虚拟几何</h3>
+  <div class="glo-item" data-cat="nanite"><b class="term">Cluster</b><span class="zh">簇</span><span class="desc">约 128 个三角形的分组，是切分、剔除、LOD、绘制共用的基本单位——整套管线的灵魂概念。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Meshlet</b><span class="zh">网格碎片</span><span class="desc">cluster 在 meshoptimizer / Bevy 里的叫法，本质完全相同；读这两家代码时别被名词绕晕。</span><a href="#tracks">→ 06</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Cluster Group</b><span class="zh">簇组</span><span class="desc">用 METIS 等图分割算法把空间相邻的 cluster 聚成组，组内做简化才能控制边界数量。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">QEM</b><span class="zh">二次误差度量</span><span class="desc">Quadric Error Metric：用顶点邻域平面构成的二次型衡量「折叠这条边的变形代价」，网格简化的标准代价函数。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Boundary Lock</b><span class="zh">边界锁定</span><span class="desc">组内简化时禁止折叠组边界顶点，否则相邻簇之间会出现肉眼可见的裂缝——切簇方案最常见的翻车点。</span><a href="#pitfalls">→ 08</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Cluster DAG</b><span class="zh">簇有向无环图</span><span class="desc">低级簇指向简化出的父簇，每个节点记录自己的误差；不是树，因为合并可以共享父节点。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Screen-space Error</b><span class="zh">屏幕误差</span><span class="desc">把簇的世界空间误差按距离投影成屏幕像素数，与阈值（Nanite 默认约 1px）比较来决定 LOD。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Cut</b><span class="zh">截断</span><span class="desc">DAG 遍历时「误差超标就停止下钻」留下的节点集合，就是当前帧实际绘制的簇列表。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Fallback Mesh</b><span class="zh">兜底网格</span><span class="desc">DAG 底层的粗模副本，专供光追 BLAS、小尺寸阴影、碰撞检测使用，避免拿整套 DAG 喂光追。</span><a href="#bridge">→ 03</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Visibility Buffer</b><span class="zh">可见性缓冲</span><span class="desc">只存 cluster id + 三角 id（打包进 64 位），延迟到材质 pass 才展开成完整 GBuffer，是支撑海量小三角形的关键设计。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Material Pass</b><span class="zh">材质解析</span><span class="desc">读可见性缓冲，反查顶点数据插值出真正的材质、法线、深度——vis buffer 管线的第二遍。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Soft Raster</b><span class="zh">软光栅</span><span class="desc">用 compute shader 光栅化小于一个像素的三角形，绕开硬件光栅 2×2 quad 的浪费；要求像素级原子操作 + 先可见性后属性两遍走。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Hi-Z</b><span class="zh">深度金字塔</span><span class="desc">mipmap 化的屏幕最小深度图，保守判断簇包围盒是否被遮挡；做两遍光栅时第二遍只在可见簇上跑。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="nanite"><b class="term">Indirect Draw</b><span class="zh">间接绘制</span><span class="desc">绘制参数由 compute shader 生成写进 GPU buffer，CPU 一帧只调一次 ExecuteIndirect——GPU-driven 的基石。</span><a href="#nanite">→ 01</a></div>
+
+  <h3 style="margin:22px 0 2px;font-size:14px;color:var(--muted);font-family:var(--mono)">LUMEN · 动态全局光</h3>
+  <div class="glo-item" data-cat="lumen"><b class="term">GBuffer</b><span class="zh">几何缓冲</span><span class="desc">全屏存位置、法线、材质参数的延迟渲染中间产物；Lumen 所有光追射线都从它的像素出发。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Irradiance</b><span class="zh">辐照度</span><span class="desc">某点单位面积接收到的总光能量（对入射半球积分）；探针和世界缓存里存的就是它——别和 radiance 混。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Radiance</b><span class="zh">辐射亮度</span><span class="desc">沿单一方向的光亮度，每条光追射线返回的量；irradiance = radiance 对半球的积分。这两个词是 GI 资料的第一道坎。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Screen Probe</b><span class="zh">屏幕探针</span><span class="desc">屏幕空间按 4 级 cascade 布点的探针（分辨率逐级减半、间距加倍），每帧从上一帧位置重投影，缓存周围 irradiance。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Octahedral Map</b><span class="zh">八面体映射</span><span class="desc">把球面方向摊平成 2D 图的方式；探针用 16×16 像素存 256 个方向的 irradiance 全靠它。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Surface Cache</b><span class="zh">表面缓存</span><span class="desc">世界空间的持久缓存，每个 cell 存 irradiance；每帧对光源追 1 条射线 + 查邻居 cell，多弹射自然涌现——Lumen 的「世界记忆」。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Hash Grid</b><span class="zh">哈希网格</span><span class="desc">世界缓存的容器：位置哈希到 cell，GPU 上用 hashmap 管理分配与回收（回收时机是经典坑）。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Final Gather</b><span class="zh">最终收集</span><span class="desc">逐像素找到周围 4 个探针，从它们的八面体图插值采样 irradiance 并按 BRDF 加权，得到间接光。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Reprojection</b><span class="zh">重投影</span><span class="desc">用上一帧深度 + 运动向量找本帧对应位置，让缓存跨帧复用；移动物体和新生成的像素会失效，靠滤波兜底。</span><a href="#algo">→ 04</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Spatiotemporal Filter</b><span class="zh">时空滤波</span><span class="desc">空间模糊 + 时间累积的联合降噪；GI 画面最终能不能看，八成取决于这个 pass 的调校。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Multi-bounce</b><span class="zh">多弹射</span><span class="desc">光经过两次以上反射形成的间接光；世界缓存天然产生，屏幕探针本身只有一跳。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">BRDF</b><span class="zh">双向反射分布函数</span><span class="desc">描述「这个表面把入射光往某方向反射多少」的函数，PBR 着色与 final gather 加权共用的数学核心。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Ray Query</b><span class="zh">光线查询</span><span class="desc">VK_KHR_ray_query / DXR Inline Ray Tracing：在任意 shader 里发起求交查询。做 GI 不需要完整 RT pipeline，用它就够。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">BLAS / TLAS</b><span class="zh">加速结构</span><span class="desc">Bottom-Level = 单个 mesh 的 BVH（可预建），Top-Level = 实例列表（每帧重建）；光追场景的两种积木。</span><a href="#bridge">→ 03</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">ReSTIR GI</b><span class="zh">重采样复用 GI</span><span class="desc">Reservoir-based Spatiotemporal Importance Resampling：从时空邻居「借」高质量光线样本，大幅降噪；Bevy solari 0.20 走的路线。</span><a href="#tracks">→ 06</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">DDGI</b><span class="zh">探针网格 GI</span><span class="desc">Dynamic Diffuse Global Illumination：世界空间规则网格放探针，比 screen probe 简单但大场景分辨率吃亏；自研 GI 的经典兜底方案。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="lumen"><b class="term">Denoiser</b><span class="zh">降噪器</span><span class="desc">把低样本数蒙特卡洛噪声滤掉的后期 pass；DLSS-RR 是这一层的终极形态。</span><a href="#lumen">→ 02</a></div>
+
+  <h3 style="margin:22px 0 2px;font-size:14px;color:var(--muted);font-family:var(--mono)">通用与接口</h3>
+  <div class="glo-item" data-cat="common"><b class="term">GPU-driven</b><span class="zh">GPU 驱动管线</span><span class="desc">剔除、LOD、绘制决策全在 GPU 上完成，CPU 不做逐对象逻辑；Nanite 和 Lumen 共同的前提。</span><a href="#nanite">→ 01</a></div>
+  <div class="glo-item" data-cat="common"><b class="term">Readback</b><span class="zh">回读</span><span class="desc">GPU → CPU 拷数据；逐簇 BLAS 聚合需要回读簇列表，同步代价大，标准解法是延迟一帧使用。</span><a href="#bridge">→ 03</a></div>
+  <div class="glo-item" data-cat="common"><b class="term">Distance Field</b><span class="zh">距离场</span><span class="desc">Lumen 软光追路径的几何表示（每个网格存有符号距离场纹理）；本库建议砍掉软光追路径，知道概念即可。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="common"><b class="term">Mesh Card</b><span class="zh">网格卡片</span><span class="desc">Lumen 软光追路径里贴到网格表面的矩形捕获卡，表面缓存的载体——同属「被砍路线」，工程量比 Nanite 本体还大。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="common"><b class="term">Cascade</b><span class="zh">级联</span><span class="desc">近细分远粗略的多级结构；探针布局和距离场都用它平衡近处精度与远处覆盖。</span><a href="#lumen">→ 02</a></div>
+  <div class="glo-item" data-cat="common"><b class="term">Vis Buffer 的 64 位打包</b><span class="zh">打包约定</span><span class="desc">高 32 位放 cluster id、低 26 位放三角 id 的典型布局；写光栅 shader 前先定死，改一次全家重编译。</span><a href="#algo">→ 04</a></div>
+</section>
+
+<!-- ============ 附录 B 文档跳转 ============ -->
+<section class="page" id="page-docs">
+  <span class="kicker">Appendix B · Docs Hub</span>
+  <h1>文档跳转</h1>
+  <p class="lede">本地三份手册的直达入口、UE 源码深链和官方文档一览。卡住时从这里出发，别在收藏夹里捞。</p>
+
+  <h3 style="margin:6px 0 10px;font-size:15px">本地学习体系（三份手册）</h3>
+  <table>
+    <thead><tr><th>手册</th><th>定位</th><th>什么时候用</th><th>直达锚点</th></tr></thead>
+    <tbody>
+      <tr><td><a href="graphics-handbook.html" style="color:var(--accent)">graphics-handbook.html</a></td><td>地基：图形学基础 G0~G8</td><td>软光栅、PBR、GPU API 这几块心里没底时先来补课</td><td><a href="graphics-handbook.html#path" style="color:var(--teal)">学习路径</a> · <a href="graphics-handbook.html#books" style="color:var(--teal)">书课地图</a> · <a href="graphics-handbook.html#pits" style="color:var(--teal)">学习误区</a></td></tr>
+      <tr><td><a href="index.html" style="color:var(--accent)">index.html</a>（本库）</td><td>专项：Nanite + Lumen 手撸 P0~P7</td><td>主线开发时当作架构手册 + 踩坑手册查</td><td><a href="#nanite" style="color:var(--teal)">01 Nanite</a> · <a href="#lumen" style="color:var(--teal)">02 Lumen</a> · <a href="#bridge" style="color:var(--teal)">03 接口层</a> · <a href="#algo" style="color:var(--teal)">04 伪码</a> · <a href="#uesrc" style="color:var(--teal)">05 源码导读</a> · <a href="#tracks" style="color:var(--teal)">06 三路线</a> · <a href="#pitfalls" style="color:var(--teal)">08 踩坑</a></td></tr>
+      <tr><td><a href="unity-handbook.html" style="color:var(--accent)">unity-handbook.html</a></td><td>宿主：Unity SRP 落地 U0~U8</td><td>进入路线 C，把设计搬进 Unity 时全程开着</td><td><a href="unity-handbook.html#land" style="color:var(--teal)">能力盘点</a> · <a href="unity-handbook.html#path" style="color:var(--teal)">学习路径</a> · <a href="unity-handbook.html#pits" style="color:var(--teal)">Unity 踩坑</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:26px 0 10px;font-size:15px">UE 源码深链（release 分支 · 需 Epic 账号访问）</h3>
+  <p style="font-size:13.5px;color:var(--ink-2)">配合 05 章源码导读使用：本地路径已在本地源码树里，下表链接用于没带源码的环境快速对照。仓库名 <code>EpicGames/UnrealEngine</code>，路径前缀 <code>Engine/</code>。</p>
+  <table>
+    <thead><tr><th>关注点</th><th>源码路径（Engine/ 下）</th><th>带什么问题去</th></tr></thead>
+    <tbody>
+      <tr><td>簇剔除与光栅调度</td><td><a href="https://github.com/EpicGames/UnrealEngine/tree/release/Engine/Source/Runtime/Renderer/Private/Nanite" target="_blank" style="color:var(--teal)">Source/Runtime/Renderer/Private/Nanite/</a></td><td>NaniteCullRaster.cpp：cut 判定与误差投影的精确数学</td></tr>
+      <tr><td>Nanite shaders</td><td><a href="https://github.com/EpicGames/UnrealEngine/tree/release/Engine/Shaders/Private/Nanite" target="_blank" style="color:var(--teal)">Shaders/Private/Nanite/</a></td><td>vis buffer 打包、软光栅分箱的 shader 实现</td></tr>
+      <tr><td>Fallback / 粗模</td><td><a href="https://github.com/EpicGames/UnrealEngine/tree/release/Engine/Source/Runtime/Engine" target="_blank" style="color:var(--teal)">Source/Runtime/Engine（CoarseMesh*）</a></td><td>fallback mesh 怎么生成、怎么挂进光追场景</td></tr>
+      <tr><td>Lumen 主目录</td><td><a href="https://github.com/EpicGames/UnrealEngine/tree/release/Engine/Source/Runtime/Renderer/Private/Lumen" target="_blank" style="color:var(--teal)">Source/Runtime/Renderer/Private/Lumen/</a></td><td>ScreenProbeGather*：cascade 布局与 final gather 权重</td></tr>
+      <tr><td>Lumen shaders</td><td><a href="https://github.com/EpicGames/UnrealEngine/tree/release/Engine/Shaders/Private/Lumen" target="_blank" style="color:var(--teal)">Shaders/Private/Lumen/</a></td><td>探针八面体图、世界缓存 cell 更新的着色实现</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin:26px 0 10px;font-size:15px">外部权威入口</h3>
+  <table>
+    <thead><tr><th>资源</th><th>链接</th><th>用法</th></tr></thead>
+    <tbody>
+      <tr><td>官方文档 · Nanite</td><td><a href="https://dev.epicgames.com/documentation/zh-cn/unreal-engine/nanite-virtualized-geometry-in-unreal-engine" target="_blank" style="color:var(--teal)">dev.epicgames.com … nanite-virtualized-geometry</a></td><td>查参数含义与 CVar 说明</td></tr>
+      <tr><td>官方文档 · Lumen</td><td><a href="https://dev.epicgames.com/documentation/zh-cn/unreal-engine/lumen-global-illumination-and-reflections-in-unreal-engine" target="_blank" style="color:var(--teal)">dev.epicgames.com … lumen-global-illumination</a></td><td>查探针/缓存各级质量的开关与代价</td></tr>
+      <tr><td>SIGGRAPH Advances 合集</td><td><a href="https://advances.realtimerendering.com/" target="_blank" style="color:var(--teal)">advances.realtimerendering.com</a></td><td>s21 有 Nanite Deep Dive PDF，s22/GDC 有 Lumen 全流程分享</td></tr>
+      <tr><td>JMS55 博客</td><td><a href="https://jms55.github.io/" target="_blank" style="color:var(--teal)">jms55.github.io</a></td><td>Bevy 虚拟几何 + Solari 的踩坑实录</td></tr>
+      <tr><td>Carrot 引擎博客</td><td><a href="https://blog.jglrxavpok.eu/" target="_blank" style="color:var(--teal)">blog.jglrxavpok.eu</a></td><td>Recreating Nanite 系列，唯一写到接口层的编年史</td></tr>
+      <tr><td>在线交互 Demo</td><td><a href="https://scthe.github.io/nanite-webgpu/" target="_blank" style="color:var(--teal)">scthe.github.io/nanite-webgpu</a></td><td>逐项开关剔除/LOD/软光栅，直观感受各模块权重</td></tr>
+      <tr><td>meshoptimizer</td><td><a href="https://github.com/zeux/meshoptimizer" target="_blank" style="color:var(--teal)">github.com/zeux/meshoptimizer</a></td><td>离线切簇/简化管线第一手参考（demo/nanite.cpp）</td></tr>
+      <tr><td>Bevy 源码</td><td><a href="https://github.com/bevyengine/bevy" target="_blank" style="color:var(--teal)">github.com/bevyengine/bevy</a></td><td>meshlet 与 solari 两套实现，GI 细节照它抄</td></tr>
+    </tbody>
+  </table>
+
+  <div class="key" style="margin-top:24px">
+    <b>用法建议：</b>把本页当浏览器起始标签。查术语 → 附录 A；查本库章节 → 上表第二行；查 UE 源码 → 05 章导读 + 上表深链；查外部资料 → 资源库（08 章）有更全的 19 条。
+  </div>
+</section>
+
+<footer>
+  Nanite × Lumen 手撸知识库 · 本地单文件，可离线阅读 · 内容基于公开分享与开源实现整理，不含 Epic 源码
+</footer>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var pages = Array.prototype.slice.call(document.querySelectorAll('.page'));
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+
+  function route(){
+    var id = (location.hash || '#overview').slice(1);
+    if(!document.getElementById('page-' + id)) id = 'overview';
+    pages.forEach(function(p){
+      p.classList.toggle('show', p.id === 'page-' + id);
+    });
+    links.forEach(function(a){
+      a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+    });
+    window.scrollTo({top:0, behavior:'instant'});
+  }
+  window.addEventListener('hashchange', route);
+  route();
+
+  // 代码复制
+  document.querySelectorAll('pre').forEach(function(pre){
+    var btn = document.createElement('button');
+    btn.className = 'cp'; btn.textContent = '复制';
+    btn.addEventListener('click', function(){
+      var txt = pre.querySelector('code') ? pre.querySelector('code').innerText : pre.innerText;
+      navigator.clipboard.writeText(txt).then(function(){
+        btn.textContent = '已复制';
+        setTimeout(function(){ btn.textContent = '复制'; }, 1400);
+      });
+    });
+    pre.appendChild(btn);
+  });
+
+  // 资源筛选
+  var search = document.getElementById('resSearch');
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var items = Array.prototype.slice.call(document.querySelectorAll('.res-item'));
+  var cat = 'all';
+  function applyFilter(){
+    var q = (search && search.value || '').trim().toLowerCase();
+    items.forEach(function(it){
+      var okCat = (cat === 'all' || it.getAttribute('data-cat') === cat);
+      var okText = !q || it.innerText.toLowerCase().indexOf(q) >= 0;
+      it.classList.toggle('hide', !(okCat && okText));
+    });
+  }
+  if(search) search.addEventListener('input', applyFilter);
+  chips.forEach(function(c){
+    c.addEventListener('click', function(){
+      chips.forEach(function(x){ x.classList.remove('on'); });
+      c.classList.add('on');
+      cat = c.getAttribute('data-cat');
+      applyFilter();
+    });
+  });
+
+  // 术语筛选
+  var gloSearch = document.getElementById('gloSearch');
+  var gchips = Array.prototype.slice.call(document.querySelectorAll('.gchip'));
+  var gitems = Array.prototype.slice.call(document.querySelectorAll('.glo-item'));
+  var gcat = 'all';
+  function applyGloFilter(){
+    var q = (gloSearch && gloSearch.value || '').trim().toLowerCase();
+    gitems.forEach(function(it){
+      var okCat = (gcat === 'all' || it.getAttribute('data-cat') === gcat);
+      var okText = !q || it.innerText.toLowerCase().indexOf(q) >= 0;
+      it.classList.toggle('hide', !(okCat && okText));
+    });
+  }
+  if(gloSearch) gloSearch.addEventListener('input', applyGloFilter);
+  gchips.forEach(function(c){
+    c.addEventListener('click', function(){
+      gchips.forEach(function(x){ x.classList.remove('on'); });
+      c.classList.add('on');
+      gcat = c.getAttribute('data-cat');
+      applyGloFilter();
+    });
+  });
+
+  // 打卡进度
+  var KEY = 'nlkb-progress-v1';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type=checkbox][data-step]'));
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){ saved = {}; }
+
+  function sync(){
+    var state = {};
+    boxes.forEach(function(b){ if(b.checked) state[b.getAttribute('data-step')] = 1; });
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){}
+    var done = boxes.filter(function(b){ return b.checked; }).length;
+    var pct = boxes.length ? Math.round(done * 100 / boxes.length) : 0;
+    var sp = document.getElementById('sideProg');
+    if(sp){ sp.style.width = pct + '%'; }
+    var st = document.getElementById('sideProgText');
+    if(st){ st.textContent = done + ' / ' + boxes.length; }
+
+    document.querySelectorAll('.check-group').forEach(function(g){
+      var bxs = Array.prototype.slice.call(g.querySelectorAll('input[type=checkbox]'));
+      var d = bxs.filter(function(b){ return b.checked; }).length;
+      var span = g.querySelector('h3 span');
+      if(span) span.textContent = d + ' / ' + bxs.length;
+    });
+  }
+
+  boxes.forEach(function(b){
+    var k = b.getAttribute('data-step');
+    b.checked = !!saved[k];
+    b.parentElement.classList.toggle('done', b.checked);
+    b.addEventListener('change', function(){
+      b.parentElement.classList.toggle('done', b.checked);
+      sync();
+    });
+  });
+  sync();
+})();
+</script>
+</body>
+</html>

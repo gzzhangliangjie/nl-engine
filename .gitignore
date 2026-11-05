@@ -1,0 +1,18 @@
+# build
+build/
+out/
+cmake-build-*/
+.cache/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# assets 生成物
+assets/*.nmesh
+
+# OS
+Thumbs.db
+Desktop.ini

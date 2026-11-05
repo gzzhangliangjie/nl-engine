@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图形学基础学习手册 · 从零到实时渲染</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--panel:#fff;--ink:#1b1f24;--ink-2:#3d4653;--muted:#6b7482;
+    --line:#e4e8ee;--accent:#2f6fed;--accent-soft:#edf2ff;--teal:#0e9384;--teal-soft:#e8f7f4;
+    --amber:#b4690e;--amber-soft:#fdf4e6;--radius:12px;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.75}
+  .shell{display:flex;min-height:100vh}
+  aside{width:264px;flex:0 0 264px;background:var(--panel);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;padding:22px 16px 40px}
+  .brand{font-weight:700;font-size:16px;margin:0 0 2px 6px}
+  .brand small{display:block;font-weight:500;color:var(--muted);font-size:12px;margin-top:4px;line-height:1.6}
+  .back{display:block;margin:10px 6px 0;font-size:12.5px;color:var(--accent);text-decoration:none}
+  .back:hover{text-decoration:underline}
+  nav{margin-top:20px}
+  nav a{display:flex;gap:10px;align-items:center;padding:8px 10px;margin-bottom:2px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-size:13.5px;transition:.15s}
+  nav a .num{font-family:var(--mono);font-size:11px;color:var(--muted);width:20px;flex:0 0 20px;text-align:right}
+  nav a:hover{background:#f2f4f8;color:var(--ink)}
+  nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  nav a.active .num{color:var(--accent)}
+  .aside-foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.7}
+  .aside-foot b{color:var(--ink-2)}
+  main{flex:1;min-width:0;padding:34px 44px 120px;max-width:1080px}
+  .page{display:none;animation:fade .25s ease}
+  .page.show{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  h1{font-size:28px;line-height:1.35;margin:0 0 8px;letter-spacing:-.3px}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:24px 0 8px}
+  p{margin:10px 0}
+  .lede{color:var(--muted);font-size:15px;margin:0 0 6px}
+  .kicker{display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:1.2px;color:var(--accent);background:var(--accent-soft);padding:3px 8px;border-radius:5px;margin-bottom:12px;text-transform:uppercase}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:.88em;background:#eef1f6;padding:1.5px 5px;border-radius:4px;color:#2b3a55}
+  pre{background:#1d2330;color:#dfe4ee;padding:16px 18px;border-radius:10px;overflow-x:auto;font-family:var(--mono);font-size:12.6px;line-height:1.65;margin:14px 0}
+  pre code{background:none;color:inherit;padding:0}
+  .cm{color:#7d8ba3}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media(max-width:1000px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+  .card h4{margin:0 0 6px;font-size:14px}
+  .card p{margin:6px 0;font-size:13.5px;color:var(--ink-2);line-height:1.7}
+  .card a{color:var(--accent);text-decoration:none;font-size:13px}
+  .card a:hover{text-decoration:underline}
+  .note,.warn,.key{border-radius:10px;padding:12px 16px;margin:16px 0;font-size:13.8px;border-left:3px solid;line-height:1.75}
+  .note{background:var(--accent-soft);border-color:var(--accent);color:#243a63}
+  .warn{background:var(--amber-soft);border-color:var(--amber);color:#5e3a08}
+  .key{background:var(--teal-soft);border-color:var(--teal);color:#0a4f47}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.4px;background:var(--panel);border-radius:10px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f3f5f9;font-size:12.5px;color:var(--ink-2);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:12px}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
+  .steps>li{position:relative;padding:0 0 18px 42px;border-left:2px solid var(--line);margin-left:12px}
+  .steps>li:last-child{border-color:transparent;padding-bottom:0}
+  .steps>li::before{counter-increment:s;content:counter(s);position:absolute;left:-13px;top:-2px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:var(--mono)}
+  .steps li b{display:block;margin-bottom:2px}
+  .steps li p{margin:2px 0;font-size:13.6px;color:var(--ink-2)}
+  .check-group{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 18px 14px;margin:16px 0}
+  .check-group>h3{margin:14px 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .check-group>h3 span{font-size:12px;color:var(--muted);font-family:var(--mono);font-weight:400}
+  label.chk{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed #eef1f5;font-size:13.8px;cursor:pointer;color:var(--ink-2)}
+  label.chk:last-child{border-bottom:none}
+  label.chk input{margin:5px 0 0;accent-color:var(--accent);width:15px;height:15px;flex:0 0 15px}
+  label.chk.done{color:#9aa3b0;text-decoration:line-through}
+  .prog{height:6px;background:#eef1f5;border-radius:99px;overflow:hidden;margin:10px 0 4px}
+  .prog i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--teal));width:0%}
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  @media(max-width:820px){.shell{display:block}aside{position:static;width:100%;height:auto;border-right:0;border-bottom:1px solid var(--line)}main{padding:22px 18px 90px}h1{font-size:23px}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside>
+  <div class="brand">图形学基础手册<small>从零到实时渲染工程师的地基路线</small></div>
+  <a class="back" href="index.html">← 返回主知识库</a>
+  <nav id="nav">
+    <a href="#intro"><span class="num">00</span>定位与用法</a>
+    <a href="#map"><span class="num">01</span>知识全景图</a>
+    <a href="#math"><span class="num">02</span>数学：学什么不学什么</a>
+    <a href="#path"><span class="num">03</span>学习路径 G0~G8</a>
+    <a href="#books"><span class="num">04</span>书籍与课程地图</a>
+    <a href="#pits"><span class="num">05</span>学习误区</a>
+    <a href="#done"><span class="num">06</span>打卡</a>
+  </nav>
+  <div class="aside-foot">
+    <b>体系</b>：本手册是地基 → 毕业后进 <a href="index.html" style="color:var(--accent);text-decoration:none">主知识库</a>（Nanite/Lumen 专项）→ 落地走 <a href="unity-handbook.html" style="color:var(--accent);text-decoration:none">Unity 手册</a>。<br><br>
+    <b>进度</b><div class="prog"><i id="sideProg"></i></div><span id="sideProgText">0 / 0</span>
+  </div>
+</aside>
+
+<main>
+
+<!-- 00 -->
+<section class="page" id="page-intro">
+  <span class="kicker">00 · Positioning</span>
+  <h1>这份手册解决什么问题</h1>
+  <p class="lede">主知识库里的 Nanite/Lumen 是「大楼」，这份手册是打地基：从零开始，到能看懂并动手写实时渲染代码为止。</p>
+
+  <h2>适用画像</h2>
+  <ul>
+    <li>有编程基础（任意语言），但没系统学过图形学</li>
+    <li>目标明确：能理解并最终手撸 Nanite/Lumen 级别的技术，或成为渲染方向工程师</li>
+    <li>不想在「搜集教程」上浪费三个月，要一条能直接走的线</li>
+  </ul>
+
+  <h2>使用方式</h2>
+  <table>
+    <thead><tr><th style="width:150px">阶段</th><th>怎么用本手册</th></tr></thead>
+    <tbody>
+      <tr><td>完全零基础</td><td>按 03 章 G0→G8 顺序走，每步配 04 章对应课程/书</td></tr>
+      <tr><td>用过 OpenGL/Unity 但只会抄 shader</td><td>直接从 G4 开始，但 02 章数学自查一遍</td></tr>
+      <tr><td>已能写 PBR 渲染器</td><td>本手册可以跳过，直接进主知识库 P0</td></tr>
+    </tbody>
+  </table>
+
+  <div class="key">
+    <b>总原则：图形学是「做」出来的学问。</b>看十节课不如写一个能跑的错误渲染器——每一步的验收标准都是「屏幕上出现了正确的东西」，不是「看完了视频」。
+  </div>
+</section>
+
+<!-- 01 -->
+<section class="page" id="page-map">
+  <span class="kicker">01 · Knowledge Map</span>
+  <h1>知识全景图</h1>
+  <p class="lede">图形学很大，先看清边界，避免漫无目的地学。</p>
+
+  <h2>按「你要去的地方」划分优先级</h2>
+  <table>
+    <thead><tr><th style="width:170px">领域</th><th>内容</th><th style="width:110px">对你的优先级</th></tr></thead>
+    <tbody>
+      <tr><td>渲染管线与光栅化</td><td>顶点/片段处理、变换、裁剪、深度、混合</td><td><b>地基，必学</b></td></tr>
+      <tr><td>数学</td><td>线性代数为主 + 少量积分与概率</td><td><b>地基，必学</b></td></tr>
+      <tr><td>光照与着色</td><td>Blinn-Phong → PBR → IBL → 阴影</td><td><b>必学</b></td></tr>
+      <tr><td>几何处理</td><td>网格数据结构、简化、LOD、参数化</td><td>Nanite 前置，进主库前学</td></tr>
+      <tr><td>光传输与 GI</td><td>渲染方程、Monte Carlo、路径追踪、降噪</td><td>Lumen 前置，进主库前学</td></tr>
+      <tr><td>GPU 架构与 API</td><td>硬件管线、Vulkan/DX12、compute、同步</td><td>与上面并行学</td></tr>
+      <tr><td>动画/物理/流体</td><td>骨骼、布料、粒子、流体</td><td>方向外，跳过</td></tr>
+      <tr><td>离线渲染器</td><td>光谱、体积、参与介质</td><td>只学 PBRT 前几章的概念</td></tr>
+    </tbody>
+  </table>
+
+  <h2>主线只有一条</h2>
+  <div class="note">
+    <b>软光栅 → GPU API → 着色与光照 → 几何 → 光传输。</b>所有阶段都围绕「亲手写一个渲染器」展开，理论按需插入，而不是先啃完一本书再动手。
+  </div>
+</section>
+
+<!-- 02 -->
+<section class="page" id="page-math">
+  <span class="kicker">02 · Math</span>
+  <h1>数学：学什么，不学什么</h1>
+  <p class="lede">图形学的数学不可怕，可怕的是按数学系的方式学它。只学会用到的部分。</p>
+
+  <h2>必须会的（按出场顺序）</h2>
+  <table>
+    <thead><tr><th style="width:190px">主题</th><th>用到哪</th><th>掌握标准</th></tr></thead>
+    <tbody>
+      <tr><td>向量与点积/叉积</td><td>法线、朝向、背面剔除、光照强度</td><td>能心算「两个向量的夹角怎么求」并写代码验证</td></tr>
+      <tr><td>矩阵与变换链</td><td>模型→世界→观察→裁剪四级变换</td><td>能手推 MVP 矩阵，不背结论</td></tr>
+      <tr><td>透视投影与深度</td><td>透视除法、深度插值（为什么要 z 除 w）</td><td>能解释「纹理为什么会扭曲，怎么修」</td></tr>
+      <tr><td>重心坐标</td><td>三角形插值（颜色/UV/法线）</td><td>能写软光栅的插值代码</td></tr>
+      <tr><td>四元数</td><td>旋转表示（Gimbal lock 规避）</td><td>会用、知道何时用，不必手推全部公式</td></tr>
+      <tr><td>概率与期望</td><td>Monte Carlo 积分、重要性采样</td><td>能解释「为什么采样数平方根收敛」</td></tr>
+      <tr><td>积分（概念级）</td><td>渲染方程、BRDF 积分</td><td>能看懂积分符号并离散化求和</td></tr>
+    </tbody>
+  </table>
+
+  <h2>暂时不用学的</h2>
+  <div class="warn">
+    <b>劝退清单：</b>微分几何（除非做曲面）、傅里叶/小波分析（做信号处理时再说）、测度论级概率论、数值线性代数的深度内容（SVD/特征值分解用库就行）。遇到用得上的时候回来学，效率最高。
+  </div>
+
+  <h2>怎么学最省时间</h2>
+  <p>推荐「GAMES101 的数学周 + 软光栅实践」组合：看一节课，立刻用代码实现刚讲的东西（向量库、MVP、光栅化三角形），两周覆盖全部必修数学。<b>拒绝线性代数教材从头啃</b>。</p>
+</section>
+
+<!-- 03 -->
+<section class="page" id="page-path">
+  <span class="kicker">03 · Roadmap</span>
+  <h1>学习路径 G0 ~ G8</h1>
+  <p class="lede">九个阶段，每个都有明确产出。时间按业余时间估算（每周 10~15 小时）。</p>
+
+  <ol class="steps">
+    <li><b>G0 · 环境与第一个像素（~1 周）</b>
+      <p>选语言（C++ 主流、Rust/Java/C# 都行），装环境，写一个「往 framebuffer 里塞颜色并输出成图/显示到窗口」的程序。</p>
+      <p><b>验收：</b>屏幕上出现渐变图或第一个三角形。推荐先配 GAMES101 作业框架或 TinyRenderer 思路。</p>
+    </li>
+    <li><b>G1 · 软光栅器（2~4 周，最重要的阶段）</b>
+      <p>纯 CPU 手写整条管线：三角形装配 → 背面剔除 → 视口变换 → 扫描线/重心坐标光栅化 → 深度缓冲 → 透视校正插值 → 简单纹理采样。加载 OBJ 模型。</p>
+      <p><b>验收：</b>渲染一个带贴图的模型，透视正确、无深度冲突；能解释每个环节为什么存在。</p>
+    </li>
+    <li><b>G2 · 上 GPU API（3~6 周）</b>
+      <p>把 G1 的理解映射到 GPU：推荐 Vulkan 或 D3D12（你的 Nanite 目标依赖底层 API）——第一次学也可用 OpenGL 快速过渡再下潜。重点：管线状态、描述符/资源绑定、command buffer、同步。</p>
+      <p><b>验收：</b>vulkan-tutorial.com 的 hello triangle 不抄写而是自己复述着写出，能画出带贴图的旋转立方体。</p>
+    </li>
+    <li><b>G3 · 纹理与采样（~1 周）</b>
+      <p>采样理论、双线性/三线性、mipmap 与各向异性、sRGB 与线性空间（新手重灾区）。</p>
+      <p><b>验收：</b>能解释远处纹理闪烁的原因与 mipmap 的修复原理；颜色空间不再混淆。</p>
+    </li>
+    <li><b>G4 · 光照：从 Phong 到 PBR（3~4 周）</b>
+      <p>环境/漫反射/高光模型 → 辐射度量学（radiance/irradiance 概念）→ PBR 金属度工作流 → IBL（预滤波环境贴图 + 分级求和近似）。配 LearnOpenGL 的 PBR 系列。</p>
+      <p><b>验收：</b>渲染一排不同 metallic/roughness 的球，光照结果与参考图肉眼接近。</p>
+    </li>
+    <li><b>G5 · 阴影（1~2 周）</b>
+      <p>Shadow map 原理、深度偏差、PCF、级联阴影。</p>
+      <p><b>验收：</b>稳定无 acne 的阴影，知道每一项调参在解决什么 artifact。</p>
+    </li>
+    <li><b>G6 · 后处理与画质（2 周）</b>
+      <p>HDR 渲染目标、tonemapping（ACES）、bloom、简单的抗锯齿（FXAA 思路即可），可选 TAA 概念了解。</p>
+      <p><b>验收：</b>一帧 HDR→SDR 完整管线，画面明显「高级」了一档。</p>
+    </li>
+    <li><b>G7 · 几何处理（2~3 周，Nanite 直通车）</b>
+      <p>半边结构等网格数据结构、法线/包围计算、网格简化（QEM！）与 LOD 概念、空间数据结构（BVH/AABB 树）。</p>
+      <p><b>验收：</b>能用 meshoptimizer 或自写 QEM 把一个模型简化到 10% 并观察误差——这一步直接衔接主库 P0。</p>
+    </li>
+    <li><b>G8 · 光线追踪与 GI 入门（3~4 周，Lumen 直通车）</b>
+      <p>跟 Ray Tracing in One Weekend 三部曲写一个完整路径追踪器；然后补渲染方程、Monte Carlo、重要性采样概念（GAMES202）。</p>
+      <p><b>验收：</b>自己的 CPU 路径追踪器能渲染 Cornell Box，含软阴影、光泽反射、渐进收敛。</p>
+    </li>
+  </ol>
+
+  <div class="key">
+    <b>毕业标准：</b>G8 完成 = 你已经具备进主知识库 P0 的全部地基（数学、管线直觉、GPU API、QEM、Monte Carlo 全都在位），而且手里有软光栅器、GPU 渲染器、路径追踪器三个作品。
+  </div>
+</section>
+
+<!-- 04 -->
+<section class="page" id="page-books">
+  <span class="kicker">04 · Books & Courses</span>
+  <h1>书籍与课程地图</h1>
+  <p class="lede">只列经过时间检验的。每项标注「什么时候用」，不要囤积。</p>
+
+  <h2>课程（中文优先）</h2>
+  <table>
+    <thead><tr><th style="width:230px">资源</th><th>定位</th><th>使用时机</th></tr></thead>
+    <tbody>
+      <tr><td><b>GAMES101</b>（闫令琪，现代计算机图形学入门）</td><td>最佳中文入门，覆盖 G0~G4 的理论框架，作业即软光栅</td><td>G0~G2 全程同步看</td></tr>
+      <tr><td><b>GAMES202</b>（高质量实时渲染）</td><td>实时阴影、GI、降噪的理论课，Lumen 的直接前置</td><td>G5~G8 期间</td></tr>
+      <tr><td><b>GAMES104</b>（现代游戏引擎）</td><td>引擎视野：管线组织、Nanite/Lumen 级技术的综述</td><td>进主库前当速览</td></tr>
+    </tbody>
+  </table>
+
+  <h2>书（英文为主，别怕）</h2>
+  <table>
+    <thead><tr><th style="width:230px">书</th><th>定位</th><th>使用时机</th></tr></thead>
+    <tbody>
+      <tr><td><b>LearnOpenGL</b>（免费在线，有中文翻译）</td><td>跟写型教程，G2~G5 的实操手册</td><td>G2 开始一直用到 G5</td></tr>
+      <tr><td><b>Ray Tracing in One Weekend</b> 三部曲（免费在线）</td><td>最快写出路径追踪器的路线</td><td>G8</td></tr>
+      <tr><td><b>Real-Time Rendering 4th</b>（RTR4）</td><td>实时渲染的百科全书，当词典不当教材</td><td>全程备查，G4 起频繁翻</td></tr>
+      <tr><td><b>Fundamentals of Computer Graphics</b>（虎书）</td><td>系统教材，数学与管线细节</td><td>查漏补缺，不建议通读</td></tr>
+      <tr><td><b>Physically Based Rendering</b>（PBRT，pbr-book.org 免费在线）</td><td>离线渲染圣经；读前几章理解辐射度量学</td><td>G8 之后按需</td></tr>
+      <tr><td><b>vulkan-tutorial.com</b>（免费）</td><td>Vulkan 入门事实标准</td><td>G2 选 Vulkan 时</td></tr>
+      <tr><td><b>Scratchapixel</b>（免费在线）</td><td>碎片化查概念，讲解直观</td><td>任意时刻</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <b>囤积警告：</b>图形学的资源多到可以学十年。规则：<b>同一时间只跟一个课程 + 一本实操教程</b>，其他的当词典。买书如山倒、读书如抽丝是这个领域最常见的时间黑洞。
+  </div>
+</section>
+
+<!-- 05 -->
+<section class="page" id="page-pits">
+  <span class="kicker">05 · Pitfalls</span>
+  <h1>学习误区</h1>
+  <p class="lede">按出现频率排序，前三个几乎人人中招。</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4>① 只看课不写码</h4>
+      <p>GAMES101 看完三遍，一行渲染代码没写过——最常见，没有之一。每个概念必须落到「屏幕上出现了什么」。</p>
+    </div>
+    <div class="card">
+      <h4>② 从 shader 开始，不懂管线</h4>
+      <p>抄了一堆 fragment shader 但说不清顶点数据怎么到片元的。先把 G1 软光栅写了，shader 才不再是咒语。</p>
+    </div>
+    <div class="card">
+      <h4>③ 数学恐惧导致无限延期</h4>
+      <p>「先把线代学完再学图形学」——错误。按 02 章的方式，数学随用随学，两周够入门。</p>
+    </div>
+    <div class="card">
+      <h4>④ 上来就啃 Vulkan</h4>
+      <p>Vulkan 的 1000 行 hello triangle 会击穿意志力。先软光栅（G1）建立管线心智模型，再上底层 API，痛苦减半。</p>
+    </div>
+    <div class="card">
+      <h5 style="font-size:14px;margin:0 0 6px">⑤ 颜色空间/坐标系混乱</h5>
+      <p>sRGB 与线性、行主序与列主序、左手与右手——新手三大玄学 bug 源。第一次遇到就花半天彻底搞清。</p>
+    </div>
+    <div class="card">
+      <h4>⑥ 追新</h4>
+      <p>基础没打完就去追 UE6 新特性、神经渲染。地基决定你能走多远，热点半年一换。</p>
+    </div>
+  </div>
+
+  <div class="key" style="margin-top:18px">
+    <b>检验标准：</b>任何一个阶段卡住超过两天，说明前置有洞，回上一阶段补——而不是硬磨或者跳过。
+  </div>
+</section>
+
+<!-- 06 -->
+<section class="page" id="page-done">
+  <span class="kicker">06 · Milestones</span>
+  <h1>打卡</h1>
+  <p class="lede">对应 G0~G8，完成后即可开始主知识库的 P0。</p>
+  <div class="check-group">
+    <h3>基础路线 <span>0 / 9</span></h3>
+    <label class="chk"><input type="checkbox" data-step="g0"><span>G0 环境就绪，第一个像素/三角形上屏</span></label>
+    <label class="chk"><input type="checkbox" data-step="g1"><span>G1 软光栅器：贴图模型透视正确、深度正常</span></label>
+    <label class="chk"><input type="checkbox" data-step="g2"><span>G2 GPU API 上手：能独立写出带贴图的旋转立方体</span></label>
+    <label class="chk"><input type="checkbox" data-step="g3"><span>G3 采样与颜色空间：能解释 mipmap 与 sRGB</span></label>
+    <label class="chk"><input type="checkbox" data-step="g4"><span>G4 PBR 渲染器：金属度/粗糙度球排与参考图对上</span></label>
+    <label class="chk"><input type="checkbox" data-step="g5"><span>G5 稳定的 shadow map 阴影</span></label>
+    <label class="chk"><input type="checkbox" data-step="g6"><span>G6 HDR + tonemapping 后处理链</span></label>
+    <label class="chk"><input type="checkbox" data-step="g7"><span>G7 网格简化（QEM）+ BVH，衔接主库 P0</span></label>
+    <label class="chk"><input type="checkbox" data-step="g8"><span>G8 自己的路径追踪器渲染出 Cornell Box</span></label>
+  </div>
+  <div class="key" style="margin-top:24px">
+    <b>下一站：</b>全勾完 → 打开 <a href="index.html" style="color:var(--accent)">主知识库</a> 从 P0 开始 Nanite；理论精读可同步用 UE 源码导读。
+  </div>
+</section>
+
+<footer>
+  图形学基础学习手册 · 配套主知识库与 Unity 手册 · 单文件可离线
+</footer>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var pages = Array.prototype.slice.call(document.querySelectorAll('.page'));
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  function route(){
+    var id = (location.hash || '#intro').slice(1);
+    if(!document.getElementById('page-' + id)) id = 'intro';
+    pages.forEach(function(p){ p.classList.toggle('show', p.id === 'page-' + id); });
+    links.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === '#' + id); });
+    window.scrollTo({top:0, behavior:'instant'});
+  }
+  window.addEventListener('hashchange', route);
+  route();
+
+  var KEY = 'nlkb-graphics-v1';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type=checkbox][data-step]'));
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){ saved = {}; }
+  function sync(){
+    var state = {};
+    boxes.forEach(function(b){ if(b.checked) state[b.getAttribute('data-step')] = 1; });
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){}
+    var done = boxes.filter(function(b){ return b.checked; }).length;
+    var pct = boxes.length ? Math.round(done * 100 / boxes.length) : 0;
+    var sp = document.getElementById('sideProg'); if(sp) sp.style.width = pct + '%';
+    var st = document.getElementById('sideProgText'); if(st) st.textContent = done + ' / ' + boxes.length;
+    document.querySelectorAll('.check-group').forEach(function(g){
+      var bxs = Array.prototype.slice.call(g.querySelectorAll('input[type=checkbox]'));
+      var d = bxs.filter(function(b){ return b.checked; }).length;
+      var span = g.querySelector('h3 span');
+      if(span) span.textContent = d + ' / ' + bxs.length;
+    });
+  }
+  boxes.forEach(function(b){
+    var k = b.getAttribute('data-step');
+    b.checked = !!saved[k];
+    b.parentElement.classList.toggle('done', b.checked);
+    b.addEventListener('change', function(){
+      b.parentElement.classList.toggle('done', b.checked);
+      sync();
+    });
+  });
+  sync();
+})();
+</script>
+</body>
+</html>
