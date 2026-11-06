@@ -1,14 +1,15 @@
 # 方案（定稿）
 
-> 结论先行：**裸 Vulkan 1.3 + Slang，参照 Carrot 的架构自己写一份。**
+> 结论先行：**NVRHI + Slang，参照 Carrot 的架构自己写一份。**
 > 学习路线参考 Carrot、代码自己写一份——S0~S14 的每一步产出就是自己的实现，Carrot 是教材不是底座。
+> 本机 N 卡 + N 家同源（NVRHI 与 Slang 同为 NVIDIA 出品，slangc 产物直接喂 NVRHI）；自动 barrier 可开关；Meshlet pipeline 原生支持；RTXDI/RTXGI/RTXMG 生态直接可用。
 
 ## 一、最终技术决策（四条要点）
 
-1. **「参考 Carrot」= 抄思路不抄代码**：先读它某模块怎么组织（ClusterManager / VisibilityBuffer / AS 管理），合上书自己默写，写不出来再回去看——逐行复制等于白学，理解后重写才算产出。
-2. **Slang 与 Carrot 同款**，shader 侧无缝对照；不习惯也可以 HLSL + DXC，随你。
-3. **本机 N 卡的正确用法**：Nsight Graphics 对 Vulkan 程序逐 draw 抓帧调试（这比选什么框架重要得多）；NVRHI/RTXDI/RTXGI 源码当「答案册」，卡壳超过三天再精读，平时不碰。
-4. **渲染器模块纪律**：图形调用不散落到业务代码。哪天目标从学习转向产出，把模块换成 NVRHI 或 Diligent，Nanite/Lumen 业务代码不动。
+1. **「参考 Carrot」= 抄思路不抄代码**：先读它某模块怎么组织（ClusterManager / VisibilityBuffer / AS 管理），合上书自己默写，写不出来再回去看——逐行复制等于白学，理解后重写才算产出。Carrot 是裸 Vulkan，但 NVRHI 的 Vulkan 后端与之概念一一对应（barrier → NVRHI 自动跟踪，其余直接平移）。
+2. **Slang 与 Carrot 同款**，shader 侧无缝对照；slangc 产物直接被 NVRHI 加载，零胶水。
+3. **答案册**：RTXDI/RTXGI/RTXMG 源码（就跑在 NVRHI 上）——卡壳超过三天再精读，平时不碰。
+4. **本机 N 卡**：Nsight Graphics 逐 draw 抓帧照常可用，N 卡红利全额兑现。
 
 ## 二、框架选型（已定稿）
 
@@ -16,9 +17,8 @@ Nanite+Lumen 对框架有 4 条硬性检查项：**compute shader、indirect dra
 
 | 框架 | 结论 |
 |---|---|
-| **裸 Vulkan 1.3 + Slang** | ✅ **主推（定稿）**。与 Carrot 逐行对照零翻译；barrier/同步/内存亲手写本身就是 S0~S8 的课程内容；vulkan-tutorial / vkguide 全部直接适用 |
-| wgpu（Rust） | ✅ 备选 B：想跟 bevy 参考代码同语言同 API 时用；RT 为实验特性；WGSL 无 64 位标量原子（vis buffer 要改双 32 位 CAS） |
-| NVRHI（NVIDIA） | 📚 **参考答案库，不是底座**：RTXDI/RTXGI/RTXMG 全建其上（MIT），卡壳超三天再读；Meshlet pipeline 原生支持但学习目标下不启用 |
+| **NVRHI + Slang** | ✅ **主推（定稿，跨平台底座）**：Windows（DX12/Vulkan）+ Linux（Vulkan）+ macOS（MoltenVK，光栅化可用、硬光追不可用）；自动 barrier 可开关；Meshlet pipeline 原生支持；RTXDI/RTXGI/RTXMG 同栈直接可跑；与 Slang 同为 N 家，字节码直喂零胶水 |
+| 裸 Vulkan 1.3（补课选项） | ⬇️ 备选：关键 pass 关掉 NVRHI 自动 barrier 手写对照，补同步/内存功底用；不作为主路线 |
 | Diligent Engine | ⬇️ 降为备选：多后端优势在本场景用不上；只有「以后确定要 macOS/移动端商用」再回头考虑 |
 | The Forge | ⚠️ 当资料读可以（可见性缓冲 2.0 + Wolfgang Engel 博客），当底座不建议（GI 中间件闭源、Windows 移除 Vulkan） |
 | Falcor | ⚠️ 研究原型框架，替你做得太多，与「手撸」目标冲突；当 GI 算法参考书 |

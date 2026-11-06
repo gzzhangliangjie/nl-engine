@@ -2,6 +2,7 @@
 
 > 15 步、8 个阶段，总周期约 3~4 个月业余时间。
 > **铁律：每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步。**每完成一步打一个 git tag + 存一张截图。
+> API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目的性质是**把 Carrot 的架构移植到 NVRHI**——参考代码当思路读，API 层全部自己写。这正是本项目区别于「照抄 Carrot 历史」的价值所在。
 > 卡住的对照资料分三层：知识库章节（`docs/kb/`）→ 本地参考代码（`E:\UE_STUDY_2026\` 下 Carrot 与 bevy）→ 作者博客。
 
 ## 步骤 → 本地代码对照总表
@@ -36,17 +37,17 @@
 nl-engine/
 ├── CMakeLists.txt          ← 顶层：三个 target（core/renderer/viewer）+ nanite-tools 预留
 ├── core/                   ← 数学(GLM 封装)/日志/断言/窗口+输入/ImGui —— 引擎壳未来的家
-├── renderer/               ← 唯一允许调 Vulkan 的模块（纪律所在），内部再分 backend/
+├── renderer/               ← 唯一允许调 NVRHI 的模块（纪律所在）
 ├── viewer/                 ← main.cpp + --mode 分发，薄壳，不含图形调用
 └── nanite-tools/           ← S1 起填
 ```
 
-- **底子边界（S0 要的）**：窗口+输入+主循环（update/render 粗分工）、日志+断言、数学库、renderer 模块边界（S0 只包到实例/swapchain 初始化）
+- **底子边界（S0 要的）**：窗口+输入+主循环（update/render 粗分工）、日志+断言、数学库、renderer 模块边界（S0 只包到 NVRHI 设备/swapchain 初始化）
 - **底子边界（S0 明确不要的）**：ECS/场景图、事件总线、层系统、序列化、资产管理、反射、脚本——这些是 P8 引擎化的事，现在写就是范围失控
 - **可运行产出**：`viewer` 打开窗口，画出带贴图的 Suzanne，相机可拖动，ImGui 可调参数
-- **验收效果**：画面正确、可交互；开调试层（VVL）**零报错**；一份 .slang 编译出 SPIR-V（和 DXIL）
-- **涉及知识**：RHI 抽象、Slang→SPIR-V/DXIL 编译、同步模型（fence/semaphore）、GLM、glTF 结构
-- **卡住翻哪**：vulkan-tutorial；kb/graphics-handbook.html#path 的 G2
+- **验收效果**：画面正确、可交互；开 NVRHI 验证层 **零报错**；一份 .slang 编译出 SPIR-V（和 DXIL）
+- **涉及知识**：RHI 抽象（NVRHI）、Slang→SPIR-V/DXIL 编译、同步模型（NVRHI fence / frame in flight）、GLM、glTF 结构
+- **卡住翻哪**：NVRHI / Donut 官方示例；kb/graphics-handbook.html#path 的 G2
 
 ## 阶段 P1 · 离线管线（Nanite 数据侧，约 2~3 周）
 
@@ -104,8 +105,8 @@ nl-engine/
 ### S8 BLAS/TLAS + ray query 最小闭环
 - **产出**：`viewer --mode rt`：fallback mesh 预建 BLAS、TLAS 每帧重建；compute 里发调试射线，命中距离可视化成灰度图
 - **验收**：调试射线可视化与场景深度吻合；HUD 显示 AS 构建/更新耗时
-- **知识**：VkAccelerationStructureKHR、ray query in compute、AS 构建预算、队列同步
-- **翻哪**：02 章；Vulkan ray tracing examples（nvpro / kbladin）
+- **知识**：NVRHI RayTracing 接口（BLAS/TLAS/ray query）、AS 构建预算、队列同步
+- **翻哪**：02 章；NVRHI / Donut 光追示例；nvpro ray tracing samples
 
 ### S9 GBuffer + 直接光 + 阴影射线 + 离线参考模式
 - **产出**：`viewer --mode shadow`（每像素 1 条阴影射线）；`--mode reference`（每像素 64+ 采样积分「真值图」存盘）
