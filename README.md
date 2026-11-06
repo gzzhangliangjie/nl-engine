@@ -29,6 +29,8 @@ nl-engine/
 │       ├── index.html            主知识库（术语字典/踩坑/资源库/里程碑打卡）
 │       ├── graphics-handbook.html 图形学基础手册（G0~G8）
 │       └── unity-handbook.html   Unity SRP 落地手册（U0~U8）
+├── example/           ← 每个里程碑的成功用例：基线 PNG + 一键复现 run.bat + cases.json 清单
+├── tools/showcase/    ← 成果展示台：按版本加载 example/ 用例、现场跑 viewer 看效果、双后端对比
 ├── nanite-tools/      ← （S1 起）离线工具：cluster / simplify / dag / stat
 └── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
@@ -45,6 +47,22 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关
 ```
 
 M0.4 验收：一份 `model.slang` 同出 SPIR-V 与 DXIL，DX12/Vulkan 各渲染带贴图 Suzanne，正常视角 PNG 逐字节相同、`deviceErrors=0`，resize 640×360 → 1024×768 前后均非黑。证据见 `docs/screenshots/m0.4-*.png` 与 `docs/MILESTONES.md`。
+
+## 成果展示台（按版本看用例）
+
+`example/` 是**用例的唯一数据源**：每个版本一个目录，放该版本验收成功的基线 PNG、一键复现 `run.bat` 和 `cases.json` 元数据。展示台读取它，把各版本用例按时间线陈列，并能现场调用对应 tag 的 `viewer.exe` 重新渲染，直接看到效果。
+
+```bash
+tools\showcase\start.bat                      # Windows 一键启动（自动开浏览器）
+python tools/showcase/server.py --port 8787   # 或手动起服务，访问 http://127.0.0.1:8787/
+python tools/showcase/rebuild.py              # 干净 clone 后重建历史 tag 的 viewer.exe（build/ 不入库）
+```
+
+- 页面可切换 M0.1~M0.4、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线）。
+- M0.4 可调 yaw / pitch / dist / cull 实时换视角；内壁剔除、resize 前后对照都能直接点开。
+- 双后端结果除 MD5 外还做像素级比对：正常视角逐字节一致，内壁/resize 只差 1~2 个像素（≤1/255，GPU 取整噪声），页面如实标注而不是笼统写「一致」。
+- 历史 exe 由 `git archive <tag>` 现场重建，Slang 工具链用 NTFS junction 复用主工作区，不重复下载/复制。
+- 每个 `example/<版本>/run.bat` 也能单独跑：`run.bat all` 或 `run.bat <用例名>`，两后端各出一张 PNG。
 
 ## 两个程序
 

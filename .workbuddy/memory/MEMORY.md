@@ -32,6 +32,13 @@
 - 资产 `assets/models/Suzanne.glb` 是 Khronos 官方 glTF 三件套经 `scripts/pack-suzanne-glb.py` 打包的单文件（2.5 MB，内嵌贴图）；路径由 `NL_ASSET_DIR` 注入，不依赖 CWD。tinygltf 只在 `scene.cpp` 一个 TU 展开实现，`TINYGLTF_NO_STB_IMAGE_WRITE`。
 - 每阶段新增 GPU 资源时，**slot 级同步表（如 `frameFence_`）必须在 `createTargets()` 初始化**：`renderFrame` 在懒建 `ensurePipeline()` 之前就会按 slot 访问它，放错位置 = 首帧 139 段错误。
 
+## 成果展示台 / 用例库（2026-11-07 新增，`v0.4.1`）
+- **`example/cases.json` 是版本与用例的唯一数据源**：截图、`run.bat`、exe 映射、参数范围都从它读；新增用例只改它 + 把 PNG 放进 `example/<版本>/`，**不要另建第二份清单**。
+- 启动：`tools/showcase/start.bat`（或 `python tools/showcase/server.py --port 8787`）→ http://127.0.0.1:8787/；服务是 Python 标准库、零依赖，只从清单白名单读图、参数按 spec 校验、运行加串行锁（viewer 会开真实 GPU 窗口）。
+- 干净 clone 后 `build/` 不存在 → 先 `python tools/showcase/rebuild.py`：按 tag `git archive` 出历史快照，注入阶段无关 `build-m0.2.bat`（s0-init 自带脚本要 `reg.exe`，本机被禁），junction 复用 `thirdparty/slang/dist`，产物在 `build/showcase/<tag>/build/<BACKEND>/viewer.exe`。M0.4 直接用当前 `build/<backend>/viewer.exe`。
+- **双后端「画面一致」要分档**：正常视角 PNG 逐字节相同；M0.4 内壁 / resize 的 MD5 不同但像素差仅 ≤1/255（2 个 / 1 个像素，GPU 取整噪声）。展示台的 `compare_pixels()` 如实标 `bytes` / `near` / 不同，别笼统写「一致」。
+- 历史遗留：`docs/screenshots/` 是验收存档（含 M0.2 不同参数的旧图），`example/` 里的基线必须与用例命令的产物一致；M0.2 resize 基线已用现场产物替换。
+
 ## 参考文档/示例（M0.3 拉取，已 vendored 本地，2026-11-06）
 - ⚠️ **被误导纠正**：NVRHI 官方仓库是 `NVIDIA-RTX/NVRHI`（不是 `NVIDIA/nvrhi`）；当前 `main` **不含 `examples/`**，权威 API 参考在仓库 `doc/Tutorial.md`+`doc/ProgrammingGuide.md`（已存 `thirdparty/nvrhi/doc/`）。
 - 之前误判“当前 main 用新版 beginRenderPass、与 vendored 老接口不兼容”——实测 `Tutorial.md` 仍是 `open→setGraphicsState→draw`，与本地 vendored `nvrhi.h`(2021 代) 同代，可直接对照；差异只在校验细节，每处调用仍需回 vendored 头核对签名。

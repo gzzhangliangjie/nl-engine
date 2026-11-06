@@ -197,6 +197,34 @@
 
 ---
 
+## 附带工具：S0 成果展示台 + example 用例库（M0.4 后，非里程碑）
+
+**动作**
+- 新增 `example/`：按 `m0.1`~`m0.4` 分目录，归置 12 个成功用例的基线 PNG（含 resize 前后对照）、4 个一键复现 `run.bat`，以及 `example/cases.json`（版本 / 用例 / 命令 / 参数 / exe 映射的唯一数据源）。
+- 新增 `tools/showcase/`：`server.py`（Python 标准库 HTTP 服务，`/api/cases` + `/api/run`，参数白名单校验、路径白名单、运行串行锁）、`rebuild.py`（按 tag 现场重建历史 exe）、`index.html` / `app.js` / `style.css`（版本时间线、用例画廊、双后端并排、参数滑块、日志与 MD5/像素对比）、`start.bat`（一键启动）。
+- 用 `git archive` 重建 `s0-init` / `s0-device` / `s0-triangle` 各 DX12+Vulkan 两份 viewer.exe 到 `build/showcase/<tag>/build/<BACKEND>/`（不入库）；Slang 工具链用 NTFS junction 复用主工作区，不复制 180 MB。
+- 补 M0.3 缺失的三角形截图 `docs/screenshots/m0.3-{dx12,vulkan}.png`；同步 README（目录树 + 展示台章节）、`.gitignore`（`__pycache__/`）。
+
+**提交版本**：`v0.4.1`（M0.5 未启动，不占 `s0-*` 里程碑 tag）
+
+**完成情况**
+- 8/8 历史 exe 构建通过：selftest 7/7（M0.1）、9/9（M0.3）、11/11（M0.4），全部 `BUILD OK`。
+- 11 个可运行用例 × 双后端全部 `ok=True`、`deviceErrors=0`、实时 PNG 与各自基线 MD5 逐字节相同；3 个文字用例（selftest）日志匹配 `SELFTEST PASS`；1 个交互用例（M0.1 空窗口）明确标 manual，不自动跑。
+- 双后端对比：8 项 `bytes`（MD5 相同，含 M0.2 清屏、M0.3 三角形、M0.4 Suzanne 正常视角）、2 项 `near`（M0.4 内壁 / resize：MD5 不同但像素差仅 1/255，分别 2 个、1 个像素），页面分别标注而不笼统写「一致」。
+- `example/m0.{1,3,4}/run.bat` 抽测（`selftest` / `triangle` / `suzanne`）全部退出码 0，PNG 落到 `build/showcase/runs/`，基线未被覆盖。
+- 无头浏览器截图确认首页布局与图片正常（版本列表、验收判据、双后端并排图、参数控件、运行按钮）；`/shots/../cases.json` 穿越请求被拦（404）。
+
+**踩坑情况**
+1. **M0.3 验收只查了画面、没落盘截图** → 现象：`docs/screenshots/` 无三角形图，展示台该版本开天窗。根因：M0.3 用肉眼确认后没执行 `--screenshot` 存证。处理：从 `s0-triangle` 原始代码现场重建两后端 exe 再出图，双后端 MD5 `6f7711d1…` 相同；图同时进 `docs/screenshots/` 与 `example/m0.3/`。
+2. **清单里历史 exe 路径少一层 `build/`** → 现象：`/api/cases` 里 6 个历史 exe 全 `ready=false`。根因：构建脚本 `BUILDDIR=%ROOT%\build\%BACKEND%`，而清单写成 `build/showcase/<tag>/<BACKEND>/`。处理：统一改为 `build/showcase/<tag>/build/<BACKEND>/viewer.exe`，8/8 就绪。
+3. **`s0-init` 自带构建脚本在本机跑不通** → 根因：`build-m0.1.bat` 调 `vcvars64.bat`，后者要 `reg.exe`（本会话被安全策略禁用）。处理：`rebuild.py` 检出历史 tag 后注入当前阶段无关的 `build-m0.2.bat`（显式 INCLUDE/LIB/PATH + NMake），两后端均 PASS。
+4. **M0.2 resize 基线不是该用例的产物** → 现象：DX12 实时图与基线 MD5 不同（`d6fe0511` vs `bfbbf3a7`），查尺寸发现基线是 800×450、before 图还带 `--color 1`。根因：`case-dx12-resize.png` 是历史不同参数的遗留截图。处理：用本次现场运行的 DX12/Vulkan 各两张图覆盖 `example/m0.2/resize-*.png`，并给「清屏色切换」补 `color-*.png` 基线，之后 11/11 用例基线全匹配。
+5. **「双后端画面一致」与 MD5 不同自相矛盾** → 现象：M0.4 内壁 / resize 两后端 PNG 字节不同（`a8ab17dd` vs `26221b55`），但台账写逐像素一致。根因：zlib IDAT 解压后扫描线不同，实际像素只差 ≤1/255（GPU 取整噪声）。处理：服务端 `compare_pixels()`（Pillow 可选加速，标准库 PNG 解码器兜底）返回最大通道差与差异像素数；UI 分 `bytes` / `pixels` / `near` / 不同四态如实显示。
+6. **清单放两份会漂移** → 现象：初版 `tools/showcase/cases.json` 与截图目录 `docs/screenshots/` 分离，用户要求「做个 example 目录放每个版本的用例」后必然出现两套索引。处理：清单整体搬进 `example/cases.json`，服务与重建脚本都从它读，截图与 `run.bat` 同目录；`/shots/` 只服务清单里声明过的相对路径，避免目录穿越。
+7. **批量测试脚本的 CRLF 污染 JSON** → 现象：`/api/run` 全部回 `Invalid control character at line 1`。根因：Python 在 Windows 写清单文件默认 `\r\n`，shell `read` 把 `\r` 带进 case id。处理：测试侧 strip `\r`；产品侧不动（服务端本就按 JSON 严格解析，没有静默容错）。
+
+---
+
 ## 后续阶段的填写规范
 
 每个阶段追加一节，四栏齐全，另附「可见用例」的截图路径与复现命令：

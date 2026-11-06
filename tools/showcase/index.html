@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nl-engine · S0 成果展示台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">NL</div>
+      <div>
+        <h1>S0 成果展示台</h1>
+        <p>nl-engine · 按版本回放成功用例</p>
+      </div>
+    </div>
+
+    <div class="side-label">里程碑版本</div>
+    <nav id="versionList" class="version-list"></nav>
+
+    <div class="side-bottom">
+      <div class="side-label">后端模式</div>
+      <div class="segment" id="backendSwitch">
+        <button data-backend="dx12">DX12</button>
+        <button data-backend="vulkan">Vulkan</button>
+        <button data-backend="both" class="active">双后端对比</button>
+      </div>
+      <div class="hint">「双后端对比」会分别跑两个 exe，并比对输出 PNG 的 MD5。</div>
+      <div class="side-label" style="margin-top:18px">服务</div>
+      <div id="serviceInfo" class="hint">读取中…</div>
+      <button id="runAll" class="run-all">▶ 运行本版本全部用例</button>
+      <div id="runAllStatus" class="hint"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="head">
+      <div>
+        <div class="eyebrow" id="headTag">—</div>
+        <h2 id="headTitle">加载中…</h2>
+        <p id="headSummary"></p>
+      </div>
+      <div class="head-right">
+        <span class="badge" id="headStatus">—</span>
+        <span class="date" id="headDate"></span>
+      </div>
+    </header>
+
+    <section class="accept">
+      <div class="accept-title">验收判据</div>
+      <ul id="acceptList"></ul>
+    </section>
+
+    <div id="cases" class="cases"></div>
+
+    <footer class="foot">
+      <div><strong>基线截图</strong> 在 <code>example/&lt;版本&gt;/</code>，是各里程碑验收落盘或按 tag 现场重建出的真实 GPU 回读 PNG；<strong>运行结果</strong> 由对应 tag 的 viewer.exe 现场渲染，写到 <code>build/showcase/runs/</code>，不覆盖基线。版本与用例清单：<code>example/cases.json</code>。</div>
+      <div id="rebuildHint" class="rebuild"></div>
+    </footer>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

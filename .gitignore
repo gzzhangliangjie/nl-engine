@@ -18,6 +18,10 @@ thirdparty/slang/dist/
 thirdparty/slang/_dl/
 thirdparty/slang/_test/
 
+# Python (showcase tool)
+__pycache__/
+*.pyc
+
 # OS
 Thumbs.db
 Desktop.ini
