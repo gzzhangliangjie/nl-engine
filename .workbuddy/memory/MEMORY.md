@@ -21,7 +21,16 @@
 - 网络：GitHub 小文件开代理后直连可用，大文件限速 ~12KB/s → gh-proxy 分 8 段并发。
 
 ## 版本
-- `s0-init` = M0.1 验收；`v0.1.0` = M0.0 环境补齐快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）。`v0.1.0` = M0.0 环境补齐快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+
+## M0.4 起的渲染约定（2026-11-07 实测，改动前先看 `docs/SHADER-CONVENTIONS.md`）
+- 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 `nvrhi.h`）；两个 backend 只管 swapchain / depth / framebuffer / present，**不要再在两个后端里各抄一遍 shader 或资源创建**。
+- **SPIR-V 绑定偏移固定**：NVRHI 默认 `VulkanBindingOffsets` = SRV 0 / Sampler 128 / CB 256；slangc 必须带 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`。shader 只写 `register(b0/t0/s0)`，禁用 `[[vk::binding]]` 之类 GLSL 注解。
+- SPIR-V 入口恒为 `main`、DXIL 才是 `vsMain/psMain`（M0.3 老坑，Model shader 同样适用）。
+- MVP 用 NVRHI **volatile constant buffer**（`setMaxVersions(16)`），不是 push constant；`SceneConstants` 严格 160 B，C++ 的 `FrameParams` 尾部有 `bool cullBack`，**禁止整块 memcpy 进 cbuffer**。
+- 剔除方向：glTF CCW 外表面在本项目两后端都被判为 back-face（叠加 Slang + NVRHI Vulkan 视口换算），pipeline 必须 `setFrontCounterClockwise(true)`；默认 false 会剔掉正脸只剩内壁。「关剔除看内壁」用例 = `--dist 0.6 --cull none`（相机进模型内部），外部视角看不出差异。
+- 资产 `assets/models/Suzanne.glb` 是 Khronos 官方 glTF 三件套经 `scripts/pack-suzanne-glb.py` 打包的单文件（2.5 MB，内嵌贴图）；路径由 `NL_ASSET_DIR` 注入，不依赖 CWD。tinygltf 只在 `scene.cpp` 一个 TU 展开实现，`TINYGLTF_NO_STB_IMAGE_WRITE`。
+- 每阶段新增 GPU 资源时，**slot 级同步表（如 `frameFence_`）必须在 `createTargets()` 初始化**：`renderFrame` 在懒建 `ensurePipeline()` 之前就会按 slot 访问它，放错位置 = 首帧 139 段错误。
 
 ## 参考文档/示例（M0.3 拉取，已 vendored 本地，2026-11-06）
 - ⚠️ **被误导纠正**：NVRHI 官方仓库是 `NVIDIA-RTX/NVRHI`（不是 `NVIDIA/nvrhi`）；当前 `main` **不含 `examples/`**，权威 API 参考在仓库 `doc/Tutorial.md`+`doc/ProgrammingGuide.md`（已存 `thirdparty/nvrhi/doc/`）。
