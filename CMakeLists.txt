@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
 project(nl-engine VERSION 0.0.1 LANGUAGES C CXX)
 
-# S0 / M0.1：最小可跑骨架。
+# S0 / M0.2：NVRHI device + swapchain + 程序内截图。
 # 搭建节奏参考 docs/s0/CARROT-BOOTSTRAP.md（Carrot 2020-11 从零起步的实况，仅作参考）。
 #
-# 【架构纪律】这是通用管线，构建系统不依赖任何厂商图形 SDK：
+# 【架构纪律】这是通用管线，构建系统不依赖任何厂商图形 SDK、也不联网拉依赖：
 #   - 不读取 VULKAN_SDK / VK_SDK_PATH，不 find_package(Vulkan)，不要求 vkcube
 #   - D3D12 / OpenGL 的头文件与库来自 Windows SDK（系统自带）
-#   - Vulkan 头走 KhronosGroup/Vulkan-Headers（M0.2 由 NVRHI 的
-#     NVRHI_FETCH_VULKAN_HEADERS 拉），loader 是显卡驱动自带的 vulkan-1.dll
+#   - Vulkan 头走本地 vendored 的 KhronosGroup/Vulkan-Headers；loader 是驱动自带的 vulkan-1.dll
+#   - DirectX-Headers 只是 NVRHI D3D12 后端需要的开源辅助头，同样本地 vendored
 #   - Slang 独立获取，不从任何 SDK 路径里找
 #   viewer/ 与 core/ 里不得出现任何图形 API 符号；图形 API 只允许活在 renderer/。
 
@@ -16,14 +16,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ---- 后端选择：只是编译期配置，M0.1 不链接任何图形 API ----
+# ---- 后端选择：编译期配置，切换后端不需要装任何东西 ----
 set(NL_GRAPHICS_BACKEND "AUTO" CACHE STRING "Graphics backend: AUTO | DX12 | VULKAN")
 set_property(CACHE NL_GRAPHICS_BACKEND PROPERTY STRINGS AUTO DX12 VULKAN)
 string(TOUPPER "${NL_GRAPHICS_BACKEND}" NL_BACKEND_UPPER)
 if(NL_BACKEND_UPPER STREQUAL "AUTO")
     if(WIN32)
-        # Windows 零额外依赖：头 / 库 / debug layer 全在 Windows SDK 里
-        set(NL_BACKEND_UPPER "DX12")
+        set(NL_BACKEND_UPPER "DX12")   # Windows 零额外依赖：头 / 库 / debug layer 全在 Windows SDK 里
     else()
         set(NL_BACKEND_UPPER "VULKAN")
     endif()
@@ -31,9 +30,56 @@ endif()
 if(NOT NL_BACKEND_UPPER STREQUAL "DX12" AND NOT NL_BACKEND_UPPER STREQUAL "VULKAN")
     message(FATAL_ERROR "NL_GRAPHICS_BACKEND must be AUTO, DX12 or VULKAN")
 endif()
-message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK required)")
+message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no network)")
 
-# ---- thirdparty：GLFW 源码本地 vendored，零网络（M0.0 已复用 Carrot/thirdparty/glfw） ----
+set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
+
+# ---- 本地 headers targets：NVRHI 会按这些名字检测，检测到就不走 FetchContent 联网 ----
+add_library(Vulkan-Headers INTERFACE)
+target_include_directories(Vulkan-Headers INTERFACE ${THIRDPARTY}/vulkan-headers/include)
+add_library(Vulkan::Headers ALIAS Vulkan-Headers)
+
+add_library(DirectX-Headers STATIC
+    ${THIRDPARTY}/directx-headers/src/d3dx12_property_format_table.cpp)
+target_include_directories(DirectX-Headers PUBLIC ${THIRDPARTY}/directx-headers/include)
+target_include_directories(DirectX-Headers PRIVATE ${THIRDPARTY}/directx-headers/include/directx)
+add_library(Microsoft::DirectX-Headers ALIAS DirectX-Headers)
+
+add_library(DirectX-Guids STATIC
+    ${THIRDPARTY}/directx-headers/src/dxguids.cpp)
+target_include_directories(DirectX-Guids PUBLIC ${THIRDPARTY}/directx-headers/include)
+add_library(Microsoft::DirectX-Guids ALIAS DirectX-Guids)
+
+# ---- NVRHI：只编译当前后端，纯本地源码 ----
+if(NL_BACKEND_UPPER STREQUAL "DX12")
+    set(_NL_WITH_DX12 ON)
+    set(_NL_WITH_VULKAN OFF)
+else()
+    set(_NL_WITH_DX12 OFF)
+    set(_NL_WITH_VULKAN ON)
+endif()
+set(NVRHI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(NVRHI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(NVRHI_INSTALL OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_VALIDATION ON CACHE BOOL "" FORCE)   # NVRHI 自带校验层，两后端都有
+set(NVRHI_WITH_VULKAN ${_NL_WITH_VULKAN} CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX12 ${_NL_WITH_DX12} CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_RTXMU OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_NVAPI OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
+set(NVRHI_FETCH_VULKAN_HEADERS OFF CACHE BOOL "" FORCE)
+set(NVRHI_FETCH_DIRECTX_HEADERS OFF CACHE BOOL "" FORCE)
+add_subdirectory(thirdparty/nvrhi EXCLUDE_FROM_ALL)
+
+# 静态链接时 NVRHI 不会定义 Vulkan 动态派发器（VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE）
+# 的存储与 init——它们只在 NVRHI_SHARED_LIBRARY_BUILD 时生成。我们显式补上该宏，
+# 否则 nvrhi_vk 在链接（存储未定义）或运行（dispatcher 未初始化）时会崩。DX12 后端不受影响。
+if(NL_BACKEND_UPPER STREQUAL "VULKAN")
+    target_compile_definitions(nvrhi_vk PRIVATE NVRHI_SHARED_LIBRARY_BUILD=1)
+endif()
+
+# ---- thirdparty：GLFW 源码本地 vendored，零网络 ----
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -49,24 +95,50 @@ add_library(nl_core STATIC
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(nl_core PRIVATE glfw)
 
-# ---- renderer：M0.1 只报告选定了哪个后端；M0.2 起在这里接 NVRHI device / swapchain ----
+# ---- renderer：所有图形 API / NVRHI 符号只活在这里 ----
 add_library(nl_renderer STATIC
     renderer/src/renderer.cpp
+    renderer/src/png_writer.cpp
+    renderer/src/backend_dx12.cpp
+    renderer/src/backend_vulkan.cpp
 )
-target_include_directories(nl_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include)
-target_compile_definitions(nl_renderer PRIVATE NL_BACKEND_${NL_BACKEND_UPPER}=1)
+target_include_directories(nl_renderer
+    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
+            ${THIRDPARTY}/stb
+)
+target_link_libraries(nl_renderer PUBLIC nl_core)
+target_compile_definitions(nl_renderer PRIVATE
+    NL_BACKEND_${NL_BACKEND_UPPER}=1
+    _CRT_SECURE_NO_WARNINGS
+    NOMINMAX
+)
+if(NL_BACKEND_UPPER STREQUAL "DX12")
+    target_link_libraries(nl_renderer PUBLIC nvrhi nvrhi_d3d12 d3d12 dxgi)
+else()
+    # NVRHI 的 Vulkan 后端用 Vulkan-Hpp 动态派发，不需要链接 vulkan-1.lib
+    target_link_libraries(nl_renderer PUBLIC nvrhi nvrhi_vk)
+    # Vulkan-Headers 不随 NVRHI 暴露为 PUBLIC 头，renderer 自身也要吃 vulkan.h
+    target_include_directories(nl_renderer PRIVATE ${THIRDPARTY}/vulkan-headers/include)
+    target_compile_definitions(nl_renderer PRIVATE
+        VK_USE_PLATFORM_WIN32_KHR
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+    )
+endif()
 
-# ---- viewer：可见用例（窗口 + 标题栏实时帧号 + ESC 退出）与 --selftest ----
+# ---- viewer：可见用例 + 程序内截图（--screenshot） ----
 add_executable(viewer viewer/main.cpp)
 target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw)
 
 if(MSVC)
+    # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
+    add_compile_options(/wd4819)
     foreach(t nl_core nl_renderer viewer)
-        target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8)
+        target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
 endif()
 
-# 验收判据之一：无窗口自检可进 CI
+# 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
 enable_testing()
-add_test(NAME m0.1-selftest COMMAND viewer --selftest)
+add_test(NAME m0.2-selftest COMMAND viewer --selftest)

@@ -1,0 +1,652 @@
+#include "backend.hpp"
+
+#if defined(NL_BACKEND_VULKAN)
+
+#include "nl/core/log.hpp"
+
+#include <nvrhi/nvrhi.h>
+#include <nvrhi/vulkan.h>   // 拉入 vulkan.h（C 原型），提供全部 PFN_vk* 函数指针类型
+#include <vulkan/vulkan.h>
+
+#include <windows.h>
+
+#include <cstdint>
+#include <cstring>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace nl::renderer::detail {
+namespace {
+
+constexpr uint32_t kBufferCount = 2;
+
+std::string vkResultStr(VkResult r) {
+    std::ostringstream os;
+    os << "VkResult " << static_cast<int>(r);
+    return os.str();
+}
+
+// 从 loader 动态解析一个 Vulkan 函数指针。
+template <class F>
+F loadProc(PFN_vkGetInstanceProcAddr getProc, VkInstance inst, const char* name) {
+    return reinterpret_cast<F>(getProc(inst, name));
+}
+
+// NVRHI 的消息回调接进 core 日志；错误信息独立计数，验收要求为 0。
+// Vulkan 侧没有 Khronos VVL（本机不装厂商 SDK），NVRHI 自身的状态校验仍走这里。
+class NvrhiMessageCallback final : public nvrhi::IMessageCallback {
+public:
+    void message(nvrhi::MessageSeverity severity, const char* messageText) override {
+        const char* text = messageText ? messageText : "<null>";
+        switch (severity) {
+        case nvrhi::MessageSeverity::Error:
+        case nvrhi::MessageSeverity::Fatal:
+            nl::core::log::deviceError("NVRHI", text);
+            break;
+        case nvrhi::MessageSeverity::Warning:
+            nl::core::log::warn("NVRHI: ", text);
+            break;
+        default:
+            nl::core::log::debug("NVRHI: ", text);
+            break;
+        }
+    }
+};
+
+// 命名约定（本文件内一律这么区分，避免 vkDev_ / vkDevice_ 那种看串的坑）：
+//   vulkan*_  → 原生 Vulkan 句柄 / 对象（VkDevice、VkInstance、VkSwapchainKHR …）
+//   nvrhi*_   → NVRHI 抽象层对象（nvrhi::vulkan::IDevice*、TextureHandle …）
+//   vk*_      → 从 loader 运行时解析的 Vulkan 函数指针（本机无 vulkan-1.lib，禁止静态链接）
+class VkBackend final : public Backend {
+public:
+    ~VkBackend() override { shutdown(); }
+
+    bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
+              std::string& outError) override {
+        if (!nativeWindow || extent.width == 0 || extent.height == 0) {
+            outError = "invalid window handle or extent";
+            return false;
+        }
+        hwnd_ = static_cast<HWND>(nativeWindow);
+        extent_ = extent;
+
+        // Vulkan loader（vulkan-1.dll）由显卡驱动自带，本机没有 vulkan-1.lib 导入库，
+        // 故所有 Vulkan 函数都在运行时从 loader 解析。调试层：Khronos VVL 需要厂商 SDK，
+        // 本架构不装，故 Vulkan 调试能力 = NVRHI 自身校验层。
+        info_.debugLayer = enableDebugLayer
+            ? "NVRHI validation (Vulkan VVL 未安装：零厂商 SDK)"
+            : "NVRHI validation only";
+        info_.debugLayerActive = enableDebugLayer;
+
+        if (!createInstance(outError)) return false;
+        if (!createSurface(outError)) return false;
+        if (!pickPhysicalDevice(outError)) return false;
+        if (!createDevice(outError)) return false;
+
+        reportFeatures();
+
+        if (!createSwapchain(outError)) return false;
+        if (!createTargets(outError)) return false;
+
+        nl::core::log::info("device ready: ", info_.adapterName,
+                            " | ", info_.debugLayer,
+                            " | swapchain ", extent_.width, "x", extent_.height);
+        return true;
+    }
+
+    void resize(Extent extent) override {
+        if (extent.width == 0 || extent.height == 0) return;
+        if (extent.width == extent_.width && extent.height == extent_.height) return;
+        if (!nvrhiDevice_ || !vulkanSwapchain_) return;
+
+        // 顺序照 Donut / DX12：先等所有在途工作结束，再清 NVRHI 引用，
+        // 最后才销毁旧 swapchain 重建。反序会让 backbuffer 在途引用未释放。
+        nvrhiDevice_->waitForIdle();
+        nvrhiDevice_->runGarbageCollection();
+        rhiTargets_.clear();
+        nativeTargets_.clear();
+
+        extent_ = extent;
+        if (!recreateSwapchain()) {
+            nl::core::log::deviceError("Vulkan", "resize: recreateSwapchain failed");
+            return;
+        }
+        std::string unused;
+        createTargets(unused);
+        nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
+    }
+
+    bool renderFrame(ClearColor color, const char* screenshotPath,
+                     std::string& outError) override {
+        if (!nvrhiDevice_ || !vulkanSwapchain_) { outError = "renderer not initialized"; return false; }
+
+        const VkResult acq = vkAcquireNextImageKHR_(vulkanDevice_, vulkanSwapchain_, ~0ULL,
+                                                    vulkanImageAvailableSem_, VK_NULL_HANDLE, &vulkanImageIndex_);
+        if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+            if (!recreateSwapchain()) { outError = "acquire: swapchain out of date, recreate failed"; return false; }
+            std::string unused; createTargets(unused);
+            return true; // 下一帧再画
+        }
+        if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
+            outError = std::string("vkAcquireNextImageKHR failed: ") + vkResultStr(acq);
+            return false;
+        }
+
+        // acquire 信号 imageAvailableSem；NVRHI 在下一次 submit 时等它。
+        nvrhiDevice_->queueWaitForSemaphore(nvrhi::CommandQueue::Graphics, vulkanImageAvailableSem_, 0);
+
+        nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
+        cmd->open();
+        cmd->clearTextureFloat(rhiTargets_[vulkanImageIndex_], nvrhi::TextureSubresourceSet(),
+                               nvrhi::Color(color.r, color.g, color.b, color.a));
+
+        nvrhi::StagingTextureHandle staging;
+        if (screenshotPath) {
+            const auto stagingDesc = nvrhi::TextureDesc()
+                .setWidth(extent_.width)
+                .setHeight(extent_.height)
+                .setFormat(vulkanSwapFormat_)
+                .setDebugName("ScreenshotReadback");
+            staging = nvrhiDevice_->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+            if (staging) {
+                cmd->copyTexture(staging, nvrhi::TextureSlice(),
+                                 rhiTargets_[vulkanImageIndex_], nvrhi::TextureSlice());
+            }
+        }
+        cmd->close();
+        nvrhiDevice_->executeCommandList(cmd);
+
+        bool ok = true;
+        if (screenshotPath) {
+            if (!staging) {
+                outError = "staging texture for screenshot could not be created";
+                ok = false;
+            } else {
+                std::size_t rowPitch = 0;
+                void* pixels = nvrhiDevice_->mapStagingTexture(
+                    staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch);
+                if (!pixels) {
+                    outError = "mapStagingTexture returned null";
+                    ok = false;
+                } else {
+                    ok = writeReadback(pixels, static_cast<std::uint32_t>(rowPitch), screenshotPath);
+                    if (!ok) outError = std::string("writePngRGBA8 failed: ") + screenshotPath;
+                    nvrhiDevice_->unmapStagingTexture(staging);
+                }
+            }
+        }
+
+        // NVRHI 缓冲了 semaphore 信号；用一次空 submit 真正触发 renderFinishedSem 信号。
+        nvrhiDevice_->queueSignalSemaphore(nvrhi::CommandQueue::Graphics, vulkanRenderFinishedSem_, 0);
+        nvrhiDevice_->executeCommandLists(nullptr, 0);
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = &vulkanRenderFinishedSem_;
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = &vulkanSwapchain_;
+        presentInfo.pImageIndices = &vulkanImageIndex_;
+        const VkResult pres = vkQueuePresentKHR_(vulkanPresentQueue_, &presentInfo);
+        if (pres == VK_ERROR_OUT_OF_DATE_KHR) {
+            // swapchain 已失效（resize / 窗口状态变化等）。重建后下一帧重试，不计入错误。
+            // 这与 acquire 阶段的 OUT_OF_DATE 处理一致，是标准 Vulkan 实践。
+            recreateSwapchain();
+            std::string unused; createTargets(unused);
+            return true;
+        }
+        if (pres != VK_SUCCESS && pres != VK_SUBOPTIMAL_KHR) {
+            outError = std::string("vkQueuePresentKHR failed: ") + vkResultStr(pres);
+            ok = false;
+        }
+
+        nvrhiDevice_->waitForIdle();
+        nvrhiDevice_->runGarbageCollection();
+        return ok;
+    }
+
+    // 无 VVL（零厂商 SDK），NVRHI 错误已由回调计入 log::deviceError；这里返回 0 不重复计数。
+    int drainMessages() override { return 0; }
+
+    const DeviceInfo& info() const override { return info_; }
+    Extent extent() const override { return extent_; }
+
+private:
+    bool createInstance(std::string& outError) {
+        // loader 由驱动自带，运行时加载，避免依赖 vulkan-1.lib 导入库（本机没有）。
+        vulkanModule_ = LoadLibraryW(L"vulkan-1.dll");
+        if (!vulkanModule_) {
+            outError = "failed to LoadLibrary vulkan-1.dll (Vulkan loader 缺失？)";
+            return false;
+        }
+        getInstanceProcAddr_ = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            GetProcAddress(vulkanModule_, "vkGetInstanceProcAddr"));
+        if (!getInstanceProcAddr_) {
+            outError = "vkGetInstanceProcAddr not found in vulkan-1.dll";
+            return false;
+        }
+        // vkCreateInstance 是 loader 极少数静态导出的函数之一，可经 NULL instance 取得。
+        vkCreateInstance_ = loadProc<PFN_vkCreateInstance>(getInstanceProcAddr_, nullptr, "vkCreateInstance");
+
+        const char* instanceExts[] = {
+            VK_KHR_SURFACE_EXTENSION_NAME,
+            VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+        };
+
+        VkApplicationInfo appInfo{};
+        appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        appInfo.pApplicationName = "nl-engine";
+        appInfo.applicationVersion = 1;
+        appInfo.pEngineName = "nl-engine";
+        appInfo.engineVersion = 1;
+        appInfo.apiVersion = VK_API_VERSION_1_2;
+
+        VkInstanceCreateInfo instInfo{};
+        instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        instInfo.pApplicationInfo = &appInfo;
+        instInfo.enabledLayerCount = 0;
+        instInfo.enabledExtensionCount = sizeof(instanceExts) / sizeof(instanceExts[0]);
+        instInfo.ppEnabledExtensionNames = instanceExts;
+
+        const VkResult r = vkCreateInstance_(&instInfo, nullptr, &vulkanInstance_);
+        if (r != VK_SUCCESS) {
+            outError = std::string("vkCreateInstance failed: ") + vkResultStr(r);
+            return false;
+        }
+        // 有了 instance，把其余 Vulkan 函数（核心 + KHR 扩展）一次性解析出来。
+        loadRemaining();
+        return true;
+    }
+
+    // 用 instance 解析除 vkCreateInstance 之外的全部 Vulkan 函数指针。
+    void loadRemaining() {
+        vkDestroyInstance_      = loadProc<PFN_vkDestroyInstance>(getInstanceProcAddr_, vulkanInstance_, "vkDestroyInstance");
+        vkEnumeratePhysicalDevices_ = loadProc<PFN_vkEnumeratePhysicalDevices>(getInstanceProcAddr_, vulkanInstance_, "vkEnumeratePhysicalDevices");
+        vkGetPhysicalDeviceProperties_ = loadProc<PFN_vkGetPhysicalDeviceProperties>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceProperties");
+        vkGetPhysicalDeviceQueueFamilyProperties_ = loadProc<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceQueueFamilyProperties");
+        vkGetPhysicalDeviceSurfaceSupportKHR_ = loadProc<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceSurfaceSupportKHR");
+        vkCreateWin32SurfaceKHR_ = loadProc<PFN_vkCreateWin32SurfaceKHR>(getInstanceProcAddr_, vulkanInstance_, "vkCreateWin32SurfaceKHR");
+        vkCreateDevice_        = loadProc<PFN_vkCreateDevice>(getInstanceProcAddr_, vulkanInstance_, "vkCreateDevice");
+        vkGetDeviceQueue_      = loadProc<PFN_vkGetDeviceQueue>(getInstanceProcAddr_, vulkanInstance_, "vkGetDeviceQueue");
+        vkGetPhysicalDeviceFeatures2_ = loadProc<PFN_vkGetPhysicalDeviceFeatures2>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceFeatures2");
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR_ = loadProc<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        vkGetPhysicalDeviceSurfaceFormatsKHR_ = loadProc<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        vkCreateSwapchainKHR_  = loadProc<PFN_vkCreateSwapchainKHR>(getInstanceProcAddr_, vulkanInstance_, "vkCreateSwapchainKHR");
+        vkCreateSemaphore_     = loadProc<PFN_vkCreateSemaphore>(getInstanceProcAddr_, vulkanInstance_, "vkCreateSemaphore");
+        vkDestroySemaphore_    = loadProc<PFN_vkDestroySemaphore>(getInstanceProcAddr_, vulkanInstance_, "vkDestroySemaphore");
+        vkDestroySwapchainKHR_ = loadProc<PFN_vkDestroySwapchainKHR>(getInstanceProcAddr_, vulkanInstance_, "vkDestroySwapchainKHR");
+        vkGetSwapchainImagesKHR_ = loadProc<PFN_vkGetSwapchainImagesKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetSwapchainImagesKHR");
+        vkAcquireNextImageKHR_ = loadProc<PFN_vkAcquireNextImageKHR>(getInstanceProcAddr_, vulkanInstance_, "vkAcquireNextImageKHR");
+        vkQueuePresentKHR_     = loadProc<PFN_vkQueuePresentKHR>(getInstanceProcAddr_, vulkanInstance_, "vkQueuePresentKHR");
+        vkDestroySurfaceKHR_   = loadProc<PFN_vkDestroySurfaceKHR>(getInstanceProcAddr_, vulkanInstance_, "vkDestroySurfaceKHR");
+        vkDestroyDevice_       = loadProc<PFN_vkDestroyDevice>(getInstanceProcAddr_, vulkanInstance_, "vkDestroyDevice");
+    }
+
+    bool createSurface(std::string& outError) {
+        VkWin32SurfaceCreateInfoKHR surfInfo{};
+        surfInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        surfInfo.hinstance = GetModuleHandle(nullptr);
+        surfInfo.hwnd = hwnd_;
+        const VkResult r = vkCreateWin32SurfaceKHR_(vulkanInstance_, &surfInfo, nullptr, &vulkanSurface_);
+        if (r != VK_SUCCESS) {
+            outError = std::string("vkCreateWin32SurfaceKHR failed: ") + vkResultStr(r);
+            return false;
+        }
+        return true;
+    }
+
+    bool pickPhysicalDevice(std::string& outError) {
+        uint32_t count = 0;
+        vkEnumeratePhysicalDevices_(vulkanInstance_, &count, nullptr);
+        if (count == 0) { outError = "no Vulkan physical devices"; return false; }
+        std::vector<VkPhysicalDevice> phys(count);
+        vkEnumeratePhysicalDevices_(vulkanInstance_, &count, phys.data());
+
+        for (VkPhysicalDevice p : phys) {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties_(p, &props);
+            uint32_t qfCount = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties_(p, &qfCount, nullptr);
+            std::vector<VkQueueFamilyProperties> qf(qfCount);
+            vkGetPhysicalDeviceQueueFamilyProperties_(p, &qfCount, qf.data());
+
+            uint32_t g = UINT32_MAX;
+            uint32_t pres = UINT32_MAX;
+            for (uint32_t i = 0; i < qfCount; ++i) {
+                if (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) g = i;
+                VkBool32 support = VK_FALSE;
+                vkGetPhysicalDeviceSurfaceSupportKHR_(p, i, vulkanSurface_, &support);
+                if (support == VK_TRUE) pres = i;
+            }
+            if (g != UINT32_MAX && pres != UINT32_MAX) {
+                vulkanPhysicalDevice_ = p;
+                vulkanGraphicsFamily_ = g;
+                vulkanPresentFamily_ = pres;
+                info_.adapterName = props.deviceName;
+                return true;
+            }
+        }
+        outError = "no Vulkan physical device with graphics + present support";
+        return false;
+    }
+
+    bool createDevice(std::string& outError) {
+        const float priority = 1.0f;
+        std::vector<VkDeviceQueueCreateInfo> qcis;
+        VkDeviceQueueCreateInfo gqci{};
+        gqci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        gqci.queueFamilyIndex = vulkanGraphicsFamily_;
+        gqci.queueCount = 1;
+        gqci.pQueuePriorities = &priority;
+        qcis.push_back(gqci);
+        if (vulkanPresentFamily_ != vulkanGraphicsFamily_) {
+            VkDeviceQueueCreateInfo pqci{};
+            pqci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            pqci.queueFamilyIndex = vulkanPresentFamily_;
+            pqci.queueCount = 1;
+            pqci.pQueuePriorities = &priority;
+            qcis.push_back(pqci);
+        }
+
+        const char* deviceExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+        VkPhysicalDeviceFeatures features{}; // 默认特性足够画一个清屏三角形
+
+        VkDeviceCreateInfo dci{};
+        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        dci.queueCreateInfoCount = static_cast<uint32_t>(qcis.size());
+        dci.pQueueCreateInfos = qcis.data();
+        dci.enabledExtensionCount = sizeof(deviceExts) / sizeof(deviceExts[0]);
+        dci.ppEnabledExtensionNames = deviceExts;
+        dci.pEnabledFeatures = &features;
+
+        const VkResult r = vkCreateDevice_(vulkanPhysicalDevice_, &dci, nullptr, &vulkanDevice_);
+        if (r != VK_SUCCESS) {
+            outError = std::string("vkCreateDevice failed: ") + vkResultStr(r);
+            return false;
+        }
+        vkGetDeviceQueue_(vulkanDevice_, vulkanGraphicsFamily_, 0, &vulkanGraphicsQueue_);
+        vulkanPresentQueue_ = (vulkanPresentFamily_ == vulkanGraphicsFamily_) ? vulkanGraphicsQueue_ : VK_NULL_HANDLE;
+        if (!vulkanPresentQueue_) vkGetDeviceQueue_(vulkanDevice_, vulkanPresentFamily_, 0, &vulkanPresentQueue_);
+
+        nvrhi::vulkan::DeviceDesc desc;
+        desc.errorCB = &nvrhiMessageCallback_;
+        desc.instance = vulkanInstance_;
+        desc.physicalDevice = vulkanPhysicalDevice_;
+        desc.device = vulkanDevice_;
+        desc.graphicsQueue = vulkanGraphicsQueue_;
+        desc.graphicsQueueIndex = static_cast<int>(vulkanGraphicsFamily_);
+        nvrhiDeviceHandle_ = nvrhi::vulkan::createDevice(desc); // 内部会初始化 Vulkan 动态 dispatcher
+        if (!nvrhiDeviceHandle_) { outError = "nvrhi::vulkan::createDevice returned null"; return false; }
+        // 注意：Vulkan 的 semaphore 协调方法只在 raw vulkan::IDevice 上可用，
+        // NVRHI 的 validation 包裹层不暴露它们，故这里直接用 raw device（Donut 同款做法）。
+        nvrhiDevice_ = nvrhiDeviceHandle_;
+        return true;
+    }
+
+    void reportFeatures() {
+        info_.rayQuery = nvrhiDevice_->queryFeatureSupport(nvrhi::Feature::RayQuery);
+        info_.indirectDraw = true;
+
+        // Vulkan 1.4 头文件里 64 位整型原子已从 Vulkan12Features 拆到
+        // ShaderAtomicInt64Features 独立结构，需单独挂在 pNext 链上查询。
+        VkPhysicalDeviceVulkan12Features vk12{};
+        vk12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceShaderAtomicInt64Features atom64{};
+        atom64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES;
+        vk12.pNext = &atom64;
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &vk12;
+        vkGetPhysicalDeviceFeatures2_(vulkanPhysicalDevice_, &features2);
+        info_.shaderInt64Atomics = (atom64.shaderBufferInt64Atomics == VK_TRUE)
+                                || (atom64.shaderSharedInt64Atomics == VK_TRUE);
+
+        nl::core::log::info("features: rayQuery=", info_.rayQuery ? 1 : 0,
+                            " shaderInt64Atomics=", info_.shaderInt64Atomics ? 1 : 0,
+                            " indirectDraw=", info_.indirectDraw ? 1 : 0);
+        if (!info_.rayQuery || !info_.shaderInt64Atomics) {
+            nl::core::log::warn("feature report has unsupported items; S7/S8 需按此能力调整");
+        }
+    }
+
+    bool createSwapchain(std::string& outError) {
+        VkSurfaceCapabilitiesKHR caps{};
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR_(vulkanPhysicalDevice_, vulkanSurface_, &caps);
+
+        uint32_t fmtCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR_(vulkanPhysicalDevice_, vulkanSurface_, &fmtCount, nullptr);
+        std::vector<VkSurfaceFormatKHR> fmts(fmtCount);
+        vkGetPhysicalDeviceSurfaceFormatsKHR_(vulkanPhysicalDevice_, vulkanSurface_, &fmtCount, fmts.data());
+
+        // 优先 R8G8B8A8_UNORM，和 DX12 的 RGBA 截图字节序一致；
+        // 否则退回 B8G8R8A8_UNORM（spec 保证支持），截图时做 R/B 交换。
+        VkFormat chosen = VK_FORMAT_UNDEFINED;
+        for (const auto& f : fmts) {
+            if (f.format == VK_FORMAT_R8G8B8A8_UNORM) { chosen = VK_FORMAT_R8G8B8A8_UNORM; break; }
+        }
+        if (chosen == VK_FORMAT_UNDEFINED) {
+            for (const auto& f : fmts) {
+                if (f.format == VK_FORMAT_B8G8R8A8_UNORM) { chosen = VK_FORMAT_B8G8R8A8_UNORM; break; }
+            }
+        }
+        if (chosen == VK_FORMAT_UNDEFINED) chosen = fmts.empty() ? VK_FORMAT_B8G8R8A8_UNORM : fmts[0].format;
+
+        vulkanSwapFormat_ = (chosen == VK_FORMAT_R8G8B8A8_UNORM)
+            ? nvrhi::Format::RGBA8_UNORM
+            : nvrhi::Format::BGRA8_UNORM;
+        vulkanSwapRB_ = (vulkanSwapFormat_ == nvrhi::Format::BGRA8_UNORM);
+
+        VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        for (const auto& f : fmts) {
+            if (f.format == chosen) { colorSpace = f.colorSpace; break; }
+        }
+
+        uint32_t w = extent_.width, h = extent_.height;
+        if (caps.minImageExtent.width > w) w = caps.minImageExtent.width;
+        if (caps.minImageExtent.height > h) h = caps.minImageExtent.height;
+        if (caps.maxImageExtent.width < w) w = caps.maxImageExtent.width;
+        if (caps.maxImageExtent.height < h) h = caps.maxImageExtent.height;
+        extent_.width = w; extent_.height = h;
+
+        uint32_t minImages = caps.minImageCount + 1;
+        if (caps.maxImageCount > 0 && minImages > caps.maxImageCount) minImages = caps.maxImageCount;
+
+        VkSwapchainCreateInfoKHR sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        sci.surface = vulkanSurface_;
+        sci.minImageCount = minImages;
+        sci.imageFormat = chosen;
+        sci.imageColorSpace = colorSpace;
+        sci.imageExtent = { w, h };
+        sci.imageArrayLayers = 1;
+        sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        sci.imageSharingMode = (vulkanGraphicsFamily_ == vulkanPresentFamily_)
+            ? VK_SHARING_MODE_EXCLUSIVE : VK_SHARING_MODE_CONCURRENT;
+        if (sci.imageSharingMode == VK_SHARING_MODE_CONCURRENT) {
+            uint32_t idxs[2] = { vulkanGraphicsFamily_, vulkanPresentFamily_ };
+            sci.queueFamilyIndexCount = 2;
+            sci.pQueueFamilyIndices = idxs;
+        }
+        sci.preTransform = caps.currentTransform;
+        sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        sci.clipped = VK_TRUE;
+        sci.oldSwapchain = VK_NULL_HANDLE;
+
+        const VkResult r = vkCreateSwapchainKHR_(vulkanDevice_, &sci, nullptr, &vulkanSwapchain_);
+        if (r != VK_SUCCESS) {
+            outError = std::string("vkCreateSwapchainKHR failed: ") + vkResultStr(r);
+            return false;
+        }
+
+        // 二进制 semaphore：acquire 信号一个，present 等另一个。
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        vkCreateSemaphore_(vulkanDevice_, &semInfo, nullptr, &vulkanImageAvailableSem_);
+        vkCreateSemaphore_(vulkanDevice_, &semInfo, nullptr, &vulkanRenderFinishedSem_);
+        return true;
+    }
+
+    bool recreateSwapchain() {
+        vulkanSafeWait();
+        if (vulkanSwapchain_) {
+            rhiTargets_.clear();
+            nativeTargets_.clear();
+            vkDestroySwapchainKHR_(vulkanDevice_, vulkanSwapchain_, nullptr);
+            vulkanSwapchain_ = VK_NULL_HANDLE;
+        }
+        std::string err;
+        if (!createSwapchain(err)) {
+            nl::core::log::deviceError("Vulkan", err);
+            return false;
+        }
+        return true;
+    }
+
+    bool createTargets(std::string& outError) {
+        rhiTargets_.clear();
+        nativeTargets_.clear();
+
+        uint32_t count = 0;
+        vkGetSwapchainImagesKHR_(vulkanDevice_, vulkanSwapchain_, &count, nullptr);
+        std::vector<VkImage> images(count);
+        vkGetSwapchainImagesKHR_(vulkanDevice_, vulkanSwapchain_, &count, images.data());
+
+        for (VkImage img : images) {
+            nvrhi::TextureDesc texDesc;
+            texDesc.width = extent_.width;
+            texDesc.height = extent_.height;
+            texDesc.format = vulkanSwapFormat_;
+            texDesc.debugName = "SwapChainBuffer";
+            texDesc.isRenderTarget = true;
+            texDesc.initialState = nvrhi::ResourceStates::Present;
+            texDesc.keepInitialState = true;
+
+            auto handle = nvrhiDevice_->createHandleForNativeTexture(
+                nvrhi::ObjectTypes::VK_Image, nvrhi::Object(img), texDesc);
+            if (!handle) { outError = "createHandleForNativeTexture failed"; return false; }
+            rhiTargets_.push_back(handle);
+            nativeTargets_.push_back(img);
+        }
+        return true;
+    }
+
+    // BGRA 回读时把 R/B 交换成 RGBA，保证和 DX12 截图字节序一致。
+    bool writeReadback(void* pixels, std::uint32_t rowPitch, const char* path) {
+        if (!vulkanSwapRB_) {
+            return writePngRGBA8(path, pixels, extent_.width, extent_.height, rowPitch);
+        }
+        const std::uint32_t w = extent_.width, h = extent_.height;
+        const std::uint8_t* src = static_cast<const std::uint8_t*>(pixels);
+        std::vector<std::uint8_t> rgba(static_cast<size_t>(rowPitch) * h);
+        for (std::uint32_t y = 0; y < h; ++y) {
+            const std::uint8_t* s = src + static_cast<size_t>(y) * rowPitch;
+            std::uint8_t* d = rgba.data() + static_cast<size_t>(y) * rowPitch;
+            for (std::uint32_t x = 0; x < w; ++x) {
+                const std::uint8_t b = s[0], g = s[1], r = s[2], a = s[3];
+                d[0] = r; d[1] = g; d[2] = b; d[3] = a;
+                s += 4; d += 4;
+            }
+        }
+        return writePngRGBA8(path, rgba.data(), w, h, rowPitch);
+    }
+
+    void vulkanSafeWait() {
+        if (vulkanDevice_) nvrhiDevice_->waitForIdle();
+    }
+
+    void shutdown() {
+        if (vulkanDevice_) nvrhiDevice_->waitForIdle();
+        rhiTargets_.clear();
+        nativeTargets_.clear();
+
+        // 关键析构顺序：NVRHI 只持有 VkDevice 的「非拥有」包装（vk::Device），
+        // 其 Device::~Device() 会用该 device 销毁内部 query pool / pipeline cache /
+        // descriptor set layout。必须在销毁原生 VkDevice 之前先把 NVRHI 句柄 Reset，
+        // 否则 NVRHI 析构作用于已销毁的 device → use-after-free → 退出段错误（139）。
+        // 注意 NVRHI 自身从不 vkDestroyDevice（全源码无此调用），故 VkDevice 只由本
+        // 后端销毁一次，不存在双重销毁。
+        nvrhiDeviceHandle_.Reset();
+        nvrhiDevice_ = nullptr;
+
+        if (vulkanImageAvailableSem_) vkDestroySemaphore_(vulkanDevice_, vulkanImageAvailableSem_, nullptr);
+        if (vulkanRenderFinishedSem_) vkDestroySemaphore_(vulkanDevice_, vulkanRenderFinishedSem_, nullptr);
+        if (vulkanSwapchain_) vkDestroySwapchainKHR_(vulkanDevice_, vulkanSwapchain_, nullptr);
+        if (vulkanSurface_) vkDestroySurfaceKHR_(vulkanInstance_, vulkanSurface_, nullptr);
+        if (vulkanDevice_) vkDestroyDevice_(vulkanDevice_, nullptr);
+        if (vulkanInstance_) vkDestroyInstance_(vulkanInstance_, nullptr);
+
+        vulkanSwapchain_ = VK_NULL_HANDLE;
+        vulkanSurface_ = VK_NULL_HANDLE;
+        vulkanDevice_ = VK_NULL_HANDLE;
+        vulkanInstance_ = VK_NULL_HANDLE;
+        // 注意：vulkan-1.dll（图形 loader）不在 shutdown 卸载——NVRHI 内部仍持有其引用，
+        // 进程退出时的静态析构还会用到；卸载会导致退出段错误。让它随进程生命周期存在即可。
+    }
+
+    HWND hwnd_ = nullptr;
+    Extent extent_{};
+    DeviceInfo info_{};
+    NvrhiMessageCallback nvrhiMessageCallback_;
+
+    // 原生 Vulkan 对象（一律 vulkan 前缀）
+    VkInstance vulkanInstance_ = VK_NULL_HANDLE;
+    VkPhysicalDevice vulkanPhysicalDevice_ = VK_NULL_HANDLE;
+    VkDevice vulkanDevice_ = VK_NULL_HANDLE;
+    uint32_t vulkanGraphicsFamily_ = 0;
+    VkQueue vulkanGraphicsQueue_ = VK_NULL_HANDLE;
+    uint32_t vulkanPresentFamily_ = 0;
+    VkQueue vulkanPresentQueue_ = VK_NULL_HANDLE;
+    VkSurfaceKHR vulkanSurface_ = VK_NULL_HANDLE;
+    VkSwapchainKHR vulkanSwapchain_ = VK_NULL_HANDLE;
+    VkSemaphore vulkanImageAvailableSem_ = VK_NULL_HANDLE;
+    VkSemaphore vulkanRenderFinishedSem_ = VK_NULL_HANDLE;
+    uint32_t vulkanImageIndex_ = 0;
+
+    nvrhi::Format vulkanSwapFormat_ = nvrhi::Format::RGBA8_UNORM;
+    bool vulkanSwapRB_ = false;
+
+    // NVRHI 抽象层对象（一律 nvrhi 前缀）
+    nvrhi::vulkan::DeviceHandle nvrhiDeviceHandle_;
+    nvrhi::vulkan::IDevice* nvrhiDevice_ = nullptr;  // raw device（持有 semaphore 协调方法）
+    std::vector<nvrhi::TextureHandle> rhiTargets_;
+    std::vector<VkImage> nativeTargets_;
+
+    // Vulkan loader 模块句柄（运行时加载，避免依赖 vulkan-1.lib 导入库）
+    HMODULE vulkanModule_ = nullptr;
+    // 从 loader 动态解析的 Vulkan 函数指针（本机无静态导出符号可链接）
+    PFN_vkGetInstanceProcAddr getInstanceProcAddr_ = nullptr;
+    PFN_vkCreateInstance      vkCreateInstance_ = nullptr;
+    PFN_vkDestroyInstance     vkDestroyInstance_ = nullptr;
+    PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices_ = nullptr;
+    PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties_ = nullptr;
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties_ = nullptr;
+    PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR_ = nullptr;
+    PFN_vkCreateWin32SurfaceKHR vkCreateWin32SurfaceKHR_ = nullptr;
+    PFN_vkCreateDevice        vkCreateDevice_ = nullptr;
+    PFN_vkGetDeviceQueue      vkGetDeviceQueue_ = nullptr;
+    PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2_ = nullptr;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR_ = nullptr;
+    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR_ = nullptr;
+    PFN_vkCreateSwapchainKHR  vkCreateSwapchainKHR_ = nullptr;
+    PFN_vkCreateSemaphore     vkCreateSemaphore_ = nullptr;
+    PFN_vkDestroySemaphore    vkDestroySemaphore_ = nullptr;
+    PFN_vkDestroySwapchainKHR vkDestroySwapchainKHR_ = nullptr;
+    PFN_vkGetSwapchainImagesKHR vkGetSwapchainImagesKHR_ = nullptr;
+    PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR_ = nullptr;
+    PFN_vkQueuePresentKHR     vkQueuePresentKHR_ = nullptr;
+    PFN_vkDestroySurfaceKHR   vkDestroySurfaceKHR_ = nullptr;
+    PFN_vkDestroyDevice       vkDestroyDevice_ = nullptr;
+};
+
+} // namespace (anonymous)
+
+std::unique_ptr<Backend> createBackend() {
+    return std::make_unique<VkBackend>();
+}
+
+} // namespace nl::renderer::detail
+
+#endif // NL_BACKEND_VULKAN

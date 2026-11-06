@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | M0.0 | 工具链齐备 + 后端开关可用 | 同屏截图：`cmake --version`、两次 configure 的 `backend:` 行、`viewer.exe --selftest` 分别输出 `backend: dx12` 与 `backend: vulkan` | 两种 `-DNL_GRAPHICS_BACKEND` 配置都不装任何图形 SDK 就编译通过且 PASS，输出的后端名不同 | → M0.1 |
 | M0.1 | 最小可跑骨架 | `viewer.exe` 弹出窗口，标题栏实时显示帧号/帧时间，按 ESC 干净退出，控制台打印 shutdown ok。截图 `docs/screenshots/m0.1.png` | `viewer.exe --selftest` 输出 PASS；`grep -R "\bvk[A-Z]\|D3D12\|ID3D12" viewer/ core/` 零命中 | → M0.2 |
-| M0.2 | NVRHI device + swapchain，两后端都能起 | 窗口清屏色按空格切换；切换后端后**同一份 viewer 代码出同一个画面**；拖动缩放窗口前后都不黑屏。截图 `m0.2.png`（含两后端 + 缩放前后对比） | 当前后端调试层零输出；DX12 / Vulkan 都跑通 | → M0.3 |
+| M0.2 ✅ | NVRHI device + swapchain，两后端都能起 | 窗口清屏色按空格切换；切换后端后**同一份 viewer 代码出同一个画面**；拖动缩放窗口前后都不黑屏。截图 `m0.2.png`（含两后端 + 缩放前后对比） | 当前后端调试层零输出；DX12 / Vulkan 都跑通 | ✅ 2026-11-06（→ M0.3） |
 | M0.3 | 三角形 + frame in flight = 2 | 彩色三角形；任务管理器 GPU 占用非 0；两个后端各跑一次。截图 `m0.3.png` | 当前后端调试层零输出；**故意删一个 fence 等待能触发同步校验报错**（证明安全网有效） | → M0.4 |
 | M0.4 | 模型 + 贴图 + 轨道相机 | 带贴图 Suzanne；拖动旋转、滚轮缩放；关背面剔除能看到内壁。截图 `m0.4.png` | 调试层零输出 + resize 回归通过 + 两后端画面一致 | → M0.5 |
 | M0.5 | ImGui HUD + 总验收 | HUD 显示 FPS / 帧时间曲线 / 相机参数 / 当前后端名；Nsight Graphics 抓一帧看到 draw call；截图 `docs/screenshots/s0.png` | S0 三条硬指标全过（画面可交互 / 两后端调试层零报错 / **一份 .slang 同时出 SPIR-V 与 DXIL 且两后端都能加载**） | 打 `s0-done`，进 S1 |
@@ -105,13 +105,21 @@ nl-engine/
 
 **做什么**：拿到 NVRHI → 创建 device（feature 一次验全）→ swapchain → 接入主循环 → 两个后端都跑通。
 
-- [ ] 获取 NVRHI：`git clone --recursive`（gh-proxy 镜像）或 CMake FetchContent；Vulkan 头用 `NVRHI_FETCH_VULKAN_HEADERS` 拉 `Vulkan-Headers`，**不读 `VULKAN_SDK`**
-- [ ] `IDeviceCreationParams`：debug 模式开**当前后端的调试层**（DX12 Debug Layer / VVL），device callback 错误信息接到日志
-- [ ] feature 检查写死在设备创建里：**rayQuery、shaderBufferInt64Atomics、indirectDraw**（S7/S8 要用，现在验掉，免得写完了发现不支持）
-- [ ] graphics queue + `ISwapChain`（sRGB 格式起步），resize 处理留好接口（窗口缩放必测）
-- [ ] 默认 DX12（Windows 零额外依赖）；`-DNL_GRAPHICS_BACKEND=VULKAN` 重配一次，**同一份 viewer 代码出同一个画面**——这一步就是「抽象是否真的通用」的验收
+- [x] 获取 NVRHI：`git clone --recursive`（gh-proxy 镜像）或 CMake FetchContent；Vulkan 头用 `NVRHI_FETCH_VULKAN_HEADERS` 拉 `Vulkan-Headers`，**不读 `VULKAN_SDK`**
+- [x] `IDeviceCreationParams`：debug 模式开**当前后端的调试层**（DX12 Debug Layer / VVL），device callback 错误信息接到日志
+- [x] feature 检查写死在设备创建里：**rayQuery、shaderBufferInt64Atomics、indirectDraw**（S7/S8 要用，现在验掉，免得写完了发现不支持）
+- [x] graphics queue + `ISwapChain`（sRGB 格式起步），resize 处理留好接口（窗口缩放必测）
+- [x] 默认 DX12（Windows 零额外依赖）；`-DNL_GRAPHICS_BACKEND=VULKAN` 重配一次，**同一份 viewer 代码出同一个画面**——这一步就是「抽象是否真的通用」的验收
 
 **自检**：resize 窗口不崩不黑屏；两后端调试层全程零输出；两后端画面一致。tag：`s0-device`。
+
+**M0.2 验收记录（2026-11-06，本机实跑）**：
+- ✅ DX12 / Vulkan 两后端 `viewer.exe --screenshot ... --frames 8` 均打印 `shutdown ok ... deviceErrors=0`、退出码 0
+- ✅ **两后端画面逐字节相同**：`docs/screenshots/m0.2-vulkan.png` 与 `m0.2-dx12.png` MD5 一致（`bdebaf50f80697e7ee42e362e658cc78`），清屏色深海军蓝 RGB≈13,21,48
+- ✅ resize 回归 `640x360 → 1024x768`：`--resize 1024x768 --screenshot ...` 存 `.before.png` + 终帧 PNG，前后均非黑、`deviceErrors=0`、无 `VK_ERROR_OUT_OF_DATE_KHR` 硬错误（present 阶段过期已按标准 Vulkan 实践处理）
+- ✅ **退出段错误已修**：`shutdown()` 析构顺序改为先 `nvrhiDeviceHandle_.Reset()` 让 NVRHI 用活着的 device 清内部对象，再销毁原生 native 对象；进程退出码 0（原 139 use-after-free）
+- ✅ **零厂商 SDK**：Vulkan 后端无 `vulkan-1.lib` 依赖，全部 Vulkan 函数经 `vulkan-1.dll`（驱动自带）运行时 `LoadLibraryW` + `GetProcAddress("vkGetInstanceProcAddr")` 解析，编译链接退出码 0
+- 复现：`scripts/build-m0.2.bat VULKAN`（NMake 生成器，原生 `cmd.exe` 显式环境跑 `cmake --build`）
 
 ⚠️ 常见坑：
 - swapchain resize 处理不干净是本里程碑唯一高发 bug，且**每个后续阶段都要回归**（Carrot 实况修了 4 次）

@@ -1,6 +1,6 @@
 # nl-engine — 手撸 Nanite + Lumen
 
-> 裸 Vulkan 1.3 + Slang，参照 Carrot 的架构自己写一份。
+> NVRHI + Slang 通用图形管线（DX12 / Vulkan 双后端，零厂商 SDK），参照 Carrot 的架构自己写一份。
 > 铁律：**每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步。**
 
 ## 目录

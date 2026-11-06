@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交；环境补齐快照 `v0.1.0`；架构校准见本节补记 | 2026-11-06 | 编译链 / GLFW / CMake / DX12·Vulkan 双后端开关齐并验收，**零厂商 SDK**；Slang / NVRHI / Nsight 按阶段取 |
 | M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)`；两种后端配置都 PASS |
-| M0.2 设备 + swapchain | ⬜ 未开始 | `s0-device` | — | — |
+| M0.2 设备 + swapchain | ✅ 验收通过 | `s0-device` | 2026-11-06 | 双后端清屏逐字节相同、resize 不黑屏、deviceErrors=0、退出无段错误 |
 | M0.3 三角形 + 帧同步 | ⬜ 未开始 | `s0-triangle` | — | — |
 | M0.4 模型 + 贴图 + 相机 | ⬜ 未开始 | `s0-model` | — | — |
 | M0.5 ImGui + 总验收 | ⬜ 未开始 | `s0-done` | — | — |
@@ -97,6 +97,36 @@
 3. **链接 19 个 `LNK2019` + `LNK1120`（`glfwWindowHint` / `_glfwInputWindowFocus` 等全丢）** → 根因：我们的 `window.cpp` 和 GLFW 的 `window.c` 都会生成 `window.obj`，同目录编译后者覆盖前者，GLFW 实现被吃掉；同时 `@objs` 与 `@cpp` 重复指定触发 `LNK4042`。处理：C 与 C++ 的 obj 分目录（`build/glfw-obj` / `build/nl-obj`），链接时显式传两组完整路径；编译与链接分两步，不再把 cpp 和 obj 混在一条 cl 命令里。
 4. **中文注释在 MSVC 下有编码风险** → 处理：C++ 编译统一加 `/utf-8`。
 5. **需求理解偏差：一开始把 Carrot 流程写成「逐行对齐」** → 根因：把实况时间线当成了必须复刻的路线，忽略他早期换底座 / 晚拆模块 / 相机坏 5 天 / resize 修 4 次都是弯路。处理：文档改为「取节奏、避弯路」，新增「不复刻的弯路」表，并同步清理 README / PLAN / ROADMAP / kb / S0-PLAN / 设计稿共 6 处旧表述。
+
+---
+
+## M0.2 设备 + swapchain
+
+**动作**
+- 新建 `renderer/src/backend.hpp`（`Backend` 抽象接口：init / resize / renderFrame / shutdown / 设备错误计数）、`backend_dx12.cpp`、`backend_vulkan.cpp`、`png_writer.cpp`（`writePngRGBA8` GPU 回读写 PNG）。
+- 扩展 `renderer/src/renderer.cpp` 与 `renderer/include/nl/renderer/renderer.hpp`：按 `NL_GRAPHICS_BACKEND` 选后端，暴露 NVRHI device 错误回调接进 `core` 日志。
+- 扩展 `core/src/window.cpp` + `core/include/nl/core/window.hpp`：`nativeHandle()` 给 Vulkan 建 Win32 surface 用，resize 事件经 `consumeResize` 传给 renderer。
+- 扩展 `viewer/main.cpp`：`--screenshot <path> [--frames N] [--resize WxH]` 回归模式，渲染 N 帧后 GPU 回读像素写 PNG；resize 回归额外存 `<path>.before.png` 做前后对比；验收门槛 `deviceErrorCount()==0 && errorCount()==0`。
+- `CMakeLists.txt`：Vulkan 分支接 `nvrhi_vk`、包含 `vulkan-headers`、定义 `VK_USE_PLATFORM_WIN32_KHR`；**零 `vulkan-1.lib` 依赖**——所有 Vulkan 函数经 `vulkan-1.dll`（驱动自带）运行时 `LoadLibraryW` + `GetProcAddress("vkGetInstanceProcAddr")` 解析。
+- vendored 依赖进 `thirdparty/`：`nvrhi/`、`vulkan-headers/`、`directx-headers/`、`stb/`（`png_writer` 用 stb_image_write）。
+
+**提交版本**：`s0-device`（M0.2 验收通过后本地提交并打 tag）。
+
+**完成情况**
+- ✅ **Vulkan 全函数链接零 SDK**：本机无 `vulkan-1.lib`，`vkCreateInstance` 等核心函数也无静态导出符号；用 `LoadLibraryW(L"vulkan-1.dll")` 拿 `vkGetInstanceProcAddr`，22 个 Vulkan 函数指针（核心 + KHR）全部运行时解析，编译链接退出码 0。
+- ✅ NVRHI Vulkan device + swapchain 起得来：设备 `NVIDIA GeForce RTX 4060 Laptop GPU`、swapchain 创建、`deviceErrors=0`、PNG 写出（9416 字节）。
+- ✅ **双后端逐字节相同**：`m0.2-vulkan.png` 与 `m0.2-dx12.png` MD5 完全一致（`bdebaf50f80697e7ee42e362e658cc78`），同一清屏色（深海军蓝 RGB≈13,21,48），验证通用管线不绑死单一后端。
+- ✅ resize 回归不黑屏：640×360 → 1024×768，前后 PNG 均非黑、`deviceErrors=0`、无 `VK_ERROR_OUT_OF_DATE_KHR` 硬错误。
+- ✅ **退出段错误已修**：`shutdown()` 析构顺序改为先 `nvrhiDeviceHandle_.Reset()` 让 NVRHI 用活着的 device 清内部对象，再销毁原生 native 对象；进程退出码 0（原 139）。
+- ✅ 验收门槛：`viewer.exe --screenshot ... --frames 8` 与 `--resize 1024x768 --screenshot ...` 均打印 `shutdown ok ... deviceErrors=0`、退出码 0。
+
+**踩坑情况**
+1. **21 个 `vk*KHR` + 12 个核心函数 `LNK2019`** → 根因：本机无 `vulkan-1.lib`，KHR 扩展与核心 `vkCreateInstance` 等都没有静态导出符号，不能静态链接。处理：loader 引导 + 全函数指针化（`LoadLibraryW` + `GetProcAddress("vkGetInstanceProcAddr")` + `loadRemaining()` 解析 22 个 `PFN_vk*`）。
+2. **`DispatchLoaderDynamic` 不在 `vk` 命名空间（C2065/C2039）** → 根因：NVRHI 强制 `VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=0`，本 TU 的 `#define` 被覆盖。处理：彻底弃用 `vulkan.hpp` 动态派发器，改纯 C 函数指针（同时避开 NVRHI 已定义的全局派发器存储 `LNK2005`）。
+3. **命名 `vkDev_` / `vkDevice_` 辨识度为零** → 根因：两名字只差两个字母、极易看串。处理：三前缀约定（用户认可）——`vulkan*_`=原生句柄、`nvrhi*_`=NVRHI 抽象层、`vk*_`=运行时函数指针，全文件统一。
+4. **present 阶段 `VK_ERROR_OUT_OF_DATE_KHR`（resize 报硬错误、验收失败）** → 根因：`renderFrame` 只处理 acquire 阶段的过期，present 阶段过期被当硬错。处理：present 返回 `OUT_OF_DATE` 时 `recreateSwapchain()` + `createTargets` + `return true`（不计错误），与 acquire 阶段一致。
+5. **进程退出段错误 `exit=139`（删除 `FreeLibrary` 后依旧）** → 根因：原 `shutdown()` 先 `vkDestroyDevice_` 销毁原生 device，**后**才 `nvrhiDeviceHandle_.Reset()`，而 NVRHI 的 `Device::~Device()` 会用那个已被销毁的 device 去 `destroyQueryPool` 等内部对象 → use-after-free。查证：NVRHI 全源码**无 `vkDestroyDevice` 调用**，它只持有非拥有的 `vk::Device` 包装，故 VkDevice 只由本后端销毁一次。处理：`shutdown()` 顺序改为先 `Reset()` NVRHI 句柄、再销毁 sem/swapchain/surface/device/instance。
+6. **`nmake: command not found`（Git Bash 下 `cmake --build` 派生失败）** → 根因：Git Bash 用 Windows 风格 `C:/...` 的 PATH 搜不到 exe，且 `cmake --build` 调 Windows cmake 派生 nmake 路径不稳。处理：用原生 `cmd.exe` + `set "PATH=C:\...\Hostx64\x64;..."` 显式环境跑 `cmake --build`（与 `scripts/build-m0.2.bat` 一致）。
 
 ---
 
