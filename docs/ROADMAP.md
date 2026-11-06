@@ -5,6 +5,21 @@
 > API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目的性质是**把 Carrot 的架构移植到 NVRHI**——参考代码当思路读，API 层全部自己写。这正是本项目区别于「照抄 Carrot 历史」的价值所在。
 > 卡住的对照资料分三层：知识库章节（`docs/kb/`）→ 本地参考代码（`E:\UE_STUDY_2026\` 下 Carrot 与 bevy）→ 作者博客。
 
+## 详细开发文档索引（每步一份，按里程碑拆到可直接照着敲的粒度）
+
+| 步骤 | 文档 | 步骤 | 文档 |
+|---|---|---|---|
+| S0 骨架 | `s0/S0-PLAN.md` | S8 BLAS/TLAS | `s8/S8-PLAN.md` |
+| S1 切簇 | `s1/S1-PLAN.md` | S9 直光+参考图 | `s9/S9-PLAN.md` |
+| S2 QEM 简化 | `s2/S2-PLAN.md` | S10 屏幕探针 | `s10/S10-PLAN.md` |
+| S3 DAG | `s3/S3-PLAN.md` | S11 世界缓存 | `s11/S11-PLAN.md` |
+| S4 剔除+indirect | `s4/S4-PLAN.md` | S12 时空滤波 | `s12/S12-PLAN.md` |
+| S5 DAG 遍历 | `s5/S5-PLAN.md` | S13 接缝聚合 | `s13/S13-PLAN.md` |
+| S6 Hi-Z | `s6/S6-PLAN.md` | S14 增强（四选一） | `s14/S14-PLAN.md` |
+| S7 vis buffer | `s7/S7-PLAN.md` | P8 引擎化 | 本页下方 P8 表 |
+
+每份详细文档的结构统一：里程碑拆分（半天~两天一个）→ 每个里程碑带 checklist、自检标准、git tag → 常见坑 → 卡住翻哪（本地代码对照）→ 底线。
+
 ## 步骤 → 本地代码对照总表
 
 | # | 本地参考文件（E:\UE_STUDY_2026\ 下） | 对应博客/资料 |
