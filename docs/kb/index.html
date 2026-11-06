@@ -1244,7 +1244,7 @@ grep -rn <span class="cs">"InterlockedMax\|atomicMax"</span> Engine/Shaders/Priv
   <table>
     <thead><tr><th style="width:34px">#</th><th style="width:62%">本地参考文件（E:\UE_STUDY_2026\ 下）</th><th>对应博客/资料</th></tr></thead>
     <tbody>
-      <tr><td><b>S0</b></td><td><code>Carrot/engine/engine/vulkan/</code>（Vulkan 封装风格参考，别照抄体量）</td><td>vulkan-tutorial</td></tr>
+      <tr><td><b>S0</b></td><td>⭐ <code>docs/s0/CARROT-BOOTSTRAP.md</code>：Carrot 从零搭建实况（<code>46799759</code> Init → <code>152edabe</code> 第二天出三角形 → <code>d11508e3</code> staging 抽象 → <code>d25a1cc9</code> 模型）。<b>节奏仅作参考、不做逐行对齐</b>（文档第三节列了他早期不复刻的弯路），不是只看成品代码风格；本地 <code>Carrot/thirdparty/</code> 的 glfw / glm / imgui / tinygltf 源码可直接复用</td><td>vulkan-tutorial；NVRHI 官方示例（gh-proxy 拉）</td></tr>
       <tr><td><b>S1</b></td><td><code>bevy/crates/bevy_pbr/src/meshlet/from_mesh.rs</code>（离线构建入口）、<code>meshlet/asset.rs</code>（.meshlet_mesh 资产结构）</td><td>JMS55 博客 0.14 篇</td></tr>
       <tr><td><b>S2</b></td><td><code>Carrot/engine/engine/render/ClusterManager.cpp</code>（聚组+简化+重切全套，C++ 读起来最顺）</td><td>Carrot《Recreating Nanite: The Plan》</td></tr>
       <tr><td><b>S3</b></td><td><code>bevy/.../meshlet/cull_bvh.wesl</code>（bevy 用两级 BVH 而非 DAG——先想清楚你要哪种）</td><td>JMS55 博客 0.15 篇（讲为什么弃 DAG）</td></tr>

@@ -6,7 +6,7 @@
 
 ## 一、最终技术决策（四条要点）
 
-1. **「参考 Carrot」= 抄思路不抄代码**：先读它某模块怎么组织（ClusterManager / VisibilityBuffer / AS 管理），合上书自己默写，写不出来再回去看——逐行复制等于白学，理解后重写才算产出。Carrot 是裸 Vulkan，但 NVRHI 的 Vulkan 后端与之概念一一对应（barrier → NVRHI 自动跟踪，其余直接平移）。
+1. **「参考 Carrot」是两件事，别混为一谈**：**搭建节奏**参考它从零起步的实况（`docs/s0/CARROT-BOOTSTRAP.md`：Init → 第二天出画面 → 抽象被重复逼出来 → 验证层第一天在），仅作参考、不做逐行对齐，他早期换底座 / 晚拆模块 / 相机硬搓等返工明确不复刻；**具体代码**才是「抄思路不抄代码」——先读它某模块怎么组织（ClusterManager / VisibilityBuffer / AS 管理），合上书自己默写，写不出来再回去看。Carrot 是裸 Vulkan，但 NVRHI 的 Vulkan 后端与之概念一一对应（barrier → NVRHI 自动跟踪，其余直接平移）。
 2. **Slang 与 Carrot 同款**，shader 侧无缝对照；slangc 产物直接被 NVRHI 加载，零胶水。
 3. **答案册**：RTXDI/RTXGI/RTXMG 源码（就跑在 NVRHI 上）——卡壳超过三天再精读，平时不碰。
 4. **本机 N 卡**：Nsight Graphics 逐 draw 抓帧照常可用，N 卡红利全额兑现。

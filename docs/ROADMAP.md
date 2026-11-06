@@ -1,8 +1,8 @@
 # 步骤路线图：S0~S14
 
 > 15 步、8 个阶段，总周期约 3~4 个月业余时间。
-> **铁律：每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步。**每完成一步打一个 git tag + 存一张截图。
-> API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目的性质是**把 Carrot 的架构移植到 NVRHI**——参考代码当思路读，API 层全部自己写。这正是本项目区别于「照抄 Carrot 历史」的价值所在。
+> **铁律：每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步。**每完成一步：本地提交一波 + 打一个 git tag + 存一张截图 + 在 `docs/MILESTONES.md` 追加一条（动作 / 提交版本 / 完成情况 / 踩坑情况，写实不写空话）。
+> API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目是**把 Carrot 的架构移植到 NVRHI**——API 层全部自己写，搭建**节奏**参考 Carrot 从零起步的实况（见 `docs/s0/CARROT-BOOTSTRAP.md`：Init → 第二天出画面 → 抽象被重复逼出来 → 验证层天天在）。**仅作参考、不做逐行对齐，他早期的返工不必复刻**。区别于「照抄 Carrot 成品」的地方在这里。
 > 卡住的对照资料分三层：知识库章节（`docs/kb/`）→ 本地参考代码（`E:\UE_STUDY_2026\` 下 Carrot 与 bevy）→ 作者博客。
 
 ## 详细开发文档索引（每步一份，按里程碑拆到可直接照着敲的粒度）
@@ -18,15 +18,17 @@
 | S6 Hi-Z | `s6/S6-PLAN.md` | S14 增强（四选一） | `s14/S14-PLAN.md` |
 | S7 vis buffer | `s7/S7-PLAN.md` | P8 引擎化 | 本页下方 P8 表 |
 
-每份详细文档的结构统一：里程碑拆分（半天~两天一个）→ 每个里程碑带 checklist、自检标准、git tag → 常见坑 → 卡住翻哪（本地代码对照）→ 底线。
+每份详细文档的结构统一：里程碑拆分（半天~两天一个）→ **阶段目标 + 能亲眼看到的用例** → 验收判据 → checklist / git tag → 常见坑 → 卡住翻哪 → 底线。**验收通过才放行下一阶段，tag 在验收之后打**（S0 门禁表见 `s0/S0-PLAN.md` 开头）。
 
-**Carrot 开发过程实况**：`docs/carrot-history.md`——从本地 Carrot 仓库 1180 个提交里抽出的 Nanite×GI 时间线（带 hash，可 `git show` 看实况 diff），逐行对齐 S1~S13，含「实况才看得到」的三条教训。
+**Carrot 开发过程实况（两份，别搞混）**：
+- `docs/s0/CARROT-BOOTSTRAP.md`——**2020-11 起从空仓库到能看画面的前 21 天**，节奏仅作参考、不做逐行对齐；第三节明确列了他早期不复刻的弯路（换底座、晚拆模块、相机硬搓、resize 修 4 次）。
+- `docs/carrot-history.md`——2023 年之后的 Nanite×GI 时间线（带 hash，可 `git show` 看实况 diff），逐行对齐 S1~S13，含「实况才看得到」的三条教训。
 
 ## 步骤 → 本地代码对照总表
 
 | # | 本地参考文件（E:\UE_STUDY_2026\ 下） | 对应博客/资料 |
 |---|---|---|
-| S0 | `Carrot/engine/engine/vulkan/`（Vulkan 封装风格参考，别照抄体量） | vulkan-tutorial |
+| S0 | ⭐ `docs/s0/CARROT-BOOTSTRAP.md`：Carrot 从零搭建实况 `46799759` Init → `152edabe` 三角形（第二天）→ `d11508e3` staging 抽象 → `d25a1cc9` 模型；本地 `Carrot/thirdparty/` 的 glfw / glm / imgui / tinygltf / stb 源码可直接复用（零网络） | vulkan-tutorial；NVRHI / Donut 官方示例（gh-proxy 拉） |
 | S1 | `bevy/crates/bevy_pbr/src/meshlet/from_mesh.rs`（离线构建入口）、`meshlet/asset.rs`（资产结构） | JMS55 博客 0.14 篇 |
 | S2 | `Carrot/engine/engine/render/ClusterManager.cpp`（聚组+简化+重切全套） | Carrot《Recreating Nanite: The Plan》 |
 | S3 | `bevy/.../meshlet/cull_bvh.wesl`（bevy 用两级 BVH 而非 DAG——先想清楚要哪种） | JMS55 博客 0.15 篇（讲为什么弃 DAG） |

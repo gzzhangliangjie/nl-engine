@@ -1,7 +1,23 @@
 # S0 详细开发路线图：从空目录到「画出一个能转的 Suzanne」
 
-> 对应总路线 `docs/ROADMAP.md` 的 S0。预计 5 个里程碑、业余时间 1~2 周。
-> 每个里程碑 = 一段可运行代码 + 一个 git tag。**跑不通当下一步，不攒债。**
+> 对应总路线 `docs/ROADMAP.md` 的 S0。共 6 个阶段（M0.0~M0.5）、业余时间 1~2 周。
+> 每个里程碑 = 一段可运行代码 + 一次本地提交 + 一个 git tag + `docs/MILESTONES.md` 里一条写实记录。**跑不通当下一步，不攒债。**
+> 搭建节奏参考 `docs/s0/CARROT-BOOTSTRAP.md`（Carrot 2020-11 从零起步的实况，不是只看成品代码风格）。**仅作参考、不做逐行对齐**：他早期换底座、晚拆模块、相机硬搓、resize 修 4 次都是弯路，文档第三节列了不复刻清单。
+
+## 阶段门禁：目标 → 可见用例 → 验收 → 放行
+
+**每阶段必须有能亲眼看到、能截图存档的用例；验收不过不进下一阶段，tag 在验收通过之后才打。**
+
+| 阶段 | 目标 | 可见用例（必须能截图 / 能当场演示） | 验收判据 | 放行 |
+|---|---|---|---|---|
+| M0.0 | 工具链齐备 | 同屏截图：`cmake --version`、`vkcube` 旋转方块、`slangc -h` 输出 | 三项都有正常输出；`VULKAN_SDK` 已设置 | → M0.1 |
+| M0.1 | 最小可跑骨架 | `viewer.exe` 弹出窗口，标题栏实时显示帧号/帧时间，按 ESC 干净退出，控制台打印 shutdown ok。截图 `docs/screenshots/m0.1.png` | `viewer.exe --selftest` 输出 PASS；`grep -R "\bvk[A-Z]" viewer/ core/` 零命中 | → M0.2 |
+| M0.2 | NVRHI device + swapchain | 窗口清屏色按空格切换；拖动缩放窗口前后都不黑屏。截图 `m0.2.png`（含缩放前后对比） | 验证层全程零输出 | → M0.3 |
+| M0.3 | 三角形 + frame in flight = 2 | 彩色三角形；任务管理器 GPU 占用非 0。截图 `m0.3.png` | 验证层零输出；**故意删一个 fence 等待能触发验证层报错**（证明安全网有效） | → M0.4 |
+| M0.4 | 模型 + 贴图 + 轨道相机 | 带贴图 Suzanne；拖动旋转、滚轮缩放；关背面剔除能看到内壁。截图 `m0.4.png` | 验证层零输出 + resize 回归通过 | → M0.5 |
+| M0.5 | ImGui HUD + 总验收 | HUD 显示 FPS / 帧时间曲线 / 相机参数；Nsight Graphics 抓一帧看到 draw call；截图 `docs/screenshots/s0.png` | S0 三条硬指标全过（画面可交互 / 验证层零报错 / 一份 .slang 出 SPIR-V） | 打 `s0-done`，进 S1 |
+
+> **resize 是每一阶段的回归项，不是 M0.2 的一次性检查**：Carrot 实况里 swapchain recreation 前后修了 4 次（`146517a7` → `6a30f711` → `bb981ccb` → `2c87efe2`），那是没做回归的代价——我们做成回归项，预期一次修好，不预期修 4 次。
 
 ---
 
@@ -12,14 +28,22 @@
 | Visual Studio 2022 | Community，勾「使用 C++ 的桌面开发」 | 官网 | `cl` 能在开发者命令行找到 |
 | CMake | ≥ 3.24 | 官网 / VS 自带 | `cmake --version` |
 | Vulkan SDK | 最新（LunarG） | https://www.lunarg.com/vulkan-sdk/ （直链下载，不走 GitHub） | `vkcube` 能跑；`VULKAN_SDK` 环境变量已设置 |
-| Slang | 最新 release | https://github.com/shader-slang/slang/releases ——**本机 GitHub 下载易挂，失败就用 gh-proxy 镜像前缀**：`https://gh-proxy.com/https://github.com/shader-slang/slang/releases/...` | `slangc -h` 有输出 |
+| Slang | **随 Vulkan SDK 附带** | 不用单独下：Carrot 的 `cmake_modules/ShaderSlangConfig.cmake` 实测从 `$VULKAN_SDK/include/slang` + `lib/slang` 找，`BUILDING.md` 用 1.4.341.1。装新版 LunarG SDK 自带 `slangc`；实在缺才从 `https://github.com/shader-slang/slang/releases` 下（本机加 gh-proxy 前缀） | `slangc -h` 有输出 |
+| CMake | ≥ 3.24 | 官网 .msi / zip（非 GitHub 直链可下）；VS 的「C++ CMake 工具」组件若已勾也可 | `cmake --version` |
 | NVRHI | 最新 master | `git clone --recursive`（走 gh-proxy 镜像）或 CMake FetchContent | `cmake` 能构建出静态库 |
+| GLFW | 3.3+ | **零网络**：从本地 `E:\UE_STUDY_2026\Carrot\thirdparty\glfw\` 复制到 `thirdparty/`（Carrot Init 就是这么 vendored 的） | `add_subdirectory` 能过 |
 | 测试模型 | Suzanne 带贴图 glb | Blender 导出，或随便一个 glTF 样例 | — |
 
-环境自检清单：
+环境自检清单（M0.0 的可见用例：三项输出同屏截图）：
+- [ ] `cmake --version` 正常
 - [ ] `vkcube` 弹出旋转方块（说明驱动+SDK 正常）
-- [ ] `slangc -h` 正常
+- [ ] `slangc -h` 正常（确认 SDK 自带 Slang）
+- [ ] `VULKAN_SDK` 已设置
 - [ ] Nsight Graphics 已装（验收日要用）
+
+> 本机实测（2026-11-06）：VS2022 Community + `cl.exe` 14.38 + Windows SDK 10.0.26100.0 已装；**系统 CMake / Vulkan SDK / vcpkg 未装**。
+> 网络：`raw.githubusercontent.com` 默认超时、`gh-proxy` 稳定可用；开代理后直连恢复（0.94s）；Vulkan SDK 的 LunarG 直链 HTTP 200。CMake 官方 zip 在 cmake.org 与 GitHub Releases 上都只有约 12KB/s，**所以 M0.1 不依赖 CMake**，改用 MSVC 直编验收（脚本 `scripts/verify-m0.1-msvc.ps1`）；M0.2 接 NVRHI 前再补 CMake。
+> GLFW 已从本地 `Carrot/thirdparty/glfw` 复制进 `thirdparty/`（166 个文件、零网络）。
 
 ## M0.1 项目骨架（0.5~1 天）
 
@@ -38,9 +62,20 @@ nl-engine/
 - CMake 三 target：`core`（静态库）、`renderer`（静态库，链接 Vulkan::Vulkan）、`viewer`（exe，链 core+renderer）。`nanite-tools` 先只建 target 不写码
 - 窗口用 GLFW（vcpkg 或 FetchContent 均可，别手搓 Win32）
 - 日志：spdlog，或者先 `printf` + 宏占位——**别在日志上花超过 1 小时**
+- **日志/错误回调框架第一天就留好**（Carrot `46799759` 的 `debugCallback` 与 validation 检查是 Init 的一部分，验证层是验收手段不是后期加固）；M0.2 把 NVRHI device callback 直接接到这个口
 - 产出代码风格从第一天定死：`viewer/` 和 `core/` 里 **不出现任何 `vk` 开头的符号**，这是渲染器模块纪律的机械保证
+- 三 target 保持薄：Carrot 单 `Engine` 类跑了 4 个月才拆模块（`e6bc5196` 起，单次 900+ 行搬家式重构）是他的弯路，我们提前分层正是避开它；但**不能在 M0.1 就把 4 个月后的壳搬进来**
 
-**自检**：`viewer.exe` 弹出空窗口，按 ESC 退出。tag：`s0-init`。
+**可见用例**：`viewer.exe` 弹出窗口，标题栏实时显示帧号/帧时间，按 ESC 干净退出；`viewer.exe --selftest` 无窗口跑自检输出 PASS。
+**自检**：窗口出现、`--selftest` PASS、`grep -R "\bvk[A-Z]" viewer/ core/` 零命中；截图 `docs/screenshots/m0.1.png`。验收通过才打 tag：`s0-init`。
+
+**M0.1 验收记录（2026-11-06，本机实跑）**：
+- MSVC 14.38 直编 GLFW + 三个 target：编译 / 链接退出码 0
+- `viewer.exe --selftest` → `SELFTEST PASS (7/7)`（日志格式化与 sink、干净运行零错误、设备错误独立计数、断言可接管、窗口默认可缩放、renderer 占位不越界、自检收尾干净）
+- `viewer.exe` 主循环 → `[nl:info] window created 1280x720 | no GL context (Vulkan/NVRHI ready) | ESC to quit`，标题栏帧计数器持续更新
+- `grep` 检查 `viewer/`、`core/` 下 `vk[A-Z]` / `Vk[A-Z]` / `nvrhi` → 零命中
+- 复现：`powershell -ExecutionPolicy Bypass -File scripts\verify-m0.1-msvc.ps1`（零 CMake 依赖）；标准构建见 `scripts/build-m0.1.bat`
+- 未自动完成项：验收截图 `docs/screenshots/m0.1.png` 需在本机运行 viewer 后手动保存（沙箱内 GUI 不便截屏）
 
 ## M0.2 NVRHI 接入：设备 + swapchain（1~2 天）
 
@@ -55,7 +90,7 @@ nl-engine/
 **自检**：resize 窗口不崩不黑屏；NVRHI 验证层全程零输出。tag：`s0-device`。
 
 ⚠️ 常见坑：
-- swapchain resize 处理不干净是本里程碑唯一高发 bug
+- swapchain resize 处理不干净是本里程碑唯一高发 bug，且**每个后续阶段都要回归**（Carrot 实况修了 4 次）
 - feature 漏开在创建 device 时才炸——从第一天就把 S7/S8 要的能力写进检查列表，别以后返工
 
 ## M0.3 第一个三角形 + 帧同步（2~3 天，本里程碑的灵魂）
@@ -116,8 +151,9 @@ nl-engine/
 
 | 问题 | 翻 |
 |---|---|
-| NVRHI 任何一步 | NVRHI / Donut 官方示例；vulkan-tutorial.com 当底层原理对照（NVRHI 的 Vulkan 后端与之一一对应） |
-| 想看更工程化的组织 | `E:\UE_STUDY_2026\Carrot\engine\engine\vulkan\`（只看风格，别照抄体量） |
+| **这一步该按什么顺序搭** | ⭐ `docs/s0/CARROT-BOOTSTRAP.md`：Carrot 从 `Init`（`46799759`）到三角形（`152edabe`）、staging 抽象（`d11508e3`）、模型（`d25a1cc9`）的实况流程，带可 `git show` 的 hash |
+| NVRHI 任何一步 | NVRHI / Donut 官方示例（外部代码走 gh-proxy 拉来研究）；vulkan-tutorial.com 当底层原理对照 |
+| 工程组织怎么长出来 | Carrot `e6bc5196` → `4d06c0d3` → `8c227e91`：单 Engine 跑通 4 个月后才拆模块，看它**什么时候**拆比看最终目录有用 |
 | 同步疑问 | vkguide.dev 的 synchronization 章节；《Vulkan Synchronization Validation》官方页 |
 | slangc 参数 | `slangc -h`；https://shader-slang.org 的用户指南 |
 | 下载挂了 | GitHub release 用 gh-proxy 镜像前缀；Vulkan SDK 走 LunarG 直链没问题 |
