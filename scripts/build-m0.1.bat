@@ -29,8 +29,11 @@ if not defined CMAKE_BIN (
 rem NMake generator calls cl.exe directly. The VS generator goes through MSBuild,
 rem which throws when HTTPS_PROXY and https_proxy both exist (case-insensitive
 rem Hashtable collision) -- see docs/MILESTONES.md M0.0 pitfall 6.
-echo === configure ===
-"%CMAKE_BIN%" -S "%ROOT%" -B "%ROOT%\build\nmake" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+rem Optional: pass DX12 or VULKAN as first arg to switch backend. Neither needs a vendor SDK.
+set "BACKEND=AUTO"
+if not "%~1"=="" set "BACKEND=%~1"
+echo === configure (backend=%BACKEND%) ===
+"%CMAKE_BIN%" -S "%ROOT%" -B "%ROOT%\build\nmake" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DNL_GRAPHICS_BACKEND=%BACKEND%
 if errorlevel 1 exit /b 1
 
 echo === build ===

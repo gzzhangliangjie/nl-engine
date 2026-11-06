@@ -26,6 +26,8 @@ Nanite+Lumen 对框架有 4 条硬性检查项：**compute shader、indirect dra
 
 **为什么 Slang**：一份 shader 编译到 SPIR-V / DXIL / Metal LIB，天然跨后端；Carrot 的 shader 全是 .slang（`Carrot/engine/resources/shaders/`），语法对 HLSL 用户几乎零成本。
 
+**后端对称（架构纪律，2026-11-06 定稿）**：既然是通用管线，构建链就**不依赖任何厂商图形 SDK**。D3D12 / OpenGL 的头、库、调试层来自 Windows SDK（系统自带）；Vulkan 头走 `KhronosGroup/Vulkan-Headers`（NVRHI 的 `NVRHI_FETCH_VULKAN_HEADERS` 自动拉），loader 是显卡驱动自带；Slang 独立获取，不从 `$VULKAN_SDK` 找。默认 DX12（Windows 零额外依赖），Vulkan 作为第二后端验证抽象；判据「调试层零报错」按当前后端走，不把 VVL 写成全项目前提。详细对照见 `docs/s0/S0-PLAN.md` M0.0「后端对称」表。
+
 ## 三、工程组织
 
 - 只维护两个程序：`nanite-tools`（cluster / simplify / dag / stat）+ `viewer`（10+ 可开关模式）

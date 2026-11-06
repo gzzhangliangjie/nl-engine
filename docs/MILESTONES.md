@@ -9,8 +9,8 @@
 
 | 阶段 | 状态 | 提交版本 | 日期 | 一句话结果 |
 |---|---|---|---|---|
-| M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交；环境补齐快照 `v0.1.0` | 2026-11-06 | 编译链 / GLFW / CMake 齐并验收，Vulkan SDK（只为验证层）与 Nsight 待装 |
-| M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)` |
+| M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交；环境补齐快照 `v0.1.0`；架构校准见本节补记 | 2026-11-06 | 编译链 / GLFW / CMake / DX12·Vulkan 双后端开关齐并验收，**零厂商 SDK**；Slang / NVRHI / Nsight 按阶段取 |
+| M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)`；两种后端配置都 PASS |
 | M0.2 设备 + swapchain | ⬜ 未开始 | `s0-device` | — | — |
 | M0.3 三角形 + 帧同步 | ⬜ 未开始 | `s0-triangle` | — | — |
 | M0.4 模型 + 贴图 + 相机 | ⬜ 未开始 | `s0-model` | — | — |
@@ -23,10 +23,10 @@
 **动作**
 - 自检本机工具链与仓库状态；确认 VS2022 Community、`cl.exe` 14.38.33130、Windows SDK 10.0.26100.0 已装。
 - 从本地 `E:\UE_STUDY_2026\Carrot\thirdparty\glfw\` 复制 GLFW 源码到 `thirdparty/glfw/`（Carrot Init 的 vendored 思路，零网络），删掉 submodule 的 `.git` 引用文件、`docs/examples/tests`（提交 105 个构建必需文件）。
-- 从本地 Carrot 的 `cmake_modules/ShaderSlangConfig.cmake` 与 `BUILDING.md` 确认：新版 Vulkan SDK 自带 slangc，**S0-PLAN 里「单独从 GitHub 下 Slang」那步删掉**。
-- 测试外部代码通道：`raw.githubusercontent.com` 默认超时、`gh-proxy` HTTP 200；开代理后直连 0.94s；LunarG SDK 直链 HTTP 200。
+- 核对 Carrot 的 `cmake_modules/ShaderSlangConfig.cmake` 与 `BUILDING.md`：确认它从 `$ENV{VULKAN_SDK}` 找 slangc 是**裸 Vulkan 单后端**的做法，本项目通用管线不继承，Slang 独立获取（见下方架构校准补记）。
+- 测试外部代码通道：`raw.githubusercontent.com` 默认超时、`gh-proxy` HTTP 200；开代理后直连 0.94s。
 - 下载并安装 CMake 3.31.6 便携版到 `E:\UE_STUDY_2026\.build-tools\`（不污染系统 PATH），把 `scripts/build-m0.1.bat` 接到标准构建链并实测全通。
-- 实测并拆清 Vulkan 依赖：确认 `vulkan-1.dll` / `vulkaninfo` 由驱动提供、验证层缺失；在 `docs/s0/S0-PLAN.md` 新增「为什么需要 Vulkan SDK」表，写明只有 validation layers 绕不过去。
+- 实测三后端依赖来源：D3D12 / OpenGL 头与调试层来自 Windows SDK、Vulkan loader 驱动自带、Vulkan 头走 `Vulkan-Headers`；确认**不需要安装任何厂商图形 SDK**。
 - 更新 `docs/s0/S0-PLAN.md` 的 M0.0 依赖表（删掉重复的 CMake 行）与本机实测段。
 
 **提交版本**：随 M0.1 的 `s0-init` 提交；环境补齐后的版本快照另打 `v0.1.0`。
@@ -36,8 +36,8 @@
 - ✅ GLFW 本地化：`thirdparty/glfw/` 105 文件，`add_subdirectory` 所需结构完整。
 - ✅ CMake 3.31.6：`configure` 退出码 0 → `build` 退出码 0（glfw / nl_core / nl_renderer / viewer 四 target 全过）→ `SELFTEST PASS (7/7)`，标准构建链已可复现。
 - ✅ Vulkan 运行时就绪：`C:\Windows\System32\vulkan-1.dll`（1.5MB）+ `vulkaninfo.exe` 驱动自带。
-- ⬜ Vulkan SDK 未安装（`VULKAN_SDK` 未设置、`vkcube` / `slangc` 不可用、无任何 `VkLayer_*.json`）——M0.2 的「验证层零报错」用例依赖它，前必须补。
-- ⬜ Nsight Graphics 未确认。
+- ✅ **不需要 Vulkan SDK**：`VULKAN_SDK` 未设置、`vkcube` 不可用、无 `VkLayer_*.json`；DX12 后端用 Windows SDK 自带 Debug Layer，Vulkan 头由 `NVRHI_FETCH_VULKAN_HEADERS` 拉，VVL 是可选插件而非阶段前置。
+- ⬜ Slang release / NVRHI 源码 / Nsight Graphics：用到的阶段再拿，都不是环境前置。
 
 **踩坑情况**
 1. **命令含 `MSBuild.exe` 字样被安全策略整条拦截** → 根因：命令字符串命中 LOLBin 名单，与该命令是否真的执行它无关。处理：拆成不含该字样的独立命令。
@@ -47,6 +47,26 @@
 5. **复制 submodule 目录带 `.git` 引用文件** → 会让 git 当作嵌套仓库。处理：复制后删除，提交前核对 `git status`。
 6. **CMake 用 VS 生成器报 `No CMAKE_CXX_COMPILER could be found`** → 根因：`CMakeConfigureLog.yaml` 里 MSBuild 抛 `MSB6001 / System.ArgumentException: 已添加项，字典中关键字 "HTTPS_PROXY" / "https_proxy"`——代理环境变量大小写两份同时存在，MSBuild 用大小写不敏感 Hashtable 收集环境变量时撞键，`CL.exe` 起不来，与 VS / SDK 装没装无关。处理：改用 `NMake Makefiles` 生成器（直接调 `cl.exe`，不经过 MSBuild），`scripts/build-m0.1.bat` 同步改掉；也可在构建前删掉小写那份代理变量再用 VS 生成器。
 7. **S0-PLAN 依赖表里 CMake 写了两行** → 根因：多次编辑叠加。处理：合并成一行并写上实际获取方式。
+8. **把 Vulkan SDK 列成「必需依赖」，还专门写「为什么需要 Vulkan SDK」为它辩护** → 根因：把 Carrot（裸 Vulkan 单后端）的依赖习惯带进 NVRHI 通用管线，DX12 / OpenGL 不用装却给 Vulkan 单开特权，架构上双标；还错误断言「DX12 与 SPIR-V 验收冲突」（Slang 一份源码本来就同时出 SPIR-V / DXIL）。处理：见下方架构校准补记。
+
+### 补记 · 架构校准：通用管线不装任何厂商 SDK（2026-11-06 15:50）
+
+**动作**
+- `CMakeLists.txt` 新增 `NL_GRAPHICS_BACKEND`（`AUTO` / `DX12` / `VULKAN`）：`AUTO` 在 Windows 落 DX12、其它平台落 Vulkan；`configure` 打印 `nl-engine backend: XXX (no vendor SDK required)`；只给 `renderer/` 传一个编译期宏，M0.1 不链接任何图形 API。
+- `renderer/` 按宏报告后端名（`status().backend`），`viewer --help` / `--selftest` 打印该名字；同一份源码两种配置编出两个后端名，作为「不绑死单一后端」的机械证据。
+- 删除 `S0-PLAN.md` 的「Vulkan SDK」依赖行、`vkcube` / `VULKAN_SDK` 自检项与「为什么需要 Vulkan SDK」整节，换成「后端对称：谁都不装 SDK」表 + 五条写死规则；门禁表 M0.0 / M0.2 / M0.5 改成双后端可看用例；Slang 改为独立获取。
+- 同步清理 `PLAN.md`（新增后端对称决策）、`ROADMAP.md`、`LINKS.md`、`s0/CARROT-BOOTSTRAP.md` 与 S0 看板参考索引里的 SDK 表述。`kb/index.html` 原本就是「VVL / DX12 debug layer」对称写法，无需改。
+
+**提交版本**：本次架构校准提交；里程碑 tag 仍为 `s0-init`，版本快照 `v0.1.0` 已存在，本次不预支新 tag。
+
+**完成情况**
+- ✅ `-DNL_GRAPHICS_BACKEND=DX12` → `backend: dx12` + `SELFTEST PASS (7/7)`。
+- ✅ `-DNL_GRAPHICS_BACKEND=VULKAN` → `backend: vulkan` + `SELFTEST PASS (7/7)`。
+- ✅ 两次构建全程未安装、未读取任何厂商图形 SDK；`CMakeLists.txt` / `scripts/` 里 `VULKAN_SDK` / `find_package(Vulkan)` 零命中。
+- ✅ 通用管线的可见用例成立：同一份 viewer 源码，两种配置输出不同后端名且都 PASS。
+
+**踩坑情况**
+1. **现象**：用户连问三次（「既然是通用管线还专门装 SDK 说不过去」→「为什么 OpenGL / DX 的就不装」→「不要来回反复」）。**根因**：一直在给依赖清单辩护，没接住架构问题；上一轮还把「装 SDK 是省事选择」写成结论。**处理**：一次改到位、不留「也可以装」的尾巴，所有相关文档同步清理，并写进长期记忆。
 
 ---
 

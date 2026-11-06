@@ -49,7 +49,7 @@
 | 工具 | 链接 |
 |---|---|
 | Slang（shader 语言+编译器） | https://shader-slang.org / https://github.com/shader-slang/slang |
-| Vulkan SDK / 文档 | https://www.lunarg.com/vulkan-sdk/ / https://docs.vulkan.org/ |
+| Vulkan 规范 / Vulkan-Headers（**只查资料，不装 SDK**） | https://docs.vulkan.org/ · https://github.com/KhronosGroup/Vulkan-Headers |
 | vulkan-tutorial.com | https://vulkan-tutorial.com/ |
 | vkguide.dev | https://vkguide.dev/ |
 | Nsight Graphics（本机 N 卡抓帧） | NVIDIA 官网下载 |

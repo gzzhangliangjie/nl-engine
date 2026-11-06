@@ -2,7 +2,7 @@
 
 > 15 步、8 个阶段，总周期约 3~4 个月业余时间。
 > **铁律：每一步都必须有可运行的源码产出和一条能亲眼看到的验证效果，验收不过不进下一步。**每完成一步：本地提交一波 + 打一个 git tag + 存一张截图 + 在 `docs/MILESTONES.md` 追加一条（动作 / 提交版本 / 完成情况 / 踩坑情况，写实不写空话）。
-> API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目是**把 Carrot 的架构移植到 NVRHI**——API 层全部自己写，搭建**节奏**参考 Carrot 从零起步的实况（见 `docs/s0/CARROT-BOOTSTRAP.md`：Init → 第二天出画面 → 抽象被重复逼出来 → 验证层天天在）。**仅作参考、不做逐行对齐，他早期的返工不必复刻**。区别于「照抄 Carrot 成品」的地方在这里。
+> API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目是**把 Carrot 的架构移植到 NVRHI**——API 层全部自己写，搭建**节奏**参考 Carrot 从零起步的实况（见 `docs/s0/CARROT-BOOTSTRAP.md`：Init → 第二天出画面 → 抽象被重复逼出来 → 验证层天天在）。**仅作参考、不做逐行对齐，他早期的返工不必复刻**。区别于「照抄 Carrot 成品」的地方在这里。**构建链不依赖任何厂商图形 SDK**：D3D12 / OpenGL 走 Windows SDK、Vulkan 头走 `KhronosGroup/Vulkan-Headers`、Slang 独立获取；默认 DX12，Vulkan 为第二后端（见 `s0/S0-PLAN.md` M0.0 的后端对称表）。
 > 卡住的对照资料分三层：知识库章节（`docs/kb/`）→ 本地参考代码（`E:\UE_STUDY_2026\` 下 Carrot 与 bevy）→ 作者博客。
 
 ## 详细开发文档索引（每步一份，按里程碑拆到可直接照着敲的粒度）
@@ -64,7 +64,7 @@ nl-engine/
 - **底子边界（S0 要的）**：窗口+输入+主循环（update/render 粗分工）、日志+断言、数学库、renderer 模块边界（S0 只包到 NVRHI 设备/swapchain 初始化）
 - **底子边界（S0 明确不要的）**：ECS/场景图、事件总线、层系统、序列化、资产管理、反射、脚本——这些是 P8 引擎化的事，现在写就是范围失控
 - **可运行产出**：`viewer` 打开窗口，画出带贴图的 Suzanne，相机可拖动，ImGui 可调参数
-- **验收效果**：画面正确、可交互；开 NVRHI 验证层 **零报错**；一份 .slang 编译出 SPIR-V（和 DXIL）
+- **验收效果**：画面正确、可交互；**DX12 / Vulkan 两个后端**的调试层都 **零报错**；一份 .slang 同时编译出 SPIR-V 与 DXIL 且两后端都能加载（通用管线的验收核心）
 - **涉及知识**：RHI 抽象（NVRHI）、Slang→SPIR-V/DXIL 编译、同步模型（NVRHI fence / frame in flight）、GLM、glTF 结构
 - **卡住翻哪**：NVRHI / Donut 官方示例；kb/graphics-handbook.html#path 的 G2
 

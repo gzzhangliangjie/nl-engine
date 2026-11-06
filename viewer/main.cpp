@@ -36,7 +36,7 @@ int runSelfTest() {
     check(captured == "hello 42", "log formatting + sink");
     check(nl::core::log::errorCount() == 0, "no errors on clean run");
 
-    // 2. 设备错误独立计数（后续「验证层零报错」的机械判据）；静音避免误读为真故障
+    // 2. 设备错误独立计数（后续「调试层零报错」的机械判据）；静音避免误读为真故障
     nl::core::log::setLevel(nl::core::log::Level::Fatal);
     nl::core::log::deviceError("SELFTEST", "synthetic device error");
     nl::core::log::setLevel(nl::core::log::Level::Debug);
@@ -44,7 +44,7 @@ int runSelfTest() {
           "device error counted separately");
     nl::core::log::resetCounters();
 
-    // 3. 断言失败可被接管（验证层第一天就位的框架）
+    // 3. 断言失败可被接管（调试层第一天就位的框架）
     // handler 是函数指针，用静态变量 + 无捕获 lambda
     static bool tripped = false;
     nl::core::setAssertHandler([](const char*, int, const char*, const char*) { tripped = true; });
@@ -56,9 +56,13 @@ int runSelfTest() {
     // 4. 窗口默认配置（resizable 是每阶段 resize 回归的前提）
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
 
-    // 5. renderer 仍是占位，不越界碰图形 API
+    // 5. renderer 只报告编译期选定的后端，未创建设备、未链接任何图形 API。
+    //    同一份源码用 -DNL_GRAPHICS_BACKEND=DX12 / VULKAN 各编一遍，
+    //    两行 backend 输出不同 = 「通用管线不绑死单一后端」的机械证据。
     const auto st = nl::renderer::status();
-    check(st.backend != nullptr && !st.deviceReady, "renderer placeholder, no device yet");
+    std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n";
+    check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
+          "backend selected, no device yet");
 
     check(nl::core::log::errorCount() == 0, "selftest ends clean");
 
@@ -112,10 +116,11 @@ int runWindow() {
 }
 
 void printUsage() {
-    std::cout << "nl-engine viewer (M0.1)\n"
+    std::cout << "nl-engine viewer (M0.1)  backend=" << nl::renderer::status().backend << '\n'
               << "  viewer.exe            show window; ESC to quit\n"
               << "  viewer.exe --selftest headless checks, prints SELFTEST PASS (n/n)\n"
-              << "  viewer.exe --help     this text\n";
+              << "  viewer.exe --help     this text\n"
+              << "  backend is selected at configure time: -DNL_GRAPHICS_BACKEND=DX12|VULKAN\n";
 }
 
 } // namespace

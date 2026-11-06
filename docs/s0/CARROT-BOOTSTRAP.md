@@ -55,7 +55,7 @@ git show --stat 46799759                                                     # �
 | shader 链 | GLSL + `glslc`；**Slang 是 2025-06 `98b0809d` 才引入的** | S0 起就是 `.slang`。CMake 结构可借 `152edabe` 的 `add_spirv_shader()`：`add_custom_command` + `MAIN_DEPENDENCY` + 产物挂进 target sources，只把 `glslc` 换成 `slangc` |
 | 同步 / barrier | 手写 renderpass dependency、barrier、framebuffer | NVRHI 自动 barrier + dynamic rendering，M0.3 只需管 frame in flight = 2 的 fence。**`6a30f711` 那类坑由底座消掉，不必复刻样板** |
 
-**额外收获（M0.0 直接省钱）**：Carrot 现在的 `cmake_modules/ShaderSlangConfig.cmake` 从 `$ENV{VULKAN_SDK}/include/slang` 与 `lib/slang` 找 Slang，`BUILDING.md` 写明用 **1.4.341.1 版 LunarG SDK**。装新版 Vulkan SDK 就自带 `slangc`，**S0-PLAN 里「从 GitHub release 单独下 Slang」那步可以删掉**——本机 GitHub 大文件下载本来就常挂。
+**不能继承的一点（底座不同）**：Carrot 现在的 `cmake_modules/ShaderSlangConfig.cmake` 从 `$ENV{VULKAN_SDK}/include/slang` 与 `lib/slang` 找 Slang，`BUILDING.md` 用 1.4.341.1 版 LunarG SDK——**它是裸 Vulkan 单后端项目，装 SDK 顺手把 slangc 一起拿到是合理的**。我们是 NVRHI 通用管线（DX12 / Vulkan 双后端），不能给某一个后端开特权：Slang 独立获取，Vulkan 头走 `KhronosGroup/Vulkan-Headers`，构建链不读 `VULKAN_SDK`。这条是 2026-11-06 架构校准推翻的旧结论（曾写成「装 SDK 自带 slangc，省一步」）。
 
 ---
 
@@ -108,9 +108,9 @@ git clone --depth 1 --recursive "https://gh-proxy.com/https://github.com/NVIDIA-
 curl -L "https://raw.githubusercontent.com/NVIDIA-RTX/NVRHI/main/README.md" -o NVRHI-README.md
 ```
 
-注：大文件（Vulkan SDK / CMake 官方 zip）即使开代理也只有约 12KB/s，别在它们上面卡工期；Vulkan SDK 的 LunarG 直链实测 HTTP 200，可单独下。
+注：大文件即使开代理也只有约 12KB/s，别在它们上面卡工期（CMake 官方 zip 实测单连接 ~12KB/s，改 8 段并发解决）。本项目不需要下载任何图形 SDK。
 
-NVRHI 侧已核实的构建事实：CMake ≥ 3.10、C++17、推荐 `add_subdirectory(nvrhi)` 后链 `nvrhi` + `nvrhi_vk`；`NVRHI_WITH_VALIDATION` 默认 **ON**；Vulkan-Headers 可用 `NVRHI_FETCH_VULKAN_HEADERS` 自动拉（本机需把 git URL 换成 gh-proxy 前缀）。
+NVRHI 侧已核实的构建事实：CMake ≥ 3.10、C++17、推荐 `add_subdirectory(nvrhi)` 后链 `nvrhi` + `nvrhi_vk`；`NVRHI_WITH_VALIDATION` 默认 **ON**；Vulkan-Headers 可用 `NVRHI_FETCH_VULKAN_HEADERS` 自动拉（本机需把 git URL 换成 gh-proxy 前缀）——**这正是「Vulkan 头不用装 SDK」的依据**。
 
 ---
 
