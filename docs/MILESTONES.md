@@ -13,7 +13,7 @@
 | M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)`；两种后端配置都 PASS |
 | M0.2 设备 + swapchain | ✅ 验收通过 | `s0-device` | 2026-11-06 | 双后端清屏逐字节相同、resize 不黑屏、deviceErrors=0、退出无段错误 |
 | M0.3 三角形 + 帧同步 | ✅ 验收通过 | `s0-triangle` | 2026-11-06 | 双后端顶点色三角形渲染、frame-in-flight=2、selftest 9/9；SPIR-V 入口恒为 `main` 的坑已固化见 `docs/SHADER-CONVENTIONS.md` |
-| M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 双后端带贴图 Suzanne 逐像素一致、内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
+| M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 正常视角双后端 PNG 逐字节相同，内壁 / resize 仅 1~2 像素差（≤1/255）；内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
 | M0.5 ImGui + 总验收 | ⬜ 未开始 | `s0-done` | — | — |
 
 ---
@@ -176,7 +176,7 @@
 **完成情况**
 - ✅ 两后端 `scripts/build-m0.2.bat DX12|VULKAN`：configure 0 / build 0 / `SELFTEST PASS (11/11)`；`ctest` 两后端 `m0.4-selftest` 100% 通过。
 - ✅ 可见用例：`viewer.exe` 弹出窗口显示带贴图 Suzanne（黄色眼睛 + 皮毛细节）；左键拖动旋转、滚轮缩放、`C` 切剔除、`R` 重置、`F12` 存图、标题栏实时显示 yaw/pitch/dist/cull。
-- ✅ **双后端画面一致**：正常视角 `m0.4-dx12.png` 与 `m0.4-vulkan.png` **MD5 完全相同**（`7e528087d19722d8f9ef4de35e36d382`）；内壁 / resize 截图 PNG 字节不同但 RGBA 平均绝对差 **0**（PIL 核对，extrema 最多 ±1）。
+- ✅ **双后端画面一致（分档如实记）**：正常视角 `m0.4-dx12.png` 与 `m0.4-vulkan.png` **MD5 完全相同**（`7e528087d19722d8f9ef4de35e36d382`）；内壁 / resize 截图 PNG 字节不同（zlib 编码差异），像素级比对为 **2 个 / 1 个像素相差 1/255**（GPU 取整噪声），不是「全图逐像素一致」——精确结论与处理见下方「附带工具」节踩坑 5。
 - ✅ **背面剔除真生效**：`--dist 0.6 --cull back` 相机在模型内部只剩背景（13 KB，平均亮度 13.71）；同角度 `--cull none` 显示带贴图内壁（200 KB，平均亮度 147.52）；两后端各一份，结果一致。
 - ✅ 深度与 resize：640×360 → 1024×768 前后 PNG 均非黑（平均亮度 36.82 / 41.21），两后端一致；8 帧连续渲染稳定。
 - ✅ 全 8 个验收进程退出码 0，日志均 `deviceErrors=0`；D3D12 Debug Layer + NVRHI validation / Vulkan NVRHI validation 零报错。
@@ -193,7 +193,16 @@
 7. **官方仓库没有现成 `Suzanne.glb`** → 现象：直接下 `glTF-Binary/Suzanne.glb` 两个仓库路径都 404；只有 glTF 三件套 + 2 张 PNG。处理：写 `scripts/pack-suzanne-glb.py` 把 bin 与图片转 bufferView 封装成单文件 GLB（保留原始几何/贴图），运行时只读一个绝对路径，不依赖 CWD。
 8. **Vulkan `recreateSwapchain()` 的 OUT_OF_DATE 分支会留陈旧引用** → 根因：M0.4 新增 depth/framebuffer/pipeline 后，acquire / present 过期时只重建 swapchain 不失效这些对象。处理：`recreateSwapchain()` 统一 `scene_.invalidatePipelines()` + 清 framebuffer/depth，覆盖 resize 与两条 OUT_OF_DATE 路径。
 9. **tinygltf / nlohmann json / stb 头在 `/W4` 下噪音大** → 处理：只在 `scene.cpp` 用 `#pragma warning(push,0)` 包住实现展开，定义 `TINYGLTF_NO_STB_IMAGE_WRITE` 避免与 `png_writer.cpp` 的 `stb_image_write.h` 重复。
-10. **计划写的 push constant / fastgltf 未照搬** → 原因：NVRHI 教程主推 volatile constant buffer（跨 DX12/Vulkan 由 NVRHI 管版本池，比手写 root constants / VkPushConstantRange 更稳）；tinygltf 本机已有、零新依赖。差异已同步写进 `docs/s0/S0-PLAN.md`，不是「无声偏离」。
+10. **计划写的 push constant / fastgltf 未照搬** → 原因：NVRHI 教程主推 volatile constant buffer（跨 DX12/Vulkan 由 NVRHI 管版本池，比手写 root constants / VkPushConstantRange 更稳）；tinygltf 本机已有、零新依赖。差异已同步写进 `docs/s0/S0-PLAN.md`，不是「无声偏离」。补充一条：`GLM → 未引入`，M0.4 的 4×4 透视 / lookAt 由 `core/camera.cpp` 手写并配 `cameraSelfTest`，当天一次过。
+
+**文档复核补记（2026-11-07，同日收口）**：M0.4 验收后回扫全部文档，发现 5 处旧表述 / 空头支票，已一并清理——
+1. `docs/s1/S1-PLAN.md` 让 S1「复用 M0.4 用过的 **fastgltf**」→ 实际 M0.4 用 **tinygltf**，照它做 S1 一开工就找错库。改为指向 `renderer/src/scene.cpp` 的 `core/mesh_io` 抽取方案，并注明实现宏只能在一个 TU 展开。
+2. `docs/s0/CARROT-BOOTSTRAP.md` 两处写「M0.4 用 glm」/「`thirdparty/glm/` 用于 M0.4 相机」→ 实际未引入 GLM，改成手写矩阵 + selftest 的实况；`docs/ROADMAP.md` S0 骨架的「数学(GLM 封装)」同步标明实况，并补当前进度行。
+3. 台账速查表 / 本节「完成情况」/ S0-PLAN 自检 / `example/cases.json` 的「逐像素一致」「RGBA 平均绝对差 0」→ 统一为分档结论：正常视角逐字节相同，内壁 / resize 为 2 个 / 1 个像素相差 1/255。
+4. S0-PLAN 门禁表截图名 `m0.1.png` / `m0.3.png` / `m0.4.png` 与实际落盘文件不符 → 改真实路径；M0.1 明写「交互用例、无截图」，M0.3 注明由 `s0-triangle` 重建补出，M0.1/M0.3/M0.4 完成行补 ✅ 与日期。
+5. S0-PLAN「测试模型」依赖表仍写「Blender 导出，或随便一个 glTF 样例」→ 改成 Khronos 官方三件套 + `scripts/pack-suzanne-glb.py` + `NL_ASSET_DIR` 的实况，并给出复现命令。
+
+> 教训：**验收结论一旦被更精确的测量修正，要回扫全仓文档**（含后续阶段的计划文档、UI 展示文案），不能只改台账正文。本次最危险的残留不在 M0.4 章节里，而在 S1 的开工清单里。
 
 ---
 
@@ -219,7 +228,7 @@
 2. **清单里历史 exe 路径少一层 `build/`** → 现象：`/api/cases` 里 6 个历史 exe 全 `ready=false`。根因：构建脚本 `BUILDDIR=%ROOT%\build\%BACKEND%`，而清单写成 `build/showcase/<tag>/<BACKEND>/`。处理：统一改为 `build/showcase/<tag>/build/<BACKEND>/viewer.exe`，8/8 就绪。
 3. **`s0-init` 自带构建脚本在本机跑不通** → 根因：`build-m0.1.bat` 调 `vcvars64.bat`，后者要 `reg.exe`（本会话被安全策略禁用）。处理：`rebuild.py` 检出历史 tag 后注入当前阶段无关的 `build-m0.2.bat`（显式 INCLUDE/LIB/PATH + NMake），两后端均 PASS。
 4. **M0.2 resize 基线不是该用例的产物** → 现象：DX12 实时图与基线 MD5 不同（`d6fe0511` vs `bfbbf3a7`），查尺寸发现基线是 800×450、before 图还带 `--color 1`。根因：`case-dx12-resize.png` 是历史不同参数的遗留截图。处理：用本次现场运行的 DX12/Vulkan 各两张图覆盖 `example/m0.2/resize-*.png`，并给「清屏色切换」补 `color-*.png` 基线，之后 11/11 用例基线全匹配。
-5. **「双后端画面一致」与 MD5 不同自相矛盾** → 现象：M0.4 内壁 / resize 两后端 PNG 字节不同（`a8ab17dd` vs `26221b55`），但台账写逐像素一致。根因：zlib IDAT 解压后扫描线不同，实际像素只差 ≤1/255（GPU 取整噪声）。处理：服务端 `compare_pixels()`（Pillow 可选加速，标准库 PNG 解码器兜底）返回最大通道差与差异像素数；UI 分 `bytes` / `pixels` / `near` / 不同四态如实显示。
+5. **「双后端画面一致」与 MD5 不同自相矛盾** → 现象：M0.4 内壁 / resize 两后端 PNG 字节不同（`a8ab17dd` vs `26221b55`），但台账写逐像素一致。根因：zlib IDAT 解压后扫描线不同，实际像素只差 ≤1/255（GPU 取整噪声）。处理：服务端 `compare_pixels()`（Pillow 可选加速，标准库 PNG 解码器兜底）返回最大通道差与差异像素数；UI 分 `bytes` / `pixels` / `near` / 不同四态如实显示；台账速查表、本节完成情况、S0-PLAN、`example/cases.json` 里的旧表述同步清理（见上方「文档复核补记」）。
 6. **清单放两份会漂移** → 现象：初版 `tools/showcase/cases.json` 与截图目录 `docs/screenshots/` 分离，用户要求「做个 example 目录放每个版本的用例」后必然出现两套索引。处理：清单整体搬进 `example/cases.json`，服务与重建脚本都从它读，截图与 `run.bat` 同目录；`/shots/` 只服务清单里声明过的相对路径，避免目录穿越。
 7. **批量测试脚本的 CRLF 污染 JSON** → 现象：`/api/run` 全部回 `Invalid control character at line 1`。根因：Python 在 Windows 写清单文件默认 `\r\n`，shell `read` 把 `\r` 带进 case id。处理：测试侧 strip `\r`；产品侧不动（服务端本就按 JSON 严格解析，没有静默容错）。
 

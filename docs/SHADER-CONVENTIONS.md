@@ -1,7 +1,7 @@
 # Shader 编写规范 + Slang 导出流程
 
 > 适用范围：M0.3 起所有图形 shader。`renderer/shaders/` 下的 `.slang` 源码与 `CMakeLists.txt` 的 Slang 编译块。
-> 关联：`docs/s0/S0-PLAN.md` M0.3 目标 · `docs/MILESTONES.md` M0.3 台账。
+> 关联：`docs/s0/S0-PLAN.md` M0.3 / M0.4 目标 · `docs/MILESTONES.md` M0.3 / M0.4 台账。
 > 纪律：零厂商 SDK。Slang 独立获取（vendored 到 `thirdparty/slang/dist/`，已 gitignore，不入仓库），DXIL 所需的 `dxcompiler.dll` 来自已装的 Windows SDK，**不额外下载任何东西**。
 
 ---

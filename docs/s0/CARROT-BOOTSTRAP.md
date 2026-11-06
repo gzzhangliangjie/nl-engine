@@ -65,7 +65,7 @@ git show --stat 46799759                                                     # �
 |---|---|---|---|
 | 底座选了又换 | `bc679592` 自写 Vulkan RAII → 3 天后 `703af81e`~`a0dbebbb` 全量迁 VulkanHpp、删掉自己写的类型 | 两次纯重构提交 | 底座 M0.0 一次定死（NVRHI + Slang），后续不换 |
 | 模块拆得太晚 | `e6bc5196` → `4d06c0d3` → `8c227e91`，单 Engine 跑了 4 个月 | 单次 915~1059 行搬家式重构 | M0.1 就三 target，但各自只放最少代码 |
-| 相机自己硬搓 | `21594df4` "Broken orbit camera" → `038c6d38` 修好，隔 5 天 | 一周里最不值的时间 | M0.4 直接用 glm + 现成轨道相机公式，先跑通再调手感 |
+| 相机自己硬搓 | `21594df4` "Broken orbit camera" → `038c6d38` 修好，隔 5 天 | 一周里最不值的时间 | M0.4 在 `core/camera.cpp` 手写 4×4 透视 / lookAt（**未引 GLM**），但配 `cameraSelfTest` 覆盖 orbit / zoom / 钳制 / reset，当天一次过，没走「写坏→隔几天修」的回头路 |
 | resize 没进回归 | 前后修 4 次（`146517a7` `6a30f711` `bb981ccb` `2c87efe2`） | 每改一次渲染结构复发一次 | 门禁表里列为每阶段回归项 |
 | HUD 拖到三个月后 | `e5b52cb8`（此时已有光追阴影和 ECS） | 之前调参全靠改代码重编 | M0.5 就接 ImGui，当验收仪器用 |
 | 早期塞进无关依赖 | Lua / Mono / OpenXR / 音频 / 粒子编辑器在第一年陆续进来 | 体量膨胀，与渲染主线无关 | S0 只装窗口 + 渲染必需依赖 |
@@ -92,7 +92,7 @@ Carrot 的 `thirdparty/` 已 checkout，以下源码可直接复制到 `nl-engin
 | 目录 | 用在 | 备注 |
 |---|---|---|
 | `thirdparty/glfw/` | M0.1 窗口 | 完整 `CMakeLists.txt` + `include/GLFW/glfw3.h`，`add_subdirectory` 即可 |
-| `thirdparty/glm/` | M0.4 相机 | 数学库 |
+| `thirdparty/glm/` | **（M0.4 未用）** | M0.4 相机只需 4×4 矩阵，由 `core/camera.cpp` 手写，S0 不引入 GLM；留作后续阶段可选 |
 | `thirdparty/tinygltf/` | M0.4 模型 | 单头文件方案，比 Assimp 轻 |
 | `thirdparty/stb/` | M0.4 贴图 | `stb_image.h` |
 | `thirdparty/imgui/` | M0.5 HUD | 注意 Carrot 用的是作者 fork，S0 只需基本功能 |

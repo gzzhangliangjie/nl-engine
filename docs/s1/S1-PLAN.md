@@ -10,7 +10,7 @@
 
 - [ ] `nanite-tools/` 目录建 CMake target（S0 预留过），命令行框架：`nanite-tools <subcommand> <args>`（手写或 cxxopts，别纠结）
 - [ ] 子命令占位：`cluster / simplify / dag / stat`（本里程碑只实现 cluster 的入口）
-- [ ] glTF 读取：**直接复用 viewer 里 M0.4 用过的 fastgltf**，抽一个共用的 `mesh_io` 进 core/（模型加载只有一份代码）
+- [ ] glTF 读取：**复用 M0.4 已经在用的 tinygltf**（`thirdparty/tinygltf/`，从本机 Carrot vendored；M0.4 从未引入 fastgltf），把 `renderer/src/scene.cpp` 的解析部分抽成 `core/mesh_io`，让 viewer 与 nanite-tools 共用一份代码。注意：tinygltf 实现宏只在**一个 TU** 展开（现在在 `scene.cpp`，抽走时要同步移走），且 `core/` 仍保持零图形 API 符号
 - [ ] 中间数据结构：`Vertex{pos,normal,uv}` + 三角列表 + mesh 级变换展开（glTF 节点变换烘进顶点）
 
 **自检**：`nanite-tools stat model.gltf` 能打印「顶点数 / 三角数 / 子网格数」。tag：`s1-tools`。

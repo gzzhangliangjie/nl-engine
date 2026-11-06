@@ -12,10 +12,10 @@
 | 阶段 | 目标 | 可见用例（必须能截图 / 能当场演示） | 验收判据 | 放行 |
 |---|---|---|---|---|
 | M0.0 | 工具链齐备 + 后端开关可用 | 同屏截图：`cmake --version`、两次 configure 的 `backend:` 行、`viewer.exe --selftest` 分别输出 `backend: dx12` 与 `backend: vulkan` | 两种 `-DNL_GRAPHICS_BACKEND` 配置都不装任何图形 SDK 就编译通过且 PASS，输出的后端名不同 | → M0.1 |
-| M0.1 | 最小可跑骨架 | `viewer.exe` 弹出窗口，标题栏实时显示帧号/帧时间，按 ESC 干净退出，控制台打印 shutdown ok。截图 `docs/screenshots/m0.1.png` | `viewer.exe --selftest` 输出 PASS；`grep -R "\bvk[A-Z]\|D3D12\|ID3D12" viewer/ core/` 零命中 | → M0.2 |
+| M0.1 ✅ | 最小可跑骨架 | `viewer.exe` 弹出窗口，标题栏实时显示帧号/帧时间，按 ESC 干净退出，控制台打印 shutdown ok。**交互用例，无截图**（空窗口无 GPU 回读，展示台标 `manual`） | `viewer.exe --selftest` 输出 PASS；`grep -R "\bvk[A-Z]\|D3D12\|ID3D12" viewer/ core/` 零命中 | ✅ 2026-11-06（→ M0.2） |
 | M0.2 ✅ | NVRHI device + swapchain，两后端都能起 | 窗口清屏色按空格切换；切换后端后**同一份 viewer 代码出同一个画面**；拖动缩放窗口前后都不黑屏。截图 `m0.2.png`（含两后端 + 缩放前后对比） | 当前后端调试层零输出；DX12 / Vulkan 都跑通 | ✅ 2026-11-06（→ M0.3） |
-| M0.3 | 三角形 + frame in flight = 2 | 彩色三角形；任务管理器 GPU 占用非 0；两个后端各跑一次。截图 `m0.3.png` | 当前后端调试层零输出；**故意删一个 fence 等待能触发同步校验报错**（证明安全网有效） | → M0.4 |
-| M0.4 | 模型 + 贴图 + 轨道相机 | 带贴图 Suzanne；拖动旋转、滚轮缩放；关背面剔除能看到内壁。截图 `m0.4.png` | 调试层零输出 + resize 回归通过 + 两后端画面一致 | → M0.5 |
+| M0.3 ✅ | 三角形 + frame in flight = 2 | 彩色三角形；任务管理器 GPU 占用非 0；两个后端各跑一次。截图 `docs/screenshots/m0.3-{dx12,vulkan}.png`（2026-11-07 由 `s0-triangle` 原始代码重建补出，原验收只肉眼看没落盘） | 当前后端调试层零输出；**故意删一个 fence 等待能触发同步校验报错**（证明安全网有效） | ✅ 2026-11-06（→ M0.4） |
+| M0.4 ✅ | 模型 + 贴图 + 轨道相机 | 带贴图 Suzanne；拖动旋转、滚轮缩放；关背面剔除能看到内壁。截图 `docs/screenshots/m0.4-{dx12,vulkan}.png` + 内壁 / resize 对照共 10 张（回放清单 `example/m0.4/`） | 调试层零输出 + resize 回归通过 + 两后端画面一致（实测分档：正常视角逐字节、内壁 / resize ≤1/255） | ✅ 2026-11-07（→ M0.5） |
 | M0.5 | ImGui HUD + 总验收 | HUD 显示 FPS / 帧时间曲线 / 相机参数 / 当前后端名；Nsight Graphics 抓一帧看到 draw call；截图 `docs/screenshots/s0.png` | S0 三条硬指标全过（画面可交互 / 两后端调试层零报错 / **一份 .slang 同时出 SPIR-V 与 DXIL 且两后端都能加载**） | 打 `s0-done`，进 S1 |
 
 > **resize 是每一阶段的回归项，不是 M0.2 的一次性检查**：Carrot 实况里 swapchain recreation 前后修了 4 次（`146517a7` → `6a30f711` → `bb981ccb` → `2c87efe2`），那是没做回归的代价——我们做成回归项，预期一次修好，不预期修 4 次。
@@ -31,7 +31,7 @@
 | Slang | 独立 release | `https://github.com/shader-slang/slang/releases` 取预编译 `slangc`，或 FetchContent 编源码。**独立获取，不从任何 SDK 路径找** | `slangc -h` 有输出 |
 | NVRHI | 最新 master | `git clone --recursive`（gh-proxy 镜像）或 CMake FetchContent；Vulkan 头由 `NVRHI_FETCH_VULKAN_HEADERS` 拉 `KhronosGroup/Vulkan-Headers` | `cmake` 能构建出静态库 |
 | GLFW | 3.3+ | **零网络**：从本地 `E:\UE_STUDY_2026\Carrot\thirdparty\glfw\` 复制到 `thirdparty/`（Carrot Init 就是这么 vendored 的） | `add_subdirectory` 能过 |
-| 测试模型 | Suzanne 带贴图 glb | Blender 导出，或随便一个 glTF 样例 | — |
+| 测试模型 | Suzanne 带贴图 GLB | **已就位**：Khronos `glTF-Sample-Models/2.0/Suzanne` 官方 gltf / bin / 2 张 PNG 经 gh-proxy 下载，用 `scripts/pack-suzanne-glb.py` 封成 `assets/models/Suzanne.glb`（2.5 MB，内嵌贴图） | `python scripts/pack-suzanne-glb.py <源目录> assets/models/Suzanne.glb`；运行时由 `NL_ASSET_DIR` 注入，不依赖 CWD |
 
 环境自检清单（M0.0 的可见用例）：
 - [x] `cmake --version` 正常 → 3.31.6（便携版）
@@ -152,9 +152,9 @@ nl-engine/
 - [x] depth buffer：`Format::D32`，两个后端随 swapchain 尺寸重建，framebuffer 带 depth attachment，每帧 `clearDepthStencilTexture`
 - [x] 关背面剔除对照：`C` 键 / `--cull none` 切两套 pipeline；滚轮把相机推进模型内部（`--dist 0.6`）时，`cull=back` 只剩背景、`cull=none` 能看到带贴图内壁
 
-**实现与计划的差异（有意为之，写进台账）**：`fastgltf → tinygltf`（零新依赖）；`push constant → volatile CB`（NVRHI 教程主推、跨两后端更稳）；`Suzanne.glb` 由 Khronos 官方 glTF 三件套（`Suzanne.gltf/.bin/_BaseColor.png/_MetallicRoughness.png`）用 `scripts/pack-suzanne-glb.py` 打包成单文件，几何/贴图原样保留。
+**实现与计划的差异（有意为之，写进台账）**：`fastgltf → tinygltf`（零新依赖）；`push constant → volatile CB`（NVRHI 教程主推、跨两后端更稳）；`Suzanne.glb` 由 Khronos 官方 glTF 三件套（`Suzanne.gltf/.bin/_BaseColor.png/_MetallicRoughness.png`）用 `scripts/pack-suzanne-glb.py` 打包成单文件，几何/贴图原样保留；`GLM → 未引入`，4×4 透视 / lookAt 由 `core/camera.cpp` 手写并配 `cameraSelfTest`（一次过，未重演 Carrot「相机硬搓修 5 天」的弯路）。
 
-**自检**（已实测，证据 `docs/screenshots/m0.4-*.png`）：Suzanne 带贴图正确显示（黄色眼睛 + 皮毛细节），相机可拖动/缩放；`--dist 0.6 --cull none` 看到内壁、同参数 `--cull back` 只剩背景；resize 640×360 → 1024×768 前后非黑；两后端正常视角 PNG **逐字节相同**（MD5 `7e528087…`）、内壁/resize 画面 RGBA 平均绝对差 0、`deviceErrors=0`。tag：`s0-model`。
+**自检**（已实测，证据 `docs/screenshots/m0.4-*.png`）：Suzanne 带贴图正确显示（黄色眼睛 + 皮毛细节），相机可拖动/缩放；`--dist 0.6 --cull none` 看到内壁、同参数 `--cull back` 只剩背景；resize 640×360 → 1024×768 前后非黑；两后端正常视角 PNG **逐字节相同**（MD5 `7e528087…`）、内壁/resize 仅 2 个 / 1 个像素相差 1/255（`compare_pixels()` 实测，非「全图逐像素一致」）、`deviceErrors=0`。tag：`s0-model`。
 
 ## M0.5 ImGui + 收尾验收（1 天）
 

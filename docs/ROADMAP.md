@@ -49,13 +49,15 @@
 ## 阶段 P0 · 渲染地基（约 1~2 周）
 
 ### S0 搭骨架
+> 当前进度（2026-11-07）：M0.4 已验收通过（tag `s0-model`），M0.5 ImGui + 总验收待做；逐阶段实况见 `docs/MILESTONES.md`，可回放用例见 `example/`。
+
 - **做什么**：接入后端，窗口 + glTF 加载 + ImGui 面板 + Slang 编译管线跑通
 - **工程骨架（底子，一次搭对）**：
 
 ```
 nl-engine/
 ├── CMakeLists.txt          ← 顶层：三个 target（core/renderer/viewer）+ nanite-tools 预留
-├── core/                   ← 数学(GLM 封装)/日志/断言/窗口+输入/ImGui —— 引擎壳未来的家
+├── core/                   ← 日志/断言/窗口+输入/轨道相机（M0.4 手写 4×4，未引 GLM）/ImGui —— 引擎壳未来的家
 ├── renderer/               ← 唯一允许调 NVRHI 的模块（纪律所在）
 ├── viewer/                 ← main.cpp + --mode 分发，薄壳，不含图形调用
 └── nanite-tools/           ← S1 起填
@@ -65,7 +67,7 @@ nl-engine/
 - **底子边界（S0 明确不要的）**：ECS/场景图、事件总线、层系统、序列化、资产管理、反射、脚本——这些是 P8 引擎化的事，现在写就是范围失控
 - **可运行产出**：`viewer` 打开窗口，画出带贴图的 Suzanne，相机可拖动，ImGui 可调参数
 - **验收效果**：画面正确、可交互；**DX12 / Vulkan 两个后端**的调试层都 **零报错**；一份 .slang 同时编译出 SPIR-V 与 DXIL 且两后端都能加载（通用管线的验收核心）
-- **涉及知识**：RHI 抽象（NVRHI）、Slang→SPIR-V/DXIL 编译、同步模型（NVRHI fence / frame in flight）、GLM、glTF 结构
+- **涉及知识**：RHI 抽象（NVRHI）、Slang→SPIR-V/DXIL 编译、同步模型（NVRHI fence / frame in flight）、4×4 矩阵与轨道相机（M0.4 现为 `core/camera.cpp` 手写，GLM 未引入）、glTF 结构（tinygltf）
 - **卡住翻哪**：NVRHI / Donut 官方示例；kb/graphics-handbook.html#path 的 G2
 
 ## 阶段 P1 · 离线管线（Nanite 数据侧，约 2~3 周）

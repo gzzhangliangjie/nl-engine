@@ -157,7 +157,7 @@
       "date": "2026-11-07",
       "summary": "tinygltf 读 Suzanne.glb，共享 Scene 上传 VB/IB/贴图/绑定集；model.slang 单源双目标；深度缓冲 + 背面剔除 + 轨道相机。",
       "acceptance": [
-        "带贴图 Suzanne 双后端画面逐字节一致",
+        "正常视角带贴图 Suzanne 双后端 PNG 逐字节一致（内壁/resize 像素差 ≤1/255）",
         "相机钻进模型后：开剔除只剩背景，关剔除见内壁",
         "resize 回归、selftest 11/11、deviceErrors=0"
       ],
