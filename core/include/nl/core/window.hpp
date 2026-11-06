@@ -5,7 +5,7 @@
 
 namespace nl::core {
 
-enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, F12, Count };
+enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, F12, Count };
 
 struct WindowDesc {
     int         width  = 1280;
@@ -38,6 +38,10 @@ public:
 
     // 边沿触发：读一次即清除，避免长按重复响应
     bool keyPressed(Key key) const;
+
+    // M0.4 轨道相机输入：拖动增量 / 滚轮增量按帧消费，左键按下状态用于判定拖动。
+    void consumeMouse(float& deltaX, float& deltaY, float& scrollDelta);
+    bool leftButtonDown() const;
 
     // M0.2：渲染器拿它创建原生 surface / swapchain
     void* nativeHandle() const;

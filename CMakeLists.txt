@@ -91,6 +91,7 @@ add_library(nl_core STATIC
     core/src/log.cpp
     core/src/assert.cpp
     core/src/window.cpp
+    core/src/camera.cpp
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(nl_core PRIVATE glfw)
@@ -99,6 +100,7 @@ target_link_libraries(nl_core PRIVATE glfw)
 add_library(nl_renderer STATIC
     renderer/src/renderer.cpp
     renderer/src/png_writer.cpp
+    renderer/src/scene.cpp
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -106,10 +108,12 @@ target_include_directories(nl_renderer
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
+            ${THIRDPARTY}/tinygltf
 )
 target_link_libraries(nl_renderer PUBLIC nl_core)
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
+    NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     _CRT_SECURE_NO_WARNINGS
     NOMINMAX
 )
@@ -168,8 +172,12 @@ foreach(_SRC ${NL_SHADER_SRCS})
         endif()
         list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
                                       "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil")
+        # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
+        #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128（set 0）。
+        # DX12 侧仍用 b0/t0/s0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
         add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
             COMMAND "${SLANGC}" "${_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
+                    -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
             MAIN_DEPENDENCY "${_SRC}"
             COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_ent})")
@@ -204,4 +212,4 @@ endif()
 
 # 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
 enable_testing()
-add_test(NAME m0.2-selftest COMMAND viewer --selftest)
+add_test(NAME m0.4-selftest COMMAND viewer --selftest)

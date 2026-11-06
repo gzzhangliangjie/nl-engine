@@ -8,7 +8,7 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.3 first triangle + frame-in-flight=2 (Slang dual-backend)";
+constexpr const char* kStage = "M0.4 textured model + depth + orbit camera (Slang dual-backend)";
 } // namespace
 
 Status status() {
@@ -54,9 +54,10 @@ void Renderer::resize(Extent extent) {
     if (impl_->backend) impl_->backend->resize(extent);
 }
 
-bool Renderer::renderFrame(ClearColor color, const char* screenshotPath) {
+bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
+                           const char* screenshotPath) {
     if (!impl_->backend) return false;
-    return impl_->backend->renderFrame(color, screenshotPath, impl_->error);
+    return impl_->backend->renderFrame(color, frame, screenshotPath, impl_->error);
 }
 
 int Renderer::drainMessages() {

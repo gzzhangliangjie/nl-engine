@@ -30,6 +30,16 @@ struct ClearColor {
     float a = 1.0f;
 };
 
+// M0.4 每帧参数：与 model.slang 的 SceneConstants cbuffer 逐字节对应（列主序矩阵）。
+// 公开头只放 POD，viewer/core 不需要认识任何 NVRHI / 图形 API 类型。
+struct FrameParams {
+    float mvp[16]     = {};
+    float model[16]   = {};
+    float lightDir[4] = {0.45f, 0.80f, 0.50f, 0.28f};  // xyz 方向, w = 环境光
+    float options[4]  = {};
+    bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
+};
+
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
 struct DeviceInfo {
     std::string adapterName;
@@ -59,9 +69,10 @@ public:
 
     void resize(Extent extent);
 
-    // 画一帧：清屏 + 可选同帧回读写 PNG + present。
+    // 画一帧：清屏 + 模型绘制（MVP / 剔除开关来自 FrameParams）+ 可选同帧回读写 PNG + present。
     // screenshotPath 非空时用 NVRHI staging texture 真回读 GPU 像素，不是 CPU 画个假图。
-    bool renderFrame(ClearColor color, const char* screenshotPath = nullptr);
+    bool renderFrame(ClearColor color, const FrameParams& frame,
+                     const char* screenshotPath = nullptr);
 
     // 把当前后端调试层里积累的消息转成日志并返回新增的设备错误数（验收要求为 0）。
     int drainMessages();

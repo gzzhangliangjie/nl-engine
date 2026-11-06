@@ -8,11 +8,19 @@
 ```
 nl-engine/
 ├── README.md          ← 本文件：项目总览
+├── CMakeLists.txt     ← 标准 CMake 构建链；NL_GRAPHICS_BACKEND=AUTO|DX12|VULKAN
+├── core/              ← 日志 / 断言 / 窗口 / 轨道相机（零图形 API 符号）
+├── renderer/          ← 唯一允许出现 NVRHI / 图形 API 的模块；shaders/ 放 .slang
+│   └── src/scene.cpp  ← 两后端共享：glTF 加载 / staging 上传 / 绑定集 / pipeline
+├── viewer/            ← 可见用例 + --screenshot 回归
+├── assets/models/     ← Suzanne.glb（Khronos 官方 glTF 样例，单文件内嵌贴图）
+├── thirdparty/        ← glfw / nvrhi / vulkan-headers / directx-headers / stb / tinygltf（本地 vendored）
 ├── docs/
 │   ├── PLAN.md        ← 方案：技术决策、框架选型、工程组织
 │   ├── ROADMAP.md     ← 步骤：S0~S14 详细路线图 + 本地代码对照表
 │   ├── LINKS.md       ← 学习链接：按用途分类，标注什么时候用
 │   ├── MILESTONES.md  ← 里程碑台账：每阶段的动作 / 提交版本 / 完成情况 / 踩坑
+│   ├── SHADER-CONVENTIONS.md ← Slang 双目标编译 + 入口名 / 绑定偏移规范
 │   ├── carrot-history.md  ← Carrot 2023 之后 Nanite×GI 实况时间线（S1~S13）
 │   ├── s0/
 │   │   ├── S0-PLAN.md         ← S0 六阶段 + 阶段门禁（目标/可见用例/验收/放行）
@@ -22,9 +30,21 @@ nl-engine/
 │       ├── graphics-handbook.html 图形学基础手册（G0~G8）
 │       └── unity-handbook.html   Unity SRP 落地手册（U0~U8）
 ├── nanite-tools/      ← （S1 起）离线工具：cluster / simplify / dag / stat
-├── viewer/            ← （S0 起）运行时：--mode 每步加一个可开关模式
-└── assets/            ← .nmesh 资产与测试模型
+└── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
+
+## 当前进度与运行（S0 / M0.4）
+
+零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
+
+```bash
+scripts/build-m0.2.bat DX12          # 或 VULKAN：configure + build + selftest
+build/<backend>/viewer.exe            # 窗口：左键拖动旋转、滚轮缩放、C 切剔除、R 重置、F12 存图、ESC 退出
+build/<backend>/viewer.exe --screenshot out.png --frames 8
+build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关剔除看内壁
+```
+
+M0.4 验收：一份 `model.slang` 同出 SPIR-V 与 DXIL，DX12/Vulkan 各渲染带贴图 Suzanne，正常视角 PNG 逐字节相同、`deviceErrors=0`，resize 640×360 → 1024×768 前后均非黑。证据见 `docs/screenshots/m0.4-*.png` 与 `docs/MILESTONES.md`。
 
 ## 两个程序
 

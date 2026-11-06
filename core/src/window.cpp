@@ -21,6 +21,8 @@ Key mapKey(int glfwKey) {
         case GLFW_KEY_A:      return Key::A;
         case GLFW_KEY_S:      return Key::S;
         case GLFW_KEY_D:      return Key::D;
+        case GLFW_KEY_C:      return Key::C;
+        case GLFW_KEY_R:      return Key::R;
         case GLFW_KEY_F12:    return Key::F12;
         default:              return Key::Unknown;
     }
@@ -38,6 +40,10 @@ struct Window::Impl {
     std::array<bool, static_cast<size_t>(Key::Count)> keyDown{};
     int  pendingWidth  = 0;
     int  pendingHeight = 0;
+    double mouseDX = 0.0, mouseDY = 0.0, scrollY = 0.0;
+    double lastCursorX = 0.0, lastCursorY = 0.0;
+    bool   haveCursor = false;
+    bool   leftDown = false;
 
     void onKey(int glfwKey, int action) {
         if (action != GLFW_PRESS) return;
@@ -55,6 +61,34 @@ struct Window::Impl {
         if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
             impl->pendingWidth  = width;
             impl->pendingHeight = height;
+        }
+    }
+
+    static void cursorCallback(GLFWwindow* handle, double x, double y) {
+        if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
+            if (impl->haveCursor) {
+                impl->mouseDX += x - impl->lastCursorX;
+                impl->mouseDY += y - impl->lastCursorY;
+            }
+            impl->lastCursorX = x;
+            impl->lastCursorY = y;
+            impl->haveCursor = true;
+        }
+    }
+
+    static void buttonCallback(GLFWwindow* handle, int button, int action, int /*mods*/) {
+        if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                impl->leftDown = (action == GLFW_PRESS);
+                // 按下瞬间重新取基准点：避免上一次点击留下的光标位置产生跳变。
+                if (action == GLFW_PRESS) impl->haveCursor = false;
+            }
+        }
+    }
+
+    static void scrollCallback(GLFWwindow* handle, double /*x*/, double y) {
+        if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
+            impl->scrollY += y;
         }
     }
 };
@@ -81,8 +115,11 @@ Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
     glfwSetWindowUserPointer(impl_->handle, impl_.get());
     glfwSetKeyCallback(impl_->handle, &Impl::keyCallback);
     glfwSetFramebufferSizeCallback(impl_->handle, &Impl::framebufferCallback);
+    glfwSetCursorPosCallback(impl_->handle, &Impl::cursorCallback);
+    glfwSetMouseButtonCallback(impl_->handle, &Impl::buttonCallback);
+    glfwSetScrollCallback(impl_->handle, &Impl::scrollCallback);
     log::info("window created ", desc.width, "x", desc.height,
-              " | no GL context | ESC to quit, SPACE color, F12 screenshot");
+              " | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit");
 }
 
 Window::~Window() {
@@ -113,6 +150,19 @@ bool Window::keyPressed(Key key) const {
     const bool pressed = impl_->keyDown[i];
     impl_->keyDown[i] = false;
     return pressed;
+}
+
+void Window::consumeMouse(float& deltaX, float& deltaY, float& scrollDelta) {
+    deltaX = deltaY = scrollDelta = 0.0f;
+    if (!valid()) return;
+    deltaX = static_cast<float>(impl_->mouseDX);
+    deltaY = static_cast<float>(impl_->mouseDY);
+    scrollDelta = static_cast<float>(impl_->scrollY);
+    impl_->mouseDX = impl_->mouseDY = impl_->scrollY = 0.0;
+}
+
+bool Window::leftButtonDown() const {
+    return valid() && impl_->leftDown;
 }
 
 void* Window::nativeHandle() const {

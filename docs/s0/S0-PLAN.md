@@ -143,15 +143,18 @@ nl-engine/
 
 ## M0.4 glTF 模型 + 纹理 + 相机（2 天）
 
-**做什么**：加载 Suzanne.glb → 顶点/索引 buffer 上传 → 贴图（staging + image barrier）→ push constant MVP → 轨道相机。
+**做什么**：加载 Suzanne.glb → 顶点/索引 buffer 上传 → 贴图（staging + image barrier）→ 每帧 MVP → 轨道相机。
 
-- [ ] glTF 库：`fastgltf`（现代、和 vulkan-tutorial 后期同款）或 `tinygltf`（更简单），选一个别纠结
-- [ ] buffer 上传走 staging：createBuffer(map/copy) 封装成 renderer 里第一个真正可复用的函数
-- [ ] 纹理：staging 上传 → NVRHI 纹理 + sampler；看懂自动 barrier 替你做了哪些转换（对照 Donut 源码——barrier 原理不懂，S6 Hi-Z 会还债）
-- [ ] push constant 传 MVP，轨道相机（拖动旋转/滚轮缩放），core 里写 `Camera` 类
-- [ ] 顺带把 depth buffer 挂上（模型有立体感，也为 S6 Hi-Z 铺路）
+- [x] glTF 库：**tinygltf**（本机 Carrot 已 vendored，零网络；不选 fastgltf 是为了不引入新依赖）→ `thirdparty/tinygltf/`，只在 `renderer/src/scene.cpp` 一个 TU 展开实现
+- [x] buffer 上传走 staging：NVRHI `writeBuffer`/`writeTexture` 内部的 upload manager（staging buffer + CopyBufferRegion / vkCmdCopyBufferToImage + 自动 barrier），收进共享 `Scene` 而不是两后端各抄一遍
+- [x] 纹理：staging 上传 → NVRHI 纹理（`RGBA8_UNORM`）+ sampler；自动 barrier 把资源转到 `ShaderResource`，对照 `doc/Tutorial.md` 的 "Filling the Resource Data" 一节
+- [x] MVP：**volatile constant buffer**（NVRHI 官方教程的轻量 CB，语义接近 push constant，两后端由 NVRHI 统一管版本池），轨道相机 `core/camera.*`（拖动旋转 / 滚轮缩放 / 距离钳制）
+- [x] depth buffer：`Format::D32`，两个后端随 swapchain 尺寸重建，framebuffer 带 depth attachment，每帧 `clearDepthStencilTexture`
+- [x] 关背面剔除对照：`C` 键 / `--cull none` 切两套 pipeline；滚轮把相机推进模型内部（`--dist 0.6`）时，`cull=back` 只剩背景、`cull=none` 能看到带贴图内壁
 
-**自检**：Suzanne 带贴图正确显示，相机拖动丝滑；关闭背面剔除看到内壁，再打开验证 culling 生效；两后端画面一致。tag：`s0-model`。
+**实现与计划的差异（有意为之，写进台账）**：`fastgltf → tinygltf`（零新依赖）；`push constant → volatile CB`（NVRHI 教程主推、跨两后端更稳）；`Suzanne.glb` 由 Khronos 官方 glTF 三件套（`Suzanne.gltf/.bin/_BaseColor.png/_MetallicRoughness.png`）用 `scripts/pack-suzanne-glb.py` 打包成单文件，几何/贴图原样保留。
+
+**自检**（已实测，证据 `docs/screenshots/m0.4-*.png`）：Suzanne 带贴图正确显示（黄色眼睛 + 皮毛细节），相机可拖动/缩放；`--dist 0.6 --cull none` 看到内壁、同参数 `--cull back` 只剩背景；resize 640×360 → 1024×768 前后非黑；两后端正常视角 PNG **逐字节相同**（MD5 `7e528087…`）、内壁/resize 画面 RGBA 平均绝对差 0、`deviceErrors=0`。tag：`s0-model`。
 
 ## M0.5 ImGui + 收尾验收（1 天）
 

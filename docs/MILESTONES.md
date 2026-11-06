@@ -13,7 +13,7 @@
 | M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)`；两种后端配置都 PASS |
 | M0.2 设备 + swapchain | ✅ 验收通过 | `s0-device` | 2026-11-06 | 双后端清屏逐字节相同、resize 不黑屏、deviceErrors=0、退出无段错误 |
 | M0.3 三角形 + 帧同步 | ✅ 验收通过 | `s0-triangle` | 2026-11-06 | 双后端顶点色三角形渲染、frame-in-flight=2、selftest 9/9；SPIR-V 入口恒为 `main` 的坑已固化见 `docs/SHADER-CONVENTIONS.md` |
-| M0.4 模型 + 贴图 + 相机 | ⬜ 未开始 | `s0-model` | — | — |
+| M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 双后端带贴图 Suzanne 逐像素一致、内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
 | M0.5 ImGui + 总验收 | ⬜ 未开始 | `s0-done` | — | — |
 
 ---
@@ -155,6 +155,45 @@
 2. **DX12 `queue_->Signal(fence_, v)` 传 `ComPtr` 未 `.Get()`** → 现象：C2664。处理：`fence_.Get()`。
 3. **`createGraphicsPipeline(desc, IFramebuffer*)` deprecated** → 现象：C4996。处理：改用 `createGraphicsPipeline(desc, FramebufferInfo(FramebufferDesc))` 重载（两后端一致）。
 4. **Vulkan 三角形空白（仅清屏）** → 现象：`vk pipeline create -> 0`，draw 永远跳过；DX12 正常。根因：Slang 把 SPIR-V 入口点**固定命名为 `main`**（与 `-entry vsMain` 无关），而 `ShaderDesc.setEntryName("vsMain")` 让 NVRHI-Vulkan 找不到入口 → `vkCreateGraphicsPipelines` 静默失败返回 NULL；DXIL 入口才是 `vsMain`，故 DX12 正常。查证：自写 SPIR-V 解析器确认 `tri.vs.spv` 的 `OpEntryPoint` 名=`main`。处理：Vulkan 路径 `setEntryName("main")`，DX12 保持 `vsMain`；注释写明 Slang→SPIR-V 入口名约定。
+
+---
+
+## M0.4 模型 + 贴图 + 深度 + 轨道相机（Slang 双后端）
+
+**动作**
+- 资源：Khronos `glTF-Sample-Models/2.0/Suzanne` 官方三件套（`Suzanne.gltf` / `.bin` / `_BaseColor.png` / `_MetallicRoughness.png`，经 gh-proxy 下载，零厂商 SDK）由 `scripts/pack-suzanne-glb.py` 打包成单文件 `assets/models/Suzanne.glb`（2.5 MB，图片内嵌为 bufferView）。
+- `thirdparty/tinygltf/`（本机 Carrot vendored：`tiny_gltf.h` / `json.hpp` / `stb_image.h` / LICENSE），实现只在 `renderer/src/scene.cpp` 一个 TU 展开。
+- `renderer/shaders/model.slang`：单一源码，`cbuffer SceneConstants`（MVP + model + light + options，160 B）、`register(t0)` 贴图、`register(s0)` sampler；VS 变换位置/法线，PS 采样贴图 + `abs(N·L)` 双面受光 + 2.2 曝光。
+- `renderer/src/scene.hpp/.cpp`（两后端共享，只依赖 `nvrhi.h`）：tinygltf 读 POSITION/NORMAL/TEXCOORD_0/indices/baseColor → VB/IB/Texture/Sampler/volatile CB → `writeBuffer`/`writeTexture` 一次性 staging 上传 → binding layout/set → 两套 pipeline（cull back / none）→ 每帧 `writeBuffer(MVP)` + `drawIndexed`。
+- `core/camera.hpp/.cpp`：轨道相机（yaw/pitch/distance、透视 ZO + lookAt 列主序矩阵、距离/俯仰钳制、`cameraSelfTest`）；`core/window.*` 加鼠标拖动 / 滚轮 / 左键回调、`C` / `R` 键。
+- 两后端：`createTargets` 里建 `Format::D32` 深度、framebuffer 挂 depth attachment、每帧 `clearDepthStencilTexture`；`renderFrame` 接 `FrameParams`（MVP / cullBack）并改用 `Scene::draw`；resize 与 Vulkan OUT_OF_DATE 路径统一失效 framebuffer/depth/pipeline；shutdown 在 device 存活时 `scene_.shutdown()`。
+- `renderer/include/nl/renderer/renderer.hpp` 加 `FrameParams` POD；`renderer.cpp` stage → M0.4；`viewer/main.cpp` 接交互、固定相机参数（`--yaw/--pitch/--dist/--cull`）、标题栏显示相机与剔除状态、selftest 扩到 11 项。
+- `CMakeLists.txt`：`camera.cpp` / `scene.cpp` 入 target、`NL_ASSET_DIR` 注入、SPIR-V 编译加 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`、ctest 名改 `m0.4-selftest`。
+- 文档：`docs/SHADER-CONVENTIONS.md`（顶点布局 / 资源绑定偏移表 / cbuffer 160 B / volatile CB）、`docs/s0/S0-PLAN.md`（M0.4 勾选 + 与计划的差异）、`README.md`（目录 + 运行方式）、`scripts/build-m0.2.bat`（阶段无关的说明）。
+
+**提交版本**：`s0-model`（M0.4 验收通过后本地提交并打 tag）
+
+**完成情况**
+- ✅ 两后端 `scripts/build-m0.2.bat DX12|VULKAN`：configure 0 / build 0 / `SELFTEST PASS (11/11)`；`ctest` 两后端 `m0.4-selftest` 100% 通过。
+- ✅ 可见用例：`viewer.exe` 弹出窗口显示带贴图 Suzanne（黄色眼睛 + 皮毛细节）；左键拖动旋转、滚轮缩放、`C` 切剔除、`R` 重置、`F12` 存图、标题栏实时显示 yaw/pitch/dist/cull。
+- ✅ **双后端画面一致**：正常视角 `m0.4-dx12.png` 与 `m0.4-vulkan.png` **MD5 完全相同**（`7e528087d19722d8f9ef4de35e36d382`）；内壁 / resize 截图 PNG 字节不同但 RGBA 平均绝对差 **0**（PIL 核对，extrema 最多 ±1）。
+- ✅ **背面剔除真生效**：`--dist 0.6 --cull back` 相机在模型内部只剩背景（13 KB，平均亮度 13.71）；同角度 `--cull none` 显示带贴图内壁（200 KB，平均亮度 147.52）；两后端各一份，结果一致。
+- ✅ 深度与 resize：640×360 → 1024×768 前后 PNG 均非黑（平均亮度 36.82 / 41.21），两后端一致；8 帧连续渲染稳定。
+- ✅ 全 8 个验收进程退出码 0，日志均 `deviceErrors=0`；D3D12 Debug Layer + NVRHI validation / Vulkan NVRHI validation 零报错。
+- ✅ 同一份 `model.slang` 编出 `model.{vs,ps}.{spv,dxil}` 四产物；SPIR-V binding 实测 `{256}`（vs）、`{0,128,256}`（ps），全部 descriptor set 0，与 NVRHI 默认 offset 对齐；DXIL 用 `vsMain/psMain`、SPIR-V 用 `main`（沿用 M0.3 已固化的坑）。
+- ✅ 截图证据：`docs/screenshots/m0.4-{dx12,vulkan}.png`、`m0.4-*-cull-{back,none}-inner.png`、`m0.4-*-resize.png(.before.png)`。
+
+**踩坑情况**
+1. **首帧 Segmentation fault（退出 139，无任何报错日志）** → 现象：删掉 M0.3 的 `initTriangle()` 后，第一次 `renderFrame` 就崩。根因：`frameFence_` 的 `assign()` 原本写在被删掉的 `initTriangle()` 里，而 `renderFrame` 在 `ensurePipeline()` **之前**就按 swapchain slot 读 `frameFence_[index]`，空 vector 越界。处理：把 framebuffer/fence 表初始化搬进 `createTargets()`（init 与 resize 都经过），代码注释写明顺序约束。定位方式是分段日志（最终定位到「`[dbg] renderFrame enter` 之后、`ensurePipeline` 内第一条日志之前」）。
+2. **剔除方向判反：cull=back 显示碗状内壁、cull=none 才是完整正脸** → 根因：glTF 外表面 CCW，叠加 Slang 目标与 NVRHI Vulkan 视口换算后，外表面被判成 back-face；`RasterState::frontCounterClockwise` 默认 false 不对。处理：两套 pipeline 都 `setFrontCounterClockwise(true)`，两后端一致。另把相机最小距离 1.8 → 0.45，允许滚轮钻进模型内部——闭合曲面从外部看不出剔除差异，只有从内部看 `cull=back`（全空）vs `cull=none`（内壁）才有「能亲眼看到」的对照。
+3. **SPIR-V 资源绑定与 NVRHI 对不上 + slangc `E39029` 警告** → 根因：Vulkan 没有 b/t/s 三套命名空间，NVRHI 默认 `VulkanBindingOffsets` 把 slot 映射到 SRV 0 / Sampler 128 / CB 256；`register(t0)` 又没给 `-fvk-t-shift` 触发警告。处理：SPIR-V 命令统一加三个 shift（对无资源的 `triangle.slang` 无影响）；自写 SPIR-V 解析器 dump `OpDecorate Binding` 逐个核对后再写渲染代码。规范已固化到 `docs/SHADER-CONVENTIONS.md` §2.5。
+4. **`FrameParams` 不能整块塞进 cbuffer** → 根因：C++ 侧 `FrameParams` 尾部有 `bool cullBack`，sizeof 164，而 shader cbuffer 只要前 160 字节；直接 `writeBuffer(&params, sizeof(params))` 会越界。处理：定义纯 POD `SceneConstants`（`static_assert(sizeof == 160)`），`Scene::draw` 里逐段 `memcpy` 四个数组，剔除开关只用于选 pipeline。
+5. **官方 Suzanne 贴图太暗，看起来像「没贴图的灰模型」** → 根因：`Suzanne_BaseColor.png` 本身是中灰（只有眼睛是黄色）。处理：`model.slang` 乘 2.2 曝光并用 `min(...,1)` 钳制，截图里皮毛细节和黄色眼睛可见；正式色彩管理（sRGB）留到后续阶段，已写进文档局限。
+6. **相机 selftest 假失败（10/11）** → 根因：自检用 `640/360` 与 `16/9` 两个 aspect 期望矩阵不同，但 float 下两者数值相同，`differs()` 永远为 false。处理：改成 `1.0f` aspect 对照，非法 aspect 检查随之调整。
+7. **官方仓库没有现成 `Suzanne.glb`** → 现象：直接下 `glTF-Binary/Suzanne.glb` 两个仓库路径都 404；只有 glTF 三件套 + 2 张 PNG。处理：写 `scripts/pack-suzanne-glb.py` 把 bin 与图片转 bufferView 封装成单文件 GLB（保留原始几何/贴图），运行时只读一个绝对路径，不依赖 CWD。
+8. **Vulkan `recreateSwapchain()` 的 OUT_OF_DATE 分支会留陈旧引用** → 根因：M0.4 新增 depth/framebuffer/pipeline 后，acquire / present 过期时只重建 swapchain 不失效这些对象。处理：`recreateSwapchain()` 统一 `scene_.invalidatePipelines()` + 清 framebuffer/depth，覆盖 resize 与两条 OUT_OF_DATE 路径。
+9. **tinygltf / nlohmann json / stb 头在 `/W4` 下噪音大** → 处理：只在 `scene.cpp` 用 `#pragma warning(push,0)` 包住实现展开，定义 `TINYGLTF_NO_STB_IMAGE_WRITE` 避免与 `png_writer.cpp` 的 `stb_image_write.h` 重复。
+10. **计划写的 push constant / fastgltf 未照搬** → 原因：NVRHI 教程主推 volatile constant buffer（跨 DX12/Vulkan 由 NVRHI 管版本池，比手写 root constants / VkPushConstantRange 更稳）；tinygltf 本机已有、零新依赖。差异已同步写进 `docs/s0/S0-PLAN.md`，不是「无声偏离」。
 
 ---
 

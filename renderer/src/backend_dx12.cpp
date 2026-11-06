@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "scene.hpp"
 
 #if defined(NL_BACKEND_DX12)
 
@@ -142,7 +143,7 @@ public:
         hr = createSwapChain();
         if (FAILED(hr)) { outError = hrMessage("CreateSwapChainForHwnd", hr); return false; }
         if (!createTargets(outError)) return false;
-        if (!initTriangle(outError)) return false;
+        if (!scene_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -162,8 +163,9 @@ public:
         // 反序会让 D3D12 Debug Layer 判定旧 backbuffer 仍被引用，抛 0x87d CORRUPTION。
         device_->waitForIdle();
         device_->runGarbageCollection();
-        pipeline_ = nullptr;
+        scene_.invalidatePipelines();
         for (auto& fb : framebuffers_) fb = nullptr;
+        depth_ = nullptr;
         rhiTargets_.clear();
         nativeTargets_.clear();
         nl::core::log::debug("resize: old targets released");
@@ -181,7 +183,8 @@ public:
         nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
     }
 
-    bool renderFrame(ClearColor color, const char* screenshotPath,
+    bool renderFrame(ClearColor color, const FrameParams& frame,
+                     const char* screenshotPath,
                      std::string& outError) override {
         if (!swapchain_ || !device_) { outError = "renderer not initialized"; return false; }
         const UINT index = swapchain_->GetCurrentBackBufferIndex();
@@ -205,21 +208,14 @@ public:
         cmd->clearTextureFloat(rhiTargets_[index], nvrhi::TextureSubresourceSet(),
                                nvrhi::Color(color.r, color.g, color.b, color.a));
 
-        // ---- M0.3：画一个硬编码三角形 ----
-        if (pipeline_ && index < framebuffers_.size() && framebuffers_[index]) {
-            nvrhi::GraphicsState state;
-            state.setPipeline(pipeline_)
-                  .setFramebuffer(framebuffers_[index])
-                  .addVertexBuffer(nvrhi::VertexBufferBinding()
-                                      .setBuffer(vertexBuffer_)
-                                      .setSlot(0)
-                                      .setOffset(0));
-            state.viewport.addViewportAndScissorRect(
-                nvrhi::Viewport(float(extent_.width), float(extent_.height)));
-            cmd->setGraphicsState(state);
-            nvrhi::DrawArguments args;
-            args.setVertexCount(3);
-            cmd->draw(args);
+        // ---- M0.4：清深度 + 画带贴图的 Suzanne（MVP / 剔除开关来自 FrameParams）----
+        if (depth_) {
+            cmd->clearDepthStencilTexture(depth_, nvrhi::TextureSubresourceSet(),
+                                          true, 1.0f, false, 0);
+        }
+        if (index < framebuffers_.size() && framebuffers_[index] && scene_.ready() && depth_) {
+            scene_.draw(cmd, framebuffers_[index],
+                        nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
         }
 
         nvrhi::StagingTextureHandle staging;
@@ -391,6 +387,23 @@ private:
             rhiTargets_.push_back(handle);
             nativeTargets_.push_back(resource);
         }
+        // frame-in-flight 的 slot fence 表必须在这里初始化：renderFrame 在调用
+        // ensurePipeline() 之前就要按 slot 读它，放在懒建流程里会首帧越界。
+        framebuffers_.assign(rhiTargets_.size(), nullptr);
+        frameFence_.assign(rhiTargets_.size(), 0);
+
+        // M0.4 深度缓冲：随 swapchain 尺寸一起重建，为每个 framebuffer 提供 depth attachment。
+        nvrhi::TextureDesc depthDesc;
+        depthDesc.width = extent_.width;
+        depthDesc.height = extent_.height;
+        depthDesc.format = nvrhi::Format::D32;
+        depthDesc.debugName = "SceneDepth";
+        depthDesc.isRenderTarget = true;
+        depthDesc.initialState = nvrhi::ResourceStates::DepthWrite;
+        depthDesc.keepInitialState = true;
+        depthDesc.setClearValue(nvrhi::Color(1.0f));
+        depth_ = device_->createTexture(depthDesc);
+        if (!depth_) { outError = "createTexture failed for depth buffer"; return false; }
         return true;
     }
 
@@ -400,10 +413,10 @@ private:
             device_->waitForIdle();
             device_->runGarbageCollection();
         }
-        // 释放三角形资源（NVRHI 句柄，device 仍存活）
-        vsShader_ = nullptr; psShader_ = nullptr; vertexBuffer_ = nullptr;
-        inputLayout_ = nullptr; pipeline_ = nullptr;
+        // M0.4：场景资源（含 binding set / pipeline）必须在 device 仍存活时释放。
+        scene_.shutdown();
         for (auto& fb : framebuffers_) fb = nullptr;
+        depth_ = nullptr;
         rhiTargets_.clear();
         nativeTargets_.clear();
         device_.Reset();
@@ -420,9 +433,7 @@ private:
         if (fenceEvent_) { CloseHandle(fenceEvent_); fenceEvent_ = nullptr; }
     }
 
-    // M0.3：加载 Slang 双后端字节码 + 建三角形资源（shader / 顶点 buffer / input layout）。
-    bool initTriangle(std::string& outError);
-    // 懒建 framebuffer + graphics pipeline（pipeline 绑定 backbuffer 格式，resize 后失效重建）。
+    // M0.4：懒建 framebuffer（color + depth）与两套 pipeline（开/关背面剔除）。
     void ensurePipeline(UINT index);
 
     HWND hwnd_ = nullptr;
@@ -444,90 +455,12 @@ private:
     nvrhi::DeviceHandle device_;
     std::vector<nvrhi::TextureHandle> rhiTargets_;
 
-    // ---- M0.3 三角形资源 ----
-    nvrhi::ShaderHandle              vsShader_;
-    nvrhi::ShaderHandle              psShader_;
-    nvrhi::BufferHandle              vertexBuffer_;
-    nvrhi::InputLayoutHandle         inputLayout_;
-    nvrhi::GraphicsPipelineHandle    pipeline_;
+    // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
+    Scene                                 scene_;
+    nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
-    std::vector<UINT64>              frameFence_;          // frame-in-flight=2 同步安全网
+    std::vector<UINT64>                   frameFence_;     // frame-in-flight=2 同步安全网
 };
-
-    bool Dx12Backend::initTriangle(std::string& outError) {
-        // 按后端选字节码后缀：DX12 用 DXIL（Vulkan 用 SPIR-V，见 Vulkan 后端同款逻辑）。
-        const char* suffix =
-#if defined(NL_BACKEND_DX12)
-            "dxil";
-#else
-            "spv";
-#endif
-
-        auto path = [suffix](const char* stage) {
-            return std::string(NL_SHADER_DIR) + "/triangle." + stage + "." + suffix;
-        };
-
-        std::vector<uint8_t> vsBlob, psBlob;
-        if (!readFileBytes(path("vs").c_str(), vsBlob) ||
-            !readFileBytes(path("ps").c_str(), psBlob)) {
-            outError = std::string("failed to load compiled triangle shader (") +
-                       suffix + ") from " NL_SHADER_DIR;
-            return false;
-        }
-
-        nvrhi::ShaderDesc vsDesc;
-        vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("vsMain");
-        nvrhi::ShaderDesc psDesc;
-        psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("psMain");
-        vsShader_ = device_->createShader(vsDesc, vsBlob.data(), vsBlob.size());
-        psShader_ = device_->createShader(psDesc, psBlob.data(), psBlob.size());
-        if (!vsShader_ || !psShader_) {
-            outError = "createShader failed for triangle shaders";
-            return false;
-        }
-
-        // 硬编码三角形顶点：3 个顶点，position + color。
-        struct TriV { float px, py, pz, cr, cg, cb; };
-        static const TriV verts[3] = {
-            { 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f },  // 顶，红
-            { 0.5f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f },  // 右下，绿
-            {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f },  // 左下，蓝
-        };
-
-        nvrhi::BufferDesc vbDesc;
-        vbDesc.byteSize = sizeof(verts);
-        vbDesc.isVertexBuffer = true;
-        vbDesc.debugName = "TriangleVB";
-        vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
-        vertexBuffer_ = device_->createBuffer(vbDesc);
-        if (!vertexBuffer_) { outError = "createBuffer failed for triangle VB"; return false; }
-
-        // 在一条 cmd 里把顶点数据上传进 buffer（照 Donut vertex_buffer 写法）。
-        nvrhi::CommandListHandle upload = device_->createCommandList();
-        upload->open();
-        upload->beginTrackingBufferState(vertexBuffer_, nvrhi::ResourceStates::CopyDest);
-        upload->writeBuffer(vertexBuffer_, verts, sizeof(verts));
-        upload->setPermanentBufferState(vertexBuffer_, nvrhi::ResourceStates::VertexBuffer);
-        upload->close();
-        device_->executeCommandList(upload);
-
-        nvrhi::VertexAttributeDesc attrs[2] = {
-            nvrhi::VertexAttributeDesc().setName("POSITION")
-                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0)
-                .setBufferIndex(0).setElementStride(sizeof(TriV)),
-            nvrhi::VertexAttributeDesc().setName("COLOR")
-                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(12)
-                .setBufferIndex(0).setElementStride(sizeof(TriV)),
-        };
-        inputLayout_ = device_->createInputLayout(attrs, 2, vsShader_);
-        if (!inputLayout_) { outError = "createInputLayout failed"; return false; }
-
-        framebuffers_.assign(rhiTargets_.size(), nullptr);
-        frameFence_.assign(rhiTargets_.size(), 0);
-
-        nl::core::log::info("M0.3 triangle resources ready (", suffix, ")");
-        return true;
-    }
 
     void Dx12Backend::ensurePipeline(UINT index) {
         if (framebuffers_.size() != rhiTargets_.size())
@@ -535,23 +468,18 @@ private:
         if (frameFence_.size() != rhiTargets_.size())
             frameFence_.assign(rhiTargets_.size(), 0);
 
-        if (index < framebuffers_.size() && !framebuffers_[index]) {
+        if (index < framebuffers_.size() && !framebuffers_[index] && depth_) {
             nvrhi::FramebufferDesc fbDesc;
             fbDesc.addColorAttachment(rhiTargets_[index]);
+            fbDesc.setDepthAttachment(depth_);
             framebuffers_[index] = device_->createFramebuffer(fbDesc);
         }
-        // pipeline 绑定 backbuffer 格式（所有 slot 同格式），建一次即可；resize 后失效重建。
-        if (!pipeline_ && !framebuffers_.empty() && framebuffers_[0]) {
-            nvrhi::GraphicsPipelineDesc psoDesc;
-            psoDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
-                   .setInputLayout(inputLayout_)
-                   .setVertexShader(vsShader_)
-                   .setFragmentShader(psShader_);
-            psoDesc.renderState.depthStencilState.depthTestEnable = false;
-            nvrhi::FramebufferDesc fbDesc;
-            fbDesc.addColorAttachment(rhiTargets_[0]);
-            nvrhi::FramebufferInfo fbInfo(fbDesc);
-            pipeline_ = device_->createGraphicsPipeline(psoDesc, fbInfo);
+        // pipeline 绑定 framebuffer 格式（color + depth），建一次即可；resize 后由
+        // scene_.invalidatePipelines() 触发重建。两套分别对应开/关背面剔除。
+        if (!scene_.ready() && !framebuffers_.empty() && framebuffers_[0]) {
+            std::string err;
+            if (!scene_.ensurePipelines(device_, framebuffers_[0]->getFramebufferInfo(), err))
+                nl::core::log::deviceError("DX12", err);
         }
     }
 

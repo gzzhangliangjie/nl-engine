@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem M0.2 one-shot configure + build + selftest for one backend.
+rem S0 one-shot configure + build + selftest for one backend (stage-neutral; filename kept for history).
 rem Usage: scripts\build-m0.2.bat DX12   (or VULKAN)
 rem NMake generator is mandatory: the VS generator breaks when HTTPS_PROXY and
 rem https_proxy both exist (case-insensitive Hashtable collision in MSBuild).
@@ -39,5 +39,5 @@ echo === selftest ===
 if errorlevel 1 exit /b 1
 
 echo.
-echo M0.2 BUILD OK [%BACKEND%]: %BUILDDIR%\viewer.exe
+echo M0.4 BUILD OK [%BACKEND%]: %BUILDDIR%\viewer.exe
 exit /b 0

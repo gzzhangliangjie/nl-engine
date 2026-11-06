@@ -1,4 +1,5 @@
 #include "nl/core/assert.hpp"
+#include "nl/core/camera.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/window.hpp"
 #include "nl/renderer/renderer.hpp"
@@ -41,12 +42,16 @@ struct Options {
     bool screenshot = false;
     bool sizeSet    = false;
     bool resize     = false;
+    bool cullBack   = true;   // C 键 / --cull 控制；关掉能看到 Suzanne 内壁
     int  width      = 1280;
     int  height     = 720;
     int  resizeWidth  = 0;
     int  resizeHeight = 0;
     int  color      = 0;
     int  frames     = 8;
+    float yawDeg    = 12.0f;  // 与 OrbitCamera 默认一致，默认正脸、截图可复现
+    float pitchDeg  = 9.2f;
+    float distance  = 4.2f;
     std::string screenshotPath;
 };
 
@@ -57,7 +62,16 @@ Options parseArgs(int argc, char** argv) {
         if (a == "--selftest") o.selftest = true;
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
-        else if (a == "--screenshot" && i + 1 < argc) {
+        else if (a == "--cull" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            o.cullBack = (v != "none" && v != "off" && v != "0");
+        } else if (a == "--yaw" && i + 1 < argc) {
+            o.yawDeg = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--pitch" && i + 1 < argc) {
+            o.pitchDeg = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--dist" && i + 1 < argc) {
+            o.distance = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
         } else if (a == "--color" && i + 1 < argc) {
@@ -76,7 +90,7 @@ Options parseArgs(int argc, char** argv) {
             }
         }
     }
-    // 截图模式默认小窗口：两后端 PNG 逐字节对照，跑得快、文件小。
+    // 截图模式默认小窗口：两后端 PNG 逐像素对照，跑得快、文件小。
     if (o.screenshot && !o.sizeSet) { o.width = 640; o.height = 360; }
     if (o.frames < 1) o.frames = 1;
     return o;
@@ -84,7 +98,7 @@ Options parseArgs(int argc, char** argv) {
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.2 selftest\n";
+    std::cout << "nl-engine M0.4 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -110,13 +124,18 @@ int runSelfTest() {
     check(tripped, "assert failure captured");
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
+    check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
 
     const auto st = nl::renderer::status();
     std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n"
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.3") != nullptr, "M0.3 stage reported");
+    check(std::strstr(st.stage, "M0.4") != nullptr, "M0.4 stage reported");
+
+    nl::renderer::FrameParams fp;
+    check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
+          "frame params (MVP/cull/light) POD defaults");
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
     auto bad = nl::renderer::Renderer::create(nullptr, {640, 360}, false);
@@ -137,14 +156,15 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
     return true;
 }
 
-// 可见用例：窗口清屏色按空格切换、F12/--screenshot 真回读 GPU 像素写 PNG、缩放不黑屏。
+// 可见用例：带贴图 Suzanne + 轨道相机（拖动/滚轮）+ C 键背面剔除 +
+// F12/--screenshot 真回读 GPU 像素写 PNG + resize 不黑屏。
 int runWindow(const Options& o) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
-    desc.title  = "nl-engine | M0.2 | starting...";
+    desc.title  = "nl-engine | M0.4 | starting...";
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
@@ -162,15 +182,17 @@ int runWindow(const Options& o) {
         return 1;
     }
 
+    nl::core::OrbitCamera camera;
+    camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
+    camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
+    bool cullBack = o.cullBack;
+
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
     nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
     nl::core::log::info("debug layer: ", info.debugLayer,
                         " | active=", info.debugLayerActive ? "yes" : "no");
-    nl::core::log::info("features: rayQuery=", info.rayQuery ? 1 : 0,
-                        " shaderInt64Atomics=", info.shaderInt64Atomics ? 1 : 0,
-                        " indirectDraw=", info.indirectDraw ? 1 : 0);
-    nl::core::log::info("case: SPACE changes clear color, F12 saves PNG, resize must not go black");
+    nl::core::log::info("case: drag=orbit, wheel=zoom, C=culling, R=reset, SPACE=clear, F12=PNG");
 
     if (o.screenshot) {
         std::string err;
@@ -179,7 +201,8 @@ int runWindow(const Options& o) {
             return 1;
         }
         nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
-                            std::filesystem::absolute(o.screenshotPath).string());
+                            std::filesystem::absolute(o.screenshotPath).string(),
+                            " | cull=", cullBack ? "back" : "none");
     }
 
     using clock = std::chrono::steady_clock;
@@ -201,12 +224,24 @@ int runWindow(const Options& o) {
             colorIndex = (colorIndex + 1) % kColorCount;
             nl::core::log::info("clear color -> ", colorIndex);
         }
+        if (window.keyPressed(nl::core::Key::C)) {
+            cullBack = !cullBack;
+            nl::core::log::info("back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
+        }
+        if (window.keyPressed(nl::core::Key::R)) {
+            camera.reset();
+            nl::core::log::info("camera reset");
+        }
+        float dx = 0.0f, dy = 0.0f, scroll = 0.0f;
+        window.consumeMouse(dx, dy, scroll);
+        if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
+        if (scroll != 0.0f) camera.zoom(scroll);
 
         const char* capturePath = nullptr;
         std::string manualPath;
         std::string beforePath;
         if (window.keyPressed(nl::core::Key::F12)) {
-            manualPath = "docs/screenshots/m0.2-" + std::string(st.backend) + "-manual.png";
+            manualPath = "docs/screenshots/m0.4-" + std::string(st.backend) + "-manual.png";
             std::string err;
             if (prepareScreenshotDirs(manualPath, err)) capturePath = manualPath.c_str();
         }
@@ -223,6 +258,7 @@ int runWindow(const Options& o) {
         if (window.consumeResize(resized) && resized.width > 0 && resized.height > 0) {
             renderer->resize({static_cast<std::uint32_t>(resized.width),
                               static_cast<std::uint32_t>(resized.height)});
+            camera.setAspect(static_cast<float>(resized.width) / static_cast<float>(resized.height));
         }
         if (resizeFrame != 0 && frame + 1 == resizeFrame) {
             window.setSize(o.resizeWidth, o.resizeHeight);
@@ -234,7 +270,14 @@ int runWindow(const Options& o) {
         last = now;
         ++frame;
 
-        if (!renderer->renderFrame(kColors[colorIndex], capturePath)) {
+        nl::renderer::FrameParams fp;
+        const auto vp = camera.viewProjection();
+        const auto model = camera.model();
+        std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
+        std::memcpy(fp.model, model.m, sizeof(fp.model));
+        fp.cullBack = cullBack;
+
+        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -248,10 +291,13 @@ int runWindow(const Options& o) {
         if (frame % 15 == 0 || o.screenshot) {
             const auto e = renderer->extent();
             std::ostringstream title;
-            title << "nl-engine | M0.2 | " << st.backend
+            title << "nl-engine | M0.4 | " << st.backend
                   << " | frame " << frame
                   << " | " << std::fixed << std::setprecision(1) << dtMs << " ms"
-                  << " | color " << colorIndex
+                  << " | yaw " << std::setprecision(1) << camera.yawDegrees()
+                  << " pitch " << camera.pitchDegrees()
+                  << " dist " << camera.distance()
+                  << " | cull " << (cullBack ? "back" : "none")
                   << " | " << e.width << "x" << e.height;
             window.setTitle(title.str());
         }
@@ -276,14 +322,18 @@ int runWindow(const Options& o) {
 }
 
 void printUsage() {
-    std::cout << "nl-engine viewer (M0.2)  backend=" << nl::renderer::status().backend << '\n'
-              << "  viewer.exe                         window; ESC quit, SPACE color, F12 PNG\n"
+    std::cout << "nl-engine viewer (M0.4)  backend=" << nl::renderer::status().backend << '\n'
+              << "  viewer.exe                         textured Suzanne; drag=orbit, wheel=zoom\n"
+              << "                                     C=culling on/off, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
+              << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
+              << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
+              << "  viewer.exe --dist F                camera distance (default 4.2)\n"
               << "  viewer.exe --no-debug              disable current backend debug layer\n"
               << "  viewer.exe --help                  this text\n"
               << "  backend at configure time: -DNL_GRAPHICS_BACKEND=DX12|VULKAN\n";

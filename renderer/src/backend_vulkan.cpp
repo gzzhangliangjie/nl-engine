@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "scene.hpp"
 
 #if defined(NL_BACKEND_VULKAN)
 
@@ -88,7 +89,7 @@ public:
 
         if (!createSwapchain(outError)) return false;
         if (!createTargets(outError)) return false;
-        if (!initTriangle(outError)) return false;
+        if (!scene_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -105,8 +106,9 @@ public:
         // 最后才销毁旧 swapchain 重建。反序会让 backbuffer 在途引用未释放。
         nvrhiDevice_->waitForIdle();
         nvrhiDevice_->runGarbageCollection();
-        pipeline_ = nullptr;
+        scene_.invalidatePipelines();
         for (auto& fb : framebuffers_) fb = nullptr;
+        depth_ = nullptr;
         rhiTargets_.clear();
         nativeTargets_.clear();
 
@@ -120,7 +122,8 @@ public:
         nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
     }
 
-    bool renderFrame(ClearColor color, const char* screenshotPath,
+    bool renderFrame(ClearColor color, const FrameParams& frame,
+                     const char* screenshotPath,
                      std::string& outError) override {
         if (!nvrhiDevice_ || !vulkanSwapchain_) { outError = "renderer not initialized"; return false; }
 
@@ -148,21 +151,15 @@ public:
         cmd->clearTextureFloat(rhiTargets_[vulkanImageIndex_], nvrhi::TextureSubresourceSet(),
                                nvrhi::Color(color.r, color.g, color.b, color.a));
 
-        // ---- M0.3：画一个硬编码三角形 ----
-        if (pipeline_ && vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_]) {
-            nvrhi::GraphicsState state;
-            state.setPipeline(pipeline_)
-                  .setFramebuffer(framebuffers_[vulkanImageIndex_])
-                  .addVertexBuffer(nvrhi::VertexBufferBinding()
-                                      .setBuffer(vertexBuffer_)
-                                      .setSlot(0)
-                                      .setOffset(0));
-            state.viewport.addViewportAndScissorRect(
-                nvrhi::Viewport(float(extent_.width), float(extent_.height)));
-            cmd->setGraphicsState(state);
-            nvrhi::DrawArguments args;
-            args.setVertexCount(3);
-            cmd->draw(args);
+        // ---- M0.4：清深度 + 画带贴图的 Suzanne（MVP / 剔除开关来自 FrameParams）----
+        if (depth_) {
+            cmd->clearDepthStencilTexture(depth_, nvrhi::TextureSubresourceSet(),
+                                          true, 1.0f, false, 0);
+        }
+        if (vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_]
+            && scene_.ready() && depth_) {
+            scene_.draw(cmd, framebuffers_[vulkanImageIndex_],
+                        nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
         }
 
         nvrhi::StagingTextureHandle staging;
@@ -516,6 +513,11 @@ private:
 
     bool recreateSwapchain() {
         vulkanSafeWait();
+        // acquire / present 的 OUT_OF_DATE 也会走这里：旧的 framebuffer 与 depth
+        // 必须一并失效，否则 createTargets() 之后还在引用已销毁的 swapchain image。
+        scene_.invalidatePipelines();
+        for (auto& fb : framebuffers_) fb = nullptr;
+        depth_ = nullptr;
         if (vulkanSwapchain_) {
             rhiTargets_.clear();
             nativeTargets_.clear();
@@ -555,6 +557,19 @@ private:
             rhiTargets_.push_back(handle);
             nativeTargets_.push_back(img);
         }
+
+        // M0.4 深度缓冲：随 swapchain 尺寸一起重建，为每个 framebuffer 提供 depth attachment。
+        nvrhi::TextureDesc depthDesc;
+        depthDesc.width = extent_.width;
+        depthDesc.height = extent_.height;
+        depthDesc.format = nvrhi::Format::D32;
+        depthDesc.debugName = "SceneDepth";
+        depthDesc.isRenderTarget = true;
+        depthDesc.initialState = nvrhi::ResourceStates::DepthWrite;
+        depthDesc.keepInitialState = true;
+        depthDesc.setClearValue(nvrhi::Color(1.0f));
+        depth_ = nvrhiDevice_->createTexture(depthDesc);
+        if (!depth_) { outError = "createTexture failed for depth buffer"; return false; }
         return true;
     }
 
@@ -584,10 +599,10 @@ private:
 
     void shutdown() {
         if (vulkanDevice_) nvrhiDevice_->waitForIdle();
-        // 释放三角形资源（NVRHI 句柄，device 仍存活）
-        vsShader_ = nullptr; psShader_ = nullptr; vertexBuffer_ = nullptr;
-        inputLayout_ = nullptr; pipeline_ = nullptr;
+        // M0.4：场景资源（含 binding set / pipeline）必须在 device 仍存活时释放。
+        scene_.shutdown();
         for (auto& fb : framebuffers_) fb = nullptr;
+        depth_ = nullptr;
         rhiTargets_.clear();
         nativeTargets_.clear();
 
@@ -615,9 +630,7 @@ private:
         // 进程退出时的静态析构还会用到；卸载会导致退出段错误。让它随进程生命周期存在即可。
     }
 
-    // M0.3：加载 Slang 双后端字节码 + 建三角形资源（shader / 顶点 buffer / input layout）。
-    bool initTriangle(std::string& outError);
-    // 懒建 framebuffer + graphics pipeline（pipeline 绑定 backbuffer 格式，resize 后失效重建）。
+    // M0.4：懒建 framebuffer（color + depth）与两套 pipeline（开/关背面剔除）。
     void ensurePipeline(uint32_t index);
 
     HWND hwnd_ = nullptr;
@@ -648,12 +661,9 @@ private:
     std::vector<nvrhi::TextureHandle> rhiTargets_;
     std::vector<VkImage> nativeTargets_;
 
-    // ---- M0.3 三角形资源 ----
-    nvrhi::ShaderHandle              vsShader_;
-    nvrhi::ShaderHandle              psShader_;
-    nvrhi::BufferHandle              vertexBuffer_;
-    nvrhi::InputLayoutHandle         inputLayout_;
-    nvrhi::GraphicsPipelineHandle    pipeline_;
+    // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
+    Scene                                 scene_;
+    nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
 
     // Vulkan loader 模块句柄（运行时加载，避免依赖 vulkan-1.lib 导入库）
@@ -683,95 +693,21 @@ private:
     PFN_vkDestroyDevice       vkDestroyDevice_ = nullptr;
 };
 
-    bool VkBackend::initTriangle(std::string& outError) {
-        // 按后端选字节码后缀：DX12 用 DXIL，Vulkan 用 SPIR-V。
-        const char* suffix =
-#if defined(NL_BACKEND_DX12)
-            "dxil";
-#else
-            "spv";
-#endif
-        auto path = [suffix](const char* stage) {
-            return std::string(NL_SHADER_DIR) + "/triangle." + stage + "." + suffix;
-        };
-        std::vector<uint8_t> vsBlob, psBlob;
-        if (!readFileBytes(path("vs").c_str(), vsBlob) ||
-            !readFileBytes(path("ps").c_str(), psBlob)) {
-            outError = std::string("failed to load compiled triangle shader (") +
-                       suffix + ") from " NL_SHADER_DIR;
-            return false;
-        }
-        nvrhi::ShaderDesc vsDesc;
-        // Slang 把 SPIR-V 入口点固定命名为 "main"（与 -entry 无关），DXIL 才是 vsMain。
-        vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
-        nvrhi::ShaderDesc psDesc;
-        psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
-        vsShader_ = nvrhiDevice_->createShader(vsDesc, vsBlob.data(), vsBlob.size());
-        psShader_ = nvrhiDevice_->createShader(psDesc, psBlob.data(), psBlob.size());
-        if (!vsShader_ || !psShader_) {
-            outError = "createShader failed for triangle shaders";
-            return false;
-        }
-
-        struct TriV { float px, py, pz, cr, cg, cb; };
-        static const TriV verts[3] = {
-            { 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f },  // 顶，红
-            { 0.5f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f },  // 右下，绿
-            {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f },  // 左下，蓝
-        };
-        nvrhi::BufferDesc vbDesc;
-        vbDesc.byteSize = sizeof(verts);
-        vbDesc.isVertexBuffer = true;
-        vbDesc.debugName = "TriangleVB";
-        vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
-        vertexBuffer_ = nvrhiDevice_->createBuffer(vbDesc);
-        if (!vertexBuffer_) { outError = "createBuffer failed for triangle VB"; return false; }
-
-        nvrhi::CommandListHandle upload = nvrhiDevice_->createCommandList();
-        upload->open();
-        upload->beginTrackingBufferState(vertexBuffer_, nvrhi::ResourceStates::CopyDest);
-        upload->writeBuffer(vertexBuffer_, verts, sizeof(verts));
-        upload->setPermanentBufferState(vertexBuffer_, nvrhi::ResourceStates::VertexBuffer);
-        upload->close();
-        nvrhiDevice_->executeCommandList(upload);
-
-        nvrhi::VertexAttributeDesc attrs[2] = {
-            nvrhi::VertexAttributeDesc().setName("POSITION")
-                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0)
-                .setBufferIndex(0).setElementStride(sizeof(TriV)),
-            nvrhi::VertexAttributeDesc().setName("COLOR")
-                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(12)
-                .setBufferIndex(0).setElementStride(sizeof(TriV)),
-        };
-        inputLayout_ = nvrhiDevice_->createInputLayout(attrs, 2, vsShader_);
-        if (!inputLayout_) { outError = "createInputLayout failed"; return false; }
-
-        framebuffers_.assign(rhiTargets_.size(), nullptr);
-
-        nl::core::log::info("M0.3 triangle resources ready (", suffix, ")");
-        return true;
-    }
-
     void VkBackend::ensurePipeline(uint32_t index) {
         if (framebuffers_.size() != rhiTargets_.size())
             framebuffers_.assign(rhiTargets_.size(), nullptr);
-        if (index < framebuffers_.size() && !framebuffers_[index]) {
+        if (index < framebuffers_.size() && !framebuffers_[index] && depth_) {
             nvrhi::FramebufferDesc fbDesc;
             fbDesc.addColorAttachment(rhiTargets_[index]);
+            fbDesc.setDepthAttachment(depth_);
             framebuffers_[index] = nvrhiDevice_->createFramebuffer(fbDesc);
         }
-        // pipeline 绑定 backbuffer 格式（所有 slot 同格式），建一次即可；resize 后失效重建。
-        if (!pipeline_ && !framebuffers_.empty() && framebuffers_[0]) {
-            nvrhi::GraphicsPipelineDesc psoDesc;
-            psoDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
-                   .setInputLayout(inputLayout_)
-                   .setVertexShader(vsShader_)
-                   .setFragmentShader(psShader_);
-            psoDesc.renderState.depthStencilState.depthTestEnable = false;
-            nvrhi::FramebufferDesc fbDesc;
-            fbDesc.addColorAttachment(rhiTargets_[0]);
-            nvrhi::FramebufferInfo fbInfo(fbDesc);
-            pipeline_ = nvrhiDevice_->createGraphicsPipeline(psoDesc, fbInfo);
+        // pipeline 绑定 framebuffer 格式（color + depth），建一次即可；resize 后由
+        // scene_.invalidatePipelines() 触发重建。两套分别对应开/关背面剔除。
+        if (!scene_.ready() && !framebuffers_.empty() && framebuffers_[0]) {
+            std::string err;
+            if (!scene_.ensurePipelines(nvrhiDevice_, framebuffers_[0]->getFramebufferInfo(), err))
+                nl::core::log::deviceError("Vulkan", err);
         }
     }
 

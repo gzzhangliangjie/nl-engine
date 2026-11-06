@@ -34,8 +34,9 @@ public:
                       std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
-    // 一帧：clear → （可选）回读 GPU 像素写 PNG → present
-    virtual bool renderFrame(ClearColor color, const char* screenshotPath,
+    // 一帧：clear → 模型绘制（MVP / cull）→（可选）回读 GPU 像素写 PNG → present
+    virtual bool renderFrame(ClearColor color, const FrameParams& frame,
+                             const char* screenshotPath,
                              std::string& outError) = 0;
 
     // 调试层消息转日志；返回新增设备错误数
