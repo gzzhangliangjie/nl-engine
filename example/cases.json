@@ -26,7 +26,9 @@
           "name": "自检 7/7",
           "kind": "selftest",
           "note": "断言框架、日志、窗口描述符、编译期后端开关全部走一遍。",
-          "args": ["--selftest"],
+          "args": [
+            "--selftest"
+          ],
           "expectLog": "SELFTEST PASS",
           "command": "viewer.exe --selftest",
           "script": "example/m0.1/run.bat selftest"
@@ -68,7 +70,12 @@
             "dx12": "example/m0.2/clear-dx12.png",
             "vulkan": "example/m0.2/clear-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8",
           "script": "example/m0.2/run.bat clear"
         },
@@ -85,7 +92,14 @@
             "dx12": "example/m0.2/resize-dx12-before.png",
             "vulkan": "example/m0.2/resize-vulkan-before.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--resize", "1024x768"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--resize",
+            "1024x768"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8 --resize 1024x768",
           "script": "example/m0.2/run.bat resize"
         },
@@ -98,9 +112,26 @@
             "dx12": "example/m0.2/color-dx12.png",
             "vulkan": "example/m0.2/color-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "4", "--color", "{color}"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--color",
+            "{color}"
+          ],
           "params": {
-            "color": { "type": "select", "label": "清屏色", "default": "1", "options": ["0", "1", "2", "3"] }
+            "color": {
+              "type": "select",
+              "label": "清屏色",
+              "default": "1",
+              "options": [
+                "0",
+                "1",
+                "2",
+                "3"
+              ]
+            }
           },
           "command": "viewer.exe --screenshot <out.png> --frames 4 --color 1",
           "script": "example/m0.2/run.bat color"
@@ -133,7 +164,12 @@
             "dx12": "example/m0.3/triangle-dx12.png",
             "vulkan": "example/m0.3/triangle-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8",
           "script": "example/m0.3/run.bat triangle"
         },
@@ -142,7 +178,9 @@
           "name": "自检 9/9",
           "kind": "selftest",
           "note": "两后端字节码魔数、输入布局、日志断言一起过。",
-          "args": ["--selftest"],
+          "args": [
+            "--selftest"
+          ],
           "expectLog": "SELFTEST PASS",
           "command": "viewer.exe --selftest",
           "script": "example/m0.3/run.bat selftest"
@@ -175,12 +213,54 @@
             "dx12": "example/m0.4/suzanne-dx12.png",
             "vulkan": "example/m0.4/suzanne-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--yaw", "{yaw}", "--pitch", "{pitch}", "--dist", "{dist}", "--cull", "{cull}"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--yaw",
+            "{yaw}",
+            "--pitch",
+            "{pitch}",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "{cull}"
+          ],
           "params": {
-            "yaw":   { "type": "range", "label": "水平角 yaw", "min": -180, "max": 180, "step": 1, "default": "12" },
-            "pitch": { "type": "range", "label": "俯仰 pitch", "min": -80, "max": 80, "step": 1, "default": "9" },
-            "dist":  { "type": "range", "label": "距离 dist", "min": 0.45, "max": 12, "step": 0.05, "default": "4.2" },
-            "cull":  { "type": "select", "label": "背面剔除", "default": "back", "options": ["back", "none"] }
+            "yaw": {
+              "type": "range",
+              "label": "水平角 yaw",
+              "min": -180,
+              "max": 180,
+              "step": 1,
+              "default": "12"
+            },
+            "pitch": {
+              "type": "range",
+              "label": "俯仰 pitch",
+              "min": -80,
+              "max": 80,
+              "step": 1,
+              "default": "9"
+            },
+            "dist": {
+              "type": "range",
+              "label": "距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            },
+            "cull": {
+              "type": "select",
+              "label": "背面剔除",
+              "default": "back",
+              "options": [
+                "back",
+                "none"
+              ]
+            }
           },
           "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --cull back",
           "script": "example/m0.4/run.bat suzanne"
@@ -194,9 +274,30 @@
             "dx12": "example/m0.4/inner-dx12.png",
             "vulkan": "example/m0.4/inner-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "4", "--yaw", "12", "--pitch", "9", "--dist", "{dist}", "--cull", "none"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "none"
+          ],
           "params": {
-            "dist": { "type": "select", "label": "相机距离", "default": "0.6", "options": ["0.6", "4.2"] }
+            "dist": {
+              "type": "select",
+              "label": "相机距离",
+              "default": "0.6",
+              "options": [
+                "0.6",
+                "4.2"
+              ]
+            }
           },
           "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull none",
           "script": "example/m0.4/run.bat inner"
@@ -210,7 +311,20 @@
             "dx12": "example/m0.4/inner-cullback-dx12.png",
             "vulkan": "example/m0.4/inner-cullback-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "4", "--yaw", "12", "--pitch", "9", "--dist", "0.6", "--cull", "back"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "0.6",
+            "--cull",
+            "back"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull back",
           "script": "example/m0.4/run.bat inner"
         },
@@ -227,7 +341,20 @@
             "dx12": "example/m0.4/resize-dx12-before.png",
             "vulkan": "example/m0.4/resize-vulkan-before.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--resize", "1024x768"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--resize",
+            "1024x768"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --resize 1024x768",
           "script": "example/m0.4/run.bat resize"
         },
@@ -236,7 +363,9 @@
           "name": "自检 11/11",
           "kind": "selftest",
           "note": "相机边界、矩阵、输入默认值、渲染器阶段标记一起过。",
-          "args": ["--selftest"],
+          "args": [
+            "--selftest"
+          ],
           "expectLog": "SELFTEST PASS",
           "command": "viewer.exe --selftest",
           "script": "example/m0.4/run.bat selftest"
@@ -270,9 +399,32 @@
             "dx12": "example/m0.5/hud-dx12.png",
             "vulkan": "example/m0.5/hud-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "960x540", "--yaw", "12", "--pitch", "9", "--dist", "{dist}", "--cull", "back"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back"
+          ],
           "params": {
-            "dist": { "type": "range", "label": "相机距离 dist", "min": 0.45, "max": 12, "step": 0.05, "default": "4.2" }
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            }
           },
           "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
           "script": "example/m0.5/run.bat hud"
@@ -286,7 +438,25 @@
             "dx12": "example/m0.5/controls-dx12.png",
             "vulkan": "example/m0.5/controls-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "960x540", "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--cull", "back", "--color", "2"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--color",
+            "2"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
           "script": "example/m0.5/run.bat controls"
         },
@@ -299,7 +469,21 @@
             "dx12": "example/m0.5/nohud-dx12.png",
             "vulkan": "example/m0.5/nohud-vulkan.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--no-hud", "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--cull", "back"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
           "script": "example/m0.5/run.bat nohud"
         },
@@ -316,7 +500,23 @@
             "dx12": "example/m0.5/resize-dx12-before.png",
             "vulkan": "example/m0.5/resize-vulkan-before.png"
           },
-          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "640x360", "--resize", "1024x768", "--yaw", "12", "--pitch", "9", "--dist", "4.2"],
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "640x360",
+            "--resize",
+            "1024x768",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
           "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
           "script": "example/m0.5/run.bat resize"
         },
@@ -325,7 +525,9 @@
           "name": "自检 14/14 + 8 个 shader 产物",
           "kind": "selftest",
           "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
-          "args": ["--selftest"],
+          "args": [
+            "--selftest"
+          ],
           "expectLog": "SELFTEST PASS (14/14)",
           "command": "viewer.exe --selftest",
           "script": "example/m0.5/run.bat selftest"
@@ -335,9 +537,112 @@
           "name": "HUD 控件（交互）",
           "kind": "manual",
           "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
-          "args": ["--mode", "normal", "--hud"],
+          "args": [
+            "--mode",
+            "normal",
+            "--hud"
+          ],
           "command": "viewer.exe --mode normal --hud",
           "script": "example/m0.5/run.bat controls"
+        }
+      ]
+    },
+    {
+      "id": "m0.6",
+      "label": "M0.6",
+      "name": "GPU 帧内计时（NVRHI timestamp query）",
+      "tag": "m0.6",
+      "date": "2026-11-07",
+      "summary": "两后端共享的 GpuTimer 用一对 NVRHI timer query 包住整帧 GPU 命令，异步轮询出真实 GPU 耗时；HUD 在 CPU frame ms 旁新增 GPU ms 行 + gpu ms 曲线，一眼分清 CPU 帧间隔与 GPU 耗时。",
+      "acceptance": [
+        "交互模式两后端均有 'gpu timer resolved' 日志（DX12 0.0369 ms / Vulkan 0.0380 ms，量级合理）",
+        "HUD 并排显示 CPU frame ms 与 GPU ms（NVRHI timer），各自曲线",
+        "--no-hud 完全不建 query，两后端 PNG MD5 仍为 7e528087…（M0.4/M0.5 基线逐字节不变）",
+        "截图回归模式 GPU 样本固定（面板标 capture/replay），PNG 可复现",
+        "selftest 14/14（HUD selftest 覆盖秒→ms 换算与环形游标回绕），ctest 两后端 100%"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "GPU 帧内计时 HUD（双后端）",
+          "kind": "pair",
+          "note": "面板 'GPU x.xx ms (NVRHI timer)' 行 + gpu ms 曲线是 M0.6 新增；timer query 异步轮询天然有 1~2 帧延迟。截图回归模式用固定样本（GPU 0.63 ms），面板标 capture/replay。两张 PNG 必然不同：HUD 里印的 backend / debug layer 按后端不同，3D 部分一致。拖下面的 dist 滑块现场改视角，与基线不同属预期。",
+          "baselines": {
+            "dx12": "example/m0.6/hud-dx12.png",
+            "vulkan": "example/m0.6/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.6/run.bat hud"
+        },
+        {
+          "id": "nohud",
+          "name": "关 HUD：历史基线逐字节不变（零 query）",
+          "kind": "pair",
+          "note": "--no-hud 时 GpuTimer 完全不 ensure/poll/begin/end，M0.1~M0.5 回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4、example/m0.5 相同。",
+          "baselines": {
+            "dx12": "example/m0.6/nohud-dx12.png",
+            "vulkan": "example/m0.6/nohud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.6/run.bat nohud"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（14/14，含 GPU 计时换算）",
+          "kind": "selftest",
+          "note": "模式分发器、HUD 投影 / POD、GPU 秒→毫秒换算与环形游标回绕、以及 model.slang 与 hud.slang 共 8 个产物的魔数，全部机械校验。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (14/14)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.6/run.bat selftest"
         }
       ]
     }

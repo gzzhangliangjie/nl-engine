@@ -54,8 +54,13 @@ struct HudFrame {
     // ---- viewer -> HUD（显示数据）----
     float fps          = 0.0f;
     float frameMs      = 0.0f;
-    float frameMsHistory[120] = {};   // 帧时间曲线样本
+    float frameMsHistory[120] = {};   // CPU 帧间隔曲线样本
     int   frameMsCount = 0;
+    // ---- M0.6：renderer 侧 NVRHI timer query 写回的真实 GPU 耗时 ----
+    float gpuMs = 0.0f;              // 最近一次 resolve 的整帧 GPU 耗时（ms），异步有 1~2 帧延迟
+    float gpuMsHistory[120] = {};    // GPU 耗时曲线样本（viewer 维护）
+    int   gpuMsCount = 0;
+    bool  gpuTimingAvailable = false; // timer query 是否可用 / 已拿到过结果
     bool  deterministic = false;      // 截图回归模式：时序样本固定，画面可复现
     float yawDeg = 0.0f, pitchDeg = 0.0f, distance = 0.0f;
     float displayWidth = 0.0f, displayHeight = 0.0f;

@@ -22,7 +22,9 @@
 - 网络：GitHub 小文件开代理后直连可用，大文件限速 ~12KB/s → gh-proxy 分 8 段并发。
 
 ## 版本
-- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；**`s0-done` = M0.5 + S0 总验收，S0 全部完成，下一步 S1**。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；`s0-done` = M0.5 + S0 总验收，S0 全部完成。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+- **S0 后是「能力补齐版本序列」，一个版本一件事**（2026-11-07 用户确认）：`m0.6` = GPU 帧内计时 ✅ → M0.7 = 高模测试资产生成器（S1 切簇的命门：Suzanne 只有 504 tri 没法演示切簇；程序化生成致密网格 GLB，零网络确定性；vendored meshoptimizer 随此版本作文档级对照基准，不入构建）→ M0.8 = 线框 / 调试着色（normal / UV / 三角形ID）→ M0.9 = 一键全量回归总闸（全部 example 用例 × 双后端）。之后进 S1 切簇。
+- Carrot 实况（2026-11-07 git 实查）：meshoptimizer + meshlet 支持是 **2023-11-25 同一个大提交 `4c100761`** 进的（meshlet → visibility buffer），配套 `asset_tools/fertilizer`；wireframe 在 `engine/render/Pipeline.cpp`；**没有**截图 MD5 回归（只有 googletest），性能靠 tracy + WinPixEventRuntime、无 NVRHI timer query。教训：它把 vendor + 切簇塞一个提交，我们拆版本铺路更稳；M0.9 回归总闸是超它的部分。
 
 ## M0.5 起的 HUD / 模式约定（2026-11-07 实测，改前看 `docs/IMGUI-GUIDE.md`）
 - ImGui 用 vendored **v1.91.9 稳定版**（不要拿本机 Carrot 的 `1.92.7 WIP`，字体系统重构过）；**不用官方 D3D12/Vulkan backend**，统一走自写 `renderer/src/hud.cpp`（`ImDrawData` 摊平成 HudVertex 32 B + R32_UINT + 逐 cmd scissor）。
@@ -35,10 +37,16 @@
 - `--mode` 分发器在 `core/modes.*` + `viewer` 的 `runMode()`：M0.5 只有 `normal`；S1 起每加一个模式只改枚举 / 名字 / case，旧模式保留当对照。未知模式退出 1。
 
 ## 调试与性能工具链（2026-11-07 定，S1~S14 沿用）
-- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（S4 前补，填进 `HudFrame`）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
+- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（**整帧部分已由 M0.6 补掉**，按 pass 拆分排 M0.7 序列之后）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
 - 选 RenderDoc 当主工具是因为**同时覆盖 DX12 + Vulkan**；Nsight 偏 N 卡、PIX 只管 D3D12，退到 L3。工具全在进程外或 NVRHI 抽象层内，不进 CMake、不链接、不读 SDK 路径。
-- **当前 HUD 的 `frame ms` 是 CPU 帧间隔，不是 GPU 耗时**，不能拿它验收 60fps / 性能退化。
-- 本机（2026-11-07）RenderDoc / Nsight / PIX / `renderdoc.dll` **均未安装**；S0 验收不依赖抓帧，台账如实记 ⬜，不虚构结果。详见 `docs/s0/S0-PLAN.md`。
+- **HUD 的 `frame ms` 是 CPU 帧间隔，GPU ms 才是 GPU 耗时**（M0.6 起两者并排显示），验收 60fps / 性能退化看 GPU ms。
+
+## M0.6 GPU 计时约定（2026-11-07 实测，改前看 `docs/s0/M0.6-PLAN.md`）
+- 两后端共享 `renderer/src/gpu_timer.hpp` 的 `GpuTimer`：4 slot 环形 `ITimerQuery`，`ensure()` 懒建（`--no-hud` 零调用）、`poll()` 不阻塞、无空闲 slot 本帧不计时；`begin()` 在 `cmd->open()` 后、`end()` 在 `close()` 前，包住整帧（clear+scene+hud）。
+- **截图确定性关键**：deterministic 模式下 renderer 不写回真实 GPU ms（viewer 已填固定样本 0.63 ms），否则基线 MD5 每次都不同。
+- **基线必须用与 cases.json 用例完全相同的参数生成**：M0.6 基线曾用默认 pitch 9.2 而用例是 `--pitch 9`，展示台回放 baselineMatch=False、16.9 万像素全图级差异，肉眼看还以为是渲染坏了。
+- 面板高度上限 400→460、双曲线 44/34 px：加一行内容就可能裁底，每次改 HUD 布局后 960×540 实拍确认整块面板完整。
+- 首次成功 resolve 落 `gpu timer resolved` 日志（`GpuTimer` 内 `resolvedOnce_`），是交互模式 GPU 计时的机械证据（实测 DX12 0.0369 / Vulkan 0.0380 ms）。
 
 ## M0.4 起的渲染约定（2026-11-07 实测，改动前先看 `docs/SHADER-CONVENTIONS.md`）
 - 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 `nvrhi.h`）；两个 backend 只管 swapchain / depth / framebuffer / present，**不要再在两个后端里各抄一遍 shader 或资源创建**。

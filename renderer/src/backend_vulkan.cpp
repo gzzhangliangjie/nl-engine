@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "scene.hpp"
 #include "hud.hpp"
+#include "gpu_timer.hpp"
 
 #if defined(NL_BACKEND_VULKAN)
 
@@ -156,11 +157,22 @@ public:
                 if (!hud_.ensurePipeline(nvrhiDevice_, framebuffers_[0]->getFramebufferInfo(), err))
                     nl::core::log::deviceError("Vulkan", err);
             }
+            // M0.6：先轮询上一帧的 timer query（异步计时天然有 1~2 帧延迟），
+            // 再开始本帧；建 query 延迟到第一次需要 HUD 的帧，--no-hud 完全不碰。
+            if (gpuTimer_.ensure(nvrhiDevice_)) {
+                float gpuMs = 0.0f;
+                // 截图回归模式：viewer 已填固定 GPU 样本，不写回真实计时，保基线 MD5 稳定。
+                if (!hud->deterministic && gpuTimer_.poll(gpuMs)) hud->gpuMs = gpuMs;
+                hud->gpuTimingAvailable = true;
+            }
             hud_.build(*hud);
         }
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
+        // M0.6：timer query 包住整帧 GPU 命令（clear + scene + hud）；
+        // 找不到空闲 slot 时 begin 返回 false，本帧不计时、不报错。
+        const bool gpuTiming = gpuTimer_.begin(cmd);
         cmd->clearTextureFloat(rhiTargets_[vulkanImageIndex_], nvrhi::TextureSubresourceSet(),
                                nvrhi::Color(color.r, color.g, color.b, color.a));
 
@@ -193,6 +205,8 @@ public:
                                  rhiTargets_[vulkanImageIndex_], nvrhi::TextureSlice());
             }
         }
+        // M0.6：结束整帧计时（clear + scene + hud 都已记录）。
+        if (gpuTiming) gpuTimer_.end(cmd);
         cmd->close();
         nvrhiDevice_->executeCommandList(cmd);
 
@@ -621,6 +635,7 @@ private:
         // 场景 / HUD 资源（含 binding set / pipeline）必须在 device 仍存活时释放。
         scene_.shutdown();
         hud_.shutdown();
+        gpuTimer_.shutdown();   // M0.6：device 仍存活时释放 timer query
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -684,6 +699,7 @@ private:
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;
     Hud                                   hud_;
+    GpuTimer                              gpuTimer_;
     nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
 

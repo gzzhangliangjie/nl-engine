@@ -38,7 +38,7 @@
 环境自检清单（M0.0 的可见用例）：
 - [x] `cmake --version` 正常 → 3.31.6（便携版）
 - [x] `-DNL_GRAPHICS_BACKEND=DX12` 与 `=VULKAN` 两种配置各编一遍，`--selftest` 都 PASS 且 `backend:` 行不同——**全程零厂商 SDK**
-- [ ] `slangc -h` 正常（M0.3 前拿到即可）
+- [x] `slangc -h` 正常（M0.0 落地时实测通过）
 - [ ] RenderDoc（L1 帧结构调试，S4 前按需装；**不是 S0 验收项**，本机未装，见「可观测性与调试工具计划」）
 
 ### 后端对称：谁都不装 SDK（2026-11-06 架构校准）
@@ -133,10 +133,10 @@ nl-engine/
 
 **做什么**：dynamic rendering → 图形 pipeline → 顶点/片元 shader（Slang 编译）→ fence/semaphore 同步 → 每帧 submit。
 
-- [ ] 写 `triangle.slang`（vertex + fragment 两个 entry），CMake `add_custom_command` 调 `slangc` **同一份源码编译出 SPIR-V 和 DXIL 两个目标**，target 依赖挂上（改 shader 自动重编）
-- [ ] 渲染循环：NVRHI `ICommandList` 记录 → `executeCommandList` → fence 同步，**frame in flight = 2**；自动 barrier 跟踪保持开启
-- [ ] render target 直接用 NVRHI begin/end render pass（无手写 RenderPass/Framebuffer 样板）
-- [ ] 画一个硬编码三角形，两个后端各跑一次
+- [x] 写 `triangle.slang`（vertex + fragment 两个 entry），CMake `add_custom_command` 调 `slangc` **同一份源码编译出 SPIR-V 和 DXIL 两个目标**，target 依赖挂上（改 shader 自动重编）
+- [x] 渲染循环：NVRHI `ICommandList` 记录 → `executeCommandList` → fence 同步，**frame in flight = 2**；自动 barrier 跟踪保持开启
+- [x] render target 直接用 NVRHI begin/end render pass（无手写 RenderPass/Framebuffer 样板）
+- [x] 画一个硬编码三角形，两个后端各跑一次
 
 **自检**：三角形出现；任务管理器看 GPU 占用非 0（确认真在 GPU 上画）；拖动窗口/resize 正常；当前后端调试层零输出；**故意删掉一个 fence 等待看同步校验报错**（验证安全网真的在工作）。tag：`s0-triangle`。
 
@@ -191,7 +191,7 @@ nl-engine/
 |---|---|---|---|---|
 | L0 画面证据 | 每步「能亲眼看到」的验收图 | `--screenshot` GPU 真回读 + `example/` 基线 + 展示台现场回放 | M0.2 起 | ✅ 已就位 |
 | L1 帧结构 | draw call / pipeline / 资源状态 / 依赖 | **RenderDoc**（同时支持 D3D12 + Vulkan）：外部 Launch Application 拉起 `viewer.exe`、热键抓帧，**零代码改动**；要精确抓第 N 帧再加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")` 拿 in-app API（约 30 行、零链接依赖、默认关闭） | S4 起 GPU-driven 调试必备，S1 后随用随取 | ⬜ 工具未装，代码侧未写 |
-| L2 帧内计时 | 真实 GPU 耗时、按 pass 拆分 | NVRHI timestamp query（`createQueryPool` / `beginQuery` / `endQuery`）→ 结果填进 `HudFrame` 的 GPU 曲线；`--profile` 按 mode 分段。**当前 HUD 的 frame ms 是 CPU 帧间隔，不是 GPU 耗时**，这是第一个该补的洞 | S4 前补掉，让每步性能退化当场可见 | ⬜ 未做 |
+| L2 帧内计时 | 真实 GPU 耗时、按 pass 拆分 | NVRHI timestamp query（`ITimerQuery` / `beginTimerQuery` / `endTimerQuery`）→ 结果填进 `HudFrame` 的 GPU 曲线；`--profile` 按 mode 分段。**HUD 的 frame ms 是 CPU 帧间隔，不是 GPU 耗时** | 整帧 GPU 计时已由 **M0.6 补掉**（tag `m0.6`，两后端实测 0.037 ms 量级、`--no-hud` 基线不变，见 `docs/s0/M0.6-PLAN.md`）；按 pass 拆分留给 M0.7 | ✅ 整帧部分（M0.6） |
 | L3 时间线 / 帧 pacing | CPU-GPU 对齐、stall、帧间隔抖动 | Nsight Graphics / PIX（D3D12）/ PresentMon / Tracy（本机 `Carrot/thirdparty/tracy` 现成） | S13 证明无同步 stall 时按需取 | ⬜ 工具未装 |
 
 **为什么 L1 改 RenderDoc、不写死 Nsight**：Nsight 偏 N 卡、PIX 只管 D3D12，我们是 DX12 / Vulkan 双后端通用管线，逐 draw 抓帧选能同时覆盖两者的 RenderDoc；Nsight / RGP 退到 L3 做时间线佐证。外部工具都不进 CMake、不链接、不读 SDK 路径——它们是进程外调试工具，与「零厂商图形 SDK」不是一回事。

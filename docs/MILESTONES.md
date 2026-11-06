@@ -15,6 +15,7 @@
 | M0.3 三角形 + 帧同步 | ✅ 验收通过 | `s0-triangle` | 2026-11-06 | 双后端顶点色三角形渲染、frame-in-flight=2、selftest 9/9；SPIR-V 入口恒为 `main` 的坑已固化见 `docs/SHADER-CONVENTIONS.md` |
 | M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 正常视角双后端 PNG 逐字节相同，内壁 / resize 仅 1~2 像素差（≤1/255）；内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
 | M0.5 ImGui + 总验收 | ✅ 验收通过 | `s0-done` | 2026-11-07 | 双后端 ImGui HUD 实拍 + `--no-hud` 与 M0.4 基线逐字节相同；`model`/`hud` 共 8 个 shader 产物魔数自检、selftest 14/14、`--check` 退出 0；S0 全部完成 |
+| M0.6 GPU 帧内计时 | ✅ 验收通过 | `m0.6` | 2026-11-07 | NVRHI timestamp query 真实 GPU 耗时进 HUD（CPU/GPU 并排 + 双曲线）；`--no-hud` 基线逐字节不变；S0 后能力补齐序列第一版 |
 
 ---
 
@@ -260,7 +261,39 @@
 - ✅ 放行门禁：`python tools/showcase/server.py --check` → `[example-sync] OK: stage=M0.5 version=m0.5 cases=5 baselines=10`，退出码 0。
 - ✅ 展示台服务重载新清单后 `/api/cases` 返回 `m0.1~m0.5` 且 `stageSync.ok=True`；`/api/run` 现场回放 4 个用例：`hud`（双后端 exit 0、baselineMatch True、`identical=False` 为预期）、`nohud`（`identical=bytes`）、`resize`（baselineMatch True）、`selftest`（日志匹配 `SELFTEST PASS (14/14)`），全部 `ok=True`。
 - ⬜ 图形 / 性能调试工具抓帧：已从 S0 验收项移出，本机 RenderDoc / Nsight / PIX 均未安装，如实记未做，不虚构结果；L1~L3 计划见 `docs/s0/S0-PLAN.md`。
-- ⬜ L2 GPU 帧内计时（NVRHI timestamp query）：当前 HUD 的 `frame ms` 只是 CPU 帧间隔，S4 前补；`docs/s4/S4-PLAN.md` 已挂账。
+- ⬜ L2 GPU 帧内计时（NVRHI timestamp query）：M0.5 时挂账，**已由 M0.6 补掉**（见下一节）。
+
+---
+
+## M0.6 GPU 帧内计时（NVRHI timestamp query）
+
+**动作**
+- `renderer/src/gpu_timer.hpp`（新建）：两后端共享的 `GpuTimer`——4 个 slot 环形轮转的 `nvrhi::ITimerQuery`；`ensure()` 延迟到第一次需要 HUD 的帧才建 query（`--no-hud` 零调用）；`poll()` 只取已 resolve 的结果、绝不阻塞；`begin()/end()` 包住整帧 GPU 命令；无空闲 slot 时本帧不计时、不报错；`selfTest()` 锁秒→ms 换算与游标回绕。
+- `HudFrame` 扩展：`gpuMs` / `gpuMsHistory[120]` / `gpuMsCount` / `gpuTimingAvailable`；HUD 在 CPU `frame ms` 旁新增 `GPU x.xx ms (NVRHI timer)` 行 + `gpu ms` 曲线，面板高度上限 400→460、两条曲线压到 44/34 px，960×540 下整块面板不裁底。
+- 两后端对称接线：`renderFrame` HUD 分支里 `ensure()` + `poll()`（**deterministic 时不写回真实计时**，viewer 已填固定样本保 MD5 稳定）；`cmd->open()` 后 `begin()`、`close()` 前 `end()`；shutdown 在 device 存活时释放。首次成功 resolve 落一条 `gpu timer resolved` 日志，作为交互模式的机械证据。
+- `viewer/main.cpp`：截图回归模式填 8 个固定 GPU 样本（与 CPU 样本独立）；交互模式维护 120 帧 GPU 历史（renderFrame 返回后追加写回值）。
+- `kStage` → `M0.6 GPU frame timing (NVRHI timestamp query)`；selftest 的 stage 校验同步改 M0.6。
+
+**提交版本**：`m0.6`（S0 后能力补齐序列第一版；精确 hash 用 `git rev-parse m0.6` 查）。
+
+**完成情况**
+- ✅ 两后端 build + `SELFTEST PASS (14/14)`（`GpuTimer::selfTest` 并入 HUD selftest 项）+ `ctest` 100%。
+- ✅ 真实 GPU 计时证据：交互模式首次 resolve 日志 DX12 `0.0369 ms`、Vulkan `0.0380 ms`，量级合理（小场景）；渲染进程 `deviceErrors=0`。
+- ✅ HUD 实拍（`docs/screenshots/m0.6-hud-{dx12,vulkan}.png`）：CPU/GPU 并排 + 双曲线 + `capture/replay (fixed samples)` 标注（GPU 固定 0.63 ms），面板完整不裁底。
+- ✅ **历史基线不动**：`--no-hud` 两后端 PNG MD5 同为 `7e528087d19722d8f9ef4de35e36d382`，与 M0.4 / M0.5 逐字节相同。
+- ✅ 用例归位：`example/m0.6/`（`hud` / `nohud` / `selftest` 3 用例 + 4 张基线 + `run.bat`），`example/cases.json` 增 `m0.6`；`--check` → `stage=M0.6 version=m0.6 cases=3 baselines=4` 退出 0；展示台 `/api/run` 三用例回放全 `ok=True`（hud 双后端 `baselineMatch=True`、nohud `identical=bytes`）。
+- ✅ S0 遗留 checklist 修正：M0.3 四条（triangle.slang 双目标 / frame-in-flight=2 / render pass / 两后端三角形）与 `slangc -h` 实际早已完成，checklist 由 `[ ]` 改 `[x]`。
+
+**踩坑情况**
+1. **基线参数与用例参数不一致 → 展示台回放 `baselineMatch=False`** → 现象：16.9 万像素差异、bbox 覆盖模型区，初看像渲染坏了。根因：基线用默认参数生成（pitch 9.2），cases.json 用例是 `--pitch 9`，pitch 一度之差就是全图级差异。处理：按用例参数重出基线；教训写进 `docs/s0/M0.6-PLAN.md`——**基线必须用与用例完全相同的参数生成**。
+2. **加 GPU 行后面板内容超出 400px 上限，底部帮助文字被滚动条裁掉** → 处理：上限提到 460、两条 PlotLines 压到 44/34 px，960×540 实拍确认整块面板完整。
+3. **DX12 `end()` 首次编辑误删 `executeCommandList` 与 fence 注释** → 下一次 Edit 立即发现补回，构建后逐段核对。
+4. **selftest「M0.5 stage reported」写死阶段名** → `kStage` 改 M0.6 后该项失败（13/14）。处理：stage 校验与窗口标题同步改 M0.6；阶段名校验本来就该跟 `kStage` 走。
+
+**用例归位**
+- `example/m0.6/`：`hud-{dx12,vulkan}.png` / `nohud-{dx12,vulkan}.png` 共 4 张基线 + `run.bat`（`all` / `hud` / `nohud` / `selftest`）。
+- `example/cases.json` 增 `m0.6` 版本：3 个可运行用例；验收条目含两后端首次 resolve 实测值与 MD5 parity 记录。
+- 后续版本序列（用户已确认）：M0.7 = 高模测试资产生成器（S1 切簇的命门，Suzanne 504 tri 无法演示切簇）→ M0.8 = 线框 / 调试着色 → M0.9 = 一键全量回归总闸；vendored meshoptimizer 作对照基准随 M0.7 一起（文档级参考，不入构建）。Carrot 实况：meshoptimizer + meshlet 是 2023-11-25 同一个大提交进的（`4c100761`），我们拆版本铺路更稳；它没有截图回归总闸，M0.9 是超它的部分。
 
 **踩坑情况**
 1. **本机 Carrot 的 ImGui 是 `1.92.7 WIP`** → 现象：初拷自 `Carrot/thirdparty/imgui/` 的源码字体系统已重构，与 1.91 代 API 不同代，风险高。根因：Carrot checkout 的是 WIP 分支，不是稳定版。处理：删掉初拷文件，改下 `v1.91.9` 主线稳定版，只 vendored 核心 4 个 cpp（tables/widgets 都要，否则下拉框 / 表格缺符号）。

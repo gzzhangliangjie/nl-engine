@@ -1,5 +1,6 @@
 #include "hud.hpp"
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
+#include "gpu_timer.hpp"     // M0.6：GpuTimer::selfTest（秒→ms 换算 / 环形游标）
 
 #include "nl/core/log.hpp"
 
@@ -238,7 +239,8 @@ void Hud::build(HudFrame& frame) {
     // 截图回归也不依赖 imgui.ini 或窗口历史状态。长文本一律 TextWrapped。
     ImGui::SetNextWindowPos(ImVec2(14.0f, 14.0f), ImGuiCond_Always);
     // 小画布上把面板收在可视范围内（内容多时出滚动条，不越界）；大画布给足高度。
-    const float panelH = std::min(400.0f, frame.displayHeight - 28.0f);
+    // M0.6 增了 GPU 行 + 曲线后内容更高，上限从 400 提到 460，960x540 下不裁底。
+    const float panelH = std::min(460.0f, frame.displayHeight - 28.0f);
     ImGui::SetNextWindowSize(ImVec2(330.0f, std::max(180.0f, panelH)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);   // 半透明：HUD 与背后的模型同时看得见
     ImGui::Begin("nl-engine HUD", nullptr, ImGuiWindowFlags_NoResize);
@@ -251,7 +253,14 @@ void Hud::build(HudFrame& frame) {
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,
-                     0, nullptr, 0.0f, 40.0f, ImVec2(260.0f, 52.0f));
+                     0, nullptr, 0.0f, 40.0f, ImVec2(260.0f, 44.0f));
+    // M0.6：真实 GPU 帧内耗时（NVRHI timer query，异步天然有 1~2 帧延迟）。
+    // frame ms 是 CPU 帧间隔，GPU ms 才是 GPU 干活的耗时——两者并排防混淆。
+    if (frame.gpuTimingAvailable) {
+        ImGui::Text("GPU  %.2f ms (NVRHI timer)", frame.gpuMs);
+        ImGui::PlotLines("gpu ms", frame.gpuMsHistory, frame.gpuMsCount,
+                         0, nullptr, 0.0f, 40.0f, ImVec2(260.0f, 34.0f));
+    }
     ImGui::Text("yaw %.1f  pitch %.1f  dist %.2f",
                 frame.yawDeg, frame.pitchDeg, frame.distance);
     ImGui::Text("timing: %s", frame.deterministic
@@ -398,6 +407,8 @@ bool hudSelfTest() {
     HudFrame f;
     if (!f.cullBack || f.frameMsCount != 0 || f.colorIndex != 0 ||
         f.resetCamera || f.wantCaptureMouse || f.deterministic) return false;
+    if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
+    if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;
 }
 

@@ -43,6 +43,12 @@ const float kFixedSamples[kFixedSampleCount] = {
     16.6f, 16.8f, 16.5f, 16.9f, 16.7f, 16.6f, 17.1f, 16.4f
 };
 
+// M0.6：GPU 耗时的固定样本，与 CPU 样本独立——截图回归模式下真实 GPU 计时
+// 每次运行都不同，写进 PNG 会毁掉基线 MD5，故固定并在面板标 fixed samples。
+const float kFixedGpuSamples[kFixedSampleCount] = {
+    0.62f, 0.64f, 0.61f, 0.66f, 0.63f, 0.62f, 0.68f, 0.60f
+};
+
 struct Options {
     bool selftest   = false;
     bool help       = false;
@@ -114,7 +120,7 @@ Options parseArgs(int argc, char** argv) {
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.5 selftest\n";
+    std::cout << "nl-engine M0.6 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -148,7 +154,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.5") != nullptr, "M0.5 stage reported");
+    check(std::strstr(st.stage, "M0.6") != nullptr, "M0.6 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -186,7 +192,7 @@ int runNormal(const Options& o) {
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
-    desc.title  = "nl-engine | M0.5 | starting...";
+    desc.title  = "nl-engine | M0.6 | starting...";
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
@@ -239,6 +245,8 @@ int runNormal(const Options& o) {
     bool hudWantsMouse = false;   // 上一帧 HUD 是否占着鼠标（避免拖面板时转相机）
     float frameHistory[120] = {};
     int frameHistoryCount = 0;
+    float gpuHistory[120] = {};    // M0.6：GPU ms 曲线（renderFrame 后由 renderer 写回值追加）
+    int gpuHistoryCount = 0;
     const std::uint64_t resizeFrame =
         (o.resize && o.frames > 2) ? std::max<std::uint64_t>(2, o.frames / 2) : 0;
 
@@ -331,6 +339,10 @@ int runNormal(const Options& o) {
                 hud.frameMs = 16.67f;
                 hud.frameMsCount = kFixedSampleCount;
                 std::memcpy(hud.frameMsHistory, kFixedSamples, sizeof(kFixedSamples));
+                // M0.6：GPU ms 也用固定样本；renderer 侧看到 deterministic 就不写回真实计时。
+                hud.gpuMs = 0.63f;
+                hud.gpuMsCount = kFixedSampleCount;
+                std::memcpy(hud.gpuMsHistory, kFixedGpuSamples, sizeof(kFixedGpuSamples));
                 hud.deltaSeconds = 1.0f / 60.0f;
                 hud.mouseX = -100.0f; hud.mouseY = -100.0f;  // 不落在 HUD 窗口内
                 hud.mouseLeftDown = false;
@@ -352,6 +364,10 @@ int runNormal(const Options& o) {
                 hud.frameMsCount = frameHistoryCount;
                 std::memcpy(hud.frameMsHistory, frameHistory,
                             static_cast<std::size_t>(frameHistoryCount) * sizeof(float));
+                // M0.6：GPU 曲线由上一帧 renderFrame 写回的 hud.gpuMs 累积（异步 1~2 帧延迟）。
+                hud.gpuMsCount = gpuHistoryCount;
+                std::memcpy(hud.gpuMsHistory, gpuHistory,
+                            static_cast<std::size_t>(gpuHistoryCount) * sizeof(float));
             }
         }
 
@@ -362,6 +378,15 @@ int runNormal(const Options& o) {
             break;
         }
         renderer->drainMessages();
+        // M0.6：renderFrame 之后 renderer 可能已把最新 GPU 计时写回 hud.gpuMs，追加进曲线。
+        if (o.hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
+            if (gpuHistoryCount < 120) {
+                gpuHistory[gpuHistoryCount++] = hud.gpuMs;
+            } else {
+                std::memmove(gpuHistory, gpuHistory + 1, 119 * sizeof(float));
+                gpuHistory[119] = hud.gpuMs;
+            }
+        }
         if (o.hudEnabled) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;

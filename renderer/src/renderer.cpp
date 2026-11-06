@@ -13,7 +13,7 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.5 ImGui HUD + S0 final acceptance (Slang dual-backend)";
+constexpr const char* kStage = "M0.6 GPU frame timing (NVRHI timestamp query)";
 } // namespace
 
 Status status() {
