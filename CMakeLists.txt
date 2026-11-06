@@ -145,32 +145,41 @@ else()
     message(FATAL_ERROR "dxcompiler.dll not found in Windows SDK — required for the DXIL target.")
 endif()
 
-set(_SHADER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/triangle.slang")
+# 自动收集 renderer/shaders/ 下所有 .slang（不再硬编码单个文件）。
+# 每个源 <name>.slang 出 <name>.{vs,ps}.{spv,dxil} 四个产物；新增 shader 只需在目录里放文件，无需改 CMake。
+file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
+if(NOT NL_SHADER_SRCS)
+    message(FATAL_ERROR "No .slang shaders found in renderer/shaders/")
+endif()
+
 set(_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${_SHADER_OUT}")
 
 set(_SHADER_ARTIFACTS "")
-foreach(_ent vs ps)
-    if(_ent STREQUAL "vs")
-        set(_stage vertex)
-        set(_entry vsMain)
-    else()
-        set(_stage fragment)
-        set(_entry psMain)
-    endif()
-    list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/tri.${_ent}.spv"
-                                  "${_SHADER_OUT}/tri.${_ent}.dxil")
-    add_custom_command(OUTPUT "${_SHADER_OUT}/tri.${_ent}.spv"
-        COMMAND "${SLANGC}" "${_SHADER_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
-                -o "${_SHADER_OUT}/tri.${_ent}.spv"
-        MAIN_DEPENDENCY "${_SHADER_SRC}"
-        COMMENT "Slang -> SPIR-V (${_ent})")
-    add_custom_command(OUTPUT "${_SHADER_OUT}/tri.${_ent}.dxil"
-        COMMAND "${SLANGC}" "${_SHADER_SRC}" -dxc-path "${NL_DXC_DIR}"
-                -target dxil -entry ${_entry} -stage ${_stage}
-                -o "${_SHADER_OUT}/tri.${_ent}.dxil"
-        MAIN_DEPENDENCY "${_SHADER_SRC}"
-        COMMENT "Slang -> DXIL (${_ent})")
+foreach(_SRC ${NL_SHADER_SRCS})
+    get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
+    foreach(_ent vs ps)
+        if(_ent STREQUAL "vs")
+            set(_stage vertex)
+            set(_entry vsMain)
+        else()
+            set(_stage fragment)
+            set(_entry psMain)
+        endif()
+        list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
+                                      "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil")
+        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
+            COMMAND "${SLANGC}" "${_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
+                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
+            MAIN_DEPENDENCY "${_SRC}"
+            COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_ent})")
+        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil"
+            COMMAND "${SLANGC}" "${_SRC}" -dxc-path "${NL_DXC_DIR}"
+                    -target dxil -entry ${_entry} -stage ${_stage}
+                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil"
+            MAIN_DEPENDENCY "${_SRC}"
+            COMMENT "Slang -> DXIL (${_SRC_NAME}.${_ent})")
+    endforeach()
 endforeach()
 
 # 改 shader 自动重编字节码；ALL 保证每次 build 都检查过期

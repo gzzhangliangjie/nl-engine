@@ -12,7 +12,7 @@
 | M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交；环境补齐快照 `v0.1.0`；架构校准见本节补记 | 2026-11-06 | 编译链 / GLFW / CMake / DX12·Vulkan 双后端开关齐并验收，**零厂商 SDK**；Slang / NVRHI / Nsight 按阶段取 |
 | M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)`；两种后端配置都 PASS |
 | M0.2 设备 + swapchain | ✅ 验收通过 | `s0-device` | 2026-11-06 | 双后端清屏逐字节相同、resize 不黑屏、deviceErrors=0、退出无段错误 |
-| M0.3 三角形 + 帧同步 | ⬜ 未开始 | `s0-triangle` | — | — |
+| M0.3 三角形 + 帧同步 | ✅ 验收通过 | `s0-triangle` | 2026-11-06 | 双后端顶点色三角形渲染、frame-in-flight=2、selftest 9/9；SPIR-V 入口恒为 `main` 的坑已固化见 `docs/SHADER-CONVENTIONS.md` |
 | M0.4 模型 + 贴图 + 相机 | ⬜ 未开始 | `s0-model` | — | — |
 | M0.5 ImGui + 总验收 | ⬜ 未开始 | `s0-done` | — | — |
 

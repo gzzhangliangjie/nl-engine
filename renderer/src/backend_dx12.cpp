@@ -464,7 +464,7 @@ private:
 #endif
 
         auto path = [suffix](const char* stage) {
-            return std::string(NL_SHADER_DIR) + "/tri." + stage + "." + suffix;
+            return std::string(NL_SHADER_DIR) + "/triangle." + stage + "." + suffix;
         };
 
         std::vector<uint8_t> vsBlob, psBlob;
