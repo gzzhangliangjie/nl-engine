@@ -13,6 +13,11 @@ cmake-build-*/
 # assets 生成物
 assets/*.nmesh
 
+# Slang 工具链（重下成本低，不入库；源码在 thirdparty/slang-reference/）
+thirdparty/slang/dist/
+thirdparty/slang/_dl/
+thirdparty/slang/_test/
+
 # OS
 Thumbs.db
 Desktop.ini

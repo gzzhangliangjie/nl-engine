@@ -130,6 +130,34 @@
 
 ---
 
+## M0.3 第一个三角形 + frame in flight=2（Slang 双后端）
+
+**动作**
+- `renderer/shaders/triangle.slang`：单一 Slang 源，顶点色三角形（POSITION+COLOR）。
+- `CMakeLists.txt`：Slang 编译块，同一份源码 `-target spirv` 与 `-target dxil` 各出 vs/ps 四产物（`tri.{vs,ps}.{spv,dxil}`）；`NL_SHADER_DIR` 注入 `nl_renderer`；修正 `add_dependencies(viewer nl_shaders)` 写在 `add_executable(viewer)` 之前的顺序 bug。
+- `renderer/src/backend.hpp`：加 `readFileBytes` 内联，两后端共享加载字节码。
+- `renderer/src/backend_dx12.cpp` / `backend_vulkan.cpp`：`initTriangle`（读字节码/建 shader/vb/inputLayout/framebuffer）、`ensurePipeline`（`createGraphicsPipeline(desc, FramebufferInfo)`）、`renderFrame` 插入 draw；DX12 加 per-slot fence 同步安全网、Vulkan 加 acquire semaphore 门控（删每帧 `waitForIdle`，实现 frame-in-flight=2）。
+- `renderer.cpp` 的 `kStage` → M0.3；`viewer/main.cpp` selftest 断言 → M0.3。
+- 拉取并 vendored 参考：`thirdparty/nvrhi/doc/`（Tutorial/ProgrammingGuide，确认 vendored 头为 2021 老接口、无 `beginRenderPass`）、`thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`、`thirdparty/slang-reference/{triangle,hello-world,example-base}/`（含 `hello-world/vulkan-api.cpp` 作 Vulkan 对接参考）。
+- 修正 `docs/LINKS.md`、本台账、`MEMORY.md`：纠正原 `NVIDIA/nvrhi/examples/common/SampleRenderer` 链接与「当前 main 用新版 render-pass API」两处误判；官方仓库实为 `NVIDIA-RTX/NVRHI`，且其 `main` 不含 examples（示例在 `NVRHI-samples`），权威参考以 vendored 头 + 本工程 M0.2 后端为准。
+
+**提交版本**：`s0-triangle`（M0.3 验收通过后本地提交并打 tag）
+
+**完成情况**
+- 双后端编译/链接通过（DX12 + Vulkan），`nl_shaders` 四产物生成；魔数校验：`.dxil`=DXBC、` .spv`=SPIR-V（`0x07230203`）。
+- DX12 可见用例：`viewer --screenshot` 出 640×360 深蓝底、红顶/蓝左下/绿右下顶点色三角形，`deviceErrors=0`。
+- Vulkan 可见用例：同结构三角形正确渲染（修复前空白，见踩坑第 4 条）。
+- selftest 9/9（DX12 / Vulkan 均 PASS）。
+- frame-in-flight=2：DX12 per-slot fence 门控就位（`renderFrame` 开头按 slot 等上一帧 fence，删此段应触发同步报错，S0-PLAN 校验点）；Vulkan acquire semaphore 门控；8 帧连续渲染稳定无错。
+
+**踩坑情况**
+1. **CMake `add_dependencies(viewer nl_shaders)` 顺序错** → 现象：configure 报 `viewer` 目标不存在。根因：Slang 块没经 configure 验证的顺序 bug。处理：依赖移到 `add_executable(viewer)` 之后。
+2. **DX12 `queue_->Signal(fence_, v)` 传 `ComPtr` 未 `.Get()`** → 现象：C2664。处理：`fence_.Get()`。
+3. **`createGraphicsPipeline(desc, IFramebuffer*)` deprecated** → 现象：C4996。处理：改用 `createGraphicsPipeline(desc, FramebufferInfo(FramebufferDesc))` 重载（两后端一致）。
+4. **Vulkan 三角形空白（仅清屏）** → 现象：`vk pipeline create -> 0`，draw 永远跳过；DX12 正常。根因：Slang 把 SPIR-V 入口点**固定命名为 `main`**（与 `-entry vsMain` 无关），而 `ShaderDesc.setEntryName("vsMain")` 让 NVRHI-Vulkan 找不到入口 → `vkCreateGraphicsPipelines` 静默失败返回 NULL；DXIL 入口才是 `vsMain`，故 DX12 正常。查证：自写 SPIR-V 解析器确认 `tri.vs.spv` 的 `OpEntryPoint` 名=`main`。处理：Vulkan 路径 `setEntryName("main")`，DX12 保持 `vsMain`；注释写明 Slang→SPIR-V 入口名约定。
+
+---
+
 ## 后续阶段的填写规范
 
 每个阶段追加一节，四栏齐全，另附「可见用例」的截图路径与复现命令：

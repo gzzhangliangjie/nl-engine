@@ -22,3 +22,11 @@
 
 ## 版本
 - `s0-init` = M0.1 验收；`v0.1.0` = M0.0 环境补齐快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+
+## 参考文档/示例（M0.3 拉取，已 vendored 本地，2026-11-06）
+- ⚠️ **被误导纠正**：NVRHI 官方仓库是 `NVIDIA-RTX/NVRHI`（不是 `NVIDIA/nvrhi`）；当前 `main` **不含 `examples/`**，权威 API 参考在仓库 `doc/Tutorial.md`+`doc/ProgrammingGuide.md`（已存 `thirdparty/nvrhi/doc/`）。
+- 之前误判“当前 main 用新版 beginRenderPass、与 vendored 老接口不兼容”——实测 `Tutorial.md` 仍是 `open→setGraphicsState→draw`，与本地 vendored `nvrhi.h`(2021 代) 同代，可直接对照；差异只在校验细节，每处调用仍需回 vendored 头核对签名。
+- Slang 官方仓库 `shader-slang/slang` 的 `examples/` 才是示例所在（已存 `thirdparty/slang-reference/`：`triangle`/`hello-world`(含 `vulkan-api`)/`example-base`）。示例用 Slang C++ API，我们用 `slangc` CLI，等价。
+- NVRHI 完整可跑示例在 **Donut-Samples `vertex_buffer`**（已存 `thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`），基于 Donut 框架包在 NVRHI 之上，看完整管线结构。Donut 本身(`NVIDIA-RTX/Donut`) 含三后端 DeviceManager/swapchain/present 样板。
+- Falcor(`NVIDIAGameWorks/Falcor`, master) = Slang 生产级框架，Slang 高级特性/材质系统参考。
+- 这些 vendor 参考是**文档级，不入构建**；`thirdparty/slang/dist`(工具链) 仍 gitignore。

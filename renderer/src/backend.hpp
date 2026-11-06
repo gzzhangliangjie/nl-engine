@@ -4,10 +4,27 @@
 #include "nl/renderer/renderer.hpp"
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace nl::renderer::detail {
+
+// 读二进制文件到 out（用于加载 Slang 编译出的 SPIR-V / DXIL 字节码）。
+// 失败返回 false（文件不存在 / 读不全），由调用方决定报错还是回退。
+inline bool readFileBytes(const char* path, std::vector<uint8_t>& out) {
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return false; }
+    const long sz = std::ftell(f);
+    if (sz < 0) { std::fclose(f); return false; }
+    std::fseek(f, 0, SEEK_SET);
+    out.resize(static_cast<size_t>(sz));
+    const size_t rd = sz ? std::fread(out.data(), 1, static_cast<size_t>(sz), f) : 0;
+    std::fclose(f);
+    return rd == static_cast<size_t>(sz);
+}
 
 class Backend {
 public:

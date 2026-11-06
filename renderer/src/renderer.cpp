@@ -8,7 +8,7 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.2 NVRHI device + swapchain + in-app screenshot";
+constexpr const char* kStage = "M0.3 first triangle + frame-in-flight=2 (Slang dual-backend)";
 } // namespace
 
 Status status() {

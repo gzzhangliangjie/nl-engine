@@ -40,15 +40,17 @@
 | RTXGI（DDGI/表面缓存） | https://github.com/NVIDIA-RTX/RTXGI | S11 世界缓存 |
 | **RTXMG**（簇式几何加速 BVH——Nanite×RT 接口层官方答案） | https://github.com/NVIDIA-RTX/RTXMG | S8/S13 |
 | NRD（降噪器库：ReBLUR/SIGMA/ReLAX） | https://github.com/NVIDIA-RTX/NRD | S12 滤波 |
-| NVRHI | https://github.com/NVIDIA-RTX/NVRHI | 换底座备选；RBDOOM-3-BFG 是其最完整用例 |
-| Falcor（Slang 研究框架） | https://github.com/NVIDIAGameWorks/Falcor | GI 算法实验/论文代码宿主 |
+| ⭐ **NVRHI（已定为渲染底座，非备选）** | https://github.com/NVIDIA-RTX/NVRHI | `doc/Tutorial.md`+`doc/ProgrammingGuide.md` 是 API 权威参考，已 vendored 到 `thirdparty/nvrhi/doc/`；渲染流 `open→setGraphicsState→draw`，与本地 vendored 头同代，可直接对照。**注意：仓库 `main` 无 `examples/`，完整示例在 Donut-Samples** |
+| Donut（NVRHI 之上的框架，含三后端 DeviceManager/swapchain/present） | https://github.com/NVIDIA-RTX/Donut | 要看 resize/present 全后端样板时翻 |
+| ⭐ **Donut-Samples `vertex_buffer`** | https://github.com/NVIDIA-RTX/Donut-Samples | 教程钦定的「complete working example」，已 vendored 到 `thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`；基于 Donut 框架，看完整管线+三角上传+绘制结构 |
+| Falcor（Slang 研究框架） | https://github.com/NVIDIAGameWorks/Falcor | GI 算法实验/论文代码宿主；Slang 生产级用例 |
 | RBDOOM-3-BFG（NVRHI 真 AAA 用例） | https://github.com/RobertBeckebans/RBDOOM-3-BFG | 工程组织参考 |
 
 ## 5. 工具链
 
 | 工具 | 链接 |
 |---|---|
-| Slang（shader 语言+编译器） | https://shader-slang.org / https://github.com/shader-slang/slang |
+| ⭐ **Slang（shader 语言+编译器，M0.3 硬前置）** | https://shader-slang.org / https://github.com/shader-slang/slang | `examples/` 已 vendored 到 `thirdparty/slang-reference/`：`triangle`(基础)、`hello-world`(含 `vulkan-api` 后端对接)、`example-base`(共享应用框架)；`main.cpp` 演示 Slang C++ API 编译，我们用 `slangc` CLI，二者等价。Falcor(上表) 是其生产级框架 |
 | Vulkan 规范 / Vulkan-Headers（**只查资料，不装 SDK**） | https://docs.vulkan.org/ · https://github.com/KhronosGroup/Vulkan-Headers |
 | vulkan-tutorial.com | https://vulkan-tutorial.com/ |
 | vkguide.dev | https://vkguide.dev/ |
@@ -74,3 +76,5 @@
 | SIGGRAPH Advances 合集（历年） | https://advances.realtimerendering.com/ |
 
 > 注意：GitHub 链接在本机浏览器可能直连打不开（网络原因），源码已拉到 `E:\UE_STUDY_2026\`，链接主要当路径索引用。
+
+> M0.3 参考文档/示例已 vendored 到本地（文档级，不入构建）：`thirdparty/nvrhi/doc/`（Tutorial+ProgrammingGuide）、`thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`、`thirdparty/slang-reference/{triangle,hello-world,example-base}/`。`thirdparty/slang/dist`(工具链) 仍 gitignore。

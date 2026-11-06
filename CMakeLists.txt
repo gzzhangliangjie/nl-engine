@@ -126,9 +126,63 @@ else()
     )
 endif()
 
+# ---- M0.3：Slang 着色器编译（同一份源码出 SPIR-V 与 DXIL 两个目标） ----
+# 纪律：零厂商 SDK。DXIL 需要的 dxcompiler.dll/dxil.dll 来自已装的 Windows SDK，不额外下载。
+set(NL_SLANG_BIN "${THIRDPARTY}/slang/dist/bin")
+set(SLANGC "${NL_SLANG_BIN}/slangc.exe")
+if(NOT EXISTS "${SLANGC}")
+    message(FATAL_ERROR "slangc not found at ${SLANGC}. Run the Slang download step first.")
+endif()
+
+# 探测 Windows SDK 里的 dxcompiler.dll（用于 DXIL 目标）。GLOB 取版本最高的那一个。
+file(GLOB _dxc_list "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/dxcompiler.dll")
+if(_dxc_list)
+    list(SORT _dxc_list)            # 升序，取版本最高的 SDK
+    list(GET _dxc_list -1 _dxc_dll)
+    get_filename_component(NL_DXC_DIR "${_dxc_dll}" DIRECTORY)
+    message(STATUS "nl-engine dxc: ${NL_DXC_DIR}")
+else()
+    message(FATAL_ERROR "dxcompiler.dll not found in Windows SDK — required for the DXIL target.")
+endif()
+
+set(_SHADER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/triangle.slang")
+set(_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${_SHADER_OUT}")
+
+set(_SHADER_ARTIFACTS "")
+foreach(_ent vs ps)
+    if(_ent STREQUAL "vs")
+        set(_stage vertex)
+        set(_entry vsMain)
+    else()
+        set(_stage fragment)
+        set(_entry psMain)
+    endif()
+    list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/tri.${_ent}.spv"
+                                  "${_SHADER_OUT}/tri.${_ent}.dxil")
+    add_custom_command(OUTPUT "${_SHADER_OUT}/tri.${_ent}.spv"
+        COMMAND "${SLANGC}" "${_SHADER_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
+                -o "${_SHADER_OUT}/tri.${_ent}.spv"
+        MAIN_DEPENDENCY "${_SHADER_SRC}"
+        COMMENT "Slang -> SPIR-V (${_ent})")
+    add_custom_command(OUTPUT "${_SHADER_OUT}/tri.${_ent}.dxil"
+        COMMAND "${SLANGC}" "${_SHADER_SRC}" -dxc-path "${NL_DXC_DIR}"
+                -target dxil -entry ${_entry} -stage ${_stage}
+                -o "${_SHADER_OUT}/tri.${_ent}.dxil"
+        MAIN_DEPENDENCY "${_SHADER_SRC}"
+        COMMENT "Slang -> DXIL (${_ent})")
+endforeach()
+
+# 改 shader 自动重编字节码；ALL 保证每次 build 都检查过期
+add_custom_target(nl_shaders ALL DEPENDS ${_SHADER_ARTIFACTS})
+# renderer 按编译期注入的 NL_SHADER_DIR 绝对路径读取字节码，不依赖 CWD
+target_compile_definitions(nl_renderer PRIVATE NL_SHADER_DIR="${_SHADER_OUT}")
+
 # ---- viewer：可见用例 + 程序内截图（--screenshot） ----
 add_executable(viewer viewer/main.cpp)
 target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw)
+# shader 字节码先于 viewer 生成（viewer 运行时要读 NL_SHADER_DIR 下的 .spv/.dxil）
+add_dependencies(viewer nl_shaders)
 
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）

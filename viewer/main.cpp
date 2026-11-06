@@ -116,7 +116,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.2") != nullptr, "M0.2 stage reported");
+    check(std::strstr(st.stage, "M0.3") != nullptr, "M0.3 stage reported");
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
     auto bad = nl::renderer::Renderer::create(nullptr, {640, 360}, false);
