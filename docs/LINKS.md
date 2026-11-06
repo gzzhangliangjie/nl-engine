@@ -54,7 +54,11 @@
 | Vulkan 规范 / Vulkan-Headers（**只查资料，不装 SDK**） | https://docs.vulkan.org/ · https://github.com/KhronosGroup/Vulkan-Headers |
 | vulkan-tutorial.com | https://vulkan-tutorial.com/ |
 | vkguide.dev | https://vkguide.dev/ |
-| Nsight Graphics（本机 N 卡抓帧） | NVIDIA 官网下载 |
+| ⭐ **RenderDoc（L1 帧结构调试主工具，DX12 + Vulkan 双后端通吃）** | https://renderdoc.org/ · https://github.com/baldurk/renderdoc （外部 Launch Application 零改动抓帧；`renderdoc_app.h` 的 in-app API 可精确抓第 N 帧） |
+| Nsight Graphics（L3 时间线 / N 卡内核剖析） | NVIDIA 官网下载（本机未装） |
+| PIX on Windows（L3，D3D12 专用） / PresentMon（帧 pacing） | Microsoft / Intel GPU 工具页 |
+| NVRHI timestamp query（L2 帧内 GPU 计时，**零外部依赖**） | `thirdparty/nvrhi/include/nvrhi/nvrhi.h` 的 `createQueryPool` / `beginQuery` / `endQuery` |
+| Tracy（L3 CPU-GPU 时间线，可选） | 本机 `Carrot/thirdparty/tracy/` 已 vendored |
 | meshoptimizer（工具链依赖） | https://github.com/zeux/meshoptimizer |
 
 ## 6. 基础补课（对应 kb/graphics-handbook.html 的 G0~G8）

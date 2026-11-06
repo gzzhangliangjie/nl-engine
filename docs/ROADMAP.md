@@ -49,7 +49,7 @@
 ## 阶段 P0 · 渲染地基（约 1~2 周）
 
 ### S0 搭骨架
-> 当前进度（2026-11-07）：M0.4 已验收通过（tag `s0-model`），M0.5 ImGui + 总验收待做；逐阶段实况见 `docs/MILESTONES.md`，可回放用例见 `example/`。
+> 当前进度（2026-11-07）：**S0 全部完成**——M0.5 ImGui HUD + 总验收通过（tag `s0-done`），下一步进 S1。逐阶段实况见 `docs/MILESTONES.md`，可回放用例见 `example/`，调试工具计划见下方专节。
 
 - **做什么**：接入后端，窗口 + glTF 加载 + ImGui 面板 + Slang 编译管线跑通
 - **工程骨架（底子，一次搭对）**：
@@ -196,6 +196,18 @@ nl-engine/
 - 离线工具 `nanite-tools`（cluster/simplify/dag/stat 四个子命令 + `.nmesh` 资产格式）
 - 运行时 `viewer`（10+ 个可开关模式，S0 普通渲染到 S13 完整 Nanite+Lumen 随时对照）
 - 一个装满 git tag 和验收截图的仓库——**这个仓库本身就是最好的简历**
+
+## 调试与性能工具链（S1~S13 共用）
+
+> 权威明细在 `docs/s0/S0-PLAN.md` 的「可观测性与调试工具计划」，这里只记路线图层面必须知道的三件事，避免两处漂移。
+
+| 什么时候 | 用什么 | 为什么 |
+|---|---|---|
+| 每一步的验收证据 | `--screenshot` GPU 回读 + `example/` 基线 + 展示台（L0） | 铁律「能亲眼看到」，已就位 |
+| S4 起查 draw call / 资源状态 | **RenderDoc** 外部启动（零代码改动），需要精确帧号再加 `--capture-frame N` 的进程内 API（L1） | 它同时覆盖 DX12 / Vulkan；Nsight 偏 N 卡、PIX 只管 D3D12，都不适合当双后端通用管线的主工具 |
+| S4 之前、S13 验收 | NVRHI timestamp query 填进 HUD 的 GPU 耗时曲线（L2）；S13 再用 Nsight / PresentMon / Tracy 做 CPU-GPU 时间线佐证（L3） | 当前 HUD 的 frame ms 只是 CPU 帧间隔，不是 GPU 耗时；S4 之后每一步都要能看出性能退化 |
+
+**工具全是进程外或 NVRHI 抽象层内**：不进 CMake、不链接、不读厂商 SDK 路径，图形 API 符号仍只在 `renderer/`。本机（2026-11-07 实测）RenderDoc / Nsight / PIX 均未安装，按需再取；S13 验收里「时间线截图证明无 CPU-GPU 同步 stall」据此走 L3。
 
 ## 节奏提醒
 

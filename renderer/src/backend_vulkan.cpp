@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "scene.hpp"
+#include "hud.hpp"
 
 #if defined(NL_BACKEND_VULKAN)
 
@@ -76,7 +77,8 @@ public:
         // 故所有 Vulkan 函数都在运行时从 loader 解析。调试层：Khronos VVL 需要厂商 SDK，
         // 本架构不装，故 Vulkan 调试能力 = NVRHI 自身校验层。
         info_.debugLayer = enableDebugLayer
-            ? "NVRHI validation (Vulkan VVL 未安装：零厂商 SDK)"
+            // ASCII only: M0.5 的 ImGui 默认字体没有中文字形，HUD 直接显示这个字段。
+            ? "NVRHI validation (Vulkan, no VVL, zero vendor SDK)"
             : "NVRHI validation only";
         info_.debugLayerActive = enableDebugLayer;
 
@@ -90,6 +92,7 @@ public:
         if (!createSwapchain(outError)) return false;
         if (!createTargets(outError)) return false;
         if (!scene_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
+        if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -107,6 +110,7 @@ public:
         nvrhiDevice_->waitForIdle();
         nvrhiDevice_->runGarbageCollection();
         scene_.invalidatePipelines();
+        hud_.invalidatePipeline();
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -123,7 +127,7 @@ public:
     }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
-                     const char* screenshotPath,
+                     const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {
         if (!nvrhiDevice_ || !vulkanSwapchain_) { outError = "renderer not initialized"; return false; }
 
@@ -145,6 +149,15 @@ public:
         nvrhiDevice_->queueWaitForSemaphore(nvrhi::CommandQueue::Graphics, vulkanImageAvailableSem_, 0);
 
         ensurePipeline(vulkanImageIndex_);
+        // HUD 全链路都不带 hud 参数时完全不碰：M0.4 及更早的回放基线保持不变。
+        if (hud && hud->displayWidth > 0.0f) {
+            if (!framebuffers_.empty() && framebuffers_[0]) {
+                std::string err;
+                if (!hud_.ensurePipeline(nvrhiDevice_, framebuffers_[0]->getFramebufferInfo(), err))
+                    nl::core::log::deviceError("Vulkan", err);
+            }
+            hud_.build(*hud);
+        }
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
@@ -160,6 +173,11 @@ public:
             && scene_.ready() && depth_) {
             scene_.draw(cmd, framebuffers_[vulkanImageIndex_],
                         nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
+        }
+        // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
+        if (hud && vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_]) {
+            hud_.draw(cmd, framebuffers_[vulkanImageIndex_],
+                      nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
 
         nvrhi::StagingTextureHandle staging;
@@ -516,6 +534,7 @@ private:
         // acquire / present 的 OUT_OF_DATE 也会走这里：旧的 framebuffer 与 depth
         // 必须一并失效，否则 createTargets() 之后还在引用已销毁的 swapchain image。
         scene_.invalidatePipelines();
+        hud_.invalidatePipeline();
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         if (vulkanSwapchain_) {
@@ -599,8 +618,9 @@ private:
 
     void shutdown() {
         if (vulkanDevice_) nvrhiDevice_->waitForIdle();
-        // M0.4：场景资源（含 binding set / pipeline）必须在 device 仍存活时释放。
+        // 场景 / HUD 资源（含 binding set / pipeline）必须在 device 仍存活时释放。
         scene_.shutdown();
+        hud_.shutdown();
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -663,6 +683,7 @@ private:
 
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;
+    Hud                                   hud_;
     nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
 

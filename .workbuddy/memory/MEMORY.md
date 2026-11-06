@@ -4,7 +4,7 @@
 - 通用管线：NVRHI + Slang，构建链**不依赖任何厂商图形 SDK**。`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `VK_SDK_PATH` / `find_package(Vulkan)` / 要求装 SDK。
 - 后端对称：D3D12 / OpenGL 的头、库、调试层来自 Windows SDK；Vulkan 头走 `KhronosGroup/Vulkan-Headers`（NVRHI 的 `NVRHI_FETCH_VULKAN_HEADERS`），loader 是驱动自带 `vulkan-1.dll`；Slang 独立获取，不从 `$VULKAN_SDK` 找。
 - `NL_GRAPHICS_BACKEND`（AUTO / DX12 / VULKAN）是唯一后端开关；Windows 上 `AUTO` 落 DX12（零额外依赖），Vulkan 作第二后端验证抽象。
-- 图形 API 符号只允许出现在 `renderer/`；`core/` / `viewer/` 零命中。调试层判据按当前后端走（DX12 Debug Layer / VVL），不把 VVL 写成全项目前提。
+- 图形 API / NVRHI / ImGui 符号只允许出现在 `renderer/`；`core/` / `viewer/` 零命中。调试层判据按当前后端走（DX12 Debug Layer + NVRHI validation / Vulkan NVRHI validation）；VVL 是可选插件、本机未装，不写成全项目前提。
 - 一份 `.slang` 同时出 SPIR-V 与 DXIL、两后端各自加载成功 = 通用管线的验收核心，不是「顺带试一次」。
 
 ## 开发节奏
@@ -22,7 +22,23 @@
 - 网络：GitHub 小文件开代理后直连可用，大文件限速 ~12KB/s → gh-proxy 分 8 段并发。
 
 ## 版本
-- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）。`v0.1.0` = M0.0 环境补齐快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；**`s0-done` = M0.5 + S0 总验收，S0 全部完成，下一步 S1**。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+
+## M0.5 起的 HUD / 模式约定（2026-11-07 实测，改前看 `docs/IMGUI-GUIDE.md`）
+- ImGui 用 vendored **v1.91.9 稳定版**（不要拿本机 Carrot 的 `1.92.7 WIP`，字体系统重构过）；**不用官方 D3D12/Vulkan backend**，统一走自写 `renderer/src/hud.cpp`（`ImDrawData` 摊平成 HudVertex 32 B + R32_UINT + 逐 cmd scissor）。
+- `hud.slang` 与 `model.slang` 都单源双目标；`--selftest` 机械核对 8 个 `.spv`/`.dxil` 产物魔数（14/14）。`hudProjection()` 的 **Y 尺度必须为负**（ImGui y 向下、NDC y 向上），否则文字镜像。
+- 动态 VB/IB 的 `BufferDesc` 必须 `initialState = CopyDest` + `keepInitialState = true`，否则 NVRHI validation 报 `Unknown prior state` → DX12 Device Removed。
+- `HudFrame` 是唯一公开双向 POD：viewer 填显示数据、HUD 写回控件值；`renderFrame(..., hud=nullptr)` 时完全不碰 ImGui → `--screenshot` 默认 `--no-hud`，M0.1~M0.4 基线逐字节不动。
+- 截图确定性：回归模式用 8 个固定帧时间样本 + 面板标注 `capture/replay`；交互窗口才显示真实 FPS。`--hud` 两后端 PNG 必然不同（面板文本不同），别误判成 3D 画面不一致。
+- 默认字体图集只有 ASCII：HUD 里所有字符串（含后端调试层说明）必须 ASCII，中文会显示 `?????`；要中文 / InputText（键盘字符回调）/ 用户纹理（`TextureId` 当前忽略）/ docking 都是后续增量。
+- **下拉框 / 选择菜单现在就能用**：`Combo` / `BeginCombo` / `ListBox` / `Selectable` / `RadioButton` / `TreeNode` 在已 vendored 的 `imgui_widgets.cpp` 里，鼠标输入已够；弹出层的多 `ImDrawList` / ClipRect 已被 `build()` / `draw()` 覆盖。仅 `InputText` 需补字符回调。
+- `--mode` 分发器在 `core/modes.*` + `viewer` 的 `runMode()`：M0.5 只有 `normal`；S1 起每加一个模式只改枚举 / 名字 / case，旧模式保留当对照。未知模式退出 1。
+
+## 调试与性能工具链（2026-11-07 定，S1~S14 沿用）
+- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（S4 前补，填进 `HudFrame`）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
+- 选 RenderDoc 当主工具是因为**同时覆盖 DX12 + Vulkan**；Nsight 偏 N 卡、PIX 只管 D3D12，退到 L3。工具全在进程外或 NVRHI 抽象层内，不进 CMake、不链接、不读 SDK 路径。
+- **当前 HUD 的 `frame ms` 是 CPU 帧间隔，不是 GPU 耗时**，不能拿它验收 60fps / 性能退化。
+- 本机（2026-11-07）RenderDoc / Nsight / PIX / `renderdoc.dll` **均未安装**；S0 验收不依赖抓帧，台账如实记 ⬜，不虚构结果。详见 `docs/s0/S0-PLAN.md`。
 
 ## M0.4 起的渲染约定（2026-11-07 实测，改动前先看 `docs/SHADER-CONVENTIONS.md`）
 - 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 `nvrhi.h`）；两个 backend 只管 swapchain / depth / framebuffer / present，**不要再在两个后端里各抄一遍 shader 或资源创建**。

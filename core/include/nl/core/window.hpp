@@ -42,6 +42,8 @@ public:
     // M0.4 轨道相机输入：拖动增量 / 滚轮增量按帧消费，左键按下状态用于判定拖动。
     void consumeMouse(float& deltaX, float& deltaY, float& scrollDelta);
     bool leftButtonDown() const;
+    // M0.5 HUD 输入：窗口坐标系里的绝对鼠标位置（ImGui IO 需要，非边沿触发）。
+    void mousePosition(float& x, float& y) const;
 
     // M0.2：渲染器拿它创建原生 surface / swapchain
     void* nativeHandle() const;

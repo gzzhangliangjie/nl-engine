@@ -29,7 +29,8 @@
 ## M4.2 HUD 统计 + 性能验收（1 天）
 
 - [ ] 剔除统计回读：draw count / 总簇数（用 1~2 帧延迟 readback，别阻塞）
-- [ ] ImGui HUD 显示；准备 1M+ 三角场景（S1 的 .nmesh 换个大模型）
+- [ ] **先补 L2 GPU 帧内计时**：NVRHI timestamp query 把真实 GPU 耗时填进 `HudFrame` 的曲线（`--profile` 按 pass 分段）。M0.5 的 HUD `frame ms` 只是 CPU 帧间隔，不能拿来验收 60fps；计划见 `docs/s0/S0-PLAN.md`「可观测性与调试工具计划」
+- [ ] ImGui HUD 显示（控件加法和输入边界见 `docs/IMGUI-GUIDE.md`）；准备 1M+ 三角场景（S1 的 .nmesh 换个大模型）
 
 **自检（S4 验收）**：相机移出视锥 HUD 绘制簇数骤降；大场景稳定 60fps。tag：`s4-done`，截图 `docs/screenshots/s4.png`（两张：面向/背对 HUD 数字对比）。
 

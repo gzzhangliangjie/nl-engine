@@ -1,6 +1,7 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
 #include "nl/core/log.hpp"
+#include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
 #include "nl/renderer/renderer.hpp"
 
@@ -35,6 +36,13 @@ const nl::renderer::ClearColor kColors[] = {
 };
 constexpr int kColorCount = static_cast<int>(sizeof(kColors) / sizeof(kColors[0]));
 
+// --screenshot 回归模式下 HUD 的时序样本固定：实时 FPS 每次都不同，写进 PNG
+// 就会让基线 MD5 永远对不上。交互窗口里显示的是真实采样。
+constexpr int kFixedSampleCount = 8;
+const float kFixedSamples[kFixedSampleCount] = {
+    16.6f, 16.8f, 16.5f, 16.9f, 16.7f, 16.6f, 17.1f, 16.4f
+};
+
 struct Options {
     bool selftest   = false;
     bool help       = false;
@@ -42,7 +50,9 @@ struct Options {
     bool screenshot = false;
     bool sizeSet    = false;
     bool resize     = false;
-    bool cullBack   = true;   // C 键 / --cull 控制；关掉能看到 Suzanne 内壁
+    bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
+    bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
+    bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
     int  width      = 1280;
     int  height     = 720;
     int  resizeWidth  = 0;
@@ -53,6 +63,8 @@ struct Options {
     float pitchDeg  = 9.2f;
     float distance  = 4.2f;
     std::string screenshotPath;
+    std::string modeText = "normal";
+    nl::core::ViewMode mode = nl::core::ViewMode::Normal;
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -62,6 +74,9 @@ Options parseArgs(int argc, char** argv) {
         if (a == "--selftest") o.selftest = true;
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
+        else if (a == "--hud") { o.hudSet = true; o.hudEnabled = true; }
+        else if (a == "--no-hud") { o.hudSet = true; o.hudEnabled = false; }
+        else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
@@ -93,12 +108,13 @@ Options parseArgs(int argc, char** argv) {
     // 截图模式默认小窗口：两后端 PNG 逐像素对照，跑得快、文件小。
     if (o.screenshot && !o.sizeSet) { o.width = 640; o.height = 360; }
     if (o.frames < 1) o.frames = 1;
+    if (!o.hudSet) o.hudEnabled = !o.screenshot;
     return o;
 }
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.4 selftest\n";
+    std::cout << "nl-engine M0.5 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -125,17 +141,23 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
+    check(nl::core::modeSelfTest(), "view mode dispatcher (normal only in S0)");
 
     const auto st = nl::renderer::status();
     std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n"
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.4") != nullptr, "M0.4 stage reported");
+    check(std::strstr(st.stage, "M0.5") != nullptr, "M0.5 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
           "frame params (MVP/cull/light) POD defaults");
+    check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
+    std::string shaderReport;
+    check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
+          "Slang single-source -> SPIR-V + DXIL (8 artifacts)");
+    std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
     auto bad = nl::renderer::Renderer::create(nullptr, {640, 360}, false);
@@ -156,15 +178,15 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
     return true;
 }
 
-// 可见用例：带贴图 Suzanne + 轨道相机（拖动/滚轮）+ C 键背面剔除 +
-// F12/--screenshot 真回读 GPU 像素写 PNG + resize 不黑屏。
-int runWindow(const Options& o) {
+// 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
+// 清屏色 / 重置相机；F12/--screenshot 真回读 GPU 像素写 PNG；resize 不黑屏。
+int runNormal(const Options& o) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
-    desc.title  = "nl-engine | M0.4 | starting...";
+    desc.title  = "nl-engine | M0.5 | starting...";
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
@@ -192,7 +214,9 @@ int runWindow(const Options& o) {
     nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
     nl::core::log::info("debug layer: ", info.debugLayer,
                         " | active=", info.debugLayerActive ? "yes" : "no");
-    nl::core::log::info("case: drag=orbit, wheel=zoom, C=culling, R=reset, SPACE=clear, F12=PNG");
+    nl::core::log::info("mode: ", nl::core::modeName(o.mode),
+                        " | HUD: ", o.hudEnabled ? "on" : "off",
+                        " | case: drag=orbit, wheel=zoom, C=culling, R=reset, SPACE=clear, F12=PNG");
 
     if (o.screenshot) {
         std::string err;
@@ -202,7 +226,8 @@ int runWindow(const Options& o) {
         }
         nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
                             std::filesystem::absolute(o.screenshotPath).string(),
-                            " | cull=", cullBack ? "back" : "none");
+                            " | cull=", cullBack ? "back" : "none",
+                            " | hud=", o.hudEnabled ? "on" : "off");
     }
 
     using clock = std::chrono::steady_clock;
@@ -211,6 +236,9 @@ int runWindow(const Options& o) {
     int colorIndex = o.color;
     int screenshotsSaved = 0;
     bool failed = false;
+    bool hudWantsMouse = false;   // 上一帧 HUD 是否占着鼠标（避免拖面板时转相机）
+    float frameHistory[120] = {};
+    int frameHistoryCount = 0;
     const std::uint64_t resizeFrame =
         (o.resize && o.frames > 2) ? std::max<std::uint64_t>(2, o.frames / 2) : 0;
 
@@ -232,16 +260,19 @@ int runWindow(const Options& o) {
             camera.reset();
             nl::core::log::info("camera reset");
         }
-        float dx = 0.0f, dy = 0.0f, scroll = 0.0f;
+        float dx = 0.0f, dy = 0.0f, scroll = 0.0f, mouseX = 0.0f, mouseY = 0.0f;
         window.consumeMouse(dx, dy, scroll);
-        if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
-        if (scroll != 0.0f) camera.zoom(scroll);
+        window.mousePosition(mouseX, mouseY);
+        if (!hudWantsMouse) {
+            if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
+            if (scroll != 0.0f) camera.zoom(scroll);
+        }
 
         const char* capturePath = nullptr;
         std::string manualPath;
         std::string beforePath;
         if (window.keyPressed(nl::core::Key::F12)) {
-            manualPath = "docs/screenshots/m0.4-" + std::string(st.backend) + "-manual.png";
+            manualPath = "docs/screenshots/m0.5-" + std::string(st.backend) + "-manual.png";
             std::string err;
             if (prepareScreenshotDirs(manualPath, err)) capturePath = manualPath.c_str();
         }
@@ -277,12 +308,66 @@ int runWindow(const Options& o) {
         std::memcpy(fp.model, model.m, sizeof(fp.model));
         fp.cullBack = cullBack;
 
-        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath)) {
+        // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
+        nl::renderer::HudFrame hud{};
+        if (o.hudEnabled) {
+            const auto e = renderer->extent();
+            hud.displayWidth  = static_cast<float>(e.width);
+            hud.displayHeight = static_cast<float>(e.height);
+            hud.yawDeg = camera.yawDegrees();
+            hud.pitchDeg = camera.pitchDegrees();
+            hud.distance = camera.distance();
+            hud.backend = st.backend;
+            hud.adapter = info.adapterName.c_str();
+            hud.debugLayer = info.debugLayer.c_str();
+            hud.mode = nl::core::modeName(o.mode);
+            hud.stage = st.stage;
+            hud.cullBack = cullBack;
+            hud.colorIndex = colorIndex;
+            hud.deterministic = o.screenshot;
+            if (o.screenshot) {
+                // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
+                hud.fps = 60.0f;
+                hud.frameMs = 16.67f;
+                hud.frameMsCount = kFixedSampleCount;
+                std::memcpy(hud.frameMsHistory, kFixedSamples, sizeof(kFixedSamples));
+                hud.deltaSeconds = 1.0f / 60.0f;
+                hud.mouseX = -100.0f; hud.mouseY = -100.0f;  // 不落在 HUD 窗口内
+                hud.mouseLeftDown = false;
+                hud.mouseWheel = 0.0f;
+            } else {
+                hud.fps = dtMs > 0.0 ? static_cast<float>(1000.0 / dtMs) : 0.0f;
+                hud.frameMs = static_cast<float>(dtMs);
+                hud.deltaSeconds = static_cast<float>(std::max(dtMs / 1000.0, 1.0 / 1000.0));
+                hud.mouseX = mouseX;
+                hud.mouseY = mouseY;
+                hud.mouseLeftDown = window.leftButtonDown();
+                hud.mouseWheel = scroll;
+                if (frameHistoryCount < 120) {
+                    frameHistory[frameHistoryCount++] = hud.frameMs;
+                } else {
+                    std::memmove(frameHistory, frameHistory + 1, 119 * sizeof(float));
+                    frameHistory[119] = hud.frameMs;
+                }
+                hud.frameMsCount = frameHistoryCount;
+                std::memcpy(hud.frameMsHistory, frameHistory,
+                            static_cast<std::size_t>(frameHistoryCount) * sizeof(float));
+            }
+        }
+
+        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
+                                   o.hudEnabled ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
+        if (o.hudEnabled) {
+            if (hud.resetCamera) camera.reset();
+            cullBack = hud.cullBack;
+            colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
+            hudWantsMouse = hud.wantCaptureMouse;
+        }
         if (capturePath) {
             ++screenshotsSaved;
             nl::core::log::info("screenshot written: ", capturePath);
@@ -291,7 +376,9 @@ int runWindow(const Options& o) {
         if (frame % 15 == 0 || o.screenshot) {
             const auto e = renderer->extent();
             std::ostringstream title;
-            title << "nl-engine | M0.4 | " << st.backend
+            title << "nl-engine | M0.5 | " << st.backend
+                  << " | mode " << nl::core::modeName(o.mode)
+                  << " | HUD " << (o.hudEnabled ? "on" : "off")
                   << " | frame " << frame
                   << " | " << std::fixed << std::setprecision(1) << dtMs << " ms"
                   << " | yaw " << std::setprecision(1) << camera.yawDegrees()
@@ -321,10 +408,23 @@ int runWindow(const Options& o) {
     return failed ? 1 : 0;
 }
 
+// S0 定型：所有里程碑共用这一个分发器，新增模式只加 case，不改 main。
+int runMode(nl::core::ViewMode mode, const Options& o) {
+    switch (mode) {
+    case nl::core::ViewMode::Normal:
+        return runNormal(o);
+    default: {
+        const char* name = nl::core::modeName(mode);
+        nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
+        return 1;
+    }
+    }
+}
+
 void printUsage() {
-    std::cout << "nl-engine viewer (M0.4)  backend=" << nl::renderer::status().backend << '\n'
-              << "  viewer.exe                         textured Suzanne; drag=orbit, wheel=zoom\n"
-              << "                                     C=culling on/off, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
+    std::cout << "nl-engine viewer (M0.5)  backend=" << nl::renderer::status().backend << '\n'
+              << "  viewer.exe                         textured Suzanne + ImGui HUD; drag=orbit, wheel=zoom\n"
+              << "                                     C=culling, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
@@ -334,6 +434,14 @@ void printUsage() {
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
               << "  viewer.exe --dist F                camera distance (default 4.2)\n"
+              << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
+              << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
+              << "  viewer.exe --mode <name>           run mode; available: ";
+    for (int i = 0; i < nl::core::modeCount(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << nl::core::modeNameAt(i);
+    }
+    std::cout << '\n'
               << "  viewer.exe --no-debug              disable current backend debug layer\n"
               << "  viewer.exe --help                  this text\n"
               << "  backend at configure time: -DNL_GRAPHICS_BACKEND=DX12|VULKAN\n";
@@ -342,8 +450,17 @@ void printUsage() {
 } // namespace
 
 int main(int argc, char** argv) {
-    const Options o = parseArgs(argc, argv);
+    Options o = parseArgs(argc, argv);
     if (o.selftest) return runSelfTest();
     if (o.help) { printUsage(); return 0; }
-    return runWindow(o);
+    if (!nl::core::parseViewMode(o.modeText.c_str(), o.mode)) {
+        std::cerr << "unknown --mode '" << o.modeText << "'. available: ";
+        for (int i = 0; i < nl::core::modeCount(); ++i) {
+            if (i) std::cerr << ", ";
+            std::cerr << nl::core::modeNameAt(i);
+        }
+        std::cerr << '\n';
+        return 1;
+    }
+    return runMode(o.mode, o);
 }

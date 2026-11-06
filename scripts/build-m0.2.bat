@@ -39,5 +39,5 @@ echo === selftest ===
 if errorlevel 1 exit /b 1
 
 echo.
-echo M0.4 BUILD OK [%BACKEND%]: %BUILDDIR%\viewer.exe
+echo BUILD OK [%BACKEND%]: %BUILDDIR%\viewer.exe
 exit /b 0

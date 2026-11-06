@@ -1,6 +1,11 @@
 #include "nl/renderer/renderer.hpp"
 #include "backend.hpp"
 
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <sstream>
+
 namespace nl::renderer {
 namespace {
 #if defined(NL_BACKEND_VULKAN)
@@ -8,11 +13,44 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.4 textured model + depth + orbit camera (Slang dual-backend)";
+constexpr const char* kStage = "M0.5 ImGui HUD + S0 final acceptance (Slang dual-backend)";
 } // namespace
 
 Status status() {
     return Status{ kBackend, kStage, false };
+}
+
+bool shaderArtifactsSelfTest(std::string& report) {
+    static const char* kSources[] = { "model", "hud" };
+    static const char* kStages[]  = { "vs", "ps" };
+    static const char* kTargets[] = { "spv", "dxil" };
+    constexpr std::uint32_t kSpirvMagic = 0x07230203u;
+
+    std::ostringstream os;
+    int ok = 0;
+    for (const char* src : kSources) {
+        for (const char* stage : kStages) {
+            for (const char* target : kTargets) {
+                std::string name = std::string(src) + "." + stage + "." + target;
+                const std::string path = std::string(NL_SHADER_DIR) + "/" + name;
+                std::ifstream f(path, std::ios::binary | std::ios::ate);
+                std::int64_t size = -1;
+                if (f) size = static_cast<std::int64_t>(f.tellg());
+                std::uint32_t magic = 0;
+                if (f && size >= 4) {
+                    f.seekg(0);
+                    f.read(reinterpret_cast<char*>(&magic), 4);
+                }
+                const bool isSpv = (std::strcmp(target, "spv") == 0);
+                const bool good = f.good() && size >= 4 &&
+                    (isSpv ? magic == kSpirvMagic : std::memcmp(&magic, "DXBC", 4) == 0);
+                if (good) ++ok;
+                os << ' ' << name << (good ? "" : "!BAD") << '(' << size << "B)";
+            }
+        }
+    }
+    report = os.str() + "  [" + std::to_string(ok) + "/8 ok]";
+    return ok == 8;
 }
 
 struct Renderer::Impl {
@@ -55,9 +93,9 @@ void Renderer::resize(Extent extent) {
 }
 
 bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
-                           const char* screenshotPath) {
+                           const char* screenshotPath, HudFrame* hud) {
     if (!impl_->backend) return false;
-    return impl_->backend->renderFrame(color, frame, screenshotPath, impl_->error);
+    return impl_->backend->renderFrame(color, frame, screenshotPath, hud, impl_->error);
 }
 
 int Renderer::drainMessages() {

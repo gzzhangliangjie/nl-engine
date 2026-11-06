@@ -18,7 +18,7 @@
 | M0.2 ✅ | NVRHI device + swapchain，两后端都能起 | 窗口清屏色按空格切换；切换后端后**同一份 viewer 代码出同一个画面**；拖动缩放窗口前后都不黑屏。截图 `m0.2.png`（含两后端 + 缩放前后对比） | 当前后端调试层零输出；DX12 / Vulkan 都跑通 | ✅ 2026-11-06（→ M0.3） |
 | M0.3 ✅ | 三角形 + frame in flight = 2 | 彩色三角形；任务管理器 GPU 占用非 0；两个后端各跑一次。截图 `docs/screenshots/m0.3-{dx12,vulkan}.png`（2026-11-07 由 `s0-triangle` 原始代码重建补出，原验收只肉眼看没落盘） | 当前后端调试层零输出；**故意删一个 fence 等待能触发同步校验报错**（证明安全网有效） | ✅ 2026-11-06（→ M0.4） |
 | M0.4 ✅ | 模型 + 贴图 + 轨道相机 | 带贴图 Suzanne；拖动旋转、滚轮缩放；关背面剔除能看到内壁。截图 `docs/screenshots/m0.4-{dx12,vulkan}.png` + 内壁 / resize 对照共 10 张（回放清单 `example/m0.4/`） | 调试层零输出 + resize 回归通过 + 两后端画面一致（实测分档：正常视角逐字节、内壁 / resize ≤1/255） | ✅ 2026-11-07（→ M0.5） |
-| M0.5 | ImGui HUD + 总验收 | HUD 显示 FPS / 帧时间曲线 / 相机参数 / 当前后端名；Nsight Graphics 抓一帧看到 draw call；截图 `docs/screenshots/s0.png` | S0 三条硬指标全过（画面可交互 / 两后端调试层零报错 / **一份 .slang 同时出 SPIR-V 与 DXIL 且两后端都能加载**） | 打 `s0-done`，进 S1 |
+| M0.5 ✅ | ImGui HUD + 总验收 | HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 当前后端名 / mode / 调试层；`--no-hud` 画面与 M0.4 基线逐字节相同；截图 `docs/screenshots/s0.png` + `m0.5-hud-{dx12,vulkan}.png`；`controls` 用例给出「HUD 控件值 → 清屏色 / 模型画面」的静态对照（交互点选另标 manual） | S0 三条硬指标全过（画面可交互 / 两后端调试层零报错 / **一份 .slang 同时出 SPIR-V 与 DXIL 且两后端都能加载**）；selftest 14/14 含 8 个产物魔数；`--check` 退出 0（5 用例 / 10 基线） | ✅ 2026-11-07（→ S1） |
 
 > **resize 是每一阶段的回归项，不是 M0.2 的一次性检查**：Carrot 实况里 swapchain recreation 前后修了 4 次（`146517a7` → `6a30f711` → `bb981ccb` → `2c87efe2`），那是没做回归的代价——我们做成回归项，预期一次修好，不预期修 4 次。
 
@@ -39,7 +39,7 @@
 - [x] `cmake --version` 正常 → 3.31.6（便携版）
 - [x] `-DNL_GRAPHICS_BACKEND=DX12` 与 `=VULKAN` 两种配置各编一遍，`--selftest` 都 PASS 且 `backend:` 行不同——**全程零厂商 SDK**
 - [ ] `slangc -h` 正常（M0.3 前拿到即可）
-- [ ] Nsight Graphics 已装（验收日要用，可选）
+- [ ] RenderDoc（L1 帧结构调试，S4 前按需装；**不是 S0 验收项**，本机未装，见「可观测性与调试工具计划」）
 
 ### 后端对称：谁都不装 SDK（2026-11-06 架构校准）
 
@@ -63,7 +63,8 @@
 - ✅ CMake 3.31.6 便携版；标准构建链 `configure → build → SELFTEST PASS (7/7)` 全通过（`scripts/build-m0.1.bat`，NMake 生成器）。M0.1 另有零 CMake 兜底 `scripts/verify-m0.1-msvc.ps1`
 - ✅ `C:\Windows\System32\vulkan-1.dll` + `vulkaninfo.exe` 驱动自带；**未安装、也无需安装 Vulkan SDK**
 - ✅ `NL_GRAPHICS_BACKEND` 两种配置实测都能编译并输出对应后端名（见 M0.1 验收记录）
-- ⬜ Slang release、NVRHI 源码、Nsight Graphics（用到的阶段再拿）
+- ✅ Slang release / NVRHI 源码：均已本地 vendored（`thirdparty/slang/dist`、`thirdparty/nvrhi`），M0.3 起实际在用
+- ⬜ RenderDoc / Nsight Graphics / PIX：进程外调试工具，本机均未安装，按「可观测性与调试工具计划」L1 / L3 按需取，不进构建链
 - 网络：`raw.githubusercontent.com` 默认超时、`gh-proxy` 稳定可用；开代理后小文件直连 0.94s，大文件仍被限速（单连接 ~12KB/s），改分段并发解决
 - GLFW 已从本地 `Carrot/thirdparty/glfw` 复制进 `thirdparty/`（105 个构建必需文件、零网络）
 
@@ -160,15 +161,48 @@ nl-engine/
 
 ## M0.5 ImGui + 收尾验收（1 天）
 
-- [ ] ImGui（docking 分支）接进渲染循环：一个 HUD 显示 FPS、帧时间、相机参数、**当前后端名**
-- [ ] `--mode normal` 参数框架搭好（S1 起每个里程碑加一个 mode，模式分发器今天定型）
-- [ ] README 更新构建说明（`cmake -B build -DNL_GRAPHICS_BACKEND=... && cmake --build build`）
-- [ ] **验收对照 docs/ROADMAP.md 的 S0 三条**：
-  - [ ] 画面正确、可交互
-  - [ ] **两个后端**的调试层都零报错
-  - [ ] 一份 `.slang` 同时编译出 SPIR-V 与 DXIL，两个后端各自加载成功
+- [x] ImGui 接进渲染循环（本机 vendored **1.91.9 主线稳定版，非 docking 分支**）：HUD 显示 FPS / 帧时间曲线 / yaw·pitch·dist / 当前后端名 + adapter + 调试层 / mode / stage，控件可改剔除 / 清屏色 / 重置相机
+- [x] `--mode normal` 分发器定型：`core/modes.hpp/.cpp` + `runMode()`；未知模式名退出 1 并列出可用模式；S1 起只加枚举 / 名字 / case
+- [x] README 更新构建说明与 M0.5 运行方式
+- [x] **验收对照 docs/ROADMAP.md 的 S0 三条**：
+  - [x] 画面正确、可交互（HUD 控件走双向 POD 通道，值每帧回写 viewer；鼠标点控件为交互用例，展示台标 `manual`）
+  - [x] **两个后端**的调试层都零报错（6 个渲染进程 `deviceErrors=0`；两后端 ctest 100%）
+  - [x] `model.slang` 与 `hud.slang` 各自同出 SPIR-V + DXIL，两后端各自加载；`--selftest` 机械核对 8 个产物魔数
+- [x] `example/m0.5/` 归位 + `cases.json` 登记 + `server.py --check` 退出 0
+- [ ] 图形调试工具抓帧：**已从 S0 验收项移出**，见下一节工具计划（本机工具未装，如实记 ⬜）
 
-**收尾**：tag：`s0-done`；用 Nsight Graphics 抓一帧（认识工具：能看到 draw call、状态、耗时，S4 以后全靠它）；存验收截图进 `docs/screenshots/s0.png`。
+**本轮落地口径（2026-11-07 开工定，先定目标 / 可见用例 / 判据再动手）**：
+- **能亲眼看到的用例**：交互窗口里 Suzanne 画面上叠一块 ImGui HUD——FPS、帧时间曲线、yaw/pitch/dist、当前后端名 + adapter + 调试层、mode / stage，以及真正可调的控件（背面剔除 / 清屏色 / 重置相机）；`viewer.exe --hud --screenshot <png>` 出可复现的 HUD 截图 `docs/screenshots/s0.png`。
+- **截图可复现的约定**：实时 FPS / 帧时间每次都不同，若写进 PNG 则基线 MD5 永远对不上。故 `--screenshot` 回归模式下 HUD 时序数据用固定样本并在面板标注 `capture/replay`；交互窗口显示真实采样。历史版本用例不传 `--hud`，M0.1~M0.4 的基线保持原样不动。
+- **验收判据**：① 画面正确可交互（HUD 控件走双向 POD 通道、值每帧回写 viewer；鼠标点控件列为交互用例）② DX12 / Vulkan 各自 `deviceErrors=0` 且 resize 回归通过 ③ `model.slang` 与新增 `hud.slang` 各自同出 SPIR-V + DXIL 并被两后端加载；`--mode` 分发器与 HUD 自检通过；`python tools/showcase/server.py --check` 退出 0（本轮用例已归位 `example/m0.5/`）。
+- **放行**：以上全过才打 tag `s0-done`，进 S1。图形 / 性能调试工具不在 S0 验收范围内，另见下一节计划，不虚构抓帧结果。
+
+**收尾**：tag：`s0-done`；存验收截图 `docs/screenshots/s0.png`（= DX12 HUD 实拍）。图形/性能调试工具不在 S0 验收范围内，计划见下一节。
+
+---
+
+## 可观测性与调试工具计划（2026-11-07 定，S1~S14 沿用）
+
+> 起因：M0.5 的 HUD 把「看画面」和「看数字」合到一处，但工具链不能停在肉眼验收。
+> **纪律不变**：工具全在进程外或 NVRHI 抽象层内，构建链零厂商 SDK，图形 API 符号不出 `renderer/`。
+> **本机实况（2026-11-07 实测）**：RenderDoc / Nsight Graphics / PIX / `renderdoc.dll` **均未安装**。
+
+| 层 | 看什么 | 工具 / 接法 | 时机 | 状态 |
+|---|---|---|---|---|
+| L0 画面证据 | 每步「能亲眼看到」的验收图 | `--screenshot` GPU 真回读 + `example/` 基线 + 展示台现场回放 | M0.2 起 | ✅ 已就位 |
+| L1 帧结构 | draw call / pipeline / 资源状态 / 依赖 | **RenderDoc**（同时支持 D3D12 + Vulkan）：外部 Launch Application 拉起 `viewer.exe`、热键抓帧，**零代码改动**；要精确抓第 N 帧再加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")` 拿 in-app API（约 30 行、零链接依赖、默认关闭） | S4 起 GPU-driven 调试必备，S1 后随用随取 | ⬜ 工具未装，代码侧未写 |
+| L2 帧内计时 | 真实 GPU 耗时、按 pass 拆分 | NVRHI timestamp query（`createQueryPool` / `beginQuery` / `endQuery`）→ 结果填进 `HudFrame` 的 GPU 曲线；`--profile` 按 mode 分段。**当前 HUD 的 frame ms 是 CPU 帧间隔，不是 GPU 耗时**，这是第一个该补的洞 | S4 前补掉，让每步性能退化当场可见 | ⬜ 未做 |
+| L3 时间线 / 帧 pacing | CPU-GPU 对齐、stall、帧间隔抖动 | Nsight Graphics / PIX（D3D12）/ PresentMon / Tracy（本机 `Carrot/thirdparty/tracy` 现成） | S13 证明无同步 stall 时按需取 | ⬜ 工具未装 |
+
+**为什么 L1 改 RenderDoc、不写死 Nsight**：Nsight 偏 N 卡、PIX 只管 D3D12，我们是 DX12 / Vulkan 双后端通用管线，逐 draw 抓帧选能同时覆盖两者的 RenderDoc；Nsight / RGP 退到 L3 做时间线佐证。外部工具都不进 CMake、不链接、不读 SDK 路径——它们是进程外调试工具，与「零厂商图形 SDK」不是一回事。
+
+**L1 的两种接法**：
+1. 零改动：RenderDoc GUI / CLI 启动 `viewer.exe`，热键触发捕获，装好工具当天可用。
+2. 进程内：`--capture-frame N` 在指定帧包 `StartFrameCapture` / `EndFrameCapture`，自动落 `.rdc`；device / window 句柄可传空，故 `core/` / `viewer/` 里不会出现任何图形 API 符号。
+
+**与 HUD 的关系**：M0.5 的 `HudFrame` 是双向 POD，L2 的 GPU 计时、S4 的剔除统计直接加字段即可；ImGui 核心库自带表格 / 树 / 颜色选择器 / 拖拽 / 多选，复杂控件不改变 `hud.cpp` 的渲染后端。真要上编辑器级 UI 再补四块增量：键盘字符输入、用户纹理绑定表（当前忽略 `TextureId`）、中文字体（默认图集只有 ASCII）、docking 分支。扩展件 `implot` / `ImGuizmo` / `imgui-node-editor` 本机 Carrot 里都现成。
+
+**「Nsight 抓一帧」已从 S0 验收项移出**：原计划把它列进 M0.5 收尾，本机未装且工具选型已改，本轮如实记 ⬜、不虚构结果。S0 三条硬指标不依赖任何外部调试工具（见门禁表）。
 
 ---
 

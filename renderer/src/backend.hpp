@@ -34,9 +34,10 @@ public:
                       std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
-    // 一帧：clear → 模型绘制（MVP / cull）→（可选）回读 GPU 像素写 PNG → present
+    // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
+    // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,
-                             const char* screenshotPath,
+                             const char* screenshotPath, HudFrame* hud,
                              std::string& outError) = 0;
 
     // 调试层消息转日志；返回新增设备错误数

@@ -242,6 +242,104 @@
           "script": "example/m0.4/run.bat selftest"
         }
       ]
+    },
+    {
+      "id": "m0.5",
+      "label": "M0.5",
+      "name": "ImGui HUD + S0 总验收",
+      "tag": "s0-done",
+      "date": "2026-11-07",
+      "summary": "一份 NVRHI 共享 HUD 渲染后端把 ImGui 叠到两后端画面上（hud.slang 同样单源出 SPIR-V + DXIL）；--mode 分发器定型；S0 三条硬指标总验收。",
+      "acceptance": [
+        "HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 后端名 / mode / 调试层，且 3D 画面同时可见",
+        "--no-hud 画面与 M0.4 基线逐字节相同（MD5 7e528087…），双后端一致",
+        "selftest 14/14，含 8 个 Slang 产物魔数（SPIR-V 0x07230203 / DXIL DXBC）",
+        "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "双后端 ImGui HUD",
+          "kind": "pair",
+          "note": "两张 PNG 必然不同：HUD 里印的 backend 与 debug layer 本来就按后端不同，这正是「当前后端名」的可见证据；3D 部分与 M0.4 一致。截图回归模式下时序数据用固定样本（面板标 capture/replay），所以 PNG 可复现。拖下面的 dist 滑块可现场改视角，此时与基线不同属预期。",
+          "baselines": {
+            "dx12": "example/m0.5/hud-dx12.png",
+            "vulkan": "example/m0.5/hud-vulkan.png"
+          },
+          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "960x540", "--yaw", "12", "--pitch", "9", "--dist", "{dist}", "--cull", "back"],
+          "params": {
+            "dist": { "type": "range", "label": "相机距离 dist", "min": 0.45, "max": 12, "step": 0.05, "default": "4.2" }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.5/run.bat hud"
+        },
+        {
+          "id": "controls",
+          "name": "HUD 控件值 → 画面变化（清屏色）",
+          "kind": "pair",
+          "note": "与上面的 hud 用例对照看：同一个 HudFrame 的 colorIndex 从 0 变 2，HUD 的 clear color 控件显示 2、背景从深蓝变绿，Suzanne 正脸仍完整可见；back-face culling 复选框也按 cullBack 显示勾选状态。命令行给的是控件初值，和鼠标点控件写回 viewer 走的是同一条双向 POD 通道；真实鼠标点选另见交互用例。两张 PNG 不同是 HUD 里的 backend / debug 文本不同，不是 3D 画面不一致：实测 895 个差异像素的 bbox 为 x=23..328 / y=77..147，全在 adapter / debug 两行文字内，3D 区域零差异。",
+          "baselines": {
+            "dx12": "example/m0.5/controls-dx12.png",
+            "vulkan": "example/m0.5/controls-vulkan.png"
+          },
+          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "960x540", "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--cull", "back", "--color", "2"],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
+          "script": "example/m0.5/run.bat controls"
+        },
+        {
+          "id": "nohud",
+          "name": "关 HUD：历史基线逐字节不变",
+          "kind": "pair",
+          "note": "--no-hud 时完全不碰 ImGui，M0.1~M0.4 的回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4/suzanne-*.png 相同。",
+          "baselines": {
+            "dx12": "example/m0.5/nohud-dx12.png",
+            "vulkan": "example/m0.5/nohud-vulkan.png"
+          },
+          "args": ["--screenshot", "{out}", "--frames", "8", "--no-hud", "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--cull", "back"],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.5/run.bat nohud"
+        },
+        {
+          "id": "resize",
+          "name": "HUD + resize 回归",
+          "kind": "pair",
+          "note": "640×360 → 1024×768，depth / framebuffer / 两套 Scene pipeline / HUD pipeline 一起重建；保存前后两张图对照。两后端 PNG 不同是 HUD 里的 backend / debug 文字本来不同，不是 3D 画面不一致（关掉 HUD 的对照用例逐字节相同）。",
+          "baselines": {
+            "dx12": "example/m0.5/resize-dx12.png",
+            "vulkan": "example/m0.5/resize-vulkan.png"
+          },
+          "beforeBaselines": {
+            "dx12": "example/m0.5/resize-dx12-before.png",
+            "vulkan": "example/m0.5/resize-vulkan-before.png"
+          },
+          "args": ["--screenshot", "{out}", "--frames", "8", "--hud", "--size", "640x360", "--resize", "1024x768", "--yaw", "12", "--pitch", "9", "--dist", "4.2"],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/m0.5/run.bat resize"
+        },
+        {
+          "id": "selftest",
+          "name": "自检 14/14 + 8 个 shader 产物",
+          "kind": "selftest",
+          "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
+          "args": ["--selftest"],
+          "expectLog": "SELFTEST PASS (14/14)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.5/run.bat selftest"
+        },
+        {
+          "id": "hud-controls",
+          "name": "HUD 控件（交互）",
+          "kind": "manual",
+          "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
+          "args": ["--mode", "normal", "--hud"],
+          "command": "viewer.exe --mode normal --hud",
+          "script": "example/m0.5/run.bat controls"
+        }
+      ]
     }
   ]
 }

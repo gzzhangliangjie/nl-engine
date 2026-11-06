@@ -14,7 +14,7 @@
 | M0.2 设备 + swapchain | ✅ 验收通过 | `s0-device` | 2026-11-06 | 双后端清屏逐字节相同、resize 不黑屏、deviceErrors=0、退出无段错误 |
 | M0.3 三角形 + 帧同步 | ✅ 验收通过 | `s0-triangle` | 2026-11-06 | 双后端顶点色三角形渲染、frame-in-flight=2、selftest 9/9；SPIR-V 入口恒为 `main` 的坑已固化见 `docs/SHADER-CONVENTIONS.md` |
 | M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 正常视角双后端 PNG 逐字节相同，内壁 / resize 仅 1~2 像素差（≤1/255）；内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
-| M0.5 ImGui + 总验收 | ⬜ 未开始 | `s0-done` | — | — |
+| M0.5 ImGui + 总验收 | ✅ 验收通过 | `s0-done` | 2026-11-07 | 双后端 ImGui HUD 实拍 + `--no-hud` 与 M0.4 基线逐字节相同；`model`/`hud` 共 8 个 shader 产物魔数自检、selftest 14/14、`--check` 退出 0；S0 全部完成 |
 
 ---
 
@@ -231,6 +231,55 @@
 5. **「双后端画面一致」与 MD5 不同自相矛盾** → 现象：M0.4 内壁 / resize 两后端 PNG 字节不同（`a8ab17dd` vs `26221b55`），但台账写逐像素一致。根因：zlib IDAT 解压后扫描线不同，实际像素只差 ≤1/255（GPU 取整噪声）。处理：服务端 `compare_pixels()`（Pillow 可选加速，标准库 PNG 解码器兜底）返回最大通道差与差异像素数；UI 分 `bytes` / `pixels` / `near` / 不同四态如实显示；台账速查表、本节完成情况、S0-PLAN、`example/cases.json` 里的旧表述同步清理（见上方「文档复核补记」）。
 6. **清单放两份会漂移** → 现象：初版 `tools/showcase/cases.json` 与截图目录 `docs/screenshots/` 分离，用户要求「做个 example 目录放每个版本的用例」后必然出现两套索引。处理：清单整体搬进 `example/cases.json`，服务与重建脚本都从它读，截图与 `run.bat` 同目录；`/shots/` 只服务清单里声明过的相对路径，避免目录穿越。
 7. **批量测试脚本的 CRLF 污染 JSON** → 现象：`/api/run` 全部回 `Invalid control character at line 1`。根因：Python 在 Windows 写清单文件默认 `\r\n`，shell `read` 把 `\r` 带进 case id。处理：测试侧 strip `\r`；产品侧不动（服务端本就按 JSON 严格解析，没有静默容错）。
+
+---
+
+## M0.5 ImGui HUD + `--mode` 分发器 + S0 总验收（Slang 双后端）
+
+**动作**
+- `thirdparty/imgui/`：vendored **ocornut/imgui v1.91.9 主线稳定版**核心 4 个 cpp + 5 个头 + LICENSE（经 gh-proxy 取）。**不用官方 D3D12 / Vulkan backend**——那会把图形 API 散到渲染器之外；改为自写一份 NVRHI 共享渲染后端 `renderer/src/hud.cpp/.hpp`。
+- `renderer/shaders/hud.slang`：单源双目标，与 `model.slang` 同样由 `slangc` 出 `hud.{vs,ps}.{spv,dxil}`；`HudConstants : register(b0)` 存投影、`g_font : register(t0)` 字体图集；沿用三个 `-fvk-*-shift`，SPIR-V 入口 `main`、DXIL `vsMain/psMain`。
+- `renderer/src/hud.cpp`：进程级 ImGui context（关掉 ini/log 落盘）→ 字体图集上传 → binding layout/set / input layout / 两套资源（VB/IB 动态扩容）→ `ensurePipeline()`（cull none、scissor、depth off、`SrcAlpha+InvSrcAlpha`）→ `build()` 把 `ImDrawData` 摊平成 `HudVertex`(32 B) / `R32_UINT` / 逐 `DrawCmd{scissor}` → `draw()` 逐条 `setGraphicsState()` + `drawIndexed()`。
+- `renderer/include/nl/renderer/renderer.hpp`：新增双向 POD `HudFrame`（viewer 填显示数据、HUD 写回 `cullBack` / `colorIndex` / `resetCamera` / `wantCaptureMouse`），`renderFrame()` 加 `HudFrame* hud = nullptr`；`hud == nullptr` 时完全不碰 ImGui，保证 M0.1~M0.4 基线不变。`core/` / `viewer/` 仍是零 ImGui / NVRHI / 图形 API 符号。
+- 两后端对称接线：`init` 时 `hud_.init(device, "dxil"/"spv", ...)`，resize / OUT_OF_DATE 时 `invalidatePipeline()`，`scene_.draw()` 之后、截图回读之前 `hud_.draw()`，shutdown 在 device 存活时 `hud_.shutdown()`。
+- `core/include/nl/core/modes.hpp` + `core/src/modes.cpp`：`ViewMode` 枚举 / `modeName` / `modeNameAt` / `modeCount` / `parseViewMode` / `modeSelfTest`；`viewer/main.cpp` 的 `runMode()` 分发，目前只有 `normal`，S1 起只加枚举 + 名字 + case。`core/window.*` 把「绝对鼠标坐标」与「拖动增量基准」分开，供 ImGui 命中控件。
+- `viewer/main.cpp`：`--hud` / `--no-hud` / `--mode <name>`；交互窗口默认开 HUD，截图回归默认 `--no-hud`；回归模式用 8 个固定帧时间样本并标注 `capture/replay (fixed samples)`，交互窗口用真实 120 帧历史；selftest 由 11 项扩到 14 项（加 `modeSelfTest`、M0.5 stage、`hudSelfTest`、`shaderArtifactsSelfTest`）。
+- `renderer/src/renderer.cpp`：`kStage` → M0.5（展示台门禁的阶段判定源）；新增 `shaderArtifactsSelfTest()` 遍历 `model`/`hud` × `vs`/`ps` × `spv`/`dxil` 共 8 个产物，核对 `.spv` = `0x07230203`、`.dxil` = `DXBC`。
+- `CMakeLists.txt`：`nl_imgui` 静态库、`modes.cpp` / `hud.cpp` 入 target、ctest 名改 `m0.5-selftest`；`scripts/build-m0.2.bat` 输出去掉写死的阶段名。
+- 文档：`docs/IMGUI-GUIDE.md`（新建，含下拉框 / 选择菜单）、`docs/SHADER-CONVENTIONS.md`（hud.slang / binding / 8 产物 / 验收命令）、`docs/s0/S0-PLAN.md` + `ROADMAP.md` + `PLAN.md` + `LINKS.md` + `kb/index.html` + `s4/S4-PLAN.md`（工具计划改为 L0~L3 分层）、`README.md`（S0 done + 新命令）。
+- 用例归位：`example/m0.5/`（`hud` / `controls` / `nohud` / `resize` / `selftest` / `hud-controls(manual)` + 10 张基线 PNG + `run.bat`），`example/cases.json` 增 `m0.5` 版本；`docs/screenshots/` 增 `m0.5-*.png` 与 `s0.png`。收尾复核时补的 `controls` 用例用 `--color 2` + `--cull back` 给出「HUD 控件值 → 清屏色 / 画面」的静态对照，补上交互用例在展示台里看不到图证据的缺口。
+
+**提交版本**：`s0-done`（S0 收口里程碑 tag；精确 hash 用 `git rev-parse s0-done` 查）。
+
+**完成情况**
+- ✅ 两后端 `scripts/build-m0.2.bat DX12|VULKAN`：configure 0 / build 0 / `SELFTEST PASS (14/14)`；`ctest` 两后端 `m0.5-selftest` 100% 通过；8 个 shader 产物魔数全部匹配（`[8/8 ok]`）。
+- ✅ **可见用例**：交互窗口 Suzanne 上叠 HUD，FPS / 帧时间曲线 / yaw·pitch·dist / backend + adapter + debug layer / mode / stage 齐全；`back-face culling` / `clear color` / `reset camera` 三个控件可点，值经 `HudFrame` 每帧回写 viewer；960×540 实拍 `docs/screenshots/s0.png`、`m0.5-hud-{dx12,vulkan}.png`。
+- ✅ **历史基线不动**：`--no-hud` 正常视角 DX12 / Vulkan PNG MD5 同为 `7e528087d19722d8f9ef4de35e36d382`，与 M0.4 逐字节相同；`--hud` 两图必然不同（面板印的后端名 / 调试层文本不同），已写进清单 note，不谎报「一致」。
+- ✅ resize 640×360 → 1024×768 前后非黑、两后端各一份对照；6 个渲染进程退出码 0、`deviceErrors=0`，DX12 Debug Layer + NVRHI validation（两后端）零报错。
+- ✅ `--mode bogus` 退出 1 并打印 `unknown --mode 'bogus'. available: normal`；`--mode normal` 正常运行。
+- ✅ 放行门禁：`python tools/showcase/server.py --check` → `[example-sync] OK: stage=M0.5 version=m0.5 cases=5 baselines=10`，退出码 0。
+- ✅ 展示台服务重载新清单后 `/api/cases` 返回 `m0.1~m0.5` 且 `stageSync.ok=True`；`/api/run` 现场回放 4 个用例：`hud`（双后端 exit 0、baselineMatch True、`identical=False` 为预期）、`nohud`（`identical=bytes`）、`resize`（baselineMatch True）、`selftest`（日志匹配 `SELFTEST PASS (14/14)`），全部 `ok=True`。
+- ⬜ 图形 / 性能调试工具抓帧：已从 S0 验收项移出，本机 RenderDoc / Nsight / PIX 均未安装，如实记未做，不虚构结果；L1~L3 计划见 `docs/s0/S0-PLAN.md`。
+- ⬜ L2 GPU 帧内计时（NVRHI timestamp query）：当前 HUD 的 `frame ms` 只是 CPU 帧间隔，S4 前补；`docs/s4/S4-PLAN.md` 已挂账。
+
+**踩坑情况**
+1. **本机 Carrot 的 ImGui 是 `1.92.7 WIP`** → 现象：初拷自 `Carrot/thirdparty/imgui/` 的源码字体系统已重构，与 1.91 代 API 不同代，风险高。根因：Carrot checkout 的是 WIP 分支，不是稳定版。处理：删掉初拷文件，改下 `v1.91.9` 主线稳定版，只 vendored 核心 4 个 cpp（tables/widgets 都要，否则下拉框 / 表格缺符号）。
+2. **`/W4` 报 `C4127: 条件表达式是常量`** → 根因：`hudSelfTest()` 里直接拿 `sizeof(HudVertex)` 做运行时比较，编译期已知。处理：`volatile std::size_t` 中转，同时保留 `hud.hpp` 的 `static_assert` 兜底。
+3. **`C2445` / `C2737`：`tellg()` 与 `int -1` 条件表达式类型歧义** → 根因：`std::ifstream::tellg()` 返回 `std::fpos<_Mbstatet>`，不是整型。处理：`std::int64_t size = -1; if (f) size = static_cast<std::int64_t>(f.tellg());`。
+4. **DX12 首张 HUD 截图 `Device Removed!` / `Present failed (0x887a0005)` / `deviceErrors=3`** → 现象：日志先行报 `Unknown prior state of buffer ImGuiVB/ImGuiIB`。根因：动态 VB/IB 每帧 `writeBuffer()` 后留下 VertexBuffer / IndexBuffer 状态，NVRHI validation 下一帧不知道 prior state。处理：`BufferDesc` 加 `initialState = CopyDest` + `keepInitialState = true`，让每条 command list 自动从 `CopyDest` 起跟踪、close 时转回。
+5. **第一张 HUD 截图文字上下颠倒 / 镜像** → 根因：`hudProjection()` 的 Y 尺度写成 `+2/height`；ImGui y 向下、NDC y 向上。处理：改 `sy = -2/height`、`projection[3] = 1 - displayPosY * sy`，零尺寸分支 `projection[3] = 1`；`hudSelfTest()` 锁住负 Y 与平移项。用 `ViewImage` 看实拍才发现的，纯日志测不出来。
+6. **640×360 下 HUD 面板撑到半屏、底部控件被裁** → 根因：stage / adapter / debug 长字符串撑宽窗口，ImGui 自动尺寸。处理：固定 `SetNextWindowPos(14,14)` + `SetNextWindowSize(330, min(400, H-28))` + `TextWrapped` + `SetNextWindowBgAlpha(0.82f)`（模型仍可见）；960×540 实拍确认全部行完整可读。
+7. **Vulkan HUD 的 `debug` 行显示 `?????`** → 根因：ImGui 默认字体图集只有 ASCII，而该字符串含中文。处理：把 Vulkan 后端的调试层说明改成 ASCII 字符串，不把后端分支泄漏到 viewer；中文字体作为后续增量写进 `docs/IMGUI-GUIDE.md`。
+8. **实时 FPS 写进 PNG 会让基线 MD5 永远对不上** → 根因：截图回归要求确定性，而交互数据逐帧变化。处理：回归模式用 8 个固定帧时间样本并在面板标注 `capture/replay (fixed samples)`；交互窗口显示真实采样；`--screenshot` 默认 `--no-hud`，历史基线一个字节都不动。
+9. **展示台 `/api/cases` 只有 m0.1~m0.4、`stageSync.ok=False`** → 根因：旧服务进程仍持有启动时读入的 `cases.json`，文件改了但进程没重载。处理：查 8787 端口 listener、停掉旧 PID、重启服务后再验。
+10. **「复杂控件」回答过宽，被用户一句「我说的界面控件指的是 选择菜单 下拉框之类的」纠偏** → 根因：把问题理解成「编辑器级 UI / 复杂空间」，铺开了表格 / 树 / docking。处理：收窄到 `Combo` / `BeginCombo` / `ListBox` / `Selectable` / `RadioButton` / `MenuBar` / `TreeNode` 均在已 vendored 的 `imgui_widgets.cpp`、当前鼠标输入就够用；弹出层的多 `ImDrawList` 与 ClipRect 已被 `build()` / `draw()` 覆盖；只有 `InputText` 需要补字符回调。结论单独写进 `docs/IMGUI-GUIDE.md` §2 / §3。
+11. **「Nsight 抓一帧」从 S0 验收项移出** → 起因：用户连续问 RenderDoc / 性能调试工具 / 更新计划。根因：原计划把单一厂商工具写死进通用管线的验收，且本机根本没装。处理：改 L0 画面证据 / L1 RenderDoc 帧结构 / L2 NVRHI timestamp query / L3 Nsight·PIX·PresentMon·Tracy 四层，同步 6 份文档，S0 三条硬指标不依赖任何外部工具；台账里如实留 ⬜，不虚构抓帧结果。
+12. **resize 运行时 `libpng warning: iCCP: known incorrect sRGB profile`** → 现象：stb 写出的 PNG 带 sRGB 块被 libpng 提示，但进程 exit 0、`deviceErrors=0`、图片正常。处理：非阻塞项，不为此改写 PNG 编码链；如实记录，后续真要做色彩管理再一起处理。
+
+**用例归位**
+- `example/m0.5/`：`hud-{dx12,vulkan}.png` / `controls-{dx12,vulkan}.png` / `nohud-{dx12,vulkan}.png` / `resize-{dx12,vulkan}{,-before}.png` 共 10 张基线 + `run.bat`（`all` / `hud` / `controls` / `nohud` / `resize` / `selftest`）；验收存档同步进 `docs/screenshots/m0.5-controls-*.png`。
+- `example/cases.json` 增 `m0.5` 版本：5 个可运行用例 + 1 个交互用例 `hud-controls`（manual）。收尾复核补的 `controls` 用例给出了「控件值 → 画面」的静态图证据：`--color 2 --cull back --dist 4.2 --hud` 出绿背景 + 完整 Suzanne 正脸，HUD 的 `clear color` 显示 2、剔除勾选；与 `hud` 用例（深蓝、color=0）对照可见同一 `HudFrame` 同时驱动控件与渲染。
+- `python tools/showcase/server.py --check` 退出 0（`stage=M0.5 version=m0.5 cases=5 baselines=10`）；重启展示台服务加载新清单后 `/api/run` 五个可运行用例现场回放全 `ok=True`。`controls` 两后端 `baselineMatch=True`、`deviceErrors=0`，895 个差异像素的 bbox 为 `x=23..328 / y=77..147`（全在 adapter / debug 两行文字内，3D 区域零差异），印证「两图不同是 HUD 文本不同」。
 
 ---
 

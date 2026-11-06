@@ -42,7 +42,8 @@ struct Window::Impl {
     int  pendingHeight = 0;
     double mouseDX = 0.0, mouseDY = 0.0, scrollY = 0.0;
     double lastCursorX = 0.0, lastCursorY = 0.0;
-    bool   haveCursor = false;
+    bool   haveCursor = false;    // 是否收到过光标位置（HUD 的绝对坐标）
+    bool   haveDragBase = false;  // 拖动增量是否有基准点（按下左键时重置）
     bool   leftDown = false;
 
     void onKey(int glfwKey, int action) {
@@ -66,13 +67,14 @@ struct Window::Impl {
 
     static void cursorCallback(GLFWwindow* handle, double x, double y) {
         if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
-            if (impl->haveCursor) {
+            if (impl->haveDragBase) {
                 impl->mouseDX += x - impl->lastCursorX;
                 impl->mouseDY += y - impl->lastCursorY;
             }
             impl->lastCursorX = x;
             impl->lastCursorY = y;
             impl->haveCursor = true;
+            impl->haveDragBase = true;
         }
     }
 
@@ -80,8 +82,9 @@ struct Window::Impl {
         if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
                 impl->leftDown = (action == GLFW_PRESS);
-                // 按下瞬间重新取基准点：避免上一次点击留下的光标位置产生跳变。
-                if (action == GLFW_PRESS) impl->haveCursor = false;
+                // 按下瞬间只重置「拖动增量」的基准点，不动绝对坐标：
+                // HUD 需要每帧稳定的 MousePos，否则点击面板会丢一帧输入。
+                if (action == GLFW_PRESS) impl->haveDragBase = false;
             }
         }
     }
@@ -163,6 +166,13 @@ void Window::consumeMouse(float& deltaX, float& deltaY, float& scrollDelta) {
 
 bool Window::leftButtonDown() const {
     return valid() && impl_->leftDown;
+}
+
+void Window::mousePosition(float& x, float& y) const {
+    x = y = 0.0f;
+    if (!valid() || !impl_->haveCursor) return;
+    x = static_cast<float>(impl_->lastCursorX);
+    y = static_cast<float>(impl_->lastCursorY);
 }
 
 void* Window::nativeHandle() const {

@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "scene.hpp"
+#include "hud.hpp"
 
 #if defined(NL_BACKEND_DX12)
 
@@ -144,6 +145,7 @@ public:
         if (FAILED(hr)) { outError = hrMessage("CreateSwapChainForHwnd", hr); return false; }
         if (!createTargets(outError)) return false;
         if (!scene_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
+        if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -164,6 +166,7 @@ public:
         device_->waitForIdle();
         device_->runGarbageCollection();
         scene_.invalidatePipelines();
+        hud_.invalidatePipeline();
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -184,7 +187,7 @@ public:
     }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
-                     const char* screenshotPath,
+                     const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {
         if (!swapchain_ || !device_) { outError = "renderer not initialized"; return false; }
         const UINT index = swapchain_->GetCurrentBackBufferIndex();
@@ -202,6 +205,16 @@ public:
         }
 
         ensurePipeline(index);
+        // HUD 全链路都不带 hud 参数时完全不碰：M0.4 及更早的回放基线保持不变。
+        if (hud && hud->displayWidth > 0.0f) {
+            if (!framebuffers_.empty() && framebuffers_[0]) {
+                std::string err;
+                if (!hud_.ensurePipeline(device_, framebuffers_[0]->getFramebufferInfo(), err))
+                    nl::core::log::deviceError("DX12", err);
+            }
+            // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
+            hud_.build(*hud);
+        }
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();
@@ -216,6 +229,11 @@ public:
         if (index < framebuffers_.size() && framebuffers_[index] && scene_.ready() && depth_) {
             scene_.draw(cmd, framebuffers_[index],
                         nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
+        }
+        // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
+        if (hud && index < framebuffers_.size() && framebuffers_[index]) {
+            hud_.draw(cmd, framebuffers_[index],
+                      nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
 
         nvrhi::StagingTextureHandle staging;
@@ -413,8 +431,9 @@ private:
             device_->waitForIdle();
             device_->runGarbageCollection();
         }
-        // M0.4：场景资源（含 binding set / pipeline）必须在 device 仍存活时释放。
+        // 场景 / HUD 资源（含 binding set / pipeline）必须在 device 仍存活时释放。
         scene_.shutdown();
+        hud_.shutdown();
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -457,6 +476,7 @@ private:
 
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;
+    Hud                                   hud_;
     nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
     std::vector<UINT64>                   frameFence_;     // frame-in-flight=2 同步安全网

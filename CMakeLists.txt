@@ -86,12 +86,24 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 add_subdirectory(thirdparty/glfw EXCLUDE_FROM_ALL)
 
-# ---- core：日志 / 断言 / 窗口。不依赖任何图形 API 头文件（GLFW 只进 .cpp） ----
+# ---- M0.5：ImGui 1.91.9 核心源码本地 vendored（零网络、零厂商 SDK） ----
+# 只用 core 文件；官方 D3D12/Vulkan 后端不用——HUD 由 renderer/src/hud.cpp 一份
+# NVRHI 共享代码绘制，避免两套裸 API 后端把图形符号散到 renderer/ 之外。
+add_library(nl_imgui STATIC
+    thirdparty/imgui/imgui.cpp
+    thirdparty/imgui/imgui_draw.cpp
+    thirdparty/imgui/imgui_tables.cpp
+    thirdparty/imgui/imgui_widgets.cpp
+)
+target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
+
+# ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
     core/src/assert.cpp
     core/src/window.cpp
     core/src/camera.cpp
+    core/src/modes.cpp
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(nl_core PRIVATE glfw)
@@ -101,6 +113,7 @@ add_library(nl_renderer STATIC
     renderer/src/renderer.cpp
     renderer/src/png_writer.cpp
     renderer/src/scene.cpp
+    renderer/src/hud.cpp
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -110,7 +123,7 @@ target_include_directories(nl_renderer
             ${THIRDPARTY}/stb
             ${THIRDPARTY}/tinygltf
 )
-target_link_libraries(nl_renderer PUBLIC nl_core)
+target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui)
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
     NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
@@ -212,4 +225,4 @@ endif()
 
 # 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
 enable_testing()
-add_test(NAME m0.4-selftest COMMAND viewer --selftest)
+add_test(NAME m0.5-selftest COMMAND viewer --selftest)
