@@ -5,9 +5,13 @@ Zero third-party dependencies (Python standard library only).
 
     python tools/showcase/server.py --port 8787
     python tools/showcase/server.py --port 8787 --open
+    python tools/showcase/server.py --check    # iteration gate, exit 1 if example/ is stale
 
 The case catalog lives in example/cases.json (single source of truth), and the
-baseline PNGs live next to it in example/<version>/. The /api/run endpoint never
+baseline PNGs live next to it in example/<version>/. Every new iteration must
+add its successful cases there; --check compares the kStage declared in
+renderer.cpp against the catalog and exits non-zero when they are out of sync.
+The /api/run endpoint never
 executes arbitrary commands: every argument comes from that catalog, and
 user-supplied values are validated against the per-case parameter spec
 (range bounds / select options) before substitution.
@@ -183,9 +187,65 @@ def file_info(p: Path | None) -> dict:
     }
 
 
+STAGE_FILE = ROOT / "renderer" / "src" / "renderer.cpp"
+STAGE_RE = re.compile(r'kStage\s*=\s*"((?:M|S)\d+(?:\.\d+)?)')
+
+
+def stage_sync() -> dict:
+    """Gate: every new iteration must land its successful cases in example/.
+
+    The current iteration is declared by kStage in renderer.cpp, so a milestone
+    that only changes code (without adding cases to example/cases.json) shows up
+    here as "not yet landed". Run `server.py --check` before tagging a release.
+    """
+    reasons: list[str] = []
+    stage = None
+    version_id = None
+    try:
+        m = STAGE_RE.search(STAGE_FILE.read_text(encoding="utf-8"))
+        if m:
+            stage = m.group(1)
+            version_id = stage.lower()
+    except OSError as e:
+        reasons.append(f"读不到 {STAGE_FILE.relative_to(ROOT).as_posix()}: {e}")
+    if not stage:
+        reasons.append("renderer.cpp 里没有可识别的 kStage（M0.x / Sx.y）")
+
+    v = VERSIONS.get(version_id) if version_id else None
+    if not v:
+        reasons.append(
+            f"example/cases.json 缺版本 `{version_id or stage}`：本轮迭代的成功用例还没归位")
+    visible = [c for c in (v["cases"] if v else []) if c.get("kind") != "manual"]
+    if v and not visible:
+        reasons.append(f"`{version_id}` 没有可运行 / 可展示的用例")
+
+    baselines = 0
+    for c in visible:
+        for key, getter in (("baselines", baseline_for),
+                            ("beforeBaselines", before_baseline_for)):
+            for backend in ("dx12", "vulkan"):
+                rel = (c.get(key) or {}).get(backend)
+                if not rel:
+                    continue
+                p = getter(c, backend)
+                if p and p.is_file():
+                    baselines += 1
+                else:
+                    reasons.append(f"基线缺失：{rel}")
+        script = c.get("script")
+        if script and not (ROOT / script.split()[0]).is_file():
+            reasons.append(f"复现脚本缺失：{script.split()[0]}")
+    if v and baselines == 0:
+        reasons.append(f"`{version_id}` 没有任何基线截图")
+
+    return {"ok": not reasons, "stage": stage, "version": version_id,
+            "cases": len(visible), "baselines": baselines, "reasons": reasons}
+
+
 def decorate() -> dict:
     """cases.json plus live facts: which exe/baseline files exist, hashes."""
     out = json.loads(json.dumps(DATA))  # cheap deep copy
+    out["stageSync"] = stage_sync()
     for v in out["versions"]:
         v["status"] = {
             b: {"exe": str(exe_for(v, b)).replace(str(ROOT) + "\\", ""),
@@ -439,12 +499,22 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(do_run(payload))
 
 
-def main() -> None:
+def main() -> int:
     ap = argparse.ArgumentParser(description="nl-engine S0 showcase")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--open", action="store_true", help="open the browser on start")
+    ap.add_argument("--check", action="store_true",
+                    help="verify this iteration's cases landed in example/; exit 1 if not")
     args = ap.parse_args()
+    if args.check:
+        s = stage_sync()
+        print(f"[example-sync] {'OK' if s['ok'] else 'FAIL'}: "
+              f"stage={s['stage']} version={s['version']} "
+              f"cases={s['cases']} baselines={s['baselines']}")
+        for r in s["reasons"]:
+            print("  - " + r)
+        return 0 if s["ok"] else 1
     RUNS.mkdir(parents=True, exist_ok=True)
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -462,7 +532,8 @@ def main() -> None:
         print("\nstopped")
     finally:
         srv.server_close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

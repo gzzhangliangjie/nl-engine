@@ -36,8 +36,15 @@ function renderVersions() {
 
   const total = state.data.versions.length * 2;
   const ready = state.data.versions.reduce((n, v) => n + readyCount(v), 0);
+  const sync = state.data.stageSync;
+  let syncLine = '';
+  if (sync) {
+    syncLine = sync.ok
+      ? `<br><span style="color:var(--pass)">✓ 本轮 ${esc(sync.stage)} 已归位 example/（${sync.cases} 用例 / ${sync.baselines} 基线）</span>`
+      : `<br><span style="color:var(--warn)" title="${esc(sync.reasons.join('；'))}">⚠ 本轮未归位：${esc(sync.reasons[0])}</span>`;
+  }
   $('#serviceInfo').innerHTML = `用例库 <code>example/</code> · 历史快照 exe：<b style="color:var(--text)">${ready}/${total}</b> 就绪` +
-    (ready === total ? '，全部版本可现场运行。' : '，缺失的版本只展示基线截图。');
+    (ready === total ? '，全部版本可现场运行。' : '，缺失的版本只展示基线截图。') + syncLine;
   if (ready < total) {
     $('#rebuildHint').textContent = '有版本缺少历史 exe（build/ 不入库）。在仓库根运行： python tools/showcase/rebuild.py';
   }

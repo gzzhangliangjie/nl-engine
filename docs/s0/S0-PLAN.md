@@ -9,6 +9,8 @@
 
 **每阶段必须有能亲眼看到、能截图存档的用例；验收不过不进下一阶段，tag 在验收通过之后才打。**
 
+> **每轮放行的前置条件（2026-11-07 定，S1~S14 同理）**：本阶段成功用例先归位到 `example/<版本>/`（基线 PNG + `run.bat`）并登记进 `example/cases.json`，再跑 `python tools/showcase/server.py --check`；退出码非 0 不放行、不打 tag。检查以 `renderer/src/renderer.cpp` 的 `kStage` 为准，防止「只改代码、用例没跟上」。
+
 | 阶段 | 目标 | 可见用例（必须能截图 / 能当场演示） | 验收判据 | 放行 |
 |---|---|---|---|---|
 | M0.0 | 工具链齐备 + 后端开关可用 | 同屏截图：`cmake --version`、两次 configure 的 `backend:` 行、`viewer.exe --selftest` 分别输出 `backend: dx12` 与 `backend: vulkan` | 两种 `-DNL_GRAPHICS_BACKEND` 配置都不装任何图形 SDK 就编译通过且 PASS，输出的后端名不同 | → M0.1 |

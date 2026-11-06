@@ -56,6 +56,7 @@ M0.4 验收：一份 `model.slang` 同出 SPIR-V 与 DXIL，DX12/Vulkan 各渲�
 tools\showcase\start.bat                      # Windows 一键启动（自动开浏览器）
 python tools/showcase/server.py --port 8787   # 或手动起服务，访问 http://127.0.0.1:8787/
 python tools/showcase/rebuild.py              # 干净 clone 后重建历史 tag 的 viewer.exe（build/ 不入库）
+python tools/showcase/server.py --check       # 放行门禁：本轮用例是否已归位 example/（退出码 0 才放行）
 ```
 
 - 页面可切换 M0.1~M0.4、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线）。
@@ -74,8 +75,9 @@ python tools/showcase/rebuild.py              # 干净 clone 后重建历史 tag
 ## 纪律
 
 1. 图形调用全部收敛进独立渲染器模块，不散落到业务代码——将来换底座（NVRHI/Diligent）只动这一个模块
-2. 每完成一步：git tag + 存一张验收截图
+2. 每完成一步：git tag + 存一张验收截图 + **把本轮成功用例归位到 `example/`**
 3. 卡壳超过三天：翻 `docs/ROADMAP.md` 对照总表里标注的参考源码，不要闭门造车
+4. **每轮迭代的放行门禁（2026-11-07 定）**：本轮产出的成功用例必须落进 `example/<版本>/`（基线 PNG + `run.bat`）并登记到 `example/cases.json`；验收前跑 `python tools/showcase/server.py --check`，**退出码非 0 不放行、不打 tag**。检查以 `renderer/src/renderer.cpp` 的 `kStage` 为当前阶段，代码进了新阶段而 `example/` 没跟上就报错；展示台侧栏也会同步显示归位状态。S0 的 M0.x 与 S1~S14 每一步同样适用
 
 ## 参考仓库（本机）
 

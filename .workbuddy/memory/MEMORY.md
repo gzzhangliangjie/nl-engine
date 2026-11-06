@@ -9,6 +9,7 @@
 
 ## 开发节奏
 - 每阶段：目标 → **能亲眼看到的用例** → 验收判据 → 放行；验收不过不进下一步，tag 在验收之后打。
+- **每轮迭代必须更新 `example/`（2026-11-07 用户定的硬规则）**：成功用例的基线 PNG + `run.bat` 放进 `example/<版本>/`，并登记到 `example/cases.json`；验收 / 打 tag 前跑 `python tools/showcase/server.py --check`，退出码 0 才放行。该检查以 `renderer/src/renderer.cpp` 的 `kStage` 判定当前阶段，代码进了新阶段而用例没归位就退出 1，展示台侧栏也显示状态。S0 的 M0.x 与 S1~S14 每一步同样适用，不许「只改代码不归位用例」。
 - 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作 / 提交版本 / 完成情况 / 踩坑）写实追加，不写「已完成」「无」。
 - Carrot 的**节奏**参考 `docs/s0/CARROT-BOOTSTRAP.md`，其弯路（换底座、晚拆模块、相机硬搓、resize 修 4 次）不复刻。
 - 门禁表与依赖实况见 `docs/s0/S0-PLAN.md`；总路线 `docs/ROADMAP.md`；台账 `docs/MILESTONES.md`。
