@@ -9,7 +9,7 @@
 
 | 阶段 | 状态 | 提交版本 | 日期 | 一句话结果 |
 |---|---|---|---|---|
-| M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交，无独立 tag | 2026-11-06 | 编译链与 GLFW 齐，Vulkan SDK / CMake / Nsight 待装 |
+| M0.0 环境准备 | 🟡 部分完成 | 随 M0.1 提交；环境补齐快照 `v0.1.0` | 2026-11-06 | 编译链 / GLFW / CMake 齐并验收，Vulkan SDK（只为验证层）与 Nsight 待装 |
 | M0.1 骨架 + 空窗口 | ✅ 验收通过 | `s0-init` | 2026-11-06 | 窗口弹出、ESC 退出、`SELFTEST PASS (7/7)` |
 | M0.2 设备 + swapchain | ⬜ 未开始 | `s0-device` | — | — |
 | M0.3 三角形 + 帧同步 | ⬜ 未开始 | `s0-triangle` | — | — |
@@ -25,23 +25,28 @@
 - 从本地 `E:\UE_STUDY_2026\Carrot\thirdparty\glfw\` 复制 GLFW 源码到 `thirdparty/glfw/`（Carrot Init 的 vendored 思路，零网络），删掉 submodule 的 `.git` 引用文件、`docs/examples/tests`（提交 105 个构建必需文件）。
 - 从本地 Carrot 的 `cmake_modules/ShaderSlangConfig.cmake` 与 `BUILDING.md` 确认：新版 Vulkan SDK 自带 slangc，**S0-PLAN 里「单独从 GitHub 下 Slang」那步删掉**。
 - 测试外部代码通道：`raw.githubusercontent.com` 默认超时、`gh-proxy` HTTP 200；开代理后直连 0.94s；LunarG SDK 直链 HTTP 200。
-- 更新 `docs/s0/S0-PLAN.md` 的 M0.0 依赖表与本机实测段。
+- 下载并安装 CMake 3.31.6 便携版到 `E:\UE_STUDY_2026\.build-tools\`（不污染系统 PATH），把 `scripts/build-m0.1.bat` 接到标准构建链并实测全通。
+- 实测并拆清 Vulkan 依赖：确认 `vulkan-1.dll` / `vulkaninfo` 由驱动提供、验证层缺失；在 `docs/s0/S0-PLAN.md` 新增「为什么需要 Vulkan SDK」表，写明只有 validation layers 绕不过去。
+- 更新 `docs/s0/S0-PLAN.md` 的 M0.0 依赖表（删掉重复的 CMake 行）与本机实测段。
 
-**提交版本**：无独立 tag，随 M0.1 的 `s0-init` 一并提交。
+**提交版本**：随 M0.1 的 `s0-init` 提交；环境补齐后的版本快照另打 `v0.1.0`。
 
 **完成情况**（部分完成）
 - ✅ 可编译：MSVC + Windows SDK 实测编译 GLFW 与 C++17 代码，退出码 0。
 - ✅ GLFW 本地化：`thirdparty/glfw/` 105 文件，`add_subdirectory` 所需结构完整。
-- ⬜ Vulkan SDK 未安装（`VULKAN_SDK` 未设置、`vkcube` / `slangc` 不可用）——M0.2 前必须补。
-- ⬜ 系统 CMake 未安装（M0.1 已绕开；M0.2 接 NVRHI 前补）。
+- ✅ CMake 3.31.6：`configure` 退出码 0 → `build` 退出码 0（glfw / nl_core / nl_renderer / viewer 四 target 全过）→ `SELFTEST PASS (7/7)`，标准构建链已可复现。
+- ✅ Vulkan 运行时就绪：`C:\Windows\System32\vulkan-1.dll`（1.5MB）+ `vulkaninfo.exe` 驱动自带。
+- ⬜ Vulkan SDK 未安装（`VULKAN_SDK` 未设置、`vkcube` / `slangc` 不可用、无任何 `VkLayer_*.json`）——M0.2 的「验证层零报错」用例依赖它，前必须补。
 - ⬜ Nsight Graphics 未确认。
 
 **踩坑情况**
 1. **命令含 `MSBuild.exe` 字样被安全策略整条拦截** → 根因：命令字符串命中 LOLBin 名单，与该命令是否真的执行它无关。处理：拆成不含该字样的独立命令。
 2. **PowerShell 工具里不能调 `cmd.exe` 来跑 `vcvars64.bat`** → 根因：工具层禁止。处理：手动设置 `INCLUDE` / `LIB` / `PATH` 三个环境变量后直接调 `cl.exe`，不依赖 vcvars。
-3. **CMake 装不上**：cmake.org 与 GitHub Releases 的 46MB zip 都只有约 12KB/s（240s 只下 2.8MB），开梯子也只改善小文件 → 根因：大文件被限速。处理：M0.1 不依赖 CMake，写 `scripts/verify-m0.1-msvc.ps1` 用 MSVC 直编验收；CMake 改分段并发下载，M0.2 前补齐。
+3. **CMake 装不上**：cmake.org 与 GitHub Releases 的 46MB zip 都只有约 12KB/s（240s 只下 2.8MB），开梯子也只改善小文件 → 根因：单连接被限速，不是站点不可达。处理：先写 `scripts/verify-m0.1-msvc.ps1` 让 M0.1 不依赖 CMake；随后经 `gh-proxy` 分 8 段并发下载（每段约 5.6MB，2m35s 拿齐 45MB，zip 校验无错），解压出便携版 3.31.6。
 4. **GitHub 直连状态会变**：默认网络超时，开代理后恢复 → 处理：文档里两条通道都留（直连 / gh-proxy），不写死单一结论。
 5. **复制 submodule 目录带 `.git` 引用文件** → 会让 git 当作嵌套仓库。处理：复制后删除，提交前核对 `git status`。
+6. **CMake 用 VS 生成器报 `No CMAKE_CXX_COMPILER could be found`** → 根因：`CMakeConfigureLog.yaml` 里 MSBuild 抛 `MSB6001 / System.ArgumentException: 已添加项，字典中关键字 "HTTPS_PROXY" / "https_proxy"`——代理环境变量大小写两份同时存在，MSBuild 用大小写不敏感 Hashtable 收集环境变量时撞键，`CL.exe` 起不来，与 VS / SDK 装没装无关。处理：改用 `NMake Makefiles` 生成器（直接调 `cl.exe`，不经过 MSBuild），`scripts/build-m0.1.bat` 同步改掉；也可在构建前删掉小写那份代理变量再用 VS 生成器。
+7. **S0-PLAN 依赖表里 CMake 写了两行** → 根因：多次编辑叠加。处理：合并成一行并写上实际获取方式。
 
 ---
 

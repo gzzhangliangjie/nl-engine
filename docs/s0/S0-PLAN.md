@@ -26,24 +26,42 @@
 | 依赖 | 版本建议 | 获取 | 验证命令 |
 |---|---|---|---|
 | Visual Studio 2022 | Community，勾「使用 C++ 的桌面开发」 | 官网 | `cl` 能在开发者命令行找到 |
-| CMake | ≥ 3.24 | 官网 / VS 自带 | `cmake --version` |
-| Vulkan SDK | 最新（LunarG） | https://www.lunarg.com/vulkan-sdk/ （直链下载，不走 GitHub） | `vkcube` 能跑；`VULKAN_SDK` 环境变量已设置 |
-| Slang | **随 Vulkan SDK 附带** | 不用单独下：Carrot 的 `cmake_modules/ShaderSlangConfig.cmake` 实测从 `$VULKAN_SDK/include/slang` + `lib/slang` 找，`BUILDING.md` 用 1.4.341.1。装新版 LunarG SDK 自带 `slangc`；实在缺才从 `https://github.com/shader-slang/slang/releases` 下（本机加 gh-proxy 前缀） | `slangc -h` 有输出 |
-| CMake | ≥ 3.24 | 官网 .msi / zip（非 GitHub 直链可下）；VS 的「C++ CMake 工具」组件若已勾也可 | `cmake --version` |
+| CMake | ≥ 3.24 | **已就位**：便携版 3.31.6 在 `E:\UE_STUDY_2026\.build-tools\cmake-3.31.6-windows-x86_64\bin\cmake.exe`（GitHub Releases 经 gh-proxy 分 8 段并发下载，2m35s；单连接只有 ~12KB/s） | `cmake --version` |
+| Vulkan SDK | 最新（LunarG） | https://www.lunarg.com/vulkan-sdk/ （直链，不走 GitHub）；**只装必要组件即可，见下节** | `vkcube` 能跑；`VULKAN_SDK` 已设置 |
+| Slang | **随 Vulkan SDK 附带** | 新版 LunarG SDK 自带 `slangc`（Carrot `BUILDING.md` 用 1.4.341.1，`cmake_modules/ShaderSlangConfig.cmake` 从 `$VULKAN_SDK/include/slang` + `lib/slang` 找）；也可单独从 `https://github.com/shader-slang/slang/releases` 下 | `slangc -h` 有输出 |
 | NVRHI | 最新 master | `git clone --recursive`（走 gh-proxy 镜像）或 CMake FetchContent | `cmake` 能构建出静态库 |
 | GLFW | 3.3+ | **零网络**：从本地 `E:\UE_STUDY_2026\Carrot\thirdparty\glfw\` 复制到 `thirdparty/`（Carrot Init 就是这么 vendored 的） | `add_subdirectory` 能过 |
 | 测试模型 | Suzanne 带贴图 glb | Blender 导出，或随便一个 glTF 样例 | — |
 
 环境自检清单（M0.0 的可见用例：三项输出同屏截图）：
-- [ ] `cmake --version` 正常
+- [x] `cmake --version` 正常 → 3.31.6（便携版）
 - [ ] `vkcube` 弹出旋转方块（说明驱动+SDK 正常）
 - [ ] `slangc -h` 正常（确认 SDK 自带 Slang）
 - [ ] `VULKAN_SDK` 已设置
 - [ ] Nsight Graphics 已装（验收日要用）
 
-> 本机实测（2026-11-06）：VS2022 Community + `cl.exe` 14.38 + Windows SDK 10.0.26100.0 已装；**系统 CMake / Vulkan SDK / vcpkg 未装**。
-> 网络：`raw.githubusercontent.com` 默认超时、`gh-proxy` 稳定可用；开代理后直连恢复（0.94s）；Vulkan SDK 的 LunarG 直链 HTTP 200。CMake 官方 zip 在 cmake.org 与 GitHub Releases 上都只有约 12KB/s，**所以 M0.1 不依赖 CMake**，改用 MSVC 直编验收（脚本 `scripts/verify-m0.1-msvc.ps1`）；M0.2 接 NVRHI 前再补 CMake。
-> GLFW 已从本地 `Carrot/thirdparty/glfw` 复制进 `thirdparty/`（166 个文件、零网络）。
+### 为什么需要 Vulkan SDK（不是「装了才能跑 Vulkan」）
+
+本机实测：`C:\Windows\System32\vulkan-1.dll`（1.5MB）与 `vulkaninfo.exe` 已由显卡驱动装好，**跑 Vulkan 程序根本不需要 SDK**。SDK 给的是开发工具，逐项拆开：
+
+| 需要什么 | 干什么用 | 只有 SDK 能给吗 |
+|---|---|---|
+| `vulkan/vulkan.h` 等头文件 | 编译 NVRHI 的 Vulkan 后端 | 否，`KhronosGroup/Vulkan-Headers` 单独拉，几 MB |
+| `vulkan-1.dll` loader | 运行时加载 ICD | 否，驱动已装 |
+| `VkLayer_khronos_validation.dll` + JSON manifest | **S0 硬指标「验证层零报错」**；M0.3「故意删一个 fence 等待能触发报错」的安全网 | **是**（或拉 VVL release 自己配 `VK_LAYER_PATH`，版本配对易踩坑） |
+| `slangc` / `glslangValidator` | Slang → SPIR-V | 否，Slang release 单独可下 |
+| `vkcube` / `vkconfig` / Nsight | 自检与抓帧道具 | 否，可替代 |
+
+**结论：真正绕不过去的只有 validation layers。** 装 SDK 不是技术必需，是「一次装齐、版本自洽、不用手配 `VK_LAYER_PATH`」的省事选择；安装时只勾 Headers + Validation Layers 组件即可，文档 / 示例 / Nsight 都能不装。
+完全不装的替代路线：改走 NVRHI 的 D3D12 后端，验证层用 Windows SDK 自带的 D3D12 Debug Layer（本机已装），零额外安装；但那样 M0.3 的 SPIR-V 验收得改成 DXIL，与 S0 三条硬指标冲突，**不作为主线**。
+
+> 本机实测（2026-11-06 15:40 更新）：
+> - ✅ VS2022 Community + `cl.exe` 14.38.33130 + Windows SDK 10.0.26100.0
+> - ✅ CMake 3.31.6 便携版；标准构建链 `configure → build → SELFTEST PASS (7/7)` 全通过（`scripts/build-m0.1.bat`，NMake 生成器）。M0.1 另有零 CMake 兜底 `scripts/verify-m0.1-msvc.ps1`。
+> - ✅ Vulkan loader / `vulkaninfo` 驱动自带
+> - ⬜ Vulkan SDK（只为 validation layers）、Nsight Graphics、vcpkg（未必要）
+> - 网络：`raw.githubusercontent.com` 默认超时、`gh-proxy` 稳定可用；开代理后小文件直连 0.94s，大文件仍被限速（单连接 ~12KB/s），改分段并发解决；LunarG SDK 直链 HTTP 200。
+> - GLFW 已从本地 `Carrot/thirdparty/glfw` 复制进 `thirdparty/`（105 个构建必需文件、零网络）。
 
 ## M0.1 项目骨架（0.5~1 天）
 

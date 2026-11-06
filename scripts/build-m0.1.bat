@@ -26,24 +26,27 @@ if not defined CMAKE_BIN (
     exit /b 1
 )
 
+rem NMake generator calls cl.exe directly. The VS generator goes through MSBuild,
+rem which throws when HTTPS_PROXY and https_proxy both exist (case-insensitive
+rem Hashtable collision) -- see docs/MILESTONES.md M0.0 pitfall 6.
 echo === configure ===
-"%CMAKE_BIN%" -S "%ROOT%" -B "%ROOT%\build" -G "Visual Studio 17 2022" -A x64
+"%CMAKE_BIN%" -S "%ROOT%" -B "%ROOT%\build\nmake" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
 if errorlevel 1 exit /b 1
 
 echo === build ===
-"%CMAKE_BIN%" --build "%ROOT%\build" --config Debug
+"%CMAKE_BIN%" --build "%ROOT%\build\nmake"
 if errorlevel 1 exit /b 1
 
 echo === acceptance: selftest ===
-"%ROOT%\build\Debug\viewer.exe" --selftest
+"%ROOT%\build\nmake\viewer.exe" --selftest
 if errorlevel 1 exit /b 1
 
 echo === acceptance: ctest ===
-"%CMAKE_BIN%" --test-dir "%ROOT%\build" -C Debug --output-on-failure
+"%CMAKE_BIN%" --test-dir "%ROOT%\build\nmake" --output-on-failure
 if errorlevel 1 exit /b 1
 
 echo.
 echo M0.1 BUILD OK.
-echo Visible case: run "%ROOT%\build\Debug\viewer.exe"
+echo Visible case: run "%ROOT%\build\nmake\viewer.exe"
 echo Watch the title bar frame counter, press ESC to quit, then save a screenshot to docs\screenshots\m0.1.png
 exit /b 0
