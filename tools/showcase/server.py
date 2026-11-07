@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import subprocess
 import threading
@@ -436,6 +437,46 @@ def do_run(payload: dict) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def do_interactive(payload: dict) -> dict:
+    """开交互窗口：启动该版本 viewer.exe（--mode normal --hud，无 --screenshot）。
+
+    与 /api/run 的截图回归不同，这里不等待进程结束、不比对基线——窗口保持打开，
+    由用户手动关闭（ESC 或点 X）。一次最多起两个窗口（双后端时）。
+    """
+    vid = payload.get("version", "")
+    if vid not in VERSIONS:
+        return {"ok": False, "error": f"未知版本 {vid!r}"}
+    version = VERSIONS[vid]
+    backend = payload.get("backend", "both")
+    if backend not in ("dx12", "vulkan", "both"):
+        return {"ok": False, "error": f"未知后端 {backend!r}"}
+    backends = ["dx12", "vulkan"] if backend == "both" else [backend]
+
+    spawned = []
+    for b in backends:
+        exe = exe_for(version, b)
+        if not exe.is_file():
+            return {"ok": False, "error": (
+                f"该版本 {b} 的 viewer.exe 未构建，无法开交互窗口："
+                f"{exe.relative_to(ROOT).as_posix()}（历史版本先跑 tools/showcase/rebuild.py）")}
+        flags = 0
+        if os.name == "nt":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        try:
+            proc = subprocess.Popen(
+                [str(exe), "--mode", "normal", "--hud"],
+                cwd=str(exe.parent),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, creationflags=flags,
+            )
+        except OSError as e:
+            return {"ok": False, "error": f"无法启动进程：{e}"}
+        spawned.append({"backend": b, "pid": proc.pid})
+    return {"ok": True, "spawned": spawned,
+            "note": "交互窗口已启动，窗口保持打开直到手动关闭（ESC 退出）；"
+                    "不会写基线，也不参与 MD5 比对"}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "nl-showcase/1.0"
 
@@ -487,7 +528,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/run":
+        path = urlparse(self.path).path
+        if path not in ("/api/run", "/api/interactive"):
             return self._json({"ok": False, "error": "unknown endpoint"}, 404)
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -496,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("body must be an object")
         except (ValueError, json.JSONDecodeError) as e:
             return self._json({"ok": False, "error": f"bad request: {e}"}, 400)
+        if path == "/api/interactive":
+            return self._json(do_interactive(payload))
         return self._json(do_run(payload))
 
 

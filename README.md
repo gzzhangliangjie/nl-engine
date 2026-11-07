@@ -68,7 +68,7 @@ python tools/showcase/rebuild.py              # 干净 clone 后重建历史 tag
 python tools/showcase/server.py --check       # 放行门禁：本轮用例是否已归位 example/（退出码 0 才放行）
 ```
 
-- 页面可切换 M0.1~M0.6、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线）。
+- 页面可切换 M0.1~M0.6、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线；历史版本 exe 按 tag 快照从 `build/showcase/<tag>/` 解析，缺失时先跑 `tools/showcase/rebuild.py`）。「运行看效果」是 `--screenshot` 截图回归，窗口闪一下即退是设计使然；要看真实可交互窗口，点侧栏「开交互窗口」（不截图、不比对基线，窗口保持到手动关闭）。
 - M0.4 可调 yaw / pitch / dist / cull 实时换视角；M0.5 有 `hud`（可调 dist）、`controls`（HUD 控件值 → 绿背景 / Suzanne 正脸的静态对照）、`nohud` / `resize` / `selftest`；M0.6 有 `hud`（GPU ms 行 + 双曲线）/ `nohud`（零 query parity）/ `selftest`。HUD 控件点选是交互用例（标 `manual`，网页不自动跑）。
 - 双后端结果除 MD5 外还做像素级比对：正常视角逐字节一致，内壁/resize 只差 1~2 个像素（≤1/255，GPU 取整噪声），页面如实标注而不是笼统写「一致」。M0.5 的 `--hud` 两图预期不同，清单 note 里写明原因。
 - 历史 exe 由 `git archive <tag>` 现场重建，Slang 工具链用 NTFS junction 复用主工作区，不重复下载/复制。

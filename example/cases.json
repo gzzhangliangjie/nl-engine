@@ -200,8 +200,8 @@
         "resize 回归、selftest 11/11、deviceErrors=0"
       ],
       "exe": {
-        "dx12": "build/dx12/viewer.exe",
-        "vulkan": "build/vulkan/viewer.exe"
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
       "cases": [
         {
@@ -386,8 +386,8 @@
         "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
       ],
       "exe": {
-        "dx12": "build/dx12/viewer.exe",
-        "vulkan": "build/vulkan/viewer.exe"
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
       "cases": [
         {

@@ -254,9 +254,38 @@ function bindBackend() {
   }));
 }
 
+// 开交互窗口：不截图、不比对基线，窗口保持打开直到手动关闭。
+async function openInteractive() {
+  const btn = $('#interactiveBtn');
+  const status = $('#interactiveStatus');
+  const v = state.data.versions.find(x => x.id === state.versionId);
+  if (!v || state.busy) return;
+  const label = state.backend === 'both' ? 'DX12 + Vulkan' : state.backend.toUpperCase();
+  btn.disabled = true;
+  status.textContent = `正在启动 ${esc(v.id)} 的交互窗口（${label}）…`;
+  try {
+    const resp = await fetch('/api/interactive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: v.id, backend: state.backend })
+    });
+    const payload = await resp.json();
+    if (payload.ok) {
+      const pids = payload.spawned.map(s => `${s.backend.toUpperCase()}(pid ${s.pid})`).join('、');
+      status.textContent = `已启动 ${pids}。窗口保持打开，ESC 或点 X 关闭；拖动旋转、滚轮缩放、HUD 控件可直接点。`;
+    } else {
+      status.textContent = esc(payload.error || '启动失败');
+    }
+  } catch (e) {
+    status.textContent = '无法连接展示服务：' + esc(e.message);
+  }
+  btn.disabled = false;
+}
+
 async function init() {
   bindBackend();
   $('#runAll').addEventListener('click', runAll);
+  $('#interactiveBtn').addEventListener('click', openInteractive);
   try {
     const resp = await fetch('/api/cases');
     state.data = await resp.json();

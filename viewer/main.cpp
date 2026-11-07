@@ -400,8 +400,11 @@ int runNormal(const Options& o) {
 
         if (frame % 15 == 0 || o.screenshot) {
             const auto e = renderer->extent();
+            // 里程碑号取 stage 前缀（kStage 以 "M0.x ..." 开头），避免每版漏改硬编码。
+            const std::string stageStr(st.stage);
+            const std::string stagePrefix = stageStr.substr(0, stageStr.find(' '));
             std::ostringstream title;
-            title << "nl-engine | M0.5 | " << st.backend
+            title << "nl-engine | " << stagePrefix << " | " << st.backend
                   << " | mode " << nl::core::modeName(o.mode)
                   << " | HUD " << (o.hudEnabled ? "on" : "off")
                   << " | frame " << frame
@@ -447,7 +450,10 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
 }
 
 void printUsage() {
-    std::cout << "nl-engine viewer (M0.5)  backend=" << nl::renderer::status().backend << '\n'
+    const auto& st0 = nl::renderer::status();
+    const std::string stageStr0(st0.stage);
+    const std::string stagePrefix0 = stageStr0.substr(0, stageStr0.find(' '));
+    std::cout << "nl-engine viewer (" << stagePrefix0 << ")  backend=" << st0.backend << '\n'
               << "  viewer.exe                         textured Suzanne + ImGui HUD; drag=orbit, wheel=zoom\n"
               << "                                     C=culling, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"

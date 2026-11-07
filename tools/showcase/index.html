@@ -28,6 +28,8 @@
         <button data-backend="both" class="active">双后端对比</button>
       </div>
       <div class="hint">「双后端对比」会分别跑两个 exe，并比对输出 PNG 的 MD5。</div>
+      <button id="interactiveBtn" class="run-all" style="margin-top:8px">⛶ 开交互窗口（保持不关）</button>
+      <div id="interactiveStatus" class="hint">不截图、不比对基线，窗口保持打开，ESC 或点 X 关闭。</div>
       <div class="side-label" style="margin-top:18px">服务</div>
       <div id="serviceInfo" class="hint">读取中…</div>
       <button id="runAll" class="run-all">▶ 运行本版本全部用例</button>
