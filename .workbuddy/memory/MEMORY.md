@@ -37,7 +37,7 @@
 - `--mode` 分发器在 `core/modes.*` + `viewer` 的 `runMode()`：M0.5 只有 `normal`；S1 起每加一个模式只改枚举 / 名字 / case，旧模式保留当对照。未知模式退出 1。
 
 ## 调试与性能工具链（2026-11-07 定，S1~S14 沿用）
-- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（**整帧部分已由 M0.6 补掉**，按 pass 拆分排 M0.7 序列之后）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
+- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（**整帧部分已由 M0.6 补掉**；按 pass 拆分 `--profile` 是穿插项，排在已确认序列 M0.7 高模资产 / M0.8 调试着色 / M0.9 回归总闸之后视需要插）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
 - 选 RenderDoc 当主工具是因为**同时覆盖 DX12 + Vulkan**；Nsight 偏 N 卡、PIX 只管 D3D12，退到 L3。工具全在进程外或 NVRHI 抽象层内，不进 CMake、不链接、不读 SDK 路径。
 - **HUD 的 `frame ms` 是 CPU 帧间隔，GPU ms 才是 GPU 耗时**（M0.6 起两者并排显示），验收 60fps / 性能退化看 GPU ms。
 

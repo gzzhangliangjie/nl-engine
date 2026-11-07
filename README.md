@@ -55,7 +55,7 @@ build/<backend>/viewer.exe --selftest
 - **截图可复现**：实时 FPS 写进 PNG 会让基线 MD5 永远对不上，所以 `--screenshot` 的 HUD 时序数据用固定样本并标注 `capture/replay (fixed samples)`；交互窗口显示真实采样。
 - **S0 总验收**：`model.slang` 与 `hud.slang` 各自同出 SPIR-V + DXIL（`--selftest` 机械核对 8 个产物魔数）；两后端 `deviceErrors=0`、selftest 14/14、ctest 100%；`--no-hud` 正常视角双后端 PNG 逐字节相同（MD5 `7e528087…`），`--hud` 两张必然不同（面板印的后端名 / 调试层不同，不是 3D 画面不一致）。证据：`docs/screenshots/s0.png`、`m0.5-*.png`、`example/m0.5/`、`docs/MILESTONES.md`。
 - **M0.6 GPU 帧内计时（tag `m0.6`）**：两后端共享的 `GpuTimer` 用一对 NVRHI timer query 包住整帧 GPU 命令，HUD 在 CPU `frame ms` 旁新增 `GPU x.xx ms (NVRHI timer)` 行 + gpu ms 曲线——两者并排一眼分清 CPU 帧间隔与 GPU 耗时。`--no-hud` 完全不建 query，M0.1~M0.5 基线逐字节不变。计划见 `docs/s0/M0.6-PLAN.md`。
-- **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分排 M0.7 后续），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
+- **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分 `--profile` 为穿插项，排在 M0.7~M0.9 序列之后视需要插），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
 
 ## 成果展示台（按版本看用例）
 
