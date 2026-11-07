@@ -5,13 +5,15 @@
 
 ---
 
-## M2.0 METIS 接入：簇聚组（1~2 天）
+## M2.0 METIS 接入：簇聚组（1~2 天）✅ 2026-11-07（tag `s2-group`）
 
-- [ ] 集成 METIS（vcpkg 或源码编入）：建图 = 簇为节点、共享边为权重边
-- [ ] 聚组：把 128-tri 簇聚成 ~50000-tri 的组（组大小是常数，别拍脑袋，写在头文件）
-- [ ] `nanite-tools simplify model.nmesh -o model-lod1.nmesh` 入口跑通（先只做聚组打印统计）
+- [x] 集成 METIS：**vendored 源码编入**（`thirdparty/metis/`，KarypisLab 官方 METIS 5 + GKlib，自写 CMake 编静态库 `nl_metis`；改动仅 metis.h 宽度宏 + INT 宏 guard，见 VENDORED.md）
+- [x] 聚组（`core/grouping.cpp`）：节点=簇、边=共享几何点（按位置 weld、忽略 UV 缝）、边权=共享点数；`METIS_PartGraphKway`（vwgt=簇三角数、固定 seed 确定性、CONTIG 仅整图连通时开）；组内连通 fixup（不连通分区按连通分量拆）
+- [x] `nanite-tools simplify <model.nmesh> [-v]` 入口跑通（读 .nmesh → 聚组 → 统计打印）
+- ⚠️ **口径修订（2026-11-07）**：组大小目标 = **8 簇/组**（`kTargetMeshletsPerGroup`，bevy 0.15 实证值，Nanite 用 8~32），不是旧稿的 ~50000 tri——那是 UE 的 page 口径而非 group。S3 若发现合并需求再调这一个数。
+- ⚠️ 实踩（记 MILESTONES）：METIS `CONTIG=1` 要求整图连通否则 rc=-4 → 先 BFS 检测再设；断连靠 fixup 兼底。
 
-**自检**：打印组数 ≈ 簇三角总数/组上限；组内簇空间连续（可视化着色验证，临时 mode 即可）。tag：`s2-group`。
+**自检（已过）**：selftest group——单四边形 1 组、断连块无组跨块、每组在共享几何点图上连通（selftest 侧独立重算交叉验证）、空输入拒绝；Suzanne 237 簇→31 组（1 次 fixup）、球 4929 簇→617 组 avg 8.0；ctest 8/8。tag：`s2-group`。交代：展示台 s2-group 工具卡 + `docs/s2/NANITE-TOOLS-GUIDE.md` 归档。
 
 ## M2.1 QEM 简化 + 边界锁定（2~3 天，灵魂里程碑）
 

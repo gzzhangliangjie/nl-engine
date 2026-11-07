@@ -97,6 +97,9 @@ add_library(nl_imgui STATIC
 )
 target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 
+# ---- M2.0：METIS vendored（簇聚组图分割，nanite-tools 离线管线用）----
+add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -107,10 +110,13 @@ add_library(nl_core STATIC
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
     core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）
     core/src/meshlet_io.cpp    # M1.2：.nmesh 二进制资产读写
+    core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
-target_link_libraries(nl_core PRIVATE glfw)
+target_link_libraries(nl_core PRIVATE glfw nl_metis)
+# 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
+# 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
 
 # ---- renderer：所有图形 API / NVRHI 符号只活在这里 ----
 add_library(nl_renderer STATIC
@@ -271,3 +277,13 @@ add_test(NAME s1-nmesh-suzanne
                  -o ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
 set_tests_properties(s1-nmesh-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "saved      :")
+# M2.0：聚组算法机械单测（覆盖连续 / 组号连续 / 组内连通交叉验证 / 断连块不跨组 / 负向）
+add_test(NAME s2-group-selftest COMMAND nanite-tools selftest group)
+set_tests_properties(s2-group-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "group selftest: PASS")
+# M2.0：真实资产聚组验收（Suzanne.nmesh 由 s1-nmesh-suzanne 先写出；依赖同目录测试顺序）
+add_test(NAME s2-group-suzanne
+         COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
+set_tests_properties(s2-group-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "connectivity: PASS"
+    DEPENDS s1-nmesh-suzanne)

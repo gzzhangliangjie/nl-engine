@@ -527,3 +527,25 @@
 3. **m0.9/gate-hud 回归 FAIL 两后端** → 根因即坑 1 的 device error（dx12 退出码 1）+ kStage 变更导致 HUD stage 文本与旧基线像素不符（vulkan 877 px）。处理：修 shader 入口 + 用当前 exe 重拍 m0.9 基线（exe 模板=当前 build 的版本语义如此）。
 
 **下一步**：S2 simplify（簇重切，`nanite-tools simplify` 占位已在）。S1 全程四个 tag：s1-tools → s1-cluster → s1-asset → s1-done。
+
+---
+
+## M2.0 METIS 簇聚组（S2 第一步）
+
+**动作**：METIS 5 + GKlib vendored（`thirdparty/metis/`，KarypisLab 官方 main 浅克隆，自写 CMake 编静态库 `nl_metis`，不用上游构建系统）；core/grouping（`groupClusters`）：位置 weld（位级相等、忽略 UV 缝）→ 簇邻接图（边权=共享点数）→ `METIS_PartGraphKway`（vwgt=簇三角数、seed=42 固定、CONTIG 仅整图连通时开）→ 不连通分区按连通分量 fixup 拆分；`simplify` 子命令第一步（读 .nmesh → 聚组 → 统计打印）；selftest group（合成网格 5 断言 + 独立重算交叉验证）；ctest 6→8；cases.json 加 s2-group 工具卡（s1-tools 负向用例随 simplify 实现退到 dag）；交代归档 `docs/s2/NANITE-TOOLS-GUIDE.md`；S2-PLAN 组大小口径修订（~50000 tri → 8 簇/组，bevy 0.15 实证值）。
+
+**提交版本**：`s2-group`
+
+**完成情况**
+- selftest group 全绿：单四边形 1 组、断连块无组跨块、每组连通（独立重算防同错）、空输入拒绝。
+- 实机：Suzanne 237 簇→31 组（1 次 fixup）avg 7.6；球 4929 簇→617 组 avg 8.0 max 12 零 fixup，connectivity PASS。
+- viewer 零改动：selftest 15/15、ctest 8/8、回归总闸全绿（渲染基线逐字节不动）。
+- 展示台 s2-group 工具卡现场实跑（selftest / simplify 资产下拉 / 负向 exit 1）。
+
+**踩坑情况**
+1. **METIS `CONTIG=1` 要求输入图整体连通** → 断连合成网格 rc=-4（METIS_ERROR_INPUT）。处理：先 BFS 检测整图连通才设 CONTIG，断连靠 fixup 拆分兜底（「组不跨断连块」由 selftest 锁死）。
+2. **GKlib `__thread` 在 MSVC 无定义** → 60+ 语法错。处理：固化上游 TLS 检测结果 `__thread=__declspec(thread)`（vendored CMake 直接写死）。
+3. **UCRT limits.h 与 metis.h 宏重定义 C4005** → vendored metis.h 加 `#ifndef` guard（记入 VENDORED.md 改动清单）。
+4. **选型校准**：S2-PLAN 旧稿「聚成 ~50000-tri 组」经 UE/bevy 源码侦察修订——UE group ≤128 簇、bevy 8 簇/组；50000-tri 是 UE page 口径。聚组选 METIS（bevy 0.15/0.16 同款背书）而非 UE 自研 GraphPartitioner（流送分页需求，S3 前不需要）；Carrot 本地仓库只有运行时 group 管理、无离线简化实现可参考。
+
+**下一步**：M2.1 组内 QEM 简化 + 边界锁定（灵魂里程碑；meshoptimizer simplifier 作对照 oracle）。

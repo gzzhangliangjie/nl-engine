@@ -6,6 +6,7 @@
 #include "nl/core/mesh_io.hpp"
 #include "nl/core/meshlet.hpp"
 #include "nl/core/meshlet_io.hpp"
+#include "nl/core/grouping.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -23,8 +25,8 @@ void printUsage() {
         "usage:\n"
         "  nanite-tools stat <model>                 summary (.glb/.gltf 或 .nmesh)\n"
         "  nanite-tools cluster <model> [-v] [-o out.nmesh]   meshlet build + save\n"
-        "  nanite-tools selftest cluster|nmesh       deterministic unit tests\n"
-        "  nanite-tools simplify <model> [options]   cluster re-cut (S2, not yet)\n"
+        "  nanite-tools selftest cluster|nmesh|group deterministic unit tests\n"
+        "  nanite-tools simplify <model.nmesh> [-v]  cluster grouping (S2 M2.0)\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
@@ -387,6 +389,143 @@ int cmdCluster(int argc, char** argv) {
     return failures == 0 ? 0 : 1;
 }
 
+// ---- simplify（M2.0）：簇聚组 ----
+// S2 第一步：读 .nmesh，把相邻簇（共享几何点）用 METIS 聚成组并打印统计。
+// 组内 QEM 简化 + 重切在 M2.1/M2.2 落地；本步先验证「组连通 + 组大小合理」。
+
+// 独立重算组内连通性（与 grouping.cpp 的 fixup 交叉验证）：对每组沿
+// 共享几何点边 BFS，能访问全组员才算连通。返回不连通的组数。
+int countDisconnectedGroups(const nl::core::NMeshData& nm,
+                            const nl::core::GroupingResult& g) {
+    if (nm.meshlets.empty()) return 0;
+    const size_t n = nm.meshlets.size();
+    // canonical 点 → 簇倒排（与 grouping.cpp 同口径：位级相等的位置）
+    std::vector<std::uint32_t> canon(nm.vertices.size());
+    {
+        std::vector<std::uint32_t> order(nm.vertices.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = std::uint32_t(i);
+        std::sort(order.begin(), order.end(), [&nm](std::uint32_t a, std::uint32_t b) {
+            for (int k = 0; k < 3; ++k)
+                if (nm.vertices[a].pos[k] != nm.vertices[b].pos[k])
+                    return nm.vertices[a].pos[k] < nm.vertices[b].pos[k];
+            return a < b;
+        });
+        std::uint32_t id = 0;
+        canon[order[0]] = 0;
+        for (size_t i = 1; i < order.size(); ++i) {
+            const auto& a = nm.vertices[order[i - 1]].pos;
+            const auto& b = nm.vertices[order[i]].pos;
+            if (b[0] != a[0] || b[1] != a[1] || b[2] != a[2]) ++id;
+            canon[order[i]] = id;
+        }
+    }
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> pointToClusters;
+    for (std::uint32_t c = 0; c < n; ++c)
+        for (std::uint32_t i = 0; i < nm.meshlets[c].vertexCount; ++i)
+            pointToClusters[canon[nm.meshlets[c].vertexOffset + i]].push_back(c);
+    std::vector<std::vector<std::uint32_t>> adj(n);
+    for (const auto& [pt, cs] : pointToClusters)
+        for (size_t i = 0; i + 1 < cs.size(); ++i)
+            for (size_t j = i + 1; j < cs.size(); ++j) {
+                adj[cs[i]].push_back(cs[j]);
+                adj[cs[j]].push_back(cs[i]);
+            }
+
+    int bad = 0;
+    std::vector<std::uint8_t> seen(n, 0);
+    std::vector<std::uint32_t> stack;
+    for (std::uint32_t grp = 0; grp < g.groupCount; ++grp) {
+        std::uint32_t memberCount = 0, visited = 0;
+        std::uint32_t root = 0;
+        bool haveRoot = false;
+        for (std::uint32_t c = 0; c < n; ++c) {
+            if (g.clusterGroup[c] != grp) continue;
+            ++memberCount;
+            if (!haveRoot) { root = c; haveRoot = true; }
+        }
+        if (memberCount == 0) continue;
+        stack = {root};
+        std::fill(seen.begin(), seen.end(), std::uint8_t(0));
+        seen[root] = 1;
+        while (!stack.empty()) {
+            const std::uint32_t c = stack.back();
+            stack.pop_back();
+            ++visited;
+            for (std::uint32_t nb : adj[c])
+                if (!seen[nb] && g.clusterGroup[nb] == grp) { seen[nb] = 1; stack.push_back(nb); }
+        }
+        if (visited != memberCount) ++bad;
+    }
+    return bad;
+}
+
+int cmdSimplify(int argc, char** argv) {
+    if (argc < 1) {
+        std::fprintf(stderr, "simplify: missing <model.nmesh>\n");
+        return 1;
+    }
+    const char* path = argv[0];
+    bool verbose = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.empty()) continue;  // 展示台 select 空选项展开成空 arg，视为未传
+        if (a == "-v") verbose = true;
+        else {
+            std::fprintf(stderr, "simplify: unknown option %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    nl::core::NMeshData nm;
+    std::string error;
+    if (!nl::core::loadNMesh(path, nm, error)) {
+        std::fprintf(stderr, "simplify: %s\n", error.c_str());
+        return 1;
+    }
+
+    nl::core::GroupingResult g;
+    if (!nl::core::groupClusters(nm, g, error)) {
+        std::fprintf(stderr, "simplify: %s\n", error.c_str());
+        return 1;
+    }
+
+    // 组大小统计（簇数/组 + 三角数/组）
+    size_t totalTri = 0;
+    for (const auto& m : nm.meshlets) totalTri += m.triangleCount;
+    std::vector<std::uint32_t> sizeOf(g.groupCount, 0), triOf(g.groupCount, 0);
+    for (std::uint32_t c = 0; c < nm.meshlets.size(); ++c) {
+        ++sizeOf[g.clusterGroup[c]];
+        triOf[g.clusterGroup[c]] += nm.meshlets[c].triangleCount;
+    }
+    std::uint32_t sizeMin = ~0u, sizeMax = 0;
+    double sizeSum = 0;
+    for (std::uint32_t s : sizeOf) {
+        sizeMin = std::min(sizeMin, s);
+        sizeMax = std::max(sizeMax, s);
+        sizeSum += s;
+    }
+    const double sizeAvg = g.groupCount ? sizeSum / g.groupCount : 0.0;
+
+    std::printf("file        : %s\n", path);
+    std::printf("clusters    : %zu (%zu triangles)\n", nm.meshlets.size(), totalTri);
+    std::printf("target      : %u meshlets/group\n", nl::core::kTargetMeshletsPerGroup);
+    std::printf("groups      : %u\n", g.groupCount);
+    std::printf("group size  : min %u avg %.1f max %u\n",
+                g.groupCount ? sizeMin : 0u, sizeAvg, sizeMax);
+    std::printf("split fixups: %u\n", g.splitFixups);
+
+    const int bad = countDisconnectedGroups(nm, g);
+    std::printf("connectivity: %s (%d disconnected group(s))\n",
+                bad == 0 ? "PASS" : "FAIL", bad);
+    if (verbose) {
+        std::printf("per-group   :\n");
+        for (std::uint32_t grp = 0; grp < g.groupCount; ++grp)
+            std::printf("  [%3u] clusters=%-4u triangles=%-6u\n",
+                        grp, sizeOf[grp], triOf[grp]);
+    }
+    return bad == 0 ? 0 : 1;
+}
+
 // ---- selftest cluster：确定性合成网格上的机械单测 ----
 
 // xorshift32：固定种子，跨平台确定性
@@ -681,6 +820,168 @@ int selftestNMesh() {
     return 1;
 }
 
+// ---- selftest group：聚组机械单测（M2.0 验收核心）----
+// 与 grouping.cpp 内部逻辑交叉验证：连通性判定在 selftest 侧独立重算，
+// 不复用 countDisconnectedGroups 的对外口径（同一算法两份实现，防止同错）。
+
+// 合成网格 → 切簇 → NMeshData（selftest 复用的装配线）
+static bool makeNMesh(const SelftestMesh& mesh, nl::core::NMeshData& out, std::string& reason) {
+    nl::core::BuiltMeshlets built;
+    if (!nl::core::buildMeshlets(mesh.positions.data(), 3,
+                                 mesh.positions.size() / 3,
+                                 mesh.indices.data(), mesh.indices.size(), built)) {
+        reason = "buildMeshlets rejected valid input";
+        return false;
+    }
+    nl::core::PrimitiveMesh prim;
+    prim.name = "selftest#0";
+    prim.indices = mesh.indices;
+    prim.vertices.resize(mesh.positions.size() / 3);
+    for (size_t i = 0; i < prim.vertices.size(); ++i)
+        for (int k = 0; k < 3; ++k) prim.vertices[i].pos[k] = mesh.positions[i * 3 + k];
+    return toNMeshData(prim, built, out, reason);
+}
+
+int selftestGroup() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    struct Case { const char* name; SelftestMesh mesh; };
+    std::vector<Case> cases = {
+        { "single quad (2 tris)", makeTestMesh(1, 2, 2) },
+        { "2 disconnected 32x32 blocks", makeTestMesh(2, 32, 32) },
+        { "connected 64x64 grid", makeTestMesh(1, 64, 64) },
+    };
+
+    for (const Case& c : cases) {
+        std::printf("[%s]\n", c.name);
+        nl::core::NMeshData nm;
+        std::string reason;
+        if (!makeNMesh(c.mesh, nm, reason)) {
+            check(false, "makeNMesh", reason);
+            continue;
+        }
+        nl::core::GroupingResult g;
+        if (!nl::core::groupClusters(nm, g, reason)) {
+            check(false, "groupClusters", reason);
+            continue;
+        }
+
+        // 1) 簇全覆盖：每个簇有组号，组号连续 0..groupCount-1 且每号出现 ≥1 次
+        bool covered = g.clusterGroup.size() == nm.meshlets.size();
+        std::vector<std::uint32_t> seen(g.groupCount, 0);
+        for (std::uint32_t grp : g.clusterGroup)
+            if (grp < g.groupCount) ++seen[grp];
+            else covered = false;
+        for (std::uint32_t grp : seen)
+            if (grp == 0) covered = false;
+        check(covered, "coverage (every cluster grouped, ids contiguous)");
+
+        // 2) 组大小合理：单四边形恰好 1 组；其余 ≤ 3×目标（防组堆积）
+        if (std::string(c.name) == "single quad (2 tris)") {
+            check(g.groupCount == 1, "single quad -> exactly 1 group");
+        } else {
+            check(g.maxGroupSize <= 3 * nl::core::kTargetMeshletsPerGroup,
+                  "max group size sane",
+                  "max=" + std::to_string(g.maxGroupSize));
+        }
+
+        // 3) 组内连通（独立重算，交叉验证 fixup）
+        {
+            // canonical 点 → 簇倒排 → 邻接
+            const size_t n = nm.meshlets.size();
+            std::vector<std::uint32_t> canon(nm.vertices.size());
+            std::vector<std::uint32_t> order(nm.vertices.size());
+            for (size_t i = 0; i < order.size(); ++i) order[i] = std::uint32_t(i);
+            std::sort(order.begin(), order.end(), [&nm](std::uint32_t a, std::uint32_t b) {
+                for (int k = 0; k < 3; ++k)
+                    if (nm.vertices[a].pos[k] != nm.vertices[b].pos[k])
+                        return nm.vertices[a].pos[k] < nm.vertices[b].pos[k];
+                return a < b;
+            });
+            std::uint32_t id = 0;
+            canon[order[0]] = 0;
+            for (size_t i = 1; i < order.size(); ++i) {
+                const auto& p = nm.vertices[order[i - 1]].pos;
+                const auto& q = nm.vertices[order[i]].pos;
+                if (q[0] != p[0] || q[1] != p[1] || q[2] != p[2]) ++id;
+                canon[order[i]] = id;
+            }
+            std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> pt2c;
+            for (std::uint32_t cl = 0; cl < n; ++cl)
+                for (std::uint32_t i = 0; i < nm.meshlets[cl].vertexCount; ++i)
+                    pt2c[canon[nm.meshlets[cl].vertexOffset + i]].push_back(cl);
+            std::vector<std::vector<std::uint32_t>> adj(n);
+            for (const auto& [pt, cs] : pt2c)
+                for (size_t i = 0; i + 1 < cs.size(); ++i)
+                    for (size_t j = i + 1; j < cs.size(); ++j) {
+                        adj[cs[i]].push_back(cs[j]);
+                        adj[cs[j]].push_back(cs[i]);
+                    }
+            bool allConnected = true;
+            std::vector<std::uint8_t> seenB(n, 0);
+            std::vector<std::uint32_t> stack;
+            for (std::uint32_t grp = 0; grp < g.groupCount && allConnected; ++grp) {
+                std::uint32_t memberCount = 0, root = 0;
+                bool haveRoot = false;
+                for (std::uint32_t cl = 0; cl < n; ++cl)
+                    if (g.clusterGroup[cl] == grp) {
+                        ++memberCount;
+                        if (!haveRoot) { root = cl; haveRoot = true; }
+                    }
+                std::fill(seenB.begin(), seenB.end(), std::uint8_t(0));
+                stack = {root};
+                seenB[root] = 1;
+                std::uint32_t visited = 0;
+                while (!stack.empty()) {
+                    const std::uint32_t cl = stack.back();
+                    stack.pop_back();
+                    ++visited;
+                    for (std::uint32_t nb : adj[cl])
+                        if (!seenB[nb] && g.clusterGroup[nb] == grp) { seenB[nb] = 1; stack.push_back(nb); }
+                }
+                if (visited != memberCount) allConnected = false;
+            }
+            check(allConnected, "every group connected on shared-vertex graph");
+        }
+
+        // 4) 断连块 case：任何组不得跨块（块间 x 平移 100、每块宽 10）
+        if (c.mesh.blocks == 2) {
+            bool crossBlock = false;
+            std::uint32_t blockOf0 = ~0u, blockOf1 = ~0u;  // 每组必须整体落在一块
+            std::vector<int> blockOfGroup(g.groupCount, -2); // -2 未知
+            for (std::uint32_t cl = 0; cl < nm.meshlets.size(); ++cl) {
+                const int blk = nm.bounds[cl].sphere[0] < 50.f ? 0 : 1;
+                int& bg = blockOfGroup[g.clusterGroup[cl]];
+                if (bg == -2) bg = blk;
+                else if (bg != blk) crossBlock = true;
+            }
+            (void)blockOf0; (void)blockOf1;
+            check(!crossBlock, "no group spans disconnected blocks");
+        }
+        std::printf("  groups=%u max=%u fixups=%u\n",
+                    g.groupCount, g.maxGroupSize, g.splitFixups);
+    }
+
+    // 5) 负向：空簇拒绝
+    {
+        nl::core::NMeshData empty;
+        nl::core::GroupingResult g;
+        std::string reason;
+        check(!nl::core::groupClusters(empty, g, reason), "empty mesh rejected", reason);
+    }
+
+    if (failures == 0) {
+        std::printf("group selftest: PASS\n");
+        return 0;
+    }
+    std::printf("group selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -691,10 +992,12 @@ int main(int argc, char** argv) {
     if (cmd == "selftest") {
         if (argc >= 3 && std::string(argv[2]) == "cluster") return selftestCluster();
         if (argc >= 3 && std::string(argv[2]) == "nmesh") return selftestNMesh();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh)\n");
+        if (argc >= 3 && std::string(argv[2]) == "group") return selftestGroup();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group)\n");
         return 1;
     }
-    if (cmd == "simplify" || cmd == "dag") {
+    if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
+    if (cmd == "dag") {
         std::fprintf(stderr, "%s: not implemented yet (S2 / S3)\n", cmd.c_str());
         return 2;
     }

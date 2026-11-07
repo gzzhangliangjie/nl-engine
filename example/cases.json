@@ -1048,13 +1048,13 @@
      "id": "not-impl",
      "name": "负向：未实现子命令（防假成功）",
      "kind": "tool",
-     "note": "simplify 在 S2、dag 在 S3 实现；当前调用必须显式报错退出 2，不许静默假成功。cluster 在 M1.1 已实现，负向用例随之换到下一个未实现子命令。",
+     "note": "simplify 在 M2.0 已实现（聚组），dag 在 S3 实现；当前调用必须显式报错退出 2，不许静默假成功。负向用例随实现进度退到下一个未实现子命令。",
      "args": [
-      "simplify"
+      "dag"
      ],
      "expectExit": 2,
      "expectLog": "not implemented yet",
-     "command": "nanite-tools simplify"
+     "command": "nanite-tools dag"
     }
    ]
   },
@@ -1186,6 +1186,87 @@
      "expectExit": 1,
      "expectLog": "cannot open",
      "command": "nanite-tools stat __missing__.nmesh"
+    }
+   ]
+  },
+  {
+   "id": "s2-group",
+   "label": "M2.0",
+   "name": "METIS 簇聚组（S2 第一步）",
+   "tag": "s2-group",
+   "date": "2026-11-07",
+   "summary": "METIS 5 vendored（thirdparty/metis，KarypisLab 官方 + GKlib，自写 CMake 编静态库）。core/grouping：节点=簇、边=共享几何点（按位置 weld，忽略 UV 缝）、边权=共享点数的图，METIS_PartGraphKway 分区（vwgt=簇三角数、固定 seed 确定性、CONTIG 仅在图连通时开），不连通分区按连通分量 fixup 拆分。simplify 子命令第一步：读 .nmesh 聚组并打印统计。选型依据：bevy 0.15/0.16 同款（组大小目标 8 簇，UFactor/seed 秘方）；UE 用自研 GraphPartitioner（流送分页需求，S3 前不需要）。",
+   "acceptance": [
+    "selftest group 全绿：覆盖连续、单四边形 1 组、断连块不跨组、每组连通（独立重算交叉验证）、空输入拒绝",
+    "Suzanne：237 簇 → 31 组（目标 8 簇/组，1 次不连通 fixup），组大小 3~10 avg 7.6，connectivity PASS（ctest s2-group-suzanne 锁定）",
+    "METIS 断连图约束已修：CONTIG 仅在整图连通时设置，否则 rc=-4",
+    "viewer 零改动：selftest 15/15、回归全量 ALL GREEN（渲染基线逐字节不动）",
+    "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest group：聚组机械单测",
+     "kind": "tool",
+     "note": "三个确定性合成网格（单四边形 / 双断连块 32x32 / 连续 64x64）验证：每簇有组且组号连续、单四边形恰 1 组、组大小合理（≤3×目标）、每组在共享几何点图上连通（selftest 侧独立重算，与 grouping.cpp 的 fixup 交叉验证防同错）、断连块任何组不跨块、空输入显式拒绝。",
+     "args": [
+      "selftest",
+      "group"
+     ],
+     "expectExit": 0,
+     "expectLog": "group selftest: PASS",
+     "command": "nanite-tools selftest group"
+    },
+    {
+     "id": "simplify",
+     "name": "simplify：Suzanne 簇聚组统计",
+     "kind": "tool",
+     "note": "读 .nmesh（M1.2 资产）→ METIS 聚组 → 打印簇数 / 目标组大小 / 组数 / 组大小 min/avg/max / fixup 次数 / 连通性。Suzanne 237 簇 → 31 组即真实输出；勾 -v 展开每组明细。",
+     "args": [
+      "simplify",
+      "{root}/assets/meshlets/{asset}",
+      "{verbose}"
+     ],
+     "params": {
+      "asset": {
+       "type": "select",
+       "label": "资产",
+       "options": [
+        "Suzanne.nmesh",
+        "IcoSphereDense.nmesh"
+       ],
+       "default": "Suzanne.nmesh"
+      },
+      "verbose": {
+       "type": "select",
+       "label": "每组明细",
+       "options": [
+        "",
+        "-v"
+       ],
+       "default": ""
+      }
+     },
+     "expectExit": 0,
+     "expectLog": "connectivity: PASS",
+     "command": "nanite-tools simplify assets/meshlets/<asset> [-v]"
+    },
+    {
+     "id": "negative-missing",
+     "name": "负向：.nmesh 不存在（exit 1）",
+     "kind": "tool",
+     "note": "simplify 对缺失文件走 loadNMesh 失败路径报 cannot open 退出 1，不许静默成功。",
+     "args": [
+      "simplify",
+      "{root}/assets/meshlets/__missing__.nmesh"
+     ],
+     "expectExit": 1,
+     "expectLog": "cannot open",
+     "command": "nanite-tools simplify __missing__.nmesh"
     }
    ]
   },
