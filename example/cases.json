@@ -1548,6 +1548,227 @@
      "command": "nanite-tools lod Suzanne.nmesh --max-levels 0"
     }
    ]
+  },
+  {
+   "id": "s2.0",
+   "label": "M2.3",
+   "name": "viewer --mode lod N + HUD 滑条（S2 收官）",
+   "tag": "s2-done",
+   "date": "2026-11-07",
+   "summary": "M2.3：--mode lod N 直接渲染分层资产 assets/meshlets/Suzanne.lodN.nmesh（nanite-tools lod 产出，6 层入仓共 ~0.5MB），HUD 滑条运行时切层。切层 = scene.uploadClusterMesh 读盘→展开→新建 VB/IB 上传→替换句柄，shader/pipeline/binding 全部复用；层号/parent error 从 .nmesh v2 尾部 section 读回，HUD 标 lod N/M tri maxErr。缺省着色 normal（几何不连续在逐面法线色上最敏感）。renderer 探测 <stem>.lodN.nmesh 从 0 连续计数；没有分层资产 / N 越界 / 非数字一律 exit 1，绝不静默回退。kStage 升 S2.0。",
+   "acceptance": [
+    "滑条切层肉眼验收：L0..L5 同机位六层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞；L4/L5 的黑色面经 --cull none 复检为翻转面（M2.2 已知口径，几何完好非裂缝）",
+    "负向全拒：--lod 非数字 / 越界 / 资产无分层文件均 exit 1；selftest 15/15（含 lod 模式分发）",
+    "双后端 pair 基线逐字节一致（L0/L3/L5 + HUD 960x540 滑条自证 lod 2/5 tri 985 maxErr 0.0250）",
+    "ctest + 回归总闸全绿；交代物：展示台 s2-done 版本卡 + run.bat + docs/s2 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "lod-l0",
+     "name": "lod L0：3936 tri 原始层",
+     "kind": "pair",
+     "note": "最细层。与 --mode cluster 同一场景代码，首载与滑条切层走同一条 uploadClusterMesh 路径。",
+     "baselines": {
+      "dx12": "example/s2-done/lod-l0-dx12.png",
+      "vulkan": "example/s2-done/lod-l0-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "0",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode lod --lod 0 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s2-done/run.bat gallery"
+    },
+    {
+     "id": "lod-l3",
+     "name": "lod L3：490 tri（滑条中段）",
+     "kind": "pair",
+     "note": "组数 4、锁点 35；法线着色下组间接缝无裂缝。maxErr 0.0250（parent error，HUD 同值）。",
+     "baselines": {
+      "dx12": "example/s2-done/lod-l3-dx12.png",
+      "vulkan": "example/s2-done/lod-l3-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "3",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode lod --lod 3 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s2-done/run.bat gallery"
+    },
+    {
+     "id": "lod-l5",
+     "name": "lod L5：124 tri 最粗层",
+     "kind": "pair",
+     "note": "3 簇 / 0 锁点 / maxErr 0.0260。L4/L5 有已知翻转面（M2.2 口径），--cull none 复检几何完好，不是裂缝。",
+     "baselines": {
+      "dx12": "example/s2-done/lod-l5-dx12.png",
+      "vulkan": "example/s2-done/lod-l5-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "5",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode lod --lod 5 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s2-done/run.bat gallery"
+    },
+    {
+     "id": "lod-hud",
+     "name": "lod L2 + HUD（960x540，滑条自证）",
+     "kind": "pair",
+     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/5 tri 985 maxErr 0.0250。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
+     "baselines": {
+      "dx12": "example/s2-done/lod-hud-dx12.png",
+      "vulkan": "example/s2-done/lod-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "2",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode lod --lod 2 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --hud --size 960x540 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s2-done/run.bat gallery"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（15/15，阶段校验 S2.0）",
+     "kind": "selftest",
+     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 15。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (15/15)",
+     "command": "viewer.exe --selftest",
+     "script": "example/s2-done/run.bat selftest"
+    },
+    {
+     "id": "negative-lod-text",
+     "name": "负向：--lod 非数字（exit 1，无窗口）",
+     "kind": "tool",
+     "note": "parseArgs 直接拒绝，不创建窗口不碰 GPU；绝不静默落回 0 层。",
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "abc"
+     ],
+     "expectExit": 1,
+     "expectLog": "invalid --lod 'abc'",
+     "command": "viewer.exe --mode lod --lod abc"
+    },
+    {
+     "id": "negative-lod-range",
+     "name": "负向：--lod 9 越界（exit 1）",
+     "kind": "tool",
+     "note": "renderer 探测 Suzanne 共 6 层（0..5），越界显式报错退出；--screenshot 参数只是避免无参交互窗口。",
+     "args": [
+      "--mode",
+      "lod",
+      "--lod",
+      "9",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{root}/build/showcase/runs/s2-done-negative.png",
+      "--frames",
+      "2"
+     ],
+     "expectExit": 1,
+     "expectLog": "out of range",
+     "command": "viewer.exe --mode lod --lod 9 --model Suzanne.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative.png"
+    },
+    {
+     "id": "negative-no-assets",
+     "name": "负向：资产没有分层文件（exit 1）",
+     "kind": "tool",
+     "note": "IcoSphereDense.nmesh 未生成 .lodN.nmesh 时 --mode lod 显式报错，提示 nanite-tools lod 命令。",
+     "args": [
+      "--mode",
+      "lod",
+      "--model",
+      "IcoSphereDense.nmesh",
+      "--screenshot",
+      "{root}/build/showcase/runs/s2-done-negative2.png",
+      "--frames",
+      "2"
+     ],
+     "expectExit": 1,
+     "expectLog": "no layered assets",
+     "command": "viewer.exe --mode lod --model IcoSphereDense.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative2.png"
+    }
+   ]
   }
  ]
 }

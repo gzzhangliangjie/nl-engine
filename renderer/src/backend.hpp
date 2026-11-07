@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,10 @@ public:
                       const char* modelFile, bool clusterMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
+    // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，
+    // 成功后更新 info().triangleCount / lodLevel / lodMaxError；失败保持原层。
+    virtual bool setLodLevel(int level, std::string& outError) = 0;
+
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
     // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,
@@ -56,5 +61,33 @@ std::unique_ptr<Backend> createBackend();
 bool writePngRGBA8(const char* path, const void* pixels,
                    std::uint32_t width, std::uint32_t height,
                    std::uint32_t rowPitch);
+
+// ---- M2.3：分层 .nmesh 命名与探测（两个后端共用一份，避免各写一套路径规则）----
+// nanite-tools lod <base>.nmesh -o <dir>/<stem> 产出 <stem>.lod0.nmesh .. <stem>.lodN.nmesh。
+inline std::string meshletStem(const char* nmeshFile) {
+    std::string s(nmeshFile ? nmeshFile : "");
+    const std::string ext = ".nmesh";
+    if (s.size() >= ext.size() && s.compare(s.size() - ext.size(), ext.size(), ext) == 0)
+        s.resize(s.size() - ext.size());
+    return s;
+}
+
+inline std::string lodMeshFileName(const std::string& stem, int level) {
+    return stem + ".lod" + std::to_string(level) + ".nmesh";
+}
+
+// 从 0 起连续探测，遇到第一个缺失就停（层号不连续视为损坏，宁可少报也不跳号）。
+// 上限 64 只是防目录里有病态的大量文件。
+inline int probeLodLevelCount(const std::string& stem) {
+    if (stem.empty()) return 0;
+    int count = 0;
+    while (count < 64) {
+        std::error_code ec;
+        const auto path = std::filesystem::path(NL_MESHLET_DIR) / lodMeshFileName(stem, count);
+        if (!std::filesystem::is_regular_file(path, ec) || ec) break;
+        ++count;
+    }
+    return count;
+}
 
 } // namespace nl::renderer::detail

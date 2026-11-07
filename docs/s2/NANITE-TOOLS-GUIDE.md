@@ -342,3 +342,48 @@ loop selftest: PASS
 `.nmesh` v2 二进制，L0..L5 六栏**同机位同尺度**渲染，红点 = 该层组间边界点
 （逐层递减、顶层无红点）；线框密度逐层降低即每组 50% 硬目标的结果。
 `tools/lod_preview.py` + `example/s2-loop/run.bat` 一键复现（不进总闸比对）。
+
+## M2.3 交代（tag `s2-done`，2026-11-07）
+
+### 新增：`viewer --mode lod N` + HUD 滑条切层（S2 收官验收）
+
+```
+viewer.exe --mode lod --lod 3 --model Suzanne.nmesh        # 直接渲染第 3 层
+viewer.exe --mode lod                                      # 缺省 Suzanne + L0，HUD 滑条切层
+```
+
+机制（全部在 `renderer/`，两后端共享）：
+
+- **分层资产探测**：backend init 后扫 `NL_MESHLET_DIR/<stem>.lodN.nmesh`
+  （从 0 连续计数，跳号宁少报），层数写进 `DeviceInfo`，HUD 只在层数 >1 时画滑条。
+- **切层路径唯一**：`scene.uploadClusterMesh` = 读盘 → 簇窗口展开 → 新建 VB/IB
+  上传 → 替换句柄（旧 buffer 由 NVRHI 引用计数延迟释放）。首载与滑条切层走
+  同一条路；shader / pipeline / binding set 一律复用，切层只动 VB/IB。
+- **层信息回传**：层号与 parent error 从 `.nmesh` v2 尾部 section 读回，
+  HUD 显示 `lod N/M tri <n> maxErr <e>`（滑条值走 HudFrame 双向 POD）。
+- **缺省着色 normal**（几何不连续在逐面法线色上最刺眼）；显式 `--shading` 则听用户的。
+- **负向全拒**：`--lod` 非数字（parseArgs 直接 exit 1，不建窗口）、N 越界、
+  资产无分层文件（提示 `nanite-tools lod` 命令）——绝不静默回退到最细层，
+  否则「以为在看 L3」是假证据。
+
+### 分层资产入仓
+
+`nanite-tools lod Suzanne.nmesh -o assets/meshlets/Suzanne` 产出的
+`Suzanne.lod0..lod5.nmesh`（共 ~0.5 MB）已提交进仓，干净 clone 直接跑 lod 模式；
+IcoSphereDense（8 MB × 层数）不入仓，需要时本地生成。
+
+### 无缝验收（S2 收官判据）
+
+- 六层同机位画廊 `example/s2-done/lod-layers.png`（`tools/lod_gallery.py` 拼接
+  viewer 真实截图 + 从 .nmesh 读回的层号/tri/maxErr 标注）：
+  3936 → 1976 → 985 → 490 → 246 → 124 tri，逐层简化、轮廓连续、**无裂缝无洞**。
+- L4/L5 眼窝处的黑色面是 M2.2 已知口径的翻转三角形（法线朝内），`--cull none`
+  复检该区域为完整内壁几何，不是裂缝/洞——边界锁定生效。
+- 滑条在相邻层间来回切（交互），层切换零闪烁、三角数/HUD 数字同步变化。
+- 展示台 `s2.0` 版本卡（8 用例：L0/L3/L5 + HUD pair 双后端基线、selftest、
+  3 个负向 tool 卡）+ `example/s2-done/run.bat`；kStage 升 `S2.0`，
+  m0.9 gate-hud 基线随 HUD stage 文本重拍（预期动作）。
+
+### 回归口径
+
+ctest 12/12（双后端）、回归总闸 118/118 ALL GREEN、`server.py --check` OK。

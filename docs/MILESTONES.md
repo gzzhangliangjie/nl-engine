@@ -607,3 +607,22 @@
 6. **工具卡历史 exe 补建——已定案不做**：M2.2 期间曾按「每出新版把上一版 exe 改指 `build/showcase/{tag}/`」尝试给 s2-group/s2-qem 的 nanite-tools.exe 补建历史快照（`git archive <tag>` 全量构建），跑出 1/4 后取消。复核后定案：历史快照机制是为渲染卡基线 PNG 逐字节复现服务的，工具用例无基线可比、现场实跑即权威，S1 起工具卡事实口径一直是当前构建。`s2-group`/`s2-qem` 两卡映射维持 `build/{dx12,vulkan}/nanite-tools.exe`，不再补建；规范已修订到 ROADMAP「里程碑交代规范」（工具卡 exe 恒指当前构建，`rebuild.py` 只管渲染 viewer 快照）。
 
 **下一步**：M2.3 `viewer --mode lod N` + ImGui 滑条切层，肉眼验收「任意相邻层拼接无裂缝」（S2 收官 tag `s2-done`）。
+
+## M2.3 viewer --mode lod N + HUD 滑条（S2 收官）
+
+**动作**：modes 加 `Lod`（"lod"）；viewer `--lod N`（非数字/负数 parseArgs 直接 exit 1）+ `--mode lod` 分发（复用 cluster 场景，缺省模型/缺省着色 normal，显式 `--shading` 生效）；renderer 分层资产探测 `probeLodLevelCount`（backend.hpp 公共函数，两后端共用：`<stem>.lodN.nmesh` 从 0 连续计数）；`Scene::uploadClusterMesh`（读盘→簇窗口展开→新建 VB/IB 上传→替换句柄，首载与切层同一条路，shader/pipeline/binding 全复用）；`Renderer::setLodLevel` + `DeviceInfo.lodLevel/Count/MaxError`；HudFrame 加 lod 四字段，HUD 滑条（仅 lodCount>1 显示）+ `lod N/M tri maxErr` 行；kStage 升 `S2.0`；分层资产 `Suzanne.lod0..5.nmesh`（~0.5 MB）入仓；`tools/lod_gallery.py` 六层画廊 + `example/s2-done/run.bat`；展示台 `s2.0` 卡（L0/L3/L5 + HUD pair 双后端基线、selftest、3 负向 tool 卡）。
+
+**提交版本**：`s2-done`
+
+**完成情况**
+- 六层同机位画廊（viewer 真实 GPU 截图）：3936→1976→985→490→246→124 tri，逐层简化、轮廓连续、**无裂缝无洞**；L4/L5 眼窝黑面 `--cull none` 复检为完整内壁几何（M2.2 口径内翻转三角形），非裂缝——边界锁定生效的物理证据。
+- 层切换零闪烁；HUD 同步显示 `lod N/5 tri <n> maxErr <e>`（数值来自 .nmesh v2 尾部 section）。
+- 负向全拒：`--lod abc`（无窗口）/ `--lod 9`（out of range）/ 无分层资产（提示 nanite-tools lod 命令）均 exit 1。
+- ctest 12/12（双后端）、回归总闸 118/118 ALL GREEN、`server.py --check` OK；m0.9 gate-hud 基线随 kStage→S2.0 重拍（预期动作，同 M1.3）。
+
+**踩坑情况**
+1. **lod 缺省着色三元式写反（回归当场抓住）**：`(lodMode && !shadingSet) ? 1 : (cluster ? 4 : o.shading)` 在显式 `--shading normal` 时落到 `cluster ? 4` 分支——lod 也是 cluster 场景，显式着色被 4=cluster 静默吞掉，回归 pair 基线 2.8 万像素不符暴露。修正为「先按场景缺省、lod 再覆写」：`shading = cluster ? 4 : o.shading; if (lodMode) shading = o.shadingSet ? o.shading : 1;`。教训：新场景叠在旧场景的缺省分支上时，覆写方向要想清楚谁优先。
+2. **负向 tool 卡不能跑无参 viewer**：不带 `--screenshot` 的 viewer 进交互主循环，展示台 120s 超时；负向用例补 `--screenshot {root}/build/...` 让它走确定性截图路径后正常退出 1。
+3. **m0.9 HUD 基线漂移属预期**：kStage 文本在 HUD 里，升 S2.0 后 gate-hud 双后端 FAIL；重拍两张基线即恢复全绿（与 M1.3 升 S1.0 同一动作）。
+
+**下一步**：S3 构建 cluster DAG + fallback mesh（`nanite-tools dag`；DAG cut 以 group 为原子单位吃 `.nmesh` v2 的 lockedPositions / parent error）。

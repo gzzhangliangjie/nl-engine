@@ -57,6 +57,12 @@ public:
                      const char* vsEntry, const char* psEntry,
                      const char* nmeshFile, std::string& outError);
 
+    // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
+    // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
+    // 层号与 parent error 从 .nmesh v2 尾部 section 读出，供 HUD 显示。
+    bool setClusterLevel(nvrhi::IDevice* device, const char* nmeshFile,
+                         std::string& outError);
+
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
 
@@ -76,8 +82,16 @@ public:
     // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
     const std::string& modelName() const { return modelName_; }
     std::uint32_t triangleCount() const { return triangleCount_; }
+    // M2.3：当前层号与 parent error（v1 资产无 lodMeta → 0 / 0）。
+    int   lodLevel() const { return lodLevel_; }
+    float lodMaxError() const { return lodMaxError_; }
 
 private:
+    // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
+    // initCluster 与 setClusterLevel 共用，保证首次加载与切层走同一条路径。
+    bool uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
+                           std::string& outError);
+
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;
     nvrhi::TextureHandle          texture_;
@@ -90,6 +104,8 @@ private:
     std::uint32_t                 indexCount_ = 0;
     std::string                   modelName_;
     std::uint32_t                 triangleCount_ = 0;
+    int                           lodLevel_ = 0;      // M2.3：来自 .nmesh v2 lodMeta
+    float                         lodMaxError_ = 0.0f;
 };
 
 } // namespace nl::renderer::detail

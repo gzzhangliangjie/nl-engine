@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S1.0 cluster visualization (per-cluster color from .nmesh)";
+    "S2.0 layered LOD (viewer --mode lod, HUD layer slider)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -143,5 +143,15 @@ bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
 int Renderer::drainMessages() {
     return impl_->backend ? impl_->backend->drainMessages() : 0;
 }
+
+bool Renderer::setLodLevel(int level) {
+    if (!impl_->backend) return false;
+    if (!impl_->backend->setLodLevel(level, impl_->error)) return false;
+    impl_->info = impl_->backend->info();   // 三角形数 / 层号 / maxError 随层更新
+    return true;
+}
+
+int Renderer::lodLevel() const { return impl_->info.lodLevel; }
+int Renderer::lodLevelCount() const { return impl_->info.lodLevelCount; }
 
 } // namespace nl::renderer

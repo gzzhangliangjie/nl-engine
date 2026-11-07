@@ -85,6 +85,13 @@ struct HudFrame {
     int  colorIndex        = 0;
     bool resetCamera       = false;   // HUD 按钮置 true，viewer 消费后清零
     bool wantCaptureMouse  = false;   // HUD 输出：鼠标在面板上，viewer 别拖相机
+    // ---- M2.3：LOD 层切换（仅 lod 模式；lodCount<=1 时 HUD 不画滑条）----
+    // 与 cull/color 同一条双向通道：viewer 每帧填当前层，滑条写回后由 viewer
+    // 检测变化并调 Renderer::setLodLevel()——HUD 不直接碰渲染资源。
+    int   lodLevel         = 0;       // 当前层号（双向）
+    int   lodCount         = 0;       // 可用层数（0/1 = 没有可切的分层资产）
+    int   lodTriangles     = 0;       // 当前层三角形数（悬停证据：切层确实换了资产）
+    float lodMaxError      = 0.0f;    // 当前层 parent error（世界空间，单调不减）
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -98,6 +105,11 @@ struct DeviceInfo {
     // M0.7：--model 加载的模型文件名与三角形数（HUD 截图自证加载了哪个模型）。
     std::string modelName;
     std::uint32_t triangleCount = 0;
+    // M2.3：分层资产探测结果（assets/meshlets/<stem>.lodN.nmesh，N 从 0 连续）。
+    // 0 = 没有分层文件（cluster / normal 模式恒 0）。
+    int   lodLevelCount = 0;
+    int   lodLevel = 0;
+    float lodMaxError = 0.0f;
 };
 
 class Renderer {
@@ -133,6 +145,15 @@ public:
 
     // 把当前后端调试层里积累的消息转成日志并返回新增的设备错误数（验收要求为 0）。
     int drainMessages();
+
+    // M2.3：切到第 level 层（0 = 最细原始层）。只对 lod 场景有效：
+    // 读 assets/meshlets/<stem>.lod<level>.nmesh，重建 VB/IB 后一次性上传，
+    // pipeline / binding set 不动。越界或文件缺失返回 false（lastError() 带可用层数），
+    // 失败时保持原层不变（不会把画面留在半加载状态）。
+    // 分层文件由 `nanite-tools lod <base>.nmesh -o <dir>/<stem>` 产出。
+    bool setLodLevel(int level);
+    int  lodLevel() const;      // 当前层；无分层资产时 0
+    int  lodLevelCount() const; // 探测到的层数；0 = 无分层资产
 
 private:
     Renderer();

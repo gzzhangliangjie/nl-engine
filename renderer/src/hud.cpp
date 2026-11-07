@@ -286,6 +286,14 @@ void Hud::build(HudFrame& frame) {
     ImGui::Combo("shading", &frame.shading, kShadingNames,
                  static_cast<int>(sizeof(kShadingNames) / sizeof(kShadingNames[0])));
     ImGui::SliderInt("clear color", &frame.colorIndex, 0, 3);
+    // M2.3：LOD 层滑条——只有探测到分层资产（lodCount>1）才占位置，cluster / normal
+    // 模式的 HUD 布局与历史基线一像素不动。滑条值走 HudFrame 双向通道，由 viewer
+    // 检测变化后调 Renderer::setLodLevel()（HUD 不直接碰渲染资源）。
+    if (frame.lodCount > 1) {
+        ImGui::SliderInt("lod level", &frame.lodLevel, 0, frame.lodCount - 1);
+        ImGui::Text("lod %d/%d  tri %d  maxErr %.4f", frame.lodLevel, frame.lodCount - 1,
+                    frame.lodTriangles, frame.lodMaxError);
+    }
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();

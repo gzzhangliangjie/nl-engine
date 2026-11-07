@@ -8,6 +8,7 @@ namespace {
 constexpr const char* kModeNames[] = {
     "normal",
     "cluster",   // M1.3：.nmesh 每簇随机着色
+    "lod",       // M2.3：<stem>.lodN.nmesh 逐层切换
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==
@@ -52,9 +53,10 @@ bool modeSelfTest() {
         for (int j = 0; j < i; ++j)
             if (std::strcmp(modeNameAt(j), name) == 0) return false;  // 名字必须唯一
     }
-    // S1 起已有 normal / cluster；随便一个未来模式名此刻必须被拒绝（防分发器静默吞掉拼错）。
+    // S1 起已有 normal / cluster，M2.3 加 lod；下一个未实现的模式名此刻必须被拒绝
+    // （防分发器静默吞掉拼错的名字）。
     ViewMode parsed = ViewMode::Normal;
-    if (parseViewMode("lod", parsed)) return false;
+    if (parseViewMode("dag", parsed)) return false;
     if (parseViewMode("", parsed)) return false;
     if (parseViewMode(nullptr, parsed)) return false;
     if (modeName(ViewMode::Count) != nullptr) return false;

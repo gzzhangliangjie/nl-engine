@@ -153,6 +153,16 @@ public:
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
+        // M2.3：探测 assets/meshlets/<stem>.lodN.nmesh 的连续层数（0 = 没有分层资产）。
+        // 探测失败不是错误：cluster / normal 模式照样跑，只是 HUD 不画滑条。
+        if (clusterMode) {
+            lodStem_ = detail::meshletStem(modelFile);
+            lodLevelCount_ = detail::probeLodLevelCount(lodStem_);
+            info_.lodLevelCount = lodLevelCount_;
+            info_.lodLevel = scene_.lodLevel();
+            info_.lodMaxError = scene_.lodMaxError();
+            nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+        }
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -191,6 +201,29 @@ public:
         std::string unused;
         createTargets(unused);
         nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
+    }
+
+    // M2.3：切 LOD 层——只重传 VB/IB（scene_.setClusterLevel），pipeline / binding 不动。
+    // 越界或文件缺失时返回 false 且保持原层；调用方（viewer）负责提示与退出码。
+    bool setLodLevel(int level, std::string& outError) override {
+        if (lodLevelCount_ <= 0) {
+            outError = "no layered .nmesh assets (run: nanite-tools lod <base>.nmesh -o <dir>/<stem>)";
+            return false;
+        }
+        if (level < 0 || level >= lodLevelCount_) {
+            outError = "lod level " + std::to_string(level) + " out of range 0.." +
+                       std::to_string(lodLevelCount_ - 1);
+            return false;
+        }
+        const std::string file = detail::lodMeshFileName(lodStem_, level);
+        if (!scene_.setClusterLevel(device_, file.c_str(), outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.lodLevel = scene_.lodLevel();
+        info_.lodMaxError = scene_.lodMaxError();
+        nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
+                            " maxError=", info_.lodMaxError);
+        return true;
     }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
@@ -479,6 +512,8 @@ private:
     HWND hwnd_ = nullptr;
     Extent extent_{};
     DeviceInfo info_{};
+    std::string lodStem_;              // M2.3：<stem>.lodN.nmesh 的 stem
+    int lodLevelCount_ = 0;            // 0 = 没有分层资产
     NvrhiMessageCallback messageCallback_;
 
     ComPtr<IDXGIFactory4>            factory_;

@@ -69,6 +69,7 @@ struct Options {
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
+    bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
     int  width      = 1280;
@@ -85,6 +86,7 @@ struct Options {
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
+    int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -97,6 +99,18 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--hud") { o.hudSet = true; o.hudEnabled = true; }
         else if (a == "--no-hud") { o.hudSet = true; o.hudEnabled = false; }
         else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
+        else if (a == "--lod" && i + 1 < argc) {
+            // M2.3：层号必须是十进制整数；越界（相对的层数上限）在 renderer 探测后
+            // 再报错——这里只拒绝非数字与负数，绝不静默落回 0。
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            const long n = std::strtol(v.c_str(), &end, 10);
+            if (!end || *end != '\0' || n < 0) {
+                std::cerr << "invalid --lod '" << v << "' (expected an integer >= 0)\n";
+                std::exit(1);
+            }
+            o.lod = static_cast<int>(n);
+        }
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
             o.modelSet = true;
@@ -107,6 +121,7 @@ Options parseArgs(int argc, char** argv) {
         } else if (a == "--shading" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.shading = -1;
+            o.shadingSet = true;
             for (int s = 0; s < kShadingCount; ++s)
                 if (v == shadingName(s)) o.shading = s;
             if (o.shading < 0) {
@@ -183,14 +198,14 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
-    check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster in S1)");
+    check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster + lod)");
 
     const auto st = nl::renderer::status();
     std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n"
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S1.0") != nullptr, "S1.0 stage reported");
+    check(std::strstr(st.stage, "S2.0") != nullptr, "S2.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -226,7 +241,10 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 清屏色 / 重置相机；F12/--screenshot 真回读 GPU 像素写 PNG；resize 不黑屏。
 // M1.3：cluster=true 时走 cluster 场景（assets/meshlets/*.nmesh，每簇随机着色），
 // 缺省着色 4=cluster；簇色烘在 CPU，两后端截图逐字节一致。
-int runNormal(const Options& o, bool cluster = false) {
+// M2.3：lod=true 时也走 cluster 场景（同一份顶点布局），但资产是分层文件
+// <stem>.lodN.nmesh，--lod N 指定初始层、HUD 滑条切层；缺省着色 normal（几何不连续
+// 在逐面法线色上最刺眼，是「相邻层无裂缝」验收最敏感的口径）。
+int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -251,11 +269,40 @@ int runNormal(const Options& o, bool cluster = false) {
         return 1;
     }
 
+    // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
+    // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
+    // N 越界都直接退出 1，不静默回退到最细层——否则「以为在看 L3」是假证据。
+    int lodLevel = 0;
+    int lodCount = 0;
+    if (lodMode) {
+        lodCount = renderer->lodLevelCount();
+        if (lodCount <= 0) {
+            nl::core::log::error("--mode lod: no layered assets for ", o.modelFile,
+                                 " (expected assets/meshlets/<stem>.lodN.nmesh; run "
+                                 "nanite-tools lod <base>.nmesh -o assets/meshlets/<stem>)");
+            return 1;
+        }
+        if (o.lod >= lodCount) {
+            nl::core::log::error("--lod ", o.lod, " out of range: ", o.modelFile,
+                                 " has ", lodCount, " layers (0..", lodCount - 1, ")");
+            return 1;
+        }
+        if (!renderer->setLodLevel(o.lod)) {
+            nl::core::log::error("lod level ", o.lod, " load failed: ", renderer->lastError());
+            return 1;
+        }
+        lodLevel = o.lod;
+    }
+
     nl::core::OrbitCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
     bool cullBack = o.cullBack;
-    int shading = cluster ? 4 : o.shading;   // M1.3：cluster 模式缺省看簇色
+    // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
+    // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
+    // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
+    int shading = cluster ? 4 : o.shading;
+    if (lodMode) shading = o.shadingSet ? o.shading : 1;
     bool wireframe = o.wireframe;
 
     const auto st = nl::renderer::status();
@@ -263,9 +310,13 @@ int runNormal(const Options& o, bool cluster = false) {
     nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
     nl::core::log::info("debug layer: ", info.debugLayer,
                         " | active=", info.debugLayerActive ? "yes" : "no");
+    const std::string lodLine = lodMode
+        ? " | lod layers: " + std::to_string(lodCount) + " (level " + std::to_string(lodLevel) + ")"
+        : std::string();
     nl::core::log::info("mode: ", nl::core::modeName(o.mode),
                         " | HUD: ", o.hudEnabled ? "on" : "off",
                         " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
+                        lodLine,
                         " | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG");
 
     if (o.screenshot) {
@@ -393,6 +444,11 @@ int runNormal(const Options& o, bool cluster = false) {
             hud.colorIndex = colorIndex;
             hud.shading = shading;
             hud.wireframe = wireframe;
+            // M2.3：lod 模式把当前层喂给滑条；其他模式 lodCount=0，HUD 不画滑条。
+            hud.lodLevel = lodLevel;
+            hud.lodCount = lodCount;
+            hud.lodTriangles = static_cast<int>(info.triangleCount);
+            hud.lodMaxError = info.lodMaxError;
             hud.deterministic = o.screenshot;
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -455,6 +511,19 @@ int runNormal(const Options& o, bool cluster = false) {
             if (!cluster) shading = std::min(shading, 3);  // normal 场景无 CLUSTERCOLOR 属性
             wireframe = hud.wireframe;
             colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
+            // M2.3：滑条写了新层号才真的换资产（渲染资源只在 viewer 这一侧被动，
+            // HUD 永远不直接碰 GPU）。失败保持原层并把这次运行判为失败。
+            if (lodMode && lodCount > 0) {
+                const int want = std::clamp(hud.lodLevel, 0, lodCount - 1);
+                if (want != lodLevel) {
+                    if (renderer->setLodLevel(want)) {
+                        lodLevel = want;
+                    } else {
+                        nl::core::log::error("lod switch failed: ", renderer->lastError());
+                        failed = true;
+                    }
+                }
+            }
             hudWantsMouse = hud.wantCaptureMouse;
         }
         if (capturePath) {
@@ -479,6 +548,8 @@ int runNormal(const Options& o, bool cluster = false) {
                   << " | cull " << (cullBack ? "back" : "none")
                   << " | shading " << shadingName(shading) << (wireframe ? " wire" : "")
                   << " | " << e.width << "x" << e.height;
+            // M2.3：lod 模式在标题栏也标层号，交互时不必盯着 HUD 滑条。
+            if (lodMode) title << " | lod " << lodLevel << "/" << lodCount;
             window.setTitle(title.str());
         }
 
@@ -508,6 +579,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o);
     case nl::core::ViewMode::Cluster:   // M1.3
         return runNormal(o, /*cluster=*/true);
+    case nl::core::ViewMode::Lod:       // M2.3：同一个 cluster 场景，资产换成分层 .nmesh
+        return runNormal(o, /*cluster=*/true, /*lodMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -534,7 +607,9 @@ void printUsage() {
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
               << "  viewer.exe --model <name>          load assets/<name>: .glb for normal mode,\n"
-              << "                                     .nmesh for cluster mode (default per mode)\n"
+              << "                                     .nmesh for cluster/lod mode (default per mode)\n"
+              << "  viewer.exe --lod N                 lod mode: start at layer N (default 0); the\n"
+              << "                                     HUD slider switches layers at runtime\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
@@ -564,6 +639,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     // M1.3：cluster 模式的缺省资产是 assets/meshlets/Suzanne.nmesh（用户没给 --model 时）
-    if (o.mode == nl::core::ViewMode::Cluster && !o.modelSet) o.modelFile = "Suzanne.nmesh";
+    // M2.3：lod 模式同样缺省 Suzanne（分层文件 Suzanne.lodN.nmesh 随之探测）。
+    if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod) &&
+        !o.modelSet) {
+        o.modelFile = "Suzanne.nmesh";
+    }
     return runMode(o.mode, o);
 }

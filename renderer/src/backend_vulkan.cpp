@@ -99,6 +99,15 @@ public:
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
+        // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。
+        if (clusterMode) {
+            lodStem_ = meshletStem(modelFile);
+            lodLevelCount_ = probeLodLevelCount(lodStem_);
+            info_.lodLevelCount = lodLevelCount_;
+            info_.lodLevel = scene_.lodLevel();
+            info_.lodMaxError = scene_.lodMaxError();
+            nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+        }
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
@@ -130,6 +139,28 @@ public:
         std::string unused;
         createTargets(unused);
         nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
+    }
+
+    // M2.3：切 LOD 层——只重传 VB/IB，pipeline / binding 不动；失败保持原层。
+    bool setLodLevel(int level, std::string& outError) override {
+        if (lodLevelCount_ <= 0) {
+            outError = "no layered .nmesh assets (run: nanite-tools lod <base>.nmesh -o <dir>/<stem>)";
+            return false;
+        }
+        if (level < 0 || level >= lodLevelCount_) {
+            outError = "lod level " + std::to_string(level) + " out of range 0.." +
+                       std::to_string(lodLevelCount_ - 1);
+            return false;
+        }
+        const std::string file = lodMeshFileName(lodStem_, level);
+        if (!scene_.setClusterLevel(nvrhiDevice_, file.c_str(), outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.lodLevel = scene_.lodLevel();
+        info_.lodMaxError = scene_.lodMaxError();
+        nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
+                            " maxError=", info_.lodMaxError);
+        return true;
     }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
@@ -676,6 +707,8 @@ private:
     HWND hwnd_ = nullptr;
     Extent extent_{};
     DeviceInfo info_{};
+    std::string lodStem_;              // M2.3：<stem>.lodN.nmesh 的 stem
+    int lodLevelCount_ = 0;            // 0 = 没有分层资产
     NvrhiMessageCallback nvrhiMessageCallback_;
 
     // 原生 Vulkan 对象（一律 vulkan 前缀）

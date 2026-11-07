@@ -41,12 +41,22 @@
 
 ⚠️ 实踩：第一版自造了「跨层累积锁定 + `minReduction 30%` 提前收敛」，锁集合单调增长导致 L3 只能降 9%、只出 3 层；核三份源码后**整套推翻重做**为标准循环，删掉累积与门槛，同一资产自然收敛出 6 层、每层严格约 50%。M2.1 的边界锁实现不变（本来就是标准 `LockBorder`）。`groupClusters` 在簇数 ≤8 时 nparts=1，METIS_PartGraphKway 不接受 nparts<2 → 走单组直通 + 连通性 fixup。
 
-## M2.3 viewer --mode lod N 验收（1 天）
+## M2.3 viewer --mode lod N 验收（1 天）✅ 2026-11-07（tag `s2-done`）
 
-- [ ] `--mode lod N` 手动渲染第 N 层；ImGui 滑条切层
-- [ ] S1 验收标准在这里复检：新层簇同样 ≤128 tri、无畸形
+- [x] `--mode lod N` 手动渲染第 N 层；ImGui 滑条切层（HudFrame 双向 POD，与 cull/color 同通道）
+- [x] S1 验收标准在这里复检：新层簇同样 ≤128 tri、无畸形
 
-**自检（S2 验收）**：**任意相邻层拼接无裂缝**——滑条在 N 和 N+1 之间来回切，边界处看不到洞/ crack。这是边界锁定生效的物理证据。tag：`s2-done`，截图 `docs/screenshots/s2.png`（两张相邻层对比）。
+**自检（S2 验收，已过）**：**任意相邻层拼接无裂缝**——六层同机位画廊
+`example/s2-done/lod-layers.png`（viewer 真实 GPU 截图，`tools/lod_gallery.py` 拼
+3936/1976/985/490/246/124 tri 标注）逐层简化、轮廓连续、无裂缝无洞；L4/L5 眼窝黑面经
+`--cull none` 复检为 M2.2 口径内的翻转三角形（内壁几何完整），不是裂缝。
+切层实现：`scene.uploadClusterMesh` 读盘→展开→新建 VB/IB 上传→替换句柄，
+shader/pipeline/binding 全复用；层号/parent error 从 .nmesh v2 尾部读回 HUD。
+负向全拒：非数字 / 越界 / 无分层资产均 exit 1。分层资产 `Suzanne.lod0..5.nmesh`
+（~0.5 MB）入仓。展示台 `s2.0` 卡 8 用例；ctest 12/12、回归 118/118 ALL GREEN。
+tag：`s2-done`，S2 收官。
+
+⚠️ 实踩（记 MILESTONES）：lod 模式缺省着色的三元式写反——`(lodMode && !shadingSet) ? 1 : (cluster ? 4 : o.shading)` 在显式 `--shading normal` 时落到 `cluster ? 4` 分支，用户拿到的还是簇色（画面是色块，回归 pair 基线 2.8 万像素不符当场抓住）。改成先按场景缺省、lod 再覆写：`shading = cluster ? 4 : o.shading; if (lodMode) shading = o.shadingSet ? o.shading : 1;`
 
 ---
 

@@ -208,64 +208,9 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
     ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
     if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
 
-    // ---- 2. 读 .nmesh 资产（M1.2 的 loadNMesh 已校验 magic/版本/截断/窗口越界）----
-    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
-    nl::core::NMeshData nm;
-    std::string loadError;
-    if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
-        outError = std::string(nmeshFile) + ": " + loadError;
-        return false;
-    }
-    if (nm.meshlets.empty() || nm.triangles.empty()) {
-        outError = std::string(nmeshFile) + " has no meshlets"; return false;
-    }
-
-    // ---- 3. 展开成渲染数据 ----
-    // 顶点：每个条目属于恰好一个簇窗口（.nmesh 的窗口复制保证），烘上该簇的颜色。
-    // 索引：簇内局部索引 + vertexOffset 展开成全局索引，簇序遍历 → 单次 drawIndexed。
-    std::vector<ClusterVertex> vertices;
-    vertices.reserve(nm.vertices.size());
-    std::vector<std::uint32_t> indices;
-    indices.reserve(nm.triangles.size());
-    for (std::size_t m = 0; m < nm.meshlets.size(); ++m) {
-        const auto& meshlet = nm.meshlets[m];
-        float color[3];
-        clusterColor(static_cast<std::uint32_t>(m), color);
-        for (std::uint32_t i = 0; i < meshlet.vertexCount; ++i) {
-            const auto& mv = nm.vertices[meshlet.vertexOffset + i];
-            ClusterVertex cv;
-            cv.v = { mv.pos[0], mv.pos[1], mv.pos[2],
-                     mv.normal[0], mv.normal[1], mv.normal[2],
-                     mv.uv[0], mv.uv[1] };
-            cv.color[0] = color[0]; cv.color[1] = color[1]; cv.color[2] = color[2];
-            vertices.push_back(cv);
-        }
-        const std::uint32_t base = meshlet.triangleOffset;
-        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
-            for (int k = 0; k < 3; ++k) {
-                indices.push_back(meshlet.vertexOffset +
-                                  nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
-            }
-        }
-    }
-    indexCount_ = static_cast<std::uint32_t>(indices.size());
-    triangleCount_ = indexCount_ / 3;
-
-    // ---- 4. GPU 资源：VB/IB + volatile CB + 1x1 白色占位贴图（binding 布局不变）----
-    nvrhi::BufferDesc vbDesc;
-    vbDesc.byteSize = vertices.size() * sizeof(ClusterVertex);
-    vbDesc.isVertexBuffer = true;
-    vbDesc.debugName = "ClusterVB";
-    vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
-    vertexBuffer_ = device->createBuffer(vbDesc);
-    nvrhi::BufferDesc ibDesc;
-    ibDesc.byteSize = indices.size() * sizeof(std::uint32_t);
-    ibDesc.isIndexBuffer = true;
-    ibDesc.debugName = "ClusterIB";
-    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
-    indexBuffer_ = device->createBuffer(ibDesc);
-    if (!vertexBuffer_ || !indexBuffer_) { outError = "createBuffer failed for cluster VB/IB"; return false; }
-
+    // ---- 2. 与 mesh 无关的 GPU 资源先建好：volatile CB + 1x1 白色占位贴图 +
+    //         sampler + binding layout/set + 输入布局。M2.3 切层只换 VB/IB，
+    //         这些一律不动；真实几何/索引由 uploadClusterMesh 读盘并上传。----
     nvrhi::BufferDesc cbDesc;
     cbDesc.byteSize = sizeof(SceneConstants);
     cbDesc.isConstantBuffer = true;
@@ -325,27 +270,113 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
     inputLayout_ = device->createInputLayout(attrs, 4, vs_);
     if (!inputLayout_) { outError = "createInputLayout failed for cluster scene"; return false; }
 
-    // ---- 5. 一次性上传 ----
+    // ---- 3. 占位贴图上传（1x1 白）；几何/索引由 uploadClusterMesh 上传 ----
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
-    upload->beginTrackingBufferState(vertexBuffer_, nvrhi::ResourceStates::CopyDest);
-    upload->writeBuffer(vertexBuffer_, vertices.data(), vertices.size() * sizeof(ClusterVertex));
-    upload->setPermanentBufferState(vertexBuffer_, nvrhi::ResourceStates::VertexBuffer);
-    upload->beginTrackingBufferState(indexBuffer_, nvrhi::ResourceStates::CopyDest);
-    upload->writeBuffer(indexBuffer_, indices.data(), indices.size() * sizeof(std::uint32_t));
-    upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
     const std::uint8_t white[4] = { 255, 255, 255, 255 };
     upload->writeTexture(texture_, 0, 0, white, sizeof(white));
     upload->close();
     device->executeCommandList(upload);
 
-    modelName_ = nmeshFile;
+    if (!uploadClusterMesh(device, nmeshFile, outError)) return false;
+
     nl::core::log::info("cluster scene ready: ", nmeshFile,
-                        " | vertices=", vertices.size(),
-                        " triangles=", triangleCount_,
-                        " meshlets=", nm.meshlets.size(),
+                        " | triangles=", triangleCount_,
                         " | shader=", shaderSuffix);
     return true;
+}
+
+// M2.3：读一份 .nmesh（原位层或分层资产）→ 展开成顶点/索引 → 新建 VB/IB 并上传，
+// 最后才替换句柄。切层和首次加载走同一条路径，保证「L0 直读」与「滑条切到 L0」
+// 的画面完全一致；失败时旧层的 buffer / 计数原封不动。
+bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
+                              std::string& outError) {
+    // ---- 1. 读 .nmesh 资产（M1.2 的 loadNMesh 已校验 magic/版本/截断/窗口越界）----
+    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+    nl::core::NMeshData nm;
+    std::string loadError;
+    if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
+        outError = std::string(nmeshFile) + ": " + loadError;
+        return false;
+    }
+    if (nm.meshlets.empty() || nm.triangles.empty()) {
+        outError = std::string(nmeshFile) + " has no meshlets"; return false;
+    }
+
+    // ---- 2. 展开成渲染数据 ----
+    // 顶点：每个条目属于恰好一个簇窗口（.nmesh 的窗口复制保证），烘上该簇的颜色。
+    // 索引：簇内局部索引 + vertexOffset 展开成全局索引，簇序遍历 → 单次 drawIndexed。
+    std::vector<ClusterVertex> vertices;
+    vertices.reserve(nm.vertices.size());
+    std::vector<std::uint32_t> indices;
+    indices.reserve(nm.triangles.size());
+    for (std::size_t m = 0; m < nm.meshlets.size(); ++m) {
+        const auto& meshlet = nm.meshlets[m];
+        float color[3];
+        clusterColor(static_cast<std::uint32_t>(m), color);
+        for (std::uint32_t i = 0; i < meshlet.vertexCount; ++i) {
+            const auto& mv = nm.vertices[meshlet.vertexOffset + i];
+            ClusterVertex cv;
+            cv.v = { mv.pos[0], mv.pos[1], mv.pos[2],
+                     mv.normal[0], mv.normal[1], mv.normal[2],
+                     mv.uv[0], mv.uv[1] };
+            cv.color[0] = color[0]; cv.color[1] = color[1]; cv.color[2] = color[2];
+            vertices.push_back(cv);
+        }
+        const std::uint32_t base = meshlet.triangleOffset;
+        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
+            for (int k = 0; k < 3; ++k) {
+                indices.push_back(meshlet.vertexOffset +
+                                  nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            }
+        }
+    }
+
+    // ---- 3. 新建 VB/IB（老句柄此刻还在用；替换后由 NVRHI 引用计数延迟释放）----
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = vertices.size() * sizeof(ClusterVertex);
+    vbDesc.isVertexBuffer = true;
+    vbDesc.debugName = "ClusterVB";
+    vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    nvrhi::BufferHandle vb = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = indices.size() * sizeof(std::uint32_t);
+    ibDesc.isIndexBuffer = true;
+    ibDesc.debugName = "ClusterIB";
+    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    nvrhi::BufferHandle ib = device->createBuffer(ibDesc);
+    if (!vb || !ib) { outError = "createBuffer failed for cluster VB/IB"; return false; }
+
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    upload->beginTrackingBufferState(vb, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(vb, vertices.data(), vertices.size() * sizeof(ClusterVertex));
+    upload->setPermanentBufferState(vb, nvrhi::ResourceStates::VertexBuffer);
+    upload->beginTrackingBufferState(ib, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(ib, indices.data(), indices.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(ib, nvrhi::ResourceStates::IndexBuffer);
+    upload->close();
+    device->executeCommandList(upload);
+
+    vertexBuffer_ = vb;
+    indexBuffer_ = ib;
+    indexCount_ = static_cast<std::uint32_t>(indices.size());
+    triangleCount_ = indexCount_ / 3;
+    modelName_ = nmeshFile;
+    lodLevel_ = nm.lodMeta.present ? static_cast<int>(nm.lodMeta.level) : 0;
+    lodMaxError_ = nm.lodMeta.present ? nm.lodMeta.maxError : 0.0f;
+    nl::core::log::debug("cluster mesh uploaded: ", nmeshFile,
+                         " vertices=", vertices.size(),
+                         " triangles=", triangleCount_,
+                         " meshlets=", nm.meshlets.size(),
+                         " lodLevel=", lodLevel_,
+                         " maxError=", lodMaxError_);
+    return true;
+}
+
+bool Scene::setClusterLevel(nvrhi::IDevice* device, const char* nmeshFile,
+                            std::string& outError) {
+    return uploadClusterMesh(device, nmeshFile, outError);
 }
 
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
