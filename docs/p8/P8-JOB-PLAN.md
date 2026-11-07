@@ -43,15 +43,19 @@
 > **落地纪要（2026-11-08）**：接口为 `parallelFor(count, body(begin,end), minBatch)`（chunk 形式，UE MinBatchSize + bevy ParallelSlice 两家同构）；驱动 = 共享竞争队列 + **主线程参与执行**（bevy scope block_on / UE 主线程帮忙模式）；**未做 per-thread deque 窃取**（任务粒度大锁竞争可忽略，Carrot 反向证据），批数下限 = 线程数×4 保障负载均衡。边界写死：不可嵌套 parallelFor（M-J1 scope 落地嵌套）、多线程不可并发调同一实例。自测 = `nanite-tools selftest jobs` 七项（含异常重抛 + 池复用），ctest 17/17。台账见 `docs/MILESTONES.md`「P8 M-J0」。
 
 ### M-J1 scoped fork-join + 结果回收（2 天）
-- [ ] `pool.scope(|s| { s.spawn(...); })` 返回 `Vec<T>`，生命周期受限借用（仿 bevy）；`spawn` 可嵌套。
-- [ ] 与 parallel_for 共用同一底层池，不另起线程。
+- [x] `pool.scope(|s| { s.spawn(...); })` 返回 `Vec<T>`，生命周期受限借用（仿 bevy）；`spawn` 可嵌套。
+- [x] 与 parallel_for 共用同一底层池，不另起线程。
 - **自检**：嵌套 spawn 结果值 / 序正确；scope 结束前所有任务 join（无泄漏、无悬空引用）。tag：`job-scope`
 
+> **落地纪要（2026-11-08）**：`ThreadPool::scope<T>(fn)` 同步 fork-join；worker 语义重构为任务闭包自含完成计账（parallelFor 用 Impl.pending、scope 用 Scope::State.pending，锁顺序恒 st.mu→im.mu）。C++ 无借用检查，靠 scope 同步语义保证 State 裸指针无悬空（join 前任务全完成）。边界：spawn 可嵌套但任务不得阻塞等待其它任务（无前置依赖图，UE TGraphTask 长线模型）。自测扩至 13 项。tag `job-scope`（commit 4e92cf7）。
+
 ### M-J2 接入离线管线第一个消费者：cluster / stat 并行化（2~3 天）
-- [ ] 定位 `nanite-tools cluster` 与 `stat` 的数据并行热循环（按 mesh / 按 meshlet / 按三角形独立）。
-- [ ] 用 `parallel_for` 包裹，输出写各自 slot（无共享可变状态）。
-- [ ] **确定性验收**：同资产、同参数下，并行结果与单线程参考**逐字节一致**（离线资产是确定性产物，硬判据）；附耗时对比表（1 线程 vs N 线程）。
+- [x] 定位 `nanite-tools cluster` 与 `stat` 的数据并行热循环（按 mesh / 按 meshlet / 按三角形独立）。
+- [x] 用 `parallel_for` 包裹，输出写各自 slot（无共享可变状态）。
+- [x] **确定性验收**：同资产、同参数下，并行结果与单线程参考**逐字节一致**（离线资产是确定性产物，硬判据）；附耗时对比表（1 线程 vs N 线程）。
 - **自检**：`nanite-tools cluster model.gltf` 并行输出 `.nmesh` 与单线程版 MD5 一致；日志打印 wall-clock 加速比。tag：`job-cluster`
+
+> **落地纪要（2026-11-08）**：**定位结论**——贪心切簇（buildMeshlets）mesh 内串行依赖不可并行（算法本性，三处参考同口径）；真实并行点 = **多子网格 per-primitive 切簇**（cluster 命令）+ stat 无热循环（bbox 循环 O(V) 微秒级，并行无收益，保持串行——「定位」的结果可以是没有）。实现：`computeClusterResult`（verify+统计，无 I/O）从 `printClusterResult` 拆出；多子网格走 `scope` 并行 slot 输出、打印保序串行；单子网格保持串行路径（并行开销>收益，零回归）。确定性证据：selftest 合成 8 primitive 并行 vs 串行 BuiltMeshlets 四数组+summary 逐字段逐字节一致；命令行证据 `cluster Suzanne-multi.glb`（scripts/make-multi-primitive-glb.py 复制 primitives 生成，同 accessors 文件几乎不变大）。耗时：串行 4x 440ms vs 并行 194ms（约 2.3x，进程级含加载）。计划原文「-o 并行输出 .nmesh MD5 一致」按 -o 单子网格落盘边界不适用（M1.2 既有边界），确定性由 selftest 断言承担。
 
 ### M-J3 simplify / dag 并行化（含依赖边界处理）（3~4 天）
 - [ ] `simplify`：METIS 分组天然并行（按组）+ 每组 QEM 简化并行；`grouping.cpp` 的 METIS 调用梳理为可分发单元。

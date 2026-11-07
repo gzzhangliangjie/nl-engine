@@ -34,6 +34,11 @@
 
 namespace {
 
+double wallClockSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 void printUsage() {
     std::printf(
         "nanite-tools - nl-engine offline mesh pipeline (S1)\n"
@@ -215,19 +220,86 @@ struct ClusterSummary {
     double errMin = 0, errAvg = 0, errMax = 0;
     double cutoffAvg = 0, cutoffMin = 1.0;
     size_t degenerateCones = 0;  // cutoff < 0 的簇数（法线杂乱）
+    bool limitsOk = false;
 };
 
-// 对单个 primitive 切簇并核对覆盖率 / 上限。失败返回 false（failReason 带原因）。
-bool clusterPrimitive(const nl::core::PrimitiveMesh& prim,
-                      nl::core::BuiltMeshlets& built, std::string& failReason) {
-    if (!nl::core::buildMeshlets(&prim.vertices[0].pos[0],
-                                 sizeof(nl::core::MeshVertex) / sizeof(float),
-                                 prim.vertices.size(), prim.indices.data(),
-                                 prim.indices.size(), built)) {
-        failReason = "buildMeshlets rejected input";
+// M-J2：verify + 簇统计计算（无打印、无 I/O，可在多子网格间并行——各 primitive
+// 完全独立，输出写各自槽位）。从 printClusterResult 拆出（M2.1 原版一体函数）。
+bool verifyCoverage(const nl::core::PrimitiveMesh& prim,
+                    const nl::core::BuiltMeshlets& built, std::string& failReason);
+
+bool computeClusterResult(const nl::core::PrimitiveMesh& prim,
+                          nl::core::BuiltMeshlets& built,
+                          ClusterSummary& s, std::string& failReason) {
+    if (!verifyCoverage(prim, built, failReason)) return false;
+
+    s = ClusterSummary{};
+    s.tris = prim.indices.size() / 3;
+    s.verts = prim.vertices.size();
+    s.meshlets = built.meshlets.size();
+    double errSum = 0, cutoffSum = 0;
+    for (const auto& m : built.meshlets) {
+        s.maxTri = std::max(s.maxTri, m.triangleCount);
+        s.maxVert = std::max(s.maxVert, m.vertexCount);
+        s.emittedTris += m.triangleCount;
+        const auto& bd = built.bounds[&m - built.meshlets.data()];
+        errSum += bd.error;
+        s.errMin = s.errMin == 0 ? bd.error : std::min(s.errMin, (double)bd.error);
+        s.errMax = std::max(s.errMax, (double)bd.error);
+        if (bd.coneCutoff < 0.f) ++s.degenerateCones;
+        else { cutoffSum += bd.coneCutoff; s.cutoffMin = std::min(s.cutoffMin, (double)bd.coneCutoff); }
+    }
+    s.avgTri = double(s.emittedTris) / double(s.meshlets);
+    s.avgVert = double(built.vertices.size()) / double(s.meshlets);
+    s.errAvg = errSum / double(s.meshlets);
+    s.cutoffAvg = cutoffSum / double(s.meshlets - s.degenerateCones);
+    s.limitsOk = s.maxTri <= nl::core::kMeshletMaxTriangles &&
+                 s.maxVert <= nl::core::kMeshletMaxVertices;
+    return true;
+}
+
+// 纯打印（summary 已算好；保序串行段）。verbose 的 first-meshlets 预览也要 built。
+void printClusterSummary(const char* path, const nl::core::PrimitiveMesh& prim,
+                         const nl::core::BuiltMeshlets& built,
+                         const ClusterSummary& s, bool verbose) {
+    std::printf("file       : %s\n", path);
+    std::printf("submesh    : %s\n", prim.name.c_str());
+    std::printf("input      : %zu verts / %zu tris\n", s.verts, s.tris);
+    std::printf("meshlets   : %zu\n", s.meshlets);
+    std::printf("tri/cluster: avg %.1f  max %u  (limit %u)\n",
+                s.avgTri, s.maxTri, nl::core::kMeshletMaxTriangles);
+    std::printf("vert/cluster: avg %.1f  max %u  (limit %u)\n",
+                s.avgVert, s.maxVert, nl::core::kMeshletMaxVertices);
+    std::printf("coverage   : %zu/%zu = %.2f%%\n", s.emittedTris, s.tris,
+                100.0 * double(s.emittedTris) / double(s.tris));
+    std::printf("error      : min %.4f  avg %.4f  max %.4f  (world space, max edge)\n",
+                s.errMin, s.errAvg, s.errMax);
+    std::printf("cone       : avg cutoff %.3f  min %.3f  (degenerate: %zu)\n",
+                s.cutoffAvg, s.cutoffMin, s.degenerateCones);
+    std::printf("limits     : %s\n", s.limitsOk ? "PASS" : "FAIL");
+    if (verbose) {
+        const size_t show = std::min<size_t>(built.meshlets.size(), 5);
+        std::printf("first %zu meshlets:\n", show);
+        for (size_t i = 0; i < show; ++i) {
+            const auto& m = built.meshlets[i];
+            const auto& bd = built.bounds[i];
+            std::printf("  [%zu] tri=%-3u vert=%-3u sphere r=%.4f cutoff=%.3f err=%.4f\n",
+                        i, m.triangleCount, m.vertexCount, bd.sphere[3],
+                        bd.coneCutoff, bd.error);
+        }
+    }
+}
+
+bool printClusterResult(const char* path, const nl::core::PrimitiveMesh& prim,
+                        nl::core::BuiltMeshlets& built, bool verbose) {
+    std::string reason;
+    ClusterSummary s;
+    if (!computeClusterResult(prim, built, s, reason)) {
+        std::fprintf(stderr, "cluster: %s\n", reason.c_str());
         return false;
     }
-    return true;
+    printClusterSummary(path, prim, built, s, verbose);
+    return s.limitsOk;
 }
 
 // 覆盖率核对：所有簇展开后的全局索引三元组多重集 == 输入索引三元组多重集。
@@ -253,64 +325,17 @@ bool verifyCoverage(const nl::core::PrimitiveMesh& prim,
     return true;
 }
 
-bool printClusterResult(const char* path, const nl::core::PrimitiveMesh& prim,
-                        nl::core::BuiltMeshlets& built, bool verbose) {
-    std::string reason;
-    if (!verifyCoverage(prim, built, reason)) {
-        std::fprintf(stderr, "cluster: %s\n", reason.c_str());
+// 对单个 primitive 切簇并核对覆盖率 / 上限。失败返回 false（failReason 带原因）。
+bool clusterPrimitive(const nl::core::PrimitiveMesh& prim,
+                      nl::core::BuiltMeshlets& built, std::string& failReason) {
+    if (!nl::core::buildMeshlets(&prim.vertices[0].pos[0],
+                                 sizeof(nl::core::MeshVertex) / sizeof(float),
+                                 prim.vertices.size(), prim.indices.data(),
+                                 prim.indices.size(), built)) {
+        failReason = "buildMeshlets rejected input";
         return false;
     }
-
-    ClusterSummary s;
-    s.tris = prim.indices.size() / 3;
-    s.verts = prim.vertices.size();
-    s.meshlets = built.meshlets.size();
-    double errSum = 0, cutoffSum = 0;
-    for (const auto& m : built.meshlets) {
-        s.maxTri = std::max(s.maxTri, m.triangleCount);
-        s.maxVert = std::max(s.maxVert, m.vertexCount);
-        s.emittedTris += m.triangleCount;
-        const auto& bd = built.bounds[&m - built.meshlets.data()];
-        errSum += bd.error;
-        s.errMin = s.errMin == 0 ? bd.error : std::min(s.errMin, (double)bd.error);
-        s.errMax = std::max(s.errMax, (double)bd.error);
-        if (bd.coneCutoff < 0.f) ++s.degenerateCones;
-        else { cutoffSum += bd.coneCutoff; s.cutoffMin = std::min(s.cutoffMin, (double)bd.coneCutoff); }
-    }
-    s.avgTri = double(s.emittedTris) / double(s.meshlets);
-    s.avgVert = double(built.vertices.size()) / double(s.meshlets);
-    s.errAvg = errSum / double(s.meshlets);
-    s.cutoffAvg = cutoffSum / double(s.meshlets - s.degenerateCones);
-
-    std::printf("file       : %s\n", path);
-    std::printf("submesh    : %s\n", prim.name.c_str());
-    std::printf("input      : %zu verts / %zu tris\n", s.verts, s.tris);
-    std::printf("meshlets   : %zu\n", s.meshlets);
-    std::printf("tri/cluster: avg %.1f  max %u  (limit %u)\n",
-                s.avgTri, s.maxTri, nl::core::kMeshletMaxTriangles);
-    std::printf("vert/cluster: avg %.1f  max %u  (limit %u)\n",
-                s.avgVert, s.maxVert, nl::core::kMeshletMaxVertices);
-    std::printf("coverage   : %zu/%zu = %.2f%%\n", s.emittedTris, s.tris,
-                100.0 * double(s.emittedTris) / double(s.tris));
-    std::printf("error      : min %.4f  avg %.4f  max %.4f  (world space, max edge)\n",
-                s.errMin, s.errAvg, s.errMax);
-    std::printf("cone       : avg cutoff %.3f  min %.3f  (degenerate: %zu)\n",
-                s.cutoffAvg, s.cutoffMin, s.degenerateCones);
-    const bool limitsOk = s.maxTri <= nl::core::kMeshletMaxTriangles &&
-                          s.maxVert <= nl::core::kMeshletMaxVertices;
-    std::printf("limits     : %s\n", limitsOk ? "PASS" : "FAIL");
-    if (verbose) {
-        const size_t show = std::min<size_t>(built.meshlets.size(), 5);
-        std::printf("first %zu meshlets:\n", show);
-        for (size_t i = 0; i < show; ++i) {
-            const auto& m = built.meshlets[i];
-            const auto& bd = built.bounds[i];
-            std::printf("  [%zu] tri=%-3u vert=%-3u sphere r=%.4f cutoff=%.3f err=%.4f\n",
-                        i, m.triangleCount, m.vertexCount, bd.sphere[3],
-                        bd.coneCutoff, bd.error);
-        }
-    }
-    return limitsOk;
+    return true;
 }
 
 // BuiltMeshlets（引用原网格）→ NMeshData（自包含）：顶点窗口按序 remap 成真实顶点，
@@ -378,6 +403,51 @@ int cmdCluster(int argc, char** argv) {
                      data.meshes.size());
         return 1;
     }
+
+    // M-J2：多子网格走并行切簇（per-primitive 完全独立 → scope slot 输出，
+    // 打印/后续落盘保序串行）；单子网格保持原串行路径（并行开销 > 收益，零回归风险）。
+    if (data.meshes.size() > 1) {
+        struct MeshWork {
+            nl::core::BuiltMeshlets built;
+            ClusterSummary s;
+            bool ok = false;
+            std::string reason;
+        };
+        std::vector<MeshWork> works(data.meshes.size());
+        unsigned poolThreadsUsed = 0;
+        const double t0 = wallClockSeconds();
+        {
+            nl::core::jobs::ThreadPool pool;
+            const unsigned nThreads = pool.threadCount();
+            pool.scope<int>([&](nl::core::jobs::ThreadPool::Scope<int>& sc) {
+                for (size_t i = 0; i < data.meshes.size(); ++i) {
+                    sc.spawn([&data, &works, i] {
+                        MeshWork& w = works[i];
+                        w.ok = clusterPrimitive(data.meshes[i], w.built, w.reason) &&
+                               computeClusterResult(data.meshes[i], w.built, w.s, w.reason);
+                        return 0;
+                    });
+                }
+            });
+            poolThreadsUsed = nThreads;
+        }
+        const double parallelSecs = wallClockSeconds() - t0;
+        for (size_t i = 0; i < data.meshes.size(); ++i) {
+            const MeshWork& w = works[i];
+            if (!w.ok) {
+                std::fprintf(stderr, "cluster: [%zu] %s\n", i, w.reason.c_str());
+                ++failures;
+                continue;
+            }
+            printClusterSummary(path, data.meshes[i], w.built, w.s, verbose);
+            if (!w.s.limitsOk) ++failures;
+            if (i + 1 < data.meshes.size()) std::printf("\n");
+        }
+        std::printf("jobs       : %zu submeshes clustered in parallel (%.3fs, %u threads)\n",
+                    data.meshes.size(), parallelSecs, poolThreadsUsed);
+        return failures == 0 ? 0 : 1;
+    }
+
     for (size_t i = 0; i < data.meshes.size(); ++i) {
         nl::core::BuiltMeshlets built;
         std::string reason;
@@ -2793,6 +2863,108 @@ int selftestJobs() {
             });
         check(!got2.empty() && got2[0] == serialSum(5000) && got2[0] == sum.load(),
               "pool reusable after scope exception", "");
+    }
+
+    // ---- M-J2：cluster 多子网格并行 vs 串行 —— 确定性硬判据 ----
+    // 离线资产是确定性产物：并行切簇结果必须与串行逐个跑逐字节一致（MD5 同源判据）。
+    // 合成 8 个不同规模 primitive（P8 合成网格），串行与并行各跑一遍全量比对。
+
+    // 12) 并行 cluster == 串行 cluster（BuiltMeshlets 四数组 + summary 逐字段）
+    {
+        std::vector<nl::core::PrimitiveMesh> prims;
+        for (int k = 0; k < 8; ++k) {
+            SelftestMesh m = makeTestMesh(size_t(1 + k % 3),
+                                          size_t(16 + k * 8), size_t(16 + k * 8));
+            nl::core::PrimitiveMesh p;
+            p.name = "par#" + std::to_string(k);
+            p.vertices.resize(m.positions.size() / 3);
+            for (size_t v = 0; v < p.vertices.size(); ++v) {
+                p.vertices[v].pos[0] = m.positions[v * 3 + 0];
+                p.vertices[v].pos[1] = m.positions[v * 3 + 1];
+                p.vertices[v].pos[2] = m.positions[v * 3 + 2];
+                p.vertices[v].normal[0] = 0.f;
+                p.vertices[v].normal[1] = 0.f;
+                p.vertices[v].normal[2] = 1.f;
+            }
+            p.indices = m.indices;
+            prims.push_back(std::move(p));
+        }
+
+        auto runOne = [](const nl::core::PrimitiveMesh& p, nl::core::BuiltMeshlets& b,
+                         ClusterSummary& s, std::string& r) {
+            if (!clusterPrimitive(p, b, r)) return false;
+            return computeClusterResult(p, b, s, r);
+        };
+
+        std::vector<nl::core::BuiltMeshlets> serialB(prims.size());
+        std::vector<ClusterSummary> serialS(prims.size());
+        for (size_t i = 0; i < prims.size(); ++i) {
+            std::string r;
+            check(runOne(prims[i], serialB[i], serialS[i], r), "serial cluster ran", r);
+        }
+
+        std::vector<nl::core::BuiltMeshlets> parB(prims.size());
+        std::vector<ClusterSummary> parS(prims.size());
+        bool parallelRan = true;
+        {
+            ThreadPool pool;
+            std::string firstReason;
+            pool.scope<int>([&](nl::core::jobs::ThreadPool::Scope<int>& sc) {
+                for (size_t i = 0; i < prims.size(); ++i) {
+                    sc.spawn([&, i] {
+                        std::string r;
+                        if (!runOne(prims[i], parB[i], parS[i], r)) {
+                            parallelRan = false;
+                            if (firstReason.empty()) firstReason = r;
+                        }
+                        return 0;
+                    });
+                }
+            });
+            check(parallelRan, "parallel cluster ran", firstReason);
+        }
+
+        auto builtEqual = [](const nl::core::BuiltMeshlets& a,
+                             const nl::core::BuiltMeshlets& b) {
+            return a.meshlets.size() == b.meshlets.size() &&
+                   a.vertices.size() == b.vertices.size() &&
+                   a.triangles.size() == b.triangles.size() &&
+                   a.bounds.size() == b.bounds.size() &&
+                   (a.meshlets.empty() ||
+                    !std::memcmp(a.meshlets.data(), b.meshlets.data(),
+                                 a.meshlets.size() * sizeof(a.meshlets[0]))) &&
+                   (a.vertices.empty() ||
+                    !std::memcmp(a.vertices.data(), b.vertices.data(),
+                                 a.vertices.size() * sizeof(a.vertices[0]))) &&
+                   (a.triangles.empty() ||
+                    !std::memcmp(a.triangles.data(), b.triangles.data(),
+                                 a.triangles.size())) &&
+                   (a.bounds.empty() ||
+                    !std::memcmp(a.bounds.data(), b.bounds.data(),
+                                 a.bounds.size() * sizeof(a.bounds[0])));
+        };
+        auto summaryEqual = [](const ClusterSummary& a, const ClusterSummary& b) {
+            return a.meshlets == b.meshlets && a.tris == b.tris && a.verts == b.verts &&
+                   a.emittedTris == b.emittedTris && a.maxTri == b.maxTri &&
+                   a.maxVert == b.maxVert && a.avgTri == b.avgTri &&
+                   a.avgVert == b.avgVert && a.errMin == b.errMin &&
+                   a.errAvg == b.errAvg && a.errMax == b.errMax &&
+                   a.cutoffAvg == b.cutoffAvg && a.cutoffMin == b.cutoffMin &&
+                   a.degenerateCones == b.degenerateCones &&
+                   a.limitsOk == b.limitsOk;
+        };
+        bool deterministic = parallelRan;
+        std::string diff;
+        for (size_t i = 0; i < prims.size() && deterministic; ++i) {
+            if (!builtEqual(serialB[i], parB[i])) {
+                deterministic = false;
+                diff = "BuiltMeshlets mismatch at prim " + std::to_string(i);
+            } else if (!summaryEqual(serialS[i], parS[i])) {
+                deterministic = false;
+                diff = "ClusterSummary mismatch at prim " + std::to_string(i);
+            }
+        }
+        check(deterministic, "parallel cluster byte-identical to serial (8 prims)", diff);
     }
 
     // 7) 参考耗时（非判据，仅展示）：默认池 vs 单线程池跑同一求和

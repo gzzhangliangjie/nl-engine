@@ -722,3 +722,34 @@
 2. **设计取舍（留痕）**：不做 per-thread deque 窃取——共享队列 + mutex/cv 足够，离线管线任务粒度大（每组数千三角）锁竞争可忽略；Carrot 反向证据「不过度设计」。接口边界写死在 jobs.hpp：parallelFor 不可嵌套调用同一实例（嵌套支持 M-J1 scope 落地）、多线程不可并发调同一实例的 parallelFor。
 
 **下一步**：M-J1 scoped fork-join（`pool.scope(s.spawn)` 返回 Vec<T>、可嵌套、与 parallel_for 共用同池）→ M-J2 cluster/stat 并行接入。
+
+## P8 M-J1 scoped fork-join（tag `job-scope`，2026-11-08，feat/job-system 轨道）
+
+**动作**：worker 语义重构（任务闭包自含完成计账：parallelFor 用 Impl.pending、scope 用 Scope::State.pending；锁顺序恒 st.mu→im.mu）→ `ThreadPool::scope<T>(fn)` 同步 fork-join（spawn 可嵌套、结果按 spawn 序收集、异常全 join 后重抛、与 parallelFor 共用队列）→ selftest 扩至 13 项。
+
+**提交版本**：job-scope（commit 4e92cf7）
+
+**完成情况**
+- 新增 6 判据全绿：spawn 顺序收集（100 任务）/ 8x4 嵌套 spawn 无死锁全 join / 3 层链式 spawn 数据流 / 空 scope / scope 异常重抛 / 异常后池复用。
+- ctest 17/17（首轮 s1-nmesh-suzanne 空输出失败 = Defender 首启扫描拦截新 exe 的 flake，单独+全量复跑均绿）。
+- 生命周期：C++ 无借用检查，靠 scope 同步语义保证 State 裸指针无悬空（join 前任务全完成）——hpp 注释钉死。
+
+**踩坑情况**
+1. 嵌套类模板声明的名字查找两处修：scope() 签名需要 `template <class T> class Scope;` 前置声明；实现里访问 `typename Scope<T>::State` 限定名。第一版 hpp 里混入不存在的 `st_pending()` 伪函数（Write 时手误），编译前自查抓掉。
+
+## P8 M-J2 cluster 并行消费者（tag `job-cluster`，2026-11-08，feat/job-system 轨道）
+
+**动作**：定位热循环（结论：贪心切簇 mesh 内串行依赖不可并行=算法本性；真实并行点=多子网格 per-primitive；stat 无热循环保持串行并留痕）→ `computeClusterResult`（verify+统计，无 I/O）从 `printClusterResult` 拆出 → 多子网格 `scope` 并行 slot 输出、打印保序串行、单子网格保持原串行路径 → `scripts/make-multi-primitive-glb.py`（复制 primitives 成 4 submesh，同 accessors）→ selftest 并行 vs 串行逐字节断言 → 展示台 p8-jobs 卡（selftest / cluster 并行 / 负向 unknown suite，expectExit 0/0/1）。
+
+**提交版本**：job-cluster（本轮）
+
+**完成情况**
+- 确定性硬判据：合成 8 primitive 并行 vs 串行，BuiltMeshlets（meshlets/vertices/triangles/bounds）逐字节 memcmp 一致 + ClusterSummary 逐字段一致。
+- 命令行：`cluster Suzanne-multi.glb` 4 submesh 并行 limits PASS；耗时串行 4x 440ms vs 并行 194ms（约 2.3x，进程级含加载）。
+- ctest 17/17；server --check 挂在主线 s4.2 未归位（kStage 已 bump 而主线 example/ in-flight），p8-jobs 卡自身归位无报错——A 类轨道不背主线 kStage 锅，留痕。
+
+**踩坑情况**
+1. **Edit 假成功 + cwd 漂移叠加坑**：一轮 Edit 报成功但 bash grep 看不到新内容——真相是 Bash 工具 cwd 漂回主 worktree，grep 看到主 wt 同名旧 main.cpp（主 wt 是 S4 版本无新函数）。对策：核实文件一律用 Grep/Read 工具（显式绝对路径），Bash 每条命令显式 cd worktree 根或用绝对路径。同一轮里 Edit old_string 撞 clusterPrimitive 连体段误删该函数 + 旧 printClusterResult 残留成重复定义——Grep 定位后一次 Edit 恢复（clusterPrimitive 归位 + 删旧版），verifyCoverage 前向声明补链。
+2. ctest 单测 exe 首启被 Defender 实时扫描拦截（输出空、秒退）——首个全量 ctest 轮次 flake，复跑即绿。新 exe 首次跑测前先手动跑一遍暖机。
+
+**下一步**：M-J3 simplify / dag 并行化（METIS 分组按组并行 + 逐组误差自底向上并行、合并链串行）。
