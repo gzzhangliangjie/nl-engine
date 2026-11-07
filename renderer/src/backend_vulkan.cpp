@@ -67,7 +67,8 @@ public:
     ~VkBackend() override { shutdown(); }
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
-              const char* modelFile, bool clusterMode, std::string& outError) override {
+              const char* modelFile, bool clusterMode, bool cullMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -93,14 +94,18 @@ public:
 
         if (!createSwapchain(outError)) return false;
         if (!createTargets(outError)) return false;
+        // M4.0：vertex pulling 走 initCull。Vulkan 侧 SPIR-V 入口恒为 "main"（加载期
+        // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
         const bool sceneOk = clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+            : (cullMode
+                ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
-        // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。
+        // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。cull 模式不依赖分层资产。
         if (clusterMode) {
             lodStem_ = meshletStem(modelFile);
             lodLevelCount_ = probeLodLevelCount(lodStem_);

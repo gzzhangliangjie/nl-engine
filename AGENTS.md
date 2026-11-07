@@ -92,6 +92,33 @@
 
 ---
 
+## 并行轨道 worktree 纪律（2026-11-08 固化）
+
+**多并行任务互不干扰靠固定的 `feat/*` worktree 实现，不动态建临时分支、不引入更复杂的调度机制。** 单用户开发、无多进程抢坑，固定分支 + 工作线粘性已满足"互不干扰"。
+
+1. **什么进 worktree / 什么不进**：
+   - **进**：A 类并行轨道（引擎化 / 非渲染，不碰 `kStage`、不进渲染回归）—— 如材质图、Job 系统、动作系统。
+   - **不进**：VSM（S9 后插入）、TSR（S7 后拆分，见 `ROADMAP.md`）是主线 S 节奏的插入项，留在主 worktree 顺着 S 轨走，不拆出。
+2. **实例注册表（三个已建 worktree，占用说明见 `docs/PARALLEL-TRACKS.md` §7）**：
+
+   | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
+   |---|---|---|---|
+   | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 已立项 `docs/p8/P8-JOB-PLAN.md` |
+   | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
+   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | 候选（`PARALLEL-TRACKS.md` 2.4 纯逻辑层） |
+
+   三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
+3. **固化文档闸**：track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩。
+4. **假绿防护 · 占坑 ≠ 文件指向**：
+   - 在 track worktree 干活时，所有编辑绝对路径、shell 每条命令的 cwd **显式在对应 wt 路径内**，不依赖默认落点；
+   - merge 回 master 前**双向自查**：`git -C <wt> status` 看得到本批改动、主 worktree `git status` **没有**本批改动（出现即落错树，立即迁移）；
+   - 验证可信度自查：改了什么就在产物里找什么——文本 / 数值类改动后若无任何差异是红旗不是绿灯。
+5. **工作线粘性**：同一轨道回同一 worktree，一条工作线**只 merge 一次**（验收 FAIL→补丁→复验全部在占坑内闭环，不中途 merge 又裸干）。任务收尾才 merge 回 master，下个任务回同一坑。
+
+> 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
+
+---
+
 ## 本项目其余硬约束（速查，完整见各文档）
 
 - **UE 源码只读不抄**：EULA 与项目 MIT 不兼容，一行 UE 代码都不许进 repo；参考结构与边界情况处理思路。

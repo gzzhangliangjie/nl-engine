@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S3.2 dag-top cut preview (viewer --mode dag-top, group-atomic drill)";
+    "S4.0 GPU cluster data path + vertex pulling (viewer --mode cull, single drawIndexedIndirect)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -45,16 +45,19 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-    // M1.3：model 双入口（vs/vscluster/ps/pscluster）+ hud 单入口，各 × spv/dxil = 12。
-    struct Artifact { const char* name; bool spv; };
-    static const Artifact kArtifacts[] = {
-        {"model.vs", true}, {"model.vs", false},
-        {"model.vscluster", true}, {"model.vscluster", false},
-        {"model.ps", true}, {"model.ps", false},
-        {"model.pscluster", true}, {"model.pscluster", false},
-        {"hud.vs", true}, {"hud.vs", false},
-        {"hud.ps", true}, {"hud.ps", false},
-    };
+// M1.3：model 双入口（vs/vscluster/ps/pscluster）+ M4.0 再加 vscull/pscull 双入口，
+// 加 hud 单入口，各 × spv/dxil = 16。
+struct Artifact { const char* name; bool spv; };
+static const Artifact kArtifacts[] = {
+    {"model.vs", true}, {"model.vs", false},
+    {"model.vscluster", true}, {"model.vscluster", false},
+    {"model.vscull", true}, {"model.vscull", false},
+    {"model.ps", true}, {"model.ps", false},
+    {"model.pscluster", true}, {"model.pscluster", false},
+    {"model.pscull", true}, {"model.pscull", false},
+    {"hud.vs", true}, {"hud.vs", false},
+    {"hud.ps", true}, {"hud.ps", false},
+};
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
     constexpr std::uint32_t kSpirvMagic = 0x07230203u;
@@ -96,14 +99,17 @@ Renderer& Renderer::operator=(Renderer&&) noexcept = default;
 
 std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool enableDebugLayer,
-                                           const char* modelFile, bool clusterMode) {
+                                           const char* modelFile, bool clusterMode,
+                                           bool cullMode) {
     std::unique_ptr<Renderer> r(new Renderer());
-    const bool nameOk = clusterMode ? validNMeshFileName(modelFile)
-                                    : validModelFileName(modelFile);
+    // cull 模式（M4.0 GPU vertex pulling）资产同样是 assets/meshlets/ 下的 .nmesh。
+    const bool isNMesh = clusterMode || cullMode;
+    const bool nameOk = isNMesh ? validNMeshFileName(modelFile)
+                                : validModelFileName(modelFile);
     if (!nameOk) {
         r->impl_->error = std::string("invalid --model file name: '") +
                           (modelFile ? modelFile : "<null>") +
-                          (clusterMode
+                          (isNMesh
                                ? "' (expected an ASCII *.nmesh file name in assets/meshlets/)"
                                : "' (expected an ASCII *.glb file name in assets/models/)");
         return r;
@@ -114,7 +120,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
         return r;
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
-                                 clusterMode, r->impl_->error)) {
+                                 clusterMode, cullMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

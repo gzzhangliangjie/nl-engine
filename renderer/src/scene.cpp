@@ -286,6 +286,215 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// M4.0（S4.0）：GPU vertex pulling 场景。同吃 .nmesh，但几何不展开进顶点缓冲，而是
+// 铺成三张 SSBO（顶点池 / 局部索引 / 簇元数据）+ identity 索引缓冲 + indirect args，
+// 单 drawIndexedIndirect 全簇全画（instanceCount=总簇数，验证 pulling 通路；M4.1 接
+// GPU 剔除时再改写 instanceCount）。簇色由 shader 端 pcg(簇号) 算出，与 cluster 模式
+// CPU 端 clusterColor() 同式，逐像素一致。
+bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
+                     const char* vsEntry, const char* psEntry,
+                     const char* nmeshFile, std::string& outError) {
+    // ---- 1. shader 对（cull 专用入口 vsCull/psCull）。DX12 入口名被忽略，Vulkan 恒 main ----
+    auto shaderPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(shaderPath("vscull").c_str(), vsBlob) ||
+        !readFileBytes(shaderPath("pscull").c_str(), psBlob)) {
+        outError = std::string("failed to load cull shaders (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName(vsEntry);
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName(psEntry);
+    vsCull_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    psCull_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vsCull_ || !psCull_) { outError = "createShader failed for cull shaders"; return false; }
+
+    // ---- 2. 读 .nmesh 资产 ----
+    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+    nl::core::NMeshData nm;
+    std::string loadError;
+    if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
+        outError = std::string(nmeshFile) + ": " + loadError;
+        return false;
+    }
+    if (nm.meshlets.empty() || nm.triangles.empty()) {
+        outError = std::string(nmeshFile) + " has no meshlets"; return false;
+    }
+
+    // ---- 3. 铺 SSBO ----
+    // vertexPool：整份 nm.vertices 展平成 float（8 float/顶点，与 MeshVertex 布局一致）。
+    // 簇 m 的顶点在池里的起址 = meshlet.vertexOffset（不重排，局部索引直接加偏移即得全局）。
+    std::vector<float> vertexPool;
+    vertexPool.reserve(nm.vertices.size() * 8);
+    for (const auto& mv : nm.vertices) {
+        vertexPool.push_back(mv.pos[0]); vertexPool.push_back(mv.pos[1]); vertexPool.push_back(mv.pos[2]);
+        vertexPool.push_back(mv.normal[0]); vertexPool.push_back(mv.normal[1]); vertexPool.push_back(mv.normal[2]);
+        vertexPool.push_back(mv.uv[0]); vertexPool.push_back(mv.uv[1]);
+    }
+
+    // localIndices：每簇 3×triCount 个局部索引（范围 [0,vertexCount)），随簇连续铺。
+    // clusterMeta：每簇 4 个 uint = [vertexBase, triCount, localBase, pad]。
+    const std::uint32_t clusterCount = static_cast<std::uint32_t>(nm.meshlets.size());
+    std::uint32_t maxTriCount = 0;
+    std::vector<std::uint32_t> localIndices;
+    std::vector<std::uint32_t> clusterMeta;
+    clusterMeta.reserve(clusterCount * 4);
+    for (std::uint32_t m = 0; m < clusterCount; ++m) {
+        const auto& meshlet = nm.meshlets[m];
+        if (meshlet.triangleCount > maxTriCount) maxTriCount = meshlet.triangleCount;
+        const std::uint32_t localBase = static_cast<std::uint32_t>(localIndices.size());
+        const std::uint32_t base = meshlet.triangleOffset;
+        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
+            for (int k = 0; k < 3; ++k) {
+                // nm.triangles 存簇内局部顶点号（[0,vertexCount)），与 cluster 模式展开一致；
+                // shader 里 gv = vertexBase + localIdx 所得即全局顶点号。
+                localIndices.push_back(nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            }
+        }
+        clusterMeta.push_back(meshlet.vertexOffset);    // vertexBase
+        clusterMeta.push_back(meshlet.triangleCount);  // triCount
+        clusterMeta.push_back(localBase);               // localIndexBase
+        clusterMeta.push_back(0);                      // pad
+    }
+    const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
+
+    // ---- 4. 建 GPU 资源：constants_ + 1x1 白占位 + sampler + 三张 SSBO +
+    //        indirect args + identity 索引缓冲 + binding layout/set ----
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(SceneConstants);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "SceneConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
+
+    nvrhi::TextureDesc texDesc;
+    texDesc.width = 1; texDesc.height = 1;
+    texDesc.format = nvrhi::Format::RGBA8_UNORM;
+    texDesc.debugName = "CullWhite1x1";
+    texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    texDesc.keepInitialState = true;
+    texture_ = device->createTexture(texDesc);
+    if (!texture_) { outError = "createTexture failed for cull dummy texture"; return false; }
+
+    nvrhi::SamplerDesc samplerDesc;
+    samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+    sampler_ = device->createSampler(samplerDesc);
+    if (!sampler_) { outError = "createSampler failed"; return false; }
+
+    auto makeSsbo = [&](const char* name, std::uint32_t byteSize, nvrhi::BufferHandle& out) {
+        nvrhi::BufferDesc d;
+        d.byteSize = byteSize;
+        d.structStride = 4;          // float/uint 各 4 字节 -> StructuredBuffer
+        d.debugName = name;
+        out = device->createBuffer(d);
+        return out != nullptr;
+    };
+    if (!makeSsbo("CullVertexPool",
+                  static_cast<std::uint32_t>(vertexPool.size() * sizeof(float)), vertexPool_))
+        { outError = "createBuffer failed for cull vertex pool"; return false; }
+    if (!makeSsbo("CullLocalIndices",
+                  static_cast<std::uint32_t>(localIndices.size() * sizeof(std::uint32_t)), localIndices_))
+        { outError = "createBuffer failed for cull local indices"; return false; }
+    if (!makeSsbo("CullClusterMeta",
+                  static_cast<std::uint32_t>(clusterMeta.size() * sizeof(std::uint32_t)), clusterMeta_))
+        { outError = "createBuffer failed for cull cluster meta"; return false; }
+
+    // indirect args 缓冲（isDrawIndirectArgs）。M4.0 阶段 instanceCount 恒 = 总簇数（全画）。
+    nvrhi::BufferDesc iaDesc;
+    iaDesc.byteSize = sizeof(nvrhi::DrawIndexedIndirectArguments);
+    iaDesc.isDrawIndirectArgs = true;
+    iaDesc.debugName = "CullIndirectArgs";
+    iaDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    indirectArgs_ = device->createBuffer(iaDesc);
+    if (!indirectArgs_) { outError = "createBuffer failed for cull indirect args"; return false; }
+
+    // identity 索引缓冲：值 0..stride-1，SV_VertexID 即其索引号。
+    std::vector<std::uint32_t> identity(stride);
+    for (std::uint32_t i = 0; i < stride; ++i) identity[i] = i;
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = identity.size() * sizeof(std::uint32_t);
+    ibDesc.isIndexBuffer = true;
+    ibDesc.debugName = "CullIdentityIndex";
+    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    identityIndex_ = device->createBuffer(ibDesc);
+    if (!identityIndex_) { outError = "createBuffer failed for cull identity index"; return false; }
+
+    // 绑定布局：t0 占位贴图 + s0 sampler + b0 常量 + t1/t2/t3 三张 SSBO。
+    // Vulkan 经 -fvk-t-shift 0 0 映射为 binding 1/2/3，DX12 为 SRV slot 1/2/3。
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3));
+    cullBindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!cullBindingLayout_) { outError = "createBindingLayout failed for cull"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_));
+    cullBindingSet_ = device->createBindingSet(setDesc, cullBindingLayout_);
+    if (!cullBindingSet_) { outError = "createBindingSet failed for cull"; return false; }
+
+    // ---- 5. 一次性上传：白占位贴图 + 三张 SSBO + indirect args + identity 索引 ----
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    const std::uint8_t white[4] = { 255, 255, 255, 255 };
+    upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+
+    upload->beginTrackingBufferState(vertexPool_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(vertexPool_, vertexPool.data(), vertexPool.size() * sizeof(float));
+    upload->setPermanentBufferState(vertexPool_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(localIndices_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(localIndices_, localIndices.data(), localIndices.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(localIndices_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(clusterMeta_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(clusterMeta_, clusterMeta.data(), clusterMeta.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(clusterMeta_, nvrhi::ResourceStates::ShaderResource);
+
+    nvrhi::DrawIndexedIndirectArguments args;
+    args.setIndexCount(stride)
+        .setInstanceCount(clusterCount)
+        .setStartIndexLocation(0)
+        .setBaseVertexLocation(0)
+        .setStartInstanceLocation(0);
+    upload->beginTrackingBufferState(indirectArgs_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(indirectArgs_, &args, sizeof(args));
+    upload->setPermanentBufferState(indirectArgs_, nvrhi::ResourceStates::IndirectArgument);
+
+    upload->beginTrackingBufferState(identityIndex_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(identityIndex_, identity.data(), identity.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(identityIndex_, nvrhi::ResourceStates::IndexBuffer);
+    upload->close();
+    device->executeCommandList(upload);
+
+    cull_ = true;
+    modelName_ = nmeshFile;
+    // 全簇全画，总三角形 = 各簇 triCount 之和（与 cluster 模式的截图几何一致）。
+    std::uint32_t totalTri = 0;
+    for (const auto& m : nm.meshlets) totalTri += m.triangleCount;
+    triangleCount_ = totalTri;
+
+    nl::core::log::info("cull (vertex pulling) scene ready: ", nmeshFile,
+                        " | meshlets=", clusterCount,
+                        " | triangles=", triangleCount_,
+                        " | stride=", stride,
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
 // M2.3/M3.2 共用：把一份 .nmesh 展开成 ClusterVertex/索引。include 非空时只
 // 展开掩码为 1 的簇（dag cut 用）；簇色按**本层内**的簇号烘（两后端同一 CPU
 // hash，逐字节一致）。三角形展开用 triangleOffset+t*3 —— 它是字节偏移不是
@@ -492,6 +701,39 @@ bool Scene::setClusterLevel(nvrhi::IDevice* device, const char* nmeshFile,
 
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
+    // M4.0（S4.0）：cull 模式走 vertex pulling——pipeline 无顶点输入。
+    if (cull_) {
+        if (pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_ && pipelineCullWireNone_)
+            return true;
+        pipelineCullBack_ = nullptr;
+        pipelineCullNone_ = nullptr;
+        pipelineCullWireBack_ = nullptr;
+        pipelineCullWireNone_ = nullptr;
+        for (int wire = 0; wire < 2; ++wire) {
+            for (int i = 0; i < 2; ++i) {
+                nvrhi::GraphicsPipelineDesc desc;
+                // 输入布局故意为 null：VS 只读 SV_InstanceID/SV_VertexID + SSBO，无顶点属性。
+                desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+                    .setVertexShader(vsCull_)
+                    .setFragmentShader(psCull_)
+                    .addBindingLayout(cullBindingLayout_);
+                desc.renderState.rasterState
+                    .setFrontCounterClockwise(true)
+                    .setFillMode(wire ? nvrhi::RasterFillMode::Wireframe
+                                      : nvrhi::RasterFillMode::Solid)
+                    .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
+                desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
+                auto pipeline = device->createGraphicsPipeline(desc, info);
+                if (!pipeline) { outError = "createGraphicsPipeline failed for cull"; return false; }
+                if (wire == 0)
+                    (i == 0 ? pipelineCullBack_ : pipelineCullNone_) = pipeline;
+                else
+                    (i == 0 ? pipelineCullWireBack_ : pipelineCullWireNone_) = pipeline;
+            }
+        }
+        return true;
+    }
+
     if (pipelineBack_ && pipelineNone_ && pipelineWireBack_ && pipelineWireNone_) return true;
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
@@ -532,11 +774,43 @@ void Scene::invalidatePipelines() {
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
     pipelineWireNone_ = nullptr;
+    pipelineCullBack_ = nullptr;
+    pipelineCullNone_ = nullptr;
+    pipelineCullWireBack_ = nullptr;
+    pipelineCullWireNone_ = nullptr;
 }
 
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
+
+    // M4.0（S4.0）：vertex pulling 路径——无顶点缓冲，几何由 VS 从 SSBO 拉取，
+    // 单 drawIndexedIndirect（instanceCount=总簇数）全簇全画。
+    if (cull_) {
+        SceneConstants cb{};
+        std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
+        std::memcpy(cb.model, params.model, sizeof(cb.model));
+        std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
+        cb.options[0] = static_cast<float>(params.shading);   // g_options.x = 着色模式
+        std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
+        cmd->writeBuffer(constants_, &cb, sizeof(cb));
+
+        nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
+            ? (params.cullBack ? pipelineCullWireBack_ : pipelineCullWireNone_)
+            : (params.cullBack ? pipelineCullBack_ : pipelineCullNone_);
+
+        nvrhi::GraphicsState state;
+        state.setPipeline(pipeline)
+             .setFramebuffer(framebuffer)
+             .addBindingSet(cullBindingSet_)
+             .setIndexBuffer(nvrhi::IndexBufferBinding()
+                 .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+        state.viewport.addViewportAndScissorRect(viewport);
+        state.setIndirectParams(indirectArgs_);
+        cmd->setGraphicsState(state);
+        cmd->drawIndexedIndirect(0, 1);
+        return;
+    }
 
     SceneConstants cb{};
     std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
@@ -571,6 +845,20 @@ void Scene::shutdown() {
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
     pipelineWireNone_ = nullptr;
+    pipelineCullBack_ = nullptr;
+    pipelineCullNone_ = nullptr;
+    pipelineCullWireBack_ = nullptr;
+    pipelineCullWireNone_ = nullptr;
+    cullBindingSet_ = nullptr;
+    cullBindingLayout_ = nullptr;
+    vertexPool_ = nullptr;
+    localIndices_ = nullptr;
+    clusterMeta_ = nullptr;
+    indirectArgs_ = nullptr;
+    identityIndex_ = nullptr;
+    vsCull_ = nullptr;
+    psCull_ = nullptr;
+    cull_ = false;
     bindingSet_ = nullptr;
     bindingLayout_ = nullptr;
     inputLayout_ = nullptr;
