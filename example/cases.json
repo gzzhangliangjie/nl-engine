@@ -2149,6 +2149,93 @@
      ]
     }
    ]
+  },
+  {
+   "id": "s4.0",
+   "label": "M4.0",
+   "name": "GPU 簇数据通路 + vertex pulling 渲染（S4 首里程碑）",
+   "tag": "s4-indirect",
+   "date": "2026-11-08",
+   "summary": "M4.0（kStage=S4.0）：把 .nmesh 几何常驻显存，VS 用 vertex pulling（SV_InstanceID→簇元数据 SSBO→顶点/索引 SSBO）一次性 drawIndexedIndirect 画出全部簇（instanceCount=总簇数=全画，剔除在 M4.1 才接）。方案 A 单 draw + pulling，S5 遍历 cut 只换 instanceCount 语义零返工。三张 SSBO：vertexPool(8f/顶点 pos/normal/uv)、localIndices(每簇局部索引)、clusterMeta([vertexBase,triCount,localBase,0])；identity 索引缓冲做 dummy 越界三角(NaN)被光栅化丢弃。簇色 shader 端 pcg(簇号) 与 cluster 场景 CPU 端 clusterColor() 同式→逐像素一致。双后端 DX12/Vulkan 均 deviceErrors=0。",
+   "acceptance": [
+    "vertex pulling 全画 == cluster 基线：同机位同 shading 下 --mode cull 与 --mode cluster 逐字节相同（DX12 / Vulkan 各自一致）",
+    "越界三角 dummy（NaN）被光栅化整三角丢弃，不产生垃圾像素；cull back/none 两种均通过",
+    "簇色 pcg(簇号) 两路径同式，cluster 模式与 cull 模式像素一致（非 tri-id 顺序依赖）",
+    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁",
+    "tag s4-indirect，kStage=S4.0"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "pulling-back",
+     "name": "vertex pulling 全画 == cluster 基线（cull back）",
+     "kind": "pair",
+     "note": "同机位同 shading（yaw30/pitch20/dist2.6, 640x360, shading cluster）。基线为 --mode cluster --cull back 渲染；本用例渲染 --mode cull --cull back，regression 比对两者逐字节相同即证明 pulling 路径正确。",
+     "baselines": {
+      "dx12": "example/s4-indirect/cluster-back-dx12.png",
+      "vulkan": "example/s4-indirect/cluster-back-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--cull",
+      "back",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "1",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --cull back --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-indirect/run.bat verify"
+    },
+    {
+     "id": "pulling-none",
+     "name": "vertex pulling 全画 == cluster 基线（cull off / none）",
+     "kind": "pair",
+     "note": "同上，但 cull 关闭（显示内壁）。基线为 --mode cluster --cull off；本用例 --mode cull --cull off。两者逐字节相同。",
+     "baselines": {
+      "dx12": "example/s4-indirect/cluster-none-dx12.png",
+      "vulkan": "example/s4-indirect/cluster-none-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--cull",
+      "off",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "1",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --cull off --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-indirect/run.bat verify"
+    }
+   ]
   }
  ]
 }

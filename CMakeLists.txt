@@ -197,8 +197,8 @@ set(_SHADER_ARTIFACTS "")
 # 入口清单按源文件给：model.slang 双入口（M1.3 cluster 场景），其余单入口。
 # D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
 # 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
-set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex"
-                   "psMain|ps|fragment" "psCluster|pscluster|fragment")
+set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"

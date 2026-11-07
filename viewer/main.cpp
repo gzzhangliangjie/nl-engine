@@ -218,7 +218,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S3.2") != nullptr, "S3.2 stage reported");
+    check(std::strstr(st.stage, "S4.0") != nullptr, "S4.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -228,7 +228,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (12 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (16 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -261,7 +261,7 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
-              bool dagTop = false) {
+              bool dagTop = false, bool cullMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -280,7 +280,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
-                                                   o.modelFile.c_str(), cluster);
+                                                   o.modelFile.c_str(), cluster, cullMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -349,7 +349,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
-    int shading = cluster ? 4 : o.shading;
+    int shading = (cluster || cullMode) ? 4 : o.shading;
     if (lodMode) shading = o.shadingSet ? o.shading : 1;
     // M3.2：dag-top 同 lod 模式缺省 normal（父子衔接的几何不连续最刺眼），
     // 显式 --shading 则听用户的。
@@ -426,7 +426,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
             // cluster 场景五个模式全可用（textured 采 1x1 白占位）；normal 场景 4 会读
             // 未绑定的 CLUSTERCOLOR，循环范围限 0..3。
-            const int cycleCount = cluster ? kShadingCount : 4;
+            const int cycleCount = (cluster || cullMode) ? kShadingCount : 4;
             shading = (shading + 1) % cycleCount;
             nl::core::log::info("shading -> ", shadingName(shading));
         }
@@ -578,7 +578,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
-            if (!cluster) shading = std::min(shading, 3);  // normal 场景无 CLUSTERCOLOR 属性
+            if (!cluster && !cullMode) shading = std::min(shading, 3);  // 非簇场景无 CLUSTERCOLOR 属性
             wireframe = hud.wireframe;
             colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
             // M2.3：滑条写了新层号才真的换资产（渲染资源只在 viewer 这一侧被动，
@@ -667,6 +667,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/true, /*lodMode=*/true);
     case nl::core::ViewMode::DagTop:    // M3.2：DAG 顶层 + 任选组下钻一层
         return runNormal(o, /*cluster=*/true, /*lodMode=*/false, /*dagTop=*/true);
+    case nl::core::ViewMode::Cull:       // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false, /*cullMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -730,8 +732,12 @@ int main(int argc, char** argv) {
     // M1.3：cluster 模式的缺省资产是 assets/meshlets/Suzanne.nmesh（用户没给 --model 时）
     // M2.3：lod 模式同样缺省 Suzanne（分层文件 Suzanne.lodN.nmesh 随之探测）。
     // M3.2：dag-top 同缺省（顶层渲染 + 下钻都用同一套分层资产）。
+// M4.0：cull=true 走 vertex pulling 场景（assets/meshlets/*.nmesh，单 drawIndexedIndirect
+// 全簇全画，M4.1 才接 GPU 剔除），缺省着色 4=cluster；簇色由 shader 端 pcg(簇号) 算出，
+// 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
-         o.mode == nl::core::ViewMode::DagTop) && !o.modelSet) {
+         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull)
+        && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
     return runMode(o.mode, o);

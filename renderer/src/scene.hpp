@@ -57,6 +57,15 @@ public:
                      const char* vsEntry, const char* psEntry,
                      const char* nmeshFile, std::string& outError);
 
+    // M4.0（S4.0）：GPU vertex pulling 场景——同吃 .nmesh，但几何不展开进顶点缓冲，
+    // 而是铺成三张 SSBO（顶点池 / 局部索引 / 簇元数据）+ 一张 identity 索引缓冲 +
+    // 一份 indirect args 缓冲，单 drawIndexedIndirect 全簇全画（instanceCount=总簇数，
+    // 验证 pulling 通路；M4.1 才接 GPU 剔除改写 instanceCount）。簇色由 shader 端
+    // pcg(簇号) 算出，与 cluster 场景 CPU 端 clusterColor() 同式，逐像素一致。
+    bool initCull(nvrhi::IDevice* device, const char* shaderSuffix,
+                  const char* vsEntry, const char* psEntry,
+                  const char* nmeshFile, std::string& outError);
+
     // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
     // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
     // 层号与 parent error 从 .nmesh v2 尾部 section 读出，供 HUD 显示。
@@ -86,8 +95,13 @@ public:
     void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
               const nvrhi::Viewport& viewport, const FrameParams& params);
 
-    bool ready() const { return pipelineBack_ && pipelineNone_ && pipelineWireBack_
-                              && pipelineWireNone_ && bindingSet_; }
+    bool ready() const {
+        if (cull_)
+            return pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_
+                       && pipelineCullWireNone_ && cullBindingSet_;
+        return pipelineBack_ && pipelineNone_ && pipelineWireBack_
+                              && pipelineWireNone_ && bindingSet_;
+    }
     std::uint32_t indexCount() const { return indexCount_; }
     // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
     const std::string& modelName() const { return modelName_; }
@@ -128,6 +142,21 @@ private:
     float                         lodMaxError_ = 0.0f;
     int                           dagGroup_ = -1;     // M3.2：当前下钻组（-1 = 纯顶层）
     float                         dagGroupError_ = 0.f;
+
+    // ---- M4.0（S4.0）：GPU vertex pulling 资源 ----
+    // 与 cluster 模式共用 .nmesh 资产，但几何铺进 SSBO 由 VS 用 SV_InstanceID/SV_VertexID
+    // 拉取，不走任何顶点缓冲（input layout 为 null）。cull_ 置位后 draw 走 indirect 路径。
+    bool                         cull_ = false;
+    nvrhi::ShaderHandle          vsCull_, psCull_;
+    nvrhi::BufferHandle          vertexPool_;       // StructuredBuffer<float>，全顶点展平（8 float/顶点）
+    nvrhi::BufferHandle          localIndices_;     // StructuredBuffer<uint>，每簇 3×triCount 局部索引
+    nvrhi::BufferHandle          clusterMeta_;      // StructuredBuffer<uint>，每簇 [vertexBase, triCount, localBase, pad]
+    nvrhi::BufferHandle          indirectArgs_;     // drawIndexedIndirect 参数缓冲（isDrawIndirectArgs）
+    nvrhi::BufferHandle          identityIndex_;    // identity 索引缓冲（0..stride-1，stride=3×maxTri）
+    nvrhi::BindingLayoutHandle   cullBindingLayout_;
+    nvrhi::BindingSetHandle      cullBindingSet_;
+    nvrhi::GraphicsPipelineHandle pipelineCullBack_, pipelineCullNone_;         // solid × cull
+    nvrhi::GraphicsPipelineHandle pipelineCullWireBack_, pipelineCullWireNone_; // wireframe × cull
 };
 
 } // namespace nl::renderer::detail

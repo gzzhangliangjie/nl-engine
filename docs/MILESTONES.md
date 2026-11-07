@@ -17,6 +17,7 @@
 | M0.5 ImGui + 总验收 | ✅ 验收通过 | `s0-done` | 2026-11-07 | 双后端 ImGui HUD 实拍 + `--no-hud` 与 M0.4 基线逐字节相同；`model`/`hud` 共 8 个 shader 产物魔数自检、selftest 14/14、`--check` 退出 0；S0 全部完成 |
 | M0.6 GPU 帧内计时 | ✅ 验收通过 | `m0.6` | 2026-11-07 | NVRHI timestamp query 真实 GPU 耗时进 HUD（CPU/GPU 并排 + 双曲线）；`--no-hud` 基线逐字节不变；S0 后能力补齐序列第一版 |
 | M0.7 高模测试资产 + `--model` | ✅ 验收通过 | `m0.7` | 2026-11-07 | gen-dense-mesh.py 程序化致密网格（纽结 204,800 / 球 327,680 tri，MD5 确定）；`--model` 白名单加载 + HUD model 行；GPU ms 3,936→327,680 tri 双后端互证；meshoptimizer v1.3 vendored（不入构建）；S1 切簇命门就位 |
+| M4.0 GPU 簇数据通路 + vertex pulling | ✅ 验收通过 | `s4-indirect` | 2026-11-08 | 单 drawIndexedIndirect 全簇全画（cull 模式 vertex pulling）；`--mode cull` 与 `--mode cluster` 同机位同 shading 逐字节相同（DX12/Vulkan 各自一致），deviceErrors=0；kStage=S4.0；交代物 example/s4-indirect + cases.json s4.0 卡 |
 
 ---
 
@@ -704,3 +705,32 @@
 4. **exe 快照规范与 M2.3a 后置修复的冲突**：s2.0 卡映射改 s2-done tag 快照后回归 FAIL（2.8 万像素）——tag（f5bfc9a）是 M2.3a 翻转面根治**之前**的代码，而卡基线已在 fdb598c/32a10b0 重拍，tag 快照永远无法复现。回退为当前构建（与 m0.9 同款既定模式）；快照规则只在「tag 状态与基线状态一致」时可用，后续 viewer 卡收敛时机须选渲染代码已定稿的 tag。
 
 **下一步**：S4 分块/LOD 交换（或按 ROADMAP 顺延）；S5 运行时组原子 cut（M3.2 已预演，屏幕空间选层公式已存档）。
+
+---
+
+## M4.0 GPU 簇数据通路 + vertex pulling 渲染（tag `s4-indirect`，2026-11-08）
+
+**动作**
+- S4-PLAN 复读三家定稿：bevy `visibility_buffer_hardware_raster.wesl` 单 draw + vertex pulling（SSBO 拉顶点）作蓝本；UE 跳过硬件光栅、Carrot 走 mesh shader（NVRHI 2021 代无承诺）均不适用；范围边界写死（遮挡/Hi-Z/S6、软光栅/S7、多实例剔除、BVH 加速全不做；剔除须无状态可重复）。
+- 方案 A 拍板：单 `drawIndexedIndirect`，`instanceCount=可见簇数`（M4.0 恒=总簇数全画），S5 遍历 cut 只换 instanceCount 语义零返工；VS 多一次 SSBO 间接寻址。~~方案 B per-cluster 多条 args + drawIndexedIndirectCount 否决~~。
+- `core/modes` 加 `ViewMode::Cull=4` + `kModeNames` "cull"；`viewer::runMode` 加 Cull 分支、`Renderer::create` 透传 `cullMode`、`--cull off`(=none) 合法；`Renderer::create` 对 cull/cluster 按 `.nmesh` 白名单校验。
+- `scene` 加 `initCull`：读 .nmesh 铺三张 SSBO——`vertexPool`(8f/顶点 pos/normal/uv)、`localIndices`(每簇局部索引)、`clusterMeta`([vertexBase,triCount,localBase,0])；`maxTriCount→stride=3*maxTriCount`；`identityIndex`(0..stride-1) 作索引缓冲；`indirectArgs`(DrawIndexedIndirectArguments{indexCount=stride, instanceCount=clusterCount})；binding 三 `StructuredBuffer_SRV(t1/t2/t3)` + CB + tex + sampler；4 套 pipeline **无顶点输入**（null input layout）。
+- `scene::draw` 加 cull 分支：写 CB → 按 (fill×cull) 选 cull pipeline → 只绑 `cullBindingSet` + `identityIndex_`(index buffer) + `setIndirectParams(indirectArgs_)` → `drawIndexedIndirect(0,1)`；不绑任何顶点缓冲。
+- shader `model.slang` 加 `vsCull`/`psCull`：`SV_InstanceID`→簇元数据→SSBO 拉取；越界三角置 `asfloat(0x7fc00000u)` NaN 被光栅化整三角丢弃；簇色 `triIdColor(instanceIndex)` 与 cluster 场景 CPU 端 `clusterColor()` 同式 → 逐像素一致。`CMakeLists` `_ENTRIES_MODEL` 加 `vsCull`/`psCull`，双后端 16 个 shader 产物齐全。
+
+**提交版本**：s4-indirect（本轮）
+
+**完成情况**
+- 双后端（DX12/Vulkan）viewer `--mode cull` 单 drawIndexedIndirect 全簇全画成功：`meshlets=237 / triangles=3936 / stride=63`，`deviceErrors=0`。
+- **逐像素一致验收（M4.0 判据，S4-PLAN 第 38 行）**：同机位同 shading（yaw30/pitch20/dist2.6, 640x360, shading cluster）下 `--mode cull` 与 `--mode cluster` 截图 `cmp` 逐字节相同——DX12：`cluster_back==cull_back`、`cluster_none==cull_none` 均 IDENTICAL；Vulkan 同样两组 IDENTICAL；`back` vs `none` 正确相异（sanity 通过）。
+- `tools/showcase/server.py --check`：OK（stage=S4.0 version=s4.0 cases=2 baselines=4）。
+- `tools/regression.py --only s4.0`：4/4 ALL GREEN（bytes，DX12+Vulkan × back/none），产出 `build/regression/report.md`。
+- 交代物：`example/s4-indirect/`（4 张 cluster 基线 PNG + `run.bat` 现场复现 cluster==cull 自检 exit 0）+ `example/cases.json` s4.0 卡（2 个 pair 用例，基线=cluster 渲染、用例渲染 cull，regression 比对逐字节相同）。
+
+**踩坑情况**
+1. **D3D12 入口名忽略**：NVRHI D3D12 `createShader` 只存整块字节码，`entryName` 不用于选入口；Vulkan 侧 SPIR-V 入口恒为 `main`。初版给 Vulkan 传 `vsMain` 致入口缺失，统一为 DX12=`"vsMain"`/VK=`"main"` 后双后端通过。
+2. **MeshVertex 布局**：顶点池步长=8 float/顶点（pos3+normal3+uv2=32B，`static_assert(sizeof==32)`），索引公式 `b=gv*8`；初版误用 3 float 步长致顶点错位，按 `core/include/nl/core/mesh_io.hpp` 修正。
+3. **null input layout + indirect draw 合法性**：`GraphicsPipelineDesc` 不调 `setInputLayout`→inputLayout=null；D3D12 仅当 `inputLayout && !inputElements.empty()` 才设 IA，Vulkan 仅当 `inputLayout != null` 才设 vertex input——故无顶点缓冲的 pulling pipeline 合法，无需兜底 input layout（与 vendored nvrhi.h 实测一致）。
+4. **indirectArgs 字段对位**：`DrawIndexedIndirectArguments` 顺序为 indexCount/instanceCount/firstIndex/firstInstance（与 Vulkan `VkDrawIndexedIndirectCommand` 的 indexCount 字段对位）；indexCount 用 `stride=3*maxTriCount`，instanceCount=总簇数全画。
+
+**下一步**：M4.1 compute 视锥剔除（Gribb-Hartmann 5 平面球体测试、atomicAdd append 可见列表、GPU 每帧只写 instanceCount；M4.0 全画通路零返工改 instanceCount 语义即可）+ `--mode cull` HUD 可见簇数 + `tools/frustum_check.py` 离线对照。
