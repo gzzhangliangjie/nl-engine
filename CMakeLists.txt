@@ -119,6 +119,7 @@ add_library(nl_core STATIC
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
+    core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -353,3 +354,10 @@ set_tests_properties(s3-fallback-suzanne PROPERTIES
 add_test(NAME b2-graph-selftest COMMAND material-graph-tools selftest)
 set_tests_properties(b2-graph-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "material-graph selftest: PASS")
+
+# ---- B 路材质图 B3：图 -> Slang 代码生成 + 双后端编译验收（A 类轨道）----
+# 走工具版交代：emit 示例图 -> slangc 编译 SPIR-V + DXIL 各 vs/ps 入口。
+add_test(NAME b3-graph-genslang COMMAND material-graph-tools check)
+set_tests_properties(b3-graph-genslang PROPERTIES
+    PASS_REGULAR_EXPRESSION "genslang   : OK"
+    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
