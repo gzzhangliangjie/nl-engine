@@ -25,16 +25,17 @@
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
 - **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
-- **S2 收官（2026-11-07）**：`s2-group`→M2.0（回归 88/88）、`s2-qem`→M2.1（94/94）、`s2-loop`→M2.2（102/102）、**`s2-done`→M2.3 已过（提交 f5bfc9a，ctest 12/12、回归 118/118 ALL GREEN）**。M2.3：viewer `--mode lod N` + HUD 滑条；`Scene::uploadClusterMesh` 首载与切层同一条路（shader/pipeline/binding 全复用）；`probeLodLevelCount` 在 backend.hpp（两后端共用）；HUD 滑条仅 lodCount>1 显示，标 `lod N/M tri maxErr`；缺省着色 normal、显式 `--shading` 生效（初版三元式把 lod 缺省叠进 cluster 分支写反，显式 normal 被吞——先场景缺省再覆写）。负向 viewer tool 卡必须带 `--screenshot` 否则进交互循环超时。Suzanne.lod0..5.nmesh（~0.5MB）入仓，IcoSphereDense 分层不入仓。kStage=S2.0；m0.9 gate-hud 基线随 stage 文本重拍（预期动作）。验收：六层画廊 `example/s2-done/lod-layers.png`（真实 GPU 截图）无裂缝无洞；L4/L5 黑面 --cull none 复检为 M2.2 口径翻转面。下一步 **S3 构建 cluster DAG + fallback mesh**（`nanite-tools dag`，cut 以 group 为原子吃 v2 的 lockedPositions/parent error）。
+- **S2 收官（2026-11-07）**：`s2-group`→M2.0（回归 88/88）、`s2-qem`→M2.1（94/94）、`s2-loop`→M2.2（102/102）、`s2-done`→M2.3（提交 f5bfc9a）、**M2.3a 翻转面根治（提交 fdb598c，ctest 12/12、回归 118/118 ALL GREEN）**。M2.3：viewer `--mode lod N` + HUD 滑条；`Scene::uploadClusterMesh` 首载与切层同一条路；`probeLodLevelCount` 在 backend.hpp；缺省着色 normal、显式 `--shading` 生效（先场景缺省再覆写）。负向 viewer tool 卡必须带 `--screenshot` 否则进交互循环超时。**M2.3a 判决实验定稿（用户方法论三原则）**：官方两家翻面判定均**无存储参照场**（meshopt 实时 vertex_positions / UE TriWillInvert 实时 GetPosition）；摘锚纯官方口径跨层累计 L1=1→L6=8（worst cos -0.972），官方无逐层链场景可抄 → **朝向锚定稿保留**（变形后法线 vs 当前角点法线和 ≤~87°，随折叠同步更新；无法线数据的合成网格退化纯官方判定），ours inward=0 反超 oracle（2）；`rebuildMeshlets` **法线继承**（继承输入法和不重算，跨层=L0 原始场，与 check-orient 同口径）；分层资产 7 层 lod0..6 入仓。验收：七层画廊无黑斑无裂缝无洞，「L4/L5 已知翻转面」口径**作废**。backend 自证看日志 `shader=spv/dxil`（NMake 只看时间戳，cp 盖产物后必须删掉重编）。下一步 **S3 构建 cluster DAG + fallback mesh**（`nanite-tools dag`，cut 以 group 为原子吃 v2 的 lockedPositions/parent error）。
 
 ## S2 离线管线约定（M2.0 起）
 - METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。
 - 组大小目标 8 簇/组（`core/grouping.hpp` `kTargetMeshletsPerGroup`，bevy 0.15 实证值；S2-PLAN 旧稿 50000-tri 是 UE page 口径已修订）。
 - 纪律：`grouping.cpp` 是 core 里唯一碰 METIS 符号的文件；viewer 不调用 groupClusters，链接器不会拉 metis。
 - **regression/展示台的工具 exe 是 `build/{dx12,vulkan}/nanite-tools.exe`，重编后要手动 cp 同步两份**，否则总闸跑的是旧 exe。
-- UE 离线构建参考：`E:/UnrealEngine/5.8.4/Engine/Source/Developer/NaniteBuilder/`（GraphPartitioner/ClusterDAG/SimplifyTriangles，只读不抄）；Carrot 本地无离线简化实现。
+- UE 离线构建参考：`E:/UnrealEngine/5.8.4/Engine/Source/Developer/NaniteBuilder/`（GraphPartitioner/ClusterDAG/SimplifyTriangles，只读不抄）；翻面判定参照 `Developer/MeshSimplifier/MeshSimplify.cpp`（TriWillInvert 实时位置、InversionPenalty 罚金）；Carrot 本地无离线简化实现。
 - cases.json 工具卡 select 空选项会展开成空 arg，工具侧需跳过空参数。
-- **.nmesh v2（M2.2 起）** = v1 全部字段不变 + 尾部 `NMeshMetaHeader(24B, magic 'NLOD')` + `float[3*lockedCount]`；`NMeshData.lodMeta.present` 决定 saveNMesh 写 1 还是 2，loadNMesh 两版都读。分层资产 `<prefix>.lodN.nmesh` 由 `nanite-tools lod -o <prefix>` 产出；lockedPositions 存**位置**不存点号（逐层重切后编号全变），语义 = **本层按当前分组重算的组间边界点**（不累积历史层），顶层为空；`maxError` = parent error 单调不减（S3 cut 判据）。
+- **.nmesh v2（M2.2 起）** = v1 全部字段不变 + 尾部 `NMeshMetaHeader(24B, magic 'NLOD')` + `float[3*lockedCount]`；`NMeshData.lodMeta.present` 决定 saveNMesh 写 1 还是 2，loadNMesh 两版都读。分层资产 `<prefix>.lodN.nmesh` 由 `nanite-tools lod -o <prefix>` 产出（Suzanne 现为 7 层 lod0..6）；lockedPositions 存**位置**不存点号（逐层重切后编号全变），语义 = **本层按当前分组重算的组间边界点**（不累积历史层），顶层为空；`maxError` = parent error 单调不减（S3 cut 判据）。
+- **简化器口径（M2.3a 定稿）**：折叠结构 = meshopt 多 pass 主循环（src 并入 dst、collapse_locked、cos75°）+ link condition + 双层边界锁（组间边界 + 模型开放边界 LockBorder）+ 绝对朝向锚（自创加码，判决实验定稿保留）；`check-orient` 子命令扫全链 inward（exit 1 = FAIL），`simplify` 命令内置 ours vs oracle 同判据对比行。自检预期已对齐 LockBorder 语义：孤四边形不折叠、末层收敛停滞（>70%）例外。
 
 ## 渲染约定（改前先看 `docs/SHADER-CONVENTIONS.md`）
 - 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present，别各抄一遍。
