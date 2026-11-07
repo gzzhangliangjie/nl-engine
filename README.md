@@ -106,5 +106,5 @@ python tools/showcase/server.py --check       # 放行门禁：本轮用例是�
 - `E:\UE_STUDY_2026\Carrot\` — 唯一 Nanite+Lumen 双撸完成的项目（C++/Vulkan + slang），**带完整 1180 提交历史**：既看它 2020 年怎么从零搭起来（`docs/s0/CARROT-BOOTSTRAP.md`），也看它后期怎么做 Nanite×GI（`docs/carrot-history.md`）。`thirdparty/` 里 glfw / glm / imgui / tinygltf / stb 源码已 checkout，可直接复用，不用联网。
 - `E:\UE_STUDY_2026\bevy\` — meshlet（虚拟几何）+ solari（ReSTIR GI）两套单项最佳实现（Rust/wgpu）
 
-详细文档入口：`docs/PLAN.md`（方案）→ `docs/ROADMAP.md`（步骤）→ `docs/s0/S0-PLAN.md`（当前门禁 + 调试工具计划）→ `docs/MILESTONES.md`（台账）→ `docs/SHADER-CONVENTIONS.md`（shader）→ `docs/IMGUI-GUIDE.md`（HUD）→ `docs/LINKS.md`（链接）。
+详细文档入口：`docs/PLAN.md`（方案）→ `docs/ROADMAP.md`（步骤）→ `docs/s0/S0-PLAN.md`（当前门禁 + 调试工具计划）→ `docs/MILESTONES.md`（台账）→ `docs/SHADER-CONVENTIONS.md`（shader）→ `docs/IMGUI-GUIDE.md`（HUD）→ `docs/DEV-PITFALLS.md`（构建/编译/运行踩坑汇总）→ `docs/LINKS.md`（链接）。
 **开工纪律**：每个阶段先定目标和「能亲眼看到的用例」，验收通过才进下一阶段，tag 在验收后打；本轮用例必须归位 `example/`（`--check` 退出 0）才放行。

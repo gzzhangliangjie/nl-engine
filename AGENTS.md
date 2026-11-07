@@ -73,11 +73,30 @@
 
 ---
 
+## 代码开发与双后端纪律（2026-11-07 固化）
+
+通用管线是 **NVRHI + Slang 单源**，DX12 与 Vulkan 是**对称双后端**，不是两个项目。任何渲染 / 管线 / shader / 资产改动，都必须按下面三条过：
+
+1. **双后端必须同时通过**：DX12 和 Vulkan 必须**同时验证通过**，缺一不可——只在一个后端过了不算完成。验收核心 = 一份 `.slang` 双目标（SPIR-V + DXIL）两后端都能加载并出正确画面。
+2. **双后端画面一致分档（禁止笼统写「一致」）**：两后端结果必须落到下列三档之一，验收时写明是哪一档、并附证据（截图 / `regression.py` 比对）：
+   - `bytes`：MD5 逐字节相同（最优）。
+   - `near`：像素差 ≤ 1/255 且差异像素 ≤ 2 个（可接受近似）。
+   - `FAIL`：超出 `near` 阈值（不可接受，必须修）。
+   不允许只写「两后端一致」而不给分档。
+3. **与官方效果对齐**：关键算法 / 视觉结果必须和参考实现对比核验（UE5 官方 = 工业终态满分答卷、bevy = 同代实证、Carrot = 节奏参照）：
+   - 几何 / 简化 / DAG 类，对照 UE `NaniteBuilder`、`SimplifyTriangles`、bevy `meshlet` 的产出口径（如 fallback 焊接 2.6% ≈ UE 默认 2%、朝向锚判定随折叠同步更新、按组重切保证父子簇不重叠）。
+   - 任何偏离官方口径的地方，必须**解释原因并留痕**（写进 `S*-PLAN.md` / `MILESTONES.md` 踩坑栏），不许静默偏离。
+
+> 双后端比对由 `python tools/regression.py`（全量历史用例 × 双后端比对基线）执行，提交 / tag 前必须全绿。完整口径见 `.workbuddy/memory/MEMORY.md`「架构」「S2/S3 约定」与 `docs/ROADMAP.md`。
+
+---
+
 ## 本项目其余硬约束（速查，完整见各文档）
 
 - **UE 源码只读不抄**：EULA 与项目 MIT 不兼容，一行 UE 代码都不许进 repo；参考结构与边界情况处理思路。
 - **构建链不依赖任何厂商图形 SDK**：`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `find_package(Vulkan)`。后端对称：D3D12 走 Windows SDK，Vulkan 头走 `NVRHI_FETCH_VULKAN_HEADERS`，Slang 独立获取。
 - **图形 API / NVRHI / ImGui 符号只允许在 `renderer/`**；`core/` / `viewer/` 零命中。
-- **一份 `.slang` 双目标（SPIR-V + DXIL）两后端加载成功** = 通用管线验收核心。
+- **双后端纪律（必须同时通过 / 画面一致分档 / 与官方对齐）**：见上方「代码开发与双后端纪律」节。
+- **构建 / 编译 / 运行期踩坑汇总**：见 `docs/DEV-PITFALLS.md`（NMake 必用、Vulkan 静态链接宏、139 段错误、SPIR-V 入口恒 `main`、NMake 时间戳陷阱、`SceneConstants` 160B 等）。
 - **里程碑必须有「交代」**：见上方「里程碑交付纪律」节（渲染版 = `example/` 基线、工具版 = 展示台用例 + 归档；tag 在验收后打、提交前 regression 全绿、四栏台账写实、约定写回 canonical 文档）。
 - **用户实测结论 > 任何网页 / 官方文档信息**。
