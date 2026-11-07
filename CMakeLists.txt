@@ -118,6 +118,7 @@ add_library(nl_core STATIC
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
+    core/src/anim/anim.cpp     # M-A1：动作系统（nl/anim）—— clip 采样，零图形 API
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -250,10 +251,15 @@ add_dependencies(viewer nl_shaders)
 add_executable(nanite-tools nanite-tools/main.cpp)
 target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
 
+# ---- M-A1：anim-tools —— 动作系统（A 类并行轨道）自测工具，只链 nl_core ----
+# 退出码约定：0=PASS / 1=断言失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
+add_executable(anim-tools anim-tools/main.cpp)
+target_link_libraries(anim-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -341,3 +347,12 @@ add_test(NAME s3-fallback-suzanne
 set_tests_properties(s3-fallback-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "fallback    : "
     DEPENDS s1-nmesh-suzanne)
+
+# ---- M-A 轨道（A 类并行：动作系统，工具版交代，不进渲染回归总闸） ----
+# M-A1：关键帧采样机械单测（lerp/slerp 锚点、clamp、Step、常量、wrap、validate 负向、确定性）
+add_test(NAME ma1-anim-curve-selftest COMMAND anim-tools selftest curve)
+set_tests_properties(ma1-anim-curve-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "anim curve selftest: PASS")
+# M-A1：负向——未知 selftest 用例显式拒绝（exit 2）
+add_test(NAME ma1-anim-unknown-case COMMAND anim-tools selftest bogus)
+set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
