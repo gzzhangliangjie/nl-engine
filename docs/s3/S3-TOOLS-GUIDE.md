@@ -200,3 +200,60 @@ fallback    : 104 tris 96 verts (from L6, maxErr 1.1375) -> assets/meshlets/Suza
 
 ctest 14→16（s3-fallback-selftest / s3-fallback-suzanne），双后端全绿；
 dag 六项校验与 check-orient 全链 inward=0 无回归。
+
+## M3.2 viewer `--mode dag-top`（tag `s3-done`）
+
+### 定位与三家对照
+
+M3.2 是 **S5 运行时组原子 cut 的离线预演**：`--mode dag-top` 渲染 DAG 顶层
+（最粗层 = 正确粗模），`--dag-group N` 任选一组下钻一层——从顶层挖掉该组
+生成的父簇（genFirst/genCount 区间）、换回该组在第二粗层的成员簇
+（clusterGroup 血缘），在 GPU 画面上验证父子衔接无洞。
+
+| 来源 | 位置 | 与 M3.2 的对应 |
+|---|---|---|
+| UE 5.8 | `Nanite/NaniteHierarchyTraversal.ush` + `NaniteDataDecode.ush:701-702`（节点 MinLODError/MaxParentLODError，NumChildren = 组粒度） | 粗→细遍历：误差不可感知→出屏该组簇，否则下钻。M3.2 = 遍历的**单步冻结版**（手动选组） |
+| bevy 0.15 | `meshlet/cull_bvh.wesl:43-48`（parent_error + lod_error_is_imperceptible）；`cull_shared.wesl:13`（屏幕空间公式，源自 zeux nanite.cpp#L115） | 判据是屏幕空间自动选层（`error/max(d,near)*proj22*0.5*viewport.w < 1.0`）——属 S5，M3.2 手动选组，公式已存档 |
+| Carrot | `draw_virtual_geometry.slang:105-106`：`render = selfError > threshold && refinedError <= threshold`（zeux clusterlod 的 refined 口径）；`:112` 组内所有簇同决策 | 组原子挖换与 Carrot 的 task shader 组判定同构，只是我们离线、逐组手动 |
+
+### 渲染路径
+
+- `Scene::setDagCut(device, topFile, childFile, group)`：读两份 .nmesh →
+  顶层掩码挖掉 `[genFirst, genFirst+genCount)` → 子层掩码取
+  `clusterGroup==group` 的成员簇 → 同一条 expandClusterData/uploadClusterData
+  路径上传。`group < 0` = 纯顶层（与 lod 模式同路径）。
+- 可下钻组数 = 第二粗层 `.lodN.nmesh` meta 的 dagGroups（backend init 探测）。
+- HUD 下钻滑条 `dag drill`（-1 = 纯顶层），与 lod 滑条同一条双向通道，
+  两套滑条不同时出现；标题栏同步 `dag top / gN`。
+- 负向全拒：非数字 / 越界 / 无分层资产均 exit 1，绝不静默回退。
+
+### M3.2 踩坑（两个，都值得记）
+
+1. **expandClusterData 索引基址**：`meshlet.vertexOffset` 是**文件内**偏移，
+   只在「全部簇按序全量展开」时恰好等于缓冲位置（M2.3 唯一路径，一直没炸）。
+   dag cut 掩码跳簇后两者分叉：被跳簇**之后**的每个 kept 簇索引全部错位
+   （实测 kept 簇整个消失、洞 1182px）。修为 `clusterBase = vertices.size()`
+   快照（本簇顶点入缓冲时的实际位置），全量路径逐位等价。
+2. **离线探针的顶点切片 stride**：dag_weld_check.py 曾按 `i*3`（12B）切片，
+   MeshVertex 实为 8 float（32B）——NN/bbox/位级重合探针全是垃圾数据，
+   一度误判「L6 相对 L5 轴交换」「父簇顶点只有 10/62 位级存在」。修为
+   `i*8` 后一切自洽：父簇顶点全部位级存在于子簇（简化保位置）。
+
+### 验收双证据
+
+1. **GPU coverage**：同机位 top/g0/g1/g2 截图的前景掩码对比，三组下钻
+   hole=0（g1/g2 混合集与纯顶层 PNG 逐字节一致——16→16 零折叠的父簇
+   与子簇等价；g0 有真简化 110→72，fill=6278px hole=1px AA 噪声）。
+2. **焊接边流形**（`tools/dag_weld_check.py --all`）：welded edge 按位级
+   位置对计数，Suzanne 开壳的 **84 条开放边（眼窝+嘴）逐层守恒**（L0
+   5946 边 = 5862×2x + 84×1x + 0×>2x）；判据 = mixed 集开边集合与
+   full top 完全一致（零新增开边）且零 >2x 重叠边 → 三组全 PASS。
+
+### 交代物
+
+- `example/s3-done/`：5 对基线 PNG（top/g0/g1/g2/HUD，DX12 vs Vulkan
+  非 HUD 四对逐字节一致）+ `run.bat`（gallery/weld/selftest）+ 画廊
+  `dag-drills.png`（真实 GPU 截图拼版）。
+- 展示台 s3.2 卡（5 pair + 3 负向 + selftest）；s2.0 exe 映射按快照规范
+  改 `build/showcase/s2-done/`（rebuild.py 补建）。
+- ctest 16/16 双后端；回归总闸全绿；kStage 升 S3.2。

@@ -684,3 +684,23 @@
 1. **triangleOffset 语义踩坑**：M1.1 的 `triangleOffset` 是**字节偏移**（`triOffset = out->triangles.size()`，每三角 3 字节），不是三角号——fallback 拼接按三角号 ×3 读窗口全部错位（selftest 当场抓住：local index ≥ vertexCount、边流形爆炸）。全仓其余使用点（simplify/scene/loadNMesh 校验）均为字节语义，只有新代码用错。已修 + meshlet.hpp 注释钉死「字节偏移，不是三角号」。
 2. **fallback-only 测试网格不合法**：合成 v3 测试用了 0 簇 + 三角主体，被 loadNMesh 既有校验（meshlets empty but triangles present）拒绝——该校验是对的，测试网格补了真实单簇记录。
 3. **设计取舍记录**：fallback 落点选 lod0 尾段而不是改写输入文件——展示台工具卡实跑 `-o build/...` 时不能碰入仓资产；v3 尾段按 magic 识别使「v1 主体 + 仅 fallback」也成为合法 v3。
+
+## M3.2 dag-top 组原子下钻（tag `s3-done`，2026-11-07）
+
+**动作**：三家运行时实读定稿（UE NaniteHierarchyTraversal 遍历单步冻结 / bevy cull_bvw parent_error / Carrot 双阈值）→ core/modes 加 dag-top → Scene::setDagCut（挖 gen 区间父簇、换组内子簇，与 lod 同一条上传路径）→ 双后端 setDagCut + 组数探测 → HUD 下钻滑条 → viewer --dag-group（负向全拒）→ kStage S3.2 → 双证据验收 → 交代物。
+
+**提交版本**：s3-done（本轮）
+
+**完成情况**
+- dag-top 三组下钻 GPU coverage hole=0；g1/g2 混合集与纯顶层 PNG 逐字节一致（16→16 零折叠父簇≡子簇）。
+- dag_weld_check.py --all PASS：mixed 集开边集合=full top 的 84 条模型开放边（逐层守恒），零新增开边零重叠。
+- HUD 下钻滑条 960×540 面板完整（底边 345）；DX12 vs Vulkan 四对非 HUD 基线逐字节一致。
+- ctest 16/16 双后端；回归总闸全绿；交代物：example/s3-done（5 对基线 + run.bat + dag-drills.png）+ 展示台 s3.2 卡 + S3-TOOLS-GUIDE M3.2 节；s2.0 exe 按快照规范改 build/showcase/s2-done/。
+
+**踩坑情况**
+1. **expandClusterData 索引基址**：文件 vertexOffset 只有在全量按序展开时才等于缓冲位置；掩码跳簇后被跳簇之后的 kept 簇索引全错位（kept 簇整个消失、洞 1182px）。修为 clusterBase=入缓冲位置快照，全量路径逐位等价。
+2. **离线探针 stride 坑**：dag_weld_check.py 顶点按 i*3（12B）切片，MeshVertex 实为 8 float（32B）——NN/bbox/位级探针全垃圾，一度误判「轴交换」「父簇顶点 10/62 位级存在」，浪费一轮排查。修为 i*8 后自洽：父簇顶点全部位级存在于子簇（简化保位置）。
+3. **流形判据口径**：Suzanne 开壳的 84 条 1x 边是眼窝+嘴的**开放边界**（L0 即存在、逐层守恒），不是洞；判据应为「mixed 开边集合==full top」而非「0 条 1x」。
+4. **exe 快照规范与 M2.3a 后置修复的冲突**：s2.0 卡映射改 s2-done tag 快照后回归 FAIL（2.8 万像素）——tag（f5bfc9a）是 M2.3a 翻转面根治**之前**的代码，而卡基线已在 fdb598c/32a10b0 重拍，tag 快照永远无法复现。回退为当前构建（与 m0.9 同款既定模式）；快照规则只在「tag 状态与基线状态一致」时可用，后续 viewer 卡收敛时机须选渲染代码已定稿的 tag。
+
+**下一步**：S4 分块/LOD 交换（或按 ROADMAP 顺延）；S5 运行时组原子 cut（M3.2 已预演，屏幕空间选层公式已存档）。

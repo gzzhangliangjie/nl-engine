@@ -87,6 +87,7 @@ struct Options {
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
     int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
+    int  dagGroup = -1;       // M3.2：--dag-group N，dag-top 模式初始下钻组（-1 = 纯顶层）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -110,6 +111,18 @@ Options parseArgs(int argc, char** argv) {
                 std::exit(1);
             }
             o.lod = static_cast<int>(n);
+        }
+        else if (a == "--dag-group" && i + 1 < argc) {
+            // M3.2：dag-top 模式初始下钻组。-1 = 纯顶层；其它负数/非数字直接拒
+            // （组数上限在 renderer 侧探测后校验，同样绝不静默落回 -1）。
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            const long n = std::strtol(v.c_str(), &end, 10);
+            if (!end || *end != '\0' || n < -1) {
+                std::cerr << "invalid --dag-group '" << v << "' (expected an integer >= -1)\n";
+                std::exit(1);
+            }
+            o.dagGroup = static_cast<int>(n);
         }
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
@@ -198,14 +211,14 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
-    check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster + lod)");
+    check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster + lod + dag-top)");
 
     const auto st = nl::renderer::status();
     std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n"
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S3.0") != nullptr, "S3.0 stage reported");
+    check(std::strstr(st.stage, "S3.2") != nullptr, "S3.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -244,7 +257,11 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // M2.3：lod=true 时也走 cluster 场景（同一份顶点布局），但资产是分层文件
 // <stem>.lodN.nmesh，--lod N 指定初始层、HUD 滑条切层；缺省着色 normal（几何不连续
 // 在逐面法线色上最刺眼，是「相邻层无裂缝」验收最敏感的口径）。
-int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
+// M3.2：dagTop=true 时同一 cluster 场景，但初始渲染链最粗层（DAG 顶层组产出的
+// 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
+// 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
+int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
+              bool dagTop = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -274,14 +291,45 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
     // N 越界都直接退出 1，不静默回退到最细层——否则「以为在看 L3」是假证据。
     int lodLevel = 0;
     int lodCount = 0;
-    if (lodMode) {
+    if (lodMode || dagTop) {
         lodCount = renderer->lodLevelCount();
         if (lodCount <= 0) {
-            nl::core::log::error("--mode lod: no layered assets for ", o.modelFile,
+            nl::core::log::error("--mode ", nl::core::modeName(o.mode),
+                                 ": no layered assets for ", o.modelFile,
                                  " (expected assets/meshlets/<stem>.lodN.nmesh; run "
                                  "nanite-tools lod <base>.nmesh -o assets/meshlets/<stem>)");
             return 1;
         }
+    }
+    // M3.2：dag-top 模式先把初始状态落到具体组。-1 = 纯顶层；>=0 需要至少两层，
+    // 且组号必须落在可下钻范围内（renderer 探测第二粗层 dagGroups），越界退出 1。
+    int dagGroup = -1;
+    int dagGroupCount = 0;
+    if (dagTop) {
+        dagGroupCount = renderer->dagGroupCount();
+        if (o.dagGroup >= 0) {
+            if (lodCount < 2) {
+                nl::core::log::error("--dag-group ", o.dagGroup, " needs >= 2 layers, ",
+                                     o.modelFile, " has ", lodCount);
+                return 1;
+            }
+            if (o.dagGroup >= dagGroupCount) {
+                nl::core::log::error("--dag-group ", o.dagGroup, " out of range 0..",
+                                     dagGroupCount - 1);
+                return 1;
+            }
+            if (!renderer->setDagCut(o.dagGroup)) {
+                nl::core::log::error("dag cut failed: ", renderer->lastError());
+                return 1;
+            }
+            dagGroup = o.dagGroup;
+        } else if (!renderer->setLodLevel(lodCount - 1)) {
+            // 纯顶层：直接渲染最粗层（与 lod 模式同一条 uploadClusterMesh 路径）。
+            nl::core::log::error("top level load failed: ", renderer->lastError());
+            return 1;
+        }
+        lodLevel = lodCount - 1;
+    } else if (lodMode) {
         if (o.lod >= lodCount) {
             nl::core::log::error("--lod ", o.lod, " out of range: ", o.modelFile,
                                  " has ", lodCount, " layers (0..", lodCount - 1, ")");
@@ -303,6 +351,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
     int shading = cluster ? 4 : o.shading;
     if (lodMode) shading = o.shadingSet ? o.shading : 1;
+    // M3.2：dag-top 同 lod 模式缺省 normal（父子衔接的几何不连续最刺眼），
+    // 显式 --shading 则听用户的。
+    if (dagTop) shading = o.shadingSet ? o.shading : 1;
     bool wireframe = o.wireframe;
 
     const auto st = nl::renderer::status();
@@ -313,10 +364,19 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
     const std::string lodLine = lodMode
         ? " | lod layers: " + std::to_string(lodCount) + " (level " + std::to_string(lodLevel) + ")"
         : std::string();
+    // M3.2：dag-top 日志自证顶层/下钻状态（不写进 HUD 的话至少日志有据可查）。
+    std::string dagLine;
+    if (dagTop) {
+        dagLine = " | dag layers: " + std::to_string(lodCount) + " (top "
+                + std::to_string(lodCount - 1) + ")";
+        dagLine += dagGroup >= 0
+            ? " | drill g" + std::to_string(dagGroup) + " (" + std::to_string(dagGroupCount) + " groups)"
+            : " | no drill (" + std::to_string(dagGroupCount) + " groups available)";
+    }
     nl::core::log::info("mode: ", nl::core::modeName(o.mode),
                         " | HUD: ", o.hudEnabled ? "on" : "off",
                         " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
-                        lodLine,
+                        lodLine, dagLine,
                         " | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG");
 
     if (o.screenshot) {
@@ -445,10 +505,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
             hud.shading = shading;
             hud.wireframe = wireframe;
             // M2.3：lod 模式把当前层喂给滑条；其他模式 lodCount=0，HUD 不画滑条。
-            hud.lodLevel = lodLevel;
-            hud.lodCount = lodCount;
-            hud.lodTriangles = static_cast<int>(info.triangleCount);
-            hud.lodMaxError = info.lodMaxError;
+            // M3.2：dag-top 模式同理反着用——不喂 lod 滑条（viewer 不消费它），
+            // 喂 dag 下钻滑条；两套滑条不同时出现，HUD 布局互不干扰。
+            if (dagTop) {
+                hud.lodCount = 0;
+                hud.lodTriangles = static_cast<int>(info.triangleCount);
+                hud.dagGroup = dagGroup;
+                hud.dagGroupCount = dagGroupCount;
+                hud.dagGroupError = info.dagGroupError;
+            } else {
+                hud.lodLevel = lodLevel;
+                hud.lodCount = lodCount;
+                hud.lodTriangles = static_cast<int>(info.triangleCount);
+                hud.lodMaxError = info.lodMaxError;
+            }
             hud.deterministic = o.screenshot;
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -524,6 +594,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
                     }
                 }
             }
+            // M3.2：dag 下钻滑条同一套双向约定；失败保持原画面并判失败。
+            if (dagTop && dagGroupCount > 0) {
+                const int want = std::clamp(hud.dagGroup, -1, dagGroupCount - 1);
+                if (want != dagGroup) {
+                    if (renderer->setDagCut(want)) {
+                        dagGroup = want;
+                    } else {
+                        nl::core::log::error("dag cut switch failed: ", renderer->lastError());
+                        failed = true;
+                    }
+                }
+            }
             hudWantsMouse = hud.wantCaptureMouse;
         }
         if (capturePath) {
@@ -550,6 +632,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false) {
                   << " | " << e.width << "x" << e.height;
             // M2.3：lod 模式在标题栏也标层号，交互时不必盯着 HUD 滑条。
             if (lodMode) title << " | lod " << lodLevel << "/" << lodCount;
+            // M3.2：dag-top 标题栏标下钻组（-1 = 纯顶层）。
+            if (dagTop) title << " | dag " << (dagGroup >= 0 ? "g" + std::to_string(dagGroup) : "top");
             window.setTitle(title.str());
         }
 
@@ -581,6 +665,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/true);
     case nl::core::ViewMode::Lod:       // M2.3：同一个 cluster 场景，资产换成分层 .nmesh
         return runNormal(o, /*cluster=*/true, /*lodMode=*/true);
+    case nl::core::ViewMode::DagTop:    // M3.2：DAG 顶层 + 任选组下钻一层
+        return runNormal(o, /*cluster=*/true, /*lodMode=*/false, /*dagTop=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -610,6 +696,9 @@ void printUsage() {
               << "                                     .nmesh for cluster/lod mode (default per mode)\n"
               << "  viewer.exe --lod N                 lod mode: start at layer N (default 0); the\n"
               << "                                     HUD slider switches layers at runtime\n"
+              << "  viewer.exe --dag-group N           dag-top mode: drill into group N of the\n"
+              << "                                     second-coarsest layer (-1 = top only, default);\n"
+              << "                                     the HUD slider switches groups at runtime\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
@@ -640,8 +729,9 @@ int main(int argc, char** argv) {
     }
     // M1.3：cluster 模式的缺省资产是 assets/meshlets/Suzanne.nmesh（用户没给 --model 时）
     // M2.3：lod 模式同样缺省 Suzanne（分层文件 Suzanne.lodN.nmesh 随之探测）。
-    if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod) &&
-        !o.modelSet) {
+    // M3.2：dag-top 同缺省（顶层渲染 + 下钻都用同一套分层资产）。
+    if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
+         o.mode == nl::core::ViewMode::DagTop) && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
     return runMode(o.mode, o);

@@ -1909,6 +1909,246 @@
      "command": "nanite-tools selftest bogus"
     }
    ]
+  },
+  {
+   "id": "s3.2",
+   "label": "M3.2",
+   "name": "viewer --mode dag-top + 组原子下钻（S3 收官）",
+   "tag": "s3-done",
+   "date": "2026-11-07",
+   "summary": "M3.2：--mode dag-top 渲染 DAG 顶层（最粗层=正确粗模），--dag-group N 组原子下钻：从顶层挖掉该组生成的父簇（genFirst/genCount 区间）、换回该组在第二粗层的成员簇（clusterGroup 血缘），验证父子衔接无洞——S5 运行时组原子 cut 的离线预演。三家参考：UE NaniteHierarchyTraversal.ush（粗→细遍历的单步冻结）、bevy cull_bvh.wesl（parent_error 判据，屏幕空间公式留给 S5）、Carrot draw_virtual_geometry.slang:105（selfError>threshold && refinedError<=threshold 双阈值，组内同决策）。踩坑两个：expandClusterData 索引基址用文件 vertexOffset，掩码跳簇后 kept 簇整个消失（改 clusterBase=入缓冲位置）；dag_weld_check.py 顶点切片 stride 3 应为 8（探针垃圾数据误导排查）。验收双证据：GPU coverage 三组下钻 hole=0（g1/g2 与纯顶层逐字节一致=16->16 无折叠父簇等价子簇）；焊接边流形 mixed 集与 full top 的 84 条开边（Suzanne 眼窝+嘴开放边界，逐层守恒）完全一致、零新增零重叠。kStage 升 S3.2。",
+   "acceptance": [
+    "三组下钻肉眼无洞：top/g0/g1/g2 同机位画廊（example/s3-done/dag-drills.png），run.bat all exit 0",
+    "机械判据一：GPU coverage 掩码 top前景-drill前景 = 0 px（g1/g2 混合集与纯顶层 PNG 逐字节一致）",
+    "机械判据二：tools/dag_weld_check.py --all PASS（mixed 集开边集合=full top，零新增开边、零 >2x 重叠边）",
+    "负向全拒：--dag-group 非数字/越界/资产无分层均 exit 1；HUD 下钻滑条 960x540 面板完整（底边 345<=510）",
+    "双后端 pair 基线：top/g0/g1/g2 逐字节一致（DX12 vs Vulkan MD5 相同）；ctest 16/16 + 回归总闸全绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "dag-top",
+     "name": "dag-top 纯顶层：L6 104 tri 正确粗模",
+     "kind": "pair",
+     "note": "不下钻直接渲染最粗层（DAG 顶层组产出的父簇集合）。与 lod 模式同一条 uploadClusterMesh 路径。",
+     "baselines": {
+      "dx12": "example/s3-done/dag-top-dx12.png",
+      "vulkan": "example/s3-done/dag-top-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode dag-top --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s3-done/run.bat gallery"
+    },
+    {
+     "id": "dag-drill-g0",
+     "name": "下钻 g0：挖 1 父簇换 5 子簇（110->72 真折叠）",
+     "kind": "pair",
+     "note": "g0={L5 c0..c4} 生成 L6 c0（110->72 tri 有真简化）。下钻后几何更细：fill=6278px，hole=1px（与纯 L5 对 top 同级的 AA 噪声）。",
+     "baselines": {
+      "dx12": "example/s3-done/dag-drill-g0-dx12.png",
+      "vulkan": "example/s3-done/dag-drill-g0-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "0",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group 0 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s3-done/run.bat gallery"
+    },
+    {
+     "id": "dag-drill-g1",
+     "name": "下钻 g1：16->16 无折叠父簇等价子簇",
+     "kind": "pair",
+     "note": "g1={L5 c5} 生成 L6 c1，简化零折叠 => 父簇与子簇顶点位级相同，混合集渲染与纯顶层逐字节一致。",
+     "baselines": {
+      "dx12": "example/s3-done/dag-drill-g1-dx12.png",
+      "vulkan": "example/s3-done/dag-drill-g1-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "1",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group 1 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s3-done/run.bat gallery"
+    },
+    {
+     "id": "dag-drill-g2",
+     "name": "下钻 g2：16->16 无折叠",
+     "kind": "pair",
+     "note": "g2={L5 c6} 生成 L6 c2，同 g1。",
+     "baselines": {
+      "dx12": "example/s3-done/dag-drill-g2-dx12.png",
+      "vulkan": "example/s3-done/dag-drill-g2-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "2",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group 2 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s3-done/run.bat gallery"
+    },
+    {
+     "id": "dag-hud",
+     "name": "HUD 960x540：下钻滑条 dag drill -1..2",
+     "kind": "pair",
+     "note": "HUD 字体光栅两后端已知必然差异（near 档）。滑条写回 viewer 后 setDagCut，HUD 不直接碰渲染资源。",
+     "baselines": {
+      "dx12": "example/s3-done/dag-hud-dx12.png",
+      "vulkan": "example/s3-done/dag-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "1",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group 1 --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s3-done/run.bat gallery"
+    },
+    {
+     "id": "negative-dag-text",
+     "name": "负向：--dag-group 非数字（exit 1，无窗口）",
+     "kind": "tool",
+     "note": "parseArgs 直接拒绝，绝不静默落回 -1。",
+     "expectExit": 1,
+     "expectLog": "invalid --dag-group",
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "abc"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group abc"
+    },
+    {
+     "id": "negative-dag-range",
+     "name": "负向：--dag-group 99 越界（exit 1）",
+     "kind": "tool",
+     "note": "renderer 探测 Suzanne 可下钻 3 组（0..2），越界显式报错。",
+     "expectExit": 1,
+     "expectLog": "out of range",
+     "args": [
+      "--mode",
+      "dag-top",
+      "--dag-group",
+      "99",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{root}/build/showcase/runs/s3-done-negative.png",
+      "--frames",
+      "2"
+     ],
+     "command": "viewer.exe --mode dag-top --dag-group 99 --model Suzanne.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative.png --frames 2"
+    },
+    {
+     "id": "negative-no-assets",
+     "name": "负向：资产没有分层文件（exit 1）",
+     "kind": "tool",
+     "note": "dag-top 需要分层资产（可下钻组数从第二粗层 dagGroups 读），没有则显式报错。",
+     "expectExit": 1,
+     "expectLog": "no layered assets",
+     "args": [
+      "--mode",
+      "dag-top",
+      "--model",
+      "IcoSphereDense.nmesh",
+      "--screenshot",
+      "{root}/build/showcase/runs/s3-done-negative2.png",
+      "--frames",
+      "2"
+     ],
+     "command": "viewer.exe --mode dag-top --model IcoSphereDense.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative2.png --frames 2"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（15/15，阶段校验 S3.2）",
+     "kind": "selftest",
+     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 15。",
+     "expectLog": "SELFTEST PASS (15/15)",
+     "script": "example/s3-done/run.bat selftest",
+     "args": [
+      "--selftest"
+     ]
+    }
+   ]
   }
  ]
 }

@@ -18,7 +18,7 @@
 - 双后端画面一致分档：`bytes`（MD5）/ `near`（≤1/255 且 ≤2 px）/ FAIL，别笼统写「一致」。
 
 ## Agent 协作纪律 · 决策前置铁律（2026-11-07 固化；权威落点仓库根 `AGENTS.md`）
-- **每轮新任务开门四件事，缺一不可**：①读 Carrot 代码 `E:\UE_STUDY_2026\Carrot\engine\engine\render\` + `engine\resources\shaders\`；②读 bevy 代码 `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\` + `crates\bevy_solari\src\realtime\`；③读 UE5 官方 `E:\UnrealEngine\5.8.4\Engine\Source\Runtime\Renderer\Private\`（只读对照表点名文件，不漫游）；④读开发历史 `docs/MILESTONES.md` + `docs/carrot-history.md` + `.workbuddy/memory/MEMORY.md` + 当日日志 + 当前 `docs/s*/S*-PLAN.md`。当前步骤对应哪几份文件查本文件「S* 约定」节与 ROADMAP「步骤→本地代码对照总表」。
+- **每轮新任务开门四件事，缺一不可**：①读 Carrot 代码 `E:\UE_STUDY_2026\Carrot\engine\engine\render\` + `engine\resources\shaders\`；②读 bevy 代码 `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\` + `crates\bevy_solari\src\realtime\`；③读 UE5 官方 `E:\UnrealEngine\5.8.4\Engine\Source\Runtime\Renderer\Private\`（只读对照表点名文件，不漫游）；④读开发历史 `docs/MILESTONES.md` + `docs/carrot-history.md` + `docs/bevy-history.md` + `.workbuddy/memory/MEMORY.md` + 当日日志 + 当前 `docs/s*/S*-PLAN.md`。当前步骤对应哪几份文件查本文件「S* 约定」节与 ROADMAP「步骤→本地代码对照总表」。
 - **不许擅做决定**：在已定计划/S-PLAN 验收判据内、不改架构/范围/约定的机械执行可以自己做；凡触碰架构/范围/选型/约定、与历史决策冲突、或三处口径不一致需二选一，**必须先摆三处证据+历史约定，再请用户拍板**，不得直接落地。用户架构质疑先自查自相矛盾、认了一次改到位，不拿依赖清单/官方文档辩护、不留「也可以……」尾巴。
 - 若某轮已没遵守：回复里立刻承认、补读三处、重做决断，并同步清理相关文档旧表述。
 
@@ -40,7 +40,9 @@
 - Suzanne 新链 7 层：3936→1970→1002→500→252→142→104；dag 校验 56 groups/57 edges/87 父簇。Suzanne.lod0..6.nmesh（v3）入仓。
 - 工具卡 exe 恒指当前构建，重编后两份 build/{dx12,vulkan}/nanite-tools.exe 都要用本后端重编（别 cp 盖，NMake 时间戳陷阱）。
 - **M3.1 fallback（tag s3-fallback 提交 d7b87e1）**：.nmesh **文件 version 3**='NFLB' 自描述尾段（按 magic 识别，v1/v2 兼容）；落点 <prefix>.lod0.nmesh 尾段（lod 写回，输入文件不动）；buildFallbackMesh=weldPositions 口径顶层拼接（UE BuildFallbackMesh 对照，2.6%≈默认 2%，不做第二次独立简化）；selftest fallback 灵魂断言=三角守恒+weld 收敛+边流形每边≤2。**Meshlet::triangleOffset 是字节偏移不是三角号**（M1.1 语义，读三角窗口一律 `base=triangleOffset+t*3`，meshlet.hpp 已钉死注释）。ctest 16/16、回归 132/132。
-- 下一步：**M3.2 viewer --mode dag-top**（顶层渲染=正确粗模 + 任选组下钻一层验证父子衔接无洞）→ tag s3-done → S5 运行时 cut。
+- **M3.2 收官（2026-11-08，tag s3-done）**：`--mode dag-top` + `--dag-group N` 组原子下钻（挖 genFirst/genCount 父簇、换 clusterGroup 子簇，与 lod 同一条上传路径）；HUD 下钻滑条（-1=top）；kStage=S3.2；ctest 16/16、回归 **150/150 ALL GREEN**、server --check OK。验收双证据：GPU coverage 三组下钻 hole=0（g1/g2 与纯顶层逐字节一致=16→16 零折叠父簇≡子簇）+ dag_weld_check.py 焊接边流形（mixed 开边集合==full top 的 84 条**模型开放边**——Suzanne 眼窝+嘴开壳边界 L0 即有逐层守恒，不是洞；判据=「mixed 开边集合==full top」非「0 条 1x」）。
+- **M3.2 固化约定**：①expandClusterData 索引基址必须用 clusterBase=vertices.size() 快照（文件 vertexOffset 只在全量按序展开时恰好等于缓冲位置，掩码跳簇后 kept 簇全错位消失）；②离线探针的顶点切片 stride=8 float（32B MeshVertex），探针工具要有自校验（stride-3 垃圾数据曾误导整轮排查）；③**每次 kStage bump 必须重拍 m0.9 gate-hud 与 s2.0 lod-hud 两对基线**（HUD 首行含 stage 文本）；④exe 快照规范只在「tag 状态==基线状态」时可用（s2-done tag 在 M2.3a 修复前，tag 快照无法复现其后重拍的基线，s2.0/m0.9 viewer 卡恒指当前构建）。
+- 下一步：按 ROADMAP 顺延（S4 性能基准 / S5 运行时组原子 cut——bevy/zeux 屏幕空间选层公式已存档 cull_shared.wesl:13）。
 
 ## S2 离线管线约定（M2.0 起）
 - METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。
@@ -80,3 +82,10 @@
 - Slang 示例存 `thirdparty/slang-reference/`；NVRHI 完整示例存 `thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`；Falcor = Slang 生产级参考。
 - Carrot：meshlet+meshoptimizer 是 2023-11-25 同一提交 `4c100761`（无截图 MD5 回归）；其 vendor+切簇塞一个提交的教训 → 我们拆版本铺路。
 - S1 卡住翻：bevy `bevy_pbr/src/meshlet/from_mesh.rs`（本机 `E:\UE_STUDY_2026\bevy\`）、meshoptimizer `src/meshlet.cpp`、`docs/blogs/jms55-bevy-meshlet.md`。
+
+## P9 真实资产落地验收（2026-11-08 用户拍板定稿，计划已入 ROADMAP）
+- **阶段定位**：主线 S0~S14 + P8 引擎化之后的**收尾验收关，也是项目立身之本**。前 8 阶段用测试模型，P9 换用户提供的真实资产（含超大场景）做全链路真验。**大场景加载是项目意义所在，不是可选项**——S4 百万面剔除/S5 DAG LOD/S6 Hi-Z 从一开始就为大场景服务。
+- **四里程碑**：V1 接入（离线管线+分层画廊无黑斑无裂缝无洞，M2.3a 口径）→ V2 超大场景全链路（**首版即须跑通，稳定 60fps，不以流式为前提**）→ V3 多物体真实场景（承接 P8 E1，用户明确保留）→ **V4 完整流式落地**（`.nmesh` 分页 + renderer streaming 接口由「全常驻」替换为「分页 residency」，超显存超大场景按页加载/卸载、帧平稳无爆闪）。**流式非可选、非推远，是 P9 必做收尾。**
+- **提前预留流式接口（用户拍板）**：`.nmesh` 与离线管线设计须**分页友好**（cluster 自包含、顶点可分页、支持按簇/页独立加载，不为全局共享顶点池焊死——`kb/index.html:475` 后期返工点现在避开）；renderer 预留 streaming 抽象接口，V4 替换实现。
+- 资产预处理由离线管线 cleanup/weld/法线继承消化（沿用 S2 `rebuildMeshlets` 口径）；资产来源用户给。
+- 验收复用 `example/cases.json` + `tools/regression.py` 总闸。`.nmesh` 具体格式变更留待 V1 实现时按铁律请用户拍板。

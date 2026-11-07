@@ -85,13 +85,19 @@ struct HudFrame {
     int  colorIndex        = 0;
     bool resetCamera       = false;   // HUD 按钮置 true，viewer 消费后清零
     bool wantCaptureMouse  = false;   // HUD 输出：鼠标在面板上，viewer 别拖相机
-    // ---- M2.3：LOD 层切换（仅 lod 模式；lodCount<=1 时 HUD 不画滑条）----
+    // M2.3：LOD 层切换（仅 lod 模式；lodCount<=1 时 HUD 不画滑条）----
     // 与 cull/color 同一条双向通道：viewer 每帧填当前层，滑条写回后由 viewer
     // 检测变化并调 Renderer::setLodLevel()——HUD 不直接碰渲染资源。
     int   lodLevel         = 0;       // 当前层号（双向）
     int   lodCount         = 0;       // 可用层数（0/1 = 没有可切的分层资产）
     int   lodTriangles     = 0;       // 当前层三角形数（悬停证据：切层确实换了资产）
     float lodMaxError      = 0.0f;    // 当前层 parent error（世界空间，单调不减）
+    // ---- M3.2：DAG 组下钻（仅 dag-top 模式；dagGroupCount<=0 时 HUD 不画滑条）----
+    // 与 lod 滑条同一条双向通道：viewer 检测变化后调 Renderer::setDagCut()。
+    // -1 = 纯顶层（不下钻）；0..N-1 = 下钻该组（挖掉其父簇、换回组内子簇）。
+    int   dagGroup         = -1;      // 当前下钻组（双向；-1 = 无）
+    int   dagGroupCount    = 0;       // 可下钻组数（子层 dagGroups.size()）
+    float dagGroupError    = 0.0f;    // 当前下钻组的组误差（UE:1593 组统一携带）
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -110,6 +116,10 @@ struct DeviceInfo {
     int   lodLevelCount = 0;
     int   lodLevel = 0;
     float lodMaxError = 0.0f;
+    // M3.2：dag-top 状态。dagGroupCount = 可下钻组数（链第二粗层的 dagGroups）。
+    int   dagGroupCount = 0;
+    int   dagGroup = -1;              // -1 = 纯顶层
+    float dagGroupError = 0.0f;
 };
 
 class Renderer {
@@ -154,6 +164,14 @@ public:
     bool setLodLevel(int level);
     int  lodLevel() const;      // 当前层；无分层资产时 0
     int  lodLevelCount() const; // 探测到的层数；0 = 无分层资产
+
+    // M3.2：dag-top 组原子下钻（S5 运行时 cut 的离线预演）。group = 链第二粗层的
+    // 组号：把顶层（最粗层）中该组生成的父簇挖掉、换回组内子簇，渲染混合集合。
+    // group < 0 = 回到纯顶层。组号越界 / 无血缘返回 false 且保持原画面。
+    // 父子衔接必须无洞无重叠——机制保证是 M2.2 的组间边界锁点（粗细两版
+    // 边界顶点逐位一致）；验收 = dag-top 模式截图肉眼核对。
+    bool setDagCut(int group);
+    int  dagGroupCount() const; // 可下钻组数；0 = 无 DAG 血缘或层数不足
 
 private:
     Renderer();

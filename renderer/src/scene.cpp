@@ -286,6 +286,43 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// M2.3/M3.2 共用：把一份 .nmesh 展开成 ClusterVertex/索引。include 非空时只
+// 展开掩码为 1 的簇（dag cut 用）；簇色按**本层内**的簇号烘（两后端同一 CPU
+// hash，逐字节一致）。三角形展开用 triangleOffset+t*3 —— 它是字节偏移不是
+// 三角号（M3.1 踩坑，meshlet.hpp 已钉死注释）。
+//
+// M3.2 踩坑：索引基址不能用 meshlet.vertexOffset——那是**文件内**偏移，只在
+// 「全部簇按序全量展开」时恰好等于缓冲位置（M2.3 的唯一路径，所以一直没炸）。
+// dag cut 的掩码跳簇后两者分叉：被跳簇之后的每个簇索引全部错位（M3.2 实测
+// kept 簇整个消失）。基址必须取本簇顶点**入缓冲时**的实际位置。
+void expandClusterData(const nl::core::NMeshData& nm, const std::vector<char>* include,
+                       std::vector<ClusterVertex>& vertices,
+                       std::vector<std::uint32_t>& indices) {
+    for (std::size_t m = 0; m < nm.meshlets.size(); ++m) {
+        if (include && !(*include)[m]) continue;
+        const auto& meshlet = nm.meshlets[m];
+        const std::uint32_t clusterBase = static_cast<std::uint32_t>(vertices.size());
+        float color[3];
+        clusterColor(static_cast<std::uint32_t>(m), color);
+        for (std::uint32_t i = 0; i < meshlet.vertexCount; ++i) {
+            const auto& mv = nm.vertices[meshlet.vertexOffset + i];
+            ClusterVertex cv;
+            cv.v = { mv.pos[0], mv.pos[1], mv.pos[2],
+                     mv.normal[0], mv.normal[1], mv.normal[2],
+                     mv.uv[0], mv.uv[1] };
+            cv.color[0] = color[0]; cv.color[1] = color[1]; cv.color[2] = color[2];
+            vertices.push_back(cv);
+        }
+        const std::uint32_t base = meshlet.triangleOffset;
+        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
+            for (int k = 0; k < 3; ++k) {
+                indices.push_back(clusterBase +
+                                  nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            }
+        }
+    }
+}
+
 // M2.3：读一份 .nmesh（原位层或分层资产）→ 展开成顶点/索引 → 新建 VB/IB 并上传，
 // 最后才替换句柄。切层和首次加载走同一条路径，保证「L0 直读」与「滑条切到 L0」
 // 的画面完全一致；失败时旧层的 buffer / 计数原封不动。
@@ -303,36 +340,116 @@ bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
         outError = std::string(nmeshFile) + " has no meshlets"; return false;
     }
 
-    // ---- 2. 展开成渲染数据 ----
-    // 顶点：每个条目属于恰好一个簇窗口（.nmesh 的窗口复制保证），烘上该簇的颜色。
-    // 索引：簇内局部索引 + vertexOffset 展开成全局索引，簇序遍历 → 单次 drawIndexed。
+    // ---- 2. 展开成渲染数据（全簇）----
     std::vector<ClusterVertex> vertices;
     vertices.reserve(nm.vertices.size());
     std::vector<std::uint32_t> indices;
     indices.reserve(nm.triangles.size());
-    for (std::size_t m = 0; m < nm.meshlets.size(); ++m) {
-        const auto& meshlet = nm.meshlets[m];
-        float color[3];
-        clusterColor(static_cast<std::uint32_t>(m), color);
-        for (std::uint32_t i = 0; i < meshlet.vertexCount; ++i) {
-            const auto& mv = nm.vertices[meshlet.vertexOffset + i];
-            ClusterVertex cv;
-            cv.v = { mv.pos[0], mv.pos[1], mv.pos[2],
-                     mv.normal[0], mv.normal[1], mv.normal[2],
-                     mv.uv[0], mv.uv[1] };
-            cv.color[0] = color[0]; cv.color[1] = color[1]; cv.color[2] = color[2];
-            vertices.push_back(cv);
+    expandClusterData(nm, nullptr, vertices, indices);
+
+    // ---- 3. 新建 VB/IB 上传并替换句柄 ----
+    if (!uploadClusterData(device, vertices, indices, nmeshFile,
+                           nm.lodMeta.present ? static_cast<int>(nm.lodMeta.level) : 0,
+                           nm.lodMeta.present ? nm.lodMeta.maxError : 0.0f, outError)) {
+        return false;
+    }
+    dagGroup_ = -1;          // 纯层加载：无下钻状态
+    dagGroupError_ = 0.0f;
+    nl::core::log::debug("cluster mesh uploaded: ", nmeshFile,
+                         " vertices=", vertices.size(),
+                         " triangles=", triangleCount_,
+                         " meshlets=", nm.meshlets.size(),
+                         " lodLevel=", lodLevel_,
+                         " maxError=", lodMaxError_);
+    return true;
+}
+
+// M3.2：dag-top 的组原子下钻。详见 scene.hpp 注释。
+bool Scene::setDagCut(nvrhi::IDevice* device, const char* topFile, const char* childFile,
+                      int drillGroup, std::string& outError) {
+    const auto load = [&outError](const char* file, nl::core::NMeshData& out) -> bool {
+        const std::string path = std::string(NL_MESHLET_DIR "/") + file;
+        std::string err;
+        if (!nl::core::loadNMesh(path.c_str(), out, err)) {
+            outError = std::string(file) + ": " + err;
+            return false;
         }
-        const std::uint32_t base = meshlet.triangleOffset;
-        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
-            for (int k = 0; k < 3; ++k) {
-                indices.push_back(meshlet.vertexOffset +
-                                  nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
-            }
+        if (out.meshlets.empty() || out.triangles.empty()) {
+            outError = std::string(file) + " has no meshlets";
+            return false;
         }
+        return true;
+    };
+    nl::core::NMeshData top, child;
+    if (!load(topFile, top) || !load(childFile, child)) return false;
+
+    // ---- 校验 DAG 血缘：没有血缘 / 组号越界 / gen 区间越界一律显式失败 ----
+    if (!child.lodMeta.dagPresent || child.lodMeta.dagGroups.empty()) {
+        outError = std::string(childFile) + " has no DAG lineage (meta version 2)";
+        return false;
+    }
+    if (drillGroup < 0 ||
+        static_cast<std::size_t>(drillGroup) >= child.lodMeta.dagGroups.size()) {
+        outError = "dag drill group " + std::to_string(drillGroup) + " out of range 0.." +
+                   std::to_string(child.lodMeta.dagGroups.size() - 1) + " (" + childFile + ")";
+        return false;
+    }
+    const auto& group = child.lodMeta.dagGroups[static_cast<std::size_t>(drillGroup)];
+    if (group.genCount == 0) {
+        outError = "dag drill group " + std::to_string(drillGroup) + " is terminal (genCount=0)";
+        return false;
+    }
+    if (group.genFirst + group.genCount > top.meshlets.size()) {
+        outError = "dag drill group " + std::to_string(drillGroup) + " gen range [" +
+                   std::to_string(group.genFirst) + ", " +
+                   std::to_string(group.genFirst + group.genCount) + ") exceeds " +
+                   topFile + " (" + std::to_string(top.meshlets.size()) + " clusters)";
+        return false;
+    }
+    if (child.lodMeta.clusterGroup.size() != child.meshlets.size()) {
+        outError = std::string(childFile) + " clusterGroup table size mismatch";
+        return false;
     }
 
-    // ---- 3. 新建 VB/IB（老句柄此刻还在用；替换后由 NVRHI 引用计数延迟释放）----
+    // ---- 顶层：挖掉该组生成的父簇；子层：只取该组成员簇 ----
+    std::vector<char> topInclude(top.meshlets.size(), 1);
+    for (std::uint32_t i = 0; i < group.genCount; ++i)
+        topInclude[group.genFirst + i] = 0;
+    std::vector<char> childInclude(child.meshlets.size(), 0);
+    for (std::size_t m = 0; m < child.meshlets.size(); ++m)
+        if (child.lodMeta.clusterGroup[m] == static_cast<std::uint32_t>(drillGroup))
+            childInclude[m] = 1;
+
+    std::vector<ClusterVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    expandClusterData(top, &topInclude, vertices, indices);
+    expandClusterData(child, &childInclude, vertices, indices);
+    if (indices.empty()) {
+        outError = "dag cut produced an empty mesh"; return false;
+    }
+
+    // 顶层元数据照旧上报（HUD 的 lod N/M 与 maxErr 描述的是被 cut 的顶层）。
+    const int topLevel = top.lodMeta.present ? static_cast<int>(top.lodMeta.level) : 0;
+    const float topError = top.lodMeta.present ? top.lodMeta.maxError : 0.0f;
+    if (!uploadClusterData(device, vertices, indices, topFile, topLevel, topError, outError)) {
+        return false;
+    }
+    dagGroup_ = drillGroup;
+    dagGroupError_ = group.error;
+    nl::core::log::info("dag cut: ", topFile, " minus parents [", group.genFirst, ", ",
+                        group.genFirst + group.genCount, ") <- ", childFile,
+                        " group ", drillGroup,
+                        " (error=", group.error, ") | triangles=", triangleCount_);
+    return true;
+}
+
+// M2.3/M3.2 共用：建新 VB/IB 上传并替换句柄与计数。老句柄此刻还在用；替换后
+// 由 NVRHI 引用计数延迟释放。失败时旧 buffer / 计数原封不动（先成功后替换）。
+bool Scene::uploadClusterData(nvrhi::IDevice* device,
+                              const std::vector<ClusterVertex>& vertices,
+                              const std::vector<std::uint32_t>& indices,
+                              const char* modelName, int lodLevel, float maxError,
+                              std::string& outError) {
     nvrhi::BufferDesc vbDesc;
     vbDesc.byteSize = vertices.size() * sizeof(ClusterVertex);
     vbDesc.isVertexBuffer = true;
@@ -362,15 +479,9 @@ bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
     indexBuffer_ = ib;
     indexCount_ = static_cast<std::uint32_t>(indices.size());
     triangleCount_ = indexCount_ / 3;
-    modelName_ = nmeshFile;
-    lodLevel_ = nm.lodMeta.present ? static_cast<int>(nm.lodMeta.level) : 0;
-    lodMaxError_ = nm.lodMeta.present ? nm.lodMeta.maxError : 0.0f;
-    nl::core::log::debug("cluster mesh uploaded: ", nmeshFile,
-                         " vertices=", vertices.size(),
-                         " triangles=", triangleCount_,
-                         " meshlets=", nm.meshlets.size(),
-                         " lodLevel=", lodLevel_,
-                         " maxError=", lodMaxError_);
+    modelName_ = modelName;
+    lodLevel_ = lodLevel;
+    lodMaxError_ = maxError;
     return true;
 }
 

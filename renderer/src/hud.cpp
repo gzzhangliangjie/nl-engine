@@ -294,6 +294,21 @@ void Hud::build(HudFrame& frame) {
         ImGui::Text("lod %d/%d  tri %d  maxErr %.4f", frame.lodLevel, frame.lodCount - 1,
                     frame.lodTriangles, frame.lodMaxError);
     }
+    // M3.2：DAG 组下钻滑条——只有 dag-top 模式（dagGroupCount>0）才占位置，
+    // 其它模式 HUD 布局一像素不动（viewer 侧 lod 模式不下发 dagGroupCount）。
+    // -1 = 纯顶层；0..N-1 = 挖掉该组生成的父簇、换回组内子簇（S5 cut 预演）。
+    if (frame.dagGroupCount > 0) {
+        ImGui::SliderInt("dag drill", &frame.dagGroup, -1, frame.dagGroupCount - 1);
+        char dagLine[96];
+        if (frame.dagGroup < 0) {
+            std::snprintf(dagLine, sizeof(dagLine), "dag top (no drill)  tri %d",
+                          frame.lodTriangles);
+        } else {
+            std::snprintf(dagLine, sizeof(dagLine), "dag drill g%d  tri %d  groupErr %.4f",
+                          frame.dagGroup, frame.lodTriangles, frame.dagGroupError);
+        }
+        ImGui::TextUnformatted(dagLine);
+    }
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();

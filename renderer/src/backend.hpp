@@ -41,6 +41,11 @@ public:
     // 成功后更新 info().triangleCount / lodLevel / lodMaxError；失败保持原层。
     virtual bool setLodLevel(int level, std::string& outError) = 0;
 
+    // M3.2：dag-top 组原子下钻。group < 0 = 回到纯顶层（渲染最粗层全部簇）；
+    // group >= 0 = 挖掉该组在顶层生成的父簇区间、换回组内子簇。越界 / 无血缘
+    // / 层数不足返回 false 且保持原画面。
+    virtual bool setDagCut(int group, std::string& outError) = 0;
+
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
     // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,

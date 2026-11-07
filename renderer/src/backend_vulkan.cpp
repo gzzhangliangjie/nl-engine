@@ -6,6 +6,7 @@
 #if defined(NL_BACKEND_VULKAN)
 
 #include "nl/core/log.hpp"
+#include "nl/core/meshlet_io.hpp"   // M3.2：探测第二粗层 dagGroups 组数
 
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/vulkan.h>   // 拉入 vulkan.h（C 原型），提供全部 PFN_vk* 函数指针类型
@@ -107,6 +108,18 @@ public:
             info_.lodLevel = scene_.lodLevel();
             info_.lodMaxError = scene_.lodMaxError();
             nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+            // M3.2：可下钻组数 = 第二粗层 dagGroups（与 DX12 同一条探测逻辑）。
+            if (lodLevelCount_ >= 2) {
+                const std::string childFile = lodMeshFileName(lodStem_, lodLevelCount_ - 2);
+                nl::core::NMeshData probe;
+                std::string probeError;
+                if (nl::core::loadNMesh((std::string(NL_MESHLET_DIR "/") + childFile).c_str(),
+                                        probe, probeError) &&
+                    probe.lodMeta.dagPresent) {
+                    dagGroupCount_ = static_cast<int>(probe.lodMeta.dagGroups.size());
+                }
+            }
+            info_.dagGroupCount = dagGroupCount_;
         }
 
         nl::core::log::info("device ready: ", info_.adapterName,
@@ -158,8 +171,45 @@ public:
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
+        info_.dagGroup = scene_.dagGroup();
+        info_.dagGroupError = scene_.dagGroupError();
         nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
+        return true;
+    }
+
+    // M3.2：dag-top 组原子下钻（与 DX12 同语义）。
+    bool setDagCut(int group, std::string& outError) override {
+        if (lodLevelCount_ <= 0) {
+            outError = "no layered .nmesh assets (run: nanite-tools lod <base>.nmesh -o <dir>/<stem>)";
+            return false;
+        }
+        const int top = lodLevelCount_ - 1;
+        if (group < 0) {
+            const bool ok = setLodLevel(top, outError);
+            if (ok) info_.dagGroup = -1;
+            return ok;
+        }
+        if (lodLevelCount_ < 2) {
+            outError = "dag drill needs >= 2 layers, got " + std::to_string(lodLevelCount_);
+            return false;
+        }
+        if (group >= dagGroupCount_) {
+            outError = "dag drill group " + std::to_string(group) + " out of range 0.." +
+                       std::to_string(dagGroupCount_ - 1);
+            return false;
+        }
+        const std::string topFile = lodMeshFileName(lodStem_, top);
+        const std::string childFile = lodMeshFileName(lodStem_, top - 1);
+        if (!scene_.setDagCut(nvrhiDevice_, topFile.c_str(), childFile.c_str(), group, outError)) {
+            return false;
+        }
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.lodLevel = scene_.lodLevel();
+        info_.lodMaxError = scene_.lodMaxError();
+        info_.dagGroup = scene_.dagGroup();
+        info_.dagGroupError = scene_.dagGroupError();
         return true;
     }
 
@@ -709,6 +759,7 @@ private:
     DeviceInfo info_{};
     std::string lodStem_;              // M2.3：<stem>.lodN.nmesh 的 stem
     int lodLevelCount_ = 0;            // 0 = 没有分层资产
+    int dagGroupCount_ = 0;            // M3.2：可下钻组数（第二粗层 dagGroups）
     NvrhiMessageCallback nvrhiMessageCallback_;
 
     // 原生 Vulkan 对象（一律 vulkan 前缀）

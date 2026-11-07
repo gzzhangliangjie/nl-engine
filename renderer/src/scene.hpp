@@ -63,6 +63,16 @@ public:
     bool setClusterLevel(nvrhi::IDevice* device, const char* nmeshFile,
                          std::string& outError);
 
+    // M3.2：DAG cut 预演（--mode dag-top）。渲染 topFile（链最粗层）的全部簇，
+    // 但把 childFile（下一层）中第 drillGroup 组生成的父簇区间
+    // [genFirst, genFirst+genCount) 挖掉，换回该组在 childFile 里的成员簇
+    // （clusterGroup==drillGroup）。这正是 S5 运行时组原子 cut 的离线预演：
+    // 父子衔接处必须无洞无重叠——简化时组间边界点被锁（M2.2 锁点语义），
+    // 粗细两版边界顶点逐位一致。校验失败（组号越界 / 无 DAG 血缘 / gen 区间
+    // 越界）一律报错退出，绝不静默画半套。
+    bool setDagCut(nvrhi::IDevice* device, const char* topFile, const char* childFile,
+                   int drillGroup, std::string& outError);
+
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
 
@@ -85,11 +95,21 @@ public:
     // M2.3：当前层号与 parent error（v1 资产无 lodMeta → 0 / 0）。
     int   lodLevel() const { return lodLevel_; }
     float lodMaxError() const { return lodMaxError_; }
+    // M3.2：dag-top 状态（uploadClusterMesh 纯层加载后 dagGroup 复位 -1）。
+    int   dagGroup() const { return dagGroup_; }
+    float dagGroupError() const { return dagGroupError_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
     // initCluster 与 setClusterLevel 共用，保证首次加载与切层走同一条路径。
     bool uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
+                           std::string& outError);
+    // M3.2：展开（可选按簇掩码过滤）+ 建新 VB/IB 上传 + 替换句柄与计数。
+    // uploadClusterMesh / setDagCut 共用同一条落盘→显存路径。
+    bool uploadClusterData(nvrhi::IDevice* device,
+                           const std::vector<ClusterVertex>& vertices,
+                           const std::vector<std::uint32_t>& indices,
+                           const char* modelName, int lodLevel, float maxError,
                            std::string& outError);
 
     nvrhi::ShaderHandle           vs_, ps_;
@@ -106,6 +126,8 @@ private:
     std::uint32_t                 triangleCount_ = 0;
     int                           lodLevel_ = 0;      // M2.3：来自 .nmesh v2 lodMeta
     float                         lodMaxError_ = 0.0f;
+    int                           dagGroup_ = -1;     // M3.2：当前下钻组（-1 = 纯顶层）
+    float                         dagGroupError_ = 0.f;
 };
 
 } // namespace nl::renderer::detail

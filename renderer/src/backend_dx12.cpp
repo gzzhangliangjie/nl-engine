@@ -6,6 +6,7 @@
 #if defined(NL_BACKEND_DX12)
 
 #include "nl/core/log.hpp"
+#include "nl/core/meshlet_io.hpp"   // M3.2：探测第二粗层 dagGroups 组数
 
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/d3d12.h>
@@ -162,6 +163,20 @@ public:
             info_.lodLevel = scene_.lodLevel();
             info_.lodMaxError = scene_.lodMaxError();
             nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+            // M3.2：可下钻组数 = 链第二粗层（lodCount-2）的 dagGroups。读它的
+            // meta 只为了拿组数；加载失败不是错误（dag-top 纯顶层照样画，
+            // 只是 HUD 不出下钻滑条）。
+            if (lodLevelCount_ >= 2) {
+                const std::string childFile = detail::lodMeshFileName(lodStem_, lodLevelCount_ - 2);
+                nl::core::NMeshData probe;
+                std::string probeError;
+                if (nl::core::loadNMesh((std::string(NL_MESHLET_DIR "/") + childFile).c_str(),
+                                        probe, probeError) &&
+                    probe.lodMeta.dagPresent) {
+                    dagGroupCount_ = static_cast<int>(probe.lodMeta.dagGroups.size());
+                }
+            }
+            info_.dagGroupCount = dagGroupCount_;
         }
 
         nl::core::log::info("device ready: ", info_.adapterName,
@@ -221,8 +236,48 @@ public:
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
+        info_.dagGroup = scene_.dagGroup();
+        info_.dagGroupError = scene_.dagGroupError();
         nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
+        return true;
+    }
+
+    // M3.2：dag-top 组原子下钻。group < 0 = 纯顶层（渲染最粗层全部簇）；
+    // group >= 0 = 顶层挖掉该组生成的父簇区间、换回该组在第二粗层的成员簇。
+    // 越界 / 无血缘 / 层数不足返回 false 且保持原画面。
+    bool setDagCut(int group, std::string& outError) override {
+        if (lodLevelCount_ <= 0) {
+            outError = "no layered .nmesh assets (run: nanite-tools lod <base>.nmesh -o <dir>/<stem>)";
+            return false;
+        }
+        const int top = lodLevelCount_ - 1;
+        if (group < 0) {
+            // 纯顶层：走与 lod 模式同一条 uploadClusterMesh 路径。
+            const bool ok = setLodLevel(top, outError);
+            if (ok) info_.dagGroup = -1;
+            return ok;
+        }
+        if (lodLevelCount_ < 2) {
+            outError = "dag drill needs >= 2 layers, got " + std::to_string(lodLevelCount_);
+            return false;
+        }
+        if (group >= dagGroupCount_) {
+            outError = "dag drill group " + std::to_string(group) + " out of range 0.." +
+                       std::to_string(dagGroupCount_ - 1);
+            return false;
+        }
+        const std::string topFile = detail::lodMeshFileName(lodStem_, top);
+        const std::string childFile = detail::lodMeshFileName(lodStem_, top - 1);
+        if (!scene_.setDagCut(device_, topFile.c_str(), childFile.c_str(), group, outError)) {
+            return false;
+        }
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.lodLevel = scene_.lodLevel();
+        info_.lodMaxError = scene_.lodMaxError();
+        info_.dagGroup = scene_.dagGroup();
+        info_.dagGroupError = scene_.dagGroupError();
         return true;
     }
 
@@ -514,6 +569,7 @@ private:
     DeviceInfo info_{};
     std::string lodStem_;              // M2.3：<stem>.lodN.nmesh 的 stem
     int lodLevelCount_ = 0;            // 0 = 没有分层资产
+    int dagGroupCount_ = 0;            // M3.2：可下钻组数（第二粗层 dagGroups）
     NvrhiMessageCallback messageCallback_;
 
     ComPtr<IDXGIFactory4>            factory_;

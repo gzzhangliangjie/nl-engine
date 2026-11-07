@@ -27,6 +27,7 @@
 4. **开发历史** — 至少读：
    - `docs/MILESTONES.md`（四栏台账：动作 / 提交版本 / 完成情况 / 踩坑）
    - `docs/carrot-history.md`
+   - `docs/bevy-history.md`
    - `.workbuddy/memory/MEMORY.md`（长期约定）
    - `.workbuddy/memory/2026-*.md`（最近一份当日 / 前日日志）
    - 当前步骤的 `docs/s*/S*-PLAN.md` 与 `...-TOOLS-GUIDE.md`

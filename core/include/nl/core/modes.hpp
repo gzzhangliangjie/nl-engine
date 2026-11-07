@@ -11,7 +11,8 @@ enum class ViewMode {
     Normal = 0,   // M0.5 唯一的模式：普通渲染（带贴图 Suzanne + 轨道相机 + HUD）
     Cluster = 1,  // M1.3：加载 .nmesh，每簇随机着色（S1 切簇的可视化验收）
     Lod = 2,      // M2.3：加载 <stem>.lodN.nmesh 的分层资产，HUD 滑条切层（S2 无缝验收）
-    // S1 起依次追加：DagTop, Cull, Dag, Hiz, Visbuf, Rt, Shadow,
+    DagTop = 3,   // M3.2：渲染 DAG 顶层（最粗层）+ 任选组下钻一层（S5 组原子 cut 预演）
+    // S1 起依次追加：Cull, Dag, Hiz, Visbuf, Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };
