@@ -25,7 +25,16 @@
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
 - **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
-- **S2 收官（2026-11-07）**：`s2-group`→M2.0（回归 88/88）、`s2-qem`→M2.1（94/94）、`s2-loop`→M2.2（102/102）、`s2-done`→M2.3（提交 f5bfc9a）、**M2.3a 翻转面根治（提交 fdb598c，ctest 12/12、回归 118/118 ALL GREEN）**。M2.3：viewer `--mode lod N` + HUD 滑条；`Scene::uploadClusterMesh` 首载与切层同一条路；`probeLodLevelCount` 在 backend.hpp；缺省着色 normal、显式 `--shading` 生效（先场景缺省再覆写）。负向 viewer tool 卡必须带 `--screenshot` 否则进交互循环超时。**M2.3a 判决实验定稿（用户方法论三原则）**：官方两家翻面判定均**无存储参照场**（meshopt 实时 vertex_positions / UE TriWillInvert 实时 GetPosition）；摘锚纯官方口径跨层累计 L1=1→L6=8（worst cos -0.972），官方无逐层链场景可抄 → **朝向锚定稿保留**（变形后法线 vs 当前角点法线和 ≤~87°，随折叠同步更新；无法线数据的合成网格退化纯官方判定），ours inward=0 反超 oracle（2）；`rebuildMeshlets` **法线继承**（继承输入法和不重算，跨层=L0 原始场，与 check-orient 同口径）；分层资产 7 层 lod0..6 入仓。验收：七层画廊无黑斑无裂缝无洞，「L4/L5 已知翻转面」口径**作废**。backend 自证看日志 `shader=spv/dxil`（NMake 只看时间戳，cp 盖产物后必须删掉重编）。下一步 **S3 构建 cluster DAG + fallback mesh**（`nanite-tools dag`，cut 以 group 为原子吃 v2 的 lockedPositions/parent error）。
+- **S2 收官（2026-11-07）**：`s2-group`→M2.0（回归 88/88）、`s2-qem`→M2.1（94/94）、`s2-loop`→M2.2（102/102）、`s2-done`→M2.3（提交 f5bfc9a）、**M2.3a 翻转面根治（提交 fdb598c，ctest 12/12、回归 118/118 ALL GREEN）**。M2.3：viewer `--mode lod N` + HUD 滑条；`Scene::uploadClusterMesh` 首载与切层同一条路；`probeLodLevelCount` 在 backend.hpp；缺省着色 normal、显式 `--shading` 生效（先场景缺省再覆写）。负向 viewer tool 卡必须带 `--screenshot` 否则进交互循环超时。**M2.3a 判决实验定稿（用户方法论三原则）**：官方两家翻面判定均**无存储参照场**（meshopt 实时 vertex_positions / UE TriWillInvert 实时 GetPosition）；摘锚纯官方口径跨层累计 L1=1→L6=8（worst cos -0.972），官方无逐层链场景可抄 → **朝向锚定稿保留**（变形后法线 vs 当前角点法线和 ≤~87°，随折叠同步更新；无法线数据的合成网格退化纯官方判定），ours inward=0 反超 oracle（2）；`rebuildMeshlets` **法线继承**（继承输入法和不重算，跨层=L0 原始场，与 check-orient 同口径）；分层资产 7 层 lod0..6 入仓。验收：七层画廊无黑斑无裂缝无洞，「L4/L5 已知翻转面」口径**作废**。backend 自证看日志 `shader=spv/dxil`（NMake 只看时间戳，cp 盖产物后必须删掉重编）。下一步 ~~S3 DAG~~ → **M3.0 已完成（见下节）**。
+
+## S3 约定（M3.0 起，tag s3-dag 提交 32a10b0）
+- **按组重切是硬前提**（UE ReduceGroup / bevy:154）：父簇绝不跨组 → 每父簇恰一生成组 → S5 组原子 cut 才成立（只 cut 一个父簇会同组兄弟重叠重复绘制）。血缘落盘 .nmesh **meta version 2**：u32 groupCount + 32B 组记录（error/simplifyError/sphere[4]/genFirst/genCount）+ u32 clusterGroup×meshlets；v1/旧 v2 逐字节兼容。组 error=max(组简化误差, 成员簇误差)（UE:1441/:1587）逐位精确；父簇 bounds.error 统一携带组误差（UE:1593）；顶层组 genCount=0。
+- `nanite-tools dag <prefix> [--export json]`：六项校验全 PASS 才 exit 0（membership/generation/error chain/parent error/monotonic/acyclic DFS）；`selftest dag` 128x128 全链全量断言不抽样。
+- **按组重切簇粒度取整**：单层保留率上界 70%→~80%（8 簇/组整簇产出，bevy/UE 同款），loop 自检口径 30~80%。
+- **server.py stage_sync：preview 证据图计入基线证据**（M2.1 固化约定的落实，缺失文件照样 FAIL）；kStage=S3.0，viewer selftest stage 断言在 viewer/main.cpp（strstr("S3.0")）随 kStage 同步改。s1-tools not-impl 负向已退役为「未知子命令 exit 1」（工具侧占位子命令清零）。
+- Suzanne 新链 7 层：3936→1970→1002→500→252→142→104；dag 校验 56 groups/57 edges/87 父簇。Suzanne.lod0..6.nmesh（v3）入仓。
+- 工具卡 exe 恒指当前构建，重编后两份 build/{dx12,vulkan}/nanite-tools.exe 都要用本后端重编（别 cp 盖，NMake 时间戳陷阱）。
+- 下一步：**M3.1 fallback mesh**（顶层连普通 indexed mesh，S8 BLAS 用）→ M3.2 viewer --mode dag-top → S5 运行时 cut。
 
 ## S2 离线管线约定（M2.0 起）
 - METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。
