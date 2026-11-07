@@ -147,7 +147,7 @@
 
 - **Job 系统已立项**：`docs/p8/P8-JOB-PLAN.md`（M-J0~M-J4，首个消费者=离线管线）；下一步可执行 M-J0。
 - **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后。
-- **动作系统待立项（2.4，纯逻辑层）**：用户拍板后按铁律读三处（UE `Animation/` / bevy_animation / Carrot 二次确认）出正式计划；逻辑层可先用确定性单测验收，不依赖渲染。
+- **动作系统已立项并完成纯逻辑层（2.4）**：2026-11-08 用户拍板 A 路自建（网上调研结论：状态机/混合树层业界无现成库，ozz 只覆盖下层采样/混合/蒙皮数学）；M-A1 曲线采样 / M-A2 线性加法混合 / M-A3 状态机（UE 回退缩时）/ M-A4 1D blend space 全部完成并过确定性自测 + ctest 5/5 + 展示台 ma-track 卡，tag `anim-ma1`~`anim-ma4`（track 分支内，merge 走 §7.2 文档闸）；M-A5 视觉验收待 2.3 蒙皮。
 - 其余 A 类轨道（骨骼蒙皮 2.3 / Lua 2.5 / 3D 音频 2.6）仍为候选，立项前按铁律读三处 + 出计划。
 
 > 注：三个 worktree 已于 2026-11-08 **物理建立**（见 §7.1 实例注册表），但各轨道计划仍按 §5 立项纪律补，**未立项前不开干**。
@@ -166,7 +166,7 @@
 |---|---|---|---|---|
 | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | **已立项 / B2~B4 完成**：B 路自建，计划 `docs/material-graph/B3-PLAN.md`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` | B2 数据模型+序列化 / B3 图→Slang 双后端编译 / B4 热重载+证据图均已过 ctest；B5 接 PBR pass 排 S7 后；共享 `.workbuddy`+`slang/dist` junction |
 | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 工作树已建 / **已立项** `docs/p8/P8-JOB-PLAN.md` | M-J0 待启动；首个消费者=离线管线；共享 junction |
-| 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | 工作树已建 / 候选（2.4 纯逻辑层） | 状态机+混合树+曲线采样；逻辑层先确定性单测，视觉验收后挂；共享 junction |
+| 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **已立项 / M-A0~M-A4 完成（track 分支，未 merge）**：计划 `docs/action-system/ACTION-PLAN.md`，验收纪要见 `docs/MILESTONES.md` M-A 节，tag `anim-ma1`~`anim-ma4` | nl/anim 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；M-A5 视觉验收后挂（等 2.3 蒙皮 + rigged GLB）；共享 junction |
 
 > 三个 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
 
