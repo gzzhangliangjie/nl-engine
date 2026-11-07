@@ -49,6 +49,12 @@ struct LodOptions {
     std::uint32_t maxLevels = 8;           // 最多生成多少个简化层（不含 L0）
     std::uint32_t minTriangles = 128;      // 当前层三角数低于此值即收敛
     std::uint32_t minGroups = 1;           // 聚组数低于此值即收敛
+    // P8 M-J3：LOD 链并行度。0 = hardware_concurrency（默认）；
+    // 1 = 单线程参考跑（UE ParallelFor 的 ForceSingleThread 同款调试语义），
+    // 与多线程产物必须逐字节一致（确定性硬判据，selftest 双池配置断言）。
+    // 并行边界：逐组 QEM 简化 / 按组重切 / 组误差计算并行；组间 soup 前缀拼接
+    // 与层级推进（L0→LN 误差链自底向上）串行——「哪里并行哪里串行」写死。
+    unsigned threads = 0;
     // 终止条件只用「三角数/组数/不再下降/maxLevels」——bevy :94 的
     // while !simplification_queue.is_empty() 同义。不设「简化率不足就提前停」
     // 的自造门槛：某层简化不足时，下一次重新分组会换一组边界，仍能继续。

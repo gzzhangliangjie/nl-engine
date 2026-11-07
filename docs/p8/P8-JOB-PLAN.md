@@ -58,10 +58,12 @@
 > **落地纪要（2026-11-08）**：**定位结论**——贪心切簇（buildMeshlets）mesh 内串行依赖不可并行（算法本性，三处参考同口径）；真实并行点 = **多子网格 per-primitive 切簇**（cluster 命令）+ stat 无热循环（bbox 循环 O(V) 微秒级，并行无收益，保持串行——「定位」的结果可以是没有）。实现：`computeClusterResult`（verify+统计，无 I/O）从 `printClusterResult` 拆出；多子网格走 `scope` 并行 slot 输出、打印保序串行；单子网格保持串行路径（并行开销>收益，零回归）。确定性证据：selftest 合成 8 primitive 并行 vs 串行 BuiltMeshlets 四数组+summary 逐字段逐字节一致；命令行证据 `cluster Suzanne-multi.glb`（scripts/make-multi-primitive-glb.py 复制 primitives 生成，同 accessors 文件几乎不变大）。耗时：串行 4x 440ms vs 并行 194ms（约 2.3x，进程级含加载）。计划原文「-o 并行输出 .nmesh MD5 一致」按 -o 单子网格落盘边界不适用（M1.2 既有边界），确定性由 selftest 断言承担。
 
 ### M-J3 simplify / dag 并行化（含依赖边界处理）（3~4 天）
-- [ ] `simplify`：METIS 分组天然并行（按组）+ 每组 QEM 简化并行；`grouping.cpp` 的 METIS 调用梳理为可分发单元。
-- [ ] `dag`：逐组误差自底向上**并行**（per-group），**合并阶段有依赖**（父 = max 子）必须保留顺序合并，不能并行化合并链——明确标注「哪里能并行、哪里必须串行」。
-- [ ] 同 M-J2 确定性验收：`.nmesh` v1/v2 产物与单线程参考 MD5 一致。
+- [x] `simplify`：METIS 分组天然并行（按组）+ 每组 QEM 简化并行；`grouping.cpp` 的 METIS 调用梳理为可分发单元。
+- [x] `dag`：逐组误差自底向上**并行**（per-group），**合并阶段有依赖**（父 = max 子）必须保留顺序合并，不能并行化合并链——明确标注「哪里能并行、哪里必须串行」。
+- [x] 同 M-J2 确定性验收：`.nmesh` v1/v2 产物与单线程参考 MD5 一致。
 - **自检**：simplify / dag 并行产物与单线程 MD5 一致；合并链串行部分正确（DAG 遍历从根到叶不变）；`regression.py` 文本用例全绿（工具版交代，不进 bytes/near 渲染比对）。tag：`job-offline`
+
+> **落地纪要（2026-11-08）**：**并行边界（写死）**——逐组 QEM 简化、按组重切（buildMeshlets）、组误差 = max(成员簇, 简化)（UE :1441 口径，即 DAG 误差树的自底向上 per-group 段）并行；**组间 soup 前缀拼接（vertBase/triBase 前缀和）与层级推进（L0→LN）串行**——「合并链必须保序」落在此处。并行安全性来自既有设计红利：组间边界锁 → 非边界点单组独占、折叠不越组界；QEM「dst 位置不动、无新位置」→ pointPositions 全程只读。cmdDag 是纯校验/导出（误差在 lod 层已写盘），validateDagChain 保持串行。METIS 调用维持单点（grouping.cpp 唯一 METIS 文件不动，分组本身是全局分区问题不按组可分）。实现：simplifyGroups 步骤 4 两阶段化（并行算组 + 串行前缀）、rebuildMeshletsPerGroup 两阶段化；LodOptions 加 `threads`（0=硬件默认、1=单线程参考，UE ForceSingleThread 同款）、lod 命令加 `--threads`。**确定性三方 MD5**：lod Suzanne 7 层并行 == 改造前基线 == threads=1 逐字节一致；dag 56 groups OK；IcoSphereDense 5 层 threads=1 vs 32 全 MATCH。加速比 2.87x（4.448s vs 1.550s）。selftest jobs 扩至 15 项（+lod 链双池逐字节断言）。
 
 ### M-J4（可选，长线）命名线程亲和 + IO / 流式池（P9 V4 预留，不排期）
 - [ ] 仅设计接口：`IoTaskPool`（资产预取 / 解压，喂 P9 V4 residency 加载）+ 命名线程亲和（对标 UE `ENamedThreads`）。

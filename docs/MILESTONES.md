@@ -753,3 +753,21 @@
 2. ctest 单测 exe 首启被 Defender 实时扫描拦截（输出空、秒退）——首个全量 ctest 轮次 flake，复跑即绿。新 exe 首次跑测前先手动跑一遍暖机。
 
 **下一步**：M-J3 simplify / dag 并行化（METIS 分组按组并行 + 逐组误差自底向上并行、合并链串行）。
+
+## P8 M-J3 lod 链并行化（tag `job-offline`，2026-11-08，feat/job-system 轨道）
+
+**动作**：代码定位澄清（cmdDag 是纯校验/导出——误差树在 lod 层级循环已写盘，DAG 误差自底向上 per-group 段落在 rebuildMeshletsPerGroup 的组误差计算）→ 并行安全审查（组间边界锁→非边界点单组独占；QEM dst 位置不动→pointPositions 只读；共享可变状态为零）→ simplifyGroups 步骤 4 两阶段化（并行逐组 QEM + 串行前缀拼 soup）→ rebuildMeshletsPerGroup 两阶段化（并行重切+组误差/组球 + 串行窗口拼接）→ LodOptions.threads（UE ForceSingleThread 同款）+ lod 命令 --threads → 展示台 lod-parallel 用例 → selftest 双池断言。
+
+**提交版本**：job-offline（本轮）
+
+**完成情况**
+- **三方 MD5 确定性**：lod Suzanne 7 层——并行（threads=0 硬件）== 改造前串行基线（/tmp/mj3-baseline 全 7 层逐字节）== threads=1 参考跑；dag 56 groups OK。
+- IcoSphereDense（4929 簇）4 层 threads=1 vs threads=32 全 5 层 MD5 MATCH；加速 4.448s → 1.550s（**2.87x**）。
+- selftest jobs 15 项全绿（新增 lod 链 threads=1 vs parallel 全链 meshlets/vertices/triangles/bounds/lodMeta 逐字节）；ctest 17/17（复跑）。
+- 并行边界已写死进 P8-JOB-PLAN 与 lod.hpp/simplify.hpp 注释：逐组 QEM/重切/组误差并行；soup 前缀拼接与层级推进串行；METIS 保持单点（全局分区不按组可分）。
+
+**踩坑情况**
+1. **ctest 冷启动 flake 定性**：重建 exe 后头 1-2 轮 ctest，nanite-tools 前几条测试**空输出 exit 0 秒退**（挂的条目不定：M-J1 挂 #6、M-J3 挂 #6 / #5+6 / #6）；-R 单跑必过、手动直跑必过、连续第 2-3 轮全量全绿。定性 = Defender/AMSI 对新 exe 高频 CreateProcess 的静默拦截（环境问题非代码问题）。对策：构建后先手动跑一次暖机，验收以复跑全绿为准。
+2. **Edit 大段替换的连带破坏**：printClusterResult 拆分时 old_string 连带吞掉 clusterPrimitive + 旧函数残留重复定义；cmdLod 计时改造时误删 levels 打印行 + 残留旧 buildLodHierarchy 块成重名变量——均靠 Grep/Read 定位后一次性恢复。教训：大段 Edit 后必须 Grep 全部相关符号核对布局再编译。
+
+**下一步**：M-J4（可选，P9 V4 预留）不排期；P8 并发地基 M-J0~J3 收口，后续按 ROADMAP 接续（VSM 插 S9 后 / TSR 拆 S7 后两段；S5 组原子 cut 可直接消费 DAG 组边界）。

@@ -955,6 +955,12 @@ int cmdLod(int argc, char** argv) {
                 return 1;
             }
             opt.ratio = float(std::atof(argv[++i]));
+        } else if (a == "--threads") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "lod: --threads needs an integer >= 1 (0 = hardware default)\n");
+                return 1;
+            }
+            opt.threads = unsigned(std::atoi(argv[++i]));
         } else {
             std::fprintf(stderr, "lod: unknown option %s\n", argv[i]);
             return 1;
@@ -973,16 +979,21 @@ int cmdLod(int argc, char** argv) {
         std::fprintf(stderr, "lod: %s\n", error.c_str());
         return 1;
     }
+    const double lodT0 = wallClockSeconds();
     nl::core::LodHierarchy h;
     if (!nl::core::buildLodHierarchy(nm, h, error, opt)) {
         std::fprintf(stderr, "lod: %s\n", error.c_str());
         return 1;
     }
+    const double lodSecs = wallClockSeconds() - lodT0;
 
     std::printf("file        : %s\n", path);
     std::printf("out prefix  : %s\n", outPrefix.c_str());
     std::printf("qem ratio   : %.0f%% (per-group hard target)  maxLevels %u  minTris %u\n",
                 double(opt.ratio) * 100.0, opt.maxLevels, opt.minTriangles);
+    std::printf("jobs        : parallel per-group qem/recluster (threads=%u, %.3fs)\n",
+                opt.threads == 0 ? std::thread::hardware_concurrency() : opt.threads,
+                lodSecs);
     std::printf("levels      : %zu (L0..L%zu)\n", h.levels.size(), h.levels.size() - 1);
     for (const auto& lv : h.levels) {
         std::printf("  L%-2u clusters=%-5u tris=%-7u groups=%-4u locked=%-6u "
@@ -2965,6 +2976,69 @@ int selftestJobs() {
             }
         }
         check(deterministic, "parallel cluster byte-identical to serial (8 prims)", diff);
+    }
+
+    // ---- M-J3：lod 链并行确定性（逐组 QEM / 按组重切 / 组误差并行，拼接与层级串行）----
+
+    // 13) buildLodHierarchy threads=1 vs threads=0 全链逐字节一致
+    {
+        auto buildChain = [](unsigned threads, nl::core::LodHierarchy& h, std::string& r) {
+            nl::core::NMeshData nm;
+            if (!makeNMesh(makeTestMesh(1, 96, 96), nm, r)) return false;
+            nl::core::LodOptions opt;
+            opt.maxLevels = 5;
+            opt.minTriangles = 64;
+            opt.threads = threads;
+            return nl::core::buildLodHierarchy(nm, h, r, opt);
+        };
+        auto levelBytes = [](const nl::core::LodLevel& lv) {
+            std::vector<const void*> ptrs = {
+                lv.mesh.meshlets.data(), lv.mesh.vertices.data(),
+                lv.mesh.triangles.data(), lv.mesh.bounds.data(),
+            };
+            std::vector<std::size_t> bytes = {
+                lv.mesh.meshlets.size() * sizeof(nl::core::Meshlet),
+                lv.mesh.vertices.size() * sizeof(nl::core::MeshVertex),
+                lv.mesh.triangles.size(),
+                lv.mesh.bounds.size() * sizeof(nl::core::MeshletBounds),
+            };
+            return std::make_pair(ptrs, bytes);
+        };
+        nl::core::LodHierarchy h1, hN;
+        std::string r1, rN;
+        const bool ok1 = buildChain(1, h1, r1);
+        const bool okN = buildChain(0, hN, rN);
+        check(ok1 && okN, "lod chains built (1-thread & parallel)", ok1 ? rN : r1);
+        if (ok1 && okN) {
+            bool deterministic = h1.levels.size() == hN.levels.size();
+            std::string diff;
+            for (std::size_t i = 0; i < h1.levels.size() && deterministic; ++i) {
+                const auto [p1, b1] = levelBytes(h1.levels[i]);
+                const auto [pN, bN] = levelBytes(hN.levels[i]);
+                for (std::size_t a = 0; a < p1.size(); ++a) {
+                    if (b1[a] != bN[a] ||
+                        (b1[a] && std::memcmp(p1[a], pN[a], b1[a]) != 0)) {
+                        deterministic = false;
+                        diff = "level " + std::to_string(i) + " array " + std::to_string(a);
+                        break;
+                    }
+                }
+                if (deterministic) {
+                    const auto& m1 = h1.levels[i].mesh.lodMeta;
+                    const auto& mN = hN.levels[i].mesh.lodMeta;
+                    if (m1.present != mN.present || m1.dagPresent != mN.dagPresent ||
+                        m1.clusterGroup != mN.clusterGroup ||
+                        m1.dagGroups.size() != mN.dagGroups.size() ||
+                        (m1.dagGroups.size() &&
+                         std::memcmp(m1.dagGroups.data(), mN.dagGroups.data(),
+                                     m1.dagGroups.size() * sizeof(m1.dagGroups[0])) != 0)) {
+                        deterministic = false;
+                        diff = "level " + std::to_string(i) + " lodMeta";
+                    }
+                }
+            }
+            check(deterministic, "lod chain threads=1 vs parallel byte-identical", diff);
+        }
     }
 
     // 7) 参考耗时（非判据，仅展示）：默认池 vs 单线程池跑同一求和

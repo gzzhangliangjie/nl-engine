@@ -94,10 +94,14 @@ struct SimplifyResult {
 // 有序集，代价平局按点编号决胜）。
 // 边界锁只由本次传入的 grouping 决定（同层组归属），不接收任何历史层锁点：
 // 逐层循环每层重新聚组、重新调用本函数即可（bevy lock_group_borders 口径）。
-// 失败（参数非法 / 聚组结果与网格不符）返回 false 且 outError 带可读原因。
+// P8 M-J3：threads = 0 走硬件并行（逐组 QEM 并行，组间 soup 前缀拼接串行；
+// 组间边界锁保证非边界点单组独占，折叠互不越界——天然槽位安全），
+// 1 = 单线程参考跑，两种配置产物逐字节一致。失败（参数非法 / 聚组结果
+// 与网格不符）返回 false 且 outError 带可读原因。
 bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
                     SimplifyResult& out, std::string& outError,
-                    float targetRatio = kSimplifyDefaultRatio);
+                    float targetRatio = kSimplifyDefaultRatio,
+                    unsigned threads = 0);
 
 // 把 .nmesh 的簇展开成 canonical 点三角形 soup（weld + 每簇三角按序展开，
 // 重复点的退化三角剔除）。返回 canonical 点数；outIndices 每三角 3 个

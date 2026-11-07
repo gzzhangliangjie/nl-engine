@@ -18,6 +18,8 @@
 
 #include "nl/core/simplify.hpp"
 
+#include "nl/core/jobs.hpp"    // P8 M-J3：逐组 QEM 并行（组间边界锁 = 槽位安全）
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -288,7 +290,7 @@ std::uint32_t buildCanonicalTriangles(const NMeshData& mesh,
 
 bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
                     SimplifyResult& out, std::string& outError,
-                    float targetRatio) {
+                    float targetRatio, unsigned threads) {
     out = SimplifyResult{};
     if (mesh.meshlets.empty() || mesh.vertices.empty()) {
         outError = "simplify: mesh has no meshlets/vertices";
@@ -385,13 +387,25 @@ bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
             out.lockedPositions.push_back(out.pointPositions[std::size_t(p) * 3 + k]);
     }
 
-    // ---- 4) 逐组 QEM ----
+    // ---- 4) 逐组 QEM（P8 M-J3 两阶段：并行算组、串行拼 soup）----
+    // 组间边界锁保证非边界点单组独占、折叠不越组界（边界点锁死不折叠），
+    // 且 QEM「dst 位置不动、无新位置」——pointPositions 全程只读，
+    // 各组只写自己的槽位：tris/stats/localToCanon[g]，天然并行安全。
+    // 组间 soup 前缀（groupFirstTri / indices 追加）依赖前缀和，必须串行。
     out.groupFirstTri.assign(grouping.groupCount, 0);
     out.groupTriCount.assign(grouping.groupCount, 0);
     out.perGroup.resize(grouping.groupCount);
     std::vector<std::vector<uint32_t>> localToCanon(grouping.groupCount);
 
-    for (uint32_t g = 0; g < grouping.groupCount; ++g) {
+    struct GroupQem {
+        std::vector<uint32_t> tris;    // 存活三角的 canonical 点（3/三角）
+        GroupSimplifyStats stats{};
+    };
+    std::vector<GroupQem> slots(grouping.groupCount);
+    const auto perGroupBody = [&](std::size_t b, std::size_t e) {
+      for (std::size_t gIdx = b; gIdx < e; ++gIdx) {
+        const uint32_t g = uint32_t(gIdx);
+        GroupQem& slot = slots[g];
         // 局部化：canonical → local
         std::unordered_map<uint32_t, uint32_t> localOf;
         Simplifier s;
@@ -506,19 +520,30 @@ bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
             if (done == 0) break;   // 无进展（全被拓扑/翻转/锁拒绝）
         }
 
-        // 统计 + 输出（存活三角按序）
-        out.groupFirstTri[g] = uint32_t(out.indices.size() / 3);
-        out.groupTriCount[g] = s.aliveCount;
+        // 统计 + 输出（存活三角按序）→ 写本组槽位（soup 拼接在并行段后串行做）
+        slot.tris.reserve(std::size_t(s.aliveCount) * 3);
         for (uint32_t t = 0; t < s.tri.size(); ++t) {
             if (!s.alive[t]) continue;
             for (uint32_t L : s.tri[t])
-                out.indices.push_back(localToCanon[g][L]);
+                slot.tris.push_back(localToCanon[g][L]);
         }
-        auto& st = out.perGroup[g];
+        auto& st = slot.stats;
         st.inputTriangles = inputTris;
         st.outputTriangles = s.aliveCount;
         st.collapses = s.collapses;
         st.maxError = s.maxError;
+      }
+    };
+    {
+        nl::core::jobs::ThreadPool pool(threads);
+        pool.parallelFor(grouping.groupCount, perGroupBody, 1);
+    }
+    // ---- 4b) 串行前缀拼接（soup 布局确定性 = 组序固定，与执行顺序无关）----
+    for (uint32_t g = 0; g < grouping.groupCount; ++g) {
+        out.groupFirstTri[g] = uint32_t(out.indices.size() / 3);
+        out.groupTriCount[g] = uint32_t(slots[g].tris.size() / 3);
+        out.indices.insert(out.indices.end(), slots[g].tris.begin(), slots[g].tris.end());
+        out.perGroup[g] = slots[g].stats;
     }
 
     // ---- 汇总 ----
