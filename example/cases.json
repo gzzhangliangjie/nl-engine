@@ -2149,6 +2149,108 @@
      ]
     }
    ]
+  },
+  {
+   "id": "ma-track",
+   "label": "M-A1~M-A4",
+   "name": "动作系统 M-A 轨道（曲线采样 / 混合 / 状态机 / 1D blend space）",
+   "tag": "anim-ma4",
+   "date": "2026-11-08",
+   "summary": "A 类并行轨道 feat/action-system：nl/anim 纯 CPU 确定性动作系统。M-A1 关键帧采样（per-bone 通道 (t,v) 秒制，Linear lerp/slerp + Step，域外 clamp，wrapTime 循环）；M-A2 线性/加法混合（bevy blendable.rs 旋转相对叠加语义）；M-A3 动作状态机（优先级取首个满足转移 + crossfade + UE 防跳变回退缩时 effective=D*(1-wNext)，lerp 对称性保证回退姿态连续）；M-A4 1D blend space（找段线性插权重，UE BlendSpace 1D 口径）。自写最小 vec3/quat 数学（拍板 A 路自建，ozz 只作参照）。验收 = 确定性自测四组全绿 + ctest 5/5 + 本页工具卡实跑；不进 kStage / 不进渲染回归总闸（A 类交代纪律）。",
+   "acceptance": [
+    "anim-tools selftest curve/blend/statemachine/blendspace 四组全 PASS（确定性数值锚点断言，两次运行逐位一致）",
+    "ctest ma1~ma4 共 5/5 全绿（含未知用例负向 exit 2）",
+    "example/ma-track/run.bat ALL GREEN（四自测 + 负向 + sample + 证据图再生成）",
+    "状态机 10 步场景逐值断言：step6 回退 z 连续（0.7 不跳变）+ 缩时 0.3*(1-1/3)=0.2 生效",
+    "证据图 example/ma-track/evidence.png 由 anim-tools sample 真实输出生成（纯标准库 PNG）"
+   ],
+   "exe": {
+    "dx12": "build/nmake/anim-tools.exe",
+    "vulkan": "build/nmake/anim-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "anim-tools 纯 CPU 工具（只链 nl_core），两个 backend 键指向同一个 build/nmake exe。退出码约定：0 成功 / 1 断言失败 / 2 用法错误。",
+     "args": [],
+     "expectExit": 0,
+     "expectLog": "anim-tools - nl-engine action/animation controller"
+    },
+    {
+     "id": "curve",
+     "name": "selftest curve：M-A1 关键帧采样",
+     "kind": "tool",
+     "note": "lerp/slerp 数值锚点（45°/22.5° 四元数）、最短路径翻转不变、近平行 nlerp 退化、Step 保持前 key、常量/空轨道、wrapTime 负回绕、validateClip 六负向、两次运行逐位一致。",
+     "args": [
+      "selftest",
+      "curve"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim curve selftest: PASS"
+    },
+    {
+     "id": "blend",
+     "name": "selftest blend：M-A2 混合",
+     "kind": "tool",
+     "note": "lerpPose 锚点 w=0/0.5/1、blendClips 跨 clip 混合（22.5° 中点）、加法 quat 相对叠加（0/45/90/180° 合成）、骨架尺寸不一致拒绝。",
+     "args": [
+      "selftest",
+      "blend"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim blend selftest: PASS"
+    },
+    {
+     "id": "statemachine",
+     "name": "selftest statemachine：M-A3 状态机",
+     "kind": "tool",
+     "note": "10 步 loco 场景逐值断言（idle->walk->run->回退->idle）、step6 回退 z 连续 0.7 + UE 缩时 0.2、validate 五负向、两次运行序列逐位一致。",
+     "args": [
+      "selftest",
+      "statemachine"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim statemachine selftest: PASS"
+    },
+    {
+     "id": "blendspace",
+     "name": "selftest blendspace：M-A4 1D blend space",
+     "kind": "tool",
+     "note": "段权重锚点、域外 clamp、单 sample 退化常量 clip、validate 五负向、参数域扫掠两次逐位一致。",
+     "args": [
+      "selftest",
+      "blendspace"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim blendspace selftest: PASS"
+    },
+    {
+     "id": "negative",
+     "name": "负向：未知 selftest 用例显式拒绝",
+     "kind": "tool",
+     "note": "未知用例 exit 2（用法错误），不许静默假成功。",
+     "args": [
+      "selftest",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown selftest case"
+    },
+    {
+     "id": "evidence",
+     "name": "sample：确定性演示输出 + 证据图",
+     "kind": "tool",
+     "note": "blend space 参数扫掠 + 状态机 10 步场景的确定性数值表（两次运行逐位一致）；example/ma-track/evidence.png 由 tools/anim_evidence.py 从本输出绘制（纯标准库 PNG，不手绘示意）。preview 静态图见下。",
+     "args": [
+      "sample"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim-tools sample (deterministic; two runs are bit-identical)",
+     "preview": "example/ma-track/evidence.png"
+    }
+   ]
   }
  ]
 }

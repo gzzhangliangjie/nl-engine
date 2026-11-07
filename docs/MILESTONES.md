@@ -704,3 +704,25 @@
 4. **exe 快照规范与 M2.3a 后置修复的冲突**：s2.0 卡映射改 s2-done tag 快照后回归 FAIL（2.8 万像素）——tag（f5bfc9a）是 M2.3a 翻转面根治**之前**的代码，而卡基线已在 fdb598c/32a10b0 重拍，tag 快照永远无法复现。回退为当前构建（与 m0.9 同款既定模式）；快照规则只在「tag 状态与基线状态一致」时可用，后续 viewer 卡收敛时机须选渲染代码已定稿的 tag。
 
 **下一步**：S4 分块/LOD 交换（或按 ROADMAP 顺延）；S5 运行时组原子 cut（M3.2 已预演，屏幕空间选层公式已存档）。
+
+## M-A0~M-A4 动作系统立项 + 纯逻辑层四步（A 类并行轨道 feat/action-system，2026-11-08）
+
+**动作**：立项（三家实读：UE Animation 模块定向读 / bevy_animation 0.20-dev RFC 51 / Carrot 二次确认动作逻辑层空白；网上生态调研：ozz=下层事实标准但刻意不做状态机层、Lumix=自建参照）→ 用户拍板 A 路自建 + 自写最小数学 + 独立 anim-tools exe → M-A1 关键帧采样 → M-A2 线性/加法混合 → M-A3 动作状态机 → M-A4 1D blend space → 工具版交代（展示台 ma-track 卡 + run.bat + 证据图 + TOOLS-GUIDE）。计划落 `docs/action-system/ACTION-PLAN.md`（含三处对照拍板表与网上调研 §2.5）。
+
+**提交版本**：M-A1（M-A0/M-A1 同 commit）/ M-A2 / M-A3 / M-A4+交代（tag `anim-ma1`~`anim-ma4`，验收后打）
+
+**完成情况**
+- nl/anim：anim_math（vec3/quat：slerp 最短路径 + 近平行 nlerp 退化 + scaleQuat/mulQuat 加法语义）、anim（AnimClip per-bone 通道 (t,v) 秒制、Linear/Step、域外 clamp、wrapTime、validateClip 空通道=常量、lerpPose/blendPoses/addPose）、state_machine（优先级取首个 + crossfade + UE 回退缩时 effective=D*(1-wNext)、swap+alpha 取反保姿态连续）、blend_space（找段线性插权重、域外 clamp、单 sample 退化）。
+- anim-tools selftest 四组全 PASS（确定性数值锚点、两次运行逐位一致）+ sample 确定性演示输出；ctest 5/5（ma1~ma4 + 负向 WILL_FAIL）。
+- 交代物：`example/ma-track/`（run.bat ALL GREEN + evidence.png 960×540 由 sample 真实输出经纯标准库 PNG 绘制，两次生成逐字节一致）+ 展示台 ma-track 版本卡 7 张（usage/curve/blend/statemachine/blendspace/negative/evidence，expectExit 0/2 + expectLog 锁死）+ `docs/action-system/ANIM-TOOLS-GUIDE.md`；`server.py --check` OK（stage=S3.2 不受 A 轨影响）。
+- A 类纪律：不进 kStage、不动 S0~S14、不进渲染回归总闸；渲染代码零改动。
+
+**踩坑情况**
+1. 沙箱 reg.exe 黑名单打断 vcvars 注册表探测（rc/mt/LIB 缺失，CMake 编译器探测挂）→ `scripts/build-anim.bat` 手工补 SDK bin + INCLUDE/LIB；HTTPS_PROXY/https_proxy 撞键致 DevShell/VS 生成器不可用（M0.0 坑 6 重现）→ 继续 NMake。
+2. validateClip 曾把空通道判非法 → 仅 rotation 轨道的骨骼（head）被拒 → sampleClip 空 poses → 自测 poses[0] 段错误；逐用例进度输出定位后改「空通道=常量语义」（与采样侧一致）。
+3. 自测期望手算三连错（漏算 crossfade 期间 fromTime 同步推进 → step6/7/8 期望值全错；sin(11.25°) 常数笔误；断言时机在场景结束后）——实现全对、期望全错，逐值核算修正；教训：断言值必须在 update 时序模型下手算，不能拍脑袋。
+4. blendPoses 输入输出同容器混叠（先 clear 毁输入）——evaluate 改临时缓冲。
+5. 测试时点撞语义边界：t=1.0 撞 wrapTime 循环归零（t=duration→0，实现正确）、t=0 撞 clip 起点。
+6. NMake 时间戳陷阱复发：obj 在 `CMakeFiles/<target>/<target>/` 子目录，删错层不重编（M2.3a 坑 3 同款）。
+
+**下一步**：M-A5 视觉验收后挂（等 2.3 骨骼蒙皮 + rigged GLB）；2.3 立项时再议 vendored ozz；merge 回 master 走 PARALLEL-TRACKS §7.2 文档闸。

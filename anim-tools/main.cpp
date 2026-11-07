@@ -678,6 +678,54 @@ void testBlendSpaceDeterminism() {
     expectTrue(first == second && !first.empty(), "two sweeps bit-identical");
 }
 
+// ---------------------------------------------------------------------------
+// M-A4 blendspace
+// ---------------------------------------------------------------------------
+
+// sample：确定性演示输出（证据图数据源，纯文本 ASCII，两次运行逐位一致）。
+// 段 1 = 1D blend space 参数扫掠（0..2 步长 0.25，t=0.5）；
+// 段 2 = 状态机 10 步 loco 场景（speed 输入驱动 idle/walk/run + 回退缩时）。
+int cmdSample() {
+    nl::anim::BlendSpace1D bs;
+    if (!bs.reset(makeLocoBlendSpace())) {
+        std::fprintf(stderr, "sample: internal error: blendspace reset failed\n");
+        return 1;
+    }
+    std::printf("anim-tools sample (deterministic; two runs are bit-identical)\n");
+    std::printf("# section 1: blendspace sweep t=0.5 (param -> z of hips)\n");
+    std::printf("param z\n");
+    for (int i = 0; i <= 8; ++i) {
+        const float param = 0.25f * static_cast<float>(i);
+        std::vector<nl::anim::BonePose> pose;
+        if (!bs.evaluate(param, 0.5f, pose)) return 1;
+        std::size_t i0, i1; float w;
+        bs.segmentWeights(param, i0, i1, w);
+        std::printf("%.2f %.4f (seg %zu->%zu w=%.3f)\n",
+                    param, pose[0].translation.z, i0, i1, w);
+    }
+    nl::anim::AnimationStateMachine sm;
+    if (!sm.reset(makeLocoDesc())) {
+        std::fprintf(stderr, "sample: internal error: statemachine reset failed\n");
+        return 1;
+    }
+    std::printf("# section 2: statemachine scenario dt=0.1 (step speed state alpha z)\n");
+    struct Step { float dt; float speed; };
+    const Step steps[] = {
+        { 0.1f, 0.0f }, { 0.1f, 0.5f }, { 0.1f, 0.5f }, { 0.1f, 0.5f },
+        { 0.1f, 2.0f }, { 0.1f, 2.0f }, { 0.1f, 0.0f }, { 0.1f, 0.0f },
+        { 0.1f, 0.0f }, { 0.1f, 0.0f },
+    };
+    for (int i = 0; i < 10; ++i) {
+        sm.update(steps[i].dt, { steps[i].speed });
+        std::vector<nl::anim::BonePose> pose;
+        if (!sm.evaluate(pose)) return 1;
+        std::printf("%d %.1f %s %.3f %.4f\n", i, steps[i].speed,
+                    sm.currentStateName().c_str(), sm.transitionAlpha(),
+                    pose[0].translation.z);
+    }
+    return 0;
+}
+
 int runBlendSpaceSelftest() {
     struct Case { const char* name; void (*fn)(); };
     const Case cases[] = {
@@ -714,6 +762,7 @@ int main(int argc, char** argv) {
             std::printf("anim statemachine selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
+        // M-A4 用例接入处（blendspace）
         if (testCase == "blendspace") {
             const int rc = runBlendSpaceSelftest();
             std::printf("anim blendspace selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
@@ -722,6 +771,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());
         return 2;
     }
+    if (argc >= 2 && std::strcmp(argv[1], "sample") == 0)
+        return cmdSample();
     std::printf(
         "anim-tools - nl-engine action/animation controller (M-A track)\n"
         "usage:\n"
