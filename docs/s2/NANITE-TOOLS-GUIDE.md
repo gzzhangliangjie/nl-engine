@@ -117,3 +117,84 @@ group selftest: PASS
    直接写死，见 `thirdparty/metis/CMakeLists.txt`）。
 3. **UCRT limits.h 已定义 INT32_MIN**：metis.h 重复定义 C4005。处理：vendored
    metis.h 加 `#ifndef` guard。
+
+## M2.1 交代（tag `s2-qem`，2026-11-07）
+
+### 新增：组内 QEM 简化 + 边界锁定（`core/simplify`）
+
+- **QEM**（Garland & Heckbert）：每点累积邻域三角形的面积加权平面二次型
+  （退化平面按面积 clamp，零面积不贡献）；边折叠队列 = 有序集按误差升序，
+  代价平局按点编号决胜 → 完全确定（同输入同输出，selftest 重跑断言锁死）。
+  折叠位置取二次型最优点（3x3 Cramer，奇异回退端点/中点取最小误差）。
+- **边界锁定（灵魂机制，没有第二个魔法）**：边界判定看**组归属**——canonical
+  点被 ≥2 个组的簇引用即边界（组内两簇共享点不是边界，锁了简化率上不去）。
+  锁定点永不移动、永不折叠；双锁定端点的边（接缝本体）不折叠；被摧毁三角形
+  不得是某条双锁定边（≠本边）的唯一三角形——否则那条接缝边在本组一侧没三角
+  形了，跨组裂缝由此产生。锁定点集合进 `SimplifyResult.lockedPoints`
+  （S3 DAG 合并沿用，M2.2 落分层 .nmesh 时持久化）。
+- **坏折叠拒绝**：link condition（N(a)∩N(b)==edge(ab) 对顶点）+ 法线翻转检查
+  （非归一化点积 ≤0 拒）+ 非流形边（>2 三角）拒 + 不许清空整组。
+- **目标**：每组折叠到 round(输入×0.5) 即停；误差=世界空间长度（sqrt 二次型值）。
+- meshoptimizer vendored（1.3，`thirdparty/meshoptimizer/`）作**对照 oracle**：
+  只链进 nanite-tools（`meshopt_SimplifyLockBorder` 同口径），core 不依赖——
+  正式实现是自己的 QEM。注意口径差：oracle 锁子网格全部拓扑边界（含模型外缘），
+  我们只锁组间边界，oracle 更保守、简化率略低是预期。
+
+### simplify 实跑输出（M2.1 后，DX12 构建）
+
+Suzanne（31 组，622 边界点锁定）：
+
+```
+file        : assets/meshlets/Suzanne.nmesh
+clusters    : 237 (3936 triangles)
+groups      : 31
+connectivity: PASS (0 disconnected group(s))
+qem ratio   : 50%
+boundary pts: 622 locked (S3 DAG 沿用)
+simplify    : 3936 -> 1976 tris (50.2%)  collapses 992  maxErr 0.0250 (world)
+oracle      : meshopt LockBorder 3936 -> 1948 tris (49.5%)  rel err avg 0.0051 max 0.0134
+```
+
+IcoSphereDense（617 组，24,406 边界点，617 组全跑 7.6 s）：
+
+```
+clusters    : 4929 (327680 triangles)
+groups      : 617
+connectivity: PASS (0 disconnected group(s))
+qem ratio   : 50%
+boundary pts: 24406 locked (S3 DAG 沿用)
+simplify    : 327680 -> 178308 tris (54.4%)  collapses 74686  maxErr 0.0005 (world)
+oracle      : meshopt LockBorder 327680 -> 163362 tris (49.9%)  rel err avg 0.0001 max 0.0003
+```
+
+球模型 54.4% 略高于 50%：部分组在 50% 附近只剩 2-tri 折叠（一次删 2 个会越过
+目标太多或被 link condition 拒），提前停住——「约减半」口径内，M2.2 重切不受影响。
+
+### selftest qem 实跑输出（全部 ok）
+
+```
+[connected 64x64 grid, group QEM 50%]
+  ok   locked set == independent boundary set
+  ok   boundary vertices bit-identical          <- 灵魂断言：边界逐点位级不变
+  ok   seam edges alive on both sides           <- 接缝边双侧存活（无裂缝拓扑前提）
+  ok   output ratio in [30%,60%]
+  ok   every group keeps triangles
+  ok   indices in range
+  ok   deterministic (rerun identical)
+  info groups=22 boundary=807 tris 7938 -> 3966 (50.0%)
+[single quad, no boundary]
+  ok   single quad -> 1 group
+  ok   no boundary points
+  ok   quad collapses 2 -> 1
+[2 disconnected blocks]
+  ok   locked points have per-block positions   <- 锁定点不跨块
+  ok   output accounting consistent
+  ok   output ratio in [30%,60%]
+[input validation]
+  ok   ratio 0 rejected / ratio >1 rejected / grouping size mismatch rejected / empty mesh rejected
+qem selftest: PASS
+```
+
+要点：边界集合与接缝边存活在 selftest 侧**独立重算**（与 simplify.cpp 交叉
+验证防同错）；64x64 网格 22 组相邻、807 边界点，简化后边界逐点位级一致——
+这就是「相邻组拼接无裂缝」的自动证明（S2.3 再做视觉验收）。

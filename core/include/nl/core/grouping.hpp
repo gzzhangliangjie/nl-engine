@@ -29,6 +29,13 @@ struct GroupingResult {
     std::uint32_t splitFixups = 0;   // METIS 输出不连通被拆分的组次数
 };
 
+// 位置 weld：位级相等（float 精确相等）的顶点归并成同一 canonical 几何点
+// （排序 + 相邻比较，确定性；UV 缝忽略）。返回 canonical 点数。
+// grouping / simplify / selftest / meshopt oracle 共用同一口径——S2 管线的
+// 「边界判定」全建立在它上面，不许各抄一份。
+std::uint32_t weldPositions(const std::vector<MeshVertex>& vertices,
+                            std::vector<std::uint32_t>& outCanon);
+
 // 聚组。mesh 为 .nmesh 读回数据（loadNMesh 产物）。位置完全相等（位级比较，
 // float 精确相等）的顶点视为同一几何点。确定性：METIS 固定 seed，同输入同输出。
 // 失败（空簇 / 图异常 / METIS 内部错误）返回 false 且 outError 带可读原因。

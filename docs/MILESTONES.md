@@ -549,3 +549,23 @@
 4. **选型校准**：S2-PLAN 旧稿「聚成 ~50000-tri 组」经 UE/bevy 源码侦察修订——UE group ≤128 簇、bevy 8 簇/组；50000-tri 是 UE page 口径。聚组选 METIS（bevy 0.15/0.16 同款背书）而非 UE 自研 GraphPartitioner（流送分页需求，S3 前不需要）；Carrot 本地仓库只有运行时 group 管理、无离线简化实现可参考。
 
 **下一步**：M2.1 组内 QEM 简化 + 边界锁定（灵魂里程碑；meshoptimizer simplifier 作对照 oracle）。
+
+## M2.1 组内 QEM 简化 + 边界锁定（S2 灵魂里程碑）
+
+**动作**：core/simplify（`simplifyGroups`）：位置 weld → canonical 三角形 soup → 边界判定看组归属（点被 ≥2 个组的簇引用即锁）→ 逐组 QEM（面积加权平面二次型 + 有序集折叠队列，平局按点编号决胜）→ link condition + 法线翻转 + 接缝边保护拒绝坏折叠 → 折叠到 50% 即停；`simplify` 子命令升级（每组统计 + boundary pts + meshopt oracle 对照行）；meshoptimizer 1.3 vendored（仅 nanite-tools 链，core 零依赖）；weld 逻辑抽成 `weldPositions`（grouping/simplify/selftest/oracle 单一出处）；selftest qem（灵魂断言：边界点集合交叉验证 + 边界逐点位级不变 + 接缝边双侧存活 + 确定性重跑）；ctest 8→10；cases.json 加 s2-qem 工具卡（selftest / simplify 资产下拉 / 负向 -r 0）；交代归档 `docs/s2/NANITE-TOOLS-GUIDE.md`。
+
+**提交版本**：`s2-qem`
+
+**完成情况**
+- selftest qem 全绿：64x64 网格 22 组、807 边界点，简化后边界逐点位级一致（自动断言，非肉眼）；接缝边两侧组都有三角形；确定性重跑逐字节一致。
+- 实机：Suzanne 3936→1976 tri（50.2%）maxErr 0.025 世界空间；球 327680→178308（54.4%）maxErr 0.0005、617 组 7.6 s；oracle meshopt 49.5% / 49.9% 同档。
+- viewer 零改动：ctest 10/10、回归总闸 94/94 ALL GREEN（渲染基线逐字节不动）。
+- 展示台 s2-qem 工具卡现场实跑 + server.py --check 通过。
+
+**踩坑情况**
+1. **NMeshData 三角局部索引写错**：`canon[m.vertices[base+k]]` 两层错——正确是 `canon[m.vertexOffset + nm.triangles[base+k]]`（triangles 存的是簇内局部索引，先加 vertexOffset 得顶点号）。MSVC C2679 报「canon 的下标是 MeshVertex」才暴露。
+2. **triNormal 覆盖哨兵用 0**：`overrideIdx=0` 表示「无覆盖」但 0 是合法局部顶点号，空指针被当坐标读 → selftest qem 段错误。改判 `overridePos` 指针本身。
+3. **selftest 断言写错**：断连双块 case 误断言「无边界点」——块内相邻簇分属不同组时块内照样有组间边界点（这正是组归属口径的正确行为）；改为断言「锁定点坐标不落块间空档」。
+4. **简化率略高于 50%（球 54.4%）**：50% 附近只剩 2-tri 折叠会越过目标或被 link condition 拒，组提前停住。口径内不改（M2.2 重切对 4~5% 偏差不敏感）。
+
+**下一步**：M2.2 简化后重切（复用 M1.1 buildMeshlets）+ 逐层循环，分层 .nmesh 落盘时把边界点集合持久化（S3 DAG 合并用）。

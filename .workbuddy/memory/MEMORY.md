@@ -24,9 +24,18 @@
 
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
-- **0.x 冻结在 M0.9，下一步 S1 切簇**。PBR/卡通是主线「穿插项」，tag 用名字（`pbr-direct`/`toon`）不占 m0.* 编号；详细计划在 `docs/s0/PBR-DIRECT-PLAN.md`、`docs/s0/TOON-PLAN.md`。PBR 直射光是 S7 前置。
+- **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
+- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组已过（回归 88/88）；下一步 **M2.1 组内 QEM 简化+边界锁定**（meshoptimizer simplifier 作对照 oracle）。
 - 穿插项归宿（防重复建设，总表在 ROADMAP「穿插项」节）：ShadowMap/PCF/PCSS=`shadow-map`、PRT/球谐=`prt-sh`、SSR=排 S6 后（复用 Hi-Z）、Kulla-Conty=并入 pbr-direct、SSAO=`ssao`、后处理链=`post-chain`（S7 后插）、Forward+/渲染图/热重载=归 P8。
-- **Suzanne = 3,936 tri（11,808 索引）**，旧口径 504 tri 是错的。
+- Suzanne = 3,936 tri（11,808 索引），旧口径 504 tri 是错的；IcoSphereDense = 327,680 tri / 4,929 簇。
+
+## S2 离线管线约定（M2.0 起）
+- METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。
+- 组大小目标 8 簇/组（`core/grouping.hpp` `kTargetMeshletsPerGroup`，bevy 0.15 实证值；S2-PLAN 旧稿 50000-tri 是 UE page 口径已修订）。
+- 纪律：`grouping.cpp` 是 core 里唯一碰 METIS 符号的文件；viewer 不调用 groupClusters，链接器不会拉 metis。
+- **regression/展示台的工具 exe 是 `build/{dx12,vulkan}/nanite-tools.exe`，重编后要手动 cp 同步两份**，否则总闸跑的是旧 exe。
+- UE 离线构建参考：`E:/UnrealEngine/5.8.4/Engine/Source/Developer/NaniteBuilder/`（GraphPartitioner/ClusterDAG/SimplifyTriangles，只读不抄）；Carrot 本地无离线简化实现。
+- cases.json 工具卡 select 空选项会展开成空 arg，工具侧需跳过空参数。
 
 ## 渲染约定（改前先看 `docs/SHADER-CONVENTIONS.md`）
 - 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present，别各抄一遍。

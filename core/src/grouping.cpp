@@ -30,32 +30,14 @@ bool groupClusters(const NMeshData& mesh, GroupingResult& out, std::string& outE
         return false;
     }
 
-    // ---- 1) 全局位置 weld：排序 + 位级相等归并成 canonical 连续编号 ----
+    // ---- 1) 全局位置 weld：位级相等 → canonical 连续编号（实现见下） ----
     const std::size_t vertexCount = mesh.vertices.size();
     if (vertexCount == 0) {
         outError = "grouping: mesh has no vertices";
         return false;
     }
-    std::vector<std::uint32_t> canon(vertexCount);
-    {
-        std::vector<std::uint32_t> order(vertexCount);
-        std::iota(order.begin(), order.end(), 0u);
-        std::sort(order.begin(), order.end(), [&mesh](std::uint32_t a, std::uint32_t b) {
-            for (int k = 0; k < 3; ++k)
-                if (mesh.vertices[a].pos[k] != mesh.vertices[b].pos[k])
-                    return mesh.vertices[a].pos[k] < mesh.vertices[b].pos[k];
-            return a < b;
-        });
-        std::uint32_t canonId = 0;
-        canon[order[0]] = 0;
-        for (std::size_t i = 1; i < vertexCount; ++i) {
-            const MeshVertex& a = mesh.vertices[order[i - 1]];
-            const MeshVertex& b = mesh.vertices[order[i]];
-            if (b.pos[0] != a.pos[0] || b.pos[1] != a.pos[1] || b.pos[2] != a.pos[2])
-                ++canonId;
-            canon[order[i]] = canonId;
-        }
-    }
+    std::vector<std::uint32_t> canon;
+    weldPositions(mesh.vertices, canon);
 
     // ---- 2) 簇邻接：共享几何点 → 两两簇边累积边权 ----
     // canonical 点 → 出现过的簇列表（倒排）。canon 按全局顶点索引寻址。
@@ -200,6 +182,31 @@ bool groupClusters(const NMeshData& mesh, GroupingResult& out, std::string& outE
     for (std::uint32_t g : out.clusterGroup) ++groupSize[g];
     out.maxGroupSize = *std::max_element(groupSize.begin(), groupSize.end());
     return true;
+}
+
+std::uint32_t weldPositions(const std::vector<MeshVertex>& vertices,
+                            std::vector<std::uint32_t>& outCanon) {
+    outCanon.clear();
+    const std::size_t vertexCount = vertices.size();
+    if (vertexCount == 0) return 0;
+    outCanon.resize(vertexCount);
+    std::vector<std::uint32_t> order(vertexCount);
+    std::iota(order.begin(), order.end(), 0u);
+    std::sort(order.begin(), order.end(), [&vertices](std::uint32_t a, std::uint32_t b) {
+        for (int k = 0; k < 3; ++k)
+            if (vertices[a].pos[k] != vertices[b].pos[k])
+                return vertices[a].pos[k] < vertices[b].pos[k];
+        return a < b;
+    });
+    std::uint32_t canonId = 0;
+    outCanon[order[0]] = 0;
+    for (std::size_t i = 1; i < vertexCount; ++i) {
+        const float* a = vertices[order[i - 1]].pos;
+        const float* b = vertices[order[i]].pos;
+        if (b[0] != a[0] || b[1] != a[1] || b[2] != a[2]) ++canonId;
+        outCanon[order[i]] = canonId;
+    }
+    return canonId + 1;
 }
 
 } // namespace nl::core

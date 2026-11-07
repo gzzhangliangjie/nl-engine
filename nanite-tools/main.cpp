@@ -7,12 +7,18 @@
 #include "nl/core/meshlet.hpp"
 #include "nl/core/meshlet_io.hpp"
 #include "nl/core/grouping.hpp"
+#include "nl/core/simplify.hpp"
+
+#include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,8 +31,8 @@ void printUsage() {
         "usage:\n"
         "  nanite-tools stat <model>                 summary (.glb/.gltf 或 .nmesh)\n"
         "  nanite-tools cluster <model> [-v] [-o out.nmesh]   meshlet build + save\n"
-        "  nanite-tools selftest cluster|nmesh|group deterministic unit tests\n"
-        "  nanite-tools simplify <model.nmesh> [-v]  cluster grouping (S2 M2.0)\n"
+        "  nanite-tools selftest cluster|nmesh|group|qem  deterministic unit tests\n"
+        "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5]  group QEM + boundary lock (S2)\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
@@ -466,11 +472,18 @@ int cmdSimplify(int argc, char** argv) {
     }
     const char* path = argv[0];
     bool verbose = false;
+    float ratio = nl::core::kSimplifyDefaultRatio;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a.empty()) continue;  // 展示台 select 空选项展开成空 arg，视为未传
         if (a == "-v") verbose = true;
-        else {
+        else if (a == "-r") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "simplify: -r needs a ratio in (0,1]\n");
+                return 1;
+            }
+            ratio = float(std::atof(argv[++i]));
+        } else {
             std::fprintf(stderr, "simplify: unknown option %s\n", argv[i]);
             return 1;
         }
@@ -492,11 +505,9 @@ int cmdSimplify(int argc, char** argv) {
     // 组大小统计（簇数/组 + 三角数/组）
     size_t totalTri = 0;
     for (const auto& m : nm.meshlets) totalTri += m.triangleCount;
-    std::vector<std::uint32_t> sizeOf(g.groupCount, 0), triOf(g.groupCount, 0);
-    for (std::uint32_t c = 0; c < nm.meshlets.size(); ++c) {
+    std::vector<std::uint32_t> sizeOf(g.groupCount, 0);
+    for (std::uint32_t c = 0; c < nm.meshlets.size(); ++c)
         ++sizeOf[g.clusterGroup[c]];
-        triOf[g.clusterGroup[c]] += nm.meshlets[c].triangleCount;
-    }
     std::uint32_t sizeMin = ~0u, sizeMax = 0;
     double sizeSum = 0;
     for (std::uint32_t s : sizeOf) {
@@ -517,12 +528,85 @@ int cmdSimplify(int argc, char** argv) {
     const int bad = countDisconnectedGroups(nm, g);
     std::printf("connectivity: %s (%d disconnected group(s))\n",
                 bad == 0 ? "PASS" : "FAIL", bad);
+
+    // ---- M2.1：组内 QEM 简化 + 边界锁定 ----
+    nl::core::SimplifyResult sr;
+    if (!nl::core::simplifyGroups(nm, g, sr, error, ratio)) {
+        std::fprintf(stderr, "simplify: %s\n", error.c_str());
+        return 1;
+    }
+    std::printf("qem ratio   : %.0f%%\n", double(ratio) * 100.0);
+    std::printf("boundary pts: %zu locked (S3 DAG 沿用)\n", sr.lockedPoints.size());
+    std::printf("simplify    : %u -> %u tris (%.1f%%)  collapses %u  maxErr %.4f (world)\n",
+                sr.total.inputTriangles, sr.total.outputTriangles,
+                sr.total.inputTriangles
+                    ? 100.0 * double(sr.total.outputTriangles) / double(sr.total.inputTriangles)
+                    : 0.0,
+                sr.total.collapses, sr.total.maxError);
     if (verbose) {
         std::printf("per-group   :\n");
-        for (std::uint32_t grp = 0; grp < g.groupCount; ++grp)
-            std::printf("  [%3u] clusters=%-4u triangles=%-6u\n",
-                        grp, sizeOf[grp], triOf[grp]);
+        for (std::uint32_t grp = 0; grp < g.groupCount; ++grp) {
+            const auto& st = sr.perGroup[grp];
+            std::printf("  [%3u] clusters=%-3u tris %-6u -> %-6u (%5.1f%%)  collapses %-6u  maxErr %.4f\n",
+                        grp, sizeOf[grp], st.inputTriangles, st.outputTriangles,
+                        st.inputTriangles
+                            ? 100.0 * double(st.outputTriangles) / double(st.inputTriangles)
+                            : 0.0,
+                        st.collapses, st.maxError);
+        }
     }
+
+    // ---- meshopt 对照 oracle（同口径 LockBorder；正式实现是 core/simplify 的 QEM）----
+    // 注：meshopt 锁的是喂给它的子网格的**全部**拓扑边界（含模型外缘），
+    // 我们只锁组间边界 → oracle 通常更保守，简化率略低是预期。
+    {
+        std::vector<std::uint32_t> canon;
+        const std::uint32_t pointCount = nl::core::weldPositions(nm.vertices, canon);
+        std::vector<float> positions(std::size_t(pointCount) * 3, 0.f);
+        for (std::size_t i = 0; i < nm.vertices.size(); ++i)
+            for (int k = 0; k < 3; ++k)
+                positions[std::size_t(canon[i]) * 3 + k] = nm.vertices[i].pos[k];
+
+        // 按组拆分 canonical 三角形（重复点退化三角剔除，与 simplify 同口径）
+        std::vector<std::vector<std::uint32_t>> groupIdx(g.groupCount);
+        for (const auto& m : nm.meshlets) {
+            const std::uint32_t grp = g.clusterGroup[&m - nm.meshlets.data()];
+            for (std::uint32_t t = 0; t < m.triangleCount; ++t) {
+                const std::size_t base = m.triangleOffset + std::size_t(t) * 3;
+                const std::uint32_t ids[3] = {
+                    canon[m.vertexOffset + nm.triangles[base + 0]],
+                    canon[m.vertexOffset + nm.triangles[base + 1]],
+                    canon[m.vertexOffset + nm.triangles[base + 2]],
+                };
+                if (ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2]) continue;
+                groupIdx[grp].insert(groupIdx[grp].end(), { ids[0], ids[1], ids[2] });
+            }
+        }
+
+        std::uint32_t oracleIn = 0, oracleOut = 0;
+        double oracleErrSum = 0, oracleErrMax = 0;
+        std::uint32_t oracleGroups = 0;
+        for (const auto& gi : groupIdx) {
+            if (gi.size() < 3) continue;
+            oracleIn += std::uint32_t(gi.size() / 3);
+            std::vector<std::uint32_t> dst(gi.size());
+            const std::size_t targetIdx = ((gi.size() / 2) / 3) * 3;
+            float err = 0.f;
+            const std::size_t n = meshopt_simplify(
+                dst.data(), gi.data(), gi.size(),
+                positions.data(), pointCount, 12, targetIdx, 1e6f,
+                meshopt_SimplifyLockBorder, &err);
+            oracleOut += std::uint32_t(n / 3);
+            oracleErrSum += err;
+            oracleErrMax = std::max(oracleErrMax, double(err));
+            ++oracleGroups;
+        }
+        std::printf("oracle      : meshopt LockBorder %u -> %u tris (%.1f%%)  rel err avg %.4f max %.4f\n",
+                    oracleIn, oracleOut,
+                    oracleIn ? 100.0 * double(oracleOut) / double(oracleIn) : 0.0,
+                    oracleGroups ? oracleErrSum / oracleGroups : 0.0, oracleErrMax);
+    }
+
     return bad == 0 ? 0 : 1;
 }
 
@@ -982,6 +1066,344 @@ int selftestGroup() {
     return 1;
 }
 
+// ---- selftest qem：QEM 简化 + 边界锁定机械单测（M2.1 验收核心）----
+// 灵魂断言（S2-PLAN 指定）：两个相邻组各自简化后，公共边界**逐顶点完全一致**
+// —— 自动对比，不靠肉眼。边界集合与接缝边存活在 selftest 侧独立重算，
+// 与 simplify.cpp 交叉验证防同错。
+
+int selftestQem() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    // 独立重算：canonical 点 → 引用它的组集合（≥2 组 = 边界）；边界点位置代表元
+    auto independentBoundary =
+        [](const nl::core::NMeshData& nm, const nl::core::GroupingResult& g,
+           std::vector<std::uint32_t>& boundary,
+           std::vector<std::array<std::uint32_t, 3>>& boundaryTrisPerPoint) {
+            std::vector<std::uint32_t> canon;
+            const std::uint32_t pointCount = nl::core::weldPositions(nm.vertices, canon);
+            // 倒排：点 → 组集合（小集合用线性扫描，规模小无所谓）
+            std::vector<std::vector<std::uint32_t>> groupsOf(pointCount);
+            for (std::size_t c = 0; c < nm.meshlets.size(); ++c) {
+                const auto& m = nm.meshlets[c];
+                const std::uint32_t grp = g.clusterGroup[c];
+                for (std::uint32_t i = 0; i < m.vertexCount; ++i) {
+                    const std::uint32_t p = canon[m.vertexOffset + i];
+                    if (std::find(groupsOf[p].begin(), groupsOf[p].end(), grp)
+                        == groupsOf[p].end())
+                        groupsOf[p].push_back(grp);
+                }
+            }
+            boundary.clear();
+            for (std::uint32_t p = 0; p < pointCount; ++p)
+                if (groupsOf[p].size() >= 2) boundary.push_back(p);
+            (void)boundaryTrisPerPoint;
+            return groupsOf;
+        };
+
+    // 独立重算：接缝边（双边界端点）在每组的三角形覆盖数（简化前）
+    struct SeamEdge { std::uint64_t key; std::vector<std::uint32_t> perGroup; };
+    auto seamEdgesBefore =
+        [](const nl::core::NMeshData& nm, const nl::core::GroupingResult& g,
+           const std::vector<std::uint32_t>& boundary,
+           std::vector<SeamEdge>& seams) {
+            const auto keyOf = [](std::uint32_t a, std::uint32_t b) {
+                return (std::uint64_t(std::min(a, b)) << 32) | std::max(a, b);
+            };
+            std::vector<std::uint8_t> isBoundary;
+            {   // boundary 已排序
+                std::vector<std::uint32_t> canon;
+                const std::uint32_t pointCount = nl::core::weldPositions(nm.vertices, canon);
+                isBoundary.assign(pointCount, 0);
+                for (std::uint32_t p : boundary) isBoundary[p] = 1;
+            }
+            std::vector<std::uint32_t> canon;
+            nl::core::weldPositions(nm.vertices, canon);
+            std::map<std::uint64_t, std::vector<std::uint32_t>> acc;  // 有序 → 确定
+            for (std::size_t c = 0; c < nm.meshlets.size(); ++c) {
+                const auto& m = nm.meshlets[c];
+                const std::uint32_t grp = g.clusterGroup[c];
+                for (std::uint32_t t = 0; t < m.triangleCount; ++t) {
+                    const std::size_t base = m.triangleOffset + std::size_t(t) * 3;
+                    const std::uint32_t ids[3] = {
+                        canon[m.vertexOffset + nm.triangles[base + 0]],
+                        canon[m.vertexOffset + nm.triangles[base + 1]],
+                        canon[m.vertexOffset + nm.triangles[base + 2]],
+                    };
+                    if (ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2]) continue;
+                    for (int k = 0; k < 3; ++k) {
+                        const std::uint32_t u = ids[k], v = ids[(k + 1) % 3];
+                        if (!isBoundary[u] || !isBoundary[v]) continue;
+                        auto& cnt = acc[keyOf(u, v)];
+                        if (std::find(cnt.begin(), cnt.end(), grp) == cnt.end())
+                            cnt.push_back(grp);
+                    }
+                }
+            }
+            seams.clear();
+            for (auto& [k, gs] : acc)
+                seams.push_back({ k, std::move(gs) });
+        };
+
+    // 简化后：接缝边在每组的三角形覆盖数
+    auto seamEdgesAfter =
+        [](const nl::core::SimplifyResult& sr, const std::vector<SeamEdge>& before,
+           std::vector<std::vector<std::uint32_t>>& perGroupCount) {
+            const auto keyOf = [](std::uint32_t a, std::uint32_t b) {
+                return (std::uint64_t(std::min(a, b)) << 32) | std::max(a, b);
+            };
+            std::map<std::uint64_t, std::vector<std::uint32_t>> acc;
+            for (std::uint32_t grp = 0; grp < sr.groupTriCount.size(); ++grp) {
+                const std::uint32_t first = sr.groupFirstTri[grp];
+                for (std::uint32_t t = 0; t < sr.groupTriCount[grp]; ++t) {
+                    const std::size_t base = std::size_t(first + t) * 3;
+                    const std::uint32_t ids[3] = {
+                        sr.indices[base + 0], sr.indices[base + 1], sr.indices[base + 2],
+                    };
+                    for (int k = 0; k < 3; ++k) {
+                        const std::uint64_t k2 = keyOf(ids[k], ids[(k + 1) % 3]);
+                        auto& cnt = acc[k2];
+                        if (std::find(cnt.begin(), cnt.end(), grp) == cnt.end())
+                            cnt.push_back(grp);
+                    }
+                }
+            }
+            perGroupCount.clear();
+            for (const auto& se : before) {
+                std::vector<std::uint32_t> cnt;
+                auto it = acc.find(se.key);
+                if (it != acc.end()) cnt = it->second;
+                perGroupCount.push_back(std::move(cnt));
+            }
+        };
+
+    // Case 1：连续 64x64 网格 → 多组相邻 → 简化。灵魂断言全在这里。
+    {
+        std::printf("[connected 64x64 grid, group QEM 50%%]\n");
+        nl::core::NMeshData nm;
+        std::string reason;
+        if (!makeNMesh(makeTestMesh(1, 64, 64), nm, reason)) {
+            check(false, "makeNMesh", reason);
+        } else {
+            nl::core::GroupingResult g;
+            if (!nl::core::groupClusters(nm, g, reason)) {
+                check(false, "groupClusters", reason);
+            } else {
+                std::vector<std::uint32_t> boundary;
+                std::vector<std::array<std::uint32_t, 3>> unused;
+                const auto groupsOf = independentBoundary(nm, g, boundary, unused);
+
+                nl::core::SimplifyResult sr;
+                if (!nl::core::simplifyGroups(nm, g, sr, reason)) {
+                    check(false, "simplifyGroups", reason);
+                } else {
+                    // 1) 锁定点集合 == 独立重算的边界集合（交叉验证）
+                    bool lockedOk = sr.lockedPoints == boundary;
+                    check(lockedOk, "locked set == independent boundary set",
+                          "locked=" + std::to_string(sr.lockedPoints.size()) +
+                          " independent=" + std::to_string(boundary.size()));
+
+                    // 2) 灵魂断言：边界点位置逐点位级不变
+                    bool positionsOk = true;
+                    std::string posDetail;
+                    {
+                        std::vector<std::uint32_t> canon;
+                        nl::core::weldPositions(nm.vertices, canon);
+                        std::vector<std::uint32_t> rep(nm.vertices.size(), ~0u);
+                        for (std::size_t i = 0; i < nm.vertices.size(); ++i) {
+                            const std::uint32_t p = canon[i];
+                            if (rep[p] == ~0u) rep[p] = std::uint32_t(i);
+                        }
+                        for (std::uint32_t p : sr.lockedPoints) {
+                            const float* orig = nm.vertices[rep[p]].pos;
+                            const float* now = &sr.pointPositions[std::size_t(p) * 3];
+                            if (orig[0] != now[0] || orig[1] != now[1] || orig[2] != now[2]) {
+                                positionsOk = false;
+                                posDetail = "point " + std::to_string(p) + " moved";
+                                break;
+                            }
+                        }
+                    }
+                    check(positionsOk, "boundary vertices bit-identical", posDetail);
+
+                    // 3) 接缝边两侧都有三角形（无裂缝的拓扑前提）
+                    std::vector<SeamEdge> seams;
+                    seamEdgesBefore(nm, g, boundary, seams);
+                    std::vector<std::vector<std::uint32_t>> after;
+                    seamEdgesAfter(sr, seams, after);
+                    bool seamsOk = true;
+                    std::string seamDetail;
+                    for (std::size_t i = 0; i < seams.size() && seamsOk; ++i) {
+                        for (std::uint32_t grp : seams[i].perGroup) {
+                            const bool alive =
+                                std::find(after[i].begin(), after[i].end(), grp)
+                                != after[i].end();
+                            if (!alive) {
+                                seamsOk = false;
+                                seamDetail = "seam edge #" + std::to_string(i) +
+                                             " lost in group " + std::to_string(grp);
+                                break;
+                            }
+                        }
+                    }
+                    check(seamsOk, "seam edges alive on both sides", seamDetail);
+
+                    // 4) 简化率：接近 50%（拓扑约束下允许小幅偏差），每组非空
+                    bool ratioOk = sr.total.inputTriangles > 0;
+                    const double r = ratioOk
+                        ? double(sr.total.outputTriangles) / double(sr.total.inputTriangles)
+                        : 0.0;
+                    ratioOk = ratioOk && r >= 0.30 && r <= 0.60;
+                    bool nonEmpty = true;
+                    for (std::uint32_t c : sr.groupTriCount)
+                        if (c == 0) nonEmpty = false;
+                    check(ratioOk, "output ratio in [30%,60%]",
+                          "ratio=" + std::to_string(r));
+                    check(nonEmpty, "every group keeps triangles");
+
+                    // 5) 索引合法
+                    bool idxOk = true;
+                    for (std::uint32_t idx : sr.indices)
+                        if (idx >= sr.pointCount) { idxOk = false; break; }
+                    check(idxOk, "indices in range");
+
+                    // 6) 确定性：同输入重跑逐字节一致
+                    nl::core::SimplifyResult sr2;
+                    std::string reason2;
+                    if (nl::core::simplifyGroups(nm, g, sr2, reason2)) {
+                        check(sr2.indices == sr.indices &&
+                              sr2.lockedPoints == sr.lockedPoints &&
+                              sr2.groupTriCount == sr.groupTriCount &&
+                              sr2.total.collapses == sr.total.collapses,
+                              "deterministic (rerun identical)");
+                    } else {
+                        check(false, "deterministic (rerun identical)", reason2);
+                    }
+
+                    std::printf("  info groups=%u boundary=%zu tris %u -> %u (%.1f%%)\n",
+                                g.groupCount, sr.lockedPoints.size(),
+                                sr.total.inputTriangles, sr.total.outputTriangles,
+                                100.0 * double(sr.total.outputTriangles) /
+                                double(sr.total.inputTriangles));
+                }
+            }
+        }
+    }
+
+    // Case 2：单四边形（1 组、无边界）→ 可折叠到 1 三角
+    {
+        std::printf("[single quad, no boundary]\n");
+        nl::core::NMeshData nm;
+        std::string reason;
+        if (!makeNMesh(makeTestMesh(1, 2, 2), nm, reason)) {
+            check(false, "makeNMesh", reason);
+        } else {
+            nl::core::GroupingResult g;
+            if (!nl::core::groupClusters(nm, g, reason)) {
+                check(false, "groupClusters", reason);
+            } else {
+                check(g.groupCount == 1, "single quad -> 1 group");
+                nl::core::SimplifyResult sr;
+                if (!nl::core::simplifyGroups(nm, g, sr, reason)) {
+                    check(false, "simplifyGroups", reason);
+                } else {
+                    check(sr.lockedPoints.empty(), "no boundary points");
+                    check(sr.total.outputTriangles == 1 && sr.total.inputTriangles == 2,
+                          "quad collapses 2 -> 1",
+                          "out=" + std::to_string(sr.total.outputTriangles));
+                }
+            }
+        }
+    }
+
+    // Case 3：断连双块 —— 无边界点（块间无共享几何点），各组独立简化
+    {
+        std::printf("[2 disconnected blocks]\n");
+        nl::core::NMeshData nm;
+        std::string reason;
+        if (!makeNMesh(makeTestMesh(2, 32, 32), nm, reason)) {
+            check(false, "makeNMesh", reason);
+        } else {
+            nl::core::GroupingResult g;
+            if (!nl::core::groupClusters(nm, g, reason)) {
+                check(false, "groupClusters", reason);
+            } else {
+                nl::core::SimplifyResult sr;
+                if (!nl::core::simplifyGroups(nm, g, sr, reason)) {
+                    check(false, "simplifyGroups", reason);
+                } else {
+                    // 块内相邻簇可能分属不同组 → 块内可有边界点（正常）；
+                    // 真正要防的是锁定点跨块引用（块间无共享几何点，不可能出现，
+                    // 出现即数据坏了）。锁定点坐标必须落在某一块的 x 区间内。
+                    bool lockedInRange = true;
+                    {
+                        std::vector<std::uint32_t> canon;
+                        nl::core::weldPositions(nm.vertices, canon);
+                        std::vector<std::uint8_t> lockedPoint(~0u, 0);
+                        lockedPoint.assign(sr.pointCount, 0);
+                        for (std::uint32_t p : sr.lockedPoints) lockedPoint[p] = 1;
+                        for (std::size_t i = 0; i < nm.vertices.size() && lockedInRange; ++i)
+                            if (lockedPoint[canon[i]]) {
+                                const float x = nm.vertices[i].pos[0];
+                                if (x > 45.f && x < 95.f) lockedInRange = false;  // 块间空档
+                            }
+                    }
+                    check(lockedInRange, "locked points have per-block positions");
+                    check(sr.groupTriCount.size() == g.groupCount &&
+                          sr.indices.size() == std::size_t(sr.total.outputTriangles) * 3,
+                          "output accounting consistent");
+                    const double r = sr.total.inputTriangles
+                        ? double(sr.total.outputTriangles) / double(sr.total.inputTriangles)
+                        : 0.0;
+                    check(r >= 0.30 && r <= 0.60, "output ratio in [30%,60%]",
+                          "ratio=" + std::to_string(r));
+                }
+            }
+        }
+    }
+
+    // Case 4：负向 —— 非法 ratio / 聚组结果不匹配 / 空网格
+    std::printf("[input validation]\n");
+    {
+        nl::core::NMeshData nm;
+        std::string reason;
+        if (makeNMesh(makeTestMesh(1, 16, 16), nm, reason)) {
+            nl::core::GroupingResult g;
+            nl::core::SimplifyResult sr;
+            if (nl::core::groupClusters(nm, g, reason)) {
+                check(!nl::core::simplifyGroups(nm, g, sr, reason, 0.f),
+                      "ratio 0 rejected", reason);
+                check(!nl::core::simplifyGroups(nm, g, sr, reason, 1.5f),
+                      "ratio >1 rejected", reason);
+                nl::core::GroupingResult bogus;
+                bogus.clusterGroup.assign(nm.meshlets.size() + 1, 0);
+                bogus.groupCount = 1;
+                check(!nl::core::simplifyGroups(nm, bogus, sr, reason),
+                      "grouping size mismatch rejected", reason);
+            } else {
+                check(false, "groupClusters (precondition)", reason);
+            }
+        } else {
+            check(false, "makeNMesh (precondition)", reason);
+        }
+        nl::core::NMeshData empty;
+        nl::core::GroupingResult g2;
+        nl::core::SimplifyResult sr2;
+        check(!nl::core::simplifyGroups(empty, g2, sr2, reason),
+              "empty mesh rejected", reason);
+    }
+
+    if (failures == 0) {
+        std::printf("qem selftest: PASS\n");
+        return 0;
+    }
+    std::printf("qem selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -993,7 +1415,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "cluster") return selftestCluster();
         if (argc >= 3 && std::string(argv[2]) == "nmesh") return selftestNMesh();
         if (argc >= 3 && std::string(argv[2]) == "group") return selftestGroup();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group)\n");
+        if (argc >= 3 && std::string(argv[2]) == "qem") return selftestQem();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

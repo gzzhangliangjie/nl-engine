@@ -100,6 +100,10 @@ target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 # ---- M2.0：METIS vendored（簇聚组图分割，nanite-tools 离线管线用）----
 add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 
+# ---- M2.1：meshoptimizer vendored（仅 nanite-tools 的简化对照 oracle；
+# core/simplify 的 QEM 是正式实现，不依赖 meshopt）----
+add_subdirectory(thirdparty/meshoptimizer EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -111,6 +115,7 @@ add_library(nl_core STATIC
     core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）
     core/src/meshlet_io.cpp    # M1.2：.nmesh 二进制资产读写
     core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
+    core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -238,8 +243,10 @@ add_dependencies(viewer nl_shaders)
 
 # ---- M1.0：nanite-tools —— S1 离线网格工具（cluster / simplify / dag / stat） ----
 # 只链 nl_core（日志 + mesh_io），零图形 API；不依赖 renderer / viewer。
+# M2.1：另链 meshoptimizer —— 仅 simplify 子命令的对照 oracle（打印对照行），
+# core 自身不依赖 meshopt；viewer 不链它。
 add_executable(nanite-tools nanite-tools/main.cpp)
-target_link_libraries(nanite-tools PRIVATE nl_core)
+target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
 
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
@@ -286,4 +293,15 @@ add_test(NAME s2-group-suzanne
          COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
 set_tests_properties(s2-group-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "connectivity: PASS"
+    DEPENDS s1-nmesh-suzanne)
+# M2.1：QEM 简化 + 边界锁定机械单测（边界点集合交叉验证 / 边界点逐点位级不变 /
+# 接缝边双侧存活 / 简化率 / 确定性重跑 / 负向拒绝）
+add_test(NAME s2-qem-selftest COMMAND nanite-tools selftest qem)
+set_tests_properties(s2-qem-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "qem selftest: PASS")
+# M2.1：真实资产 QEM 简化验收（Suzanne 3936 tri → ~50%，边界锁定 + meshopt oracle 对照）
+add_test(NAME s2-qem-suzanne
+         COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh -v)
+set_tests_properties(s2-qem-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "oracle      : meshopt LockBorder"
     DEPENDS s1-nmesh-suzanne)
