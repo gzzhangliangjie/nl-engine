@@ -146,7 +146,7 @@
 ## 6. 后续动作（待用户圈定）
 
 - **Job 系统已立项**：`docs/p8/P8-JOB-PLAN.md`（M-J0~M-J4，首个消费者=离线管线）；下一步可执行 M-J0。
-- **材质图待立项**：用户拍板后按铁律读三处（MaterialX / PhasmaEngine 适配 / UE MaterialEditor）出正式计划。
+- **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后。
 - **动作系统待立项（2.4，纯逻辑层）**：用户拍板后按铁律读三处（UE `Animation/` / bevy_animation / Carrot 二次确认）出正式计划；逻辑层可先用确定性单测验收，不依赖渲染。
 - 其余 A 类轨道（骨骼蒙皮 2.3 / Lua 2.5 / 3D 音频 2.6）仍为候选，立项前按铁律读三处 + 出计划。
 
