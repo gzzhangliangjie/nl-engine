@@ -43,7 +43,11 @@ with CASES_PATH.open(encoding="utf-8") as f:
 
 
 def declared_shots() -> set[str]:
-    """Only PNGs named in example/cases.json are served (no path traversal)."""
+    """Only PNGs named in example/cases.json are served (no path traversal).
+
+    Includes `preview`: static evidence images for tool milestones (e.g. the
+    s2-qem QEM before/after render), which no viewer.exe produces at runtime.
+    """
     out: set[str] = set()
     for v in DATA["versions"]:
         for c in v["cases"]:
@@ -51,6 +55,9 @@ def declared_shots() -> set[str]:
                 for rel in (c.get(key) or {}).values():
                     if rel and rel.startswith("example/"):
                         out.add(rel[len("example/"):])
+            rel = c.get("preview")
+            if rel and rel.startswith("example/"):
+                out.add(rel[len("example/"):])
     return out
 
 

@@ -198,3 +198,47 @@ qem selftest: PASS
 要点：边界集合与接缝边存活在 selftest 侧**独立重算**（与 simplify.cpp 交叉
 验证防同错）；64x64 网格 22 组相邻、807 边界点，简化后边界逐点位级一致——
 这就是「相邻组拼接无裂缝」的自动证明（S2.3 再做视觉验收）。
+
+## M2.1 补充交代：可视化证据图（同日补齐，tag `s2-qem`）
+
+M2.1 原交付只有文本统计与 selftest 断言。用户追问「有图么」后补上**真实几何**
+的对比图：不是示意图、不是别的版本截图，而是 `simplify --obj` 导出的同一份
+canonical 三角 soup，经离线渲染得到的左右对照。
+
+### 导出：`--obj <prefix>`
+
+```
+nanite-tools simplify assets/meshlets/Suzanne.nmesh --obj build/qem/suzanne
+obj dump   : build/qem/suzanne.before.obj (2012 pts / 3936 tris),
+             build/qem/suzanne.after.obj  (2012 pts / 1976 tris),
+             build/qem/suzanne.locked     (622 pts)
+```
+
+- `.before.obj` / `.after.obj`：同一 canonical 点编号体系（`weldPositions` 口径），
+  点数量相同、边界点位置位级不变，所以两图能用同一机位同一尺度叠红点。
+- `.locked`：组间边界点编号（0-based，逐行一个），即 S3 DAG 要持久化的集合。
+- 该导出也是 M2.2 分层落盘的几何口径参考（重切在此 soup 上做）。
+
+### 出图：`tools/qem_preview.py`（Pillow，纯本地，无 GPU / 无网络）
+
+```
+python tools/qem_preview.py build/qem/suzanne example/s2-qem/qem-suzanne.png
+# 可选 --yaw 12 --pitch 9（默认）
+```
+
+正交投影 + 画家算法实心填充 + 三角线框 + 红点高亮，2x 超采样。左右两栏
+**共用 center/scale/相机**（从两网格并集包围盒算），因此红点位置若不一致会
+一眼看出——这是 selftest「边界逐点位级不变」的视觉对应物。
+
+成品：`example/s2-qem/qem-suzanne.png`（1260x640）
+——左 `BEFORE 3936 tris` / 右 `AFTER 1976 tris (50.2%)`，
+622 个红点（组间锁定边界点）在两栏逐像素同位。
+一键复现：`example/s2-qem/run.bat`。
+
+### 展示台挂图
+
+`example/cases.json` 的 `s2-qem/simplify` 卡带 `"preview": "example/s2-qem/qem-suzanne.png"`；
+`tools/showcase/server.py` 的 `declared_shots()` 收集 `preview` 进 `/shots/` 只读白名单，
+`app.js` 在工具卡正文下方渲染静态图。另加 `s2-qem/dump` 工具用例现场实跑 `--obj`
+（`expectExit 0` + `expectLog "obj dump   :"`）。静态证据图不进总闸 PNG 比对，
+回归仍只校验文本输出：96/96 ALL GREEN，ctest 10/10。

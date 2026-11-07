@@ -569,3 +569,19 @@
 4. **简化率略高于 50%（球 54.4%）**：50% 附近只剩 2-tri 折叠会越过目标或被 link condition 拒，组提前停住。口径内不改（M2.2 重切对 4~5% 偏差不敏感）。
 
 **下一步**：M2.2 简化后重切（复用 M1.1 buildMeshlets）+ 逐层循环，分层 .nmesh 落盘时把边界点集合持久化（S3 DAG 合并用）。
+
+## M2.1 补：可视化证据图（用户追问「有图么」后补齐）
+
+**动作**：`simplify --obj <prefix>` 导出真实几何（before/after OBJ + locked 边界点集合，父目录自动创建）；新增 `tools/qem_preview.py`（Pillow 离线正交渲染，同机位同尺度左右对照 + 红点高亮）；产出 `example/s2-qem/qem-suzanne.png` + `example/s2-qem/run.bat`；展示台支持 `case.preview` 静态证据图（server 白名单 + app.js 卡片渲染 + CSS），s2-qem 卡挂图并新增 `dump` 现场实跑用例；ROADMAP「里程碑交代规范」固化「工具版本必须有真实输出生成的证据图」。
+
+**提交版本**：`s2-qem`（补齐后重打 tag）
+
+**完成情况**
+- 图由工具真实导出的 2012 canonical 点 / 3936→1976 三角渲染，左 BEFORE 右 AFTER，622 红点两栏逐像素同位；`run.bat` 一键复现，`/shots/` 路由实测 200、461135 字节。
+- 双后端 nanite-tools 重编、ctest 10/10、回归 96/96 ALL GREEN（新增 2 条 dump 用例），`server.py --check` OK。
+- 规范同步：ROADMAP 表格与约定条目改掉「工具版本不产截图」的旧表述，明确不产 GPU 截图但必须有真实证据图。
+
+**踩坑情况**
+1. 原规范写「工具版本不产截图」，容易被当成「工具版本不用给图」——用户一句「有图么」直接指出缺口；改成「不产 GPU 截图，但必须有从工具真实输出生成的证据图」，并给出 `preview` 机制作为样板。
+2. 展示台原本只为渲染基线（`baselines`/`beforeBaselines`）开放 `/shots/` 白名单，静态图直接引用会 403；把 `preview` 一并收进 `declared_shots()` 才通。
+3. `--obj` 首次实现不创建父目录，干净 clone 的 `build/qem/` 不存在会写文件失败；加 `std::filesystem::create_directories(parent, ec)`。

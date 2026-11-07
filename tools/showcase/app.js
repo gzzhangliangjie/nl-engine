@@ -107,6 +107,11 @@ function renderCases(v) {
     const shots = hasImage
       ? `<div class="shots">${shotBlock(v, c, 'dx12')}${shotBlock(v, c, 'vulkan')}</div>`
       : '';
+    // Static evidence image (tool milestones): registered in cases.json as
+    // "preview": "example/...png", served read-only via /shots/.
+    const preview = c.preview
+      ? `<div class="preview"><img src="${esc('/shots/' + c.preview.replace(/^example\//, ''))}" alt="静态证据图"></div>`
+      : '';
     const btnLabel = c.kind === 'selftest' ? '▶ 运行自检'
       : c.kind === 'tool' ? '▶ 运行工具'
       : c.kind === 'manual' ? '交互用例 · 手动运行' : '▶ 运行看效果';
@@ -116,6 +121,7 @@ function renderCases(v) {
         <span class="kind ${esc(c.kind)}">${esc(c.kind)}</span>
       </div>
       <div class="card-note">${esc(c.note)}</div>
+      ${preview}
       ${shots}
       ${params}
       <div class="cmd"><span>${esc(c.command)}</span><button data-copy="${esc(c.command)}">复制</button></div>

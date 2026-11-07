@@ -27,13 +27,14 @@
 | 版本类型 | 交代物 | cases.json 用例类型 | 总闸覆盖 |
 |---|---|---|---|
 | **渲染版本**（改 viewer / shader） | `example/<版本>/` 基线 PNG + `run.bat`，网页上看图、现场重跑比对基线 | `image` / `pair` / `selftest` | PNG×基线逐字节比对（bytes / near / FAIL） |
-| **工具版本**（nanite-tools 等不产图） | 展示台工具卡：点「运行工具」现场实跑、**输出直接展开显示**；另归档一份 `docs/s*/…-TOOLS-GUIDE.md`（usage + 实跑输出 + 负向路径与退出码） | `tool` | 文本用例：`expectExit` + `expectLog` 校验 |
+| **工具版本**（nanite-tools 等不产 GPU 截图） | 展示台工具卡：点「运行工具」现场实跑、**输出直接展开显示**；**一张从工具真实输出生成的证据图**（`preview` 静态图，见下方约定）；另归档一份 `docs/s*/…-TOOLS-GUIDE.md`（usage + 实跑输出 + 负向路径与退出码） | `tool` | 文本用例：`expectExit` + `expectLog` 校验 |
 
 **工具用例（`kind:"tool"`）约定**：
 - `args` 只允许来自 cases.json 清单（服务端不执行任意命令）；引用仓库内文件用 `{root}` 占位；可变参数走 `params` 白名单（`type:"select"` 只许枚举值，防路径穿越）。
 - **退出码语义**：`0` 成功 / `1` 用法错误或运行失败 / `2` 已声明未实现（防静默假成功）。用例用 `expectExit` 声明预期退出码，`expectLog` 声明输出必须包含的行；两者由展示台 `/api/run` 与 `tools/regression.py` **同一套语义**校验。
 - 每个工具版本至少三条用例：**一条正向**（核心功能实跑输出）、**一条 usage/总览**、**一条负向**（非法输入或未实现路径的显式退出码）。
-- 工具版本不产截图、不动 kStage（渲染阶段号只在渲染版本前进时更新）；`server.py --check` 依旧按 kStage 校验渲染用例归位，工具版本的交代挂在展示台自己的版本卡上。
+- **补图要求（2026-11-07 用户追问「有图么」后固化）**：工具版本不产 GPU 截图，但**必须有一张肉眼可验的证据图**，且必须由工具的**真实输出**生成，不许手绘示意、不许拿别的版本截图凑数。做法：工具提供几何/数据导出（如 `simplify --obj`），本地离线渲染脚本（如 `tools/qem_preview.py`）出 PNG → 放 `example/<版本>/` → 用例上写 `"preview": "example/<版本>/<图>.png"`，展示台只读经 `/shots/` 白名单（`server.py declared_shots()` 收集 `preview`）显示在卡片上；同目录放 `run.bat` 一键复现。首个样板：`example/s2-qem/qem-suzanne.png`（左右同机位同尺度的 QEM 简化前后线框，红点=锁定边界点）。静态图不进总闸比对，回归仍只校验文本输出。
+- 工具版本不动 kStage（渲染阶段号只在渲染版本前进时更新）；`server.py --check` 依旧按 kStage 校验渲染用例归位，工具版本的交代挂在展示台自己的版本卡上。
 - 纯工具版本的「渲染零影响」证明 = 全量回归 ALL GREEN（历史基线逐字节不动）。
 
 **Carrot 开发过程实况（两份，别搞混）**：

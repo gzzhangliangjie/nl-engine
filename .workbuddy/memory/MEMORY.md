@@ -10,7 +10,7 @@
 
 ## 开发节奏
 - 每阶段：目标 → 亲眼可见用例 → 验收判据 → 放行；tag 在验收之后打。
-- **每个里程碑必须有「交代」（2026-11-07 用户定）**：渲染版本 = `example/` 截图基线；工具版本 = **展示台网页 `kind:"tool"` 用例**（点运行实跑、输出展开；usage/正向/负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s1/NANITE-TOOLS-GUIDE.md` 式归档。规范固化在 `docs/ROADMAP.md`「里程碑交代规范」节。注意：展示台 8787 端口有旧会话残留进程时新实例绑定静默失败，先 `netstat -ano | grep 8787` 清残留。
+- **每个里程碑必须有「交代」（2026-11-07 用户定）**：渲染版本 = `example/` 截图基线；工具版本 = **展示台网页 `kind:"tool"` 用例**（点运行实跑、输出展开；usage/正向/负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s1/NANITE-TOOLS-GUIDE.md` 式归档。规范固化在 `docs/ROADMAP.md`「里程碑交代规范」节。注意：展示台 8787 端口有旧会话残留进程时新实例绑定静默失败，先 `netstat -ano | grep 8787` 清残留。**补图（同日用户追问「有图么」后固化）**：工具版本不产 GPU 截图，但必须有从工具真实输出生成的证据图（cases.json `preview` 静态图 + `example/<版本>/run.bat` 复现；server `declared_shots()` 收 `preview` 走 `/shots/` 白名单），不许手绘示意；样板 `example/s2-qem/qem-suzanne.png`（`--obj` 导出 + `tools/qem_preview.py` Pillow 离线渲染）。
 - **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`，登记 `example/cases.json`（唯一数据源，别建第二份清单）；验收/tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
 - **M0.9 起总闸：提交/tag 前 `python tools/regression.py` 全绿才放行**（全量历史用例 × 双后端比对基线）。
 - 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作/提交版本/完成情况/踩坑）写实追加。
@@ -25,7 +25,7 @@
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
 - **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
-- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组已过（回归 88/88）；下一步 **M2.1 组内 QEM 简化+边界锁定**（meshoptimizer simplifier 作对照 oracle）。
+- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组（回归 88/88）；`s2-qem`→M2.1 组内 QEM 简化+边界锁定已过（回归 94/94，ctest 10/10）。core/simplify：QEM 面积加权二次型+有序集队列，边界锁定看组归属（≥2 组引用即锁）+接缝边保护；weld 抽 `weldPositions` 单一出处；meshoptimizer 1.3 vendored 仅 nanite-tools 链作 LockBorder oracle。Suzanne 50.2%、球 54.4%（2-tri 折叠越目标所致，口径内）。下一步 **M2.2 重切+逐层循环**（复用 buildMeshlets；分层 .nmesh 落盘时持久化 lockedPoints，S3 要用）。
 - 穿插项归宿（防重复建设，总表在 ROADMAP「穿插项」节）：ShadowMap/PCF/PCSS=`shadow-map`、PRT/球谐=`prt-sh`、SSR=排 S6 后（复用 Hi-Z）、Kulla-Conty=并入 pbr-direct、SSAO=`ssao`、后处理链=`post-chain`（S7 后插）、Forward+/渲染图/热重载=归 P8。
 - Suzanne = 3,936 tri（11,808 索引），旧口径 504 tri 是错的；IcoSphereDense = 327,680 tri / 4,929 簇。
 

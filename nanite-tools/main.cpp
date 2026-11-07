@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <string>
@@ -32,7 +33,8 @@ void printUsage() {
         "  nanite-tools stat <model>                 summary (.glb/.gltf 或 .nmesh)\n"
         "  nanite-tools cluster <model> [-v] [-o out.nmesh]   meshlet build + save\n"
         "  nanite-tools selftest cluster|nmesh|group|qem  deterministic unit tests\n"
-        "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5]  group QEM + boundary lock (S2)\n"
+        "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5] [--obj prefix]\n"
+        "                        group QEM + boundary lock; --obj dumps before/after OBJ + locked pts\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
@@ -473,10 +475,18 @@ int cmdSimplify(int argc, char** argv) {
     const char* path = argv[0];
     bool verbose = false;
     float ratio = nl::core::kSimplifyDefaultRatio;
+    std::string objPrefix;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a.empty()) continue;  // 展示台 select 空选项展开成空 arg，视为未传
         if (a == "-v") verbose = true;
+        else if (a == "--obj") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "simplify: --obj needs a path prefix\n");
+                return 1;
+            }
+            objPrefix = argv[++i];
+        }
         else if (a == "-r") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "simplify: -r needs a ratio in (0,1]\n");
@@ -605,6 +615,58 @@ int cmdSimplify(int argc, char** argv) {
                     oracleIn, oracleOut,
                     oracleIn ? 100.0 * double(oracleOut) / double(oracleIn) : 0.0,
                     oracleGroups ? oracleErrSum / oracleGroups : 0.0, oracleErrMax);
+    }
+
+    // ---- 可视化验收导出：真实几何（M2.1 补图；M2.2 落盘同口径）----
+    // --obj <prefix> 写 <prefix>.before.obj / .after.obj / .locked：
+    // before = 输入的 canonical 三角 soup，after = QEM 简化结果，
+    // locked = 组间边界 canonical 点编号（0-based，逐行一个）。
+    if (!objPrefix.empty()) {
+        const auto parent = std::filesystem::path(objPrefix).parent_path();
+        if (!parent.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(parent, ec);
+        }
+        std::vector<std::uint32_t> canon;
+        const std::uint32_t pcBefore = nl::core::weldPositions(nm.vertices, canon);
+        std::vector<float> beforePos(std::size_t(pcBefore) * 3, 0.f);
+        for (std::size_t i = 0; i < nm.vertices.size(); ++i)
+            for (int k = 0; k < 3; ++k)
+                beforePos[std::size_t(canon[i]) * 3 + k] = nm.vertices[i].pos[k];
+        std::vector<std::uint32_t> beforeIdx;
+        nl::core::buildCanonicalTriangles(nm, beforeIdx);
+
+        auto writeObj = [](const std::string& file, const std::vector<float>& pos,
+                           const std::vector<std::uint32_t>& idx) {
+            std::FILE* f = std::fopen(file.c_str(), "wb");
+            if (!f) return false;
+            for (std::size_t i = 0; i < pos.size(); i += 3)
+                std::fprintf(f, "v %.7g %.7g %.7g\n", pos[i], pos[i + 1], pos[i + 2]);
+            for (std::size_t i = 0; i < idx.size(); i += 3)
+                std::fprintf(f, "f %u %u %u\n", idx[i] + 1, idx[i + 1] + 1, idx[i + 2] + 1);
+            return std::fclose(f) == 0;
+        };
+        const std::string beforeFile = objPrefix + ".before.obj";
+        const std::string afterFile = objPrefix + ".after.obj";
+        const std::string lockedFile = objPrefix + ".locked";
+        bool ok = writeObj(beforeFile, beforePos, beforeIdx)
+               && writeObj(afterFile, sr.pointPositions, sr.indices);
+        if (ok) {
+            std::FILE* f = std::fopen(lockedFile.c_str(), "wb");
+            if (!f) ok = false;
+            else {
+                for (std::uint32_t p : sr.lockedPoints) std::fprintf(f, "%u\n", p);
+                ok = std::fclose(f) == 0;
+            }
+        }
+        if (!ok) {
+            std::fprintf(stderr, "simplify: --obj failed to write %s*\n", objPrefix.c_str());
+            return 1;
+        }
+        std::printf("obj dump   : %s.before.obj (%u pts / %zu tris), %s.after.obj (%u pts / %u tris), %s.locked (%zu pts)\n",
+                    objPrefix.c_str(), pcBefore, beforeIdx.size() / 3,
+                    objPrefix.c_str(), sr.pointCount, sr.total.outputTriangles,
+                    objPrefix.c_str(), sr.lockedPoints.size());
     }
 
     return bad == 0 ? 0 : 1;

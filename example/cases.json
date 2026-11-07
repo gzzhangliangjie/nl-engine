@@ -1387,13 +1387,14 @@
    "name": "组内 QEM 简化 + 边界锁定（S2 灵魂里程碑）",
    "tag": "s2-qem",
    "date": "2026-11-07",
-   "summary": "core/simplify：组内 QEM 边折叠（Garland-Heckbert 面积加权二次型 + 有序集折叠队列，代价平局按点编号决胜→完全确定）。灵魂机制：组间边界 canonical 点（被 ≥2 个组的簇引用，判定看组归属而非几何边）锁死——永不移动、永不折叠、其单三角形接缝边不被第三方折叠摧毁（否则跨组裂缝）。link condition + 法线翻转检查拒绝坏折叠；退化平面按面积 clamp。折叠到 round(输入×0.5) 即停，误差=世界空间长度。meshoptimizer vendored 作同口径 LockBorder 对照 oracle（只在 nanite-tools，core 不依赖）。",
+   "summary": "core/simplify：组内 QEM 边折叠（Garland-Heckbert 面积加权二次型 + 有序集折叠队列，代价平局按点编号决胜→完全确定）。灵魂机制：组间边界 canonical 点（被 ≥2 个组的簇引用，判定看组归属而非几何边）锁死——永不移动、永不折叠、其单三角形接缝边不被第三方折叠摧毁（否则跨组裂缝）。link condition + 法线翻转检查拒绝坏折叠；退化平面按面积 clamp。折叠到 round(输入×0.5) 即停，误差=世界空间长度。meshoptimizer vendored 作同口径 LockBorder 对照 oracle（只在 nanite-tools，core 不依赖）。 可视化验收：simplify --obj 导出真实几何（before/after OBJ + 锁定点），tools/qem_preview.py 同机位同尺度渲染 example/s2-qem/qem-suzanne.png，左侧 3936 tri / 右侧 1976 tri、622 个红点（组间边界点）两图逐像素同位。",
    "acceptance": [
     "selftest qem 全绿：锁定点集合==独立重算边界集合（交叉验证）、边界点位级不变、接缝边双侧存活（无裂缝拓扑前提）、简化率 30~60%、确定性重跑一致、负向拒绝",
     "Suzanne：3936 → 1976 tri（50.2%）、622 边界点锁定、maxErr 0.025（世界空间）；oracle meshopt 49.5% 同档",
     "ctest 8→10（s2-qem-selftest / s2-qem-suzanne 正则锁定 oracle 行）",
     "viewer 零改动：回归总闸全绿（渲染基线逐字节不动）",
-    "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档"
+    "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档",
+    "可视化证据：example/s2-qem/qem-suzanne.png + example/s2-qem/run.bat 一键复现；展示台 s2-qem 卡直接显示该图"
    ],
    "exe": {
     "dx12": "build/dx12/nanite-tools.exe",
@@ -1417,7 +1418,7 @@
      "id": "simplify",
      "name": "simplify：Suzanne 组内 QEM 简化（带 -v 明细）",
      "kind": "tool",
-     "note": "读 .nmesh → METIS 聚组 → 逐组 QEM 简化到 50%：打印边界点锁定数（S3 DAG 沿用）、每组输入/输出三角数与 collapses、世界空间 maxErr；oracle 行是 meshopt_SimplifyLockBorder 同参数对照（它锁全部拓扑边界含模型外缘，比我们只锁组间边界更保守）。下拉切 Suzanne / IcoSphereDense 对比高模表现。",
+     "note": "读 .nmesh → METIS 聚组 → 逐组 QEM 简化到 50%：打印边界点锁定数（S3 DAG 沿用）、每组输入/输出三角数与 collapses、世界空间 maxErr；oracle 行是 meshopt_SimplifyLockBorder 同参数对照（它锁全部拓扑边界含模型外缘，比我们只锁组间边界更保守）。下拉切 Suzanne / IcoSphereDense 对比高模表现。 卡片上方是同一份真实几何的简化前后对比图（同机位同尺度，红点=622 个锁定边界点，两图位置完全一致）。",
      "args": [
       "simplify",
       "{root}/assets/meshlets/{asset}",
@@ -1436,7 +1437,8 @@
      },
      "expectExit": 0,
      "expectLog": "oracle      : meshopt LockBorder",
-     "command": "nanite-tools simplify assets/meshlets/<asset> -v"
+     "command": "nanite-tools simplify assets/meshlets/<asset> -v",
+     "preview": "example/s2-qem/qem-suzanne.png"
     },
     {
      "id": "negative-ratio",
@@ -1452,6 +1454,21 @@
      "expectExit": 1,
      "expectLog": "target ratio must be in (0,1]",
      "command": "nanite-tools simplify Suzanne.nmesh -r 0"
+    },
+    {
+     "id": "dump",
+     "name": "simplify --obj：导出真实几何供可视化验收",
+     "kind": "tool",
+     "note": "现场实跑 --obj：写出 .before.obj / .after.obj（canonical 点 + 三角形 soup）与 .locked（组间边界点编号）。example/s2-qem/qem-suzanne.png 即由这份导出经 tools/qem_preview.py 离线渲染（同机位同尺度），复现脚本 example/s2-qem/run.bat。M2.2 分层落盘沿用同一口径。",
+     "args": [
+      "simplify",
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "--obj",
+      "{root}/build/qem/showcase-suzanne"
+     ],
+     "expectExit": 0,
+     "expectLog": "obj dump   :",
+     "command": "nanite-tools simplify Suzanne.nmesh --obj build/qem/<name>"
     }
    ]
   }
