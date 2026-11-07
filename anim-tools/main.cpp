@@ -14,6 +14,7 @@
 //   blendspace   M-A4 1D blend space
 
 #include "nl/anim/anim.hpp"
+#include "nl/anim/state_machine.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -369,6 +370,198 @@ int runBlendSelftest() {
     return g_failures == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// M-A3 statemachine
+// ---------------------------------------------------------------------------
+
+nl::anim::AnimClip makeLocoClip(const char* bone, float zEnd) {
+    nl::anim::AnimClip clip;
+    clip.duration = 1.0f;
+    nl::anim::BoneTrack track;
+    track.bone = bone;
+    track.translation.times = { 0.0f, 1.0f };
+    track.translation.values = { { 0, 1, 0 }, { 0, 1, zEnd } };
+    clip.tracks = { track };
+    return clip;
+}
+
+nl::anim::StateMachineDesc makeLocoDesc() {
+    nl::anim::StateMachineDesc desc;
+    desc.states = {
+        { "idle", makeLocoClip("hips", 0.0f) },
+        { "walk", makeLocoClip("hips", 1.0f) },
+        { "run",  makeLocoClip("hips", 4.0f) },
+    };
+    desc.initialState = 0;   // idle
+    // 声明顺序 = 优先级（UE FindValidTransition 取首个满足者）
+    desc.rules = {
+        { 0, 1, [](const nl::anim::ParamValues& p) { return p[0] > 0.2f; }, 0.2f },   // idle->walk
+        { 1, 2, [](const nl::anim::ParamValues& p) { return p[0] > 1.0f; }, 0.3f },   // walk->run
+        { 2, 1, [](const nl::anim::ParamValues& p) { return p[0] < 0.8f; }, 0.3f },   // run->walk
+        { 1, 0, [](const nl::anim::ParamValues& p) { return p[0] < 0.05f; }, 0.2f },  // walk->idle
+    };
+    return desc;
+}
+
+// 跑一段确定性场景，把 (状态名, alpha, 髋部 z) 序列写进 out（供断言与确定性比对）。
+// 时序：每步先推进时间与 alpha，再按优先级查当前态转移规则（转移当帧 alpha 从 0 起）。
+void runLocoScenario(nl::anim::AnimationStateMachine& sm, std::string* names,
+                     float* alphas, float* durations, float* zs) {
+    struct Step { float dt; float speed; };
+    const Step steps[] = {
+        { 0.1f, 0.0f },   // 0 idle 安稳（z=0）
+        { 0.1f, 0.5f },   // 1 idle->walk 起转移（当帧 alpha=0，z=0）
+        { 0.1f, 0.5f },   // 2 alpha=0.5（z=lerp(0, walk@0.1 z0.1, 0.5)=0.05）
+        { 0.1f, 0.5f },   // 3 alpha=1 完成（z=walk@0.2=0.2）
+        { 0.1f, 2.0f },   // 4 walk->run 起转移（z=lerp(walk@0.3, run@0, 0)=0.3）
+        { 0.1f, 2.0f },   // 5 alpha=1/3（z=lerp(walk@0.4 z0.4, run@0.1 z0.4, 1/3)=0.4）
+        { 0.1f, 0.0f },   // 6 alpha=2/3 后 run->walk 回退：alpha 取反 1/3、缩时 0.2（z 连续 0.7）
+        { 0.1f, 0.0f },   // 7 alpha=5/6 后 walk->idle 起转移（旧 run 贡献丢弃=单活跃转移声明）
+        { 0.1f, 0.0f },   // 8 alpha=0.5（z=lerp(walk@0.7 z0.7, idle 0, 0.5)=0.35）
+        { 0.1f, 0.0f },   // 9 alpha=1 完成（z=idle 0）
+    };
+    for (int i = 0; i < 10; ++i) {
+        sm.update(steps[i].dt, { steps[i].speed });
+        std::vector<nl::anim::BonePose> pose;
+        if (!sm.evaluate(pose)) {
+            ++g_failures;
+            std::printf("  FAIL scenario step %d: evaluate false\n", i);
+            return;
+        }
+        names[i] = sm.currentStateName();
+        alphas[i] = sm.transitionAlpha();
+        durations[i] = sm.transitionDuration();
+        zs[i] = pose[0].translation.z;
+    }
+}
+
+void testStateMachineScenario() {
+    nl::anim::AnimationStateMachine sm;
+    expectTrue(sm.reset(makeLocoDesc()), "reset ok");
+
+    std::string names[10];
+    float alphas[10], durations[10], zs[10];
+    runLocoScenario(sm, names, alphas, durations, zs);
+
+    expectTrue(names[0] == "idle", "step0 idle");
+    expectNear(true, "step0 z", zs[0], 0.0f, 1e-6f);
+
+    expectTrue(names[1] == "walk", "step1 target walk");
+    expectNear(true, "step1 alpha", alphas[1], 0.0f, 0.0f);
+    expectNear(true, "step1 duration", durations[1], 0.2f, 1e-6f);
+    expectNear(true, "step1 z", zs[1], 0.0f, 1e-6f);
+
+    expectNear(true, "step2 alpha", alphas[2], 0.5f, 1e-6f);
+    expectNear(true, "step2 z", zs[2], 0.05f, 1e-6f);
+
+    expectNear(true, "step3 alpha", alphas[3], 1.0f, 1e-6f);
+    expectNear(true, "step3 z", zs[3], 0.2f, 1e-6f);
+
+    expectTrue(names[4] == "run", "step4 target run");
+    expectNear(true, "step4 z", zs[4], 0.3f, 1e-6f);
+
+    expectNear(true, "step5 alpha", alphas[5], 1.0f / 3.0f, 1e-6f);
+    expectNear(true, "step5 z", zs[5], 0.4f, 1e-6f);
+
+    // 回退转移：alpha=2/3 时切回 walk（目标态既有权重 1/3）-> alpha 取反 1/3、
+    // UE 缩时 effective = 0.3 * (1 - 1/3) = 0.2；z 连续（回退前后同值 0.7）
+    expectTrue(names[6] == "walk", "step6 revert to walk");
+    expectNear(true, "step6 alpha", alphas[6], 1.0f / 3.0f, 1e-6f);
+    expectNear(true, "step6 duration", durations[6], 0.2f, 1e-6f);
+    expectNear(true, "step6 z", zs[6], 0.7f, 1e-5f);
+
+    expectTrue(names[7] == "idle", "step7 walk->idle");
+    expectNear(true, "step7 z", zs[7], 0.6f, 1e-6f);   // alpha=0 -> 纯 walk@0.6
+
+    expectNear(true, "step8 alpha", alphas[8], 0.5f, 1e-6f);
+    expectNear(true, "step8 z", zs[8], 0.35f, 1e-6f);
+
+    expectTrue(names[9] == "idle", "step9 idle");
+    expectNear(true, "step9 alpha", alphas[9], 1.0f, 1e-6f);
+    expectNear(true, "step9 z", zs[9], 0.0f, 1e-6f);
+}
+
+void testStateMachineRevertBlend() {
+    nl::anim::AnimationStateMachine sm;
+    expectTrue(sm.reset(makeLocoDesc()), "reset ok");
+
+    // idle->walk 半途（alpha=0.5）速度归零 -> walk->idle 命中回退路径
+    sm.update(0.1f, { 0.0f });              // idle 安稳
+    sm.update(0.1f, { 0.5f });              // idle->walk 起转移（alpha=0）
+    sm.update(0.1f, { 0.0f });              // alpha=0.5 后 walk->idle 命中回退
+    std::vector<nl::anim::BonePose> pose;
+    expectTrue(sm.currentStateName() == "idle", "revert target idle");
+    expectNear(true, "revert alpha", sm.transitionAlpha(), 0.5f, 1e-6f);
+    // UE 防跳变缩时：effective = 0.2 * (1 - 0.5) = 0.1
+    expectNear(true, "revert effective duration", sm.transitionDuration(), 0.1f, 1e-6f);
+    // 姿态连续：回退当帧 z 与回退前相同（lerp 对称性）
+    expectTrue(sm.evaluate(pose), "eval after revert");
+    expectNear(true, "continuity z", pose[0].translation.z, 0.05f, 1e-6f);
+
+    // 0.1s 后混合完成（缩时时长生效）
+    sm.update(0.1f, { 0.0f });
+    expectNear(true, "revert done alpha", sm.transitionAlpha(), 1.0f, 1e-6f);
+    expectTrue(sm.evaluate(pose), "eval done");
+    expectNear(true, "revert done z", pose[0].translation.z, 0.0f, 1e-6f);
+}
+
+void testStateMachineValidateNegative() {
+    nl::anim::StateMachineDesc desc = makeLocoDesc();
+    expectStr(nl::anim::validateStateMachine(desc), "", "valid desc passes");
+
+    nl::anim::StateMachineDesc bad = desc;
+    bad.rules[0].to = 9;
+    expectTrue(!nl::anim::validateStateMachine(bad).empty(), "reject rule out of range");
+    bad = desc;
+    bad.states[1].name = "idle";
+    expectTrue(!nl::anim::validateStateMachine(bad).empty(), "reject duplicate state");
+    bad = desc;
+    bad.rules[1].from = 1; bad.rules[1].to = 1;
+    expectTrue(!nl::anim::validateStateMachine(bad).empty(), "reject self-loop");
+    bad = desc;
+    bad.rules[2].canTake = nullptr;
+    expectTrue(!nl::anim::validateStateMachine(bad).empty(), "reject missing condition");
+    bad = desc;
+    bad.initialState = 7;
+    expectTrue(!nl::anim::validateStateMachine(bad).empty(), "reject initialState range");
+
+    nl::anim::AnimationStateMachine sm;
+    expectTrue(!sm.reset(bad), "reset rejects invalid desc");
+    std::vector<nl::anim::BonePose> pose;
+    expectTrue(!sm.evaluate(pose), "evaluate rejects un-reset machine");
+}
+
+void testStateMachineDeterminism() {
+    std::string namesA[10], namesB[10];
+    float alphaA[10], alphaB[10], durA[10], durB[10], zA[10], zB[10];
+    nl::anim::AnimationStateMachine smA, smB;
+    smA.reset(makeLocoDesc());
+    smB.reset(makeLocoDesc());
+    runLocoScenario(smA, namesA, alphaA, durA, zA);
+    runLocoScenario(smB, namesB, alphaB, durB, zB);
+    bool same = true;
+    for (int i = 0; i < 10; ++i)
+        same = same && namesA[i] == namesB[i] && alphaA[i] == alphaB[i] &&
+               durA[i] == durB[i] && zA[i] == zB[i];
+    expectTrue(same, "two runs identical sequence");
+}
+
+int runStateMachineSelftest() {
+    struct Case { const char* name; void (*fn)(); };
+    const Case cases[] = {
+        { "loco scenario", testStateMachineScenario },
+        { "revert blend + continuity", testStateMachineRevertBlend },
+        { "validate negatives", testStateMachineValidateNegative },
+        { "determinism", testStateMachineDeterminism },
+    };
+    for (const Case& c : cases) {
+        std::printf("  [%s]\n", c.name);
+        std::fflush(stdout);
+        c.fn();
+    }
+    return g_failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -384,7 +577,12 @@ int main(int argc, char** argv) {
             std::printf("anim blend selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
-        // M-A3/M-A4 用例接入处（statemachine / blendspace）
+        if (testCase == "statemachine") {
+            const int rc = runStateMachineSelftest();
+            std::printf("anim statemachine selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+            return rc;
+        }
+        // M-A4 用例接入处（blendspace）
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());
         return 2;
     }

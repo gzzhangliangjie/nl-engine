@@ -119,6 +119,7 @@ add_library(nl_core STATIC
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/anim/anim.cpp     # M-A1：动作系统（nl/anim）—— clip 采样，零图形 API
+    core/src/anim/state_machine.cpp  # M-A3：动作状态机（优先级转移 + crossfade + UE 缩时）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -360,3 +361,8 @@ set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
 add_test(NAME ma2-anim-blend-selftest COMMAND anim-tools selftest blend)
 set_tests_properties(ma2-anim-blend-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "anim blend selftest: PASS")
+# M-A3：状态机机械单测（优先级取首个、crossfade 权重曲线、UE 回退缩时+姿态连续、
+# 10 步确定性场景逐值断言、validate 负向、两次运行一致）
+add_test(NAME ma3-anim-statemachine-selftest COMMAND anim-tools selftest statemachine)
+set_tests_properties(ma3-anim-statemachine-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "anim statemachine selftest: PASS")
