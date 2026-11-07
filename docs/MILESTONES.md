@@ -585,3 +585,25 @@
 1. 原规范写「工具版本不产截图」，容易被当成「工具版本不用给图」——用户一句「有图么」直接指出缺口；改成「不产 GPU 截图，但必须有从工具真实输出生成的证据图」，并给出 `preview` 机制作为样板。
 2. 展示台原本只为渲染基线（`baselines`/`beforeBaselines`）开放 `/shots/` 白名单，静态图直接引用会 403；把 `preview` 一并收进 `declared_shots()` 才通。
 3. `--obj` 首次实现不创建父目录，干净 clone 的 `build/qem/` 不存在会写文件失败；加 `std::filesystem::create_directories(parent, ec)`。
+
+## M2.2 逐层 LOD 循环：重切 + 分层落盘（S2）
+
+**动作**：`core/lod`（`buildLodHierarchy`）按 Nanite 系标准做法逐层 重新聚组 → 边界锁按当前分组全量重算 → 每组硬目标 50% QEM → `buildMeshlets` 重切；误差按 UE/bevy 口径单调化为 parent error；`.nmesh` v2 尾部 section 持久化 `level/maxError/lockedPositions`（v1 逐字节兼容）；`groupClusters` 补 nparts<2 单组直通；`nanite-tools lod` 子命令（每层统计 + 分层写盘）；`selftest loop`（每层边界独立重算断言 / parent error 单调 / 每层约减半 / v1-v2 读回 / 确定性 / 负向）；ctest 10→12；`tools/lod_preview.py` 从落盘二进制渲染 `example/s2-loop/lod-suzanne.png` + `run.bat`；展示台 `s2-loop` 卡（preview 挂图）。
+
+**提交版本**：`s2-loop`
+
+**完成情况**
+- 严格对齐三份源码，不自造机制：bevy `from_mesh.rs:114-120/520-523`（每轮覆写 `vertex_locks`）、`:556`（`group_indices.len()/2`）、UE `ClusterDAG.cpp:1470`（硬目标）、`Cluster.cpp:1023-1039`（LockPosition 只作用当前 group）、meshoptimizer `simplifier.cpp:2492`（折叠到硬目标）。M2.1 边界锁实现一行未改（本来就是标准 `LockBorder` 语义）。
+- selftest loop 全绿：64x64 网格 **7 层** 7938→3966→1981→990→495→246→123，每层约 50%；灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」通过（证明不继承历史锁点）；parent error 单调不减；v2 读回逐字段一致、v1 仍可读、确定性重跑一致。
+- 实机 Suzanne：**6 层** 3936→1976→985→490→246→124 tri，簇 237→33→17→13→5→3，锁点 622→117→84→35→0→0（递减而非累积），parent error 0→0.0260 单调；写出 6 个 v2 `.nmesh`。
+- ctest 12/12、回归总闸全绿（渲染基线逐字节不动）、`server.py --check` OK；展示台 `s2-loop` 卡现场实跑 + 六层金字塔证据图。
+
+**踩坑情况**
+1. **自造「跨层累积锁定」被推翻（本轮主要修正）**：最初担心「更细层接缝点在更粗层被 QEM 移走会裂」，于是把每层锁点按世界空间位置累积继承，结果锁集合单调增长、可折叠边越来越少——Suzanne 只出 3 层（L2 降 31.4%、L3 降 9%），还用自造的 `minReduction 30%` 提前收敛把它藏起来（顶层仍有 1356 tri，层级根本没跑完）。核 bevy / UE / meshopt 源码后确认：标准做法是**每层重新分组、边界锁按当前分组全量重算、不继承**，跨层无裂缝靠 DAG cut 以 group 为原子单位，不靠永久锁顶点。删掉累积与门槛后，同一资产自然收敛出 6 层、每层严格约 50%。M2.1 的边界锁不动。
+2. **曾误判 M2.1 边界锁「比标准更严」**：核 `simplifier.cpp:526-529` 后确认 `meshopt_SimplifyLockBorder` 把 border/fringe 整体改判 `Kind_Locked`（不能作折叠源、只能作目标，双锁边不折叠），与我们一致；结论已同步纠正到 `simplify.hpp` 注释，未改代码。
+3. **误差不单调**：原先 `lodMeta.maxError` 存「生成下一层引入的误差」，跨层会忽大忽小，S3 DAG cut 判据不成立。按 UE `ClusterDAG.cpp:1441` / bevy `:146-151` 改成 parent error 单调不减，并加自动断言。
+4. **METIS nparts=1**：逐层后期簇数 ≤8 时 `nparts=1`，`METIS_PartGraphKway` 不接受 <2 → `grouping.cpp` 单组直通 + 连通性 fixup。
+5. **NMeshLodMeta 定义位置**：结构体曾放在 `NMeshData` 之后导致 C3646，须先定义后使用。
+6. **历史版本 exe 映射（本轮未落地）**：按规范每出新版应把上一版 exe 改指 `build/showcase/{tag}/` 并跑 `rebuild.py` 补建（用 `git archive <tag>` + 该 tag 的 `build-m0.2.bat` 全量构建）。本轮补建任务被用户取消，产物只落了 `s2-group/DX12` 一个 exe，故 `s2-group`/`s2-qem` 两卡的工具 exe 映射**暂回** `build/{dx12,vulkan}/nanite-tools.exe`，保证总闸可跑；待补建完成后再按规范改回 `build/showcase/{tag}/build/{DX12,VULKAN}/`。渲染用例的历史 viewer 映射不受影响。
+
+**下一步**：M2.3 `viewer --mode lod N` + ImGui 滑条切层，肉眼验收「任意相邻层拼接无裂缝」（S2 收官 tag `s2-done`）。

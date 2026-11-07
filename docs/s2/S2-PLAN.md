@@ -30,13 +30,16 @@
 - 边界判定用「簇归属」而不是「几何边界边」——组内两簇之间的边**不是**边界，锁了会过度锁定、简化率上不去
 - QEM 退化案例（共面/细长三角）要 clamp 平面法向权重，否则塌出碎三角
 
-## M2.2 重切 + 逐层循环（1 天）
+## M2.2 重切 + 逐层循环（1 天）✅ 2026-11-07（tag `s2-loop`）
 
-- [ ] 简化后的组重新跑 M1.1 的切簇 → 得到 LOD1 簇集合
-- [ ] 外层循环：对 LOD1 再聚组→简化→重切 → LOD2……直到组 < 最小组大小或三角数 < 阈值
-- [ ] 每层写一份 .nmesh（或一个文件多 section——本步先用多文件，S3 合并时再定稿）
+- [x] 简化后的组重新跑 M1.1 的切簇 → 得到 LOD1 簇集合（`core/lod` 复用 `buildMeshlets`，法线按邻面重算、UV 置零）
+- [x] 外层循环：L1 **重新聚组**→按当前分组重算边界锁→每组硬目标 50% 简化→重切 → L2……直到三角数 < 阈值 / 组数不足 / 三角数不再下降 / 达到 maxLevels
+- [x] 每层写一份 `.nmesh`（多文件 `<prefix>.lodN.nmesh`；S3 合并时再定稿）；**`.nmesh` v2** 尾部 section 持久化 `level / maxError(parent error) / lockedPositions`，v1 逐字节兼容
+- [x] **边界锁每轮重算、不跨层继承**：严格对齐 bevy `from_mesh.rs:114-120/520-523`（`lock_group_borders` 每轮全量覆写 `vertex_locks`）、UE `Cluster.cpp:1023-1039`（`LockPosition` 只作用当前 group）、meshoptimizer `simplifier.cpp:526-529`（`SimplifyLockBorder` → `Kind_Locked`）。跨层无裂缝由 S3 DAG cut 以 group 为原子单位保证
 
-**自检**：每层三角数 ≈ 上一层的 50%；层与层之间簇边界对齐（可视化叠色）。tag：`s2-loop`。
+**自检（已过）**：selftest loop 全绿——灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」（证明不继承）、每层约减半、parent error 单调、簇上限、v1/v2 读回、确定性重跑、负向拒绝；Suzanne **6 层** 3936→1976→985→490→246→124 tri，锁点 622→117→84→35→0→0 递减（每层重算）；64x64 网格 7 层；ctest 12/12、回归总闸 ALL GREEN。证据图 `example/s2-loop/lod-suzanne.png`（六栏同机位同尺度 + 红点边界点）。tag：`s2-loop`。
+
+⚠️ 实踩：第一版自造了「跨层累积锁定 + `minReduction 30%` 提前收敛」，锁集合单调增长导致 L3 只能降 9%、只出 3 层；核三份源码后**整套推翻重做**为标准循环，删掉累积与门槛，同一资产自然收敛出 6 层、每层严格约 50%。M2.1 的边界锁实现不变（本来就是标准 `LockBorder`）。`groupClusters` 在簇数 ≤8 时 nparts=1，METIS_PartGraphKway 不接受 nparts<2 → 走单组直通 + 连通性 fixup。
 
 ## M2.3 viewer --mode lod N 验收（1 天）
 

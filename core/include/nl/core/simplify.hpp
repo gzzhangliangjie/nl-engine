@@ -4,9 +4,19 @@
 //
 // 灵魂机制（没有第二个魔法）：组间边界顶点锁死——永不移动、永不作为折叠
 // 端点消失，且双锁定端点的边（跨组接缝边）不会被第三方折叠摧毁。这是
-// 「相邻 LOD 无裂缝」的唯一保证。S2-PLAN 的坑位提醒：边界判定看**组归属**
+// 「同一层内相邻组无裂缝」的唯一保证。S2-PLAN 的坑位提醒：边界判定看**组归属**
 // （一个 canonical 点被 ≥2 个组的簇引用 = 边界），组内两簇之间的共享点
 // 不是边界，锁了会过度锁定、简化率上不去。
+//
+// 标准口径对齐（2026-11-07 核过源码，不自造机制）：
+//   meshoptimizer src/simplifier.cpp:526-529  meshopt_SimplifyLockBorder 把
+//     border/fringe 整体改判 Kind_Locked —— 锁点不能作折叠源、只能作目标，
+//     双锁定边不折叠；与本实现一致。
+//   bevy from_mesh.rs:114-120,520-523  lock_group_borders 在每一轮循环开头
+//     对 vertex_locks 全量覆写 —— 边界锁按**当前轮分组**重算，不跨层继承。
+//   UE Cluster.cpp:1023-1039          LockPosition 只对当前 group 的
+//     ExternalEdges 端点生效，简化后按位置对重建标记（1080-1091）。
+// 跨层无裂缝由 DAG cut 以 group 为原子单位保证，不靠把历史锁点一直背下去。
 //
 // QEM（Garland & Heckbert）：每点累积邻域三角形的面积加权平面二次型，
 // 边折叠队列按折叠后误差升序；折叠位置取二次型最优点（退化时回退端点/
@@ -50,6 +60,9 @@ struct SimplifyResult {
     // 组间边界 canonical 点集合（排序去重）。S3 DAG 合并还要用——
     // 该集合必须持久化（随 M2.2 的分层 .nmesh 落盘），不许只活在内存里。
     std::vector<std::uint32_t> lockedPoints;
+    // 与 lockedPoints 一一对应的世界空间位置（3 float/点，顺序一致）。
+    // 存位置而非点号：重切后 canonical 编号全变，S3 按位置认接缝。
+    std::vector<float> lockedPositions;
     std::vector<GroupSimplifyStats> perGroup;   // 与组号一一对应
     GroupSimplifyStats total;
 };
@@ -58,6 +71,8 @@ struct SimplifyResult {
 // targetRatio ∈ (0,1]：每组折叠到 round(inputTris * ratio) 即停（拓扑约束
 // 下可能提前停住，输出三角数 >= 目标）。确定性：同输入同输出（折叠队列
 // 有序集，代价平局按点编号决胜）。
+// 边界锁只由本次传入的 grouping 决定（同层组归属），不接收任何历史层锁点：
+// 逐层循环每层重新聚组、重新调用本函数即可（bevy lock_group_borders 口径）。
 // 失败（参数非法 / 聚组结果与网格不符）返回 false 且 outError 带可读原因。
 bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
                     SimplifyResult& out, std::string& outError,

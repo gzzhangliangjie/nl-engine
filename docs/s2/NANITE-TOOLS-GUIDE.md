@@ -242,3 +242,103 @@ python tools/qem_preview.py build/qem/suzanne example/s2-qem/qem-suzanne.png
 `app.js` 在工具卡正文下方渲染静态图。另加 `s2-qem/dump` 工具用例现场实跑 `--obj`
 （`expectExit 0` + `expectLog "obj dump   :"`）。静态证据图不进总闸 PNG 比对，
 回归仍只校验文本输出：96/96 ALL GREEN，ctest 10/10。
+
+## M2.2 交代（tag `s2-loop`，2026-11-07）
+
+### `core/lod` 逐层循环：严格对齐标准做法，不自造机制
+
+```
+L0 → groupClusters 重新分组 → 按当前分组重算边界锁 → 每组硬目标 50% 简化
+   → buildMeshlets 重切 → L1 → 重新分组 → …
+```
+
+源码依据（本机三处实读，2026-11-07）：
+
+| 出处 | 结论 |
+|---|---|
+| bevy `from_mesh.rs:87-195` | 每轮 `group_meshlets` 重新分组；`:114-120` `lock_group_borders` 在轮首调用，`:520-523` 对 `vertex_locks` **全量覆写**（含置 false）→ 上轮锁不继承；`:556` 每组硬目标 `group_indices.len()/2`；`:154` 重切 `compute_meshlets`；`:190-192` 未达标组进 stuck 后重新入队、换一组边界再试 |
+| UE `ClusterDAG.cpp:1067+` | 逐层 `ReduceMesh`；`:1470` `TargetNumTris = NumParents * TargetClusterSize` 是硬目标；`:1441` `ParentLODError = Max(..., LODError)` 误差单调 |
+| UE `Cluster.cpp:1023-1039` | `LockPosition` 只对**当前 group 的 `ExternalEdges`** 端点生效；`:1080-1091` 简化后按位置对重建外部边标记 |
+| meshoptimizer `simplifier.cpp:2492` | `while (result_count > target_index_count)` 反复折叠到硬目标；`:526-529` `SimplifyLockBorder` 把 border/fringe 改判 `Kind_Locked`（锁点不能作折叠源、只能作目标，双锁边不折叠） |
+
+据此：
+
+- **边界锁每轮由当前分组重算，不跨层累积**。`simplifyGroups` 只接收本次
+  `groupClusters` 的组归属（点被 ≥2 组引用即锁），M2.1 的边界锁实现一行未改
+  ——它本来就是标准 `LockBorder` 语义。跨层无裂缝由 DAG cut 以 group 为原子
+  单位保证（S3），不靠把历史接缝点一直背下去。
+- **每组硬目标 50%**（`round(inputTris * ratio)`），不是全局比例、不是误差阈值
+  自然收敛。简化不足的组不特殊处理：重切已改变簇划分，下一轮重新分组会给出
+  全新边界（bevy stuck 重新入队同义）。
+- **终止条件只用**三角数 < `minTriangles`(128) / 组数 < `minGroups` / 达到
+  `maxLevels` / 三角数不再下降。没有「简化率不足就提前停」的自造门槛。
+- **误差单调**：`parentError(k+1) = max(parentError(k), 本次简化误差)`，S3 cut
+  判据才成立；L0 为 0。
+
+### `.nmesh` version 2（只加尾部，v1 逐字节兼容）
+
+```
+NMeshHeader(version=2) + name + records + vertices + triangles
+  + NMeshMetaHeader(24 B: magic 'NLOD' / payloadBytes / version / level / maxError / lockedCount)
+  + float[3*lockedCount]   lockedPositions（世界空间位置）
+```
+
+`lockedPositions` = **本层按当前分组重算的组间边界点**（供更粗层拼接用），
+顶层为空；`maxError` = parent error（单调不减）。`lodMeta.present=true` 才写 v2；
+`loadNMesh` 两种都读，v1 严格检查无尾随字节的老逻辑不变。
+
+### `lod` 实跑输出（Suzanne，DX12 构建）
+
+```
+file        : assets/meshlets/Suzanne.nmesh
+qem ratio   : 50% (per-group hard target)  maxLevels 8  minTris 128
+levels      : 6 (L0..L5)
+  L0  clusters=237   tris=3936    groups=31   locked=622    collapses=992    maxErr=0.0000 (parent, world)
+  L1  clusters=33    tris=1976    groups=7    locked=117    collapses=502    maxErr=0.0250 (parent, world)
+  L2  clusters=17    tris=985     groups=6    locked=84     collapses=252    maxErr=0.0250 (parent, world)
+  L3  clusters=13    tris=490     groups=4    locked=35     collapses=128    maxErr=0.0250 (parent, world)
+  L4  clusters=5     tris=246     groups=3    locked=0      collapses=62     maxErr=0.0250 (parent, world)
+  L5  clusters=3     tris=124     groups=3    locked=0      collapses=0      maxErr=0.0260 (parent, world)
+lod files   : 6 written (...lod0.nmesh .. ...lod5.nmesh, .nmesh v2)
+```
+
+每层严格约 50%，锁点 622→117→84→35→0→0 **递减**（每层重算，不是累积），
+parent error 单调不减。写入的 6 个文件均可 `stat` / `viewer --model` 读回。
+
+### `selftest loop` 实跑输出（全部 ok）
+
+```
+[connected 64x64 grid, LOD loop]
+  ok   at least 3 LOD levels
+  ok   triangle count strictly decreases
+  ok   each level ~50% of previous (30~70%)
+  ok   meshlet limits respected
+  ok   per-level lodMeta present with correct level
+  ok   locks == independent per-level boundary recompute   <- 灵魂断言
+  ok   top level has no outgoing seams
+  ok   parent error monotonic across levels
+  info L0 tris=7938   clusters=176  locked=807   maxErr=0.0000
+  info L1 tris=3966   clusters=81   locked=331   maxErr=0.1518
+  info L2 tris=1981   clusters=41   locked=136   maxErr=0.2316
+  info L3 tris=990    clusters=19   locked=54    maxErr=0.2784
+  info L4 tris=495    clusters=11   locked=24    maxErr=0.4608
+  info L5 tris=246    clusters=6    locked=0     maxErr=0.5156
+  info L6 tris=123    clusters=3    locked=0     maxErr=0.6163
+  ok   deterministic (rerun identical)
+  ok   v2 .nmesh round-trip keeps lodMeta
+  ok   v1 .nmesh still readable
+[input validation]
+  ok   ratio / maxLevels / minGroups / empty mesh rejected
+loop selftest: PASS
+```
+
+灵魂断言在 selftest 侧**独立重算**每层的组间边界（重新 `groupClusters` +
+按组归属找被 ≥2 组引用的 canonical 点），要求与资产里写的 `lockedPositions`
+逐点相等——只要还有跨层继承，就会多出历史锁点而立刻不等。
+
+### 可视化证据图
+
+`example/s2-loop/lod-suzanne.png`（1340x920）：直接解析 `lod` 落盘的
+`.nmesh` v2 二进制，L0..L5 六栏**同机位同尺度**渲染，红点 = 该层组间边界点
+（逐层递减、顶层无红点）；线框密度逐层降低即每组 50% 硬目标的结果。
+`tools/lod_preview.py` + `example/s2-loop/run.bat` 一键复现（不进总闸比对）。

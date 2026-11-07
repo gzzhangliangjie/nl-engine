@@ -342,9 +342,9 @@ bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
     }
 
     // ---- 2) 边界判定（组归属口径）：点被 ≥2 个组的簇引用 → 锁 ----
+    std::vector<std::uint8_t> isBoundary(pointCount, 0);
     {
         std::unordered_map<uint32_t, uint32_t> firstGroup;   // 点 → 首见组
-        std::vector<std::uint8_t> isBoundary(pointCount, 0);
         for (const auto& m : mesh.meshlets) {
             const uint32_t g = grouping.clusterGroup[&m - mesh.meshlets.data()];
             for (uint32_t i = 0; i < m.vertexCount; ++i) {
@@ -353,8 +353,6 @@ bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
                 if (!inserted && it->second != g) isBoundary[p] = 1;
             }
         }
-        for (uint32_t p = 0; p < pointCount; ++p)
-            if (isBoundary[p]) out.lockedPoints.push_back(p);
     }
 
     // ---- 3) 点位置初值（原位置；内部点折叠后覆盖）----
@@ -363,6 +361,15 @@ bool simplifyGroups(const NMeshData& mesh, const GroupingResult& grouping,
         for (int k = 0; k < 3; ++k)
             out.pointPositions[std::size_t(canon[i]) * 3 + k] = mesh.vertices[i].pos[k];
     out.pointCount = pointCount;
+
+    // 边界集合到此为止：只由本次 grouping 的组归属决定，不接收历史层锁点
+    // （bevy from_mesh.rs lock_group_borders 每轮全量覆写；UE LockPosition 同理）。
+    for (std::uint32_t p = 0; p < pointCount; ++p) {
+        if (!isBoundary[p]) continue;
+        out.lockedPoints.push_back(p);
+        for (int k = 0; k < 3; ++k)
+            out.lockedPositions.push_back(out.pointPositions[std::size_t(p) * 3 + k]);
+    }
 
     // ---- 4) 逐组 QEM ----
     out.groupFirstTri.assign(grouping.groupCount, 0);

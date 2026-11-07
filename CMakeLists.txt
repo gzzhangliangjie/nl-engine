@@ -116,6 +116,7 @@ add_library(nl_core STATIC
     core/src/meshlet_io.cpp    # M1.2：.nmesh 二进制资产读写
     core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
+    core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -304,4 +305,15 @@ add_test(NAME s2-qem-suzanne
          COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh -v)
 set_tests_properties(s2-qem-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "oracle      : meshopt LockBorder"
+    DEPENDS s1-nmesh-suzanne)
+# M2.2：逐层 LOD 循环机械单测（每层边界独立重算 / 约减半 / parent error 单调 / 簇上限 / v1-v2 资产兼容 / 确定性）
+add_test(NAME s2-loop-selftest COMMAND nanite-tools selftest loop)
+set_tests_properties(s2-loop-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "loop selftest: PASS")
+# M2.2：真实资产逐层落盘（L0..LN，每层 .nmesh v2 带 lockedPositions）
+add_test(NAME s2-loop-suzanne
+         COMMAND nanite-tools lod ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh
+                 -o ${CMAKE_CURRENT_BINARY_DIR}/lod-suzanne --max-levels 6)
+set_tests_properties(s2-loop-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "lod files   : "
     DEPENDS s1-nmesh-suzanne)

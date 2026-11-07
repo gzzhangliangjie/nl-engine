@@ -25,7 +25,7 @@
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
 - **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
-- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组（回归 88/88）；`s2-qem`→M2.1 组内 QEM 简化+边界锁定已过（回归 94/94，ctest 10/10）。core/simplify：QEM 面积加权二次型+有序集队列，边界锁定看组归属（≥2 组引用即锁）+接缝边保护；weld 抽 `weldPositions` 单一出处；meshoptimizer 1.3 vendored 仅 nanite-tools 链作 LockBorder oracle。Suzanne 50.2%、球 54.4%（2-tri 折叠越目标所致，口径内）。下一步 **M2.2 重切+逐层循环**（复用 buildMeshlets；分层 .nmesh 落盘时持久化 lockedPoints，S3 要用）。
+- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组（回归 88/88）；`s2-qem`→M2.1 组内 QEM 简化+边界锁定已过（回归 94/94，ctest 10/10）。core/simplify：QEM 面积加权二次型+有序集队列，边界锁定看组归属（≥2 组引用即锁）+接缝边保护；weld 抽 `weldPositions` 单一出处；meshoptimizer 1.3 vendored 仅 nanite-tools 链作 LockBorder oracle。Suzanne 50.2%、球 54.4%（2-tri 折叠越目标所致，口径内）。`s2-loop`→M2.2 逐层循环已过（ctest 12/12）：**严格对齐标准做法，不自造机制**——每层重新聚组→边界锁按当前分组全量重算（不跨层继承）→每组硬目标 50%→buildMeshlets 重切；依据 bevy `from_mesh.rs:114-120/520-523`、`:556`、UE `ClusterDAG.cpp:1470`、`Cluster.cpp:1023-1039`、meshopt `simplifier.cpp:2492`。误差按 UE:1441/bevy:146-151 单调化为 parent error。`.nmesh` **v2** 尾部 section 持久化 level/maxError/lockedPositions（v1 逐字节兼容），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne **6 层** 3936→1976→985→490→246→124，锁点 622→117→84→35→0→0 递减；64x64 网格 7 层。**曾自造「跨层累积锁定 + minReduction 30% 提前收敛」导致只出 3 层，核源码后整套推翻**（用户要求「千万不要自己发明」）；M2.1 边界锁实现一行未改，它本来就是标准 LockBorder 语义（meshopt:526-529）。下一步 **M2.3 viewer --mode lod N + ImGui 滑条**，肉眼验收相邻层无裂缝（tag `s2-done`）。
 - 穿插项归宿（防重复建设，总表在 ROADMAP「穿插项」节）：ShadowMap/PCF/PCSS=`shadow-map`、PRT/球谐=`prt-sh`、SSR=排 S6 后（复用 Hi-Z）、Kulla-Conty=并入 pbr-direct、SSAO=`ssao`、后处理链=`post-chain`（S7 后插）、Forward+/渲染图/热重载=归 P8。
 - Suzanne = 3,936 tri（11,808 索引），旧口径 504 tri 是错的；IcoSphereDense = 327,680 tri / 4,929 簇。
 
@@ -36,6 +36,7 @@
 - **regression/展示台的工具 exe 是 `build/{dx12,vulkan}/nanite-tools.exe`，重编后要手动 cp 同步两份**，否则总闸跑的是旧 exe。
 - UE 离线构建参考：`E:/UnrealEngine/5.8.4/Engine/Source/Developer/NaniteBuilder/`（GraphPartitioner/ClusterDAG/SimplifyTriangles，只读不抄）；Carrot 本地无离线简化实现。
 - cases.json 工具卡 select 空选项会展开成空 arg，工具侧需跳过空参数。
+- **.nmesh v2（M2.2 起）** = v1 全部字段不变 + 尾部 `NMeshMetaHeader(24B, magic 'NLOD')` + `float[3*lockedCount]`；`NMeshData.lodMeta.present` 决定 saveNMesh 写 1 还是 2，loadNMesh 两版都读。分层资产 `<prefix>.lodN.nmesh` 由 `nanite-tools lod -o <prefix>` 产出；lockedPositions 存**位置**不存点号（逐层重切后编号全变），语义 = **本层按当前分组重算的组间边界点**（不累积历史层），顶层为空；`maxError` = parent error 单调不减（S3 cut 判据）。
 
 ## 渲染约定（改前先看 `docs/SHADER-CONVENTIONS.md`）
 - 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present，别各抄一遍。

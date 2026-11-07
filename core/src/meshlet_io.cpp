@@ -54,7 +54,9 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
 
     NMeshHeader header{};
     header.magic = kNMeshMagic;
-    header.version = kNMeshVersion;
+    // M2.2：带 LOD 元数据的分层资产写 version 2（只加尾部 section）；
+    // 普通资产仍写 version 1，逐字节与 M1.2 一致。
+    header.version = data.lodMeta.present ? kNMeshVersionLod : kNMeshVersion;
     header.nameLen = static_cast<std::uint16_t>(name.size());
     header.meshletCount = static_cast<std::uint32_t>(data.meshlets.size());
     header.vertexCount = static_cast<std::uint32_t>(data.vertices.size());
@@ -89,6 +91,28 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
                     vp + data.vertices.size() * sizeof(MeshVertex));
     }
     blob.insert(blob.end(), data.triangles.begin(), data.triangles.end());
+
+    if (data.lodMeta.present) {
+        const std::size_t floats = data.lodMeta.lockedPositions.size();
+        if (floats % 3 != 0 || floats * sizeof(float) > 0xFFFFFFFFu) {
+            outError = "lod meta: lockedPositions size invalid";
+            return false;
+        }
+        NMeshMetaHeader meta{};
+        meta.magic = kNMeshLodMagic;
+        meta.payloadBytes = static_cast<std::uint32_t>(floats * sizeof(float));
+        meta.version = kNMeshMetaVersion;
+        meta.level = data.lodMeta.level;
+        meta.maxError = data.lodMeta.maxError;
+        meta.lockedCount = static_cast<std::uint32_t>(floats / 3);
+        const auto* mp = reinterpret_cast<const std::uint8_t*>(&meta);
+        blob.insert(blob.end(), mp, mp + sizeof(meta));
+        if (floats) {
+            const auto* fp = reinterpret_cast<const std::uint8_t*>(
+                data.lodMeta.lockedPositions.data());
+            blob.insert(blob.end(), fp, fp + meta.payloadBytes);
+        }
+    }
 
     const std::string tmpPath = std::string(path) + ".tmp";
     {
@@ -128,9 +152,9 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         outError = "bad magic (not a .nmesh): " + std::string(path);
         return false;
     }
-    if (header.version != kNMeshVersion) {
+    if (header.version != kNMeshVersion && header.version != kNMeshVersionLod) {
         outError = "unsupported .nmesh version " + std::to_string(header.version) +
-                   " (this build reads " + std::to_string(kNMeshVersion) + ")";
+                   " (this build reads 1 or 2)";
         return false;
     }
 
@@ -182,6 +206,26 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         out.triangles.assign(blob.data() + cursor,
                              blob.data() + cursor + size_t(header.triangleCount) * 3);
         cursor += size_t(header.triangleCount) * 3;
+    }
+    if (header.version == kNMeshVersionLod) {
+        if (!need(sizeof(NMeshMetaHeader), "lod meta header")) return false;
+        NMeshMetaHeader meta;
+        std::memcpy(&meta, blob.data() + cursor, sizeof(meta));
+        cursor += sizeof(meta);
+        const std::size_t expected = std::size_t(meta.lockedCount) * 3 * sizeof(float);
+        if (meta.magic != kNMeshLodMagic || meta.version != kNMeshMetaVersion ||
+            meta.payloadBytes != expected) {
+            outError = "bad lod meta header: " + std::string(path);
+            return false;
+        }
+        if (!need(meta.payloadBytes, "lod meta payload")) return false;
+        out.lodMeta.present = true;
+        out.lodMeta.level = meta.level;
+        out.lodMeta.maxError = meta.maxError;
+        out.lodMeta.lockedPositions.resize(std::size_t(meta.lockedCount) * 3);
+        if (expected)
+            std::memcpy(out.lodMeta.lockedPositions.data(), blob.data() + cursor, expected);
+        cursor += meta.payloadBytes;
     }
     if (cursor != blob.size()) {
         outError = "trailing bytes after last section (" +

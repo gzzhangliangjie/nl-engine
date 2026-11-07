@@ -14,6 +14,20 @@
 
 namespace nl::core {
 
+// M2.2：LOD 层元数据（可选）。.nmesh version 2 才在尾部写这一段；
+// version 1 文件逐字节不变，老 viewer / 回归基线不动。
+// lockedPositions 存**世界空间位置**而不是 canonical 点编号——逐层重切后
+// 顶点编号全变，位置才是稳定身份（S3 DAG 合并按位置认接缝）。
+// 语义对齐 bevy lock_group_borders / UE LockPosition：这里存的是**本层按当前
+// 分组重算**的组间边界点，供更粗层拼接用；不累积历史层锁点，顶层为空。
+struct NMeshLodMeta {
+    bool present = false;
+    std::uint16_t level = 0;      // 0 = 最细原始层
+    // parent error：沿层级单调不减（UE ClusterDAG.cpp:1441 / bevy :146-151）。
+    float maxError = 0.f;
+    std::vector<float> lockedPositions;  // 3 float/点，排序去重由生产者保证
+};
+
 // .nmesh 自包含数据。vertices 的顺序就是 meshlet.vertexOffset/vertexCount
 // 窗口所指的数组——即 BuiltMeshlets::vertices 经 remap 后的实际顶点内容。
 struct NMeshData {
@@ -22,15 +36,17 @@ struct NMeshData {
     std::vector<MeshletBounds> bounds;    // 与 meshlets 一一对应
     std::vector<MeshVertex> vertices;     // 自包含（不引用外部网格）
     std::vector<std::uint8_t> triangles;  // 每三角 3 个局部顶点索引（0..63）
+    NMeshLodMeta lodMeta;                 // M2.2：有 present 时落盘为 version 2
 };
 
-// ---- 二进制格式（version 1，little-endian）----
+// ---- 二进制格式（little-endian）----
 //
-//   NMeshHeader        固定 20 B
+//   NMeshHeader        固定 20 B（version 1 或 2）
 //   name               nameLen 字节 ASCII
 //   NMeshletRecord[meshletCount]   每个 52 B
 //   MeshVertex[vertexCount]        每个 32 B（float x9，直接内存映像）
 //   uint8[triangleCount * 3]
+//   [version 2 only] NMeshMetaHeader 24 B + float[3*lockedCount]
 //
 // 全部紧密排列、无填充；字段布局用 static_assert 锁死，漂移编译期就爆。
 struct NMeshHeader {
@@ -52,11 +68,26 @@ struct NMeshletRecord {
     float error;
 };
 
+// version 2 = version 1 + 尾部 LOD meta section（只加不改，loadNMesh 两种都读）。
+struct NMeshMetaHeader {
+    std::uint32_t magic;          // 'N','L','O','D' → 0x444F4C4E (LE)
+    std::uint32_t payloadBytes;   // 跟随的 float 数组字节数
+    std::uint16_t version;        // 1
+    std::uint16_t level;          // LOD 层号
+    float maxError;               // 世界空间
+    std::uint32_t lockedCount;    // payload = 3*lockedCount 个 float
+    std::uint32_t reserved;       // 置 0，S3 扩展用
+};
+
 inline constexpr std::uint16_t kNMeshVersion = 1;
-inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;  // "NMSH"
+inline constexpr std::uint16_t kNMeshVersionLod = 2;
+inline constexpr std::uint16_t kNMeshMetaVersion = 1;
+inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;     // "NMSH"
+inline constexpr std::uint32_t kNMeshLodMagic = 0x444F4C4Eu;  // "NLOD"
 
 static_assert(sizeof(NMeshHeader) == 20, "NMeshHeader layout drift");
 static_assert(sizeof(NMeshletRecord) == 52, "NMeshletRecord layout drift");
+static_assert(sizeof(NMeshMetaHeader) == 24, "NMeshMetaHeader layout drift");
 static_assert(sizeof(MeshVertex) == 32, "MeshVertex layout drift");
 
 // 写盘。失败返回 false，outError 带可读原因；成功时不留部分文件（先写临时再改名）。

@@ -83,13 +83,13 @@ bool groupClusters(const NMeshData& mesh, GroupingResult& out, std::string& outE
 
     std::vector<std::uint32_t> part(clusterCount, 0);
     std::uint32_t groupCount = 1;
-    if (clusterCount > 1) {
-        // 划分数：向上取整防「组数不足导致末组堆积」；METIS 偶发超发由 fixup 拆分兜底
-        const std::uint32_t target = kTargetMeshletsPerGroup;
-        std::uint32_t nparts = static_cast<std::uint32_t>(
-            (clusterCount + target - 1) / target);
-        nparts = std::max(nparts, 1u);
-
+    // 划分数：向上取整防「组数不足导致末组堆积」；METIS 偶发超发由 fixup 拆分兜底。
+    // M2.2 逐层循环后期簇数 ≤8 时 nparts==1：METIS_PartGraphKway 不接受 nparts<2，
+    // 直接单组（part 全 0）并照常走连通性 fixup，别让循环在收敛层炸掉。
+    std::uint32_t nparts = static_cast<std::uint32_t>(
+        (clusterCount + kTargetMeshletsPerGroup - 1) / kTargetMeshletsPerGroup);
+    nparts = std::max(nparts, 1u);
+    if (nparts > 1) {
         idx_t nvtxs = static_cast<idx_t>(clusterCount);
         idx_t ncon = 1;
         idx_t npartsIdx = static_cast<idx_t>(nparts);

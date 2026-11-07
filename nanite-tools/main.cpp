@@ -8,6 +8,7 @@
 #include "nl/core/meshlet_io.hpp"
 #include "nl/core/grouping.hpp"
 #include "nl/core/simplify.hpp"
+#include "nl/core/lod.hpp"       // M2.2：逐层 LOD 循环
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -32,9 +33,11 @@ void printUsage() {
         "usage:\n"
         "  nanite-tools stat <model>                 summary (.glb/.gltf 或 .nmesh)\n"
         "  nanite-tools cluster <model> [-v] [-o out.nmesh]   meshlet build + save\n"
-        "  nanite-tools selftest cluster|nmesh|group|qem  deterministic unit tests\n"
+        "  nanite-tools selftest cluster|nmesh|group|qem|loop  deterministic unit tests\n"
         "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5] [--obj prefix]\n"
         "                        group QEM + boundary lock; --obj dumps before/after OBJ + locked pts\n"
+        "  nanite-tools lod <model.nmesh> [-o prefix] [--max-levels 8] [-v]\n"
+        "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh (v2)\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
@@ -670,6 +673,94 @@ int cmdSimplify(int argc, char** argv) {
     }
 
     return bad == 0 ? 0 : 1;
+}
+
+// ---- M2.2：逐层 LOD 循环（聚组→组内 QEM 简化→重切→分层落盘）----
+int cmdLod(int argc, char** argv) {
+    if (argc < 1) {
+        std::fprintf(stderr, "lod: missing <model.nmesh>\n");
+        return 1;
+    }
+    const char* path = argv[0];
+    std::string outPrefix;
+    nl::core::LodOptions opt;
+    bool verbose = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.empty()) continue;  // 展示台 select 空选项展开成空 arg
+        if (a == "-v") verbose = true;
+        else if (a == "-o" || a == "--out") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "lod: -o needs a path prefix\n");
+                return 1;
+            }
+            outPrefix = argv[++i];
+        } else if (a == "--max-levels") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "lod: --max-levels needs an integer >= 1\n");
+                return 1;
+            }
+            opt.maxLevels = std::uint32_t(std::atoi(argv[++i]));
+        } else if (a == "--ratio") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "lod: --ratio needs a value in (0,1]\n");
+                return 1;
+            }
+            opt.ratio = float(std::atof(argv[++i]));
+        } else {
+            std::fprintf(stderr, "lod: unknown option %s\n", argv[i]);
+            return 1;
+        }
+    }
+    if (outPrefix.empty()) {
+        std::string p(path);
+        if (p.size() >= 6 && p.compare(p.size() - 6, 6, ".nmesh") == 0)
+            p.resize(p.size() - 6);
+        outPrefix = p + ".lod";
+    }
+
+    std::string error;
+    nl::core::NMeshData nm;
+    if (!nl::core::loadNMesh(path, nm, error)) {
+        std::fprintf(stderr, "lod: %s\n", error.c_str());
+        return 1;
+    }
+    nl::core::LodHierarchy h;
+    if (!nl::core::buildLodHierarchy(nm, h, error, opt)) {
+        std::fprintf(stderr, "lod: %s\n", error.c_str());
+        return 1;
+    }
+
+    std::printf("file        : %s\n", path);
+    std::printf("out prefix  : %s\n", outPrefix.c_str());
+    std::printf("qem ratio   : %.0f%% (per-group hard target)  maxLevels %u  minTris %u\n",
+                double(opt.ratio) * 100.0, opt.maxLevels, opt.minTriangles);
+    std::printf("levels      : %zu (L0..L%zu)\n", h.levels.size(), h.levels.size() - 1);
+    for (const auto& lv : h.levels) {
+        std::printf("  L%-2u clusters=%-5u tris=%-7u groups=%-4u locked=%-6u "
+                    "collapses=%-6u maxErr=%.4f (parent, world)\n",
+                    lv.level, lv.clusters, lv.triangles, lv.groups, lv.lockedPoints,
+                    lv.collapses, lv.maxError);
+    }
+
+    const auto parent = std::filesystem::path(outPrefix).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+    }
+    std::uint32_t written = 0;
+    for (const auto& lv : h.levels) {
+        const std::string file = outPrefix + ".lod" + std::to_string(lv.level) + ".nmesh";
+        if (!nl::core::saveNMesh(file.c_str(), lv.mesh, error)) {
+            std::fprintf(stderr, "lod: %s\n", error.c_str());
+            return 1;
+        }
+        ++written;
+        if (verbose) std::printf("  wrote     : %s\n", file.c_str());
+    }
+    std::printf("lod files   : %u written (%s.lod0.nmesh .. %s.lod%zu.nmesh, .nmesh v2)\n",
+                written, outPrefix.c_str(), outPrefix.c_str(), h.levels.size() - 1);
+    return 0;
 }
 
 // ---- selftest cluster：确定性合成网格上的机械单测 ----
@@ -1466,6 +1557,179 @@ int selftestQem() {
     return 1;
 }
 
+// ---- selftest loop：逐层 LOD 循环机械单测（M2.2 验收核心）----
+// 灵魂断言：上一层（更细 LOD）的接缝点，凡是仍存在于下一层网格里的，
+// 必须在下一层继续被锁——否则「相邻层拼接无裂缝」在离线侧就没有保证。
+int selftestLoop() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+    using Pos = std::array<float, 3>;
+    auto lockSet = [](const std::vector<float>& p) {
+        std::set<Pos> s;
+        for (std::size_t i = 0; i + 2 < p.size(); i += 3)
+            s.insert({ p[i], p[i + 1], p[i + 2] });
+        return s;
+    };
+    // 独立重算某层的组间边界：重新聚组 + 按组归属找被 ≥2 组引用的 canonical 点。
+    // 与 core/simplify.cpp 的边界判定同口径、不同代码路径（交叉验证防同错）。
+    // 这正是 bevy lock_group_borders「每轮按当前分组全量重算」的语义。
+    auto recomputeBoundary = [](const nl::core::NMeshData& mesh, std::string& why) {
+        std::set<Pos> s;
+        why.clear();
+        nl::core::GroupingResult g;
+        if (!nl::core::groupClusters(mesh, g, why)) return s;
+        std::vector<std::uint32_t> canon;
+        nl::core::weldPositions(mesh.vertices, canon);
+        std::uint32_t pointCount = 0;
+        for (std::uint32_t c : canon) pointCount = std::max(pointCount, c + 1);
+        std::vector<int> first(pointCount, -1);
+        for (std::size_t c = 0; c < mesh.meshlets.size(); ++c) {
+            const auto& m = mesh.meshlets[c];
+            const int grp = int(g.clusterGroup[c]);
+            for (std::uint32_t i = 0; i < m.vertexCount; ++i) {
+                const std::uint32_t p = canon[m.vertexOffset + i];
+                const auto& v = mesh.vertices[m.vertexOffset + i];
+                if (first[p] < 0) first[p] = grp;
+                else if (first[p] != grp) s.insert({ v.pos[0], v.pos[1], v.pos[2] });
+            }
+        }
+        return s;
+    };
+
+    std::printf("[connected 64x64 grid, LOD loop]\n");
+    std::string reason;
+    nl::core::NMeshData nm;
+    const bool inOk = makeNMesh(makeTestMesh(1, 64, 64), nm, reason);
+    check(inOk, "synthetic .nmesh built", reason);
+    if (inOk) {
+        nl::core::LodOptions opt;
+        opt.maxLevels = 6;
+        opt.minTriangles = 64;
+        nl::core::LodHierarchy h;
+        const bool built = nl::core::buildLodHierarchy(nm, h, reason, opt);
+        check(built, "buildLodHierarchy", reason);
+        if (built) {
+            check(h.levels.size() >= 3, "at least 3 LOD levels");
+            bool decreasing = h.levels.size() >= 2, halfOk = true;
+            for (std::size_t k = 1; k < h.levels.size(); ++k) {
+                const auto& a = h.levels[k - 1];
+                const auto& b = h.levels[k];
+                if (b.triangles >= a.triangles) decreasing = false;
+                const double r = double(b.triangles) / double(a.triangles);
+                // 标准做法：每组硬目标 50%；拓扑约束下允许 30~70% 波动
+                if (r < 0.30 || r > 0.70) halfOk = false;
+            }
+            check(decreasing, "triangle count strictly decreases");
+            check(halfOk, "each level ~50% of previous (30~70%)");
+
+            bool limits = true, metaOk = true;
+            for (std::size_t k = 0; k < h.levels.size(); ++k) {
+                const auto& lv = h.levels[k];
+                if (!lv.mesh.lodMeta.present || lv.mesh.lodMeta.level != k) metaOk = false;
+                for (const auto& m : lv.mesh.meshlets)
+                    if (m.triangleCount > nl::core::kMeshletMaxTriangles ||
+                        m.vertexCount > nl::core::kMeshletMaxVertices) limits = false;
+            }
+            check(limits, "meshlet limits respected");
+            check(metaOk, "per-level lodMeta present with correct level");
+
+            // 灵魂断言：每层的锁点集合 == 按该层分组独立重算的组间边界集合。
+            // 若存在跨层继承，这里会多出历史锁点而立刻不等。
+            // 顶层没有更粗层要拼，故只验到 k = n-2。
+            bool boundaryOk = true;
+            for (std::size_t k = 0; k + 1 < h.levels.size(); ++k) {
+                std::string why;
+                const auto expected = recomputeBoundary(h.levels[k].mesh, why);
+                const auto actual = lockSet(h.levels[k].mesh.lodMeta.lockedPositions);
+                if (!why.empty() || expected != actual) boundaryOk = false;
+            }
+            check(boundaryOk, "locks == independent per-level boundary recompute");
+            check(h.levels.back().mesh.lodMeta.lockedPositions.empty(),
+                  "top level has no outgoing seams");
+
+            // UE ClusterDAG.cpp:1441 / bevy :146-151：parent error 单调不减，
+            // 否则 S3 的 DAG cut 误差判据不成立。
+            bool errMono = true;
+            for (std::size_t k = 1; k < h.levels.size(); ++k)
+                if (h.levels[k].maxError + 1e-6f < h.levels[k - 1].maxError ||
+                    std::abs(h.levels[k].mesh.lodMeta.maxError - h.levels[k].maxError) > 1e-6f)
+                    errMono = false;
+            check(errMono, "parent error monotonic across levels");
+
+            for (const auto& lv : h.levels)
+                std::printf("  info L%u tris=%-6u clusters=%-4u locked=%-5u maxErr=%.4f\n",
+                            lv.level, lv.triangles, lv.clusters, lv.lockedPoints,
+                            lv.maxError);
+
+            nl::core::LodHierarchy h2;
+            const bool again = nl::core::buildLodHierarchy(nm, h2, reason, opt);
+            bool deterministic = again && h2.levels.size() == h.levels.size();
+            if (deterministic)
+                for (std::size_t k = 0; k < h.levels.size(); ++k) {
+                    const auto& a = h.levels[k];
+                    const auto& b = h2.levels[k];
+                    if (a.triangles != b.triangles || a.clusters != b.clusters ||
+                        a.lockedPoints != b.lockedPoints ||
+                        a.mesh.lodMeta.lockedPositions != b.mesh.lodMeta.lockedPositions)
+                        deterministic = false;
+                }
+            check(deterministic, "deterministic (rerun identical)");
+
+            // version 2 落盘读回 + version 1 向后兼容
+            const char* tmp2 = "lod-selftest-v2.tmp.nmesh";
+            const auto& mid = h.levels[h.levels.size() / 2].mesh;
+            bool rt = nl::core::saveNMesh(tmp2, mid, reason);
+            nl::core::NMeshData back2;
+            if (rt) rt = nl::core::loadNMesh(tmp2, back2, reason);
+            if (rt)
+                rt = back2.lodMeta.present && back2.lodMeta.level == mid.lodMeta.level &&
+                     back2.lodMeta.lockedPositions == mid.lodMeta.lockedPositions &&
+                     std::abs(back2.lodMeta.maxError - mid.lodMeta.maxError) < 1e-6f &&
+                     back2.meshlets.size() == mid.meshlets.size() &&
+                     back2.triangles == mid.triangles;
+            check(rt, "v2 .nmesh round-trip keeps lodMeta", reason);
+            std::remove(tmp2);
+
+            const char* tmp1 = "lod-selftest-v1.tmp.nmesh";
+            nl::core::NMeshData plain = nm;
+            plain.lodMeta = nl::core::NMeshLodMeta{};
+            bool v1 = nl::core::saveNMesh(tmp1, plain, reason);
+            nl::core::NMeshData back1;
+            if (v1) v1 = nl::core::loadNMesh(tmp1, back1, reason) && !back1.lodMeta.present;
+            check(v1, "v1 .nmesh still readable", reason);
+            std::remove(tmp1);
+        }
+    }
+
+    std::printf("[input validation]\n");
+    bool rejected = true;
+    {
+        const auto bad = [](const nl::core::NMeshData& input, nl::core::LodOptions o) {
+            nl::core::LodHierarchy h;
+            std::string err;
+            return !nl::core::buildLodHierarchy(input, h, err, o) && !err.empty();
+        };
+        nl::core::LodOptions o;
+        o.ratio = 0.f;              rejected &= bad(nm, o);
+        o = nl::core::LodOptions{}; o.ratio = 2.f;     rejected &= bad(nm, o);
+        o = nl::core::LodOptions{}; o.maxLevels = 0;   rejected &= bad(nm, o);
+        o = nl::core::LodOptions{}; o.minGroups = 0;   rejected &= bad(nm, o);
+        o = nl::core::LodOptions{}; nl::core::NMeshData empty;
+        rejected &= bad(empty, o);
+    }
+    check(rejected, "ratio / maxLevels / minGroups / empty mesh rejected");
+
+    if (failures == 0) {
+        std::printf("loop selftest: PASS\n");
+        return 0;
+    }
+    std::printf("loop selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1478,10 +1742,12 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "nmesh") return selftestNMesh();
         if (argc >= 3 && std::string(argv[2]) == "group") return selftestGroup();
         if (argc >= 3 && std::string(argv[2]) == "qem") return selftestQem();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem)\n");
+        if (argc >= 3 && std::string(argv[2]) == "loop") return selftestLoop();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
+    if (cmd == "lod") return cmdLod(argc - 2, argv + 2);
     if (cmd == "dag") {
         std::fprintf(stderr, "%s: not implemented yet (S2 / S3)\n", cmd.c_str());
         return 2;
