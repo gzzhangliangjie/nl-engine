@@ -82,4 +82,27 @@ bool sampleClip(const AnimClip& clip, float t, std::vector<BonePose>& out);
 // 按骨骼名找轨道下标；无则返回 SIZE_MAX（状态机按名取 pose 用）。
 std::size_t findTrackIndex(const AnimClip& clip, const std::string& bone);
 
+// ---- M-A2：混合（口径见 ACTION-PLAN §2.4 拍板表） --------------------------
+//
+// 线性混合：UE FTransform::Blend / bevy BlendInput 同式——平移/缩放 lerp、
+// 旋转 slerp（最短路径）。w=0 -> a，w=1 -> b，域外 clamp。
+// 加法混合：bevy blendable.rs 语义——平移 base + delta*w；
+// 旋转 slerp(IDENTITY, delta, w) * base（相对旋转叠加，见 anim_math.hpp scaleQuat）。
+// 混合要求两侧 pose 数组等长且骨骼顺序一致（同一骨架的两次采样天然满足；
+// 跨骨架按名重排在状态机层做，本层不背包袱）。
+
+BonePose lerpPose(const BonePose& a, const BonePose& b, float w);
+
+// 逐骨骼线性混合；a/b 尺寸不一致返回 false（out 保持不变）。
+bool blendPoses(const std::vector<BonePose>& a, const std::vector<BonePose>& b, float w,
+                std::vector<BonePose>& out);
+
+// 加法叠加：out = base ⊕ delta*w。
+BonePose addPose(const BonePose& base, const BonePose& delta, float w);
+
+// 便捷：两 clip 各自采样后混合。任一 clip 非法或骨架尺寸不一致返回 false。
+bool blendClips(const AnimClip& a, float timeA,
+                const AnimClip& b, float timeB, float w,
+                std::vector<BonePose>& out);
+
 } // namespace nl::anim

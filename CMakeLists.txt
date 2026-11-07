@@ -356,3 +356,7 @@ set_tests_properties(ma1-anim-curve-selftest PROPERTIES
 # M-A1：负向——未知 selftest 用例显式拒绝（exit 2）
 add_test(NAME ma1-anim-unknown-case COMMAND anim-tools selftest bogus)
 set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
+# M-A2：线性/加法混合机械单测（lerp 锚点 w=0/0.5/1、加法 quat 相对叠加语义、骨架不一致拒绝）
+add_test(NAME ma2-anim-blend-selftest COMMAND anim-tools selftest blend)
+set_tests_properties(ma2-anim-blend-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "anim blend selftest: PASS")

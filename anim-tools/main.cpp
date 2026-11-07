@@ -241,6 +241,134 @@ int runCurveSelftest() {
     return g_failures == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// M-A2 blend
+// ---------------------------------------------------------------------------
+
+// 两个双骨骼 clip：idle（原位）与 run（前移 4m + 绕 Y 90°）。
+void makeBlendClips(nl::anim::AnimClip& idle, nl::anim::AnimClip& run) {
+    idle = {};
+    idle.duration = 2.0f;
+    nl::anim::BoneTrack it;
+    it.bone = "hips";
+    it.translation.times = { 0.0f };
+    it.translation.values = { { 0, 1, 0 } };
+    it.rotation.times = { 0.0f };
+    it.rotation.values = { nl::anim::quatIdentity() };
+    idle.tracks = { it };
+
+    run = {};
+    run.duration = 1.0f;
+    nl::anim::BoneTrack rt;
+    rt.bone = "hips";
+    rt.translation.times = { 0.0f, 1.0f };
+    rt.translation.values = { { 0, 1, 0 }, { 0, 1, 4 } };
+    rt.rotation.times = { 0.0f, 1.0f };
+    rt.rotation.values = { nl::anim::quatIdentity(),
+                           { 0, 0.70710678118f, 0, 0.70710678118f } };
+    run.tracks = { rt };
+}
+
+void testLerpPoseAnchors() {
+    nl::anim::BonePose a, b;
+    a.translation = { 0, 1, 0 };
+    b.translation = { 2, 1, 4 };
+    b.rotation = { 0, 0.70710678118f, 0, 0.70710678118f };
+
+    nl::anim::BonePose at0 = nl::anim::lerpPose(a, b, 0.0f);
+    nl::anim::BonePose at1 = nl::anim::lerpPose(a, b, 1.0f);
+    expectNear(true, "lerp w=0 -> a", at0.translation.x, 0.0f, 0.0f);
+    expectNear(true, "lerp w=0 rot identity", at0.rotation.w, 1.0f, 0.0f);
+    expectNear(true, "lerp w=1 -> b tx", at1.translation.x, 2.0f, 0.0f);
+    expectNear(true, "lerp w=1 rot y", at1.rotation.y, 0.70710678118f, 1e-7f);
+
+    nl::anim::BonePose mid = nl::anim::lerpPose(a, b, 0.5f);
+    expectNear(true, "lerp mid tx", mid.translation.x, 1.0f, 1e-6f);
+    expectNear(true, "lerp mid tz", mid.translation.z, 2.0f, 1e-6f);
+    expectNear(true, "lerp mid rot y", mid.rotation.y, 0.38268343236f, 1e-6f);
+
+    // 域外 clamp
+    nl::anim::BonePose clamped = nl::anim::lerpPose(a, b, 1.5f);
+    expectNear(true, "lerp w>1 clamp", clamped.translation.x, 2.0f, 0.0f);
+}
+
+void testBlendPosesAndClips() {
+    nl::anim::AnimClip idle, run;
+    makeBlendClips(idle, run);
+
+    std::vector<nl::anim::BonePose> out;
+    // w=0.5、t 双 0：平移中点 x=0? idle tx=0、run t0 tx=0 -> 0；rot 都是 identity
+    expectTrue(nl::anim::blendClips(idle, 0.0f, run, 0.0f, 0.5f, out), "blendClips ok");
+    expectTrue(out.size() == 1, "blendClips pose count");
+    expectNear(true, "blend t0 y", out[0].translation.y, 1.0f, 1e-6f);
+
+    // t=0.5、w=1：完全取 run -> x 位移一半 2m，rot 45°
+    expectTrue(nl::anim::blendClips(idle, 0.0f, run, 0.5f, 1.0f, out), "blendClips w=1 ok");
+    expectNear(true, "blend w=1 x", out[0].translation.x, 0.0f, 1e-6f);
+    expectNear(true, "blend w=1 z", out[0].translation.z, 2.0f, 1e-6f);
+    expectNear(true, "blend w=1 rot y", out[0].rotation.y, 0.38268343236f, 1e-6f);
+
+    // w=0.5、t=0.5 run 侧：x 位移 2m*0.5=1m
+    expectTrue(nl::anim::blendClips(idle, 0.0f, run, 0.5f, 0.5f, out), "blendClips mid ok");
+    expectNear(true, "blend mid z", out[0].translation.z, 1.0f, 1e-6f);
+    expectNear(true, "blend mid rot y", out[0].rotation.y, 0.19509032207f, 1e-6f);  // 旋转 22.5° -> sin(11.25°)
+
+    // 骨架尺寸不一致拒绝
+    nl::anim::AnimClip runBig = run;
+    runBig.tracks.push_back(run.tracks[0]);
+    runBig.tracks[1].bone = "head";
+    std::vector<nl::anim::BonePose> keep;
+    expectTrue(!nl::anim::blendClips(idle, 0.0f, runBig, 0.0f, 0.5f, keep),
+               "blendClips rejects rig mismatch");
+}
+
+void testAdditivePose() {
+    // delta = 绕 Y 90° + 前移 2m；base = identity + 原点
+    nl::anim::BonePose base;
+    base.translation = { 1, 0, 0 };
+    nl::anim::BonePose delta;
+    delta.translation = { 0, 0, 2 };
+    delta.rotation = { 0, 0.70710678118f, 0, 0.70710678118f };
+
+    // w=0：原样 base
+    nl::anim::BonePose at0 = nl::anim::addPose(base, delta, 0.0f);
+    expectNear(true, "additive w=0 tx", at0.translation.x, 1.0f, 0.0f);
+    expectNear(true, "additive w=0 rot w", at0.rotation.w, 1.0f, 1e-7f);
+
+    // w=1：全量叠加 —— 平移 (1,0,2)，旋转 90°
+    nl::anim::BonePose at1 = nl::anim::addPose(base, delta, 1.0f);
+    expectNear(true, "additive w=1 tx", at1.translation.x, 1.0f, 1e-6f);
+    expectNear(true, "additive w=1 tz", at1.translation.z, 2.0f, 1e-6f);
+    expectNear(true, "additive w=1 rot y", at1.rotation.y, 0.70710678118f, 1e-6f);
+
+    // w=0.5：平移一半 (1,0,1)，旋转 45°
+    nl::anim::BonePose half = nl::anim::addPose(base, delta, 0.5f);
+    expectNear(true, "additive half tz", half.translation.z, 1.0f, 1e-6f);
+    expectNear(true, "additive half rot y", half.rotation.y, 0.38268343236f, 1e-6f);
+
+    // 相对叠加：base 先转 90°，delta 再 90° -> 合成 180°（绕 Y）
+    nl::anim::BonePose turned = base;
+    turned.rotation = { 0, 0.70710678118f, 0, 0.70710678118f };
+    nl::anim::BonePose composed = nl::anim::addPose(turned, delta, 1.0f);
+    expectNear(true, "additive compose y", composed.rotation.y, 1.0f, 1e-6f);   // sin90=1
+    expectNear(true, "additive compose w", composed.rotation.w, 0.0f, 1e-6f);   // cos90=0
+}
+
+int runBlendSelftest() {
+    struct Case { const char* name; void (*fn)(); };
+    const Case cases[] = {
+        { "lerp pose anchors", testLerpPoseAnchors },
+        { "blendPoses/blendClips", testBlendPosesAndClips },
+        { "additive pose", testAdditivePose },
+    };
+    for (const Case& c : cases) {
+        std::printf("  [%s]\n", c.name);
+        std::fflush(stdout);
+        c.fn();
+    }
+    return g_failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -251,7 +379,12 @@ int main(int argc, char** argv) {
             std::printf("anim curve selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
-        // M-A2/M-A3/M-A4 用例接入处（blend / statemachine / blendspace）
+        if (testCase == "blend") {
+            const int rc = runBlendSelftest();
+            std::printf("anim blend selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+            return rc;
+        }
+        // M-A3/M-A4 用例接入处（statemachine / blendspace）
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());
         return 2;
     }

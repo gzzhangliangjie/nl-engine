@@ -128,4 +128,43 @@ std::size_t findTrackIndex(const AnimClip& clip, const std::string& bone) {
     return static_cast<std::size_t>(-1);
 }
 
+// ---- M-A2：混合 ------------------------------------------------------------
+
+BonePose lerpPose(const BonePose& a, const BonePose& b, float w) {
+    if (w <= 0.0f) return a;
+    if (w >= 1.0f) return b;
+    BonePose out;
+    out.translation = lerpVec3(a.translation, b.translation, w);
+    out.rotation = normalizeQuat(slerpQuat(a.rotation, b.rotation, w));
+    return out;
+}
+
+bool blendPoses(const std::vector<BonePose>& a, const std::vector<BonePose>& b, float w,
+                std::vector<BonePose>& out) {
+    if (a.size() != b.size()) return false;
+    out.clear();
+    out.reserve(a.size());
+    for (std::size_t i = 0; i < a.size(); ++i)
+        out.push_back(lerpPose(a[i], b[i], w));
+    return true;
+}
+
+BonePose addPose(const BonePose& base, const BonePose& delta, float w) {
+    BonePose out = base;
+    out.translation = base.translation + delta.translation * w;
+    out.rotation = normalizeQuat(mulQuat(scaleQuat(delta.rotation, w), base.rotation));
+    return out;
+}
+
+bool blendClips(const AnimClip& a, float timeA,
+                const AnimClip& b, float timeB, float w,
+                std::vector<BonePose>& out) {
+    if (a.tracks.size() != b.tracks.size()) return false;
+    if (!validateClip(a).empty() || !validateClip(b).empty()) return false;
+    std::vector<BonePose> pa, pb;
+    sampleClip(a, timeA, pa);
+    sampleClip(b, timeB, pb);
+    return blendPoses(pa, pb, w, out);
+}
+
 } // namespace nl::anim
