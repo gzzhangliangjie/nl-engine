@@ -34,7 +34,8 @@
 - **server.py stage_sync：preview 证据图计入基线证据**（M2.1 固化约定的落实，缺失文件照样 FAIL）；kStage=S3.0，viewer selftest stage 断言在 viewer/main.cpp（strstr("S3.0")）随 kStage 同步改。s1-tools not-impl 负向已退役为「未知子命令 exit 1」（工具侧占位子命令清零）。
 - Suzanne 新链 7 层：3936→1970→1002→500→252→142→104；dag 校验 56 groups/57 edges/87 父簇。Suzanne.lod0..6.nmesh（v3）入仓。
 - 工具卡 exe 恒指当前构建，重编后两份 build/{dx12,vulkan}/nanite-tools.exe 都要用本后端重编（别 cp 盖，NMake 时间戳陷阱）。
-- 下一步：**M3.1 fallback mesh**（顶层连普通 indexed mesh，S8 BLAS 用）→ M3.2 viewer --mode dag-top → S5 运行时 cut。
+- **M3.1 fallback（tag s3-fallback 提交 d7b87e1）**：.nmesh **文件 version 3**='NFLB' 自描述尾段（按 magic 识别，v1/v2 兼容）；落点 <prefix>.lod0.nmesh 尾段（lod 写回，输入文件不动）；buildFallbackMesh=weldPositions 口径顶层拼接（UE BuildFallbackMesh 对照，2.6%≈默认 2%，不做第二次独立简化）；selftest fallback 灵魂断言=三角守恒+weld 收敛+边流形每边≤2。**Meshlet::triangleOffset 是字节偏移不是三角号**（M1.1 语义，读三角窗口一律 `base=triangleOffset+t*3`，meshlet.hpp 已钉死注释）。ctest 16/16、回归 132/132。
+- 下一步：**M3.2 viewer --mode dag-top**（顶层渲染=正确粗模 + 任选组下钻一层验证父子衔接无洞）→ tag s3-done → S5 运行时 cut。
 
 ## S2 离线管线约定（M2.0 起）
 - METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。
