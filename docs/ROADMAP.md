@@ -49,7 +49,7 @@
 ## 阶段 P0 · 渲染地基（约 1~2 周）
 
 ### S0 搭骨架
-> 当前进度（2026-11-07）：**S0 全部完成**——M0.5 ImGui HUD + 总验收通过（tag `s0-done`），下一步进 S1。逐阶段实况见 `docs/MILESTONES.md`，可回放用例见 `example/`，调试工具计划见下方专节。
+> 当前进度（2026-11-07）：**S0 全部完成**——M0.5 总验收通过（tag `s0-done`），能力补齐序列 M0.6 GPU 计时 / M0.7 高模资产 / M0.8 调试着色 ✅，下一步 **M0.9 回归总闸 → 进 S1**。逐阶段实况见 `docs/MILESTONES.md`，可回放用例见 `example/`，调试工具计划见下方专节。
 
 - **做什么**：接入后端，窗口 + glTF 加载 + ImGui 面板 + Slang 编译管线跑通
 - **工程骨架（底子，一次搭对）**：
@@ -188,6 +188,27 @@ nl-engine/
 | E4（可选） | 物理/音频/脚本 | 由最终想做的游戏类型决定取舍 | 按游戏需求定义 |
 
 **到此为止就是完整引擎**：core（壳）+ renderer（Nanite+Lumen）+ scene + assets + editor。物理/音频/脚本要不要，等你想清楚拿它做什么游戏再说——不要为「像 UE」而堆功能。
+
+---
+
+## 穿插项（2026-11-07 定：不挡主线，卡壳 / 换脑子时插）
+
+> **M0.x 必做序列冻结在 M0.9，做完立刻进 S1**——不往 0.x 里继续加版本，也**不为渲染研究单开第二条并行线**（并行线会让 `kStage` 阶段检查、展示台 exe 映射、M0.9 回归总闸全部变成两份，互相打架）。想做的研究一律降级为「穿插项」：硬规则不变（example 归位 + cases.json + `--check` 退出 0），但插在主线任意两步之间，做完就回主线。tag 用名字（如 `pbr-direct`、`toon`），**不占用 m0.* 编号**。
+
+| 穿插项 | 内容 | 建议插在哪 | 与主线的关系 |
+|---|---|---|---|
+| PBR 直射光 + 贴图采样 | glTF 贴图进 GPU（`t0/s0` 绑定，baseColor 注意 sRGB、ORM 线性）、Cook-Torrance GGX 直射光 + 常数环境光、metallic/roughness 因子；走 `--shading pbr`（M0.8 的 shader 分支机制现成） | **S1~S6 之间插一次** | **S7 的前置**：S7 本来就含「PBR 直光」，提前做掉，S7 只剩 vis buffer + vertex pulling + 材质解析，不会四件事挤一个里程碑 |
+| 卡通着色（ramp + 描边） | `--shading toon`：阶梯漫反射 + 边缘光 + 阶梯高光；描边走背面外扩 hull（同一 render pass 里画第二遍：反转剔除 + 顶点沿法线外扩），零离屏 RT | 随时；或排 P7 与 S14 同类 | 与 Nanite/Lumen 研究目标零耦合，纯展示性；成本最低（只改 shader 分支 + 多一个 draw，pipeline 复用 M0.8 的组合表扩一档） |
+| `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 |
+
+**边界**：穿插项不做 IBL / 阴影贴图 / 后处理链（bloom、tonemap）——PBR 补全到那一步就够 S7 用；卡通不做 SDF 脸影等进阶项，那是要真做卡通项目时另立门户的事。
+
+**渲染研究参考项目（2026-11-07 调研）**：
+- `zauonlok/renderer`——C89 从零软件渲染器，Blinn-Phong / PBR 双工作流 / IBL / 阴影贴图 / ACES，20+ 场景按 CLI 名选用例（与本项目 example/ 用例库同思路）；PBR 实现细节可逐段对照。
+- `HanetakaChou/Brioche-Puppet`——自写渲染层 **D3D12/Vulkan/Metal 三后端**，PBR + 卡通（赛璐璐脸 + 矢状面 SDF 影）+ ReSTIR；多后端对称与本项目最像，卡通进阶效果看它。
+- `PepcyCh/bisemutum-engine`——C++20 个人 RHI（Vulkan + D3D12）+ 渲染图 + PBR 前向/延迟/路径追踪/DDGI，结构上是本项目的放大版。
+- `christoskaramou/PhasmaEngine`——Vulkan + DX12 学习引擎，**shader 用 Slang**、MaterialX→Slang、visibility buffer + meshlet 簇，与 S1~S7 方向直接重叠，可抄验证思路。
+- GAMES202 各作业仓库——一作业一个技术点（ShadowMap/PCF/PCSS、PRT 球谐、SSR、Kulla-Conty），当主线技术点拆分清单用。
 
 ---
 
