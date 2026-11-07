@@ -312,11 +312,15 @@ int cmdRender(int argc, char** argv) {
     const float MARGIN = 40.0f;
 
     // 画布尺寸：按所有节点包围盒自适应（坐标可能是负数时整体平移）
+    // 节点高度 = 标题栏 + max(输入,输出) 引脚行 + 属性行 + 底部留白（props 也占高度，否则文字溢出框外）
+    auto nodeHeight = [&](const Node& n) {
+        int inN = 0, outN = 0, propN = (int)n.props.size();
+        for (const auto& p : n.pins) (p.isOutput ? outN : inN) += 1;
+        return TITLE_H + (inN > outN ? inN : outN) * PIN_H + propN * 14.0f + PAD_B;
+    };
     float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
     for (const auto& n : g.nodes()) {
-        float inN = 0, outN = 0;
-        for (const auto& p : n.pins) (p.isOutput ? outN : inN) += 1;
-        float h = TITLE_H + (inN > outN ? inN : outN) * PIN_H + PAD_B;
+        float h = nodeHeight(n);
         minX = (n.x < minX) ? n.x : minX;  minY = (n.y < minY) ? n.y : minY;
         maxX = (n.x + NW > maxX) ? n.x + NW : maxX;  maxY = (n.y + h > maxY) ? n.y + h : maxY;
     }
@@ -358,9 +362,7 @@ int cmdRender(int argc, char** argv) {
 
     // 节点框 + 标题 + 引脚 + 属性值
     for (const auto& n : g.nodes()) {
-        int inN = 0, outN = 0;
-        for (const auto& p : n.pins) (p.isOutput ? outN : inN) += 1;
-        float h = TITLE_H + (inN > outN ? inN : outN) * PIN_H + PAD_B;
+        float h = nodeHeight(n);
         float x = n.x + ox, y = n.y + oy;
         svg << "<g>\n";
         svg << "<rect x=\"" << x << "\" y=\"" << y << "\" width=\"" << NW << "\" height=\"" << h
@@ -383,8 +385,8 @@ int cmdRender(int argc, char** argv) {
                 << "</tspan></text>\n";
             if (p.isOutput) ++oo; else ++ii;
         }
-        // 属性值显示在引脚区之后
-        float ay = y + TITLE_H + (inN > outN ? inN : outN) * PIN_H + 4.0f;
+        // 属性值显示在引脚区之后（行高 14 与 nodeHeight 的 propN * 14.0f 对应）
+        float ay = y + h - PAD_B - (float)n.props.size() * 14.0f + 4.0f;
         for (const auto& kv : n.props) {
             svg << "<text x=\"" << (x + 12.0f) << "\" y=\"" << (ay + 10.0f)
                 << "\" font-size=\"11\" fill=\"#8fd18f\">" << kv.first << " = "
