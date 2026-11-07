@@ -46,6 +46,9 @@ struct FrameParams {
     float lightDir[4] = {0.45f, 0.80f, 0.50f, 0.28f};  // xyz 方向, w = 环境光
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
+    // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
+    int   shading     = 0;      // 0 textured / 1 normal / 2 uv / 3 tri-id（传进 g_options.x）
+    bool  wireframe   = false;  // 光栅化 fill mode = wireframe（深度测试照常）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -74,6 +77,9 @@ struct HudFrame {
     const char* stage      = "";
     const char* model      = "";    // M0.7：--model 加载的 .glb 文件名
     int   triangleCount    = 0;     // M0.7：模型三角形数
+    // ---- M0.8：双向——viewer 传当前值，HUD 控件写回（与 cull/color 同一条通道）----
+    int   shading          = 0;     // 0 textured / 1 normal / 2 uv / 3 tri-id
+    bool  wireframe        = false;
     // ---- 双向：viewer 传当前值，HUD 写回控件结果 ----
     bool cullBack          = true;
     int  colorIndex        = 0;

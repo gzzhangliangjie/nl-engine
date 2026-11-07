@@ -5,7 +5,7 @@
 
 namespace nl::core {
 
-enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, F12, Count };
+enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Count };
 
 struct WindowDesc {
     int         width  = 1280;

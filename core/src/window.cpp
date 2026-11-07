@@ -23,6 +23,8 @@ Key mapKey(int glfwKey) {
         case GLFW_KEY_D:      return Key::D;
         case GLFW_KEY_C:      return Key::C;
         case GLFW_KEY_R:      return Key::R;
+        case GLFW_KEY_V:      return Key::V;   // M0.8：线框开关
+        case GLFW_KEY_N:      return Key::N;   // M0.8：循环切着色模式
         case GLFW_KEY_F12:    return Key::F12;
         default:              return Key::Unknown;
     }

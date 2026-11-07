@@ -242,7 +242,8 @@ void Hud::build(HudFrame& frame) {
     // 小画布上把面板收在可视范围内（内容多时出滚动条，不越界）；大画布给足高度。
     // M0.6 增了 GPU 行 + 曲线后内容更高，上限从 400 提到 460，960x540 下不裁底。
     // M0.7 又增 model 行，上限提到 480（640x360 小画布仍靠滚动条收纳）。
-    const float panelH = std::min(480.0f, frame.displayHeight - 28.0f);
+    // M0.8 增 shading 下拉框（wireframe 复选框与 cull 并行不占新行），上限提到 510。
+    const float panelH = std::min(510.0f, frame.displayHeight - 28.0f);
     ImGui::SetNextWindowSize(ImVec2(330.0f, std::max(180.0f, panelH)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);   // 半透明：HUD 与背后的模型同时看得见
     ImGui::Begin("nl-engine HUD", nullptr, ImGuiWindowFlags_NoResize);
@@ -276,9 +277,15 @@ void Hud::build(HudFrame& frame) {
                 ? "capture/replay (fixed samples)" : "live sampling");
     ImGui::Separator();
     ImGui::Checkbox("back-face culling", &frame.cullBack);
+    ImGui::SameLine();
+    ImGui::Checkbox("wireframe", &frame.wireframe);   // M0.8：光栅 fill mode，与 cull 正交
+    // M0.8：着色模式下拉框，双向 POD 通道与 cull/color 控件同一条路。
+    static const char* kShadingNames[] = { "textured", "normal", "uv", "tri-id" };
+    ImGui::Combo("shading", &frame.shading, kShadingNames,
+                 static_cast<int>(sizeof(kShadingNames) / sizeof(kShadingNames[0])));
     ImGui::SliderInt("clear color", &frame.colorIndex, 0, 3);
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
-    ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  R=reset  ESC=quit");
+    ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();
     ImGui::Render();
 
@@ -417,6 +424,7 @@ bool hudSelfTest() {
     if (!f.cullBack || f.frameMsCount != 0 || f.colorIndex != 0 ||
         f.resetCamera || f.wantCaptureMouse || f.deterministic) return false;
     if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
+    if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;
 }

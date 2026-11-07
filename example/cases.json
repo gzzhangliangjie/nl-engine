@@ -662,8 +662,8 @@
     "thirdparty/meshoptimizer 就位但 CMake 零引用"
    ],
    "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
    },
    "cases": [
     {
@@ -747,6 +747,173 @@
      "expectLog": "SELFTEST PASS (14/14)",
      "command": "viewer.exe --selftest",
      "script": "example/m0.7/run.bat selftest"
+    }
+   ]
+  },
+  {
+   "id": "m0.8",
+   "label": "M0.8",
+   "name": "线框 / 调试着色（normal / UV / 三角形ID）",
+   "tag": null,
+   "date": "2026-11-07",
+   "summary": "model.slang 单源新增 4 种着色模式（g_options.x 分支，tri-id 用 SV_PrimitiveID 整数 hash，slangc 双目标实测通过）；线框走 NVRHI 光栅 fill mode（pipeline 2×2 组合）；viewer 新增 --shading / --wireframe / V、N 键；HUD 增 shading 下拉框 + wireframe 复选框。",
+   "acceptance": [
+    "四种着色 + 线框双后端截图成功、deviceErrors=0；tris/uv 两后端 PNG 逐字节相同",
+    "不带新参数时基线逐字节不变：--no-hud PNG MD5 仍为 7e528087…；selftest 15/15（stage 校验 M0.8）",
+    "model.slang 单源出 SPIR-V + DXIL（8/8 魔数），SV_PrimitiveID 双目标编译通过",
+    "HUD shading combo / wireframe 复选框与 CLI 同一条 FrameParams 通道；960x540 面板完整不裁底",
+    "--shading 非法值报错退出 1，不静默落回 textured",
+    "example/m0.8 归位 + cases.json + --check 退出码 0"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hud",
+     "name": "TorusKnotDense 法线着色 + HUD 新控件",
+     "kind": "pair",
+     "note": "--shading normal：20 万 tri 的纽结用世界空间法线渐变看朝向，比贴图直观。HUD 新增 shading 下拉框（显示 normal）与 wireframe 复选框（与 cull 并行一行）。两张 PNG 不同是 backend/debug 文本不同，3D 部分一致。拖 dist 滑块现场改视角，与基线不同属预期。",
+     "baselines": {
+      "dx12": "example/m0.8/hud-dx12.png",
+      "vulkan": "example/m0.8/hud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "back",
+      "--model",
+      "TorusKnotDense.glb",
+      "--shading",
+      "normal"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "5.5"
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb --shading normal",
+     "script": "example/m0.8/run.bat hud"
+    },
+    {
+     "id": "wire",
+     "name": "Suzanne 线框（3936 tri 可逐个数）",
+     "kind": "pair",
+     "note": "--wireframe 走 NVRHI 光栅 fill mode（深度测试照常），不是几何 shader。HUD 的 wireframe 复选框按实际状态勾选，与 CLI 传的是同一条 FrameParams 通道；交互窗口里 V 键即时切换。",
+     "baselines": {
+      "dx12": "example/m0.8/wire-dx12.png",
+      "vulkan": "example/m0.8/wire-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--wireframe"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --wireframe",
+     "script": "example/m0.8/run.bat wire"
+    },
+    {
+     "id": "uv",
+     "name": "IcoSphereDense UV 着色（接缝可见）",
+     "kind": "pair",
+     "note": "--shading uv：u→红 / v→绿，等距柱状 UV 的经线接缝与连续性直接目测。两后端 PNG 逐字节相同。",
+     "baselines": {
+      "dx12": "example/m0.8/uv-dx12.png",
+      "vulkan": "example/m0.8/uv-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--model",
+      "IcoSphereDense.glb",
+      "--shading",
+      "uv"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb --shading uv",
+     "script": "example/m0.8/run.bat uv"
+    },
+    {
+     "id": "tris",
+     "name": "Suzanne 三角形ID 着色",
+     "kind": "pair",
+     "note": "--shading tri-id：SV_PrimitiveID 经整数 hash 出确定性伪随机色，每个三角形颜色恒定（同参重渲染 MD5 稳定，可进截图回归）。密集网格上是高频噪点属预期，S1 切簇后看簇边界就靠它当地基。两后端 PNG 逐字节相同。",
+     "baselines": {
+      "dx12": "example/m0.8/tris-dx12.png",
+      "vulkan": "example/m0.8/tris-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--shading",
+      "tri-id"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --shading tri-id",
+     "script": "example/m0.8/run.bat tris"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（15/15，阶段校验 M0.8）",
+     "kind": "selftest",
+     "note": "新增 FrameParams 调试着色 / 线框 POD 缺省值校验（= M0.7 行为），stage 检查改为 M0.8。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (15/15)",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.8/run.bat selftest"
     }
    ]
   }

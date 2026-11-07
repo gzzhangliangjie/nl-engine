@@ -366,3 +366,35 @@
 验收通过才打 tag 并放行下一阶段；tag 打在验收之后，不预支。
 
 > **每轮迭代都要更新 `example/`（2026-11-07 定的硬规则）**：本轮产出的成功用例必须归位到 `example/`，否则展示台就看不到新阶段的效果，等于这轮没留下「能亲眼看到」的证据。`--check` 以 `renderer.cpp` 的 `kStage` 判定当前阶段，代码进了新阶段而 `example/` 没跟上就退出 1；**验收 / 打 tag 前必须过这一关**。S1~S14 的每一步同样适用。
+
+## M0.8 线框 / 调试着色（normal / UV / 三角形ID）
+
+**动作**
+- `renderer/shaders/model.slang`：`g_options.x` 加 4 种着色分支（0 textured = M0.4 原路径逐字不动 / 1 世界空间法线 / 2 uv→红绿 / 3 三角形ID）。PS 输入结构新增 `uint triId : SV_PrimitiveID`（rasterizer 系统值，VS 输出不带它），颜色用 pcg 风格整数 hash——无浮点随机源，同参重渲染确定。**开工前先用临时 shader 实测 slangc 双目标编译**：SPIR-V `03 02 23 07` / DXIL `DXBC` 都过。
+- `renderer/src/scene.{hpp,cpp}`：pipeline 从 2 套扩到 **4 套（solid/wire × cull back/none）**，线框用 NVRHI `RasterState::setFillWireframe()`（光栅 fill mode，零几何 shader、零索引改动）；`draw()` 把 `params.shading` 写进 `cb.options[0]`，按 `wireframe/cullBack` 选 pipeline。
+- `renderer/include/nl/renderer/renderer.hpp`：`FrameParams` 增 `int shading = 0; bool wireframe = false;`，`HudFrame` 增同名双向字段（缺省值 = M0.7 行为）。
+- `viewer/main.cpp`：`--shading textured|normal|uv|tri-id`（也接受 0..3，非法值报错退出 1）、`--wireframe`；**V = 线框开关、N = 循环切着色**；标题栏与启动日志带 shading/wire 状态；selftest 增 POD 缺省校验（14→15 项）。
+- `core/include/nl/core/window.hpp` + `core/src/window.cpp`：Key 枚举加 V / N（core 依旧零图形符号）。
+- `renderer/src/hud.cpp`：面板增 `shading` 下拉框（imgui_widgets 的 Combo）+ `wireframe` 复选框（与 cull 复选框并行一行，省高度）；面板上限 480→510。
+- `kStage` → `M0.8 debug shading (wireframe / normal / uv / tri-id)`；selftest 阶段校验同步改 M0.8。
+- `example/m0.8/` 归位 4 个 pair 用例 + selftest；`cases.json` 增 m0.8；m0.7 的 exe 映射改为 tag 快照（`build/showcase/m0.7/...`），`rebuild.py` 补建两后端快照 exe。
+
+**提交版本**    tag `m0.8`
+
+**完成情况**
+- 双后端构建 + selftest 15/15（stage 校验 M0.8、POD 缺省值校验、8 个 shader 产物魔数照旧全过）。
+- 四种着色 + 线框双后端截图全部成功，`deviceErrors=0`、调试层零输出；tri-id 与 uv 两后端 PNG **逐字节相同**（MD5 `1c1421ea…` / `128b51c9…`），hud / wire 用例两后端不同仅因面板文本（老约定）。
+- **历史基线逐字节不变**：不带新参数时 Suzanne `--no-hud` 双后端 PNG MD5 仍为 `7e528087d19722d8f9ef4de35e36d382`。
+- `SV_PrimitiveID` 双后端实跑通过：NVRHI validation 与 D3D12 Debug Layer 均零报错（预判的签名匹配坑没有出现）。
+- HUD 960×540 实拍：shading 下拉框 + wireframe 复选框可见、面板底部操作提示行完整不裁底。
+- `python tools/showcase/server.py --check` 退出 0（stage=M0.8，5 用例 / 8 基线）。
+- ⬜ 交互窗口里 V/N 键的现场演示为交互用例（无截图，按 M0.5 以来的约定不单独落盘）。
+
+**踩坑情况**
+1. **`--shading tris` 静默落回 textured** → 根因：规范名是 `tri-id`（HUD combo 同名），首版解析对未匹配文本走 `atoi("tris")=0`，静默当成 textured，截图与基线 MD5 相同才暴露。处理：解析改为「名字精确匹配 + 严格数字 0..3」，其余一律报错退出 1；测试命令也改用规范名。
+2. **slangc 的 `-dxc-path` 在 bash 里传带空格路径会碎** → 根因：Git Bash 对参数再分词/转义，dxcompiler.dll 路径被切碎报 `failed to load downstream compiler 'dxc'`。处理：用单引号反斜杠 Windows 路径直传（CMake 构建内不受影响，只是手工验证时的坑）。
+
+**用例归位**
+- `example/m0.8/`：`hud-{dx12,vulkan}.png`（960×540，纽结法线着色 + 新控件）、`wire-{dx12,vulkan}.png`（960×540，Suzanne 线框 + 复选框勾选）、`uv-{dx12,vulkan}.png`（640×360，细分球 UV）、`tris-{dx12,vulkan}.png`（640×360，Suzanne 三角形ID）+ `run.bat`（`all` / `hud` / `wire` / `uv` / `tris` / `selftest`）。
+- `example/cases.json` 增 m0.8：`hud`（dist 可调）/ `wire` / `uv` / `tris` / `selftest` 五用例；m0.1~m0.7 原样保留。
+- `python tools/showcase/server.py --check` 退出 0。

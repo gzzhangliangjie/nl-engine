@@ -36,6 +36,13 @@ const nl::renderer::ClearColor kColors[] = {
 };
 constexpr int kColorCount = static_cast<int>(sizeof(kColors) / sizeof(kColors[0]));
 
+// M0.8：调试着色模式（与 model.slang 的 g_options.x / HUD combo 一致）
+constexpr int kShadingCount = 4;
+const char* shadingName(int s) {
+    static const char* kNames[kShadingCount] = { "textured", "normal", "uv", "tri-id" };
+    return (s >= 0 && s < kShadingCount) ? kNames[s] : "?";
+}
+
 // --screenshot 回归模式下 HUD 的时序样本固定：实时 FPS 每次都不同，写进 PNG
 // 就会让基线 MD5 永远对不上。交互窗口里显示的是真实采样。
 constexpr int kFixedSampleCount = 8;
@@ -57,6 +64,8 @@ struct Options {
     bool sizeSet    = false;
     bool resize     = false;
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
+    int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id（N 键 / HUD combo）
+    bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
     int  width      = 1280;
@@ -90,6 +99,24 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
+        } else if (a == "--shading" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            o.shading = -1;
+            for (int s = 0; s < kShadingCount; ++s)
+                if (v == shadingName(s)) o.shading = s;
+            if (o.shading < 0) {
+                // 也接受 0..3；除此之外一律报错退出，绝不静默落回 textured
+                char* end = nullptr;
+                const long n = std::strtol(v.c_str(), &end, 10);
+                if (end && *end == '\0' && n >= 0 && n < kShadingCount) o.shading = static_cast<int>(n);
+            }
+            if (o.shading < 0 || o.shading >= kShadingCount) {
+                std::cerr << "unknown --shading '" << v << "'. available: "
+                          << "textured, normal, uv, tri-id\n";
+                std::exit(1);
+            }
+        } else if (a == "--wireframe") {
+            o.wireframe = true;
         } else if (a == "--yaw" && i + 1 < argc) {
             o.yawDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--pitch" && i + 1 < argc) {
@@ -124,7 +151,7 @@ Options parseArgs(int argc, char** argv) {
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.7 selftest\n";
+    std::cout << "nl-engine M0.8 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -158,11 +185,13 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.7") != nullptr, "M0.7 stage reported");
+    check(std::strstr(st.stage, "M0.8") != nullptr, "M0.8 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
           "frame params (MVP/cull/light) POD defaults");
+    check(fp.shading == 0 && !fp.wireframe,
+          "M0.8 debug shading / wireframe POD defaults (= M0.7 behavior)");
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
@@ -196,7 +225,7 @@ int runNormal(const Options& o) {
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
-    desc.title  = "nl-engine | M0.6 | starting...";
+    desc.title  = "nl-engine | starting...";
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
@@ -219,6 +248,8 @@ int runNormal(const Options& o) {
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
     bool cullBack = o.cullBack;
+    int shading = o.shading;
+    bool wireframe = o.wireframe;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -227,7 +258,8 @@ int runNormal(const Options& o) {
                         " | active=", info.debugLayerActive ? "yes" : "no");
     nl::core::log::info("mode: ", nl::core::modeName(o.mode),
                         " | HUD: ", o.hudEnabled ? "on" : "off",
-                        " | case: drag=orbit, wheel=zoom, C=culling, R=reset, SPACE=clear, F12=PNG");
+                        " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
+                        " | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG");
 
     if (o.screenshot) {
         std::string err;
@@ -268,6 +300,14 @@ int runNormal(const Options& o) {
         if (window.keyPressed(nl::core::Key::C)) {
             cullBack = !cullBack;
             nl::core::log::info("back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
+        }
+        if (window.keyPressed(nl::core::Key::V)) {   // M0.8：线框开关
+            wireframe = !wireframe;
+            nl::core::log::info("wireframe -> ", wireframe ? "on" : "off");
+        }
+        if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
+            shading = (shading + 1) % kShadingCount;
+            nl::core::log::info("shading -> ", shadingName(shading));
         }
         if (window.keyPressed(nl::core::Key::R)) {
             camera.reset();
@@ -320,6 +360,8 @@ int runNormal(const Options& o) {
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
         std::memcpy(fp.model, model.m, sizeof(fp.model));
         fp.cullBack = cullBack;
+        fp.shading = shading;
+        fp.wireframe = wireframe;
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
         nl::renderer::HudFrame hud{};
@@ -339,6 +381,8 @@ int runNormal(const Options& o) {
             hud.triangleCount = static_cast<int>(info.triangleCount);
             hud.cullBack = cullBack;
             hud.colorIndex = colorIndex;
+            hud.shading = shading;
+            hud.wireframe = wireframe;
             hud.deterministic = o.screenshot;
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -397,6 +441,8 @@ int runNormal(const Options& o) {
         if (o.hudEnabled) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
+            shading = std::clamp(hud.shading, 0, kShadingCount - 1);
+            wireframe = hud.wireframe;
             colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
             hudWantsMouse = hud.wantCaptureMouse;
         }
@@ -420,6 +466,7 @@ int runNormal(const Options& o) {
                   << " pitch " << camera.pitchDegrees()
                   << " dist " << camera.distance()
                   << " | cull " << (cullBack ? "back" : "none")
+                  << " | shading " << shadingName(shading) << (wireframe ? " wire" : "")
                   << " | " << e.width << "x" << e.height;
             window.setTitle(title.str());
         }
@@ -462,7 +509,7 @@ void printUsage() {
     const std::string stagePrefix0 = stageStr0.substr(0, stageStr0.find(' '));
     std::cout << "nl-engine viewer (" << stagePrefix0 << ")  backend=" << st0.backend << '\n'
               << "  viewer.exe                         textured Suzanne + ImGui HUD; drag=orbit, wheel=zoom\n"
-              << "                                     C=culling, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
+              << "                                     C=culling, V=wireframe, N=shading, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
@@ -470,6 +517,8 @@ void printUsage() {
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
+              << "  viewer.exe --shading <name>        textured | normal | uv | tri-id (default textured; N key cycles)\n"
+              << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
               << "  viewer.exe --model <name.glb>      load assets/models/<name.glb> (default Suzanne.glb)\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"

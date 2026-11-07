@@ -294,26 +294,37 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
 
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
-    if (pipelineBack_ && pipelineNone_) return true;
+    if (pipelineBack_ && pipelineNone_ && pipelineWireBack_ && pipelineWireNone_) return true;
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
-    for (int i = 0; i < 2; ++i) {
-        nvrhi::GraphicsPipelineDesc desc;
-        desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
-            .setInputLayout(inputLayout_)
-            .setVertexShader(vs_)
-            .setFragmentShader(ps_)
-            .addBindingLayout(bindingLayout_);
-        // glTF 外表面是 CCW（NDC），视口 Y 向下后 framebuffer 里为 CW；但 Slang 生成的
-        // DXIL/SPIR-V 与 NVRHI 的 Vulkan 视口换算叠加后，实测外表面被判成 back-face
-        // （cull=back 会剔掉正脸、只剩内壁）。故统一把 CCW 指定为正面，两后端一致。
-        desc.renderState.rasterState
-            .setFrontCounterClockwise(true)
-            .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
-        desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
-        auto pipeline = device->createGraphicsPipeline(desc, info);
-        if (!pipeline) { outError = "createGraphicsPipeline failed for model"; return false; }
-        if (i == 0) pipelineBack_ = pipeline; else pipelineNone_ = pipeline;
+    pipelineWireBack_ = nullptr;
+    pipelineWireNone_ = nullptr;
+    // M0.8：2×2 组合——fill(solid/wireframe) × cull(back/none)。着色模式走 cbuffer，
+    // 不进 pipeline；四套共用同一对 shader。
+    for (int wire = 0; wire < 2; ++wire) {
+        for (int i = 0; i < 2; ++i) {
+            nvrhi::GraphicsPipelineDesc desc;
+            desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+                .setInputLayout(inputLayout_)
+                .setVertexShader(vs_)
+                .setFragmentShader(ps_)
+                .addBindingLayout(bindingLayout_);
+            // glTF 外表面是 CCW（NDC），视口 Y 向下后 framebuffer 里为 CW；但 Slang 生成的
+            // DXIL/SPIR-V 与 NVRHI 的 Vulkan 视口换算叠加后，实测外表面被判成 back-face
+            // （cull=back 会剔掉正脸、只剩内壁）。故统一把 CCW 指定为正面，两后端一致。
+            desc.renderState.rasterState
+                .setFrontCounterClockwise(true)
+                .setFillMode(wire ? nvrhi::RasterFillMode::Wireframe
+                                  : nvrhi::RasterFillMode::Solid)
+                .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
+            desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
+            auto pipeline = device->createGraphicsPipeline(desc, info);
+            if (!pipeline) { outError = "createGraphicsPipeline failed for model"; return false; }
+            if (wire == 0)
+                (i == 0 ? pipelineBack_ : pipelineNone_) = pipeline;
+            else
+                (i == 0 ? pipelineWireBack_ : pipelineWireNone_) = pipeline;
+        }
     }
     return true;
 }
@@ -321,6 +332,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
 void Scene::invalidatePipelines() {
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
+    pipelineWireBack_ = nullptr;
+    pipelineWireNone_ = nullptr;
 }
 
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
@@ -331,11 +344,17 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
     std::memcpy(cb.model, params.model, sizeof(cb.model));
     std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
-    std::memcpy(cb.options, params.options, sizeof(cb.options));
+    cb.options[0] = static_cast<float>(params.shading);   // M0.8：g_options.x = 着色模式
+    std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
     cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
 
+    // M0.8：pipeline 按 (fill × cull) 四套里选一套，shader 不变。
+    nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
+        ? (params.cullBack ? pipelineWireBack_ : pipelineWireNone_)
+        : (params.cullBack ? pipelineBack_ : pipelineNone_);
+
     nvrhi::GraphicsState state;
-    state.setPipeline(params.cullBack ? pipelineBack_ : pipelineNone_)
+    state.setPipeline(pipeline)
          .setFramebuffer(framebuffer)
          .addBindingSet(bindingSet_)
          .addVertexBuffer(nvrhi::VertexBufferBinding()
@@ -352,6 +371,8 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
 void Scene::shutdown() {
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
+    pipelineWireBack_ = nullptr;
+    pipelineWireNone_ = nullptr;
     bindingSet_ = nullptr;
     bindingLayout_ = nullptr;
     inputLayout_ = nullptr;

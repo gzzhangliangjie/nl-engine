@@ -43,7 +43,8 @@ public:
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
 
-    // 用 framebuffer 的格式信息建两套 pipeline：开/关背面剔除，供 C 键切换。
+    // 用 framebuffer 的格式信息建四套 pipeline：(solid/wireframe) × (开/关背面剔除)，
+    // C 键切剔除、V 键/HUD 复选框切线框；着色模式只是 cbuffer 值，与 pipeline 正交。
     bool ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                          std::string& outError);
     void invalidatePipelines();
@@ -52,7 +53,8 @@ public:
     void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
               const nvrhi::Viewport& viewport, const FrameParams& params);
 
-    bool ready() const { return pipelineBack_ && pipelineNone_ && bindingSet_; }
+    bool ready() const { return pipelineBack_ && pipelineNone_ && pipelineWireBack_
+                              && pipelineWireNone_ && bindingSet_; }
     std::uint32_t indexCount() const { return indexCount_; }
     // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
     const std::string& modelName() const { return modelName_; }
@@ -66,7 +68,8 @@ private:
     nvrhi::InputLayoutHandle      inputLayout_;
     nvrhi::BindingLayoutHandle    bindingLayout_;
     nvrhi::BindingSetHandle       bindingSet_;
-    nvrhi::GraphicsPipelineHandle pipelineBack_, pipelineNone_;
+    nvrhi::GraphicsPipelineHandle pipelineBack_, pipelineNone_;     // M0.4：solid × cull
+    nvrhi::GraphicsPipelineHandle pipelineWireBack_, pipelineWireNone_; // M0.8：wireframe × cull
     std::uint32_t                 indexCount_ = 0;
     std::string                   modelName_;
     std::uint32_t                 triangleCount_ = 0;

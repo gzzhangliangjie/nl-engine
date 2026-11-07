@@ -41,17 +41,20 @@ nl-engine/
 └── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
 
-## 当前进度与运行（S0 全部完成 + M0.6/M0.7 能力补齐）
+## 当前进度与运行（S0 全部完成 + M0.6/M0.7/M0.8 能力补齐）
 
-**2026-11-07：S0 收口（tag `s0-done`），随后进入 S0 后能力补齐版本序列，M0.6（GPU 计时）、M0.7（高模测试资产 + --model）已完成。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
+**2026-11-07：S0 收口（tag `s0-done`），随后进入 S0 后能力补齐版本序列，M0.6（GPU 计时）、M0.7（高模测试资产 + --model）、M0.8（线框 / 调试着色）已完成。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
 
 ```bash
-scripts/build-m0.2.bat DX12          # 或 VULKAN：configure + build + selftest（14/14）
-build/<backend>/viewer.exe            # 交互窗口（默认开 HUD）：左键拖动旋转、滚轮缩放、C 切剔除、R 重置、F12 存图、ESC 退出
+scripts/build-m0.2.bat DX12          # 或 VULKAN：configure + build + selftest（15/15）
+build/<backend>/viewer.exe            # 交互窗口（默认开 HUD）：拖动旋转、滚轮缩放、C 切剔除、V 切线框、N 循环着色、R 重置、F12 存图、ESC 退出
 build/<backend>/viewer.exe --mode normal                 # 模式分发器；未知模式退出 1 并列出可用名
 build/<backend>/viewer.exe --screenshot out.png --frames 8   # 截图回归默认 --no-hud，保持 M0.1~M0.4 基线不变
 build/<backend>/viewer.exe --screenshot hud.png --frames 8 --hud --size 960x540
 build/<backend>/viewer.exe --screenshot dense.png --hud --dist 5.5 --model TorusKnotDense.glb   # 20 万 tri 纽结
+build/<backend>/viewer.exe --screenshot n.png --shading normal --model TorusKnotDense.glb   # 法线着色看朝向
+build/<backend>/viewer.exe --screenshot w.png --wireframe                  # 线框（光栅 fill mode）
+build/<backend>/viewer.exe --screenshot t.png --shading tri-id             # 三角形ID 伪随机色
 build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关剔除看内壁
 build/<backend>/viewer.exe --selftest
 python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnotDense.glb   # 程序化致密资产（零网络、MD5 确定）
@@ -62,6 +65,7 @@ python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnot
 - **S0 总验收**：`model.slang` 与 `hud.slang` 各自同出 SPIR-V + DXIL（`--selftest` 机械核对 8 个产物魔数）；两后端 `deviceErrors=0`、selftest 14/14、ctest 100%；`--no-hud` 正常视角双后端 PNG 逐字节相同（MD5 `7e528087…`），`--hud` 两张必然不同（面板印的后端名 / 调试层不同，不是 3D 画面不一致）。证据：`docs/screenshots/s0.png`、`m0.5-*.png`、`example/m0.5/`、`docs/MILESTONES.md`。
 - **M0.6 GPU 帧内计时（tag `m0.6`）**：两后端共享的 `GpuTimer` 用一对 NVRHI timer query 包住整帧 GPU 命令，HUD 在 CPU `frame ms` 旁新增 `GPU x.xx ms (NVRHI timer)` 行 + gpu ms 曲线——两者并排一眼分清 CPU 帧间隔与 GPU 耗时。`--no-hud` 完全不建 query，M0.1~M0.5 基线逐字节不变。计划见 `docs/s0/M0.6-PLAN.md`。
 - **M0.7 高模测试资产（tag `m0.7`）**：`scripts/gen-dense-mesh.py` 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204,800 tri / 细分球 327,680 tri，零网络、同参数 MD5 确定、内嵌棋盘格 PNG）；viewer 新增 `--model <name.glb>`（assets/ 下白名单），HUD 增 `model : <名> (N tri)` 行；`thirdparty/meshoptimizer` v1.3 作 S1 切簇对照基准（文档级，不入构建）。S1 切簇的命门就位。计划见 `docs/s0/M0.7-PLAN.md`。
+- **M0.8 线框 / 调试着色（tag `m0.8`）**：`model.slang` 单源新增 4 种着色模式（`g_options.x` 分支：textured / normal / uv / tri-id，tri-id 用 `SV_PrimitiveID` 整数 hash，slangc 双目标实测通过）；线框走 NVRHI 光栅 fill mode（pipeline 2×2 组合，零几何 shader）；`--shading` / `--wireframe` / V、N 键；HUD 增 shading 下拉框 + wireframe 复选框（双向 POD 通道）。不带新参数时行为与 M0.7 逐字节一致。S1 排查切簇 / 剔除的双眼睛就位。计划见 `docs/s0/M0.8-PLAN.md`。
 - **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分 `--profile` 为穿插项，排在 M0.7~M0.9 序列之后视需要插），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
 
 ## 成果展示台（按版本看用例）
