@@ -2702,6 +2702,99 @@ int selftestJobs() {
         check(deterministic, "repeat runs / thread-count variants all match", "");
     }
 
+    // ---- M-J1：scoped fork-join ----
+
+    // 8) spawn 结果按 spawn 顺序收集
+    {
+        ThreadPool pool;
+        std::vector<std::uint64_t> got = pool.scope<std::uint64_t>(
+            [](nl::core::jobs::ThreadPool::Scope<std::uint64_t>& s) {
+                for (std::uint64_t i = 0; i < 100; ++i) {
+                    s.spawn([i] { return i * 2; });
+                }
+            });
+        bool orderOk = got.size() == 100;
+        for (std::size_t i = 0; i < got.size() && orderOk; ++i) {
+            if (got[i] != i * 2) orderOk = false;
+        }
+        check(orderOk, "scope collects results in spawn order", "");
+    }
+
+    // 9) 嵌套 spawn：任务体内再 spawn，无死锁、子任务全 join
+    {
+        ThreadPool pool;
+        std::atomic<int> leafDone{0};
+        pool.scope<int>(
+            [&leafDone](nl::core::jobs::ThreadPool::Scope<int>& s) {
+                for (int i = 0; i < 8; ++i) {
+                    s.spawn([&leafDone, &s, i] {
+                        // 任务体内嵌套 spawn（不等待——join 由 scope 兜底）
+                        for (int k = 0; k < 4; ++k) {
+                            s.spawn([&leafDone, i, k] {
+                                leafDone.fetch_add(1);
+                                return i * 100 + k;
+                            });
+                        }
+                        return i;
+                    });
+                }
+            });
+        check(leafDone.load() == 32, "nested spawn leaves all joined (8x4)", "");
+    }
+
+    // 10) 链式嵌套 spawn 数据流：A 传 B 传 C（每层任务 spawn 下一层并携带父值）
+    {
+        ThreadPool pool;
+        std::atomic<int> maxDepth{0};
+        pool.scope<int>(
+            [&maxDepth](nl::core::jobs::ThreadPool::Scope<int>& s) {
+                s.spawn([&maxDepth, &s] {
+                    s.spawn([&maxDepth, &s] {
+                        s.spawn([&maxDepth] {
+                            maxDepth.store(3);
+                            return 3;
+                        });
+                        return 2;
+                    });
+                    return 1;
+                });
+            });
+        check(maxDepth.load() == 3, "chained spawn across 3 levels completes", "");
+    }
+
+    // 11) 空 scope + 非整型结果 + 异常重抛 + 池复用
+    {
+        ThreadPool pool;
+        std::vector<std::string> empty = pool.scope<std::string>(
+            [](nl::core::jobs::ThreadPool::Scope<std::string>&) {});
+        check(empty.empty(), "empty scope returns empty vector", "");
+
+        bool rethrown = false;
+        std::string msg;
+        try {
+            pool.scope<std::string>([](nl::core::jobs::ThreadPool::Scope<std::string>& s) {
+                s.spawn([] { return std::string("fine"); });
+                s.spawn([]() -> std::string { throw std::runtime_error("scope-boom"); });
+            });
+        } catch (const std::exception& ex) {
+            rethrown = true;
+            msg = ex.what();
+        }
+        check(rethrown && msg == "scope-boom", "scope exception rethrown after join", msg);
+
+        // 异常后池仍健康：parallelFor + scope 各跑一次
+        std::atomic<std::uint64_t> sum{0};
+        pool.parallelFor(5000, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        });
+        std::vector<std::uint64_t> got2 = pool.scope<std::uint64_t>(
+            [&sum](nl::core::jobs::ThreadPool::Scope<std::uint64_t>& s) {
+                s.spawn([&sum] { return sum.load(); });
+            });
+        check(!got2.empty() && got2[0] == serialSum(5000) && got2[0] == sum.load(),
+              "pool reusable after scope exception", "");
+    }
+
     // 7) 参考耗时（非判据，仅展示）：默认池 vs 单线程池跑同一求和
     {
         const std::size_t big = 50000000;
