@@ -704,3 +704,21 @@
 4. **exe 快照规范与 M2.3a 后置修复的冲突**：s2.0 卡映射改 s2-done tag 快照后回归 FAIL（2.8 万像素）——tag（f5bfc9a）是 M2.3a 翻转面根治**之前**的代码，而卡基线已在 fdb598c/32a10b0 重拍，tag 快照永远无法复现。回退为当前构建（与 m0.9 同款既定模式）；快照规则只在「tag 状态与基线状态一致」时可用，后续 viewer 卡收敛时机须选渲染代码已定稿的 tag。
 
 **下一步**：S4 分块/LOD 交换（或按 ROADMAP 顺延）；S5 运行时组原子 cut（M3.2 已预演，屏幕空间选层公式已存档）。
+
+## P8 M-J0 线程池 + parallel_for 最小内核（tag `job-pool`，2026-11-08，feat/job-system 轨道）
+
+**动作**：按铁律三处实读定稿（bevy_tasks 固定池+scope 主线程驱动 / UE ParallelFor MinBatchSize 切块 / Carrot 无 TaskPool=反向证据）→ 新建 `core/include/nl/core/jobs.hpp` + `core/src/jobs.cpp`（ThreadPool：固定 N 线程 + 共享竞争队列 + 主线程参与执行；`parallelFor(count, body(begin,end), minBatch)` 切块）→ `nanite-tools selftest jobs` 七项机械单测（求和 50 轮随机规模 vs 公式 / 槽位并发写 / minBatch>count 单批 / count=0 / 批次异常重抛+池复用 / 重复运行×3 线程数变体 1/4/硬件 / 参考耗时打印）→ CMake nl_core 加 jobs.cpp + ctest p8-jobs-selftest。
+
+**提交版本**：job-pool（feat/job-system 分支，worktree `E:/UE_STUDY_2026/nl-engine-job-system`，A 类轨道不进 kStage/渲染回归）
+
+**完成情况**
+- selftest jobs 全绿 exit 0（7/7 ok）；ctest 16→17 全绿（16 条既有全数通过，纯新增零回归）。
+- 判据逐条对上 P8-JOB-PLAN M-J0：求和无差 / 无 data race（槽位写）/ count=0 安全 / 异常不拖垮池。
+- 零图形符号（core/jobs 仅 mutex/cv/deque/thread/vector），不引第三方线程库。
+- worktree 构建：手工注入 MSVC 14.38 + SDK 10.0.26100.0 环境（见踩坑 1）。
+
+**踩坑情况**
+1. **worktree 全新构建环境坑**：vcvars64.bat 内部调 `reg.exe` 查 SDK 路径，本会话沙箱 Program Blacklist 拦截 → SDK 环境残缺 → 链接 RC Pass 报 `CMAKE_MT-NOTFOUND` / "no such file or directory"。对策：不调 vcvars，bat 里手工 `set PATH/INCLUDE/LIB`（MSVC 14.38.33130 + Win SDK 10.0.26100.0，版本对齐 M0.0 环境记录）。另：Git Bash 传引号给 cmd 会被 MSYS 转义成 `\"` 字面量（连续两次踩），统一用临时 .bat 承载构建命令。
+2. **设计取舍（留痕）**：不做 per-thread deque 窃取——共享队列 + mutex/cv 足够，离线管线任务粒度大（每组数千三角）锁竞争可忽略；Carrot 反向证据「不过度设计」。接口边界写死在 jobs.hpp：parallelFor 不可嵌套调用同一实例（嵌套支持 M-J1 scope 落地）、多线程不可并发调同一实例的 parallelFor。
+
+**下一步**：M-J1 scoped fork-join（`pool.scope(s.spawn)` 返回 Vec<T>、可嵌套、与 parallel_for 共用同池）→ M-J2 cluster/stat 并行接入。

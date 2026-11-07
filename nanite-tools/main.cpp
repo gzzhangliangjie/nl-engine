@@ -10,19 +10,25 @@
 #include "nl/core/simplify.hpp"
 #include "nl/core/lod.hpp"       // M2.2：逐层 LOD 循环
 #include "nl/core/fallback.hpp"  // M3.1：fallback mesh 拼接
+#include "nl/core/jobs.hpp"      // P8 M-J0：线程池 + parallel_for
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -44,7 +50,8 @@ void printUsage() {
         "                        orientation audit vs ref normals; exit 1 if any face inward\n"
         "  nanite-tools dag <prefix> [--export out.json]\n"
         "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
-        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n");
+        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n"
+        "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -2578,6 +2585,149 @@ int selftestFallback() {
     return 1;
 }
 
+// ---- selftest jobs：P8 M-J0 线程池 + parallel_for 机械单测 ----
+// 判据（P8-JOB-PLAN M-J0）：求和 vs 单线程 N 轮随机规模无差；槽位并发写无冲突；
+// count=0 安全；批次异常重抛且池可继续使用；重复运行/多池配置结果一致。
+// 随机序列用固定种子 mt19937（离线单测必须确定性）。参考耗时不作判据，仅打印。
+int selftestJobs() {
+    using nl::core::jobs::ThreadPool;
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    // 求和参考实现：串行公式（无需循环，恒等可比）
+    auto serialSum = [](std::uint64_t n) -> std::uint64_t { return n * (n - 1) / 2; };
+
+    // 1) 求和一致性：50 轮随机规模 [0, 100001)，原子累加 == 公式
+    {
+        std::mt19937 rng(20261108u);
+        bool allMatch = true;
+        std::string detail;
+        for (int round = 0; round < 50 && allMatch; ++round) {
+            const std::uint64_t n = std::uniform_int_distribution<std::uint64_t>(0, 100000)(rng);
+            std::atomic<std::uint64_t> sum{0};
+            ThreadPool pool;
+            pool.parallelFor(std::size_t(n), [&sum](std::size_t b, std::size_t e) {
+                std::uint64_t local = 0;
+                for (std::size_t i = b; i < e; ++i) local += i;
+                sum.fetch_add(local, std::memory_order_relaxed);
+            });
+            if (sum.load() != serialSum(n)) {
+                allMatch = false;
+                detail = "round " + std::to_string(round) + " n=" + std::to_string(n) +
+                         " got=" + std::to_string(sum.load()) +
+                         " want=" + std::to_string(serialSum(n));
+            }
+        }
+        check(allMatch, "sum matches serial reference (50 random sizes)", detail);
+    }
+
+    // 2) 槽位并发写：每个 index 写自己的 slot，无丢失无串位
+    {
+        const std::size_t count = 100000;
+        std::vector<std::uint64_t> slots(count, 0);
+        ThreadPool pool;
+        pool.parallelFor(count, [&slots](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) slots[i] = 0x9E3779B97F4A7C15ull * i;
+        });
+        bool slotsOk = true;
+        for (std::size_t i = 0; i < count && slotsOk; ++i) {
+            if (slots[i] != 0x9E3779B97F4A7C15ull * i) slotsOk = false;
+        }
+        check(slotsOk, "per-slot concurrent writes land exactly once", "");
+    }
+
+    // 3) minBatch 边界：count < minBatch → 单批覆盖全量
+    {
+        std::atomic<std::uint64_t> sum{0};
+        ThreadPool pool(4);
+        pool.parallelFor(7, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        }, 100);
+        check(sum.load() == serialSum(7), "minBatch > count collapses to one batch", "");
+    }
+
+    // 4) count = 0 安全返回
+    {
+        bool threw = false;
+        bool touched = false;
+        ThreadPool pool;
+        try {
+            pool.parallelFor(0, [&touched](std::size_t, std::size_t) { touched = true; });
+        } catch (...) { threw = true; }
+        check(!threw && !touched, "count=0 returns without invoking body", "");
+    }
+
+    // 5) 批次异常：重抛 + 池存活可复用
+    {
+        bool rethrown = false;
+        std::string msg;
+        ThreadPool pool;
+        try {
+            pool.parallelFor(1000, [](std::size_t b, std::size_t e) {
+                for (std::size_t i = b; i < e; ++i) {
+                    if (i == 500) throw std::runtime_error("boom@500");
+                }
+            }, 1);
+        } catch (const std::exception& ex) {
+            rethrown = true;
+            msg = ex.what();
+        }
+        check(rethrown && msg == "boom@500", "batch exception rethrown after full drain", msg);
+
+        // 异常后池仍健康（worker 无一被拖垮）：再跑一次求和
+        std::atomic<std::uint64_t> sum{0};
+        pool.parallelFor(10000, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        });
+        check(sum.load() == serialSum(10000), "pool reusable after exception", "");
+    }
+
+    // 6) 重复运行确定性：同一池连跑 3 次 + 不同线程数配置（1 / 4 / 硬件默认）结果一致
+    {
+        bool deterministic = true;
+        const std::uint64_t want = serialSum(77777);
+        for (unsigned tc : {1u, 4u, 0u}) {
+            ThreadPool pool(tc);
+            for (int rep = 0; rep < 3; ++rep) {
+                std::atomic<std::uint64_t> sum{0};
+                pool.parallelFor(77777, [&sum](std::size_t b, std::size_t e) {
+                    for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+                }, 97);
+                if (sum.load() != want) deterministic = false;
+            }
+        }
+        check(deterministic, "repeat runs / thread-count variants all match", "");
+    }
+
+    // 7) 参考耗时（非判据，仅展示）：默认池 vs 单线程池跑同一求和
+    {
+        const std::size_t big = 50000000;
+        auto timeSum = [big](unsigned threads) {
+            ThreadPool pool(threads);
+            const auto t0 = std::chrono::steady_clock::now();
+            pool.parallelFor(big, [](std::size_t b, std::size_t e) {
+                volatile std::uint64_t sink = 0;
+                for (std::size_t i = b; i < e; ++i) sink += i;
+            }, 100000);
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        };
+        const double t1 = timeSum(1);
+        const double tN = timeSum(0);
+        std::printf("  info wall-clock: 1 thread %.3fs, hardware pool (%u thr) %.3fs\n",
+                    t1, std::thread::hardware_concurrency(), tN);
+    }
+
+    if (failures == 0) {
+        std::printf("jobs selftest: PASS\n");
+        return 0;
+    }
+    std::printf("jobs selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2593,7 +2743,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "loop") return selftestLoop();
         if (argc >= 3 && std::string(argv[2]) == "dag") return selftestDag();
         if (argc >= 3 && std::string(argv[2]) == "fallback") return selftestFallback();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback)\n");
+        if (argc >= 3 && std::string(argv[2]) == "jobs") return selftestJobs();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

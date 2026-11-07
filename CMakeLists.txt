@@ -118,6 +118,7 @@ add_library(nl_core STATIC
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
+    core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -341,3 +342,8 @@ add_test(NAME s3-fallback-suzanne
 set_tests_properties(s3-fallback-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "fallback    : "
     DEPENDS s1-nmesh-suzanne)
+
+# P8 M-J0：jobs 线程池 + parallel_for 机械单测（A 类并行轨道；求和确定性 / 槽位 / 负向 / 异常恢复）
+add_test(NAME p8-jobs-selftest COMMAND nanite-tools selftest jobs)
+set_tests_properties(p8-jobs-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "jobs selftest: PASS")
