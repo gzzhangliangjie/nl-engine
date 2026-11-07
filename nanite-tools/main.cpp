@@ -37,10 +37,12 @@ void printUsage() {
         "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5] [--obj prefix]\n"
         "                        group QEM + boundary lock; --obj dumps before/after OBJ + locked pts\n"
         "  nanite-tools lod <model.nmesh> [-o prefix] [--max-levels 8] [-v]\n"
-        "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh (v2)\n"
+        "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh (v2 + DAG lineage)\n"
         "  nanite-tools check-orient <ref.nmesh> <target.nmesh>...\n"
         "                        orientation audit vs ref normals; exit 1 if any face inward\n"
-        "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
+        "  nanite-tools dag <prefix> [--export out.json]\n"
+        "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
+        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag  deterministic unit tests\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -930,6 +932,372 @@ int cmdLod(int argc, char** argv) {
     return 0;
 }
 
+// ---- M3.0：dag 子命令 —— 装配 + 校验 cluster DAG（S3 验收核心）----
+//
+// 数据来自分层资产的 lodMeta DAG 血缘（.nmesh meta version 2，lod 命令产出）。
+// 校验不变量（三家口径，见 core/lod.hpp 头注释）：
+//   membership  每簇恰属一组（成员方向覆盖完整）
+//   generation  非顶层各组 gen 区间连续无缝铺满下一层全部簇 → 每个父簇
+//               恰有一个生成组（按组重切的声音性；UE 组原子 cut 的前提）
+//   error chain 组 error == max(simplifyError, 全部成员簇误差)，逐位精确
+//               （UE ClusterDAG.cpp:1441+:1587）
+//   parent err  L≥1 每簇 bounds.error == 生成组 error（UE :1593 统一携带）
+//   monotonic   组 error ≥ 其成员的生成组 error（误差链沿 DAG 单调不减）
+//   acyclic     组图 DFS 染色无环（S3-PLAN 自检项）
+
+struct DagLevelData {
+    nl::core::NMeshData mesh;
+    std::uint32_t clusters = 0;
+    std::uint32_t triangles = 0;
+};
+
+struct DagCheckReport {
+    bool membershipOk = true;   // 每簇恰属一组
+    bool generationOk = true;   // gen 区间铺满下一层，每父簇恰一生成组
+    bool errorChainOk = true;   // 组 error == max(simplifyError, 成员误差) 逐位精确
+    bool parentErrOk = true;    // L≥1 爰簇 bounds.error 携带生成组误差
+    bool monotonicOk = true;    // 组 error ≥ 生成组 error（沿链单调）
+    bool acyclicOk = true;      // 组图 DFS 无环
+    bool ok() const { return membershipOk && generationOk && errorChainOk &&
+                             parentErrOk && monotonicOk && acyclicOk; }
+    std::string firstFailure;        // 第一条失败原因（各分项照常统计）
+    std::size_t groupsTotal = 0;
+    std::size_t errorChainChecks = 0;
+    std::size_t parentErrorChecks = 0;
+    std::size_t monotonicChecks = 0;
+};
+
+namespace dag_detail {
+
+// L≥1 层：簇 → 生成组（上一层组号）。gen 区间连续铺满本层，直接扫区间。
+// nextClusters = 本层（被生成层）的簇数——genFirst/genCount 索引下一层簇号，
+// 数组必须按下一层开尺寸，不是 prev.clusters（M3.0 自检抓出的越界 bug）。
+std::vector<std::uint32_t> buildGeneratingMap(const DagLevelData& prev,
+                                              std::uint32_t nextClusters) {
+    std::vector<std::uint32_t> gen(nextClusters, 0xFFFFFFFFu);
+    for (std::uint32_t gi = 0; gi < prev.mesh.lodMeta.dagGroups.size(); ++gi) {
+        const auto& dg = prev.mesh.lodMeta.dagGroups[gi];
+        for (std::uint32_t k = 0; k < dg.genCount; ++k) {
+            const std::uint32_t c = dg.genFirst + k;
+            if (c < gen.size()) gen[c] = gi;
+        }
+    }
+    return gen;
+}
+
+} // namespace dag_detail
+
+// 全链校验。levels[i].mesh.lodMeta 必须已带 DAG 血缘（meta version 2）。
+DagCheckReport validateDagChain(const std::vector<DagLevelData>& levels) {
+    DagCheckReport rep;
+    auto fail = [&](bool& flag, const std::string& why) {
+        flag = false;
+        if (rep.firstFailure.empty()) rep.firstFailure = why;
+    };
+    if (levels.empty()) {
+        rep.membershipOk = rep.generationOk = rep.errorChainOk = false;
+        rep.parentErrOk = rep.monotonicOk = rep.acyclicOk = false;
+        rep.firstFailure = "no levels";
+        return rep;
+    }
+
+    for (std::size_t L = 0; L < levels.size(); ++L) {
+        const auto& lv = levels[L];
+        const auto& meta = lv.mesh.lodMeta;
+        const std::uint32_t G = std::uint32_t(meta.dagGroups.size());
+        rep.groupsTotal += G;
+
+        // membership：每簇恰属一组，组号合法，每组至少一簇
+        if (meta.clusterGroup.size() != lv.mesh.meshlets.size()) {
+            fail(rep.membershipOk, "L" + std::to_string(L) + ": clusterGroup size mismatch");
+            continue;
+        }
+        std::vector<std::uint32_t> memberCount(G, 0);
+        for (std::uint32_t c : meta.clusterGroup) {
+            if (c >= G) {
+                fail(rep.membershipOk, "L" + std::to_string(L) + ": cluster group id out of range");
+                break;
+            }
+            ++memberCount[c];
+        }
+        for (std::uint32_t gi = 0; gi < G; ++gi)
+            if (memberCount[gi] == 0)
+                fail(rep.membershipOk, "L" + std::to_string(L) + ": group " +
+                     std::to_string(gi) + " has no members");
+
+        // generation：gen 区间铺满下一层（顶层全 0）
+        const bool isTop = (L + 1 == levels.size());
+        std::vector<std::uint32_t> genMap;
+        if (!isTop) {
+            std::uint32_t sum = 0;
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> spans;   // [first, first+count)
+            for (std::uint32_t gi = 0; gi < G; ++gi) {
+                const auto& dg = meta.dagGroups[gi];
+                if (dg.genCount == 0)
+                    fail(rep.generationOk, "L" + std::to_string(L) + ": non-top group " +
+                         std::to_string(gi) + " generates no clusters");
+                sum += dg.genCount;
+                if (dg.genCount == 0) continue;
+                spans.push_back({ dg.genFirst, dg.genFirst + dg.genCount });
+            }
+            if (sum != levels[L + 1].clusters)
+                fail(rep.generationOk, "L" + std::to_string(L) + ": generated clusters " +
+                     std::to_string(sum) + " != next level " +
+                     std::to_string(levels[L + 1].clusters));
+            std::sort(spans.begin(), spans.end());
+            std::uint32_t expect = 0;
+            for (const auto& s : spans) {
+                if (s.first != expect || s.second <= s.first) {
+                    fail(rep.generationOk, "L" + std::to_string(L) +
+                         ": gen ranges not contiguous/overlap");
+                    break;
+                }
+                expect = s.second;
+            }
+            if (expect != levels[L + 1].clusters)
+                fail(rep.generationOk, "L" + std::to_string(L) +
+                     ": gen ranges do not cover next level");
+            genMap = dag_detail::buildGeneratingMap(levels[L], levels[L + 1].clusters);
+            for (std::uint32_t c = 0; c < genMap.size(); ++c)
+                if (genMap[c] == 0xFFFFFFFFu) {
+                    fail(rep.generationOk, "L" + std::to_string(L + 1) + ": cluster " +
+                         std::to_string(c) + " has no generating group");
+                    break;
+                }
+        } else {
+            for (std::uint32_t gi = 0; gi < G; ++gi)
+                if (meta.dagGroups[gi].genCount != 0)
+                    fail(rep.generationOk, "L" + std::to_string(L) + ": top group " +
+                         std::to_string(gi) + " generates clusters");
+        }
+
+        // error chain（逐位精确）：组 error == max(simplifyError, 全部成员簇误差)
+        for (std::uint32_t gi = 0; gi < G; ++gi) {
+            const auto& dg = meta.dagGroups[gi];
+            float memberMax = 0.f;
+            for (std::uint32_t c = 0; c < lv.clusters; ++c) {
+                if (meta.clusterGroup[c] != gi) continue;
+                memberMax = std::max(memberMax, lv.mesh.bounds[c].error);
+            }
+            const float expected = std::max(dg.simplifyError, memberMax);
+            ++rep.errorChainChecks;
+            if (dg.error != expected)
+                fail(rep.errorChainOk, "L" + std::to_string(L) + " group " +
+                     std::to_string(gi) + ": error chain mismatch (stored " +
+                     std::to_string(dg.error) + " expected " +
+                     std::to_string(expected) + ")");
+        }
+        if (L > 0) {
+            const std::vector<std::uint32_t> genMapPrev =
+                dag_detail::buildGeneratingMap(levels[L - 1], lv.clusters);
+            for (std::uint32_t c = 0; c < lv.clusters; ++c) {
+                const std::uint32_t pg = genMapPrev[c];
+                const float gerr = levels[L - 1].mesh.lodMeta.dagGroups[pg].error;
+                ++rep.parentErrorChecks;
+                if (lv.mesh.bounds[c].error != gerr)
+                    fail(rep.parentErrOk, "L" + std::to_string(L) + " cluster " +
+                         std::to_string(c) +
+                         ": bounds.error does not carry generating group error");
+                // monotonic：本层每组成员的生成组误差 ≤ 该组 error
+                const std::uint32_t gi = lv.mesh.lodMeta.clusterGroup[c];
+                ++rep.monotonicChecks;
+                if (levels[L].mesh.lodMeta.dagGroups[gi].error + 1e-9f < gerr)
+                    fail(rep.monotonicOk, "L" + std::to_string(L) + " group " +
+                         std::to_string(gi) +
+                         ": error below generating group error (non-monotonic)");
+            }
+        }
+    }
+
+    // acyclic：组图 DFS 染色（0=白 1=灰 2=黑），灰上回边 = 有环
+    {
+        const std::size_t N = rep.groupsTotal;
+        std::vector<std::uint8_t> color(N, 0);
+        std::vector<std::size_t> levelOffset(levels.size() + 1, 0);
+        for (std::size_t L = 0; L < levels.size(); ++L)
+            levelOffset[L + 1] = levelOffset[L] + levels[L].mesh.lodMeta.dagGroups.size();
+        std::vector<std::vector<std::size_t>> adj(N);
+        for (std::size_t L = 0; L + 1 < levels.size(); ++L) {
+            const auto& meta = levels[L].mesh.lodMeta;
+            for (std::uint32_t gi = 0; gi < meta.dagGroups.size(); ++gi) {
+                const auto& dg = meta.dagGroups[gi];
+                std::set<std::uint32_t> targets;
+                for (std::uint32_t k = 0; k < dg.genCount; ++k) {
+                    const std::uint32_t c = dg.genFirst + k;
+                    if (c < levels[L + 1].clusters)
+                        targets.insert(levels[L + 1].mesh.lodMeta.clusterGroup[c]);
+                }
+                for (std::uint32_t gj : targets)
+                    adj[levelOffset[L] + gi].push_back(levelOffset[L + 1] + gj);
+            }
+        }
+        bool cyclic = false;
+        for (std::size_t root = 0; root < N && !cyclic; ++root) {
+            if (color[root] != 0) continue;
+            // 迭代式 DFS：栈元素 {node, done}（done=1 表示回溯时染黑）。
+            // 灰色 = 当前 DFS 路径上的祖先（其 done 标记仍在栈下），灰上回边 = 有环。
+            std::vector<std::pair<std::size_t, bool>> work;
+            work.push_back({ root, false });
+            while (!work.empty() && !cyclic) {
+                auto [node, done] = work.back();
+                work.pop_back();
+                if (done) { color[node] = 2; continue; }
+                if (color[node] == 1) continue;     // 已在栈上展开过
+                if (color[node] == 2) continue;
+                color[node] = 1;
+                work.push_back({ node, true });
+                for (std::size_t nxt : adj[node]) {
+                    if (color[nxt] == 1) { cyclic = true; break; }
+                    if (color[nxt] == 0) work.push_back({ nxt, false });
+                }
+            }
+            if (cyclic) break;
+        }
+        if (cyclic) fail(rep.acyclicOk, "group graph has a cycle");
+    }
+    return rep;
+}
+
+// ---- dag 子命令入口 ----
+
+int cmdDag(int argc, char** argv) {
+    if (argc < 1) {
+        std::fprintf(stderr, "dag: missing <prefix> (layered assets <prefix>.lodN.nmesh)\n");
+        return 1;
+    }
+    std::string prefix = argv[0];
+    std::string exportPath;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.empty()) continue;  // 展示台 select 空选项展开成空 arg，视为未传
+        if (a == "--export") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "dag: --export needs a json path\n");
+                return 1;
+            }
+            exportPath = argv[++i];
+        } else {
+            std::fprintf(stderr, "dag: unknown option %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    // 连续探测 <prefix>.lodN.nmesh（N=0..），与 renderer 的探测同一约定
+    std::vector<DagLevelData> levels;
+    std::string error;
+    for (std::uint32_t n = 0;; ++n) {
+        const std::string file = prefix + ".lod" + std::to_string(n) + ".nmesh";
+        DagLevelData lv;
+        if (!nl::core::loadNMesh(file.c_str(), lv.mesh, error)) {
+            if (n == 0) {
+                std::fprintf(stderr, "dag: %s\n", error.c_str());
+                return 1;
+            }
+            break;
+        }
+        if (!lv.mesh.lodMeta.present || !lv.mesh.lodMeta.dagPresent) {
+            std::fprintf(stderr,
+                         "dag: %s has no DAG lineage (meta version 2); "
+                         "re-run: nanite-tools lod <model.nmesh> -o %s\n",
+                         file.c_str(), prefix.c_str());
+            return 1;
+        }
+        lv.clusters = std::uint32_t(lv.mesh.meshlets.size());
+        lv.triangles = 0;
+        for (const auto& m : lv.mesh.meshlets) lv.triangles += m.triangleCount;
+        if (lv.mesh.lodMeta.level != std::uint16_t(n)) {
+            std::fprintf(stderr, "dag: %s claims level %u (expected %u)\n",
+                         file.c_str(), lv.mesh.lodMeta.level, n);
+            return 1;
+        }
+        levels.push_back(std::move(lv));
+    }
+
+    std::printf("file        : %s\n", prefix.c_str());
+    std::printf("levels      : %zu (L0..L%zu)\n", levels.size(), levels.size() - 1);
+    for (std::size_t L = 0; L < levels.size(); ++L) {
+        const auto& lv = levels[L];
+        const auto& meta = lv.mesh.lodMeta;
+        std::uint32_t genTotal = 0;
+        for (const auto& dg : meta.dagGroups) genTotal += dg.genCount;
+        std::printf("  L%-2zu clusters=%-5u tris=%-7u groups=%-4u parentClusters=%-5u "
+                    "topErr=%.4f\n",
+                    L, lv.clusters, lv.triangles,
+                    std::uint32_t(meta.dagGroups.size()), genTotal,
+                    meta.maxError);
+    }
+
+    const DagCheckReport rep = validateDagChain(levels);
+    std::printf("dag checks  :\n");
+    std::printf("  membership    : %s (every cluster in exactly one group)\n",
+                rep.membershipOk ? "PASS" : "FAIL");
+    std::printf("  generation    : %s (per-parent single generating group, spans tile next level)\n",
+                rep.generationOk ? "PASS" : "FAIL");
+    std::printf("  error chain   : %s (%zu groups, group err == max(simplifyErr, members))\n",
+                rep.errorChainOk ? "PASS" : "FAIL", rep.errorChainChecks);
+    std::printf("  parent error  : %s (%zu clusters carry group error, UE ClusterDAG.cpp:1593)\n",
+                rep.parentErrOk ? "PASS" : "FAIL", rep.parentErrorChecks);
+    std::printf("  monotonic     : %s (%zu edges, group err >= generating group err)\n",
+                rep.monotonicOk ? "PASS" : "FAIL", rep.monotonicChecks);
+    std::printf("  acyclic (DFS) : %s\n", rep.acyclicOk ? "PASS" : "FAIL");
+    if (!rep.ok()) {
+        std::fprintf(stderr, "dag: FAIL: %s\n", rep.firstFailure.c_str());
+        return 1;
+    }
+    std::printf("dag         : OK (%zu groups across %zu levels)\n",
+                rep.groupsTotal, levels.size());
+
+    if (!exportPath.empty()) {
+        std::FILE* fp = std::fopen(exportPath.c_str(), "wb");
+        if (!fp) {
+            std::fprintf(stderr, "dag: cannot open for write: %s\n", exportPath.c_str());
+            return 1;
+        }
+        // JSON 字符串转义：Windows 反斜杠路径必须写 \\，否则导出非法 JSON
+        //（run.bat 从 build\showcase\runs 实跑时抓出）。
+        std::string prefixJson;
+        prefixJson.reserve(prefix.size());
+        for (char ch : prefix) {
+            if (ch == '\\' || ch == '"') prefixJson.push_back('\\');
+            prefixJson.push_back(ch);
+        }
+        std::fprintf(fp, "{\n  \"prefix\": \"%s\",\n  \"levels\": [\n",
+                     prefixJson.c_str());
+        for (std::size_t L = 0; L < levels.size(); ++L) {
+            const auto& lv = levels[L];
+            const auto& meta = lv.mesh.lodMeta;
+            std::fprintf(fp, "    {\"level\": %zu, \"clusters\": %u, \"triangles\": %u, "
+                             "\"groups\": [\n",
+                         L, lv.clusters, lv.triangles);
+            for (std::uint32_t gi = 0; gi < meta.dagGroups.size(); ++gi) {
+                const auto& dg = meta.dagGroups[gi];
+                std::fprintf(fp,
+                             "      {\"id\": %u, \"error\": %.6g, \"simplifyError\": %.6g, "
+                             "\"sphere\": [%.6g, %.6g, %.6g, %.6g], \"children\": [",
+                             gi, double(dg.error), double(dg.simplifyError),
+                             double(dg.sphere[0]), double(dg.sphere[1]),
+                             double(dg.sphere[2]), double(dg.sphere[3]));
+                bool firstC = true;
+                for (std::uint32_t c = 0; c < lv.clusters; ++c) {
+                    if (meta.clusterGroup[c] != gi) continue;
+                    std::fprintf(fp, "%s%u", firstC ? "" : ", ", c);
+                    firstC = false;
+                }
+                std::fprintf(fp, "], \"parents\": [");
+                for (std::uint32_t k = 0; k < dg.genCount; ++k)
+                    std::fprintf(fp, "%s%u", k ? ", " : "", dg.genFirst + k);
+                std::fprintf(fp, "]}%s\n",
+                             gi + 1 < meta.dagGroups.size() ? "," : "");
+            }
+            std::fprintf(fp, "    ]}%s\n", L + 1 < levels.size() ? "," : "");
+        }
+        std::fprintf(fp, "  ]\n}\n");
+        std::fclose(fp);
+        std::printf("export      : %s\n", exportPath.c_str());
+    }
+    return 0;
+}
+
 // ---- selftest cluster：确定性合成网格上的机械单测 ----
 
 // xorshift32：固定种子，跨平台确定性
@@ -1789,14 +2157,17 @@ int selftestLoop() {
                 const auto& b = h.levels[k];
                 if (b.triangles >= a.triangles) decreasing = false;
                 const double r = double(b.triangles) / double(a.triangles);
-                // 标准做法：每组硬目标 50%；拓扑约束下允许 30~70% 波动。
+                // 标准做法：每组硬目标 50%；拓扑约束下允许 30~80% 波动。
+                // M3.0 起按组重切（bevy:154 / UE ReduceGroup 口径）：父簇必须
+                // 整簇产出，组粒度取整让保留率上界从 70% 抬到 ~80%
+                // （8 簇/组 × 每组减半后簇数向上取整），bevy/UE 同样存在。
                 // 末层例外：开放边界锁（meshopt LockBorder 语义）在小规模
-                // 网格上把剩余三角形锁死属自然收敛停滞，比率可高于 70%，
+                // 网格上把剩余三角形锁死属自然收敛停滞，比率可更高，
                 // 但必须是最后一层且仍在严格递减；中间层超界仍然 FAIL。
-                if (k + 1 < h.levels.size() && (r < 0.30 || r > 0.70)) halfOk = false;
+                if (k + 1 < h.levels.size() && (r < 0.30 || r > 0.80)) halfOk = false;
             }
             check(decreasing, "triangle count strictly decreases");
-            check(halfOk, "each level ~50% of previous (30~70%, last level may stall)");
+            check(halfOk, "each level ~50% of previous (30~80%, last level may stall)");
 
             bool limits = true, metaOk = true;
             for (std::size_t k = 0; k < h.levels.size(); ++k) {
@@ -1903,6 +2274,120 @@ int selftestLoop() {
     return 1;
 }
 
+// ---- M3.0：dag selftest —— 合成网格上的 DAG 血缘机械单测 ----
+
+int selftestDag() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+    auto toLevels = [](const nl::core::LodHierarchy& h) {
+        std::vector<DagLevelData> levels;
+        for (const auto& lv : h.levels) {
+            DagLevelData d;
+            d.mesh = lv.mesh;
+            d.clusters = std::uint32_t(lv.mesh.meshlets.size());
+            d.triangles = lv.triangles;
+            levels.push_back(std::move(d));
+        }
+        return levels;
+    };
+
+    std::printf("[connected 128x128 grid, DAG lineage]\n");
+    std::string reason;
+    nl::core::NMeshData nm;
+    const bool inOk = makeNMesh(makeTestMesh(1, 128, 128), nm, reason);
+    check(inOk, "synthetic .nmesh built", reason);
+    if (inOk) {
+        nl::core::LodOptions opt;
+        opt.maxLevels = 6;
+        opt.minTriangles = 64;
+        nl::core::LodHierarchy h;
+        const bool built = nl::core::buildLodHierarchy(nm, h, reason, opt);
+        check(built, "buildLodHierarchy", reason);
+        if (built) {
+            check(h.levels.size() >= 3, "at least 3 LOD levels");
+
+            // 全链不变量：membership / generation / error chain / parent err /
+            // monotonic / acyclic，逐层逐组全量（合成网格规模小，不抽样）
+            const DagCheckReport rep = validateDagChain(toLevels(h));
+            check(rep.membershipOk && rep.generationOk && rep.errorChainOk &&
+                  rep.parentErrOk && rep.monotonicOk && rep.acyclicOk,
+                  "full-chain DAG invariants hold", rep.firstFailure);
+            check(rep.errorChainChecks >= std::size_t(100),
+                  "error chain exercised on >=100 groups",
+                  "groups=" + std::to_string(rep.groupsTotal));
+
+            // 顶层组 genCount=0（terminal group）
+            bool terminalOk = true;
+            for (const auto& dg : h.levels.back().mesh.lodMeta.dagGroups)
+                if (dg.genCount != 0) terminalOk = false;
+            check(terminalOk, "top-level groups are terminal (genCount=0)");
+
+            // 非顶层组全部产出父簇（按组重切：每恰一生成组）
+            bool genOk = true;
+            for (std::size_t k = 0; k + 1 < h.levels.size(); ++k)
+                for (const auto& dg : h.levels[k].mesh.lodMeta.dagGroups)
+                    if (dg.genCount == 0) genOk = false;
+            check(genOk, "every non-top group generates parents");
+
+            // v3 落盘读回逐字节语义一致：分层全链各自 roundtrip 后再全量校验
+            bool rtOk = true;
+            std::vector<DagLevelData> reloaded;
+            for (std::size_t k = 0; k < h.levels.size(); ++k) {
+                const std::string file = "dag-selftest-l" + std::to_string(k) + ".tmp.nmesh";
+                if (!nl::core::saveNMesh(file.c_str(), h.levels[k].mesh, reason)) {
+                    rtOk = false; break;
+                }
+                DagLevelData d;
+                if (!nl::core::loadNMesh(file.c_str(), d.mesh, reason)) {
+                    rtOk = false; break;
+                }
+                d.clusters = std::uint32_t(d.mesh.meshlets.size());
+                d.triangles = 0;
+                for (const auto& m : d.mesh.meshlets) d.triangles += m.triangleCount;
+                // 血缘字段逐项一致
+                const auto& a = h.levels[k].mesh.lodMeta;
+                const auto& b = d.mesh.lodMeta;
+                if (b.clusterGroup != a.clusterGroup ||
+                    b.dagGroups.size() != a.dagGroups.size())
+                    rtOk = false;
+                for (std::size_t gi = 0; rtOk && gi < a.dagGroups.size(); ++gi) {
+                    const auto& ga = a.dagGroups[gi];
+                    const auto& gb = b.dagGroups[gi];
+                    if (ga.error != gb.error || ga.simplifyError != gb.simplifyError ||
+                        ga.genFirst != gb.genFirst || ga.genCount != gb.genCount ||
+                        std::memcmp(ga.sphere, gb.sphere, sizeof(ga.sphere)) != 0)
+                        rtOk = false;
+                }
+                std::remove(file.c_str());
+                reloaded.push_back(std::move(d));
+            }
+            check(rtOk, "v3 round-trip keeps DAG lineage");
+            if (rtOk) {
+                const DagCheckReport rep2 = validateDagChain(reloaded);
+                check(rep2.ok(), "reloaded chain re-validates", rep2.firstFailure);
+            }
+
+            // 负向：篡改一个组误差 → error chain 精确校验必须 FAIL
+            if (!reloaded.empty()) {
+                std::vector<DagLevelData> corrupted = reloaded;
+                corrupted[0].mesh.lodMeta.dagGroups[0].error *= 1.5f;
+                const DagCheckReport rep3 = validateDagChain(corrupted);
+                check(!rep3.errorChainOk, "tampered group error detected");
+            }
+        }
+    }
+
+    if (failures == 0) {
+        std::printf("dag selftest: PASS\n");
+        return 0;
+    }
+    std::printf("dag selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1916,16 +2401,14 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "group") return selftestGroup();
         if (argc >= 3 && std::string(argv[2]) == "qem") return selftestQem();
         if (argc >= 3 && std::string(argv[2]) == "loop") return selftestLoop();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop)\n");
+        if (argc >= 3 && std::string(argv[2]) == "dag") return selftestDag();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
     if (cmd == "check-orient") return cmdCheckOrient(argc - 2, argv + 2);
     if (cmd == "lod") return cmdLod(argc - 2, argv + 2);
-    if (cmd == "dag") {
-        std::fprintf(stderr, "%s: not implemented yet (S2 / S3)\n", cmd.c_str());
-        return 2;
-    }
+    if (cmd == "dag") return cmdDag(argc - 2, argv + 2);
     std::fprintf(stderr, "unknown subcommand: %s\n", cmd.c_str());
     printUsage();
     return 1;

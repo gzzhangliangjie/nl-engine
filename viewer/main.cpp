@@ -205,7 +205,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S2.0") != nullptr, "S2.0 stage reported");
+    check(std::strstr(st.stage, "S3.0") != nullptr, "S3.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,

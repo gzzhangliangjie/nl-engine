@@ -293,49 +293,65 @@ L0 → groupClusters 重新分组 → 按当前分组重算边界锁 → 每组�
 NMeshHeader(version=2) + name + records + vertices + triangles
   + NMeshMetaHeader(24 B: magic 'NLOD' / payloadBytes / version / level / maxError / lockedCount)
   + float[3*lockedCount]   lockedPositions（世界空间位置）
+  + [meta version 2, M3.0] DAG 血缘段：
+      u32 groupCount
+      NMeshDagGroupRecord[groupCount]   每个 32 B：
+        error / simplifyError / sphere[4] / genFirst / genCount
+      u32[meshletCount]                 clusterGroup（本层每簇的组号）
 ```
 
 `lockedPositions` = **本层按当前分组重算的组间边界点**（供更粗层拼接用），
 顶层为空；`maxError` = parent error（单调不减）。`lodMeta.present=true` 才写 v2；
-`loadNMesh` 两种都读，v1 严格检查无尾随字节的老逻辑不变。
+`loadNMesh` 全部版本都读，v1 严格检查无尾随字节的老逻辑不变。
 
-### `lod` 实跑输出（Suzanne，DX12 构建）
+M3.0 起逐层资产带 DAG 血缘（meta version 2）：组 = DAG 父节点，
+**按组重切、父簇绝不跨组**（UE ReduceGroup / bevy 每组独立 compute_meshlets
+口径），每父簇恰有一个生成组（genFirst/genCount 区间连续铺满下一层），
+组 error = max(组简化误差, 全部成员簇误差)，父簇 bounds.error 统一携带组误差
+（UE ClusterDAG.cpp:1593）。校验：`nanite-tools dag <prefix>` 六项全 PASS。
+
+### `lod` 实跑输出（Suzanne，DX12 构建，M3.0 按组重切）
 
 ```
-file        : assets/meshlets/Suzanne.nmesh
-qem ratio   : 50% (per-group hard target)  maxLevels 8  minTris 128
-levels      : 6 (L0..L5)
-  L0  clusters=237   tris=3936    groups=31   locked=622    collapses=992    maxErr=0.0000 (parent, world)
-  L1  clusters=33    tris=1976    groups=7    locked=117    collapses=502    maxErr=0.0250 (parent, world)
-  L2  clusters=17    tris=985     groups=6    locked=84     collapses=252    maxErr=0.0250 (parent, world)
-  L3  clusters=13    tris=490     groups=4    locked=35     collapses=128    maxErr=0.0250 (parent, world)
-  L4  clusters=5     tris=246     groups=3    locked=0      collapses=62     maxErr=0.0250 (parent, world)
-  L5  clusters=3     tris=124     groups=3    locked=0      collapses=0      maxErr=0.0260 (parent, world)
-lod files   : 6 written (...lod0.nmesh .. ...lod5.nmesh, .nmesh v2)
+file        : ../../assets/meshlets/Suzanne.nmesh
+out prefix  : ../../assets/meshlets/Suzanne
+qem ratio   : 50% (per-group hard target)  maxLevels 6  minTris 128
+levels      : 7 (L0..L6)
+  L0  clusters=237   tris=3936    groups=31   locked=622    collapses=983    maxErr=0.0000 (parent, world)
+  L1  clusters=35    tris=1970    groups=7    locked=183    collapses=484    maxErr=0.0435 (parent, world)
+  L2  clusters=19    tris=1002    groups=5    locked=100    collapses=251    maxErr=0.1339 (parent, world)
+  L3  clusters=15    tris=500     groups=4    locked=43     collapses=124    maxErr=0.1339 (parent, world)
+  L4  clusters=8     tris=252     groups=3    locked=0      collapses=55     maxErr=0.2690 (parent, world)
+  L5  clusters=7     tris=142     groups=3    locked=0      collapses=19     maxErr=0.4222 (parent, world)
+  L6  clusters=3     tris=104     groups=3    locked=0      collapses=0      maxErr=1.1375 (parent, world)
+lod files   : 7 written (../../assets/meshlets/Suzanne.lod0.nmesh .. Suzanne.lod6.nmesh, .nmesh v2)
 ```
 
-每层严格约 50%，锁点 622→117→84→35→0→0 **递减**（每层重算，不是累积），
-parent error 单调不减。写入的 6 个文件均可 `stat` / `viewer --model` 读回。
+锁点 622→183→100→43→0→0→0 **递减**（每层重算，不是累积；组间边界消融后
+归零），parent error 单调不减。写入的 7 个文件均可 `stat` / `viewer --model`
+读回，且带 DAG 血缘可直接 `dag` 校验。
 
 ### `selftest loop` 实跑输出（全部 ok）
 
 ```
 [connected 64x64 grid, LOD loop]
+  ok   synthetic .nmesh built
+  ok   buildLodHierarchy
   ok   at least 3 LOD levels
   ok   triangle count strictly decreases
-  ok   each level ~50% of previous (30~70%, last level may stall)
+  ok   each level ~50% of previous (30~80%, last level may stall)
   ok   meshlet limits respected
   ok   per-level lodMeta present with correct level
   ok   locks == independent per-level boundary recompute   <- 灵魂断言
   ok   top level has no outgoing seams
   ok   parent error monotonic across levels
   info L0 tris=7938   clusters=176  locked=807   maxErr=0.0000
-  info L1 tris=3966   clusters=81   locked=331   maxErr=0.1518
-  info L2 tris=1981   clusters=41   locked=136   maxErr=0.2316
-  info L3 tris=990    clusters=19   locked=54    maxErr=0.2784
-  info L4 tris=495    clusters=11   locked=24    maxErr=0.4608
-  info L5 tris=246    clusters=6    locked=0     maxErr=0.5156
-  info L6 tris=123    clusters=3    locked=0     maxErr=0.6163
+  info L1 tris=3964   clusters=117  locked=477   maxErr=0.3691
+  info L2 tris=1980   clusters=65   locked=248   maxErr=1.0108
+  info L3 tris=1008   clusters=37   locked=98    maxErr=2.2107
+  info L4 tris=514    clusters=17   locked=51    maxErr=5.8661
+  info L5 tris=392    clusters=10   locked=23    maxErr=17.1993
+  info L6 tris=324    clusters=8    locked=0     maxErr=23.7144
   ok   deterministic (rerun identical)
   ok   v2 .nmesh round-trip keeps lodMeta
   ok   v1 .nmesh still readable
@@ -344,14 +360,17 @@ parent error 单调不减。写入的 6 个文件均可 `stat` / `viewer --model
 loop selftest: PASS
 ```
 
+M3.0 按组重切后簇数收敛变慢（同目标 50% 下保留率上界 ~80%：8 簇/组
+整簇产出取整），误差链相应变大，全部判定项不变。
+
 灵魂断言在 selftest 侧**独立重算**每层的组间边界（重新 `groupClusters` +
 按组归属找被 ≥2 组引用的 canonical 点），要求与资产里写的 `lockedPositions`
 逐点相等——只要还有跨层继承，就会多出历史锁点而立刻不等。
 
 ### 可视化证据图
 
-`example/s2-loop/lod-suzanne.png`（1340x920）：直接解析 `lod` 落盘的
-`.nmesh` v2 二进制，L0..L5 六栏**同机位同尺度**渲染，红点 = 该层组间边界点
+`example/s2-loop/lod-suzanne.png`（1340x1322）：直接解析 `lod` 落盘的
+`.nmesh` v2 二进制，L0..L6 七栏**同机位同尺度**渲染，红点 = 该层组间边界点
 （逐层递减、顶层无红点）；线框密度逐层降低即每组 50% 硬目标的结果。
 `tools/lod_preview.py` + `example/s2-loop/run.bat` 一键复现（不进总闸比对）。
 
@@ -386,16 +405,16 @@ IcoSphereDense（8 MB × 层数）不入仓，需要时本地生成。
 
 ### 无缝验收（S2 收官判据）
 
-- 六层同机位画廊 `example/s2-done/lod-layers.png`（`tools/lod_gallery.py` 拼接
+- 七层同机位画廊 `example/s2-done/lod-layers.png`（`tools/lod_gallery.py` 拼接
   viewer 真实截图 + 从 .nmesh 读回的层号/tri/maxErr 标注）：
-  3936 → 1976 → 985 → 490 → 246 → 124 tri，逐层简化、轮廓连续、**无裂缝无洞**。
-- L4/L5 眼窝处的黑色面是 M2.2 已知口径的翻转三角形（法线朝内），`--cull none`
-  复检该区域为完整内壁几何，不是裂缝/洞——边界锁定生效。
+  3936 → 1970 → 1002 → 500 → 252 → 142 → 104 tri，逐层简化、轮廓连续、
+  **无裂缝无洞无黑斑**。
+- 翻转面根治（M2.3a）：朝向锚 + 法线继承，`check-orient` 全链 L0..L6
+  inward=0；M3.0 按组重切后复测仍然 inward=0，口径「L4/L5 已知翻转面」已作废。
 - 滑条在相邻层间来回切（交互），层切换零闪烁、三角数/HUD 数字同步变化。
 - 展示台 `s2.0` 版本卡（8 用例：L0/L3/L5 + HUD pair 双后端基线、selftest、
-  3 个负向 tool 卡）+ `example/s2-done/run.bat`；kStage 升 `S2.0`，
-  m0.9 gate-hud 基线随 HUD stage 文本重拍（预期动作）。
+  3 个负向 tool 卡）+ `example/s2-done/run.bat`；kStage 升 `S2.0`。
 
 ### 回归口径
 
-ctest 12/12（双后端）、回归总闸 118/118 ALL GREEN、`server.py --check` OK。
+ctest 14/14（双后端，含 s3-dag-suzanne）、回归总闸全绿、`server.py --check` OK。

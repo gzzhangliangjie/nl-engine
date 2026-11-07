@@ -26,6 +26,31 @@ struct NMeshLodMeta {
     // parent error：沿层级单调不减（UE ClusterDAG.cpp:1441 / bevy :146-151）。
     float maxError = 0.f;
     std::vector<float> lockedPositions;  // 3 float/点，排序去重由生产者保证
+
+    // ---- M3.0：DAG 血缘（meta version 2，只加不改）----
+    // 三家口径对齐（2026-11-07 实读 UE ClusterDAG.cpp / bevy from_mesh.rs /
+    // Carrot fertilizer + zeux clusterlod.h）：
+    //   组 = DAG 父节点（UE FClusterGroup.Children / bevy TempMeshletGroup）；
+    //   **按组重切，父簇绝不跨组**（UE ReduceGroup 组内 Merged+SplitCluster、
+    //   bevy 每组独立 compute_meshlets）→ 每个父簇恰有一个生成组，S5 的
+    //   组原子 cut（弹堆时同误差兄弟一起出堆）才成立；
+    //   组 error = max(组简化误差, 全部成员簇误差)（UE :1441+:1587），
+    //   且父簇 bounds.error 统一覆写为组 error（UE :1593 "They are all
+    //   dependent"）；顶层组 genCount=0（zeux clusterlod 的 terminal group）。
+    bool dagPresent = false;
+    // 本层的组（DAG 父节点）。genFirst/genCount = 本组简化重切出的父簇区间，
+    // 指**下一层文件**（.lodN+1.nmesh）的簇号；顶层组 genCount=0。
+    struct DagGroup {
+        float error = 0.f;         // ParentLODError = max(simplifyError, 成员簇误差)
+        float simplifyError = 0.f; // 本次组内 QEM 简化误差（顶层组为 0）
+        float sphere[4];           // 成员簇包围球并（LODBounds 基础，运行时 + error 膨胀）
+        std::uint32_t genFirst = 0;
+        std::uint32_t genCount = 0;
+    };
+    std::vector<DagGroup> dagGroups;
+    // 本层每簇的组号（成员方向；组记录索引，与 dagGroups 一一对应）。
+    // 生成组方向（下一层簇 → 本层组号）由 genFirst/genCount 区间反转，不冗余存。
+    std::vector<std::uint32_t> clusterGroup;
 };
 
 // .nmesh 自包含数据。vertices 的顺序就是 meshlet.vertexOffset/vertexCount
@@ -46,7 +71,11 @@ struct NMeshData {
 //   NMeshletRecord[meshletCount]   每个 52 B
 //   MeshVertex[vertexCount]        每个 32 B（float x9，直接内存映像）
 //   uint8[triangleCount * 3]
-//   [version 2 only] NMeshMetaHeader 24 B + float[3*lockedCount]
+//   [version 2 only] NMeshMetaHeader 24 B + payload
+//     meta version 1: float[3*lockedCount]                    （M2.2，仅锁点）
+//     meta version 2: float[3*lockedCount]                    （M3.0，锁点 + DAG）
+//                     + NMeshDagGroupRecord[groupCount] 每个 32 B
+//                     + u32 clusterGroup[meshletCount]
 //
 // 全部紧密排列、无填充；字段布局用 static_assert 锁死，漂移编译期就爆。
 struct NMeshHeader {
@@ -71,23 +100,36 @@ struct NMeshletRecord {
 // version 2 = version 1 + 尾部 LOD meta section（只加不改，loadNMesh 两种都读）。
 struct NMeshMetaHeader {
     std::uint32_t magic;          // 'N','L','O','D' → 0x444F4C4E (LE)
-    std::uint32_t payloadBytes;   // 跟随的 float 数组字节数
-    std::uint16_t version;        // 1
+    std::uint32_t payloadBytes;   // 跟随的 payload 字节数
+    std::uint16_t version;        // 1 = 仅锁点 / 2 = 锁点 + DAG 血缘（M3.0）
     std::uint16_t level;          // LOD 层号
     float maxError;               // 世界空间
-    std::uint32_t lockedCount;    // payload = 3*lockedCount 个 float
-    std::uint32_t reserved;       // 置 0，S3 扩展用
+    std::uint32_t lockedCount;    // payload 前 3*lockedCount 字节 = 锁点 float
+    std::uint32_t reserved;       // 置 0
+};
+
+// meta version 2 的 DAG 组记录（M3.0）。32 B 紧凑，紧跟锁点 payload 之后：
+//   DagGroupRecord[groupCount]
+//   u32 clusterGroup[meshletCount]   （组号，引用上面的记录索引）
+struct NMeshDagGroupRecord {
+    float error;
+    float simplifyError;
+    float sphere[4];
+    std::uint32_t genFirst;
+    std::uint32_t genCount;
 };
 
 inline constexpr std::uint16_t kNMeshVersion = 1;
 inline constexpr std::uint16_t kNMeshVersionLod = 2;
-inline constexpr std::uint16_t kNMeshMetaVersion = 1;
+inline constexpr std::uint16_t kNMeshMetaVersion = 1;     // 仅锁点
+inline constexpr std::uint16_t kNMeshMetaVersionDag = 2;  // 锁点 + DAG 血缘（M3.0）
 inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;     // "NMSH"
 inline constexpr std::uint32_t kNMeshLodMagic = 0x444F4C4Eu;  // "NLOD"
 
 static_assert(sizeof(NMeshHeader) == 20, "NMeshHeader layout drift");
 static_assert(sizeof(NMeshletRecord) == 52, "NMeshletRecord layout drift");
 static_assert(sizeof(NMeshMetaHeader) == 24, "NMeshMetaHeader layout drift");
+static_assert(sizeof(NMeshDagGroupRecord) == 32, "NMeshDagGroupRecord layout drift");
 static_assert(sizeof(MeshVertex) == 32, "MeshVertex layout drift");
 
 // 写盘。失败返回 false，outError 带可读原因；成功时不留部分文件（先写临时再改名）。

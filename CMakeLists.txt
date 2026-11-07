@@ -317,3 +317,13 @@ add_test(NAME s2-loop-suzanne
 set_tests_properties(s2-loop-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "lod files   : "
     DEPENDS s1-nmesh-suzanne)
+# M3.0：DAG 血缘机械单测（全链不变量 / 顶层 terminal / 按组重切产出 / v3 roundtrip / 篡改检测）
+add_test(NAME s3-dag-selftest COMMAND nanite-tools selftest dag)
+set_tests_properties(s3-dag-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "dag selftest: PASS")
+# M3.0：真实资产 DAG 装配 + 校验（每父簇恰一生成组 / error 链逐位精确 / 无环）
+add_test(NAME s3-dag-suzanne
+         COMMAND nanite-tools dag ${CMAKE_CURRENT_BINARY_DIR}/lod-suzanne)
+set_tests_properties(s3-dag-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "dag         : OK"
+    DEPENDS s2-loop-suzanne)

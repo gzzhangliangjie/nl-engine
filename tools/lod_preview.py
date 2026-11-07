@@ -58,10 +58,13 @@ def read_nmesh(path: Path):
         mg, payload_bytes, mv, level, max_error, locked_count, _ = \
             struct.unpack_from("<IIHHfII", blob, cur)
         cur += 24
-        if mg != 0x444F4C4E or mv != 1:
+        if mg != 0x444F4C4E or mv not in (1, 2):
             raise SystemExit(f"bad lod meta header: {path}")
         locked_pos = list(struct.unpack_from("<" + "f" * (locked_count * 3), blob, cur))
         cur += payload_bytes
+        # meta version 2（M3.0）：payload 尾部还有 DAG 血缘段
+        # （u32 groupCount + 32B 组记录 ×N + u32 clusterGroup ×meshlets）。
+        # payload_bytes 覆盖全部段，cur 一次跳过即可；本工具只画几何与锁点。
     if cur != len(blob):
         raise SystemExit(f"trailing bytes in {path}")
 

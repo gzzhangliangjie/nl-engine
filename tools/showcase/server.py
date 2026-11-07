@@ -240,6 +240,15 @@ def stage_sync() -> dict:
                     baselines += 1
                 else:
                     reasons.append(f"基线缺失：{rel}")
+        # 工具版本不产 GPU 截图，但必须有从工具真实输出生成的证据图
+        # （M2.1 固化约定：preview 静态图 + run.bat 复现）。缺失或文件不存在
+        # 都算「没有基线证据」。
+        pv = c.get("preview")
+        if pv:
+            if (ROOT / pv).is_file():
+                baselines += 1
+            else:
+                reasons.append(f"证据图缺失：{pv}")
         script = c.get("script")
         if script and not (ROOT / script.split()[0]).is_file():
             reasons.append(f"复现脚本缺失：{script.split()[0]}")

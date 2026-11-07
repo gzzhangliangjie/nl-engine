@@ -5,14 +5,14 @@
 
 ---
 
-## M3.0 DAG 构建自底向上（2~3 天）
+## M3.0 DAG 构建自底向上（2~3 天）✅ 2026-11-07
 
-- [ ] 逐层向上：LOD n 的簇聚组（复用 M2.0）→ 组 = DAG 父节点，组内子簇 = 子节点边
-- [ ] 父误差：`parent.error = max(child.error)`（Karis 论文规则）；组简化重切产物即父簇
-- [ ] 注意：父簇的顶点引用子簇顶点（共享边界），**DAG 边表达「可被父替换」**，数据上父存子簇 id 列表
-- [ ] DAG 写回 .nmesh v2（加 section：dagGroups[]，每组存 childIds + error + bounds）
+- [x] 逐层向上：LOD n 的簇聚组（复用 M2.0）→ 组 = DAG 父节点，组内子簇 = 子节点边
+- [x] 父误差：组 error = max(组简化误差， 全部成员簇误差)（UE ClusterDAG.cpp:1441/:1587，比 Karis max(children) 更严：含本次简化引入的误差）；父簇 bounds.error 统一携带组误差（UE:1593），沿链单调
+- [x] 实做修正（三家源码实读定稿）：**按组重切，父簇绝不跨组**（UE ReduceGroup / bevy :154）——M2.2 的全局重切会让父簇跨组 → 每父簇生成组不唯一 → S5 组原子 cut 不成立；DAG 边用双向记法：组存成员簇 id（clusterGroup[]，子方向）+ genFirst/genCount 区间（父方向，连续铺满下一层），不存独立 childIds 列表
+- [x] DAG 写进 .nmesh meta version 2（尾部 section：u32 groupCount + 32B 组记录×N + u32 clusterGroup×meshlets；v1/旧 v2 逐字节兼容读回）
 
-**自检**：随机抽 1000 个父节点断言 `error == max(children.error)`；图无环（DFS 染色检测）。tag：`s3-dag`。
+**自检**：selftest dag 不抽样——128x128 合成网格全链逐层逐组全量断言 error == max(simplifyError, members)（逐位精确）、组图 DFS 染色无环、gen 区间铺满、v3 roundtrip、篡改必被抓住。tag：`s3-dag`。
 
 ⚠️ 常见坑：
 - 不同分支的组可能共享子簇（这就是 DAG 不是树）——构建时别按「层」拍平存储，按组引用存

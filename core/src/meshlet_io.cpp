@@ -98,19 +98,61 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
             outError = "lod meta: lockedPositions size invalid";
             return false;
         }
+        // M3.0：dagPresent 时写 meta version 2（锁点 + DAG 血缘）。
+        const bool dag = data.lodMeta.dagPresent;
+        if (dag && data.lodMeta.clusterGroup.size() != data.meshlets.size()) {
+            outError = "lod meta: clusterGroup size must match meshlet count";
+            return false;
+        }
+        if (dag && data.lodMeta.clusterGroup.size() > 0xFFFFFFFFu) {
+            outError = "lod meta: cluster count exceeds uint32 range";
+            return false;
+        }
         NMeshMetaHeader meta{};
         meta.magic = kNMeshLodMagic;
-        meta.payloadBytes = static_cast<std::uint32_t>(floats * sizeof(float));
-        meta.version = kNMeshMetaVersion;
+        meta.version = dag ? kNMeshMetaVersionDag : kNMeshMetaVersion;
         meta.level = data.lodMeta.level;
         meta.maxError = data.lodMeta.maxError;
         meta.lockedCount = static_cast<std::uint32_t>(floats / 3);
+        // payload = 锁点 + [DAG 段：u32 groupCount + 组记录 + clusterGroup]
+        meta.payloadBytes = static_cast<std::uint32_t>(floats * sizeof(float));
+        if (dag) {
+            meta.payloadBytes += sizeof(std::uint32_t) +
+                static_cast<std::uint32_t>(data.lodMeta.dagGroups.size() *
+                                           sizeof(NMeshDagGroupRecord)) +
+                static_cast<std::uint32_t>(data.lodMeta.clusterGroup.size() *
+                                           sizeof(std::uint32_t));
+        }
         const auto* mp = reinterpret_cast<const std::uint8_t*>(&meta);
         blob.insert(blob.end(), mp, mp + sizeof(meta));
         if (floats) {
             const auto* fp = reinterpret_cast<const std::uint8_t*>(
                 data.lodMeta.lockedPositions.data());
-            blob.insert(blob.end(), fp, fp + meta.payloadBytes);
+            blob.insert(blob.end(), fp, fp + floats * sizeof(float));
+        }
+        if (dag) {
+            if (data.lodMeta.dagGroups.size() > 0xFFFFFFFFu) {
+                outError = "lod meta: dag group count exceeds uint32 range";
+                return false;
+            }
+            const std::uint32_t groupCount =
+                static_cast<std::uint32_t>(data.lodMeta.dagGroups.size());
+            const auto* gp = reinterpret_cast<const std::uint8_t*>(&groupCount);
+            blob.insert(blob.end(), gp, gp + sizeof(groupCount));
+            for (const auto& g : data.lodMeta.dagGroups) {
+                NMeshDagGroupRecord rec{};
+                rec.error = g.error;
+                rec.simplifyError = g.simplifyError;
+                std::memcpy(rec.sphere, g.sphere, sizeof(rec.sphere));
+                rec.genFirst = g.genFirst;
+                rec.genCount = g.genCount;
+                const auto* rp = reinterpret_cast<const std::uint8_t*>(&rec);
+                blob.insert(blob.end(), rp, rp + sizeof(rec));
+            }
+            const auto* cg = reinterpret_cast<const std::uint8_t*>(
+                data.lodMeta.clusterGroup.data());
+            blob.insert(blob.end(), cg,
+                        cg + data.lodMeta.clusterGroup.size() * sizeof(std::uint32_t));
         }
     }
 
@@ -212,9 +254,10 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         NMeshMetaHeader meta;
         std::memcpy(&meta, blob.data() + cursor, sizeof(meta));
         cursor += sizeof(meta);
-        const std::size_t expected = std::size_t(meta.lockedCount) * 3 * sizeof(float);
-        if (meta.magic != kNMeshLodMagic || meta.version != kNMeshMetaVersion ||
-            meta.payloadBytes != expected) {
+        const std::size_t lockedBytes = std::size_t(meta.lockedCount) * 3 * sizeof(float);
+        if (meta.magic != kNMeshLodMagic ||
+            (meta.version != kNMeshMetaVersion && meta.version != kNMeshMetaVersionDag) ||
+            meta.payloadBytes < lockedBytes) {
             outError = "bad lod meta header: " + std::string(path);
             return false;
         }
@@ -223,9 +266,53 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         out.lodMeta.level = meta.level;
         out.lodMeta.maxError = meta.maxError;
         out.lodMeta.lockedPositions.resize(std::size_t(meta.lockedCount) * 3);
-        if (expected)
-            std::memcpy(out.lodMeta.lockedPositions.data(), blob.data() + cursor, expected);
-        cursor += meta.payloadBytes;
+        if (lockedBytes)
+            std::memcpy(out.lodMeta.lockedPositions.data(), blob.data() + cursor, lockedBytes);
+        cursor += lockedBytes;
+        if (meta.version == kNMeshMetaVersionDag) {
+            // M3.0：DAG 血缘段。组记录数先读，clusterGroup 由外层 meshletCount 定长。
+            const size_t section = meta.payloadBytes - lockedBytes;
+            const size_t minSection = sizeof(std::uint32_t);
+            if (section < minSection) {
+                outError = "dag section truncated (no group count): " + std::string(path);
+                return false;
+            }
+            std::uint32_t groupCount;
+            std::memcpy(&groupCount, blob.data() + cursor, sizeof(groupCount));
+            cursor += sizeof(groupCount);
+            const size_t expected = sizeof(std::uint32_t) +
+                                    std::size_t(groupCount) * sizeof(NMeshDagGroupRecord) +
+                                    std::size_t(header.meshletCount) * sizeof(std::uint32_t);
+            if (section != expected) {
+                outError = "dag section size mismatch (groups " +
+                           std::to_string(groupCount) + "): " + std::string(path);
+                return false;
+            }
+            out.lodMeta.dagPresent = true;
+            out.lodMeta.dagGroups.resize(groupCount);
+            for (std::uint32_t i = 0; i < groupCount; ++i) {
+                NMeshDagGroupRecord rec;
+                std::memcpy(&rec, blob.data() + cursor, sizeof(rec));
+                cursor += sizeof(rec);
+                auto& g = out.lodMeta.dagGroups[i];
+                g.error = rec.error;
+                g.simplifyError = rec.simplifyError;
+                std::memcpy(g.sphere, rec.sphere, sizeof(g.sphere));
+                g.genFirst = rec.genFirst;
+                g.genCount = rec.genCount;
+            }
+            out.lodMeta.clusterGroup.resize(header.meshletCount);
+            if (header.meshletCount) {
+                std::memcpy(out.lodMeta.clusterGroup.data(), blob.data() + cursor,
+                            std::size_t(header.meshletCount) * sizeof(std::uint32_t));
+                cursor += std::size_t(header.meshletCount) * sizeof(std::uint32_t);
+            }
+            for (std::uint32_t v : out.lodMeta.clusterGroup)
+                if (v >= groupCount) {
+                    outError = "cluster group id out of range: " + std::string(path);
+                    return false;
+                }
+        }
     }
     if (cursor != blob.size()) {
         outError = "trailing bytes after last section (" +

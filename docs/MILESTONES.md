@@ -645,3 +645,25 @@
 4. **判决实验方法论沉淀**：「纯官方 vs 加码」的取舍必须跑同分组同目标对照实验，不是看谁说得有理。锚两次参照系 bug 的根因（出生角点 vs 当前角点、更新前 vs 更新后参照）都是实验抓的，不是审代码审出来的。
 
 **下一步**：S3 构建 cluster DAG + fallback mesh（`nanite-tools dag`；DAG cut 以 group 为原子单位吃 `.nmesh` v2 的 lockedPositions / parent error）。
+
+## M3.0 cluster DAG 组装与校验（tag `s3-dag`，2026-11-07）
+
+**动作**：三家源码实读定稿（UE ClusterDAG.cpp / bevy from_mesh.rs / Carrot→zeux clusterlod.h）→ M2.2 全局重切改**按组重切**（父簇绝不跨组，S5 组原子 cut 语义前提）→ 血缘落盘 .nmesh meta version 2（dagGroups + clusterGroup，v1/旧 v2 逐字节兼容）→ `nanite-tools dag` 六项校验器 + `selftest dag` 套件 + `--export` JSON → 资产再生成 + 基线重拍 + 交代物。
+
+**提交版本**：s3-dag（本轮）
+
+**完成情况**
+- dag Suzanne 六项校验全 PASS：56 groups / 57 edges / 87 父簇携带组误差 / DFS 无环；顶层 3 组 terminal（genCount=0）。
+- check-orient 全链 L0..L6 inward=0（按组重切不破 M2.3a 朝向锚）。
+- ctest 12→14（s3-dag-selftest / s3-dag-suzanne）、回归总闸 118/118 ALL GREEN、`server.py --check` OK（kStage 升 S3.0）。
+- 交代物：证据图 `example/s3-dag/dag-structure.png`（真实 export JSON，蓝→红 = ParentLODError）+ run.bat + `docs/s3/S3-TOOLS-GUIDE.md` + 展示台 s3.0 卡（selftest/dag/2 负向）。
+- Suzanne 新链：3936→1970→1002→500→252→142→104 tri（7 层，链更陡）；L0/L3/L5+HUD 双后端基线重拍。
+
+**踩坑情况**
+1. **buildGeneratingMap 开尺寸错**：gen 区间索引的是**下一层**簇号，数组却按本层簇数开尺寸——L0 簇数多于 L1 时尾部全是「无生成组」假报警。selftest 当场抓住；修为显式传 nextClusters。
+2. **保存侧漏 payloadBytes + 组数前缀**：meta 重构时丢了 `payloadBytes` 赋值（恒 0）与 DAG 段的 `u32 groupCount` 前缀，v3 roundtrip 必挂。加载侧段长校验（section != expected）是靠它能抓住的设计。
+3. **按组重切簇粒度取整**：8 簇/组减半后仍要整簇产出，单层保留率上界从 70% 抬到 ~80%（bevy/UE 同款效应）；loop 自检口径 30~70% → 30~80% 并注明，非凑结果。
+4. **export JSON 反斜杠未转义**：prefix 含 `\` 时写出非法 JSON（run.bat 实跑抓出，手工跑正斜杠路径测不出来）。修 C 侧转义 `'\'→"\\\\"`。
+5. **s1-tools not-impl 负向退役**：`dag` 实现后 exit 2 占位清零，负向按其自身约定退化为「未知子命令显式拒绝」（cut 是 S5 运行时能力，不进离线工具）。
+
+**下一步**：M3.1 fallback mesh（顶层连普通 indexed mesh，S8 BLAS 用）→ M3.2 viewer --mode dag-top 验收。

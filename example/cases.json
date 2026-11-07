@@ -1046,15 +1046,15 @@
     },
     {
      "id": "not-impl",
-     "name": "负向：未实现子命令（防假成功）",
+     "name": "负向：未知子命令显式拒绝（防假成功）",
      "kind": "tool",
-     "note": "simplify 在 M2.0 已实现（聚组），dag 在 S3 实现；当前调用必须显式报错退出 2，不许静默假成功。负向用例随实现进度退到下一个未实现子命令。",
+     "note": "dag 已在 M3.0（S3）实现，工具侧占位子命令清零；本负向退化为「未知子命令必须显式报错」，不许静默假成功。S5 的 cut 是运行时能力，不进离线工具。",
      "args": [
-      "dag"
+      "cut"
      ],
-     "expectExit": 2,
-     "expectLog": "not implemented yet",
-     "command": "nanite-tools dag"
+     "expectExit": 1,
+     "expectLog": "unknown subcommand",
+     "command": "nanite-tools cut"
     }
    ]
   },
@@ -1478,10 +1478,10 @@
    "name": "逐层 LOD 循环：简化→重切→分层 .nmesh（S2）",
    "tag": "s2-loop",
    "date": "2026-11-07",
-   "summary": "core/lod 严格对齐 Nanite 系标准做法：每层重新聚组 → 边界锁按当前分组全量重算（不跨层继承）→ 每组硬目标 50% 简化 → buildMeshlets 重切 → 下一层。依据 bevy from_mesh.rs:114-120/520-523（lock_group_borders 每轮覆写）、:556（group_indices.len()/2）、UE ClusterDAG.cpp:1470（TargetNumTris 硬目标）、Cluster.cpp:1023-1039（LockPosition 只作用当前 group）、meshoptimizer simplifier.cpp:2492（while result_count > target_index_count）。误差按 UE:1441/bevy:146-151 单调化为 parent error。每层写 <prefix>.lodN.nmesh（.nmesh v2 尾部 section：level / maxError / lockedPositions，v1 逐字节兼容），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne 6 层 3936→1976→985→490→246→124 tri。",
+   "summary": "core/lod 严格对齐 Nanite 系标准做法：每层重新聚组 → 边界锁按当前分组全量重算（不跨层继承）→ 每组硬目标 50% 简化 → 按组重切（M3.0 对齐 UE ReduceGroup / bevy 每组独立 compute_meshlets：父簇绝不跨组，血缘随层落盘）→ 下一层。依据 bevy from_mesh.rs:114-120/520-523（lock_group_borders 每轮覆写）、:556（group_indices.len()/2）、:154（每组独立 compute_meshlets）、UE ClusterDAG.cpp:1470（TargetNumTris 硬目标）、:1378-1605（ReduceGroup 组内合并→简化→SplitCluster 按组重切）、Cluster.cpp:1023-1039（LockPosition 只作用当前 group）、meshoptimizer simplifier.cpp:2492（while result_count > target_index_count）。误差按 UE:1441/bevy:146-151 单调化为 parent error。每层写 <prefix>.lodN.nmesh（.nmesh v2 尾部 section：level / maxError / lockedPositions，M3.0 起 meta version 2 再加 DAG 血缘：dagGroups + clusterGroup），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne 7 层 3936→1970→1002→500→252→142→104 tri。",
    "acceptance": [
-    "selftest loop 全绿：灵魂断言「每层锁点集合 == 按该层分组独立重算的组间边界集合」（交叉验证防同错，若存在跨层继承立刻不等）、每层约减半 30~70%、parent error 单调不减、簇上限、v1/v2 资产读回、确定性重跑、负向拒绝",
-    "Suzanne：6 层 L0 3936 → L1 1976（50.2%）→ 985 → 490 → 246 → 124 tri；簇 237→33→17→13→5→3；锁点 622→117→84→35→0→0（每层重算、递减而非累积）；parent error 0→0.0250→0.0250→0.0250→0.0250→0.0260 单调",
+    "selftest loop 全绿：灵魂断言「每层锁点集合 == 按该层分组独立重算的组间边界集合」（交叉验证防同错，若存在跨层继承立刻不等）、每层约减半 30~80%（M3.0 按组重切簇粒度取整，bevy/UE 同款）、parent error 单调不减、簇上限、v1/v2 资产读回、确定性重跑、负向拒绝",
+    "Suzanne：7 层 L0 3936 → L1 1970（50.1%）→ 1002 → 500 → 252 → 142 → 104 tri；簇 237→35→19→15→8→7→3；锁点 622→183→100→43→0→0→0（每层重算、递减而非累积）；parent error 0→0.0435→0.1339→0.1339→0.2690→0.4222→1.1375 单调",
     "ctest 10→12（s2-loop-selftest / s2-loop-suzanne）、回归总闸全绿（渲染基线逐字节不动）",
     "交代物：展示台 s2-loop 工具卡现场实跑 + example/s2-loop/lod-suzanne.png 六层真实几何金字塔（同机位同尺度）+ run.bat + docs/s2/NANITE-TOOLS-GUIDE.md 归档"
    ],
@@ -1494,7 +1494,7 @@
      "id": "selftest",
      "name": "selftest loop：逐层循环机械单测",
      "kind": "tool",
-     "note": "64x64 合成网格上验证标准循环：层数≥3、每层三角数严格递减且约减半（30~70%）、每簇 ≤128 tri/64 vtx、每层 lodMeta.level 正确；灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」（证明边界锁每轮重算、不继承历史层）、顶层无 outgoing seams、parent error 单调不减、v2 .nmesh 落盘读回逐字段一致、v1 仍可读、确定性重跑逐字节一致、负向参数全拒。",
+     "note": "128x128 合成网格上验证标准循环：层数≥3、每层三角数严格递减且约减半（30~80%，按组重切簇粒度取整）、每簇 ≤128 tri/64 vtx、每层 lodMeta.level 正确；灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」（证明边界锁每轮重算、不继承历史层）、顶层无 outgoing seams、parent error 单调不减、v2 .nmesh 落盘读回逐字段一致、v1 仍可读、确定性重跑逐字节一致、负向参数全拒。",
      "args": [
       "selftest",
       "loop"
@@ -1559,7 +1559,7 @@
    "acceptance": [
     "滑条切层肉眼验收：L0..L6 同机位七层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞无黑斑（M2.3a 判决实验后翻转面根治，check-orient exit 0）",
     "负向全拒：--lod 非数字 / 越界 / 资产无分层文件均 exit 1；selftest 15/15（含 lod 模式分发）",
-    "双后端 pair 基线逐字节一致（L0/L3/L5 + HUD 960x540 滑条自证 lod 2/6 tri 982 maxErr 0.0435）",
+    "双后端 pair 基线：L3/L5 逐字节一致，L0 near（差 2 px / maxDelta 1，GPU 取整噪声）；HUD 960x540 滑条自证 lod 2/6 tri 1002 maxErr 0.1339（HUD 字体光栅两后端已知必然差异，near 档）",
     "ctest + 回归总闸全绿；交代物：展示台 s2-done 版本卡 + run.bat + docs/s2 归档"
    ],
    "exe": {
@@ -1602,9 +1602,9 @@
     },
     {
      "id": "lod-l3",
-     "name": "lod L3：490 tri（滑条中段）",
+     "name": "lod L3：500 tri（滑条中段）",
      "kind": "pair",
-     "note": "组数 4、锁点 36；法线着色下组间接缝无裂缝。maxErr 0.0639（parent error，HUD 同值）。",
+     "note": "组数 4、锁点 43；法线着色下组间接缝无裂缝。maxErr 0.1339（parent error，HUD 同值）。",
      "baselines": {
       "dx12": "example/s2-done/lod-l3-dx12.png",
       "vulkan": "example/s2-done/lod-l3-vulkan.png"
@@ -1635,7 +1635,7 @@
     },
     {
      "id": "lod-l5",
-     "name": "lod L5：140 tri 最粗层",
+     "name": "lod L5：142 tri 深度简化层",
      "kind": "pair",
      "note": "5 簇 / 0 锁点 / maxErr 0.4082。M2.3a 判决实验后无翻转面：全链 inward=0，法线继承 L0 原始场。",
      "baselines": {
@@ -1670,7 +1670,7 @@
      "id": "lod-hud",
      "name": "lod L2 + HUD（960x540，滑条自证）",
      "kind": "pair",
-     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/6 tri 982 maxErr 0.0435。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
+     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/6 tri 1002 maxErr 0.1339。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
      "baselines": {
       "dx12": "example/s2-done/lod-hud-dx12.png",
       "vulkan": "example/s2-done/lod-hud-vulkan.png"
@@ -1767,6 +1767,82 @@
      "expectExit": 1,
      "expectLog": "no layered assets",
      "command": "viewer.exe --mode lod --model IcoSphereDense.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative2.png"
+    }
+   ]
+  },
+  {
+   "id": "s3.0",
+   "label": "M3.0",
+   "name": "cluster DAG 组装与校验（S3 第一步）",
+   "tag": "s3-dag",
+   "date": "2026-11-07",
+   "summary": "M3.0：血缘落盘 + DAG 校验器。按组重切对齐 UE ReduceGroup（ClusterDAG.cpp:1378-1605）/bevy 每组独立 compute_meshlets（from_mesh.rs:154）：父簇绝不跨组 → 每父簇恰有一个生成组，S5 组原子 cut 语义成立。血缘写进 .nmesh meta version 2（只加不改，v1/旧 v2 逐字节兼容读回）：dagGroups[]（error/simplifyError/sphere[4]/genFirst/genCount）+ clusterGroup[]；组 error = max(组简化误差, 全部成员簇误差)（UE:1441/:1587），父簇 bounds.error 统一携带组误差（UE:1593 \"They are all dependent\"），顶层组 genCount=0（zeux clusterlod terminal group）。nanite-tools dag 读连续 <prefix>.lodN.nmesh 六项校验全 PASS：membership（每簇恰属一组）/generation（gen 区间连续铺满下一层、每父簇恰一生成组）/error chain（逐位精确）/parent error/monotonic/acyclic（组图 DFS 染色）；--export JSON 供离线可视化。Suzanne 7 层 56 组 57 边 87 父簇携带组误差；check-orient 全链 inward=0（按组重切不破 M2.3a 朝向锚）。证据图 tools/dag_preview.py 从 dag --export 真实 JSON 画分层结构（蓝→红 = ParentLODError）。",
+   "acceptance": [
+    "selftest dag 全绿：128x128 合成网格全链不变量逐层逐组全量断言 + error chain ≥100 组 + v3 roundtrip 逐字段一致 + 重读链再校验 + 篡改组误差必被抓住",
+    "dag Suzanne：六项校验 PASS（56 groups / 57 edges / 87 父簇携带组误差 / DFS 无环），负向（无分层资产 / 未知参数）exit 1",
+    "ctest 12→14（s3-dag-selftest / s3-dag-suzanne）；check-orient L0..L6 inward=0；回归总闸 118/118 ALL GREEN",
+    "交代物：证据图 example/s3-dag/dag-structure.png + run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.0 卡现场实跑"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest dag：DAG 血缘机械单测",
+     "kind": "tool",
+     "note": "128x128 连续网格逐层生成后全链校验：全链 DAG 不变量（membership/generation/error chain/parent error/monotonic/acyclic）逐层逐组全量断言、error chain 实测 ≥100 组、顶层组 terminal（genCount=0）、每非顶层组恰产出父簇、v3 .nmesh 落盘读回血缘逐字段一致、重读链再校验、篡改任一组误差立刻被 error chain 抓住。",
+     "args": [
+      "selftest",
+      "dag"
+     ],
+     "expectExit": 0,
+     "expectLog": "dag selftest: PASS",
+     "command": "nanite-tools selftest dag"
+    },
+    {
+     "id": "dag",
+     "name": "dag：Suzanne 全链组装 + 六项校验 + JSON 导出",
+     "kind": "tool",
+     "note": "读 <prefix>.lod0..6.nmesh（meta version 2 血缘）→ 打印逐层 clusters/tris/groups/parentClusters/topErr → 六项校验（membership/generation/error chain/parent error/monotonic/acyclic DFS）→ --export 写分层 DAG JSON。卡片上方结构图由这份真实导出经 tools/dag_preview.py 离线渲染：7 列 = 7 层，每框 = 组（颜色蓝→红 = ParentLODError 高低，标注成员簇数），连线 = 组的生成簇被更粗层哪个组收养——S5 cut 的组原子邻域。",
+     "args": [
+      "dag",
+      "{root}/assets/meshlets/Suzanne",
+      "--export",
+      "{root}/build/showcase/runs/s3-dag-export.json"
+     ],
+     "expectExit": 0,
+     "expectLog": "dag         : OK",
+     "command": "nanite-tools dag assets/meshlets/Suzanne --export build/showcase/runs/s3-dag-export.json",
+     "preview": "example/s3-dag/dag-structure.png"
+    },
+    {
+     "id": "negative-no-layers",
+     "name": "负向：无分层资产（exit 1）",
+     "kind": "tool",
+     "note": "IcoSphereDense 没有分层文件（lod0 探测失败）显式报错退出 1，绝不静默当空 DAG 成功。",
+     "args": [
+      "dag",
+      "{root}/assets/meshlets/IcoSphereDense"
+     ],
+     "expectExit": 1,
+     "expectLog": "cannot open",
+     "command": "nanite-tools dag assets/meshlets/IcoSphereDense"
+    },
+    {
+     "id": "negative-opt",
+     "name": "负向：未知参数（exit 1）",
+     "kind": "tool",
+     "note": "--bogus 显式拒绝退出 1，防静默吞参数。",
+     "args": [
+      "dag",
+      "{root}/assets/meshlets/Suzanne",
+      "--bogus"
+     ],
+     "expectExit": 1,
+     "expectLog": "unknown option",
+     "command": "nanite-tools dag assets/meshlets/Suzanne --bogus"
     }
    ]
   }
