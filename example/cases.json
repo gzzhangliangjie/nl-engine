@@ -990,6 +990,69 @@
      "script": "example/m0.9/run.bat regression"
     }
    ]
+  },
+  {
+   "id": "s1-tools",
+   "label": "M1.0",
+   "name": "nanite-tools 工具骨架 + glTF 公共读取层",
+   "tag": "s1-tools",
+   "date": "2026-11-07",
+   "summary": "S1 第一步。core/mesh_io 公共 glTF 读取层（场景图遍历、节点世界变换烘进顶点——切簇误差单位从第一天统一成世界空间长度）；tinygltf 实现 TU 移到 core 全工程唯一展开；nanite-tools CLI：stat 实现，cluster/simplify/dag 占位显式退出 2。渲染侧零改动（回归 58/58 ALL GREEN）。工具版本不产截图，交代=本页工具用例现场实跑输出。",
+   "acceptance": [
+    "stat 三资产口径全对上：Suzanne 3,936 tri、纽结 204,800、球 327,680（ctest s1-tools-stat 正则锁死防漂移）",
+    "球 AABB ±1.0 严丝合缝 = 节点世界变换烘焙正确",
+    "scene.cpp 改走公共层后渲染零变化：regression.py 全绿、viewer --selftest 15/15、server.py --check 退出 0",
+    "负向路径全部显式：未知子命令 exit 1、未实现子命令 exit 2、文件不存在 exit 1",
+    "交代物：展示台工具用例（kind:tool 现场实跑）+ docs/s1/NANITE-TOOLS-GUIDE.md 输出归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动工具打印 usage 并退出。退出码 1 是预期行为——工具退出码约定：0 成功 / 1 用法错误或运行失败 / 2 已声明未实现。两个构建目录里的 nanite-tools 是同一个纯 CPU 工具（不链图形后端），跑哪个都一样。",
+     "args": [],
+     "expectExit": 1,
+     "expectLog": "nanite-tools - nl-engine offline mesh pipeline",
+     "command": "nanite-tools"
+    },
+    {
+     "id": "stat",
+     "name": "stat：顶点 / 三角 / 子网格统计",
+     "kind": "tool",
+     "note": "M1.0 核心自检：读 .glb/.gltf（场景图遍历 + 节点变换烘焙），打印顶点数、三角数、子网格、世界空间 AABB。下拉框切换三资产对比 M0.7 已知口径；球模型 AABB ±1.0 严丝合缝即变换烘焙正确。",
+     "args": [
+      "stat",
+      "{root}/assets/models/{model}"
+     ],
+     "params": {
+      "model": {
+       "type": "select",
+       "label": "模型",
+       "options": ["Suzanne.glb", "TorusKnotDense.glb", "IcoSphereDense.glb"],
+       "default": "Suzanne.glb"
+      }
+     },
+     "expectLog": "triangles :",
+     "command": "nanite-tools stat assets/models/<model>"
+    },
+    {
+     "id": "not-impl",
+     "name": "负向：未实现子命令（防假成功）",
+     "kind": "tool",
+     "note": "cluster / simplify / dag 在 M1.1 / S2 / S3 实现；当前调用必须显式报错退出 2，不许静默假成功。M1.1 完成后本用例的 expectExit 会随实现更新。",
+     "args": [
+      "cluster"
+     ],
+     "expectExit": 2,
+     "expectLog": "not implemented yet",
+     "command": "nanite-tools cluster"
+    }
+   ]
   }
  ]
 }

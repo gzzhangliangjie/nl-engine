@@ -6,14 +6,15 @@
 
 ---
 
-## M1.0 nanite-tools 骨架 + glTF 读取（0.5~1 天）
+## M1.0 nanite-tools 骨架 + glTF 读取（0.5~1 天）✅ 2026-11-07（tag `s1-tools`）
 
-- [ ] `nanite-tools/` 目录建 CMake target（S0 预留过），命令行框架：`nanite-tools <subcommand> <args>`（手写或 cxxopts，别纠结）
-- [ ] 子命令占位：`cluster / simplify / dag / stat`（本里程碑只实现 cluster 的入口）
-- [ ] glTF 读取：**复用 M0.4 已经在用的 tinygltf**（`thirdparty/tinygltf/`，从本机 Carrot vendored；M0.4 从未引入 fastgltf），把 `renderer/src/scene.cpp` 的解析部分抽成 `core/mesh_io`，让 viewer 与 nanite-tools 共用一份代码。注意：tinygltf 实现宏只在**一个 TU** 展开（现在在 `scene.cpp`，抽走时要同步移走），且 `core/` 仍保持零图形 API 符号
-- [ ] 中间数据结构：`Vertex{pos,normal,uv}` + 三角列表 + mesh 级变换展开（glTF 节点变换烘进顶点）
+- [x] `nanite-tools/` 目录建 CMake target（S0 预留过），命令行框架：`nanite-tools <subcommand> <args>`（手写或 cxxopts，别纠结）
+- [x] 子命令占位：`cluster / simplify / dag / stat`（本里程碑只实现 cluster 的入口）——占位子命令调用必须**显式退出 2**（防静默假成功）
+- [x] glTF 读取：**复用 M0.4 已经在用的 tinygltf**（`thirdparty/tinygltf/`，从本机 Carrot vendored；M0.4 从未引入 fastgltf），把 `renderer/src/scene.cpp` 的解析部分抽成 `core/mesh_io`，让 viewer 与 nanite-tools 共用一份代码。注意：tinygltf 实现宏只在**一个 TU** 展开（现在在 `scene.cpp`，抽走时要同步移走），且 `core/` 仍保持零图形 API 符号
+- [x] 中间数据结构：`Vertex{pos,normal,uv}` + 三角列表 + mesh 级变换展开（glTF 节点变换烘进顶点）
 
 **自检**：`nanite-tools stat model.gltf` 能打印「顶点数 / 三角数 / 子网格数」。tag：`s1-tools`。
+**交代（2026-11-07 固化）**：展示台 s1-tools 版本卡 `kind:"tool"` 用例现场实跑（usage / stat×三资产下拉 / 未实现负向）+ `docs/s1/NANITE-TOOLS-GUIDE.md` 归档；规范在 `docs/ROADMAP.md`「里程碑交代规范」节。
 
 ## M1.1 meshlet 构建（2~3 天，本步的核心算法）
 

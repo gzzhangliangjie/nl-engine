@@ -108,6 +108,7 @@ function renderCases(v) {
       ? `<div class="shots">${shotBlock(v, c, 'dx12')}${shotBlock(v, c, 'vulkan')}</div>`
       : '';
     const btnLabel = c.kind === 'selftest' ? '▶ 运行自检'
+      : c.kind === 'tool' ? '▶ 运行工具'
       : c.kind === 'manual' ? '交互用例 · 手动运行' : '▶ 运行看效果';
     return `<article class="card" data-case="${esc(c.id)}">
       <div class="card-head">
@@ -153,8 +154,8 @@ function collectParams(card) {
   return out;
 }
 
-function logBlock(results) {
-  return `<details class="log"><summary>运行日志（${results.length} 个进程）</summary>` +
+function logBlock(results, open = false) {
+  return `<details class="log"${open ? ' open' : ''}><summary>运行日志（${results.length} 个进程）</summary>` +
     results.map(r => `<pre>${esc(r.backend.toUpperCase())}$ ${esc(r.command || '')}\n${esc(r.log || '(无输出)')}</pre>`).join('') +
     `</details>`;
 }
@@ -165,7 +166,8 @@ async function runCase(card, v, c) {
   const resultBox = $('[data-result]', card);
   btn.disabled = true;
   btn.textContent = '运行中…';
-  resultBox.innerHTML = `<span class="pill neutral">调用 ${esc(state.backend === 'both' ? 'DX12 + Vulkan' : state.backend)} 的 viewer.exe…</span>`;
+  const toolLabel = c.kind === 'tool' ? 'nanite-tools' : 'viewer.exe';
+  resultBox.innerHTML = `<span class="pill neutral">调用 ${esc(state.backend === 'both' ? 'DX12 + Vulkan' : state.backend)} 的 ${toolLabel}…</span>`;
   state.busy = true;
 
   let payload;
@@ -222,9 +224,12 @@ async function runCase(card, v, c) {
       pills.push(`<span class="pill bad">双后端画面不同（最大通道差 ${pd.maxDelta ?? '?'}）</span>`);
     }
   }
-  resultBox.innerHTML = pills.join('') + (results.length ? logBlock(results) : '');
+  // 工具用例的输出本身就是交代物：默认展开，不折叠进 details。
+  resultBox.innerHTML = pills.join('') +
+    (results.length ? logBlock(results, c.kind === 'tool') : '');
   btn.disabled = false;
-  btn.textContent = c.kind === 'selftest' ? '▶ 运行自检' : '▶ 运行看效果';
+  btn.textContent = c.kind === 'selftest' ? '▶ 运行自检'
+    : c.kind === 'tool' ? '▶ 运行工具' : '▶ 运行看效果';
   state.busy = false;
   return payload.ok;
 }

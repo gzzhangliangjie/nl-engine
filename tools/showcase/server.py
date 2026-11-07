@@ -294,6 +294,8 @@ def build_argv(case: dict, params: dict[str, str], out: Path | None) -> list[str
         else:
             def sub(m: re.Match[str]) -> str:
                 key = m.group(1)
+                if key == "root":
+                    return str(ROOT)   # 工具用例引用仓库内文件的唯一白名单方式
                 if key not in params:
                     raise ValueError(f"unresolved placeholder {{{key}}} in case args")
                 return params[key]
@@ -306,7 +308,7 @@ def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
     exe = exe_for(version, backend)
     if not exe.is_file():
         return {"ok": False, "backend": backend,
-                "error": f"该版本 {backend} 的 viewer.exe 未构建，无法现场运行：{exe.relative_to(ROOT).as_posix()}",
+                "error": f"该版本 {backend} 的 exe 未构建，无法现场运行：{exe.relative_to(ROOT).as_posix()}",
                 "log": "", "ms": 0}
 
     params = validated_params(case, supplied)
@@ -354,14 +356,18 @@ def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
         "ms": int((time.time() - started) * 1000),
         "params": params,
         "command": exe.name + " " + " ".join(
-            ("<out.png>" if a == str(out) else a) for a in argv),
+            ("<out.png>" if a == str(out) else a.replace(str(ROOT), "<root>")) for a in argv),
     }
 
     m = re.findall(r"deviceErrors=(\d+)", log)
     result["deviceErrors"] = int(m[-1]) if m else None
-    if code != 0:
+    # 工具用例（kind:tool）约定非零退出码也是合法预期：expectExit 声明（如
+    # usage 的 1、未实现子命令的 2），防静默假成功而不是把失败当成功。
+    expected_exit = case.get("expectExit", 0)
+    if code != expected_exit:
         result["ok"] = False
-        result.setdefault("error", f"进程退出码 {code}")
+        result["error"] = (f"退出码 {code}" +
+                           (f"（预期 {expected_exit}）" if expected_exit else ""))
     if case.get("expectLog") and case["expectLog"] not in log:
         result["ok"] = False
         result["error"] = f"日志里没找到 {case['expectLog']!r}"

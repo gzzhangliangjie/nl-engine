@@ -448,3 +448,21 @@
 2. **缺 NORMAL/UV 属性会误报错** → 根因：第一版用 `readFloatAccessor` 的返回值同时当「属性存在」与「读取成功」，accessorIndex=-1（属性缺失）会落进「index out of range」错误分支。处理：先 `attr("NORMAL") >= 0` 判存在，缺失补零，存在但读失败才是真错误。
 
 **下一步**：M1.1 meshlet 贪心构建（128 tri / 64 vert 上限、包围球、法线锥、初始误差），参考 bevy `from_mesh.rs` + meshoptimizer `meshlet.cpp`。
+
+---
+
+## M1.0 补档：交代挂展示台网页 + 交代规范固化（接上节，tag 仍 `s1-tools`）
+
+**动作**：用户纠正「交代不限于 exe 截图」——工具的使用说明与实跑结果就是展示物，且要**挂展示台网页**（不是只写 markdown）。展示台新增 `kind:"tool"` 用例类型：cases.json 增 `s1-tools` 版本（usage / stat×三资产下拉 / 未实现负向，共 3 条 × 2 构建目录）；server.py 支持 `{root}` 占位与 `expectExit` 预期退出码；app.js 工具卡「▶ 运行工具」输出直接展开显示；regression.py 同语义兼容文本用例。交代规范固化进 `docs/ROADMAP.md` 新增「里程碑交代规范」节 + `docs/s1/S1-PLAN.md` M1.0 勾选补注。
+
+**提交版本**：`s1-tools`（补档提交，不重打 tag）
+
+**完成情况**
+- 展示台网页实测：侧栏出现 s1-tools 版本卡，三张工具卡带运行按钮与模型下拉框，stat 切换 IcoSphereDense 实跑返回 `triangles : 327680`；无头 Edge 960×540+ 截图确认布局正常。
+- **总闸扩容 58→64 全绿**：`python tools/regression.py` 64/64（新增 6 条 = 3 工具用例 × 2 目录），历史 58 条基线判定逐字节不动。
+- 参数白名单负向实测：`model: "../secret.glb"` 被拦（`not in options`），args 只能来自清单、`{root}` 是唯一引用仓库内文件的方式。
+- 坑：8787 端口被两个旧会话残留的展示台进程占着（旧清单只到 m0.6），新实例绑定失败静默——taskkill 清掉旧 PID 后重启才生效。**以后验证展示台先 `netstat -ano | grep 8787` 查残留**。
+
+**踩坑情况**
+1. **旧服务进程占端口、新实例静默失败** → 根因：cases.json 在 server.py import 时加载，残留进程永远吐旧数据；bind 失败的异常又因为后台任务不回显看不出来。处理：杀残留 PID 重启；后续 start.bat 前先查端口。
+2. **`code != 0` 一刀切判败与工具退出码约定冲突** → 根因：usage（exit 1）、未实现子命令（exit 2）是合法预期结果，原判据会把它们当 FAIL。处理：cases.json 用 `expectExit` 声明预期退出码，server.py 与 regression.py 同一套语义校验（清单唯一、两处一致）。

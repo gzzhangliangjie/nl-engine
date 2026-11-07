@@ -121,9 +121,13 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
     rec["exit"] = code
     rec["deviceErrors"] = check_device_errors(log)
 
-    if code != 0:
+    # 工具用例（kind:tool）约定非零退出码可以是合法预期（usage=1、未实现=2），
+    # 与展示台 server.py 的 expectExit 语义严格一致。
+    expected = case.get("expectExit", 0)
+    if code != expected:
         rec["verdict"] = "FAIL"
-        rec["detail"] = f"退出码 {code}" + ("（超时）" if code == -1 else "")
+        rec["detail"] = (f"退出码 {code}（预期 {expected}）"
+                         + ("（超时）" if code == -1 else ""))
         rec["logTail"] = log[-1500:]
         return rec
     if case.get("expectLog") and case["expectLog"] not in log:
@@ -137,9 +141,10 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
         rec["logTail"] = log[-1500:]
         return rec
 
-    if out is None:  # selftest / text-only
+    if out is None:  # selftest / tool / 其他纯文本用例
         rec["verdict"] = "bytes"
-        rec["detail"] = f"selftest 通过（{case.get('expectLog', 'ok')}）"
+        label = "selftest 通过" if kind == "selftest" else "文本用例通过"
+        rec["detail"] = f"{label}（exit {code}，{case.get('expectLog', 'ok')}）"
         return rec
 
     verdict, detail = judge_image(out, show.baseline_for(case, backend))
