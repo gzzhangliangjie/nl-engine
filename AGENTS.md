@@ -56,11 +56,28 @@
 
 ---
 
+## 里程碑交付纪律（每个里程碑收口必做，2026-11-07 固化）
+
+**每个里程碑（M0.x 各阶段、S* 各子阶段）验收通过、准备放行之前，必须完成下列「交代」，缺一不可；tag 在验收通过之后才打，严禁「先 tag 再补证明」。**
+
+1. **先验收再放行**：每阶段节奏是 `目标 → 亲眼可见用例 → 验收判据 → 放行`。用例必须是能亲眼看到 / 截图 / 演示的东西，不能是「我觉得写完了」。
+2. **必须有「交代」**（渲染版本 / 工具版本各一套）：
+   - **渲染版本** = `example/` 截图基线（基线 PNG + `run.bat` 进 `example/<版本>/`，登记唯一数据源 `example/cases.json`）。
+   - **工具版本** = 展示台网页 `kind:"tool"` 用例（点运行实跑、输出展开；usage / 正向 / 负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s*/...-TOOLS-GUIDE.md` 式归档。工具不产 GPU 截图时，也要有从工具真实输出生成的证据图（cases.json `preview` 静态图，不许手绘示意）。
+3. **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`；验收 / tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
+4. **提交 / tag 前总闸全绿**：`python tools/regression.py` 全量历史用例 × 双后端比对基线全绿，才算放行（M0.9 起生效）。
+5. **每个小里程碑本地提交一波 + 打 tag**：`docs/MILESTONES.md` 四栏（动作 / 提交版本 / 完成情况 / 踩坑）写实追加，不许只写「done」。
+6. **固化文档**：本阶段新产生的约定、不变量、口径变更，必须写回 canonical 文档（`docs/s*/S*-PLAN.md`、`docs/ROADMAP.md`、`docs/MILESTONES.md`、或 `.workbuddy/memory/MEMORY.md`），不许只活在 commit message 或口头里。
+
+> 规范详版见 `docs/ROADMAP.md`「里程碑交代规范」节与 `.workbuddy/memory/MEMORY.md`「开发节奏」节。
+
+---
+
 ## 本项目其余硬约束（速查，完整见各文档）
 
 - **UE 源码只读不抄**：EULA 与项目 MIT 不兼容，一行 UE 代码都不许进 repo；参考结构与边界情况处理思路。
 - **构建链不依赖任何厂商图形 SDK**：`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `find_package(Vulkan)`。后端对称：D3D12 走 Windows SDK，Vulkan 头走 `NVRHI_FETCH_VULKAN_HEADERS`，Slang 独立获取。
 - **图形 API / NVRHI / ImGui 符号只允许在 `renderer/`**；`core/` / `viewer/` 零命中。
 - **一份 `.slang` 双目标（SPIR-V + DXIL）两后端加载成功** = 通用管线验收核心。
-- **里程碑必须有「交代」**：渲染版本 = `example/` 截图基线；工具版本 = 展示台 `kind:"tool"` 用例（实跑输出展开）+ `docs/s*/...-TOOLS-GUIDE.md` 归档。提交 / tag 前 `python tools/regression.py` 全绿、`.workbuddy/memory/MEMORY.md` 登记四栏台账。
+- **里程碑必须有「交代」**：见上方「里程碑交付纪律」节（渲染版 = `example/` 基线、工具版 = 展示台用例 + 归档；tag 在验收后打、提交前 regression 全绿、四栏台账写实、约定写回 canonical 文档）。
 - **用户实测结论 > 任何网页 / 官方文档信息**。
