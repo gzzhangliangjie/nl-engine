@@ -5,6 +5,7 @@
 // 本文件只依赖 NVRHI 公共头（nvrhi.h），不 include d3d12.h / vulkan.h。
 
 #include "nl/renderer/renderer.hpp"
+#include "gpu_timer.hpp"     // M4.2：cull pass 计时（renderer/src 内部共享，只依赖 NVRHI 抽象）
 
 #include <nvrhi/nvrhi.h>
 
@@ -75,6 +76,12 @@ public:
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
     // 没有数据（前两帧 / 非剔除路径）时 visibleClusters() 返回 -1。
     void pollCullStats(nvrhi::IDevice* device);
+
+    // M4.2：cull pass GPU 计时轮询。backend 必须在 hud_.build() **之前**调用——
+    // viewer 每帧重建 HudFrame，build 之后写的标志活不过当帧（实测踩坑）。query
+    // 延迟到第一次 HUD 路径才建（--no-hud / hud==nullptr 完全不碰，纪律同 M0.6）；
+    // deterministic（截图回归）下不写回真实计时，viewer 提供固定样本保基线 MD5。
+    void pollCullTimer(nvrhi::IDevice* device, HudFrame* hud);
 
     // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
     // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
@@ -187,6 +194,12 @@ private:
     // 每帧 compute dispatch 前整体重写 args（indexCount 等静态字段不变、instanceCount=0
     // 由 GPU atomicAdd 重建）。init 时按 stride 一次填好。
     nvrhi::DrawIndexedIndirectArguments cullArgsReset_{};
+
+    // ---- M4.2：cull pass GPU 计时 ----
+    // 与整帧计时（backend 的 gpuTimer_）独立的第二个 GpuTimer 实例，begin/end 只包住
+    // Scene::draw 里的 compute 剔除段。query 延迟到第一次 HUD 路径的 pollCullStats 才建，
+    // --no-hud 截图与历史基线完全不碰（M0.6 同款纪律）。
+    GpuTimer cullTimer_;   // setLabel("cull")：resolve 日志与整帧计时区分开
 };
 
 } // namespace nl::renderer::detail

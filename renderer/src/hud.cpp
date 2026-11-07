@@ -243,7 +243,9 @@ void Hud::build(HudFrame& frame) {
     // M0.6 增了 GPU 行 + 曲线后内容更高，上限从 400 提到 460，960x540 下不裁底。
     // M0.7 又增 model 行，上限提到 480（640x360 小画布仍靠滚动条收纳）。
     // M0.8 增 shading 下拉框（wireframe 复选框与 cull 并行不占新行），上限提到 510。
-    const float panelH = std::min(510.0f, frame.displayHeight - 28.0f);
+    // M4.2 增 cull GPU 行 + cull ms 曲线（仅 cull 模式占位），510 装不下出滚动条，
+    // 上限提到 560；小画布仍由 min(cap, displayHeight-28) 兜底，行为不变。
+    const float panelH = std::min(560.0f, frame.displayHeight - 28.0f);
     ImGui::SetNextWindowSize(ImVec2(330.0f, std::max(180.0f, panelH)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);   // 半透明：HUD 与背后的模型同时看得见
     ImGui::Begin("nl-engine HUD", nullptr, ImGuiWindowFlags_NoResize);
@@ -324,6 +326,13 @@ void Hud::build(HudFrame& frame) {
             std::snprintf(cullLine, sizeof(cullLine), "frustum : -- / %d clusters",
                           frame.totalClusters);
             ImGui::TextUnformatted(cullLine);
+        }
+        // M4.2：cull pass GPU 耗时（独立 timer 实例，只包 compute 剔除段）。
+        // 与整帧 GPU ms 并排——剔除开销是否随场景规模变化一眼可见。
+        if (frame.cullTimingAvailable) {
+            ImGui::Text("cull GPU  %.3f ms", frame.cullMs);
+            ImGui::PlotLines("cull ms", frame.cullMsHistory, frame.cullMsCount,
+                             0, nullptr, 0.0f, 1.0f, ImVec2(260.0f, 30.0f));
         }
     }
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
@@ -466,6 +475,8 @@ bool hudSelfTest() {
     if (!f.cullBack || f.frameMsCount != 0 || f.colorIndex != 0 ||
         f.resetCamera || f.wantCaptureMouse || f.deterministic) return false;
     if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
+    // M4.2：cull 计时通道缺省全零（非 cull 模式 HUD 布局一像素不动的保证）。
+    if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;

@@ -298,6 +298,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
                      const char* nmeshFile, bool frustumCull, std::string& outError) {
     frustumCull_ = frustumCull;
+    cullTimer_.setLabel("cull");   // M4.2：resolve 日志标明这是 cull pass 实例
     // ---- 1. shader 对（cull 专用入口 vsCull/psCull）。DX12 入口名被忽略，Vulkan 恒 main ----
     auto shaderPath = [shaderSuffix](const char* artifact) {
         return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
@@ -639,6 +640,16 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
 // 本帧绘制会在同一个环形槽写入新值，但那发生在本函数读完成之后，无竞争）。
 // mapBuffer 内部等待 lastUseFence（DX12 d3d12-buffer.cpp / Vulkan 同构），两帧
 // 延迟下正常零等待，不构成主循环里的等待型 map。
+void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
+    if (!cull_ || !frustumCull_ || !hud) return;
+    // M4.2：cull pass 计时轮询。必须在 hud_.build() 之前调用（viewer 每帧重建
+    // HudFrame，晚于 build 写标志 = 永远显示不出来，M4.2 实测踩坑）。
+    if (cullTimer_.ensure(device)) {
+        float cullMs = 0.0f;
+        if (!hud->deterministic && cullTimer_.poll(cullMs)) hud->cullMs = cullMs;
+        hud->cullTimingAvailable = true;
+    }
+}
 void Scene::pollCullStats(nvrhi::IDevice* device) {
     if (!cull_ || !frustumCull_) return;
     if (cullSubmitted_ < 2) return;                       // 窗口未填满，尚无数据
@@ -968,7 +979,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         //   3) copyBuffer 把 args[1] 拷进回读环形（pollCullStats 延迟两帧消费）；
         //   4) graphics 读 args + 可见列表，一次 drawIndexedIndirect。
         // UAV→SRV/IndirectArgument 的状态转换由 NVRHI 状态跟踪插入（validation 实测）。
+        // M4.2：cull pass 单独计时——begin/end 只包剔除段（args 重写 + dispatch +
+        // 回读拷贝），整帧计时仍由 backend 的 gpuTimer_ 负责。query 未建（--no-hud）
+        // 时 begin 返回 false，本帧不计时、不报错（与整帧计时同款静默降级）。
         if (frustumCull_) {
+            const bool cullTiming = cullTimer_.begin(cmd);
             cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
 
             nvrhi::ComputeState cstate;
@@ -979,6 +994,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             // instanceCount 在 DrawIndexedIndirectArguments 第 2 个 uint（offset 4）。
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], 0,
                             indirectArgs_, sizeof(std::uint32_t), sizeof(std::uint32_t));
+            if (cullTiming) cullTimer_.end(cmd);
             ++cullSubmitted_;
         }
 
@@ -1044,6 +1060,7 @@ void Scene::shutdown() {
     cullSubmitted_ = 0;
     cullPolledSlot_ = -1;
     cullVisibleCount_ = -1;
+    cullTimer_.shutdown();   // M4.2：device 仍存活时释放 cull 计时 query
     clusterCount_ = 0;
     frustumCull_ = false;
     vertexPool_ = nullptr;

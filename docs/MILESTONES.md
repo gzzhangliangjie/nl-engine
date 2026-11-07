@@ -19,6 +19,7 @@
 | M0.7 高模测试资产 + `--model` | ✅ 验收通过 | `m0.7` | 2026-11-07 | gen-dense-mesh.py 程序化致密网格（纽结 204,800 / 球 327,680 tri，MD5 确定）；`--model` 白名单加载 + HUD model 行；GPU ms 3,936→327,680 tri 双后端互证；meshoptimizer v1.3 vendored（不入构建）；S1 切簇命门就位 |
 | M4.0 GPU 簇数据通路 + vertex pulling | ✅ 验收通过 | `s4-indirect` | 2026-11-08 | 单 drawIndexedIndirect 全簇全画（cull 模式 vertex pulling）；`--mode cull` 与 `--mode cluster` 同机位同 shading 逐字节相同（DX12/Vulkan 各自一致），deviceErrors=0；kStage=S4.0；交代物 example/s4-indirect + cases.json s4.0 卡 |
 | M4.1 GPU 视锥剔除 + 可见列表间接寻址 | ✅ 验收通过 | `s4-cull` | 2026-11-08 | compute 剔除 pass（csCull 5 平面包围球测试）+ atomicAdd append visibleList + indirectArgs.instanceCount 回写；pass-through（正对全可见）与 cluster 基线逐字节相同；真剔除姿态（进模 dist0.45/640x720）GPU 30/237 == frustum_check.py 离线 30，双后端一致；kStage=S4.1；交代物 example/s4-cull + cases.json s4.1/s4.1-tools 卡 |
+| M4.2 HUD 统计 + 1M 场景 + 性能验收 | ✅ 验收通过 | `s4-done` | 2026-11-08 | cull pass 接第二个 GpuTimer 实例（[frame]/[cull] resolve 日志 + HUD cull GPU 行/曲线）；IcoSphereDense1M 入仓（1,310,720 tri / 19,718 簇 / 33.5MB .nmesh，coverage 100%）；1.3M tri 正对 640x360 全可见 pass-through cull==cluster 逐字节（跨后端也 bytes）；进模 1932/19718（剔除 90.2%）== 离线，双后端一致；60fps：CPU avg 4.9~5.5ms / 整帧 GPU 0.96~1.02ms / cull pass ~0.010ms（判据 16.6ms 余两数量级）；kStage=S4.2；交代物 example/s4-done + cases.json s4.2/s4.2-tools 卡 |
 
 ---
 
@@ -776,3 +777,27 @@
 **完成情况**：ctest b2-graph-selftest / b3-graph-genslang / b4-graph-hot-reload 全绿（主干同步后 3/3 复验）；生成 .slang 经 slangc SPIR-V+DXIL 双后端四入口全过（genslang: OK）；热重载实测后台轮询检测到 .mg 变更并二次重编译 OK；证据图 b3-nodegraph.{svg,png}（4 节点 3 连线，非手绘）。B 路阶梯推进至 B4，B5（接 PBR 材质 pass）排 S7 后。
 
 **踩坑情况**：① junction 共享 .workbuddy 本地改动挡 merge 且 skip-worktree 下 stash 不可见——物理备份→临时 no-skip-worktree 还原→merge→cp 恢复→重设；② reg.exe 被沙箱拉黑致 vcvarsall 缺 SDK——手动注入 SDK 路径，构建批处理禁中文注释（代码页拆行）；③ 匿名命名空间内 main 无外部链接致链接失败；④ system() 路径无条件加引号会被 cmd 解析坏，含空格才加；⑤ watch 长进程管道全缓冲致实时输出不可见——setvbuf _IONBF；⑥ render 节点高度漏算属性行致 value 文本溢出——统一 nodeHeight() 口径。
+
+## M4.2 HUD 统计 + 1M 场景 + 性能验收（tag `s4-done`，2026-11-08）
+
+**动作**
+- **cull pass GPU 计时**：`Scene` 持第二个 `GpuTimer` 实例（`cullTimer_`，setLabel("cull")），begin/end 只包 `Scene::draw` 的 compute 剔除段（args 重写 + dispatch + 回读拷贝）；`GpuTimer` resolve 日志加实例标签（`[frame]`/`[cull]`，只影响日志文本不碰基线）。backend 在 `hud_.build()` **之前**调 `scene_.pollCullTimer(device, hud)`（与整帧计时同位同序）；`pollCullStats` 保持只做回读。`HudFrame` 加 cullMs/cullMsHistory[120]/cullMsCount/cullTimingAvailable；viewer 维护 cullHistory 曲线 + deterministic 固定样本 kFixedCullSamples（0.08ms 量级）；HUD 在 frustum 行下新增 `cull GPU x.xxx ms` 文本 + 曲线（仅 cull 模式占位，其它模式布局一像素不动）。
+- **1M 资产入仓**：`gen-dense-mesh.py --shape icosphere --subdiv 8` → `IcoSphereDense1M.glb`（655,362 顶点 / 1,310,720 tri，md5 `ea0b6749d0a681c0610bd23882a072e1`，36.7MB）→ `nanite-tools cluster` → `IcoSphereDense1M.nmesh`（19,718 簇，avg 66.5 tri/簇，coverage 100%，limits PASS，33.5MB）。S4-PLAN 预估 ~6554 簇，实测 19,718（meshoptimizer 按簇上限切得更细），如实记录。
+- **CPU 帧耗时日志**：截图模式（无 16ms 节流）累计 dtSum/dtMax，收尾打 `frame timing: avg X ms max Y ms over N frames (unthrottled)`——60fps CPU 侧机械证据，只进日志不进画面。
+- **面板高度上限 510→560**：cull 模式新内容（frustum 行已有 + cull GPU 行 + 曲线）超出 510 出滚动条；小画布仍由 `min(cap, H-28)` 兜底，行为不变。这是 MEMORY「面板高度≤510」约定的一次显式修订（内容驱动，非随意放宽）。
+- kStage → `S4.2 GPU frustum culling + perf acceptance (cull pass GPU timing, 1.3M-tri dense scene)`；selftest stage 断言同步改。
+
+**提交版本**：s4-done（本轮）
+
+**完成情况**
+- **1.3M tri pass-through**：正对 640x360（frustum_check 640x360 = 19718/19718 全可见）`--mode cull` 与 `--mode cluster` 逐字节相同，且 **DX12==Vulkan 跨后端也逐字节一致**（bytes 最优档）。640x720 下 frustum 剔 1353 簇、GPU 位图仍与 cluster 一致（包围球测试保守性：视锥外簇零像素贡献的实证）。
+- **真剔除 GPU==离线**：进模 dist0.45/640x720 GPU 1932/19718（剔除 **90.2%** > 85% 判据）== `frustum_check.py --expect 1932`，DX12/Vulkan 一致；封闭球从内部看全背面、cullBack 画面为空属正确行为（Suzanne 是开放壳所以有画面），可见列表真实光栅化由 `--cull none` 内壁满屏簇色马赛克证明（跨后端 bytes 一致）。
+- **60fps（RTX 4060 Laptop）**：CPU avg 4.87~5.55ms（30 帧无节流，max 尖峰为首帧预热）；整帧 GPU 0.96~1.02ms（正对）/ 0.17ms（进模）；cull pass 恒约 **0.010ms**（19,718 簇一次 dispatch）——距 16.6ms 判据两个数量级，双后端互证。
+- **总闸**：`regression.py` **176/176 ALL GREEN**（bytes 176 / near 0 / FAIL 0）；`server.py --check` OK（stage=S4.2 version=s4.2 cases=3 baselines=9）；双后端 selftest 15/15。
+- 交代物：`example/s4-done/`（8 PNG + run.bat 四段验收 exit 0）+ cases.json s4.2 卡（dense-front-pair / dense-inside-hud / dense-inside-none）+ s4.2-tools 卡（2 正向 --expect + 1 负向 exit 1）+ `docs/s4/S4-TOOLS-GUIDE.md` M4.2 节 + `docs/screenshots/s4-front.png`/`s4-inside.png`（HUD 93.1% vs 9.8% 对比）。
+
+**踩坑情况**
+1. **cull 计时轮询时序**：初版把 `pollCullTimer` 放在 `pollCullStats`（`hud_.build()` 之后）——viewer 每帧重建 `HudFrame{}`，晚于 build 写标志当帧即丢，HUD 的 cull GPU 行永远显示不出来（整帧计时在 build 之前轮询所以从未踩过）。修为与整帧计时同位：backend HUD 分支内、build 之前调 `pollCullTimer`。
+2. **batch else 块里的括号**：run.bat `else (echo ... (all visible ...))` 文本中的 `)` 把 else 块提前闭合，脚本静默断尾。echo 文本禁裸括号。
+3. **宽高比坑重现（M4.1 踩坑②）**：run.bat 离线 front 对照初版写 18365（640x720 值）对照 640x360 GPU 用例 → MISMATCH；640x360 实为 19718 全可见。离线对照必须与 GPU 用例同尺寸，M4.2 再验一次。
+4. **基线维护（预期内）**：kStage bump 重拍 m0.9/s2.0/s3.2 三对 HUD 基线之外，`s4.1/cull-inside-hud` 一对因 cull 模式 HUD 新增两行也须重拍——HUD 布局演进会波及所有含该模式的 HUD 基线，总闸兜住。

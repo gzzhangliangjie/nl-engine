@@ -1,2370 +1,2623 @@
 {
- "project": "nl-engine",
- "title": "S0 成果展示台",
- "subtitle": "按里程碑加载 example/ 里的成功用例，可直接运行看效果",
- "source": "example/cases.json（版本与用例的唯一数据源；截图与复现脚本都在本目录）",
- "versions": [
-  {
-   "id": "m0.1",
-   "label": "M0.1",
-   "name": "骨架 + 空窗口",
-   "tag": "s0-init",
-   "date": "2026-11-06",
-   "summary": "三个 target（core / renderer / viewer）+ GLFW 空窗口 + 日志断言框架。无 GPU 回读，成果是「窗口真的弹出来」和自检。",
-   "acceptance": [
-    "空窗口弹出、ESC 退出",
-    "SELFTEST PASS (7/7)",
-    "DX12 / Vulkan 两种后端配置都 PASS"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
+  "project": "nl-engine",
+  "title": "S0 成果展示台",
+  "subtitle": "按里程碑加载 example/ 里的成功用例，可直接运行看效果",
+  "source": "example/cases.json（版本与用例的唯一数据源；截图与复现脚本都在本目录）",
+  "versions": [
     {
-     "id": "selftest",
-     "name": "自检 7/7",
-     "kind": "selftest",
-     "note": "断言框架、日志、窗口描述符、编译期后端开关全部走一遍。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.1/run.bat selftest"
-    },
-    {
-     "id": "window",
-     "name": "空窗口（交互）",
-     "kind": "manual",
-     "note": "该版本没有 GPU 回读能力，窗口用例需人眼确认：1280×720 无 GL 上下文窗口，ESC 退出。不在网页里自动运行（会阻塞并抢焦点）。",
-     "args": [],
-     "command": "viewer.exe",
-     "script": "example/m0.1/run.bat window"
-    }
-   ]
-  },
-  {
-   "id": "m0.2",
-   "label": "M0.2",
-   "name": "设备 + swapchain",
-   "tag": "s0-device",
-   "date": "2026-11-06",
-   "summary": "NVRHI device + swapchain 双后端，GPU 像素真回读写 PNG；零厂商 SDK，Vulkan 全函数运行时解析。",
-   "acceptance": [
-    "双后端清屏逐字节相同（MD5 bdebaf50…）",
-    "resize 640×360 → 1024×768 不黑屏",
-    "deviceErrors=0、退出无段错误"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "clear",
-     "name": "双后端清屏",
-     "kind": "pair",
-     "note": "同一份清屏色经两条完全不同的后端路径写出 PNG，逐字节相同即证明抽象层没绑死单一 API。",
-     "baselines": {
-      "dx12": "example/m0.2/clear-dx12.png",
-      "vulkan": "example/m0.2/clear-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8",
-     "script": "example/m0.2/run.bat clear"
-    },
-    {
-     "id": "resize",
-     "name": "resize 回归",
-     "kind": "image",
-     "note": "运行中重建 swapchain，前后两张 PNG 均非黑；同时产出 <out>.before.png。",
-     "baselines": {
-      "dx12": "example/m0.2/resize-dx12.png",
-      "vulkan": "example/m0.2/resize-vulkan.png"
-     },
-     "beforeBaselines": {
-      "dx12": "example/m0.2/resize-dx12-before.png",
-      "vulkan": "example/m0.2/resize-vulkan-before.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--resize",
-      "1024x768"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --resize 1024x768",
-     "script": "example/m0.2/run.bat resize"
-    },
-    {
-     "id": "clear-color",
-     "name": "清屏色切换",
-     "kind": "image",
-     "note": "--color 0..3 切换四种清屏色，验证 clear 值一路传到两个后端；基线对应默认的 --color 1。",
-     "baselines": {
-      "dx12": "example/m0.2/color-dx12.png",
-      "vulkan": "example/m0.2/color-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "4",
-      "--color",
-      "{color}"
-     ],
-     "params": {
-      "color": {
-       "type": "select",
-       "label": "清屏色",
-       "default": "1",
-       "options": [
-        "0",
-        "1",
-        "2",
-        "3"
-       ]
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 4 --color 1",
-     "script": "example/m0.2/run.bat color"
-    }
-   ]
-  },
-  {
-   "id": "m0.3",
-   "label": "M0.3",
-   "name": "三角形 + 帧同步",
-   "tag": "s0-triangle",
-   "date": "2026-11-06",
-   "summary": "一份 triangle.slang 同出 SPIR-V 与 DXIL，两后端各画出顶点色三角形；frame-in-flight=2。",
-   "acceptance": [
-    "深蓝底 + 红顶 / 蓝左下 / 绿右下三角形",
-    "SPIR-V 入口恒为 main 的坑已修，Vulkan 不再空白",
-    "selftest 9/9、8 帧连续渲染稳定、deviceErrors=0"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "triangle",
-     "name": "双后端三角形",
-     "kind": "pair",
-     "note": "M0.3 验收时只查了画面没落盘截图；这里用 s0-triangle 原始代码现场重建并补图。两后端 PNG 逐字节相同。",
-     "baselines": {
-      "dx12": "example/m0.3/triangle-dx12.png",
-      "vulkan": "example/m0.3/triangle-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8",
-     "script": "example/m0.3/run.bat triangle"
-    },
-    {
-     "id": "selftest",
-     "name": "自检 9/9",
-     "kind": "selftest",
-     "note": "两后端字节码魔数、输入布局、日志断言一起过。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.3/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "m0.4",
-   "label": "M0.4",
-   "name": "模型 + 贴图 + 轨道相机",
-   "tag": "s0-model",
-   "date": "2026-11-07",
-   "summary": "tinygltf 读 Suzanne.glb，共享 Scene 上传 VB/IB/贴图/绑定集；model.slang 单源双目标；深度缓冲 + 背面剔除 + 轨道相机。",
-   "acceptance": [
-    "正常视角带贴图 Suzanne 双后端 PNG 逐字节一致（内壁/resize 像素差 ≤1/255）",
-    "相机钻进模型后：开剔除只剩背景，关剔除见内壁",
-    "resize 回归、selftest 11/11、deviceErrors=0"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "suzanne",
-     "name": "带贴图 Suzanne",
-     "kind": "pair",
-     "note": "固定相机角度保证可复现；调下面的参数可以现场换视角看效果。双后端 PNG 的 MD5 在正常视角下完全相同。",
-     "baselines": {
-      "dx12": "example/m0.4/suzanne-dx12.png",
-      "vulkan": "example/m0.4/suzanne-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--yaw",
-      "{yaw}",
-      "--pitch",
-      "{pitch}",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "{cull}"
-     ],
-     "params": {
-      "yaw": {
-       "type": "range",
-       "label": "水平角 yaw",
-       "min": -180,
-       "max": 180,
-       "step": 1,
-       "default": "12"
+      "id": "m0.1",
+      "label": "M0.1",
+      "name": "骨架 + 空窗口",
+      "tag": "s0-init",
+      "date": "2026-11-06",
+      "summary": "三个 target（core / renderer / viewer）+ GLFW 空窗口 + 日志断言框架。无 GPU 回读，成果是「窗口真的弹出来」和自检。",
+      "acceptance": [
+        "空窗口弹出、ESC 退出",
+        "SELFTEST PASS (7/7)",
+        "DX12 / Vulkan 两种后端配置都 PASS"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
-      "pitch": {
-       "type": "range",
-       "label": "俯仰 pitch",
-       "min": -80,
-       "max": 80,
-       "step": 1,
-       "default": "9"
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "自检 7/7",
+          "kind": "selftest",
+          "note": "断言框架、日志、窗口描述符、编译期后端开关全部走一遍。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.1/run.bat selftest"
+        },
+        {
+          "id": "window",
+          "name": "空窗口（交互）",
+          "kind": "manual",
+          "note": "该版本没有 GPU 回读能力，窗口用例需人眼确认：1280×720 无 GL 上下文窗口，ESC 退出。不在网页里自动运行（会阻塞并抢焦点）。",
+          "args": [],
+          "command": "viewer.exe",
+          "script": "example/m0.1/run.bat window"
+        }
+      ]
+    },
+    {
+      "id": "m0.2",
+      "label": "M0.2",
+      "name": "设备 + swapchain",
+      "tag": "s0-device",
+      "date": "2026-11-06",
+      "summary": "NVRHI device + swapchain 双后端，GPU 像素真回读写 PNG；零厂商 SDK，Vulkan 全函数运行时解析。",
+      "acceptance": [
+        "双后端清屏逐字节相同（MD5 bdebaf50…）",
+        "resize 640×360 → 1024×768 不黑屏",
+        "deviceErrors=0、退出无段错误"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
-      "dist": {
-       "type": "range",
-       "label": "距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "4.2"
+      "cases": [
+        {
+          "id": "clear",
+          "name": "双后端清屏",
+          "kind": "pair",
+          "note": "同一份清屏色经两条完全不同的后端路径写出 PNG，逐字节相同即证明抽象层没绑死单一 API。",
+          "baselines": {
+            "dx12": "example/m0.2/clear-dx12.png",
+            "vulkan": "example/m0.2/clear-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8",
+          "script": "example/m0.2/run.bat clear"
+        },
+        {
+          "id": "resize",
+          "name": "resize 回归",
+          "kind": "image",
+          "note": "运行中重建 swapchain，前后两张 PNG 均非黑；同时产出 <out>.before.png。",
+          "baselines": {
+            "dx12": "example/m0.2/resize-dx12.png",
+            "vulkan": "example/m0.2/resize-vulkan.png"
+          },
+          "beforeBaselines": {
+            "dx12": "example/m0.2/resize-dx12-before.png",
+            "vulkan": "example/m0.2/resize-vulkan-before.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--resize",
+            "1024x768"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --resize 1024x768",
+          "script": "example/m0.2/run.bat resize"
+        },
+        {
+          "id": "clear-color",
+          "name": "清屏色切换",
+          "kind": "image",
+          "note": "--color 0..3 切换四种清屏色，验证 clear 值一路传到两个后端；基线对应默认的 --color 1。",
+          "baselines": {
+            "dx12": "example/m0.2/color-dx12.png",
+            "vulkan": "example/m0.2/color-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--color",
+            "{color}"
+          ],
+          "params": {
+            "color": {
+              "type": "select",
+              "label": "清屏色",
+              "default": "1",
+              "options": [
+                "0",
+                "1",
+                "2",
+                "3"
+              ]
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 4 --color 1",
+          "script": "example/m0.2/run.bat color"
+        }
+      ]
+    },
+    {
+      "id": "m0.3",
+      "label": "M0.3",
+      "name": "三角形 + 帧同步",
+      "tag": "s0-triangle",
+      "date": "2026-11-06",
+      "summary": "一份 triangle.slang 同出 SPIR-V 与 DXIL，两后端各画出顶点色三角形；frame-in-flight=2。",
+      "acceptance": [
+        "深蓝底 + 红顶 / 蓝左下 / 绿右下三角形",
+        "SPIR-V 入口恒为 main 的坑已修，Vulkan 不再空白",
+        "selftest 9/9、8 帧连续渲染稳定、deviceErrors=0"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
-      "cull": {
-       "type": "select",
-       "label": "背面剔除",
-       "default": "back",
-       "options": [
-        "back",
-        "none"
-       ]
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-     "script": "example/m0.4/run.bat suzanne"
+      "cases": [
+        {
+          "id": "triangle",
+          "name": "双后端三角形",
+          "kind": "pair",
+          "note": "M0.3 验收时只查了画面没落盘截图；这里用 s0-triangle 原始代码现场重建并补图。两后端 PNG 逐字节相同。",
+          "baselines": {
+            "dx12": "example/m0.3/triangle-dx12.png",
+            "vulkan": "example/m0.3/triangle-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8",
+          "script": "example/m0.3/run.bat triangle"
+        },
+        {
+          "id": "selftest",
+          "name": "自检 9/9",
+          "kind": "selftest",
+          "note": "两后端字节码魔数、输入布局、日志断言一起过。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.3/run.bat selftest"
+        }
+      ]
     },
     {
-     "id": "inner",
-     "name": "关剔除：看到内壁",
-     "kind": "pair",
-     "note": "相机距离压到 0.6（模型内部）：cull=none 显示带贴图内壁。与下面「开剔除」用例同机位对照。",
-     "baselines": {
-      "dx12": "example/m0.4/inner-dx12.png",
-      "vulkan": "example/m0.4/inner-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "4",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "none"
-     ],
-     "params": {
-      "dist": {
-       "type": "select",
-       "label": "相机距离",
-       "default": "0.6",
-       "options": [
-        "0.6",
-        "4.2"
-       ]
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull none",
-     "script": "example/m0.4/run.bat inner"
-    },
-    {
-     "id": "inner-cullback",
-     "name": "开剔除：只剩背景",
-     "kind": "pair",
-     "note": "同一机位把 cull 打开，内壁背面被剔掉，画面只剩清屏色——「剔除真生效」的可见证据。",
-     "baselines": {
-      "dx12": "example/m0.4/inner-cullback-dx12.png",
-      "vulkan": "example/m0.4/inner-cullback-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "4",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "0.6",
-      "--cull",
-      "back"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull back",
-     "script": "example/m0.4/run.bat inner"
-    },
-    {
-     "id": "resize",
-     "name": "resize 回归",
-     "kind": "pair",
-     "note": "640×360 → 1024×768，深度纹理 / framebuffer / pipeline 全部重建；保存前后两张图对照。",
-     "baselines": {
-      "dx12": "example/m0.4/resize-dx12.png",
-      "vulkan": "example/m0.4/resize-vulkan.png"
-     },
-     "beforeBaselines": {
-      "dx12": "example/m0.4/resize-dx12-before.png",
-      "vulkan": "example/m0.4/resize-vulkan-before.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--resize",
-      "1024x768"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --resize 1024x768",
-     "script": "example/m0.4/run.bat resize"
-    },
-    {
-     "id": "selftest",
-     "name": "自检 11/11",
-     "kind": "selftest",
-     "note": "相机边界、矩阵、输入默认值、渲染器阶段标记一起过。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.4/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "m0.5",
-   "label": "M0.5",
-   "name": "ImGui HUD + S0 总验收",
-   "tag": "s0-done",
-   "date": "2026-11-07",
-   "summary": "一份 NVRHI 共享 HUD 渲染后端把 ImGui 叠到两后端画面上（hud.slang 同样单源出 SPIR-V + DXIL）；--mode 分发器定型；S0 三条硬指标总验收。",
-   "acceptance": [
-    "HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 后端名 / mode / 调试层，且 3D 画面同时可见",
-    "--no-hud 画面与 M0.4 基线逐字节相同（MD5 7e528087…），双后端一致",
-    "selftest 14/14，含 8 个 Slang 产物魔数（SPIR-V 0x07230203 / DXIL DXBC）",
-    "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "hud",
-     "name": "双后端 ImGui HUD",
-     "kind": "pair",
-     "note": "两张 PNG 必然不同：HUD 里印的 backend 与 debug layer 本来就按后端不同，这正是「当前后端名」的可见证据；3D 部分与 M0.4 一致。截图回归模式下时序数据用固定样本（面板标 capture/replay），所以 PNG 可复现。拖下面的 dist 滑块可现场改视角，此时与基线不同属预期。",
-     "baselines": {
-      "dx12": "example/m0.5/hud-dx12.png",
-      "vulkan": "example/m0.5/hud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "back"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "4.2"
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-     "script": "example/m0.5/run.bat hud"
-    },
-    {
-     "id": "controls",
-     "name": "HUD 控件值 → 画面变化（清屏色）",
-     "kind": "pair",
-     "note": "与上面的 hud 用例对照看：同一个 HudFrame 的 colorIndex 从 0 变 2，HUD 的 clear color 控件显示 2、背景从深蓝变绿，Suzanne 正脸仍完整可见；back-face culling 复选框也按 cullBack 显示勾选状态。命令行给的是控件初值，和鼠标点控件写回 viewer 走的是同一条双向 POD 通道；真实鼠标点选另见交互用例。两张 PNG 不同是 HUD 里的 backend / debug 文本不同，不是 3D 画面不一致：实测 895 个差异像素的 bbox 为 x=23..328 / y=77..147，全在 adapter / debug 两行文字内，3D 区域零差异。",
-     "baselines": {
-      "dx12": "example/m0.5/controls-dx12.png",
-      "vulkan": "example/m0.5/controls-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--color",
-      "2"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
-     "script": "example/m0.5/run.bat controls"
-    },
-    {
-     "id": "nohud",
-     "name": "关 HUD：历史基线逐字节不变",
-     "kind": "pair",
-     "note": "--no-hud 时完全不碰 ImGui，M0.1~M0.4 的回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4/suzanne-*.png 相同。",
-     "baselines": {
-      "dx12": "example/m0.5/nohud-dx12.png",
-      "vulkan": "example/m0.5/nohud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
-     "script": "example/m0.5/run.bat nohud"
-    },
-    {
-     "id": "resize",
-     "name": "HUD + resize 回归",
-     "kind": "pair",
-     "note": "640×360 → 1024×768，depth / framebuffer / 两套 Scene pipeline / HUD pipeline 一起重建；保存前后两张图对照。两后端 PNG 不同是 HUD 里的 backend / debug 文字本来不同，不是 3D 画面不一致（关掉 HUD 的对照用例逐字节相同）。",
-     "baselines": {
-      "dx12": "example/m0.5/resize-dx12.png",
-      "vulkan": "example/m0.5/resize-vulkan.png"
-     },
-     "beforeBaselines": {
-      "dx12": "example/m0.5/resize-dx12-before.png",
-      "vulkan": "example/m0.5/resize-vulkan-before.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "640x360",
-      "--resize",
-      "1024x768",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/m0.5/run.bat resize"
-    },
-    {
-     "id": "selftest",
-     "name": "自检 14/14 + 8 个 shader 产物",
-     "kind": "selftest",
-     "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (14/14)",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.5/run.bat selftest"
-    },
-    {
-     "id": "hud-controls",
-     "name": "HUD 控件（交互）",
-     "kind": "manual",
-     "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
-     "args": [
-      "--mode",
-      "normal",
-      "--hud"
-     ],
-     "command": "viewer.exe --mode normal --hud",
-     "script": "example/m0.5/run.bat controls"
-    }
-   ]
-  },
-  {
-   "id": "m0.6",
-   "label": "M0.6",
-   "name": "GPU 帧内计时（NVRHI timestamp query）",
-   "tag": "m0.6",
-   "date": "2026-11-07",
-   "summary": "两后端共享的 GpuTimer 用一对 NVRHI timer query 包住整帧 GPU 命令，异步轮询出真实 GPU 耗时；HUD 在 CPU frame ms 旁新增 GPU ms 行 + gpu ms 曲线，一眼分清 CPU 帧间隔与 GPU 耗时。",
-   "acceptance": [
-    "交互模式两后端均有 'gpu timer resolved' 日志（DX12 0.0369 ms / Vulkan 0.0380 ms，量级合理）",
-    "HUD 并排显示 CPU frame ms 与 GPU ms（NVRHI timer），各自曲线",
-    "--no-hud 完全不建 query，两后端 PNG MD5 仍为 7e528087…（M0.4/M0.5 基线逐字节不变）",
-    "截图回归模式 GPU 样本固定（面板标 capture/replay），PNG 可复现",
-    "selftest 14/14（HUD selftest 覆盖秒→ms 换算与环形游标回绕），ctest 两后端 100%"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "hud",
-     "name": "GPU 帧内计时 HUD（双后端）",
-     "kind": "pair",
-     "note": "面板 'GPU x.xx ms (NVRHI timer)' 行 + gpu ms 曲线是 M0.6 新增；timer query 异步轮询天然有 1~2 帧延迟。截图回归模式用固定样本（GPU 0.63 ms），面板标 capture/replay。两张 PNG 必然不同：HUD 里印的 backend / debug layer 按后端不同，3D 部分一致。拖下面的 dist 滑块现场改视角，与基线不同属预期。",
-     "baselines": {
-      "dx12": "example/m0.6/hud-dx12.png",
-      "vulkan": "example/m0.6/hud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "back"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "4.2"
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-     "script": "example/m0.6/run.bat hud"
-    },
-    {
-     "id": "nohud",
-     "name": "关 HUD：历史基线逐字节不变（零 query）",
-     "kind": "pair",
-     "note": "--no-hud 时 GpuTimer 完全不 ensure/poll/begin/end，M0.1~M0.5 回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4、example/m0.5 相同。",
-     "baselines": {
-      "dx12": "example/m0.6/nohud-dx12.png",
-      "vulkan": "example/m0.6/nohud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
-     "script": "example/m0.6/run.bat nohud"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（14/14，含 GPU 计时换算）",
-     "kind": "selftest",
-     "note": "模式分发器、HUD 投影 / POD、GPU 秒→毫秒换算与环形游标回绕、以及 model.slang 与 hud.slang 共 8 个产物的魔数，全部机械校验。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (14/14)",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.6/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "m0.7",
-   "label": "M0.7",
-   "name": "高模测试资产生成器（--model）",
-   "tag": "m0.7",
-   "date": "2026-11-07",
-   "summary": "scripts/gen-dense-mesh.py 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204800 tri / 细分球 327680 tri，零网络、同参数 MD5 确定），内嵌棋盘格 PNG；viewer 新增 --model 白名单加载，HUD 增 model 行自证。vendored meshoptimizer v1.3 作 S1 切簇对照基准（不入构建）。",
-   "acceptance": [
-    "同参数两次生成 GLB MD5 相同（TorusKnotDense=130c66f2…，IcoSphereDense=7edaa6a7…），生成过程零网络、纯 stdlib",
-    "--model 加载双后端截图成功、deviceErrors=0；HUD 显示 'model : TorusKnotDense.glb (204800 tri)'",
-    "真实 GPU ms 对比（交互首帧 resolve）：Suzanne 0.032/0.039 → 纽结 0.066/0.065 → 球 0.154/0.153 ms（DX12/VK 互相印证）",
-    "不带 --model 时 Suzanne 基线逐字节不变：两后端 --no-hud PNG MD5 仍为 7e528087…",
-    "selftest 14/14（两后端）；--check 退出码 0",
-    "thirdparty/meshoptimizer 就位但 CMake 零引用"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "hud",
-     "name": "TorusKnotDense 204800 tri（--model + HUD 自证）",
-     "kind": "pair",
-     "note": "--model TorusKnotDense.glb：程序化 (2,3) 环面纽结管，棋盘格 UV。HUD 新增 model 行显示文件名与三角形数。两张 PNG 必然不同（backend/debug layer 文本不同），3D 部分一致。dist 可拖动现场改视角。",
-     "baselines": {
-      "dx12": "example/m0.7/hud-dx12.png",
-      "vulkan": "example/m0.7/hud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "back",
-      "--model",
-      "TorusKnotDense.glb"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "5.5"
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb",
-     "script": "example/m0.7/run.bat hud"
-    },
-    {
-     "id": "icosphere",
-     "name": "IcoSphereDense 327680 tri（--model 换形状）",
-     "kind": "pair",
-     "note": "--model IcoSphereDense.glb：20*4^7 细分球，等距柱状 UV（经线接缝有纹理环绕线，属预期且对 M0.8 调试着色有用）。无 HUD。",
-     "baselines": {
-      "dx12": "example/m0.7/icosphere-dx12.png",
-      "vulkan": "example/m0.7/icosphere-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--model",
-      "IcoSphereDense.glb"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb",
-     "script": "example/m0.7/run.bat icosphere"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（14/14，阶段校验 M0.7）",
-     "kind": "selftest",
-     "note": "与 M0.6 相同的 14 项机械校验，stage 检查改为 M0.7。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (14/14)",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.7/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "m0.8",
-   "label": "M0.8",
-   "name": "线框 / 调试着色（normal / UV / 三角形ID）",
-   "tag": "m0.8",
-   "date": "2026-11-07",
-   "summary": "model.slang 单源新增 4 种着色模式（g_options.x 分支，tri-id 用 SV_PrimitiveID 整数 hash，slangc 双目标实测通过）；线框走 NVRHI 光栅 fill mode（pipeline 2×2 组合）；viewer 新增 --shading / --wireframe / V、N 键；HUD 增 shading 下拉框 + wireframe 复选框。",
-   "acceptance": [
-    "四种着色 + 线框双后端截图成功、deviceErrors=0；tris/uv 两后端 PNG 逐字节相同",
-    "不带新参数时基线逐字节不变：--no-hud PNG MD5 仍为 7e528087…；selftest 15/15（stage 校验 M0.8）",
-    "model.slang 单源出 SPIR-V + DXIL（8/8 魔数），SV_PrimitiveID 双目标编译通过",
-    "HUD shading combo / wireframe 复选框与 CLI 同一条 FrameParams 通道；960x540 面板完整不裁底",
-    "--shading 非法值报错退出 1，不静默落回 textured",
-    "example/m0.8 归位 + cases.json + --check 退出码 0"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "hud",
-     "name": "TorusKnotDense 法线着色 + HUD 新控件",
-     "kind": "pair",
-     "note": "--shading normal：20 万 tri 的纽结用世界空间法线渐变看朝向，比贴图直观。HUD 新增 shading 下拉框（显示 normal）与 wireframe 复选框（与 cull 并行一行）。两张 PNG 不同是 backend/debug 文本不同，3D 部分一致。拖 dist 滑块现场改视角，与基线不同属预期。",
-     "baselines": {
-      "dx12": "example/m0.8/hud-dx12.png",
-      "vulkan": "example/m0.8/hud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--cull",
-      "back",
-      "--model",
-      "TorusKnotDense.glb",
-      "--shading",
-      "normal"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "5.5"
-      }
-     },
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb --shading normal",
-     "script": "example/m0.8/run.bat hud"
-    },
-    {
-     "id": "wire",
-     "name": "Suzanne 线框（3936 tri 可逐个数）",
-     "kind": "pair",
-     "note": "--wireframe 走 NVRHI 光栅 fill mode（深度测试照常），不是几何 shader。HUD 的 wireframe 复选框按实际状态勾选，与 CLI 传的是同一条 FrameParams 通道；交互窗口里 V 键即时切换。",
-     "baselines": {
-      "dx12": "example/m0.8/wire-dx12.png",
-      "vulkan": "example/m0.8/wire-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--wireframe"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --wireframe",
-     "script": "example/m0.8/run.bat wire"
-    },
-    {
-     "id": "uv",
-     "name": "IcoSphereDense UV 着色（接缝可见）",
-     "kind": "pair",
-     "note": "--shading uv：u→红 / v→绿，等距柱状 UV 的经线接缝与连续性直接目测。两后端 PNG 逐字节相同。",
-     "baselines": {
-      "dx12": "example/m0.8/uv-dx12.png",
-      "vulkan": "example/m0.8/uv-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--model",
-      "IcoSphereDense.glb",
-      "--shading",
-      "uv"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb --shading uv",
-     "script": "example/m0.8/run.bat uv"
-    },
-    {
-     "id": "tris",
-     "name": "Suzanne 三角形ID 着色",
-     "kind": "pair",
-     "note": "--shading tri-id：SV_PrimitiveID 经整数 hash 出确定性伪随机色，每个三角形颜色恒定（同参重渲染 MD5 稳定，可进截图回归）。密集网格上是高频噪点属预期，S1 切簇后看簇边界就靠它当地基。两后端 PNG 逐字节相同。",
-     "baselines": {
-      "dx12": "example/m0.8/tris-dx12.png",
-      "vulkan": "example/m0.8/tris-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--shading",
-      "tri-id"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --shading tri-id",
-     "script": "example/m0.8/run.bat tris"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（15/15，阶段校验 M0.8）",
-     "kind": "selftest",
-     "note": "新增 FrameParams 调试着色 / 线框 POD 缺省值校验（= M0.7 行为），stage 检查改为 M0.8。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (15/15)",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.8/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "m0.9",
-   "label": "M0.9",
-   "name": "一键全量回归总闸（tools/regression.py）",
-   "tag": "m0.9",
-   "date": "2026-11-07",
-   "summary": "python tools/regression.py 把 cases.json 里全部版本的全部可自动用例 × 双后端现场重跑（历史 exe 走 tag 快照），PNG 与基线逐字节比对（near 档：≤1/255 且 ≤2 像素 GPU 取整噪声）、selftest 校验日志、deviceErrors=0，全绿 exit 0。S1 起每次改动的总闸。",
-   "acceptance": [
-    "全量回归 ALL GREEN（当前为 24 用例运行 × 双后端），exit 0；报告落 build/regression/report.md",
-    "负向用例：改坏任一基线字节 → 总闸 exit 1 并指出用例与后端，还原后 exit 0",
-    "exe 缺失按 FAIL 处理并提示 rebuild.py，不静默跳过",
-    "m0.9 自身用例归位：gate-hud（线框 × tri-id × HUD 组合冒烟，首次同时归位）+ selftest 15/15（stage M0.9）",
-    "纯工具版本：--no-hud 历史基线逐字节不动（回归报告即证据）"
-   ],
-   "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "gate-hud",
-     "name": "组合状态冒烟：线框 × tri-id × HUD",
-     "kind": "pair",
-     "note": "M0.9 是工具版本，可见用例选一个此前从未同时归位的组合：--wireframe + --shading tri-id + HUD 同帧。线框填模关闭、每三角形一个确定性 hash 色、HUD 的 shading 下拉框显示 tri-id 且 wireframe 勾选。总闸本体输出见 tools/regression.py 的报告（regression 用例）。",
-     "baselines": {
-      "dx12": "example/m0.9/hud-dx12.png",
-      "vulkan": "example/m0.9/hud-vulkan.png"
-     },
-     "args": [
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2",
-      "--cull",
-      "back",
-      "--wireframe",
-      "--shading",
-      "tri-id"
-     ],
-     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --wireframe --shading tri-id",
-     "script": "example/m0.9/run.bat gate-hud"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（15/15，阶段校验 M0.9）",
-     "kind": "selftest",
-     "note": "与 M0.8 相同的 15 项机械校验，stage 检查改为 M0.9。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (15/15)",
-     "command": "viewer.exe --selftest",
-     "script": "example/m0.9/run.bat selftest"
-    },
-    {
-     "id": "regression",
-     "name": "一键全量回归总闸（tools/regression.py）",
-     "kind": "manual",
-     "note": "总闸本体：python tools/regression.py 全量重跑 cases.json 所有版本 × 双后端并比对基线，报告在 build/regression/report.md。命令行脚本不适合网页内运行（数十次 GPU 窗口串行跑数分钟），本地跑：python tools/regression.py。最近一次 ALL GREEN 报告存档在 example/m0.9/regression-report.md。",
-     "args": [],
-     "command": "python tools/regression.py",
-     "script": "example/m0.9/run.bat regression"
-    }
-   ]
-  },
-  {
-   "id": "s1-tools",
-   "label": "M1.0",
-   "name": "nanite-tools 工具骨架 + glTF 公共读取层",
-   "tag": "s1-tools",
-   "date": "2026-11-07",
-   "summary": "S1 第一步。core/mesh_io 公共 glTF 读取层（场景图遍历、节点世界变换烘进顶点——切簇误差单位从第一天统一成世界空间长度）；tinygltf 实现 TU 移到 core 全工程唯一展开；nanite-tools CLI：stat 实现，cluster/simplify/dag 占位显式退出 2。渲染侧零改动（回归 58/58 ALL GREEN）。工具版本不产截图，交代=本页工具用例现场实跑输出。",
-   "acceptance": [
-    "stat 三资产口径全对上：Suzanne 3,936 tri、纽结 204,800、球 327,680（ctest s1-tools-stat 正则锁死防漂移）",
-    "球 AABB ±1.0 严丝合缝 = 节点世界变换烘焙正确",
-    "scene.cpp 改走公共层后渲染零变化：regression.py 全绿、viewer --selftest 15/15、server.py --check 退出 0",
-    "负向路径全部显式：未知子命令 exit 1、未实现子命令 exit 2、文件不存在 exit 1",
-    "交代物：展示台工具用例（kind:tool 现场实跑）+ docs/s1/NANITE-TOOLS-GUIDE.md 输出归档"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "usage",
-     "name": "usage：子命令总览（无参数）",
-     "kind": "tool",
-     "note": "不带参数启动工具打印 usage 并退出。退出码 1 是预期行为——工具退出码约定：0 成功 / 1 用法错误或运行失败 / 2 已声明未实现。两个构建目录里的 nanite-tools 是同一个纯 CPU 工具（不链图形后端），跑哪个都一样。",
-     "args": [],
-     "expectExit": 1,
-     "expectLog": "nanite-tools - nl-engine offline mesh pipeline",
-     "command": "nanite-tools"
-    },
-    {
-     "id": "stat",
-     "name": "stat：顶点 / 三角 / 子网格统计",
-     "kind": "tool",
-     "note": "M1.0 核心自检：读 .glb/.gltf（场景图遍历 + 节点变换烘焙），打印顶点数、三角数、子网格、世界空间 AABB。下拉框切换三资产对比 M0.7 已知口径；球模型 AABB ±1.0 严丝合缝即变换烘焙正确。",
-     "args": [
-      "stat",
-      "{root}/assets/models/{model}"
-     ],
-     "params": {
-      "model": {
-       "type": "select",
-       "label": "模型",
-       "options": [
-        "Suzanne.glb",
-        "TorusKnotDense.glb",
-        "IcoSphereDense.glb"
-       ],
-       "default": "Suzanne.glb"
-      }
-     },
-     "expectLog": "triangles :",
-     "command": "nanite-tools stat assets/models/<model>"
-    },
-    {
-     "id": "not-impl",
-     "name": "负向：未知子命令显式拒绝（防假成功）",
-     "kind": "tool",
-     "note": "dag 已在 M3.0（S3）实现，工具侧占位子命令清零；本负向退化为「未知子命令必须显式报错」，不许静默假成功。S5 的 cut 是运行时能力，不进离线工具。",
-     "args": [
-      "cut"
-     ],
-     "expectExit": 1,
-     "expectLog": "unknown subcommand",
-     "command": "nanite-tools cut"
-    }
-   ]
-  },
-  {
-   "id": "s1-cluster",
-   "label": "M1.1",
-   "name": "meshlet 贪心切簇（S1 核心算法）",
-   "tag": "s1-cluster",
-   "date": "2026-11-07",
-   "summary": "core/meshlet：贪心吸收至 128 tri / 64 vert 上限（meshoptimizer clusterizer 裁剪版：拓扑优先级 + 空间评分），Ritter 包围球 + 法线锥 + 世界空间叶子误差（簇内最长边长）。关键取舍：几何邻接按位置 weld 建（Suzanne 每 tri 拆 3 独立顶点、索引零共享，按索引建邻接会退化成每 tri 一簇）；GPU 条目上限按原始索引口径（保留 UV 缝属性）。自测：确定性网格上覆盖率 100%、上限不破、bounds 合理、负向输入拒绝。",
-   "acceptance": [
-    "selftest cluster 全绿：覆盖率多重集相等、128 tri / 64 vert 上限不破、包围球含全部簇顶点、越界索引 / 非三倍数 indexCount 拒绝",
-    "三实机资产 coverage 100% + limits PASS：Suzanne 237 簇（无索引共享条目消耗快，簇小是数据本性）、球 4929 簇 avg 66.5 tri、纽结 3108 簇",
-    "ctest 4/4（新增 s1-cluster-selftest / s1-cluster-suzanne 正则锁定）",
-    "viewer 零改动：回归总闸全绿（渲染基线逐字节不动）"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest cluster：确定性单测",
-     "kind": "tool",
-     "note": "三个确定性合成网格（连续 64x64 / 双断连块 / 单四边形）上验证：覆盖率 100%（簇展开索引多重集 == 输入）、每簇 128 tri / 64 vert 上限、包围球真的包住簇顶点、非法输入显式拒绝。退出 0 即 PASS。",
-     "args": [
-      "selftest",
-      "cluster"
-     ],
-     "expectExit": 0,
-     "expectLog": "cluster selftest: PASS",
-     "command": "nanite-tools selftest cluster"
-    },
-    {
-     "id": "cluster",
-     "name": "cluster：贪心切簇统计（带 -v 明细）",
-     "kind": "tool",
-     "note": "读模型 → 位置 weld → 贪心切簇 → 打印簇数、tri/vert 均值与峰值、覆盖率、世界空间误差（簇内最长边长）、法线锥 cutoff。下拉框切换资产对比：Suzanne 簇小（每 tri 拆 3 独立顶点）、高模簇接近 64 vert 上限。",
-     "args": [
-      "cluster",
-      "{root}/assets/models/{model}",
-      "-v"
-     ],
-     "params": {
-      "model": {
-       "type": "select",
-       "label": "模型",
-       "options": [
-        "Suzanne.glb",
-        "TorusKnotDense.glb",
-        "IcoSphereDense.glb"
-       ],
-       "default": "Suzanne.glb"
-      }
-     },
-     "expectExit": 0,
-     "expectLog": "coverage",
-     "command": "nanite-tools cluster assets/models/<model> -v"
-    },
-    {
-     "id": "negative-missing",
-     "name": "负向：模型文件不存在（exit 1）",
-     "kind": "tool",
-     "note": "cluster 对不存在的文件必须报错退出 1，不许静默成功。与 stat 的负向语义一致（0 成功 / 1 运行失败 / 2 未实现）。",
-     "args": [
-      "cluster",
-      "{root}/assets/models/__missing__.glb"
-     ],
-     "expectExit": 1,
-     "expectLog": "cluster:",
-     "command": "nanite-tools cluster __missing__.glb"
-    }
-   ]
-  },
-  {
-   "id": "s1-asset",
-   "label": "M1.2",
-   "name": ".nmesh 资产读写 + stat 完善",
-   "tag": "s1-asset",
-   "date": "2026-11-07",
-   "summary": "core/meshlet_io：.nmesh 二进制格式（magic NMSH / version 1，header+records+自包含顶点+三角局部索引，static_assert 锁死布局，先写临时再改名）；cluster -o 落盘并立即读回自检；stat 直接吃 .nmesh（簇统计 + ASCII 误差直方图）；selftest nmesh roundtrip（字段一致 + 重写逐字节一致 + 坏 magic / 截断拒绝）。assets/meshlets/Suzanne.nmesh 为 M1.3 viewer 的输入资产。",
-   "acceptance": [
-    "roundtrip：读回字段逐字段一致，读回再重写逐字节一致（selftest nmesh 全绿）",
-    "负向：坏 magic、截断文件、窗口越界全部显式拒绝（loadNMesh 校验）",
-    "端到端：cluster -o 写盘 402KB Suzanne.nmesh → stat 读回簇统计 + 误差直方图（ctest s1-nmesh-suzanne 正则锁定 saved）",
-    "viewer 零改动：回归总闸全绿"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "roundtrip",
-     "name": "selftest nmesh：roundtrip 单测",
-     "kind": "tool",
-     "note": "确定性网格切簇 → 写盘 → 读回：逐字段一致、读回重写逐字节一致；坏 magic / 截断文件显式拒绝。退出 0 即 PASS。",
-     "args": [
-      "selftest",
-      "nmesh"
-     ],
-     "expectExit": 0,
-     "expectLog": "nmesh selftest: PASS",
-     "command": "nanite-tools selftest nmesh"
-    },
-    {
-     "id": "stat-nmesh",
-     "name": "stat：直接读 .nmesh 资产",
-     "kind": "tool",
-     "note": "对已落盘的簇资产打印簇数、tri/vert 均峰值、世界空间误差与 ASCII 直方图。读的是仓库内 assets/meshlets/Suzanne.nmesh（M1.3 viewer 的输入资产）。",
-     "args": [
-      "stat",
-      "{root}/assets/meshlets/Suzanne.nmesh"
-     ],
-     "expectExit": 0,
-     "expectLog": "meshlets   : 237",
-     "command": "nanite-tools stat assets/meshlets/Suzanne.nmesh"
-    },
-    {
-     "id": "negative-missing-nmesh",
-     "name": "负向：.nmesh 不存在（exit 1）",
-     "kind": "tool",
-     "note": "stat 对缺失的 .nmesh 必须报 cannot open 退出 1，不许静默成功（走 loadNMesh 失败路径）。",
-     "args": [
-      "stat",
-      "{root}/assets/meshlets/__missing__.nmesh"
-     ],
-     "expectExit": 1,
-     "expectLog": "cannot open",
-     "command": "nanite-tools stat __missing__.nmesh"
-    }
-   ]
-  },
-  {
-   "id": "s2-group",
-   "label": "M2.0",
-   "name": "METIS 簇聚组（S2 第一步）",
-   "tag": "s2-group",
-   "date": "2026-11-07",
-   "summary": "METIS 5 vendored（thirdparty/metis，KarypisLab 官方 + GKlib，自写 CMake 编静态库）。core/grouping：节点=簇、边=共享几何点（按位置 weld，忽略 UV 缝）、边权=共享点数的图，METIS_PartGraphKway 分区（vwgt=簇三角数、固定 seed 确定性、CONTIG 仅在图连通时开），不连通分区按连通分量 fixup 拆分。simplify 子命令第一步：读 .nmesh 聚组并打印统计。选型依据：bevy 0.15/0.16 同款（组大小目标 8 簇，UFactor/seed 秘方）；UE 用自研 GraphPartitioner（流送分页需求，S3 前不需要）。",
-   "acceptance": [
-    "selftest group 全绿：覆盖连续、单四边形 1 组、断连块不跨组、每组连通（独立重算交叉验证）、空输入拒绝",
-    "Suzanne：237 簇 → 31 组（目标 8 簇/组，1 次不连通 fixup），组大小 3~10 avg 7.6，connectivity PASS（ctest s2-group-suzanne 锁定）",
-    "METIS 断连图约束已修：CONTIG 仅在整图连通时设置，否则 rc=-4",
-    "viewer 零改动：selftest 15/15、回归全量 ALL GREEN（渲染基线逐字节不动）",
-    "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest group：聚组机械单测",
-     "kind": "tool",
-     "note": "三个确定性合成网格（单四边形 / 双断连块 32x32 / 连续 64x64）验证：每簇有组且组号连续、单四边形恰 1 组、组大小合理（≤3×目标）、每组在共享几何点图上连通（selftest 侧独立重算，与 grouping.cpp 的 fixup 交叉验证防同错）、断连块任何组不跨块、空输入显式拒绝。",
-     "args": [
-      "selftest",
-      "group"
-     ],
-     "expectExit": 0,
-     "expectLog": "group selftest: PASS",
-     "command": "nanite-tools selftest group"
-    },
-    {
-     "id": "simplify",
-     "name": "simplify：Suzanne 簇聚组统计",
-     "kind": "tool",
-     "note": "读 .nmesh（M1.2 资产）→ METIS 聚组 → 打印簇数 / 目标组大小 / 组数 / 组大小 min/avg/max / fixup 次数 / 连通性。Suzanne 237 簇 → 31 组即真实输出；勾 -v 展开每组明细。",
-     "args": [
-      "simplify",
-      "{root}/assets/meshlets/{asset}",
-      "{verbose}"
-     ],
-     "params": {
-      "asset": {
-       "type": "select",
-       "label": "资产",
-       "options": [
-        "Suzanne.nmesh",
-        "IcoSphereDense.nmesh"
-       ],
-       "default": "Suzanne.nmesh"
+      "id": "m0.4",
+      "label": "M0.4",
+      "name": "模型 + 贴图 + 轨道相机",
+      "tag": "s0-model",
+      "date": "2026-11-07",
+      "summary": "tinygltf 读 Suzanne.glb，共享 Scene 上传 VB/IB/贴图/绑定集；model.slang 单源双目标；深度缓冲 + 背面剔除 + 轨道相机。",
+      "acceptance": [
+        "正常视角带贴图 Suzanne 双后端 PNG 逐字节一致（内壁/resize 像素差 ≤1/255）",
+        "相机钻进模型后：开剔除只剩背景，关剔除见内壁",
+        "resize 回归、selftest 11/11、deviceErrors=0"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
       },
-      "verbose": {
-       "type": "select",
-       "label": "每组明细",
-       "options": [
-        "",
-        "-v"
-       ],
-       "default": ""
-      }
-     },
-     "expectExit": 0,
-     "expectLog": "connectivity: PASS",
-     "command": "nanite-tools simplify assets/meshlets/<asset> [-v]"
+      "cases": [
+        {
+          "id": "suzanne",
+          "name": "带贴图 Suzanne",
+          "kind": "pair",
+          "note": "固定相机角度保证可复现；调下面的参数可以现场换视角看效果。双后端 PNG 的 MD5 在正常视角下完全相同。",
+          "baselines": {
+            "dx12": "example/m0.4/suzanne-dx12.png",
+            "vulkan": "example/m0.4/suzanne-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--yaw",
+            "{yaw}",
+            "--pitch",
+            "{pitch}",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "{cull}"
+          ],
+          "params": {
+            "yaw": {
+              "type": "range",
+              "label": "水平角 yaw",
+              "min": -180,
+              "max": 180,
+              "step": 1,
+              "default": "12"
+            },
+            "pitch": {
+              "type": "range",
+              "label": "俯仰 pitch",
+              "min": -80,
+              "max": 80,
+              "step": 1,
+              "default": "9"
+            },
+            "dist": {
+              "type": "range",
+              "label": "距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            },
+            "cull": {
+              "type": "select",
+              "label": "背面剔除",
+              "default": "back",
+              "options": [
+                "back",
+                "none"
+              ]
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.4/run.bat suzanne"
+        },
+        {
+          "id": "inner",
+          "name": "关剔除：看到内壁",
+          "kind": "pair",
+          "note": "相机距离压到 0.6（模型内部）：cull=none 显示带贴图内壁。与下面「开剔除」用例同机位对照。",
+          "baselines": {
+            "dx12": "example/m0.4/inner-dx12.png",
+            "vulkan": "example/m0.4/inner-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "none"
+          ],
+          "params": {
+            "dist": {
+              "type": "select",
+              "label": "相机距离",
+              "default": "0.6",
+              "options": [
+                "0.6",
+                "4.2"
+              ]
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull none",
+          "script": "example/m0.4/run.bat inner"
+        },
+        {
+          "id": "inner-cullback",
+          "name": "开剔除：只剩背景",
+          "kind": "pair",
+          "note": "同一机位把 cull 打开，内壁背面被剔掉，画面只剩清屏色——「剔除真生效」的可见证据。",
+          "baselines": {
+            "dx12": "example/m0.4/inner-cullback-dx12.png",
+            "vulkan": "example/m0.4/inner-cullback-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "0.6",
+            "--cull",
+            "back"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull back",
+          "script": "example/m0.4/run.bat inner"
+        },
+        {
+          "id": "resize",
+          "name": "resize 回归",
+          "kind": "pair",
+          "note": "640×360 → 1024×768，深度纹理 / framebuffer / pipeline 全部重建；保存前后两张图对照。",
+          "baselines": {
+            "dx12": "example/m0.4/resize-dx12.png",
+            "vulkan": "example/m0.4/resize-vulkan.png"
+          },
+          "beforeBaselines": {
+            "dx12": "example/m0.4/resize-dx12-before.png",
+            "vulkan": "example/m0.4/resize-vulkan-before.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--resize",
+            "1024x768"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --resize 1024x768",
+          "script": "example/m0.4/run.bat resize"
+        },
+        {
+          "id": "selftest",
+          "name": "自检 11/11",
+          "kind": "selftest",
+          "note": "相机边界、矩阵、输入默认值、渲染器阶段标记一起过。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.4/run.bat selftest"
+        }
+      ]
     },
     {
-     "id": "negative-missing",
-     "name": "负向：.nmesh 不存在（exit 1）",
-     "kind": "tool",
-     "note": "simplify 对缺失文件走 loadNMesh 失败路径报 cannot open 退出 1，不许静默成功。",
-     "args": [
-      "simplify",
-      "{root}/assets/meshlets/__missing__.nmesh"
-     ],
-     "expectExit": 1,
-     "expectLog": "cannot open",
-     "command": "nanite-tools simplify __missing__.nmesh"
+      "id": "m0.5",
+      "label": "M0.5",
+      "name": "ImGui HUD + S0 总验收",
+      "tag": "s0-done",
+      "date": "2026-11-07",
+      "summary": "一份 NVRHI 共享 HUD 渲染后端把 ImGui 叠到两后端画面上（hud.slang 同样单源出 SPIR-V + DXIL）；--mode 分发器定型；S0 三条硬指标总验收。",
+      "acceptance": [
+        "HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 后端名 / mode / 调试层，且 3D 画面同时可见",
+        "--no-hud 画面与 M0.4 基线逐字节相同（MD5 7e528087…），双后端一致",
+        "selftest 14/14，含 8 个 Slang 产物魔数（SPIR-V 0x07230203 / DXIL DXBC）",
+        "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "双后端 ImGui HUD",
+          "kind": "pair",
+          "note": "两张 PNG 必然不同：HUD 里印的 backend 与 debug layer 本来就按后端不同，这正是「当前后端名」的可见证据；3D 部分与 M0.4 一致。截图回归模式下时序数据用固定样本（面板标 capture/replay），所以 PNG 可复现。拖下面的 dist 滑块可现场改视角，此时与基线不同属预期。",
+          "baselines": {
+            "dx12": "example/m0.5/hud-dx12.png",
+            "vulkan": "example/m0.5/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.5/run.bat hud"
+        },
+        {
+          "id": "controls",
+          "name": "HUD 控件值 → 画面变化（清屏色）",
+          "kind": "pair",
+          "note": "与上面的 hud 用例对照看：同一个 HudFrame 的 colorIndex 从 0 变 2，HUD 的 clear color 控件显示 2、背景从深蓝变绿，Suzanne 正脸仍完整可见；back-face culling 复选框也按 cullBack 显示勾选状态。命令行给的是控件初值，和鼠标点控件写回 viewer 走的是同一条双向 POD 通道；真实鼠标点选另见交互用例。两张 PNG 不同是 HUD 里的 backend / debug 文本不同，不是 3D 画面不一致：实测 895 个差异像素的 bbox 为 x=23..328 / y=77..147，全在 adapter / debug 两行文字内，3D 区域零差异。",
+          "baselines": {
+            "dx12": "example/m0.5/controls-dx12.png",
+            "vulkan": "example/m0.5/controls-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--color",
+            "2"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
+          "script": "example/m0.5/run.bat controls"
+        },
+        {
+          "id": "nohud",
+          "name": "关 HUD：历史基线逐字节不变",
+          "kind": "pair",
+          "note": "--no-hud 时完全不碰 ImGui，M0.1~M0.4 的回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4/suzanne-*.png 相同。",
+          "baselines": {
+            "dx12": "example/m0.5/nohud-dx12.png",
+            "vulkan": "example/m0.5/nohud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.5/run.bat nohud"
+        },
+        {
+          "id": "resize",
+          "name": "HUD + resize 回归",
+          "kind": "pair",
+          "note": "640×360 → 1024×768，depth / framebuffer / 两套 Scene pipeline / HUD pipeline 一起重建；保存前后两张图对照。两后端 PNG 不同是 HUD 里的 backend / debug 文字本来不同，不是 3D 画面不一致（关掉 HUD 的对照用例逐字节相同）。",
+          "baselines": {
+            "dx12": "example/m0.5/resize-dx12.png",
+            "vulkan": "example/m0.5/resize-vulkan.png"
+          },
+          "beforeBaselines": {
+            "dx12": "example/m0.5/resize-dx12-before.png",
+            "vulkan": "example/m0.5/resize-vulkan-before.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "640x360",
+            "--resize",
+            "1024x768",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/m0.5/run.bat resize"
+        },
+        {
+          "id": "selftest",
+          "name": "自检 14/14 + 8 个 shader 产物",
+          "kind": "selftest",
+          "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (14/14)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.5/run.bat selftest"
+        },
+        {
+          "id": "hud-controls",
+          "name": "HUD 控件（交互）",
+          "kind": "manual",
+          "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
+          "args": [
+            "--mode",
+            "normal",
+            "--hud"
+          ],
+          "command": "viewer.exe --mode normal --hud",
+          "script": "example/m0.5/run.bat controls"
+        }
+      ]
+    },
+    {
+      "id": "m0.6",
+      "label": "M0.6",
+      "name": "GPU 帧内计时（NVRHI timestamp query）",
+      "tag": "m0.6",
+      "date": "2026-11-07",
+      "summary": "两后端共享的 GpuTimer 用一对 NVRHI timer query 包住整帧 GPU 命令，异步轮询出真实 GPU 耗时；HUD 在 CPU frame ms 旁新增 GPU ms 行 + gpu ms 曲线，一眼分清 CPU 帧间隔与 GPU 耗时。",
+      "acceptance": [
+        "交互模式两后端均有 'gpu timer resolved' 日志（DX12 0.0369 ms / Vulkan 0.0380 ms，量级合理）",
+        "HUD 并排显示 CPU frame ms 与 GPU ms（NVRHI timer），各自曲线",
+        "--no-hud 完全不建 query，两后端 PNG MD5 仍为 7e528087…（M0.4/M0.5 基线逐字节不变）",
+        "截图回归模式 GPU 样本固定（面板标 capture/replay），PNG 可复现",
+        "selftest 14/14（HUD selftest 覆盖秒→ms 换算与环形游标回绕），ctest 两后端 100%"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "GPU 帧内计时 HUD（双后端）",
+          "kind": "pair",
+          "note": "面板 'GPU x.xx ms (NVRHI timer)' 行 + gpu ms 曲线是 M0.6 新增；timer query 异步轮询天然有 1~2 帧延迟。截图回归模式用固定样本（GPU 0.63 ms），面板标 capture/replay。两张 PNG 必然不同：HUD 里印的 backend / debug layer 按后端不同，3D 部分一致。拖下面的 dist 滑块现场改视角，与基线不同属预期。",
+          "baselines": {
+            "dx12": "example/m0.6/hud-dx12.png",
+            "vulkan": "example/m0.6/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.6/run.bat hud"
+        },
+        {
+          "id": "nohud",
+          "name": "关 HUD：历史基线逐字节不变（零 query）",
+          "kind": "pair",
+          "note": "--no-hud 时 GpuTimer 完全不 ensure/poll/begin/end，M0.1~M0.5 回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4、example/m0.5 相同。",
+          "baselines": {
+            "dx12": "example/m0.6/nohud-dx12.png",
+            "vulkan": "example/m0.6/nohud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+          "script": "example/m0.6/run.bat nohud"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（14/14，含 GPU 计时换算）",
+          "kind": "selftest",
+          "note": "模式分发器、HUD 投影 / POD、GPU 秒→毫秒换算与环形游标回绕、以及 model.slang 与 hud.slang 共 8 个产物的魔数，全部机械校验。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (14/14)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.6/run.bat selftest"
+        }
+      ]
+    },
+    {
+      "id": "m0.7",
+      "label": "M0.7",
+      "name": "高模测试资产生成器（--model）",
+      "tag": "m0.7",
+      "date": "2026-11-07",
+      "summary": "scripts/gen-dense-mesh.py 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204800 tri / 细分球 327680 tri，零网络、同参数 MD5 确定），内嵌棋盘格 PNG；viewer 新增 --model 白名单加载，HUD 增 model 行自证。vendored meshoptimizer v1.3 作 S1 切簇对照基准（不入构建）。",
+      "acceptance": [
+        "同参数两次生成 GLB MD5 相同（TorusKnotDense=130c66f2…，IcoSphereDense=7edaa6a7…），生成过程零网络、纯 stdlib",
+        "--model 加载双后端截图成功、deviceErrors=0；HUD 显示 'model : TorusKnotDense.glb (204800 tri)'",
+        "真实 GPU ms 对比（交互首帧 resolve）：Suzanne 0.032/0.039 → 纽结 0.066/0.065 → 球 0.154/0.153 ms（DX12/VK 互相印证）",
+        "不带 --model 时 Suzanne 基线逐字节不变：两后端 --no-hud PNG MD5 仍为 7e528087…",
+        "selftest 14/14（两后端）；--check 退出码 0",
+        "thirdparty/meshoptimizer 就位但 CMake 零引用"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "TorusKnotDense 204800 tri（--model + HUD 自证）",
+          "kind": "pair",
+          "note": "--model TorusKnotDense.glb：程序化 (2,3) 环面纽结管，棋盘格 UV。HUD 新增 model 行显示文件名与三角形数。两张 PNG 必然不同（backend/debug layer 文本不同），3D 部分一致。dist 可拖动现场改视角。",
+          "baselines": {
+            "dx12": "example/m0.7/hud-dx12.png",
+            "vulkan": "example/m0.7/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back",
+            "--model",
+            "TorusKnotDense.glb"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "5.5"
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb",
+          "script": "example/m0.7/run.bat hud"
+        },
+        {
+          "id": "icosphere",
+          "name": "IcoSphereDense 327680 tri（--model 换形状）",
+          "kind": "pair",
+          "note": "--model IcoSphereDense.glb：20*4^7 细分球，等距柱状 UV（经线接缝有纹理环绕线，属预期且对 M0.8 调试着色有用）。无 HUD。",
+          "baselines": {
+            "dx12": "example/m0.7/icosphere-dx12.png",
+            "vulkan": "example/m0.7/icosphere-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--model",
+            "IcoSphereDense.glb"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb",
+          "script": "example/m0.7/run.bat icosphere"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（14/14，阶段校验 M0.7）",
+          "kind": "selftest",
+          "note": "与 M0.6 相同的 14 项机械校验，stage 检查改为 M0.7。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (14/14)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.7/run.bat selftest"
+        }
+      ]
+    },
+    {
+      "id": "m0.8",
+      "label": "M0.8",
+      "name": "线框 / 调试着色（normal / UV / 三角形ID）",
+      "tag": "m0.8",
+      "date": "2026-11-07",
+      "summary": "model.slang 单源新增 4 种着色模式（g_options.x 分支，tri-id 用 SV_PrimitiveID 整数 hash，slangc 双目标实测通过）；线框走 NVRHI 光栅 fill mode（pipeline 2×2 组合）；viewer 新增 --shading / --wireframe / V、N 键；HUD 增 shading 下拉框 + wireframe 复选框。",
+      "acceptance": [
+        "四种着色 + 线框双后端截图成功、deviceErrors=0；tris/uv 两后端 PNG 逐字节相同",
+        "不带新参数时基线逐字节不变：--no-hud PNG MD5 仍为 7e528087…；selftest 15/15（stage 校验 M0.8）",
+        "model.slang 单源出 SPIR-V + DXIL（8/8 魔数），SV_PrimitiveID 双目标编译通过",
+        "HUD shading combo / wireframe 复选框与 CLI 同一条 FrameParams 通道；960x540 面板完整不裁底",
+        "--shading 非法值报错退出 1，不静默落回 textured",
+        "example/m0.8 归位 + cases.json + --check 退出码 0"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "hud",
+          "name": "TorusKnotDense 法线着色 + HUD 新控件",
+          "kind": "pair",
+          "note": "--shading normal：20 万 tri 的纽结用世界空间法线渐变看朝向，比贴图直观。HUD 新增 shading 下拉框（显示 normal）与 wireframe 复选框（与 cull 并行一行）。两张 PNG 不同是 backend/debug 文本不同，3D 部分一致。拖 dist 滑块现场改视角，与基线不同属预期。",
+          "baselines": {
+            "dx12": "example/m0.8/hud-dx12.png",
+            "vulkan": "example/m0.8/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--cull",
+            "back",
+            "--model",
+            "TorusKnotDense.glb",
+            "--shading",
+            "normal"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "5.5"
+            }
+          },
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb --shading normal",
+          "script": "example/m0.8/run.bat hud"
+        },
+        {
+          "id": "wire",
+          "name": "Suzanne 线框（3936 tri 可逐个数）",
+          "kind": "pair",
+          "note": "--wireframe 走 NVRHI 光栅 fill mode（深度测试照常），不是几何 shader。HUD 的 wireframe 复选框按实际状态勾选，与 CLI 传的是同一条 FrameParams 通道；交互窗口里 V 键即时切换。",
+          "baselines": {
+            "dx12": "example/m0.8/wire-dx12.png",
+            "vulkan": "example/m0.8/wire-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--wireframe"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --wireframe",
+          "script": "example/m0.8/run.bat wire"
+        },
+        {
+          "id": "uv",
+          "name": "IcoSphereDense UV 着色（接缝可见）",
+          "kind": "pair",
+          "note": "--shading uv：u→红 / v→绿，等距柱状 UV 的经线接缝与连续性直接目测。两后端 PNG 逐字节相同。",
+          "baselines": {
+            "dx12": "example/m0.8/uv-dx12.png",
+            "vulkan": "example/m0.8/uv-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--model",
+            "IcoSphereDense.glb",
+            "--shading",
+            "uv"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb --shading uv",
+          "script": "example/m0.8/run.bat uv"
+        },
+        {
+          "id": "tris",
+          "name": "Suzanne 三角形ID 着色",
+          "kind": "pair",
+          "note": "--shading tri-id：SV_PrimitiveID 经整数 hash 出确定性伪随机色，每个三角形颜色恒定（同参重渲染 MD5 稳定，可进截图回归）。密集网格上是高频噪点属预期，S1 切簇后看簇边界就靠它当地基。两后端 PNG 逐字节相同。",
+          "baselines": {
+            "dx12": "example/m0.8/tris-dx12.png",
+            "vulkan": "example/m0.8/tris-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--shading",
+            "tri-id"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --shading tri-id",
+          "script": "example/m0.8/run.bat tris"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（15/15，阶段校验 M0.8）",
+          "kind": "selftest",
+          "note": "新增 FrameParams 调试着色 / 线框 POD 缺省值校验（= M0.7 行为），stage 检查改为 M0.8。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (15/15)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.8/run.bat selftest"
+        }
+      ]
+    },
+    {
+      "id": "m0.9",
+      "label": "M0.9",
+      "name": "一键全量回归总闸（tools/regression.py）",
+      "tag": "m0.9",
+      "date": "2026-11-07",
+      "summary": "python tools/regression.py 把 cases.json 里全部版本的全部可自动用例 × 双后端现场重跑（历史 exe 走 tag 快照），PNG 与基线逐字节比对（near 档：≤1/255 且 ≤2 像素 GPU 取整噪声）、selftest 校验日志、deviceErrors=0，全绿 exit 0。S1 起每次改动的总闸。",
+      "acceptance": [
+        "全量回归 ALL GREEN（当前为 24 用例运行 × 双后端），exit 0；报告落 build/regression/report.md",
+        "负向用例：改坏任一基线字节 → 总闸 exit 1 并指出用例与后端，还原后 exit 0",
+        "exe 缺失按 FAIL 处理并提示 rebuild.py，不静默跳过",
+        "m0.9 自身用例归位：gate-hud（线框 × tri-id × HUD 组合冒烟，首次同时归位）+ selftest 15/15（stage M0.9）",
+        "纯工具版本：--no-hud 历史基线逐字节不动（回归报告即证据）"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "gate-hud",
+          "name": "组合状态冒烟：线框 × tri-id × HUD",
+          "kind": "pair",
+          "note": "M0.9 是工具版本，可见用例选一个此前从未同时归位的组合：--wireframe + --shading tri-id + HUD 同帧。线框填模关闭、每三角形一个确定性 hash 色、HUD 的 shading 下拉框显示 tri-id 且 wireframe 勾选。总闸本体输出见 tools/regression.py 的报告（regression 用例）。",
+          "baselines": {
+            "dx12": "example/m0.9/hud-dx12.png",
+            "vulkan": "example/m0.9/hud-vulkan.png"
+          },
+          "args": [
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2",
+            "--cull",
+            "back",
+            "--wireframe",
+            "--shading",
+            "tri-id"
+          ],
+          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --wireframe --shading tri-id",
+          "script": "example/m0.9/run.bat gate-hud"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（15/15，阶段校验 M0.9）",
+          "kind": "selftest",
+          "note": "与 M0.8 相同的 15 项机械校验，stage 检查改为 M0.9。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (15/15)",
+          "command": "viewer.exe --selftest",
+          "script": "example/m0.9/run.bat selftest"
+        },
+        {
+          "id": "regression",
+          "name": "一键全量回归总闸（tools/regression.py）",
+          "kind": "manual",
+          "note": "总闸本体：python tools/regression.py 全量重跑 cases.json 所有版本 × 双后端并比对基线，报告在 build/regression/report.md。命令行脚本不适合网页内运行（数十次 GPU 窗口串行跑数分钟），本地跑：python tools/regression.py。最近一次 ALL GREEN 报告存档在 example/m0.9/regression-report.md。",
+          "args": [],
+          "command": "python tools/regression.py",
+          "script": "example/m0.9/run.bat regression"
+        }
+      ]
+    },
+    {
+      "id": "s1-tools",
+      "label": "M1.0",
+      "name": "nanite-tools 工具骨架 + glTF 公共读取层",
+      "tag": "s1-tools",
+      "date": "2026-11-07",
+      "summary": "S1 第一步。core/mesh_io 公共 glTF 读取层（场景图遍历、节点世界变换烘进顶点——切簇误差单位从第一天统一成世界空间长度）；tinygltf 实现 TU 移到 core 全工程唯一展开；nanite-tools CLI：stat 实现，cluster/simplify/dag 占位显式退出 2。渲染侧零改动（回归 58/58 ALL GREEN）。工具版本不产截图，交代=本页工具用例现场实跑输出。",
+      "acceptance": [
+        "stat 三资产口径全对上：Suzanne 3,936 tri、纽结 204,800、球 327,680（ctest s1-tools-stat 正则锁死防漂移）",
+        "球 AABB ±1.0 严丝合缝 = 节点世界变换烘焙正确",
+        "scene.cpp 改走公共层后渲染零变化：regression.py 全绿、viewer --selftest 15/15、server.py --check 退出 0",
+        "负向路径全部显式：未知子命令 exit 1、未实现子命令 exit 2、文件不存在 exit 1",
+        "交代物：展示台工具用例（kind:tool 现场实跑）+ docs/s1/NANITE-TOOLS-GUIDE.md 输出归档"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数）",
+          "kind": "tool",
+          "note": "不带参数启动工具打印 usage 并退出。退出码 1 是预期行为——工具退出码约定：0 成功 / 1 用法错误或运行失败 / 2 已声明未实现。两个构建目录里的 nanite-tools 是同一个纯 CPU 工具（不链图形后端），跑哪个都一样。",
+          "args": [],
+          "expectExit": 1,
+          "expectLog": "nanite-tools - nl-engine offline mesh pipeline",
+          "command": "nanite-tools"
+        },
+        {
+          "id": "stat",
+          "name": "stat：顶点 / 三角 / 子网格统计",
+          "kind": "tool",
+          "note": "M1.0 核心自检：读 .glb/.gltf（场景图遍历 + 节点变换烘焙），打印顶点数、三角数、子网格、世界空间 AABB。下拉框切换三资产对比 M0.7 已知口径；球模型 AABB ±1.0 严丝合缝即变换烘焙正确。",
+          "args": [
+            "stat",
+            "{root}/assets/models/{model}"
+          ],
+          "params": {
+            "model": {
+              "type": "select",
+              "label": "模型",
+              "options": [
+                "Suzanne.glb",
+                "TorusKnotDense.glb",
+                "IcoSphereDense.glb"
+              ],
+              "default": "Suzanne.glb"
+            }
+          },
+          "expectLog": "triangles :",
+          "command": "nanite-tools stat assets/models/<model>"
+        },
+        {
+          "id": "not-impl",
+          "name": "负向：未知子命令显式拒绝（防假成功）",
+          "kind": "tool",
+          "note": "dag 已在 M3.0（S3）实现，工具侧占位子命令清零；本负向退化为「未知子命令必须显式报错」，不许静默假成功。S5 的 cut 是运行时能力，不进离线工具。",
+          "args": [
+            "cut"
+          ],
+          "expectExit": 1,
+          "expectLog": "unknown subcommand",
+          "command": "nanite-tools cut"
+        }
+      ]
+    },
+    {
+      "id": "s1-cluster",
+      "label": "M1.1",
+      "name": "meshlet 贪心切簇（S1 核心算法）",
+      "tag": "s1-cluster",
+      "date": "2026-11-07",
+      "summary": "core/meshlet：贪心吸收至 128 tri / 64 vert 上限（meshoptimizer clusterizer 裁剪版：拓扑优先级 + 空间评分），Ritter 包围球 + 法线锥 + 世界空间叶子误差（簇内最长边长）。关键取舍：几何邻接按位置 weld 建（Suzanne 每 tri 拆 3 独立顶点、索引零共享，按索引建邻接会退化成每 tri 一簇）；GPU 条目上限按原始索引口径（保留 UV 缝属性）。自测：确定性网格上覆盖率 100%、上限不破、bounds 合理、负向输入拒绝。",
+      "acceptance": [
+        "selftest cluster 全绿：覆盖率多重集相等、128 tri / 64 vert 上限不破、包围球含全部簇顶点、越界索引 / 非三倍数 indexCount 拒绝",
+        "三实机资产 coverage 100% + limits PASS：Suzanne 237 簇（无索引共享条目消耗快，簇小是数据本性）、球 4929 簇 avg 66.5 tri、纽结 3108 簇",
+        "ctest 4/4（新增 s1-cluster-selftest / s1-cluster-suzanne 正则锁定）",
+        "viewer 零改动：回归总闸全绿（渲染基线逐字节不动）"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest cluster：确定性单测",
+          "kind": "tool",
+          "note": "三个确定性合成网格（连续 64x64 / 双断连块 / 单四边形）上验证：覆盖率 100%（簇展开索引多重集 == 输入）、每簇 128 tri / 64 vert 上限、包围球真的包住簇顶点、非法输入显式拒绝。退出 0 即 PASS。",
+          "args": [
+            "selftest",
+            "cluster"
+          ],
+          "expectExit": 0,
+          "expectLog": "cluster selftest: PASS",
+          "command": "nanite-tools selftest cluster"
+        },
+        {
+          "id": "cluster",
+          "name": "cluster：贪心切簇统计（带 -v 明细）",
+          "kind": "tool",
+          "note": "读模型 → 位置 weld → 贪心切簇 → 打印簇数、tri/vert 均值与峰值、覆盖率、世界空间误差（簇内最长边长）、法线锥 cutoff。下拉框切换资产对比：Suzanne 簇小（每 tri 拆 3 独立顶点）、高模簇接近 64 vert 上限。",
+          "args": [
+            "cluster",
+            "{root}/assets/models/{model}",
+            "-v"
+          ],
+          "params": {
+            "model": {
+              "type": "select",
+              "label": "模型",
+              "options": [
+                "Suzanne.glb",
+                "TorusKnotDense.glb",
+                "IcoSphereDense.glb"
+              ],
+              "default": "Suzanne.glb"
+            }
+          },
+          "expectExit": 0,
+          "expectLog": "coverage",
+          "command": "nanite-tools cluster assets/models/<model> -v"
+        },
+        {
+          "id": "negative-missing",
+          "name": "负向：模型文件不存在（exit 1）",
+          "kind": "tool",
+          "note": "cluster 对不存在的文件必须报错退出 1，不许静默成功。与 stat 的负向语义一致（0 成功 / 1 运行失败 / 2 未实现）。",
+          "args": [
+            "cluster",
+            "{root}/assets/models/__missing__.glb"
+          ],
+          "expectExit": 1,
+          "expectLog": "cluster:",
+          "command": "nanite-tools cluster __missing__.glb"
+        }
+      ]
+    },
+    {
+      "id": "s1-asset",
+      "label": "M1.2",
+      "name": ".nmesh 资产读写 + stat 完善",
+      "tag": "s1-asset",
+      "date": "2026-11-07",
+      "summary": "core/meshlet_io：.nmesh 二进制格式（magic NMSH / version 1，header+records+自包含顶点+三角局部索引，static_assert 锁死布局，先写临时再改名）；cluster -o 落盘并立即读回自检；stat 直接吃 .nmesh（簇统计 + ASCII 误差直方图）；selftest nmesh roundtrip（字段一致 + 重写逐字节一致 + 坏 magic / 截断拒绝）。assets/meshlets/Suzanne.nmesh 为 M1.3 viewer 的输入资产。",
+      "acceptance": [
+        "roundtrip：读回字段逐字段一致，读回再重写逐字节一致（selftest nmesh 全绿）",
+        "负向：坏 magic、截断文件、窗口越界全部显式拒绝（loadNMesh 校验）",
+        "端到端：cluster -o 写盘 402KB Suzanne.nmesh → stat 读回簇统计 + 误差直方图（ctest s1-nmesh-suzanne 正则锁定 saved）",
+        "viewer 零改动：回归总闸全绿"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "roundtrip",
+          "name": "selftest nmesh：roundtrip 单测",
+          "kind": "tool",
+          "note": "确定性网格切簇 → 写盘 → 读回：逐字段一致、读回重写逐字节一致；坏 magic / 截断文件显式拒绝。退出 0 即 PASS。",
+          "args": [
+            "selftest",
+            "nmesh"
+          ],
+          "expectExit": 0,
+          "expectLog": "nmesh selftest: PASS",
+          "command": "nanite-tools selftest nmesh"
+        },
+        {
+          "id": "stat-nmesh",
+          "name": "stat：直接读 .nmesh 资产",
+          "kind": "tool",
+          "note": "对已落盘的簇资产打印簇数、tri/vert 均峰值、世界空间误差与 ASCII 直方图。读的是仓库内 assets/meshlets/Suzanne.nmesh（M1.3 viewer 的输入资产）。",
+          "args": [
+            "stat",
+            "{root}/assets/meshlets/Suzanne.nmesh"
+          ],
+          "expectExit": 0,
+          "expectLog": "meshlets   : 237",
+          "command": "nanite-tools stat assets/meshlets/Suzanne.nmesh"
+        },
+        {
+          "id": "negative-missing-nmesh",
+          "name": "负向：.nmesh 不存在（exit 1）",
+          "kind": "tool",
+          "note": "stat 对缺失的 .nmesh 必须报 cannot open 退出 1，不许静默成功（走 loadNMesh 失败路径）。",
+          "args": [
+            "stat",
+            "{root}/assets/meshlets/__missing__.nmesh"
+          ],
+          "expectExit": 1,
+          "expectLog": "cannot open",
+          "command": "nanite-tools stat __missing__.nmesh"
+        }
+      ]
+    },
+    {
+      "id": "s2-group",
+      "label": "M2.0",
+      "name": "METIS 簇聚组（S2 第一步）",
+      "tag": "s2-group",
+      "date": "2026-11-07",
+      "summary": "METIS 5 vendored（thirdparty/metis，KarypisLab 官方 + GKlib，自写 CMake 编静态库）。core/grouping：节点=簇、边=共享几何点（按位置 weld，忽略 UV 缝）、边权=共享点数的图，METIS_PartGraphKway 分区（vwgt=簇三角数、固定 seed 确定性、CONTIG 仅在图连通时开），不连通分区按连通分量 fixup 拆分。simplify 子命令第一步：读 .nmesh 聚组并打印统计。选型依据：bevy 0.15/0.16 同款（组大小目标 8 簇，UFactor/seed 秘方）；UE 用自研 GraphPartitioner（流送分页需求，S3 前不需要）。",
+      "acceptance": [
+        "selftest group 全绿：覆盖连续、单四边形 1 组、断连块不跨组、每组连通（独立重算交叉验证）、空输入拒绝",
+        "Suzanne：237 簇 → 31 组（目标 8 簇/组，1 次不连通 fixup），组大小 3~10 avg 7.6，connectivity PASS（ctest s2-group-suzanne 锁定）",
+        "METIS 断连图约束已修：CONTIG 仅在整图连通时设置，否则 rc=-4",
+        "viewer 零改动：selftest 15/15、回归全量 ALL GREEN（渲染基线逐字节不动）",
+        "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest group：聚组机械单测",
+          "kind": "tool",
+          "note": "三个确定性合成网格（单四边形 / 双断连块 32x32 / 连续 64x64）验证：每簇有组且组号连续、单四边形恰 1 组、组大小合理（≤3×目标）、每组在共享几何点图上连通（selftest 侧独立重算，与 grouping.cpp 的 fixup 交叉验证防同错）、断连块任何组不跨块、空输入显式拒绝。",
+          "args": [
+            "selftest",
+            "group"
+          ],
+          "expectExit": 0,
+          "expectLog": "group selftest: PASS",
+          "command": "nanite-tools selftest group"
+        },
+        {
+          "id": "simplify",
+          "name": "simplify：Suzanne 簇聚组统计",
+          "kind": "tool",
+          "note": "读 .nmesh（M1.2 资产）→ METIS 聚组 → 打印簇数 / 目标组大小 / 组数 / 组大小 min/avg/max / fixup 次数 / 连通性。Suzanne 237 簇 → 31 组即真实输出；勾 -v 展开每组明细。",
+          "args": [
+            "simplify",
+            "{root}/assets/meshlets/{asset}",
+            "{verbose}"
+          ],
+          "params": {
+            "asset": {
+              "type": "select",
+              "label": "资产",
+              "options": [
+                "Suzanne.nmesh",
+                "IcoSphereDense.nmesh"
+              ],
+              "default": "Suzanne.nmesh"
+            },
+            "verbose": {
+              "type": "select",
+              "label": "每组明细",
+              "options": [
+                "",
+                "-v"
+              ],
+              "default": ""
+            }
+          },
+          "expectExit": 0,
+          "expectLog": "connectivity: PASS",
+          "command": "nanite-tools simplify assets/meshlets/<asset> [-v]"
+        },
+        {
+          "id": "negative-missing",
+          "name": "负向：.nmesh 不存在（exit 1）",
+          "kind": "tool",
+          "note": "simplify 对缺失文件走 loadNMesh 失败路径报 cannot open 退出 1，不许静默成功。",
+          "args": [
+            "simplify",
+            "{root}/assets/meshlets/__missing__.nmesh"
+          ],
+          "expectExit": 1,
+          "expectLog": "cannot open",
+          "command": "nanite-tools simplify __missing__.nmesh"
+        }
+      ]
+    },
+    {
+      "id": "s1.0",
+      "label": "S1.0",
+      "name": "簇着色可视化（--mode cluster，每簇随机色）",
+      "tag": "s1-done",
+      "date": "2026-11-07",
+      "summary": "viewer 新增 --mode cluster：加载 assets/meshlets/*.nmesh（M1.2 资产），每簇随机着色。簇色在 CPU 端用与 shader tri-id 同一个 pcg hash 烘进 CLUSTERCOLOR 顶点属性（.nmesh 窗口复制保证每条目归属唯一簇），零新增 GPU 资源类型，双后端 PNG 逐字节一致。model.slang 单源新增 mode 4 分支；HUD shading combo 加 cluster 项。",
+      "acceptance": [
+        "clusters（球）双后端 PNG 逐字节一致；色块大小均匀、无长条畸形簇（S1 验收判据）",
+        "clusters-hud（Suzanne）HUD 显示 mode cluster / model Suzanne.nmesh (3936 tri) / shading combo cluster；面板 960x540 完整不裁底",
+        "不带 --mode cluster 的历史基线逐字节不变：回归全量 ALL GREEN（kStage 升 S1.0，--check 退出 0）",
+        "selftest 15/15 双后端（stage 校验改 S1.0）",
+        "example/s1.0 归位 + cases.json + run.bat"
+      ],
+      "exe": {
+        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "clusters",
+          "name": "IcoSphereDense 簇着色（4929 簇密铺球面）",
+          "kind": "pair",
+          "note": "球面被 4929 个簇的随机色块均匀密铺——色块大小是否均匀、有无长条畸形簇是切簇算法质量的直接判据。簇色 CPU 烘顶点属性，双后端逐字节一致（不含 HUD 文本差异）。",
+          "baselines": {
+            "dx12": "example/s1.0/clusters-dx12.png",
+            "vulkan": "example/s1.0/clusters-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cluster",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}",
+            "--model",
+            "IcoSphereDense.nmesh"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 1.5,
+              "max": 8,
+              "step": 0.05,
+              "default": "4.2"
+            }
+          },
+          "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --model IcoSphereDense.nmesh",
+          "script": "example/s1.0/run.bat clusters"
+        },
+        {
+          "id": "clusters-hud",
+          "name": "Suzanne 簇着色 + HUD（237 簇贴脸）",
+          "kind": "pair",
+          "note": "Suzanne 每簇 avg 16.6 tri（每 tri 拆 3 独立顶点、GPU 条目口径 64 上限），色块紧凑贴模型表面、无贯穿面片的长条簇。HUD 自证：mode cluster / model Suzanne.nmesh / shading combo = cluster。",
+          "baselines": {
+            "dx12": "example/s1.0/clusters-hud-dx12.png",
+            "vulkan": "example/s1.0/clusters-hud-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cluster",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "{dist}"
+          ],
+          "params": {
+            "dist": {
+              "type": "range",
+              "label": "相机距离 dist",
+              "min": 0.45,
+              "max": 12,
+              "step": 0.05,
+              "default": "4.2"
+            }
+          },
+          "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s1.0/run.bat hud"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（15/15，阶段校验 S1.0）",
+          "kind": "selftest",
+          "note": "stage 检查改为 S1.0；check 数保持 15 不变（历史版本 selftest 用例只锁 count）。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (15/15)",
+          "command": "viewer.exe --selftest",
+          "script": "example/s1.0/run.bat selftest"
+        }
+      ]
+    },
+    {
+      "id": "s2-qem",
+      "label": "M2.1",
+      "name": "组内 QEM 简化 + 边界锁定（S2 灵魂里程碑）",
+      "tag": "s2-qem",
+      "date": "2026-11-07",
+      "summary": "core/simplify：组内 QEM 边折叠（Garland-Heckbert 面积加权二次型 + 有序集折叠队列，代价平局按点编号决胜→完全确定）。灵魂机制：组间边界 canonical 点（被 ≥2 个组的簇引用，判定看组归属而非几何边）锁死——永不移动、永不折叠、其单三角形接缝边不被第三方折叠摧毁（否则跨组裂缝）。link condition + 法线翻转检查拒绝坏折叠；退化平面按面积 clamp。折叠到 round(输入×0.5) 即停，误差=世界空间长度。meshoptimizer vendored 作同口径 LockBorder 对照 oracle（只在 nanite-tools，core 不依赖）。 可视化验收：simplify --obj 导出真实几何（before/after OBJ + 锁定点），tools/qem_preview.py 同机位同尺度渲染 example/s2-qem/qem-suzanne.png，左侧 3936 tri / 右侧 1976 tri、622 个红点（组间边界点）两图逐像素同位。",
+      "acceptance": [
+        "selftest qem 全绿：锁定点集合==独立重算边界集合（交叉验证）、边界点位级不变、接缝边双侧存活（无裂缝拓扑前提）、简化率 30~60%、确定性重跑一致、负向拒绝",
+        "Suzanne：3936 → 1976 tri（50.2%）、622 边界点锁定、maxErr 0.025（世界空间）；oracle meshopt 49.5% 同档",
+        "ctest 8→10（s2-qem-selftest / s2-qem-suzanne 正则锁定 oracle 行）",
+        "viewer 零改动：回归总闸全绿（渲染基线逐字节不动）",
+        "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档",
+        "可视化证据：example/s2-qem/qem-suzanne.png + example/s2-qem/run.bat 一键复现；展示台 s2-qem 卡直接显示该图"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest qem：简化+边界锁机械单测",
+          "kind": "tool",
+          "note": "连续 64x64 网格（22 组相邻）上验证灵魂断言：锁定点集合与独立重算边界集合一致（防同错）、边界顶点简化后逐点位级不变、每条接缝边两侧组都有三角形（拼接无裂缝的拓扑前提）、简化率落在 30~60%、同输入重跑逐字节一致；单四边形 2→1 三角；断连双块锁定点不跨块；非法 ratio / 聚组不匹配 / 空网格显式拒绝。",
+          "args": [
+            "selftest",
+            "qem"
+          ],
+          "expectExit": 0,
+          "expectLog": "qem selftest: PASS",
+          "command": "nanite-tools selftest qem"
+        },
+        {
+          "id": "simplify",
+          "name": "simplify：Suzanne 组内 QEM 简化（带 -v 明细）",
+          "kind": "tool",
+          "note": "读 .nmesh → METIS 聚组 → 逐组 QEM 简化到 50%：打印边界点锁定数（S3 DAG 沿用）、每组输入/输出三角数与 collapses、世界空间 maxErr；oracle 行是 meshopt_SimplifyLockBorder 同参数对照（它锁全部拓扑边界含模型外缘，比我们只锁组间边界更保守）。下拉切 Suzanne / IcoSphereDense 对比高模表现。 卡片上方是同一份真实几何的简化前后对比图（同机位同尺度，红点=622 个锁定边界点，两图位置完全一致）。",
+          "args": [
+            "simplify",
+            "{root}/assets/meshlets/{asset}",
+            "-v"
+          ],
+          "params": {
+            "asset": {
+              "type": "select",
+              "label": "资产",
+              "options": [
+                "Suzanne.nmesh",
+                "IcoSphereDense.nmesh"
+              ],
+              "default": "Suzanne.nmesh"
+            }
+          },
+          "expectExit": 0,
+          "expectLog": "oracle      : meshopt LockBorder",
+          "command": "nanite-tools simplify assets/meshlets/<asset> -v",
+          "preview": "example/s2-qem/qem-suzanne.png"
+        },
+        {
+          "id": "negative-ratio",
+          "name": "负向：非法简化比（exit 1）",
+          "kind": "tool",
+          "note": "-r 0 不在 (0,1] 区间，simplifyGroups 显式拒绝退出 1，不许静默成功或死循环。",
+          "args": [
+            "simplify",
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "-r",
+            "0"
+          ],
+          "expectExit": 1,
+          "expectLog": "target ratio must be in (0,1]",
+          "command": "nanite-tools simplify Suzanne.nmesh -r 0"
+        },
+        {
+          "id": "dump",
+          "name": "simplify --obj：导出真实几何供可视化验收",
+          "kind": "tool",
+          "note": "现场实跑 --obj：写出 .before.obj / .after.obj（canonical 点 + 三角形 soup）与 .locked（组间边界点编号）。example/s2-qem/qem-suzanne.png 即由这份导出经 tools/qem_preview.py 离线渲染（同机位同尺度），复现脚本 example/s2-qem/run.bat。M2.2 分层落盘沿用同一口径。",
+          "args": [
+            "simplify",
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "--obj",
+            "{root}/build/qem/showcase-suzanne"
+          ],
+          "expectExit": 0,
+          "expectLog": "obj dump   :",
+          "command": "nanite-tools simplify Suzanne.nmesh --obj build/qem/<name>"
+        }
+      ]
+    },
+    {
+      "id": "s2-loop",
+      "label": "M2.2",
+      "name": "逐层 LOD 循环：简化→重切→分层 .nmesh（S2）",
+      "tag": "s2-loop",
+      "date": "2026-11-07",
+      "summary": "core/lod 严格对齐 Nanite 系标准做法：每层重新聚组 → 边界锁按当前分组全量重算（不跨层继承）→ 每组硬目标 50% 简化 → 按组重切（M3.0 对齐 UE ReduceGroup / bevy 每组独立 compute_meshlets：父簇绝不跨组，血缘随层落盘）→ 下一层。依据 bevy from_mesh.rs:114-120/520-523（lock_group_borders 每轮覆写）、:556（group_indices.len()/2）、:154（每组独立 compute_meshlets）、UE ClusterDAG.cpp:1470（TargetNumTris 硬目标）、:1378-1605（ReduceGroup 组内合并→简化→SplitCluster 按组重切）、Cluster.cpp:1023-1039（LockPosition 只作用当前 group）、meshoptimizer simplifier.cpp:2492（while result_count > target_index_count）。误差按 UE:1441/bevy:146-151 单调化为 parent error。每层写 <prefix>.lodN.nmesh（.nmesh v2 尾部 section：level / maxError / lockedPositions，M3.0 起 meta version 2 再加 DAG 血缘：dagGroups + clusterGroup），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne 7 层 3936→1970→1002→500→252→142→104 tri。",
+      "acceptance": [
+        "selftest loop 全绿：灵魂断言「每层锁点集合 == 按该层分组独立重算的组间边界集合」（交叉验证防同错，若存在跨层继承立刻不等）、每层约减半 30~80%（M3.0 按组重切簇粒度取整，bevy/UE 同款）、parent error 单调不减、簇上限、v1/v2 资产读回、确定性重跑、负向拒绝",
+        "Suzanne：7 层 L0 3936 → L1 1970（50.1%）→ 1002 → 500 → 252 → 142 → 104 tri；簇 237→35→19→15→8→7→3；锁点 622→183→100→43→0→0→0（每层重算、递减而非累积）；parent error 0→0.0435→0.1339→0.1339→0.2690→0.4222→1.1375 单调",
+        "ctest 10→12（s2-loop-selftest / s2-loop-suzanne）、回归总闸全绿（渲染基线逐字节不动）",
+        "交代物：展示台 s2-loop 工具卡现场实跑 + example/s2-loop/lod-suzanne.png 六层真实几何金字塔（同机位同尺度）+ run.bat + docs/s2/NANITE-TOOLS-GUIDE.md 归档"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest loop：逐层循环机械单测",
+          "kind": "tool",
+          "note": "128x128 合成网格上验证标准循环：层数≥3、每层三角数严格递减且约减半（30~80%，按组重切簇粒度取整）、每簇 ≤128 tri/64 vtx、每层 lodMeta.level 正确；灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」（证明边界锁每轮重算、不继承历史层）、顶层无 outgoing seams、parent error 单调不减、v2 .nmesh 落盘读回逐字段一致、v1 仍可读、确定性重跑逐字节一致、负向参数全拒。",
+          "args": [
+            "selftest",
+            "loop"
+          ],
+          "expectExit": 0,
+          "expectLog": "loop selftest: PASS",
+          "command": "nanite-tools selftest loop"
+        },
+        {
+          "id": "lod",
+          "name": "lod：Suzanne 逐层简化重切 + 分层落盘",
+          "kind": "tool",
+          "note": "读 .nmesh → 每层重新聚组 → 按当前分组重算边界锁 → 每组硬目标 50% QEM → 重切循环，打印每层 clusters/tris/groups/locked/collapses/parent maxErr，并把每层写成 <prefix>.lodN.nmesh（v2，lockedPositions = 本层组间边界点，S3 DAG cut 用）。卡片上方证据图由同一份落盘二进制离线渲染：六栏同机位同尺度，红点为该层边界点，逐层递减；顶层无红点。下拉可切高模看规模化表现。",
+          "args": [
+            "lod",
+            "{root}/assets/meshlets/{asset}",
+            "-o",
+            "{root}/build/qem/showcase-lod",
+            "--max-levels",
+            "8"
+          ],
+          "params": {
+            "asset": {
+              "type": "select",
+              "label": "资产",
+              "options": [
+                "Suzanne.nmesh",
+                "IcoSphereDense.nmesh"
+              ],
+              "default": "Suzanne.nmesh"
+            }
+          },
+          "preview": "example/s2-loop/lod-suzanne.png",
+          "expectExit": 0,
+          "expectLog": "lod files   : ",
+          "command": "nanite-tools lod assets/meshlets/<asset> -o build/qem/showcase-lod --max-levels 8"
+        },
+        {
+          "id": "negative-levels",
+          "name": "负向：--max-levels 0（exit 1）",
+          "kind": "tool",
+          "note": "maxLevels 必须 >=1，buildLodHierarchy 显式拒绝并退出 1，不许静默生成只有 L0 的假层级。",
+          "args": [
+            "lod",
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "--max-levels",
+            "0"
+          ],
+          "expectExit": 1,
+          "expectLog": "maxLevels must be >= 1",
+          "command": "nanite-tools lod Suzanne.nmesh --max-levels 0"
+        }
+      ]
+    },
+    {
+      "id": "s2.0",
+      "label": "M2.3",
+      "name": "viewer --mode lod N + HUD 滑条（S2 收官）",
+      "tag": "s2-done",
+      "date": "2026-11-07",
+      "summary": "M2.3：--mode lod N 直接渲染分层资产 assets/meshlets/Suzanne.lodN.nmesh（nanite-tools lod 产出，7 层入仓共 ~0.5MB），HUD 滑条运行时切层。切层 = scene.uploadClusterMesh 读盘→展开→新建 VB/IB 上传→替换句柄，shader/pipeline/binding 全部复用；层号/parent error 从 .nmesh v2 尾部 section 读回，HUD 标 lod N/M tri maxErr。缺省着色 normal（几何不连续在逐面法线色上最敏感）。renderer 探测 <stem>.lodN.nmesh 从 0 连续计数；没有分层资产 / N 越界 / 非数字一律 exit 1，绝不静默回退。kStage 升 S2.0。M2.3a 判决实验根治翻转面：朝向锚 + 法线继承（rebuildMeshlets 继承输入法线和），check-orient 全链 L0..L6 inward=0（纯官方口径跨层累计 1→8）。",
+      "acceptance": [
+        "滑条切层肉眼验收：L0..L6 同机位七层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞无黑斑（M2.3a 判决实验后翻转面根治，check-orient exit 0）",
+        "负向全拒：--lod 非数字 / 越界 / 资产无分层文件均 exit 1；selftest 15/15（含 lod 模式分发）",
+        "双后端 pair 基线：L3/L5 逐字节一致，L0 near（差 2 px / maxDelta 1，GPU 取整噪声）；HUD 960x540 滑条自证 lod 2/6 tri 1002 maxErr 0.1339（HUD 字体光栅两后端已知必然差异，near 档）",
+        "ctest + 回归总闸全绿；交代物：展示台 s2-done 版本卡 + run.bat + docs/s2 归档"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "lod-l0",
+          "name": "lod L0：3936 tri 原始层",
+          "kind": "pair",
+          "note": "最细层。与 --mode cluster 同一场景代码，首载与滑条切层走同一条 uploadClusterMesh 路径。",
+          "baselines": {
+            "dx12": "example/s2-done/lod-l0-dx12.png",
+            "vulkan": "example/s2-done/lod-l0-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "0",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode lod --lod 0 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s2-done/run.bat gallery"
+        },
+        {
+          "id": "lod-l3",
+          "name": "lod L3：500 tri（滑条中段）",
+          "kind": "pair",
+          "note": "组数 4、锁点 43；法线着色下组间接缝无裂缝。maxErr 0.1339（parent error，HUD 同值）。",
+          "baselines": {
+            "dx12": "example/s2-done/lod-l3-dx12.png",
+            "vulkan": "example/s2-done/lod-l3-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "3",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode lod --lod 3 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s2-done/run.bat gallery"
+        },
+        {
+          "id": "lod-l5",
+          "name": "lod L5：142 tri 深度简化层",
+          "kind": "pair",
+          "note": "5 簇 / 0 锁点 / maxErr 0.4082。M2.3a 判决实验后无翻转面：全链 inward=0，法线继承 L0 原始场。",
+          "baselines": {
+            "dx12": "example/s2-done/lod-l5-dx12.png",
+            "vulkan": "example/s2-done/lod-l5-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "5",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode lod --lod 5 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s2-done/run.bat gallery"
+        },
+        {
+          "id": "lod-hud",
+          "name": "lod L2 + HUD（960x540，滑条自证）",
+          "kind": "pair",
+          "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/6 tri 1002 maxErr 0.1339。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
+          "baselines": {
+            "dx12": "example/s2-done/lod-hud-dx12.png",
+            "vulkan": "example/s2-done/lod-hud-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "2",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--hud",
+            "--size",
+            "960x540",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode lod --lod 2 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --hud --size 960x540 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s2-done/run.bat gallery"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（15/15，阶段校验 S2.0）",
+          "kind": "selftest",
+          "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 15。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (15/15)",
+          "command": "viewer.exe --selftest",
+          "script": "example/s2-done/run.bat selftest"
+        },
+        {
+          "id": "negative-lod-text",
+          "name": "负向：--lod 非数字（exit 1，无窗口）",
+          "kind": "tool",
+          "note": "parseArgs 直接拒绝，不创建窗口不碰 GPU；绝不静默落回 0 层。",
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "abc"
+          ],
+          "expectExit": 1,
+          "expectLog": "invalid --lod 'abc'",
+          "command": "viewer.exe --mode lod --lod abc"
+        },
+        {
+          "id": "negative-lod-range",
+          "name": "负向：--lod 9 越界（exit 1）",
+          "kind": "tool",
+          "note": "renderer 探测 Suzanne 共 6 层（0..5），越界显式报错退出；--screenshot 参数只是避免无参交互窗口。",
+          "args": [
+            "--mode",
+            "lod",
+            "--lod",
+            "9",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{root}/build/showcase/runs/s2-done-negative.png",
+            "--frames",
+            "2"
+          ],
+          "expectExit": 1,
+          "expectLog": "out of range",
+          "command": "viewer.exe --mode lod --lod 9 --model Suzanne.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative.png"
+        },
+        {
+          "id": "negative-no-assets",
+          "name": "负向：资产没有分层文件（exit 1）",
+          "kind": "tool",
+          "note": "IcoSphereDense.nmesh 未生成 .lodN.nmesh 时 --mode lod 显式报错，提示 nanite-tools lod 命令。",
+          "args": [
+            "--mode",
+            "lod",
+            "--model",
+            "IcoSphereDense.nmesh",
+            "--screenshot",
+            "{root}/build/showcase/runs/s2-done-negative2.png",
+            "--frames",
+            "2"
+          ],
+          "expectExit": 1,
+          "expectLog": "no layered assets",
+          "command": "viewer.exe --mode lod --model IcoSphereDense.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative2.png"
+        }
+      ]
+    },
+    {
+      "id": "s3.0",
+      "label": "M3.0",
+      "name": "cluster DAG 组装与校验（S3 第一步）",
+      "tag": "s3-dag",
+      "date": "2026-11-07",
+      "summary": "M3.0：血缘落盘 + DAG 校验器。按组重切对齐 UE ReduceGroup（ClusterDAG.cpp:1378-1605）/bevy 每组独立 compute_meshlets（from_mesh.rs:154）：父簇绝不跨组 → 每父簇恰有一个生成组，S5 组原子 cut 语义成立。血缘写进 .nmesh meta version 2（只加不改，v1/旧 v2 逐字节兼容读回）：dagGroups[]（error/simplifyError/sphere[4]/genFirst/genCount）+ clusterGroup[]；组 error = max(组简化误差, 全部成员簇误差)（UE:1441/:1587），父簇 bounds.error 统一携带组误差（UE:1593 \"They are all dependent\"），顶层组 genCount=0（zeux clusterlod terminal group）。nanite-tools dag 读连续 <prefix>.lodN.nmesh 六项校验全 PASS：membership（每簇恰属一组）/generation（gen 区间连续铺满下一层、每父簇恰一生成组）/error chain（逐位精确）/parent error/monotonic/acyclic（组图 DFS 染色）；--export JSON 供离线可视化。Suzanne 7 层 56 组 57 边 87 父簇携带组误差；check-orient 全链 inward=0（按组重切不破 M2.3a 朝向锚）。证据图 tools/dag_preview.py 从 dag --export 真实 JSON 画分层结构（蓝→红 = ParentLODError）。",
+      "acceptance": [
+        "selftest dag 全绿：128x128 合成网格全链不变量逐层逐组全量断言 + error chain ≥100 组 + v3 roundtrip 逐字段一致 + 重读链再校验 + 篡改组误差必被抓住",
+        "dag Suzanne：六项校验 PASS（56 groups / 57 edges / 87 父簇携带组误差 / DFS 无环），负向（无分层资产 / 未知参数）exit 1",
+        "ctest 12→14（s3-dag-selftest / s3-dag-suzanne）；check-orient L0..L6 inward=0；回归总闸 118/118 ALL GREEN",
+        "交代物：证据图 example/s3-dag/dag-structure.png + run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.0 卡现场实跑"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest dag：DAG 血缘机械单测",
+          "kind": "tool",
+          "note": "128x128 连续网格逐层生成后全链校验：全链 DAG 不变量（membership/generation/error chain/parent error/monotonic/acyclic）逐层逐组全量断言、error chain 实测 ≥100 组、顶层组 terminal（genCount=0）、每非顶层组恰产出父簇、v3 .nmesh 落盘读回血缘逐字段一致、重读链再校验、篡改任一组误差立刻被 error chain 抓住。",
+          "args": [
+            "selftest",
+            "dag"
+          ],
+          "expectExit": 0,
+          "expectLog": "dag selftest: PASS",
+          "command": "nanite-tools selftest dag"
+        },
+        {
+          "id": "dag",
+          "name": "dag：Suzanne 全链组装 + 六项校验 + JSON 导出",
+          "kind": "tool",
+          "note": "读 <prefix>.lod0..6.nmesh（meta version 2 血缘）→ 打印逐层 clusters/tris/groups/parentClusters/topErr → 六项校验（membership/generation/error chain/parent error/monotonic/acyclic DFS）→ --export 写分层 DAG JSON。卡片上方结构图由这份真实导出经 tools/dag_preview.py 离线渲染：7 列 = 7 层，每框 = 组（颜色蓝→红 = ParentLODError 高低，标注成员簇数），连线 = 组的生成簇被更粗层哪个组收养——S5 cut 的组原子邻域。",
+          "args": [
+            "dag",
+            "{root}/assets/meshlets/Suzanne",
+            "--export",
+            "{root}/build/showcase/runs/s3-dag-export.json"
+          ],
+          "expectExit": 0,
+          "expectLog": "dag         : OK",
+          "command": "nanite-tools dag assets/meshlets/Suzanne --export build/showcase/runs/s3-dag-export.json",
+          "preview": "example/s3-dag/dag-structure.png"
+        },
+        {
+          "id": "negative-no-layers",
+          "name": "负向：无分层资产（exit 1）",
+          "kind": "tool",
+          "note": "IcoSphereDense 没有分层文件（lod0 探测失败）显式报错退出 1，绝不静默当空 DAG 成功。",
+          "args": [
+            "dag",
+            "{root}/assets/meshlets/IcoSphereDense"
+          ],
+          "expectExit": 1,
+          "expectLog": "cannot open",
+          "command": "nanite-tools dag assets/meshlets/IcoSphereDense"
+        },
+        {
+          "id": "negative-opt",
+          "name": "负向：未知参数（exit 1）",
+          "kind": "tool",
+          "note": "--bogus 显式拒绝退出 1，防静默吞参数。",
+          "args": [
+            "dag",
+            "{root}/assets/meshlets/Suzanne",
+            "--bogus"
+          ],
+          "expectExit": 1,
+          "expectLog": "unknown option",
+          "command": "nanite-tools dag assets/meshlets/Suzanne --bogus"
+        }
+      ]
+    },
+    {
+      "id": "s3.1",
+      "label": "M3.1",
+      "name": "fallback mesh（S8 BLAS 直接吃，不追 DAG）",
+      "tag": "s3-fallback",
+      "date": "2026-11-07",
+      "summary": "M3.1：链最顶层整体 weld 拼成一份普通 indexed mesh（vertices + u32 indices），写进 <prefix>.lod0.nmesh 尾段（.nmesh 文件 version 3，'NFLB' 自描述尾段，按 magic 识别、顺序不敏感；v1/v2 逐字节兼容读回）。输入文件不动，展示台实跑 -o build/... 不碰入仓资产；S8 光追 BLAS / 非 Nanite 兜底渲染直接吃，不追 DAG。UE 口径对照（NaniteBuilder.cpp BuildFallbackMesh :769 + BuildCoarseRepresentation :415）：UE 从 DAG 独立简化到 FallbackPercentTriangles（默认 ~2%）；本实现取链顶层（parent error 单调链背书），Suzanne 104/3936 = 2.6% 同量级，且不引入第二次独立简化——同一条链、同一份确定性，无第二口径可漂移。拼接 = weldPositions 同口径（float 位级相等）合并，边界点本就锁死 → 接缝无洞；属性取 canonical 点首现那份。selftest fallback 灵魂断言：三角守恒 + weld 收敛 + 每条无向边 ≤2 次使用（>2 = T 形/重复面）。证据图 tools/fallback_preview.py 从真实 .nmesh v3 字节离线渲染（平涂+边线；背景透出 = 洞）。",
+      "acceptance": [
+        "selftest fallback 全绿：三角守恒（拼接恒等重索引）、weld 收敛（顶层簇间重复顶点合并）、边流形 ≤2、确定性重拼逐字节一致、v3 roundtrip（fallback + DAG 血缘同时读回）、fallback-only 尾段（无 lodMeta 的 v3）、负向拒绝",
+        "lod Suzanne：fallback 104 tris / 96 verts（from L6, maxErr 1.1375）写进 lod0 尾段；dag 六项校验与 check-orient 全链 inward=0 无回归",
+        "ctest 16/16 双后端（新增 s3-fallback-selftest / s3-fallback-suzanne）；回归总闸 ALL GREEN；server --check exit 0",
+        "交代物：证据图 example/s3-fallback/fallback-preview.png（真实资产字节）+ run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.1 卡现场实跑"
+      ],
+      "exe": {
+        "dx12": "build/dx12/nanite-tools.exe",
+        "vulkan": "build/vulkan/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest",
+          "name": "selftest fallback：拼接机械单测",
+          "kind": "tool",
+          "note": "128x128 连续网格全链顶层拼接：三角守恒（恒等重索引不许丢三角）、weld 收敛（跨簇边界重复顶点位级合并）、每条无向边 ≤2 次使用（>2 = T 形接缝/重复面，渲染与 BLAS 都会出洞）、确定性重拼、v3 roundtrip（fallback 尾段 + DAG 血缘逐字段一致）、fallback-only 尾段（v1 语义主体 + fallback = v3）、空网格拒绝。",
+          "args": [
+            "selftest",
+            "fallback"
+          ],
+          "expectExit": 0,
+          "expectLog": "fallback selftest: PASS",
+          "command": "nanite-tools selftest fallback"
+        },
+        {
+          "id": "lod-fallback",
+          "name": "lod：链再生成 + fallback 写进 lod0 尾段（输入文件不动）",
+          "kind": "tool",
+          "note": "链写完 → buildFallbackMesh(顶层) → weldPositions 口径位置合并 → 写 <prefix>.lod0.nmesh v3 尾段。卡片上方证据图由落盘的真实字节经 tools/fallback_preview.py 离线渲染：平涂 + 边线，背景透出 = 洞（边流形 ≤2 已由 selftest 断言，图为视觉对照）。",
+          "args": [
+            "lod",
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "-o",
+            "{root}/build/showcase/runs/s3-fallback/lod",
+            "--max-levels",
+            "6"
+          ],
+          "expectExit": 0,
+          "expectLog": "fallback    : ",
+          "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/s3-fallback/lod --max-levels 6",
+          "preview": "example/s3-fallback/fallback-preview.png"
+        },
+        {
+          "id": "negative-suite",
+          "name": "负向：未知 selftest 套件（exit 1）",
+          "kind": "tool",
+          "note": "未知套件显式拒绝并列出可用套件，防静默假成功。",
+          "args": [
+            "selftest",
+            "bogus"
+          ],
+          "expectExit": 1,
+          "expectLog": "unknown suite",
+          "command": "nanite-tools selftest bogus"
+        }
+      ]
+    },
+    {
+      "id": "s3.2",
+      "label": "M3.2",
+      "name": "viewer --mode dag-top + 组原子下钻（S3 收官）",
+      "tag": "s3-done",
+      "date": "2026-11-07",
+      "summary": "M3.2：--mode dag-top 渲染 DAG 顶层（最粗层=正确粗模），--dag-group N 组原子下钻：从顶层挖掉该组生成的父簇（genFirst/genCount 区间）、换回该组在第二粗层的成员簇（clusterGroup 血缘），验证父子衔接无洞——S5 运行时组原子 cut 的离线预演。三家参考：UE NaniteHierarchyTraversal.ush（粗→细遍历的单步冻结）、bevy cull_bvh.wesl（parent_error 判据，屏幕空间公式留给 S5）、Carrot draw_virtual_geometry.slang:105（selfError>threshold && refinedError<=threshold 双阈值，组内同决策）。踩坑两个：expandClusterData 索引基址用文件 vertexOffset，掩码跳簇后 kept 簇整个消失（改 clusterBase=入缓冲位置）；dag_weld_check.py 顶点切片 stride 3 应为 8（探针垃圾数据误导排查）。验收双证据：GPU coverage 三组下钻 hole=0（g1/g2 与纯顶层逐字节一致=16->16 无折叠父簇等价子簇）；焊接边流形 mixed 集与 full top 的 84 条开边（Suzanne 眼窝+嘴开放边界，逐层守恒）完全一致、零新增零重叠。kStage 升 S3.2。",
+      "acceptance": [
+        "三组下钻肉眼无洞：top/g0/g1/g2 同机位画廊（example/s3-done/dag-drills.png），run.bat all exit 0",
+        "机械判据一：GPU coverage 掩码 top前景-drill前景 = 0 px（g1/g2 混合集与纯顶层 PNG 逐字节一致）",
+        "机械判据二：tools/dag_weld_check.py --all PASS（mixed 集开边集合=full top，零新增开边、零 >2x 重叠边）",
+        "负向全拒：--dag-group 非数字/越界/资产无分层均 exit 1；HUD 下钻滑条 960x540 面板完整（底边 345<=510）",
+        "双后端 pair 基线：top/g0/g1/g2 逐字节一致（DX12 vs Vulkan MD5 相同）；ctest 16/16 + 回归总闸全绿"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "dag-top",
+          "name": "dag-top 纯顶层：L6 104 tri 正确粗模",
+          "kind": "pair",
+          "note": "不下钻直接渲染最粗层（DAG 顶层组产出的父簇集合）。与 lod 模式同一条 uploadClusterMesh 路径。",
+          "baselines": {
+            "dx12": "example/s3-done/dag-top-dx12.png",
+            "vulkan": "example/s3-done/dag-top-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "dag-top",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode dag-top --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s3-done/run.bat gallery"
+        },
+        {
+          "id": "dag-drill-g0",
+          "name": "下钻 g0：挖 1 父簇换 5 子簇（110->72 真折叠）",
+          "kind": "pair",
+          "note": "g0={L5 c0..c4} 生成 L6 c0（110->72 tri 有真简化）。下钻后几何更细：fill=6278px，hole=1px（与纯 L5 对 top 同级的 AA 噪声）。",
+          "baselines": {
+            "dx12": "example/s3-done/dag-drill-g0-dx12.png",
+            "vulkan": "example/s3-done/dag-drill-g0-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "0",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group 0 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s3-done/run.bat gallery"
+        },
+        {
+          "id": "dag-drill-g1",
+          "name": "下钻 g1：16->16 无折叠父簇等价子簇",
+          "kind": "pair",
+          "note": "g1={L5 c5} 生成 L6 c1，简化零折叠 => 父簇与子簇顶点位级相同，混合集渲染与纯顶层逐字节一致。",
+          "baselines": {
+            "dx12": "example/s3-done/dag-drill-g1-dx12.png",
+            "vulkan": "example/s3-done/dag-drill-g1-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "1",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group 1 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s3-done/run.bat gallery"
+        },
+        {
+          "id": "dag-drill-g2",
+          "name": "下钻 g2：16->16 无折叠",
+          "kind": "pair",
+          "note": "g2={L5 c6} 生成 L6 c2，同 g1。",
+          "baselines": {
+            "dx12": "example/s3-done/dag-drill-g2-dx12.png",
+            "vulkan": "example/s3-done/dag-drill-g2-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "2",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group 2 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s3-done/run.bat gallery"
+        },
+        {
+          "id": "dag-hud",
+          "name": "HUD 960x540：下钻滑条 dag drill -1..2",
+          "kind": "pair",
+          "note": "HUD 字体光栅两后端已知必然差异（near 档）。滑条写回 viewer 后 setDagCut，HUD 不直接碰渲染资源。",
+          "baselines": {
+            "dx12": "example/s3-done/dag-hud-dx12.png",
+            "vulkan": "example/s3-done/dag-hud-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "1",
+            "--hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--shading",
+            "normal",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group 1 --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s3-done/run.bat gallery"
+        },
+        {
+          "id": "negative-dag-text",
+          "name": "负向：--dag-group 非数字（exit 1，无窗口）",
+          "kind": "tool",
+          "note": "parseArgs 直接拒绝，绝不静默落回 -1。",
+          "expectExit": 1,
+          "expectLog": "invalid --dag-group",
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "abc"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group abc"
+        },
+        {
+          "id": "negative-dag-range",
+          "name": "负向：--dag-group 99 越界（exit 1）",
+          "kind": "tool",
+          "note": "renderer 探测 Suzanne 可下钻 3 组（0..2），越界显式报错。",
+          "expectExit": 1,
+          "expectLog": "out of range",
+          "args": [
+            "--mode",
+            "dag-top",
+            "--dag-group",
+            "99",
+            "--model",
+            "Suzanne.nmesh",
+            "--screenshot",
+            "{root}/build/showcase/runs/s3-done-negative.png",
+            "--frames",
+            "2"
+          ],
+          "command": "viewer.exe --mode dag-top --dag-group 99 --model Suzanne.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative.png --frames 2"
+        },
+        {
+          "id": "negative-no-assets",
+          "name": "负向：资产没有分层文件（exit 1）",
+          "kind": "tool",
+          "note": "dag-top 需要分层资产（可下钻组数从第二粗层 dagGroups 读），没有则显式报错。",
+          "expectExit": 1,
+          "expectLog": "no layered assets",
+          "args": [
+            "--mode",
+            "dag-top",
+            "--model",
+            "IcoSphereDense.nmesh",
+            "--screenshot",
+            "{root}/build/showcase/runs/s3-done-negative2.png",
+            "--frames",
+            "2"
+          ],
+          "command": "viewer.exe --mode dag-top --model IcoSphereDense.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative2.png --frames 2"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（15/15，阶段校验 S3.2）",
+          "kind": "selftest",
+          "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 15。",
+          "expectLog": "SELFTEST PASS (15/15)",
+          "script": "example/s3-done/run.bat selftest",
+          "args": [
+            "--selftest"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s4.0",
+      "label": "M4.0",
+      "name": "GPU 簇数据通路 + vertex pulling 渲染（S4 首里程碑）",
+      "tag": "s4-indirect",
+      "date": "2026-11-08",
+      "summary": "M4.0（kStage=S4.0）：把 .nmesh 几何常驻显存，VS 用 vertex pulling（SV_InstanceID→簇元数据 SSBO→顶点/索引 SSBO）一次性 drawIndexedIndirect 画出全部簇（instanceCount=总簇数=全画，剔除在 M4.1 才接）。方案 A 单 draw + pulling，S5 遍历 cut 只换 instanceCount 语义零返工。三张 SSBO：vertexPool(8f/顶点 pos/normal/uv)、localIndices(每簇局部索引)、clusterMeta([vertexBase,triCount,localBase,0])；identity 索引缓冲做 dummy 越界三角(NaN)被光栅化丢弃。簇色 shader 端 pcg(簇号) 与 cluster 场景 CPU 端 clusterColor() 同式→逐像素一致。双后端 DX12/Vulkan 均 deviceErrors=0。",
+      "acceptance": [
+        "vertex pulling 全画 == cluster 基线：同机位同 shading 下 --mode cull 与 --mode cluster 逐字节相同（DX12 / Vulkan 各自一致）",
+        "越界三角 dummy（NaN）被光栅化整三角丢弃，不产生垃圾像素；cull back/none 两种均通过",
+        "簇色 pcg(簇号) 两路径同式，cluster 模式与 cull 模式像素一致（非 tri-id 顺序依赖）",
+        "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁",
+        "tag s4-indirect，kStage=S4.0"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "pulling-back",
+          "name": "vertex pulling 全画 == cluster 基线（cull back）",
+          "kind": "pair",
+          "note": "同机位同 shading（yaw30/pitch20/dist2.6, 640x360, shading cluster）。基线为 --mode cluster --cull back 渲染；本用例渲染 --mode cull --cull back，regression 比对两者逐字节相同即证明 pulling 路径正确。",
+          "baselines": {
+            "dx12": "example/s4-indirect/cluster-back-dx12.png",
+            "vulkan": "example/s4-indirect/cluster-back-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--cull",
+            "back",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "1",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "2.6",
+            "--size",
+            "640x360"
+          ],
+          "command": "viewer.exe --mode cull --cull back --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+          "script": "example/s4-indirect/run.bat verify",
+          "preview": "example/s4-indirect/pulling-back-dx12.png"
+        },
+        {
+          "id": "pulling-none",
+          "name": "vertex pulling 全画 == cluster 基线（cull off / none）",
+          "kind": "pair",
+          "note": "同上，但 cull 关闭（显示内壁）。基线为 --mode cluster --cull off；本用例 --mode cull --cull off。两者逐字节相同。",
+          "baselines": {
+            "dx12": "example/s4-indirect/cluster-none-dx12.png",
+            "vulkan": "example/s4-indirect/cluster-none-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--cull",
+            "off",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "1",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "2.6",
+            "--size",
+            "640x360"
+          ],
+          "command": "viewer.exe --mode cull --cull off --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+          "script": "example/s4-indirect/run.bat verify",
+          "preview": "example/s4-indirect/pulling-none-dx12.png"
+        }
+      ]
+    },
+    {
+      "id": "s4.1",
+      "label": "M4.1",
+      "name": "GPU 视锥剔除 + 可见列表间接寻址（compute cull pass）",
+      "tag": "s4-cull",
+      "date": "2026-11-08",
+      "summary": "M4.1（kStage=S4.1）：compute 剔除 pass——csCull 每线程测一个簇包围球（Gribb-Hartmann 5 平面，MVP 行直接取平面、归一化后球测试），可见簇 InterlockedAdd 追加进 visibleList 并回写 indirectArgs.instanceCount，drawIndexedIndirect 消费之（VS 经 g_visibleList[instanceID] 间接寻址取簇号）。簇色=pcg(簇号) 与顺序无关，原子追加的非确定性次序不影响像素。蓝图为 bevy meshlet cull_clusters.wesl；UE 能力有（NaniteCullRaster 混合软/硬光栅）但结构与遍历融合不可拆，Carrot 走 mesh shader（NVRHI 2021 不支持）→ S4-PLAN 均记 N/A。真剔除姿态=相机进模型内部（轨道相机几何决定：背对时整模仍在视锥内，S4-PLAN『背对≈0』前提对轨道相机不成立，如实修正）：dist0.45/640x720 时 GPU 30/237 == frustum_check.py 离线 30，双后端一致；正脸 237/237 与 cluster 基线逐字节相同（pass-through 零像素影响）。readback 2 帧延迟环形（DX12 map 等 lastUseFence），HUD frustum 行 frames>=4 出数。多状态缓冲（UAV/SRV/IndirectArgs 同帧）用 initialState=CopyDest + keepInitialState（NVRHI 动态跟踪不跨 command list）。双后端 deviceErrors=0。",
+      "acceptance": [
+        "pass-through：正脸（全可见 237）--mode cull（frustum on）与 --mode cluster 逐字节相同（DX12/Vulkan 各自一致）——剔除 pass + 间接寻址在零剔除时像素零影响",
+        "真剔除：相机进模型内部 dist0.45（640x720 竖构图视锥更窄）GPU=30/237，== frustum_check.py 离线值（同一相机公式 5 平面球测试），双后端一致",
+        "HUD frustum 统计行（readback 2 帧延迟）与日志 cull stats 数字一致，截图确定性（同机位两跑逐字节相同）",
+        "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁（shader artifacts 18/18 含 cull.cs spv/dxil）",
+        "tag s4-cull，kStage=S4.1"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "cull-front",
+          "name": "pass-through：frustum-on 全可见位图 == cluster 基线",
+          "kind": "pair",
+          "note": "正脸机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）——沿用 M4.0 已证字节一致的同机位。基线为 --mode cluster；本用例 --mode cull（frustum 默认 on，全部 237 簇可见）。逐字节相同即证明 compute 剔除 pass + 可见列表间接寻址在零剔除时对像素零影响（簇色 pcg(簇号) 顺序无关，原子追加次序不进像素）。注意：默认机位 yaw12/pitch9.2 下 pulling 与 cluster 路径有 1 个取整平局像素（maxDelta 154），故 pair 用例必须落在已验证机位；双后端 3 连跑稳定。",
+          "baselines": {
+            "dx12": "example/s4-cull/cluster-front-dx12.png",
+            "vulkan": "example/s4-cull/cluster-front-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "2.6",
+            "--size",
+            "640x360"
+          ],
+          "command": "viewer.exe --mode cull --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+          "script": "example/s4-cull/run.bat verify",
+          "preview": "example/s4-cull/cull-front-dx12.png"
+        },
+        {
+          "id": "cull-inside-hud",
+          "name": "真剔除：相机进模型内部，HUD frustum 行 30/237",
+          "kind": "image",
+          "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。",
+          "baselines": {
+            "dx12": "example/s4-cull/cull-inside-hud-dx12.png",
+            "vulkan": "example/s4-cull/cull-inside-hud-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9.2",
+            "--dist",
+            "0.45",
+            "--size",
+            "640x720"
+          ],
+          "expectLog": "cull stats: visible 30 / 237",
+          "command": "viewer.exe --mode cull --hud --screenshot <out.png> --frames 4 --yaw 12 --pitch 9.2 --dist 0.45 --size 640x720",
+          "script": "example/s4-cull/run.bat verify",
+          "preview": "example/s4-cull/cull-inside-hud-dx12.png"
+        }
+      ]
+    },
+    {
+      "id": "s4.1-tools",
+      "label": "M4.1",
+      "name": "frustum_check.py 离线视锥对照工具",
+      "tag": "s4-cull",
+      "date": "2026-11-08",
+      "summary": "M4.1 离线对照：tools/frustum_check.py 逐行复刻 camera.cpp 相机公式（perspectiveZO × lookAt 列主序、ZO 深度）+ Gribb-Hartmann 5 平面提取 + 包围球测试，读 .nmesh 簇包围球（52B 记录 offset16），输出可见簇数/列表。--expect N 不符即 exit 1（回归锁数字）；--list 打印可见簇号。与 GPU HUD 数字逐姿态对照：正脸 237/237、进模型 30/237（640x720）。工具用例经 tools/frustum_check.bat 包装（regression 无 shell 启动 .py 需可执行 shim，退出码直通）。一张 .nmesh 的簇号即 GPU visibleList 里的 tid，离线与 GPU 数的是同一批球。",
+      "acceptance": [
+        "离线 == GPU：进模型姿态（yaw12/pitch9.2/dist0.45/640x720）--expect 30 通过；正脸 --expect 237 通过",
+        "--expect 不符 exit 1（负向锁数字）；文件不存在 exit 1 显式报错",
+        "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 30/237）"
+      ],
+      "exe": {
+        "dx12": "tools/frustum_check.bat",
+        "vulkan": "tools/frustum_check.bat"
+      },
+      "cases": [
+        {
+          "id": "offline-inside",
+          "name": "离线对照：进模型姿态 --expect 30（== GPU）",
+          "kind": "tool",
+          "note": "与 s4.1/cull-inside-hud 同机位同尺寸（640x720）。GPU 回读 instanceCount=30，本工具独立从 .nmesh 球 + 相机公式算出 30，两数相等即 GPU 剔除语义与离线参考逐簇一致。",
+          "args": [
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9.2",
+            "--dist",
+            "0.45",
+            "--width",
+            "640",
+            "--height",
+            "720",
+            "--expect",
+            "30"
+          ],
+          "expectExit": 0,
+          "expectLog": "MATCH",
+          "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 0.45 --width 640 --height 720 --expect 30",
+          "script": "example/s4-cull/run.bat verify"
+        },
+        {
+          "id": "offline-front",
+          "name": "离线对照：正脸全可见 --expect 237",
+          "kind": "tool",
+          "note": "默认 640x360。轨道相机永远看原点，dist4.2 时整模在视锥内（半高约1.74 > 模型半径约1.3），237 全可见——与 GPU 正脸数字一致。",
+          "args": [
+            "{root}/assets/meshlets/Suzanne.nmesh",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9.2",
+            "--dist",
+            "4.2",
+            "--expect",
+            "237"
+          ],
+          "expectExit": 0,
+          "expectLog": "MATCH",
+          "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 4.2 --expect 237",
+          "script": "example/s4-cull/run.bat verify"
+        },
+        {
+          "id": "negative-missing",
+          "name": "负向：资产不存在显式报错（防假成功）",
+          "kind": "tool",
+          "note": "读不到 .nmesh 必须 FAIL + exit 1，不许静默成功。",
+          "args": [
+            "{root}/assets/meshlets/Nope.nmesh"
+          ],
+          "expectExit": 1,
+          "expectLog": "FAIL",
+          "command": "frustum_check.py assets/meshlets/Nope.nmesh"
+        }
+      ]
+    },
+    {
+      "id": "s4.2",
+      "label": "M4.2",
+      "name": "1.3M 致密场景 + cull pass GPU 计时（HUD 统计完善）",
+      "tag": "s4-done",
+      "date": "2026-11-08",
+      "summary": "M4.2（kStage=S4.2）：①新资产 IcoSphereDense1M.nmesh 入仓——gen-dense-mesh.py --subdiv 8（20x4^8=1,310,720 tri / 655,362 顶点 / GLB md5 ea0b6749d0a681c0610bd23882a072e1），nanite-tools cluster 切 19,718 簇（avg 66.5 tri/簇，coverage 100%，limits PASS），.nmesh 33.5MB；②cull pass 接入第二个 GpuTimer 实例（begin/end 只包 compute 剔除段，resolve 日志带 [frame]/[cull] 标签区分），HUD 新增 cull GPU 行 + 曲线（仅 cull 模式占位，其它模式布局一像素不动），面板高度上限 510→560（510 装不下新曲线出滚动条，小画布仍由 min(cap,H-28) 兜底）；③viewer 截图模式新增 frame timing 日志（无节流 CPU 吞吐上限）。验收：1.3M tri 正对 640x360 全可见 19718/19718，cull==cluster 逐字节一致且 DX12==Vulkan 跨后端也逐字节一致；640x720 下 frustum 剔 1353 簇像素零影响（包围球测试保守性实证）；进模 dist0.45 GPU 1932/19718（剔除 90.2%）== frustum_check.py 离线，双后端一致；内壁 --cull none 满屏簇色马赛克证明可见列表真实光栅化。60fps 实测（RTX 4060 Laptop）：CPU avg 4.87~5.55ms、整帧 GPU 0.96~1.02ms（正对）/0.17ms（进模）、cull pass 约 0.010ms——距 16.6ms 预算两个数量级。踩坑：cull 计时轮询必须在 hud_.build() 之前（viewer 每帧重建 HudFrame，晚于 build 写标志永远显示不出来）。",
+      "acceptance": [
+        "pass-through on 1.3M tri：正对 640x360（全可见 19718/19718）--mode cull（frustum on）与 --mode cluster 逐字节相同，且 DX12/Vulkan 跨后端也逐字节一致（bytes 档）",
+        "真剔除：进模 dist0.45/640x720 GPU=1932/19718（剔除 90.2% > 85% 判据）== frustum_check.py 离线值，双后端一致；--cull none 内壁满屏渲染证明可见列表光栅化正常",
+        "HUD cull GPU 行 + 曲线（deterministic 固定样本 0.08ms；实测定时 interaction 窗口 cull pass 约 0.010ms，[frame]/[cull] resolve 日志双行可查）",
+        "60fps：截图模式无节流 30 帧 CPU avg 4.87~5.55ms / max 尖峰为首帧预热；GPU 整帧 0.96~1.02ms 与 0.17ms 远低于 16.6ms",
+        "双后端 deviceErrors=0；kStage=S4.2；m0.9/s2.0/s3.2 三对 HUD 基线随 stage 文本重拍"
+      ],
+      "exe": {
+        "dx12": "build/dx12/viewer.exe",
+        "vulkan": "build/vulkan/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "dense-front-pair",
+          "name": "1.3M tri pass-through：frustum-on 全可见位图 == cluster 基线",
+          "kind": "pair",
+          "note": "正对机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）。640x360 视锥水平更宽，19718 簇全可见（frustum_check 640x360 --expect 19718）——纯 pass-through 位姿。基线 --mode cluster；本用例 --mode cull。逐字节相同且跨后端一致。",
+          "baselines": {
+            "dx12": "example/s4-done/dense-front-cluster-dx12.png",
+            "vulkan": "example/s4-done/dense-front-cluster-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--model",
+            "IcoSphereDense1M.nmesh",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "2.6",
+            "--size",
+            "640x360"
+          ],
+          "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+          "script": "example/s4-done/run.bat verify",
+          "preview": "example/s4-done/dense-front-cull-dx12.png"
+        },
+        {
+          "id": "dense-inside-hud",
+          "name": "真剔除 90.2%：进模 HUD frustum 行 1932/19718 + cull GPU 行",
+          "kind": "image",
+          "note": "进模姿态（dist0.45/640x720, frames>=4 等回读）。画面主体为深色属正确行为：封闭球从内部看全是背面、cullBack=true 全被光栅化剔除（球体与开放壳的 Suzanne 不同）；可见性证据在 HUD 数字——frustum 1932/19718 (9.8%) + cull GPU 0.080ms（deterministic 固定样本）。可见列表真实光栅化由 dense-inside-none 用例证明。",
+          "baselines": {
+            "dx12": "example/s4-done/dense-inside-hud-dx12.png",
+            "vulkan": "example/s4-done/dense-inside-hud-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--model",
+            "IcoSphereDense1M.nmesh",
+            "--hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "6",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "0.45",
+            "--size",
+            "640x720"
+          ],
+          "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --hud --screenshot <out.png> --frames 6 --shading cluster --yaw 30 --pitch 20 --dist 0.45 --size 640x720",
+          "script": "example/s4-done/run.bat verify",
+          "preview": "example/s4-done/dense-inside-hud-dx12.png"
+        },
+        {
+          "id": "dense-inside-none",
+          "name": "可见列表光栅化实证：进模 + cull none 内壁满屏簇色",
+          "kind": "image",
+          "note": "同机位关背面剔除：1932 个过视锥簇的内壁铺满全屏（相机贴内壁近距特写），证明 GPU 可见列表内容真实可光栅化、少 draw 路径无异常。DX12 与 Vulkan 逐字节一致（bytes 档）。",
+          "baselines": {
+            "dx12": "example/s4-done/dense-inside-none-dx12.png",
+            "vulkan": "example/s4-done/dense-inside-none-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "cull",
+            "--model",
+            "IcoSphereDense1M.nmesh",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "4",
+            "--shading",
+            "cluster",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "0.45",
+            "--cull",
+            "none",
+            "--size",
+            "640x720"
+          ],
+          "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 0.45 --cull none --size 640x720",
+          "script": "example/s4-done/run.bat verify",
+          "preview": "example/s4-done/dense-inside-none-dx12.png"
+        }
+      ]
+    },
+    {
+      "id": "s4.2-tools",
+      "label": "M4.2",
+      "name": "frustum_check.py 1.3M 致密资产离线对照",
+      "tag": "s4-done",
+      "date": "2026-11-08",
+      "summary": "M4.2 离线对照升级到 1.3M tri / 19,718 簇资产：同一工具零改动（逐行复刻 camera.cpp 公式 + Gribb-Hartmann 5 平面包围球测试），数字级锁两姿态——正对 640x360 全可见 19718、进模 640x720 可见 1932（剔除 90.2%）。宽高比进视锥（M4.1 踩坑②）：同机位 640x360=19718 全可见 / 640x720=18365（剔 1353），离线对照必须与 GPU 用例同尺寸。",
+      "acceptance": [
+        "离线 == GPU：进模 --expect 1932 通过；正对 640x360 --expect 19718 通过（GPU pair 同尺寸）",
+        "--expect 不符 exit 1（负向锁数字）",
+        "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 18365 与 1932，见 s4.2 卡 summary）"
+      ],
+      "exe": {
+        "dx12": "tools/frustum_check.bat",
+        "vulkan": "tools/frustum_check.bat"
+      },
+      "cases": [
+        {
+          "id": "offline-dense-front",
+          "name": "离线对照：1.3M 正对 640x360 全可见 --expect 19718",
+          "kind": "tool",
+          "note": "与 s4.2/dense-front-pair 同机位同尺寸（640x360）。19718 簇全可见 = 纯 pass-through 位姿。",
+          "args": [
+            "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "2.6",
+            "--width",
+            "640",
+            "--height",
+            "360",
+            "--expect",
+            "19718"
+          ],
+          "expectExit": 0,
+          "expectLog": "MATCH",
+          "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 2.6 --width 640 --height 360 --expect 19718",
+          "script": "example/s4-done/run.bat verify"
+        },
+        {
+          "id": "offline-dense-inside",
+          "name": "离线对照：1.3M 进模 640x720 --expect 1932（剔除 90.2%）",
+          "kind": "tool",
+          "note": "与 s4.2/dense-inside-hud 同机位同尺寸。GPU 回读 1932 == 离线 1932。",
+          "args": [
+            "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "0.45",
+            "--width",
+            "640",
+            "--height",
+            "720",
+            "--expect",
+            "1932"
+          ],
+          "expectExit": 0,
+          "expectLog": "MATCH",
+          "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 0.45 --width 640 --height 720 --expect 1932",
+          "script": "example/s4-done/run.bat verify"
+        },
+        {
+          "id": "negative-dense-wrong-expect",
+          "name": "负向：--expect 数字不符 exit 1（防假成功）",
+          "kind": "tool",
+          "note": "进模姿态真值 1932，故意 --expect 99999 必须 FAIL + exit 1。",
+          "args": [
+            "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+            "--yaw",
+            "30",
+            "--pitch",
+            "20",
+            "--dist",
+            "0.45",
+            "--width",
+            "640",
+            "--height",
+            "720",
+            "--expect",
+            "99999"
+          ],
+          "expectExit": 1,
+          "expectLog": "MISMATCH",
+          "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 0.45 --width 640 --height 720 --expect 99999",
+          "script": "example/s4-done/run.bat verify"
+        }
+      ]
     }
-   ]
-  },
-  {
-   "id": "s1.0",
-   "label": "S1.0",
-   "name": "簇着色可视化（--mode cluster，每簇随机色）",
-   "tag": "s1-done",
-   "date": "2026-11-07",
-   "summary": "viewer 新增 --mode cluster：加载 assets/meshlets/*.nmesh（M1.2 资产），每簇随机着色。簇色在 CPU 端用与 shader tri-id 同一个 pcg hash 烘进 CLUSTERCOLOR 顶点属性（.nmesh 窗口复制保证每条目归属唯一簇），零新增 GPU 资源类型，双后端 PNG 逐字节一致。model.slang 单源新增 mode 4 分支；HUD shading combo 加 cluster 项。",
-   "acceptance": [
-    "clusters（球）双后端 PNG 逐字节一致；色块大小均匀、无长条畸形簇（S1 验收判据）",
-    "clusters-hud（Suzanne）HUD 显示 mode cluster / model Suzanne.nmesh (3936 tri) / shading combo cluster；面板 960x540 完整不裁底",
-    "不带 --mode cluster 的历史基线逐字节不变：回归全量 ALL GREEN（kStage 升 S1.0，--check 退出 0）",
-    "selftest 15/15 双后端（stage 校验改 S1.0）",
-    "example/s1.0 归位 + cases.json + run.bat"
-   ],
-   "exe": {
-    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "clusters",
-     "name": "IcoSphereDense 簇着色（4929 簇密铺球面）",
-     "kind": "pair",
-     "note": "球面被 4929 个簇的随机色块均匀密铺——色块大小是否均匀、有无长条畸形簇是切簇算法质量的直接判据。簇色 CPU 烘顶点属性，双后端逐字节一致（不含 HUD 文本差异）。",
-     "baselines": {
-      "dx12": "example/s1.0/clusters-dx12.png",
-      "vulkan": "example/s1.0/clusters-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "cluster",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}",
-      "--model",
-      "IcoSphereDense.nmesh"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 1.5,
-       "max": 8,
-       "step": 0.05,
-       "default": "4.2"
-      }
-     },
-     "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --model IcoSphereDense.nmesh",
-     "script": "example/s1.0/run.bat clusters"
-    },
-    {
-     "id": "clusters-hud",
-     "name": "Suzanne 簇着色 + HUD（237 簇贴脸）",
-     "kind": "pair",
-     "note": "Suzanne 每簇 avg 16.6 tri（每 tri 拆 3 独立顶点、GPU 条目口径 64 上限），色块紧凑贴模型表面、无贯穿面片的长条簇。HUD 自证：mode cluster / model Suzanne.nmesh / shading combo = cluster。",
-     "baselines": {
-      "dx12": "example/s1.0/clusters-hud-dx12.png",
-      "vulkan": "example/s1.0/clusters-hud-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "cluster",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "{dist}"
-     ],
-     "params": {
-      "dist": {
-       "type": "range",
-       "label": "相机距离 dist",
-       "min": 0.45,
-       "max": 12,
-       "step": 0.05,
-       "default": "4.2"
-      }
-     },
-     "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s1.0/run.bat hud"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S1.0）",
-     "kind": "selftest",
-     "note": "stage 检查改为 S1.0；check 数保持 15 不变（历史版本 selftest 用例只锁 count）。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (15/15)",
-     "command": "viewer.exe --selftest",
-     "script": "example/s1.0/run.bat selftest"
-    }
-   ]
-  },
-  {
-   "id": "s2-qem",
-   "label": "M2.1",
-   "name": "组内 QEM 简化 + 边界锁定（S2 灵魂里程碑）",
-   "tag": "s2-qem",
-   "date": "2026-11-07",
-   "summary": "core/simplify：组内 QEM 边折叠（Garland-Heckbert 面积加权二次型 + 有序集折叠队列，代价平局按点编号决胜→完全确定）。灵魂机制：组间边界 canonical 点（被 ≥2 个组的簇引用，判定看组归属而非几何边）锁死——永不移动、永不折叠、其单三角形接缝边不被第三方折叠摧毁（否则跨组裂缝）。link condition + 法线翻转检查拒绝坏折叠；退化平面按面积 clamp。折叠到 round(输入×0.5) 即停，误差=世界空间长度。meshoptimizer vendored 作同口径 LockBorder 对照 oracle（只在 nanite-tools，core 不依赖）。 可视化验收：simplify --obj 导出真实几何（before/after OBJ + 锁定点），tools/qem_preview.py 同机位同尺度渲染 example/s2-qem/qem-suzanne.png，左侧 3936 tri / 右侧 1976 tri、622 个红点（组间边界点）两图逐像素同位。",
-   "acceptance": [
-    "selftest qem 全绿：锁定点集合==独立重算边界集合（交叉验证）、边界点位级不变、接缝边双侧存活（无裂缝拓扑前提）、简化率 30~60%、确定性重跑一致、负向拒绝",
-    "Suzanne：3936 → 1976 tri（50.2%）、622 边界点锁定、maxErr 0.025（世界空间）；oracle meshopt 49.5% 同档",
-    "ctest 8→10（s2-qem-selftest / s2-qem-suzanne 正则锁定 oracle 行）",
-    "viewer 零改动：回归总闸全绿（渲染基线逐字节不动）",
-    "交代物：本页工具用例现场实跑 + docs/s2/NANITE-TOOLS-GUIDE.md 输出归档",
-    "可视化证据：example/s2-qem/qem-suzanne.png + example/s2-qem/run.bat 一键复现；展示台 s2-qem 卡直接显示该图"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest qem：简化+边界锁机械单测",
-     "kind": "tool",
-     "note": "连续 64x64 网格（22 组相邻）上验证灵魂断言：锁定点集合与独立重算边界集合一致（防同错）、边界顶点简化后逐点位级不变、每条接缝边两侧组都有三角形（拼接无裂缝的拓扑前提）、简化率落在 30~60%、同输入重跑逐字节一致；单四边形 2→1 三角；断连双块锁定点不跨块；非法 ratio / 聚组不匹配 / 空网格显式拒绝。",
-     "args": [
-      "selftest",
-      "qem"
-     ],
-     "expectExit": 0,
-     "expectLog": "qem selftest: PASS",
-     "command": "nanite-tools selftest qem"
-    },
-    {
-     "id": "simplify",
-     "name": "simplify：Suzanne 组内 QEM 简化（带 -v 明细）",
-     "kind": "tool",
-     "note": "读 .nmesh → METIS 聚组 → 逐组 QEM 简化到 50%：打印边界点锁定数（S3 DAG 沿用）、每组输入/输出三角数与 collapses、世界空间 maxErr；oracle 行是 meshopt_SimplifyLockBorder 同参数对照（它锁全部拓扑边界含模型外缘，比我们只锁组间边界更保守）。下拉切 Suzanne / IcoSphereDense 对比高模表现。 卡片上方是同一份真实几何的简化前后对比图（同机位同尺度，红点=622 个锁定边界点，两图位置完全一致）。",
-     "args": [
-      "simplify",
-      "{root}/assets/meshlets/{asset}",
-      "-v"
-     ],
-     "params": {
-      "asset": {
-       "type": "select",
-       "label": "资产",
-       "options": [
-        "Suzanne.nmesh",
-        "IcoSphereDense.nmesh"
-       ],
-       "default": "Suzanne.nmesh"
-      }
-     },
-     "expectExit": 0,
-     "expectLog": "oracle      : meshopt LockBorder",
-     "command": "nanite-tools simplify assets/meshlets/<asset> -v",
-     "preview": "example/s2-qem/qem-suzanne.png"
-    },
-    {
-     "id": "negative-ratio",
-     "name": "负向：非法简化比（exit 1）",
-     "kind": "tool",
-     "note": "-r 0 不在 (0,1] 区间，simplifyGroups 显式拒绝退出 1，不许静默成功或死循环。",
-     "args": [
-      "simplify",
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "-r",
-      "0"
-     ],
-     "expectExit": 1,
-     "expectLog": "target ratio must be in (0,1]",
-     "command": "nanite-tools simplify Suzanne.nmesh -r 0"
-    },
-    {
-     "id": "dump",
-     "name": "simplify --obj：导出真实几何供可视化验收",
-     "kind": "tool",
-     "note": "现场实跑 --obj：写出 .before.obj / .after.obj（canonical 点 + 三角形 soup）与 .locked（组间边界点编号）。example/s2-qem/qem-suzanne.png 即由这份导出经 tools/qem_preview.py 离线渲染（同机位同尺度），复现脚本 example/s2-qem/run.bat。M2.2 分层落盘沿用同一口径。",
-     "args": [
-      "simplify",
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "--obj",
-      "{root}/build/qem/showcase-suzanne"
-     ],
-     "expectExit": 0,
-     "expectLog": "obj dump   :",
-     "command": "nanite-tools simplify Suzanne.nmesh --obj build/qem/<name>"
-    }
-   ]
-  },
-  {
-   "id": "s2-loop",
-   "label": "M2.2",
-   "name": "逐层 LOD 循环：简化→重切→分层 .nmesh（S2）",
-   "tag": "s2-loop",
-   "date": "2026-11-07",
-   "summary": "core/lod 严格对齐 Nanite 系标准做法：每层重新聚组 → 边界锁按当前分组全量重算（不跨层继承）→ 每组硬目标 50% 简化 → 按组重切（M3.0 对齐 UE ReduceGroup / bevy 每组独立 compute_meshlets：父簇绝不跨组，血缘随层落盘）→ 下一层。依据 bevy from_mesh.rs:114-120/520-523（lock_group_borders 每轮覆写）、:556（group_indices.len()/2）、:154（每组独立 compute_meshlets）、UE ClusterDAG.cpp:1470（TargetNumTris 硬目标）、:1378-1605（ReduceGroup 组内合并→简化→SplitCluster 按组重切）、Cluster.cpp:1023-1039（LockPosition 只作用当前 group）、meshoptimizer simplifier.cpp:2492（while result_count > target_index_count）。误差按 UE:1441/bevy:146-151 单调化为 parent error。每层写 <prefix>.lodN.nmesh（.nmesh v2 尾部 section：level / maxError / lockedPositions，M3.0 起 meta version 2 再加 DAG 血缘：dagGroups + clusterGroup），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne 7 层 3936→1970→1002→500→252→142→104 tri。",
-   "acceptance": [
-    "selftest loop 全绿：灵魂断言「每层锁点集合 == 按该层分组独立重算的组间边界集合」（交叉验证防同错，若存在跨层继承立刻不等）、每层约减半 30~80%（M3.0 按组重切簇粒度取整，bevy/UE 同款）、parent error 单调不减、簇上限、v1/v2 资产读回、确定性重跑、负向拒绝",
-    "Suzanne：7 层 L0 3936 → L1 1970（50.1%）→ 1002 → 500 → 252 → 142 → 104 tri；簇 237→35→19→15→8→7→3；锁点 622→183→100→43→0→0→0（每层重算、递减而非累积）；parent error 0→0.0435→0.1339→0.1339→0.2690→0.4222→1.1375 单调",
-    "ctest 10→12（s2-loop-selftest / s2-loop-suzanne）、回归总闸全绿（渲染基线逐字节不动）",
-    "交代物：展示台 s2-loop 工具卡现场实跑 + example/s2-loop/lod-suzanne.png 六层真实几何金字塔（同机位同尺度）+ run.bat + docs/s2/NANITE-TOOLS-GUIDE.md 归档"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest loop：逐层循环机械单测",
-     "kind": "tool",
-     "note": "128x128 合成网格上验证标准循环：层数≥3、每层三角数严格递减且约减半（30~80%，按组重切簇粒度取整）、每簇 ≤128 tri/64 vtx、每层 lodMeta.level 正确；灵魂断言「每层锁点集合 == 独立重算的当前分组边界集合」（证明边界锁每轮重算、不继承历史层）、顶层无 outgoing seams、parent error 单调不减、v2 .nmesh 落盘读回逐字段一致、v1 仍可读、确定性重跑逐字节一致、负向参数全拒。",
-     "args": [
-      "selftest",
-      "loop"
-     ],
-     "expectExit": 0,
-     "expectLog": "loop selftest: PASS",
-     "command": "nanite-tools selftest loop"
-    },
-    {
-     "id": "lod",
-     "name": "lod：Suzanne 逐层简化重切 + 分层落盘",
-     "kind": "tool",
-     "note": "读 .nmesh → 每层重新聚组 → 按当前分组重算边界锁 → 每组硬目标 50% QEM → 重切循环，打印每层 clusters/tris/groups/locked/collapses/parent maxErr，并把每层写成 <prefix>.lodN.nmesh（v2，lockedPositions = 本层组间边界点，S3 DAG cut 用）。卡片上方证据图由同一份落盘二进制离线渲染：六栏同机位同尺度，红点为该层边界点，逐层递减；顶层无红点。下拉可切高模看规模化表现。",
-     "args": [
-      "lod",
-      "{root}/assets/meshlets/{asset}",
-      "-o",
-      "{root}/build/qem/showcase-lod",
-      "--max-levels",
-      "8"
-     ],
-     "params": {
-      "asset": {
-       "type": "select",
-       "label": "资产",
-       "options": [
-        "Suzanne.nmesh",
-        "IcoSphereDense.nmesh"
-       ],
-       "default": "Suzanne.nmesh"
-      }
-     },
-     "preview": "example/s2-loop/lod-suzanne.png",
-     "expectExit": 0,
-     "expectLog": "lod files   : ",
-     "command": "nanite-tools lod assets/meshlets/<asset> -o build/qem/showcase-lod --max-levels 8"
-    },
-    {
-     "id": "negative-levels",
-     "name": "负向：--max-levels 0（exit 1）",
-     "kind": "tool",
-     "note": "maxLevels 必须 >=1，buildLodHierarchy 显式拒绝并退出 1，不许静默生成只有 L0 的假层级。",
-     "args": [
-      "lod",
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "--max-levels",
-      "0"
-     ],
-     "expectExit": 1,
-     "expectLog": "maxLevels must be >= 1",
-     "command": "nanite-tools lod Suzanne.nmesh --max-levels 0"
-    }
-   ]
-  },
-  {
-   "id": "s2.0",
-   "label": "M2.3",
-   "name": "viewer --mode lod N + HUD 滑条（S2 收官）",
-   "tag": "s2-done",
-   "date": "2026-11-07",
-   "summary": "M2.3：--mode lod N 直接渲染分层资产 assets/meshlets/Suzanne.lodN.nmesh（nanite-tools lod 产出，7 层入仓共 ~0.5MB），HUD 滑条运行时切层。切层 = scene.uploadClusterMesh 读盘→展开→新建 VB/IB 上传→替换句柄，shader/pipeline/binding 全部复用；层号/parent error 从 .nmesh v2 尾部 section 读回，HUD 标 lod N/M tri maxErr。缺省着色 normal（几何不连续在逐面法线色上最敏感）。renderer 探测 <stem>.lodN.nmesh 从 0 连续计数；没有分层资产 / N 越界 / 非数字一律 exit 1，绝不静默回退。kStage 升 S2.0。M2.3a 判决实验根治翻转面：朝向锚 + 法线继承（rebuildMeshlets 继承输入法线和），check-orient 全链 L0..L6 inward=0（纯官方口径跨层累计 1→8）。",
-   "acceptance": [
-    "滑条切层肉眼验收：L0..L6 同机位七层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞无黑斑（M2.3a 判决实验后翻转面根治，check-orient exit 0）",
-    "负向全拒：--lod 非数字 / 越界 / 资产无分层文件均 exit 1；selftest 15/15（含 lod 模式分发）",
-    "双后端 pair 基线：L3/L5 逐字节一致，L0 near（差 2 px / maxDelta 1，GPU 取整噪声）；HUD 960x540 滑条自证 lod 2/6 tri 1002 maxErr 0.1339（HUD 字体光栅两后端已知必然差异，near 档）",
-    "ctest + 回归总闸全绿；交代物：展示台 s2-done 版本卡 + run.bat + docs/s2 归档"
-   ],
-   "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "lod-l0",
-     "name": "lod L0：3936 tri 原始层",
-     "kind": "pair",
-     "note": "最细层。与 --mode cluster 同一场景代码，首载与滑条切层走同一条 uploadClusterMesh 路径。",
-     "baselines": {
-      "dx12": "example/s2-done/lod-l0-dx12.png",
-      "vulkan": "example/s2-done/lod-l0-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "0",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode lod --lod 0 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s2-done/run.bat gallery"
-    },
-    {
-     "id": "lod-l3",
-     "name": "lod L3：500 tri（滑条中段）",
-     "kind": "pair",
-     "note": "组数 4、锁点 43；法线着色下组间接缝无裂缝。maxErr 0.1339（parent error，HUD 同值）。",
-     "baselines": {
-      "dx12": "example/s2-done/lod-l3-dx12.png",
-      "vulkan": "example/s2-done/lod-l3-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "3",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode lod --lod 3 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s2-done/run.bat gallery"
-    },
-    {
-     "id": "lod-l5",
-     "name": "lod L5：142 tri 深度简化层",
-     "kind": "pair",
-     "note": "5 簇 / 0 锁点 / maxErr 0.4082。M2.3a 判决实验后无翻转面：全链 inward=0，法线继承 L0 原始场。",
-     "baselines": {
-      "dx12": "example/s2-done/lod-l5-dx12.png",
-      "vulkan": "example/s2-done/lod-l5-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "5",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--no-hud",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode lod --lod 5 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s2-done/run.bat gallery"
-    },
-    {
-     "id": "lod-hud",
-     "name": "lod L2 + HUD（960x540，滑条自证）",
-     "kind": "pair",
-     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/6 tri 1002 maxErr 0.1339。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
-     "baselines": {
-      "dx12": "example/s2-done/lod-hud-dx12.png",
-      "vulkan": "example/s2-done/lod-hud-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "2",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--hud",
-      "--size",
-      "960x540",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode lod --lod 2 --model Suzanne.nmesh --screenshot <out.png> --frames 8 --hud --size 960x540 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s2-done/run.bat gallery"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S2.0）",
-     "kind": "selftest",
-     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 15。",
-     "args": [
-      "--selftest"
-     ],
-     "expectLog": "SELFTEST PASS (15/15)",
-     "command": "viewer.exe --selftest",
-     "script": "example/s2-done/run.bat selftest"
-    },
-    {
-     "id": "negative-lod-text",
-     "name": "负向：--lod 非数字（exit 1，无窗口）",
-     "kind": "tool",
-     "note": "parseArgs 直接拒绝，不创建窗口不碰 GPU；绝不静默落回 0 层。",
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "abc"
-     ],
-     "expectExit": 1,
-     "expectLog": "invalid --lod 'abc'",
-     "command": "viewer.exe --mode lod --lod abc"
-    },
-    {
-     "id": "negative-lod-range",
-     "name": "负向：--lod 9 越界（exit 1）",
-     "kind": "tool",
-     "note": "renderer 探测 Suzanne 共 6 层（0..5），越界显式报错退出；--screenshot 参数只是避免无参交互窗口。",
-     "args": [
-      "--mode",
-      "lod",
-      "--lod",
-      "9",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{root}/build/showcase/runs/s2-done-negative.png",
-      "--frames",
-      "2"
-     ],
-     "expectExit": 1,
-     "expectLog": "out of range",
-     "command": "viewer.exe --mode lod --lod 9 --model Suzanne.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative.png"
-    },
-    {
-     "id": "negative-no-assets",
-     "name": "负向：资产没有分层文件（exit 1）",
-     "kind": "tool",
-     "note": "IcoSphereDense.nmesh 未生成 .lodN.nmesh 时 --mode lod 显式报错，提示 nanite-tools lod 命令。",
-     "args": [
-      "--mode",
-      "lod",
-      "--model",
-      "IcoSphereDense.nmesh",
-      "--screenshot",
-      "{root}/build/showcase/runs/s2-done-negative2.png",
-      "--frames",
-      "2"
-     ],
-     "expectExit": 1,
-     "expectLog": "no layered assets",
-     "command": "viewer.exe --mode lod --model IcoSphereDense.nmesh --screenshot <root>/build/showcase/runs/s2-done-negative2.png"
-    }
-   ]
-  },
-  {
-   "id": "s3.0",
-   "label": "M3.0",
-   "name": "cluster DAG 组装与校验（S3 第一步）",
-   "tag": "s3-dag",
-   "date": "2026-11-07",
-   "summary": "M3.0：血缘落盘 + DAG 校验器。按组重切对齐 UE ReduceGroup（ClusterDAG.cpp:1378-1605）/bevy 每组独立 compute_meshlets（from_mesh.rs:154）：父簇绝不跨组 → 每父簇恰有一个生成组，S5 组原子 cut 语义成立。血缘写进 .nmesh meta version 2（只加不改，v1/旧 v2 逐字节兼容读回）：dagGroups[]（error/simplifyError/sphere[4]/genFirst/genCount）+ clusterGroup[]；组 error = max(组简化误差, 全部成员簇误差)（UE:1441/:1587），父簇 bounds.error 统一携带组误差（UE:1593 \"They are all dependent\"），顶层组 genCount=0（zeux clusterlod terminal group）。nanite-tools dag 读连续 <prefix>.lodN.nmesh 六项校验全 PASS：membership（每簇恰属一组）/generation（gen 区间连续铺满下一层、每父簇恰一生成组）/error chain（逐位精确）/parent error/monotonic/acyclic（组图 DFS 染色）；--export JSON 供离线可视化。Suzanne 7 层 56 组 57 边 87 父簇携带组误差；check-orient 全链 inward=0（按组重切不破 M2.3a 朝向锚）。证据图 tools/dag_preview.py 从 dag --export 真实 JSON 画分层结构（蓝→红 = ParentLODError）。",
-   "acceptance": [
-    "selftest dag 全绿：128x128 合成网格全链不变量逐层逐组全量断言 + error chain ≥100 组 + v3 roundtrip 逐字段一致 + 重读链再校验 + 篡改组误差必被抓住",
-    "dag Suzanne：六项校验 PASS（56 groups / 57 edges / 87 父簇携带组误差 / DFS 无环），负向（无分层资产 / 未知参数）exit 1",
-    "ctest 12→14（s3-dag-selftest / s3-dag-suzanne）；check-orient L0..L6 inward=0；回归总闸 118/118 ALL GREEN",
-    "交代物：证据图 example/s3-dag/dag-structure.png + run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.0 卡现场实跑"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest dag：DAG 血缘机械单测",
-     "kind": "tool",
-     "note": "128x128 连续网格逐层生成后全链校验：全链 DAG 不变量（membership/generation/error chain/parent error/monotonic/acyclic）逐层逐组全量断言、error chain 实测 ≥100 组、顶层组 terminal（genCount=0）、每非顶层组恰产出父簇、v3 .nmesh 落盘读回血缘逐字段一致、重读链再校验、篡改任一组误差立刻被 error chain 抓住。",
-     "args": [
-      "selftest",
-      "dag"
-     ],
-     "expectExit": 0,
-     "expectLog": "dag selftest: PASS",
-     "command": "nanite-tools selftest dag"
-    },
-    {
-     "id": "dag",
-     "name": "dag：Suzanne 全链组装 + 六项校验 + JSON 导出",
-     "kind": "tool",
-     "note": "读 <prefix>.lod0..6.nmesh（meta version 2 血缘）→ 打印逐层 clusters/tris/groups/parentClusters/topErr → 六项校验（membership/generation/error chain/parent error/monotonic/acyclic DFS）→ --export 写分层 DAG JSON。卡片上方结构图由这份真实导出经 tools/dag_preview.py 离线渲染：7 列 = 7 层，每框 = 组（颜色蓝→红 = ParentLODError 高低，标注成员簇数），连线 = 组的生成簇被更粗层哪个组收养——S5 cut 的组原子邻域。",
-     "args": [
-      "dag",
-      "{root}/assets/meshlets/Suzanne",
-      "--export",
-      "{root}/build/showcase/runs/s3-dag-export.json"
-     ],
-     "expectExit": 0,
-     "expectLog": "dag         : OK",
-     "command": "nanite-tools dag assets/meshlets/Suzanne --export build/showcase/runs/s3-dag-export.json",
-     "preview": "example/s3-dag/dag-structure.png"
-    },
-    {
-     "id": "negative-no-layers",
-     "name": "负向：无分层资产（exit 1）",
-     "kind": "tool",
-     "note": "IcoSphereDense 没有分层文件（lod0 探测失败）显式报错退出 1，绝不静默当空 DAG 成功。",
-     "args": [
-      "dag",
-      "{root}/assets/meshlets/IcoSphereDense"
-     ],
-     "expectExit": 1,
-     "expectLog": "cannot open",
-     "command": "nanite-tools dag assets/meshlets/IcoSphereDense"
-    },
-    {
-     "id": "negative-opt",
-     "name": "负向：未知参数（exit 1）",
-     "kind": "tool",
-     "note": "--bogus 显式拒绝退出 1，防静默吞参数。",
-     "args": [
-      "dag",
-      "{root}/assets/meshlets/Suzanne",
-      "--bogus"
-     ],
-     "expectExit": 1,
-     "expectLog": "unknown option",
-     "command": "nanite-tools dag assets/meshlets/Suzanne --bogus"
-    }
-   ]
-  },
-  {
-   "id": "s3.1",
-   "label": "M3.1",
-   "name": "fallback mesh（S8 BLAS 直接吃，不追 DAG）",
-   "tag": "s3-fallback",
-   "date": "2026-11-07",
-   "summary": "M3.1：链最顶层整体 weld 拼成一份普通 indexed mesh（vertices + u32 indices），写进 <prefix>.lod0.nmesh 尾段（.nmesh 文件 version 3，'NFLB' 自描述尾段，按 magic 识别、顺序不敏感；v1/v2 逐字节兼容读回）。输入文件不动，展示台实跑 -o build/... 不碰入仓资产；S8 光追 BLAS / 非 Nanite 兜底渲染直接吃，不追 DAG。UE 口径对照（NaniteBuilder.cpp BuildFallbackMesh :769 + BuildCoarseRepresentation :415）：UE 从 DAG 独立简化到 FallbackPercentTriangles（默认 ~2%）；本实现取链顶层（parent error 单调链背书），Suzanne 104/3936 = 2.6% 同量级，且不引入第二次独立简化——同一条链、同一份确定性，无第二口径可漂移。拼接 = weldPositions 同口径（float 位级相等）合并，边界点本就锁死 → 接缝无洞；属性取 canonical 点首现那份。selftest fallback 灵魂断言：三角守恒 + weld 收敛 + 每条无向边 ≤2 次使用（>2 = T 形/重复面）。证据图 tools/fallback_preview.py 从真实 .nmesh v3 字节离线渲染（平涂+边线；背景透出 = 洞）。",
-   "acceptance": [
-    "selftest fallback 全绿：三角守恒（拼接恒等重索引）、weld 收敛（顶层簇间重复顶点合并）、边流形 ≤2、确定性重拼逐字节一致、v3 roundtrip（fallback + DAG 血缘同时读回）、fallback-only 尾段（无 lodMeta 的 v3）、负向拒绝",
-    "lod Suzanne：fallback 104 tris / 96 verts（from L6, maxErr 1.1375）写进 lod0 尾段；dag 六项校验与 check-orient 全链 inward=0 无回归",
-    "ctest 16/16 双后端（新增 s3-fallback-selftest / s3-fallback-suzanne）；回归总闸 ALL GREEN；server --check exit 0",
-    "交代物：证据图 example/s3-fallback/fallback-preview.png（真实资产字节）+ run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.1 卡现场实跑"
-   ],
-   "exe": {
-    "dx12": "build/dx12/nanite-tools.exe",
-    "vulkan": "build/vulkan/nanite-tools.exe"
-   },
-   "cases": [
-    {
-     "id": "selftest",
-     "name": "selftest fallback：拼接机械单测",
-     "kind": "tool",
-     "note": "128x128 连续网格全链顶层拼接：三角守恒（恒等重索引不许丢三角）、weld 收敛（跨簇边界重复顶点位级合并）、每条无向边 ≤2 次使用（>2 = T 形接缝/重复面，渲染与 BLAS 都会出洞）、确定性重拼、v3 roundtrip（fallback 尾段 + DAG 血缘逐字段一致）、fallback-only 尾段（v1 语义主体 + fallback = v3）、空网格拒绝。",
-     "args": [
-      "selftest",
-      "fallback"
-     ],
-     "expectExit": 0,
-     "expectLog": "fallback selftest: PASS",
-     "command": "nanite-tools selftest fallback"
-    },
-    {
-     "id": "lod-fallback",
-     "name": "lod：链再生成 + fallback 写进 lod0 尾段（输入文件不动）",
-     "kind": "tool",
-     "note": "链写完 → buildFallbackMesh(顶层) → weldPositions 口径位置合并 → 写 <prefix>.lod0.nmesh v3 尾段。卡片上方证据图由落盘的真实字节经 tools/fallback_preview.py 离线渲染：平涂 + 边线，背景透出 = 洞（边流形 ≤2 已由 selftest 断言，图为视觉对照）。",
-     "args": [
-      "lod",
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "-o",
-      "{root}/build/showcase/runs/s3-fallback/lod",
-      "--max-levels",
-      "6"
-     ],
-     "expectExit": 0,
-     "expectLog": "fallback    : ",
-     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/s3-fallback/lod --max-levels 6",
-     "preview": "example/s3-fallback/fallback-preview.png"
-    },
-    {
-     "id": "negative-suite",
-     "name": "负向：未知 selftest 套件（exit 1）",
-     "kind": "tool",
-     "note": "未知套件显式拒绝并列出可用套件，防静默假成功。",
-     "args": [
-      "selftest",
-      "bogus"
-     ],
-     "expectExit": 1,
-     "expectLog": "unknown suite",
-     "command": "nanite-tools selftest bogus"
-    }
-   ]
-  },
-  {
-   "id": "s3.2",
-   "label": "M3.2",
-   "name": "viewer --mode dag-top + 组原子下钻（S3 收官）",
-   "tag": "s3-done",
-   "date": "2026-11-07",
-   "summary": "M3.2：--mode dag-top 渲染 DAG 顶层（最粗层=正确粗模），--dag-group N 组原子下钻：从顶层挖掉该组生成的父簇（genFirst/genCount 区间）、换回该组在第二粗层的成员簇（clusterGroup 血缘），验证父子衔接无洞——S5 运行时组原子 cut 的离线预演。三家参考：UE NaniteHierarchyTraversal.ush（粗→细遍历的单步冻结）、bevy cull_bvh.wesl（parent_error 判据，屏幕空间公式留给 S5）、Carrot draw_virtual_geometry.slang:105（selfError>threshold && refinedError<=threshold 双阈值，组内同决策）。踩坑两个：expandClusterData 索引基址用文件 vertexOffset，掩码跳簇后 kept 簇整个消失（改 clusterBase=入缓冲位置）；dag_weld_check.py 顶点切片 stride 3 应为 8（探针垃圾数据误导排查）。验收双证据：GPU coverage 三组下钻 hole=0（g1/g2 与纯顶层逐字节一致=16->16 无折叠父簇等价子簇）；焊接边流形 mixed 集与 full top 的 84 条开边（Suzanne 眼窝+嘴开放边界，逐层守恒）完全一致、零新增零重叠。kStage 升 S3.2。",
-   "acceptance": [
-    "三组下钻肉眼无洞：top/g0/g1/g2 同机位画廊（example/s3-done/dag-drills.png），run.bat all exit 0",
-    "机械判据一：GPU coverage 掩码 top前景-drill前景 = 0 px（g1/g2 混合集与纯顶层 PNG 逐字节一致）",
-    "机械判据二：tools/dag_weld_check.py --all PASS（mixed 集开边集合=full top，零新增开边、零 >2x 重叠边）",
-    "负向全拒：--dag-group 非数字/越界/资产无分层均 exit 1；HUD 下钻滑条 960x540 面板完整（底边 345<=510）",
-    "双后端 pair 基线：top/g0/g1/g2 逐字节一致（DX12 vs Vulkan MD5 相同）；ctest 16/16 + 回归总闸全绿"
-   ],
-   "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "dag-top",
-     "name": "dag-top 纯顶层：L6 104 tri 正确粗模",
-     "kind": "pair",
-     "note": "不下钻直接渲染最粗层（DAG 顶层组产出的父簇集合）。与 lod 模式同一条 uploadClusterMesh 路径。",
-     "baselines": {
-      "dx12": "example/s3-done/dag-top-dx12.png",
-      "vulkan": "example/s3-done/dag-top-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "dag-top",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode dag-top --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s3-done/run.bat gallery"
-    },
-    {
-     "id": "dag-drill-g0",
-     "name": "下钻 g0：挖 1 父簇换 5 子簇（110->72 真折叠）",
-     "kind": "pair",
-     "note": "g0={L5 c0..c4} 生成 L6 c0（110->72 tri 有真简化）。下钻后几何更细：fill=6278px，hole=1px（与纯 L5 对 top 同级的 AA 噪声）。",
-     "baselines": {
-      "dx12": "example/s3-done/dag-drill-g0-dx12.png",
-      "vulkan": "example/s3-done/dag-drill-g0-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "0",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group 0 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s3-done/run.bat gallery"
-    },
-    {
-     "id": "dag-drill-g1",
-     "name": "下钻 g1：16->16 无折叠父簇等价子簇",
-     "kind": "pair",
-     "note": "g1={L5 c5} 生成 L6 c1，简化零折叠 => 父簇与子簇顶点位级相同，混合集渲染与纯顶层逐字节一致。",
-     "baselines": {
-      "dx12": "example/s3-done/dag-drill-g1-dx12.png",
-      "vulkan": "example/s3-done/dag-drill-g1-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "1",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group 1 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s3-done/run.bat gallery"
-    },
-    {
-     "id": "dag-drill-g2",
-     "name": "下钻 g2：16->16 无折叠",
-     "kind": "pair",
-     "note": "g2={L5 c6} 生成 L6 c2，同 g1。",
-     "baselines": {
-      "dx12": "example/s3-done/dag-drill-g2-dx12.png",
-      "vulkan": "example/s3-done/dag-drill-g2-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "2",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group 2 --no-hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s3-done/run.bat gallery"
-    },
-    {
-     "id": "dag-hud",
-     "name": "HUD 960x540：下钻滑条 dag drill -1..2",
-     "kind": "pair",
-     "note": "HUD 字体光栅两后端已知必然差异（near 档）。滑条写回 viewer 后 setDagCut，HUD 不直接碰渲染资源。",
-     "baselines": {
-      "dx12": "example/s3-done/dag-hud-dx12.png",
-      "vulkan": "example/s3-done/dag-hud-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "1",
-      "--hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "8",
-      "--shading",
-      "normal",
-      "--yaw",
-      "12",
-      "--pitch",
-      "9",
-      "--dist",
-      "4.2"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group 1 --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2",
-     "script": "example/s3-done/run.bat gallery"
-    },
-    {
-     "id": "negative-dag-text",
-     "name": "负向：--dag-group 非数字（exit 1，无窗口）",
-     "kind": "tool",
-     "note": "parseArgs 直接拒绝，绝不静默落回 -1。",
-     "expectExit": 1,
-     "expectLog": "invalid --dag-group",
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "abc"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group abc"
-    },
-    {
-     "id": "negative-dag-range",
-     "name": "负向：--dag-group 99 越界（exit 1）",
-     "kind": "tool",
-     "note": "renderer 探测 Suzanne 可下钻 3 组（0..2），越界显式报错。",
-     "expectExit": 1,
-     "expectLog": "out of range",
-     "args": [
-      "--mode",
-      "dag-top",
-      "--dag-group",
-      "99",
-      "--model",
-      "Suzanne.nmesh",
-      "--screenshot",
-      "{root}/build/showcase/runs/s3-done-negative.png",
-      "--frames",
-      "2"
-     ],
-     "command": "viewer.exe --mode dag-top --dag-group 99 --model Suzanne.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative.png --frames 2"
-    },
-    {
-     "id": "negative-no-assets",
-     "name": "负向：资产没有分层文件（exit 1）",
-     "kind": "tool",
-     "note": "dag-top 需要分层资产（可下钻组数从第二粗层 dagGroups 读），没有则显式报错。",
-     "expectExit": 1,
-     "expectLog": "no layered assets",
-     "args": [
-      "--mode",
-      "dag-top",
-      "--model",
-      "IcoSphereDense.nmesh",
-      "--screenshot",
-      "{root}/build/showcase/runs/s3-done-negative2.png",
-      "--frames",
-      "2"
-     ],
-     "command": "viewer.exe --mode dag-top --model IcoSphereDense.nmesh --screenshot {root}/build/showcase/runs/s3-done-negative2.png --frames 2"
-    },
-    {
-     "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S3.2）",
-     "kind": "selftest",
-     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 15。",
-     "expectLog": "SELFTEST PASS (15/15)",
-     "script": "example/s3-done/run.bat selftest",
-     "args": [
-      "--selftest"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "s4.0",
-   "label": "M4.0",
-   "name": "GPU 簇数据通路 + vertex pulling 渲染（S4 首里程碑）",
-   "tag": "s4-indirect",
-   "date": "2026-11-08",
-   "summary": "M4.0（kStage=S4.0）：把 .nmesh 几何常驻显存，VS 用 vertex pulling（SV_InstanceID→簇元数据 SSBO→顶点/索引 SSBO）一次性 drawIndexedIndirect 画出全部簇（instanceCount=总簇数=全画，剔除在 M4.1 才接）。方案 A 单 draw + pulling，S5 遍历 cut 只换 instanceCount 语义零返工。三张 SSBO：vertexPool(8f/顶点 pos/normal/uv)、localIndices(每簇局部索引)、clusterMeta([vertexBase,triCount,localBase,0])；identity 索引缓冲做 dummy 越界三角(NaN)被光栅化丢弃。簇色 shader 端 pcg(簇号) 与 cluster 场景 CPU 端 clusterColor() 同式→逐像素一致。双后端 DX12/Vulkan 均 deviceErrors=0。",
-   "acceptance": [
-    "vertex pulling 全画 == cluster 基线：同机位同 shading 下 --mode cull 与 --mode cluster 逐字节相同（DX12 / Vulkan 各自一致）",
-    "越界三角 dummy（NaN）被光栅化整三角丢弃，不产生垃圾像素；cull back/none 两种均通过",
-    "簇色 pcg(簇号) 两路径同式，cluster 模式与 cull 模式像素一致（非 tri-id 顺序依赖）",
-    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁",
-    "tag s4-indirect，kStage=S4.0"
-   ],
-   "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "pulling-back",
-     "name": "vertex pulling 全画 == cluster 基线（cull back）",
-     "kind": "pair",
-     "note": "同机位同 shading（yaw30/pitch20/dist2.6, 640x360, shading cluster）。基线为 --mode cluster --cull back 渲染；本用例渲染 --mode cull --cull back，regression 比对两者逐字节相同即证明 pulling 路径正确。",
-     "baselines": {
-      "dx12": "example/s4-indirect/cluster-back-dx12.png",
-      "vulkan": "example/s4-indirect/cluster-back-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "cull",
-      "--cull",
-      "back",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "1",
-      "--shading",
-      "cluster",
-      "--yaw",
-      "30",
-      "--pitch",
-      "20",
-      "--dist",
-      "2.6",
-      "--size",
-      "640x360"
-     ],
-     "command": "viewer.exe --mode cull --cull back --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
-     "script": "example/s4-indirect/run.bat verify",
-     "preview": "example/s4-indirect/pulling-back-dx12.png"
-    },
-    {
-     "id": "pulling-none",
-     "name": "vertex pulling 全画 == cluster 基线（cull off / none）",
-     "kind": "pair",
-     "note": "同上，但 cull 关闭（显示内壁）。基线为 --mode cluster --cull off；本用例 --mode cull --cull off。两者逐字节相同。",
-     "baselines": {
-      "dx12": "example/s4-indirect/cluster-none-dx12.png",
-      "vulkan": "example/s4-indirect/cluster-none-vulkan.png"
-     },
-     "args": [
-      "--mode",
-      "cull",
-      "--cull",
-      "off",
-      "--no-hud",
-      "--screenshot",
-      "{out}",
-      "--frames",
-      "1",
-      "--shading",
-      "cluster",
-      "--yaw",
-      "30",
-      "--pitch",
-      "20",
-      "--dist",
-      "2.6",
-      "--size",
-      "640x360"
-     ],
-     "command": "viewer.exe --mode cull --cull off --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
-     "script": "example/s4-indirect/run.bat verify",
-     "preview": "example/s4-indirect/pulling-none-dx12.png"
-    }
-   ]
-  },
-  {
-   "id": "s4.1",
-   "label": "M4.1",
-   "name": "GPU 视锥剔除 + 可见列表间接寻址（compute cull pass）",
-   "tag": "s4-cull",
-   "date": "2026-11-08",
-   "summary": "M4.1（kStage=S4.1）：compute 剔除 pass——csCull 每线程测一个簇包围球（Gribb-Hartmann 5 平面，MVP 行直接取平面、归一化后球测试），可见簇 InterlockedAdd 追加进 visibleList 并回写 indirectArgs.instanceCount，drawIndexedIndirect 消费之（VS 经 g_visibleList[instanceID] 间接寻址取簇号）。簇色=pcg(簇号) 与顺序无关，原子追加的非确定性次序不影响像素。蓝图为 bevy meshlet cull_clusters.wesl；UE 能力有（NaniteCullRaster 混合软/硬光栅）但结构与遍历融合不可拆，Carrot 走 mesh shader（NVRHI 2021 不支持）→ S4-PLAN 均记 N/A。真剔除姿态=相机进模型内部（轨道相机几何决定：背对时整模仍在视锥内，S4-PLAN『背对≈0』前提对轨道相机不成立，如实修正）：dist0.45/640x720 时 GPU 30/237 == frustum_check.py 离线 30，双后端一致；正脸 237/237 与 cluster 基线逐字节相同（pass-through 零像素影响）。readback 2 帧延迟环形（DX12 map 等 lastUseFence），HUD frustum 行 frames>=4 出数。多状态缓冲（UAV/SRV/IndirectArgs 同帧）用 initialState=CopyDest + keepInitialState（NVRHI 动态跟踪不跨 command list）。双后端 deviceErrors=0。",
-   "acceptance": [
-    "pass-through：正脸（全可见 237）--mode cull（frustum on）与 --mode cluster 逐字节相同（DX12/Vulkan 各自一致）——剔除 pass + 间接寻址在零剔除时像素零影响",
-    "真剔除：相机进模型内部 dist0.45（640x720 竖构图视锥更窄）GPU=30/237，== frustum_check.py 离线值（同一相机公式 5 平面球测试），双后端一致",
-    "HUD frustum 统计行（readback 2 帧延迟）与日志 cull stats 数字一致，截图确定性（同机位两跑逐字节相同）",
-    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁（shader artifacts 18/18 含 cull.cs spv/dxil）",
-    "tag s4-cull，kStage=S4.1"
-   ],
-   "exe": {
-    "dx12": "build/dx12/viewer.exe",
-    "vulkan": "build/vulkan/viewer.exe"
-   },
-   "cases": [
-    {
-     "id": "cull-front",
-     "name": "pass-through：frustum-on 全可见位图 == cluster 基线",
-     "kind": "pair",
-     "note": "正脸机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）——沿用 M4.0 已证字节一致的同机位。基线为 --mode cluster；本用例 --mode cull（frustum 默认 on，全部 237 簇可见）。逐字节相同即证明 compute 剔除 pass + 可见列表间接寻址在零剔除时对像素零影响（簇色 pcg(簇号) 顺序无关，原子追加次序不进像素）。注意：默认机位 yaw12/pitch9.2 下 pulling 与 cluster 路径有 1 个取整平局像素（maxDelta 154），故 pair 用例必须落在已验证机位；双后端 3 连跑稳定。",
-     "baselines": {
-      "dx12": "example/s4-cull/cluster-front-dx12.png",
-      "vulkan": "example/s4-cull/cluster-front-vulkan.png"
-     },
-     "args": [
-      "--mode", "cull",
-      "--no-hud",
-      "--screenshot", "{out}",
-      "--frames", "4",
-      "--shading", "cluster",
-      "--yaw", "30", "--pitch", "20", "--dist", "2.6",
-      "--size", "640x360"
-     ],
-     "command": "viewer.exe --mode cull --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
-     "script": "example/s4-cull/run.bat verify",
-     "preview": "example/s4-cull/cull-front-dx12.png"
-    },
-    {
-     "id": "cull-inside-hud",
-     "name": "真剔除：相机进模型内部，HUD frustum 行 30/237",
-     "kind": "image",
-     "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。",
-     "baselines": {
-      "dx12": "example/s4-cull/cull-inside-hud-dx12.png",
-      "vulkan": "example/s4-cull/cull-inside-hud-vulkan.png"
-     },
-     "args": [
-      "--mode", "cull",
-      "--hud",
-      "--screenshot", "{out}",
-      "--frames", "4",
-      "--yaw", "12", "--pitch", "9.2", "--dist", "0.45",
-      "--size", "640x720"
-     ],
-     "expectLog": "cull stats: visible 30 / 237",
-     "command": "viewer.exe --mode cull --hud --screenshot <out.png> --frames 4 --yaw 12 --pitch 9.2 --dist 0.45 --size 640x720",
-     "script": "example/s4-cull/run.bat verify",
-     "preview": "example/s4-cull/cull-inside-hud-dx12.png"
-    }
-   ]
-  },
-  {
-   "id": "s4.1-tools",
-   "label": "M4.1",
-   "name": "frustum_check.py 离线视锥对照工具",
-   "tag": "s4-cull",
-   "date": "2026-11-08",
-   "summary": "M4.1 离线对照：tools/frustum_check.py 逐行复刻 camera.cpp 相机公式（perspectiveZO × lookAt 列主序、ZO 深度）+ Gribb-Hartmann 5 平面提取 + 包围球测试，读 .nmesh 簇包围球（52B 记录 offset16），输出可见簇数/列表。--expect N 不符即 exit 1（回归锁数字）；--list 打印可见簇号。与 GPU HUD 数字逐姿态对照：正脸 237/237、进模型 30/237（640x720）。工具用例经 tools/frustum_check.bat 包装（regression 无 shell 启动 .py 需可执行 shim，退出码直通）。一张 .nmesh 的簇号即 GPU visibleList 里的 tid，离线与 GPU 数的是同一批球。",
-   "acceptance": [
-    "离线 == GPU：进模型姿态（yaw12/pitch9.2/dist0.45/640x720）--expect 30 通过；正脸 --expect 237 通过",
-    "--expect 不符 exit 1（负向锁数字）；文件不存在 exit 1 显式报错",
-    "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 30/237）"
-   ],
-   "exe": {
-    "dx12": "tools/frustum_check.bat",
-    "vulkan": "tools/frustum_check.bat"
-   },
-   "cases": [
-    {
-     "id": "offline-inside",
-     "name": "离线对照：进模型姿态 --expect 30（== GPU）",
-     "kind": "tool",
-     "note": "与 s4.1/cull-inside-hud 同机位同尺寸（640x720）。GPU 回读 instanceCount=30，本工具独立从 .nmesh 球 + 相机公式算出 30，两数相等即 GPU 剔除语义与离线参考逐簇一致。",
-     "args": [
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "--yaw", "12", "--pitch", "9.2", "--dist", "0.45",
-      "--width", "640", "--height", "720",
-      "--expect", "30"
-     ],
-     "expectExit": 0,
-     "expectLog": "MATCH",
-     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 0.45 --width 640 --height 720 --expect 30",
-     "script": "example/s4-cull/run.bat verify"
-    },
-    {
-     "id": "offline-front",
-     "name": "离线对照：正脸全可见 --expect 237",
-     "kind": "tool",
-     "note": "默认 640x360。轨道相机永远看原点，dist4.2 时整模在视锥内（半高约1.74 > 模型半径约1.3），237 全可见——与 GPU 正脸数字一致。",
-     "args": [
-      "{root}/assets/meshlets/Suzanne.nmesh",
-      "--yaw", "12", "--pitch", "9.2", "--dist", "4.2",
-      "--expect", "237"
-     ],
-     "expectExit": 0,
-     "expectLog": "MATCH",
-     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 4.2 --expect 237",
-     "script": "example/s4-cull/run.bat verify"
-    },
-    {
-     "id": "negative-missing",
-     "name": "负向：资产不存在显式报错（防假成功）",
-     "kind": "tool",
-     "note": "读不到 .nmesh 必须 FAIL + exit 1，不许静默成功。",
-     "args": [
-      "{root}/assets/meshlets/Nope.nmesh"
-     ],
-     "expectExit": 1,
-     "expectLog": "FAIL",
-     "command": "frustum_check.py assets/meshlets/Nope.nmesh"
-    }
-   ]
-  }
- ]
+  ]
 }

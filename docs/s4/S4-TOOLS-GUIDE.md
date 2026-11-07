@@ -92,3 +92,73 @@ GPU：`cull stats: visible 237 / 237 clusters (frustum on)`（双后端一致）
   shim，退出码直通）；
 - `example/s4-cull/run.bat` 一键复现：pass-through 字节比对 + GPU 统计行
   grep + 离线 --expect 三段验收。
+
+---
+
+## M4.2：1.3M 致密资产离线对照 + cull pass GPU 计时（S4.2）
+
+### 新资产：IcoSphereDense1M.nmesh（入仓）
+
+```
+> python scripts/gen-dense-mesh.py --shape icosphere --subdiv 8 --out assets/models/IcoSphereDense1M.glb
+  vertices=655362 triangles=1310720 indices=3932160
+  md5=ea0b6749d0a681c0610bd23882a072e1          (GLB 36,702,876 B)
+
+> nanite-tools cluster assets/models/IcoSphereDense1M.glb -o assets/meshlets/IcoSphereDense1M.nmesh
+  meshlets   : 19718            (.nmesh 33,548,020 B)
+  tri/cluster: avg 66.5  max 102  (limit 128)
+  coverage   : 1310720/1310720 = 100.00%
+  limits     : PASS
+```
+
+S4-PLAN 预估 ~6554 簇，实测 19,718——meshoptimizer 按簇上限（128 tri/64 vert）
+切得更细，剔除压力更足，如实记录。gen-dense-mesh.py 确定性（MD5 锁定），
+GLB 可随时重生成；.nmesh 入仓保 cases.json 基线可复现。
+
+### 两姿态离线值（宽高比进视锥，对照必须同尺寸）
+
+| 姿态 | 尺寸 | 可见 | 剔除 | 备注 |
+|---|---|---|---|---|
+| 正对 yaw30/pitch20/dist2.6 | 640x360 | 19718 | 0 | 水平视锥更宽，纯 pass-through 位姿（pair 用例落这里） |
+| 正对 yaw30/pitch20/dist2.6 | 640x720 | 18365 | 1353 | 剔 1353 簇，GPU 位图仍与 cluster 逐字节一致（球测试保守性实证） |
+| 进模 yaw30/pitch20/dist0.45 | 640x720 | 1932 | 17786 | 剔除 90.2% > 85% 判据；GPU == 离线，双后端一致 |
+
+```
+> python tools/frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 0.45 --width 640 --height 720 --expect 1932
+  MATCH
+```
+
+### cull pass GPU 计时（M4.2 新增 slot）
+
+第二个 GpuTimer 实例（`Scene::cullTimer_`），begin/end 只包 Scene::draw 里的
+compute 剔除段（args 重写 + dispatch + 回读拷贝）。resolve 日志带标签区分：
+
+```
+[nl:info] gpu timer resolved [frame]: 1.01581 ms (first successful NVRHI timestamp query)
+[nl:info] gpu timer resolved [cull]: 0.010656 ms (first successful NVRHI timestamp query)
+```
+
+实测（RTX 4060 Laptop，限时交互窗，960x540）：整帧 0.96~1.02ms（正对）/
+0.17ms（进模）；cull pass 恒约 0.010ms——19,718 簇一次 dispatch 的开销在
+0.01ms 量级，S5 换 DAG 遍历后此 slot 直接复用。
+
+**踩坑**：cull 计时轮询必须在 `hud_.build()` 之前调用——viewer 每帧重建
+`HudFrame{}`，晚于 build 写标志当帧即丢、永远显示不出来（整帧计时在 build
+之前轮询所以没踩过）。两后端 `pollCullTimer` 与整帧计时同位同序。
+
+### 60fps 验收口径
+
+- CPU 侧：截图模式（无 16ms 节流 sleep）测渲染吞吐上限，30 帧
+  `frame timing: avg 4.87~5.55ms`（新增性能日志，只进日志不进画面）；
+  max 尖峰（21~48ms）为首个 swapchain 帧预热，不影响均值口径。
+- GPU 侧：timer query resolve 日志（上节）。
+- 判据 16.6ms：CPU/GPU 均余两个数量级。
+
+### 回归挂接
+
+- `example/cases.json` s4.2 卡（3 渲染用例）+ s4.2-tools 卡（3 工具用例，
+  负向 = --expect 99999 exit 1）；
+- `example/s4-done/run.bat` 一键复现：1.3M pass-through 字节比对（双后端）
+  + HUD 统计行 grep + 内壁渲染 + 离线 --expect 四段验收；
+- kStage bump S4.1→S4.2：m0.9/gate-hud、s2.0/lod-hud、s3.2/dag-hud 三对
+  基线随 stage 文本重拍（预期维护）。

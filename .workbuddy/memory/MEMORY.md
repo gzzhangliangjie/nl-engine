@@ -15,20 +15,21 @@
 - CMake 必用 `NMake Makefiles`（VS 生成器被 HTTPS_PROXY/https_proxy 大小写撞键搞挂）。
 
 ## 当前进度
-- 主线 S0~S4.1：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(**164/164 ALL GREEN**，tag s4-cull)。
-- 当前 `kStage=S4.1`；主线下一步 M4.2(cull pass 接 GpuTimer + 1M dense 资产入仓 + 60fps 验收，tag s4-done) → S5(运行时组原子 cut)。
+- 主线 S0~S4.2：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(s4-cull) → M4.2 cull 计时+1.3M dense 资产+60fps 验收(**176/176 ALL GREEN**，tag s4-done，S4 收官)。
+- 当前 `kStage=S4.2`；主线下一步 S5(运行时组原子 cut，bevy 屏幕空间公式已存档 cull_shared.wesl:13)。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
+- **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，2.3 立项再议 vendored）；M-A5 视觉验收等 2.3 蒙皮 + rigged GLB。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）
 - 每阶段：目标→亲眼可见用例→验收判据→放行；tag 在验收后打。
-- **总闸**：提交/tag 前 `python tools/regression.py` 全绿（双后端 × 全量历史用例，`--jobs` 默认 4 并行提速）。**开发中不跑全量**：日常用 `--only <版本>[/用例]`（可加 `--backend`）验当前阶段，全量只在收口跑一次。并行口径 = 用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
+- **总闸（2026-11-08 用户拍板：回归按需跑，非必要不跑）**：默认不跑回归；改了什么就 `regression.py --only <版本>[/用例]` 挑 2~3 条关键用例验。全量（双后端 × 全量历史用例，`--jobs` 并行）**只在打 tag 收口时跑一次**；其余场景（含验证工具自身改动）禁止起全量。并行口径 = 用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
 - 双后端一致分档：`bytes`(MD5 逐字节)/`near`(≤1/255 且 ≤2px)/`FAIL`，禁笼统写「一致」。
 - 展示台 8787 端口残留先 `netstat -ano | grep 8787` 清。
 - 工具 exe：`build/{dx12,vulkan}/nanite-tools.exe` 各后端重编后手动 cp 同步（NMake 时间戳陷阱，别 cp 盖）。
 - `nanite-tools dag` 六项校验全 PASS 才 exit 0；`selftest dag` 128×128 全链全量断言不抽样。
-- 每次 `kStage` bump 必须重拍 m0.9 gate-hud 与 s2.0 lod-hud 两对基线（S4.1 起 HUD 还多一对 s3.2 dag-hud，共 6 张）。
+- 每次 `kStage` bump 必须重拍 m0.9 gate-hud / s2.0 lod-hud / s3.2 dag-hud 三对基线；且 HUD 布局演进会波及含该模式的所有 HUD 基线（M4.2 给 cull 模式加两行，s4.1/cull-inside-hud 一对也重拍，共 8 张）——总闸 regression 兜底。
 - **example/*/run.bat 里 for 块内引用循环内 set 的变量必须延迟展开 `!VAR!`**（`%VAR%` 解析期为空 → 执行字面 `""` 静默 no-op 假绿；M4.0 旧脚本即此病，M4.1 已修）。
 - UE 源码**只读不抄**（EULA）；Carrot/bevy 抄思路不抄代码。
 
@@ -46,7 +47,7 @@
 - MVP 用 volatile CB（`setMaxVersions(16)`）；`SceneConstants` 严格 160B，**禁整块 memcpy**（尾部有 bool cullBack）。
 - pipeline 必 `setFrontCounterClockwise(true)`，否则剔掉正脸；`--dist 0.6 --cull none` 看内壁。
 - 资源/绘制逻辑收 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present。
-- ImGui vendored **v1.91.9**，自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）；`hudProjection()` Y 尺度必须负；面板高度≤510；HUD 字符串须 ASCII；`renderFrame(...,hud=nullptr)` 不碰 ImGui（截图默认 `--no-hud`）。
+- ImGui vendored **v1.91.9**，自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）；`hudProjection()` Y 尺度必须负；面板高度≤560（M4.2 起，510 装不下 cull GPU 行+曲线，小画布仍 min(cap,H-28) 兜底）；HUD 字符串须 ASCII；`renderFrame(...,hud=nullptr)` 不碰 ImGui（截图默认 `--no-hud`）。
 - 新增 GPU 资源 slot 级同步表必在 `createTargets()` 初始化（renderFrame 在 ensurePipeline 前按 slot 访问，放错=首帧 139 段错误）。
 
 ## 简化器口径（M2.3a 定稿）

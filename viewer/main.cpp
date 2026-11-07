@@ -59,6 +59,11 @@ const float kFixedGpuSamples[kFixedSampleCount] = {
     0.62f, 0.64f, 0.61f, 0.66f, 0.63f, 0.62f, 0.68f, 0.60f
 };
 
+// M4.2：cull pass GPU 耗时的固定样本（同上理由；Suzanne 量级剔除段远小于整帧）。
+const float kFixedCullSamples[kFixedSampleCount] = {
+    0.08f, 0.09f, 0.08f, 0.10f, 0.08f, 0.09f, 0.11f, 0.08f
+};
+
 struct Options {
     bool selftest   = false;
     bool help       = false;
@@ -228,7 +233,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S4.1") != nullptr, "S4.1 stage reported");
+    check(std::strstr(st.stage, "S4.2") != nullptr, "S4.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -413,8 +418,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     int frameHistoryCount = 0;
     float gpuHistory[120] = {};    // M0.6：GPU ms 曲线（renderFrame 后由 renderer 写回值追加）
     int gpuHistoryCount = 0;
+    float cullHistory[120] = {};   // M4.2：cull pass GPU ms 曲线（同上，renderer 写回值追加）
+    int cullHistoryCount = 0;
     const std::uint64_t resizeFrame =
         (o.resize && o.frames > 2) ? std::max<std::uint64_t>(2, o.frames / 2) : 0;
+    // M4.2：截图模式的 CPU 帧耗时机械证据（60fps 验收判据 = avg/max 均 ≤16.6ms）。
+    // 只进日志不进画面，任何 PNG 基线不受影响。截图模式无 16ms 节流 sleep，
+    // 测的是纯渲染吞吐上限（无节流都能 ≤16.6ms，节流后必然稳 60fps）。
+    double dtSumMs = 0.0;
+    double dtMaxMs = 0.0;
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -485,6 +497,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
         ++frame;
+        if (o.screenshot) {
+            dtSumMs += dtMs;
+            if (dtMs > dtMaxMs) dtMaxMs = dtMs;
+        }
 
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
@@ -544,6 +560,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.gpuMs = 0.63f;
                 hud.gpuMsCount = kFixedSampleCount;
                 std::memcpy(hud.gpuMsHistory, kFixedGpuSamples, sizeof(kFixedGpuSamples));
+                // M4.2：cull pass 耗时同样固定（renderer 侧 deterministic 不写回真实值）。
+                hud.cullMs = 0.08f;
+                hud.cullMsCount = kFixedSampleCount;
+                std::memcpy(hud.cullMsHistory, kFixedCullSamples, sizeof(kFixedCullSamples));
                 hud.deltaSeconds = 1.0f / 60.0f;
                 hud.mouseX = -100.0f; hud.mouseY = -100.0f;  // 不落在 HUD 窗口内
                 hud.mouseLeftDown = false;
@@ -569,6 +589,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.gpuMsCount = gpuHistoryCount;
                 std::memcpy(hud.gpuMsHistory, gpuHistory,
                             static_cast<std::size_t>(gpuHistoryCount) * sizeof(float));
+                // M4.2：cull pass 曲线同一条累积路（renderer 写回 hud.cullMs）。
+                hud.cullMsCount = cullHistoryCount;
+                std::memcpy(hud.cullMsHistory, cullHistory,
+                            static_cast<std::size_t>(cullHistoryCount) * sizeof(float));
             }
         }
 
@@ -586,6 +610,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             } else {
                 std::memmove(gpuHistory, gpuHistory + 1, 119 * sizeof(float));
                 gpuHistory[119] = hud.gpuMs;
+            }
+        }
+        // M4.2：cull pass 计时同一条追加路（cullTimingAvailable 只在 cull 模式置位）。
+        if (o.hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
+            if (cullHistoryCount < 120) {
+                cullHistory[cullHistoryCount++] = hud.cullMs;
+            } else {
+                std::memmove(cullHistory, cullHistory + 1, 119 * sizeof(float));
+                cullHistory[119] = hud.cullMs;
             }
         }
         if (o.hudEnabled) {
@@ -664,6 +697,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     nl::core::log::info("shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
+    // M4.2：60fps 验收的 CPU 侧机械证据（截图模式无节流，测渲染吞吐上限）。
+    if (o.screenshot && frame > 1) {
+        nl::core::log::info("frame timing: avg ",
+                            dtSumMs / static_cast<double>(frame), " ms  max ",
+                            dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
+    }
 
     if (o.screenshot && screenshotsSaved == 0) {
         nl::core::log::error("screenshot was not written");

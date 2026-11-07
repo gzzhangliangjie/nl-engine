@@ -258,6 +258,8 @@ public:
                 if (!hud->deterministic && gpuTimer_.poll(gpuMs)) hud->gpuMs = gpuMs;
                 hud->gpuTimingAvailable = true;
             }
+            // M4.2：cull pass 计时同理，必须在 hud_.build() 之前写回标志。
+            scene_.pollCullTimer(nvrhiDevice_, hud);
             hud_.build(*hud);
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。

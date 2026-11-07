@@ -66,7 +66,10 @@
    - **渲染版本** = `example/` 截图基线（基线 PNG + `run.bat` 进 `example/<版本>/`，登记唯一数据源 `example/cases.json`）。
    - **工具版本** = 展示台网页 `kind:"tool"` 用例（点运行实跑、输出展开；usage / 正向 / 负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s*/...-TOOLS-GUIDE.md` 式归档。工具不产 GPU 截图时，也要有从工具真实输出生成的证据图（cases.json `preview` 静态图，不许手绘示意）。
 3. **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`；验收 / tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
-4. **提交 / tag 前总闸全绿**：`python tools/regression.py` 全量历史用例 × 双后端比对基线全绿，才算放行（M0.9 起生效）。**开发中不必跑全量**：日常迭代用 `--only <版本>[/用例]`（可叠加 `--backend` 单后端快验）只验当前阶段；全量只在提交 / tag 收口时跑一次，用 `--jobs N`（默认 4，用例级并行）提速。
+4. **回归按需跑，非必要不跑（2026-11-08 用户拍板，覆盖一切「顺手跑全量」的惯性）**：
+   - **默认不跑回归**。改了什么就只跑受影响的几条关键用例：`python tools/regression.py --only <版本>[/用例]`（可叠加 `--backend` 单后端）挑 2~3 条即可。
+   - **全量总闸（双后端 × 全部历史用例）只在打 tag 收口放行时跑一次**（M0.9 起生效，用 `--jobs N` 默认 4 提速）。除此之外任何场景——包括「验证 regression 工具本身的改动」——**禁止起全量**，一律小子集验证。
+   - 并行口径：用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
 5. **每个小里程碑本地提交一波 + 打 tag**：`docs/MILESTONES.md` 四栏（动作 / 提交版本 / 完成情况 / 踩坑）写实追加，不许只写「done」。
 6. **固化文档**：本阶段新产生的约定、不变量、口径变更，必须写回 canonical 文档（`docs/s*/S*-PLAN.md`、`docs/ROADMAP.md`、`docs/MILESTONES.md`、或 `.workbuddy/memory/MEMORY.md`），不许只活在 commit message 或口头里。
 

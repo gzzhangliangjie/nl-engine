@@ -58,11 +58,11 @@
 
 ## M4.2 HUD 统计 + 1M 场景 + 性能验收（1~2 天）
 
-- [ ] **剔除统计回读**：可见簇数/总簇数/剔除率，readback buffer 延迟 1~2 帧（`cpuAccess=Read` + `copyBuffer` + `mapBuffer`，主循环内禁止等待型 map——旧 PLAN 底线保留）
-- [ ] **GPU 计时**：cull pass 接入现有 `GpuTimer`（M0.6 已交付 4 slot 环形，旧版"先补 L2 计时"已完成，此处只加 slot）；HUD 曲线显示 cull ms
-- [ ] **1M+ 三角资产（2026-11-08 用户拍板）**：`scripts/gen-dense-mesh.py --shape icosphere` 升一级细分（20×4⁸ = 1,310,720 tri，约 6554 簇、~40MB .nmesh），**产物入仓**（cases.json 基线可复现依赖资产在场；P9 前例：dense 8MB 已入仓）
-- [ ] **验收姿态**（2026-11-08 修正：轨道相机背对不产生剔除，见 M4.1 自检）：正对全可见 / 进模近平面真剔除（高剔除率）两姿态，HUD `frame ms`（CPU）与 GPU ms 均 ≤ 16.6ms（60fps）；进模姿态剔除率 >85% 仍稳定 60fps（验证少 draw 路径无异常）
-- [ ] **展示台交代（里程碑交代规范）**：cases.json s4.x 卡（pulling 全画 pair / 正对 + 进模剔除 pair + HUD 统计卡 + 负向 + selftest）+ `example/s4-cull/` 基线 PNG + `run.bat`（gallery：正对/进模同机位对比 + 真剔除率证据）+ `docs/s4/S4-TOOLS-GUIDE.md` 归档；kStage 升 `S4.0→S4.1→S4.2` 随里程碑推进
+- [x] **剔除统计回读**：可见簇数/总簇数/剔除率，readback buffer 延迟 1~2 帧（M4.1 已交付）
+- [x] **GPU 计时**：cull pass 接入第二个 `GpuTimer` 实例（M4.2 落地：[frame]/[cull] resolve 日志 + HUD cull GPU 行/曲线；轮询必须在 hud_.build() 之前，踩坑见 MILESTONES）
+- [x] **1M+ 三角资产（2026-11-08 用户拍板）**：IcoSphereDense1M 入仓——subdiv 8 = 1,310,720 tri / **19,718 簇**（PLAN 预估 6554，meshoptimizer 按簇上限切得更细，如实修正）/ .nmesh 33.5MB
+- [x] **验收姿态**：正对 640x360 全可见 19718/19718 pass-through bytes（跨后端也一致）/ 进模 1932/19718 剔除 90.2% == 离线；CPU avg 4.9~5.5ms、GPU 整帧 0.96~1.02ms / cull pass ~0.010ms（判据 16.6ms 余两数量级）
+- [x] **展示台交代**：cases.json s4.2 + s4.2-tools 卡 + example/s4-done 基线 + run.bat + S4-TOOLS-GUIDE M4.2 节；kStage=S4.2
 
 **自检（S4 验收）**：进模姿态 HUD 绘制簇数骤降（近平面真剔除）；1M+ 场景稳定 60fps；双后端两姿态数字与离线工具一致。tag：`s4-done`，截图 `docs/screenshots/s4.png`（两张：正对全可见 / 进模高剔除 HUD 数字对比）。
 

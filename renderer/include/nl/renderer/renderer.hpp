@@ -98,6 +98,11 @@ struct HudFrame {
     int   dagGroup         = -1;      // 当前下钻组（双向；-1 = 无）
     int   dagGroupCount    = 0;       // 可下钻组数（子层 dagGroups.size()）
     float dagGroupError    = 0.0f;    // 当前下钻组的组误差（UE:1593 组统一携带）
+    // ---- M4.2：cull pass GPU 计时（第二个 timer 实例只包 compute 剔除段）----
+    float cullMs = 0.0f;             // 最近一次 resolve 的剔除 pass GPU 耗时（ms），异步有延迟
+    float cullMsHistory[120] = {};   // cull 耗时曲线样本（viewer 维护）
+    int   cullMsCount = 0;
+    bool  cullTimingAvailable = false; // cull 计时是否可用（仅 cull 模式 + HUD 时置位）
     // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
     int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
     int   totalClusters    = 0;       // 总簇数
