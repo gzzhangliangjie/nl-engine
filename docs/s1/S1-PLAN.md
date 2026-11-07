@@ -18,20 +18,18 @@
 
 ## M1.1 meshlet 构建（2~3 天，本步的核心算法）
 
-- [ ] 贪心构建：从任意三角出发，逐个吸收相邻三角，直到满 128 tri / 64 vert 上限（vertex 共享优先，空间相邻次之）
-- [ ] 每簇算：**包围球**（Ritter 或 EPOS6，先 Ritter）、**圆锥包围**（法线锥，后面剔除用）、**初始误差**（边界边在世界空间的投影长度）
-- [ ] 数据结构即最终 `.nmesh` 的簇结构，一次定好带版本号：
+- [x] 贪心构建：从任意三角出发，逐个吸收相邻三角，直到满 128 tri / 64 vert 上限（vertex 共享优先，空间相邻次之）——**已落地 2026-11-07**：几何邻接按位置 weld 建（Suzanne 每 tri 拆 3 独立顶点、索引零共享，按索引建邻接会退化成每 tri 一簇）；GPU 条目上限按原始索引口径（保留 UV 缝属性）
+- [x] 每簇算：**包围球**（Ritter，已实现；EPOS6 后续有需要再上）、**圆锥包围**（法线锥，已实现）、**初始误差**（已实现，口径：簇内最长边长的世界空间长度——比计划里的「边界边投影」更简单且确定性，S3 起被 DAG 节点误差覆盖）
+- [x] 数据结构即最终 `.nmesh` 的簇结构（`core/include/nl/core/meshlet.hpp`：Meshlet 窗口 + MeshletBounds；版本号在 M1.2 序列化时落 header）
 
-```
-struct Meshlet { uint32 triOffset, triCount, vertOffset, vertCount; Sphere bounds; Cone cone; float error; }
-struct NMeshHeader { uint32 magic, version; uint32 meshletCount, ...; }   // 后面 S2/S3 只加字段不改旧字段
-```
+**自检（已过）**：selftest cluster——三个确定性网格（连续 / 双断连块 / 单四边形）上每簇 tri ≤ 128、vert ≤ 64；覆盖率 100%（簇展开索引多重集 == 输入）；包围球含全部簇顶点；越界索引 / 非三倍数 indexCount 拒绝。三实机资产 coverage 100% + limits PASS。tag：`s1-cluster`。
 
-**自检**：单元测试——随机网格切完后每簇 tri ≤ 128、vert ≤ 64；顶点覆盖率 = 100%（所有三角都被分进簇）。tag：`s1-cluster`。
-
-⚠️ 常见坑：
-- 贪心吸收时**忘了 vert 上限**（64），只有 tri 上限——跑大模型时簇爆炸，后面 indirect buffer 溢出
-- 误差单位要一开始就统一成「世界空间长度」，别用局部空间——S3 DAG 的父误差传播全部依赖同一单位
+⚠️ 常见坑（M1.1 实踩，已记 MILESTONES）：
+- 贪心吸收时**忘了 vert 上限**（64），只有 tri 上限——跑大模型时簇爆炸，后面 indirect buffer 溢出（实现时 neighborSearch 统一 fit 判定，未踩）
+- 误差单位要一开始就统一成「世界空间长度」，别用局部空间——S3 DAG 的父误差传播全部依赖同一单位（M1.0 已烘进顶点，本步未踩）
+- **实踩 1：主循环推进计数漏自增** → while 永不退出、簇数组无限增长、段错误
+- **实踩 2：代际戳从 0 起步** → 与 usedStamp 零初始化撞车，首个三角形三顶点被当成「已在簇内」，产出 vc=0 垃圾簇
+- **实踩 3：按索引建邻接** → 拆缝导出的网格（Suzanne）几何连通性全丢，每 tri 一簇；必须按位置 weld
 
 ## M1.2 .nmesh 资产读写 + stat（0.5~1 天）
 

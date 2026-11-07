@@ -466,3 +466,24 @@
 **踩坑情况**
 1. **旧服务进程占端口、新实例静默失败** → 根因：cases.json 在 server.py import 时加载，残留进程永远吐旧数据；bind 失败的异常又因为后台任务不回显看不出来。处理：杀残留 PID 重启；后续 start.bat 前先查端口。
 2. **`code != 0` 一刀切判败与工具退出码约定冲突** → 根因：usage（exit 1）、未实现子命令（exit 2）是合法预期结果，原判据会把它们当 FAIL。处理：cases.json 用 `expectExit` 声明预期退出码，server.py 与 regression.py 同一套语义校验（清单唯一、两处一致）。
+
+---
+
+## M1.1 meshlet 贪心切簇（S1 核心算法）
+
+**动作**：`core/include/nl/core/meshlet.hpp` + `core/src/meshlet.cpp` 新增切簇算法层（meshoptimizer clusterizer 裁剪版）：每三角预计算质心+单位法线 → **位置 weld**（位级相等归代表顶点）→ CSR 几何邻接 → 拓扑优先级 + 空间评分贪心吸收，128 tri / 64 vert 双上限；每簇 Ritter 包围球 + 法线锥 + 世界空间叶子误差（簇内最长边长）。nanite-tools 新增 `cluster <model> [-v]` 与 `selftest cluster`；cases.json 增 s1-cluster 版本卡（3 工具用例）；M1.0 的 not-impl 负向用例从 cluster 换到 simplify（cluster 已实现）。CMake 增 ctest s1-cluster-selftest / s1-cluster-suzanne。
+
+**提交版本**：`s1-cluster`
+
+**完成情况**
+- selftest cluster 全绿：三个确定性网格（连续 64x64 / 双断连块 / 单四边形）覆盖率 100%（多重集相等）、上限不破、包围球含全部簇顶点、越界索引与非三倍数 indexCount 显式拒绝。
+- 三实机资产 coverage 100% + limits PASS：Suzanne 237 簇（avg 16.6 tri / 49.8 vert）、IcoSphereDense 4929 簇（avg 66.5 tri）、TorusKnotDense 3094 簇（avg 66.2 tri / max 64 vert 贴上限）。确定性验证：同 exe 连跑 4 次输出逐字相同。
+- ctest 4/4；**回归总闸 64→70 ALL GREEN**（新增 s1-cluster 3 工具用例 × 2 目录，历史 64 条基线逐字节不动）；viewer 零改动、selftest 15/15 双后端。
+- 交代物：`docs/s1/NANITE-TOOLS-GUIDE.md` M1.1 节（实跑输出归档）+ 展示台 s1-cluster 版本卡。
+
+**踩坑情况**
+1. **主循环推进计数漏自增** → 根因：append 里只置 emitted[] 标志，忘了 ++emittedCount，while 永不退出、簇数组无限增长直至段错误（bash 报 139 且无输出）。处理：计数挪进 Builder 成员，append 单点自增。
+2. **代际戳从 0 起步与零初始化撞车** → 根因：usedStamp 全零初始化，stamp 初始 0，首个三角形的三顶点被判成「已在簇内」（usedStamp==stamp），产出 vertexCount=0 / triangleCount=1 的垃圾簇，后续 bounds 全 NaN。处理：stamp 从 1 起步（代际戳惯例）。
+3. **按索引建几何邻接，Suzanne 退化成每 tri 一簇（3936 簇）** → 根因：glTF 导出常见每面拆顶点，Suzanne 11808 = 3936×3 索引零共享，索引邻接完全断开。处理：按位置 weld 出 canonical 顶点（位级相等排序分组），邻接/live/emitted 按 canonical，簇内条目去重与 GPU 上限按原始索引（保留 UV 缝两侧不同属性）。与 bevy position-merge、meshoptimizer weld 语义对齐。
+
+**下一步**：M1.2 `.nmesh` 资产读写——二进制落盘（header 带版本号）+ roundtrip 逐字节一致 + stat 簇统计直方图。

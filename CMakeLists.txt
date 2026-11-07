@@ -97,7 +97,7 @@ add_library(nl_imgui STATIC
 )
 target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 
-# ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取。不依赖任何图形 API 头 ----
+# ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
     core/src/assert.cpp
@@ -105,6 +105,7 @@ add_library(nl_core STATIC
     core/src/camera.cpp
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
+    core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -237,3 +238,12 @@ add_test(NAME s1-tools-stat
          COMMAND nanite-tools stat ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
 set_tests_properties(s1-tools-stat PROPERTIES
     PASS_REGULAR_EXPRESSION "triangles : 3936")
+# M1.1：切簇算法机械单测（覆盖率 / 128 tri 与 64 vert 上限 / bounds 合理性 / 负向输入）
+add_test(NAME s1-cluster-selftest COMMAND nanite-tools selftest cluster)
+set_tests_properties(s1-cluster-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "cluster selftest: PASS")
+# M1.1：真实资产切簇验收（覆盖率 100% + limits PASS）
+add_test(NAME s1-cluster-suzanne
+         COMMAND nanite-tools cluster ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
+set_tests_properties(s1-cluster-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "limits     : PASS")
