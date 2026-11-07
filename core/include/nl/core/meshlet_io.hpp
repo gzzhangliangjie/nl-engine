@@ -62,20 +62,34 @@ struct NMeshData {
     std::vector<MeshVertex> vertices;     // 自包含（不引用外部网格）
     std::vector<std::uint8_t> triangles;  // 每三角 3 个局部顶点索引（0..63）
     NMeshLodMeta lodMeta;                 // M2.2：有 present 时落盘为 version 2
+
+    // ---- M3.1：fallback mesh（可选，文件 version 3 尾段）----
+    // 详见 fallback.hpp。落点约定 = <prefix>.lod0.nmesh（lod 命令在链写完
+    // 后拼最顶层写回）；S8 BLAS / 非 Nanite 兜底渲染直接吃，不追 DAG。
+    // 落盘独立于 lodMeta：v1 base 文件也可以只加 fallback 尾段（version 3）。
+    bool fallbackPresent = false;
+    std::uint32_t fallbackSourceLevel = 0; // 生成 fallback 的层号
+    float fallbackMaxError = 0.f;          // 来源层 parent error（世界空间）
+    std::vector<MeshVertex> fallbackVertices;   // weld 后无跨簇重复
+    std::vector<std::uint32_t> fallbackIndices; // 3 × 三角数
 };
 
 // ---- 二进制格式（little-endian）----
 //
-//   NMeshHeader        固定 20 B（version 1 或 2）
+//   NMeshHeader        固定 20 B（version 1 / 2 / 3）
 //   name               nameLen 字节 ASCII
 //   NMeshletRecord[meshletCount]   每个 52 B
 //   MeshVertex[vertexCount]        每个 32 B（float x9，直接内存映像）
 //   uint8[triangleCount * 3]
-//   [version 2 only] NMeshMetaHeader 24 B + payload
+//   [version 2+ only] NMeshMetaHeader 24 B + payload
 //     meta version 1: float[3*lockedCount]                    （M2.2，仅锁点）
 //     meta version 2: float[3*lockedCount]                    （M3.0，锁点 + DAG）
 //                     + NMeshDagGroupRecord[groupCount] 每个 32 B
 //                     + u32 clusterGroup[meshletCount]
+//   [version 3 only] 尾段按 magic 识别，顺序不敏感，至少一段（M3.1）：
+//     NMeshMetaHeader（可选，同上）或 NMeshFallbackHeader（可选）：
+//       NMeshFallbackHeader 24 B
+//       MeshVertex[vertexCount] + u32[indexCount]
 //
 // 全部紧密排列、无填充；字段布局用 static_assert 锁死，漂移编译期就爆。
 struct NMeshHeader {
@@ -97,7 +111,8 @@ struct NMeshletRecord {
     float error;
 };
 
-// version 2 = version 1 + 尾部 LOD meta section（只加不改，loadNMesh 两种都读）。
+// version 3 = version 2 语义 + 尾部可选 fallback section（只加不改，
+// loadNMesh 1/2/3 都读；v3 尾段按 magic 识别，顺序不敏感，至少一段）。
 struct NMeshMetaHeader {
     std::uint32_t magic;          // 'N','L','O','D' → 0x444F4C4E (LE)
     std::uint32_t payloadBytes;   // 跟随的 payload 字节数
@@ -119,17 +134,31 @@ struct NMeshDagGroupRecord {
     std::uint32_t genCount;
 };
 
+// M3.1 fallback 尾段头（24 B，紧跟文件主体；S8 BLAS 用，不追 DAG）。
+// payload = MeshVertex[vertexCount] + u32[indexCount]。
+struct NMeshFallbackHeader {
+    std::uint32_t magic;          // 'N','F','L','B' → 0x424C464E (LE)
+    std::uint32_t payloadBytes;   // vertexCount*32 + indexCount*4
+    std::uint32_t vertexCount;
+    std::uint32_t indexCount;     // = 三角数 ×3
+    std::uint32_t sourceLevel;    // 生成 fallback 的层号（链顶层）
+    float maxError;               // 来源层 parent error（世界空间）
+};
+
 inline constexpr std::uint16_t kNMeshVersion = 1;
 inline constexpr std::uint16_t kNMeshVersionLod = 2;
+inline constexpr std::uint16_t kNMeshVersionFallback = 3;  // + fallback 尾段（M3.1）
 inline constexpr std::uint16_t kNMeshMetaVersion = 1;     // 仅锁点
 inline constexpr std::uint16_t kNMeshMetaVersionDag = 2;  // 锁点 + DAG 血缘（M3.0）
 inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;     // "NMSH"
 inline constexpr std::uint32_t kNMeshLodMagic = 0x444F4C4Eu;  // "NLOD"
+inline constexpr std::uint32_t kNMeshFallbackMagic = 0x424C464Eu;  // "NFLB"
 
 static_assert(sizeof(NMeshHeader) == 20, "NMeshHeader layout drift");
 static_assert(sizeof(NMeshletRecord) == 52, "NMeshletRecord layout drift");
 static_assert(sizeof(NMeshMetaHeader) == 24, "NMeshMetaHeader layout drift");
 static_assert(sizeof(NMeshDagGroupRecord) == 32, "NMeshDagGroupRecord layout drift");
+static_assert(sizeof(NMeshFallbackHeader) == 24, "NMeshFallbackHeader layout drift");
 static_assert(sizeof(MeshVertex) == 32, "MeshVertex layout drift");
 
 // 写盘。失败返回 false，outError 带可读原因；成功时不留部分文件（先写临时再改名）。

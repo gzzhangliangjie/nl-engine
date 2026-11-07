@@ -9,6 +9,7 @@
 #include "nl/core/grouping.hpp"
 #include "nl/core/simplify.hpp"
 #include "nl/core/lod.hpp"       // M2.2：逐层 LOD 循环
+#include "nl/core/fallback.hpp"  // M3.1：fallback mesh 拼接
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -37,12 +38,13 @@ void printUsage() {
         "  nanite-tools simplify <model.nmesh> [-v] [-r 0.5] [--obj prefix]\n"
         "                        group QEM + boundary lock; --obj dumps before/after OBJ + locked pts\n"
         "  nanite-tools lod <model.nmesh> [-o prefix] [--max-levels 8] [-v]\n"
-        "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh (v2 + DAG lineage)\n"
+        "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh\n"
+        "                        (v2 + DAG lineage; lod0 gains v3 fallback tail from top level)\n"
         "  nanite-tools check-orient <ref.nmesh> <target.nmesh>...\n"
         "                        orientation audit vs ref normals; exit 1 if any face inward\n"
         "  nanite-tools dag <prefix> [--export out.json]\n"
         "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
-        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag  deterministic unit tests\n");
+        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -912,6 +914,27 @@ int cmdLod(int argc, char** argv) {
                     lv.collapses, lv.maxError);
     }
 
+    // ---- M3.1：fallback = 链顶层拼成普通 indexed mesh，写进 lod0 尾段 ----
+    // 输入文件不动（展示台实跑 -o build/... 不会碰入仓资产）；S8 读
+    // <model>.lod0.nmesh 的 fallback，不追 DAG。
+    nl::core::FallbackMesh fb;
+    if (!nl::core::buildFallbackMesh(h.levels.back().mesh, fb, error)) {
+        std::fprintf(stderr, "lod: fallback: %s\n", error.c_str());
+        return 1;
+    }
+    const std::size_t fbTris = fb.indices.size() / 3;
+    const std::size_t fbVerts = fb.vertices.size();
+    const std::uint32_t fbLevel = fb.sourceLevel;
+    const float fbMaxError = fb.maxError;
+    {
+        nl::core::NMeshData& lod0 = h.levels.front().mesh;
+        lod0.fallbackPresent = true;
+        lod0.fallbackSourceLevel = fb.sourceLevel;
+        lod0.fallbackMaxError = fb.maxError;
+        lod0.fallbackVertices = std::move(fb.vertices);
+        lod0.fallbackIndices = std::move(fb.indices);
+    }
+
     const auto parent = std::filesystem::path(outPrefix).parent_path();
     if (!parent.empty()) {
         std::error_code ec;
@@ -927,8 +950,10 @@ int cmdLod(int argc, char** argv) {
         ++written;
         if (verbose) std::printf("  wrote     : %s\n", file.c_str());
     }
-    std::printf("lod files   : %u written (%s.lod0.nmesh .. %s.lod%zu.nmesh, .nmesh v2)\n",
+    std::printf("lod files   : %u written (%s.lod0.nmesh [v3+fallback] .. %s.lod%zu.nmesh [v2])\n",
                 written, outPrefix.c_str(), outPrefix.c_str(), h.levels.size() - 1);
+    std::printf("fallback    : %zu tris %zu verts (from L%u, maxErr %.4f) -> %s.lod0.nmesh tail\n",
+                fbTris, fbVerts, fbLevel, double(fbMaxError), outPrefix.c_str());
     return 0;
 }
 
@@ -2388,6 +2413,171 @@ int selftestDag() {
     return 1;
 }
 
+// ---- M3.1：fallback mesh 机械单测（不抽样）----
+//
+// 口径见 core/fallback.hpp：顶层 weld 拼接成普通 indexed mesh（S8 BLAS 用）。
+// 灵魂断言 = **三角守恒 + weld 收敛 + 边流形 ≤2**：拼接不许丢三角，跨簇
+// 重复的边界顶点必须合并（位级相等），合并后不许出现 >2 次使用的边
+// （>2 = T 形接缝或重复面，渲染/BLAS 都会出洞）。
+int selftestFallback() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    std::printf("[connected 128x128 grid, fallback stitch]\n");
+    std::string reason;
+    nl::core::NMeshData nm;
+    const bool inOk = makeNMesh(makeTestMesh(1, 128, 128), nm, reason);
+    check(inOk, "synthetic .nmesh built", reason);
+    if (inOk) {
+        nl::core::LodOptions opt;
+        opt.maxLevels = 6;
+        opt.minTriangles = 64;
+        nl::core::LodHierarchy h;
+        const bool built = nl::core::buildLodHierarchy(nm, h, reason, opt);
+        check(built, "buildLodHierarchy", reason);
+        if (built) {
+            const nl::core::NMeshData& top = h.levels.back().mesh;
+
+            // 拼接本身（退化三角在此被拒绝，等于隐式断言无退化）
+            nl::core::FallbackMesh fb;
+            const bool stitched = nl::core::buildFallbackMesh(top, fb, reason);
+            check(stitched, "buildFallbackMesh", reason);
+            if (stitched) {
+                // 三角守恒：拼接是恒等重索引，不许丢/加三角
+                std::uint32_t topTris = 0;
+                for (const auto& m : top.meshlets) topTris += m.triangleCount;
+                check(fb.indices.size() / 3 == topTris,
+                      "triangle count conserved through stitch",
+                      "fallback=" + std::to_string(fb.indices.size() / 3) +
+                      " top=" + std::to_string(topTris));
+
+                // weld 收敛：顶层簇间边界点重复，weld 后顶点必须更少；
+                // 且每个 canonical 点都恰被一个输出顶点持有
+                check(fb.vertices.size() < top.vertices.size(),
+                      "cross-cluster duplicate vertices welded",
+                      "verts=" + std::to_string(fb.vertices.size()) +
+                      " top=" + std::to_string(top.vertices.size()));
+
+                // 边流形：每条无向边 ≤2 次使用（>2 = T 形/重复面）
+                std::unordered_map<std::uint64_t, std::uint32_t> edgeUse;
+                auto edgeKey = [](std::uint32_t a, std::uint32_t b) {
+                    // 无向键：小端在前
+                    if (a > b) std::swap(a, b);
+                    return (std::uint64_t(a) << 32) | std::uint64_t(b);
+                };
+                bool manifoldOk = true;
+                for (std::size_t t = 0; t + 2 < fb.indices.size(); t += 3) {
+                    for (int k = 0; k < 3; ++k) {
+                        const std::uint32_t a = fb.indices[t + std::size_t(k)];
+                        const std::uint32_t b = fb.indices[t + std::size_t((k + 1) % 3)];
+                        if (++edgeUse[edgeKey(a, b)] > 2) manifoldOk = false;
+                    }
+                }
+                check(manifoldOk, "every undirected edge used <= 2 times");
+
+                // 来源层元数据随拼随带
+                check(fb.sourceLevel == top.lodMeta.level &&
+                      fb.maxError == top.lodMeta.maxError,
+                      "source level / maxError carried from top");
+
+                // 确定性：重拼逐字节一致
+                nl::core::FallbackMesh fb2;
+                bool detOk = nl::core::buildFallbackMesh(top, fb2, reason) &&
+                             fb2.vertices.size() == fb.vertices.size() &&
+                             fb2.indices == fb.indices &&
+                             std::memcmp(fb2.vertices.data(), fb.vertices.data(),
+                                         fb.vertices.size() * sizeof(nl::core::MeshVertex)) == 0;
+                check(detOk, "deterministic (restitch identical)", reason);
+            }
+
+            // v3 roundtrip：顶层 mesh + fallback 落盘读回逐字段一致
+            const char* tmpF = "fallback-selftest.tmp.nmesh";
+            {
+                nl::core::NMeshData written = top;
+                written.fallbackPresent = true;
+                written.fallbackSourceLevel = fb.sourceLevel;
+                written.fallbackMaxError = fb.maxError;
+                written.fallbackVertices = fb.vertices;
+                written.fallbackIndices = fb.indices;
+                bool rtOk = nl::core::saveNMesh(tmpF, written, reason);
+                nl::core::NMeshData back;
+                if (rtOk) rtOk = nl::core::loadNMesh(tmpF, back, reason);
+                if (rtOk) {
+                    rtOk = back.fallbackPresent &&
+                           back.fallbackSourceLevel == written.fallbackSourceLevel &&
+                           back.fallbackMaxError == written.fallbackMaxError &&
+                           back.fallbackIndices == written.fallbackIndices &&
+                           back.fallbackVertices.size() == written.fallbackVertices.size() &&
+                           std::memcmp(back.fallbackVertices.data(),
+                                       written.fallbackVertices.data(),
+                                       written.fallbackVertices.size() *
+                                           sizeof(nl::core::MeshVertex)) == 0;
+                    // v3 = v2 语义照常：DAG 血缘也读回
+                    rtOk = rtOk && back.lodMeta.present && back.lodMeta.dagPresent;
+                }
+                check(rtOk, "v3 round-trip keeps fallback + DAG lineage", reason);
+                std::remove(tmpF);
+            }
+
+            // fallback-only 尾段：无 lodMeta 的 v1 语义主体 + fallback = version 3
+            {
+                nl::core::NMeshData plain;
+                plain.name = "plain";
+                // 单簇单三角的最小合法主体（meshletCount==0 但有三角会被拒）
+                nl::core::Meshlet m{};
+                m.vertexOffset = 0;
+                m.vertexCount = 3;
+                m.triangleOffset = 0;   // 字节偏移
+                m.triangleCount = 1;
+                plain.meshlets = { m };
+                nl::core::MeshletBounds b{};
+                b.sphere[0] = b.sphere[1] = b.sphere[2] = 0.f;
+                b.sphere[3] = 1.f;
+                b.coneAxis[2] = 1.f;
+                b.coneCutoff = -1.f;
+                plain.bounds = { b };
+                plain.vertices.resize(3);
+                plain.vertices[0].pos[1] = -1.f;
+                plain.vertices[1].pos[0] = 1.f;
+                plain.vertices[2].pos[0] = -1.f;
+                for (auto& v : plain.vertices) v.normal[2] = 1.f;
+                plain.triangles = { 0, 1, 2 };
+                plain.fallbackPresent = true;
+                plain.fallbackSourceLevel = 0;
+                plain.fallbackMaxError = 0.f;
+                plain.fallbackVertices = plain.vertices;
+                plain.fallbackIndices = { 0, 1, 2 };
+                const char* tmpP = "fallback-only.tmp.nmesh";
+                bool ok = nl::core::saveNMesh(tmpP, plain, reason);
+                nl::core::NMeshData back;
+                if (ok) ok = nl::core::loadNMesh(tmpP, back, reason);
+                if (ok) ok = back.fallbackPresent && !back.lodMeta.present &&
+                             back.fallbackIndices.size() == 3;
+                check(ok, "fallback-only tail loads (no lodMeta)", reason);
+                std::remove(tmpP);
+            }
+        }
+
+        // 负向：空簇网格拒绝
+        {
+            nl::core::NMeshData empty;
+            nl::core::FallbackMesh fb;
+            check(!nl::core::buildFallbackMesh(empty, fb, reason),
+                  "empty mesh rejected", reason);
+        }
+    }
+
+    if (failures == 0) {
+        std::printf("fallback selftest: PASS\n");
+        return 0;
+    }
+    std::printf("fallback selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2402,7 +2592,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "qem") return selftestQem();
         if (argc >= 3 && std::string(argv[2]) == "loop") return selftestLoop();
         if (argc >= 3 && std::string(argv[2]) == "dag") return selftestDag();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag)\n");
+        if (argc >= 3 && std::string(argv[2]) == "fallback") return selftestFallback();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

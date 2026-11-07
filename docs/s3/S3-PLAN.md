@@ -18,12 +18,13 @@
 - 不同分支的组可能共享子簇（这就是 DAG 不是树）——构建时别按「层」拍平存储，按组引用存
 - 组内简化**跨组边界锁定依旧生效**，否则 DAG 上层直接裂缝（S2 的坑在这层会二次出现）
 
-## M3.1 Fallback mesh 导出（0.5 天）
+## M3.1 Fallback mesh 导出（0.5 天）✅ 2026-11-07
 
-- [ ] 取每 mesh「误差可接受的最顶层」整体连成普通 indexed mesh（或取根层），作为 `.nmesh` 内的 fallback section
-- [ ] 用途说明写进文件头注释：S8 BLAS 用它，不追 DAG
+- [x] 取每 mesh「误差可接受的最顶层」整体连成普通 indexed mesh（或取根层），作为 `.nmesh` 内的 fallback section —— 实做落点：**`<prefix>.lod0.nmesh` 尾段**（文件 version 3，'NFLB' 自描述头按 magic 识别；输入文件不动，展示台实跑不碰入仓资产）。UE 口径对照（NaniteBuilder.cpp BuildFallbackMesh :769 / BuildCoarseRepresentation :415，默认 ~2% 目标）：取链顶层（parent error 单调链背书），Suzanne 104/3936=2.6% 同量级，且**不引入第二次独立简化**——同一条链同一份确定性
+- [x] 用途说明写进文件头注释：S8 BLAS 用它，不追 DAG（core/fallback.hpp 头注释 + meshlet_io.hpp 格式注释）
+- [x] 拼接 = weldPositions 同口径（float 位级相等）位置合并；边界点锁死 → 接缝无洞；selftest fallback 灵魂断言：三角守恒 + weld 收敛 + **每条无向边 ≤2 次使用**（>2 = T 形/重复面）
 
-**自检**：fallback 独立渲染正常无洞。tag：`s3-fallback`。
+**自检**：fallback 独立渲染正常无洞 —— `tools/fallback_preview.py` 从真实 .nmesh v3 字节离线渲染（平涂+边线，背景透出=洞）+ selftest 边流形断言双保险。tag：`s3-fallback`。
 
 ## M3.2 viewer --mode dag-top 验收（1 天）
 

@@ -55,8 +55,10 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
     NMeshHeader header{};
     header.magic = kNMeshMagic;
     // M2.2：带 LOD 元数据的分层资产写 version 2（只加尾部 section）；
-    // 普通资产仍写 version 1，逐字节与 M1.2 一致。
-    header.version = data.lodMeta.present ? kNMeshVersionLod : kNMeshVersion;
+    // M3.1：带 fallback 的写 version 3；普通资产仍写 version 1。
+    header.version = data.fallbackPresent ? kNMeshVersionFallback
+                     : data.lodMeta.present ? kNMeshVersionLod
+                     : kNMeshVersion;
     header.nameLen = static_cast<std::uint16_t>(name.size());
     header.meshletCount = static_cast<std::uint32_t>(data.meshlets.size());
     header.vertexCount = static_cast<std::uint32_t>(data.vertices.size());
@@ -156,6 +158,40 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
         }
     }
 
+    // M3.1：fallback 尾段（追加在 lodMeta 之后；顺序由 loadNMesh 按 magic
+    // 识别，不依赖写入顺序）。
+    if (data.fallbackPresent) {
+        if (data.fallbackIndices.size() % 3 != 0 ||
+            data.fallbackIndices.size() > 0xFFFFFFFFu ||
+            data.fallbackVertices.size() > 0xFFFFFFFFu) {
+            outError = "fallback section: size invalid";
+            return false;
+        }
+        NMeshFallbackHeader fh{};
+        fh.magic = kNMeshFallbackMagic;
+        fh.vertexCount = static_cast<std::uint32_t>(data.fallbackVertices.size());
+        fh.indexCount = static_cast<std::uint32_t>(data.fallbackIndices.size());
+        fh.sourceLevel = data.fallbackSourceLevel;
+        fh.maxError = data.fallbackMaxError;
+        fh.payloadBytes = static_cast<std::uint32_t>(
+            data.fallbackVertices.size() * sizeof(MeshVertex) +
+            data.fallbackIndices.size() * sizeof(std::uint32_t));
+        const auto* fhp = reinterpret_cast<const std::uint8_t*>(&fh);
+        blob.insert(blob.end(), fhp, fhp + sizeof(fh));
+        if (fh.vertexCount) {
+            const auto* vp = reinterpret_cast<const std::uint8_t*>(
+                data.fallbackVertices.data());
+            blob.insert(blob.end(), vp,
+                        vp + std::size_t(fh.vertexCount) * sizeof(MeshVertex));
+        }
+        if (fh.indexCount) {
+            const auto* ip = reinterpret_cast<const std::uint8_t*>(
+                data.fallbackIndices.data());
+            blob.insert(blob.end(), ip,
+                        ip + std::size_t(fh.indexCount) * sizeof(std::uint32_t));
+        }
+    }
+
     const std::string tmpPath = std::string(path) + ".tmp";
     {
         FileHandle h;
@@ -194,9 +230,10 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         outError = "bad magic (not a .nmesh): " + std::string(path);
         return false;
     }
-    if (header.version != kNMeshVersion && header.version != kNMeshVersionLod) {
+    if (header.version != kNMeshVersion && header.version != kNMeshVersionLod &&
+        header.version != kNMeshVersionFallback) {
         outError = "unsupported .nmesh version " + std::to_string(header.version) +
-                   " (this build reads 1 or 2)";
+                   " (this build reads 1, 2 or 3)";
         return false;
     }
 
@@ -249,69 +286,151 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
                              blob.data() + cursor + size_t(header.triangleCount) * 3);
         cursor += size_t(header.triangleCount) * 3;
     }
-    if (header.version == kNMeshVersionLod) {
-        if (!need(sizeof(NMeshMetaHeader), "lod meta header")) return false;
-        NMeshMetaHeader meta;
-        std::memcpy(&meta, blob.data() + cursor, sizeof(meta));
-        cursor += sizeof(meta);
-        const std::size_t lockedBytes = std::size_t(meta.lockedCount) * 3 * sizeof(float);
-        if (meta.magic != kNMeshLodMagic ||
-            (meta.version != kNMeshMetaVersion && meta.version != kNMeshMetaVersionDag) ||
-            meta.payloadBytes < lockedBytes) {
-            outError = "bad lod meta header: " + std::string(path);
-            return false;
-        }
-        if (!need(meta.payloadBytes, "lod meta payload")) return false;
-        out.lodMeta.present = true;
-        out.lodMeta.level = meta.level;
-        out.lodMeta.maxError = meta.maxError;
-        out.lodMeta.lockedPositions.resize(std::size_t(meta.lockedCount) * 3);
-        if (lockedBytes)
-            std::memcpy(out.lodMeta.lockedPositions.data(), blob.data() + cursor, lockedBytes);
-        cursor += lockedBytes;
-        if (meta.version == kNMeshMetaVersionDag) {
-            // M3.0：DAG 血缘段。组记录数先读，clusterGroup 由外层 meshletCount 定长。
-            const size_t section = meta.payloadBytes - lockedBytes;
-            const size_t minSection = sizeof(std::uint32_t);
-            if (section < minSection) {
-                outError = "dag section truncated (no group count): " + std::string(path);
-                return false;
-            }
-            std::uint32_t groupCount;
-            std::memcpy(&groupCount, blob.data() + cursor, sizeof(groupCount));
-            cursor += sizeof(groupCount);
-            const size_t expected = sizeof(std::uint32_t) +
-                                    std::size_t(groupCount) * sizeof(NMeshDagGroupRecord) +
-                                    std::size_t(header.meshletCount) * sizeof(std::uint32_t);
-            if (section != expected) {
-                outError = "dag section size mismatch (groups " +
-                           std::to_string(groupCount) + "): " + std::string(path);
-                return false;
-            }
-            out.lodMeta.dagPresent = true;
-            out.lodMeta.dagGroups.resize(groupCount);
-            for (std::uint32_t i = 0; i < groupCount; ++i) {
-                NMeshDagGroupRecord rec;
-                std::memcpy(&rec, blob.data() + cursor, sizeof(rec));
-                cursor += sizeof(rec);
-                auto& g = out.lodMeta.dagGroups[i];
-                g.error = rec.error;
-                g.simplifyError = rec.simplifyError;
-                std::memcpy(g.sphere, rec.sphere, sizeof(g.sphere));
-                g.genFirst = rec.genFirst;
-                g.genCount = rec.genCount;
-            }
-            out.lodMeta.clusterGroup.resize(header.meshletCount);
-            if (header.meshletCount) {
-                std::memcpy(out.lodMeta.clusterGroup.data(), blob.data() + cursor,
-                            std::size_t(header.meshletCount) * sizeof(std::uint32_t));
-                cursor += std::size_t(header.meshletCount) * sizeof(std::uint32_t);
-            }
-            for (std::uint32_t v : out.lodMeta.clusterGroup)
-                if (v >= groupCount) {
-                    outError = "cluster group id out of range: " + std::string(path);
+    if (header.version == kNMeshVersionLod || header.version == kNMeshVersionFallback) {
+        // 尾段按 magic 识别（NLOD meta / NFLB fallback），顺序不敏感，
+        // 重复段、未知段都拒绝。v2 必须有 meta；v3 至少一段。
+        bool metaRead = false;
+        bool fallbackRead = false;
+        while (cursor < blob.size()) {
+            if (!need(sizeof(std::uint32_t), "tail section magic")) return false;
+            std::uint32_t magic;
+            std::memcpy(&magic, blob.data() + cursor, sizeof(magic));
+            if (magic == kNMeshLodMagic) {
+                if (metaRead) {
+                    outError = "duplicate lod meta section: " + std::string(path);
                     return false;
                 }
+                if (!need(sizeof(NMeshMetaHeader), "lod meta header")) return false;
+                NMeshMetaHeader meta;
+                std::memcpy(&meta, blob.data() + cursor, sizeof(meta));
+                cursor += sizeof(meta);
+                const std::size_t lockedBytes =
+                    std::size_t(meta.lockedCount) * 3 * sizeof(float);
+                if (meta.magic != kNMeshLodMagic ||
+                    (meta.version != kNMeshMetaVersion &&
+                     meta.version != kNMeshMetaVersionDag) ||
+                    meta.payloadBytes < lockedBytes) {
+                    outError = "bad lod meta header: " + std::string(path);
+                    return false;
+                }
+                if (!need(meta.payloadBytes, "lod meta payload")) return false;
+                out.lodMeta.present = true;
+                out.lodMeta.level = meta.level;
+                out.lodMeta.maxError = meta.maxError;
+                out.lodMeta.lockedPositions.resize(std::size_t(meta.lockedCount) * 3);
+                if (lockedBytes)
+                    std::memcpy(out.lodMeta.lockedPositions.data(),
+                                blob.data() + cursor, lockedBytes);
+                cursor += lockedBytes;
+                if (meta.version == kNMeshMetaVersionDag) {
+                    // M3.0：DAG 血缘段。组记录数先读，clusterGroup 由外层
+                    // meshletCount 定长。
+                    const size_t section = meta.payloadBytes - lockedBytes;
+                    const size_t minSection = sizeof(std::uint32_t);
+                    if (section < minSection) {
+                        outError = "dag section truncated (no group count): " +
+                                   std::string(path);
+                        return false;
+                    }
+                    std::uint32_t groupCount;
+                    std::memcpy(&groupCount, blob.data() + cursor, sizeof(groupCount));
+                    cursor += sizeof(groupCount);
+                    const size_t expected = sizeof(std::uint32_t) +
+                                            std::size_t(groupCount) *
+                                                sizeof(NMeshDagGroupRecord) +
+                                            std::size_t(header.meshletCount) *
+                                                sizeof(std::uint32_t);
+                    if (section != expected) {
+                        outError = "dag section size mismatch (groups " +
+                                   std::to_string(groupCount) + "): " +
+                                   std::string(path);
+                        return false;
+                    }
+                    out.lodMeta.dagPresent = true;
+                    out.lodMeta.dagGroups.resize(groupCount);
+                    for (std::uint32_t i = 0; i < groupCount; ++i) {
+                        NMeshDagGroupRecord rec;
+                        std::memcpy(&rec, blob.data() + cursor, sizeof(rec));
+                        cursor += sizeof(rec);
+                        auto& g = out.lodMeta.dagGroups[i];
+                        g.error = rec.error;
+                        g.simplifyError = rec.simplifyError;
+                        std::memcpy(g.sphere, rec.sphere, sizeof(g.sphere));
+                        g.genFirst = rec.genFirst;
+                        g.genCount = rec.genCount;
+                    }
+                    out.lodMeta.clusterGroup.resize(header.meshletCount);
+                    if (header.meshletCount) {
+                        std::memcpy(out.lodMeta.clusterGroup.data(),
+                                    blob.data() + cursor,
+                                    std::size_t(header.meshletCount) *
+                                        sizeof(std::uint32_t));
+                        cursor += std::size_t(header.meshletCount) *
+                                  sizeof(std::uint32_t);
+                    }
+                    for (std::uint32_t v : out.lodMeta.clusterGroup)
+                        if (v >= groupCount) {
+                            outError = "cluster group id out of range: " +
+                                       std::string(path);
+                            return false;
+                        }
+                }
+                metaRead = true;
+            } else if (magic == kNMeshFallbackMagic) {
+                if (fallbackRead) {
+                    outError = "duplicate fallback section: " + std::string(path);
+                    return false;
+                }
+                if (!need(sizeof(NMeshFallbackHeader), "fallback header")) return false;
+                NMeshFallbackHeader fh;
+                std::memcpy(&fh, blob.data() + cursor, sizeof(fh));
+                cursor += sizeof(fh);
+                const std::size_t vbytes =
+                    std::size_t(fh.vertexCount) * sizeof(MeshVertex);
+                const std::size_t ibytes =
+                    std::size_t(fh.indexCount) * sizeof(std::uint32_t);
+                if (fh.magic != kNMeshFallbackMagic || fh.indexCount % 3 != 0 ||
+                    fh.indexCount == 0 || fh.payloadBytes != vbytes + ibytes) {
+                    outError = "bad fallback header: " + std::string(path);
+                    return false;
+                }
+                if (!need(fh.payloadBytes, "fallback payload")) return false;
+                out.fallbackPresent = true;
+                out.fallbackSourceLevel = fh.sourceLevel;
+                out.fallbackMaxError = fh.maxError;
+                out.fallbackVertices.resize(fh.vertexCount);
+                if (vbytes)
+                    std::memcpy(out.fallbackVertices.data(),
+                                blob.data() + cursor, vbytes);
+                cursor += vbytes;
+                out.fallbackIndices.resize(fh.indexCount);
+                if (ibytes)
+                    std::memcpy(out.fallbackIndices.data(),
+                                blob.data() + cursor, ibytes);
+                cursor += ibytes;
+                for (std::uint32_t idx : out.fallbackIndices)
+                    if (idx >= fh.vertexCount) {
+                        outError = "fallback index out of range: " + std::string(path);
+                        return false;
+                    }
+                fallbackRead = true;
+            } else {
+                outError = "unknown tail section (magic 0x" +
+                           [&] {
+                               char buf[16];
+                               std::snprintf(buf, sizeof(buf), "%08X", magic);
+                               return std::string(buf);
+                           }() + "): " + std::string(path);
+                return false;
+            }
+        }
+        if (header.version == kNMeshVersionLod && !metaRead) {
+            outError = "version 2 file without lod meta section: " + std::string(path);
+            return false;
+        }
+        if (header.version == kNMeshVersionFallback && !metaRead && !fallbackRead) {
+            outError = "version 3 file without any tail section: " + std::string(path);
+            return false;
         }
     }
     if (cursor != blob.size()) {

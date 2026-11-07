@@ -20,7 +20,9 @@ inline constexpr std::uint32_t kMeshletMaxVertices = 64;
 struct Meshlet {
     std::uint32_t vertexOffset;    // 进 BuiltMeshlets::vertices
     std::uint32_t vertexCount;     // 去重后的簇内顶点数，<= kMeshletMaxVertices
-    std::uint32_t triangleOffset;  // 进 BuiltMeshlets::triangles（每三角 3 字节）
+    std::uint32_t triangleOffset;  // 进 BuiltMeshlets::triangles 的【字节】偏移
+                                   // （每三角 3 字节；不是三角号，按三角号 ×3
+                                   // 会读错窗口——M3.1 已踩，字节语义全仓唯一口径）
     std::uint32_t triangleCount;   // <= kMeshletMaxTriangles
 };
 

@@ -117,6 +117,7 @@ add_library(nl_core STATIC
     core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
+    core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -327,3 +328,16 @@ add_test(NAME s3-dag-suzanne
 set_tests_properties(s3-dag-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "dag         : OK"
     DEPENDS s2-loop-suzanne)
+
+# M3.1：fallback 拼接自检（weld 收敛、三角守恒、边流形 ≤2、v3 roundtrip）
+add_test(NAME s3-fallback-selftest COMMAND nanite-tools selftest fallback)
+set_tests_properties(s3-fallback-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "fallback selftest: PASS")
+
+# M3.1：真实资产 fallback 落盘（写进 lod0 尾段，输入文件不动）
+add_test(NAME s3-fallback-suzanne
+         COMMAND nanite-tools lod ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh
+                 -o ${CMAKE_CURRENT_BINARY_DIR}/fb-suzanne --max-levels 6)
+set_tests_properties(s3-fallback-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "fallback    : "
+    DEPENDS s1-nmesh-suzanne)

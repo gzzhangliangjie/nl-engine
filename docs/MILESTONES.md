@@ -667,3 +667,20 @@
 5. **s1-tools not-impl 负向退役**：`dag` 实现后 exit 2 占位清零，负向按其自身约定退化为「未知子命令显式拒绝」（cut 是 S5 运行时能力，不进离线工具）。
 
 **下一步**：M3.1 fallback mesh（顶层连普通 indexed mesh，S8 BLAS 用）→ M3.2 viewer --mode dag-top 验收。
+
+## M3.1 fallback mesh（tag `s3-fallback`，2026-11-07）
+
+**动作**：UE BuildFallbackMesh/BuildCoarseRepresentation 实读定稿（取链顶层，UE 默认 ~2% 同量级，不做第二次独立简化）→ .nmesh 文件 version 3（'NFLB' 自描述尾段，按 magic 识别）→ core/fallback buildFallbackMesh（weldPositions 同口径拼接）→ lod 命令写 lod0 尾段（输入文件不动）→ selftest fallback + ctest → 证据图 + 交代物。
+
+**提交版本**：s3-fallback（本轮）
+
+**完成情况**
+- fallback Suzanne：104 tris / 96 verts（from L6, maxErr 1.1375），2.6% ≈ UE 默认 ~2%。
+- selftest fallback 全绿：三角守恒 / weld 收敛 / 边流形 ≤2 / 确定性 / v3 roundtrip / fallback-only 尾段 / 负向。
+- ctest 14→16 双后端全绿；dag 六项校验 + check-orient inward=0 无回归。
+- 交代物：fallback-preview.png（真实资产字节离线渲染）+ run.bat + S3-TOOLS-GUIDE M3.1 节 + 展示台 s3.1 卡（selftest/lod/负向）。
+
+**踩坑情况**
+1. **triangleOffset 语义踩坑**：M1.1 的 `triangleOffset` 是**字节偏移**（`triOffset = out->triangles.size()`，每三角 3 字节），不是三角号——fallback 拼接按三角号 ×3 读窗口全部错位（selftest 当场抓住：local index ≥ vertexCount、边流形爆炸）。全仓其余使用点（simplify/scene/loadNMesh 校验）均为字节语义，只有新代码用错。已修 + meshlet.hpp 注释钉死「字节偏移，不是三角号」。
+2. **fallback-only 测试网格不合法**：合成 v3 测试用了 0 簇 + 三角主体，被 loadNMesh 既有校验（meshlets empty but triangles present）拒绝——该校验是对的，测试网格补了真实单簇记录。
+3. **设计取舍记录**：fallback 落点选 lod0 尾段而不是改写输入文件——展示台工具卡实跑 `-o build/...` 时不能碰入仓资产；v3 尾段按 magic 识别使「v1 主体 + 仅 fallback」也成为合法 v3。

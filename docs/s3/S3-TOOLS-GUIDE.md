@@ -129,3 +129,74 @@ ctest 14/14（双后端，新增 `s3-dag-selftest` / `s3-dag-suzanne`）；
 - M3.1 fallback mesh：取顶层整体连成普通 indexed mesh，S8 BLAS 用。
 - M3.2 `viewer --mode dag-top`：顶层渲染 + 任选组下钻一层，验证父子衔接无洞。
 - S5 运行时 cut：优先队列按 error 弹堆，整组原子替换（同误差兄弟一起出堆）。
+
+---
+
+## M3.1 fallback mesh（tag `s3-fallback`）
+
+### 定位与 UE 对照
+
+fallback = 链最顶层整体拼成的一份**普通 indexed mesh**（vertices + u32 indices），
+S8 光追 BLAS / 非 Nanite 兜底渲染直接吃，**不追 DAG**。S3-PLAN 底线：这步定稿，
+S8 不许再「顺手生成一份」。
+
+UE 对照（2026-11-07 实读 NaniteBuilder.cpp）：`BuildFallbackMesh` :769 +
+`BuildCoarseRepresentation` :415 —— UE 从 ClusterDAG 独立简化到
+`FallbackPercentTriangles`（默认 ~2% 输入三角数）目标。本实现取**链顶层**：
+
+- 顶层已有 parent error 单调链背书（M3.0），误差口径由分层链给出；
+- Suzanne 104/3936 = **2.6%**，与 UE 默认 ~2% 同量级；
+- 不引入第二次独立简化——同一条链、同一份确定性，无第二口径可漂移。
+
+### 格式：.nmesh 文件 version 3
+
+```
+[version 1/2 主体不变]
+NMeshFallbackHeader 24 B（'NFLB' 自描述尾段，按 magic 识别、顺序不敏感）:
+  magic / payloadBytes / vertexCount / indexCount(=三角数×3) / sourceLevel / maxError
+MeshVertex[vertexCount] + u32[indexCount]
+```
+
+- 落点约定 = **`<prefix>.lod0.nmesh` 尾段**（`lod` 命令链写完后拼顶层写回）；
+  **输入文件不动**——展示台实跑 `-o build/...` 不会碰入仓资产。
+- v1/v2 逐字节兼容读回；v3 尾段按 magic 识别（NLOD meta 可选 + NFLB 可选，
+  至少一段），重复段/未知段拒绝；fallback 索引范围在 loadNMesh 校验。
+
+### 拼接算法（core/fallback.cpp）
+
+1. `weldPositions`（grouping.hpp 唯一口径，float 位级相等）→ canonical 点；
+2. canonical 点 → 输出顶点（首现持有完整 normal/uv；边界点两侧本就是同一源
+   顶点的拷贝）；
+3. 簇局部索引 → 全局窗口 → 输出编号；退化三角当场拒绝（出现退化 = 上游已坏）。
+
+### 实跑输出（Suzanne，DX12 构建）
+
+```
+lod files   : 7 written (assets/meshlets/Suzanne.lod0.nmesh [v3+fallback] .. Suzanne.lod6.nmesh [v2])
+fallback    : 104 tris 96 verts (from L6, maxErr 1.1375) -> assets/meshlets/Suzanne.lod0.nmesh tail
+```
+
+3936→104 = 2.6%，与 UE FallbackPercentTriangles 默认 ~2% 同量级。
+
+### 自检（selftest fallback，不抽样）
+
+128x128 合成网格全链顶层拼接，灵魂断言：
+
+- **三角守恒**：拼接是恒等重索引，不许丢/加三角；
+- **weld 收敛**：顶层簇间边界重复顶点必须合并（顶层顶点数 > 拼接后顶点数）；
+- **边流形**：每条无向边 ≤2 次使用（>2 = T 形接缝/重复面，渲染与 BLAS 都出洞）；
+- 确定性重拼逐字节一致；v3 roundtrip（fallback + DAG 血缘同时读回）；
+- fallback-only 尾段（v1 语义主体 + fallback = v3，无 lodMeta）；空网格拒绝。
+
+### 证据图
+
+`example/s3-fallback/fallback-preview.png`：`tools/fallback_preview.py` 直接
+解析 .nmesh v3 的 NFLB 段（真实入仓资产字节），平涂 + 边线离线渲染；
+**背景透出 = 洞**（边流形已由 selftest 断言，图为视觉对照）。
+`example/s3-fallback/run.bat` 一键复现。L5/L6 躺倒姿态与 `lod-suzanne.png`
+金字塔同款——离线预览不做 GPU 侧轴向修正，风格一致。
+
+### ctest / 回归
+
+ctest 14→16（s3-fallback-selftest / s3-fallback-suzanne），双后端全绿；
+dag 六项校验与 check-orient 全链 inward=0 无回归。

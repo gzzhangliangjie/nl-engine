@@ -1845,6 +1845,70 @@
      "command": "nanite-tools dag assets/meshlets/Suzanne --bogus"
     }
    ]
+  },
+  {
+   "id": "s3.1",
+   "label": "M3.1",
+   "name": "fallback mesh（S8 BLAS 直接吃，不追 DAG）",
+   "tag": "s3-fallback",
+   "date": "2026-11-07",
+   "summary": "M3.1：链最顶层整体 weld 拼成一份普通 indexed mesh（vertices + u32 indices），写进 <prefix>.lod0.nmesh 尾段（.nmesh 文件 version 3，'NFLB' 自描述尾段，按 magic 识别、顺序不敏感；v1/v2 逐字节兼容读回）。输入文件不动，展示台实跑 -o build/... 不碰入仓资产；S8 光追 BLAS / 非 Nanite 兜底渲染直接吃，不追 DAG。UE 口径对照（NaniteBuilder.cpp BuildFallbackMesh :769 + BuildCoarseRepresentation :415）：UE 从 DAG 独立简化到 FallbackPercentTriangles（默认 ~2%）；本实现取链顶层（parent error 单调链背书），Suzanne 104/3936 = 2.6% 同量级，且不引入第二次独立简化——同一条链、同一份确定性，无第二口径可漂移。拼接 = weldPositions 同口径（float 位级相等）合并，边界点本就锁死 → 接缝无洞；属性取 canonical 点首现那份。selftest fallback 灵魂断言：三角守恒 + weld 收敛 + 每条无向边 ≤2 次使用（>2 = T 形/重复面）。证据图 tools/fallback_preview.py 从真实 .nmesh v3 字节离线渲染（平涂+边线；背景透出 = 洞）。",
+   "acceptance": [
+    "selftest fallback 全绿：三角守恒（拼接恒等重索引）、weld 收敛（顶层簇间重复顶点合并）、边流形 ≤2、确定性重拼逐字节一致、v3 roundtrip（fallback + DAG 血缘同时读回）、fallback-only 尾段（无 lodMeta 的 v3）、负向拒绝",
+    "lod Suzanne：fallback 104 tris / 96 verts（from L6, maxErr 1.1375）写进 lod0 尾段；dag 六项校验与 check-orient 全链 inward=0 无回归",
+    "ctest 16/16 双后端（新增 s3-fallback-selftest / s3-fallback-suzanne）；回归总闸 ALL GREEN；server --check exit 0",
+    "交代物：证据图 example/s3-fallback/fallback-preview.png（真实资产字节）+ run.bat 一键复现 + docs/s3/S3-TOOLS-GUIDE.md 归档；展示台 s3.1 卡现场实跑"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest fallback：拼接机械单测",
+     "kind": "tool",
+     "note": "128x128 连续网格全链顶层拼接：三角守恒（恒等重索引不许丢三角）、weld 收敛（跨簇边界重复顶点位级合并）、每条无向边 ≤2 次使用（>2 = T 形接缝/重复面，渲染与 BLAS 都会出洞）、确定性重拼、v3 roundtrip（fallback 尾段 + DAG 血缘逐字段一致）、fallback-only 尾段（v1 语义主体 + fallback = v3）、空网格拒绝。",
+     "args": [
+      "selftest",
+      "fallback"
+     ],
+     "expectExit": 0,
+     "expectLog": "fallback selftest: PASS",
+     "command": "nanite-tools selftest fallback"
+    },
+    {
+     "id": "lod-fallback",
+     "name": "lod：链再生成 + fallback 写进 lod0 尾段（输入文件不动）",
+     "kind": "tool",
+     "note": "链写完 → buildFallbackMesh(顶层) → weldPositions 口径位置合并 → 写 <prefix>.lod0.nmesh v3 尾段。卡片上方证据图由落盘的真实字节经 tools/fallback_preview.py 离线渲染：平涂 + 边线，背景透出 = 洞（边流形 ≤2 已由 selftest 断言，图为视觉对照）。",
+     "args": [
+      "lod",
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "-o",
+      "{root}/build/showcase/runs/s3-fallback/lod",
+      "--max-levels",
+      "6"
+     ],
+     "expectExit": 0,
+     "expectLog": "fallback    : ",
+     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/s3-fallback/lod --max-levels 6",
+     "preview": "example/s3-fallback/fallback-preview.png"
+    },
+    {
+     "id": "negative-suite",
+     "name": "负向：未知 selftest 套件（exit 1）",
+     "kind": "tool",
+     "note": "未知套件显式拒绝并列出可用套件，防静默假成功。",
+     "args": [
+      "selftest",
+      "bogus"
+     ],
+     "expectExit": 1,
+     "expectLog": "unknown suite",
+     "command": "nanite-tools selftest bogus"
+    }
+   ]
   }
  ]
 }
