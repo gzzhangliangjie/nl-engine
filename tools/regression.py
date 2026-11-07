@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""nl-engine M0.9 full regression gate (one command, all example cases, both backends).
+
+    python tools/regression.py                    # run everything, exit 0 only if all green
+    python tools/regression.py --only m0.5/nohud  # filter by version[/case] id
+    python tools/regression.py --backend dx12     # limit to one backend
+    python tools/regression.py --report PATH.md   # where the markdown report goes
+
+Reuses the showcase module for every shared semantic (exe resolution, argument
+building, baseline lookup, pixel comparison) so there is exactly one parser of
+example/cases.json in this repo. Historical milestone exes come from the tag
+snapshots under build/showcase/<tag>/ (see tools/showcase/rebuild.py); the
+current version runs from build/<backend>/viewer.exe.
+
+Verdict tiers, matching the showcase convention:
+  bytes  - PNG byte-identical to the baseline (the normal case; screenshots are
+           deterministic)
+  near   - MD5 differs but pixel diff is maxDelta <= 1/255 and <= 2 pixels
+           (documented GPU rounding noise, e.g. M0.4 inner-wall / resize)
+  FAIL   - anything else: wrong image, missing exe, non-zero exit, missing
+           "SELFTEST PASS", deviceErrors > 0, timeout
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent          # tools/
+ROOT = HERE.parent                              # repo root
+sys.path.insert(0, str(HERE / "showcase"))      # reuse the showcase module
+
+import server as show  # noqa: E402  (module-level side effects: loads cases.json)
+
+RUNS_DIR = ROOT / "build" / "regression" / "runs"
+DEFAULT_REPORT_MD = ROOT / "build" / "regression" / "report.md"
+DEFAULT_REPORT_JSON = ROOT / "build" / "regression" / "report.json"
+
+BACKENDS = ("dx12", "vulkan")
+RUN_TIMEOUT = 120
+# Documented rounding-noise tier (see module docstring).
+NEAR_MAX_DELTA = 1
+NEAR_MAX_PIXELS = 2
+
+
+def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
+    """Return (verdict, detail) for one produced PNG against its baseline."""
+    if not png.is_file():
+        return "FAIL", "PNG 未生成"
+    if baseline is None or not baseline.is_file():
+        return "FAIL", f"基线缺失：{baseline}"
+    if show.md5(png) == show.md5(baseline):
+        return "bytes", "与基线逐字节相同"
+    try:
+        cmp = show.compare_pixels(png, baseline)
+    except Exception as e:  # corrupt PNG (bad zlib stream etc.) is a FAIL, not a crash
+        return "FAIL", f"基线或产物 PNG 无法解码：{type(e).__name__}: {e}"
+    if not cmp.get("sameSize"):
+        return "FAIL", "与基线尺寸不同"
+    dp, md = cmp["diffPixels"], cmp["maxDelta"]
+    if dp == 0:
+        return "bytes", "MD5 不同但像素完全相同（PNG 编码差异）"
+    if dp <= NEAR_MAX_PIXELS and md is not None and md <= NEAR_MAX_DELTA:
+        return "near", f"GPU 取整噪声：{dp} 像素、maxDelta {md}/255"
+    return "FAIL", f"与基线像素不符：{dp} 像素、maxDelta {md}/255"
+
+
+def run_viewer(exe: Path, argv: list[str]) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            [str(exe), *argv],
+            cwd=str(exe.parent),
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=RUN_TIMEOUT,
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        log = (e.stdout or "") + (e.stderr or "")
+        if isinstance(log, bytes):
+            log = log.decode("utf-8", "replace")
+        return -1, log[-8000:] + f"\n[regression] timeout after {RUN_TIMEOUT}s"
+    except OSError as e:
+        return -1, f"[regression] cannot launch {exe.name}: {e}"
+
+
+def check_device_errors(log: str) -> int | None:
+    m = re.findall(r"deviceErrors=(\d+)", log)
+    return int(m[-1]) if m else None
+
+
+def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> dict:
+    """Run one (version, case, backend) and return the verdict record."""
+    rec: dict = {"version": version["id"], "case": case["id"], "backend": backend,
+                 "kind": case.get("kind")}
+    exe = show.exe_for(version, backend)
+    if not exe.is_file():
+        rec["verdict"] = "FAIL"
+        rec["detail"] = (f"exe 缺失：{exe.relative_to(ROOT).as_posix()}"
+                         f"（补建：python tools/showcase/rebuild.py --tags {version['tag']}）")
+        return rec
+
+    kind = case.get("kind")
+    out = out_png if kind in ("image", "pair") else None
+    try:
+        params = show.validated_params(case, {})  # defaults = baseline params
+        argv = show.build_argv(case, params, out)
+    except ValueError as e:
+        rec["verdict"] = "FAIL"
+        rec["detail"] = f"用例参数解析失败：{e}"
+        return rec
+
+    started = time.time()
+    code, log = run_viewer(exe, argv)
+    rec["ms"] = int((time.time() - started) * 1000)
+    rec["exit"] = code
+    rec["deviceErrors"] = check_device_errors(log)
+
+    if code != 0:
+        rec["verdict"] = "FAIL"
+        rec["detail"] = f"退出码 {code}" + ("（超时）" if code == -1 else "")
+        rec["logTail"] = log[-1500:]
+        return rec
+    if case.get("expectLog") and case["expectLog"] not in log:
+        rec["verdict"] = "FAIL"
+        rec["detail"] = f"日志缺 {case['expectLog']!r}"
+        rec["logTail"] = log[-1500:]
+        return rec
+    if rec["deviceErrors"] not in (None, 0):
+        rec["verdict"] = "FAIL"
+        rec["detail"] = f"deviceErrors={rec['deviceErrors']}"
+        rec["logTail"] = log[-1500:]
+        return rec
+
+    if out is None:  # selftest / text-only
+        rec["verdict"] = "bytes"
+        rec["detail"] = f"selftest 通过（{case.get('expectLog', 'ok')}）"
+        return rec
+
+    verdict, detail = judge_image(out, show.baseline_for(case, backend))
+    rec["verdict"], rec["detail"] = verdict, detail
+    if verdict != "FAIL":
+        # resize-type cases also carry a pre-resize frame next to the main one.
+        before = out.with_name(out.name + ".before.png")
+        bb = show.before_baseline_for(case, backend)
+        if bb and before.is_file():
+            v2, d2 = judge_image(before, bb)
+            rec["beforeVerdict"], rec["beforeDetail"] = v2, d2
+            if v2 == "FAIL":
+                rec["verdict"], rec["detail"] = "FAIL", f"before 图不符：{d2}"
+        rec["md5"] = show.md5(out)
+    return rec
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="nl-engine M0.9 full regression gate")
+    ap.add_argument("--only", default=None, metavar="VERSION[/CASE]",
+                    help="limit to one version (m0.5) or case (m0.5/nohud)")
+    ap.add_argument("--backend", choices=BACKENDS, default=None)
+    ap.add_argument("--report", default=str(DEFAULT_REPORT_MD),
+                    help="markdown report path (a .json sits next to it)")
+    args = ap.parse_args()
+
+    backend_filter = (args.backend,) if args.backend else BACKENDS
+    if args.only:
+        vid, _, cid = args.only.partition("/")
+        versions = [v for v in show.DATA["versions"] if v["id"] == vid]
+        if not versions:
+            print(f"[regression] no version id {vid!r} in cases.json", file=sys.stderr)
+            return 2
+    else:
+        cid = ""
+        versions = show.DATA["versions"]
+
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict] = []
+    t_all = time.time()
+    for v in versions:
+        missing = [b for b in BACKENDS if b in backend_filter
+                   and not show.exe_for(v, b).is_file()]
+        if len(missing) == len(backend_filter):
+            print(f"[regression] {v['id']}: 两后端 exe 都缺失，跳过该版本"
+                  f"（{v['tag']}）")
+        for c in v["cases"]:
+            if c.get("kind") == "manual":
+                continue
+            if cid and c["id"] != cid:
+                continue
+            for b in backend_filter:
+                out = RUNS_DIR / f"{v['id']}-{c['id']}-{b}.png"
+                for stale in (out, out.with_name(out.name + ".before.png")):
+                    if stale.exists():
+                        stale.unlink()
+                rec = regression_case(v, c, b, out)
+                records.append(rec)
+                mark = "PASS" if rec["verdict"] in ("bytes", "near") else "FAIL"
+                extra = f" ({rec['ms']} ms)" if "ms" in rec else ""
+                print(f"[{mark}] {v['id']}/{c['id']} {b:<6} {rec['verdict']:<5} "
+                      f"{rec['detail']}{extra}")
+
+    # Cross-backend info tier: same case, do the two GPUs agree byte-wise?
+    cross = []
+    for v in versions:
+        for c in v["cases"]:
+            if c.get("kind") != "pair":
+                continue
+            recs = [r for r in records if r["version"] == v["id"] and r["case"] == c["id"]]
+            md5s = {r["backend"]: r.get("md5") for r in recs if r.get("md5")}
+            if "dx12" in md5s and "vulkan" in md5s:
+                same = md5s["dx12"] == md5s["vulkan"]
+                cross.append({"version": v["id"], "case": c["id"], "identical": same})
+                if not same:
+                    cmp = show.compare_pixels(RUNS_DIR / f"{v['id']}-{c['id']}-dx12.png",
+                                              RUNS_DIR / f"{v['id']}-{c['id']}-vulkan.png")
+                    cross[-1]["pixel"] = cmp
+
+    passed = [r for r in records if r["verdict"] in ("bytes", "near")]
+    failed = [r for r in records if r["verdict"] not in ("bytes", "near")]
+    tiers = {t: sum(1 for r in records if r["verdict"] == t)
+             for t in ("bytes", "near", "FAIL")}
+    ok = not failed
+
+    # ---- markdown report ----
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        "# nl-engine 全量回归报告（M0.9 总闸）", "",
+        f"- 时间：{now}　用时 {int(time.time() - t_all)} s",
+        f"- 结果：**{'ALL GREEN' if ok else 'FAILED'}** — "
+        f"{len(passed)}/{len(records)} 通过"
+        f"（bytes {tiers['bytes']} / near {tiers['near']} / FAIL {tiers['FAIL']}）",
+        f"- 判据：PNG 与基线 MD5 相同 = `bytes`；像素差 ≤1/255 且 ≤2 像素 = `near`"
+        f"（GPU 取整噪声档）；selftest 校验日志；deviceErrors=0。", "",
+    ]
+    if failed:
+        lines += ["## 失败明细", ""]
+        for r in failed:
+            lines.append(f"- `{r['version']}/{r['case']}` {r['backend']}: {r['detail']}")
+        lines.append("")
+    lines += ["## 明细", "",
+              "| 版本 | 用例 | 后端 | 判定 | 说明 |",
+              "|---|---|---|---|---|"]
+    for r in records:
+        lines.append(f"| {r['version']} | {r['case']} | {r['backend']} | "
+                     f"{r['verdict']} | {r['detail']} |")
+    lines += ["", "## 双后端对照（信息档）", ""]
+    for c in cross:
+        tag = "逐字节相同" if c["identical"] else \
+            f"不同（像素差 {c.get('pixel', {}).get('diffPixels', '?')}，maxDelta " \
+            f"{c.get('pixel', {}).get('maxDelta', '?')}/255，HUD 文本差异属预期）"
+        lines.append(f"- {c['version']}/{c['case']}: {tag}")
+    Path(args.report).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report_json = Path(args.report).with_suffix(".json")
+    report_json.write_text(json.dumps(
+        {"ok": ok, "when": now,
+         "counts": {"passed": len(passed), "failed": len(failed), **tiers},
+         "records": records, "crossBackend": cross},
+        ensure_ascii=False, indent=1), encoding="utf-8")
+
+    print(f"\n[regression] {len(passed)}/{len(records)} 通过"
+          f"（bytes {tiers['bytes']} / near {tiers['near']} / FAIL {tiers['FAIL']}）"
+          f" — {'ALL GREEN' if ok else 'FAILED'}，用时 {int(time.time() - t_all)} s")
+    print(f"[regression] 报告：{args.report}")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

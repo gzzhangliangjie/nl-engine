@@ -13,7 +13,7 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.8 debug shading (wireframe / normal / uv / tri-id)";
+constexpr const char* kStage = "M0.9 full regression gate (all example cases x both backends)";
 
 // M0.7：--model 白名单校验。只放行 assets/models/ 下安全引用的 ASCII .glb 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、以 ".glb" 结尾。

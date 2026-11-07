@@ -41,9 +41,9 @@ nl-engine/
 └── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
 
-## 当前进度与运行（S0 全部完成 + M0.6/M0.7/M0.8 能力补齐）
+## 当前进度与运行（S0 完成 + M0.6~M0.9 能力补齐，下一步进 S1）
 
-**2026-11-07：S0 收口（tag `s0-done`），随后进入 S0 后能力补齐版本序列，M0.6（GPU 计时）、M0.7（高模测试资产 + --model）、M0.8（线框 / 调试着色）已完成。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
+**2026-11-07：S0 收口（tag `s0-done`）后进入能力补齐版本序列，M0.6（GPU 计时）、M0.7（高模测试资产 + --model）、M0.8（线框 / 调试着色）、M0.9（一键全量回归总闸）已完成——0.x 必做序列到此冻结，下一步进 S1 切簇。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
 
 ```bash
 scripts/build-m0.2.bat DX12          # 或 VULKAN：configure + build + selftest（15/15）
@@ -57,6 +57,7 @@ build/<backend>/viewer.exe --screenshot w.png --wireframe                  # 线
 build/<backend>/viewer.exe --screenshot t.png --shading tri-id             # 三角形ID 伪随机色
 build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关剔除看内壁
 build/<backend>/viewer.exe --selftest
+python tools/regression.py            # M0.9 总闸：全部 example 用例 × 双后端现场重跑并比对基线，全绿 exit 0
 python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnotDense.glb   # 程序化致密资产（零网络、MD5 确定）
 ```
 
@@ -66,7 +67,8 @@ python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnot
 - **M0.6 GPU 帧内计时（tag `m0.6`）**：两后端共享的 `GpuTimer` 用一对 NVRHI timer query 包住整帧 GPU 命令，HUD 在 CPU `frame ms` 旁新增 `GPU x.xx ms (NVRHI timer)` 行 + gpu ms 曲线——两者并排一眼分清 CPU 帧间隔与 GPU 耗时。`--no-hud` 完全不建 query，M0.1~M0.5 基线逐字节不变。计划见 `docs/s0/M0.6-PLAN.md`。
 - **M0.7 高模测试资产（tag `m0.7`）**：`scripts/gen-dense-mesh.py` 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204,800 tri / 细分球 327,680 tri，零网络、同参数 MD5 确定、内嵌棋盘格 PNG）；viewer 新增 `--model <name.glb>`（assets/ 下白名单），HUD 增 `model : <名> (N tri)` 行；`thirdparty/meshoptimizer` v1.3 作 S1 切簇对照基准（文档级，不入构建）。S1 切簇的命门就位。计划见 `docs/s0/M0.7-PLAN.md`。
 - **M0.8 线框 / 调试着色（tag `m0.8`）**：`model.slang` 单源新增 4 种着色模式（`g_options.x` 分支：textured / normal / uv / tri-id，tri-id 用 `SV_PrimitiveID` 整数 hash，slangc 双目标实测通过）；线框走 NVRHI 光栅 fill mode（pipeline 2×2 组合，零几何 shader）；`--shading` / `--wireframe` / V、N 键；HUD 增 shading 下拉框 + wireframe 复选框（双向 POD 通道）。不带新参数时行为与 M0.7 逐字节一致。S1 排查切簇 / 剔除的双眼睛就位。计划见 `docs/s0/M0.8-PLAN.md`。
-- **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分 `--profile` 为穿插项，排在 M0.7~M0.9 序列之后视需要插），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
+- **M0.9 一键全量回归总闸（tag `m0.9`）**：`python tools/regression.py` 把 `example/cases.json` 里全部版本的全部可自动用例 × 双后端现场重跑（历史 exe 走 tag 快照，当前版走 build/），PNG 与基线逐字节比对（near 档：像素差 ≤1/255 且 ≤2 像素的 GPU 取整噪声）、selftest 校验日志、`deviceErrors=0`，全绿 exit 0，报告落 `build/regression/report.md`。复用展示台的 exe 解析 / 参数校验 / 像素比对，单一语义源。S1 起每次改动的提交前总闸。计划见 `docs/s0/M0.9-PLAN.md`。
+- **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分 `--profile` 为穿插项视需要插），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
 
 ## 成果展示台（按版本看用例）
 

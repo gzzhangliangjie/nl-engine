@@ -398,3 +398,34 @@
 - `example/m0.8/`：`hud-{dx12,vulkan}.png`（960×540，纽结法线着色 + 新控件）、`wire-{dx12,vulkan}.png`（960×540，Suzanne 线框 + 复选框勾选）、`uv-{dx12,vulkan}.png`（640×360，细分球 UV）、`tris-{dx12,vulkan}.png`（640×360，Suzanne 三角形ID）+ `run.bat`（`all` / `hud` / `wire` / `uv` / `tris` / `selftest`）。
 - `example/cases.json` 增 m0.8：`hud`（dist 可调）/ `wire` / `uv` / `tris` / `selftest` 五用例；m0.1~m0.7 原样保留。
 - `python tools/showcase/server.py --check` 退出 0。
+
+## M0.9 一键全量回归总闸（tools/regression.py）
+
+**动作**
+- `tools/regression.py`（新增）：读 `example/cases.json`，对全部版本的全部可自动用例 × 双后端现场重跑——历史里程碑 exe 走 tag 快照（`build/showcase/<tag>/`），当前版走 `build/<backend>/`。**复用 `tools/showcase/server.py` 的 `exe_for / validated_params / build_argv / baseline_for / before_baseline_for / compare_pixels / md5`**（import 同目录模块），cases.json 只有一份解析器。判据：PNG 与基线 MD5 相同 = `bytes`；不同但像素差 ≤1/255 且 ≤2 像素 = `near`（GPU 取整噪声档，与展示台同约定）；selftest 校验 `expectLog`；每次运行校验 `deviceErrors=0`；exe 缺失 = FAIL 并提示 `rebuild.py --tags <tag>`；resize 类用例的 `.before.png` 与 `beforeBaselines` 同样比对。参数取 `validated_params(case, {})` 默认值（与基线生成同参）。报告落 `build/regression/report.{md,json}`，失败 exit 1。
+- `example/cases.json`：m0.8 腾位（`tag: null` → `m0.8`，exe 改 `build/showcase/{tag}/…`，`rebuild.py --tags m0.8` 补建两后端快照）；新增 m0.9 版本：`gate-hud`（**线框 × tri-id × HUD 组合冒烟**，此前从未同时归位过的组合）+ `selftest`（15/15，stage M0.9）+ `regression`（manual，指向总闸本体）。
+- `renderer/src/renderer.cpp`：`kStage` → `M0.9 full regression gate (all example cases x both backends)`；`viewer/main.cpp` selftest 阶段校验同步改 M0.9（仍 15/15）。
+- `example/m0.9/` 归位：`hud-{dx12,vulkan}.png`（gate-hud 960×540 基线）+ `run.bat`（`all / gate-hud / selftest / regression`）+ `regression-report.md`（最近一次 ALL GREEN 报告存档）。
+- README 进度行 / 命令块更新；ROADMAP 此前已把 M0.9 列为 0.x 序列终点。
+
+**提交版本**    tag `m0.9`
+
+**完成情况**
+- 全量回归 **58/58 通过（bytes 58 / near 0 / FAIL 0）**，exit 0，用时 ~40 s（9 版本 × 24 可自动用例 × 双后端）。历史基线全部逐字节命中——含从 s0-init 到 m0.8 的全部 tag 快照 exe。
+- 负向用例：把 `example/m0.5/nohud-dx12.png` 中间翻 1 字节 → 总闸 `[FAIL] … 基线或产物 PNG 无法解码`、exit 1；`git checkout` 还原后 MD5 仍 `7e528087…`、复跑 PASS。exe 缺失路径也实测（首跑时 m0.8 快照未补建，逐版本 FAIL 提示 rebuild.py）。
+- `gate-hud` 目检：彩色线框 Suzanne（每三角形 hash 色）+ HUD 显示 `tri-id` 下拉与 wireframe 勾选，M0.9 阶段行自证；960×540 面板完整不裁底。
+- 双后端对照（信息档）：19 个 pair 用例中 9 个两后端 PNG **逐字节相同**（clear / triangle / suzanne / inner-cullback / nohud×2 / icosphere / uv / tris）；10 个不同均属两类已知差异——HUD 类（m0.5~m0.9 的 hud / controls / wire / gate-hud）面板印的 backend / debug layer 文本本来就不同，内壁 / resize 类是既有 ≤1/255 的 GPU 取整噪声（m0.4/inner、m0.4/resize）。注意 gate-hud 两后端 MD5 不同但**各自**与基线逐字节命中，判定不受影响。
+- `python tools/showcase/server.py --check` 退出 0（stage=M0.9，2 可见用例 / 2 基线）。
+- 纯工具版本：不动任何渲染行为，`m0.5/nohud` 基线逐字节命中即机械证据。
+
+**踩坑情况**
+1. **`sys.path` 指错层** → 根因：脚本在 `tools/regression.py`，`HERE = Path(__file__).parent` 是 `tools/` 不是 `tools/showcase/`，`import server` 报 ModuleNotFoundError、ROOT 也多算一层。处理：`sys.path.insert(0, str(HERE / "showcase"))`、`ROOT = HERE.parent`。
+2. **`--backend` 缺省时 `backend_filter = (None,)`** → 根因：`b` 变量为 None，f-string `{b:<6}` 对 None 用格式说明符炸 `unsupported format string passed to NoneType`。处理：`backend_filter = (args.backend,) if args.backend else BACKENDS`。
+3. **坏基线 PNG 砸穿 zlib 解码** → 根因：负向验证把基线中间翻 1 字节，zlib 流损坏，stdlib PNG 解码器抛 `zlib.error`，总闸没把它当判据而是崩溃。处理：`judge_image` 里 `compare_pixels` 包 try/except → FAIL「PNG 无法解码」。负向用例本身反而帮总闸补了一条判据。
+
+**用例归位**
+- `example/m0.9/`：`hud-{dx12,vulkan}.png`（gate-hud 组合冒烟）+ `run.bat`（all / gate-hud / selftest / regression）+ `regression-report.md`（ALL GREEN 存档）。
+- `example/cases.json` 增 m0.9 三用例；m0.8 exe 腾位到 tag 快照并 `rebuild.py --tags m0.8` 补建。
+- `python tools/showcase/server.py --check` 退出 0。
+
+**下一步**：0.x 序列到此冻结，进 S1 切簇（meshlet building / cluster culling，`thirdparty/meshoptimizer` 对照基准已就位）。

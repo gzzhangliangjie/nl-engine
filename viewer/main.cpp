@@ -151,7 +151,7 @@ Options parseArgs(int argc, char** argv) {
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.8 selftest\n";
+    std::cout << "nl-engine M0.9 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -185,7 +185,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.8") != nullptr, "M0.8 stage reported");
+    check(std::strstr(st.stage, "M0.9") != nullptr, "M0.9 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
