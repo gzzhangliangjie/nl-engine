@@ -130,6 +130,7 @@ target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui)
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
     NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
+    NL_MESHLET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/meshlets"   # M1.3：.nmesh 资产
     _CRT_SECURE_NO_WARNINGS
     NOMINMAX
 )
@@ -166,7 +167,11 @@ else()
 endif()
 
 # 自动收集 renderer/shaders/ 下所有 .slang（不再硬编码单个文件）。
-# 每个源 <name>.slang 出 <name>.{vs,ps}.{spv,dxil} 四个产物；新增 shader 只需在目录里放文件，无需改 CMake。
+# 每个源 <name>.slang 出 8 个产物（model 双入口后）：
+#   <name>.vs.{spv,dxil}         入口 vsMain
+#   <name>.vscluster.{spv,dxil}  入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
+#   <name>.ps.{spv,dxil}         入口 psMain
+#   <name>.pscluster.{spv,dxil}  入口 psCluster（M1.3）
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
     message(FATAL_ERROR "No .slang shaders found in renderer/shaders/")
@@ -176,33 +181,41 @@ set(_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${_SHADER_OUT}")
 
 set(_SHADER_ARTIFACTS "")
+# 入口清单按源文件给：model.slang 双入口（M1.3 cluster 场景），其余单入口。
+# D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
+# 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
+set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment")
+set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
-    foreach(_ent vs ps)
-        if(_ent STREQUAL "vs")
-            set(_stage vertex)
-            set(_entry vsMain)
-        else()
-            set(_stage fragment)
-            set(_entry psMain)
-        endif()
-        list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
-                                      "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil")
+    if(_SRC_NAME STREQUAL "model")
+        set(_ENTRIES "${_ENTRIES_MODEL}")
+    else()
+        set(_ENTRIES "${_ENTRIES_DEFAULT}")
+    endif()
+    foreach(_SPEC ${_ENTRIES})
+        string(REPLACE "|" ";" _SPEC_LIST "${_SPEC}")
+        list(GET _SPEC_LIST 0 _entry)
+        list(GET _SPEC_LIST 1 _suffix)
+        list(GET _SPEC_LIST 2 _stage)
+        list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
+                                      "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil")
         # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
         #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128（set 0）。
         # DX12 侧仍用 b0/t0/s0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
-        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
+        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             COMMAND "${SLANGC}" "${_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
                     -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0
-                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.spv"
+                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             MAIN_DEPENDENCY "${_SRC}"
-            COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_ent})")
-        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil"
+            COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_suffix})")
+        add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             COMMAND "${SLANGC}" "${_SRC}" -dxc-path "${NL_DXC_DIR}"
                     -target dxil -entry ${_entry} -stage ${_stage}
-                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_ent}.dxil"
+                    -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             MAIN_DEPENDENCY "${_SRC}"
-            COMMENT "Slang -> DXIL (${_SRC_NAME}.${_ent})")
+            COMMENT "Slang -> DXIL (${_SRC_NAME}.${_suffix})")
     endforeach()
 endforeach()
 

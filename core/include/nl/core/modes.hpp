@@ -9,7 +9,8 @@ namespace nl::core {
 
 enum class ViewMode {
     Normal = 0,   // M0.5 唯一的模式：普通渲染（带贴图 Suzanne + 轨道相机 + HUD）
-    // S1 起依次追加：Cluster, Lod, DagTop, Cull, Dag, Hiz, Visbuf, Rt, Shadow,
+    Cluster = 1,  // M1.3：加载 .nmesh，每簇随机着色（S1 切簇的可视化验收）
+    // S1 起依次追加：Lod, DagTop, Cull, Dag, Hiz, Visbuf, Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };

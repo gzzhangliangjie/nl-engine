@@ -1033,7 +1033,11 @@
       "model": {
        "type": "select",
        "label": "模型",
-       "options": ["Suzanne.glb", "TorusKnotDense.glb", "IcoSphereDense.glb"],
+       "options": [
+        "Suzanne.glb",
+        "TorusKnotDense.glb",
+        "IcoSphereDense.glb"
+       ],
        "default": "Suzanne.glb"
       }
      },
@@ -1077,7 +1081,10 @@
      "name": "selftest cluster：确定性单测",
      "kind": "tool",
      "note": "三个确定性合成网格（连续 64x64 / 双断连块 / 单四边形）上验证：覆盖率 100%（簇展开索引多重集 == 输入）、每簇 128 tri / 64 vert 上限、包围球真的包住簇顶点、非法输入显式拒绝。退出 0 即 PASS。",
-     "args": ["selftest", "cluster"],
+     "args": [
+      "selftest",
+      "cluster"
+     ],
      "expectExit": 0,
      "expectLog": "cluster selftest: PASS",
      "command": "nanite-tools selftest cluster"
@@ -1096,7 +1103,11 @@
       "model": {
        "type": "select",
        "label": "模型",
-       "options": ["Suzanne.glb", "TorusKnotDense.glb", "IcoSphereDense.glb"],
+       "options": [
+        "Suzanne.glb",
+        "TorusKnotDense.glb",
+        "IcoSphereDense.glb"
+       ],
        "default": "Suzanne.glb"
       }
      },
@@ -1142,7 +1153,10 @@
      "name": "selftest nmesh：roundtrip 单测",
      "kind": "tool",
      "note": "确定性网格切簇 → 写盘 → 读回：逐字段一致、读回重写逐字节一致；坏 magic / 截断文件显式拒绝。退出 0 即 PASS。",
-     "args": ["selftest", "nmesh"],
+     "args": [
+      "selftest",
+      "nmesh"
+     ],
      "expectExit": 0,
      "expectLog": "nmesh selftest: PASS",
      "command": "nanite-tools selftest nmesh"
@@ -1172,6 +1186,117 @@
      "expectExit": 1,
      "expectLog": "cannot open",
      "command": "nanite-tools stat __missing__.nmesh"
+    }
+   ]
+  },
+  {
+   "id": "s1.0",
+   "label": "S1.0",
+   "name": "簇着色可视化（--mode cluster，每簇随机色）",
+   "tag": "s1-done",
+   "date": "2026-11-07",
+   "summary": "viewer 新增 --mode cluster：加载 assets/meshlets/*.nmesh（M1.2 资产），每簇随机着色。簇色在 CPU 端用与 shader tri-id 同一个 pcg hash 烘进 CLUSTERCOLOR 顶点属性（.nmesh 窗口复制保证每条目归属唯一簇），零新增 GPU 资源类型，双后端 PNG 逐字节一致。model.slang 单源新增 mode 4 分支；HUD shading combo 加 cluster 项。",
+   "acceptance": [
+    "clusters（球）双后端 PNG 逐字节一致；色块大小均匀、无长条畸形簇（S1 验收判据）",
+    "clusters-hud（Suzanne）HUD 显示 mode cluster / model Suzanne.nmesh (3936 tri) / shading combo cluster；面板 960x540 完整不裁底",
+    "不带 --mode cluster 的历史基线逐字节不变：回归全量 ALL GREEN（kStage 升 S1.0，--check 退出 0）",
+    "selftest 15/15 双后端（stage 校验改 S1.0）",
+    "example/s1.0 归位 + cases.json + run.bat"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "clusters",
+     "name": "IcoSphereDense 簇着色（4929 簇密铺球面）",
+     "kind": "pair",
+     "note": "球面被 4929 个簇的随机色块均匀密铺——色块大小是否均匀、有无长条畸形簇是切簇算法质量的直接判据。簇色 CPU 烘顶点属性，双后端逐字节一致（不含 HUD 文本差异）。",
+     "baselines": {
+      "dx12": "example/s1.0/clusters-dx12.png",
+      "vulkan": "example/s1.0/clusters-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cluster",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--model",
+      "IcoSphereDense.nmesh"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 1.5,
+       "max": 8,
+       "step": 0.05,
+       "default": "4.2"
+      }
+     },
+     "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --model IcoSphereDense.nmesh",
+     "script": "example/s1.0/run.bat clusters"
+    },
+    {
+     "id": "clusters-hud",
+     "name": "Suzanne 簇着色 + HUD（237 簇贴脸）",
+     "kind": "pair",
+     "note": "Suzanne 每簇 avg 16.6 tri（每 tri 拆 3 独立顶点、GPU 条目口径 64 上限），色块紧凑贴模型表面、无贯穿面片的长条簇。HUD 自证：mode cluster / model Suzanne.nmesh / shading combo = cluster。",
+     "baselines": {
+      "dx12": "example/s1.0/clusters-hud-dx12.png",
+      "vulkan": "example/s1.0/clusters-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cluster",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "4.2"
+      }
+     },
+     "command": "viewer.exe --mode cluster --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s1.0/run.bat hud"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（15/15，阶段校验 S1.0）",
+     "kind": "selftest",
+     "note": "stage 检查改为 S1.0；check 数保持 15 不变（历史版本 selftest 用例只锁 count）。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (15/15)",
+     "command": "viewer.exe --selftest",
+     "script": "example/s1.0/run.bat selftest"
     }
    ]
   }

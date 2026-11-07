@@ -280,7 +280,9 @@ void Hud::build(HudFrame& frame) {
     ImGui::SameLine();
     ImGui::Checkbox("wireframe", &frame.wireframe);   // M0.8：光栅 fill mode，与 cull 正交
     // M0.8：着色模式下拉框，双向 POD 通道与 cull/color 控件同一条路。
-    static const char* kShadingNames[] = { "textured", "normal", "uv", "tri-id" };
+    // M1.3：cluster 只有 cluster 场景提供了 CLUSTERCOLOR 属性（viewer 侧在
+    // normal 模式把该值钳回 0..3，这里只是同一张清单）。
+    static const char* kShadingNames[] = { "textured", "normal", "uv", "tri-id", "cluster" };
     ImGui::Combo("shading", &frame.shading, kShadingNames,
                  static_cast<int>(sizeof(kShadingNames) / sizeof(kShadingNames[0])));
     ImGui::SliderInt("clear color", &frame.colorIndex, 0, 3);

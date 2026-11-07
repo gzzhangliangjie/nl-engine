@@ -13,21 +13,30 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.9 full regression gate (all example cases x both backends)";
+constexpr const char* kStage =
+    "S1.0 cluster visualization (per-cluster color from .nmesh)";
 
-// M0.7：--model 白名单校验。只放行 assets/models/ 下安全引用的 ASCII .glb 文件名：
-// 无路径分隔符（防目录穿越）、无 ".."、可打印字符、以 ".glb" 结尾。
-bool validModelFileName(const char* name) {
+// M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
+// 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
+bool validAssetFileName(const char* name, const char* ext) {
     if (!name || !*name) return false;
     const std::string s(name);
     if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
     if (s.find("..") != std::string::npos) return false;
-    if (s.size() < 5 || s.compare(s.size() - 4, 4, ".glb") != 0) return false;
+    const size_t extLen = std::strlen(ext);
+    if (s.size() < extLen + 1 || s.compare(s.size() - extLen, extLen, ext) != 0) return false;
     for (const char c : s) {
         const auto u = static_cast<unsigned char>(c);
         if (u < 0x21 || u > 0x7E) return false;   // 可打印 ASCII，不含空格
     }
     return true;
+}
+bool validModelFileName(const char* name) {
+    return validAssetFileName(name, ".glb");
+}
+// M1.3：cluster 模式的 .nmesh 白名单（assets/meshlets/）。
+bool validNMeshFileName(const char* name) {
+    return validAssetFileName(name, ".nmesh");
 }
 } // namespace
 
@@ -36,36 +45,42 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-    static const char* kSources[] = { "model", "hud" };
-    static const char* kStages[]  = { "vs", "ps" };
-    static const char* kTargets[] = { "spv", "dxil" };
+    // M1.3：model 双入口（vs/vscluster/ps/pscluster）+ hud 单入口，各 × spv/dxil = 12。
+    struct Artifact { const char* name; bool spv; };
+    static const Artifact kArtifacts[] = {
+        {"model.vs", true}, {"model.vs", false},
+        {"model.vscluster", true}, {"model.vscluster", false},
+        {"model.ps", true}, {"model.ps", false},
+        {"model.pscluster", true}, {"model.pscluster", false},
+        {"hud.vs", true}, {"hud.vs", false},
+        {"hud.ps", true}, {"hud.ps", false},
+    };
+    constexpr int kArtifactCount =
+        static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
     constexpr std::uint32_t kSpirvMagic = 0x07230203u;
 
     std::ostringstream os;
     int ok = 0;
-    for (const char* src : kSources) {
-        for (const char* stage : kStages) {
-            for (const char* target : kTargets) {
-                std::string name = std::string(src) + "." + stage + "." + target;
-                const std::string path = std::string(NL_SHADER_DIR) + "/" + name;
-                std::ifstream f(path, std::ios::binary | std::ios::ate);
-                std::int64_t size = -1;
-                if (f) size = static_cast<std::int64_t>(f.tellg());
-                std::uint32_t magic = 0;
-                if (f && size >= 4) {
-                    f.seekg(0);
-                    f.read(reinterpret_cast<char*>(&magic), 4);
-                }
-                const bool isSpv = (std::strcmp(target, "spv") == 0);
-                const bool good = f.good() && size >= 4 &&
-                    (isSpv ? magic == kSpirvMagic : std::memcmp(&magic, "DXBC", 4) == 0);
-                if (good) ++ok;
-                os << ' ' << name << (good ? "" : "!BAD") << '(' << size << "B)";
-            }
+    for (const Artifact& a : kArtifacts) {
+        const char* target = a.spv ? "spv" : "dxil";
+        std::string name = std::string(a.name) + "." + target;
+        const std::string path = std::string(NL_SHADER_DIR) + "/" + name;
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        std::int64_t size = -1;
+        if (f) size = static_cast<std::int64_t>(f.tellg());
+        std::uint32_t magic = 0;
+        if (f && size >= 4) {
+            f.seekg(0);
+            f.read(reinterpret_cast<char*>(&magic), 4);
         }
+        const bool good = f.good() && size >= 4 &&
+            (a.spv ? magic == kSpirvMagic : std::memcmp(&magic, "DXBC", 4) == 0);
+        if (good) ++ok;
+        os << ' ' << name << (good ? "" : "!BAD") << '(' << size << "B)";
     }
-    report = os.str() + "  [" + std::to_string(ok) + "/8 ok]";
-    return ok == 8;
+    report = os.str() + "  [" + std::to_string(ok) + "/" + std::to_string(kArtifactCount) +
+             " ok]";
+    return ok == kArtifactCount;
 }
 
 struct Renderer::Impl {
@@ -81,12 +96,16 @@ Renderer& Renderer::operator=(Renderer&&) noexcept = default;
 
 std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool enableDebugLayer,
-                                           const char* modelFile) {
+                                           const char* modelFile, bool clusterMode) {
     std::unique_ptr<Renderer> r(new Renderer());
-    if (!validModelFileName(modelFile)) {
+    const bool nameOk = clusterMode ? validNMeshFileName(modelFile)
+                                    : validModelFileName(modelFile);
+    if (!nameOk) {
         r->impl_->error = std::string("invalid --model file name: '") +
                           (modelFile ? modelFile : "<null>") +
-                          "' (expected an ASCII *.glb file name in assets/models/)";
+                          (clusterMode
+                               ? "' (expected an ASCII *.nmesh file name in assets/meshlets/)"
+                               : "' (expected an ASCII *.glb file name in assets/models/)");
         return r;
     }
     r->impl_->backend = detail::createBackend();
@@ -95,7 +114,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
         return r;
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
-                                 r->impl_->error)) {
+                                 clusterMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

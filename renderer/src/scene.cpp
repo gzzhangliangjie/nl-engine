@@ -2,12 +2,24 @@
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
 
 #include "nl/core/log.hpp"
-#include "nl/core/mesh_io.hpp"   // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
+#include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
+#include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
 
 #include <cstring>
 #include <vector>
 
 namespace nl::renderer::detail {
+
+// M1.3：与 model.slang triIdColor 完全相同的 pcg 整数 hash——簇色在 CPU 端算好
+// 烘进顶点，两后端字节一致，不引入任何新 GPU 资源类型。
+static void clusterColor(std::uint32_t id, float out[3]) {
+    std::uint32_t h = id * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    h = (h >> 22u) ^ h;
+    out[0] = static_cast<float>(h & 255u) / 255.0f;
+    out[1] = static_cast<float>((h >> 8u) & 255u) / 255.0f;
+    out[2] = static_cast<float>((h >> 16u) & 255u) / 255.0f;
+}
 
 bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
                  const char* vsEntry, const char* psEntry,
@@ -167,6 +179,171 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
                         " triangles=", triangleCount_, " indices=", indexCount_,
                         " | baseColor ", texWidth, "x", texHeight,
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
+// ---- M1.3：cluster 场景。加载 .nmesh，每簇随机着色，簇窗口展开成全局索引 ----
+bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
+                        const char* vsEntry, const char* psEntry,
+                        const char* nmeshFile, std::string& outError) {
+    // ---- 1. shader 对（cluster 专用入口 vsCluster/psCluster：签名多带 CLUSTERCOLOR。
+    // vsEntry/psEntry 由后端传，SPIR-V 恒为 main——cluster 字节码是独立编译产物，
+    // 入口在 slangc 时已定为 main；此处参数仅 DXIL 用）----
+    auto shaderPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(shaderPath("vscluster").c_str(), vsBlob) ||
+        !readFileBytes(shaderPath("pscluster").c_str(), psBlob)) {
+        outError = std::string("failed to load cluster shaders (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName(vsEntry);
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName(psEntry);
+    vs_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
+
+    // ---- 2. 读 .nmesh 资产（M1.2 的 loadNMesh 已校验 magic/版本/截断/窗口越界）----
+    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+    nl::core::NMeshData nm;
+    std::string loadError;
+    if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
+        outError = std::string(nmeshFile) + ": " + loadError;
+        return false;
+    }
+    if (nm.meshlets.empty() || nm.triangles.empty()) {
+        outError = std::string(nmeshFile) + " has no meshlets"; return false;
+    }
+
+    // ---- 3. 展开成渲染数据 ----
+    // 顶点：每个条目属于恰好一个簇窗口（.nmesh 的窗口复制保证），烘上该簇的颜色。
+    // 索引：簇内局部索引 + vertexOffset 展开成全局索引，簇序遍历 → 单次 drawIndexed。
+    std::vector<ClusterVertex> vertices;
+    vertices.reserve(nm.vertices.size());
+    std::vector<std::uint32_t> indices;
+    indices.reserve(nm.triangles.size());
+    for (std::size_t m = 0; m < nm.meshlets.size(); ++m) {
+        const auto& meshlet = nm.meshlets[m];
+        float color[3];
+        clusterColor(static_cast<std::uint32_t>(m), color);
+        for (std::uint32_t i = 0; i < meshlet.vertexCount; ++i) {
+            const auto& mv = nm.vertices[meshlet.vertexOffset + i];
+            ClusterVertex cv;
+            cv.v = { mv.pos[0], mv.pos[1], mv.pos[2],
+                     mv.normal[0], mv.normal[1], mv.normal[2],
+                     mv.uv[0], mv.uv[1] };
+            cv.color[0] = color[0]; cv.color[1] = color[1]; cv.color[2] = color[2];
+            vertices.push_back(cv);
+        }
+        const std::uint32_t base = meshlet.triangleOffset;
+        for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
+            for (int k = 0; k < 3; ++k) {
+                indices.push_back(meshlet.vertexOffset +
+                                  nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            }
+        }
+    }
+    indexCount_ = static_cast<std::uint32_t>(indices.size());
+    triangleCount_ = indexCount_ / 3;
+
+    // ---- 4. GPU 资源：VB/IB + volatile CB + 1x1 白色占位贴图（binding 布局不变）----
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = vertices.size() * sizeof(ClusterVertex);
+    vbDesc.isVertexBuffer = true;
+    vbDesc.debugName = "ClusterVB";
+    vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    vertexBuffer_ = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = indices.size() * sizeof(std::uint32_t);
+    ibDesc.isIndexBuffer = true;
+    ibDesc.debugName = "ClusterIB";
+    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    indexBuffer_ = device->createBuffer(ibDesc);
+    if (!vertexBuffer_ || !indexBuffer_) { outError = "createBuffer failed for cluster VB/IB"; return false; }
+
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(SceneConstants);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "SceneConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
+
+    // mode 0-3 在 cluster 场景也可用（normal/uv/tri-id 用真实属性），textured 需要
+    // 一个合法的 t0 绑定——1x1 白色占位，反正 cluster 模式不采样。
+    nvrhi::TextureDesc texDesc;
+    texDesc.width = 1; texDesc.height = 1;
+    texDesc.format = nvrhi::Format::RGBA8_UNORM;
+    texDesc.debugName = "ClusterWhite1x1";
+    texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    texDesc.keepInitialState = true;
+    texture_ = device->createTexture(texDesc);
+    if (!texture_) { outError = "createTexture failed for cluster dummy texture"; return false; }
+
+    nvrhi::SamplerDesc samplerDesc;
+    samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+    sampler_ = device->createSampler(samplerDesc);
+    if (!sampler_) { outError = "createSampler failed"; return false; }
+
+    // 槽位与 model.slang 的 register(b0/t0/s0) 一致（注释详见 init）。
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    bindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
+    if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
+
+    // 输入布局多一个 CLUSTERCOLOR（stride 44B）；其余三个与 SceneVertex 布局一致。
+    nvrhi::VertexAttributeDesc attrs[4] = {
+        nvrhi::VertexAttributeDesc().setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0)
+            .setBufferIndex(0).setElementStride(sizeof(ClusterVertex)),
+        nvrhi::VertexAttributeDesc().setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(12)
+            .setBufferIndex(0).setElementStride(sizeof(ClusterVertex)),
+        nvrhi::VertexAttributeDesc().setName("TEXCOORD")
+            .setFormat(nvrhi::Format::RG32_FLOAT).setOffset(24)
+            .setBufferIndex(0).setElementStride(sizeof(ClusterVertex)),
+        nvrhi::VertexAttributeDesc().setName("CLUSTERCOLOR")
+            .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(32)
+            .setBufferIndex(0).setElementStride(sizeof(ClusterVertex)),
+    };
+    inputLayout_ = device->createInputLayout(attrs, 4, vs_);
+    if (!inputLayout_) { outError = "createInputLayout failed for cluster scene"; return false; }
+
+    // ---- 5. 一次性上传 ----
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    upload->beginTrackingBufferState(vertexBuffer_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(vertexBuffer_, vertices.data(), vertices.size() * sizeof(ClusterVertex));
+    upload->setPermanentBufferState(vertexBuffer_, nvrhi::ResourceStates::VertexBuffer);
+    upload->beginTrackingBufferState(indexBuffer_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(indexBuffer_, indices.data(), indices.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
+    const std::uint8_t white[4] = { 255, 255, 255, 255 };
+    upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+    upload->close();
+    device->executeCommandList(upload);
+
+    modelName_ = nmeshFile;
+    nl::core::log::info("cluster scene ready: ", nmeshFile,
+                        " | vertices=", vertices.size(),
+                        " triangles=", triangleCount_,
+                        " meshlets=", nm.meshlets.size(),
                         " | shader=", shaderSuffix);
     return true;
 }

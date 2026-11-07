@@ -21,6 +21,16 @@ struct SceneVertex {
 };
 static_assert(sizeof(SceneVertex) == 32, "SceneVertex must be tightly packed");
 
+// M1.3：cluster 场景的顶点 = SceneVertex + 烘好的簇色（CPU 端用与 shader tri-id
+// 同一个 pcg hash，从 .nmesh 的簇窗口归属算出，两后端字节一致、截图可复现）。
+// 每个顶点条目只属于一个簇窗口（邻簇共享顶点在 .nmesh 里本就按窗口复制），
+// 所以三角形三个顶点同色，插值恒定——不需要 SRV / PrimitiveID 查表。
+struct ClusterVertex {
+    SceneVertex v;
+    float color[3];
+};
+static_assert(sizeof(ClusterVertex) == 44, "ClusterVertex must be tightly packed");
+
 // 与 model.slang 的 SceneConstants cbuffer 逐字节对应（40 floats = 160 B）。
 struct SceneConstants {
     float mvp[16];
@@ -39,6 +49,13 @@ public:
     bool init(nvrhi::IDevice* device, const char* shaderSuffix,
               const char* vsEntry, const char* psEntry,
               const char* modelFile, std::string& outError);
+
+    // M1.3：cluster 场景——加载 assets/meshlets/ 下的 .nmesh（上层白名单校验），
+    // 每簇随机着色（CPU pcg hash 烘进 CLUSTERCOLOR 顶点属性），簇窗口展开成
+    // 全局索引一次 drawIndexed。绑定的贴图换 1x1 白色占位（布局与 init 一致）。
+    bool initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
+                     const char* vsEntry, const char* psEntry,
+                     const char* nmeshFile, std::string& outError);
 
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();

@@ -30,9 +30,10 @@ class Backend {
 public:
     virtual ~Backend() = default;
 
-    // modelFile：assets/models/ 下的 .glb 文件名（上层已做白名单校验）。
+    // modelFile：assets/models/ 下的 .glb（clusterMode=false）或 assets/meshlets/
+    // 下的 .nmesh（clusterMode=true，M1.3）；上层已做白名单校验。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
-                      const char* modelFile, std::string& outError) = 0;
+                      const char* modelFile, bool clusterMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加

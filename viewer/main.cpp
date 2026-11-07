@@ -37,9 +37,12 @@ const nl::renderer::ClearColor kColors[] = {
 constexpr int kColorCount = static_cast<int>(sizeof(kColors) / sizeof(kColors[0]));
 
 // M0.8：调试着色模式（与 model.slang 的 g_options.x / HUD combo 一致）
-constexpr int kShadingCount = 4;
+// M1.3：4 = cluster（只有 cluster 场景提供了 CLUSTERCOLOR 属性；normal 场景选它会
+// 读到未绑定属性的未定义值，所以 N 键循环与 HUD 回写时在 normal 模式下钳到 0..3）
+constexpr int kShadingCount = 5;
 const char* shadingName(int s) {
-    static const char* kNames[kShadingCount] = { "textured", "normal", "uv", "tri-id" };
+    static const char* kNames[kShadingCount] =
+        { "textured", "normal", "uv", "tri-id", "cluster" };
     return (s >= 0 && s < kShadingCount) ? kNames[s] : "?";
 }
 
@@ -64,7 +67,7 @@ struct Options {
     bool sizeSet    = false;
     bool resize     = false;
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
-    int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id（N 键 / HUD combo）
+    int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
@@ -78,7 +81,8 @@ struct Options {
     float pitchDeg  = 9.2f;
     float distance  = 4.2f;
     std::string screenshotPath;
-    std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/models/ 下的 .glb
+    std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
+    bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
 };
@@ -95,6 +99,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
+            o.modelSet = true;
         }
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
@@ -178,14 +183,14 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
-    check(nl::core::modeSelfTest(), "view mode dispatcher (normal only in S0)");
+    check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster in S1)");
 
     const auto st = nl::renderer::status();
     std::cout << "  backend: " << st.backend << " (configured, no vendor SDK)\n"
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.9") != nullptr, "M0.9 stage reported");
+    check(std::strstr(st.stage, "S1.0") != nullptr, "S1.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -195,7 +200,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (8 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (12 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -219,7 +224,9 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 
 // 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
 // 清屏色 / 重置相机；F12/--screenshot 真回读 GPU 像素写 PNG；resize 不黑屏。
-int runNormal(const Options& o) {
+// M1.3：cluster=true 时走 cluster 场景（assets/meshlets/*.nmesh，每簇随机着色），
+// 缺省着色 4=cluster；簇色烘在 CPU，两后端截图逐字节一致。
+int runNormal(const Options& o, bool cluster = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -238,7 +245,7 @@ int runNormal(const Options& o) {
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
-                                                   o.modelFile.c_str());
+                                                   o.modelFile.c_str(), cluster);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -248,7 +255,7 @@ int runNormal(const Options& o) {
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
     bool cullBack = o.cullBack;
-    int shading = o.shading;
+    int shading = cluster ? 4 : o.shading;   // M1.3：cluster 模式缺省看簇色
     bool wireframe = o.wireframe;
 
     const auto st = nl::renderer::status();
@@ -306,7 +313,10 @@ int runNormal(const Options& o) {
             nl::core::log::info("wireframe -> ", wireframe ? "on" : "off");
         }
         if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
-            shading = (shading + 1) % kShadingCount;
+            // cluster 场景五个模式全可用（textured 采 1x1 白占位）；normal 场景 4 会读
+            // 未绑定的 CLUSTERCOLOR，循环范围限 0..3。
+            const int cycleCount = cluster ? kShadingCount : 4;
+            shading = (shading + 1) % cycleCount;
             nl::core::log::info("shading -> ", shadingName(shading));
         }
         if (window.keyPressed(nl::core::Key::R)) {
@@ -442,6 +452,7 @@ int runNormal(const Options& o) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
+            if (!cluster) shading = std::min(shading, 3);  // normal 场景无 CLUSTERCOLOR 属性
             wireframe = hud.wireframe;
             colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
             hudWantsMouse = hud.wantCaptureMouse;
@@ -495,6 +506,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
     switch (mode) {
     case nl::core::ViewMode::Normal:
         return runNormal(o);
+    case nl::core::ViewMode::Cluster:   // M1.3
+        return runNormal(o, /*cluster=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -520,7 +533,8 @@ void printUsage() {
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id (default textured; N key cycles)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
-              << "  viewer.exe --model <name.glb>      load assets/models/<name.glb> (default Suzanne.glb)\n"
+              << "  viewer.exe --model <name>          load assets/<name>: .glb for normal mode,\n"
+              << "                                     .nmesh for cluster mode (default per mode)\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
@@ -549,5 +563,7 @@ int main(int argc, char** argv) {
         std::cerr << '\n';
         return 1;
     }
+    // M1.3：cluster 模式的缺省资产是 assets/meshlets/Suzanne.nmesh（用户没给 --model 时）
+    if (o.mode == nl::core::ViewMode::Cluster && !o.modelSet) o.modelFile = "Suzanne.nmesh";
     return runMode(o.mode, o);
 }

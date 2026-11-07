@@ -12,6 +12,14 @@
 //   1 = world-space normal -> color
 //   2 = uv -> color
 //   3 = triangle id (SV_PrimitiveID, integer hash) -> color
+//   4 = cluster color (M1.3): per-vertex CLUSTERCOLOR baked by the cluster scene
+//
+// M1.3 entry points (two pairs, one source file):
+//   vsMain / psMain        - 3-attribute signature (normal scene). D3D12's debug
+//                            layer treats "VS input not provided by the input
+//                            layout" as an error, so the cluster attribute must
+//                            live in a separate entry-point pair.
+//   vsCluster / psCluster  - 4-attribute signature (+CLUSTERCOLOR), cluster scene.
 // Wireframe is orthogonal: it is a raster fill mode, not a shader mode.
 
 cbuffer SceneConstants : register(b0)
@@ -19,7 +27,7 @@ cbuffer SceneConstants : register(b0)
     float4x4 g_mvp;        // view-projection * model, column-major
     float4x4 g_model;      // model matrix, for normal transform
     float4   g_lightDir;   // xyz = world-space light direction, w = ambient
-    float4   g_options;    // x = shading mode (0 textured / 1 normal / 2 uv / 3 tri-id)
+    float4   g_options;    // x = shading mode (0 textured / 1 normal / 2 uv / 3 tri-id / 4 cluster)
 };
 
 Texture2D<float4> g_baseColor : register(t0);
@@ -48,6 +56,33 @@ VSOutput vsMain(VSInput input)
     return output;
 }
 
+// M1.3: cluster scene adds one per-vertex attribute (baked cluster color).
+struct VSInputCluster
+{
+    float3 position : POSITION;
+    float3 normal   : NORMAL;
+    float2 uv       : TEXCOORD;
+    float3 clusterColor : CLUSTERCOLOR;
+};
+
+struct VSOutputCluster
+{
+    float4 position : SV_Position;
+    float3 normal   : NORMAL;
+    float2 uv       : TEXCOORD;
+    float3 clusterColor : CLUSTERCOLOR;
+};
+
+VSOutputCluster vsCluster(VSInputCluster input)
+{
+    VSOutputCluster output;
+    output.position = mul(g_mvp, float4(input.position, 1.0f));
+    output.normal   = mul((float3x3)g_model, input.normal);
+    output.uv       = input.uv;
+    output.clusterColor = input.clusterColor;
+    return output;
+}
+
 // M0.8: the pixel shader receives the rasterizer-generated primitive id directly.
 // It is a system value: the VS output does not carry it, and signature matching on
 // both DXIL (injected by the rasterizer) and SPIR-V (gl_PrimitiveID built-in) accepts it.
@@ -56,6 +91,16 @@ struct PSInput
     float4 position : SV_Position;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
+    uint   triId    : SV_PrimitiveID;
+};
+
+// M1.3: cluster variant — same fields plus the interpolated (constant) cluster color.
+struct PSInputCluster
+{
+    float4 position : SV_Position;
+    float3 normal   : NORMAL;
+    float2 uv       : TEXCOORD;
+    float3 clusterColor : CLUSTERCOLOR;
     uint   triId    : SV_PrimitiveID;
 };
 
@@ -69,27 +114,33 @@ float3 triIdColor(uint id)
     return float3(float(h & 255u), float((h >> 8u) & 255u), float((h >> 16u) & 255u)) / 255.0f;
 }
 
-float4 psMain(PSInput input) : SV_Target
+// Shared shading body. clusterColor only participates in mode 4; callers on the
+// normal signature pass a dummy value.
+float4 shade(float3 normal, float2 uv, uint triId, uint mode, float3 clusterColor)
 {
-    const uint mode = uint(g_options.x);
-
     if (mode == 1u)
     {
-        float3 n = normalize(input.normal);
+        float3 n = normalize(normal);
         return float4(n * 0.5f + 0.5f, 1.0f);   // world-space normal, [-1,1] -> [0,1]
     }
     if (mode == 2u)
     {
-        return float4(input.uv, 0.0f, 1.0f);    // raw uv: seam / continuity visible
+        return float4(uv, 0.0f, 1.0f);          // raw uv: seam / continuity visible
     }
     if (mode == 3u)
     {
-        return float4(triIdColor(input.triId), 1.0f);
+        return float4(triIdColor(triId), 1.0f);
+    }
+    if (mode == 4u)
+    {
+        // M1.3: cluster visualization. All three vertices of a triangle carry the
+        // same baked color (one cluster), so interpolation is a constant.
+        return float4(clusterColor, 1.0f);
     }
 
     // mode 0: textured path from M0.4, kept byte-for-byte identical.
-    float4 base = g_baseColor.Sample(g_sampler, input.uv);
-    float3 n = normalize(input.normal);
+    float4 base = g_baseColor.Sample(g_sampler, uv);
+    float3 n = normalize(normal);
     // abs() keeps back faces lit too: with culling disabled the inner wall is visible.
     float ndl = abs(dot(n, normalize(g_lightDir.xyz)));
     // Khronos 官方 Suzanne_BaseColor.png 是中灰底；乘一档曝光让贴图细节（含黄色眼睛）
@@ -97,4 +148,14 @@ float4 psMain(PSInput input) : SV_Target
     float3 albedo = base.rgb * 2.2f;
     float3 lit = min(albedo * (g_lightDir.w + (1.0f - g_lightDir.w) * ndl), 1.0f);
     return float4(lit, 1.0f);
+}
+
+float4 psMain(PSInput input) : SV_Target
+{
+    return shade(input.normal, input.uv, input.triId, uint(g_options.x), float3(0.0f, 0.0f, 0.0f));
+}
+
+float4 psCluster(PSInputCluster input) : SV_Target
+{
+    return shade(input.normal, input.uv, input.triId, uint(g_options.x), input.clusterColor);
 }

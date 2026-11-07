@@ -103,12 +103,14 @@ struct DeviceInfo {
 class Renderer {
 public:
     // nativeWindow：Windows 下是 HWND（core::Window::nativeHandle()）。
-    // modelFile：assets/models/ 下的 .glb 文件名（--model 传入；缺省 Suzanne.glb，
-    // 历史基线不变）。renderer 侧做白名单校验：ASCII 文件名、无路径分隔符。
+    // modelFile：normal 模式下是 assets/models/ 下的 .glb 文件名（--model 传入；
+    // 缺省 Suzanne.glb，历史基线不变）；cluster 模式（clusterMode=true）下是
+    // assets/meshlets/ 下的 .nmesh 文件名（M1.3）。renderer 侧做白名单校验。
     // 总是返回对象；创建失败时 valid()==false，原因在 lastError()。
     static std::unique_ptr<Renderer> create(void* nativeWindow, Extent extent,
                                             bool enableDebugLayer,
-                                            const char* modelFile = "Suzanne.glb");
+                                            const char* modelFile = "Suzanne.glb",
+                                            bool clusterMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

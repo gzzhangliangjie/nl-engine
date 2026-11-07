@@ -506,3 +506,24 @@
 2. **负向用例设计错**：第一版拿 `stat Suzanne.glb` 当「坏 magic」负向 → 根因：stat 对 .glb 本来就合法，exit 0。处理：换成缺失 .nmesh 路径（走 loadNMesh 失败分支）。教训：负向用例的输入必须真落在目标错误分支上。
 
 **下一步**：M1.3 viewer `--mode cluster` 每簇随机着色（吃 assets/meshlets/Suzanne.nmesh），S1 收官可视化验收。
+
+---
+
+## M1.3 viewer --mode cluster 簇着色可视化（S1 收官）
+
+**动作**：modes 分发器加 `Cluster` 模式；viewer `--mode cluster` 加载 `assets/meshlets/*.nmesh`（缺省 Suzanne.nmesh，`--model` 可选），簇窗口展开成全局索引单次 drawIndexed，**簇色 CPU 端 pcg hash（与 shader tri-id 同式）烘进 CLUSTERCOLOR 顶点属性**（.nmesh 窗口复制保证每条目归属唯一簇），零新增 GPU 资源类型；绑定贴图换 1x1 白占位（binding 布局不变）。model.slang 单源**双入口** vsMain/psMain + vsCluster/psCluster；CMake shader 产物 8→12、shaderArtifactsSelfTest 同步；kStage 升 `S1.0`；HUD shading combo 加 cluster；N 键循环 cluster 场景 0..4 / normal 场景钳 0..3。example/s1.0 归位（2 pair + selftest）；assets/meshlets/IcoSphereDense.nmesh（8MB）入仓。
+
+**提交版本**：`s1-done`（S1 收官 tag）
+
+**完成情况**
+- 可视化验收达标：Suzanne 237 簇色块紧凑贴表面无畸形长条；球面 4929 簇均匀密铺——正是「吸收逻辑优先空间相邻」的直接视觉证据。
+- **双后端 nohud PNG MD5 逐字节相同**（簇色 CPU 烘顶点的直接收益：确定性跨后端）。
+- 回归总闸 76→**82 ALL GREEN**（+s1.0 用例 3×2）；ctest 6/6；selftest 15/15 双后端；`--check` 退出 0。
+- m0.9 基线重拍：m0.9 的 exe 模板是当前 build（非快照），HUD stage 文本随 kStage 变 S1.0，重拍属预期动作而非漂移。
+
+**踩坑情况**
+1. **D3D12 debug layer 把「VS 签名有 CLUSTERCOLOR 但 normal 场景 input layout 不提供」记为 device error**（deviceErrors=24，每帧报）→ 根因：最初共用一对 shader 入口，以为未绑定属性是无害未定义值。处理：model.slang 拆双入口，normal/cluster 场景各用各的签名，CMake 入口清单按源文件过滤。
+2. **NL_ASSET_DIR 是 assets/models 而非 assets** → cluster 资产路径拼错。处理：CMake 新增 `NL_MESHLET_DIR` 独立定义。
+3. **m0.9/gate-hud 回归 FAIL 两后端** → 根因即坑 1 的 device error（dx12 退出码 1）+ kStage 变更导致 HUD stage 文本与旧基线像素不符（vulkan 877 px）。处理：修 shader 入口 + 用当前 exe 重拍 m0.9 基线（exe 模板=当前 build 的版本语义如此）。
+
+**下一步**：S2 simplify（簇重切，`nanite-tools simplify` 占位已在）。S1 全程四个 tag：s1-tools → s1-cluster → s1-asset → s1-done。

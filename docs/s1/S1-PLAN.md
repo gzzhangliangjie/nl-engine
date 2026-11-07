@@ -38,12 +38,12 @@
 
 **自检**：写出的 .nmesh 能被读回且逐字节一致（roundtrip 测试）。tag：`s1-asset`。
 
-## M1.3 viewer --mode cluster 簇着色可视化（1 天）
+## M1.3 viewer --mode cluster 簇着色可视化（1 天）——已落地 2026-11-07
 
-- [ ] viewer 加载 .nmesh，`--mode cluster` 下每簇随机颜色（hash(clusterId) → 调色板）
-- [ ] ImGui 加一个簇 id hover 显示信息（可后补）
+- [x] viewer 加载 .nmesh，`--mode cluster` 下每簇随机颜色：**簇色在 CPU 端**用与 shader tri-id 同一个 pcg hash 烘进 CLUSTERCOLOR 顶点属性（.nmesh 窗口复制保证每条目归属唯一簇，零新增 GPU 资源类型，双后端 PNG 逐字节一致）。ImGui 簇 hover 信息可后补（S4 剔除阶段一并做）
+- [x] model.slang 单源**双入口**：vsMain/psMain（3 属性，normal 场景）+ vsCluster/psCluster（+CLUSTERCOLOR，cluster 场景）——D3D12 debug layer 对「VS 签名有但 input layout 不提供」报 error，不能共用一对入口；CMake 产物 8→12 个，selftest 产物校验同步
 
-**自检（S1 验收）**：调试图簇边界清晰、颜色块大小均匀、**无长条畸形簇**（畸形=纯按索引顺序切的标志，说明吸收逻辑没优先空间相邻）。tag：`s1-done`，截图存 `docs/screenshots/s1.png`。
+**自检（已过）**：Suzanne 237 簇色块紧凑贴表面、球面 4929 簇密铺均匀、**无长条畸形簇**（畸形=纯按索引顺序切的标志）；双后端 nohud PNG MD5 相同。tag：`s1-done`，基线存 `example/s1.0/`。
 
 ---
 
