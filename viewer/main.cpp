@@ -67,6 +67,7 @@ struct Options {
     bool sizeSet    = false;
     bool resize     = false;
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
+    bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -131,6 +132,15 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
+        } else if (a == "--frustum" && i + 1 < argc) {
+            // M4.1：GPU 视锥剔除开关（仅 cull 模式消费；off = 恒等可见列表，M4.0 行为）。
+            const std::string v = argv[++i];
+            if (v == "on" || v == "1" || v == "true") o.frustumOn = true;
+            else if (v == "off" || v == "0" || v == "none" || v == "false") o.frustumOn = false;
+            else {
+                std::cerr << "invalid --frustum '" << v << "' (expected on|off)\n";
+                std::exit(1);
+            }
         } else if (a == "--shading" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.shading = -1;
@@ -218,7 +228,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S4.0") != nullptr, "S4.0 stage reported");
+    check(std::strstr(st.stage, "S4.1") != nullptr, "S4.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -228,7 +238,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (16 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (18 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -280,7 +290,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
-                                                   o.modelFile.c_str(), cluster, cullMode);
+                                                   o.modelFile.c_str(), cluster, cullMode,
+                                                   o.frustumOn);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -520,6 +531,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.lodMaxError = info.lodMaxError;
             }
             hud.deterministic = o.screenshot;
+            // M4.1：GPU 剔除统计（DeviceInfo 由 backend 每帧 poll 后更新，只读显示）。
+            hud.visibleClusters = info.visibleClusters;
+            hud.totalClusters = static_cast<int>(info.totalClusters);
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -612,6 +626,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             ++screenshotsSaved;
             nl::core::log::info("screenshot written: ", capturePath);
         }
+        // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
+        // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
+        if (o.screenshot && cullMode && info.totalClusters > 0 && info.visibleClusters >= 0) {
+            nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
+                                info.totalClusters, " clusters (frustum on)");
+        }
 
         if (frame % 15 == 0 || o.screenshot) {
             const auto e = renderer->extent();
@@ -691,6 +711,8 @@ void printUsage() {
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
+              << "  viewer.exe --frustum on|off        GPU frustum culling in cull mode (default on;\n"
+              << "                                     off = identity visible list, M4.0 behavior)\n"
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id (default textured; N key cycles)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"

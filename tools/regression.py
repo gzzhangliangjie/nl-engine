@@ -4,7 +4,16 @@
     python tools/regression.py                    # run everything, exit 0 only if all green
     python tools/regression.py --only m0.5/nohud  # filter by version[/case] id
     python tools/regression.py --backend dx12     # limit to one backend
+    python tools/regression.py --jobs 4           # parallel across cases (default 4; 1 = serial)
     python tools/regression.py --report PATH.md   # where the markdown report goes
+
+Usage discipline (2026-11-08): --only is the everyday loop ("current stage
+only"); the full run is the commit/tag gate. Cases run in parallel across
+(version, case) pairs, but the two backends of one case run serially — tool
+cases write fixed shared paths (e.g. build/qem/showcase-*) with no backend in
+the name, so same-case parallelism would collide. GPU screenshots are
+deterministic, but if a suspicious near/FAIL appears under load, re-run with
+--jobs 1 to rule out contention.
 
 Reuses the showcase module for every shared semantic (exe resolution, argument
 building, baseline lookup, pixel comparison) so there is exactly one parser of
@@ -27,7 +36,9 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -167,6 +178,8 @@ def main() -> int:
     ap.add_argument("--only", default=None, metavar="VERSION[/CASE]",
                     help="limit to one version (m0.5) or case (m0.5/nohud)")
     ap.add_argument("--backend", choices=BACKENDS, default=None)
+    ap.add_argument("--jobs", type=int, default=4,
+                    help="parallel cases (default 4; 1 = serial, 最保守)")
     ap.add_argument("--report", default=str(DEFAULT_REPORT_MD),
                     help="markdown report path (a .json sits next to it)")
     args = ap.parse_args()
@@ -185,8 +198,10 @@ def main() -> int:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     Path(args.report).parent.mkdir(parents=True, exist_ok=True)
 
-    records: list[dict] = []
-    t_all = time.time()
+    # ---- 任务表：以 (version, case) 为并行单元；同用例双后端串行 ----
+    # 工具用例（kind:tool）写固定共享路径（如 build/qem/showcase-*，路径不含
+    # 后端名），同用例并行会互相覆盖 → 用例间并行、用例内串行。
+    tasks: list[tuple[dict, dict]] = []
     for v in versions:
         missing = [b for b in BACKENDS if b in backend_filter
                    and not show.exe_for(v, b).is_file()]
@@ -198,17 +213,46 @@ def main() -> int:
                 continue
             if cid and c["id"] != cid:
                 continue
-            for b in backend_filter:
-                out = RUNS_DIR / f"{v['id']}-{c['id']}-{b}.png"
-                for stale in (out, out.with_name(out.name + ".before.png")):
-                    if stale.exists():
-                        stale.unlink()
-                rec = regression_case(v, c, b, out)
-                records.append(rec)
-                mark = "PASS" if rec["verdict"] in ("bytes", "near") else "FAIL"
-                extra = f" ({rec['ms']} ms)" if "ms" in rec else ""
+            tasks.append((v, c))
+
+    print_lock = threading.Lock()
+
+    def run_task(v: dict, c: dict) -> list[dict]:
+        recs: list[dict] = []
+        for b in backend_filter:
+            out = RUNS_DIR / f"{v['id']}-{c['id']}-{b}.png"
+            for stale in (out, out.with_name(out.name + ".before.png")):
+                if stale.exists():
+                    stale.unlink()
+            rec = regression_case(v, c, b, out)
+            recs.append(rec)
+            mark = "PASS" if rec["verdict"] in ("bytes", "near") else "FAIL"
+            extra = f" ({rec['ms']} ms)" if "ms" in rec else ""
+            with print_lock:
                 print(f"[{mark}] {v['id']}/{c['id']} {b:<6} {rec['verdict']:<5} "
                       f"{rec['detail']}{extra}")
+        return recs
+
+    records: list[dict] = []
+    t_all = time.time()
+    jobs = max(1, args.jobs)
+    if jobs == 1:
+        for v, c in tasks:
+            records.extend(run_task(v, c))
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futs = [pool.submit(run_task, v, c) for v, c in tasks]
+            for fut in as_completed(futs):
+                records.extend(fut.result())
+
+    # 报告顺序与用例表一致（并行完成顺序不定，排序保证确定性）
+    ver_order = {v["id"]: i for i, v in enumerate(show.DATA["versions"])}
+    case_order = {(v["id"], c["id"]): i
+                  for v in show.DATA["versions"] for i, c in enumerate(v["cases"])}
+    b_order = {b: i for i, b in enumerate(BACKENDS)}
+    records.sort(key=lambda r: (ver_order.get(r["version"], 999),
+                                case_order.get((r["version"], r["case"]), 999),
+                                b_order.get(r["backend"], 9)))
 
     # Cross-backend info tier: same case, do the two GPUs agree byte-wise?
     cross = []

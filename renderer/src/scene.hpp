@@ -59,12 +59,22 @@ public:
 
     // M4.0（S4.0）：GPU vertex pulling 场景——同吃 .nmesh，但几何不展开进顶点缓冲，
     // 而是铺成三张 SSBO（顶点池 / 局部索引 / 簇元数据）+ 一张 identity 索引缓冲 +
-    // 一份 indirect args 缓冲，单 drawIndexedIndirect 全簇全画（instanceCount=总簇数，
-    // 验证 pulling 通路；M4.1 才接 GPU 剔除改写 instanceCount）。簇色由 shader 端
+    // 一份 indirect args 缓冲，单 drawIndexedIndirect 全簇全画。簇色由 shader 端
     // pcg(簇号) 算出，与 cluster 场景 CPU 端 clusterColor() 同式，逐像素一致。
+    // M4.1（S4.1）：frustumCull=true 时再建 cull compute pass（cull.slang csCull）
+    // 与可见列表 SSBO——compute 每线程 1 簇做 5 平面包围球测试，通过者 append 簇号
+    // 并 atomicAdd 写 indirect args 的 instanceCount；VS 经可见列表间接寻址取簇号
+    // （bevy cull_clusters.wesl 蓝本）。false 时可见列表是恒等映射、不跑剔除，
+    // 行为与 M4.0 逐像素一致（s4.0 回归基线依赖这条）。
     bool initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                   const char* vsEntry, const char* psEntry,
-                  const char* nmeshFile, std::string& outError);
+                  const char* nmeshFile, bool frustumCull, std::string& outError);
+
+    // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
+    // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
+    // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
+    // 没有数据（前两帧 / 非剔除路径）时 visibleClusters() 返回 -1。
+    void pollCullStats(nvrhi::IDevice* device);
 
     // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
     // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
@@ -112,6 +122,9 @@ public:
     // M3.2：dag-top 状态（uploadClusterMesh 纯层加载后 dagGroup 复位 -1）。
     int   dagGroup() const { return dagGroup_; }
     float dagGroupError() const { return dagGroupError_; }
+    // M4.1：GPU 剔除统计（两帧前的结果；-1 = 暂无数据）。clusterCount 总簇数恒有。
+    int           visibleClusters() const { return cullVisibleCount_; }
+    std::uint32_t clusterCount() const { return clusterCount_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -157,6 +170,23 @@ private:
     nvrhi::BindingSetHandle      cullBindingSet_;
     nvrhi::GraphicsPipelineHandle pipelineCullBack_, pipelineCullNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineCullWireBack_, pipelineCullWireNone_; // wireframe × cull
+
+    // ---- M4.1（S4.1）：GPU 视锥剔除（bevy cull_clusters.wesl 蓝本）----
+    bool                          frustumCull_ = false;   // --frustum off 时整条路径旁路
+    std::uint32_t                 clusterCount_ = 0;      // 总簇数（static dispatch 用）
+    nvrhi::BufferHandle           clusterSpheres_;  // StructuredBuffer<float4>，世界空间球
+    nvrhi::BufferHandle           visibleList_;     // StructuredBuffer<uint>，compute append / VS 读
+    nvrhi::ShaderHandle           csCull_;
+    nvrhi::ComputePipelineHandle  cullComputePSO_;
+    nvrhi::BindingLayoutHandle    cullComputeLayout_;  // UAV(0) list + UAV(1) args + SRV/CB
+    nvrhi::BindingSetHandle       cullComputeSet_;
+    nvrhi::BufferHandle           cullReadback_[2];    // instanceCount 回读环形（4B × 2）
+    std::uint32_t                 cullSubmitted_ = 0;  // 已提交剔除的帧数（环形游标源）
+    int                           cullPolledSlot_ = -1; // 已消费的最大提交序号（-1 = 无）
+    int                           cullVisibleCount_ = -1;
+    // 每帧 compute dispatch 前整体重写 args（indexCount 等静态字段不变、instanceCount=0
+    // 由 GPU atomicAdd 重建）。init 时按 stride 一次填好。
+    nvrhi::DrawIndexedIndirectArguments cullArgsReset_{};
 };
 
 } // namespace nl::renderer::detail

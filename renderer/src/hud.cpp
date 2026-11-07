@@ -309,6 +309,23 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::TextUnformatted(dagLine);
     }
+    // M4.1：GPU 视锥剔除统计——仅 cull 模式（totalClusters>0）占位，其它模式 HUD
+    // 布局一像素不动。visibleClusters<0 = 前两帧尚无回读数据。
+    if (frame.totalClusters > 0) {
+        if (frame.visibleClusters >= 0) {
+            const float pct = 100.0f * static_cast<float>(frame.visibleClusters) /
+                              static_cast<float>(frame.totalClusters);
+            char cullLine[96];
+            std::snprintf(cullLine, sizeof(cullLine), "frustum : %d / %d clusters (%.1f%%)",
+                          frame.visibleClusters, frame.totalClusters, pct);
+            ImGui::TextUnformatted(cullLine);
+        } else {
+            char cullLine[96];
+            std::snprintf(cullLine, sizeof(cullLine), "frustum : -- / %d clusters",
+                          frame.totalClusters);
+            ImGui::TextUnformatted(cullLine);
+        }
+    }
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();

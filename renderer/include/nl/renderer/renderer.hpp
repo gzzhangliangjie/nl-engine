@@ -98,6 +98,9 @@ struct HudFrame {
     int   dagGroup         = -1;      // 当前下钻组（双向；-1 = 无）
     int   dagGroupCount    = 0;       // 可下钻组数（子层 dagGroups.size()）
     float dagGroupError    = 0.0f;    // 当前下钻组的组误差（UE:1593 组统一携带）
+    // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
+    int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
+    int   totalClusters    = 0;       // 总簇数
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -120,6 +123,10 @@ struct DeviceInfo {
     int   dagGroupCount = 0;
     int   dagGroup = -1;              // -1 = 纯顶层
     float dagGroupError = 0.0f;
+    // M4.1：GPU 视锥剔除统计（两帧前提交的结果，延迟窗口与 GPU timer 同思路）。
+    // visibleClusters = -1 表示暂无数据（前两帧 / 非剔除路径 / map 失败）。
+    int           visibleClusters = -1;
+    std::uint32_t totalClusters = 0;
 };
 
 class Renderer {
@@ -134,7 +141,8 @@ public:
                                             bool enableDebugLayer,
                                             const char* modelFile = "Suzanne.glb",
                                             bool clusterMode = false,
-                                            bool cullMode = false);
+                                            bool cullMode = false,
+                                            bool frustumCull = true);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

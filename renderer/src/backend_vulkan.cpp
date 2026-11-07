@@ -68,7 +68,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              std::string& outError) override {
+              bool frustumCull, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -99,12 +99,14 @@ public:
         const bool sceneOk = clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
-                ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+                ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
                 : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
+        info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
+        info_.totalClusters = scene_.clusterCount();
         // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。cull 模式不依赖分层资产。
         if (clusterMode) {
             lodStem_ = meshletStem(modelFile);
@@ -258,6 +260,9 @@ public:
             }
             hud_.build(*hud);
         }
+        // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
+        scene_.pollCullStats(nvrhiDevice_);
+        info_.visibleClusters = scene_.visibleClusters();
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();

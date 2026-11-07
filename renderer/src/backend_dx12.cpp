@@ -70,7 +70,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              std::string& outError) override {
+              bool frustumCull, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -154,13 +154,16 @@ public:
         if (clusterMode)
             sceneOk = scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (cullMode)
-            sceneOk = scene_.initCull(device_, "dxil", "vsCull", "psCull", modelFile, outError);
+            sceneOk = scene_.initCull(device_, "dxil", "vsCull", "psCull", modelFile,
+                                      frustumCull, outError);
         else
             sceneOk = scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         if (!sceneOk) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
+        info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
+        info_.totalClusters = scene_.clusterCount();
         // M2.3：探测 assets/meshlets/<stem>.lodN.nmesh 的连续层数（0 = 没有分层资产）。
         // 探测失败不是错误：cluster / normal 模式照样跑，只是 HUD 不画滑条。
         // cull 模式不依赖分层资产，跳过探测。
@@ -326,6 +329,9 @@ public:
             // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
             hud_.build(*hud);
         }
+        // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
+        scene_.pollCullStats(device_);
+        info_.visibleClusters = scene_.visibleClusters();
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();

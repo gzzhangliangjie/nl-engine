@@ -1,5 +1,8 @@
 @echo off
-setlocal
+rem NOTE: !EXE!/!CAM! delayed expansion is REQUIRED — %VAR% inside a
+rem parenthesized for-body expands at parse time (empty), which made this
+rem script execute a literal "" command and silently no-op (fixed in M4.1).
+setlocal enabledelayedexpansion
 rem ==== M4.0 (S4.0) successful cases ======================================
 rem viewer --mode cull: GPU vertex pulling (single drawIndexedIndirect,
 rem instanceCount = total cluster count = full draw, no culling yet). The
@@ -20,8 +23,8 @@ set "FAIL=0"
 for %%m in (dx12 vulkan) do (
   if "%%m"=="dx12" (set "EXE=%DX%") else (set "EXE=%VK%")
   for %%c in (back off) do (
-    "%EXE%" --mode cluster --cull %%c %CAM% --screenshot "%OUT%\s4-cluster-%%m-%%c.png" || exit /b 1
-    "%EXE%" --mode cull    --cull %%c %CAM% --screenshot "%OUT%\s4-pulling-%%m-%%c.png" || exit /b 1
+    "!EXE!" --mode cluster --cull %%c !CAM! --screenshot "%OUT%\s4-cluster-%%m-%%c.png" || exit /b 1
+    "!EXE!" --mode cull    --cull %%c !CAM! --screenshot "%OUT%\s4-pulling-%%m-%%c.png" || exit /b 1
     fc /b "%OUT%\s4-cluster-%%m-%%c.png" "%OUT%\s4-pulling-%%m-%%c.png" >nul
     if errorlevel 1 (echo [FAIL] %%m %%c : cluster != pulling & set "FAIL=1") else (echo [OK]   %%m %%c : cluster == pulling)
   )

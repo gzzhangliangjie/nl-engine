@@ -2238,6 +2238,133 @@
      "preview": "example/s4-indirect/pulling-none-dx12.png"
     }
    ]
+  },
+  {
+   "id": "s4.1",
+   "label": "M4.1",
+   "name": "GPU 视锥剔除 + 可见列表间接寻址（compute cull pass）",
+   "tag": "s4-cull",
+   "date": "2026-11-08",
+   "summary": "M4.1（kStage=S4.1）：compute 剔除 pass——csCull 每线程测一个簇包围球（Gribb-Hartmann 5 平面，MVP 行直接取平面、归一化后球测试），可见簇 InterlockedAdd 追加进 visibleList 并回写 indirectArgs.instanceCount，drawIndexedIndirect 消费之（VS 经 g_visibleList[instanceID] 间接寻址取簇号）。簇色=pcg(簇号) 与顺序无关，原子追加的非确定性次序不影响像素。蓝图为 bevy meshlet cull_clusters.wesl；UE 能力有（NaniteCullRaster 混合软/硬光栅）但结构与遍历融合不可拆，Carrot 走 mesh shader（NVRHI 2021 不支持）→ S4-PLAN 均记 N/A。真剔除姿态=相机进模型内部（轨道相机几何决定：背对时整模仍在视锥内，S4-PLAN『背对≈0』前提对轨道相机不成立，如实修正）：dist0.45/640x720 时 GPU 30/237 == frustum_check.py 离线 30，双后端一致；正脸 237/237 与 cluster 基线逐字节相同（pass-through 零像素影响）。readback 2 帧延迟环形（DX12 map 等 lastUseFence），HUD frustum 行 frames>=4 出数。多状态缓冲（UAV/SRV/IndirectArgs 同帧）用 initialState=CopyDest + keepInitialState（NVRHI 动态跟踪不跨 command list）。双后端 deviceErrors=0。",
+   "acceptance": [
+    "pass-through：正脸（全可见 237）--mode cull（frustum on）与 --mode cluster 逐字节相同（DX12/Vulkan 各自一致）——剔除 pass + 间接寻址在零剔除时像素零影响",
+    "真剔除：相机进模型内部 dist0.45（640x720 竖构图视锥更窄）GPU=30/237，== frustum_check.py 离线值（同一相机公式 5 平面球测试），双后端一致",
+    "HUD frustum 统计行（readback 2 帧延迟）与日志 cull stats 数字一致，截图确定性（同机位两跑逐字节相同）",
+    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁（shader artifacts 18/18 含 cull.cs spv/dxil）",
+    "tag s4-cull，kStage=S4.1"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "cull-front",
+     "name": "pass-through：frustum-on 全可见位图 == cluster 基线",
+     "kind": "pair",
+     "note": "正脸机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）——沿用 M4.0 已证字节一致的同机位。基线为 --mode cluster；本用例 --mode cull（frustum 默认 on，全部 237 簇可见）。逐字节相同即证明 compute 剔除 pass + 可见列表间接寻址在零剔除时对像素零影响（簇色 pcg(簇号) 顺序无关，原子追加次序不进像素）。注意：默认机位 yaw12/pitch9.2 下 pulling 与 cluster 路径有 1 个取整平局像素（maxDelta 154），故 pair 用例必须落在已验证机位；双后端 3 连跑稳定。",
+     "baselines": {
+      "dx12": "example/s4-cull/cluster-front-dx12.png",
+      "vulkan": "example/s4-cull/cluster-front-vulkan.png"
+     },
+     "args": [
+      "--mode", "cull",
+      "--no-hud",
+      "--screenshot", "{out}",
+      "--frames", "4",
+      "--shading", "cluster",
+      "--yaw", "30", "--pitch", "20", "--dist", "2.6",
+      "--size", "640x360"
+     ],
+     "command": "viewer.exe --mode cull --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-cull/run.bat verify",
+     "preview": "example/s4-cull/cull-front-dx12.png"
+    },
+    {
+     "id": "cull-inside-hud",
+     "name": "真剔除：相机进模型内部，HUD frustum 行 30/237",
+     "kind": "image",
+     "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。",
+     "baselines": {
+      "dx12": "example/s4-cull/cull-inside-hud-dx12.png",
+      "vulkan": "example/s4-cull/cull-inside-hud-vulkan.png"
+     },
+     "args": [
+      "--mode", "cull",
+      "--hud",
+      "--screenshot", "{out}",
+      "--frames", "4",
+      "--yaw", "12", "--pitch", "9.2", "--dist", "0.45",
+      "--size", "640x720"
+     ],
+     "expectLog": "cull stats: visible 30 / 237",
+     "command": "viewer.exe --mode cull --hud --screenshot <out.png> --frames 4 --yaw 12 --pitch 9.2 --dist 0.45 --size 640x720",
+     "script": "example/s4-cull/run.bat verify",
+     "preview": "example/s4-cull/cull-inside-hud-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "s4.1-tools",
+   "label": "M4.1",
+   "name": "frustum_check.py 离线视锥对照工具",
+   "tag": "s4-cull",
+   "date": "2026-11-08",
+   "summary": "M4.1 离线对照：tools/frustum_check.py 逐行复刻 camera.cpp 相机公式（perspectiveZO × lookAt 列主序、ZO 深度）+ Gribb-Hartmann 5 平面提取 + 包围球测试，读 .nmesh 簇包围球（52B 记录 offset16），输出可见簇数/列表。--expect N 不符即 exit 1（回归锁数字）；--list 打印可见簇号。与 GPU HUD 数字逐姿态对照：正脸 237/237、进模型 30/237（640x720）。工具用例经 tools/frustum_check.bat 包装（regression 无 shell 启动 .py 需可执行 shim，退出码直通）。一张 .nmesh 的簇号即 GPU visibleList 里的 tid，离线与 GPU 数的是同一批球。",
+   "acceptance": [
+    "离线 == GPU：进模型姿态（yaw12/pitch9.2/dist0.45/640x720）--expect 30 通过；正脸 --expect 237 通过",
+    "--expect 不符 exit 1（负向锁数字）；文件不存在 exit 1 显式报错",
+    "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 30/237）"
+   ],
+   "exe": {
+    "dx12": "tools/frustum_check.bat",
+    "vulkan": "tools/frustum_check.bat"
+   },
+   "cases": [
+    {
+     "id": "offline-inside",
+     "name": "离线对照：进模型姿态 --expect 30（== GPU）",
+     "kind": "tool",
+     "note": "与 s4.1/cull-inside-hud 同机位同尺寸（640x720）。GPU 回读 instanceCount=30，本工具独立从 .nmesh 球 + 相机公式算出 30，两数相等即 GPU 剔除语义与离线参考逐簇一致。",
+     "args": [
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "--yaw", "12", "--pitch", "9.2", "--dist", "0.45",
+      "--width", "640", "--height", "720",
+      "--expect", "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 0.45 --width 640 --height 720 --expect 30",
+     "script": "example/s4-cull/run.bat verify"
+    },
+    {
+     "id": "offline-front",
+     "name": "离线对照：正脸全可见 --expect 237",
+     "kind": "tool",
+     "note": "默认 640x360。轨道相机永远看原点，dist4.2 时整模在视锥内（半高约1.74 > 模型半径约1.3），237 全可见——与 GPU 正脸数字一致。",
+     "args": [
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "--yaw", "12", "--pitch", "9.2", "--dist", "4.2",
+      "--expect", "237"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 4.2 --expect 237",
+     "script": "example/s4-cull/run.bat verify"
+    },
+    {
+     "id": "negative-missing",
+     "name": "负向：资产不存在显式报错（防假成功）",
+     "kind": "tool",
+     "note": "读不到 .nmesh 必须 FAIL + exit 1，不许静默成功。",
+     "args": [
+      "{root}/assets/meshlets/Nope.nmesh"
+     ],
+     "expectExit": 1,
+     "expectLog": "FAIL",
+     "command": "frustum_check.py assets/meshlets/Nope.nmesh"
+    }
+   ]
   }
  ]
 }

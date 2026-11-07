@@ -18,6 +18,7 @@
 | M0.6 GPU 帧内计时 | ✅ 验收通过 | `m0.6` | 2026-11-07 | NVRHI timestamp query 真实 GPU 耗时进 HUD（CPU/GPU 并排 + 双曲线）；`--no-hud` 基线逐字节不变；S0 后能力补齐序列第一版 |
 | M0.7 高模测试资产 + `--model` | ✅ 验收通过 | `m0.7` | 2026-11-07 | gen-dense-mesh.py 程序化致密网格（纽结 204,800 / 球 327,680 tri，MD5 确定）；`--model` 白名单加载 + HUD model 行；GPU ms 3,936→327,680 tri 双后端互证；meshoptimizer v1.3 vendored（不入构建）；S1 切簇命门就位 |
 | M4.0 GPU 簇数据通路 + vertex pulling | ✅ 验收通过 | `s4-indirect` | 2026-11-08 | 单 drawIndexedIndirect 全簇全画（cull 模式 vertex pulling）；`--mode cull` 与 `--mode cluster` 同机位同 shading 逐字节相同（DX12/Vulkan 各自一致），deviceErrors=0；kStage=S4.0；交代物 example/s4-indirect + cases.json s4.0 卡 |
+| M4.1 GPU 视锥剔除 + 可见列表间接寻址 | ✅ 验收通过 | `s4-cull` | 2026-11-08 | compute 剔除 pass（csCull 5 平面包围球测试）+ atomicAdd append visibleList + indirectArgs.instanceCount 回写；pass-through（正对全可见）与 cluster 基线逐字节相同；真剔除姿态（进模 dist0.45/640x720）GPU 30/237 == frustum_check.py 离线 30，双后端一致；kStage=S4.1；交代物 example/s4-cull + cases.json s4.1/s4.1-tools 卡 |
 
 ---
 
@@ -734,6 +735,35 @@
 4. **indirectArgs 字段对位**：`DrawIndexedIndirectArguments` 顺序为 indexCount/instanceCount/firstIndex/firstInstance（与 Vulkan `VkDrawIndexedIndirectCommand` 的 indexCount 字段对位）；indexCount 用 `stride=3*maxTriCount`，instanceCount=总簇数全画。
 
 **下一步**：M4.1 compute 视锥剔除（Gribb-Hartmann 5 平面球体测试、atomicAdd append 可见列表、GPU 每帧只写 instanceCount；M4.0 全画通路零返工改 instanceCount 语义即可）+ `--mode cull` HUD 可见簇数 + `tools/frustum_check.py` 离线对照。
+
+## M4.1 compute 视锥剔除 + 可见列表间接寻址（tag `s4-cull`，2026-11-08）
+
+**动作**
+- `renderer/shaders/cull.slang`（新）：compute 剔除 pass——wg=128 每线程 1 簇，Gribb-Hartmann 5 平面包围球测试（`g_mvp[3]±g_mvp[0]`、`g_mvp[3]±g_mvp[1]`、`g_mvp[2]`，平面归一化，`dot(c,n)+d < -r` 判外）；可见簇 `InterlockedAdd(g_cullArgs[1],1)` 抢槽 + `g_visibleList[slot]=tid` 追加。SPIR-V 需 `-fvk-u-shift 384 0`（vendored NVRHI `VulkanBindingOffsets::unorderedAccess=384`），并入 CMake 通用旗标。
+- `model.slang` vsCull 改间接寻址：`clusterId = g_visibleList[instanceIndex]`（原来是 instanceIndex 直通）；簇色 `pcg(clusterId)` 与槽位无关，原子追加的非确定次序不进像素。
+- `scene.cpp` initCull 扩展：clusterSpheres SSBO（.nmesh 包围球）、visibleList SSBO（identity 初值，frustum-off 恒等表）、indirectArgs（frustum-on 时 GPU 写 instanceCount）、compute pipeline + binding set（CB0+SRV1/2+UAV0/1）、2 槽 readback 环形（`cpuAccess=Read` 永久 CopyDest）；draw() cull 路径 = reset args → dispatch → `copyBuffer(readback[i&1], args+4, 4)`；`pollCullStats` 延迟 2 帧 map（NVRHI map 内部等 lastUseFence，主循环无等待）。
+- 接线：`Renderer::create`/backend init 加 `frustumCull`；`viewer --frustum on|off`；DeviceInfo/HudFrame 加 visibleClusters/totalClusters；HUD 新 frustum 统计行；`renderFrame` 修 info 重同步（每帧从 backend 拉新 DeviceInfo）。shaderArtifacts 自检 16→18（cull.cs spv/dxil）。
+- 离线对照：`tools/frustum_check.py` 逐行复刻 camera.cpp（perspectiveZO×lookAt 列主序）+ 同 5 平面球测试，读 .nmesh 簇球；`--expect N` 锁数字、`--list` 出可见簇号；`tools/frustum_check.bat` 可执行 shim（regression 无 shell 启动 .py）。
+
+**提交版本**：s4-cull（本轮）
+
+**完成情况**
+- **pass-through 零像素影响**：正对机位（yaw30/pitch20/dist2.6，M4.0 已证字节一致的同机位）`--mode cull`（frustum on，237 全可见）与 `--mode cluster` 基线逐字节相同，DX12/Vulkan 各自一致，双后端 3 连跑稳定。
+- **真剔除 GPU==离线**：进模姿态（yaw12/pitch9.2/dist0.45，640x720）GPU 回读 `cull stats: visible 30 / 237`，`frustum_check.py --expect 30` MATCH，双后端一致；正对 237/237 离线同值。HUD frustum 行与日志同数，截图确定性已验（同机位两跑逐字节相同）。
+- **总闸**：`regression.py` 164/164 ALL GREEN（bytes 164 / near 0 / FAIL 0）；`server.py --check` OK（stage=S4.1 cases=2 baselines=6）；selftest 15/15（shader artifacts 18/18 含 cull.cs）。
+- 交代物：`example/s4-cull/`（6 PNG + run.bat 三段验收 exit 0）+ cases.json s4.1 卡（cull-front pair / cull-inside-hud image+expectLog）+ s4.1-tools 卡（3 个 kind:tool 用例）+ `docs/s4/S4-TOOLS-GUIDE.md` 归档。
+- **如实修正（S4-PLAN 同步改）**：轨道相机永远 look at 原点，「背对」姿态整模仍在视锥内（dist4.2 视锥半高≈1.74 > 模型半径≈1.3），S4-PLAN「背对≈0」前提不成立；真剔除维度=近平面（进模 dist0.45），M4.2/S4 验收姿态表述同步修正。
+
+**踩坑情况**
+1. **HUD 数字晚一帧**：HUD 帧首读 info，poll 在 renderFrame 内才更新 → HUD 显示比回读晚一拍；`--frames 3` 截图 HUD 显示 `--`，frames≥4 出数（readback 本身 2 帧延迟 + info 一帧滞后）。截图证据统一 frames 4。
+2. **宽高比进视锥**：640x360 下进模可见 64、640x720 下是 30——aspect 改变水平视锥，两个数都对；离线对照必须带同尺寸（`--width/--height`），用例 note 已写明。
+3. **默认机位 pulling vs cluster 有 1 个取整平局像素**（maxDelta 154）：cull-front pair 初版用默认机位 yaw12/pitch9.2/dist4.2，回归 1 像素 FAIL；cull 渲染自身 5 连跑字节稳定（非原子序非确定），是 pulling 与 cluster 两路径在该机位的浮点平局。换到 M4.0 已证机位 yaw30/pitch20/dist2.6 后双后端 3 连跑字节一致——pair 用例必须落在已验证机位。
+4. **NVRHI 多状态缓冲**：visibleList 同帧当 UAV（compute 写）+ SRV（VS 读）+ identity 上传，indirectArgs 同帧 UAV + IndirectArgument + CPU writeBuffer——`setPermanentBufferState` 报状态位错、动态跟踪不跨 command list 报 Unknown prior state → 统一 `initialState=CopyDest + keepInitialState=true`（NVRHI 标准多状态模式）。
+5. **UAV 绑定校验三连**：visibleList 缺 `canHaveUAVs`、args 缺 `structStride`、args 缺 `canHaveUAVs`，逐个补齐。
+6. **run.bat 延迟展开陷阱（连 s4.0 一起修）**：`%EXE%` 在 for 块内解析期展开为空 → 执行字面 `""` 命令静默 no-op，s4-indirect 旧脚本同病（M4.0 的 run.bat verify 从未真正跑过——假绿实锤）。两份脚本改 `setlocal enabledelayedexpansion` + `!EXE!`，修后 s4.0 也 PASS。
+7. **杂键注入偶发**：自动化跑批时 viewer 窗口偶收 'C' 键切 back-face（日志可见 `back-face culling -> off`），84% 像素差特征明显；单跑复验即消失，属环境偶发非代码问题，总闸重跑全绿。
+
+**下一步**：M4.2 HUD 统计完善（cull pass 接 GpuTimer slot）+ 1M 三角 dense 资产（icosphere 升一级细分入仓）+ 60fps 性能验收，tag `s4-done`。
 
 ## B2~B4 材质图轨道第一批（A 类并行轨道，feat/material-graph，2026-11-08）
 

@@ -189,6 +189,7 @@ endif()
 #   <name>.ps.{spv,dxil}          入口 psMain
 #   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
 #   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
+# cull.slang 单 compute 入口（M4.1）：<name>.cs.{spv,dxil} 入口 csCull
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
     message(FATAL_ERROR "No .slang shaders found in renderer/shaders/")
@@ -204,10 +205,14 @@ set(_SHADER_ARTIFACTS "")
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
                    "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
+# M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
+set(_ENTRIES_CULL "csCull|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
         set(_ENTRIES "${_ENTRIES_MODEL}")
+    elseif(_SRC_NAME STREQUAL "cull")
+        set(_ENTRIES "${_ENTRIES_CULL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -219,11 +224,12 @@ foreach(_SRC ${NL_SHADER_SRCS})
         list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
                                       "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil")
         # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
-        #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128（set 0）。
-        # DX12 侧仍用 b0/t0/s0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
+        #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128, u0 -> binding 384（set 0）。
+        #   -fvk-u-shift 对无 UAV 的 shader 是无操作，统一加免去逐文件特判。
+        # DX12 侧仍用 b0/t0/s0/u0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
         add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             COMMAND "${SLANGC}" "${_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
-                    -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0
+                    -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-u-shift 384 0
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             MAIN_DEPENDENCY "${_SRC}"
             COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_suffix})")

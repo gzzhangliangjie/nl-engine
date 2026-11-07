@@ -178,6 +178,7 @@ float4 psCluster(PSInputCluster input) : SV_Target
 StructuredBuffer<float> g_vertexPool  : register(t1);
 StructuredBuffer<uint>  g_localIndices : register(t2);
 StructuredBuffer<uint>  g_clusterMeta  : register(t3);
+StructuredBuffer<uint>  g_visibleList  : register(t4);
 
 struct VSCullOutput {
     float4 position      : SV_Position;
@@ -186,7 +187,10 @@ struct VSCullOutput {
     float3 clusterColor  : CLUSTERCOLOR;
 };
 
-// vertexIndex 是 identity 索引缓冲的值（0..stride-1）；instanceIndex 即簇号。
+// vertexIndex 是 identity 索引缓冲的值（0..stride-1）；instanceIndex 是可见列表的
+// 槽位，簇号经 g_visibleList 间接寻址得到（M4.1）。剔除关闭时列表是恒等映射，
+// 与 M4.0 逐像素一致；剔除开启时槽位序不确定，但簇色按簇号取、绘制不透明 +
+// 深度测试，像素与顺序无关。
 VSCullOutput vsCull(uint instanceIndex : SV_InstanceID,
                     uint vertexIndex   : SV_VertexID) {
     VSCullOutput output;
@@ -196,7 +200,8 @@ VSCullOutput vsCull(uint instanceIndex : SV_InstanceID,
     output.uv           = 0.0f;
     output.clusterColor = 0.0f;
 
-    const uint metaBase   = instanceIndex * 4u;
+    const uint clusterId  = g_visibleList[instanceIndex];
+    const uint metaBase   = clusterId * 4u;
     const uint vertexBase = g_clusterMeta[metaBase + 0u];
     const uint triCount   = g_clusterMeta[metaBase + 1u];
     const uint localBase  = g_clusterMeta[metaBase + 2u];
@@ -216,7 +221,8 @@ VSCullOutput vsCull(uint instanceIndex : SV_InstanceID,
     output.normal       = mul((float3x3)g_model, nrm);
     output.uv           = uv;
     // 簇色 = pcg(簇号)，与 cluster 场景 CPU 端 clusterColor() 同式 -> 截图逐像素一致。
-    output.clusterColor = triIdColor(instanceIndex);
+    // 注意是簇号不是槽位：剔除开启时槽位序不确定，按槽位取色会闪。
+    output.clusterColor = triIdColor(clusterId);
     return output;
 }
 

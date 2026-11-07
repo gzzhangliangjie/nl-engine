@@ -15,19 +15,21 @@
 - CMake 必用 `NMake Makefiles`（VS 生成器被 HTTPS_PROXY/https_proxy 大小写撞键搞挂）。
 
 ## 当前进度
-- 主线 S0~S3 收官：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(**150/150 ALL GREEN**)。
-- 当前 `kStage=S1.0` 基线；主线下一步 S4(性能基准)/S5(运行时组原子 cut)。
-- 并行研究模块：GPU-Driven 间接绘制=S4；VSM 插 S9 后；TSR 拆 S7 后两段。
+- 主线 S0~S4.1：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(**164/164 ALL GREEN**，tag s4-cull)。
+- 当前 `kStage=S4.1`；主线下一步 M4.2(cull pass 接 GpuTimer + 1M dense 资产入仓 + 60fps 验收，tag s4-done) → S5(运行时组原子 cut)。
+- M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
+- 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）
 - 每阶段：目标→亲眼可见用例→验收判据→放行；tag 在验收后打。
-- **总闸**：提交/tag 前 `python tools/regression.py` 全绿（双后端 × 全量历史用例）。
+- **总闸**：提交/tag 前 `python tools/regression.py` 全绿（双后端 × 全量历史用例，`--jobs` 默认 4 并行提速）。**开发中不跑全量**：日常用 `--only <版本>[/用例]`（可加 `--backend`）验当前阶段，全量只在收口跑一次。并行口径 = 用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
 - 双后端一致分档：`bytes`(MD5 逐字节)/`near`(≤1/255 且 ≤2px)/`FAIL`，禁笼统写「一致」。
 - 展示台 8787 端口残留先 `netstat -ano | grep 8787` 清。
 - 工具 exe：`build/{dx12,vulkan}/nanite-tools.exe` 各后端重编后手动 cp 同步（NMake 时间戳陷阱，别 cp 盖）。
 - `nanite-tools dag` 六项校验全 PASS 才 exit 0；`selftest dag` 128×128 全链全量断言不抽样。
-- 每次 `kStage` bump 必须重拍 m0.9 gate-hud 与 s2.0 lod-hud 两对基线。
+- 每次 `kStage` bump 必须重拍 m0.9 gate-hud 与 s2.0 lod-hud 两对基线（S4.1 起 HUD 还多一对 s3.2 dag-hud，共 6 张）。
+- **example/*/run.bat 里 for 块内引用循环内 set 的变量必须延迟展开 `!VAR!`**（`%VAR%` 解析期为空 → 执行字面 `""` 静默 no-op 假绿；M4.0 旧脚本即此病，M4.1 已修）。
 - UE 源码**只读不抄**（EULA）；Carrot/bevy 抄思路不抄代码。
 
 ## 资产格式 .nmesh（M2.2~M3.2 定稿）

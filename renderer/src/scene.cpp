@@ -288,12 +288,16 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
 
 // M4.0（S4.0）：GPU vertex pulling 场景。同吃 .nmesh，但几何不展开进顶点缓冲，而是
 // 铺成三张 SSBO（顶点池 / 局部索引 / 簇元数据）+ identity 索引缓冲 + indirect args，
-// 单 drawIndexedIndirect 全簇全画（instanceCount=总簇数，验证 pulling 通路；M4.1 接
-// GPU 剔除时再改写 instanceCount）。簇色由 shader 端 pcg(簇号) 算出，与 cluster 模式
+// 单 drawIndexedIndirect 全簇全画。簇色由 shader 端 pcg(簇号) 算出，与 cluster 模式
 // CPU 端 clusterColor() 同式，逐像素一致。
+// M4.1（S4.1）：frustumCull=true 时加 cull.slang compute pass——簇包围球 SSBO +
+// 可见列表 SSBO + compute pipeline，每线程 1 簇 5 平面球测试（bevy 蓝本），通过者
+// append 簇号 + atomicAdd 写 args.instanceCount；VS 经可见列表取簇号。false 时
+// 可见列表恒等映射、不建 compute 资源，行为与 M4.0 一致。
 bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
-                     const char* nmeshFile, std::string& outError) {
+                     const char* nmeshFile, bool frustumCull, std::string& outError) {
+    frustumCull_ = frustumCull;
     // ---- 1. shader 对（cull 专用入口 vsCull/psCull）。DX12 入口名被忽略，Vulkan 恒 main ----
     auto shaderPath = [shaderSuffix](const char* artifact) {
         return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
@@ -339,6 +343,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     // localIndices：每簇 3×triCount 个局部索引（范围 [0,vertexCount)），随簇连续铺。
     // clusterMeta：每簇 4 个 uint = [vertexBase, triCount, localBase, pad]。
     const std::uint32_t clusterCount = static_cast<std::uint32_t>(nm.meshlets.size());
+    clusterCount_ = clusterCount;
     std::uint32_t maxTriCount = 0;
     std::vector<std::uint32_t> localIndices;
     std::vector<std::uint32_t> clusterMeta;
@@ -361,6 +366,19 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         clusterMeta.push_back(0);                      // pad
     }
     const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
+
+    // M4.1：簇包围球（世界空间 center.xyz + radius.w，M1.0 Ritter 近似产物）。
+    // 剔除开启时才需要；nm.bounds 与 nm.meshlets 一一对应。
+    std::vector<float> clusterSpheres;
+    if (frustumCull_) {
+        clusterSpheres.reserve(clusterCount * 4);
+        for (const auto& b : nm.bounds) {
+            clusterSpheres.push_back(b.sphere[0]);
+            clusterSpheres.push_back(b.sphere[1]);
+            clusterSpheres.push_back(b.sphere[2]);
+            clusterSpheres.push_back(b.sphere[3]);
+        }
+    }
 
     // ---- 4. 建 GPU 资源：constants_ + 1x1 白占位 + sampler + 三张 SSBO +
     //        indirect args + identity 索引缓冲 + binding layout/set ----
@@ -405,12 +423,43 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                   static_cast<std::uint32_t>(clusterMeta.size() * sizeof(std::uint32_t)), clusterMeta_))
         { outError = "createBuffer failed for cull cluster meta"; return false; }
 
-    // indirect args 缓冲（isDrawIndirectArgs）。M4.0 阶段 instanceCount 恒 = 总簇数（全画）。
+    // M4.1：剔除路径的簇包围球 SSBO + 可见列表 SSBO。
+    // visibleList 同时被 compute 写（UAV）和 VS 读（SRV），创建时必须声明
+    // canHaveUAVs（NVRHI validation 实测抓出），permanent 态给 UnorderedAccess，
+    // 帧内由 NVRHI 状态跟踪在 UAV/SRV 间插转换。
+    if (frustumCull_) {
+        if (!makeSsbo("CullClusterSpheres",
+                      static_cast<std::uint32_t>(clusterSpheres.size() * sizeof(float)), clusterSpheres_))
+            { outError = "createBuffer failed for cull cluster spheres"; return false; }
+        nvrhi::BufferDesc vlDesc;
+        vlDesc.byteSize = clusterCount * sizeof(std::uint32_t);
+        vlDesc.structStride = 4;
+        vlDesc.canHaveUAVs = true;
+        // keepInitialState：动态状态跟踪不跨命令列表，每条列表从 CopyDest 重新出发，
+        // 帧内 UAV(compute 写)/SRV(VS 读) 动态晋升（NVRHI validation 指路的标准写法）。
+        vlDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        vlDesc.keepInitialState = true;
+        vlDesc.debugName = "CullVisibleList";
+        visibleList_ = device->createBuffer(vlDesc);
+        if (!visibleList_) { outError = "createBuffer failed for cull visible list"; return false; }
+    }
+
+    // indirect args 缓冲（isDrawIndirectArgs）。frustumCull=false 时 instanceCount 恒 =
+    // 总簇数（M4.0 行为）；frustumCull=true 时 GPU 每帧经 compute atomicAdd 写 [1]。
+    // structStride=4：同一块缓冲在 compute 里以 RWStructuredBuffer<uint> 视角访问
+    // （NVRHI validation 要求 UAV 视角必须带 structStride）。
     nvrhi::BufferDesc iaDesc;
     iaDesc.byteSize = sizeof(nvrhi::DrawIndexedIndirectArguments);
     iaDesc.isDrawIndirectArgs = true;
+    iaDesc.structStride = 4;
+    // frustumCull=true 时 compute 以 RWStructuredBuffer 视角 atomicAdd 写 instanceCount，
+    // canHaveUAVs 必须开（NVRHI validation 实测；false 时无害）。
+    iaDesc.canHaveUAVs = true;
     iaDesc.debugName = "CullIndirectArgs";
     iaDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    // frustumCull 时同帧三态轮转（CopyDest→UAV→IndirectArgument），keepInitialState
+    // 让每条命令列表从 CopyDest 重新出发；frustumCull=false 走 M4.0 的 permanent 路径。
+    iaDesc.keepInitialState = frustumCull_;
     indirectArgs_ = device->createBuffer(iaDesc);
     if (!indirectArgs_) { outError = "createBuffer failed for cull indirect args"; return false; }
 
@@ -425,8 +474,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     identityIndex_ = device->createBuffer(ibDesc);
     if (!identityIndex_) { outError = "createBuffer failed for cull identity index"; return false; }
 
-    // 绑定布局：t0 占位贴图 + s0 sampler + b0 常量 + t1/t2/t3 三张 SSBO。
-    // Vulkan 经 -fvk-t-shift 0 0 映射为 binding 1/2/3，DX12 为 SRV slot 1/2/3。
+    // 绑定布局：t0 占位贴图 + s0 sampler + b0 常量 + t1/t2/t3 三张 SSBO + t4 可见列表。
+    // Vulkan 经 -fvk-t-shift 0 0 映射为 binding 1/2/3/4，DX12 为 SRV slot 1/2/3/4。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
@@ -434,7 +483,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
-        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3));
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4));
     cullBindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!cullBindingLayout_) { outError = "createBindingLayout failed for cull"; return false; }
 
@@ -445,8 +495,67 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_));
+    if (frustumCull_)
+        setDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
     cullBindingSet_ = device->createBindingSet(setDesc, cullBindingLayout_);
     if (!cullBindingSet_) { outError = "createBindingSet failed for cull"; return false; }
+
+    // M4.1：cull.slang compute pipeline。binding 与 cull.slang 的寄存器一一对应：
+    //   b0 volatile CB / t1 clusterMeta / t2 clusterSpheres / u0 visibleList / u1 args。
+    // compute pipeline 不依赖 framebuffer 格式，init 时一次建成（graphics pipeline
+    // 仍留在 ensurePipelines）。
+    if (frustumCull_) {
+        auto cullShaderPath = [shaderSuffix](const char* artifact) {
+            return std::string(NL_SHADER_DIR) + "/cull." + artifact + "." + shaderSuffix;
+        };
+        std::vector<std::uint8_t> csBlob;
+        if (!readFileBytes(cullShaderPath("cs").c_str(), csBlob)) {
+            outError = std::string("failed to load cull compute shader (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc csDesc;
+        // 入口名传 "main"：SPIR-V 恒 main；DX12 完全忽略 setEntryName、直接用 blob
+        // 唯一入口（编译期 -entry csCull 写入）——两后端都正确（§2.4 两阶段规则）。
+        csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        csCull_ = device->createShader(csDesc, csBlob.data(), csBlob.size());
+        if (!csCull_) { outError = "createShader failed for cull compute"; return false; }
+
+        nvrhi::BindingLayoutDesc cLayoutDesc;
+        cLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1));
+        cullComputeLayout_ = device->createBindingLayout(cLayoutDesc);
+        if (!cullComputeLayout_) { outError = "createBindingLayout failed for cull compute"; return false; }
+
+        nvrhi::BindingSetDesc cSetDesc;
+        cSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterMeta_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, clusterSpheres_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_));
+        cullComputeSet_ = device->createBindingSet(cSetDesc, cullComputeLayout_);
+        if (!cullComputeSet_) { outError = "createBindingSet failed for cull compute"; return false; }
+
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csCull_).addBindingLayout(cullComputeLayout_);
+        cullComputePSO_ = device->createComputePipeline(cpDesc);
+        if (!cullComputePSO_) { outError = "createComputePipeline failed for cull"; return false; }
+
+        // instanceCount 回读环形：每帧 compute 后 copyBuffer 4 字节（args[1]），
+        // pollCullStats 延迟两帧 map（cpuAccess=Read，map 内部等 lastUseFence）。
+        for (auto& rb : cullReadback_) {
+            nvrhi::BufferDesc rDesc;
+            rDesc.byteSize = sizeof(std::uint32_t);
+            rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+            rDesc.debugName = "CullCountReadback";
+            rb = device->createBuffer(rDesc);
+            if (!rb) { outError = "createBuffer failed for cull readback"; return false; }
+        }
+    }
 
     // ---- 5. 一次性上传：白占位贴图 + 三张 SSBO + indirect args + identity 索引 ----
     nvrhi::CommandListHandle upload = device->createCommandList();
@@ -464,15 +573,45 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->writeBuffer(clusterMeta_, clusterMeta.data(), clusterMeta.size() * sizeof(std::uint32_t));
     upload->setPermanentBufferState(clusterMeta_, nvrhi::ResourceStates::ShaderResource);
 
+    // M4.1：包围球（只读 SRV）+ 可见列表（初始恒等映射；permanent 态 UnorderedAccess，
+    // 帧内 compute 写 UAV、VS 读 SRV，NVRHI 状态跟踪负责插转换）。
+    if (frustumCull_) {
+        upload->beginTrackingBufferState(clusterSpheres_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(clusterSpheres_, clusterSpheres.data(),
+                            clusterSpheres.size() * sizeof(float));
+        upload->setPermanentBufferState(clusterSpheres_, nvrhi::ResourceStates::ShaderResource);
+
+        std::vector<std::uint32_t> identityClusters(clusterCount);
+        for (std::uint32_t i = 0; i < clusterCount; ++i) identityClusters[i] = i;
+        // M4.1：可见列表不钉 permanent 态——同一帧内 compute 写 UAV、VS 读 SRV、
+        // 由状态跟踪动态晋升（permanent 态会报 "doesn't have the right state bits"）。
+        upload->beginTrackingBufferState(visibleList_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(visibleList_, identityClusters.data(),
+                            identityClusters.size() * sizeof(std::uint32_t));
+    }
+
     nvrhi::DrawIndexedIndirectArguments args;
     args.setIndexCount(stride)
-        .setInstanceCount(clusterCount)
+        .setInstanceCount(frustumCull_ ? 0u : clusterCount)
         .setStartIndexLocation(0)
         .setBaseVertexLocation(0)
         .setStartInstanceLocation(0);
+    // M4.1：剔除开启时每帧用这份模板整体重写 args（instanceCount=0，atomicAdd 从零累加）。
+    cullArgsReset_ = args;
+    cullArgsReset_.setInstanceCount(0);
     upload->beginTrackingBufferState(indirectArgs_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(indirectArgs_, &args, sizeof(args));
-    upload->setPermanentBufferState(indirectArgs_, nvrhi::ResourceStates::IndirectArgument);
+    if (frustumCull_) {
+        // M4.1：args 同帧三态轮转（writeBuffer=CopyDest → compute=UAV → draw=
+        // IndirectArgument），保持动态跟踪由状态跟踪插转换；钉 permanent 会报错。
+        for (auto& rb : cullReadback_) {
+            upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
+            upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+        }
+    } else {
+        // M4.0 路径：args 恒 IndirectArgument，钉 permanent 与历史行为一致。
+        upload->setPermanentBufferState(indirectArgs_, nvrhi::ResourceStates::IndirectArgument);
+    }
 
     upload->beginTrackingBufferState(identityIndex_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(identityIndex_, identity.data(), identity.size() * sizeof(std::uint32_t));
@@ -491,8 +630,29 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                         " | meshlets=", clusterCount,
                         " | triangles=", triangleCount_,
                         " | stride=", stride,
+                        " | frustum=", frustumCull_ ? "on (compute cull pass)" : "off",
                         " | shader=", shaderSuffix);
     return true;
+}
+
+// M4.1：消费两帧前提交的 instanceCount 回读（frame-in-flight=2 的延迟窗口——
+// 本帧绘制会在同一个环形槽写入新值，但那发生在本函数读完成之后，无竞争）。
+// mapBuffer 内部等待 lastUseFence（DX12 d3d12-buffer.cpp / Vulkan 同构），两帧
+// 延迟下正常零等待，不构成主循环里的等待型 map。
+void Scene::pollCullStats(nvrhi::IDevice* device) {
+    if (!cull_ || !frustumCull_) return;
+    if (cullSubmitted_ < 2) return;                       // 窗口未填满，尚无数据
+    const std::uint32_t ready = cullSubmitted_ - 2;
+    if (cullPolledSlot_ >= 0 && static_cast<std::uint32_t>(cullPolledSlot_) >= ready) return;
+    const std::uint32_t slot = ready & 1u;
+    void* p = device->mapBuffer(cullReadback_[slot], nvrhi::CpuAccessMode::Read);
+    if (p) {
+        cullVisibleCount_ = static_cast<int>(*static_cast<std::uint32_t*>(p));
+        device->unmapBuffer(cullReadback_[slot]);
+    } else {
+        cullVisibleCount_ = -1;   // map 失败如实上报，不静默沿用旧值
+    }
+    cullPolledSlot_ = static_cast<int>(ready);
 }
 
 // M2.3/M3.2 共用：把一份 .nmesh 展开成 ClusterVertex/索引。include 非空时只
@@ -793,11 +953,34 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
         cb.options[0] = static_cast<float>(params.shading);   // g_options.x = 着色模式
         std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
+        // M4.1：cull.slang 从 g_options.y 读总簇数（整数 ≤2^24 float 精确无损）。
+        if (frustumCull_) cb.options[1] = static_cast<float>(clusterCount_);
         cmd->writeBuffer(constants_, &cb, sizeof(cb));
 
         nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
             ? (params.cullBack ? pipelineCullWireBack_ : pipelineCullWireNone_)
             : (params.cullBack ? pipelineCullBack_ : pipelineCullNone_);
+
+        // M4.1：剔除 compute pass（bevy cull_clusters.wesl 蓝本）。每帧：
+        //   1) CPU 整体重写 args（instanceCount=0，静态字段不变——atomicAdd 从 0 累加）；
+        //   2) 静态 dispatch ceil(簇数/128)，每线程 1 簇 5 平面球测试，通过者
+        //      atomicAdd(args[1]) + append 簇号到可见列表；
+        //   3) copyBuffer 把 args[1] 拷进回读环形（pollCullStats 延迟两帧消费）；
+        //   4) graphics 读 args + 可见列表，一次 drawIndexedIndirect。
+        // UAV→SRV/IndirectArgument 的状态转换由 NVRHI 状态跟踪插入（validation 实测）。
+        if (frustumCull_) {
+            cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
+
+            nvrhi::ComputeState cstate;
+            cstate.setPipeline(cullComputePSO_).addBindingSet(cullComputeSet_);
+            cmd->setComputeState(cstate);
+            cmd->dispatch((clusterCount_ + 127u) / 128u, 1, 1);
+
+            // instanceCount 在 DrawIndexedIndirectArguments 第 2 个 uint（offset 4）。
+            cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], 0,
+                            indirectArgs_, sizeof(std::uint32_t), sizeof(std::uint32_t));
+            ++cullSubmitted_;
+        }
 
         nvrhi::GraphicsState state;
         state.setPipeline(pipeline)
@@ -851,6 +1034,18 @@ void Scene::shutdown() {
     pipelineCullWireNone_ = nullptr;
     cullBindingSet_ = nullptr;
     cullBindingLayout_ = nullptr;
+    cullComputeSet_ = nullptr;
+    cullComputeLayout_ = nullptr;
+    cullComputePSO_ = nullptr;
+    csCull_ = nullptr;
+    visibleList_ = nullptr;
+    clusterSpheres_ = nullptr;
+    for (auto& rb : cullReadback_) rb = nullptr;
+    cullSubmitted_ = 0;
+    cullPolledSlot_ = -1;
+    cullVisibleCount_ = -1;
+    clusterCount_ = 0;
+    frustumCull_ = false;
     vertexPool_ = nullptr;
     localIndices_ = nullptr;
     clusterMeta_ = nullptr;
