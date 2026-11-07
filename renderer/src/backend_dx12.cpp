@@ -147,13 +147,14 @@ public:
         hr = createSwapChain();
         if (FAILED(hr)) { outError = hrMessage("CreateSwapChainForHwnd", hr); return false; }
         if (!createTargets(outError)) return false;
-        // M4.0：cull 模式走 vertex pulling（initCull，三 SSBO + indirect draw）。
-        // DX12 入口名被 NVRHI 忽略，这里传什么都行；Vulkan 侧恒传 "main"。
+        // M4.0：vertex pulling 走 initCull（三 SSBO + indirect draw）。DX12 入口名被
+        // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
+        // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
         bool sceneOk = false;
         if (clusterMode)
             sceneOk = scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (cullMode)
-            sceneOk = scene_.initCull(device_, "dxil", "vsMain", "psMain", modelFile, outError);
+            sceneOk = scene_.initCull(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else
             sceneOk = scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         if (!sceneOk) return false;

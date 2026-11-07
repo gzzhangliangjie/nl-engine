@@ -40,7 +40,7 @@
 
 ## 渲染 / HUD 约定（改前看 `docs/SHADER-CONVENTIONS.md` / `docs/IMGUI-GUIDE.md`）
 - SPIR-V 绑定偏移固定：`slangc -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`；shader 只写 `register(b0/t0/s0)`，禁 `[[vk::binding]]`。
-- SPIR-V 入口恒 `main`，DXIL 才 `vsMain/psMain`。
+- 入口名分两阶段（详见 `docs/SHADER-CONVENTIONS.md` §2.4）：**编译期** `-entry` 决定 DXIL blob 内入口名（vsMain/vsCluster/vsCull…），SPIR-V 恒 `main`（无视 `-entry`）；**加载期** NVRHI 运行时 `setEntryName` 仅 Vulkan 用作 SPIR-V `pName`（必须 `main`），DX12 忽略它直接用 blob 唯一入口（传啥都行）。
 - MVP 用 volatile CB（`setMaxVersions(16)`）；`SceneConstants` 严格 160B，**禁整块 memcpy**（尾部有 bool cullBack）。
 - pipeline 必 `setFrontCounterClockwise(true)`，否则剔掉正脸；`--dist 0.6 --cull none` 看内壁。
 - 资源/绘制逻辑收 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present。

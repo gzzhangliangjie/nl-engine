@@ -180,11 +180,13 @@ else()
 endif()
 
 # 自动收集 renderer/shaders/ 下所有 .slang（不再硬编码单个文件）。
-# 每个源 <name>.slang 出 8 个产物（model 双入口后）：
-#   <name>.vs.{spv,dxil}         入口 vsMain
-#   <name>.vscluster.{spv,dxil}  入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
-#   <name>.ps.{spv,dxil}         入口 psMain
-#   <name>.pscluster.{spv,dxil}  入口 psCluster（M1.3）
+# model.slang 当前 6 个入口（3 对 vs+ps），各出 {spv,dxil} 两份（共 12 个产物）：
+#   <name>.vs.{spv,dxil}          入口 vsMain
+#   <name>.vscluster.{spv,dxil}   入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
+#   <name>.vscull.{spv,dxil}      入口 vsCull（M4.0：GPU vertex pulling）
+#   <name>.ps.{spv,dxil}          入口 psMain
+#   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
+#   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
     message(FATAL_ERROR "No .slang shaders found in renderer/shaders/")

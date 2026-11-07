@@ -94,7 +94,8 @@ public:
 
         if (!createSwapchain(outError)) return false;
         if (!createTargets(outError)) return false;
-        // M4.0：cull 模式走 vertex pulling（initCull）。Vulkan 侧 SPIR-V 入口恒为 "main"。
+        // M4.0：vertex pulling 走 initCull。Vulkan 侧 SPIR-V 入口恒为 "main"（加载期
+        // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
         const bool sceneOk = clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
