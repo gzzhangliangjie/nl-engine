@@ -17,7 +17,7 @@
 - 展示台 `tools/showcase/start.bat` → http://127.0.0.1:8787/；干净 clone 先 `python tools/showcase/rebuild.py`；**exe 快照规范（2026-11-07 定案）：仅渲染 viewer 卡**每出新版把上一版映射改 `build/showcase/{tag}/` 并跑 rebuild.py 补建；**工具卡 exe 恒指当前构建** `build/{dx12,vulkan}/nanite-tools.exe`（无基线可比、现场实跑即权威），不建历史快照、不再补建。
 - 双后端画面一致分档：`bytes`（MD5）/ `near`（≤1/255 且 ≤2 px）/ FAIL，别笼统写「一致」。
 
-## Agent 协作纪律 · 决策前置铁律（2026-11-07 固化；权威落点仓库根 `AGENTS.md`，详版 `docs/AGENT-RULES.md`）
+## Agent 协作纪律 · 决策前置铁律（2026-11-07 固化；权威落点仓库根 `AGENTS.md`）
 - **每轮新任务开门四件事，缺一不可**：①读 Carrot 代码 `E:\UE_STUDY_2026\Carrot\engine\engine\render\` + `engine\resources\shaders\`；②读 bevy 代码 `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\` + `crates\bevy_solari\src\realtime\`；③读 UE5 官方 `E:\UnrealEngine\5.8.4\Engine\Source\Runtime\Renderer\Private\`（只读对照表点名文件，不漫游）；④读开发历史 `docs/MILESTONES.md` + `docs/carrot-history.md` + `.workbuddy/memory/MEMORY.md` + 当日日志 + 当前 `docs/s*/S*-PLAN.md`。当前步骤对应哪几份文件查本文件「S* 约定」节与 ROADMAP「步骤→本地代码对照总表」。
 - **不许擅做决定**：在已定计划/S-PLAN 验收判据内、不改架构/范围/约定的机械执行可以自己做；凡触碰架构/范围/选型/约定、与历史决策冲突、或三处口径不一致需二选一，**必须先摆三处证据+历史约定，再请用户拍板**，不得直接落地。用户架构质疑先自查自相矛盾、认了一次改到位，不拿依赖清单/官方文档辩护、不留「也可以……」尾巴。
 - 若某轮已没遵守：回复里立刻承认、补读三处、重做决断，并同步清理相关文档旧表述。

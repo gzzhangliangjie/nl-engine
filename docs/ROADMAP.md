@@ -5,7 +5,7 @@
 > API 底座是 **NVRHI**（跨平台：Windows DX12/Vulkan、Linux Vulkan、macOS MoltenVK）。Carrot 是裸 Vulkan，所以本项目是**把 Carrot 的架构移植到 NVRHI**——API 层全部自己写，搭建**节奏**参考 Carrot 从零起步的实况（见 `docs/s0/CARROT-BOOTSTRAP.md`：Init → 第二天出画面 → 抽象被重复逼出来 → 验证层天天在）。**仅作参考、不做逐行对齐，他早期的返工不必复刻**。区别于「照抄 Carrot 成品」的地方在这里。**构建链不依赖任何厂商图形 SDK**：D3D12 / OpenGL 走 Windows SDK、Vulkan 头走 `KhronosGroup/Vulkan-Headers`、Slang 独立获取；默认 DX12，Vulkan 为第二后端（见 `s0/S0-PLAN.md` M0.0 的后端对称表）。
 > 卡住的对照资料分三层：知识库章节（`docs/kb/`）→ 本地参考代码（`E:\UE_STUDY_2026\` 下 Carrot 与 bevy）→ 作者博客。
 
-## 决策前置铁律（Agent 协作门禁，2026-11-07 固化 → 权威落点见仓库根 `AGENTS.md`，详版 `docs/AGENT-RULES.md`）
+## 决策前置铁律（Agent 协作门禁，2026-11-07 固化 → 完整权威落点见仓库根 `AGENTS.md`）
 
 > **每开始一轮新任务，必须先同时读过 Carrot / bevy / UE5 官方 三处参考代码 + 本项目开发历史（`MILESTONES.md` / `carrot-history.md` / `.workbuddy/memory/MEMORY.md` / 当日日志 / 当前 `S*-PLAN.md`），带着证据做决断。任何超出「已定计划内机械执行」的判定（架构 / 范围 / 选型 / 约定 / 与历史决策冲突 / 三处口径不一致需二选一），不许自己拍板——先摆三处证据 + 历史约定，再请用户定。** 违反即视为失职，用户可随时追责。当前步骤对应哪几份文件见下方「步骤 → 本地代码对照总表」。
 
