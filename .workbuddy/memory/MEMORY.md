@@ -10,6 +10,7 @@
 
 ## 开发节奏
 - 每阶段：目标 → 亲眼可见用例 → 验收判据 → 放行；tag 在验收之后打。
+- **每个里程碑必须有「交代」（2026-11-07 用户定，不限于可运行 exe 截图）**：渲染版本 = `example/` 截图基线；工具版本 = `docs/s1/NANITE-TOOLS-GUIDE.md` 式的「使用说明 + 实跑输出归档」（从 exe 现场跑出来贴入，含负向路径与退出码）。
 - **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`，登记 `example/cases.json`（唯一数据源，别建第二份清单）；验收/tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
 - **M0.9 起总闸：提交/tag 前 `python tools/regression.py` 全绿才放行**（全量历史用例 × 双后端比对基线）。
 - 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作/提交版本/完成情况/踩坑）写实追加。
