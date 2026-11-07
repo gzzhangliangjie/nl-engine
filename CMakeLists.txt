@@ -361,3 +361,14 @@ add_test(NAME b3-graph-genslang COMMAND material-graph-tools check)
 set_tests_properties(b3-graph-genslang PROPERTIES
     PASS_REGULAR_EXPRESSION "genslang   : OK"
     ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
+
+# ---- B 路材质图 B4：热重载（改图即重编译）----
+# watch --once 对 fixture 图做单次 recompile（emit + 双后端编译），验收热重载链路本身；
+# 与 check 同源，只是走 watch 的加载 + 轮询首轮路径。不进渲染总闸，走工具版交代。
+add_test(NAME b4-graph-hot-reload
+         COMMAND material-graph-tools watch
+                 ${CMAKE_CURRENT_SOURCE_DIR}/material-graph-tools/sample.mg --once)
+set_tests_properties(b4-graph-hot-reload PROPERTIES
+    PASS_REGULAR_EXPRESSION "OK"
+    DEPENDS b3-graph-genslang
+    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")

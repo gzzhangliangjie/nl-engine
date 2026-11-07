@@ -8,9 +8,14 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <chrono>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -22,7 +27,9 @@ void printUsage() {
         "  material-graph-tools build <out.mg>      assemble a sample graph and write it\n"
         "  material-graph-tools dump <in.mg>        load and pretty-print a graph\n"
         "  material-graph-tools gen <in.mg> <out.slang>   graph -> Slang (B3)\n"
-        "  material-graph-tools check               emit sample -> slangc spirv+dxil x vs/ps\n");
+        "  material-graph-tools check               emit sample -> slangc spirv+dxil x vs/ps\n"
+        "  material-graph-tools watch <in.mg> [--slang DIR] [--dxc DIR]\n"
+        "                              [--interval MS] [--once]   hot-reload recompile (B4)\n");
 }
 
 // 用代码装配一个最小有意义图：两个常量 + 乘法 → 输出（供后续代码生成消费）
@@ -156,32 +163,110 @@ int cmdGen(int argc, char** argv) {
     return 0;
 }
 
-// check：内部装配示例图 -> emit -> slangc 双后端 x (vs/ps) 编译
+// B4：热重载核心。把图 emit + slangc 双后端 x (vs/ps)，集中汇报每次结果。
+// recompileGraph 是 B3 验收链路的复用点：check / watch 都走它。
+struct RecompileReport {
+    bool psSpirv = false, vsSpirv = false, psDxil = false, vsDxil = false;
+    bool ok() const { return psSpirv && vsSpirv && psDxil && vsDxil; }
+};
+bool recompileGraph(const nl::material_graph::MaterialGraph& g,
+                    const std::string& slangc, const std::string& dxcDir,
+                    RecompileReport* rep) {
+    std::string err;
+    if (!g.validate(&err)) { std::printf("  validate FAIL: %s\n", err.c_str()); return false; }
+    std::string tmp = "_mg_hot.slang";
+    {
+        std::ofstream os(tmp, std::ios::binary);
+        if (!nl::material_graph::emitSlang(g, os, &err)) {
+            std::printf("  emit FAIL: %s\n", err.c_str()); return false;
+        }
+    }
+    RecompileReport r;
+    r.psSpirv = runSlangc(slangc, dxcDir, tmp, "_mg_hot.ps.spv",  "spirv", "psMain", "fragment");
+    r.vsSpirv = runSlangc(slangc, dxcDir, tmp, "_mg_hot.vs.spv",  "spirv", "vsMain", "vertex");
+    r.psDxil = runSlangc(slangc, dxcDir, tmp, "_mg_hot.ps.dxil", "dxil",  "psMain", "fragment");
+    r.vsDxil = runSlangc(slangc, dxcDir, tmp, "_mg_hot.vs.dxil", "dxil",  "vsMain", "vertex");
+    std::remove(tmp.c_str());
+    std::remove("_mg_hot.ps.spv");   std::remove("_mg_hot.vs.spv");
+    std::remove("_mg_hot.ps.dxil");  std::remove("_mg_hot.vs.dxil");
+    if (rep) *rep = r;
+    return r.ok();
+}
+
+// check：内部装配示例图 -> 重编译（emit + 双后端编译）。B3 验收入口，B4 复用 recompileGraph。
 int cmdCheck() {
     nl::material_graph::MaterialGraph g = buildSample();
     std::string err;
     if (!g.validate(&err)) { std::fprintf(stderr, "check: graph invalid: %s\n", err.c_str()); return 1; }
-    std::string slangc = findSlangc();
-    std::string dxcDir = findDxc();
-    std::string tmpSlang = "_mg_check.slang";
-    {
-        std::ofstream os(tmpSlang, std::ios::binary);
-        if (!nl::material_graph::emitSlang(g, os, &err)) {
-            std::fprintf(stderr, "check: emit failed: %s\n", err.c_str()); return 1;
-        }
-    }
-    std::printf("check      : emitting + compiling (spirv/dxil x vs/ps)\n");
-    bool ok = true;
-    ok &= runSlangc(slangc, dxcDir, tmpSlang, "_mg_check.ps.spv",  "spirv", "psMain", "fragment");
-    ok &= runSlangc(slangc, dxcDir, tmpSlang, "_mg_check.vs.spv",  "spirv", "vsMain", "vertex");
-    ok &= runSlangc(slangc, dxcDir, tmpSlang, "_mg_check.ps.dxil", "dxil",  "psMain", "fragment");
-    ok &= runSlangc(slangc, dxcDir, tmpSlang, "_mg_check.vs.dxil", "dxil",  "vsMain", "vertex");
-    std::remove(tmpSlang.c_str());
-    std::remove("_mg_check.ps.spv");   std::remove("_mg_check.vs.spv");
-    std::remove("_mg_check.ps.dxil");  std::remove("_mg_check.vs.dxil");
+    RecompileReport rep;
+    bool ok = recompileGraph(g, findSlangc(), findDxc(), &rep);
     if (ok) { std::printf("genslang   : OK\n"); return 0; }
     std::printf("genslang   : FAIL\n");
     return 1;
+}
+
+// B4：热重载。轮询 .mg 文件修改时间，变更即重新 emit + 编译双后端；
+// 首轮先编译一次作基线。--once 只编译一次（供 ctest 非交互验收）。
+int cmdWatch(int argc, char** argv) {
+    // 长进程输出走管道时默认全缓冲，强制无缓冲以便实时看到每次重编译结果。
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::string inMg, slangBin, dxcDir;
+    long intervalMs = 500;
+    bool once = false;
+    for (int i = 0; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--slang" && i + 1 < argc) slangBin = argv[++i];
+        else if (a == "--dxc" && i + 1 < argc) dxcDir = argv[++i];
+        else if (a == "--interval" && i + 1 < argc) intervalMs = std::strtol(argv[++i], nullptr, 10);
+        else if (a == "--once") once = true;
+        else if (inMg.empty()) inMg = a;
+        else { std::fprintf(stderr, "watch: unexpected arg %s\n", a.c_str()); return 1; }
+    }
+    if (inMg.empty()) { std::fprintf(stderr, "watch: missing <in.mg>\n"); return 1; }
+    std::string slangc = slangBin.empty() ? findSlangc() : slangBin + "\\slangc.exe";
+    std::string dxc = dxcDir.empty() ? findDxc() : dxcDir;
+
+    auto stamp = []() -> std::string {
+        std::time_t t = std::time(nullptr);
+        std::tm tm{};
+        localtime_s(&tm, &t);
+        char buf[16];
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
+        return buf;
+    };
+
+    std::error_code ec;
+    std::filesystem::file_time_type last = std::filesystem::last_write_time(inMg, ec);
+    if (ec) { std::fprintf(stderr, "watch: cannot stat %s\n", inMg.c_str()); return 1; }
+    bool first = true;
+    for (;;) {
+        auto now = std::filesystem::last_write_time(inMg, ec);
+        if (ec) {
+            std::printf("%s  ERR (stat)\n", stamp().c_str());
+            if (once) return 1;
+            std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+            continue;
+        }
+        if (first || now != last) {
+            first = false; last = now;
+            std::ifstream is(inMg, std::ios::binary);
+            nl::material_graph::MaterialGraph g;
+            std::string err;
+            if (!nl::material_graph::MaterialGraph::deserialize(is, g, &err)) {
+                std::printf("%s  LOAD FAIL (%s)\n", stamp().c_str(), err.c_str());
+                if (once) return 1;
+                std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+                continue;
+            }
+            RecompileReport rep;
+            bool ok = recompileGraph(g, slangc, dxc, &rep);
+            if (ok) std::printf("%s  OK\n", stamp().c_str());
+            else std::printf("%s  FAIL (psS=%d vsS=%d psD=%d vsD=%d)\n", stamp().c_str(),
+                             rep.psSpirv, rep.vsSpirv, rep.psDxil, rep.vsDxil);
+            if (once) return ok ? 0 : 1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+    }
 }
 
 // ---- selftest：节点图数据模型 + 序列化（第 2 步验收核心）----
@@ -259,6 +344,7 @@ int main(int argc, char** argv) {
     if (cmd == "dump")     return cmdDump(argc - 2, argv + 2);
     if (cmd == "gen")      return cmdGen(argc - 2, argv + 2);
     if (cmd == "check")    return cmdCheck();
+    if (cmd == "watch")    return cmdWatch(argc - 2, argv + 2);
     std::fprintf(stderr, "unknown subcommand: %s\n", cmd.c_str());
     printUsage();
     return 1;
