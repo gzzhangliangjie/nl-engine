@@ -2200,7 +2200,8 @@
       "640x360"
      ],
      "command": "viewer.exe --mode cull --cull back --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
-     "script": "example/s4-indirect/run.bat verify"
+     "script": "example/s4-indirect/run.bat verify",
+     "preview": "example/s4-indirect/pulling-back-dx12.png"
     },
     {
      "id": "pulling-none",
@@ -2233,7 +2234,8 @@
       "640x360"
      ],
      "command": "viewer.exe --mode cull --cull off --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
-     "script": "example/s4-indirect/run.bat verify"
+     "script": "example/s4-indirect/run.bat verify",
+     "preview": "example/s4-indirect/pulling-none-dx12.png"
     }
    ]
   }
