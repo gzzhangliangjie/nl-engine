@@ -120,6 +120,7 @@ add_library(nl_core STATIC
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/anim/anim.cpp     # M-A1：动作系统（nl/anim）—— clip 采样，零图形 API
     core/src/anim/state_machine.cpp  # M-A3：动作状态机（优先级转移 + crossfade + UE 缩时）
+    core/src/anim/blend_space.cpp    # M-A4：1D blend space（找段 + 权重插值，UE 1D 口径）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -366,3 +367,8 @@ set_tests_properties(ma2-anim-blend-selftest PROPERTIES
 add_test(NAME ma3-anim-statemachine-selftest COMMAND anim-tools selftest statemachine)
 set_tests_properties(ma3-anim-statemachine-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "anim statemachine selftest: PASS")
+# M-A4：1D blend space 机械单测（段权重锚点、域外 clamp、单 sample 退化、
+# validate 负向、参数域扫掠两次运行逐位一致）
+add_test(NAME ma4-anim-blendspace-selftest COMMAND anim-tools selftest blendspace)
+set_tests_properties(ma4-anim-blendspace-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "anim blendspace selftest: PASS")

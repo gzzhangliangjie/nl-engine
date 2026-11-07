@@ -14,6 +14,7 @@
 //   blendspace   M-A4 1D blend space
 
 #include "nl/anim/anim.hpp"
+#include "nl/anim/blend_space.hpp"
 #include "nl/anim/state_machine.hpp"
 
 #include <cmath>
@@ -562,6 +563,137 @@ int runStateMachineSelftest() {
     return g_failures == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// M-A4 blendspace
+// ---------------------------------------------------------------------------
+
+// 轴：速度 0/1/2（m/s），clip z 终点 0 / 1 / 4（t=0.5 时 z = 0 / 0.5 / 2）。
+nl::anim::BlendSpace1DDesc makeLocoBlendSpace() {
+    nl::anim::BlendSpace1DDesc desc;
+    desc.samples = {
+        { 0.0f, makeLocoClip("hips", 0.0f) },
+        { 1.0f, makeLocoClip("hips", 1.0f) },
+        { 2.0f, makeLocoClip("hips", 4.0f) },
+    };
+    return desc;
+}
+
+void testBlendSpaceWeights() {
+    nl::anim::BlendSpace1D bs;
+    expectTrue(bs.reset(makeLocoBlendSpace()), "reset ok");
+
+    std::size_t i0, i1;
+    float w = -1.0f;
+    bs.segmentWeights(0.5f, i0, i1, w);
+    expectTrue(i0 == 0 && i1 == 1, "seg(0.5) indices");
+    expectNear(true, "seg(0.5) w", w, 0.5f, 1e-6f);
+    bs.segmentWeights(1.5f, i0, i1, w);
+    expectTrue(i0 == 1 && i1 == 2, "seg(1.5) indices");
+    expectNear(true, "seg(1.5) w", w, 0.5f, 1e-6f);
+
+    // 域外 clamp：i0==i1、w=0
+    bs.segmentWeights(-1.0f, i0, i1, w);
+    expectTrue(i0 == 0 && i1 == 0 && w == 0.0f, "seg clamp low");
+    bs.segmentWeights(9.0f, i0, i1, w);
+    expectTrue(i0 == 2 && i1 == 2 && w == 0.0f, "seg clamp high");
+}
+
+void testBlendSpaceEvaluate() {
+    nl::anim::BlendSpace1D bs;
+    expectTrue(bs.reset(makeLocoBlendSpace()), "reset ok");
+    std::vector<nl::anim::BonePose> pose;
+
+    // 段中点：param 0.5 -> lerp(idle z0, walk@0.5 z0.5, 0.5) = 0.25
+    expectTrue(bs.evaluate(0.5f, 0.5f, pose), "eval 0.5");
+    expectNear(true, "eval 0.5 z", pose[0].translation.z, 0.25f, 1e-6f);
+
+    // param 1.5 -> lerp(walk z0.5, run z2, 0.5) = 1.25
+    expectTrue(bs.evaluate(1.5f, 0.5f, pose), "eval 1.5");
+    expectNear(true, "eval 1.5 z", pose[0].translation.z, 1.25f, 1e-6f);
+
+    // 精确落点：param 1 -> 纯 walk（w=0 混合即 walk 本身）
+    expectTrue(bs.evaluate(1.0f, 0.5f, pose), "eval 1.0");
+    expectNear(true, "eval 1.0 z", pose[0].translation.z, 0.5f, 1e-6f);
+
+    // 域外 clamp：-1 -> idle z0；9 -> run z2
+    expectTrue(bs.evaluate(-1.0f, 0.5f, pose), "eval low");
+    expectNear(true, "eval low z", pose[0].translation.z, 0.0f, 1e-6f);
+    expectTrue(bs.evaluate(9.0f, 0.5f, pose), "eval high");
+    expectNear(true, "eval high z", pose[0].translation.z, 2.0f, 1e-6f);
+
+    // 单 sample 退化 = 常量 clip（任意 param 都返回该 clip；t=0.5 时 z=3.5。
+    // 注意 t=1.0 会被 wrapTime 归到 0（循环 clip 语义），别拿端点当测试时点）
+    nl::anim::BlendSpace1DDesc single;
+    single.samples = { { 3.0f, makeLocoClip("hips", 7.0f) } };
+    expectTrue(bs.reset(single), "single reset ok");
+    expectTrue(bs.evaluate(0.0f, 0.5f, pose), "single eval");
+    expectNear(true, "single eval z", pose[0].translation.z, 3.5f, 1e-6f);
+}
+
+void testBlendSpaceValidateNegative() {
+    nl::anim::BlendSpace1DDesc desc = makeLocoBlendSpace();
+    expectStr(nl::anim::validateBlendSpace1D(desc), "", "valid desc passes");
+
+    nl::anim::BlendSpace1DDesc bad = desc;
+    bad.samples[1].param = 0.0f;   // 递增被破坏（0,0,2）
+    expectTrue(!nl::anim::validateBlendSpace1D(bad).empty(), "reject non-increasing");
+    bad = desc;
+    bad.samples.pop_back();        // 单 sample 合法，换成空
+    bad.samples.clear();
+    expectTrue(!nl::anim::validateBlendSpace1D(bad).empty(), "reject empty");
+    bad = desc;
+    bad.samples[2].param = std::nanf("");
+    expectTrue(!nl::anim::validateBlendSpace1D(bad).empty(), "reject NaN param");
+    bad = desc;
+    bad.samples[2].clip.duration = 0.0f;
+    expectTrue(!nl::anim::validateBlendSpace1D(bad).empty(), "reject invalid clip");
+    bad = desc;
+    bad.samples[2].clip.tracks.push_back(desc.samples[0].clip.tracks[0]);
+    bad.samples[2].clip.tracks[1].bone = "head";
+    expectTrue(!nl::anim::validateBlendSpace1D(bad).empty(), "reject rig mismatch");
+
+    nl::anim::BlendSpace1D bs;
+    expectTrue(!bs.reset(bad), "reset rejects invalid");
+    std::vector<nl::anim::BonePose> pose;
+    expectTrue(!bs.evaluate(0.0f, 0.0f, pose), "evaluate rejects un-reset");
+}
+
+void testBlendSpaceDeterminism() {
+    nl::anim::BlendSpace1D bs;
+    expectTrue(bs.reset(makeLocoBlendSpace()), "reset ok");
+    std::vector<unsigned char> first, second;
+    for (int run = 0; run < 2; ++run) {
+        std::vector<unsigned char>& sink = run == 0 ? first : second;
+        for (int i = 0; i <= 8; ++i) {
+            std::vector<nl::anim::BonePose> pose;
+            if (!bs.evaluate(0.25f * i, 0.5f, pose)) {
+                ++g_failures;
+                std::printf("  FAIL determinism sweep: eval %d\n", i);
+                return;
+            }
+            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(pose.data());
+            sink.insert(sink.end(), bytes, bytes + pose.size() * sizeof(nl::anim::BonePose));
+        }
+    }
+    expectTrue(first == second && !first.empty(), "two sweeps bit-identical");
+}
+
+int runBlendSpaceSelftest() {
+    struct Case { const char* name; void (*fn)(); };
+    const Case cases[] = {
+        { "segment weights", testBlendSpaceWeights },
+        { "evaluate", testBlendSpaceEvaluate },
+        { "validate negatives", testBlendSpaceValidateNegative },
+        { "determinism", testBlendSpaceDeterminism },
+    };
+    for (const Case& c : cases) {
+        std::printf("  [%s]\n", c.name);
+        std::fflush(stdout);
+        c.fn();
+    }
+    return g_failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -582,7 +714,11 @@ int main(int argc, char** argv) {
             std::printf("anim statemachine selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
-        // M-A4 用例接入处（blendspace）
+        if (testCase == "blendspace") {
+            const int rc = runBlendSpaceSelftest();
+            std::printf("anim blendspace selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+            return rc;
+        }
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());
         return 2;
     }
