@@ -429,3 +429,22 @@
 - `python tools/showcase/server.py --check` 退出 0。
 
 **下一步**：0.x 序列到此冻结，进 S1 切簇（meshlet building / cluster culling，`thirdparty/meshoptimizer` 对照基准已就位）。
+
+---
+
+## M1.0 nanite-tools 骨架 + glTF 公共读取层（S1 第一步）
+
+**动作**：S1 开工。`core/include/nl/core/mesh_io.hpp` + `core/src/mesh_io.cpp` 新增公共 glTF 读取层（场景图遍历、节点世界变换烘进顶点——切簇误差单位从第一天就统一成世界空间长度）；tinygltf 实现 TU 从 `renderer/src/scene.cpp` 移到 `core/src/mesh_io.cpp`（仍全工程唯一展开）。`nanite-tools/main.cpp` 新增 CLI：`stat` 实现（顶点/三角/子网格/AABB），`cluster/simplify/dag` 占位 exit 2。CMake 增 `nanite-tools` target + `s1-tools-stat` ctest（PASS_REGULAR_EXPRESSION 锁 Suzanne 3,936 tri）。
+
+**提交版本**：`s1-tools`
+
+**完成情况**
+- `nanite-tools stat` 三资产全对上已知口径：Suzanne 11,808 vert / 3,936 tri；TorusKnotDense 103,113 vert / 204,800 tri；IcoSphereDense 163,842 vert / 327,680 tri。AABB 正常（球 ±1.0 严丝合缝）。
+- scene.cpp 改走 `nl::core::loadGltfScene` 后渲染零变化：**`python tools/regression.py` 58/58 ALL GREEN（bytes 58）**，viewer --selftest 15/15（DX12 + Vulkan 两后端构建均过）。
+- ctest 2/2（m0.5-selftest + s1-tools-stat）。`server.py --check` 退出 0（kStage 保持 M0.9——纯工具版本不动渲染，S1 的 example 归位放在 M1.3 可视化验收）。
+
+**踩坑情况**
+1. **vendored tinygltf 是老版本，`Model` 没有 `scene` 成员** → 根因：新版 tinygltf 用 `model.scene`，本机 vendored 版字段叫 `defaultScene`，编译报 C2039。处理：改用 `gltf.defaultScene`（注释标明版本差异）。
+2. **缺 NORMAL/UV 属性会误报错** → 根因：第一版用 `readFloatAccessor` 的返回值同时当「属性存在」与「读取成功」，accessorIndex=-1（属性缺失）会落进「index out of range」错误分支。处理：先 `attr("NORMAL") >= 0` 判存在，缺失补零，存在但读失败才是真错误。
+
+**下一步**：M1.1 meshlet 贪心构建（128 tri / 64 vert 上限、包围球、法线锥、初始误差），参考 bevy `from_mesh.rs` + meshoptimizer `meshlet.cpp`。

@@ -2,113 +2,12 @@
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
 
 #include "nl/core/log.hpp"
-
-// tinygltf 是 header-only：整个工程只在这一个 TU 展开实现，避免重复符号。
-// M0.4 只用 GLB 内嵌 PNG，不需要 stb_image_write（png_writer.cpp 有自己的那份）。
-#ifdef _MSC_VER
-#  pragma warning(push, 0)
-#endif
-#define TINYGLTF_IMPLEMENTATION
-#define TINYGLTF_NO_STB_IMAGE_WRITE
-#define STB_IMAGE_IMPLEMENTATION
-#include <tiny_gltf.h>
-#ifdef _MSC_VER
-#  pragma warning(pop)
-#endif
+#include "nl/core/mesh_io.hpp"   // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 
 #include <cstring>
 #include <vector>
 
 namespace nl::renderer::detail {
-namespace {
-
-// 读 FLOAT 类型的 glTF accessor（POSITION / NORMAL / TEXCOORD_0）。
-// 支持 byteStride 交错存储；Suzanne 是紧密排列，这里仍按通用写法处理。
-bool readFloatAccessor(const tinygltf::Model& model, int accessorIndex,
-                       int wantComponents, std::vector<float>& out,
-                       std::string& outError) {
-    if (accessorIndex < 0 || accessorIndex >= static_cast<int>(model.accessors.size())) {
-        outError = "glTF accessor index out of range"; return false;
-    }
-    const auto& acc = model.accessors[accessorIndex];
-    if (acc.componentType != 5126 /* FLOAT */ ||
-        tinygltf::GetNumComponentsInType(static_cast<uint32_t>(acc.type)) != wantComponents) {
-        outError = "glTF accessor is not a float VEC" + std::to_string(wantComponents);
-        return false;
-    }
-    const auto& view = model.bufferViews[acc.bufferView];
-    const auto& buffer = model.buffers[view.buffer];
-    const size_t elemSize = sizeof(float) * static_cast<size_t>(wantComponents);
-    const size_t stride = view.byteStride > 0 ? static_cast<size_t>(view.byteStride) : elemSize;
-    const size_t base = static_cast<size_t>(view.byteOffset) + acc.byteOffset;
-    if (acc.count == 0 || base + stride * (acc.count - 1) + elemSize > buffer.data.size()) {
-        outError = "glTF accessor data truncated"; return false;
-    }
-    out.resize(acc.count * static_cast<size_t>(wantComponents));
-    for (size_t i = 0; i < acc.count; ++i) {
-        std::memcpy(out.data() + i * wantComponents,
-                    buffer.data.data() + base + i * stride, elemSize);
-    }
-    return true;
-}
-
-// 索引统一展开成 uint32（R32_UINT），不区分 glTF 的 UNSIGNED_BYTE/SHORT/INT。
-bool readIndices(const tinygltf::Model& model, int accessorIndex,
-                 std::vector<std::uint32_t>& out, std::string& outError) {
-    const auto& acc = model.accessors[accessorIndex];
-    const auto& view = model.bufferViews[acc.bufferView];
-    const auto& buffer = model.buffers[view.buffer];
-    const int compSize = tinygltf::GetComponentSizeInBytes(
-        static_cast<uint32_t>(acc.componentType));
-    const int comps = tinygltf::GetNumComponentsInType(static_cast<uint32_t>(acc.type));
-    if (compSize <= 0 || comps != 1 ||
-        (acc.componentType != 5121 && acc.componentType != 5123 && acc.componentType != 5125)) {
-        outError = "unsupported glTF index component type"; return false;
-    }
-    const size_t stride = view.byteStride > 0
-        ? static_cast<size_t>(view.byteStride) : static_cast<size_t>(compSize);
-    const size_t base = static_cast<size_t>(view.byteOffset) + acc.byteOffset;
-    if (acc.count == 0 || base + stride * (acc.count - 1) + compSize > buffer.data.size()) {
-        outError = "glTF index data truncated"; return false;
-    }
-    out.resize(acc.count);
-    const unsigned char* p = buffer.data.data() + base;
-    for (size_t i = 0; i < acc.count; ++i) {
-        const unsigned char* src = p + i * stride;
-        std::uint32_t v = 0;
-        if (acc.componentType == 5121) v = src[0];
-        else if (acc.componentType == 5123) { std::uint16_t u; std::memcpy(&u, src, 2); v = u; }
-        else { std::memcpy(&v, src, 4); }
-        out[i] = v;
-    }
-    return true;
-}
-
-// tinygltf 用 stb_image 解出的像素可能是 1/2/3/4 通道，统一补成 RGBA8。
-bool toRGBA8(const tinygltf::Image& image, std::vector<std::uint8_t>& out,
-             std::string& outError) {
-    if (image.width <= 0 || image.height <= 0 || image.image.empty() || image.bits != 8 ||
-        image.component < 1 || image.component > 4) {
-        outError = "glTF base color image is not 8-bit decoded RGBA-capable data";
-        return false;
-    }
-    const size_t pixels = static_cast<size_t>(image.width) * image.height;
-    if (image.image.size() < pixels * static_cast<size_t>(image.component)) {
-        outError = "glTF base color image data truncated"; return false;
-    }
-    out.assign(pixels * 4, 255);
-    for (size_t i = 0; i < pixels; ++i) {
-        const unsigned char* s = image.image.data() + i * image.component;
-        unsigned char* d = out.data() + i * 4;
-        d[0] = s[0];
-        d[1] = image.component >= 3 ? s[1] : s[0];
-        d[2] = image.component >= 3 ? s[2] : s[0];
-        d[3] = image.component == 4 ? s[3] : 255;
-    }
-    return true;
-}
-
-} // namespace
 
 bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
                  const char* vsEntry, const char* psEntry,
@@ -132,60 +31,40 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
     if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
 
-    // ---- 2. 解析 GLB：POSITION / NORMAL / TEXCOORD_0 / indices / baseColor ----
+    // ---- 2. 解析 GLB（core::mesh_io：场景图遍历 + 节点变换烘进顶点）----
     // M0.7：模型文件名由 --model 传入（上层 Renderer::create 已做白名单校验：
     // 仅 assets/models/ 下的 ASCII .glb 文件名，无路径分隔符）。缺省 Suzanne.glb。
     const std::string modelPath = std::string(NL_ASSET_DIR "/") + modelFile;
-    tinygltf::Model gltf;
-    tinygltf::TinyGLTF loader;
-    std::string err, warn;
-    if (!loader.LoadBinaryFromFile(&gltf, &err, &warn, modelPath.c_str())) {
-        outError = "LoadBinaryFromFile(" + modelPath + ") failed: " + err;
-        return false;
+    nl::core::SceneMeshData meshData;
+    std::string loadWarning;
+    if (!nl::core::loadGltfScene(modelPath.c_str(), meshData, loadWarning)) {
+        outError = modelFile + std::string(": ") + loadWarning; return false;
     }
-    if (!warn.empty()) nl::core::log::debug("tinygltf: ", warn);
-    if (gltf.meshes.empty() || gltf.meshes[0].primitives.empty()) {
+    if (!loadWarning.empty()) nl::core::log::debug(loadWarning);
+    // M0.4 起的约定：只画第一个子网格；其余子网格留给 nanite-tools 侧处理。
+    if (meshData.meshes.empty()) {
         outError = modelFile + std::string(" has no mesh primitive"); return false;
     }
-    const auto& prim = gltf.meshes[0].primitives[0];
-    auto findAttr = [&prim](const char* name) {
-        auto it = prim.attributes.find(name);
-        return it == prim.attributes.end() ? -1 : it->second;
-    };
-    std::vector<float> positions, normals, uvs;
-    std::vector<std::uint32_t> indices;
-    if (!readFloatAccessor(gltf, findAttr("POSITION"), 3, positions, outError) ||
-        !readFloatAccessor(gltf, findAttr("NORMAL"), 3, normals, outError) ||
-        !readFloatAccessor(gltf, findAttr("TEXCOORD_0"), 2, uvs, outError) ||
-        !readIndices(gltf, prim.indices, indices, outError)) return false;
-    const size_t vertexCount = positions.size() / 3;
-    if (normals.size() / 3 != vertexCount || uvs.size() / 2 != vertexCount) {
-        outError = modelFile + std::string(" attribute counts disagree"); return false;
-    }
-
-    int imageIndex = -1;
-    if (prim.material >= 0 && prim.material < static_cast<int>(gltf.materials.size())) {
-        const int texIndex = gltf.materials[prim.material].pbrMetallicRoughness.baseColorTexture.index;
-        if (texIndex >= 0 && texIndex < static_cast<int>(gltf.textures.size()))
-            imageIndex = gltf.textures[texIndex].source;
-    }
-    if (imageIndex < 0 || imageIndex >= static_cast<int>(gltf.images.size())) {
+    const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
+    if (!prim.hasBaseColor) {
         outError = modelFile + std::string(" has no base color texture"); return false;
     }
-    std::vector<std::uint8_t> rgba;
-    if (!toRGBA8(gltf.images[imageIndex], rgba, outError)) return false;
-    const auto texWidth = static_cast<std::uint32_t>(gltf.images[imageIndex].width);
-    const auto texHeight = static_cast<std::uint32_t>(gltf.images[imageIndex].height);
+    const size_t vertexCount = prim.vertices.size();
+    if (prim.indices.empty()) {
+        outError = modelFile + std::string(" first primitive has no indices"); return false;
+    }
+    const std::vector<std::uint32_t>& indices = prim.indices;
 
     std::vector<SceneVertex> vertices(vertexCount);
     for (size_t i = 0; i < vertexCount; ++i) {
-        vertices[i] = {
-            positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2],
-            normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2],
-            uvs[i * 2], uvs[i * 2 + 1]
-        };
+        const auto& mv = prim.vertices[i];
+        vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
+                        mv.normal[0], mv.normal[1], mv.normal[2],
+                        mv.uv[0], mv.uv[1] };
     }
     indexCount_ = static_cast<std::uint32_t>(indices.size());
+    const auto texWidth = prim.texWidth;
+    const auto texHeight = prim.texHeight;
 
     // ---- 3. 建 GPU 资源（debug 名带模型名，RenderDoc / validation 里分得清）----
     const std::string vbName = std::string(modelFile) + "VB";
@@ -276,7 +155,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->beginTrackingBufferState(indexBuffer_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(indexBuffer_, indices.data(), indices.size() * sizeof(std::uint32_t));
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
-    upload->writeTexture(texture_, 0, 0, rgba.data(),
+    upload->writeTexture(texture_, 0, 0, prim.baseColorRGBA.data(),
                          static_cast<size_t>(texWidth) * 4u);
     upload->close();
     device->executeCommandList(upload);

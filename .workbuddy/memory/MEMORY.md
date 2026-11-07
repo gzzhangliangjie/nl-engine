@@ -1,78 +1,57 @@
 # nl-engine 项目长期约定
 
 ## 架构（2026-11-06 定稿）
-- 通用管线：NVRHI + Slang，构建链**不依赖任何厂商图形 SDK**。`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `VK_SDK_PATH` / `find_package(Vulkan)` / 要求装 SDK。
-- 后端对称：D3D12 头/库/调试层来自 Windows SDK；Vulkan 头走 `KhronosGroup/Vulkan-Headers`（NVRHI 的 `NVRHI_FETCH_VULKAN_HEADERS`），loader 是驱动自带 `vulkan-1.dll`；Slang 独立获取，不从 `$VULKAN_SDK` 找。
-- **OpenGL 后端已评估并否决（2026-11-07）**：vendored NVRHI（当前 main）根本没有 GL 后端（上游 2023 年已删，`src/` 只有 d3d11/d3d12/vulkan/validation），要加只能从 2021~2023 老版本移植 + 自写 WGL 上下文 + vendor glad/glslang；GL 路径要求 GLSL 运行时编译，会破坏「一份 .slang 离线出 SPIR-V/DXIL」的单源约定。抽象验证价值为零增量（DX12+Vulkan 已是最大差异化组合），S1~S14 的 meshlet/BVH/RT 方向 GL 均无意义。Carrot 也是 Vulkan-only。别再捡起这个话题。
-- `NL_GRAPHICS_BACKEND`（AUTO / DX12 / VULKAN）是唯一后端开关；Windows 上 `AUTO` 落 DX12（零额外依赖），Vulkan 作第二后端验证抽象。
-- 图形 API / NVRHI / ImGui 符号只允许出现在 `renderer/`；`core/` / `viewer/` 零命中。调试层判据按当前后端走（DX12 Debug Layer + NVRHI validation / Vulkan NVRHI validation）；VVL 是可选插件、本机未装，不写成全项目前提。
-- 一份 `.slang` 同时出 SPIR-V 与 DXIL、两后端各自加载成功 = 通用管线的验收核心，不是「顺带试一次」。
+- 通用管线：NVRHI + Slang，构建链**不依赖任何厂商图形 SDK**。`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `find_package(Vulkan)` / 要求装 SDK。
+- 后端对称：D3D12 来自 Windows SDK；Vulkan 头走 `NVRHI_FETCH_VULKAN_HEADERS`，loader 是驱动自带 `vulkan-1.dll`（未装也无需装 Vulkan SDK）；Slang 独立获取。
+- **OpenGL 后端已否决（2026-11-07）**：vendored NVRHI 无 GL 后端，移植成本高且破坏「一份 .slang 出 SPIR-V/DXIL」单源约定，S1~S14 方向 GL 均无意义。别再捡起这个话题。
+- `NL_GRAPHICS_BACKEND`（AUTO/DX12/VULKAN）唯一后端开关；Windows AUTO 落 DX12。
+- 图形 API / NVRHI / ImGui 符号只允许在 `renderer/`；`core/` / `viewer/` 零命中。调试层判据按当前后端走；VVL 可选、本机未装。
+- 一份 `.slang` 双目标（SPIR-V+DXIL）两后端加载成功 = 通用管线验收核心。
 
 ## 开发节奏
-- 每阶段：目标 → **能亲眼看到的用例** → 验收判据 → 放行；验收不过不进下一步，tag 在验收之后打。
-- **每轮迭代必须更新 `example/`（2026-11-07 用户定的硬规则）**：成功用例的基线 PNG + `run.bat` 放进 `example/<版本>/`，并登记到 `example/cases.json`；验收 / 打 tag 前跑 `python tools/showcase/server.py --check`，退出码 0 才放行。该检查以 `renderer/src/renderer.cpp` 的 `kStage` 判定当前阶段，代码进了新阶段而用例没归位就退出 1，展示台侧栏也显示状态。**M0.9 起再加一道总闸：`python tools/regression.py` 全量重跑全部历史用例 × 双后端比对基线，全绿才提交打 tag**。S0 的 M0.x 与 S1~S14 每一步同样适用，不许「只改代码不归位用例」。
-- 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作 / 提交版本 / 完成情况 / 踩坑）写实追加，不写「已完成」「无」。
-- Carrot 的**节奏**参考 `docs/s0/CARROT-BOOTSTRAP.md`，其弯路（换底座、晚拆模块、相机硬搓、resize 修 4 次）不复刻。
-- 门禁表与依赖实况见 `docs/s0/S0-PLAN.md`；总路线 `docs/ROADMAP.md`；台账 `docs/MILESTONES.md`。
+- 每阶段：目标 → 亲眼可见用例 → 验收判据 → 放行；tag 在验收之后打。
+- **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`，登记 `example/cases.json`（唯一数据源，别建第二份清单）；验收/tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
+- **M0.9 起总闸：提交/tag 前 `python tools/regression.py` 全绿才放行**（全量历史用例 × 双后端比对基线）。
+- 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作/提交版本/完成情况/踩坑）写实追加。
+- 展示台 `tools/showcase/start.bat` → http://127.0.0.1:8787/；干净 clone 先 `python tools/showcase/rebuild.py`；每出新版把上一版 exe 映射改 `build/showcase/{tag}/` 并跑 rebuild.py 补建。
+- 双后端画面一致分档：`bytes`（MD5）/ `near`（≤1/255 且 ≤2 px）/ FAIL，别笼统写「一致」。
 
 ## 本机环境（2026-11-06 实测）
-- VS2022 Community + MSVC 14.38.33130 + Windows SDK 10.0.26100.0；CMake 3.31.6 便携版在 `E:\UE_STUDY_2026\.build-tools\`（仓库外，不污染 PATH）。
-- `vulkan-1.dll` / `vulkaninfo.exe` 驱动自带；**未装也无需装 Vulkan SDK**。
-- CMake 必须用 `NMake Makefiles` 生成器：VS 生成器会被 `HTTPS_PROXY` / `https_proxy` 大小写撞键搞挂（构建工具的大小写不敏感 Hashtable）。
-- GLFW 从本地 `Carrot/thirdparty/glfw` vendored（105 个构建必需文件，零网络）。
-- 网络：GitHub 小文件开代理后直连可用，大文件限速 ~12KB/s → gh-proxy 分 8 段并发。
+- VS2022 + MSVC 14.38 + Windows SDK 10.0.26100.0；CMake 3.31.6 便携版在 `E:\UE_STUDY_2026\.build-tools\`。
+- CMake 必须用 `NMake Makefiles`（VS 生成器被 HTTPS_PROXY/https_proxy 大小写撞键搞挂）。
+- 网络：GitHub 小文件开代理直连，大文件 gh-proxy 分 8 段并发。
 
 ## 版本
-- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；`s0-done` = M0.5 + S0 总验收；`m0.6` = GPU 帧内计时；`m0.7` = 高模测试资产 + `--model`；`m0.8` = 线框 / 调试着色（commit f1ba95f）；**`m0.9` = 一键全量回归总闸（2026-11-07，0.x 序列终点）**。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*`/`m0.*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
-- **S0 后是「能力补齐版本序列」，一个版本一件事**（2026-11-07 用户确认）：`m0.6` = GPU 帧内计时 ✅ → `m0.7` = 高模测试资产生成器 ✅ → `m0.8` = 线框 / 调试着色 ✅ → **`m0.9` = 一键全量回归总闸 ✅（2026-11-07）**。**0.x 必做序列到此冻结，下一步进 S1 切簇**。
-- **0.x 必做序列冻结在 M0.9，做完立刻进 S1**（2026-11-07 用户拍板，怕卡在 0.x 出不来）：PBR / 卡通渲染**不做进 m0.x、也不单开并行线**（并行线会让 kStage 检查 / 展示台 exe 映射 / 回归总闸双份打架），定为主线「穿插项」，tag 用名字（`pbr-direct` / `toon`）不占 m0.* 编号。PBR 直射光 + 贴图采样是 **S7 前置**，建议 S1~S6 间插一次；卡通（ramp + 背面外扩描边）与主线零耦合随时插。**两份详细计划已预写**：`docs/s0/PBR-DIRECT-PLAN.md`、`docs/s0/TOON-PLAN.md`（含绑定位 / 公式 / pipeline 组合层，开工照着敲）。**外部技术点归宿已对齐（2026-11-07，防重复建设）**：GAMES202 五项——ShadowMap/PCF/PCSS=穿插项 `shadow-map`（CSM 是其进阶）、PRT/球谐=穿插项 `prt-sh`（补 PBR 不做 IBL 的缺口）、SSR=排 S6 之后（复用 Hi-Z 金字塔）、Kulla-Conty=并入 `pbr-direct` 进阶、SVGF=主线 S12 本体不穿插；PhasmaEngine——SSAO=穿插项 `ssao`、后处理链=穿插项 `post-chain`（**前置离屏 RT，S7 后插**、TAA motion vector 与 S12 共享）、Forward+多光源/渲染图/shader 热重载=归 P8 引擎化，GPU 剔除/meshlet 簇/visibility buffer 主线 S1~S7 本来就有。归宿总表在 `docs/ROADMAP.md`「穿插项」节。
-- M0.7 落地要点（2026-11-07）：`scripts/gen-dense-mesh.py` 纯 stdlib 确定性生成（纽结 204,800 / 球 327,680 tri，同参 MD5 确定）；`--model` 白名单校验在 `Renderer::create`（ASCII .glb 文件名、无路径分隔符）；HUD 增 model 行（面板上限 460→480）；`thirdparty/meshoptimizer` v1.3 vendored 文档级不入构建（CMake 零引用）。**Suzanne 实为 3,936 tri（11,808 索引），旧口径「504 tri」是错的，别再引用**。GPU ms 对比要在限时交互窗口取 `gpu timer resolved` 日志——截图模式默认 `--no-hud` 不建 query，且 deterministic 不 poll。展示台每出新版要把上一版 exe 映射改成 `build/showcase/{tag}/` 并跑 `rebuild.py` 补建。
-- M0.8 落地要点（2026-11-07）：着色模式走 `g_options.x` shader 内分支（0 textured / 1 normal / 2 uv / 3 tri-id），**规范名是 `tri-id` 不是 `tris`**；tri-id 用 SV_PrimitiveID（PS 直收 rasterizer 系统值，VS 不传，slangc 双目标实测过）+ pcg 整数 hash（确定性，可进截图回归）；线框 = NVRHI `RasterFillMode::Wireframe`（非几何 shader），Scene pipeline 2→4 套（solid/wire × cull）；V/N 键（Key 枚举加了 V/N）；HUD shading Combo + wireframe 复选框，面板上限 480→510；selftest 14→15/15。`--shading` 非法值必须 exit 1，不许静默落回 textured（首版 `atoi("tris")=0` 的坑）。接法细节在 `docs/SHADER-CONVENTIONS.md` §2.6。
-- M0.9 落地要点（2026-11-07）：`tools/regression.py` = 一键总闸，全量 **58/58 ALL GREEN**（~40 s，9 版本 × 双后端）；复用 `server.py` 的 exe_for/validated_params/build_argv/compare_pixels（`sys.path` 指向 `tools/showcase`，脚本在 `tools/` 下别指错层）；判据 bytes（MD5）/ near（≤1/255 且 ≤2 像素）/ FAIL，selftest 校验 expectLog、deviceErrors=0、exe 缺失=FAIL+提示 rebuild.py。**用法：提交 / 打 tag 前先 `python tools/regression.py`，全绿才放行**。坏 PNG 会砸穿 zlib → judge_image 已包 try/except 判 FAIL。cases.json 加用例后总闸自动覆盖，不用改 regression.py。
-- Carrot 实况（2026-11-07 git 实查）：meshoptimizer + meshlet 支持是 **2023-11-25 同一个大提交 `4c100761`** 进的（meshlet → visibility buffer），配套 `asset_tools/fertilizer`；wireframe 在 `engine/render/Pipeline.cpp`；**没有**截图 MD5 回归（只有 googletest），性能靠 tracy + WinPixEventRuntime、无 NVRHI timer query。教训：它把 vendor + 切簇塞一个提交，我们拆版本铺路更稳；M0.9 回归总闸是超它的部分。
+- tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
+- **0.x 冻结在 M0.9，下一步 S1 切簇**。PBR/卡通是主线「穿插项」，tag 用名字（`pbr-direct`/`toon`）不占 m0.* 编号；详细计划在 `docs/s0/PBR-DIRECT-PLAN.md`、`docs/s0/TOON-PLAN.md`。PBR 直射光是 S7 前置。
+- 穿插项归宿（防重复建设，总表在 ROADMAP「穿插项」节）：ShadowMap/PCF/PCSS=`shadow-map`、PRT/球谐=`prt-sh`、SSR=排 S6 后（复用 Hi-Z）、Kulla-Conty=并入 pbr-direct、SSAO=`ssao`、后处理链=`post-chain`（S7 后插）、Forward+/渲染图/热重载=归 P8。
+- **Suzanne = 3,936 tri（11,808 索引）**，旧口径 504 tri 是错的。
 
-## M0.5 起的 HUD / 模式约定（2026-11-07 实测，改前看 `docs/IMGUI-GUIDE.md`）
-- ImGui 用 vendored **v1.91.9 稳定版**（不要拿本机 Carrot 的 `1.92.7 WIP`，字体系统重构过）；**不用官方 D3D12/Vulkan backend**，统一走自写 `renderer/src/hud.cpp`（`ImDrawData` 摊平成 HudVertex 32 B + R32_UINT + 逐 cmd scissor）。
-- `hud.slang` 与 `model.slang` 都单源双目标；`--selftest` 机械核对 8 个 `.spv`/`.dxil` 产物魔数（14/14）。`hudProjection()` 的 **Y 尺度必须为负**（ImGui y 向下、NDC y 向上），否则文字镜像。
-- 动态 VB/IB 的 `BufferDesc` 必须 `initialState = CopyDest` + `keepInitialState = true`，否则 NVRHI validation 报 `Unknown prior state` → DX12 Device Removed。
-- `HudFrame` 是唯一公开双向 POD：viewer 填显示数据、HUD 写回控件值；`renderFrame(..., hud=nullptr)` 时完全不碰 ImGui → `--screenshot` 默认 `--no-hud`，M0.1~M0.4 基线逐字节不动。
-- 截图确定性：回归模式用 8 个固定帧时间样本 + 面板标注 `capture/replay`；交互窗口才显示真实 FPS。`--hud` 两后端 PNG 必然不同（面板文本不同），别误判成 3D 画面不一致。
-- 默认字体图集只有 ASCII：HUD 里所有字符串（含后端调试层说明）必须 ASCII，中文会显示 `?????`；要中文 / InputText（键盘字符回调）/ 用户纹理（`TextureId` 当前忽略）/ docking 都是后续增量。
-- **下拉框 / 选择菜单现在就能用**：`Combo` / `BeginCombo` / `ListBox` / `Selectable` / `RadioButton` / `TreeNode` 在已 vendored 的 `imgui_widgets.cpp` 里，鼠标输入已够；弹出层的多 `ImDrawList` / ClipRect 已被 `build()` / `draw()` 覆盖。仅 `InputText` 需补字符回调。
-- `--mode` 分发器在 `core/modes.*` + `viewer` 的 `runMode()`：M0.5 只有 `normal`；S1 起每加一个模式只改枚举 / 名字 / case，旧模式保留当对照。未知模式退出 1。
+## 渲染约定（改前先看 `docs/SHADER-CONVENTIONS.md`）
+- 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present，别各抄一遍。
+- SPIR-V 绑定偏移固定：slangc 带 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`；shader 只写 `register(b0/t0/s0)`，禁 `[[vk::binding]]`。
+- SPIR-V 入口恒 `main`，DXIL 才 `vsMain/psMain`。
+- MVP 用 volatile constant buffer（`setMaxVersions(16)`）；`SceneConstants` 严格 160 B，**禁止整块 memcpy**（尾部有 bool cullBack）。
+- 剔除：pipeline 必须 `setFrontCounterClockwise(true)`，否则剔掉正脸。「关剔除看内壁」用例 `--dist 0.6 --cull none`。
+- 资产 `assets/models/Suzanne.glb`；tinygltf 只在 scene.cpp 一个 TU 展开（`TINYGLTF_NO_STB_IMAGE_WRITE`）。
+- 新增 GPU 资源时 slot 级同步表必须在 `createTargets()` 初始化（renderFrame 在 ensurePipeline 前就按 slot 访问，放错=首帧 139 段错误）。
 
-## 调试与性能工具链（2026-11-07 定，S1~S14 沿用）
-- **四层**：L0 画面证据（`--screenshot` + `example/` + 展示台）→ L1 **RenderDoc** 帧结构（外部 Launch Application 零代码改动；精确抓第 N 帧才加 `--capture-frame N` + 运行时 `LoadLibraryW(L"renderdoc.dll")`）→ L2 **NVRHI timestamp query** 真实 GPU 帧内计时（**整帧部分已由 M0.6 补掉**；按 pass 拆分 `--profile` 是穿插项，排在已确认序列 M0.7 高模资产 / M0.8 调试着色 / M0.9 回归总闸之后视需要插）→ L3 Nsight / PIX / PresentMon / Tracy 时间线。
-- 选 RenderDoc 当主工具是因为**同时覆盖 DX12 + Vulkan**；Nsight 偏 N 卡、PIX 只管 D3D12，退到 L3。工具全在进程外或 NVRHI 抽象层内，不进 CMake、不链接、不读 SDK 路径。
-- **HUD 的 `frame ms` 是 CPU 帧间隔，GPU ms 才是 GPU 耗时**（M0.6 起两者并排显示），验收 60fps / 性能退化看 GPU ms。
+## HUD / 模式约定（改前看 `docs/IMGUI-GUIDE.md`）
+- ImGui vendored **v1.91.9 稳定版**（不是 Carrot 的 1.92.7 WIP）；不用官方 backend，统一自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）。
+- `hudProjection()` Y 尺度必须为负。动态 VB/IB 必须 `initialState=CopyDest` + `keepInitialState=true`。
+- `HudFrame` 唯一双向 POD；`renderFrame(..., hud=nullptr)` 完全不碰 ImGui → 截图默认 `--no-hud`，老基线不动。
+- HUD 字符串必须 ASCII（字体图集无中文）；`--hud` 两后端 PNG 必然不同，别误判。
+- 面板高度上限 510：每次改 HUD 布局后 960×540 实拍确认完整。
+- `--mode` 分发器在 `core/modes.*` + viewer `runMode()`；每加模式只改枚举/名字/case，未知模式 exit 1。
+- M0.8：着色模式 `g_options.x` 分支（0 textured/1 normal/2 uv/3 tri-id），规范名 `tri-id`；tri-id 用 SV_PrimitiveID + pcg hash；线框 = `RasterFillMode::Wireframe`，pipeline 4 套；V/N 键；`--shading` 非法值 exit 1。
+- M0.6：`GpuTimer` 在 `renderer/src/gpu_timer.hpp`（4 slot 环形，懒建/poll 不阻塞）；deterministic 模式不写回真实 GPU ms；基线参数必须与 cases.json 完全一致；`frame ms`=CPU 间隔，GPU ms 才是 GPU 耗时。
 
-## M0.6 GPU 计时约定（2026-11-07 实测，改前看 `docs/s0/M0.6-PLAN.md`）
-- 两后端共享 `renderer/src/gpu_timer.hpp` 的 `GpuTimer`：4 slot 环形 `ITimerQuery`，`ensure()` 懒建（`--no-hud` 零调用）、`poll()` 不阻塞、无空闲 slot 本帧不计时；`begin()` 在 `cmd->open()` 后、`end()` 在 `close()` 前，包住整帧（clear+scene+hud）。
-- **截图确定性关键**：deterministic 模式下 renderer 不写回真实 GPU ms（viewer 已填固定样本 0.63 ms），否则基线 MD5 每次都不同。
-- **基线必须用与 cases.json 用例完全相同的参数生成**：M0.6 基线曾用默认 pitch 9.2 而用例是 `--pitch 9`，展示台回放 baselineMatch=False、16.9 万像素全图级差异，肉眼看还以为是渲染坏了。
-- 面板高度上限 400→460、双曲线 44/34 px：加一行内容就可能裁底，每次改 HUD 布局后 960×540 实拍确认整块面板完整。
-- 首次成功 resolve 落 `gpu timer resolved` 日志（`GpuTimer` 内 `resolvedOnce_`），是交互模式 GPU 计时的机械证据（实测 DX12 0.0369 / Vulkan 0.0380 ms）。
+## 调试工具链（S1~S14 沿用）
+- L0 画面证据 → L1 RenderDoc（外部 Launch 零改动；精确抓帧才加 `--capture-frame N`）→ L2 NVRHI timestamp（整帧已由 M0.6 补）→ L3 Nsight/PIX/PresentMon/Tracy。
+- RenderDoc 主工具因同时覆盖 DX12+Vulkan；工具不进 CMake、不读 SDK 路径。
 
-## M0.4 起的渲染约定（2026-11-07 实测，改动前先看 `docs/SHADER-CONVENTIONS.md`）
-- 资源与绘制逻辑收在 `renderer/src/scene.cpp`（两后端共享，只依赖 `nvrhi.h`）；两个 backend 只管 swapchain / depth / framebuffer / present，**不要再在两个后端里各抄一遍 shader 或资源创建**。
-- **SPIR-V 绑定偏移固定**：NVRHI 默认 `VulkanBindingOffsets` = SRV 0 / Sampler 128 / CB 256；slangc 必须带 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`。shader 只写 `register(b0/t0/s0)`，禁用 `[[vk::binding]]` 之类 GLSL 注解。
-- SPIR-V 入口恒为 `main`、DXIL 才是 `vsMain/psMain`（M0.3 老坑，Model shader 同样适用）。
-- MVP 用 NVRHI **volatile constant buffer**（`setMaxVersions(16)`），不是 push constant；`SceneConstants` 严格 160 B，C++ 的 `FrameParams` 尾部有 `bool cullBack`，**禁止整块 memcpy 进 cbuffer**。
-- 剔除方向：glTF CCW 外表面在本项目两后端都被判为 back-face（叠加 Slang + NVRHI Vulkan 视口换算），pipeline 必须 `setFrontCounterClockwise(true)`；默认 false 会剔掉正脸只剩内壁。「关剔除看内壁」用例 = `--dist 0.6 --cull none`（相机进模型内部），外部视角看不出差异。
-- 资产 `assets/models/Suzanne.glb` 是 Khronos 官方 glTF 三件套经 `scripts/pack-suzanne-glb.py` 打包的单文件（2.5 MB，内嵌贴图）；路径由 `NL_ASSET_DIR` 注入，不依赖 CWD。tinygltf 只在 `scene.cpp` 一个 TU 展开实现，`TINYGLTF_NO_STB_IMAGE_WRITE`。
-- 每阶段新增 GPU 资源时，**slot 级同步表（如 `frameFence_`）必须在 `createTargets()` 初始化**：`renderFrame` 在懒建 `ensurePipeline()` 之前就会按 slot 访问它，放错位置 = 首帧 139 段错误。
-
-## 成果展示台 / 用例库（2026-11-07 新增，`v0.4.1`）
-- **`example/cases.json` 是版本与用例的唯一数据源**：截图、`run.bat`、exe 映射、参数范围都从它读；新增用例只改它 + 把 PNG 放进 `example/<版本>/`，**不要另建第二份清单**。
-- 启动：`tools/showcase/start.bat`（或 `python tools/showcase/server.py --port 8787`）→ http://127.0.0.1:8787/；服务是 Python 标准库、零依赖，只从清单白名单读图、参数按 spec 校验、运行加串行锁（viewer 会开真实 GPU 窗口）。
-- 干净 clone 后 `build/` 不存在 → 先 `python tools/showcase/rebuild.py`：按 tag `git archive` 出历史快照，注入阶段无关 `build-m0.2.bat`（s0-init 自带脚本要 `reg.exe`，本机被禁），junction 复用 `thirdparty/slang/dist`，产物在 `build/showcase/<tag>/build/<BACKEND>/viewer.exe`。M0.4 直接用当前 `build/<backend>/viewer.exe`。
-- **双后端「画面一致」要分档**：正常视角 PNG 逐字节相同；M0.4 内壁 / resize 的 MD5 不同但像素差仅 ≤1/255（2 个 / 1 个像素，GPU 取整噪声）。展示台的 `compare_pixels()` 如实标 `bytes` / `near` / 不同，别笼统写「一致」。
-- 历史遗留：`docs/screenshots/` 是验收存档（含 M0.2 不同参数的旧图），`example/` 里的基线必须与用例命令的产物一致；M0.2 resize 基线已用现场产物替换。
-
-## 参考文档/示例（M0.3 拉取，已 vendored 本地，2026-11-06）
-- ⚠️ **被误导纠正**：NVRHI 官方仓库是 `NVIDIA-RTX/NVRHI`（不是 `NVIDIA/nvrhi`）；当前 `main` **不含 `examples/`**，权威 API 参考在仓库 `doc/Tutorial.md`+`doc/ProgrammingGuide.md`（已存 `thirdparty/nvrhi/doc/`）。
-- 之前误判“当前 main 用新版 beginRenderPass、与 vendored 老接口不兼容”——实测 `Tutorial.md` 仍是 `open→setGraphicsState→draw`，与本地 vendored `nvrhi.h`(2021 代) 同代，可直接对照；差异只在校验细节，每处调用仍需回 vendored 头核对签名。
-- Slang 官方仓库 `shader-slang/slang` 的 `examples/` 才是示例所在（已存 `thirdparty/slang-reference/`：`triangle`/`hello-world`(含 `vulkan-api`)/`example-base`）。示例用 Slang C++ API，我们用 `slangc` CLI，等价。
-- NVRHI 完整可跑示例在 **Donut-Samples `vertex_buffer`**（已存 `thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`），基于 Donut 框架包在 NVRHI 之上，看完整管线结构。Donut 本身(`NVIDIA-RTX/Donut`) 含三后端 DeviceManager/swapchain/present 样板。
-- Falcor(`NVIDIAGameWorks/Falcor`, master) = Slang 生产级框架，Slang 高级特性/材质系统参考。
-- 这些 vendor 参考是**文档级，不入构建**；`thirdparty/slang/dist`(工具链) 仍 gitignore。
+## 参考文档（已 vendored，文档级不入构建）
+- NVRHI 官方仓库 `NVIDIA-RTX/NVRHI`（main 无 examples/），权威参考 `doc/Tutorial.md`+`ProgrammingGuide.md`（存 `thirdparty/nvrhi/doc/`），每处调用回 vendored `nvrhi.h`(2021 代) 核对签名。
+- Slang 示例存 `thirdparty/slang-reference/`；NVRHI 完整示例存 `thirdparty/nvrhi-reference/donut-samples/vertex_buffer/`；Falcor = Slang 生产级参考。
+- Carrot：meshlet+meshoptimizer 是 2023-11-25 同一提交 `4c100761`（无截图 MD5 回归）；其 vendor+切簇塞一个提交的教训 → 我们拆版本铺路。
+- S1 卡住翻：bevy `bevy_pbr/src/meshlet/from_mesh.rs`（本机 `E:\UE_STUDY_2026\bevy\`）、meshoptimizer `src/meshlet.cpp`、`docs/blogs/jms55-bevy-meshlet.md`。

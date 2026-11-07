@@ -97,15 +97,17 @@ add_library(nl_imgui STATIC
 )
 target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 
-# ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器。不依赖任何图形 API 头 ----
+# ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
     core/src/assert.cpp
     core/src/window.cpp
     core/src/camera.cpp
     core/src/modes.cpp
+    core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
 target_link_libraries(nl_core PRIVATE glfw)
 
 # ---- renderer：所有图形 API / NVRHI 符号只活在这里 ----
@@ -121,7 +123,6 @@ target_include_directories(nl_renderer
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
-            ${THIRDPARTY}/tinygltf
 )
 target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui)
 target_compile_definitions(nl_renderer PRIVATE
@@ -214,10 +215,15 @@ target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw)
 # shader 字节码先于 viewer 生成（viewer 运行时要读 NL_SHADER_DIR 下的 .spv/.dxil）
 add_dependencies(viewer nl_shaders)
 
+# ---- M1.0：nanite-tools —— S1 离线网格工具（cluster / simplify / dag / stat） ----
+# 只链 nl_core（日志 + mesh_io），零图形 API；不依赖 renderer / viewer。
+add_executable(nanite-tools nanite-tools/main.cpp)
+target_link_libraries(nanite-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer)
+    foreach(t nl_core nl_renderer viewer nanite-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -226,3 +232,8 @@ endif()
 # 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
 enable_testing()
 add_test(NAME m0.5-selftest COMMAND viewer --selftest)
+# M1.0：nanite-tools 对官方 Suzanne 资产的机械验收（顶点 / 三角 / 子网格数）
+add_test(NAME s1-tools-stat
+         COMMAND nanite-tools stat ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
+set_tests_properties(s1-tools-stat PROPERTIES
+    PASS_REGULAR_EXPRESSION "triangles : 3936")
