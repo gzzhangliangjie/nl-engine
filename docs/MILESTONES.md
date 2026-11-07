@@ -604,6 +604,6 @@
 3. **误差不单调**：原先 `lodMeta.maxError` 存「生成下一层引入的误差」，跨层会忽大忽小，S3 DAG cut 判据不成立。按 UE `ClusterDAG.cpp:1441` / bevy `:146-151` 改成 parent error 单调不减，并加自动断言。
 4. **METIS nparts=1**：逐层后期簇数 ≤8 时 `nparts=1`，`METIS_PartGraphKway` 不接受 <2 → `grouping.cpp` 单组直通 + 连通性 fixup。
 5. **NMeshLodMeta 定义位置**：结构体曾放在 `NMeshData` 之后导致 C3646，须先定义后使用。
-6. **历史版本 exe 映射（本轮未落地）**：按规范每出新版应把上一版 exe 改指 `build/showcase/{tag}/` 并跑 `rebuild.py` 补建（用 `git archive <tag>` + 该 tag 的 `build-m0.2.bat` 全量构建）。本轮补建任务被用户取消，产物只落了 `s2-group/DX12` 一个 exe，故 `s2-group`/`s2-qem` 两卡的工具 exe 映射**暂回** `build/{dx12,vulkan}/nanite-tools.exe`，保证总闸可跑；待补建完成后再按规范改回 `build/showcase/{tag}/build/{DX12,VULKAN}/`。渲染用例的历史 viewer 映射不受影响。
+6. **工具卡历史 exe 补建——已定案不做**：M2.2 期间曾按「每出新版把上一版 exe 改指 `build/showcase/{tag}/`」尝试给 s2-group/s2-qem 的 nanite-tools.exe 补建历史快照（`git archive <tag>` 全量构建），跑出 1/4 后取消。复核后定案：历史快照机制是为渲染卡基线 PNG 逐字节复现服务的，工具用例无基线可比、现场实跑即权威，S1 起工具卡事实口径一直是当前构建。`s2-group`/`s2-qem` 两卡映射维持 `build/{dx12,vulkan}/nanite-tools.exe`，不再补建；规范已修订到 ROADMAP「里程碑交代规范」（工具卡 exe 恒指当前构建，`rebuild.py` 只管渲染 viewer 快照）。
 
 **下一步**：M2.3 `viewer --mode lod N` + ImGui 滑条切层，肉眼验收「任意相邻层拼接无裂缝」（S2 收官 tag `s2-done`）。
