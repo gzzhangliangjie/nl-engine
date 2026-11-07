@@ -24,6 +24,11 @@
 - `docs/s0/CARROT-BOOTSTRAP.md`——**2020-11 起从空仓库到能看画面的前 21 天**，节奏仅作参考、不做逐行对齐；第三节明确列了他早期不复刻的弯路（换底座、晚拆模块、相机硬搓、resize 修 4 次）。
 - `docs/carrot-history.md`——2023 年之后的 Nanite×GI 时间线（带 hash，可 `git show` 看实况 diff），逐行对齐 S1~S13，含「实况才看得到」的三条教训。
 
+**UE 源码使用规矩（2026-11-07 定；完整源码在 `E:/UnrealEngine/5.8.4/`，Nanite/Lumen 模块齐全）**：
+- **只读、不抄**：UE 的 LICENSE（EULA）与本项目 MIT 不兼容，**任何 UE 代码不许复制进 nl-engine 仓库**——许可证污染。参考的是「结构和边界情况怎么想全」，一行代码都不进 repo；这比 Carrot 的「参考节奏不复刻弯路」更严一档。
+- **定向读，不漫游**：UE Renderer 上万文件，90% 与本项目无关。只读步骤对照表里点名的那几个文件（S5 `NaniteCullRaster.cpp`、S10 `LumenScreenProbeGather*`，路径前缀 `Engine/Source/Runtime/Renderer/Private/`），每次打开前先带着具体问题。
+- **分工**：Carrot = 从零搭建的**节奏**（S0~S1）；bevy = meshlet **数据结构与 shader**（S1~S4）；**UE = 工业终态的满分答卷**——S4~S13 每步卡壳时翻它，看边界情况（接缝、crack、fallback、异步构建预算）是怎么处理全的，这正是我们验收判据最容易漏的部分。穿插项研究项目（zauonlok / Brioche 等）与 UE 互不替代：一个管算法可读性，一个管工业完备性。
+
 ## 步骤 → 本地代码对照总表
 
 | # | 本地参考文件（E:\UE_STUDY_2026\ 下） | 对应博客/资料 |
@@ -195,20 +200,45 @@ nl-engine/
 
 > **M0.x 必做序列冻结在 M0.9，做完立刻进 S1**——不往 0.x 里继续加版本，也**不为渲染研究单开第二条并行线**（并行线会让 `kStage` 阶段检查、展示台 exe 映射、M0.9 回归总闸全部变成两份，互相打架）。想做的研究一律降级为「穿插项」：硬规则不变（example 归位 + cases.json + `--check` 退出 0），但插在主线任意两步之间，做完就回主线。tag 用名字（如 `pbr-direct`、`toon`），**不占用 m0.* 编号**。
 
-| 穿插项 | 内容 | 建议插在哪 | 与主线的关系 |
-|---|---|---|---|
-| PBR 直射光 + 贴图采样 | glTF 贴图进 GPU（`t0/s0` 绑定，baseColor 注意 sRGB、ORM 线性）、Cook-Torrance GGX 直射光 + 常数环境光、metallic/roughness 因子；走 `--shading pbr`（M0.8 的 shader 分支机制现成） | **S1~S6 之间插一次** | **S7 的前置**：S7 本来就含「PBR 直光」，提前做掉，S7 只剩 vis buffer + vertex pulling + 材质解析，不会四件事挤一个里程碑 |
-| 卡通着色（ramp + 描边） | `--shading toon`：阶梯漫反射 + 边缘光 + 阶梯高光；描边走背面外扩 hull（同一 render pass 里画第二遍：反转剔除 + 顶点沿法线外扩），零离屏 RT | 随时；或排 P7 与 S14 同类 | 与 Nanite/Lumen 研究目标零耦合，纯展示性；成本最低（只改 shader 分支 + 多一个 draw，pipeline 复用 M0.8 的组合表扩一档） |
-| `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 |
+| 穿插项 | 内容 | 建议插在哪 | 与主线的关系 | 详细计划 |
+|---|---|---|---|---|
+| PBR 直射光 + 贴图采样 | glTF 贴图进 GPU（`t0` baseColor sRGB + `t1` ORM 线性、`s0` 共用 sampler）、新开 `b1` LightConstants、Cook-Torrance GGX 直射光 + 常数环境光；走 `--shading pbr`（M0.8 的 shader 分支机制现成） | **S1~S6 之间插一次** | **S7 的前置**：S7 本来就含「PBR 直光」，提前做掉，S7 只剩 vis buffer + vertex pulling + 材质解析 | `s0/PBR-DIRECT-PLAN.md` |
+| 卡通着色（ramp + 描边） | `--shading toon`：三段阶梯漫反射 + 阶梯高光 + rim；描边走背面外扩 hull（同一 render pass 第二个 draw：`CullMode::Front` + view-space 法线外扩，先画写深度），零离屏 RT | 随时；或排 P7 与 S14 同类 | 与 Nanite/Lumen 研究目标零耦合，纯展示性；成本最低（只改 shader 分支 + 多一个 draw，pipeline 组合表扩一档） | `s0/TOON-PLAN.md` |
+| 光栅阴影（ShadowMap / PCF / PCSS） | 深度 pass + 阴影贴图采样 + PCF 软化 / PCSS 半影估计 | S1~S6 之间或 S7 后 | 主线 S9 走**光追阴影射线**，光栅阴影是对照路线；纯展示 + 与 PBR 穿插项组合成完整直光 | GAMES202 hw1 拆解，开工时补计划 |
+| PRT 球谐环境光（静态场景） | 离线预计算 cubemap → SH 系数，运行时 SH(dot(n, wi)) 环境光 | `pbr-direct` 之后 | **PBR 穿插项「不做 IBL」缺口的廉价补法**；也可当 S9 参考图工作流的降级对照 | GAMES202 hw2 拆解，开工时补计划 |
+| 屏幕空间 AO（SSAO） | 深度/法线 buffer + 半球采样（或 GTAO 近似） | `pbr-direct` 之后 | 主线 S10 GI 才补间接光，SSAO 先填直光阶段的接触暗角；PhasmaEngine 用 FidelityFX CACAO 可对照 | 开工时补计划 |
+| 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | TAA 的 motion vector 与 S12 时间累积共享；PBR/卡通最终都要 tonemap 出片 | 开工时补计划 |
+| `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 | — |
+
+**外部技术点归宿对照（2026-11-07 对齐，不单开新线，防重复建设）**
+
+| 来源 | 技术点 | 归宿 |
+|---|---|---|
+| GAMES202 | ShadowMap / PCF / PCSS | 穿插项 `shadow-map`（上表；级联阴影 CSM 是其进阶） |
+| GAMES202 | PRT / 球谐环境光 | 穿插项 `prt-sh`（上表） |
+| GAMES202 | SSR | **排 S6 之后插**：Hi-Z SSR 复用 S6 的深度金字塔基建，一鱼两吃；P7/S14 扩选 |
+| GAMES202 | Kulla-Conty BRDF | 并入 `pbr-direct` 进阶（能量补偿，不单开） |
+| GAMES202 | SVGF / 降噪 | **主线 S12 本体**（时空滤波就是 SVGF 思想），不穿插 |
+| PhasmaEngine | SSAO（FidelityFX CACAO 可对照） | 穿插项 `ssao`（上表） |
+| PhasmaEngine | 级联阴影 CSM（GPU-culled cascades） | 并入 `shadow-map` 进阶 |
+| PhasmaEngine | 后处理链（tonemap/AA/bloom/DoF） | 穿插项 `post-chain`（上表） |
+| PhasmaEngine | TAA + RCAS upscale | 并入 `post-chain`；motion vector 与 S12 时间累积共享 |
+| PhasmaEngine | Forward+ 分块光源剔除 / 渲染图 / shader 热重载 | 归 **P8 引擎化**（E1 多光源 / E2 热重载时才有意义，穿插期不做基建） |
+| PhasmaEngine | 两相 temporal Hi-Z 遮挡剔除 / meshoptimizer 簇层级 / visibility buffer / MaterialX→Slang | **主线 S6 / S1~S5 / S7 本来就有**——Phasma 实证了这条路可走；MaterialX→Slang 远期不归档 |
+| 作者其他项目（2026-11-07 二次调研） | PepcyCh `opengl-cs-rasterizer`（compute shader 光栅器 + Hi-Z culling） | **主线 S6 + S14 直接参考**——比 CPU 软渲更贴 GPU 路线的「compute 光栅」活样本 |
+| 作者其他项目 | bisemutum Wavefront 路径追踪 / PepcyCh `cuda-path-tracer` | **S9 离线参考图模式**的对照实现 |
+| 作者其他项目 | HanetakaChou `Voxel-Cone-Tracing` | GI 另一条路线，**S14 备选视角**对照 Lumen（S10/S11），不单开 |
+| 作者其他项目 | Brioche SSS/LTC/SHaRC/NeRF-NRC、ANARI-USD Hydra、Console-Tutorial(PS5)、christoskaramou `RenderLens`(Godot 性能 MCP) | 与 Nanite×Lumen 主线无关，**远期不归档**；做卡通人物项目时再翻 Brioche 的 SSS/脸影 |
 
 **边界**：穿插项不做 IBL / 阴影贴图 / 后处理链（bloom、tonemap）——PBR 补全到那一步就够 S7 用；卡通不做 SDF 脸影等进阶项，那是要真做卡通项目时另立门户的事。
 
-**渲染研究参考项目（2026-11-07 调研）**：
-- `zauonlok/renderer`——C89 从零软件渲染器，Blinn-Phong / PBR 双工作流 / IBL / 阴影贴图 / ACES，20+ 场景按 CLI 名选用例（与本项目 example/ 用例库同思路）；PBR 实现细节可逐段对照。
-- `HanetakaChou/Brioche-Puppet`——自写渲染层 **D3D12/Vulkan/Metal 三后端**，PBR + 卡通（赛璐璐脸 + 矢状面 SDF 影）+ ReSTIR；多后端对称与本项目最像，卡通进阶效果看它。
-- `PepcyCh/bisemutum-engine`——C++20 个人 RHI（Vulkan + D3D12）+ 渲染图 + PBR 前向/延迟/路径追踪/DDGI，结构上是本项目的放大版。
-- `christoskaramou/PhasmaEngine`——Vulkan + DX12 学习引擎，**shader 用 Slang**、MaterialX→Slang、visibility buffer + meshlet 簇，与 S1~S7 方向直接重叠，可抄验证思路。
-- GAMES202 各作业仓库——一作业一个技术点（ShadowMap/PCF/PCSS、PRT 球谐、SSR、Kulla-Conty），当主线技术点拆分清单用。
+**渲染研究参考项目（2026-11-07 调研；融合方式：不看它走硬走软，看它哪一层最可读）**：
+- **融合判据（先定这个再看代码）**：学**算法本身**（BRDF / 阴影 / 滤波为什么这么算）→ 翻软渲（zauonlok，C89 零 API 噪音）；学**GPU 工程化**（pass 组织 / 多后端 / 同步）→ 翻硬件项目（Brioche-Puppet / bisemutum）；**落地一律过自己的关**（slangc 单源双目标 + 绑定约定 + example 回归），谁都不照抄。主线已定硬件（NVRHI），软件光栅不是路线选项——它是算法教室 + S14 备胎（Nanite 本尊就是软硬混合，S14 选「软光栅亚像素」时 zauonlok 光栅化器 + bevy `visibility_buffer_software_raster.wesl` 才升级为移植素材）。
+- `zauonlok/renderer`——C89 从零软件渲染器，Blinn-Phong / PBR 双工作流 / IBL / 阴影贴图 / ACES，20+ 场景按 CLI 名选用例（与本项目 example/ 用例库同思路）。**融合点**：`pbr-direct` / `shadow-map` 的算法参照（公式逐行对拍）；用例组织已同构，不另学。
+- `HanetakaChou/Brioche-Puppet`——自写渲染层 **D3D12/Vulkan/Metal 三后端**，PBR + 卡通（赛璐璐脸 + 矢状面 SDF 影）+ ReSTIR。**融合点**：多后端对称的工程组织对照；`toon` 穿插项与卡通进阶（SDF 脸影）的效果标杆。
+- `PepcyCh/bisemutum-engine`——C++20 个人 RHI（Vulkan + D3D12）+ 渲染图 + PBR 前向/延迟/路径追踪/DDGI。**融合点**：RHI 双后端上再长渲染图的活样本——**P8 引擎化（渲染图）时翻**，穿插期不碰基建。
+- `christoskaramou/PhasmaEngine`——Vulkan + DX12 学习引擎，**shader 用 Slang**、MaterialX→Slang、visibility buffer + meshlet 簇。**融合点**：S1~S7 各步的验证思路（归宿已并入上表对照）；Slang 的生产级用法参考。
+- GAMES202 各作业仓库——一作业一个技术点，当主线技术点拆分清单用（归宿已对齐，见上表）。
 
 ---
 
