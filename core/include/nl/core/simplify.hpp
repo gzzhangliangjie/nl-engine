@@ -18,10 +18,27 @@
 //     ExternalEdges 端点生效，简化后按位置对重建标记（1080-1091）。
 // 跨层无裂缝由 DAG cut 以 group 为原子单位保证，不靠把历史锁点一直背下去。
 //
-// QEM（Garland & Heckbert）：每点累积邻域三角形的面积加权平面二次型，
-// 边折叠队列按折叠后误差升序；折叠位置取二次型最优点（退化时回退端点/
-// 中点）。误差单位 = 世界空间长度（sqrt 二次型值），与 M1.1 叶子误差同口径。
+// QEM（Garland & Heckbert）：每点累积邻域三角形的面积加权平面二次型。
+// 折叠结构语义对齐 meshoptimizer simplifier.cpp 主循环（2026-11-07 移植）：
+//   - 折叠 = 源端点并入目标端点，目标位置不动（不创造二次型最优点）；
+//   - 每个顶点每 pass 至多参与一次折叠（collapse_locked → moved，每 pass
+//     清零）且 pass 内有序不重排；pass 间从当前拓扑重建候选、重排。
+// 误差单位 = 世界空间长度（sqrt 二次型值），与 M1.1 叶子误差同口径。
 // 退化保护：零面积三角形不贡献平面；共面/细长由面积权重自然 clamp。
+// 翻转预检（折叠应用前，两道）：
+//   1) 单步 cos75°：meshoptimizer simplifier.cpp:1230-1246 口径的转角检查
+//      ——转角超限的折叠直接拒绝。纯 90°（dot<=0）判定挡不住一串各自合法
+//      的近 90° 折叠累计翻面（S2.0 画廊黑斑的最初根因）。
+//   2) 绝对朝向锚（超出官方的加码，M2.3a 判决实验定稿保留）：变形后法线
+//      与本三角「当前三个角点法线之和」的夹角不得超过 ~87°（kOrientCos=
+//      0.05 ≈ 标准线 cos=0 留数值余量）。锚参考随折叠换角**同步更新**、
+//      预判用**更新后**参照——与 check-orient 检查器（rebuildMeshlets 继承
+//      的 L0 原始场口径）完全同参照系。判决实验：官方两家均无存储参照场
+//      （meshopt 实时 vertex_positions、UE TriWillInvert 实时 GetPosition），
+//      纯官方口径（cos75°+多 pass+开放边界锁全抄）单层 inward=1（oracle
+//      同判据 2），但跨层硬目标链累计 L1=1→L6=8（worst cos -0.972）；
+//      锚把全链压到 0，比率无损（50.1% vs oracle 49.5%）。官方没有逐层
+//      硬目标链场景，无现成机制可抄，锚是经过判决实验的必要补充。
 //
 // 纪律：core/ 零图形 API 符号；本文件不碰 METIS（聚组在 grouping.cpp）、
 // 不碰 meshoptimizer（对照 oracle 在 nanite-tools/main.cpp）。meshoptimizer
@@ -56,6 +73,10 @@ struct SimplifyResult {
     // canonical 点位置（简化后；边界点 = 原位置位级不变；3*pointCount）。
     // 未被任何三角形引用的点保留原位置。
     std::vector<float> pointPositions;
+    // canonical 点法线（本层输入法线和，恒外向；3*pointCount）。rebuildMeshlets
+    // **继承**而非重算：位置全程不动，输入法线和跨层唯一确定，层间法线场
+    // 无漂移；若按邻面重算，法线场随层几何漂移，跨层朝向检查口径不一致。
+    std::vector<float> pointNormals;
     std::uint32_t pointCount = 0;
     // 组间边界 canonical 点集合（排序去重）。S3 DAG 合并还要用——
     // 该集合必须持久化（随 M2.2 的分层 .nmesh 落盘），不许只活在内存里。

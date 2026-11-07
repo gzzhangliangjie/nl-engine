@@ -14,7 +14,7 @@
 - **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`，登记 `example/cases.json`（唯一数据源，别建第二份清单）；验收/tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
 - **M0.9 起总闸：提交/tag 前 `python tools/regression.py` 全绿才放行**（全量历史用例 × 双后端比对基线）。
 - 每个小里程碑本地提交一波；`docs/MILESTONES.md` 四栏（动作/提交版本/完成情况/踩坑）写实追加。
-- 展示台 `tools/showcase/start.bat` → http://127.0.0.1:8787/；干净 clone 先 `python tools/showcase/rebuild.py`；每出新版把上一版 exe 映射改 `build/showcase/{tag}/` 并跑 rebuild.py 补建。
+- 展示台 `tools/showcase/start.bat` → http://127.0.0.1:8787/；干净 clone 先 `python tools/showcase/rebuild.py`；**exe 快照规范（2026-11-07 定案）：仅渲染 viewer 卡**每出新版把上一版映射改 `build/showcase/{tag}/` 并跑 rebuild.py 补建；**工具卡 exe 恒指当前构建** `build/{dx12,vulkan}/nanite-tools.exe`（无基线可比、现场实跑即权威），不建历史快照、不再补建。
 - 双后端画面一致分档：`bytes`（MD5）/ `near`（≤1/255 且 ≤2 px）/ FAIL，别笼统写「一致」。
 
 ## 本机环境（2026-11-06 实测）
@@ -25,9 +25,7 @@
 ## 版本
 - tag 序列：`s0-init`→M0.1、`s0-device`→M0.2、`s0-triangle`→M0.3、`s0-model`→M0.4、`s0-done`→M0.5、`m0.6` GPU 计时、`m0.7` 高模资产+`--model`、`m0.8` 线框/调试着色(f1ba95f)、`m0.9` 一键回归总闸（0.x 终点，58/58 ALL GREEN）。`v0.1.0`/`v0.4.1` 是快照 tag，与里程碑 tag 互不覆盖。
 - **S1 收官（2026-11-07）**：`s1-tools`→M1.0、`s1-cluster`→M1.1、`s1-asset`→M1.2、`s1-done`→M1.3（kStage=S1.0，回归 82/82）。
-- **S2 进度（2026-11-07）**：`s2-group`→M2.0 METIS 簇聚组（回归 88/88）；`s2-qem`→M2.1 组内 QEM 简化+边界锁定已过（回归 94/94，ctest 10/10）。core/simplify：QEM 面积加权二次型+有序集队列，边界锁定看组归属（≥2 组引用即锁）+接缝边保护；weld 抽 `weldPositions` 单一出处；meshoptimizer 1.3 vendored 仅 nanite-tools 链作 LockBorder oracle。Suzanne 50.2%、球 54.4%（2-tri 折叠越目标所致，口径内）。`s2-loop`→M2.2 逐层循环已过（ctest 12/12）：**严格对齐标准做法，不自造机制**——每层重新聚组→边界锁按当前分组全量重算（不跨层继承）→每组硬目标 50%→buildMeshlets 重切；依据 bevy `from_mesh.rs:114-120/520-523`、`:556`、UE `ClusterDAG.cpp:1470`、`Cluster.cpp:1023-1039`、meshopt `simplifier.cpp:2492`。误差按 UE:1441/bevy:146-151 单调化为 parent error。`.nmesh` **v2** 尾部 section 持久化 level/maxError/lockedPositions（v1 逐字节兼容），lockedPositions = 本层组间边界点（顶层为空），S3 DAG cut 直接吃。Suzanne **6 层** 3936→1976→985→490→246→124，锁点 622→117→84→35→0→0 递减；64x64 网格 7 层。**曾自造「跨层累积锁定 + minReduction 30% 提前收敛」导致只出 3 层，核源码后整套推翻**（用户要求「千万不要自己发明」）；M2.1 边界锁实现一行未改，它本来就是标准 LockBorder 语义（meshopt:526-529）。下一步 **M2.3 viewer --mode lod N + ImGui 滑条**，肉眼验收相邻层无裂缝（tag `s2-done`）。
-- 穿插项归宿（防重复建设，总表在 ROADMAP「穿插项」节）：ShadowMap/PCF/PCSS=`shadow-map`、PRT/球谐=`prt-sh`、SSR=排 S6 后（复用 Hi-Z）、Kulla-Conty=并入 pbr-direct、SSAO=`ssao`、后处理链=`post-chain`（S7 后插）、Forward+/渲染图/热重载=归 P8。
-- Suzanne = 3,936 tri（11,808 索引），旧口径 504 tri 是错的；IcoSphereDense = 327,680 tri / 4,929 簇。
+- **S2 收官（2026-11-07）**：`s2-group`→M2.0（回归 88/88）、`s2-qem`→M2.1（94/94）、`s2-loop`→M2.2（102/102）、**`s2-done`→M2.3 已过（提交 f5bfc9a，ctest 12/12、回归 118/118 ALL GREEN）**。M2.3：viewer `--mode lod N` + HUD 滑条；`Scene::uploadClusterMesh` 首载与切层同一条路（shader/pipeline/binding 全复用）；`probeLodLevelCount` 在 backend.hpp（两后端共用）；HUD 滑条仅 lodCount>1 显示，标 `lod N/M tri maxErr`；缺省着色 normal、显式 `--shading` 生效（初版三元式把 lod 缺省叠进 cluster 分支写反，显式 normal 被吞——先场景缺省再覆写）。负向 viewer tool 卡必须带 `--screenshot` 否则进交互循环超时。Suzanne.lod0..5.nmesh（~0.5MB）入仓，IcoSphereDense 分层不入仓。kStage=S2.0；m0.9 gate-hud 基线随 stage 文本重拍（预期动作）。验收：六层画廊 `example/s2-done/lod-layers.png`（真实 GPU 截图）无裂缝无洞；L4/L5 黑面 --cull none 复检为 M2.2 口径翻转面。下一步 **S3 构建 cluster DAG + fallback mesh**（`nanite-tools dag`，cut 以 group 为原子吃 v2 的 lockedPositions/parent error）。
 
 ## S2 离线管线约定（M2.0 起）
 - METIS vendored 在 `thirdparty/metis/`（METIS 5 + GKlib，自写 CMake 编 `nl_metis`；metis.h 宽度宏 32 位已固定，MSVC 宏 `__thread=__declspec(thread)` 在 vendored CMake 固化）。CONTIG=1 仅整图连通时设，否则 rc=-4。

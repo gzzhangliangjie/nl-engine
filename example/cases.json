@@ -1555,11 +1555,11 @@
    "name": "viewer --mode lod N + HUD 滑条（S2 收官）",
    "tag": "s2-done",
    "date": "2026-11-07",
-   "summary": "M2.3：--mode lod N 直接渲染分层资产 assets/meshlets/Suzanne.lodN.nmesh（nanite-tools lod 产出，6 层入仓共 ~0.5MB），HUD 滑条运行时切层。切层 = scene.uploadClusterMesh 读盘→展开→新建 VB/IB 上传→替换句柄，shader/pipeline/binding 全部复用；层号/parent error 从 .nmesh v2 尾部 section 读回，HUD 标 lod N/M tri maxErr。缺省着色 normal（几何不连续在逐面法线色上最敏感）。renderer 探测 <stem>.lodN.nmesh 从 0 连续计数；没有分层资产 / N 越界 / 非数字一律 exit 1，绝不静默回退。kStage 升 S2.0。",
+   "summary": "M2.3：--mode lod N 直接渲染分层资产 assets/meshlets/Suzanne.lodN.nmesh（nanite-tools lod 产出，7 层入仓共 ~0.5MB），HUD 滑条运行时切层。切层 = scene.uploadClusterMesh 读盘→展开→新建 VB/IB 上传→替换句柄，shader/pipeline/binding 全部复用；层号/parent error 从 .nmesh v2 尾部 section 读回，HUD 标 lod N/M tri maxErr。缺省着色 normal（几何不连续在逐面法线色上最敏感）。renderer 探测 <stem>.lodN.nmesh 从 0 连续计数；没有分层资产 / N 越界 / 非数字一律 exit 1，绝不静默回退。kStage 升 S2.0。M2.3a 判决实验根治翻转面：朝向锚 + 法线继承（rebuildMeshlets 继承输入法线和），check-orient 全链 L0..L6 inward=0（纯官方口径跨层累计 1→8）。",
    "acceptance": [
-    "滑条切层肉眼验收：L0..L5 同机位六层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞；L4/L5 的黑色面经 --cull none 复检为翻转面（M2.2 已知口径，几何完好非裂缝）",
+    "滑条切层肉眼验收：L0..L6 同机位七层画廊（example/s2-done/lod-layers.png）逐层简化、无裂缝无洞无黑斑（M2.3a 判决实验后翻转面根治，check-orient exit 0）",
     "负向全拒：--lod 非数字 / 越界 / 资产无分层文件均 exit 1；selftest 15/15（含 lod 模式分发）",
-    "双后端 pair 基线逐字节一致（L0/L3/L5 + HUD 960x540 滑条自证 lod 2/5 tri 985 maxErr 0.0250）",
+    "双后端 pair 基线逐字节一致（L0/L3/L5 + HUD 960x540 滑条自证 lod 2/6 tri 982 maxErr 0.0435）",
     "ctest + 回归总闸全绿；交代物：展示台 s2-done 版本卡 + run.bat + docs/s2 归档"
    ],
    "exe": {
@@ -1604,7 +1604,7 @@
      "id": "lod-l3",
      "name": "lod L3：490 tri（滑条中段）",
      "kind": "pair",
-     "note": "组数 4、锁点 35；法线着色下组间接缝无裂缝。maxErr 0.0250（parent error，HUD 同值）。",
+     "note": "组数 4、锁点 36；法线着色下组间接缝无裂缝。maxErr 0.0639（parent error，HUD 同值）。",
      "baselines": {
       "dx12": "example/s2-done/lod-l3-dx12.png",
       "vulkan": "example/s2-done/lod-l3-vulkan.png"
@@ -1635,9 +1635,9 @@
     },
     {
      "id": "lod-l5",
-     "name": "lod L5：124 tri 最粗层",
+     "name": "lod L5：140 tri 最粗层",
      "kind": "pair",
-     "note": "3 簇 / 0 锁点 / maxErr 0.0260。L4/L5 有已知翻转面（M2.2 口径），--cull none 复检几何完好，不是裂缝。",
+     "note": "5 簇 / 0 锁点 / maxErr 0.4082。M2.3a 判决实验后无翻转面：全链 inward=0，法线继承 L0 原始场。",
      "baselines": {
       "dx12": "example/s2-done/lod-l5-dx12.png",
       "vulkan": "example/s2-done/lod-l5-vulkan.png"
@@ -1670,7 +1670,7 @@
      "id": "lod-hud",
      "name": "lod L2 + HUD（960x540，滑条自证）",
      "kind": "pair",
-     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/5 tri 985 maxErr 0.0250。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
+     "note": "HUD 自证：mode lod / model Suzanne.nmesh / lod level 滑条=2 / lod 2/6 tri 982 maxErr 0.0435。滑条走 HudFrame 双向 POD，与 cull/color 同一条通道。",
      "baselines": {
       "dx12": "example/s2-done/lod-hud-dx12.png",
       "vulkan": "example/s2-done/lod-hud-vulkan.png"

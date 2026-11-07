@@ -77,7 +77,7 @@ def main() -> int:
     H = top + rows * (th + cap) + (rows + 1) * gap
     canvas = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(canvas)
-    draw.text((gap + 4, 18), "nl-engine M2.3  viewer --mode lod N  (Suzanne, one camera, six layers)",
+    draw.text((gap + 4, 18), f"nl-engine M2.3  viewer --mode lod N  (Suzanne, one camera, {len(tiles)} layers)",
               fill=TEXT, font=font(22))
 
     for i, (img, lv, tris, err) in enumerate(tiles):

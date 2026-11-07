@@ -626,3 +626,22 @@
 3. **m0.9 HUD 基线漂移属预期**：kStage 文本在 HUD 里，升 S2.0 后 gate-hud 双后端 FAIL；重拍两张基线即恢复全绿（与 M1.3 升 S1.0 同一动作）。
 
 **下一步**：S3 构建 cluster DAG + fallback mesh（`nanite-tools dag`；DAG cut 以 group 为原子单位吃 `.nmesh` v2 的 lockedPositions / parent error）。
+
+## M2.3a 简化器翻转面根治（判决实验定稿：朝向锚 + 法线继承）
+
+**动作**：用户方法论三原则（①标准先行 ②抄全不遗漏 ③官方 oracle 对比）驱动。核源码定参照系事实：meshopt/UE 翻面判定均**无存储参照场**（meshopt 实时 vertex_positions、UE TriWillInvert 实时 GetPosition，`MeshSimplify.cpp:779`）；判决实验摘锚跑纯官方口径（cos75°+多 pass+开放边界锁全抄）——单层 inward=1（oracle 2）但**跨层硬目标链累计 L1=1→L6=8（worst cos -0.972）**，官方无逐层链场景无现成机制可抄 → 锚定稿保留；`rebuildMeshlets` 改**法线继承**（继承输入法线和，不按邻面重算）：位置全程不动、法线场跨层不变 = L0 原始场，与 check-orient 审计同口径；锚对无法线数据的合成网格退化为纯官方判定（自检回归当场抓住 ratio=100%）；自检预期与 LockBorder 官方语义对齐（孤四边形不折叠、末层收敛停滞例外）。
+
+**提交版本**：（本轮，s2-done 之后）
+
+**完成情况**
+- 判决数据：同分组同 50% 硬目标下 ours inward 0 / worst +0.063 vs oracle inward 2 / worst -0.333；全链 check-orient L0..L6 七层全 PASS（exit 0），纯官方口径对照 L1=1→L6=8。
+- 七层画廊（真实 GPU 截图，`example/s2-done/lod-layers.png`）：3936/1970/982/490/248/140/104 tri，**无黑斑无裂缝无洞**，L6 眼睛仍完整——M2.2 以来「L4/L5 已知翻转面」口径作废。
+- ctest 12/12、回归总闸 118/118 ALL GREEN、`server.py --check` OK；分层资产 7 层（~0.52MB）重拍入仓。
+
+**踩坑情况**
+1. **锚退化拒绝一切折叠（自检当场抓住）**：合成测试网格无法线数据 → 法线和全零 → 锚 refLen≈0 → 拒绝所有折叠 ratio=100%，qem/loop 自检 5 例 FAIL。修正：锚只在有法线信息时加约束，refLen 退化的三角退化为纯官方 cos75° 判定（保守方向不变：真实资产锚生效，合成网格退化不出错）。
+2. **自检预期滞后于官方语义**：孤四边形「2→1」预期写在开放边界锁加入前——meshopt LockBorder 同样不折叠（边界全锁+对角折叠会清空整组）；loop「每层 30~70%」在末层收敛停滞（89.6%）越界。测试预期对齐官方语义，非凑结果。
+3. **VULKAN viewer 被 cp 盖掉后 nmake 不重链**：手动 cp DX12 viewer.exe 到 VULKAN 目录后时间戳变新，重编「Built target」零编译行、二进制仍是 DX12（日志 shader=dxil 暴露）。删 exe 强制重链恢复 shader=spv。教训：NMake 只看时间戳，覆盖产物必须删掉再编；backend 自证看 `shader=spv/dxil` 与 `backend: vulkan/dx12` 日志。
+4. **判决实验方法论沉淀**：「纯官方 vs 加码」的取舍必须跑同分组同目标对照实验，不是看谁说得有理。锚两次参照系 bug 的根因（出生角点 vs 当前角点、更新前 vs 更新后参照）都是实验抓的，不是审代码审出来的。
+
+**下一步**：S3 构建 cluster DAG + fallback mesh（`nanite-tools dag`；DAG cut 以 group 为原子单位吃 `.nmesh` v2 的 lockedPositions / parent error）。

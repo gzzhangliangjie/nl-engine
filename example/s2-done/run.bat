@@ -31,8 +31,8 @@ for %%n in (0 1 2 3 4 5) do (
     "%DX%" --mode lod --lod %%n --model Suzanne.nmesh --screenshot "%OUT%\s2-done-lod-l%%n-DX12.png" --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --shading normal || exit /b 1
 )
 python "%ROOT%\tools\lod_gallery.py" --prefix "%ROOT%\assets\meshlets\Suzanne" --pattern "%OUT%\s2-done-lod-l{n}-DX12.png" --out "%ROOT%\example\s2-done\lod-layers.png" || exit /b 1
-echo expected: six tiles L0..L5, triangle counts 3936/1976/985/490/246/124, no seams or holes
-echo           (L4/L5 show known flipped triangles from M2.2, cull=none proves geometry intact)
+echo expected: seven tiles L0..L6, triangle counts 3936/1970/982/490/248/140/104, no seams/holes/black faces
+echo           (M2.3a orientation-anchor fix: check-orient L0..L6 inward=0)
 exit /b 0
 
 :selftest

@@ -38,6 +38,8 @@ void printUsage() {
         "                        group QEM + boundary lock; --obj dumps before/after OBJ + locked pts\n"
         "  nanite-tools lod <model.nmesh> [-o prefix] [--max-levels 8] [-v]\n"
         "                        group/simplify/recluster loop; writes <prefix>.lodN.nmesh (v2)\n"
+        "  nanite-tools check-orient <ref.nmesh> <target.nmesh>...\n"
+        "                        orientation audit vs ref normals; exit 1 if any face inward\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
@@ -470,6 +472,157 @@ int countDisconnectedGroups(const nl::core::NMeshData& nm,
     return bad;
 }
 
+// ---- M2.3a：朝向验收（测试标准，先于一切修复）----
+// 标准：任何三角形的面法线不得与其「参考法线」反向——反向 = 朝内 =
+// 开背面剔除时的黑斑。inward == 0 才过关。参考法线 = 原始网格的外向
+// 顶点法线；判据与数据源正交，量化为可执行的 exit code。
+//
+// 两条对比路径：
+//   same-pool   简化 soup 的 canonical 点号与输入 weld 一一对应（点只是
+//               移动，身份不变）→ 参考法线按点号直配；
+//   nearest     分层 .nmesh 重切后编号全变 → 按位置最近邻取参考法线
+//               （顶点位移 ≤ maxErr ≪ 网格尺度，语义等价）。
+struct OrientationRef {
+    std::uint32_t pointCount = 0;
+    std::vector<float> pos;          // 3*pointCount，canonical 原始位置
+    std::vector<float> nrm;          // 3*pointCount，原始法线和（外向）
+};
+
+OrientationRef buildOrientationRef(const nl::core::NMeshData& nm) {
+    std::vector<std::uint32_t> canon;
+    OrientationRef ref;
+    ref.pointCount = nl::core::weldPositions(nm.vertices, canon);
+    ref.pos.assign(std::size_t(ref.pointCount) * 3, 0.f);
+    ref.nrm.assign(std::size_t(ref.pointCount) * 3, 0.f);
+    std::vector<std::uint8_t> posSeen(std::size_t(ref.pointCount), 0);
+    for (std::size_t i = 0; i < nm.vertices.size(); ++i) {
+        const std::uint32_t p = canon[i];
+        // 位置只赋值一次：同位置多份窗口顶点，累加会被放大 N 倍（法线累加是对的）
+        if (!posSeen[p]) {
+            for (int k = 0; k < 3; ++k)
+                ref.pos[std::size_t(p) * 3 + k] = nm.vertices[i].pos[k];
+            posSeen[p] = 1;
+        }
+        for (int k = 0; k < 3; ++k)
+            ref.nrm[std::size_t(p) * 3 + k] += nm.vertices[i].normal[k];
+    }
+    return ref;
+}
+
+// 单三角形朝向余弦：面法线 vs 三角参考法线和（两者归一化）。
+static float triOrientCos(const float* a, const float* b, const float* c,
+                          const float* s0, const float* s1, const float* s2) {
+    const float u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    const float v[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    const float n[3] = {
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    };
+    const float s[3] = { s0[0] + s1[0] + s2[0],
+                         s0[1] + s1[1] + s2[1],
+                         s0[2] + s1[2] + s2[2] };
+    const float nn = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    const float sn = std::sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    if (nn <= 0.f || sn <= 0.f) return 1.f;   // 退化不判
+    return (n[0] * s[0] + n[1] * s[1] + n[2] * s[2]) / (nn * sn);
+}
+
+// 同池：soup 点号即 ref 点号（qem/simplify 的 canonical soup，ours 与
+// oracle 同口径可比）。
+int countInwardSamePool(const std::vector<float>& pos,
+                        const std::vector<std::uint32_t>& idx,
+                        const OrientationRef& ref,
+                        float* outWorstCos) {
+    int inward = 0;
+    float worst = 1.f;
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+        const std::uint32_t i[3] = { idx[t], idx[t + 1], idx[t + 2] };
+        const float cosv = triOrientCos(
+            &pos[std::size_t(i[0]) * 3], &pos[std::size_t(i[1]) * 3], &pos[std::size_t(i[2]) * 3],
+            &ref.nrm[std::size_t(i[0]) * 3], &ref.nrm[std::size_t(i[1]) * 3], &ref.nrm[std::size_t(i[2]) * 3]);
+        worst = std::min(worst, cosv);
+        if (cosv < 0.f) ++inward;
+    }
+    if (outWorstCos) *outWorstCos = worst;
+    return inward;
+}
+
+// 跨池：target canonical 点与 ref 无对应，按位置最近邻（brute force，
+// 组内规模与层数都很小，不值得建空间索引）。maxDist 顺带报位移上界。
+int countInwardNearest(const std::vector<float>& pos,
+                       const std::vector<std::uint32_t>& idx,
+                       const OrientationRef& ref,
+                       float* outWorstCos, float* outMaxDist) {
+    int inward = 0;
+    float worst = 1.f, maxDist = 0.f;
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+        const std::uint32_t i[3] = { idx[t], idx[t + 1], idx[t + 2] };
+        const float* p[3] = {
+            &pos[std::size_t(i[0]) * 3], &pos[std::size_t(i[1]) * 3], &pos[std::size_t(i[2]) * 3],
+        };
+        float s[3][3];
+        for (int k = 0; k < 3; ++k) {
+            float best = 1e30f;
+            std::uint32_t bi = 0;
+            for (std::uint32_t r = 0; r < ref.pointCount; ++r) {
+                const float* rp = &ref.pos[std::size_t(r) * 3];
+                const float d[3] = { rp[0] - p[k][0], rp[1] - p[k][1], rp[2] - p[k][2] };
+                const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                if (dd < best) { best = dd; bi = r; }
+            }
+            maxDist = std::max(maxDist, std::sqrt(best));
+            for (int c = 0; c < 3; ++c) s[k][c] = ref.nrm[std::size_t(bi) * 3 + c];
+        }
+        const float cosv = triOrientCos(p[0], p[1], p[2], s[0], s[1], s[2]);
+        worst = std::min(worst, cosv);
+        if (cosv < 0.f) ++inward;
+    }
+    if (outWorstCos) *outWorstCos = worst;
+    if (outMaxDist) *outMaxDist = maxDist;
+    return inward;
+}
+
+// check-orient <ref.nmesh> <target.nmesh>...
+// 标准（先于一切修复）：每层朝内三角形数必须为 0，任何 >0 exit 1。
+int cmdCheckOrient(int argc, char** argv) {
+    if (argc < 2) {
+        std::fprintf(stderr, "check-orient: need <ref.nmesh> <target.nmesh>...\n");
+        return 1;
+    }
+    nl::core::NMeshData refMesh;
+    std::string error;
+    if (!nl::core::loadNMesh(argv[0], refMesh, error)) {
+        std::fprintf(stderr, "check-orient: ref %s: %s\n", argv[0], error.c_str());
+        return 1;
+    }
+    const OrientationRef ref = buildOrientationRef(refMesh);
+
+    int rc = 0;
+    for (int a = 1; a < argc; ++a) {
+        nl::core::NMeshData nm;
+        if (!nl::core::loadNMesh(argv[a], nm, error)) {
+            std::fprintf(stderr, "check-orient: %s: %s\n", argv[a], error.c_str());
+            rc = 1;
+            continue;
+        }
+        std::vector<std::uint32_t> canon, idx;
+        const std::uint32_t pc = nl::core::weldPositions(nm.vertices, canon);
+        std::vector<float> pos(std::size_t(pc) * 3, 0.f);
+        for (std::size_t i = 0; i < nm.vertices.size(); ++i)
+            for (int k = 0; k < 3; ++k)
+                pos[std::size_t(canon[i]) * 3 + k] = nm.vertices[i].pos[k];
+        nl::core::buildCanonicalTriangles(nm, idx);
+        float worst = 1.f, maxDist = 0.f;
+        const int inward = countInwardNearest(pos, idx, ref, &worst, &maxDist);
+        std::printf("%-34s tris %-6u inward %-4d worst cos %+.3f  maxPosDrift %.4f  %s\n",
+                    argv[a], static_cast<unsigned>(idx.size() / 3), inward, worst, maxDist,
+                    inward == 0 ? "PASS" : "FAIL");
+        if (inward != 0) rc = 1;
+    }
+    return rc;
+}
+
 int cmdSimplify(int argc, char** argv) {
     if (argc < 1) {
         std::fprintf(stderr, "simplify: missing <model.nmesh>\n");
@@ -599,6 +752,7 @@ int cmdSimplify(int argc, char** argv) {
         std::uint32_t oracleIn = 0, oracleOut = 0;
         double oracleErrSum = 0, oracleErrMax = 0;
         std::uint32_t oracleGroups = 0;
+        std::vector<std::uint32_t> oracleIdx;   // M2.3a：oracle 输出 soup（同 canonical 池）
         for (const auto& gi : groupIdx) {
             if (gi.size() < 3) continue;
             oracleIn += std::uint32_t(gi.size() / 3);
@@ -610,6 +764,7 @@ int cmdSimplify(int argc, char** argv) {
                 positions.data(), pointCount, 12, targetIdx, 1e6f,
                 meshopt_SimplifyLockBorder, &err);
             oracleOut += std::uint32_t(n / 3);
+            oracleIdx.insert(oracleIdx.end(), dst.begin(), dst.begin() + n);
             oracleErrSum += err;
             oracleErrMax = std::max(oracleErrMax, double(err));
             ++oracleGroups;
@@ -618,6 +773,18 @@ int cmdSimplify(int argc, char** argv) {
                     oracleIn, oracleOut,
                     oracleIn ? 100.0 * double(oracleOut) / double(oracleIn) : 0.0,
                     oracleGroups ? oracleErrSum / oracleGroups : 0.0, oracleErrMax);
+
+        // M2.3a：同判据朝向对比（同一分组 / 同一 50% 硬目标 / 同一参考法线）。
+        // oracle = 官方实现的地面真值；ours > oracle → 我们的简化器漏了官方
+        // 的某道保护；两者都 > 0 → 是 per-group 硬目标管线本身的问题。
+        const OrientationRef oref = buildOrientationRef(nm);
+        float worstOurs = 1.f, worstOracle = 1.f;
+        const int inwardOurs = countInwardSamePool(sr.pointPositions, sr.indices, oref, &worstOurs);
+        const int inwardOracle = countInwardSamePool(positions, oracleIdx, oref, &worstOracle);
+        std::printf("orientation : ours inward %-4d worst %+.3f | oracle inward %-4d worst %+.3f  %s\n",
+                    inwardOurs, worstOurs, inwardOracle, worstOracle,
+                    inwardOurs == 0 && inwardOracle == 0 ? "PASS"
+                        : inwardOracle == 0 ? "OURS-FAILS-ORACLE-PASS" : "BOTH-FAIL");
     }
 
     // ---- 可视化验收导出：真实几何（M2.1 补图；M2.2 落盘同口径）----
@@ -1446,7 +1613,10 @@ int selftestQem() {
         }
     }
 
-    // Case 2：单四边形（1 组、无边界）→ 可折叠到 1 三角
+    // Case 2：单四边形（1 组）——开放边界锁（meshopt LockBorder 语义）
+    // 把 4 条外缘端点全部锁死，孤四边形不折叠（out=2）：对角线折叠会同时
+    // 杀掉两个三角形，边界折叠被锁拒绝。meshopt LockBorder 对同一输入
+    // 同样不折叠。折叠能力由 Case 1 网格覆盖。
     {
         std::printf("[single quad, no boundary]\n");
         nl::core::NMeshData nm;
@@ -1464,8 +1634,8 @@ int selftestQem() {
                     check(false, "simplifyGroups", reason);
                 } else {
                     check(sr.lockedPoints.empty(), "no boundary points");
-                    check(sr.total.outputTriangles == 1 && sr.total.inputTriangles == 2,
-                          "quad collapses 2 -> 1",
+                    check(sr.total.outputTriangles == 2 && sr.total.inputTriangles == 2,
+                          "open-border quad stays 2 tris (LockBorder)",
                           "out=" + std::to_string(sr.total.outputTriangles));
                 }
             }
@@ -1619,11 +1789,14 @@ int selftestLoop() {
                 const auto& b = h.levels[k];
                 if (b.triangles >= a.triangles) decreasing = false;
                 const double r = double(b.triangles) / double(a.triangles);
-                // 标准做法：每组硬目标 50%；拓扑约束下允许 30~70% 波动
-                if (r < 0.30 || r > 0.70) halfOk = false;
+                // 标准做法：每组硬目标 50%；拓扑约束下允许 30~70% 波动。
+                // 末层例外：开放边界锁（meshopt LockBorder 语义）在小规模
+                // 网格上把剩余三角形锁死属自然收敛停滞，比率可高于 70%，
+                // 但必须是最后一层且仍在严格递减；中间层超界仍然 FAIL。
+                if (k + 1 < h.levels.size() && (r < 0.30 || r > 0.70)) halfOk = false;
             }
             check(decreasing, "triangle count strictly decreases");
-            check(halfOk, "each level ~50% of previous (30~70%)");
+            check(halfOk, "each level ~50% of previous (30~70%, last level may stall)");
 
             bool limits = true, metaOk = true;
             for (std::size_t k = 0; k < h.levels.size(); ++k) {
@@ -1747,6 +1920,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
+    if (cmd == "check-orient") return cmdCheckOrient(argc - 2, argv + 2);
     if (cmd == "lod") return cmdLod(argc - 2, argv + 2);
     if (cmd == "dag") {
         std::fprintf(stderr, "%s: not implemented yet (S2 / S3)\n", cmd.c_str());

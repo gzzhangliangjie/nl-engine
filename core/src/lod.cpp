@@ -24,7 +24,10 @@ std::uint32_t triangleCount(const NMeshData& mesh) {
 
 // 简化输出的 canonical 三角 soup → 重新切簇 → 自包含 NMeshData。
 // 对应 bevy from_mesh.rs:154 compute_meshlets / UE 简化后 Split 父簇。
-// 顶点法线按邻面重新累加（QEM 只保位置，原法线/UV 已无意义），UV 置零。
+// 顶点法线**继承**简化器的 canonical 点法线（= 本层输入法线和）：QEM 折叠
+// 是位置并入、不创造新位置，法线场跨层不变 = L0 原始场，与 check-orient
+// 的参照（输入法线和）同口径，逐层审计不漂移。若按邻面重算，法线随层
+// 几何漂移，粗层桥接凹折痕会被误读成朝内（度量伪影）。UV 置零。
 bool rebuildMeshlets(const SimplifyResult& sr, NMeshData& out, std::string& outError) {
     out = NMeshData{};
     if (sr.indices.empty() || sr.pointCount == 0) {
@@ -50,39 +53,13 @@ bool rebuildMeshlets(const SimplifyResult& sr, NMeshData& out, std::string& outE
         const std::uint32_t p = built.vertices[i];
         for (int k = 0; k < 3; ++k)
             v.pos[k] = sr.pointPositions[std::size_t(p) * 3 + k];
-        out.vertices[i] = v;
-    }
-
-    std::vector<float> acc(out.vertices.size() * 3, 0.f);
-    for (const auto& m : out.meshlets) {
-        for (std::uint32_t t = 0; t < m.triangleCount; ++t) {
-            const std::size_t base = std::size_t(m.triangleOffset) + std::size_t(t) * 3;
-            const std::size_t ids[3] = {
-                std::size_t(m.vertexOffset) + out.triangles[base + 0],
-                std::size_t(m.vertexOffset) + out.triangles[base + 1],
-                std::size_t(m.vertexOffset) + out.triangles[base + 2],
-            };
-            const float* a = out.vertices[ids[0]].pos;
-            const float* b = out.vertices[ids[1]].pos;
-            const float* c = out.vertices[ids[2]].pos;
-            const float u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
-            const float v[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
-            const float n[3] = {
-                u[1] * v[2] - u[2] * v[1],
-                u[2] * v[0] - u[0] * v[2],
-                u[0] * v[1] - u[1] * v[0],
-            };
-            for (std::size_t id : ids)
-                for (int k = 0; k < 3; ++k) acc[id * 3 + k] += n[k];
-        }
-    }
-    for (std::size_t i = 0; i < out.vertices.size(); ++i) {
-        const float len = std::sqrt(acc[i * 3] * acc[i * 3] +
-                                    acc[i * 3 + 1] * acc[i * 3 + 1] +
-                                    acc[i * 3 + 2] * acc[i * 3 + 2]);
+        // 法线继承：canonical 点法线和归一化后写入（长度近零保持零向量）。
+        const float* n = &sr.pointNormals[std::size_t(p) * 3];
+        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
         if (len > 1e-20f)
             for (int k = 0; k < 3; ++k)
-                out.vertices[i].normal[k] = acc[i * 3 + k] / len;
+                v.normal[k] = n[k] / len;
+        out.vertices[i] = v;
     }
     return true;
 }

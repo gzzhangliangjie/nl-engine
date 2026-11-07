@@ -133,12 +133,19 @@ group selftest: PASS
   形了，跨组裂缝由此产生。锁定点集合进 `SimplifyResult.lockedPoints`
   （S3 DAG 合并沿用，M2.2 落分层 .nmesh 时持久化）。
 - **坏折叠拒绝**：link condition（N(a)∩N(b)==edge(ab) 对顶点）+ 法线翻转检查
-  （非归一化点积 ≤0 拒）+ 非流形边（>2 三角）拒 + 不许清空整组。
+  （单步 cos75°，meshopt hasTriangleFlip 口径）+ 绝对朝向锚（M2.3a 判决实验
+  定稿的加码：变形后法线 vs 当前角点法线和夹角 ≤~87°，随折叠换角同步更新；
+  输入无法线数据时本三角退化为纯官方判定）+ 非流形边（>2 三角）拒 +
+  不许清空整组。
+- **模型开放边界锁**（M2.3a 补齐，meshopt LockBorder 语义）：soup 中只挂
+  1 个三角形的边端点锁死——眼窝等开放轮廓不随简化收缩。
+- **法线继承**：rebuildMeshlets 继承输入法线和（不按邻面重算）——位置全程
+  不动，法线场跨层不变 = L0 原始场，与 check-orient 审计同口径。
 - **目标**：每组折叠到 round(输入×0.5) 即停；误差=世界空间长度（sqrt 二次型值）。
 - meshoptimizer vendored（1.3，`thirdparty/meshoptimizer/`）作**对照 oracle**：
   只链进 nanite-tools（`meshopt_SimplifyLockBorder` 同口径），core 不依赖——
   正式实现是自己的 QEM。注意口径差：oracle 锁子网格全部拓扑边界（含模型外缘），
-  我们只锁组间边界，oracle 更保守、简化率略低是预期。
+  我们锁组间边界 + 模型开放边界，保守程度相当。
 
 ### simplify 实跑输出（M2.1 后，DX12 构建）
 
@@ -151,9 +158,14 @@ groups      : 31
 connectivity: PASS (0 disconnected group(s))
 qem ratio   : 50%
 boundary pts: 622 locked (S3 DAG 沿用)
-simplify    : 3936 -> 1976 tris (50.2%)  collapses 992  maxErr 0.0250 (world)
+simplify    : 3936 -> 1970 tris (50.1%)  collapses 983  maxErr 0.0435 (world)
 oracle      : meshopt LockBorder 3936 -> 1948 tris (49.5%)  rel err avg 0.0051 max 0.0134
+orientation : ours inward 0    worst +0.063 | oracle inward 2    worst -0.333  PASS
 ```
+
+`orientation` 行 = M2.3a 判决实验的同判据朝向对比（同一分组 / 同一 50% 硬目标 /
+同一参考法线，我们的简化器 vs meshopt 官方实现的朝内面数）：锚 + 法线继承后
+ours inward=0，反超官方（oracle 同判据下仍剩 2 张）。
 
 IcoSphereDense（617 组，24,406 边界点，617 组全跑 7.6 s）：
 
@@ -185,7 +197,7 @@ oracle      : meshopt LockBorder 327680 -> 163362 tris (49.9%)  rel err avg 0.00
 [single quad, no boundary]
   ok   single quad -> 1 group
   ok   no boundary points
-  ok   quad collapses 2 -> 1
+  ok   open-border quad stays 2 tris (LockBorder)   <- 孤四边形边界全锁不折叠（meshopt 同判据）
 [2 disconnected blocks]
   ok   locked points have per-block positions   <- 锁定点不跨块
   ok   output accounting consistent
@@ -311,7 +323,7 @@ parent error 单调不减。写入的 6 个文件均可 `stat` / `viewer --model
 [connected 64x64 grid, LOD loop]
   ok   at least 3 LOD levels
   ok   triangle count strictly decreases
-  ok   each level ~50% of previous (30~70%)
+  ok   each level ~50% of previous (30~70%, last level may stall)
   ok   meshlet limits respected
   ok   per-level lodMeta present with correct level
   ok   locks == independent per-level boundary recompute   <- 灵魂断言
