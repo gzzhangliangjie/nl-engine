@@ -734,3 +734,15 @@
 4. **indirectArgs 字段对位**：`DrawIndexedIndirectArguments` 顺序为 indexCount/instanceCount/firstIndex/firstInstance（与 Vulkan `VkDrawIndexedIndirectCommand` 的 indexCount 字段对位）；indexCount 用 `stride=3*maxTriCount`，instanceCount=总簇数全画。
 
 **下一步**：M4.1 compute 视锥剔除（Gribb-Hartmann 5 平面球体测试、atomicAdd append 可见列表、GPU 每帧只写 instanceCount；M4.0 全画通路零返工改 instanceCount 语义即可）+ `--mode cull` HUD 可见簇数 + `tools/frustum_check.py` 离线对照。
+
+## B2~B4 材质图轨道第一批（A 类并行轨道，feat/material-graph，2026-11-08）
+
+> 详细验收纪要：`docs/material-graph/B2-B4-ACCEPTANCE.md`（固化文档闸要求，merge 回 master 前置）。
+
+**动作**：B 路自建轻量材质图三步落地——B2 节点图数据模型（Node/Pin/Edge + validate + material_graph v1 确定性文本序列化）；B3 图→Slang 代码生成（纯函数 emitter，Output 上游 DAG 递归求值，产物符合 model.slang 约定：vsMain/psMain + register(b0/t0/s0) + SceneConstants）+ slangc 双后端 × vs/ps 四入口真实编译验收；B4 热重载（watch 轮询 mtime，复用 recompileGraph 单一链路）+ `render` 子命令从 .mg 真实数据出 SVG 证据图；主干 8faad52 同步合入（b2d1050）后复验。
+
+**提交版本**：feat/material-graph `1a912fa`(B2) / `0cb2593`(B3) / `b01959e`(B4) / `3a22b40`(render 修复) / `b2d1050`(主干同步)
+
+**完成情况**：ctest b2-graph-selftest / b3-graph-genslang / b4-graph-hot-reload 全绿（主干同步后 3/3 复验）；生成 .slang 经 slangc SPIR-V+DXIL 双后端四入口全过（genslang: OK）；热重载实测后台轮询检测到 .mg 变更并二次重编译 OK；证据图 b3-nodegraph.{svg,png}（4 节点 3 连线，非手绘）。B 路阶梯推进至 B4，B5（接 PBR 材质 pass）排 S7 后。
+
+**踩坑情况**：① junction 共享 .workbuddy 本地改动挡 merge 且 skip-worktree 下 stash 不可见——物理备份→临时 no-skip-worktree 还原→merge→cp 恢复→重设；② reg.exe 被沙箱拉黑致 vcvarsall 缺 SDK——手动注入 SDK 路径，构建批处理禁中文注释（代码页拆行）；③ 匿名命名空间内 main 无外部链接致链接失败；④ system() 路径无条件加引号会被 cmd 解析坏，含空格才加；⑤ watch 长进程管道全缓冲致实时输出不可见——setvbuf _IONBF；⑥ render 节点高度漏算属性行致 value 文本溢出——统一 nodeHeight() 口径。

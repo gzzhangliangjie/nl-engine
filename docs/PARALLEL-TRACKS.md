@@ -164,7 +164,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 状态 | 占用说明 |
 |---|---|---|---|---|
-| 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 工作树已建 / 计划待立项 | 参考 MaterialX v1.39.5 + PhasmaEngine 适配；B 路自建轻量图；共享 `.workbuddy`+`slang/dist` junction |
+| 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | **已立项 / B2~B4 完成**：B 路自建，计划 `docs/material-graph/B3-PLAN.md`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` | B2 数据模型+序列化 / B3 图→Slang 双后端编译 / B4 热重载+证据图均已过 ctest；B5 接 PBR pass 排 S7 后；共享 `.workbuddy`+`slang/dist` junction |
 | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 工作树已建 / **已立项** `docs/p8/P8-JOB-PLAN.md` | M-J0 待启动；首个消费者=离线管线；共享 junction |
 | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | 工作树已建 / 候选（2.4 纯逻辑层） | 状态机+混合树+曲线采样；逻辑层先确定性单测，视觉验收后挂；共享 junction |
 
