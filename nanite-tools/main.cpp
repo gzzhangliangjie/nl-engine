@@ -5,11 +5,13 @@
 
 #include "nl/core/mesh_io.hpp"
 #include "nl/core/meshlet.hpp"
+#include "nl/core/meshlet_io.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -19,21 +21,38 @@ void printUsage() {
     std::printf(
         "nanite-tools - nl-engine offline mesh pipeline (S1)\n"
         "usage:\n"
-        "  nanite-tools stat <model.gltf|.glb>       vertex/tri/submesh summary\n"
-        "  nanite-tools cluster <model> [options]    meshlet build (M1.1)\n"
-        "  nanite-tools selftest cluster             deterministic unit tests\n"
+        "  nanite-tools stat <model>                 summary (.glb/.gltf 或 .nmesh)\n"
+        "  nanite-tools cluster <model> [-v] [-o out.nmesh]   meshlet build + save\n"
+        "  nanite-tools selftest cluster|nmesh       deterministic unit tests\n"
         "  nanite-tools simplify <model> [options]   cluster re-cut (S2, not yet)\n"
         "  nanite-tools dag <model> [options]        error DAG (S3, not yet)\n");
 }
 
+// stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
+void printNMeshStats(const nl::core::NMeshData& nm);
+
 // stat：<path> 的顶点 / 三角 / 子网格汇总 + 每子网格明细 + 世界空间包围盒。
-// S1 切簇的前置事实核对：变换烘焙是否生效、三角形规模是否与已知口径一致。
+// M1.2 起：也直接吃 .nmesh（簇统计 + 误差直方图）。
 int cmdStat(int argc, char** argv) {
     if (argc < 1) {
-        std::fprintf(stderr, "stat: missing <model.gltf|.glb>\n");
+        std::fprintf(stderr, "stat: missing <model.gltf|.glb|.nmesh>\n");
         return 1;
     }
     const char* path = argv[0];
+
+    // .nmesh 输入：簇视角的统计（M1.2）
+    const std::string pathStr = path;
+    if (pathStr.size() >= 6 && pathStr.compare(pathStr.size() - 6, 6, ".nmesh") == 0) {
+        nl::core::NMeshData nm;
+        std::string error;
+        if (!nl::core::loadNMesh(path, nm, error)) {
+            std::fprintf(stderr, "stat: %s\n", error.c_str());
+            return 1;
+        }
+        std::printf("file      : %s\n", path);
+        printNMeshStats(nm);
+        return 0;
+    }
 
     nl::core::SceneMeshData data;
     std::string error;
@@ -83,6 +102,79 @@ int cmdStat(int argc, char** argv) {
                     prim.hasBaseColor ? "yes" : "no");
     }
     return 0;
+}
+
+// ---- .nmesh 的簇统计（stat 与 cluster 共用）----
+
+// 误差直方图：errMin..errMax 等宽 10 桶，# 数量按桶内占比归一化到 60 列
+void printErrorHistogram(const nl::core::NMeshData& nm) {
+    double mn = 0, mx = 0;
+    bool first = true;
+    for (const auto& b : nm.bounds) {
+        if (first) { mn = mx = b.error; first = false; }
+        mn = std::min(mn, (double)b.error);
+        mx = std::max(mx, (double)b.error);
+    }
+    if (first) return;
+    if (mx <= mn) mx = mn + 1e-6f;  // 单值退化：保一个桶
+    constexpr int kBuckets = 10;
+    size_t count[kBuckets] = {};
+    for (const auto& b : nm.bounds) {
+        int idx = int((b.error - mn) / (mx - mn) * kBuckets);
+        idx = std::clamp(idx, 0, kBuckets - 1);
+        ++count[idx];
+    }
+    const size_t maxCount = *std::max_element(count, count + kBuckets);
+    std::printf("error histogram (world space, max edge):\n");
+    for (int i = 0; i < kBuckets; ++i) {
+        const double lo = mn + (mx - mn) * i / kBuckets;
+        const double hi = mn + (mx - mn) * (i + 1) / kBuckets;
+        const int bars = maxCount > 0 ? int(count[i] * 60 / maxCount) : 0;
+        std::printf("  [%.4f,%.4f) %-6zu ", lo, hi, count[i]);
+        for (int j = 0; j < bars; ++j) std::printf("#");
+        std::printf("\n");
+    }
+}
+
+void printNMeshStats(const nl::core::NMeshData& nm) {
+    size_t maxTri = 0, maxVert = 0, totalTri = 0;
+    double sumTri = 0, sumVert = 0;
+    double errSum = 0, errMin = 0, errMax = 0;
+    double cutoffSum = 0, cutoffMin = 1.0;
+    size_t degenerate = 0;
+    for (const auto& m : nm.meshlets) {
+        maxTri = std::max<size_t>(maxTri, m.triangleCount);
+        maxVert = std::max<size_t>(maxVert, m.vertexCount);
+        totalTri += m.triangleCount;
+        sumTri += m.triangleCount;
+        sumVert += m.vertexCount;
+    }
+    bool first = true;
+    for (const auto& b : nm.bounds) {
+        if (first) { errMin = b.error; first = false; }
+        errMin = std::min(errMin, (double)b.error);
+        errMax = std::max(errMax, (double)b.error);
+        errSum += b.error;
+        if (b.coneCutoff < 0.f) ++degenerate;
+        else { cutoffSum += b.coneCutoff; cutoffMin = std::min(cutoffMin, (double)b.coneCutoff); }
+    }
+    const size_t n = nm.meshlets.size();
+    std::printf("name       : %s\n", nm.name.c_str());
+    std::printf("meshlets   : %zu\n", n);
+    std::printf("vertices   : %zu\n", nm.vertices.size());
+    std::printf("triangles  : %zu\n", totalTri);
+    std::printf("tri/cluster: avg %.1f  max %zu  (limit %u)\n",
+                n ? sumTri / n : 0.0, maxTri, nl::core::kMeshletMaxTriangles);
+    std::printf("vert/cluster: avg %.1f  max %zu  (limit %u)\n",
+                n ? sumVert / n : 0.0, maxVert, nl::core::kMeshletMaxVertices);
+    if (n) {
+        std::printf("error      : min %.4f  avg %.4f  max %.4f\n",
+                    errMin, errSum / n, errMax);
+        std::printf("cone       : avg cutoff %.3f  min %.3f  (degenerate: %zu)\n",
+                    n - degenerate ? cutoffSum / (n - degenerate) : 0.0,
+                    degenerate == n ? 0.0 : cutoffMin, degenerate);
+    }
+    printErrorHistogram(nm);
 }
 
 // ---- cluster：对每个子网格贪心切簇，打印簇统计（M1.1 的交代物）----
@@ -195,13 +287,52 @@ bool printClusterResult(const char* path, const nl::core::PrimitiveMesh& prim,
     return limitsOk;
 }
 
+// BuiltMeshlets（引用原网格）→ NMeshData（自包含）：顶点窗口按序 remap 成真实顶点，
+// 局部索引不变（窗口序不变，只是数组内容从全局索引变成顶点数据）。
+bool toNMeshData(const nl::core::PrimitiveMesh& prim,
+                 const nl::core::BuiltMeshlets& built,
+                 nl::core::NMeshData& out, std::string& failReason) {
+    out = nl::core::NMeshData{};
+    out.name = prim.name;
+    out.meshlets = built.meshlets;
+    out.bounds = built.bounds;
+    out.vertices.resize(built.vertices.size());
+    for (size_t i = 0; i < built.vertices.size(); ++i)
+        out.vertices[i] = prim.vertices[built.vertices[i]];
+    out.triangles = built.triangles;
+    // 窗口合法性自检（remap 不改索引，这里防上游数据坏了难排查）
+    for (const auto& m : out.meshlets) {
+        if (size_t(m.vertexOffset) + m.vertexCount > out.vertices.size() ||
+            size_t(m.triangleOffset) + size_t(m.triangleCount) * 3 > out.triangles.size()) {
+            failReason = "built meshlet window out of range";
+            return false;
+        }
+    }
+    return true;
+}
+
 int cmdCluster(int argc, char** argv) {
     if (argc < 1) {
         std::fprintf(stderr, "cluster: missing <model.gltf|.glb>\n");
         return 1;
     }
     const char* path = argv[0];
-    const bool verbose = argc >= 2 && std::string(argv[1]) == "-v";
+    const char* outPath = nullptr;
+    bool verbose = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "-v") verbose = true;
+        else if (a == "-o") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "cluster: -o needs a path\n");
+                return 1;
+            }
+            outPath = argv[++i];
+        } else {
+            std::fprintf(stderr, "cluster: unknown option %s\n", argv[i]);
+            return 1;
+        }
+    }
 
     nl::core::SceneMeshData data;
     std::string error;
@@ -215,6 +346,12 @@ int cmdCluster(int argc, char** argv) {
     }
 
     int failures = 0;
+    if (outPath && data.meshes.size() != 1) {
+        // M1.2 只支持单子网格落盘（当前资产都是单子网格）；多子网格等真出现了再定容器格式
+        std::fprintf(stderr, "cluster: -o needs exactly one submesh (got %zu)\n",
+                     data.meshes.size());
+        return 1;
+    }
     for (size_t i = 0; i < data.meshes.size(); ++i) {
         nl::core::BuiltMeshlets built;
         std::string reason;
@@ -224,6 +361,27 @@ int cmdCluster(int argc, char** argv) {
             continue;
         }
         if (!printClusterResult(path, data.meshes[i], built, verbose)) ++failures;
+        if (outPath) {
+            nl::core::NMeshData nm;
+            if (!toNMeshData(data.meshes[i], built, nm, reason)) {
+                std::fprintf(stderr, "cluster: [%zu] %s\n", i, reason.c_str());
+                ++failures;
+                continue;
+            }
+            if (!nl::core::saveNMesh(outPath, nm, reason)) {
+                std::fprintf(stderr, "cluster: save %s: %s\n", outPath, reason.c_str());
+                ++failures;
+                continue;
+            }
+            // 立即读回自检：写出的文件必须能被同版本工具读回且窗口合法
+            nl::core::NMeshData back;
+            if (!nl::core::loadNMesh(outPath, back, reason)) {
+                std::fprintf(stderr, "cluster: reload %s: %s\n", outPath, reason.c_str());
+                ++failures;
+                continue;
+            }
+            std::printf("saved      : %s (reload ok)\n", outPath);
+        }
         if (i + 1 < data.meshes.size()) std::printf("\n");
     }
     return failures == 0 ? 0 : 1;
@@ -408,6 +566,121 @@ int selftestCluster() {
     return 1;
 }
 
+// ---- selftest nmesh：写盘 → 读回 roundtrip（M1.2 验收核心）----
+
+int selftestNMesh() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    const char* tmpA = "_nmesh_selftest_a.nmesh";
+    const char* tmpB = "_nmesh_selftest_b.nmesh";
+
+    // 本地字节读取（core 的 readFileAll 是匿名命名空间，不导出）
+    auto readAll = [](const char* p, std::vector<std::uint8_t>& out) {
+        std::FILE* fp = std::fopen(p, "rb");
+        if (!fp) return false;
+        std::fseek(fp, 0, SEEK_END);
+        const long sz = std::ftell(fp);
+        std::fseek(fp, 0, SEEK_SET);
+        out.resize(sz > 0 ? size_t(sz) : 0);
+        const bool ok = sz <= 0 || std::fread(out.data(), 1, size_t(sz), fp) == size_t(sz);
+        std::fclose(fp);
+        return ok;
+    };
+
+    // 正向：确定性网格 → 切簇 → 写盘 → 读回
+    nl::core::NMeshData written;
+    {
+        SelftestMesh mesh = makeTestMesh(2, 40, 40);  // 断连块，覆盖兑底种子路径
+        nl::core::BuiltMeshlets built;
+        if (!nl::core::buildMeshlets(mesh.positions.data(), 3,
+                                     mesh.positions.size() / 3,
+                                     mesh.indices.data(), mesh.indices.size(), built)) {
+            std::printf("  FAIL buildMeshlets (precondition)\n");
+            return 1;
+        }
+        nl::core::PrimitiveMesh prim;
+        prim.name = "selftest#0";
+        prim.indices = mesh.indices;
+        prim.vertices.resize(mesh.positions.size() / 3);
+        for (size_t i = 0; i < prim.vertices.size(); ++i)
+            for (int k = 0; k < 3; ++k) prim.vertices[i].pos[k] = mesh.positions[i * 3 + k];
+        std::string reason;
+        if (!toNMeshData(prim, built, written, reason)) {
+            std::printf("  FAIL toNMeshData: %s\n", reason.c_str());
+            return 1;
+        }
+        if (!nl::core::saveNMesh(tmpA, written, reason)) {
+            std::printf("  FAIL saveNMesh: %s\n", reason.c_str());
+            return 1;
+        }
+    }
+
+    nl::core::NMeshData back;
+    std::string reason;
+    check(nl::core::loadNMesh(tmpA, back, reason), "loadNMesh", reason);
+
+    bool fieldsOk = back.name == written.name &&
+                    back.meshlets.size() == written.meshlets.size() &&
+                    back.vertices.size() == written.vertices.size() &&
+                    back.triangles.size() == written.triangles.size();
+    for (size_t i = 0; fieldsOk && i < written.meshlets.size(); ++i) {
+        const auto& a = written.meshlets[i];
+        const auto& b = back.meshlets[i];
+        const auto& ba = written.bounds[i];
+        const auto& bb = back.bounds[i];
+        fieldsOk = std::memcmp(&a, &b, sizeof(a)) == 0 &&
+                   std::memcmp(&ba, &bb, sizeof(ba)) == 0;
+    }
+    for (size_t i = 0; fieldsOk && i < written.vertices.size(); ++i)
+        fieldsOk = std::memcmp(&written.vertices[i], &back.vertices[i],
+                               sizeof(nl::core::MeshVertex)) == 0;
+    for (size_t i = 0; fieldsOk && i < written.triangles.size(); ++i)
+        fieldsOk = written.triangles[i] == back.triangles[i];
+    check(fieldsOk, "fields identical after roundtrip");
+
+    // 字节级 roundtrip：读回再重写，两文件逐字节一致
+    if (nl::core::saveNMesh(tmpB, back, reason)) {
+        std::vector<std::uint8_t> rawA, rawB;
+        bool bytesOk = nl::core::loadNMesh(tmpA, back, reason) &&
+                       readAll(tmpA, rawA) && readAll(tmpB, rawB) && rawA == rawB;
+        check(bytesOk, "byte-identical roundtrip");
+    } else {
+        check(false, "byte-identical roundtrip", "resave failed");
+    }
+
+    // 负向：坏 magic / 截断
+    {
+        std::vector<std::uint8_t> raw;
+        readAll(tmpA, raw);
+        raw[0] = 'X';  // 破坏 magic
+        std::FILE* fp = std::fopen(tmpB, "wb");
+        std::fwrite(raw.data(), 1, raw.size(), fp);
+        std::fclose(fp);
+        nl::core::NMeshData nm;
+        check(!nl::core::loadNMesh(tmpB, nm, reason), "bad magic rejected", reason);
+        std::vector<std::uint8_t> truncated(raw.begin(), raw.begin() + raw.size() / 2);
+        // 恢复 magic 再截断，命中 need() 分支
+        truncated[0] = 'N';
+        fp = std::fopen(tmpB, "wb");
+        std::fwrite(truncated.data(), 1, truncated.size(), fp);
+        std::fclose(fp);
+        check(!nl::core::loadNMesh(tmpB, nm, reason), "truncated file rejected", reason);
+    }
+
+    std::remove(tmpA);
+    std::remove(tmpB);
+    if (failures == 0) {
+        std::printf("nmesh selftest: PASS\n");
+        return 0;
+    }
+    std::printf("nmesh selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -417,7 +690,8 @@ int main(int argc, char** argv) {
     if (cmd == "cluster") return cmdCluster(argc - 2, argv + 2);
     if (cmd == "selftest") {
         if (argc >= 3 && std::string(argv[2]) == "cluster") return selftestCluster();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster)\n");
+        if (argc >= 3 && std::string(argv[2]) == "nmesh") return selftestNMesh();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh)\n");
         return 1;
     }
     if (cmd == "simplify" || cmd == "dag") {

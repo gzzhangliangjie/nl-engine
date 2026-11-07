@@ -187,3 +187,69 @@ Suzanne 簇小（avg 16.6 tri）不是 bug——每 tri 拆 3 独立顶点，64 
 viewer 一行未动：`python tools/regression.py` **70/70 ALL GREEN**（历史 64 条基线逐字节
 不动 + 新增 s1-cluster 工具用例 3×2）、viewer --selftest 15/15 双后端、ctest 4/4
 （新增 s1-cluster-selftest / s1-cluster-suzanne 正则锁定）。
+
+## M1.2 .nmesh 资产读写 + stat 完善（tag `s1-asset`，2026-11-07）
+
+> 格式（version 1，little-endian，static_assert 锁布局）：`NMeshHeader`(20B，magic "NMSH") →
+> 子网格名 → `NMeshletRecord[]`(52B/簇：窗口 + 球 + 锥 + 误差) → `MeshVertex[]`(32B 自包含顶点，
+> 与 GPU 输入布局同构) → 三角局部索引字节流。先写临时文件再 rename，失败不留半个文件；
+> loadNMesh 校验 magic / 版本 / 截断 / 簇窗口与局部索引越界。
+
+### 子命令变化
+
+- `cluster <model> [-v] [-o out.nmesh]`：写盘（单子网格；落盘后立即读回自检，打印 `saved: … (reload ok)`）
+- `stat <file>`：识别 `.nmesh` 扩展名 → 簇视角统计 + ASCII 误差直方图
+- `selftest nmesh`：roundtrip 单测
+
+### selftest nmesh 实跑
+
+```
+  ok   loadNMesh
+  ok   fields identical after roundtrip
+  ok   byte-identical roundtrip
+  ok   bad magic rejected
+  ok   truncated file rejected
+nmesh selftest: PASS
+exit=0
+```
+
+### 端到端：写盘 → stat 读回
+
+```
+$ nanite-tools cluster assets/models/Suzanne.glb -o assets/meshlets/Suzanne.nmesh
+...
+limits     : PASS
+saved      : assets/meshlets/Suzanne.nmesh (reload ok)
+
+$ nanite-tools stat assets/meshlets/Suzanne.nmesh
+file      : assets/meshlets/Suzanne.nmesh
+name       : Suzanne#0
+meshlets   : 237
+vertices   : 11808
+triangles  : 3936
+tri/cluster: avg 16.6  max 21  (limit 128)
+vert/cluster: avg 49.8  max 63  (limit 64)
+error      : min 0.0308  avg 0.1167  max 0.3198
+cone       : avg cutoff 0.858  min 0.286  (degenerate: 1)
+error histogram (world space, max edge):
+  [0.0308,0.0597) 32     #################################
+  [0.0597,0.0886) 50     ###################################################
+  [0.0886,0.1175) 58     ############################################################
+  [0.1175,0.1464) 47     ################################################
+  [0.1464,0.1753) 15     ###############
+  [0.1753,0.2042) 13     #############
+  [0.2042,0.2331) 9      #########
+  [0.2331,0.2620) 5      #####
+  [0.2620,0.2909) 2      ##
+  [0.2909,0.3198) 6      ######
+exit=0
+```
+
+**判读**：roundtrip 字段逐字段一致 + 重写逐字节一致（验收核心）；402KB 自包含资产入仓
+`assets/meshlets/Suzanne.nmesh`，即 M1.3 viewer `--mode cluster` 的输入；直方图左偏
+（多数簇误差小、尾部少量长边簇）符合贪心切簇预期。
+
+### 渲染侧零影响证明
+
+viewer 一行未动：回归总闸 **70→76 ALL GREEN**（新增 s1-asset 3 工具用例 × 2 目录）、
+ctest 6/6（新增 s1-nmesh-roundtrip / s1-nmesh-suzanne）、双后端 selftest 15/15。

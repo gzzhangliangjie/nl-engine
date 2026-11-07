@@ -106,6 +106,7 @@ add_library(nl_core STATIC
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
     core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）
+    core/src/meshlet_io.cpp    # M1.2：.nmesh 二进制资产读写
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -247,3 +248,13 @@ add_test(NAME s1-cluster-suzanne
          COMMAND nanite-tools cluster ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
 set_tests_properties(s1-cluster-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "limits     : PASS")
+# M1.2：.nmesh roundtrip 单测（字段一致 + 逐字节重写一致 + 坏 magic / 截断拒绝）
+add_test(NAME s1-nmesh-roundtrip COMMAND nanite-tools selftest nmesh)
+set_tests_properties(s1-nmesh-roundtrip PROPERTIES
+    PASS_REGULAR_EXPRESSION "nmesh selftest: PASS")
+# M1.2：真实资产写盘 → stat 读回（-cluster -o 与 .nmesh stat 的端到端验收）
+add_test(NAME s1-nmesh-suzanne
+         COMMAND nanite-tools cluster ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb
+                 -o ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
+set_tests_properties(s1-nmesh-suzanne PROPERTIES
+    PASS_REGULAR_EXPRESSION "saved      :")

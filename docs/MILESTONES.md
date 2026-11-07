@@ -487,3 +487,22 @@
 3. **按索引建几何邻接，Suzanne 退化成每 tri 一簇（3936 簇）** → 根因：glTF 导出常见每面拆顶点，Suzanne 11808 = 3936×3 索引零共享，索引邻接完全断开。处理：按位置 weld 出 canonical 顶点（位级相等排序分组），邻接/live/emitted 按 canonical，簇内条目去重与 GPU 上限按原始索引（保留 UV 缝两侧不同属性）。与 bevy position-merge、meshoptimizer weld 语义对齐。
 
 **下一步**：M1.2 `.nmesh` 资产读写——二进制落盘（header 带版本号）+ roundtrip 逐字节一致 + stat 簇统计直方图。
+
+---
+
+## M1.2 .nmesh 资产读写 + stat 完善（S1 资产化）
+
+**动作**：`core/include/nl/core/meshlet_io.hpp` + `core/src/meshlet_io.cpp` 新增 .nmesh 二进制读写（magic NMSH / version 1 / header 20B + record 52B + MeshVertex 32B 自包含顶点 + 三角局部索引字节流，static_assert 锁布局；写盘先临时后 rename；读回校验 magic/版本/截断/窗口越界）。nanite-tools：`cluster -o` 落盘+立即读回自检；`stat` 识别 .nmesh 打印簇统计 + ASCII 误差直方图；`selftest nmesh` roundtrip 单测。cases.json 增 s1-asset 版本卡；`assets/meshlets/Suzanne.nmesh`（402KB）入仓为 M1.3 viewer 输入资产。CMake 增 ctest s1-nmesh-roundtrip / s1-nmesh-suzanne。
+
+**提交版本**：`s1-asset`
+
+**完成情况**
+- selftest nmesh 全绿：loadNMesh、逐字段一致、**重写逐字节一致**、坏 magic 拒绝、截断拒绝。
+- 端到端：cluster -o 写盘 → stat 读回（237 簇 / 11808 vert / 3936 tri + 误差直方图），ctest 6/6。
+- **回归总闸 70→76 ALL GREEN**；viewer 零改动、双后端 selftest 15/15、`--check` 退出 0。
+
+**踩坑情况**
+1. **NMeshHeader static_assert 写错（24B vs 实际 20B）** → 根因：手算字段和算错（4+2+2+4+4+4=20）。处理：修正断言——static_assert 恰好证明其价值，布局漂移编译期就爆。
+2. **负向用例设计错**：第一版拿 `stat Suzanne.glb` 当「坏 magic」负向 → 根因：stat 对 .glb 本来就合法，exit 0。处理：换成缺失 .nmesh 路径（走 loadNMesh 失败分支）。教训：负向用例的输入必须真落在目标错误分支上。
+
+**下一步**：M1.3 viewer `--mode cluster` 每簇随机着色（吃 assets/meshlets/Suzanne.nmesh），S1 收官可视化验收。

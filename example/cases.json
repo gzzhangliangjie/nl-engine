@@ -1118,6 +1118,62 @@
      "command": "nanite-tools cluster __missing__.glb"
     }
    ]
+  },
+  {
+   "id": "s1-asset",
+   "label": "M1.2",
+   "name": ".nmesh 资产读写 + stat 完善",
+   "tag": "s1-asset",
+   "date": "2026-11-07",
+   "summary": "core/meshlet_io：.nmesh 二进制格式（magic NMSH / version 1，header+records+自包含顶点+三角局部索引，static_assert 锁死布局，先写临时再改名）；cluster -o 落盘并立即读回自检；stat 直接吃 .nmesh（簇统计 + ASCII 误差直方图）；selftest nmesh roundtrip（字段一致 + 重写逐字节一致 + 坏 magic / 截断拒绝）。assets/meshlets/Suzanne.nmesh 为 M1.3 viewer 的输入资产。",
+   "acceptance": [
+    "roundtrip：读回字段逐字段一致，读回再重写逐字节一致（selftest nmesh 全绿）",
+    "负向：坏 magic、截断文件、窗口越界全部显式拒绝（loadNMesh 校验）",
+    "端到端：cluster -o 写盘 402KB Suzanne.nmesh → stat 读回簇统计 + 误差直方图（ctest s1-nmesh-suzanne 正则锁定 saved）",
+    "viewer 零改动：回归总闸全绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "roundtrip",
+     "name": "selftest nmesh：roundtrip 单测",
+     "kind": "tool",
+     "note": "确定性网格切簇 → 写盘 → 读回：逐字段一致、读回重写逐字节一致；坏 magic / 截断文件显式拒绝。退出 0 即 PASS。",
+     "args": ["selftest", "nmesh"],
+     "expectExit": 0,
+     "expectLog": "nmesh selftest: PASS",
+     "command": "nanite-tools selftest nmesh"
+    },
+    {
+     "id": "stat-nmesh",
+     "name": "stat：直接读 .nmesh 资产",
+     "kind": "tool",
+     "note": "对已落盘的簇资产打印簇数、tri/vert 均峰值、世界空间误差与 ASCII 直方图。读的是仓库内 assets/meshlets/Suzanne.nmesh（M1.3 viewer 的输入资产）。",
+     "args": [
+      "stat",
+      "{root}/assets/meshlets/Suzanne.nmesh"
+     ],
+     "expectExit": 0,
+     "expectLog": "meshlets   : 237",
+     "command": "nanite-tools stat assets/meshlets/Suzanne.nmesh"
+    },
+    {
+     "id": "negative-missing-nmesh",
+     "name": "负向：.nmesh 不存在（exit 1）",
+     "kind": "tool",
+     "note": "stat 对缺失的 .nmesh 必须报 cannot open 退出 1，不许静默成功（走 loadNMesh 失败路径）。",
+     "args": [
+      "stat",
+      "{root}/assets/meshlets/__missing__.nmesh"
+     ],
+     "expectExit": 1,
+     "expectLog": "cannot open",
+     "command": "nanite-tools stat __missing__.nmesh"
+    }
+   ]
   }
  ]
 }
