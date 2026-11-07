@@ -1,650 +1,754 @@
 {
-  "project": "nl-engine",
-  "title": "S0 成果展示台",
-  "subtitle": "按里程碑加载 example/ 里的成功用例，可直接运行看效果",
-  "source": "example/cases.json（版本与用例的唯一数据源；截图与复现脚本都在本目录）",
-  "versions": [
+ "project": "nl-engine",
+ "title": "S0 成果展示台",
+ "subtitle": "按里程碑加载 example/ 里的成功用例，可直接运行看效果",
+ "source": "example/cases.json（版本与用例的唯一数据源；截图与复现脚本都在本目录）",
+ "versions": [
+  {
+   "id": "m0.1",
+   "label": "M0.1",
+   "name": "骨架 + 空窗口",
+   "tag": "s0-init",
+   "date": "2026-11-06",
+   "summary": "三个 target（core / renderer / viewer）+ GLFW 空窗口 + 日志断言框架。无 GPU 回读，成果是「窗口真的弹出来」和自检。",
+   "acceptance": [
+    "空窗口弹出、ESC 退出",
+    "SELFTEST PASS (7/7)",
+    "DX12 / Vulkan 两种后端配置都 PASS"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
     {
-      "id": "m0.1",
-      "label": "M0.1",
-      "name": "骨架 + 空窗口",
-      "tag": "s0-init",
-      "date": "2026-11-06",
-      "summary": "三个 target（core / renderer / viewer）+ GLFW 空窗口 + 日志断言框架。无 GPU 回读，成果是「窗口真的弹出来」和自检。",
-      "acceptance": [
-        "空窗口弹出、ESC 退出",
-        "SELFTEST PASS (7/7)",
-        "DX12 / Vulkan 两种后端配置都 PASS"
-      ],
-      "exe": {
-        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "selftest",
-          "name": "自检 7/7",
-          "kind": "selftest",
-          "note": "断言框架、日志、窗口描述符、编译期后端开关全部走一遍。",
-          "args": [
-            "--selftest"
-          ],
-          "expectLog": "SELFTEST PASS",
-          "command": "viewer.exe --selftest",
-          "script": "example/m0.1/run.bat selftest"
-        },
-        {
-          "id": "window",
-          "name": "空窗口（交互）",
-          "kind": "manual",
-          "note": "该版本没有 GPU 回读能力，窗口用例需人眼确认：1280×720 无 GL 上下文窗口，ESC 退出。不在网页里自动运行（会阻塞并抢焦点）。",
-          "args": [],
-          "command": "viewer.exe",
-          "script": "example/m0.1/run.bat window"
-        }
-      ]
+     "id": "selftest",
+     "name": "自检 7/7",
+     "kind": "selftest",
+     "note": "断言框架、日志、窗口描述符、编译期后端开关全部走一遍。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.1/run.bat selftest"
     },
     {
-      "id": "m0.2",
-      "label": "M0.2",
-      "name": "设备 + swapchain",
-      "tag": "s0-device",
-      "date": "2026-11-06",
-      "summary": "NVRHI device + swapchain 双后端，GPU 像素真回读写 PNG；零厂商 SDK，Vulkan 全函数运行时解析。",
-      "acceptance": [
-        "双后端清屏逐字节相同（MD5 bdebaf50…）",
-        "resize 640×360 → 1024×768 不黑屏",
-        "deviceErrors=0、退出无段错误"
-      ],
-      "exe": {
-        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "clear",
-          "name": "双后端清屏",
-          "kind": "pair",
-          "note": "同一份清屏色经两条完全不同的后端路径写出 PNG，逐字节相同即证明抽象层没绑死单一 API。",
-          "baselines": {
-            "dx12": "example/m0.2/clear-dx12.png",
-            "vulkan": "example/m0.2/clear-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8",
-          "script": "example/m0.2/run.bat clear"
-        },
-        {
-          "id": "resize",
-          "name": "resize 回归",
-          "kind": "image",
-          "note": "运行中重建 swapchain，前后两张 PNG 均非黑；同时产出 <out>.before.png。",
-          "baselines": {
-            "dx12": "example/m0.2/resize-dx12.png",
-            "vulkan": "example/m0.2/resize-vulkan.png"
-          },
-          "beforeBaselines": {
-            "dx12": "example/m0.2/resize-dx12-before.png",
-            "vulkan": "example/m0.2/resize-vulkan-before.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--resize",
-            "1024x768"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --resize 1024x768",
-          "script": "example/m0.2/run.bat resize"
-        },
-        {
-          "id": "clear-color",
-          "name": "清屏色切换",
-          "kind": "image",
-          "note": "--color 0..3 切换四种清屏色，验证 clear 值一路传到两个后端；基线对应默认的 --color 1。",
-          "baselines": {
-            "dx12": "example/m0.2/color-dx12.png",
-            "vulkan": "example/m0.2/color-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "4",
-            "--color",
-            "{color}"
-          ],
-          "params": {
-            "color": {
-              "type": "select",
-              "label": "清屏色",
-              "default": "1",
-              "options": [
-                "0",
-                "1",
-                "2",
-                "3"
-              ]
-            }
-          },
-          "command": "viewer.exe --screenshot <out.png> --frames 4 --color 1",
-          "script": "example/m0.2/run.bat color"
-        }
-      ]
-    },
-    {
-      "id": "m0.3",
-      "label": "M0.3",
-      "name": "三角形 + 帧同步",
-      "tag": "s0-triangle",
-      "date": "2026-11-06",
-      "summary": "一份 triangle.slang 同出 SPIR-V 与 DXIL，两后端各画出顶点色三角形；frame-in-flight=2。",
-      "acceptance": [
-        "深蓝底 + 红顶 / 蓝左下 / 绿右下三角形",
-        "SPIR-V 入口恒为 main 的坑已修，Vulkan 不再空白",
-        "selftest 9/9、8 帧连续渲染稳定、deviceErrors=0"
-      ],
-      "exe": {
-        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "triangle",
-          "name": "双后端三角形",
-          "kind": "pair",
-          "note": "M0.3 验收时只查了画面没落盘截图；这里用 s0-triangle 原始代码现场重建并补图。两后端 PNG 逐字节相同。",
-          "baselines": {
-            "dx12": "example/m0.3/triangle-dx12.png",
-            "vulkan": "example/m0.3/triangle-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8",
-          "script": "example/m0.3/run.bat triangle"
-        },
-        {
-          "id": "selftest",
-          "name": "自检 9/9",
-          "kind": "selftest",
-          "note": "两后端字节码魔数、输入布局、日志断言一起过。",
-          "args": [
-            "--selftest"
-          ],
-          "expectLog": "SELFTEST PASS",
-          "command": "viewer.exe --selftest",
-          "script": "example/m0.3/run.bat selftest"
-        }
-      ]
-    },
-    {
-      "id": "m0.4",
-      "label": "M0.4",
-      "name": "模型 + 贴图 + 轨道相机",
-      "tag": "s0-model",
-      "date": "2026-11-07",
-      "summary": "tinygltf 读 Suzanne.glb，共享 Scene 上传 VB/IB/贴图/绑定集；model.slang 单源双目标；深度缓冲 + 背面剔除 + 轨道相机。",
-      "acceptance": [
-        "正常视角带贴图 Suzanne 双后端 PNG 逐字节一致（内壁/resize 像素差 ≤1/255）",
-        "相机钻进模型后：开剔除只剩背景，关剔除见内壁",
-        "resize 回归、selftest 11/11、deviceErrors=0"
-      ],
-      "exe": {
-        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "suzanne",
-          "name": "带贴图 Suzanne",
-          "kind": "pair",
-          "note": "固定相机角度保证可复现；调下面的参数可以现场换视角看效果。双后端 PNG 的 MD5 在正常视角下完全相同。",
-          "baselines": {
-            "dx12": "example/m0.4/suzanne-dx12.png",
-            "vulkan": "example/m0.4/suzanne-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--yaw",
-            "{yaw}",
-            "--pitch",
-            "{pitch}",
-            "--dist",
-            "{dist}",
-            "--cull",
-            "{cull}"
-          ],
-          "params": {
-            "yaw": {
-              "type": "range",
-              "label": "水平角 yaw",
-              "min": -180,
-              "max": 180,
-              "step": 1,
-              "default": "12"
-            },
-            "pitch": {
-              "type": "range",
-              "label": "俯仰 pitch",
-              "min": -80,
-              "max": 80,
-              "step": 1,
-              "default": "9"
-            },
-            "dist": {
-              "type": "range",
-              "label": "距离 dist",
-              "min": 0.45,
-              "max": 12,
-              "step": 0.05,
-              "default": "4.2"
-            },
-            "cull": {
-              "type": "select",
-              "label": "背面剔除",
-              "default": "back",
-              "options": [
-                "back",
-                "none"
-              ]
-            }
-          },
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-          "script": "example/m0.4/run.bat suzanne"
-        },
-        {
-          "id": "inner",
-          "name": "关剔除：看到内壁",
-          "kind": "pair",
-          "note": "相机距离压到 0.6（模型内部）：cull=none 显示带贴图内壁。与下面「开剔除」用例同机位对照。",
-          "baselines": {
-            "dx12": "example/m0.4/inner-dx12.png",
-            "vulkan": "example/m0.4/inner-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "4",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "{dist}",
-            "--cull",
-            "none"
-          ],
-          "params": {
-            "dist": {
-              "type": "select",
-              "label": "相机距离",
-              "default": "0.6",
-              "options": [
-                "0.6",
-                "4.2"
-              ]
-            }
-          },
-          "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull none",
-          "script": "example/m0.4/run.bat inner"
-        },
-        {
-          "id": "inner-cullback",
-          "name": "开剔除：只剩背景",
-          "kind": "pair",
-          "note": "同一机位把 cull 打开，内壁背面被剔掉，画面只剩清屏色——「剔除真生效」的可见证据。",
-          "baselines": {
-            "dx12": "example/m0.4/inner-cullback-dx12.png",
-            "vulkan": "example/m0.4/inner-cullback-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "4",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "0.6",
-            "--cull",
-            "back"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull back",
-          "script": "example/m0.4/run.bat inner"
-        },
-        {
-          "id": "resize",
-          "name": "resize 回归",
-          "kind": "pair",
-          "note": "640×360 → 1024×768，深度纹理 / framebuffer / pipeline 全部重建；保存前后两张图对照。",
-          "baselines": {
-            "dx12": "example/m0.4/resize-dx12.png",
-            "vulkan": "example/m0.4/resize-vulkan.png"
-          },
-          "beforeBaselines": {
-            "dx12": "example/m0.4/resize-dx12-before.png",
-            "vulkan": "example/m0.4/resize-vulkan-before.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "4.2",
-            "--resize",
-            "1024x768"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --resize 1024x768",
-          "script": "example/m0.4/run.bat resize"
-        },
-        {
-          "id": "selftest",
-          "name": "自检 11/11",
-          "kind": "selftest",
-          "note": "相机边界、矩阵、输入默认值、渲染器阶段标记一起过。",
-          "args": [
-            "--selftest"
-          ],
-          "expectLog": "SELFTEST PASS",
-          "command": "viewer.exe --selftest",
-          "script": "example/m0.4/run.bat selftest"
-        }
-      ]
-    },
-    {
-      "id": "m0.5",
-      "label": "M0.5",
-      "name": "ImGui HUD + S0 总验收",
-      "tag": "s0-done",
-      "date": "2026-11-07",
-      "summary": "一份 NVRHI 共享 HUD 渲染后端把 ImGui 叠到两后端画面上（hud.slang 同样单源出 SPIR-V + DXIL）；--mode 分发器定型；S0 三条硬指标总验收。",
-      "acceptance": [
-        "HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 后端名 / mode / 调试层，且 3D 画面同时可见",
-        "--no-hud 画面与 M0.4 基线逐字节相同（MD5 7e528087…），双后端一致",
-        "selftest 14/14，含 8 个 Slang 产物魔数（SPIR-V 0x07230203 / DXIL DXBC）",
-        "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
-      ],
-      "exe": {
-        "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
-        "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "hud",
-          "name": "双后端 ImGui HUD",
-          "kind": "pair",
-          "note": "两张 PNG 必然不同：HUD 里印的 backend 与 debug layer 本来就按后端不同，这正是「当前后端名」的可见证据；3D 部分与 M0.4 一致。截图回归模式下时序数据用固定样本（面板标 capture/replay），所以 PNG 可复现。拖下面的 dist 滑块可现场改视角，此时与基线不同属预期。",
-          "baselines": {
-            "dx12": "example/m0.5/hud-dx12.png",
-            "vulkan": "example/m0.5/hud-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--hud",
-            "--size",
-            "960x540",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "{dist}",
-            "--cull",
-            "back"
-          ],
-          "params": {
-            "dist": {
-              "type": "range",
-              "label": "相机距离 dist",
-              "min": 0.45,
-              "max": 12,
-              "step": 0.05,
-              "default": "4.2"
-            }
-          },
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-          "script": "example/m0.5/run.bat hud"
-        },
-        {
-          "id": "controls",
-          "name": "HUD 控件值 → 画面变化（清屏色）",
-          "kind": "pair",
-          "note": "与上面的 hud 用例对照看：同一个 HudFrame 的 colorIndex 从 0 变 2，HUD 的 clear color 控件显示 2、背景从深蓝变绿，Suzanne 正脸仍完整可见；back-face culling 复选框也按 cullBack 显示勾选状态。命令行给的是控件初值，和鼠标点控件写回 viewer 走的是同一条双向 POD 通道；真实鼠标点选另见交互用例。两张 PNG 不同是 HUD 里的 backend / debug 文本不同，不是 3D 画面不一致：实测 895 个差异像素的 bbox 为 x=23..328 / y=77..147，全在 adapter / debug 两行文字内，3D 区域零差异。",
-          "baselines": {
-            "dx12": "example/m0.5/controls-dx12.png",
-            "vulkan": "example/m0.5/controls-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--hud",
-            "--size",
-            "960x540",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "4.2",
-            "--cull",
-            "back",
-            "--color",
-            "2"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
-          "script": "example/m0.5/run.bat controls"
-        },
-        {
-          "id": "nohud",
-          "name": "关 HUD：历史基线逐字节不变",
-          "kind": "pair",
-          "note": "--no-hud 时完全不碰 ImGui，M0.1~M0.4 的回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4/suzanne-*.png 相同。",
-          "baselines": {
-            "dx12": "example/m0.5/nohud-dx12.png",
-            "vulkan": "example/m0.5/nohud-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--no-hud",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "4.2",
-            "--cull",
-            "back"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
-          "script": "example/m0.5/run.bat nohud"
-        },
-        {
-          "id": "resize",
-          "name": "HUD + resize 回归",
-          "kind": "pair",
-          "note": "640×360 → 1024×768，depth / framebuffer / 两套 Scene pipeline / HUD pipeline 一起重建；保存前后两张图对照。两后端 PNG 不同是 HUD 里的 backend / debug 文字本来不同，不是 3D 画面不一致（关掉 HUD 的对照用例逐字节相同）。",
-          "baselines": {
-            "dx12": "example/m0.5/resize-dx12.png",
-            "vulkan": "example/m0.5/resize-vulkan.png"
-          },
-          "beforeBaselines": {
-            "dx12": "example/m0.5/resize-dx12-before.png",
-            "vulkan": "example/m0.5/resize-vulkan-before.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--hud",
-            "--size",
-            "640x360",
-            "--resize",
-            "1024x768",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "4.2"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
-          "script": "example/m0.5/run.bat resize"
-        },
-        {
-          "id": "selftest",
-          "name": "自检 14/14 + 8 个 shader 产物",
-          "kind": "selftest",
-          "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
-          "args": [
-            "--selftest"
-          ],
-          "expectLog": "SELFTEST PASS (14/14)",
-          "command": "viewer.exe --selftest",
-          "script": "example/m0.5/run.bat selftest"
-        },
-        {
-          "id": "hud-controls",
-          "name": "HUD 控件（交互）",
-          "kind": "manual",
-          "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
-          "args": [
-            "--mode",
-            "normal",
-            "--hud"
-          ],
-          "command": "viewer.exe --mode normal --hud",
-          "script": "example/m0.5/run.bat controls"
-        }
-      ]
-    },
-    {
-      "id": "m0.6",
-      "label": "M0.6",
-      "name": "GPU 帧内计时（NVRHI timestamp query）",
-      "tag": "m0.6",
-      "date": "2026-11-07",
-      "summary": "两后端共享的 GpuTimer 用一对 NVRHI timer query 包住整帧 GPU 命令，异步轮询出真实 GPU 耗时；HUD 在 CPU frame ms 旁新增 GPU ms 行 + gpu ms 曲线，一眼分清 CPU 帧间隔与 GPU 耗时。",
-      "acceptance": [
-        "交互模式两后端均有 'gpu timer resolved' 日志（DX12 0.0369 ms / Vulkan 0.0380 ms，量级合理）",
-        "HUD 并排显示 CPU frame ms 与 GPU ms（NVRHI timer），各自曲线",
-        "--no-hud 完全不建 query，两后端 PNG MD5 仍为 7e528087…（M0.4/M0.5 基线逐字节不变）",
-        "截图回归模式 GPU 样本固定（面板标 capture/replay），PNG 可复现",
-        "selftest 14/14（HUD selftest 覆盖秒→ms 换算与环形游标回绕），ctest 两后端 100%"
-      ],
-      "exe": {
-        "dx12": "build/dx12/viewer.exe",
-        "vulkan": "build/vulkan/viewer.exe"
-      },
-      "cases": [
-        {
-          "id": "hud",
-          "name": "GPU 帧内计时 HUD（双后端）",
-          "kind": "pair",
-          "note": "面板 'GPU x.xx ms (NVRHI timer)' 行 + gpu ms 曲线是 M0.6 新增；timer query 异步轮询天然有 1~2 帧延迟。截图回归模式用固定样本（GPU 0.63 ms），面板标 capture/replay。两张 PNG 必然不同：HUD 里印的 backend / debug layer 按后端不同，3D 部分一致。拖下面的 dist 滑块现场改视角，与基线不同属预期。",
-          "baselines": {
-            "dx12": "example/m0.6/hud-dx12.png",
-            "vulkan": "example/m0.6/hud-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--hud",
-            "--size",
-            "960x540",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "{dist}",
-            "--cull",
-            "back"
-          ],
-          "params": {
-            "dist": {
-              "type": "range",
-              "label": "相机距离 dist",
-              "min": 0.45,
-              "max": 12,
-              "step": 0.05,
-              "default": "4.2"
-            }
-          },
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
-          "script": "example/m0.6/run.bat hud"
-        },
-        {
-          "id": "nohud",
-          "name": "关 HUD：历史基线逐字节不变（零 query）",
-          "kind": "pair",
-          "note": "--no-hud 时 GpuTimer 完全不 ensure/poll/begin/end，M0.1~M0.5 回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4、example/m0.5 相同。",
-          "baselines": {
-            "dx12": "example/m0.6/nohud-dx12.png",
-            "vulkan": "example/m0.6/nohud-vulkan.png"
-          },
-          "args": [
-            "--screenshot",
-            "{out}",
-            "--frames",
-            "8",
-            "--no-hud",
-            "--yaw",
-            "12",
-            "--pitch",
-            "9",
-            "--dist",
-            "4.2",
-            "--cull",
-            "back"
-          ],
-          "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
-          "script": "example/m0.6/run.bat nohud"
-        },
-        {
-          "id": "selftest",
-          "name": "selftest（14/14，含 GPU 计时换算）",
-          "kind": "selftest",
-          "note": "模式分发器、HUD 投影 / POD、GPU 秒→毫秒换算与环形游标回绕、以及 model.slang 与 hud.slang 共 8 个产物的魔数，全部机械校验。",
-          "args": [
-            "--selftest"
-          ],
-          "expectLog": "SELFTEST PASS (14/14)",
-          "command": "viewer.exe --selftest",
-          "script": "example/m0.6/run.bat selftest"
-        }
-      ]
+     "id": "window",
+     "name": "空窗口（交互）",
+     "kind": "manual",
+     "note": "该版本没有 GPU 回读能力，窗口用例需人眼确认：1280×720 无 GL 上下文窗口，ESC 退出。不在网页里自动运行（会阻塞并抢焦点）。",
+     "args": [],
+     "command": "viewer.exe",
+     "script": "example/m0.1/run.bat window"
     }
-  ]
+   ]
+  },
+  {
+   "id": "m0.2",
+   "label": "M0.2",
+   "name": "设备 + swapchain",
+   "tag": "s0-device",
+   "date": "2026-11-06",
+   "summary": "NVRHI device + swapchain 双后端，GPU 像素真回读写 PNG；零厂商 SDK，Vulkan 全函数运行时解析。",
+   "acceptance": [
+    "双后端清屏逐字节相同（MD5 bdebaf50…）",
+    "resize 640×360 → 1024×768 不黑屏",
+    "deviceErrors=0、退出无段错误"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "clear",
+     "name": "双后端清屏",
+     "kind": "pair",
+     "note": "同一份清屏色经两条完全不同的后端路径写出 PNG，逐字节相同即证明抽象层没绑死单一 API。",
+     "baselines": {
+      "dx12": "example/m0.2/clear-dx12.png",
+      "vulkan": "example/m0.2/clear-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8",
+     "script": "example/m0.2/run.bat clear"
+    },
+    {
+     "id": "resize",
+     "name": "resize 回归",
+     "kind": "image",
+     "note": "运行中重建 swapchain，前后两张 PNG 均非黑；同时产出 <out>.before.png。",
+     "baselines": {
+      "dx12": "example/m0.2/resize-dx12.png",
+      "vulkan": "example/m0.2/resize-vulkan.png"
+     },
+     "beforeBaselines": {
+      "dx12": "example/m0.2/resize-dx12-before.png",
+      "vulkan": "example/m0.2/resize-vulkan-before.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--resize",
+      "1024x768"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --resize 1024x768",
+     "script": "example/m0.2/run.bat resize"
+    },
+    {
+     "id": "clear-color",
+     "name": "清屏色切换",
+     "kind": "image",
+     "note": "--color 0..3 切换四种清屏色，验证 clear 值一路传到两个后端；基线对应默认的 --color 1。",
+     "baselines": {
+      "dx12": "example/m0.2/color-dx12.png",
+      "vulkan": "example/m0.2/color-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--color",
+      "{color}"
+     ],
+     "params": {
+      "color": {
+       "type": "select",
+       "label": "清屏色",
+       "default": "1",
+       "options": [
+        "0",
+        "1",
+        "2",
+        "3"
+       ]
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 4 --color 1",
+     "script": "example/m0.2/run.bat color"
+    }
+   ]
+  },
+  {
+   "id": "m0.3",
+   "label": "M0.3",
+   "name": "三角形 + 帧同步",
+   "tag": "s0-triangle",
+   "date": "2026-11-06",
+   "summary": "一份 triangle.slang 同出 SPIR-V 与 DXIL，两后端各画出顶点色三角形；frame-in-flight=2。",
+   "acceptance": [
+    "深蓝底 + 红顶 / 蓝左下 / 绿右下三角形",
+    "SPIR-V 入口恒为 main 的坑已修，Vulkan 不再空白",
+    "selftest 9/9、8 帧连续渲染稳定、deviceErrors=0"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "triangle",
+     "name": "双后端三角形",
+     "kind": "pair",
+     "note": "M0.3 验收时只查了画面没落盘截图；这里用 s0-triangle 原始代码现场重建并补图。两后端 PNG 逐字节相同。",
+     "baselines": {
+      "dx12": "example/m0.3/triangle-dx12.png",
+      "vulkan": "example/m0.3/triangle-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8",
+     "script": "example/m0.3/run.bat triangle"
+    },
+    {
+     "id": "selftest",
+     "name": "自检 9/9",
+     "kind": "selftest",
+     "note": "两后端字节码魔数、输入布局、日志断言一起过。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.3/run.bat selftest"
+    }
+   ]
+  },
+  {
+   "id": "m0.4",
+   "label": "M0.4",
+   "name": "模型 + 贴图 + 轨道相机",
+   "tag": "s0-model",
+   "date": "2026-11-07",
+   "summary": "tinygltf 读 Suzanne.glb，共享 Scene 上传 VB/IB/贴图/绑定集；model.slang 单源双目标；深度缓冲 + 背面剔除 + 轨道相机。",
+   "acceptance": [
+    "正常视角带贴图 Suzanne 双后端 PNG 逐字节一致（内壁/resize 像素差 ≤1/255）",
+    "相机钻进模型后：开剔除只剩背景，关剔除见内壁",
+    "resize 回归、selftest 11/11、deviceErrors=0"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "suzanne",
+     "name": "带贴图 Suzanne",
+     "kind": "pair",
+     "note": "固定相机角度保证可复现；调下面的参数可以现场换视角看效果。双后端 PNG 的 MD5 在正常视角下完全相同。",
+     "baselines": {
+      "dx12": "example/m0.4/suzanne-dx12.png",
+      "vulkan": "example/m0.4/suzanne-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "{yaw}",
+      "--pitch",
+      "{pitch}",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "{cull}"
+     ],
+     "params": {
+      "yaw": {
+       "type": "range",
+       "label": "水平角 yaw",
+       "min": -180,
+       "max": 180,
+       "step": 1,
+       "default": "12"
+      },
+      "pitch": {
+       "type": "range",
+       "label": "俯仰 pitch",
+       "min": -80,
+       "max": 80,
+       "step": 1,
+       "default": "9"
+      },
+      "dist": {
+       "type": "range",
+       "label": "距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "4.2"
+      },
+      "cull": {
+       "type": "select",
+       "label": "背面剔除",
+       "default": "back",
+       "options": [
+        "back",
+        "none"
+       ]
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/m0.4/run.bat suzanne"
+    },
+    {
+     "id": "inner",
+     "name": "关剔除：看到内壁",
+     "kind": "pair",
+     "note": "相机距离压到 0.6（模型内部）：cull=none 显示带贴图内壁。与下面「开剔除」用例同机位对照。",
+     "baselines": {
+      "dx12": "example/m0.4/inner-dx12.png",
+      "vulkan": "example/m0.4/inner-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "none"
+     ],
+     "params": {
+      "dist": {
+       "type": "select",
+       "label": "相机距离",
+       "default": "0.6",
+       "options": [
+        "0.6",
+        "4.2"
+       ]
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull none",
+     "script": "example/m0.4/run.bat inner"
+    },
+    {
+     "id": "inner-cullback",
+     "name": "开剔除：只剩背景",
+     "kind": "pair",
+     "note": "同一机位把 cull 打开，内壁背面被剔掉，画面只剩清屏色——「剔除真生效」的可见证据。",
+     "baselines": {
+      "dx12": "example/m0.4/inner-cullback-dx12.png",
+      "vulkan": "example/m0.4/inner-cullback-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "0.6",
+      "--cull",
+      "back"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 4 --yaw 12 --pitch 9 --dist 0.6 --cull back",
+     "script": "example/m0.4/run.bat inner"
+    },
+    {
+     "id": "resize",
+     "name": "resize 回归",
+     "kind": "pair",
+     "note": "640×360 → 1024×768，深度纹理 / framebuffer / pipeline 全部重建；保存前后两张图对照。",
+     "baselines": {
+      "dx12": "example/m0.4/resize-dx12.png",
+      "vulkan": "example/m0.4/resize-vulkan.png"
+     },
+     "beforeBaselines": {
+      "dx12": "example/m0.4/resize-dx12-before.png",
+      "vulkan": "example/m0.4/resize-vulkan-before.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--resize",
+      "1024x768"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --resize 1024x768",
+     "script": "example/m0.4/run.bat resize"
+    },
+    {
+     "id": "selftest",
+     "name": "自检 11/11",
+     "kind": "selftest",
+     "note": "相机边界、矩阵、输入默认值、渲染器阶段标记一起过。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.4/run.bat selftest"
+    }
+   ]
+  },
+  {
+   "id": "m0.5",
+   "label": "M0.5",
+   "name": "ImGui HUD + S0 总验收",
+   "tag": "s0-done",
+   "date": "2026-11-07",
+   "summary": "一份 NVRHI 共享 HUD 渲染后端把 ImGui 叠到两后端画面上（hud.slang 同样单源出 SPIR-V + DXIL）；--mode 分发器定型；S0 三条硬指标总验收。",
+   "acceptance": [
+    "HUD 实拍显示 FPS / 帧时间曲线 / 相机参数 / 后端名 / mode / 调试层，且 3D 画面同时可见",
+    "--no-hud 画面与 M0.4 基线逐字节相同（MD5 7e528087…），双后端一致",
+    "selftest 14/14，含 8 个 Slang 产物魔数（SPIR-V 0x07230203 / DXIL DXBC）",
+    "HUD + resize 回归双后端 deviceErrors=0；--mode 未知值被拒绝"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hud",
+     "name": "双后端 ImGui HUD",
+     "kind": "pair",
+     "note": "两张 PNG 必然不同：HUD 里印的 backend 与 debug layer 本来就按后端不同，这正是「当前后端名」的可见证据；3D 部分与 M0.4 一致。截图回归模式下时序数据用固定样本（面板标 capture/replay），所以 PNG 可复现。拖下面的 dist 滑块可现场改视角，此时与基线不同属预期。",
+     "baselines": {
+      "dx12": "example/m0.5/hud-dx12.png",
+      "vulkan": "example/m0.5/hud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "back"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "4.2"
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/m0.5/run.bat hud"
+    },
+    {
+     "id": "controls",
+     "name": "HUD 控件值 → 画面变化（清屏色）",
+     "kind": "pair",
+     "note": "与上面的 hud 用例对照看：同一个 HudFrame 的 colorIndex 从 0 变 2，HUD 的 clear color 控件显示 2、背景从深蓝变绿，Suzanne 正脸仍完整可见；back-face culling 复选框也按 cullBack 显示勾选状态。命令行给的是控件初值，和鼠标点控件写回 viewer 走的是同一条双向 POD 通道；真实鼠标点选另见交互用例。两张 PNG 不同是 HUD 里的 backend / debug 文本不同，不是 3D 画面不一致：实测 895 个差异像素的 bbox 为 x=23..328 / y=77..147，全在 adapter / debug 两行文字内，3D 区域零差异。",
+     "baselines": {
+      "dx12": "example/m0.5/controls-dx12.png",
+      "vulkan": "example/m0.5/controls-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--color",
+      "2"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --color 2",
+     "script": "example/m0.5/run.bat controls"
+    },
+    {
+     "id": "nohud",
+     "name": "关 HUD：历史基线逐字节不变",
+     "kind": "pair",
+     "note": "--no-hud 时完全不碰 ImGui，M0.1~M0.4 的回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4/suzanne-*.png 相同。",
+     "baselines": {
+      "dx12": "example/m0.5/nohud-dx12.png",
+      "vulkan": "example/m0.5/nohud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/m0.5/run.bat nohud"
+    },
+    {
+     "id": "resize",
+     "name": "HUD + resize 回归",
+     "kind": "pair",
+     "note": "640×360 → 1024×768，depth / framebuffer / 两套 Scene pipeline / HUD pipeline 一起重建；保存前后两张图对照。两后端 PNG 不同是 HUD 里的 backend / debug 文字本来不同，不是 3D 画面不一致（关掉 HUD 的对照用例逐字节相同）。",
+     "baselines": {
+      "dx12": "example/m0.5/resize-dx12.png",
+      "vulkan": "example/m0.5/resize-vulkan.png"
+     },
+     "beforeBaselines": {
+      "dx12": "example/m0.5/resize-dx12-before.png",
+      "vulkan": "example/m0.5/resize-vulkan-before.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "640x360",
+      "--resize",
+      "1024x768",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 640x360 --resize 1024x768 --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/m0.5/run.bat resize"
+    },
+    {
+     "id": "selftest",
+     "name": "自检 14/14 + 8 个 shader 产物",
+     "kind": "selftest",
+     "note": "模式分发器、HUD 投影 / POD、以及 model.slang 与 hud.slang 各自同出 SPIR-V + DXIL 共 8 个产物的魔数，全部机械校验。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (14/14)",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.5/run.bat selftest"
+    },
+    {
+     "id": "hud-controls",
+     "name": "HUD 控件（交互）",
+     "kind": "manual",
+     "note": "交互窗口里手点 HUD：勾选/取消 back-face culling、拖 clear color、点 reset camera，观察 Suzanne 与清屏色即时变化；WantCaptureMouse 保证拖面板不会误转相机。控件状态的静态对照见上面的 controls 用例，控件加法见 docs/IMGUI-GUIDE.md。需在真实窗口操作，不在网页里自动运行。",
+     "args": [
+      "--mode",
+      "normal",
+      "--hud"
+     ],
+     "command": "viewer.exe --mode normal --hud",
+     "script": "example/m0.5/run.bat controls"
+    }
+   ]
+  },
+  {
+   "id": "m0.6",
+   "label": "M0.6",
+   "name": "GPU 帧内计时（NVRHI timestamp query）",
+   "tag": "m0.6",
+   "date": "2026-11-07",
+   "summary": "两后端共享的 GpuTimer 用一对 NVRHI timer query 包住整帧 GPU 命令，异步轮询出真实 GPU 耗时；HUD 在 CPU frame ms 旁新增 GPU ms 行 + gpu ms 曲线，一眼分清 CPU 帧间隔与 GPU 耗时。",
+   "acceptance": [
+    "交互模式两后端均有 'gpu timer resolved' 日志（DX12 0.0369 ms / Vulkan 0.0380 ms，量级合理）",
+    "HUD 并排显示 CPU frame ms 与 GPU ms（NVRHI timer），各自曲线",
+    "--no-hud 完全不建 query，两后端 PNG MD5 仍为 7e528087…（M0.4/M0.5 基线逐字节不变）",
+    "截图回归模式 GPU 样本固定（面板标 capture/replay），PNG 可复现",
+    "selftest 14/14（HUD selftest 覆盖秒→ms 换算与环形游标回绕），ctest 两后端 100%"
+   ],
+   "exe": {
+    "dx12": "build/showcase/{tag}/build/DX12/viewer.exe",
+    "vulkan": "build/showcase/{tag}/build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hud",
+     "name": "GPU 帧内计时 HUD（双后端）",
+     "kind": "pair",
+     "note": "面板 'GPU x.xx ms (NVRHI timer)' 行 + gpu ms 曲线是 M0.6 新增；timer query 异步轮询天然有 1~2 帧延迟。截图回归模式用固定样本（GPU 0.63 ms），面板标 capture/replay。两张 PNG 必然不同：HUD 里印的 backend / debug layer 按后端不同，3D 部分一致。拖下面的 dist 滑块现场改视角，与基线不同属预期。",
+     "baselines": {
+      "dx12": "example/m0.6/hud-dx12.png",
+      "vulkan": "example/m0.6/hud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "back"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "4.2"
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/m0.6/run.bat hud"
+    },
+    {
+     "id": "nohud",
+     "name": "关 HUD：历史基线逐字节不变（零 query）",
+     "kind": "pair",
+     "note": "--no-hud 时 GpuTimer 完全不 ensure/poll/begin/end，M0.1~M0.5 回放基线保持原样。两后端 PNG 的 MD5 都是 7e528087d19722d8f9ef4de35e36d382，与 example/m0.4、example/m0.5 相同。",
+     "baselines": {
+      "dx12": "example/m0.6/nohud-dx12.png",
+      "vulkan": "example/m0.6/nohud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/m0.6/run.bat nohud"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（14/14，含 GPU 计时换算）",
+     "kind": "selftest",
+     "note": "模式分发器、HUD 投影 / POD、GPU 秒→毫秒换算与环形游标回绕、以及 model.slang 与 hud.slang 共 8 个产物的魔数，全部机械校验。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (14/14)",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.6/run.bat selftest"
+    }
+   ]
+  },
+  {
+   "id": "m0.7",
+   "label": "M0.7",
+   "name": "高模测试资产生成器（--model）",
+   "tag": "m0.7",
+   "date": "2026-11-07",
+   "summary": "scripts/gen-dense-mesh.py 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204800 tri / 细分球 327680 tri，零网络、同参数 MD5 确定），内嵌棋盘格 PNG；viewer 新增 --model 白名单加载，HUD 增 model 行自证。vendored meshoptimizer v1.3 作 S1 切簇对照基准（不入构建）。",
+   "acceptance": [
+    "同参数两次生成 GLB MD5 相同（TorusKnotDense=130c66f2…，IcoSphereDense=7edaa6a7…），生成过程零网络、纯 stdlib",
+    "--model 加载双后端截图成功、deviceErrors=0；HUD 显示 'model : TorusKnotDense.glb (204800 tri)'",
+    "真实 GPU ms 对比（交互首帧 resolve）：Suzanne 0.032/0.039 → 纽结 0.066/0.065 → 球 0.154/0.153 ms（DX12/VK 互相印证）",
+    "不带 --model 时 Suzanne 基线逐字节不变：两后端 --no-hud PNG MD5 仍为 7e528087…",
+    "selftest 14/14（两后端）；--check 退出码 0",
+    "thirdparty/meshoptimizer 就位但 CMake 零引用"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hud",
+     "name": "TorusKnotDense 204800 tri（--model + HUD 自证）",
+     "kind": "pair",
+     "note": "--model TorusKnotDense.glb：程序化 (2,3) 环面纽结管，棋盘格 UV。HUD 新增 model 行显示文件名与三角形数。两张 PNG 必然不同（backend/debug layer 文本不同），3D 部分一致。dist 可拖动现场改视角。",
+     "baselines": {
+      "dx12": "example/m0.7/hud-dx12.png",
+      "vulkan": "example/m0.7/hud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "{dist}",
+      "--cull",
+      "back",
+      "--model",
+      "TorusKnotDense.glb"
+     ],
+     "params": {
+      "dist": {
+       "type": "range",
+       "label": "相机距离 dist",
+       "min": 0.45,
+       "max": 12,
+       "step": 0.05,
+       "default": "5.5"
+      }
+     },
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 5.5 --cull back --model TorusKnotDense.glb",
+     "script": "example/m0.7/run.bat hud"
+    },
+    {
+     "id": "icosphere",
+     "name": "IcoSphereDense 327680 tri（--model 换形状）",
+     "kind": "pair",
+     "note": "--model IcoSphereDense.glb：20*4^7 细分球，等距柱状 UV（经线接缝有纹理环绕线，属预期且对 M0.8 调试着色有用）。无 HUD。",
+     "baselines": {
+      "dx12": "example/m0.7/icosphere-dx12.png",
+      "vulkan": "example/m0.7/icosphere-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--model",
+      "IcoSphereDense.glb"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back --model IcoSphereDense.glb",
+     "script": "example/m0.7/run.bat icosphere"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（14/14，阶段校验 M0.7）",
+     "kind": "selftest",
+     "note": "与 M0.6 相同的 14 项机械校验，stage 检查改为 M0.7。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (14/14)",
+     "command": "viewer.exe --selftest",
+     "script": "example/m0.7/run.bat selftest"
+    }
+   ]
+  }
+ ]
 }

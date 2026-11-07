@@ -66,7 +66,7 @@ public:
     ~VkBackend() override { shutdown(); }
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
-              std::string& outError) override {
+              const char* modelFile, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -92,8 +92,10 @@ public:
 
         if (!createSwapchain(outError)) return false;
         if (!createTargets(outError)) return false;
-        if (!scene_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
+        if (!scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,

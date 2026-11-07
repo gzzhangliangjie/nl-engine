@@ -72,6 +72,8 @@ struct HudFrame {
     const char* debugLayer = "";
     const char* mode       = "";
     const char* stage      = "";
+    const char* model      = "";    // M0.7：--model 加载的 .glb 文件名
+    int   triangleCount    = 0;     // M0.7：模型三角形数
     // ---- 双向：viewer 传当前值，HUD 写回控件结果 ----
     bool cullBack          = true;
     int  colorIndex        = 0;
@@ -87,13 +89,20 @@ struct DeviceInfo {
     bool        rayQuery = false;
     bool        shaderInt64Atomics = false;
     bool        indirectDraw = false;
+    // M0.7：--model 加载的模型文件名与三角形数（HUD 截图自证加载了哪个模型）。
+    std::string modelName;
+    std::uint32_t triangleCount = 0;
 };
 
 class Renderer {
 public:
     // nativeWindow：Windows 下是 HWND（core::Window::nativeHandle()）。
+    // modelFile：assets/models/ 下的 .glb 文件名（--model 传入；缺省 Suzanne.glb，
+    // 历史基线不变）。renderer 侧做白名单校验：ASCII 文件名、无路径分隔符。
     // 总是返回对象；创建失败时 valid()==false，原因在 lastError()。
-    static std::unique_ptr<Renderer> create(void* nativeWindow, Extent extent, bool enableDebugLayer);
+    static std::unique_ptr<Renderer> create(void* nativeWindow, Extent extent,
+                                            bool enableDebugLayer,
+                                            const char* modelFile = "Suzanne.glb");
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

@@ -14,8 +14,8 @@ nl-engine/
 │   ├── src/scene.cpp  ← 两后端共享：glTF 加载 / staging 上传 / 绑定集 / pipeline
 │   └── src/hud.cpp    ← 两后端共享：自写 NVRHI ImGui 渲染后端（不用官方 D3D12/VK backend）
 ├── viewer/            ← 可见用例 + --screenshot 回归 + HudFrame 双向 POD
-├── assets/models/     ← Suzanne.glb（Khronos 官方 glTF 样例，单文件内嵌贴图）
-├── thirdparty/        ← glfw / nvrhi / imgui(1.91.9) / vulkan-headers / directx-headers / stb / tinygltf（本地 vendored）
+├── assets/models/     ← Suzanne.glb（Khronos 官方样例）+ TorusKnotDense.glb / IcoSphereDense.glb（程序化致密测试资产，gen-dense-mesh.py 生成）
+├── thirdparty/        ← glfw / nvrhi / imgui(1.91.9) / vulkan-headers / directx-headers / stb / tinygltf / meshoptimizer(v1.3 文档级对照，不入构建)（本地 vendored）
 ├── docs/
 │   ├── PLAN.md        ← 方案：技术决策、框架选型、工程组织
 │   ├── ROADMAP.md     ← 步骤：S0~S14 详细路线图 + 本地代码对照表 + 调试工具分层
@@ -41,9 +41,9 @@ nl-engine/
 └── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
 
-## 当前进度与运行（S0 全部完成 + M0.6 能力补齐）
+## 当前进度与运行（S0 全部完成 + M0.6/M0.7 能力补齐）
 
-**2026-11-07：S0 收口（tag `s0-done`），随后进入 S0 后能力补齐版本序列，M0.6 已完成。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
+**2026-11-07：S0 收口（tag `s0-done`），随后进入 S0 后能力补齐版本序列，M0.6（GPU 计时）、M0.7（高模测试资产 + --model）已完成。** 零厂商图形 SDK：D3D12 头/库/调试层来自 Windows SDK，Vulkan 头走本地 vendored `Vulkan-Headers`、loader 用驱动自带 `vulkan-1.dll`，Slang 独立获取。构建只需 VS2022 + Windows SDK + 便携 CMake。
 
 ```bash
 scripts/build-m0.2.bat DX12          # 或 VULKAN：configure + build + selftest（14/14）
@@ -51,14 +51,17 @@ build/<backend>/viewer.exe            # 交互窗口（默认开 HUD）：左键
 build/<backend>/viewer.exe --mode normal                 # 模式分发器；未知模式退出 1 并列出可用名
 build/<backend>/viewer.exe --screenshot out.png --frames 8   # 截图回归默认 --no-hud，保持 M0.1~M0.4 基线不变
 build/<backend>/viewer.exe --screenshot hud.png --frames 8 --hud --size 960x540
+build/<backend>/viewer.exe --screenshot dense.png --hud --dist 5.5 --model TorusKnotDense.glb   # 20 万 tri 纽结
 build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关剔除看内壁
 build/<backend>/viewer.exe --selftest
+python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnotDense.glb   # 程序化致密资产（零网络、MD5 确定）
 ```
 
 - **交互窗口**：Suzanne 上叠 ImGui HUD——FPS / 帧时间曲线 / yaw·pitch·dist / 后端名 + adapter + 调试层 / mode / stage，控件可直接改背面剔除、清屏色、重置相机（双向 POD 每帧回写）。控件怎么加、下拉框 / 选择菜单能不能用，见 `docs/IMGUI-GUIDE.md`。
 - **截图可复现**：实时 FPS 写进 PNG 会让基线 MD5 永远对不上，所以 `--screenshot` 的 HUD 时序数据用固定样本并标注 `capture/replay (fixed samples)`；交互窗口显示真实采样。
 - **S0 总验收**：`model.slang` 与 `hud.slang` 各自同出 SPIR-V + DXIL（`--selftest` 机械核对 8 个产物魔数）；两后端 `deviceErrors=0`、selftest 14/14、ctest 100%；`--no-hud` 正常视角双后端 PNG 逐字节相同（MD5 `7e528087…`），`--hud` 两张必然不同（面板印的后端名 / 调试层不同，不是 3D 画面不一致）。证据：`docs/screenshots/s0.png`、`m0.5-*.png`、`example/m0.5/`、`docs/MILESTONES.md`。
 - **M0.6 GPU 帧内计时（tag `m0.6`）**：两后端共享的 `GpuTimer` 用一对 NVRHI timer query 包住整帧 GPU 命令，HUD 在 CPU `frame ms` 旁新增 `GPU x.xx ms (NVRHI timer)` 行 + gpu ms 曲线——两者并排一眼分清 CPU 帧间隔与 GPU 耗时。`--no-hud` 完全不建 query，M0.1~M0.5 基线逐字节不变。计划见 `docs/s0/M0.6-PLAN.md`。
+- **M0.7 高模测试资产（tag `m0.7`）**：`scripts/gen-dense-mesh.py` 纯 stdlib 程序化生成致密网格 GLB（环面纽结 204,800 tri / 细分球 327,680 tri，零网络、同参数 MD5 确定、内嵌棋盘格 PNG）；viewer 新增 `--model <name.glb>`（assets/ 下白名单），HUD 增 `model : <名> (N tri)` 行；`thirdparty/meshoptimizer` v1.3 作 S1 切簇对照基准（文档级，不入构建）。S1 切簇的命门就位。计划见 `docs/s0/M0.7-PLAN.md`。
 - **调试工具**：帧结构调试主用 RenderDoc（L1，进程外零改动），GPU 帧内计时走 NVRHI timestamp query（L2 整帧部分已由 M0.6 补掉，按 pass 拆分 `--profile` 为穿插项，排在 M0.7~M0.9 序列之后视需要插），Nsight / PIX / PresentMon / Tracy 做时间线佐证（L3）。分层计划见 `docs/s0/S0-PLAN.md`。
 
 ## 成果展示台（按版本看用例）
@@ -72,8 +75,8 @@ python tools/showcase/rebuild.py              # 干净 clone 后重建历史 tag
 python tools/showcase/server.py --check       # 放行门禁：本轮用例是否已归位 example/（退出码 0 才放行）
 ```
 
-- 页面可切换 M0.1~M0.6、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线；历史版本 exe 按 tag 快照从 `build/showcase/<tag>/` 解析，缺失时先跑 `tools/showcase/rebuild.py`）。「运行看效果」是 `--screenshot` 截图回归，窗口闪一下即退是设计使然；要看真实可交互窗口，点侧栏「开交互窗口」（不截图、不比对基线，窗口保持到手动关闭）。
-- M0.4 可调 yaw / pitch / dist / cull 实时换视角；M0.5 有 `hud`（可调 dist）、`controls`（HUD 控件值 → 绿背景 / Suzanne 正脸的静态对照）、`nohud` / `resize` / `selftest`；M0.6 有 `hud`（GPU ms 行 + 双曲线）/ `nohud`（零 query parity）/ `selftest`。HUD 控件点选是交互用例（标 `manual`，网页不自动跑）。
+- 页面可切换 M0.1~M0.7、切换 DX12 / Vulkan / 双后端并排；用例卡显示基线截图、验收判据、复现命令，点「运行看效果」由**该版本自己的 exe** 现场出图（输出到 `build/showcase/runs/`，不覆盖基线；历史版本 exe 按 tag 快照从 `build/showcase/<tag>/` 解析，缺失时先跑 `tools/showcase/rebuild.py`）。「运行看效果」是 `--screenshot` 截图回归，窗口闪一下即退是设计使然；要看真实可交互窗口，点侧栏「开交互窗口」（不截图、不比对基线，窗口保持到手动关闭）。
+- M0.4 可调 yaw / pitch / dist / cull 实时换视角；M0.5 有 `hud`（可调 dist）、`controls`（HUD 控件值 → 绿背景 / Suzanne 正脸的静态对照）、`nohud` / `resize` / `selftest`；M0.6 有 `hud`（GPU ms 行 + 双曲线）/ `nohud`（零 query parity）/ `selftest`；M0.7 有 `hud`（TorusKnotDense 204800 tri + model 行，可调 dist）/ `icosphere`（327680 tri 换形状）/ `selftest`。HUD 控件点选是交互用例（标 `manual`，网页不自动跑）。
 - 双后端结果除 MD5 外还做像素级比对：正常视角逐字节一致，内壁/resize 只差 1~2 个像素（≤1/255，GPU 取整噪声），页面如实标注而不是笼统写「一致」。M0.5 的 `--hud` 两图预期不同，清单 note 里写明原因。
 - 历史 exe 由 `git archive <tag>` 现场重建，Slang 工具链用 NTFS junction 复用主工作区，不重复下载/复制。
 - 每个 `example/<版本>/run.bat` 也能单独跑：`run.bat all` 或 `run.bat <用例名>`，两后端各出一张 PNG。

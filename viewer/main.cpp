@@ -69,6 +69,7 @@ struct Options {
     float pitchDeg  = 9.2f;
     float distance  = 4.2f;
     std::string screenshotPath;
+    std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/models/ 下的 .glb
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
 };
@@ -83,6 +84,9 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--hud") { o.hudSet = true; o.hudEnabled = true; }
         else if (a == "--no-hud") { o.hudSet = true; o.hudEnabled = false; }
         else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
+        else if (a == "--model" && i + 1 < argc) {
+            o.modelFile = argv[++i];
+        }
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
@@ -120,7 +124,7 @@ Options parseArgs(int argc, char** argv) {
 
 // 无窗口、无 GPU 的机械验收用例：CI 里 ctest 直接跑
 int runSelfTest() {
-    std::cout << "nl-engine M0.6 selftest\n";
+    std::cout << "nl-engine M0.7 selftest\n";
 
     nl::core::log::resetCounters();
 
@@ -154,7 +158,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "M0.6") != nullptr, "M0.6 stage reported");
+    check(std::strstr(st.stage, "M0.7") != nullptr, "M0.7 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -204,7 +208,8 @@ int runNormal(const Options& o) {
         static_cast<std::uint32_t>(nativeSize.width),
         static_cast<std::uint32_t>(nativeSize.height)
     };
-    auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug);
+    auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
+                                                   o.modelFile.c_str());
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -330,6 +335,8 @@ int runNormal(const Options& o) {
             hud.debugLayer = info.debugLayer.c_str();
             hud.mode = nl::core::modeName(o.mode);
             hud.stage = st.stage;
+            hud.model = info.modelName.c_str();
+            hud.triangleCount = static_cast<int>(info.triangleCount);
             hud.cullBack = cullBack;
             hud.colorIndex = colorIndex;
             hud.deterministic = o.screenshot;
@@ -464,7 +471,7 @@ void printUsage() {
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
-              << "  viewer.exe --dist F                camera distance (default 4.2)\n"
+              << "  viewer.exe --model <name.glb>      load assets/models/<name.glb> (default Suzanne.glb)\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";

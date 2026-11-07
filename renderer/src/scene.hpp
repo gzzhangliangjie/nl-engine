@@ -33,9 +33,12 @@ static_assert(sizeof(SceneConstants) == 160, "cbuffer layout must match shader")
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
+    // modelFile = assets/models/ 下的 .glb 文件名（M0.7 起由 --model 传入，
+    // 上层已做白名单校验）；默认仍是 Suzanne.glb，历史基线不受影响。
     // 资产路径用 CMake 注入的 NL_ASSET_DIR / NL_SHADER_DIR，不依赖当前工作目录。
     bool init(nvrhi::IDevice* device, const char* shaderSuffix,
-              const char* vsEntry, const char* psEntry, std::string& outError);
+              const char* vsEntry, const char* psEntry,
+              const char* modelFile, std::string& outError);
 
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
@@ -51,6 +54,9 @@ public:
 
     bool ready() const { return pipelineBack_ && pipelineNone_ && bindingSet_; }
     std::uint32_t indexCount() const { return indexCount_; }
+    // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
+    const std::string& modelName() const { return modelName_; }
+    std::uint32_t triangleCount() const { return triangleCount_; }
 
 private:
     nvrhi::ShaderHandle           vs_, ps_;
@@ -62,6 +68,8 @@ private:
     nvrhi::BindingSetHandle       bindingSet_;
     nvrhi::GraphicsPipelineHandle pipelineBack_, pipelineNone_;
     std::uint32_t                 indexCount_ = 0;
+    std::string                   modelName_;
+    std::uint32_t                 triangleCount_ = 0;
 };
 
 } // namespace nl::renderer::detail

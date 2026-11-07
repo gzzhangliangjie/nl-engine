@@ -2,7 +2,8 @@
 
 ## 架构（2026-11-06 定稿）
 - 通用管线：NVRHI + Slang，构建链**不依赖任何厂商图形 SDK**。`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `VK_SDK_PATH` / `find_package(Vulkan)` / 要求装 SDK。
-- 后端对称：D3D12 / OpenGL 的头、库、调试层来自 Windows SDK；Vulkan 头走 `KhronosGroup/Vulkan-Headers`（NVRHI 的 `NVRHI_FETCH_VULKAN_HEADERS`），loader 是驱动自带 `vulkan-1.dll`；Slang 独立获取，不从 `$VULKAN_SDK` 找。
+- 后端对称：D3D12 头/库/调试层来自 Windows SDK；Vulkan 头走 `KhronosGroup/Vulkan-Headers`（NVRHI 的 `NVRHI_FETCH_VULKAN_HEADERS`），loader 是驱动自带 `vulkan-1.dll`；Slang 独立获取，不从 `$VULKAN_SDK` 找。
+- **OpenGL 后端已评估并否决（2026-11-07）**：vendored NVRHI（当前 main）根本没有 GL 后端（上游 2023 年已删，`src/` 只有 d3d11/d3d12/vulkan/validation），要加只能从 2021~2023 老版本移植 + 自写 WGL 上下文 + vendor glad/glslang；GL 路径要求 GLSL 运行时编译，会破坏「一份 .slang 离线出 SPIR-V/DXIL」的单源约定。抽象验证价值为零增量（DX12+Vulkan 已是最大差异化组合），S1~S14 的 meshlet/BVH/RT 方向 GL 均无意义。Carrot 也是 Vulkan-only。别再捡起这个话题。
 - `NL_GRAPHICS_BACKEND`（AUTO / DX12 / VULKAN）是唯一后端开关；Windows 上 `AUTO` 落 DX12（零额外依赖），Vulkan 作第二后端验证抽象。
 - 图形 API / NVRHI / ImGui 符号只允许出现在 `renderer/`；`core/` / `viewer/` 零命中。调试层判据按当前后端走（DX12 Debug Layer + NVRHI validation / Vulkan NVRHI validation）；VVL 是可选插件、本机未装，不写成全项目前提。
 - 一份 `.slang` 同时出 SPIR-V 与 DXIL、两后端各自加载成功 = 通用管线的验收核心，不是「顺带试一次」。
@@ -22,8 +23,9 @@
 - 网络：GitHub 小文件开代理后直连可用，大文件限速 ~12KB/s → gh-proxy 分 8 段并发。
 
 ## 版本
-- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；`s0-done` = M0.5 + S0 总验收，S0 全部完成。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
-- **S0 后是「能力补齐版本序列」，一个版本一件事**（2026-11-07 用户确认）：`m0.6` = GPU 帧内计时 ✅ → M0.7 = 高模测试资产生成器（S1 切簇的命门：Suzanne 只有 504 tri 没法演示切簇；程序化生成致密网格 GLB，零网络确定性；vendored meshoptimizer 随此版本作文档级对照基准，不入构建）→ M0.8 = 线框 / 调试着色（normal / UV / 三角形ID）→ M0.9 = 一键全量回归总闸（全部 example 用例 × 双后端）。之后进 S1 切簇。
+- `s0-init` = M0.1；`s0-device` = M0.2；`s0-triangle` = M0.3；`s0-model` = M0.4 验收（commit `2e897a6`）；`s0-done` = M0.5 + S0 总验收；`m0.6` = GPU 帧内计时；**`m0.7` = 高模测试资产 + `--model`（2026-11-07）**。`v0.1.0` = M0.0 环境补齐快照，`v0.4.1` = 展示台快照。`s0-*`/`m0.*` 是里程碑 tag，`v*` 是版本快照，互不覆盖。
+- **S0 后是「能力补齐版本序列」，一个版本一件事**（2026-11-07 用户确认）：`m0.6` = GPU 帧内计时 ✅ → `m0.7` = 高模测试资产生成器 ✅ → **M0.8 = 线框 / 调试着色（normal / UV / 三角形ID）→ M0.9 = 一键全量回归总闸（全部 example 用例 × 双后端）**。之后进 S1 切簇。
+- M0.7 落地要点（2026-11-07）：`scripts/gen-dense-mesh.py` 纯 stdlib 确定性生成（纽结 204,800 / 球 327,680 tri，同参 MD5 确定）；`--model` 白名单校验在 `Renderer::create`（ASCII .glb 文件名、无路径分隔符）；HUD 增 model 行（面板上限 460→480）；`thirdparty/meshoptimizer` v1.3 vendored 文档级不入构建（CMake 零引用）。**Suzanne 实为 3,936 tri（11,808 索引），旧口径「504 tri」是错的，别再引用**。GPU ms 对比要在限时交互窗口取 `gpu timer resolved` 日志——截图模式默认 `--no-hud` 不建 query，且 deterministic 不 poll。展示台每出新版要把上一版 exe 映射改成 `build/showcase/{tag}/` 并跑 `rebuild.py` 补建。
 - Carrot 实况（2026-11-07 git 实查）：meshoptimizer + meshlet 支持是 **2023-11-25 同一个大提交 `4c100761`** 进的（meshlet → visibility buffer），配套 `asset_tools/fertilizer`；wireframe 在 `engine/render/Pipeline.cpp`；**没有**截图 MD5 回归（只有 googletest），性能靠 tracy + WinPixEventRuntime、无 NVRHI timer query。教训：它把 vendor + 切簇塞一个提交，我们拆版本铺路更稳；M0.9 回归总闸是超它的部分。
 
 ## M0.5 起的 HUD / 模式约定（2026-11-07 实测，改前看 `docs/IMGUI-GUIDE.md`）

@@ -13,7 +13,22 @@ constexpr const char* kBackend = "vulkan";
 #else
 constexpr const char* kBackend = "dx12";
 #endif
-constexpr const char* kStage = "M0.6 GPU frame timing (NVRHI timestamp query)";
+constexpr const char* kStage = "M0.7 dense test asset generator (--model)";
+
+// M0.7：--model 白名单校验。只放行 assets/models/ 下安全引用的 ASCII .glb 文件名：
+// 无路径分隔符（防目录穿越）、无 ".."、可打印字符、以 ".glb" 结尾。
+bool validModelFileName(const char* name) {
+    if (!name || !*name) return false;
+    const std::string s(name);
+    if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
+    if (s.find("..") != std::string::npos) return false;
+    if (s.size() < 5 || s.compare(s.size() - 4, 4, ".glb") != 0) return false;
+    for (const char c : s) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x21 || u > 0x7E) return false;   // 可打印 ASCII，不含空格
+    }
+    return true;
+}
 } // namespace
 
 Status status() {
@@ -65,14 +80,22 @@ Renderer::Renderer(Renderer&&) noexcept = default;
 Renderer& Renderer::operator=(Renderer&&) noexcept = default;
 
 std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
-                                           bool enableDebugLayer) {
+                                           bool enableDebugLayer,
+                                           const char* modelFile) {
     std::unique_ptr<Renderer> r(new Renderer());
+    if (!validModelFileName(modelFile)) {
+        r->impl_->error = std::string("invalid --model file name: '") +
+                          (modelFile ? modelFile : "<null>") +
+                          "' (expected an ASCII *.glb file name in assets/models/)";
+        return r;
+    }
     r->impl_->backend = detail::createBackend();
     if (!r->impl_->backend) {
         r->impl_->error = "no backend compiled in";
         return r;
     }
-    if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, r->impl_->error)) {
+    if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

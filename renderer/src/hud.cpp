@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace nl::renderer::detail {
@@ -240,7 +241,8 @@ void Hud::build(HudFrame& frame) {
     ImGui::SetNextWindowPos(ImVec2(14.0f, 14.0f), ImGuiCond_Always);
     // 小画布上把面板收在可视范围内（内容多时出滚动条，不越界）；大画布给足高度。
     // M0.6 增了 GPU 行 + 曲线后内容更高，上限从 400 提到 460，960x540 下不裁底。
-    const float panelH = std::min(460.0f, frame.displayHeight - 28.0f);
+    // M0.7 又增 model 行，上限提到 480（640x360 小画布仍靠滚动条收纳）。
+    const float panelH = std::min(480.0f, frame.displayHeight - 28.0f);
     ImGui::SetNextWindowSize(ImVec2(330.0f, std::max(180.0f, panelH)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);   // 半透明：HUD 与背后的模型同时看得见
     ImGui::Begin("nl-engine HUD", nullptr, ImGuiWindowFlags_NoResize);
@@ -250,6 +252,13 @@ void Hud::build(HudFrame& frame) {
     ImGui::TextWrapped("adapter  : %s", frame.adapter);
     ImGui::TextWrapped("debug    : %s", frame.debugLayer);
     ImGui::Text("mode     : %s", frame.mode);
+    // M0.7：加载的模型名 + 三角形数，截图直接自证 --model 生效（不用翻日志）。
+    if (frame.model && *frame.model) {
+        char modelLine[128];
+        std::snprintf(modelLine, sizeof(modelLine), "model    : %s (%d tri)",
+                      frame.model, frame.triangleCount);
+        ImGui::TextUnformatted(modelLine);
+    }
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,

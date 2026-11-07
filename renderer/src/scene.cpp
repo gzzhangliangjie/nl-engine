@@ -111,7 +111,8 @@ bool toRGBA8(const tinygltf::Image& image, std::vector<std::uint8_t>& out,
 } // namespace
 
 bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
-                 const char* vsEntry, const char* psEntry, std::string& outError) {
+                 const char* vsEntry, const char* psEntry,
+                 const char* modelFile, std::string& outError) {
     // ---- 1. 加载 Slang 双目标字节码（同一份 model.slang 出的 spv / dxil）----
     auto shaderPath = [shaderSuffix](const char* stage) {
         return std::string(NL_SHADER_DIR) + "/model." + stage + "." + shaderSuffix;
@@ -131,17 +132,20 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
     if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
 
-    // ---- 2. 解析 GLB：Suzanne 的 POSITION / NORMAL / TEXCOORD_0 / indices / baseColor ----
+    // ---- 2. 解析 GLB：POSITION / NORMAL / TEXCOORD_0 / indices / baseColor ----
+    // M0.7：模型文件名由 --model 传入（上层 Renderer::create 已做白名单校验：
+    // 仅 assets/models/ 下的 ASCII .glb 文件名，无路径分隔符）。缺省 Suzanne.glb。
+    const std::string modelPath = std::string(NL_ASSET_DIR "/") + modelFile;
     tinygltf::Model gltf;
     tinygltf::TinyGLTF loader;
     std::string err, warn;
-    if (!loader.LoadBinaryFromFile(&gltf, &err, &warn, NL_ASSET_DIR "/Suzanne.glb")) {
-        outError = "LoadBinaryFromFile(Suzanne.glb) failed: " + err;
+    if (!loader.LoadBinaryFromFile(&gltf, &err, &warn, modelPath.c_str())) {
+        outError = "LoadBinaryFromFile(" + modelPath + ") failed: " + err;
         return false;
     }
     if (!warn.empty()) nl::core::log::debug("tinygltf: ", warn);
     if (gltf.meshes.empty() || gltf.meshes[0].primitives.empty()) {
-        outError = "Suzanne.glb has no mesh primitive"; return false;
+        outError = modelFile + std::string(" has no mesh primitive"); return false;
     }
     const auto& prim = gltf.meshes[0].primitives[0];
     auto findAttr = [&prim](const char* name) {
@@ -156,7 +160,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
         !readIndices(gltf, prim.indices, indices, outError)) return false;
     const size_t vertexCount = positions.size() / 3;
     if (normals.size() / 3 != vertexCount || uvs.size() / 2 != vertexCount) {
-        outError = "Suzanne.glb attribute counts disagree"; return false;
+        outError = modelFile + std::string(" attribute counts disagree"); return false;
     }
 
     int imageIndex = -1;
@@ -166,7 +170,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
             imageIndex = gltf.textures[texIndex].source;
     }
     if (imageIndex < 0 || imageIndex >= static_cast<int>(gltf.images.size())) {
-        outError = "Suzanne.glb has no base color texture"; return false;
+        outError = modelFile + std::string(" has no base color texture"); return false;
     }
     std::vector<std::uint8_t> rgba;
     if (!toRGBA8(gltf.images[imageIndex], rgba, outError)) return false;
@@ -183,17 +187,20 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     indexCount_ = static_cast<std::uint32_t>(indices.size());
 
-    // ---- 3. 建 GPU 资源 ----
+    // ---- 3. 建 GPU 资源（debug 名带模型名，RenderDoc / validation 里分得清）----
+    const std::string vbName = std::string(modelFile) + "VB";
+    const std::string ibName = std::string(modelFile) + "IB";
+    const std::string texName = std::string(modelFile) + "BaseColor";
     nvrhi::BufferDesc vbDesc;
     vbDesc.byteSize = vertices.size() * sizeof(SceneVertex);
     vbDesc.isVertexBuffer = true;
-    vbDesc.debugName = "SuzanneVB";
+    vbDesc.debugName = vbName.c_str();
     vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
     vertexBuffer_ = device->createBuffer(vbDesc);
     nvrhi::BufferDesc ibDesc;
     ibDesc.byteSize = indices.size() * sizeof(std::uint32_t);
     ibDesc.isIndexBuffer = true;
-    ibDesc.debugName = "SuzanneIB";
+    ibDesc.debugName = ibName.c_str();
     ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
     indexBuffer_ = device->createBuffer(ibDesc);
     if (!vertexBuffer_ || !indexBuffer_) { outError = "createBuffer failed for model VB/IB"; return false; }
@@ -213,7 +220,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     texDesc.width = texWidth;
     texDesc.height = texHeight;
     texDesc.format = nvrhi::Format::RGBA8_UNORM;
-    texDesc.debugName = "SuzanneBaseColor";
+    texDesc.debugName = texName.c_str();
     texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
     texDesc.keepInitialState = true;
     texture_ = device->createTexture(texDesc);
@@ -274,8 +281,12 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->close();
     device->executeCommandList(upload);
 
-    nl::core::log::info("model ready: Suzanne.glb | vertices=", vertexCount,
-                        " indices=", indexCount_,
+    // M0.7：模型名与三角形数带回给 backend（DeviceInfo）→ viewer（HUD 自证）。
+    modelName_ = modelFile;
+    triangleCount_ = indexCount_ / 3;
+
+    nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
+                        " triangles=", triangleCount_, " indices=", indexCount_,
                         " | baseColor ", texWidth, "x", texHeight,
                         " | shader=", shaderSuffix);
     return true;

@@ -68,7 +68,7 @@ public:
     ~Dx12Backend() override { shutdown(); }
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
-              std::string& outError) override {
+              const char* modelFile, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -145,8 +145,10 @@ public:
         hr = createSwapChain();
         if (FAILED(hr)) { outError = hrMessage("CreateSwapChainForHwnd", hr); return false; }
         if (!createTargets(outError)) return false;
-        if (!scene_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
+        if (!scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError)) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
 
         nl::core::log::info("device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,

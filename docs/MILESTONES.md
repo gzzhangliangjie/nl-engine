@@ -16,6 +16,7 @@
 | M0.4 模型 + 贴图 + 相机 | ✅ 验收通过 | `s0-model` | 2026-11-07 | 正常视角双后端 PNG 逐字节相同，内壁 / resize 仅 1~2 像素差（≤1/255）；内壁剔除对照、resize 回归、selftest 11/11、deviceErrors=0 |
 | M0.5 ImGui + 总验收 | ✅ 验收通过 | `s0-done` | 2026-11-07 | 双后端 ImGui HUD 实拍 + `--no-hud` 与 M0.4 基线逐字节相同；`model`/`hud` 共 8 个 shader 产物魔数自检、selftest 14/14、`--check` 退出 0；S0 全部完成 |
 | M0.6 GPU 帧内计时 | ✅ 验收通过 | `m0.6` | 2026-11-07 | NVRHI timestamp query 真实 GPU 耗时进 HUD（CPU/GPU 并排 + 双曲线）；`--no-hud` 基线逐字节不变；S0 后能力补齐序列第一版 |
+| M0.7 高模测试资产 + `--model` | ✅ 验收通过 | `m0.7` | 2026-11-07 | gen-dense-mesh.py 程序化致密网格（纽结 204,800 / 球 327,680 tri，MD5 确定）；`--model` 白名单加载 + HUD model 行；GPU ms 3,936→327,680 tri 双后端互证；meshoptimizer v1.3 vendored（不入构建）；S1 切簇命门就位 |
 
 ---
 
@@ -313,6 +314,38 @@
 - `example/m0.5/`：`hud-{dx12,vulkan}.png` / `controls-{dx12,vulkan}.png` / `nohud-{dx12,vulkan}.png` / `resize-{dx12,vulkan}{,-before}.png` 共 10 张基线 + `run.bat`（`all` / `hud` / `controls` / `nohud` / `resize` / `selftest`）；验收存档同步进 `docs/screenshots/m0.5-controls-*.png`。
 - `example/cases.json` 增 `m0.5` 版本：5 个可运行用例 + 1 个交互用例 `hud-controls`（manual）。收尾复核补的 `controls` 用例给出了「控件值 → 画面」的静态图证据：`--color 2 --cull back --dist 4.2 --hud` 出绿背景 + 完整 Suzanne 正脸，HUD 的 `clear color` 显示 2、剔除勾选；与 `hud` 用例（深蓝、color=0）对照可见同一 `HudFrame` 同时驱动控件与渲染。
 - `python tools/showcase/server.py --check` 退出 0（`stage=M0.5 version=m0.5 cases=5 baselines=10`）；重启展示台服务加载新清单后 `/api/run` 五个可运行用例现场回放全 `ok=True`。`controls` 两后端 `baselineMatch=True`、`deviceErrors=0`，895 个差异像素的 bbox 为 `x=23..328 / y=77..147`（全在 adapter / debug 两行文字内，3D 区域零差异），印证「两图不同是 HUD 文本不同」。
+
+---
+
+## M0.7 高模测试资产生成器 + `--model`（S1 切簇的命门）
+
+**动作**
+- 新增 `scripts/gen-dense-mesh.py`：纯 stdlib（argparse/json/struct/zlib/math）程序化生成致密网格 GLB——`--shape torusknot`（(2,3) 纽结管，Frenet 近似 frame，默认 512×200 = 204,800 tri）/ `--shape icosphere`（中点缓存细分，20×4^7 = 327,680 tri，等距柱状 UV）；uint32 索引；内嵌手写 PNG 编码器出的 256px 棋盘格贴图；GLB 封装复用 pack-suzanne-glb.py 的 bufferView 套路。产物 `assets/models/{TorusKnotDense,IcoSphereDense}.glb`（5.8 / 9.2 MB）。
+- `--model` 贯通：`viewer/main.cpp` 解析 → `Renderer::create(..., modelFile)`（白名单校验：ASCII 可打印、无路径分隔符、无 `..`、必须 .glb）→ `Backend::init` → `Scene::init`；`scene.cpp` 模型路径 / VB·IB·贴图 debug 名 / 日志全部参数化；`DeviceInfo` 增 `modelName` / `triangleCount`，`HudFrame` 增 `model` / `triangleCount`，HUD 面板增 `model : <名> (N tri)` 行（面板上限 460→480）。
+- vendored `thirdparty/meshoptimizer`（gh-proxy 浅克隆 v1.3/1030，去 .git，2.8 MB）：S1 切簇正确性对照基准，**文档级、不入构建**。
+- `kStage` → `M0.7 dense test asset generator (--model)`；selftest 阶段校验同步改 M0.7。
+- `example/m0.7/` 归位 + `cases.json` 增 m0.7（hud / icosphere / selftest）；m0.6 exe 映射改为 tag 快照（`build/showcase/m0.6/...`），`rebuild.py` 补建两后端快照 exe。
+
+**提交版本**    tag `m0.7`
+
+**完成情况**
+- 确定性：同参数两次生成 GLB MD5 相同（TorusKnotDense `130c66f2…`、IcoSphereDense `7edaa6a7…`）；生成过程零网络、纯 stdlib。
+- 三模型 × 双后端真实 GPU ms（交互模式 `gpu timer resolved` 首帧日志）：Suzanne 3,936 tri = 0.032/0.039 ms → 纽结 204,800 tri = 0.066/0.065 ms → 球 327,680 tri = 0.154/0.153 ms（DX12/Vulkan 互相印证，M0.6 计时第一次派上用场）。
+- `--model` 双后端截图成功、`deviceErrors=0`；HUD 自证 `model : TorusKnotDense.glb (204800 tri)`。
+- **回归**：不带 `--model` 时两后端 `--no-hud` PNG MD5 仍为 `7e528087…`，与 m0.4/m0.5/m0.6 基线逐字节相同；selftest 两后端 14/14。
+- 展示台：`--check` 退出 0（`stage=M0.7 version=m0.7 cases=3 baselines=4`）；`/api/run` 现场回放 m0.7 三用例 + m0.6 快照 exe 两用例，全 `ok=True`、`baselineMatch=true`、`deviceErrors=0`。
+- `thirdparty/meshoptimizer` 在位，CMake 零引用。
+
+**踩坑情况**
+1. **uv 打包 `struct.error: required argument is not a float`** → 根因：生成器里 UV 存的是 `(u,v)` 元组列表，`struct.pack` 不接受。处理：pack 前摊平（`[c for pair in uvs for c in pair]`），accessor count 同步用摊平长度。
+2. **截图模式抓不到 `gpu timer resolved`** → 根因：`gpuTimer_.ensure()` 只在 HUD 帧里调用（`--screenshot` 默认 `--no-hud` 则完全不建 query），且 deterministic 模式跳过 `poll()`（不写回真实计时保基线）。处理：GPU ms 对比改用限时交互窗口（`timeout 7 viewer.exe`）取首帧 resolve 日志——与 M0.6 的取数口径一致。
+3. **台账旧口径「Suzanne 504 tri」失实** → 根因：早年从会话记录传抄的错误数字（504 其实约是顶点相关的另一口径）。实测日志：11,808 索引 = 3,936 tri。处理：`M0.7-PLAN.md` 已改正为 3,936 tri。
+4. **展示台服务用 shell `&` 起后台会被沙箱随命令结束回收**（连 curl 一起死）→ 处理：改用宿主后台任务方式常驻服务，回放完再停。
+
+**用例归位**
+- `example/m0.7/`：`hud-{dx12,vulkan}.png`（960x540，纽结 + model 行）、`icosphere-{dx12,vulkan}.png`（640x360，无 HUD）+ `run.bat`（`all` / `hud` / `icosphere` / `selftest`）。
+- `example/cases.json` 增 `m0.7`：`hud`（dist 可调，默认 5.5）/ `icosphere` / `selftest` 三用例；m0.1~m0.6 用例原样保留。
+- `python tools/showcase/server.py --check` 退出 0。
 
 ---
 
