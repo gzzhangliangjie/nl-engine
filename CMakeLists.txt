@@ -118,6 +118,7 @@ add_library(nl_core STATIC
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
+    core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -250,10 +251,15 @@ add_dependencies(viewer nl_shaders)
 add_executable(nanite-tools nanite-tools/main.cpp)
 target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
 
+# ---- B 路材质图工具（A 类轨道，工具版交代）----
+# 第 2 步种子：节点图数据模型 + 稳定序列化。只链 nl_core（日志），零图形 API。
+add_executable(material-graph-tools material-graph-tools/main.cpp)
+target_link_libraries(material-graph-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools material-graph-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -341,3 +347,9 @@ add_test(NAME s3-fallback-suzanne
 set_tests_properties(s3-fallback-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "fallback    : "
     DEPENDS s1-nmesh-suzanne)
+
+# ---- B 路材质图：节点图数据模型 + 序列化机械单测（A 类轨道第 2 步验收）----
+# 不进渲染回归总闸（bytes/near），走工具版交代。
+add_test(NAME b2-graph-selftest COMMAND material-graph-tools selftest)
+set_tests_properties(b2-graph-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "material-graph selftest: PASS")
