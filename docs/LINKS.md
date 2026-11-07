@@ -16,8 +16,8 @@
 |---|---|---|
 | ⭐ Karis《Nanite: A Deep Dive》SIGGRAPH 2021 | https://advances.realtimerendering.com/s2021/ （Karis Nanite PDF） | 所有开源实现的共同蓝本，cluster DAG / 误差 / 两遍光栅全在这 |
 | GDC 2021《The Technology Behind Lumen in the Land of Nanite》 | GDC Vault 搜标题 | Lumen screen/surface cache 架构 |
-| ⭐ JMS55 博客（Bevy 0.14/0.15 虚拟几何 + Solari） | https://jms55.github.io/ | 最完整的「我踩过的坑」实录，S1~S5 配套 |
-| ⭐ jglrxavpok《Recreating Nanite》系列 + GI 长文 | https://blog.jglrxavpok.eu/ | 唯一双撸编年史，S2/S7/S8/S10/S11 配套 |
+| ⭐ JMS55 博客（Bevy 0.14/0.15 虚拟几何 + Solari） | https://jms55.github.io/ | 最完整的「我踩过的坑」实录，S1~S5 配套；**逐篇×源码总结见 [docs/blogs/jms55-bevy-meshlet.md](blogs/jms55-bevy-meshlet.md)，浏览器打开 `docs/blogs/index.html` 可视化阅读** |
+| ⭐ jglrxavpok《Recreating Nanite》系列 + GI 长文 | https://blog.jglrxavpok.eu/ | 唯一双撸编年史，S2/S7/S8/S10/S11 配套；**逐篇×Carrot 源码总结见 [docs/blogs/jglrxavpok-carrot-nanite.md](blogs/jglrxavpok-carrot-nanite.md)** |
 | Scthe 软光栅系列博文 | https://scthe.github.io/ | S14 软光栅时的 WGSL 踩坑记录 |
 | Understanding Nanite（Deep Dive 解读） | 搜标题 | 觉得 slides 太密时先看这个 |
 

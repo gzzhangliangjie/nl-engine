@@ -64,7 +64,7 @@ struct NMeshHeader { uint32 magic, version; uint32 meshletCount, ...; }   // 后
 | meshlet 构建参考实现 | `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\from_mesh.rs`（离线构建入口，Rust 但逻辑直白）；meshoptimizer `src/meshlet.cpp` |
 | 资产结构设计 | `bevy/.../meshlet/asset.rs` |
 | 概念不清 | kb/index.html#nanite（01 章 meshlet/包围球/误差节） |
-| 簇质量差/畸形 | JMS55 博客 0.14 篇「what didn't work」一节 |
+| 簇质量差/畸形 | JMS55 博客 [0.14 篇](https://jms55.github.io/posts/2024-06-09-virtual-geometry-bevy-0-14/)「what didn't work」一节；逐篇实录 `docs/blogs/jms55-bevy-meshlet.md` §1.3 |
 
 ## 底线
 

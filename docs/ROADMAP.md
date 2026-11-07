@@ -31,7 +31,7 @@
 | S0 | ⭐ `docs/s0/CARROT-BOOTSTRAP.md`：Carrot 从零搭建实况 `46799759` Init → `152edabe` 三角形（第二天）→ `d11508e3` staging 抽象 → `d25a1cc9` 模型；本地 `Carrot/thirdparty/` 的 glfw / glm / imgui / tinygltf / stb 源码可直接复用（零网络） | vulkan-tutorial；NVRHI / Donut 官方示例（gh-proxy 拉） |
 | S1 | `bevy/crates/bevy_pbr/src/meshlet/from_mesh.rs`（离线构建入口）、`meshlet/asset.rs`（资产结构） | JMS55 博客 0.14 篇 |
 | S2 | `Carrot/engine/engine/render/ClusterManager.cpp`（聚组+简化+重切全套） | Carrot《Recreating Nanite: The Plan》 |
-| S3 | `bevy/.../meshlet/cull_bvh.wesl`（bevy 用两级 BVH 而非 DAG——先想清楚要哪种） | JMS55 博客 0.15 篇（讲为什么弃 DAG） |
+| S3 | `bevy/.../meshlet/cull_bvh.wesl`（bevy main 现状：**DAG 管 LOD 层级、BVH 管 GPU 遍历剔除**，两者配合不是替代；博客期 DAG 一直保留） | JMS55 博客 [0.14](https://jms55.github.io/posts/2024-06-09-virtual-geometry-bevy-0-14/) / [0.15](https://jms55.github.io/posts/2024-11-14-virtual-geometry-bevy-0-15/) / [0.16](https://jms55.github.io/posts/2025-03-27-virtual-geometry-bevy-0-16/) + `docs/blogs/jms55-bevy-meshlet.md` |
 | S4 | `bevy/.../meshlet/cull_instances.wesl → cull_clusters.wesl → fill_counts.wesl`（三级剔除链，照抄结构） | — |
 | S5 | `bevy/.../meshlet/cull_bvh.wesl`；UE `NaniteCullRaster.cpp`（已拉源码里） | Karis《Nanite: A Deep Dive》 |
 | S6 | `Carrot/engine/resources/shaders/post-process/visibility-buffer-debug/` | Carrot《The Plan》 |

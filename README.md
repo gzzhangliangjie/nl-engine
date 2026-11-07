@@ -23,6 +23,10 @@ nl-engine/
 │   ├── MILESTONES.md  ← 里程碑台账：每阶段的动作 / 提交版本 / 完成情况 / 踩坑
 │   ├── SHADER-CONVENTIONS.md ← Slang 双目标编译 + 入口名 / 绑定偏移规范（含 hud.slang）
 │   ├── IMGUI-GUIDE.md ← HUD 使用说明：怎么加控件 / 下拉框 / 输入边界 / 渲染约定 / 截图复现
+│   ├── blogs/         ← 大佬博客研读笔记（博客原文 × 源码实况 × 我们的对照）
+│   │   ├── jms55-bevy-meshlet.md          JMS55《Virtual Geometry in Bevy 0.14/0.15/0.16》× bevy 源码（S1~S5 配套）
+│   │   ├── jglrxavpok-carrot-nanite.md    《Recreating Nanite》全系列 × Carrot 源码（S1~S12 配套）
+│   │   └── index.html                     浏览器直接打开的可视化阅读页（重生成：python tools/blogs/build.py）
 │   ├── carrot-history.md  ← Carrot 2023 之后 Nanite×GI 实况时间线（S1~S13）
 │   ├── s0/
 │   │   ├── S0-PLAN.md         ← S0 六阶段 + 阶段门禁 + 可观测性/调试工具计划

@@ -46,9 +46,9 @@
 
 | 问题 | 翻 |
 |---|---|
-| DAG 概念与合并细节 | kb/index.html#nanite（01 章 DAG 节）；Carrot《Recreating Nanite: The Plan》 |
-| 完整离线流程对照 | `bevy/.../meshlet/from_mesh.rs`；JMS55 博客 0.14 篇 |
-| **重要分歧点**：DAG vs 两级 BVH | JMS55 博客 0.15 篇——bevy 后来**弃 DAG 改 BVH**（遍历简单但剔除粗）。先读完再做决定不迟；总路线默认 DAG（对齐 UE），读完博客想换要改 S5 的计划 |
+| DAG 概念与合并细节 | kb/index.html#nanite（01 章 DAG 节）；Carrot《Recreating Nanite: [The Plan](https://blog.jglrxavpok.eu/2023/11/12/recreating-nanite-the-plan.html)》；逐篇实录 `docs/blogs/jglrxavpok-carrot-nanite.md` |
+| 完整离线流程对照 | `bevy/.../meshlet/from_mesh.rs`；JMS55 博客 [0.14 篇](https://jms55.github.io/posts/2024-06-09-virtual-geometry-bevy-0-14/)；实录 `docs/blogs/jms55-bevy-meshlet.md` |
+| DAG 质量秘方 | JMS55 [0.16 篇](https://jms55.github.io/posts/2025-03-27-virtual-geometry-bevy-0-16/)——METIS 直接聚三角形（共享顶点最少化，UFactor=1、划分数少算）；bevy 一直保留 DAG，BVH 只是剔除遍历层（main 的 `cull_bvh.wesl`），两者配合不是替代 |
 | .nmesh 结构演进 | 自己的 `docs/s1/S1-PLAN.md` 底线（版本号纪律） |
 
 ## 底线
