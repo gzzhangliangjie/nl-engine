@@ -111,6 +111,14 @@ bool MaterialGraph::setProp(int node, std::string key, std::string value) {
     return true;
 }
 
+bool MaterialGraph::setNodePos(int node, float x, float y) {
+    Node* n = const_cast<Node*>(findNode(node));
+    if (!n) return false;
+    n->x = x;
+    n->y = y;
+    return true;
+}
+
 bool MaterialGraph::removeNode(int node) {
     auto it = std::find_if(nodes_.begin(), nodes_.end(),
                            [node](const Node& n) { return n.id == node; });

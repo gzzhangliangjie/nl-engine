@@ -106,6 +106,9 @@ struct HudFrame {
     // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
     int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
     int   totalClusters    = 0;       // 总簇数
+    // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
+    // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
+    class NodeEditor* editor = nullptr;
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。

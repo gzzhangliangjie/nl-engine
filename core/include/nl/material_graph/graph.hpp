@@ -54,6 +54,7 @@ public:
     int addPin(int node, std::string name, ValueType type, bool isOutput);
     int connect(int fromNode, int fromPin, int toNode, int toPin);  // 成功返回 edge id，非法/冲突返回 -1
     bool setProp(int node, std::string key, std::string value);
+    bool setNodePos(int node, float x, float y);  // T1 编辑器：保存前回收画布拖拽后的布局坐标
     bool removeNode(int node);
     bool removeEdge(int edge);
 

@@ -1,0 +1,245 @@
+#include "nl/renderer/editor.hpp"
+
+#include "nl/material_graph/compile.hpp"
+#include "nl/material_graph/graph.hpp"
+
+#include <imgui.h>
+#include <imgui_node_editor.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+
+namespace ed = ax::NodeEditor;
+
+namespace nl::renderer {
+
+namespace {
+
+// 节点配色（ASCII，与 CLI render 证据图同一套语义）。
+ImVec4 typeColor(const std::string& type) {
+    if (type == "ConstantFloat") return ImVec4(0.30f, 0.50f, 0.70f, 1.0f);
+    if (type == "Multiply")      return ImVec4(0.30f, 0.60f, 0.40f, 1.0f);
+    if (type == "Output")        return ImVec4(0.70f, 0.35f, 0.35f, 1.0f);
+    return ImVec4(0.35f, 0.35f, 0.45f, 1.0f);
+}
+
+// 引脚反查（引脚 id 全图唯一）：引脚存在性/方向/类型校验与 connect 约束同源。
+struct PinRef {
+    int node = -1;
+    bool valid = false;
+    bool isOutput = false;
+    nl::material_graph::ValueType type = nl::material_graph::ValueType::Invalid;
+    std::string name;
+};
+PinRef findPin(const nl::material_graph::MaterialGraph& g, int pinId) {
+    for (const auto& n : g.nodes())
+        for (const auto& p : n.pins)
+            if (p.id == pinId)
+                return PinRef{n.id, true, p.isOutput, p.type, p.name};
+    return PinRef{};
+}
+
+// 按 B 路阶梯当前节点库：ConstantFloat(1 out) / Multiply(a,b in + out) / Output(baseColor in)。
+void addTypedNode(nl::material_graph::MaterialGraph& g, const std::string& type) {
+    using namespace nl::material_graph;
+    int n = g.addNode(type);
+    if (type == "ConstantFloat") {
+        g.setProp(n, "value", "0.5");
+        g.addPin(n, "out", ValueType::Float, true);
+    } else if (type == "Multiply") {
+        g.addPin(n, "a", ValueType::Float, false);
+        g.addPin(n, "b", ValueType::Float, false);
+        g.addPin(n, "out", ValueType::Float, true);
+    } else if (type == "Output") {
+        g.addPin(n, "baseColor", ValueType::Float, false);
+    }
+}
+
+}  // namespace
+
+struct NodeEditor::Impl {
+    std::string path;
+    std::string lastError;
+    nl::material_graph::MaterialGraph graph;
+    ed::EditorContext* ctx = nullptr;
+    std::string status = "ready";
+
+    ~Impl() {
+        if (ctx) ed::DestroyEditor(ctx);
+    }
+
+    void drawWindow() {
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 520.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Material Graph Editor (T1)");
+        ed::SetCurrentEditor(ctx);   // 整个窗口体都在编辑器作用域内（Save 要回收坐标）
+
+        // ---- 工具栏：加节点 / 保存 / 编译（T1 拆解 3/4/5 步）----
+        if (ImGui::Button("+ ConstantFloat")) { addTypedNode(graph, "ConstantFloat"); status = "node added"; }
+        ImGui::SameLine();
+        if (ImGui::Button("+ Multiply")) { addTypedNode(graph, "Multiply"); status = "node added"; }
+        ImGui::SameLine();
+        if (ImGui::Button("+ Output")) { addTypedNode(graph, "Output"); status = "node added"; }
+        ImGui::SameLine();
+        if (ImGui::Button("Save")) save();
+        ImGui::SameLine();
+        if (ImGui::Button("Compile")) {
+            std::string rep;
+            bool ok = nl::material_graph::compileCheck(graph, &rep);
+            status = ok ? ("compile OK: " + rep) : ("compile FAIL: " + rep);
+        }
+
+        // ---- 节点画布 ----
+        ed::Begin("canvas", ImVec2(0.0f, 0.0f));
+        for (const auto& n : graph.nodes()) {
+            ed::BeginNode(static_cast<std::uintptr_t>(n.id));
+            ImGui::PushStyleColor(ImGuiCol_Header, typeColor(n.type));
+            ImGui::TextUnformatted(n.type.c_str());
+            ImGui::PopStyleColor();
+            for (const auto& p : n.pins) {          // 输入列在左
+                if (p.isOutput) continue;
+                ed::BeginPin(static_cast<std::uintptr_t>(p.id), ed::PinKind::Input);
+                ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+                ImGui::Text(">%s %s", p.name.c_str(),
+                            nl::material_graph::valueTypeName(p.type));
+                ed::EndPin();
+            }
+            if (n.type == "ConstantFloat") {        // 属性即时编辑（写回 props）
+                float v = 0.0f;
+                auto it = n.props.find("value");
+                if (it != n.props.end()) v = std::strtof(it->second.c_str(), nullptr);
+                ImGui::SetNextItemWidth(110.0f);    // 不占满整行，out 引脚保持在同一列高度
+                if (ImGui::InputFloat("value", &v, 0.0f, 0.0f, "%.3f")) {
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%.3f", v);
+                    graph.setProp(n.id, "value", buf);
+                    status = "prop changed";
+                }
+            }
+            for (const auto& p : n.pins) {          // 输出列在右
+                if (!p.isOutput) continue;
+                ed::BeginPin(static_cast<std::uintptr_t>(p.id), ed::PinKind::Output);
+                ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+                ImGui::Text("%s %s>", p.name.c_str(),
+                            nl::material_graph::valueTypeName(p.type));
+                ed::EndPin();
+            }
+            ed::EndNode();
+        }
+        for (const auto& e : graph.edges()) {
+            ed::Link(static_cast<std::uintptr_t>(e.id),
+                     static_cast<std::uintptr_t>(e.fromPin),
+                     static_cast<std::uintptr_t>(e.toPin));
+        }
+        if (graph.nodes().empty())
+            ImGui::TextUnformatted("(empty graph) - use toolbar to add nodes");
+        ed::End();
+
+        // ---- 连线创建：拖拽引脚 -> 校验（存在/一进一出/类型一致）-> connect ----
+        if (ed::BeginCreate()) {
+            ed::PinId startPin, endPin;
+            if (ed::QueryNewLink(&startPin, &endPin)) {
+                const PinRef a = findPin(graph, static_cast<int>(startPin.Get()));
+                const PinRef b = findPin(graph, static_cast<int>(endPin.Get()));
+                const bool ok = a.valid && b.valid && (a.isOutput != b.isOutput)
+                                && (a.type == b.type);
+                if (ok) {
+                    if (ed::AcceptNewItem()) {
+                        // 方向归一（from = 输出端）后落 graph.connect。
+                        const PinRef& out = a.isOutput ? a : b;
+                        const PinRef& in  = a.isOutput ? b : a;
+                        const int outPin  = a.isOutput ? static_cast<int>(startPin.Get())
+                                                       : static_cast<int>(endPin.Get());
+                        const int inPin   = a.isOutput ? static_cast<int>(endPin.Get())
+                                                       : static_cast<int>(startPin.Get());
+                        const int id = graph.connect(out.node, outPin, in.node, inPin);
+                        status = (id >= 0) ? "link created"
+                                           : "connect rejected (duplicate input)";
+                    }
+                } else {
+                    ed::RejectNewItem();
+                    if (a.valid && b.valid && a.isOutput == b.isOutput)
+                        status = "link rejected: same direction";
+                    else if (a.valid && b.valid && a.type != b.type)
+                        status = "link rejected: type mismatch";
+                }
+            }
+        }
+        ed::EndCreate();
+
+        // ---- 连线删除 ----
+        if (ed::BeginDelete()) {
+            ed::LinkId deleted;
+            while (ed::QueryDeletedLink(&deleted)) {
+                if (ed::AcceptDeletedItem()) {
+                    graph.removeEdge(static_cast<int>(deleted.Get()));
+                    status = "link deleted";
+                }
+            }
+        }
+        ed::EndDelete();
+
+        ImGui::Separator();
+        ImGui::TextWrapped("status: %s", status.c_str());
+        ImGui::TextWrapped("drag pin->pin = link | drag title = move | wheel = zoom | Del on link = delete");
+
+        ed::SetCurrentEditor(nullptr);
+        ImGui::End();
+    }
+
+    void save() {
+        // 编辑器上下文里的拖拽坐标 -> graph（Node.x/y 是序列化的布局真值）。
+        ed::SetCurrentEditor(ctx);
+        for (const auto& n : graph.nodes()) {
+            const ImVec2 p = ed::GetNodePosition(static_cast<std::uintptr_t>(n.id));
+            graph.setNodePos(n.id, p.x, p.y);
+        }
+        ed::SetCurrentEditor(nullptr);
+        std::ofstream os(path, std::ios::binary);
+        if (!graph.serialize(os)) { status = "save FAIL"; return; }
+        status = "saved";
+    }
+};
+
+NodeEditor::NodeEditor() = default;
+NodeEditor::~NodeEditor() = default;
+
+std::unique_ptr<NodeEditor> NodeEditor::create(const char* graphPath, std::string* err) {
+    std::unique_ptr<NodeEditor> self(new NodeEditor());
+    self->impl_ = std::make_unique<Impl>();
+    Impl& im = *self->impl_;
+    im.path = graphPath;
+    std::ifstream is(im.path, std::ios::binary);
+    if (!is) {
+        im.lastError = "cannot open " + im.path;
+        if (err) *err = im.lastError;
+        return self;
+    }
+    if (!nl::material_graph::MaterialGraph::deserialize(is, im.graph, &im.lastError)) {
+        if (err) *err = im.lastError;
+        return self;
+    }
+    std::string verr;
+    if (!im.graph.validate(&verr)) {
+        im.lastError = "graph invalid: " + verr;
+        if (err) *err = im.lastError;
+        return self;
+    }
+    im.ctx = ed::CreateEditor(nullptr);
+    // 序列化保存的布局坐标（Node.x/y）作为画布初始位置——.mg 的布局真值一以贯之。
+    ed::SetCurrentEditor(im.ctx);
+    for (const auto& n : im.graph.nodes())
+        ed::SetNodePosition(static_cast<std::uintptr_t>(n.id), ImVec2(n.x, n.y));
+    ed::SetCurrentEditor(nullptr);
+    im.status = "loaded " + std::to_string(im.graph.nodeCount()) + " nodes, "
+              + std::to_string(im.graph.edgeCount()) + " edges";
+    return self;
+}
+
+bool NodeEditor::valid() const { return impl_->ctx != nullptr; }
+const std::string& NodeEditor::lastError() const { return impl_->lastError; }
+const std::string& NodeEditor::graphPath() const { return impl_->path; }
+void NodeEditor::drawWindow() { impl_->drawWindow(); }
+
+}  // namespace nl::renderer
