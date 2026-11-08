@@ -9,6 +9,7 @@
 
 - [ ] Motion vector pass：上一帧相机矩阵 + 重投影（物体全静态时可先只做相机版，E1 引入动态物体后再补物体级）
 - [ ] 时间累积：当前帧 GI 与历史帧按 `α` 混合（α≈0.1 起步），历史位置 = motion vector 回投采样
+  - 📋 预研证据（2026-11-09，`docs/s10/GI-RESEARCH-NOTES.md` §3）：bevy 世界缓存用**亮度 delta 自适应历史长度**——`alpha=|ΔL|/L`，`max_samples = mix(cap, 1, alpha^(1/8))`，变化快的区域自动短历史。像素级时间累积的历史长度可调可直接套这条曲线（出处 gboisse bsky，与 UE 探针重投影口径不冲突）
 - [ ] `--mode filter` 接入，α 与历史长度 ImGui 可调
 
 **自检**：静止时噪声随时间明显收敛；移动画面基本跟手（拖影留到 M12.2 解决）。tag：`s12-temporal`。
