@@ -21,7 +21,7 @@
 - kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 exe=current 版本：m0.9/s2.0/s3.2/s4.1/s4.2/s5.0 共 6 对 12 张，S5.1 已重拍）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
-- **A 类并行轨道：动作系统 M-A0~M-A5 全部完成**（feat/action-system，tag `anim-ma1`~`anim-ma5`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space/蒙皮）+ anim-tools 自测全绿 + viewer skin 模式（CPU LBS，CesiumMan 行走验收截图）；M-A5.2 顺手修 regression cwd 错位双 bug（ma-track 用例卡 {root}/ 模板 + anim-tools 缺文件段错误）。教训：用例卡进 cases.json ≠ 回归跑过，收口必须真跑 --only。下一步 = merge 回 master 走 PARALLEL-TRACKS §7 文档闸（等用户指令）。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
+- **A 类并行轨道：动作系统已收官并合入 master**（merge `5a1912f`，2026-11-09；worktree 已移除、分支 `feat/action-system` 保留，tag `anim-ma1`~`anim-ma5c`）：nl/anim 纯逻辑层 + anim-tools + viewer skin 模式 + 四资产蒙皮演示页全在 master；GPU 调色板等更大规模蒙皮资产再立项。合并教训：merge-tree 预演不可信（报 0 实撞 11 文件）；跨布局 merge 后 cases.json exe 模板与 cameraSelfTest 断言都要按 master 口径适配。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）
@@ -62,11 +62,12 @@
 - 调试：L0 画面证据 → L1 RenderDoc（外部 Launch 零改动，精确抓帧才加 `--capture-frame N`）→ L2 NVRHI timestamp（M0.6 补）→ L3 Nsight/PIX/PresentMon/Tracy。
 
 ## 并行轨道纪律（2026-11-08 用户拍板）
-- 固定 `feat/*` 分支 + 常驻 worktree 模式（已建 `feat/job-system` / `feat/material-graph` / `feat/action-system`）。**新轨道 = 新 `feat/*` 分支 + 新 worktree**（如本次 Slang 可视化编辑器）。
-- **材质图轨道已封顶（2026-11-09 用户拍板「及时收手」）**：B1~B4 + T1 编辑器（调试工具级 `viewer --editor`）+ 节点库 10 种 + uniform 曝光（MaterialParams b1，运行时绑定留 B5）全部完成；定位=可调参表面材质薄层，UI 不再投入，复杂 shader 手写与图无关。唯一遗留=T1 拆解 6 预览视口（等 B5/S7）；B5 也排 S7 后。终点定义见 `docs/material-graph/SIDE-TASKS.md`。
-- 三 worktree 均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree` 防纪律源误入 feature 分支（git status 干净）。
+- 固定 `feat/*` 分支 + worktree 模式。**新轨道 = 新 `feat/*` 分支 + 新 worktree**；轨道收官 = 内容全量合回 master + worktree 移除、**分支保留**（job-system/action-system/material-graph 三轨均按此先例收口，2026-11-09）。
+- **材质图轨道已收官（2026-11-09）**：B2~B4（tag `mg-b2b4`）+ T1 编辑器 M1~M3（tag `mg-t1`，merge `e5505bc`）全量合入 master；调试工具级 `viewer --editor` + 节点库 10 种 + uniform 曝光（MaterialParams b1，运行时绑定留 B5）；定位=可调参表面材质薄层，UI 封顶不再投入，复杂 shader 手写与图无关。唯一遗留=T1 拆解 6 预览视口 + B5 接 PBR（都等 S7，届时按 §7.1b 重建 worktree）。终点定义见 `docs/material-graph/SIDE-TASKS.md`。
+- worktree `junction` 共享主树 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净）。**拆 worktree 时 junction 只能删链接**（`.NET Directory.Delete(path,false)` / `cmd rmdir`），MSYS `rm -r` 会穿透删共享内容。
 - 纪律三条（详 `docs/PARALLEL-TRACKS.md` §7）：① 实例注册表登记占用说明；② 固化文档闸（merge 回 master 前必写 `S*-PLAN`/`MILESTONES` 验收纪要）；③ 假绿防护（占坑≠文件指向，merge 前双向 `git status` 自查：wt 看得到、master 没有）。
 - 工作线粘性：同一轨道回同一 worktree；一条工作线只 merge 一次（验收 FAIL→补丁→复验在占坑内闭环）。
+- **wt_pool 占坑闸（2026-11-09 用户拍板，事故防复发）**：任务号=里程碑编号；**每个对话开场声明里程碑编号**（没给就提示补充），补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记归属；动 wt 前过 `check`/`guard`；CLOSED 轨道硬拒绝；锁=主树根 `.wt_pool_busy.json` 全 wt 共享（已 .gitignore）；跨 wt 用绝对路径调主树脚本；selftest 16 项。详 AGENTS.md 并行轨道纪律第 7 条 + PARALLEL-TRACKS §7.6。
 
 ## 非渲染候选拍板（2026-11-08）
 - **总原则（用户拍板）：有参考的内容就考虑从头写**——不因有现成开源库而改集成路线；参照实现用于对照与节奏校准。
