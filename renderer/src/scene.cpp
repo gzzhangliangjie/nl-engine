@@ -508,10 +508,24 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!cullBindingSet_) { outError = "createBindingSet failed for cull"; return false; }
 
     // M4.1：cull.slang compute pipeline。binding 与 cull.slang 的寄存器一一对应：
-    //   b0 volatile CB / t1 clusterMeta / t2 clusterSpheres / u0 visibleList / u1 args。
+    //   b0 volatile CB / t1 clusterMeta / t2 clusterSpheres / u0 visibleList / u1 args
+    //   / u2 triCounter（M5.2 三角计数）。
     // compute pipeline 不依赖 framebuffer 格式，init 时一次建成（graphics pipeline
     // 仍留在 ensurePipelines）。
     if (frustumCull_) {
+        // M5.2：GPU 原子三角计数器（1 uint）。与 args 同帧多态轮转（writeBuffer 清零
+        // = CopyDest → compute atomicAdd = UAV → copyBuffer 回读 = CopySource），
+        // keepInitialState 每条命令列表开头回到 CopyDest（dagGroupExpanded_ 同款纪律）。
+        nvrhi::BufferDesc tDesc;
+        tDesc.byteSize = sizeof(std::uint32_t);
+        tDesc.structStride = sizeof(std::uint32_t);
+        tDesc.canHaveUAVs = true;
+        tDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        tDesc.keepInitialState = true;
+        tDesc.debugName = "TriCounter";
+        triCounter_ = device->createBuffer(tDesc);
+        if (!triCounter_) { outError = "createBuffer failed for tri counter"; return false; }
+
         auto cullShaderPath = [shaderSuffix](const char* artifact) {
             return std::string(NL_SHADER_DIR) + "/cull." + artifact + "." + shaderSuffix;
         };
@@ -534,7 +548,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1));
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2));
         cullComputeLayout_ = device->createBindingLayout(cLayoutDesc);
         if (!cullComputeLayout_) { outError = "createBindingLayout failed for cull compute"; return false; }
 
@@ -543,7 +558,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterMeta_))
                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, clusterSpheres_))
                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
-                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_));
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, triCounter_));
         cullComputeSet_ = device->createBindingSet(cSetDesc, cullComputeLayout_);
         if (!cullComputeSet_) { outError = "createBindingSet failed for cull compute"; return false; }
 
@@ -552,11 +568,12 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         cullComputePSO_ = device->createComputePipeline(cpDesc);
         if (!cullComputePSO_) { outError = "createComputePipeline failed for cull"; return false; }
 
-        // instanceCount 回读环形：每帧 compute 后 copyBuffer 4 字节（args[1]），
-        // pollCullStats 延迟两帧 map（cpuAccess=Read，map 内部等 lastUseFence）。
+        // 回读环形（M5.2 起 8B）：每帧 compute 后 copyBuffer 两段——[0]=args[1]
+        // （可见簇数）、[4]=triCounter[0]（可见三角数），pollCullStats 延迟两帧
+        // map（cpuAccess=Read，map 内部等 lastUseFence）。
         for (auto& rb : cullReadback_) {
             nvrhi::BufferDesc rDesc;
-            rDesc.byteSize = sizeof(std::uint32_t);
+            rDesc.byteSize = 2 * sizeof(std::uint32_t);
             rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
             rDesc.debugName = "CullCountReadback";
             rb = device->createBuffer(rDesc);
@@ -617,6 +634,10 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
             upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
             upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
         }
+        // M5.2：三角计数器初始清零（动态跟踪，与 args 同款轮转）。
+        const std::uint32_t triZero = 0;
+        upload->beginTrackingBufferState(triCounter_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(triCounter_, &triZero, sizeof(triZero));
     } else {
         // M4.0 路径：args 恒 IndirectArgument，钉 permanent 与历史行为一致。
         upload->setPermanentBufferState(indirectArgs_, nvrhi::ResourceStates::IndirectArgument);
@@ -937,7 +958,19 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // DAG 遍历 compute 绑定（dag.slang 寄存器一一对应）：
     //   b0 DagConstants / t1 spheres / t2 errors / t3 groups / t4 members /
-    //   t5 genGroup / t6 levels / u0 visibleList / u1 args。
+    //   t5 genGroup / t6 levels / t7 clusterMeta（M5.2）/ u0 visibleList / u1 args /
+    //   u2 expanded / u3 triCounter（M5.2）。
+    // M5.2：GPU 原子三角计数器（与 initCull 同款；dag 模式不调 initCull，各自建）。
+    nvrhi::BufferDesc tDesc;
+    tDesc.byteSize = sizeof(std::uint32_t);
+    tDesc.structStride = sizeof(std::uint32_t);
+    tDesc.canHaveUAVs = true;
+    tDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    tDesc.keepInitialState = true;
+    tDesc.debugName = "DagTriCounter";
+    triCounter_ = device->createBuffer(tDesc);
+    if (!triCounter_) { outError = "createBuffer failed for dag tri counter"; return false; }
+
     nvrhi::BindingLayoutDesc dLayoutDesc;
     dLayoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
@@ -947,9 +980,11 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
-        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2));
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3));
     dagComputeLayout_ = device->createBindingLayout(dLayoutDesc);
     if (!dagComputeLayout_) { outError = "createBindingLayout failed for dag compute"; return false; }
 
@@ -961,9 +996,11 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, dagMembers_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, dagGenGroup_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, dagClusterLevel_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(7, clusterMeta_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_));
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, triCounter_));
     dagComputeSet_ = device->createBindingSet(dSetDesc, dagComputeLayout_);
     if (!dagComputeSet_) { outError = "createBindingSet failed for dag compute"; return false; }
 
@@ -988,10 +1025,11 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!dagComputePSO_) { outError = "createComputePipeline failed for dag"; return false; }
     }
 
-    // instanceCount 回读环形（M4.1 同款，dag 遍历同样每帧回读）。
+    // 回读环形（M4.1 同款，M5.2 起 8B：[0]=可见簇数 [4]=可见三角数，dag 遍历同样
+    // 每帧回读）。
     for (auto& rb : cullReadback_) {
         nvrhi::BufferDesc rDesc;
-        rDesc.byteSize = sizeof(std::uint32_t);
+        rDesc.byteSize = 2 * sizeof(std::uint32_t);
         rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
         rDesc.debugName = "DagCountReadback";
         rb = device->createBuffer(rDesc);
@@ -1056,6 +1094,10 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
         upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
     }
+    // M5.2：三角计数器初始清零（动态跟踪，writeBuffer/UAV/CopySource 轮转）。
+    const std::uint32_t dagTriZero = 0;
+    upload->beginTrackingBufferState(triCounter_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(triCounter_, &dagTriZero, sizeof(dagTriZero));
 
     upload->beginTrackingBufferState(identityIndex_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(identityIndex_, identity.data(), identity.size() * sizeof(std::uint32_t));
@@ -1127,10 +1169,14 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
     const std::uint32_t slot = ready & 1u;
     void* p = device->mapBuffer(cullReadback_[slot], nvrhi::CpuAccessMode::Read);
     if (p) {
-        cullVisibleCount_ = static_cast<int>(*static_cast<std::uint32_t*>(p));
+        // M5.2：槽位 8B —— [0]=可见簇数（args[1]）、[4]=可见三角数（triCounter[0]）。
+        const auto* vals = static_cast<const std::uint32_t*>(p);
+        cullVisibleCount_ = static_cast<int>(vals[0]);
+        visibleTriangles_ = static_cast<int>(vals[1]);
         device->unmapBuffer(cullReadback_[slot]);
     } else {
         cullVisibleCount_ = -1;   // map 失败如实上报，不静默沿用旧值
+        visibleTriangles_ = -1;
     }
     cullPolledSlot_ = static_cast<int>(ready);
 }
@@ -1479,6 +1525,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         //   2) 静态 dispatch ceil(簇数/128)，每线程 1 簇 5 平面球测试，通过者
         //      atomicAdd(args[1]) + append 簇号到可见列表；
         //   3) copyBuffer 把 args[1] 拷进回读环形（pollCullStats 延迟两帧消费）；
+        //      M5.2 起再拷 triCounter[0] 到槽位偏移 4（同帧同环形）；
         //   4) graphics 读 args + 可见列表，一次 drawIndexedIndirect。
         // UAV→SRV/IndirectArgument 的状态转换由 NVRHI 状态跟踪插入（validation 实测）。
         // M4.2：cull pass 单独计时——begin/end 只包剔除段（args 重写 + dispatch +
@@ -1487,6 +1534,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         if (frustumCull_) {
             const bool cullTiming = cullTimer_.begin(cmd);
             cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
+            // M5.2：三角计数器每帧清零（GPU atomicAdd 从 0 累加，与 args[1] 同款）。
+            const std::uint32_t triZero = 0;
+            cmd->writeBuffer(triCounter_, &triZero, sizeof(triZero));
 
             // M5.1：dag 遍历换 dag.slang csDag（显式栈）+ 自己的绑定/常量；
             // M4.1 路径保持原样。输出接口（visibleList + args）两者完全一致。
@@ -1517,9 +1567,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             const std::uint32_t threads = dag_ ? dagRootCount_ : clusterCount_;
             cmd->dispatch((threads + 127u) / 128u, 1, 1);
 
-            // instanceCount 在 DrawIndexedIndirectArguments 第 2 个 uint（offset 4）。
+            // 回读拷贝两段：槽位 [0]=args[1]（可见簇数，offset 4 字节处）、
+            // [4]=triCounter[0]（可见三角数）。pollCullStats 延迟两帧一起消费。
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], 0,
                             indirectArgs_, sizeof(std::uint32_t), sizeof(std::uint32_t));
+            cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], sizeof(std::uint32_t),
+                            triCounter_, 0, sizeof(std::uint32_t));
             if (cullTiming) cullTimer_.end(cmd);
             ++cullSubmitted_;
         }
@@ -1598,9 +1651,11 @@ void Scene::shutdown() {
     visibleList_ = nullptr;
     clusterSpheres_ = nullptr;
     for (auto& rb : cullReadback_) rb = nullptr;
+    triCounter_ = nullptr;   // M5.2：GPU 原子三角计数器
     cullSubmitted_ = 0;
     cullPolledSlot_ = -1;
     cullVisibleCount_ = -1;
+    visibleTriangles_ = -1;
     cullTimer_.shutdown();   // M4.2：device 仍存活时释放 cull 计时 query
     clusterCount_ = 0;
     frustumCull_ = false;

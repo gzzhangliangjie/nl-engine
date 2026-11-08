@@ -141,6 +141,9 @@ public:
     float dagGroupError() const { return dagGroupError_; }
     // M4.1：GPU 剔除统计（两帧前的结果；-1 = 暂无数据）。clusterCount 总簇数恒有。
     int           visibleClusters() const { return cullVisibleCount_; }
+    // M5.2：GPU 可见三角数（与 visibleClusters 同一延迟窗口、同一回读环形槽位
+    // 的高 4 字节；-1 = 暂无数据）。cull / dag 两种 compute 路径口径一致。
+    int           visibleTriangles() const { return visibleTriangles_; }
     std::uint32_t clusterCount() const { return clusterCount_; }
     // M5.0：屏幕误差投影球数据（世界空间 xyz=center w=radius；model 恒单位阵）。
     // assetSphere = 当前显示几何联合球（uploadClusterData 每次重算）；
@@ -202,10 +205,14 @@ private:
     nvrhi::ComputePipelineHandle  cullComputePSO_;
     nvrhi::BindingLayoutHandle    cullComputeLayout_;  // UAV(0) list + UAV(1) args + SRV/CB
     nvrhi::BindingSetHandle       cullComputeSet_;
-    nvrhi::BufferHandle           cullReadback_[2];    // instanceCount 回读环形（4B × 2）
+    nvrhi::BufferHandle           cullReadback_[2];    // 回读环形（8B × 2：[0]=visibleCount [4]=triCount）
     std::uint32_t                 cullSubmitted_ = 0;  // 已提交剔除的帧数（环形游标源）
     int                           cullPolledSlot_ = -1; // 已消费的最大提交序号（-1 = 无）
     int                           cullVisibleCount_ = -1;
+    // M5.2：GPU 原子三角计数器（1 个 uint）。cull.slang u2 / dag.slang u3 各自
+    // atomicAdd，每帧 writeBuffer 清零，copyBuffer 进回读环形槽位高 4 字节。
+    nvrhi::BufferHandle           triCounter_;
+    int                           visibleTriangles_ = -1;
     // 每帧 compute dispatch 前整体重写 args（indexCount 等静态字段不变、instanceCount=0
     // 由 GPU atomicAdd 重建）。init 时按 stride 一次填好。
     nvrhi::DrawIndexedIndirectArguments cullArgsReset_{};

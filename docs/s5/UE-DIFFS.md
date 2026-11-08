@@ -25,7 +25,7 @@
 | UE 做法 | `NaniteRasterizer.usf:2097` `ComputeClusterLODTransition`：父子簇之间算 0..1 过渡因子，连续混合。 |
 | 我们现状 | cut 二值：`screenPx < cutThresholdPx` 即在此层停（S5 组原子 cut）。 |
 | 为什么 | 组原子 cut 数据前提（父簇绝不跨组）只支撑整组离散切换；连续混合需要 per-pixel 过渡预算，复杂度整档提升。 |
-| 缓解 | S5.2 滞回（hysteresis）防抖解决同族的阈值抖动问题，但仍是离散切层。 |
+| 缓解 | ~~S5.2 滞回（hysteresis）防抖~~（2026-11-08 拍板砍掉：三处参考均无运行时滞回——UE `NaniteClusterCulling.usf` 无状态双误差带 + TAA 掩盖、bevy/Carrot 纯无状态判定；滞回需 per-cluster 上帧状态，破坏 M5.1 刚验证的无状态性，且当前规模未实测到抖动危害。与 UE 的无状态判定口径**对齐**而非差异）。 |
 | 升级路径 | 若视觉上切层跳变不可接受，再立项连续过渡（参考 UE 的 dithered transition）。 |
 
 ### D3a GPU 遍历结构：每线程显式栈 vs bevy 全局队列多 pass（M5.1，有意简化）

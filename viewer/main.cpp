@@ -247,7 +247,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S5.1") != nullptr, "S5.1 stage reported");
+    check(std::strstr(st.stage, "S5.2") != nullptr, "S5.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -594,6 +594,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             // M4.1：GPU 剔除统计（DeviceInfo 由 backend 每帧 poll 后更新，只读显示）。
             hud.visibleClusters = info.visibleClusters;
             hud.totalClusters = static_cast<int>(info.totalClusters);
+            hud.visibleTriangles = info.visibleTriangles;   // M5.2：-1 = 暂无数据
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -697,8 +698,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     }
                 }
             }
-            // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。
-            if (dagTop || dagMode)
+            // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。只在滑条真的
+            // 画出来时回读（HUD 侧条件 = frame.dagGroupCount > 0）：dag 遍历模式
+            // 不显示滑条，hud.cutThresholdPx 保持 POD 默认 1.0，无条件回读会把
+            // 命令行 --cut-thr 每帧覆盖回 1.0（M5.2 实测踩坑：far HUD 图 237/3936
+            // = thr 被钳回 1.0 的结果；s5.1 near 没踩到纯属 thr 恰好 = 1.0）。
+            if (dagTop && dagGroupCount > 0)
                 cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
             hudWantsMouse = hud.wantCaptureMouse;
         }
@@ -709,15 +714,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
         // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
         // M5.1：dag 遍历复用同一回读通路（visible = 被 emit 的簇数）。
+        // M5.2：追加 GPU 可见三角数（同一延迟窗口的回读环形高 4 字节）。
         if (o.screenshot && (cullMode || dagMode) && info.totalClusters > 0 &&
             info.visibleClusters >= 0) {
             if (dagMode) {
                 nl::core::log::info("dag stats: visible ", info.visibleClusters, " / ",
                                     info.totalClusters, " clusters (threshold ",
-                                    cutThresholdPx, " px)");
+                                    cutThresholdPx, " px, tris ",
+                                    info.visibleTriangles, ")");
             } else {
                 nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
-                                    info.totalClusters, " clusters (frustum on)");
+                                    info.totalClusters, " clusters (frustum on, tris ",
+                                    info.visibleTriangles, ")");
             }
         }
 

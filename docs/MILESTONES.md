@@ -966,3 +966,28 @@
 6. **`camera.eyePosition()` 无返回值重载**：只有 `void eyePosition(float out[3])` 数组出参形式。
 
 **下一步**：M5.2 时滞防抖 + HUD（误差阈值滞回：上帧选中簇本帧误差 < 阈值×1.1 不换，抑制边界抖动；GPU 原子计数总三角数实时显示；S5 收官自检=拉远三角数连续下降 + 固定视角数字稳定）。tag `s5-done`。
+
+## M5.2：GPU 三角数 HUD（S5 收官，2026-11-09，tag `s5-done`）
+
+**动作**：kStage → `S5.2 GPU triangle count (atomic counter in cull/dag compute, delayed readback)`。范围调整（用户拍板）：**砍掉误差滞回**——三处参考实读均无运行时滞回（UE 5.8.4 `NaniteClusterCulling.usf:258` 无状态双误差带 + TAA 掩盖、bevy `cull_bvh.wesl` 无状态、Carrot `draw_virtual_geometry.slang:106` 纯双误差判定），滞回需 per-cluster 上帧状态 buffer 主动破坏 M5.1 刚验证的「无状态、逐字节可复现」，且当前单资产规模未实测到抖动危害；与 UE 无状态口径对齐（UE-DIFFS D2 缓解栏留痕）。M5.2 收窄为 GPU 原子三角计数 + HUD。
+
+**提交版本**（核心改动）：
+- `cull.slang` u2 / `dag.slang` u3：各加 `RWStructuredBuffer<uint>` 三角计数器，可见判定/emit 时 `InterlockedAdd` 该簇 triCount（`clusterMeta[id*4+1]`，字节偏移陷阱同 M3.1）
+- 回读环形 4B→8B（[0]=可见簇数 [4]=可见三角数），每帧 `writeBuffer` 清零 + 两段 `copyBuffer`，`pollCullStats` 延迟两帧一起 map；triCounter_ 双路 init 各建（dag 不调 initCull，与回读环形同款独立）
+- HUD cull/dag 模式新增 `s5 tris` 行（frustum 行下方）；截图日志追加 `tris N`（run.bat findstr 断言出口）
+- 顺手修 viewer 潜伏 bug：cut thr 滑条回读条件 `dagTop||dagMode` → `dagTop && dagGroupCount>0`（dag 遍历模式 hud.cutThresholdPx 从不被填 = POD 默认 1.0，无条件回读把命令行 `--cut-thr 16` 每帧覆盖回 1.0）
+- 顺手修三张历史 selftest 卡：m0.9/s2.0/s3.2（exe=current）expectLog 停在 15/15，M5.0 起套件 16/16，本轮首次跑到即 FAIL → expectLog 同步 16/16（exe=current 断言当前构建，套件数演进必须同步历史卡）
+
+**完成情况**：
+- 三角数锚点逐位精确：dag 近景（thr 0.001）237 簇 → **tris 3936 == triangles(finest)**，双后端一致；cull 近景 76 簇 → 1526
+- 拉远谱单调连续：thr 2/4/8/16/32/64 → tris **3870/2360/426/142/104/104**（簇 230/106/14/7/3/3）——S5 验收「拉远连续下降 + 固定视角稳定」达成
+- HUD 目检：s5 tris 行 near 3936 / far 426 同屏可见；640x720 面板完整
+- 交代物：`example/s5-done/`（near/far HUD pair × 双后端 4 张 + verify-near/far-dx12 证据图 + run.bat verify exit 0，findstr 断言 `tris 3936`/`tris 426`）+ cases.json s5.2 卡（29 versions）
+- HUD 基线重拍 7 版本 14 张（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0/s5.1，只拍 exe=current）；回归全 bytes：s5.1 6/6 + s4.0 4/4 + s4.1 4/4 + s4.2 6/6 + s5.0 6/6 + s3.2 18/18 + m0.9 4/4 + s2.0 16/16 + s5.2 新卡 6/6；`server.py --check` OK（stage=S5.2 cases=3 baselines=6）；双后端 selftest 16/16
+- **S5 全线收官**：M5.0 误差投影 → M5.1 DAG 遍历 → M5.2 三角数 HUD，tag `s5-done`
+
+**踩坑**：
+1. **NVRHI BufferDesc 无 `canHaveUAV`**：成员名是 `canHaveUAVs`（复数）；triCounter_ 按 dagGroupExpanded_ 同款纪律建（canHaveUAVs + initialState CopyDest + keepInitialState=true，每条命令列表开头回 CopyDest，帧内 writeBuffer→UAV→CopySource 动态轮转）。
+2. **cut thr 滑条回读钳制命令行参数（潜伏 bug，M5.1 埋雷）**：dag 遍历模式 HUD 不画滑条（`frame.dagGroupCount` 恒 0 不填），但 viewer 每帧 `if (dagTop||dagMode) cutThresholdPx = clamp(hud.cutThresholdPx, 0.25, 4.0)` 无条件回读 → 命令行 thr 16 第二帧起被覆盖成 1.0。实锤过程：far HUD 基线图显示 237/3936（= no-hud thr 1 的结果），no-hud 同参数 14/426 → 实测 thr1@dist20H720 == 237/3936 逐位吻合。s5.1 near 没踩到纯属 thr 恰好 = 1.0。
+3. **历史 selftest 卡 expectLog 失配（潜伏，M5.0 埋雷）**：m0.9/s2.0/s3.2 卡 exe=current 但写死 15/15，M5.0 加第 16 项 selftest 后必 FAIL，此前收口没挑到这三卡所以没暴露。教训：exe=current 的 tool 卡断言的是**当前构建**，套件数/stage 演进时历史卡必须同步，否则全量跑闸必炸。
+4. **Edit 工具误删行**：批量替换时 old_string 尾部含上下文行、new_string 漏带，`beginTrackingBufferState(identityIndex_, ...)` 被吃——编译能过（writeBuffer 不依赖前一行）但状态跟踪会错，目检 diff 当场抓回。

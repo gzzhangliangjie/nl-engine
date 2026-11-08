@@ -17,6 +17,7 @@
 //   t2 = cluster spheres (world-space center.xyz + radius.w)
 //   u0 = visible cluster list (append target, read back by model.slang vsCull as t4)
 //   u1 = drawIndexedIndirect args as raw uints; element [1] = instanceCount
+//   u2 = triangle counter (M5.2: atomicAdd per visible cluster, read back 2 frames later)
 //
 // On Vulkan the UAV registers map through slangc -fvk-u-shift 384 0, matching
 // NVRHI's default VulkanBindingOffsets::unorderedAccess = 384. DX12 uses u0/u1 as-is.
@@ -33,6 +34,7 @@ StructuredBuffer<uint>   g_clusterMeta    : register(t1);
 StructuredBuffer<float4> g_clusterSpheres : register(t2);
 RWStructuredBuffer<uint> g_visibleList    : register(u0);
 RWStructuredBuffer<uint> g_cullArgs       : register(u1);
+RWStructuredBuffer<uint> g_triCounter     : register(u2);
 
 // Gribb-Hartmann plane extraction, sphere flavor. bevy cull_shared.wesl:44-64 uses
 // the same 5 rows (transposed there because WGSL indexes columns; Slang/HLSL m[i]
@@ -73,4 +75,8 @@ void csCull(uint dispatchThreadID : SV_DispatchThreadID)
     uint slot;
     InterlockedAdd(g_cullArgs[1], 1u, slot);
     g_visibleList[slot] = dispatchThreadID;
+
+    // M5.2：同款原子累加该簇三角数（meta 布局 [vertexBase, triCount, localBase, pad]，
+    // stride 4 uint）。CPU 侧每帧 writeBuffer 清零，与 args[1] 一起延迟两帧回读。
+    InterlockedAdd(g_triCounter[0], g_clusterMeta[dispatchThreadID * 4u + 1u]);
 }

@@ -25,12 +25,17 @@
 - **洞**的来源几乎都是：父簇被画时其子簇区域本应被父覆盖、但父简化时边界没对齐——回到 S2 检查边界锁，别在遍历侧修
 - 遍历里读 DAG 引用注意共享子簇只画一次（父替换语义：选父则子不画；兄弟组共享子簇时按引用计数去重）
 
-## M5.2 时滞防抖 + HUD（1~2 天）
+## M5.2 HUD 三角数（2026-11-08 拍板：砍掉滞回，0.5 天）
 
-- [ ] 误差阈值加滞回（hysteresis）：上帧选中的簇，本帧误差只要 < 阈值×1.1 就不换——抑制边界抖动
-- [ ] HUD 实时显示当前总三角数（GPU 原子计数 + 延迟回读，复用 S4）
+**拍板留痕**：原计划的误差阈值滞回（×1.1）**不做**。依据：① 三处参考实读均无运行时滞回——UE 5.8.4 `NaniteClusterCulling.usf:258` 无状态双误差带 + TAA 掩盖；bevy `cull_bvh.wesl` 无状态；Carrot `draw_virtual_geometry.slang:106` 纯双误差判定；② M5.1 刚验证的「无状态、可复现」（全细节逐字节等价成立的前提）值得保住，滞回需 per-cluster 上帧状态 buffer，主动破坏它；③ 滞回治的「运动中边界簇翻转」在当前单资产规模下未实测到危害，无证据不引入机制。
 
-**自检（S5 验收）**：相机拉远三角数**连续**下降（不是跳变）；固定视角数字稳定不抖。tag：`s5-done`，录屏或连拍 `docs/screenshots/s5_*.png`。
+- [x] HUD 实时显示当前总三角数（GPU 原子计数 + 延迟回读，复用 S4）
+  - dag.slang u3 / cull.slang u2 各加 RWStructuredBuffer 计数器，emit/append 时 `InterlockedAdd` 该簇 triCount（clusterMeta[1]）
+  - 回读环形 4B→8B：[0]=可见簇数、[4]=可见三角数，pollCullStats 延迟两帧一起消费
+  - HUD cull/dag 模式新增 `s5 tris` 行；截图日志追加 tris 计数（run.bat findstr 断言出口）
+  - 非 dag 模式（`--mode cull`）同样显示，口径一致
+
+**自检（2026-11-09 实测通过，S5 收官）**：三角数锚点逐位精确——dag 近景（thr 0.001）237 簇 → tris **3936 == triangles(finest)**，双后端一致；拉远谱单调连续：thr 2/4/8/16/32/64 → tris 3870/2360/426/142/104/104；固定视角数字稳定。顺手修两个潜伏 bug：① viewer cut thr 滑条回读条件 `dagTop||dagMode` 在 dag 遍历模式下把命令行 `--cut-thr` 每帧覆盖回 POD 默认 1.0（hud.cutThresholdPx 从不被填）→ 改为只在滑条真显示（`dagTop && dagGroupCount>0`）时回读；② 三张历史 selftest 卡（m0.9/s2.0/s3.2，exe=current）expectLog 停在 15/15 → 同步 16/16。回归 8 组全 bytes（HUD 基线重拍 7 版本 14 张）。tag：`s5-done`。
 
 ---
 
@@ -40,7 +45,7 @@
 |---|---|---|
 | M5.0 误差投影 | 1 天 | `s5-proj` |
 | M5.1 DAG 遍历 | 2~3 天 | `s5-traverse` |
-| M5.2 防抖+HUD | 1~2 天 | `s5-done` |
+| M5.2 HUD 三角数（滞回已砍） | 0.5 天 | `s5-done` |
 
 ## 卡住翻哪
 

@@ -970,13 +970,13 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 M0.9）",
+     "name": "selftest（16/16，阶段校验 M0.9）",
      "kind": "selftest",
-     "note": "与 M0.8 相同的 15 项机械校验，stage 检查改为 M0.9。",
+     "note": "16 项机械校验（M0.8 的 15 项 + M5.0 新增 1 项；exe=current 断言的是当前构建，expectLog 随套件数演进）。",
      "args": [
       "--selftest"
      ],
-     "expectLog": "SELFTEST PASS (15/15)",
+     "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest",
      "script": "example/m0.9/run.bat selftest"
     },
@@ -1703,13 +1703,13 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S2.0）",
+     "name": "selftest（16/16，阶段校验 S2.0）",
      "kind": "selftest",
-     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 15。",
+     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 16（M5.0 起 16/16，历史卡 expectLog 同步演进；exe=current 断言的是当前构建）。",
      "args": [
       "--selftest"
      ],
-     "expectLog": "SELFTEST PASS (15/15)",
+     "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest",
      "script": "example/s2-done/run.bat selftest"
     },
@@ -2139,10 +2139,10 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S3.2）",
+     "name": "selftest（16/16，阶段校验 S3.2）",
      "kind": "selftest",
-     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 15。",
-     "expectLog": "SELFTEST PASS (15/15)",
+     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 16（M5.0 起 16/16，历史卡 expectLog 同步演进；exe=current 断言的是当前构建）。",
+     "expectLog": "SELFTEST PASS (16/16)",
      "script": "example/s3-done/run.bat selftest",
      "args": [
       "--selftest"
@@ -2730,9 +2730,23 @@
       "vulkan": "example/s5-proj/s5-hud-vulkan.png"
      },
      "args": [
-      "--mode", "dag-top", "--hud", "--screenshot", "{out}",
-      "--frames", "8", "--shading", "normal",
-      "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--size", "640x720"
+      "--mode",
+      "dag-top",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
      ],
      "command": "viewer.exe --mode dag-top --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
      "script": "example/s5-proj/run.bat verify",
@@ -2743,7 +2757,9 @@
      "name": "selftest：lodErrorSelfTest 手算投影用例（16/16）",
      "kind": "tool",
      "note": "viewer --selftest：新增 M5.0 手算屏幕误差用例（45° fov 已知球固定相机逐例对比）；套件数 15→16。",
-     "args": ["--selftest"],
+     "args": [
+      "--selftest"
+     ],
      "expectExit": 0,
      "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest"
@@ -2779,9 +2795,25 @@
       "vulkan": "example/s5-traverse/s5-traverse-near-vulkan.png"
      },
      "args": [
-      "--mode", "dag", "--hud", "--screenshot", "{out}", "--frames", "8",
-      "--shading", "normal", "--yaw", "12", "--pitch", "9", "--dist", "4.2",
-      "--cut-thr", "1.0", "--size", "640x720"
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cut-thr",
+      "1.0",
+      "--size",
+      "640x720"
      ],
      "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --cut-thr 1.0 --size 640x720",
      "script": "example/s5-traverse/run.bat verify",
@@ -2797,9 +2829,24 @@
       "vulkan": "example/s5-traverse/s5-traverse-far-vulkan.png"
      },
      "args": [
-      "--mode", "dag", "--screenshot", "{out}", "--frames", "8",
-      "--shading", "normal", "--yaw", "12", "--pitch", "9", "--dist", "20",
-      "--cut-thr", "16", "--size", "640x720"
+      "--mode",
+      "dag",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "20",
+      "--cut-thr",
+      "16",
+      "--size",
+      "640x720"
      ],
      "command": "viewer.exe --mode dag --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 20 --cut-thr 16 --size 640x720",
      "script": "example/s5-traverse/run.bat verify",
@@ -2810,7 +2857,110 @@
      "name": "selftest（S5.1 stage 断言，16/16）",
      "kind": "tool",
      "note": "viewer --selftest：kStage=S5.1 stage 断言同步更新；套件数不变（遍历正确性由 pair 用例 + 回归覆盖）。",
-     "args": ["--selftest"],
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
+  },
+  {
+   "id": "s5.2",
+   "label": "M5.2",
+   "name": "GPU 三角数 HUD（原子计数 + 延迟回读，S5 收官）",
+   "tag": "s5-done",
+   "date": "2026-11-09",
+   "summary": "M5.2（kStage=S5.2）：cull.slang u2 / dag.slang u3 各加 RWStructuredBuffer 三角计数器——emit/append 时 InterlockedAdd 该簇 triCount（clusterMeta[1]），每帧 writeBuffer 清零，copyBuffer 进回读环形槽位高 4 字节（8B 环形：[0]=可见簇数 [4]=可见三角数），pollCullStats 延迟两帧 map 一起消费；HUD cull/dag 模式新增 s5 tris 行，截图日志追加 tris 计数。原计划的误差滞回（×1.1）经三处参考实读后砍掉：UE 5.8.4 NaniteClusterCulling.usf 无状态双误差带、bevy/Carrot 纯无状态判定，滞回需 per-cluster 上帧状态破坏 M5.1 刚验证的无状态性，且当前规模未实测到抖动危害——与 UE 无状态口径对齐（UE-DIFFS D2 缓解栏留痕）。顺手修 viewer 潜伏 bug：cut thr 滑条回读条件 dagTop||dagMode 在 dag 遍历模式下把命令行 --cut-thr 每帧覆盖回 POD 默认 1.0（hud.cutThresholdPx 从不被填），改为只在滑条真的显示（dagTop && dagGroupCount>0）时回读。另修三张历史 selftest 卡 expectLog 停在 15/15（exe=current 断言当前构建，M5.0 起 16/16）。",
+   "acceptance": [
+    "三角数锚点逐位精确：dag 近景（thr 0.001）237 簇 → tris 3936 == triangles(finest)，双后端一致；cull 近景 76 簇 → 1526",
+    "拉远谱单调连续：thr 2/4/8/16/32/64 → tris 3870/2360/426/142/104/104（簇 230/106/14/7/3/3），S5 验收『拉远连续下降』达成",
+    "HUD 目检：s5 tris 行随 frustum 行同屏（near 3936 / far 426），640x720 面板完整不裁底",
+    "回归全 bytes：s5.1 6/6 + s4.0 4/4 + s4.1 4/4 + s4.2 6/6 + s5.0 + s3.2 18/18 + m0.9 4/4 + s2.0 16/16（HUD 基线重拍 7 版本 14 张；dag 渲染路径加计数后逐字节不变 = 无状态性保住）",
+    "example/s5-done/run.bat verify exit 0（findstr 断言 tris 3936 / tris 426）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-tris-near",
+     "name": "dag 近景 HUD：s5 tris = 3936（全部叶簇三角）",
+     "kind": "pair",
+     "note": "dist 4.2 阈值 1px：237/324 簇，GPU 原子计数 tris 3936 == 最细层总三角数（逐位锚点）。HUD 直接显示 s5 tris 行。",
+     "baselines": {
+      "dx12": "example/s5-done/s5-tris-near-dx12.png",
+      "vulkan": "example/s5-done/s5-tris-near-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cut-thr",
+      "1.0",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --cut-thr 1.0 --size 640x720",
+     "script": "example/s5-done/run.bat verify",
+     "preview": "example/s5-done/s5-tris-near-dx12.png"
+    },
+    {
+     "id": "s5-tris-far",
+     "name": "dag 远景 HUD：s5 tris = 426（粗层即停）",
+     "kind": "pair",
+     "note": "dist 20 阈值 16px：14/324 簇，tris 426。与近景同屏对比 = 拉远变粗、三角数连续下降的 S5 收官证据。",
+     "baselines": {
+      "dx12": "example/s5-done/s5-tris-far-dx12.png",
+      "vulkan": "example/s5-done/s5-tris-far-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "20",
+      "--cut-thr",
+      "16",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 20 --cut-thr 16 --size 640x720",
+     "script": "example/s5-done/run.bat verify",
+     "preview": "example/s5-done/s5-tris-far-dx12.png"
+    },
+    {
+     "id": "s5.2-selftest",
+     "name": "selftest（S5.2 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S5.2 stage 断言同步更新；套件数不变（三角计数正确性由 pair 用例 + 锚点断言覆盖）。",
+     "args": [
+      "--selftest"
+     ],
      "expectExit": 0,
      "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest"

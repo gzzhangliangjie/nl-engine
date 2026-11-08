@@ -34,8 +34,11 @@
 //   t4 = member CSR        (flattened member cluster ids, global)
 //   t5 = generating group  (per cluster, global group index; level-0 clusters unused)
 //   t6 = cluster level     (per cluster; 0 = finest = leaf)
+//   t7 = cluster meta      ([vertexBase, triCount, localBase, pad]; M5.2 tri counting)
 //   u0 = visible cluster list (append target, read back by model.slang vsCull as t4)
 //   u1 = drawIndexedIndirect args as raw uints; element [1] = instanceCount
+//   u2 = per-group expansion claim (0/1, cleared every frame)
+//   u3 = triangle counter (M5.2: atomicAdd per emitted cluster, read back 2 frames later)
 //
 // On Vulkan the UAV registers map through slangc -fvk-u-shift 384 0, matching
 // NVRHI's default VulkanBindingOffsets::unorderedAccess = 384.
@@ -54,9 +57,11 @@ StructuredBuffer<float4> g_dagGroups      : register(t3);
 StructuredBuffer<uint>   g_dagMembers     : register(t4);
 StructuredBuffer<uint>   g_dagGenGroup    : register(t5);
 StructuredBuffer<uint>   g_dagLevel       : register(t6);
+StructuredBuffer<uint>   g_clusterMeta    : register(t7);
 RWStructuredBuffer<uint> g_visibleList    : register(u0);
 RWStructuredBuffer<uint> g_cullArgs       : register(u1);
 RWStructuredBuffer<uint> g_dagExpanded    : register(u2);  // per-group expansion claim (0/1)
+RWStructuredBuffer<uint> g_triCounter     : register(u3);  // M5.2 triangle counter
 
 // Local stack capacity. Worst case (no cut at all) peaks around depth x branch:
 // measured Suzanne tree peaks well under 100; 256 leaves ample headroom. Overflow
@@ -68,6 +73,9 @@ void emitCluster(uint clusterId)
     uint slot;
     InterlockedAdd(g_cullArgs[1], 1u, slot);
     g_visibleList[slot] = clusterId;
+    // M5.2：原子累加该簇三角数（meta 布局 [vertexBase, triCount, localBase, pad]，
+    // stride 4 uint）。CPU 侧每帧 writeBuffer 清零，与 args[1] 一起延迟两帧回读。
+    InterlockedAdd(g_triCounter[0], g_clusterMeta[clusterId * 4u + 1u]);
 }
 
 [numthreads(128, 1, 1)]

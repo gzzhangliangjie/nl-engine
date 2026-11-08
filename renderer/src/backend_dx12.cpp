@@ -166,6 +166,7 @@ public:
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2：-1 = 暂无数据
         // M5.0：屏幕误差投影球数据（cluster/dag 路径有效，normal 恒 0）。
         for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         // M2.3：探测 assets/meshlets/<stem>.lodN.nmesh 的连续层数（0 = 没有分层资产）。
@@ -342,6 +343,7 @@ public:
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(device_);
         info_.visibleClusters = scene_.visibleClusters();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();

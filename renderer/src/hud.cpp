@@ -337,6 +337,13 @@ void Hud::build(HudFrame& frame) {
                           frame.totalClusters);
             ImGui::TextUnformatted(cullLine);
         }
+        // M5.2：GPU 可见三角数（cull / dag 同一口径，compute 原子累加 + 延迟两帧
+        // 回读）。-1 = 前两帧尚无数据，与 frustum 行同款占位规则。
+        if (frame.visibleTriangles >= 0) {
+            char triLine[96];
+            std::snprintf(triLine, sizeof(triLine), "s5 tris : %d", frame.visibleTriangles);
+            ImGui::TextUnformatted(triLine);
+        }
         // M4.2：cull pass GPU 耗时（独立 timer 实例，只包 compute 剔除段）。
         // 与整帧 GPU ms 并排——剔除开销是否随场景规模变化一眼可见。
         if (frame.cullTimingAvailable) {
@@ -487,6 +494,8 @@ bool hudSelfTest() {
     if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
     // M4.2：cull 计时通道缺省全零（非 cull 模式 HUD 布局一像素不动的保证）。
     if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;
+    // M5.2：可见三角数通道缺省无数据。
+    if (f.visibleTriangles != -1) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;

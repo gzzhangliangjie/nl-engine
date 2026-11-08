@@ -109,6 +109,7 @@ public:
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2：-1 = 暂无数据
         // M5.0：屏幕误差投影球数据（cluster/dag 路径有效，normal 恒 0）。
         for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。cull 模式不依赖分层资产。
@@ -273,6 +274,7 @@ public:
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(nvrhiDevice_);
         info_.visibleClusters = scene_.visibleClusters();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();

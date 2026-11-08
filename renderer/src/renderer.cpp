@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S5.1 GPU DAG traversal (explicit-stack compute, group-atomic cut, M4 indirect interface)";
+    "S5.2 GPU triangle count (atomic counter in cull/dag compute, delayed readback)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
