@@ -127,7 +127,7 @@
 按"零冲突 + 最贴你地基 + 用户兴趣"排序：
 
 1. **Job / Task 并行系统** —— **已立项** `docs/p8/P8-JOB-PLAN.md`（纯底层无依赖，第一个消费者=离线管线）；等于把 P8 引擎化的"并发地基"前置。
-2. **材质图（图编辑器 + Slang 代码生成）** —— 走 B 路（自建轻量图，参考 MaterialX 语义 + PhasmaEngine 适配），尚未立项，待用户拍板后出计划。
+2. **材质图（图编辑器 + Slang 代码生成）** —— 走 B 路（自建轻量图，参考 MaterialX 语义 + PhasmaEngine 适配），**已封顶**（见 §6 与 `docs/material-graph/SIDE-TASKS.md`）。
 3. **动作系统 / 动画控制器（2.4）** —— **逻辑层最独立**：状态机 + 混合树 + 曲线采样全是 CPU 确定性计算，不需要 GPU / 不碰 kStage / 不依赖任何 S 步，现在就能开并以确定性单测验收；只有"看到角色动"的视觉验收要等蒙皮（2.3）+ rigged GLB，可后挂。是三个候选里最干净的 A 类样板。
 
 这三条 = 把 P8 引擎化的"并发地基（Job）+ 资产表达（材质图）+ 角色驱动（动作系统）"三块最独立子系统并行啃掉，不影响 S0~S14 主线节奏。若按 worktree 隔离，对应 `feat/job-system` / `feat/material-graph` / `feat/action-system` 三个独立工作树。
@@ -146,7 +146,7 @@
 ## 6. 后续动作（待用户圈定）
 
 - **Job 系统已立项**：`docs/p8/P8-JOB-PLAN.md`（M-J0~M-J4，首个消费者=离线管线）；下一步可执行 M-J0。
-- **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后；支线 T1 可视化编辑器 GUI 已登记 `docs/material-graph/SIDE-TASKS.md`。
+- **材质图已封顶（B 路自建，2026-11-09 用户拍板「及时收手」）**：B1~B4 主线阶梯 + T1 编辑器（拆解 1~5，`viewer --editor`）+ 节点库 10 种 + uniform 曝光（`MaterialParams` cbuffer b1，运行时绑定留 B5）全部完成；定位=**调试工具级**的可调参表面材质薄层（与 UE 分层一致，复杂 shader 手写与图无关），UI 不再投入。见 `docs/material-graph/SIDE-TASKS.md`（含终点定义）；B5 接 PBR pass 排 S7 后（轨道唯一遗留 = T1 拆解 6 预览视口）。
 - **动作系统已立项并完成纯逻辑层（2.4）**：2026-11-08 用户拍板 A 路自建（网上调研结论：状态机/混合树层业界无现成库，ozz 只覆盖下层采样/混合/蒙皮数学）；M-A1 曲线采样 / M-A2 线性加法混合 / M-A3 状态机（UE 回退缩时）/ M-A4 1D blend space 全部完成并过确定性自测 + ctest 5/5 + 展示台 ma-track 卡，tag `anim-ma1`~`anim-ma4`（track 分支内，merge 走 §7.2 文档闸）。**M-A5 按重定义推进中**（先建蒙皮再视觉验收）：**M-A5.1 CPU 蒙皮层已落地**（`cde41c7`：`nl/anim/skinning` LBS + glTF 蒙皮数据入口 + CesiumMan rest 姿态端到端验收）。
 - 其余 A 类轨道（骨骼蒙皮 2.3 / Lua 2.5 / 3D 音频 2.6）仍为候选，立项前按铁律读三处 + 出计划。
 
