@@ -105,11 +105,11 @@
 1. **什么进 worktree / 什么不进**：
    - **进**：A 类并行轨道（引擎化 / 非渲染，不碰 `kStage`、不进渲染回归）—— 如材质图、Job 系统、动作系统。
    - **不进**：VSM（S9 后插入）、TSR（S7 后拆分，见 `ROADMAP.md`）是主线 S 节奏的插入项，留在主 worktree 顺着 S 轨走，不拆出。
-2. **实例注册表（三个已建 worktree，占用说明见 `docs/PARALLEL-TRACKS.md` §7）**：
+2. **实例注册表（四个登记轨道，占用说明见 `docs/PARALLEL-TRACKS.md` §7）**：
 
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
-   | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 已立项 `docs/p8/P8-JOB-PLAN.md` |
+   | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
    | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
    | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **进行中**：M-A0~M-A4 完成（tag `anim-ma1`~`anim-ma4d`）+ M-A5.1 CPU 蒙皮落地（`cde41c7`）；交接 `docs/action-system/ACTION-PLAN.md`（在分支上，未 merge） |
    | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0~C1 完成**（2026-11-09：`core/console/` 纯逻辑内核 + ImGui 前端〔`` ` `` 呼出/滚动日志配色/输入行历史/Tab 补全〕，双后端证据截图，track 分支 b4787da）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C2 内建命令集待开工 |
