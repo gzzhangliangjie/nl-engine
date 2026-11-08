@@ -17,6 +17,7 @@
 #include "nl/anim/blend_space.hpp"
 #include "nl/anim/gltf_anim.hpp"
 #include "nl/anim/skeleton.hpp"
+#include "nl/anim/skinning.hpp"
 #include "nl/anim/state_machine.hpp"
 
 #include <cmath>
@@ -994,6 +995,159 @@ void testGltfDeterminism(const std::string& path) {
     expectTrue(same, "two loads identical");
 }
 
+// ---- M-A5：蒙皮（skinning）确定性自测 ----
+
+// 3 骨骼链（与 skeleton FK 用例同款）：hip→spine→head，rest 平移
+// (0,1,0)/(0,0.5,0)/(0,0.5,0) => rest 世界 (0,1)/(0,1.5)/(0,2)。
+// IBM = rest 世界矩阵的逆（纯 T）：T(0,-1)/T(0,-1.5)/T(0,-2)。
+nl::anim::Skeleton makeChainSkeleton() {
+    nl::anim::Skeleton sk;
+    sk.boneNames = { "hip", "spine", "head" };
+    sk.parentIndices = { -1, 0, 1 };
+    for (const float y : { 1.0f, 0.5f, 0.5f })
+        sk.restPose.push_back({ { 0, y, 0 }, nl::anim::quatIdentity() });
+    return sk;
+}
+
+nl::anim::SkinBinding makeChainBinding(nl::anim::Skeleton& sk) {
+    nl::anim::SkinBinding b;
+    b.inverseBind = {
+        nl::anim::mat4FromTR({ 0, -1, 0 }, nl::anim::quatIdentity()),
+        nl::anim::mat4FromTR({ 0, -1.5f, 0 }, nl::anim::quatIdentity()),
+        nl::anim::mat4FromTR({ 0, -2, 0 }, nl::anim::quatIdentity()),
+    };
+    (void)sk;
+    return b;
+}
+
+void testSkinningRigidAnchors() {
+    nl::anim::Skeleton sk = makeChainSkeleton();
+    nl::anim::SkinBinding b = makeChainBinding(sk);
+
+    // 姿态：hip 绕 Z 90°（与 FK 用例同款）→ spine(-0.5,1) / head(-1,1)
+    std::vector<nl::anim::BonePose> local(3);
+    local[0].translation = { 0, 1, 0 };
+    local[0].rotation = nl::anim::quatFromAxisAngle({ 0, 0, 1 }, 1.57079632679f);
+    local[1].translation = { 0, 0.5f, 0 };
+    local[2].translation = { 0, 0.5f, 0 };
+    std::vector<nl::anim::BonePose> model;
+    expectTrue(nl::anim::localToModel(local, sk, model), "fk ok");
+
+    std::vector<nl::anim::Mat4> palette;
+    nl::anim::computePalette(palette, model, b.inverseBind);
+
+    // 刚体绑定 v=(0,2,0)@head：palette*T = T(-1,-1) → (-1,1) == head 世界位
+    std::vector<nl::anim::Vec3> base = { { 0, 2, 0 } };
+    nl::anim::SkinBinding one = b;
+    one.joints = { { 2, -1, -1, -1 } };
+    one.weights = { { 1, 0, 0, 0 } };
+    std::vector<nl::anim::Vec3> out;
+    nl::anim::skinPositions(out, base, palette, one);
+    expectNear(true, "rigid head x", out[0].x, -1.0f, 1e-5f);
+    expectNear(true, "rigid head y", out[0].y, 1.0f, 1e-5f);
+
+    // 刚体绑定 v=(0,1,0)@hip：绕髋关节转，位置不动（旋转枢轴语义）
+    one.joints = { { 0, -1, -1, -1 } };
+    base = { { 0, 1, 0 } };
+    nl::anim::skinPositions(out, base, palette, one);
+    expectNear(true, "rigid hip x", out[0].x, 0.0f, 1e-5f);
+    expectNear(true, "rigid hip y", out[0].y, 1.0f, 1e-5f);
+
+    // LBS：v=(0,1.5,0)，w=(hip 0.5, head 0.5) →
+    // palette_hip(0,1.5)=(0,1.5)（绕髋不动点）、palette_head(0,1.5)=(-1,0.5)
+    // → 混合 (-0.5, 1.0)
+    base = { { 0, 1.5f, 0 } };
+    one.joints = { { 0, 2, -1, -1 } };
+    one.weights = { { 0.5f, 0.5f, 0, 0 } };
+    nl::anim::skinPositions(out, base, palette, one);
+    expectNear(true, "lbs x", out[0].x, -0.5f, 1e-5f);
+    expectNear(true, "lbs y", out[0].y, 1.0f, 1e-5f);
+
+    // 法线：n=(0,1,0)@head，hip 90° → (-1,0,0) 归一化
+    std::vector<nl::anim::Vec3> nbase = { { 0, 1, 0 } };
+    one.joints = { { 2, -1, -1, -1 } };
+    one.weights = { { 1, 0, 0, 0 } };
+    std::vector<nl::anim::Vec3> nout;
+    nl::anim::skinNormals(nout, nbase, palette, one);
+    expectNear(true, "skin normal x", nout[0].x, -1.0f, 1e-5f);
+    expectNear(true, "skin normal y", nout[0].y, 0.0f, 1e-5f);
+}
+
+void testSkinningValidateNegative() {
+    nl::anim::Skeleton sk = makeChainSkeleton();
+    nl::anim::SkinBinding b = makeChainBinding(sk);
+    b.joints = { { 2, -1, -1, -1 } };
+    b.weights = { { 1, 0, 0, 0 } };
+    expectTrue(nl::anim::validateSkinBinding(b, 1, 3).empty(), "valid ok");
+
+    expectTrue(!nl::anim::validateSkinBinding(b, 2, 3).empty(), "vertex count mismatch");
+    nl::anim::SkinBinding bad = b;
+    bad.joints = { { 3, -1, -1, -1 } };
+    expectTrue(!nl::anim::validateSkinBinding(bad, 1, 3).empty(), "joint out of range");
+    bad = b;
+    bad.weights = { { 0.5f, 0, 0, 0 } };
+    expectTrue(!nl::anim::validateSkinBinding(bad, 1, 3).empty(), "weight sum != 1");
+    bad = b;
+    bad.inverseBind[0].m[0] = std::numeric_limits<float>::quiet_NaN();
+    expectTrue(!nl::anim::validateSkinBinding(bad, 1, 3).empty(), "non-finite IBM");
+    bad = b;
+    bad.inverseBind.pop_back();
+    expectTrue(!nl::anim::validateSkinBinding(bad, 1, 3).empty(), "IBM count != bones");
+}
+
+// 真实资产端到端：CesiumMan rest 姿态调色板 ≈ identity（bind 姿态 = 节点
+// 静态 TRS 时 palette_i = model_i * IBM_i = I）→ 蒙皮位置 ≈ bind 位置。
+void testSkinnedAssetRestIdentity(const std::string& assetPath) {
+    nl::anim::Skeleton sk;
+    std::vector<nl::anim::AnimClip> clips;
+    nl::anim::SkinnedMeshData mesh;
+    nl::anim::SkinBinding skin;
+    std::string err;
+    if (!nl::anim::loadGltfSkinnedModel(assetPath, sk, clips, mesh, skin, err)) {
+        ++g_failures;
+        std::printf("  FAIL load skinned asset: %s\n", err.c_str());
+        return;
+    }
+    expectTrue(mesh.positions.size() > 0, "asset has vertices");
+    expectTrue(mesh.indices.size() % 3 == 0, "asset indices are triangles");
+
+    // rest 姿态 FK → 调色板 → 蒙皮位置 ≈ bind 位置
+    std::vector<nl::anim::BonePose> local(sk.boneCount());
+    for (std::size_t i = 0; i < sk.boneCount(); ++i) local[i] = sk.restPose[i];
+    std::vector<nl::anim::BonePose> model;
+    expectTrue(nl::anim::localToModel(local, sk, model), "rest fk ok");
+    std::vector<nl::anim::Mat4> palette;
+    nl::anim::computePalette(palette, model, skin.inverseBind);
+    std::vector<nl::anim::Vec3> skinned;
+    nl::anim::skinPositions(skinned, mesh.positions, palette, skin);
+    double maxErr = 0.0;
+    for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
+        const double dx = std::abs(static_cast<double>(skinned[i].x) - mesh.positions[i].x);
+        const double dy = std::abs(static_cast<double>(skinned[i].y) - mesh.positions[i].y);
+        const double dz = std::abs(static_cast<double>(skinned[i].z) - mesh.positions[i].z);
+        maxErr = std::max(maxErr, std::max(dx, std::max(dy, dz)));
+    }
+    if (maxErr >= 1e-3) {
+        ++g_failures;
+        std::printf("  FAIL rest palette ~= identity (maxErr %.6f)\n", maxErr);
+    }
+}
+
+int runSkinningSelftest(const std::string& assetPath) {
+    struct Case { const char* name; void (*fn)(); };
+    const Case cases[] = {
+        { "rigid/lbs anchors", testSkinningRigidAnchors },
+        { "validate negatives", testSkinningValidateNegative },
+    };
+    for (const Case& c : cases) {
+        std::printf("  [%s]\n", c.name);
+        std::fflush(stdout);
+        c.fn();
+    }
+    testSkinnedAssetRestIdentity(assetPath);
+    return g_failures == 0 ? 0 : 1;
+}
+
 int runSkeletonSelftest(const std::string& assetPath) {
     struct Case { const char* name; void (*fn)(); };
     const Case cases[] = {
@@ -1041,6 +1195,13 @@ int main(int argc, char** argv) {
                 argc >= 4 ? argv[3] : "assets/models/RiggedChain.glb";
             const int rc = runSkeletonSelftest(assetPath);
             std::printf("anim skeleton selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+            return rc;
+        }
+        if (testCase == "skinning") {
+            const std::string assetPath =
+                argc >= 4 ? argv[3] : "assets/models/rigged/CesiumMan.glb";
+            const int rc = runSkinningSelftest(assetPath);
+            std::printf("anim skinning selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());

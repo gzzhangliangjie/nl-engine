@@ -122,6 +122,7 @@ add_library(nl_core STATIC
     core/src/anim/state_machine.cpp  # M-A3：动作状态机（优先级转移 + crossfade + UE 缩时）
     core/src/anim/blend_space.cpp    # M-A4：1D blend space（找段 + 权重插值，UE 1D 口径）
     core/src/anim/skeleton.cpp       # M-A4b：骨架拓扑 + FK（local -> model，纯 (T,R)）
+    core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
@@ -397,6 +398,13 @@ add_test(NAME ma4b-anim-skeleton-selftest
                  ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/RiggedChain.glb)
 set_tests_properties(ma4b-anim-skeleton-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "anim skeleton selftest: PASS")
+
+# ---- M-A5：蒙皮确定性自测（刚体/LBS 手算锚点 + CesiumMan rest 调色板≈identity）----
+add_test(NAME ma5-anim-skinning-selftest
+         COMMAND anim-tools selftest skinning
+                 ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/rigged/CesiumMan.glb)
+set_tests_properties(ma5-anim-skinning-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "anim skinning selftest: PASS")
 
 # ---- B 路材质图：节点图数据模型 + 序列化机械单测（A 类轨道第 2 步验收）----
 # 不进渲染回归总闸（bytes/near），走工具版交代。
