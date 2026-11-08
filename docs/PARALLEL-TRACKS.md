@@ -205,3 +205,14 @@ worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道�
 - 相关候选 / 计划文档的状态标注（如 `NON-RENDER-ROADMAP.md` 候选总表）。
 
 注册表与跨轨道文档的更新在**主 worktree 提交**，不进 feature 分支（避免双份冲突）。教训留痕：动作系统 M-A5.1（CPU 蒙皮）落地后，master 侧三处注册表仍停在「M-A4 / 候选」，下个会话即误判进度。
+
+### 7.6 对话归属登记 = wt_pool 占坑闸（2026-11-09 用户拍板，工具 `tools/wt_pool.py`）
+
+起因：2026-11-09 事故——动作系统会话越轨删除了其他轨道的 worktree。教训机械化的产物：**任务号 = 里程碑编号**（用户拍板：里程碑编号本来就关联 wt，不另设任务编号体系）。
+
+- **对话开场归属**：每个对话开场声明里程碑编号，没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记（幂等，同里程碑重入无害）。
+- **动 wt 前过闸**：编辑 / merge / 删除前 `check --track <轨道> [--milestone <编号>]`；`guard --op edit|merge|delete` 输出 exit code 供脚本闸用（0=放行 / 1=阻断 / 2=警告需确认）。
+- **CLOSED 轨道硬拒绝**：claim/check 默认拒绝已收官轨道（wt 应已移除、分支保留）；重建走 §7.1b，重建后更新 TRACKS 注册表状态。
+- **锁文件**：主树根 `.wt_pool_busy.json`（经 `git rev-parse --git-common-dir` 定位主树，全部 worktree 共享一把锁；已 .gitignore）。锁记录里程碑 / wt 路径 / 分支 / pid / host / 时间 / 备注，status 会标 `pid-dead` 陈旧占坑。
+- **自测**：`python tools/wt_pool.py selftest`（16 项断言，进程内临时锁，不碰真实锁）；全表对照 `python tools/wt_pool.py status`。
+- **维护约定**：TRACKS 注册表（脚本内）与 §7.1/§7.1b 表同步更新——轨道收官 / 重建时两处一起改，脚本表是机械闸的事实源。

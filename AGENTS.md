@@ -21,6 +21,8 @@
 
 ## 每轮任务必做的 4 步前置（checklist，缺一不可）
 
+> **第 0 步 · 对话开场归属声明（2026-11-09 用户拍板，见并行轨道纪律第 7 条）**：每个对话开场先声明本次归属的**里程碑编号**；用户没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记，然后才动手。
+
 1. **Carrot 代码** — `E:\UE_STUDY_2026\Carrot\engine\engine\render\` + `engine\resources\shaders\`（.slang）。
 2. **bevy 代码** — `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\` + `crates\bevy_solari\src\realtime\`。
 3. **UE5 官方代码** — `E:\UnrealEngine\5.8.4\Engine\Source\Runtime\Renderer\Private\`（Nanite / Lumen 模块），只读对照表点名的文件，定向读不漫游。
@@ -112,7 +114,7 @@
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
    | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
-   | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
+   | 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官**：B2~B4（tag `mg-b2b4`）+ T1 编辑器 M1~M3（tag `mg-t1`，merge commit `e5505bc`）全量合入 master；B5 接 PBR + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 |
    | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官**：M-A0~M-A5.4 全量 merge 回 master（merge commit `5a1912f`，tag `anim-ma1`~`anim-ma5c`）；nl/anim 纯逻辑层 + anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页；验收纪要 `docs/MILESTONES.md` M-A 节 + `docs/action-system/ACTION-PLAN.md` + `ANIM-TOOLS-GUIDE.md`；GPU 调色板等更大规模蒙皮资产再立项 |
    | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0~C1 完成**（2026-11-09：`core/console/` 纯逻辑内核 + ImGui 前端〔`` ` `` 呼出/滚动日志配色/输入行历史/Tab 补全〕，双后端证据截图，track 分支 b4787da）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C2 内建命令集待开工 |
 
@@ -125,6 +127,7 @@
    - 验证可信度自查：改了什么就在产物里找什么——文本 / 数值类改动后若无任何差异是红旗不是绿灯。
 5. **工作线粘性**：同一轨道回同一 worktree，一条工作线**只 merge 一次**（验收 FAIL→补丁→复验全部在占坑内闭环，不中途 merge 又裸干）。任务收尾才 merge 回 master，下个任务回同一坑。
 6. **收尾即同步关联文档（2026-11-08 用户拍板固化）**：worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道验收纪要外，**必须同步更新 master 侧关联文档**——`AGENTS.md` 实例注册表状态、`docs/PARALLEL-TRACKS.md` §7 注册表、相关候选 / 计划文档（如 `NON-RENDER-ROADMAP.md`）——不许让 master 侧文档停在过时值。注册表 / 跨轨道文档的更新在**主 worktree 提交**（避免与 feature 分支双份冲突；教训：动作系统 M-A5.1 已落地，master 侧注册表仍写「候选」，下个会话即误判进度）。
+7. **对话归属登记 = wt_pool 占坑闸（2026-11-09 用户拍板，事故防复发）**：**任务号 = 里程碑编号**（如 M-C1、S4.2，里程碑编号天然关联轨道，不另设任务编号体系）。①**每个对话开场必须声明里程碑编号**；用户没给就先提示补充，补上后立即登记归属：`python tools/wt_pool.py claim --track <轨道> --milestone <编号> --note "本对话用途"`。②**动任何 worktree（编辑 / merge / 删除 / 清理）前先过闸**：`python tools/wt_pool.py check --track <轨道> --milestone <编号>`；CLOSED 轨道一律不碰（要重开按 §7.1b 重建）；被其他里程碑占用一律停手。③锁文件 `.wt_pool_busy.json` 在主树根，全部 worktree 共享一把锁（已 .gitignore）。④工具自测 `python tools/wt_pool.py selftest`（16 项），全表 `python tools/wt_pool.py status`。本条是对话轨道边界的机械可查实现——「这个对话只处理自己轨道的东西」不再只靠自觉。
 
 > 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
 

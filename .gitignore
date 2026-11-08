@@ -28,4 +28,7 @@ Desktop.ini
 
 # Windows 保留名误产生的 0 字节幻影文件（git 无法 add，也不该入库）
 /nul
+
+# wt_pool 占坑闸锁文件（跨 worktree 共享，见 tools/wt_pool.py）
+.wt_pool_busy.json
 NodeEditor.json
