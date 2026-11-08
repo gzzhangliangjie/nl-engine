@@ -76,13 +76,15 @@
 
 - **任务性质**：支线任务（side quest），独立领走、不阻塞主线（S4/S5）；主线下次开工前或任意空闲会话可执行。
 
-- [ ] **现状缺口**：p8-jobs 展示卡 4 条 `kind:"tool"` 用例（selftest-jobs / cluster-parallel / lod-parallel / negative-unknown-suite）`cases.json` 中 `preview` 均为 `None`，`example/` 下无 job 相关 PNG。验收纪律要求的「一张真实输出证据图」实际未交付，本条为欠账。
-- [ ] **补交方式**：从工具**真实输出**生成证据图（不许手绘示意），候选：
-  1. **加速比对比图**——用 `cluster-parallel` / `lod-parallel` 真实计时输出（440ms→194ms 2.3×、4.448s→1.550s 2.87×）生成条形图，python 脚本落 `scripts/`，产物进 `example/p8-jobs/`；
-  2. **确定性 MD5 报告图**——三方一致（并行 == 基线 == threads=1）的 MD5 对照表渲染成图；
-  3. **selftest 15 项结果图**——selftest jobs 真实输出逐项 PASS 清单渲染成图。
-- [ ] 生成后回填 `cases.json` 对应用例的 `preview` 字段，跑 `python tools/showcase/server.py --check` 退出 0。
-- [ ] 完成后在本节勾选并补一行执行纪要（四栏口径：动作 / 提交版本 / 完成情况 / 踩坑）到 `docs/MILESTONES.md`。
+- [x] **现状缺口**：p8-jobs 展示卡 4 条 `kind:"tool"` 用例（selftest-jobs / cluster-parallel / lod-parallel / negative-unknown-suite）`cases.json` 中 `preview` 均为 `None`，`example/` 下无 job 相关 PNG。验收纪律要求的「一张真实输出证据图」实际未交付，本条为欠账。
+- [x] **补交方式**：从工具**真实输出**生成证据图（不许手绘示意）：
+  1. **加速比对比图 + MD5 表**——`example/p8-jobs/lod-parallel.png`：IcoSphereDense 5 层真实计时（threads=1 5.913s vs threads=32 1.982s，**2.98×**）+ 逐层 MD5 对照表 6/6 MATCH；
+  2. **selftest 结果图**——`example/p8-jobs/selftest-jobs.png`：selftest jobs 真实输出 26 项逐条 + `jobs selftest: PASS`；
+  3. **cluster 并行图**——`example/p8-jobs/cluster-parallel.png`：4 子网格逐块真实统计（coverage 100% / limits PASS）+ 末行并行计时；
+  4. **负向用例图**——`example/p8-jobs/negative-unknown.png`：`selftest: unknown suite` 拒绝 + exit 1。
+- [x] 生成器脚本 `scripts/make-job-evidence.py`（Pillow 渲染，计时/MD5 全部从 `build/showcase/runs/job-offline/` 真实日志与产物解析，无硬编码数据）；`cases.json` 4 条 `preview` 已回填（JSON 有效、仅 +9/-5 行 diff）。
+- [x] **验收说明**：`python tools/showcase/server.py --check` 当前 FAIL，但 FAIL 项为「缺 `s5.0` 版本用例」——归属 S5.0 主线收口件（主 worktree 存在另一条 S5.0 工作线的未提交占坑改动，kStage 已 bump 至 S5.0）。本支线的 preview 回填与 4 张图不触发任何 check 项；待 S5.0 收口时随其版本归位一并转绿。
+- [x] 执行纪要（四栏）已补 `docs/MILESTONES.md`（2026-11-08 支线行）。
 
 ---
 

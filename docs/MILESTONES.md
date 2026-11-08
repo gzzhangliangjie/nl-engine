@@ -887,3 +887,22 @@
 4. **启动拦截 flake 与真像素 FAIL 的鉴别**：本环境全量跑平均挂 0~3 条，特征两种——「日志缺 X」毫秒级秒退 / 超时（Defender 高频启动拦截，串行复跑必过，条目每轮不同）；与「与基线像素不符」的确定性 FAIL（本轮 4 条 vulkan 基线即此类，逐对像素取证定位）严格区分，前者复跑定性、后者必须查根因不许复跑糊弄过去。
 
 **下一步**：P8 并发地基全部收口（M-J0~J3 已入主干）；主线 S5（组原子 cut）/S6 排期按 ROADMAP；feat 分支任务完成后可清理 worktree 登记。
+
+## P8 支线：可视化证据图补交（2026-11-08，主 worktree）
+
+**动作**：登记支线（bb3680c）→ 主 worktree 真实跑工具留档（selftest jobs / cluster Suzanne-multi / lod IcoSphereDense threads=1 vs 32 / 负向 selftest nope）→ 逐层 hashlib MD5 比对 6/6 MATCH → 新增 `scripts/make-job-evidence.py`（Pillow，计时与 MD5 全部从真实日志/产物解析，无硬编码）→ 生成 `example/p8-jobs/` 4 张证据图 → `cases.json` 4 条 tool 用例 `preview` 回填（diff 仅 +9/-5）。
+
+**提交版本**：本轮（master）
+
+**完成情况**
+- 4 张图：`lod-parallel.png`（2.98× 加速条形 + 6 层 MD5 表）、`selftest-jobs.png`（26 项 PASS）、`cluster-parallel.png`（4 子网格统计 + 并行计时）、`negative-unknown.png`（exit 1 拒绝）；全部亲眼验收无重叠/截断/乱码。
+- `server.py --check` 当前 FAIL 项为「缺 s5.0 版本用例」——归属 S5.0 主线收口件（主 wt 存在另一条 S5.0 工作线未提交占坑：kStage 已 bump、camera/hud/scene/viewer 等成批修改 + lod_error 新增）。本支线不触发任何 check 项。
+- 支线节在 `docs/p8/P8-JOB-PLAN.md` 全勾选并留痕。
+
+**踩坑情况**
+1. **`lod -o` 是文件前缀不是目录**：`-o build/.../lod` 产出 `lod.lod0.nmesh` 等同目录平铺文件，按目录 md5sum 会空手而归；MD5 比对按 `lod-dense-{t1,tp}.lodN.nmesh` 逐文件做。
+2. **certutil 输出 GBK 解码炸 UTF-8 reader**：证据脚本改用 `hashlib` 本地直接算 MD5，更干净且不依赖外部命令编码。
+3. **json 重写注意原缩进**：`cases.json` 原为 1 空格缩进，round-trip 用 `indent=1` 才不会整文件 diff 噪音（先误用 indent=2 产生 ~500 行假 diff，已 `checkout --` 重做）。
+4. **cluster 证据图首版只渲染最后一个 submesh**：按 `file` 行重置缓冲的逻辑 bug，改为顺序累积后 4 个子网格齐全——生成器自己也要亲眼验收，不能只看「脚本没报错」。
+
+**下一步**：本支线闭环；等 S5.0 主线收口时 `server.py --check` 随 s5.0 版本归位转绿。

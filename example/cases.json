@@ -2648,7 +2648,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs selftest: PASS",
-     "command": "nanite-tools selftest jobs"
+     "command": "nanite-tools selftest jobs",
+     "preview": "example/p8-jobs/selftest-jobs.png"
     },
     {
      "id": "cluster-parallel",
@@ -2661,7 +2662,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs       : 4 submeshes clustered in parallel",
-     "command": "nanite-tools cluster assets/models/Suzanne-multi.glb"
+     "command": "nanite-tools cluster assets/models/Suzanne-multi.glb",
+     "preview": "example/p8-jobs/cluster-parallel.png"
     },
     {
      "id": "lod-parallel",
@@ -2680,7 +2682,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs        : parallel per-group qem/recluster",
-     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/job-offline/lod --max-levels 6 --threads 1"
+     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/job-offline/lod --max-levels 6 --threads 1",
+     "preview": "example/p8-jobs/lod-parallel.png"
     },
     {
      "id": "negative-unknown-suite",
@@ -2693,7 +2696,8 @@
      ],
      "expectExit": 1,
      "expectLog": "selftest: unknown suite",
-     "command": "nanite-tools selftest nope"
+     "command": "nanite-tools selftest nope",
+     "preview": "example/p8-jobs/negative-unknown.png"
     }
    ]
   }
