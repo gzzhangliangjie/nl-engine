@@ -2288,6 +2288,21 @@
      "expectLog": "anim skeleton selftest: PASS"
     },
     {
+     "id": "anim-demo",
+     "name": "fkdump + 动画演示页：标准资产骨骼动态演示",
+     "kind": "tool",
+     "note": "fkdump 导出全骨骼逐帧 FK 世界坐标（确定性 TSV）；tools/anim_demo.py 据此生成单文件 anim-demo.html —— 四面板 canvas 循环播放 Fox Walk/Run、CesiumMan Walk、RiggedFigure，支持播放/暂停、0.25~3× 速度、XY/ZY 视角切换。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/anim-demo.html（预览图为本页截图）。",
+     "args": [
+      "fkdump",
+      "assets/models/rigged/Fox.glb",
+      "1",
+      "8"
+     ],
+     "expectExit": 0,
+     "expectLog": "# fkdump assets/models/rigged/Fox.glb clip 1",
+     "preview": "example/ma-track/anim-demo-verify.png"
+    },
+    {
      "id": "evidence",
      "name": "sample：确定性演示输出 + 证据图",
      "kind": "tool",

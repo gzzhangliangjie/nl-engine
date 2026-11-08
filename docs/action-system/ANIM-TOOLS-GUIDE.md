@@ -94,3 +94,11 @@ ctest（构建目录内）：`ma1-anim-curve-selftest` / `ma2-anim-blend-selftes
 **真 bug 修复**：collectBones 的 parentIndices 曾存 glTF 原始 node id，而骨架下标是 DFS 序——glTF 不保证 nodes 数组序=拓扑序（CesiumMan/RiggedFigure 父在子后），Fox 恰好两序一致所以 M-A4b 没暴露。修为 nodeId->boneIndex 映射。
 
 **验收**：run.bat 三资产 inspect 关键行 findstr 锁定 ALL GREEN；cases.json ma-track 卡 +3 张 inspect（expectLog 锁 `bones N clips M`）；ctest ma* 6/6 无回归。
+
+## M-A4d：骨骼动画动态演示页（2026-11-08 追加）
+
+**演示命令**：`anim-tools fkdump <glb> <clipIndex> [frames=64]` —— 全骨骼逐帧 FK 世界坐标 TSV（拓扑头 + 每帧 `F t x0 y0 z0 ...`），确定性输出；`fksample` 同源（末端骨骼单点轨迹）。
+
+**演示页**：`tools/anim_demo.py` 读取 dump 生成单文件 `example/ma-track/anim-demo.html`——四面板 canvas 循环播放 Fox Walk / Fox Run / CesiumMan Walk / RiggedFigure，蓝线段=骨骼、亮点=关节、白点=末端骨骼、淡色线=末端整周期轨迹；控件：播放/暂停、0.25~3× 速度、XY/ZY 视角切换（等比投影居中，切视角自动重算包围盒）。**页面零伪造**：数据 100% 来自 fkdump 真实输出，JS 只做投影与取帧；同 dump 两次生成 HTML 逐字节一致。
+
+**验收**：run.bat 加 fkdump findstr 锁定行；cases.json ma-track 卡 +1（anim-demo，preview=演示页截图）；server --check OK。

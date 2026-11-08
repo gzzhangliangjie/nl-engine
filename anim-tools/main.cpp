@@ -723,6 +723,86 @@ int cmdInspect(const std::string& path) {
     return 0;
 }
 
+// fksample <glb> <clipIndex> [samples] —— 整周期 FK 轨迹 TSV（确定性，证据图数据源）。
+// 输出末端骨骼世界位置 (x,y,z) 随时间的采样表；两次运行逐位一致。
+int cmdFkSample(const std::string& path, int clipIndex, int samples) {
+    if (samples < 2 || samples > 4096) {
+        std::fprintf(stderr, "fksample: samples must be in [2, 4096]\n");
+        return 2;
+    }
+    nl::anim::Skeleton skeleton;
+    std::vector<nl::anim::AnimClip> clips;
+    std::string err;
+    if (!nl::anim::loadGltfAnim(path, skeleton, clips, err)) {
+        std::fprintf(stderr, "fksample: %s\n", err.c_str());
+        return 1;
+    }
+    if (clipIndex < 0 || static_cast<std::size_t>(clipIndex) >= clips.size()) {
+        std::fprintf(stderr, "fksample: clip index %d out of range [0, %zu)\n",
+                     clipIndex, clips.size());
+        return 2;
+    }
+    const nl::anim::AnimClip& clip = clips[static_cast<std::size_t>(clipIndex)];
+    const std::size_t tip = skeleton.boneCount() - 1;
+    std::printf("# asset %s clip %d duration %.4f bone %zu %s samples %d\n",
+                path.c_str(), clipIndex, clip.duration, tip,
+                skeleton.boneNames[tip].c_str(), samples);
+    std::printf("# t x y z\n");
+    for (int i = 0; i < samples; ++i) {
+        const float t = clip.duration * static_cast<float>(i) / static_cast<float>(samples - 1);
+        std::vector<nl::anim::BonePose> local, model;
+        if (!sampleClip(clip, t, local) || !localToModel(local, skeleton, model)) {
+            std::fprintf(stderr, "fksample: FK failed at t=%.4f\n", t);
+            return 1;
+        }
+        std::printf("%.4f %.4f %.4f %.4f\n", t, model[tip].translation.x,
+                    model[tip].translation.y, model[tip].translation.z);
+    }
+    return 0;
+}
+
+// fkdump <glb> <clipIndex> [frames] —— 全骨骼逐帧 FK 世界坐标 TSV（确定性，动画演示数据源）。
+// 头部输出拓扑（父下标表），随后每帧一行：t + 每骨骼 (x,y,z)。
+int cmdFkDump(const std::string& path, int clipIndex, int frames) {
+    if (frames < 2 || frames > 2048) {
+        std::fprintf(stderr, "fkdump: frames must be in [2, 2048]\n");
+        return 2;
+    }
+    nl::anim::Skeleton skeleton;
+    std::vector<nl::anim::AnimClip> clips;
+    std::string err;
+    if (!nl::anim::loadGltfAnim(path, skeleton, clips, err)) {
+        std::fprintf(stderr, "fkdump: %s\n", err.c_str());
+        return 1;
+    }
+    if (clipIndex < 0 || static_cast<std::size_t>(clipIndex) >= clips.size()) {
+        std::fprintf(stderr, "fkdump: clip index %d out of range [0, %zu)\n",
+                     clipIndex, clips.size());
+        return 2;
+    }
+    const nl::anim::AnimClip& clip = clips[static_cast<std::size_t>(clipIndex)];
+    const std::size_t B = skeleton.boneCount();
+    std::printf("# fkdump %s clip %d duration %.4f bones %zu frames %d\n",
+                path.c_str(), clipIndex, clip.duration, B, frames);
+    std::printf("# topology (parent index per bone, -1 = root)\n");
+    std::printf("P");
+    for (const int p : skeleton.parentIndices) std::printf(" %d", p);
+    std::printf("\n# per frame: t then bones*(x y z), DFS bone order\n");
+    for (int i = 0; i < frames; ++i) {
+        const float t = clip.duration * static_cast<float>(i) / static_cast<float>(frames);
+        std::vector<nl::anim::BonePose> local, model;
+        if (!sampleClip(clip, t, local) || !localToModel(local, skeleton, model)) {
+            std::fprintf(stderr, "fkdump: FK failed at t=%.4f\n", t);
+            return 1;
+        }
+        std::printf("F %.4f", t);
+        for (const nl::anim::BonePose& m : model)
+            std::printf(" %.4f %.4f %.4f", m.translation.x, m.translation.y, m.translation.z);
+        std::printf("\n");
+    }
+    return 0;
+}
+
 int cmdSample() {
     nl::anim::BlendSpace1D bs;
     if (!bs.reset(makeLocoBlendSpace())) {
@@ -970,11 +1050,25 @@ int main(int argc, char** argv) {
         return cmdSample();
     if (argc >= 3 && std::strcmp(argv[1], "inspect") == 0)
         return cmdInspect(argv[2]);
+    if (argc >= 4 && std::strcmp(argv[1], "fksample") == 0) {
+        const int clipIndex = std::atoi(argv[3]);
+        const int samples = argc >= 5 ? std::atoi(argv[4]) : 200;
+        return cmdFkSample(argv[2], clipIndex, samples);
+    }
+    if (argc >= 4 && std::strcmp(argv[1], "fkdump") == 0) {
+        const int clipIndex = std::atoi(argv[3]);
+        const int frames = argc >= 5 ? std::atoi(argv[4]) : 64;
+        return cmdFkDump(argv[2], clipIndex, frames);
+    }
     std::printf(
         "anim-tools - nl-engine action/animation controller (M-A track)\n"
         "usage:\n"
         "  anim-tools selftest curve|blend|statemachine|blendspace|skeleton [rigged.glb]\n"
         "    deterministic unit tests\n"
-        "  anim-tools inspect <rigged.glb>   skeleton/clip stats + tip FK trajectory\n");
+        "  anim-tools inspect <rigged.glb>   skeleton/clip stats + tip FK trajectory\n"
+        "  anim-tools fksample <rigged.glb> <clipIndex> [samples=200]\n"
+        "    full-cycle tip FK world trajectory (TSV, deterministic)\n"
+        "  anim-tools fkdump <rigged.glb> <clipIndex> [frames=64]\n"
+        "    per-frame all-bone FK world positions (TSV, demo data source)\n");
     return argc == 1 ? 0 : 2;
 }
