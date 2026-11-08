@@ -687,6 +687,42 @@ void testBlendSpaceDeterminism() {
 // sample：确定性演示输出（证据图数据源，纯文本 ASCII，两次运行逐位一致）。
 // 段 1 = 1D blend space 参数扫掠（0..2 步长 0.25，t=0.5）；
 // 段 2 = 状态机 10 步 loco 场景（speed 输入驱动 idle/walk/run + 回退缩时）。
+// M-A4b 标准资产演示：inspect <rigged.glb>
+// 打印骨架统计 + clip 列表（名/时长/通道数）+ 抽 5 个时刻的末端骨骼 FK 世界位置。
+// 全部输出确定性（同资产两次运行逐位一致），作为 M-A5 之前的 CPU 端演示替身。
+int cmdInspect(const std::string& path) {
+    nl::anim::Skeleton skeleton;
+    std::vector<nl::anim::AnimClip> clips;
+    std::string err;
+    if (!nl::anim::loadGltfAnim(path, skeleton, clips, err)) {
+        std::fprintf(stderr, "inspect: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("asset %s\n", path.c_str());
+    std::printf("bones %zu clips %zu\n", skeleton.boneCount(), clips.size());
+    for (std::size_t b = 0; b < skeleton.boneCount(); ++b) {
+        const int p = skeleton.parentIndices[b];
+        std::printf("bone %zu %s parent %d restT %.4f %.4f %.4f\n", b,
+                    skeleton.boneNames[b].c_str(), p, skeleton.restPose[b].translation.x,
+                    skeleton.restPose[b].translation.y, skeleton.restPose[b].translation.z);
+    }
+    for (const nl::anim::AnimClip& clip : clips) {
+        std::printf("clip duration %.4f tracks %zu\n", clip.duration, clip.tracks.size());
+        // 末端骨骼 = 无子节点的最后一个骨骼（演示用近似：取 boneCount-1）。
+        const std::size_t tip = skeleton.boneCount() - 1;
+        std::printf("tip %s world (t=0.00,0.25,0.50,0.75,1.00 of duration)\n",
+                    skeleton.boneNames[tip].c_str());
+        for (int k = 0; k < 5; ++k) {
+            const float t = clip.duration * 0.25f * static_cast<float>(k);
+            std::vector<nl::anim::BonePose> local, model;
+            if (!sampleClip(clip, t, local) || !localToModel(local, skeleton, model)) return 1;
+            std::printf("  t=%.4f %.4f %.4f %.4f\n", t, model[tip].translation.x,
+                        model[tip].translation.y, model[tip].translation.z);
+        }
+    }
+    return 0;
+}
+
 int cmdSample() {
     nl::anim::BlendSpace1D bs;
     if (!bs.reset(makeLocoBlendSpace())) {
@@ -932,10 +968,13 @@ int main(int argc, char** argv) {
     }
     if (argc >= 2 && std::strcmp(argv[1], "sample") == 0)
         return cmdSample();
+    if (argc >= 3 && std::strcmp(argv[1], "inspect") == 0)
+        return cmdInspect(argv[2]);
     std::printf(
         "anim-tools - nl-engine action/animation controller (M-A track)\n"
         "usage:\n"
         "  anim-tools selftest curve|blend|statemachine|blendspace|skeleton [rigged.glb]\n"
-        "    deterministic unit tests\n");
+        "    deterministic unit tests\n"
+        "  anim-tools inspect <rigged.glb>   skeleton/clip stats + tip FK trajectory\n");
     return argc == 1 ? 0 : 2;
 }

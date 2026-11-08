@@ -29,8 +29,11 @@ bool validTrackTimes(const std::vector<float>& times, std::size_t valueCount, st
         if (error) *error = std::string(what) + ": times/values size mismatch or empty";
         return false;
     }
-    if (times[0] != 0.0f) {
-        if (error) *error = std::string(what) + ": first key time must be 0";
+    if (!std::isfinite(times[0]) || times[0] < 0.0f) {
+        // 首 key 不必为 0（glTF 只要求递增；CesiumMan 实测 translation 通道
+        // 从 0.4167s 起步）：t < 首 key 时 clamp 到首值（sample_clamped 语义
+        // 已实现，域内语义自洽）。只拒绝负时间与非有限值。
+        if (error) *error = std::string(what) + ": first key time must be finite and >= 0";
         return false;
     }
     for (std::size_t i = 1; i < times.size(); ++i) {

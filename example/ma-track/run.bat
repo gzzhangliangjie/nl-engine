@@ -22,6 +22,10 @@ echo === selftest blendspace ===
 echo === selftest skeleton (rigged glTF + FK) ===
 python "%ROOT%\tools\make_rigged_glb.py" "%ROOT%\assets\models\RiggedChain.glb" || exit /b 1
 "%EXE%" selftest skeleton "%ROOT%\assets\models\RiggedChain.glb" || exit /b 1
+echo === standard rigged assets (Khronos glTF-Sample-Assets) ===
+"%EXE%" inspect "%ROOT%\assets\models\rigged\Fox.glb" | findstr /C:"bones 26 clips 3" >nul || exit /b 1
+"%EXE%" inspect "%ROOT%\assets\models\rigged\CesiumMan.glb" | findstr /C:"bones 22 clips 1" >nul || exit /b 1
+"%EXE%" inspect "%ROOT%\assets\models\rigged\RiggedFigure.glb" | findstr /C:"bones 22 clips 1" >nul || exit /b 1
 echo === negative: unknown case (expect exit 2) ===
 "%EXE%" selftest bogus >nul 2>&1
 if not errorlevel 2 (

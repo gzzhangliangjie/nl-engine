@@ -2191,6 +2191,42 @@
      "expectLog": "anim curve selftest: PASS"
     },
     {
+     "id": "inspect-fox",
+     "name": "inspect Fox.glb：3 clip 标准资产（Survey/Walk/Run）",
+     "kind": "tool",
+     "note": "Khronos glTF-Sample-Assets 官方演示资产：26 骨骼、3 clips（3.4167/0.7083/1.1583s）。inspect 打印骨架统计 + 末端骨骼 FK 世界位置轨迹（确定性输出）。",
+     "args": [
+      "inspect",
+      "assets/models/rigged/Fox.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 26 clips 3"
+    },
+    {
+     "id": "inspect-cesiumman",
+     "name": "inspect CesiumMan.glb：经典行走动画（22 骨骼）",
+     "kind": "tool",
+     "note": "业界标准中标准的骨骼行走用例。验证 loadGltfAnim 对真实导出器产物（scale 通道恒 1 忽略、首 key>0 的 translation 轨道）全链可用。",
+     "args": [
+      "inspect",
+      "assets/models/rigged/CesiumMan.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 22 clips 1"
+    },
+    {
+     "id": "inspect-riggedfigure",
+     "name": "inspect RiggedFigure.glb：标准蒙皮人体（22 骨骼）",
+     "kind": "tool",
+     "note": "Khronos 官方 rigged 人体，1 clip 1.25s。与 CesiumMan 同口径验证。",
+     "args": [
+      "inspect",
+      "assets/models/rigged/RiggedFigure.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 22 clips 1"
+    },
+    {
      "id": "blend",
      "name": "selftest blend：M-A2 混合",
      "kind": "tool",

@@ -74,3 +74,23 @@ ctest（构建目录内）：`ma1-anim-curve-selftest` / `ma2-anim-blend-selftes
 **踩坑（本轮）**
 1. tinygltf 双 TU 宏视图不一致：IMPLEMENTATION 在 mesh_io.cpp（定义 `TINYGLTF_NO_STB_IMAGE_WRITE`），gltf_anim.cpp 未定义同宏 → inline 构造函数引用被禁的 `WriteImageData` → LNK2019。对齐宏后过；约定：**第二个 tinygltf 消费 TU 必须复刻 IMPLEMENTATION TU 的全部 NO_* 宏**。
 2. FK 测试初版漏把 rest 平移填进 local——`local` 的语义是「采样输出」，glTF 流程里静态 TRS 已在轨道内；直接手构造 local 时必须以 restPose 打底。
+
+## M-A4c：标准骨骼动画演示资产（2026-11-08 追加）
+
+**资产**：`assets/models/rigged/` 三件套，来源 Khronos `glTF-Sample-Assets`（官方演示库，经 gh-proxy 镜像下载）：
+
+| 资产 | 骨骼 | clips | 时长 | 用途 |
+|---|---|---|---|---|
+| `Fox.glb` | 26 | 3（Survey/Walk/Run） | 3.417/0.708/1.158 s | 多 clip 切换演示 |
+| `CesiumMan.glb` | 22 | 1（行走） | 2.0 s | 业界经典单 clip 行走 |
+| `RiggedFigure.glb` | 22 | 1 | 1.25 s | 标准蒙皮人体 |
+
+**演示命令**：`anim-tools inspect <glb>`——打印骨架统计（bone/parent/restT 全表）+ clip 列表（名/时长/通道数）+ 末端骨骼 5 时刻 FK 世界位置。输出确定性（同资产两次运行逐位一致），作为 M-A5 GPU 视觉验收前的 CPU 端演示替身。
+
+**加载器为真实资产补的两条口径**（都有手算/探针证据，非静默放宽）：
+1. **动画 scale 通道**：值恒 1（|v-1|≤1e-4，CesiumMan/RiggedFigure 导出器空操作）→ 验证后丢弃；非恒 1 → 拒绝。BonePose 无 scale 口径不变。
+2. **首 key 时间**：validateClip 的「first key must be 0」过严——glTF 只要求递增（CesiumMan translation 通道从 0.4167s 起步），域外 clamp 语义（M-A1 已实现）下首 key>0 自洽。改为拒绝负时间/非有限值。
+
+**真 bug 修复**：collectBones 的 parentIndices 曾存 glTF 原始 node id，而骨架下标是 DFS 序——glTF 不保证 nodes 数组序=拓扑序（CesiumMan/RiggedFigure 父在子后），Fox 恰好两序一致所以 M-A4b 没暴露。修为 nodeId->boneIndex 映射。
+
+**验收**：run.bat 三资产 inspect 关键行 findstr 锁定 ALL GREEN；cases.json ma-track 卡 +3 张 inspect（expectLog 锁 `bones N clips M`）；ctest ma* 6/6 无回归。

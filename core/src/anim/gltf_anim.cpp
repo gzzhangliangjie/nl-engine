@@ -48,20 +48,29 @@ bool readFloatAccessor(const Model& model, int accessorIndex,
 }
 
 // DFS 收 scene 全部节点：拓扑序（父先于子）+ 名字 + 静态 TRS。
+// ⚠ glTF 不保证 nodes 数组序 = 拓扑序（CesiumMan/RiggedFigure 实测父在子后），
+// parentIndices 必须存「骨架表下标」，不是原始 node id——nodeId -> boneIndex
+// 映射表修此 bug（Fox 恰好两序一致，之前没暴露）。
 bool collectBones(const Model& model, const tinygltf::Scene& scene, Skeleton& skeleton,
                   std::string& error) {
-    std::vector<int> stack(scene.nodes.rbegin(), scene.nodes.rend());
-    std::vector<int> parents(scene.nodes.size(), -1);   // 根的父 = -1，与栈同位
     std::vector<int> parentOf(model.nodes.size(), -1);
-    while (!stack.empty()) {
-        const int node = stack.back();
-        stack.pop_back();
-        for (const int child : model.nodes[static_cast<std::size_t>(node)].children) {
-            parentOf[static_cast<std::size_t>(child)] = node;
-            stack.push_back(child);
+    {
+        std::vector<int> stack(scene.nodes.begin(), scene.nodes.end());
+        while (!stack.empty()) {
+            const int node = stack.back();
+            stack.pop_back();
+            for (const int child : model.nodes[static_cast<std::size_t>(node)].children) {
+                if (parentOf[static_cast<std::size_t>(child)] != -1) {
+                    error = "gltf: node has multiple parents (scene graph is not a tree)";
+                    return false;
+                }
+                parentOf[static_cast<std::size_t>(child)] = node;
+                stack.push_back(child);
+            }
         }
     }
-    // 第二遍 DFS：保证父下标 < 子下标（拓扑序输出）。
+    // DFS（显式栈，父展开后子紧随其后追加）=> 输出序即拓扑序。
+    std::vector<int> nodeIdToBone(model.nodes.size(), -1);
     struct Frame { int node; bool expanded; };
     std::vector<Frame> work;
     for (const int root : scene.nodes) work.push_back({ root, false });
@@ -77,8 +86,10 @@ bool collectBones(const Model& model, const tinygltf::Scene& scene, Skeleton& sk
         for (const int child : n.children) children.push_back({ child, false });
         // 逆序压栈 = 正序弹出，子节点紧随父节点之后追加。
         for (auto it = children.rbegin(); it != children.rend(); ++it) work.push_back(*it);
+        const std::size_t boneIndex = skeleton.boneCount();
+        nodeIdToBone[static_cast<std::size_t>(top.node)] = static_cast<int>(boneIndex);
         std::string name = n.name;
-        if (name.empty()) name = "bone_" + std::to_string(skeleton.boneCount());
+        if (name.empty()) name = "bone_" + std::to_string(boneIndex);
         BonePose rest;
         if (!n.translation.empty()) {
             rest.translation = { static_cast<float>(n.translation[0]),
@@ -99,7 +110,10 @@ bool collectBones(const Model& model, const tinygltf::Scene& scene, Skeleton& sk
                 }
         }
         skeleton.boneNames.push_back(name);
-        skeleton.parentIndices.push_back(parentOf[static_cast<std::size_t>(top.node)]);
+        skeleton.parentIndices.push_back(
+            parentOf[static_cast<std::size_t>(top.node)] == -1
+                ? -1
+                : nodeIdToBone[static_cast<std::size_t>(parentOf[static_cast<std::size_t>(top.node)])]);
         skeleton.restPose.push_back(rest);
     }
     return true;
@@ -213,6 +227,17 @@ bool loadGltfAnim(const std::string& path, Skeleton& skeleton,
                     track.rotation.values.push_back(normalizeQuat(
                         { values[k * 4], values[k * 4 + 1], values[k * 4 + 2],
                           values[k * 4 + 3] }));
+            } else if (ch.target_path == "scale") {
+                // scale 通道口径（2026-11-08 标准资产接入时定）：值恒 1（空操作，
+                // CesiumMan/RiggedFigure 等导出器常带）→ 验证后丢弃；非恒 1 →
+                // 拒绝（BonePose 无 scale 口径，静默丢非平凡 scale = 假数据）。
+                bool allOnes = true;
+                for (const float s : values)
+                    if (std::abs(s - 1.0f) > 1e-4f) { allOnes = false; break; }
+                if (!allOnes) {
+                    error = "gltf: non-trivial animation scale channel not supported";
+                    return false;
+                }
             } else {
                 error = "gltf: animation path " + ch.target_path + " not supported";
                 return false;
