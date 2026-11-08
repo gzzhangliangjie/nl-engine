@@ -72,6 +72,20 @@
 
 ---
 
+## 支线任务（2026-11-08 登记）：可视化证据图补交
+
+- **任务性质**：支线任务（side quest），独立领走、不阻塞主线（S4/S5）；主线下次开工前或任意空闲会话可执行。
+
+- [ ] **现状缺口**：p8-jobs 展示卡 4 条 `kind:"tool"` 用例（selftest-jobs / cluster-parallel / lod-parallel / negative-unknown-suite）`cases.json` 中 `preview` 均为 `None`，`example/` 下无 job 相关 PNG。验收纪律要求的「一张真实输出证据图」实际未交付，本条为欠账。
+- [ ] **补交方式**：从工具**真实输出**生成证据图（不许手绘示意），候选：
+  1. **加速比对比图**——用 `cluster-parallel` / `lod-parallel` 真实计时输出（440ms→194ms 2.3×、4.448s→1.550s 2.87×）生成条形图，python 脚本落 `scripts/`，产物进 `example/p8-jobs/`；
+  2. **确定性 MD5 报告图**——三方一致（并行 == 基线 == threads=1）的 MD5 对照表渲染成图；
+  3. **selftest 15 项结果图**——selftest jobs 真实输出逐项 PASS 清单渲染成图。
+- [ ] 生成后回填 `cases.json` 对应用例的 `preview` 字段，跑 `python tools/showcase/server.py --check` 退出 0。
+- [ ] 完成后在本节勾选并补一行执行纪要（四栏口径：动作 / 提交版本 / 完成情况 / 踩坑）到 `docs/MILESTONES.md`。
+
+---
+
 ## 时间线与 tag
 
 | 里程碑 | 预计 | tag |
