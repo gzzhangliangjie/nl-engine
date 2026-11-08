@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S5.2 GPU triangle count (atomic counter in cull/dag compute, delayed readback)";
+    "S6.0 Hi-Z depth pre-pass + hand-rolled min-mipmap pyramid";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -56,6 +56,13 @@ static const Artifact kArtifacts[] = {
     {"model.pscluster", true}, {"model.pscluster", false},
     {"model.pscull", true}, {"model.pscull", false},
     {"cull.cs", true}, {"cull.cs", false},
+    {"dag.cs", true}, {"dag.cs", false},
+    {"hiz.vshizdepth", true}, {"hiz.vshizdepth", false},
+    {"hiz.pshizdepth", true}, {"hiz.pshizdepth", false},
+    {"hiz.cs", true}, {"hiz.cs", false},
+    {"hiz.cstop", true}, {"hiz.cstop", false},
+    {"hiz.vshizviz", true}, {"hiz.vshizviz", false},
+    {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
 };
@@ -102,11 +109,12 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool enableDebugLayer,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
-                                           bool dagMode, bool skinMode) {
+                                           bool dagMode, bool skinMode,
+                                           bool hizMode) {
     std::unique_ptr<Renderer> r(new Renderer());
-    // cull 模式（M4.0 GPU vertex pulling）与 dag 模式（M5.1 多层遍历）资产同样是
-    // assets/meshlets/ 下的 .nmesh。
-    const bool isNMesh = clusterMode || cullMode || dagMode;
+    // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
+    // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
+    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode;
     // M-A5：skin 模式吃 assets/models/ 下的 .glb（含 rigged/ 子目录——
     // 标准演示资产在 assets/models/rigged/；仍禁 ".." 与其他路径分隔符）。
     bool nameOk = false;
@@ -134,7 +142,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
-                                 r->impl_->error)) {
+                                 hizMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

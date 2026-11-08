@@ -353,6 +353,22 @@ void Hud::build(HudFrame& frame) {
                              0, nullptr, 0.0f, 1.0f, ImVec2(260.0f, 30.0f));
         }
     }
+    // M6.0：Hi-Z 金字塔——仅 hiz 模式（hizMipCount>0）占位，其它模式 HUD 布局
+    // 一像素不动。mip 层滑条双向写回（viewer 传 FrameParams.hizViewMip 给 GPU
+    // 覆盖层），top-min 显示「金字塔最高层 ≈ 整屏最近径向距离」的回读值。
+    if (frame.hizMipCount > 0) {
+        ImGui::SliderInt("pyramid mip", &frame.hizViewLevel, 0, frame.hizMipCount - 1);
+        char hizLine[96];
+        if (frame.hizTopMin >= 0.0f) {
+            std::snprintf(hizLine, sizeof(hizLine),
+                          "hiz top : %.3f (mip %d/%d, nearest depth)",
+                          frame.hizTopMin, frame.hizMipCount - 1, frame.hizMipCount - 1);
+        } else {
+            std::snprintf(hizLine, sizeof(hizLine), "hiz top : -- (mips %d)",
+                          frame.hizMipCount);
+        }
+        ImGui::TextUnformatted(hizLine);
+    }
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();

@@ -186,6 +186,18 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
 
     started = time.time()
     code, log = run_viewer(exe, argv)
+    # 【2026-11-09】Windows 并发拉起同镜像进程偶发「exit 0 + 空输出」（本机环境级
+    # 抖动：单独重跑必过、双后端 bytes 一致；并发探针还复现过 0xC0000005）。
+    # 对这种不可能签名——exit 等于预期 0 但 expectLog 用例拿到空日志——自动重试
+    # 一次；仍失败才按原逻辑判 FAIL。
+    if code == 0 and case.get("expectLog") and not log:
+        code, log = run_viewer(exe, argv)
+    # 同族抖动签名 2：超时（exit -1）且 marker 前零输出——selftest/文本用例启动
+    # 即打印，120s 内一个字都没吐出来只可能是进程被并发环境卡死（M6.0 收口
+    # 全量闸实测 s5.0/s5-selftest vulkan：单独复验 24ms 即 PASS）。同样重试一次。
+    _timeout_marker = f"[regression] timeout after {RUN_TIMEOUT}s"
+    if code == -1 and log.strip() == _timeout_marker:
+        code, log = run_viewer(exe, argv)
     rec["ms"] = int((time.time() - started) * 1000)
     rec["exit"] = code
     rec["deviceErrors"] = check_device_errors(log)

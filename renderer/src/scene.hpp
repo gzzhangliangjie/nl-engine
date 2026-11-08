@@ -82,6 +82,17 @@ public:
                  const char* vsEntry, const char* psEntry,
                  const char* nmeshFile, std::string& outError);
 
+    // M6.0（S6.0）：Hi-Z 深度预通道 + 手写 min 金字塔。先走 initDag（S5 遍历
+    // 原样复用——S6-PLAN 底线：第二遍剔除的输入接口就是 S4 indirect buffer），
+    // 再追加：hiz.slang 六入口（深度预通道 vs/ps、金字塔 min 降采样 + top 回读
+    // 两个 compute、层级可视化 vs/ps）、HizConstants volatile CB、金字塔纹理
+    // （R32F 全 mip，尺寸随 framebuffer 在 ensurePipelines 建）+ 深度预通道专用
+    // D32 附件。每帧顺序 = 遍历 compute → 深度预通道（mip0 = 视点径向距离）→
+    // min 金字塔逐级 → 最高 mip 回读 → 主绘制 → 右下角 mip 灰度覆盖层。
+    bool initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
+                 const char* vsEntry, const char* psEntry,
+                 const char* nmeshFile, std::string& outError);
+
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
     // 纹理暂不用，先看形变），VB 按 CopyDest + keepInitialState 建立供每帧
@@ -161,6 +172,9 @@ public:
     // dagGroupSphere = 下钻组记录球（dagGroup()>=0 时有效）。
     const float* assetSphere() const { return assetSphere_; }
     const float* dagGroupSphere() const { return dagGroupSphere_; }
+    // M6.0：Hi-Z 金字塔状态（仅 hiz 模式非零；-1 = 暂无数据）。
+    int   hizMipCount() const { return static_cast<int>(hizMipCount_); }
+    float hizTopMin() const { return hizTopMin_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -272,6 +286,43 @@ private:
     nvrhi::BindingLayoutHandle   dagComputeLayout_;
     nvrhi::BindingSetHandle      dagComputeSet_;
     // args 重置模板直接复用 cullArgsReset_（indexCount 同一 identity stride）。
+
+    // ---- M6.0（S6.0）：Hi-Z 深度预通道 + min 金字塔 ----
+    // mip0 = 深度预通道颜色 RT（R32F，视点径向距离）；mip>=1 由 csHizDown 逐级
+    // min。hizDepth_ 是预通道专用 D32 附件（硬件 less 测试保证「最近」）。
+    // 尺寸随 framebuffer，在 ensurePipelines 建/重建（resize 时随 pipeline 重建）。
+    bool                         hiz_ = false;
+    std::uint32_t                hizMipCount_ = 0;
+    nvrhi::ShaderHandle          vsHizDepth_, psHizDepth_, vsHizViz_, psHizViz_;
+    nvrhi::ShaderHandle          csHizDown_, csHizTop_;
+    nvrhi::BufferHandle          hizConstants_;      // volatile CB 48B（b1）
+    nvrhi::BufferHandle          hizTop_;            // 4B 计数器（csHizTop 写，回读）
+    nvrhi::TextureHandle         hizPyramid_;        // R32F，mipLevels=hizMipCount_
+    nvrhi::TextureHandle         hizDepth_;          // D32 预通道附件
+    nvrhi::FramebufferHandle     prepassFramebuffer_;
+    nvrhi::GraphicsPipelineHandle prepassPSO_;       // vsHizDepth+psHizDepth，R32F+D32
+    nvrhi::GraphicsPipelineHandle vizPSO_;           // vsHizViz+psHizViz，主帧缓冲
+    nvrhi::BindingLayoutHandle   hizPrepassLayout_;  // 预通道单 set：b0+b1+t1..t4
+    nvrhi::BindingSetHandle      hizPrepassSet_;     // （Vulkan 多 set 会拆 vk set，b1 读不到）
+    nvrhi::BindingLayoutHandle   vizLayout_;         // Texture_SRV(0) + VolatileConstantBuffer(1)
+    nvrhi::BindingSetHandle      vizSet_;
+    nvrhi::BindingLayoutHandle   chainLayout_;       // Texture_SRV(0) + Texture_UAV(0)
+    std::vector<nvrhi::BindingSetHandle> chainSets_; // 每级一个：SRV=mip L-1，UAV=mip L
+    nvrhi::ComputePipelineHandle chainPSO_;
+    nvrhi::BindingLayoutHandle   topLayout_;         // Texture_SRV(0) + StructuredBuffer_UAV(0)
+    nvrhi::BindingSetHandle      topSet_;
+    nvrhi::ComputePipelineHandle topPSO_;
+    // hizTop_ 清零值每帧 writeBuffer 后由 csHizTop 覆写；回读复用 cullReadback_ 环形
+    // （槽位扩到 12B：[0]=可见簇数 [4]=三角数 [8]=asuint(最近径向距离)）。
+    float                        hizTopMin_ = -1.0f;
+    float                        hizFarRange_ = 10.0f;  // 可视化对比度参考距离（每帧算）
+    // 金字塔/预通道帧缓冲/各级绑定集随视口尺寸在 draw() 懒建（FramebufferInfo 只有
+    // 格式没有尺寸；resize 后按 viewport 尺寸重建，绑定集随纹理重建）。
+    nvrhi::IDevice*              hizDevice_ = nullptr;
+    std::uint32_t                hizW_ = 0, hizH_ = 0;
+    bool                         hizFailed_ = false;   // 懒建失败只报一次，后续帧跳过 hiz
+    bool ensureHizTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                          std::string& outError);
 };
 
 } // namespace nl::renderer::detail

@@ -135,6 +135,15 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 
 ---
 
+### 2.7 ⚠️ 一个 graphics/compute 管线只用一个 BindingSet（2026-11-09，S6.0 实测教训）
+- **本项目 slangc 统一把所有资源编进 vk set 0**（`-fvk-b-shift 256 0` 的 `0` = set 号）。NVRHI Vulkan 的 legacy 模式（`registerSpaceIsDescriptorSet=false`）会把管线的**多个 BindingLayout 拆成多个 vk descriptor set**（set 0, 1, …）——shader 却仍在 vk set 0 找所有资源 → 第二个 set 里的资源（如 b1）在 Vulkan 上**根本绑不上**，未绑定描述符读出垃圾（实测读出 NaN：mip0 模型像素全 NaN → min 链被 NMin 丢掉只剩清屏值 1e9 → top 回读恒 0xFFFFFFFF「pending」）。
+- **DX12 没有描述符集概念，同样的双 set 代码完全正常**——所以这类 bug 只在 Vulkan 爆，且 NVRHI validation 不报错（资源确实「绑在了它该在的 set」）。诊断手段：往 compute 里写哨兵值（如 0xDEADBEEF）确认 UAV 写/copy 链路，再用绝对 LOD 多点采样纹理定位坏层。
+- **项目口径：每管线恰好一个 BindingSet**，需要多份资源就并进一个 layout/set（如 hiz 预通道 = b0 mvp + b1 hiz 常量 + t1..t4 vertex pulling，单一 `hizPrepassSet_`）。若未来真需要多 set，必须改用 `registerSpaceIsDescriptorSet=true` + 按 set 号分档的 `-fvk-*-shift` 编译参数——两套口径不许混用。
+
+### 2.8 ⚠️ Hi-Z 金字塔尺寸必须 POT（2026-11-09，S6.0 实测教训）
+- D3D12 与 Vulkan 都限制 `mipLevels ≤ floor(log2(maxdim)) + 1`：640 宽的非 POT 纹理上限 10 层，ceil 对半链（640→320→…→5→3→2→1）要 11 层直接超规格。DX12 debug layer 报错；**Vulkan 无 VVL 时驱动静默建坏**（SRV/UAV 全踩坑）。修法：Hi-Z 目标尺寸向上取 2 的幂（UE HZB 同款），mip0 视口外区域每帧清 1e9，保守性不破（min 金字塔「空 = 更远 = 不遮挡」方向正确）。
+- RT 贴图创建必须带 `setClearValue`（与每帧 clearColor 一致），否则 D3D12 debug layer 每帧报 ClearRenderTargetView info message 被计入 deviceErrors（acceptance 卡零容错）。
+
 ## 3. 当前局限
 - **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`，无需改 CMake，重新跑 build 脚本即触发重新 configure 并生成 `<name>.{vs,ps}.{spv,dxil}`。注意 `file(GLOB)` 在 configure 时求值，纯新增文件（不碰 CMakeLists）时若没触发重编，手动重跑一次 build 脚本即可。
 - **shader 名仍由共享类固定拼接**：M0.4 把两后端重复的路径/入口名收进了 `renderer/src/scene.cpp`，M0.5 又加了一个 `renderer/src/hud.cpp`（`<name>` = `hud`），两者各自是常量；多材质系统（shader 名 → 产物 + 入口 + pipeline 的注册表）留到 S1。

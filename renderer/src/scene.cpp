@@ -1148,6 +1148,159 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// M6.0（S6.0）：Hi-Z 深度预通道 + 手写 min 金字塔。声明见 scene.hpp。
+bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
+                    const char* vsEntry, const char* psEntry,
+                    const char* nmeshFile, std::string& outError) {
+    // S5 遍历场景原样建好——hiz 深度 pass 就画它的 indirect 输出（S6-PLAN 底线：
+    // 第二遍剔除的输入接口 = S4 indirect buffer，不另起炉灶）。
+    if (!initDag(device, shaderSuffix, vsEntry, psEntry, nmeshFile, outError)) return false;
+    hiz_ = true;
+    hizDevice_ = device;
+    cullTimer_.setLabel("hiz");   // 计时段 = 遍历 + 深度预通道 + 金字塔（resolve 日志区分）
+
+    auto hizPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/hiz." + artifact + "." + shaderSuffix;
+    };
+    auto loadShader = [&](const char* artifact, nvrhi::ShaderType type,
+                          nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(hizPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load hiz shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+        desc.setShaderType(type).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for hiz ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadShader("vshizdepth", nvrhi::ShaderType::Vertex, vsHizDepth_) ||
+        !loadShader("pshizdepth", nvrhi::ShaderType::Pixel, psHizDepth_) ||
+        !loadShader("vshizviz", nvrhi::ShaderType::Vertex, vsHizViz_) ||
+        !loadShader("pshizviz", nvrhi::ShaderType::Pixel, psHizViz_) ||
+        !loadShader("cs", nvrhi::ShaderType::Compute, csHizDown_) ||
+        !loadShader("cstop", nvrhi::ShaderType::Compute, csHizTop_)) {
+        return false;
+    }
+
+    // HizConstants（hiz.slang b1，48B）。每帧写入次数 = 预通道 1 + 金字塔逐级
+    // （≤10）+ top 1 + 可视化 1 ≈ 13 次，× frame-in-flight 2 → maxVersions 64 富余。
+    nvrhi::BufferDesc hcDesc;
+    hcDesc.byteSize = 48;
+    hcDesc.isConstantBuffer = true;
+    hcDesc.isVolatile = true;
+    hcDesc.maxVersions = 64;
+    hcDesc.debugName = "HizConstants";
+    hizConstants_ = device->createBuffer(hcDesc);
+    if (!hizConstants_) { outError = "createBuffer failed for hiz constants"; return false; }
+
+    // 金字塔最高 mip 值落 4B 计数器：每帧 CPU 清零（0xFFFFFFFF=asfloat NaN）→
+    // csHizTop 覆写 → copyBuffer 进回读环形槽位偏移 8（pollCullStats 延迟两帧）。
+    // 状态口径与 triCounter_（M5.2）完全同款：永久 CopyDest，UAV/CopySource 用途
+    // 不做状态迁移——双后端验证过的模式，勿改动态跟踪（会报 Unknown prior state）。
+    nvrhi::BufferDesc htDesc;
+    htDesc.byteSize = sizeof(std::uint32_t);
+    htDesc.structStride = sizeof(std::uint32_t);
+    htDesc.canHaveUAVs = true;
+    htDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    htDesc.keepInitialState = true;
+    htDesc.debugName = "HizTopCounter";
+    hizTop_ = device->createBuffer(htDesc);
+    if (!hizTop_) { outError = "createBuffer failed for hiz top counter"; return false; }
+
+    // 预通道绑定集（单一 set，覆盖 vsHizDepth/psHizDepth 的全部资源需求）：
+    // b0 SceneConstants（mvp）+ b1 HizConstants + t1..t4 vertex pulling SSBO。
+    // 【教训】本项目 slangc 统一把资源编进 vk set 0（-fvk-b-shift 256 0），而
+    // NVRHI Vulkan 的 legacy 模式会把多个 BindingLayout 拆成多个 vk descriptor
+    // set——prepass 若拆两套（cullBindingSet_ + b1），b1 落在 vk set 1 而 shader
+    // 在 set 0 找它 → 未绑定描述符读出 NaN（M6.0 首跑 mip0 模型像素 = NaN 的根因；
+    // DX12 无 set 概念侥幸不炸）。管线要用几个 NVRHI 绑定集，必须保证资源都
+    // 归进一个 set（本项目口径：每管线单 set）。
+    nvrhi::BindingLayoutDesc hpLayoutDesc;
+    hpLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4));
+    hizPrepassLayout_ = device->createBindingLayout(hpLayoutDesc);
+    if (!hizPrepassLayout_) { outError = "createBindingLayout failed for hiz prepass"; return false; }
+    {
+        nvrhi::BindingSetDesc hpSetDesc;
+        hpSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+                 .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, hizConstants_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
+        hizPrepassSet_ = device->createBindingSet(hpSetDesc, hizPrepassLayout_);
+    }
+    if (!hizPrepassSet_) { outError = "createBindingSet failed for hiz prepass"; return false; }
+
+    // 金字塔降采样 compute：SRV(0) = mip L-1 单 mip 子资源 + UAV(0) = mip L + b1。
+    // 绑定集依赖纹理（尺寸随视口），在 ensureHizTargets 懒建；layout/PSO 此处建。
+    nvrhi::BindingLayoutDesc chLayoutDesc;
+    chLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
+    chainLayout_ = device->createBindingLayout(chLayoutDesc);
+    if (!chainLayout_) { outError = "createBindingLayout failed for hiz chain"; return false; }
+    {
+        nvrhi::ComputePipelineDesc chPsoDesc;
+        chPsoDesc.setComputeShader(csHizDown_).addBindingLayout(chainLayout_);
+        chainPSO_ = device->createComputePipeline(chPsoDesc);
+    }
+    if (!chainPSO_) { outError = "createComputePipeline failed for hiz chain"; return false; }
+
+    // top 回读 compute：SRV(0) = 最高 mip + StructuredBuffer_UAV(0) = 计数器 + b1。
+    nvrhi::BindingLayoutDesc tpLayoutDesc;
+    tpLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
+    topLayout_ = device->createBindingLayout(tpLayoutDesc);
+    if (!topLayout_) { outError = "createBindingLayout failed for hiz top"; return false; }
+    {
+        nvrhi::ComputePipelineDesc tpPsoDesc;
+        tpPsoDesc.setComputeShader(csHizTop_).addBindingLayout(topLayout_);
+        topPSO_ = device->createComputePipeline(tpPsoDesc);
+    }
+    if (!topPSO_) { outError = "createComputePipeline failed for hiz top"; return false; }
+
+    // 可视化绑定：SRV(0) 全 mip（psHizViz 用绝对 mip 号 Load）+ b1。
+    nvrhi::BindingLayoutDesc vzLayoutDesc;
+    vzLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
+    vizLayout_ = device->createBindingLayout(vzLayoutDesc);
+    if (!vizLayout_) { outError = "createBindingLayout failed for hiz viz"; return false; }
+    // 可视化绑定集也依赖纹理 → ensureHizTargets 懒建。
+
+    // 回读环形槽位扩到 12B：[0]=可见簇数 [4]=三角数 [8]=asuint(最高 mip 距离)。
+    // initDag 已建 8B 版，这里重建（旧句柄引用计数释放）。重建的是新 NVRHI 对象，
+    // 必须补状态：永久 CopyDest（只当拷贝目标 + CPU 读，与 initDag 老缓冲的
+    // setPermanentBufferState 同语义）——Vulkan 侧拷贝/回读同步依赖状态跟踪。
+    for (auto& rb : cullReadback_) {
+        nvrhi::BufferDesc rDesc;
+        rDesc.byteSize = 3 * sizeof(std::uint32_t);
+        rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        rDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        rDesc.keepInitialState = true;
+        rDesc.debugName = "DagCountReadback";
+        rb = device->createBuffer(rDesc);
+        if (!rb) { outError = "createBuffer failed for hiz readback"; return false; }
+    }
+
+    nl::core::log::info("hiz scene ready (dag traversal + depth pre-pass + min pyramid)",
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
 // M4.1：消费两帧前提交的 instanceCount 回读（frame-in-flight=2 的延迟窗口——
 // 本帧绘制会在同一个环形槽写入新值，但那发生在本函数读完成之后，无竞争）。
 // mapBuffer 内部等待 lastUseFence（DX12 d3d12-buffer.cpp / Vulkan 同构），两帧
@@ -1174,6 +1327,15 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
         const auto* vals = static_cast<const std::uint32_t*>(p);
         cullVisibleCount_ = static_cast<int>(vals[0]);
         visibleTriangles_ = static_cast<int>(vals[1]);
+        // M6.0：槽位 [8] = 金字塔最高 mip 的 asuint 位模式（仅 hiz 模式写入）。
+        // 0xFFFFFFFF 清零值 = asfloat NaN → 无数据时如实回 -1。
+        if (hiz_) {
+            float v;
+            std::memcpy(&v, &vals[2], sizeof(v));
+            hizTopMin_ = (v >= 0.0f && v < 1e8f) ? v : -1.0f;
+        } else {
+            hizTopMin_ = -1.0f;
+        }
         device->unmapBuffer(cullReadback_[slot]);
     } else {
         cullVisibleCount_ = -1;   // map 失败如实上报，不静默沿用旧值
@@ -1419,8 +1581,150 @@ bool Scene::setClusterLevel(nvrhi::IDevice* device, const char* nmeshFile,
     return uploadClusterMesh(device, nmeshFile, outError);
 }
 
+// M6.0：金字塔/预通道帧缓冲/各级绑定集按视口尺寸懒建（FramebufferInfo 只有格式
+// 没有尺寸）。resize 后尺寸变化 → 整组重建；失败置 hizFailed_ 后续帧跳过 hiz。
+bool Scene::ensureHizTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                             std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    if (w == 0 || h == 0) { outError = "hiz: zero viewport"; return false; }
+    // 尺寸向上取 2 的幂（UE 的 HZB 同款 POT 口径）。D3D12/Vulkan 都限制
+    // mipLevels ≤ floor(log2(maxdim))+1——非 POT 视口的 ceil 对半链（640 宽
+    // 要 11 层，上限只有 10）直接超规格：DX12 debug layer 报错、Vulkan 驱动
+    // 静默建坏（SRV/UAV 全踩坑，M6.0 首跑白剪影 + top pending 的根因）。
+    // POT 化后链长恰 = log2+1，ceil 对半保守性成立；mip0 视口外区域每帧
+    // 清 1e9，不遮挡（保守方向正确）。
+    std::uint32_t pw = 1, ph = 1;
+    while (pw < w) pw <<= 1;
+    while (ph < h) ph <<= 1;
+    if (hizPyramid_ && hizW_ == pw && hizH_ == ph) return true;   // 懒建判据按 POT 尺寸
+    hizW_ = pw;
+    hizH_ = ph;
+
+    // mip 层数：逐级 ceil 对半直至 1 texel（最高层 = 全屏最近距离）。POT 尺寸
+    // 下 ceil 对半链长 == log2+1，与 D3D12/Vulkan mip 上限规则精确一致。
+    hizMipCount_ = 1;
+    std::uint32_t m = std::max(hizW_, hizH_);
+    while (m > 1) { m = (m + 1) / 2; ++hizMipCount_; }
+
+    // 金字塔：R32F 全 mip；mip0 兼任深度预通道颜色 RT，mip>=1 compute 写。
+    nvrhi::TextureDesc pDesc;
+    pDesc.width = hizW_;
+    pDesc.height = hizH_;
+    pDesc.format = nvrhi::Format::R32_FLOAT;
+    pDesc.mipLevels = hizMipCount_;
+    pDesc.isRenderTarget = true;
+    pDesc.isUAV = true;
+    pDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    pDesc.keepInitialState = true;
+    // 优化 clear value = mip0 每帧清的 1e9（D3D12 要求 RT 创建时带 clear value，
+    // 否则 ClearRenderTargetView 每帧报 info message 被计入 deviceErrors）。
+    pDesc.setClearValue(nvrhi::Color(1e9f, 1e9f, 1e9f, 1e9f));
+    pDesc.debugName = "HizPyramid";
+    hizPyramid_ = device->createTexture(pDesc);
+    if (!hizPyramid_) { outError = "createTexture failed for hiz pyramid"; return false; }
+
+    // 预通道专用 D32 附件（硬件 less 测试保证 mip0 每像素存最近表面）。
+    // 尺寸随金字塔 POT 化（Vulkan 帧缓冲要求附件等尺寸）；视口只有 w×h，
+    // 视口外深度清 1.0 不参与。
+    nvrhi::TextureDesc dDesc;
+    dDesc.width = hizW_;
+    dDesc.height = hizH_;
+    dDesc.format = nvrhi::Format::D32;
+    dDesc.isRenderTarget = true;
+    dDesc.initialState = nvrhi::ResourceStates::DepthWrite;
+    dDesc.keepInitialState = true;
+    dDesc.setClearValue(nvrhi::Color(1.0f));
+    dDesc.debugName = "HizPrepassDepth";
+    hizDepth_ = device->createTexture(dDesc);
+    if (!hizDepth_) { outError = "createTexture failed for hiz prepass depth"; return false; }
+
+    {
+        nvrhi::FramebufferDesc fbDesc;
+        fbDesc.addColorAttachment(hizPyramid_, nvrhi::TextureSubresourceSet(0, 1, 0,
+            nvrhi::TextureSubresourceSet::AllArraySlices));
+        fbDesc.setDepthAttachment(hizDepth_);
+        prepassFramebuffer_ = device->createFramebuffer(fbDesc);
+    }
+    if (!prepassFramebuffer_) { outError = "createFramebuffer failed for hiz prepass"; return false; }
+
+    // 各级降采样绑定集：SRV(0)=mip L-1 单 mip（Load LOD 相对视图基 mip）+
+    // UAV(0)=mip L + b1。索引 = 层号 L（[0] 未用）。
+    chainSets_.assign(hizMipCount_, nullptr);
+    for (std::uint32_t L = 1; L < hizMipCount_; ++L) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hizPyramid_,
+            nvrhi::Format::UNKNOWN,
+            nvrhi::TextureSubresourceSet(L - 1, 1, 0,
+                                         nvrhi::TextureSubresourceSet::AllArraySlices)))
+           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, hizPyramid_,
+            nvrhi::Format::R32_FLOAT,
+            nvrhi::TextureSubresourceSet(L, 1, 0,
+                                         nvrhi::TextureSubresourceSet::AllArraySlices)))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, hizConstants_));
+        chainSets_[L] = device->createBindingSet(sd, chainLayout_);
+        if (!chainSets_[L]) { outError = "createBindingSet failed for hiz chain level"; return false; }
+    }
+
+    // top 回读绑定集：SRV = 最高 mip（1 texel）+ UAV = 计数器。
+    {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hizPyramid_,
+            nvrhi::Format::UNKNOWN,
+            nvrhi::TextureSubresourceSet(hizMipCount_ - 1, 1, 0,
+                                         nvrhi::TextureSubresourceSet::AllArraySlices)))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, hizTop_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, hizConstants_));
+        topSet_ = device->createBindingSet(sd, topLayout_);
+    }
+    if (!topSet_) { outError = "createBindingSet failed for hiz top"; return false; }
+
+    // 可视化绑定集：SRV 全 mip（绝对 mip 号 Load）+ b1。
+    {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hizPyramid_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, hizConstants_));
+        vizSet_ = device->createBindingSet(sd, vizLayout_);
+    }
+    if (!vizSet_) { outError = "createBindingSet failed for hiz viz"; return false; }
+
+    return true;
+}
+
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
+    // M6.0：hiz 管线。预通道 FramebufferInfo 直接按格式构造（R32F + D32），
+    // 不依赖真实纹理——纹理/帧缓冲/绑定集随视口尺寸在 ensureHizTargets 懒建。
+    if (hiz_ && !prepassPSO_) {
+        nvrhi::FramebufferInfo prepassInfo;
+        prepassInfo.addColorFormat(nvrhi::Format::R32_FLOAT);
+        prepassInfo.setDepthFormat(nvrhi::Format::D32);
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+             .setVertexShader(vsHizDepth_)
+             .setFragmentShader(psHizDepth_)
+             .addBindingLayout(hizPrepassLayout_);
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::Back);
+        pDesc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
+        prepassPSO_ = device->createGraphicsPipeline(pDesc, prepassInfo);
+        if (!prepassPSO_) { outError = "createGraphicsPipeline failed for hiz prepass"; return false; }
+
+        nvrhi::GraphicsPipelineDesc vDesc;
+        vDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsHizViz_)
+             .setFragmentShader(psHizViz_)
+             .addBindingLayout(vizLayout_);
+        vDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        // 深度测试/写入关（缺省即关）：覆盖层画在主场景之上，只读金字塔。
+        vizPSO_ = device->createGraphicsPipeline(vDesc, info);
+        if (!vizPSO_) { outError = "createGraphicsPipeline failed for hiz viz"; return false; }
+    }
     // M4.0（S4.0）：cull 模式走 vertex pulling——pipeline 无顶点输入。
     if (cull_) {
         if (pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_ && pipelineCullWireNone_)
@@ -1490,6 +1794,9 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
 }
 
 void Scene::invalidatePipelines() {
+    // M6.0：hiz 管线随主管线一起重建（纹理/绑定集按视口尺寸懒建，不受影响）。
+    prepassPSO_ = nullptr;
+    vizPSO_ = nullptr;
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
@@ -1752,6 +2059,96 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                             indirectArgs_, sizeof(std::uint32_t), sizeof(std::uint32_t));
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], sizeof(std::uint32_t),
                             triCounter_, 0, sizeof(std::uint32_t));
+
+            // ---- M6.0：Hi-Z 深度预通道 + min 金字塔（hiz 模式）----
+            // 顺序：遍历 compute（上面）→ 深度预通道（mip0 = 视点径向距离）→
+            // 逐级 2x2 min → 最高 mip 落 4B 计数器。全部发生在主绘制之前，
+            // M6.1 的盒测试可以直接消费本帧金字塔（同帧两遍结构，S6-PLAN M6.1）。
+            if (hiz_ && !hizFailed_) {
+                std::string hizErr;
+                if (!ensureHizTargets(hizDevice_, viewport.maxX - viewport.minX,
+                                      viewport.maxY - viewport.minY, hizErr)) {
+                    nl::core::log::deviceError("hiz", hizErr);
+                    hizFailed_ = true;   // 只报一次，后续帧跳过 hiz 段（主绘制不受影响）
+                } else {
+                    // farRange：可视化对比度参考 = 相机到资产中心距离 + 半径。
+                    const float ecx = params.eye[0] - assetSphere_[0];
+                    const float ecy = params.eye[1] - assetSphere_[1];
+                    const float ecz = params.eye[2] - assetSphere_[2];
+                    hizFarRange_ = std::sqrt(ecx * ecx + ecy * ecy + ecz * ecz) +
+                                   std::max(assetSphere_[3], 1.0f);
+                    const float w = static_cast<float>(hizW_);
+                    const float h = static_cast<float>(hizH_);
+
+                    // 预通道常量：viewMip=0，dims=mip0 尺寸。
+                    {
+                        const float hc[12] = {
+                            params.eye[0], params.eye[1], params.eye[2], hizFarRange_,
+                            0.f, 0.f, 0.f, 0.f,
+                            w, h, w, h};
+                        cmd->writeBuffer(hizConstants_, hc, sizeof(hc));
+                    }
+                    // 空 mip0 像素 = 大值 = 不遮挡任何东西（保守方向的正确缺省）；
+                    // 预通道深度清 1.0（far）。
+                    cmd->clearTextureFloat(hizPyramid_,
+                        nvrhi::TextureSubresourceSet(0, 1, 0,
+                                                     nvrhi::TextureSubresourceSet::AllArraySlices),
+                        nvrhi::Color(1e9f, 1e9f, 1e9f, 1e9f));
+                    cmd->clearDepthStencilTexture(hizDepth_, nvrhi::TextureSubresourceSet(),
+                                                  true, 1.0f, false, 0);
+
+                    nvrhi::GraphicsState pstate;
+                    pstate.setPipeline(prepassPSO_)
+                          .setFramebuffer(prepassFramebuffer_)
+                          .addBindingSet(hizPrepassSet_)
+                          .setIndexBuffer(nvrhi::IndexBufferBinding()
+                              .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT)
+                              .setOffset(0));
+                    pstate.viewport.addViewportAndScissorRect(viewport);
+                    pstate.setIndirectParams(indirectArgs_);
+                    cmd->setGraphicsState(pstate);
+                    cmd->drawIndexedIndirect(0, 1);
+
+                    // 金字塔逐级 min：每级一版 HizConstants（src/tgt 尺寸）+ 一组绑定。
+                    {
+                        const std::uint32_t topZero = 0xFFFFFFFFu;
+                        cmd->writeBuffer(hizTop_, &topZero, sizeof(topZero));
+                    }
+                    for (std::uint32_t L = 1; L < hizMipCount_; ++L) {
+                        const float sw = static_cast<float>(std::max(1u, hizW_ >> (L - 1)));
+                        const float sh = static_cast<float>(std::max(1u, hizH_ >> (L - 1)));
+                        const float tw = static_cast<float>(std::max(1u, hizW_ >> L));
+                        const float th = static_cast<float>(std::max(1u, hizH_ >> L));
+                        const float hcL[12] = {
+                            params.eye[0], params.eye[1], params.eye[2], hizFarRange_,
+                            static_cast<float>(L), 0.f, 0.f, 0.f,
+                            sw, sh, tw, th};
+                        cmd->writeBuffer(hizConstants_, hcL, sizeof(hcL));
+                        nvrhi::ComputeState cst;
+                        cst.setPipeline(chainPSO_).addBindingSet(chainSets_[L]);
+                        cmd->setComputeState(cst);
+                        const std::uint32_t tgw = std::max(1u, hizW_ >> L);
+                        const std::uint32_t tgh = std::max(1u, hizH_ >> L);
+                        cmd->dispatch((tgw + 7u) / 8u, (tgh + 7u) / 8u, 1);
+                    }
+
+                    // 最高 mip（1 texel）→ 计数器 → 回读环形槽位偏移 8。
+                    {
+                        const float hcT[12] = {
+                            params.eye[0], params.eye[1], params.eye[2], hizFarRange_,
+                            static_cast<float>(hizMipCount_ - 1), 0.f, 0.f, 0.f,
+                            1.f, 1.f, 1.f, 1.f};
+                        cmd->writeBuffer(hizConstants_, hcT, sizeof(hcT));
+                        nvrhi::ComputeState tst;
+                        tst.setPipeline(topPSO_).addBindingSet(topSet_);
+                        cmd->setComputeState(tst);
+                        cmd->dispatch(1, 1, 1);
+                    }
+                    cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u],
+                                    2 * sizeof(std::uint32_t), hizTop_, 0,
+                                    sizeof(std::uint32_t));
+                }
+            }
             if (cullTiming) cullTimer_.end(cmd);
             ++cullSubmitted_;
         }
@@ -1766,6 +2163,29 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         state.setIndirectParams(indirectArgs_);
         cmd->setGraphicsState(state);
         cmd->drawIndexedIndirect(0, 1);
+
+        // M6.0：右下角 160x160 层级可视化覆盖层（只读金字塔，近亮远暗）。
+        // 画在主绘制之后、HUD 之前——截图基线里可见 = 层级可视化的验收证据。
+        if (hiz_ && !hizFailed_ && prepassPSO_ && vizPSO_) {
+            // vsHizViz/psHizViz 从 g_hizViz.y/z（[1].y/[1].z）读视口宽高、
+            // g_hizViz.x 读 mip 号——viz 路径 dims 必须放 [1]，不能放 [2]。
+            const float hcV[12] = {
+                params.eye[0], params.eye[1], params.eye[2], hizFarRange_,
+                static_cast<float>(std::clamp(params.hizViewMip, 0,
+                                              static_cast<int>(hizMipCount_) - 1)),
+                static_cast<float>(hizW_), static_cast<float>(hizH_), 0.f,
+                0.f, 0.f, 0.f, 0.f};
+            cmd->writeBuffer(hizConstants_, hcV, sizeof(hcV));
+            nvrhi::GraphicsState vstate;
+            vstate.setPipeline(vizPSO_)
+                  .setFramebuffer(framebuffer)
+                  .addBindingSet(vizSet_);
+            vstate.viewport.addViewportAndScissorRect(viewport);
+            cmd->setGraphicsState(vstate);
+            nvrhi::DrawArguments vargs;
+            vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+            cmd->draw(vargs);
+        }
         return;
     }
 
@@ -1855,6 +2275,37 @@ void Scene::shutdown() {
     clusterSpheres_ = nullptr;
     for (auto& rb : cullReadback_) rb = nullptr;
     triCounter_ = nullptr;   // M5.2：GPU 原子三角计数器
+    // M6.0：Hi-Z 金字塔资源。
+    hiz_ = false;
+    hizFailed_ = false;
+    hizDevice_ = nullptr;
+    hizMipCount_ = 0;
+    hizW_ = 0;
+    hizH_ = 0;
+    vsHizDepth_ = nullptr;
+    psHizDepth_ = nullptr;
+    vsHizViz_ = nullptr;
+    psHizViz_ = nullptr;
+    csHizDown_ = nullptr;
+    csHizTop_ = nullptr;
+    hizConstants_ = nullptr;
+    hizTop_ = nullptr;
+    hizPyramid_ = nullptr;
+    hizDepth_ = nullptr;
+    prepassFramebuffer_ = nullptr;
+    prepassPSO_ = nullptr;
+    vizPSO_ = nullptr;
+    hizPrepassLayout_ = nullptr;
+    hizPrepassSet_ = nullptr;
+    vizLayout_ = nullptr;
+    vizSet_ = nullptr;
+    chainLayout_ = nullptr;
+    chainSets_.clear();
+    chainPSO_ = nullptr;
+    topLayout_ = nullptr;
+    topSet_ = nullptr;
+    topPSO_ = nullptr;
+    hizTopMin_ = -1.0f;
     cullSubmitted_ = 0;
     cullPolledSlot_ = -1;
     cullVisibleCount_ = -1;

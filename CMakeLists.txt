@@ -230,6 +230,11 @@ set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 set(_ENTRIES_CULL "csCull|cs|compute")
 # M5.1：dag.slang 单 compute 入口（DAG 遍历选层，显式栈）。
 set(_ENTRIES_DAG "csDag|cs|compute")
+# M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
+# 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
+set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
+                 "csHizDown|cs|compute" "csHizTop|cstop|compute"
+                 "vsHizViz|vshizviz|vertex" "psHizViz|pshizviz|fragment")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -238,6 +243,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_CULL}")
     elseif(_SRC_NAME STREQUAL "dag")
         set(_ENTRIES "${_ENTRIES_DAG}")
+    elseif(_SRC_NAME STREQUAL "hiz")
+        set(_ENTRIES "${_ENTRIES_HIZ}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()

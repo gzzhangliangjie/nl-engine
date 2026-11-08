@@ -68,7 +68,8 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, bool dagMode, bool skinMode, std::string& outError) override {
+              bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -98,13 +99,15 @@ public:
         // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
         const bool sceneOk = skinMode
             ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+            : (hizMode
+            ? scene_.initHiz(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (dagMode
             ? scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
@@ -280,6 +283,8 @@ public:
         scene_.pollCullStats(nvrhiDevice_);
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
+        info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
+        info_.hizTopMin = scene_.hizTopMin();                 // M6.0：金字塔最高 mip
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();

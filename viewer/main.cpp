@@ -262,7 +262,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S5.2") != nullptr, "S5.2 stage reported");
+    check(std::strstr(st.stage, "S6.0") != nullptr, "S6.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -306,7 +306,7 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
-              bool skinMode = false) {
+              bool skinMode = false, bool hizMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -329,7 +329,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn, dagMode, skinMode);
+                                                   o.frustumOn, dagMode, skinMode, hizMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -372,6 +372,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 且组号必须落在可下钻范围内（renderer 探测第二粗层 dagGroups），越界退出 1。
     int dagGroup = -1;
     int dagGroupCount = 0;
+    int hizViewLevel = 0;    // M6.0：金字塔可视化 mip 层（HUD 滑条双向）
     // M5.0：cut 阈值 px 运行时状态（HUD 滑条双向写回，M5.1 GPU 遍历消费）。
     float cutThresholdPx = o.cutThresholdPx;
     if (dagTop) {
@@ -571,8 +572,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
-        if (dagMode) {
-            // M5.1：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
+        if (dagMode || hizMode) {
+            // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
             camera.eyePosition(eye);
             fp.eye[0] = eye[0]; fp.eye[1] = eye[1]; fp.eye[2] = eye[2];
@@ -581,6 +582,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             const auto e = renderer->extent();
             fp.viewportHeight = static_cast<float>(e.height);
             fp.cutThresholdPx = cutThresholdPx;
+            if (hizMode) fp.hizViewMip = hizViewLevel;   // M6.0：金字塔可视化层
         }
         // M-A5：skin 模式动画时间——--anim-time 固定（截图确定性），否则实时累加。
         if (skinMode) {
@@ -643,6 +645,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             hud.visibleClusters = info.visibleClusters;
             hud.totalClusters = static_cast<int>(info.totalClusters);
             hud.visibleTriangles = info.visibleTriangles;   // M5.2：-1 = 暂无数据
+            // M6.0：Hi-Z 金字塔（hiz 模式才有 mipCount>0，HUD 才画滑条）。
+            hud.hizMipCount = info.hizMipCount;
+            hud.hizTopMin = info.hizTopMin;
+            hud.hizViewLevel = hizViewLevel;
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -746,6 +752,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     }
                 }
             }
+            // M6.0：金字塔 mip 滑条回读（GPU 覆盖层按它选层；只显示不换资源）。
+            if (hizMode && info.hizMipCount > 0)
+                hizViewLevel = std::clamp(hud.hizViewLevel, 0, info.hizMipCount - 1);
             // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。只在滑条真的
             // 画出来时回读（HUD 侧条件 = frame.dagGroupCount > 0）：dag 遍历模式
             // 不显示滑条，hud.cutThresholdPx 保持 POD 默认 1.0，无条件回读会把
@@ -765,7 +774,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M5.2：追加 GPU 可见三角数（同一延迟窗口的回读环形高 4 字节）。
         if (o.screenshot && (cullMode || dagMode) && info.totalClusters > 0 &&
             info.visibleClusters >= 0) {
-            if (dagMode) {
+            if (hizMode) {
+                // M6.0：金字塔最高 mip 回读值（≈ 整屏最近径向距离的机械验收证据）。
+                if (info.hizTopMin >= 0.0f) {
+                    nl::core::log::info("hiz stats: pyramid top min ", info.hizTopMin,
+                                        " (visible ", info.visibleClusters, " / ",
+                                        info.totalClusters, " clusters, mips ",
+                                        info.hizMipCount, ")");
+                } else {
+                    nl::core::log::info("hiz stats: top min pending (mips ",
+                                        info.hizMipCount, ")");
+                }
+            } else if (dagMode) {
                 nl::core::log::info("dag stats: visible ", info.visibleClusters, " / ",
                                     info.totalClusters, " clusters (threshold ",
                                     cutThresholdPx, " px, tris ",
@@ -845,6 +865,10 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
     case nl::core::ViewMode::Skin:       // M-A5：CPU 蒙皮展示（rigged GLB 逐帧 LBS）
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/true);
+    case nl::core::ViewMode::Hiz:        // M6.0：Hi-Z 深度预通道 + min 金字塔
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/true, /*dagMode=*/true, /*skinMode=*/false,
+                         /*hizMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -917,7 +941,7 @@ int main(int argc, char** argv) {
 // 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
-         o.mode == nl::core::ViewMode::Dag)
+         o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

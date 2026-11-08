@@ -61,6 +61,10 @@ struct FrameParams {
     // M-A5：蒙皮动画时间（秒，循环采样由 Scene 侧 wrapTime）。仅 skin 模式消费；
     // 其他模式忽略（确定性截图用 --anim-time 固定，实时模式由 viewer 累加 dt）。
     float animTime    = 0.0f;
+
+    // M6.0：Hi-Z 金字塔可视化查看的 mip 层号（hiz 模式消费；0 = mip0 原始深度，
+    // 其他模式不读，缺省无副作用）。层级可视化由 GPU 覆盖层绘制，HUD 滑条选层。
+    int   hizViewMip  = 0;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -124,6 +128,10 @@ struct HudFrame {
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
     float cutThresholdPx   = 1.0f;    // cut 阈值 px（双向；M5.1 GPU 遍历消费）
+    // ---- M6.0：Hi-Z 金字塔（仅 hiz 模式非零/有效；其它模式不画对应控件）----
+    int   hizMipCount      = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
+    int   hizViewLevel     = 0;       // 可视化查看的 mip 层（双向，viewer 传 FrameParams）
+    float hizTopMin        = -1.0f;   // 最高 mip = 全屏最近径向距离（两帧延迟回读；<0 无数据）
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
@@ -164,6 +172,10 @@ struct DeviceInfo {
     // M-A5.4：skin 模式 t=0 蒙皮输出半径（最大顶点到中心距离；非 skin 模式 0）。
     // viewer 据此对未显式 --dist 的 skin 模式做资产尺度自适应取景。
     float skinRadius = 0.0f;
+
+    // M6.0：Hi-Z 金字塔状态（仅 hiz 模式非零；DeviceInfo 由 backend 每帧 poll 更新）。
+    int   hizMipCount = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
+    float hizTopMin   = -1.0f;   // 最高 mip 全屏最近径向距离（两帧延迟；<0 = 暂无数据）
 };
 
 class Renderer {
@@ -181,7 +193,8 @@ public:
                                             bool cullMode = false,
                                             bool frustumCull = true,
                                             bool dagMode = false,
-                                            bool skinMode = false);
+                                            bool skinMode = false,
+                                            bool hizMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

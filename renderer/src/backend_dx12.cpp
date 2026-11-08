@@ -70,7 +70,8 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, bool dagMode, bool skinMode, std::string& outError) override {
+              bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -153,6 +154,8 @@ public:
         bool sceneOk = false;
         if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
+        else if (hizMode)
+            sceneOk = scene_.initHiz(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (dagMode)
             sceneOk = scene_.initDag(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (clusterMode)
@@ -349,6 +352,8 @@ public:
         scene_.pollCullStats(device_);
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
+        info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
+        info_.hizTopMin = scene_.hizTopMin();                 // M6.0：金字塔最高 mip
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();
