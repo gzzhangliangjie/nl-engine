@@ -805,6 +805,87 @@ int cmdFkDump(const std::string& path, int clipIndex, int frames) {
     return 0;
 }
 
+// skindump <glb> <clipIndex> [frames] —— 逐帧 CPU LBS 蒙皮输出 TSV（蒙皮动画演示数据源）。
+// 头部输出三角索引（IDX）与每顶点主导关节槽位（DOM，着色用），随后每帧一行：
+// t + 每顶点 (x,y,z)。位置已按 t=0 蒙皮输出包围盒中心平移（与 viewer --mode skin 同口径）。
+int cmdSkinDump(const std::string& path, int clipIndex, int frames) {
+    if (frames < 2 || frames > 512) {
+        std::fprintf(stderr, "skindump: frames must be in [2, 512]\n");
+        return 2;
+    }
+    nl::anim::Skeleton skeleton;
+    std::vector<nl::anim::AnimClip> clips;
+    nl::anim::SkinnedMeshData mesh;
+    nl::anim::SkinBinding skin;
+    std::string err;
+    if (!nl::anim::loadGltfSkinnedModel(path, skeleton, clips, mesh, skin, err)) {
+        std::fprintf(stderr, "skindump: %s\n", err.c_str());
+        return 1;
+    }
+    if (clips.empty() || clipIndex < 0 ||
+        static_cast<std::size_t>(clipIndex) >= clips.size()) {
+        std::fprintf(stderr, "skindump: clip index %d out of range [0, %zu)\n",
+                     clipIndex, clips.size());
+        return 2;
+    }
+    const nl::anim::AnimClip& clip = clips[static_cast<std::size_t>(clipIndex)];
+    const std::size_t V = mesh.positions.size();
+    if (V == 0) {
+        std::fprintf(stderr, "skindump: empty mesh\n");
+        return 1;
+    }
+
+    // t=0 探针求蒙皮输出包围盒中心（scene.cpp initSkin 同式）。
+    std::vector<nl::anim::BonePose> local, model;
+    std::vector<nl::anim::Mat4> palette;
+    std::vector<nl::anim::Vec3> pos(V);
+    nl::anim::Vec3 center{0.0f, 0.0f, 0.0f};
+    if (nl::anim::sampleClip(clip, 0.0f, local) &&
+        nl::anim::localToModel(local, skeleton, model)) {
+        nl::anim::computePalette(palette, model, skin.inverseBind);
+        nl::anim::skinPositions(pos, mesh.positions, palette, skin);
+        nl::anim::Vec3 mn = pos.front(), mx = pos.front();
+        for (const nl::anim::Vec3& p : pos) {
+            mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+            mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+        }
+        center = nl::anim::Vec3{(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f,
+                                (mn.z + mx.z) * 0.5f};
+    }
+
+    std::printf("# skindump %s clip %d duration %.4f verts %zu tris %zu frames %d\n",
+                path.c_str(), clipIndex, clip.duration, V, mesh.indices.size() / 3, frames);
+    std::printf("IDX");
+    for (const std::uint32_t idx : mesh.indices) std::printf(" %u", idx);
+    std::printf("\nDOM");
+    for (std::size_t v = 0; v < V; ++v) {
+        int best = -1; float bestW = -1.0f;
+        for (int k = 0; k < 4; ++k) {
+            if (skin.joints[v][k] >= 0 && skin.weights[v][k] > bestW) {
+                bestW = skin.weights[v][k];
+                best = skin.joints[v][k];
+            }
+        }
+        std::printf(" %d", best);
+    }
+    std::printf("\n# per frame: t then verts*(x y z), center-subtracted bind->skinned LBS\n");
+    for (int i = 0; i < frames; ++i) {
+        const float t = clip.duration * static_cast<float>(i) / static_cast<float>(frames);
+        if (!nl::anim::sampleClip(clip, t, local) ||
+            !nl::anim::localToModel(local, skeleton, model)) {
+            std::fprintf(stderr, "skindump: FK failed at t=%.4f\n", t);
+            return 1;
+        }
+        nl::anim::computePalette(palette, model, skin.inverseBind);
+        nl::anim::skinPositions(pos, mesh.positions, palette, skin);
+        std::printf("F %.4f", t);
+        for (const nl::anim::Vec3& p : pos)
+            std::printf(" %.3f %.3f %.3f", p.x - center.x, p.y - center.y, p.z - center.z);
+        std::printf("\n");
+    }
+    return 0;
+}
+
 // skincheck <glb> [t=0] [threshold=1.5] —— 蒙皮诊断：bind/skinned bbox、
 // 位移超阈值顶点数，以及最坏几个顶点的绑定与调色板信息（定位拉飞顶点）。
 int cmdSkinCheck(const std::string& path, float t, float threshold) {
@@ -1363,6 +1444,11 @@ int main(int argc, char** argv) {
         const int frames = argc >= 5 ? std::atoi(argv[4]) : 64;
         return cmdFkDump(argv[2], clipIndex, frames);
     }
+    if (argc >= 4 && std::strcmp(argv[1], "skindump") == 0) {
+        const int clipIndex = std::atoi(argv[3]);
+        const int frames = argc >= 5 ? std::atoi(argv[4]) : 48;
+        return cmdSkinDump(argv[2], clipIndex, frames);
+    }
     std::printf(
         "anim-tools - nl-engine action/animation controller (M-A track)\n"
         "usage:\n"
@@ -1372,6 +1458,8 @@ int main(int argc, char** argv) {
         "  anim-tools fksample <rigged.glb> <clipIndex> [samples=200]\n"
         "    full-cycle tip FK world trajectory (TSV, deterministic)\n"
         "  anim-tools fkdump <rigged.glb> <clipIndex> [frames=64]\n"
-        "    per-frame all-bone FK world positions (TSV, demo data source)\n");
+        "    per-frame all-bone FK world positions (TSV, demo data source)\n"
+        "  anim-tools skindump <rigged.glb> <clipIndex> [frames=48]\n"
+        "    per-frame CPU-LBS skinned vertex positions (TSV, skin demo data source)\n");
     return argc == 1 ? 0 : 2;
 }
