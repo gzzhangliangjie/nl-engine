@@ -120,6 +120,7 @@ add_library(nl_core STATIC
     core/src/lod_error.cpp     # M5.0：屏幕空间误差投影（zeux/bevy cut 公式，纯数学）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/console.cpp       # P8 M-C0：开发者控制台纯逻辑内核（A 类轨道，零图形符号）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
 )
@@ -267,10 +268,16 @@ target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
 add_executable(material-graph-tools material-graph-tools/main.cpp)
 target_link_libraries(material-graph-tools PRIVATE nl_core)
 
+# ---- P8 M-C0：开发者控制台工具（A 类轨道，工具版交代）----
+# core/console 纯逻辑内核的机械单测 + demo 注册表执行器（selftest / exec）。
+# 只链 nl_core，零图形 API；不依赖 renderer / viewer。
+add_executable(nanite-console nanite-console/main.cpp)
+target_link_libraries(nanite-console PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools material-graph-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools material-graph-tools nanite-console)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -286,6 +293,8 @@ set_tests_properties(s1-tools-stat PROPERTIES
     PASS_REGULAR_EXPRESSION "triangles : 3936")
 # M1.1：切簇算法机械单测（覆盖率 / 128 tri 与 64 vert 上限 / bounds 合理性 / 负向输入）
 add_test(NAME s1-cluster-selftest COMMAND nanite-tools selftest cluster)
+# P8 M-C0：core/console 纯逻辑内核机械单测（A 类轨道，无渲染依赖）
+add_test(NAME p8-console-selftest COMMAND nanite-console selftest)
 set_tests_properties(s1-cluster-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "cluster selftest: PASS")
 # M1.1：真实资产切簇验收（覆盖率 100% + limits PASS）

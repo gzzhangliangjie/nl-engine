@@ -935,3 +935,24 @@
 4. **基线重拍 exe 必须与回归用的 exe 同源（本轮自摆乌龙，被总闸当场抓住）**：`cases.json` 里 m0.1~m0.8/s1.0 的 `exe` 指向 **tag 快照**（`build/showcase/{tag}/build/…`），HUD 内嵌快照时代的 stage 字符串；我用当前 S5.0 exe 给这 8 对基线重拍 → `m0.5/resize` 回归立即 FAIL（91k 像素差，maxDelta 242）。修正：`git checkout --` 还原历史版本基线（它们本就不随 kStage 变），只重拍 exe=current 的 5 对。**教训**：重拍基线前先查该版本 `exe` 字段指向快照还是当前构建；「重拍永远用刚重编的 exe」只对 exe=current 的版本成立（M4.2 踩坑 1 的适用边界在此）。
 
 **下一步**：M5.1 compute DAG 遍历（显式栈从根组下钻、簇屏幕误差 ≤ 阈值写 indirect 命令、栈溢出宁粗勿漏；输出接口 = S4 indirect buffer 不另起炉灶）。D1 升级路径监控点：M5.1/M5.2 偏轴或进模场景若选层明显偏粗，把 `screenErrorPixels()` 换成 UE 切线投影（见 `docs/s5/UE-DIFFS.md`）。
+
+## P8 M-C0 开发者控制台纯逻辑内核（feat/console 轨道，2026-11-08）
+
+**动作**
+- **决策前置**：三处参考实读——Carrot `console/Console.h/.cpp`（registerCommand + 补全 + toggleVisibility 结构；**命令不支持参数**，源码 TODO 挂着，RuntimeOption 是二级体系）、UE `HAL/IConsoleManager.h`（CVar bool/int/float/string 与命令**统一注册表**、help 必填、`SetOnChangedCallback`、命令回调带 args，只读）、bevy 无内建控制台（据实标注）。拍板（计划内）：注册体系/回调/参数化取 UE 口径，节奏参照 Carrot，不做 RuntimeOption 二级体系（CVar 覆盖其用途）。
+- **`core/console/` 纯逻辑内核**（零 ImGui / 零图形符号）：`nl/core/console.hpp` + `core/src/console.cpp`——`Console::get()` 单例（UE/Carrot 同款）；CVar 四类型注册 + 类型化 set + `setFromString`（bool 接受 true/false/1/0/on/off/yes/no，数字全串校验）+ `setOnChanged` 变更回调；`registerCommand` 回调带 args（UE 口径）；`tokenize` 引号解析（双/单引号段可拼接，不支持转义，未闭合=错误）；`exec` 统一查找（CVar 无参=打印值+类型+help，单参=赋值）+ `ExecCode{Ok=0, UnknownCommand=1, BadRequest=2, CommandFailed=3}` 分档（M-C3 展示台 expectExit 的源头）；`completePrefix` 前缀补全候选（M-C1 Tab 消费）+ `allEntries`（M-C2 help/cvar.list 消费）+ 512 行环形日志（M-C1 滚动区消费）。重复注册：CVar 保留现值仅更新 help / 命令覆盖回调，记 Warn 不 assert。
+- **`nanite-console` 工具**（只链 nl_core）：`selftest` 42 断言全绿（注册/读写/解析/执行/未知命令/回调/补全/日志，含负向：int 拒 '3.5'、float 拒 'xyz'、失败 set 保旧值、未闭合引号）；`exec "<line>"...` demo 注册表执行器，退出码=ExecCode。
+- CMake：`nl_core` 加 `core/src/console.cpp`；新 exe `nanite-console`；ctest `p8-console-selftest`；编译选项 foreach 补 `nanite-console`（/utf-8 等，见踩坑 1）。
+
+**提交版本**：feat/console 本轮 commit（M-C3 收口时打 tag merge）
+
+**完成情况**
+- selftest **42/42 PASS**，exit 0（ctest `p8-console-selftest` 登记同口径）。
+- `exec` CLI 实跑验证（亲眼可见）：`demo.fov` → `[0] demo.fov = 60 (float) demo fov cvar`；`demo.fov 75` → `[0]`；`echo hello "big world"` → `[0] echo: hello big world`（引号参数保空格）；`add 1 2.5 3` → `[0] add: 6.5`；`demo.fov abc` → `[2] invalid value... expected float`；`no-such-cmd` → `[1] unknown command`。
+- 无渲染依赖：`nanite-console` 只链 nl_core，`core/console/` 零图形符号，不碰 kStage、不进渲染回归（P8-CONSOLE-PLAN 双后端纪律豁免成立）。
+
+**踩坑情况**
+1. **MSVC 默认按 GBK 读源码**：新建 main.cpp 带 UTF-8 中文注释，未进 CMakeLists 编译选项 foreach 列表 → cl 按 GBK 解码产生幻影标识符（`r1 未声明` 等上百错误，报错行与真实代码对不上）。修正：foreach 补 `nanite-console`（/utf-8）。教训：新 exe/新 lib 进 CMake 必须同步进 281 行 foreach。
+2. **selftest 断言笔误一次**：`tokenize("cmd a \"b c\" d")` 误断言 t1[1]=="b c"（实为 t1[2]），首轮 41/42；实现无错。教训：改完跑不绿先查断言再查实现。
+
+**下一步**：M-C1 ImGui 前端（`` ` `` 呼出/收起、输入行 + ↑↓ 历史、滚动日志区带级别配色、Tab 补全；renderer/viewer 侧，`core/console/` 不动）。
