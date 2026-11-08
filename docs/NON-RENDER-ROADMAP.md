@@ -64,7 +64,7 @@ Carrot 全模块（按代码规模降序）与本候选文档的覆盖情况：
 | `edition` | 816 行（EditorSettings / FreeCamera / DragDrop / Widgets） | ⚠️ 隐含在本表「完整编辑器」条目内 | 不单列，编辑器立项时一并纳入 |
 | `task` | 549 行 | ✅ **已立项** `docs/p8/P8-JOB-PLAN.md` | 已覆盖 |
 | `assets` | 450 行 | ✅ `.nmesh` 离线管线已覆盖 | 已覆盖 |
-| `console` | 369 行（命令注册 + ImGui 渲染 + 自动补全 + `RuntimeOption` 运行时调参） | ❌ 未覆盖 | **值得排**：小而独立，吃 ImGui 地基，可见验收直观，对日常调试立刻有用；可作为小甜点轨道或并入编辑器轨道 |
+| `console` | 369 行（命令注册 + ImGui 渲染 + 自动补全 + `RuntimeOption` 运行时调参） | ✅ **已立项（2026-11-08）**：`docs/p8/P8-CONSOLE-PLAN.md`（M-C0~M-C3），worktree `feat/console` 已建；两层架构（`core/console/` 纯逻辑 + renderer 侧 ImGui 前端）；不依赖场景整合，随时可开工 | 小而独立，吃 ImGui 地基，可见验收直观，对日常调试立刻有用 |
 | `utils` / 根级（Window / Settings / LoadingScreen / Capabilities） | — | 通用基础设施 | 不算独立方向 |
 
 ---
