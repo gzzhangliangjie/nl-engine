@@ -1,5 +1,6 @@
 #include "hud.hpp"
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
+#include "console_ui.hpp"    // P8 M-C1：开发者控制台窗口（ImGui 前端）
 #include "gpu_timer.hpp"     // M0.6：GpuTimer::selfTest（秒→ms 换算 / 环形游标）
 
 #include "nl/core/log.hpp"
@@ -348,9 +349,12 @@ void Hud::build(HudFrame& frame) {
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();
+    // P8 M-C1：开发者控制台（` 呼出的独立窗口）。含 GLFW->ImGuiKey 输入映射与
+    // wantCaptureKeyboard 回写；consoleOpen=false 时仍同步按键状态但零布局。
+    drawConsoleWindow(frame);
     ImGui::Render();
 
-    frame.wantCaptureMouse = io.WantCaptureMouse;
+    frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;
 
     ImDrawData* data = ImGui::GetDrawData();
     if (!data || !data->Valid || data->CmdListsCount <= 0 ||
@@ -488,6 +492,10 @@ bool hudSelfTest() {
     // M4.2：cull 计时通道缺省全零（非 cull 模式 HUD 布局一像素不动的保证）。
     if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
+    // M-C1：控制台通道缺省全关（HUD 关掉控制台 = 历史 HUD 基线一像素不动的保证）。
+    if (f.consoleOpen || f.consoleTab || f.wantCaptureKeyboard) return false;
+    if (f.keyEventCount != 0 || f.textCharCount != 0) return false;
+    if (f.consolePrefill != nullptr && *f.consolePrefill != '\0') return false;
     if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;
 }

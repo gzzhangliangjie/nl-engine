@@ -8,6 +8,7 @@
 #endif
 
 #include <array>
+#include <vector>
 
 namespace nl::core {
 namespace {
@@ -26,6 +27,8 @@ Key mapKey(int glfwKey) {
         case GLFW_KEY_V:      return Key::V;   // M0.8：线框开关
         case GLFW_KEY_N:      return Key::N;   // M0.8：循环切着色模式
         case GLFW_KEY_F12:    return Key::F12;
+        case GLFW_KEY_GRAVE_ACCENT: return Key::Grave;  // M-C1：控制台呼出
+        case GLFW_KEY_TAB:    return Key::Tab;   // M-C1：补全请求（viewer 边沿）
         default:              return Key::Unknown;
     }
 }
@@ -48,15 +51,38 @@ struct Window::Impl {
     bool   haveDragBase = false;  // 拖动增量是否有基准点（按下左键时重置）
     bool   leftDown = false;
 
-    void onKey(int glfwKey, int action) {
-        if (action != GLFW_PRESS) return;
-        const Key key = mapKey(glfwKey);
-        if (key != Key::Unknown) keyDown[static_cast<size_t>(key)] = true;
+    // M-C1：键盘原始事件 / 文本字符队列（ImGui 输入通路，消费制，见 consumeKeyEvents）。
+    std::vector<KeyEvent>     keyEvents;
+    std::vector<unsigned int> textChars;
+
+    void onKey(int glfwKey, int action, int mods) {
+        // 游戏热键边沿（PRESS 才记，读一次即清）
+        if (action == GLFW_PRESS) {
+            const Key key = mapKey(glfwKey);
+            if (key != Key::Unknown) keyDown[static_cast<size_t>(key)] = true;
+        }
+        // ImGui 通道：PRESS / RELEASE / REPEAT 全记（ImGui 自己消化重复输入）
+        KeyEvent ev;
+        ev.key = glfwKey;
+        ev.down = (action != GLFW_RELEASE);
+        ev.ctrl  = (mods & GLFW_MOD_CONTROL) != 0;
+        ev.shift = (mods & GLFW_MOD_SHIFT) != 0;
+        ev.alt   = (mods & GLFW_MOD_ALT) != 0;
+        keyEvents.push_back(ev);
     }
 
-    static void keyCallback(GLFWwindow* handle, int key, int /*scancode*/, int action, int /*mods*/) {
+    static void keyCallback(GLFWwindow* handle, int key, int /*scancode*/, int action, int mods) {
         if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
-            impl->onKey(key, action);
+            impl->onKey(key, action, mods);
+        }
+    }
+
+    // M-C1：文本字符（ImGui InputText 的字符流）。反引号全局过滤：` 只做控制台
+    // 呼出边沿，呼出瞬间不该往输入行打一个 `。
+    static void charCallback(GLFWwindow* handle, unsigned int codepoint) {
+        if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
+            if (codepoint == '`') return;
+            impl->textChars.push_back(codepoint);
         }
     }
 
@@ -120,6 +146,7 @@ Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
 
     glfwSetWindowUserPointer(impl_->handle, impl_.get());
     glfwSetKeyCallback(impl_->handle, &Impl::keyCallback);
+    glfwSetCharCallback(impl_->handle, &Impl::charCallback);
     glfwSetFramebufferSizeCallback(impl_->handle, &Impl::framebufferCallback);
     glfwSetCursorPosCallback(impl_->handle, &Impl::cursorCallback);
     glfwSetMouseButtonCallback(impl_->handle, &Impl::buttonCallback);
@@ -156,6 +183,24 @@ bool Window::keyPressed(Key key) const {
     const bool pressed = impl_->keyDown[i];
     impl_->keyDown[i] = false;
     return pressed;
+}
+
+// M-C1：键盘 / 字符事件消费。队列上限 = 调用方容量，溢出丢弃最旧（打字速率下
+// 一帧 16 键 / 32 字符绰绰有余；真溢出说明主循环卡了 N 帧，丢输入好过卡死）。
+std::size_t Window::consumeKeyEvents(KeyEvent* out, std::size_t cap) {
+    if (!valid() || cap == 0) { if (valid()) impl_->keyEvents.clear(); return 0; }
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < impl_->keyEvents.size() && n < cap; ++i) out[n++] = impl_->keyEvents[i];
+    impl_->keyEvents.clear();
+    return n;
+}
+
+std::size_t Window::consumeTextChars(unsigned int* out, std::size_t cap) {
+    if (!valid() || cap == 0) { if (valid()) impl_->textChars.clear(); return 0; }
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < impl_->textChars.size() && n < cap; ++i) out[n++] = impl_->textChars[i];
+    impl_->textChars.clear();
+    return n;
 }
 
 void Window::consumeMouse(float& deltaX, float& deltaY, float& scrollDelta) {

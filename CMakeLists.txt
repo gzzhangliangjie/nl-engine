@@ -136,6 +136,7 @@ add_library(nl_renderer STATIC
     renderer/src/png_writer.cpp
     renderer/src/scene.cpp
     renderer/src/hud.cpp
+    renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -144,7 +145,8 @@ target_include_directories(nl_renderer
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
 )
-target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui)
+target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui glfw)
+# 注：glfw 仅 console_ui.cpp 吃 GLFW 键值常量（M-C1 键盘映射），窗口库本身仍归 core/viewer。
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
     NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"

@@ -1,11 +1,14 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
 namespace nl::core {
 
-enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Count };
+// M0.5：游戏热键边沿。M-C1：Grave(`)=控制台呼出、Tab=补全请求（viewer 边沿消费，
+// 不进 ImGui 文本流；其余键全量以 KeyEvent 通道喂 ImGui，见 consumeKeyEvents）。
+enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Grave, Tab, Count };
 
 struct WindowDesc {
     int         width  = 1280;
@@ -20,6 +23,16 @@ struct WindowDesc {
 struct Extent {
     int width  = 0;
     int height = 0;
+};
+
+// M-C1：键盘原始事件（POD）。key 是 GLFW key code（平台无关常量），ImGuiKey 的
+// 映射在 renderer 侧 console_ui.cpp 做——core 不许出现 ImGui 符号。
+struct KeyEvent {
+    int  key = 0;
+    bool down = false;
+    bool ctrl = false;
+    bool shift = false;
+    bool alt = false;
 };
 
 // pimpl：GLFW / 平台头文件只出现在 window.cpp 里，公开 API 不泄漏图形或窗口库类型。
@@ -41,6 +54,12 @@ public:
 
     // 边沿触发：读一次即清除，避免长按重复响应
     bool keyPressed(Key key) const;
+
+    // M-C1：ImGui 键盘输入通路（消费制）。按帧取走本帧累积的事件 / 字符；
+    // 超出 cap 的部分丢弃。viewer 把它们塞进 HudFrame 的定长数组，ImGui 映射
+    // 在 renderer 侧 console_ui.cpp（core 不许出现 ImGui 符号）。
+    std::size_t consumeKeyEvents(KeyEvent* out, std::size_t cap);
+    std::size_t consumeTextChars(unsigned int* out, std::size_t cap);
 
     // M0.4 轨道相机输入：拖动增量 / 滚轮增量按帧消费，左键按下状态用于判定拖动。
     void consumeMouse(float& deltaX, float& deltaY, float& scrollDelta);

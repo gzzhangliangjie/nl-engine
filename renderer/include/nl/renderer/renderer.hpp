@@ -59,6 +59,19 @@ struct HudFrame {
     float frameMs      = 0.0f;
     float frameMsHistory[120] = {};   // CPU 帧间隔曲线样本
     int   frameMsCount = 0;
+    // ---- M-C1：开发者控制台输入通道（POD；GLFW->ImGuiKey 映射在 console_ui.cpp）----
+    struct ConsoleKeyEvent {
+        int  key = 0;        // GLFW key code 原值
+        bool down = false;   // PRESS/REPEAT = true，RELEASE = false
+        bool ctrl = false, shift = false, alt = false;
+    };
+    ConsoleKeyEvent keyEvents[16] = {};  // 本帧键盘事件（溢出丢弃最旧）
+    int  keyEventCount  = 0;
+    unsigned int textChars[32] = {};     // 本帧文本字符（codepoint；` 已被 core 过滤）
+    int  textCharCount  = 0;
+    bool consoleOpen    = false;         // viewer 持有开关（` 边沿切换）
+    bool consoleTab     = false;         // viewer 边沿：本帧按了 Tab = 补全请求
+    const char* consolePrefill = "";     // 输入行预填（演示/截图用；空->非空边沿灌一次）
     // ---- M0.6：renderer 侧 NVRHI timer query 写回的真实 GPU 耗时 ----
     float gpuMs = 0.0f;              // 最近一次 resolve 的整帧 GPU 耗时（ms），异步有 1~2 帧延迟
     float gpuMsHistory[120] = {};    // GPU 耗时曲线样本（viewer 维护）
@@ -85,6 +98,7 @@ struct HudFrame {
     int  colorIndex        = 0;
     bool resetCamera       = false;   // HUD 按钮置 true，viewer 消费后清零
     bool wantCaptureMouse  = false;   // HUD 输出：鼠标在面板上，viewer 别拖相机
+    bool wantCaptureKeyboard = false; // M-C1 HUD 输出：控制台输入行在打字，viewer 屏蔽游戏热键
     // M2.3：LOD 层切换（仅 lod 模式；lodCount<=1 时 HUD 不画滑条）----
     // 与 cull/color 同一条双向通道：viewer 每帧填当前层，滑条写回后由 viewer
     // 检测变化并调 Renderer::setLodLevel()——HUD 不直接碰渲染资源。

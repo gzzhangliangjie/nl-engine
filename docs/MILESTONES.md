@@ -956,3 +956,29 @@
 2. **selftest 断言笔误一次**：`tokenize("cmd a \"b c\" d")` 误断言 t1[1]=="b c"（实为 t1[2]），首轮 41/42；实现无错。教训：改完跑不绿先查断言再查实现。
 
 **下一步**：M-C1 ImGui 前端（`` ` `` 呼出/收起、输入行 + ↑↓ 历史、滚动日志区带级别配色、Tab 补全；renderer/viewer 侧，`core/console/` 不动）。
+
+## P8 M-C1 控制台 ImGui 前端（feat/console 轨道，2026-11-09）
+
+**动作**
+- **决策前置**：本里程碑点名的文件重读——Carrot `console/AutocompleteField.h/.cpp`（其补全依赖 **ImSearch** 第三方库：BeginSearch/SearchBar/SearchableItem + 上下键导航；本项目 vendored 清单只有 ImGui 四 cpp，**不引**，按 P8-CONSOLE-PLAN 判据「前缀匹配 + 唯一候选直接补全」自写 ~40 行）+ 本项目 `docs/IMGUI-GUIDE.md`（§3 明确「键盘字符/修饰键未接，InputText 要补字符回调 ~50 行」——本轮补齐）+ `viewer/main.cpp` / `window.cpp` / `hud.cpp` 全文（HudFrame POD 双向通道、keyPressed 边沿、截图确定性机制）。bevy 无等价（据实）；UE UConsole 打字流口径（只读）。
+- **键盘输入通路**（IMGUI-GUIDE §3 预言的缺口补齐）：`core/window` 加 GLFW charCallback + KeyEvent 队列（PRESS/RELEASE/REPEAT 全记 + mods）→ `HudFrame` 定长 POD 数组（16 键 / 32 字符，溢出丢最旧）→ `console_ui.cpp` 映射 `ImGuiKey`（官方后端同款口径，Tab 不映射——走 viewer 边沿）喂 `io.AddKeyEvent`/`AddInputCharacter`。反引号字符在 core 过滤：只做呼出边沿，不进文本流。
+- **`renderer/src/console_ui.{hpp,cpp}`**（renderer 侧第二个 ImGui include 点，符合铁律）：独立 Console 窗口（右上，避开 330 宽 HUD 面板，窄画布 min 兜底）；滚动日志区（Info 灰白/Warn 黄/Error 红，新行自动滚底、手滚上去不拽）；输入行（呼出首帧 `SetKeyboardFocusHere`；历史上下键走 ImGui 内建 `CallbackHistory`，带草稿暂存与连续重复去重）；Tab 补全（`completePrefix`，唯一候选直接补全+空格，多候选补到最长公共前缀无进展不动，幂等）。
+- **viewer 键控**：反引号边沿呼出/收起；ESC 开着控制台先收；`hud.wantCaptureKeyboard` 回写屏蔽 Space/C/V/N/R 热键（读旧帧，防把 cvar 值当热键吞）；HUD 关着也排干事件泵（防 window 侧队列无限增长）。
+- **新 CLI**：`--console on|off` / `--console-exec <line>`（启动预执行，结果留控制台日志=截图证据）/ `--console-type <text>`（输入行预填；截图模式合成 Tab 边沿演示补全，幂等保确定性）。
+- CMake：`nl_renderer` 加 `console_ui.cpp` + PRIVATE 链 glfw（只吃键值常量，窗口库仍归 core/viewer）；`hudSelfTest` 补控制台通道 POD 缺省断言。
+
+**提交版本**：feat/console 本轮 commit（M-C3 收口时打 tag merge）
+
+**完成情况**
+- viewer selftest **16/16**（含新增控制台 POD 缺省断言）+ ctest `p8-console-selftest` PASS（M-C0 内核不受前端影响）。
+- **验收截图（亲眼可见，DX12 960x540）**：`build/out/mc1-console-evidence-dx12.png`——反引号呼出的 Console 窗口与 HUD 同屏不重叠；日志区完整回显 `echo hello world`→`echo: hello world`、`demo.fov 75`→`demo.fov = 75`、`demo.fov`→带类型+help 的打印、`add 1 2.5`→`add: 3.5`，错误行 `unknown command: no-such-cmd` 红色；输入行显示 `demo.fov ` = 预填 `demo.fo` 经 Tab 补全产物（stderr 插桩证实 frame 2 起 `demo.fov ` 稳定）。
+- Vulkan 后端：viewer 编译通过 + 证据截图（console_ui 零 GPU 代码，通道层验证；P8-CONSOLE-PLAN 双后端画面回归豁免成立——不新增 shader/GPU 资源，console 关闭时 HUD 布局一像素不动）。
+- 未跑渲染回归（总闸口径：本轨道不进回归；console 关闭 = 历史 HUD 基线零波及，`hudSelfTest` POD 缺省断言锁住）。
+
+**踩坑情况**
+1. **PowerShell cwd 落错树**：用绝对路径调 exe 但 cwd 停在主 worktree，`--screenshot out/xxx.png` 相对路径把产物写进了 master 的 `out/`（占坑纪律第 4 条当场自查发现，迁移+清理）。教训：worktree 内跑 exe 必须先 cd 到 wt 路径，产物路径不能依赖 shell cwd 假设。
+2. **ViewImage 缓存假信号**：截图重拍后连续两次「图像未变化」——用 md5/时间戳+stderr 插桩才确认补全实际已生效，假信号是工具侧缓存。教训：像素级判断以文件 hash + 程序内插桩为准，别让「看图工具说没变」盖过机械证据。
+3. **演示 Tab 需要 viewer 合成边沿**：截图模式无真实按键，`window.keyPressed(Tab)` 恒 false——`--console-type` 存在时由 viewer 合成（applyTabCompletion 幂等：补完再 Tab 前缀为空/无进展直接返回，逐帧合成无副作用）。交互模式仍走真实 Tab 边沿。
+4. **GLFW 常量跨层**：GLFW key code 在 core 收集（int 原值）、renderer 映射 ImGuiKey——GLFW 头只进 `console_ui.cpp`（窗口库常量非图形 API，nl_renderer PRIVATE 链 glfw 注释写明）。
+
+**下一步**：M-C2 运行时调参 + 内建命令集（`help`/`cvar.list`/`cvar.set`/`hud.*`/`cam.*`，CVar 变更回调接相机/HUD 参数；viewer 起步注册表 `demo.*` 届时替换）。交互模式键盘输入（真实打字/上下键历史/真实 Tab）建议用户开窗手验一次——截图管道已证 ImGui 通路，GLFW charCallback 属系统级输入，隐藏窗口收不到。
