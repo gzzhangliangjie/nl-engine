@@ -128,6 +128,7 @@ add_library(nl_core STATIC
     core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
+    core/src/lod_error.cpp     # M5.0：屏幕空间误差投影（zeux/bevy cut 公式，纯数学）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
@@ -221,12 +222,16 @@ set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscul
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")
+# M5.1：dag.slang 单 compute 入口（DAG 遍历选层，显式栈）。
+set(_ENTRIES_DAG "csDag|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
         set(_ENTRIES "${_ENTRIES_MODEL}")
     elseif(_SRC_NAME STREQUAL "cull")
         set(_ENTRIES "${_ENTRIES_CULL}")
+    elseif(_SRC_NAME STREQUAL "dag")
+        set(_ENTRIES "${_ENTRIES_DAG}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()

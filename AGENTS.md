@@ -34,6 +34,8 @@
 
 > **当前步骤对应哪几份文件**：先查 `docs/ROADMAP.md`「步骤 → 本地代码对照总表」。查不到对应行时，按功能就近读三处源码的同类模块，并在回复里**明确写出读了哪几个文件、得出什么结论**，不许含糊带过。
 
+> **（2026-11-08 追加，M5.1 失职教训）证据与当前里程碑模块一一对应**：新里程碑（M*.x）开工时，即使同一阶段内上一里程碑（M*.x-1）已经读过三处，也**必须按对照总表重读本里程碑点名的文件**——误差公式读过的 `cull_shared.wesl` 不能顶替遍历结构要读的 `cull_bvh.wesl`。复用旧证据前先自问：这份证据覆盖的是**本轮要落码的那个模块**吗？不是就重读。
+
 ---
 
 ## 「不许擅做决定」的判定边界
@@ -90,6 +92,7 @@
 3. **与官方效果对齐**：关键算法 / 视觉结果必须和参考实现对比核验（UE5 官方 = 工业终态满分答卷、bevy = 同代实证、Carrot = 节奏参照）：
    - 几何 / 简化 / DAG 类，对照 UE `NaniteBuilder`、`SimplifyTriangles`、bevy `meshlet` 的产出口径（如 fallback 焊接 2.6% ≈ UE 默认 2%、朝向锚判定随折叠同步更新、按组重切保证父子簇不重叠）。
    - 任何偏离官方口径的地方，必须**解释原因并留痕**（写进 `S*-PLAN.md` / `MILESTONES.md` 踩坑栏），不许静默偏离。
+   - **偏离集中台账**（2026-11-08 固化）：所有与 UE5 官方做法的不一致，除上述散落留痕外，必须随手追加到 **`docs/s5/UE-DIFFS.md`**（一条 = UE 做法 + 出处、我们现状、定性〔有意简化/未实现/计划内待办〕、升级路径/触发条件）；每个里程碑收口 / review 前过一遍该文档，确认升级路径仍成立。
 
 > 双后端比对由 `python tools/regression.py`（全量历史用例 × 双后端比对基线）执行，提交 / tag 前必须全绿。完整口径见 `.workbuddy/memory/MEMORY.md`「架构」「S2/S3 约定」与 `docs/ROADMAP.md`。
 
@@ -102,21 +105,24 @@
 1. **什么进 worktree / 什么不进**：
    - **进**：A 类并行轨道（引擎化 / 非渲染，不碰 `kStage`、不进渲染回归）—— 如材质图、Job 系统、动作系统。
    - **不进**：VSM（S9 后插入）、TSR（S7 后拆分，见 `ROADMAP.md`）是主线 S 节奏的插入项，留在主 worktree 顺着 S 轨走，不拆出。
-2. **实例注册表（三个已建 worktree，占用说明见 `docs/PARALLEL-TRACKS.md` §7）**：
+2. **实例注册表（四个登记轨道，占用说明见 `docs/PARALLEL-TRACKS.md` §7）**：
 
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
-   | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 已立项 `docs/p8/P8-JOB-PLAN.md` |
+   | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
    | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
-   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | 候选（`PARALLEL-TRACKS.md` 2.4 纯逻辑层） |
+   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **进行中**：M-A0~M-A4 完成（tag `anim-ma1`~`anim-ma4d`）+ M-A5.1 CPU 蒙皮落地（`cde41c7`）；交接 `docs/action-system/ACTION-PLAN.md`（在分支上，未 merge） |
+   | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0~C1 完成**（2026-11-09：`core/console/` 纯逻辑内核 + ImGui 前端〔`` ` `` 呼出/滚动日志配色/输入行历史/Tab 补全〕，双后端证据截图，track 分支 b4787da）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C2 内建命令集待开工 |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
+   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。
 3. **固化文档闸**：track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩。
 4. **假绿防护 · 占坑 ≠ 文件指向**：
    - 在 track worktree 干活时，所有编辑绝对路径、shell 每条命令的 cwd **显式在对应 wt 路径内**，不依赖默认落点；
    - merge 回 master 前**双向自查**：`git -C <wt> status` 看得到本批改动、主 worktree `git status` **没有**本批改动（出现即落错树，立即迁移）；
    - 验证可信度自查：改了什么就在产物里找什么——文本 / 数值类改动后若无任何差异是红旗不是绿灯。
 5. **工作线粘性**：同一轨道回同一 worktree，一条工作线**只 merge 一次**（验收 FAIL→补丁→复验全部在占坑内闭环，不中途 merge 又裸干）。任务收尾才 merge 回 master，下个任务回同一坑。
+6. **收尾即同步关联文档（2026-11-08 用户拍板固化）**：worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道验收纪要外，**必须同步更新 master 侧关联文档**——`AGENTS.md` 实例注册表状态、`docs/PARALLEL-TRACKS.md` §7 注册表、相关候选 / 计划文档（如 `NON-RENDER-ROADMAP.md`）——不许让 master 侧文档停在过时值。注册表 / 跨轨道文档的更新在**主 worktree 提交**（避免与 feature 分支双份冲突；教训：动作系统 M-A5.1 已落地，master 侧注册表仍写「候选」，下个会话即误判进度）。
 
 > 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
 

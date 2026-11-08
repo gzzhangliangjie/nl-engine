@@ -71,6 +71,16 @@ public:
                   const char* vsEntry, const char* psEntry,
                   const char* nmeshFile, bool frustumCull, std::string& outError);
 
+    // M5.1（S5.1）：GPU DAG 遍历选层。nmeshFile 只取 stem（"Suzanne.nmesh" →
+    // "Suzanne"），探测 <stem>.lod0..lodN.nmesh 全层驻留：顶点池/局部索引/簇元数据
+    // 拼接（vertexBase/localBase 重定基，vsCull 零改动）、逐簇误差/层级/生成组拍平、
+    // 组成员 CSR 拍平（组成员不保证连续，2026-11-08 资产实测）。遍历 compute
+    // （dag.slang csDag，显式栈）每帧从最粗层根簇下钻，输出 = M4 的
+    // visibleList_ + indirectArgs_ 同一接口（S5-PLAN 底线：不另起炉灶）。
+    bool initDag(nvrhi::IDevice* device, const char* shaderSuffix,
+                 const char* vsEntry, const char* psEntry,
+                 const char* nmeshFile, std::string& outError);
+
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
@@ -131,7 +141,15 @@ public:
     float dagGroupError() const { return dagGroupError_; }
     // M4.1：GPU 剔除统计（两帧前的结果；-1 = 暂无数据）。clusterCount 总簇数恒有。
     int           visibleClusters() const { return cullVisibleCount_; }
+    // M5.2：GPU 可见三角数（与 visibleClusters 同一延迟窗口、同一回读环形槽位
+    // 的高 4 字节；-1 = 暂无数据）。cull / dag 两种 compute 路径口径一致。
+    int           visibleTriangles() const { return visibleTriangles_; }
     std::uint32_t clusterCount() const { return clusterCount_; }
+    // M5.0：屏幕误差投影球数据（世界空间 xyz=center w=radius；model 恒单位阵）。
+    // assetSphere = 当前显示几何联合球（uploadClusterData 每次重算）；
+    // dagGroupSphere = 下钻组记录球（dagGroup()>=0 时有效）。
+    const float* assetSphere() const { return assetSphere_; }
+    const float* dagGroupSphere() const { return dagGroupSphere_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -187,10 +205,14 @@ private:
     nvrhi::ComputePipelineHandle  cullComputePSO_;
     nvrhi::BindingLayoutHandle    cullComputeLayout_;  // UAV(0) list + UAV(1) args + SRV/CB
     nvrhi::BindingSetHandle       cullComputeSet_;
-    nvrhi::BufferHandle           cullReadback_[2];    // instanceCount 回读环形（4B × 2）
+    nvrhi::BufferHandle           cullReadback_[2];    // 回读环形（8B × 2：[0]=visibleCount [4]=triCount）
     std::uint32_t                 cullSubmitted_ = 0;  // 已提交剔除的帧数（环形游标源）
     int                           cullPolledSlot_ = -1; // 已消费的最大提交序号（-1 = 无）
     int                           cullVisibleCount_ = -1;
+    // M5.2：GPU 原子三角计数器（1 个 uint）。cull.slang u2 / dag.slang u3 各自
+    // atomicAdd，每帧 writeBuffer 清零，copyBuffer 进回读环形槽位高 4 字节。
+    nvrhi::BufferHandle           triCounter_;
+    int                           visibleTriangles_ = -1;
     // 每帧 compute dispatch 前整体重写 args（indexCount 等静态字段不变、instanceCount=0
     // 由 GPU atomicAdd 重建）。init 时按 stride 一次填好。
     nvrhi::DrawIndexedIndirectArguments cullArgsReset_{};
@@ -200,6 +222,29 @@ private:
     // Scene::draw 里的 compute 剔除段。query 延迟到第一次 HUD 路径的 pollCullStats 才建，
     // --no-hud 截图与历史基线完全不碰（M0.6 同款纪律）。
     GpuTimer cullTimer_;   // setLabel("cull")：resolve 日志与整帧计时区分开
+
+    // ---- M5.0（S5.0）：屏幕误差投影球数据 ----
+    float assetSphere_[4]    = {0.0f, 0.0f, 0.0f, 0.0f};
+    float dagGroupSphere_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // ---- M5.1（S5.1）：GPU DAG 遍历 ----
+    bool                         dag_ = false;          // initDag 成功后置位
+    std::uint32_t                dagRootCount_ = 0;     // 最粗层簇数（遍历 dispatch 规模）
+    std::uint32_t                dagLevelCount_ = 0;    // 层数（lod0..lodN）
+    std::uint32_t                dagGroupCount_ = 0;    // 全层组总数（expanded 清零规模）
+    nvrhi::BufferHandle          dagConstants_;         // volatile CB：eye/projY/H/near/threshold
+    nvrhi::BufferHandle          dagClusterErrors_;     // StructuredBuffer<float>，逐簇世界误差
+    nvrhi::BufferHandle          dagGroups_;            // StructuredBuffer<float4>，组记录×2：
+                                                        //   [2g]=(cx,cy,cz,r) [2g+1]=(err,first,count,_)
+    nvrhi::BufferHandle          dagMembers_;           // StructuredBuffer<uint>，组成员 CSR 展平
+    nvrhi::BufferHandle          dagGenGroup_;          // StructuredBuffer<uint>，逐簇生成组（全局组号）
+    nvrhi::BufferHandle          dagClusterLevel_;      // StructuredBuffer<uint>，逐簇层号（0=最细）
+    nvrhi::BufferHandle          dagGroupExpanded_;     // StructuredBuffer<uint>，组展开声明标志（每帧清零）
+    nvrhi::ShaderHandle          csDag_;
+    nvrhi::ComputePipelineHandle dagComputePSO_;
+    nvrhi::BindingLayoutHandle   dagComputeLayout_;
+    nvrhi::BindingSetHandle      dagComputeSet_;
+    // args 重置模板直接复用 cullArgsReset_（indexCount 同一 identity stride）。
 };
 
 } // namespace nl::renderer::detail

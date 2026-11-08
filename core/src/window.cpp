@@ -109,6 +109,7 @@ Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
     // 底座是 NVRHI，不创建 OpenGL context（与 Carrot Init 同款设置）
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
 
     impl_->handle = glfwCreateWindow(desc.width, desc.height, desc.title.c_str(), nullptr, nullptr);
     if (!impl_->handle) {

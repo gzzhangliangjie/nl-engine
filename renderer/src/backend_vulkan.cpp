@@ -68,7 +68,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, std::string& outError) override {
+              bool frustumCull, bool dagMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -96,17 +96,22 @@ public:
         if (!createTargets(outError)) return false;
         // M4.0：vertex pulling 走 initCull。Vulkan 侧 SPIR-V 入口恒为 "main"（加载期
         // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
-        const bool sceneOk = clusterMode
+        const bool sceneOk = dagMode
+            ? scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+            : (clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2：-1 = 暂无数据
+        // M5.0：屏幕误差投影球数据（cluster/dag 路径有效，normal 恒 0）。
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         // M2.3：分层资产探测（与 DX12 同一份公共函数，规则不会漂移）。cull 模式不依赖分层资产。
         if (clusterMode) {
             lodStem_ = meshletStem(modelFile);
@@ -180,6 +185,7 @@ public:
         info_.lodMaxError = scene_.lodMaxError();
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
         return true;
@@ -217,6 +223,9 @@ public:
         info_.lodMaxError = scene_.lodMaxError();
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
+        // M5.0：下钻后球数据两套都换（viewer 按 dagGroup 选组球 / 资产球）。
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
+        for (int i = 0; i < 4; ++i) info_.dagGroupSphere[i] = scene_.dagGroupSphere()[i];
         return true;
     }
 
@@ -265,6 +274,7 @@ public:
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(nvrhiDevice_);
         info_.visibleClusters = scene_.visibleClusters();
+        info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();

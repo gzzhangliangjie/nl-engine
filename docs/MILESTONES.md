@@ -20,6 +20,7 @@
 | M4.0 GPU 簇数据通路 + vertex pulling | ✅ 验收通过 | `s4-indirect` | 2026-11-08 | 单 drawIndexedIndirect 全簇全画（cull 模式 vertex pulling）；`--mode cull` 与 `--mode cluster` 同机位同 shading 逐字节相同（DX12/Vulkan 各自一致），deviceErrors=0；kStage=S4.0；交代物 example/s4-indirect + cases.json s4.0 卡 |
 | M4.1 GPU 视锥剔除 + 可见列表间接寻址 | ✅ 验收通过 | `s4-cull` | 2026-11-08 | compute 剔除 pass（csCull 5 平面包围球测试）+ atomicAdd append visibleList + indirectArgs.instanceCount 回写；pass-through（正对全可见）与 cluster 基线逐字节相同；真剔除姿态（进模 dist0.45/640x720）GPU 30/237 == frustum_check.py 离线 30，双后端一致；kStage=S4.1；交代物 example/s4-cull + cases.json s4.1/s4.1-tools 卡 |
 | M4.2 HUD 统计 + 1M 场景 + 性能验收 | ✅ 验收通过 | `s4-done` | 2026-11-08 | cull pass 接第二个 GpuTimer 实例（[frame]/[cull] resolve 日志 + HUD cull GPU 行/曲线）；IcoSphereDense1M 入仓（1,310,720 tri / 19,718 簇 / 33.5MB .nmesh，coverage 100%）；1.3M tri 正对 640x360 全可见 pass-through cull==cluster 逐字节（跨后端也 bytes）；进模 1932/19718（剔除 90.2%）== 离线，双后端一致；60fps：CPU avg 4.9~5.5ms / 整帧 GPU 0.96~1.02ms / cull pass ~0.010ms（判据 16.6ms 余两数量级）；kStage=S4.2；交代物 example/s4-done + cases.json s4.2/s4.2-tools 卡 |
+| M5.0 误差投影：世界→屏幕像素 | ✅ 验收通过 | `s5-proj` | 2026-11-08 | core 纯数学层 `screenErrorPixels()`（bevy/zeux 口径，用户拍板）+ `lodErrorSelfTest()` 手算用例进 selftest（15→16）+ OrbitCamera 三个只读访问器 + HUD dag 模式 `s5 err` 行 + `cut thr px` 滑条；三机位 1567.05→352.15→149.84 px 单调下降且与离线手算逐位一致；13 对 HUD 基线 kStage bump 全量重拍 + 3 条关键用例回归 6/6 bytes + s5.0 卡 4/4 bytes + server --check OK；UE 差异台账 `docs/s5/UE-DIFFS.md` 建立（AGENTS.md 固化入口）；kStage=S5.0；交代物 example/s5-proj + cases.json s5.0 卡 |
 
 ---
 
@@ -887,3 +888,106 @@
 4. **启动拦截 flake 与真像素 FAIL 的鉴别**：本环境全量跑平均挂 0~3 条，特征两种——「日志缺 X」毫秒级秒退 / 超时（Defender 高频启动拦截，串行复跑必过，条目每轮不同）；与「与基线像素不符」的确定性 FAIL（本轮 4 条 vulkan 基线即此类，逐对像素取证定位）严格区分，前者复跑定性、后者必须查根因不许复跑糊弄过去。
 
 **下一步**：P8 并发地基全部收口（M-J0~J3 已入主干）；主线 S5（组原子 cut）/S6 排期按 ROADMAP；feat 分支任务完成后可清理 worktree 登记。
+
+## P8 支线：可视化证据图补交（2026-11-08，主 worktree）
+
+**动作**：登记支线（bb3680c）→ 主 worktree 真实跑工具留档（selftest jobs / cluster Suzanne-multi / lod IcoSphereDense threads=1 vs 32 / 负向 selftest nope）→ 逐层 hashlib MD5 比对 6/6 MATCH → 新增 `scripts/make-job-evidence.py`（Pillow，计时与 MD5 全部从真实日志/产物解析，无硬编码）→ 生成 `example/p8-jobs/` 4 张证据图 → `cases.json` 4 条 tool 用例 `preview` 回填（diff 仅 +9/-5）。
+
+**提交版本**：本轮（master）
+
+**完成情况**
+- 4 张图：`lod-parallel.png`（2.98× 加速条形 + 6 层 MD5 表）、`selftest-jobs.png`（26 项 PASS）、`cluster-parallel.png`（4 子网格统计 + 并行计时）、`negative-unknown.png`（exit 1 拒绝）；全部亲眼验收无重叠/截断/乱码。
+- `server.py --check` 当前 FAIL 项为「缺 s5.0 版本用例」——归属 S5.0 主线收口件（主 wt 存在另一条 S5.0 工作线未提交占坑：kStage 已 bump、camera/hud/scene/viewer 等成批修改 + lod_error 新增）。本支线不触发任何 check 项。
+- 支线节在 `docs/p8/P8-JOB-PLAN.md` 全勾选并留痕。
+
+**踩坑情况**
+1. **`lod -o` 是文件前缀不是目录**：`-o build/.../lod` 产出 `lod.lod0.nmesh` 等同目录平铺文件，按目录 md5sum 会空手而归；MD5 比对按 `lod-dense-{t1,tp}.lodN.nmesh` 逐文件做。
+2. **certutil 输出 GBK 解码炸 UTF-8 reader**：证据脚本改用 `hashlib` 本地直接算 MD5，更干净且不依赖外部命令编码。
+3. **json 重写注意原缩进**：`cases.json` 原为 1 空格缩进，round-trip 用 `indent=1` 才不会整文件 diff 噪音（先误用 indent=2 产生 ~500 行假 diff，已 `checkout --` 重做）。
+4. **cluster 证据图首版只渲染最后一个 submesh**：按 `file` 行重置缓冲的逻辑 bug，改为顺序累积后 4 个子网格齐全——生成器自己也要亲眼验收，不能只看「脚本没报错」。
+
+**下一步**：本支线闭环；等 S5.0 主线收口时 `server.py --check` 随 s5.0 版本归位转绿。
+
+## M5.0 误差投影：世界 → 屏幕像素（tag `s5-proj`，2026-11-08）
+
+**动作**
+- **决策前置**：三处参考实读——bevy `cull_shared.wesl:13`（`lod_error_is_imperceptible`，溯源 zeux meshoptimizer `demo/nanite.cpp:115`）、UE `NaniteClusterCulling.usf:255` + `NaniteCullingCommon.ush:112` `GetProjectedEdgeScales`（切线投影）、Carrot `draw_virtual_geometry.slang:81`（flat 双阈值）；开发历史 M3.2 已存档「bevy 屏幕空间公式 S5 用」。发现 S5-PLAN 原文「distance 用相机平面距离」与已存档口径冲突 → 摆证据请用户拍板，**拍板 bevy/zeux**：`screenPx = worldError / max(d, near) × projYScale × 0.5 × H`，`d = |球心−eye| − 球半径`。
+- **core 纯数学层**：`core/include/nl/core/lod_error.hpp` + `core/src/lod_error.cpp` `screenErrorPixels()`（零图形符号）+ `lodErrorSelfTest()`（45° fov 手算逐例对比）；CMakeLists 加 `core/src/lod_error.cpp`。
+- **OrbitCamera 补只读访问器**：`eyePosition()`（与 `viewProjection()` 的 lookAt 同源公式，不另造一套）、`projectionYScale()`（=1/tan(fovY/2)）、`nearPlane()`。
+- **数据通路**：`Scene` 存资产联合包围球 `assetSphere_`（bbox 中心 + 到最远顶点，M5.0 注释明确下钻时优先组记录球）与组球 `dagGroupSphere_` 透出；DeviceInfo/HudFrame 加 `assetSphere[4]/dagGroupSphere[4]/screenErrorPx/screenErrorValid/cutThresholdPx`（POD 通道，两后端对称补齐）；viewer 主循环按 `drilled ? 组球+组误差 : 资产球+顶层 maxError` 计算并喂 HUD。
+- **HUD**：dag 模式加 `s5 err %.2f px` 文本行 + `cut thr px` 滑条（0.25~4.0 默认 1.0）；非 dag 模式布局一像素不动。
+- **文档同步**：S5-PLAN M5.0 公式行按拍板修正（旧口径划掉留痕）；新建 `docs/s5/UE-DIFFS.md`（与 UE 不一致的集中台账，D1~D7 + 待办 D8/D9 + 对齐确认），AGENTS.md「偏离官方口径」条目下固化台账入口（2026-11-08 用户点名）。
+- kStage → `S5.0 screen-space error projection (zeux/bevy cut formula, threshold HUD)`；selftest stage 断言同步改。
+
+**提交版本**：s5-proj（本轮）
+
+**完成情况**
+- **数值复核（亲眼可见）**：dag-top + HUD 三机位 dist 2.0/4.2/8.0 → `s5 err` 1567.05 / 352.15 / 149.84 px 单调下降；Python 解析 `Suzanne.lod6.nmesh`（顶层 maxError=1.1375、联合球 R=1.2661、eye 公式逐项复算）**逐位一致**。
+- 双后端 selftest **16/16**（含新增 `lodErrorSelfTest`）。
+- **kStage bump 波及面（含认知修正）**：HUD 标题行含 stage 字符串，但**只有 exe 用当前构建的版本才需要重拍**——m0.1~m0.8/s1.0 的回归走 tag 快照 exe（`build/showcase/<tag>/`，HUD 内嵌当时代 stage 字符串），基线不随 kStage 变。实际重拍 = 当前 exe 的 5 对（m0.9/gate-hud、s2.0/lod-hud、s3.2/dag-hud、s4.1/cull-inside-hud、s4.2/dense-inside-hud，双后端 10 张）。
+- **总闸（按需口径）**：3 条关键用例回归 6/6 bytes（s3.2/dag-hud = 本次唯一布局变化 + m0.9/gate-hud + s4.1/cull-inside-hud = stage 行验证）；s5.0 新卡 4/4 bytes（s5-hud pair ×2 + s5-selftest ×2）；`server.py --check` OK（stage=S5.0 version=s5.0 cases=2 baselines=3）。
+- 交代物：`example/s5-proj/`（s5-hud 双后端基线 + 3 机位证据图 + run.bat verify exit 0）+ cases.json s5.0 卡（s5-hud pair + s5-selftest tool）+ `docs/s5/UE-DIFFS.md` 台账。
+
+**踩坑情况**
+1. **Python 手算复核的 struct 布局连环错**：`NMeshHeader` 实为 **20B**（4+2+2+4+4+4，先误按 24B 解析整体错位 4 字节）；`NMeshMetaHeader` 解析 format 串连错三次（`<IIHfII`→`<IIHHfI`→正解 `<IHHfII`，把 version+level 两个 u16 误并成一个 u32 时数值看似「随机」实为字段拼接）。教训：对账先 hexdump 定 magic 实际偏移反推记录大小，再逐字段解，别对着记忆写 format 串。
+2. **HUD 读数须以本机像素为准**：d=4.2 机位早先视觉读数记成 332.15，重看截图确认实为 **352.15**（3↔5 误读）——视觉读数进验收纪要前必须二次确认或直接用可机读通道。
+3. **run.bat for 循环内 echo 行尾 `)` 会被当成块结束符**：`echo ...(dx12 + vulkan)` 输出被截断括号，纯文本瑕疵但会误导证据阅读；避免在 for 块内的 echo 行尾用裸括号。
+4. **基线重拍 exe 必须与回归用的 exe 同源（本轮自摆乌龙，被总闸当场抓住）**：`cases.json` 里 m0.1~m0.8/s1.0 的 `exe` 指向 **tag 快照**（`build/showcase/{tag}/build/…`），HUD 内嵌快照时代的 stage 字符串；我用当前 S5.0 exe 给这 8 对基线重拍 → `m0.5/resize` 回归立即 FAIL（91k 像素差，maxDelta 242）。修正：`git checkout --` 还原历史版本基线（它们本就不随 kStage 变），只重拍 exe=current 的 5 对。**教训**：重拍基线前先查该版本 `exe` 字段指向快照还是当前构建；「重拍永远用刚重编的 exe」只对 exe=current 的版本成立（M4.2 踩坑 1 的适用边界在此）。
+
+**下一步**：M5.1 compute DAG 遍历（显式栈从根组下钻、簇屏幕误差 ≤ 阈值写 indirect 命令、栈溢出宁粗勿漏；输出接口 = S4 indirect buffer 不另起炉灶）。D1 升级路径监控点：M5.1/M5.2 偏轴或进模场景若选层明显偏粗，把 `screenErrorPixels()` 换成 UE 切线投影（见 `docs/s5/UE-DIFFS.md`）。
+
+## M5.1 compute DAG 遍历（tag `s5-traverse`，2026-11-08）
+
+**动作**
+- **决策前置（铁律执行，含一次失职补课）**：开工时拿 M5.0 的公式证据顶数没重读遍历结构参考，被用户两连问揪出 → 补读三处参考并摆对照表：bevy `cull_bvh.wesl`（BVH 8 叉 + 全局队列 + 多 pass，cut = `parent_is_imperceptible || !aabb_in_frustum` 停止下钻）、UE `NaniteCulling.cpp`/`NaniteClusterCulling.usf`（DAG 节点遍历 + 组原子 FClusterGroup）、Carrot `draw_virtual_geometry.slang`（flat 无遍历，已记 D3）。AGENTS.md 追加铁律条款并单独提交（a762fb8）：「证据与当前里程碑模块一一对应：新里程碑开工时必须按 ROADMAP 对照表重读本里程碑点名的文件，不许拿上一里程碑的部分证据顶数」。
+- **资产不变量实测（Python 逐层解析 Suzanne.lod0..6）**：成员方向**不连续**（lod0 全部 31 组非连续）→ 必须 CSR 拍平，不能断言区间；生成方向区间反转干净（每粗簇恰一生成组）；父簇 error = 生成组 error（lod.cpp:128 覆写）≥ 任一子簇 error → 单调性数学恒成立，不用运行时防御。
+- **数据布局（initDag）**：`renderer/src/scene.cpp` 探测 `<stem>.lod0..N` 全层加载（≥2 层 + dagPresent 校验）→ 全层拼接 vertexPool/localIndices/clusterMeta（vertexBase 重定基，localBase 逐簇取 `localIndices.size()` 天然全局）+ 逐簇 error/level/genGroup SSBO + 组记录 float4×2（`[2g]=(cx,cy,cz,r)`，`[2g+1]=(err,memberFirst,memberCount,0)`；整数值 `static_cast<float>` 打包，shader 侧 `uint()` 数值转换还原）。DagConstants 独立 volatile CB 48B（`g_dagProj/g_dagEye/g_dagRoot` 三个 float4），不动 SceneConstants 160B 契约。
+- **遍历 shader**：新建 `renderer/shaders/dag.slang`：每根簇线程显式栈 `uint[512]`，pop → screenPx ≤ thr 或叶层 → `emitCluster(c)`，否则组展开压成员；组重复下钻用 `dagGroupExpanded_` 声标志 + `InterlockedExchange` 三参形式去重（同组多个同误差父簇全失败会重复压成员，实测放大到 54923 emits）。vsCull/绘制链零改动，输出复用 S4 visibleList + indirectArgs。
+- **viewer/HUD**：`ViewMode::Dag` + `--mode dag` + `--cut-thr` CLI（复用 M5.0 的 `Options::cutThresholdPx`）；dag 帧参数 eye/projYScale/nearPlane/viewportHeight/cutThresholdPx 走新 CB；HUD 滑条与 `s5 err` 行复用 dagMode；截图日志打印 `dag stats: visible N / 324 clusters`。
+- **M4.1 潜伏 bug 修复**：`--frustum off` 因 visibleList 条件创建而布局无条件声明 t4 → set 未绑定 init 即败（viewer 默认 on 从未被用例踩到）。修正：visibleList_ 恒创建恒绑定 t4、恒等列表恒上传。
+- 交代物：`example/s5-traverse/`（near/far × 双后端 4 张基线 + run.bat verify，findstr 断言 `visible 237 / 324` 与 `visible 14 / 324`）+ cases.json s5.1 卡（28 versions）；kStage → `S5.1 DAG traversal (atomic group cut, per-thread explicit stack)`。
+
+**提交版本**：s5-traverse（本轮）
+
+**完成情况**
+- **选层谱单调（亲眼可见）**：dist 20 固定，thr 4/8/16/32/64 → visible 230/106/14/7/3 簇，连续过渡符合预期；thr=8（14 簇）/thr=16（7 簇）截图形状正确无洞无裂缝。
+- **全细节等价（最强证据）**：`--mode dag --cut-thr 0.001` 与 `--mode cull --frustum off` 同机位**逐字节相等**（md5 f0b5db63）；dx12/vulkan 各自成立，且 dag 图**跨后端也逐字节相等**——遍历是纯确定性 compute，双后端同一份输入同一输出。
+- **相机钳制解释**：OrbitCamera kMaxDist=20，dist 60/200 结果相同是相机钳制不是遍历 bug。
+- 回归全绿（总闸按需口径）：s4.0 4/4（潜伏修复验证）+ s5.0 4/4 + s3.2 2/2 + s4.1 2/2 + s5.1 新卡 6/6，全 bytes；`server.py --check` OK（stage=S5.1 version=s5.1 cases=3 baselines=6）；双后端 selftest 16/16。
+- kStage bump 波及面（M5.0 教训升级版）：只重拍 exe=current 的 6 版本 12 张 HUD 基线（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0），tag 快照 exe 的历史版本不动（先查 exe 字段再动手）。
+- UE-DIFFS 台账增补 **D3a**：每线程显式栈 + atomicExchange 去重 vs bevy 全局队列多 pass（有意简化，多实例/千组级负载不均时升级，输出接口不变）。
+
+**踩坑情况**
+1. **恒只画 3 簇（三连根因排查，本轮最大坑）**：dag 模式画面恒为 3 簇叶子。① 嫌疑 `asuint()` 位型重解释（组记录整数值经 float 打包，`asuint(float(7))` 得到的是位型 `0x40E00000`≈10.9 亿而非 7 → 栈溢出保护恒触发）→ 改 `uint()` 数值转换（必要修复但非充分）；② 通过 indirectArgs 的 args[1] 安全探针（把阈值值选为探针、量程限制防 instanceCount 爆炸挂进程）逐一验证 CB/level/error/members 数据全对、判定方向对、迭代数=1、分支=leaf；③ **真凶：根簇种子漏加根基址**——`dispatchThreadID` 0..2 是 lod0 叶子（level 0 恒 leaf emit），根簇应为 `g_dagRoot.x + dispatchThreadID`（=321..323）。教训：三维排查顺序=数据 → 判定逻辑 → 种子/寻址，探针通道（args[1] 回读）比猜快得多。
+2. **`InterlockedExchange` 三参形式（E30019）**：Slang/HLSL 里是 `void InterlockedExchange(dst, val, out old)`，不能当表达式用；先声明 `uint claimed` 再判。
+3. **shader 未重编假象**：dxil 时间戳早于 slang 源文件，SPIR-V 因 E30019 失败时画面用的还是旧 dxil——修完 shader 后确认构建管道真的重编了两个目标再验。
+4. **组重复下钻指数放大**：一个组生成多个同误差父簇（genCount 最高 8），全部同时判失败 → 每个失败父簇都压同组成员 → 54923 emits。修复 = 每帧清零的 `dagGroupExpanded_` 声标志，赢家压栈、输家跳过；成员并集覆盖所有兄弟面积，不丢面。
+5. **NVRHI `setInitialState` 是 Desc 方法非 handle 方法**：`DagGroupExpanded` 缓冲（canHaveUAVs + keepInitialState(CopyDest)）用独立 desc 创建，不能在 handle 上链。
+6. **`camera.eyePosition()` 无返回值重载**：只有 `void eyePosition(float out[3])` 数组出参形式。
+
+**下一步**：M5.2 时滞防抖 + HUD（误差阈值滞回：上帧选中簇本帧误差 < 阈值×1.1 不换，抑制边界抖动；GPU 原子计数总三角数实时显示；S5 收官自检=拉远三角数连续下降 + 固定视角数字稳定）。tag `s5-done`。
+
+## M5.2：GPU 三角数 HUD（S5 收官，2026-11-09，tag `s5-done`）
+
+**动作**：kStage → `S5.2 GPU triangle count (atomic counter in cull/dag compute, delayed readback)`。范围调整（用户拍板）：**砍掉误差滞回**——三处参考实读均无运行时滞回（UE 5.8.4 `NaniteClusterCulling.usf:258` 无状态双误差带 + TAA 掩盖、bevy `cull_bvh.wesl` 无状态、Carrot `draw_virtual_geometry.slang:106` 纯双误差判定），滞回需 per-cluster 上帧状态 buffer 主动破坏 M5.1 刚验证的「无状态、逐字节可复现」，且当前单资产规模未实测到抖动危害；与 UE 无状态口径对齐（UE-DIFFS D2 缓解栏留痕）。M5.2 收窄为 GPU 原子三角计数 + HUD。
+
+**提交版本**（核心改动）：
+- `cull.slang` u2 / `dag.slang` u3：各加 `RWStructuredBuffer<uint>` 三角计数器，可见判定/emit 时 `InterlockedAdd` 该簇 triCount（`clusterMeta[id*4+1]`，字节偏移陷阱同 M3.1）
+- 回读环形 4B→8B（[0]=可见簇数 [4]=可见三角数），每帧 `writeBuffer` 清零 + 两段 `copyBuffer`，`pollCullStats` 延迟两帧一起 map；triCounter_ 双路 init 各建（dag 不调 initCull，与回读环形同款独立）
+- HUD cull/dag 模式新增 `s5 tris` 行（frustum 行下方）；截图日志追加 `tris N`（run.bat findstr 断言出口）
+- 顺手修 viewer 潜伏 bug：cut thr 滑条回读条件 `dagTop||dagMode` → `dagTop && dagGroupCount>0`（dag 遍历模式 hud.cutThresholdPx 从不被填 = POD 默认 1.0，无条件回读把命令行 `--cut-thr 16` 每帧覆盖回 1.0）
+- 顺手修三张历史 selftest 卡：m0.9/s2.0/s3.2（exe=current）expectLog 停在 15/15，M5.0 起套件 16/16，本轮首次跑到即 FAIL → expectLog 同步 16/16（exe=current 断言当前构建，套件数演进必须同步历史卡）
+
+**完成情况**：
+- 三角数锚点逐位精确：dag 近景（thr 0.001）237 簇 → **tris 3936 == triangles(finest)**，双后端一致；cull 近景 76 簇 → 1526
+- 拉远谱单调连续：thr 2/4/8/16/32/64 → tris **3870/2360/426/142/104/104**（簇 230/106/14/7/3/3）——S5 验收「拉远连续下降 + 固定视角稳定」达成
+- HUD 目检：s5 tris 行 near 3936 / far 426 同屏可见；640x720 面板完整
+- 交代物：`example/s5-done/`（near/far HUD pair × 双后端 4 张 + verify-near/far-dx12 证据图 + run.bat verify exit 0，findstr 断言 `tris 3936`/`tris 426`）+ cases.json s5.2 卡（29 versions）
+- HUD 基线重拍 7 版本 14 张（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0/s5.1，只拍 exe=current）；回归全 bytes：s5.1 6/6 + s4.0 4/4 + s4.1 4/4 + s4.2 6/6 + s5.0 6/6 + s3.2 18/18 + m0.9 4/4 + s2.0 16/16 + s5.2 新卡 6/6；`server.py --check` OK（stage=S5.2 cases=3 baselines=6）；双后端 selftest 16/16
+- **S5 全线收官**：M5.0 误差投影 → M5.1 DAG 遍历 → M5.2 三角数 HUD，tag `s5-done`
+
+**踩坑**：
+1. **NVRHI BufferDesc 无 `canHaveUAV`**：成员名是 `canHaveUAVs`（复数）；triCounter_ 按 dagGroupExpanded_ 同款纪律建（canHaveUAVs + initialState CopyDest + keepInitialState=true，每条命令列表开头回 CopyDest，帧内 writeBuffer→UAV→CopySource 动态轮转）。
+2. **cut thr 滑条回读钳制命令行参数（潜伏 bug，M5.1 埋雷）**：dag 遍历模式 HUD 不画滑条（`frame.dagGroupCount` 恒 0 不填），但 viewer 每帧 `if (dagTop||dagMode) cutThresholdPx = clamp(hud.cutThresholdPx, 0.25, 4.0)` 无条件回读 → 命令行 thr 16 第二帧起被覆盖成 1.0。实锤过程：far HUD 基线图显示 237/3936（= no-hud thr 1 的结果），no-hud 同参数 14/426 → 实测 thr1@dist20H720 == 237/3936 逐位吻合。s5.1 near 没踩到纯属 thr 恰好 = 1.0。
+3. **历史 selftest 卡 expectLog 失配（潜伏，M5.0 埋雷）**：m0.9/s2.0/s3.2 卡 exe=current 但写死 15/15，M5.0 加第 16 项 selftest 后必 FAIL，此前收口没挑到这三卡所以没暴露。教训：exe=current 的 tool 卡断言的是**当前构建**，套件数/stage 演进时历史卡必须同步，否则全量跑闸必炸。
+4. **Edit 工具误删行**：批量替换时 old_string 尾部含上下文行、new_string 漏带，`beginTrackingBufferState(identityIndex_, ...)` 被吃——编译能过（writeBuffer 不依赖前一行）但状态跟踪会错，目检 diff 当场抓回。

@@ -69,6 +69,47 @@ def checkout(tag: str, dest: Path) -> None:
             log("  junction thirdparty/slang -> main worktree")
 
 
+# ---------------------------------------------------------------------------
+# 隐藏窗口补丁（2026-11-08）：tag 快照源码本无此修复，截图模式建可见窗口会
+# 抢前台焦点（~0.85 s/用例，--jobs 并行跑闸打断打字）。这里给 tag 源码注入
+# 与 master commit dd0130a 等价的最小三处改动——不改任何渲染行为，基线像素
+# 零影响（回归 bytes 验证）。幂等：已打过补丁的目录直接跳过。
+# s0-init（m0.1）不适用：该版本无 --screenshot，且其 window 用例是 manual，
+# 回归不会建窗口。
+# ---------------------------------------------------------------------------
+def apply_hidden_window_patch(dest: Path, tag: str) -> None:
+    main_cpp = dest / "viewer" / "main.cpp"
+    if not main_cpp.is_file():
+        return  # s0-init 等无截图模式/源码布局不同的 tag，跳过
+    src = main_cpp.read_text(encoding="utf-8")
+    if "desc.visible" in src:
+        return  # 已打补丁
+
+    hpp = dest / "core" / "include" / "nl" / "core" / "window.hpp"
+    cpp = dest / "core" / "src" / "window.cpp"
+    text_hpp = hpp.read_text(encoding="utf-8")
+    text_cpp = cpp.read_text(encoding="utf-8")
+
+    a1 = "    bool        resizable = true;\n"
+    assert text_hpp.count(a1) == 1, f"{tag}: window.hpp anchor not unique"
+    hpp.write_text(text_hpp.replace(
+        a1, a1 + "    bool        visible = true;  // false = 隐藏窗口（截图回归防抢前台焦点）\n"),
+        encoding="utf-8")
+
+    a2 = "    glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);\n"
+    assert text_cpp.count(a2) == 1, f"{tag}: window.cpp anchor not unique"
+    cpp.write_text(text_cpp.replace(
+        a2, a2 + "    glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);\n"),
+        encoding="utf-8")
+
+    a3 = "    nl::core::Window window(desc);\n"
+    assert src.count(a3) == 1, f"{tag}: main.cpp anchor not unique"
+    main_cpp.write_text(src.replace(
+        a3, "    desc.visible = !o.screenshot;  // 截图回归建隐藏窗口，防抢前台焦点\n" + a3),
+        encoding="utf-8")
+    log("  patched hidden-window fix (dd0130a equivalent)")
+
+
 def exe_path(version: dict, backend: str) -> Path:
     tmpl = version["exe"][backend]
     return ROOT / tmpl.replace("{tag}", version["tag"])
@@ -116,6 +157,7 @@ def main() -> int:
             log("  both backends already built, nothing to do (use --force)")
             continue
         checkout(v["tag"], WORK / v["tag"])
+        apply_hidden_window_patch(WORK / v["tag"], v["tag"])
         for b in need:
             if not build(v, b, WORK / v["tag"] / f"build-{b}.log"):
                 failed += 1

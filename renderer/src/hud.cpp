@@ -311,6 +311,16 @@ void Hud::build(HudFrame& frame) {
                           frame.dagGroup, frame.lodTriangles, frame.dagGroupError);
         }
         ImGui::TextUnformatted(dagLine);
+        // M5.0（S5.0）：屏幕误差投影 + cut 阈值（S5 组原子 cut 的选层判据）。
+        // 误差由 viewer 侧 zeux/bevy 公式算好（世界误差 -> 屏幕像素），HUD 只显示；
+        // 转相机 / 拉远时该值随距离单调变化 = M5.0 的可见验收用例。阈值双向写回，
+        // M5.1 GPU 遍历消费同一参数。
+        if (frame.screenErrorValid) {
+            char s5Line[96];
+            std::snprintf(s5Line, sizeof(s5Line), "s5 err %.2f px", frame.screenErrorPx);
+            ImGui::TextUnformatted(s5Line);
+        }
+        ImGui::SliderFloat("cut thr px", &frame.cutThresholdPx, 0.25f, 4.0f, "%.2f");
     }
     // M4.1：GPU 视锥剔除统计——仅 cull 模式（totalClusters>0）占位，其它模式 HUD
     // 布局一像素不动。visibleClusters<0 = 前两帧尚无回读数据。
@@ -327,6 +337,13 @@ void Hud::build(HudFrame& frame) {
             std::snprintf(cullLine, sizeof(cullLine), "frustum : -- / %d clusters",
                           frame.totalClusters);
             ImGui::TextUnformatted(cullLine);
+        }
+        // M5.2：GPU 可见三角数（cull / dag 同一口径，compute 原子累加 + 延迟两帧
+        // 回读）。-1 = 前两帧尚无数据，与 frustum 行同款占位规则。
+        if (frame.visibleTriangles >= 0) {
+            char triLine[96];
+            std::snprintf(triLine, sizeof(triLine), "s5 tris : %d", frame.visibleTriangles);
+            ImGui::TextUnformatted(triLine);
         }
         // M4.2：cull pass GPU 耗时（独立 timer 实例，只包 compute 剔除段）。
         // 与整帧 GPU ms 并排——剔除开销是否随场景规模变化一眼可见。
@@ -480,6 +497,8 @@ bool hudSelfTest() {
     if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
     // M4.2：cull 计时通道缺省全零（非 cull 模式 HUD 布局一像素不动的保证）。
     if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;
+    // M5.2：可见三角数通道缺省无数据。
+    if (f.visibleTriangles != -1) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     if (!GpuTimer::selfTest()) return false;   // M0.6：秒→ms 换算 + 环形游标回绕
     return true;

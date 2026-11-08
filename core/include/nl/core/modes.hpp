@@ -13,7 +13,8 @@ enum class ViewMode {
     Lod = 2,      // M2.3：加载 <stem>.lodN.nmesh 的分层资产，HUD 滑条切层（S2 无缝验收）
     DagTop = 3,   // M3.2：渲染 DAG 顶层（最粗层）+ 任选组下钻一层（S5 组原子 cut 预演）
     Cull = 4,     // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画验证通路；M4.1 接 GPU 剔除）
-    // S1 起依次追加：Dag, Hiz, Visbuf, Rt, Shadow,
+    Dag = 5,      // M5.1：GPU DAG 遍历选层（compute 显式栈，输出复用 M4 indirect 通路）
+    // S1 起依次追加：Hiz, Visbuf, Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };

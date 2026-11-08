@@ -12,6 +12,9 @@ struct WindowDesc {
     int         height = 720;
     std::string title  = "nl-engine";
     bool        resizable = true;
+    // 截图回归模式建隐藏窗口：画面走 GPU readback，与窗口可见性无关；
+    // 可见窗口首显会抢前台焦点（实测 ~0.85 s/用例），--jobs 并行时打断打字。
+    bool        visible = true;
 };
 
 struct Extent {

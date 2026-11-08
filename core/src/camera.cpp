@@ -121,6 +121,18 @@ float OrbitCamera::yawDegrees() const   { return yaw_ * 180.0f / kPi; }
 float OrbitCamera::pitchDegrees() const { return pitch_ * 180.0f / kPi; }
 float OrbitCamera::distance() const     { return distance_; }
 
+// M5.0：与 viewProjection() 的 lookAt 完全同一组 eye 数值（公式同源，不另造一套）。
+void OrbitCamera::eyePosition(float out[3]) const {
+    const float cp = std::cos(pitch_);
+    out[0] = distance_ * cp * std::sin(yaw_);
+    out[1] = distance_ * std::sin(pitch_);
+    out[2] = distance_ * cp * std::cos(yaw_);
+}
+
+float OrbitCamera::projectionYScale() const {
+    return 1.0f / std::tan(kFovY * 0.5f);
+}
+
 bool cameraSelfTest() {
     OrbitCamera cam;
     cam.setAspect(640.0f / 360.0f);

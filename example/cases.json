@@ -970,13 +970,13 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 M0.9）",
+     "name": "selftest（16/16，阶段校验 M0.9）",
      "kind": "selftest",
-     "note": "与 M0.8 相同的 15 项机械校验，stage 检查改为 M0.9。",
+     "note": "16 项机械校验（M0.8 的 15 项 + M5.0 新增 1 项；exe=current 断言的是当前构建，expectLog 随套件数演进）。",
      "args": [
       "--selftest"
      ],
-     "expectLog": "SELFTEST PASS (15/15)",
+     "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest",
      "script": "example/m0.9/run.bat selftest"
     },
@@ -1703,13 +1703,13 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S2.0）",
+     "name": "selftest（16/16，阶段校验 S2.0）",
      "kind": "selftest",
-     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 15。",
+     "note": "stage 检查升为 S2.0；modeSelfTest 覆盖 lod 名字往返与未实现的 dag 被拒；check 数保持 16（M5.0 起 16/16，历史卡 expectLog 同步演进；exe=current 断言的是当前构建）。",
      "args": [
       "--selftest"
      ],
-     "expectLog": "SELFTEST PASS (15/15)",
+     "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest",
      "script": "example/s2-done/run.bat selftest"
     },
@@ -2139,10 +2139,10 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（15/15，阶段校验 S3.2）",
+     "name": "selftest（16/16，阶段校验 S3.2）",
      "kind": "selftest",
-     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 15。",
-     "expectLog": "SELFTEST PASS (15/15)",
+     "note": "stage 检查升为 S3.2；modeSelfTest 覆盖 dag-top 名字往返；check 数保持 16（M5.0 起 16/16，历史卡 expectLog 同步演进；exe=current 断言的是当前构建）。",
+     "expectLog": "SELFTEST PASS (16/16)",
      "script": "example/s3-done/run.bat selftest",
      "args": [
       "--selftest"
@@ -2648,7 +2648,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs selftest: PASS",
-     "command": "nanite-tools selftest jobs"
+     "command": "nanite-tools selftest jobs",
+     "preview": "example/p8-jobs/selftest-jobs.png"
     },
     {
      "id": "cluster-parallel",
@@ -2661,7 +2662,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs       : 4 submeshes clustered in parallel",
-     "command": "nanite-tools cluster assets/models/Suzanne-multi.glb"
+     "command": "nanite-tools cluster assets/models/Suzanne-multi.glb",
+     "preview": "example/p8-jobs/cluster-parallel.png"
     },
     {
      "id": "lod-parallel",
@@ -2680,7 +2682,8 @@
      ],
      "expectExit": 0,
      "expectLog": "jobs        : parallel per-group qem/recluster",
-     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/job-offline/lod --max-levels 6 --threads 1"
+     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/job-offline/lod --max-levels 6 --threads 1",
+     "preview": "example/p8-jobs/lod-parallel.png"
     },
     {
      "id": "negative-unknown-suite",
@@ -2693,7 +2696,274 @@
      ],
      "expectExit": 1,
      "expectLog": "selftest: unknown suite",
-     "command": "nanite-tools selftest nope"
+     "command": "nanite-tools selftest nope",
+     "preview": "example/p8-jobs/negative-unknown.png"
+    }
+   ]
+  },
+  {
+   "id": "s5.0",
+   "label": "M5.0",
+   "name": "误差投影：世界 → 屏幕像素（bevy/zeux cut 判据）",
+   "tag": "s5-proj",
+   "date": "2026-11-08",
+   "summary": "M5.0（kStage=S5.0）：S5 组原子 cut 的选层判据落地——core 纯数学层 screenErrorPixels()：screenPx = worldError / max(d, near) × projYScale × 0.5 × H，d = |球心−eye| − 球半径（bevy cull_shared.wesl:13，溯源 zeux nanite.cpp:115，与 S3 error chain 同源；2026-11-08 用户拍板，与 UE GetProjectedEdgeScales 切线投影的差异记 docs/s5/UE-DIFFS.md D1）。OrbitCamera 补 eyePosition/projectionYScale/nearPlane 只读访问器（eye 与 viewProjection 同源公式）。HUD dag-top 模式新增 s5 err 实时行（无下钻用资产联合球+顶层 maxError，下钻优先组记录球+组误差）+ cut thr px 滑条（0.25~4.0 默认 1.0），非 dag 模式 HUD 布局一像素不动。lodErrorSelfTest() 45° fov 手算逐例对比进 viewer --selftest。",
+   "acceptance": [
+    "数值复核：dag-top + HUD 三机位 dist 2.0/4.2/8.0 屏幕误差 1567.05 → 352.15 → 149.84 px 单调下降，与 Python 按资产真实 maxError=1.1375、联合球 R=1.2661、eye 公式离线手算逐位一致（example/s5-proj/ 三连拍）",
+    "双后端 selftest 16/16（含 lodErrorSelfTest 手算用例）",
+    "kStage bump 波及面：仅 exe=当前构建的 5 对 HUD 基线重拍（m0.9/s2.0/s3.2/s4.1/s4.2；m0.1~m0.8/s1.0 走 tag 快照 exe 不受影响），关键用例回归 6/6 bytes（s3.2/dag-hud、m0.9/gate-hud、s4.1/cull-inside-hud）",
+    "server --check OK（stage=S5.0 version=s5.0）",
+    "docs/s5/UE-DIFFS.md 台账建立（AGENTS.md 固化入口）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-hud",
+     "name": "dag-top HUD：s5 err 实时行 + cut thr px 滑条",
+     "kind": "pair",
+     "note": "dag-top 无下钻机位（yaw12/pitch9/dist4.2, 640x720, shading normal）：HUD 显示 s5 err 352.15 px（资产联合球 + 顶层 maxError=1.1375 手算复核逐位一致）与 cut thr px 滑条。切相机/拉远时该值随距离单调下降。基线即 M5.0 数值复核证据图。",
+     "baselines": {
+      "dx12": "example/s5-proj/s5-hud-dx12.png",
+      "vulkan": "example/s5-proj/s5-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag-top",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag-top --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s5-proj/run.bat verify",
+     "preview": "example/s5-proj/s5-hud-dx12.png"
+    },
+    {
+     "id": "s5-selftest",
+     "name": "selftest：lodErrorSelfTest 手算投影用例（16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：新增 M5.0 手算屏幕误差用例（45° fov 已知球固定相机逐例对比）；套件数 15→16。",
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
+  },
+  {
+   "id": "s5.1",
+   "label": "M5.1",
+   "name": "GPU DAG 遍历选层（compute 显式栈，组原子 cut）",
+   "tag": "s5-traverse",
+   "date": "2026-11-08",
+   "summary": "M5.1（kStage=S5.1）：dag.slang csDag compute 遍历——每根簇线程持显式栈自最粗层下钻：簇屏幕误差（M5.0 bevy/zeux 公式）≤ 阈值或叶层 → emit 进可见列表，否则下钻到生成组成员；栈溢出画当前簇（宁粗勿漏）。数据 = Suzanne.lod0..lod6 全层拼接驻留（vertexBase 重定基，vsCull 零改动）；组成员 CSR 拍平（成员方向不保证连续，资产实测 lod0 全部 31 组非连续）；组展开 atomicExchange 去重（一个组生成多个同误差父簇，不去重则成员被重复压栈指数放大）。输出接口 = M4 visibleList + indirectArgs 不另起炉灶。 DagConstants 独立 CB（eye/projY/viewportH/near/threshold/rootBase），SceneConstants 160B 契约不动。顺带修 M4.1 潜伏 bug：cull 模式 --frustum off 因布局声明 t4 而 set 未绑定一直 init 失败（viewer 默认 on 从未被用例踩到），visibleList 改恒创建恒绑定。",
+   "acceptance": [
+    "选层谱单调：dist 20 阈值 4/8/16/32/64 px → visible 230/106/14/7/3 簇（237=全叶簇），远粗近细无跳变",
+    "全细节等价：--mode dag --cut-thr 0.001 与 --mode cull --frustum off 同机位截图逐字节相等（dx12 与 vulkan 各自成立，且两后端 dag 图也逐字节相等）",
+    "视觉验收：thr=8（14 簇）猴头轮廓/耳朵无洞无裂缝；thr=16（7 簇）粗模形状完整",
+    "双后端 selftest 16/16；kStage bump 后 exe=current 6 版本 12 张 HUD 基线重拍；回归 s4.0 4/4 + s5.0 4/4 + s3.2 2/2 + s4.1 2/2 全 bytes（s4.0 验证 frustum-off 潜伏修复）",
+    "example/s5-traverse/run.bat verify exit 0（near=237 / far=14 计数 findstr 断言）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-traverse-near",
+     "name": "dag 近景：全细节（≈cull 直通逐字节）",
+     "kind": "pair",
+     "note": "dist 4.2 阈值 1px：误差全超阈，遍历钻到叶层 → visible 237/324（全部 lod0 簇）。与 --mode cull --frustum off 同机位截图逐字节相等（md5 f0b5db63）。",
+     "baselines": {
+      "dx12": "example/s5-traverse/s5-traverse-near-dx12.png",
+      "vulkan": "example/s5-traverse/s5-traverse-near-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cut-thr",
+      "1.0",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --cut-thr 1.0 --size 640x720",
+     "script": "example/s5-traverse/run.bat verify",
+     "preview": "example/s5-traverse/s5-traverse-near-dx12.png"
+    },
+    {
+     "id": "s5-traverse-far",
+     "name": "dag 远景粗模：14 簇无洞",
+     "kind": "pair",
+     "note": "dist 20（相机 kMaxDist 钳制上限）阈值 16px：粗层组误差不可感知即停 → visible 14/324。猴头轮廓/耳朵完整无洞无裂缝（组原子 cut 的水密性视觉证据）。",
+     "baselines": {
+      "dx12": "example/s5-traverse/s5-traverse-far-dx12.png",
+      "vulkan": "example/s5-traverse/s5-traverse-far-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "20",
+      "--cut-thr",
+      "16",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 20 --cut-thr 16 --size 640x720",
+     "script": "example/s5-traverse/run.bat verify",
+     "preview": "example/s5-traverse/s5-traverse-far-dx12.png"
+    },
+    {
+     "id": "s5.1-selftest",
+     "name": "selftest（S5.1 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S5.1 stage 断言同步更新；套件数不变（遍历正确性由 pair 用例 + 回归覆盖）。",
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
+  },
+  {
+   "id": "s5.2",
+   "label": "M5.2",
+   "name": "GPU 三角数 HUD（原子计数 + 延迟回读，S5 收官）",
+   "tag": "s5-done",
+   "date": "2026-11-09",
+   "summary": "M5.2（kStage=S5.2）：cull.slang u2 / dag.slang u3 各加 RWStructuredBuffer 三角计数器——emit/append 时 InterlockedAdd 该簇 triCount（clusterMeta[1]），每帧 writeBuffer 清零，copyBuffer 进回读环形槽位高 4 字节（8B 环形：[0]=可见簇数 [4]=可见三角数），pollCullStats 延迟两帧 map 一起消费；HUD cull/dag 模式新增 s5 tris 行，截图日志追加 tris 计数。原计划的误差滞回（×1.1）经三处参考实读后砍掉：UE 5.8.4 NaniteClusterCulling.usf 无状态双误差带、bevy/Carrot 纯无状态判定，滞回需 per-cluster 上帧状态破坏 M5.1 刚验证的无状态性，且当前规模未实测到抖动危害——与 UE 无状态口径对齐（UE-DIFFS D2 缓解栏留痕）。顺手修 viewer 潜伏 bug：cut thr 滑条回读条件 dagTop||dagMode 在 dag 遍历模式下把命令行 --cut-thr 每帧覆盖回 POD 默认 1.0（hud.cutThresholdPx 从不被填），改为只在滑条真的显示（dagTop && dagGroupCount>0）时回读。另修三张历史 selftest 卡 expectLog 停在 15/15（exe=current 断言当前构建，M5.0 起 16/16）。",
+   "acceptance": [
+    "三角数锚点逐位精确：dag 近景（thr 0.001）237 簇 → tris 3936 == triangles(finest)，双后端一致；cull 近景 76 簇 → 1526",
+    "拉远谱单调连续：thr 2/4/8/16/32/64 → tris 3870/2360/426/142/104/104（簇 230/106/14/7/3/3），S5 验收『拉远连续下降』达成",
+    "HUD 目检：s5 tris 行随 frustum 行同屏（near 3936 / far 426），640x720 面板完整不裁底",
+    "回归全 bytes：s5.1 6/6 + s4.0 4/4 + s4.1 4/4 + s4.2 6/6 + s5.0 + s3.2 18/18 + m0.9 4/4 + s2.0 16/16（HUD 基线重拍 7 版本 14 张；dag 渲染路径加计数后逐字节不变 = 无状态性保住）",
+    "example/s5-done/run.bat verify exit 0（findstr 断言 tris 3936 / tris 426）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-tris-near",
+     "name": "dag 近景 HUD：s5 tris = 3936（全部叶簇三角）",
+     "kind": "pair",
+     "note": "dist 4.2 阈值 1px：237/324 簇，GPU 原子计数 tris 3936 == 最细层总三角数（逐位锚点）。HUD 直接显示 s5 tris 行。",
+     "baselines": {
+      "dx12": "example/s5-done/s5-tris-near-dx12.png",
+      "vulkan": "example/s5-done/s5-tris-near-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cut-thr",
+      "1.0",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --cut-thr 1.0 --size 640x720",
+     "script": "example/s5-done/run.bat verify",
+     "preview": "example/s5-done/s5-tris-near-dx12.png"
+    },
+    {
+     "id": "s5-tris-far",
+     "name": "dag 远景 HUD：s5 tris = 426（粗层即停）",
+     "kind": "pair",
+     "note": "dist 20 阈值 16px：14/324 簇，tris 426。与近景同屏对比 = 拉远变粗、三角数连续下降的 S5 收官证据。",
+     "baselines": {
+      "dx12": "example/s5-done/s5-tris-far-dx12.png",
+      "vulkan": "example/s5-done/s5-tris-far-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--shading",
+      "normal",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "20",
+      "--cut-thr",
+      "16",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 20 --cut-thr 16 --size 640x720",
+     "script": "example/s5-done/run.bat verify",
+     "preview": "example/s5-done/s5-tris-far-dx12.png"
+    },
+    {
+     "id": "s5.2-selftest",
+     "name": "selftest（S5.2 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S5.2 stage 断言同步更新；套件数不变（三角计数正确性由 pair 用例 + 锚点断言覆盖）。",
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
     }
    ]
   }

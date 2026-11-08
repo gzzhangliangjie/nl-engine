@@ -49,6 +49,14 @@ struct FrameParams {
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
     int   shading     = 0;      // 0 textured / 1 normal / 2 uv / 3 tri-id（传进 g_options.x）
     bool  wireframe   = false;  // 光栅化 fill mode = wireframe（深度测试照常）
+    // ---- M5.1：dag 模式遍历参数（其它模式不读，缺省值无副作用）----
+    // 屏幕误差公式（bevy/zeux 口径，core/lod_error.hpp）：screenPx =
+    //   worldError / max(dist(eye, center)-radius, near) * projYScale * 0.5 * viewportHeight
+    float eye[3]             = {0.f, 0.f, 4.2f};  // 相机世界位置（轨道相机 eyePosition()）
+    float projYScale         = 2.4142f;           // 1/tan(fovY/2)，fovY=45° 时 2.4142
+    float nearPlane          = 0.1f;              // 近断面（与相机投影一致）
+    float viewportHeight     = 720.f;             // 投影用的视口高度（px）
+    float cutThresholdPx     = 1.0f;              // 组原子 cut 阈值（px，>0）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -106,6 +114,12 @@ struct HudFrame {
     // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
     int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
     int   totalClusters    = 0;       // 总簇数
+    // ---- M5.2：GPU 可见三角数（与 visibleClusters 同一延迟窗口；-1 = 暂无数据）----
+    int   visibleTriangles = -1;
+    // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
+    float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
+    bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
+    float cutThresholdPx   = 1.0f;    // cut 阈值 px（双向；M5.1 GPU 遍历消费）
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
@@ -135,6 +149,13 @@ struct DeviceInfo {
     // visibleClusters = -1 表示暂无数据（前两帧 / 非剔除路径 / map 失败）。
     int           visibleClusters = -1;
     std::uint32_t totalClusters = 0;
+    // M5.2：GPU 可见三角数（cull / dag compute 原子累加，同帧回读环形高 4 字节）。
+    int           visibleTriangles = -1;
+    // M5.0（S5.0）：屏幕误差投影的球数据源（世界空间，xyz=center, w=radius）。
+    // assetSphere = 当前显示几何的联合包围球；dagGroupSphere = 下钻组记录球
+    //（dagGroup>=0 时有效，来自 .nmesh meta 的组 sphere）。纯 normal 模式恒 0。
+    float assetSphere[4]     = {0.0f, 0.0f, 0.0f, 0.0f};
+    float dagGroupSphere[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 class Renderer {
@@ -150,7 +171,8 @@ public:
                                             const char* modelFile = "Suzanne.glb",
                                             bool clusterMode = false,
                                             bool cullMode = false,
-                                            bool frustumCull = true);
+                                            bool frustumCull = true,
+                                            bool dagMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

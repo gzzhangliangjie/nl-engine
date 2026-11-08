@@ -16,10 +16,12 @@
 
 ## 当前进度
 - 主线 S0~S4.2：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(s4-cull) → M4.2 cull 计时+1.3M dense 资产+60fps 验收(**176/176 ALL GREEN**，tag s4-done，S4 收官)。
-- 当前 `kStage=S4.2`；主线下一步 S5(运行时组原子 cut，bevy 屏幕空间公式已存档 cull_shared.wesl:13)。
+- 当前 `kStage=S5.2`；**M5.2 GPU 三角数 HUD 已验收，S5 全线收官**（tag `s5-done`）：cull.slang u2 / dag.slang u3 原子三角计数器（InterlockedAdd clusterMeta[id*4+1]）+ 回读环形 8B（[0]=簇数 [4]=三角数）延迟两帧 + HUD `s5 tris` 行。验收：锚点逐位（dag 近景 237 簇 → 3936 == finest 总数，双后端）；拉远谱 thr 2..64 → 3870/2360/426/142/104/104 单调；回归 8 组全 bytes。**滞回已砍**（用户拍板：三处参考均无运行时滞回，破坏 M5.1 无状态性且必要性未实测；UE-DIFFS D2 留痕）。M5.2 顺手修两个潜伏 bug：viewer cut thr 滑条回读条件改 `dagTop && dagGroupCount>0`（原 `dagTop||dagMode` 在 dag 遍历模式把命令行 --cut-thr 每帧覆盖回 1.0）；历史 selftest 卡（m0.9/s2.0/s3.2 exe=current）expectLog 15/15 → 16/16。主线下一步 = S6（bevy 全局队列多 pass 升级路径）或 P9 真实资产，等用户指令。
+- **UE 差异台账（2026-11-08 用户点名固化）**：所有与 UE 不一致处随手记 `docs/s5/UE-DIFFS.md`（D1 投影口径/D2 二值 cut/D3 遍历结构/D3a GPU 遍历=每线程栈 vs bevy 全局队列/D4 简化器/D5 无实例误差旋钮/D6 无遮蔽剔除/D7 无软光栅 + D8/D9 待办），AGENTS.md 已挂入口；里程碑收口/review 前过一遍。
+- kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 exe=current 版本：m0.9/s2.0/s3.2/s4.1/s4.2/s5.0 共 6 对 12 张，S5.1 已重拍）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
-- **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，2.3 立项再议 vendored）；M-A5 视觉验收等 2.3 蒙皮 + rigged GLB。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
+- **A 类并行轨道：动作系统 M-A0~M-A5 全部完成**（feat/action-system，tag `anim-ma1`~`anim-ma5`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space/蒙皮）+ anim-tools 自测全绿 + viewer skin 模式（CPU LBS，CesiumMan 行走验收截图）；M-A5.2 顺手修 regression cwd 错位双 bug（ma-track 用例卡 {root}/ 模板 + anim-tools 缺文件段错误）。教训：用例卡进 cases.json ≠ 回归跑过，收口必须真跑 --only。下一步 = merge 回 master 走 PARALLEL-TRACKS §7 文档闸（等用户指令）。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）
@@ -49,6 +51,7 @@
 - 资源/绘制逻辑收 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present。
 - ImGui vendored **v1.91.9**，自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）；`hudProjection()` Y 尺度必须负；面板高度≤560（M4.2 起，510 装不下 cull GPU 行+曲线，小画布仍 min(cap,H-28) 兜底）；HUD 字符串须 ASCII；`renderFrame(...,hud=nullptr)` 不碰 ImGui（截图默认 `--no-hud`）。
 - 新增 GPU 资源 slot 级同步表必在 `createTargets()` 初始化（renderFrame 在 ensurePipeline 前按 slot 访问，放错=首帧 139 段错误）。
+- **viewer 截图模式（--screenshot）建隐藏窗口**（`WindowDesc.visible=false`，2026-11-08 固化）：可见窗口首显必抢前台焦点（实测 ~0.85 s/用例，--jobs 并行跑闸打断打字）；像素来自 GPU readback 与窗口可见性无关，基线零影响。别把该 hint 拿掉，交互模式仍 visible=true。8 个 tag 快照 exe 已由 `rebuild.py --force` 重编（`apply_hidden_window_patch()` 自动注入等价补丁，s0-init 除外——无截图模式且用例 manual），全量跑闸零抢焦点；快照源码 = tag + 此补丁，非纯 tag 原样。
 
 ## 简化器口径（M2.3a 定稿）
 - meshopt 多 pass 主循环（src 并入 dst + collapse_locked + cos75°）+ link condition + 双层边界锁（组间边界 + 模型开放边界 LockBorder）+ 绝对朝向锚（判决实验定稿保留）。`check-orient` 扫全链 inward（exit 1=FAIL）。
@@ -60,6 +63,16 @@
 
 ## 并行轨道纪律（2026-11-08 用户拍板）
 - 固定 `feat/*` 分支 + 常驻 worktree 模式（已建 `feat/job-system` / `feat/material-graph` / `feat/action-system`）。**新轨道 = 新 `feat/*` 分支 + 新 worktree**（如本次 Slang 可视化编辑器）。
+- **材质图轨道已封顶（2026-11-09 用户拍板「及时收手」）**：B1~B4 + T1 编辑器（调试工具级 `viewer --editor`）+ 节点库 10 种 + uniform 曝光（MaterialParams b1，运行时绑定留 B5）全部完成；定位=可调参表面材质薄层，UI 不再投入，复杂 shader 手写与图无关。唯一遗留=T1 拆解 6 预览视口（等 B5/S7）；B5 也排 S7 后。终点定义见 `docs/material-graph/SIDE-TASKS.md`。
 - 三 worktree 均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree` 防纪律源误入 feature 分支（git status 干净）。
 - 纪律三条（详 `docs/PARALLEL-TRACKS.md` §7）：① 实例注册表登记占用说明；② 固化文档闸（merge 回 master 前必写 `S*-PLAN`/`MILESTONES` 验收纪要）；③ 假绿防护（占坑≠文件指向，merge 前双向 `git status` 自查：wt 看得到、master 没有）。
 - 工作线粘性：同一轨道回同一 worktree；一条工作线只 merge 一次（验收 FAIL→补丁→复验在占坑内闭环）。
+
+## 非渲染候选拍板（2026-11-08）
+- **总原则（用户拍板）：有参考的内容就考虑从头写**——不因有现成开源库而改集成路线；参照实现用于对照与节奏校准。
+- **寻路（NavMesh+A*）：从零写**——Carrot `pathfinding/`（2336 行，SparseVoxelGrid→OpenHeightField→DistanceField→Region→Contour→AStar，debugDraw 分步可视化）为从零节奏参照，UE `Runtime/Navmesh`（Recast v1.4.2+Detour）只读；候选 ★★★★，**已立项 `docs/p8/P8-NAV-PLAN.md`（M-N0~M-N5）**。
+- **物理：vendored Jolt（MIT）不自研**——原则例外：Carrot physics 本身就是 Jolt 集成层（2902 行）、UE 5.x 亦提供 Jolt 后端、bevy 生态 avian，三处均不自研求解器；集成方式参照 Carrot `physics/`。**已立项 `docs/p8/P8-PHYS-PLAN.md`（M-P0~M-P5）**。想学原理另开 Box2D-Lite mini 求解器支线（不进引擎）。
+- **3D 音频**：集成层+解码器从零写、设备混音/3D 定位用 OpenAL Soft（Carrot `audio/` 1358 行同分层：OpenAL 封装+自写 WAV/MP3/Vorbis 解码器+独立 AudioThread）；混响卷积/遮挡音频不在范围。**已立项 `docs/p8/P8-AUDIO-PLAN.md`（M-S0~M-S5）**。
+- **开发者控制台**：**已立项 `docs/p8/P8-CONSOLE-PLAN.md`（M-C0~C3），worktree `feat/console` 已建**（2026-11-08 拍板）——两层架构：`core/console/` 纯逻辑（命令/CVar/解析，零 ImGui）+ renderer 侧 ImGui 前端（呼出/补全/日志）；Carrot `console/`（369 行）参照、UE `IConsoleManager.h` 只读；不依赖场景整合，随时可开工。
+- **排期拍板（2026-11-08）：三条执行都放到场景整合之后**——依赖 P8 E1（ECS-lite 场景：多物体/变换层级；物理 M-P5 还依赖 E3 序列化）；届时新建 `feat/pathfinding` / `feat/physics` / `feat/audio` worktree（PARALLEL-TRACKS §7.1b）。
+- **worktree 收尾即同步关联文档（用户拍板固化进 AGENTS.md 纪律第 6 条 + PARALLEL-TRACKS §7.5）**：track 内完成里程碑后必须同步更新 master 侧 AGENTS.md 注册表 / PARALLEL-TRACKS §7.1 / 相关候选文档，跨轨道文档更新在主 worktree 提交（教训：M-A5.1 落地后 master 侧注册表停在「候选」）。

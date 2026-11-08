@@ -1,5 +1,6 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
+#include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
@@ -79,6 +80,7 @@ struct Options {
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
+    float cutThresholdPx = 1.0f;  // M5.0/M5.1：cut 阈值 px（--cut-thr 设初值，HUD 滑条双向）
     int  width      = 1280;
     int  height     = 720;
     int  resizeWidth  = 0;
@@ -131,6 +133,17 @@ Options parseArgs(int argc, char** argv) {
                 std::exit(1);
             }
             o.dagGroup = static_cast<int>(n);
+        }
+        else if (a == "--cut-thr" && i + 1 < argc) {
+            // M5.1：dag 模式屏幕误差阈值（px）。必须为正数；截图回归靠它定死选层。
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            const double d = std::strtod(v.c_str(), &end);
+            if (!end || *end != '\0' || !(d > 0.0)) {
+                std::cerr << "invalid --cut-thr '" << v << "' (expected a number > 0)\n";
+                std::exit(1);
+            }
+            o.cutThresholdPx = static_cast<float>(d);
         }
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
@@ -232,6 +245,7 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
+    check(nl::core::lodErrorSelfTest(), "M5.0 screen-error projection, hand-computed cases");
     check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster + lod + dag-top)");
 
     const auto st = nl::renderer::status();
@@ -239,7 +253,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S4.2") != nullptr, "S4.2 stage reported");
+    check(std::strstr(st.stage, "S5.2") != nullptr, "S5.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -282,13 +296,16 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
-              bool dagTop = false, bool cullMode = false) {
+              bool dagTop = false, bool cullMode = false, bool dagMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
     desc.title  = "nl-engine | starting...";
+    // 截图回归模式：隐藏窗口。像素来自 GPU readback，与窗口可见性无关；
+    // 可见窗口首显必抢前台焦点，并行跑闸会打断用户输入（2026-11-08 实测修）。
+    desc.visible = !o.screenshot;
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
@@ -302,7 +319,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn);
+                                                   o.frustumOn, dagMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -345,6 +362,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 且组号必须落在可下钻范围内（renderer 探测第二粗层 dagGroups），越界退出 1。
     int dagGroup = -1;
     int dagGroupCount = 0;
+    // M5.0：cut 阈值 px 运行时状态（HUD 滑条双向写回，M5.1 GPU 遍历消费）。
+    float cutThresholdPx = o.cutThresholdPx;
     if (dagTop) {
         dagGroupCount = renderer->dagGroupCount();
         if (o.dagGroup >= 0) {
@@ -534,6 +553,17 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        if (dagMode) {
+            // M5.1：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
+            float eye[3];
+            camera.eyePosition(eye);
+            fp.eye[0] = eye[0]; fp.eye[1] = eye[1]; fp.eye[2] = eye[2];
+            fp.projYScale = camera.projectionYScale();
+            fp.nearPlane = camera.nearPlane();
+            const auto e = renderer->extent();
+            fp.viewportHeight = static_cast<float>(e.height);
+            fp.cutThresholdPx = cutThresholdPx;
+        }
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
         nl::renderer::HudFrame hud{};
@@ -565,6 +595,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.dagGroup = dagGroup;
                 hud.dagGroupCount = dagGroupCount;
                 hud.dagGroupError = info.dagGroupError;
+                // M5.0：屏幕误差投影——下钻时用组记录球 + 组误差（组原子 cut 语义），
+                // 纯顶层用资产联合球 + 顶层 maxErr。转相机时该值随距离单调变化。
+                const bool drilled = (dagGroup >= 0 && info.dagGroup >= 0);
+                const float* sph = drilled ? info.dagGroupSphere : info.assetSphere;
+                const float worldErr = drilled ? info.dagGroupError : info.lodMaxError;
+                hud.cutThresholdPx = cutThresholdPx;
+                if (sph[3] > 0.0f) {
+                    float eye[3];
+                    camera.eyePosition(eye);
+                    hud.screenErrorPx = nl::core::screenErrorPixels(
+                        worldErr, sph, sph[3], eye, camera.projectionYScale(),
+                        hud.displayHeight, camera.nearPlane());
+                    hud.screenErrorValid = true;
+                }
             } else {
                 hud.lodLevel = lodLevel;
                 hud.lodCount = lodCount;
@@ -575,6 +619,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             // M4.1：GPU 剔除统计（DeviceInfo 由 backend 每帧 poll 后更新，只读显示）。
             hud.visibleClusters = info.visibleClusters;
             hud.totalClusters = static_cast<int>(info.totalClusters);
+            hud.visibleTriangles = info.visibleTriangles;   // M5.2：-1 = 暂无数据
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -678,6 +723,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     }
                 }
             }
+            // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。只在滑条真的
+            // 画出来时回读（HUD 侧条件 = frame.dagGroupCount > 0）：dag 遍历模式
+            // 不显示滑条，hud.cutThresholdPx 保持 POD 默认 1.0，无条件回读会把
+            // 命令行 --cut-thr 每帧覆盖回 1.0（M5.2 实测踩坑：far HUD 图 237/3936
+            // = thr 被钳回 1.0 的结果；s5.1 near 没踩到纯属 thr 恰好 = 1.0）。
+            if (dagTop && dagGroupCount > 0)
+                cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
             hudWantsMouse = hud.wantCaptureMouse;
         }
         if (capturePath) {
@@ -686,9 +738,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
         // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
         // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
-        if (o.screenshot && cullMode && info.totalClusters > 0 && info.visibleClusters >= 0) {
-            nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
-                                info.totalClusters, " clusters (frustum on)");
+        // M5.1：dag 遍历复用同一回读通路（visible = 被 emit 的簇数）。
+        // M5.2：追加 GPU 可见三角数（同一延迟窗口的回读环形高 4 字节）。
+        if (o.screenshot && (cullMode || dagMode) && info.totalClusters > 0 &&
+            info.visibleClusters >= 0) {
+            if (dagMode) {
+                nl::core::log::info("dag stats: visible ", info.visibleClusters, " / ",
+                                    info.totalClusters, " clusters (threshold ",
+                                    cutThresholdPx, " px, tris ",
+                                    info.visibleTriangles, ")");
+            } else {
+                nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
+                                    info.totalClusters, " clusters (frustum on, tris ",
+                                    info.visibleTriangles, ")");
+            }
         }
 
         if (frame % 15 == 0 || o.screenshot) {
@@ -753,6 +816,9 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/true, /*lodMode=*/false, /*dagTop=*/true);
     case nl::core::ViewMode::Cull:       // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false, /*cullMode=*/true);
+    case nl::core::ViewMode::Dag:        // M5.1：GPU DAG 遍历选层（compute 显式栈）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/true, /*dagMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -824,7 +890,8 @@ int main(int argc, char** argv) {
 // 全簇全画，M4.1 才接 GPU 剔除），缺省着色 4=cluster；簇色由 shader 端 pcg(簇号) 算出，
 // 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
-         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull)
+         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
+         o.mode == nl::core::ViewMode::Dag)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
