@@ -111,15 +111,17 @@
    |---|---|---|---|
    | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 已立项 `docs/p8/P8-JOB-PLAN.md` |
    | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
-   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | 候选（`PARALLEL-TRACKS.md` 2.4 纯逻辑层） |
+   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **进行中**：M-A0~M-A4 完成（tag `anim-ma1`~`anim-ma4d`）+ M-A5.1 CPU 蒙皮落地（`cde41c7`）；交接 `docs/action-system/ACTION-PLAN.md`（在分支上，未 merge） |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
+   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。
 3. **固化文档闸**：track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩。
 4. **假绿防护 · 占坑 ≠ 文件指向**：
    - 在 track worktree 干活时，所有编辑绝对路径、shell 每条命令的 cwd **显式在对应 wt 路径内**，不依赖默认落点；
    - merge 回 master 前**双向自查**：`git -C <wt> status` 看得到本批改动、主 worktree `git status` **没有**本批改动（出现即落错树，立即迁移）；
    - 验证可信度自查：改了什么就在产物里找什么——文本 / 数值类改动后若无任何差异是红旗不是绿灯。
 5. **工作线粘性**：同一轨道回同一 worktree，一条工作线**只 merge 一次**（验收 FAIL→补丁→复验全部在占坑内闭环，不中途 merge 又裸干）。任务收尾才 merge 回 master，下个任务回同一坑。
+6. **收尾即同步关联文档（2026-11-08 用户拍板固化）**：worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道验收纪要外，**必须同步更新 master 侧关联文档**——`AGENTS.md` 实例注册表状态、`docs/PARALLEL-TRACKS.md` §7 注册表、相关候选 / 计划文档（如 `NON-RENDER-ROADMAP.md`）——不许让 master 侧文档停在过时值。注册表 / 跨轨道文档的更新在**主 worktree 提交**（避免与 feature 分支双份冲突；教训：动作系统 M-A5.1 已落地，master 侧注册表仍写「候选」，下个会话即误判进度）。
 
 > 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
 

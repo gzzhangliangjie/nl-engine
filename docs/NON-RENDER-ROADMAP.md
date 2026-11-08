@@ -20,14 +20,14 @@
 
 | 模块 | 复用已有地基 | 增量阶梯（可见验收点） | 参考口径 | 评级 |
 |---|---|---|---|---|
-| **骨骼动画 + 蒙皮** | 最高，直接吃 mesh 管线 + 矩阵调色板 | 静态姿势 → 线性混合蒙皮(LBS) → 多 clip 混合 → 状态机/混合树 | UE Anim / bevy_animation / assimp | ★★★★★ 最顺 |
+| **骨骼动画 + 蒙皮** | 最高，直接吃 mesh 管线 + 矩阵调色板 | 静态姿势 → 线性混合蒙皮(LBS) → 多 clip 混合 → 状态机/混合树 | UE Anim / bevy_animation / assimp | ★★★★★ **大部分已由动作系统轨道实现**（feat/action-system：M-A1~M-A4 纯逻辑层 + M-A5.1 CPU 蒙皮，未 merge；剩 GPU 调色板 + 视觉验收） |
 | **ECS 架构 / 模块生命周期** | 中，是地基本身、要先铺 | entity 存储 → system 调度 → 并行 → 模块化插件 | bevy（纯 ECS 范本）/ Carrot（节点式） | ★★★★ 参考强但重构大 |
 | **任务 / Job 并行系统** | 中，跨系统受益 | 线程池 → parallel_for → 任务图依赖 → 抢占 | bevy_tasks(Rayon) / UE TaskGraph | ★★★★ 验收看加速比 |
 | **材质图 → Slang 编译** | 最高，吃 Slang 单源双后端 | 固定管线材质 → 节点图 → 生成 Slang → 热重载 | UE Material Editor / ReaUI | ★★★★ 最贴合技术栈 |
-| **寻路（NavMesh + A\*）** | 中，体素化/高度场与 mesh 管线同源；离线烘焙可与 Job 系统合流 | 体素栅格 → 开放高度场 → 区域划分 → 轮廓提取 → 多边形 NavMesh → A\* 寻路 → 路径平滑（每步 debugDraw 可视化验收） | **Carrot pathfinding（从零 2336 行，管线对照首选）** / UE `Runtime/Navmesh`（Recast v1.4.2 + Detour 工业终态，只读）/ bevy 无原生（生态 bevy_pathfinding） | ★★★★ **已拍板（2026-11-08）从零写**——Carrot 从零参照现成 + 每步可可视化，待立项出 S-PLAN |
+| **寻路（NavMesh + A\*）** | 中，体素化/高度场与 mesh 管线同源；离线烘焙可与 Job 系统合流 | 体素栅格 → 开放高度场 → 区域划分 → 轮廓提取 → 多边形 NavMesh → A\* 寻路 → 路径平滑（每步 debugDraw 可视化验收） | **Carrot pathfinding（从零 2336 行，管线对照首选）** / UE `Runtime/Navmesh`（Recast v1.4.2 + Detour 工业终态，只读）/ bevy 无原生（生态 bevy_pathfinding） | ★★★★ **已立项 `docs/p8/P8-NAV-PLAN.md`（从零写）；执行排 P8 场景整合（E1）之后** |
 | **GPU 粒子 / VFX** | 高，纯 compute | 单发射器 → 生灭 → SDF 碰撞 → 点/精灵/ribbon 渲染 | UE Niagara / bevy | ★★★ 自闭环 |
-| **3D 空间音频** | 低，独立子系统 | 单声源定位 → 距离衰减 → 遮挡 → 混响卷积 | Steam Audio(开源) / bevy rodio | ★★★ 不碰 GPU |
-| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.x 亦提供 Jolt 后端（业界共识：求解器不自研）/ bevy 生态 avian | ★★★ **已拍板（2026-11-08）vendored Jolt（MIT）不自研**——三处均不从零写求解器；若想学原理可另开 Box2D-Lite 风格 mini 求解器学习支线（不进引擎） |
+| **3D 空间音频** | 低，独立子系统 | 单声源定位 → 距离衰减 → 遮挡 → 混响卷积 | Steam Audio(开源) / bevy rodio | ★★★ **已立项 `docs/p8/P8-AUDIO-PLAN.md`**（集成层+解码器从零写、设备混音用 OpenAL Soft，参照 Carrot `audio/` 分层）；执行排 P8 场景整合（E1）之后 |
+| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.x 亦提供 Jolt 后端（业界共识：求解器不自研）/ bevy 生态 avian | ★★★ **已立项 `docs/p8/P8-PHYS-PLAN.md`（vendored Jolt 不自研）；执行排 P8 场景整合（E1/E3）之后** |
 | **角色控制器** | 中低 | 胶囊扫掠 → 地面检测 → 斜坡 → 动画衔接 | UE CharacterMovement | ★★★ |
 | **Lua / 脚本 VM 接入** | 低，但参考极多 | 绑定核心 API → 调用渲染 → 游戏逻辑脚本化 | sol2 / 诸多实现 | ★★★ |
 | **网络同步 / 复制** | 低，体量爆炸 | 快照 → 状态同步 → 插值 → 回滚 | bevy_renet / UE replication | ★★ 里程碑不直观 |

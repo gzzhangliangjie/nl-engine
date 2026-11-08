@@ -147,7 +147,7 @@
 
 - **Job 系统已立项**：`docs/p8/P8-JOB-PLAN.md`（M-J0~M-J4，首个消费者=离线管线）；下一步可执行 M-J0。
 - **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后；支线 T1 可视化编辑器 GUI 已登记 `docs/material-graph/SIDE-TASKS.md`。
-- **动作系统已立项并完成纯逻辑层（2.4）**：2026-11-08 用户拍板 A 路自建（网上调研结论：状态机/混合树层业界无现成库，ozz 只覆盖下层采样/混合/蒙皮数学）；M-A1 曲线采样 / M-A2 线性加法混合 / M-A3 状态机（UE 回退缩时）/ M-A4 1D blend space 全部完成并过确定性自测 + ctest 5/5 + 展示台 ma-track 卡，tag `anim-ma1`~`anim-ma4`（track 分支内，merge 走 §7.2 文档闸）；M-A5 视觉验收待 2.3 蒙皮。
+- **动作系统已立项并完成纯逻辑层（2.4）**：2026-11-08 用户拍板 A 路自建（网上调研结论：状态机/混合树层业界无现成库，ozz 只覆盖下层采样/混合/蒙皮数学）；M-A1 曲线采样 / M-A2 线性加法混合 / M-A3 状态机（UE 回退缩时）/ M-A4 1D blend space 全部完成并过确定性自测 + ctest 5/5 + 展示台 ma-track 卡，tag `anim-ma1`~`anim-ma4`（track 分支内，merge 走 §7.2 文档闸）。**M-A5 按重定义推进中**（先建蒙皮再视觉验收）：**M-A5.1 CPU 蒙皮层已落地**（`cde41c7`：`nl/anim/skinning` LBS + glTF 蒙皮数据入口 + CesiumMan rest 姿态端到端验收）。
 - 其余 A 类轨道（骨骼蒙皮 2.3 / Lua 2.5 / 3D 音频 2.6）仍为候选，立项前按铁律读三处 + 出计划。
 
 > 注：三个 worktree 已于 2026-11-08 **物理建立**（见 §7.1 实例注册表），但各轨道计划仍按 §5 立项纪律补，**未立项前不开干**。
@@ -166,9 +166,19 @@
 |---|---|---|---|---|
 | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | **已立项 / B2~B4 完成**：B 路自建，计划 `docs/material-graph/B3-PLAN.md`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` | B2 数据模型+序列化 / B3 图→Slang 双后端编译 / B4 热重载+证据图均已过 ctest；B5 接 PBR pass 排 S7 后；共享 `.workbuddy`+`slang/dist` junction |
 | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 工作树已建 / **已立项** `docs/p8/P8-JOB-PLAN.md` | **M-J0~J3 完成**（2026-11-08，tags job-pool/job-scope/job-cluster/job-offline；M-J4 可选不排期）；首个消费者=离线管线已接；共享 junction |
-| 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **已立项 / M-A0~M-A4 完成（track 分支，未 merge）**：计划 `docs/action-system/ACTION-PLAN.md`，验收纪要见 `docs/MILESTONES.md` M-A 节，tag `anim-ma1`~`anim-ma4` | nl/anim 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；M-A5 视觉验收后挂（等 2.3 蒙皮 + rigged GLB）；共享 junction |
+| 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **已立项 / M-A0~M-A4 完成 + M-A5.1 CPU 蒙皮落地（track 分支，未 merge）**：计划 `docs/action-system/ACTION-PLAN.md`（在分支上），tag `anim-ma1`~`anim-ma4d` | nl/anim 纯逻辑层（采样/混合/状态机/1D blend space）+ `nl/anim/skinning`（LBS CPU 蒙皮）自测全绿；M-A5 后续（GPU 调色板→视觉验收）进行中；共享 junction |
 
-> 三个 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
+> 三个已建 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
+
+### 7.1b 待建 worktree（已立项，执行排 P8 场景整合之后）
+
+2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree：
+
+| 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
+|---|---|---|---|
+| 寻路（NavMesh + A\*，从零写） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md` |
+| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics` | 已立项 `docs/p8/P8-PHYS-PLAN.md` |
+| 3D 空间音频（OpenAL Soft + 从零集成层） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md` |
 
 ### 7.2 固化文档闸
 
@@ -184,3 +194,13 @@ track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTON
 ### 7.4 工作线粘性
 
 同一轨道回同一 worktree，一条工作线**只 merge 一次**（验收 FAIL→补丁→复验全部在占坑内闭环，不中途 merge 又裸干）。任务收尾才 merge 回 master，下个任务回同一坑。
+
+### 7.5 收尾即同步关联文档（2026-11-08 用户拍板固化）
+
+worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道验收纪要（§7.2）外，**必须同步更新 master 侧关联文档**，不许让 master 侧文档停在过时值：
+
+- `AGENTS.md` 并行轨道注册表（轨道状态列）；
+- 本文件 §7.1 实例注册表（状态 / 占用说明列）；
+- 相关候选 / 计划文档的状态标注（如 `NON-RENDER-ROADMAP.md` 候选总表）。
+
+注册表与跨轨道文档的更新在**主 worktree 提交**，不进 feature 分支（避免双份冲突）。教训留痕：动作系统 M-A5.1（CPU 蒙皮）落地后，master 侧三处注册表仍停在「M-A4 / 候选」，下个会话即误判进度。

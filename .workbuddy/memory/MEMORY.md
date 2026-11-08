@@ -69,5 +69,8 @@
 
 ## 非渲染候选拍板（2026-11-08）
 - **总原则（用户拍板）：有参考的内容就考虑从头写**——不因有现成开源库而改集成路线；参照实现用于对照与节奏校准。
-- **寻路（NavMesh+A*）：从零写**——Carrot `pathfinding/`（2336 行，SparseVoxelGrid→OpenHeightField→DistanceField→Region→Contour→AStar，debugDraw 分步可视化）为从零节奏参照，UE `Runtime/Navmesh`（Recast v1.4.2+Detour）只读；候选 ★★★★，待立项出 S-PLAN。
-- **物理：vendored Jolt（MIT）不自研**——原则例外：Carrot physics 本身就是 Jolt 集成层（2902 行）、UE 5.x 亦提供 Jolt 后端、bevy 生态 avian，三处均不自研求解器；集成方式参照 Carrot `physics/`。想学原理另开 Box2D-Lite mini 求解器支线（不进引擎）。
+- **寻路（NavMesh+A*）：从零写**——Carrot `pathfinding/`（2336 行，SparseVoxelGrid→OpenHeightField→DistanceField→Region→Contour→AStar，debugDraw 分步可视化）为从零节奏参照，UE `Runtime/Navmesh`（Recast v1.4.2+Detour）只读；候选 ★★★★，**已立项 `docs/p8/P8-NAV-PLAN.md`（M-N0~M-N5）**。
+- **物理：vendored Jolt（MIT）不自研**——原则例外：Carrot physics 本身就是 Jolt 集成层（2902 行）、UE 5.x 亦提供 Jolt 后端、bevy 生态 avian，三处均不自研求解器；集成方式参照 Carrot `physics/`。**已立项 `docs/p8/P8-PHYS-PLAN.md`（M-P0~M-P5）**。想学原理另开 Box2D-Lite mini 求解器支线（不进引擎）。
+- **3D 音频**：集成层+解码器从零写、设备混音/3D 定位用 OpenAL Soft（Carrot `audio/` 1358 行同分层：OpenAL 封装+自写 WAV/MP3/Vorbis 解码器+独立 AudioThread）；混响卷积/遮挡音频不在范围。**已立项 `docs/p8/P8-AUDIO-PLAN.md`（M-S0~M-S5）**。
+- **排期拍板（2026-11-08）：三条执行都放到场景整合之后**——依赖 P8 E1（ECS-lite 场景：多物体/变换层级；物理 M-P5 还依赖 E3 序列化）；届时新建 `feat/pathfinding` / `feat/physics` / `feat/audio` worktree（PARALLEL-TRACKS §7.1b）。
+- **worktree 收尾即同步关联文档（用户拍板固化进 AGENTS.md 纪律第 6 条 + PARALLEL-TRACKS §7.5）**：track 内完成里程碑后必须同步更新 master 侧 AGENTS.md 注册表 / PARALLEL-TRACKS §7.1 / 相关候选文档，跨轨道文档更新在主 worktree 提交（教训：M-A5.1 落地后 master 侧注册表停在「候选」）。
