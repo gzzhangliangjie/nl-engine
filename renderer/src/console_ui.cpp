@@ -5,6 +5,7 @@
 #include "nl/core/console.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiInputTextState::ReloadUserBuf*（Tab 补全外部改 buf 的官方重载机制）
 #include <GLFW/glfw3.h>   // GLFW key code 原值（KeyEvent.key 携带；仅取常量，不碰窗口）
 
 #include <cstdio>
@@ -68,6 +69,7 @@ std::vector<std::string> g_history;    // 旧 -> 新
 int                   g_histPos = -1;   // -1 = 不在翻历史（草稿态）
 std::string           g_draft;          // 翻历史前的草稿
 bool                  g_wasOpen = false;
+bool                  g_refocus = false; // EnterReturnsTrue 会让 InputText 失活——终端语义要求执行后输入行保持焦点
 bool                  g_prefilled = false;
 std::size_t           g_prevLogCount = 0;
 
@@ -160,10 +162,12 @@ void drawConsoleWindow(HudFrame& frame) {
     if (x < 358.0f) x = 358.0f;                 // HUD 右缘 (14+330+14) 之外
     if (x < 14.0f) x = 14.0f;                   // 极小画布兜底
     const float yh = (frame.displayHeight > 56.0f) ? std::min(h, frame.displayHeight - 28.0f) : h;
-    ImGui::SetNextWindowPos(ImVec2(x, 14.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(w, yh), ImGuiCond_Always);
+    // FirstUseEver：初始位置/大小只定一次，之后用户可拖标题栏移动、拖角缩放
+    //（Always 会每帧强制归位，拖动/缩放静默失效——交互手验抓出）。
+    ImGui::SetNextWindowPos(ImVec2(x, 14.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(w, yh), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.90f);
-    ImGui::Begin("Console", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    ImGui::Begin("Console");   // 默认 flags：标题栏拖动移动 + 拖角缩放（用户要求可移动/可缩放）
 
     // ---- 滚动日志区（新行自动滚底；手滚上去就不拽——开发者正在往上翻时别打扰）----
     const auto& log = nl::core::console::Console::get().log();
@@ -183,11 +187,27 @@ void drawConsoleWindow(HudFrame& frame) {
     ImGui::EndChild();
 
     // ---- Tab 补全（viewer 边沿；applyTabCompletion 幂等：无候选/无进展不动）----
-    if (frame.consoleTab) applyTabCompletion();
+    // InputText 激活期真值在其内部缓冲，外部改 g_input 默认不可见（写回只在失焦时，
+    // imgui_widgets.cpp 5156）——改完后必须走官方 reload 机制（WantReloadUserBuf 在
+    // 下一次 InputText 开头消费，4565 行），否则交互模式下补全静默失效。
+    if (frame.consoleTab) {
+        if (ImGuiInputTextState* st = ImGui::GetInputTextState(ImGui::GetID("##console cmd"))) {
+            // 激活期 g_input 陈旧（真值在 st->TextA）：先同步 → 补全 → 标记 reload
+            //（WantReloadUserBuf 在本帧稍后 InputText 开头消费，光标落尾）。
+            std::snprintf(g_input, sizeof(g_input), "%s", st->TextA.Data);
+            applyTabCompletion();
+            st->ReloadUserBufAndMoveToEnd();
+        } else {
+            applyTabCompletion();   // 输入行未持有焦点：g_input 即真值
+        }
+    }
 
     // ---- 输入行（呼出首帧抢焦点；Enter 执行 + 进历史）----
     const bool rising = !g_wasOpen;
-    if (rising) ImGui::SetKeyboardFocusHere();
+    if (rising || g_refocus) {
+        ImGui::SetKeyboardFocusHere();
+        g_refocus = false;
+    }
     // consolePrefill：空->非空边沿灌一次（演示 / 截图确定性用）
     if (!g_prefilled && frame.consolePrefill && frame.consolePrefill[0]) {
         std::snprintf(g_input, sizeof(g_input), "%s", frame.consolePrefill);
@@ -205,6 +225,7 @@ void drawConsoleWindow(HudFrame& frame) {
         if (g_history.empty() || g_history.back() != g_input) g_history.emplace_back(g_input);
         g_histPos = -1;
         g_input[0] = '\0';
+        g_refocus = true;              // 下帧重新抢焦点（EnterReturnsTrue 默认失活）
         ImGui::SetScrollHereY(1.0f);   // 新日志立即露底（child 已 End，作用于窗口滚动兜底）
     }
     g_wasOpen = true;

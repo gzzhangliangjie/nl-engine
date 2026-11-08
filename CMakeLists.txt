@@ -126,7 +126,7 @@ add_library(nl_core STATIC
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
-target_link_libraries(nl_core PRIVATE glfw nl_metis)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
 

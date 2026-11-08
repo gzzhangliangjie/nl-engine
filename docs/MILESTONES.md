@@ -982,3 +982,26 @@
 4. **GLFW 常量跨层**：GLFW key code 在 core 收集（int 原值）、renderer 映射 ImGuiKey——GLFW 头只进 `console_ui.cpp`（窗口库常量非图形 API，nl_renderer PRIVATE 链 glfw 注释写明）。
 
 **下一步**：M-C2 运行时调参 + 内建命令集（`help`/`cvar.list`/`cvar.set`/`hud.*`/`cam.*`，CVar 变更回调接相机/HUD 参数；viewer 起步注册表 `demo.*` 届时替换）。交互模式键盘输入（真实打字/上下键历史/真实 Tab）建议用户开窗手验一次——截图管道已证 ImGui 通路，GLFW charCallback 属系统级输入，隐藏窗口收不到。
+## P8 M-C1 修复包：交互手验暴露的三个真 bug（feat/console，2026-11-09）
+
+**动作**
+- SendInput 自动化手验链（Python ctypes SendInput + PrintWindow 截图，绕沙箱对 .NET 动态编译/COM 实例化的封锁）替代/补充隐藏窗口截图，逐键验证交互通路，暴露三个 M-C1 截图验收盖不住的 bug：
+- **① Tab 补全交互模式失效**：InputText 激活期真值在其内部缓冲，外部改 `g_input` 默认不可见（写回只在失焦，imgui_widgets.cpp 5156）。修：改 buf 前先从 `st->TextA` 同步真值 → `applyTabCompletion()` → `ReloadUserBufAndMoveToEnd()`（imgui_internal.h 官方重载机制，`WantReloadUserBuf` 在本帧 InputText 开头消费、光标落尾）。截图模式反而能过是隐藏窗口焦点路径不同的假象。
+- **② 回车后输入行失焦**：`EnterReturnsTrue` 执行完主动失活，后续打字全落空。修：`g_refocus` 标记，下帧 `SetKeyboardFocusHere` 重抢焦点（终端语义）。
+- **③ 反引号呼出被中文 IME 吞掉**：插桩实证 ESC/TAB 的 WM_KEYDOWN 到 GLFW、VK_OEM_3 一个事件都没有——IME 系统层抢键。修：`ImmAssociateContext(glfwGetWin32Window(), nullptr)` 全窗口解除 IME（nl_core 链接 imm32；控制台输入本就 ASCII，ImGui 默认字体无 CJK 字形，游戏视口不该被 IME 拦热键）。
+- **④ 顺带**：Console 窗口 `NoResize|NoCollapse` 摘除 + `SetNextWindowPos/Size` 从 `ImGuiCond_Always` 改 `FirstUseEver`（Always 每帧强制归位，拖动/缩放静默失效）——响应用户「可关闭/可移动/可缩放」诉求。
+
+**提交版本**：feat/console 本轮 commit（修复包）
+
+**完成情况**
+- 自动化验证（DX12 960x540，SendInput 注入 + PrintWindow 截图 + stderr 插桩三重证据）：Tab 补全（`demo.fo`+Tab→`demo.fov |`）、连发三条命令全执行（回车后焦点保持）、ESC 收起、`` ` `` 再呼出（stdout `console -> open` + keyprobe glfwKey=96）全部通过。
+- UP/DOWN 历史回填在注入环境复现不了（GLFW 探针零事件——VK_UP 在系统层被吃，与 grave 的 IME 现象同层但 ImmAssociateContext 后依旧；WorkBuddy 环境的注入链路限制），通道代码为 ImGui vendored 官方 `CallbackHistory` 用法（DeleteChars/InsertChars），**留用户真手验**。
+- 窗口可拖动/可缩放/可折叠，位置大小记忆（FirstUseEver）。
+
+**踩坑情况**
+1. **x64 INPUT 结构体少算 8 字节**：union 只放 KEYBDINPUT（20B 对齐后 24B）→ sizeof=32，真身 40（MOUSEINPUT 最大成员）；SendInput 校验 cbSize 不符**静默返回 0**，一个键都没进去。修：union 补 MOUSEINPUT。教训：ctypes 定义 Win32 结构必须与 MSDN 逐字段核对宽度。
+2. **BitBlt 抓 flip-model swapchain 得过期帧**：四张截图 MD5 完全一致而标题栏帧号在走。修：`PrintWindow + PW_RENDERFULLCONTENT`。另 Python 进程需 `SetProcessDPIAware()`，否则 GetWindowRect 返回逻辑坐标截不全。
+3. **WorkBuddy 环境焦点窃贼**：注入中途前台可被夺走，按键进错窗口；每阶段前重申 SetForegroundWindow + Alt 解锁技巧。
+4. **检查工具链**：沙箱拦 .NET 动态编译与 COM 实例化；键盘注入改走 Python ctypes SendInput，截图走 GDI PrintWindow，均纯标准库/系统 API。
+
+**下一步**：用户真手验 UP/DOWN 历史（唯一遗留）→ M-C2 内建命令集（help/cvar.list/cvar.set/hud.*/cam.* + 变更回调）。

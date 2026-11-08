@@ -5,6 +5,7 @@
 #if defined(_WIN32)
 #  define GLFW_EXPOSE_NATIVE_WIN32
 #  include <GLFW/glfw3native.h>
+#  include <imm.h>   // ImmAssociateContext：解除 IME 关联（M-C1）
 #endif
 
 #include <array>
@@ -150,6 +151,12 @@ Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
     glfwSetFramebufferSizeCallback(impl_->handle, &Impl::framebufferCallback);
     glfwSetCursorPosCallback(impl_->handle, &Impl::cursorCallback);
     glfwSetMouseButtonCallback(impl_->handle, &Impl::buttonCallback);
+#if defined(_WIN32)
+    // M-C1：中文 IME 会把反引号（VK_OEM_3）当编辑键抢走，WM_KEYDOWN 根本到不了
+    // GLFW（插桩实证：ESC/TAB 有事件、grave 无）——viewer 全窗口解除 IME 关联。
+    // 控制台输入本就 ASCII（ImGui 默认字体无 CJK 字形），游戏视口也不该被 IME 拦热键。
+    ImmAssociateContext(glfwGetWin32Window(impl_->handle), nullptr);
+#endif
     glfwSetScrollCallback(impl_->handle, &Impl::scrollCallback);
     log::info("window created ", desc.width, "x", desc.height,
               " | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit");
