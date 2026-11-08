@@ -910,3 +910,21 @@
 4. **启动拦截 flake 与真像素 FAIL 的鉴别**：本环境全量跑平均挂 0~3 条，特征两种——「日志缺 X」毫秒级秒退 / 超时（Defender 高频启动拦截，串行复跑必过，条目每轮不同）；与「与基线像素不符」的确定性 FAIL（本轮 4 条 vulkan 基线即此类，逐对像素取证定位）严格区分，前者复跑定性、后者必须查根因不许复跑糊弄过去。
 
 **下一步**：P8 并发地基全部收口（M-J0~J3 已入主干）；主线 S5（组原子 cut）/S6 排期按 ROADMAP；feat 分支任务完成后可清理 worktree 登记。
+
+## M-A4b 骨架 FK + rigged glTF 资产入口（feat/action-system，2026-11-08）
+
+**动作**：M-A5 视觉验收的两个前置解阻塞（蒙皮渲染仍等 2.3，但骨架层与资产层不被阻塞）——①`nl/anim/skeleton`（扁平拓扑表 + 纯 (T,R) FK，ozz Skeleton 同构口径）；②`nl/anim/gltf_anim`（rigged glTF -> Skeleton + AnimClip，tinygltf 声明侧第二消费 TU）；③程序化资产 `RiggedChain.glb`（tools/make_rigged_glb.py，纯标准库 GLB）→ selftest skeleton + ctest ma4b + run.bat/展示台卡/TOOLS-GUIDE 收口。
+
+**提交版本**：M-A4b（tag `anim-ma4b`，验收后打）
+
+**完成情况**
+- skeleton：boneNames/parentIndices/restPose 三表拓扑序；`localToModel` = model[i]=parent⊗local[i]（rotVecByQuat 作用于局部平移）；out 与输入同容器安全；validate 拒拓扑序破坏/重名/尺寸不齐。
+- gltf_anim：DFS 收表（无名节点自动 bone_N）、LINEAR/STEP、rotation 采样归一化；SCALE/CUBICSPLINE 显式拒绝；静态 TRS → 单关键帧轨道（⭐空轨道=零/identity 常量语义，不能兜 rest）。
+- 验证：selftest skeleton PASS（FK 手算锚点 + sway t=0.5 spineWorld(-0.25,1.4330127)/headWorld(-0.5,1.8660254) + wrap 逐位 + 两次加载逐位 + 负向）；ctest 6/6；`example/ma-track/run.bat` ALL GREEN（含资产再生成）；`server.py --check` OK。
+
+**踩坑情况**
+1. tinygltf 双 TU 宏视图不一致（mesh_io 的 `TINYGLTF_NO_STB_IMAGE_WRITE` 未被 gltf_anim 复刻）→ inline 构造引用被禁 `WriteImageData` LNK2019。约定固化：第二个 tinygltf 消费 TU 必须复刻 IMPLEMENTATION TU 全部 NO_* 宏。
+2. FK 测试初版 local 未以 restPose 打底（local=采样输出语义，静态 TRS 在轨道内）——用例错实现对。
+3. bash 调 bat 传多 target 必须分开传参（引号整体成一个参数，NMake 收不到第二个 target）。
+
+**下一步**：M-A5 视觉验收等 2.3 蒙皮渲染（届时资产/骨架/采样/混合/状态机/blend space 全链已备）；或先做 sway 轨迹证据图升级（preview 用）。

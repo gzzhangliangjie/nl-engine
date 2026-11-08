@@ -2239,6 +2239,19 @@
      "expectLog": "unknown selftest case"
     },
     {
+     "id": "skeleton",
+     "name": "selftest skeleton：M-A4b 骨架 FK + rigged glTF 入口",
+     "kind": "tool",
+     "note": "RiggedChain.glb（3 骨骼链 + sway 动画，程序化生成）加载 -> 骨架拓扑/rest 静态 TRS 单关键帧 -> FK 手算锚点（90° 链、sway t=0.5 spineWorld(-0.25,1.4330127)/headWorld(-0.5,1.8660254)）-> wrap 循环逐位一致、两次加载逐位一致、缺文件/拓扑序负向。",
+     "args": [
+      "selftest",
+      "skeleton",
+      "assets/models/RiggedChain.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim skeleton selftest: PASS"
+    },
+    {
      "id": "evidence",
      "name": "sample：确定性演示输出 + 证据图",
      "kind": "tool",

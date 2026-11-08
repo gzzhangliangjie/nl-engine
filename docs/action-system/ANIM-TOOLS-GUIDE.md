@@ -53,3 +53,24 @@ ctest（构建目录内）：`ma1-anim-curve-selftest` / `ma2-anim-blend-selftes
 4. `blendPoses` 输入输出同容器混叠（先 clear 毁输入）——evaluate 改走临时缓冲。
 5. `t=1.0` 撞 wrapTime 循环归零语义（t=duration → 0）——测试时点避开端点。
 6. NMake 时间戳陷阱复发：obj 在 `CMakeFiles/<target>/<target>/` 子目录，删错层不重编（M2.3a 坑 3 同款）。
+
+## M-A4b：骨架 FK + rigged glTF 入口（2026-11-08 追加）
+
+**新增模块**（`core/include/nl/anim/` + `core/src/anim/`）：
+
+| 文件 | 内容 |
+|---|---|
+| `skeleton.hpp/.cpp` | `Skeleton` 扁平拓扑表（boneNames / parentIndices / restPose，父先于子）+ `validateSkeleton` + `localToModel`（纯 (T,R) FK，out 允许与输入同容器）；`scale` 口径后置（与 BoneTrack 一致） |
+| `gltf_anim.hpp/.cpp` | `loadGltfAnim(path) -> Skeleton + AnimClip[]`：scene 全节点 DFS 收表；动画通道 LINEAR/STEP、rotation 归一化；SCALE 通道 / CUBICSPLINE 采样器**显式拒绝**；⭐静态 TRS 填单关键帧轨道（空轨道=零/identity 常量语义，不能拿来兜 rest） |
+| `anim_math.hpp` 追加 | `rotVecByQuat`（q v q⁻¹ 优化式，FK 用）、`quatFromAxisAngle`（锚点构造） |
+
+**资产**：`assets/models/RiggedChain.glb`（1504 B）由 `tools/make_rigged_glb.py` 程序化生成——3 骨骼链 hip→spine→head（平移 (0,1,0)/(0,0.5,0)/(0,0.5,0)）+ 单个 sway 旋转动画（duration 2.0 s，关键帧 [0, 0.5, 1, 1.5, 2] s，绕 Z 相位错格）。全部关键帧手算可断言。
+
+**自测**：`anim-tools selftest skeleton [rigged.glb]`
+- FK 锚点：hip 绕 Z 90° → spineWorld (-0.5, 1)、headWorld (-1, 1)；rest 直加 → head y=2；尺寸不匹配 / 拓扑序破坏 / 重名负向。
+- 资产链：t=0.5 hip=+30°（quat y=sin15°=0.25881905）、spineWorld (-0.25, 1.4330127)、headWorld (-0.5, 1.8660254)；链长守恒 reach=1；wrap t=2.5 == t=0.5 逐位；两次加载逐位一致；缺文件负向。
+- ctest：`ma4b-anim-skeleton-selftest`（资产路径显式传源目录绝对路径）。
+
+**踩坑（本轮）**
+1. tinygltf 双 TU 宏视图不一致：IMPLEMENTATION 在 mesh_io.cpp（定义 `TINYGLTF_NO_STB_IMAGE_WRITE`），gltf_anim.cpp 未定义同宏 → inline 构造函数引用被禁的 `WriteImageData` → LNK2019。对齐宏后过；约定：**第二个 tinygltf 消费 TU 必须复刻 IMPLEMENTATION TU 的全部 NO_* 宏**。
+2. FK 测试初版漏把 rest 平移填进 local——`local` 的语义是「采样输出」，glTF 流程里静态 TRS 已在轨道内；直接手构造 local 时必须以 restPose 打底。
