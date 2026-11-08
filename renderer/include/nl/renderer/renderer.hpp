@@ -49,6 +49,9 @@ struct FrameParams {
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
     int   shading     = 0;      // 0 textured / 1 normal / 2 uv / 3 tri-id（传进 g_options.x）
     bool  wireframe   = false;  // 光栅化 fill mode = wireframe（深度测试照常）
+    // M-A5：蒙皮动画时间（秒，循环采样由 Scene 侧 wrapTime）。仅 skin 模式消费；
+    // 其他模式忽略（确定性截图用 --anim-time 固定，实时模式由 viewer 累加 dt）。
+    float animTime    = 0.0f;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -147,7 +150,8 @@ public:
                                             const char* modelFile = "Suzanne.glb",
                                             bool clusterMode = false,
                                             bool cullMode = false,
-                                            bool frustumCull = true);
+                                            bool frustumCull = true,
+                                            bool skinMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

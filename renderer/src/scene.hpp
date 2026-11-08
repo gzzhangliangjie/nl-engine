@@ -5,6 +5,7 @@
 // 本文件只依赖 NVRHI 公共头（nvrhi.h），不 include d3d12.h / vulkan.h。
 
 #include "nl/renderer/renderer.hpp"
+#include "nl/anim/gltf_anim.hpp"   // M-A5：CPU 蒙皮（骨架/clips/绑定，纯逻辑层）
 #include "gpu_timer.hpp"     // M4.2：cull pass 计时（renderer/src 内部共享，只依赖 NVRHI 抽象）
 
 #include <nvrhi/nvrhi.h>
@@ -70,6 +71,16 @@ public:
     bool initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                   const char* vsEntry, const char* psEntry,
                   const char* nmeshFile, bool frustumCull, std::string& outError);
+
+    // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
+    // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
+    // 纹理暂不用，先看形变），VB 按 CopyDest + keepInitialState 建立供每帧
+    // writeBuffer（hud.cpp 同款动态缓冲模式）。每帧 draw(params.animTime)：
+    // 采样 clip[0] -> FK -> 调色板(model*IBM) -> LBS -> 动态 VB -> 正常管线绘制。
+    // 管线/常量布局与 init 完全共用（CPU 蒙皮后的顶点就是普通 POS/NORM/UV 流）。
+    bool initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
+                  const char* vsEntry, const char* psEntry,
+                  const char* modelFile, std::string& outError);
 
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
@@ -194,6 +205,18 @@ private:
     // 每帧 compute dispatch 前整体重写 args（indexCount 等静态字段不变、instanceCount=0
     // 由 GPU atomicAdd 重建）。init 时按 stride 一次填好。
     nvrhi::DrawIndexedIndirectArguments cullArgsReset_{};
+
+    // ---- M-A5：CPU 蒙皮 ----
+    bool skinMode_ = false;                      // draw() 走逐帧蒙皮路径
+    nl::anim::Skeleton        skinSkeleton_;
+    std::vector<nl::anim::AnimClip> skinClips_;
+    nl::anim::SkinBinding     skinBinding_;
+    std::vector<nl::anim::Vec3> skinBasePos_, skinBaseNrm_;    // bind 空间
+    nl::anim::Vec3 skinCenter_{};   // bind 包围盒中心：逐帧蒙皮后平移回原点（相机 target=(0,0,0) 取景居中）
+    std::vector<nl::anim::Vec3> skinPos_, skinNrm_;            // 蒙皮输出
+    std::vector<nl::anim::BonePose> skinLocal_, skinModel_;    // 采样/FK 暂存
+    std::vector<nl::anim::Mat4> skinPalette_;                  // model*IBM
+    std::vector<SceneVertex>  skinVertices_;                   // 动态 VB 源
 
     // ---- M4.2：cull pass GPU 计时 ----
     // 与整帧计时（backend 的 gpuTimer_）独立的第二个 GpuTimer 实例，begin/end 只包住

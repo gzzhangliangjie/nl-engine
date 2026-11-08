@@ -2152,11 +2152,11 @@
   },
   {
    "id": "ma-track",
-   "label": "M-A1~M-A4",
-   "name": "动作系统 M-A 轨道（曲线采样 / 混合 / 状态机 / 1D blend space）",
-   "tag": "anim-ma4",
+   "label": "M-A1~M-A5",
+   "name": "动作系统 M-A 轨道（曲线采样 / 混合 / 状态机 / 1D blend space / 蒙皮）",
+   "tag": "anim-ma5",
    "date": "2026-11-08",
-   "summary": "A 类并行轨道 feat/action-system：nl/anim 纯 CPU 确定性动作系统。M-A1 关键帧采样（per-bone 通道 (t,v) 秒制，Linear lerp/slerp + Step，域外 clamp，wrapTime 循环）；M-A2 线性/加法混合（bevy blendable.rs 旋转相对叠加语义）；M-A3 动作状态机（优先级取首个满足转移 + crossfade + UE 防跳变回退缩时 effective=D*(1-wNext)，lerp 对称性保证回退姿态连续）；M-A4 1D blend space（找段线性插权重，UE BlendSpace 1D 口径）。自写最小 vec3/quat 数学（拍板 A 路自建，ozz 只作参照）。验收 = 确定性自测四组全绿 + ctest 5/5 + 本页工具卡实跑；不进 kStage / 不进渲染回归总闸（A 类交代纪律）。",
+   "summary": "A 类并行轨道 feat/action-system：nl/anim 纯 CPU 确定性动作系统。M-A1 关键帧采样（per-bone 通道 (t,v) 秒制，Linear lerp/slerp + Step，域外 clamp，wrapTime 循环）；M-A2 线性/加法混合（bevy blendable.rs 旋转相对叠加语义）；M-A3 动作状态机（优先级取首个满足转移 + crossfade + UE 防跳变回退缩时 effective=D*(1-wNext)，lerp 对称性保证回退姿态连续）；M-A4 1D blend space（找段线性插权重，UE BlendSpace 1D 口径）。自写最小 vec3/quat 数学（拍板 A 路自建，ozz 只作参照）。验收 = 确定性自测四组全绿 + ctest 5/5 + 本页工具卡实跑；不进 kStage / 不进渲染回归总闸（A 类交代纪律）。M-A5 蒙皮层：CPU LBS（列主序 Mat4，palette=model*IBM，法线 3x3+归一）+ rigged glTF 蒙皮入口（skin.joints 槽位映射、IBM 换算、权重加载归一 bevy 语义）+ viewer skin 模式（动态 VB 逐帧蒙皮，--anim-time 截图确定性）；公式对源核实 bevy skin.rs / UE SkinnedMeshComponent。",
    "acceptance": [
     "anim-tools selftest curve/blend/statemachine/blendspace 四组全 PASS（确定性数值锚点断言，两次运行逐位一致）",
     "ctest ma1~ma4 共 5/5 全绿（含未知用例负向 exit 2）",
@@ -2197,7 +2197,7 @@
      "note": "Khronos glTF-Sample-Assets 官方演示资产：26 骨骼、3 clips（3.4167/0.7083/1.1583s）。inspect 打印骨架统计 + 末端骨骼 FK 世界位置轨迹（确定性输出）。",
      "args": [
       "inspect",
-      "assets/models/rigged/Fox.glb"
+      "{root}/assets/models/rigged/Fox.glb"
      ],
      "expectExit": 0,
      "expectLog": "bones 26 clips 3"
@@ -2209,7 +2209,7 @@
      "note": "业界标准中标准的骨骼行走用例。验证 loadGltfAnim 对真实导出器产物（scale 通道恒 1 忽略、首 key>0 的 translation 轨道）全链可用。",
      "args": [
       "inspect",
-      "assets/models/rigged/CesiumMan.glb"
+      "{root}/assets/models/rigged/CesiumMan.glb"
      ],
      "expectExit": 0,
      "expectLog": "bones 22 clips 1"
@@ -2221,7 +2221,7 @@
      "note": "Khronos 官方 rigged 人体，1 clip 1.25s。与 CesiumMan 同口径验证。",
      "args": [
       "inspect",
-      "assets/models/rigged/RiggedFigure.glb"
+      "{root}/assets/models/rigged/RiggedFigure.glb"
      ],
      "expectExit": 0,
      "expectLog": "bones 22 clips 1"
@@ -2282,7 +2282,7 @@
      "args": [
       "selftest",
       "skeleton",
-      "assets/models/RiggedChain.glb"
+      "{root}/assets/models/RiggedChain.glb"
      ],
      "expectExit": 0,
      "expectLog": "anim skeleton selftest: PASS"
@@ -2294,12 +2294,12 @@
      "note": "fkdump 导出全骨骼逐帧 FK 世界坐标（确定性 TSV）；tools/anim_demo.py 据此生成单文件 anim-demo.html —— 四面板 canvas 循环播放 Fox Walk/Run、CesiumMan Walk、RiggedFigure，支持播放/暂停、0.25~3× 速度、XY/ZY 视角切换。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/anim-demo.html（预览图为本页截图）。",
      "args": [
       "fkdump",
-      "assets/models/rigged/Fox.glb",
+      "{root}/assets/models/rigged/Fox.glb",
       "1",
       "8"
      ],
      "expectExit": 0,
-     "expectLog": "# fkdump assets/models/rigged/Fox.glb clip 1",
+     "expectLog": "# fkdump",
      "preview": "example/ma-track/anim-demo-verify.png"
     },
     {
@@ -2313,6 +2313,19 @@
      "expectExit": 0,
      "expectLog": "anim-tools sample (deterministic; two runs are bit-identical)",
      "preview": "example/ma-track/evidence.png"
+    },
+    {
+     "id": "skinning",
+     "name": "selftest skinning：M-A5 LBS + rigged 资产端到端",
+     "kind": "tool",
+     "note": "刚体锚点不动点（head(-1,1)/hip 枢轴）、LBS 中点(-0.5,1)、法线旋转归一、validate 五负向；CesiumMan 端到端：网格撕裂检测（蒙皮/绑定最大边比<2）+ 主关节接近度（顶点距主导关节<1.2m）。注：rest-identity 判据对该资产无效（bind=T-pose 而 rest=行走姿），M-A5.2 换用上述两条强判据。",
+     "args": [
+      "selftest",
+      "skinning",
+      "{root}/assets/models/rigged/CesiumMan.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim skinning selftest: PASS"
     }
    ]
   },

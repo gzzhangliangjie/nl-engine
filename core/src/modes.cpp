@@ -11,6 +11,7 @@ constexpr const char* kModeNames[] = {
     "lod",       // M2.3：<stem>.lodN.nmesh 逐层切换
     "dag-top",   // M3.2：DAG 顶层 + 任选组下钻一层（cut 预演）
     "cull",      // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
+    "skin",      // M-A5：CPU 蒙皮展示（rigged GLB 逐帧 LBS）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

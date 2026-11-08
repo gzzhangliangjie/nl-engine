@@ -20,6 +20,7 @@
 #include "nl/anim/skinning.hpp"
 #include "nl/anim/state_machine.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -804,6 +805,90 @@ int cmdFkDump(const std::string& path, int clipIndex, int frames) {
     return 0;
 }
 
+// skincheck <glb> [t=0] [threshold=1.5] —— 蒙皮诊断：bind/skinned bbox、
+// 位移超阈值顶点数，以及最坏几个顶点的绑定与调色板信息（定位拉飞顶点）。
+int cmdSkinCheck(const std::string& path, float t, float threshold) {
+    nl::anim::Skeleton skeleton;
+    std::vector<nl::anim::AnimClip> clips;
+    nl::anim::SkinnedMeshData mesh;
+    nl::anim::SkinBinding skin;
+    std::string err;
+    if (!nl::anim::loadGltfSkinnedModel(path, skeleton, clips, mesh, skin, err)) {
+        std::fprintf(stderr, "skincheck: %s\n", err.c_str());
+        return 1;
+    }
+    if (clips.empty()) { std::fprintf(stderr, "skincheck: no clips\n"); return 1; }
+    const nl::anim::AnimClip& clip = clips[0];
+    const float tc = nl::anim::wrapTime(t, clip.duration);
+    std::vector<nl::anim::BonePose> local(skeleton.boneCount());
+    for (std::size_t i = 0; i < skeleton.boneCount(); ++i) local[i] = skeleton.restPose[i];
+    std::vector<nl::anim::BonePose> model;
+    if (!nl::anim::sampleClip(clip, tc, local) ||
+        !nl::anim::localToModel(local, skeleton, model)) {
+        std::fprintf(stderr, "skincheck: sample/FK failed\n");
+        return 1;
+    }
+    std::vector<nl::anim::Mat4> palette;
+    nl::anim::computePalette(palette, model, skin.inverseBind);
+    std::vector<nl::anim::Vec3> skinned;
+    nl::anim::skinPositions(skinned, mesh.positions, palette, skin);
+
+    auto bbox = [](const std::vector<nl::anim::Vec3>& v) {
+        nl::anim::Vec3 lo = v[0], hi = v[0];
+        for (const auto& p : v) {
+            lo = { std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z) };
+            hi = { std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z) };
+        }
+        return std::pair<nl::anim::Vec3, nl::anim::Vec3>(lo, hi);
+    };
+    const auto [blo, bhi] = bbox(mesh.positions);
+    const auto [slo, shi] = bbox(skinned);
+    std::printf("asset %s t=%.4f (clip %.4fs) vertices %zu\n",
+                path.c_str(), tc, clip.duration, mesh.positions.size());
+    std::printf("bind  bbox (%.3f %.3f %.3f) - (%.3f %.3f %.3f)\n",
+                blo.x, blo.y, blo.z, bhi.x, bhi.y, bhi.z);
+    std::printf("skin  bbox (%.3f %.3f %.3f) - (%.3f %.3f %.3f)\n",
+                slo.x, slo.y, slo.z, shi.x, shi.y, shi.z);
+    for (std::size_t i = 0; i < skeleton.boneCount(); ++i)
+        std::printf("bone %zu %s parent %d worldT %.4f %.4f %.4f\n", i,
+                    skeleton.boneNames[i].c_str(), skeleton.parentIndices[i],
+                    model[i].translation.x, model[i].translation.y,
+                    model[i].translation.z);
+
+    std::vector<std::pair<float, std::size_t>> worst;
+    for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
+        const float dx = skinned[i].x - mesh.positions[i].x;
+        const float dy = skinned[i].y - mesh.positions[i].y;
+        const float dz = skinned[i].z - mesh.positions[i].z;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (d > threshold) worst.push_back({ d, i });
+    }
+    std::sort(worst.begin(), worst.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::printf("displaced > %.2fm: %zu\n", threshold, worst.size());
+    for (int k = 0; k < 5 && k < static_cast<int>(worst.size()); ++k) {
+        const std::size_t i = worst[static_cast<std::size_t>(k)].second;
+        std::printf("  v%zu bind(%.3f %.3f %.3f) skin(%.3f %.3f %.3f) d=%.3f j=[%d %d %d %d] w=[%.2f %.2f %.2f %.2f]\n",
+                    i, mesh.positions[i].x, mesh.positions[i].y, mesh.positions[i].z,
+                    skinned[i].x, skinned[i].y, skinned[i].z,
+                    worst[static_cast<std::size_t>(k)].first,
+                    skin.joints[i][0], skin.joints[i][1], skin.joints[i][2], skin.joints[i][3],
+                    skin.weights[i][0], skin.weights[i][1], skin.weights[i][2], skin.weights[i][3]);
+        for (int jb = 0; jb < 4; ++jb) {
+            const int j = skin.joints[i][static_cast<std::size_t>(jb)];
+            if (j < 0 || skin.weights[i][static_cast<std::size_t>(jb)] == 0.0f) continue;
+            const nl::anim::Mat4& p = palette[static_cast<std::size_t>(j)];
+            std::printf("    j%d %-14s palT(%.3f %.3f %.3f) modelT(%.3f %.3f %.3f)\n",
+                        j, skeleton.boneNames[static_cast<std::size_t>(j)].c_str(),
+                        p.m[12], p.m[13], p.m[14],
+                        model[static_cast<std::size_t>(j)].translation.x,
+                        model[static_cast<std::size_t>(j)].translation.y,
+                        model[static_cast<std::size_t>(j)].translation.z);
+        }
+    }
+    return 0;
+}
+
 int cmdSample() {
     nl::anim::BlendSpace1D bs;
     if (!bs.reset(makeLocoBlendSpace())) {
@@ -924,7 +1009,13 @@ void testGltfAssetLoad(const std::string& path) {
     Skeleton sk;
     std::vector<nl::anim::AnimClip> clips;
     std::string err;
-    expectTrue(loadGltfAnim(path, sk, clips, err), ("gltf load: " + err).c_str());
+    // ⭐加载失败必须早退：后续 clips[0]/restPose[0] 直接索引加载产物，
+    //   缺文件时打空 vector 是未定义行为（regression cwd 错位实测段错误）。
+    if (!loadGltfAnim(path, sk, clips, err)) {
+        expectTrue(false, ("gltf load: " + err).c_str());
+        return;
+    }
+    expectTrue(true, "gltf load");
     expectTrue(sk.boneCount() == 3, "gltf bones=3");
     expectTrue(sk.boneNames[0] == "hip" && sk.boneNames[2] == "head", "gltf bone names");
     expectTrue(sk.parentIndices == std::vector<int>{ -1, 0, 1 }, "gltf parents");
@@ -977,8 +1068,15 @@ void testGltfDeterminism(const std::string& path) {
     Skeleton skA, skB;
     std::vector<nl::anim::AnimClip> a, b;
     std::string err;
-    expectTrue(loadGltfAnim(path, skA, a, err), "det load A");
-    expectTrue(loadGltfAnim(path, skB, b, err), "det load B");
+    // ⭐同 testGltfAssetLoad：加载失败早退，防 a[0] 打空 vector。
+    const bool okA = loadGltfAnim(path, skA, a, err);
+    const bool okB = okA && loadGltfAnim(path, skB, b, err);
+    if (!okA || !okB) {
+        expectTrue(false, okA ? "det load B" : ("det load A: " + err).c_str());
+        return;
+    }
+    expectTrue(true, "det load A");
+    expectTrue(true, "det load B");
     bool same = skA.boneNames == skB.boneNames &&
                 skA.parentIndices == skB.parentIndices &&
                 a.size() == b.size() && a[0].duration == b[0].duration &&
@@ -1095,41 +1193,80 @@ void testSkinningValidateNegative() {
     expectTrue(!nl::anim::validateSkinBinding(bad, 1, 3).empty(), "IBM count != bones");
 }
 
-// 真实资产端到端：CesiumMan rest 姿态调色板 ≈ identity（bind 姿态 = 节点
-// 静态 TRS 时 palette_i = model_i * IBM_i = I）→ 蒙皮位置 ≈ bind 位置。
-void testSkinnedAssetRestIdentity(const std::string& assetPath) {
-    nl::anim::Skeleton sk;
+// 真实资产端到端：bind pose ≠ 节点 TRS rest 姿态的资产（CesiumMan：bind=T-pose、
+// TRS=垂臂行走姿）没有「rest 调色板≈identity」保证（该前提对 RiggedChain 这类
+// 程序化资产成立，对 CesiumMan 是错的——之前能过是槽位映射与骨架两错相消的假象，
+// 2026-11-08 修正）。改用两条强判据：
+// ① 网格撕裂检测：蒙皮后最大三角形边长 / bind 最大边长 < 2（错误关节映射会把
+//    顶点拉飞，边长爆炸；正确蒙皮相邻顶点同骨骼近似刚体运动，边长几乎不变）。
+// ② 主关节邻近：每个顶点到其最大权重关节世界位置的距离 < 1.2m（四肢长度量级）。
+void testSkinnedAssetCoherence(const std::string& assetPath) {
+    nl::anim::Skeleton skeleton;
     std::vector<nl::anim::AnimClip> clips;
     nl::anim::SkinnedMeshData mesh;
     nl::anim::SkinBinding skin;
     std::string err;
-    if (!nl::anim::loadGltfSkinnedModel(assetPath, sk, clips, mesh, skin, err)) {
+    if (!nl::anim::loadGltfSkinnedModel(assetPath, skeleton, clips, mesh, skin, err)) {
         ++g_failures;
         std::printf("  FAIL load skinned asset: %s\n", err.c_str());
         return;
     }
     expectTrue(mesh.positions.size() > 0, "asset has vertices");
     expectTrue(mesh.indices.size() % 3 == 0, "asset indices are triangles");
+    if (clips.empty()) { expectTrue(false, "asset has clips"); return; }
 
-    // rest 姿态 FK → 调色板 → 蒙皮位置 ≈ bind 位置
-    std::vector<nl::anim::BonePose> local(sk.boneCount());
-    for (std::size_t i = 0; i < sk.boneCount(); ++i) local[i] = sk.restPose[i];
+    std::vector<nl::anim::BonePose> local(skeleton.boneCount());
+    for (std::size_t i = 0; i < skeleton.boneCount(); ++i) local[i] = skeleton.restPose[i];
     std::vector<nl::anim::BonePose> model;
-    expectTrue(nl::anim::localToModel(local, sk, model), "rest fk ok");
+    if (!nl::anim::sampleClip(clips[0], 0.0f, local) ||
+        !nl::anim::localToModel(local, skeleton, model)) {
+        expectTrue(false, "sample/FK failed");
+        return;
+    }
     std::vector<nl::anim::Mat4> palette;
     nl::anim::computePalette(palette, model, skin.inverseBind);
     std::vector<nl::anim::Vec3> skinned;
     nl::anim::skinPositions(skinned, mesh.positions, palette, skin);
-    double maxErr = 0.0;
-    for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
-        const double dx = std::abs(static_cast<double>(skinned[i].x) - mesh.positions[i].x);
-        const double dy = std::abs(static_cast<double>(skinned[i].y) - mesh.positions[i].y);
-        const double dz = std::abs(static_cast<double>(skinned[i].z) - mesh.positions[i].z);
-        maxErr = std::max(maxErr, std::max(dx, std::max(dy, dz)));
-    }
-    if (maxErr >= 1e-3) {
+
+    auto maxEdge = [&mesh, &skinned](bool useSkinned) {
+        float m = 0.0f;
+        for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+            for (int k = 0; k < 3; ++k) {
+                const std::uint32_t a = mesh.indices[t + static_cast<std::size_t>(k)];
+                const std::uint32_t b = mesh.indices[t + static_cast<std::size_t>((k + 1) % 3)];
+                const nl::anim::Vec3& pa = useSkinned ? skinned[a] : mesh.positions[a];
+                const nl::anim::Vec3& pb = useSkinned ? skinned[b] : mesh.positions[b];
+                const float dx = pa.x - pb.x, dy = pa.y - pb.y, dz = pa.z - pb.z;
+                m = std::max(m, std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+        return m;
+    };
+    const float edgeBind = maxEdge(false);
+    const float edgeSkin = maxEdge(true);
+    if (edgeSkin / edgeBind >= 2.0f) {
         ++g_failures;
-        std::printf("  FAIL rest palette ~= identity (maxErr %.6f)\n", maxErr);
+        std::printf("  FAIL mesh torn: maxEdge bind %.4f -> skin %.4f (ratio %.2f)\n",
+                    edgeBind, edgeSkin, edgeSkin / edgeBind);
+    }
+
+    float worstJointDist = 0.0f;
+    for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
+        int dom = -1; float w = 0.0f;
+        for (int k = 0; k < 4; ++k)
+            if (skin.weights[i][static_cast<std::size_t>(k)] > w) {
+                w = skin.weights[i][static_cast<std::size_t>(k)];
+                dom = skin.joints[i][static_cast<std::size_t>(k)];
+            }
+        if (dom < 0) continue;
+        const nl::anim::Vec3& jt = model[static_cast<std::size_t>(dom)].translation;
+        const float dx = skinned[i].x - jt.x, dy = skinned[i].y - jt.y,
+                    dz = skinned[i].z - jt.z;
+        worstJointDist = std::max(worstJointDist,
+                                  std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    if (worstJointDist >= 1.2f) {
+        ++g_failures;
+        std::printf("  FAIL vertex far from dominant joint: %.3fm\n", worstJointDist);
     }
 }
 
@@ -1144,7 +1281,7 @@ int runSkinningSelftest(const std::string& assetPath) {
         std::fflush(stdout);
         c.fn();
     }
-    testSkinnedAssetRestIdentity(assetPath);
+    testSkinnedAssetCoherence(assetPath);
     return g_failures == 0 ? 0 : 1;
 }
 
@@ -1215,6 +1352,11 @@ int main(int argc, char** argv) {
         const int clipIndex = std::atoi(argv[3]);
         const int samples = argc >= 5 ? std::atoi(argv[4]) : 200;
         return cmdFkSample(argv[2], clipIndex, samples);
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "skincheck") == 0) {
+        const float t = argc >= 4 ? static_cast<float>(std::atof(argv[3])) : 0.0f;
+        const float th = argc >= 5 ? static_cast<float>(std::atof(argv[4])) : 1.5f;
+        return cmdSkinCheck(argv[2], t, th);
     }
     if (argc >= 4 && std::strcmp(argv[1], "fkdump") == 0) {
         const int clipIndex = std::atoi(argv[3]);

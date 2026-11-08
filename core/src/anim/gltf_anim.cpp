@@ -115,6 +115,50 @@ bool readVecAccessor(const Model& model, int accessorIndex, std::size_t comps,
     return readFloatAccessor(model, accessorIndex, comps, out);
 }
 
+// 列主序 4x4 -> (T,R)。scale 必须 ≈1（三列长度），否则 false（BonePose 无
+// scale 口径）。CesiumMan 的 Z_UP / Armature 转换节点即用 matrix 表达旋转
+// （忽略 matrix = 骨架躺平，2026-11-08 M-A5 实测）。
+bool decomposeNodeMatrix(const std::vector<double>& m16, BonePose& out) {
+    if (m16.size() != 16) return false;
+    const float c[3][3] = {
+        { static_cast<float>(m16[0]), static_cast<float>(m16[1]), static_cast<float>(m16[2]) },
+        { static_cast<float>(m16[4]), static_cast<float>(m16[5]), static_cast<float>(m16[6]) },
+        { static_cast<float>(m16[8]), static_cast<float>(m16[9]), static_cast<float>(m16[10]) },
+    };
+    for (int k = 0; k < 3; ++k) {
+        const float len = std::sqrt(c[k][0] * c[k][0] + c[k][1] * c[k][1] + c[k][2] * c[k][2]);
+        if (std::abs(len - 1.0f) > 1e-3f) return false;   // 带缩放/非刚性，拒绝
+    }
+    out.translation = { static_cast<float>(m16[12]),
+                        static_cast<float>(m16[13]),
+                        static_cast<float>(m16[14]) };
+    // 旋转矩阵（行：r[row][col] = 列向量组按行主排）-> 四元数（Shepperd 法）。
+    const float r00 = c[0][0], r01 = c[1][0], r02 = c[2][0];
+    const float r10 = c[0][1], r11 = c[1][1], r12 = c[2][1];
+    const float r20 = c[0][2], r21 = c[1][2], r22 = c[2][2];
+    const float tr = r00 + r11 + r22;
+    float x, y, z, w;
+    if (tr > 0.0f) {
+        const float s = std::sqrt(tr + 1.0f) * 2.0f;
+        w = 0.25f * s;
+        x = (r21 - r12) / s; y = (r02 - r20) / s; z = (r10 - r01) / s;
+    } else if (r00 > r11 && r00 > r22) {
+        const float s = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f;
+        w = (r21 - r12) / s; x = 0.25f * s;
+        y = (r01 + r10) / s; z = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        const float s = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f;
+        w = (r02 - r20) / s; x = (r01 + r10) / s;
+        y = 0.25f * s; z = (r12 + r21) / s;
+    } else {
+        const float s = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f;
+        w = (r10 - r01) / s; x = (r02 + r20) / s;
+        y = (r12 + r21) / s; z = 0.25f * s;
+    }
+    out.rotation = normalizeQuat({ x, y, z, w });
+    return true;
+}
+
 // DFS 收 scene 全部节点：拓扑序（父先于子）+ 名字 + 静态 TRS。
 // ⚠ glTF 不保证 nodes 数组序 = 拓扑序（CesiumMan/RiggedFigure 实测父在子后），
 // parentIndices 必须存「骨架表下标」，不是原始 node id——nodeId -> boneIndex
@@ -160,16 +204,25 @@ bool collectBones(const Model& model, const tinygltf::Scene& scene, Skeleton& sk
         std::string name = n.name;
         if (name.empty()) name = "bone_" + std::to_string(boneIndex);
         BonePose rest;
-        if (!n.translation.empty()) {
-            rest.translation = { static_cast<float>(n.translation[0]),
-                                 static_cast<float>(n.translation[1]),
-                                 static_cast<float>(n.translation[2]) };
-        }
-        if (!n.rotation.empty()) {
-            rest.rotation = normalizeQuat({ static_cast<float>(n.rotation[0]),
-                                            static_cast<float>(n.rotation[1]),
-                                            static_cast<float>(n.rotation[2]),
-                                            static_cast<float>(n.rotation[3]) });
+        if (!n.matrix.empty()) {
+            // matrix 与 TRS 是 glTF 节点变换的两种互斥表达；matrix（刚性部分）
+            // 分解进 (T,R)（CesiumMan 的 Z_UP/Armature 转换节点走这条路）。
+            if (!decomposeNodeMatrix(n.matrix, rest)) {
+                error = "gltf: node matrix has scale or is non-rigid (not supported)";
+                return false;
+            }
+        } else {
+            if (!n.translation.empty()) {
+                rest.translation = { static_cast<float>(n.translation[0]),
+                                     static_cast<float>(n.translation[1]),
+                                     static_cast<float>(n.translation[2]) };
+            }
+            if (!n.rotation.empty()) {
+                rest.rotation = normalizeQuat({ static_cast<float>(n.rotation[0]),
+                                                static_cast<float>(n.rotation[1]),
+                                                static_cast<float>(n.rotation[2]),
+                                                static_cast<float>(n.rotation[3]) });
+            }
         }
         if (!n.scale.empty()) {
             for (const double s : n.scale)
@@ -377,6 +430,19 @@ bool loadGltfSkinnedModel(const std::string& path, Skeleton& skeleton,
 
     // inverseBindMatrices：MAT4 float，按 skin.joints 顺序；缺失 → identity 兜底
     // （bevy loader unwrap_or_else(IDENTITY) 同款回退）。
+    // ⭐ JOINTS_0 语义是「skin.joints 数组的槽位」，不是 node id——先建
+    // slot -> 骨架下标映射，顶点属性按槽位换算（CesiumMan 实测：脚部顶点
+    // 被绑到手臂骨骼 = 槽位误当 node id 的症状）。
+    std::vector<int> jointSlotToBone;
+    jointSlotToBone.reserve(gltfSkin.joints.size());
+    for (const int node : gltfSkin.joints) {
+        if (node < 0 || node >= static_cast<int>(nodeIdToBone.size()) ||
+            nodeIdToBone[static_cast<std::size_t>(node)] < 0) {
+            error = "gltf: skin joint node outside skeleton";
+            return false;
+        }
+        jointSlotToBone.push_back(nodeIdToBone[static_cast<std::size_t>(node)]);
+    }
     skin.inverseBind.assign(skeleton.boneCount(), mat4Identity());
     if (gltfSkin.inverseBindMatrices >= 0) {
         std::vector<float> ibm;
@@ -389,15 +455,12 @@ bool loadGltfSkinnedModel(const std::string& path, Skeleton& skeleton,
             return false;
         }
         for (std::size_t k = 0; k < gltfSkin.joints.size(); ++k) {
-            const int node = gltfSkin.joints[k];
-            if (node < 0 || node >= static_cast<int>(nodeIdToBone.size()) ||
-                nodeIdToBone[static_cast<std::size_t>(node)] < 0) {
-                error = "gltf: skin joint node outside skeleton";
-                return false;
-            }
-            const std::size_t b = static_cast<std::size_t>(
-                nodeIdToBone[static_cast<std::size_t>(node)]);
-            std::memcpy(skin.inverseBind[b].m, &ibm[k * 16], sizeof(Mat4));
+            skin.inverseBind[static_cast<std::size_t>(jointSlotToBone[k])] =
+                [&] {
+                    Mat4 m{};
+                    std::memcpy(m.m, &ibm[k * 16], sizeof(Mat4));
+                    return m;
+                }();
         }
     }
 
@@ -462,15 +525,15 @@ bool loadGltfSkinnedModel(const std::string& path, Skeleton& skeleton,
         mesh.normals[i] = { nx[i * 3], nx[i * 3 + 1], nx[i * 3 + 2] };
     }
 
-    // joints 换算到骨架下标 + 权重归一化（bevy 语义）。
+    // joints 槽位 -> 骨架下标 + 权重归一化（bevy 语义）。
     skin.joints.resize(vertexCount);
     skin.weights.resize(vertexCount);
     for (std::size_t i = 0; i < vertexCount; ++i) {
         for (int k = 0; k < 4; ++k) {
-            const int node = jx[i][static_cast<std::size_t>(k)];
+            const int slot = jx[i][static_cast<std::size_t>(k)];
             skin.joints[i][static_cast<std::size_t>(k)] =
-                node >= 0 && node < static_cast<int>(nodeIdToBone.size())
-                    ? nodeIdToBone[static_cast<std::size_t>(node)]
+                slot >= 0 && slot < static_cast<int>(jointSlotToBone.size())
+                    ? jointSlotToBone[static_cast<std::size_t>(slot)]
                     : -1;
         }
         skin.weights[i] = { wx[i * 4], wx[i * 4 + 1], wx[i * 4 + 2], wx[i * 4 + 3] };

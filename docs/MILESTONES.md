@@ -940,3 +940,25 @@
 **踩坑情况**：等比投影初版 x/y 各自 sx/sy 拉伸变形——改 min(W/f.w, H/f.h) 统一比例 + 内容居中；Edge 无头 `--headless=new --screenshot --virtual-time-budget` 对本地 HTML 截图核查渲染（本机可用）。
 
 **下一步**：M-A5 蒙皮渲染（CPU 刚体绑定 → LBS → 模型展示）——蒙皮层需从零建，不再「等」任何已有里程碑。
+
+## M-A5 蒙皮层 + 模型展示（feat/action-system，2026-11-08）
+
+**动作**：用户拍板「继续做蒙皮和模型展示」→ 两段落地。M-A5.1：`nl/anim/skinning`（CPU LBS：列主序 Mat4、palette=model*IBM、skinPositions/skinNormals、validateSkinBinding）+ `loadGltfSkinnedModel`（skin.joints 槽位映射、IBM 换算、JOINTS_0/WEIGHTS_0 物化、权重加载归一 bevy 语义），动手前补读 bevy skin.rs / UE SkinnedMeshComponent 两处参考（用户指出未读源码就动手）。M-A5.2：viewer `Skin` 模式（`--mode skin`，动态 VB 逐帧蒙皮，`--anim-time` 截图确定性）+ 取景修正 + 回归收口。
+
+**提交版本**：M-A5.1（`cde41c7`）+ M-A5.2（本提交，tag `anim-ma5`）
+
+**完成情况**：
+- selftest skinning 全 PASS：刚体锚点不动点、LBS 中点、法线旋转归一、validate 五负向、CesiumMan 端到端两条强判据（网格撕裂检测：蒙皮/绑定最大边比<2；主关节接近度：顶点距主导关节<1.2m）；ctest ma5 1/1。
+- regression ma-track 13/13 ALL GREEN（cases.json 新增 skinning 用例卡；ma-track 版本卡更新 M-A1~M-A5 / tag `anim-ma5`；run.bat 补 skinning 锁行）。
+- viewer 截图验收：`example/ma-track/skin-walk-t0/t06/t12.png`（CesiumMan 行走三时刻相位清晰、全身居中、无撕裂无尖刺）。
+- 取景修正：skin 模式 init 时做一次 t=0 蒙皮，取蒙皮输出 bbox 中心做逐帧后蒙皮平移（bind bbox 中心无效——网格在 bind 空间中心≈原点，偏移来自骨骼动画输出站姿）；缺省距离 2.6（Suzanne 口径 4.2 对 1.4m 人形太远）。
+- ANIM-TOOLS-GUIDE 补 skin 模式与 selftest skinning 用法。
+
+**踩坑情况**：
+1. ⭐JOINTS_0 语义：值域是 skin.joints 数组槽位不是 node id——首版把槽位当 node id，脚部顶点绑到手臂骨骼，渲染放射尖刺；`cmdSkinCheck` 诊断定位，jointSlotToBone 映射修复。
+2. rest-identity 判据失效：CesiumMan bind=T-pose 而 rest=行走姿，IBM≠inverse(restGlobal) 是资产正常状态（此前自测通过是「槽位误映射 × IBM 误换算」两个错误抵消的巧合）；换撕裂检测+接近度两条强判据。
+3. node.matrix：CesiumMan Z_UP/Armature 节点用 matrix 而非 TRS，collectBones 初版忽略 → decomposeNodeMatrix（列主序刚性分解 + Shepperd 四元数提取）。
+4. ⭐回归 cwd 错位（真 bug 两枚）：regression.py 工具用例 cwd=exe 目录（build/nmake），ma-track 用例卡却写仓库根相对路径——M-A4 起用例只跑过 run.bat 从未真跑 regression，本次首跑即暴露 6 条 FAIL；修 = 用例参数改 `{root}/` 模板（server.py build_argv 既有白名单）。连带暴露 anim-tools 缺文件段错误：testGltfAssetLoad / testGltfDeterminism 加载失败不早退，`clips[0]` 打空 vector UB——补早退守卫（exit 139 → 干净 FAIL）。
+5. 「selftest skeleton + CesiumMan FAIL」虚惊：该用例约定 3 骨合成资产 RiggedChain.glb，传 Khronos 资产属用错参数非回归。
+
+**下一步**：M-A 轨道收口（merge 回 master 走 PARALLEL-TRACKS §7 文档闸）；GPU 调色板（shader 端 palette UB）等更大规模蒙皮资产再立项。

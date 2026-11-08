@@ -37,7 +37,7 @@ public:
     // true = 建 cull compute pass 并每帧剔除；false = 恒等可见列表（M4.0 行为）。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
-                      bool frustumCull, std::string& outError) = 0;
+                      bool frustumCull, bool skinMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

@@ -5,6 +5,7 @@
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -951,6 +952,176 @@ void Scene::invalidatePipelines() {
     pipelineCullWireNone_ = nullptr;
 }
 
+// ---- M-A5：CPU 蒙皮场景（口径见 scene.hpp initSkin 注释）----
+bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
+                     const char* vsEntry, const char* psEntry,
+                     const char* modelFile, std::string& outError) {
+    skinMode_ = true;
+
+    // ---- 1. 同一份 model.slang 字节码：CPU 蒙皮后的顶点就是普通 POS/NORM/UV 流，
+    //         管线/常量布局与 init 完全共用，不新增 shader（一份 .slang 单源纪律）----
+    auto shaderPath = [shaderSuffix](const char* stage) {
+        return std::string(NL_SHADER_DIR) + "/model." + stage + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(shaderPath("vs").c_str(), vsBlob) ||
+        !readFileBytes(shaderPath("ps").c_str(), psBlob)) {
+        outError = std::string("failed to load model shader (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName(vsEntry);
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName(psEntry);
+    vs_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
+
+    // ---- 2. rigged GLB：骨架 + clips + 绑定 + bind 空间网格（nl::anim 纯逻辑层）----
+    const std::string modelPath = std::string(NL_ASSET_DIR "/") + modelFile;
+    nl::anim::SkinnedMeshData meshData;
+    std::string err;
+    if (!nl::anim::loadGltfSkinnedModel(modelPath, skinSkeleton_, skinClips_,
+                                        meshData, skinBinding_, err)) {
+        outError = std::string(modelFile) + ": " + err;
+        return false;
+    }
+    if (skinClips_.empty()) {
+        outError = std::string(modelFile) + ": rigged model has no animation clip";
+        return false;
+    }
+    const std::size_t vertexCount = meshData.positions.size();
+    skinBasePos_ = meshData.positions;
+    skinBaseNrm_ = meshData.normals;
+
+    // M-A5：蒙皮输出包围盒中心——rigged 资产的网格在 bind 空间（中心≈原点），
+    // 但骨骼动画采样后输出站姿（如 CesiumMan 站在 y=0、身高 1.4），而
+    // OrbitCamera target 硬编码 (0,0,0)。init 时先做一次 t=0 蒙皮，取其输出
+    // 包围盒中心作为逐帧后蒙皮刚体平移量（不碰蒙皮数学），模型居中于原点。
+    skinCenter_ = {0.0f, 0.0f, 0.0f};
+    skinPos_.resize(vertexCount);
+    skinNrm_.resize(vertexCount);
+    if (!skinClips_.empty() && vertexCount > 0) {
+        skinLocal_.resize(skinSkeleton_.boneCount());
+        skinModel_.resize(skinSkeleton_.boneCount());
+        const nl::anim::AnimClip& probe = skinClips_[0];
+        if (nl::anim::sampleClip(probe, 0.0f, skinLocal_) &&
+            nl::anim::localToModel(skinLocal_, skinSkeleton_, skinModel_)) {
+            nl::anim::computePalette(skinPalette_, skinModel_, skinBinding_.inverseBind);
+            nl::anim::skinPositions(skinPos_, skinBasePos_, skinPalette_, skinBinding_);
+            nl::anim::Vec3 mn = skinPos_.front(), mx = skinPos_.front();
+            for (const auto& p : skinPos_) {
+                mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+                mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+            }
+            skinCenter_ = {(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
+        }
+    }
+
+    skinVertices_.resize(vertexCount);
+    for (std::size_t i = 0; i < vertexCount; ++i) {
+        skinVertices_[i] = { skinBasePos_[i].x, skinBasePos_[i].y, skinBasePos_[i].z,
+                             skinBaseNrm_[i].x, skinBaseNrm_[i].y, skinBaseNrm_[i].z,
+                             0.0f, 0.0f };
+    }
+    indexCount_ = static_cast<std::uint32_t>(meshData.indices.size());
+
+    // ---- 3. GPU 资源：VB 走 hud.cpp 同款动态模式（CopyDest + keepInitialState，
+    //         每帧 draw 内 writeBuffer 重写）；IB/贴图/采样/布局与 init 同构 ----
+    const std::string vbName = std::string(modelFile) + "SkinVB";
+    const std::string ibName = std::string(modelFile) + "SkinIB";
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = skinVertices_.size() * sizeof(SceneVertex);
+    vbDesc.isVertexBuffer = true;
+    vbDesc.debugName = vbName.c_str();
+    vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    vbDesc.keepInitialState = true;    // 每帧命令列表开头自动回到 CopyDest → 可反复 writeBuffer
+    vertexBuffer_ = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = meshData.indices.size() * sizeof(std::uint32_t);
+    ibDesc.isIndexBuffer = true;
+    ibDesc.debugName = ibName.c_str();
+    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    indexBuffer_ = device->createBuffer(ibDesc);
+    if (!vertexBuffer_ || !indexBuffer_) { outError = "createBuffer failed for skin VB/IB"; return false; }
+
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(SceneConstants);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "SceneConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
+
+    nvrhi::TextureDesc texDesc;
+    texDesc.width = 1;
+    texDesc.height = 1;
+    texDesc.format = nvrhi::Format::RGBA8_UNORM;
+    texDesc.debugName = "SkinWhiteTex";
+    texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    texDesc.keepInitialState = true;
+    texture_ = device->createTexture(texDesc);
+    if (!texture_) { outError = "createTexture failed for skin white texture"; return false; }
+
+    nvrhi::SamplerDesc samplerDesc;
+    samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+    sampler_ = device->createSampler(samplerDesc);
+    if (!sampler_) { outError = "createSampler failed"; return false; }
+
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    bindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
+    if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
+
+    nvrhi::VertexAttributeDesc attrs[3] = {
+        nvrhi::VertexAttributeDesc().setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0)
+            .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+        nvrhi::VertexAttributeDesc().setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(12)
+            .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+        nvrhi::VertexAttributeDesc().setName("TEXCOORD")
+            .setFormat(nvrhi::Format::RG32_FLOAT).setOffset(24)
+            .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+    };
+    inputLayout_ = device->createInputLayout(attrs, 3, vs_);
+    if (!inputLayout_) { outError = "createInputLayout failed for skin"; return false; }
+
+    // IB 一次性上传；VB 不预传（首帧 draw 前的 writeBuffer 就是首份数据）。
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    upload->beginTrackingBufferState(indexBuffer_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(indexBuffer_, meshData.indices.data(),
+                        meshData.indices.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
+    const std::uint8_t white[4] = { 255, 255, 255, 255 };
+    upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+    upload->close();
+    device->executeCommandList(upload);
+
+    modelName_ = modelFile;
+    triangleCount_ = indexCount_ / 3;
+    nl::core::log::info(
+        "skin model ready: ", modelFile,
+        " | bones=", skinSkeleton_.boneCount(),
+        " clips=", skinClips_.size(),
+        " vertices=", vertexCount,
+        " | shader=", shaderSuffix);
+    return true;
+}
+
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
@@ -1009,6 +1180,30 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         cmd->setGraphicsState(state);
         cmd->drawIndexedIndirect(0, 1);
         return;
+    }
+
+    // M-A5：CPU 蒙皮——采样 clip[0] → FK → 调色板(model*IBM) → LBS → 动态 VB。
+    // VB 是 CopyDest+keepInitialState（hud.cpp 同款）：每帧命令列表开头自动回到
+    // CopyDest，writeBuffer 可反复执行，无需手工状态跟踪。
+    if (skinMode_) {
+        const nl::anim::AnimClip& clip = skinClips_[0];
+        const float t = nl::anim::wrapTime(params.animTime, clip.duration);
+        if (!nl::anim::sampleClip(clip, t, skinLocal_) ||
+            !nl::anim::localToModel(skinLocal_, skinSkeleton_, skinModel_))
+            return;
+        nl::anim::computePalette(skinPalette_, skinModel_, skinBinding_.inverseBind);
+        nl::anim::skinPositions(skinPos_, skinBasePos_, skinPalette_, skinBinding_);
+        nl::anim::skinNormals(skinNrm_, skinBaseNrm_, skinPalette_, skinBinding_);
+        for (std::size_t i = 0; i < skinVertices_.size(); ++i) {
+            skinVertices_[i].px = skinPos_[i].x - skinCenter_.x;   // 后蒙皮平移居中
+            skinVertices_[i].py = skinPos_[i].y - skinCenter_.y;
+            skinVertices_[i].pz = skinPos_[i].z - skinCenter_.z;
+            skinVertices_[i].nx = skinNrm_[i].x;
+            skinVertices_[i].ny = skinNrm_[i].y;
+            skinVertices_[i].nz = skinNrm_[i].z;
+        }
+        cmd->writeBuffer(vertexBuffer_, skinVertices_.data(),
+                         skinVertices_.size() * sizeof(SceneVertex));
     }
 
     SceneConstants cb{};

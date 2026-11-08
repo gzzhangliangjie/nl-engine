@@ -14,7 +14,7 @@
 2. **混合**——线性混合（两 clip 按 weight）与加法混合（跑动中叠加持枪瞄准类）。
 3. **动作状态机**——idle/walk/run/attack 状态 + 转移条件 + 跨状态混合时长（crossfade）。
 4. **1D Blend Space**——按速度参数在多个 clip 间插值（2D 按需后置）。
-5. （后挂）蒙皮就绪后接**渲染侧骨骼蒙皮层（ROADMAP §2.3，规划中、从未排期——与里程碑 M2.3 无关）**，做「看到角色动起来」的视觉验收。M-A5 实际需要先建蒙皮：最小路径 = CPU 蒙皮（刚体绑定起步：每顶点单权重绑一骨骼，调色板=rest⁻¹⊗model，逐帧变换顶点重上传）→ LBS 平滑蒙皮 → GPU 调色板。
+5. **（已完成 M-A5，2026-11-08）渲染侧蒙皮层（ROADMAP §2.3）+ 模型展示**——实际路径：CPU LBS 蒙皮（`nl/anim/skinning`：列主序 Mat4，palette=model*IBM，法线 3x3+归一）+ rigged glTF 蒙皮入口（`loadGltfSkinnedModel`：skin.joints 槽位映射、IBM 换算、权重加载归一）+ viewer `--mode skin`（动态 VB 逐帧蒙皮，`--anim-time` 截图确定性）。GPU 调色板（shader 端 palette UB）留待更大规模资产时立项。
 
 ## 2. 三处参考实读结论（2026-11-08，带证据）
 
@@ -79,7 +79,7 @@
 | **M-A2 混合** | `blend(a, b, w)` 线性混合 + `add(base, additive, w)` 加法混合 | 单测：w=0/0.5/1 三个锚点数值断言；加法 quat 语义（IDENTITY 参照）断言 |
 | **M-A3 状态机** | 状态 + 转移条件（阈值式）+ crossfade 时长 + UE 式防跳变缩时 | 单测：事件序列驱动的确定性状态序列断言（idle→walk→run→idle），过渡期 pose 混合权重曲线断言 |
 | **M-A4 1D blend space** | 按速度参数多 clip 段插值（预建段表，运行时查表） | 单测：速度扫过全参数域的采样序列断言 |
-| **M-A5 视觉验收（后挂）** | 先建渲染侧蒙皮层（ROADMAP §2.3，从未开工；⚠️编号与里程碑 M2.3 撞车，勿混）+ rigged GLB，驱动可见骨骼动画 | GPU 截图（此时才碰渲染；A 类属性不变，走一次性对照不进总闸） |
+| **M-A5 蒙皮层 + 模型展示（已完成 2026-11-08）** | CPU LBS 蒙皮 `nl/anim/skinning` + rigged glTF 蒙皮入口 + viewer `--mode skin`（先建蒙皮再展示，ROADMAP §2.3 落地；与里程碑 M2.3 无关） | selftest skinning 全 PASS（刚体锚点/LBS 中点/法线归一/validate 负向 + CesiumMan 撕裂检测与主关节接近度两条强判据）；ctest ma5；viewer 截图三时刻行走相位清晰无撕裂（example/ma-track/skin-walk-*.png）；regression ma-track 13/13 ALL GREEN（A 类属性不变，工具版交代不进渲染总闸） |
 
 ## 4. 代码落点与测试载体（待 M-A0 拍板两项）
 

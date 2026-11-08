@@ -102,3 +102,20 @@ ctest（构建目录内）：`ma1-anim-curve-selftest` / `ma2-anim-blend-selftes
 **演示页**：`tools/anim_demo.py` 读取 dump 生成单文件 `example/ma-track/anim-demo.html`——四面板 canvas 循环播放 Fox Walk / Fox Run / CesiumMan Walk / RiggedFigure，蓝线段=骨骼、亮点=关节、白点=末端骨骼、淡色线=末端整周期轨迹；控件：播放/暂停、0.25~3× 速度、XY/ZY 视角切换（等比投影居中，切视角自动重算包围盒）。**页面零伪造**：数据 100% 来自 fkdump 真实输出，JS 只做投影与取帧；同 dump 两次生成 HTML 逐字节一致。
 
 **验收**：run.bat 加 fkdump findstr 锁定行；cases.json ma-track 卡 +1（anim-demo，preview=演示页截图）；server --check OK。
+
+## M-A5：蒙皮层 + viewer 模型展示（2026-11-08 追加）
+
+**确定性自测**：`anim-tools selftest skinning [rigged.glb]`（缺省 `assets/models/rigged/CesiumMan.glb`）——刚体锚点不动点（head(-1,1)/hip 枢轴）、LBS 中点 (-0.5,1)、法线旋转归一、validateSkinBinding 五负向、资产端到端两条强判据：
+
+| 判据 | 口径 |
+|---|---|
+| 网格撕裂检测 | 同一条边蒙皮后/绑定态长度比 < 2（全边扫描） |
+| 主关节接近度 | 顶点与其主导权重关节的距离 < 1.2 m |
+
+注：rest-identity（调色板≈identity）判据对 CesiumMan **无效**——bind=T-pose 而 rest=行走姿，IBM≠inverse(restGlobal) 是资产正常状态，勿再当断言用。
+
+**viewer 模型展示**：`viewer --mode skin [--anim-time 秒] [--model rigged/X.glb]`——缺省 CesiumMan.glb，缺省距离 2.6；`--anim-time` 固定动画时刻（截图确定性），不传则实时累加。渲染 = CPU LBS（palette=model*IBM）逐帧写动态 VB，蒙皮输出按 t=0 包围盒中心平移居中（相机 target 硬编码原点的取景补偿）。
+
+**回归**：cases.json ma-track 卡 `skinning` 用例（`{root}/assets/...` 路径——regression 工具用例 cwd=exe 目录，仓库根相对路径必挂）；run.bat 补 skinning 锁行。
+
+**坑位（详 MILESTONES M-A5）**：JOINTS_0=skin.joints 槽位非 node id；node.matrix 刚性分解兜底；testGltfAssetLoad/testGltfDeterminism 加载失败必须早退（clips[0] 空 vector UB）。
