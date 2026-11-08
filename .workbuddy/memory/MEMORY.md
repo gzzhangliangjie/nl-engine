@@ -51,7 +51,7 @@
 - 资源/绘制逻辑收 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present。
 - ImGui vendored **v1.91.9**，自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）；`hudProjection()` Y 尺度必须负；面板高度≤560（M4.2 起，510 装不下 cull GPU 行+曲线，小画布仍 min(cap,H-28) 兜底）；HUD 字符串须 ASCII；`renderFrame(...,hud=nullptr)` 不碰 ImGui（截图默认 `--no-hud`）。
 - 新增 GPU 资源 slot 级同步表必在 `createTargets()` 初始化（renderFrame 在 ensurePipeline 前按 slot 访问，放错=首帧 139 段错误）。
-- **viewer 截图模式（--screenshot）建隐藏窗口**（`WindowDesc.visible=false`，2026-11-08 固化）：可见窗口首显必抢前台焦点（实测 ~0.85 s/用例，--jobs 并行跑闸打断打字）；像素来自 GPU readback 与窗口可见性无关，基线零影响。别把该 hint 拿掉，交互模式仍 visible=true。
+- **viewer 截图模式（--screenshot）建隐藏窗口**（`WindowDesc.visible=false`，2026-11-08 固化）：可见窗口首显必抢前台焦点（实测 ~0.85 s/用例，--jobs 并行跑闸打断打字）；像素来自 GPU readback 与窗口可见性无关，基线零影响。别把该 hint 拿掉，交互模式仍 visible=true。8 个 tag 快照 exe 已由 `rebuild.py --force` 重编（`apply_hidden_window_patch()` 自动注入等价补丁，s0-init 除外——无截图模式且用例 manual），全量跑闸零抢焦点；快照源码 = tag + 此补丁，非纯 tag 原样。
 
 ## 简化器口径（M2.3a 定稿）
 - meshopt 多 pass 主循环（src 并入 dst + collapse_locked + cos75°）+ link condition + 双层边界锁（组间边界 + 模型开放边界 LockBorder）+ 绝对朝向锚（判决实验定稿保留）。`check-orient` 扫全链 inward（exit 1=FAIL）。
