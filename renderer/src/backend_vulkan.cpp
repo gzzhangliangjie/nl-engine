@@ -68,7 +68,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, bool dagMode, std::string& outError) override {
+              bool frustumCull, bool dagMode, bool skinMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -96,16 +96,19 @@ public:
         if (!createTargets(outError)) return false;
         // M4.0：vertex pulling 走 initCull。Vulkan 侧 SPIR-V 入口恒为 "main"（加载期
         // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
-        const bool sceneOk = dagMode
+        const bool sceneOk = skinMode
+            ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+            : (dagMode
             ? scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
@@ -180,6 +183,7 @@ public:
         const std::string file = lodMeshFileName(lodStem_, level);
         if (!scene_.setClusterLevel(nvrhiDevice_, file.c_str(), outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
@@ -218,6 +222,7 @@ public:
             return false;
         }
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();

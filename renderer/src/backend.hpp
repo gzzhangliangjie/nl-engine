@@ -38,7 +38,7 @@ public:
     // dagMode（M5.1）优先于 cullMode：多层 .lodN 驻留 + DAG 遍历 compute 选层。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
-                      bool frustumCull, bool dagMode, std::string& outError) = 0;
+                      bool frustumCull, bool dagMode, bool skinMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

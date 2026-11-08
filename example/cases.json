@@ -2151,6 +2151,200 @@
    ]
   },
   {
+   "id": "ma-track",
+   "label": "M-A1~M-A5",
+   "name": "动作系统 M-A 轨道（曲线采样 / 混合 / 状态机 / 1D blend space / 蒙皮）",
+   "tag": "anim-ma5",
+   "date": "2026-11-08",
+   "summary": "A 类并行轨道 feat/action-system：nl/anim 纯 CPU 确定性动作系统。M-A1 关键帧采样（per-bone 通道 (t,v) 秒制，Linear lerp/slerp + Step，域外 clamp，wrapTime 循环）；M-A2 线性/加法混合（bevy blendable.rs 旋转相对叠加语义）；M-A3 动作状态机（优先级取首个满足转移 + crossfade + UE 防跳变回退缩时 effective=D*(1-wNext)，lerp 对称性保证回退姿态连续）；M-A4 1D blend space（找段线性插权重，UE BlendSpace 1D 口径）。自写最小 vec3/quat 数学（拍板 A 路自建，ozz 只作参照）。验收 = 确定性自测四组全绿 + ctest 5/5 + 本页工具卡实跑；不进 kStage / 不进渲染回归总闸（A 类交代纪律）。M-A5 蒙皮层：CPU LBS（列主序 Mat4，palette=model*IBM，法线 3x3+归一）+ rigged glTF 蒙皮入口（skin.joints 槽位映射、IBM 换算、权重加载归一 bevy 语义）+ viewer skin 模式（动态 VB 逐帧蒙皮，--anim-time 截图确定性）；公式对源核实 bevy skin.rs / UE SkinnedMeshComponent。",
+   "acceptance": [
+    "anim-tools selftest curve/blend/statemachine/blendspace 四组全 PASS（确定性数值锚点断言，两次运行逐位一致）",
+    "ctest ma1~ma4 共 5/5 全绿（含未知用例负向 exit 2）",
+    "example/ma-track/run.bat ALL GREEN（四自测 + 负向 + sample + 证据图再生成）",
+    "状态机 10 步场景逐值断言：step6 回退 z 连续（0.7 不跳变）+ 缩时 0.3*(1-1/3)=0.2 生效",
+    "证据图 example/ma-track/evidence.png 由 anim-tools sample 真实输出生成（纯标准库 PNG）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/anim-tools.exe",
+    "vulkan": "build/vulkan/anim-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "anim-tools 纯 CPU 工具（只链 nl_core），两个 backend 键指向同一个 build/nmake exe。退出码约定：0 成功 / 1 断言失败 / 2 用法错误。",
+     "args": [],
+     "expectExit": 0,
+     "expectLog": "anim-tools - nl-engine action/animation controller"
+    },
+    {
+     "id": "curve",
+     "name": "selftest curve：M-A1 关键帧采样",
+     "kind": "tool",
+     "note": "lerp/slerp 数值锚点（45°/22.5° 四元数）、最短路径翻转不变、近平行 nlerp 退化、Step 保持前 key、常量/空轨道、wrapTime 负回绕、validateClip 六负向、两次运行逐位一致。",
+     "args": [
+      "selftest",
+      "curve"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim curve selftest: PASS"
+    },
+    {
+     "id": "inspect-fox",
+     "name": "inspect Fox.glb：3 clip 标准资产（Survey/Walk/Run）",
+     "kind": "tool",
+     "note": "Khronos glTF-Sample-Assets 官方演示资产：26 骨骼、3 clips（3.4167/0.7083/1.1583s）。inspect 打印骨架统计 + 末端骨骼 FK 世界位置轨迹（确定性输出）。",
+     "args": [
+      "inspect",
+      "{root}/assets/models/rigged/Fox.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 26 clips 3"
+    },
+    {
+     "id": "inspect-cesiumman",
+     "name": "inspect CesiumMan.glb：经典行走动画（22 骨骼）",
+     "kind": "tool",
+     "note": "业界标准中标准的骨骼行走用例。验证 loadGltfAnim 对真实导出器产物（scale 通道恒 1 忽略、首 key>0 的 translation 轨道）全链可用。",
+     "args": [
+      "inspect",
+      "{root}/assets/models/rigged/CesiumMan.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 22 clips 1"
+    },
+    {
+     "id": "inspect-riggedfigure",
+     "name": "inspect RiggedFigure.glb：标准蒙皮人体（22 骨骼）",
+     "kind": "tool",
+     "note": "Khronos 官方 rigged 人体，1 clip 1.25s。与 CesiumMan 同口径验证。",
+     "args": [
+      "inspect",
+      "{root}/assets/models/rigged/RiggedFigure.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "bones 22 clips 1"
+    },
+    {
+     "id": "blend",
+     "name": "selftest blend：M-A2 混合",
+     "kind": "tool",
+     "note": "lerpPose 锚点 w=0/0.5/1、blendClips 跨 clip 混合（22.5° 中点）、加法 quat 相对叠加（0/45/90/180° 合成）、骨架尺寸不一致拒绝。",
+     "args": [
+      "selftest",
+      "blend"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim blend selftest: PASS"
+    },
+    {
+     "id": "statemachine",
+     "name": "selftest statemachine：M-A3 状态机",
+     "kind": "tool",
+     "note": "10 步 loco 场景逐值断言（idle->walk->run->回退->idle）、step6 回退 z 连续 0.7 + UE 缩时 0.2、validate 五负向、两次运行序列逐位一致。",
+     "args": [
+      "selftest",
+      "statemachine"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim statemachine selftest: PASS"
+    },
+    {
+     "id": "blendspace",
+     "name": "selftest blendspace：M-A4 1D blend space",
+     "kind": "tool",
+     "note": "段权重锚点、域外 clamp、单 sample 退化常量 clip、validate 五负向、参数域扫掠两次逐位一致。",
+     "args": [
+      "selftest",
+      "blendspace"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim blendspace selftest: PASS"
+    },
+    {
+     "id": "negative",
+     "name": "负向：未知 selftest 用例显式拒绝",
+     "kind": "tool",
+     "note": "未知用例 exit 2（用法错误），不许静默假成功。",
+     "args": [
+      "selftest",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown selftest case"
+    },
+    {
+     "id": "skeleton",
+     "name": "selftest skeleton：M-A4b 骨架 FK + rigged glTF 入口",
+     "kind": "tool",
+     "note": "RiggedChain.glb（3 骨骼链 + sway 动画，程序化生成）加载 -> 骨架拓扑/rest 静态 TRS 单关键帧 -> FK 手算锚点（90° 链、sway t=0.5 spineWorld(-0.25,1.4330127)/headWorld(-0.5,1.8660254)）-> wrap 循环逐位一致、两次加载逐位一致、缺文件/拓扑序负向。",
+     "args": [
+      "selftest",
+      "skeleton",
+      "{root}/assets/models/RiggedChain.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim skeleton selftest: PASS"
+    },
+    {
+     "id": "anim-demo",
+     "name": "fkdump + 动画演示页：标准资产骨骼动态演示",
+     "kind": "tool",
+     "note": "fkdump 导出全骨骼逐帧 FK 世界坐标（确定性 TSV）；tools/anim_demo.py 据此生成单文件 anim-demo.html —— 四面板 canvas 循环播放 Fox Walk/Run、CesiumMan Walk、RiggedFigure，支持播放/暂停、0.25~3× 速度、XY/ZY 视角切换。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/anim-demo.html（预览图为本页截图）。",
+     "args": [
+      "fkdump",
+      "{root}/assets/models/rigged/Fox.glb",
+      "1",
+      "8"
+     ],
+     "expectExit": 0,
+     "expectLog": "# fkdump",
+     "preview": "example/ma-track/anim-demo-verify.png"
+    },
+    {
+     "id": "evidence",
+     "name": "sample：确定性演示输出 + 证据图",
+     "kind": "tool",
+     "note": "blend space 参数扫掠 + 状态机 10 步场景的确定性数值表（两次运行逐位一致）；example/ma-track/evidence.png 由 tools/anim_evidence.py 从本输出绘制（纯标准库 PNG，不手绘示意）。preview 静态图见下。",
+     "args": [
+      "sample"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim-tools sample (deterministic; two runs are bit-identical)",
+     "preview": "example/ma-track/evidence.png"
+    },
+    {
+     "id": "skinning",
+     "name": "selftest skinning：M-A5 LBS + rigged 资产端到端",
+     "kind": "tool",
+     "note": "刚体锚点不动点（head(-1,1)/hip 枢轴）、LBS 中点(-0.5,1)、法线旋转归一、validate 五负向；CesiumMan 端到端：网格撕裂检测（蒙皮/绑定最大边比<2）+ 主关节接近度（顶点距主导关节<1.2m）。注：rest-identity 判据对该资产无效（bind=T-pose 而 rest=行走姿），M-A5.2 换用上述两条强判据。",
+     "args": [
+      "selftest",
+      "skinning",
+      "{root}/assets/models/rigged/CesiumMan.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "anim skinning selftest: PASS"
+    },
+    {
+     "id": "skin-demo",
+     "name": "skindump + 蒙皮动画演示页：CesiumMan 行走（CPU LBS）",
+     "kind": "tool",
+     "note": "skindump 导出逐帧 CPU LBS 蒙皮顶点（确定性 TSV，IDX 三角索引 + DOM 主导关节 + F 逐帧位置，t=0 蒙皮输出中心平移与 viewer 同口径）；tools/skin_demo.py 据此生成单文件 skin-demo.html —— 四面板（CesiumMan Walk / Fox Walk / Fox Run / RiggedFigure，与 anim-demo 的 FK 面板同资产同 clip），canvas 深度排序 + 面法线兰伯特 + 主导关节着色，帧间线性插值，播放/速度/每画布拖拽轨道/滚轮缩放，#t=&pause= 调试锚点。加载器配套修正：NORMAL 缺失时从三角网格算平滑法线、非索引网格补恒等索引（Fox.glb 即此二者）。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/skin-demo.html（预览图为 t=1.2s 四面板截图）。",
+     "args": [
+      "skindump",
+      "{root}/assets/models/rigged/CesiumMan.glb",
+      "0",
+      "8"
+     ],
+     "expectExit": 0,
+     "expectLog": "# skindump",
+     "preview": "example/ma-track/skin-demo-verify.png"
+    }
+   ]
+  },
+  {
    "id": "s4.0",
    "label": "M4.0",
    "name": "GPU 簇数据通路 + vertex pulling 渲染（S4 首里程碑）",

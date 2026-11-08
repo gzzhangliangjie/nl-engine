@@ -102,13 +102,23 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool enableDebugLayer,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
-                                           bool dagMode) {
+                                           bool dagMode, bool skinMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）与 dag 模式（M5.1 多层遍历）资产同样是
     // assets/meshlets/ 下的 .nmesh。
     const bool isNMesh = clusterMode || cullMode || dagMode;
-    const bool nameOk = isNMesh ? validNMeshFileName(modelFile)
-                                : validModelFileName(modelFile);
+    // M-A5：skin 模式吃 assets/models/ 下的 .glb（含 rigged/ 子目录——
+    // 标准演示资产在 assets/models/rigged/；仍禁 ".." 与其他路径分隔符）。
+    bool nameOk = false;
+    if (skinMode) {
+        const std::string prefix = "rigged/";
+        if (modelFile && std::string(modelFile).rfind(prefix, 0) == 0)
+            nameOk = validModelFileName(modelFile + prefix.size());
+        else
+            nameOk = validModelFileName(modelFile);
+    } else {
+        nameOk = isNMesh ? validNMeshFileName(modelFile) : validModelFileName(modelFile);
+    }
     if (!nameOk) {
         r->impl_->error = std::string("invalid --model file name: '") +
                           (modelFile ? modelFile : "<null>") +
@@ -123,7 +133,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
         return r;
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
-                                 clusterMode, cullMode, frustumCull, dagMode,
+                                 clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";

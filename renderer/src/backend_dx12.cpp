@@ -70,7 +70,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, bool dagMode, std::string& outError) override {
+              bool frustumCull, bool dagMode, bool skinMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -151,7 +151,9 @@ public:
         // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
         // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
         bool sceneOk = false;
-        if (dagMode)
+        if (skinMode)
+            sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
+        else if (dagMode)
             sceneOk = scene_.initDag(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (clusterMode)
             sceneOk = scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError);
@@ -163,6 +165,7 @@ public:
         if (!sceneOk) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
@@ -249,6 +252,7 @@ public:
         const std::string file = detail::lodMeshFileName(lodStem_, level);
         if (!scene_.setClusterLevel(device_, file.c_str(), outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
@@ -290,6 +294,7 @@ public:
             return false;
         }
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();

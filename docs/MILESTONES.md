@@ -709,6 +709,29 @@
 
 **下一步**：S4 分块/LOD 交换（或按 ROADMAP 顺延）；S5 运行时组原子 cut（M3.2 已预演，屏幕空间选层公式已存档）。
 
+## M-A0~M-A4 动作系统立项 + 纯逻辑层四步（A 类并行轨道 feat/action-system，2026-11-08）
+
+**动作**：立项（三家实读：UE Animation 模块定向读 / bevy_animation 0.20-dev RFC 51 / Carrot 二次确认动作逻辑层空白；网上生态调研：ozz=下层事实标准但刻意不做状态机层、Lumix=自建参照）→ 用户拍板 A 路自建 + 自写最小数学 + 独立 anim-tools exe → M-A1 关键帧采样 → M-A2 线性/加法混合 → M-A3 动作状态机 → M-A4 1D blend space → 工具版交代（展示台 ma-track 卡 + run.bat + 证据图 + TOOLS-GUIDE）。计划落 `docs/action-system/ACTION-PLAN.md`（含三处对照拍板表与网上调研 §2.5）。
+
+**提交版本**：M-A1（M-A0/M-A1 同 commit）/ M-A2 / M-A3 / M-A4+交代（tag `anim-ma1`~`anim-ma4`，验收后打）
+
+**完成情况**
+- nl/anim：anim_math（vec3/quat：slerp 最短路径 + 近平行 nlerp 退化 + scaleQuat/mulQuat 加法语义）、anim（AnimClip per-bone 通道 (t,v) 秒制、Linear/Step、域外 clamp、wrapTime、validateClip 空通道=常量、lerpPose/blendPoses/addPose）、state_machine（优先级取首个 + crossfade + UE 回退缩时 effective=D*(1-wNext)、swap+alpha 取反保姿态连续）、blend_space（找段线性插权重、域外 clamp、单 sample 退化）。
+- anim-tools selftest 四组全 PASS（确定性数值锚点、两次运行逐位一致）+ sample 确定性演示输出；ctest 5/5（ma1~ma4 + 负向 WILL_FAIL）。
+- 交代物：`example/ma-track/`（run.bat ALL GREEN + evidence.png 960×540 由 sample 真实输出经纯标准库 PNG 绘制，两次生成逐字节一致）+ 展示台 ma-track 版本卡 7 张（usage/curve/blend/statemachine/blendspace/negative/evidence，expectExit 0/2 + expectLog 锁死）+ `docs/action-system/ANIM-TOOLS-GUIDE.md`；`server.py --check` OK（stage=S3.2 不受 A 轨影响）。
+- A 类纪律：不进 kStage、不动 S0~S14、不进渲染回归总闸；渲染代码零改动。
+
+**踩坑情况**
+1. 沙箱 reg.exe 黑名单打断 vcvars 注册表探测（rc/mt/LIB 缺失，CMake 编译器探测挂）→ `scripts/build-anim.bat` 手工补 SDK bin + INCLUDE/LIB；HTTPS_PROXY/https_proxy 撞键致 DevShell/VS 生成器不可用（M0.0 坑 6 重现）→ 继续 NMake。
+2. validateClip 曾把空通道判非法 → 仅 rotation 轨道的骨骼（head）被拒 → sampleClip 空 poses → 自测 poses[0] 段错误；逐用例进度输出定位后改「空通道=常量语义」（与采样侧一致）。
+3. 自测期望手算三连错（漏算 crossfade 期间 fromTime 同步推进 → step6/7/8 期望值全错；sin(11.25°) 常数笔误；断言时机在场景结束后）——实现全对、期望全错，逐值核算修正；教训：断言值必须在 update 时序模型下手算，不能拍脑袋。
+4. blendPoses 输入输出同容器混叠（先 clear 毁输入）——evaluate 改临时缓冲。
+5. 测试时点撞语义边界：t=1.0 撞 wrapTime 循环归零（t=duration→0，实现正确）、t=0 撞 clip 起点。
+6. NMake 时间戳陷阱复发：obj 在 `CMakeFiles/<target>/<target>/` 子目录，删错层不重编（M2.3a 坑 3 同款）。
+
+**下一步**：M-A5 视觉验收后挂（等 2.3 骨骼蒙皮 + rigged GLB）；2.3 立项时再议 vendored ozz；merge 回 master 走 PARALLEL-TRACKS §7.2 文档闸。
+
+---
 ---
 
 ## M4.0 GPU 簇数据通路 + vertex pulling 渲染（tag `s4-indirect`，2026-11-08）
@@ -991,3 +1014,54 @@
 2. **cut thr 滑条回读钳制命令行参数（潜伏 bug，M5.1 埋雷）**：dag 遍历模式 HUD 不画滑条（`frame.dagGroupCount` 恒 0 不填），但 viewer 每帧 `if (dagTop||dagMode) cutThresholdPx = clamp(hud.cutThresholdPx, 0.25, 4.0)` 无条件回读 → 命令行 thr 16 第二帧起被覆盖成 1.0。实锤过程：far HUD 基线图显示 237/3936（= no-hud thr 1 的结果），no-hud 同参数 14/426 → 实测 thr1@dist20H720 == 237/3936 逐位吻合。s5.1 near 没踩到纯属 thr 恰好 = 1.0。
 3. **历史 selftest 卡 expectLog 失配（潜伏，M5.0 埋雷）**：m0.9/s2.0/s3.2 卡 exe=current 但写死 15/15，M5.0 加第 16 项 selftest 后必 FAIL，此前收口没挑到这三卡所以没暴露。教训：exe=current 的 tool 卡断言的是**当前构建**，套件数/stage 演进时历史卡必须同步，否则全量跑闸必炸。
 4. **Edit 工具误删行**：批量替换时 old_string 尾部含上下文行、new_string 漏带，`beginTrackingBufferState(identityIndex_, ...)` 被吃——编译能过（writeBuffer 不依赖前一行）但状态跟踪会错，目检 diff 当场抓回。
+## M-A4b 骨架 FK + rigged glTF 资产入口（feat/action-system，2026-11-08）
+
+**动作**：M-A5 视觉验收的两个前置解阻塞（蒙皮渲染仍等 2.3，但骨架层与资产层不被阻塞）——①`nl/anim/skeleton`（扁平拓扑表 + 纯 (T,R) FK，ozz Skeleton 同构口径）；②`nl/anim/gltf_anim`（rigged glTF -> Skeleton + AnimClip，tinygltf 声明侧第二消费 TU）；③程序化资产 `RiggedChain.glb`（tools/make_rigged_glb.py，纯标准库 GLB）→ selftest skeleton + ctest ma4b + run.bat/展示台卡/TOOLS-GUIDE 收口。
+
+**提交版本**：M-A4b（tag `anim-ma4b`，验收后打）
+
+**完成情况**
+- skeleton：boneNames/parentIndices/restPose 三表拓扑序；`localToModel` = model[i]=parent⊗local[i]（rotVecByQuat 作用于局部平移）；out 与输入同容器安全；validate 拒拓扑序破坏/重名/尺寸不齐。
+- gltf_anim：DFS 收表（无名节点自动 bone_N）、LINEAR/STEP、rotation 采样归一化；SCALE/CUBICSPLINE 显式拒绝；静态 TRS → 单关键帧轨道（⭐空轨道=零/identity 常量语义，不能兜 rest）。
+- 验证：selftest skeleton PASS（FK 手算锚点 + sway t=0.5 spineWorld(-0.25,1.4330127)/headWorld(-0.5,1.8660254) + wrap 逐位 + 两次加载逐位 + 负向）；ctest 6/6；`example/ma-track/run.bat` ALL GREEN（含资产再生成）；`server.py --check` OK。
+
+**踩坑情况**
+1. tinygltf 双 TU 宏视图不一致（mesh_io 的 `TINYGLTF_NO_STB_IMAGE_WRITE` 未被 gltf_anim 复刻）→ inline 构造引用被禁 `WriteImageData` LNK2019。约定固化：第二个 tinygltf 消费 TU 必须复刻 IMPLEMENTATION TU 全部 NO_* 宏。
+2. FK 测试初版 local 未以 restPose 打底（local=采样输出语义，静态 TRS 在轨道内）——用例错实现对。
+3. bash 调 bat 传多 target 必须分开传参（引号整体成一个参数，NMake 收不到第二个 target）。
+
+**下一步**：M-A5 视觉验收等 2.3 蒙皮渲染（届时资产/骨架/采样/混合/状态机/blend space 全链已备）；或先做 sway 轨迹证据图升级（preview 用）。
+
+## M-A4d 骨骼动画动态演示（feat/action-system，2026-11-08）
+
+**动作**：用户要看「图」→「动态图演示」——anim-tools 新增 `fkdump`（全骨骼逐帧 FK 世界坐标 TSV，确定性）与 `fksample`（末端单点轨迹）；`tools/anim_demo.py`（纯标准库）生成单文件 `example/ma-track/anim-demo.html` 动态演示页。
+
+**提交版本**：M-A4d（tag `anim-ma4d`）
+
+**完成情况**：四面板 canvas 循环播放 Fox Walk/Run、CesiumMan Walk、RiggedFigure（Khronos 标准资产真实 FK 数据，页面零伪造——数据 100% 来自 fkdump，JS 只做投影取帧）；播放/暂停 + 0.25~3× 速度 + XY/ZY 视角切换 + 等比投影居中；fkdata/ 四段 dump 入库；run.bat 补 fkdump 锁行 ALL GREEN；cases.json ma-track 卡 +1（preview=Edge 无头实截）；TOOLS-GUIDE 追加 M-A4d；server --check OK。另：纠正 M-A5 错误前提（commit 7266abc）——「2.3 蒙皮」系编号撞车（里程碑 M2.3=LOD viewer 早收官；实指 ROADMAP §2.3 渲染侧蒙皮层，规划未开工，renderer/shaders 零 skin/bone 命中实证）。
+
+**踩坑情况**：等比投影初版 x/y 各自 sx/sy 拉伸变形——改 min(W/f.w, H/f.h) 统一比例 + 内容居中；Edge 无头 `--headless=new --screenshot --virtual-time-budget` 对本地 HTML 截图核查渲染（本机可用）。
+
+**下一步**：M-A5 蒙皮渲染（CPU 刚体绑定 → LBS → 模型展示）——蒙皮层需从零建，不再「等」任何已有里程碑。
+
+## M-A5 蒙皮层 + 模型展示（feat/action-system，2026-11-08）
+
+**动作**：用户拍板「继续做蒙皮和模型展示」→ 两段落地。M-A5.1：`nl/anim/skinning`（CPU LBS：列主序 Mat4、palette=model*IBM、skinPositions/skinNormals、validateSkinBinding）+ `loadGltfSkinnedModel`（skin.joints 槽位映射、IBM 换算、JOINTS_0/WEIGHTS_0 物化、权重加载归一 bevy 语义），动手前补读 bevy skin.rs / UE SkinnedMeshComponent 两处参考（用户指出未读源码就动手）。M-A5.2：viewer `Skin` 模式（`--mode skin`，动态 VB 逐帧蒙皮，`--anim-time` 截图确定性）+ 取景修正 + 回归收口。
+
+**提交版本**：M-A5.1（`cde41c7`）+ M-A5.2（本提交，tag `anim-ma5`）
+
+**完成情况**：
+- selftest skinning 全 PASS：刚体锚点不动点、LBS 中点、法线旋转归一、validate 五负向、CesiumMan 端到端两条强判据（网格撕裂检测：蒙皮/绑定最大边比<2；主关节接近度：顶点距主导关节<1.2m）；ctest ma5 1/1。
+- regression ma-track 13/13 ALL GREEN（cases.json 新增 skinning 用例卡；ma-track 版本卡更新 M-A1~M-A5 / tag `anim-ma5`；run.bat 补 skinning 锁行）。
+- viewer 截图验收：`example/ma-track/skin-walk-t0/t06/t12.png`（CesiumMan 行走三时刻相位清晰、全身居中、无撕裂无尖刺）。
+- 取景修正：skin 模式 init 时做一次 t=0 蒙皮，取蒙皮输出 bbox 中心做逐帧后蒙皮平移（bind bbox 中心无效——网格在 bind 空间中心≈原点，偏移来自骨骼动画输出站姿）；缺省距离 2.6（Suzanne 口径 4.2 对 1.4m 人形太远）。
+- ANIM-TOOLS-GUIDE 补 skin 模式与 selftest skinning 用法。
+
+**踩坑情况**：
+1. ⭐JOINTS_0 语义：值域是 skin.joints 数组槽位不是 node id——首版把槽位当 node id，脚部顶点绑到手臂骨骼，渲染放射尖刺；`cmdSkinCheck` 诊断定位，jointSlotToBone 映射修复。
+2. rest-identity 判据失效：CesiumMan bind=T-pose 而 rest=行走姿，IBM≠inverse(restGlobal) 是资产正常状态（此前自测通过是「槽位误映射 × IBM 误换算」两个错误抵消的巧合）；换撕裂检测+接近度两条强判据。
+3. node.matrix：CesiumMan Z_UP/Armature 节点用 matrix 而非 TRS，collectBones 初版忽略 → decomposeNodeMatrix（列主序刚性分解 + Shepperd 四元数提取）。
+4. ⭐回归 cwd 错位（真 bug 两枚）：regression.py 工具用例 cwd=exe 目录（build/nmake），ma-track 用例卡却写仓库根相对路径——M-A4 起用例只跑过 run.bat 从未真跑 regression，本次首跑即暴露 6 条 FAIL；修 = 用例参数改 `{root}/` 模板（server.py build_argv 既有白名单）。连带暴露 anim-tools 缺文件段错误：testGltfAssetLoad / testGltfDeterminism 加载失败不早退，`clips[0]` 打空 vector UB——补早退守卫（exit 139 → 干净 FAIL）。
+5. 「selftest skeleton + CesiumMan FAIL」虚惊：该用例约定 3 骨合成资产 RiggedChain.glb，传 Khronos 资产属用错参数非回归。
+
+**下一步**：M-A 轨道收口（merge 回 master 走 PARALLEL-TRACKS §7 文档闸）；GPU 调色板（shader 端 palette UB）等更大规模蒙皮资产再立项。

@@ -88,6 +88,7 @@ struct Options {
     int  frames     = 8;
     float yawDeg    = 12.0f;  // 与 OrbitCamera 默认一致，默认正脸、截图可复现
     float pitchDeg  = 9.2f;
+    bool distSet = false;                     // 用户显式给了 --dist（skin 模式缺省距离不同）
     float distance  = 4.2f;
     std::string screenshotPath;
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
@@ -96,6 +97,9 @@ struct Options {
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
     int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
     int  dagGroup = -1;       // M3.2：--dag-group N，dag-top 模式初始下钻组（-1 = 纯顶层）
+    // M-A5：skin 模式动画时间（秒）。未指定 = 实时累加；指定 = 固定（截图确定性）。
+    bool animTimeSet = false;
+    float animTime = 0.0f;
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -184,6 +188,11 @@ Options parseArgs(int argc, char** argv) {
             o.pitchDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--dist" && i + 1 < argc) {
             o.distance = static_cast<float>(std::atof(argv[++i]));
+            o.distSet = true;
+        } else if (a == "--anim-time" && i + 1 < argc) {
+            // M-A5：固定蒙皮动画时间（秒，clip 内循环采样）——截图确定性与验收用。
+            o.animTimeSet = true;
+            o.animTime = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -290,7 +299,8 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
-              bool dagTop = false, bool cullMode = false, bool dagMode = false) {
+              bool dagTop = false, bool cullMode = false, bool dagMode = false,
+              bool skinMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -313,7 +323,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn, dagMode);
+                                                   o.frustumOn, dagMode, skinMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -379,7 +389,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     nl::core::OrbitCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
-    camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
+    // M-A5.4：skin 模式资产尺度自适应——Fox.glb 等资产单位远大于 1m，固定缺省
+    // 距离会把相机放进模型肚子里。未显式 --dist 时按 t=0 蒙皮输出半径取景，
+    // max() 兜底保证 CesiumMan 级小资产维持既有 2.6 取景（基线不破）。
+    float camDist = o.distance;
+    if (o.mode == nl::core::ViewMode::Skin && !o.distSet) {
+        camDist = std::max(camDist, renderer->info().skinRadius * 2.4f);
+    }
+    camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
     bool cullBack = o.cullBack;
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
@@ -428,6 +445,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
+    double skinTime = 0.0;   // M-A5：skin 模式动画时间（--anim-time 固定 / 实时累加）
     std::uint64_t frame = 0;
     int colorIndex = o.color;
     int screenshotsSaved = 0;
@@ -539,6 +557,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             const auto e = renderer->extent();
             fp.viewportHeight = static_cast<float>(e.height);
             fp.cutThresholdPx = cutThresholdPx;
+        }
+        // M-A5：skin 模式动画时间——--anim-time 固定（截图确定性），否则实时累加。
+        if (skinMode) {
+            skinTime = o.animTimeSet ? o.animTime : skinTime + dtMs / 1000.0;
+            fp.animTime = skinTime;
         }
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
@@ -794,6 +817,9 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
     case nl::core::ViewMode::Dag:        // M5.1：GPU DAG 遍历选层（compute 显式栈）
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/true, /*dagMode=*/true);
+    case nl::core::ViewMode::Skin:       // M-A5：CPU 蒙皮展示（rigged GLB 逐帧 LBS）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -867,6 +893,14 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::Dag)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
+    }
+    // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。
+    if (o.mode == nl::core::ViewMode::Skin && !o.modelSet) {
+        o.modelFile = "rigged/CesiumMan.glb";
+    }
+    // M-A5：skin 模式缺省距离拉近（4.2 是 Suzanne 口径；1.4m 人形在 4.2 外太小）。
+    if (o.mode == nl::core::ViewMode::Skin && !o.distSet) {
+        o.distance = 2.6f;
     }
     return runMode(o.mode, o);
 }

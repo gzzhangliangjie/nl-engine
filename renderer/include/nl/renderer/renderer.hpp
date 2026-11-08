@@ -57,6 +57,10 @@ struct FrameParams {
     float nearPlane          = 0.1f;              // 近断面（与相机投影一致）
     float viewportHeight     = 720.f;             // 投影用的视口高度（px）
     float cutThresholdPx     = 1.0f;              // 组原子 cut 阈值（px，>0）
+
+    // M-A5：蒙皮动画时间（秒，循环采样由 Scene 侧 wrapTime）。仅 skin 模式消费；
+    // 其他模式忽略（确定性截图用 --anim-time 固定，实时模式由 viewer 累加 dt）。
+    float animTime    = 0.0f;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -153,6 +157,10 @@ struct DeviceInfo {
     //（dagGroup>=0 时有效，来自 .nmesh meta 的组 sphere）。纯 normal 模式恒 0。
     float assetSphere[4]     = {0.0f, 0.0f, 0.0f, 0.0f};
     float dagGroupSphere[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // M-A5.4：skin 模式 t=0 蒙皮输出半径（最大顶点到中心距离；非 skin 模式 0）。
+    // viewer 据此对未显式 --dist 的 skin 模式做资产尺度自适应取景。
+    float skinRadius = 0.0f;
 };
 
 class Renderer {
@@ -169,7 +177,8 @@ public:
                                             bool clusterMode = false,
                                             bool cullMode = false,
                                             bool frustumCull = true,
-                                            bool dagMode = false);
+                                            bool dagMode = false,
+                                            bool skinMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
