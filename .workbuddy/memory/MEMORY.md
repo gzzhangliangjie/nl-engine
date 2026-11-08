@@ -16,7 +16,9 @@
 
 ## 当前进度
 - 主线 S0~S4.2：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(s4-cull) → M4.2 cull 计时+1.3M dense 资产+60fps 验收(**176/176 ALL GREEN**，tag s4-done，S4 收官)。
-- 当前 `kStage=S4.2`；主线下一步 S5(运行时组原子 cut，bevy 屏幕空间公式已存档 cull_shared.wesl:13)。
+- 当前 `kStage=S5.0`；**M5.0 误差投影已验收**（tag `s5-proj`）：`core/src/lod_error.cpp` `screenErrorPixels()` bevy/zeux 口径（用户拍板，S5-PLAN 旧「平面距离」口径已划掉留痕）+ HUD `s5 err` 行/`cut thr px` 滑条 + selftest 15→16；三机位 1567.05/352.15/149.84 px 与离线手算逐位一致。主线下一步 M5.1 compute DAG 遍历（显式栈，输出=S4 indirect buffer）。
+- **UE 差异台账（2026-11-08 用户点名固化）**：所有与 UE 不一致处随手记 `docs/s5/UE-DIFFS.md`（D1 投影口径/D2 二值 cut/D3 遍历结构/D4 简化器/D5 无实例误差旋钮/D6 无遮蔽剔除/D7 无软光栅 + D8/D9 待办），AGENTS.md 已挂入口；里程碑收口/review 前过一遍。
+- kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 m0.9/s2.0/s3.2/s4.1/s4.2 共 5 对）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
 - **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，2.3 立项再议 vendored）；M-A5 视觉验收等 2.3 蒙皮 + rigged GLB。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
@@ -63,3 +65,8 @@
 - 三 worktree 均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree` 防纪律源误入 feature 分支（git status 干净）。
 - 纪律三条（详 `docs/PARALLEL-TRACKS.md` §7）：① 实例注册表登记占用说明；② 固化文档闸（merge 回 master 前必写 `S*-PLAN`/`MILESTONES` 验收纪要）；③ 假绿防护（占坑≠文件指向，merge 前双向 `git status` 自查：wt 看得到、master 没有）。
 - 工作线粘性：同一轨道回同一 worktree；一条工作线只 merge 一次（验收 FAIL→补丁→复验在占坑内闭环）。
+
+## 非渲染候选拍板（2026-11-08）
+- **总原则（用户拍板）：有参考的内容就考虑从头写**——不因有现成开源库而改集成路线；参照实现用于对照与节奏校准。
+- **寻路（NavMesh+A*）：从零写**——Carrot `pathfinding/`（2336 行，SparseVoxelGrid→OpenHeightField→DistanceField→Region→Contour→AStar，debugDraw 分步可视化）为从零节奏参照，UE `Runtime/Navmesh`（Recast v1.4.2+Detour）只读；候选 ★★★★，待立项出 S-PLAN。
+- **物理：vendored Jolt（MIT）不自研**——原则例外：Carrot physics 本身就是 Jolt 集成层（2902 行）、UE 5.x 亦提供 Jolt 后端、bevy 生态 avian，三处均不自研求解器；集成方式参照 Carrot `physics/`。想学原理另开 Box2D-Lite mini 求解器支线（不进引擎）。

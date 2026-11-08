@@ -2700,6 +2700,55 @@
      "preview": "example/p8-jobs/negative-unknown.png"
     }
    ]
+  },
+  {
+   "id": "s5.0",
+   "label": "M5.0",
+   "name": "误差投影：世界 → 屏幕像素（bevy/zeux cut 判据）",
+   "tag": "s5-proj",
+   "date": "2026-11-08",
+   "summary": "M5.0（kStage=S5.0）：S5 组原子 cut 的选层判据落地——core 纯数学层 screenErrorPixels()：screenPx = worldError / max(d, near) × projYScale × 0.5 × H，d = |球心−eye| − 球半径（bevy cull_shared.wesl:13，溯源 zeux nanite.cpp:115，与 S3 error chain 同源；2026-11-08 用户拍板，与 UE GetProjectedEdgeScales 切线投影的差异记 docs/s5/UE-DIFFS.md D1）。OrbitCamera 补 eyePosition/projectionYScale/nearPlane 只读访问器（eye 与 viewProjection 同源公式）。HUD dag-top 模式新增 s5 err 实时行（无下钻用资产联合球+顶层 maxError，下钻优先组记录球+组误差）+ cut thr px 滑条（0.25~4.0 默认 1.0），非 dag 模式 HUD 布局一像素不动。lodErrorSelfTest() 45° fov 手算逐例对比进 viewer --selftest。",
+   "acceptance": [
+    "数值复核：dag-top + HUD 三机位 dist 2.0/4.2/8.0 屏幕误差 1567.05 → 352.15 → 149.84 px 单调下降，与 Python 按资产真实 maxError=1.1375、联合球 R=1.2661、eye 公式离线手算逐位一致（example/s5-proj/ 三连拍）",
+    "双后端 selftest 16/16（含 lodErrorSelfTest 手算用例）",
+    "kStage bump 波及面：仅 exe=当前构建的 5 对 HUD 基线重拍（m0.9/s2.0/s3.2/s4.1/s4.2；m0.1~m0.8/s1.0 走 tag 快照 exe 不受影响），关键用例回归 6/6 bytes（s3.2/dag-hud、m0.9/gate-hud、s4.1/cull-inside-hud）",
+    "server --check OK（stage=S5.0 version=s5.0）",
+    "docs/s5/UE-DIFFS.md 台账建立（AGENTS.md 固化入口）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-hud",
+     "name": "dag-top HUD：s5 err 实时行 + cut thr px 滑条",
+     "kind": "pair",
+     "note": "dag-top 无下钻机位（yaw12/pitch9/dist4.2, 640x720, shading normal）：HUD 显示 s5 err 352.15 px（资产联合球 + 顶层 maxError=1.1375 手算复核逐位一致）与 cut thr px 滑条。切相机/拉远时该值随距离单调下降。基线即 M5.0 数值复核证据图。",
+     "baselines": {
+      "dx12": "example/s5-proj/s5-hud-dx12.png",
+      "vulkan": "example/s5-proj/s5-hud-vulkan.png"
+     },
+     "args": [
+      "--mode", "dag-top", "--hud", "--screenshot", "{out}",
+      "--frames", "8", "--shading", "normal",
+      "--yaw", "12", "--pitch", "9", "--dist", "4.2", "--size", "640x720"
+     ],
+     "command": "viewer.exe --mode dag-top --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s5-proj/run.bat verify",
+     "preview": "example/s5-proj/s5-hud-dx12.png"
+    },
+    {
+     "id": "s5-selftest",
+     "name": "selftest：lodErrorSelfTest 手算投影用例（16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：新增 M5.0 手算屏幕误差用例（45° fov 已知球固定相机逐例对比）；套件数 15→16。",
+     "args": ["--selftest"],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
   }
  ]
 }

@@ -7,11 +7,11 @@
 
 ## M5.0 误差投影：世界 → 屏幕像素（1 天）
 
-- [ ] 公式：`screenError = worldError * (screenHeight / 2) / (distance * tan(fov/2))`，distance 用簇球心到相机平面距离
-- [ ] 单元测试：固定相机下已知 worldError 的球，手算屏幕误差对比
-- [ ] 阈值参数进 ImGui（先 1.0 px 起步）
+- [x] 公式（2026-11-08 拍板修正）：bevy/zeux 口径 `screenPx = worldError / max(d, near) × projYScale × 0.5 × H`，`d = |球心−eye| − 球半径`（保守取球最近点）。~~原文「distance 用簇球心到相机平面距离」与 M3.2 已存档的 bevy 公式冲突，弃用~~——与 S3 error chain 同源；与 UE `GetProjectedEdgeScales` 切线投影的差异记 `docs/s5/UE-DIFFS.md` D1
+- [x] 单元测试：`core/src/lod_error.cpp` `lodErrorSelfTest()`（45° fov 手算逐例对比，进 viewer `--selftest`）
+- [x] 阈值参数进 ImGui（`cut thr px` 滑条 0.25~4.0，默认 1.0；HUD 加 `s5 err` 实时行）
 
-**自检**：转相机时投影值随距离单调变化、数值合理。tag：`s5-proj`。
+**自检（2026-11-08 实测通过）**：dag-top + HUD 三机位（dist 2.0/4.2/8.0）屏幕误差 1567.05 → 352.15 → 149.84 px 单调下降，与 Python 按资产真实 maxError=1.1375、联合球 R=1.2661、eye 公式离线手算**逐位一致**；数值复核 + 26 张 HUD 基线重拍 + 3 条关键用例回归 6/6 bytes。tag：`s5-proj`（详见 MILESTONES M5.0 纪要）。
 
 ## M5.1 compute DAG 遍历（2~3 天，本步核心）
 

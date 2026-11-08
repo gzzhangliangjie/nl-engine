@@ -132,6 +132,11 @@ public:
     // M4.1：GPU 剔除统计（两帧前的结果；-1 = 暂无数据）。clusterCount 总簇数恒有。
     int           visibleClusters() const { return cullVisibleCount_; }
     std::uint32_t clusterCount() const { return clusterCount_; }
+    // M5.0：屏幕误差投影球数据（世界空间 xyz=center w=radius；model 恒单位阵）。
+    // assetSphere = 当前显示几何联合球（uploadClusterData 每次重算）；
+    // dagGroupSphere = 下钻组记录球（dagGroup()>=0 时有效）。
+    const float* assetSphere() const { return assetSphere_; }
+    const float* dagGroupSphere() const { return dagGroupSphere_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -200,6 +205,10 @@ private:
     // Scene::draw 里的 compute 剔除段。query 延迟到第一次 HUD 路径的 pollCullStats 才建，
     // --no-hud 截图与历史基线完全不碰（M0.6 同款纪律）。
     GpuTimer cullTimer_;   // setLabel("cull")：resolve 日志与整帧计时区分开
+
+    // ---- M5.0（S5.0）：屏幕误差投影球数据 ----
+    float assetSphere_[4]    = {0.0f, 0.0f, 0.0f, 0.0f};
+    float dagGroupSphere_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 } // namespace nl::renderer::detail

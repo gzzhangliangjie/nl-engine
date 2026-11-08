@@ -117,6 +117,7 @@ add_library(nl_core STATIC
     core/src/grouping.cpp      # M2.0：簇聚组（core 里唯一碰 METIS 符号的文件）
     core/src/simplify.cpp      # M2.1：组内 QEM 简化 + 边界锁定
     core/src/lod.cpp           # M2.2：逐层 LOD 循环（聚组→简化→重切）
+    core/src/lod_error.cpp     # M5.0：屏幕空间误差投影（zeux/bevy cut 公式，纯数学）
     core/src/fallback.cpp      # M3.1：fallback mesh（顶层 weld 拼接）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化

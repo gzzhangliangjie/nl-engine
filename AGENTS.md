@@ -90,6 +90,7 @@
 3. **与官方效果对齐**：关键算法 / 视觉结果必须和参考实现对比核验（UE5 官方 = 工业终态满分答卷、bevy = 同代实证、Carrot = 节奏参照）：
    - 几何 / 简化 / DAG 类，对照 UE `NaniteBuilder`、`SimplifyTriangles`、bevy `meshlet` 的产出口径（如 fallback 焊接 2.6% ≈ UE 默认 2%、朝向锚判定随折叠同步更新、按组重切保证父子簇不重叠）。
    - 任何偏离官方口径的地方，必须**解释原因并留痕**（写进 `S*-PLAN.md` / `MILESTONES.md` 踩坑栏），不许静默偏离。
+   - **偏离集中台账**（2026-11-08 固化）：所有与 UE5 官方做法的不一致，除上述散落留痕外，必须随手追加到 **`docs/s5/UE-DIFFS.md`**（一条 = UE 做法 + 出处、我们现状、定性〔有意简化/未实现/计划内待办〕、升级路径/触发条件）；每个里程碑收口 / review 前过一遍该文档，确认升级路径仍成立。
 
 > 双后端比对由 `python tools/regression.py`（全量历史用例 × 双后端比对基线）执行，提交 / tag 前必须全绿。完整口径见 `.workbuddy/memory/MEMORY.md`「架构」「S2/S3 约定」与 `docs/ROADMAP.md`。
 

@@ -1,0 +1,85 @@
+# S5 · 与 UE5 官方做法差异台账（UE-DIFFS）
+
+> 用途：集中记录本项目与 UE5 Nanite 官方实现**不一致**的地方，供 review 一次性过。
+> 纪律来源：AGENTS.md「任何偏离官方口径的地方必须解释原因并留痕，不许静默偏离」——本文档即留痕的集中落点。
+> 维护约定：**新差异随手追加一条；每个里程碑收口 / review 前过一遍本文档**，确认「升级路径 / 触发条件」仍然成立。
+> 定性分三档：**有意简化**（故意选更简单的做法，留升级路径）/ **未实现**（终态要做，当前缺）/ **计划内待办**（已排期）。
+
+## 算法差异
+
+### D1 误差投影口径：zeux 一维公式 vs UE 切线投影（M5.0，有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `NaniteCullingCommon.ush:112` `GetProjectedEdgeScales`：对包围球做**精确切线投影**，返回投影误差 min/max 区间（float2）；显式分支处理球跨近断面（`DistToTSq < 0`）、相机入球（`bVisibleAngleSpansZero`）等退化情形；阈值带 `LODScale × UniformScale`。调用点 `NaniteClusterCulling.usf:255` `ShouldVisitChild`。 |
+| 我们现状 | `core/src/lod_error.cpp` `screenErrorPixels()`：`screenPx = err / max(\|eye−C\|−R, near) × projYScale × 0.5 × H`（bevy `cull_shared.wesl:13`，溯源 zeux meshoptimizer `demo/nanite.cpp:115`）。 |
+| 为什么 | ① 与 S3 error chain 同一权威源（bevy 自己注明抄 zeux），全链一个口径；② 一维标量，M5.1 compute 遍历与单测都简单；③ 2026-11-08 用户拍板。 |
+| 已知偏差 | 偏轴簇用欧氏距离低估视平面 Z → 屏幕边缘可能选层偏粗（多画细节，不破画面）；球跨近断面只 clamp 不做切线几何。 |
+| 升级路径 | `screenErrorPixels()` 是纯函数，换成 UE 切线投影只动它 + 重推 M5.0 单测手算值；调用方（viewer HUD / compute 遍历）不动。 |
+| 触发条件 | M5.1/M5.2 在偏轴或进模场景实测选层明显偏粗时升级。 |
+
+### D2 cut 语义：二值切层 vs UE 连续 LOD 混合（M5.0 起，有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `NaniteRasterizer.usf:2097` `ComputeClusterLODTransition`：父子簇之间算 0..1 过渡因子，连续混合。 |
+| 我们现状 | cut 二值：`screenPx < cutThresholdPx` 即在此层停（S5 组原子 cut）。 |
+| 为什么 | 组原子 cut 数据前提（父簇绝不跨组）只支撑整组离散切换；连续混合需要 per-pixel 过渡预算，复杂度整档提升。 |
+| 缓解 | S5.2 滞回（hysteresis）防抖解决同族的阈值抖动问题，但仍是离散切层。 |
+| 升级路径 | 若视觉上切层跳变不可接受，再立项连续过渡（参考 UE 的 dithered transition）。 |
+
+### D3 DAG 遍历结构：单级组原子 cut vs UE 两级 hierarchical（S5 设计，有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 两级：mesh 级预剔除（`NaniteCulling.cpp` 出候选实例）→ cluster 级 hierarchical BVH/swizzle 遍历 + 两阶段 raster 队列（cull pass 产出、raster pass 消费）。 |
+| 我们现状 | 单级：32B 组记录（error/sphere[4]）flat 列表 + 组原子 cut，遍历输出复用 S4 indirect buffer。 |
+| 为什么 | 资产规模当前单模型（≤1.3M tri），组数 ≤ 数百，两级层次收益未显性；Carrot 的 flat 双阈值模型（`draw_virtual_geometry.slang:81`）证明 flat 也能出正确画面。 |
+| 升级路径 | 资产规模上到多实例 / 千组级时引入 mesh 级预剔除；hierarchical 遍历与 P9 流式分页（V4）同期评估。 |
+
+### D4 简化器：meshopt 多 pass vs UE 自研 collapse（M2.3a，有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `NaniteBuilder.cpp` 自研 collapse 简化器：自维护边界锁、误差随折叠同步重算、朝向不变量内建。 |
+| 我们现状 | meshopt 多 pass 主循环（src 并入 dst + collapse_locked + cos75°）+ link condition + 双层边界锁（组间边界 + 模型开放边界）+ 绝对朝向锚（`check-orient` 扫全链验收）。 |
+| 为什么 | M2.3a 判决实验：meshopt 质量达标且省一整套自研简化器；朝向缺口用外挂锚补齐（`check-orient` exit 1 = FAIL 兜底）。 |
+| 已知偏差 | 误差链定义与 UE 不逐位相同（我们叶子误差 = 簇内最长边，同 zeux 语义；UE `Cluster.Error` 自有定义）。 |
+| 升级路径 | 无主动升级计划；若 meshopt 在某类资产上质量不达标再议。 |
+
+### D5 无 per-instance 误差缩放旋钮（M5.0 起，未实现）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `LODScale × UniformScale` 全局/实例级质量旋钮，支持非均匀缩放的误差修正。 |
+| 我们现状 | `SceneConstants` 无误差缩放字段；model 恒单位阵（M1.0 起节点变换烘进顶点）。 |
+| 升级路径 | 多实例（S8+）落地时加：CB 加 `errorScale` 标量（均匀）即可覆盖 90% 场景；非均匀需回到 D1 的 UE 口径。 |
+
+### D6 剔除维度：仅视锥 vs UE 视锥+遮蔽（M4.1，未实现）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 视锥剔除之外还有 hierarchical-Z 遮蔽剔除、two-pass（先保守后精确）、cluster swizzle 优化访存。 |
+| 我们现状 | 单 pass compute 视锥剔除（簇球 vs 6 平面，M4.1），1.3M tri 60fps 验收通过。 |
+| 升级路径 | 遮蔽剔除排在 S6+（先做 depth pyramid）；swizzle 视 profiler 证据再定。 |
+
+### D7 无软件光栅化兜底（未实现）
+
+| | 内容 |
+|---|---|
+| UE 做法 | Nanite 全屏 pass 内置软件光栅（S 路径），处理硬件光栅漏掉的微小簇。 |
+| 我们现状 | 无。微小簇漏画时无兜底（当前资产规模未见可见 artifacts）。 |
+| 升级路径 | 若 M5.x+ 大规模资产出现微小簇闪烁/漏画，评估 S 级软件光栅（工作量大，需单独立项）。 |
+
+## 计划内待办（非偏差，挂账防丢）
+
+- **D8 资产分页 v4**（`NPAG` 页表 + 128KiB 字节预算）：对标 UE `FStreamOutMeshDataHeader`，代码落地排在 **P9 V1**（V1 即写 v4，不破 M3.2 回归基线）。
+- **D9 流式调度**：UE 的 streaming priority/eviction 全套，P9 V4 范围。
+
+## 对齐确认（不是差异，防 review 误判）
+
+- **fallback**：weldPositions 顶层拼接 2.6% ≈ UE 默认 2%（`NaniteBuilder` fallback percent），语义对齐（M2.6 验收）。
+- **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
+
+---
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；出处行号以 2026-11-08 实读版本为准。*

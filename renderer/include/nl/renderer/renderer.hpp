@@ -106,6 +106,10 @@ struct HudFrame {
     // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
     int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
     int   totalClusters    = 0;       // 总簇数
+    // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
+    float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
+    bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
+    float cutThresholdPx   = 1.0f;    // cut 阈值 px（双向；M5.1 GPU 遍历消费）
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -132,6 +136,11 @@ struct DeviceInfo {
     // visibleClusters = -1 表示暂无数据（前两帧 / 非剔除路径 / map 失败）。
     int           visibleClusters = -1;
     std::uint32_t totalClusters = 0;
+    // M5.0（S5.0）：屏幕误差投影的球数据源（世界空间，xyz=center, w=radius）。
+    // assetSphere = 当前显示几何的联合包围球；dagGroupSphere = 下钻组记录球
+    //（dagGroup>=0 时有效，来自 .nmesh meta 的组 sphere）。纯 normal 模式恒 0。
+    float assetSphere[4]     = {0.0f, 0.0f, 0.0f, 0.0f};
+    float dagGroupSphere[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 class Renderer {

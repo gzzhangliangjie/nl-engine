@@ -5,6 +5,7 @@
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -735,6 +736,7 @@ bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
     }
     dagGroup_ = -1;          // 纯层加载：无下钻状态
     dagGroupError_ = 0.0f;
+    dagGroupSphere_[0] = dagGroupSphere_[1] = dagGroupSphere_[2] = dagGroupSphere_[3] = 0.0f;
     nl::core::log::debug("cluster mesh uploaded: ", nmeshFile,
                          " vertices=", vertices.size(),
                          " triangles=", triangleCount_,
@@ -816,6 +818,7 @@ bool Scene::setDagCut(nvrhi::IDevice* device, const char* topFile, const char* c
     }
     dagGroup_ = drillGroup;
     dagGroupError_ = group.error;
+    for (int i = 0; i < 4; ++i) dagGroupSphere_[i] = group.sphere[i];
     nl::core::log::info("dag cut: ", topFile, " minus parents [", group.genFirst, ", ",
                         group.genFirst + group.genCount, ") <- ", childFile,
                         " group ", drillGroup,
@@ -862,6 +865,37 @@ bool Scene::uploadClusterData(nvrhi::IDevice* device,
     modelName_ = modelName;
     lodLevel_ = lodLevel;
     lodMaxError_ = maxError;
+
+    // M5.0：显示几何的联合包围球（模型空间 == 世界空间，model 恒为单位阵）。
+    // 中心 = 包围盒中心、半径 = 中心到最远顶点；S5 屏幕误差投影的默认球数据源
+    //（下钻时 viewer 优先用组记录球 dagGroupSphere_，更贴组原子 cut 语义）。
+    if (!vertices.empty()) {
+        float minX = vertices[0].v.px, minY = vertices[0].v.py, minZ = vertices[0].v.pz;
+        float maxX = minX, maxY = minY, maxZ = minZ;
+        for (const auto& v : vertices) {
+            if (v.v.px < minX) minX = v.v.px;
+            if (v.v.py < minY) minY = v.v.py;
+            if (v.v.pz < minZ) minZ = v.v.pz;
+            if (v.v.px > maxX) maxX = v.v.px;
+            if (v.v.py > maxY) maxY = v.v.py;
+            if (v.v.pz > maxZ) maxZ = v.v.pz;
+        }
+        const float cx = 0.5f * (minX + maxX);
+        const float cy = 0.5f * (minY + maxY);
+        const float cz = 0.5f * (minZ + maxZ);
+        float r2 = 0.0f;
+        for (const auto& v : vertices) {
+            const float dx = v.v.px - cx, dy = v.v.py - cy, dz = v.v.pz - cz;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > r2) r2 = d2;
+        }
+        assetSphere_[0] = cx;
+        assetSphere_[1] = cy;
+        assetSphere_[2] = cz;
+        assetSphere_[3] = std::sqrt(r2);
+    } else {
+        assetSphere_[0] = assetSphere_[1] = assetSphere_[2] = assetSphere_[3] = 0.0f;
+    }
     return true;
 }
 

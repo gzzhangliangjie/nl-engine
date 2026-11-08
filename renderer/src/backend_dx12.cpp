@@ -164,6 +164,8 @@ public:
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
+        // M5.0：屏幕误差投影球数据（cluster/dag 路径有效，normal 恒 0）。
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         // M2.3：探测 assets/meshlets/<stem>.lodN.nmesh 的连续层数（0 = 没有分层资产）。
         // 探测失败不是错误：cluster / normal 模式照样跑，只是 HUD 不画滑条。
         // cull 模式不依赖分层资产，跳过探测。
@@ -249,6 +251,7 @@ public:
         info_.lodMaxError = scene_.lodMaxError();
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
         nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
         return true;
@@ -289,6 +292,9 @@ public:
         info_.lodMaxError = scene_.lodMaxError();
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
+        // M5.0：下钻后球数据两套都换（viewer 按 dagGroup 选组球 / 资产球）。
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
+        for (int i = 0; i < 4; ++i) info_.dagGroupSphere[i] = scene_.dagGroupSphere()[i];
         return true;
     }
 

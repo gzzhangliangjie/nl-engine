@@ -32,6 +32,12 @@ public:
     float distance() const;
     float aspect() const { return aspect_; }
 
+    // M5.0：屏幕误差投影需要的相机侧数据（只读，不改任何相机状态）。
+    // eyePosition = viewProjection() 里 lookAt 用的同一组 eye（不重复算两套）。
+    void  eyePosition(float out[3]) const;
+    float projectionYScale() const;   // 投影 [1][1] = 1/tan(fovY/2)
+    float nearPlane() const { return kNear; }
+
 private:
     float yaw_      = 0.21f;   // rad（约 12°），默认能看到 Suzanne 正脸
     float pitch_    = 0.16f;   // rad

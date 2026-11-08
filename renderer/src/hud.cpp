@@ -310,6 +310,16 @@ void Hud::build(HudFrame& frame) {
                           frame.dagGroup, frame.lodTriangles, frame.dagGroupError);
         }
         ImGui::TextUnformatted(dagLine);
+        // M5.0（S5.0）：屏幕误差投影 + cut 阈值（S5 组原子 cut 的选层判据）。
+        // 误差由 viewer 侧 zeux/bevy 公式算好（世界误差 -> 屏幕像素），HUD 只显示；
+        // 转相机 / 拉远时该值随距离单调变化 = M5.0 的可见验收用例。阈值双向写回，
+        // M5.1 GPU 遍历消费同一参数。
+        if (frame.screenErrorValid) {
+            char s5Line[96];
+            std::snprintf(s5Line, sizeof(s5Line), "s5 err %.2f px", frame.screenErrorPx);
+            ImGui::TextUnformatted(s5Line);
+        }
+        ImGui::SliderFloat("cut thr px", &frame.cutThresholdPx, 0.25f, 4.0f, "%.2f");
     }
     // M4.1：GPU 视锥剔除统计——仅 cull 模式（totalClusters>0）占位，其它模式 HUD
     // 布局一像素不动。visibleClusters<0 = 前两帧尚无回读数据。

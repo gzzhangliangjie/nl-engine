@@ -20,6 +20,7 @@
 | M4.0 GPU 簇数据通路 + vertex pulling | ✅ 验收通过 | `s4-indirect` | 2026-11-08 | 单 drawIndexedIndirect 全簇全画（cull 模式 vertex pulling）；`--mode cull` 与 `--mode cluster` 同机位同 shading 逐字节相同（DX12/Vulkan 各自一致），deviceErrors=0；kStage=S4.0；交代物 example/s4-indirect + cases.json s4.0 卡 |
 | M4.1 GPU 视锥剔除 + 可见列表间接寻址 | ✅ 验收通过 | `s4-cull` | 2026-11-08 | compute 剔除 pass（csCull 5 平面包围球测试）+ atomicAdd append visibleList + indirectArgs.instanceCount 回写；pass-through（正对全可见）与 cluster 基线逐字节相同；真剔除姿态（进模 dist0.45/640x720）GPU 30/237 == frustum_check.py 离线 30，双后端一致；kStage=S4.1；交代物 example/s4-cull + cases.json s4.1/s4.1-tools 卡 |
 | M4.2 HUD 统计 + 1M 场景 + 性能验收 | ✅ 验收通过 | `s4-done` | 2026-11-08 | cull pass 接第二个 GpuTimer 实例（[frame]/[cull] resolve 日志 + HUD cull GPU 行/曲线）；IcoSphereDense1M 入仓（1,310,720 tri / 19,718 簇 / 33.5MB .nmesh，coverage 100%）；1.3M tri 正对 640x360 全可见 pass-through cull==cluster 逐字节（跨后端也 bytes）；进模 1932/19718（剔除 90.2%）== 离线，双后端一致；60fps：CPU avg 4.9~5.5ms / 整帧 GPU 0.96~1.02ms / cull pass ~0.010ms（判据 16.6ms 余两数量级）；kStage=S4.2；交代物 example/s4-done + cases.json s4.2/s4.2-tools 卡 |
+| M5.0 误差投影：世界→屏幕像素 | ✅ 验收通过 | `s5-proj` | 2026-11-08 | core 纯数学层 `screenErrorPixels()`（bevy/zeux 口径，用户拍板）+ `lodErrorSelfTest()` 手算用例进 selftest（15→16）+ OrbitCamera 三个只读访问器 + HUD dag 模式 `s5 err` 行 + `cut thr px` 滑条；三机位 1567.05→352.15→149.84 px 单调下降且与离线手算逐位一致；13 对 HUD 基线 kStage bump 全量重拍 + 3 条关键用例回归 6/6 bytes + s5.0 卡 4/4 bytes + server --check OK；UE 差异台账 `docs/s5/UE-DIFFS.md` 建立（AGENTS.md 固化入口）；kStage=S5.0；交代物 example/s5-proj + cases.json s5.0 卡 |
 
 ---
 
@@ -906,3 +907,31 @@
 4. **cluster 证据图首版只渲染最后一个 submesh**：按 `file` 行重置缓冲的逻辑 bug，改为顺序累积后 4 个子网格齐全——生成器自己也要亲眼验收，不能只看「脚本没报错」。
 
 **下一步**：本支线闭环；等 S5.0 主线收口时 `server.py --check` 随 s5.0 版本归位转绿。
+
+## M5.0 误差投影：世界 → 屏幕像素（tag `s5-proj`，2026-11-08）
+
+**动作**
+- **决策前置**：三处参考实读——bevy `cull_shared.wesl:13`（`lod_error_is_imperceptible`，溯源 zeux meshoptimizer `demo/nanite.cpp:115`）、UE `NaniteClusterCulling.usf:255` + `NaniteCullingCommon.ush:112` `GetProjectedEdgeScales`（切线投影）、Carrot `draw_virtual_geometry.slang:81`（flat 双阈值）；开发历史 M3.2 已存档「bevy 屏幕空间公式 S5 用」。发现 S5-PLAN 原文「distance 用相机平面距离」与已存档口径冲突 → 摆证据请用户拍板，**拍板 bevy/zeux**：`screenPx = worldError / max(d, near) × projYScale × 0.5 × H`，`d = |球心−eye| − 球半径`。
+- **core 纯数学层**：`core/include/nl/core/lod_error.hpp` + `core/src/lod_error.cpp` `screenErrorPixels()`（零图形符号）+ `lodErrorSelfTest()`（45° fov 手算逐例对比）；CMakeLists 加 `core/src/lod_error.cpp`。
+- **OrbitCamera 补只读访问器**：`eyePosition()`（与 `viewProjection()` 的 lookAt 同源公式，不另造一套）、`projectionYScale()`（=1/tan(fovY/2)）、`nearPlane()`。
+- **数据通路**：`Scene` 存资产联合包围球 `assetSphere_`（bbox 中心 + 到最远顶点，M5.0 注释明确下钻时优先组记录球）与组球 `dagGroupSphere_` 透出；DeviceInfo/HudFrame 加 `assetSphere[4]/dagGroupSphere[4]/screenErrorPx/screenErrorValid/cutThresholdPx`（POD 通道，两后端对称补齐）；viewer 主循环按 `drilled ? 组球+组误差 : 资产球+顶层 maxError` 计算并喂 HUD。
+- **HUD**：dag 模式加 `s5 err %.2f px` 文本行 + `cut thr px` 滑条（0.25~4.0 默认 1.0）；非 dag 模式布局一像素不动。
+- **文档同步**：S5-PLAN M5.0 公式行按拍板修正（旧口径划掉留痕）；新建 `docs/s5/UE-DIFFS.md`（与 UE 不一致的集中台账，D1~D7 + 待办 D8/D9 + 对齐确认），AGENTS.md「偏离官方口径」条目下固化台账入口（2026-11-08 用户点名）。
+- kStage → `S5.0 screen-space error projection (zeux/bevy cut formula, threshold HUD)`；selftest stage 断言同步改。
+
+**提交版本**：s5-proj（本轮）
+
+**完成情况**
+- **数值复核（亲眼可见）**：dag-top + HUD 三机位 dist 2.0/4.2/8.0 → `s5 err` 1567.05 / 352.15 / 149.84 px 单调下降；Python 解析 `Suzanne.lod6.nmesh`（顶层 maxError=1.1375、联合球 R=1.2661、eye 公式逐项复算）**逐位一致**。
+- 双后端 selftest **16/16**（含新增 `lodErrorSelfTest`）。
+- **kStage bump 波及面（含认知修正）**：HUD 标题行含 stage 字符串，但**只有 exe 用当前构建的版本才需要重拍**——m0.1~m0.8/s1.0 的回归走 tag 快照 exe（`build/showcase/<tag>/`，HUD 内嵌当时代 stage 字符串），基线不随 kStage 变。实际重拍 = 当前 exe 的 5 对（m0.9/gate-hud、s2.0/lod-hud、s3.2/dag-hud、s4.1/cull-inside-hud、s4.2/dense-inside-hud，双后端 10 张）。
+- **总闸（按需口径）**：3 条关键用例回归 6/6 bytes（s3.2/dag-hud = 本次唯一布局变化 + m0.9/gate-hud + s4.1/cull-inside-hud = stage 行验证）；s5.0 新卡 4/4 bytes（s5-hud pair ×2 + s5-selftest ×2）；`server.py --check` OK（stage=S5.0 version=s5.0 cases=2 baselines=3）。
+- 交代物：`example/s5-proj/`（s5-hud 双后端基线 + 3 机位证据图 + run.bat verify exit 0）+ cases.json s5.0 卡（s5-hud pair + s5-selftest tool）+ `docs/s5/UE-DIFFS.md` 台账。
+
+**踩坑情况**
+1. **Python 手算复核的 struct 布局连环错**：`NMeshHeader` 实为 **20B**（4+2+2+4+4+4，先误按 24B 解析整体错位 4 字节）；`NMeshMetaHeader` 解析 format 串连错三次（`<IIHfII`→`<IIHHfI`→正解 `<IHHfII`，把 version+level 两个 u16 误并成一个 u32 时数值看似「随机」实为字段拼接）。教训：对账先 hexdump 定 magic 实际偏移反推记录大小，再逐字段解，别对着记忆写 format 串。
+2. **HUD 读数须以本机像素为准**：d=4.2 机位早先视觉读数记成 332.15，重看截图确认实为 **352.15**（3↔5 误读）——视觉读数进验收纪要前必须二次确认或直接用可机读通道。
+3. **run.bat for 循环内 echo 行尾 `)` 会被当成块结束符**：`echo ...(dx12 + vulkan)` 输出被截断括号，纯文本瑕疵但会误导证据阅读；避免在 for 块内的 echo 行尾用裸括号。
+4. **基线重拍 exe 必须与回归用的 exe 同源（本轮自摆乌龙，被总闸当场抓住）**：`cases.json` 里 m0.1~m0.8/s1.0 的 `exe` 指向 **tag 快照**（`build/showcase/{tag}/build/…`），HUD 内嵌快照时代的 stage 字符串；我用当前 S5.0 exe 给这 8 对基线重拍 → `m0.5/resize` 回归立即 FAIL（91k 像素差，maxDelta 242）。修正：`git checkout --` 还原历史版本基线（它们本就不随 kStage 变），只重拍 exe=current 的 5 对。**教训**：重拍基线前先查该版本 `exe` 字段指向快照还是当前构建；「重拍永远用刚重编的 exe」只对 exe=current 的版本成立（M4.2 踩坑 1 的适用边界在此）。
+
+**下一步**：M5.1 compute DAG 遍历（显式栈从根组下钻、簇屏幕误差 ≤ 阈值写 indirect 命令、栈溢出宁粗勿漏；输出接口 = S4 indirect buffer 不另起炉灶）。D1 升级路径监控点：M5.1/M5.2 偏轴或进模场景若选层明显偏粗，把 `screenErrorPixels()` 换成 UE 切线投影（见 `docs/s5/UE-DIFFS.md`）。

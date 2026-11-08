@@ -1,5 +1,6 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
+#include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
@@ -78,6 +79,7 @@ struct Options {
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
+    float cutThresholdPx = 1.0f;  // M5.0：cut 阈值 px（HUD 滑条双向，M5.1 遍历消费）
     int  width      = 1280;
     int  height     = 720;
     int  resizeWidth  = 0;
@@ -226,6 +228,7 @@ int runSelfTest() {
 
     check(nl::core::windowSelfTest(), "window defaults (resizable)");
     check(nl::core::cameraSelfTest(), "orbit camera matrices, zoom clamps, reset");
+    check(nl::core::lodErrorSelfTest(), "M5.0 screen-error projection, hand-computed cases");
     check(nl::core::modeSelfTest(), "view mode dispatcher (normal + cluster + lod + dag-top)");
 
     const auto st = nl::renderer::status();
@@ -233,7 +236,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S4.2") != nullptr, "S4.2 stage reported");
+    check(std::strstr(st.stage, "S5.0") != nullptr, "S5.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -321,6 +324,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 且组号必须落在可下钻范围内（renderer 探测第二粗层 dagGroups），越界退出 1。
     int dagGroup = -1;
     int dagGroupCount = 0;
+    // M5.0：cut 阈值 px 运行时状态（HUD 滑条双向写回，M5.1 GPU 遍历消费）。
+    float cutThresholdPx = o.cutThresholdPx;
     if (dagTop) {
         dagGroupCount = renderer->dagGroupCount();
         if (o.dagGroup >= 0) {
@@ -540,6 +545,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.dagGroup = dagGroup;
                 hud.dagGroupCount = dagGroupCount;
                 hud.dagGroupError = info.dagGroupError;
+                // M5.0：屏幕误差投影——下钻时用组记录球 + 组误差（组原子 cut 语义），
+                // 纯顶层用资产联合球 + 顶层 maxErr。转相机时该值随距离单调变化。
+                const bool drilled = (dagGroup >= 0 && info.dagGroup >= 0);
+                const float* sph = drilled ? info.dagGroupSphere : info.assetSphere;
+                const float worldErr = drilled ? info.dagGroupError : info.lodMaxError;
+                hud.cutThresholdPx = cutThresholdPx;
+                if (sph[3] > 0.0f) {
+                    float eye[3];
+                    camera.eyePosition(eye);
+                    hud.screenErrorPx = nl::core::screenErrorPixels(
+                        worldErr, sph, sph[3], eye, camera.projectionYScale(),
+                        hud.displayHeight, camera.nearPlane());
+                    hud.screenErrorValid = true;
+                }
             } else {
                 hud.lodLevel = lodLevel;
                 hud.lodCount = lodCount;
@@ -653,6 +672,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     }
                 }
             }
+            // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。
+            if (dagTop) cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
             hudWantsMouse = hud.wantCaptureMouse;
         }
         if (capturePath) {
