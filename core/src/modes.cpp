@@ -10,6 +10,7 @@ constexpr const char* kModeNames[] = {
     "cluster",   // M1.3：.nmesh 每簇随机着色
     "lod",       // M2.3：<stem>.lodN.nmesh 逐层切换
     "dag-top",   // M3.2：DAG 顶层 + 任选组下钻一层（cut 预演）
+    "cull",      // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

@@ -28,6 +28,10 @@ public:
 
     static int nextCursor(int c) { return (c + 1) % kSlots; }
 
+    // M4.2：resolve 日志带实例标签（frame / cull）——同帧两个实例各 resolve 一次，
+    // 日志里区分得开，验收才能逐行对照。只影响日志文本，不影响任何截图基线。
+    void setLabel(const char* label) { label_ = label; }
+
     // 延迟到第一帧真正需要 HUD 时才建 query：--no-hud 完全不碰。
     bool ensure(nvrhi::IDevice* device) {
         if (ready_) return true;
@@ -69,7 +73,7 @@ public:
             pollCursor_ = nextCursor(i);
             // M0.6 验收证据：首次真实 resolve 落一条日志（交互模式跑几秒即可核对）。
             if (!resolvedOnce_) {
-                nl::core::log::info("gpu timer resolved: ", outMilliseconds,
+                nl::core::log::info("gpu timer resolved [", label_, "]: ", outMilliseconds,
                                     " ms (first successful NVRHI timestamp query)");
                 resolvedOnce_ = true;
             }
@@ -120,6 +124,7 @@ private:
 
     nvrhi::IDevice* device_ = nullptr;
     std::vector<Slot> slots_;
+    const char* label_ = "frame";
     bool ready_ = false;
     int active_ = -1;
     int writeCursor_ = 0;

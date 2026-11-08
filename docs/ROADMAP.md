@@ -20,6 +20,9 @@
 | S4 剔除+indirect | `s4/S4-PLAN.md` | S12 时空滤波 | `s12/S12-PLAN.md` |
 | S5 DAG 遍历 | `s5/S5-PLAN.md` | S13 接缝聚合 | `s13/S13-PLAN.md` |
 | S6 Hi-Z | `s6/S6-PLAN.md` | S14 增强（四选一） | `s14/S14-PLAN.md` |
+| S15 VSM（虚拟阴影贴图）⤴**插入 S9 后** | `s15/S15-PLAN.md` | S16 TSR（时域超分）⤴**基建 S7 后 / 算法 S7 后轻量验证** | `s16/S16-PLAN.md` |
+
+> **2026-11-08 新增研究轨道说明**：用户拍板「前三个研究模块」（VSM / GPU-Driven 间接绘制骨架 / TSR）中，**GPU-Driven 间接绘制骨架已 = 本表 S4**（硬件光栅+GPU视锥剔除+indirect draw，原文"从本步起进入 GPU-driven……这是后面 S5/S6 的骨架"），**不重复建**；VSM、TSR 为真正新增，排 S15/S16。编号保留 S15/S16 不变以避免重排 S0~S14 引发连锁改动；**2026-11-08 用户已拍板提前插入主线**：VSM 插入 **S9 之后**（作阴影阶段 rasterized 对照路线，合并进 `shadow-map` 穿插项，依赖 S4+S7/S9 在 S9 已全就绪）；TSR **拆为两段**——velocity/history 基建在 **S7 之后**先建（喂给 S12 时空滤波复用 motion vector），完整算法在 **S7 之后**轻量直光场景隔离验证，最终集成 slot 仍在 tonemap 前（Lumen 之后主帧）。
 | S7 vis buffer | `s7/S7-PLAN.md` | P8 引擎化 | 本页下方 P8 表 |
 
 每份详细文档的结构统一：里程碑拆分（半天~两天一个）→ **阶段目标 + 能亲眼看到的用例** → 验收判据 → checklist / git tag → 常见坑 → 卡住翻哪 → 底线。**验收通过才放行下一阶段，tag 在验收之后打**（S0 门禁表见 `s0/S0-PLAN.md` 开头）。
@@ -70,6 +73,8 @@
 | S12 | `Carrot/.../lighting/svgf.slang`（现成 SVGF 实现）+ `temporal-denoise.compute.glsl` | — |
 | S13 | `Carrot/engine/resources/pipelines/compute/compute-rt-clusters.json`（逐簇 BLAS 聚合管线定义） | Carrot《Raytracing》（此题唯一详解） |
 | S14 | `bevy_solari/.../restir.wesl` vs `no_restir.wesl`（两条路线对照）；`bevy/.../meshlet/visibility_buffer_software_raster.wesl`（软光栅） | Scthe 软光栅系列博文 |
+| S15 | `UE5 .../VirtualShadowMaps/VirtualShadowMapArray.cpp`（`FVirtualShadowMapArray`、物理页池 `PhysicalPagePool`/`MaxPhysicalPages`）+ `VirtualShadowMapClipmap.cpp`（级联 clipmap）+ `VirtualShadowMapProjection.cpp`（OnePassProjection 投影采样）+ `VirtualShadowMapCacheManager.cpp`（页请求/缓存） | bevy/Carrot 无 VSM 等价实现（待开工按铁律二次确认）；**插入位置：S9 之后** |
+| S16 | `UE5 .../PostProcess/TemporalSuperResolution.cpp`（`HistoryUpdate` 历史重投影 / `RejectHistory` 拒绝掩码 / `ShadingRejection` 启发式 + 历史元数据 R11G11B10 编码） | bevy/Carrot 无 TSR 等价实现（待开工按铁律二次确认）；**拆分：velocity/history 基建 S7 后先建喂 S12，完整算法 S7 后轻量验证，最终 slot tonemap 前** |
 
 ---
 
@@ -229,6 +234,12 @@ nl-engine/
 | V3 | 多物体真实场景：真实资产组合成多物体世界（承接 P8 E1） | `viewer` 加载真实多物体场景 | GI / LOD 在多物体真实场景正确响应 |
 | V4 | **完整流式落地**：`.nmesh` 分页 + renderer streaming 接口由「全常驻」替换为「分页 residency」 | `viewer` 实跑超显存超大场景 | 按页加载 / 卸载，帧时间平稳，无 pop-in 爆闪；**超显存的超大场景也能流畅加载** |
 
+**证据依据（三处来源，2026-11-08 复读确认，P9 判定非拍脑袋）**：
+- **Carrot**（`engine/engine/render/ClusterManager.cpp:144-150,161,182-186`）：簇顶点**按簇自包含存储**（`vertices.resize(firstVertexIndex + meshlet.vertexCount)` 每簇独立拷贝，buffer 命名 "Virtual geometry vertex buffer %llu meshlets"）。但 Carrot **本身未实现流式**（render 目录下无任何 streaming 模块）——印证流式是公认的后期重活，不是我们偷懒。
+- **bevy**（`aa626e4f0b` Per-meshlet compressed vertex data）：Objective 第一行即 "Prepare for streaming"，顶点按 meshlet 自包含 + 位流压缩；`bdaf47c72b` Zero-Day 大场景示例即本阶段 V2/V3/V4 的现成参照。
+- **UE5**（`Nanite/NaniteStreamOut.h` 的 `FStreamOutMeshDataHeader` 用 `VertexBufferOffset / IndexBufferOffset / NumVertices / NumIndices` 偏移寻址；`kb/index.html:820` 点名 `NaniteStreamingManager*.cpp` = 分页与驻留策略）：工业终态的流式 = 「偏移寻址大 buffer + 独立 residency 管理器」，V4 直接对标此模型。
+- 三处一致结论：**顶点自包含 + 偏移寻址 + 独立 page/residency 管理** 是流式正路；`kb/index.html:475` 警告的「全局共享顶点池焊死」三处来源无一采用。本阶段 **V1 起**就把 `.nmesh` 与离线管线按此设计，V4 不返工。
+
 **边界（首版约定，沿用 ROADMAP 既有口径 + 用户 2026-11-08 拍板）**：
 - **真实资产含超大场景（可能超显存）**：V2 起超大场景**首版即须跑通**（整模型常驻或分块加载）；完整流式（V4）在此之上进一步支持「超显存 N 倍的超大场景」，**流式非可选、非推远，是 P9 必做收尾**。
 - **提前预留流式接口（用户拍板）**：离线管线与 `.nmesh` 格式设计需**分页友好**——cluster 自包含、顶点可分页组织、支持后续按簇 / 页独立加载，不为全局共享顶点池焊死结构（`kb/index.html:475` 指出的后期返工点，现在就避开）；renderer 层预留 streaming 抽象接口（asset residency / page manager），**V4 由「全常驻」替换为「分页 residency」**。
@@ -247,10 +258,12 @@ nl-engine/
 |---|---|---|---|---|
 | PBR 直射光 + 贴图采样 | glTF 贴图进 GPU（`t0` baseColor sRGB + `t1` ORM 线性、`s0` 共用 sampler）、新开 `b1` LightConstants、Cook-Torrance GGX 直射光 + 常数环境光；走 `--shading pbr`（M0.8 的 shader 分支机制现成） | **S1~S6 之间插一次** | **S7 的前置**：S7 本来就含「PBR 直光」，提前做掉，S7 只剩 vis buffer + vertex pulling + 材质解析 | `s0/PBR-DIRECT-PLAN.md` |
 | 卡通着色（ramp + 描边） | `--shading toon`：三段阶梯漫反射 + 阶梯高光 + rim；描边走背面外扩 hull（同一 render pass 第二个 draw：`CullMode::Front` + view-space 法线外扩，先画写深度），零离屏 RT | 随时；或排 P7 与 S14 同类 | 与 Nanite/Lumen 研究目标零耦合，纯展示性；成本最低（只改 shader 分支 + 多一个 draw，pipeline 组合表扩一档） | `s0/TOON-PLAN.md` |
-| 光栅阴影（ShadowMap / PCF / PCSS） | 深度 pass + 阴影贴图采样 + PCF 软化 / PCSS 半影估计 | S1~S6 之间或 S7 后 | 主线 S9 走**光追阴影射线**，光栅阴影是对照路线；纯展示 + 与 PBR 穿插项组合成完整直光 | GAMES202 hw1 拆解，开工时补计划 |
+| 光栅阴影（ShadowMap / PCF / PCSS） | 深度 pass + 阴影贴图采样 + PCF 软化 / PCSS 半影估计 | **已由 VSM（S9 后插入）升级替代**，见下方 VSM 行 | 主线 S9 走**光追阴影射线**，光栅阴影为对照路线；VSM 是其工业级升级版 | GAMES202 hw1 拆解，开工时补计划 |
 | PRT 球谐环境光（静态场景） | 离线预计算 cubemap → SH 系数，运行时 SH(dot(n, wi)) 环境光 | `pbr-direct` 之后 | **PBR 穿插项「不做 IBL」缺口的廉价补法**；也可当 S9 参考图工作流的降级对照 | GAMES202 hw2 拆解，开工时补计划 |
 | 屏幕空间 AO（SSAO） | 深度/法线 buffer + 半球采样（或 GTAO 近似） | `pbr-direct` 之后 | 主线 S10 GI 才补间接光，SSAO 先填直光阶段的接触暗角；PhasmaEngine 用 FidelityFX CACAO 可对照 | 开工时补计划 |
 | 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | TAA 的 motion vector 与 S12 时间累积共享；PBR/卡通最终都要 tonemap 出片 | 开工时补计划 |
+| VSM（虚拟阴影贴图） | clipmap 级联 + 物理页池 + 页表，rasterized 阴影路线（替代 S9 光追阴影射线，作对照） | **S9 之后**（合并升级原 `shadow-map` 穿插项） | S15 正式计划；依赖 S4 簇光栅 + S7/S9 GBuffer，S9 已就绪 | `s15/S15-PLAN.md` |
+| TSR 基建（velocity/history） | 运动向量 GBuffer + 历史 ping-pong，喂 S12 时空滤波复用 motion vector | **S7 之后** | S16 前半段；避免 S12 重复建 motion vector 基建 | `s16/S16-PLAN.md` |
 | `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 | — |
 
 **外部技术点归宿对照（2026-11-07 对齐，不单开新线，防重复建设）**

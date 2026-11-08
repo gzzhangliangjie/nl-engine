@@ -145,14 +145,46 @@ struct NMeshFallbackHeader {
     float maxError;               // 来源层 parent error（世界空间）
 };
 
+// ---- P9 / V4：分页友好页表尾段（DECIDED 2026-11-08，待 V1 落地）----
+// 设计：v4 = v3 + 强制 NPAG 页表尾段。meshlet 记录布局零改动（vertexOffset 等
+// 仍绝对指向共享 vertices/triangles 数组）；离线 page-builder 把顶点/索引重排成
+// 页连续、顶点闭合的 slab，页表记录每页的 meshlet 区间与顶点/索引 slab 区间。
+// 流式（V4）按页 slab 的固定偏移拷入同一块大 GPU buffer，meshlet 偏移永不 patch
+// （对标 UE5 FStreamOutMeshDataHeader）。证据见 docs/p9/NMESH-PAGING-DRAFT.md §3。
+// 当前仅声明结构 + 锁布局；saveNMesh/loadNMesh 的 v4 读写在 V1 实现（§8）。
+// 字段布局与 §4.2 草案一致；页表头原草案误写为 20B，此处按 static_assert(==24) 修正。
+struct NMeshPageTableHeader {
+    std::uint32_t magic;          // 'N','P','A','G' → 0x4741504E (LE)
+    std::uint32_t payloadBytes;   // = pageCount * sizeof(NMeshPageRecord)
+    std::uint32_t pageCount;      // 页数（u32，避 16-bit 上限）
+    std::uint16_t version;        // 1
+    std::uint16_t reserved0;      // 0
+    std::uint32_t reserved1;      // 0
+    std::uint32_t reserved2;      // 0
+};
+
+// 每页 32 B，镜像 NMeshDagGroupRecord 尺寸。所有偏移为绝对偏移（磁盘 = GPU buffer）。
+struct NMeshPageRecord {
+    std::uint32_t firstMeshlet;    // 本页首 meshlet 号
+    std::uint32_t meshletCount;    // 本页 meshlet 数
+    std::uint32_t vertexOffset;    // 顶点 slab 基（绝对，= 磁盘 & GPU 同一偏移）
+    std::uint32_t vertexCount;     // 顶点 slab 长度
+    std::uint32_t triangleOffset;  // 索引 slab 基（BYTE 偏移，绝对）
+    std::uint32_t triangleCount;   // 索引 slab 长度（三角数）
+    std::uint32_t flags;           // bit0 = 本页含跨页复制的边界顶点
+    std::uint32_t reserved;        // 0
+};
+
 inline constexpr std::uint16_t kNMeshVersion = 1;
 inline constexpr std::uint16_t kNMeshVersionLod = 2;
 inline constexpr std::uint16_t kNMeshVersionFallback = 3;  // + fallback 尾段（M3.1）
+inline constexpr std::uint16_t kNMeshVersionPage = 4;      // + 强制 NPAG 页表尾段（P9/V4，待落地）
 inline constexpr std::uint16_t kNMeshMetaVersion = 1;     // 仅锁点
 inline constexpr std::uint16_t kNMeshMetaVersionDag = 2;  // 锁点 + DAG 血缘（M3.0）
 inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;     // "NMSH"
 inline constexpr std::uint32_t kNMeshLodMagic = 0x444F4C4Eu;  // "NLOD"
 inline constexpr std::uint32_t kNMeshFallbackMagic = 0x424C464Eu;  // "NFLB"
+inline constexpr std::uint32_t kNMeshPageMagic = 0x4741504Eu;     // "NPAG"（P9/V4，待落地）
 
 static_assert(sizeof(NMeshHeader) == 20, "NMeshHeader layout drift");
 static_assert(sizeof(NMeshletRecord) == 52, "NMeshletRecord layout drift");
@@ -160,6 +192,8 @@ static_assert(sizeof(NMeshMetaHeader) == 24, "NMeshMetaHeader layout drift");
 static_assert(sizeof(NMeshDagGroupRecord) == 32, "NMeshDagGroupRecord layout drift");
 static_assert(sizeof(NMeshFallbackHeader) == 24, "NMeshFallbackHeader layout drift");
 static_assert(sizeof(MeshVertex) == 32, "MeshVertex layout drift");
+static_assert(sizeof(NMeshPageTableHeader) == 24, "NMeshPageTableHeader layout drift");
+static_assert(sizeof(NMeshPageRecord) == 32, "NMeshPageRecord layout drift");
 
 // 写盘。失败返回 false，outError 带可读原因；成功时不留部分文件（先写临时再改名）。
 bool saveNMesh(const char* path, const NMeshData& data, std::string& outError);

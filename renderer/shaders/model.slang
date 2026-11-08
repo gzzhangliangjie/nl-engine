@@ -159,3 +159,82 @@ float4 psCluster(PSInputCluster input) : SV_Target
 {
     return shade(input.normal, input.uv, input.triId, uint(g_options.x), input.clusterColor);
 }
+
+// ============================================================================
+// M4.0 (S4.0): GPU vertex pulling. Single drawIndexedIndirect, instanceCount =
+// total cluster count (full draw — no culling yet; M4.1 adds compute culling).
+//
+// Per instance i (SV_InstanceID) we pull cluster i's meshlet out of three SSBOs:
+//   g_vertexPool   : all cluster vertices, flattened (8 floats each: pos/normal/uv)
+//   g_localIndices : per-cluster local triangle indices (uint32, 3 per triangle)
+//   g_clusterMeta  : per-cluster [vertexBase, triangleCount, localIndexBase, pad]
+//
+// The index buffer is an identity range [0, stride) with stride = 3*maxTriCount,
+// so SV_VertexID (= the index value) is the within-stride position; triInCluster
+// = SV_VertexID/3. Triangles beyond triangleCount are dummy'd to NaN so the
+// rasterizer discards them. This reproduces the cluster-mode geometry exactly.
+// ============================================================================
+
+StructuredBuffer<float> g_vertexPool  : register(t1);
+StructuredBuffer<uint>  g_localIndices : register(t2);
+StructuredBuffer<uint>  g_clusterMeta  : register(t3);
+StructuredBuffer<uint>  g_visibleList  : register(t4);
+
+struct VSCullOutput {
+    float4 position      : SV_Position;
+    float3 normal        : NORMAL;
+    float2 uv            : TEXCOORD;
+    float3 clusterColor  : CLUSTERCOLOR;
+};
+
+// vertexIndex 是 identity 索引缓冲的值（0..stride-1）；instanceIndex 是可见列表的
+// 槽位，簇号经 g_visibleList 间接寻址得到（M4.1）。剔除关闭时列表是恒等映射，
+// 与 M4.0 逐像素一致；剔除开启时槽位序不确定，但簇色按簇号取、绘制不透明 +
+// 深度测试，像素与顺序无关。
+VSCullOutput vsCull(uint instanceIndex : SV_InstanceID,
+                    uint vertexIndex   : SV_VertexID) {
+    VSCullOutput output;
+    // 默认 dummy：NaN 裁剪坐标，光栅化阶段整三角被丢弃（bevy 同式）。
+    output.position     = asfloat(0x7fc00000u).xxxx;
+    output.normal       = 0.0f;
+    output.uv           = 0.0f;
+    output.clusterColor = 0.0f;
+
+    const uint clusterId  = g_visibleList[instanceIndex];
+    const uint metaBase   = clusterId * 4u;
+    const uint vertexBase = g_clusterMeta[metaBase + 0u];
+    const uint triCount   = g_clusterMeta[metaBase + 1u];
+    const uint localBase  = g_clusterMeta[metaBase + 2u];
+
+    const uint triInCluster = vertexIndex / 3u;
+    const uint vertInTri    = vertexIndex % 3u;
+    if (triInCluster >= triCount) return output;   // padding 三角 -> dummy
+
+    const uint localIdx = g_localIndices[localBase + vertexIndex];
+    const uint gv = vertexBase + localIdx;          // 顶点池里的全局顶点
+    const uint b  = gv * 8u;                        // 8 float / 顶点
+    const float3 pos = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+    const float3 nrm = float3(g_vertexPool[b + 3u], g_vertexPool[b + 4u], g_vertexPool[b + 5u]);
+    const float2 uv  = float2(g_vertexPool[b + 6u], g_vertexPool[b + 7u]);
+
+    output.position     = mul(g_mvp, float4(pos, 1.0f));
+    output.normal       = mul((float3x3)g_model, nrm);
+    output.uv           = uv;
+    // 簇色 = pcg(簇号)，与 cluster 场景 CPU 端 clusterColor() 同式 -> 截图逐像素一致。
+    // 注意是簇号不是槽位：剔除开启时槽位序不确定，按槽位取色会闪。
+    output.clusterColor = triIdColor(clusterId);
+    return output;
+}
+
+struct PSCullInput {
+    float4 position      : SV_Position;
+    float3 normal        : NORMAL;
+    float2 uv            : TEXCOORD;
+    float3 clusterColor  : CLUSTERCOLOR;
+    uint   triId         : SV_PrimitiveID;
+};
+
+float4 psCull(PSCullInput input) : SV_Target
+{
+    return shade(input.normal, input.uv, input.triId, uint(g_options.x), input.clusterColor);
+}

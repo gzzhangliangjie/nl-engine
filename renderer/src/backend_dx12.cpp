@@ -69,7 +69,8 @@ public:
     ~Dx12Backend() override { shutdown(); }
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
-              const char* modelFile, bool clusterMode, std::string& outError) override {
+              const char* modelFile, bool clusterMode, bool cullMode,
+              bool frustumCull, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -146,16 +147,26 @@ public:
         hr = createSwapChain();
         if (FAILED(hr)) { outError = hrMessage("CreateSwapChainForHwnd", hr); return false; }
         if (!createTargets(outError)) return false;
-        if (clusterMode
-                ? !scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError)
-                : !scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError)) {
-            return false;
-        }
+        // M4.0：vertex pulling 走 initCull（三 SSBO + indirect draw）。DX12 入口名被
+        // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
+        // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
+        bool sceneOk = false;
+        if (clusterMode)
+            sceneOk = scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError);
+        else if (cullMode)
+            sceneOk = scene_.initCull(device_, "dxil", "vsCull", "psCull", modelFile,
+                                      frustumCull, outError);
+        else
+            sceneOk = scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError);
+        if (!sceneOk) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
         info_.modelName = scene_.modelName();
         info_.triangleCount = scene_.triangleCount();
+        info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
+        info_.totalClusters = scene_.clusterCount();
         // M2.3：探测 assets/meshlets/<stem>.lodN.nmesh 的连续层数（0 = 没有分层资产）。
         // 探测失败不是错误：cluster / normal 模式照样跑，只是 HUD 不画滑条。
+        // cull 模式不依赖分层资产，跳过探测。
         if (clusterMode) {
             lodStem_ = detail::meshletStem(modelFile);
             lodLevelCount_ = detail::probeLodLevelCount(lodStem_);
@@ -315,9 +326,14 @@ public:
                 if (!hud->deterministic && gpuTimer_.poll(gpuMs)) hud->gpuMs = gpuMs;
                 hud->gpuTimingAvailable = true;
             }
+            // M4.2：cull pass 计时同理，必须在 hud_.build() 之前写回标志。
+            scene_.pollCullTimer(device_, hud);
             // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
             hud_.build(*hud);
         }
+        // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
+        scene_.pollCullStats(device_);
+        info_.visibleClusters = scene_.visibleClusters();
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();

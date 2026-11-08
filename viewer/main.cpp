@@ -59,6 +59,11 @@ const float kFixedGpuSamples[kFixedSampleCount] = {
     0.62f, 0.64f, 0.61f, 0.66f, 0.63f, 0.62f, 0.68f, 0.60f
 };
 
+// M4.2：cull pass GPU 耗时的固定样本（同上理由；Suzanne 量级剔除段远小于整帧）。
+const float kFixedCullSamples[kFixedSampleCount] = {
+    0.08f, 0.09f, 0.08f, 0.10f, 0.08f, 0.09f, 0.11f, 0.08f
+};
+
 struct Options {
     bool selftest   = false;
     bool help       = false;
@@ -67,6 +72,7 @@ struct Options {
     bool sizeSet    = false;
     bool resize     = false;
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
+    bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -131,6 +137,15 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
+        } else if (a == "--frustum" && i + 1 < argc) {
+            // M4.1：GPU 视锥剔除开关（仅 cull 模式消费；off = 恒等可见列表，M4.0 行为）。
+            const std::string v = argv[++i];
+            if (v == "on" || v == "1" || v == "true") o.frustumOn = true;
+            else if (v == "off" || v == "0" || v == "none" || v == "false") o.frustumOn = false;
+            else {
+                std::cerr << "invalid --frustum '" << v << "' (expected on|off)\n";
+                std::exit(1);
+            }
         } else if (a == "--shading" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.shading = -1;
@@ -218,7 +233,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S3.2") != nullptr, "S3.2 stage reported");
+    check(std::strstr(st.stage, "S4.2") != nullptr, "S4.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -228,7 +243,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (12 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (18 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -261,7 +276,7 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
-              bool dagTop = false) {
+              bool dagTop = false, bool cullMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -280,7 +295,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
-                                                   o.modelFile.c_str(), cluster);
+                                                   o.modelFile.c_str(), cluster, cullMode,
+                                                   o.frustumOn);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -349,7 +365,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
-    int shading = cluster ? 4 : o.shading;
+    int shading = (cluster || cullMode) ? 4 : o.shading;
     if (lodMode) shading = o.shadingSet ? o.shading : 1;
     // M3.2：dag-top 同 lod 模式缺省 normal（父子衔接的几何不连续最刺眼），
     // 显式 --shading 则听用户的。
@@ -402,8 +418,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     int frameHistoryCount = 0;
     float gpuHistory[120] = {};    // M0.6：GPU ms 曲线（renderFrame 后由 renderer 写回值追加）
     int gpuHistoryCount = 0;
+    float cullHistory[120] = {};   // M4.2：cull pass GPU ms 曲线（同上，renderer 写回值追加）
+    int cullHistoryCount = 0;
     const std::uint64_t resizeFrame =
         (o.resize && o.frames > 2) ? std::max<std::uint64_t>(2, o.frames / 2) : 0;
+    // M4.2：截图模式的 CPU 帧耗时机械证据（60fps 验收判据 = avg/max 均 ≤16.6ms）。
+    // 只进日志不进画面，任何 PNG 基线不受影响。截图模式无 16ms 节流 sleep，
+    // 测的是纯渲染吞吐上限（无节流都能 ≤16.6ms，节流后必然稳 60fps）。
+    double dtSumMs = 0.0;
+    double dtMaxMs = 0.0;
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -426,7 +449,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
             // cluster 场景五个模式全可用（textured 采 1x1 白占位）；normal 场景 4 会读
             // 未绑定的 CLUSTERCOLOR，循环范围限 0..3。
-            const int cycleCount = cluster ? kShadingCount : 4;
+            const int cycleCount = (cluster || cullMode) ? kShadingCount : 4;
             shading = (shading + 1) % cycleCount;
             nl::core::log::info("shading -> ", shadingName(shading));
         }
@@ -474,6 +497,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
         ++frame;
+        if (o.screenshot) {
+            dtSumMs += dtMs;
+            if (dtMs > dtMaxMs) dtMaxMs = dtMs;
+        }
 
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
@@ -520,6 +547,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.lodMaxError = info.lodMaxError;
             }
             hud.deterministic = o.screenshot;
+            // M4.1：GPU 剔除统计（DeviceInfo 由 backend 每帧 poll 后更新，只读显示）。
+            hud.visibleClusters = info.visibleClusters;
+            hud.totalClusters = static_cast<int>(info.totalClusters);
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -530,6 +560,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.gpuMs = 0.63f;
                 hud.gpuMsCount = kFixedSampleCount;
                 std::memcpy(hud.gpuMsHistory, kFixedGpuSamples, sizeof(kFixedGpuSamples));
+                // M4.2：cull pass 耗时同样固定（renderer 侧 deterministic 不写回真实值）。
+                hud.cullMs = 0.08f;
+                hud.cullMsCount = kFixedSampleCount;
+                std::memcpy(hud.cullMsHistory, kFixedCullSamples, sizeof(kFixedCullSamples));
                 hud.deltaSeconds = 1.0f / 60.0f;
                 hud.mouseX = -100.0f; hud.mouseY = -100.0f;  // 不落在 HUD 窗口内
                 hud.mouseLeftDown = false;
@@ -555,6 +589,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.gpuMsCount = gpuHistoryCount;
                 std::memcpy(hud.gpuMsHistory, gpuHistory,
                             static_cast<std::size_t>(gpuHistoryCount) * sizeof(float));
+                // M4.2：cull pass 曲线同一条累积路（renderer 写回 hud.cullMs）。
+                hud.cullMsCount = cullHistoryCount;
+                std::memcpy(hud.cullMsHistory, cullHistory,
+                            static_cast<std::size_t>(cullHistoryCount) * sizeof(float));
             }
         }
 
@@ -574,11 +612,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 gpuHistory[119] = hud.gpuMs;
             }
         }
+        // M4.2：cull pass 计时同一条追加路（cullTimingAvailable 只在 cull 模式置位）。
+        if (o.hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
+            if (cullHistoryCount < 120) {
+                cullHistory[cullHistoryCount++] = hud.cullMs;
+            } else {
+                std::memmove(cullHistory, cullHistory + 1, 119 * sizeof(float));
+                cullHistory[119] = hud.cullMs;
+            }
+        }
         if (o.hudEnabled) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
-            if (!cluster) shading = std::min(shading, 3);  // normal 场景无 CLUSTERCOLOR 属性
+            if (!cluster && !cullMode) shading = std::min(shading, 3);  // 非簇场景无 CLUSTERCOLOR 属性
             wireframe = hud.wireframe;
             colorIndex = std::clamp(hud.colorIndex, 0, kColorCount - 1);
             // M2.3：滑条写了新层号才真的换资产（渲染资源只在 viewer 这一侧被动，
@@ -612,6 +659,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             ++screenshotsSaved;
             nl::core::log::info("screenshot written: ", capturePath);
         }
+        // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
+        // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
+        if (o.screenshot && cullMode && info.totalClusters > 0 && info.visibleClusters >= 0) {
+            nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
+                                info.totalClusters, " clusters (frustum on)");
+        }
 
         if (frame % 15 == 0 || o.screenshot) {
             const auto e = renderer->extent();
@@ -644,6 +697,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     nl::core::log::info("shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
+    // M4.2：60fps 验收的 CPU 侧机械证据（截图模式无节流，测渲染吞吐上限）。
+    if (o.screenshot && frame > 1) {
+        nl::core::log::info("frame timing: avg ",
+                            dtSumMs / static_cast<double>(frame), " ms  max ",
+                            dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
+    }
 
     if (o.screenshot && screenshotsSaved == 0) {
         nl::core::log::error("screenshot was not written");
@@ -667,6 +726,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/true, /*lodMode=*/true);
     case nl::core::ViewMode::DagTop:    // M3.2：DAG 顶层 + 任选组下钻一层
         return runNormal(o, /*cluster=*/true, /*lodMode=*/false, /*dagTop=*/true);
+    case nl::core::ViewMode::Cull:       // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false, /*cullMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -689,6 +750,8 @@ void printUsage() {
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
+              << "  viewer.exe --frustum on|off        GPU frustum culling in cull mode (default on;\n"
+              << "                                     off = identity visible list, M4.0 behavior)\n"
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id (default textured; N key cycles)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
@@ -730,8 +793,12 @@ int main(int argc, char** argv) {
     // M1.3：cluster 模式的缺省资产是 assets/meshlets/Suzanne.nmesh（用户没给 --model 时）
     // M2.3：lod 模式同样缺省 Suzanne（分层文件 Suzanne.lodN.nmesh 随之探测）。
     // M3.2：dag-top 同缺省（顶层渲染 + 下钻都用同一套分层资产）。
+// M4.0：cull=true 走 vertex pulling 场景（assets/meshlets/*.nmesh，单 drawIndexedIndirect
+// 全簇全画，M4.1 才接 GPU 剔除），缺省着色 4=cluster；簇色由 shader 端 pcg(簇号) 算出，
+// 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
-         o.mode == nl::core::ViewMode::DagTop) && !o.modelSet) {
+         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull)
+        && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
     return runMode(o.mode, o);

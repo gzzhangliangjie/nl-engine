@@ -14,7 +14,7 @@
 | **bevy 0.15**（直接蓝本） | `meshlet/cull_clusters.wesl:29-92`：每线程 1 簇、wg=128，`aabb_in_frustum`（5 平面）+ atomicAdd append 到 raster 桶并写 `hardware_raster_indirect_args.instance_count`；`fill_counts.wesl:24-33`（单线程填计数）；`visibility_buffer_hardware_raster.wesl:27-58`（**vertex pulling**：一次 `draw_indirect`，`instance_index → 簇槽位 → SSBO 读顶点`，超界产 dummy NaN 顶点）；`visibility_buffer_raster_node.rs:592`（`pass.draw_indirect`） | 结构照抄：cull compute（append + 写 instanceCount）→ 一次 indirect draw（vertex pulling）。bevy 的软件光栅桶/两 pass 遮挡队列是 S7/S6 的东西，S4 不搬 |
 | bevy 视锥公式 | `cull_shared.wesl:44-64`（Gribb-Hartmann 行抽取 5 平面：`row[3]±row[0]`、`row[3]±row[1]`、`row[2]`；AABB `half_extent*sign(plane.xyz)` 投影）+ `:84-121`（project_aabb，近平面后不剔除） | **5 平面不是 6**：近平面跳过，防相机贴脸/球心在近平面后的过剔除（bevy 57e58ef997 修过该 bug）。我们用簇**包围球**（.nmesh 52B 头自带 sphere[4]）代替 AABB |
 | Carrot | `render/ClusterManager.cpp:572-588`（mesh task shader `drawMeshTasks`，组判定在 `draw_virtual_geometry.slang:105`） | 走 `VK_EXT_mesh_shader`——NVRHI 2021 代无 meshlet/mesh pipeline 对外承诺，**不适用**；其组原子双阈值判定留给 S5 |
-| UE 5.8 | `Renderer/Private/Nanite/NaniteCullRaster.cpp`（全 compute 光栅化）+ `NaniteVisibility.cpp` | UE 跳过硬件光栅（compute raster 是 S7 参考），**S4 在 UE 里没有直接对应物**——UE 的"视锥剔除"融在它的 visibility pass 里。S4 蓝本只有 bevy |
+| UE 5.8 | `Renderer/Private/Nanite/NaniteCullRaster.cpp`（主可见性 pass 全 compute 软光栅；**2026-11-08 用户追问后复读修正**：CVar "triangle edge length in pixels at which Nanite starts using the hardware rasterizer" + `FHWRasterizeVS/MS/PS` 一套 material shader——**大三角形走硬件光栅的补充路径存在**，且硬光栅 VS 同样是 pulling 式读 GPU 簇数据、变体还用 mesh shader `SF_Mesh`）+ `NaniteVisibility.cpp` | UE 硬件光栅只是「软光栅为主 + 大三角硬光栅补画」的**补充**，与 S4「硬件光栅为主路径」方向相反；其视锥剔除也不独立成 pass，全部融进 GPU-driven 层级遍历流水线。**S4 在 UE 里没有可拆的结构对应物**（能力有、结构没有）——S4 蓝本只有 bevy；UE 的 compute 全光栅是 S7 参考、层级剔除遍历是 S5 参考 |
 
 **NVRHI 可行性（vendored 2021.3 实读确认）**：
 - `ICommandList::drawIndexedIndirect(offsetBytes, drawCount)` 两后端均实现：`src/d3d12/d3d12-graphics.cpp:586`（ExecuteIndirect + CommandSignature）、`src/vulkan/vulkan-graphics.cpp:721`（vkCmdDrawIndexedIndirect，stride=`sizeof(DrawIndexedIndirectArguments)`）。
@@ -49,7 +49,7 @@
 - [ ] **barrier**：compute 写 indirect args → graphics 读，NVRHI 状态跟踪通常覆盖；DX12 的 UAV→INDIRECT_ARGUMENT 显式状态在实现时实测确认（Donut `vertex_buffer` 示例 + nvrhi src/d3d12 有现成写法）
 - [ ] **离线对照工具**：`tools/frustum_check.py`——读 .nmesh 簇球 + 相机参数（--yaw/pitch/dist 同公式）离线算可见簇集合，与 GPU HUD 数字逐个对照（机械判据，防"数字看起来合理"假证据）
 
-**自检**：相机背对场景 HUD 可见簇数 ≈0（画面对应空/少）；转回恢复全量；**三姿态（正对/侧 45°/背对）的 GPU 数字 == frustum_check.py 离线值**。tag：`s4-cull`。
+**自检**：~~相机背对场景 HUD 可见簇数 ≈0~~ **2026-11-08 实测修正：轨道相机永远 look at 原点，背对时整模仍在视锥内（dist4.2 视锥半高≈1.74 > 模型半径≈1.3），「背对」剔除数仍是全量——本前提对轨道相机不成立**。真剔除维度 = 近平面：相机推进模型内部（dist 0.45）外围簇被近平面切掉，Suzanne 640x720 下 237→30。**验收姿态（正对全可见 / 进模真剔除）的 GPU 数字 == frustum_check.py 离线值**。tag：`s4-cull`。
 
 ⚠️ 常见坑：
 - 视锥平面从**视图投影矩阵**提取（Gribb-Hartmann 行抽取），别对错行列；我们的 MVP 矩阵符号约定先核 `scene.cpp` 现有用法再抄 bevy 公式（行列序差异）
@@ -58,13 +58,13 @@
 
 ## M4.2 HUD 统计 + 1M 场景 + 性能验收（1~2 天）
 
-- [ ] **剔除统计回读**：可见簇数/总簇数/剔除率，readback buffer 延迟 1~2 帧（`cpuAccess=Read` + `copyBuffer` + `mapBuffer`，主循环内禁止等待型 map——旧 PLAN 底线保留）
-- [ ] **GPU 计时**：cull pass 接入现有 `GpuTimer`（M0.6 已交付 4 slot 环形，旧版"先补 L2 计时"已完成，此处只加 slot）；HUD 曲线显示 cull ms
-- [ ] **1M+ 三角资产（2026-11-08 用户拍板）**：`scripts/gen-dense-mesh.py --shape icosphere` 升一级细分（20×4⁸ = 1,310,720 tri，约 6554 簇、~40MB .nmesh），**产物入仓**（cases.json 基线可复现依赖资产在场；P9 前例：dense 8MB 已入仓）
-- [ ] **验收姿态**：正对/侧 45°/背对三姿态，HUD `frame ms`（CPU）与 GPU ms 均 ≤ 16.6ms（60fps）；背对时剔除率 ≈100% 仍稳定 60fps（验证空 draw 路径无异常）
-- [ ] **展示台交代（里程碑交代规范）**：cases.json s4.x 卡（pulling 全画 pair / 三姿态剔除 pair + HUD 统计卡 + 负向：无效 --mode cull 参数 exit 1 + selftest）+ `example/s4-cull/` 基线 PNG + `run.bat`（gallery：三姿态同机位对比 + 背对剔除率证据）+ `docs/s4/S4-TOOLS-GUIDE.md` 归档；kStage 升 `S4.0→S4.1→S4.2` 随里程碑推进
+- [x] **剔除统计回读**：可见簇数/总簇数/剔除率，readback buffer 延迟 1~2 帧（M4.1 已交付）
+- [x] **GPU 计时**：cull pass 接入第二个 `GpuTimer` 实例（M4.2 落地：[frame]/[cull] resolve 日志 + HUD cull GPU 行/曲线；轮询必须在 hud_.build() 之前，踩坑见 MILESTONES）
+- [x] **1M+ 三角资产（2026-11-08 用户拍板）**：IcoSphereDense1M 入仓——subdiv 8 = 1,310,720 tri / **19,718 簇**（PLAN 预估 6554，meshoptimizer 按簇上限切得更细，如实修正）/ .nmesh 33.5MB
+- [x] **验收姿态**：正对 640x360 全可见 19718/19718 pass-through bytes（跨后端也一致）/ 进模 1932/19718 剔除 90.2% == 离线；CPU avg 4.9~5.5ms、GPU 整帧 0.96~1.02ms / cull pass ~0.010ms（判据 16.6ms 余两数量级）
+- [x] **展示台交代**：cases.json s4.2 + s4.2-tools 卡 + example/s4-done 基线 + run.bat + S4-TOOLS-GUIDE M4.2 节；kStage=S4.2
 
-**自检（S4 验收）**：相机移出视锥 HUD 绘制簇数骤降；1M+ 场景稳定 60fps；双后端三姿态数字与离线工具一致。tag：`s4-done`，截图 `docs/screenshots/s4.png`（两张：面向/背对 HUD 数字对比）。
+**自检（S4 验收）**：进模姿态 HUD 绘制簇数骤降（近平面真剔除）；1M+ 场景稳定 60fps；双后端两姿态数字与离线工具一致。tag：`s4-done`，截图 `docs/screenshots/s4.png`（两张：正对全可见 / 进模高剔除 HUD 数字对比）。
 
 ---
 
