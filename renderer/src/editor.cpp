@@ -22,6 +22,13 @@ ImVec4 typeColor(const std::string& type) {
     if (type == "ConstantFloat") return ImVec4(0.30f, 0.50f, 0.70f, 1.0f);
     if (type == "Multiply")      return ImVec4(0.30f, 0.60f, 0.40f, 1.0f);
     if (type == "Add")           return ImVec4(0.75f, 0.55f, 0.25f, 1.0f);
+    if (type == "Subtract")      return ImVec4(0.40f, 0.45f, 0.70f, 1.0f);
+    if (type == "Divide")        return ImVec4(0.55f, 0.40f, 0.30f, 1.0f);
+    if (type == "Power")         return ImVec4(0.65f, 0.35f, 0.55f, 1.0f);
+    if (type == "Lerp")          return ImVec4(0.25f, 0.55f, 0.55f, 1.0f);
+    if (type == "OneMinus")      return ImVec4(0.50f, 0.50f, 0.30f, 1.0f);
+    if (type == "Abs")           return ImVec4(0.45f, 0.45f, 0.60f, 1.0f);
+    if (type == "Clamp")         return ImVec4(0.30f, 0.55f, 0.65f, 1.0f);
     if (type == "Output")        return ImVec4(0.70f, 0.35f, 0.35f, 1.0f);
     return ImVec4(0.35f, 0.35f, 0.45f, 1.0f);
 }
@@ -42,20 +49,29 @@ PinRef findPin(const nl::material_graph::MaterialGraph& g, int pinId) {
     return PinRef{};
 }
 
-// 按 B 路阶梯当前节点库：ConstantFloat(1 out) / Multiply / Add（二值 float）/ Output(baseColor in)。
-// 返回新节点 id（供右键建节点时定位画布坐标）。
+// 全部 10 种节点类型（封顶版节点库）：二值运算 a/b、三输入 Lerp a/b/t、
+// 一元 x、Clamp 的 min/max 走属性。返回新节点 id（供建节点时定位画布坐标）。
 int addTypedNode(nl::material_graph::MaterialGraph& g, const std::string& type) {
     using namespace nl::material_graph;
     int n = g.addNode(type);
     if (type == "ConstantFloat") {
         g.setProp(n, "value", "0.5");
         g.addPin(n, "out", ValueType::Float, true);
-    } else if (type == "Multiply" || type == "Add") {
+    } else if (type == "Lerp") {
+        g.addPin(n, "a", ValueType::Float, false);
+        g.addPin(n, "b", ValueType::Float, false);
+        g.addPin(n, "t", ValueType::Float, false);
+        g.addPin(n, "out", ValueType::Float, true);
+    } else if (type == "OneMinus" || type == "Abs" || type == "Clamp") {
+        g.addPin(n, "x", ValueType::Float, false);
+        g.addPin(n, "out", ValueType::Float, true);
+        if (type == "Clamp") { g.setProp(n, "min", "0"); g.setProp(n, "max", "1"); }
+    } else if (type == "Output") {
+        g.addPin(n, "baseColor", ValueType::Float, false);
+    } else {  // Multiply / Add / Subtract / Divide / Power：二值 float
         g.addPin(n, "a", ValueType::Float, false);
         g.addPin(n, "b", ValueType::Float, false);
         g.addPin(n, "out", ValueType::Float, true);
-    } else if (type == "Output") {
-        g.addPin(n, "baseColor", ValueType::Float, false);
     }
     return n;
 }
@@ -118,15 +134,42 @@ struct NodeEditor::Impl {
                 ed::EndPin();
             }
             if (n.type == "ConstantFloat") {        // 属性即时编辑（写回 props）
-                float v = 0.0f;
-                auto it = n.props.find("value");
-                if (it != n.props.end()) v = std::strtof(it->second.c_str(), nullptr);
-                ImGui::SetNextItemWidth(110.0f);    // 不占满整行，out 引脚保持在同一列高度
-                if (ImGui::InputFloat("value", &v, 0.0f, 0.0f, "%.3f")) {
-                    char buf[32];
-                    std::snprintf(buf, sizeof(buf), "%.3f", v);
-                    graph.setProp(n.id, "value", buf);
+                // uniform 开关：勾上后进 cbuffer MaterialParams(b1)（B5 运行时绑定）
+                bool asUniform = false;
+                auto itU = n.props.find("uniform");
+                asUniform = (itU != n.props.end()
+                             && (itU->second == "1" || itU->second == "true"));
+                if (ImGui::Checkbox("uniform", &asUniform)) {
+                    if (asUniform) {
+                        graph.setProp(n.id, "uniform", "1");
+                        if (n.props.find("uname") == n.props.end())
+                            graph.setProp(n.id, "uname", "uParam" + std::to_string(n.id));
+                    } else {
+                        graph.setProp(n.id, "uniform", "0");
+                    }
                     status = "prop changed";
+                }
+                if (asUniform) {
+                    char buf[64] = {};
+                    auto un = n.props.find("uname");
+                    if (un != n.props.end())
+                        std::snprintf(buf, sizeof(buf), "%s", un->second.c_str());
+                    ImGui::SetNextItemWidth(110.0f);
+                    if (ImGui::InputText("uname", buf, sizeof(buf))) {
+                        graph.setProp(n.id, "uname", buf);
+                        status = "prop changed";
+                    }
+                } else {
+                    float v = 0.0f;
+                    auto it = n.props.find("value");
+                    if (it != n.props.end()) v = std::strtof(it->second.c_str(), nullptr);
+                    ImGui::SetNextItemWidth(110.0f);    // 不占满整行，out 引脚保持在同一列高度
+                    if (ImGui::InputFloat("value", &v, 0.0f, 0.0f, "%.3f")) {
+                        char buf[32];
+                        std::snprintf(buf, sizeof(buf), "%.3f", v);
+                        graph.setProp(n.id, "value", buf);
+                        status = "prop changed";
+                    }
                 }
             }
             for (const auto& p : n.pins) {          // 输出列在右
@@ -153,7 +196,9 @@ struct NodeEditor::Impl {
             ImGui::OpenPopup(hovered ? "node_menu" : "canvas_menu");
         if (ImGui::BeginPopup("canvas_menu")) {
             const ImVec2 at = ed::ScreenToCanvas(ImGui::GetMousePosOnOpeningCurrentPopup());
-            const char* types[] = {"ConstantFloat", "Multiply", "Add", "Output"};
+            const char* types[] = {"ConstantFloat", "Multiply", "Add", "Subtract",
+                                   "Divide", "Power", "Lerp", "OneMinus", "Abs",
+                                   "Clamp", "Output"};
             for (const char* t : types)
                 if (ImGui::MenuItem(t)) {
                     const int id = addTypedNode(graph, t);

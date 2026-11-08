@@ -52,7 +52,8 @@ nl::material_graph::MaterialGraph buildSample() {
     g.connect(nA, pA, nMul, pMulA);
     g.connect(nB, pB, nMul, pMulB);
 
-    // T1-M2：Add 节点入示例链（baseColor = 0.8*0.5 + 0.2 = 0.6），示范扩节点库全链。
+    // T1-M2：Add 入示例链；封顶版：uniform 曝光 + OneMinus + Lerp。
+    // baseColor = lerp(0.8*0.5 + 0.2, 1 - 0.2, uTint) = lerp(0.6, 0.8, 0.25) = 0.65
     int nC = g.addNode("ConstantFloat", 0.0f, 240.0f);
     g.setProp(nC, "value", "0.2");
     int pC = g.addPin(nC, "out", ValueType::Float, true);
@@ -64,9 +65,82 @@ nl::material_graph::MaterialGraph buildSample() {
     g.connect(nC, pC, nAdd, pAddA);
     g.connect(nMul, pMulO, nAdd, pAddB);
 
-    int nOut = g.addNode("Output", 400.0f, 60.0f);
+    int nU = g.addNode("ConstantFloat", 0.0f, 360.0f);
+    g.setProp(nU, "value", "0.25");
+    g.setProp(nU, "uniform", "1");        // uniform 曝光：进 cbuffer MaterialParams(b1)
+    g.setProp(nU, "uname", "uTint");
+    int pU = g.addPin(nU, "out", ValueType::Float, true);
+
+    int nOm = g.addNode("OneMinus", 200.0f, 300.0f);
+    int pOmX = g.addPin(nOm, "x", ValueType::Float, false);
+    int pOmO = g.addPin(nOm, "out", ValueType::Float, true);
+    g.connect(nC, pC, nOm, pOmX);         // 1 - 0.2 = 0.8
+
+    int nLerp = g.addNode("Lerp", 400.0f, 120.0f);
+    int pLerpA = g.addPin(nLerp, "a", ValueType::Float, false);
+    int pLerpB = g.addPin(nLerp, "b", ValueType::Float, false);
+    int pLerpT = g.addPin(nLerp, "t", ValueType::Float, false);
+    int pLerpO = g.addPin(nLerp, "out", ValueType::Float, true);
+    g.connect(nAdd, pAddO, nLerp, pLerpA);
+    g.connect(nOm, pOmO, nLerp, pLerpB);
+    g.connect(nU, pU, nLerp, pLerpT);
+
+    int nOut = g.addNode("Output", 600.0f, 60.0f);
     int pOutIn = g.addPin(nOut, "baseColor", ValueType::Float, false);
-    g.connect(nAdd, pAddO, nOut, pOutIn);
+    g.connect(nLerp, pLerpO, nOut, pOutIn);
+    return g;
+}
+
+// 封顶版：全算子覆盖图（Power/Divide/Subtract/Abs/Clamp + uniform + Lerp）。
+// b3 check 真实编译它——10 种节点类型的 slangc 双后端覆盖集中在一张图。
+// baseColor = lerp(clamp(abs(0.8^2 / 2 - 0.02), 0.1, 0.5), 0.8, uK) = lerp(0.3, 0.8, 0.5) = 0.55
+nl::material_graph::MaterialGraph buildKitchenSink() {
+    using namespace nl::material_graph;
+    MaterialGraph g;
+    int k1 = g.addNode("ConstantFloat", 0.0f, 0.0f);   g.setProp(k1, "value", "0.8");
+    int p1 = g.addPin(k1, "out", ValueType::Float, true);
+    int k2 = g.addNode("ConstantFloat", 0.0f, 120.0f); g.setProp(k2, "value", "2.0");
+    int p2 = g.addPin(k2, "out", ValueType::Float, true);
+    int np = g.addNode("Power", 200.0f, 0.0f);
+    int ppa = g.addPin(np, "a", ValueType::Float, false);
+    int ppb = g.addPin(np, "b", ValueType::Float, false);
+    int ppo = g.addPin(np, "out", ValueType::Float, true);
+    g.connect(k1, p1, np, ppa); g.connect(k2, p2, np, ppb);    // 0.64
+    int k3 = g.addNode("ConstantFloat", 0.0f, 240.0f); g.setProp(k3, "value", "2.0");
+    int p3 = g.addPin(k3, "out", ValueType::Float, true);
+    int nd = g.addNode("Divide", 200.0f, 120.0f);
+    int pda = g.addPin(nd, "a", ValueType::Float, false);
+    int pdb = g.addPin(nd, "b", ValueType::Float, false);
+    int pdo = g.addPin(nd, "out", ValueType::Float, true);
+    g.connect(np, ppo, nd, pda); g.connect(k3, p3, nd, pdb);   // 0.32
+    int k4 = g.addNode("ConstantFloat", 0.0f, 360.0f); g.setProp(k4, "value", "0.02");
+    int p4 = g.addPin(k4, "out", ValueType::Float, true);
+    int ns = g.addNode("Subtract", 200.0f, 240.0f);
+    int psa = g.addPin(ns, "a", ValueType::Float, false);
+    int psb = g.addPin(ns, "b", ValueType::Float, false);
+    int pso = g.addPin(ns, "out", ValueType::Float, true);
+    g.connect(nd, pdo, ns, psa); g.connect(k4, p4, ns, psb);   // 0.30
+    int na = g.addNode("Abs", 400.0f, 240.0f);
+    int pax = g.addPin(na, "x", ValueType::Float, false);
+    int pao = g.addPin(na, "out", ValueType::Float, true);
+    g.connect(ns, pso, na, pax);
+    int nc = g.addNode("Clamp", 600.0f, 240.0f);
+    g.setProp(nc, "min", "0.1"); g.setProp(nc, "max", "0.5");  // min/max 走属性不占引脚
+    int pcx = g.addPin(nc, "x", ValueType::Float, false);
+    int pco = g.addPin(nc, "out", ValueType::Float, true);
+    g.connect(na, pao, nc, pcx);
+    int ku = g.addNode("ConstantFloat", 0.0f, 480.0f);
+    g.setProp(ku, "value", "0.5"); g.setProp(ku, "uniform", "1");  // 缺省名 -> uParam<id>
+    int pu = g.addPin(ku, "out", ValueType::Float, true);
+    int nl = g.addNode("Lerp", 800.0f, 120.0f);
+    int pla = g.addPin(nl, "a", ValueType::Float, false);
+    int plb = g.addPin(nl, "b", ValueType::Float, false);
+    int plt = g.addPin(nl, "t", ValueType::Float, false);
+    int plo = g.addPin(nl, "out", ValueType::Float, true);
+    g.connect(nc, pco, nl, pla); g.connect(k1, p1, nl, plb); g.connect(ku, pu, nl, plt);
+    int no = g.addNode("Output", 1000.0f, 60.0f);
+    int po = g.addPin(no, "baseColor", ValueType::Float, false);
+    g.connect(nl, plo, no, po);
     return g;
 }
 
@@ -206,13 +280,20 @@ bool recompileGraph(const nl::material_graph::MaterialGraph& g,
     return r.ok();
 }
 
-// check：内部装配示例图 -> 重编译（emit + 双后端编译）。B3 验收入口，B4 复用 recompileGraph。
+// check：示例图 + 全算子覆盖图 -> 各自重编译（emit + 双后端四路）。
+// B3 验收入口（B4 复用 recompileGraph）；封顶版在此同时覆盖 uniform cbuffer
+// 与全部 10 种节点类型的真实 slangc 编译。
 int cmdCheck() {
-    nl::material_graph::MaterialGraph g = buildSample();
-    std::string err;
-    if (!g.validate(&err)) { std::fprintf(stderr, "check: graph invalid: %s\n", err.c_str()); return 1; }
-    RecompileReport rep;
-    bool ok = recompileGraph(g, findSlangc(), findDxc(), &rep);
+    auto runOne = [&](const char* name, nl::material_graph::MaterialGraph g) {
+        std::string err;
+        if (!g.validate(&err)) { std::fprintf(stderr, "check: %s invalid: %s\n", name, err.c_str()); return false; }
+        RecompileReport rep;
+        bool ok = recompileGraph(g, findSlangc(), findDxc(), &rep);
+        std::printf("genslang(%-7s): %s\n", name, ok ? "OK" : "FAIL");
+        return ok;
+    };
+    bool ok = runOne("sample", buildSample());
+    ok &= runOne("kitchen", buildKitchenSink());
     if (ok) { std::printf("genslang   : OK\n"); return 0; }
     std::printf("genslang   : FAIL\n");
     return 1;
@@ -427,8 +508,8 @@ int selftestGraph() {
     // 1) 构造 + validate 通过
     MaterialGraph g = buildSample();
     std::string err;
-    check(g.nodeCount() == 6, "expected 6 nodes");   // T1-M2：示例链含 Add（2 常量 + Multiply + 常量 + Add + Output）
-    check(g.edgeCount() == 5, "expected 5 edges");
+    check(g.nodeCount() == 9, "expected 9 nodes");   // 封顶版：+ uniform uTint / OneMinus / Lerp
+    check(g.edgeCount() == 9, "expected 9 edges");
     check(g.validate(&err), "sample graph should validate");
 
     // 2) 序列化确定性：两次写出字节一致
@@ -472,6 +553,31 @@ int selftestGraph() {
     MaterialGraph g3;
     check(!MaterialGraph::deserialize(broken, g3, nullptr),
           "headerless input must be rejected");
+
+    // 7) emit 表达式断言：uniform cbuffer + 全部算子形式（T1-M3 封顶）
+    {
+        MaterialGraph ks = buildKitchenSink();
+        std::ostringstream es;
+        check(emitSlang(ks, es, &err), "kitchen emit");
+        const std::string s = es.str();
+        check(s.find("cbuffer MaterialParams : register(b1)") != std::string::npos,
+              "uniform cbuffer emitted");
+        check(s.find("float uParam") != std::string::npos,
+              "default uniform member emitted (uParam<id>)");
+        check(s.find("pow(") != std::string::npos, "Power op");
+        check(s.find(" / ") != std::string::npos, "Divide op");
+        check(s.find(" - ") != std::string::npos, "Subtract op");
+        check(s.find("abs(") != std::string::npos, "Abs op");
+        check(s.find("clamp(") != std::string::npos, "Clamp op");
+
+        MaterialGraph sm = buildSample();
+        std::ostringstream es2;
+        check(emitSlang(sm, es2, &err), "sample emit");
+        const std::string s2 = es2.str();
+        check(s2.find("uTint") != std::string::npos, "named uniform referenced");
+        check(s2.find("lerp(") != std::string::npos, "Lerp op");
+        check(s2.find("(1.0f - ") != std::string::npos, "OneMinus op");
+    }
 
     if (failures == 0) {
         std::printf("material-graph selftest: PASS\n");
