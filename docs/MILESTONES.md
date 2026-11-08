@@ -991,3 +991,15 @@
 2. **cut thr 滑条回读钳制命令行参数（潜伏 bug，M5.1 埋雷）**：dag 遍历模式 HUD 不画滑条（`frame.dagGroupCount` 恒 0 不填），但 viewer 每帧 `if (dagTop||dagMode) cutThresholdPx = clamp(hud.cutThresholdPx, 0.25, 4.0)` 无条件回读 → 命令行 thr 16 第二帧起被覆盖成 1.0。实锤过程：far HUD 基线图显示 237/3936（= no-hud thr 1 的结果），no-hud 同参数 14/426 → 实测 thr1@dist20H720 == 237/3936 逐位吻合。s5.1 near 没踩到纯属 thr 恰好 = 1.0。
 3. **历史 selftest 卡 expectLog 失配（潜伏，M5.0 埋雷）**：m0.9/s2.0/s3.2 卡 exe=current 但写死 15/15，M5.0 加第 16 项 selftest 后必 FAIL，此前收口没挑到这三卡所以没暴露。教训：exe=current 的 tool 卡断言的是**当前构建**，套件数/stage 演进时历史卡必须同步，否则全量跑闸必炸。
 4. **Edit 工具误删行**：批量替换时 old_string 尾部含上下文行、new_string 漏带，`beginTrackingBufferState(identityIndex_, ...)` 被吃——编译能过（writeBuffer 不依赖前一行）但状态跟踪会错，目检 diff 当场抓回。
+
+## T1 材质图可视化编辑器（A 类并行轨道支线，feat/material-graph，2026-11-08~09）
+
+> 终点定义与拆解：`docs/material-graph/SIDE-TASKS.md`（2026-11-09 用户拍板「及时收手」封顶）。
+
+**动作**：T1-M1 交互式节点编辑器落地（imgui-node-editor v0.9.4 vendored；viewer `--editor <file.mg>` 经 HudFrame.editor 挂入 hud NewFrame..Render 区间，不碰 ViewMode/kStage；画布拖拽/连线/属性编辑/Save/Compile 全套）；T1-M2 细化（右键增删节点、Del 级联删、Ctrl+S、Add 节点全链示范扩库路径、底部状态条）；T1-M3 封顶版（节点库扩到 10 种 + uniform 曝光 MaterialParams cbuffer b1 + kitchenSink 全算子图入 b3 真实编译）。
+
+**提交版本**：feat/material-graph `2e60906`(M1) / `15ce08c`(M2) / `40d5704`(M3 封顶)
+
+**完成情况**：DX12+Vulkan 双后端编译通过；ctest b2/b3/b4 全绿（M3 后复验 3/3，含 kitchenSink 双图 slangc SPIR-V/DXIL×vs/ps 四路真实编译）；证据图 t1-editor-window.png / b3-nodegraph.{svg,png}（GPU 回读/工具真实输出，非手绘）；editor=null 路径零改动既有基线不受影响。封顶定位：调试工具级，UI 不再加功能；唯一遗留 = 拆解 6 预览视口（等 B5/S7）。
+
+**踩坑情况**：① imgui-node-editor v0.9.4 API 是 PinKind（新版才叫 PinDirection）；② 库对 size<=0 回退「占满剩余」，底部状态条须外层包 ImGui host child 预留；③ NodeEditor.json 运行时状态污染确定性截图，拍摄前 rm；④ 本机 SDK 的 wrl/client.h 在 Include\<ver>\winrt 下（构建脚本 INCLUDE 补 winrt）；⑤ emitter memo 泄漏——上游多边引用把 visited key 写进生成代码（B3 潜伏雷，改 key→expr 记忆化）；⑥ props 按 unordered_map 迭代序写出致 roundtrip 非字节一致（改 key 排序）。
