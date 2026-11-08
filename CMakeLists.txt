@@ -121,6 +121,9 @@ add_library(nl_core STATIC
     core/src/anim/anim.cpp     # M-A1：动作系统（nl/anim）—— clip 采样，零图形 API
     core/src/anim/state_machine.cpp  # M-A3：动作状态机（优先级转移 + crossfade + UE 缩时）
     core/src/anim/blend_space.cpp    # M-A4：1D blend space（找段 + 权重插值，UE 1D 口径）
+    core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
+    core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -183,11 +186,14 @@ else()
 endif()
 
 # 自动收集 renderer/shaders/ 下所有 .slang（不再硬编码单个文件）。
-# 每个源 <name>.slang 出 8 个产物（model 双入口后）：
-#   <name>.vs.{spv,dxil}         入口 vsMain
-#   <name>.vscluster.{spv,dxil}  入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
-#   <name>.ps.{spv,dxil}         入口 psMain
-#   <name>.pscluster.{spv,dxil}  入口 psCluster（M1.3）
+# model.slang 当前 6 个入口（3 对 vs+ps），各出 {spv,dxil} 两份（共 12 个产物）：
+#   <name>.vs.{spv,dxil}          入口 vsMain
+#   <name>.vscluster.{spv,dxil}   入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
+#   <name>.vscull.{spv,dxil}      入口 vsCull（M4.0：GPU vertex pulling）
+#   <name>.ps.{spv,dxil}          入口 psMain
+#   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
+#   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
+# cull.slang 单 compute 入口（M4.1）：<name>.cs.{spv,dxil} 入口 csCull
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
     message(FATAL_ERROR "No .slang shaders found in renderer/shaders/")
@@ -200,13 +206,17 @@ set(_SHADER_ARTIFACTS "")
 # 入口清单按源文件给：model.slang 双入口（M1.3 cluster 场景），其余单入口。
 # D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
 # 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
-set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex"
-                   "psMain|ps|fragment" "psCluster|pscluster|fragment")
+set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
+# M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
+set(_ENTRIES_CULL "csCull|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
         set(_ENTRIES "${_ENTRIES_MODEL}")
+    elseif(_SRC_NAME STREQUAL "cull")
+        set(_ENTRIES "${_ENTRIES_CULL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -218,11 +228,12 @@ foreach(_SRC ${NL_SHADER_SRCS})
         list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
                                       "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil")
         # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
-        #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128（set 0）。
-        # DX12 侧仍用 b0/t0/s0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
+        #   b0 -> binding 256, t0 -> binding 0, s0 -> binding 128, u0 -> binding 384（set 0）。
+        #   -fvk-u-shift 对无 UAV 的 shader 是无操作，统一加免去逐文件特判。
+        # DX12 侧仍用 b0/t0/s0/u0 各自的 slot 0，故同一份 .slang 无需任何 GLSL 注解。
         add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             COMMAND "${SLANGC}" "${_SRC}" -target spirv -entry ${_entry} -stage ${_stage}
-                    -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0
+                    -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-u-shift 384 0
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             MAIN_DEPENDENCY "${_SRC}"
             COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_suffix})")
@@ -258,10 +269,15 @@ target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
 add_executable(anim-tools anim-tools/main.cpp)
 target_link_libraries(anim-tools PRIVATE nl_core)
 
+# ---- B 路材质图工具（A 类轨道，工具版交代）----
+# 第 2 步种子：节点图数据模型 + 稳定序列化。只链 nl_core（日志），零图形 API。
+add_executable(material-graph-tools material-graph-tools/main.cpp)
+target_link_libraries(material-graph-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -372,3 +388,27 @@ set_tests_properties(ma3-anim-statemachine-selftest PROPERTIES
 add_test(NAME ma4-anim-blendspace-selftest COMMAND anim-tools selftest blendspace)
 set_tests_properties(ma4-anim-blendspace-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "anim blendspace selftest: PASS")
+
+# ---- B 路材质图：节点图数据模型 + 序列化机械单测（A 类轨道第 2 步验收）----
+# 不进渲染回归总闸（bytes/near），走工具版交代。
+add_test(NAME b2-graph-selftest COMMAND material-graph-tools selftest)
+set_tests_properties(b2-graph-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "material-graph selftest: PASS")
+
+# ---- B 路材质图 B3：图 -> Slang 代码生成 + 双后端编译验收（A 类轨道）----
+# 走工具版交代：emit 示例图 -> slangc 编译 SPIR-V + DXIL 各 vs/ps 入口。
+add_test(NAME b3-graph-genslang COMMAND material-graph-tools check)
+set_tests_properties(b3-graph-genslang PROPERTIES
+    PASS_REGULAR_EXPRESSION "genslang   : OK"
+    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
+
+# ---- B 路材质图 B4：热重载（改图即重编译）----
+# watch --once 对 fixture 图做单次 recompile（emit + 双后端编译），验收热重载链路本身；
+# 与 check 同源，只是走 watch 的加载 + 轮询首轮路径。不进渲染总闸，走工具版交代。
+add_test(NAME b4-graph-hot-reload
+         COMMAND material-graph-tools watch
+                 ${CMAKE_CURRENT_SOURCE_DIR}/material-graph-tools/sample.mg --once)
+set_tests_properties(b4-graph-hot-reload PROPERTIES
+    PASS_REGULAR_EXPRESSION "OK"
+    DEPENDS b3-graph-genslang
+    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")

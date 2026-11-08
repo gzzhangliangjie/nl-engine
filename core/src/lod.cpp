@@ -8,6 +8,7 @@
 #include "nl/core/lod.hpp"
 
 #include "nl/core/grouping.hpp"
+#include "nl/core/jobs.hpp"    // P8 M-J3：按组重切 / 组误差并行（拼接串行）
 #include "nl/core/meshlet.hpp"
 
 #include <algorithm>
@@ -62,7 +63,8 @@ struct GroupSplit {
 
 bool rebuildMeshletsPerGroup(const NMeshData& current, const GroupingResult& g,
                              const SimplifyResult& sr, NMeshData& out,
-                             std::vector<GroupSplit>& outGroups, std::string& outError) {
+                             std::vector<GroupSplit>& outGroups, std::string& outError,
+                             unsigned threads) {
     out = NMeshData{};
     outGroups.clear();
     if (sr.indices.empty() || sr.pointCount == 0) {
@@ -85,40 +87,45 @@ bool rebuildMeshletsPerGroup(const NMeshData& current, const GroupingResult& g,
     std::vector<std::uint8_t> localTris;
     outGroups.reserve(g.groupCount);
 
-    for (std::uint32_t grp = 0; grp < g.groupCount; ++grp) {
+    // P8 M-J3 两阶段：并行算组（buildMeshlets 重切 + 组误差/组球），串行拼接。
+    // 误差链口径（UE :1441+:1587）= max(成员簇误差, 简化误差)，per-group 独立可算；
+    // 层级推进（L0→LN 自底向上）在外层 for 循环，保持串行——「合并链必须串行」。
+    struct GroupBuild {
+        BuiltMeshlets built;
+        GroupSplit gs;
+        bool ok = false;
+        std::string error;
+    };
+    std::vector<GroupBuild> slots(g.groupCount);
+    const auto perGroupBody = [&](std::size_t b, std::size_t e) {
+      for (std::size_t gIdx = b; gIdx < e; ++gIdx) {
+        const std::uint32_t grp = std::uint32_t(gIdx);
+        GroupBuild& slot = slots[grp];
         const std::uint32_t firstTri = sr.groupFirstTri[grp];
         const std::uint32_t triCount = sr.groupTriCount[grp];
         if (triCount == 0) {
-            outError = "lod: group " + std::to_string(grp) + " simplified to nothing";
-            return false;
+            slot.error = "lod: group " + std::to_string(grp) + " simplified to nothing";
+            continue;
         }
         BuiltMeshlets built;
         if (!buildMeshlets(sr.pointPositions.data(), 3, sr.pointCount,
                            sr.indices.data() + std::size_t(firstTri) * 3,
                            std::size_t(triCount) * 3, built)) {
-            outError = "lod: buildMeshlets rejected simplified soup (group " +
-                       std::to_string(grp) + ")";
-            return false;
+            slot.error = "lod: buildMeshlets rejected simplified soup (group " +
+                         std::to_string(grp) + ")";
+            continue;
         }
         if (built.meshlets.empty()) {
-            outError = "lod: recluster produced no meshlets (group " +
-                       std::to_string(grp) + ")";
-            return false;
-        }
-
-        // 窗口平移拼接：顶点/三角池共享，簇窗口偏移累加
-        const std::uint32_t vertBase = std::uint32_t(vertexPoints.size());
-        const std::uint32_t triBase = std::uint32_t(localTris.size());
-        for (auto& m : built.meshlets) {
-            m.vertexOffset += vertBase;
-            m.triangleOffset += triBase;
+            slot.error = "lod: recluster produced no meshlets (group " +
+                         std::to_string(grp) + ")";
+            continue;
         }
 
         // 组 error（UE :1441+:1587），全部父簇统一携带（UE :1593）
         GroupSplit gs;
         gs.simplifyError = sr.perGroup[grp].maxError;
         gs.error = std::max(memberMax[grp], gs.simplifyError);
-        for (auto& b : built.bounds) b.error = gs.error;
+        for (auto& bd : built.bounds) bd.error = gs.error;
 
         // 组球 = 成员簇包围球并（UE :1445）
         {
@@ -136,6 +143,34 @@ bool rebuildMeshletsPerGroup(const NMeshData& current, const GroupingResult& g,
             }
         }
 
+        slot.built = std::move(built);
+        slot.gs = gs;
+        slot.ok = true;
+      }
+    };
+    {
+        nl::core::jobs::ThreadPool pool(threads);
+        pool.parallelFor(g.groupCount, perGroupBody, 1);
+    }
+
+    // ---- 串行拼接：窗口前缀（vertBase/triBase）依赖共享池当前 size ----
+    for (std::uint32_t grp = 0; grp < g.groupCount; ++grp) {
+        const GroupBuild& slot = slots[grp];
+        if (!slot.ok) {
+            outError = slot.error;
+            return false;
+        }
+        BuiltMeshlets built = slot.built;   // 窗口平移就地改 offset
+
+        // 窗口平移拼接：顶点/三角池共享，簇窗口偏移累加
+        const std::uint32_t vertBase = std::uint32_t(vertexPoints.size());
+        const std::uint32_t triBase = std::uint32_t(localTris.size());
+        for (auto& m : built.meshlets) {
+            m.vertexOffset += vertBase;
+            m.triangleOffset += triBase;
+        }
+
+        GroupSplit gs = slot.gs;
         gs.firstCluster = std::uint32_t(out.meshlets.size());
         gs.clusterCount = std::uint32_t(built.meshlets.size());
 
@@ -246,7 +281,7 @@ bool buildLodHierarchy(const NMeshData& input, LodHierarchy& out,
 
         // ---- 每组硬目标 ratio；不传任何历史层锁点 ----
         SimplifyResult sr;
-        if (!simplifyGroups(current, g, sr, outError, options.ratio)) return false;
+        if (!simplifyGroups(current, g, sr, outError, options.ratio, options.threads)) return false;
         if (sr.total.outputTriangles >= lv.triangles) {   // 无法再下降 = 自然收敛
             recordTerminalGroups(current, g, out.levels.back().mesh.lodMeta.dagGroups);
             break;
@@ -255,7 +290,8 @@ bool buildLodHierarchy(const NMeshData& input, LodHierarchy& out,
         // ---- 按组重切（M3.0）：父簇绝不跨组，血缘随重切产生 ----
         NMeshData next;
         std::vector<GroupSplit> splits;
-        if (!rebuildMeshletsPerGroup(current, g, sr, next, splits, outError)) return false;
+        if (!rebuildMeshletsPerGroup(current, g, sr, next, splits, outError,
+                                     options.threads)) return false;
 
         {
             std::vector<NMeshLodMeta::DagGroup>& dgs =

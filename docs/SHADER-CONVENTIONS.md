@@ -15,10 +15,15 @@
 - 命名：`<effect>.slang`（当前：`triangle.slang` = M0.3 回归、`model.slang` = M0.4 带贴图模型、`hud.slang` = M0.5 ImGui HUD 叠加）。三份都同出 SPIR-V + DXIL。
 
 ### 1.2 入口点与语义约定
-| 用途 | 入口函数名 | NVRHI ShaderType | 关键输出语义 |
-|---|---|---|---|
-| 顶点 | `vsMain` | `ShaderType::Vertex` | `float4 position : SV_Position` |
-| 片元 | `psMain` | `ShaderType::Pixel` | `float4 : SV_Target` |
+`model.slang` 当前三对入口（已由 `CMakeLists.txt` 的 `_ENTRIES_MODEL` 各自编出 `.{spv,dxil}`）：
+
+| 用途 | 顶点入口 | 片元入口 | NVRHI ShaderType | 输入签名差异 |
+|---|---|---|---|---|
+| 普通场景 | `vsMain` | `psMain` | Vertex / Pixel | 3 属性（position / normal / uv） |
+| cluster 场景（M1.3） | `vsCluster` | `psCluster` | Vertex / Pixel | 多 1 个 `CLUSTERCOLOR` 顶点属性（D3D12 debug layer 要求与 input layout 严格对应） |
+| GPU vertex pulling（M4.0） | `vsCull` | `psCull` | Vertex / Pixel | 无顶点缓冲，改从 SSBO 拉取（`SV_InstanceID` / `SV_VertexID`） |
+
+> 每对入口的**产物后缀**与**入口名**是两个独立维度：`CMakeLists.txt` 用 `_ENTRIES_MODEL` 的 `入口名|后缀|stage` 三元组分别指定（如 `"vsCull|vscull|vertex"` → `-entry vsCull` 编译出 `model.vscull.{spv,dxil}`）。`scene_.init*` 读后缀选文件、运行时入口名按后端规则传（见 §2.4）。
 
 - 顶点输入结构体用 HLSL 语义标注，当前约定：
   ```hlsl
@@ -81,22 +86,34 @@ slangc <name>.slang -dxc-path <WinSDK_x64_dir> -target dxil -entry <vsMain|psMai
 - 模型资产路径同理由 `NL_ASSET_DIR`（`assets/models/Suzanne.glb`）注入，同样不依赖 CWD。
 - `viewer` 通过 `add_dependencies(viewer nl_shaders)` 保证运行时字节码已生成。
 
-### 2.4 ⚠️ 致命坑：SPIR-V 入口点永远叫 `main`
-**Slang 编译 SPIR-V 时，入口点名恒为 `main`，完全无视 `-entry` 参数；DXIL 才真正按 `-entry` 命名。**
+### 2.4 ⚠️ 致命坑：入口名分「编译期」与「加载期」两个阶段，规则相反
+入口名由谁决定，取决于你是在**编译期（slangc）**还是**加载期（NVRHI runtime）**看它——两阶段规则正好相反，搞混就会误判（例如以为 `initCluster` 传 `vsMain` 加载 `vsCluster` 字节码是 bug，其实不是）：
 
-后果：
-- Vulkan 侧若把 `ShaderDesc.setEntryName("vsMain")`，NVRHI 在 SPIR-V 里找不到 `vsMain` 入口 → **`createShader` 静默返回 NULL** → pipeline 建不出来 → 三角形全黑、调试层可能零报错，极难定位。
-- 正确做法（已固化在 `renderer/src/scene.cpp` 的参数里，两个后端各自传）：
+- **编译期（`slangc -entry`）**：
+  - `DXIL`（`-target dxil`）：**认 `-entry`**，blob 内的入口名就是 `-entry` 写的（`vsMain` / `vsCluster` / `vsCull` …）。
+  - `SPIR-V`（`-target spirv`）：**永远叫 `main`，完全无视 `-entry`**。这是 Slang 的行为，不是 NVRHI 的。
+- **加载期（`ShaderDesc.setEntryName`，即 `scene_.init*` 传的第三/四个字符串参数）**：
+  - **Vulkan**：NVRHI 把 `setEntryName` 当成 SPIR-V 的 `pName`（见 vendored `thirdparty/nvrhi/src/vulkan/vulkan-graphics.cpp`）。SPIR-V 入口恒为 `main` → **Vulkan 必须传 `"main"`**，传 `vsMain`/`vsCluster` 等会找不到入口。
+  - **DX12**：NVRHI 直接把整段字节码喂进 PSO（见 vendored `thirdparty/nvrhi/src/d3d12/d3d12-graphics.cpp`），**完全不碰 `setEntryName`**。DX12 用的是 blob 里编译期 `-entry` 定下的那个唯一入口；运行时传的入口名是**纯摆设**（传 `vsMain`/`vsCluster` 都行，不影响结果）。
+
+后果与正确做法：
+- Vulkan 侧若把 `setEntryName` 设成 `"vsMain"`/`"vsCluster"` 等非 `"main"` 值，NVRHI 在 SPIR-V 里找不到该入口 → **`createShader` 静默返回 NULL** → pipeline 建不出来 → 画面全黑、调试层可能零报错，极难定位。
+- 两个后端现在的传参（固化在 `renderer/src/backend_dx12.cpp` 与 `backend_vulkan.cpp`，注释已对齐）：
   ```cpp
-  // backend_vulkan.cpp —— SPIR-V 入口固定为 "main"
-  scene_.init(nvrhiDevice_, "spv",  "main",   "main",   outError);
-  // backend_dx12.cpp —— DXIL 认 -entry，用真实入口名
-  scene_.init(device_,      "dxil", "vsMain", "psMain", outError);
-  hud_.init  (device_,      "dxil", "vsMain", "psMain", outError);
+  // Vulkan：SPIR-V 入口恒 "main"（不管 normal/cluster/cull 哪套入口）
+  scene_.init       (nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+  scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+  scene_.initCull   (nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+  hud_.init         (nvrhiDevice_, "spv", "main", "main", outError);
 
-  // backend_vulkan.cpp —— HUD 同样走 "main"
-  hud_.init  (nvrhiDevice_, "spv",  "main",   "main",   outError);
+  // DX12：运行时入口名被 NVRHI 忽略，真正生效的是编译期 -entry 写进 blob 的入口
+  //       （vsMain/vsCluster/vsCull …）。这里传真实名仅为可读性，传啥都行。
+  scene_.init       (device_,      "dxil", "vsMain",    "psMain",    modelFile, outError);
+  scene_.initCluster(device_,      "dxil", "vsCluster", "psCluster", modelFile, outError);
+  scene_.initCull   (device_,      "dxil", "vsCull",    "psCull",    modelFile, outError);
+  hud_.init         (device_,      "dxil", "vsMain",    "psMain",    outError);
   ```
+- 所以「`initCluster` 加载 `model.vscluster` 但传 `vsMain` 入口名」**不是 bug**：Vulkan 传的是 `"main"`（对），DX12 传的 `"vsMain"` 被忽略、用的是 blob 里的 `vsCluster`（也对）。新增同类入口（如未来的剔除变体）照此接线即可，不会踩坑。
 - **自检字节码合法性**（当初就是靠这个定位的）：
   - `.dxil` 文件头魔数 `44 58 42 43`（ASCII `DXBC`）。
   - `.spv`  文件头魔数 `03 02 23 07`（SPIR-V）。

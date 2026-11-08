@@ -10,23 +10,34 @@
 #include "nl/core/simplify.hpp"
 #include "nl/core/lod.hpp"       // M2.2：逐层 LOD 循环
 #include "nl/core/fallback.hpp"  // M3.1：fallback mesh 拼接
+#include "nl/core/jobs.hpp"      // P8 M-J0：线程池 + parallel_for
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace {
+
+double wallClockSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 void printUsage() {
     std::printf(
@@ -44,7 +55,8 @@ void printUsage() {
         "                        orientation audit vs ref normals; exit 1 if any face inward\n"
         "  nanite-tools dag <prefix> [--export out.json]\n"
         "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
-        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n");
+        "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n"
+        "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -208,19 +220,86 @@ struct ClusterSummary {
     double errMin = 0, errAvg = 0, errMax = 0;
     double cutoffAvg = 0, cutoffMin = 1.0;
     size_t degenerateCones = 0;  // cutoff < 0 的簇数（法线杂乱）
+    bool limitsOk = false;
 };
 
-// 对单个 primitive 切簇并核对覆盖率 / 上限。失败返回 false（failReason 带原因）。
-bool clusterPrimitive(const nl::core::PrimitiveMesh& prim,
-                      nl::core::BuiltMeshlets& built, std::string& failReason) {
-    if (!nl::core::buildMeshlets(&prim.vertices[0].pos[0],
-                                 sizeof(nl::core::MeshVertex) / sizeof(float),
-                                 prim.vertices.size(), prim.indices.data(),
-                                 prim.indices.size(), built)) {
-        failReason = "buildMeshlets rejected input";
+// M-J2：verify + 簇统计计算（无打印、无 I/O，可在多子网格间并行——各 primitive
+// 完全独立，输出写各自槽位）。从 printClusterResult 拆出（M2.1 原版一体函数）。
+bool verifyCoverage(const nl::core::PrimitiveMesh& prim,
+                    const nl::core::BuiltMeshlets& built, std::string& failReason);
+
+bool computeClusterResult(const nl::core::PrimitiveMesh& prim,
+                          nl::core::BuiltMeshlets& built,
+                          ClusterSummary& s, std::string& failReason) {
+    if (!verifyCoverage(prim, built, failReason)) return false;
+
+    s = ClusterSummary{};
+    s.tris = prim.indices.size() / 3;
+    s.verts = prim.vertices.size();
+    s.meshlets = built.meshlets.size();
+    double errSum = 0, cutoffSum = 0;
+    for (const auto& m : built.meshlets) {
+        s.maxTri = std::max(s.maxTri, m.triangleCount);
+        s.maxVert = std::max(s.maxVert, m.vertexCount);
+        s.emittedTris += m.triangleCount;
+        const auto& bd = built.bounds[&m - built.meshlets.data()];
+        errSum += bd.error;
+        s.errMin = s.errMin == 0 ? bd.error : std::min(s.errMin, (double)bd.error);
+        s.errMax = std::max(s.errMax, (double)bd.error);
+        if (bd.coneCutoff < 0.f) ++s.degenerateCones;
+        else { cutoffSum += bd.coneCutoff; s.cutoffMin = std::min(s.cutoffMin, (double)bd.coneCutoff); }
+    }
+    s.avgTri = double(s.emittedTris) / double(s.meshlets);
+    s.avgVert = double(built.vertices.size()) / double(s.meshlets);
+    s.errAvg = errSum / double(s.meshlets);
+    s.cutoffAvg = cutoffSum / double(s.meshlets - s.degenerateCones);
+    s.limitsOk = s.maxTri <= nl::core::kMeshletMaxTriangles &&
+                 s.maxVert <= nl::core::kMeshletMaxVertices;
+    return true;
+}
+
+// 纯打印（summary 已算好；保序串行段）。verbose 的 first-meshlets 预览也要 built。
+void printClusterSummary(const char* path, const nl::core::PrimitiveMesh& prim,
+                         const nl::core::BuiltMeshlets& built,
+                         const ClusterSummary& s, bool verbose) {
+    std::printf("file       : %s\n", path);
+    std::printf("submesh    : %s\n", prim.name.c_str());
+    std::printf("input      : %zu verts / %zu tris\n", s.verts, s.tris);
+    std::printf("meshlets   : %zu\n", s.meshlets);
+    std::printf("tri/cluster: avg %.1f  max %u  (limit %u)\n",
+                s.avgTri, s.maxTri, nl::core::kMeshletMaxTriangles);
+    std::printf("vert/cluster: avg %.1f  max %u  (limit %u)\n",
+                s.avgVert, s.maxVert, nl::core::kMeshletMaxVertices);
+    std::printf("coverage   : %zu/%zu = %.2f%%\n", s.emittedTris, s.tris,
+                100.0 * double(s.emittedTris) / double(s.tris));
+    std::printf("error      : min %.4f  avg %.4f  max %.4f  (world space, max edge)\n",
+                s.errMin, s.errAvg, s.errMax);
+    std::printf("cone       : avg cutoff %.3f  min %.3f  (degenerate: %zu)\n",
+                s.cutoffAvg, s.cutoffMin, s.degenerateCones);
+    std::printf("limits     : %s\n", s.limitsOk ? "PASS" : "FAIL");
+    if (verbose) {
+        const size_t show = std::min<size_t>(built.meshlets.size(), 5);
+        std::printf("first %zu meshlets:\n", show);
+        for (size_t i = 0; i < show; ++i) {
+            const auto& m = built.meshlets[i];
+            const auto& bd = built.bounds[i];
+            std::printf("  [%zu] tri=%-3u vert=%-3u sphere r=%.4f cutoff=%.3f err=%.4f\n",
+                        i, m.triangleCount, m.vertexCount, bd.sphere[3],
+                        bd.coneCutoff, bd.error);
+        }
+    }
+}
+
+bool printClusterResult(const char* path, const nl::core::PrimitiveMesh& prim,
+                        nl::core::BuiltMeshlets& built, bool verbose) {
+    std::string reason;
+    ClusterSummary s;
+    if (!computeClusterResult(prim, built, s, reason)) {
+        std::fprintf(stderr, "cluster: %s\n", reason.c_str());
         return false;
     }
-    return true;
+    printClusterSummary(path, prim, built, s, verbose);
+    return s.limitsOk;
 }
 
 // 覆盖率核对：所有簇展开后的全局索引三元组多重集 == 输入索引三元组多重集。
@@ -246,64 +325,17 @@ bool verifyCoverage(const nl::core::PrimitiveMesh& prim,
     return true;
 }
 
-bool printClusterResult(const char* path, const nl::core::PrimitiveMesh& prim,
-                        nl::core::BuiltMeshlets& built, bool verbose) {
-    std::string reason;
-    if (!verifyCoverage(prim, built, reason)) {
-        std::fprintf(stderr, "cluster: %s\n", reason.c_str());
+// 对单个 primitive 切簇并核对覆盖率 / 上限。失败返回 false（failReason 带原因）。
+bool clusterPrimitive(const nl::core::PrimitiveMesh& prim,
+                      nl::core::BuiltMeshlets& built, std::string& failReason) {
+    if (!nl::core::buildMeshlets(&prim.vertices[0].pos[0],
+                                 sizeof(nl::core::MeshVertex) / sizeof(float),
+                                 prim.vertices.size(), prim.indices.data(),
+                                 prim.indices.size(), built)) {
+        failReason = "buildMeshlets rejected input";
         return false;
     }
-
-    ClusterSummary s;
-    s.tris = prim.indices.size() / 3;
-    s.verts = prim.vertices.size();
-    s.meshlets = built.meshlets.size();
-    double errSum = 0, cutoffSum = 0;
-    for (const auto& m : built.meshlets) {
-        s.maxTri = std::max(s.maxTri, m.triangleCount);
-        s.maxVert = std::max(s.maxVert, m.vertexCount);
-        s.emittedTris += m.triangleCount;
-        const auto& bd = built.bounds[&m - built.meshlets.data()];
-        errSum += bd.error;
-        s.errMin = s.errMin == 0 ? bd.error : std::min(s.errMin, (double)bd.error);
-        s.errMax = std::max(s.errMax, (double)bd.error);
-        if (bd.coneCutoff < 0.f) ++s.degenerateCones;
-        else { cutoffSum += bd.coneCutoff; s.cutoffMin = std::min(s.cutoffMin, (double)bd.coneCutoff); }
-    }
-    s.avgTri = double(s.emittedTris) / double(s.meshlets);
-    s.avgVert = double(built.vertices.size()) / double(s.meshlets);
-    s.errAvg = errSum / double(s.meshlets);
-    s.cutoffAvg = cutoffSum / double(s.meshlets - s.degenerateCones);
-
-    std::printf("file       : %s\n", path);
-    std::printf("submesh    : %s\n", prim.name.c_str());
-    std::printf("input      : %zu verts / %zu tris\n", s.verts, s.tris);
-    std::printf("meshlets   : %zu\n", s.meshlets);
-    std::printf("tri/cluster: avg %.1f  max %u  (limit %u)\n",
-                s.avgTri, s.maxTri, nl::core::kMeshletMaxTriangles);
-    std::printf("vert/cluster: avg %.1f  max %u  (limit %u)\n",
-                s.avgVert, s.maxVert, nl::core::kMeshletMaxVertices);
-    std::printf("coverage   : %zu/%zu = %.2f%%\n", s.emittedTris, s.tris,
-                100.0 * double(s.emittedTris) / double(s.tris));
-    std::printf("error      : min %.4f  avg %.4f  max %.4f  (world space, max edge)\n",
-                s.errMin, s.errAvg, s.errMax);
-    std::printf("cone       : avg cutoff %.3f  min %.3f  (degenerate: %zu)\n",
-                s.cutoffAvg, s.cutoffMin, s.degenerateCones);
-    const bool limitsOk = s.maxTri <= nl::core::kMeshletMaxTriangles &&
-                          s.maxVert <= nl::core::kMeshletMaxVertices;
-    std::printf("limits     : %s\n", limitsOk ? "PASS" : "FAIL");
-    if (verbose) {
-        const size_t show = std::min<size_t>(built.meshlets.size(), 5);
-        std::printf("first %zu meshlets:\n", show);
-        for (size_t i = 0; i < show; ++i) {
-            const auto& m = built.meshlets[i];
-            const auto& bd = built.bounds[i];
-            std::printf("  [%zu] tri=%-3u vert=%-3u sphere r=%.4f cutoff=%.3f err=%.4f\n",
-                        i, m.triangleCount, m.vertexCount, bd.sphere[3],
-                        bd.coneCutoff, bd.error);
-        }
-    }
-    return limitsOk;
+    return true;
 }
 
 // BuiltMeshlets（引用原网格）→ NMeshData（自包含）：顶点窗口按序 remap 成真实顶点，
@@ -371,6 +403,51 @@ int cmdCluster(int argc, char** argv) {
                      data.meshes.size());
         return 1;
     }
+
+    // M-J2：多子网格走并行切簇（per-primitive 完全独立 → scope slot 输出，
+    // 打印/后续落盘保序串行）；单子网格保持原串行路径（并行开销 > 收益，零回归风险）。
+    if (data.meshes.size() > 1) {
+        struct MeshWork {
+            nl::core::BuiltMeshlets built;
+            ClusterSummary s;
+            bool ok = false;
+            std::string reason;
+        };
+        std::vector<MeshWork> works(data.meshes.size());
+        unsigned poolThreadsUsed = 0;
+        const double t0 = wallClockSeconds();
+        {
+            nl::core::jobs::ThreadPool pool;
+            const unsigned nThreads = pool.threadCount();
+            pool.scope<int>([&](nl::core::jobs::ThreadPool::Scope<int>& sc) {
+                for (size_t i = 0; i < data.meshes.size(); ++i) {
+                    sc.spawn([&data, &works, i] {
+                        MeshWork& w = works[i];
+                        w.ok = clusterPrimitive(data.meshes[i], w.built, w.reason) &&
+                               computeClusterResult(data.meshes[i], w.built, w.s, w.reason);
+                        return 0;
+                    });
+                }
+            });
+            poolThreadsUsed = nThreads;
+        }
+        const double parallelSecs = wallClockSeconds() - t0;
+        for (size_t i = 0; i < data.meshes.size(); ++i) {
+            const MeshWork& w = works[i];
+            if (!w.ok) {
+                std::fprintf(stderr, "cluster: [%zu] %s\n", i, w.reason.c_str());
+                ++failures;
+                continue;
+            }
+            printClusterSummary(path, data.meshes[i], w.built, w.s, verbose);
+            if (!w.s.limitsOk) ++failures;
+            if (i + 1 < data.meshes.size()) std::printf("\n");
+        }
+        std::printf("jobs       : %zu submeshes clustered in parallel (%.3fs, %u threads)\n",
+                    data.meshes.size(), parallelSecs, poolThreadsUsed);
+        return failures == 0 ? 0 : 1;
+    }
+
     for (size_t i = 0; i < data.meshes.size(); ++i) {
         nl::core::BuiltMeshlets built;
         std::string reason;
@@ -878,6 +955,12 @@ int cmdLod(int argc, char** argv) {
                 return 1;
             }
             opt.ratio = float(std::atof(argv[++i]));
+        } else if (a == "--threads") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "lod: --threads needs an integer >= 1 (0 = hardware default)\n");
+                return 1;
+            }
+            opt.threads = unsigned(std::atoi(argv[++i]));
         } else {
             std::fprintf(stderr, "lod: unknown option %s\n", argv[i]);
             return 1;
@@ -896,16 +979,21 @@ int cmdLod(int argc, char** argv) {
         std::fprintf(stderr, "lod: %s\n", error.c_str());
         return 1;
     }
+    const double lodT0 = wallClockSeconds();
     nl::core::LodHierarchy h;
     if (!nl::core::buildLodHierarchy(nm, h, error, opt)) {
         std::fprintf(stderr, "lod: %s\n", error.c_str());
         return 1;
     }
+    const double lodSecs = wallClockSeconds() - lodT0;
 
     std::printf("file        : %s\n", path);
     std::printf("out prefix  : %s\n", outPrefix.c_str());
     std::printf("qem ratio   : %.0f%% (per-group hard target)  maxLevels %u  minTris %u\n",
                 double(opt.ratio) * 100.0, opt.maxLevels, opt.minTriangles);
+    std::printf("jobs        : parallel per-group qem/recluster (threads=%u, %.3fs)\n",
+                opt.threads == 0 ? std::thread::hardware_concurrency() : opt.threads,
+                lodSecs);
     std::printf("levels      : %zu (L0..L%zu)\n", h.levels.size(), h.levels.size() - 1);
     for (const auto& lv : h.levels) {
         std::printf("  L%-2u clusters=%-5u tris=%-7u groups=%-4u locked=%-6u "
@@ -2578,6 +2666,407 @@ int selftestFallback() {
     return 1;
 }
 
+// ---- selftest jobs：P8 M-J0 线程池 + parallel_for 机械单测 ----
+// 判据（P8-JOB-PLAN M-J0）：求和 vs 单线程 N 轮随机规模无差；槽位并发写无冲突；
+// count=0 安全；批次异常重抛且池可继续使用；重复运行/多池配置结果一致。
+// 随机序列用固定种子 mt19937（离线单测必须确定性）。参考耗时不作判据，仅打印。
+int selftestJobs() {
+    using nl::core::jobs::ThreadPool;
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    // 求和参考实现：串行公式（无需循环，恒等可比）
+    auto serialSum = [](std::uint64_t n) -> std::uint64_t { return n * (n - 1) / 2; };
+
+    // 1) 求和一致性：50 轮随机规模 [0, 100001)，原子累加 == 公式
+    {
+        std::mt19937 rng(20261108u);
+        bool allMatch = true;
+        std::string detail;
+        for (int round = 0; round < 50 && allMatch; ++round) {
+            const std::uint64_t n = std::uniform_int_distribution<std::uint64_t>(0, 100000)(rng);
+            std::atomic<std::uint64_t> sum{0};
+            ThreadPool pool;
+            pool.parallelFor(std::size_t(n), [&sum](std::size_t b, std::size_t e) {
+                std::uint64_t local = 0;
+                for (std::size_t i = b; i < e; ++i) local += i;
+                sum.fetch_add(local, std::memory_order_relaxed);
+            });
+            if (sum.load() != serialSum(n)) {
+                allMatch = false;
+                detail = "round " + std::to_string(round) + " n=" + std::to_string(n) +
+                         " got=" + std::to_string(sum.load()) +
+                         " want=" + std::to_string(serialSum(n));
+            }
+        }
+        check(allMatch, "sum matches serial reference (50 random sizes)", detail);
+    }
+
+    // 2) 槽位并发写：每个 index 写自己的 slot，无丢失无串位
+    {
+        const std::size_t count = 100000;
+        std::vector<std::uint64_t> slots(count, 0);
+        ThreadPool pool;
+        pool.parallelFor(count, [&slots](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) slots[i] = 0x9E3779B97F4A7C15ull * i;
+        });
+        bool slotsOk = true;
+        for (std::size_t i = 0; i < count && slotsOk; ++i) {
+            if (slots[i] != 0x9E3779B97F4A7C15ull * i) slotsOk = false;
+        }
+        check(slotsOk, "per-slot concurrent writes land exactly once", "");
+    }
+
+    // 3) minBatch 边界：count < minBatch → 单批覆盖全量
+    {
+        std::atomic<std::uint64_t> sum{0};
+        ThreadPool pool(4);
+        pool.parallelFor(7, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        }, 100);
+        check(sum.load() == serialSum(7), "minBatch > count collapses to one batch", "");
+    }
+
+    // 4) count = 0 安全返回
+    {
+        bool threw = false;
+        bool touched = false;
+        ThreadPool pool;
+        try {
+            pool.parallelFor(0, [&touched](std::size_t, std::size_t) { touched = true; });
+        } catch (...) { threw = true; }
+        check(!threw && !touched, "count=0 returns without invoking body", "");
+    }
+
+    // 5) 批次异常：重抛 + 池存活可复用
+    {
+        bool rethrown = false;
+        std::string msg;
+        ThreadPool pool;
+        try {
+            pool.parallelFor(1000, [](std::size_t b, std::size_t e) {
+                for (std::size_t i = b; i < e; ++i) {
+                    if (i == 500) throw std::runtime_error("boom@500");
+                }
+            }, 1);
+        } catch (const std::exception& ex) {
+            rethrown = true;
+            msg = ex.what();
+        }
+        check(rethrown && msg == "boom@500", "batch exception rethrown after full drain", msg);
+
+        // 异常后池仍健康（worker 无一被拖垮）：再跑一次求和
+        std::atomic<std::uint64_t> sum{0};
+        pool.parallelFor(10000, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        });
+        check(sum.load() == serialSum(10000), "pool reusable after exception", "");
+    }
+
+    // 6) 重复运行确定性：同一池连跑 3 次 + 不同线程数配置（1 / 4 / 硬件默认）结果一致
+    {
+        bool deterministic = true;
+        const std::uint64_t want = serialSum(77777);
+        for (unsigned tc : {1u, 4u, 0u}) {
+            ThreadPool pool(tc);
+            for (int rep = 0; rep < 3; ++rep) {
+                std::atomic<std::uint64_t> sum{0};
+                pool.parallelFor(77777, [&sum](std::size_t b, std::size_t e) {
+                    for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+                }, 97);
+                if (sum.load() != want) deterministic = false;
+            }
+        }
+        check(deterministic, "repeat runs / thread-count variants all match", "");
+    }
+
+    // ---- M-J1：scoped fork-join ----
+
+    // 8) spawn 结果按 spawn 顺序收集
+    {
+        ThreadPool pool;
+        std::vector<std::uint64_t> got = pool.scope<std::uint64_t>(
+            [](nl::core::jobs::ThreadPool::Scope<std::uint64_t>& s) {
+                for (std::uint64_t i = 0; i < 100; ++i) {
+                    s.spawn([i] { return i * 2; });
+                }
+            });
+        bool orderOk = got.size() == 100;
+        for (std::size_t i = 0; i < got.size() && orderOk; ++i) {
+            if (got[i] != i * 2) orderOk = false;
+        }
+        check(orderOk, "scope collects results in spawn order", "");
+    }
+
+    // 9) 嵌套 spawn：任务体内再 spawn，无死锁、子任务全 join
+    {
+        ThreadPool pool;
+        std::atomic<int> leafDone{0};
+        pool.scope<int>(
+            [&leafDone](nl::core::jobs::ThreadPool::Scope<int>& s) {
+                for (int i = 0; i < 8; ++i) {
+                    s.spawn([&leafDone, &s, i] {
+                        // 任务体内嵌套 spawn（不等待——join 由 scope 兜底）
+                        for (int k = 0; k < 4; ++k) {
+                            s.spawn([&leafDone, i, k] {
+                                leafDone.fetch_add(1);
+                                return i * 100 + k;
+                            });
+                        }
+                        return i;
+                    });
+                }
+            });
+        check(leafDone.load() == 32, "nested spawn leaves all joined (8x4)", "");
+    }
+
+    // 10) 链式嵌套 spawn 数据流：A 传 B 传 C（每层任务 spawn 下一层并携带父值）
+    {
+        ThreadPool pool;
+        std::atomic<int> maxDepth{0};
+        pool.scope<int>(
+            [&maxDepth](nl::core::jobs::ThreadPool::Scope<int>& s) {
+                s.spawn([&maxDepth, &s] {
+                    s.spawn([&maxDepth, &s] {
+                        s.spawn([&maxDepth] {
+                            maxDepth.store(3);
+                            return 3;
+                        });
+                        return 2;
+                    });
+                    return 1;
+                });
+            });
+        check(maxDepth.load() == 3, "chained spawn across 3 levels completes", "");
+    }
+
+    // 11) 空 scope + 非整型结果 + 异常重抛 + 池复用
+    {
+        ThreadPool pool;
+        std::vector<std::string> empty = pool.scope<std::string>(
+            [](nl::core::jobs::ThreadPool::Scope<std::string>&) {});
+        check(empty.empty(), "empty scope returns empty vector", "");
+
+        bool rethrown = false;
+        std::string msg;
+        try {
+            pool.scope<std::string>([](nl::core::jobs::ThreadPool::Scope<std::string>& s) {
+                s.spawn([] { return std::string("fine"); });
+                s.spawn([]() -> std::string { throw std::runtime_error("scope-boom"); });
+            });
+        } catch (const std::exception& ex) {
+            rethrown = true;
+            msg = ex.what();
+        }
+        check(rethrown && msg == "scope-boom", "scope exception rethrown after join", msg);
+
+        // 异常后池仍健康：parallelFor + scope 各跑一次
+        std::atomic<std::uint64_t> sum{0};
+        pool.parallelFor(5000, [&sum](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i) sum.fetch_add(i);
+        });
+        std::vector<std::uint64_t> got2 = pool.scope<std::uint64_t>(
+            [&sum](nl::core::jobs::ThreadPool::Scope<std::uint64_t>& s) {
+                s.spawn([&sum] { return sum.load(); });
+            });
+        check(!got2.empty() && got2[0] == serialSum(5000) && got2[0] == sum.load(),
+              "pool reusable after scope exception", "");
+    }
+
+    // ---- M-J2：cluster 多子网格并行 vs 串行 —— 确定性硬判据 ----
+    // 离线资产是确定性产物：并行切簇结果必须与串行逐个跑逐字节一致（MD5 同源判据）。
+    // 合成 8 个不同规模 primitive（P8 合成网格），串行与并行各跑一遍全量比对。
+
+    // 12) 并行 cluster == 串行 cluster（BuiltMeshlets 四数组 + summary 逐字段）
+    {
+        std::vector<nl::core::PrimitiveMesh> prims;
+        for (int k = 0; k < 8; ++k) {
+            SelftestMesh m = makeTestMesh(size_t(1 + k % 3),
+                                          size_t(16 + k * 8), size_t(16 + k * 8));
+            nl::core::PrimitiveMesh p;
+            p.name = "par#" + std::to_string(k);
+            p.vertices.resize(m.positions.size() / 3);
+            for (size_t v = 0; v < p.vertices.size(); ++v) {
+                p.vertices[v].pos[0] = m.positions[v * 3 + 0];
+                p.vertices[v].pos[1] = m.positions[v * 3 + 1];
+                p.vertices[v].pos[2] = m.positions[v * 3 + 2];
+                p.vertices[v].normal[0] = 0.f;
+                p.vertices[v].normal[1] = 0.f;
+                p.vertices[v].normal[2] = 1.f;
+            }
+            p.indices = m.indices;
+            prims.push_back(std::move(p));
+        }
+
+        auto runOne = [](const nl::core::PrimitiveMesh& p, nl::core::BuiltMeshlets& b,
+                         ClusterSummary& s, std::string& r) {
+            if (!clusterPrimitive(p, b, r)) return false;
+            return computeClusterResult(p, b, s, r);
+        };
+
+        std::vector<nl::core::BuiltMeshlets> serialB(prims.size());
+        std::vector<ClusterSummary> serialS(prims.size());
+        for (size_t i = 0; i < prims.size(); ++i) {
+            std::string r;
+            check(runOne(prims[i], serialB[i], serialS[i], r), "serial cluster ran", r);
+        }
+
+        std::vector<nl::core::BuiltMeshlets> parB(prims.size());
+        std::vector<ClusterSummary> parS(prims.size());
+        bool parallelRan = true;
+        {
+            ThreadPool pool;
+            std::string firstReason;
+            pool.scope<int>([&](nl::core::jobs::ThreadPool::Scope<int>& sc) {
+                for (size_t i = 0; i < prims.size(); ++i) {
+                    sc.spawn([&, i] {
+                        std::string r;
+                        if (!runOne(prims[i], parB[i], parS[i], r)) {
+                            parallelRan = false;
+                            if (firstReason.empty()) firstReason = r;
+                        }
+                        return 0;
+                    });
+                }
+            });
+            check(parallelRan, "parallel cluster ran", firstReason);
+        }
+
+        auto builtEqual = [](const nl::core::BuiltMeshlets& a,
+                             const nl::core::BuiltMeshlets& b) {
+            return a.meshlets.size() == b.meshlets.size() &&
+                   a.vertices.size() == b.vertices.size() &&
+                   a.triangles.size() == b.triangles.size() &&
+                   a.bounds.size() == b.bounds.size() &&
+                   (a.meshlets.empty() ||
+                    !std::memcmp(a.meshlets.data(), b.meshlets.data(),
+                                 a.meshlets.size() * sizeof(a.meshlets[0]))) &&
+                   (a.vertices.empty() ||
+                    !std::memcmp(a.vertices.data(), b.vertices.data(),
+                                 a.vertices.size() * sizeof(a.vertices[0]))) &&
+                   (a.triangles.empty() ||
+                    !std::memcmp(a.triangles.data(), b.triangles.data(),
+                                 a.triangles.size())) &&
+                   (a.bounds.empty() ||
+                    !std::memcmp(a.bounds.data(), b.bounds.data(),
+                                 a.bounds.size() * sizeof(a.bounds[0])));
+        };
+        auto summaryEqual = [](const ClusterSummary& a, const ClusterSummary& b) {
+            return a.meshlets == b.meshlets && a.tris == b.tris && a.verts == b.verts &&
+                   a.emittedTris == b.emittedTris && a.maxTri == b.maxTri &&
+                   a.maxVert == b.maxVert && a.avgTri == b.avgTri &&
+                   a.avgVert == b.avgVert && a.errMin == b.errMin &&
+                   a.errAvg == b.errAvg && a.errMax == b.errMax &&
+                   a.cutoffAvg == b.cutoffAvg && a.cutoffMin == b.cutoffMin &&
+                   a.degenerateCones == b.degenerateCones &&
+                   a.limitsOk == b.limitsOk;
+        };
+        bool deterministic = parallelRan;
+        std::string diff;
+        for (size_t i = 0; i < prims.size() && deterministic; ++i) {
+            if (!builtEqual(serialB[i], parB[i])) {
+                deterministic = false;
+                diff = "BuiltMeshlets mismatch at prim " + std::to_string(i);
+            } else if (!summaryEqual(serialS[i], parS[i])) {
+                deterministic = false;
+                diff = "ClusterSummary mismatch at prim " + std::to_string(i);
+            }
+        }
+        check(deterministic, "parallel cluster byte-identical to serial (8 prims)", diff);
+    }
+
+    // ---- M-J3：lod 链并行确定性（逐组 QEM / 按组重切 / 组误差并行，拼接与层级串行）----
+
+    // 13) buildLodHierarchy threads=1 vs threads=0 全链逐字节一致
+    {
+        auto buildChain = [](unsigned threads, nl::core::LodHierarchy& h, std::string& r) {
+            nl::core::NMeshData nm;
+            if (!makeNMesh(makeTestMesh(1, 96, 96), nm, r)) return false;
+            nl::core::LodOptions opt;
+            opt.maxLevels = 5;
+            opt.minTriangles = 64;
+            opt.threads = threads;
+            return nl::core::buildLodHierarchy(nm, h, r, opt);
+        };
+        auto levelBytes = [](const nl::core::LodLevel& lv) {
+            std::vector<const void*> ptrs = {
+                lv.mesh.meshlets.data(), lv.mesh.vertices.data(),
+                lv.mesh.triangles.data(), lv.mesh.bounds.data(),
+            };
+            std::vector<std::size_t> bytes = {
+                lv.mesh.meshlets.size() * sizeof(nl::core::Meshlet),
+                lv.mesh.vertices.size() * sizeof(nl::core::MeshVertex),
+                lv.mesh.triangles.size(),
+                lv.mesh.bounds.size() * sizeof(nl::core::MeshletBounds),
+            };
+            return std::make_pair(ptrs, bytes);
+        };
+        nl::core::LodHierarchy h1, hN;
+        std::string r1, rN;
+        const bool ok1 = buildChain(1, h1, r1);
+        const bool okN = buildChain(0, hN, rN);
+        check(ok1 && okN, "lod chains built (1-thread & parallel)", ok1 ? rN : r1);
+        if (ok1 && okN) {
+            bool deterministic = h1.levels.size() == hN.levels.size();
+            std::string diff;
+            for (std::size_t i = 0; i < h1.levels.size() && deterministic; ++i) {
+                const auto [p1, b1] = levelBytes(h1.levels[i]);
+                const auto [pN, bN] = levelBytes(hN.levels[i]);
+                for (std::size_t a = 0; a < p1.size(); ++a) {
+                    if (b1[a] != bN[a] ||
+                        (b1[a] && std::memcmp(p1[a], pN[a], b1[a]) != 0)) {
+                        deterministic = false;
+                        diff = "level " + std::to_string(i) + " array " + std::to_string(a);
+                        break;
+                    }
+                }
+                if (deterministic) {
+                    const auto& m1 = h1.levels[i].mesh.lodMeta;
+                    const auto& mN = hN.levels[i].mesh.lodMeta;
+                    if (m1.present != mN.present || m1.dagPresent != mN.dagPresent ||
+                        m1.clusterGroup != mN.clusterGroup ||
+                        m1.dagGroups.size() != mN.dagGroups.size() ||
+                        (m1.dagGroups.size() &&
+                         std::memcmp(m1.dagGroups.data(), mN.dagGroups.data(),
+                                     m1.dagGroups.size() * sizeof(m1.dagGroups[0])) != 0)) {
+                        deterministic = false;
+                        diff = "level " + std::to_string(i) + " lodMeta";
+                    }
+                }
+            }
+            check(deterministic, "lod chain threads=1 vs parallel byte-identical", diff);
+        }
+    }
+
+    // 7) 参考耗时（非判据，仅展示）：默认池 vs 单线程池跑同一求和
+    {
+        const std::size_t big = 50000000;
+        auto timeSum = [big](unsigned threads) {
+            ThreadPool pool(threads);
+            const auto t0 = std::chrono::steady_clock::now();
+            pool.parallelFor(big, [](std::size_t b, std::size_t e) {
+                volatile std::uint64_t sink = 0;
+                for (std::size_t i = b; i < e; ++i) sink += i;
+            }, 100000);
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        };
+        const double t1 = timeSum(1);
+        const double tN = timeSum(0);
+        std::printf("  info wall-clock: 1 thread %.3fs, hardware pool (%u thr) %.3fs\n",
+                    t1, std::thread::hardware_concurrency(), tN);
+    }
+
+    if (failures == 0) {
+        std::printf("jobs selftest: PASS\n");
+        return 0;
+    }
+    std::printf("jobs selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2593,7 +3082,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "loop") return selftestLoop();
         if (argc >= 3 && std::string(argv[2]) == "dag") return selftestDag();
         if (argc >= 3 && std::string(argv[2]) == "fallback") return selftestFallback();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback)\n");
+        if (argc >= 3 && std::string(argv[2]) == "jobs") return selftestJobs();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

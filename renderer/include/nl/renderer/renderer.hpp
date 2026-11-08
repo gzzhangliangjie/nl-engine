@@ -98,6 +98,14 @@ struct HudFrame {
     int   dagGroup         = -1;      // 当前下钻组（双向；-1 = 无）
     int   dagGroupCount    = 0;       // 可下钻组数（子层 dagGroups.size()）
     float dagGroupError    = 0.0f;    // 当前下钻组的组误差（UE:1593 组统一携带）
+    // ---- M4.2：cull pass GPU 计时（第二个 timer 实例只包 compute 剔除段）----
+    float cullMs = 0.0f;             // 最近一次 resolve 的剔除 pass GPU 耗时（ms），异步有延迟
+    float cullMsHistory[120] = {};   // cull 耗时曲线样本（viewer 维护）
+    int   cullMsCount = 0;
+    bool  cullTimingAvailable = false; // cull 计时是否可用（仅 cull 模式 + HUD 时置位）
+    // ---- M4.1：GPU 视锥剔除统计（只读显示，viewer 从 DeviceInfo 填入）----
+    int   visibleClusters  = -1;      // GPU 可见簇数（两帧前结果；-1 = 暂无数据）
+    int   totalClusters    = 0;       // 总簇数
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -120,6 +128,10 @@ struct DeviceInfo {
     int   dagGroupCount = 0;
     int   dagGroup = -1;              // -1 = 纯顶层
     float dagGroupError = 0.0f;
+    // M4.1：GPU 视锥剔除统计（两帧前提交的结果，延迟窗口与 GPU timer 同思路）。
+    // visibleClusters = -1 表示暂无数据（前两帧 / 非剔除路径 / map 失败）。
+    int           visibleClusters = -1;
+    std::uint32_t totalClusters = 0;
 };
 
 class Renderer {
@@ -127,12 +139,15 @@ public:
     // nativeWindow：Windows 下是 HWND（core::Window::nativeHandle()）。
     // modelFile：normal 模式下是 assets/models/ 下的 .glb 文件名（--model 传入；
     // 缺省 Suzanne.glb，历史基线不变）；cluster 模式（clusterMode=true）下是
-    // assets/meshlets/ 下的 .nmesh 文件名（M1.3）。renderer 侧做白名单校验。
+    // assets/meshlets/ 下的 .nmesh 文件名（M1.3）；cull 模式（cullMode=true，M4.0
+    // GPU vertex pulling）下同样是 .nmesh 文件名。renderer 侧做白名单校验。
     // 总是返回对象；创建失败时 valid()==false，原因在 lastError()。
     static std::unique_ptr<Renderer> create(void* nativeWindow, Extent extent,
                                             bool enableDebugLayer,
                                             const char* modelFile = "Suzanne.glb",
-                                            bool clusterMode = false);
+                                            bool clusterMode = false,
+                                            bool cullMode = false,
+                                            bool frustumCull = true);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

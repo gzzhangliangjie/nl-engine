@@ -57,7 +57,7 @@ build/<backend>/viewer.exe --screenshot w.png --wireframe                  # 线
 build/<backend>/viewer.exe --screenshot t.png --shading tri-id             # 三角形ID 伪随机色
 build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none   # 关剔除看内壁
 build/<backend>/viewer.exe --selftest
-python tools/regression.py            # M0.9 总闸：全部 example 用例 × 双后端现场重跑并比对基线，全绿 exit 0
+python tools/regression.py            # 全量总闸：仅打 tag 收口时跑一次（--jobs 4 并行提速）；日常开发用 --only <版本>[/用例] 挑几条关键用例，非必要不跑
 python scripts/gen-dense-mesh.py --shape torusknot --out assets/models/TorusKnotDense.glb   # 程序化致密资产（零网络、MD5 确定）
 ```
 

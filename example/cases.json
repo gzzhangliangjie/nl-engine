@@ -2251,6 +2251,553 @@
      "preview": "example/ma-track/evidence.png"
     }
    ]
+  },
+  {
+   "id": "s4.0",
+   "label": "M4.0",
+   "name": "GPU 簇数据通路 + vertex pulling 渲染（S4 首里程碑）",
+   "tag": "s4-indirect",
+   "date": "2026-11-08",
+   "summary": "M4.0（kStage=S4.0）：把 .nmesh 几何常驻显存，VS 用 vertex pulling（SV_InstanceID→簇元数据 SSBO→顶点/索引 SSBO）一次性 drawIndexedIndirect 画出全部簇（instanceCount=总簇数=全画，剔除在 M4.1 才接）。方案 A 单 draw + pulling，S5 遍历 cut 只换 instanceCount 语义零返工。三张 SSBO：vertexPool(8f/顶点 pos/normal/uv)、localIndices(每簇局部索引)、clusterMeta([vertexBase,triCount,localBase,0])；identity 索引缓冲做 dummy 越界三角(NaN)被光栅化丢弃。簇色 shader 端 pcg(簇号) 与 cluster 场景 CPU 端 clusterColor() 同式→逐像素一致。双后端 DX12/Vulkan 均 deviceErrors=0。",
+   "acceptance": [
+    "vertex pulling 全画 == cluster 基线：同机位同 shading 下 --mode cull 与 --mode cluster 逐字节相同（DX12 / Vulkan 各自一致）",
+    "越界三角 dummy（NaN）被光栅化整三角丢弃，不产生垃圾像素；cull back/none 两种均通过",
+    "簇色 pcg(簇号) 两路径同式，cluster 模式与 cull 模式像素一致（非 tri-id 顺序依赖）",
+    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁",
+    "tag s4-indirect，kStage=S4.0"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "pulling-back",
+     "name": "vertex pulling 全画 == cluster 基线（cull back）",
+     "kind": "pair",
+     "note": "同机位同 shading（yaw30/pitch20/dist2.6, 640x360, shading cluster）。基线为 --mode cluster --cull back 渲染；本用例渲染 --mode cull --cull back，regression 比对两者逐字节相同即证明 pulling 路径正确。",
+     "baselines": {
+      "dx12": "example/s4-indirect/cluster-back-dx12.png",
+      "vulkan": "example/s4-indirect/cluster-back-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--cull",
+      "back",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "1",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --cull back --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-indirect/run.bat verify",
+     "preview": "example/s4-indirect/pulling-back-dx12.png"
+    },
+    {
+     "id": "pulling-none",
+     "name": "vertex pulling 全画 == cluster 基线（cull off / none）",
+     "kind": "pair",
+     "note": "同上，但 cull 关闭（显示内壁）。基线为 --mode cluster --cull off；本用例 --mode cull --cull off。两者逐字节相同。",
+     "baselines": {
+      "dx12": "example/s4-indirect/cluster-none-dx12.png",
+      "vulkan": "example/s4-indirect/cluster-none-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--cull",
+      "off",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "1",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --cull off --no-hud --screenshot <out.png> --frames 1 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-indirect/run.bat verify",
+     "preview": "example/s4-indirect/pulling-none-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "s4.1",
+   "label": "M4.1",
+   "name": "GPU 视锥剔除 + 可见列表间接寻址（compute cull pass）",
+   "tag": "s4-cull",
+   "date": "2026-11-08",
+   "summary": "M4.1（kStage=S4.1）：compute 剔除 pass——csCull 每线程测一个簇包围球（Gribb-Hartmann 5 平面，MVP 行直接取平面、归一化后球测试），可见簇 InterlockedAdd 追加进 visibleList 并回写 indirectArgs.instanceCount，drawIndexedIndirect 消费之（VS 经 g_visibleList[instanceID] 间接寻址取簇号）。簇色=pcg(簇号) 与顺序无关，原子追加的非确定性次序不影响像素。蓝图为 bevy meshlet cull_clusters.wesl；UE 能力有（NaniteCullRaster 混合软/硬光栅）但结构与遍历融合不可拆，Carrot 走 mesh shader（NVRHI 2021 不支持）→ S4-PLAN 均记 N/A。真剔除姿态=相机进模型内部（轨道相机几何决定：背对时整模仍在视锥内，S4-PLAN『背对≈0』前提对轨道相机不成立，如实修正）：dist0.45/640x720 时 GPU 30/237 == frustum_check.py 离线 30，双后端一致；正脸 237/237 与 cluster 基线逐字节相同（pass-through 零像素影响）。readback 2 帧延迟环形（DX12 map 等 lastUseFence），HUD frustum 行 frames>=4 出数。多状态缓冲（UAV/SRV/IndirectArgs 同帧）用 initialState=CopyDest + keepInitialState（NVRHI 动态跟踪不跨 command list）。双后端 deviceErrors=0。",
+   "acceptance": [
+    "pass-through：正脸（全可见 237）--mode cull（frustum on）与 --mode cluster 逐字节相同（DX12/Vulkan 各自一致）——剔除 pass + 间接寻址在零剔除时像素零影响",
+    "真剔除：相机进模型内部 dist0.45（640x720 竖构图视锥更窄）GPU=30/237，== frustum_check.py 离线值（同一相机公式 5 平面球测试），双后端一致",
+    "HUD frustum 统计行（readback 2 帧延迟）与日志 cull stats 数字一致，截图确定性（同机位两跑逐字节相同）",
+    "双后端 deviceErrors=0；ctest 与 selftest 沿用既有门禁（shader artifacts 18/18 含 cull.cs spv/dxil）",
+    "tag s4-cull，kStage=S4.1"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "cull-front",
+     "name": "pass-through：frustum-on 全可见位图 == cluster 基线",
+     "kind": "pair",
+     "note": "正脸机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）——沿用 M4.0 已证字节一致的同机位。基线为 --mode cluster；本用例 --mode cull（frustum 默认 on，全部 237 簇可见）。逐字节相同即证明 compute 剔除 pass + 可见列表间接寻址在零剔除时对像素零影响（簇色 pcg(簇号) 顺序无关，原子追加次序不进像素）。注意：默认机位 yaw12/pitch9.2 下 pulling 与 cluster 路径有 1 个取整平局像素（maxDelta 154），故 pair 用例必须落在已验证机位；双后端 3 连跑稳定。",
+     "baselines": {
+      "dx12": "example/s4-cull/cluster-front-dx12.png",
+      "vulkan": "example/s4-cull/cluster-front-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-cull/run.bat verify",
+     "preview": "example/s4-cull/cull-front-dx12.png"
+    },
+    {
+     "id": "cull-inside-hud",
+     "name": "真剔除：相机进模型内部，HUD frustum 行 30/237",
+     "kind": "image",
+     "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。",
+     "baselines": {
+      "dx12": "example/s4-cull/cull-inside-hud-dx12.png",
+      "vulkan": "example/s4-cull/cull-inside-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9.2",
+      "--dist",
+      "0.45",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "cull stats: visible 30 / 237",
+     "command": "viewer.exe --mode cull --hud --screenshot <out.png> --frames 4 --yaw 12 --pitch 9.2 --dist 0.45 --size 640x720",
+     "script": "example/s4-cull/run.bat verify",
+     "preview": "example/s4-cull/cull-inside-hud-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "s4.1-tools",
+   "label": "M4.1",
+   "name": "frustum_check.py 离线视锥对照工具",
+   "tag": "s4-cull",
+   "date": "2026-11-08",
+   "summary": "M4.1 离线对照：tools/frustum_check.py 逐行复刻 camera.cpp 相机公式（perspectiveZO × lookAt 列主序、ZO 深度）+ Gribb-Hartmann 5 平面提取 + 包围球测试，读 .nmesh 簇包围球（52B 记录 offset16），输出可见簇数/列表。--expect N 不符即 exit 1（回归锁数字）；--list 打印可见簇号。与 GPU HUD 数字逐姿态对照：正脸 237/237、进模型 30/237（640x720）。工具用例经 tools/frustum_check.bat 包装（regression 无 shell 启动 .py 需可执行 shim，退出码直通）。一张 .nmesh 的簇号即 GPU visibleList 里的 tid，离线与 GPU 数的是同一批球。",
+   "acceptance": [
+    "离线 == GPU：进模型姿态（yaw12/pitch9.2/dist0.45/640x720）--expect 30 通过；正脸 --expect 237 通过",
+    "--expect 不符 exit 1（负向锁数字）；文件不存在 exit 1 显式报错",
+    "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 30/237）"
+   ],
+   "exe": {
+    "dx12": "tools/frustum_check.bat",
+    "vulkan": "tools/frustum_check.bat"
+   },
+   "cases": [
+    {
+     "id": "offline-inside",
+     "name": "离线对照：进模型姿态 --expect 30（== GPU）",
+     "kind": "tool",
+     "note": "与 s4.1/cull-inside-hud 同机位同尺寸（640x720）。GPU 回读 instanceCount=30，本工具独立从 .nmesh 球 + 相机公式算出 30，两数相等即 GPU 剔除语义与离线参考逐簇一致。",
+     "args": [
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9.2",
+      "--dist",
+      "0.45",
+      "--width",
+      "640",
+      "--height",
+      "720",
+      "--expect",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 0.45 --width 640 --height 720 --expect 30",
+     "script": "example/s4-cull/run.bat verify"
+    },
+    {
+     "id": "offline-front",
+     "name": "离线对照：正脸全可见 --expect 237",
+     "kind": "tool",
+     "note": "默认 640x360。轨道相机永远看原点，dist4.2 时整模在视锥内（半高约1.74 > 模型半径约1.3），237 全可见——与 GPU 正脸数字一致。",
+     "args": [
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9.2",
+      "--dist",
+      "4.2",
+      "--expect",
+      "237"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/Suzanne.nmesh --yaw 12 --pitch 9.2 --dist 4.2 --expect 237",
+     "script": "example/s4-cull/run.bat verify"
+    },
+    {
+     "id": "negative-missing",
+     "name": "负向：资产不存在显式报错（防假成功）",
+     "kind": "tool",
+     "note": "读不到 .nmesh 必须 FAIL + exit 1，不许静默成功。",
+     "args": [
+      "{root}/assets/meshlets/Nope.nmesh"
+     ],
+     "expectExit": 1,
+     "expectLog": "FAIL",
+     "command": "frustum_check.py assets/meshlets/Nope.nmesh"
+    }
+   ]
+  },
+  {
+   "id": "s4.2",
+   "label": "M4.2",
+   "name": "1.3M 致密场景 + cull pass GPU 计时（HUD 统计完善）",
+   "tag": "s4-done",
+   "date": "2026-11-08",
+   "summary": "M4.2（kStage=S4.2）：①新资产 IcoSphereDense1M.nmesh 入仓——gen-dense-mesh.py --subdiv 8（20x4^8=1,310,720 tri / 655,362 顶点 / GLB md5 ea0b6749d0a681c0610bd23882a072e1），nanite-tools cluster 切 19,718 簇（avg 66.5 tri/簇，coverage 100%，limits PASS），.nmesh 33.5MB；②cull pass 接入第二个 GpuTimer 实例（begin/end 只包 compute 剔除段，resolve 日志带 [frame]/[cull] 标签区分），HUD 新增 cull GPU 行 + 曲线（仅 cull 模式占位，其它模式布局一像素不动），面板高度上限 510→560（510 装不下新曲线出滚动条，小画布仍由 min(cap,H-28) 兜底）；③viewer 截图模式新增 frame timing 日志（无节流 CPU 吞吐上限）。验收：1.3M tri 正对 640x360 全可见 19718/19718，cull==cluster 逐字节一致且 DX12==Vulkan 跨后端也逐字节一致；640x720 下 frustum 剔 1353 簇像素零影响（包围球测试保守性实证）；进模 dist0.45 GPU 1932/19718（剔除 90.2%）== frustum_check.py 离线，双后端一致；内壁 --cull none 满屏簇色马赛克证明可见列表真实光栅化。60fps 实测（RTX 4060 Laptop）：CPU avg 4.87~5.55ms、整帧 GPU 0.96~1.02ms（正对）/0.17ms（进模）、cull pass 约 0.010ms——距 16.6ms 预算两个数量级。踩坑：cull 计时轮询必须在 hud_.build() 之前（viewer 每帧重建 HudFrame，晚于 build 写标志永远显示不出来）。",
+   "acceptance": [
+    "pass-through on 1.3M tri：正对 640x360（全可见 19718/19718）--mode cull（frustum on）与 --mode cluster 逐字节相同，且 DX12/Vulkan 跨后端也逐字节一致（bytes 档）",
+    "真剔除：进模 dist0.45/640x720 GPU=1932/19718（剔除 90.2% > 85% 判据）== frustum_check.py 离线值，双后端一致；--cull none 内壁满屏渲染证明可见列表光栅化正常",
+    "HUD cull GPU 行 + 曲线（deterministic 固定样本 0.08ms；实测定时 interaction 窗口 cull pass 约 0.010ms，[frame]/[cull] resolve 日志双行可查）",
+    "60fps：截图模式无节流 30 帧 CPU avg 4.87~5.55ms / max 尖峰为首帧预热；GPU 整帧 0.96~1.02ms 与 0.17ms 远低于 16.6ms",
+    "双后端 deviceErrors=0；kStage=S4.2；m0.9/s2.0/s3.2 三对 HUD 基线随 stage 文本重拍"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "dense-front-pair",
+     "name": "1.3M tri pass-through：frustum-on 全可见位图 == cluster 基线",
+     "kind": "pair",
+     "note": "正对机位（yaw30/pitch20/dist2.6, 640x360, shading cluster, frames 4）。640x360 视锥水平更宽，19718 簇全可见（frustum_check 640x360 --expect 19718）——纯 pass-through 位姿。基线 --mode cluster；本用例 --mode cull。逐字节相同且跨后端一致。",
+     "baselines": {
+      "dx12": "example/s4-done/dense-front-cluster-dx12.png",
+      "vulkan": "example/s4-done/dense-front-cluster-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--model",
+      "IcoSphereDense1M.nmesh",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--size",
+      "640x360"
+     ],
+     "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 2.6 --size 640x360",
+     "script": "example/s4-done/run.bat verify",
+     "preview": "example/s4-done/dense-front-cull-dx12.png"
+    },
+    {
+     "id": "dense-inside-hud",
+     "name": "真剔除 90.2%：进模 HUD frustum 行 1932/19718 + cull GPU 行",
+     "kind": "image",
+     "note": "进模姿态（dist0.45/640x720, frames>=4 等回读）。画面主体为深色属正确行为：封闭球从内部看全是背面、cullBack=true 全被光栅化剔除（球体与开放壳的 Suzanne 不同）；可见性证据在 HUD 数字——frustum 1932/19718 (9.8%) + cull GPU 0.080ms（deterministic 固定样本）。可见列表真实光栅化由 dense-inside-none 用例证明。",
+     "baselines": {
+      "dx12": "example/s4-done/dense-inside-hud-dx12.png",
+      "vulkan": "example/s4-done/dense-inside-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--model",
+      "IcoSphereDense1M.nmesh",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "6",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "0.45",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --hud --screenshot <out.png> --frames 6 --shading cluster --yaw 30 --pitch 20 --dist 0.45 --size 640x720",
+     "script": "example/s4-done/run.bat verify",
+     "preview": "example/s4-done/dense-inside-hud-dx12.png"
+    },
+    {
+     "id": "dense-inside-none",
+     "name": "可见列表光栅化实证：进模 + cull none 内壁满屏簇色",
+     "kind": "image",
+     "note": "同机位关背面剔除：1932 个过视锥簇的内壁铺满全屏（相机贴内壁近距特写），证明 GPU 可见列表内容真实可光栅化、少 draw 路径无异常。DX12 与 Vulkan 逐字节一致（bytes 档）。",
+     "baselines": {
+      "dx12": "example/s4-done/dense-inside-none-dx12.png",
+      "vulkan": "example/s4-done/dense-inside-none-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--model",
+      "IcoSphereDense1M.nmesh",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "4",
+      "--shading",
+      "cluster",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "0.45",
+      "--cull",
+      "none",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode cull --model IcoSphereDense1M.nmesh --no-hud --screenshot <out.png> --frames 4 --shading cluster --yaw 30 --pitch 20 --dist 0.45 --cull none --size 640x720",
+     "script": "example/s4-done/run.bat verify",
+     "preview": "example/s4-done/dense-inside-none-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "s4.2-tools",
+   "label": "M4.2",
+   "name": "frustum_check.py 1.3M 致密资产离线对照",
+   "tag": "s4-done",
+   "date": "2026-11-08",
+   "summary": "M4.2 离线对照升级到 1.3M tri / 19,718 簇资产：同一工具零改动（逐行复刻 camera.cpp 公式 + Gribb-Hartmann 5 平面包围球测试），数字级锁两姿态——正对 640x360 全可见 19718、进模 640x720 可见 1932（剔除 90.2%）。宽高比进视锥（M4.1 踩坑②）：同机位 640x360=19718 全可见 / 640x720=18365（剔 1353），离线对照必须与 GPU 用例同尺寸。",
+   "acceptance": [
+    "离线 == GPU：进模 --expect 1932 通过；正对 640x360 --expect 19718 通过（GPU pair 同尺寸）",
+    "--expect 不符 exit 1（负向锁数字）",
+    "双后端 GPU 数字均与离线一致（DX12/Vulkan 各 18365 与 1932，见 s4.2 卡 summary）"
+   ],
+   "exe": {
+    "dx12": "tools/frustum_check.bat",
+    "vulkan": "tools/frustum_check.bat"
+   },
+   "cases": [
+    {
+     "id": "offline-dense-front",
+     "name": "离线对照：1.3M 正对 640x360 全可见 --expect 19718",
+     "kind": "tool",
+     "note": "与 s4.2/dense-front-pair 同机位同尺寸（640x360）。19718 簇全可见 = 纯 pass-through 位姿。",
+     "args": [
+      "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "2.6",
+      "--width",
+      "640",
+      "--height",
+      "360",
+      "--expect",
+      "19718"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 2.6 --width 640 --height 360 --expect 19718",
+     "script": "example/s4-done/run.bat verify"
+    },
+    {
+     "id": "offline-dense-inside",
+     "name": "离线对照：1.3M 进模 640x720 --expect 1932（剔除 90.2%）",
+     "kind": "tool",
+     "note": "与 s4.2/dense-inside-hud 同机位同尺寸。GPU 回读 1932 == 离线 1932。",
+     "args": [
+      "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "0.45",
+      "--width",
+      "640",
+      "--height",
+      "720",
+      "--expect",
+      "1932"
+     ],
+     "expectExit": 0,
+     "expectLog": "MATCH",
+     "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 0.45 --width 640 --height 720 --expect 1932",
+     "script": "example/s4-done/run.bat verify"
+    },
+    {
+     "id": "negative-dense-wrong-expect",
+     "name": "负向：--expect 数字不符 exit 1（防假成功）",
+     "kind": "tool",
+     "note": "进模姿态真值 1932，故意 --expect 99999 必须 FAIL + exit 1。",
+     "args": [
+      "{root}/assets/meshlets/IcoSphereDense1M.nmesh",
+      "--yaw",
+      "30",
+      "--pitch",
+      "20",
+      "--dist",
+      "0.45",
+      "--width",
+      "640",
+      "--height",
+      "720",
+      "--expect",
+      "99999"
+     ],
+     "expectExit": 1,
+     "expectLog": "MISMATCH",
+     "command": "frustum_check.py assets/meshlets/IcoSphereDense1M.nmesh --yaw 30 --pitch 20 --dist 0.45 --width 640 --height 720 --expect 99999",
+     "script": "example/s4-done/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "p8-jobs",
+   "label": "P8 M-J0~J3",
+   "name": "Job 系统：线程池 + scope + 并行 cluster/lod（A 类轨道）",
+   "tag": "job-offline",
+   "date": "2026-11-08",
+   "summary": "A 类并行轨道（不进 kStage/渲染回归，纯 CPU）：M-J0 ThreadPool 固定池 + parallelFor 切块（共享竞争队列 + 主线程参与执行，批数下限=线程数x4）；M-J1 scope<T> 同步 fork-join（spawn 可嵌套、结果按 spawn 序收集、异常全 join 后重抛）；M-J2 多子网格并行切簇（per-primitive 独立 scope slot 输出，打印/落盘保序串行；确定性硬判据：并行与串行逐字节一致）；M-J3 lod 链并行（逐组 QEM + 按组重切 + 组误差并行，soup 前缀拼接与层级推进串行——组间边界锁保证非边界点单组独占、QEM dst 位置不动 = pointPositions 只读，天然槽位安全；LodOptions.threads=1 为单线程参考跑，UE ParallelFor ForceSingleThread 同款调试语义）。参考：bevy_tasks 固定池+scope 主线程驱动 / UE ParallelFor MinBatchSize / Carrot 无 TaskPool=不过度设计反向证据。不做 per-thread deque 窃取（离线管线任务粒度大锁竞争可忽略）。",
+   "acceptance": [
+    "selftest jobs 15 项全绿（M-J0 池判据 / M-J1 scope 判据 / M-J2 并行 cluster 逐字节 / M-J3 lod 链 threads=1 vs parallel 全链逐字节一致）",
+    "三方 MD5 确定性：lod Suzanne 7 层并行产物 == 改造前串行基线 == threads=1 参考跑，逐字节一致；dag 校验 56 groups OK",
+    "加速比：cluster 4 submesh 串行 4x 440ms vs 并行 194ms（约 2.3x）；lod IcoSphereDense 4 层 threads=1 4.448s vs threads=32 1.550s（2.87x，4929 簇/340K tri）",
+    "ctest 16→17 全绿（p8-jobs-selftest）；tags：job-pool / job-scope / job-cluster / job-offline"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-tools.exe",
+    "vulkan": "build/vulkan/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest-jobs",
+     "name": "selftest jobs：池 + scope + 并行确定性机械单测",
+     "kind": "tool",
+     "note": "M-J0 判据（求和无差 / 槽位并发写 / count=0 / 异常重抛+池复用 / 确定性）+ M-J1 判据（spawn 顺序收集 / 嵌套 spawn 无死锁 / 链式 spawn / scope 异常）+ M-J2 判据（并行 cluster 与串行逐字节一致）。",
+     "args": [
+      "selftest",
+      "jobs"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobs selftest: PASS",
+     "command": "nanite-tools selftest jobs"
+    },
+    {
+     "id": "cluster-parallel",
+     "name": "cluster：4 子网格并行切簇（M-J2 消费者）",
+     "kind": "tool",
+     "note": "Suzanne-multi.glb（同 accessors 复制 4 个 primitive，scripts/make-multi-primitive-glb.py 生成）。多子网格走 scope 并行（per-primitive 独立），打印保序；单子网格保持串行路径。末行打印并行耗时与线程数。",
+     "args": [
+      "cluster",
+      "{root}/assets/models/Suzanne-multi.glb"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobs       : 4 submeshes clustered in parallel",
+     "command": "nanite-tools cluster assets/models/Suzanne-multi.glb"
+    },
+    {
+     "id": "lod-parallel",
+     "name": "lod：全链并行（逐组 QEM / 重切 / 组误差）+ --threads 参考跑（M-J3）",
+     "kind": "tool",
+     "note": "并行边界写死：逐组 QEM 简化 / 按组重切 / 组误差 = max(成员簇, 简化) 并行；组间 soup 前缀拼接与 L0→LN 层级推进串行（误差树合并链必须保序）。--threads 1 = 单线程参考跑（UE ForceSingleThread 同款），产物与并行跑逐字节一致（三方 MD5 对比验收）。",
+     "args": [
+      "lod",
+      "{root}/assets/meshlets/Suzanne.nmesh",
+      "-o",
+      "{root}/build/showcase/runs/job-offline/lod",
+      "--max-levels",
+      "6",
+      "--threads",
+      "1"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobs        : parallel per-group qem/recluster",
+     "command": "nanite-tools lod assets/meshlets/Suzanne.nmesh -o build/showcase/runs/job-offline/lod --max-levels 6 --threads 1"
+    },
+    {
+     "id": "negative-unknown-suite",
+     "name": "负向：未知 selftest 套件拒绝（exit 1）",
+     "kind": "tool",
+     "note": "工具退出码约定：0 成功 / 1 用法错误或运行失败。未知套件必须拒绝且不产生任何副作用。",
+     "args": [
+      "selftest",
+      "nope"
+     ],
+     "expectExit": 1,
+     "expectLog": "selftest: unknown suite",
+     "command": "nanite-tools selftest nope"
+    }
+   ]
   }
  ]
 }
