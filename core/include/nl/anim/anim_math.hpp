@@ -94,4 +94,26 @@ inline Quat mulQuat(const Quat& a, const Quat& b) {
     };
 }
 
+// 四元数旋转向量 v' = q v q^-1（优化式 t=2(qv×v); v'=v+w·t+qv×t）。
+// M-A4b FK 用：父旋转作用于子骨骼局部平移偏移。
+inline Vec3 rotVecByQuat(const Quat& q, const Vec3& v) {
+    const Vec3 qv{ q.x, q.y, q.z };
+    const Vec3 t{
+        2.0f * (qv.y * v.z - qv.z * v.y),
+        2.0f * (qv.z * v.x - qv.x * v.z),
+        2.0f * (qv.x * v.y - qv.y * v.x),
+    };
+    return {
+        v.x + q.w * t.x + (qv.y * t.z - qv.z * t.y),
+        v.y + q.w * t.y + (qv.z * t.x - qv.x * t.z),
+        v.z + q.w * t.z + (qv.x * t.y - qv.y * t.x),
+    };
+}
+
+// 轴角 -> 四元数（资产构造 / 自测锚点用；axis 须为单位向量）。
+inline Quat quatFromAxisAngle(const Vec3& axis, float radians) {
+    const float s = std::sin(radians * 0.5f);
+    return { axis.x * s, axis.y * s, axis.z * s, std::cos(radians * 0.5f) };
+}
+
 } // namespace nl::anim

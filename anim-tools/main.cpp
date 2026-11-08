@@ -15,6 +15,8 @@
 
 #include "nl/anim/anim.hpp"
 #include "nl/anim/blend_space.hpp"
+#include "nl/anim/gltf_anim.hpp"
+#include "nl/anim/skeleton.hpp"
 #include "nl/anim/state_machine.hpp"
 
 #include <cmath>
@@ -742,6 +744,155 @@ int runBlendSpaceSelftest() {
     return g_failures == 0 ? 0 : 1;
 }
 
+// ---- M-A4b：Skeleton FK + rigged glTF 入口 --------------------------------
+
+using nl::anim::BonePose;
+using nl::anim::Skeleton;
+using nl::anim::Vec3;
+
+void testSkeletonFkAnchors() {
+    using nl::anim::findBoneIndex;
+    using nl::anim::localToModel;
+    using nl::anim::quatFromAxisAngle;
+    using nl::anim::validateSkeleton;
+
+    // 三链：hip(-(1,0,0) 偏移? 不——直接用资产同款几何：hip 平移 (0,1,0))
+    Skeleton sk;
+    sk.boneNames = { "hip", "spine", "head" };
+    sk.parentIndices = { -1, 0, 1 };
+    sk.restPose = { { { 0, 1, 0 }, {} }, { { 0, 0.5f, 0 }, {} }, { { 0, 0.5f, 0 }, {} } };
+    expectTrue(validateSkeleton(sk).empty(), "fk skeleton valid");
+    expectTrue(findBoneIndex(sk, "spine") == 1, "findBoneIndex");
+
+    // 局部：hip 绕 z 90°，spine/head identity -> 全链 90°
+    // （local = 采样输出语义：静态 rest 平移已进轨道，见 gltf_anim.hpp）
+    std::vector<BonePose> local = sk.restPose;
+    local[0].rotation = quatFromAxisAngle({ 0, 0, 1 }, 1.57079632679f);   // 90°
+    std::vector<BonePose> model;
+    expectTrue(localToModel(local, sk, model), "fk eval");
+    // spineWorld = (0,1) + rotZ90*(0,0.5,0) = (-0.5, 1)
+    expectNear(true, "fk spine x", model[1].translation.x, -0.5f, 1e-6f);
+    expectNear(true, "fk spine y", model[1].translation.y, 1.0f, 1e-6f);
+    // headWorld = (-0.5,1) + rotZ90*(0,0.5,0) = (-1.0, 1)
+    expectNear(true, "fk head x", model[2].translation.x, -1.0f, 1e-6f);
+    expectNear(true, "fk head y", model[2].translation.y, 1.0f, 1e-6f);
+    // 链复合旋转 = 90°（三层同向 identity 叠加不变）
+    expectNear(true, "fk head rot z", model[2].rotation.z, 0.70710678118f, 1e-6f);
+    expectNear(true, "fk head rot w", model[2].rotation.w, 0.70710678118f, 1e-6f);
+
+    // 反向断言：无旋转时 FK = rest 平移逐级累加（local = restPose 原样）
+    std::vector<BonePose> rest = sk.restPose;
+    expectTrue(localToModel(rest, sk, model), "fk rest");
+    expectNear(true, "fk rest head y", model[2].translation.y, 2.0f, 1e-6f);
+
+    // 负向：尺寸不匹配
+    std::vector<BonePose> two(2);
+    expectTrue(!localToModel(two, sk, model), "fk size mismatch rejected");
+
+    // 校验负向：父索引打破拓扑序 / 重名
+    Skeleton bad = sk;
+    bad.parentIndices[2] = 2;   // 自指（非 [0,i)）
+    expectTrue(!validateSkeleton(bad).empty(), "fk topo negative");
+    bad = sk;
+    bad.boneNames[1] = "hip";
+    expectTrue(!validateSkeleton(bad).empty(), "fk dup name negative");
+}
+
+void testGltfAssetLoad(const std::string& path) {
+    using nl::anim::loadGltfAnim;
+    using nl::anim::sampleClip;
+    using nl::anim::localToModel;
+    using nl::anim::quatFromAxisAngle;
+
+    Skeleton sk;
+    std::vector<nl::anim::AnimClip> clips;
+    std::string err;
+    expectTrue(loadGltfAnim(path, sk, clips, err), ("gltf load: " + err).c_str());
+    expectTrue(sk.boneCount() == 3, "gltf bones=3");
+    expectTrue(sk.boneNames[0] == "hip" && sk.boneNames[2] == "head", "gltf bone names");
+    expectTrue(sk.parentIndices == std::vector<int>{ -1, 0, 1 }, "gltf parents");
+    // 静态 TRS 落 restPose（空轨道兜底是零平移，必须显式单关键帧——见 gltf_anim.hpp）
+    expectNear(true, "gltf rest hip y", sk.restPose[0].translation.y, 1.0f, 1e-6f);
+
+    expectTrue(clips.size() == 1, "gltf clips=1");
+    expectNear(true, "gltf clip duration", clips[0].duration, 2.0f, 1e-6f);
+    expectTrue(nl::anim::validateClip(clips[0]).empty(), "gltf clip valid");
+
+    // 锚点 t=0.5：hip=+30°、spine=0、head=0（资产生成器注释里的手算值）
+    std::vector<BonePose> local, model;
+    expectTrue(sampleClip(clips[0], 0.5f, local), "gltf sample t=0.5");
+    expectNear(true, "sway hip rot z", local[0].rotation.z, 0.25881904510f, 1e-6f);
+    expectNear(true, "sway hip rot w", local[0].rotation.w, 0.96592582628f, 1e-6f);
+    expectNear(true, "sway spine rot z", local[1].rotation.z, 0.0f, 1e-7f);
+    expectTrue(localToModel(local, sk, model), "sway fk");
+    // spineWorld = (-0.25, 1.4330127)；headWorld = (-0.5, 1.8660254)
+    expectNear(true, "sway spine wx", model[1].translation.x, -0.25f, 1e-6f);
+    expectNear(true, "sway spine wy", model[1].translation.y, 1.43301270189f, 1e-6f);
+    expectNear(true, "sway head wx", model[2].translation.x, -0.5f, 1e-6f);
+    expectNear(true, "sway head wy", model[2].translation.y, 1.86602540378f, 1e-6f);
+
+    // 静态平移守恒：整链 world y 基线来自 rest（1+0.5+0.5），旋转不改变链长
+    const float reach = model[2].translation.x * model[2].translation.x +
+                        (model[2].translation.y - 1.0f) * (model[2].translation.y - 1.0f);
+    expectNear(true, "sway reach = 1.0", std::sqrt(reach), 1.0f, 1e-6f);
+
+    // wrap 循环：t=2.5 == t=0.5（逐位一致，determinism 口径）
+    std::vector<BonePose> localWrap;
+    expectTrue(sampleClip(clips[0], 2.5f, localWrap), "gltf sample t=2.5");
+    bool same = true;
+    for (std::size_t i = 0; i < local.size(); ++i)
+        same = same && local[i].rotation.x == localWrap[i].rotation.x &&
+               local[i].rotation.y == localWrap[i].rotation.y &&
+               local[i].rotation.z == localWrap[i].rotation.z &&
+               local[i].rotation.w == localWrap[i].rotation.w &&
+               local[i].translation.x == localWrap[i].translation.x &&
+               local[i].translation.y == localWrap[i].translation.y;
+    expectTrue(same, "gltf wrap determinism");
+
+    // 负向：缺文件
+    Skeleton sk2;
+    std::vector<nl::anim::AnimClip> clips2;
+    std::string err2;
+    expectTrue(!loadGltfAnim(path + ".missing", sk2, clips2, err2), "gltf missing file rejected");
+}
+
+void testGltfDeterminism(const std::string& path) {
+    Skeleton skA, skB;
+    std::vector<nl::anim::AnimClip> a, b;
+    std::string err;
+    expectTrue(loadGltfAnim(path, skA, a, err), "det load A");
+    expectTrue(loadGltfAnim(path, skB, b, err), "det load B");
+    bool same = skA.boneNames == skB.boneNames &&
+                skA.parentIndices == skB.parentIndices &&
+                a.size() == b.size() && a[0].duration == b[0].duration &&
+                a[0].tracks.size() == b[0].tracks.size();
+    for (std::size_t t = 0; same && t < a[0].tracks.size(); ++t) {
+        same = a[0].tracks[t].bone == b[0].tracks[t].bone &&
+               a[0].tracks[t].rotation.times == b[0].tracks[t].rotation.times;
+        for (std::size_t k = 0; same && k < a[0].tracks[t].rotation.values.size(); ++k) {
+            const nl::anim::Quat& qa = a[0].tracks[t].rotation.values[k];
+            const nl::anim::Quat& qb = b[0].tracks[t].rotation.values[k];
+            same = qa.x == qb.x && qa.y == qb.y && qa.z == qb.z && qa.w == qb.w;
+        }
+    }
+    expectTrue(same, "two loads identical");
+}
+
+int runSkeletonSelftest(const std::string& assetPath) {
+    struct Case { const char* name; void (*fn)(); };
+    const Case cases[] = {
+        { "fk anchors", testSkeletonFkAnchors },
+    };
+    for (const Case& c : cases) {
+        std::printf("  [%s]\n", c.name);
+        std::fflush(stdout);
+        c.fn();
+    }
+    testGltfAssetLoad(assetPath);
+    testGltfDeterminism(assetPath);
+    return g_failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -768,6 +919,14 @@ int main(int argc, char** argv) {
             std::printf("anim blendspace selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
             return rc;
         }
+        // M-A4b 用例接入处（skeleton：FK + rigged glTF 入口）
+        if (testCase == "skeleton") {
+            const std::string assetPath =
+                argc >= 4 ? argv[3] : "assets/models/RiggedChain.glb";
+            const int rc = runSkeletonSelftest(assetPath);
+            std::printf("anim skeleton selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+            return rc;
+        }
         std::fprintf(stderr, "anim-tools: unknown selftest case '%s'\n", testCase.c_str());
         return 2;
     }
@@ -776,6 +935,7 @@ int main(int argc, char** argv) {
     std::printf(
         "anim-tools - nl-engine action/animation controller (M-A track)\n"
         "usage:\n"
-        "  anim-tools selftest curve|blend|statemachine|blendspace  deterministic unit tests\n");
+        "  anim-tools selftest curve|blend|statemachine|blendspace|skeleton [rigged.glb]\n"
+        "    deterministic unit tests\n");
     return argc == 1 ? 0 : 2;
 }
