@@ -112,7 +112,7 @@
    |---|---|---|---|
    | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
    | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
-   | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **进行中**：M-A0~M-A4 完成（tag `anim-ma1`~`anim-ma4d`）+ M-A5.1 CPU 蒙皮落地（`cde41c7`）；交接 `docs/action-system/ACTION-PLAN.md`（在分支上，未 merge） |
+   | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官**：M-A0~M-A5.4 全量 merge 回 master（merge commit `5a1912f`，tag `anim-ma1`~`anim-ma5c`）；nl/anim 纯逻辑层 + anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页；验收纪要 `docs/MILESTONES.md` M-A 节 + `docs/action-system/ACTION-PLAN.md` + `ANIM-TOOLS-GUIDE.md`；GPU 调色板等更大规模蒙皮资产再立项 |
    | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0~C1 完成**（2026-11-09：`core/console/` 纯逻辑内核 + ImGui 前端〔`` ` `` 呼出/滚动日志配色/输入行历史/Tab 补全〕，双后端证据截图，track 分支 b4787da）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C2 内建命令集待开工 |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
