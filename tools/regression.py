@@ -21,6 +21,12 @@ example/cases.json in this repo. Historical milestone exes come from the tag
 snapshots under build/showcase/<tag>/ (see tools/showcase/rebuild.py); the
 current version runs from build/<backend>/viewer.exe.
 
+exe freshness gate (2026-11-08): before any run that touches current-tree
+exes, build/<backend>/*.exe must be newer than every source file they depend
+on (core/ renderer/ viewer/ nanite-tools/ material-graph-tools/). A stale exe
+refuses to run (exit 2) — this kills the "baseline retaken with an old exe"
+false-green class (M4.2 vulkan HUD baselines incident).
+
 Verdict tiers, matching the showcase convention:
   bytes  - PNG byte-identical to the baseline (the normal case; screenshots are
            deterministic)
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -48,7 +55,10 @@ sys.path.insert(0, str(HERE / "showcase"))      # reuse the showcase module
 
 import server as show  # noqa: E402  (module-level side effects: loads cases.json)
 
-RUNS_DIR = ROOT / "build" / "regression" / "runs"
+# 产物目录可用环境变量覆盖（CI/沙箱场景：指向全新目录则全程零删除——
+# 每个用例跑前只清理「目标文件已存在」的陈旧产物，新目录里没有可删的东西）。
+RUNS_DIR = Path(os.environ.get(
+    "NL_REGRESSION_RUNS_DIR", str(ROOT / "build" / "regression" / "runs")))
 DEFAULT_REPORT_MD = ROOT / "build" / "regression" / "report.md"
 DEFAULT_REPORT_JSON = ROOT / "build" / "regression" / "report.json"
 
@@ -57,6 +67,54 @@ RUN_TIMEOUT = 120
 # Documented rounding-noise tier (see module docstring).
 NEAR_MAX_DELTA = 1
 NEAR_MAX_PIXELS = 2
+
+# ---- exe 新鲜度门禁（2026-11-08 固化，P8 合并总闸的假绿教训）----
+# 事故：M4.2 重拍 HUD 基线时 vulkan exe 是旧构建（面板 cap 510），dx12 用新 exe
+# （cap 560）→ 两后端基线口径不一致，假绿一直埋到 P8 合并后的总闸才炸出
+# （m0.9/s2.0/s4.1/s4.2 四对 vulkan 基线全要返工重拍）。
+# 规则：跑闸前，当前树 exe（build/<backend>/*.exe）的 mtime 必须新于其所依赖的
+# 全部源文件，否则整闸拒绝运行（exit 2）——重拍基线、跑总闸都必须在重编之后。
+# tag 快照 exe（build/showcase/<tag>/）是刻意冻结的历史产物，不参与本检查。
+# 依赖域按 exe 分桶：NMake 只重链真正依赖变更 TU 的 exe（viewer 链 renderer，
+# 工具不链），全局比对会造成「无关源文件 touch → 工具 exe 永不新鲜」死锁。
+SOURCE_EXTS = {".cpp", ".hpp", ".h", ".slang", ".py"}
+EXE_SOURCE_DIRS = {
+    "viewer.exe": ("core/src", "core/include", "renderer/src", "renderer/include",
+                   "renderer/shaders", "viewer"),
+    "nanite-tools.exe": ("core/src", "core/include", "nanite-tools"),
+    "material-graph-tools.exe": ("core/src", "core/include", "material-graph-tools"),
+}
+
+
+def stale_sources(exe: Path, dirs: tuple[str, ...]) -> list[Path]:
+    """Return source files strictly newer than the given exe (may be empty)."""
+    if not exe.is_file():
+        return []  # exe 缺失由既有 per-case 逻辑报错，这里不管
+    t = exe.stat().st_mtime
+    out: list[Path] = []
+    for d in dirs:
+        dp = ROOT / d
+        if not dp.is_dir():
+            continue
+        for p in dp.rglob("*"):
+            if p.is_file() and p.suffix in SOURCE_EXTS and p.stat().st_mtime > t:
+                out.append(p)
+    return out
+
+
+def check_exe_freshness(backends: tuple[str, ...]) -> list[str]:
+    """Return human-readable problems; empty list = all current-tree exes fresh."""
+    problems: list[str] = []
+    for b in backends:
+        for name, dirs in EXE_SOURCE_DIRS.items():
+            exe = ROOT / "build" / b / name
+            bad = stale_sources(exe, dirs)
+            if bad:
+                newest = max(bad, key=lambda p: p.stat().st_mtime)
+                problems.append(
+                    f"  build/{b}/{name} 落后于 {len(bad)} 个源文件"
+                    f"（最新 {newest.relative_to(ROOT)}）——先 cmake --build 再跑闸")
+    return problems
 
 
 def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
@@ -197,6 +255,20 @@ def main() -> int:
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+
+    # ---- exe 新鲜度门禁：所选版本里有跑「当前树 exe」的，exe 就必须新于源码 ----
+    uses_current_exe = any(
+        "showcase" not in (v.get("exe", {}).get(b, ""))
+        for v in versions for b in backend_filter)
+    if uses_current_exe:
+        problems = check_exe_freshness(backend_filter)
+        if problems:
+            print("[regression] exe 过期门禁：以下 exe 落后于源码，拒绝运行：",
+                  file=sys.stderr)
+            print("\n".join(problems), file=sys.stderr)
+            print("[regression] 重编后重跑（cmake --build build\\<backend>）。",
+                  file=sys.stderr)
+            return 2
 
     # ---- 任务表：以 (version, case) 为并行单元；同用例双后端串行 ----
     # 工具用例（kind:tool）写固定共享路径（如 build/qem/showcase-*，路径不含

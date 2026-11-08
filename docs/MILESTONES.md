@@ -868,3 +868,22 @@
 2. **Edit 大段替换的连带破坏**：printClusterResult 拆分时 old_string 连带吞掉 clusterPrimitive + 旧函数残留重复定义；cmdLod 计时改造时误删 levels 打印行 + 残留旧 buildLodHierarchy 块成重名变量——均靠 Grep/Read 定位后一次性恢复。教训：大段 Edit 后必须 Grep 全部相关符号核对布局再编译。
 
 **下一步**：M-J4（可选，P9 V4 预留）不排期；P8 并发地基 M-J0~J3 收口，后续按 ROADMAP 接续（VSM 插 S9 后 / TSR 拆 S7 后两段；S5 组原子 cut 可直接消费 DAG 组边界）。
+## P8 合并回 master + 回归门禁固化（exe 新鲜度闸 + 基线修正，2026-11-08）
+
+**动作**：主干先合入 feat 分支消化分歧（fd53670：解 CMakeLists/MILESTONES/cases.json 三处内容冲突 + PARALLEL-TRACKS/P8-JOB-PLAN 两处 add/add）→ feat/job-system 快进合回 master → 合并树双后端重编 + ctest 19/19 → 全量总闸揪出 4 对 vulkan HUD 基线为 M4.2 旧 exe 误拍（m0.9/gate-hud、s2.0/lod-hud、s4.1/cull-inside-hud、s4.2/dense-inside-hud）→ 逐对像素取证确认 actual 为正确产物（跨后端差异 895~907px = backend/debug 两行设备文本的既知口径）后重拍 → 按用户要求把「exe 版本」问题固化进门禁：`regression.py` 启动即查 `build/<backend>/*.exe` mtime 是否新于其依赖域全部源文件，过期整闸拒绝（exit 2）→ 增 `NL_REGRESSION_RUNS_DIR` 产物目录覆盖（新目录全程零删除，CI/沙箱友好）。
+
+**提交版本**：本轮（master，合并 commit fd53670 + 门禁固化 commit）
+
+**完成情况**
+- 合并零冲突残留；合并树 selftest jobs PASS + ctest dx12/vulkan 各 19/19。
+- 4 对 vulkan 基线重拍后双后端逐字节 PASS；最终全量串行总闸 184 条 ALL GREEN（启动拦截 flake 以串行复跑定性，见踩坑 4）。
+- exe 新鲜度闸负向实测：touch renderer/src/hud.cpp 后跑闸被拒并列出落后明细；正向：重编后放行。
+- 门禁改动落在 `tools/regression.py`：`check_exe_freshness()`（按 exe 依赖域分桶）+ `NL_REGRESSION_RUNS_DIR` + 模块文档同步。
+
+**踩坑情况**
+1. **M4.2 vulkan 基线旧 exe 误拍（假绿根源）**：重拍基线时 dx12 用新 exe（面板 cap 560，底边 y525）、vulkan 用旧构建（cap 510，底边 y523，s4.x 两条还是带滚动条裁底的面板）→ 双后端基线口径不一致，一直假绿到 P8 合并后的总闸才炸出。教训已固化进门禁：**跑闸/重拍基线前 exe 必须新于源码，否则拒绝运行**——基线重拍永远用刚重编的 exe。
+2. **NMake 按 TU 依赖重链 → 全局源码比对死锁（用户点名固化）**：`touch renderer/src/hud.cpp` 后 NMake 只重链依赖该 TU 的 viewer.exe；nanite-tools / material-graph-tools 不含此 TU 不会重链，exe mtime 保持落后。若门禁用「全局 SOURCE_DIRS 比对所有 exe」会造成无关源文件一碰、工具 exe **永不新鲜**的死锁（重编也没用，NMake 认为它已是最新）。对策：`EXE_SOURCE_DIRS` 按 exe 依赖域分桶——viewer=core+renderer+shaders+viewer/，nanite-tools=core+nanite-tools/，material-graph-tools=core+material-graph-tools/；无关 touch 不再误伤，真依赖变更仍被拦。
+3. **沙箱 safe-delete 累计删除阈值杀长跑**：WorkBuddy 沙箱按会话轮累计删除文件数（阈值原 50），全量总闸运行中的产物清理会撞线被杀（进程无 traceback 死在中途，块缓冲还会吞掉已跑输出的尾部）。对策两层：① `NL_REGRESSION_RUNS_DIR` 指向全新目录 = 全程零删除事件；② 用户已把阈值调到 500。另：长跑 python 一律 `python -u`（无缓冲），避免死因诊断被缓冲吞尸。
+4. **启动拦截 flake 与真像素 FAIL 的鉴别**：本环境全量跑平均挂 0~3 条，特征两种——「日志缺 X」毫秒级秒退 / 超时（Defender 高频启动拦截，串行复跑必过，条目每轮不同）；与「与基线像素不符」的确定性 FAIL（本轮 4 条 vulkan 基线即此类，逐对像素取证定位）严格区分，前者复跑定性、后者必须查根因不许复跑糊弄过去。
+
+**下一步**：P8 并发地基全部收口（M-J0~J3 已入主干）；主线 S5（组原子 cut）/S6 排期按 ROADMAP；feat 分支任务完成后可清理 worktree 登记。
