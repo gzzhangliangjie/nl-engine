@@ -2331,7 +2331,7 @@
      "id": "skin-demo",
      "name": "skindump + 蒙皮动画演示页：CesiumMan 行走（CPU LBS）",
      "kind": "tool",
-     "note": "skindump 导出逐帧 CPU LBS 蒙皮顶点（确定性 TSV，IDX 三角索引 + DOM 主导关节 + F 逐帧位置，t=0 蒙皮输出中心平移与 viewer 同口径）；tools/skin_demo.py 据此生成单文件 skin-demo.html —— canvas 画 4672 三角（painter's algorithm 深度排序 + 面法线兰伯特 + 主导关节着色），相邻帧线性插值平滑播放，支持播放/暂停、0.5~2× 速度、45°/正面/侧面视角、拖拽轨道、滚轮缩放、#t=&pause= 调试锚点。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/skin-demo.html（预览图为本页 t=1.2s 截图）。",
+     "note": "skindump 导出逐帧 CPU LBS 蒙皮顶点（确定性 TSV，IDX 三角索引 + DOM 主导关节 + F 逐帧位置，t=0 蒙皮输出中心平移与 viewer 同口径）；tools/skin_demo.py 据此生成单文件 skin-demo.html —— 四面板（CesiumMan Walk / Fox Walk / Fox Run / RiggedFigure，与 anim-demo 的 FK 面板同资产同 clip），canvas 深度排序 + 面法线兰伯特 + 主导关节着色，帧间线性插值，播放/速度/每画布拖拽轨道/滚轮缩放，#t=&pause= 调试锚点。加载器配套修正：NORMAL 缺失时从三角网格算平滑法线、非索引网格补恒等索引（Fox.glb 即此二者）。页面只做投影与播放，不伪造任何一帧。交互页：example/ma-track/skin-demo.html（预览图为 t=1.2s 四面板截图）。",
      "args": [
       "skindump",
       "{root}/assets/models/rigged/CesiumMan.glb",

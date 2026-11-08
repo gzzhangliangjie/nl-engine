@@ -46,7 +46,10 @@ private:
     // 允许滚轮推进模型内部：cull=back 时全被剔除只剩背景，
     // cull=none 时能看到带贴图的内壁 —— M0.4 的可见对照用例。
     static constexpr float kMinDist   = 0.45f;
-    static constexpr float kMaxDist   = 20.0f;
+    // M-A5.4：20 → 500。Fox.glb 等资产坐标 ~80 单位，20 的上限会把相机钳在
+    // 模型内部（skin 模式自动取景 dist≈radius*2.4 一样被钳）。历史用例
+    // dist ≤ 20 不受影响；远景裁剪由 viewProjection 的自适应远平面兜住。
+    static constexpr float kMaxDist   = 500.0f;
     static constexpr float kOrbitGain = 0.007f;
     static constexpr float kZoomGain  = 0.16f;
 };

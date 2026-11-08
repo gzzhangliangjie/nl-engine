@@ -490,39 +490,72 @@ bool loadGltfSkinnedModel(const std::string& path, Skeleton& skeleton,
     };
     const int posAcc = attr("POSITION"), nrmAcc = attr("NORMAL");
     const int jointAcc = attr("JOINTS_0"), weightAcc = attr("WEIGHTS_0");
-    if (posAcc < 0 || nrmAcc < 0 || jointAcc < 0 || weightAcc < 0) {
-        error = "gltf: primitive lacks POSITION/NORMAL/JOINTS_0/WEIGHTS_0";
+    // NORMAL 可选（Khronos Fox.glb 等资产无 NORMAL）：缺失时从三角网格算平滑法线。
+    if (posAcc < 0 || jointAcc < 0 || weightAcc < 0) {
+        error = "gltf: primitive lacks POSITION/JOINTS_0/WEIGHTS_0";
         return false;
     }
     std::vector<float> px, nx, wx;
     std::vector<std::array<int, 4>> jx;
-    if (!readVecAccessor(model, posAcc, 3, px) || !readVecAccessor(model, nrmAcc, 3, nx) ||
+    if (!readVecAccessor(model, posAcc, 3, px) ||
+        (nrmAcc >= 0 && !readVecAccessor(model, nrmAcc, 3, nx)) ||
         !readJointAccessor(model, jointAcc, jx) ||
         !readVecAccessor(model, weightAcc, 4, wx)) {
         error = "gltf: bad mesh attribute accessor";
         return false;
     }
     const std::size_t vertexCount = px.size() / 3;
-    if (nx.size() != vertexCount * 3 || jx.size() != vertexCount ||
+    if ((nrmAcc >= 0 && nx.size() != vertexCount * 3) || jx.size() != vertexCount ||
         wx.size() != vertexCount * 4) {
         error = "gltf: mesh attribute sizes mismatch";
         return false;
     }
-    if (prim.indices < 0 || !readIndexAccessor(model, prim.indices, mesh.indices)) {
-        error = "gltf: bad mesh indices";
-        return false;
-    }
-    for (std::uint32_t idx : mesh.indices)
-        if (idx >= vertexCount) {
-            error = "gltf: index out of range";
+    if (prim.indices >= 0) {
+        if (!readIndexAccessor(model, prim.indices, mesh.indices)) {
+            error = "gltf: bad mesh indices";
             return false;
         }
+        for (std::uint32_t idx : mesh.indices)
+            if (idx >= vertexCount) {
+                error = "gltf: index out of range";
+                return false;
+            }
+    } else {
+        // 非索引网格（Fox.glb）：顶点即逐三角展开，索引补 0..n-1 恒等映射。
+        mesh.indices.resize(vertexCount);
+        for (std::size_t i = 0; i < vertexCount; ++i)
+            mesh.indices[i] = static_cast<std::uint32_t>(i);
+    }
 
     mesh.positions.resize(vertexCount);
     mesh.normals.resize(vertexCount);
     for (std::size_t i = 0; i < vertexCount; ++i) {
         mesh.positions[i] = { px[i * 3], px[i * 3 + 1], px[i * 3 + 2] };
-        mesh.normals[i] = { nx[i * 3], nx[i * 3 + 1], nx[i * 3 + 2] };
+    }
+    if (nrmAcc >= 0) {
+        for (std::size_t i = 0; i < vertexCount; ++i)
+            mesh.normals[i] = { nx[i * 3], nx[i * 3 + 1], nx[i * 3 + 2] };
+    } else {
+        // 无 NORMAL 属性：面积加权的平滑法线（面法线累计到顶点后归一化）。
+        for (auto& n : mesh.normals) n = { 0.0f, 0.0f, 0.0f };
+        for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+            const nl::anim::Vec3& a = mesh.positions[mesh.indices[t]];
+            const nl::anim::Vec3& b = mesh.positions[mesh.indices[t + 1]];
+            const nl::anim::Vec3& c = mesh.positions[mesh.indices[t + 2]];
+            const float e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z;
+            const float e2x = c.x - a.x, e2y = c.y - a.y, e2z = c.z - a.z;
+            const nl::anim::Vec3 fn = { e1y * e2z - e1z * e2y,
+                                        e1z * e2x - e1x * e2z,
+                                        e1x * e2y - e1y * e2x };
+            for (int k = 0; k < 3; ++k) {
+                nl::anim::Vec3& n = mesh.normals[mesh.indices[t + static_cast<std::size_t>(k)]];
+                n.x += fn.x; n.y += fn.y; n.z += fn.z;
+            }
+        }
+        for (auto& n : mesh.normals) {
+            const float len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+            if (len > 1e-12f) { n.x /= len; n.y /= len; n.z /= len; }
+        }
     }
 
     // joints 槽位 -> 骨架下标 + 权重归一化（bevy 语义）。

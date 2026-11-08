@@ -1,5 +1,6 @@
 #include "nl/core/camera.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -108,7 +109,10 @@ Matrix4 OrbitCamera::viewProjection() const {
     };
     const float center[3] = {0.0f, 0.0f, 0.0f};
     const float up[3] = {0.0f, 1.0f, 0.0f};
-    return multiply(perspectiveZO(kFovY, aspect_, kNear, kFar), lookAt(eye, center, up));
+    // M-A5.4：远平面随距离自适应（kFar=100 只够 dist≤33 的场景）。dist>33 时
+    // 模型会被远平面整体裁掉；dist ≤ 33 时取值与旧 kFar 完全一致，历史基线不破。
+    const float farZ = std::max(kFar, distance_ * 3.0f);
+    return multiply(perspectiveZO(kFovY, aspect_, kNear, farZ), lookAt(eye, center, up));
 }
 
 Matrix4 OrbitCamera::model() const {

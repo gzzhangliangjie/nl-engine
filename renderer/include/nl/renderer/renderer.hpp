@@ -135,6 +135,9 @@ struct DeviceInfo {
     // visibleClusters = -1 表示暂无数据（前两帧 / 非剔除路径 / map 失败）。
     int           visibleClusters = -1;
     std::uint32_t totalClusters = 0;
+    // M-A5.4：skin 模式 t=0 蒙皮输出半径（最大顶点到中心距离；非 skin 模式 0）。
+    // viewer 据此对未显式 --dist 的 skin 模式做资产尺度自适应取景。
+    float skinRadius = 0.0f;
 };
 
 class Renderer {

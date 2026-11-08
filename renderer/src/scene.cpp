@@ -1016,6 +1016,14 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
                 mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
             }
             skinCenter_ = {(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
+            // t=0 蒙皮输出半径（最大顶点到中心距离）：供 viewer 按资产尺度自动取景
+            //（Fox.glb 等资产单位远大于 1m，固定缺省距离会把相机放进模型肚子里）。
+            skinRadius_ = 0.0f;
+            for (const auto& p : skinPos_) {
+                const float dx = p.x - skinCenter_.x, dy = p.y - skinCenter_.y,
+                            dz = p.z - skinCenter_.z;
+                skinRadius_ = std::max(skinRadius_, std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
         }
     }
 

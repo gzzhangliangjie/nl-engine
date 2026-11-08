@@ -369,7 +369,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     nl::core::OrbitCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
-    camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
+    // M-A5.4：skin 模式资产尺度自适应——Fox.glb 等资产单位远大于 1m，固定缺省
+    // 距离会把相机放进模型肚子里。未显式 --dist 时按 t=0 蒙皮输出半径取景，
+    // max() 兜底保证 CesiumMan 级小资产维持既有 2.6 取景（基线不破）。
+    float camDist = o.distance;
+    if (o.mode == nl::core::ViewMode::Skin && !o.distSet) {
+        camDist = std::max(camDist, renderer->info().skinRadius * 2.4f);
+    }
+    camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
     bool cullBack = o.cullBack;
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省

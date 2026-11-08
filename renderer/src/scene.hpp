@@ -213,6 +213,10 @@ private:
     nl::anim::SkinBinding     skinBinding_;
     std::vector<nl::anim::Vec3> skinBasePos_, skinBaseNrm_;    // bind 空间
     nl::anim::Vec3 skinCenter_{};   // bind 包围盒中心：逐帧蒙皮后平移回原点（相机 target=(0,0,0) 取景居中）
+    float skinRadius_ = 0.0f;       // t=0 蒙皮输出半径：viewer 自动取景用（DeviceInfo.skinRadius）
+  public:
+    float skinRadius() const { return skinRadius_; }
+  private:
     std::vector<nl::anim::Vec3> skinPos_, skinNrm_;            // 蒙皮输出
     std::vector<nl::anim::BonePose> skinLocal_, skinModel_;    // 采样/FK 暂存
     std::vector<nl::anim::Mat4> skinPalette_;                  // model*IBM

@@ -120,8 +120,10 @@ ctest（构建目录内）：`ma1-anim-curve-selftest` / `ma2-anim-blend-selftes
 
 **坑位（详 MILESTONES M-A5）**：JOINTS_0=skin.joints 槽位非 node id；node.matrix 刚性分解兜底；testGltfAssetLoad/testGltfDeterminism 加载失败必须早退（clips[0] 空 vector UB）。
 
-### M-A5 补充：skindump + 蒙皮动画演示页（2026-11-09 追加）
+### M-A5 补充：skindump + 蒙皮动画演示页（2026-11-09 追加，M-A5.3/M-A5.4）
 
 - **`anim-tools skindump <rigged.glb> <clipIndex> [frames=48]`**：逐帧 CPU LBS 蒙皮顶点 TSV（确定性）。头部 `# skindump`（duration/verts/tris/frames）+ `IDX` 三角索引 + `DOM` 每顶点主导关节槽位（着色用）+ `F` 逐帧行（t + 每顶点 xyz，%.3f）。位置按 t=0 蒙皮输出包围盒中心平移——与 viewer `--mode skin` 同口径（bind 空间中心无效，见 M-A5.2 取景修正）。frames ∈ [2,512]。
-- **`tools/skin_demo.py`** → `example/ma-track/skin-demo.html`（单文件 ~2.3MB，36 帧）：canvas 画 4672 三角——painter's algorithm 深度排序 + 面法线双面兰伯特 + 主导关节 hue 着色；相邻帧线性插值平滑播放。控件：播放/暂停、0.5~2× 速度、45°/正面/侧面预设、拖拽轨道、滚轮缩放、帧滑条；`#t=秒&pause=1` hash 锚点供确定性截图验证。页面只投影播放，不伪造任何一帧。
-- **用例卡**：cases.json ma-track `skin-demo`（skindump 8 帧冒烟 + preview 挂 t=1.2s 页面截图）。
+- **`tools/skin_demo.py`** → `example/ma-track/skin-demo.html`（单文件 ~4MB，四面板）：**CesiumMan Walk / Fox Walk / Fox Run / RiggedFigure**（与 anim-demo 的 FK 面板同资产同 clip，各 28 帧）。每面板 canvas：painter's algorithm 深度排序 + 面法线双面兰伯特 + 主导关节 hue 着色；帧间线性插值平滑播放；每画布独立拖拽轨道 + 滚轮缩放；全局播放/暂停、0.5~2× 速度；`#t=秒&pause=1` hash 锚点供确定性截图验证。页面只投影播放，不伪造任何一帧。
+- **加载器配套修正（M-A5.4，Fox.glb 进蒙皮链路的两块绊脚石）**：① glTF 蒙皮入口 NORMAL 属性改为可选，缺失时从三角网格面积加权累计平滑法线（Khronos Fox.glb 无 NORMAL）；② 非索引网格（primitive 无 indices，Fox.glb 即此）补 `0..n-1` 恒等索引。修后 `viewer --mode skin --model rigged/Fox.glb` GPU 路径直接可用。
+- **相机尺度自适应（M-A5.4）**：Fox.glb 坐标 ~80 单位，旧 `OrbitCamera` 两处硬编码挡路——`kMaxDist=20`（`--dist 170` 也被钳成 20，相机进模型肚子）与 `kFar=100`（远景整体裁掉）。改为 `kMaxDist=500` + 远平面 `max(kFar, dist*3)`；DeviceInfo 新增 `skinRadius`（t=0 蒙皮输出半径），viewer skin 模式未显式 `--dist` 时按 `radius*2.4` 自动取景（`max()` 兜底，CesiumMan 级小资产维持既有 2.6 取景，截图逐字节不变）。历史用例 dist≤20、far 取值不变，基线零波及。
+- **用例卡**：cases.json ma-track `skin-demo`（skindump 8 帧冒烟 + preview 挂 t=1.2s 四面板截图）；GPU 侧证据 `example/ma-track/skin-fox-viewer.png`（viewer --mode skin Fox 自动取景）。

@@ -163,6 +163,7 @@ public:
         if (!sceneOk) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.visibleClusters = scene_.visibleClusters();     // M4.1：-1 = 暂无数据
         info_.totalClusters = scene_.clusterCount();
@@ -246,6 +247,7 @@ public:
         const std::string file = detail::lodMeshFileName(lodStem_, level);
         if (!scene_.setClusterLevel(device_, file.c_str(), outError)) return false;
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
@@ -286,6 +288,7 @@ public:
             return false;
         }
         info_.modelName = scene_.modelName();
+        info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
         info_.lodLevel = scene_.lodLevel();
         info_.lodMaxError = scene_.lodMaxError();
