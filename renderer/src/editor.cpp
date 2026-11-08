@@ -21,6 +21,7 @@ namespace {
 ImVec4 typeColor(const std::string& type) {
     if (type == "ConstantFloat") return ImVec4(0.30f, 0.50f, 0.70f, 1.0f);
     if (type == "Multiply")      return ImVec4(0.30f, 0.60f, 0.40f, 1.0f);
+    if (type == "Add")           return ImVec4(0.75f, 0.55f, 0.25f, 1.0f);
     if (type == "Output")        return ImVec4(0.70f, 0.35f, 0.35f, 1.0f);
     return ImVec4(0.35f, 0.35f, 0.45f, 1.0f);
 }
@@ -41,20 +42,22 @@ PinRef findPin(const nl::material_graph::MaterialGraph& g, int pinId) {
     return PinRef{};
 }
 
-// 按 B 路阶梯当前节点库：ConstantFloat(1 out) / Multiply(a,b in + out) / Output(baseColor in)。
-void addTypedNode(nl::material_graph::MaterialGraph& g, const std::string& type) {
+// 按 B 路阶梯当前节点库：ConstantFloat(1 out) / Multiply / Add（二值 float）/ Output(baseColor in)。
+// 返回新节点 id（供右键建节点时定位画布坐标）。
+int addTypedNode(nl::material_graph::MaterialGraph& g, const std::string& type) {
     using namespace nl::material_graph;
     int n = g.addNode(type);
     if (type == "ConstantFloat") {
         g.setProp(n, "value", "0.5");
         g.addPin(n, "out", ValueType::Float, true);
-    } else if (type == "Multiply") {
+    } else if (type == "Multiply" || type == "Add") {
         g.addPin(n, "a", ValueType::Float, false);
         g.addPin(n, "b", ValueType::Float, false);
         g.addPin(n, "out", ValueType::Float, true);
     } else if (type == "Output") {
         g.addPin(n, "baseColor", ValueType::Float, false);
     }
+    return n;
 }
 
 }  // namespace
@@ -71,14 +74,16 @@ struct NodeEditor::Impl {
     }
 
     void drawWindow() {
-        ImGui::SetNextWindowSize(ImVec2(760.0f, 520.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(780.0f, 660.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Material Graph Editor (T1)");
         ed::SetCurrentEditor(ctx);   // 整个窗口体都在编辑器作用域内（Save 要回收坐标）
 
-        // ---- 工具栏：加节点 / 保存 / 编译（T1 拆解 3/4/5 步）----
+        // ---- 工具栏：加节点 / 保存 / 编译（T1 拆解 3/4/5 步；Ctrl+S 亦可存）----
         if (ImGui::Button("+ ConstantFloat")) { addTypedNode(graph, "ConstantFloat"); status = "node added"; }
         ImGui::SameLine();
         if (ImGui::Button("+ Multiply")) { addTypedNode(graph, "Multiply"); status = "node added"; }
+        ImGui::SameLine();
+        if (ImGui::Button("+ Add")) { addTypedNode(graph, "Add"); status = "node added"; }
         ImGui::SameLine();
         if (ImGui::Button("+ Output")) { addTypedNode(graph, "Output"); status = "node added"; }
         ImGui::SameLine();
@@ -89,9 +94,16 @@ struct NodeEditor::Impl {
             bool ok = nl::material_graph::compileCheck(graph, &rep);
             status = ok ? ("compile OK: " + rep) : ("compile FAIL: " + rep);
         }
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+            && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
+            save();
+        }
 
-        // ---- 节点画布 ----
-        ed::Begin("canvas", ImVec2(0.0f, 0.0f));
+        // ---- 节点画布（host child 预留底部 separator + status + 提示三行；库对
+        //      size<=0 的处理是"占满剩余"，负值预留不生效，必须外层包 child）----
+        const float bottomBarH = ImGui::GetTextLineHeightWithSpacing() * 3.0f + 14.0f;
+        ImGui::BeginChild("canvas_host", ImVec2(0.0f, -bottomBarH));
+        ed::Begin("canvas");
         for (const auto& n : graph.nodes()) {
             ed::BeginNode(static_cast<std::uintptr_t>(n.id));
             ImGui::PushStyleColor(ImGuiCol_Header, typeColor(n.type));
@@ -134,7 +146,31 @@ struct NodeEditor::Impl {
         }
         if (graph.nodes().empty())
             ImGui::TextUnformatted("(empty graph) - use toolbar to add nodes");
+
+        // ---- 右键菜单：空白处 = 加节点（落在鼠标处），节点上 = 删除 ----
+        const ed::NodeId hovered = ed::GetHoveredNode();
+        if (ImGui::IsMouseReleased(1))
+            ImGui::OpenPopup(hovered ? "node_menu" : "canvas_menu");
+        if (ImGui::BeginPopup("canvas_menu")) {
+            const ImVec2 at = ed::ScreenToCanvas(ImGui::GetMousePosOnOpeningCurrentPopup());
+            const char* types[] = {"ConstantFloat", "Multiply", "Add", "Output"};
+            for (const char* t : types)
+                if (ImGui::MenuItem(t)) {
+                    const int id = addTypedNode(graph, t);
+                    ed::SetNodePosition(static_cast<std::uintptr_t>(id), at);
+                    status = "node added";
+                }
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("node_menu")) {
+            if (ImGui::MenuItem("Delete node")) {
+                graph.removeNode(static_cast<int>(hovered.Get()));
+                status = "node deleted (edges cascaded)";
+            }
+            ImGui::EndPopup();
+        }
         ed::End();
+        ImGui::EndChild();
 
         // ---- 连线创建：拖拽引脚 -> 校验（存在/一进一出/类型一致）-> connect ----
         if (ed::BeginCreate()) {
@@ -168,7 +204,7 @@ struct NodeEditor::Impl {
         }
         ed::EndCreate();
 
-        // ---- 连线删除 ----
+        // ---- 删除：选中连线 Del 删除；选中节点 Del 级联删节点及其连线 ----
         if (ed::BeginDelete()) {
             ed::LinkId deleted;
             while (ed::QueryDeletedLink(&deleted)) {
@@ -177,12 +213,19 @@ struct NodeEditor::Impl {
                     status = "link deleted";
                 }
             }
+            ed::NodeId deletedNode;
+            while (ed::QueryDeletedNode(&deletedNode)) {
+                if (ed::AcceptDeletedItem()) {
+                    graph.removeNode(static_cast<int>(deletedNode.Get()));
+                    status = "node deleted (edges cascaded)";
+                }
+            }
         }
         ed::EndDelete();
 
         ImGui::Separator();
         ImGui::TextWrapped("status: %s", status.c_str());
-        ImGui::TextWrapped("drag pin->pin = link | drag title = move | wheel = zoom | Del on link = delete");
+        ImGui::TextWrapped("drag pin->pin = link | drag title = move | wheel = zoom | Del on link/node = delete | right-click = add/delete node | Ctrl+S = save");
 
         ed::SetCurrentEditor(nullptr);
         ImGui::End();

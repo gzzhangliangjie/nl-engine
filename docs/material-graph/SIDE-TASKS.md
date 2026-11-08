@@ -17,3 +17,6 @@
 - **验收形式**：A 类工具版交代——编辑器窗口截图 / 演示（拖节点 → 连线 → 改属性 → 重编译 OK 的完整操作序列），不进渲染回归总闸。
 - **排期建议**：不依赖 B5，随时可开；若与 B5 并行，注意工作线粘性——**新任务 = 同 worktree（`nl-engine-material-graph`）新工作线**，先合一波主干再开干（2026-11-08 用户拍板的合并惯例）。
 - **参考**：MaterialX Graph Editor（imgui-node-editor 用法权威）、UE MaterialEditor（信息架构：图区 + 属性细节面板 + 节点搜索，只读不抄）。
+- **进度**：**T1-M1 ✅**（2026-11-09，`2e60906`）——拆解 1~5 全部落地：`viewer --editor <file.mg>`（经 `HudFrame.editor` 挂入 hud 的 NewFrame..Render 区间，`editor=null` 路径零改动不碰基线）、画布拖拽（读写 `Node.x/y`）、引脚拖拽连线（方向/类型校验）、`ConstantFloat.value` 即时编辑、Save / Compile（`core/material_graph/compile.cpp` emit + slangc 四路）。双后端编译通过，证据 `t1-editor-window.png`。
+  **T1-M2 ✅**（2026-11-09）——右键空白加节点（落鼠标处）/ 右键节点删除 / Del 删节点（级联清边，`removeNode` 已有）/ Ctrl+S 快捷保存 / 新节点类型 **Add** 全链打通（emitter 二值运算泛化 → 编辑器 → 示例图 6 节点 5 边 → b2/b3/b4 ctest 覆盖，生成表达式 `0.2f + (0.8f * 0.5f)` 经 slangc 双后端四路编译）。坑：库对 `size<=0` 回退「占满剩余」，底部状态条须外层包 ImGui host child 预留；`NodeEditor.json` 运行时状态会污染确定性截图，拍摄前须删除。证据 `t1-editor-window.png`（已更新）。
+  剩余：拆解 6（预览视口，等 B5 / S7）。

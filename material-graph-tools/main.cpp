@@ -52,9 +52,21 @@ nl::material_graph::MaterialGraph buildSample() {
     g.connect(nA, pA, nMul, pMulA);
     g.connect(nB, pB, nMul, pMulB);
 
+    // T1-M2：Add 节点入示例链（baseColor = 0.8*0.5 + 0.2 = 0.6），示范扩节点库全链。
+    int nC = g.addNode("ConstantFloat", 0.0f, 240.0f);
+    g.setProp(nC, "value", "0.2");
+    int pC = g.addPin(nC, "out", ValueType::Float, true);
+
+    int nAdd = g.addNode("Add", 200.0f, 150.0f);
+    int pAddA = g.addPin(nAdd, "a", ValueType::Float, false);
+    int pAddB = g.addPin(nAdd, "b", ValueType::Float, false);
+    int pAddO = g.addPin(nAdd, "out", ValueType::Float, true);
+    g.connect(nC, pC, nAdd, pAddA);
+    g.connect(nMul, pMulO, nAdd, pAddB);
+
     int nOut = g.addNode("Output", 400.0f, 60.0f);
     int pOutIn = g.addPin(nOut, "baseColor", ValueType::Float, false);
-    g.connect(nMul, pMulO, nOut, pOutIn);
+    g.connect(nAdd, pAddO, nOut, pOutIn);
     return g;
 }
 
@@ -415,8 +427,8 @@ int selftestGraph() {
     // 1) 构造 + validate 通过
     MaterialGraph g = buildSample();
     std::string err;
-    check(g.nodeCount() == 4, "expected 4 nodes");
-    check(g.edgeCount() == 3, "expected 3 edges");
+    check(g.nodeCount() == 6, "expected 6 nodes");   // T1-M2：示例链含 Add（2 常量 + Multiply + 常量 + Add + Output）
+    check(g.edgeCount() == 5, "expected 5 edges");
     check(g.validate(&err), "sample graph should validate");
 
     // 2) 序列化确定性：两次写出字节一致

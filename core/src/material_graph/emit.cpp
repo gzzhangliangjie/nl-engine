@@ -43,26 +43,32 @@ std::string emitPinExpr(const MaterialGraph& g, int nodeId, int pinId,
         if (n->type == "ConstantFloat") {
             auto it = n->props.find("value");
             expr = toFloatLiteral(it != n->props.end() ? it->second : "");
-        } else if (n->type == "Multiply") {
-            // 找 a / b 两个输入引脚
-            int aPin = -1, bPin = -1;
-            for (const auto& pin : n->pins) {
-                if (!pin.isOutput) {
-                    if (aPin < 0) aPin = pin.id;
-                    else if (bPin < 0) bPin = pin.id;
-                }
-            }
-            // 上游表达式：从连到该输入引脚的边取
-            auto upstreamExpr = [&](int inPin) -> std::string {
-                for (const auto& e : g.edges()) {
-                    if (e.toNode == nodeId && e.toPin == inPin)
-                        return emitPinExpr(g, e.fromNode, e.fromPin, visited);
-                }
-                return "0.0f";
-            };
-            expr = "(" + upstreamExpr(aPin) + " * " + upstreamExpr(bPin) + ")";
         } else {
-            expr = "0.0f";   // 未知节点类型：占位（emitSlang 会在校验阶段报错）
+            // 二值运算节点：Multiply -> *、Add -> +（新运算节点在此表登记即可）。
+            const char* op = nullptr;
+            if (n->type == "Multiply") op = "*";
+            else if (n->type == "Add") op = "+";
+            if (op) {
+                int aPin = -1, bPin = -1;
+                for (const auto& pin : n->pins) {
+                    if (!pin.isOutput) {
+                        if (aPin < 0) aPin = pin.id;
+                        else if (bPin < 0) bPin = pin.id;
+                    }
+                }
+                // 上游表达式：从连到该输入引脚的边取
+                auto upstreamExpr = [&](int inPin) -> std::string {
+                    for (const auto& e : g.edges()) {
+                        if (e.toNode == nodeId && e.toPin == inPin)
+                            return emitPinExpr(g, e.fromNode, e.fromPin, visited);
+                    }
+                    return "0.0f";
+                };
+                expr = std::string("(") + upstreamExpr(aPin) + " " + op + " "
+                     + upstreamExpr(bPin) + ")";
+            } else {
+                expr = "0.0f";   // 未知节点类型：占位（emitSlang 会在校验阶段报错）
+            }
         }
         visited[key] = 1;
         return expr;
