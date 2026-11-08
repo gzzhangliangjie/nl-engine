@@ -928,3 +928,15 @@
 3. bash 调 bat 传多 target 必须分开传参（引号整体成一个参数，NMake 收不到第二个 target）。
 
 **下一步**：M-A5 视觉验收等 2.3 蒙皮渲染（届时资产/骨架/采样/混合/状态机/blend space 全链已备）；或先做 sway 轨迹证据图升级（preview 用）。
+
+## M-A4d 骨骼动画动态演示（feat/action-system，2026-11-08）
+
+**动作**：用户要看「图」→「动态图演示」——anim-tools 新增 `fkdump`（全骨骼逐帧 FK 世界坐标 TSV，确定性）与 `fksample`（末端单点轨迹）；`tools/anim_demo.py`（纯标准库）生成单文件 `example/ma-track/anim-demo.html` 动态演示页。
+
+**提交版本**：M-A4d（tag `anim-ma4d`）
+
+**完成情况**：四面板 canvas 循环播放 Fox Walk/Run、CesiumMan Walk、RiggedFigure（Khronos 标准资产真实 FK 数据，页面零伪造——数据 100% 来自 fkdump，JS 只做投影取帧）；播放/暂停 + 0.25~3× 速度 + XY/ZY 视角切换 + 等比投影居中；fkdata/ 四段 dump 入库；run.bat 补 fkdump 锁行 ALL GREEN；cases.json ma-track 卡 +1（preview=Edge 无头实截）；TOOLS-GUIDE 追加 M-A4d；server --check OK。另：纠正 M-A5 错误前提（commit 7266abc）——「2.3 蒙皮」系编号撞车（里程碑 M2.3=LOD viewer 早收官；实指 ROADMAP §2.3 渲染侧蒙皮层，规划未开工，renderer/shaders 零 skin/bone 命中实证）。
+
+**踩坑情况**：等比投影初版 x/y 各自 sx/sy 拉伸变形——改 min(W/f.w, H/f.h) 统一比例 + 内容居中；Edge 无头 `--headless=new --screenshot --virtual-time-budget` 对本地 HTML 截图核查渲染（本机可用）。
+
+**下一步**：M-A5 蒙皮渲染（CPU 刚体绑定 → LBS → 模型展示）——蒙皮层需从零建，不再「等」任何已有里程碑。
