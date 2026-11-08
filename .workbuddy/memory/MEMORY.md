@@ -21,7 +21,7 @@
 - kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 m0.9/s2.0/s3.2/s4.1/s4.2 共 5 对）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
-- **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，2.3 立项再议 vendored）；M-A5 视觉验收等 2.3 蒙皮 + rigged GLB。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
+- **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，蒙皮层立项时再议 vendored）；M-A5 视觉验收等**渲染侧蒙皮层**（ROADMAP §2.3，规划未开工——⚠️编号与里程碑 M2.3=LOD viewer 撞车，勿混）。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）
@@ -51,6 +51,7 @@
 - 资源/绘制逻辑收 `renderer/src/scene.cpp`（两后端共享，只依赖 nvrhi.h）；backend 只管 swapchain/depth/framebuffer/present。
 - ImGui vendored **v1.91.9**，自写 `renderer/src/hud.cpp`（ImDrawData 摊平 + R32_UINT + 逐 cmd scissor）；`hudProjection()` Y 尺度必须负；面板高度≤560（M4.2 起，510 装不下 cull GPU 行+曲线，小画布仍 min(cap,H-28) 兜底）；HUD 字符串须 ASCII；`renderFrame(...,hud=nullptr)` 不碰 ImGui（截图默认 `--no-hud`）。
 - 新增 GPU 资源 slot 级同步表必在 `createTargets()` 初始化（renderFrame 在 ensurePipeline 前按 slot 访问，放错=首帧 139 段错误）。
+- **viewer 截图模式（--screenshot）建隐藏窗口**（`WindowDesc.visible=false`，2026-11-08 固化）：可见窗口首显必抢前台焦点（实测 ~0.85 s/用例，--jobs 并行跑闸打断打字）；像素来自 GPU readback 与窗口可见性无关，基线零影响。别把该 hint 拿掉，交互模式仍 visible=true。
 
 ## 简化器口径（M2.3a 定稿）
 - meshopt 多 pass 主循环（src 并入 dst + collapse_locked + cos75°）+ link condition + 双层边界锁（组间边界 + 模型开放边界 LockBorder）+ 绝对朝向锚（判决实验定稿保留）。`check-orient` 扫全链 inward（exit 1=FAIL）。

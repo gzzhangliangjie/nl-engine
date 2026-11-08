@@ -286,6 +286,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     desc.width  = o.width;
     desc.height = o.height;
     desc.title  = "nl-engine | starting...";
+    // 截图回归模式：隐藏窗口。像素来自 GPU readback，与窗口可见性无关；
+    // 可见窗口首显必抢前台焦点，并行跑闸会打断用户输入（2026-11-08 实测修）。
+    desc.visible = !o.screenshot;
     nl::core::Window window(desc);
     if (!window.valid()) {
         nl::core::log::error("window creation failed");
