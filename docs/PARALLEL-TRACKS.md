@@ -53,7 +53,7 @@
 - **两条落地路线（待立项时拍板）**：
   - **A 路**：vendored MaterialX 库，拿它的节点语义 + 生成器内核，外写一层适配到你 NVRHI 固定绑定与现有 scene/material 结构。
   - **B 路（推荐，最贴技术栈）**：以 MaterialX 节点语义为参考、**自建轻量材质图**（节点序列化 → 生成符合你 binding 约定的 `.slang` 片段 → 接现有 PBR 材质 pass），适配量更小。
-- **可见里程碑阶梯**：固定管线材质常量 → 节点图数据结构 + 序列化 → 图→Slang 代码生成 → 热重载（改图即重编译） → （S7 后）接入 PBR 材质 pass。
+- **可见里程碑阶梯**：固定管线材质常量 → 节点图数据结构 + 序列化 → 图→Slang 代码生成 → 热重载（改图即重编译） → （S7 后）接入 PBR 材质 pass。**B2~B4 已完成**（2026-11-08，tag `mg-b2b4`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md`）；交互式可视化编辑器 GUI 已立为支线 T1（`docs/material-graph/SIDE-TASKS.md`），不阻塞 B5。
 - **验收形式**：工具版交代——展示台 tool 卡跑"图→Slang→编译双后端"管线，一张从生成产物真实编译输出的证据图（不许手绘）；不进渲染回归总闸。
 - **三处参考口径**：UE `MaterialEditor`（只读结构）/ PhasmaEngine `MaterialX→Slang` 适配（最贴）/ MaterialX 官方 Graph+Generator（语义权威）；bevy 无等价、据实标注。
 
@@ -146,7 +146,7 @@
 ## 6. 后续动作（待用户圈定）
 
 - **Job 系统已立项**：`docs/p8/P8-JOB-PLAN.md`（M-J0~M-J4，首个消费者=离线管线）；下一步可执行 M-J0。
-- **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后。
+- **材质图已立项（B 路自建）**：B2~B4 完成（数据模型+序列化 / 图→Slang 双后端编译 / 热重载+证据图），见 `docs/material-graph/B2-B4-ACCEPTANCE.md`；B5 接 PBR pass 排 S7 后；支线 T1 可视化编辑器 GUI 已登记 `docs/material-graph/SIDE-TASKS.md`。
 - **动作系统已立项并完成纯逻辑层（2.4）**：2026-11-08 用户拍板 A 路自建（网上调研结论：状态机/混合树层业界无现成库，ozz 只覆盖下层采样/混合/蒙皮数学）；M-A1 曲线采样 / M-A2 线性加法混合 / M-A3 状态机（UE 回退缩时）/ M-A4 1D blend space 全部完成并过确定性自测 + ctest 5/5 + 展示台 ma-track 卡，tag `anim-ma1`~`anim-ma4`（track 分支内，merge 走 §7.2 文档闸）；M-A5 视觉验收待 2.3 蒙皮。
 - 其余 A 类轨道（骨骼蒙皮 2.3 / Lua 2.5 / 3D 音频 2.6）仍为候选，立项前按铁律读三处 + 出计划。
 
