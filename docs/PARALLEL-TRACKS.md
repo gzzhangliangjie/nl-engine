@@ -167,7 +167,7 @@
 | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | **已立项 / B2~B4 完成**：B 路自建，计划 `docs/material-graph/B3-PLAN.md`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` | B2 数据模型+序列化 / B3 图→Slang 双后端编译 / B4 热重载+证据图均已过 ctest；B5 接 PBR pass 排 S7 后；共享 `.workbuddy`+`slang/dist` junction |
 | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 工作树已建 / **已立项** `docs/p8/P8-JOB-PLAN.md` | **M-J0~J3 完成**（2026-11-08，tags job-pool/job-scope/job-cluster/job-offline；M-J4 可选不排期）；首个消费者=离线管线已接；共享 junction |
 | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **已立项 / M-A0~M-A4 完成 + M-A5.1 CPU 蒙皮落地（track 分支，未 merge）**：计划 `docs/action-system/ACTION-PLAN.md`（在分支上），tag `anim-ma1`~`anim-ma4d` | nl/anim 纯逻辑层（采样/混合/状态机/1D blend space）+ `nl/anim/skinning`（LBS CPU 蒙皮）自测全绿；M-A5 后续（GPU 调色板→视觉验收）进行中；共享 junction |
-| 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **进行中 / M-C0 完成**（2026-11-08，track 分支 d818b88）：`core/console/` 纯逻辑内核 + `nanite-console` selftest 42/42 绿 | M-C0~C3：`core/console/` 纯逻辑内核 → ImGui 前端 → RuntimeOption 运行时调参；不依赖场景整合；共享 junction |
+| 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **进行中 / M-C0~C1 完成**（2026-11-09，track 分支 b4787da）：纯逻辑内核 + ImGui 前端（呼出/日志配色/历史/Tab 补全），双后端证据截图 | M-C0~C3：`core/console/` 纯逻辑内核 → ImGui 前端 → RuntimeOption 运行时调参；不依赖场景整合；共享 junction |
 
 > 四个已建 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
 

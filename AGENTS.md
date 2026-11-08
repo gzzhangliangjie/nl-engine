@@ -112,7 +112,7 @@
    | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system` | `feat/job-system` | 已立项 `docs/p8/P8-JOB-PLAN.md` |
    | 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | 计划待立项（B 路自建） |
    | 动作系统 / 动画控制器 | `E:/UE_STUDY_2026/nl-engine-action-system` | `feat/action-system` | **进行中**：M-A0~M-A4 完成（tag `anim-ma1`~`anim-ma4d`）+ M-A5.1 CPU 蒙皮落地（`cde41c7`）；交接 `docs/action-system/ACTION-PLAN.md`（在分支上，未 merge） |
-   | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0 完成**（2026-11-08：`core/console/` 纯逻辑内核 + `nanite-console` selftest 42/42 绿，track 分支 d818b88）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C1 ImGui 前端待开工 |
+   | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **M-C0~C1 完成**（2026-11-09：`core/console/` 纯逻辑内核 + ImGui 前端〔`` ` `` 呼出/滚动日志配色/输入行历史/Tab 补全〕，双后端证据截图，track 分支 b4787da）；计划 `docs/p8/P8-CONSOLE-PLAN.md`，M-C2 内建命令集待开工 |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
    **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。
