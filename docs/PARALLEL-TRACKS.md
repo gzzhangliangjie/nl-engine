@@ -53,7 +53,7 @@
 - **两条落地路线（待立项时拍板）**：
   - **A 路**：vendored MaterialX 库，拿它的节点语义 + 生成器内核，外写一层适配到你 NVRHI 固定绑定与现有 scene/material 结构。
   - **B 路（推荐，最贴技术栈）**：以 MaterialX 节点语义为参考、**自建轻量材质图**（节点序列化 → 生成符合你 binding 约定的 `.slang` 片段 → 接现有 PBR 材质 pass），适配量更小。
-- **可见里程碑阶梯**：固定管线材质常量 → 节点图数据结构 + 序列化 → 图→Slang 代码生成 → 热重载（改图即重编译） → （S7 后）接入 PBR 材质 pass。**B2~B4 已完成**（2026-11-08，tag `mg-b2b4`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md`）；交互式可视化编辑器 GUI 已立为支线 T1（`docs/material-graph/SIDE-TASKS.md`），不阻塞 B5。
+- **可见里程碑阶梯**：固定管线材质常量 → 节点图数据结构 + 序列化 → 图→Slang 代码生成 → 热重载（改图即重编译） → （S7 后）接入 PBR 材质 pass。**B2~B4 已完成**（2026-11-08，tag `mg-b2b4`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md`）；支线 T1 交互式编辑器已完成封顶（2026-11-09，tag `mg-t1`，M1~M3 见 `docs/material-graph/SIDE-TASKS.md`，唯一遗留 = 拆解 6 预览视口等 B5）。
 - **验收形式**：工具版交代——展示台 tool 卡跑"图→Slang→编译双后端"管线，一张从生成产物真实编译输出的证据图（不许手绘）；不进渲染回归总闸。
 - **三处参考口径**：UE `MaterialEditor`（只读结构）/ PhasmaEngine `MaterialX→Slang` 适配（最贴）/ MaterialX 官方 Graph+Generator（语义权威）；bevy 无等价、据实标注。
 
@@ -164,7 +164,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 状态 | 占用说明 |
 |---|---|---|---|---|
-| 材质图 → Slang | `E:/UE_STUDY_2026/nl-engine-material-graph` | `feat/material-graph` | **已立项 / B2~B4 完成**：B 路自建，计划 `docs/material-graph/B3-PLAN.md`，验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` | B2 数据模型+序列化 / B3 图→Slang 双后端编译 / B4 热重载+证据图均已过 ctest；B5 接 PBR pass 排 S7 后；共享 `.workbuddy`+`slang/dist` junction |
+| 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官 / 全量 merge 回 master**（tag `mg-b2b4`(B2~B4) + `mg-t1`(T1 编辑器 M1~M3)，merge commit `e5505bc`）：B 路全阶梯——数据模型+序列化 / 图→Slang 双后端编译 / 热重载 / 交互式节点编辑器（imgui-node-editor v0.9.4，`viewer --editor`）+ 节点库 10 种 + uniform 曝光（`MaterialParams` b1，运行时绑定留 B5）；验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` + MILESTONES T1 节 + `SIDE-TASKS.md`（终点定义：调试工具级，UI 封顶）；主干 `viewer --editor` 冒烟截图验收（HUD+编辑器+场景叠加正常） | 全部内容在 master `e5505bc`+；B5 接 PBR pass + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 worktree |
 | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成（tags job-pool/job-scope/job-cluster/job-offline），已双向合并回 master，可视化证据图补交完成；M-J4 可选不排期（等 P9 V4） | 全部内容在 master `c136bcd`+；P9 V4 需要流式加载时按 §7.1b 重建 worktree |
 | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官 / M-A0~M-A5.4 全量 merge 回 master**（merge commit `5a1912f`，2026-11-09，tag `anim-ma1`~`anim-ma5c`）：nl/anim 纯逻辑层（采样/混合/状态机/1D blend space/FK/CPU LBS 蒙皮）+ anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页（CesiumMan/Fox Walk/Fox Run/RiggedFigure）+ Fox.glb 链路三修复；验收纪要 MILESTONES M-A 节 + ACTION-PLAN + ANIM-TOOLS-GUIDE；GPU 调色板等更大规模蒙皮资产再立项 |
 | 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **进行中 / M-C0~C1 完成**（2026-11-09，track 分支 b4787da）：纯逻辑内核 + ImGui 前端（呼出/日志配色/历史/Tab 补全），双后端证据截图 | M-C0~C3：`core/console/` 纯逻辑内核 → ImGui 前端 → RuntimeOption 运行时调参；不依赖场景整合；共享 junction |
