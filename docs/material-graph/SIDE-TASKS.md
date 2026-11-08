@@ -17,3 +17,14 @@
 - **验收形式**：A 类工具版交代——编辑器窗口截图 / 演示（拖节点 → 连线 → 改属性 → 重编译 OK 的完整操作序列），不进渲染回归总闸。
 - **排期建议**：不依赖 B5，随时可开；若与 B5 并行，注意工作线粘性——**新任务 = 同 worktree（`nl-engine-material-graph`）新工作线**，先合一波主干再开干（2026-11-08 用户拍板的合并惯例）。
 - **参考**：MaterialX Graph Editor（imgui-node-editor 用法权威）、UE MaterialEditor（信息架构：图区 + 属性细节面板 + 节点搜索，只读不抄）。
+- **进度**：**T1-M1 ✅**（2026-11-09，`2e60906`）——拆解 1~5 全部落地：`viewer --editor <file.mg>`（经 `HudFrame.editor` 挂入 hud 的 NewFrame..Render 区间，`editor=null` 路径零改动不碰基线）、画布拖拽（读写 `Node.x/y`）、引脚拖拽连线（方向/类型校验）、`ConstantFloat.value` 即时编辑、Save / Compile（`core/material_graph/compile.cpp` emit + slangc 四路）。双后端编译通过，证据 `t1-editor-window.png`。
+  **T1-M2 ✅**（2026-11-09）——右键空白加节点（落鼠标处）/ 右键节点删除 / Del 删节点（级联清边，`removeNode` 已有）/ Ctrl+S 快捷保存 / 新节点类型 **Add** 全链打通（emitter 二值运算泛化 → 编辑器 → 示例图 6 节点 5 边 → b2/b3/b4 ctest 覆盖，生成表达式 `0.2f + (0.8f * 0.5f)` 经 slangc 双后端四路编译）。坑：库对 `size<=0` 回退「占满剩余」，底部状态条须外层包 ImGui host child 预留；`NodeEditor.json` 运行时状态会污染确定性截图，拍摄前须删除。证据 `t1-editor-window.png`（已更新）。
+  **T1-M3 ✅ / 轨道封顶**（2026-11-09，用户拍板「及时收手」）——编辑器定位确定为**调试工具级**（服务引擎开发者调材质/验链路，不追 Blender/MaterialX Editor 级 UX，UI 不再投入）。本轮内容全在**代码生成层**：节点库扩到 **10 种**（+Subtract/Divide/Power/Lerp/OneMinus/Abs/Clamp，Clamp 的 min/max 走属性）；**uniform 曝光**（ConstantFloat 带 `uniform=1` 进 `cbuffer MaterialParams : register(b1)`，编辑器勾选框 + uname 输入；运行时绑定接 PBR 属 B5）；`kitchenSink` 全算子图入 b3 check 真实编译。顺带修掉两个潜伏 bug：① emitter memo 泄漏——上游输出被多条边引用时二次引用把内部 key（`4:6`）写进生成代码（B3 起、示例图单引用未触发）；② 序列化 props 按 `unordered_map` 迭代序写出，多属性节点 roundtrip 不字节一致——改按 key 排序。示例图升级 9 节点 9 边（`lerp(0.2+0.8*0.5, 1-0.2, uTint)`=0.65）。ctest b2/b3/b4 3/3 绿，双后端编译通过。
+  剩余：拆解 6（预览视口，等 B5 / S7）——这是轨道唯一遗留项。
+
+## 轨道终点定义（2026-11-09 封顶拍板）
+
+- **定位**：材质图 = **可调参的表面材质薄层**（与 UE 分层一致：复杂 shader 框架手写 `.slang`，图只覆盖表面参数层的可视化调参 + 像素表达式生成 + 热重载）。复杂 shader（VSM/TSR/indirect 等）与图零关系。
+- **已完成**：B1~B4 主线阶梯 + T1 编辑器（拆解 1~5）+ 节点库 10 种 + uniform 曝光。
+- **不再投入**：编辑器 UI 新功能（undo/redo、搜索调板、缩略图预览等明确不做）；节点库按需增量登记（每种 = emitter 一分支 + 单测 + 配色一行的成本）。
+- **唯一遗留**：T1 拆解 6 预览视口（依赖 B5 / S7）；B5 本体（接 PBR 材质 pass + MaterialParams 运行时绑定）排 S7 后。

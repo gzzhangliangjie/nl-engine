@@ -1,6 +1,7 @@
 #include "hud.hpp"
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
 #include "gpu_timer.hpp"     // M0.6：GpuTimer::selfTest（秒→ms 换算 / 环形游标）
+#include "nl/renderer/editor.hpp"  // T1：材质图编辑器窗口（--editor 时由 HudFrame.editor 挂入）
 
 #include "nl/core/log.hpp"
 
@@ -355,6 +356,8 @@ void Hud::build(HudFrame& frame) {
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();
+    // T1：材质图编辑器窗口（--editor 时 viewer 挂入；null = 完全不画，既有基线不动）。
+    if (frame.editor) frame.editor->drawWindow();
     ImGui::Render();
 
     frame.wantCaptureMouse = io.WantCaptureMouse;

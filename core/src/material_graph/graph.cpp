@@ -111,6 +111,14 @@ bool MaterialGraph::setProp(int node, std::string key, std::string value) {
     return true;
 }
 
+bool MaterialGraph::setNodePos(int node, float x, float y) {
+    Node* n = const_cast<Node*>(findNode(node));
+    if (!n) return false;
+    n->x = x;
+    n->y = y;
+    return true;
+}
+
 bool MaterialGraph::removeNode(int node) {
     auto it = std::find_if(nodes_.begin(), nodes_.end(),
                            [node](const Node& n) { return n.id == node; });
@@ -198,9 +206,14 @@ bool MaterialGraph::serialize(std::ostream& os) const {
     }
     os << "# props\n";
     for (const auto& n : nodes_) {
-        for (const auto& kv : n.props) {
-            os << "prop " << n.id << ' ' << kv.first << ' ' << kv.second << '\n';
-        }
+        // props 是 unordered_map，迭代顺序不定——按 key 排序写出，保证 roundtrip
+        // 字节一致（多属性节点如 uniform/uname/value 必须有确定顺序）。
+        std::vector<std::string> keys;
+        keys.reserve(n.props.size());
+        for (const auto& kv : n.props) keys.push_back(kv.first);
+        std::sort(keys.begin(), keys.end());
+        for (const auto& k : keys)
+            os << "prop " << n.id << ' ' << k << ' ' << n.props.at(k) << '\n';
     }
     os << "# edges\n";
     for (const auto& e : edges_) {

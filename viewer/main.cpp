@@ -4,6 +4,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
+#include "nl/renderer/editor.hpp"
 #include "nl/renderer/renderer.hpp"
 
 #include <algorithm>
@@ -93,6 +94,7 @@ struct Options {
     std::string screenshotPath;
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
+    std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
     int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
@@ -150,6 +152,10 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
             o.modelSet = true;
+        }
+        else if (a == "--editor" && i + 1 < argc) {
+            // T1：材质图编辑器（material_graph v1 文本文件）。
+            o.editorGraph = argv[++i];
         }
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
@@ -329,6 +335,24 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         return 1;
     }
 
+    // T1：--editor <file.mg> 挂材质图编辑器。复用当前场景模式做背景（缺省 normal），
+    // 编辑器窗口经 HudFrame.editor 挂入 hud 的 NewFrame..Render 区间——ImGui 符号
+    // 全在 renderer/ 内，viewer 只持指针。编辑器需要 ImGui 路径，强制开 HUD。
+    std::unique_ptr<nl::renderer::NodeEditor> editor;
+    bool editorActive = false;
+    if (!o.editorGraph.empty()) {
+        std::string err;
+        editor = nl::renderer::NodeEditor::create(o.editorGraph.c_str(), &err);
+        if (!editor->valid()) {
+            nl::core::log::error("--editor: ", err);
+            return 1;
+        }
+        editorActive = true;
+        nl::core::log::info("editor: ", o.editorGraph, " (", editor->graphPath(), ")");
+    }
+    // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
+    const bool hudOn = o.hudEnabled || editorActive;
+
     // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
     // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
     // N 越界都直接退出 1，不静默回退到最细层——否则「以为在看 L3」是假证据。
@@ -426,7 +450,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             : " | no drill (" + std::to_string(dagGroupCount) + " groups available)";
     }
     nl::core::log::info("mode: ", nl::core::modeName(o.mode),
-                        " | HUD: ", o.hudEnabled ? "on" : "off",
+                        " | HUD: ", hudOn ? "on" : "off",
                         " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
                         lodLine, dagLine,
                         " | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG");
@@ -440,7 +464,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
                             std::filesystem::absolute(o.screenshotPath).string(),
                             " | cull=", cullBack ? "back" : "none",
-                            " | hud=", o.hudEnabled ? "on" : "off");
+                            " | hud=", hudOn ? "on" : "off");
     }
 
     using clock = std::chrono::steady_clock;
@@ -566,7 +590,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
         nl::renderer::HudFrame hud{};
-        if (o.hudEnabled) {
+        if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
+        if (hudOn) {
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
             hud.displayHeight = static_cast<float>(e.height);
@@ -665,14 +690,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   o.hudEnabled ? &hud : nullptr)) {
+                                   hudOn ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
         // M0.6：renderFrame 之后 renderer 可能已把最新 GPU 计时写回 hud.gpuMs，追加进曲线。
-        if (o.hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
+        if (hudOn && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
             if (gpuHistoryCount < 120) {
                 gpuHistory[gpuHistoryCount++] = hud.gpuMs;
             } else {
@@ -681,7 +706,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
         // M4.2：cull pass 计时同一条追加路（cullTimingAvailable 只在 cull 模式置位）。
-        if (o.hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
+        if (hudOn && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
             if (cullHistoryCount < 120) {
                 cullHistory[cullHistoryCount++] = hud.cullMs;
             } else {
@@ -689,7 +714,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (o.hudEnabled) {
+        if (hudOn) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
@@ -760,7 +785,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             std::ostringstream title;
             title << "nl-engine | " << stagePrefix << " | " << st.backend
                   << " | mode " << nl::core::modeName(o.mode)
-                  << " | HUD " << (o.hudEnabled ? "on" : "off")
+                  << " | HUD " << (hudOn ? "on" : "off")
                   << " | frame " << frame
                   << " | " << std::fixed << std::setprecision(1) << dtMs << " ms"
                   << " | yaw " << std::setprecision(1) << camera.yawDegrees()
@@ -856,6 +881,8 @@ void printUsage() {
               << "                                     the HUD slider switches groups at runtime\n"
               << "  viewer.exe --hud / --no-hud        force ImGui HUD on/off (window default on,\n"
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
+              << "  viewer.exe --editor <file.mg>      material graph editor window (T1); forces HUD on,\n"
+              << "                                     scene background = current --mode (default normal)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
     for (int i = 0; i < nl::core::modeCount(); ++i) {
         if (i) std::cout << ", ";

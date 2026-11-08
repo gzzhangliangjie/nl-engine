@@ -1065,3 +1065,15 @@
 5. 「selftest skeleton + CesiumMan FAIL」虚惊：该用例约定 3 骨合成资产 RiggedChain.glb，传 Khronos 资产属用错参数非回归。
 
 **下一步**：M-A 轨道收口（merge 回 master 走 PARALLEL-TRACKS §7 文档闸）；GPU 调色板（shader 端 palette UB）等更大规模蒙皮资产再立项。
+
+## T1 材质图可视化编辑器（A 类并行轨道支线，feat/material-graph，2026-11-08~09）
+
+> 终点定义与拆解：`docs/material-graph/SIDE-TASKS.md`（2026-11-09 用户拍板「及时收手」封顶）。
+
+**动作**：T1-M1 交互式节点编辑器落地（imgui-node-editor v0.9.4 vendored；viewer `--editor <file.mg>` 经 HudFrame.editor 挂入 hud NewFrame..Render 区间，不碰 ViewMode/kStage；画布拖拽/连线/属性编辑/Save/Compile 全套）；T1-M2 细化（右键增删节点、Del 级联删、Ctrl+S、Add 节点全链示范扩库路径、底部状态条）；T1-M3 封顶版（节点库扩到 10 种 + uniform 曝光 MaterialParams cbuffer b1 + kitchenSink 全算子图入 b3 真实编译）。
+
+**提交版本**：feat/material-graph `2e60906`(M1) / `15ce08c`(M2) / `40d5704`(M3 封顶)
+
+**完成情况**：DX12+Vulkan 双后端编译通过；ctest b2/b3/b4 全绿（M3 后复验 3/3，含 kitchenSink 双图 slangc SPIR-V/DXIL×vs/ps 四路真实编译）；证据图 t1-editor-window.png / b3-nodegraph.{svg,png}（GPU 回读/工具真实输出，非手绘）；editor=null 路径零改动既有基线不受影响。封顶定位：调试工具级，UI 不再加功能；唯一遗留 = 拆解 6 预览视口（等 B5/S7）。
+
+**踩坑情况**：① imgui-node-editor v0.9.4 API 是 PinKind（新版才叫 PinDirection）；② 库对 size<=0 回退「占满剩余」，底部状态条须外层包 ImGui host child 预留；③ NodeEditor.json 运行时状态污染确定性截图，拍摄前 rm；④ 本机 SDK 的 wrl/client.h 在 Include\<ver>\winrt 下（构建脚本 INCLUDE 补 winrt）；⑤ emitter memo 泄漏——上游多边引用把 visited key 写进生成代码（B3 潜伏雷，改 key→expr 记忆化）；⑥ props 按 unordered_map 迭代序写出致 roundtrip 非字节一致（改 key 排序）。

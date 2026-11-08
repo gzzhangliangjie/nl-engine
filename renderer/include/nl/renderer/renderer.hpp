@@ -124,6 +124,9 @@ struct HudFrame {
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
     float cutThresholdPx   = 1.0f;    // cut 阈值 px（双向；M5.1 GPU 遍历消费）
+    // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
+    // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
+    class NodeEditor* editor = nullptr;
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。

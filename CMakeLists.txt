@@ -97,6 +97,17 @@ add_library(nl_imgui STATIC
 )
 target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 
+# ---- T1：imgui-node-editor v0.9.4 vendored（MIT，MaterialX Graph Editor 同款节点 UI）----
+# 只收库本体源码；依赖 nl_imgui（v1.91.9）。
+add_library(nl_imgui_node_editor STATIC
+    thirdparty/imgui-node-editor/imgui_node_editor.cpp
+    thirdparty/imgui-node-editor/imgui_node_editor_api.cpp
+    thirdparty/imgui-node-editor/imgui_canvas.cpp
+    thirdparty/imgui-node-editor/crude_json.cpp
+)
+target_include_directories(nl_imgui_node_editor PUBLIC ${THIRDPARTY}/imgui-node-editor)
+target_link_libraries(nl_imgui_node_editor PUBLIC nl_imgui)
+
 # ---- M2.0：METIS vendored（簇聚组图分割，nanite-tools 离线管线用）----
 add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 
@@ -128,6 +139,7 @@ add_library(nl_core STATIC
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
+    core/src/material_graph/compile.cpp # T1：图编译验收（emit + slangc 四路，纯进程调用）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
@@ -141,6 +153,7 @@ add_library(nl_renderer STATIC
     renderer/src/png_writer.cpp
     renderer/src/scene.cpp
     renderer/src/hud.cpp
+    renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -149,7 +162,7 @@ target_include_directories(nl_renderer
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
 )
-target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui)
+target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui nl_imgui_node_editor)
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
     NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"

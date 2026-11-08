@@ -28,3 +28,4 @@ Desktop.ini
 
 # Windows 保留名误产生的 0 字节幻影文件（git 无法 add，也不该入库）
 /nul
+NodeEditor.json
