@@ -63,6 +63,7 @@
 
 ## 并行轨道纪律（2026-11-08 用户拍板）
 - 固定 `feat/*` 分支 + 常驻 worktree 模式（已建 `feat/job-system` / `feat/material-graph` / `feat/action-system`）。**新轨道 = 新 `feat/*` 分支 + 新 worktree**（如本次 Slang 可视化编辑器）。
+- **材质图轨道已封顶（2026-11-09 用户拍板「及时收手」）**：B1~B4 + T1 编辑器（调试工具级 `viewer --editor`）+ 节点库 10 种 + uniform 曝光（MaterialParams b1，运行时绑定留 B5）全部完成；定位=可调参表面材质薄层，UI 不再投入，复杂 shader 手写与图无关。唯一遗留=T1 拆解 6 预览视口（等 B5/S7）；B5 也排 S7 后。终点定义见 `docs/material-graph/SIDE-TASKS.md`。
 - 三 worktree 均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree` 防纪律源误入 feature 分支（git status 干净）。
 - 纪律三条（详 `docs/PARALLEL-TRACKS.md` §7）：① 实例注册表登记占用说明；② 固化文档闸（merge 回 master 前必写 `S*-PLAN`/`MILESTONES` 验收纪要）；③ 假绿防护（占坑≠文件指向，merge 前双向 `git status` 自查：wt 看得到、master 没有）。
 - 工作线粘性：同一轨道回同一 worktree；一条工作线只 merge 一次（验收 FAIL→补丁→复验在占坑内闭环）。
