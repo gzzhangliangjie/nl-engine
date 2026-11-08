@@ -209,12 +209,16 @@ set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscul
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")
+# M5.1：dag.slang 单 compute 入口（DAG 遍历选层，显式栈）。
+set(_ENTRIES_DAG "csDag|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
         set(_ENTRIES "${_ENTRIES_MODEL}")
     elseif(_SRC_NAME STREQUAL "cull")
         set(_ENTRIES "${_ENTRIES_CULL}")
+    elseif(_SRC_NAME STREQUAL "dag")
+        set(_ENTRIES "${_ENTRIES_DAG}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()

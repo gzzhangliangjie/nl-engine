@@ -15,11 +15,11 @@
 
 ## M5.1 compute DAG 遍历（2~3 天，本步核心）
 
-- [ ] 遍历策略起步用**简单版**：compute 每线程持一个显式栈（局部数组），从根组出发：簇屏幕误差 ≤ 阈值 → 写 indirect 命令；否则把子簇压栈
-- [ ] 栈溢出保护：超出深度直接画当前簇（宁粗勿漏）
-- [ ] 数据布局：DAG 组/子引用做成 GPU 可索引的扁平数组（S3 的 v2 格式在此兑现）
+- [x] 遍历策略起步用**简单版**：compute 每线程持一个显式栈（局部数组），从根组出发：簇屏幕误差 ≤ 阈值 → 写 indirect 命令；否则把子簇压栈（`renderer/shaders/dag.slang`；成员 CSR 拍平——lod0 实测成员方向不连续，不能断言区间；D3a 与 bevy 全局队列的差异记 UE-DIFFS）
+- [x] 栈溢出保护：超出深度直接画当前簇（宁粗勿漏）；组重复下钻用 `dagGroupExpanded_` + `InterlockedExchange` 声标志去重（同组多个同误差父簇全失败会重复压成员，实测 54923 emits 放大）
+- [x] 数据布局：DAG 组/子引用做成 GPU 可索引的扁平数组（S3 的 v2 格式在此兑现）：全层拼接 vertexPool/localIndices/clusterMeta + 逐簇 error/level/genGroup SSBO + 组记录 float4×2；DagConstants 独立 volatile CB 48B，不动 SceneConstants 160B 契约
 
-**自检**：`--mode dag`：近看画面 ≈ 全分辨率原模型；拉远逐步变粗但**形状始终正确无洞**。tag：`s5-traverse`。
+**自检（2026-11-08 实测通过）**：`--mode dag` 选层谱单调（dist 20，thr 4/8/16/32/64 → 230/106/14/7/3 簇）；**全细节等价**：`--cut-thr 0.001` 与 `--mode cull --frustum off` 同机位逐字节相等（md5 f0b5db63，双后端各自成立且 dag 图跨后端也逐字节相等）；视觉验收 thr=8/16 无洞无裂缝；回归 s4.0/s5.0/s3.2/s4.1 + 新卡 s5.1 全 bytes。tag：`s5-traverse`（踩坑见 MILESTONES M5.1 纪要）。
 
 ⚠️ 常见坑：
 - **洞**的来源几乎都是：父簇被画时其子簇区域本应被父覆盖、但父简化时边界没对齐——回到 S2 检查边界锁，别在遍历侧修

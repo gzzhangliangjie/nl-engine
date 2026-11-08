@@ -433,6 +433,11 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!makeSsbo("CullClusterSpheres",
                       static_cast<std::uint32_t>(clusterSpheres.size() * sizeof(float)), clusterSpheres_))
             { outError = "createBuffer failed for cull cluster spheres"; return false; }
+    }
+    // M5.1 修潜伏 bug：visibleList 恒创建恒绑定。M4.1 起布局无条件声明 t4，但 set
+    // 只在 frustum on 时绑 → --frustum off 一直 init 失败（viewer 默认 on，从未被
+    // 用例踩到）。frustum off 时列表内容 = 恒等映射，VS 寻址与 M4.0 直通等价。
+    {
         nvrhi::BufferDesc vlDesc;
         vlDesc.byteSize = clusterCount * sizeof(std::uint32_t);
         vlDesc.structStride = 4;
@@ -497,8 +502,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_));
-    if (frustumCull_)
-        setDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
+    // M5.1：t4 恒绑定（见上方 visibleList 恒创建的注释）。
+    setDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
     cullBindingSet_ = device->createBindingSet(setDesc, cullBindingLayout_);
     if (!cullBindingSet_) { outError = "createBindingSet failed for cull"; return false; }
 
@@ -582,7 +587,9 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->writeBuffer(clusterSpheres_, clusterSpheres.data(),
                             clusterSpheres.size() * sizeof(float));
         upload->setPermanentBufferState(clusterSpheres_, nvrhi::ResourceStates::ShaderResource);
-
+    }
+    // M5.1：恒等列表恒上传——frustum off 时 VS 经它直通（M4.0 语义）。
+    {
         std::vector<std::uint32_t> identityClusters(clusterCount);
         for (std::uint32_t i = 0; i < clusterCount; ++i) identityClusters[i] = i;
         // M4.1：可见列表不钉 permanent 态——同一帧内 compute 写 UAV、VS 读 SRV、
@@ -633,6 +640,467 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                         " | triangles=", triangleCount_,
                         " | stride=", stride,
                         " | frustum=", frustumCull_ ? "on (compute cull pass)" : "off",
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
+// M5.1（S5.1）：GPU DAG 遍历选层场景。声明见 scene.hpp。
+// 图形侧与 M4.0/4.1 同构（SSBO vertex pulling + 可见列表 + indirect draw，vsCull/psCull
+// 原样复用——多层拼接 meta 已重定基，VS 寻址 clusterId*4 不变），差异只在：
+//   1) 数据 = 全部 .lodN.nmesh 层拼接（vertexBase/localBase 重定基）；
+//   2) 新增 DAG 拍平 SSBO（误差/层级/生成组/组成员 CSR）；
+//   3) compute 换 dag.slang csDag（显式栈遍历，输出仍是 u0/u1 同一接口）。
+// 刻意不复用 initCull 的资源（M4 路径冻结保回归），样板代码重复是已接受的代价。
+bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
+                    const char* vsEntry, const char* psEntry,
+                    const char* nmeshFile, std::string& outError) {
+    frustumCull_ = true;          // 复用 M4 的 indirect + 计时 + 回读路径开关
+    cullTimer_.setLabel("dag");   // resolve 日志标明这是 dag 遍历实例
+
+    // ---- 1. shader：vsCull/psCull 与 M4 同一份；compute 读 dag.cs.<suffix> ----
+    auto shaderPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(shaderPath("vscull").c_str(), vsBlob) ||
+        !readFileBytes(shaderPath("pscull").c_str(), psBlob)) {
+        outError = std::string("failed to load cull shaders (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName(vsEntry);
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName(psEntry);
+    vsCull_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    psCull_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vsCull_ || !psCull_) { outError = "createShader failed for dag graphics shaders"; return false; }
+
+    // ---- 2. 逐层加载 + 拍平拼接 ----
+    std::string stem(nmeshFile ? nmeshFile : "");
+    const std::string ext = ".nmesh";
+    if (stem.size() < ext.size() ||
+        stem.compare(stem.size() - ext.size(), ext.size(), ext) != 0) {
+        outError = std::string("dag scene expects a .nmesh file, got '") + stem + "'";
+        return false;
+    }
+    stem.resize(stem.size() - ext.size());
+
+    constexpr int kMaxLevels = 16;
+    std::vector<nl::core::NMeshData> levels;
+    for (int L = 0; L < kMaxLevels; ++L) {
+        const std::string path = std::string(NL_MESHLET_DIR "/") + stem + ".lod" +
+                                 std::to_string(L) + ".nmesh";
+        nl::core::NMeshData nm;
+        std::string err;
+        if (!nl::core::loadNMesh(path.c_str(), nm, err)) break;   // 连续层到此为止
+        if (nm.meshlets.empty() || nm.triangles.empty()) break;
+        levels.push_back(std::move(nm));
+    }
+    if (levels.size() < 2) {
+        outError = "dag scene needs >= 2 consecutive <stem>.lodN.nmesh levels under " NL_MESHLET_DIR;
+        return false;
+    }
+    for (std::size_t L = 0; L < levels.size(); ++L) {
+        if (!levels[L].lodMeta.dagPresent || levels[L].lodMeta.clusterGroup.size() !=
+                                             levels[L].meshlets.size()) {
+            outError = stem + ".lod" + std::to_string(L) +
+                       ".nmesh has no DAG lineage (meta version 2 required)";
+            return false;
+        }
+    }
+    const std::uint32_t dagLevelCount = static_cast<std::uint32_t>(levels.size());
+
+    // 拼接目标数组（M4.0 同布局；vertexBase 重定基，vsCull 寻址不变；
+    // localBase 逐簇取 localIndices.size()，天然就是全局地址，无需额外重定基）。
+    std::vector<float>         vertexPool;
+    std::vector<std::uint32_t> localIndices, clusterMeta;
+    std::vector<float>         clusterSpheresF, clusterErrorsF;
+    std::vector<float>         groupsF;          // 每组 2×float4：(cx,cy,cz,r),(err,first,count,0)
+    std::vector<std::uint32_t> membersF, genGroupF, levelF;
+    std::uint32_t gvBase = 0, gcBase = 0, ggBase = 0;
+    std::uint32_t maxTriCount = 0, finestTri = 0;
+    std::vector<std::uint32_t> levelClusterCount;
+
+    for (std::uint32_t L = 0; L < dagLevelCount; ++L) {
+        const auto& nm = levels[L];
+        const std::uint32_t lc = static_cast<std::uint32_t>(nm.meshlets.size());
+        levelClusterCount.push_back(lc);
+
+        for (std::uint32_t c = 0; c < lc; ++c) {
+            const auto& meshlet = nm.meshlets[c];
+            if (meshlet.triangleCount > maxTriCount) maxTriCount = meshlet.triangleCount;
+            const std::uint32_t localBase = static_cast<std::uint32_t>(localIndices.size());
+            const std::uint32_t base = meshlet.triangleOffset;
+            for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t)
+                for (int k = 0; k < 3; ++k)
+                    localIndices.push_back(nm.triangles[base + t * 3 +
+                                                        static_cast<std::uint32_t>(k)]);
+            clusterMeta.push_back(meshlet.vertexOffset + gvBase);
+            clusterMeta.push_back(meshlet.triangleCount);
+            clusterMeta.push_back(localBase);
+            clusterMeta.push_back(0);
+            const auto& b = nm.bounds[c];
+            clusterSpheresF.insert(clusterSpheresF.end(), {b.sphere[0], b.sphere[1],
+                                                           b.sphere[2], b.sphere[3]});
+            clusterErrorsF.push_back(b.error);
+            levelF.push_back(L);
+        }
+        for (const auto& mv : nm.vertices) {
+            vertexPool.insert(vertexPool.end(),
+                              {mv.pos[0], mv.pos[1], mv.pos[2],
+                               mv.normal[0], mv.normal[1], mv.normal[2],
+                               mv.uv[0], mv.uv[1]});
+        }
+
+        // 组记录 + 成员 CSR。成员方向不保证连续（2026-11-08 资产实测 lod0 全部
+        // 31 组非连续），所以拍成显式列表而非区间——bevy cull_bvh 节点同样显式存
+        // child_offset+count，同因。
+        for (std::uint32_t g = 0; g < nm.lodMeta.dagGroups.size(); ++g) {
+            const auto& dg = nm.lodMeta.dagGroups[g];
+            groupsF.insert(groupsF.end(), {dg.sphere[0], dg.sphere[1], dg.sphere[2], dg.sphere[3]});
+            const std::uint32_t memberFirst = static_cast<std::uint32_t>(membersF.size());
+            std::uint32_t memberCount = 0;
+            for (std::uint32_t c = 0; c < lc; ++c) {
+                if (nm.lodMeta.clusterGroup[c] == g) {
+                    membersF.push_back(gcBase + c);
+                    ++memberCount;
+                }
+            }
+            // first/count 打包进 float：全局值 < 2^24，float 精确无损（324 量级）。
+            groupsF.insert(groupsF.end(),
+                           {dg.error, static_cast<float>(memberFirst),
+                            static_cast<float>(memberCount), 0.f});
+        }
+
+        // 生成方向区间反转：level L 的组（genFirst/genCount 指 L+1 层局部簇号，
+        // 不变量实测：恰一生成组、无重叠无遗漏）→ L+1 层每簇的生成组（全局组号）。
+        if (L + 1 < dagLevelCount) {
+            const std::uint32_t nextBase = gcBase + lc;
+            for (std::uint32_t g = 0; g < nm.lodMeta.dagGroups.size(); ++g) {
+                const auto& dg = nm.lodMeta.dagGroups[g];
+                for (std::uint32_t c = 0; c < dg.genCount; ++c) {
+                    const std::uint32_t globalC = nextBase + dg.genFirst + c;
+                    if (genGroupF.size() <= globalC) genGroupF.resize(globalC + 1, 0);
+                    genGroupF[globalC] = ggBase + g;
+                }
+            }
+        }
+        if (L == 0)
+            for (const auto& m : nm.meshlets) finestTri += m.triangleCount;
+
+        gvBase += static_cast<std::uint32_t>(nm.vertices.size());
+        gcBase += lc;
+        ggBase += static_cast<std::uint32_t>(nm.lodMeta.dagGroups.size());
+    }
+    genGroupF.resize(gcBase, 0);   // 叶层/未写项补 0（遍历只读有父簇的项）
+    if (genGroupF.size() != gcBase) { outError = "dag: genGroup size mismatch"; return false; }
+
+    const std::uint32_t totalClusters = gcBase;
+    const std::uint32_t stride = maxTriCount * 3;   // identity 索引缓冲长度
+    const std::uint32_t groupTotal = ggBase;
+
+    // ---- 3. 建 GPU 资源：图形侧与 initCull 同构（M4.0 样板），DAG 侧另加 ----
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(SceneConstants);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "SceneConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
+
+    nvrhi::BufferDesc dcbDesc = cbDesc;
+    dcbDesc.byteSize = 48;   // 3×float4：DagConstants（dag.slang b0）
+    dcbDesc.debugName = "DagConstants";
+    dagConstants_ = device->createBuffer(dcbDesc);
+    if (!dagConstants_) { outError = "createBuffer failed for dag constants"; return false; }
+
+    nvrhi::TextureDesc texDesc;
+    texDesc.width = 1; texDesc.height = 1;
+    texDesc.format = nvrhi::Format::RGBA8_UNORM;
+    texDesc.debugName = "DagWhite1x1";
+    texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    texDesc.keepInitialState = true;
+    texture_ = device->createTexture(texDesc);
+    if (!texture_) { outError = "createTexture failed for dag dummy texture"; return false; }
+
+    nvrhi::SamplerDesc samplerDesc;
+    samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+    sampler_ = device->createSampler(samplerDesc);
+    if (!sampler_) { outError = "createSampler failed"; return false; }
+
+    auto makeSsbo = [&](const char* name, std::uint32_t byteSize, nvrhi::BufferHandle& out) {
+        nvrhi::BufferDesc d;
+        d.byteSize = byteSize;
+        d.structStride = 4;
+        d.debugName = name;
+        out = device->createBuffer(d);
+        return out != nullptr;
+    };
+    if (!makeSsbo("DagVertexPool",
+                  static_cast<std::uint32_t>(vertexPool.size() * sizeof(float)), vertexPool_))
+        { outError = "createBuffer failed for dag vertex pool"; return false; }
+    if (!makeSsbo("DagLocalIndices",
+                  static_cast<std::uint32_t>(localIndices.size() * sizeof(std::uint32_t)), localIndices_))
+        { outError = "createBuffer failed for dag local indices"; return false; }
+    if (!makeSsbo("DagClusterMeta",
+                  static_cast<std::uint32_t>(clusterMeta.size() * sizeof(std::uint32_t)), clusterMeta_))
+        { outError = "createBuffer failed for dag cluster meta"; return false; }
+    if (!makeSsbo("DagClusterSpheres",
+                  static_cast<std::uint32_t>(clusterSpheresF.size() * sizeof(float)), clusterSpheres_))
+        { outError = "createBuffer failed for dag cluster spheres"; return false; }
+    if (!makeSsbo("DagClusterErrors",
+                  static_cast<std::uint32_t>(clusterErrorsF.size() * sizeof(float)), dagClusterErrors_))
+        { outError = "createBuffer failed for dag cluster errors"; return false; }
+    if (!makeSsbo("DagGroups",
+                  static_cast<std::uint32_t>(groupsF.size() * sizeof(float)), dagGroups_))
+        { outError = "createBuffer failed for dag groups"; return false; }
+    if (!makeSsbo("DagMembers",
+                  static_cast<std::uint32_t>(membersF.size() * sizeof(std::uint32_t)), dagMembers_))
+        { outError = "createBuffer failed for dag members"; return false; }
+    if (!makeSsbo("DagGenGroup",
+                  static_cast<std::uint32_t>(genGroupF.size() * sizeof(std::uint32_t)), dagGenGroup_))
+        { outError = "createBuffer failed for dag gen group"; return false; }
+    if (!makeSsbo("DagClusterLevel",
+                  static_cast<std::uint32_t>(levelF.size() * sizeof(std::uint32_t)), dagClusterLevel_))
+        { outError = "createBuffer failed for dag cluster level"; return false; }
+    // 组展开声明标志：每帧 writeBuffer(CopyDest) 清零 → compute UAV(atomicExchange)，
+    // 状态由 NVRHI 动态跟踪插转换（visibleList 同款三态纪律）。
+    {
+        nvrhi::BufferDesc exDesc;
+        exDesc.byteSize = groupTotal * sizeof(std::uint32_t);
+        exDesc.structStride = 4;
+        exDesc.canHaveUAVs = true;
+        exDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        exDesc.keepInitialState = true;
+        exDesc.debugName = "DagGroupExpanded";
+        dagGroupExpanded_ = device->createBuffer(exDesc);
+    }
+    if (!dagGroupExpanded_) { outError = "createBuffer failed for dag group expanded"; return false; }
+
+    // 可见列表：容量 = 全层簇总和（不变量：每簇至多被 emit 一次，不可能越界）。
+    nvrhi::BufferDesc vlDesc;
+    vlDesc.byteSize = totalClusters * sizeof(std::uint32_t);
+    vlDesc.structStride = 4;
+    vlDesc.canHaveUAVs = true;
+    vlDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    vlDesc.keepInitialState = true;
+    vlDesc.debugName = "DagVisibleList";
+    visibleList_ = device->createBuffer(vlDesc);
+    if (!visibleList_) { outError = "createBuffer failed for dag visible list"; return false; }
+
+    nvrhi::BufferDesc iaDesc;
+    iaDesc.byteSize = sizeof(nvrhi::DrawIndexedIndirectArguments);
+    iaDesc.isDrawIndirectArgs = true;
+    iaDesc.structStride = 4;
+    iaDesc.canHaveUAVs = true;
+    iaDesc.debugName = "DagIndirectArgs";
+    iaDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    iaDesc.keepInitialState = true;    // 同帧三态轮转（M4.1 同款）
+    indirectArgs_ = device->createBuffer(iaDesc);
+    if (!indirectArgs_) { outError = "createBuffer failed for dag indirect args"; return false; }
+
+    std::vector<std::uint32_t> identity(stride);
+    for (std::uint32_t i = 0; i < stride; ++i) identity[i] = i;
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = identity.size() * sizeof(std::uint32_t);
+    ibDesc.isIndexBuffer = true;
+    ibDesc.debugName = "DagIdentityIndex";
+    ibDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    identityIndex_ = device->createBuffer(ibDesc);
+    if (!identityIndex_) { outError = "createBuffer failed for dag identity index"; return false; }
+
+    // 图形绑定（t0 贴图 + s0 sampler + b0 常量 + t1/t2/t3 SSBO + t4 可见列表）——M4 同构。
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4));
+    cullBindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!cullBindingLayout_) { outError = "createBindingLayout failed for dag"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
+    cullBindingSet_ = device->createBindingSet(setDesc, cullBindingLayout_);
+    if (!cullBindingSet_) { outError = "createBindingSet failed for dag"; return false; }
+
+    // DAG 遍历 compute 绑定（dag.slang 寄存器一一对应）：
+    //   b0 DagConstants / t1 spheres / t2 errors / t3 groups / t4 members /
+    //   t5 genGroup / t6 levels / u0 visibleList / u1 args。
+    nvrhi::BindingLayoutDesc dLayoutDesc;
+    dLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2));
+    dagComputeLayout_ = device->createBindingLayout(dLayoutDesc);
+    if (!dagComputeLayout_) { outError = "createBindingLayout failed for dag compute"; return false; }
+
+    nvrhi::BindingSetDesc dSetDesc;
+    dSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, dagConstants_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterSpheres_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, dagClusterErrors_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, dagGroups_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, dagMembers_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, dagGenGroup_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, dagClusterLevel_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_));
+    dagComputeSet_ = device->createBindingSet(dSetDesc, dagComputeLayout_);
+    if (!dagComputeSet_) { outError = "createBindingSet failed for dag compute"; return false; }
+
+    {
+        auto dagShaderPath = [shaderSuffix](const char* artifact) {
+            return std::string(NL_SHADER_DIR) + "/dag." + artifact + "." + shaderSuffix;
+        };
+        std::vector<std::uint8_t> csBlob;
+        if (!readFileBytes(dagShaderPath("cs").c_str(), csBlob)) {
+            outError = std::string("failed to load dag compute shader (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc csDesc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略（§2.4 两阶段规则，M4.1 同款）。
+        csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        csDag_ = device->createShader(csDesc, csBlob.data(), csBlob.size());
+        if (!csDag_) { outError = "createShader failed for dag compute"; return false; }
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csDag_).addBindingLayout(dagComputeLayout_);
+        dagComputePSO_ = device->createComputePipeline(cpDesc);
+        if (!dagComputePSO_) { outError = "createComputePipeline failed for dag"; return false; }
+    }
+
+    // instanceCount 回读环形（M4.1 同款，dag 遍历同样每帧回读）。
+    for (auto& rb : cullReadback_) {
+        nvrhi::BufferDesc rDesc;
+        rDesc.byteSize = sizeof(std::uint32_t);
+        rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        rDesc.debugName = "DagCountReadback";
+        rb = device->createBuffer(rDesc);
+        if (!rb) { outError = "createBuffer failed for dag readback"; return false; }
+    }
+
+    // ---- 4. 一次性上传（M4.0 同款状态纪律）----
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    const std::uint8_t white[4] = { 255, 255, 255, 255 };
+    upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+
+    upload->beginTrackingBufferState(vertexPool_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(vertexPool_, vertexPool.data(), vertexPool.size() * sizeof(float));
+    upload->setPermanentBufferState(vertexPool_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(localIndices_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(localIndices_, localIndices.data(), localIndices.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(localIndices_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(clusterMeta_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(clusterMeta_, clusterMeta.data(), clusterMeta.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(clusterMeta_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(clusterSpheres_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(clusterSpheres_, clusterSpheresF.data(),
+                        clusterSpheresF.size() * sizeof(float));
+    upload->setPermanentBufferState(clusterSpheres_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(dagClusterErrors_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagClusterErrors_, clusterErrorsF.data(),
+                        clusterErrorsF.size() * sizeof(float));
+    upload->setPermanentBufferState(dagClusterErrors_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(dagGroups_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagGroups_, groupsF.data(), groupsF.size() * sizeof(float));
+    upload->setPermanentBufferState(dagGroups_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(dagMembers_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagMembers_, membersF.data(), membersF.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(dagMembers_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(dagGenGroup_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagGenGroup_, genGroupF.data(), genGroupF.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(dagGenGroup_, nvrhi::ResourceStates::ShaderResource);
+    upload->beginTrackingBufferState(dagClusterLevel_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagClusterLevel_, levelF.data(), levelF.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(dagClusterLevel_, nvrhi::ResourceStates::ShaderResource);
+    std::vector<std::uint32_t> expandedZeros(groupTotal, 0);
+    upload->beginTrackingBufferState(dagGroupExpanded_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(dagGroupExpanded_, expandedZeros.data(), expandedZeros.size() * sizeof(std::uint32_t));
+
+    std::vector<std::uint32_t> identityClusters(totalClusters);
+    for (std::uint32_t i = 0; i < totalClusters; ++i) identityClusters[i] = i;
+    upload->beginTrackingBufferState(visibleList_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(visibleList_, identityClusters.data(),
+                        identityClusters.size() * sizeof(std::uint32_t));
+
+    nvrhi::DrawIndexedIndirectArguments args;
+    args.setIndexCount(stride)
+        .setInstanceCount(0u)
+        .setStartIndexLocation(0)
+        .setBaseVertexLocation(0)
+        .setStartInstanceLocation(0);
+    cullArgsReset_ = args;   // dag 遍历每帧同款重写（instanceCount 由 GPU atomicAdd 重建）
+    upload->beginTrackingBufferState(indirectArgs_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(indirectArgs_, &args, sizeof(args));
+    for (auto& rb : cullReadback_) {
+        upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
+        upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+    }
+
+    upload->beginTrackingBufferState(identityIndex_, nvrhi::ResourceStates::CopyDest);
+    upload->writeBuffer(identityIndex_, identity.data(), identity.size() * sizeof(std::uint32_t));
+    upload->setPermanentBufferState(identityIndex_, nvrhi::ResourceStates::IndexBuffer);
+    upload->close();
+    device->executeCommandList(upload);
+
+    // ---- 5. 状态落位 ----
+    cull_ = true;
+    dag_ = true;
+    clusterCount_ = totalClusters;
+    dagRootCount_ = levelClusterCount.back();
+    dagLevelCount_ = dagLevelCount;
+    dagGroupCount_ = groupTotal;
+    modelName_ = nmeshFile;
+    triangleCount_ = finestTri;
+    // M5.0 投影球：dag 模式给最粗层联合球（HUD s5 err 行的数据源口径不变）。
+    {
+        const auto& top = levels.back();
+        float minx = 1e30f, miny = 1e30f, minz = 1e30f;
+        float maxx = -1e30f, maxy = -1e30f, maxz = -1e30f;
+        for (const auto& mv : top.vertices) {
+            minx = std::min(minx, mv.pos[0]); maxx = std::max(maxx, mv.pos[0]);
+            miny = std::min(miny, mv.pos[1]); maxy = std::max(maxy, mv.pos[1]);
+            minz = std::min(minz, mv.pos[2]); maxz = std::max(maxz, mv.pos[2]);
+        }
+        const float cx = (minx + maxx) * 0.5f, cy = (miny + maxy) * 0.5f,
+                    cz = (minz + maxz) * 0.5f;
+        float r2 = 0.f;
+        for (const auto& mv : top.vertices) {
+            const float dx = mv.pos[0] - cx, dy = mv.pos[1] - cy, dz = mv.pos[2] - cz;
+            r2 = std::max(r2, dx * dx + dy * dy + dz * dz);
+        }
+        assetSphere_[0] = cx; assetSphere_[1] = cy; assetSphere_[2] = cz;
+        assetSphere_[3] = std::sqrt(r2);
+    }
+
+    nl::core::log::info("dag (traversal) scene ready: ", stem, ".lod0..lod",
+                        dagLevelCount - 1,
+                        " | levels=", dagLevelCount,
+                        " | clusters=", totalClusters,
+                        " | groups=", groupTotal,
+                        " | roots=", dagRootCount_,
+                        " | triangles(finest)=", triangleCount_,
+                        " | stride=", stride,
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -1020,10 +1488,34 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             const bool cullTiming = cullTimer_.begin(cmd);
             cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
 
+            // M5.1：dag 遍历换 dag.slang csDag（显式栈）+ 自己的绑定/常量；
+            // M4.1 路径保持原样。输出接口（visibleList + args）两者完全一致。
+            if (dag_) {
+                const float dc[12] = {
+                    params.projYScale, params.viewportHeight, params.nearPlane,
+                    params.cutThresholdPx,
+                    params.eye[0], params.eye[1], params.eye[2],
+                    static_cast<float>(dagRootCount_),
+                    // 根簇全局基址 = 总簇数 − 最粗层簇数（最粗层拼在最后）。
+                    static_cast<float>(clusterCount_ - dagRootCount_), 0.f, 0.f, 0.f};
+                cmd->writeBuffer(dagConstants_, dc, sizeof(dc));
+                // 组展开声明标志每帧清零（遍历 compute 的 atomicExchange 从干净态出发）。
+                std::uint32_t zeros[64] = {};
+                std::uint32_t cleared = 0;
+                while (cleared < dagGroupCount_) {
+                    const std::uint32_t n = std::min<std::uint32_t>(64u, dagGroupCount_ - cleared);
+                    cmd->writeBuffer(dagGroupExpanded_, zeros, n * sizeof(std::uint32_t),
+                                     cleared * sizeof(std::uint32_t));
+                    cleared += n;
+                }
+            }
+
             nvrhi::ComputeState cstate;
-            cstate.setPipeline(cullComputePSO_).addBindingSet(cullComputeSet_);
+            cstate.setPipeline(dag_ ? dagComputePSO_ : cullComputePSO_)
+                  .addBindingSet(dag_ ? dagComputeSet_ : cullComputeSet_);
             cmd->setComputeState(cstate);
-            cmd->dispatch((clusterCount_ + 127u) / 128u, 1, 1);
+            const std::uint32_t threads = dag_ ? dagRootCount_ : clusterCount_;
+            cmd->dispatch((threads + 127u) / 128u, 1, 1);
 
             // instanceCount 在 DrawIndexedIndirectArguments 第 2 个 uint（offset 4）。
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], 0,
@@ -1088,6 +1580,21 @@ void Scene::shutdown() {
     cullComputeLayout_ = nullptr;
     cullComputePSO_ = nullptr;
     csCull_ = nullptr;
+    // M5.1：DAG 遍历资源。
+    dag_ = false;
+    dagRootCount_ = 0;
+    dagLevelCount_ = 0;
+    dagConstants_ = nullptr;
+    dagClusterErrors_ = nullptr;
+    dagGroups_ = nullptr;
+    dagMembers_ = nullptr;
+    dagGenGroup_ = nullptr;
+    dagClusterLevel_ = nullptr;
+    dagGroupExpanded_ = nullptr;
+    csDag_ = nullptr;
+    dagComputePSO_ = nullptr;
+    dagComputeLayout_ = nullptr;
+    dagComputeSet_ = nullptr;
     visibleList_ = nullptr;
     clusterSpheres_ = nullptr;
     for (auto& rb : cullReadback_) rb = nullptr;

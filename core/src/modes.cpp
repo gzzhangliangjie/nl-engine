@@ -11,6 +11,7 @@ constexpr const char* kModeNames[] = {
     "lod",       // M2.3：<stem>.lodN.nmesh 逐层切换
     "dag-top",   // M3.2：DAG 顶层 + 任选组下钻一层（cut 预演）
     "cull",      // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
+    "dag",       // M5.1：GPU DAG 遍历选层（compute 显式栈，误差阈值 cut）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==
@@ -55,11 +56,9 @@ bool modeSelfTest() {
         for (int j = 0; j < i; ++j)
             if (std::strcmp(modeNameAt(j), name) == 0) return false;  // 名字必须唯一
     }
-    // 已有 normal / cluster / lod / dag-top；尚未实现的模式名此刻必须被拒绝
-    // （防分发器静默吞掉拼错的名字）。注意 "dag-top" 已实现，负向探测用的
-    // "dag" 是不同名字，仍然必须被拒。
+    // 已有 normal / cluster / lod / dag-top / cull / dag；尚未实现的模式名此刻
+    // 必须被拒绝（防分发器静默吞掉拼错的名字）。
     ViewMode parsed = ViewMode::Normal;
-    if (parseViewMode("dag", parsed)) return false;
     if (parseViewMode("dagtop", parsed)) return false;
     if (parseViewMode("", parsed)) return false;
     if (parseViewMode(nullptr, parsed)) return false;

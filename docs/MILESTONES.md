@@ -935,3 +935,34 @@
 4. **基线重拍 exe 必须与回归用的 exe 同源（本轮自摆乌龙，被总闸当场抓住）**：`cases.json` 里 m0.1~m0.8/s1.0 的 `exe` 指向 **tag 快照**（`build/showcase/{tag}/build/…`），HUD 内嵌快照时代的 stage 字符串；我用当前 S5.0 exe 给这 8 对基线重拍 → `m0.5/resize` 回归立即 FAIL（91k 像素差，maxDelta 242）。修正：`git checkout --` 还原历史版本基线（它们本就不随 kStage 变），只重拍 exe=current 的 5 对。**教训**：重拍基线前先查该版本 `exe` 字段指向快照还是当前构建；「重拍永远用刚重编的 exe」只对 exe=current 的版本成立（M4.2 踩坑 1 的适用边界在此）。
 
 **下一步**：M5.1 compute DAG 遍历（显式栈从根组下钻、簇屏幕误差 ≤ 阈值写 indirect 命令、栈溢出宁粗勿漏；输出接口 = S4 indirect buffer 不另起炉灶）。D1 升级路径监控点：M5.1/M5.2 偏轴或进模场景若选层明显偏粗，把 `screenErrorPixels()` 换成 UE 切线投影（见 `docs/s5/UE-DIFFS.md`）。
+
+## M5.1 compute DAG 遍历（tag `s5-traverse`，2026-11-08）
+
+**动作**
+- **决策前置（铁律执行，含一次失职补课）**：开工时拿 M5.0 的公式证据顶数没重读遍历结构参考，被用户两连问揪出 → 补读三处参考并摆对照表：bevy `cull_bvh.wesl`（BVH 8 叉 + 全局队列 + 多 pass，cut = `parent_is_imperceptible || !aabb_in_frustum` 停止下钻）、UE `NaniteCulling.cpp`/`NaniteClusterCulling.usf`（DAG 节点遍历 + 组原子 FClusterGroup）、Carrot `draw_virtual_geometry.slang`（flat 无遍历，已记 D3）。AGENTS.md 追加铁律条款并单独提交（a762fb8）：「证据与当前里程碑模块一一对应：新里程碑开工时必须按 ROADMAP 对照表重读本里程碑点名的文件，不许拿上一里程碑的部分证据顶数」。
+- **资产不变量实测（Python 逐层解析 Suzanne.lod0..6）**：成员方向**不连续**（lod0 全部 31 组非连续）→ 必须 CSR 拍平，不能断言区间；生成方向区间反转干净（每粗簇恰一生成组）；父簇 error = 生成组 error（lod.cpp:128 覆写）≥ 任一子簇 error → 单调性数学恒成立，不用运行时防御。
+- **数据布局（initDag）**：`renderer/src/scene.cpp` 探测 `<stem>.lod0..N` 全层加载（≥2 层 + dagPresent 校验）→ 全层拼接 vertexPool/localIndices/clusterMeta（vertexBase 重定基，localBase 逐簇取 `localIndices.size()` 天然全局）+ 逐簇 error/level/genGroup SSBO + 组记录 float4×2（`[2g]=(cx,cy,cz,r)`，`[2g+1]=(err,memberFirst,memberCount,0)`；整数值 `static_cast<float>` 打包，shader 侧 `uint()` 数值转换还原）。DagConstants 独立 volatile CB 48B（`g_dagProj/g_dagEye/g_dagRoot` 三个 float4），不动 SceneConstants 160B 契约。
+- **遍历 shader**：新建 `renderer/shaders/dag.slang`：每根簇线程显式栈 `uint[512]`，pop → screenPx ≤ thr 或叶层 → `emitCluster(c)`，否则组展开压成员；组重复下钻用 `dagGroupExpanded_` 声标志 + `InterlockedExchange` 三参形式去重（同组多个同误差父簇全失败会重复压成员，实测放大到 54923 emits）。vsCull/绘制链零改动，输出复用 S4 visibleList + indirectArgs。
+- **viewer/HUD**：`ViewMode::Dag` + `--mode dag` + `--cut-thr` CLI（复用 M5.0 的 `Options::cutThresholdPx`）；dag 帧参数 eye/projYScale/nearPlane/viewportHeight/cutThresholdPx 走新 CB；HUD 滑条与 `s5 err` 行复用 dagMode；截图日志打印 `dag stats: visible N / 324 clusters`。
+- **M4.1 潜伏 bug 修复**：`--frustum off` 因 visibleList 条件创建而布局无条件声明 t4 → set 未绑定 init 即败（viewer 默认 on 从未被用例踩到）。修正：visibleList_ 恒创建恒绑定 t4、恒等列表恒上传。
+- 交代物：`example/s5-traverse/`（near/far × 双后端 4 张基线 + run.bat verify，findstr 断言 `visible 237 / 324` 与 `visible 14 / 324`）+ cases.json s5.1 卡（28 versions）；kStage → `S5.1 DAG traversal (atomic group cut, per-thread explicit stack)`。
+
+**提交版本**：s5-traverse（本轮）
+
+**完成情况**
+- **选层谱单调（亲眼可见）**：dist 20 固定，thr 4/8/16/32/64 → visible 230/106/14/7/3 簇，连续过渡符合预期；thr=8（14 簇）/thr=16（7 簇）截图形状正确无洞无裂缝。
+- **全细节等价（最强证据）**：`--mode dag --cut-thr 0.001` 与 `--mode cull --frustum off` 同机位**逐字节相等**（md5 f0b5db63）；dx12/vulkan 各自成立，且 dag 图**跨后端也逐字节相等**——遍历是纯确定性 compute，双后端同一份输入同一输出。
+- **相机钳制解释**：OrbitCamera kMaxDist=20，dist 60/200 结果相同是相机钳制不是遍历 bug。
+- 回归全绿（总闸按需口径）：s4.0 4/4（潜伏修复验证）+ s5.0 4/4 + s3.2 2/2 + s4.1 2/2 + s5.1 新卡 6/6，全 bytes；`server.py --check` OK（stage=S5.1 version=s5.1 cases=3 baselines=6）；双后端 selftest 16/16。
+- kStage bump 波及面（M5.0 教训升级版）：只重拍 exe=current 的 6 版本 12 张 HUD 基线（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0），tag 快照 exe 的历史版本不动（先查 exe 字段再动手）。
+- UE-DIFFS 台账增补 **D3a**：每线程显式栈 + atomicExchange 去重 vs bevy 全局队列多 pass（有意简化，多实例/千组级负载不均时升级，输出接口不变）。
+
+**踩坑情况**
+1. **恒只画 3 簇（三连根因排查，本轮最大坑）**：dag 模式画面恒为 3 簇叶子。① 嫌疑 `asuint()` 位型重解释（组记录整数值经 float 打包，`asuint(float(7))` 得到的是位型 `0x40E00000`≈10.9 亿而非 7 → 栈溢出保护恒触发）→ 改 `uint()` 数值转换（必要修复但非充分）；② 通过 indirectArgs 的 args[1] 安全探针（把阈值值选为探针、量程限制防 instanceCount 爆炸挂进程）逐一验证 CB/level/error/members 数据全对、判定方向对、迭代数=1、分支=leaf；③ **真凶：根簇种子漏加根基址**——`dispatchThreadID` 0..2 是 lod0 叶子（level 0 恒 leaf emit），根簇应为 `g_dagRoot.x + dispatchThreadID`（=321..323）。教训：三维排查顺序=数据 → 判定逻辑 → 种子/寻址，探针通道（args[1] 回读）比猜快得多。
+2. **`InterlockedExchange` 三参形式（E30019）**：Slang/HLSL 里是 `void InterlockedExchange(dst, val, out old)`，不能当表达式用；先声明 `uint claimed` 再判。
+3. **shader 未重编假象**：dxil 时间戳早于 slang 源文件，SPIR-V 因 E30019 失败时画面用的还是旧 dxil——修完 shader 后确认构建管道真的重编了两个目标再验。
+4. **组重复下钻指数放大**：一个组生成多个同误差父簇（genCount 最高 8），全部同时判失败 → 每个失败父簇都压同组成员 → 54923 emits。修复 = 每帧清零的 `dagGroupExpanded_` 声标志，赢家压栈、输家跳过；成员并集覆盖所有兄弟面积，不丢面。
+5. **NVRHI `setInitialState` 是 Desc 方法非 handle 方法**：`DagGroupExpanded` 缓冲（canHaveUAVs + keepInitialState(CopyDest)）用独立 desc 创建，不能在 handle 上链。
+6. **`camera.eyePosition()` 无返回值重载**：只有 `void eyePosition(float out[3])` 数组出参形式。
+
+**下一步**：M5.2 时滞防抖 + HUD（误差阈值滞回：上帧选中簇本帧误差 < 阈值×1.1 不换，抑制边界抖动；GPU 原子计数总三角数实时显示；S5 收官自检=拉远三角数连续下降 + 固定视角数字稳定）。tag `s5-done`。

@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S5.0 screen-space error projection (zeux/bevy cut formula, threshold HUD)";
+    "S5.1 GPU DAG traversal (explicit-stack compute, group-atomic cut, M4 indirect interface)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -101,10 +101,12 @@ Renderer& Renderer::operator=(Renderer&&) noexcept = default;
 std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool enableDebugLayer,
                                            const char* modelFile, bool clusterMode,
-                                           bool cullMode, bool frustumCull) {
+                                           bool cullMode, bool frustumCull,
+                                           bool dagMode) {
     std::unique_ptr<Renderer> r(new Renderer());
-    // cull 模式（M4.0 GPU vertex pulling）资产同样是 assets/meshlets/ 下的 .nmesh。
-    const bool isNMesh = clusterMode || cullMode;
+    // cull 模式（M4.0 GPU vertex pulling）与 dag 模式（M5.1 多层遍历）资产同样是
+    // assets/meshlets/ 下的 .nmesh。
+    const bool isNMesh = clusterMode || cullMode || dagMode;
     const bool nameOk = isNMesh ? validNMeshFileName(modelFile)
                                 : validModelFileName(modelFile);
     if (!nameOk) {
@@ -121,7 +123,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
         return r;
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
-                                 clusterMode, cullMode, frustumCull, r->impl_->error)) {
+                                 clusterMode, cullMode, frustumCull, dagMode,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

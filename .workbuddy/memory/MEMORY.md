@@ -16,12 +16,12 @@
 
 ## 当前进度
 - 主线 S0~S4.2：M0.1~M0.9(58/58) → M1.0~M1.3(82/82) → M2.0~M2.3a(118/118) → M3.0~M3.2(150/150) → M4.0(s4-indirect) → M4.1 GPU 视锥剔除(s4-cull) → M4.2 cull 计时+1.3M dense 资产+60fps 验收(**176/176 ALL GREEN**，tag s4-done，S4 收官)。
-- 当前 `kStage=S5.0`；**M5.0 误差投影已验收**（tag `s5-proj`）：`core/src/lod_error.cpp` `screenErrorPixels()` bevy/zeux 口径（用户拍板，S5-PLAN 旧「平面距离」口径已划掉留痕）+ HUD `s5 err` 行/`cut thr px` 滑条 + selftest 15→16；三机位 1567.05/352.15/149.84 px 与离线手算逐位一致。主线下一步 M5.1 compute DAG 遍历（显式栈，输出=S4 indirect buffer）。
-- **UE 差异台账（2026-11-08 用户点名固化）**：所有与 UE 不一致处随手记 `docs/s5/UE-DIFFS.md`（D1 投影口径/D2 二值 cut/D3 遍历结构/D4 简化器/D5 无实例误差旋钮/D6 无遮蔽剔除/D7 无软光栅 + D8/D9 待办），AGENTS.md 已挂入口；里程碑收口/review 前过一遍。
-- kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 m0.9/s2.0/s3.2/s4.1/s4.2 共 5 对）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
+- 当前 `kStage=S5.1`；**M5.1 compute DAG 遍历已验收**（tag `s5-traverse`）：`renderer/shaders/dag.slang` 每根簇线程显式栈下钻 + 组原子 cut（成员 CSR 拍平，lod0 实测不连续；组重复下钻 `dagGroupExpanded_` atomicExchange 去重）+ `--mode dag`/`--cut-thr` CLI + DagConstants 独立 48B CB（不动 SceneConstants 160B）。验收：选层谱单调（dist20 thr4/8/16/32/64 → 230/106/14/7/3）；全细节等价 `--cut-thr 0.001` == `--mode cull --frustum off` 逐字节（md5 f0b5db63，跨后端也逐字节相等）；s5.1 新卡 6/6 全 bytes。顺手修 M4.1 潜伏 bug（--frustum off 因 visibleList 条件绑定 init 即败）。主线下一步 **M5.2 时滞防抖 + HUD**（滞回上帧选中簇 < 阈值×1.1 不换 + GPU 原子计数三角数，S5 收官 tag s5-done）。
+- **UE 差异台账（2026-11-08 用户点名固化）**：所有与 UE 不一致处随手记 `docs/s5/UE-DIFFS.md`（D1 投影口径/D2 二值 cut/D3 遍历结构/D3a GPU 遍历=每线程栈 vs bevy 全局队列/D4 简化器/D5 无实例误差旋钮/D6 无遮蔽剔除/D7 无软光栅 + D8/D9 待办），AGENTS.md 已挂入口；里程碑收口/review 前过一遍。
+- kStage bump 波及面修正：HUD 标题行含 stage 字符串，但**只有 exe=current 的版本需要重拍**（当前 exe=current 版本：m0.9/s2.0/s3.2/s4.1/s4.2/s5.0 共 6 对 12 张，S5.1 已重拍）；m0.1~m0.8/s1.0 走 tag 快照 exe（`build/showcase/{tag}/`，HUD 内嵌旧 stage 字符串），基线不随 kStage 变。**重拍基线前先查该版本 cases.json 的 exe 字段指向快照还是当前构建**（M5.0 曾用当前 exe 重拍 8 对历史版本基线被总闸当场抓住）。
 - M4.1 真剔除姿态=进模近断面（dist0.45/640x720：GPU 30/237 == frustum_check.py 离线）；轨道相机「背对」整模仍在视锥内，S4-PLAN 旧前提已修正。
 - 并行研究模块：VSM 插 S9 后；TSR 拆 S7 后两段。
-- **A 类并行轨道：动作系统 M-A0~M-A4 完成**（feat/action-system，tag `anim-ma1`~`anim-ma4`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space）+ anim-tools 自测全绿；拍板 A 路自建（ozz 只覆盖下层，蒙皮层立项时再议 vendored）；M-A5 视觉验收等**渲染侧蒙皮层**（ROADMAP §2.3，规划未开工——⚠️编号与里程碑 M2.3=LOD viewer 撞车，勿混）。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
+- **A 类并行轨道：动作系统 M-A0~M-A5 全部完成**（feat/action-system，tag `anim-ma1`~`anim-ma5`，未 merge）：`nl/anim` 纯逻辑层（采样/混合/状态机/1D blend space/蒙皮）+ anim-tools 自测全绿 + viewer skin 模式（CPU LBS，CesiumMan 行走验收截图）；M-A5.2 顺手修 regression cwd 错位双 bug（ma-track 用例卡 {root}/ 模板 + anim-tools 缺文件段错误）。教训：用例卡进 cases.json ≠ 回归跑过，收口必须真跑 --only。下一步 = merge 回 master 走 PARALLEL-TRACKS §7 文档闸（等用户指令）。交接详见 `docs/action-system/ACTION-PLAN.md` + MILESTONES M-A 节 + 2026-11-08 日志。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选项）。
 
 ## 工程纪律（易忘点）

@@ -70,7 +70,7 @@ public:
 
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
-              bool frustumCull, std::string& outError) override {
+              bool frustumCull, bool dagMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -151,7 +151,9 @@ public:
         // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
         // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
         bool sceneOk = false;
-        if (clusterMode)
+        if (dagMode)
+            sceneOk = scene_.initDag(device_, "dxil", "vsCull", "psCull", modelFile, outError);
+        else if (clusterMode)
             sceneOk = scene_.initCluster(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (cullMode)
             sceneOk = scene_.initCull(device_, "dxil", "vsCull", "psCull", modelFile,

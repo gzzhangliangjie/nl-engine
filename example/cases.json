@@ -2749,6 +2749,73 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "s5.1",
+   "label": "M5.1",
+   "name": "GPU DAG 遍历选层（compute 显式栈，组原子 cut）",
+   "tag": "s5-traverse",
+   "date": "2026-11-08",
+   "summary": "M5.1（kStage=S5.1）：dag.slang csDag compute 遍历——每根簇线程持显式栈自最粗层下钻：簇屏幕误差（M5.0 bevy/zeux 公式）≤ 阈值或叶层 → emit 进可见列表，否则下钻到生成组成员；栈溢出画当前簇（宁粗勿漏）。数据 = Suzanne.lod0..lod6 全层拼接驻留（vertexBase 重定基，vsCull 零改动）；组成员 CSR 拍平（成员方向不保证连续，资产实测 lod0 全部 31 组非连续）；组展开 atomicExchange 去重（一个组生成多个同误差父簇，不去重则成员被重复压栈指数放大）。输出接口 = M4 visibleList + indirectArgs 不另起炉灶。 DagConstants 独立 CB（eye/projY/viewportH/near/threshold/rootBase），SceneConstants 160B 契约不动。顺带修 M4.1 潜伏 bug：cull 模式 --frustum off 因布局声明 t4 而 set 未绑定一直 init 失败（viewer 默认 on 从未被用例踩到），visibleList 改恒创建恒绑定。",
+   "acceptance": [
+    "选层谱单调：dist 20 阈值 4/8/16/32/64 px → visible 230/106/14/7/3 簇（237=全叶簇），远粗近细无跳变",
+    "全细节等价：--mode dag --cut-thr 0.001 与 --mode cull --frustum off 同机位截图逐字节相等（dx12 与 vulkan 各自成立，且两后端 dag 图也逐字节相等）",
+    "视觉验收：thr=8（14 簇）猴头轮廓/耳朵无洞无裂缝；thr=16（7 簇）粗模形状完整",
+    "双后端 selftest 16/16；kStage bump 后 exe=current 6 版本 12 张 HUD 基线重拍；回归 s4.0 4/4 + s5.0 4/4 + s3.2 2/2 + s4.1 2/2 全 bytes（s4.0 验证 frustum-off 潜伏修复）",
+    "example/s5-traverse/run.bat verify exit 0（near=237 / far=14 计数 findstr 断言）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "s5-traverse-near",
+     "name": "dag 近景：全细节（≈cull 直通逐字节）",
+     "kind": "pair",
+     "note": "dist 4.2 阈值 1px：误差全超阈，遍历钻到叶层 → visible 237/324（全部 lod0 簇）。与 --mode cull --frustum off 同机位截图逐字节相等（md5 f0b5db63）。",
+     "baselines": {
+      "dx12": "example/s5-traverse/s5-traverse-near-dx12.png",
+      "vulkan": "example/s5-traverse/s5-traverse-near-vulkan.png"
+     },
+     "args": [
+      "--mode", "dag", "--hud", "--screenshot", "{out}", "--frames", "8",
+      "--shading", "normal", "--yaw", "12", "--pitch", "9", "--dist", "4.2",
+      "--cut-thr", "1.0", "--size", "640x720"
+     ],
+     "command": "viewer.exe --mode dag --hud --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 4.2 --cut-thr 1.0 --size 640x720",
+     "script": "example/s5-traverse/run.bat verify",
+     "preview": "example/s5-traverse/s5-traverse-near-dx12.png"
+    },
+    {
+     "id": "s5-traverse-far",
+     "name": "dag 远景粗模：14 簇无洞",
+     "kind": "pair",
+     "note": "dist 20（相机 kMaxDist 钳制上限）阈值 16px：粗层组误差不可感知即停 → visible 14/324。猴头轮廓/耳朵完整无洞无裂缝（组原子 cut 的水密性视觉证据）。",
+     "baselines": {
+      "dx12": "example/s5-traverse/s5-traverse-far-dx12.png",
+      "vulkan": "example/s5-traverse/s5-traverse-far-vulkan.png"
+     },
+     "args": [
+      "--mode", "dag", "--screenshot", "{out}", "--frames", "8",
+      "--shading", "normal", "--yaw", "12", "--pitch", "9", "--dist", "20",
+      "--cut-thr", "16", "--size", "640x720"
+     ],
+     "command": "viewer.exe --mode dag --screenshot <out.png> --frames 8 --shading normal --yaw 12 --pitch 9 --dist 20 --cut-thr 16 --size 640x720",
+     "script": "example/s5-traverse/run.bat verify",
+     "preview": "example/s5-traverse/s5-traverse-far-dx12.png"
+    },
+    {
+     "id": "s5.1-selftest",
+     "name": "selftest（S5.1 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S5.1 stage 断言同步更新；套件数不变（遍历正确性由 pair 用例 + 回归覆盖）。",
+     "args": ["--selftest"],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
   }
  ]
 }

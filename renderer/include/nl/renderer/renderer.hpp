@@ -49,6 +49,14 @@ struct FrameParams {
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
     int   shading     = 0;      // 0 textured / 1 normal / 2 uv / 3 tri-id（传进 g_options.x）
     bool  wireframe   = false;  // 光栅化 fill mode = wireframe（深度测试照常）
+    // ---- M5.1：dag 模式遍历参数（其它模式不读，缺省值无副作用）----
+    // 屏幕误差公式（bevy/zeux 口径，core/lod_error.hpp）：screenPx =
+    //   worldError / max(dist(eye, center)-radius, near) * projYScale * 0.5 * viewportHeight
+    float eye[3]             = {0.f, 0.f, 4.2f};  // 相机世界位置（轨道相机 eyePosition()）
+    float projYScale         = 2.4142f;           // 1/tan(fovY/2)，fovY=45° 时 2.4142
+    float nearPlane          = 0.1f;              // 近断面（与相机投影一致）
+    float viewportHeight     = 720.f;             // 投影用的视口高度（px）
+    float cutThresholdPx     = 1.0f;              // 组原子 cut 阈值（px，>0）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -156,7 +164,8 @@ public:
                                             const char* modelFile = "Suzanne.glb",
                                             bool clusterMode = false,
                                             bool cullMode = false,
-                                            bool frustumCull = true);
+                                            bool frustumCull = true,
+                                            bool dagMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

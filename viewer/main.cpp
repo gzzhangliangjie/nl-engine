@@ -79,7 +79,7 @@ struct Options {
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
-    float cutThresholdPx = 1.0f;  // M5.0：cut 阈值 px（HUD 滑条双向，M5.1 遍历消费）
+    float cutThresholdPx = 1.0f;  // M5.0/M5.1：cut 阈值 px（--cut-thr 设初值，HUD 滑条双向）
     int  width      = 1280;
     int  height     = 720;
     int  resizeWidth  = 0;
@@ -131,6 +131,17 @@ Options parseArgs(int argc, char** argv) {
                 std::exit(1);
             }
             o.dagGroup = static_cast<int>(n);
+        }
+        else if (a == "--cut-thr" && i + 1 < argc) {
+            // M5.1：dag 模式屏幕误差阈值（px）。必须为正数；截图回归靠它定死选层。
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            const double d = std::strtod(v.c_str(), &end);
+            if (!end || *end != '\0' || !(d > 0.0)) {
+                std::cerr << "invalid --cut-thr '" << v << "' (expected a number > 0)\n";
+                std::exit(1);
+            }
+            o.cutThresholdPx = static_cast<float>(d);
         }
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
@@ -236,7 +247,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S5.0") != nullptr, "S5.0 stage reported");
+    check(std::strstr(st.stage, "S5.1") != nullptr, "S5.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -279,7 +290,7 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
-              bool dagTop = false, bool cullMode = false) {
+              bool dagTop = false, bool cullMode = false, bool dagMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -302,7 +313,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn);
+                                                   o.frustumOn, dagMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -518,6 +529,17 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        if (dagMode) {
+            // M5.1：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
+            float eye[3];
+            camera.eyePosition(eye);
+            fp.eye[0] = eye[0]; fp.eye[1] = eye[1]; fp.eye[2] = eye[2];
+            fp.projYScale = camera.projectionYScale();
+            fp.nearPlane = camera.nearPlane();
+            const auto e = renderer->extent();
+            fp.viewportHeight = static_cast<float>(e.height);
+            fp.cutThresholdPx = cutThresholdPx;
+        }
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
         nl::renderer::HudFrame hud{};
@@ -676,7 +698,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 }
             }
             // M5.0：cut 阈值滑条回读（M5.1 GPU 遍历消费同一参数）。
-            if (dagTop) cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
+            if (dagTop || dagMode)
+                cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
             hudWantsMouse = hud.wantCaptureMouse;
         }
         if (capturePath) {
@@ -685,9 +708,17 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
         // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
         // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
-        if (o.screenshot && cullMode && info.totalClusters > 0 && info.visibleClusters >= 0) {
-            nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
-                                info.totalClusters, " clusters (frustum on)");
+        // M5.1：dag 遍历复用同一回读通路（visible = 被 emit 的簇数）。
+        if (o.screenshot && (cullMode || dagMode) && info.totalClusters > 0 &&
+            info.visibleClusters >= 0) {
+            if (dagMode) {
+                nl::core::log::info("dag stats: visible ", info.visibleClusters, " / ",
+                                    info.totalClusters, " clusters (threshold ",
+                                    cutThresholdPx, " px)");
+            } else {
+                nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
+                                    info.totalClusters, " clusters (frustum on)");
+            }
         }
 
         if (frame % 15 == 0 || o.screenshot) {
@@ -752,6 +783,9 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/true, /*lodMode=*/false, /*dagTop=*/true);
     case nl::core::ViewMode::Cull:       // M4.0：vertex pulling 渲染（单 drawIndexedIndirect，全簇全画）
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false, /*cullMode=*/true);
+    case nl::core::ViewMode::Dag:        // M5.1：GPU DAG 遍历选层（compute 显式栈）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/true, /*dagMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -821,7 +855,8 @@ int main(int argc, char** argv) {
 // 全簇全画，M4.1 才接 GPU 剔除），缺省着色 4=cluster；簇色由 shader 端 pcg(簇号) 算出，
 // 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
-         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull)
+         o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
+         o.mode == nl::core::ViewMode::Dag)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
