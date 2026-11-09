@@ -1386,3 +1386,33 @@
 8. **证据图全 ASCII 文本**：Consolas 无中文字形（M-SC0 中文方框教训），本轮预防性守住。
 
 **下一步**：M-S1（3D 定位 / 4 种距离衰减 / 多声源并发 / Clip 缓存）；M-S2 游戏内调试（console cvar + 独立 ImGui 窗口，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。
+
+## P8 M-S1：3D 定位 + 4 种距离衰减 + 多声源并发 + Clip 缓存（feat/audio 轨道，2026-11-09，tag `audio-s1`）
+
+**动作**：用户「继续做 M-S1」。先 `wt_pool claim --track audio --milestone M-S1` 占坑。三处参考**重读**（铁律：新里程碑即使同阶段也按对照总表重读）：Carrot `engine/audio/OpenAL.cpp:86` / `SoundSource.cpp:77` / `SoundListener.cpp`（只有 `setPosition` 转发 `alSource3f`，**无衰减模型参数**）/ bevy `audio_output.rs:330-380` / `audio.rs:56` / `sinks.rs:336-355`（`SpatialAudioSink` 仅 emitter/双耳 + `SpatialScale`，注释「无 HRTF、只左右声像」）/ UE `Engine/Classes/Engine/Attenuation.h:16-24`（**只读不抄**：`EAttenuationDistanceModel` 6 种 + 4 shape + LPF + `AudioComponent.h:815 IsInAudibleRange`）。结论：对象模型借 Carrot、衰减 API 不照抄；3D 不必 HRTF（bevy 印证）；超距判定口径借 UE `IsInAudibleRange`；落码依据 = miniaudio 原生 `ma_attenuation_model`（正好 4 种：none/inverse/linear/exponential，inverse 等价 OpenAL `INVERSE_DISTANCE_CLAMPED`，与 Carrot 底座同源）。`docs/carrot-history.md` / `bevy-history.md` 全文无音频条目，本轮以三处源码实读为准。
+落地：`AudioConfig` 加 `spatialization`（**默认 false** → M-S0 format=1 基线逐字节不变）；`nl/audio` 新增 4 种 `AttenuationModel` 枚举、声源/听者位置朝向 setter、超 maxDistance 按 UE 口径补增益 0 剔除、`ma_resource_manager` 承担 Clip 缓存（`registerClip` / `createSourceFromClip` / `clipCacheStats`）；`audio-tools` 新增 `spatial <outdir>`（21 距离 × 4 模型 = 84 次独立离线渲染 + 两声源并发混音）+ `check` 支持 format=1(M-S0)/format=2(M-S1) 双格式（M-S1 从 provenance 全量重渲染逐字比对）；`scripts/make-audio-wav.py` 加频率/幅度参数生成第二素材 `test-tone-b.wav`（原 `test-tone.wav` 默认参数不变、逐字节不变）；`tools/make-audio-evidence.py` 加衰减/混音/验收三图；`example/audio-s1/` 交代物（run.bat 全链 + 7 log + spatial/ 三文件 + bad/ 与 bad-prov/ 两个负向夹具 + 三证据图）+ `example/cases.json` `audio-s1` 卡 7 用例 + `docs/p8/AUDIO-TOOLS-GUIDE.md` 追加 M-S1 节 + `docs/s5/UE-DIFFS.md` 增 D16。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s1`
+
+**完成情况**：
+- **双后端 BUILD OK**：`build-audio-tools.bat DX12` 与 `VULKAN` 各自编译 + `audio-tools selftest` **33/33 PASS**（M-S0 21 + M-S1 12）；A 类纯 CPU 工具，不进渲染回归、不动 kStage。
+- **4 种衰减模型分离**：听者原点面向 +Z、声源沿 +Z 步进 21 点；每点 warmup 512 帧越过 `gainSmoothTimeInFrames=360`（7.5ms 增益平滑）后测 1024 帧 RMS。rolloff 取 **0.5**（rolloff=1 时 inverse≡exponential 数学恒等，曲线无法区分——实踩坑）；none 恒定 / inverse 最陡 / linear 线性 / exponential 幂律，4 条曲线肉眼可辨。
+- **超距静音**：maxDistance=20 后 inverse/linear/exponential 增益由 `nl/audio` 按 UE `IsInAudibleRange` 强制 0（miniaudio 公式在 d>max 仍给极小正值，不自动静音——D16 留痕），证据图 `z=20` 静音竖线可见。
+- **并发线性叠加**：声源 A（440Hz `test-tone.wav`）与 B（660Hz `test-tone-b.wav`）并发；MIX 与 A+B 逐样本 `maxAbsDiff=0 / exactSamples=1024`（残差零平线）。
+- **Clip 缓存**：`ma_resource_manager` 承担 PCM 去重；2 clips / 2 misses / 2 hits / 4 sources，缓存统计入 provenance 并由 `check` 重探测比对。
+- **防假绿 format=2**：`check` 不信任 tsv——从 provenance 重建 21×4 衰减 + 512 混音帧 + 重探测缓存统计，渲染成格式化文本逐字比较；两条负向夹具分别被抓：`bad/`（超距静音行篡改 → `attenuationHash` 校验阶段 exit 1）、`bad-prov/`（maxDistance 由 20→10 → 哈希合法、**重渲染后曲线不匹配**阶段 exit 1）。
+- **M-S0 基线零回归**：`test-tone.wav` 默认参数未动，重新 dump+check 仍 `waveformHash=4293b40fe2f9a770` 逐字节一致；`audio-s0` 展示台卡仍 PASS。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s1/attenuation.png`（4 曲线分离 + 静音竖线 + 参数/hash 完整）、`mixing.png`（A/B/MIX/RESIDUAL 四栏铺满全宽、残差零平线）、`acceptance.png`（七条命令真实 stdout、七节齐全、无中文方框）；均由 `make-audio-evidence.py` 从真实输出生成，非手绘。
+- `example/audio-s1/run.bat` 全链 exit 0（AUDIO M-S1 ACCEPTANCE: ALL GREEN）；`server.py --check` exit 0；展示台 `audio-s1` 卡 7 用例（usage 2 / selftest 0 / spatial 0 / check 0 / probe-b 0 / 坏 tsv 1 / 坏 provenance 1）实跑全绿。
+- **边界**：M-S1 不做 console cvar / ImGui 面板（M-S2）、不碰 ECS 场景集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（轨道收口在 M-S3）。
+
+**踩坑情况**：
+1. **rolloff=1 让 inverse≡exponential**：两者公式数学恒等（都是 `min/d`），证据图只剩 3 条可辨曲线；改 `rolloff=0.5` 分离四条。
+2. **增益平滑 warmup**：miniaudio `gainSmoothTimeInFrames=360`（7.5ms），直接读首帧量到过渡段而非稳态；每距离点先 warmup 512 帧再测 1024 帧。
+3. **超距不自动静音**：miniaudio 衰减公式 d>max 仍给极小正值；`nl/audio` 按 UE `IsInAudibleRange` 补 `gain=0` 剔除（D16 留痕）。
+4. **第二素材频率必须不同**：`test-tone-b.wav` 660Hz 与 `test-tone.wav` 440Hz 频率不同，才能证明并发是两路独立信号相加而非复制；默认参数脚本不改原素材（逐字节不变）。
+5. **证据图宽度铺满**：`draw_channel` 原 `cols=min(w,len)` 在 512 帧时只占左 43% 像被裁切；改按画布宽铺满（24000 帧的 M-S0 图不受影响）。
+6. **`const_cast<Impl*>` 误用**：4 个只读访问器重复该写法，抽成 `Impl::at()` 内联成员。
+7. **miniaudio `ma_attenuation_model` 正好 4 种**：落码即原生 4 种（计划 §4 已定），属计划内机械执行，不另请拍板；6 种 UE 模型（含 Custom / NaturalSound 等）不进本轮。
+
+**下一步**：M-S2 游戏内调试（console cvar `audio.volume/debug/solo/freeze/dump` + 独立 ImGui 声源面板，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。

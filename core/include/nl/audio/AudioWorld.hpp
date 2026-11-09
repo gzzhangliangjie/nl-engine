@@ -1,9 +1,9 @@
 #pragma once
-// P8 M-S0: nl/audio thin wrapper over vendored miniaudio.
+// P8 M-S0/M-S1: nl/audio thin wrapper over vendored miniaudio.
 // Core layer: ZERO graphics / NVRHI / ImGui symbols (AGENTS.md boundary).
 //
 // Object model follows Carrot engine/audio (AudioWorld / Clip / Source / Listener),
-// but miniaudio owns decoding, mixing and (from M-S1) spatialization: we do NOT add
+// but miniaudio owns decoding, mixing and spatialization: we do NOT add
 // a second audio thread on top of it (P8-AUDIO-PLAN.md section 2).
 #include <cstdint>
 #include <memory>
@@ -23,6 +23,9 @@ struct AudioConfig {
     // true  = noDevice engine, PCM pulled manually with readFrames() (offline, deterministic).
     // false = engine creates the default playback device (realtime path).
     bool offline = true;
+    // M-S1: enable ma_sound spatialization. DEFAULT FALSE on purpose: the M-S0
+    // offline PCM baseline (MA_SOUND_FLAG_NO_SPATIALIZATION) must stay byte-identical.
+    bool spatialization = false;
 };
 
 struct ClipDesc {
@@ -34,13 +37,50 @@ struct ClipDesc {
     double        durationSeconds = 0.0;
 };
 
+// miniaudio's four native attenuation models (miniaudio.h:5154-5157).
+// NOTE: `None` is NOT "spatialized but flat" - the library takes an unspatialized
+// fast path (no distance gain, no panning) when it is selected.
+enum class AttenuationModel : std::uint8_t {
+    None        = 0,
+    Inverse     = 1,
+    Linear      = 2,
+    Exponential = 3
+};
+
+const char* attenuationModelName(AttenuationModel m);
+bool parseAttenuationModel(const std::string& s, AttenuationModel* out);
+
+// Full 3D state of a source. `audible` follows UE UAudioComponent::IsInAudibleRange
+// semantics: miniaudio clamps distance to maxDistance (never reaches zero gain),
+// so nl/audio explicitly mutes sources beyond it (P8-AUDIO-PLAN section 4).
+struct SpatialDesc {
+    Vec3             position;
+    Vec3             direction{0.0f, 0.0f, -1.0f};
+    AttenuationModel model = AttenuationModel::Inverse;
+    float            minDistance = 1.0f;
+    float            maxDistance = 100.0f;
+    float            rolloff     = 1.0f;
+    bool             audible     = true;
+};
+
 struct SourceDesc {
     std::uint32_t id = 0;
     std::string   clip;
     float         gain    = 1.0f;
     bool          looping = false;
     bool          playing = false;
-    Vec3          position;
+    SpatialDesc   spatial;
+};
+
+// M-S1 Clip cache accounting. Decoded PCM de-duplication itself is done by
+// ma_engine's internal ma_resource_manager (same path loads only once); this
+// registry owns path de-dup, reference counting and hit/miss evidence.
+struct CacheStats {
+    std::uint32_t clips        = 0;
+    std::uint32_t misses       = 0;  // first load per path (probe + decode)
+    std::uint32_t hits         = 0;  // reused clip, probe skipped
+    std::uint32_t sources      = 0;
+    std::uint32_t maxClipRefs  = 0;
 };
 
 class AudioWorld {
@@ -52,6 +92,7 @@ public:
 
     bool               ok() const;
     bool               isOffline() const;
+    bool               spatializationEnabled() const;
     const std::string& error() const;
     std::uint32_t      sampleRate() const;
     std::uint32_t      channels() const;
@@ -68,9 +109,28 @@ public:
     bool sourceDesc(std::uint32_t id, SourceDesc* out) const;
     std::uint32_t sourceCount() const;
 
-    // Listener: M-S0 keeps position only; orientation / cones belong to M-S1.
+    // M-S1 3D source state. Requires AudioConfig::spatialization = true.
+    bool setSourcePosition(std::uint32_t id, const Vec3& pos, std::string* err = nullptr);
+    bool setSourceDirection(std::uint32_t id, const Vec3& dir, std::string* err = nullptr);
+    bool setSourceCone(std::uint32_t id, float innerRadians, float outerRadians,
+                       float outerGain, std::string* err = nullptr);
+    bool setSourceAttenuation(std::uint32_t id, AttenuationModel model,
+                              float minDistance, float maxDistance, float rolloff,
+                              std::string* err = nullptr);
+    bool spatialDesc(std::uint32_t id, SpatialDesc* out) const;
+
+    // Listener: position (M-S0) + orientation (M-S1).
     bool setListenerPosition(const Vec3& pos, std::string* err = nullptr);
+    bool setListenerDirection(const Vec3& dir, std::string* err = nullptr);
+    bool setListenerWorldUp(const Vec3& up, std::string* err = nullptr);
     Vec3 listenerPosition() const;
+    Vec3 listenerDirection() const;
+    Vec3 listenerWorldUp() const;
+
+    // M-S1 Clip cache observability.
+    CacheStats     cacheStats() const;
+    std::uint32_t  clipCount() const;
+    std::uint32_t  clipRefCount(const std::string& wavPath) const;
 
     // Offline path: pull interleaved f32 PCM. Returns frames actually read.
     std::uint64_t readFrames(float* dst, std::uint64_t frameCount);

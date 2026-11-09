@@ -3944,6 +3944,117 @@
      "command": "audio-tools check example/audio-s0/bad"
     }
    ]
+  },
+  {
+   "id": "audio-s1",
+   "label": "M-S1",
+   "name": "3D 定位与距离衰减：4 种模型 + 多声源并发 + Clip 缓存",
+   "tag": "audio-s1",
+   "date": "2026-11-09",
+   "note": "A 类工具版交代；不进 kStage、不进渲染回归。M-S0 的 format=1 基线逐字节不变（AudioConfig::spatialization 默认 false）。",
+   "acceptance": [
+    "4 种 miniaudio 原生衰减模型（none/inverse/linear/exponential）逐距离 RMS 曲线，rolloff=0.5 让四条可辨",
+    "听者沿 +Z 移出 maxDistance=20 后 inverse/linear/exponential 全部静音（UE IsInAudibleRange 口径由 nl/audio 补剔除）",
+    "两声源（440Hz / 660Hz）并发：MIX 与 A+B 逐样本位级一致，maxAbsDiff=0 / exactSamples=1024",
+    "Clip 缓存：2 clips / 2 misses / 2 hits / 4 sources，PCM 去重由 ma_resource_manager 承担",
+    "check 从 format=2 provenance 重渲染 21 距离 x 4 模型 + 512 混音帧 + 缓存统计，格式化文本逐字比对（防假绿）",
+    "DX12 + VULKAN 双构建树 BUILD OK，audio-tools selftest 33/33 各绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/audio-tools.exe",
+    "vulkan": "build/vulkan/audio-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2；退出码 0 成功 / 1 运行或断言失败 / 2 用法错误。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "audio-tools - nl-engine",
+     "command": "audio-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：33 条断言（M-S0 21 + M-S1 12）",
+     "kind": "tool",
+     "note": "含 4 模型枚举 roundtrip、非法衰减参数拒绝、听者朝向读回、超距静音、none 平坦、Clip 缓存统计、并发线性叠加。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "audio selftest: PASS (33/33)",
+     "command": "audio-tools selftest"
+    },
+    {
+     "id": "spatial",
+     "name": "spatial：衰减曲线 + 混音 + 缓存 dump",
+     "kind": "tool",
+     "note": "21 个距离点 x 4 模型 = 84 次独立离线渲染；warmup 512 帧越过 gainSmoothTimeInFrames(360) 后测 1024 帧 RMS。",
+     "args": [
+      "spatial",
+      "{root}/example/audio-s1/spatial"
+     ],
+     "expectExit": 0,
+     "expectLog": "spatial: PASS",
+     "preview": "example/audio-s1/attenuation.png",
+     "command": "audio-tools spatial example/audio-s1/spatial"
+    },
+    {
+     "id": "check",
+     "name": "check：按 provenance 重渲染全量比对",
+     "kind": "tool",
+     "note": "防假绿：不信任存下来的 tsv，从 provenance 重建全部采样点重渲染，格式化文本逐字比较；缓存统计也重新探测。",
+     "args": [
+      "check",
+      "{root}/example/audio-s1/spatial"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS (format=2",
+     "preview": "example/audio-s1/acceptance.png",
+     "command": "audio-tools check example/audio-s1/spatial"
+    },
+    {
+     "id": "probe-b",
+     "name": "probe：第二素材（660Hz / amp 0.4）",
+     "kind": "tool",
+     "note": "与 440Hz 素材频率不同，才能证明并发混音是两路独立信号相加而非复制。",
+     "args": [
+      "probe",
+      "{root}/assets/audio/test-tone-b.wav"
+     ],
+     "expectExit": 0,
+     "expectLog": "probe: PASS",
+     "command": "audio-tools probe assets/audio/test-tone-b.wav"
+    },
+    {
+     "id": "negative-tsv",
+     "name": "负向：篡改衰减 tsv（exit 1）",
+     "kind": "tool",
+     "note": "bad/attenuation.tsv 把超距静音行改成 0.1；provenance 的 hash 仍指原始 tsv，hash 校验阶段拒绝。",
+     "args": [
+      "check",
+      "{root}/example/audio-s1/bad"
+     ],
+     "expectExit": 1,
+     "expectLog": "attenuation hash mismatch",
+     "command": "audio-tools check example/audio-s1/bad"
+    },
+    {
+     "id": "negative-prov",
+     "name": "负向：篡改 maxDistance 参数（exit 1）",
+     "kind": "tool",
+     "note": "bad-prov/ 只把 provenance 的 maxDistance 改成 10，tsv 哈希仍合法；必须在「重渲染后曲线不匹配」阶段才被抓住。",
+     "args": [
+      "check",
+      "{root}/example/audio-s1/bad-prov"
+     ],
+     "expectExit": 1,
+     "expectLog": "mismatch after re-render",
+     "command": "audio-tools check example/audio-s1/bad-prov"
+    }
+   ]
   }
  ]
 }

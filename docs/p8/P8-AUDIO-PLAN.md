@@ -49,7 +49,7 @@
 | **M-S2** | **游戏内调试**：console cvar（`audio.volume/debug/solo/freeze/dump`）+ 独立 ImGui 声源面板（实体/位置/距离/增益/状态、独奏/静音、单步推进）+ 离线 dump | 调试面板截图（挂 console 那套独立 ImGui 窗口，默认关，**不动常驻 HUD** —— 否则触发全模式 HUD 基线重拍）；tool 卡 usage/正向/负向 | M-S1 |
 | **M-S3** | 场景集成：ECS Transform 每帧同步声源、listener 随主相机；收口 merge | 50 物体场景里声源随物体移动（位置读回一致）；全量回归按需 + 收口硬闸 `wt_pool close` | E1 / E1b 收口 |
 
-> **进度（2026-11-09）**：**M-S0 已收口**（tag `audio-s0`，`feat/audio` worktree）：vendored v0.11.26 + `nl/audio` 薄封装 + `audio-tools`（selftest / probe / dump / check / play）+ 展示台 `audio-s0` 卡 7 用例 + 波形/验收双证据图；DX12 + VULKAN 双构建树 `selftest 21/21`。离线 24000 帧 × 2 声道逐样本位级确定，`check` 从 provenance 重渲染比对（防假绿）。归档 `docs/p8/AUDIO-TOOLS-GUIDE.md`，台账 `docs/MILESTONES.md`。M-S1 起按阶梯推进。
+> **进度（2026-11-09）**：**M-S0 已收口**（tag `audio-s0`）：vendored v0.11.26 + `nl/audio` 薄封装 + `audio-tools`（selftest / probe / dump / check / play）+ 展示台 `audio-s0` 卡 7 用例 + 波形/验收双证据图；双构建树 `selftest 21/21`，离线 24000 帧 × 2 声道逐样本位级确定。`**M-S1 已收口**（tag `audio-s1`）：4 种 miniaudio 原生衰减模型（none/inverse/linear/exponential，rolloff=0.5 分离）+ 听者/声源位置朝向 + 超 maxDistance 静音（按 UE `IsInAudibleRange` 由 `nl/audio` 补剔除，D16 留痕）+ 两声源并发线性叠加（MIX=A+B 逐样本 0 差）+ Clip 缓存（ma_resource_manager 去重，2 clips/2 misses/2 hits/4 sources）；`spatial` 子命令 21 距离 × 4 模型 = 84 次独立离线渲染 + `check` format=2 从 provenance 全量重渲染比对（防假绿）；双构建树 `selftest 33/33`，展示台 `audio-s1` 卡 7 用例 + 衰减/混音/验收三证据图。**M-S0 基线 format=1 逐字节不变**（`AudioConfig::spatialization` 默认 false）。归档 `docs/p8/AUDIO-TOOLS-GUIDE.md`（含 M-S1 追加节），台账 `docs/MILESTONES.md`，偏离 `docs/s5/UE-DIFFS.md` D16。M-S2 起按阶梯推进。
 
 可选（默认不做）：空间衰减球 gizmo（碰 viewer，排 E1b 收口后）、ScriptComponent 式 `OnTick` 音频脚本绑定、Vorbis custom decoder。
 
