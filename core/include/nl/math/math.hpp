@@ -122,4 +122,113 @@ inline Quat quatFromAxisAngle(const Vec3& axis, float radians) {
     return { axis.x * s, axis.y * s, axis.z * s, std::cos(radians * 0.5f) };
 }
 
+// ---------------------------------------------------------------------------
+// Mat4（M-E1 ECS 层级数学，2026-11-09 P8-ECS-PLAN「架构约束·数学」拍板：在本模块
+// 新增；与 nl/anim 蒙皮矩阵合并时机届时再定）。列主序 m[col*4 + row]，列向量约定
+// v' = M v，与 Carrot glm 一致；TRS 构造顺序 = translate * rotate * scale
+// （Carrot Math/Transform.cpp:15-16 逐条对标）。
+// 纪律不变：全 inline、float 顺序固定 = 确定性可单测。
+// ---------------------------------------------------------------------------
+
+struct Mat4 {
+    // m[col][row] 语义的扁平存储：m[0..3]=第 0 列 (x 基向量 + 0)，m[12..14]=平移。
+    float m[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+};
+
+inline Mat4 mat4Identity() { return {}; }
+
+// 列主序矩阵乘 result = a * b：result[c][r] = Σ_k a.m[k*4+r] * b.m[c*4+k]。
+inline Mat4 mulMat4(const Mat4& a, const Mat4& b) {
+    Mat4 r;
+    for (int c = 0; c < 4; ++c) {
+        for (int row = 0; row < 4; ++row) {
+            float acc = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                acc += a.m[k * 4 + row] * b.m[c * 4 + k];
+            }
+            r.m[c * 4 + row] = acc;
+        }
+    }
+    return r;
+}
+
+inline Mat4 mat4Translate(const Vec3& t) {
+    Mat4 r;
+    r.m[12] = t.x; r.m[13] = t.y; r.m[14] = t.z;
+    return r;
+}
+
+inline Mat4 mat4Scale(const Vec3& s) {
+    Mat4 r;
+    r.m[0] = s.x; r.m[5] = s.y; r.m[10] = s.z;
+    return r;
+}
+
+// 四元数 -> 旋转矩阵（列主序；glm::toMat4 同款公式）。
+inline Mat4 quatToMat4(const Quat& q) {
+    Mat4 r;
+    const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+    r.m[0]  = 1 - 2 * (yy + zz); r.m[4]  = 2 * (xy - wz);      r.m[8]  = 2 * (xz + wy);
+    r.m[1]  = 2 * (xy + wz);     r.m[5]  = 1 - 2 * (xx + zz);  r.m[9]  = 2 * (yz - wx);
+    r.m[2]  = 2 * (xz - wy);     r.m[6]  = 2 * (yz + wx);      r.m[10] = 1 - 2 * (xx + yy);
+    return r;
+}
+
+// TRS 构造：T(pos) * R(rot) * S(scale)（Carrot Transform::toTransformMatrix 顺序）。
+inline Mat4 mat4TRS(const Vec3& pos, const Quat& rot, const Vec3& scale) {
+    Mat4 m = quatToMat4(rot);
+    for (int c = 0; c < 3; ++c) {           // 旋转三列各乘 scale（列向量约定）
+        m.m[c * 4 + 0] *= scale.x;
+        m.m[c * 4 + 1] *= scale.y;
+        m.m[c * 4 + 2] *= scale.z;
+    }
+    m.m[12] = pos.x; m.m[13] = pos.y; m.m[14] = pos.z;
+    return m;
+}
+
+// 通用 4x4 求逆（Mesa gluInvertMatrix 经典展开，列主序逐项对应；reparent 的
+// inverse(parent) 用）。可逆性由调用方保证（TRS 矩阵 scale 非 0）；奇异矩阵
+// 结果无定义（不崩溃，不除零保护——引擎矩阵路径不允许奇异输入）。
+inline Mat4 inverseMat4(const Mat4& a) {
+    const float* m = a.m;
+    Mat4 inv;
+    float* o = inv.m;
+    o[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+    o[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+    o[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+    o[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+    o[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+    o[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+    o[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+    o[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+    o[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14]  - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7]  - m[13]*m[3]*m[6];
+    o[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14]  + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7]  + m[12]*m[3]*m[6];
+    o[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13]  - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7]  - m[12]*m[3]*m[5];
+    o[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13]  + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6]  + m[12]*m[2]*m[5];
+    o[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10]  + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7]   + m[9]*m[3]*m[6];
+    o[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10]  - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7]   - m[8]*m[3]*m[6];
+    o[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]   + m[4]*m[1]*m[11] - m[4]*m[3]*m[9]  - m[8]*m[1]*m[7]   + m[8]*m[3]*m[5];
+    o[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]   - m[4]*m[1]*m[10] + m[4]*m[2]*m[9]  + m[8]*m[1]*m[6]   - m[8]*m[2]*m[5];
+    const float det = m[0]*o[0] + m[1]*o[4] + m[2]*o[8] + m[3]*o[12];
+    const float invDet = 1.0f / det;
+    for (int i = 0; i < 16; ++i) o[i] *= invDet;
+    return inv;
+}
+
+// 点变换 v' = M * vec4(v, 1)（层级世界位置提取用）。
+inline Vec3 mat4TransformPoint(const Mat4& m, const Vec3& v) {
+    return {
+        m.m[0] * v.x + m.m[4] * v.y + m.m[8]  * v.z + m.m[12],
+        m.m[1] * v.x + m.m[5] * v.y + m.m[9]  * v.z + m.m[13],
+        m.m[2] * v.x + m.m[6] * v.y + m.m[10] * v.z + m.m[14],
+    };
+}
+
 } // namespace nl::math

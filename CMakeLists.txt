@@ -141,9 +141,13 @@ add_library(nl_core STATIC
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
     core/src/material_graph/compile.cpp # T1：图编译验收（emit + slangc 四路，纯进程调用）
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
+    core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
-target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
+# tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
+# vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
+# 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
+target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 target_link_libraries(nl_core PRIVATE glfw nl_metis)
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -469,3 +473,8 @@ set_tests_properties(e0-ecs-core-selftest PROPERTIES
 # 负向：未知 suite = 用法错误退出码 2
 add_test(NAME e0-ecs-unknown-suite COMMAND nanite-scene selftest --suite bogus)
 set_tests_properties(e0-ecs-unknown-suite PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-E1：组件 + 层级机械单测（数值锚 = 手算对照，P8-ECS-PLAN.md 判据）----
+add_test(NAME e1-ecs-hier-selftest COMMAND nanite-scene selftest --suite ecs-hier)
+set_tests_properties(e1-ecs-hier-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-hier selftest: PASS")

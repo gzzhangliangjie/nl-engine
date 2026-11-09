@@ -1127,3 +1127,15 @@
 
 **下一步**：M-E1 Component 基类（serialise/deserialise/duplicate/类型 ID）+ ComponentLibrary 注册工厂 + Transform（pos/scale/quat，nl/math 扩展）+ 层级（setParent / reparent 保世界变换 / 父删递归删子 / local→world 复合 / duplicate 深拷贝）。
 
+
+## M-E1：Component + Transform + 层级（feat/ecs，2026-11-09，tag `ecs-e1`）
+
+**动作**：wt_pool claim（track ecs / M-E1）→ 三处证据重读（Carrot `components/Component.h` 基类五虚 + `TransformComponent.{h,cpp}` + `math/Transform.cpp` TRS 顺序 + `World.cpp:476-650` 层级段：setParent 摘旧挂新 / reparent 取世界变换后写回 / duplicateWithRemap 递归深拷 + "(Copy)" / removeEntity 立即递归压子孙 / flush 双结构双侧清理；TRS = translate*rotate*scale，层级复合 = parentGlobal*local）→ `nl/math` 新增 Mat4 段（列主序 m[col*4+row]：mat4TRS / mulMat4 / quatToMat4 / inverseMat4 gluInvertMatrix 展开 / mat4TransformPoint）→ `nl/scene/Component.hpp/.cpp`：Component 基类五虚（getName/duplicate/serialise/deserialise/getComponentTypeID，serialise 签名用 vendored nlohmann json 零新依赖）+ ComponentOf<T> CRTP（类型 ID 0..63 静态递增 = Signature 位对应 + duplicate 换 owner 拷构造）+ ComponentLibrary 显式注册工厂（未知名 nullptr = M-E2 负向铺垫）+ Transform/TransformComponent（getWorldMatrix 递归复合 / getWorldPosition=局部原点世界位置 / setWorldFromMatrix 矩阵分解写回）→ World.hpp/.cpp 扩展：组件存储 unordered_map 增删即时（Carrot 口径）+ 层级双结构 parents_/children_ + setParent 环防护 assert（Carrot 不防，引擎路径必须防）+ reparent 统一矩阵路径（取旧世界矩阵→setParent→inverse(新父)*世界矩阵分解写回，保 reparent 前后世界矩阵逐元素不变——硬判据；偏离 Carrot 逐字段路径的留痕见 Component.hpp 注释，Carrot 同病：非均匀 scale+旋转父链有剪切时 reparent 是近似，锚点用例用均匀 scale 父保严格成立）+ removeEntity 立即递归压子孙 + flush 清组件/双结构 + duplicateWithRemap → `nanite-scene` 加 suite `ecs-hier` 五组数值锚（全部手算对照）→ CMake：Component.cpp 进 nl_core + tinygltf include 改 PUBLIC（组件头接口暴露 json）+ ctest e1 系注册。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e1`，即本条台账所在提交）。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16；`nanite-scene selftest --suite ecs-hier` PASS 五组：①三层父子链复合矩阵手算锚（A(pos1,0,0·s2)←B(pos0,1,0·s3·Rz90)←C(pos1,1,0)：C 世界矩阵 col0(0,6,0) col1(-6,0,0) col2(0,0,6) col3(-5,8,0) 逐元素；局部点 (1,1,0)→世界 (-11,14,0)；getWorldPosition=局部原点=(-5,8,0) 即 W 平移列）②reparent 保世界变换硬判据（世界矩阵逐元素不变 + 新局部手算锚 pos(-3,4,0) scale(3) rot=Rz90）+ 无 Transform 父直通（Carrot 断链口径）③删父递归删子（flush 后子孙全不存在 + 双结构清理）④duplicate 深拷（"(Copy)" 名 / 组件局部一致 / 改副本原件不动 / 副本孙世界矩阵一致 / 父关系继承）⑤组件库（显式注册 / 按名创建 / 类型 ID 稳定 / 未知名 nullptr）；ctest 3/3（e0 正负向 + e1 正向）。收口四项自查：①渲染交代物——无（A 类 E1a 纯逻辑）；②工具交代物——ctest e1 正向已注册跑绿（负向复用 e0 未知 suite），展示台留 M-E3；③MILESTONES 四栏（本节）；④固化——P8-ECS-PLAN M-E1 标完成 + 数学段口径注释留痕（nl/math Mat4 与 anim 合并时机届时定）。
+
+**踩坑**：①World.hpp 缺 `<memory>`（unique_ptr 进头后 std 成员 C2039 连锁报错一片）——头文件加新 std 类型先补 include；②`nl::scene` 内用 nl/math 类型未限定 → 头里定向 using 声明（类型 + mat4TRS/quatIdentity），cpp 文件级 `using namespace nl::math`（anim 先例，头不污染）；③「世界位置」语义口径：getWorldPosition = Carrot computeFinalPosition = **局部原点**的世界位置（= W 平移列），首轮锚点误写成局部点 (1,1,0) 的变换值 FAIL——两个语义分开锚定（原点 vs mat4TransformPoint 任意局部点）；④裸 shell 无 nmake 环境，构建必须走 bat 脚本（cmake --build 直接炸 generator）；⑤ComponentTypeID 归 World.hpp 基础类型层（World 存储与组件层共用，避免循环 include——Component.hpp include World.hpp，World.hpp 只前向声明 Component）。
+
+**下一步**：M-E2 System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ 场景 JSON 序列化/反序列化 roundtrip 字节一致（正/负向：非法 JSON / 未知组件名退出码 2）。
