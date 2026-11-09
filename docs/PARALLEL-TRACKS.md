@@ -181,7 +181,7 @@
 |---|---|---|---|
 | 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废；新阶梯 = vendored + 封装 + 编辑器结合 + E1 集成） |
 | ~~物理（Jolt vendored 集成）~~ | **已建** `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics`（已建） | **已提前开工**，见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
-| 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md`（2026-11-09 全量重写；旧 OpenAL Soft + 自写解码器作废留痕 §7）；排期闸仍排 E1 后 |
+| 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | ~~`E:/UE_STUDY_2026/nl-engine-audio`~~ | `feat/audio`（**分支保留**） | **M-S0/M-S1/M-S2 已 merge 回 master**（2026-11-09，merge `1aac3d2`，wt 可择机拆除）；剩 M-S3 场景集成 gate 在 E1/E1b 后；`docs/p8/P8-AUDIO-PLAN.md` |
 
 ### 7.1e 物理轨道（2026-11-09 提前开工，M-P0~M-P3）
 

@@ -1703,3 +1703,24 @@
 5. **VULKAN 构建树 cache 失效**：旧 cache `CMAKE_MAKE_PROGRAM=nmake`（裸名），build 报 generator 错误；显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure 后恢复。
 
 **下一步**：M-S3 场景集成（**gate 在 P8 E1 / E1b 收口之后**，不随本轮解锁）；feat/audio 轨道在 M-S3 收口时全量合回 master。
+
+## feat/audio merge 回 master：M-S0 + M-S1 + M-S2 全量合并（主树，2026-11-09，merge commit `1aac3d2`）
+
+**动作**：用户「合并 nl-engine-audio 的内容到主工程」（提前于原计划「M-S3 收口时合并」，M-S3 仍 gate 在 E1/E1b 后）。`git merge --no-ff feat/audio`（merge-base `55f361c`，feat/audio +3 / master +31）。冲突 4 文件全解：`CMakeLists.txt` 三处（script+audio 源文件同列 / Taskflow PUBLIC 与 `nl_miniaudio` PRIVATE 并存 / `nl-script audio-tools` 同入 /W4 列表）；`docs/MILESTONES.md` 两侧条目顺序拼接；`docs/s5/UE-DIFFS.md` 音频条目 **D16→D17**（与 M7.1 的 D16 撞号，按 M-P2 撞号先例改号，正文三处引用同步）；`example/cases.json` 三处版本卡拼接（master 侧 11 卡 + audio 侧 3 卡，机器核对无缺失无重复，共 50 卡）。合并后新修：`DebugController.hpp` 补 `registerAudioConsole` 声明（feat/audio 上 viewer 从未编译，缺声明漏网——见踩坑）。
+
+**提交版本**：merge commit `1aac3d2`（master）；feat/audio 分支保留不删。
+
+**完成情况**：
+- **双后端构建**：DX12 / VULKAN 各 BUILD OK + `viewer --selftest` 16/16。
+- **音频自证**：`audio-tools selftest` 46/46；`example/audio-s0 / audio-s1 / audio-s2` 三张 run.bat 全链 **ALL GREEN**（仓库根 CWD）；`server.py --check` 退出 0（stage=S7.1）。
+- **cases.json 集合核对**：合并结果与 HEAD/feat/audio 两侧原版逐 id 比对，无缺失、无多余、无重复。
+- **UE-DIFFS**：D17（音频距离衰减）随 merge 入主树，编号撞号已修。
+
+**踩坑情况**：
+1. **feat/audio 的 viewer 从未编译过**：wt 里 `build/DX12` 无 viewer.exe，`main.cpp` 调 `nl::audio::registerAudioConsole` 但全树无声明——M-S2 的「viewer 已注册」验收实际未编译验证。merge 后主树首次构建暴露，补 `DebugController.hpp` 声明（Console 前置声明 + 函数声明）修复。
+2. **wt 内 exe 陈旧假阳性**：`audio-tools.exe` 构建于 19:19，最后一次 AudioWorld.cpp 提交 19:22——wt 里 `check` PASS 是旧 exe 的结果，M-S2 收口后从未重编验证。
+3. **CRLF 撞 FNV hash**：`core.autocrlf=true` 下新 clone/merge 检出的 `example/audio-s*/` 数据文件是 CRLF，而 provenance 记录的 hash 按 LF 算——对检入副本直接跑 `audio-tools check` 必 FAIL；走 run.bat（现场重新生成 LF 文件）则全绿。音频卡是全仓首个按字节 hash 文本的工具卡，此隐患 feat/audio 自带。
+4. **`audio-tools debug` 子命令 CWD 敏感**：`portableWav` 把 WAV 归一化成仓库相对路径后 `createSource` 按 CWD 解析——必须从仓库根跑 run.bat，从 `example/audio-s2/` 内跑会报 cannot open WAV。feat/audio 原有设计（快照可移植性优先），暂不改码，留档备忘。
+5. **merge 时 git 把两侧卡片共用收尾对齐进公共区**：cases.json 三处冲突块两侧尾部共享 `}`/`]`/`},` 闭括号，文本拼接后各丢一处收尾——按 JSON 解析报错逐处补回。
+
+**下一步**：M-S3 场景集成仍 gate 在 P8 E1/E1b 收口之后；feat/audio 轨道代码已全量在 master，wt `nl-engine-audio` 可择机拆除（分支保留）。
