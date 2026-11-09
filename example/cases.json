@@ -3822,9 +3822,9 @@
     },
     {
      "id": "selftest",
-     "name": "selftest（16/16，阶段校验 pbr-direct）",
+     "name": "selftest（16/16，阶段校验跟随当前 kStage）",
      "kind": "selftest",
-     "note": "stage 检查改为 pbr-direct；FrameParams POD 缺省校验照旧。",
+     "note": "stage 检查跟随 kStage 演进（本卡建立时为 pbr-direct，M7.0 起为 S7.0）；FrameParams POD 缺省校验照旧。",
      "args": [
       "--selftest"
      ],
@@ -3897,7 +3897,8 @@
      "preview": "example/m-j5a/negative-unknown.png"
     }
    ]
-  },
+  }
+,
   {
    "id": "m-j5a-mg",
    "label": "M-J5a MG",
@@ -3942,6 +3943,134 @@
      "command": "material-graph-tools check",
      "preview": "example/m-j5a/check.png"
     }
+   ]
+  }
+,
+  {
+   "id": "s7.0",
+   "label": "S7.0",
+   "name": "Visibility Buffer 打包写入（M7.0）",
+   "tag": "s7-visbuf",
+   "date": "2026-11-09",
+   "summary": "M7.0（S7 首个里程碑）：64 位 vis buffer 打包写入 + 簇/三角可视化。预研定稿 Option A 口径不变——u64=(asuint(deviceZ)<<32)|(clusterId<<8|triId)，标准 Z 下位图单调递增故 atomicMin=最近者胜，clear=0xFFFFFFFFFFFFFFFF 让任意真实写入即胜（不需要 UE 的 cluster+1 空哨兵）。介质计划内偏离：vendored NVRHI 全树无 R64 格式（枚举/DXGI 映射/Vulkan 映射三处实查），UE/bevy 的 R64_UINT image atomic 走不通，改走 RWStructuredBuffer<uint64_t>（宽×高）线性 buffer + buffer atomic；打包/解包/hash/寻址集中在 visbuf_common.slangh 供 S9/S10/S13 复用。能力补齐两处：CMake 只给 4 个新 shader 产物加 -profile sm_6_6（默认 profile 报 64-bit atomic 需 SM6.6+；老产物一个字节不动），Vulkan createDevice 挂 VkPhysicalDeviceShaderAtomicInt64Features.shaderBufferInt64Atomics + VK_KHR_shader_atomic_int64；DX12 单独补查 Options11 的 AtomicInt64OnDescriptorHeapResourceSupported（Options9 两位只管 typed resource 与 group shared）。Scene 复用 initCull 的 .nmesh/vertex pulling 全套资源（frustum 恒关），每帧三段式 = clearBufferUInt(0xFFFFFFFF) → 簇光栅 PS atomicMin 写 u0 → 全屏 viz pass 读 t0 解包输出。viz 两档：clusterId→pcg 色 / (clusterId<<8|triId)→pcg 色。",
+   "acceptance": [
+    "visbuf 调试图簇/三角颜色分明、边缘干净无撕裂；背景 VIS_EMPTY 与前景可区分",
+    "遮挡关系正确：与 --mode cull --frustum off --shading 4 传统直画对照，前景 64262 px 对 64262 px，轮廓差 0、颜色差 0、最大通道差 0（verify.py 逐像素核验）",
+    "cluster / triangle / cull-reference 三对双后端 PNG 全部逐字节相同；deviceErrors=0、调试层零输出",
+    "单源双目标 40/40 魔数（新增 visbuf 四入口 × spv/dxil）；selftest 16/16；spot 回归 m0.9/s2.0/s3.2 三对 bytes 全绿（老基线零影响）",
+    "example/s7-visbuf 归位（6 张基线 + run.bat + verify.py）+ cases.json + --check 退出 0"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "cluster",
+     "name": "visbuf 簇色档：clusterId → pcg 颜色",
+     "kind": "pair",
+     "note": "每个簇一个颜色，与 cull 模式 CPU/GPU 同式 pcg(簇号) 逐位一致；可直接并排对拍。237 簇边缘干净、无撕裂，猴头轮廓与眼睛/耳朵内部遮挡关系正确。",
+     "baselines": {
+      "dx12": "example/s7-visbuf/cluster-dx12.png",
+      "vulkan": "example/s7-visbuf/cluster-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "visbuf",
+      "--vis-viz",
+      "cluster",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode visbuf --vis-viz cluster --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s7-visbuf/run.bat cluster"
+    },
+    {
+     "id": "triangle",
+     "name": "visbuf 三角档：全局三角 id → pcg 颜色",
+     "kind": "pair",
+     "note": "hash 输入 (clusterId<<8|triId) 保证全局唯一三角编号；画面里每个三角一个颜色、簇间也不重复，证明低 8 位 triId 与 24 位 clusterId 解包都正确。",
+     "baselines": {
+      "dx12": "example/s7-visbuf/triangle-dx12.png",
+      "vulkan": "example/s7-visbuf/triangle-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "visbuf",
+      "--vis-viz",
+      "triangle",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode visbuf --vis-viz triangle --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s7-visbuf/run.bat triangle"
+    },
+    {
+     "id": "cull-reference",
+     "name": "对照组：传统直画（cull 模式，frustum off）",
+     "kind": "pair",
+     "note": "--shading 4 的簇色与 visbuf 簇色档同一个 pcg hash。verify.py 按各自背景色取前景掩码逐像素对拍：轮廓/颜色全等 = vis buffer 反解与遮挡关系正确。",
+     "baselines": {
+      "dx12": "example/s7-visbuf/cull-reference-dx12.png",
+      "vulkan": "example/s7-visbuf/cull-reference-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cull",
+      "--frustum",
+      "off",
+      "--shading",
+      "4",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2"
+     ],
+     "command": "viewer.exe --mode cull --frustum off --shading 4 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+     "script": "example/s7-visbuf/run.bat reference"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（16/16，阶段校验 S7.0）",
+     "kind": "selftest",
+     "note": "stage 检查改为 S7.0；40/40 shader 产物魔数（含 visbuf 四入口）；modeSelfTest 覆盖新 visbuf 名字。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest",
+     "script": "example/s7-visbuf/run.bat selftest"  }
    ]
   }
  ]

@@ -80,6 +80,7 @@ struct Options {
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
     bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
     bool hizOn      = true;   // M6.2：Hi-Z 遮蔽剔除（--hiz off = 纯视锥/误差遍历，退化可验证）
+    int  visVizMode = 0;     // M7.0：visbuf 可视化档（0 cluster / 1 triangle）
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -190,6 +191,15 @@ Options parseArgs(int argc, char** argv) {
                 std::cerr << "invalid --hiz '" << v << "' (expected on|off)\n";
                 std::exit(1);
             }
+        } else if (a == "--vis-viz" && i + 1 < argc) {
+            // M7.0：vis buffer 解码档（仅 visbuf 模式消费；其它模式恒 0 不读）。
+            const std::string v = argv[++i];
+            if (v == "cluster" || v == "0") o.visVizMode = 0;
+            else if (v == "triangle" || v == "tri" || v == "1") o.visVizMode = 1;
+            else {
+                std::cerr << "invalid --vis-viz '" << v << "' (expected cluster|triangle)\n";
+                std::exit(1);
+            }
         } else if (a == "--shading" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.shading = -1;
@@ -295,7 +305,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "pbr-direct") != nullptr, "pbr-direct stage reported");
+    check(std::strstr(st.stage, "S7.0") != nullptr, "S7.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -392,7 +402,8 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
-              bool skinMode = false, bool hizMode = false) {
+              bool skinMode = false, bool hizMode = false,
+              bool visbufMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -415,7 +426,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn, dagMode, skinMode, hizMode);
+                                                   o.frustumOn, dagMode, skinMode, hizMode,
+                                                   visbufMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -703,6 +715,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
@@ -1062,6 +1075,10 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/true, /*dagMode=*/true, /*skinMode=*/false,
                          /*hizMode=*/true);
+    case nl::core::ViewMode::Visbuf:     // M7.0：u64 vis buffer 打包 + 簇/三角可视化
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -1088,6 +1105,9 @@ void printUsage() {
               << "                                     off = identity visible list, M4.0 behavior)\n"
               << "  viewer.exe --hiz on|off            Hi-Z occlusion culling in hiz mode (default on;\n"
               << "                                     off = frustum/error traversal only, M6.2 toggle)\n"
+              << "  viewer.exe --vis-viz cluster|triangle\n"
+              << "                                     visbuf mode: decode vis buffer by clusterId\n"
+              << "                                     or by global triangle id (default cluster)\n"
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id | pbr (default textured;\n"
               << "                                     N key cycles 0..3; pbr = Cook-Torrance direct light)\n"
               << "  viewer.exe --pbr-naive             pbr debug A/B: skip sRGB->linear (naive UNORM read,\n"
@@ -1143,7 +1163,8 @@ int main(int argc, char** argv) {
 // 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
-         o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz)
+         o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
+         o.mode == nl::core::ViewMode::Visbuf)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

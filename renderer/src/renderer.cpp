@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "pbr-direct Cook-Torrance direct lighting + glTF metallicRoughness";
+    "S7.0 visibility buffer u64 packing + cluster/triangle viz";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -65,6 +65,11 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
+    // M7.0：visbuf.slang 四入口 × 双目标。
+    {"visbuf.vsvisraster", true}, {"visbuf.vsvisraster", false},
+    {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
+    {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
+    {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -110,11 +115,12 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
-                                           bool hizMode) {
+                                           bool hizMode, bool visbufMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
-    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode;
+    // M7.0：visbuf 模式同样吃 .nmesh（复用 M4 的簇数据）。
+    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode;
     // M-A5：skin 模式吃 assets/models/ 下的 .glb（含 rigged/ 子目录——
     // 标准演示资产在 assets/models/rigged/；仍禁 ".." 与其他路径分隔符）。
     bool nameOk = false;
@@ -142,7 +148,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
-                                 hizMode, r->impl_->error)) {
+                                 hizMode, visbufMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

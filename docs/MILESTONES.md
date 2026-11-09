@@ -1381,3 +1381,40 @@
 6. **版本由 C++ 标准定死**：项目 `CMAKE_CXX_STANDARD 17` → 不能取 v4.x；v3.11.0 是 v3 末版（`TF_VERSION 301100`），`VENDOR.md` 记录升级条件。
 
 **下一步**：M-J5b（进程级常驻 Scheduler + Compute/IO 分池 + 兼容层）、M-J5c（physics 合回后接 `JPH::JobSystem` / ECS E1b 稳定后接 system 调度）；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。**merge 回 master 与 worktree 拆除尚未执行**（主树有 S7 在途改动，按纪律不碰），需用户批准后另行处理。
+
+## M7.0：visibility buffer 打包写入 + 簇/三角可视化（S7 首个里程碑，2026-11-09，tag `s7-visbuf`）
+
+**动作**
+- **打包口径定稿（Option A 不变）**：`u64 = (uint64(asuint(deviceZ)) << 32) | (clusterId(24b) << 8 | triId(8b))`；标准 Z（near=0）下 `[0,1]` 正浮点位图按 u64 整数单调递增，故 `atomicMin` = 最近者胜；`clear = 0xFFFFFFFFFFFFFFFF`，任意真实写入都小于空值，不需要 UE 的 `cluster+1` 空哨兵。
+- **新增 `renderer/shaders/visbuf_common.slangh`**：`VIS_CLUSTER_BITS=24` / `VIS_TRI_BITS=8` / `VIS_EMPTY` + `visPack()` / `visUnpack()` / `visHashColor()` / `visIndex(pixel,width)=y*width+x`，打包 / 解包 / hash / 二维压一维集中一处，供 M7.1 与 S9/S10/S13 复用；用 `.slangh` 避开 CMake 的 `*.slang` GLOB。
+- **新增 `renderer/shaders/visbuf.slang` 四入口**：`vsVisRaster`/`psVisRaster`（复用 M4 的顶点池/localIndices/clusterMeta/identityIndex/indirectArgs 做 vertex pulling，VS 输出 `nointerpolation clusterId/triInCluster`，PS 对 `u0 RWStructuredBuffer<uint64_t>` 做 `InterlockedMin`）；`vsVisViz`/`psVisViz`（`SV_VertexID` 生成全屏大三角，读同块 buffer 的 `t0` SRV 解包，`--vis-viz cluster|triangle` 两档 pcg hash 色）。`model.slang` **一个字节未动**。
+- **`CMakeLists.txt`**：登记 `_ENTRIES_VISBUF`（4 入口）、`_VISBUF_COMMON`（公共头依赖）、`_SM66_ARTIFACTS` 白名单——只对 4 个新 DXIL 产物加 `-profile sm_6_6`，老产物与历史基线零扰动。
+- **`renderer/src/scene.cpp/.hpp`**：新增 `initVisbuf()`（调 `initCull(..., frustumCull=false)` 复用 .nmesh 全套资源；断言 `maxTriPerCluster<=256` / `clusterCount<1<<24`）、`ensureVisbufTargets()`（按 viewport 懒建宽×高 u64 buffer：stride 8 / `canHaveUAVs` / `initialState=CopyDest` / `keepInitialState`，并建 raster、viz 各一个 BindingSet）；`draw()` 三段式 `clearBufferUInt(0xFFFFFFFF)` → `drawIndexedIndirect(0,1)` 簇光栅 → `draw(3)` 全屏 viz（Carrot 编排，M7.1 把 viz 换成 material pass）；`ready()` 加 visbuf 分支；`invalidatePipelines()`/`shutdown()` 补齐清理。
+- **设备能力补齐两处**：`backend_vulkan.cpp::createDevice()` 挂 `VkPhysicalDeviceShaderAtomicInt64Features.shaderBufferInt64Atomics` 的 `pNext` + `VK_KHR_shader_atomic_int64`（修掉「只查不启」）；`backend_dx12.cpp::reportFeatures()` 补查 `D3D12_OPTIONS11::AtomicInt64OnDescriptorHeapResourceSupported`。两后端 `init()` 增加 `visbufMode` 且优先级最高。
+- **接口链路**：`backend.hpp` / `renderer.cpp` / `renderer.hpp` 加 `visbufMode` 与 `FrameParams.visVizMode`；kStage bump `S7.0 visibility buffer u64 packing + cluster/triangle viz`；artifact selftest 增 8 个产物（32→40）；`core/modes.hpp/.cpp` 加 `ViewMode::Visbuf=8` + `"visbuf"`；`viewer/main.cpp` 加 `--mode visbuf` / `--vis-viz cluster|triangle` / help / selftest stage 期望改 S7.0。
+- **交代物**：`example/s7-visbuf/`（6 张双后端基线 + `run.bat` + `verify.py`）、`example/cases.json` 新增 s7.0 卡 4 用例；pbr-direct 的 selftest 卡 note 与 `run.bat` echo 改为「阶段校验跟随 kStage」。
+- **固化文档**：`docs/s7/S7-PLAN.md`（预研 §1 的 R64UINT/R32G32 降级条目标作废，改 u64 buffer 介质 + 落地实录 + 常见坑；M7.0 checkbox 全勾）、`docs/s5/UE-DIFFS.md` 新增 **D15**（载体偏离含 buffer/image 能力位差异与升级触发条件）、`docs/SHADER-CONVENTIONS.md` 新增 **§2.9**（64 位原子的编译 profile / 设备启用 / 介质三件事）+ 多入口登记纪律 + 40 产物自检。
+- **kStage bump 波及**：18 个 HUD 用例 × 2 后端 = **36 张 HUD 基线全量重拍**（首行 stage 文本变化）。
+
+**提交版本**：本条固化提交，tag `s7-visbuf`（D-S7-1 Carrot 式单全屏材质 pass / D-S8-1 TLAS 每帧全量 rebuild 沿用历史拍板，本轮不重复问；主线渲染按既有约定不占 `wt_pool` 坑）。
+
+**完成情况**
+- 单源双目标：40/40 shader 产物魔数（新增 visbuf 四入口 × spv/dxil），selftest **16/16 ×2**，`deviceErrors=0` ×2、调试层零输出。
+- 三对展示台基线**逐字节相同**（DX12 与 Vulkan 各自复现 + 跨后端互等）：cluster MD5 `e85285853ee6230cdeed70a5118854a5`、triangle `d82262305d101baf72a12a2195628a34`、cull-reference `26e3d1f39eed181079bfde6abf6a0223`。
+- **硬对拍**（`example/s7-visbuf/verify.py`）：visbuf 簇色档 vs 传统直画 `--mode cull --frustum off --shading 4`，按各自背景色取前景掩码逐像素比对，**64262 px 对 64262 px，轮廓差 0 / 颜色差 0 / 最大通道差 0**（双后端各一份）——一次性证明打包、解包与遮挡关系全对；`verify.py` 输出 `ALL GREEN`。
+- `server.py --check` 退出 0（`stage=S7.0 version=s7.0 cases=4 baselines=6`）；收口全量回归 **286/286 ALL GREEN**（`--jobs 2` 59 s 与脚本头部纪律指定的 `--jobs 1` 串行 107 s 各跑一次，两次全绿；`--jobs 4` 曾出现 1 条工具用例并发争用，见踩坑 9）。
+- 老路径不变量：m0.9 / s2.0 / s3.2 三对 spot 回归 bytes 全绿；36 张 HUD 基线随 bump 重拍后全量回归逐字节通过。
+- 证据图：`example/s7-visbuf/{cluster,triangle,cull-reference}-{dx12,vulkan}.png`（收口回复已直接打开）。
+
+**踩坑情况**
+1. **R64_UINT 纹理路线开工即撞墙** → 根因：vendored NVRHI 全树零 R64 格式（`Format` 枚举、`dxgi-format.cpp`、`vulkan-constants.cpp` 三处实查），`Format::R64UINT` / `imageAtomicMin` 根本不存在。处理：开工前用 slangc + NVRHI 源码实测后向用户拍板三选一，按「改自己的代码、不改第三方」选 `RWStructuredBuffer<uint64_t>` 线性 buffer；打包格式 / atomicMin / clear=max 口径一个不动，偏离落 D15 + S7-PLAN 落地实录。
+2. **DXIL 编译报 `64-bit atomic operations should only be used in Shader Model 6.6+`** → 根因：默认 profile 不含 SM6.6。处理：`-profile sm_6_6`，且只给 `_SM66_ARTIFACTS` 白名单的 4 个新产物加，老产物一个字节不动（避免历史基线被连坐重拍）。SPIR-V 直通（`OpCapability Int64` + `Int64Atomics`）。
+3. **Vulkan 显示 `shaderBufferInt64Atomics=1` 却用不了** → 根因：`reportFeatures()` 只是查询，`vkCreateDevice` 没挂 feature / 扩展 = 查询 ≠ 启用。处理：createDevice 里挂 `VkPhysicalDeviceShaderAtomicInt64Features` 的 `pNext` + `VK_KHR_shader_atomic_int64`。
+4. **DX12 能力位查错** → 根因：Options9 的 `AtomicInt64OnTypedResourceSupported` / `GroupShared` 只管 typed resource 与 group shared，不管 structured buffer。处理：补查 Options11 的 `AtomicInt64OnDescriptorHeapResourceSupported` 并入 `info_.shaderInt64Atomics`。
+5. **首帧不画 / pipeline 永远建不起来** → 根因：`ensurePipelines()` 挂在 `!ready()` 分支，而 `ready()` 把懒建资源也算进去，自相矛盾成死锁。处理：`ready()` 在 visbuf 分支只要求 `visRasterPSO_ && visVizPSO_`。
+6. **`clearBufferUInt` 顺序敏感** → 根因：Vulkan 实现内部 `endRenderPass()`，必须早于首个 `setGraphicsState`；validation 层要求命令列表类型 ≤ Compute（graphics 列表满足）。处理：clear 放在 `draw()` 最开头；u64 空值用「每个 u32 写 0xFFFFFFFF」实现，省掉独立 compute clear pass。
+7. **新入口不能塞进 `model.slang`** → 根因：会改动 6 个老入口产物，牵连所有 exe=current 历史渲染结果。处理：独立 `visbuf.slang` + `.slangh` 公共头，CMake 登记 `_ENTRIES_VISBUF` 与额外 `DEPENDS`；spot 回归三对 bytes 反证零扰动。
+8. **kStage 文案串联** → 根因：`example/pbr-direct/run.bat` 与 selftest 卡把 stage 检查写死成 `pbr-direct`。处理：改为「跟随 kStage」；18 个 HUD 用例 × 2 后端基线全量重拍。
+9. **`--jobs 4` 全量回归偶发 1 条 FAIL（`s1-asset/roundtrip` vulkan：日志缺 `nmesh selftest: PASS`）** → 根因：工具用例写固定共享路径，用例间并行会争用（`tools/regression.py` 头部纪律已写明，并建议可疑 near/FAIL 用 `--jobs 1` 排除争用）；与本轮 M7.0 代码无关。处理：`--only s1-asset/roundtrip` 单跑 2/2 通过、`--jobs 2` 全量 286/286 ALL GREEN 后以低并发为准；不擅自改工具层的共享路径约定。
+
+**下一步**：M7.1 材质 pass（vis buffer 反解 → barycentrics → vertex pulling 取属性 → Carrot 式单全屏材质着色，D-S7-1 已拍板）；M7.2 多材质验收。

@@ -244,6 +244,11 @@ set(_SHADER_ARTIFACTS "")
 # 入口清单按源文件给：model.slang 双入口（M1.3 cluster 场景），其余单入口。
 # D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
 # 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
+# M7.0（S7.0）：visbuf 路径的 4 个新入口全部收进独立的 visbuf.slang，
+# model.slang 一个字节都不动（老产物 100% 不变）。64 位原子在 DXIL 上必须
+# SM6.6（spike 实测：默认 profile 报 "64-bit atomic operations should only be
+# used in Shader Model 6.6+"），所以只给 _SM66_ARTIFACTS 列出的**新产物**
+# 加 -profile sm_6_6，否则 exe=current 的 HUD 基线要全部重拍。
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
                    "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
@@ -251,6 +256,15 @@ set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 set(_ENTRIES_CULL "csCull|cs|compute")
 # M5.1：dag.slang 单 compute 入口（DAG 遍历选层，显式栈）。
 set(_ENTRIES_DAG "csDag|cs|compute")
+# M7.0：visbuf.slang 四入口——簇光栅（vertex pulling + u64 atomicMin 写 vis）
+# 与全屏可视化（解包 → 簇/三角颜色）。
+set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fragment"
+                    "vsVisViz|vsvisviz|vertex" "psVisViz|psvisviz|fragment")
+# 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
+set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
+# DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
+set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
+                    "visbuf.vsvisviz" "visbuf.psvisviz")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -266,6 +280,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_DAG}")
     elseif(_SRC_NAME STREQUAL "hiz")
         set(_ENTRIES "${_ENTRIES_HIZ}")
+    elseif(_SRC_NAME STREQUAL "visbuf")
+        set(_ENTRIES "${_ENTRIES_VISBUF}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -274,6 +290,19 @@ foreach(_SRC ${NL_SHADER_SRCS})
         list(GET _SPEC_LIST 0 _entry)
         list(GET _SPEC_LIST 1 _suffix)
         list(GET _SPEC_LIST 2 _stage)
+        list(FIND _SM66_ARTIFACTS "${_SRC_NAME}.${_suffix}" _sm66_idx)
+        if(_sm66_idx GREATER_EQUAL 0)
+            set(_DXIL_PROFILE -profile sm_6_6)
+        else()
+            set(_DXIL_PROFILE "")
+        endif()
+        # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
+        # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
+        if(_SRC_NAME STREQUAL "visbuf")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+        else()
+            set(_SHADER_EXTRA_DEPS "")
+        endif()
         list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
                                       "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil")
         # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
@@ -285,12 +314,14 @@ foreach(_SRC ${NL_SHADER_SRCS})
                     -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-u-shift 384 0
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             MAIN_DEPENDENCY "${_SRC}"
+            DEPENDS ${_SHADER_EXTRA_DEPS}
             COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_suffix})")
         add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             COMMAND "${SLANGC}" "${_SRC}" -dxc-path "${NL_DXC_DIR}"
-                    -target dxil -entry ${_entry} -stage ${_stage}
+                    -target dxil -entry ${_entry} -stage ${_stage} ${_DXIL_PROFILE}
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             MAIN_DEPENDENCY "${_SRC}"
+            DEPENDS ${_SHADER_EXTRA_DEPS}
             COMMENT "Slang -> DXIL (${_SRC_NAME}.${_suffix})")
     endforeach()
 endforeach()
