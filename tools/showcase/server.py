@@ -25,6 +25,7 @@ import mimetypes
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -37,6 +38,12 @@ ROOT = HERE.parents[1]
 EXAMPLES = ROOT / "example"
 RUNS = ROOT / "build" / "showcase" / "runs"
 CASES_PATH = EXAMPLES / "cases.json"
+
+# Cross-tree gate (2026-11-10): refuse when cwd tree != this script's tree.
+# See tools/tree_gate.py. Must run before any file access.
+sys.path.insert(0, str(HERE.parent))            # tools/
+import tree_gate as _tree_gate  # noqa: E402
+_tree_gate.gate(__file__)
 
 with CASES_PATH.open(encoding="utf-8") as f:
     DATA = json.load(f)

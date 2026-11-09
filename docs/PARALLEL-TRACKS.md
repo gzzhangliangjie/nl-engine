@@ -253,5 +253,14 @@ worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道�
 - **动 wt 前过闸**：编辑 / merge / 删除前 `check --track <轨道> [--milestone <编号>]`；`guard --op edit|merge|delete` 输出 exit code 供脚本闸用（0=放行 / 1=阻断 / 2=警告需确认）。
 - **CLOSED 轨道硬拒绝**：claim/check 默认拒绝已收官轨道（wt 应已移除、分支保留）；重建走 §7.1b，重建后更新 TRACKS 注册表状态。
 - **锁文件**：主树根 `.wt_pool_busy.json`（经 `git rev-parse --git-common-dir` 定位主树，全部 worktree 共享一把锁；已 .gitignore）。锁记录里程碑 / wt 路径 / 分支 / pid / host / 时间 / 备注，status 会标 `pid-dead` 陈旧占坑。
-- **自测**：`python tools/wt_pool.py selftest`（16 项断言，进程内临时锁，不碰真实锁）；全表对照 `python tools/wt_pool.py status`。
+- **自测**：`python tools/wt_pool.py selftest`（21 项断言，进程内临时锁，不碰真实锁）；全表对照 `python tools/wt_pool.py status`。
 - **维护约定**：TRACKS 注册表（脚本内）与 §7.1/§7.1b 表同步更新——轨道收官 / 重建时两处一起改，脚本表是机械闸的事实源。
+
+### 7.7 树边界闸（2026-11-10 用户拍板，`scope` + `tools/tree_gate.py`）
+
+起因：2026-11-10 用户报告——已占 wt 坑的对话仍经常越界对**主树或其他 wt** 操作（跑错树的 regression、重拍错树的 example 基线等），§7.6 只防「碰别人已 claim 的 wt」，不防「占坑会话自己伸手出去」。两道机械闸：
+
+- **cwd 自查 `scope`**：claim 后第一步、以及任何切换目录之后跑 `python tools/wt_pool.py scope [--milestone <编号>]`。判定：cwd 在自己 claim 的 wt 内 = exit 0；cwd 在主树且锁里有活跃 claim = exit 2 警告（主线无 claim 会话核实后可忽略）；cwd 在别的 track 的 wt 内 / 未 claim 的 wt 内 / 任何注册树之外 = exit 1 拒绝。
+- **脚本树闸 `tree_gate.py`**：共享入口工具（`tools/regression.py`、`tools/showcase/server.py`、`tools/reshot-hud-s71.py`；后续同类入口照接）开头调 `gate(__file__)`——**脚本所在树 ≠ cwd 所在树 → exit 2 拒绝**。判据零误伤：主线会话主树脚本+主树 cwd 放行；wt 会话自己树的脚本+自己树 cwd 放行；其余一律拒绝。刻意例外（CI 沙箱 cwd 无关等）设 `NL_TREE_GATE_ALLOW=1`（输出 WARN 放行）。
+- **`wt_pool.py` 本身不接树闸**：它就是跨树占坑工具（锁在共享 .git），从任何树跑都是合法的。
+- **作用边界**：树闸防的是「跑错树 / 写错树」；git 层面的还原类危险操作仍按 AGENTS.md「git 危险操作闸门」节执行（status --porcelain 闸门）。

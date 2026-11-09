@@ -18,6 +18,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE / "showcase"))
 
+# Cross-tree gate (2026-11-10): this tool OVERWRITES example/ baselines —
+# running the main tree's copy from a wt cwd (or vice versa) is exactly the
+# contamination class wt_pool scope was built for. See tools/tree_gate.py.
+sys.path.insert(0, str(HERE))
+import tree_gate as _tree_gate  # noqa: E402
+_tree_gate.gate(__file__)
+
 import server as show  # noqa: E402
 
 # 全量回归实测的 15 个 HUD 失败用例（S7.0 文本基线）

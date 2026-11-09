@@ -1956,3 +1956,11 @@
 - **完成情况**：check-jobs 矩阵 6 条判定全 IDENTICAL（N=1 硬证明 / N=4 run-to-run / parallel vs serial，drop+stack 双路径）；`simulate --jobs 1` 全文件与 M-P0 drop.tsv `fc /b` 一致；selftest p0..p4+j5c 全 PASS；ctest 物理+j5c 15/15 双后端；五基线逐字节回归 OK（默认路径零扰动）；run.bat ALL GREEN exit 0；`server.py --check` exit 0；acceptance.png 肉眼核验。
 - **踩坑**：① stackTSV 按 rs[0..2] 索引，单元素 vector 传入越界段错误（改整批）；② check-jobs 无参数按默认值跑，usage 负向须 `--threads 0`；③ Scheduler configure 冻结 → 验收用专用 ThreadPool(N) 实例（偏差如实记录，生产一行换 compute() 池）。
 - **下一步**：ECS system 调度接入走 jobgraph（待 ECS 腾手）；M-P5 场景集成仍 gate P8 E3。
+
+## 工具维护：wt_pool 树边界闸（不占里程碑坑，2026-11-10）
+
+- **动作**：用户报告「已占 wt 坑的对话仍经常越界对主树或其他 wt 操作」。§7.6 占坑闸只防「碰别人已 claim 的 wt」，不防「占坑会话自己伸手出去」——补两道机械闸：①`wt_pool.py scope` cwd 自查子命令（自己 wt=0 / 主树且有活跃 claim=2 警告 / 别的 wt 或未 claim=1 拒绝）；②新 `tools/tree_gate.py` 接进共享入口（`regression.py` / `showcase/server.py` / `reshot-hud-s71.py`）：脚本所在树 ≠ cwd 树 → exit 2，逃生口 `NL_TREE_GATE_ALLOW=1`。
+- **提交版本**：主树工具维护提交（无 tag，非里程碑）。
+- **完成情况**：selftest 21/21 ALL GREEN（新增 5 项 scope 断言）；真实验证——主树 --check exit 0、gameloop wt cwd 跑主树三脚本全部 exit 2、wt 内 `scope --milestone M-GL0` OK。
+- **踩坑**：server.py 原本没 import sys，树闸首次接线即 NameError（regression 连带 --help exit 1），补 import 后全通。
+- **固化**：AGENTS.md 并行轨道第 8 条 + PARALLEL-TRACKS.md §7.7；`wt_pool.py` 自身不接树闸（跨树工具设计使然）。
