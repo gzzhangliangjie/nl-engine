@@ -1358,3 +1358,31 @@
 7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
 
 **下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
+
+## P8 M-S0：vendored miniaudio + nl/audio 封装 + 离线确定性 PCM（feat/audio 轨道，2026-11-09，tag `audio-s0`）
+
+**动作**：用户「开工 M-S0 建 feat/audio」= 提前解禁音频轨道 M-S0~S2 排期闸（M-S3 场景集成仍 gate 在 P8 E1/E1b 之后，照物理 §7.1e 先例）。基于 master 建 `feat/audio` worktree（`E:/UE_STUDY_2026/nl-engine-audio`，两处 junction 共享 + skip-worktree）。三处参考实读：Carrot `engine/audio/` 对象模型（Manager→SFX/Music→Sound→SoundSource→SoundListener，AudioThread 不抄）/ bevy `bevy_audio` `audio_output.rs`（无设备 `stream: None` 优雅降级）+ `audio.rs`（无 HRTF 只左右声像）/ UE `AudioDebug.cpp`（M-S2 调试字段口径，只读不抄）；ROADMAP 对照总表无音频行（A 类轨道），按铁律就近读三处音频同类模块。
+落地：`thirdparty/miniaudio/` vendored **v0.11.26（2026-10-31）**（`miniaudio.h` + 单实现 TU `miniaudio.c` + `VENDOR.md`，选 Public Domain / Unlicense）；CMake `nl_miniaudio` 静态目标 + `nl_core` 挂 `core/src/audio/AudioWorld.cpp` + `audio-tools` 工具 + ctest `s0-audio-selftest`；`nl/audio::AudioWorld` 薄封装（Clip 只读 WAV 头探测 / Source 同步预解码 / Listener 位置 / 离线 noDevice `ma_engine_read_pcm_frames` f32 2ch / 实时默认设备阻塞播放）；`scripts/make-audio-wav.py` 生成确定性 440Hz 衰减 WAV；`audio-tools`（selftest / probe / dump / check / play，退出码 0/1/2）；`example/audio-s0/` 交代物（run.bat 七段实跑 + 7 张 log + 波形/验收 PNG + bad provenance 负向夹具）+ `example/cases.json` `audio-s0` 卡 7 用例 + `docs/p8/AUDIO-TOOLS-GUIDE.md` 归档。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s0`
+
+**完成情况**：
+- **双后端 BUILD OK**：`scripts/build-audio-tools.bat DX12` 与 `VULKAN` 各自 configure + 编译 + `audio-tools selftest` **21/21 PASS**（A 类纯 CPU 工具，不进渲染 bytes/near 回归总闸、不动 kStage）。
+- **确定性硬判据**：两次独立 noDevice world 渲染 24000 帧 × 2 声道 = 48000 个 float **逐位一致**（memcmp）；单声道展开 L/R 完全相同；峰值 0.595886 / RMS 0.122469 / 非零帧 23950；前 512 帧 RMS > 后 512 帧 4 倍（指数衰减包络可见）。
+- **防假绿**：`check` 从 provenance 读参数（wav 写仓库相对路径、跨 checkout 可解析）、核 tsv 的 FNV-1a 哈希、再重建 world 重渲染，48000 个 float 位级 `==`；篡改 sampleRate=44100 在字段校验阶段显式 exit 1。展示台 `audio-s0` 卡 7 用例（usage 2 / selftest 0 / probe 0 / dump 0 / check 0 / 缺 WAV 1 / 坏 provenance 1），`server.py --check` OK。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s0/waveform.png`（真实 PCM dump 绘制的 L/R 双栏衰减波形，参数行/hash/峰值完整，无截断无方框）+ `acceptance.png`（七条命令真实 stdout 渲染，七节齐全）。两图均由 `tools/make-audio-evidence.py` 从真实输出生成，非手绘。
+- `example/audio-s0/run.bat` 全链 exit 0（AUDIO M-S0 ACCEPTANCE: ALL GREEN）。
+- **边界**：M-S0 不做 3D 空间化（M-S1）/ console cvar + ImGui 面板（M-S2）/ ECS 集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（用户未要求，轨道收口在 M-S3）。
+- **主树注册表同步**：`AGENTS.md`（音频表行 + 例外 4）、`docs/PARALLEL-TRACKS.md`（§7.1b 表 + 新增 §7.1f）、`docs/ROADMAP.md` E4 行、`docs/NON-RENDER-ROADMAP.md` 候选总表/例外段、`tools/wt_pool.py` TRACKS（`audio` planned→active + M-S3 gate note）已**就地同步但留在主树工作区未提交**：同文件含另一会话 M-J5a（job-system 重启）的未提交改动，精确 commit 会连带扫走别人现场；待该会话收口后一并提交。内容口径与本台账一致。
+
+**踩坑情况**：
+1. **Python `// 1` 不转整数**：`FRAMES = SAMPLE_RATE * DURATION_S // 1` 得到 float → `range()` TypeError；改 `int(...)`。
+2. **`git update-index` 的 `--stdin` 必须置于末尾**：`-z --stdin --skip-worktree` 报 `option 'stdin' must be the last argument`；正确 `-z --skip-worktree --stdin`。共享 `.workbuddy` 5 个 memory 文件靠这步 skip-worktree，否则 junction 内容一变工作树就脏。
+3. **provenance 写死本机绝对路径**：展示台换个 checkout 跑 `check` 就打不开 WAV。修 = `portableWav()`（写仓库相对路径）+ `resolveWav()`（读时拼编译期 `NL_AUDIO_ROOT`），坏路径仍显式 exit 1。
+4. **miniaudio 0.11.26 签名与 noDevice 契约**：`ma_sound_init_from_file` 是 **6 参**（新增 `ma_fence* pDoneFence`，传 nullptr）；`noDevice=TRUE` 时 `channels`/`sampleRate` **必须显式赋值**（头 1086-1099 行）否则 engine 无从推断格式；engine 内部恒 f32（78146 行注释实锤）。
+5. **生命周期顺序**：`ma_sound` 必须先于 `ma_engine` uninit（声源节点挂在 engine 的 node graph 上），`Impl::~Impl` 显式遍历再 `ma_engine_uninit`。
+6. **从 Bash 调 PowerShell 被安全策略拦**：junction 建立必须走独立 PowerShell 工具（`New-Item -ItemType Junction`），不能 Bash 里 `powershell -Command`。
+7. **MA_SOUND_FLAG 组合**：`DECODE` 同步全解码是离线确定性的前提（避开 resource manager 异步 job）；`NO_SPATIALIZATION` 是 M-S0 有意简化，3D 留 M-S1，已写进 GUIDE 与计划。
+8. **证据图全 ASCII 文本**：Consolas 无中文字形（M-SC0 中文方框教训），本轮预防性守住。
+
+**下一步**：M-S1（3D 定位 / 4 种距离衰减 / 多声源并发 / Clip 缓存）；M-S2 游戏内调试（console cvar + 独立 ImGui 窗口，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。

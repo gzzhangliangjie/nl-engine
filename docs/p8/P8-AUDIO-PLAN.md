@@ -49,6 +49,8 @@
 | **M-S2** | **游戏内调试**：console cvar（`audio.volume/debug/solo/freeze/dump`）+ 独立 ImGui 声源面板（实体/位置/距离/增益/状态、独奏/静音、单步推进）+ 离线 dump | 调试面板截图（挂 console 那套独立 ImGui 窗口，默认关，**不动常驻 HUD** —— 否则触发全模式 HUD 基线重拍）；tool 卡 usage/正向/负向 | M-S1 |
 | **M-S3** | 场景集成：ECS Transform 每帧同步声源、listener 随主相机；收口 merge | 50 物体场景里声源随物体移动（位置读回一致）；全量回归按需 + 收口硬闸 `wt_pool close` | E1 / E1b 收口 |
 
+> **进度（2026-11-09）**：**M-S0 已收口**（tag `audio-s0`，`feat/audio` worktree）：vendored v0.11.26 + `nl/audio` 薄封装 + `audio-tools`（selftest / probe / dump / check / play）+ 展示台 `audio-s0` 卡 7 用例 + 波形/验收双证据图；DX12 + VULKAN 双构建树 `selftest 21/21`。离线 24000 帧 × 2 声道逐样本位级确定，`check` 从 provenance 重渲染比对（防假绿）。归档 `docs/p8/AUDIO-TOOLS-GUIDE.md`，台账 `docs/MILESTONES.md`。M-S1 起按阶梯推进。
+
 可选（默认不做）：空间衰减球 gizmo（碰 viewer，排 E1b 收口后）、ScriptComponent 式 `OnTick` 音频脚本绑定、Vorbis custom decoder。
 
 ## 5. 验收纪律
@@ -63,6 +65,7 @@
 ## 6. 排期约束（拍板留痕）
 
 - 原闸「执行排 P8 E1 场景整合之后」**不变**（听者/声源定位吃 E1 变换层级）。M-S0~S2 纯逻辑、不依赖场景，若要提前开工需用户单独解禁（照 ECS E1a / script / physics 三轨先例），本文件不擅自改闸。
+- **2026-11-09 用户指令「开工 M-S0 建 feat/audio」= 提前解禁 M-S0~S2**（照 `PARALLEL-TRACKS.md` §7.1e 物理先例）：`feat/audio` worktree 已建于 `E:/UE_STUDY_2026/nl-engine-audio`（junction 共享 `.workbuddy` / `thirdparty/slang/dist`，skip-worktree），M-S0 已收口。**M-S3 场景集成仍 gate 在 P8 E1 / E1b 收口之后**，不随本轮解锁；M-S2 的 ImGui 面板仍只用 console 那套独立窗口、默认关、不碰常驻 HUD 与 kStage。
 - 调试面板接 viewer 的部分与 E1b 渲染集成潜在撞车：M-S2 只用 console 那套独立 ImGui 窗口，不碰 `scene.cpp`/kStage/常驻 HUD。
 
 ## 7. 旧方案作废留痕（2026-11-08 立项 → 2026-11-09 全量替换）

@@ -1,0 +1,3 @@
+dump: frames=24000 rate=48000 ch=2 peak=0.595886 rms=0.122469 nonzero=23950
+dump: waveform.tsv bytes=788665 hash=4293b40fe2f9a770
+dump: PASS

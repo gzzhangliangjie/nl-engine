@@ -115,6 +115,12 @@ add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 # core/simplify 的 QEM 是正式实现，不依赖 meshopt）----
 add_subdirectory(thirdparty/meshoptimizer EXCLUDE_FROM_ALL)
 
+# ---- P8 M-S0：miniaudio v0.11.26 vendored（Public Domain / MIT-0 二选一，本项目选 PD）----
+# 单头库：MINIAUDIO_IMPLEMENTATION 只在 thirdparty/miniaudio/miniaudio.c 这一个 TU 展开。
+# nl/audio 只 include 声明头；零外部依赖、纯 C、不动双后端图形链。
+add_library(nl_miniaudio STATIC thirdparty/miniaudio/miniaudio.c)
+target_include_directories(nl_miniaudio PUBLIC ${THIRDPARTY}/miniaudio)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -144,13 +150,14 @@ add_library(nl_core STATIC
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
+    core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
-target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -323,10 +330,19 @@ target_link_libraries(nanite-scene PRIVATE nl_core)
 add_executable(nanite-console nanite-console/main.cpp)
 target_link_libraries(nanite-console PRIVATE nl_core)
 
+# ---- P8 M-S0：audio-tools（A 类轨道，工具版交代）----
+# 只链 nl_core（nl/audio + nl_miniaudio），零图形 API。
+# 退出码约定：0=PASS / 1=断言或运行失败 / 2=用法错误（展示台 expectExit 0/1/2）。
+add_executable(audio-tools audio-tools/main.cpp)
+target_link_libraries(audio-tools PRIVATE nl_core)
+target_compile_definitions(audio-tools PRIVATE
+    NL_AUDIO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
+    NL_AUDIO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console audio-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -509,3 +525,10 @@ set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
 add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
 set_tests_properties(e2-ecs-good-scene PROPERTIES
     PASS_REGULAR_EXPRESSION "PASS")
+
+# ---- P8 M-S0：音频离线渲染确定性机械单测（A 类轨道，工具版交代）----
+# 不进渲染回归总闸；判据 = 两次独立 noDevice 渲染逐样本位级一致 +
+# provenance 篡改显式拒绝（防假绿，照 phys-tools check 教训）。
+add_test(NAME s0-audio-selftest COMMAND audio-tools selftest)
+set_tests_properties(s0-audio-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "audio selftest: PASS")

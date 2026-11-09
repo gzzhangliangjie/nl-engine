@@ -1,0 +1,7 @@
+wav        : E:\UE_STUDY_2026\nl-engine-audio\example\audio-s0\..\..\assets\audio\test-tone.wav
+sampleRate : 48000
+channels   : 1
+bits       : 16
+frames     : 24000
+duration   : 0.500000 s
+probe: PASS

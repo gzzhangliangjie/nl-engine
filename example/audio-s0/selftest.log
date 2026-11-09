@@ -1,0 +1,23 @@
+audio selftest (M-S0):
+  ok   clip: WAV header anchors (48000/1/16/24000)
+  ok   clip: missing file explicitly rejected
+  ok   world: noDevice engine init
+  ok   world: sampleRate/channels readback
+  ok   source: createSource decodes WAV
+  ok   source: configure gain/loop
+  ok   source: start
+  ok   source: isPlaying after start
+  ok   source: count
+  ok   source: descriptor readback
+  ok   listener: position roundtrip
+  ok   render: two independent offline renders succeeded
+  ok   render: per-sample deterministic (bitwise)
+  ok   render: peak in (0.05, 1.0]
+  ok   render: non-zero frames
+  ok   render: mono clip expands to identical L/R
+  ok   render: exponential decay envelope (head RMS > 4x tail)
+  ok   dump: waveform.tsv + provenance.txt written
+  ok   check: re-render from provenance is per-sample identical
+  ok   provenance: sampleRate field present
+  ok   check: tampered provenance explicitly rejected (anti-false-green)
+audio selftest: PASS (21/21)
