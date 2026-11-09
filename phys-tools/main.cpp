@@ -17,6 +17,9 @@
 //   debug [options]        M-P3: collision-shape wireframe TSV (real Jolt
 //                          DebugRenderer line stream: floor + box/sphere/capsule)
 //   check-debug <tsv>      re-verify the wireframe dump (topology + settle anchors)
+//   character [options]    M-P4: character walk-through TSV (Jolt CharacterVirtual,
+//                          CharacterMovement-style: 30deg ramp + 3 steps + 60deg block)
+//   check-character <tsv>  re-verify the walk dump (course + parking anchors)
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
@@ -62,6 +65,8 @@ void usage() {
     std::printf("  phys-tools check-stack <tsv>\n");
     std::printf("  phys-tools debug [--out <tsv>] [--frames N]\n");
     std::printf("  phys-tools check-debug <tsv>\n");
+    std::printf("  phys-tools character [--out <tsv>] [--frames N]\n");
+    std::printf("  phys-tools check-character <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -913,6 +918,194 @@ int runCheckDebug(const char* path) {
     return 0;
 }
 
+// ---- M-P4: character walk-through TSV (CharacterMovement-style) -------------
+// 与 core CharacterHarness 同一场地/节奏：地板 -> 30° 斜坡 -> 平台 -> 3 级台阶
+// -> 平台 -> 60° 斜坡（挡住）。position 列 = CharacterVirtual mPosition（胶囊
+// 几何中心；脚底 = py - (halfCyl + radius - padding) = py - 1.08，见 World.cpp
+// 位置语义注释）。groundState 数值 = JPH::CharacterBase::EGroundState 枚举序。
+constexpr double kCharDt        = 1.0 / 60.0;
+constexpr int    kCharTail      = 60;      // 静止判定窗口（帧）
+constexpr double kCharRampTop   = 2.3094;  // 与 World.cpp kCharRampTop 同源
+constexpr double kCharStepTop   = 3.2094;  // 与 World.cpp kCharStepTop 同源
+// 贴地时中心高度 = top + (halfCyl + radius - padding) + padding = top + 1.10
+// （CharacterVirtual 保持 padding 悬距；实测 2026-11-09：平台1 3.4094 / 平台2 4.3094）。
+constexpr double kCharPlat1PosY = kCharRampTop + 1.10;  // 3.4094
+constexpr double kCharPlat2PosY = kCharStepTop + 1.10;  // 4.3094
+// 台阶爬升窗口：胶囊半径 0.5 使前缘在 x≈17.5 就接触第一级立面（WalkStairs 提前），
+// 所以窗口从 17.3 起算（含平台1 尾段），到 20.2（平台2 头段）。
+constexpr double kCharStepWinLo = 4.3;   // 场地中心化后台阶窗口（前缘提前接触）
+constexpr double kCharStepWinHi = 7.2;
+
+int runCharacter(int argc, char** argv) {
+    std::string out;
+    int frames = 1200;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); frames = n; }
+        else return fail("unknown option " + key);
+    }
+
+    nl::physics::CharacterConfig cfg;
+    cfg.frames = frames;
+    nl::physics::World world;
+    const nl::physics::CharacterResult r = world.simulateCharacter(cfg);
+    if (!r.ok()) { std::printf("character simulate failed: %s\n", r.error.c_str()); return 1; }
+
+    std::ostringstream os;
+    os << "# nl-physics M-P4 character walk-through (Jolt " << nl::physics::kJoltVersion
+       << " CharacterVirtual ExtendedUpdate, CharacterMovement-style)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded dt=" << kCharDt
+       << " frames=" << cfg.frames
+       << " walk=1.5 max_slope=50 radius=0.5 half_cyl=0.6 padding=0.02\n";
+    os << "# groundState 0=OnGround 1=OnSteepGround 2=NotSupported 3=InAir; "
+          "position = capsule center (feet = py - 1.08)\n";
+    os << "# course: start x=-13 -> 30deg ramp x[-7,-3] -> platform -> 3 steps x[5,6.8]"
+          " -> platform -> 60deg slope x[11,13] (blocked)\n";
+    os << "frame\tt\tpx\tpy\tpz\tvx\tvy\tvz\tstate\tgroundNy\n";
+    for (const nl::physics::CharacterSample& s : r.samples) {
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+            "%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%.6f\n",
+            s.frame, s.t, s.position.x, s.position.y, s.position.z,
+            s.velocity.x, s.velocity.y, s.velocity.z,
+            s.groundState, s.groundNormalY);
+        os << buf;
+    }
+    if (out.empty()) { std::fputs(os.str().c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << os.str();
+    f.close();
+    std::printf("wrote %s frames=%d final_x=%.4f final_y=%.4f\n",
+                out.c_str(), cfg.frames, r.finalX, r.finalY);
+    return 0;
+}
+
+int runCheckCharacter(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    struct Row {
+        int frame = 0;
+        double t = 0, px = 0, py = 0, pz = 0, vx = 0, vy = 0, vz = 0;
+        int state = -1;
+        double groundNy = 0;
+    };
+    std::vector<Row> rows;
+    int  frames = -1, dataRows = 0;
+    bool headerSeen = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("# jolt=", 0) == 0) {
+            std::istringstream is(line);
+            std::string tok;
+            while (is >> tok) {
+                const auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                if (tok.substr(0, eq) == "frames") frames = std::atoi(tok.substr(eq + 1).c_str());
+            }
+            continue;
+        }
+        if (line.rfind("frame\t", 0) == 0) { headerSeen = true; continue; }
+        if (line.empty() || line[0] == '#') continue;
+        Row r;
+        double gny = 0;
+        if (std::sscanf(line.c_str(),
+                        "%d %lf %lf %lf %lf %lf %lf %lf %d %lf",
+                        &r.frame, &r.t, &r.px, &r.py, &r.pz,
+                        &r.vx, &r.vy, &r.vz, &r.state, &gny) != 10) {
+            std::printf("bad TSV row at data row %d\n", dataRows);
+            return 1;
+        }
+        r.groundNy = gny;
+        rows.push_back(r);
+        ++dataRows;
+    }
+
+    expectTrue(headerSeen, "M-P4 dump has TSV column header");
+    expectTrue(frames > 0 && dataRows == frames, "M-P4 dump row count = frames");
+    expectTrue(!rows.empty(), "M-P4 dump non-empty");
+    if (g_failures || rows.empty()) {
+        std::printf("phys-p4 check-character: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+
+    // 结构锚：state 全程在枚举值域内（0=OnGround 1=OnSteepGround 2=NotSupported 3=InAir）。
+    bool statesValid = true;
+    for (const Row& r : rows)
+        statesValid = statesValid && r.state >= 0 && r.state <= 3;
+    expectTrue(statesValid, "M-P4 groundState within enum range");
+
+    // 物理锚（从数据列独立复算，不信头注释；脚底 = py - 1.08）：
+    const Row& first = rows.front();
+    const Row& last  = rows.back();
+    expectTrue(first.state == 0, "M-P4 starts on ground");
+    // 无穿地：全程脚底 >= -0.01
+    bool noPenetration = true;
+    for (const Row& r : rows) noPenetration = noPenetration && (r.py - 1.08) >= -0.01;
+    expectTrue(noPenetration, "M-P4 no floor penetration");
+    // 30° 斜坡段（x in [6.2,9.8]）y 非降：爬得上去
+    bool rampMonotonic = true;
+    double prevY = -1e9;
+    for (const Row& r : rows) {
+        if (r.px >= -6.8 && r.px <= -3.2) {
+            rampMonotonic = rampMonotonic && r.py >= prevY - 1e-9;
+            prevY = r.py;
+        }
+    }
+    expectTrue(rampMonotonic, "M-P4 climbs 30deg ramp (y monotonic)");
+    // 平台1：x in [11,17] 存在样本 py ≈ rampTop + feetDelta
+    bool onPlat1 = false;
+    for (const Row& r : rows)
+        if (r.px >= -2.0 && r.px <= 4.0 && std::abs(r.py - kCharPlat1PosY) < 0.06) onPlat1 = true;
+    expectTrue(onPlat1, "M-P4 crosses platform1 (feet on ramp top)");
+    // 台阶：x in [18,19.9] y 覆盖 >= 0.85（三级台阶 0.9，容差 0.05）
+    double stepMinY = 1e9, stepMaxY = -1e9;
+    for (const Row& r : rows)
+        if (r.px >= kCharStepWinLo && r.px <= kCharStepWinHi) {
+            stepMinY = std::min(stepMinY, r.py);
+            stepMaxY = std::max(stepMaxY, r.py);
+        }
+    expectTrue(stepMaxY - stepMinY >= 0.85, "M-P4 walks all 3 steps (0.9 total rise)");
+    // 平台2：x in [20,23.5] 存在样本 py ≈ stepTop + feetDelta
+    bool onPlat2 = false;
+    for (const Row& r : rows)
+        if (r.px >= 7.0 && r.px <= 10.5 && std::abs(r.py - kCharPlat2PosY) < 0.06) onPlat2 = true;
+    expectTrue(onPlat2, "M-P4 crosses platform2 (feet on step top)");
+    // 60° 斜坡挡住：finalX 停在坡脚（没爬上去、也没穿过去）
+    expectTrue(last.px >= 10.0 && last.px <= 11.6,
+               "M-P4 blocked by 60deg slope (final x at slope foot)");
+    expectTrue(std::abs(last.py - kCharPlat2PosY) < 0.08,
+               "M-P4 parked at platform2 height");
+
+    // 静止锚：末 60 帧 px/py 冻结（被挡后 walk 推进失败，位置不再变化）。
+    const int from = std::max(0, static_cast<int>(rows.size()) - kCharTail);
+    double tailSpread = 0.0;
+    for (std::size_t i = static_cast<std::size_t>(from); i < rows.size(); ++i) {
+        tailSpread = std::max(tailSpread, std::abs(rows[i].px - last.px));
+        tailSpread = std::max(tailSpread, std::abs(rows[i].py - last.py));
+    }
+    expectTrue(tailSpread < 1e-3, "M-P4 tail 60 frames parked (blocked by steep slope)");
+
+    if (g_failures) {
+        std::printf("phys-p4 check-character: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-p4 check-character: PASS (%s, %d frames, final x=%.3f)\n",
+                path, frames, last.px);
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -1133,10 +1326,93 @@ int runSelftest() {
         expectTrue(std::abs(mr.maxY - 1.6) < 0.05, "M-P3 settled capsule apex 1.6");
     }
 
+    // --- M-P4: character walk-through over ramp/steps/steep slope ---
+    {
+        nl::physics::CharacterConfig cc;   // 默认 1200 帧
+        std::string cerr;
+
+        // negative config paths
+        auto badChar = cc; badChar.frames = 0;
+        expectTrue(!nl::physics::validateCharacter(badChar, &cerr), "M-P4 reject frames=0");
+        badChar = cc; badChar.dt = 1.0;
+        expectTrue(!nl::physics::validateCharacter(badChar, &cerr), "M-P4 reject dt=1.0");
+        badChar = cc; badChar.maxSlopeDeg = 90.0f;
+        expectTrue(!nl::physics::validateCharacter(badChar, &cerr), "M-P4 reject maxSlopeDeg=90");
+
+        nl::physics::World world;
+        const nl::physics::CharacterResult r = world.simulateCharacter(cc);
+        expectTrue(r.ok(), "M-P4 simulateCharacter runs");
+        expectTrue(r.samples.size() == static_cast<std::size_t>(cc.frames),
+                   "M-P4 sample count = frames");
+        if (r.ok() && r.samples.size() == static_cast<std::size_t>(cc.frames)) {
+            const nl::physics::CharacterSample& first = r.samples.front();
+            const nl::physics::CharacterSample& last  = r.samples.back();
+            expectTrue(first.groundState == 0, "M-P4 starts on ground");
+            expectTrue(last.position.x >= 10.0f && last.position.x <= 11.6f,
+                       "M-P4 blocked by 60deg slope at slope foot");
+            expectTrue(std::abs(last.position.y - 4.3094) < 0.08,
+                       "M-P4 parked at platform2 height (feet on step top)");
+
+            bool noPen = true, statesValid = true, rampMono = true;
+            double prevY = -1e9, stepMinY = 1e9, stepMaxY = -1e9;
+            bool onPlat1 = false, onPlat2 = false;
+            for (const nl::physics::CharacterSample& s : r.samples) {
+                noPen      = noPen && (s.position.y - 1.08f) >= -0.01f;
+                statesValid = statesValid && s.groundState >= 0 && s.groundState <= 3;
+                if (s.position.x >= -6.8f && s.position.x <= -3.2f) {
+                    rampMono = rampMono && s.position.y >= prevY - 1e-9f;
+                    prevY = s.position.y;
+                }
+                if (s.position.x >= 4.3f && s.position.x <= 7.2f) {
+                    stepMinY = std::min(stepMinY, static_cast<double>(s.position.y));
+                    stepMaxY = std::max(stepMaxY, static_cast<double>(s.position.y));
+                }
+                if (s.position.x >= -2.0f && s.position.x <= 4.0f &&
+                    std::abs(s.position.y - 3.4094) < 0.06) onPlat1 = true;
+                if (s.position.x >= 7.0f && s.position.x <= 10.5f &&
+                    std::abs(s.position.y - 4.3094) < 0.06) onPlat2 = true;
+            }
+            expectTrue(noPen, "M-P4 no floor penetration");
+            expectTrue(statesValid, "M-P4 groundState within enum range");
+            expectTrue(rampMono, "M-P4 climbs 30deg ramp (y monotonic)");
+            expectTrue(onPlat1, "M-P4 crosses platform1");
+            expectTrue(stepMaxY - stepMinY >= 0.85, "M-P4 walks all 3 steps");
+            expectTrue(onPlat2, "M-P4 crosses platform2");
+
+            // 静止锚：末 60 帧 px/py 冻结。
+            double tailSpread = 0.0;
+            const std::size_t from = r.samples.size() >= 60 ? r.samples.size() - 60 : 0;
+            for (std::size_t i = from; i < r.samples.size(); ++i) {
+                tailSpread = std::max(tailSpread,
+                    std::abs(static_cast<double>(r.samples[i].position.x) - last.position.x));
+                tailSpread = std::max(tailSpread,
+                    std::abs(static_cast<double>(r.samples[i].position.y) - last.position.y));
+            }
+            expectTrue(tailSpread < 1e-3, "M-P4 tail 60 frames parked");
+        }
+
+        // 确定性：两次模拟逐位一致（M-P0 契约：fresh world + 固定步 + 单线程）。
+        nl::physics::World world2;
+        const nl::physics::CharacterResult r2 = world2.simulateCharacter(cc);
+        bool charIdentical = r2.ok() && r2.samples.size() == r.samples.size();
+        for (std::size_t i = 0; charIdentical && i < r.samples.size(); ++i) {
+            const nl::physics::CharacterSample& a = r.samples[i];
+            const nl::physics::CharacterSample& b = r2.samples[i];
+            charIdentical = a.frame == b.frame && a.t == b.t &&
+                            a.position.x == b.position.x && a.position.y == b.position.y &&
+                            a.position.z == b.position.z && a.velocity.x == b.velocity.x &&
+                            a.velocity.y == b.velocity.y && a.velocity.z == b.velocity.z &&
+                            a.groundState == b.groundState &&
+                            a.groundNormalY == b.groundNormalY;
+        }
+        expectTrue(charIdentical, "M-P4 determinism: same course twice bit-identical");
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)\n");
     std::printf("phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)\n");
     std::printf("phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)\n");
     std::printf("phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)\n");
@@ -1292,6 +1568,11 @@ int main(int argc, char** argv) {
     if (cmd == "check-debug") {
         if (argc != 3) { usage(); return 2; }
         return runCheckDebug(argv[2]);
+    }
+    if (cmd == "character") return runCharacter(argc, argv);
+    if (cmd == "check-character") {
+        if (argc != 3) { usage(); return 2; }
+        return runCheckCharacter(argv[2]);
     }
     usage();
     return 2;

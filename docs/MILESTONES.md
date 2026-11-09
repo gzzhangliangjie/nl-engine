@@ -1475,3 +1475,12 @@
 5. **证据图排版**：MEASURED 面板首行 70 字符溢出面板右缘被截，拆两行复验通过。
 
 **下一步**：M-P4 角色胶囊（Jolt `CharacterVirtual`，扫掠 + 地面检测 + 斜坡）；**M-P5 仍等 P8 E3**。
+
+## P8 M-P4：角色胶囊走查（feat/physics 轨道，2026-11-09，tag `phys-p4`）
+
+- **动作**：决策前置实读清单——Carrot `engine/physics/Character.{h,cpp}` + `PhysicsCharacterComponent/System`（用的是 JPH::Character 真实体式，jump TODO，无 CharacterVirtual 参考）；bevy 本体无物理 crate（既有核实，N/A）；UE 5.8.4 `CharacterMovementComponent.h`（MoveAlongFloor/FindFloor/MaxSlopeAmount 概念对照，只读）；Jolt vendored `CharacterVirtual.{h,cpp}`（接口 + mPosition 语义源码钉死）；开发历史（MILESTONES M-P0~P3 四栏、P8-PHYS-PLAN 固化口径、PHYS-TOOLS-GUIDE §10）。`wt_pool claim --track physics --milestone M-P4` 占坑。
+- **落码**：`World.hpp` M-P4 段（CharacterConfig/CharacterSample/CharacterResult/validateCharacter + simulateCharacter）；`World.cpp` CharacterHarness（走查场 8 静态体中心化 x−13 + CharacterVirtual + advance 重力/输入合成 + sample）+ simulateCharacter + DebugScene scenario=1（charH 接管 / step 走查 / extractLines 手动 DrawCapsule 亮黄胶囊 / bodyCount 分流）；`viewer` scenario=1 固定机位 + 场景日志文案分流；`phys-tools` character/check-character（10 列 TSV + 课程锚独立复算）+ selftest M-P4 段 12 条；CMake p4 三条 ctest；`check-phys-regression.py` 扩五基线；`make-phys-p4-evidence.py` 新增。
+- **提交版本**：`feat/physics` M-P4 提交（annotated tag `phys-p4`）。A 类轨道，不 bump `kStage`。
+- **完成情况**：selftest 全绿（p0 23 + p1 21 + p2 27 + p3 12 + p4 12），含角色轨迹两次模拟逐位一致；ctest 物理段 DX12/VULKAN 各 **13/13**；五基线（drop/layers/stack/debug/character）逐字节回归 OK；run.bat **ALL GREEN exit 0**（双后端 viewer 截图 `deviceErrors=0` 硬闸）；`server.py --check` exit 0；三张 PNG（trajectory/acceptance/双 viewer 截图）肉眼核验（两轮文字重叠修后复验通过）。
+- **踩坑**：① CharacterVirtual mPosition 是**胶囊几何中心**非脚底（COM 变换 PostTranslated(padding*up)），锚点初版按"脚底"写挂了平台贴合锚——读源码钉死后修正（脚底=py−1.08、贴地=top+1.10）；② 台阶爬升提前：胶囊半径前缘在台阶立面 0.5m 前接触，锚窗口 [4.3,7.2]；③ DebugScene::extractLines 的 `bodyInterface` guard 把 scenario=1（charH 接管、bodyInterface 为空）拦成空线流——guard 改 `!bodyInterface && !charH`；④ 本树 s1-nmesh-suzanne ctest 失败：**与本轮无关**（stash M-P4 后同样失败=因果排除；exe 在 MSYS bash 管道下零输出但 cmd/文件重定向正常，环境层问题留档不阻塞）。
+- **下一步**：M-P4 预留动作系统衔接接口（walkSpeed 输入 / groundState 状态机）；**M-P5 场景集成仍 gate P8 E3**。

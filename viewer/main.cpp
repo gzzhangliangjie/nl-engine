@@ -456,8 +456,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             nl::core::log::error("physics debug scene build failed: ", perr);
             return 1;
         }
-        nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
-                           " bodies (floor + dynamic box/sphere/capsule)");
+        if (o.physicsScenario == 1)
+            nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
+                               " static course bodies (floor + ramp/steps/platforms/steep slope/wall"
+                               ", CharacterVirtual walks without a rigid body)");
+        else
+            nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
+                               " bodies (floor + dynamic box/sphere/capsule)");
     }
 
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
@@ -532,6 +537,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         camDist = std::max(camDist, renderer->info().skinRadius * 2.4f);
     }
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
+    // M-P4：走查场固定机位——场地 x∈[-13,17]、y∈[0,6.8]，OrbitCamera pivot 固定
+    // 在原点，缺省 4.2 距离取不到景；scenario=1 且未显式给 --dist 时摆侧视机位
+    // （yaw 0 = 从 +z 看向原点的正面视角，pitch 28° 俯视全场）。
+    if (o.physicsDebug && o.physicsScenario == 1 && !o.distSet) {
+        camera.setOrbit(0.0f, 35.0f, 19.0f);
+    }
     bool cullBack = o.cullBack;
     // M6.2：Hi-Z 遮蔽剔除总开关（HUD checkbox 双向；缺省开 = M6.1 行为不变）。
     bool hizEnabled = o.hizOn;

@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Renderer/DebugRenderer.h>
 
 #include <atomic>
@@ -558,6 +559,245 @@ StackResult World::simulateStack(const StackConfig& cfg) {
     return r;
 }
 
+// ---- M-P4: character walk-through (UE CharacterMovement-style) --------------
+// UE counterpart (read only): CharacterMovementComponent::MoveAlongFloor /
+// FindFloor / MaxSlopeAngle (Engine/Classes/GameFramework/
+// CharacterMovementComponent.h). Jolt CharacterVirtual maps 1:1 onto that model
+// (Update sweep + StickToFloor + WalkStairs + GetGroundState). Carrot uses the
+// other flavor (JPH::Character kinematic rigid body, engine/physics/Character.cpp)
+// with no CharacterVirtual reference; the plan says "CharacterMovement-style
+// sweeping", so CharacterVirtual is the right tool.
+// CharacterVirtual owns NO rigid body -- it is not stepped by
+// PhysicsSystem::Update. Gravity/input are composed app-side each frame (Jolt
+// docs on Update: "it's your own responsibility to apply gravity").
+//
+// Position semantics (pinned from CharacterVirtual.cpp/h, not guessed):
+//   GetCenterOfMassTransform = sRotationTranslation(rot, mPosition)
+//     .PreTranslated(shapeOffset + COM).PostTranslated(padding * up)
+//   => for a capsule (COM=0, offset=0) the shape origin (cylinder center)
+//   sits at mPosition + padding*up, i.e. mPosition is the CAPSULE CENTER and
+//   feet y = mPosition.y - (halfCylinder + radius - padding).
+//
+// Course (static, y-up), walked along +x, centered near the origin so the
+// viewer orbit camera (pivot = origin, dist clamp <= 20) can frame it all:
+//   floor top y=0
+//   character starts at x=-13, walks +x
+//   30 deg ramp x in [-7,-3]  -> top y=kCharRampTop (=4*tan30, walkable)
+//   platform1 x in [-3,5]     -> top y=kCharRampTop
+//   3 steps (0.3 up / 0.6 deep) x in [5,6.8] -> top y=kCharStepTop (WalkStairs)
+//   platform2 x in [6.8,11]   -> top y=kCharStepTop
+//   60 deg slope x in [11,13] -> BLOCKED (maxSlope 50 deg), character parks
+//   safety wall x in [16.5,17.5]
+constexpr float kCharRampTop   = 2.3094f;  // 4 * tan(30 deg)
+constexpr float kCharStepTop   = 3.2094f;  // kCharRampTop + 3 * 0.3
+constexpr float kCharPadding   = 0.02f;    // Jolt default mCharacterPadding
+constexpr float kCharFeetToPos = 1.08f;    // halfCyl 0.6 + radius 0.5 - padding
+
+// Shared harness: World::simulateCharacter (headless full run) and
+// DebugScene scenario=1 (viewer per-frame) step the exact same course + cadence,
+// so viewer screenshots and tool TSVs are two views of one simulation.
+struct CharacterHarness {
+    // Declaration order = construction order; destruction is reverse, so
+    // character (declared after physicsSystem) dies first and filters outlive
+    // the system -- same discipline as DebugScene::Impl (M-P3).
+    LayerMatrix matrix;
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter;
+    ObjectLayerPairFilterImpl objectLayerPairFilter;
+    JPH::TempAllocatorImpl tempAllocator{10 * 1024 * 1024};
+    JPH::JobSystemSingleThreaded jobSystem{JPH::cMaxPhysicsJobs};
+    JPH::PhysicsSystem physicsSystem;
+    JPH::BodyInterface* bodyInterface = nullptr;
+    JPH::Ref<JPH::CharacterVirtual> character;
+    std::vector<JPH::BodyID> courseIds;  // ramp/steps/platforms/steep slope (green)
+    JPH::BodyID floorId;
+    float gravity   = 9.8f;
+    float walkSpeed = 1.5f;
+    std::string error;
+
+    CharacterHarness()
+        : objectVsBroadPhaseLayerFilter(matrix)
+        , objectLayerPairFilter(matrix)
+    {}
+
+    bool build(const CharacterConfig& cfg) {
+        matrix.set(layers::kFloor, layers::kFloor, false);
+        physicsSystem.Init(1024, 0, 1024, 1024, bpLayerInterface,
+                           objectVsBroadPhaseLayerFilter, objectLayerPairFilter);
+        physicsSystem.SetGravity(JPH::Vec3(0.0f, -cfg.gravity, 0.0f));
+        bodyInterface = &physicsSystem.GetBodyInterface();
+        JPH::BodyInterface& bi = *bodyInterface;
+        gravity = cfg.gravity;
+        walkSpeed = cfg.walkSpeed;
+
+        auto addStatic = [&](const JPH::Vec3& half, JPH::RVec3Arg pos,
+                             const JPH::Quat& rot) -> JPH::BodyID {
+            JPH::BoxShapeSettings s(half);
+            s.SetEmbedded();
+            auto r = s.Create();
+            if (r.HasError()) { error = "static box shape failed"; return JPH::BodyID(); }
+            JPH::BodyCreationSettings bcs(r.Get(), pos, rot, JPH::EMotionType::Static,
+                                          static_cast<JPH::ObjectLayer>(layers::kFloor));
+            JPH::BodyID id = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+            if (id.IsInvalid()) error = "static body failed";
+            return id;
+        };
+
+        const JPH::Quat rotZ30 = JPH::Quat::sRotation(JPH::Vec3::sAxisZ(),
+                                                      JPH::DegreesToRadians(30.0f));
+        const JPH::Quat rotZ60 = JPH::Quat::sRotation(JPH::Vec3::sAxisZ(),
+                                                      JPH::DegreesToRadians(60.0f));
+        // floor: half-height 0.5 box, top y=0, spans x in [-30,60]
+        floorId = addStatic(JPH::Vec3(45.0f, 0.5f, 10.0f), JPH::RVec3(2.0_r, -0.5_r, 0.0_r),
+                            JPH::Quat::sIdentity());
+        if (floorId.IsInvalid()) return false;
+        // 30 deg ramp: rotated slab; axial half-length 2.30945 -> horizontal 2.0, rise 1.1547
+        {
+            JPH::BodyID id = addStatic(JPH::Vec3(2.30945f, 0.25f, 5.0f),
+                                       JPH::RVec3(-5.0_r, JPH::Real(kCharRampTop * 0.5f), 0.0_r),
+                                       rotZ30);
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+        // platform1: top y=kCharRampTop, x in [10,18]
+        {
+            JPH::BodyID id = addStatic(JPH::Vec3(4.0f, 0.25f, 5.0f),
+                                       JPH::RVec3(1.0_r, JPH::Real(kCharRampTop - 0.25f), 0.0_r),
+                                       JPH::Quat::sIdentity());
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+        // 3 steps: full-height pillars from the ground, tops 2.6094/2.9094/3.2094
+        for (int i = 0; i < 3; ++i) {
+            const float top = kCharRampTop + 0.3f * static_cast<float>(i + 1);
+            const float cx  = 5.3f + 0.6f * static_cast<float>(i);
+            JPH::BodyID id = addStatic(JPH::Vec3(0.3f, top * 0.5f, 5.0f),
+                                       JPH::RVec3(JPH::Real(cx), JPH::Real(top * 0.5f), 0.0_r),
+                                       JPH::Quat::sIdentity());
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+        // platform2: top y=kCharStepTop, x in [19.8,24]
+        {
+            JPH::BodyID id = addStatic(JPH::Vec3(2.1f, 0.25f, 5.0f),
+                                       JPH::RVec3(8.9_r, JPH::Real(kCharStepTop - 0.25f), 0.0_r),
+                                       JPH::Quat::sIdentity());
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+        // 60 deg slope: axial half-length 2.0 -> horizontal 1.0, rise 1.732; blocks the walk
+        {
+            JPH::BodyID id = addStatic(JPH::Vec3(2.0f, 0.25f, 5.0f),
+                                       JPH::RVec3(12.0_r, JPH::Real(kCharStepTop + 1.73205f), 0.0_r),
+                                       rotZ60);
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+        // safety wall (anchor backstop; the 60 deg slope should stop the walk first)
+        {
+            JPH::BodyID id = addStatic(JPH::Vec3(0.5f, 3.0f, 5.0f),
+                                       JPH::RVec3(17.0_r, 3.0_r, 0.0_r),
+                                       JPH::Quat::sIdentity());
+            if (id.IsInvalid()) return false;
+            courseIds.push_back(id);
+        }
+
+        // Character: capsule r=0.5 halfCyl=0.6 (total 2.2 m), feet start 0.02 above floor.
+        JPH::CapsuleShapeSettings capSettings(cfg.halfCylinder, cfg.radius);
+        capSettings.SetEmbedded();
+        auto capRes = capSettings.Create();
+        if (capRes.HasError()) { error = "capsule shape failed"; return false; }
+
+        JPH::CharacterVirtualSettings cs;
+        cs.mShape = capRes.Get();
+        cs.mMaxSlopeAngle = JPH::DegreesToRadians(cfg.maxSlopeDeg);
+        cs.mUp = JPH::Vec3::sAxisY();
+        // No mInnerBodyShape: pure virtual body (CharacterMovement-style, simplest form).
+        // No inner body => no BodyID in the world => DebugRenderer will not draw it;
+        // DebugScene::extractLines draws the capsule manually for scenario=1.
+        character = new JPH::CharacterVirtual(&cs, JPH::RVec3(-13.0_r, JPH::Real(1.10f), 0.0_r),
+                                              JPH::Quat::sIdentity(), &physicsSystem);
+        if (!character) { error = "character creation failed"; return false; }
+        physicsSystem.OptimizeBroadPhase();
+        return true;
+    }
+
+    // One walk step. Jolt cadence (CharacterVirtual.h Update doc):
+    //  - OnGround: velocity = ground velocity (0 here, static course) + input
+    //    + dt*gravity (presses onto the ground/ramp so the sweep keeps contact)
+    //  - else:     velocity = current vertical + input + dt*gravity
+    void advance(float dt) {
+        const JPH::CharacterBase::EGroundState gs = character->GetGroundState();
+        JPH::Vec3 v;
+        if (gs == JPH::CharacterBase::EGroundState::OnGround)
+            v = JPH::Vec3(walkSpeed, -gravity * dt, 0.0f);
+        else
+            v = JPH::Vec3(walkSpeed,
+                          character->GetLinearVelocity().GetY() - gravity * dt, 0.0f);
+        character->SetLinearVelocity(v);
+        // Jolt defaults: stickDown {0,-0.5,0} / stepUp {0,0.4,0} (explicit for provenance).
+        JPH::CharacterVirtual::ExtendedUpdateSettings ext;
+        character->ExtendedUpdate(dt, JPH::Vec3(0.0f, -gravity, 0.0f), ext,
+                                  JPH::DefaultBroadPhaseLayerFilter(objectVsBroadPhaseLayerFilter,
+                                      static_cast<JPH::ObjectLayer>(layers::kDefault)),
+                                  JPH::DefaultObjectLayerFilter(objectLayerPairFilter,
+                                      static_cast<JPH::ObjectLayer>(layers::kDefault)),
+                                  JPH::BodyFilter(), JPH::ShapeFilter(), tempAllocator);
+    }
+
+    CharacterSample sample(int frame, double t) const {
+        CharacterSample s;
+        s.frame = frame;
+        s.t = t;
+        const JPH::RVec3 p = character->GetPosition();
+        s.position = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                       static_cast<float>(p.GetZ()) };
+        const JPH::Vec3 v = character->GetLinearVelocity();
+        s.velocity = { v.GetX(), v.GetY(), v.GetZ() };
+        s.groundState = static_cast<int>(character->GetGroundState());
+        s.groundNormalY = character->GetGroundNormal().GetY();
+        return s;
+    }
+};
+
+bool validateCharacter(const CharacterConfig& cfg, std::string* err) {
+    auto bad = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    if (cfg.frames < 60 || cfg.frames > 100000) return bad("frames out of range [60,100000]");
+    if (!(cfg.dt >= 1.0 / 1000.0 && cfg.dt <= 1.0 / 30.0)) return bad("dt out of range [0.001,0.033333]");
+    if (!(cfg.gravity > 0.0f && cfg.gravity <= 1000.0f)) return bad("gravity out of range (0,1000]");
+    if (!(cfg.radius > 0.0f && cfg.radius <= 5.0f)) return bad("radius out of range (0,5]");
+    if (!(cfg.halfCylinder >= 0.0f && cfg.halfCylinder <= 5.0f)) return bad("halfCylinder out of range [0,5]");
+    if (!(cfg.walkSpeed >= 0.0f && cfg.walkSpeed <= 20.0f)) return bad("walkSpeed out of range [0,20]");
+    if (!(cfg.maxSlopeDeg > 0.0f && cfg.maxSlopeDeg <= 85.0f)) return bad("maxSlopeDeg out of range (0,85]");
+    return true;
+}
+
+CharacterResult World::simulateCharacter(const CharacterConfig& cfg) {
+    CharacterResult r;
+    if (!validateCharacter(cfg, &r.error)) return r;
+    bootstrap();
+
+    CharacterHarness h;   // fresh world per call: the determinism contract
+    if (!h.build(cfg)) { r.error = h.error; return r; }
+
+    double t = 0.0;
+    r.samples.reserve(static_cast<std::size_t>(cfg.frames));
+    for (int frame = 0; frame < cfg.frames; ++frame) {
+        h.advance(static_cast<float>(cfg.dt));
+        t += cfg.dt;
+        r.samples.push_back(h.sample(frame, t));
+    }
+    if (!r.samples.empty()) {
+        const CharacterSample& last = r.samples.back();
+        r.finalX = last.position.x;
+        r.finalY = last.position.y;
+    }
+    return r;
+}
+
 // ---- M-P3：物理调试场景（碰撞形状线框） ----
 // Jolt 头只进本 cpp。线框经 POD 视图（const float* + 顶点数）暴露，World.hpp 零 Jolt 类型。
 // 套路与 Carrot / Jolt 双实证一致：物理引擎只「喊」图元（DrawBox/DrawSphere/... ->
@@ -669,6 +909,9 @@ struct DebugScene::Impl {
     JPH::BodyID floorId;
     std::unique_ptr<JoltLineRenderer> renderer;
     std::vector<float> lineBuffer;   // extractLines 持久输出，供本帧 renderFrame 消费
+    // M-P4：scenario=1 时全接管（自带 PhysicsSystem + CharacterVirtual 走查场），
+    // Impl 的 physicsSystem 不 Init、不 Update；scenario=0 时为空。
+    std::unique_ptr<CharacterHarness> charH;
 
     Impl()
         : objectVsBroadPhaseLayerFilter(matrix)
@@ -685,6 +928,22 @@ bool DebugScene::build(int scenario, std::uint32_t seed, std::string* err) {
     auto& I = *impl_;
     I.scenario = scenario;
     (void)seed;
+
+    // M-P4：scenario=1 = 角色走查场（地板 -> 30° 斜坡 -> 平台 -> 3 级台阶 ->
+    // 平台 -> 60° 斜坡），CharacterHarness 全接管，与 phys-tools character
+    // 命令同一套场地与步进节奏（确定性契约同源）。
+    if (scenario == 1) {
+        I.charH = std::make_unique<CharacterHarness>();
+        CharacterConfig cc;   // 默认口径：r0.5/halfCyl0.6、walk 1.5、maxSlope 50°
+        if (!I.charH->build(cc)) {
+            if (err) *err = I.charH->error.c_str();
+            I.error = I.charH->error;
+            return false;
+        }
+        I.renderer = std::make_unique<JoltLineRenderer>();
+        I.valid = true;
+        return true;
+    }
 
     // floor/floor 禁用；其余 pair 全开（M-P0 同口径）。
     I.matrix.set(layers::kFloor, layers::kFloor, false);
@@ -733,15 +992,48 @@ bool DebugScene::build(int scenario, std::uint32_t seed, std::string* err) {
 void DebugScene::step(double dt) {
     if (!impl_ || !impl_->valid) return;
     auto& I = *impl_;
+    if (I.charH) {
+        // M-P4：CharacterVirtual 不占 PhysicsSystem::Update（无真实体），
+        // 走查步进独立于此处；场景全是静态体，物理 Update 本身无事可做。
+        I.charH->advance(static_cast<float>(dt));
+        return;
+    }
     I.physicsSystem.Update(static_cast<float>(dt), 1, &I.tempAllocator, &I.jobSystem);
 }
 
 DebugLines DebugScene::extractLines() {
     DebugLines out;
-    if (!impl_ || !impl_->valid || !impl_->bodyInterface) return out;
+    if (!impl_ || !impl_->valid) return out;
+    // scenario=1 时 Impl 的 bodyInterface 为空（charH 接管），不能在此拦截。
+    if (!impl_->bodyInterface && !impl_->charH) return out;
     auto& I = *impl_;
     I.lineBuffer.clear();
     I.renderer->lines.clear();
+
+    // M-P4：走查场线框——地板蓝、场地几何绿、角色胶囊亮黄（手动补画：
+    // CharacterVirtual 无真实体，DebugRenderer 不会自动画它）。
+    if (I.charH) {
+        CharacterHarness& h = *I.charH;
+        JPH::BodyInterface& bi = *h.bodyInterface;
+        auto drawH = [&](JPH::BodyID id, const JPH::Color& color) {
+            JPH::RefConst<JPH::Shape> shape = bi.GetShape(id);
+            if (!shape) return;
+            const JPH::RMat44 xf = bi.GetCenterOfMassTransform(id);
+            shape->Draw(I.renderer.get(), xf, JPH::Vec3::sOne(), color, false, true);
+        };
+        drawH(h.floorId, JPH::Color(60, 120, 255));
+        for (JPH::BodyID id : h.courseIds) drawH(id, JPH::Color(80, 220, 80));
+        // 胶囊 shape 原点（圆柱中心）= mPosition + padding*up（COM=0、offset=0，
+        // 见 M-P4 段位置语义注释）；halfHeightOfCylinder = cfg halfCylinder 0.6。
+        const JPH::RVec3 pos = h.character->GetPosition();
+        const JPH::RMat44 capXf = JPH::RMat44::sTranslation(
+            pos + JPH::RVec3(0.0_r, JPH::Real(kCharPadding), 0.0_r));
+        I.renderer->DrawCapsule(capXf, 0.6f, 0.5f, JPH::Color(255, 230, 60));
+        I.lineBuffer.swap(I.renderer->lines);
+        out.data = I.lineBuffer.data();
+        out.vertexCount = static_cast<std::uint32_t>(I.lineBuffer.size() / 6u);
+        return out;
+    }
 
     JPH::BodyInterface& bi = *I.bodyInterface;
     auto drawBody = [&](JPH::BodyID id, const JPH::Color& color) {
@@ -775,7 +1067,11 @@ DebugLines DebugScene::extractLines() {
 }
 
 const char* DebugScene::lastError() const { return impl_ ? impl_->error.c_str() : "not built"; }
-std::uint32_t DebugScene::bodyCount() const { return impl_ ? impl_->totalBodies : 0; }
+std::uint32_t DebugScene::bodyCount() const {
+    if (!impl_) return 0;
+    if (impl_->charH) return impl_->charH->physicsSystem.GetNumBodies();
+    return impl_->totalBodies;
+}
 
 
 } // namespace nl::physics

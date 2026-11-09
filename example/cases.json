@@ -4173,6 +4173,91 @@
      "command": "phys-tools debug --frames 0"
     }
    ]
+  },
+  {
+   "id": "phys-p4",
+   "label": "P8 M-P4",
+   "name": "角色胶囊走查（Jolt CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶）",
+   "tag": "phys-p4",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/physics 第五里程碑：nl/physics 新增 CharacterHarness（地板 -> 30° 斜坡 -> 平台 -> 3 级台阶 -> 平台 -> 60° 斜坡静态走查场，场地中心化到原点以便 viewer 轨道相机取景），Jolt CharacterVirtual 沿 +x 匀速 ExtendedUpdate 走查（重力/输入应用侧每帧合成，Jolt 约定；无真实体——DebugRenderer 不会自动画它，viewer scenario=1 手动补画亮黄胶囊线框）。位置语义从 CharacterVirtual 源码钉死：mPosition 是胶囊几何中心（COM 变换 PreTranslated(shapeOffset+COM).PostTranslated(padding*up)），贴地中心 = top + 1.10。工具侧 character/check-character 落 10 列 TSV（px/py/pz/vx/vy/vz/state/groundNy），check 从数据列独立复算课程锚：起步 OnGround、30° 段 y 单调、台阶覆盖 0.9、60° 被挡停在 x=10.41、末 60 帧冻结 spread 0.000000。mPosition 语义从 CharacterVirtual 源码钉死（不猜）。",
+   "acceptance": [
+    "viewer --physics-debug --physics-scenario 1 双后端 1200 帧 deviceErrors=0，亮黄胶囊停在 60° 坡脚（x=10.41），绿场地/蓝地板/Suzanne 深度参照肉眼核验；线流 vertices=13704、lineY[-1, 6.7985] 两后端一致（互比 1103px/maxDelta242 记 FAIL 档，薄线噪声 scene/scale 先例口径）",
+    "character TSV：1200 帧 × 10 列；物理锚从数据列独立复算——首帧 OnGround、无穿地（feet ≥ -0.01）、30° 段 y 非降、平台1 贴合 3.4094、台阶 y 覆盖 ≥ 0.85、平台2 贴合 4.3094、final x∈[10,11.6]（被挡）、末 60 帧 px/py 极差 0.000000",
+    "selftest 断言全绿（M-P0 23 + M-P1 21 + M-P2 27 + M-P3 12 + M-P4 12），含角色轨迹两次模拟逐位确定性；ctest p4-phys-character / p4-phys-character-check / p4-phys-negative 全过（物理段 DX12/VULKAN 各 13/13）",
+    "逐字节回归闸扩到五基线：M-P0 drop / M-P1 layers / M-P2 stack / M-P3 debug / M-P4 character 全部 byte-identical OK（A 类口径不变：不进渲染回归总闸）",
+    "交代物：example/phys-p4/（run.bat ALL GREEN exit 0 + character.tsv + viewer-dx12/vulkan.png 双后端截图 + trajectory/acceptance.png 两张真实证据图 + 8 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md §11 + P8-PHYS-PLAN.md M-P4 固化口径"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 character / check-character。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-P0..M-P4 全锚点 + 走查确定性",
+     "kind": "tool",
+     "note": "真实 Jolt 5.3.1 世界；M-P4 段 12 条断言覆盖负向配置/起步贴地/60° 被挡/无穿地/30° 单调/平台贴合/台阶覆盖/静止冻结/两次模拟逐位一致。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-p4 anchors: PASS",
+     "command": "phys-tools selftest --verbose"
+    },
+    {
+     "id": "character",
+     "name": "character：角色走查轨迹 TSV（真实 CharacterVirtual 输出）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# course 行记录场地布局（与 World.cpp CharacterHarness 同源）；groundState 数值 = EGroundState 枚举序。",
+     "args": [
+      "character",
+      "--frames",
+      "120"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-P4 character walk-through",
+     "command": "phys-tools character --frames 120"
+    },
+    {
+     "id": "check-character",
+     "name": "check-character：从归档 TSV 复验走查锚",
+     "kind": "tool",
+     "note": "从数据列独立重算：state 值域、起步 OnGround、无穿地、30° 单调、平台1/2 贴合、台阶覆盖 0.9、final x∈[10,11.6] 被挡、末 60 帧冻结；只验摘要不算验收。",
+     "args": [
+      "check-character",
+      "{root}/example/phys-p4/character.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-p4 check-character: PASS",
+     "command": "phys-tools check-character example/phys-p4/character.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：character --frames 0 显式退出 2",
+     "kind": "tool",
+     "note": "参数校验先于任何 Jolt 调用拒绝（validateCharacter 下界 60）。",
+     "args": [
+      "character",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools character --frames 0"
+    }
+   ]
   }
  ]
 }

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """Physics-track regression gate: archived dumps must stay byte-identical.
 
-Covers M-P0 drop + M-P1 layers (M-P2 origin) and, since M-P3, the M-P2 stack
-dump and the M-P3 debug wireframe dump. Reads the REAL archived baselines and
-freshly regenerated files, emits ASCII-only witness lines (Chinese Windows
-`fc /b` prints GBK and breaks the evidence PNG). Exit 0 = all identical,
-1 = any changed.
+Covers M-P0 drop + M-P1 layers (M-P2 origin), the M-P2 stack dump, the M-P3
+debug wireframe dump and, since M-P4, the M-P4 character walk-through dump.
+Reads the REAL archived baselines and freshly regenerated files, emits
+ASCII-only witness lines (Chinese Windows `fc /b` prints GBK and breaks the
+evidence PNG). Exit 0 = all identical, 1 = any changed.
 """
 import hashlib
 import os
@@ -14,6 +14,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 D2 = os.path.join(ROOT, "example", "phys-p2")
 D3 = os.path.join(ROOT, "example", "phys-p3")
+D4 = os.path.join(ROOT, "example", "phys-p4")
 
 PAIRS = (
     ("M-P0 drop.tsv",
@@ -28,6 +29,9 @@ PAIRS = (
     ("M-P3 debug.tsv",
      os.path.join(D3, "debug.tsv"),
      os.path.join(D3, "debug-regen.tsv")),
+    ("M-P4 character.tsv",
+     os.path.join(D4, "character.tsv"),
+     os.path.join(D4, "character-regen.tsv")),
 )
 
 ok = True

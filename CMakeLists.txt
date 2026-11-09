@@ -572,3 +572,16 @@ set_tests_properties(p3-phys-debug-check PROPERTIES
     PASS_REGULAR_EXPRESSION "phys-p3 check-debug: PASS")
 add_test(NAME p3-phys-negative COMMAND phys-tools debug --frames 0)
 set_tests_properties(p3-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P4：角色走查（CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶）----
+add_test(NAME p4-phys-character COMMAND phys-tools character --frames 1200
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
+set_tests_properties(p4-phys-character PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-p4-character\\.tsv")
+add_test(NAME p4-phys-character-check
+         COMMAND phys-tools check-character ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
+set_tests_properties(p4-phys-character-check PROPERTIES
+    DEPENDS p4-phys-character
+    PASS_REGULAR_EXPRESSION "phys-p4 check-character: PASS")
+add_test(NAME p4-phys-negative COMMAND phys-tools character --frames 0)
+set_tests_properties(p4-phys-negative PROPERTIES WILL_FAIL TRUE)

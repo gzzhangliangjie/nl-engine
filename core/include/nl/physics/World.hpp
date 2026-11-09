@@ -162,6 +162,46 @@ struct StackResult {
 
 bool validateStack(const StackConfig& cfg, std::string* err);
 
+// ---- M-P4：角色胶囊（CharacterMovement 式：扫掠 + 地面检测 + 斜坡/台阶） ----
+// Jolt CharacterVirtual（虚体走查，与 UE CharacterMovementComponent 同型：
+// MoveAlongFloor/FindFloor/MaxSlopeAngle <-> Update/StickToFloor/WalkStairs/
+// GetGroundState）。重力与输入由应用侧每帧合成（Jolt 约定，见
+// CharacterVirtual.h Update 注释）。Carrot 的 Character（JPH::Character 真实体
+// 式）是另一路，M-P4 计划口径为 CharacterMovement 式，故取 CharacterVirtual。
+// 头文件零 Jolt 类型；确定性契约与 M-P0 相同（fresh world + 固定步 + 单线程
+// JobSystem + CharacterVirtual mInnerBodyIDOverride 固定 BodyID）。
+struct CharacterConfig {
+    int           frames       = 1200;       // 20 s at 1/60：走完 24 m 到 60° 坡脚再静止
+    double        dt           = 1.0 / 60.0;
+    float         gravity      = 9.8f;
+    float         radius       = 0.5f;
+    float         halfCylinder = 0.6f;       // capsule 圆柱半高（总高 2.2 m）
+    float         walkSpeed    = 1.5f;       // 沿 +x 匀速（动作系统输入接口的演示驱动）
+    float         maxSlopeDeg  = 50.0f;      // Jolt 默认 50°：30° 可爬、60° 被挡
+    std::uint32_t seed         = 0;
+};
+
+// groundState 数值 = JPH::CharacterBase::EGroundState 枚举序（固化，TSV 直接可读）：
+// 0=OnGround 1=OnSteepGround 2=NotSupported 3=InAir
+struct CharacterSample {
+    int            frame = 0;
+    double         t     = 0.0;
+    nl::math::Vec3 position{};             // 脚底（CharacterVirtual mPosition = 胶囊底部中心）
+    nl::math::Vec3 velocity{};
+    int            groundState = -1;
+    float          groundNormalY = 0.0f;
+};
+
+struct CharacterResult {
+    std::vector<CharacterSample> samples;
+    float         finalX = 0.0f;           // 末帧脚底 x（锚：被 60° 斜坡挡住）
+    float         finalY = 0.0f;
+    std::string   error;
+    bool ok() const { return error.empty(); }
+};
+
+bool validateCharacter(const CharacterConfig& cfg, std::string* err);
+
 class World {
 public:
     World();
@@ -190,6 +230,12 @@ public:
     // per-frame position/velocity/active flag plus the stability metrics.
     StackResult simulateStack(const StackConfig& cfg);
 
+    // M-P4: character walk-through over ramp/stairs/steep-slope course
+    // (floor -> 30deg ramp -> platform -> 3 steps -> platform -> 60deg slope).
+    // One fresh world per call (determinism contract); CharacterVirtual
+    // ExtendedUpdate cadence, gravity/input composed app-side per Jolt docs.
+    CharacterResult simulateCharacter(const CharacterConfig& cfg);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
@@ -213,6 +259,10 @@ public:
     DebugScene& operator=(const DebugScene&) = delete;
 
     // scenario: 0 = 静态地板 + 落体盒/球/胶囊（落地稳态）。
+    //           1 = M-P4 角色走查场地（地板 -> 30° 斜坡 -> 平台 -> 3 级台阶 ->
+    //               平台 -> 60° 斜坡；CharacterVirtual 沿 +x 匀速走查，
+    //               线框含亮黄角色胶囊——CharacterVirtual 无真实体，
+    //               DebugRenderer 不会自动画它，由本类手动补画）。
     // gravity 默认 9.8；seed 当前未驱动 RNG（确定性来自固定步 + 单线程 JobSystem）。
     bool build(int scenario, std::uint32_t seed, std::string* err);
     void step(double dt);                 // 推进一个固定步（dt 建议 1/60）

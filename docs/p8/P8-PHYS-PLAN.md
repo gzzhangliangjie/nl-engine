@@ -28,7 +28,8 @@
 | **M-P1** ✅ **2026-11-09 完成（tag `phys-p1`）** | 体封装 + 碰撞层（引擎对象 ↔ Jolt 双向关联） | 层过滤矩阵用例：同层碰撞 / 异层穿透，dump 可验。实测见 §M-P1 固化口径与 `PHYS-TOOLS-GUIDE.md` §8 |
 | **M-P2** ✅ **2026-11-09 完成（tag `phys-p2`）** | 堆叠 + 地面（静态体） | 箱体堆叠稳定不抖（长时间步进位移收敛），dump 证据。实测见 §M-P2 固化口径与 `PHYS-TOOLS-GUIDE.md` §9 |
 | **M-P3** ✅ **2026-11-09 完成（tag `phys-p3`）** | debug 渲染接 viewer（Jolt DebugRendering → ImGui/线框） | `viewer --physics-debug` 场景内实时看碰撞形状（地板蓝 / 盒绿 / 球橙 / 胶囊品红，depth test 开 / write 关），双后端 `deviceErrors=0`；工具侧 `debug`/`check-debug` 线流度量 TSV。实测见 §M-P3 固化口径与 `PHYS-TOOLS-GUIDE.md` §10；⚠️ §2.4 入口名坑的共享 builder 变体（`SHADER-CONVENTIONS.md` §2.4 已扩充） |
-| **M-P4** | 角色胶囊（CharacterMovement 式：扫掠 + 地面检测 + 斜坡） | 胶囊走斜坡/台阶轨迹 dump；与动作系统（M-A 轨道）动画衔接预留接口 |
+| **M-P4** ✅ **2026-11-09 完成（tag `phys-p4`）** | 角色胶囊（CharacterMovement 式：扫掠 + 地面检测 + 斜坡） | `character`/`check-character` 走查 TSV：地板 → 30° 斜坡 → 3 级台阶 → 60° 斜坡挡住（Jolt CharacterVirtual ExtendedUpdate，重力/输入应用侧合成）；viewer scenario=1 亮黄胶囊线框走查演示（双后端 `deviceErrors=0`）；`CharacterConfig.walkSpeed` 为动作系统衔接预留输入接口。实测见 §M-P4 固化口径与 `PHYS-TOOLS-GUIDE.md` §11 |
+| M-P5 | 场景集成（物理对象 ↔ ECS/序列化） | **仍 gate 在 P8 E3 之后**，不随 M-P4 解锁 |
 | **M-P5** | 场景集成：E1/E3 场景物体挂碰撞体 + 序列化 | E1 场景（50 物体）物理正确；Inspector 可编辑碰撞参数 |
 
 
@@ -82,6 +83,17 @@
 - **回归闸**：`check-phys-regression.py` 扩到四基线（M-P0 drop / M-P1 layers / M-P2 stack / M-P3 debug）逐字节 + MD5。
 - **双后端互比**：线框截图 599px / maxDelta 242，薄线覆盖噪声按 `scene`/`scale` 先例如实记 FAIL 档，各自对本后端基线 bytes。
 - **交代**：工具版 + 渲染证据双轨（`example/phys-p3/`：debug.tsv + 双后端 viewer 截图 + 2 张证据图 + `cases.json` `phys-p3` 卡 + `PHYS-TOOLS-GUIDE.md` §10），不进 `kStage` / 渲染总闸。
+
+### M-P4 固化口径（2026-11-09 验收后写回）
+
+- **路线**：Jolt `CharacterVirtual`（虚体走查），不是 Carrot 的 `JPH::Character`（真实体 kinematic）——M-P4 计划口径「CharacterMovement 式扫掠」与 UE `MoveAlongFloor/FindFloor/MaxSlopeAngle` 同型，Carrot 无 CharacterVirtual 参考。
+- **mPosition 语义（源码钉死）**：胶囊（COM=0、offset=0）shape 原点 = `mPosition + padding*up` → mPosition 是胶囊几何中心；脚底 = py − 1.08；贴地 py = top + 1.10（padding 悬距 0.02）。锚点全部按此口径。
+- **步进节奏**：重力/输入应用侧每帧合成（OnGround: `(walk, −g·dt, 0)` 贴地压紧；空中: `(walk, vy−g·dt, 0)`）；`ExtendedUpdate` 用 Jolt 默认 stickDown 0.5 / stepUp 0.4（显式写出）。
+- **场地（中心化 x−13）**：地板顶 y=0 → 30° 斜坡 x∈[−7,−3]（顶 2.3094）→ 平台1 → 3 级台阶 x∈[5,6.8]（每级 0.3，顶 3.2094，WalkStairs）→ 平台2 → 60° 斜坡 x∈[11,13]（maxSlope 50° 挡住）→ 保险墙 x=17。中心化原因：OrbitCamera pivot 固定原点，viewer scenario=1 固定机位 `(yaw 0, pitch 35°, dist 19)`。
+- **台阶锚窗口**：[4.3, 7.2] 而非几何区间 [5, 6.8]——胶囊半径 0.5 前缘提前 0.5m 接触立面。
+- **确定性**：与 M-P0 同契约（fresh world + 固定步 + 单线程 JobSystem），两次模拟逐位一致；五基线逐字节回归闸（drop/layers/stack/debug/character）。
+- **viewer 接线**：scenario=1 时 `DebugScene::Impl.charH` 全接管；CharacterVirtual 无真实体，extractLines 手动 `DrawCapsule` 画亮黄 (255,230,60) 胶囊；`bodyInterface` guard 放行条件改为 `!bodyInterface && !charH`。
+- **动作系统衔接**：`CharacterConfig.walkSpeed` = 输入接口演示驱动；`groundState`（EGroundState 枚举序 0..3，TSV 直接可读）与 `GetGroundVelocity` 可直接喂动画状态机——M-P5/E 系集成时按此接。
 
 ## 验收纪律
 

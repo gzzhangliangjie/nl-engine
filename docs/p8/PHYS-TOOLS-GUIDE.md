@@ -156,3 +156,33 @@ M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）/ M-P4 角
 
 ### 下一步
 M-P4 角色胶囊（Jolt `CharacterVirtual`）；**M-P5 场景集成仍 gate 在 P8 E3 之后**。
+
+## 11. M-P4：角色胶囊走查（2026-11-09，tag `phys-p4`）
+
+### 交付物
+- `example/phys-p4/run.bat`：重跑 selftest / character / check-character / M-P0..M-P3 五基线逐字节回归 / **双后端 viewer 截图（`--physics-scenario 1`，`deviceErrors=0` 硬闸）** / usage / 负向，再重生成两张证据图，全绿才退出 0。
+- `example/phys-p4/character.tsv`：1200 帧 × 10 列真实 CharacterVirtual 走查轨迹（`# jolt=` / `# groundState` / `# course` provenance 头）。
+- `example/phys-p4/{viewer-dx12,viewer-vulkan}.png`：viewer `--physics-debug --physics-scenario 1` 真实 GPU 截图（1200 帧全程走完，黄胶囊停在 60° 坡脚 x=10.41）。
+- `example/phys-p4/{trajectory,acceptance}.png`：`tools/make-phys-p4-evidence.py` 从真实 TSV 与真实日志渲染（侧视剖面 + ground state 时间线 + 末 60 帧 parking zoom + MEASURED 面板；验收图为完整日志）。
+- `tools/check-phys-regression.py` 扩到五基线（+M-P4 character）。
+
+### 内核要点（写回 canonical）
+- **CharacterVirtual 而非 Carrot 的 Character**：M-P4 计划口径「CharacterMovement 式扫掠」对应 Jolt CharacterVirtual（Update sweep + StickToFloor + WalkStairs + GetGroundState ↔ UE MoveAlongFloor / FindFloor / MaxSlopeAngle）；Carrot `engine/physics/Character.cpp` 用的是另一路 `JPH::Character`（kinematic 真实体，jump 未实现 TODO），不采用。
+- **mPosition 语义（源码钉死，不猜）**：`GetCenterOfMassTransform = sRotationTranslation(rot, mPosition).PreTranslated(shapeOffset + COM).PostTranslated(padding*up)` → 胶囊（COM=0、offset=0）的 shape 原点（圆柱中心）在 `mPosition + padding*up`，即 **mPosition 是胶囊几何中心**，脚底 = mPosition.y − (halfCyl + radius − padding) = py − 1.08；贴地（保持 padding 悬距）时 py = top + 1.10。实测平台1 3.4094 / 平台2 4.3094。
+- **重力/输入应用侧合成**（Jolt Update 注释明文）：OnGround → v = (walk, −g·dt, 0)（地面速度 0 + 输入 + 重力压紧贴坡）；空中 → v = (walk, vy − g·dt, 0)。
+- **ExtendedUpdate 默认参数**：stickDown {0,−0.5,0} / stepUp {0,0.4,0}（代码显式写出作 provenance）；filter 组 `DefaultBroadPhaseLayerFilter(objVsBp, kDefault)` / `DefaultObjectLayerFilter(matrix, kDefault)` / 空 BodyFilter / ShapeFilter；TempAllocatorImpl(10MB)。
+- **场地中心化**：全部几何 x−13（角色起点 −13、60° 坡 x∈[11,13]），因为 OrbitCamera pivot 固定原点、dist clamp ≤20，viewer scenario=1 且未给 `--dist` 时摆固定机位 `setOrbit(0, 35°, 19)`。
+- **台阶爬升提前**：胶囊半径 0.5 使前缘在台阶立面 0.5m 前就接触（x≈4.5 触发第一级），台阶锚窗口取 [4.3, 7.2] 而非台阶几何区间 [5, 6.8]。
+- **viewer 侧**：scenario=1 时 `DebugScene::Impl.charH` 全接管（自带 PhysicsSystem；`bodyInterface` guard 已相应放行——`!bodyInterface && !charH` 才拦）；extractLines 手动 `DrawCapsule(matrix=sTranslation(pos+padding*up), halfCyl, r)` 画亮黄 (255,230,60) 角色胶囊。
+
+### 工具 CLI
+| 命令 | 行为 | 退出码 |
+|---|---|---|
+| `phys-tools character [--out <tsv>] [--frames N]` | 与 viewer scenario=1 同一 CharacterHarness，逐帧 10 列 TSV（frame/t/px/py/pz/vx/vy/vz/state/groundNy） | 0 / 1 / 2 |
+| `phys-tools check-character <tsv>` | 从数据列独立复验：state 值域、起步 OnGround、无穿地、30° 单调、平台1/2 贴合、台阶覆盖 ≥0.85、final x∈[10,11.6]（被挡）、末 60 帧冻结 | 0 / 1 / 2 |
+
+### 复验防假绿
+`check-character` 只信数据列：物理锚全部从 px/py 列独立复算（贴地高度常数与 World.cpp 常量同源、注释互指），摘要行只作 provenance。
+
+### 下一步
+M-P4 预留动作系统衔接接口（`CharacterConfig.walkSpeed` 即输入接口的演示驱动；`groundState`/`GetGroundVelocity` 可直接喂动画状态机）；**M-P5 场景集成仍 gate 在 P8 E3 之后**。
