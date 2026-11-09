@@ -1,8 +1,16 @@
 # 穿插项计划：PBR 直射光 + 贴图采样（tag：`pbr-direct`）
 
-> 状态：**计划已预写（2026-11-07），开工时按本页执行，动手前如需调整先改这里**。
+> 状态：**已实施收口（2026-11-09，tag `pbr-direct`，feat/pbr-direct 分支 d277bc7+）**。验收纪要见 `docs/MILESTONES.md` pbr-direct 节。
 > 定位：主线「穿插项」，插在 S1~S6 之间（建议 S2/S3 卡壳换脑子时），**是 S7 的前置**——S7 本来就含 PBR 直光，这里提前做掉，S7 只剩 vis buffer + vertex pulling + 材质解析。
 > 硬规则不变：example 归位 + cases.json + `--check` 退出 0；tag 用名字 `pbr-direct`，不占 m0.* 编号。
+>
+> **实施时与预写的偏差（全部已在 MILESTONES 踩坑栏留痕）**：
+> 1. shading mode 用 **5** 不是 4——4 已被 M1.3 cluster 色占用；
+> 2. t0 保持 `RGBA8_UNORM` 不换 SRGB 格式（换格式会破坏「M0.8 行为逐字节不变」硬判据），pbr 分支在 shader 内做精确分段 sRGB→linear；`--pbr-naive` 跳过它即验收判据 3 的对照路径；
+> 3. pbr 分支**只编译进 psMain**——共享 shade() 会把 t1/b1 带进 psCluster/psCull，而 cull/dag 管线的 t1 是 StructuredBuffer（同槽异型 = Vulkan 布局非法，§2.7）；
+> 4. `LightConstants` 实为 80B（含 glTF 材质因子 + naive 对照开关），不止 48B——因子总得有地方放；
+> 5. 输出端 `pow(1/2.2)` gamma 编码（显示变换，非 tonemap，plan 边界不破）；
+> 6. `server.py` 的 STAGE_RE 放行具名穿插项前缀（kStage=`pbr-direct ...` 不匹配 M*/S* 模式）。
 
 ## 为什么是它（背景）
 
