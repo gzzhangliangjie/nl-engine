@@ -95,11 +95,12 @@
 - **增量阶梯**：绑定核心 API → 调用渲染 → 游戏逻辑脚本化。
 - **三处参考口径**：sol2（C++↔Lua 桥，最常用）/ 诸多社区实现；UE/bevy 无直接等价（据实标注）。
 
-### 2.6 3D 空间音频
+### 2.6 3D 空间音频（2026-11-09 方案变更：vendored miniaudio）
 
-- **为什么适合并行**：完全独立，不碰 GPU。
-- **增量阶梯**：单声源定位 → 距离衰减 → 遮挡 → 混响卷积。
-- **三处参考口径**：Steam Audio（开源，物理建模）/ bevy rodio（轻量）/ UE Audio（结构参考，只读）。
+- **为什么适合并行**：完全独立，不碰 GPU；A 类，不进渲染回归。
+- **增量阶梯（重写后 4 步）**：单声源播放 + 离线确定性 dump → 3D 定位/距离衰减/多声源 → 游戏内调试（console cvar + ImGui 声源面板）→ E1 场景集成。
+- **三处参考口径**：UE `AudioDebug.cpp`（只读定调试字段）/ Carrot `engine/audio/`（对象模型与绑定形状，不抄 AudioThread 与 OpenAL 底座）/ bevy `SpatialListener`（ECS 同步挂法）；上游 miniaudio 官方示例清单见 `P8-AUDIO-PLAN.md` §3。
+- **不在范围**：HRTF / 几何遮挡 / EFX 混响卷积 / Steam Audio / FMOD/Wwise 内容管线（目标只要「3D 音效 + 能调试」）。
 
 ---
 
@@ -180,7 +181,7 @@
 |---|---|---|---|
 | 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废；新阶梯 = vendored + 封装 + 编辑器结合 + E1 集成） |
 | ~~物理（Jolt vendored 集成）~~ | **已建** `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics`（已建） | **已提前开工**，见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
-| 3D 空间音频（OpenAL Soft + 从零集成层） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md` |
+| 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md`（2026-11-09 全量重写；旧 OpenAL Soft + 自写解码器作废留痕 §7）；排期闸仍排 E1 后 |
 
 ### 7.1e 物理轨道（2026-11-09 提前开工，M-P0~M-P3）
 

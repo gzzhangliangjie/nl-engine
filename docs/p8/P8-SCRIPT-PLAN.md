@@ -56,4 +56,4 @@
 ## 注册表
 
 - worktree：`E:/UE_STUDY_2026/nl-engine-script`，分支 `feat/script`（待建）。
-- 计划归属：ROADMAP E4 脚本段（2026-11-09 解禁，鸣潮方向）；物理/音频仍保持「等游戏类型拍板」原状。
+- 计划归属：ROADMAP E4 脚本段（2026-11-09 解禁，鸣潮方向）；物理已提前开工（`P8-PHYS-PLAN.md` M-P0~M-P3），音频 2026-11-09 定案 vendored miniaudio（`P8-AUDIO-PLAN.md`，排期闸仍排 E1 后）——两者均已不再「等游戏类型拍板」，见 ROADMAP E4 行。
