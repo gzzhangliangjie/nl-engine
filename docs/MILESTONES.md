@@ -1022,9 +1022,9 @@
 **完成情况**
 - selftest **49/49 PASS**（新增 7 条内建命令断言），viewer selftest 16/16（含 panelShow 缺省）。
 - **验收截图（DX12 960x540，亲眼可见）**：
-  - `build/out/mc2-registry-dx12.png`——`help` 列出 add/cvar.list/cvar.set/echo/help；`cvar.list` 列出 `cam.dist = 4.2 (float)` / `cam.fov = 45 (float)` / `hud.show = true (bool)`（相机实际值）；输入行 `cam.fov |` = `cam.fo` Tab 补全产物（新注册表下补全照常）。
-  - `build/out/mc2-fov100-dx12.png`——`cam.fov 100` 生效（模型透视明显变广 vs 45°）；`hud.show false` 只藏 HUD 面板、**控制台窗口存活**（解耦生效），日志回显 `cam.fov = 100` / `hud.show = false`。
-- Vulkan 后端编译 + 证据截图（console_ui 零 GPU 代码，通道层验证；P8-CONSOLE-PLAN 双后端画面回归豁免成立）。
+  - `docs/screenshots/mc2-registry-dx12.png`——`help` 列出 add/cvar.list/cvar.set/echo/help；`cvar.list` 列出 `cam.dist = 4.2 (float)` / `cam.fov = 45 (float)` / `hud.show = true (bool)`（相机实际值）；输入行 `cam.fov |` = `cam.fo` Tab 补全产物（新注册表下补全照常）。
+  - `docs/screenshots/mc2-fov100-dx12.png`——`cam.fov 100` 生效（模型透视明显变广 vs 45°）；`hud.show false` 只藏 HUD 面板、**控制台窗口存活**（解耦生效），日志回显 `cam.fov = 100` / `hud.show = false`。
+- Vulkan 后端编译 + 证据截图 `docs/screenshots/mc2-registry-vulkan.png`（HUD `backend : vulkan` 同框 `help`/`cvar.list` 完整输出 + Suzanne.glb 贴图模型正常；console_ui 零 GPU 代码，通道层验证；P8-CONSOLE-PLAN 双后端画面回归豁免成立）。
 - 未跑渲染回归（总闸口径：panelShow 缺省 true + 传参条件在双关时仍为 nullptr，历史 HUD 基线零波及；hudSelfTest 缺省断言锁住）。
 
 **踩坑情况**
