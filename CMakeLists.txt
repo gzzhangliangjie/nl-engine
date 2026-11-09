@@ -34,6 +34,14 @@ message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no networ
 
 set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
+# ---- Taskflow v3.11.0（MIT / header-only / C++17）：M-J5a 显式依赖 DAG ----
+# 选型闸与风险核查见 thirdparty/taskflow/VENDOR.md；cuda/ 未入库，无 CUDA 依赖。
+# 只用 INTERFACE 目标暴露 include 路径：不编源、不产库、不联网、不新增 DLL。
+add_library(taskflow INTERFACE)
+# 上游布局：include root 是仓库根（vendored 后 = ${THIRDPARTY}），
+# 业务侧写 #include <taskflow/taskflow.hpp>；不可用 .../taskflow 本身作 root。
+target_include_directories(taskflow INTERFACE ${THIRDPARTY})
+
 # ---- 本地 headers targets：NVRHI 会按这些名字检测，检测到就不走 FetchContent 联网 ----
 add_library(Vulkan-Headers INTERFACE)
 target_include_directories(Vulkan-Headers INTERFACE ${THIRDPARTY}/vulkan-headers/include)
@@ -137,6 +145,7 @@ add_library(nl_core STATIC
     core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/jobgraph.cpp      # P8 M-J5a：显式依赖 DAG 薄封装（vendored Taskflow 只在此 TU 出现）
     core/src/console.cpp       # P8 M-C0：开发者控制台纯逻辑内核（A 类轨道，零图形符号）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
@@ -150,6 +159,8 @@ target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/inclu
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
+# M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
+target_link_libraries(nl_core PUBLIC taskflow)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会

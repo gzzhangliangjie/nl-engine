@@ -19,6 +19,32 @@
 
 ---
 
+## 自研边界与第三方库选型闸（2026-11-09 用户拍板，覆盖旧原则）
+
+**核心诉求只有 nanite / lumen 手写**；关联系统（任务调度 / 物理 / 寻路 / 音频 / 脚本 hosting / 编辑器与工具链等）**优先 vendored 成熟库，不再以「有参考就从头写」为默认**。用户原话：「可以直接用 Taskflow，这些关联系统完全自己写的确意义不大，核心诉求是 nanite 和 lumen 手写」「复杂度一上来，很多自己写的就不够用了」「当然前提是那些成熟库，必须是开源并且无使用风险的」。
+
+本条**作废旧原则**：`docs/NON-RENDER-ROADMAP.md` 头部「有参考的内容就考虑从头写，参照实现只作对照与节奏校准」，以及各计划里把 Jolt / Recast-Detour / miniaudio / Taskflow 称作「例外」的表述。从此**用成熟库是通例，自研是例外**；自研只在「核心算法（nanite / lumen 及其渲染主线）/ 无成熟方案 / 成熟方案确不适用」三种情况下成立，且须单独拍板。
+
+### 选型硬闸（缺一不可，不得跳过）
+
+1. **开源且无使用风险**：宽松许可证（MIT / ZLib / Apache-2.0 / MIT-0 / Public Domain 等），**LICENSE 原文随 vendored 入库**；禁 copyleft 传染（GPL/LGPL/MPL 须单独评审）、禁 EULA 限制的厂商 SDK、禁只读参考实现的代码（UE）、禁来源不明或已停维护且无替代的项目。
+2. **许可文本与项目 MIT 兼容**：允许商用 / 修改 / 再分发；无已知专利 / 授权诉讼风险。**MIT 无显式专利授权条款这一事实必须如实写明，不许对外宣称「绝对零风险」**。
+3. **零构建期新依赖**：header-only 或纯源码，不联网拉取、不要求装厂商 SDK、不引入新运行时 DLL；本机 MSVC 14.38 / C++17 能编译（沿用「构建链不依赖任何厂商图形 SDK」铁律）。
+4. **溯源留档**：`thirdparty/<lib>/VENDOR.md` 写明版本 / tag 或 commit / 上游地址 / 许可证 / C++ 标准 / 入库子集与排除项 / 风险核查结论；升级时同步更新。
+5. **边界不变**：UE 源码仍只读不抄，Carrot / bevy 仍抄思路不抄代码；第三方库只解决关联系统，**不得替代 nanite / lumen 手写主线**。业务代码不直接暴露第三方类型，经 `nl/` 薄封装隔离，保证可替换。
+
+### 已按本闸落地（统一归档，不再称「例外」）
+
+| 库 | 版本 | 许可证 | 用途 |
+|---|---|---|---|
+| Taskflow | 3.11.0 | MIT | M-J5a 显式依赖 DAG（v4 要 C++20，故取 v3 末版） |
+| Jolt Physics | 5.3.1 | MIT | 物理 |
+| Recast/Detour | 上游 1.6.0 | ZLib | 寻路（计划已立项，待开工） |
+| miniaudio | 0.11.26 | Public Domain / Unlicense | 3D 音频 |
+| NVRHI / Slang / meshoptimizer / METIS / imgui / glfw / tinygltf 等 | — | 各自 LICENSE | 既有 vendored，沿用 |
+
+---
+
 ## 每轮任务必做的 4 步前置（checklist，缺一不可）
 
 > **第 0 步 · 对话开场归属声明（2026-11-09 用户拍板，见并行轨道纪律第 7 条）**：每个对话开场先声明本次归属的**里程碑编号**；用户没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记，然后才动手。**收尾必须对称释放（2026-11-09 用户拍板）**：本轮里程碑做完（或对话要结束时），`python tools/wt_pool.py release --track <轨道> --milestone <编号>` 释放占用——否则 `.wt_pool_busy.json` 里的锁一直挂着，其他对话全被挡。正常收尾不带 `--force`（`--strict` 可校验文档闸）；异常中断后接手清理才用 `--force`。
@@ -125,7 +151,7 @@
 
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
-   | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
+   | Job / Task 并行 | **已重建** `E:/UE_STUDY_2026/nl-engine-job-system`（2026-11-09 M-J5a 重启） | `feat/job-system`（保留，已快进至 master `6a718fb`） | **M-J0~J3 已收官** + 已双向合并回 master + 可视化证据图补交；**M-J5a 开工中**（2026-11-09 用户「开始」批准重启 CLOSED 轨道）：vendored Taskflow 3.11.0 做显式依赖 DAG + A 档 4 路 slangc fan-in 并行 + 抽共用编译入口；M-J4 仍等 P9 V4，M-J5b/c 为后续步。计划 `docs/p8/P8-JOB-PLAN.md`（REUSE 盘点与后续消费者已并成一份） |
    | 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官**：B2~B4（tag `mg-b2b4`）+ T1 编辑器 M1~M3（tag `mg-t1`，merge commit `e5505bc`）全量合入 master；B5 接 PBR + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 |
    | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官**：M-A0~M-A5.4 全量 merge 回 master（merge commit `5a1912f`，tag `anim-ma1`~`anim-ma5c`）；nl/anim 纯逻辑层 + anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页；验收纪要 `docs/MILESTONES.md` M-A 节 + `docs/action-system/ACTION-PLAN.md` + `ANIM-TOOLS-GUIDE.md`；GPU 调色板等更大规模蒙皮资产再立项 |
    | 开发者控制台 | ~~`E:/UE_STUDY_2026/nl-engine-console`~~（worktree 拆除待批准，merge 已落地 2026-11-09） | `feat/console`（保留） | **已收官**：M-C0~C3 全量 merge 回 master（merge commit `9e12cc6`，tag `console-mc3`）：core/console 纯逻辑内核（CVar 四类型 + ExecCode 四档）+ ImGui 前端（`` ` `` 呼出/Tab 补全/历史/可拖缩）+ installBuiltins（help/cvar.list/cvar.set）+ cam.*/hud.show 真参数回调 + panelShow 解耦；selftest 49/49、双后端构建+selftest 绿、展示台 console-mc3 卡五用例实跑；归档 `docs/p8/CONSOLE-TOOLS-GUIDE.md` + `docs/screenshots/CONSOLE-EVIDENCE.md`；计划 `docs/p8/P8-CONSOLE-PLAN.md` |

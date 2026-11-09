@@ -3,6 +3,7 @@
 > 对应总路线 `docs/ROADMAP.md` 的 **A 类并行轨道**（引擎化 / 非渲染，不进 `kStage`）。本计划把 P8 引擎化的「并发地基」前置为独立可验收轨道——它**现在就能开**（纯底层、零 GPU 依赖），第一个真实消费者是**离线管线**（`nanite-tools` / `core` 离线部分）。
 > 性质：S*-PLAN 风格里程碑草案。立项前已按铁律读三处参考（bevy_tasks / UE TaskGraph / Carrot）+ 开发历史（MILESTONES / ROADMAP / MEMORY / S-PLAN 格式样张 `s15/S15-PLAN.md`）。
 > **本文是 job 轨道唯一权威计划文档（2026-11-09 归并）**：原 `docs/p8/JOB-REUSE-REVIEW.md`（复用面 Review）已整段并入本文 §复用面盘点 / §M-J5，不再保留副本；其它文档中的待接消费者描述保持原样，本文 §消费者登记表只做指针索引，不复制正文，避免多处维护漂移。
+> **2026-11-09 选型变更**：用户拍板「关联系统完全自己写意义不大，核心诉求是 nanite/lumen 手写」「复杂度一上来很多自己写的就不够用了」「成熟库必须开源且无使用风险」→ M-J5a 的显式依赖 DAG **不自研**，改 vendored **Taskflow v3.11.0（MIT / header-only / C++17）**；`AGENTS.md`「自研边界与第三方库选型闸」为通例，本文原「不引第三方线程库」底线作废。详见 §M-J5a 选型对照与 `thirdparty/taskflow/VENDOR.md`。
 
 ---
 
@@ -71,27 +72,75 @@
 - [ ] **不在本轨道当前范围**：等 P9 V4 真实需要独立流式线程时再落，避免提前引入复杂度。
 - **自检**：仅接口桩 + 设计说明；无功能验收。
 
-> **能力边界（2026-11-09 复核，写死）**：M-J0~J3 交付的是「离线确定性批处理专用线程池」——只覆盖三处参考共识里的 (a) 数据并行 + (b) 同步 fork-join；缺 (c) 异步 lane / 跨帧长任务、(d) 前置依赖图（即 M-J4 留白）。池目前由消费者各自局部构造（`ThreadPool pool(...)`），无进程级常驻实例；因此**渲染运行时帧管线接入不在能力范围内**，需先完成 M-J5 升池。这不是欠账，是按 M-J4 已拍板边界交付的完整成果。
+> **能力边界（2026-11-09 复核，写死）**：M-J0~J3 交付的是「离线确定性批处理专用线程池」——只覆盖三处参考共识里的 (a) 数据并行 + (b) 同步 fork-join；缺 (c) 异步 lane / 跨帧长任务、(d) 前置依赖图。池目前由消费者各自局部构造（`ThreadPool pool(...)`），无进程级常驻实例；因此**渲染运行时帧管线接入不在能力范围内**，需先完成 M-J5b 升池。
+> **(d) 的实现方式已改（2026-11-09 用户拍板）**：不再自研「依赖计数 + 就绪队列」，改用 vendored Taskflow 显式 DAG（M-J5a）；`nl/core/jobgraph.hpp` 只做薄封装与确定性收口。理由：关联系统复杂度上来自写不够用，且手写预算要留给 nanite / lumen。原 M-J4 留白中的「依赖图」部分就此关闭，M-J4 只剩命名线程 / IO 分池（仍不排期）。
 
-### M-J5（待拍板）扩大复用面：从离线批处理件到进程级调度底座
+### M-J5（已拍板开工）扩大复用面：从离线批处理件到进程级调度底座
 
-> **状态（2026-11-09）**：仅完成前置盘点与计划草案，**未开工、未改码、未占坑、未打 tag**。`wt_pool status` 显示 `job-system` 轨道为 **CLOSED**，claim 会被硬拒；重启属范围变更，须先批准并确认里程碑编号。
+> **状态（2026-11-09）**：用户「开始」批准重启 CLOSED 轨道；`wt_pool claim --track job-system --milestone M-J5a` 已登记，worktree `E:/UE_STUDY_2026/nl-engine-job-system` 已从 master `6a718fb` 重建（junction 共享 + skip-worktree 齐）。**M-J5a 已验收、收口中**；M-J5b/c 尚未开工。
 
 - **目标**：把池从「每次调用 new 一个的局部工具」升成进程级常驻调度底座，并把已用别的方案 / 仍串行的真实消费者接回来，让「并发地基」名副其实。
-- **亲眼可见的用例**（A 类轨道工具版交代）：① 材质图热重载 4 路 slangc 并行的 wall-clock 对比图（每次改图都跑，收益直接可见）；② `anim-tools` 批量帧 dump 并行 vs 单线程逐字节一致报告；③ Jolt `JobSystem` 适配后的 selftest 输出；④ 负向用例（count=0 / 异常路径 exit 码）。
+- **亲眼可见的用例**（A 类轨道工具版交代）：① 材质图 4 路 slangc **fan-in DAG** 并行的 wall-clock 对比图 + 逐字节一致报告；② `jobgraph` selftest（菱形拓扑 / 成环拒绝 / 多次执行确定性）；③ `anim-tools` 批量帧 dump 并行 vs 单线程逐字节一致报告；④ 负向用例（非法图 / 异常路径 exit 码）。
 - **验收判据**：
-  - **A 档**：产物 / 输出与单线程参考**逐字节一致**（硬判据，任何 MD5 不一致即 FAIL）；附耗时对比表；不进 `kStage`、不进渲染回归。
-  - **B 档**：常驻池 + 依赖计数 / barrier 单测（对 UE `TGraphTask::CreateTask(Prerequisites)` 与 Carrot `Async::Counter` 口径）；Jolt 适配后 selftest 全绿；ECS system 并行 vs 串行状态逐字段一致。
-  - **确定性契约**：物理 M-P0「逐样本位一致」若因换并行需放宽为「同线程数配置下逐样本位一致」，**单独拍板，不默认改**。
-- **范围分档**：A = #1/#3/#5/#7（零架构障碍，可先落）；B = #2 Jolt 适配 + #4 ECS system 调度（M-J5 实质内容，需升池）；C = #8~#12 保留现状；#6 为已在案合流点。详见 §复用面盘点。
-- **放行**：四项拍板齐全 → 按 `AGENTS.md` 铁律出三处参考对照 → 登记占坑 → 落码；tag 在验收后打。
+  - **A 档 / M-J5a**：产物 / 输出与单线程参考**逐字节一致**（硬判据，任何不一致即 FAIL）；附耗时对比表；不进 `kStage`、不进渲染回归。
+  - **B 档 / M-J5b**：常驻池 + Compute/IO 分池 + 兼容层；合成依赖图 selftest 全绿、原 26 项 jobs selftest 不退。
+  - **确定性契约**：物理 M-P0「逐样本位一致」若因换并行需放宽为「同线程数配置下逐样本位一致」，**单独拍板，不默认改**。M-J5a 不碰物理，此契约一个字不动。
+- **范围分档**：A = #1/#3/#5/#7（零架构障碍）；B = #2 Jolt 适配 + #4 ECS system 调度；C = #8~#12 保留现状；#6 为已在案合流点。详见 §复用面盘点。
+- **放行**：拍板齐全 → 三处参考对照 + 候选库核实 → 登记占坑 → 落码；tag 在验收后打。
 
-#### M-J5 开工前待拍板（四项）
+#### 拍板记录（2026-11-09，四项全部关闭）
 
-1. **编号与轨道**：M-J5 是否成立？`job-system` 轨道当前 CLOSED，重启属范围变更，需批准。
-2. **范围**：只做 A 档，还是 A + B 一起（B 决定池要不要升依赖图 / 常驻化）。
-3. **#2 单独项**：若做 Jolt 适配，M-P0 确定性契约是否允许放宽，须明确拍板，不默认改。
-4. 结论确认后按 `AGENTS.md` 铁律出 M-J5 实施细节 + 三处参考对照，再动手落码。
+| # | 议题 | 结论 |
+|---|---|---|
+| 1 | 编号与轨道重启 | **成立**。M-J5 编号保留，`job-system` 从 CLOSED 重启为 ACTIVE，已 claim M-J5a 并重建 worktree |
+| 2 | 范围 | **A + B，但拆三步**：M-J5a（DAG 内核 + A 档真实消费者）/ M-J5b（常驻化 + 分池）/ M-J5c（Jolt / ECS 接入，等各自轨道腾手）。用户追加「纯并行有点弱」→ 依赖图从 M-J5b **提前到 M-J5a** |
+| 3 | M-P0 确定性契约 | **不改**。Jolt 适配延后到 M-J5c，本轮绕开，契约维持「逐样本位一致」 |
+| 4 | DAG 实现方式 | **不自研，vendored Taskflow v3.11.0**（用户「关联系统完全自己写意义不大，核心诉求 nanite/lumen 手写」+「复杂度一上来很多自己写的就不够用了」+「必须开源且无使用风险」） |
+
+#### 步序（重排后）
+
+| 步 | 内容 | 状态 |
+|---|---|---|
+| **M-J5a** | ① vendored Taskflow 3.11.0 + `nl/core/jobgraph.hpp` 薄封装（环检测 / 登记序归并）；② 抽共用 `recompileGraph` 消除两份 4 路 slangc 实现；③ 4 编译 job → 1 汇总 job 的 fan-in DAG 接到真实消费者；④ selftest + 证据图 + 展示台卡 | **已验收，收口中**（2026-11-09） |
+| M-J5b | 进程级常驻 `Scheduler` + Compute/IO 分池 + 老 `ThreadPool` 兼容层 | 待 M-J5a 收口 |
+| M-J5c | physics 合回 master 后接 `JPH::JobSystem`；ECS E1b 稳定后接 system 调度 | 延后（`ecs` ACTIVE M-E1b.1 / `physics` ACTIVE / `audio` M-S0 占坑，现在碰会撞在途树） |
+
+### M-J5a 实施计划（2026-11-09，落码依据）
+
+**选型对照（按 `AGENTS.md` 决策前置铁律，只读与本轮模块对应的部分）**
+
+| 来源 | 证据 | 结论 |
+|---|---|---|
+| UE5 | `TaskGraphInterfaces.h:54`、`TGraphTask::CreateTask(Prerequisites)`（:671/1135） | 显式前置依赖 DAG，依赖没齐的任务不调度；`ENamedThreads` 是命名线程，与依赖图两件事，不绑在一起做 |
+| Carrot | `TaskScheduler.h:83-88/50/128`（`TaskDescription::dependency` / `Async::Counter` / `wait(Counter&)`） | 依赖计数 + fiber yield 让出执行；我们无协程，改用成熟库的 work-stealing，不照抄 fiber |
+| bevy | `usages.rs:57-75` 三池分流（Compute / AsyncCompute / IO） | 无显式 DAG；分池归 M-J5b，不与依赖图耦合 |
+| Taskflow | vendored `core/task.hpp:511/533`（`precede/succeed`）、`core/executor.hpp:91/123`（`Executor(N)` / `run().wait()`）、`taskflow.hpp:53`（`TF_VERSION 301100`） | DAG 原生、work-stealing、环检测需自己兜；**MIT / header-only / C++17**，风险核查见 `VENDOR.md` |
+| 候选否决 | enkiTS（无静态图表达力弱）、oneTBB flow_graph（带 TBB 运行时，违反「零构建期新依赖」）、Taskflow v4.x（要求 C++20） | 取 v3 末版 3.11.0 |
+
+**改动清单（只在 feat/job-system worktree）**
+
+1. `thirdparty/taskflow/`（52 头 + LICENSE + VENDOR.md，排除 `cuda/`）；`CMakeLists.txt` 加 `INTERFACE` 目标并挂 `nl_core PUBLIC`。
+2. 新增 `core/include/nl/core/jobgraph.hpp`：`Graph::add(name, fn)` 返回登记序 id、`Graph::precede(from, to)` 建边、`Graph::run(threads, &err)`；Kahn 拓扑**拒环**（静态图成环会挂死，库不检测）；任务只写自己槽位，结果**按 id 归并**不按完成序；`tf::` 类型不泄漏到业务代码。
+3. `core/src/material_graph/compile.cpp` 抽共用 `recompileGraph(g, stem, report)`：4 路 `std::system("slangc ...")` 改 4 个编译 job + 1 个汇总 job 的 fan-in DAG；`ok &=` / `report +=` 共享写改按登记序收集后再串行归并。编辑器 `compileCheck`（`_mg_ed_*`）与工具 `cmdCheck`/`cmdWatch`（`_mg_hot_*`）都改调共用入口，**两份重复实现消失**。
+4. `nanite-tools selftest jobgraph` 新套件：菱形 A→{B,C}→D 拓扑顺序、成环拒绝（负向 exit 非 0）、同一 DAG 多次执行逐字节一致、fan-in 汇总 == 串行版；原 `selftest jobs` 26 项不退。
+5. 证据：`example/m-j5a/` 真实输出（wall-clock 串行 vs DAG、逐字节比对报告、负向用例）、Pillow 证据图、展示台 `kind:tool` 卡 + `cases.json` + `server.py --check`。
+
+**验收（A 类工具版交代）**：① 共用入口的输出与改造前串行版**逐字节一致**；② DAG 拓扑 / 拒环 / 确定性 selftest 全绿；③ 原 26 项 jobs selftest 不退；④ 4 路编译产物（保留版）MD5 与串行一致；⑤ 负向用例 exit 非 0；⑥ 双后端构建能编过（`nl_core` 全链）。不进 `kStage`、不进渲染回归。
+
+**落码前已知坑**：`std::system` 并发拉 cmd.exe 需实测（不同进程、dxcompiler.dll 无共享状态，理论安全）；`report` 必须按 id 归并；`tf::Executor` 析构自带 `wait_for_all`，不要额外套 `cv.wait` 干等。
+
+#### 落地纪要（2026-11-09，M-J5a 验收通过）
+
+- **交付**：`thirdparty/taskflow/`（52 头 + LICENSE + VENDOR.md，排除 `cuda/`）、`core/include/nl/core/jobgraph.hpp` + `core/src/jobgraph.cpp`（`tf::` 只在此 TU）、`CMakeLists.txt` INTERFACE 目标挂 `nl_core PUBLIC`；`compile.hpp/cpp` 抽唯一 `recompileGraph()`（支持 `threads=1` 串行参考 / `keepOutputs` / `verbose`）；`material-graph-tools` 删掉第二份实现并新增 `compilepar` 对拍命令；`nanite-tools selftest jobgraph` 新套件 9 项；`scripts/make-j5a-evidence.py` + `example/m-j5a/`（4 日志 + 4 PNG + run.bat）+ cases.json 两张 tool 卡。
+- **验收实测（DX12 / VULKAN 双后端各自跑过）**：`jobgraph selftest: PASS (9 cases)`；老 `jobs selftest: PASS`（26 项不退）；`compilepar : PASS`（serial 0.932s vs DAG 0.299s = **3.12x**；report bytes EQUAL 66 vs 66；lane flags EQUAL；ps.spv/vs.spv/ps.dxil/vs.dxil FNV64 4/4 MATCH）；`check` genslang OK；负向 `selftest unknown-suite` exit 1；`server.py --check` 退出 0（stage=pbr-direct cases=5 baselines=8）。
+- **踩坑（固化）**：
+  1. **include root**：vendored 目录 `thirdparty/taskflow/` 内部还有一层 `taskflow/`，首次把 include root 设成 `.../taskflow` 导致 `<taskflow/taskflow.hpp>` C1083。上游布局要求 root = 仓库根，本项目对应 `${THIRDPARTY}`。
+  2. **Taskflow 静态图不做环检测**：成环会挂死；`Graph::topoOrder` 用 Kahn（同层按登记序）拒环，负向用例才成立。
+  3. **异常不在单 task 上**：v3.11.0 把异常挂在 topology（`core/executor.hpp:1863/1871`），`tf::Task::has_exception_ptr()` 不保证置位；改为封装层 `try/catch` 写 `errors[id]`，按登记序取第一个异常，兼得确定性。
+  4. **旧代码整理要连调用点一起扫**：删掉工具侧 `findSlangc/findDxc/q/runSlangc` 与第二份 `recompileGraph` 后，`cmdWatch` 残留两处 `findSlangc()` 调用编译报错；同时清掉旧 `s2` 变量遮蔽（C4456）。
+  5. **旧默认路径失效**：core 的 `findSlangc()` 指向已拆除的 `nl-engine-material-graph` worktree，改指主树（各 worktree 的 `thirdparty/slang/dist` 是共享 junction）。
+  6. **`std::system` 并发实测干净**：4 个独立 cmd.exe 各写各的输出文件；逐路命令回显也收集到各 lane，由汇总 job 按登记序打印，保证并行不改输出。
+  7. **版本由 C++ 标准定死**：项目 `CMAKE_CXX_STANDARD 17`，Taskflow v4 起要 C++20 → 取 v3 末版 3.11.0（`TF_VERSION 301100`），不追最新。
 
 ---
 
@@ -159,7 +208,9 @@
 ## M-J5 不变量与已固化踩坑
 
 - `nl_core` 静态库已被全部工具链接（CMakeLists.txt:139），core / 工具层接入**无需新增链接依赖**；Job 系统只放 `core/jobs/`，图形 API / NVRHI / ImGui 符号零触及。
-- `parallelFor` **不可嵌套**（M-J0 写死）；多线程不可并发调同一实例；`spawn` 可嵌套但任务不得阻塞等待其它任务（M-J1，无前置依赖图）。
+- `parallelFor` **不可嵌套**（M-J0 写死）；多线程不可并发调同一实例；`spawn` 可嵌套但任务不得阻塞等待其它任务（M-J1）。**M-J5a 起这条只约束老 `ThreadPool`**：有前置依赖的任务走 `jobgraph::Graph`，不要在 `scope` 里 `cv.wait` 干等（worker 全阻塞会死锁）。
+- **Taskflow 静态图不做环检测**（成环会挂死），封装层必须 Kahn 拓扑拒环；work-stealing **不承诺无依赖任务的执行顺序**，归并只按登记序，不按完成序。
+- **老 `ThreadPool` 与 `jobgraph::Graph` 并存**：M-J5a 不替换 M-J0~J3 的数据并行 / fork-join 消费者，26 项 jobs selftest 一行不退；统一常驻化是 M-J5b 的事。
 - 池目前**无常驻实例**（消费者各自局部构造）；M-J5 升池之前不接帧内循环——每次 new 一个池会亏，且会污染帧时间与确定性判据。
 - **4 路 slangc 有两份重复实现**：编辑器 `compile.cpp` 走 `_mg_ed_*`，工具 `main.cpp` 走 `_mg_hot_*`；B4-PLAN 写的「check/watch 都走 recompileGraph，无重复实现」与实际不符。并行化时两处要同步改，或按原计划抽共用函数；`report +=` 是共享写，必须改成按 spawn 序收集。
 - 确定性是硬判据：并行化**不允许**改变输出，任何 MD5 不一致即 FAIL；任何为提速牺牲产物确定性的改法都禁止。
@@ -190,8 +241,10 @@
 | M-J1 scope fork-join | 2 天 | `job-scope` |
 | M-J2 cluster / stat 并行 | 2~3 天 | `job-cluster` |
 | M-J3 simplify / dag 并行 | 3~4 天 | `job-offline` |
-| M-J4 命名线程（可选） | 不排期 | — |
-| M-J5 扩大复用面（待拍板） | 待定 | — |
+| M-J4 命名线程 / IO 分池（可选） | 不排期（P9 V4） | — |
+| M-J5a DAG 内核 + A 档复用（vendored Taskflow） | 2026-11-09 收官 | `m-j5a` |
+| M-J5b 常驻池 + 分池 | 待 M-J5a 收口 | — |
+| M-J5c Jolt / ECS 接入 | 待各自轨道腾手 | — |
 
 ---
 
@@ -210,6 +263,7 @@
 | scope 生命周期 / work-stealing 模型 | bevy `bevy_tasks/src/task_pool.rs`（`pool.scope` + `Scope::spawn`）、`executor.rs` |
 | slice 数据并行原语 | bevy `bevy_tasks/src/slice.rs` + `iter/` |
 | 命名线程 + 前置依赖图（长线） | UE `TaskGraphInterfaces.h`（`ENamedThreads` / `TGraphTask::CreateTask(Prerequisites)`）、`ParallelFor.h` |
+| 显式依赖 DAG 怎么用 / 环与确定性 | `thirdparty/taskflow/VENDOR.md`（版本 / 风险 / API 速查）、vendored `core/task.hpp`、`core/executor.hpp`；本项目封装 `nl/core/jobgraph.hpp` |
 | 不要过度设计的反向证据 | Carrot 仅 `AsyncResource.hpp` + 散落 `std::thread`，无 TaskGraph |
 
 ---
@@ -217,8 +271,8 @@
 ## 底线
 
 - Job 系统只放 `core/jobs/`，**图形 API / NVRHI / ImGui 符号零触及**（沿用 `core/` 纪律）。
-- 不引入第三方线程库（标准库 + 自写池足够，与「构建链不依赖厂商 SDK / 重依赖」一致）；bevy / UE 只学结构与边界处理，一行不抄。
+- **（2026-11-09 作废重写）** 原「不引入第三方线程库，标准库 + 自写池足够」已按用户拍板推翻：关联系统优先 vendored 成熟库，手写预算集中给 nanite / lumen；硬闸见 `AGENTS.md`「自研边界与第三方库选型闸」（开源 + 无使用风险 + LICENSE 入库 + 零构建期新依赖 + VENDOR.md 溯源）。bevy / UE 只学结构与边界处理，一行不抄。
 - 并行化离线管线时**先保确定性、再谈加速比**；任何为提速而牺牲产物确定性的改法都禁止。
 - 不动 S0~S14 编号；本轨道与渲染主线零冲突，可随时插做。
 - **单一源**：本文是 job 轨道唯一权威计划文档；待接消费者在其它计划文档里的描述保持原样，本文 §消费者登记表只做指针索引、不复制正文。盘点与实施计划同处一份，避免状态漂移。
-- **M-J5 未获批准前不得占坑 / 改码**：`job-system` 轨道 CLOSED，claim 会被硬拒；范围变更须用户明确批准编号与范围后再动。
+- **（2026-11-09 更新）** 轨道重启与 M-J5a 范围已获用户明确批准并登记 `claim --track job-system --milestone M-J5a`；`M-J5b/c` 仍须各自开工前确认，不得顺手扩范围。

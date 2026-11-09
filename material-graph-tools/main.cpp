@@ -5,8 +5,10 @@
 
 #include "nl/material_graph/graph.hpp"
 #include "nl/material_graph/emit.hpp"
+#include "nl/material_graph/compile.hpp"   // M-J5a：editor / CLI 共用编译入口（唯一一份）
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -28,6 +30,7 @@ void printUsage() {
         "  material-graph-tools dump <in.mg>        load and pretty-print a graph\n"
         "  material-graph-tools gen <in.mg> <out.slang>   graph -> Slang (B3)\n"
         "  material-graph-tools check               emit sample -> slangc spirv+dxil x vs/ps\n"
+        "  material-graph-tools compilepar          M-J5a: serial vs fan-in DAG byte-exact + timing\n"
         "  material-graph-tools render <in.mg> <out.svg>  graph -> SVG evidence image (deterministic)\n"
         "  material-graph-tools watch <in.mg> [--slang DIR] [--dxc DIR]\n"
         "                              [--interval MS] [--once]   hot-reload recompile (B4)\n");
@@ -196,40 +199,9 @@ int cmdDump(int argc, char** argv) {
 }
 
 // ---- gen / check：B3 图 -> Slang 代码生成 + 双后端编译验收 ----
-namespace {
-// 定位 slangc：env NL_SLANG_BIN（目录）优先，否则退回本机已知路径（与 CMake 同源）。
-std::string findSlangc() {
-    const char* bin = std::getenv("NL_SLANG_BIN");
-    if (bin && *bin) return std::string(bin) + "\\slangc.exe";
-    return "E:\\UE_STUDY_2026\\nl-engine-material-graph\\thirdparty\\slang\\dist\\bin\\slangc.exe";
-}
-std::string findDxc() {
-    const char* d = std::getenv("NL_DXC_DIR");
-    if (d && *d) return std::string(d);
-    return "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64";
-}
-// 仅当路径含空格时加引号（避免 system() 把无空格的可执行路径用引号包住导致 cmd 解析失败）。
-std::string q(const std::string& p) {
-    if (p.find(' ') != std::string::npos) return "\"" + p + "\"";
-    return p;
-}
-// 跑一条 slangc；exit 0 才返回 true。SPIR-V 走统一绑定平移，DXIL 走 dxc-path。
-bool runSlangc(const std::string& slangc, const std::string& dxcDir,
-               const std::string& inSlang, const std::string& out,
-               const char* target, const char* entry, const char* stage) {
-    std::string cmd = q(slangc) + " " + q(inSlang) + " -target " + target
-                    + " -entry " + entry + " -stage " + stage;
-    if (std::string(target) == "spirv")
-        cmd += " -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0";
-    else
-        cmd += " -dxc-path " + q(dxcDir);
-    cmd += " -o " + q(out);
-    std::printf("  > slangc %s/%s/%s\n", target, entry, stage);
-    int rc = std::system(cmd.c_str());
-    if (rc != 0) { std::printf("    slangc failed (rc=%d)\n", rc); return false; }
-    return true;
-}
-}  // namespace
+// M-J5a 旧代码整理：findSlangc / findDxc / q / runSlangc 四个辅助函数原本在这份工具里
+// 与 core/src/material_graph/compile.cpp 各写一份（_mg_hot_* vs _mg_ed_*）。
+// 现全部收进 core 的 recompileGraph()，工具侧只组装 CompileOptions，不再有第二份实现。
 
 int cmdGen(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr, "gen: missing <in.mg> <out.slang>\n"); return 1; }
@@ -250,34 +222,91 @@ int cmdGen(int argc, char** argv) {
     return 0;
 }
 
-// B4：热重载核心。把图 emit + slangc 双后端 x (vs/ps)，集中汇报每次结果。
-// recompileGraph 是 B3 验收链路的复用点：check / watch 都走它。
-struct RecompileReport {
-    bool psSpirv = false, vsSpirv = false, psDxil = false, vsDxil = false;
-    bool ok() const { return psSpirv && vsSpirv && psDxil && vsDxil; }
-};
-bool recompileGraph(const nl::material_graph::MaterialGraph& g,
-                    const std::string& slangc, const std::string& dxcDir,
-                    RecompileReport* rep) {
-    std::string err;
-    if (!g.validate(&err)) { std::printf("  validate FAIL: %s\n", err.c_str()); return false; }
-    std::string tmp = "_mg_hot.slang";
-    {
-        std::ofstream os(tmp, std::ios::binary);
-        if (!nl::material_graph::emitSlang(g, os, &err)) {
-            std::printf("  emit FAIL: %s\n", err.c_str()); return false;
-        }
+// B4 / M-J5a：CLI 侧编译参数（_mg_hot.* 历史文件名保持不变）。
+// 实现本体在 core/src/material_graph/compile.cpp::recompileGraph —— 唯一一份。
+nl::material_graph::CompileOptions cliOptions(const std::string& slangc = {},
+                                              const std::string& dxcDir = {}) {
+    nl::material_graph::CompileOptions opt;
+    opt.stem = "_mg_hot.";
+    opt.tmpSlang = "_mg_hot.slang";
+    opt.slangc = slangc;      // 空 = core 按 env / 本机默认定位
+    opt.dxcDir = dxcDir;
+    opt.verbose = true;       // 逐路命令回显由汇总 job 按登记序打印，确定
+    return opt;
+}
+
+// M-J5a 验收：串行参考 vs fan-in DAG 的真实 4 路编译对拍 + 计时。
+// 判据：report 逐字节一致 + 四路成败一致 + 4 个产物 FNV64 哈希一致 + DAG 更快。
+// 产物保留到本命令结束（自证哈希用），随后清理，不污染工作树。
+namespace {
+std::uint64_t fnv64File(const std::string& path) {
+    std::ifstream is(path, std::ios::binary);
+    if (!is) return 0;
+    std::uint64_t h = 14695981039346656037ull;
+    char c;
+    while (is.get(c)) {
+        h ^= static_cast<unsigned char>(c);
+        h *= 1099511628211ull;
     }
-    RecompileReport r;
-    r.psSpirv = runSlangc(slangc, dxcDir, tmp, "_mg_hot.ps.spv",  "spirv", "psMain", "fragment");
-    r.vsSpirv = runSlangc(slangc, dxcDir, tmp, "_mg_hot.vs.spv",  "spirv", "vsMain", "vertex");
-    r.psDxil = runSlangc(slangc, dxcDir, tmp, "_mg_hot.ps.dxil", "dxil",  "psMain", "fragment");
-    r.vsDxil = runSlangc(slangc, dxcDir, tmp, "_mg_hot.vs.dxil", "dxil",  "vsMain", "vertex");
-    std::remove(tmp.c_str());
-    std::remove("_mg_hot.ps.spv");   std::remove("_mg_hot.vs.spv");
-    std::remove("_mg_hot.ps.dxil");  std::remove("_mg_hot.vs.dxil");
-    if (rep) *rep = r;
-    return r.ok();
+    return h;
+}
+}  // namespace
+
+int cmdCompilePar() {
+    using namespace nl::material_graph;
+    const char* kFiles[4] = {"ps.spv", "vs.spv", "ps.dxil", "vs.dxil"};
+    auto makeOpt = [](const char* stem, const char* tmp, unsigned threads) {
+        CompileOptions o;
+        o.stem = stem; o.tmpSlang = tmp; o.threads = threads;
+        o.keepOutputs = true; o.verbose = false;
+        return o;
+    };
+    const CompileOptions serial = makeOpt("_mg_par_serial_", "_mg_par_serial.slang", 1);
+    const CompileOptions dag    = makeOpt("_mg_par_dag_",    "_mg_par_dag.slang",    0);
+
+    const MaterialGraph g = buildSample();
+    RecompileReport rS, rD;
+    std::string repS, repD, err;
+
+    auto t0 = std::chrono::steady_clock::now();
+    const bool okS = recompileGraph(g, serial, &rS, &repS, &err);
+    auto t1 = std::chrono::steady_clock::now();
+    const bool okD = recompileGraph(g, dag, &rD, &repD, &err);
+    auto t2 = std::chrono::steady_clock::now();
+    const double sS = std::chrono::duration<double>(t1 - t0).count();
+    const double sD = std::chrono::duration<double>(t2 - t1).count();
+
+    std::printf("compilepar : serial  %s  (%.3fs, threads=1)\n", okS ? "OK" : "FAIL", sS);
+    std::printf("compilepar : dag     %s  (%.3fs, fan-in 4->1)\n", okD ? "OK" : "FAIL", sD);
+    std::printf("compilepar : speedup %.2fx\n", sD > 0.0 ? sS / sD : 0.0);
+
+    bool ok = okS && okD;
+    const bool repEqual = (repS == repD);
+    std::printf("compilepar : report bytes %s (%zu vs %zu)\n",
+                repEqual ? "EQUAL" : "DIFFER", repS.size(), repD.size());
+    ok &= repEqual;
+    const bool flagsEqual = rS.psSpirv == rD.psSpirv && rS.vsSpirv == rD.vsSpirv
+                         && rS.psDxil == rD.psDxil && rS.vsDxil == rD.vsDxil;
+    std::printf("compilepar : lane flags   %s\n", flagsEqual ? "EQUAL" : "DIFFER");
+    ok &= flagsEqual;
+
+    for (int i = 0; i < 4; ++i) {
+        const std::uint64_t hS = fnv64File(serial.stem + kFiles[i]);
+        const std::uint64_t hD = fnv64File(dag.stem + kFiles[i]);
+        const bool match = (hS != 0) && (hS == hD);
+        std::printf("compilepar : %-7s hash %s  (0x%016llx)\n", kFiles[i],
+                    match ? "MATCH" : "DIFFER", static_cast<unsigned long long>(hS));
+        ok &= match;
+    }
+    // 清理 8 个产物 + 2 个临时 .slang（keepOutputs 只是为自证哈希）
+    for (int i = 0; i < 4; ++i) {
+        std::remove((serial.stem + kFiles[i]).c_str());
+        std::remove((dag.stem + kFiles[i]).c_str());
+    }
+    std::remove(serial.tmpSlang.c_str());
+    std::remove(dag.tmpSlang.c_str());
+    std::printf("compilepar : %s\n", ok ? "PASS" : "FAIL");
+    return ok ? 0 : 1;
 }
 
 // check：示例图 + 全算子覆盖图 -> 各自重编译（emit + 双后端四路）。
@@ -287,8 +316,8 @@ int cmdCheck() {
     auto runOne = [&](const char* name, nl::material_graph::MaterialGraph g) {
         std::string err;
         if (!g.validate(&err)) { std::fprintf(stderr, "check: %s invalid: %s\n", name, err.c_str()); return false; }
-        RecompileReport rep;
-        bool ok = recompileGraph(g, findSlangc(), findDxc(), &rep);
+        nl::material_graph::RecompileReport rep;
+        bool ok = nl::material_graph::recompileGraph(g, cliOptions(), &rep, nullptr, nullptr);
         std::printf("genslang(%-7s): %s\n", name, ok ? "OK" : "FAIL");
         return ok;
     };
@@ -317,8 +346,9 @@ int cmdWatch(int argc, char** argv) {
         else { std::fprintf(stderr, "watch: unexpected arg %s\n", a.c_str()); return 1; }
     }
     if (inMg.empty()) { std::fprintf(stderr, "watch: missing <in.mg>\n"); return 1; }
-    std::string slangc = slangBin.empty() ? findSlangc() : slangBin + "\\slangc.exe";
-    std::string dxc = dxcDir.empty() ? findDxc() : dxcDir;
+    // 空 = core 侧 recompileGraph 按 env / 本机默认定位（M-J5a 后工具侧不再有第二份 find*）。
+    std::string slangc = slangBin.empty() ? std::string() : slangBin + "\\slangc.exe";
+    std::string dxc = dxcDir;
 
     auto stamp = []() -> std::string {
         std::time_t t = std::time(nullptr);
@@ -352,8 +382,9 @@ int cmdWatch(int argc, char** argv) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
                 continue;
             }
-            RecompileReport rep;
-            bool ok = recompileGraph(g, slangc, dxc, &rep);
+            nl::material_graph::RecompileReport rep;
+            bool ok = nl::material_graph::recompileGraph(g, cliOptions(slangc, dxc),
+                                                         &rep, nullptr, nullptr);
             if (ok) std::printf("%s  OK\n", stamp().c_str());
             else std::printf("%s  FAIL (psS=%d vsS=%d psD=%d vsD=%d)\n", stamp().c_str(),
                              rep.psSpirv, rep.vsSpirv, rep.psDxil, rep.vsDxil);
@@ -573,10 +604,10 @@ int selftestGraph() {
         MaterialGraph sm = buildSample();
         std::ostringstream es2;
         check(emitSlang(sm, es2, &err), "sample emit");
-        const std::string s2 = es2.str();
-        check(s2.find("uTint") != std::string::npos, "named uniform referenced");
-        check(s2.find("lerp(") != std::string::npos, "Lerp op");
-        check(s2.find("(1.0f - ") != std::string::npos, "OneMinus op");
+        const std::string emitted = es2.str();   // 旧名 s2 遮蔽上方 ostringstream s2，顺手消除 C4456
+        check(emitted.find("uTint") != std::string::npos, "named uniform referenced");
+        check(emitted.find("lerp(") != std::string::npos, "Lerp op");
+        check(emitted.find("(1.0f - ") != std::string::npos, "OneMinus op");
     }
 
     if (failures == 0) {
@@ -597,6 +628,7 @@ int main(int argc, char** argv) {
     if (cmd == "dump")     return cmdDump(argc - 2, argv + 2);
     if (cmd == "gen")      return cmdGen(argc - 2, argv + 2);
     if (cmd == "check")    return cmdCheck();
+    if (cmd == "compilepar") return cmdCompilePar();
     if (cmd == "render")   return cmdRender(argc - 2, argv + 2);
     if (cmd == "watch")    return cmdWatch(argc - 2, argv + 2);
     std::fprintf(stderr, "unknown subcommand: %s\n", cmd.c_str());

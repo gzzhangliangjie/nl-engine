@@ -1,0 +1,11 @@
+  > slangc spirv/psMain/fragment
+  > slangc spirv/vsMain/vertex
+  > slangc dxil/psMain/fragment
+  > slangc dxil/vsMain/vertex
+genslang(sample ): OK
+  > slangc spirv/psMain/fragment
+  > slangc spirv/vsMain/vertex
+  > slangc dxil/psMain/fragment
+  > slangc dxil/vsMain/vertex
+genslang(kitchen): OK
+genslang   : OK

@@ -3833,6 +3833,116 @@
      "script": "example/pbr-direct/run.bat selftest"
     }
    ]
+  },
+  {
+   "id": "m-j5a",
+   "label": "M-J5a",
+   "name": "Job 轨道 M-J5a：显式依赖 DAG（vendored Taskflow 3.11.0）+ 复用面扩张",
+   "tag": "m-j5a",
+   "date": "2026-11-09",
+   "summary": "A 类轨道重启第一刀。用户拍板「关联系统优先成熟库，手写预算留给 nanite/lumen」「复杂度上来自写不够用」「成熟库必须开源且无使用风险」：不自研 JobGraph，改 vendored Taskflow 3.11.0（MIT / header-only / C++17），经 nl/core/jobgraph.hpp 薄封装隔离 tf:: 类型；Kahn 拓扑拒环、结果按登记序归并。真实消费者 = 材质图 4 路 slangc，由 4 个编译 job + 1 个汇总 job 的 fan-in DAG 驱动；editor 与 CLI 两份重复实现抽成唯一 recompileGraph()。老 ThreadPool 一行不动，26 项 jobs selftest 不退。",
+   "acceptance": [
+    "jobgraph selftest 9/9 PASS：菱形 A->{B,C}->D 拓扑、20 次执行逐字节一致、成环/重复边/自环/越界/空 body/异常四类负向拒绝、dumpDot 确定",
+    "原 26 项 jobs selftest 全绿（老池不退）；CLI check 经共用入口仍 genslang OK",
+    "compilepar：串行 vs DAG 真实 4 路编译报告逐字节一致（66 vs 66）、四路产物 FNV64 哈希全 MATCH、加速 3.12x",
+    "负向用例 selftest unknown-suite 退出 1；不进 kStage、不进渲染回归",
+    "four evidence PNGs generated from real logs by scripts/make-j5a-evidence.py"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nanite-tools.exe",
+    "vulkan": "build/VULKAN/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest-jobgraph",
+     "name": "selftest jobgraph：依赖 DAG / 拒环 / 确定性",
+     "kind": "tool",
+     "note": "9 cases incl. 4 negative; vendored Taskflow static graph has no cycle detection -> wrapper rejects via Kahn topo sort.",
+     "args": [
+      "selftest",
+      "jobgraph"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobgraph selftest: PASS",
+     "command": "nanite-tools selftest jobgraph",
+     "preview": "example/m-j5a/selftest-jobgraph.png",
+     "script": "example/m-j5a/run.bat"
+    },
+    {
+     "id": "selftest-jobs",
+     "name": "selftest jobs：M-J0~J3 老池 26 项不退",
+     "kind": "tool",
+     "note": "ThreadPool / parallelFor / scope unchanged; regression guard for the new DAG layer.",
+     "args": [
+      "selftest",
+      "jobs"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobs selftest: PASS",
+     "command": "nanite-tools selftest jobs",
+     "preview": "example/p8-jobs/selftest-jobs.png"
+    },
+    {
+     "id": "negative-unknown",
+     "name": "负向：未知 selftest 套件必须拒绝",
+     "kind": "tool",
+     "note": "expectExit 1; also covers CLI negative gate discipline.",
+     "args": [
+      "selftest",
+      "unknown-suite"
+     ],
+     "expectExit": 1,
+     "expectLog": "unknown suite",
+     "command": "nanite-tools selftest unknown-suite",
+     "preview": "example/m-j5a/negative-unknown.png"
+    }
+   ]
+  },
+  {
+   "id": "m-j5a-mg",
+   "label": "M-J5a MG",
+   "name": "M-J5a 消费者：4 路 slangc fan-in DAG 逐字节对拍",
+   "tag": "m-j5a",
+   "date": "2026-11-09",
+   "summary": "material-graph-tools 侧真实消费者。compilepar 同一张图跑串行参考（threads=1）与 fan-in DAG，比对 report 文本、四路成败、四个编译产物 FNV64 哈希与 wall-clock；check 走共用入口做回归。",
+   "acceptance": [
+    "compilepar PASS：report bytes EQUAL (66 vs 66)、lane flags EQUAL、ps.spv/vs.spv/ps.dxil/vs.dxil 哈希 4/4 MATCH",
+    "check 回归：共用 recompileGraph 后 check 仍 genslang OK（两次图 x 四路真实 slangc）",
+    "editor 与 CLI 两份重复实现已合并，产物文件名保持历史不变"
+   ],
+   "exe": {
+    "dx12": "build/DX12/material-graph-tools.exe",
+    "vulkan": "build/VULKAN/material-graph-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "compilepar",
+     "name": "compilepar：serial vs fan-in DAG 逐字节一致 + 计时",
+     "kind": "tool",
+     "note": "4 compile jobs -> 1 merge job; outputs are preserved only for self-hash then cleaned.",
+     "args": [
+      "compilepar"
+     ],
+     "expectExit": 0,
+     "expectLog": "compilepar : PASS",
+     "command": "material-graph-tools compilepar",
+     "preview": "example/m-j5a/compilepar.png",
+     "script": "example/m-j5a/run.bat"
+    },
+    {
+     "id": "check",
+     "name": "check：共用编译入口回归（双后端四路）",
+     "kind": "tool",
+     "note": "sample + kitchen-sink graphs, each emitting 4 real slangc invocations via the shared entry.",
+     "args": [
+      "check"
+     ],
+     "expectExit": 0,
+     "expectLog": "genslang   : OK",
+     "command": "material-graph-tools check",
+     "preview": "example/m-j5a/check.png"
+    }
+   ]
   }
  ]
 }

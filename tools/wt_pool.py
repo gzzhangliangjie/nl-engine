@@ -53,7 +53,9 @@ TRACKS = {
     },
     "job-system": {
         "wt": "E:/UE_STUDY_2026/nl-engine-job-system",
-        "branch": "feat/job-system", "state": "closed",
+        "branch": "feat/job-system", "state": "active",
+        "note": "M-J5a reopened 2026-11-09 by user instruction (reuse expansion); "
+                "wt rebuilt from master 6a718fb per PARALLEL-TRACKS 7.1b",
     },
     "action-system": {
         "wt": "E:/UE_STUDY_2026/nl-engine-action-system",

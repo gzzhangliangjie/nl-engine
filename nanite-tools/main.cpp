@@ -11,6 +11,7 @@
 #include "nl/core/lod.hpp"       // M2.2：逐层 LOD 循环
 #include "nl/core/fallback.hpp"  // M3.1：fallback mesh 拼接
 #include "nl/core/jobs.hpp"      // P8 M-J0：线程池 + parallel_for
+#include "nl/core/jobgraph.hpp"  // P8 M-J5a：显式依赖 DAG（vendored Taskflow 薄封装）
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -56,7 +57,8 @@ void printUsage() {
         "  nanite-tools dag <prefix> [--export out.json]\n"
         "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
         "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n"
-        "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n");
+        "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n"
+        "  nanite-tools selftest jobgraph           P8 M-J5a dependency DAG / cycle / determinism\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -3161,6 +3163,135 @@ int selftestJobs() {
     return 1;
 }
 
+// ---- selftest jobgraph：M-J5a 显式依赖 DAG（vendored Taskflow 3.11.0）机械单测 ----
+// 与 selftest jobs 并列、互不改动：原 26 项一行不退。
+int selftestJobGraph() {
+    using nl::core::jobgraph::Graph;
+    int failures = 0;
+    auto check = [&](bool ok, const char* name) {
+        std::printf("  [%s] %s\n", ok ? " OK " : "FAIL", name);
+        if (!ok) ++failures;
+    };
+
+    auto makeDiamond = [](std::atomic<int>* s) {
+        Graph g;
+        g.add("A", [s] { s[0].store(1); });
+        g.add("B", [s] { s[1].store(s[0].load() + 1); });
+        g.add("C", [s] { s[2].store(s[0].load() + 1); });
+        g.add("D", [s] { s[3].store((s[1].load() == 2 && s[2].load() == 2) ? 1 : 0); });
+        g.precede(0, 1); g.precede(0, 2); g.precede(1, 3); g.precede(2, 3);
+        return g;
+    };
+
+    // 1) 拓扑序按登记序出队（同层确定性）
+    {
+        Graph g;
+        g.add("A", [] {}); g.add("B", [] {}); g.add("C", [] {}); g.add("D", [] {});
+        const bool edges = g.precede(0, 1) && g.precede(0, 2)
+                        && g.precede(1, 3) && g.precede(2, 3);
+        std::string err;
+        const auto order = g.topoOrder(&err);
+        check(edges && order == std::vector<std::size_t>{0, 1, 2, 3},
+              "topo order diamond = 0,1,2,3");
+    }
+
+    // 2) 依赖边生效：D 必须看见 A/B/C 全部完成
+    {
+        std::atomic<int> s[4]{};
+        Graph g = makeDiamond(s);
+        std::string err;
+        const bool ok = g.run(4, &err);
+        check(ok && s[3].load() == 1, "diamond run: fan-in D sees A,B,C completed");
+    }
+
+    // 3) 同一 DAG 多次执行，按登记序归并结果逐字节一致
+    {
+        std::string first;
+        bool allEqual = true, allRun = true;
+        for (int k = 0; k < 20; ++k) {
+            std::atomic<int> s[4]{};
+            Graph g = makeDiamond(s);
+            std::string err;
+            allRun &= g.run(0, &err);      // 0 = hardware_concurrency
+            const std::string merged = std::to_string(s[0].load())
+                                     + std::to_string(s[1].load())
+                                     + std::to_string(s[2].load())
+                                     + std::to_string(s[3].load());
+            if (k == 0) first = merged;
+            else if (merged != first) allEqual = false;
+        }
+        check(allRun && allEqual && first == "1221",
+              "20 runs byte-identical (registered-order merge)");
+    }
+
+    // 4) 成环拒绝（负向：静态图成环会挂死，封装层必须拒）
+    {
+        Graph g;
+        g.add("A", [] {}); g.add("B", [] {});
+        g.precede(0, 1); g.precede(1, 0);
+        std::string err;
+        const bool ok = g.run(2, &err);
+        check(!ok && err.find("cycle") != std::string::npos,
+              "cycle rejected (negative)");
+    }
+
+    // 5) 重复边 / 自环 / 越界边拒绝（负向）
+    {
+        Graph g;
+        g.add("A", [] {}); g.add("B", [] {});
+        const bool a = g.precede(0, 1);
+        const bool b = g.precede(0, 1);
+        const bool c = g.precede(0, 0);
+        const bool d = g.precede(0, 99);
+        check(a && !b && !c && !d && g.edgeCount() == 1,
+              "duplicate/self/out-of-range edges rejected (negative)");
+    }
+
+    // 6) 空 body 拒绝（负向）
+    {
+        Graph g;
+        g.add("empty", Graph::Body{});
+        std::string err;
+        const bool ok = g.run(2, &err);
+        check(!ok && err.find("empty body") != std::string::npos,
+              "empty body rejected (negative)");
+    }
+
+    // 7) 任务异常回收成项目侧错误码（负向）
+    {
+        Graph g;
+        g.add("thrower", [] { throw 42; });
+        std::string err;
+        const bool ok = g.run(2, &err);
+        check(!ok && err.find("exception") != std::string::npos,
+              "task exception surfaced (negative)");
+    }
+
+    // 8) 空图合法
+    {
+        Graph g;
+        std::string err;
+        check(g.run(2, &err), "empty graph OK");
+    }
+
+    // 9) DOT 输出逐字节确定（拓扑证据）
+    {
+        std::atomic<int> s[4]{};
+        Graph g = makeDiamond(s);
+        const std::string a = g.dumpDot(), b = g.dumpDot();
+        check(a == b && a.find("t0 -> t1") != std::string::npos
+                     && a.find("t2 -> t3") != std::string::npos,
+              "dumpDot deterministic (4 nodes / 4 edges)");
+    }
+
+    if (failures == 0) {
+        std::printf("jobgraph selftest: PASS (9 cases)\n");
+        return 0;
+    }
+    std::printf("jobgraph selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3177,7 +3308,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "dag") return selftestDag();
         if (argc >= 3 && std::string(argv[2]) == "fallback") return selftestFallback();
         if (argc >= 3 && std::string(argv[2]) == "jobs") return selftestJobs();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs)\n");
+        if (argc >= 3 && std::string(argv[2]) == "jobgraph") return selftestJobGraph();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
