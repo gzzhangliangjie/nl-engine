@@ -71,7 +71,8 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, bool visbufMode, std::string& outError) override {
+              bool sceneMode, bool visbufMode, bool pullingMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -159,7 +160,8 @@ public:
             sceneOk = true;
         }
         else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
-            sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile, outError);
+            sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile,
+                                         pullingMode, outError);
         else if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (hizMode)

@@ -1,0 +1,14 @@
+format=3
+tool=audio-tools
+milestone=M-S2/solo
+engine=noDevice
+masterVolume=1
+soloId=1
+frozen=0
+sampleRate=48000
+channels=2
+frames=2048
+soloId=1
+src1.effGain=1
+src2.effGain=0
+waveformHash=b85b05bceb39795a

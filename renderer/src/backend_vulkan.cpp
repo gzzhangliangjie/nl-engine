@@ -69,7 +69,8 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, bool visbufMode, std::string& outError) override {
+              bool sceneMode, bool visbufMode, bool pullingMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -103,7 +104,8 @@ public:
         const bool sceneOk = sceneMode
             ? true
             : (visbufMode
-            ? scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+            ? scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile,
+                                 pullingMode, outError)
             : (skinMode
             ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (hizMode

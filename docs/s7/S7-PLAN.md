@@ -73,19 +73,24 @@ bevy 的 `compute_partial_derivatives` 可整体移植（Slang 语法几乎兼�
 - `clearBufferUInt` 在 validation 层要求命令列表类型 ≤ Compute，graphics 列表（Graphics=0）满足；Vulkan 实现内部 `endRenderPass()`，故必须放在首个 `setGraphicsState` 之前
 - u64 buffer 同时有 structured UAV（stride 8）与 DX12 自动建的 R32_UINT typed clear UAV，两种视图并存合法；`canHaveUAVs=true` + `initialState=CopyDest` + `keepInitialState=true`，帧内由 NVRHI 动态跟踪晋升 CopyDest→UAV→ShaderResource
 
-## M7.1 材质 pass：vertex pulling 反解（2 天）
+## M7.1 材质 pass：vertex pulling 反解（2026-11-09 收官，tag `s7-pulling`）
 
-- [ ] 单全屏 pass（拍板点 D-S7-1 默认方案 A）：读 vis buffer → clusterId 查簇 → 三角 id 查索引 → **vertex pulling**（fetch 三顶点）
-- [ ] 移植 bevy `compute_partial_derivatives`：解析 barycentrics + ddx/ddy → perspective-correct 插值 pos/normal/uv，贴图采样显式传导数（`textureGrad`/`sampleGrad`）
-- [ ] 材质 ID 间接表：cluster → 材质实例 → 纹理索引，bindless 数组、§2.7 单 BindingSet
-- [ ] PBR 直光（1~2 盏方向光，复用 PBR-DIRECT-PLAN 分支）+ 深度测试用重建深度（vis 高 32 位恢复）
+- [x] 单全屏 pass（拍板点 D-S7-1 默认方案 A）：读 vis buffer → clusterId 查簇 → 三角 id 查索引 → **vertex pulling**（fetch 三顶点）
+- [x] 移植 bevy `compute_partial_derivatives`：解析 barycentrics + ddx/ddy → perspective-correct 插值 pos/normal/uv，贴图采样显式传导数（`textureGrad`/`sampleGrad`）
+- [x] 材质 ID 间接表：`clusterMeta[3]` 的 materialId 槽已接线（单材质恒 0，M7.2 走 bindless 间接表）
+- [x] PBR 直光（mode 5 复刻 pbr-direct 的 Cook-Torrance，SampleGrad 吃解析导数）；深度重建暂未用于着色（单材质不透明模型，硬件深度已保证遮挡）
 
-**自检**：单材质模型与 M0.4 传统画法**逐像素一致**（先保证单材质对，再上多材质）。tag：`s7-pulling`。
+**自检（实测）**：silhouette 与 M0.4 传统画法**严格一致（64203 px 对 64203 px，轮廓差 0）**；颜色为**等价而非逐位**——属性交付路径本质不同（解析导数+手工透视插值 vs 硬件 quad 插值+隐式 mip），实测 73.2% 像素逐位相同、99.71% 差 ≤2、孤立尾峰 15、均值偏移 0.019（无系统性光照错配）；pulling 双后端 near（23 px ±1、maxDelta=1）；normal-reference 双后端 bytes。验收口径偏离计划原话「逐像素一致」已如实落档（`example/s7-pulling/verify.py` 阈值与理由）。tag：`s7-pulling`。
 
-⚠️ 常见坑（预研更新）：
-- ~~barycentrics 另存 RT~~（作废，见预研 §2）
-- 解析导数函数移植时注意 Y 方向：bevy（wgpu）`ddy *= -1.0` 的翻转与 Vulkan/DX12 NDC 约定不同，移植后用「贴图梯度可视化」用例验一次
-- vertex pulling 的顶点数据用 SRV 逐顶点 fetch（.nmesh 顶点布局），别复制顶点
+**落地实录**：
+1. `material.slang` 六入口（vsMatResolve 全屏三角形 + psMatResolve），mode 0 逐字复刻 `model.slang::shade` 的 mode 0（`albedo*2.2 × (w+(1-w)·|ndl|)`）；CMake 沿用 `_VISBUF_COMMON` 依赖链。
+2. `--mode pulling` 全链穿线：`ViewMode::Pulling`(10) → `Renderer::create(pullingMode)` → `initVisbuf(..., pulling)`——同一 Scene 复用 vis 资源，追加从 `.nmesh` 同名推导 `.glb` 加载真贴图（baseColor+MR）+ `LightConstants`(80B, b1) + `MatResolveConstants`(16B, b2)。
+3. 空像素 `discard`：M0.4 清屏色透出，与 viz 档背景行为一致。
+
+⚠️ 常见坑（落地更新）：
+- bevy `ddy *= -1.0` 翻转**不要带过来**：NVRHI 的 `SV_Position.xy` 已是像素坐标系（y-down），与屏幕空间 barycentrics 同一直角系，直接用 `fragPos.xy`（已进 `docs/s5/UE-DIFFS.md` D16）
+- 全屏 pass 的纹理采样**必须 SampleGrad**：`ddx(uv)` 在无映射导数的全屏三角形上是未定义/错误方向，bevy 同款坑
+- pulling 三顶点从 SRV 逐顶点 fetch（8 float/顶点：pos/normal/uv），不复制顶点缓冲
 
 ## M7.2 多材质 + 对照验收（1 天）
 

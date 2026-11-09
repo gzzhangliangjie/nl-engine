@@ -4088,6 +4088,136 @@
       ]
     },
     {
+      "id": "m-j5b",
+      "label": "M-J5b",
+      "name": "Job 轨道 M-J5b：进程级常驻 Scheduler（compute + io 分池）+ 老 ThreadPool 兼容层",
+      "tag": "m-j5b",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道（feat/job-system，纯 CPU，零图形符号，不进 kStage/不进渲染回归）。把池从「每次调用 new 一个的局部工具」升为进程级常驻调度底座：Scheduler 组合两个既有 jobs::ThreadPool——compute()（CPU 密集数据并行/fork-join，喂 material 编译、simplify、anim dump、check-orient）+ io()（阻塞 IO/资产预取，P9 V4 residency 预备位）。老 jobs::ThreadPool 一行不动：M-J0~J3 的 25 项 selftest 零回归，全部消费者无改动。常驻规模以 configure() 冻结（首次 instance() 后 no-op），避免污染帧时间与确定性判据；底座与进程同生命周期不析构。",
+      "acceptance": [
+        "selftest scheduler 11/11 PASS：常驻同一性、compute/io 规模对齐、compute parallelFor 求和一致、scope 保序回收、compute 与 io 物理分池（指针不同）、io 阻塞不拖垮 compute、常驻多轮确定性、老 ThreadPool 兼容层仍可用、configure 后 no-op 负向",
+        "原 jobs selftest 25 项全绿（老池/兼容层不退），作为 M-J5b 回归护栏独立复跑",
+        "负向用例 selftest unknown-suite 退出 1；不进 kStage、不进渲染回归",
+        "three evidence PNGs generated from real logs by scripts/make-j5b-evidence.py"
+      ],
+      "exe": {
+        "dx12": "build/DX12/nanite-tools.exe",
+        "vulkan": "build/VULKAN/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest-scheduler",
+          "name": "selftest scheduler：常驻 Scheduler / compute+io 分池 / 兼容层",
+          "kind": "tool",
+          "note": "11 checks: resident identity, compute/io physical separation, io blocking doesn't stall compute, determinism across runs, legacy ThreadPool compat, post-instance configure no-op.",
+          "args": [
+            "selftest",
+            "scheduler"
+          ],
+          "expectExit": 0,
+          "expectLog": "scheduler selftest: PASS",
+          "command": "nanite-tools selftest scheduler",
+          "preview": "example/m-j5b/selftest-scheduler.png",
+          "script": "example/m-j5b/run.bat"
+        },
+        {
+          "id": "selftest-jobs-j5b",
+          "name": "selftest jobs：老 ThreadPool 25 项不退（M-J5b 回归护栏）",
+          "kind": "tool",
+          "note": "M-J5b 组合两个既有 ThreadPool，老 jobs::ThreadPool 一行不动；本用例独立复跑 25 项确认零回归。",
+          "args": [
+            "selftest",
+            "jobs"
+          ],
+          "expectExit": 0,
+          "expectLog": "jobs selftest: PASS",
+          "command": "nanite-tools selftest jobs",
+          "preview": "example/m-j5b/selftest-jobs.png",
+          "script": "example/m-j5b/run.bat"
+        },
+        {
+          "id": "negative-unknown-j5b",
+          "name": "负向：未知 selftest 套件必须拒绝",
+          "kind": "tool",
+          "note": "expectExit 1; CLI negative gate discipline (mirrors M-J5a).",
+          "args": [
+            "selftest",
+            "unknown-suite"
+          ],
+          "expectExit": 1,
+          "expectLog": "unknown suite",
+          "command": "nanite-tools selftest unknown-suite",
+          "preview": "example/m-j5b/negative-unknown.png",
+          "script": "example/m-j5b/run.bat"
+        }
+      ]
+    },
+    {
+      "id": "m-j5c-prep",
+      "label": "M-J5c-prep",
+      "name": "Job 轨道 M-J5c-prep：动态依赖计数 job + Barrier（Jolt JobSystem 同构桩，Jolt 无关）",
+      "tag": "m-j5c-prep",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道（feat/job-system，纯 CPU，零图形符号，不进 kStage/不进渲染回归）。接口先行解开 physics/ECS 互相等：给常驻池补上 Jolt JobSystem 同构的动态依赖能力——JobHandle（引用计数，AddDependency/RemoveDependency/IsDone 同构面）+ JobSync（create/launch/link/wait）+ Barrier（等待期动态 AddJob + 帮跑 wait，Jolt 合约 b/c）。全部落在 Scheduler::compute() 上，零 Jolt 头；池侧只加 post/runOne 两个最小原语（与 parallelFor/scope 共用队列，worker 不感知）。physics 轨道继续用 JobSystemSingleThreaded，M-P0 确定性契约一字不动；将来适配器把 JPH CreateJob/RemoveDependencyAndQueue/Barrier 映射到本原语即可。ECS 侧静态 system 依赖图走既有 jobgraph（Taskflow DAG），不经此处。",
+      "acceptance": [
+        "selftest jobsync 20/20 PASS：创建者持有防早跑、null 句柄负向、Jolt 手动释放链、link 线性链严格有序、菱形 join 恰一次、fan-in 64->1、fan-out 1->64、Barrier 混合已完成+排队、等待期动态 AddJob（Jolt 合约 b）、满池帮跑不饿死（Jolt 合约 c）、常驻多轮逐位一致、句柄先析构 job 仍完成、发布后 link 拒绝、过度释放防回绕",
+        "回归护栏独立复跑：jobs selftest 25 项全绿（老池一行未动）、scheduler 11 项、jobgraph 9 项全绿",
+        "负向用例 selftest unknown-suite 退出 1；不进 kStage、不进渲染回归",
+        "three evidence PNGs generated from real logs by scripts/make-j5c-prep-evidence.py"
+      ],
+      "exe": {
+        "dx12": "build/DX12/nanite-tools.exe",
+        "vulkan": "build/VULKAN/nanite-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest-jobsync",
+          "name": "selftest jobsync：动态依赖计数 / Barrier 动态 AddJob / 帮跑不饿死",
+          "kind": "tool",
+          "note": "20 checks: creator-hold contract, Jolt-pattern manual release chain, link ordering, diamond/fan-in/fan-out, barrier dynamic AddJob during wait, saturated-pool no-starvation, determinism, lifetime, negative link/over-release.",
+          "args": [
+            "selftest",
+            "jobsync"
+          ],
+          "expectExit": 0,
+          "expectLog": "jobsync selftest: PASS",
+          "command": "nanite-tools selftest jobsync",
+          "preview": "example/m-j5c-prep/selftest-jobsync.png",
+          "script": "example/m-j5c-prep/run.bat"
+        },
+        {
+          "id": "selftest-jobs-j5c",
+          "name": "selftest jobs：老 ThreadPool 25 项不退（M-J5c-prep 回归护栏）",
+          "kind": "tool",
+          "note": "池侧只加 post/runOne 两个最小原语，老 ThreadPool 内核一行未动；本用例独立复跑 25 项确认零回归。",
+          "args": [
+            "selftest",
+            "jobs"
+          ],
+          "expectExit": 0,
+          "expectLog": "jobs selftest: PASS",
+          "command": "nanite-tools selftest jobs",
+          "preview": "example/m-j5c-prep/selftest-jobs.png",
+          "script": "example/m-j5c-prep/run.bat"
+        },
+        {
+          "id": "negative-unknown-j5c",
+          "name": "负向：未知 selftest 套件必须拒绝",
+          "kind": "tool",
+          "note": "expectExit 1; CLI negative gate discipline (mirrors M-J5a/M-J5b).",
+          "args": [
+            "selftest",
+            "unknown-suite"
+          ],
+          "expectExit": 1,
+          "expectLog": "unknown suite",
+          "command": "nanite-tools selftest unknown-suite",
+          "preview": "example/m-j5c-prep/negative-unknown.png",
+          "script": "example/m-j5c-prep/run.bat"
+        }
+      ]
+    },
+    {
       "id": "m-sc0",
       "label": "P8 M-SC0",
       "name": "C# hosting 内核：hostfxr 装载 + 默认签名入口 + 热重编（A 类轨道）",
@@ -4467,6 +4597,117 @@
       ]
     },
     {
+      "id": "audio-s0",
+      "label": "M-S0",
+      "name": "3D 音频起步：vendored miniaudio + 离线确定性 PCM dump",
+      "tag": "audio-s0",
+      "date": "2026-11-09",
+      "note": "A 类并行轨道，工具版交代；不进 kStage、不进渲染回归。双后端构建树里的 audio-tools 是同一个纯 CPU exe（不链图形后端）。",
+      "acceptance": [
+        "vendored miniaudio v0.11.26（PD/MIT-0 二选一，选 PD）单头库 + 单实现 TU，零外部依赖",
+        "nl/audio 薄封装 AudioWorld/Clip/Source/Listener，core 层零图形符号",
+        "noDevice 离线渲染 48000Hz/2ch f32 PCM，两次独立渲染 48000 样本逐位一致",
+        "波形 PNG 从真实 PCM dump 生成（非手绘）；check 从 provenance 重渲染逐样本比对",
+        "DX12 + VULKAN 双构建树 BUILD OK，audio-tools selftest 21/21 各绿"
+      ],
+      "exe": {
+        "dx12": "build/dx12/audio-tools.exe",
+        "vulkan": "build/vulkan/audio-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2；退出码约定 0 成功 / 1 运行或断言失败 / 2 用法错误。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "audio-tools - nl-engine",
+          "command": "audio-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：21 条确定性断言",
+          "kind": "tool",
+          "note": "两次独立 noDevice 渲染逐样本位级一致 + 单声道展开 L/R 相同 + 衰减包络 + 篡改 provenance 显式拒绝。",
+          "args": [
+            "selftest"
+          ],
+          "expectExit": 0,
+          "expectLog": "audio selftest: PASS",
+          "command": "audio-tools selftest"
+        },
+        {
+          "id": "probe",
+          "name": "probe：只读 WAV 头",
+          "kind": "tool",
+          "note": "48000Hz / mono / 16-bit / 24000 frames / 0.5s，程序化生成、逐字节确定。",
+          "args": [
+            "probe",
+            "{root}/assets/audio/test-tone.wav"
+          ],
+          "expectExit": 0,
+          "expectLog": "probe: PASS",
+          "command": "audio-tools probe assets/audio/test-tone.wav"
+        },
+        {
+          "id": "dump",
+          "name": "dump：真实离线 PCM -> waveform.tsv + provenance",
+          "kind": "tool",
+          "note": "ma_engine_read_pcm_frames 拉 24000 帧 f32 交错 PCM；provenance 记参数与 tsv 的 FNV-1a 哈希。",
+          "args": [
+            "dump",
+            "{root}/assets/audio/test-tone.wav",
+            "{root}/example/audio-s0/dump"
+          ],
+          "expectExit": 0,
+          "expectLog": "dump: PASS",
+          "preview": "example/audio-s0/waveform.png",
+          "command": "audio-tools dump assets/audio/test-tone.wav example/audio-s0/dump"
+        },
+        {
+          "id": "check",
+          "name": "check：按 provenance 重渲染逐样本比对",
+          "kind": "tool",
+          "note": "防假绿：不信任存下来的波形，按 provenance 参数重建 world 重渲染，48000 个 float 位级 ==。",
+          "args": [
+            "check",
+            "{root}/example/audio-s0/dump"
+          ],
+          "expectExit": 0,
+          "expectLog": "check: PASS",
+          "preview": "example/audio-s0/acceptance.png",
+          "command": "audio-tools check example/audio-s0/dump"
+        },
+        {
+          "id": "negative-missing",
+          "name": "负向：缺失 WAV 显式拒绝（exit 1）",
+          "kind": "tool",
+          "note": "找不到文件必须报错退出 1，不许静默产出空波形。",
+          "args": [
+            "probe",
+            "{root}/assets/audio/no-such.wav"
+          ],
+          "expectExit": 1,
+          "expectLog": "cannot open WAV",
+          "command": "audio-tools probe assets/audio/no-such.wav"
+        },
+        {
+          "id": "negative-tamper",
+          "name": "负向：篡改 provenance 显式拒绝（exit 1）",
+          "kind": "tool",
+          "note": "bad/provenance.txt 故意把 sampleRate 写成 44100；check 在字段校验阶段就拒绝。",
+          "args": [
+            "check",
+            "{root}/example/audio-s0/bad"
+          ],
+          "expectExit": 1,
+          "expectLog": "sampleRate 44100 != engine 48000",
+          "command": "audio-tools check example/audio-s0/bad"
+        }
+      ]
+    },
+    {
       "id": "m-sc3",
       "label": "P8 M-SC3",
       "name": "脚本热更：collectible ALC 换载 + console.reload-script + C++ 状态无损（A 类轨道）",
@@ -4545,6 +4786,333 @@
           "expectLog": "check: PASS",
           "command": "nl-script check script/bootstrap",
           "preview": "example/m-sc3/check.png"
+        }
+      ]
+    },
+    {
+      "id": "audio-s1",
+      "label": "M-S1",
+      "name": "3D 定位与距离衰减：4 种模型 + 多声源并发 + Clip 缓存",
+      "tag": "audio-s1",
+      "date": "2026-11-09",
+      "note": "A 类工具版交代；不进 kStage、不进渲染回归。M-S0 的 format=1 基线逐字节不变（AudioConfig::spatialization 默认 false）。",
+      "acceptance": [
+        "4 种 miniaudio 原生衰减模型（none/inverse/linear/exponential）逐距离 RMS 曲线，rolloff=0.5 让四条可辨",
+        "听者沿 +Z 移出 maxDistance=20 后 inverse/linear/exponential 全部静音（UE IsInAudibleRange 口径由 nl/audio 补剔除）",
+        "两声源（440Hz / 660Hz）并发：MIX 与 A+B 逐样本位级一致，maxAbsDiff=0 / exactSamples=1024",
+        "Clip 缓存：2 clips / 2 misses / 2 hits / 4 sources，PCM 去重由 ma_resource_manager 承担",
+        "check 从 format=2 provenance 重渲染 21 距离 x 4 模型 + 512 混音帧 + 缓存统计，格式化文本逐字比对（防假绿）",
+        "DX12 + VULKAN 双构建树 BUILD OK，audio-tools selftest 33/33 各绿"
+      ],
+      "exe": {
+        "dx12": "build/dx12/audio-tools.exe",
+        "vulkan": "build/vulkan/audio-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数）",
+          "kind": "tool",
+          "note": "不带参数打印 usage 并退出 2；退出码 0 成功 / 1 运行或断言失败 / 2 用法错误。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "audio-tools - nl-engine",
+          "command": "audio-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：33 条断言（M-S0 21 + M-S1 12）",
+          "kind": "tool",
+          "note": "含 4 模型枚举 roundtrip、非法衰减参数拒绝、听者朝向读回、超距静音、none 平坦、Clip 缓存统计、并发线性叠加。",
+          "args": [
+            "selftest"
+          ],
+          "expectExit": 0,
+          "expectLog": "audio selftest: PASS (33/33)",
+          "command": "audio-tools selftest"
+        },
+        {
+          "id": "spatial",
+          "name": "spatial：衰减曲线 + 混音 + 缓存 dump",
+          "kind": "tool",
+          "note": "21 个距离点 x 4 模型 = 84 次独立离线渲染；warmup 512 帧越过 gainSmoothTimeInFrames(360) 后测 1024 帧 RMS。",
+          "args": [
+            "spatial",
+            "{root}/example/audio-s1/spatial"
+          ],
+          "expectExit": 0,
+          "expectLog": "spatial: PASS",
+          "preview": "example/audio-s1/attenuation.png",
+          "command": "audio-tools spatial example/audio-s1/spatial"
+        },
+        {
+          "id": "check",
+          "name": "check：按 provenance 重渲染全量比对",
+          "kind": "tool",
+          "note": "防假绿：不信任存下来的 tsv，从 provenance 重建全部采样点重渲染，格式化文本逐字比较；缓存统计也重新探测。",
+          "args": [
+            "check",
+            "{root}/example/audio-s1/spatial"
+          ],
+          "expectExit": 0,
+          "expectLog": "check: PASS (format=2",
+          "preview": "example/audio-s1/acceptance.png",
+          "command": "audio-tools check example/audio-s1/spatial"
+        },
+        {
+          "id": "probe-b",
+          "name": "probe：第二素材（660Hz / amp 0.4）",
+          "kind": "tool",
+          "note": "与 440Hz 素材频率不同，才能证明并发混音是两路独立信号相加而非复制。",
+          "args": [
+            "probe",
+            "{root}/assets/audio/test-tone-b.wav"
+          ],
+          "expectExit": 0,
+          "expectLog": "probe: PASS",
+          "command": "audio-tools probe assets/audio/test-tone-b.wav"
+        },
+        {
+          "id": "negative-tsv",
+          "name": "负向：篡改衰减 tsv（exit 1）",
+          "kind": "tool",
+          "note": "bad/attenuation.tsv 把超距静音行改成 0.1；provenance 的 hash 仍指原始 tsv，hash 校验阶段拒绝。",
+          "args": [
+            "check",
+            "{root}/example/audio-s1/bad"
+          ],
+          "expectExit": 1,
+          "expectLog": "attenuation hash mismatch",
+          "command": "audio-tools check example/audio-s1/bad"
+        },
+        {
+          "id": "negative-prov",
+          "name": "负向：篡改 maxDistance 参数（exit 1）",
+          "kind": "tool",
+          "note": "bad-prov/ 只把 provenance 的 maxDistance 改成 10，tsv 哈希仍合法；必须在「重渲染后曲线不匹配」阶段才被抓住。",
+          "args": [
+            "check",
+            "{root}/example/audio-s1/bad-prov"
+          ],
+          "expectExit": 1,
+          "expectLog": "mismatch after re-render",
+          "command": "audio-tools check example/audio-s1/bad-prov"
+        }
+      ]
+    },
+    {
+      "id": "s7.1",
+      "label": "S7.1",
+      "name": "Visibility Buffer 材质反解（M7.1）",
+      "tag": "s7-pulling",
+      "date": "2026-11-09",
+      "summary": "M7.1（S7 第二个里程碑）：vis buffer 材质反解 pass（vertex pulling + 解析导数），单全屏 pass 替换 M7.0 的 viz（Option A 口径落地）。每像素：u64 解包 → clusterMeta 查表 → localIndices+vertexPool 拉三顶点（8 float/顶点）→ The-Forge 解析式屏幕空间 barycentrics 与每像素导数 → 透视正确插值 worldPos/normal/uv → mode 0/1/2/5 着色（mode 0 复刻 M0.4 传统公式、mode 5 复刻 pbr-direct 的 Cook-Torrance，纹理采样走 SampleGrad 吃解析导数）。空像素 discard 让清屏色透出。验收口径：silhouette 严格为 0（vis 反解正确性的硬证据）；属性交付路径本质不同（解析导数+手工透视插值 vs 硬件 quad 插值+隐式 mip），前景为等价而非逐位——实测 73.2% 像素逐位相同、99.7% 差 ≤2、孤立尾峰 15（mip/插值固有噪声），均值偏移 0.019（无系统性光照错配）；pulling 双后端 near（23 px ±1、maxDelta=1）；normal-reference 双后端 bytes。过程修复两个既有 bug：① ECS 合并把 Renderer::create 的 sceneMode 插在 hizMode/visbufMode 之间，runNormal 调用点漏传 → visbuf/pulling 实参整体错位一格，--mode visbuf 实际以 sceneMode=true 空跑 Scene，首帧 ensurePipelines 掉进 model 分支解引用 null shader（ASan 定位）；② M7.1 新增 6 个 matResolve 资源句柄漏加进 Scene::shutdown()，退出时 PSO 活到 device 析构之后，RootSignature 释放摸已释放缓存（ASan 实锤 UAF）。",
+      "acceptance": [
+        "pulling 模式渲染出带 baseColor 贴图 + 直射光的 Suzanne，无裂缝/花斑/锯齿带；空像素 discard 与 M0.4 清屏色一致",
+        "与 --mode normal --shading 0 传统直画对照：轮廓差 0（64203 前景 px 对 64203 px）；99.71% 前景像素色差 ≤2；maxDelta=15（孤立采样噪声）；均值偏移 0.019（无系统性错配）（verify.py 逐像素核验）",
+        "normal-reference 双后端逐字节相同；pulling 双后端 near（>2px 的像素 0 个、maxDelta=1）；四张基线复跑 MD5 全等",
+        "单源双目标 44/44 魔数（新增 material 两入口 × spv/dxil）；selftest 16/16（stage 校验 S7.1）；deviceErrors=0、调试层零输出",
+        "example/s7-pulling 归位（4 张基线 + run.bat + verify.py）+ cases.json + --check 退出 0"
+      ],
+      "exe": {
+        "dx12": "build/DX12/viewer.exe",
+        "vulkan": "build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "pulling",
+          "name": "vis buffer 材质反解：贴图 + 直射光（mode 0）",
+          "kind": "pair",
+          "note": "光栅 pass 写 u64 vis buffer（与 M7.0 同款），全屏材质 pass 解包后拉顶点、解析重建 barycentrics/导数、透视正确插值、SampleGrad 采样。与 normal 模式同一套 mode 0 公式、同一张贴图、同一光源。",
+          "baselines": {
+            "dx12": "example/s7-pulling/pulling-dx12.png",
+            "vulkan": "example/s7-pulling/pulling-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "pulling",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode pulling --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s7-pulling/run.bat pulling"
+        },
+        {
+          "id": "normal-reference",
+          "name": "对照组：传统直画（normal 模式，贴图档）",
+          "kind": "pair",
+          "note": "M0.4 传统顶点插值 + 隐式 mip 采样。verify.py 按各自背景色取前景掩码逐像素对拍：轮廓全等 = vis buffer 反解与遮挡关系正确；颜色等价（非逐位）= 解析导数方法论噪声。",
+          "baselines": {
+            "dx12": "example/s7-pulling/normal-reference-dx12.png",
+            "vulkan": "example/s7-pulling/normal-reference-vulkan.png"
+          },
+          "args": [
+            "--mode",
+            "normal",
+            "--shading",
+            "0",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "8",
+            "--no-hud",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--dist",
+            "4.2"
+          ],
+          "command": "viewer.exe --mode normal --shading 0 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2",
+          "script": "example/s7-pulling/run.bat reference"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest（16/16，阶段校验 S7.1）",
+          "kind": "selftest",
+          "note": "stage 检查改为 S7.1；44/44 shader 产物魔数（含 material 两入口）；runNormal sceneMode 实参修复后全模式冒烟回归。",
+          "args": [
+            "--selftest"
+          ],
+          "expectLog": "SELFTEST PASS (16/16)",
+          "command": "viewer.exe --selftest",
+          "script": "example/s7-pulling/run.bat selftest"
+        }
+      ]
+    },
+    {
+      "id": "audio-s2",
+      "label": "M-S2",
+      "name": "游戏内音频调试：master volume / solo / freeze 单步 / 声源快照",
+      "tag": "audio-s2",
+      "date": "2026-11-09",
+      "note": "A 类工具版交代；不进 kStage、不进渲染回归。AudioDebugController 默认纯透传（volume=1/无 solo/未冻结），M-S0/M-S1 离线基线逐字节不变。",
+      "acceptance": [
+        "masterVolume 0..2 折进 effectiveGain：x0 全零、x2 峰值翻倍、x0.5 峰值恰为一半（ratio=0.500000）",
+        "solo(id)：他源 effectiveGain=0 静音，solo(1) 混音与单源渲染逐字节一致",
+        "freeze：readFrames 返回 0 不推进时钟；stepFrames 跳过守卫单步推进，首块与未冻结世界逐字节一致",
+        "debug 快照：entity/position/distance/gain/state 逐源可读（footsteps@0 / wind@z=10，model=none 平坦）",
+        "防假绿：FNV-1a64 波形哈希独立复算（verify-dump-hash.py），篡改样本或篡改存储哈希任一都被拒绝；solo 与 freeze 哈希相同（单步首块 == solo 混音）交叉验证",
+        "DX12 + VULKAN 双构建树 BUILD OK，audio-tools selftest 46/46 各绿"
+      ],
+      "exe": {
+        "dx12": "build/dx12/audio-tools.exe",
+        "vulkan": "build/vulkan/audio-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数）",
+          "kind": "tool",
+          "note": "不带参数打印 usage 并退出 2；M-S2 四个子命令（volume/solo/freeze/debug）已列入总览。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "audio-tools - nl-engine",
+          "command": "audio-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：46 条断言（M-S0 21 + M-S1 12 + M-S2 13）",
+          "kind": "tool",
+          "note": "M-S2 段：控制器 reset 透传默认、volume 0/2 两端、solo 静音他源且混音等价单源、freeze 读零步进且等价正常首块、debug 快照字段齐全。",
+          "args": [
+            "selftest"
+          ],
+          "expectExit": 0,
+          "expectLog": "audio selftest: PASS (46/46)",
+          "preview": "example/audio-s2/acceptance.png",
+          "command": "audio-tools selftest"
+        },
+        {
+          "id": "volume",
+          "name": "volume 0.5：主音量折进有效增益",
+          "kind": "tool",
+          "note": "dump 2048 帧 + format=3 provenance（masterVolume/soloId/frozen/debug 态）；峰值恰为全增益一半，哈希独立复算通过。",
+          "args": [
+            "volume",
+            "0.5",
+            "{root}/assets/audio/test-tone.wav",
+            "{root}/example/audio-s2/volume"
+          ],
+          "expectExit": 0,
+          "expectLog": "volume: PASS",
+          "preview": "example/audio-s2/volume.png",
+          "command": "audio-tools volume 0.5 assets/audio/test-tone.wav example/audio-s2/volume"
+        },
+        {
+          "id": "solo",
+          "name": "solo 1：目标源通过、他源静音",
+          "kind": "tool",
+          "note": "两命名源并发；provenance 记录每源 effectiveGain（src1=1 / src2=0）。与 freeze 哈希相同：单步首块 == solo 混音。",
+          "args": [
+            "solo",
+            "1",
+            "{root}/assets/audio/test-tone.wav",
+            "{root}/assets/audio/test-tone-b.wav",
+            "{root}/example/audio-s2/solo"
+          ],
+          "expectExit": 0,
+          "expectLog": "solo: PASS",
+          "preview": "example/audio-s2/solo-freeze.png",
+          "command": "audio-tools solo 1 assets/audio/test-tone.wav assets/audio/test-tone-b.wav example/audio-s2/solo"
+        },
+        {
+          "id": "freeze",
+          "name": "freeze：时钟冻结 + stepFrames 单步",
+          "kind": "tool",
+          "note": "frozen 时 readFrames=0（时钟保持）；stepFrames=2048 推进且产出音频；波形哈希与 solo 混音相同。",
+          "args": [
+            "freeze",
+            "{root}/assets/audio/test-tone.wav",
+            "{root}/example/audio-s2/freeze"
+          ],
+          "expectExit": 0,
+          "expectLog": "freeze: PASS",
+          "preview": "example/audio-s2/solo-freeze.png",
+          "command": "audio-tools freeze assets/audio/test-tone.wav example/audio-s2/freeze"
+        },
+        {
+          "id": "debug",
+          "name": "debug：逐源快照（entity/pos/dist/gain/state）",
+          "kind": "tool",
+          "note": "spatialization 世界两定位命名源；snapshot.tsv + debug.txt（同 ImGui 面板数据源 AudioDebugController）；model=none 平坦但位置距离照记。",
+          "args": [
+            "debug",
+            "{root}/assets/audio/test-tone.wav",
+            "{root}/assets/audio/test-tone-b.wav",
+            "{root}/example/audio-s2/debug"
+          ],
+          "expectExit": 0,
+          "expectLog": "debug: PASS",
+          "preview": "example/audio-s2/debug-panel.png",
+          "command": "audio-tools debug assets/audio/test-tone.wav assets/audio/test-tone-b.wav example/audio-s2/debug"
+        },
+        {
+          "id": "negative-usage",
+          "name": "负向：solo 缺 wavB 参数（exit 2）",
+          "kind": "tool",
+          "note": "argc != 6 时显式拒绝为用法错误；负向夹具（篡改波形/篡改哈希 → exit 1）由 run.bat 的 verify-dump-hash.py 机器断言覆盖。",
+          "args": [
+            "solo",
+            "1",
+            "{root}/assets/audio/test-tone.wav"
+          ],
+          "expectExit": 2,
+          "expectLog": "exit codes: 0=ok 1=runtime/assert failure 2=usage error",
+          "command": "audio-tools solo 1 assets/audio/test-tone.wav"
         }
       ]
     }

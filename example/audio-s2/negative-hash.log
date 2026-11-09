@@ -1,0 +1,2 @@
+hash MISMATCH: E:\UE_STUDY_2026\nl-engine-audio\example\audio-s2\bad-hash  computed=89a3885789ba4c52  stored=0000000089ba4c52
+verify-dump-hash: FAIL (0 verified, 1 mismatch)

@@ -1,0 +1,27 @@
+  ok   sum matches serial reference (50 random sizes)
+  ok   per-slot concurrent writes land exactly once
+  ok   minBatch > count collapses to one batch
+  ok   count=0 returns without invoking body
+  ok   batch exception rethrown after full drain
+  ok   pool reusable after exception
+  ok   repeat runs / thread-count variants all match
+  ok   scope collects results in spawn order
+  ok   nested spawn leaves all joined (8x4)
+  ok   chained spawn across 3 levels completes
+  ok   empty scope returns empty vector
+  ok   scope exception rethrown after join
+  ok   pool reusable after scope exception
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   serial cluster ran
+  ok   parallel cluster ran
+  ok   parallel cluster byte-identical to serial (8 prims)
+  ok   lod chains built (1-thread & parallel)
+  ok   lod chain threads=1 vs parallel byte-identical
+  info wall-clock: 1 thread 0.018s, hardware pool (32 thr) 0.002s
+jobs selftest: PASS
