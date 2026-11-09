@@ -130,4 +130,35 @@ void TransformComponent::deserialise(const nlohmann::json& j) {
     local.rotation = {j.at("rotation")[0], j.at("rotation")[1], j.at("rotation")[2], j.at("rotation")[3]};
 }
 
+// ---------------------------------------------------------------------------
+// ModelComponent / LightComponent：场景 roundtrip（M-E1b.0）
+// 数组序固定；float -> json double -> float 无损（TransformComponent 同款）。
+// ---------------------------------------------------------------------------
+
+nlohmann::json ModelComponent::serialise() const {
+    nlohmann::json j;
+    j["mesh"] = meshFile;
+    j["tint"] = {tint.x, tint.y, tint.z};
+    return j;
+}
+
+void ModelComponent::deserialise(const nlohmann::json& j) {
+    meshFile = j.at("mesh").get<std::string>();
+    tint = {j.at("tint")[0], j.at("tint")[1], j.at("tint")[2]};
+}
+
+nlohmann::json LightComponent::serialise() const {
+    nlohmann::json j;
+    j["direction"] = {direction.x, direction.y, direction.z};
+    j["color"]     = {color.x, color.y, color.z};
+    j["intensity"] = intensity;
+    return j;
+}
+
+void LightComponent::deserialise(const nlohmann::json& j) {
+    direction = {j.at("direction")[0], j.at("direction")[1], j.at("direction")[2]};
+    color     = {j.at("color")[0], j.at("color")[1], j.at("color")[2]};
+    intensity = j.at("intensity").get<float>();
+}
+
 } // namespace nl::scene

@@ -84,6 +84,17 @@ private:
 // CRTP 中间层：类型 ID / 名字 / duplicate 三件套自动落地。
 // 约定：T 提供 static constexpr const char* kName；T 必须有
 // T(const T& other, Entity newOwner) 拷构造（duplicate 语义 = 换 owner 的深拷）。
+// 组件类型 ID 的全局递增计数器（M-E1b.0 修正）。
+// 必须放在非模板 inline 函数里：inline 函数的函数级 static 在整个程序只有一份实例，
+// 各 TU 共享；若像原实现那样放在 ComponentOf<T> 的成员函数里，模板每个 T 实例化
+// 都各自持有一份 next，所有组件类型都会拿到 id=0 —— getComponent<U>() 会把
+// 槽 0 上别的组件 static_cast 成 U* 读内存（虚假灯数 / 段错误，UB）。
+inline ComponentTypeID allocateComponentTypeID() {
+    static ComponentTypeID next = 0;
+    assert(next < kMaxComponentTypes && "component type count exceeds 64 (Signature bitset)");
+    return next++;
+}
+
 template <class T>
 class ComponentOf : public Component {
 public:
@@ -91,18 +102,12 @@ public:
 
     const char* getName() const override { return T::kName; }
     static ComponentTypeID typeID() {
-        static const ComponentTypeID id = nextTypeID();
+        static const ComponentTypeID id = allocateComponentTypeID();
         return id;
     }
     ComponentTypeID getComponentTypeID() const override { return typeID(); }
     std::unique_ptr<Component> duplicate(Entity newOwner) const override {
         return std::make_unique<T>(*static_cast<const T*>(this), newOwner);
-    }
-
-    static ComponentTypeID nextTypeID() {
-        static ComponentTypeID next = 0;
-        assert(next < kMaxComponentTypes && "component type count exceeds 64 (Signature bitset)");
-        return next++;
     }
 };
 
@@ -179,6 +184,53 @@ public:
 
     // ---- M-E2 场景 roundtrip（float -> json double -> float 无损：
     // float 值的 double 表示精确，序列化数组 [x,y,z] / [x,y,z,w]）----
+    nlohmann::json serialise() const override;
+    void deserialise(const nlohmann::json& j) override;
+};
+
+// ---------------------------------------------------------------------------
+// ModelComponent（M-E1b.0，渲染语义组件首次进 nl/scene）。
+// 口径来源：Carrot ecs/components/ModelComponent.h——组件持「文件路径 + 颜色」
+// 字符串/纯数据，GPU 资源由渲染侧按路径加载（我们 viewer 侧同步加载，Carrot 的
+// AsyncModelResource 异步句柄是升级项）；零图形符号纪律不破（只有 std::string
+// 与 Vec3，NVRHI/ImGui 零 include）。
+// direction/deserialise 与 TransformComponent 同款：数组序固定、float<->double
+// 无损、缺键 = nlohmann 异常（World::deserialise 统一 catch 转显式报错）。
+// ---------------------------------------------------------------------------
+class ModelComponent : public ComponentOf<ModelComponent> {
+public:
+    explicit ModelComponent(Entity owner) : ComponentOf<ModelComponent>(owner) {}
+    ModelComponent(const ModelComponent& other, Entity newOwner)
+        : ComponentOf<ModelComponent>(newOwner), meshFile(other.meshFile), tint(other.tint) {}
+
+    static constexpr const char* kName = "Model";
+
+    std::string meshFile;          // assets/ 下的资产文件名（白名单校验在 viewer 侧）。
+    Vec3 tint{1.0f, 1.0f, 1.0f};   // 实体级着色（N 物体画面区分用；Carrot color 字段口径）。
+
+    nlohmann::json serialise() const override;
+    void deserialise(const nlohmann::json& j) override;
+};
+
+// ---------------------------------------------------------------------------
+// LightComponent（M-E1b.0）：方向灯纯数据组件（bevy PointLight/UE ULightComponent
+// 的「灯数据存组件」口径；本期只支持方向灯数组，点光源等 pbr-direct merge 后
+// 扩类型字段）。方向存组件字段（世界空间光照传播方向），从 Transform 层级推导
+// 方向是升级项（UE 口径），留痕 docs/p8/P8-ECS-PLAN.md。
+// ---------------------------------------------------------------------------
+class LightComponent : public ComponentOf<LightComponent> {
+public:
+    explicit LightComponent(Entity owner) : ComponentOf<LightComponent>(owner) {}
+    LightComponent(const LightComponent& other, Entity newOwner)
+        : ComponentOf<LightComponent>(newOwner),
+          direction(other.direction), color(other.color), intensity(other.intensity) {}
+
+    static constexpr const char* kName = "Light";
+
+    Vec3 direction{0.0f, -1.0f, 0.0f};  // 光照传播方向（世界空间，viewer 侧归一化）。
+    Vec3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;
 };

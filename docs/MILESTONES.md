@@ -1333,3 +1333,35 @@
 3. `server.py --check` 只按 kStage 校验渲染卡，工具卡不在其范围——JSON 合法性另行 `json.load` 校验，五用例退出码/输出以实跑为准。
 
 **下一步**：轨道收官。wt（nl-engine-console）按 §7.1b 保留分支拆 worktree；M-C4 级别的后续（命令自动补全模糊匹配、日志导出等）不在本计划，需要时另立项。
+
+## P8 M-E1b.0：ECS 渲染集成（feat/ecs 轨道，2026-11-09）
+
+**动作**
+- S6 主线（Hi-Z / console M-C0~C3 / check-orient 加速）快进合入 `feat/ecs` worktree，双树重建 + `nanite-scene selftest --all` 四 suite 全绿。
+- `ModelComponent`（mesh 路径 + tint）/ `LightComponent`（direction + color + intensity）纯数据组件进 `nl/scene`，零图形符号纪律不破；`nanite-scene` ecs-serial suite 补 Model/Light roundtrip 字段级断言。
+- `viewer --scene <World JSON>`：`World::deserialise` 加载 → O(N) 遍历收集 → `Renderer::loadEcsScene` → `Scene::initScene` 按 meshFile 分组实例化。新入口对 `vsScene/psScene` + t5 实例缓冲 / t6 灯缓冲，既有 shader 入口与既有 draw 路径逐字节不动。
+- **用户拍板两条**：① 多灯 = 方向灯数组（点光源留给 pbr-direct merge 后）；② 照 console 轨道先例，**kStage 保持 S6.2 一字不动**，证据走 example 卡 + 截图 + `--only` 抽查。
+- 三处参考口径（Carrot ModelRenderSystem 双签名收集 + ModelComponent 路径 / bevy PointLight 纯数据灯 / UE ULightComponent 多灯注册）一致指向「组件纯数据 + 渲染侧收集」。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.0`）；主线 master 不合并（E1b 尚有后续分段，轨道未收官）。
+
+**完成情况（四项自查）**
+1. `example/ecs-e1b/`：`ecs-e1b.scene`（5 物体 + 3 灯，ambient 0.22）/ `run.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-DX12.png` + `shot-VULKAN.png` 基线 + 双后端 `.log`；`example/cases.json` 加 `ecs-e1b` 版本卡（pair 用例，args 用 `{root}` 绝对路径）。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS，双树 `BUILD OK`；`server.py --check` 退出 0（stage=S6.2 cases=5 baselines=12）。
+3. 台账：本段即四栏。
+4. 固化：`docs/p8/P8-ECS-PLAN.md` E1b 段标完成 + `docs/p8/ECS-TOOLS-GUIDE.md` M-E1b.0 节（含踩坑存档）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-dx12.png` / `ecs-e1b-vulkan.png`（归档，卡片直接展示）；肉眼核验 5 个 Suzanne 红绿蓝黄白、不同 TRS、顶面亮侧面暗的方向光层次。
+- 验收数字：双后端 `5 objects | 3 lights | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes ALL GREEN；抽查 `--only s6.2` 10/10 bytes ALL GREEN（既有路径零回归，kStage 未动）。
+
+**踩坑情况（本轮七条，前三条是 E1a 遗留隐藏 bug，一加渲染组件就爆）**
+1. **组件类型 ID 全为 0**：`ComponentOf<T>::nextTypeID()` 的 `static next` 写在类模板成员函数里 → 每个 T 各持一份计数器，所有组件都拿 id=0。后果：`getComponent<Light>` 把槽 0 上的 Model 强行 `static_cast` 后读内存（虚假灯数 + 稳定段错误 139）。修：计数器移到非模板 `inline allocateComponentTypeID()`（inline 函数级 static 全程序唯一）。E1a 只 3 个组件时未暴露，E1b 加两个组件才炸——**类型 ID 分配必须有多类型隔离的正向断言**。
+2. **BindingSet 早于缓冲创建**：`createBindingSet` 把还没建的 `sceneInstances_/sceneLights_` 绑进去，NVRHI 报 `Null resource bindings are not allowed for buffers` → load 失败。修：BindingSet 创建延后到两个缓冲建好之后（新增第 5.5 步）。
+3. **实例计数从没赋值**：`batchObjects` 分组收集了，但 `SceneMeshBatch::instanceStart/instanceCount` 保持默认 0，且实例数据按 objects 原序而非按 batch 连续排布 → `InstanceCount = 0` 空画面 + deviceErrors=8。修：实例数据按 batch 分组连续写入并顺带落两个计数字段。
+4. **多灯强度直接相加过曝**：ΣI≈4.7 经 `min(...,1.0)` 后全画面饱和，三灯的方向/色温差别完全看不出（等于没实现多灯）。修：按总强度归一化成加权平均（`1/ΣI` 由 CPU 预算进灯缓冲 [0].z，shader 只做乘法，避免 DXIL/SPIR-V 除法微差）；绝对强度/曝光留作 pbr-direct 升级项。
+5. **联合包围球第一个球漏算半径**：`first` 分支把 gmn/gmx 直接设为球心而非 ±r → 自动取景偏近。修：首球也按 ±r 展开。
+6. **回归以 exe 目录为 cwd**：`--scene example/...` 相对路径解析到 `build/DX12/example/...` → exit 2。修：用 `{root}` 占位符（仓库内文件引用的唯一白名单方式），`command` 文本同步。
+7. **Windows 大小写不敏感误删**：清理临时探针时用小写 `shot-dx12.png` 命中了真实基线 `shot-DX12.png`。修：立刻重拍恢复；**清理命令绝不用大小写近似名**。另：cases.json 是 CRLF，文本级插入锚点必须先归一化换行符。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 2/2）；两后端画面互比 `diffPixels=3 / maxDelta=2`，按项目 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**（GPU 取整噪声，非画面差异）；已去掉 shader 内多余的 `normalize` 与归一化除法仍存在，留作后续精度项。
+
+**下一步**：E1b 后续分段（E1b.1+，如点光源 / 材质响应 / 更多实体压力）或轨道收官 merge 回 master，按用户指令。wt_pool M-E1b.0 占坑已 release。

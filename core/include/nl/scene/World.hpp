@@ -231,6 +231,10 @@ public:
     void updateName(EntityID id, std::string_view name);
     std::optional<Entity> findEntityByName(std::string_view name) const;
 
+    // M-E1b.0：flush 后全局实体表只读快照（serialise 同一数据源）。viewer 的
+    // --scene 收集渲染描述走 O(N) 遍历（P8-ECS-PLAN 50 物体规模锚：不做查询缓存）。
+    const std::vector<EntityID>& getEntityIDs() const { return entities_; }
+
     // ---- Flags ----
     EntityFlags getFlags(EntityID id) const;    // 缺失条目 = None
     void setFlags(EntityID id, EntityFlags flags);

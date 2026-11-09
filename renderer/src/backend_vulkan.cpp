@@ -69,7 +69,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              std::string& outError) override {
+              bool sceneMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -97,7 +97,11 @@ public:
         if (!createTargets(outError)) return false;
         // M4.0：vertex pulling 走 initCull。Vulkan 侧 SPIR-V 入口恒为 "main"（加载期
         // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
-        const bool sceneOk = skinMode
+        // M-E1b.0：sceneMode 不在此初始化 Scene（与 DX12 对称）；场景资源由
+        // loadEcsScene 建立后才可绘制。
+        const bool sceneOk = sceneMode
+            ? true
+            : (skinMode
             ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (hizMode
             ? scene_.initHiz(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
@@ -107,7 +111,7 @@ public:
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))))));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
@@ -237,6 +241,21 @@ public:
         return true;
     }
 
+    // M-E1b.0：ECS 场景加载（sceneMode=true 的 init 之后由 Renderer 转发调用）。
+    // Vulkan：SPIR-V 入口恒为 "main"（加载期 setEntryName 即 SPIR-V pName，§2.4）。
+    bool loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                      const SceneLightDesc* lights, std::uint32_t lightCount,
+                      float ambient, const char* sceneName,
+                      std::string& outError) override {
+        if (!scene_.initScene(nvrhiDevice_, "spv", "main", "main", objects, objectCount,
+                              lights, lightCount, ambient, sceneName, outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.instanceCount = scene_.instanceCount();
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
+        return true;
+    }
+
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {
@@ -291,6 +310,7 @@ public:
         info_.hizTopFar = scene_.hizTopFar();                 // M6.1：金字塔最高 mip（最远表面）
         info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
+        info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
 
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();

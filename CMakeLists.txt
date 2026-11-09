@@ -217,9 +217,11 @@ endif()
 #   <name>.vs.{spv,dxil}          入口 vsMain
 #   <name>.vscluster.{spv,dxil}   入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
 #   <name>.vscull.{spv,dxil}      入口 vsCull（M4.0：GPU vertex pulling）
+#   <name>.vsscene.{spv,dxil}     入口 vsScene（M-E1b.0：ECS 场景实例化，SV_InstanceID）
 #   <name>.ps.{spv,dxil}          入口 psMain
 #   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
 #   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
+#   <name>.pscene.{spv,dxil}      入口 psScene（M-E1b.0：N 物体 M 方向灯）
 # cull.slang 单 compute 入口（M4.1）：<name>.cs.{spv,dxil} 入口 csCull
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
@@ -234,7 +236,9 @@ set(_SHADER_ARTIFACTS "")
 # D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
 # 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
-                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
+                   "vsScene|vsscene|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment"
+                   "psScene|pscene|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")
