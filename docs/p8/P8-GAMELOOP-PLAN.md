@@ -1,0 +1,50 @@
+# P8-GAMELOOP-PLAN — 游戏循环 / 双帧模型（渲染帧 vs 逻辑帧，A 类，2026-11-09 立项登记）
+
+> 起因：2026-11-09 用户问「支持游戏暂停，现有框架能做到么」→ 讨论中拍板**需要有渲染帧和逻辑帧的概念**，三点方案（双帧模型 / 起步不插值 / 与 M-S3 合并落点）用户全部同意，本文档即「固化登记」产物。
+> **性质**：A 类并行轨道（不碰 `kStage`、不进渲染回归），走工具版交代（selftest / console 命令 / 展示台 tool 卡）。
+> **Gate**：E1b 链 merge 回 master 之后才动工；M-GL2（物理/音频/ECS 接逻辑帧）与 **M-S3 场景集成合并收口**（见 `P8-AUDIO-PLAN.md` M-S3 行，已互相挂前置）。
+
+## 1. 目标
+
+给引擎引入**双帧模型**，作为 game loop 层第一次落地：
+
+| 帧 | 驱动 | 步长 | 职责 |
+|---|---|---|---|
+| **逻辑帧（sim tick）** | accumulator | **固定 60Hz**（`1.0/60.0`） | input → 脚本/动作 → 物理（Jolt step）→ ECS transform 同步 → 音频 listener/声源同步；暂停 = 逻辑帧时钟停摆 |
+| **渲染帧** | vsync / 主循环 | 变步长 | present、相机漫游、HUD/console、GPU 资源上传；暂停时**继续跑** |
+
+**暂停语义**：`paused=true` → 逻辑帧不推进（simTime 不变），渲染帧照常——画面可见、可漫游、可调 console，游戏状态冻结。这就是用户原始问题「游戏暂停」的实现载体。
+
+## 2. 三处参考口径（2026-11-09 实读；各里程碑开工按铁律重读点名文件）
+
+| 来源 | 实读证据 | 用法 |
+|---|---|---|
+| **Carrot** `engine/engine/physics/PhysicsSystem.{h,cpp}`（实读） | `TimeStep = 1.0/60.0` 常量；`accumulator += deltaTime; while(accumulator >= TimeStep) { jolt->Update(TimeStep, collisionSteps, …); accumulator -= TimeStep; }`（cpp:130-138） | **accumulator 模式直接同构**：固定步长 + while 循环；⚠️ 它只在物理侧用，本项目推广为全局 sim clock（引擎级而非单系统级） |
+| **bevy** `bevy_time/src/virt.rs`（实读） | `Time<Fixed>` 与 `Time<Virtual>` 分离；`DEFAULT_MAX_DELTA = 250ms` 防死亡螺旋（`max_delta` 双重用途：大 delta 截断 + 长卡顿追赶上限）；`FixedUpdate` 调度与渲染 `Update` 解耦；暂停/倍速走 Virtual 时钟 | **max_delta=250ms 口径照抄**；Virtual 时钟的 `paused`/`relative_speed` 语义即本项目 timeSource 设计的蓝本 |
+| **UE** `Runtime/Engine/Private/`（**本轮未实读**，按已知结构：Tick 每帧变 dt + TickGroup 排序 + 物理异步 substepping 固定步长补；`FApp::SetFixedFrameRate` 用于固定帧率模式） | 工业终态走「渲染帧为主 + 物理 substepping」，与 Carrot/bevy 的「逻辑帧为主」是两种流派 | M-GL0 开工时按铁律实读 `GameEngine.cpp` tick 与 `FApp` 相关文件再定论；当前拍板**选逻辑帧为主**（与确定性回放契约同向，见 §4） |
+
+**历史决策对齐**：本项目「确定性回放 = 固定样本 + 固定 dt，PNG MD5 与基线逐字节对上」（viewer/main.cpp:843 注释）——逻辑帧恒定步长**强化**该契约而非冲突；Jolt「逐样本位一致」契约（M-P0）在固定步长下天然满足，不动。
+
+## 3. 设计
+
+- **`nl::core::GameClock`**（薄层，纯逻辑，零依赖）：`simTime / frameDt(缩放后) / timeScale / paused / accumulator`；`tick(realDtMs)` 内部做 `scaledDt → 截断 maxDelta(250ms) → accumulator 累加 → while 跑 logicTick(step)`。逻辑帧步长常量 `1.0/60.0`（对齐 Carrot）。
+- **主循环改造**（viewer/main.cpp）：渲染帧开头 `clock.tick(realDt)`，`skinTime` 改读 `clock.simTime()`；`--anim-time` 固定值模式语义不变（等价 paused 固定 simTime）。
+- **console 命令**（复用 M-C0~C3 基建）：`game.pause` / `game.timeScale`（CVar，`setOnChanged` 生效）。
+- **逻辑帧 tick 顺序**（对齐 UE TickGroup 思想做简化，单线程起步，Scheduler 池化不变）：input → script/action → physics → ECS transform sync → audio sync。
+- **起步不插值**（2026-11-09 用户拍板，最小必要方案）：渲染帧直接取最新逻辑帧状态；60Hz 逻辑 + 高刷屏的 judder 可接受。bevy 有 interpolator、Carrot/UE 不插值——将来要了再补 `alpha = accumulator/step` 的 transform 插值，GameClock 已预留 alpha 输出。
+
+## 4. 不在范围
+
+- 多逻辑帧速率分档（TickGroup 精细化）、帧间插值、回滚 netcode、多线程逻辑帧并行（Scheduler 已有 DAG，将来 M-GL2 再评估）。
+
+## 5. 里程碑草案（不排期，gate E1b merge 后开工）
+
+| 里程碑 | 内容 | 验收判据 |
+|---|---|---|
+| **M-GL0** | `GameClock` 纯逻辑 + selftest（累加/截断/暂停/倍速/追帧上限） | selftest 全绿；tool 卡 usage/正向/负向 + 证据图 |
+| **M-GL1** | viewer 主循环接双帧 + `game.pause`/`game.timeScale` + `--fixed-dt` 兼容 | 截图基线：暂停帧 simTime 不变、渲染帧 HUD 活；双后端对拍 |
+| **M-GL2** | 物理/音频/ECS 接逻辑帧 tick（与 **M-S3 合并收口**） | 声源随物体移动且暂停即停；全量回归 + 收口硬闸 |
+
+## 6. 留痕
+
+- 2026-11-09：立项登记（用户拍板三点：双帧模型 / 起步不插值 / 与 M-S3 合并落点）。点光源阴影同日拍板**不排期**（见 `.workbuddy/memory/2026-11-09.md`）。

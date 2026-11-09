@@ -102,6 +102,13 @@
 - **三处参考口径**：UE `AudioDebug.cpp`（只读定调试字段）/ Carrot `engine/audio/`（对象模型与绑定形状，不抄 AudioThread 与 OpenAL 底座）/ bevy `SpatialListener`（ECS 同步挂法）；上游 miniaudio 官方示例清单见 `P8-AUDIO-PLAN.md` §3。
 - **不在范围**：HRTF / 几何遮挡 / EFX 混响卷积 / Steam Audio / FMOD/Wwise 内容管线（目标只要「3D 音效 + 能调试」）。
 
+### 2.7 游戏循环 / 双帧模型（渲染帧 vs 逻辑帧，2026-11-09 立项登记，未开工）
+
+- **为什么适合并行**：纯逻辑层（GameClock + 主循环改造），不碰 GPU 管线；A 类，不进渲染回归。
+- **拍板结论（2026-11-09 用户同意三点）**：逻辑帧固定 60Hz + accumulator、渲染帧 vsync 驱动；起步不插值；M-GL2 与 M-S3 场景集成合并收口。暂停 = 逻辑帧时钟停摆、渲染帧照常。
+- **Gate**：E1b 链 merge 回 master 之后动工。里程碑草案 M-GL0（GameClock+selftest）→ M-GL1（viewer 接双帧 + console）→ M-GL2（接物理/音频/ECS）。
+- **三处参考口径**：Carrot `PhysicsSystem` accumulator（实读，cpp:130-138）/ bevy `Time<Fixed>`+`Time<Virtual>`+max_delta 250ms（实读）/ UE TickGroup+substepping（未实读，M-GL0 开工补）；详见 `docs/p8/P8-GAMELOOP-PLAN.md`。
+
 ---
 
 ## 3. B 类 · 已登记穿插项（渲染研究，不另开并行线，仅汇总）

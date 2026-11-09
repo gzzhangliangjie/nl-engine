@@ -184,4 +184,5 @@
 - **双后端纪律（必须同时通过 / 画面一致分档 / 与官方对齐）**：见上方「代码开发与双后端纪律」节。
 - **构建 / 编译 / 运行期踩坑汇总**：见 `docs/DEV-PITFALLS.md`（NMake 必用、Vulkan 静态链接宏、139 段错误、SPIR-V 入口恒 `main`、NMake 时间戳陷阱、`SceneConstants` 160B 等）。
 - **里程碑必须有「交代」**：见上方「里程碑交付纪律」节（渲染版 = `example/` 基线、工具版 = 展示台用例 + 归档；tag 在验收后打、提交前 regression 全绿、四栏台账写实、约定写回 canonical 文档）。
+- **展示台网站（里程碑 review 入口，2026-11-09 固化）**：`tools/showcase/start.bat` 或 `python tools/showcase/server.py --port 8787` → http://127.0.0.1:8787/；侧栏按里程碑版本回放成功用例，数据源唯一 `example/cases.json`、基线图在 `example/<版本>/`；验收闸是 `--check` 退出 0；起服务前先 `netstat -ano | grep 8787` 查残留进程（详见 `docs/DEV-PITFALLS.md`）。
 - **用户实测结论 > 任何网页 / 官方文档信息**。
