@@ -131,7 +131,7 @@
    | ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs` | `feat/ecs` | **E1a 收官 / 全量 merge 回 master**（2026-11-09，merge commit `2d4ad49`，tags `ecs-e0`~`ecs-e3`）：Carrot 式 OOP 组件内核（World/Entity 延迟增删 + Component 层级 + System 签名收编 + 场景 JSON roundtrip 字节一致）+ `nanite-scene` 工具 + 展示台 `p8-ecs` 卡 4 条 + `docs/p8/ECS-TOOLS-GUIDE.md`；wt 保留（E1b 渲染集成后挂等 S6 收官 tag `s6-done`，届时另编号触发渲染纪律）；计划 `docs/p8/P8-ECS-PLAN.md` |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
-   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。**例外（2026-11-09 拍板）**：ECS 场景轨道（`feat/ecs`，`docs/p8/P8-ECS-PLAN.md`）作为 E1 的 E1a 拆分段**提前开工**，不受此排期闸限制；三条下游轨道仍排在其后。
+   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。**例外（2026-11-09 拍板）**：ECS 场景轨道（`feat/ecs`，`docs/p8/P8-ECS-PLAN.md`）作为 E1 的 E1a 拆分段**提前开工**，不受此排期闸限制；三条下游轨道仍排在其后。**例外 2（2026-11-09 拍板）**：脚本轨道（`feat/script`，`docs/p8/P8-SCRIPT-PLAN.md`）E4 脚本段**解禁提前**（鸣潮方向 C#/.NET hosting，目标扩展+热更），M-SC0 无依赖即刻开工。
 3. **固化文档闸**：track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩。
 4. **假绿防护 · 占坑 ≠ 文件指向**：
    - 在 track worktree 干活时，所有编辑绝对路径、shell 每条命令的 cwd **显式在对应 wt 路径内**，不依赖默认落点；

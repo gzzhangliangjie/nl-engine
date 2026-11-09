@@ -190,6 +190,14 @@
 |---|---|---|---|
 | ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/ecs` | **E1a 收官**（2026-11-09，M-E0~E3 完成 tags `ecs-e0`~`ecs-e3`，merge commit `2d4ad49`）：`nl/scene` 内核 + `nanite-scene` 工具 + 展示台 `p8-ecs` 卡 4 条 + `docs/p8/ECS-TOOLS-GUIDE.md`；wt 保留，**E1b（渲染集成）后挂等 S6 收官**（tag `s6-done`）后另编号开工 |
 
+### 7.1d C# 脚本轨道（2026-11-09 立项，E4 脚本段解禁提前）
+
+> 2026-11-09 用户拍板（三轮收敛：Lua → 鸣潮参考 TS+C# → **定 C#**「热更也已成熟」）：E4 脚本段解禁提前，目标 = 功能扩展 + 热更，技术路线 = **.NET hosting（hostfxr）+ C# 脚本程序集 + collectible ALC 热更**（鸣潮 3.6 同款方向）。计划 `docs/p8/P8-SCRIPT-PLAN.md`（M-SC0~SC3）；M-SC0 无依赖即刻开工，M-SC1 gated on console M-C3 merge，M-SC2 消费 E1a 成果。
+
+| 轨道 | worktree 绝对路径 | 分支 | 计划 |
+|---|---|---|---|
+| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（待建，junction 共享 `.workbuddy`/`slang dist`） | `feat/script`（待建） | M-SC0~SC3（`docs/p8/P8-SCRIPT-PLAN.md`）：hosting 内核 → console 绑定 → ECS 数据面绑定 → 热更收口 |
+
 ### 7.2 固化文档闸
 
 track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩；我们已有 `MILESTONES.md` 四栏写实，此处**纪律化**为 merge 前置。
