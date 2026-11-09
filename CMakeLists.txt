@@ -137,6 +137,7 @@ add_library(nl_core STATIC
     core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/console.cpp       # P8 M-C0：开发者控制台纯逻辑内核（A 类轨道，零图形符号）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
     core/src/material_graph/compile.cpp # T1：图编译验收（emit + slangc 四路，纯进程调用）
@@ -149,7 +150,8 @@ target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/inclu
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
-target_link_libraries(nl_core PRIVATE glfw nl_metis)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
+# imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
 
@@ -160,6 +162,7 @@ add_library(nl_renderer STATIC
     renderer/src/scene.cpp
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
+    renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -168,7 +171,8 @@ target_include_directories(nl_renderer
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
 )
-target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui nl_imgui_node_editor)
+target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui nl_imgui_node_editor glfw)
+# 注1：glfw 仅 console_ui.cpp 吃 GLFW 键值常量（M-C1 键盘映射），窗口库本身仍归 core/viewer。
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
     NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
@@ -313,10 +317,16 @@ target_link_libraries(material-graph-tools PRIVATE nl_core)
 add_executable(nanite-scene nanite-scene/main.cpp)
 target_link_libraries(nanite-scene PRIVATE nl_core)
 
+# ---- P8 M-C0：开发者控制台工具（A 类轨道，工具版交代）----
+# core/console 纯逻辑内核的机械单测 + demo 注册表执行器（selftest / exec）。
+# 只链 nl_core，零图形 API；不依赖 renderer / viewer。
+add_executable(nanite-console nanite-console/main.cpp)
+target_link_libraries(nanite-console PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -332,6 +342,8 @@ set_tests_properties(s1-tools-stat PROPERTIES
     PASS_REGULAR_EXPRESSION "triangles : 3936")
 # M1.1：切簇算法机械单测（覆盖率 / 128 tri 与 64 vert 上限 / bounds 合理性 / 负向输入）
 add_test(NAME s1-cluster-selftest COMMAND nanite-tools selftest cluster)
+# P8 M-C0：core/console 纯逻辑内核机械单测（A 类轨道，无渲染依赖）
+add_test(NAME p8-console-selftest COMMAND nanite-console selftest)
 set_tests_properties(s1-cluster-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "cluster selftest: PASS")
 # M1.1：真实资产切簇验收（覆盖率 100% + limits PASS）

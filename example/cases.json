@@ -3596,6 +3596,76 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "console-mc3",
+   "label": "M-C3",
+   "name": "开发者控制台收口：nanite-console 展示台用例（feat/console 轨道）",
+   "tag": "console-mc3",
+   "date": "2026-11-09",
+   "summary": "P8 开发者控制台轨道收口。M-C0 纯逻辑内核（core/console 统一注册表 + CVar 四类型 + 引号解析 + exec 分档 ExecCode{Ok=0/UnknownCommand=1/BadRequest=2/CommandFailed=3}）→ M-C1 ImGui 前端（`` ` `` 呼出/ESC 收起、滚动日志配色、输入行历史、Tab 补全、可拖动缩放）→ M-C2 installBuiltins（help/cvar.list/cvar.set）+ cam.fov/cam.dist/hud.show 真参数回调 + panelShow 解耦面板与控制台 → M-C3 展示台用例 + 归档。工具纯 CPU 不链图形后端，dx12/vulkan 是同一个 exe；退出码=ExecCode 分档（0 ok / 1 unknown / 2 bad request / 3 command failed），与 nanite-tools 的 0/1/2 约定不同，如实分档。",
+   "acceptance": [
+    "nanite-console selftest 49/49 PASS（M-C0 42 条 + M-C2 内建 7 条；ctest 锁死）",
+    "展示台五用例实跑：usage(2)/selftest(0)/exec 正向(0)/负向 unknown(1)/负向坏值(3) 退出码与 ExecCode 分档逐一对上",
+    "viewer 运行时调参可见联动：cam.fov 100 透视变化 + hud.show false 只藏面板控制台存活（docs/screenshots/mc2-* 三张证据图）",
+    "归档 docs/p8/CONSOLE-TOOLS-GUIDE.md + MILESTONES 四栏 + tag console-mc3 + merge 回 master"
+   ],
+   "exe": {
+    "dx12": "build/nanite-console.exe",
+    "vulkan": "build/nanite-console.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数启动（子命令总览）",
+     "kind": "tool",
+     "note": "不带参数打印 usage。退出码 2 = ExecCode::BadRequest（console 工具的退出码语义就是 ExecCode 分档，不沿用 nanite-tools 的 0/1/2 约定）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "usage:",
+     "command": "nanite-console"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性单测（49/49）",
+     "kind": "tool",
+     "note": "M-C0 42 条（tokenize 引号解析 / CVar 四类型 setFromString 校验 / exec 分档 / completePrefix / 重复注册）+ M-C2 内建 7 条（help / cvar.list / cvar.set 三态 / double-install 幂等）。退出 0 即 PASS。",
+     "args": ["selftest"],
+     "expectExit": 0,
+     "expectLog": "console selftest: PASS",
+     "command": "nanite-console selftest"
+    },
+    {
+     "id": "exec-positive",
+     "name": "exec 正向：echo + cvar.list + cvar.set 三连（demo 注册表）",
+     "kind": "tool",
+     "note": "M-C2 installBuiltins 真实执行体：echo 输出拼接、cvar.list 列 demo.* 四类型 CVar 现值+help、cvar.set 改 demo.fov 60→90。退出码 = 多条命令的 worst（全 0 即 0）。",
+     "args": ["exec", "echo hello console", "cvar.list", "cvar.set demo.fov 90"],
+     "expectExit": 0,
+     "expectLog": "demo.fov = 90",
+     "command": "nanite-console exec \"echo hello console\" \"cvar.list\" \"cvar.set demo.fov 90\""
+    },
+    {
+     "id": "neg-unknown",
+     "name": "负向：未知命令显式拒绝（UnknownCommand=1）",
+     "kind": "tool",
+     "note": "注册表查无此名，显式报错退出 1，不许静默假成功。",
+     "args": ["exec", "nonsense.cmd"],
+     "expectExit": 1,
+     "expectLog": "unknown command: nonsense.cmd",
+     "command": "nanite-console exec \"nonsense.cmd\""
+    },
+    {
+     "id": "neg-badvalue",
+     "name": "负向：cvar.set 坏值保旧（CommandFailed=3）",
+     "kind": "tool",
+     "note": "setFromString 类型校验拒绝非数字，旧值不动（demo.fov 保持 60），退出 3。ExecCode 分档：参数本身可解析但赋值失败归 CommandFailed 而非 BadRequest。",
+     "args": ["exec", "cvar.set demo.fov abc"],
+     "expectExit": 3,
+     "expectLog": "invalid value for demo.fov: expected float, got 'abc'",
+     "command": "nanite-console exec \"cvar.set demo.fov abc\""
+    }
+   ]
   }
  ]
 }

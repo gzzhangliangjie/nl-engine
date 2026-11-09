@@ -100,6 +100,17 @@ void OrbitCamera::zoom(float scrollDelta) {
     distance_ = clamp(distance_ * std::exp(-scrollDelta * kZoomGain), kMinDist, kMaxDist);
 }
 
+void OrbitCamera::setDistance(float distance) {
+    distance_ = clamp(distance, kMinDist, kMaxDist);
+}
+
+void OrbitCamera::setFovYDegrees(float fovYDegrees) {
+    constexpr float kMinFovDeg = 20.0f, kMaxFovDeg = 120.0f;
+    fovY_ = clamp(fovYDegrees * kPi / 180.0f, kMinFovDeg * kPi / 180.0f, kMaxFovDeg * kPi / 180.0f);
+}
+
+float OrbitCamera::fovYDegrees() const { return fovY_ * 180.0f / kPi; }
+
 Matrix4 OrbitCamera::viewProjection() const {
     const float cp = std::cos(pitch_);
     const float eye[3] = {
@@ -111,8 +122,9 @@ Matrix4 OrbitCamera::viewProjection() const {
     const float up[3] = {0.0f, 1.0f, 0.0f};
     // M-A5.4：远平面随距离自适应（kFar=100 只够 dist≤33 的场景）。dist>33 时
     // 模型会被远平面整体裁掉；dist ≤ 33 时取值与旧 kFar 完全一致，历史基线不破。
+    // M-C2 merge：fov 用 fovY_ 实例字段（console cam.fov 可写，缺省 45° 不变）。
     const float farZ = std::max(kFar, distance_ * 3.0f);
-    return multiply(perspectiveZO(kFovY, aspect_, kNear, farZ), lookAt(eye, center, up));
+    return multiply(perspectiveZO(fovY_, aspect_, kNear, farZ), lookAt(eye, center, up));
 }
 
 Matrix4 OrbitCamera::view() const {
@@ -148,7 +160,7 @@ void OrbitCamera::eyePosition(float out[3]) const {
 }
 
 float OrbitCamera::projectionYScale() const {
-    return 1.0f / std::tan(kFovY * 0.5f);
+    return 1.0f / std::tan(fovY_ * 0.5f);
 }
 
 bool cameraSelfTest() {
