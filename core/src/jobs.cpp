@@ -57,6 +57,38 @@ void ThreadPool::workerLoop() {
     }
 }
 
+// ---- M-J5c-prep：动态依赖执行器原语（与 parallelFor/scope 共用 Impl.queue；worker 不感知）----
+void ThreadPool::post(std::function<void()> fn) {
+    Impl& im = *impl_;
+    {
+        std::lock_guard<std::mutex> lk(im.mu);
+        im.queue.push_back(std::move(fn));
+        im.cvWork.notify_one();
+    }
+}
+
+bool ThreadPool::runOne() {
+    Impl& im = *impl_;
+    std::function<void()> task;
+    {
+        std::lock_guard<std::mutex> lk(im.mu);
+        if (im.queue.empty()) return false;
+        task = std::move(im.queue.front());
+        im.queue.pop_front();
+    }
+    try {
+        task();
+    } catch (...) {
+        // 与 workerLoop 同款兜底：闭包应自含异常处理（parallelFor 批次闭包自含计账，
+        // 被 runOne 帮跑也正确；jobsync 闭包不抛）。
+    }
+    {
+        std::lock_guard<std::mutex> lk(im.mu);
+        im.cvDone.notify_all();
+    }
+    return true;
+}
+
 void ThreadPool::parallelFor(std::size_t count,
                              const std::function<void(std::size_t, std::size_t)>& body,
                              std::size_t minBatch) {
