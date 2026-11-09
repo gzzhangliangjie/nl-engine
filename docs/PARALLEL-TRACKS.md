@@ -174,13 +174,22 @@
 
 ### 7.1b 待建 worktree（已立项，执行排 P8 场景整合之后）
 
-2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree：
+2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree。**2026-11-09 用户指令提前解锁物理轨道**（见 §7.1e），寻路 / 音频仍排其后。
 
 | 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
 |---|---|---|---|
-| 寻路（NavMesh + A\*，从零写） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md` |
-| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics` | 已立项 `docs/p8/P8-PHYS-PLAN.md` |
+| 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废；新阶梯 = vendored + 封装 + 编辑器结合 + E1 集成） |
+| ~~物理（Jolt vendored 集成）~~ | **已建** `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics`（已建） | **已提前开工**，见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
 | 3D 空间音频（OpenAL Soft + 从零集成层） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md` |
+
+### 7.1e 物理轨道（2026-11-09 提前开工，M-P0~M-P3）
+
+| 轨道 | worktree 绝对路径 | 分支 | 状态 |
+|---|---|---|---|
+| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/physics` | **M-P0 开工中**：vendored Jolt v5.3.1（本地 Carrot `thirdparty/JoltPhysics` 上游副本，MIT，锁版本不升级）+ `nl/physics` 最小世界 + `phys-tools` 落球轨迹；A 类工具版交代，不进 `kStage`/渲染回归 |
+
+- 用户指令「建 feat/physics 开发物理模块内容」= 提前解锁排期闸（计划 §排期约束括号内已允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3（序列化 + Inspector）之后**，不随本轮解锁。
+- 三处口径二次核实（2026-11-09）：Carrot `engine/physics/` 2902 行 Jolt 集成层 + 本地 vendored JoltPhysics **v5.3.1**；bevy 本体无物理 crate（仅 `examples/movement/physics_in_fixed_timestep.rs` 示例），生态 avian，不作口径；UE 5.8.4 只有自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`），**全树无 Jolt 后端**——立项文档里「UE 官方提供 Jolt 后端」为误记，已勘误并落 `UE-DIFFS.md` D10。
 
 ### 7.1c ECS-lite 场景轨道（2026-11-09 立项，E1a 先行）
 

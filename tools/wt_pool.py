@@ -73,7 +73,9 @@ TRACKS = {
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
-        "branch": "feat/physics", "state": "planned",
+        "branch": "feat/physics", "state": "active",
+        "note": "M-P0 opened 2026-11-09 by user instruction (schedule gate lifted); "
+                "M-P5 still gated on P8 E3",
     },
     "audio": {
         "wt": "E:/UE_STUDY_2026/nl-engine-audio",

@@ -83,6 +83,15 @@
 | 我们现状 | 无。微小簇漏画时无兜底（当前资产规模未见可见 artifacts）。 |
 | 升级路径 | 若 M5.x+ 大规模资产出现微小簇闪烁/漏画，评估 S 级软件光栅（工作量大，需单独立项）。 |
 
+### D10 物理求解器：UE 自研 Chaos vs 我们 vendored Jolt（M-P0 建档，2026-11-09；有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 官方物理=自研 **Chaos** 求解器（`Engine/Source/Runtime/Experimental/Chaos/`、`ChaosCore/`、`ChaosSolverEngine/`、`ChaosSpatialPartitions/`、`Runtime/PhysicsCore/`、`Engine/Classes/PhysicsEngine/` 的 `BodyInstance`/`BodySetup`/`ConstraintInstance`）；引擎侧耦合面是 Scene/Actor + `FBodyInstance`，求解、宽相、约束、CCD 全在 Chaos 内。 |
+| 我们现状（M-P0） | 物理走 A 类并行轨道 `feat/physics`：**vendored Jolt Physics v5.3.1（MIT）**，自写集成层（世界生命周期 / 体封装 / 碰撞层 / debug 渲染），求解器一行不自研。UE 5.8.4 源码树中**不存在 Jolt 后端选项**——立项时 `P8-PHYS-PLAN.md` / `NON-RENDER-ROADMAP.md` 里「UE 5.x 官方另提供 Jolt 后端」系误记，本条一并勘误（结论「不自研求解器」不变，依据改为：Carrot 集成层 + bevy 生态第三方 + UE 工业自研三条路径均不要求我们自己写求解器）。 |
+| 定性 | **有意简化**（引擎化阶段）：本项目目标是 Nanite×Lumen 渲染研究，物理只要能验收「物体按物理规律动」，不追 Chaos 的工业完备度（网络物理回滚、ChaosVehicles、GeometryCollection 破碎、CCD 全链路）。 |
+| 升级路径 | 需要 Chaos 级能力（破坏、载具、确定性网络回滚）时单独立项评估，不把 Jolt 换掉当默认；vendored Jolt 版本锁死 v5.3.1，**升级单独走一轮 M-P 验收**（确定性轨迹逐点比对 + 展示台卡全绿）。 |
+
 ## 计划内待办（非偏差，挂账防丢）
 
 - **D8 资产分页 v4**（`NPAG` 页表 + 128KiB 字节预算）：对标 UE `FStreamOutMeshDataHeader`，代码落地排在 **P9 V1**（V1 即写 v4，不破 M3.2 回归基线）。

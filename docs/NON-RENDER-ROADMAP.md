@@ -3,6 +3,7 @@
 > 背景：用户原问题「UE 里还有什么模块能像 nanite+lumen 从头一步步实现」，澄清后范围为**整个引擎层面、非渲染方向的子系统**。本文档用于后续立项参考，非已实现代码。
 >
 > **用户拍板（2026-11-08）：有参考的内容就考虑从头写**——不因「有现成开源库可 vendored」而改走集成路线；参照实现（Carrot 从零参照 / UE 工业终态只读 / 开源库源码）用于对照与节奏校准，不直接拿来用。
+> **2026-11-09 修订（用户拍板）**：本原则对**寻路**例外——改走 **vendored Recast/Detour 集成路线**（工具链成熟 + 要与编辑器结合 + 从零工作量过大），成为继物理之后的第二个例外；其余候选仍按原原则。详 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废留痕）。
 
 ---
 
@@ -24,10 +25,10 @@
 | **ECS 架构 / 模块生命周期** | 中，是地基本身、要先铺 | entity 存储 → system 调度 → 并行 → 模块化插件 | bevy（纯 ECS 范本）/ Carrot（节点式） | ★★★★ 参考强但重构大 |
 | **任务 / Job 并行系统** | 中，跨系统受益 | 线程池 → parallel_for → 任务图依赖 → 抢占 | bevy_tasks(Rayon) / UE TaskGraph | ★★★★ 验收看加速比 |
 | **材质图 → Slang 编译** | 最高，吃 Slang 单源双后端 | 固定管线材质 → 节点图 → 生成 Slang → 热重载 | UE Material Editor / ReaUI | ★★★★ 最贴合技术栈 |
-| **寻路（NavMesh + A\*）** | 中，体素化/高度场与 mesh 管线同源；离线烘焙可与 Job 系统合流 | 体素栅格 → 开放高度场 → 区域划分 → 轮廓提取 → 多边形 NavMesh → A\* 寻路 → 路径平滑（每步 debugDraw 可视化验收） | **Carrot pathfinding（从零 2336 行，管线对照首选）** / UE `Runtime/Navmesh`（Recast v1.4.2 + Detour 工业终态，只读）/ bevy 无原生（生态 bevy_pathfinding） | ★★★★ **已立项 `docs/p8/P8-NAV-PLAN.md`（从零写）；执行排 P8 场景整合（E1）之后** |
+| **寻路（vendored Recast/Detour）** | 中，几何喂给上游 `rcConfig`、集成层挂 `nl/scene`；编辑器吃 ImGui/console cvar 现成基建 | **集成层可见验收**：单模型烘焙 → Detour 查询/路径平滑 → 编辑器调参重烘焙 + `DebugUtils` 五阶段可视化 → E1 多物体场景 / tiled 增量重烘（每步出 PNG 证据） | **上游 recastnavigation（ZLib，1.6.0，Recast/Detour/DebugUtils/DetourTileCache）** / UE `Runtime/Navmesh`（`Recast.tps` 实证 vendored Recast v1.4.2 + Detour，工业做法实证，只读）/ Carrot `pathfinding`（2336 行从零，降级为验收口径与编辑器交互参照）/ bevy 无原生 | ★★★★ **已立项 `docs/p8/P8-NAV-PLAN.md`（2026-11-09 改拍 vendored 集成）；执行排 P8 场景整合（E1）之后** |
 | **GPU 粒子 / VFX** | 高，纯 compute | 单发射器 → 生灭 → SDF 碰撞 → 点/精灵/ribbon 渲染 | UE Niagara / bevy | ★★★ 自闭环 |
 | **3D 空间音频** | 低，独立子系统 | 单声源定位 → 距离衰减 → 遮挡 → 混响卷积 | Steam Audio(开源) / bevy rodio | ★★★ **已立项 `docs/p8/P8-AUDIO-PLAN.md`**（集成层+解码器从零写、设备混音用 OpenAL Soft，参照 Carrot `audio/` 分层）；执行排 P8 场景整合（E1）之后 |
-| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.x 亦提供 Jolt 后端（业界共识：求解器不自研）/ bevy 生态 avian | ★★★ **已立项 `docs/p8/P8-PHYS-PLAN.md`（vendored Jolt 不自研）；执行排 P8 场景整合（E1/E3）之后** |
+| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.8.4 自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/`，只读；**官方无 Jolt 后端**，2026-11-09 实读全树确认，勘误见 `UE-DIFFS.md` D10）/ bevy 本体无物理 crate、生态 avian | ★★★ **已立项 `docs/p8/P8-PHYS-PLAN.md`（vendored Jolt 不自研）；2026-11-09 用户指令提前开工 M-P0~M-P3（worktree `feat/physics` 已建、Jolt 锁 v5.3.1），M-P5 场景集成仍排 P8 E3 之后** |
 | **角色控制器** | 中低 | 胶囊扫掠 → 地面检测 → 斜坡 → 动画衔接 | UE CharacterMovement | ★★★ |
 | **Lua / 脚本 VM 接入** | 低，但参考极多 | 绑定核心 API → 调用渲染 → 游戏逻辑脚本化 | sol2 / 诸多实现 | ★★★ |
 | **网络同步 / 复制** | 低，体量爆炸 | 快照 → 状态同步 → 插值 → 回滚 | bevy_renet / UE replication | ★★ 里程碑不直观 |
@@ -37,10 +38,10 @@
 
 ## 分桶结论
 
-- **第一桶（最值得搞）**：骨骼动画、材质图、GPU 粒子、Job 系统、**寻路（已拍板从零写）**——要么直接吃图形地基，要么参考现成，且每步都能出可见画面/数据。
+- **第一桶（最值得搞）**：骨骼动画、材质图、GPU 粒子、Job 系统——要么直接吃图形地基，要么参考现成，且每步都能出可见画面/数据。**寻路 2026-11-09 移出本桶**（改走 vendored 集成，见下方例外）。
 - **第二桶（能搞但要从零铺一层）**：ECS、3D 音频、Lua——参考丰富，但跟现有 GPU/渲染地基耦合松，等于另开一条线。
 - **第三桶（慎入）**：网络同步、完整编辑器、视觉脚本——参考要么体量爆炸、要么里程碑不直观，容易「写完才算数」。
-- **已拍板例外（2026-11-08）**：物理不进三桶分类，走 **vendored Jolt 集成路线**（三处均不自研求解器，见候选总表）。
+- **已拍板例外（2026-11-08 物理 / 2026-11-09 寻路）**：物理不进三桶分类，走 **vendored Jolt 集成路线**（三处均不自研求解器）；**寻路同样走 vendored Recast/Detour 集成路线**（工具链成熟 + 编辑器结合 + 从零工作量过大，`Recast.tps` 与上游 README 实证工业做法）。两条均见候选总表与各自 `P8-*-PLAN.md`。
 
 ---
 
@@ -55,7 +56,7 @@ Carrot 全模块（按代码规模降序）与本候选文档的覆盖情况：
 | `physics` | 2902 行 | ✅ 本表「物理（Jolt 集成）」条目——**已拍板（2026-11-08）vendored Jolt**，集成方式参照 Carrot | 已覆盖（拍板：不自研） |
 | `vulkan` | 2790 行 | ✅ 双后端纪律 | 已覆盖 |
 | `scripting` | 2465 行 | ✅ 本表「Lua / 脚本 VM」条目 | 已覆盖 |
-| `pathfinding` | 2336 行 | ✅ 本表「寻路」条目（本轮新增） | 已覆盖（候选 ★★★★） |
+| `pathfinding` | 2336 行 | ✅ 本表「寻路」条目——**从零实现仅作验收口径 / 编辑器交互参照**；实现走上游 vendored Recast/Detour（2026-11-09 修订） | 已覆盖（方案已变更） |
 | `audio` | 1358 行 | ✅ 本表「3D 空间音频」条目 | 已覆盖 |
 | `io` | 1133 行（异步资源加载，`AsyncResource`） | ⚠️ 部分——V4 几何分页 + Job 系统已覆盖其核心诉求 | 不单列 |
 | `vr` | 1121 行（Session / HandTracking / VRInterface，OpenXR 式） | ❌ 未覆盖 | **不建议排**：验收依赖 VR 硬件，与项目场景无交集 |
