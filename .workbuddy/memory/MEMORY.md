@@ -57,7 +57,7 @@
 
 ## 并行轨道（详 `docs/PARALLEL-TRACKS.md`，权威）
 - A 类=非渲染（不进 kStage/渲染回归，走工具版交代）；B 类=渲染研究只作主线穿插项。新轨道=新 `feat/*` 分支+新 worktree；收官=全量合回 master+拆 wt+**分支保留**。
-- 状态（2026-11-09）：三轨已收官；console 进行中（M-C0~C2 完成，剩 M-C3 收口）；**ECS 进行中**（`feat/ecs` wt 已建 `E:/UE_STUDY_2026/nl-engine-ecs`，junction 共享，M-E0 完成 tag `ecs-e0`，feat/ecs f36a50b；下一步 M-E1 组件+层级，详 `docs/p8/P8-ECS-PLAN.md`，E1b 渲染集成等 S6 收官后）；寻路/物理/音频已立项 `docs/p8/`，执行排 E1（ECS）之后。
+- 状态（2026-11-09）：三轨已收官；console 进行中（M-C0~C2 完成，剩 M-C3 收口）；**ECS 进行中**（`feat/ecs` wt 已建 `E:/UE_STUDY_2026/nl-engine-ecs`，junction 共享，M-E0/M-E1 完成 tag `ecs-e0`/`ecs-e1`，feat/ecs dc9fadb；下一步 M-E2 System+JSON roundtrip，详 `docs/p8/P8-ECS-PLAN.md`，E1b 渲染集成等 S6 收官后）；寻路/物理/音频已立项 `docs/p8/`，执行排 E1（ECS）之后。
 - **wt_pool 占坑闸**：任务号=里程碑编号；对话开场声明里程碑编号，`python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记后动手；CLOSED 轨道硬拒绝；锁=主树根 `.wt_pool_busy.json`。
 - worktree junction 共享 `.workbuddy` 与 `thirdparty/slang/dist`；**拆 wt 时 junction 只能删链接**（`.NET Directory.Delete(path,false)`/`cmd rmdir`），MSYS `rm -r` 穿透删共享内容。
 
