@@ -1119,7 +1119,7 @@
 
 **动作**：两项用户拍板先行——①金字塔 min→max（三处权威口径：UE `NaniteHZBCull.ush IsVisibleHZB` inverted-Z 取 min=最远表面、bevy `downsample_depth.wesl` reverse-Z 取 min + `occlusion_cull_screen_aabb` 簇最近点比较；S6-PLAN 原文 min 口径在径向距离下不保守会漏画）；②单 dispatch 内联（S6-PLAN 原文方案），bevy 式 HZB second pass 不做（=D3a 升级，触发条件未到）。落地：hiz.slang `csHizDown` min→max + top 语义翻转；dag.slang 新增 `hizOccluded`（Mara&Morgan 精确切线球投影（UE `SphereToScreenRect` 同款）+ bevy `firstLeadingBit` mip 选择 + 4×4 采样 max 聚合 + 簇最近径向距离>区域 hizMax 整树 continue），DagConstants 48B→128B（+g_dagHiz 开关/视口宽 +g_dagView），t8 金字塔 SRV 双 set（dummy/真金字塔互斥，§2.7）；FrameParams 加 view[16]、OrbitCamera 加 view()（与 viewProjection 的 lookAt 同源）；ensureHizTargets 建 dagHizSet_ + just-created 帧内补全 mip 清屏；HizConstants/hizTopFar 三态回读（真实值/-2 背景主导/-1）；HUD `hiz top` 行 farthest depth 语义 + viewer 日志 pyramid top far；kStage bump S6.1。新资产 HizScene（墙+墙后 3 球+侧边对照球，`scripts/make-hiz-scene-glb.py`，6 层 lod 链 check-orient PASS + dag 校验 PASS）。
 
-**提交版本**：`f0dc46c`（M6.1 本体，全量回归闸 240/240 ALL GREEN 跑于该状态）+ `e5fd68c` / `6936862`（台账回填与措辞修正，随改随提交）；tag `s6-cull` 挂在本节终版提交上
+**提交版本**：`f0dc46c`（M6.1 本体，全量回归闸 240/240 ALL GREEN 跑于该状态）+ `e5fd68c` / `6936862`（台账回填与措辞修正）+ `415699e`（kStage bump 重拍基线补交：m0.9/s2-done/s3-done/s4-cull/s4-done/s5-proj/s5-traverse/s5-done 共 18 张 + memory 追加段）+ 本节台账勘误提交；tag `s6-cull` 挂在本节终版提交上（含全部重拍基线与台账）
 
 **完成情况**：
 - 机械判据：正面（yaw 12）墙挡墙后 3 球 → hiz visible **24/85** vs dag 基线 **40/85**（-16 簇整树剔除）；侧面（yaw 75 穿墙）hiz **40/85** == dag（零误剔）；hiz vs dag 正面画面**覆盖层外逐像素 0 差**（剔除对最终画面透明 = 只减被深度测试挡住的簇）；Suzanne 自遮挡 hiz 233/324 vs dag 237/324。
@@ -1136,5 +1136,6 @@
 5. **asset 生成 winding**：首版 HizScene 盒/球绕序内翻（check-orient exit 1，2116/2120 inward worst cos -1.000）——盒面角序未按「外视 CCW」排、球 [a,b,a+1] 绕向反；修正后 PASS。check-orient 是资产管线的硬闸，生成类资产必须过。
 6. **NMake 跳重链**：dag.slang 改后 viewer.exe 未重链（链接依赖未变）→ regression exe 新鲜度门禁拒绝（落后于 dag.slang）；删 exe 强制重链后过闸（§工具 exe 纪律同款）。
 7. 640x720 竖幅把对照球挤出画面（aspect 0.89 → ctrl 球 NDC x 1.61 > 1）——基线改 960x540 让「墙 + 对照球」同框，亲眼可见「剔除选择性」。
+8. **重拍基线漏 add**：f0dc46c 的 add 清单只含 s6 系基线 + cases.json，kStage bump 重拍的其余 8 版本 18 张 PNG 留在工作树（tag 已打、检出会 FAIL）。收口时用 `git log -1 -- <file>` 抽查 PNG 最后提交发现，补交 `415699e` 并 `git tag -f s6-cull` 移至该提交。教训：基线重拍收口时先 `git status -- example/` 全列再 add，逐版本核对最后提交 hash。
 
 **下一步**：M6.2 开关对照 + 验收（ImGui 一键开关 Hi-Z、HUD 剔除前/后簇数与帧时间、S4 1M+ 大模型+挡板帧时间对比；tag `s6-done`，`docs/screenshots/s6.png`）。
