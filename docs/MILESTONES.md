@@ -1151,3 +1151,19 @@
 **踩坑**：①`#include <bitset>` 写进了 namespace nl::scene 里 → MSVC 标准库头在 namespace 内展开全线爆炸（bitset C2061 conditional_t 等十余条）——include 永远在 namespace 外，using 才可进；②`sysPtr->duplicate(w2).get()` 取裸指针后临时 unique_ptr 立即析构 → use-after-free，表现为 ecs-system suite exit 127 且无任何输出（stdout 缓冲随崩溃丢失）——所有权先落 named unique_ptr 再取指针，教训已注释进测试；③组件推送时机的非对称：组件增删**即时**推送 onEntitiesUpdated（挂上 Transform 即收编系统列表，不等 flush），实体增删才走 flush——首轮断言错把列表时机绑 flush FAIL，修断言并在注释留痕（Carrot addComponent 直调 system->onEntitiesUpdated 同口径）；④裸 shell 无 nmake 环境（cmake --build 直接炸 generator），构建必须走 build-m0.2.bat（第二次踩，已彻底记住）；⑤duplicate 返回 unique_ptr<System>，auto 推导后访问派生成员 C2039——先 static_cast 再访问。
 
 **下一步**：M-E3 收口——展示台 tool 卡（usage/正向/负向三用例 expectExit 0/1/2）+ `docs/p8/ECS-TOOLS-GUIDE.md` 归档 + MILESTONES 四栏 + tag + feat/ecs 全量 merge 回 master + 注册表同步（AGENTS/PARALLEL-TRACKS/wt_pool）。
+
+## M-E3：收口段（feat/ecs，2026-11-09，tag `ecs-e3`）
+
+**动作**：wt_pool claim（track ecs / M-E3）→ 重读判据（cases.json tool 卡三用例 + §7.2 文档闸 + 注册表同步）→ 真实输出留档（四用例实跑重定向 `example/ecs-e1a/*.log`：usage exit 2 / system+serial exit 0 / badjson exit 2 显式拒绝）→ `nanite-scene` 加 `--verbose`（断言成功逐条打印 ok 行，证据图数据源；expectQuat 顺带改单行输出防 4 连刷屏）→ 测试断言字符串全量 ASCII 化（工具输出纪律同 HUD：证据图 Consolas 无中文字形；注释中文保留）→ `tools/make-ecs-evidence.py`（Pillow terminal 风格，标题参与宽度计算防截断 + 超长行自动折行，全部内容来自真实日志）→ 4 张证据图逐张亲眼验收（首轮发现中文方框 + 标题截断两处，修复后复验）→ `example/ecs-e1a/run.bat`（四 suite + 负向 exit 2 校验 + 证据图重生成，ALL GREEN exit 0）→ `example/cases.json` 追加 `p8-ecs` 版本卡 4 条（usage/system/serial/negative，expectExit 2/0/0/2 + expectLog 锁死；**文本级插入**：先对齐 master 版（M6.1 max 口径修正 + s6.1 新版本），再在 versions 尾部追加，master 段逐条相等断言防 diff 噪音——首轮 json.dumps 全量重写产生 26 行 s6.0/s6.1 args 数组展开假 diff，checkout 重做）→ `docs/p8/ECS-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag `ecs-e3` → merge 回 master + 注册表同步（AGENTS / PARALLEL-TRACKS §7.1c / wt_pool）。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e3`，即本条台账所在提交）；master 侧 merge commit 见 PARALLEL-TRACKS §7.1c ECS 行。
+
+**完成情况**：run.bat ALL GREEN exit 0（四 suite 全过 + usage/badjson exit 2 校验 + good exit 0 + 证据图重生成）；4 张证据图亲眼验收无重叠/截断/乱码（usage 861×336 / system 696×532 / serial 1008×896 / negative-badjson 1158×224）；cases.json `p8-ecs` 卡 4 条 tool 用例 args/expectExit/expectLog 与真实行为逐条对上（usage 首行 "usage:" 实测核对）；ctest 8/8 不回退。收口四项自查：①渲染交代物——**无**（E1a 纯逻辑零渲染，无截图无 example 基线卡；渲染集成在 E1b 等 S6 收官）；②工具交代物——**本轮有**：展示台 p8-ecs 版本卡 4 条（含 preview 证据图）+ run.bat + 4 张证据图 + ECS-TOOLS-GUIDE + --verbose 逐断言输出；③MILESTONES 四栏（本节）；④固化——P8-ECS-PLAN M-E3 标完成 + TOOLS-GUIDE 踩坑存档 6 条 + 注册表同步留痕。
+
+**踩坑情况**
+1. 证据图首轮两处缺陷（中文断言字符串在 Consolas 下成方框；标题未参与画布宽度计算被截断）——生成器「脚本没报错」不等于产物可用，逐张亲眼验收是硬纪律；测试字符串 ASCII 化 + 生成器修宽度/折行后复验全过。
+2. `cases.json` 全量 json.dumps 重写会把紧凑 `args` 数组展开成 26 行假 diff（p8-jobs 支线同款坑复发）——改文本级插入：以 master 现文本为底、versions 尾部追加、`d['versions'][:32] == orig['versions']` 断言 master 段逐字节不动。
+3. wt 内 `git diff cases.json` 的 26 删不是本次改动——是 wt 基线（e283b86）落后 master（M6.1 修正）的表现；diff 基线是 wt HEAD 不是 master，判噪音前先看清和谁比。
+4. expectLog 必须与真实输出首行核对（usage 卡初版写了臆造的 banner 行，实测首行是 "usage:"，已改）。
+
+**下一步**：E1a 全链收口（merge 回 master + 注册表同步）；E1b（viewer 加载场景文件渲染 + ModelComponent/LightComponent）等 S6 收官（tag `s6-done`）后另编号开工。

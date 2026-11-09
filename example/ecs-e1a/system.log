@@ -1,0 +1,15 @@
+  ok register collects signature-matching entities
+  ok non-matching entity not collected
+  ok component add collects immediately (instant push)
+  ok unchanged after flush (already listed)
+  ok component add -> auto join list
+  ok component remove -> auto leave list
+  ok still in list right after remove
+  ok removed entity leaves list after flush
+  ok firstTick exactly once
+  ok tick count == 2
+  ok dt passed through
+  ok system signature has Transform bit
+  ok duplicate copies tick count
+  ok duplicate starts with empty list (new world has no entities)
+ecs-system selftest: PASS

@@ -1,0 +1,28 @@
+  ok deserialise succeeds
+  ok roundtrip byte-identical (M-E2 hard criterion)
+  ok ids preserved
+  ok name preserved
+  ok A root preserved
+  ok B.parent == A preserved
+  ok C.parent == B preserved
+  ok Hidden flags preserved
+  ok C local position preserved
+  ok C local scale preserved
+  ok C local rotation preserved
+  ok B rotation preserved (float->double->float lossless)
+  ok world matrix rebuilt identically
+  ok system restored
+  ok system serialise data restored
+  ok restored system collects 3 transform entities
+  ok nextID preserved (no id reuse)
+  ok unknown component rejected
+  ok err names unknown component
+  ok unknown parent rejected
+  ok err names unknown parent
+  ok unknown system rejected
+  ok err names unknown system
+  ok bad version rejected
+  ok err names version problem
+  ok duplicate id rejected
+  ok err names duplicate id
+ecs-serial selftest: PASS

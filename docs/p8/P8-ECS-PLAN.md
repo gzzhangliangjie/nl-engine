@@ -1,6 +1,6 @@
 # P8-ECS-PLAN — ECS-lite 场景系统（P8 E1 拆分段）
 
-> A 类并行轨道（非渲染 / 引擎化），固定 worktree `feat/ecs`（`E:/UE_STUDY_2026/nl-engine-ecs`，待建）。
+> A 类并行轨道（非渲染 / 引擎化），固定 worktree `feat/ecs`（`E:/UE_STUDY_2026/nl-engine-ecs`，已建，junction 共享）。
 > 2026-11-09 用户拍板立项：**Carrot 式 OOP 组件路线**；E1a（纯逻辑内核）先行开 worktree，E1b（接 viewer 渲染）后挂等 S6 收官。
 > 动机：寻路 / 物理 / 音频三条已立项轨道全部依赖场景整合（P8 E1），E1 是下游瓶颈，提前做 = 提前解锁三条轨（2026-11-08 排期拍板只把三条下游排在 E1 **之后**，未禁止 E1 提前）。
 > 对应总路线 `docs/ROADMAP.md` 阶段 P8 表 E1 行；并行纪律见 `AGENTS.md`「并行轨道 worktree 纪律」与 `docs/PARALLEL-TRACKS.md` §7。
@@ -39,7 +39,7 @@
 | **M-E0** | World/Entity 核心：实体创建（递增 ID）/ 延迟增删 flush / 名字 / Flags(Hidden) / exists / getAllEntities；`nanite-scene` 工具骨架 + `selftest --suite ecs-core` | selftest 断言绿：增删 flush 前后存在性、名字读写、Hidden 过滤；tick 中删实体下一 tick 生效（延迟语义锚点）**✅ 已完成**（2026-11-09，feat/ecs tag `ecs-e0`：ctest e0 系 2/2，四栏台账 MILESTONES M-E0 节） |
 | **M-E1** ✅ 已完成（feat/ecs tag `ecs-e1`，2026-11-09） | Component 基类（serialise/deserialise/duplicate/getComponentTypeID）+ ComponentLibrary 注册工厂 + `Transform`（pos/scale/quat）+ 层级：setParent / reparent 保世界变换 / 父删递归删子 / local→world 复合 | selftest 锚点：三层父子链复合矩阵数值锚（手算对照）；reparent 后世界变换不变；删父后子不存在；**duplicate 实体含组件深拷贝 |
 | **M-E2** ✅ 已完成（tag `ecs-e2`，2026-11-09） | System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ `SignedSystem<Required...>` + 场景 JSON 序列化/反序列化 **roundtrip 字节一致** | selftest：System 只收 Signature 匹配实体（加/删组件自动进出列表）；roundtrip = `serialise→deserialise→serialise` 逐字节一致（正/负向：非法 JSON / 未知组件名显式退出码 2） |
-| **M-E3** | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json tool 卡三用例全过；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |
+| **M-E3** ✅ 已完成（2026-11-09，tag `ecs-e3`） | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json `p8-ecs` 卡 4 条全过（expectExit 2/0/0/2）+ run.bat ALL GREEN + 4 张证据图亲眼验收；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |
 
 ## E1b 后挂段（渲染集成，不在本 worktree 范围）
 

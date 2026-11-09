@@ -1,0 +1,8 @@
+usage:
+  nanite-scene selftest --suite <name> [--verbose]
+  nanite-scene deserialise-check <good|badjson|unknown>
+suites:
+  ecs-core    M-E0 World/Entity core (deferred add/remove, names, Hidden flags)
+  ecs-hier    M-E1 components + hierarchy (world-matrix anchors, reparent, duplicate)
+  ecs-system  M-E2 systems (signature matching, auto list, firstTick/tick)
+  ecs-serial  M-E2 scene roundtrip (byte-identical, explicit rejections)

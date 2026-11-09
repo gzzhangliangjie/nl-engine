@@ -33,21 +33,26 @@
 namespace {
 
 int g_failures = 0;
+bool g_verbose = false; // --verbose：断言成功也逐条打印（证据图数据源；默认只报 FAIL + 总结）
+
+inline void verboseOk(const char* what) {
+    if (g_verbose) std::printf("  ok %s\n", what);
+}
 
 void expectTrue(bool ok, const char* what) {
-    if (ok) return;
+    if (ok) { verboseOk(what); return; }
     std::printf("  FAIL %s\n", what);
     ++g_failures;
 }
 
 void expectSize(size_t got, size_t want, const char* what) {
-    if (got == want) return;
+    if (got == want) { verboseOk(what); return; }
     std::printf("  FAIL %s: got %zu want %zu\n", what, got, want);
     ++g_failures;
 }
 
 void expectId(nl::scene::EntityID got, nl::scene::EntityID want, const char* what) {
-    if (got == want) return;
+    if (got == want) { verboseOk(what); return; }
     std::printf("  FAIL %s: got %llu want %llu\n", what,
                 static_cast<unsigned long long>(got),
                 static_cast<unsigned long long>(want));
@@ -55,32 +60,37 @@ void expectId(nl::scene::EntityID got, nl::scene::EntityID want, const char* wha
 }
 
 void expectStr(const std::string& got, const char* want, const char* what) {
-    if (got == want) return;
+    if (got == want) { verboseOk(what); return; }
     std::printf("  FAIL %s: got \"%s\" want \"%s\"\n", what, got.c_str(), want);
     ++g_failures;
 }
 
 void expectNear(float got, float want, float eps, const char* what) {
-    if (std::fabs(got - want) <= eps) return;
+    if (std::fabs(got - want) <= eps) { verboseOk(what); return; }
     std::printf("  FAIL %s: got %.6f want %.6f (eps %g)\n", what, got, want, eps);
     ++g_failures;
 }
 
 void expectVec3(nl::math::Vec3 got, nl::math::Vec3 want, float eps, const char* what) {
     if (std::fabs(got.x - want.x) <= eps && std::fabs(got.y - want.y) <= eps &&
-        std::fabs(got.z - want.z) <= eps) return;
+        std::fabs(got.z - want.z) <= eps) { verboseOk(what); return; }
     std::printf("  FAIL %s: got (%.6f, %.6f, %.6f) want (%.6f, %.6f, %.6f)\n",
                 what, got.x, got.y, got.z, want.x, want.y, want.z);
     ++g_failures;
 }
 
 void expectQuat(nl::math::Quat got, nl::math::Quat want, float eps, const char* what) {
-    // 双覆盖对齐：dot < 0 时取反再比（同一旋转的另一半）。
+    // 双覆盖对齐：dot < 0 时取反再比（同一旋转的另一半）；单条断言单行输出。
     if (nl::math::dotQuat(got, want) < 0.0f) {
         got = { -got.x, -got.y, -got.z, -got.w };
     }
-    expectNear(got.x, want.x, eps, what); expectNear(got.y, want.y, eps, what);
-    expectNear(got.z, want.z, eps, what); expectNear(got.w, want.w, eps, what);
+    if (std::fabs(got.x - want.x) <= eps && std::fabs(got.y - want.y) <= eps &&
+        std::fabs(got.z - want.z) <= eps && std::fabs(got.w - want.w) <= eps) {
+        verboseOk(what); return;
+    }
+    std::printf("  FAIL %s: got (%.6f, %.6f, %.6f, %.6f) want (%.6f, %.6f, %.6f, %.6f)\n",
+                what, got.x, got.y, got.z, got.w, want.x, want.y, want.z, want.w);
+    ++g_failures;
 }
 
 void expectMat4(const nl::math::Mat4& got, const nl::math::Mat4& want, float eps,
@@ -93,6 +103,7 @@ void expectMat4(const nl::math::Mat4& got, const nl::math::Mat4& want, float eps
             return;
         }
     }
+    verboseOk(what);
 }
 
 using nl::scene::Entity;
@@ -108,8 +119,8 @@ void testCreateIncrementIds() {
     Entity a = w.newEntity("a");
     Entity b = w.newEntity("b");
     expectId(a.getID(), 1, "first id == 1");
-    expectId(b.getID(), 2, "second id == 2 (递增)");
-    expectTrue(a.exists(), "new entity exists immediately (名字表即时登记)");
+    expectId(b.getID(), 2, "second id == 2 (increment)");
+    expectTrue(a.exists(), "new entity exists immediately (name table instant)");
     expectTrue(w.exists(a.getID()) && w.exists(b.getID()), "world.exists by id");
     expectTrue(!w.exists(0), "kInvalidEntity(0) does not exist");
     expectTrue(!w.exists(99), "unknown id does not exist");
@@ -133,11 +144,11 @@ void testDeferredAddRemoveFlush() {
 
     // 延迟删除锚点：removeEntity 只排队，flush（下一次 tick）才生效
     a.remove();
-    expectTrue(a.exists(), "exists still true right after remove (延迟)");
+    expectTrue(a.exists(), "exists still true right after remove (deferred)");
     expectSize(w.getAllEntities().size(), 2, "list unchanged before flush");
 
     w.tick(1.0 / 60.0);
-    expectTrue(!a.exists(), "exists false after next tick (延迟语义锚点)");
+    expectTrue(!a.exists(), "exists false after next tick (deferred anchor)");
     expectTrue(b.exists(), "survivor still exists");
     expectSize(w.getAllEntities().size(), 1, "getAllEntities == 1 after removal flush");
     expectStr(w.getName(a.getID()), "", "name of removed entity is empty");
@@ -158,11 +169,11 @@ void testNames() {
     Entity a = w.newEntity("root");
     Entity b = w.newEntity(); // 默认名
     expectStr(a.getName(), "root", "getName initial");
-    expectStr(b.getName(), "<unnamed>", "default name (Carrot 口径)");
+    expectStr(b.getName(), "<unnamed>", "default name (Carrot convention)");
 
     // 名字表即时登记，但 findEntityByName 扫全局实体表（flush 后才有）——Carrot 口径
     expectTrue(!w.findEntityByName("root").has_value(),
-               "findEntityByName before flush misses (实体表延迟)");
+               "findEntityByName before flush misses (entity table deferred)");
     w.tick(0.0); // flush
 
     a.updateName("renamed");
@@ -196,7 +207,7 @@ void testFlagsHidden() {
 
     // 隐藏 a：still exists（隐藏 != 删除），过滤查询只含未隐藏者
     a.setFlags(EntityFlags::Hidden);
-    expectTrue(a.exists(), "hidden entity still exists (隐藏不是删除)");
+    expectTrue(a.exists(), "hidden entity still exists (hide is not delete)");
     expectTrue(!a.isVisible(), "isVisible false after setFlags(Hidden)");
     expectSize(w.getEntitiesWithFlags(EntityFlags::Hidden).size(), 1,
                "getEntitiesWithFlags(Hidden) == 1");
@@ -344,7 +355,7 @@ void testReparentKeepsWorldTransform() {
     q.reparent(p.getID());
     expectTrue(q.getParentID() == p.getID(), "reparent under transform-less parent works");
     expectVec3(tq->getWorldPosition(), { 5.0f, 0.0f, 0.0f }, kEps,
-               "transform-less parent passes local through (Carrot 断链口径)");
+               "transform-less parent passes local through (Carrot)");
 }
 
 // ---------------------------------------------------------------------------
@@ -357,11 +368,11 @@ void testRemoveParentRecursesChildren() {
     buildChain(w, a, b, c);
 
     b.remove(); // 删 B（C 是 B 的子）
-    expectTrue(b.exists() && c.exists(), "still exists right after remove (延迟)");
+    expectTrue(b.exists() && c.exists(), "still exists right after remove (deferred)");
 
     w.tick(0.0); // flush
     expectTrue(!b.exists(), "B removed after flush");
-    expectTrue(!c.exists(), "C recursively removed with parent (父删递归删子锚点)");
+    expectTrue(!c.exists(), "C recursively removed with parent (anchor)");
     expectTrue(a.exists(), "A survives");
     expectSize(w.getAllEntities().size(), 1, "only A left");
 
@@ -379,12 +390,12 @@ void testDuplicateDeepCopy() {
     buildChain(w, a, b, c);
 
     Entity dup = b.duplicate();
-    expectStr(dup.getName(), "B (Copy)", "duplicate name suffix (Carrot 口径)");
+    expectStr(dup.getName(), "B (Copy)", "duplicate name suffix (Carrot)");
     expectTrue(dup.getParentID() == a.getID(), "copy inherits source parent");
 
     // 子孙递归：副本应有 1 个直接子 "C (Copy)"
     auto kids = dup.getChildren();
-    expectSize(kids.size(), 1, "copy has 1 child (递归深拷)");
+    expectSize(kids.size(), 1, "copy has 1 child (deep copy)");
     if (!kids.empty()) {
         expectStr(kids[0].getName(), "C (Copy)", "grandchild copy name");
         // 副本孙的世界矩阵 = 原孙世界矩阵（同父同局部）
@@ -406,7 +417,7 @@ void testDuplicateDeepCopy() {
     // 深拷独立性：改副本不影响原件
     dupTb->local.position = { 9.0f, 9.0f, 9.0f };
     expectVec3(origTb->local.position, { 0.0f, 1.0f, 0.0f }, kEps,
-               "source unaffected by copy mutation (深拷独立)");
+               "source unaffected by copy mutation (independent)");
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +438,7 @@ void testComponentLibrary() {
         expectTrue(comp->getComponentTypeID() == TransformComponent::typeID(),
                    "created component type id matches");
         expectTrue(comp->getName() == std::string("Transform"), "created component name");
-        expectTrue(lib.create("Nope", e) == nullptr, "create unknown -> nullptr (M-E2 负向铺垫)");
+        expectTrue(lib.create("Nope", e) == nullptr, "create unknown -> nullptr (M-E2 negative groundwork)");
     }
 
     // 类型 ID 唯一且稳定（Signature 位对应的前提）
@@ -513,9 +524,9 @@ void testSystemSignatureMatching() {
     // 实体表才延迟——d 有 Transform 即匹配进列表，不等 flush；非对称留痕）
     Entity d = w.newEntity("d");
     d.addComponent(std::make_unique<TransformComponent>(d));
-    expectSize(sysPtr->getEntities().size(), 3, "component add collects immediately (即时推送)");
+    expectSize(sysPtr->getEntities().size(), 3, "component add collects immediately (instant push)");
     w.tick(0.016); // flush：d 落表 + firstTick + 第一次 tick
-    expectSize(sysPtr->getEntities().size(), 3, "unchanged after flush (已在列表)");
+    expectSize(sysPtr->getEntities().size(), 3, "unchanged after flush (already listed)");
 
     // 组件增删自动进出列表（即时推送 onEntitiesUpdated）
     b.addComponent(std::make_unique<TransformComponent>(b));
@@ -596,7 +607,7 @@ void testRoundtripByteIdentical() {
         return;
     }
     const std::string dump2 = w2.serialise().dump();
-    expectTrue(dump1 == dump2, "roundtrip byte-identical (M-E2 硬判据)");
+    expectTrue(dump1 == dump2, "roundtrip byte-identical (M-E2 hard criterion)");
     if (dump1 != dump2) {
         std::printf("  dump1: %s\n  dump2: %s\n", dump1.c_str(), dump2.c_str());
     }
@@ -799,7 +810,7 @@ int runDeserialiseCheck(const std::string& mode) {
 
 void printUsage() {
     std::printf("usage:\n"
-                "  nanite-scene selftest --suite <name>\n"
+                "  nanite-scene selftest --suite <name> [--verbose]\n"
                 "  nanite-scene deserialise-check <good|badjson|unknown>\n"
                 "suites:\n"
                 "  ecs-core    M-E0 World/Entity core (deferred add/remove, names, Hidden flags)\n"
@@ -829,13 +840,16 @@ int main(int argc, char** argv) {
         printUsage();
         return 2;
     }
-    // selftest --suite <name>
+    // selftest --suite <name> [--verbose]
     std::string suite;
     bool haveSuite = false;
-    for (int i = 2; i + 1 < argc; i += 2) {
-        if (std::string(argv[i]) == "--suite") {
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--suite" && i + 1 < argc) {
             suite = argv[i + 1];
             haveSuite = true;
+            ++i;
+        } else if (std::string(argv[i]) == "--verbose") {
+            g_verbose = true;
         }
     }
     if (!haveSuite) {
