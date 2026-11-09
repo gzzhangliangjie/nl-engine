@@ -1334,6 +1334,85 @@
 
 **下一步**：轨道收官。wt（nl-engine-console）按 §7.1b 保留分支拆 worktree；M-C4 级别的后续（命令自动补全模糊匹配、日志导出等）不在本计划，需要时另立项。
 
+## P8 M-E1b.0：ECS 渲染集成（feat/ecs 轨道，2026-11-09）
+
+**动作**
+- S6 主线（Hi-Z / console M-C0~C3 / check-orient 加速）快进合入 `feat/ecs` worktree，双树重建 + `nanite-scene selftest --all` 四 suite 全绿。
+- `ModelComponent`（mesh 路径 + tint）/ `LightComponent`（direction + color + intensity）纯数据组件进 `nl/scene`，零图形符号纪律不破；`nanite-scene` ecs-serial suite 补 Model/Light roundtrip 字段级断言。
+- `viewer --scene <World JSON>`：`World::deserialise` 加载 → O(N) 遍历收集 → `Renderer::loadEcsScene` → `Scene::initScene` 按 meshFile 分组实例化。新入口对 `vsScene/psScene` + t5 实例缓冲 / t6 灯缓冲，既有 shader 入口与既有 draw 路径逐字节不动。
+- **用户拍板两条**：① 多灯 = 方向灯数组（点光源留给 pbr-direct merge 后）；② 照 console 轨道先例，**kStage 保持 S6.2 一字不动**，证据走 example 卡 + 截图 + `--only` 抽查。
+- 三处参考口径（Carrot ModelRenderSystem 双签名收集 + ModelComponent 路径 / bevy PointLight 纯数据灯 / UE ULightComponent 多灯注册）一致指向「组件纯数据 + 渲染侧收集」。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.0`）；主线 master 不合并（E1b 尚有后续分段，轨道未收官）。
+
+**完成情况（四项自查）**
+1. `example/ecs-e1b/`：`ecs-e1b.scene`（5 物体 + 3 灯，ambient 0.22）/ `run.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-DX12.png` + `shot-VULKAN.png` 基线 + 双后端 `.log`；`example/cases.json` 加 `ecs-e1b` 版本卡（pair 用例，args 用 `{root}` 绝对路径）。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS，双树 `BUILD OK`；`server.py --check` 退出 0（stage=S6.2 cases=5 baselines=12）。
+3. 台账：本段即四栏。
+4. 固化：`docs/p8/P8-ECS-PLAN.md` E1b 段标完成 + `docs/p8/ECS-TOOLS-GUIDE.md` M-E1b.0 节（含踩坑存档）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-dx12.png` / `ecs-e1b-vulkan.png`（归档，卡片直接展示）；肉眼核验 5 个 Suzanne 红绿蓝黄白、不同 TRS、顶面亮侧面暗的方向光层次。
+- 验收数字：双后端 `5 objects | 3 lights | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes ALL GREEN；抽查 `--only s6.2` 10/10 bytes ALL GREEN（既有路径零回归，kStage 未动）。
+
+**踩坑情况（本轮七条，前三条是 E1a 遗留隐藏 bug，一加渲染组件就爆）**
+1. **组件类型 ID 全为 0**：`ComponentOf<T>::nextTypeID()` 的 `static next` 写在类模板成员函数里 → 每个 T 各持一份计数器，所有组件都拿 id=0。后果：`getComponent<Light>` 把槽 0 上的 Model 强行 `static_cast` 后读内存（虚假灯数 + 稳定段错误 139）。修：计数器移到非模板 `inline allocateComponentTypeID()`（inline 函数级 static 全程序唯一）。E1a 只 3 个组件时未暴露，E1b 加两个组件才炸——**类型 ID 分配必须有多类型隔离的正向断言**。
+2. **BindingSet 早于缓冲创建**：`createBindingSet` 把还没建的 `sceneInstances_/sceneLights_` 绑进去，NVRHI 报 `Null resource bindings are not allowed for buffers` → load 失败。修：BindingSet 创建延后到两个缓冲建好之后（新增第 5.5 步）。
+3. **实例计数从没赋值**：`batchObjects` 分组收集了，但 `SceneMeshBatch::instanceStart/instanceCount` 保持默认 0，且实例数据按 objects 原序而非按 batch 连续排布 → `InstanceCount = 0` 空画面 + deviceErrors=8。修：实例数据按 batch 分组连续写入并顺带落两个计数字段。
+4. **多灯强度直接相加过曝**：ΣI≈4.7 经 `min(...,1.0)` 后全画面饱和，三灯的方向/色温差别完全看不出（等于没实现多灯）。修：按总强度归一化成加权平均（`1/ΣI` 由 CPU 预算进灯缓冲 [0].z，shader 只做乘法，避免 DXIL/SPIR-V 除法微差）；绝对强度/曝光留作 pbr-direct 升级项。
+5. **联合包围球第一个球漏算半径**：`first` 分支把 gmn/gmx 直接设为球心而非 ±r → 自动取景偏近。修：首球也按 ±r 展开。
+6. **回归以 exe 目录为 cwd**：`--scene example/...` 相对路径解析到 `build/DX12/example/...` → exit 2。修：用 `{root}` 占位符（仓库内文件引用的唯一白名单方式），`command` 文本同步。
+7. **Windows 大小写不敏感误删**：清理临时探针时用小写 `shot-dx12.png` 命中了真实基线 `shot-DX12.png`。修：立刻重拍恢复；**清理命令绝不用大小写近似名**。另：cases.json 是 CRLF，文本级插入锚点必须先归一化换行符。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 2/2）；两后端画面互比 `diffPixels=3 / maxDelta=2`，按项目 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**（GPU 取整噪声，非画面差异）；已去掉 shader 内多余的 `normalize` 与归一化除法仍存在，留作后续精度项。
+
+**下一步**：E1b 后续分段（E1b.1+，如点光源 / 材质响应 / 更多实体压力）或轨道收官 merge 回 master，按用户指令。wt_pool M-E1b.0 占坑已 release。
+
+---
+
+## M-E1b.1 — ECS 场景规模锚（50 物体 + 8 方向灯）（2026-11-09）
+
+**动作**：按 `docs/p8/P8-ECS-PLAN.md` 目标「50 物体 + 8 灯规模」把 `viewer --scene` 推到计划规模：10×5 网格 × 4 种 mesh（13/13/12/12 实例）= 4 个 batch、8 盏方向灯，共 58 实体。三处参考定向复核多实例 / 多灯容器均无硬上限（Carrot `ModelRenderSystem::renderModels` 逐实体 `parallelForEachEntity` 构造 `InstanceData`、UE `ScenePrivate.h` 的 `TArray<FLightSceneInfo*, TInlineAllocator<4>> DirectionalLights` + `AddLight/BatchAddLights` 动态数组、bevy clustered forward 未找到方向灯硬编码上限），故不改架构、只扩场景数据。结果暴露并修掉 M-E1b.0 的多 batch 实例化 bug（踩坑①）。kStage 保持 S6.2 不 bump。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.1`）；**不 merge 回 master**——master 此刻压着并行会话的 S7 vis buffer 在途 WIP（`CMakeLists.txt` / `renderer/*` / `viewer/main.cpp` 全脏且与 E1b 文件高度重叠），且 E1 轨道尚未整体收官。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-scale.scene`（58 实体）/ `run-scale.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-scale-DX12.png` + `shot-scale-VULKAN.png` + 双后端 `.log`；`example/cases.json` 在 `ecs-e1b` 卡加 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图（`docs/screenshots/ecs-e1b-scale-{dx12,vulkan}.png`）。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 规模锚标达成、`ECS-TOOLS-GUIDE.md` M-E1b.1 节、`SHADER-CONVENTIONS.md` 新增 §2.10（禁依赖 `startInstanceLocation` 的 `SV_InstanceID` 语义）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-scale-dx12.png` / `ecs-e1b-scale-vulkan.png`；肉眼核验 10×5 网格 50 个物体完整、4 种形状（猴头 / 棋盘球 / 环面 / 水滴）、彩虹色相全覆盖、无遮挡缺失，双后端布局一致。
+- 验收数字：双后端 `50 objects | 8 lights | batches=4 | triangles=540352 | deviceErrors=0`；`regression.py --only ecs-e1b` **4/4 bytes**（scene + scale 两卡）、抽查 `--only s6.2` **10/10 bytes**；M-E1b.0 既有基线复拍 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **多 batch 全部读实例槽 0（M-E1b.0 遗留隐藏 bug，单 batch 未暴露）**：旧实现把全场实例放一个 `sceneInstances_`，靠 `DrawArguments::setStartInstanceLocation(batch.instanceStart)` 划窗口，认定 `SV_InstanceID` 会是全局槽号。**DX12 实际不把 `StartInstanceLocation` 计入 `SV_InstanceID`** → 4 个 batch 全读槽 0..12，画面只剩 13 个物体、颜色却覆盖全色相环（连续排布的前 13 槽恰是第一个 batch 的实例）。2-batch 最小探针（两实例 x=±4）叠成一个 blob 定性；连通域统计 13 团与 `(col+row)%4==0` 的 13 个实例位置一一对应。修：**每个 batch 各持自己的 t5 实例缓冲**，`SV_InstanceID` 0-based 直接按 `id*5` 寻址，draw 不再设 `startInstanceLocation`。没走「同一 buffer 绑 SRV 子范围」是因为 Vulkan `minStorageBufferOffsetAlignment` 常为 64B 而批次起点按 80B 递增会踩对齐。单 batch 行为与 M-E1b.0 同构 → 既有基线无需重拍（实测 MD5 一致）。
+2. **自动取景被高密度 mesh 撑远**：联合包围球按各 mesh 局部球 × 实例尺度取并集，`IcoSphereDense` / `TorusKnotDense` 把半径拉大，`camDist = sph[3]*2.4` 让 50 物体挤在画面中央（x 250..740 / y 150..390），四周大片空白。修：规模卡固定 `--dist 18`（viewer 已有参数，不改自动取景公式、普通场景行为不变）；试 14/18/22 三档，18 铺满且不裁切。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 4/4）；两后端画面互比 `scale` = `diffPixels=6 / maxDelta=23`，按 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**。逐像素拆解：5 个是 ±1 取整噪声，第 6 个 `(690,369)` 是绿色环面边缘覆盖差（±23），属 GPU 边缘取整而非光照 / 几何差异。`scene` 卡互比仍 3px/maxDelta2（M-E1b.0 已知项）。精度项继续留痕，不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需等 master 的 S7 vis buffer WIP 提交且工作区干净）；或 E1b.2 点光源 / 材质响应（用户拍板留 pbr-direct merge 后）。wt_pool M-E1b.1 占坑已 release。
+
+---
+
+## M-E1b.2 ECS 场景点光源（2026-11-09）
+
+**动作**：`LightComponent` 扩展 `type`（0=Directional 默认 / 1=Point）、`position`（世界位置）、`range`（衰减截断半径）；`SceneLightDesc` 尾部追加同三个字段；t6 灯缓冲由每灯 2 个 float4 扩为 **3 个**（`{dir,I}`、`{color,type}`、`{position,InvRadius}`），头 slot 增 `pointCount`；`vsScene` 增 `WORLDPOS` 插值量，`psScene` 按 type 分支。点光衰减逐条照抄 UE `DeferredLightingCommon.ush:480-486` 实读公式（`1/(d²+1) × Square(saturate(1-Square(d²·InvRadius²)))`、`L=ToLight*rsqrt(d²)`、单面 `max(dot(N,L),0)`）；`InvRadius=1/range` 由 CPU 预算，shader 不做灯参数除法。点光按绝对强度**独立累加**、不进方向灯的 `1/ΣI` 归一化（否则 `att<<1` 会把点光压没）；无点光时 `psScene` 走 M-E1b.0 原表达式分支保护既有基线。三处参考定向实读：Carrot `GPULight::LightType` 枚举 + union（组件纯数据、灯池在渲染侧）、bevy `bevy_light/src/point_light.rs` `PointLight{color,intensity,range,radius}`、UE `UPointLightComponent` `bUseInverseSquaredFalloff` + `AttenuationRadius` + `LightFalloffExponent`。**不 merge master**：只读 `git merge-tree` 探查显示同步会撞至少 12 个文件冲突（S7 visbuf + pbr-direct 与 E1b 的 `renderer/*` / `model.slang` / `modes.hpp` 全重叠），本轮与 E1b.0/1 同构留在 wt 基线；因此点光暂为 Lambert 响应，PBR 材质响应留轨道收官 merge 后。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.2`）；**不 merge 回 master**（轨道未整体收官）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-point.scene`（7 白模 + 3 彩色点光 + 1 弱方向灯 = 11 实体）/ `run-point.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-point-{DX12,VULKAN}.{png,log}`；`example/cases.json` 在 `ecs-e1b` 卡加 `point` pair 用例与 3 条 acceptance；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染验证）；`nanite-scene selftest --all` 四 suite 在 DX12/VULKAN 双树各 PASS（ecs-serial 新增实体 E 点光字段逐字段 roundtrip + 方向灯不带新键断言）；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 段补 M-E1b.2、`ECS-TOOLS-GUIDE.md` 新增 M-E1b.2 节、`SHADER-CONVENTIONS.md` 新增 §2.11（灯缓冲布局 / 衰减公式 / 归一化 / 向后兼容铁律）、`UE-DIFFS.md` 追加 `D-E1b-1`（轨道局部编号，避开主线 D10~D15 撞号）、两张新证据图 + 两张重拍 scale 图归档 `docs/screenshots/`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-point-{dx12,vulkan}.png`；肉眼核验 7 个 Suzanne 一字排开，颜色由左至右呈红 → 红绿 → 绿 → 绿蓝 → 蓝的连续光池，近灯亮远灯暗，无过曝、无缺失，双后端布局与像素完全一致。
+- 验收数字：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` **6/6 bytes**（scene/scale/point 三卡 × 双后端）、抽查 `--only s6.2` **10/10 bytes**；`selftest --all` 双后端各 0、`--check` 0。`scene` 卡既有基线 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **`run-point.bat` 的 `echo ... (3 point) ...` 提前闭合 for 块**：ASCII bat 里 `for %%B in (...) do (...)` 块内出现未加引号 / 未 `^)` 转义的右括号，cmd 解析到 `)` 就闭合块，把后面的 ` / zero device errors` 当命令 → `此时不应有 /`、exit 255、两张图都没拍。修：块内 echo 文本一律不用圆括号（run-scale.bat 当初的文字没有括号所以没暴露）。
+2. **新增 `WORLDPOS` 插值量后 scale 卡复拍出现 1px / maxDelta1 差异**（`scene` 卡 MD5 逐字节不变）：`(208,402)` 单像素 G 通道 49→50，属 GPU 边缘取整噪声、按项目阈值是 near 档而非逻辑回归。按纪律重拍 `scale` 双后端基线并在台账 / cases.json 留痕；`point` 卡因 shader 里没有除法或 normalize 分歧，双后端 MD5 完全一致。
+
+**双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。

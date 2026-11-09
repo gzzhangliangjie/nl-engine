@@ -1,0 +1,351 @@
+{
+  "version": 1,
+  "nextID": 12,
+  "ambient": 0.08,
+  "entities": [
+    {
+      "id": 1,
+      "name": "obj-01",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -9.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "obj-02",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -6.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "obj-03",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "obj-04",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "obj-05",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "obj-06",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            6.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "obj-07",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            9.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.9,
+            0.9
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "key-red",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "color": [
+            1.0,
+            0.18,
+            0.12
+          ],
+          "intensity": 8.0,
+          "type": 1,
+          "position": [
+            -7.0,
+            0.0,
+            2.0
+          ],
+          "range": 8.0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "mid-green",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "color": [
+            0.18,
+            1.0,
+            0.28
+          ],
+          "intensity": 8.0,
+          "type": 1,
+          "position": [
+            0.0,
+            0.0,
+            2.0
+          ],
+          "range": 8.0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "right-blue",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "color": [
+            0.22,
+            0.45,
+            1.0
+          ],
+          "intensity": 8.0,
+          "type": 1,
+          "position": [
+            7.0,
+            0.0,
+            2.0
+          ],
+          "range": 8.0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "fill-directional",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.3,
+            -0.8,
+            0.5
+          ],
+          "color": [
+            0.14,
+            0.16,
+            0.2
+          ],
+          "intensity": 1.0
+        }
+      }
+    }
+  ],
+  "systems": []
+}

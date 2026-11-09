@@ -229,9 +229,11 @@ endif()
 #   <name>.vs.{spv,dxil}          入口 vsMain
 #   <name>.vscluster.{spv,dxil}   入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
 #   <name>.vscull.{spv,dxil}      入口 vsCull（M4.0：GPU vertex pulling）
+#   <name>.vsscene.{spv,dxil}     入口 vsScene（M-E1b.0：ECS 场景实例化，SV_InstanceID）
 #   <name>.ps.{spv,dxil}          入口 psMain
 #   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
 #   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
+#   <name>.pscene.{spv,dxil}      入口 psScene（M-E1b.0：N 物体 M 方向灯）
 # cull.slang 单 compute 入口（M4.1）：<name>.cs.{spv,dxil} 入口 csCull
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
@@ -251,7 +253,9 @@ set(_SHADER_ARTIFACTS "")
 # used in Shader Model 6.6+"），所以只给 _SM66_ARTIFACTS 列出的**新产物**
 # 加 -profile sm_6_6，否则 exe=current 的 HUD 基线要全部重拍。
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
-                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
+                   "vsScene|vsscene|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment"
+                   "psScene|pscene|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")

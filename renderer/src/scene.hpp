@@ -123,6 +123,20 @@ public:
                   const char* vsEntry, const char* psEntry,
                   const char* modelFile, std::string& outError);
 
+    // M-E1b.0：ECS 场景（viewer --scene）。objects/lights 由 viewer 从 World 组件
+    // O(N) 收集（meshFile 已过白名单）；流程：model.vsscene/pscene 双目标字节码 →
+    // meshFile 分组（保持首次出现序）→ 每组 loadGltfScene 首 primitive 建 VB/IB/
+    // 贴图/采样/绑定集 → 实例缓冲（每实例 5 个 float4：世界矩阵列主序 4 列 + tint）
+    // 与灯缓冲（1+2/灯）一次 writeBuffer → 单 BindingLayout + 每 batch 一个
+    // BindingSet（§2.7 单 set 纪律）→ inputLayout（vsScene 三属性）→ 联合包围球写
+    // assetSphere_。device 不初始化 Scene 时（backend init sceneMode=true）由此
+    // 方法独占建场景资源；shaderSuffix/vsEntry/psEntry 规则同 init 系列。
+    bool initScene(nvrhi::IDevice* device, const char* shaderSuffix,
+                   const char* vsEntry, const char* psEntry,
+                   const SceneObjectDesc* objects, std::uint32_t objectCount,
+                   const SceneLightDesc* lights, std::uint32_t lightCount,
+                   float ambient, const char* sceneName, std::string& outError);
+
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
@@ -165,6 +179,9 @@ public:
               const nvrhi::Viewport& viewport, const FrameParams& params);
 
     bool ready() const {
+        if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
+            return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
+                   && pipelineSceneWireNone_ && !sceneBatches_.empty();
         // M7.0：visbuf 复用 cull_ 的资源通路，但自己的两条管线才是判据——
         // cull 的四套 (fill×cull) 管线在 visbuf 下不必建（ensurePipelines 分支）。
         // vis buffer / 两个 binding set 随视口尺寸在 draw() 里懒建，不进 ready()：
@@ -180,6 +197,8 @@ public:
     // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
     const std::string& modelName() const { return modelName_; }
     std::uint32_t triangleCount() const { return triangleCount_; }
+    // M-E1b.0：ECS 场景实例数（非 scene 模式恒 0；backend 拷进 DeviceInfo）。
+    std::uint32_t instanceCount() const { return sceneInstanceCount_; }
     // M2.3：当前层号与 parent error（v1 资产无 lodMeta → 0 / 0）。
     int   lodLevel() const { return lodLevel_; }
     float lodMaxError() const { return lodMaxError_; }
@@ -284,6 +303,36 @@ private:
 
     // ---- M-A5：CPU 蒙皮 ----
     bool skinMode_ = false;                      // draw() 走逐帧蒙皮路径
+
+    // ---- M-E1b.0：ECS 场景资源（viewer --scene；N 实例化物体 + M 方向灯）----
+    // 与其他模式互斥：sceneMode_ 置位后 draw/ensurePipelines/ready 走专属分支，
+    // 既有路径（normal/cluster/cull/dag/hiz/skin）零改动。
+    bool sceneMode_ = false;
+    nvrhi::ShaderHandle        vsScene_, psScene_;
+    nvrhi::BufferHandle        sceneLights_;      // StructuredBuffer<float4>，1+2/灯
+                                                  //（[0]=(lightCount,ambient,1/ΣI,0)）
+    nvrhi::InputLayoutHandle   sceneInputLayout_;
+    nvrhi::BindingLayoutHandle sceneBindingLayout_;   // 单 layout：t0+s0+b0+t5+t6（§2.7）
+    // 每 mesh 一个批次（同一 meshFile 的所有实例共享 VB/IB/贴图/BindingSet）。
+    // M-E1b.1：每个 batch 持有自己的 t5 实例缓冲——SV_InstanceID 是 draw 内
+    // 0-based，不依赖 startInstanceLocation 的硬件语义（DX12 不把它计入实例号，
+    // 旧实现多 batch 时所有批次都读槽 0）；也避开 Vulkan storage buffer SRV
+    // 子范围的 minStorageBufferOffsetAlignment 约束（批次起点按 80B 递增）。
+    struct SceneMeshBatch {
+        nvrhi::BufferHandle vb, ib;
+        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，5/实例
+        nvrhi::TextureHandle tex;
+        nvrhi::SamplerHandle sampler;
+        nvrhi::BindingSetHandle set;
+        std::uint32_t indexCount = 0;
+        std::uint32_t instanceCount = 0;
+    };
+    std::vector<SceneMeshBatch> sceneBatches_;
+    nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
+    nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    float         sceneAmbient_ = 0.28f;
+    std::uint32_t sceneLightCount_ = 0;
+    std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源
     nl::anim::Skeleton        skinSkeleton_;
     std::vector<nl::anim::AnimClip> skinClips_;
     nl::anim::SkinBinding     skinBinding_;

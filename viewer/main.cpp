@@ -7,14 +7,18 @@
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/renderer.hpp"
+#include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
+#include "nl/scene/World.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>              // M-E1b.0：--scene 场景文件直读
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -101,6 +105,7 @@ struct Options {
     std::string screenshotPath;
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
+    std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
@@ -164,6 +169,12 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--model" && i + 1 < argc) {
             o.modelFile = argv[++i];
             o.modelSet = true;
+        }
+        else if (a == "--scene" && i + 1 < argc) {
+            // M-E1b.0：ECS 场景文件（World::serialise 的 JSON）。路径按传入直读
+            //（不是 assets 白名单资产）；ASCII + 存在性校验在 runScene 落地，
+            // 失败走用法错误码 2。
+            o.scenePath = argv[++i];
         }
         else if (a == "--editor" && i + 1 < argc) {
             // T1：材质图编辑器（material_graph v1 文本文件）。
@@ -315,7 +326,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (18 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (36 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -1052,6 +1063,342 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     return failed ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// M-E1b.0：ECS 场景模式（--scene <file>）。场景文件不是 assets 白名单资产，
+// 按传入路径直读；组件库显式注册后 World::deserialise（负向 = 用法错误码 2，
+// 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
+// SceneObjectDesc / SceneLightDesc，sceneMode=true 的 Renderer + loadEcsScene。
+// ---------------------------------------------------------------------------
+int runScene(const Options& o) {
+    // ---- 1. 读场景文件 + World 反序列化 ----
+    const std::string& scenePath = o.scenePath;
+    if (scenePath.empty()) { nl::core::log::error("--scene: path is empty"); return 2; }
+    for (const char c : scenePath) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u > 0x7E) {
+            nl::core::log::error("--scene: path must be printable ASCII: ", scenePath);
+            return 2;
+        }
+    }
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(std::filesystem::path(scenePath), ec) || ec) {
+            nl::core::log::error("--scene: file not found: ", scenePath);
+            return 2;
+        }
+    }
+    nl::scene::World world;
+    float ambient = 0.28f;   // 场景文件缺省（ambient 为场景级扩展键，World 格式不感知）
+    {
+        std::ifstream f(scenePath, std::ios::binary);
+        if (!f) { nl::core::log::error("--scene: cannot open ", scenePath); return 2; }
+        nlohmann::json doc;
+        try {
+            f >> doc;
+        } catch (const nlohmann::json::exception& ex) {
+            nl::core::log::error("--scene: malformed json: ", ex.what());
+            return 2;
+        }
+        // 注册组件库（与 nanite-scene 同款显式注册）→ World::deserialise。
+        world.getComponentLibrary().registerComponent<nl::scene::TransformComponent>();
+        world.getComponentLibrary().registerComponent<nl::scene::ModelComponent>();
+        world.getComponentLibrary().registerComponent<nl::scene::LightComponent>();
+        std::string err;
+        bool ok = false;
+        try {
+            ok = world.deserialise(doc, err);
+        } catch (const std::exception& ex) {
+            nl::core::log::error("--scene: deserialise threw: ", ex.what());
+            return 2;
+        }
+        if (!ok) {
+            nl::core::log::error("--scene: deserialise rejected: ", err);
+            return 2;
+        }
+        if (doc.contains("ambient") && doc["ambient"].is_number())
+            ambient = doc["ambient"].get<float>();
+    }
+
+    // ---- 2. O(N) 遍历实体收集渲染描述 ----
+    // meshFile 白名单校验（与 renderer.cpp validAssetFileName 同一套逻辑，
+    // scene.cpp 兜底同款复制；非法 = 显式报错退出 2，不静默跳过）。
+    auto validGlbAssetName = [](const std::string& s) {
+        if (s.empty()) return false;
+        if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
+        if (s.find("..") != std::string::npos) return false;
+        const std::string ext = ".glb";
+        if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
+            return false;
+        for (const char c : s) {
+            const auto u = static_cast<unsigned char>(c);
+            if (u < 0x21 || u > 0x7E) return false;
+        }
+        return true;
+    };
+    std::vector<nl::renderer::SceneLightDesc> lights;
+    std::vector<std::string> meshFiles;
+    std::vector<nl::scene::EntityID> modelIds;
+    for (nl::scene::EntityID id : world.getEntityIDs()) {
+        const auto* light = world.getComponent<nl::scene::LightComponent>(id);
+        if (light) {
+            nl::renderer::SceneLightDesc l{};
+            const float len = std::sqrt(light->direction.x * light->direction.x +
+                                        light->direction.y * light->direction.y +
+                                        light->direction.z * light->direction.z);
+            if (len > 1e-8f) {   // 归一化（零向量保原样，退化灯交给 shader abs(dot) 口径）
+                l.dir[0] = light->direction.x / len;
+                l.dir[1] = light->direction.y / len;
+                l.dir[2] = light->direction.z / len;
+            }
+            l.color[0] = light->color.x;
+            l.color[1] = light->color.y;
+            l.color[2] = light->color.z;
+            l.intensity = light->intensity;
+            // M-E1b.2：点光字段透传 + 显式拒绝（非法 type / 非正 range 退出码 2）
+            l.type = light->type;
+            if (l.type != 0 && l.type != 1) {
+                nl::core::log::error("--scene: entity ", id, " has unknown light type ", l.type);
+                return 2;
+            }
+            l.position[0] = light->position.x;
+            l.position[1] = light->position.y;
+            l.position[2] = light->position.z;
+            l.range = light->range;
+            if (l.type == 1 && l.range <= 0.0f) {
+                nl::core::log::error("--scene: entity ", id, " point light range must be > 0");
+                return 2;
+            }
+            lights.push_back(l);
+        }
+        const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
+        if (model) {
+            if (!world.getComponent<nl::scene::TransformComponent>(id)) {
+                nl::core::log::error("--scene: entity ", id, " has Model without Transform");
+                return 2;
+            }
+            if (!validGlbAssetName(model->meshFile)) {
+                nl::core::log::error("--scene: entity ", id, " meshFile '",
+                                     model->meshFile, "' rejected by asset whitelist (.glb)");
+                return 2;
+            }
+            meshFiles.push_back(model->meshFile);   // 指针先落到稳定存储再填 POD
+            modelIds.push_back(id);
+        }
+    }
+    std::vector<nl::renderer::SceneObjectDesc> objects;
+    objects.reserve(modelIds.size());
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        const auto* model = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+        const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+        nl::renderer::SceneObjectDesc d{};
+        const auto wm = t->getWorldMatrix();   // nl::math Mat4 列主序 m[col*4+row]，按列直拷
+        std::memcpy(d.world, wm.m, sizeof(d.world));
+        d.tint[0] = model->tint.x;
+        d.tint[1] = model->tint.y;
+        d.tint[2] = model->tint.z;
+        d.meshFile = meshFiles[k].c_str();
+        objects.push_back(d);
+    }
+
+    // ---- 3. 窗口 + sceneMode Renderer ----
+    nl::core::log::resetCounters();
+    nl::core::WindowDesc desc;
+    desc.width  = o.width;
+    desc.height = o.height;
+    desc.title  = "nl-engine | starting...";
+    // 截图回归模式隐藏窗口（与 runNormal 同口径：可见窗口会抢前台焦点）。
+    desc.visible = !o.screenshot;
+    nl::core::Window window(desc);
+    if (!window.valid()) {
+        nl::core::log::error("window creation failed");
+        return 1;
+    }
+    const auto nativeSize = window.framebufferSize();
+    const nl::renderer::Extent extent{
+        static_cast<std::uint32_t>(nativeSize.width),
+        static_cast<std::uint32_t>(nativeSize.height)
+    };
+    auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
+                                                   /*modelFile=*/nullptr,
+                                                   /*cluster=*/false, /*cullMode=*/false,
+                                                   /*frustumCull=*/false, /*dagMode=*/false,
+                                                   /*skinMode=*/false, /*hizMode=*/false,
+                                                   /*sceneMode=*/true);
+    if (!renderer->valid()) {
+        nl::core::log::error("renderer init failed: ", renderer->lastError());
+        return 1;
+    }
+    const std::string sceneName =
+        std::filesystem::path(scenePath).filename().string();
+    // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
+    std::uint32_t pointLights = 0;
+    for (const auto& l : lights) if (l.type == 1) ++pointLights;
+    nl::core::log::info("ecs scene: ", objects.size(), " objects | ", lights.size(),
+                        " lights (", pointLights, " point) | ambient ", ambient);
+    if (!renderer->loadEcsScene(objects.data(),
+                                static_cast<std::uint32_t>(objects.size()),
+                                lights.empty() ? nullptr : lights.data(),
+                                static_cast<std::uint32_t>(lights.size()),
+                                ambient, sceneName.c_str())) {
+        nl::core::log::error("ecs scene load failed: ", renderer->lastError());
+        return 1;
+    }
+
+    const bool hudOn = o.hudEnabled;
+    // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
+    // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
+    float camDist = o.distance;
+    if (!o.distSet) {
+        const float* sph = renderer->info().assetSphere;
+        if (sph[3] > 0.0f) camDist = std::max(camDist, sph[3] * 2.4f);
+    }
+    nl::core::OrbitCamera camera;
+    camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
+    camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
+
+    const auto st = nl::renderer::status();
+    const auto& info = renderer->info();
+    nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
+    nl::core::log::info("mode: scene | objects=", info.instanceCount,
+                        " triangles=", info.triangleCount,
+                        " model=", info.modelName,
+                        " | HUD: ", hudOn ? "on" : "off",
+                        " | case: ESC=quit, F12=PNG");
+
+    if (o.screenshot) {
+        std::string err;
+        if (!prepareScreenshotDirs(o.screenshotPath, err)) {
+            nl::core::log::error(err);
+            return 1;
+        }
+        nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
+                            std::filesystem::absolute(o.screenshotPath).string());
+    }
+
+    using clock = std::chrono::steady_clock;
+    auto last = clock::now();
+    std::uint64_t frame = 0;
+    int colorIndex = o.color;
+    int screenshotsSaved = 0;
+    bool failed = false;
+    double dtSumMs = 0.0;
+    double dtMaxMs = 0.0;
+
+    while (!window.shouldClose()) {
+        window.pollEvents();
+        if (window.keyPressed(nl::core::Key::Escape)) {
+            nl::core::log::info("ESC -> exit");
+            break;
+        }
+        float dx = 0.0f, dy = 0.0f, scroll = 0.0f;
+        window.consumeMouse(dx, dy, scroll);
+        if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
+        if (scroll != 0.0f) camera.zoom(scroll);
+
+        const char* capturePath = nullptr;
+        if (window.keyPressed(nl::core::Key::F12)) {
+            capturePath = o.screenshot ? o.screenshotPath.c_str() : nullptr;
+        }
+        if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames))
+            capturePath = o.screenshotPath.c_str();
+
+        nl::core::Extent resized{};
+        if (window.consumeResize(resized) && resized.width > 0 && resized.height > 0) {
+            renderer->resize({static_cast<std::uint32_t>(resized.width),
+                              static_cast<std::uint32_t>(resized.height)});
+            camera.setAspect(static_cast<float>(resized.width) / static_cast<float>(resized.height));
+        }
+
+        const auto now = clock::now();
+        const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
+        last = now;
+        ++frame;
+        if (o.screenshot) {
+            dtSumMs += dtMs;
+            if (dtMs > dtMaxMs) dtMaxMs = dtMs;
+        }
+
+        nl::renderer::FrameParams fp;
+        const auto vp = camera.viewProjection();
+        std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
+        fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
+        fp.cullBack = o.cullBack;
+        fp.shading = 0;                              // psScene 固定 mode 0 风格着色
+        fp.wireframe = o.wireframe;
+
+        nl::renderer::HudFrame hud{};
+        if (hudOn) {
+            const auto e = renderer->extent();
+            hud.displayWidth  = static_cast<float>(e.width);
+            hud.displayHeight = static_cast<float>(e.height);
+            hud.yawDeg = camera.yawDegrees();
+            hud.pitchDeg = camera.pitchDegrees();
+            hud.distance = camera.distance();
+            hud.backend = st.backend;
+            hud.adapter = info.adapterName.c_str();
+            hud.debugLayer = info.debugLayer.c_str();
+            hud.mode = nl::core::modeName(o.mode);       // 自动显示 "scene"
+            hud.stage = st.stage;
+            hud.model = info.modelName.c_str();
+            hud.triangleCount = static_cast<int>(info.triangleCount);
+            hud.cullBack = o.cullBack;
+            hud.colorIndex = colorIndex;
+            hud.deterministic = o.screenshot;
+            if (o.screenshot) {
+                hud.fps = 60.0f;
+                hud.frameMs = 16.67f;
+                hud.frameMsCount = kFixedSampleCount;
+                std::memcpy(hud.frameMsHistory, kFixedSamples, sizeof(kFixedSamples));
+                hud.gpuMs = 0.63f;
+                hud.gpuMsCount = kFixedSampleCount;
+                std::memcpy(hud.gpuMsHistory, kFixedGpuSamples, sizeof(kFixedGpuSamples));
+                hud.deltaSeconds = 1.0f / 60.0f;
+                hud.mouseX = -100.0f; hud.mouseY = -100.0f;
+            } else {
+                hud.fps = dtMs > 0.0 ? static_cast<float>(1000.0 / dtMs) : 0.0f;
+                hud.frameMs = static_cast<float>(dtMs);
+                hud.deltaSeconds = static_cast<float>(std::max(dtMs / 1000.0, 1.0 / 1000.0));
+            }
+        }
+
+        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath, hudOn ? &hud : nullptr)) {
+            nl::core::log::error("renderFrame failed: ", renderer->lastError());
+            failed = true;
+            break;
+        }
+        renderer->drainMessages();
+        if (capturePath) {
+            ++screenshotsSaved;
+            nl::core::log::info("screenshot written: ", capturePath);
+        }
+        if (o.screenshot && frame % 15 == 0) {
+            nl::core::log::info("ecs stats: objects ", info.instanceCount,
+                                " | triangles ", info.triangleCount,
+                                " | lights ", lights.size());
+        }
+        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+
+    nl::core::log::info("shutdown ok (frames=", frame,
+                        " screenshots=", screenshotsSaved,
+                        " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
+    if (o.screenshot && frame > 1) {
+        nl::core::log::info("frame timing: avg ",
+                            dtSumMs / static_cast<double>(frame), " ms  max ",
+                            dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
+    }
+    if (o.screenshot && screenshotsSaved == 0) {
+        nl::core::log::error("screenshot was not written");
+        failed = true;
+    }
+    if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
+        nl::core::log::error("acceptance failed: device/error counters must be zero");
+        failed = true;
+    }
+    return failed ? 1 : 0;
+}
+
 // S0 定型：所有里程碑共用这一个分发器，新增模式只加 case，不改 main。
 int runMode(nl::core::ViewMode mode, const Options& o) {
     switch (mode) {
@@ -1075,6 +1422,8 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/true, /*dagMode=*/true, /*skinMode=*/false,
                          /*hizMode=*/true);
+    case nl::core::ViewMode::Scene:      // M-E1b.0：ECS 场景（--scene 文件 → N 物体 M 灯）
+        return runScene(o);
     case nl::core::ViewMode::Visbuf:     // M7.0：u64 vis buffer 打包 + 簇/三角可视化
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
@@ -1116,6 +1465,9 @@ void printUsage() {
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
               << "  viewer.exe --model <name>          load assets/<name>: .glb for normal mode,\n"
               << "                                     .nmesh for cluster/lod mode (default per mode)\n"
+              << "  viewer.exe --scene <file>          M-E1b.0: load an ECS scene JSON (World::serialise\n"
+              << "                                     format); forces --mode scene. Objects/lights come\n"
+              << "                                     from Model/Transform/Light components.\n"
               << "  viewer.exe --lod N                 lod mode: start at layer N (default 0); the\n"
               << "                                     HUD slider switches layers at runtime\n"
               << "  viewer.exe --dag-group N           dag-top mode: drill into group N of the\n"
@@ -1175,6 +1527,10 @@ int main(int argc, char** argv) {
     // M-A5：skin 模式缺省距离拉近（4.2 是 Suzanne 口径；1.4m 人形在 4.2 外太小）。
     if (o.mode == nl::core::ViewMode::Skin && !o.distSet) {
         o.distance = 2.6f;
+    }
+    // M-E1b.0：给了 --scene 就强制 mode=Scene（--mode 同给以 Scene 为准）。
+    if (!o.scenePath.empty()) {
+        o.mode = nl::core::ViewMode::Scene;
     }
     return runMode(o.mode, o);
 }

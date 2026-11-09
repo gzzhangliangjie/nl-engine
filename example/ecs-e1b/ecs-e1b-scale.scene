@@ -1,0 +1,1876 @@
+{
+  "version": 1,
+  "nextID": 59,
+  "ambient": 0.22,
+  "entities": [
+    {
+      "id": 1,
+      "name": "obj-01",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.35,
+            -4.6,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.183947,
+            0.0,
+            0.982936
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "obj-02",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -8.05,
+            -4.6,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.361615,
+            0.0,
+            0.932327
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            1.0,
+            0.4544,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "obj-03",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -5.75,
+            -4.6,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.526943,
+            0.0,
+            0.8499
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            1.0,
+            0.5288,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "obj-04",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.45,
+            -4.6,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.674288,
+            0.0,
+            0.738469
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            1.0,
+            0.6032,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "obj-05",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.15,
+            -4.6,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.798621,
+            0.0,
+            0.601835
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            0.6776,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "obj-06",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            1.15,
+            -4.6,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.895699,
+            0.0,
+            0.444662
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            1.0,
+            0.752,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "obj-07",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.45,
+            -4.6,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.962209,
+            0.0,
+            0.272313
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            1.0,
+            0.8264,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "obj-08",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            5.75,
+            -4.6,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.995881,
+            0.0,
+            0.090672
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            1.0,
+            0.9008,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "obj-09",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            8.05,
+            -4.6,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.995566,
+            0.0,
+            -0.094064
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            0.9752,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "obj-10",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            10.35,
+            -4.6,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.961275,
+            0.0,
+            -0.27559
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.9504,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "obj-11",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.35,
+            -2.3,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.894178,
+            0.0,
+            -0.447711
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.876,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "obj-12",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -8.05,
+            -2.3,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.796565,
+            0.0,
+            -0.604552
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.8016,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "obj-13",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -5.75,
+            -2.3,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.671768,
+            0.0,
+            -0.740762
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.7272,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "obj-14",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.45,
+            -2.3,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.524044,
+            0.0,
+            -0.851691
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.6528,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "obj-15",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.15,
+            -2.3,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.358437,
+            0.0,
+            -0.933554
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.5784,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "obj-16",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            1.15,
+            -2.3,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.180596,
+            0.0,
+            -0.983557
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.504,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "obj-17",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.45,
+            -2.3,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.003407,
+            0.0,
+            0.999994
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.4296,
+            1.0,
+            0.38
+          ]
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "obj-18",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            5.75,
+            -2.3,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.187295,
+            0.0,
+            0.982304
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.4048
+          ]
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "obj-19",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            8.05,
+            -2.3,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.36479,
+            0.0,
+            0.93109
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.4792
+          ]
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "obj-20",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            10.35,
+            -2.3,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.529836,
+            0.0,
+            0.8481
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.5536
+          ]
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "obj-21",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.35,
+            0.0,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.6768,
+            0.0,
+            0.736167
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.628
+          ]
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "obj-22",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -8.05,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.800667,
+            0.0,
+            0.59911
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.7024
+          ]
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "obj-23",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -5.75,
+            0.0,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.897209,
+            0.0,
+            0.441607
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.7768
+          ]
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "obj-24",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.45,
+            0.0,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.963131,
+            0.0,
+            0.269033
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.8512
+          ]
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "obj-25",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.15,
+            0.0,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.996184,
+            0.0,
+            0.087278
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.38,
+            1.0,
+            0.9256
+          ]
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "obj-26",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            1.15,
+            0.0,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.99524,
+            0.0,
+            -0.097456
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.38,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "obj-27",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.45,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.960331,
+            0.0,
+            -0.278864
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.38,
+            0.9256,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "obj-28",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            5.75,
+            0.0,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.892648,
+            0.0,
+            -0.450755
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.38,
+            0.8512,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "obj-29",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            8.05,
+            0.0,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.794501,
+            0.0,
+            -0.607263
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.38,
+            0.7768,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 30,
+      "name": "obj-30",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            10.35,
+            0.0,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.66924,
+            0.0,
+            -0.743046
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.38,
+            0.7024,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "obj-31",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.35,
+            2.3,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.521139,
+            0.0,
+            -0.853472
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.38,
+            0.628,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "obj-32",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -8.05,
+            2.3,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.355254,
+            0.0,
+            -0.93477
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.38,
+            0.5536,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "obj-33",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -5.75,
+            2.3,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.177244,
+            0.0,
+            -0.984167
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.38,
+            0.4792,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "obj-34",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.45,
+            2.3,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.006815,
+            0.0,
+            0.999977
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.38,
+            0.4048,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 35,
+      "name": "obj-35",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.15,
+            2.3,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.190641,
+            0.0,
+            0.98166
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.4296,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 36,
+      "name": "obj-36",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            1.15,
+            2.3,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.367961,
+            0.0,
+            0.929841
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.504,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 37,
+      "name": "obj-37",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.45,
+            2.3,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.532723,
+            0.0,
+            0.84629
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.5784,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 38,
+      "name": "obj-38",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            5.75,
+            2.3,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.679305,
+            0.0,
+            0.733856
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            0.6528,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 39,
+      "name": "obj-39",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            8.05,
+            2.3,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.802704,
+            0.0,
+            0.596378
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            0.7272,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 40,
+      "name": "obj-40",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            10.35,
+            2.3,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.898708,
+            0.0,
+            0.438547
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.8016,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 41,
+      "name": "obj-41",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.35,
+            4.6,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.964042,
+            0.0,
+            0.26575
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            0.876,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 42,
+      "name": "obj-42",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -8.05,
+            4.6,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.996476,
+            0.0,
+            0.083883
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            0.9504,
+            0.38,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 43,
+      "name": "obj-43",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -5.75,
+            4.6,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.994902,
+            0.0,
+            -0.100847
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.9752
+          ]
+        }
+      }
+    },
+    {
+      "id": 44,
+      "name": "obj-44",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.45,
+            4.6,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.959375,
+            0.0,
+            -0.282135
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.9008
+          ]
+        }
+      }
+    },
+    {
+      "id": 45,
+      "name": "obj-45",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.15,
+            4.6,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.891107,
+            0.0,
+            -0.453794
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.8264
+          ]
+        }
+      }
+    },
+    {
+      "id": 46,
+      "name": "obj-46",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            1.15,
+            4.6,
+            0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.792427,
+            0.0,
+            -0.609967
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.752
+          ]
+        }
+      }
+    },
+    {
+      "id": 47,
+      "name": "obj-47",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            3.45,
+            4.6,
+            -0.35
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.666704,
+            0.0,
+            -0.745322
+          ]
+        },
+        "Model": {
+          "mesh": "TorusKnotDense.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.6776
+          ]
+        }
+      }
+    },
+    {
+      "id": 48,
+      "name": "obj-48",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            5.75,
+            4.6,
+            0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.518228,
+            0.0,
+            -0.855242
+          ]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.6032
+          ]
+        }
+      }
+    },
+    {
+      "id": 49,
+      "name": "obj-49",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            8.05,
+            4.6,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.352066,
+            0.0,
+            -0.935975
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.5288
+          ]
+        }
+      }
+    },
+    {
+      "id": 50,
+      "name": "obj-50",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [
+            10.35,
+            4.6,
+            -0.7
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.173889,
+            0.0,
+            -0.984765
+          ]
+        },
+        "Model": {
+          "mesh": "Suzanne-multi.glb",
+          "tint": [
+            1.0,
+            0.38,
+            0.4544
+          ]
+        }
+      }
+    },
+    {
+      "id": 51,
+      "name": "key-warm",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.4,
+            -0.8,
+            0.45
+          ],
+          "color": [
+            1.0,
+            0.95,
+            0.88
+          ],
+          "intensity": 2.2
+        }
+      }
+    },
+    {
+      "id": 52,
+      "name": "fill-cool",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            -0.6,
+            -0.3,
+            0.7
+          ],
+          "color": [
+            0.45,
+            0.6,
+            1.0
+          ],
+          "intensity": 1.1
+        }
+      }
+    },
+    {
+      "id": 53,
+      "name": "rim-orange",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.1,
+            0.3,
+            -0.95
+          ],
+          "color": [
+            1.0,
+            0.75,
+            0.55
+          ],
+          "intensity": 1.4
+        }
+      }
+    },
+    {
+      "id": 54,
+      "name": "top-white",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0
+        }
+      }
+    },
+    {
+      "id": 55,
+      "name": "left-cyan",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            -0.9,
+            0.1,
+            0.2
+          ],
+          "color": [
+            0.4,
+            0.95,
+            0.9
+          ],
+          "intensity": 0.9
+        }
+      }
+    },
+    {
+      "id": 56,
+      "name": "right-magenta",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.9,
+            0.1,
+            0.2
+          ],
+          "color": [
+            1.0,
+            0.5,
+            0.85
+          ],
+          "intensity": 0.9
+        }
+      }
+    },
+    {
+      "id": 57,
+      "name": "back-green",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            0.2,
+            -1.0
+          ],
+          "color": [
+            0.6,
+            1.0,
+            0.5
+          ],
+          "intensity": 0.8
+        }
+      }
+    },
+    {
+      "id": 58,
+      "name": "bottom-warm",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [
+            0.0,
+            1.0,
+            0.3
+          ],
+          "color": [
+            1.0,
+            0.85,
+            0.6
+          ],
+          "intensity": 0.7
+        }
+      }
+    }
+  ],
+  "systems": []
+}
