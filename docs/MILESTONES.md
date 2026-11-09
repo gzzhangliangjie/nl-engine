@@ -1033,3 +1033,25 @@
 3. **首版注册表 lambda 悬垂**：`CVar&` 局部引用被 lambda 按引用捕获，函数返回即 UB——重写为 `CVar* const` 指针捕获（指向注册表 map 节点，与 Console 单例同寿）。
 
 **下一步**：M-C3 收口（展示台 tool 用例 usage/正向/负向 + TOOLS-GUIDE 归档 + tag + merge 回 master + wt_pool release）。
+
+## P8 M-C3 收口：展示台用例 + 归档 + tag + merge（feat/console 轨道，2026-11-09）
+
+**动作**
+- **证据补档（用户点名「还是没有交代的图片」的修正）**：M-C2 验收截图原本只拍在 `build/out/`（gitignore 内，没进 git 不可追）——三张图肉眼核验后归档 `docs/screenshots/`（mc2-registry-dx12 / mc2-fov100-dx12 / mc2-registry-vulkan），Vulkan 对称图为补拍（build-vulkan viewer `--console-exec help/cvar.list` + PrintWindow 截图脚本 snap.py）；台账证据路径改指可追位置；`docs/screenshots/CONSOLE-EVIDENCE.md` 图目索引（含 M-C1 图目与拍法口径）。纪律固化：**证据图必须落 `docs/screenshots/`，`build/out/` 只作中间产物；收口必须展示图，不许只给路径**。
+- **展示台 `console-mc3` 版本卡**（M-C0~C2 欠的 tool 交代一并补齐）：`example/cases.json` 五用例——usage(exit 2) / selftest 49 条(exit 0) / exec 正向三连 echo+cvar.list+cvar.set(exit 0) / 负向未知命令(exit 1) / 负向 cvar.set 坏值保旧(exit 3)；exe 字段 dx12/vulkan 同指 `build/nanite-console.exe`（纯 CPU 不链图形后端）；`expectExit` 如实按 ExecCode 四档分，不为迁就 nanite-tools 的 0/1/2 全局约定改语义（note 写明双约定并存）。
+- **归档**：`docs/p8/CONSOLE-TOOLS-GUIDE.md`（定位 / ExecCode 退出码语义表 / 用法 / 五用例实跑输出逐条归档 / 踩坑三条）。
+
+**提交版本**：feat/console `fc61c2d`（M-C2 证据补档）→ M-C3 本轮 commit（tag `console-mc3`）→ merge master
+
+**完成情况**
+- 展示台五用例全部实跑核验：退出码 2/0/0/1/3 与 ExecCode 分档逐一对上，`expectLog` 子串全部命中真输出（含 `demo.fov = 90`、`unknown command: nonsense.cmd`、`invalid value for demo.fov: expected float, got 'abc'`）；`example/cases.json` JSON 合法性校验过、`server.py --check` 退出 0。
+- selftest 无管道直跑复核 exit 0（`| tail; echo $?` 拿的是 tail 退出码——M6.0 已留痕的坑，本次守住）。
+- `docs/p8/CONSOLE-TOOLS-GUIDE.md` 归档完成；`docs/screenshots/` 三张 M-C2 证据图 + 图目索引入库。
+- tag `console-mc3` 在验收通过后打；merge 回 master + master 侧注册表同步（AGENTS.md / PARALLEL-TRACKS §7 / P8-CONSOLE-PLAN 状态）+ wt_pool release。
+
+**踩坑情况**
+1. **M-C2 截图落在 `build/out/` 不可追**（收口纪律四项自查漏 ① 渲染交代物）——用户点名后补档；修复不止拷图，还包括台账路径、图目索引、纪律固化三点。
+2. **退出码双约定**：ExecCode 四档 vs nanite-tools 0/1/2——按「语义如实」处理而非强行归一，卡内 note 留痕。
+3. `server.py --check` 只按 kStage 校验渲染卡，工具卡不在其范围——JSON 合法性另行 `json.load` 校验，五用例退出码/输出以实跑为准。
+
+**下一步**：轨道收官。wt（nl-engine-console）按 §7.1b 保留分支拆 worktree；M-C4 级别的后续（命令自动补全模糊匹配、日志导出等）不在本计划，需要时另立项。
