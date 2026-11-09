@@ -5965,6 +5965,96 @@
           "script": "example/gl2/run.bat pause"
         }
       ]
+    },
+    {
+      "id": "gl3",
+      "label": "M-GL3",
+      "name": "游戏循环 M-GL3：渲染帧插值（alpha 消费）",
+      "tag": "gl-m3",
+      "date": "2026-11-10",
+      "summary": "A 类并行轨道 feat/gameloop：GameClock alpha（=accumulator/step，bevy Fixed overstep/timestep 同口径）接进 runScene 渲染——每渲染帧 tick 前后快照 prev/curr 世界 TRS（列分解+Shepperd 四元数），交互态按 alpha lerp/slerp 合成实例矩阵；渲染专用绝不回写 sim state（社区 bevy_transform_interpolation 纪律，bevy core 全树无内建插值器 v0.16.1 实读 0 命中）。截图模式恒走不插值原路径（PNG 与不插值逐字节同），插值数值证据走捕获帧 probe 日志。",
+      "acceptance": [
+        "字节恒等：interp OFF vs ON（--fixed-dt 16.7 ×100 帧，截图态）PNG 逐字节同 ×2 后端（同一代码路径构造保证）",
+        "数值孪生：--fixed-dt 25 → 每帧 tick 数 [1,2,1]、捕获帧 alpha=0.5（python 独立复推 accumulator）；orb 轨道位置 prev/curr/interp 全对上 SpinSystem 公式孪生（w_i=0.9×(1+0.5·idx) rad/s）；interp 四元数 == slerp(pq,cq,alpha)",
+        "暂停冻结：game.pause 下 prev==curr==interp、alpha=0",
+        "跨后端逐位：mid 组 6 条 probe 行 DX12==VULKAN（纯 CPU）"
+      ],
+      "exe": {
+        "dx12": "build/DX12/viewer.exe",
+        "vulkan": "build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "interp-equal",
+          "name": "插值开/关字节恒等（截图=确定性产物）",
+          "kind": "image",
+          "note": "--interp 开（截图态走不插值原路径）与关同参逐字节；log 内 probe 记录真实 alpha 的 lerp/slerp 数值（verify.py 自洽复算）。",
+          "baselines": {
+            "dx12": "example/gl3/gl3-equal-on-DX12.png",
+            "vulkan": "example/gl3/gl3-equal-on-VULKAN.png"
+          },
+          "args": [
+            "--mode",
+            "scene",
+            "--scene",
+            "{root}/example/gl2/gl2-audio.scene",
+            "--tick",
+            "parallel",
+            "--fixed-dt",
+            "16.7",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "100",
+            "--size",
+            "960x540",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--interp"
+          ],
+          "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --interp",
+          "script": "example/gl3/run.bat equal"
+        },
+        {
+          "id": "interp-mid",
+          "name": "中帧插值 alpha=0.5（时钟+轨道位置双重孪生）",
+          "kind": "image",
+          "note": "--fixed-dt 25 → 每帧 tick [1,2,1]，捕获帧 alpha=0.5；probe 日志 prev/curr/interp 与 SpinSystem 公式孪生复算逐位对上（orb-a idx0 / orb-b idx1 轨道）。",
+          "baselines": {
+            "dx12": "example/gl3/gl3-mid-DX12.png",
+            "vulkan": "example/gl3/gl3-mid-VULKAN.png"
+          },
+          "args": [
+            "--mode",
+            "scene",
+            "--scene",
+            "{root}/example/gl2/gl2-audio.scene",
+            "--tick",
+            "parallel",
+            "--fixed-dt",
+            "25",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "3",
+            "--size",
+            "960x540",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--interp",
+            "--console-exec",
+            "game.status"
+          ],
+          "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 25 --screenshot <out> --frames 3 --size 960x540 --no-hud --yaw 12 --pitch 9 --interp --console-exec \"game.status\"",
+          "script": "example/gl3/run.bat mid"
+        }
+      ]
     }
   ]
 }

@@ -35,7 +35,7 @@
 
 ## 4. 不在范围
 
-- 多逻辑帧速率分档（TickGroup 精细化）、帧间插值、回滚 netcode、多线程逻辑帧并行（Scheduler 已有 DAG，将来 M-GL2 再评估）。
+- ~~帧间插值~~（**M-GL3 已解禁立项**，2026-11-10 用户拍板）、多逻辑帧速率分档（TickGroup 精细化）、回滚 netcode、多线程逻辑帧并行（Scheduler 已有 DAG）。
 
 ## 5. 里程碑草案（不排期，gate E1b merge 后开工）
 
@@ -44,6 +44,7 @@
 | **M-GL0** | `GameClock` 纯逻辑 + selftest（累加/截断/暂停/倍速/追帧上限） | selftest 全绿；tool 卡 usage/正向/负向 + 证据图 |
 | **M-GL1** | viewer 主循环接双帧 + `game.pause`/`game.timeScale` + `--fixed-dt` 兼容 | 截图基线：暂停帧 simTime 不变、渲染帧 HUD 活；双后端对拍 |
 | **M-GL2** | 物理/音频/ECS 接逻辑帧 tick（与 **M-S3 合并收口**） | 声源随物体移动且暂停即停；全量回归 + 收口硬闸 |
+| **M-GL3** | 渲染帧插值（alpha 消费，2026-11-10 用户解禁立项） | 插值开/关截图逐字节同；fixed-dt 25 中帧 alpha=0.5 数值孪生（时钟 + 轨道位置 + slerp）；暂停冻结 |
 
 ## 6. 留痕
 
@@ -53,3 +54,4 @@
 - 2026-11-10：**新知沉淀（viewer 截图捕获口径）**：capturePath 判定（`frame + 1 == o.frames`）在 `++frame` 之前求值、持上一迭代值 → PNG 实际落在**最后一个迭代**（`--frames N` 跑 N 次迭代、第 N 次出图）；终帧日志必须用 `frame == o.frames`（自增后语境）才能与 PNG 同帧。另：**240 tick = 4.0s 恰好 wrap 回 t0 姿态**（CesiumMan Walk 2.0s 循环 + 末键≈首键）——倍速用例取 100 帧（200 tick = 3.3333s 落周期中部）避开巧合等值。
 - 2026-11-10：**M-GL2 收口（tag `gl-m2`）**。物理调试 step / ECS world.tick / 音频场景同步全部收进 GameClock 逻辑帧 callback（runNormal 与 runScene 同构）；runScene 补落 `--fixed-dt`；新增 `audio.play <wav> <entity>`（M-S3：声源挂 ECS 实体、listener 随相机、逻辑帧同步、暂停即停）。**拍板记录（用户选 B）**：`game.pause` 连音频播放一起冻（UE 流派，复用 audio.freeze 机制）；bevy「只停同步」流派被否。迁移零重拍：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变，ecs-parallel/phys-p3/phys-p4/gl1 基线全部逐字节复现。验收证据：gl2-audio.scene 轨道子实体（E1a 层级）上声源读回 == 实体世界位置（轨道半径不变量 + movement + freeze + 跨后端逐位，verify.py 独立孪生 12 检查 × 2 后端）。游戏循环双帧模型至此完整落地（全消费方接入）。
 - 2026-11-10：**新知（viewer 截图捕获口径补遗）**：phys-debug 的 settled 日志此前沿用 `frame + 1 == o.frames`（pre-increment 语境残留），与 PNG 实际落点差一迭代，M-GL2 起统一为 `frame == o.frames`（自增后语境）。另：场景 deserialise 严格拒绝重复实体 id（gl2 场景 id 7 撞 spin 场景即被拒）——手工拼场景 JSON 时 nextID 必须与已用 id 对账。
+- 2026-11-10：**M-GL3 立项 + 收口（tag `gl-m3`）**。用户从 §4 候选中拍板「帧间插值」。参考实读：bevy v0.16.1 `crates/bevy_time/src/fixed.rs:178-183`——Fixed 时钟 `overstep()/timestep()` 分数即插值 alpha（与 `GameClock::alpha()` 同构）；**bevy core 全树无内建 transform 插值器**（`git ls-tree` 0 命中，插值本体是社区 crate），PLAN §3 旧表述「bevy 有 interpolator」据此修正。落码：viewer runScene 每渲染帧 tick 前后快照 prev/curr 世界 TRS（列分解 + Shepperd 矩阵→四元数），交互态 `mat4TRS(lerp, slerpQuat, lerp)` 合成实例矩阵，渲染专用不回写 sim state；CLI `--interp` + console `game.interp`。**拍板（实现期）**：截图模式恒走不插值原路径——首版「钉 alpha=0 走分解重构」因 roundtrip 非逐位 PNG MD5 不等被否，字节恒等改由「同一代码路径」构造保证。验收：equal（开/关 PNG 逐字节 ×2 后端）+ mid（fixed-dt 25 → ticks [1,2,1]、alpha=0.5，verify.py 三重孪生：accumulator 复推 / SpinSystem 轨道位置 / slerp 自洽）+ pause（全冻结）+ smoke（console 负向计 acceptance 错误计数 → 非零退出，负向独立成 run）。

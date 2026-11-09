@@ -128,6 +128,10 @@ struct Options {
     // 优先级：--anim-time > 时钟（animTimeSet 时 skinTime 直接钉值，绕过 GameClock，
     // 既有基线逐字节零风险）；--fixed-dt 只钉「每帧喂多少」，不钉绝对时间。
     double fixedDtMs = 0.0;
+    // M-GL3：--interp 渲染帧插值（alpha = accumulator/step，bevy Fixed
+    // overstep/timestep 同口径）。渲染专用不回写 sim state；截图模式恒走
+    // 不插值原路径（PNG 与不插值逐字节同），插值证据走捕获帧 probe 日志。
+    bool interp = false;
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -290,6 +294,9 @@ Options parseArgs(int argc, char** argv) {
                 std::exit(1);
             }
             o.fixedDtMs = v;
+        } else if (a == "--interp") {
+            // M-GL3：渲染帧插值开关（见 Options::interp 注释）。
+            o.interp = true;
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -1240,6 +1247,71 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 }
 
 // ---------------------------------------------------------------------------
+// P8 M-GL3：渲染帧插值（帧间插值，alpha = accumulator/step）。
+// 参考口径（2026-11-10 实读）：bevy v0.16.1 crates/bevy_time/src/fixed.rs:178-183
+// —— Fixed 时钟暴露 overstep()/timestep() 分数即插值 alpha（与 GameClock::alpha()
+// 同构）；bevy core 全树无内建 transform 插值器（git ls-tree 0 命中，插值本体是
+// 社区 crate bevy_transform_interpolation）。采用其公开设计纪律：插值结果
+// **渲染专用、绝不回写 sim state**（组件态只在逻辑帧内变化）。Carrot/UE 不插值
+// （PLAN §3 既有结论）。世界空间 TRS 插值（非局部递归）：E1a 层级子实体无需重算
+// 父链；均匀 scale 场景下分解严格成立（与 Component::setWorldTransform 同口径）。
+// 截图模式恒走不插值原路径（截图=确定性产物，PNG 与不插值逐字节同）；
+// 插值数值证据走捕获帧 probe 日志（verify.py 孪生复算）。
+// ---------------------------------------------------------------------------
+struct WorldSample {
+    nl::math::Vec3 pos{};
+    nl::math::Quat rot{};
+    nl::math::Vec3 scale{1.0f, 1.0f, 1.0f};
+};
+
+// Mat4 -> TRS 分解（列主序：三列长度 = scale、归一化列 = 旋转、m[12..14] = pos）。
+// 四元数用 Shepperd 法（quatToMat4 的逆变换，trace 判主元分支，数值稳定）；
+// 退化保护：任一 scale 列近零时不除（旋转按单位阵，组件层不允许奇异但防御）。
+static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
+    WorldSample s;
+    s.pos = {m.m[12], m.m[13], m.m[14]};
+    const float sx = std::sqrt(m.m[0] * m.m[0] + m.m[1] * m.m[1] + m.m[2] * m.m[2]);
+    const float sy = std::sqrt(m.m[4] * m.m[4] + m.m[5] * m.m[5] + m.m[6] * m.m[6]);
+    const float sz = std::sqrt(m.m[8] * m.m[8] + m.m[9] * m.m[9] + m.m[10] * m.m[10]);
+    s.scale = {sx, sy, sz};
+    if (sx < 1e-8f || sy < 1e-8f || sz < 1e-8f) return s;  // 退化：单位旋转
+    const float r[3][3] = {
+        {m.m[0] / sx, m.m[4] / sy, m.m[8] / sz},
+        {m.m[1] / sx, m.m[5] / sy, m.m[9] / sz},
+        {m.m[2] / sx, m.m[6] / sy, m.m[10] / sz},
+    };
+    const float tr = r[0][0] + r[1][1] + r[2][2];
+    nl::math::Quat q{};   // Quat{} = identity（quatIdentity 同默认）
+    if (tr > 0.0f) {
+        const float t = std::sqrt(tr + 1.0f) * 2.0f;
+        q.w = 0.25f * t;
+        q.x = (r[2][1] - r[1][2]) / t;
+        q.y = (r[0][2] - r[2][0]) / t;
+        q.z = (r[1][0] - r[0][1]) / t;
+    } else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) {
+        const float t = std::sqrt(1.0f + r[0][0] - r[1][1] - r[2][2]) * 2.0f;
+        q.w = (r[2][1] - r[1][2]) / t;
+        q.x = 0.25f * t;
+        q.y = (r[0][1] + r[1][0]) / t;
+        q.z = (r[0][2] + r[2][0]) / t;
+    } else if (r[1][1] > r[2][2]) {
+        const float t = std::sqrt(1.0f + r[1][1] - r[0][0] - r[2][2]) * 2.0f;
+        q.w = (r[0][2] - r[2][0]) / t;
+        q.x = (r[0][1] + r[1][0]) / t;
+        q.y = 0.25f * t;
+        q.z = (r[1][2] + r[2][1]) / t;
+    } else {
+        const float t = std::sqrt(1.0f + r[2][2] - r[0][0] - r[1][1]) * 2.0f;
+        q.w = (r[1][0] - r[0][1]) / t;
+        q.x = (r[0][2] + r[2][0]) / t;
+        q.y = (r[1][2] + r[2][1]) / t;
+        q.z = 0.25f * t;
+    }
+    s.rot = nl::math::normalizeQuat(q);
+    return s;
+}
+
+// ---------------------------------------------------------------------------
 // M-E1b.0：ECS 场景模式（--scene <file>）。场景文件不是 assets 白名单资产，
 // 按传入路径直读；组件库显式注册后 World::deserialise（负向 = 用法错误码 2，
 // 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
@@ -1384,6 +1456,16 @@ int runScene(const Options& o) {
         d.metallic  = model->metallic;
         d.meshFile = meshFiles[k].c_str();
         objects.push_back(d);
+    }
+
+    // ---- P8 M-GL3：插值样本（prev/curr 世界 TRS，per modelId）----
+    // 每渲染帧 tick 前 snapshot prev（上一 tick 边界态）、tick 后 snapshot curr；
+    // 无条件维护（开销 = 每实体两次矩阵分解），game.interp 运行时切换零毛刺。
+    std::vector<WorldSample> interpPrev(modelIds.size());
+    std::vector<WorldSample> interpCurr(modelIds.size());
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+        interpPrev[k] = interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
     }
 
     // ---- 3. 窗口 + sceneMode Renderer ----
@@ -1551,6 +1633,23 @@ int runScene(const Options& o) {
                           id, args[1].c_str(), p.x, p.y, p.z);
             return {true, std::string(buf)};
         });
+    // M-GL3：渲染帧插值开关（--interp 初值；game.interp 运行时切换）。
+    bool interpOn = o.interp;
+    sceneConsole.registerCommand("game.interp",
+        "toggle/set render-frame interpolation (on|off); render-only, never written back to sim",
+        [&](const std::vector<std::string>& args) -> nl::core::console::CommandResult {
+            if (args.size() == 1) {
+                const auto& v = args[0];
+                if (v == "on" || v == "1" || v == "true") interpOn = true;
+                else if (v == "off" || v == "0" || v == "false") interpOn = false;
+                else return {false, "usage: game.interp [on|off]"};
+            } else if (args.size() > 1) {
+                return {false, "usage: game.interp [on|off]"};
+            } else {
+                interpOn = !interpOn;   // 无参 = 翻转（game.pause 同款）
+            }
+            return {true, std::string("game.interp -> ") + (interpOn ? "on" : "off")};
+        });
     for (const auto& line : o.consoleExecLines) {
         const auto r = sceneConsole.exec(line);
         if (r.ok()) {
@@ -1632,6 +1731,12 @@ int runScene(const Options& o) {
         // renderFrame 的命令列表执行）。
         if (ticking) {
             constexpr double kFixedDt = 1.0 / 60.0;
+            // P8 M-GL3：tick 前 snapshot prev（上一 tick 边界态 = 上帧 tick 后态）。
+            // 无条件维护（不依赖 interpOn——game.interp 运行时切换零毛刺）。
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                interpPrev[k] = decomposeWorldTRS(t->getWorldMatrix());
+            }
             // P8 M-GL2：逐渲染帧固定步长 → GameClock 双帧驱动（暂停=game.pause、
             // 倍速=game.timeScale、250ms 截断全在时钟内）。逻辑帧内：ECS tick +
             // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
@@ -1660,12 +1765,33 @@ int runScene(const Options& o) {
                 camera.eyePosition(eye3);
                 audioWorld->setListenerPosition({eye3[0], eye3[1], eye3[2]});
             }
+            // M-GL3：tick 后 snapshot curr（本帧最终 tick 边界态）。
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
+            }
             // 刷新实例数据：Transform 重取世界矩阵（getWorldMatrix 递归现算，
             // 改 rotation 即生效）。tint/材质不变，updateEcsObjects 全量覆盖。
+            // M-GL3：交互态 interpOn 时渲染帧用 prev/curr 插值态（alpha =
+            // accumulator/step，bevy overstep/timestep 同口径），渲染专用不回写
+            // 组件。截图模式恒走原 getWorldMatrix() 路径（截图=确定性产物：
+            // 与不插值同一代码路径 → PNG 逐字节同；分解→重构 roundtrip 非逐位，
+            // 钉 alpha 仍会引入 1ulp 级差异，故不采用钉 alpha 方案——首版实测
+            // PNG MD5 不等即此因）。插值数值证据走捕获帧 probe 日志。
             for (std::size_t k = 0; k < modelIds.size(); ++k) {
                 const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
                 const auto* m = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
-                const auto wm = t->getWorldMatrix();
+                nl::math::Mat4 wm;
+                if (interpOn && !o.screenshot) {
+                    const float a = static_cast<float>(gameClock.alpha());
+                    const auto& s0 = interpPrev[k];
+                    const auto& s1 = interpCurr[k];
+                    wm = nl::math::mat4TRS(nl::math::lerpVec3(s0.pos, s1.pos, a),
+                                           nl::math::slerpQuat(s0.rot, s1.rot, a),
+                                           nl::math::lerpVec3(s0.scale, s1.scale, a));
+                } else {
+                    wm = t->getWorldMatrix();
+                }
                 std::memcpy(objects[k].world, wm.m, sizeof(objects[k].world));
                 objects[k].tint[0] = m->tint.x;
                 objects[k].tint[1] = m->tint.y;
@@ -1678,6 +1804,37 @@ int runScene(const Options& o) {
                 nl::core::log::error("ecs updateEcsObjects failed: ", renderer->lastError());
                 failed = true;
                 break;
+            }
+        }
+
+        // M-GL3 机器证据（捕获帧）：插值探针——PNG 恒走 tick 边界原路径（见上），
+        // 日志记录真实 alpha 与 prev/curr/interp 数值（verify.py 孪生复算
+        // lerp/slerp + SpinSystem 轨道位置）。暂停帧 prev==curr，插值态恒等于冻结态。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) && interpOn &&
+            !modelIds.empty()) {
+            const double probeAlpha = gameClock.alpha();
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto& s0 = interpPrev[k];
+                const auto& s1 = interpCurr[k];
+                const auto ip = nl::math::lerpVec3(s0.pos, s1.pos,
+                                                   static_cast<float>(probeAlpha));
+                const auto iq = nl::math::slerpQuat(s0.rot, s1.rot,
+                                                    static_cast<float>(probeAlpha));
+                char buf[512];
+                std::snprintf(buf, sizeof(buf),
+                              "interp probe: k=%zu alpha=%.6f"
+                              " prev=(%.6f,%.6f,%.6f) curr=(%.6f,%.6f,%.6f)"
+                              " interp=(%.6f,%.6f,%.6f)"
+                              " pq=(%.6f,%.6f,%.6f,%.6f) cq=(%.6f,%.6f,%.6f,%.6f)"
+                              " iq=(%.6f,%.6f,%.6f,%.6f)",
+                              k, probeAlpha,
+                              s0.pos.x, s0.pos.y, s0.pos.z,
+                              s1.pos.x, s1.pos.y, s1.pos.z,
+                              ip.x, ip.y, ip.z,
+                              s0.rot.x, s0.rot.y, s0.rot.z, s0.rot.w,
+                              s1.rot.x, s1.rot.y, s1.rot.z, s1.rot.w,
+                              iq.x, iq.y, iq.z, iq.w);
+                nl::core::log::info(buf);
             }
         }
 
@@ -1885,6 +2042,7 @@ void printUsage() {
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
+              << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
               << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
               << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"
               << "                                     (deterministic pause/timescale screenshot runs)\n"

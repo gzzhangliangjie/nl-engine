@@ -85,3 +85,12 @@ M-GL0 实测：240 行 + 9 行全等（ticks/tickCount 精确；simTime/alpha 1e
 - **gl2-audio.scene 设计**：orb-a/orb-b 是自转实体 spin-a/spin-b 的**轨道子实体**（E1a 层级）——SpinSystem 只改 rotation（原地自转），直接挂 spin 实体世界位置不变，证不了「随物体移动」；子实体偏移随父旋转形成轨道（半径 1.6/1.4 不变量 = verify.py 几何断言）。
 - **AudioWorld 生命周期**（scene 模式）：realtime 优先，设备初始化失败降级 offline（位置读回同步不依赖设备，无扬声器环境可跑全套验收）；listener 位置渲染帧同步，声源位置逻辑帧同步。
 - **验收复现**：`example/gl2/run.bat`（动/停两组 × 双后端 + verify.py 孪生全绿，exit 0）。
+
+## 渲染帧插值（M-GL3 起）
+
+- **开关**：CLI `--interp`（初值）+ console `game.interp`（无参翻转 / `on|off`）。
+- **口径**：`alpha = GameClock::alpha()`（= accumulator/kStep，与 bevy `Time<Fixed>::overstep()/timestep()` 同构）。每渲染帧 tick 前后快照 prev/curr **世界 TRS**（列主序矩阵分解：三列长度 = scale、归一化列 = 旋转、Shepperd 法矩阵→四元数），交互态渲染 `mat4TRS(lerp(pos), slerpQuat(rot), lerp(scale))`（`nl::math::slerpQuat` 最短路径 + 近平行 nlerp 退化）。
+- **纪律（拍板）**：插值**渲染专用、绝不回写 sim state**——组件态只在逻辑帧内变化（社区 crate bevy_transform_interpolation 的公开纪律；bevy core 全树无内建 transform 插值器，v0.16.1 实读 0 命中）。Carrot/UE 不插值。
+- **截图 = 确定性产物**：截图模式恒走不插值原路径（`getWorldMatrix()`），PNG 与 `--interp` 缺省运行**逐字节同**。首版曾试「截图钉 alpha=0 走分解重构」——分解→重构 roundtrip 非逐位（normalize/sqrt 引入 1ulp 级差异），PNG MD5 不等，否决（留痕 viewer/main.cpp M-GL3 注释）。
+- **数值证据**：捕获帧 probe 日志（`interp probe: k=... alpha=... prev/curr/interp pq/cq/iq`）——verify.py 独立孪生复算三重：① lerp/slerp 自洽；② GameClock accumulator 复推（`--fixed-dt 25` → 每帧 tick [1,2,1]、捕获帧 alpha=0.5）；③ SpinSystem 公式孪生（`w_i = 0.9×(1+0.5·idx)` rad/s，idx = Transform 载体实体注册序）算轨道世界位置。
+- **验收复现**：`example/gl3/run.bat`（equal/mid/pause/smoke 四组 × 双后端，exit 0）。
