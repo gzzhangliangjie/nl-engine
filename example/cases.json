@@ -4055,6 +4055,129 @@
      "command": "audio-tools check example/audio-s1/bad-prov"
     }
    ]
+  },
+  {
+   "id": "audio-s2",
+   "label": "M-S2",
+   "name": "游戏内音频调试：master volume / solo / freeze 单步 / 声源快照",
+   "tag": "audio-s2",
+   "date": "2026-11-09",
+   "note": "A 类工具版交代；不进 kStage、不进渲染回归。AudioDebugController 默认纯透传（volume=1/无 solo/未冻结），M-S0/M-S1 离线基线逐字节不变。",
+   "acceptance": [
+    "masterVolume 0..2 折进 effectiveGain：x0 全零、x2 峰值翻倍、x0.5 峰值恰为一半（ratio=0.500000）",
+    "solo(id)：他源 effectiveGain=0 静音，solo(1) 混音与单源渲染逐字节一致",
+    "freeze：readFrames 返回 0 不推进时钟；stepFrames 跳过守卫单步推进，首块与未冻结世界逐字节一致",
+    "debug 快照：entity/position/distance/gain/state 逐源可读（footsteps@0 / wind@z=10，model=none 平坦）",
+    "防假绿：FNV-1a64 波形哈希独立复算（verify-dump-hash.py），篡改样本或篡改存储哈希任一都被拒绝；solo 与 freeze 哈希相同（单步首块 == solo 混音）交叉验证",
+    "DX12 + VULKAN 双构建树 BUILD OK，audio-tools selftest 46/46 各绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/audio-tools.exe",
+    "vulkan": "build/vulkan/audio-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2；M-S2 四个子命令（volume/solo/freeze/debug）已列入总览。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "audio-tools - nl-engine",
+     "command": "audio-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：46 条断言（M-S0 21 + M-S1 12 + M-S2 13）",
+     "kind": "tool",
+     "note": "M-S2 段：控制器 reset 透传默认、volume 0/2 两端、solo 静音他源且混音等价单源、freeze 读零步进且等价正常首块、debug 快照字段齐全。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "audio selftest: PASS (46/46)",
+     "preview": "example/audio-s2/acceptance.png",
+     "command": "audio-tools selftest"
+    },
+    {
+     "id": "volume",
+     "name": "volume 0.5：主音量折进有效增益",
+     "kind": "tool",
+     "note": "dump 2048 帧 + format=3 provenance（masterVolume/soloId/frozen/debug 态）；峰值恰为全增益一半，哈希独立复算通过。",
+     "args": [
+      "volume",
+      "0.5",
+      "{root}/assets/audio/test-tone.wav",
+      "{root}/example/audio-s2/volume"
+     ],
+     "expectExit": 0,
+     "expectLog": "volume: PASS",
+     "preview": "example/audio-s2/volume.png",
+     "command": "audio-tools volume 0.5 assets/audio/test-tone.wav example/audio-s2/volume"
+    },
+    {
+     "id": "solo",
+     "name": "solo 1：目标源通过、他源静音",
+     "kind": "tool",
+     "note": "两命名源并发；provenance 记录每源 effectiveGain（src1=1 / src2=0）。与 freeze 哈希相同：单步首块 == solo 混音。",
+     "args": [
+      "solo",
+      "1",
+      "{root}/assets/audio/test-tone.wav",
+      "{root}/assets/audio/test-tone-b.wav",
+      "{root}/example/audio-s2/solo"
+     ],
+     "expectExit": 0,
+     "expectLog": "solo: PASS",
+     "preview": "example/audio-s2/solo-freeze.png",
+     "command": "audio-tools solo 1 assets/audio/test-tone.wav assets/audio/test-tone-b.wav example/audio-s2/solo"
+    },
+    {
+     "id": "freeze",
+     "name": "freeze：时钟冻结 + stepFrames 单步",
+     "kind": "tool",
+     "note": "frozen 时 readFrames=0（时钟保持）；stepFrames=2048 推进且产出音频；波形哈希与 solo 混音相同。",
+     "args": [
+      "freeze",
+      "{root}/assets/audio/test-tone.wav",
+      "{root}/example/audio-s2/freeze"
+     ],
+     "expectExit": 0,
+     "expectLog": "freeze: PASS",
+     "preview": "example/audio-s2/solo-freeze.png",
+     "command": "audio-tools freeze assets/audio/test-tone.wav example/audio-s2/freeze"
+    },
+    {
+     "id": "debug",
+     "name": "debug：逐源快照（entity/pos/dist/gain/state）",
+     "kind": "tool",
+     "note": "spatialization 世界两定位命名源；snapshot.tsv + debug.txt（同 ImGui 面板数据源 AudioDebugController）；model=none 平坦但位置距离照记。",
+     "args": [
+      "debug",
+      "{root}/assets/audio/test-tone.wav",
+      "{root}/assets/audio/test-tone-b.wav",
+      "{root}/example/audio-s2/debug"
+     ],
+     "expectExit": 0,
+     "expectLog": "debug: PASS",
+     "preview": "example/audio-s2/debug-panel.png",
+     "command": "audio-tools debug assets/audio/test-tone.wav assets/audio/test-tone-b.wav example/audio-s2/debug"
+    },
+    {
+     "id": "negative-usage",
+     "name": "负向：solo 缺 wavB 参数（exit 2）",
+     "kind": "tool",
+     "note": "argc != 6 时显式拒绝为用法错误；负向夹具（篡改波形/篡改哈希 → exit 1）由 run.bat 的 verify-dump-hash.py 机器断言覆盖。",
+     "args": [
+      "solo",
+      "1",
+      "{root}/assets/audio/test-tone.wav"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit codes: 0=ok 1=runtime/assert failure 2=usage error",
+     "command": "audio-tools solo 1 assets/audio/test-tone.wav"
+    }
+   ]
   }
  ]
 }

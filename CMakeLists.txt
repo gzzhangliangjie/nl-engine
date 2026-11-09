@@ -151,6 +151,8 @@ add_library(nl_core STATIC
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
     core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
+    core/src/audio/DebugController.cpp  # P8 M-S2：调试态单例（音量/独奏/冻结/面板开关）
+    core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
@@ -170,6 +172,7 @@ add_library(nl_renderer STATIC
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
+    renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace nl::audio {
 
@@ -66,7 +67,9 @@ struct SpatialDesc {
 struct SourceDesc {
     std::uint32_t id = 0;
     std::string   clip;
+    std::string   entity;          // M-S2: owning ECS entity label
     float         gain    = 1.0f;
+    float         effectiveGain = 1.0f;  // M-S2: post masterVolume/solo/audible
     bool          looping = false;
     bool          playing = false;
     SpatialDesc   spatial;
@@ -81,6 +84,25 @@ struct CacheStats {
     std::uint32_t hits         = 0;  // reused clip, probe skipped
     std::uint32_t sources      = 0;
     std::uint32_t maxClipRefs  = 0;
+};
+
+// M-S2 debug snapshot: one row of the in-game audio debug panel / `debug` tool
+// output. `effectiveGain` already folds in master volume + solo + out-of-range mute
+// (computed by AudioWorld::refreshAudibility against AudioDebugController).
+struct SourceSnapshot {
+    std::uint32_t id = 0;
+    std::string   entity;           // ECS entity label (or "src-<id>" fallback)
+    Vec3          position{};
+    Vec3          listenerPosition{};
+    float         distance       = 0.0f;   // source -> listener
+    float         baseGain       = 0.0f;   // configured gain
+    float         effectiveGain  = 0.0f;   // post masterVolume / solo / audible
+    bool          playing        = false;
+    bool          audible        = true;   // within maxDistance (M-S1 semantics)
+    bool          soloed         = false;  // this source is the solo target
+    bool          muted          = false;  // muted because another source is soloed
+    std::string   clip;
+    AttenuationModel model = AttenuationModel::Inverse;
 };
 
 class AudioWorld {
@@ -109,6 +131,9 @@ public:
     bool sourceDesc(std::uint32_t id, SourceDesc* out) const;
     std::uint32_t sourceCount() const;
 
+    // M-S2: label a source with its owning ECS entity (panel / `debug` readability).
+    bool setSourceEntity(std::uint32_t id, const std::string& name, std::string* err = nullptr);
+
     // M-S1 3D source state. Requires AudioConfig::spatialization = true.
     bool setSourcePosition(std::uint32_t id, const Vec3& pos, std::string* err = nullptr);
     bool setSourceDirection(std::uint32_t id, const Vec3& dir, std::string* err = nullptr);
@@ -133,10 +158,22 @@ public:
     std::uint32_t  clipRefCount(const std::string& wavPath) const;
 
     // Offline path: pull interleaved f32 PCM. Returns frames actually read.
+    // Honors AudioDebugController::frozen() — when frozen, returns 0 and does NOT
+    // advance the engine clock (M-S2 single-step debugging).
     std::uint64_t readFrames(float* dst, std::uint64_t frameCount);
+
+    // M-S2: advance the mix regardless of the frozen flag (single-step when paused).
+    std::uint64_t stepFrames(float* dst, std::uint64_t frameCount);
+
+    // M-S2: snapshot every active source for the debug panel / `debug` tool.
+    std::vector<SourceSnapshot> snapshot() const;
 
     // Realtime path: play one WAV on the default device, block until it ends.
     bool playRealtimeBlocking(const std::string& wavPath, std::string* err = nullptr);
+
+    // M-S2: bind this world as the one the debug panel / audio.dump inspects.
+    void bindToDebug();
+    void unbindFromDebug();
 
 private:
     struct Impl;

@@ -7,6 +7,8 @@
 //   play <wav>                    realtime playback on the default device
 // Exit codes: 0 = ok, 1 = runtime/assert failure, 2 = usage error.
 #include "nl/audio/AudioWorld.hpp"
+#include "nl/audio/DebugController.hpp"
+#include "nl/core/console.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -91,6 +93,10 @@ void usage() {
         "  audio-tools spatial <outdir>               M-S1 attenuation/mixing/cache dump\n"
         "  audio-tools check <outdir>                 re-render from provenance, per-sample compare\n"
         "  audio-tools play <wav>                     realtime playback on default device\n"
+        "  audio-tools volume <gain> <wav> <outdir>   M-S2 master-volume scaling (gain 0..2)\n"
+        "  audio-tools solo <id> <wavA> <wavB> <outdir>  M-S2 solo id (1|2), other source muted\n"
+        "  audio-tools freeze <wav> <outdir>          M-S2 freeze pauses + step advances\n"
+        "  audio-tools debug <wavA> <wavB> <outdir>   M-S2 source snapshot (entity/pos/dist/gain/state)\n"
         "exit codes: 0=ok 1=runtime/assert failure 2=usage error\n");
 }
 
@@ -717,7 +723,254 @@ int cmdSpatial(const fs::path& outdir) {
     return 0;
 }
 
-// ================== end M-S1 ==================
+// ================== M-S2: game-internal audio debug (volume / solo / freeze / snapshot) ==================
+// A-class track deliverable. These four subcommands exercise the SAME gain path the
+// in-game ImGui panel / audio.dump console command use (AudioDebugController ->
+// AudioWorld::refreshAudibility). They do NOT touch the resident HUD and run on the
+// same pure-CPU exe as M-S0/M-S1.
+
+// Render a mix of N sources under the CURRENT AudioDebugController state
+// (masterVolume + solo folded into each source's effectiveGain). Used by cmdSolo and
+// the M-S2 selftest so the "mute other source" behavior is exercised through the
+// exact same gain path the panel uses.
+RenderResult renderMix(const std::vector<std::string>& wavs, std::uint64_t frames) {
+    RenderResult r;
+    AudioConfig cfg;
+    cfg.sampleRate = kSampleRate;
+    cfg.channels   = kChannels;
+    cfg.offline    = true;
+    AudioWorld world(cfg);
+    if (!world.ok()) { r.err = "noDevice engine: " + world.error(); return r; }
+    std::string e;
+    for (const auto& wav : wavs) {
+        const std::uint32_t id = world.createSource(wav, &e);
+        if (!id) { r.err = e; return r; }
+        if (!world.configureSource(id, 1.0f, false, &e)) { r.err = e; return r; }
+        if (!world.startSource(id, &e)) { r.err = e; return r; }
+    }
+    r.pcm.assign(static_cast<std::size_t>(frames * kChannels), 0.0f);
+    std::uint64_t done = 0;
+    while (done < frames) {
+        const std::uint64_t n = world.readFrames(
+            r.pcm.data() + done * kChannels, frames - done);
+        if (n == 0) break;
+        done += n;
+    }
+    if (done != frames) {
+        r.err = "offline mix read short: " + std::to_string(done) + " of " + std::to_string(frames);
+        return r;
+    }
+    r.frames = frames;
+    r.ok = true;
+    return r;
+}
+
+// Fold the active debug state + rendered PCM into a waveform.tsv + provenance.txt.
+// `kind` distinguishes the four M-S2 subcommands; `extra` are extra provenance lines.
+bool dumpDebugCore(const fs::path& outdir, const std::vector<float>& pcm,
+                   std::uint64_t frames, const std::string& kind,
+                   const std::string& extra, std::string* summary, std::string* err) {
+    const std::string hdr = "# frame left right\n";
+    std::string body;
+    body.reserve(static_cast<std::size_t>(frames) * 30);
+    char line[128];
+    float peak = 0.0f;
+    std::uint64_t nonZero = 0;
+    for (std::uint64_t i = 0; i < frames; ++i) {
+        const float L = pcm[static_cast<std::size_t>(i * kChannels)];
+        const float R = pcm[static_cast<std::size_t>(i * kChannels + 1)];
+        std::snprintf(line, sizeof(line), "%llu %s %s\n",
+                      static_cast<unsigned long long>(i), fmtFloat(L).c_str(), fmtFloat(R).c_str());
+        body += line;
+        peak = (std::max)(peak, (std::max)(std::fabs(L), std::fabs(R)));
+        if (L != 0.0f || R != 0.0f) ++nonZero;
+    }
+    const std::string hash = hex64(fnv1a64(hdr + body));
+    std::error_code ec;
+    fs::create_directories(outdir, ec);
+    if (ec) { if (err) *err = "cannot create outdir: " + outdir.string(); return false; }
+    if (!writeFile(outdir / "waveform.tsv", hdr + body, err)) return false;
+    auto& ctrl = nl::audio::AudioDebugController::get();
+    std::string prov = "format=3\n";
+    prov += "tool=audio-tools\n";
+    prov += "milestone=M-S2/" + kind + "\n";
+    prov += "engine=noDevice\n";
+    prov += "masterVolume=" + fmtFloat(ctrl.masterVolume()) + "\n";
+    prov += "soloId=" + std::to_string(ctrl.soloId()) + "\n";
+    prov += "frozen=" + std::string(ctrl.frozen() ? "1" : "0") + "\n";
+    prov += "sampleRate=" + std::to_string(kSampleRate) + "\n";
+    prov += "channels=" + std::to_string(kChannels) + "\n";
+    prov += "frames=" + std::to_string(frames) + "\n";
+    prov += extra;
+    prov += "waveformHash=" + hash + "\n";
+    if (!writeFile(outdir / "provenance.txt", prov, err)) return false;
+    if (summary) {
+        char b[256];
+        std::snprintf(b, sizeof(b),
+            "debug[%s]: frames=%llu peak=%.6f nonzero=%llu hash=%s",
+            kind.c_str(), static_cast<unsigned long long>(frames),
+            static_cast<double>(peak), static_cast<unsigned long long>(nonZero),
+            hash.c_str());
+        *summary = std::string(b) + "\n" + kind + ": PASS";
+    }
+    return true;
+}
+
+int cmdVolume(float gain, const std::string& wav, const fs::path& outdir) {
+    auto& ctrl = nl::audio::AudioDebugController::get();
+    ctrl.reset();
+    ctrl.setMasterVolume(gain);
+    const std::uint64_t frames = 2048;
+    const RenderResult r = render(wav, frames, 1.0f, false);
+    if (!r.ok) { std::printf("volume: FAIL %s\n", r.err.c_str()); return 1; }
+    std::string summary, err;
+    if (!dumpDebugCore(outdir, r.pcm, frames, "volume",
+                       "requestedGain=" + fmtFloat(gain) + "\n", &summary, &err)) {
+        std::printf("volume: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::printf("%s\n", summary.c_str());
+    return 0;
+}
+
+int cmdSolo(std::int64_t id, const std::string& wavA, const std::string& wavB,
+            const fs::path& outdir) {
+    auto& ctrl = nl::audio::AudioDebugController::get();
+    ctrl.reset();
+    ctrl.setSolo(id);
+    const std::uint64_t frames = 2048;
+    AudioConfig cfg;
+    cfg.sampleRate = kSampleRate; cfg.channels = kChannels; cfg.offline = true;
+    AudioWorld world(cfg);
+    if (!world.ok()) { std::printf("solo: FAIL %s\n", world.error().c_str()); return 1; }
+    std::string e;
+    const std::uint32_t sid1 = world.createSource(wavA, &e);
+    const std::uint32_t sid2 = world.createSource(wavB, &e);
+    if (!sid1 || !sid2) { std::printf("solo: FAIL %s\n", e.c_str()); return 1; }
+    if (!world.configureSource(sid1, 1.0f, false, &e) ||
+        !world.configureSource(sid2, 1.0f, false, &e) ||
+        !world.startSource(sid1, &e) || !world.startSource(sid2, &e)) {
+        std::printf("solo: FAIL %s\n", e.c_str()); return 1;
+    }
+    std::vector<float> pcm(frames * kChannels, 0.0f);
+    std::uint64_t done = 0;
+    while (done < frames) {
+        const std::uint64_t n = world.readFrames(pcm.data() + done * kChannels, frames - done);
+        if (n == 0) break;
+        done += n;
+    }
+    if (done != frames) { std::printf("solo: FAIL mix read short\n"); return 1; }
+    const auto snap = world.snapshot();
+    std::string extra = "soloId=" + std::to_string(id) + "\n";
+    for (const auto& s : snap)
+        extra += "src" + std::to_string(s.id) + ".effGain=" + fmtFloat(s.effectiveGain) + "\n";
+    std::string summary, err;
+    if (!dumpDebugCore(outdir, pcm, frames, "solo", extra, &summary, &err)) {
+        std::printf("solo: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::printf("%s\n", summary.c_str());
+    return 0;
+}
+
+int cmdFreeze(const std::string& wav, const fs::path& outdir) {
+    auto& ctrl = nl::audio::AudioDebugController::get();
+    ctrl.reset();
+    ctrl.setFrozen(true);
+    const std::uint64_t frames = 2048;
+    AudioConfig cfg;
+    cfg.sampleRate = kSampleRate; cfg.channels = kChannels; cfg.offline = true;
+    AudioWorld world(cfg);
+    if (!world.ok()) { std::printf("freeze: FAIL %s\n", world.error().c_str()); return 1; }
+    std::string e;
+    const std::uint32_t fid = world.createSource(wav, &e);
+    if (!fid || !world.configureSource(fid, 1.0f, false, &e) || !world.startSource(fid, &e)) {
+        std::printf("freeze: FAIL %s\n", e.c_str()); return 1;
+    }
+    std::vector<float> zeros(frames * kChannels, 0.0f);
+    const std::uint64_t readN = world.readFrames(zeros.data(), frames);   // frozen -> 0
+    std::vector<float> stepPcm(frames * kChannels, 0.0f);
+    const std::uint64_t stepN = world.stepFrames(stepPcm.data(), frames); // advances
+    float peak = 0.0f;
+    for (float v : stepPcm) peak = (std::max)(peak, std::fabs(v));
+    std::string extra = "readFrozen=" + std::to_string(readN) +
+                        "\nstepFrames=" + std::to_string(stepN) + "\n";
+    std::string summary, err;
+    if (!dumpDebugCore(outdir, stepPcm, frames, "freeze", extra, &summary, &err)) {
+        std::printf("freeze: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::printf("%s\n", summary.c_str());
+    return 0;
+}
+
+int cmdDebug(const std::string& wavA, const std::string& wavB, const fs::path& outdir) {
+    auto& ctrl = nl::audio::AudioDebugController::get();
+    ctrl.reset();
+    AudioConfig cfg;
+    cfg.sampleRate = kSampleRate; cfg.channels = kChannels; cfg.offline = true;
+    cfg.spatialization = true;   // need position setters recorded for the snapshot
+    AudioWorld world(cfg);
+    if (!world.ok()) { std::printf("debug: FAIL %s\n", world.error().c_str()); return 1; }
+    std::string e;
+    // Snapshot readability: record the portable repo-relative clip path, not the
+    // caller's raw argument (run.bat passes absolute paths with ..\..\ segments).
+    const std::string pwavA = portableWav(wavA);
+    const std::string pwavB = portableWav(wavB);
+    const std::uint32_t did1 = world.createSource(pwavA, &e);
+    const std::uint32_t did2 = world.createSource(pwavB, &e);
+    if (!did1 || !did2) { std::printf("debug: FAIL %s\n", e.c_str()); return 1; }
+    // model=none -> no distance gain (effectiveGain stays 1); positions/distance still recorded.
+    if (!world.setSourceAttenuation(did1, AttenuationModel::None, 1.0f, 20.0f, 0.5f, &e) ||
+        !world.setSourceAttenuation(did2, AttenuationModel::None, 1.0f, 20.0f, 0.5f, &e) ||
+        !world.setSourcePosition(did1, Vec3{0.0f, 0.0f, 0.0f}, &e) ||
+        !world.setSourcePosition(did2, Vec3{0.0f, 0.0f, 10.0f}, &e) ||
+        !world.setListenerPosition(Vec3{0.0f, 0.0f, 0.0f}, &e) ||
+        !world.setSourceEntity(did1, "footsteps") || !world.setSourceEntity(did2, "wind") ||
+        !world.configureSource(did1, 1.0f, false, &e) ||
+        !world.configureSource(did2, 1.0f, false, &e) ||
+        !world.startSource(did1, &e) || !world.startSource(did2, &e)) {
+        std::printf("debug: FAIL %s\n", e.c_str()); return 1;
+    }
+    world.bindToDebug();
+    const std::string text = ctrl.debugText();
+    const auto snap = world.snapshot();
+    std::error_code ec;
+    fs::create_directories(outdir, ec);
+    if (ec) { std::printf("debug: FAIL cannot create outdir\n"); return 1; }
+    std::string err;
+    if (!writeFile(outdir / "debug.txt", text, &err)) {
+        std::printf("debug: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::string snapTsv = "# id entity clip model pos(x,y,z) dist gain(eff) state\n";
+    char line[512];
+    for (const auto& s : snap) {
+        std::snprintf(line, sizeof(line),
+            "%u %s %s %s (%.2f,%.2f,%.2f) %.3f %.4f %s%s%s%s\n",
+            s.id, s.entity.c_str(), s.clip.c_str(),
+            attenuationModelName(s.model),
+            static_cast<double>(s.position.x), static_cast<double>(s.position.y),
+            static_cast<double>(s.position.z), static_cast<double>(s.distance),
+            static_cast<double>(s.effectiveGain),
+            s.playing ? "play" : "stop", s.audible ? "" : " silent",
+            s.soloed ? " solo" : "", s.muted ? " muted" : "");
+        snapTsv += line;
+    }
+    if (!writeFile(outdir / "snapshot.tsv", snapTsv, &err)) {
+        std::printf("debug: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::string prov = "format=3\n";
+    prov += "tool=audio-tools\nmilestone=M-S2/debug\nengine=noDevice|spatialization\n";
+    prov += "sampleRate=" + std::to_string(kSampleRate) + "\n";
+    prov += "channels=" + std::to_string(kChannels) + "\n";
+    prov += "sources=" + std::to_string(snap.size()) + "\n";
+    prov += "wavA=" + pwavA + "\nwavB=" + pwavB + "\n";
+    if (!writeFile(outdir / "provenance.txt", prov, &err)) {
+        std::printf("debug: FAIL %s\n", err.c_str()); return 1;
+    }
+    std::printf("debug: %zu active source(s)\n%sdebug: PASS\n",
+                static_cast<std::size_t>(snap.size()), text.c_str());
+    return 0;
+}
+
+// ================== end M-S2 ==================
 
 int cmdSelftest() {
     int total = 0, fail = 0;
@@ -874,6 +1127,127 @@ int cmdSelftest() {
               "M-S1 mixing: two concurrent sources sum linearly");
     }
 
+    // ---- M-S2: game-internal debug (volume / solo / freeze / snapshot) ----
+    std::printf("audio selftest (M-S2):\n");
+    {
+        auto& ctrl = nl::audio::AudioDebugController::get();
+        ctrl.reset();
+        check(ctrl.masterVolume() == 1.0f && !ctrl.hasSolo() && ctrl.soloId() == 0 &&
+              !ctrl.frozen() && !ctrl.debug(),
+              "M-S2 controller: reset() restores passthrough defaults");
+
+        // masterVolume = 0 -> entire mix silent
+        ctrl.reset();
+        ctrl.setMasterVolume(0.0f);
+        const RenderResult v0 = render(wav, 2048, 1.0f, false);
+        bool v0silent = v0.ok;
+        for (float x : v0.pcm) { if (x != 0.0f) { v0silent = false; break; } }
+        check(v0silent, "M-S2 volume: masterVolume=0 -> whole mix silent");
+
+        // masterVolume = 2 -> peak doubles (clip peak < 1 so no output clip)
+        ctrl.reset();
+        const RenderResult v1 = render(wav, 2048, 1.0f, false);
+        ctrl.setMasterVolume(2.0f);
+        const RenderResult v2 = render(wav, 2048, 1.0f, false);
+        float pk1 = 0, pk2 = 0;
+        for (float x : v1.pcm) pk1 = (std::max)(pk1, std::fabs(x));
+        for (float x : v2.pcm) pk2 = (std::max)(pk2, std::fabs(x));
+        check(v1.ok && v2.ok && std::fabs(pk2 - 2.0f * pk1) < 1e-3,
+              "M-S2 volume: masterVolume=2 -> peak doubles");
+
+        // solo: the non-soloed source is muted; mix == solo source only
+        ctrl.reset();
+        ctrl.setSolo(1);
+        AudioConfig scfg; scfg.offline = true; scfg.channels = kChannels; scfg.sampleRate = kSampleRate;
+        AudioWorld sw(scfg);
+        std::string se;
+        const std::uint32_t sid1 = sw.createSource(wav, &se);
+        const std::uint32_t sid2 = sw.createSource(defaultWavB(), &se);
+        check(sid1 && sid2 && sw.setSourceEntity(sid1, "player") &&
+              sw.setSourceEntity(sid2, "ambient") &&
+              sw.configureSource(sid1, 1.0f, false, &se) &&
+              sw.configureSource(sid2, 1.0f, false, &se) &&
+              sw.startSource(sid1, &se) && sw.startSource(sid2, &se),
+              "M-S2 solo: two named sources created");
+        const auto ssnap = sw.snapshot();
+        check(ssnap.size() == 2 && ssnap[0].effectiveGain == 1.0f && ssnap[0].soloed &&
+              ssnap[1].effectiveGain == 0.0f && ssnap[1].muted,
+              "M-S2 solo: soloed source gain=1, other muted gain=0");
+        std::vector<float> mix(2048 * kChannels, 0.0f);
+        std::uint64_t md = 0;
+        while (md < 2048) {
+            std::uint64_t n = sw.readFrames(mix.data() + md * kChannels, 2048 - md);
+            if (n == 0) break;
+            md += n;
+        }
+        const RenderResult s1only = render(wav, 2048, 1.0f, false);
+        bool soloMixEq = s1only.ok && md == 2048 &&
+            std::memcmp(mix.data(), s1only.pcm.data(), mix.size() * sizeof(float)) == 0;
+        check(soloMixEq, "M-S2 solo: mix with solo(1) == source-1-only (other muted)");
+        ctrl.reset();
+
+        // freeze: readFrames returns 0 while frozen; stepFrames still advances
+        ctrl.reset();
+        ctrl.setFrozen(true);
+        AudioConfig fcfg; fcfg.offline = true; fcfg.channels = kChannels; fcfg.sampleRate = kSampleRate;
+        AudioWorld fw(fcfg);
+        std::string fe;
+        const std::uint32_t fid = fw.createSource(wav, &fe);
+        check(fid && fw.configureSource(fid, 1.0f, false, &fe) && fw.startSource(fid, &fe),
+              "M-S2 freeze: world + source ready");
+        std::vector<float> fbuf(2048 * kChannels, 0.0f);
+        const std::uint64_t fr = fw.readFrames(fbuf.data(), 2048);
+        check(fr == 0, "M-S2 freeze: readFrames returns 0 while frozen (clock held)");
+        std::vector<float> stepPcm(2048 * kChannels, 0.0f);
+        const std::uint64_t fs2 = fw.stepFrames(stepPcm.data(), 2048);
+        float fpeak = 0;
+        for (float x : stepPcm) fpeak = (std::max)(fpeak, std::fabs(x));
+        check(fs2 == 2048 && fpeak > 0.0f,
+              "M-S2 freeze: stepFrames advances and produces audio");
+        // render() honors the controller (by design - volume/solo tests rely on
+        // it), so unfreeze briefly or its readFrames gets blocked by the freeze
+        // guard and the reference block comes back empty.
+        ctrl.setFrozen(false);
+        const RenderResult norm = render(wav, 2048, 1.0f, false);
+        ctrl.setFrozen(true);
+        bool stepEqNorm = norm.ok &&
+            std::memcmp(stepPcm.data(), norm.pcm.data(), stepPcm.size() * sizeof(float)) == 0;
+        check(stepEqNorm, "M-S2 freeze: stepped block == normal first block (advances right)");
+        const std::uint64_t fr2 = fw.readFrames(fbuf.data(), 2048);
+        check(fr2 == 0, "M-S2 freeze: readFrames still 0 after step (remains frozen)");
+        ctrl.reset();
+
+        // debug snapshot: entity / position / distance / gain / state present
+        ctrl.reset();
+        AudioConfig dcfg; dcfg.offline = true; dcfg.channels = kChannels;
+        dcfg.sampleRate = kSampleRate; dcfg.spatialization = true;
+        AudioWorld dw(dcfg);
+        std::string de;
+        const std::uint32_t did1 = dw.createSource(wav, &de);
+        const std::uint32_t did2 = dw.createSource(defaultWavB(), &de);
+        check(did1 && did2 &&
+              dw.setSourceAttenuation(did1, AttenuationModel::None, 1.0f, 20.0f, 0.5f, &de) &&
+              dw.setSourceAttenuation(did2, AttenuationModel::None, 1.0f, 20.0f, 0.5f, &de) &&
+              dw.setSourcePosition(did1, Vec3{0.0f, 0.0f, 0.0f}, &de) &&
+              dw.setSourcePosition(did2, Vec3{0.0f, 0.0f, 10.0f}, &de) &&
+              dw.setListenerPosition(Vec3{0.0f, 0.0f, 0.0f}, &de) &&
+              dw.setSourceEntity(did1, "footsteps") && dw.setSourceEntity(did2, "wind") &&
+              dw.configureSource(did1, 1.0f, false, &de) &&
+              dw.configureSource(did2, 1.0f, false, &de) &&
+              dw.startSource(did1, &de) && dw.startSource(did2, &de),
+              "M-S2 debug: two positioned named sources + listener");
+        dw.bindToDebug();
+        const std::string dtext = ctrl.debugText();
+        const auto dsnap = dw.snapshot();
+        bool dbgOk = dsnap.size() == 2 && dsnap[0].entity == "footsteps" &&
+            dsnap[1].entity == "wind" && dsnap[1].distance == 10.0f &&
+            dsnap[0].effectiveGain == 1.0f && dsnap[1].effectiveGain == 1.0f &&
+            dtext.find("footsteps") != std::string::npos &&
+            dtext.find("wind") != std::string::npos;
+        check(dbgOk, "M-S2 debug: snapshot shows entity/position/distance/gain/state");
+        ctrl.reset();
+    }
+
     if (fail == 0) {
         std::printf("audio selftest: PASS (%d/%d)\n", total, total);
         return 0;
@@ -982,6 +1356,24 @@ int main(int argc, char** argv) {
     if (cmd == "play") {
         if (argc != 3) { usage(); return 2; }
         return cmdPlay(argv[2]);
+    }
+    if (cmd == "volume") {
+        if (argc != 5) { usage(); return 2; }
+        const float gain = static_cast<float>(std::strtof(argv[2], nullptr));
+        return cmdVolume(gain, argv[3], fs::path(argv[4]));
+    }
+    if (cmd == "solo") {
+        if (argc != 6) { usage(); return 2; }
+        const std::int64_t id = static_cast<std::int64_t>(std::strtoll(argv[2], nullptr, 10));
+        return cmdSolo(id, argv[3], argv[4], fs::path(argv[5]));
+    }
+    if (cmd == "freeze") {
+        if (argc != 4) { usage(); return 2; }
+        return cmdFreeze(argv[2], fs::path(argv[3]));
+    }
+    if (cmd == "debug") {
+        if (argc != 5) { usage(); return 2; }
+        return cmdDebug(argv[2], argv[3], fs::path(argv[4]));
     }
     std::printf("unknown subcommand: %s\n", cmd.c_str());
     usage();

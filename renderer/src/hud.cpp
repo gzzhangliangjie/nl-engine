@@ -1,6 +1,7 @@
 #include "hud.hpp"
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
 #include "console_ui.hpp"    // P8 M-C1：开发者控制台窗口（ImGui 前端）
+#include "audio_debug_ui.hpp" // P8 M-S2：独立默认关的音频声源调试面板
 #include "gpu_timer.hpp"     // M0.6：GpuTimer::selfTest（秒→ms 换算 / 环形游标）
 #include "nl/renderer/editor.hpp"  // T1：材质图编辑器窗口（--editor 时由 HudFrame.editor 挂入）
 
@@ -407,6 +408,10 @@ void Hud::build(HudFrame& frame) {
     // P8 M-C1：开发者控制台（` 呼出的独立窗口）。含 GLFW->ImGuiKey 输入映射与
     // wantCaptureKeyboard 回写；consoleOpen=false 时仍同步按键状态但零布局。
     drawConsoleWindow(frame);
+    // P8 M-S2: audio source debug panel — SEPARATE default-off window
+    // (audio.debug CVar). Does not touch the resident HUD content above, so it
+    // never forces a HUD baseline re-shoot; with the CVar off it draws nothing.
+    drawAudioDebugWindow();
     ImGui::Render();
 
     frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;

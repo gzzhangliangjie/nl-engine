@@ -1416,3 +1416,30 @@
 7. **miniaudio `ma_attenuation_model` 正好 4 种**：落码即原生 4 种（计划 §4 已定），属计划内机械执行，不另请拍板；6 种 UE 模型（含 Custom / NaturalSound 等）不进本轮。
 
 **下一步**：M-S2 游戏内调试（console cvar `audio.volume/debug/solo/freeze/dump` + 独立 ImGui 声源面板，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。
+
+## P8 M-S2：游戏内音频调试——volume / solo / freeze 单步 / 声源快照（feat/audio 轨道，2026-11-09，tag `audio-s2`）
+
+**动作**：用户「继续做 M-S2」。`wt_pool claim --track audio --milestone M-S2` 占坑。三处参考重读：Carrot `engine/audio/`（无调试面，仅 AudioManager/SoundSource 基础面）/ bevy `audio.rs`（`play` + sink 即全部，无调试）/ UE `AudioDebug.cpp`（**只读不抄**：`au.DumpActiveSounds`、命令级 solo/mute、`au.3dVisualize.*` 字段口径——M-S2 快照字段清单照它定）。落码：`AudioDebugController`（core 层单例，零图形零 console，管 masterVolume/solo/frozen/debug 四态，默认纯透传保 M-S0/M-S1 基线逐字节不变）；`AudioWorld::refreshAudibility` 折叠 masterVolume+solo 因子进 effectiveGain；`readFrames` frozen 时返回 0 不推进时钟、`stepFrames` 跳过守卫单步推进（仅离线世界）；`SourceSnapshot`（entity/position/listenerPosition/distance/baseGain/effectiveGain/playing/audible/soloed/muted/clip/model）+ `snapshot()` + `setSourceEntity` + `bindToDebug`；`audio_cvars.cpp`（依赖 console 的唯一 TU：`audio.volume/debug/solo/freeze` 四 CVar + `audio.dump` 命令）；`renderer/src/audio_debug_ui.cpp` 独立 ImGui 窗口（默认关、`hud.cpp` 在 console 窗后调 drawAudioDebugWindow，**不动常驻 HUD**）；`audio-tools` 新增 `volume/solo/freeze/debug` 四子命令（format=3 provenance 记调试态 + waveformHash）+ selftest 13 条 M-S2 断言。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s2`
+
+**完成情况**：
+- **双后端 BUILD OK**：DX12 与 VULKAN 各自编译 + `audio-tools selftest` **46/46 PASS**（M-S0 21 + M-S1 12 + M-S2 13）；A 类纯 CPU 工具，不进渲染回归、不动 kStage。
+- **volume 折叠**：masterVolume 0..2 经 `refreshAudibility` 折进 effectiveGain——x0 全零、x2 峰值翻倍、x0.5 峰值恰为一半（证据图 ratio=0.500000）。
+- **solo**：solo(id) 后他源 effectiveGain=0；solo(1) 混音与单源渲染逐字节一致；provenance 逐源记录 effGain（src1=1 / src2=0）。
+- **freeze 单步**：frozen 时 `readFrames` 返回 0（时钟保持）；`stepFrames` 跳过守卫推进 2048 帧且首块与未冻结世界逐字节一致；**solo 与 freeze 的 waveformHash 相同**（单步首块 == solo 混音），成为交叉验证锚点。
+- **debug 快照**：`snapshot.tsv` / `debug.txt`（同 ImGui 面板数据源）逐源 entity/pos/dist/gain/state；clip 路径经 `portableWav` 归一化为仓库相对路径（不含 `..\..` 冗余段）。
+- **防假绿 format=3 + 独立复算**：dumpDebugCore 写 `waveformHash=FNV-1a64(文件全字节)`；`example/audio-s2/verify-dump-hash.py`（python 复刻同参 FNV-1a64）独立复算——篡改波形样本（bad-volume/）与篡改存储哈希（bad-hash/）两条负向都被抓（exit 1），失败原因互异（波形改 / 哈希改）。
+- **CVar 接线分离**：`audio_cvars.cpp` 依赖 console，`AudioWorld`/`AudioDebugController` 保持零 console 零图形依赖；viewer 已注册 `registerAudioConsole`，ImGui 面板仅 `audio.debug` 为真时开窗（默认关）。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s2/volume.png`（x0.5 vs x1.0 双对照、ratio=0.500000）、`solo-freeze.png`（双波形 + hash 相同结论行）、`debug-panel.png`（两源快照表）、`acceptance.png`（十条命令真实 stdout、46/46 + 三负向齐全）——均由 `make-audio-evidence.py --s2` 从真实输出生成。
+- `example/audio-s2/run.bat` 全链 exit 0（AUDIO M-S2 ACCEPTANCE: ALL GREEN）；`server.py --check` exit 0；展示台 `audio-s2` 卡 7 用例（usage 2 / selftest 0 / volume 0 / solo 0 / freeze 0 / debug 0 / 负向缺参 2）实跑全绿。
+- **边界**：M-S2 不碰 ECS 场景集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（轨道收口在 M-S3）。
+
+**踩坑情况**：
+1. **`std::vector` 漏 include**：`AudioWorld.hpp` 168 行 `snapshot()` 返回 `std::vector` 但头文件只 include 了 cstdint/memory/string——一个解析错误级联丢掉 `snapshot`/`impl_` 声明，报错点却落在别的 TU（`audio_cvars.cpp` 报「未定义类型」）。补 `#include <vector>` 一次修复。
+2. **frozen 态调用 `render()` 基准被拦**：selftest freeze 断言「单步首块 == 正常首块」在 frozen=true 时调 `render()` 生成基准——`render()` 按设计尊重 controller（volume/solo 断言正依赖此），其内部 `readFrames` 被 frozen 守卫拦成 0 → 基准为空 → 对比恒 FAIL。修法：渲染基准前临时解冻、渲后恢复。实现无 bug，是测试基准的顺序错误。
+3. **`dumpDebugCore` 参数类型不一致**：调用方传 `fs::path`、签名收 `std::string`，而函数体用 `outdir / "..."`（fs::path 语法）——统一为 `fs::path`。
+4. **快照 clip 路径带 `..\..`**：run.bat 传绝对路径后 `snapshot.tsv` 的 clip 字段出现冗余段；`cmdDebug` 改用 `portableWav()` 归一化后再 createSource（provenance 已归一化、快照漏了）。
+5. **VULKAN 构建树 cache 失效**：旧 cache `CMAKE_MAKE_PROGRAM=nmake`（裸名），build 报 generator 错误；显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure 后恢复。
+
+**下一步**：M-S3 场景集成（**gate 在 P8 E1 / E1b 收口之后**，不随本轮解锁）；feat/audio 轨道在 M-S3 收口时全量合回 master。

@@ -1,6 +1,7 @@
 // P8 M-S0/M-S1: nl/audio implementation. miniaudio declarations only in this TU;
 // MINIAUDIO_IMPLEMENTATION is compiled once in thirdparty/miniaudio/miniaudio.c.
 #include "nl/audio/AudioWorld.hpp"
+#include "nl/audio/DebugController.hpp"   // M-S2: master volume / solo / freeze
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)   // vendored 4 MB single header: keep /W4 output clean
@@ -83,9 +84,12 @@ struct ClipSlot {
 };
 
 struct SourceSlot {
+    std::uint32_t id = 0;
     std::unique_ptr<ma_sound> sound;
     std::string  clip;
+    std::string  entity;          // M-S2: owning ECS entity label
     float        gain    = 1.0f;
+    float        effectiveGain = 1.0f;  // M-S2: post masterVolume/solo/audible
     bool         looping = false;
     SpatialDesc  spatial{};
 };
@@ -112,6 +116,7 @@ struct AudioWorld::Impl {
     // UE UAudioComponent::IsInAudibleRange semantics. miniaudio clamps the
     // distance to maxDistance, so gain never reaches zero on its own; nl/audio
     // mutes the source explicitly when the listener moves out of range.
+    // M-S2: also folds in master volume + solo from AudioDebugController.
     void refreshAudibility(SourceSlot* s) {
         if (!s || !s->sound) return;
         const SpatialDesc& sp = s->spatial;
@@ -121,7 +126,10 @@ struct AudioWorld::Impl {
         const bool inRange = !hasRange ||
                              distanceBetween(sp.position, listenerPos) <= sp.maxDistance;
         s->spatial.audible = inRange;
-        ma_sound_set_volume(s->sound.get(), inRange ? s->gain : 0.0f);
+        const auto& dbg = AudioDebugController::get();
+        const float soloFactor = dbg.sourceGainFactor(s->id);
+        s->effectiveGain = s->gain * dbg.masterVolume() * soloFactor;
+        ma_sound_set_volume(s->sound.get(), inRange ? s->effectiveGain : 0.0f);
     }
 
     void refreshAll() { for (auto& s : sources) refreshAudibility(s.get()); }
@@ -254,6 +262,7 @@ std::uint32_t AudioWorld::createSource(const std::string& wavPath, std::string* 
     ++it->second.refs;
 
     auto slot = std::make_unique<SourceSlot>();
+    slot->id = static_cast<std::uint32_t>(impl_->sources.size() + 1);
     slot->sound = std::make_unique<ma_sound>();
     // DECODE = synchronous full decode (no async resource-manager job in the read path,
     // hence bit-deterministic offline rendering). M-S0 keeps NO_SPATIALIZATION so its
@@ -322,7 +331,9 @@ bool AudioWorld::sourceDesc(std::uint32_t id, SourceDesc* out) const {
     if (!s || !out) return false;
     out->id = id;
     out->clip = s->clip;
+    out->entity = s->entity;
     out->gain = s->gain;
+    out->effectiveGain = s->effectiveGain;
     out->looping = s->looping;
     out->playing = ma_sound_is_playing(s->sound.get()) == MA_TRUE;
     out->spatial = s->spatial;
@@ -331,6 +342,13 @@ bool AudioWorld::sourceDesc(std::uint32_t id, SourceDesc* out) const {
 
 std::uint32_t AudioWorld::sourceCount() const {
     return static_cast<std::uint32_t>(impl_->sources.size());
+}
+
+bool AudioWorld::setSourceEntity(std::uint32_t id, const std::string& name, std::string* err) {
+    auto* s = impl_->at(id);
+    if (!s) { setErr(err, "invalid source id"); return false; }
+    s->entity = name;
+    return true;
 }
 
 bool AudioWorld::setSourcePosition(std::uint32_t id, const Vec3& pos, std::string* err) {
@@ -448,6 +466,10 @@ std::uint64_t AudioWorld::readFrames(float* dst, std::uint64_t frameCount) {
         impl_->error = "readFrames requires an offline (noDevice) world";
         return 0;
     }
+    // M-S2: frozen == paused. Do not advance the engine clock; return 0 so a
+    // caller cannot observe (or consume) the same mix twice. stepFrames() is the
+    // only path that advances while frozen (single-step debugging).
+    if (AudioDebugController::get().frozen()) return 0;
     ma_uint64 read = 0;
     ma_result r = ma_engine_read_pcm_frames(&impl_->engine, dst, frameCount, &read);
     if (r != MA_SUCCESS) {
@@ -456,6 +478,50 @@ std::uint64_t AudioWorld::readFrames(float* dst, std::uint64_t frameCount) {
     }
     return static_cast<std::uint64_t>(read);
 }
+
+std::uint64_t AudioWorld::stepFrames(float* dst, std::uint64_t frameCount) {
+    if (!impl_->ok) return 0;
+    if (!impl_->cfg.offline) {
+        impl_->error = "stepFrames requires an offline (noDevice) world";
+        return 0;
+    }
+    // Advance regardless of frozen (single-step). Same code path as readFrames
+    // minus the freeze guard.
+    ma_uint64 read = 0;
+    ma_result r = ma_engine_read_pcm_frames(&impl_->engine, dst, frameCount, &read);
+    if (r != MA_SUCCESS) {
+        impl_->error = "ma_engine_read_pcm_frames failed (" + maCode(r) + ")";
+        return 0;
+    }
+    return static_cast<std::uint64_t>(read);
+}
+
+std::vector<SourceSnapshot> AudioWorld::snapshot() const {
+    std::vector<SourceSnapshot> out;
+    const auto& dbg = AudioDebugController::get();
+    for (const auto& s : impl_->sources) {
+        if (!s || !s->sound) continue;
+        SourceSnapshot sn;
+        sn.id              = s->id;
+        sn.entity          = s->entity.empty() ? ("src-" + std::to_string(s->id)) : s->entity;
+        sn.position        = s->spatial.position;
+        sn.listenerPosition = impl_->listenerPos;
+        sn.distance        = distanceBetween(s->spatial.position, impl_->listenerPos);
+        sn.baseGain        = s->gain;
+        sn.effectiveGain   = s->effectiveGain;
+        sn.playing         = ma_sound_is_playing(s->sound.get()) == MA_TRUE;
+        sn.audible         = s->spatial.audible;
+        sn.soloed          = dbg.hasSolo() && static_cast<std::int64_t>(s->id) == dbg.soloId();
+        sn.muted           = dbg.hasSolo() && !sn.soloed;
+        sn.clip            = s->clip;
+        sn.model           = s->spatial.model;
+        out.push_back(sn);
+    }
+    return out;
+}
+
+void AudioWorld::bindToDebug()   { AudioDebugController::get().bind(this); }
+void AudioWorld::unbindFromDebug() { AudioDebugController::get().unbind(this); }
 
 bool AudioWorld::playRealtimeBlocking(const std::string& wavPath, std::string* err) {
     if (impl_->cfg.offline) {

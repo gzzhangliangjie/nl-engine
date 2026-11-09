@@ -112,7 +112,7 @@ def color_for(line):
     t = line.strip()
     if "PASS" in t:
         return GREEN
-    if "FAIL" in t or "unknown subcommand" in t:
+    if "FAIL" in t or "unknown subcommand" in t or "MISMATCH" in t:
         return RED
     if t.startswith("=== ") or t.startswith("usage:"):
         return CYAN
@@ -336,8 +336,161 @@ def make_s1_acceptance():
     print("wrote", path, img.size)
 
 
+# ---------------- M-S2 evidence (game-internal audio debug) ----------------
+S2DIR = os.path.join(ROOT, "example", "audio-s2")
+
+
+def make_s2_volume():
+    half_l, half_r = load_waveform(os.path.join(S2DIR, "volume", "waveform.tsv"))
+    full_l, full_r = load_waveform(os.path.join(S2DIR, "solo", "waveform.tsv"))
+    prov = read_kv(os.path.join(S2DIR, "volume", "provenance.txt"))
+    assert half_l and len(half_l) == len(half_r), "ragged volume waveform.tsv"
+    W, H = 1240, 700
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((28, 20), "M-S2 master volume - real offline PCM at gain x0.5 vs gain x1.0",
+           font=font(22, True), fill=CYAN)
+    d.text((28, 52),
+           "masterVolume=%s  requestedGain=%s  soloId=%s  frozen=%s  frames=%s" %
+           (prov.get("masterVolume", "?"), prov.get("requestedGain", "?"),
+            prov.get("soloId", "?"), prov.get("frozen", "?"), prov.get("frames", "?")),
+           font=font(15), fill=FG)
+    d.text((28, 76), "waveformHash=%s  source=example/audio-s2/volume/waveform.tsv" %
+           prov.get("waveformHash", "?"), font=font(15), fill=DIM)
+    draw_channel(d, (28, 112, W - 56, 150), half_l, CYAN, "LEFT  volume x0.5")
+    draw_channel(d, (28, 276, W - 56, 150), half_r, GREEN, "RIGHT volume x0.5")
+    draw_channel(d, (28, 440, W - 56, 150), full_l, AMBER, "LEFT reference gain x1.0 (soloed mix)")
+    pk_half = max(max(abs(v) for v in half_l), max(abs(v) for v in half_r))
+    pk_full = max(max(abs(v) for v in full_l), max(abs(v) for v in full_r))
+    d.text((28, H - 54),
+           "peak(x0.5)=%.6f  peak(x1.0)=%.6f  ratio=%.6f  (folded into effectiveGain by refreshAudibility)" %
+           (pk_half, pk_full, pk_half / pk_full), font=font(15), fill=AMBER)
+    d.text((28, H - 28),
+           "Every pixel from ma_engine_read_pcm_frames output - real tool output, not a sketch.",
+           font=font(14), fill=DIM)
+    path = os.path.join(S2DIR, "volume.png")
+    img.save(path)
+    print("wrote", path, img.size)
+
+
+def make_s2_solo_freeze():
+    solo_l, _ = load_waveform(os.path.join(S2DIR, "solo", "waveform.tsv"))
+    frz_l, _ = load_waveform(os.path.join(S2DIR, "freeze", "waveform.tsv"))
+    sp = read_kv(os.path.join(S2DIR, "solo", "provenance.txt"))
+    fp = read_kv(os.path.join(S2DIR, "freeze", "provenance.txt"))
+    assert solo_l and len(solo_l) == len(frz_l), "solo/freeze frame counts differ"
+    same = sp.get("waveformHash") == fp.get("waveformHash")
+    W, H = 1240, 620
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((28, 20), "M-S2 freeze + single-step - frozen mix advances only via stepFrames",
+           font=font(22, True), fill=CYAN)
+    d.text((28, 52),
+           "solo: soloId=%s effGain(1)=%s effGain(2)=%s   freeze: frozen=%s readFrozen=%s stepFrames=%s" %
+           (sp.get("soloId", "?"), sp.get("src1.effGain", "?"), sp.get("src2.effGain", "?"),
+            fp.get("frozen", "?"), fp.get("readFrozen", "?"), fp.get("stepFrames", "?")),
+           font=font(15), fill=FG)
+    draw_channel(d, (28, 96, W - 56, 160), solo_l, CYAN, "SOLO id=1  (source 2 muted to gain 0)")
+    draw_channel(d, (28, 272, W - 56, 160), frz_l, GREEN, "FREEZE single-step first block")
+    ok_col = GREEN if same else RED
+    d.text((28, 456),
+           "cross-check: solo waveformHash=%s" % sp.get("waveformHash", "?"),
+           font=font(15), fill=DIM)
+    d.text((28, 480),
+           "             freeze waveformHash=%s  -> %s" %
+           (fp.get("waveformHash", "?"),
+            "IDENTICAL (soloed mix == frozen first block)" if same else "MISMATCH"),
+           font=font(15, True), fill=ok_col)
+    d.text((28, H - 54),
+           "readFrames returns 0 while frozen (clock held); stepFrames skips the guard and produces",
+           font=font(14), fill=DIM)
+    d.text((28, H - 28),
+           "the same first block an unfrozen world renders. real tool output, not a sketch.",
+           font=font(14), fill=AMBER)
+    path = os.path.join(S2DIR, "solo-freeze.png")
+    img.save(path)
+    print("wrote", path, img.size)
+
+
+def make_s2_debug_panel():
+    snap = read_text(os.path.join(S2DIR, "debug", "snapshot.tsv")).rstrip("\n")
+    prov = read_kv(os.path.join(S2DIR, "debug", "provenance.txt"))
+    W, H = 1240, 360
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((28, 20), "M-S2 debug snapshot - AudioDebugController per-source state",
+           font=font(22, True), fill=CYAN)
+    d.text((28, 52),
+           "engine=%s  spatialization on  sources=%s  wavA=%s  wavB=%s" %
+           (prov.get("engine", "?"), prov.get("sources", "?"),
+            os.path.basename(prov.get("wavA", "?")), os.path.basename(prov.get("wavB", "?"))),
+           font=font(15), fill=FG)
+    y = 104
+    for raw in snap.splitlines():
+        head = raw.startswith("#")
+        col = DIM if head else (GREEN if " play" in raw else FG)
+        d.text((40, y), raw, font=font(17), fill=col)
+        y += 34
+    d.text((28, H - 40),
+           "model=none keeps gain flat on purpose (unspatialized fast path); positions/distances still recorded.",
+           font=font(14), fill=DIM)
+    d.text((28, H - 18),
+           "source=example/audio-s2/debug/snapshot.tsv (audio-tools debug) - real tool output.",
+           font=font(14), fill=AMBER)
+    path = os.path.join(S2DIR, "debug-panel.png")
+    img.save(path)
+    print("wrote", path, img.size)
+
+
+def make_s2_acceptance():
+    sections = [
+        ("usage.log", "audio-tools (no args)  -> exit 2 / usage"),
+        ("selftest.log", "audio-tools selftest  -> exit 0 (46/46: M-S0 + M-S1 + M-S2)"),
+        ("volume.log", "audio-tools volume 0.5  -> exit 0 (peak halves)"),
+        ("solo.log", "audio-tools solo 1  -> exit 0 (source 2 muted)"),
+        ("freeze.log", "audio-tools freeze  -> exit 0 (stepFrames advances)"),
+        ("debug.log", "audio-tools debug  -> exit 0 (snapshot)"),
+        ("verify-hash.log", "verify-dump-hash.py over real dumps  -> exit 0 (anti-false-green)"),
+        ("negative-wave.log", "negative: tampered waveform sample  -> exit 1"),
+        ("negative-hash.log", "negative: tampered stored hash  -> exit 1"),
+        ("negative-usage.log", "negative: solo missing wavB  -> exit 2"),
+    ]
+    lines = []
+    for log, title in sections:
+        p = os.path.join(S2DIR, log)
+        if not os.path.exists(p):
+            continue
+        if lines:
+            lines.append("")
+        lines.append("=== " + title + " ===")
+        for raw in read_text(p).splitlines():
+            lines.extend(wrap_line(raw.rstrip()))
+    f, fb, ft = font(16), font(16, True), font(22, True)
+    lh, pad = 25, 26
+    td = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    width = min(1360, max([td.textlength(l, font=f) for l in lines] + [400]) + pad * 2 + 40)
+    height = pad * 2 + lh * (len(lines) + 2)
+    img = Image.new("RGB", (int(width), height), BG)
+    d = ImageDraw.Draw(img)
+    d.text((pad, pad), "M-S2 acceptance - audio-tools real output", font=ft, fill=CYAN)
+    y = pad + lh * 2
+    for line in lines:
+        is_title = line.startswith("=== ")
+        d.text((pad, y), line, font=fb if is_title else f,
+               fill=CYAN if is_title else color_for(line))
+        y += lh
+    path = os.path.join(S2DIR, "acceptance.png")
+    img.save(path)
+    print("wrote", path, img.size)
+
+
 def main():
-    if "--s1" in sys.argv[1:]:
+    if "--s2" in sys.argv[1:]:
+        make_s2_volume()
+        make_s2_solo_freeze()
+        make_s2_debug_panel()
+        make_s2_acceptance()
+    elif "--s1" in sys.argv[1:]:
         make_s1_attenuation()
         make_s1_mixing()
         make_s1_acceptance()

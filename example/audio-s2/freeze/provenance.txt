@@ -1,0 +1,13 @@
+format=3
+tool=audio-tools
+milestone=M-S2/freeze
+engine=noDevice
+masterVolume=1
+soloId=0
+frozen=1
+sampleRate=48000
+channels=2
+frames=2048
+readFrozen=0
+stepFrames=2048
+waveformHash=b85b05bceb39795a

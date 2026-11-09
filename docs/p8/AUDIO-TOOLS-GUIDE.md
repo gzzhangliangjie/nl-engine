@@ -268,3 +268,73 @@ miniaudio 原生 4 种 = Carrot 底座同源的 OpenAL distance model：
    改为按画布宽铺满（24000 帧的 M-S0 图不受影响）。
 6. **`auto* at(...)` 成员函数提取**：`const_cast<Impl*>` 在 4 个只读访问器里重复，抽成
    `Impl::at()` 内联成员，去掉 `const` 误用。
+
+---
+
+# M-S2：游戏内音频调试（volume / solo / freeze / debug）
+
+> 目标：调试态（主音量 / 独奏 / 冻结 / 面板）从游戏内可观测、可单步，且**默认纯透传**——
+> M-S0/M-S1 的离线基线逐字节不变。口径照 UE `AudioDebug.cpp`（`au.DumpActiveSounds`、
+> 命令级 solo/mute）定字段清单，只读不抄。
+
+## 架构
+
+- **`AudioDebugController`**（`core/src/audio/DebugController.cpp`，单例）：集中管
+  `masterVolume(0..2)` / `solo(id)` / `frozen` / `debug` 四态。默认透传（volume=1、
+  无 solo、未冻结、面板关）。零图形、零 console 依赖。
+- **增益折叠**：`AudioWorld::refreshAudibility` 把 masterVolume 与 solo 因子（他源
+  soloed 时本源 gain=0）乘进 `effectiveGain`。
+- **冻结 / 单步**：`readFrames` 在 frozen 时返回 0（不推进引擎时钟）；`stepFrames`
+  跳过冻结守卫仍推进（单步调试）。仅离线世界可单步。
+- **CVar 接线分离**：`audio_cvars.cpp` 是唯一依赖 console 的音频 TU
+  （`audio.volume/debug/solo/freeze` 四 CVar + `audio.dump` 命令）；
+  `AudioWorld` / `AudioDebugController` 保持零 console。
+- **独立面板**：`renderer/src/audio_debug_ui.cpp` 的 `drawAudioDebugWindow()`，
+  仅 `audio.debug` 为真时开窗，默认关、**不动常驻 HUD**（A 类硬约束）。
+
+## 子命令（M-S2，全部产出 format=3 provenance）
+
+| 子命令 | 用法 | 语义 |
+|---|---|---|
+| `volume` | `volume <gain 0..2> <wav> <outdir>` | 设 masterVolume 后离线渲染 2048 帧；provenance 记 `masterVolume` / `requestedGain` |
+| `solo` | `solo <id> <wavA> <wavB> <outdir>` | 两源并发 + solo(id)；provenance 逐源记 `src<N>.effGain`（他源=0） |
+| `freeze` | `freeze <wav> <outdir>` | frozen 下 `readFrozen=0` / `stepFrames=2048`（单步推进的一块） |
+| `debug` | `debug <wavA> <wavB> <outdir>` | 两定位命名源快照：`snapshot.tsv` + `debug.txt`（entity/pos/dist/gain/state） |
+
+`format=3` provenance 在 format=2 字段外追加 `masterVolume/soloId/frozen`（+ 各命令
+专属行），并写 `waveformHash=FNV-1a64(waveform.tsv 全字节)`。
+
+## 防假绿：哈希独立复算
+
+`example/audio-s2/verify-dump-hash.py` 用 python 复刻同参 FNV-1a64（标准 offset
+basis + prime），对 `waveform.tsv` 文件字节独立重算并与 provenance 存的哈希比对：
+
+- `bad-volume/`：波形样本 ×1.5 篡改，存储哈希仍是原始值 → **exit 1**；
+- `bad-hash/`：波形不动，存储哈希本身被改 → **exit 1**。
+
+两条负向失败原因互异（波形改 / 哈希改），校验器永不信任存储数字。
+**交叉验证锚点**：`solo` 与 `freeze` 的 waveformHash 相同——冻结世界单步推进的
+首块 == solo(1) 的混音（同一 clip 的正常首块），两个调试态互相印证。
+
+## 证据图（M-S2）
+
+| 图 | 数据源 | 肉眼核验 |
+|---|---|---|
+| `example/audio-s2/volume.png` | `volume/waveform.tsv` + `solo/waveform.tsv` | x0.5 与 x1.0 波形幅度差肉眼可见；`ratio=0.500000` |
+| `example/audio-s2/solo-freeze.png` | `solo/` + `freeze/` 两 dump | 双波形 + 「IDENTICAL (soloed mix == frozen first block)」结论行 |
+| `example/audio-s2/debug-panel.png` | `debug/snapshot.tsv` | 两源快照表（footsteps@0 / wind@z=10，gain 1.0000，play） |
+| `example/audio-s2/acceptance.png` | 十条命令真实 stdout | 46/46 + 三负向（1/1/2）齐全、无截断 |
+
+## 踩坑（M-S2 实遇）
+
+1. **`std::vector` 漏 include 的级联报错**：`AudioWorld.hpp` 的 `snapshot()` 返回
+   `std::vector` 但头文件没 include `<vector>`——类声明解析错误把 `snapshot`/`impl_`
+   一起丢掉，报错点却落在**别的 TU**（`audio_cvars.cpp` 报「未定义类型 AudioWorld」）。
+   见到「成员不存在」先怀疑头文件解析失败，不是调用方没 include。
+2. **frozen 态生成对比基准**：selftest 在 frozen=true 时调 `render()` 生成基准——
+   `render()` 按设计尊重 controller（volume/solo 断言正依赖此），内部 readFrames
+   被 frozen 守卫拦成 0 → 基准为空 → 对比恒 FAIL。渲染基准前临时解冻、渲后恢复。
+3. **快照路径归一化**：run.bat 传绝对路径后 `snapshot.tsv` 的 clip 字段出现
+   `..\..` 冗余段；`cmdDebug` 对 wavA/wavB 先过 `portableWav()` 再 createSource。
+4. **VULKAN 构建树 cache 失效**：旧 cache 记 `CMAKE_MAKE_PROGRAM=nmake`（裸名），
+   build 直接 generator 报错；显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure。
