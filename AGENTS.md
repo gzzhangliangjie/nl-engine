@@ -151,7 +151,7 @@
 
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
-   | Job / Task 并行 | **已重建** `E:/UE_STUDY_2026/nl-engine-job-system`（2026-11-09 M-J5a 重启） | `feat/job-system`（保留，已快进至 master `6a718fb`） | **M-J0~J3 已收官** + 已双向合并回 master + 可视化证据图补交；**M-J5a 开工中**（2026-11-09 用户「开始」批准重启 CLOSED 轨道）：vendored Taskflow 3.11.0 做显式依赖 DAG + A 档 4 路 slangc fan-in 并行 + 抽共用编译入口；M-J4 仍等 P9 V4，M-J5b/c 为后续步。计划 `docs/p8/P8-JOB-PLAN.md`（REUSE 盘点与后续消费者已并成一份） |
+   | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system`（junction 共享 `.workbuddy`/`slang dist`） | `feat/job-system`（保留） | **M-J5a 已合回 master**（merge `0accf6e`，2026-11-09）：vendored Taskflow 3.11.0 做显式依赖 DAG + A 档 4 路 slangc fan-in 并行 + 抽共用编译入口 `recompileGraph`；M-J0~J3 已收官 + 双向合并回 master + 可视化证据图补交；M-J4 仍等 P9 V4，M-J5b/c 为后续步。计划 `docs/p8/P8-JOB-PLAN.md`（REUSE 盘点与后续消费者已并成一份） |
    | 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官**：B2~B4（tag `mg-b2b4`）+ T1 编辑器 M1~M3（tag `mg-t1`，merge commit `e5505bc`）全量合入 master；B5 接 PBR + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 |
    | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官**：M-A0~M-A5.4 全量 merge 回 master（merge commit `5a1912f`，tag `anim-ma1`~`anim-ma5c`）；nl/anim 纯逻辑层 + anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页；验收纪要 `docs/MILESTONES.md` M-A 节 + `docs/action-system/ACTION-PLAN.md` + `ANIM-TOOLS-GUIDE.md`；GPU 调色板等更大规模蒙皮资产再立项 |
    | 开发者控制台 | ~~`E:/UE_STUDY_2026/nl-engine-console`~~（worktree 已拆，2026-11-09） | `feat/console`（保留） | **已收官**：M-C0~C3 全量 merge 回 master（merge commit `9e12cc6`，tag `console-mc3`）：core/console 纯逻辑内核（CVar 四类型 + ExecCode 四档）+ ImGui 前端（`` ` `` 呼出/Tab 补全/历史/可拖缩）+ installBuiltins（help/cvar.list/cvar.set）+ cam.*/hud.show 真参数回调 + panelShow 解耦；selftest 49/49、双后端构建+selftest 绿、展示台 console-mc3 卡五用例实跑；归档 `docs/p8/CONSOLE-TOOLS-GUIDE.md` + `docs/screenshots/CONSOLE-EVIDENCE.md`；计划 `docs/p8/P8-CONSOLE-PLAN.md` |
@@ -177,6 +177,7 @@
 
 ## 本项目其余硬约束（速查，完整见各文档）
 
+- **回复语言：简体中文（2026-11-09 固化）**：本项目所有 Agent 回复默认使用简体中文；代码、标识符、技术术语、命令、文件路径等保留英文原文不翻译。
 - **UE 源码只读不抄**：EULA 与项目 MIT 不兼容，一行 UE 代码都不许进 repo；参考结构与边界情况处理思路。
 - **构建链不依赖任何厂商图形 SDK**：`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `find_package(Vulkan)`。后端对称：D3D12 走 Windows SDK，Vulkan 头走 `NVRHI_FETCH_VULKAN_HEADERS`，Slang 独立获取。
 - **图形 API / NVRHI / ImGui 符号只允许在 `renderer/`**；`core/` / `viewer/` 零命中。
