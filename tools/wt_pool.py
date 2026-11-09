@@ -90,7 +90,8 @@ TRACKS = {
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "active",
+        "branch": "feat/script", "state": "closed",
+        "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
     },
 }
 
