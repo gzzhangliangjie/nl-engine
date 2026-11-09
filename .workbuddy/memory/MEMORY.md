@@ -15,7 +15,7 @@
 ## 当前进度（2026-11-09）
 - 主线 S0~S5 已收官（tag s0-done…s5-done，实况看 MILESTONES 台账）；A 类并行轨道 job-system / material-graph / action-system 均已全量合入 master 并拆 wt（分支保留）。
 - 当前 `kStage=S6.1`：**M6.1 Hi-Z 遮挡剔除串进 DAG 遍历已收口**（tag `s6-cull`）。两项拍板：①金字塔 **min→max**（S6-PLAN 原文 min 口径不保守会漏画；权威口径=簇最近点 vs 区域最远表面，径向距离度量下取 max）；②**单 dispatch 内联**（bevy 式 HZB second pass 不做，=D3a 升级，触发条件未到）。验收：HizScene 墙场景 hiz 24/85 vs dag 40/85（整树剔除）、穿墙侧视 hiz==dag 零误剔、覆盖层外逐像素 0 差、双后端 bytes。关键坑固化 §2.8：view space 右手系 -z 朝前须 `wz=-vc.z` 换轴（否则剔除静默失效假绿）、top 回读三态（1e9=背景主导合法）、帧内禁开第二 cmd list。主线下一步=**M6.2 开关对照 + 验收**（ImGui 一键开关 Hi-Z、HUD 剔除前/后簇数与帧时间、S4 1M+ 大模型+挡板；tag `s6-done`，`docs/screenshots/s6.png`）。
-- **UE 差异台账** `docs/s5/UE-DIFFS.md`（D1~D9），里程碑收口/review 前过一遍。
+- **UE 差异台账** `docs/s5/UE-DIFFS.md`（D1~D9），**过程中发现与 UE 不一致的地方随手追加、必须落档不许只在口头/回复里提**（2026-11-09 用户拍板），里程碑收口/review 前再整体过一遍。
 - **S7/S8 预研完成（2026-11-09）**：三处对照+NVRHI RT 接口核查已固化进 `docs/s7/S7-PLAN.md` / `docs/s8/S8-PLAN.md` 的「预研结论」节（含 S7 打包定稿 Option A、barycentrics 解析重构作废另存 RT、S8 NVRHI 签名速查表）。**两处拍板点待开工前确认**：D-S7-1 材质 pass 执行模型（建议 Carrot 式单全屏 pass）；D-S8-1 TLAS 每帧全量 rebuild（UE 口径，update 路径留升级项）。
 - kStage bump 波及：**只有 exe=current 的版本需重拍基线**（重拍前查 cases.json 的 exe 字段指向）；每次 bump 重拍 m0.9/s2.0/s3.2 三对；HUD 布局演进波及含该模式的所有 HUD 基线，总闸兜底。
 - P9 真实资产验收四里程碑 V1~V4（V4 流式分页必做，非可选）。

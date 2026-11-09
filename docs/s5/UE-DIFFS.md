@@ -72,7 +72,8 @@
 | UE 做法 | 视锥剔除之外还有 hierarchical-Z 遮蔽剔除、**三 pass culling**（`NaniteCullRaster.cpp` CULLING_PASS_NO_OCCLUSION / OCCLUSION_MAIN〔用上帧 HZB〕/ OCCLUSION_POST〔深度 prepass 后用本帧 HZB 复测被遮候选〕）、two-pass raster（RasterHomogeneous）、cluster swizzle 优化访存。HZB 测试口径 = `NaniteHZBCull.ush IsVisibleHZB`：簇最近点（Rect.Depth）≥ 区域最远表面（inverted-Z min）→ 可见。 |
 | 我们现状（M6.1） | **Hi-Z 遮蔽剔除已实现**：dag.slang 单 dispatch 内联 hizOccluded（Mara&Morgan 球投影 + bevy mip 选择/4×4 采样 + 簇最近径向距离 > 区域 hizMax 整树剔除），金字塔 max 口径与 UE/bevy 一致（hiz.slang 文件头）。**差异 = 结构**：单 pass + 上一帧 HZB（一帧延迟），无 UE 的 OCCLUSION_POST 本帧复测、无 two-pass raster、无 swizzle。 |
 | 为什么 | S6-PLAN M6.1 原文方案（2026-11-09 用户拍板）：单模型 ≤ 数百组，本帧复测需先建 D3a 队列多 pass 结构，收益（减少转动假遮挡过画）当前规模不显性。 |
-| 升级路径 | bevy 式 HZB second pass（被遮簇压 second-pass 队列、prepass 后本帧 HZB 复测）= 与 D3a 队列多 pass 绑定，触发条件同 D3a（多实例/千组级负载不均 + 转动假剔除实测明显）；swizzle 视 profiler 证据再定。 |
+| 已知偏差 | **度量空间**：金字塔与簇深度均用**视点径向距离** `distance(worldPos, eye)`（M6.0 定，与 M5.0 误差公式 |eye−C|−R 同空间），UE 用**设备深度**（inverted-Z，IsVisibleHZB 的 Rect.Depth）；max vs min 方向翻转是同一保守语义（簇最近 vs 区域最远）在两套度量下的等价换算，不是分歧；一帧延迟本身与 UE OCCLUSION_MAIN 同口径（UE 多的是 OCCLUSION_POST 本帧复测，已列升级路径）。 |
+| 升级路径 | bevy 式 HZB second pass（被遮簇压 second-pass 队列、prepass 后本帧 HZB 复测）= 与 D3a 队列多 pass 绑定，触发条件同 D3a（多实例/千组级负载不均 + 转动假剔除实测明显）；swizzle 视 profiler 证据再定。度量空间换设备深度需重推 hiz.slang/dag.slang 全部手算锚 + 重拍 s6-hiz/s6-cull 基线，无实测危害不主动做。 |
 
 ### D7 无软件光栅化兜底（未实现）
 
@@ -93,4 +94,4 @@
 - **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
 
 ---
-*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；出处行号以 2026-11-08~09 实读版本为准。*
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；出处行号以 2026-11-08~09 实读版本为准。*
