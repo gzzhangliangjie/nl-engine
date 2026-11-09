@@ -3350,6 +3350,83 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "p8-ecs",
+   "label": "P8 M-E0~E3",
+   "name": "ECS-lite 场景内核：World/Entity + 组件层级 + System + JSON roundtrip（A 类轨道 E1a）",
+   "tag": "ecs-e1a",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 E1a 纯逻辑内核（不进 kStage/渲染回归）：M-E0 World/Entity 核心（递增 ID / 延迟增删 flush / 名字 / Hidden 位标志 / exists 非对称口径）；M-E1 Component 基类五虚 + ComponentLibrary 工厂 + Transform 层级（setParent 环防护 / reparent 保世界矩阵逐元素不变 / 父删递归删子 / duplicate 深拷）；M-E2 System 基类（签名匹配收编 = 子集判定，实体列表 World 推送维护，firstTick 恰一次）+ 场景 JSON 序列化 roundtrip 逐字节一致（实体 id 升序确定性，五路负向显式拒绝）。工具 = nanite-scene（纯 CPU 只链 nl_core），四 suite + deserialise-check 子命令。口径逐条对标 Carrot ecs（延迟增删/推送/序列化字段），bevy entity_disabling 借语义（隐藏不是删除）。",
+   "acceptance": [
+    "selftest 四 suite 全绿：ecs-core（延迟语义锚点：删实体下一 tick 生效）/ ecs-hier（三层父子链复合矩阵手算锚 + reparent 保世界矩阵 + 深拷）/ ecs-system（签名收编 + firstTick 恰一次）/ ecs-serial（roundtrip 字节一致硬判据 + 五路显式拒绝）",
+    "ctest 8/8（e0 正负向 + e1 + e2 四条含 badjson/unknown-comp 退出码 2 判据）",
+    "example/ecs-e1a/run.bat ALL GREEN exit 0（四 suite + 负向 exit 2 校验 + 证据图重生成）",
+    "tags: ecs-e0 / ecs-e1 / ecs-e2 / ecs-e3（track 分支内，merge 走 §7.2 文档闸）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nanite-scene.exe",
+    "vulkan": "build/vulkan/nanite-scene.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "nanite-scene 纯 CPU 工具（只链 nl_core，零图形 API）。退出码约定：0 成功 / 1 断言失败 / 2 用法错误。无参数打印 usage 并 exit 2。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "usage:",
+     "command": "nanite-scene",
+     "preview": "example/ecs-e1a/usage.png"
+    },
+    {
+     "id": "selftest-system",
+     "name": "selftest ecs-system：签名收编 + firstTick 恰一次（M-E2，verbose 逐断言）",
+     "kind": "tool",
+     "note": "System 实体列表由 World 推送维护（Carrot 口径）：注册即收编匹配实体、组件挂上即时收编（不等 flush）、删组件自动出列、删实体 flush 后出列、firstTick 恰一次、duplicate 数据拷贝换 World。--verbose 逐断言打印 ok 行。",
+     "args": [
+      "selftest",
+      "--suite",
+      "ecs-system",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "ecs-system selftest: PASS",
+     "command": "nanite-scene selftest --suite ecs-system --verbose",
+     "preview": "example/ecs-e1a/system.png"
+    },
+    {
+     "id": "selftest-serial",
+     "name": "selftest ecs-serial：场景 JSON roundtrip 逐字节一致（M-E2 硬判据）",
+     "kind": "tool",
+     "note": "serialise→deserialise→serialise 输出逐字节一致（实体 id 升序 + 组件键排序 = 输出确定性）；ID/名字/层级/Hidden/组件数值（非平凡 quat float->double->float 逐位无损）/世界矩阵重建/nextID 接续全抽查；五路负向（未知组件/未知父/未知系统/坏版本/重复 ID）显式拒绝。",
+     "args": [
+      "selftest",
+      "--suite",
+      "ecs-serial",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "ecs-serial selftest: PASS",
+     "command": "nanite-scene selftest --suite ecs-serial --verbose",
+     "preview": "example/ecs-e1a/serial.png"
+    },
+    {
+     "id": "negative-badjson",
+     "name": "负向：非法 JSON 显式拒绝（exit 2）",
+     "kind": "tool",
+     "note": "deserialise-check badjson：非法 JSON 必须 err 非空 + exit 2 显式拒绝，不静默、不 assert。另两路 good（exit 0）/ unknown（exit 2）见 example/ecs-e1a/run.bat。",
+     "args": [
+      "deserialise-check",
+      "badjson"
+     ],
+     "expectExit": 2,
+     "expectLog": "deserialise-check badjson: rejected",
+     "command": "nanite-scene deserialise-check badjson",
+     "preview": "example/ecs-e1a/negative-badjson.png"
+    }
+   ]
   }
  ]
 }

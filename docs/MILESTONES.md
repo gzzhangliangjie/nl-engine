@@ -1139,3 +1139,56 @@
 8. **重拍基线漏 add**：f0dc46c 的 add 清单只含 s6 系基线 + cases.json，kStage bump 重拍的其余 8 版本 18 张 PNG 留在工作树（tag 已打、检出会 FAIL）。收口时用 `git log -1 -- <file>` 抽查 PNG 最后提交发现，补交 `415699e` 并 `git tag -f s6-cull` 移至该提交。教训：基线重拍收口时先 `git status -- example/` 全列再 add，逐版本核对最后提交 hash。
 
 **下一步**：M6.2 开关对照 + 验收（ImGui 一键开关 Hi-Z、HUD 剔除前/后簇数与帧时间、S4 1M+ 大模型+挡板帧时间对比；tag `s6-done`，`docs/screenshots/s6.png`）。
+
+## M-E0：World/Entity 核心（feat/ecs 开篇，2026-11-09，tag `ecs-e0`）
+
+**动作**：wt_pool claim（track ecs / M-E0）→ 建 worktree `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy` + `thirdparty/slang/dist`，`.workbuddy` skip-worktree）→ 三处证据重读（Carrot `World.h/.cpp` + `EntityTypes.h` 定向读 M-E0 点名段：newEntity/newEntityWithID/removeEntity/flush/tick/exists/flags；bevy `entity_disabling.rs` 借语义：隐藏是标记不是删除、只禁自身不牵连子级）→ 落码 `core/include/nl/scene/World.hpp` + `core/src/scene/World.cpp`：实体创建（u64 递增，0=无效）、延迟增删（entitiesToAdd/Remove + flush 先加后删）、tick 开头 flush（延迟语义锚点）、名字表（exists=names_.contains，Carrot 口径）、Flags(Hidden) 位标志 + getEntitiesWithFlags 过滤、getAllEntities/findEntityByName O(N) 无缓存 → 工具 `nanite-scene`（anim-tools 先例）`selftest --suite ecs-core` 四组断言 → CMake：nl_core 挂 World.cpp + nanite-scene 目标 + ctest 正/负向注册。master 侧注册表三处同步（AGENTS.md / PARALLEL-TRACKS §7.1c / wt_pool TRACKS，commit 6647fcf）。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e0`，即本条台账所在提交）；master 注册表同步 6647fcf。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16（全量构建顺带验证无回归）；`nanite-scene selftest --suite ecs-core` PASS：递增 ID / 增删 flush 前后存在性（Carrot 非对称口径：新建即时可见、删除 flush 后不可见）/ 名字读写与 findEntityByName / Hidden 过滤（隐藏≠删除、getAllEntities 不受 flags 影响）/ 重复 remove 幂等 / 延迟语义锚点（删实体下一 tick 生效）；ctest e0 系 2/2（正向 PASS + 负向未知 suite 退出码 2 WILL_FAIL）。收口前四项自查：①渲染交代物——本轮无（A 类 E1a 纯逻辑零渲染，如实写明）；②工具交代物——ctest 正/负向已注册并在构建树跑绿，展示台 tool 卡 + TOOLS-GUIDE 按计划留 M-E3 收口统一上；③MILESTONES 四栏已追加（本节）；④固化——P8-ECS-PLAN.md M-E0 行标完成 + 踩坑沉淀见下。
+
+**踩坑**：①`unordered_map::contains` 是 C++20，MSVC 本项目标准下 C2039 → 一律 `find != end`；②exists() 语义是 Carrot 非对称口径（名字表即时登记 / 全局实体表 flush 后才有）——首轮 selftest 在 flush 前调 findEntityByName 直接 FAIL，修测试（补 tick(0) flush）并把「flush 前查名 miss」固化为正向断言（把延迟语义本身锁进锚点，防后续实现漂移）；③构建必须走 `scripts/build-m0.2.bat`（裸 shell 无 nmake/MSVC 环境，cmake --build 直接炸 generator）。
+
+**下一步**：M-E1 Component 基类（serialise/deserialise/duplicate/类型 ID）+ ComponentLibrary 注册工厂 + Transform（pos/scale/quat，nl/math 扩展）+ 层级（setParent / reparent 保世界变换 / 父删递归删子 / local→world 复合 / duplicate 深拷贝）。
+
+
+## M-E1：Component + Transform + 层级（feat/ecs，2026-11-09，tag `ecs-e1`）
+
+**动作**：wt_pool claim（track ecs / M-E1）→ 三处证据重读（Carrot `components/Component.h` 基类五虚 + `TransformComponent.{h,cpp}` + `math/Transform.cpp` TRS 顺序 + `World.cpp:476-650` 层级段：setParent 摘旧挂新 / reparent 取世界变换后写回 / duplicateWithRemap 递归深拷 + "(Copy)" / removeEntity 立即递归压子孙 / flush 双结构双侧清理；TRS = translate*rotate*scale，层级复合 = parentGlobal*local）→ `nl/math` 新增 Mat4 段（列主序 m[col*4+row]：mat4TRS / mulMat4 / quatToMat4 / inverseMat4 gluInvertMatrix 展开 / mat4TransformPoint）→ `nl/scene/Component.hpp/.cpp`：Component 基类五虚（getName/duplicate/serialise/deserialise/getComponentTypeID，serialise 签名用 vendored nlohmann json 零新依赖）+ ComponentOf<T> CRTP（类型 ID 0..63 静态递增 = Signature 位对应 + duplicate 换 owner 拷构造）+ ComponentLibrary 显式注册工厂（未知名 nullptr = M-E2 负向铺垫）+ Transform/TransformComponent（getWorldMatrix 递归复合 / getWorldPosition=局部原点世界位置 / setWorldFromMatrix 矩阵分解写回）→ World.hpp/.cpp 扩展：组件存储 unordered_map 增删即时（Carrot 口径）+ 层级双结构 parents_/children_ + setParent 环防护 assert（Carrot 不防，引擎路径必须防）+ reparent 统一矩阵路径（取旧世界矩阵→setParent→inverse(新父)*世界矩阵分解写回，保 reparent 前后世界矩阵逐元素不变——硬判据；偏离 Carrot 逐字段路径的留痕见 Component.hpp 注释，Carrot 同病：非均匀 scale+旋转父链有剪切时 reparent 是近似，锚点用例用均匀 scale 父保严格成立）+ removeEntity 立即递归压子孙 + flush 清组件/双结构 + duplicateWithRemap → `nanite-scene` 加 suite `ecs-hier` 五组数值锚（全部手算对照）→ CMake：Component.cpp 进 nl_core + tinygltf include 改 PUBLIC（组件头接口暴露 json）+ ctest e1 系注册。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e1`，即本条台账所在提交）。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16；`nanite-scene selftest --suite ecs-hier` PASS 五组：①三层父子链复合矩阵手算锚（A(pos1,0,0·s2)←B(pos0,1,0·s3·Rz90)←C(pos1,1,0)：C 世界矩阵 col0(0,6,0) col1(-6,0,0) col2(0,0,6) col3(-5,8,0) 逐元素；局部点 (1,1,0)→世界 (-11,14,0)；getWorldPosition=局部原点=(-5,8,0) 即 W 平移列）②reparent 保世界变换硬判据（世界矩阵逐元素不变 + 新局部手算锚 pos(-3,4,0) scale(3) rot=Rz90）+ 无 Transform 父直通（Carrot 断链口径）③删父递归删子（flush 后子孙全不存在 + 双结构清理）④duplicate 深拷（"(Copy)" 名 / 组件局部一致 / 改副本原件不动 / 副本孙世界矩阵一致 / 父关系继承）⑤组件库（显式注册 / 按名创建 / 类型 ID 稳定 / 未知名 nullptr）；ctest 3/3（e0 正负向 + e1 正向）。收口四项自查：①渲染交代物——无（A 类 E1a 纯逻辑）；②工具交代物——ctest e1 正向已注册跑绿（负向复用 e0 未知 suite），展示台留 M-E3；③MILESTONES 四栏（本节）；④固化——P8-ECS-PLAN M-E1 标完成 + 数学段口径注释留痕（nl/math Mat4 与 anim 合并时机届时定）。
+
+**踩坑**：①World.hpp 缺 `<memory>`（unique_ptr 进头后 std 成员 C2039 连锁报错一片）——头文件加新 std 类型先补 include；②`nl::scene` 内用 nl/math 类型未限定 → 头里定向 using 声明（类型 + mat4TRS/quatIdentity），cpp 文件级 `using namespace nl::math`（anim 先例，头不污染）；③「世界位置」语义口径：getWorldPosition = Carrot computeFinalPosition = **局部原点**的世界位置（= W 平移列），首轮锚点误写成局部点 (1,1,0) 的变换值 FAIL——两个语义分开锚定（原点 vs mat4TransformPoint 任意局部点）；④裸 shell 无 nmake 环境，构建必须走 bat 脚本（cmake --build 直接炸 generator）；⑤ComponentTypeID 归 World.hpp 基础类型层（World 存储与组件层共用，避免循环 include——Component.hpp include World.hpp，World.hpp 只前向声明 Component）。
+
+**下一步**：M-E2 System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ 场景 JSON 序列化/反序列化 roundtrip 字节一致（正/负向：非法 JSON / 未知组件名退出码 2）。
+
+## M-E2：System + 场景 JSON roundtrip（feat/ecs，2026-11-09，tag `ecs-e2`）
+
+**动作**：wt_pool claim（track ecs / M-E2）→ 三处证据重读（Carrot `systems/System.{h,cpp,.ipp}`：实体列表 World 推送维护 + 签名匹配 `(entitySig & systemSig) == systemSig` 子集判定 + firstTick waiting 列表恰一次 + addSystem 注册即收编；Carrot `World.cpp` tick:313-321 系统循环 + flush:268/277 推送点 + getSignature:460 现算；Carrot 场景序列化 = `scene/Scene.cpp` 文件夹+TOML+UUID 编辑器格式——单文件 JSON 按计划拍板自定，字段口径借 Carrot：id/name/flags/逐组件 serialise，层级用 parent 字段替代目录树；bevy_scene 新版结构已演进无逐键对照价值，语义「实体 id + 组件映射」一致）→ `nl/scene/System.hpp/.cpp`：System 基类（签名/实体列表/firstTick/tick/duplicate/serialise + onEntities* 推送维护）+ SignedSystem<Required...>（构造置位 + forEachEntity）+ SystemLibrary 工厂；有意裁剪留痕：Logic/Render 双类目、prePhysics/postPhysics/swapBuffers/broadcast 事件、parallelSubmit（job 轨道挂接后按需）、entitiesWithComponents 缓存 → World 扩展：getSignature 现算 / registerSystem 注册即收编 + firstTick 等待列表 / tick = flush -> firstTick -> 逐系统 tick / flush 推送 added/removed / 组件增删即时推送 onEntitiesUpdated（Carrot 口径，不走队列——组件增删本身即时，省一队列留痕）/ findSystem → `nl/scene/Serialise`（World::serialise/deserialise）：版本 1 格式 + 实体数组按 id 升序 + 组件键 nlohmann(std::map) 排序 + systems 按注册序 = 输出确定性；deserialise 三轮（壳 -> 挂父/组件 -> flush 后注册系统），非法结构/未知组件名/未知系统名/未知父/重复 ID 显式拒绝（err 非空不 assert）；TransformComponent serialise/deserialise 落地（float->json double->float 无损）→ `nanite-scene` 加 suite `ecs-system` + `ecs-serial` + 子命令 `deserialise-check`（badjson/unknown 显式退出码 2）→ CMake：System.cpp 进 nl_core + ctest e2 系四条。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e2`，即本条台账所在提交）。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16；`nanite-scene selftest --suite ecs-system` PASS（注册收编匹配实体 / 非匹配不收 / 组件挂上即时收编（Carrot 非对称口径）/ 删组件自动出列 / 删实体 flush 后出列 / firstTick 恰一次 / tick 计数与 dt 传递 / duplicate 数据拷贝换 World）；`selftest --suite ecs-serial` PASS（roundtrip 逐字节一致硬判据 + ID/名字/层级/Hidden/组件数值/非平凡 quat 逐位无损/世界矩阵重建抽查 + nextID 接续不重用 + 五路负向显式拒绝：未知组件/未知父/未知系统/坏版本/重复 ID）；ctest 8/8（e0 正负向 + e1 + e2 四条含 badjson/unknown-comp 退出码 2 显式判据）。收口四项自查：①渲染交代物——**无**（A 类 E1a 纯逻辑零渲染，无截图无 example 卡）；②工具交代物——ctest e2 系 4 条已注册跑绿（含 2 条负向退出码 2），展示台 tool 卡 + TOOLS-GUIDE 按 P8-ECS-PLAN 留 M-E3 收口统一上，本轮无独立证据图；③MILESTONES 四栏（本节）；④固化——P8-ECS-PLAN M-E2 标完成 + 裁剪范围/序列化格式口径注释留痕（System.hpp / World.hpp serialise 注释）。
+
+**踩坑**：①`#include <bitset>` 写进了 namespace nl::scene 里 → MSVC 标准库头在 namespace 内展开全线爆炸（bitset C2061 conditional_t 等十余条）——include 永远在 namespace 外，using 才可进；②`sysPtr->duplicate(w2).get()` 取裸指针后临时 unique_ptr 立即析构 → use-after-free，表现为 ecs-system suite exit 127 且无任何输出（stdout 缓冲随崩溃丢失）——所有权先落 named unique_ptr 再取指针，教训已注释进测试；③组件推送时机的非对称：组件增删**即时**推送 onEntitiesUpdated（挂上 Transform 即收编系统列表，不等 flush），实体增删才走 flush——首轮断言错把列表时机绑 flush FAIL，修断言并在注释留痕（Carrot addComponent 直调 system->onEntitiesUpdated 同口径）；④裸 shell 无 nmake 环境（cmake --build 直接炸 generator），构建必须走 build-m0.2.bat（第二次踩，已彻底记住）；⑤duplicate 返回 unique_ptr<System>，auto 推导后访问派生成员 C2039——先 static_cast 再访问。
+
+**下一步**：M-E3 收口——展示台 tool 卡（usage/正向/负向三用例 expectExit 0/1/2）+ `docs/p8/ECS-TOOLS-GUIDE.md` 归档 + MILESTONES 四栏 + tag + feat/ecs 全量 merge 回 master + 注册表同步（AGENTS/PARALLEL-TRACKS/wt_pool）。
+
+## M-E3：收口段（feat/ecs，2026-11-09，tag `ecs-e3`）
+
+**动作**：wt_pool claim（track ecs / M-E3）→ 重读判据（cases.json tool 卡三用例 + §7.2 文档闸 + 注册表同步）→ 真实输出留档（四用例实跑重定向 `example/ecs-e1a/*.log`：usage exit 2 / system+serial exit 0 / badjson exit 2 显式拒绝）→ `nanite-scene` 加 `--verbose`（断言成功逐条打印 ok 行，证据图数据源；expectQuat 顺带改单行输出防 4 连刷屏）→ 测试断言字符串全量 ASCII 化（工具输出纪律同 HUD：证据图 Consolas 无中文字形；注释中文保留）→ `tools/make-ecs-evidence.py`（Pillow terminal 风格，标题参与宽度计算防截断 + 超长行自动折行，全部内容来自真实日志）→ 4 张证据图逐张亲眼验收（首轮发现中文方框 + 标题截断两处，修复后复验）→ `example/ecs-e1a/run.bat`（四 suite + 负向 exit 2 校验 + 证据图重生成，ALL GREEN exit 0）→ `example/cases.json` 追加 `p8-ecs` 版本卡 4 条（usage/system/serial/negative，expectExit 2/0/0/2 + expectLog 锁死；**文本级插入**：先对齐 master 版（M6.1 max 口径修正 + s6.1 新版本），再在 versions 尾部追加，master 段逐条相等断言防 diff 噪音——首轮 json.dumps 全量重写产生 26 行 s6.0/s6.1 args 数组展开假 diff，checkout 重做）→ `docs/p8/ECS-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag `ecs-e3` → merge 回 master + 注册表同步（AGENTS / PARALLEL-TRACKS §7.1c / wt_pool）。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e3`，即本条台账所在提交）；master 侧 merge commit 见 PARALLEL-TRACKS §7.1c ECS 行。
+
+**完成情况**：run.bat ALL GREEN exit 0（四 suite 全过 + usage/badjson exit 2 校验 + good exit 0 + 证据图重生成）；4 张证据图亲眼验收无重叠/截断/乱码（usage 861×336 / system 696×532 / serial 1008×896 / negative-badjson 1158×224）；cases.json `p8-ecs` 卡 4 条 tool 用例 args/expectExit/expectLog 与真实行为逐条对上（usage 首行 "usage:" 实测核对）；ctest 8/8 不回退。收口四项自查：①渲染交代物——**无**（E1a 纯逻辑零渲染，无截图无 example 基线卡；渲染集成在 E1b 等 S6 收官）；②工具交代物——**本轮有**：展示台 p8-ecs 版本卡 4 条（含 preview 证据图）+ run.bat + 4 张证据图 + ECS-TOOLS-GUIDE + --verbose 逐断言输出；③MILESTONES 四栏（本节）；④固化——P8-ECS-PLAN M-E3 标完成 + TOOLS-GUIDE 踩坑存档 6 条 + 注册表同步留痕。
+
+**踩坑情况**
+1. 证据图首轮两处缺陷（中文断言字符串在 Consolas 下成方框；标题未参与画布宽度计算被截断）——生成器「脚本没报错」不等于产物可用，逐张亲眼验收是硬纪律；测试字符串 ASCII 化 + 生成器修宽度/折行后复验全过。
+2. `cases.json` 全量 json.dumps 重写会把紧凑 `args` 数组展开成 26 行假 diff（p8-jobs 支线同款坑复发）——改文本级插入：以 master 现文本为底、versions 尾部追加、`d['versions'][:32] == orig['versions']` 断言 master 段逐字节不动。
+3. wt 内 `git diff cases.json` 的 26 删不是本次改动——是 wt 基线（e283b86）落后 master（M6.1 修正）的表现；diff 基线是 wt HEAD 不是 master，判噪音前先看清和谁比。
+4. expectLog 必须与真实输出首行核对（usage 卡初版写了臆造的 banner 行，实测首行是 "usage:"，已改）。
+
+**下一步**：E1a 全链收口（merge 回 master + 注册表同步）；E1b（viewer 加载场景文件渲染 + ModelComponent/LightComponent）等 S6 收官（tag `s6-done`）后另编号开工。

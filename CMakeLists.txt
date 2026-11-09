@@ -140,9 +140,15 @@ add_library(nl_core STATIC
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
     core/src/material_graph/compile.cpp # T1：图编译验收（emit + slangc 四路，纯进程调用）
+    core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
+    core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
+    core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
-target_include_directories(nl_core PRIVATE ${THIRDPARTY}/tinygltf)
+# tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
+# vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
+# 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
+target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 target_link_libraries(nl_core PRIVATE glfw nl_metis)
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -302,10 +308,15 @@ target_link_libraries(anim-tools PRIVATE nl_core)
 add_executable(material-graph-tools material-graph-tools/main.cpp)
 target_link_libraries(material-graph-tools PRIVATE nl_core)
 
+# ---- M-E0：nanite-scene —— ECS-lite 场景（nl/scene）自测工具，A 类并行轨道 ----
+# 退出码约定：0=PASS / 1=断言失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
+add_executable(nanite-scene nanite-scene/main.cpp)
+target_link_libraries(nanite-scene PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -454,3 +465,35 @@ set_tests_properties(b4-graph-hot-reload PROPERTIES
     PASS_REGULAR_EXPRESSION "OK"
     DEPENDS b3-graph-genslang
     ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
+
+# ---- M-E0：ECS-lite World/Entity 核心机械单测（A 类轨道，P8-ECS-PLAN.md 判据）----
+# 不进渲染回归总闸（bytes/near），走工具版交代。
+add_test(NAME e0-ecs-core-selftest COMMAND nanite-scene selftest --suite ecs-core)
+set_tests_properties(e0-ecs-core-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-core selftest: PASS")
+# 负向：未知 suite = 用法错误退出码 2
+add_test(NAME e0-ecs-unknown-suite COMMAND nanite-scene selftest --suite bogus)
+set_tests_properties(e0-ecs-unknown-suite PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-E1：组件 + 层级机械单测（数值锚 = 手算对照，P8-ECS-PLAN.md 判据）----
+add_test(NAME e1-ecs-hier-selftest COMMAND nanite-scene selftest --suite ecs-hier)
+set_tests_properties(e1-ecs-hier-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-hier selftest: PASS")
+
+# ---- M-E2：System + 场景 roundtrip（P8-ECS-PLAN.md 判据）----
+add_test(NAME e2-ecs-system-selftest COMMAND nanite-scene selftest --suite ecs-system)
+set_tests_properties(e2-ecs-system-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-system selftest: PASS")
+add_test(NAME e2-ecs-serial-selftest COMMAND nanite-scene selftest --suite ecs-serial)
+set_tests_properties(e2-ecs-serial-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-serial selftest: PASS")
+# 负向：非法 JSON / 未知组件名 = 显式退出码 2（M-E2 判据原样落地）
+add_test(NAME e2-ecs-badjson-exit2 COMMAND nanite-scene deserialise-check badjson)
+set_tests_properties(e2-ecs-badjson-exit2 PROPERTIES
+    PASS_REGULAR_EXPRESSION "rejected")
+add_test(NAME e2-ecs-unknown-comp-exit2 COMMAND nanite-scene deserialise-check unknown)
+set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
+    PASS_REGULAR_EXPRESSION "rejected")
+add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
+set_tests_properties(e2-ecs-good-scene PROPERTIES
+    PASS_REGULAR_EXPRESSION "PASS")
