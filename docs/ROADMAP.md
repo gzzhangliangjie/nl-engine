@@ -277,7 +277,7 @@ nl-engine/
 |---|---|---|
 | GAMES202 | ShadowMap / PCF / PCSS | 穿插项 `shadow-map`（上表；级联阴影 CSM 是其进阶） |
 | GAMES202 | PRT / 球谐环境光 | 穿插项 `prt-sh`（上表） |
-| GAMES202 | SSR | **排 S6 之后插**：Hi-Z SSR 复用 S6 的深度金字塔基建，一鱼两吃；P7/S14 扩选 |
+| GAMES202 | SSR | **S7 之后插（2026-11-09 拍板，覆盖原「S6 之后」）**：依赖法线/粗糙度缓冲与离屏 RT 合成，S7 才就绪；Hi-Z march 复用 S6 深度金字塔成立（径向距离口径论证见 `docs/s6/SSR-RESEARCH-NOTES.md`）；P7/S14 扩选 |
 | GAMES202 | Kulla-Conty BRDF | 并入 `pbr-direct` 进阶（能量补偿，不单开） |
 | GAMES202 | SVGF / 降噪 | **主线 S12 本体**（时空滤波就是 SVGF 思想），不穿插 |
 | PhasmaEngine | SSAO（FidelityFX CACAO 可对照） | 穿插项 `ssao`（上表） |
