@@ -1126,7 +1126,7 @@
 - 双后端：hiz-front/hiz-side/dag-front/dag-side 4 图 bytes 逐字节一致；deviceErrors=0 ×2；selftest 16/16 ×2。
 - 交代物：`example/s6-cull/`（hiz-front/hiz-side 双后端 4 基线 + dag-front/side dx12 证据 + run.bat verify findstr 断言 hiz 24/85 + 40/85 ×3 exit 0）+ cases.json s6.1 卡（3 用例）+ server.py --check OK（stage=S6.1 cases=3 baselines=6）；s6-hiz 卡同步 max 口径（run.bat 断言 233/237 per 324 + background-dominates，exit 0）。
 - kStage bump 波及基线重拍：exe=current 10 版本 × 双后端 **48/48 全部重拍**（重拍脚本走 cases.json args 模板，deviceErrors=0 全验）。
-- 固化：S6-PLAN（M6.0/M6.1 口径勘误 + checklist 打勾 + 两条新坑）、UE-DIFFS D6（遮蔽已实现+结构差异）与 D3a（second pass 交汇拍板）、SHADER-CONVENTIONS §2.8（max 口径三连锁语义 + 帧内禁开第二 cmd list）、MEMORY.md、当日日志。
+- 固化：S6-PLAN（M6.0/M6.1 口径勘误 + checklist 打勾 + 两条新坑）、UE-DIFFS D6（遮蔽已实现+结构差异+**度量空间径向距离 vs UE 设备深度**已知偏差行，72cdbe4）与 D3a（second pass 交汇拍板）、SHADER-CONVENTIONS §2.8（max 口径三连锁语义 + 帧内禁开第二 cmd list）、MEMORY.md（固化「UE 差异随手落档」规矩，2026-11-09 用户拍板）、当日日志。
 
 **踩坑情况**：
 1. ⭐**view space 朝向**：`camera.lookAt` 是右手系 **-z 朝前**（camera.cpp:28），Mara&Morgan/UE 公式按 +z 朝前推导——首跑直接用 `vc.z` 使「跨近断面」判定恒真 → 剔除**静默失效**（hiz==dag 40/85 假绿）。修：`wz = -vc.z` 换轴后 40→26 立现。教训：三处参考的公式移植必须核对本项目坐标系约定。
