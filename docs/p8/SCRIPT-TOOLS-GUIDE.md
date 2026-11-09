@@ -145,3 +145,71 @@ nl-script check script/examples/console
 5. **cases.json 尾锚插入**：末卡闭括号是四层嵌套（case `}` / cases `]` / version `}` /
    versions `]` / root `}`），锚点切多一行就把 cases 数组闭括号切掉（本轮实测两次
    JSONDecodeError）——只切末三行、保留 case 层 `    }`，插入后必须 json.load 复验。
+
+---
+
+# M-SC2：ECS 数据面绑定（2026-11-09，tag `m-sc2`）
+
+## 绑定面口径（nl/script/Bindings v2）
+
+- **表结构**：ApiTable 尾部追加 10 导出（偏移 6..15）——ecsSpawn / ecsRemove /
+  ecsFlush / ecsExists / ecsSetParent / ecsGetParent / ecsAddTransform /
+  ecsTransformGet / ecsTransformSet / ecsFindByName。旧 C# 按偏移读，零波及。
+- **World 绑定**：表内纯函数指针，World 实例由宿主侧 `ecsSetWorld(World*)` 显式绑定
+  （时序同 M-SC1 注册 cvar：绑 World → installBuiltins → 调入口）；nullptr = 解绑，
+  此后导出一律 `kEcsNoWorld`——M-SC3 热重载窗口的兜底（s7g 验收）。
+- **错误码**（0..4 写死防漂移）：0=ok / 1=NoWorld / 2=NoEntity / 3=组件缺失或重复挂 /
+  4=BadArg。失效安全拒绝 = 每导出前置 `exists()` 检查，C# 侧不抛异常不崩。
+- **C# 侧**：`Ecs` 静态类（偏移读表 + delegate 直调）+ `SceneEntity` 轻量 wrapper
+  （{ ulong Id }，Carrot Entity 同构不持存储；实例方法全委托 Ecs.* 回错误码）。
+- **Transform ABI**：局部 TRS，rot = quat (x,y,z,w)，pos/scale = vec3；float 数组
+  指针传递（逐位透传，无格式化损耗）。TransformSet 任一指针可 NULL（跳过该组）。
+- **内存所有权**：本组导出无字符串返回（名字查询走 ID），无新配对协议。
+
+## 语义锚（Carrot/World 口径，selftest 实测）
+
+- **延迟非对称**：spawn 新建立即可见（names_ 即时登记，exists 即时真）；remove 排队
+  flush/tick 生效；`findEntityByName` 走 flush 后全局表（entities_）——**脚本 spawn 后
+  必须宿主 flush 再按名查**（selftest s7a「host flush after script spawn」锚）。
+  绑定层不改 World 语义（E1a 已 merge，不动 ECS 轨道）。
+- **父删级联**：removeEntity 父删递归删子（run --api demo：remove root → leaf 同没）。
+- **JSON roundtrip**：deserialise 前必须 `getComponentLibrary().registerComponent
+  <TransformComponent>()`（clone 世界的工厂库默认空）——nanite-scene ecs-serial 同款。
+
+## selftest 判据（s7 组，M-SC0 s0~s5 + M-SC1 s6 不回归）
+
+- s7a C# SpawnSetup（spawn×2 + setParent + addTransform×2 + TRS 写入）→ C++ flush 后
+  findByName 取回、parent/pos/quat/scale 逐位比对；
+- s7b C++ 经绑定表预置 cppEnt 锚值 → C# ReadVerify 读回一致（float 逐位）；
+- s7c C# InvalidProbe：未存在 ID 七项操作（Remove/SetParent/GetParent/AddTransform/
+  GetTransform/SetTransform/Exists）全 NoEntity，不崩；
+- s7d 延迟删除非对称：remove 后 flush 前 exists 真 → flush 后假 + 表级 TransformGet
+  → NoEntity；
+- s7e 父子 roundtrip：解除（parent=0）→ 重挂 → getChildIDs 视图一致；
+- s7f JSON serialise→deserialise→serialise 字节一致（脚本侧改动全量入库）；
+- s7g ecsSetWorld(nullptr) 后 spawn/flush/exists 一律 NoWorld。
+
+## 验收复现
+
+```
+nl-script selftest script/examples/hello script/examples/console script/examples/ecs
+nl-script run script/examples/ecs --api
+nl-script run script/examples/ecs --api --type "NlScript.Examples.HelloScript, EcsScript"   # 负向 exit 1
+nl-script check script/examples/ecs
+```
+
+默认类型名约定（本轮起）：`NlScript.Examples.<工程目录名首字母大写>Script, <AssemblyName>`
+（hello→HelloScript / console→ConsoleScript / ecs→EcsScript）。
+
+## 踩坑存档（M-SC2 实测）
+
+1. **findEntityByName 走全局表**：spawn 后未 flush 按名查不到（返回 nullopt），与
+   exists()（查 names_）非对称——不是 bug，是 Carrot 口径；绑定层照抄，selftest
+   补 flush 步骤（「宿主 tick 边界」生产时序）。首轮 s7a 13 处 FAIL 全根因于此。
+2. **clone 世界工厂库默认空**：deserialise 遇 "Transform" 报 unknown component name——
+   必须 registerComponent<TransformComponent>()（nanite-scene 先例同款）。
+3. **默认类型名硬编码**：run 无 --type 时原默认 HelloScript，ecs 工程直接 code=5——
+   改按工程目录名推导（首字母大写 + Script）。
+4. **cases.json 尾锚 + 转义**：heredoc 内嵌 JSON 的 `\\"` 要一层层数清（多一层 =
+   JSONDecodeError line 3870）；command 含引号的字段用 Python 单引号串承载再 replace
+   注入，插后 json.loads 复验。

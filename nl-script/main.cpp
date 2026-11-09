@@ -20,15 +20,26 @@
 //        s6a C# 改 cvar 触发 C++ onChanged / s6b C# 注册命令经 console exec 调通 /
 //        s6c 错误码逐一对齐（0/1/2/3）/ s6d 托管异常命令 SEH 边界 /
 //        s6e 双向读回 + cvar.list / s6f 注销命令解绑（M-SC3 预演）
+//     s7 ECS 数据面绑定（M-SC2，需第 3 个参数给出 ecs 示例工程目录）：
+//        s7a C# spawn+挂 Transform+改字段 -> C++ 读回一致 /
+//        s7b C++ 经绑定表改字段 -> C# 读回锚值 /
+//        s7c 失效实体全操作拒绝（NoEntity，不崩）/
+//        s7d 延迟删除 + flush 后 exists 假 + 绑定表 TransformGet 拒绝 /
+//        s7e 父子关系经绑定表 roundtrip（getChildIDs 视图一致）/
+//        s7f JSON roundtrip 不受脚本侧改动影响（字节一致）/
+//        s7g 解绑 World 后导出一律 NoWorld（M-SC3 热重载窗口兜底）
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello script/examples/console
+//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs
 //   nl-script run script/examples/hello --args ok
 //   nl-script run script/examples/console --api
+//   nl-script run script/examples/ecs --api
 //   nl-script check script/examples/hello
 
 #include "nl/core/log.hpp"
 #include "nl/core/console.hpp"
+#include "nl/scene/Component.hpp"
+#include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"
 #include "nl/script/Bindings.hpp"
 
@@ -164,9 +175,12 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
         return 1;
     }
 
-    // 类型名默认约定：RootNamespace.类名, AssemblyName（csproj 双锚，M-SC0 只有一个入口类型）。
+    // 类型名默认约定：RootNamespace.<工程目录名首字母大写>Script, AssemblyName
+    // （csproj 双锚：hello->HelloScript / console->ConsoleScript / ecs->EcsScript）。
+    std::string stem = projectDir.filename().string();
+    if (!stem.empty()) stem[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(stem[0])));
     const std::string typeName =
-        typeOverride.empty() ? ("NlScript.Examples.HelloScript, " + out->assemblyName) : typeOverride;
+        typeOverride.empty() ? ("NlScript.Examples." + stem + "Script, " + out->assemblyName) : typeOverride;
 
     nl::script::EntryPointFn entry = nullptr;
     result = vm->getEntryPoint(out->assemblyDll.string(), typeName, "Entry", &entry);
@@ -175,13 +189,15 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
         return 1;
     }
 
-    // 绑定脚本（M-SC1）约定 args = nl::script::ApiTable*；普通脚本 args = 命令行串。
+    // 绑定脚本（M-SC1/M-SC2）约定 args = nl::script::ApiTable*；普通脚本 args = 命令行串。
     if (passApiTable) {
-        // 宿主侧预注册（生产宿主注册自家 cvar 的口径；脚本由此可 get/set/exec）。
+        // 宿主侧预注册（生产宿主注册自家 cvar / 绑 World 的口径；脚本由此可 get/set/exec/spawn）。
         auto& console = nl::core::console::Console::get();
         console.installBuiltins();
         console.registerInt("script.count", 0, "demo cvar bound to script (M-SC1)");
         console.registerFloat("script.rate", 1.5, "demo float cvar (M-SC1)");
+        static nl::scene::World world;   // 绑定脚本生命周期 = 本工具进程
+        nl::script::ecsSetWorld(&world);
     }
     void* argPtr = passApiTable ? const_cast<void*>(static_cast<const void*>(nl::script::consoleApiTable()))
                                 : (args.empty() ? nullptr : const_cast<char*>(args.c_str()));
@@ -198,7 +214,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 // ---- selftest ----
 
-int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir) {
+int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -420,6 +436,168 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir) {
         }
     }
 
+    // ---- s7 ECS 数据面绑定（M-SC2；ecsDir 为空 = 跳过，同 s6 口径）----
+    if (!ecsDir.empty()) {
+        if (!dotnetBuild(ecsDir.string(), {})) {
+            expectTrue(false, "s7a dotnet build ecs example");
+            std::printf("nl-script selftest: FAIL (ecs binding build)\n");
+            return 1;
+        }
+        auto eso = locateOutput(ecsDir, {});
+        expectTrue(eso.has_value(), "s7a locate EcsScript build output");
+        if (eso) {
+            const std::string esType = "NlScript.Examples.EcsScript, " + eso->assemblyName;
+            nl::script::EntryPointFn spawnEntry = nullptr, readEntry = nullptr,
+                                     probeEntry = nullptr, removeEntry = nullptr;
+            result = vm->getEntryPoint(eso->assemblyDll.string(), esType, "SpawnSetup", &spawnEntry);
+            result = vm->getEntryPoint(eso->assemblyDll.string(), esType, "ReadVerify", &readEntry);
+            result = vm->getEntryPoint(eso->assemblyDll.string(), esType, "InvalidProbe", &probeEntry);
+            result = vm->getEntryPoint(eso->assemblyDll.string(), esType, "RemoveSpawned", &removeEntry);
+            expectTrue(result.ok && removeEntry != nullptr, "s7a locate ecs binding entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                // 绑定表导出的强类型视图（C++ 侧经同一张表调用 = 与 C# 完全同路径）
+                using SpawnFnT = int(__cdecl*)(const char*, std::uint64_t*);
+                using RemoveFnT = int(__cdecl*)(std::uint64_t);
+                using FlushFnT = int(__cdecl*)();
+                using ExistsFnT = int(__cdecl*)(std::uint64_t, int*);
+                using SetParentFnT = int(__cdecl*)(std::uint64_t, std::uint64_t);
+                using GetParentFnT = int(__cdecl*)(std::uint64_t, std::uint64_t*);
+                using AddTFnT = int(__cdecl*)(std::uint64_t);
+                using TGetFnT = int(__cdecl*)(std::uint64_t, float*, float*, float*);
+                using TSetFnT = int(__cdecl*)(std::uint64_t, const float*, const float*, const float*);
+                using FindFnT = int(__cdecl*)(const char*, std::uint64_t*);
+                const auto ecsSpawn = reinterpret_cast<SpawnFnT>(table->ecsSpawn);
+                const auto ecsRemove = reinterpret_cast<RemoveFnT>(table->ecsRemove);
+                const auto ecsFlush = reinterpret_cast<FlushFnT>(table->ecsFlush);
+                const auto ecsExists = reinterpret_cast<ExistsFnT>(table->ecsExists);
+                const auto ecsSetParent = reinterpret_cast<SetParentFnT>(table->ecsSetParent);
+                const auto ecsGetParent = reinterpret_cast<GetParentFnT>(table->ecsGetParent);
+                const auto ecsAddTransform = reinterpret_cast<AddTFnT>(table->ecsAddTransform);
+                const auto ecsTransformGet = reinterpret_cast<TGetFnT>(table->ecsTransformGet);
+                const auto ecsTransformSet = reinterpret_cast<TSetFnT>(table->ecsTransformSet);
+                const auto ecsFindByName = reinterpret_cast<FindFnT>(table->ecsFindByName);
+
+                auto callEntry = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 每轮新 World + 绑定（selftest 隔离；生产宿主同款时序：绑 World -> 调入口）
+                static nl::scene::World world;
+                nl::script::ecsSetWorld(&world);
+
+                // C++ 侧预置 cppEnt（经绑定表走 = 与 C# 同路径）：挂 Transform + 锚值
+                {
+                    std::uint64_t cppEnt = 0;
+                    expectInt(ecsSpawn("cppEnt", &cppEnt), 0, "s7-pre C++ spawn cppEnt via table");
+                    expectInt(ecsAddTransform(cppEnt), 0, "s7-pre C++ addTransform cppEnt");
+                    const float pos[3] = {10.f, -20.f, 30.f};
+                    const float rot[4] = {0.f, 0.f, 0.7071067811865476f, 0.7071067811865476f};
+                    const float scl[3] = {0.5f, 1.5f, 3.f};
+                    expectInt(ecsTransformSet(cppEnt, pos, rot, scl), 0, "s7-pre C++ set anchor TRS");
+                }
+
+                // s7a：C# spawn + 挂 Transform + 改字段 -> C++ 读回一致
+                {
+                    auto [hit, ret] = callEntry(spawnEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s7a C# SpawnSetup -> 0");
+
+                    // 宿主 tick 边界 flush（Carrot 口径：spawn 排队、flush 后进全局表，
+                    // findEntityByName 走全局表——脚本 spawn 完宿主 flush 再查，同生产时序）
+                    expectInt(ecsFlush(), 0, "s7a host flush after script spawn");
+
+                    std::uint64_t root = 0, leaf = 0;
+                    expectInt(ecsFindByName("scriptRoot", &root), 0, "s7a C++ find scriptRoot");
+                    expectInt(ecsFindByName("scriptLeaf", &leaf), 0, "s7a C++ find scriptLeaf");
+                    expectTrue(root != 0 && leaf != 0 && root != leaf, "s7a both entities exist with distinct ids");
+
+                    std::uint64_t parent = 0;
+                    expectInt(ecsGetParent(leaf, &parent), 0, "s7a getparent leaf -> ok");
+                    expectTrue(parent == root, "s7a leaf parent == root id");
+
+                    float pos[3] = {}, rot[4] = {}, scl[3] = {};
+                    expectInt(ecsTransformGet(root, pos, rot, scl), 0, "s7a transformGet scriptRoot -> 0");
+                    expectTrue(pos[0] == 1.f && pos[1] == 2.f && pos[2] == 3.f, "s7a pos anchor (1,2,3) exact");
+                    expectTrue(rot[0] == 0.5f && rot[1] == 0.5f && rot[2] == 0.5f && rot[3] == 0.5f,
+                               "s7a quat anchor (0.5,0.5,0.5,0.5) exact");
+                    expectTrue(scl[0] == 2.f && scl[1] == 2.f && scl[2] == 2.f, "s7a scale anchor (2,2,2) exact");
+                    expectInt(ecsTransformGet(leaf, pos, rot, scl), 0, "s7a transformGet scriptLeaf -> 0");
+                    expectTrue(pos[0] == -1.f && pos[1] == -2.f && pos[2] == -3.f, "s7a leaf pos anchor (-1,-2,-3) exact");
+                }
+
+                // s7b：C++ 改字段（预置锚）-> C# 读回一致
+                expectInt(callEntry(readEntry).second, 0, "s7b C# ReadVerify cppEnt anchors -> 0");
+
+                // s7c：失效实体全操作拒绝（NoEntity，不崩）
+                expectInt(callEntry(probeEntry).second, 0, "s7c C# InvalidProbe all rejected -> 0");
+
+                // s7d：延迟删除 + flush 后 exists 假 + 绑定表 TransformGet 拒绝
+                {
+                    std::uint64_t leaf = 0;
+                    ecsFindByName("scriptLeaf", &leaf);
+                    expectInt(callEntry(removeEntry).second, 0, "s7d C# RemoveSpawned(scriptLeaf) -> 0");
+                    int alive = 1;
+                    ecsExists(leaf, &alive);
+                    expectTrue(alive == 1, "s7d deferred: still exists before flush (Carrot asymmetry)");
+                    expectInt(ecsFlush(), 0, "s7d flush -> 0");
+                    ecsExists(leaf, &alive);
+                    expectTrue(alive == 0, "s7d after flush exists -> false");
+                    float pos[3] = {}, rot[4] = {}, scl[3] = {};
+                    expectInt(ecsTransformGet(leaf, pos, rot, scl), nl::script::kEcsNoEntity,
+                              "s7d TransformGet on flushed entity -> NoEntity (safe reject)");
+                }
+
+                // s7e：父子关系经绑定表 roundtrip（解除 + 重挂 + 子视图一致）
+                {
+                    std::uint64_t root = 0;
+                    ecsFindByName("scriptRoot", &root);
+                    expectInt(ecsSetParent(root, 0), 0, "s7e clear parent -> 0");
+                    std::uint64_t parent = 12345;
+                    expectInt(ecsGetParent(root, &parent), 0, "s7e getparent root -> 0");
+                    expectTrue(parent == 0, "s7e root parent cleared");
+                    std::uint64_t cppEnt = 0;
+                    ecsFindByName("cppEnt", &cppEnt);
+                    expectInt(ecsSetParent(root, cppEnt), 0, "s7e reparent root -> cppEnt");
+                    ecsGetParent(root, &parent);
+                    expectTrue(parent == cppEnt, "s7e root parent == cppEnt");
+                    const auto kids = world.getChildIDs(cppEnt);
+                    bool found = false;
+                    for (const auto k : kids) found |= (k == root);
+                    expectTrue(found, "s7e getChildIDs(cppEnt) view contains root");
+                }
+
+                // s7f：JSON roundtrip 不受脚本侧改动影响（序列化字节一致）
+                {
+                    const auto a = world.serialise().dump();
+                    nl::scene::World clone;
+                    clone.getComponentLibrary().registerComponent<nl::scene::TransformComponent>();
+                    std::string err;
+                    expectTrue(clone.deserialise(nlohmann::json::parse(a), err),
+                               "s7f deserialise world snapshot -> true");
+                    if (!err.empty()) std::printf("  s7f detail: %s\n", err.c_str());
+                    expectTrue(clone.serialise().dump() == a, "s7f serialise roundtrip bytes equal");
+                }
+
+                // s7g：解绑 World 后导出一律 NoWorld（M-SC3 热重载窗口兜底）
+                {
+                    nl::script::ecsSetWorld(nullptr);
+                    std::uint64_t id = 0;
+                    expectInt(ecsSpawn("nope", &id), nl::script::kEcsNoWorld,
+                              "s7g spawn after unbind -> NoWorld");
+                    expectInt(ecsFlush(), nl::script::kEcsNoWorld, "s7g flush after unbind -> NoWorld");
+                    int alive = 0;
+                    expectInt(ecsExists(1, &alive), nl::script::kEcsNoWorld, "s7g exists after unbind -> NoWorld");
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -432,7 +610,8 @@ void usage() {
         "  nl-script check <projectDir>                       compile only (dotnet build)\n"
         "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
-        "  nl-script selftest <projectDir> [consoleProjectDir]  full machine-checked acceptance\n"
+        "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir]\n"
+        "                                                     full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -479,7 +658,8 @@ int main(int argc, char** argv) {
             return 2;
         }
         const fs::path consoleDir = argc >= 4 ? fs::weakly_canonical(argv[3]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir);
+        const fs::path ecsDir = argc >= 5 ? fs::weakly_canonical(argv[4]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir);
     }
     usage();
     return 2;

@@ -12,7 +12,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.2.0";   // M-SC1：+console 绑定
+        public const string Version = "0.3.0";   // M-SC2：+ECS 数据面绑定
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -74,6 +74,7 @@ namespace Nl.Script.Api
             _consoleExec       = Marshal.ReadIntPtr(table, 3 * sizeof(IntPtr));
             _consoleRegister   = Marshal.ReadIntPtr(table, 4 * sizeof(IntPtr));
             _consoleUnregister = Marshal.ReadIntPtr(table, 5 * sizeof(IntPtr));
+            Ecs.Init(table);   // v2 ECS 导出（偏移 6..14，M-SC2 尾部追加）
         }
 
         // ---- CVar ----
@@ -193,5 +194,199 @@ namespace Nl.Script.Api
             Marshal.WriteByte(p, bytes.Length, 0);
             return p;
         }
+    }
+
+    /// <summary>ECS 导出错误码（与 nl/script/Bindings.hpp kEcs* 一致）。</summary>
+    public static class EcsCode
+    {
+        public const int Ok = 0;
+        public const int NoWorld = 1;      // 宿主未绑 World
+        public const int NoEntity = 2;     // 实体不存在（失效安全拒绝）
+        public const int Component = 3;    // 组件缺失或重复挂
+        public const int BadArg = 4;       // 非法参数
+    }
+
+    /// <summary>局部 TRS（quat x,y,z,w 口径与 C++ Transform 一致）。</summary>
+    public struct TransformData
+    {
+        public float Px, Py, Pz;
+        public float Qx, Qy, Qz, Qw;
+        public float Sx, Sy, Sz;
+
+        public static TransformData Identity() => new()
+        { Qw = 1f, Sx = 1f, Sy = 1f, Sz = 1f };
+    }
+
+    /// <summary>
+    /// ECS 数据面绑定（M-SC2）。操作目标 = 宿主侧 ecsSetWorld 绑定的 World
+    /// （nl/script/Bindings.hpp v2 导出，ApiTable 偏移 6..14）。延迟语义沿 World 口径：
+    /// Spawn 新建立即可见；Remove 排队、Flush/tick 生效（Carrot 口径）。
+    /// 失效安全拒绝：所有方法回错误码（EcsCode），不抛异常不崩。
+    /// </summary>
+    public static unsafe class Ecs
+    {
+        // ---- C++ 侧函数指针（ApiTable 偏移 6..15）----
+        static IntPtr _spawn, _remove, _flush, _exists, _setParent, _getParent,
+                      _addTransform, _transformGet, _transformSet, _findByName;
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int SpawnFn(IntPtr name, out ulong id);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int RemoveFn(ulong id);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int FlushFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int ExistsFn(ulong id, out int exists);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int SetParentFn(ulong id, ulong parent);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int GetParentFn(ulong id, out ulong parent);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int AddTransformFn(ulong id);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int TransformGetFn(ulong id, float* pos3, float* rot4, float* scale3);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int TransformSetFn(ulong id, float* pos3, float* rot4, float* scale3);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int FindByNameFn(IntPtr name, out ulong id);
+
+        /// <summary>由 Engine.Init 调用（读 v2 尾部偏移）。</summary>
+        internal static void Init(IntPtr table)
+        {
+            _spawn         = Marshal.ReadIntPtr(table, 6 * sizeof(IntPtr));
+            _remove        = Marshal.ReadIntPtr(table, 7 * sizeof(IntPtr));
+            _flush         = Marshal.ReadIntPtr(table, 8 * sizeof(IntPtr));
+            _exists        = Marshal.ReadIntPtr(table, 9 * sizeof(IntPtr));
+            _setParent     = Marshal.ReadIntPtr(table, 10 * sizeof(IntPtr));
+            _getParent     = Marshal.ReadIntPtr(table, 11 * sizeof(IntPtr));
+            _addTransform  = Marshal.ReadIntPtr(table, 12 * sizeof(IntPtr));
+            _transformGet  = Marshal.ReadIntPtr(table, 13 * sizeof(IntPtr));
+            _transformSet  = Marshal.ReadIntPtr(table, 14 * sizeof(IntPtr));
+            _findByName    = Marshal.ReadIntPtr(table, 15 * sizeof(IntPtr));
+        }
+
+        /// <summary>建实体（新建立即可见，Carrot 口径）。0=ok，*id 为实体 ID。</summary>
+        public static int Spawn(string name, out ulong id)
+        {
+            id = 0;
+            IntPtr namePtr = Utf8(name);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<SpawnFn>(_spawn);
+                return fn(namePtr, out id);
+            }
+            finally { Marshal.FreeHGlobal(namePtr); }
+        }
+
+        /// <summary>延迟删除（flush/tick 生效；父删递归删子）。</summary>
+        public static int Remove(ulong id) =>
+            Marshal.GetDelegateForFunctionPointer<RemoveFn>(_remove)(id);
+
+        /// <summary>统一落盘（宿主 tick 边界动作）。</summary>
+        public static int Flush() =>
+            Marshal.GetDelegateForFunctionPointer<FlushFn>(_flush)();
+
+        /// <summary>存在性查询（0=ok / 1=未绑 World）。exists: 新建即时真、删除 flush 后假。</summary>
+        public static int Exists(ulong id, out bool exists)
+        {
+            exists = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<ExistsFn>(_exists);
+            int rc = fn(id, out int e);
+            if (rc == EcsCode.Ok) exists = e != 0;
+            return rc;
+        }
+
+        /// <summary>挂父（纯关系，不动变换）。parent=0 解除父子。</summary>
+        public static int SetParent(ulong id, ulong parent) =>
+            Marshal.GetDelegateForFunctionPointer<SetParentFn>(_setParent)(id, parent);
+
+        /// <summary>取父 ID（0=无父）。</summary>
+        public static int GetParent(ulong id, out ulong parent)
+        {
+            parent = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<GetParentFn>(_getParent);
+            return fn(id, out parent);
+        }
+
+        /// <summary>挂 TransformComponent（重复挂 = EcsCode.Component）。</summary>
+        public static int AddTransform(ulong id) =>
+            Marshal.GetDelegateForFunctionPointer<AddTransformFn>(_addTransform)(id);
+
+        /// <summary>局部 TRS 读回（缺组件 = EcsCode.Component）。</summary>
+        public static int TransformGet(ulong id, out TransformData t)
+        {
+            t = default;
+            var fn = Marshal.GetDelegateForFunctionPointer<TransformGetFn>(_transformGet);
+            float* pos = stackalloc float[3];
+            float* rot = stackalloc float[4];
+            float* scl = stackalloc float[3];
+            int rc = fn(id, pos, rot, scl);
+            if (rc == EcsCode.Ok)
+            {
+                t = new TransformData
+                {
+                    Px = pos[0], Py = pos[1], Pz = pos[2],
+                    Qx = rot[0], Qy = rot[1], Qz = rot[2], Qw = rot[3],
+                    Sx = scl[0], Sy = scl[1], Sz = scl[2],
+                };
+            }
+            return rc;
+        }
+
+        /// <summary>局部 TRS 写入（缺组件 = EcsCode.Component）。</summary>
+        public static int TransformSet(ulong id, in TransformData t)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<TransformSetFn>(_transformSet);
+            float* pos = stackalloc float[3] { t.Px, t.Py, t.Pz };
+            float* rot = stackalloc float[4] { t.Qx, t.Qy, t.Qz, t.Qw };
+            float* scl = stackalloc float[3] { t.Sx, t.Sy, t.Sz };
+            return fn(id, pos, rot, scl);
+        }
+
+        /// <summary>按名查实体（未找到 id=0，返回 EcsCode.Ok）。</summary>
+        public static int FindByName(string name, out ulong id)
+        {
+            id = 0;
+            IntPtr namePtr = Utf8(name);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<FindByNameFn>(_findByName);
+                return fn(namePtr, out id);
+            }
+            finally { Marshal.FreeHGlobal(namePtr); }
+        }
+
+        static IntPtr Utf8(string s)
+        {
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(s ?? "");
+            IntPtr p = Marshal.AllocHGlobal(bytes.Length + 1);
+            Marshal.Copy(bytes, 0, p, bytes.Length);
+            Marshal.WriteByte(p, bytes.Length, 0);
+            return p;
+        }
+    }
+
+    /// <summary>
+    /// Entity 轻量 wrapper（与 EntityID 映射，Carrot Entity 同构：不持存储）。
+    /// 失效安全拒绝：所有实例方法委托 Ecs.* 回错误码——失效实体上调用得到
+    /// EcsCode.NoEntity，不崩不改状态（selftest s7 判据本体）。
+    /// </summary>
+    public readonly struct SceneEntity
+    {
+        public ulong Id { get; }
+        public SceneEntity(ulong id) { Id = id; }
+
+        /// <summary>存在性（新建即时真、删除 flush 后假——Carrot 非对称口径）。</summary>
+        public bool Exists
+        {
+            get { Ecs.Exists(Id, out bool e); return e; }
+        }
+
+        public int Remove() => Ecs.Remove(Id);
+        public int SetParent(ulong parent) => Ecs.SetParent(Id, parent);
+        public int GetParent(out ulong parent) => Ecs.GetParent(Id, out parent);
+        public int AddTransform() => Ecs.AddTransform(Id);
+        public int GetTransform(out TransformData t) => Ecs.TransformGet(Id, out t);
+        public int SetTransform(in TransformData t) => Ecs.TransformSet(Id, t);
     }
 }

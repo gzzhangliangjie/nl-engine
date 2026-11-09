@@ -11,6 +11,12 @@
 //     UE 与脚本层无 C# 绑定（走 Blueprint/Python），据实标注无对应物。
 //   - bevy：无控制台无脚本 crate，据实标注无对应物。
 //
+// M-SC2（ECS 数据面）：Carrot 的脚本↔ECS 桥 = C# World.Current 单例 + internal call
+// 直接操作 World（engine/scripting/SceneBridge.cs 口径：句柄 = EntityID 数值）；对应物
+// 同 M-SC1——ApiTable 尾部追加 ECS 导出，World 实例由宿主侧 ecsSetWorld() 显式绑定
+// （宿主注册自家 cvar 同款时序：绑 World → 调入口）。Entity wrapper = C# 侧
+// { ulong Id } 轻量壳（Carrot Entity 同构），失效安全拒绝 = 每个导出先查 exists()。
+//
 // ABI 约定（写死，防两边漂移；v1 固定顺序，只许尾部追加）：
 //   - 所有字符串 UTF-8（'\0' 结尾）；
 //   - 调用约定 __cdecl（x64 Windows 统一，标注只为可读）；
@@ -29,10 +35,22 @@
 
 #include <cstdint>
 
+namespace nl::scene { class World; }
+
 namespace nl::script {
 
+// ECS 导出通用错误码（v2；写死防漂移）：
+//   0=ok / 1=未绑 World（宿主忘 ecsSetWorld）/ 2=实体不存在（失效安全拒绝）/
+//   3=组件缺失或重复挂 / 4=非法参数（空指针等）
+inline constexpr int kEcsOk = 0;
+inline constexpr int kEcsNoWorld = 1;
+inline constexpr int kEcsNoEntity = 2;
+inline constexpr int kEcsComponent = 3;
+inline constexpr int kEcsBadArg = 4;
+
 // C ABI api 表（随托管入口 args 传入；C# 侧按偏移 Marshal.ReadIntPtr 读）。
-// 字段顺序 = 表内偏移顺序（64 位指针，逐个 8 字节）。
+// 字段顺序 = 表内偏移顺序（64 位指针，逐个 8 字节）。v1 console 6 导出 +
+// v2 ECS 9 导出（M-SC2，尾部追加——C# 按偏移读，旧脚本零波及）。
 struct ApiTable {
     // int cvarGet(const char* name, const char** outValue)
     //   返回类型码：0=未注册 / 1=bool / 2=int / 3=float / 4=string；*outValue=toString()
@@ -55,9 +73,46 @@ struct ApiTable {
     // int consoleUnregister(const char* name)
     //   0=ok / 1=未知命令（M-SC3 热重载解绑的落点）
     void* consoleUnregister;
+
+    // ---- v2 ECS（M-SC2；操作目标 = ecsSetWorld 绑定的 World；延迟语义沿 World 口径）----
+
+    // int ecsSpawn(const char* name, unsigned long long* outID)
+    //   newEntity（新建立即可见，Carrot 口径）；*outID=实体 ID（0=无效）
+    void* ecsSpawn;
+    // int ecsRemove(unsigned long long id)
+    //   延迟删除（排队，flush/tick 生效；父删递归删子）
+    void* ecsRemove;
+    // int ecsFlush()
+    //   flushEntityCreationAndRemoval（宿主 tick 边界动作；Carrot flush 口径）
+    void* ecsFlush;
+    // int ecsExists(unsigned long long id, int* outExists)
+    //   *outExists: 0=不存在 / 1=存在（新建即时真、删除 flush 后假——非对称 Carrot 口径）
+    void* ecsExists;
+    // int ecsSetParent(unsigned long long id, unsigned long long parentID)
+    //   parentID=0 解除父子；环防护 = World::setParent 口径（父不得是后代）
+    void* ecsSetParent;
+    // int ecsGetParent(unsigned long long id, unsigned long long* outParent)
+    //   *outParent=0 无父
+    void* ecsGetParent;
+    // int ecsAddTransform(unsigned long long id)
+    //   挂 TransformComponent（重复挂 = 3）
+    void* ecsAddTransform;
+    // int ecsTransformGet(unsigned long long id, float* outPos3, float* outRot4, float* outScale3)
+    //   局部 TRS 读回；rot = quat (x,y,z,w)
+    void* ecsTransformGet;
+    // int ecsTransformSet(unsigned long long id, const float* pos3, const float* rot4, const float* scale3)
+    //   局部 TRS 写入；任一指针可 NULL（跳过该组字段）
+    void* ecsTransformSet;
+    // int ecsFindByName(const char* name, unsigned long long* outID)
+    //   按名查实体（World::findEntityByName 口径）；未找到 *outID=0 返回 0
+    void* ecsFindByName;
 };
 
 // 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应）。
 const ApiTable* consoleApiTable();
+
+// 宿主侧 World 绑定（M-SC2）：入口调用前设置，ECS 导出全部操作该实例；
+// nullptr = 解绑（此后 ECS 导出一律返回 kEcsNoWorld——M-SC3 热重载窗口的兜底）。
+void ecsSetWorld(scene::World* world);
 
 } // namespace nl::script

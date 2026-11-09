@@ -1370,3 +1370,19 @@
 5. **cases.json 尾锚插入**：末卡四层嵌套闭括号，锚点切多一行就把 cases 数组 `]` 切掉（本轮两次 JSONDecodeError 后改「只切末三行保留 case 层 `}`」+ json.load 复验）。
 
 **下一步**：M-SC2 ECS 绑定（数据面：World.Spawn/Remove/SetParent、Entity 失效安全拒绝、TransformComponent 字段读写；E1a 已 merge 前置满足）。
+
+## M-SC2：ECS 数据面绑定（feat/script，2026-11-09，tag `m-sc2`）
+
+**动作**：wt_pool claim（track script / M-SC2）→ 三处证据（本轮模块=脚本↔ECS 数据面：Carrot 脚本↔ECS 桥 = C# World.Current 单例 + internal call 直接操作 World、句柄 = EntityID 数值——hostfxr 路线对应物 = ApiTable 尾部追加 + 宿主侧显式绑 World；UE/bevy 据实标注无对应物）→ `Bindings.hpp/.cpp` v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` + 错误码 0..4 写死 → script-api 升 0.3.0（`Ecs` 静态类偏移读表 + `SceneEntity` wrapper）→ `script/examples/ecs/` 多入口示例（SpawnSetup/ReadVerify/InvalidProbe/RemoveSpawned + Entry demo）→ nl-script selftest s7a~s7g + run --api 绑 World + 默认类型名按工程目录推导 → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc2/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc2 段 4 张真实输出图逐张亲眼验收 → cases.json 文本级追加 `m-sc2` 卡 4 条（前缀逐字节保留 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc2`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（v2 绑定面）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 不回归 + s7a~s7g：C# spawn→C++ 逐位读回 / C++ 锚值 C# 验证 / 失效实体七项操作全 NoEntity / 延迟删除 flush 非对称 + 表级安全拒绝 / 父子 roundtrip / JSON 字节一致 / 解绑 NoWorld）；run --api ecs demo 全链路 exit 0（含父删级联）；负向错 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc2` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC2 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC2 行标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面 v2 口径固化（10 导出 ABI/错误码/World 绑定时序/延迟非对称语义锚/JSON roundtrip 前置）+ 踩坑 4 条存档。
+
+**踩坑情况**
+1. **findEntityByName 走 flush 后全局表**（entities_），与 exists()（查 names_）非对称——spawn 后未 flush 按名查不到；绑定层照抄 Carrot 口径不改 World 语义（E1a 已 merge 不动 ECS 轨道），selftest s7a 补「host flush after script spawn」步骤。首轮 s7a 13 处 FAIL 全根因于此。
+2. **clone 世界工厂库默认空**：deserialise 报 unknown component name "Transform"——必须 registerComponent<TransformComponent>()（nanite-scene ecs-serial 先例同款）。
+3. **默认类型名硬编码 HelloScript**：ecs 工程 run 无 --type 直接 code=5——改按工程目录名推导（首字母大写 + Script，三示例统一）。
+4. **cases.json heredoc 转义**：内嵌 JSON 的引号转义层级数错一层即 JSONDecodeError——含引号 command 字段用 Python 单引号串承载再 replace 注入，插后 json.loads 复验。
+
+**下一步**：M-SC3 热更 + 收口（`console.reload-script`：新 DLL 载入 collectible ALC → 重绑定 → 旧 ALC Unload；改脚本 → dotnet build → reload → cvar/命令/实体行为换新 C++ 状态无损；连续 reload 句柄计数核；全量回归绿；merge 回 master）。

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段）。
+"""P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段）。
 
 铁律：所有内容从工具**真实输出**渲染（example/<dir>/*.log，
 由 nl-script.exe 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
 复现：example/<dir>/run.bat（重跑用例 -> 重新生成本图 -> exit 0 校验）。
-用法：python make-script-evidence.py [m-sc0|m-sc1]   （缺省 m-sc0）
+用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2]   （缺省 m-sc0）
 """
 import os
 import sys
@@ -139,7 +139,28 @@ CASES_M_SC1 = [
      "dotnet build only; binding entry points require [UnmanagedCallersOnly] default signature."),
 ]
 
-CASES = CASES_M_SC0 if DIR_NAME == "m-sc0" else CASES_M_SC1
+CASES_M_SC2 = [
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC2 ECS binding (s7a-s7g, on top of M-SC0 s0-s5 + M-SC1 s6)",
+     "s7a C# spawn+Transform+fields -> C++ reads back exact / s7b C++ sets anchors via table, "
+     "C# verifies / s7c invalid entity ops all rejected NoEntity, no crash / "
+     "s7d deferred removal + flush asymmetry (Carrot) + table TransformGet safe reject / "
+     "s7e parent roundtrip via table + getChildIDs view / s7f JSON roundtrip bytes equal / "
+     "s7g unbound World -> all exports NoWorld (M-SC3 hot-reload window fallback)."),
+    ("run-api.log", "run-api.png",
+     "nl-script run --api on ecs example -- demo (exit 0)",
+     "Entry receives ApiTable* (v2, 16 fn pointers): spawn root+leaf, setParent/getParent, "
+     "addTransform, transformSet/Get, flush, remove root (children cascade), flush again."),
+    ("run-badtype.log", "run-badtype.png",
+     "nl-script run --api with wrong --type -- negative (exit 1, clean Result error)",
+     "HelloScript type does not exist in EcsScript assembly -> getEntryPoint returns "
+     "Result{code=5}; no crash, exit 1."),
+    ("check.log", "check.png",
+     "nl-script check ecs example -- compile only (exit 0)",
+     "dotnet build only; binding entry points require [UnmanagedCallersOnly] default signature."),
+]
+
+CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2}[DIR_NAME]
 
 
 def main():
