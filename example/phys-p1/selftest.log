@@ -1,0 +1,49 @@
+  ok reject frames=0
+  ok reject dt=1.0
+  ok reject gravity=0
+  ok reject height<=radius
+  ok reject restitution>1
+  ok accept default config
+  ok simulateDrop succeeded
+  ok body count = 2 (floor + sphere)
+  ok trajectory length = frames + 1
+  ok initial height = startHeight
+  ok initial vy = 0
+  ok physical anchors computable
+  ok first contact matches sqrt(2h/g) within 3 steps
+  ok free fall matches semi-implicit Euler closed form (<0.05)
+  ok sphere bounced above floor
+  ok bounce never exceeds drop height
+  ok bounce apex consistent with restitution^2 energy law
+  ok late bounces decay (30-frame spread < 0.05)
+  ok rest trajectory converged (last 10 frames flat)
+  ok rest height = sphere radius
+  ok determinism: two worlds match sample-by-sample
+  ok dump has TSV header
+  ok dump line count = header comments + samples
+  ok M-P1 matrix defaults all-on and symmetric
+  ok M-P1 set() keeps symmetry
+  ok M-P1 reject layer out of range
+  ok M-P1 reject height below blocker
+  ok M-P1 same_layer probe ok
+  ok M-P1 same_layer 3 bodies
+  ok M-P1 same_layer two-way association
+  ok M-P1 same_layer outcome
+  ok M-P1 enabled_pair probe ok
+  ok M-P1 enabled_pair 3 bodies
+  ok M-P1 enabled_pair two-way association
+  ok M-P1 enabled_pair outcome
+  ok M-P1 disabled_pair probe ok
+  ok M-P1 disabled_pair 3 bodies
+  ok M-P1 disabled_pair two-way association
+  ok M-P1 disabled_pair outcome
+  ok M-P1 ghost probe ok
+  ok M-P1 ghost 3 bodies
+  ok M-P1 ghost two-way association
+  ok M-P1 ghost outcome
+  ok M-P1 determinism: same case twice bit-identical
+phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)
+phys-p0 selftest: PASS (Jolt 5.3.1, single-threaded, 240 frames)
+  frames=241 fall_frame=57 fall_t=0.950000 analytic_fall_t=0.958315
+  free_fall_max_err=0.000001 bounce_peak=2.138943 (frame 92)
+  rest_y=0.500000 rest_spread=0.038218 last10_spread=0.000000

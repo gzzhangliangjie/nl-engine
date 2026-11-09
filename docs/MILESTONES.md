@@ -1389,3 +1389,34 @@
 7. **证据图标注重叠**：首版 trajectory.png 的 floor/contact 标签撞车，移到红线下方后复验通过——工具版证据图同样要肉眼核验。
 
 **下一步**：M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联）；M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+
+## P8 M-P1：碰撞层矩阵 + 体双向关联（feat/physics 轨道，2026-11-09，tag `phys-p1`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/CollisionLayers.{h,cpp}`（N×N `collisionMatrix`、默认全 true、层名/静态标记）、`PhysicsBody.h/.cpp`（接触回调 + `BodyAccessRead/Write` 锁封装）、`RigidBody.cpp`（`SetUserData((uint64)&bodyUserData)`）、`BodyUserData.h`（Type + BaseBody*）、`Types.h`（`CollisionLayerID = JPH::ObjectLayer`）；UE 5.8.4 `Engine/Classes/Engine/EngineTypes.h` 的 `FCollisionResponseContainer`（Ignore/Overlap/Block 三态）+ `CollisionProfile.h`（`ResponseToChannels` / `ObjectType`）只读；bevy `crates/` 复核仍无物理 crate。历史读 `MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `MEMORY.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md`。
+- **选型二次拍板**：用户「物理用现成的、没必要从头写、成本太高；纠结的只是用哪个」→ 复核后「继续走 Jolt 路线」。例外理由从「UE 口径 / 业界共识」改写为**成本取舍**，四处 canonical 文档（master `3d11f08`：NON-RENDER-ROADMAP / UE-DIFFS D10 / PARALLEL-TRACKS §7.1e / AGENTS.md；track：P8-PHYS-PLAN §选型评审结论）一次改到位；UE 口径不参与选型。
+- **建轨/占坑**：`wt_pool claim --track physics --milestone M-P1`，沿用 `feat/physics` worktree（junction 共享 + skip-worktree），未碰 master 上另一会话的 WIP。
+- **落码**：`World.hpp/.cpp` 新增 `LayerMatrix`（4 层对称 bool 掩码）/ `BodyInfo` / `LayerProbeConfig` / `LayerProbeResult` / `simulateLayerProbe()`；过滤器改为持有矩阵引用、宽相层 1:1 映射；体创建写入 userData 索引并建 owner<->BodyID 双向表。`phys-tools` 新增 `layers` / `check-layers` 与 M-P1 自测段；CMake 加 ctest 两条；新增 `make-phys-p1-evidence.py` 与 `check-phys-p0-regression.py`。
+- **交代物**：`example/phys-p1/`（run.bat ALL GREEN + layers.tsv + 2 张真实证据图 + 5 份日志 + drop-regen.tsv）、`cases.json` `phys-p1` 卡五用例、`PHYS-TOOLS-GUIDE.md` §8、计划 M-P1 标完成与固化口径、`UE-DIFFS.md` D12。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p1`）；master 侧选型改写提交 `3d11f08`。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 四用例实测（`h=6.0 / r=0.5 / blocker_y=2.5 / g=9.8 / e=0.6 / dt=1/60 / 180 帧`）：`same_layer` 与 `enabled_pair` 停在挡板接触线 **y=3.500000**；`disabled_pair` 穿过挡板被地板接住 **y=0.842475**（末段余弹）；`ghost` 全层穿透持续自由落体 **y=-38.345005**。四例 `owner_ok=1`、`bodies=3`。
+- `selftest` **44 条断言全绿**（M-P0 23 + M-P1 21，逐条计数自 selftest.log），含矩阵对称性、非法层拒绝、双向关联逐例、确定性逐样本位一致；`check-layers` 4 用例全绿；`example/phys-p1/run.bat` **ALL GREEN** exit 0。
+- **M-P0 逐字节回归**：`phys-p0/drop.tsv` 与重生成 TSV 的 MD5 同为 `075ddfe9e4e513763c2728f7c801a1ed`（过滤器重构未改变 M-P0 数值）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均 PASS、`layers` 两树均出 TSV；ctest `p0-phys-*` 3/3 + `p1-phys-*` 2/2。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**。
+- `python tools/showcase/server.py --check` exit 0；展示台 `phys-p1` 卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。两张证据图肉眼核验（图例/标注/日志完整性修过一轮后复验通过）。
+
+**踩坑情况**
+1. **`ShapeRefC` 无 `.Get()`**：`ShapeSettings::Create()` 的结果对象才有 `.Get()`；`ShapeRefC` 应直接传给 `BodyCreationSettings`（M-P0 就是这么写的）。
+2. **两级过滤器都要读矩阵**：只改 `ObjectLayerPairFilter` 时宽相层已把碰撞对筛掉，矩阵看似失效；对象层与宽相层必须 1:1 映射并共用同一矩阵。
+3. **M-P0 兼容**：新过滤器默认全开会让 (floor,floor) 从 false 变 true，须显式 `matrix.set(kFloor,kFloor,false)` 才能保住 M-P0 基线逐位一致（已用 MD5 闸锁死）。
+4. **收敛判据别写死静息高度**：穿透用例末帧仍在地板余弹（0.842475），首版要求精确 0.5 误判 FAIL；改按「低于挡板接触线且未穿透地板」的物理本质判据。
+5. **`check-layers` 必须读 provenance**：首版硬编码 3.5/0.5，重演 M-P0「不读 TSV 头=假绿」的坑；改为从 `# jolt=` 行读 `blocker_y / radius / frames`。
+6. **`fc /b` 中文 Windows 吐 GBK**：证据图按 ASCII 读会变问号；改用 `check-phys-p0-regression.py` 输出纯 ASCII 的字节/MD5 见证。
+7. **变量重名**：插入的 M-P1 自测段与 M-P0 段的 `r` / `identical` 撞名，MSVC C2374；改名 `lr` / `layersIdentical`。
+8. **证据图布局**：首版 acceptance.png 把 selftest 截断在前 30 行（漏掉两条 PASS 行）、trajectory.png 图例压在曲线起点；去掉截断 + 图例移到右上空白后复验通过。
+
+**下一步**：M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。

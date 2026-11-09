@@ -542,3 +542,10 @@ set_tests_properties(p0-phys-drop PROPERTIES
     PASS_REGULAR_EXPRESSION "nl-physics M-P0 drop trajectory")
 add_test(NAME p0-phys-bad-config COMMAND phys-tools simulate --restitution 1.5)
 set_tests_properties(p0-phys-bad-config PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P1：碰撞层矩阵 + 体关联（A 类工具版验收）----
+add_test(NAME p1-phys-layers COMMAND phys-tools layers --frames 180)
+set_tests_properties(p1-phys-layers PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P1 collision layer matrix probe")
+add_test(NAME p1-phys-negative COMMAND phys-tools layers --frames 0)
+set_tests_properties(p1-phys-negative PROPERTIES WILL_FAIL TRUE)

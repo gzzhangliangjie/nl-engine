@@ -75,3 +75,29 @@ TSV 头三行是 provenance（版本 / job system / 全部参数 / 体数），�
 ## 7. 下一步（不属 M-P0）
 
 M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联，`BodyUserData` 思路）/ M-P2 堆叠稳定 / M-P3 debug 渲染接 viewer / M-P4 角色胶囊 / **M-P5 场景集成仍 gate 在 P8 E3（序列化 + Inspector）之后**，未按本轮提前解锁。
+
+
+## 8. M-P1：碰撞层矩阵与体关联（2026-11-09，tag `phys-p1`）
+
+### 交付物
+- `example/phys-p1/run.bat`：重跑 selftest / layers / check-layers / M-P0 逐字节回归 / usage / 负向，再重生成两张证据图，全绿才退出 0。
+- `example/phys-p1/layers.tsv`：4 用例 × 181 帧真实 Jolt 输出；`# jolt=` 行是 provenance（blocker_y / radius / frames / dt / gravity），`# case` 行记录每个用例的矩阵、末帧高度、blocked、owner_ok、体数。
+- `example/phys-p1/{trajectory,acceptance}.png`：`tools/make-phys-p1-evidence.py` 从真实 TSV 与真实日志渲染，无手绘曲线。
+- `tools/check-phys-p0-regression.py`：M-P0 基线逐字节 + MD5 比对，输出纯 ASCII（中文 Windows 的 `fc /b` 会吐 GBK，不能进证据图）。
+
+### 内核约定（写回 `P8-PHYS-PLAN.md`）
+- **层级**：`kLayerCount=4`（FLOOR=0 / DEFAULT=1 / DEBRIS=2 / GHOST=3），对象层与宽相层 **1:1 映射**，同一个 `LayerMatrix` 同时驱动 `ObjectLayerPairFilter` 与 `ObjectVsBroadPhaseLayerFilter`——只改一处过滤器会让宽相层先把碰撞对筛掉，矩阵看起来「没生效」。
+- **矩阵**：`rows[a] bit b` 对称 bool 掩码，`set()` 强制双向写入；`validateLayerProbe` 拒绝非对称矩阵。UE 用 `FCollisionResponseContainer` 的 Ignore/Overlap/Block 三态，我们简化的差异见 `UE-DIFFS.md` D12。
+- **双向关联**：Jolt `Body::SetUserData` 存的是 `bodies` 向量的**索引**，不是对象裸指针（避免 move/销毁后悬垂）；owner -> BodyID 走 `unordered_map`，BodyID -> userData(index) -> owner 走表反查，两个方向都由 `ownerOk()` 在 TSV 里留证。
+- **M-P0 兼容**：`simulateDrop()` 用「全开但 (floor,floor) 关」的矩阵，过滤行为与原固定两层版本逐位一致；`run.bat` 用 MD5 逐字节回归把这条锁死。
+- **确定性契约不变**：`JobSystemSingleThreaded` + 1/60 + collisionSteps 1；`disabled_pair` 两次新建世界逐样本位一致。
+- **收敛判据**：穿透用例末帧仍在地板上余弹（实测 0.842475），判据按物理本质写成「低于挡板接触线且未穿透地板」，不要求精确静息高度（M-P0 同款教训）；`check-layers` 从 provenance 读真实参数，不硬编码 3.5/0.5。
+
+### CLI
+| 命令 | 行为 | 退出码 |
+|---|---|---|
+| `phys-tools layers [--out <tsv>] [--frames N] [--verbose]` | 跑 4 个层矩阵用例，输出逐帧 TSV | 0 / 1 / 2 |
+| `phys-tools check-layers <tsv>` | 从归档 TSV 复验矩阵结局与双向关联 | 0 / 1 / 2 |
+
+### 下一步
+M-P2 堆叠稳定 / M-P3 debug 渲染接 viewer / M-P4 角色胶囊；**M-P5 仍 gate 在 P8 E3 之后**。

@@ -3904,6 +3904,77 @@
      "command": "phys-tools simulate --restitution 1.5"
     }
    ]
+  },
+  {
+   "id": "phys-p1",
+   "label": "P8 M-P1",
+   "name": "物理碰撞层矩阵 + 引擎对象/Jolt 体双向关联",
+   "tag": "phys-p1",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/physics 第二里程碑：4 层对称碰撞矩阵同时驱动 Jolt 的 ObjectLayerPairFilter 与 ObjectVsBroadPhaseLayerFilter（宽相层 1:1 映射），体封装用 userData 索引做引擎 owner<->BodyID 双向关联（不存裸指针）。四个真实用例：同层碰撞 / 异层允许 / 异层禁用 / 幽灵全穿透，逐帧轨迹 TSV 出证据图。M-P0 落球基线逐字节不变。",
+   "acceptance": [
+    "允许对（same_layer / enabled_pair）落球停在挡板接触线 y=3.500000；禁用对（disabled_pair）穿过挡板被地板接住 y=0.842475；ghost 全层穿透持续自由落体 y=-38.345005",
+    "四个用例 owner_ok=1（BodyID -> userData -> owner 与 owner -> BodyID 双向一致）、bodies=3；矩阵 set() 强制对称、非法层索引被拒绝",
+    "确定性：disabled_pair 用例两次新建世界逐样本位一致；M-P0 drop.tsv 与 phys-p0 归档 MD5 均为 075ddfe9e4e513763c2728f7c801a1ed（逐字节回归）",
+    "selftest 44 条断言全绿（含 M-P1 锚点行）、check-layers 4 用例全绿、DX12+VULKAN 双后端 BUILD OK + viewer 16/16 x2、ctest p0/p1 5/5",
+    "交代物：example/phys-p1/（run.bat ALL GREEN + layers.tsv + 2 张真实输出证据图 + 5 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md M-P1 节"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 layers / check-layers。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-P0 锚点 + M-P1 层矩阵/双向关联/确定性",
+     "kind": "tool",
+     "note": "真实 Jolt 5.3.1 世界；--verbose 逐条 ok 行是 acceptance.png 的数据源。",
+     "args": ["selftest", "--verbose"],
+     "expectExit": 0,
+     "expectLog": "phys-p1 anchors: PASS",
+     "command": "phys-tools selftest --verbose"
+    },
+    {
+     "id": "layers",
+     "name": "layers：四用例逐帧轨迹 TSV（真实求解器输出）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# case 行记录矩阵、末帧高度、blocked、owner_ok、体数。",
+     "args": ["layers", "--frames", "180"],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-P1 collision layer matrix probe",
+     "command": "phys-tools layers --frames 180"
+    },
+    {
+     "id": "check-layers",
+     "name": "check-layers：从归档 TSV 复验层矩阵",
+     "kind": "tool",
+     "note": "从 # jolt= 头读回 blocker_y/radius/frames，不硬编码默认参数；逐用例验 owner_ok 与物理结局。",
+     "args": ["check-layers", "{root}/example/phys-p1/layers.tsv"],
+     "expectExit": 0,
+     "expectLog": "phys-p1 check-layers: PASS",
+     "command": "phys-tools check-layers example/phys-p1/layers.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：frames=0 显式退出 2",
+     "kind": "tool",
+     "note": "参数校验先于任何 Jolt 调用拒绝；非法层索引另有 selftest 断言覆盖。",
+     "args": ["layers", "--frames", "0"],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools layers --frames 0"
+    }
+   ]
   }
  ]
 }

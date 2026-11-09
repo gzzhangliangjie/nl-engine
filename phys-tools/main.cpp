@@ -10,9 +10,12 @@
 //                          bounce, rest convergence, determinism, negative configs
 //   simulate [options]     dump per-frame trajectory TSV (real solver output)
 //   check <tsv>            re-verify a dumped trajectory with the same anchors
+//   layers [options]       M-P1: collision layer matrix probe TSV (4 cases)
+//   check-layers <tsv>     re-verify the layer matrix dump
 //
-// Evidence rule: example/phys-p0/*.png is generated from the REAL TSV by
-// tools/make-phys-evidence.py. No hand-drawn diagrams.
+// Evidence rule: example/phys-p0/*.png and example/phys-p1/*.png are generated
+// from the REAL TSV by tools/make-phys-evidence.py / make-phys-p1-evidence.py.
+// No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
 
@@ -48,6 +51,8 @@ void usage() {
     std::printf("  phys-tools simulate [--out <tsv>] [--frames N] [--dt S] [--gravity G]\n");
     std::printf("                      [--height H] [--radius R] [--restitution E] [--seed N]\n");
     std::printf("  phys-tools check <tsv>\n");
+    std::printf("  phys-tools layers [--out <tsv>] [--frames N] [--verbose]\n");
+    std::printf("  phys-tools check-layers <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -181,6 +186,231 @@ void reportMetrics(const Metrics& m) {
     std::printf("  rest_y=%.6f rest_spread=%.6f last10_spread=%.6f\n", m.restY, m.restSpread, m.last10Spread);
 }
 
+
+// ---- M-P1: collision layer matrix probe (real solver output, 4 cases) ----
+enum class Expect { kBlocker, kFloor, kPassThrough };
+
+struct LayerCase {
+    const char*   name;
+    std::uint32_t probeLayer;
+    std::uint32_t blockerLayer;
+    bool          disablePair;   // turn off exactly the probe/blocker pair
+    bool          ghost;         // turn off the probe against EVERY layer
+    Expect        expect;
+};
+
+const LayerCase kCases[] = {
+    {"same_layer",    nl::physics::layers::kDefault, nl::physics::layers::kDefault,
+     false, false, Expect::kBlocker},
+    {"enabled_pair",  nl::physics::layers::kDebris,  nl::physics::layers::kDefault,
+     false, false, Expect::kBlocker},
+    {"disabled_pair", nl::physics::layers::kDebris,  nl::physics::layers::kDefault,
+     true,  false, Expect::kFloor},
+    {"ghost",         nl::physics::layers::kGhost,   nl::physics::layers::kDefault,
+     false, true,  Expect::kPassThrough},
+};
+constexpr int kCaseCount = 4;
+
+nl::physics::LayerMatrix buildMatrix(const LayerCase& c) {
+    nl::physics::LayerMatrix m;
+    if (c.disablePair) m.set(c.probeLayer, c.blockerLayer, false);
+    if (c.ghost)
+        for (std::uint32_t b = 0; b < nl::physics::kLayerCount; ++b)
+            m.set(c.probeLayer, b, false);
+    return m;
+}
+
+nl::physics::LayerProbeResult runCase(const LayerCase& c,
+                                      const nl::physics::LayerProbeConfig& base) {
+    nl::physics::LayerProbeConfig cfg = base;
+    cfg.probeLayer   = c.probeLayer;
+    cfg.blockerLayer = c.blockerLayer;
+    nl::physics::World world;
+    return world.simulateLayerProbe(buildMatrix(c), cfg);
+}
+
+bool ownerOk(const nl::physics::LayerProbeResult& r,
+             const nl::physics::LayerProbeConfig& cfg) {
+    return r.ownerFromId == cfg.probeOwner && r.idFromOwner == r.probeId &&
+           r.probeId != nl::physics::kInvalidBodyId;
+}
+
+bool caseMatches(const nl::physics::LayerProbeResult& r,
+                 const nl::physics::LayerProbeConfig& cfg, Expect e) {
+    const float onBlocker = cfg.blockerY + 2.0f * cfg.radius;
+    switch (e) {
+    case Expect::kBlocker:
+        return std::abs(r.finalY - onBlocker) < 0.1f && r.blocked;
+    case Expect::kFloor:
+        // The probe passed through the blocker (below its contact height) but is
+        // still held up by the floor. Late small bounces are physical, not jitter,
+        // so do not demand an exact rest height here (M-P0 lesson).
+        return r.finalY < cfg.blockerY + cfg.radius &&
+               r.finalY > -cfg.radius && !r.blocked;
+    case Expect::kPassThrough:
+        return r.finalY < -1.0f && !r.blocked;
+    }
+    return false;
+}
+
+std::string layersTSV(const nl::physics::LayerProbeConfig& cfg,
+                      const std::vector<nl::physics::LayerProbeResult>& rs) {
+    std::ostringstream os;
+    os << "# nl-physics M-P1 collision layer matrix probe (real Jolt 5.3.1 solver output)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << cfg.dt << " gravity=" << cfg.gravity
+       << " radius=" << cfg.radius << " start_height=" << cfg.startHeight
+       << " blocker_y=" << cfg.blockerY << " frames=" << cfg.frames
+       << " layers=" << nl::physics::kLayerCount << "\n";
+    for (int i = 0; i < kCaseCount; ++i) {
+        const nl::physics::LayerMatrix m = buildMatrix(kCases[i]);
+        char buf[320];
+        std::snprintf(buf, sizeof(buf),
+            "# case %s probe=%u blocker=%u allow=%d matrix=%s final_y=%.6f blocked=%d owner_ok=%d bodies=%zu\n",
+            kCases[i].name, kCases[i].probeLayer, kCases[i].blockerLayer,
+            m.allows(kCases[i].probeLayer, kCases[i].blockerLayer) ? 1 : 0,
+            m.hex().c_str(), rs[i].finalY, rs[i].blocked ? 1 : 0,
+            ownerOk(rs[i], cfg) ? 1 : 0, rs[i].bodies.size());
+        os << buf;
+    }
+    os << "frame\tt\tsame_layer\tenabled_pair\tdisabled_pair\tghost\n";
+    const std::size_t n = rs[0].samples.size();
+    for (std::size_t f = 0; f < n; ++f) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+                      rs[0].samples[f].frame, rs[0].samples[f].t,
+                      rs[0].samples[f].position.y, rs[1].samples[f].position.y,
+                      rs[2].samples[f].position.y, rs[3].samples[f].position.y);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runLayers(int argc, char** argv) {
+    nl::physics::LayerProbeConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (key == "--verbose") { g_verbose = true; continue; }
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    nl::physics::LayerMatrix probeMatrix;
+    if (!nl::physics::validateLayerProbe(cfg, probeMatrix, &err)) return fail(err);
+
+    std::vector<nl::physics::LayerProbeResult> rs;
+    rs.reserve(kCaseCount);
+    for (int i = 0; i < kCaseCount; ++i) {
+        auto r = runCase(kCases[i], cfg);
+        if (!r.ok()) {
+            std::printf("layers case %s failed: %s\n", kCases[i].name, r.error.c_str());
+            return 1;
+        }
+        rs.push_back(std::move(r));
+    }
+    const std::string tsv = layersTSV(cfg, rs);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s cases=%d frames=%d\n", out.c_str(), kCaseCount, cfg.frames);
+    return 0;
+}
+
+int runCheckLayers(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    struct CaseRow {
+        std::string name;
+        double finalY = 0.0;
+        int allow = 0, blocked = 0, ownerOk = 0, bodies = 0;
+    };
+    std::vector<CaseRow> rows;
+    int frames = -1, dataRows = 0;
+    double blockerY = 2.5, radius = 0.5;
+    bool headerSeen = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("# jolt=", 0) == 0) {
+            std::istringstream is(line);
+            std::string tok;
+            while (is >> tok) {
+                if      (tok.rfind("frames=", 0) == 0)     frames   = std::atoi(tok.c_str() + 7);
+                else if (tok.rfind("blocker_y=", 0) == 0)  blockerY = std::strtod(tok.c_str() + 10, nullptr);
+                else if (tok.rfind("radius=", 0) == 0)     radius   = std::strtod(tok.c_str() + 7, nullptr);
+            }
+            continue;
+        }
+        if (line.rfind("# case ", 0) == 0) {
+            CaseRow r;
+            std::istringstream is(line);
+            std::string hash, tag, tok;
+            is >> hash >> tag >> r.name;
+            while (is >> tok) {
+                const auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+                if      (k == "final_y")  r.finalY  = std::strtod(v.c_str(), nullptr);
+                else if (k == "allow")    r.allow   = std::atoi(v.c_str());
+                else if (k == "blocked")  r.blocked = std::atoi(v.c_str());
+                else if (k == "owner_ok") r.ownerOk = std::atoi(v.c_str());
+                else if (k == "bodies")   r.bodies  = std::atoi(v.c_str());
+            }
+            rows.push_back(r);
+            continue;
+        }
+        if (line.rfind("frame\t", 0) == 0) { headerSeen = true; continue; }
+        if (line.empty() || line[0] == '#') continue;
+        ++dataRows;
+    }
+
+    expectTrue(headerSeen, "M-P1 dump has TSV header");
+    expectTrue(static_cast<int>(rows.size()) == kCaseCount, "M-P1 dump has 4 case rows");
+    expectTrue(frames > 0 && dataRows == frames + 1, "M-P1 dump row count = frames+1");
+    for (int i = 0; i < static_cast<int>(rows.size()) && i < kCaseCount; ++i) {
+        const CaseRow& r = rows[i];
+        const std::string w = std::string("M-P1 case ") + kCases[i].name;
+        expectTrue(r.name == kCases[i].name, (w + " name").c_str());
+        expectTrue(r.ownerOk == 1, (w + " two-way association").c_str());
+        expectTrue(r.bodies == 3, (w + " 3 bodies").c_str());
+        const double onBlocker = blockerY + 2.0 * radius;
+        switch (kCases[i].expect) {
+        case Expect::kBlocker:
+            expectTrue(std::abs(r.finalY - onBlocker) < 0.1 && r.blocked == 1,
+                       (w + " rests on blocker").c_str());
+            break;
+        case Expect::kFloor:
+            expectTrue(r.finalY < blockerY + radius && r.finalY > -radius &&
+                       r.blocked == 0 && r.allow == 0,
+                       (w + " passes through blocker, held by floor").c_str());
+            break;
+        case Expect::kPassThrough:
+            expectTrue(r.finalY < -2.0 * radius && r.blocked == 0 && r.allow == 0,
+                       (w + " passes through every layer").c_str());
+            break;
+        }
+    }
+    if (g_failures) {
+        std::printf("phys-p1 check-layers: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-p1 check-layers: PASS (%s, 4 cases, %d frames)\n", path, frames);
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -256,10 +486,44 @@ int runSelftest() {
                == static_cast<long>(r.samples.size()) + 4,
                "dump line count = header comments + samples");
 
+
+    // --- M-P1: collision layer matrix + engine<->body association ---
+    nl::physics::LayerProbeConfig pcfg;
+    nl::physics::LayerMatrix mm;
+    expectTrue(mm.allows(0, 1) && mm.allows(1, 0),
+               "M-P1 matrix defaults all-on and symmetric");
+    mm.set(2, 1, false);
+    expectTrue(!mm.allows(2, 1) && !mm.allows(1, 2), "M-P1 set() keeps symmetry");
+    nl::physics::LayerProbeConfig badLayer = pcfg; badLayer.probeLayer = 9;
+    expectTrue(!nl::physics::validateLayerProbe(badLayer, mm, &err),
+               "M-P1 reject layer out of range");
+    nl::physics::LayerProbeConfig badHeight = pcfg; badHeight.startHeight = 1.0f;
+    expectTrue(!nl::physics::validateLayerProbe(badHeight, mm, &err),
+               "M-P1 reject height below blocker");
+    for (int i = 0; i < kCaseCount; ++i) {
+        const auto lr = runCase(kCases[i], pcfg);
+        const std::string w = std::string("M-P1 ") + kCases[i].name;
+        expectTrue(lr.ok(), (w + " probe ok").c_str());
+        expectTrue(lr.bodies.size() == 3, (w + " 3 bodies").c_str());
+        expectTrue(ownerOk(lr, pcfg), (w + " two-way association").c_str());
+        expectTrue(caseMatches(lr, pcfg, kCases[i].expect), (w + " outcome").c_str());
+    }
+    const auto d1 = runCase(kCases[2], pcfg);
+    const auto d2 = runCase(kCases[2], pcfg);
+    bool layersIdentical = d1.samples.size() == d2.samples.size();
+    for (std::size_t i = 0; layersIdentical && i < d1.samples.size(); ++i) {
+        layersIdentical = d1.samples[i].frame == d2.samples[i].frame &&
+                          d1.samples[i].t == d2.samples[i].t &&
+                          d1.samples[i].position.y == d2.samples[i].position.y &&
+                          d1.samples[i].velocity.y == d2.samples[i].velocity.y;
+    }
+    expectTrue(layersIdentical, "M-P1 determinism: same case twice bit-identical");
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)\n");
     std::printf("phys-p0 selftest: PASS (Jolt %s, single-threaded, %d frames)\n",
                 nl::physics::kJoltVersion, cfg.frames);
     if (g_verbose) reportMetrics(m);
@@ -397,6 +661,11 @@ int main(int argc, char** argv) {
     if (cmd == "check") {
         if (argc != 3) { usage(); return 2; }
         return runCheck(argv[2]);
+    }
+    if (cmd == "layers")       return runLayers(argc, argv);
+    if (cmd == "check-layers") {
+        if (argc != 3) { usage(); return 2; }
+        return runCheckLayers(argv[2]);
     }
     usage();
     return 2;

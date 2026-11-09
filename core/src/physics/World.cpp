@@ -34,53 +34,50 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <unordered_map>
 
 using namespace JPH::literals;
 
 namespace {
 
-// ---- Layers: two object layers / two broadphase trees (Jolt HelloWorld cadence) ----
-namespace Layers {
-constexpr JPH::ObjectLayer NON_MOVING = 0;
-constexpr JPH::ObjectLayer MOVING     = 1;
-constexpr JPH::uint        NUM_LAYERS = 2;
-}
-
-namespace BroadPhaseLayers {
-const JPH::BroadPhaseLayer NON_MOVING(0);
-const JPH::BroadPhaseLayer MOVING(1);
-constexpr JPH::uint        NUM_LAYERS = 2;
-}
-
+// ---- M-P1: kLayerCount object layers mapped 1:1 onto broadphase layers, so the
+// caller-supplied LayerMatrix is authoritative at BOTH filter stages.
+// M-P0 keeps its exact original cadence by passing a matrix with (floor,floor)
+// disabled -- see simulateDrop() below (keeps the M-P0 baseline bit-identical). ----
 class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface {
 public:
-    JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::NUM_LAYERS; }
+    JPH::uint GetNumBroadPhaseLayers() const override { return nl::physics::kLayerCount; }
 
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override {
-        return inLayer == Layers::NON_MOVING ? BroadPhaseLayers::NON_MOVING
-                                            : BroadPhaseLayers::MOVING;
+        return JPH::BroadPhaseLayer(static_cast<JPH::BroadPhaseLayer::Type>(inLayer));
     }
 
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
     const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer inLayer) const override {
-        return inLayer == BroadPhaseLayers::NON_MOVING ? "NON_MOVING" : "MOVING";
+        static const char* kNames[nl::physics::kLayerCount] = {"FLOOR", "DEFAULT", "DEBRIS", "GHOST"};
+        return kNames[inLayer.GetValue()];
     }
 #endif
 };
 
 class ObjectVsBroadPhaseLayerFilterImpl : public JPH::ObjectVsBroadPhaseLayerFilter {
 public:
+    explicit ObjectVsBroadPhaseLayerFilterImpl(const nl::physics::LayerMatrix& m) : matrix_(m) {}
     bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override {
-        // Static floor never collides with another static body.
-        return inLayer1 == Layers::NON_MOVING ? inLayer2 == BroadPhaseLayers::MOVING : true;
+        return matrix_.allows(inLayer1, inLayer2.GetValue());
     }
+private:
+    const nl::physics::LayerMatrix& matrix_;
 };
 
 class ObjectLayerPairFilterImpl : public JPH::ObjectLayerPairFilter {
 public:
+    explicit ObjectLayerPairFilterImpl(const nl::physics::LayerMatrix& m) : matrix_(m) {}
     bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override {
-        return !(inObject1 == Layers::NON_MOVING && inObject2 == Layers::NON_MOVING);
+        return matrix_.allows(inObject1, inObject2);
     }
+private:
+    const nl::physics::LayerMatrix& matrix_;
 };
 
 // ---- Process-wide Jolt plumbing (idempotent) ----
@@ -155,11 +152,14 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
 
     // Filter interfaces are referenced (not owned) by PhysicsSystem: declare them
     // before it so they outlive it under reverse destruction order.
+    // M-P0 cadence preserved exactly: floor/floor disabled, all other pairs on.
+    LayerMatrix matrix;
+    matrix.set(layers::kFloor, layers::kFloor, false);
     JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
     JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
     BPLayerInterfaceImpl bpLayerInterface;
-    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter;
-    ObjectLayerPairFilterImpl objectLayerPairFilter;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(matrix);
+    ObjectLayerPairFilterImpl objectLayerPairFilter(matrix);
     JPH::PhysicsSystem physicsSystem;
 
     physicsSystem.Init(1024, 0, 1024, 1024,
@@ -180,7 +180,7 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
 
     JPH::BodyCreationSettings floorSettings(
         floorShape, JPH::RVec3(0.0_r, -1.0_r, 0.0_r),
-        JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::NON_MOVING);
+        JPH::Quat::sIdentity(), JPH::EMotionType::Static, layers::kFloor);
     floorSettings.mRestitution = cfg.restitution;
     JPH::Body* floor = bodyInterface.CreateBody(floorSettings);
     if (!floor) {
@@ -192,7 +192,7 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
     JPH::BodyCreationSettings sphereSettings(
         new JPH::SphereShape(cfg.radius),
         JPH::RVec3(0.0_r, JPH::Real(cfg.startHeight), 0.0_r),
-        JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
+        JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, layers::kDefault);
     sphereSettings.mRestitution = cfg.restitution;
     sphereSettings.mLinearDamping = 0.0f;
     JPH::BodyID sphereId = bodyInterface.CreateAndAddBody(sphereSettings, JPH::EActivation::Activate);
@@ -228,6 +228,171 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
     bodyInterface.RemoveBody(floor->GetID());
     bodyInterface.DestroyBody(floor->GetID());
     return result;
+}
+
+// ---- M-P1: layer matrix, engine<->body association, probe harness ----
+LayerMatrix::LayerMatrix() {
+    const std::uint32_t all = (1u << kLayerCount) - 1u;
+    for (std::uint32_t i = 0; i < kLayerCount; ++i) rows[i] = all;
+}
+
+bool LayerMatrix::allows(std::uint32_t a, std::uint32_t b) const {
+    if (a >= kLayerCount || b >= kLayerCount) return false;
+    return (rows[a] & (1u << b)) != 0u;
+}
+
+void LayerMatrix::set(std::uint32_t a, std::uint32_t b, bool allow) {
+    if (a >= kLayerCount || b >= kLayerCount) return;
+    if (allow) {
+        rows[a] |= (1u << b);
+        rows[b] |= (1u << a);
+    } else {
+        rows[a] &= ~(1u << b);
+        rows[b] &= ~(1u << a);
+    }
+}
+
+std::string LayerMatrix::hex() const {
+    char buf[kLayerCount * 2 + 1];
+    for (std::uint32_t i = 0; i < kLayerCount; ++i)
+        std::snprintf(buf + i * 2, 3, "%02x", rows[i] & 0xffu);
+    buf[kLayerCount * 2] = '\0';
+    return std::string(buf);
+}
+
+bool validateLayerProbe(const LayerProbeConfig& cfg, const LayerMatrix& matrix,
+                        std::string* err) {
+    auto bad = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    if (cfg.frames < 1 || cfg.frames > 100000) return bad("frames out of range [1,100000]");
+    if (!(cfg.dt >= 1.0 / 1000.0 && cfg.dt <= 1.0 / 30.0)) return bad("dt out of range [0.001,0.033333]");
+    if (!(cfg.gravity > 0.0f && cfg.gravity <= 1000.0f)) return bad("gravity out of range (0,1000]");
+    if (!(cfg.radius > 0.0f && cfg.radius <= 10.0f)) return bad("radius out of range (0,10]");
+    if (cfg.probeLayer >= kLayerCount || cfg.blockerLayer >= kLayerCount ||
+        cfg.floorLayer >= kLayerCount)
+        return bad("layer out of range [0,3]");
+    if (!(cfg.startHeight > cfg.blockerY + 2.0f * cfg.radius))
+        return bad("startHeight must clear the blocker");
+    if (!(cfg.blockerY > cfg.radius)) return bad("blockerY must clear the floor");
+    if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f))
+        return bad("restitution out of range [0,1]");
+    for (std::uint32_t a = 0; a < kLayerCount; ++a)
+        for (std::uint32_t b = 0; b < kLayerCount; ++b)
+            if (matrix.allows(a, b) != matrix.allows(b, a))
+                return bad("layer matrix is not symmetric");
+    return true;
+}
+
+LayerProbeResult World::simulateLayerProbe(const LayerMatrix& matrix,
+                                           const LayerProbeConfig& cfg) {
+    LayerProbeResult r;
+    if (!validateLayerProbe(cfg, matrix, &r.error)) return r;
+    bootstrap();
+
+    // Declared first: filters hold references and PhysicsSystem holds pointers,
+    // so the matrix must outlive both under reverse destruction order.
+    LayerMatrix local = matrix;
+    JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
+    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(local);
+    ObjectLayerPairFilterImpl objectLayerPairFilter(local);
+    JPH::PhysicsSystem physicsSystem;
+
+    physicsSystem.Init(1024, 0, 1024, 1024,
+                       bpLayerInterface, objectVsBroadPhaseLayerFilter, objectLayerPairFilter);
+    physicsSystem.SetGravity(JPH::Vec3(0.0f, -cfg.gravity, 0.0f));
+    JPH::BodyInterface& bi = physicsSystem.GetBodyInterface();
+
+    JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(100.0f, 1.0f, 100.0f));
+    floorShapeSettings.SetEmbedded();
+    auto floorShapeResult = floorShapeSettings.Create();
+    if (floorShapeResult.HasError()) { r.error = "floor shape creation failed"; return r; }
+    JPH::ShapeRefC floorShape = floorShapeResult.Get();
+    JPH::ShapeRefC sphereShape = new JPH::SphereShape(cfg.radius);
+
+    std::unordered_map<std::uint64_t, JPH::BodyID> ownerToId;
+    std::vector<JPH::BodyID> ids;
+
+    // Engine object <-> Jolt body association. Jolt's userData holds the INDEX
+    // into r.bodies (never a raw pointer, so a stale handle cannot dangle).
+    auto add = [&](const JPH::ShapeRefC& shape, JPH::RVec3 pos, JPH::EMotionType motion,
+                   std::uint32_t layer, std::uint64_t owner) -> bool {
+        JPH::BodyCreationSettings s(shape, pos, JPH::Quat::sIdentity(), motion,
+                                    static_cast<JPH::ObjectLayer>(layer));
+        s.mRestitution   = cfg.restitution;
+        s.mLinearDamping = 0.0f;
+        JPH::Body* body = bi.CreateBody(s);
+        if (!body) return false;
+        const std::uint32_t idx = static_cast<std::uint32_t>(r.bodies.size());
+        body->SetUserData(static_cast<std::uint64_t>(idx));
+        const JPH::BodyID id = body->GetID();
+
+        BodyInfo info;
+        info.id       = id.GetIndexAndSequenceNumber();
+        info.owner    = owner;
+        info.layer    = layer;
+        info.isStatic = (motion == JPH::EMotionType::Static);
+        info.position = { static_cast<float>(pos.GetX()), static_cast<float>(pos.GetY()),
+                          static_cast<float>(pos.GetZ()) };
+        r.bodies.push_back(info);
+        ownerToId[owner] = id;
+        ids.push_back(id);
+        bi.AddBody(id, motion == JPH::EMotionType::Static
+                           ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        return true;
+    };
+
+    if (!add(floorShape, JPH::RVec3(0.0_r, -1.0_r, 0.0_r),
+             JPH::EMotionType::Static, cfg.floorLayer, cfg.floorOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.blockerY), 0.0_r),
+             JPH::EMotionType::Static, cfg.blockerLayer, cfg.blockerOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.startHeight), 0.0_r),
+             JPH::EMotionType::Dynamic, cfg.probeLayer, cfg.probeOwner)) {
+        r.error = "body creation failed";
+        return r;
+    }
+
+    physicsSystem.OptimizeBroadPhase();
+    impl_->lastBodyCount = physicsSystem.GetNumBodies();
+    const JPH::BodyID probeId = ids.back();
+    r.probeId = probeId.GetIndexAndSequenceNumber();
+
+    auto pushSample = [&](int frame) {
+        const JPH::RVec3 p = bi.GetCenterOfMassPosition(probeId);
+        const JPH::Vec3  v = bi.GetLinearVelocity(probeId);
+        Sample s;
+        s.frame = frame;
+        s.t = frame * cfg.dt;
+        s.position = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                       static_cast<float>(p.GetZ()) };
+        s.velocity = { v.GetX(), v.GetY(), v.GetZ() };
+        r.samples.push_back(s);
+    };
+
+    r.samples.reserve(static_cast<std::size_t>(cfg.frames) + 1);
+    pushSample(0);
+    for (int frame = 1; frame <= cfg.frames; ++frame) {
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        pushSample(frame);
+    }
+    r.finalY  = r.samples.back().position.y;
+    r.blocked = r.finalY > cfg.blockerY + cfg.radius; // ~3.5 on blocker vs ~0.5 on floor
+
+    // Two-way self-check: BodyID -> userData(index) -> owner, and owner -> BodyID.
+    const std::uint64_t userData = bi.GetUserData(probeId);
+    if (userData < r.bodies.size())
+        r.ownerFromId = r.bodies[static_cast<std::size_t>(userData)].owner;
+    const auto it = ownerToId.find(cfg.probeOwner);
+    if (it != ownerToId.end()) r.idFromOwner = it->second.GetIndexAndSequenceNumber();
+
+    for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
+        bi.RemoveBody(*rit);
+        bi.DestroyBody(*rit);
+    }
+    return r;
 }
 
 } // namespace nl::physics
