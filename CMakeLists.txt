@@ -145,6 +145,7 @@ add_library(nl_core STATIC
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
+    core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带

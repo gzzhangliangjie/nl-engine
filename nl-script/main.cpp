@@ -16,14 +16,21 @@
 //     s4 托管异常边界捕获：args="throw" -> SEH 转错误码，不崩进程
 //     s5 热重编行为更新：拷贝工程改 42->43，dotnet build -p:AssemblyName 换名重编，
 //        同进程装载新 DLL -> 43（「脚本改动经 dotnet build 重编后行为更新」验收）
+//     s6 console 绑定（M-SC1，需第 2 个参数给出 console 示例工程目录）：
+//        s6a C# 改 cvar 触发 C++ onChanged / s6b C# 注册命令经 console exec 调通 /
+//        s6c 错误码逐一对齐（0/1/2/3）/ s6d 托管异常命令 SEH 边界 /
+//        s6e 双向读回 + cvar.list / s6f 注销命令解绑（M-SC3 预演）
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello
+//   nl-script selftest script/examples/hello script/examples/console
 //   nl-script run script/examples/hello --args ok
+//   nl-script run script/examples/console --api
 //   nl-script check script/examples/hello
 
 #include "nl/core/log.hpp"
+#include "nl/core/console.hpp"
 #include "nl/script/Vm.hpp"
+#include "nl/script/Bindings.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -117,8 +124,11 @@ std::optional<ScriptOutput> locateOutput(const fs::path& projectDir, const std::
 }
 
 // dotnet build（构建期编译，plan 口径：不做 Roslyn 运行时编译）。
+// DOTNET_CLI_UI_LANGUAGE=en：CLI 摘要（已成功生成/警告/错误）统一英文——
+// M-SC0 踩坑 1 复发修正：中文摘要在证据图 Consolas 下成方框。
 bool dotnetBuild(const std::string& projectDir, const std::string& extraArgs) {
-    const std::string cmd = "dotnet build \"" + projectDir + "\" -nologo -v q " + extraArgs;
+    const std::string cmd = "set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build \"" + projectDir +
+                            "\" -nologo -v q " + extraArgs;
     std::printf("  $ %s\n", cmd.c_str());
     const int rc = std::system(cmd.c_str());
     if (rc != 0) {
@@ -138,7 +148,8 @@ int cmdCheck(const fs::path& projectDir) {
     return 0;
 }
 
-int cmdRun(const fs::path& projectDir, const std::string& args, const std::string& typeOverride) {
+int cmdRun(const fs::path& projectDir, const std::string& args, const std::string& typeOverride,
+           bool passApiTable) {
     if (!dotnetBuild(projectDir.string(), {})) return 1;
     auto out = locateOutput(projectDir, {});
     if (!out) {
@@ -164,8 +175,17 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
         return 1;
     }
 
-    void* argPtr = args.empty() ? nullptr : const_cast<char*>(args.c_str());
-    const std::int32_t argSize = static_cast<std::int32_t>(args.size());
+    // 绑定脚本（M-SC1）约定 args = nl::script::ApiTable*；普通脚本 args = 命令行串。
+    if (passApiTable) {
+        // 宿主侧预注册（生产宿主注册自家 cvar 的口径；脚本由此可 get/set/exec）。
+        auto& console = nl::core::console::Console::get();
+        console.installBuiltins();
+        console.registerInt("script.count", 0, "demo cvar bound to script (M-SC1)");
+        console.registerFloat("script.rate", 1.5, "demo float cvar (M-SC1)");
+    }
+    void* argPtr = passApiTable ? const_cast<void*>(static_cast<const void*>(nl::script::consoleApiTable()))
+                                : (args.empty() ? nullptr : const_cast<char*>(args.c_str()));
+    const std::int32_t argSize = passApiTable ? 0 : static_cast<std::int32_t>(args.size());
     std::int32_t ret = 0;
     std::uint32_t excCode = 0;
     if (guardedCall(entry, argPtr, argSize, &ret, &excCode) != 0) {
@@ -178,7 +198,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 // ---- selftest ----
 
-int cmdSelftest(const fs::path& projectDir) {
+int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -312,6 +332,94 @@ int cmdSelftest(const fs::path& projectDir) {
         fs::remove_all(hotRoot, ec);
     }
 
+    // ---- s6 console 绑定（M-SC1；consoleDir 为空 = 上游分支未合入本轮范围，跳过）----
+    if (!consoleDir.empty()) {
+        if (!dotnetBuild(consoleDir.string(), {})) {
+            expectTrue(false, "s6a dotnet build console example");
+            std::printf("nl-script selftest: FAIL (console binding build)\n");
+            return 1;
+        }
+        auto cso = locateOutput(consoleDir, {});
+        expectTrue(cso.has_value(), "s6a locate ConsoleScript build output");
+        if (cso) {
+            const std::string csType = "NlScript.Examples.ConsoleScript, " + cso->assemblyName;
+            // 绑定入口取用帮手（args = ApiTable*）
+            auto callEntry = [&](nl::script::EntryPointFn fn) {
+                std::int32_t ret = 0;
+                std::uint32_t exc = 0;
+                const void* table = nl::script::consoleApiTable();
+                const int hit = guardedCall(fn, const_cast<void*>(table), 0, &ret, &exc);
+                return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+            };
+
+            // C++ 侧注册脚本绑定的 cvar（onChanged 钩子记录，验收「C# 改 cvar 触发 onChanged」）
+            auto& console = nl::core::console::Console::get();
+            console.installBuiltins();   // 生产宿主口径：内建命令集（cvar.set / cvar.list / help）
+            int onChangedCount = 0;
+            std::string onChangedValue;
+            nl::core::console::CVar& countCvar = nl::core::console::Console::get().registerInt(
+                "script.count", 0, "cvar bound to script (M-SC1 selftest)");
+            countCvar.setOnChanged([&](const nl::core::console::CVar& c) {
+                ++onChangedCount;
+                onChangedValue = c.value().toString();
+            });
+            nl::core::console::Console::get().registerFloat(
+                "script.rate", 1.5, "float cvar for readback (M-SC1 selftest)");
+
+            nl::script::EntryPointFn setEntry = nullptr, regEntry = nullptr, errEntry = nullptr,
+                                     throwEntry = nullptr, readEntry = nullptr, unregEntry = nullptr;
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "SetCvar", &setEntry);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "RegisterCmd", &regEntry);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "ErrorCodes", &errEntry);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "ThrowCmd", &throwEntry);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "Readback", &readEntry);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), csType, "UnregisterCmd", &unregEntry);
+            expectTrue(result.ok && unregEntry != nullptr, "s6a locate console binding entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                // s6a：C# 改 cvar -> onChanged 触发 + CvarSet 码 0
+                {
+                    auto [hit, ret] = callEntry(setEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s6a C# CvarSet script.count=77 -> 0");
+                    expectInt(onChangedCount, 1, "s6a C++ onChanged hook fired exactly once");
+                    expectTrue(onChangedValue == "77", "s6a onChanged captured value 77");
+                }
+                // s6b：C# 注册命令 -> console exec 调通
+                {
+                    expectInt(callEntry(regEntry).second, 0, "s6b C# ConsoleRegister script.echo -> 0");
+                    const auto r = nl::core::console::Console::get().exec("script.echo hello world");
+                    expectTrue(r.ok() && r.output.find("hello world") != std::string::npos,
+                               "s6b console exec of C#-registered command returns echo text");
+                }
+                // s6c：错误码逐一对齐（C# 视角触发 0/1/2/3，返回位掩码 31）
+                expectInt(callEntry(errEntry).second, 31,
+                          "s6c ExecCode alignment 0/1/2/3 across binding (mask 31)");
+                // s6d：托管异常命令 -> SEH 边界捕获 -> CommandFailed，进程存活
+                {
+                    expectInt(callEntry(throwEntry).second, 0, "s6d C# ConsoleRegisterRaw throwcmd -> 0");
+                    const auto r = nl::core::console::Console::get().exec("script.throwcmd");
+                    expectTrue(r.code == nl::core::console::ExecCode::CommandFailed &&
+                               r.output.find("SEH code=0xe0434352") != std::string::npos,
+                               "s6d managed exception in command -> CommandFailed + SEH captured");
+                    const auto r2 = nl::core::console::Console::get().exec("script.echo alive");
+                    expectTrue(r2.ok() && r2.output.find("alive") != std::string::npos,
+                               "s6d console alive and commands still callable after exception");
+                }
+                // s6e：双向读回（C++ 类型化赋值 -> C# 读；cvar.list 全量视图）
+                expectInt(callEntry(readEntry).second, 3,
+                          "s6e C++-set float read from C# + cvar.list contains script cvar");
+                // s6f：注销命令 -> 解绑（M-SC3 热重载预演）
+                {
+                    expectInt(callEntry(unregEntry).second, 0, "s6f C# ConsoleUnregister script.echo -> 0");
+                    const auto r = nl::core::console::Console::get().exec("script.echo gone");
+                    expectTrue(r.code == nl::core::console::ExecCode::UnknownCommand,
+                               "s6f exec after unregister -> UnknownCommand");
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -322,9 +430,9 @@ void usage() {
         "nl-script -- C# hosting selftest tool (nl::script, A-class track)\n"
         "usage:\n"
         "  nl-script check <projectDir>                       compile only (dotnet build)\n"
-        "  nl-script run <projectDir> [--args <s>] [--type <ns.Class, Assembly>]\n"
-        "                                                     compile + load + call Entry\n"
-        "  nl-script selftest <projectDir>                    full machine-checked acceptance\n"
+        "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
+        "             --api passes ApiTable* to Entry (console-binding scripts)\n"
+        "  nl-script selftest <projectDir> [consoleProjectDir]  full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -350,9 +458,12 @@ int main(int argc, char** argv) {
             return 2;
         }
         std::string args, typeOverride;
+        bool passApiTable = false;
         for (int i = 3; i < argc; ++i) {
             if (std::string(argv[i]) == "--args" && i + 1 < argc) {
                 args = argv[++i];
+            } else if (std::string(argv[i]) == "--api") {
+                passApiTable = true;
             } else if (std::string(argv[i]) == "--type" && i + 1 < argc) {
                 typeOverride = argv[++i];
             } else {
@@ -360,14 +471,15 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        return cmdRun(fs::weakly_canonical(argv[2]), args, typeOverride);
+        return cmdRun(fs::weakly_canonical(argv[2]), args, typeOverride, passApiTable);
     }
     if (cmd == "selftest") {
         if (argc < 3) {
             usage();
             return 2;
         }
-        return cmdSelftest(fs::weakly_canonical(argv[2]));
+        const fs::path consoleDir = argc >= 4 ? fs::weakly_canonical(argv[3]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir);
     }
     usage();
     return 2;

@@ -9,6 +9,10 @@
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
     <RootNamespace>Nl.Script.Api</RootNamespace>
+    <!-- M-SC1：Engine 绑定面 unsafe（ApiTable 偏移读 / argv 数组遍历） -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- FDD 硬前置：classlib 默认不产 runtimeconfig.json（M-SC0 踩坑），hostfxr 装载必须有 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
   </PropertyGroup>
 
 </Project>

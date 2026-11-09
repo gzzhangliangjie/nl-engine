@@ -1,0 +1,56 @@
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.87
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\hello" -nologo -v q 
+  ok  s0 locate HelloScript build output (runtimeconfig + dll)
+[hello-script] script-api v0.2.0, host says hello
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.64
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.89
+  ok  s1 Vm::create via runtimeconfig.json (hostfxr 3-export flow)
+  ok  s2 getEntryPoint Entry (default signature, UnmanagedCallersOnly)
+  ok  s3a args="ok" -> 42 (got 42)
+  ok  s3b empty args -> -1 (got -1)
+  ok  s3c args="echo" -> 0 (script-api Version printed above) (got 0)
+  ok  s3d unknown mode -> -1 (got -1)
+  ok  s4a managed exception caught at SEH boundary (process alive)
+  exception code: 0xe0434352 (CLR managed exception 0xe0434352)
+  ok  s4b entry callable again after exception (got 42)
+  ok  s5a copy example project to temp dir
+  ok  s5a2 locate ProjectReference in copied csproj
+  ok  s5a3 set hot AssemblyName in copied csproj
+  ok  s5b locate anchor "return 42;" in copied source
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot\hello" -nologo -v q 
+  ok  s5c dotnet build rebuilt script (HelloScriptHot)
+  ok  s5d locate rebuilt output
+  ok  s5e load rebuilt assembly in same process (no host restart)
+  ok  s5f rebuilt script behavior updated: "ok" -> 43 (got 43)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\console" -nologo -v q 
+  ok  s6a locate ConsoleScript build output
+  ok  s6a locate console binding entries (UnmanagedCallersOnly)
+  ok  s6a C# CvarSet script.count=77 -> 0 (got 0)
+  ok  s6a C++ onChanged hook fired exactly once (got 1)
+  ok  s6a onChanged captured value 77
+  ok  s6b C# ConsoleRegister script.echo -> 0 (got 0)
+  ok  s6b console exec of C#-registered command returns echo text
+  ok  s6c ExecCode alignment 0/1/2/3 across binding (mask 31) (got 31)
+  ok  s6d C# ConsoleRegisterRaw throwcmd -> 0 (got 0)
+  ok  s6d managed exception in command -> CommandFailed + SEH captured
+  ok  s6d console alive and commands still callable after exception
+  ok  s6e C++-set float read from C# + cvar.list contains script cvar (got 3)
+  ok  s6f C# ConsoleUnregister script.echo -> 0 (got 0)
+  ok  s6f exec after unregister -> UnknownCommand
+nl-script selftest: PASS (0 failures)

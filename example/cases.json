@@ -3756,6 +3756,69 @@
      "preview": "example/m-sc0/usage.png"
     }
    ]
+  },
+  {
+   "id": "m-sc1",
+   "label": "P8 M-SC1",
+   "name": "console 绑定：ApiTable 函数指针面 + C# 命令注册（A 类轨道）",
+   "tag": "m-sc1",
+   "date": "2026-11-09",
+   "summary": "console 绑定面（nl/script/Bindings）：C++ 暴露 6 导出 ApiTable（cvarGet/cvarSet/cvarList/consoleExec/consoleRegister/consoleUnregister）随托管入口 args 传入，C# 侧按偏移读指针转 delegate——对应 Carrot mono_add_internal_call 的 hostfxr 路线对应物（单向显式绑定面，无反射魔法）；C#→C++ 注册经 reverse P/Invoke（delegate 保活 + 原始 ABI int(argc,argv,outText)，CoTaskMem 配对释放）；托管命令回调 C++ 侧 SEH __except 捕获（0xe0434352→CommandFailed）；Console 扩 unregisterCommand（M-SC3 热重载解绑落点）；DOTNET_CLI_UI_LANGUAGE=en 根治 M-SC0 中文方框复发。selftest s6a~s6f：onChanged 触发 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 逐一对齐（掩码 31）/ 托管异常命令 / 双向读回 / 注销解绑。",
+   "acceptance": [
+    "selftest s6a~s6f 全绿（M-SC0 s0~s5 不回归，PASS 0 failures）：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码 0/1/2/3 逐一对齐、托管异常命令 SEH 边界、双向读回、注销解绑",
+    "run --api demo 全链路（exit 0）：注册→赋值→回显→内建 cvar.set→C# 读回→cvar.list；负向 run 缺 --type exit 1（Result code=5 干净报错不崩）",
+    "双后端 DX12/VULKAN nl_core + nl-script 构建过，selftest 均 PASS；四张证据图全部由工具真实输出渲染（dotnet 输出英文化），run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s6a~s6f：console 绑定机械单测（M-SC0 s0~s5 不回归）",
+     "kind": "tool",
+     "note": "s6a C# cvar.set 触发 C++ onChanged（恰一次、值 77）/ s6b C# 注册命令经 console exec 调通 / s6c ExecCode 0/1/2/3 对齐掩码 31 / s6d 托管异常命令 SEH 边界转 CommandFailed 且 console 存活 / s6e C++ setFloat 后 C# 读回 + cvar.list 全量视图 / s6f 注销后 exec UnknownCommand。",
+     "args": ["selftest", "{root}/script/examples/hello", "{root}/script/examples/console"],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console",
+     "preview": "example/m-sc1/selftest.png"
+    },
+    {
+     "id": "run-api",
+     "name": "run --api demo：ApiTable 传入 + 全链路绑定（正向，exit 0）",
+     "kind": "tool",
+     "note": "Entry 收到 ApiTable*（6 导出）：C# 注册 script.echo、CvarSet script.count=77、exec 回显、经 exec 驱动内建 cvar.set 100、C# CvarGet 读回 100、cvar.list 全量视图。",
+     "args": ["run", "{root}/script/examples/console", "--api", "--type", "NlScript.Examples.ConsoleScript, ConsoleScript"],
+     "expectExit": 0,
+     "expectLog": "run: ret=0",
+     "command": "nl-script run script/examples/console --api --type \"NlScript.Examples.ConsoleScript, ConsoleScript\"",
+     "preview": "example/m-sc1/run-api.png"
+    },
+    {
+     "id": "run-badtype",
+     "name": "run --api 缺 --type：getEntryPoint 干净报错（负向，exit 1）",
+     "kind": "tool",
+     "note": "默认类型名在 ConsoleScript 程序集不存在 → Result{code=5} 经 'run: FAIL getEntryPoint' 报出，进程不崩 exit 1。",
+     "args": ["run", "{root}/script/examples/console", "--api"],
+     "expectExit": 1,
+     "expectLog": "run: FAIL getEntryPoint: code=5",
+     "command": "nl-script run script/examples/console --api",
+     "preview": "example/m-sc1/run-badtype.png"
+    },
+    {
+     "id": "check",
+     "name": "check console 示例：只编译不装载（正向，exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；绑定入口须 [UnmanagedCallersOnly] 默认签名（hostfxr UNMANAGEDCALLERSONLY_METHOD 路线）。",
+     "args": ["check", "{root}/script/examples/console"],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/console",
+     "preview": "example/m-sc1/check.png"
+    }
+   ]
   }
  ]
 }

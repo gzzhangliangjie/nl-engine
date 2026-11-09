@@ -1353,3 +1353,20 @@
 8. C# `Api` 跨程序集引用漏 `using Nl.Script.Api;` → CS0103（首轮 dotnet build 失败）。
 
 **下一步**：M-SC1 console 绑定（gated on feat/console M-C3 merge 回 master）：C++→C# 函数指针暴露 cvar.get/set/list + console.exec，C#→C# 注册命令进 console 命令表。
+
+## M-SC1：console 绑定（feat/script，2026-11-09，tag `m-sc1`）
+
+**动作**：master 合入 feat/script（console M-C0~M-C3 merge `9e12cc6`，解 M-SC1 gate；冲突 4 处——CMakeLists 双工具目标并存 + MILESTONES/PLAN/cases.json 双方追加保留，cases.json 版本序 console-mc3→m-sc0）→ wt_pool claim（track script / M-SC1）→ 三处证据（本轮模块=脚本↔console 绑定面：Carrot `CSharpBindings.cpp` + `script-api/Carrot/` 精读——绑定面是 mono_add_internal_call 按名 internal call，hostfxr 路线对应物=显式函数指针表随入口传入，同构「单一显式绑定面」；UE IConsoleManager 无 C# 脚本绑定（Blueprint/Python），bevy 无 console 无脚本——均据实标注）→ `nl/script/Bindings.hpp/.cpp`（ApiTable 6 导出 C ABI + extern "C" 实现 + 托管命令回调 SEH POD guard + CoTaskMem 配对释放）→ core/console 扩 `unregisterCommand`（M-SC3 解绑落点）→ script-api `Engine` 静态类（Init 按偏移读表 + CvarGet/Set/List + ConsoleExec + ConsoleRegister 友好/Raw 双路 + ConsoleUnregister + delegate 保活）→ `script/examples/console/` 多入口示例（SetCvar/RegisterCmd/ErrorCodes/ThrowCmd/Readback/UnregisterCmd + Entry demo）→ nl-script 扩 `run --api`（宿主预注册 builtins + demo cvar）+ selftest s6a~s6f → 迭代修 4 坑（见踩坑栏）→ 全绿 → VULKAN 树同步构建 + selftest 复跑全绿（双后端对称）→ `example/m-sc1/run.bat` 四用例 ALL GREEN + 证据生成器扩 m-sc1 段 4 张真实输出图逐张亲眼验收（DOTNET_CLI_UI_LANGUAGE=en 根治中文方框复发）→ cases.json 文本级追加 `m-sc1` 卡 4 条（前缀逐字节保留断言 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc1`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+Bindings.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 不回归 + s6a~s6f：onChanged 恰触发一次 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 掩码 31 对齐 / 托管异常命令 SEH→CommandFailed 存活 / 双向读回 + cvar.list / 注销后 UnknownCommand）；run --api demo 全链路 exit 0；负向缺 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，与 M-SC0 同口径；证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc1` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC1 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC1 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面口径固化（ApiTable ABI/内存所有权两条路/异常边界/unregisterCommand）+ 踩坑 5 条存档。
+
+**踩坑情况**
+1. **script-api 与脚本工程都要 `<AllowUnsafeBlocks>true`**：`Engine` unsafe class（ApiTable 偏移读），只在示例 csproj 开 → CS0227。
+2. **lambda 参数显隐混用 CS0748**：`(argc, argv, out IntPtr text)` 非法，全显式。
+3. **selftest 漏 `installBuiltins()`**：`cvar.set` 命令路径断言拿到 UnknownCommand(1) 而非 CommandFailed(3)，掩码 27≠31——内建命令集是生产宿主动作，selftest 必须同口径装上。
+4. **`DOTNET_CLI_UI_LANGUAGE=en`**：dotnet 中文摘要在证据图 Consolas 下成方框（M-SC0 踩坑 1 复发），dotnetBuild 前置 set 根治。
+5. **cases.json 尾锚插入**：末卡四层嵌套闭括号，锚点切多一行就把 cases 数组 `]` 切掉（本轮两次 JSONDecodeError 后改「只切末三行保留 case 层 `}`」+ json.load 复验）。
+
+**下一步**：M-SC2 ECS 绑定（数据面：World.Spawn/Remove/SetParent、Entity 失效安全拒绝、TransformComponent 字段读写；E1a 已 merge 前置满足）。

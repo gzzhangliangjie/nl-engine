@@ -80,3 +80,68 @@ expectExit 2/0/1/0/0）。
    out handle）——`parameters` 可传 nullptr，漏传即 C2198。
 7. 托管异常在 MSVC `/EHsc` 下 **C++ `catch(...)` 接不住**，必须 SEH `__try/__except`
    （且 `__try` 函数体不许有需展开的 C++ 对象 → 独立纯 POD guard 函数）。
+
+---
+
+# M-SC1：console 绑定（2026-11-09，tag `m-sc1`）
+
+## 绑定面口径（nl/script/Bindings）
+
+- **C++ → C#**：`ApiTable`（6 导出函数指针，v1 固定顺序尾部追加）随托管入口 `args`
+  传入；C# 侧 `Engine.Init(table)` 按偏移 `Marshal.ReadIntPtr` 读出转 delegate。
+  这是 Carrot `mono_add_internal_call`（按名 internal call）在 hostfxr 路线的对应物——
+  Mono 底座不走，显式函数指针表 = 同构的「单一显式绑定面、无反射魔法」。
+  6 导出：`cvarGet`（类型码 0=无/1=bool/2=int/3=float/4=string + toString 值）、
+  `cvarSet`（引擎路径 setFromString 语义，onChanged 触发）、`cvarList`、
+  `consoleExec`（ExecCode 0..3 原样）、`consoleRegister`、`consoleUnregister`。
+- **C# → C++**：`ConsoleRegister` 经 reverse P/Invoke——delegate 用静态列表保活
+  （thunk 被 GC 收 = native 调用炸），原始 ABI `int fn(int argc, const char** argv,
+  const char** outText)`（0=ok/1=失败）；`outText` 由 C# `Marshal.AllocHGlobal`
+  （Windows 实现 = CoTaskMemAlloc）分配，C++ 拷成 std::string 后 `CoTaskMemFree`
+  （COM 字符串同款配对）。友好包装 `ScriptCommandHandler`（返回串=成功/null=失败，
+  异常包装内 catch）；`RegisterRaw` 走原始 ABI（异常穿到 C++ SEH 边界，selftest 用）。
+- **内存所有权两条路各定一条**（Bindings.hpp 文件头写死）：C++→C# 返回串 = C++ 静态
+  缓冲持有、**下次调用前有效**（console 单线程约定下无竞态，C# 立即拷贝）；
+  C#→C++ = CoTaskMem 配对。不许混用。
+- **异常边界**：C++ 侧调用托管命令回调经 SEH `__except`（POD guard 函数），
+  0xe0434352 → `CommandResult{false}` → ExecCode::CommandFailed，console 存活。
+- **Console 扩 `unregisterCommand`**（core/console）：M-SC3 热重载解绑的落点；
+  CVar 不在命令表，不会误删。
+
+## selftest 判据（M-SC1 s6 组，M-SC0 s0~s5 不回归）
+
+- s6a C# `CvarSet("script.count","77")` → C++ onChanged 钩子恰触发一次、捕获 77；
+- s6b C# 注册 `script.echo` → console exec 调通（回显文本）；
+- s6c ExecCode 逐一对齐：未知命令=1 / 引擎路径类型不符=2 / `cvar.set` 命令路径坏值=3 /
+  裸 CVar 名=0（C# 视角触发，位掩码 31 断言）；
+- s6d 原始 ABI 命令抛托管异常 → SEH 捕获 → CommandFailed + console 存活可复调；
+- s6e C++ `registerFloat(1.5)` 后 C# `CvarGet` 读回 "1.5" + `CvarList` 全量视图含脚本 cvar；
+- s6f `ConsoleUnregister` → exec → UnknownCommand（M-SC3 解绑预演）。
+
+## 验收复现
+
+```
+nl-script selftest script/examples/hello script/examples/console   # s0~s5 + s6a~s6f
+nl-script run script/examples/console --api --type "NlScript.Examples.ConsoleScript, ConsoleScript"
+nl-script run script/examples/console --api                        # 负向：exit 1 code=5
+nl-script check script/examples/console
+```
+
+`run --api` 传 `ApiTable*` 给 Entry；宿主侧预注册 `installBuiltins()` +
+`script.count`/`script.rate` demo cvar（生产宿主注册自家 cvar 的口径）。
+
+## 踩坑存档（M-SC1 实测）
+
+1. **script-api 与脚本工程都要 `<AllowUnsafeBlocks>true`**：`Engine` 标了 `unsafe`
+   class（ApiTable 偏移读），只在示例 csproj 开、api 程序集漏开 → CS0227。
+2. **lambda 参数显隐混用**：`(argc, argv, out IntPtr text) =>` 是 CS0748（隐式参数
+   不能与显式 out 混排），全部显式 `(int argc, IntPtr argv, out IntPtr text)`。
+3. **selftest 漏 `installBuiltins()`**：`cvar.set` 命令路径断言拿到 UnknownCommand(1)
+   而非 CommandFailed(3)，掩码 27≠31——内建命令集是生产宿主的 install 动作，
+   selftest 必须同口径装上。
+4. **`DOTNET_CLI_UI_LANGUAGE=en`**：dotnet CLI 中文摘要（已成功生成/警告/错误）在
+   证据图 Consolas 下成方框（M-SC0 踩坑 1 复发）——dotnetBuild 命令行前置
+   `set ...&&` 根治，顺带证据图输出全英文统一。
+5. **cases.json 尾锚插入**：末卡闭括号是四层嵌套（case `}` / cases `]` / version `}` /
+   versions `]` / root `}`），锚点切多一行就把 cases 数组闭括号切掉（本轮实测两次
+   JSONDecodeError）——只切末三行、保留 case 层 `    }`，插入后必须 json.load 复验。
