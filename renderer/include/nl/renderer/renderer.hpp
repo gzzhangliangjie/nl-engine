@@ -189,6 +189,8 @@ struct SceneLightDesc {
     int   type        = 0;                    // 0=Directional / 1=Point
     float position[3] = {0.0f, 0.0f, 0.0f}; // 点光世界位置
     float range       = 12.0f;               // 衰减截断半径
+    // M-E1b.4：方向灯投阴影（仅 type=0 生效；scene 侧最多取前 kMaxShadowLights 盏）
+    bool  shadow      = false;
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。

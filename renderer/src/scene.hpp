@@ -53,6 +53,14 @@ struct LightConstants {
 };
 static_assert(sizeof(LightConstants) == 80, "cbuffer layout must match shader");
 
+// M-E1b.4：与 model.slang 的 ShadowConstants cbuffer（b2，psScene 专用）逐字节对应。
+// 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）；params = enabled/bias/mapSize/未用。
+struct ShadowConstantsCB {
+    float viewProj[4][16];     // 4 个 float4x4（未启用槽保持零矩阵 + enabled=0）
+    float params[4][4];        // x=enabled, y=depthBias, z=mapSize, w 未用
+};
+static_assert(sizeof(ShadowConstantsCB) == 320, "cbuffer layout must match shader");
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -324,12 +332,26 @@ private:
         nvrhi::TextureHandle tex;
         nvrhi::SamplerHandle sampler;
         nvrhi::BindingSetHandle set;
+        nvrhi::BindingSetHandle shadowSet;   // M-E1b.4：shadow pass 用（b0=lightViewProj + t5 实例）
         std::uint32_t indexCount = 0;
         std::uint32_t instanceCount = 0;
     };
     std::vector<SceneMeshBatch> sceneBatches_;
     nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    // ---- M-E1b.4：方向灯 2D 阴影（最多 4 盏；R32F Texture2DArray 整数 Load 采样）----
+    static constexpr std::uint32_t kMaxShadowLights = 4;
+    nvrhi::ShaderHandle        vsShadow_, psShadow_;
+    nvrhi::InputLayoutHandle   shadowInputLayout_;       // 与 scene 同签名，绑 vsShadow_ 创建
+    nvrhi::BindingLayoutHandle shadowBindingLayout_;     // b0 + t5（§2.7：shadow 管线单一 set）
+    nvrhi::BufferHandle        shadowLightCB_;           // volatile 160B（b0 = lightViewProj）
+    nvrhi::BufferHandle        shadowConstants_;         // volatile 320B（b2，psScene 读）
+    nvrhi::TextureHandle       shadowMap_;               // R32F 1024x1024 arraySize=4（POT，§2.8 精神）
+    nvrhi::FramebufferHandle   shadowFb_[kMaxShadowLights];  // 每层一个（无 depth）
+    nvrhi::GraphicsPipelineHandle pipelineShadow_;       // cull=None + 无深度测试
+    std::uint32_t shadowCount_ = 0;
+    float shadowViewProj_[kMaxShadowLights][16];         // CPU 预算，每帧写 b2
+    float shadowBias_[kMaxShadowLights] = {};
     float         sceneAmbient_ = 0.28f;
     std::uint32_t sceneLightCount_ = 0;
     std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源

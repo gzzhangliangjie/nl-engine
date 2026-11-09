@@ -1168,6 +1168,14 @@ int runScene(const Options& o) {
                 nl::core::log::error("--scene: entity ", id, " point light range must be > 0");
                 return 2;
             }
+            // M-E1b.4：方向灯阴影开关透传；点光不投阴影（2D shadow map 只做方向灯），
+            // 带键显式拒绝（不静默忽略，五路负向口径）。
+            l.shadow = light->shadow;
+            if (l.type == 1 && l.shadow) {
+                nl::core::log::error("--scene: entity ", id,
+                                     " point light does not support shadow (directional only)");
+                return 2;
+            }
             lights.push_back(l);
         }
         const auto* model = world.getComponent<nl::scene::ModelComponent>(id);

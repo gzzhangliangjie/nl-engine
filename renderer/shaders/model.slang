@@ -52,6 +52,18 @@ cbuffer LightConstants : register(b1)
     float4   g_mrF;          // x = metallicFactor, y = roughnessFactor, z = pbr-naive debug switch (>=0.5 skips sRGB->linear)
 };
 
+// M-E1b.4：ECS 方向灯 2D 阴影——psScene 专用（shadePbr 不声明不读，pbr-direct 零波及）。
+// 正交 lightViewProj 由 CPU 侧按场景联合包围球预算；R32F 阴影图 t7（4 层
+// Texture2DArray，1024x1024 POT，§2.8 精神），整数 Load 采样 → 无采样器状态、
+// 双后端逐位一致（浮点 uv 采样会引入 DXIL/SPIR-V 差异）。无阴影场景时
+// psScene 的 shadowFactor 恒为字面量 1.0f，x*1.0f 在 IEEE 下精确 → M-E1b.3 基线逐字节不变。
+cbuffer ShadowConstants : register(b2)
+{
+    float4x4 g_shadowViewProj[4];   // 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）
+    float4   g_shadowParams[4];     // x=enabled(0/1), y=depth bias, z=mapSize, w 未用
+};
+Texture2DArray<float> g_shadowMap : register(t7);
+
 Texture2D<float4> g_baseColor : register(t0);
 Texture2D<float4> g_metallicRoughness : register(t1);
 SamplerState      g_sampler   : register(s0);
@@ -419,6 +431,34 @@ VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
     return output;
 }
 
+// M-E1b.4：阴影 depth pass（b0 = lightViewProj，shadow pass 语义下复用
+// SceneConstants 的 g_mvp 槽位；t5 实例缓冲与 vsScene 同一套）。正交投影下
+// z/w ∈ [0,1] 且线性，PS 直接落 R32F——整数精度双后端一致。
+struct VSOutputShadow
+{
+    float4 position : SV_Position;
+};
+
+VSOutputShadow vsShadow(VSInputScene input, uint instanceId : SV_InstanceID)
+{
+    VSOutputShadow output;
+    const uint base = instanceId * 7u;
+    // 与 vsScene 相同的列主序世界矩阵还原（transpose 一次）。
+    const float4x4 world = transpose(float4x4(
+        g_instanceData[base + 0u],
+        g_instanceData[base + 1u],
+        g_instanceData[base + 2u],
+        g_instanceData[base + 3u]));
+    const float3 worldPos = mul(world, float4(input.position, 1.0f)).xyz;
+    output.position = mul(g_mvp, float4(worldPos, 1.0f));   // g_mvp = lightViewProj
+    return output;
+}
+
+float4 psShadow(VSOutputShadow input) : SV_Target
+{
+    return float4(input.position.z, 0.0f, 0.0f, 1.0f);      // 正交深度（已除 w）
+}
+
 struct PSInputScene
 {
     float4 position : SV_Position;
@@ -464,6 +504,7 @@ float4 psScene(PSInputScene input) : SV_Target
         float3 L;
         float NdotL;
         float3 radiance;
+        float shadowFactor = 1.0f;   // M-E1b.4：方向灯分支可改写；点光恒 1。
         if (color.w > 0.5f)   // 点光
         {
             // M-E1b.2 同款 UE DeferredLightingCommon.ush:480-486 实读口径：
@@ -486,6 +527,46 @@ float4 psScene(PSInputScene input) : SV_Target
             L = dirInt.xyz;
             NdotL = abs(dot(n, L));
             radiance = color.rgb * dirInt.w;
+
+            // M-E1b.4：方向灯 2D 阴影。t6 posRng.w 复用为 shadowSlot+1（0=无阴影；
+            // 方向灯分支原本不读该字段）。R32F 阴影图整数 texel Load + 3x3 PCF：
+            // DX 视口约定 clip.y=+1 → 图像第 0 行（NVRHI Vulkan 视口换算与 DX 对齐，
+            // 见 pipeline 注释），故接收侧 texel.y = (0.5 - ndc.y*0.5) * size。
+            // ortho 下 clip.w==1，recDepth = clip.z 已在 [0,1]；视锥外全亮。
+            const float slot = posRng.w;
+            if (slot > 0.5f)
+            {
+                const uint si = (uint)(slot) - 1u;
+                const float4 clip = mul(g_shadowViewProj[si], float4(input.worldPos, 1.0f));
+                const float2 ndc = clip.xy / clip.w;
+                const float recDepth = clip.z / clip.w;
+                if (recDepth > 0.0f && recDepth < 1.0f &&
+                    abs(ndc.x) <= 1.0f && abs(ndc.y) <= 1.0f)
+                {
+                    const float size = g_shadowParams[si].z;
+                    // 坡度缩放 bias：MIN 混合存 nearest 深度，斜面上 texel 内深度跨度
+                    // ∝ (1-NdotL)（PROBE-D2 实测：地面 ~0.004 / 头部斜面 ~0.028），
+                    // 固定 bias 0.003 盖不住 → 满屏自阴影。0.035×(1-NdotL) 实测覆盖。
+                    const float slopeBias = 0.035f * (1.0f - saturate(dot(n, L)));
+                    const float bias = g_shadowParams[si].y + slopeBias;
+                    const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+                    const int2 base = int2(floor(uv * size));
+                    const int2 maxSize = int2(size, size) - int2(1, 1);
+                    float lit = 0.0f;
+                    [unroll]
+                    for (int dy = -1; dy <= 1; ++dy)
+                    {
+                        [unroll]
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            const int2 t = clamp(base + int2(dx, dy), int2(0, 0), maxSize);
+                            lit += (g_shadowMap.Load(int4(t, si, 0)) >= recDepth - bias)
+                                       ? 1.0f : 0.0f;
+                        }
+                    }
+                    shadowFactor = lit * (1.0f / 9.0f);
+                }
+            }
         }
         if (NdotL <= 0.0f) continue;
 
@@ -502,7 +583,7 @@ float4 psScene(PSInputScene input) : SV_Target
         const float3 brdf = (diffuse + specular) * NdotL;
 
         if (color.w > 0.5f) Lo_point += brdf * radiance;
-        else                Lo_dir   += brdf * radiance;
+        else                Lo_dir   += brdf * radiance * shadowFactor;
     }
 
     // ambient：flat irradiance = ambient·cDiff（无 IBL）。M-E1b.3：乘 (1-metallic)——

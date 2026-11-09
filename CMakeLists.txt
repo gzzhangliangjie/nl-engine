@@ -266,7 +266,8 @@ set(_SHADER_ARTIFACTS "")
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
                    "vsScene|vsscene|vertex"
                    "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment"
-                   "psScene|pscene|fragment")
+                   "psScene|pscene|fragment"
+                   "vsShadow|vsshadow|vertex" "psShadow|psshadow|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")

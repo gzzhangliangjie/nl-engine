@@ -227,7 +227,8 @@ public:
     LightComponent(const LightComponent& other, Entity newOwner)
         : ComponentOf<LightComponent>(newOwner),
           type(other.type), direction(other.direction), color(other.color),
-          intensity(other.intensity), position(other.position), range(other.range) {}
+          intensity(other.intensity), position(other.position), range(other.range),
+          shadow(other.shadow) {}
 
     static constexpr const char* kName = "Light";
 
@@ -241,6 +242,9 @@ public:
     float intensity = 1.0f;
     Vec3  position{0.0f, 0.0f, 0.0f};    // 点光世界位置（仅 type=1 生效）
     float range = 12.0f;                 // 衰减截断半径（bevy range / UE AttenuationRadius）
+    // M-E1b.4：方向灯投阴影开关（仅 type=0 生效，渲染侧最多取前 4 盏）。
+    // 缺省 false = 既有场景零行为变化；serialise() 不写新键（向后兼容铁律）。
+    bool  shadow = false;
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;

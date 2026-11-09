@@ -179,6 +179,17 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 - **色彩管线**：ECS `psScene` 已换代为 `srgbToLinear(base.rgb) * tint` 进光、`pow(saturate(Lo), 1/2.2)` 出（替换旧 `*2.2f` sRGB 空间曝光补偿）；t0 贴图仍 `RGBA8_UNORM` 直读。彩色饱和度略低于 Lambert 时代 = 白色介电质 specular（F0=0.04）稀释，物理正确。
 - **改 shader 后先删 exe 再 build**：NMake 同秒 mtime 会跳重链（`Built target viewer` 但 exe 未更新），regression 过期门禁会拦；两次踩中。
 
+### 2.13 ⚠️ ECS 方向灯 2D 阴影图口径（2026-11-09，M-E1b.4）
+
+- **资源布局**：`Texture2DArray R32F 1024×1024×shadowCount`（每阴影灯一层）+ b2 `ShadowConstantsCB`（`viewProj[4]` + `params[4][3]`，160B volatile；`params[s]` = `{enabled, bias, size}`）。灯打包复用 t6 `posRng.w` 作 shadowSlot+1（0=无阴影；方向灯分支原本不读该字段）。**>4 盏阴影灯 initScene 显式报错**（viewProj[4] 数组上限）。
+- **阴影 pass 无 depth attachment，nearest 深度用 R32F MIN 混合实现**（src/dst `One` + `BlendOp::Min`）：语义 = 深度测试 LessEqual 且**顺序无关**。**坑**：无深度测试 + 无混合时 psShadow 无条件写 → 按绘制顺序后画覆盖先画（地面盘覆盖整个灯视锥 → 物体深度被冲掉 → 永远判亮）。D3D12 对 float32 RT 强制支持 MIN/MAX blend，Vulkan 规范同一张强制表（R32_SFLOAT 要求 VK_BLEND_OP_MIN/MAX），双后端对称。depth test/write 必须 disable（R32F framebuffer 无深度格式，DX12 validation 拒绝建管线）。
+- **pass 顺序（draw() 内，主 pass 之前）**：b2 写零 + `beginTrackingTextureState(shadowMap_, ShaderResource)` **无条件做**（主 pass 恒绑 b2/t7，NVRHI 校验 volatile CB 未写即用 = 报错）→ 每层 `clearTextureFloat(1.0)`（clear 先于任何 setGraphicsState，Vulkan render pass 纪律同 §2.8）→ 全层状态切 RenderTarget → 逐灯逐 batch 渲染（`Viewport(1024,1024)`，SPIR-V 入口名恒 `main` 见 §2.4）→ 全层切回 ShaderResource → 主 pass。
+- **接收侧采样口径**：正交下 `clip.w==1`，`recDepth = clip.z` 已在 [0,1]；texel 映射 `uv = (ndc.x*0.5+0.5, 0.5−ndc.y*0.5)`（DX 视口约定 clip.y=+1 → 图像第 0 行，NVRHI Vulkan 视口换算与 DX 对齐）；`Texture2DArray.Load(int4(texel, slice, 0))` 整数 texel 直读（第 4 分量 = array slice）；视锥外全亮。3×3 PCF clamp 到边缘。
+- **坡度缩放 bias（M-E1b.4 拍板数值）**：MIN 混合存 nearest 深度，斜面 texel 内深度跨度 ∝ (1−NdotL)——PROBE-D2 实测本场景地面 ~0.004 / 头部斜面 ~0.028，固定 bias 0.003 盖不住 → 物体整体误阴影。`bias = 0.003(CPU) + 0.035×(1−NdotL)(shader)` 实测覆盖；`abs(NdotL)` 双面照亮的背面按 NdotL=0 取满 bias（保守正确）。调 bias 前先跑三通道探针（R=图值 G=接收深度 B=差值×10，一眼分类：暗黄=一致/红=图深/绿=接收深）。
+- **量化闸基线必须同场景**：阴影「只变暗不变亮」断言对比的是**同场景 shadow=false**（`ecs-e1b-shadow-base.scene`）；拿不同场景（如无地面盘的 `ecs-e1b.scene`）当基线必然大面积「变亮」误报。
+- **探针结论有效性前置**：改 shader 后跑任何画面探针，先核 `exe mtime > shader mtime`（NMake 同秒 mtime 跳重链，§2.12 尾条），否则结论全部作废——M-E1b.4 连环假阴性（shadowTry1~4/PROBE-S）的真实根因。
+
+
 ## 3. 当前局限
 - **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增单入口 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`（默认 `vsMain/psMain` 双入口）；**多入口 shader 必须在 CMakeLists 登记 `_ENTRIES_<NAME>`**（model 6 / hiz 6 / visbuf 4 个入口），需要 SM6.6 的产物进 `_SM66_ARTIFACTS` 白名单（见 §2.9）。公共 `#include` 头用 `.slangh` 后缀避开 GLOB。注意 `file(GLOB)` 在 configure 时求值，纯新增文件若不触发重编，手动重跑一次 build 脚本即可。
 - **shader 名仍由共享类固定拼接**：M0.4 把两后端重复的路径/入口名收进了 `renderer/src/scene.cpp`，M0.5 又加了一个 `renderer/src/hud.cpp`（`<name>` = `hud`），两者各自是常量；多材质系统（shader 名 → 产物 + 入口 + pipeline 的注册表）留到 S1。

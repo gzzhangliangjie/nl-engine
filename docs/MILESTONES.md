@@ -1438,6 +1438,32 @@
 **双后端分档（如实报）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡互比：`point` = **bytes**（逐字节一致）；`scene` = 2px/maxDelta1 → **near 档**；`scale` = 7px/maxDelta6 → FAIL 档（但 maxDelta 由旧 23 降至 6，乘法-only 口径 + CPU 预算倒数的改善）；按既有拍板留痕不折腾。
 
 **下一步**：**阴影拆 E1b.4**（用户拍板 A，2026-11-09）；E1 轨道收官 merge 回 master 的前置不变（12 文件冲突统一解）。
+
+## M-E1b.4 方向灯 2D 阴影图（feat/ecs，2026-11-09，tag `ecs-e1b.4`）
+
+**动作**：wt_pool claim（track ecs / M-E1b.4）→ 三处证据（本轮模块=阴影 pass：Carrot `ShadowMapPass` 方向灯单 cascade 正交投影 + depth-only pass；bevy directional light cascade shadow map 定向读 `bevy_core_pipeline` 阴影 pass 与 `shadow_sampling`（PCF/硬件 sampler 口径）；UE `ShadowRendering` SDirectionalLightShadow 阴影 pass 与 CSMLinux 保守读——三处共同口径：正交 lightViewProj + depth-only 渲染 + 接收侧 PCF/bias）→ 落码：① `LightComponent` +`shadow` 键（type=0 才写 JSON、deserialise 缺键默认 false，serialise 向后兼容铁律同 E1b.2/E1b.3）；② `SceneLightDesc` +shadow、viewer 收集（点光带 shadow 显式拒绝 exit 2）；③ `initScene`：灯打包 shadow 槽位（>4 盏显式报错）、场景 AABB 裁剪正交 lightViewProj（`shadowLookAt`/`shadowOrtho` 自写辅助，LH 口径）、GPU 资源（`Texture2DArray R32F 1024×1024×N` + b2 `ShadowConstantsCB`(viewProj[4]+params[4][3]，160B volatile) + vsShadow/psShadow 双目标编译产物 + per-batch shadowSet）；④ `draw()`：b2 写零无条件化 + beginTracking→clear→渲染→切 SRV 的 pass 顺序；⑤ `psScene` 方向灯分支 3×3 PCF 整数 texel Load。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.4`）；不 merge（轨道未收官）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/` 新增 `ecs-e1b-shadow.scene`（主灯 shadow=true + 地面盘）/`ecs-e1b-shadow-base.scene`（同场景 shadow=false 量化基线）+ `run-shadow.bat`（双后端复拍 4 张 + shadowLights/deviceErrors 断言 + 负向：点光 shadow=true 退出码 2）+ `check-shadow.py`（只变暗不变亮）；`cases.json` ecs-e1b 卡 +`shadow` 用例卡与 4 条验收条目；`server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染里程碑）；负向/量化断言收在 run-shadow.bat 内。
+3. 台账：本段即四栏。
+4. 固化：`SHADER-CONVENTIONS.md` 新增 §2.13（阴影 pass 口径五条）、`UE-DIFFS.md` D-E1b-2、`P8-ECS-PLAN.md` E1b 段、证据图归档 `docs/screenshots/ecs-e1b.4-*.png`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b.4-{dx12,vulkan}.png` + 差异图 `ecs-e1b.4-diff-dx12.png`；肉眼核验——5 个物体脚下朝灯光反方向成片暗斑、无条纹 acne、物体向光面亮度不变、下颌/颈底自阴影合理。
+- 验收数字：双后端 `shadowLights=1 / deviceErrors=0`；量化闸 DX12/VULKAN 均 **darker=14673 / brighter=0**；双后端互比 near 档（shadow 2px/maxDelta1、base 1px/maxDelta1）；`regression.py --only ecs-e1b` **6/6 ALL GREEN**（scene/scale/point 三链基线逐字节不变）。
+
+**踩坑情况（本轮五条，前两条是「采样无效果」连环假阴性的真根因）**
+1. **构建脚本 `%~dp0..` 定根**：用主树绝对路径调 `scripts/build-m0.2.bat` 会构建**主树**而非 worktree——worktree 构建必须用 worktree 自己的脚本路径。
+2. **NMake 同秒 mtime 跳重链（第三次踩，本次酿成连环假阴性）**：改 shader 后 build 显示成功但 exe 未重链，**shadowTry1~4、PROBE-S 的「采样无效果/永远判亮」结论全部作废**；本轮实测 shader 21:00 改完 exe 仍停在 20:56 才暴露。铁律重申：改 shader 后先 `rm viewer.exe` 再 build，**探针结论必须先核 exe mtime 新于 shader mtime 才有效**。
+3. **无深度测试 + 无混合 = 按绘制顺序覆盖**：阴影 pass 用 R32F 颜色目标当深度图、depth test/write 全禁（「framebuffer 无深度格式」报错的错误解法），psShadow 无条件写 → 后画的地面盘（覆盖整个灯视锥）冲掉物体深度 → 图里全是地面深度 → 永远判亮。PROBE-D 三通道诊断（R=图值 G=接收深度 B=差值×10）一眼定位：物体 texel 上 map=地面在物体后面的深度。正解 = **R32F MIN 混合**（src/dst One + `BlendOp::Min`，语义等价深度测试 LessEqual 且顺序无关；D3D12 强制支持 float32 RT 的 MIN/MAX，Vulkan 同一强制表，双后端对称），免建 depth attachment。
+4. **MIN 混合后坡度 acne**：nearest 深度在斜面 texel 内的深度跨度 ∝ (1−NdotL)，PROBE-D2 实测地面 ~0.004 / 头部斜面 ~0.028，固定 bias 0.003 盖不住 → 物体整体误阴影。坡度缩放 bias `0.003 + 0.035×(1−NdotL)` 实测覆盖。
+5. **量化基线选错**：`run-shadow.bat` 第一版拿 `ecs-e1b.scene`（无地面盘）当基线 →大面积「变亮」FAIL；量化闸必须用**同场景 shadow=false**（`ecs-e1b-shadow-base.scene`）。
+
+**双后端分档（如实报）**：`--only ecs-e1b` 6/6（bytes 5 / near 1 = scale 卡既有噪声）。shadow 卡对本后端基线 bytes；跨后端互比 near 档（2px/maxDelta1）。
+
+**下一步**：E1 轨道（E1b.0~E1b.4）收官 merge 回 master（12 文件冲突统一解）；点光阴影、多 cascade、PCF 质量提升不在本里程碑范围。
+
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。
