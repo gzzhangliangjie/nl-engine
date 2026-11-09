@@ -41,7 +41,7 @@
 | **M-E2** ✅ 已完成（tag `ecs-e2`，2026-11-09） | System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ `SignedSystem<Required...>` + 场景 JSON 序列化/反序列化 **roundtrip 字节一致** | selftest：System 只收 Signature 匹配实体（加/删组件自动进出列表）；roundtrip = `serialise→deserialise→serialise` 逐字节一致（正/负向：非法 JSON / 未知组件名显式退出码 2） |
 | **M-E3** ✅ 已完成（2026-11-09，tag `ecs-e3`） | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json `p8-ecs` 卡 4 条全过（expectExit 2/0/0/2）+ run.bat ALL GREEN + 4 张证据图亲眼验收；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |
 
-## E1b 后挂段（渲染集成）—— M-E1b.0 + M-E1b.1 + M-E1b.2 已完成（2026-11-09）
+## E1b 后挂段（渲染集成）—— M-E1b.0~M-E1b.5 全部完成，E1b 链已 merge 回 master（2026-11-09）
 
 > S6 收官（tag `s6-done`）后解禁，`feat/ecs` worktree 内开工；**里程碑编号定为 M-E1b.0**（E1a 的 M-E0~E3 已收官）。
 > 用户拍板：① 多灯 = **方向灯数组**（点光源留 pbr-direct merge 后）；② **不 bump kStage**（保持 S6.2），照 console 轨道先例，证据走 example 卡 + 截图 + `--only` 抽查。
@@ -57,7 +57,8 @@
 - **验收（M-E1b.5）**：`selftest ecs-parallel` 6 用例 30 断言 PASS（求解边数 + dot 逐字节确定 / 自旋互等真并行重叠证明 / 串行逐位对拍 / 裸类型保守 / 守卫违约可定位且 World 可继续用 / firstTick 恰一次）；DX12 连跑 5 遍稳定 + VULKAN PASS；`selftest --all` 5 suite 全绿（旧 suite 零回归）；`--only ecs-e1b` 8/8 ALL GREEN（core-only，kStage 不 bump，基线逐字节不变）；`parallel-dot` 真实求解 DOT + 2 张证据 PNG（`example/ecs-parallel/run.bat` exit 0，usage/正向/负向三用例）。
 - **渲染证据（M-E1b.5 补做，用户点名「渲染一波看看」）**：viewer 增 `--tick off|serial|parallel`（默认 off 静态，既有基线零触碰）——`SpinSystem(Write<TransformComponent>)` 逐实体差异化绕 Y 旋转 + `ReadCountSystem(Read<TransformComponent>)` 纯读并行，帧循环固定 dt=1/60 tick 后经 `Scene::updateObjects`（新增，单 upload 命令列表）刷实例矩阵。量化闸（DX12+VULKAN 双后端 run.bat 机器链）：static/serial/parallel 三档 deviceErrors=0；**serial==parallel 截图逐字节**（tickParallel 确定性在渲染链路的端到端证明）；animated!=static（56005 px 差异 = 物体真转动了）；`--tick warp` 负向拒绝。证据 `docs/screenshots/ecs-e1b.5-spin-{dx12,vulkan}.png`。
 - **渲染链踩坑（NVRHI 状态机，§2.15）**：① `writeBuffer` 内部 `requireBufferState(CopyDest)`，而 buffer 一经 `setPermanentBufferState(SRV)` **永久冻结**——require 直接校验 permanent 位不插 barrier → 每帧写必报错（首轮 deviceErrors=60）；② 跟踪状态**不跨命令列表**（`commandListSubmitted` 清空），每个新列表 open 后必须 `beginTrackingBufferState` 如实声明当前态；③ 解法 = instances 不设 permanent，`Scene::instanceTrackSRV_` 跨列表跟踪末态（update 末态恒 CopyDest / draw 末态恒 SRV，序列完全确定），beginTracking 参数=**当前**态（不是目标态，语义别记反）。
-- **待办（用户指认的通用需求，独立立项）**：**暂停 + 逻辑帧/渲染帧分离**——当前 `--tick` 是验收简化版（固定 dt、1 渲染帧=1 逻辑帧）；完整版 = World 级 fixed-step driver（accumulator + max catch-up + pause + 可选渲染插值 alpha），UE/Carrot 同口径，做时进 `core/` 而非 viewer 特例。
+- **待办（用户指认的通用需求，已独立立项）**：**暂停 + 逻辑帧/渲染帧分离**——当前 `--tick` 是验收简化版（固定 dt、1 渲染帧=1 逻辑帧）；完整版已立项 **`docs/p8/P8-GAMELOOP-PLAN.md`**（M-GL0~M-GL2，2026-11-09 登记，gate=E1b merge 回 master——**现已解除**）。
+- **E1b 链 merge 回 master（2026-11-09，收口）**：merge `e2ac82c`（79 文件，0 冲突，反向同步 `2b5ecf6` 红利）+ 收口闸 `6560b2c`；全量回归 **406/406 ALL GREEN**；wt `nl-engine-ecs` 已拆（junction 原生摘除 + worktree remove，`feat/ecs` 分支保留）；`wt_pool close` PASS。收口闸修存量债 6 类（S7.1 HUD 基线漏拍 32 张 / harness case 级 exe+cwd 覆盖 / audio-s1 expectLog 过期 / m-sc1 负向失效），详见 `docs/MILESTONES.md` merge 段。
 - **未完成**：「50 物体 + 8 动态灯 GI 正确响应」完整验收仍卡主线 S10 之后；clustered 灯池 / lumens 灯强口径留 E1b.5+；tick 中结构变更的命令缓冲（MassCommandBuffer 式）不在计划内，需要时单独拍板。
 - 三轮均只在本 worktree 提交 + tag，轨道未收官、不 merge 回 master：只读 `git merge-tree` 探查显示同步 master 会撞至少 12 个文件冲突（S7 visbuf + pbr-direct 与 E1b 的 `renderer/*` / `model.slang` / `modes.hpp` 全重叠），留待收官时统一解。
 

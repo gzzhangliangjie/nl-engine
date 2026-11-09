@@ -1798,3 +1798,26 @@
 5. **merge 时 git 把两侧卡片共用收尾对齐进公共区**：cases.json 三处冲突块两侧尾部共享 `}`/`]`/`},` 闭括号，文本拼接后各丢一处收尾——按 JSON 解析报错逐处补回。
 
 **下一步**：M-S3 场景集成仍 gate 在 P8 E1/E1b 收口之后；feat/audio 轨道代码已全量在 master，wt `nl-engine-audio` 可择机拆除（分支保留）。
+
+## feat/ecs merge 回 master：E1b 链全量合并 + 收口闸（主树，2026-11-09，merge `e2ac82c` + 收口 `6560b2c`）
+
+**动作**：用户「ECS合回Master」。前置：主树挂着的游戏循环立项文档先行提交（`bbd6983`，避免 merge 覆盖工作区改动）；audio example 33 个纯路径噪声产物还原。`git merge-tree --write-tree` 预检 **0 冲突**（反向同步 `2b5ecf6` 的红利）→ `git merge feat/ecs` 一次过（79 文件，E1b.0~E1b.5 全量：渲染集成/规模锚/点光/逐实例 PBR/2D 阴影/并行 tick，tags `ecs-e1b.0`~`ecs-e1b.5`）。合并后收口闸暴露一批**存量债**（均非合并破坏），全部当轮修复：
+
+1. **S7.0→S7.1 HUD 基线漏拍（存量债，s7-pulling 段遗留）**：`s2.0~s6.2` 共 16 用例 × 2 后端基线仍是 S7.0 stage 文本，统一签名 FAIL（512 px / maxDelta 240 = HUD 首行一行）。写 `tools/reshot-hud-s71.py`（带安全闸：仅 diff 落在单行文本签名内才覆盖，防把真渲染回归刷进基线）重拍 32 张，全部精确命中签名。
+2. **harness case 级 exe 覆盖**：`ecs-parallel` 卡 exe=nanite-scene（3 个 selftest 用例），但 render-spin 是 viewer 渲染用例 → harness 拿 nanite-scene 跑 `--scene` 必然 usage exit 2。`server.py exe_for` + `regression.py` 加 case 级 `exe` 覆盖（未声明时行为不变），render-spin 卡声明 viewer.exe。
+3. **harness case 级 cwd 覆盖**：`audio-tools debug` 快照存仓库根相对路径（音频轨道留档的 CWD 敏感问题），harness 固定 exe 目录 CWD 天然过不了。run 路径加 `"cwd": "{root}"` 支持，debug 卡声明之。
+4. **audio-s1 卡 expectLog 过期**：selftest 33/33→46/46（M-S2 加了 13 用例没同步卡片）；negative-prov 期望文案 `mismatch after re-render`→`hash mismatch`（check 输出口径早已变更）。
+5. **m-sc1 run-badtype 负向失效**：M-SC2/SC3 后缺省类型名已能解析成功（exit 0），负向改显式 `--type NoSuchType`（getEntryPoint code=5 干净报错 exit 1，意图不变）。
+6. **并行负载翻动两类**（`--jobs 4` 下偶发、`--jobs 1` 复跑即绿）：m-j5c-prep/selftest-jobsync（saturated pool 时序敏感）、m-sc3/selftest。最终闸按 docstring 纪律用 `--jobs 1`。
+
+**过程事故（当轮自纠，留档）**：①最终闸前 `git checkout -- example/`（本意清 audio 噪声）把 cases.json 五处修复 + 32 张重拍基线一并还原，闸打出 43 FAIL——未提交的修复混在 checkout 范围里，教训：**批量 checkout 前先核对范围是否覆盖刚做的未提交修复**；②首次分诊 `head -20` 截断失败分组，漏掉 s5-tris-far，重拍名单少 1 条（16 而非 15）——教训：**失败分组必须全量输出，截断统计会漏项**。
+
+**提交版本**：merge `e2ac82c` + 收口闸配套 `6560b2c`（36 文件：32 基线 + cases.json 5 处修复 + harness 2 文件 + reshot 脚本）+ 立项文档 `bbd6983`。feat/ecs 分支保留不删。
+
+**完成情况**：
+- **全量回归**：**406/406 ALL GREEN**（bytes 405 / near 1 / FAIL 0，`--jobs 1`，252s）——本仓首次 406 用例口径全绿。
+- **双后端构建**：DX12 / VULKAN 各 BUILD OK + selftest 16/16。
+- **wt_pool**：`close --track ecs --milestone E1b --tag ecs-e1b.5 --commit 09f6f86` PASS（报告 `.wt_pool_close/ecs-E1b.md`）；release 在 M-E1b.5 收官时已对称释放。
+- **wt 拆除**：`nl-engine-ecs` junction 两处（`.workbuddy` / `slang dist`）PowerShell 原生 API 只摘链接、目标完好 → `git worktree remove --force` + prune；`feat/ecs` 分支保留。
+
+**下一步**：E1/E1b 双 gate 解除 → M-S3（音频场景集成）与 M-GL 游戏循环链可开工；P9 真实资产验收 V1~V4 排期不变。

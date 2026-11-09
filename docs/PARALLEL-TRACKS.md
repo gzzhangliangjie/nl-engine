@@ -210,7 +210,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/ecs` | **E1a 收官**（2026-11-09，M-E0~E3 完成 tags `ecs-e0`~`ecs-e3`，merge commit `2d4ad49`）：`nl/scene` 内核 + `nanite-scene` 工具 + 展示台 `p8-ecs` 卡 4 条 + `docs/p8/ECS-TOOLS-GUIDE.md`；wt 保留，**E1b（渲染集成）后挂等 S6 收官**（tag `s6-done`）后另编号开工 |
+| ECS-lite 场景 | ~~`E:/UE_STUDY_2026/nl-engine-ecs`~~（**已拆**，2026-11-09：junction 两处 PowerShell 原生摘除 + `git worktree remove`，分支保留） | `feat/ecs`（**分支保留**） | **E1a + E1b 链全收官并 merge 回 master**（2026-11-09：E1a merge `2d4ad49`；E1b 链 merge `e2ac82c` + 收口闸 `6560b2c`，tags `ecs-e0`~`ecs-e1b.5`，全量回归 **406/406 ALL GREEN**）。`nl/scene` 内核 + 渲染集成（5 物体→50 物体规模锚/点光/逐实例 Cook-Torrance/2D 阴影/并行 tick）+ `ecs-e1b`/`ecs-parallel` 展示台卡 + `docs/p8/ECS-TOOLS-GUIDE.md`。收口闸修存量债 6 类（S7.1 HUD 基线漏拍 32 张、harness case 级 exe/cwd 覆盖、audio-s1 expectLog 过期、m-sc1 负向失效），详见 `docs/MILESTONES.md` merge 段 |
 
 ### 7.1d C# 脚本轨道（2026-11-09 立项，E4 脚本段解禁提前）
 
