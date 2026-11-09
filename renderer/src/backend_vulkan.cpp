@@ -69,7 +69,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, std::string& outError) override {
+              bool sceneMode, bool visbufMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -99,8 +99,11 @@ public:
         // setEntryName 即 SPIR-V pName，见 docs/SHADER-CONVENTIONS.md §2.4）。
         // M-E1b.0：sceneMode 不在此初始化 Scene（与 DX12 对称）；场景资源由
         // loadEcsScene 建立后才可绘制。
+        // M7.0：visbuf 优先于所有既有场景（吃 .nmesh，但走独立 vis 管线）。
         const bool sceneOk = sceneMode
             ? true
+            : (visbufMode
+            ? scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (skinMode
             ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (hizMode
@@ -111,7 +114,7 @@ public:
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))))));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))))));
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();
@@ -547,7 +550,31 @@ private:
             qcis.push_back(pqci);
         }
 
-        const char* deviceExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+        // M7.0（S7）：64 位 buffer 原子是 vis buffer 的硬前提。reportFeatures()
+        // 只做查询，真正启用必须在 vkCreateDevice 这里挂 feature 结构 + 扩展。
+        // 结构体是 Vulkan 1.4 头文件里独立的 VkPhysicalDeviceShaderAtomicInt64Features
+        // （已从 Vulkan12Features 拆出），直接挂 DeviceCreateInfo::pNext 即可；
+        // pEnabledFeatures 仍保留 legacy 全 0 结构（规范只禁止与 Features2 混用）。
+        VkPhysicalDeviceShaderAtomicInt64Features atom64Query{};
+        atom64Query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES;
+        VkPhysicalDeviceFeatures2 featuresQuery{};
+        featuresQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        featuresQuery.pNext = &atom64Query;
+        vkGetPhysicalDeviceFeatures2_(vulkanPhysicalDevice_, &featuresQuery);
+
+        std::vector<const char*> deviceExts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+        VkPhysicalDeviceShaderAtomicInt64Features atom64Enable{};
+        atom64Enable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES;
+        bool atom64Enabled = false;
+        if (atom64Query.shaderBufferInt64Atomics == VK_TRUE) {
+            // 只开 buffer 位：M7.0 的 vis buffer 是 RWStructuredBuffer<uint64_t>，
+            // 不需要 shared/image 两位，也不额外要求 VK_EXT_shader_image_atomic_int64。
+            atom64Enable.shaderBufferInt64Atomics = VK_TRUE;
+            deviceExts.push_back(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
+            atom64Enabled = true;
+        } else {
+            nl::core::log::warn("shaderBufferInt64Atomics unsupported; --mode visbuf will fail");
+        }
 
         VkPhysicalDeviceFeatures features{}; // 默认特性足够画一个清屏三角形
 
@@ -555,9 +582,10 @@ private:
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = static_cast<uint32_t>(qcis.size());
         dci.pQueueCreateInfos = qcis.data();
-        dci.enabledExtensionCount = sizeof(deviceExts) / sizeof(deviceExts[0]);
-        dci.ppEnabledExtensionNames = deviceExts;
+        dci.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
+        dci.ppEnabledExtensionNames = deviceExts.data();
         dci.pEnabledFeatures = &features;
+        if (atom64Enabled) dci.pNext = &atom64Enable;
 
         const VkResult r = vkCreateDevice_(vulkanPhysicalDevice_, &dci, nullptr, &vulkanDevice_);
         if (r != VK_SUCCESS) {

@@ -34,3 +34,7 @@ Desktop.ini
 # wt_pool 占坑闸锁文件（跨 worktree 共享，见 tools/wt_pool.py）
 .wt_pool_busy.json
 NodeEditor.json
+
+# M-SC0: dotnet build artifacts (script-api / examples)
+script/**/bin/
+script/**/obj/

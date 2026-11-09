@@ -29,7 +29,7 @@
 |---|---|---|
 | GPU-Driven 间接绘制骨架 | **= S4**（硬件光栅+GPU视锥剔除+indirect draw，原文即"从本步起进入 GPU-driven"），**不重复建** | 主线本体 |
 | VSM（虚拟阴影贴图） | **S15，插入 S9 之后**（合并原 `shadow-map` 穿插项，作 rasterized 阴影对照） | B 类，已排期 |
-| TSR（时域超分） | **S16，拆两段**：velocity/history 基建 **S7 后**先建（喂 S12 复用 motion vector），完整算法 S7 后轻量验证，最终 slot tonemap 前 | B 类，已排期 |
+| TSR（时域超分） | **S16，拆两段**：velocity/history 基建 **S7 后**先建（喂 S12 复用 motion vector），完整算法 S7 后轻量验证，最终 slot tonemap 前 | B 类，已排期。**2026-11-09 预研补**：jitter(Halton)+双帧矩阵+渲染/输出分辨率分离并入 M16.0；velocity 统一为完整逐像素版（S12 复用同一张，不是相机版）；**离屏 HDR RT + post-chain 为 SSR/S16/bloom 三家共享前置**，归 ROADMAP「后处理链」行只建一份；结论见 `s16/S16-PLAN.md` 预研结论节、UE-DIFFS D12 |
 | VT（虚拟纹理） | **跳过**：P9 V4 用几何 residency + 纹理随 page 流式，不引入 feedback-buffer VT | 范围决策已定 |
 
 ---
@@ -95,11 +95,12 @@
 - **增量阶梯**：绑定核心 API → 调用渲染 → 游戏逻辑脚本化。
 - **三处参考口径**：sol2（C++↔Lua 桥，最常用）/ 诸多社区实现；UE/bevy 无直接等价（据实标注）。
 
-### 2.6 3D 空间音频
+### 2.6 3D 空间音频（2026-11-09 方案变更：vendored miniaudio）
 
-- **为什么适合并行**：完全独立，不碰 GPU。
-- **增量阶梯**：单声源定位 → 距离衰减 → 遮挡 → 混响卷积。
-- **三处参考口径**：Steam Audio（开源，物理建模）/ bevy rodio（轻量）/ UE Audio（结构参考，只读）。
+- **为什么适合并行**：完全独立，不碰 GPU；A 类，不进渲染回归。
+- **增量阶梯（重写后 4 步）**：单声源播放 + 离线确定性 dump → 3D 定位/距离衰减/多声源 → 游戏内调试（console cvar + ImGui 声源面板）→ E1 场景集成。
+- **三处参考口径**：UE `AudioDebug.cpp`（只读定调试字段）/ Carrot `engine/audio/`（对象模型与绑定形状，不抄 AudioThread 与 OpenAL 底座）/ bevy `SpatialListener`（ECS 同步挂法）；上游 miniaudio 官方示例清单见 `P8-AUDIO-PLAN.md` §3。
+- **不在范围**：HRTF / 几何遮挡 / EFX 混响卷积 / Steam Audio / FMOD/Wwise 内容管线（目标只要「3D 音效 + 能调试」）。
 
 ---
 
@@ -168,19 +169,30 @@
 | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成（tags job-pool/job-scope/job-cluster/job-offline），已双向合并回 master，可视化证据图补交完成；M-J4 可选不排期（等 P9 V4） | 全部内容在 master `c136bcd`+；P9 V4 需要流式加载时按 §7.1b 重建 worktree |
 | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官 / M-A0~M-A5.4 全量 merge 回 master**（merge commit `5a1912f`，2026-11-09，tag `anim-ma1`~`anim-ma5c`）：nl/anim 纯逻辑层（采样/混合/状态机/1D blend space/FK/CPU LBS 蒙皮）+ anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页（CesiumMan/Fox Walk/Fox Run/RiggedFigure）+ Fox.glb 链路三修复；验收纪要 MILESTONES M-A 节 + ACTION-PLAN + ANIM-TOOLS-GUIDE；GPU 调色板等更大规模蒙皮资产再立项 |
 | 开发者控制台 | ~~`E:/UE_STUDY_2026/nl-engine-console`~~（worktree 拆除待批准，merge 已落地 2026-11-09） | `feat/console`（保留） | **已收官 / M-C0~C3 全量 merge 回 master**（merge commit `9e12cc6`，2026-11-09，tag `console-mc3`）：`core/console/` 纯逻辑内核（CVar 四类型 + ExecCode 四档退出码）+ ImGui 前端（`` ` `` 呼出 / Tab 补全 / ↑↓ 历史 / 可拖动缩放 / IME 解绑）+ installBuiltins（help/cvar.list/cvar.set）+ cam.*/hud.show 真参数回调 + panelShow 解耦面板与控制台；selftest 49/49、双后端构建+selftest 绿、展示台 console-mc3 卡五用例实跑（expectExit 2/0/0/1/3）；验收纪要 MILESTONES P8 M-C 节 + `docs/p8/CONSOLE-TOOLS-GUIDE.md` + `docs/screenshots/CONSOLE-EVIDENCE.md`；M-SC1 console 绑定解锁 | M-C0~C3 计划 `docs/p8/P8-CONSOLE-PLAN.md`；共享 junction；M-C4 级别增强（模糊补全/日志导出）需要时另立项 |
-| PBR 直射光 + 贴图采样（B 类穿插项专列） | `E:/UE_STUDY_2026/nl-engine-pbr-direct` | `feat/pbr-direct` | **进行中 / 2026-11-09 用户拍板开 wt**：S7 前置穿插项，提前做掉 PBR 直光使 S7 只剩 vis buffer + vertex pulling + 材质解析；完成后顺带解锁 PRT / Kulla-Conty 两个 GAMES202 点 | 计划 `docs/s0/PBR-DIRECT-PLAN.md`（已预写：t0 baseColor sRGB + t1 ORM 线性 + s0 共用 sampler、新开 b1 LightConstants、Cook-Torrance GGX、`--shading pbr`、tag `pbr-direct` 不占 m0.* 编号）；走渲染版交代（example/pbr-direct + cases.json + `--check` 退出 0），收口 merge 回 master；不进 kStage 总闸长线（tag 后全量跑一次即归位） |
+| PBR 直射光 + 贴图采样（B 类穿插项专列） | ~~`E:/UE_STUDY_2026/nl-engine-pbr-direct`~~（worktree 已移除，2026-11-09） | `feat/pbr-direct`（保留） | **已收官**（2026-11-09，tag `pbr-direct`，merge commit `e57173d` 全量合入 master）：mode 5 = Cook-Torrance 直射光（只编译进 psMain）+ t1 MR 贴图 + b1 LightConstants 80B + `--pbr-naive` sRGB 对照；双后端 bytes、textured 不变量不变、example/pbr-direct 5 用例；kStage=`pbr-direct`（17 对 exe=current HUD 基线随 bump 重拍）。**merge 后 PRT / Kulla-Conty 解锁，S7 只剩 vis buffer + vertex pulling + 材质解析** | 计划 `docs/s0/PBR-DIRECT-PLAN.md`（含收口偏差 6 条留痕）；验收纪要 `docs/MILESTONES.md` pbr-direct 节 |
 
 > 四个已建 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
 
 ### 7.1b 待建 worktree（已立项，执行排 P8 场景整合之后）
 
-2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree：
+2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree。**2026-11-09 用户指令提前解锁物理轨道**（见 §7.1e），寻路 / 音频仍排其后。
 
 | 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
 |---|---|---|---|
-| 寻路（NavMesh + A\*，从零写） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md` |
-| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics` | 已立项 `docs/p8/P8-PHYS-PLAN.md` |
-| 3D 空间音频（OpenAL Soft + 从零集成层） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md` |
+| 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废；新阶梯 = vendored + 封装 + 编辑器结合 + E1 集成） |
+| ~~物理（Jolt vendored 集成）~~ | **已建** `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics`（已建） | **已提前开工**，见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
+| 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md`（2026-11-09 全量重写；旧 OpenAL Soft + 自写解码器作废留痕 §7）；排期闸仍排 E1 后 |
+
+### 7.1e 物理轨道（2026-11-09 提前开工，M-P0~M-P3）
+
+| 轨道 | worktree 绝对路径 | 分支 | 状态 |
+|---|---|---|---|
+| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/physics` | **M-P0 / M-P1 / M-P2 收口（tags `phys-p0` / `phys-p1` / `phys-p2`）**：vendored Jolt v5.3.1 + `nl/physics` 最小世界 + 4 层碰撞矩阵与 owner↔BodyID 双向关联 + 6 箱体堆叠稳定/休眠岛三用例；`phys-tools` layers/check-layers/stack/check-stack；M-P0 落球 + M-P1 层矩阵 TSV 双基线逐字节回归锁死；A 类工具版交代，不进 `kStage`/渲染回归 |
+
+- 用户指令「建 feat/physics 开发物理模块内容」= 提前解锁排期闸（计划 §排期约束括号内已允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3（序列化 + Inspector）之后**，不随本轮解锁。
+- 三处口径二次核实（2026-11-09）：Carrot `engine/physics/` 2902 行 Jolt 集成层 + 本地 vendored JoltPhysics **v5.3.1**；bevy 本体无物理 crate（仅 `examples/movement/physics_in_fixed_timestep.rs` 示例），生态 avian，不作口径；UE 5.8.4 只有自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`），**全树无 Jolt 后端、ThirdParty 下亦无 PhysX SDK**——立项文档里「UE 官方提供 Jolt 后端」为误记，已勘误并落 `UE-DIFFS.md` D10。
+- **M-P1 状态（2026-11-09）**：4 层对称矩阵（对象层与宽相层 1:1）、userData 索引式双向关联、四用例拦住/穿透轨迹、M-P0 基线 MD5 逐字节一致；见 `example/phys-p1/` 与 `MILESTONES.md` M-P1 四栏。
+- **选型二次拍板（2026-11-09）**：用户「物理用现成的、没必要从头写、成本太高；纠结的只是用哪个」→ 不自研方向不变，**继续走 Jolt 5.3.1**；例外理由从「UE 口径 / 业界共识」改写为**成本取舍 + 工程适配**（本机唯一可得 / MIT / 纯 CPU / 确定性 / 自带接口 / Carrot 集成层参照）。UE 口径不参与选型，仅作只读对照。候选对比与换库代价见 `NON-RENDER-ROADMAP.md` 头部修订与 `P8-PHYS-PLAN.md` §选型评审结论。
 
 ### 7.1c ECS-lite 场景轨道（2026-11-09 立项，E1a 先行）
 
@@ -196,7 +208,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（待建，junction 共享 `.workbuddy`/`slang dist`） | `feat/script`（待建） | M-SC0~SC3（`docs/p8/P8-SCRIPT-PLAN.md`）：hosting 内核 → console 绑定 → ECS 数据面绑定 → 热更收口 |
+| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（**已建**，wt_pool track `script` active；junction 共享 `.workbuddy`/`slang dist`） | `feat/script` | M-SC0~SC3（`docs/p8/P8-SCRIPT-PLAN.md`）：hosting 内核 → console 绑定 → ECS 数据面绑定 → 热更收口。**M-SC0 已收口（2026-11-09，tag `m-sc0`）**：`nl::script::Vm` hosting 内核 + `nl-script` 工具（selftest 17/17 含热重编行为更新）+ 展示台 m-sc0 卡 + SCRIPT-TOOLS-GUIDE |
 
 ### 7.2 固化文档闸
 

@@ -119,26 +119,68 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     texture_ = device->createTexture(texDesc);
     if (!texture_) { outError = "createTexture failed for base color texture"; return false; }
 
+    // pbr-direct：metallicRoughness 贴图（t1）。RGBA8_UNORM——MR 是线性数据
+    // （G=roughness B=metallic，glTF 2.0 spec §3.9.3），千万别学 baseColor 上
+    // SRGB 视图格式。无 MR 贴图的材质退 1x1 dummy（roughness=1, metallic=0）。
+    pbrBaseColorFactor_[0] = prim.baseColorFactor[0];
+    pbrBaseColorFactor_[1] = prim.baseColorFactor[1];
+    pbrBaseColorFactor_[2] = prim.baseColorFactor[2];
+    pbrBaseColorFactor_[3] = prim.baseColorFactor[3];
+    pbrMetallicFactor_  = prim.metallicFactor;
+    pbrRoughnessFactor_ = prim.roughnessFactor;
+    {
+        nvrhi::TextureDesc mrDesc;
+        mrDesc.format = nvrhi::Format::RGBA8_UNORM;
+        mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        mrDesc.keepInitialState = true;
+        if (prim.hasMR) {
+            mrDesc.width = prim.mrWidth;
+            mrDesc.height = prim.mrHeight;
+        } else {
+            mrDesc.width = 1;
+            mrDesc.height = 1;
+        }
+        const std::string mrName = std::string(modelFile) + "MetallicRoughness";
+        mrDesc.debugName = mrName.c_str();
+        mrTexture_ = device->createTexture(mrDesc);
+        if (!mrTexture_) { outError = "createTexture failed for metallicRoughness texture"; return false; }
+    }
+
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
     sampler_ = device->createSampler(samplerDesc);
     if (!sampler_) { outError = "createSampler failed"; return false; }
 
-    // 布局槽位与 model.slang 的 register(b0/t0/s0) 一致；
+    // 布局槽位与 model.slang 的 register(b0/t0/t1/s0/b0/b1) 一致；
     // Vulkan 侧由 NVRHI 默认 VulkanBindingOffsets 映射为 CB=256 / SRV=0 / Sampler=128，
-    // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。
+    // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。b1 = LightConstants
+    //（slot 1，pbr-direct 新开；SceneConstants 160 B 老规矩不动）。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
     bindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
 
     nvrhi::BindingSetDesc setDesc;
     setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrTexture_))
            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
            .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    if (!lightConstants_) {
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for light constants"; return false; }
+    }
+    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_));
     bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
     if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
 
@@ -171,6 +213,14 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
     upload->writeTexture(texture_, 0, 0, prim.baseColorRGBA.data(),
                          static_cast<size_t>(texWidth) * 4u);
+    // pbr-direct：MR 贴图同一命令列表上传（线性数据，无 gamma 语义）。
+    if (prim.hasMR) {
+        upload->writeTexture(mrTexture_, 0, 0, prim.metallicRoughnessRGBA.data(),
+                             static_cast<size_t>(prim.mrWidth) * 4u);
+    } else {
+        const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
+        upload->writeTexture(mrTexture_, 0, 0, dummyMR, 4u);
+    }
     upload->close();
     device->executeCommandList(upload);
 
@@ -181,6 +231,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
                         " triangles=", triangleCount_, " indices=", indexCount_,
                         " | baseColor ", texWidth, "x", texHeight,
+                        " | mr ", (prim.hasMR ? "tex" : "dummy"),
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -369,6 +420,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         clusterMeta.push_back(0);                      // pad
     }
     const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
+    maxTriPerCluster_ = maxTriCount;                    // M7.0：visbuf triId 8 位断言
 
     // M4.1：簇包围球（世界空间 center.xyz + radius.w，M1.0 Ritter 近似产物）。
     // 剔除开启时才需要；nm.bounds 与 nm.meshlets 一一对应。
@@ -1328,6 +1380,94 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
 // 本帧绘制会在同一个环形槽写入新值，但那发生在本函数读完成之后，无竞争）。
 // mapBuffer 内部等待 lastUseFence（DX12 d3d12-buffer.cpp / Vulkan 同构），两帧
 // 延迟下正常零等待，不构成主循环里的等待型 map。
+// ============================================================================
+// M7.0（S7.0）：visibility buffer 打包写入 + 可视化。
+// initCull 的 .nmesh / vertex pulling 全套资源原样复用（frustum 恒关 = 全簇全画，
+// 遮挡关系交给硬件深度测试 + 64 位 atomicMin），这里只追加：
+//   visbuf.slang 四入口 / u64 vis buffer（宽×高）/ 16B VisConstants / 两个绑定布局。
+// 尺寸相关的 buffer + binding set 与两条 PSO 分别在 ensureVisbufTargets /
+// ensurePipelines 里建；每帧三段式 pass 编排在 draw() 的 visbuf 分支。
+// ============================================================================
+bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
+                       const char* vsEntry, const char* psEntry,
+                       const char* nmeshFile, std::string& outError) {
+    if (!initCull(device, shaderSuffix, vsEntry, psEntry, nmeshFile, false, outError))
+        return false;
+    visbuf_ = true;
+    visbufDevice_ = device;
+
+    // 打包格式的硬前提（S7-PLAN §1）：triId 8 位、clusterId 24 位。
+    if (maxTriPerCluster_ > 256u) {
+        outError = "visbuf: a cluster has " + std::to_string(maxTriPerCluster_) +
+                   " triangles, packing allows 256 (triId is 8 bits)";
+        return false;
+    }
+    if (clusterCount_ >= (1u << 24)) {
+        outError = "visbuf: cluster count " + std::to_string(clusterCount_) +
+                   " exceeds the 24-bit clusterId field";
+        return false;
+    }
+
+    auto visPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/visbuf." + artifact + "." + shaderSuffix;
+    };
+    auto loadVisShader = [&](const char* artifact, nvrhi::ShaderType type,
+                             nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(visPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load visbuf shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+        desc.setShaderType(type).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for visbuf ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadVisShader("vsvisraster", nvrhi::ShaderType::Vertex, vsVisRaster_) ||
+        !loadVisShader("psvisraster", nvrhi::ShaderType::Pixel, psVisRaster_) ||
+        !loadVisShader("vsvisviz", nvrhi::ShaderType::Vertex, vsVisViz_) ||
+        !loadVisShader("psvisviz", nvrhi::ShaderType::Pixel, psVisViz_))
+        return false;
+
+    // VisConstants（visbuf.slang b1，16B）：(width, height, vizMode, unused)。
+    // 每帧写一次，volatile CB 避免 frame-in-flight 相互覆盖。
+    nvrhi::BufferDesc vcDesc;
+    vcDesc.byteSize = 16;
+    vcDesc.isConstantBuffer = true;
+    vcDesc.isVolatile = true;
+    vcDesc.maxVersions = 16;
+    vcDesc.debugName = "VisConstants";
+    visConstants_ = device->createBuffer(vcDesc);
+    if (!visConstants_) { outError = "createBuffer failed for vis constants"; return false; }
+
+    // §2.7：每条管线必须单一 BindingSet。raster = b0+b1+t1..t4+u0，
+    // viz = b1+t0（同一块 u64 buffer 的 SRV 视角），各自一个 set。
+    // Vulkan 下 b→256、t→0、u→384 的 shift 由 CMake 编译参数保证。
+    nvrhi::BindingLayoutDesc rDesc;
+    rDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
+    visRasterLayout_ = device->createBindingLayout(rDesc);
+    if (!visRasterLayout_) { outError = "createBindingLayout failed for vis raster"; return false; }
+
+    nvrhi::BindingLayoutDesc vDesc;
+    vDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0));
+    visVizLayout_ = device->createBindingLayout(vDesc);
+    if (!visVizLayout_) { outError = "createBindingLayout failed for vis viz"; return false; }
+
+    return true;
+}
+
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
     if (!cull_ || !frustumCull_ || !hud) return;
     // M4.2：cull pass 计时轮询。必须在 hud_.build() 之前调用（viewer 每帧重建
@@ -1749,6 +1889,52 @@ bool Scene::ensureHizTargets(nvrhi::IDevice* device, float viewportW, float view
     return true;
 }
 
+bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                                std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    if (w == 0 || h == 0) { outError = "visbuf: zero viewport"; return false; }
+    if (visBuffer_ && visW_ == w && visH_ == h && visRasterSet_ && visVizSet_) return true;
+    visW_ = w;
+    visH_ = h;
+
+    // 每像素一个 u64：高 32 = asuint(deviceZ)，低 32 = clusterId<<8 | triId。
+    // structStride=8 是 RWStructuredBuffer<uint64_t> 的 UAV 视角要求；
+    // canHaveUAVs 同时让 NVRHI 能建 DX12 的 R32_UINT typed clear UAV
+    // （clearBufferUInt(0xFFFFFFFF) → 每个 u32 全 1 → u64 = VIS_EMPTY）。
+    // keepInitialState：每条命令列表从 CopyDest 出发，帧内由状态跟踪动态晋升
+    // clear(CopyDest/UAV) → raster(UAV) → viz(ShaderResource)，visibleList_ 同款。
+    nvrhi::BufferDesc bd;
+    bd.byteSize = static_cast<std::uint64_t>(w) * h * sizeof(std::uint64_t);
+    bd.structStride = 8;
+    bd.canHaveUAVs = true;
+    bd.initialState = nvrhi::ResourceStates::CopyDest;
+    bd.keepInitialState = true;
+    bd.debugName = "VisBufferU64";
+    visBuffer_ = device->createBuffer(bd);
+    if (!visBuffer_) { outError = "createBuffer failed for vis buffer"; return false; }
+
+    nvrhi::BindingSetDesc rSet;
+    rSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+        .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, visConstants_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
+    visRasterSet_ = device->createBindingSet(rSet, visRasterLayout_);
+    if (!visRasterSet_) { outError = "createBindingSet failed for vis raster"; return false; }
+
+    // viz set 把同一块 buffer 绑成 SRV(t0)：与 raster 的 UAV(u0) 只是两个视图，
+    // 不涉及拷贝。§2.7 单 BindingSet 指每条管线一个 set，不是全场只能有一个。
+    nvrhi::BindingSetDesc vSet;
+    vSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, visConstants_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_));
+    visVizSet_ = device->createBindingSet(vSet, visVizLayout_);
+    if (!visVizSet_) { outError = "createBindingSet failed for vis viz"; return false; }
+    return true;
+}
+
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
     // M-E1b.0：ECS 场景 pipeline（vsScene_/psScene_/sceneInputLayout_）。
@@ -1816,6 +2002,40 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
         // 深度测试/写入关（缺省即关）：覆盖层画在主场景之上，只读金字塔。
         vizPSO_ = device->createGraphicsPipeline(vDesc, info);
         if (!vizPSO_) { outError = "createGraphicsPipeline failed for hiz viz"; return false; }
+    }
+    // M7.0（S7.0）：visbuf 两条管线。必须排在 cull 分支之前——visbuf 复用 cull_
+    // 的资源通路，但那四套 (fill×cull) 管线在 visbuf 下完全用不上。
+    if (visbuf_) {
+        if (visRasterPSO_ && visVizPSO_) return true;
+        // 簇光栅：无顶点输入（VS 只读 SV_InstanceID/SV_VertexID + SSBO），
+        // 深度测试照旧；PS 的 SV_Target 只是占位，真正产物是 u0 的 atomicMin。
+        nvrhi::GraphicsPipelineDesc rDesc;
+        rDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+             .setVertexShader(vsVisRaster_)
+             .setFragmentShader(psVisRaster_)
+             .addBindingLayout(visRasterLayout_);
+        rDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::Back);
+        rDesc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
+        visRasterPSO_ = device->createGraphicsPipeline(rDesc, info);
+        if (!visRasterPSO_) { outError = "createGraphicsPipeline failed for vis raster"; return false; }
+
+        // 全屏可视化：三条顶点的大三角形，深度测试/写入关（缺省即关），
+        // 整屏覆盖光栅 pass 的占位色。M7.1 会在这里换成 material pass。
+        nvrhi::GraphicsPipelineDesc vDesc;
+        vDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+             .setVertexShader(vsVisViz_)
+             .setFragmentShader(psVisViz_)
+             .addBindingLayout(visVizLayout_);
+        vDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        visVizPSO_ = device->createGraphicsPipeline(vDesc, info);
+        if (!visVizPSO_) { outError = "createGraphicsPipeline failed for vis viz"; return false; }
+        return true;
     }
     // M4.0（S4.0）：cull 模式走 vertex pulling——pipeline 无顶点输入。
     if (cull_) {
@@ -1889,6 +2109,10 @@ void Scene::invalidatePipelines() {
     // M6.0：hiz 管线随主管线一起重建（纹理/绑定集按视口尺寸懒建，不受影响）。
     prepassPSO_ = nullptr;
     vizPSO_ = nullptr;
+    // M7.0：visbuf 两条管线同样随 framebuffer 格式重建；
+    // vis buffer / 两个 binding set 按视口尺寸懒建，不在这里清。
+    visRasterPSO_ = nullptr;
+    visVizPSO_ = nullptr;
     pipelineSceneBack_ = nullptr;      // M-E1b.0：ECS 场景四套随 resize 一起重建
     pipelineSceneNone_ = nullptr;
     pipelineSceneWireBack_ = nullptr;
@@ -2024,6 +2248,23 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     texture_ = device->createTexture(texDesc);
     if (!texture_) { outError = "createTexture failed for skin white texture"; return false; }
 
+    // pbr-direct：skin 场景的 MR 贴图也是 1x1 dummy（rigged 资产暂不解析 PBR
+    // 材质）：roughness=1、metallic=0，psMain 的 pbr 分支绑定面必须齐（§2.7）。
+    {
+        nvrhi::TextureDesc mrDesc = texDesc;
+        mrDesc.debugName = "SkinDummyMR";
+        mrTexture_ = device->createTexture(mrDesc);
+        if (!mrTexture_) { outError = "createTexture failed for skin dummy MR"; return false; }
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for skin light constants"; return false; }
+    }
+
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
     sampler_ = device->createSampler(samplerDesc);
@@ -2032,15 +2273,19 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))    // pbr-direct：psMain 引用 t1
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));   // b1 LightConstants
     bindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
 
     nvrhi::BindingSetDesc setDesc;
     setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrTexture_))
            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
-           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_));
     bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
     if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
 
@@ -2067,6 +2312,8 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
     const std::uint8_t white[4] = { 255, 255, 255, 255 };
     upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+    const std::uint8_t dummyMR[4] = { 0, 255, 0, 255 };   // roughness=1, metallic=0
+    upload->writeTexture(mrTexture_, 0, 0, dummyMR, sizeof(dummyMR));
     upload->close();
     device->executeCommandList(upload);
 
@@ -2526,6 +2773,67 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // M4.0（S4.0）：vertex pulling 路径——无顶点缓冲，几何由 VS 从 SSBO 拉取，
     // 单 drawIndexedIndirect（instanceCount=总簇数）全簇全画。
     if (cull_) {
+        // ---- M7.0（S7.0）：vis buffer 三段式（Carrot 的 clear → rasterize → debug
+        // 编排；M7.1 把 debug 换成 material pass）。frustum 恒关 = 全簇全画，
+        // 遮挡由硬件深度测试 + 64 位 atomicMin 共同决定。----
+        if (visbuf_) {
+            if (!visbufFailed_) {
+                std::string visErr;
+                if (!ensureVisbufTargets(visbufDevice_, viewport.maxX - viewport.minX,
+                                         viewport.maxY - viewport.minY, visErr)) {
+                    nl::core::log::deviceError("visbuf", visErr);
+                    visbufFailed_ = true;   // 只报一次，后续帧跳过 vis 段
+                }
+            }
+            if (!visbufFailed_ && visRasterPSO_ && visVizPSO_) {
+                // (1) b0 只写 MVP（visbuf.slang 的 b0 与 model.slang 同 160B 布局）。
+                SceneConstants cb{};
+                std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
+                std::memcpy(cb.model, params.model, sizeof(cb.model));
+                std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
+                cb.options[0] = static_cast<float>(params.shading);
+                cmd->writeBuffer(constants_, &cb, sizeof(cb));
+
+                // (2) b1 = (宽, 高, 可视化档, 未用)。宽高用 float 传递，像素数
+                // ≤2^24 时无损；shader 侧 uint() 还原。
+                const float vc[4] = {static_cast<float>(visW_), static_cast<float>(visH_),
+                                     static_cast<float>(params.visVizMode), 0.f};
+                cmd->writeBuffer(visConstants_, vc, sizeof(vc));
+
+                // (3) clear = max。clearBufferUInt 把整块 buffer 的每个 u32 写成
+                // 0xFFFFFFFF → 每个 u64 = 0xFFFFFFFFFFFFFFFF = VIS_EMPTY；
+                // 任意真实写入的打包值都小于它，故不需要 UE 的 cluster+1 空哨兵。
+                // 必须在首个 setGraphicsState 之前（Vulkan 实现会 endRenderPass）。
+                cmd->clearBufferUInt(visBuffer_, 0xFFFFFFFFu);
+
+                // (4) 簇光栅：PS 对 u64 做 InterlockedMin，深度测试照旧。
+                nvrhi::GraphicsState rstate;
+                rstate.setPipeline(visRasterPSO_)
+                      .setFramebuffer(framebuffer)
+                      .addBindingSet(visRasterSet_)
+                      .setIndexBuffer(nvrhi::IndexBufferBinding()
+                          .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT)
+                          .setOffset(0));
+                rstate.viewport.addViewportAndScissorRect(viewport);
+                rstate.setIndirectParams(indirectArgs_);
+                cmd->setGraphicsState(rstate);
+                cmd->drawIndexedIndirect(0, 1);
+
+                // (5) 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
+                // 深度测试/写入关，整屏覆盖 (4) 的占位输出。
+                nvrhi::GraphicsState vstate;
+                vstate.setPipeline(visVizPSO_)
+                      .setFramebuffer(framebuffer)
+                      .addBindingSet(visVizSet_);
+                vstate.viewport.addViewportAndScissorRect(viewport);
+                cmd->setGraphicsState(vstate);
+                nvrhi::DrawArguments vargs;
+                vargs.setVertexCount(3);   // 覆盖屏的大三角形
+                cmd->draw(vargs);
+            }
+            return;
+        }
+
         SceneConstants cb{};
         std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
         std::memcpy(cb.model, params.model, sizeof(cb.model));
@@ -2799,6 +3107,26 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
     cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
 
+    // pbr-direct：b1 LightConstants 同款 volatile 每帧写。只有 init/initSkin 的
+    // 绑定集携带 b1（psMain 引用）；initCluster 场景（lod 模式同样走这里）没有
+    // b1 槽位、句柄为空，绝不能碰——写空句柄 = NVRHI 内部空指针段错误。
+    if (lightConstants_) {
+        LightConstants lc{};
+        lc.lightDirW[0] = params.lightDir[0];   // 方向沿用 b0 g_lightDir 的口径与缺省值
+        lc.lightDirW[1] = params.lightDir[1];
+        lc.lightDirW[2] = params.lightDir[2];
+        lc.lightColor[0] = 1.0f; lc.lightColor[1] = 1.0f; lc.lightColor[2] = 1.0f;
+        lc.lightColor[3] = 2.5f;                // 白光强度 2.5：金属体无 IBL 只剩直射高光
+        lc.cameraPos[0] = params.eye[0];
+        lc.cameraPos[1] = params.eye[1];
+        lc.cameraPos[2] = params.eye[2];
+        std::memcpy(lc.baseColorFactor, pbrBaseColorFactor_, sizeof(lc.baseColorFactor));
+        lc.mrFactor[0] = pbrMetallicFactor_;
+        lc.mrFactor[1] = pbrRoughnessFactor_;
+        lc.mrFactor[2] = params.options[0];     // --pbr-naive 对照开关（viewer 填 1）
+        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
+    }
+
     // M0.8：pipeline 按 (fill × cull) 四套里选一套，shader 不变。
     nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
         ? (params.cullBack ? pipelineWireBack_ : pipelineWireNone_)
@@ -2923,6 +3251,27 @@ void Scene::shutdown() {
     inputLayout_ = nullptr;
     sampler_ = nullptr;
     texture_ = nullptr;
+    // M7.0：vis buffer 资源必须在 device 存活期间释放（同上）。
+    visbuf_ = false;
+    visbufDevice_ = nullptr;
+    visbufFailed_ = false;
+    visW_ = visH_ = 0;
+    visRasterPSO_ = nullptr;
+    visVizPSO_ = nullptr;
+    visRasterSet_ = nullptr;
+    visVizSet_ = nullptr;
+    visRasterLayout_ = nullptr;
+    visVizLayout_ = nullptr;
+    visBuffer_ = nullptr;
+    visConstants_ = nullptr;
+    vsVisRaster_ = nullptr;
+    psVisRaster_ = nullptr;
+    vsVisViz_ = nullptr;
+    psVisViz_ = nullptr;
+    maxTriPerCluster_ = 0;
+    // pbr-direct：新资源句柄同样要在 device 存活期间释放。
+    mrTexture_ = nullptr;
+    lightConstants_ = nullptr;
     constants_ = nullptr;
     indexBuffer_ = nullptr;
     vertexBuffer_ = nullptr;

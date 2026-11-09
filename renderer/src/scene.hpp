@@ -42,6 +42,17 @@ struct SceneConstants {
 };
 static_assert(sizeof(SceneConstants) == 160, "cbuffer layout must match shader");
 
+// pbr-direct：与 model.slang 的 LightConstants cbuffer（b1）逐字节对应（80 B）。
+// 不塞进 SceneConstants——它严格 160 B 且禁整块 memcpy 的老规矩不变。
+struct LightConstants {
+    float lightDirW[4];        // xyz = 指向光源的方向（与 b0 g_lightDir 同口径），w 未用
+    float lightColor[4];       // rgb = 颜色，a = 强度
+    float cameraPos[4];        // xyz = 世界空间相机位置（FrameParams.eye）
+    float baseColorFactor[4];  // glTF baseColorFactor
+    float mrFactor[4];         // x = metallicFactor，y = roughnessFactor，z = pbr-naive 对照开关
+};
+static_assert(sizeof(LightConstants) == 80, "cbuffer layout must match shader");
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -92,6 +103,15 @@ public:
     bool initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
                  const char* vsEntry, const char* psEntry,
                  const char* nmeshFile, std::string& outError);
+
+    // M7.0（S7.0）：visibility buffer 打包写入 + 可视化。复用 initCull 的全部
+    // .nmesh / vertex pulling 资源（frustum 恒关 = 全簇全画），再追加一个
+    // RWStructuredBuffer<uint64_t>（宽×高）与两条管线。每帧三段式：
+    //   clearBufferUInt(0xFFFFFFFF) → 簇光栅 atomicMin 写 vis → 全屏 viz 解包输出。
+    // 64 位布局/打包函数唯一权威见 renderer/shaders/visbuf_common.slangh。
+    bool initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
+                    const char* vsEntry, const char* psEntry,
+                    const char* nmeshFile, std::string& outError);
 
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
@@ -162,6 +182,11 @@ public:
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
             return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
                    && pipelineSceneWireNone_ && !sceneBatches_.empty();
+        // M7.0：visbuf 复用 cull_ 的资源通路，但自己的两条管线才是判据——
+        // cull 的四套 (fill×cull) 管线在 visbuf 下不必建（ensurePipelines 分支）。
+        // vis buffer / 两个 binding set 随视口尺寸在 draw() 里懒建，不进 ready()：
+        // backend 正是「!ready() 才调 ensurePipelines」，把它们算进来会首帧死锁。
+        if (visbuf_) return visRasterPSO_ && visVizPSO_;
         if (cull_)
             return pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_
                        && pipelineCullWireNone_ && cullBindingSet_;
@@ -216,6 +241,15 @@ private:
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;
     nvrhi::TextureHandle          texture_;
+    // pbr-direct：metallicRoughness 贴图（t1，RGBA8_UNORM 线性数据；skin 场景
+    // 是 1x1 dummy）+ b1 LightConstants volatile CB。仅 init / initSkin 的绑定集
+    // 携带这两个槽位——pbr 分支只编译进 psMain，cluster/cull/dag 管线的 SPIR-V
+    // 不引用它们（t1 在那边是 StructuredBuffer，同槽异型是 Vulkan 布局非法）。
+    nvrhi::TextureHandle          mrTexture_;
+    nvrhi::BufferHandle           lightConstants_;
+    float pbrBaseColorFactor_[4] = {1.f, 1.f, 1.f, 1.f};
+    float pbrMetallicFactor_     = 1.0f;
+    float pbrRoughnessFactor_    = 1.0f;
     nvrhi::SamplerHandle          sampler_;
     nvrhi::InputLayoutHandle      inputLayout_;
     nvrhi::BindingLayoutHandle    bindingLayout_;
@@ -248,6 +282,7 @@ private:
     // ---- M4.1（S4.1）：GPU 视锥剔除（bevy cull_clusters.wesl 蓝本）----
     bool                          frustumCull_ = false;   // --frustum off 时整条路径旁路
     std::uint32_t                 clusterCount_ = 0;      // 总簇数（static dispatch 用）
+    std::uint32_t                 maxTriPerCluster_ = 0;  // M7.0：triId 8 位打包的断言依据
     nvrhi::BufferHandle           clusterSpheres_;  // StructuredBuffer<float4>，世界空间球
     nvrhi::BufferHandle           visibleList_;     // StructuredBuffer<uint>，compute append / VS 读
     nvrhi::ShaderHandle           csCull_;
@@ -384,6 +419,27 @@ private:
     bool                         hizFailed_ = false;   // 懒建失败只报一次，后续帧跳过 hiz
     bool ensureHizTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                           std::string& outError);
+
+    // ---- M7.0（S7.0）：visibility buffer ----
+    // 介质 = RWStructuredBuffer<uint64_t>，长度 宽×高。vendored NVRHI 全树无
+    // R64 纹理格式（预研实测），故从 UE/bevy 的 image atomic 改走 buffer atomic；
+    // 打包/clear/原子方向全部保持 Option A 口径，偏离登记 docs/s5/UE-DIFFS.md。
+    // 尺寸随视口，在 draw() 里懒建（与 ensureHizTargets 同一套纪律）。
+    bool                         visbuf_ = false;
+    nvrhi::IDevice*              visbufDevice_ = nullptr;
+    std::uint32_t                visW_ = 0, visH_ = 0;
+    nvrhi::ShaderHandle          vsVisRaster_, psVisRaster_, vsVisViz_, psVisViz_;
+    nvrhi::BufferHandle          visBuffer_;      // u64 buffer，宽×高
+    nvrhi::BufferHandle          visConstants_;   // volatile CB 16B（b1）
+    nvrhi::BindingLayoutHandle   visRasterLayout_; // b0 + b1 + t1..t4 + u0
+    nvrhi::BindingSetHandle      visRasterSet_;
+    nvrhi::BindingLayoutHandle   visVizLayout_;    // b1 + t0
+    nvrhi::BindingSetHandle      visVizSet_;
+    nvrhi::GraphicsPipelineHandle visRasterPSO_;
+    nvrhi::GraphicsPipelineHandle visVizPSO_;
+    bool                         visbufFailed_ = false;  // 懒建失败只报一次
+    bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                             std::string& outError);
 };
 
 } // namespace nl::renderer::detail

@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S6.2 Hi-Z toggle + pre/post cull counts (runtime switch, occluded cluster readback)";
+    "S7.0 visibility buffer u64 packing + cluster/triangle viz";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -68,6 +68,11 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
+    // M7.0：visbuf.slang 四入口 × 双目标。
+    {"visbuf.vsvisraster", true}, {"visbuf.vsvisraster", false},
+    {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
+    {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
+    {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -113,11 +118,12 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
-                                           bool hizMode, bool sceneMode) {
+                                           bool hizMode, bool sceneMode, bool visbufMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
-    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode;
+    // M7.0：visbuf 模式同样吃 .nmesh（复用 M4 的簇数据）。
+    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -149,7 +155,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
-                                 hizMode, sceneMode, r->impl_->error)) {
+                                 hizMode, sceneMode, visbufMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

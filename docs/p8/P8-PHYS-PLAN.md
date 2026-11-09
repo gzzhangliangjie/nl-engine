@@ -1,6 +1,6 @@
 # P8-PHYS-PLAN — 物理系统（Jolt vendored 集成，A 类并行轨道，2026-11-08 立项）
 
-> 轨道归属：`NON-RENDER-ROADMAP.md` 候选总表「物理（Jolt 集成）」行（★★★）。用户拍板（2026-11-08）：**vendored Jolt（MIT）不自研**——原则例外，三处证据（Carrot physics 即 Jolt 集成层 / UE 5.x 官方提供 Jolt 后端 / bevy 生态 avian，无一从零写求解器）。
+> 轨道归属：`NON-RENDER-ROADMAP.md` 候选总表「物理（Jolt 集成）」行（★★★）。用户拍板（2026-11-08）：**vendored Jolt（MIT）不自研**——总原则的首例例外（2026-11-09 寻路跟进同类拍板，改 vendored Recast/Detour，见 `P8-NAV-PLAN.md`），三处证据（Carrot physics 即 Jolt 集成层 / UE 自研 Chaos 工业终态 / bevy 本体无物理、生态 avian），三条路径均不要求我们自己写求解器。**2026-11-09 勘误**：原写「UE 5.x 官方提供 Jolt 后端」不成立——本机 UE 5.8.4 `Engine/Source` + `Engine/Plugins` 递归扫描无任何 Jolt 文件，官方物理只有 Chaos；差异已落 `docs/s5/UE-DIFFS.md` D10，轨道内 M-P0 已收口（tag `phys-p0`）。
 > **执行排期：放到场景整合之后**——物理体 / 碰撞层吃 P8 E1（ECS-lite 场景：多物体 / 变换层级）与 E3（序列化 + Inspector，碰撞体参数要可编辑）。先立项出计划，执行在 P8 E1/E3 落地后启动。
 > 届时按 `AGENTS.md` 并行轨道纪律新建 `feat/physics` worktree（junction 共享），验收走**工具版交代**（A 类：不进 `kStage`、不进渲染回归）。
 

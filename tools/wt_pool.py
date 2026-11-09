@@ -73,7 +73,9 @@ TRACKS = {
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
-        "branch": "feat/physics", "state": "planned",
+        "branch": "feat/physics", "state": "active",
+        "note": "M-P0 opened 2026-11-09 by user instruction (schedule gate lifted); "
+                "M-P5 still gated on P8 E3",
     },
     "audio": {
         "wt": "E:/UE_STUDY_2026/nl-engine-audio",
@@ -81,7 +83,8 @@ TRACKS = {
     },
     "pbr-direct": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
-        "branch": "feat/pbr-direct", "state": "active",
+        "branch": "feat/pbr-direct", "state": "closed",
+        "note": "merged to master e57173d (tag pbr-direct); wt removed 2026-11-09, branch kept",
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",

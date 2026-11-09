@@ -1413,3 +1413,126 @@
 **双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
 
 **下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
+## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
+
+**动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。
+
+**提交版本**：`d277bc7`（feat/pbr-direct，代码+example）+ 本条固化提交（docs），tag `pbr-direct`
+
+**完成情况**：
+- 机械判据：`--shading pbr` 双后端 PNG **逐字节相同**（MD5 `54ff8a33…`，bytes 档）；deviceErrors=0 ×2、调试层零输出；selftest 16/16 ×2；32 个 shader 产物魔数全 ok（单源双目标）。
+- 不变量判据：不带新参数行为不变——textured 基线 MD5 `7e528087…` 与 `example/m0.4` 冻结基线逐字节一致（双后端同 MD5）；回归 spot：s4.0 4/4 bytes、s5.1/s5-traverse-far 2/2 bytes（cluster/cull/dag 管线像素零扰动）。
+- sRGB 对照（验收判据 3）：`--pbr-naive`（误用 UNORM 直读）泛灰偏亮、高光对比糊掉；正确路径深色金属 + 金色眼 GGX 高光。Suzanne MR 实测 metallic≈0.98 / roughness≈0.32——无 IBL 直射光下金属只剩高光，身体深色是物理正确行为（S9 IBL 的活教材）。
+- 交代物：`example/pbr-direct/`（pbr/naive/hud/textured 四对基线 + run.bat + cases.json 卡 5 用例）+ `server.py --check` OK（stage=pbr-direct cases=5 baselines=8）。
+- kStage bump 波及：11 对 exe=current 的 HUD 基线（stage 文字行）全部重拍（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0/s5.1/s5.2×2/s6.0×2）。
+- 固化：本条 + `docs/s0/PBR-DIRECT-PLAN.md` 状态与偏差记录。
+
+**踩坑情况**：
+1. ⭐pbr 分支只能编译进 psMain（§2.7 新例）：共享 `shade()` 也会被 psCluster/psCull 编译，而 cull/dag 管线的 t1~t4 是 StructuredBuffer（顶点池/索引/元数据/可见列表）——同一 descriptor slot 两种资源类型在 Vulkan descriptor set layout 里非法。pbr 移入 psMain 专属分支后 cluster/cull/dag 的 SPIR-V 不引用 t1/b1，绑定面只动 init/initSkin。
+2. ⭐写空 volatile CB = 段错误：draw() 常规路径无条件 `writeBuffer(lightConstants_)`，而 initCluster 场景（lod 模式走这里）没有 b1 槽位、句柄为空 → 0xC0000005。kStage 重拍 11 对基线时被 s2.0/s3.2/s5.0 六连崩暴露；`| tail` 管道吃掉退出码一度误判「手动跑不崩」（tail 恒 0），python subprocess 直跑退出码才现形。修复 = null 守卫（语义也正确：无 b1 的场景本来就不该写）。
+3. mode 编号：plan 预写的「mode 4 = pbr」与 M1.3 cluster 色撞号，改用 5（重编号 cluster 会动 viewer 缺省与历史基线，零收益）。
+4. t0 格式不能动：plan 的「t0 用 RGBA8_UNORM_SRGB」会让 M0.4 textured 基线全变（验收判据 2 是硬闸）——t0 保持 UNORM，pbr 分支在 shader 内做精确分段 sRGB→linear（`--pbr-naive` 跳过即对照路径）。
+5. HUD 回写钳制：非簇场景 `min(shading,3)` 会吞掉 pbr——改为只挡 4=cluster（唯一非法值），5=pbr 放行。
+6. STAGE_RE 闸口扩展：`tools/showcase/server.py` 原只认 `M*/S*` 前缀，具名穿插项（pbr-direct，不占 m0.*/S* 编号是 plan 明文）加进白名单，version id = 前缀小写。
+7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
+
+**下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
+
+## M7.0：visibility buffer 打包写入 + 簇/三角可视化（S7 首个里程碑，2026-11-09，tag `s7-visbuf`）
+
+**动作**
+- **打包口径定稿（Option A 不变）**：`u64 = (uint64(asuint(deviceZ)) << 32) | (clusterId(24b) << 8 | triId(8b))`；标准 Z（near=0）下 `[0,1]` 正浮点位图按 u64 整数单调递增，故 `atomicMin` = 最近者胜；`clear = 0xFFFFFFFFFFFFFFFF`，任意真实写入都小于空值，不需要 UE 的 `cluster+1` 空哨兵。
+- **新增 `renderer/shaders/visbuf_common.slangh`**：`VIS_CLUSTER_BITS=24` / `VIS_TRI_BITS=8` / `VIS_EMPTY` + `visPack()` / `visUnpack()` / `visHashColor()` / `visIndex(pixel,width)=y*width+x`，打包 / 解包 / hash / 二维压一维集中一处，供 M7.1 与 S9/S10/S13 复用；用 `.slangh` 避开 CMake 的 `*.slang` GLOB。
+- **新增 `renderer/shaders/visbuf.slang` 四入口**：`vsVisRaster`/`psVisRaster`（复用 M4 的顶点池/localIndices/clusterMeta/identityIndex/indirectArgs 做 vertex pulling，VS 输出 `nointerpolation clusterId/triInCluster`，PS 对 `u0 RWStructuredBuffer<uint64_t>` 做 `InterlockedMin`）；`vsVisViz`/`psVisViz`（`SV_VertexID` 生成全屏大三角，读同块 buffer 的 `t0` SRV 解包，`--vis-viz cluster|triangle` 两档 pcg hash 色）。`model.slang` **一个字节未动**。
+- **`CMakeLists.txt`**：登记 `_ENTRIES_VISBUF`（4 入口）、`_VISBUF_COMMON`（公共头依赖）、`_SM66_ARTIFACTS` 白名单——只对 4 个新 DXIL 产物加 `-profile sm_6_6`，老产物与历史基线零扰动。
+- **`renderer/src/scene.cpp/.hpp`**：新增 `initVisbuf()`（调 `initCull(..., frustumCull=false)` 复用 .nmesh 全套资源；断言 `maxTriPerCluster<=256` / `clusterCount<1<<24`）、`ensureVisbufTargets()`（按 viewport 懒建宽×高 u64 buffer：stride 8 / `canHaveUAVs` / `initialState=CopyDest` / `keepInitialState`，并建 raster、viz 各一个 BindingSet）；`draw()` 三段式 `clearBufferUInt(0xFFFFFFFF)` → `drawIndexedIndirect(0,1)` 簇光栅 → `draw(3)` 全屏 viz（Carrot 编排，M7.1 把 viz 换成 material pass）；`ready()` 加 visbuf 分支；`invalidatePipelines()`/`shutdown()` 补齐清理。
+- **设备能力补齐两处**：`backend_vulkan.cpp::createDevice()` 挂 `VkPhysicalDeviceShaderAtomicInt64Features.shaderBufferInt64Atomics` 的 `pNext` + `VK_KHR_shader_atomic_int64`（修掉「只查不启」）；`backend_dx12.cpp::reportFeatures()` 补查 `D3D12_OPTIONS11::AtomicInt64OnDescriptorHeapResourceSupported`。两后端 `init()` 增加 `visbufMode` 且优先级最高。
+- **接口链路**：`backend.hpp` / `renderer.cpp` / `renderer.hpp` 加 `visbufMode` 与 `FrameParams.visVizMode`；kStage bump `S7.0 visibility buffer u64 packing + cluster/triangle viz`；artifact selftest 增 8 个产物（32→40）；`core/modes.hpp/.cpp` 加 `ViewMode::Visbuf=8` + `"visbuf"`；`viewer/main.cpp` 加 `--mode visbuf` / `--vis-viz cluster|triangle` / help / selftest stage 期望改 S7.0。
+- **交代物**：`example/s7-visbuf/`（6 张双后端基线 + `run.bat` + `verify.py`）、`example/cases.json` 新增 s7.0 卡 4 用例；pbr-direct 的 selftest 卡 note 与 `run.bat` echo 改为「阶段校验跟随 kStage」。
+- **固化文档**：`docs/s7/S7-PLAN.md`（预研 §1 的 R64UINT/R32G32 降级条目标作废，改 u64 buffer 介质 + 落地实录 + 常见坑；M7.0 checkbox 全勾）、`docs/s5/UE-DIFFS.md` 新增 **D15**（载体偏离含 buffer/image 能力位差异与升级触发条件）、`docs/SHADER-CONVENTIONS.md` 新增 **§2.9**（64 位原子的编译 profile / 设备启用 / 介质三件事）+ 多入口登记纪律 + 40 产物自检。
+- **kStage bump 波及**：18 个 HUD 用例 × 2 后端 = **36 张 HUD 基线全量重拍**（首行 stage 文本变化）。
+
+**提交版本**：本条固化提交，tag `s7-visbuf`（D-S7-1 Carrot 式单全屏材质 pass / D-S8-1 TLAS 每帧全量 rebuild 沿用历史拍板，本轮不重复问；主线渲染按既有约定不占 `wt_pool` 坑）。
+
+**完成情况**
+- 单源双目标：40/40 shader 产物魔数（新增 visbuf 四入口 × spv/dxil），selftest **16/16 ×2**，`deviceErrors=0` ×2、调试层零输出。
+- 三对展示台基线**逐字节相同**（DX12 与 Vulkan 各自复现 + 跨后端互等）：cluster MD5 `e85285853ee6230cdeed70a5118854a5`、triangle `d82262305d101baf72a12a2195628a34`、cull-reference `26e3d1f39eed181079bfde6abf6a0223`。
+- **硬对拍**（`example/s7-visbuf/verify.py`）：visbuf 簇色档 vs 传统直画 `--mode cull --frustum off --shading 4`，按各自背景色取前景掩码逐像素比对，**64262 px 对 64262 px，轮廓差 0 / 颜色差 0 / 最大通道差 0**（双后端各一份）——一次性证明打包、解包与遮挡关系全对；`verify.py` 输出 `ALL GREEN`。
+- `server.py --check` 退出 0（`stage=S7.0 version=s7.0 cases=4 baselines=6`）；收口全量回归 **286/286 ALL GREEN**（`--jobs 2` 59 s 与脚本头部纪律指定的 `--jobs 1` 串行 107 s 各跑一次，两次全绿；`--jobs 4` 曾出现 1 条工具用例并发争用，见踩坑 9）。
+- 老路径不变量：m0.9 / s2.0 / s3.2 三对 spot 回归 bytes 全绿；36 张 HUD 基线随 bump 重拍后全量回归逐字节通过。
+- 证据图：`example/s7-visbuf/{cluster,triangle,cull-reference}-{dx12,vulkan}.png`（收口回复已直接打开）。
+
+**踩坑情况**
+1. **R64_UINT 纹理路线开工即撞墙** → 根因：vendored NVRHI 全树零 R64 格式（`Format` 枚举、`dxgi-format.cpp`、`vulkan-constants.cpp` 三处实查），`Format::R64UINT` / `imageAtomicMin` 根本不存在。处理：开工前用 slangc + NVRHI 源码实测后向用户拍板三选一，按「改自己的代码、不改第三方」选 `RWStructuredBuffer<uint64_t>` 线性 buffer；打包格式 / atomicMin / clear=max 口径一个不动，偏离落 D15 + S7-PLAN 落地实录。
+2. **DXIL 编译报 `64-bit atomic operations should only be used in Shader Model 6.6+`** → 根因：默认 profile 不含 SM6.6。处理：`-profile sm_6_6`，且只给 `_SM66_ARTIFACTS` 白名单的 4 个新产物加，老产物一个字节不动（避免历史基线被连坐重拍）。SPIR-V 直通（`OpCapability Int64` + `Int64Atomics`）。
+3. **Vulkan 显示 `shaderBufferInt64Atomics=1` 却用不了** → 根因：`reportFeatures()` 只是查询，`vkCreateDevice` 没挂 feature / 扩展 = 查询 ≠ 启用。处理：createDevice 里挂 `VkPhysicalDeviceShaderAtomicInt64Features` 的 `pNext` + `VK_KHR_shader_atomic_int64`。
+4. **DX12 能力位查错** → 根因：Options9 的 `AtomicInt64OnTypedResourceSupported` / `GroupShared` 只管 typed resource 与 group shared，不管 structured buffer。处理：补查 Options11 的 `AtomicInt64OnDescriptorHeapResourceSupported` 并入 `info_.shaderInt64Atomics`。
+5. **首帧不画 / pipeline 永远建不起来** → 根因：`ensurePipelines()` 挂在 `!ready()` 分支，而 `ready()` 把懒建资源也算进去，自相矛盾成死锁。处理：`ready()` 在 visbuf 分支只要求 `visRasterPSO_ && visVizPSO_`。
+6. **`clearBufferUInt` 顺序敏感** → 根因：Vulkan 实现内部 `endRenderPass()`，必须早于首个 `setGraphicsState`；validation 层要求命令列表类型 ≤ Compute（graphics 列表满足）。处理：clear 放在 `draw()` 最开头；u64 空值用「每个 u32 写 0xFFFFFFFF」实现，省掉独立 compute clear pass。
+7. **新入口不能塞进 `model.slang`** → 根因：会改动 6 个老入口产物，牵连所有 exe=current 历史渲染结果。处理：独立 `visbuf.slang` + `.slangh` 公共头，CMake 登记 `_ENTRIES_VISBUF` 与额外 `DEPENDS`；spot 回归三对 bytes 反证零扰动。
+8. **kStage 文案串联** → 根因：`example/pbr-direct/run.bat` 与 selftest 卡把 stage 检查写死成 `pbr-direct`。处理：改为「跟随 kStage」；18 个 HUD 用例 × 2 后端基线全量重拍。
+9. **`--jobs 4` 全量回归偶发 1 条 FAIL（`s1-asset/roundtrip` vulkan：日志缺 `nmesh selftest: PASS`）** → 根因：工具用例写固定共享路径，用例间并行会争用（`tools/regression.py` 头部纪律已写明，并建议可疑 near/FAIL 用 `--jobs 1` 排除争用）；与本轮 M7.0 代码无关。处理：`--only s1-asset/roundtrip` 单跑 2/2 通过、`--jobs 2` 全量 286/286 ALL GREEN 后以低并发为准；不擅自改工具层的共享路径约定。
+
+**下一步**：M7.1 材质 pass（vis buffer 反解 → barycentrics → vertex pulling 取属性 → Carrot 式单全屏材质着色，D-S7-1 已拍板）；M7.2 多材质验收。
+## M-SC0：C# hosting 内核（feat/script，2026-11-09，tag `m-sc0`）
+
+**动作**：wt_pool claim（track script / M-SC0；script 轨道注册表同步进 wt_pool.py TRACKS）→ 三处证据（P8-SCRIPT-PLAN「三处参考口径」+「现成封装参考」2026-11-09 精读留痕：Carrot `core/core/scripting/csharp/` 1229 行 hosting 分层——抄结构不抄 Mono 底座；bevy 无脚本 crate——克制先例；Microsoft Learn《Write a custom .NET runtime host》——hostfxr 三导出 + `component_entry_point_fn=int(void*,int32)` 默认签名 + FDD-only/单运行时两硬限制）→ vendored `thirdparty/dotnet-hosting/`（SDK 8.0.19 pack：hostfxr.h / nethost.h / coreclr_delegates.h 三头件 + nethost.lib 真导入库 + nethost.dll）→ `nl::script::Vm`（PIMPL：头文件零 hostfxr 符号；create=定位→LoadLibrary→init_for_runtime_config→取 delegate；getEntryPoint=UNMANAGEDCALLERSONLY_METHOD 路线；析构 close+FreeLibrary）+ SEH 互操作边界 guard（托管异常转 Result code 6）→ CMake：Vm.cpp 进 nl_core + nethost 链接 + `nl-script` 工具目标（nethost.dll POST_BUILD copy）→ `script/script-api/` 骨架 classlib（net8.0，M-SC1/SC2 绑定落点）+ `script/examples/hello/` 最小用户脚本（mode 驱动：ok/echo/throw/default 四路）→ `nl-script/main.cpp`（check/run/selftest 三命令，退出码 0/1/2）→ selftest 17 项迭代全绿（4 轮修坑见踩坑栏）→ `example/m-sc0/run.bat` 五用例实跑 ALL GREEN + `tools/make-script-evidence.py` 5 张证据图（真实日志渲染）+ 逐张亲眼验收 → `example/cases.json` 追加 `m-sc0` 版本卡 5 条 tool 用例（diff 干净 90 行纯追加）→ `docs/p8/SCRIPT-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc0`，即本条台账所在提交）。
+
+**完成情况**：DX12 树 nl-script 构建过（VULKAN 树 nl_core 同步验证）；selftest 17/17（s0 产物定位 / s1 hostfxr 三导出装载 / s2 默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）/ s3 返回值锚 42/-1/0/-1 / s4 托管异常 SEH 捕获 0xe0434352 + 进程存活 + 异常后可复调 / s5 拷贝工程改 42→43 重编换名同进程装载 → 43）；`run --args ok` ret=42 exit 0、`run --args throw` exit 1、`check` exit 0、无参 exit 2；run.bat ALL GREEN；`server.py --check` exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，无截图无渲染基线卡；渲染集成属 E1b 之外的脚本渲染绑定，plan 未排）；②工具交代物——**本轮有**：展示台 `m-sc0` 版本卡 5 条（usage/正向 run-ok/负向 run-throw/check/selftest，expectExit 2/0/1/0/0）+ 5 张证据图（真实输出渲染，亲眼核验）+ SCRIPT-TOOLS-GUIDE + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC0 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 踩坑存档 7 条 + PARALLEL-TRACKS §7.1d wt 状态更新 + wt_pool.py TRACKS 注册 script 轨道。
+
+**踩坑情况**
+1. **libnethost.lib 是静态库**（1.6MB 无 `__imp_` 符号）与 nethost.h 默认 dllimport 语义不符 → LNK2019 `__imp_get_hostfxr_path`；换 nethost.lib（1.7KB 真导入库）+ nethost.dll 运行期紧挨 exe（官方样例布局），静态 lib 不入库。
+2. **classlib 默认不产 runtimeconfig.json**（FDD 加载硬前置缺失）→ csproj 显式 `<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>`。
+3. **`-p:AssemblyName` 是全局属性**：连带 ProjectReference 的 script-api 一起改名 → NuGet restore「Ambiguous project name 'HelloScriptHot'」；热重编换名必须改拷贝出的 csproj 本体。
+4. **拷贝工程带 obj/**：NuGet 缓存残留 FullPath 同样撞 Ambiguous → 热重编只拷源文件（csproj+.cs）。
+5. **`fs::path::extension()` 只取最后一个点**（runtimeconfig.json 的 extension 是 `.json`）+ 对 runtimeconfig 路径 `replace_extension(".dll")` 会拼出 `HelloScript.runtimeconfig.dll` —— 后缀判断改文件名 ends_with，DLL 名显式「程序集名+.dll」拼接。
+6. **hostfxr.h `initialize_for_runtime_config_fn` 是三参数**（path, parameters, out handle；parameters 可 nullptr），按两参数调用即 C2198。
+7. **托管异常 MSVC /EHsc 下 catch(...) 接不住**：必须 SEH `__try/__except`（guard 函数体内禁 C++ 对象），实测 0xe0434352 捕获、进程存活、入口可复调。
+8. C# `Api` 跨程序集引用漏 `using Nl.Script.Api;` → CS0103（首轮 dotnet build 失败）。
+
+**下一步**：M-SC1 console 绑定（gated on feat/console M-C3 merge 回 master）：C++→C# 函数指针暴露 cvar.get/set/list + console.exec，C#→C# 注册命令进 console 命令表。
+
+## M-SC1：console 绑定（feat/script，2026-11-09，tag `m-sc1`）
+
+**动作**：master 合入 feat/script（console M-C0~M-C3 merge `9e12cc6`，解 M-SC1 gate；冲突 4 处——CMakeLists 双工具目标并存 + MILESTONES/PLAN/cases.json 双方追加保留，cases.json 版本序 console-mc3→m-sc0）→ wt_pool claim（track script / M-SC1）→ 三处证据（本轮模块=脚本↔console 绑定面：Carrot `CSharpBindings.cpp` + `script-api/Carrot/` 精读——绑定面是 mono_add_internal_call 按名 internal call，hostfxr 路线对应物=显式函数指针表随入口传入，同构「单一显式绑定面」；UE IConsoleManager 无 C# 脚本绑定（Blueprint/Python），bevy 无 console 无脚本——均据实标注）→ `nl/script/Bindings.hpp/.cpp`（ApiTable 6 导出 C ABI + extern "C" 实现 + 托管命令回调 SEH POD guard + CoTaskMem 配对释放）→ core/console 扩 `unregisterCommand`（M-SC3 解绑落点）→ script-api `Engine` 静态类（Init 按偏移读表 + CvarGet/Set/List + ConsoleExec + ConsoleRegister 友好/Raw 双路 + ConsoleUnregister + delegate 保活）→ `script/examples/console/` 多入口示例（SetCvar/RegisterCmd/ErrorCodes/ThrowCmd/Readback/UnregisterCmd + Entry demo）→ nl-script 扩 `run --api`（宿主预注册 builtins + demo cvar）+ selftest s6a~s6f → 迭代修 4 坑（见踩坑栏）→ 全绿 → VULKAN 树同步构建 + selftest 复跑全绿（双后端对称）→ `example/m-sc1/run.bat` 四用例 ALL GREEN + 证据生成器扩 m-sc1 段 4 张真实输出图逐张亲眼验收（DOTNET_CLI_UI_LANGUAGE=en 根治中文方框复发）→ cases.json 文本级追加 `m-sc1` 卡 4 条（前缀逐字节保留断言 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc1`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+Bindings.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 不回归 + s6a~s6f：onChanged 恰触发一次 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 掩码 31 对齐 / 托管异常命令 SEH→CommandFailed 存活 / 双向读回 + cvar.list / 注销后 UnknownCommand）；run --api demo 全链路 exit 0；负向缺 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，与 M-SC0 同口径；证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc1` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC1 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC1 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面口径固化（ApiTable ABI/内存所有权两条路/异常边界/unregisterCommand）+ 踩坑 5 条存档。
+
+**踩坑情况**
+1. **script-api 与脚本工程都要 `<AllowUnsafeBlocks>true`**：`Engine` unsafe class（ApiTable 偏移读），只在示例 csproj 开 → CS0227。
+2. **lambda 参数显隐混用 CS0748**：`(argc, argv, out IntPtr text)` 非法，全显式。
+3. **selftest 漏 `installBuiltins()`**：`cvar.set` 命令路径断言拿到 UnknownCommand(1) 而非 CommandFailed(3)，掩码 27≠31——内建命令集是生产宿主动作，selftest 必须同口径装上。
+4. **`DOTNET_CLI_UI_LANGUAGE=en`**：dotnet 中文摘要在证据图 Consolas 下成方框（M-SC0 踩坑 1 复发），dotnetBuild 前置 set 根治。
+5. **cases.json 尾锚插入**：末卡四层嵌套闭括号，锚点切多一行就把 cases 数组 `]` 切掉（本轮两次 JSONDecodeError 后改「只切末三行保留 case 层 `}`」+ json.load 复验）。
+
+**下一步**：M-SC2 ECS 绑定（数据面：World.Spawn/Remove/SetParent、Entity 失效安全拒绝、TransformComponent 字段读写；E1a 已 merge 前置满足）。
+
+## M-SC2：ECS 数据面绑定（feat/script，2026-11-09，tag `m-sc2`）
+
+**动作**：wt_pool claim（track script / M-SC2）→ 三处证据（本轮模块=脚本↔ECS 数据面：Carrot 脚本↔ECS 桥 = C# World.Current 单例 + internal call 直接操作 World、句柄 = EntityID 数值——hostfxr 路线对应物 = ApiTable 尾部追加 + 宿主侧显式绑 World；UE/bevy 据实标注无对应物）→ `Bindings.hpp/.cpp` v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` + 错误码 0..4 写死 → script-api 升 0.3.0（`Ecs` 静态类偏移读表 + `SceneEntity` wrapper）→ `script/examples/ecs/` 多入口示例（SpawnSetup/ReadVerify/InvalidProbe/RemoveSpawned + Entry demo）→ nl-script selftest s7a~s7g + run --api 绑 World + 默认类型名按工程目录推导 → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc2/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc2 段 4 张真实输出图逐张亲眼验收 → cases.json 文本级追加 `m-sc2` 卡 4 条（前缀逐字节保留 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc2`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（v2 绑定面）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 不回归 + s7a~s7g：C# spawn→C++ 逐位读回 / C++ 锚值 C# 验证 / 失效实体七项操作全 NoEntity / 延迟删除 flush 非对称 + 表级安全拒绝 / 父子 roundtrip / JSON 字节一致 / 解绑 NoWorld）；run --api ecs demo 全链路 exit 0（含父删级联）；负向错 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc2` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC2 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC2 行标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面 v2 口径固化（10 导出 ABI/错误码/World 绑定时序/延迟非对称语义锚/JSON roundtrip 前置）+ 踩坑 4 条存档。
+
+**踩坑情况**
+1. **findEntityByName 走 flush 后全局表**（entities_），与 exists()（查 names_）非对称——spawn 后未 flush 按名查不到；绑定层照抄 Carrot 口径不改 World 语义（E1a 已 merge 不动 ECS 轨道），selftest s7a 补「host flush after script spawn」步骤。首轮 s7a 13 处 FAIL 全根因于此。
+2. **clone 世界工厂库默认空**：deserialise 报 unknown component name "Transform"——必须 registerComponent<TransformComponent>()（nanite-scene ecs-serial 先例同款）。
+3. **默认类型名硬编码 HelloScript**：ecs 工程 run 无 --type 直接 code=5——改按工程目录名推导（首字母大写 + Script，三示例统一）。
+4. **cases.json heredoc 转义**：内嵌 JSON 的引号转义层级数错一层即 JSONDecodeError——含引号 command 字段用 Python 单引号串承载再 replace 注入，插后 json.loads 复验。
+
+**下一步**：M-SC3 热更 + 收口（`console.reload-script`：新 DLL 载入 collectible ALC → 重绑定 → 旧 ALC Unload；改脚本 → dotnet build → reload → cvar/命令/实体行为换新 C++ 状态无损；连续 reload 句柄计数核；全量回归绿；merge 回 master）。
+
+## M-SC3：脚本热更（feat/script，2026-11-09，tag `m-sc3`）
+
+**动作**：wt_pool claim（track script / M-SC3）→ 三处证据（本轮模块=热更：官方《assembly unloadability》教程 = NoInlining 方法边界 + weakref 排空在调用方 + collectible ALC 完成条件三条款；Carrot = registerGameAssemblyLoadCallback/UnloadCallback 程序集换载时命令重 init——对应物 = scriptUnregisterAll + 新 ALC Entry 重注册（脚本自描述重绑定）；UE/bevy 据实标注无对应物）→ `script/bootstrap/`（NlScriptBootstrap：BootLoad/BootCall/BootUnload 三 UnmanagedCallersOnly + ScriptLoadContext collectible resolver）→ `Vm` 热更四件套（loadBootstrap/scriptLoad/scriptCall/scriptUnload + 阶段码 7/8/9）→ `ScriptHost`（单例编排 + `console.reload-script` 命令）→ `Bindings` 脚本命令登记表（登记/擦除/scriptUnregisterAll）→ 示例 Entry 拆两层（普通 Entry + EntryNative）→ nl-script selftest s8a~s8h → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc3/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc3 段 4 张真实输出图 → cases.json 尾插 `m-sc3` 卡 4 条（json.load 复验 39 卡）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc3`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+ScriptHost.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 + s7 不回归 + s8a~s8h：bootstrap 3 函数指针 + reload-script 注册 / 首载 collectible ALC + Entry 重绑定 / 改源→同名覆盖重编→reloadScript 解绑 2 命令 + weakref dead + 重装载 / 行为换新 [v2] / C++ 状态无损四锚 / 连续 reload x3 句柄漂移 0 / unloadScript weakref dead / 卸载后命令消失 + C++ 导出可用）；run --api demo exit 0；check bootstrap exit 0；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc3` 版本卡 4 条 tool 用例（selftest/reload 特写/run-api 正向 + check，expectExit 0/0/0/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC3 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC3 行标完成 + 热更架构拍板回写 + 踩坑 5 条存档（同帧 dead-store / UnmanagedCallersOnly 禁托管 Invoke / 锁文件 / 协议结构地址 / 登记表对称）。
+
+**计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。

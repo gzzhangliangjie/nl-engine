@@ -1,0 +1,41 @@
+Build succeeded.
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+Build succeeded.
+Build succeeded.
+Build succeeded.
+Build succeeded.
+  ok  s8-pre locate NlScriptBootstrap build output
+  ok  s8a ScriptHost::init (Vm::loadBootstrap 3 function pointers, idempotent)
+  ok  s8a2 console.reload-script registered (no-script case -> CommandFailed hint)
+  ok  s8b copy console project to temp (sources only)
+  ok  s8b2 loc
+Build succeeded.
+Build succeeded.
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8\console" -nologo -v q 
+  ok  s8b3 dotnet build hot console (v1)
+  ok  s8b4 locate v1 build output
+  ok  s8b5 first load via collectible ALC + Entry rebinding
+  ok  s8b6 v1 echo anchor (prefix "script.echo: ")
+  ok  s8b7 script command registered in C++ ledger
+  ok  s8-pre3 script.rate cvar present (registered by s6 host preset)
+  ok  s8-pre2 C++ state anchor: cppEntHot spawned with transform
+  ok  s8c locate echo prefix anchor in copied source
+  ok  s8c2 echo prefix replaced in both lambdas
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8\console" -nologo -v q 
+  ok  s8c2 dotnet build overwrite same DLL name (file not locked by LoadFromStream)
+  ok  s8c3 ScriptHost::reloadScript (unbind -> unload -> load -> rebind)
+  reload-script: unbound 2 command(s) [script.echo, script.throwcmd], ALC fully unloaded (weakref dead), reloaded C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8\console\bin\Debug\net8.0\ConsoleScript.dll (Entry ret=0)
+  ok  s8d behavior updated after reload (echo prefix [v2])
+  ok  s8e C++ cvar state intact (script.rate == 2.5)
+  ok  s8e2 entity alive after reload (got 0)
+  ok  s8e3 entity transform bits intact (7,8,9)
+  ok  s8e4 builtin cvar.set intact after reload
+  ok  s8e5 script command re-registered by new Entry (ledger)
+  ok  s8f3 consecutive reload x3 all ok
+  handle drift over 3 reloads: 0 (h0=279 h1=279)
+  ok  s8f4 no handle leak over consecutive reloads (|drift| <= 32)
+  ok  s8g unloadScript -> weakref dead (ALC fully collected)
+  ok  s8h script command gone after unload -> UnknownCommand
+  ok  s8h2 ECS export still works (World bound in C++) (got 0)
+  ok  s8h3 C++ cvar intact after unload
+nl-script selftest: PASS (0 failures)

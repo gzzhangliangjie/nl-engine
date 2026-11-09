@@ -1,0 +1,58 @@
+// M7.0 (S7): visibility buffer pack / unpack / debug color — SINGLE SOURCE OF TRUTH.
+// Included by renderer/shaders/visbuf.slang (and by the future M7.1 resolve pass).
+// S7-PLAN §1 Option A + §底线「查找函数集中一个头文件」：S9/S10/S13 复用这里，
+// 任何打包格式变更只改本文件。shader 公共头用 .slangh 后缀，CMake 的
+// *.slang GLOB 不会把它当成独立 shader 源。
+//
+// 64 位布局（标准 Z，near=0）：
+//   [63..32] asuint(deviceZ)   —— 位图在 [0,1] 正浮点上单调递增
+//   [31..8]  clusterId (24b)  —— 全局簇号，上限 2^24
+//   [7..0]   triId (8b)       —— 簇内三角号，上限 256（meshopt 上限 128）
+// atomicMin 对**整个 u64 整数**比较：深度占高位才是「最近者胜」的主导项，
+// 低位只在同深度时决定谁胜（同深度像素的胜者不确定，但不影响遮挡正确性）。
+// clear = VIS_EMPTY (全 1)：任意真实写入都小于它，故 0 不需要 +1 sentinel。
+//
+// 介质偏离登记：UE/bevy 用 R64_UINT 纹理 + image atomic；本工程 vendored NVRHI
+// 全树无 R64 格式，改走 RWStructuredBuffer<uint64_t> 线性 buffer + buffer atomic
+// （详见 docs/s5/UE-DIFFS.md）。逻辑上仍是「每像素一个 u64」，寻址函数 visIndex()
+// 是把二维像素压成一维下标的唯一地方。
+#ifndef NL_VISBUF_COMMON_SLANGH
+#define NL_VISBUF_COMMON_SLANGH
+
+static const uint64_t VIS_CLUSTER_BITS = 24u;
+static const uint64_t VIS_TRI_BITS     = 8u;
+static const uint64_t VIS_EMPTY        = ~uint64_t(0);   // 0xFFFFFFFFFFFFFFFF
+
+// deviceZ 必须是 SV_Position.z（viewport 变换后的 [0,1] 深度）。
+uint64_t visPack(uint clusterId, uint triId, float deviceZ)
+{
+    const uint lo = (clusterId << VIS_TRI_BITS) | (triId & 255u);
+    return (uint64_t(asuint(deviceZ)) << 32u) | uint64_t(lo);
+}
+
+void visUnpack(uint64_t v, out uint clusterId, out uint triId, out float deviceZ)
+{
+    const uint lo = uint(v);            // 截断到低 32 位
+    const uint hi = uint(v >> 32u);     // 高 32 位 = 深度位图
+    deviceZ   = asfloat(hi);
+    triId     = lo & 255u;
+    clusterId = lo >> VIS_TRI_BITS;
+}
+
+// 与 model.slang::triIdColor 逐位同式的 pcg hash（CPU 端 clusterColor() 同源），
+// 所以 visbuf 的簇色和 cull 模式的簇色可以直接对拍，截图可复现。
+float3 visHashColor(uint id)
+{
+    uint h = id * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    h = (h >> 22u) ^ h;
+    return float3(float(h & 255u), float((h >> 8u) & 255u), float((h >> 16u) & 255u)) / 255.0f;
+}
+
+// vis buffer 是 width*height 的一维数组；二维像素压下标的唯一入口。
+uint visIndex(uint2 pixel, uint width)
+{
+    return pixel.y * width + pixel.x;
+}
+
+#endif // NL_VISBUF_COMMON_SLANGH

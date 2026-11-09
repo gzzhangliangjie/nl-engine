@@ -39,10 +39,12 @@ public:
     // hizMode（M6.0）优先于 dagMode：dag 遍历之上再加深度预通道 + min 金字塔。
     // sceneMode（M-E1b.0）为 true 时不初始化 Scene（其余 swapchain/depth/
     // framebuffer/present 照常）——场景资源由 loadEcsScene 建立后才可绘制。
+    // visbufMode（M7.0）独立优先级最高：吃 .nmesh，但走 vis buffer 三段式
+    // 光栅而不是 S4 的常规着色路径。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-                      bool sceneMode, std::string& outError) = 0;
+                      bool sceneMode, bool visbufMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

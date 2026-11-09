@@ -1,0 +1,8 @@
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.04
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\ecs" -nologo -v q 
+run: FAIL getEntryPoint: code=5 load_assembly_and_get_function_pointer failed: hresult=0x80131522 assembly=E:\UE_STUDY_2026\nl-engine-script\script\examples\ecs\bin\Debug\net8.0\EcsScript.dll type=NlScript.Examples.HelloScript, EcsScript method=Entry

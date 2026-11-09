@@ -326,7 +326,9 @@ void Hud::build(HudFrame& frame) {
     // M0.8：着色模式下拉框，双向 POD 通道与 cull/color 控件同一条路。
     // M1.3：cluster 只有 cluster 场景提供了 CLUSTERCOLOR 属性（viewer 侧在
     // normal 模式把该值钳回 0..3，这里只是同一张清单）。
-    static const char* kShadingNames[] = { "textured", "normal", "uv", "tri-id", "cluster" };
+    // pbr-direct：追加 "pbr"（mode 5，仅 normal/skin 场景有意义；cluster 场景
+    // 选它会落 mode-0 白模兜底，无崩溃——与 normal 场景选 cluster 同级别的宽松）。
+    static const char* kShadingNames[] = { "textured", "normal", "uv", "tri-id", "cluster", "pbr" };
     ImGui::Combo("shading", &frame.shading, kShadingNames,
                  static_cast<int>(sizeof(kShadingNames) / sizeof(kShadingNames[0])));
     ImGui::SliderInt("clear color", &frame.colorIndex, 0, 3);

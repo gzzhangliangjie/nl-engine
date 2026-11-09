@@ -243,6 +243,34 @@ bool extractBaseColor(const Model& model, int materialIndex,
     return true;
 }
 
+// pbr-direct：metallicRoughness 贴图 + 材质因子提取。与 extractBaseColor 同一
+// image 解码路径；MR 是线性数据（G=roughness B=metallic R=occlusion，glTF 2.0
+// spec §3.9.3），不解码通道、原样上传 RGBA8_UNORM。无贴图/无材质不算错（工具侧
+// 只关心几何），因子取 spec 缺省值（baseColor=[1,1,1,1] metallic=1 roughness=1）。
+bool extractMetallicRoughness(const Model& model, int materialIndex,
+                              PrimitiveMesh& prim, std::string& outError) {
+    if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
+        return true;
+    const auto& pbr = model.materials[materialIndex].pbrMetallicRoughness;
+    prim.baseColorFactor[0] = static_cast<float>(pbr.baseColorFactor[0]);
+    prim.baseColorFactor[1] = static_cast<float>(pbr.baseColorFactor[1]);
+    prim.baseColorFactor[2] = static_cast<float>(pbr.baseColorFactor[2]);
+    prim.baseColorFactor[3] = static_cast<float>(pbr.baseColorFactor[3]);
+    prim.metallicFactor  = static_cast<float>(pbr.metallicFactor);
+    prim.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+    const int texIndex = pbr.metallicRoughnessTexture.index;
+    if (texIndex < 0 || texIndex >= static_cast<int>(model.textures.size()))
+        return true;
+    const int imageIndex = model.textures[texIndex].source;
+    if (imageIndex < 0 || imageIndex >= static_cast<int>(model.images.size()))
+        return true;
+    if (!toRGBA8(model.images[imageIndex], prim.metallicRoughnessRGBA, outError)) return false;
+    prim.hasMR = true;
+    prim.mrWidth = static_cast<std::uint32_t>(model.images[imageIndex].width);
+    prim.mrHeight = static_cast<std::uint32_t>(model.images[imageIndex].height);
+    return true;
+}
+
 // ---- 场景图遍历：把世界变换烘进每个 primitive 的顶点 ----
 
 bool visitNode(const Model& model, int nodeIndex, const Mat4& parentWorld,
@@ -308,6 +336,7 @@ bool visitNode(const Model& model, int nodeIndex, const Mat4& parentWorld,
             }
             if (!readIndices(model, primGltf.indices, prim.indices, outError)) return false;
             if (!extractBaseColor(model, primGltf.material, prim, outError)) return false;
+            if (!extractMetallicRoughness(model, primGltf.material, prim, outError)) return false;
             out.meshes.push_back(std::move(prim));
         }
     }

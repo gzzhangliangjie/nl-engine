@@ -71,7 +71,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, std::string& outError) override {
+              bool sceneMode, bool visbufMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -158,6 +158,8 @@ public:
             // false 时 draw 段跳过，与历史空场景行为一致）。
             sceneOk = true;
         }
+        else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
+            sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (hizMode)
@@ -521,6 +523,16 @@ private:
             info_.shaderInt64Atomics =
                 options9.AtomicInt64OnTypedResourceSupported == TRUE ||
                 options9.AtomicInt64OnGroupSharedSupported == TRUE;
+        }
+        // M7.0（S7）：Options9 的两位是 typed resource（R64 纹理）与 group shared；
+        // 我们走 RWStructuredBuffer<uint64_t>，对应 Options11 的 descriptor heap
+        // resource 位——这一位才是 vis buffer 真正的硬件门槛，必须单独查。
+        D3D12_FEATURE_DATA_D3D12_OPTIONS11 options11{};
+        if (SUCCEEDED(device12_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS11,
+                                                     &options11, sizeof(options11)))) {
+            info_.shaderInt64Atomics =
+                info_.shaderInt64Atomics ||
+                options11.AtomicInt64OnDescriptorHeapResourceSupported == TRUE;
         }
         info_.indirectDraw = true;  // ExecuteIndirect / DrawIndirect 是 DX12 核心能力
 

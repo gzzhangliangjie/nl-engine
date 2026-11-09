@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- M-SC0 最小用户脚本示例：默认签名托管入口（component_entry_point_fn）
+       + [UnmanagedCallersOnly]（coreclr_delegates.h 契约：UNMANAGEDCALLERSONLY_METHOD
+       要求方法带此标记）。引用 script-api 骨架（双程序集布局验收）。
+       行为由入口参数驱动（UTF-8 字符串）：
+         "ok"    -> 42（selftest 数值锚）
+         "echo"  -> 打印标记行（script-api.Version 进输出 = 双程序集装载证明）-> 0
+         "throw" -> 托管异常（验证 C++ SEH 边界捕获，docs/p8/P8-SCRIPT-PLAN.md 错误约定）
+         其他    -> -1
+       热更验收（selftest 内）：拷贝本工程改 42 -> 43，dotnet build -p:AssemblyName
+       换名重编后同进程装载 -> 43（脚本改动经重编行为更新，不重启宿主进程）。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <RootNamespace>NlScript.Examples</RootNamespace>
+    <AssemblyName>HelloScript</AssemblyName>
+    <!-- classlib 默认不产 runtimeconfig.json；hostfxr FDD 加载必须有 → 显式开启 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../script-api/NlScriptApi.csproj" />
+  </ItemGroup>
+
+</Project>

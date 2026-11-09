@@ -1,0 +1,8 @@
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:01.36
+  $ dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\hello" -nologo -v q 
+run: FAIL managed exception at boundary: SEH code=0xe0434352
