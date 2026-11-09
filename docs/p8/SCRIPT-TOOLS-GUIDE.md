@@ -247,6 +247,45 @@ nl-script check script/examples/ecs
   → 再 `scriptUnload`。**状态全在 C++**：cvar 值/实体树/内建命令 reload 不动；
   重绑定 = 新脚本 Entry 自己重新注册（脚本自描述，Carrot load-callback 同构）。
 
+## 热更流程（端到端，开发者工作流）
+
+**脚本作者的改动→生效循环**（全程引擎进程不重启）：
+
+```
+① 改 C# 脚本源码（script/examples/<name>/ 或任意脚本工程）
+② dotnet build（同名覆盖 DLL——必须 LoadFromStream 装载，文件不被锁才可覆盖）
+③ 触发 reload：
+   - 引擎内：console 执行 `reload-script`（无参=重载当前脚本 DLL；带参=换路径）
+   - 工具链：nl-script / ScriptHost::reloadScript(dllPath)
+④ 生命周期自动走完，无需手工干预：
+   scriptUnregisterAll（解绑旧脚本命令，登记表清空）
+   → scriptUnload → BootUnload（旧 collectible ALC Unload + weakref 排空校验）
+   → scriptLoad → BootLoad（新 ALC + LoadFromStream 装入新 DLL 及其本地依赖）
+   → BootCall Entry（新脚本入口重注册自己的命令/cvar）
+⑤ 验证：旧命令执行观察行为变化（如 echo 前缀 [v2]）；
+   cvar 值 / 实体树 / 内建命令全程 C++ 持有，reload 不动
+```
+
+**运行时一次装载的内部链**（C++ → 托管，全部经 bootstrap 中转）：
+
+```
+Vm::loadBootstrap   取 bootstrap 程序集三函数指针（默认 ALC，常驻安全）
+Vm::scriptLoad      → BootLoad(assemblyPath)   建 collectible ALC + LoadFromStream
+Vm::scriptCall      → BootCall(type, method)   反射 Invoke 脚本静态方法 int(IntPtr,int)
+Vm::scriptUnload    → BootUnload               ALC Unload + weakref 排空，返回是否完全收集
+```
+
+**两条入口路径**（同一脚本程序集，按宿主形态二选一）：
+
+| 路径 | 取用方式 | 方法要求 | 适用 |
+|---|---|---|---|
+| collectible（热更） | BootCall 反射 Invoke | 普通 `static int(IntPtr,int)`，**禁** `[UnmanagedCallersOnly]` | 引擎内运行时 |
+| native（函数指针） | `getEntryPoint`（默认 ALC） | `[UnmanagedCallersOnly]` 包装（示例命名 `EntryNative`） | 工具进程一次性调用 |
+
+**失败兜底语义**：卸载窗口内脚本命令 UnknownCommand、ECS 导出回 NoWorld（错误码
+1）、cvar 读写正常（全在 C++）；reload 中途失败（编译错/加载错）时旧环境已卸载，
+重新 `reload-script` 指回上一个好 DLL 即恢复——脚本无跨帧状态，无回滚包袱。
+
 ## selftest 判据（s8 组，s0~s5 + s6 + s7 不回归）
 
 - s8a bootstrap 装载（3 函数指针）+ `console.reload-script` 注册（幂等 init）
