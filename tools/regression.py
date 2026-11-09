@@ -139,11 +139,14 @@ def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
     return "FAIL", f"与基线像素不符：{dp} 像素、maxDelta {md}/255"
 
 
-def run_viewer(exe: Path, argv: list[str]) -> tuple[int, str]:
+def run_viewer(exe: Path, argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             [str(exe), *argv],
-            cwd=str(exe.parent),
+            # 【2026-11-09】case 级 cwd 覆盖：默认 exe 所在目录；声明
+            # "cwd": "{root}" 时改用仓库根（audio-tools debug 的快照存
+            # 仓库根相对路径，必须仓库根 CWD 才能复开 clip）。
+            cwd=str(cwd if cwd is not None else exe.parent),
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=RUN_TIMEOUT,
@@ -167,7 +170,7 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
     """Run one (version, case, backend) and return the verdict record."""
     rec: dict = {"version": version["id"], "case": case["id"], "backend": backend,
                  "kind": case.get("kind")}
-    exe = show.exe_for(version, backend)
+    exe = show.exe_for(version, backend, case)
     if not exe.is_file():
         rec["verdict"] = "FAIL"
         rec["detail"] = (f"exe 缺失：{exe.relative_to(ROOT).as_posix()}"
@@ -185,19 +188,21 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
         return rec
 
     started = time.time()
-    code, log = run_viewer(exe, argv)
+    # case 级 cwd 覆盖（与 showcase server.run_one 同语义）
+    run_cwd = ROOT if case.get("cwd") == "{root}" else None
+    code, log = run_viewer(exe, argv, run_cwd)
     # 【2026-11-09】Windows 并发拉起同镜像进程偶发「exit 0 + 空输出」（本机环境级
     # 抖动：单独重跑必过、双后端 bytes 一致；并发探针还复现过 0xC0000005）。
     # 对这种不可能签名——exit 等于预期 0 但 expectLog 用例拿到空日志——自动重试
     # 一次；仍失败才按原逻辑判 FAIL。
     if code == 0 and case.get("expectLog") and not log:
-        code, log = run_viewer(exe, argv)
+        code, log = run_viewer(exe, argv, run_cwd)
     # 同族抖动签名 2：超时（exit -1）且 marker 前零输出——selftest/文本用例启动
     # 即打印，120s 内一个字都没吐出来只可能是进程被并发环境卡死（M6.0 收口
     # 全量闸实测 s5.0/s5-selftest vulkan：单独复验 24ms 即 PASS）。同样重试一次。
     _timeout_marker = f"[regression] timeout after {RUN_TIMEOUT}s"
     if code == -1 and log.strip() == _timeout_marker:
-        code, log = run_viewer(exe, argv)
+        code, log = run_viewer(exe, argv, run_cwd)
     rec["ms"] = int((time.time() - started) * 1000)
     rec["exit"] = code
     rec["deviceErrors"] = check_device_errors(log)

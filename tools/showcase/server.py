@@ -80,7 +80,15 @@ def md5(path: Path) -> str | None:
     return h.hexdigest()
 
 
-def exe_for(version: dict, backend: str) -> Path:
+def exe_for(version: dict, backend: str, case: dict | None = None) -> Path:
+    # 【2026-11-09】case 级 exe 覆盖：版本卡默认一个 exe（selftest 卡 ->
+    # nanite-scene/nanite-tools，渲染卡 -> viewer），但混合卡（如 ecs-parallel：
+    # 3 个 selftest 文本用例 + 1 个 viewer 渲染用例）需要 per-case 覆盖。
+    # 未声明 case["exe"] 时行为与旧版完全一致。
+    if case is not None:
+        tmpl = (case.get("exe") or {}).get(backend)
+        if tmpl:
+            return ROOT / tmpl.replace("{tag}", version["tag"])
     tmpl = version.get("exe", {}).get(backend)
     if not tmpl:
         return ROOT / "__missing__"
@@ -323,7 +331,7 @@ def build_argv(case: dict, params: dict[str, str], out: Path | None) -> list[str
 
 def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
     started = time.time()
-    exe = exe_for(version, backend)
+    exe = exe_for(version, backend, case)
     if not exe.is_file():
         return {"ok": False, "backend": backend,
                 "error": f"该版本 {backend} 的 exe 未构建，无法现场运行：{exe.relative_to(ROOT).as_posix()}",
@@ -344,10 +352,14 @@ def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
         return {"ok": False, "backend": backend, "error": str(e), "log": "", "ms": 0}
 
     try:
+        # 【2026-11-09】case 级 cwd 覆盖：默认 exe 所在目录；声明 "cwd": "{root}"
+        # 时改用仓库根——audio-tools debug 的快照存仓库根相对路径，必须仓库根
+        # CWD 才能复开 clip（音频轨道留档的 CWD 敏感问题）。
+        cwd = ROOT if case.get("cwd") == "{root}" else exe.parent
         with RUN_LOCK:
             proc = subprocess.run(
                 [str(exe), *argv],
-                cwd=str(exe.parent),
+                cwd=str(cwd),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

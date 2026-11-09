@@ -4486,17 +4486,19 @@
         },
         {
           "id": "run-badtype",
-          "name": "run --api 缺 --type：getEntryPoint 干净报错（负向，exit 1）",
+          "name": "run --api --type 不存在：getEntryPoint 干净报错（负向，exit 1）",
           "kind": "tool",
-          "note": "默认类型名在 ConsoleScript 程序集不存在 → Result{code=5} 经 'run: FAIL getEntryPoint' 报出，进程不崩 exit 1。",
+          "note": "显式传不存在的类型名 → Result{code=5} 经 'run: FAIL getEntryPoint' 报出，进程不崩 exit 1。（2026-11-09 修：M-SC2/SC3 后缺省类型名已能解析成功，缺 --type 不再构成负向，改为显式 NoSuchType。）",
           "args": [
             "run",
             "{root}/script/examples/console",
-            "--api"
+            "--api",
+            "--type",
+            "NoSuchType"
           ],
           "expectExit": 1,
           "expectLog": "run: FAIL getEntryPoint: code=5",
-          "command": "nl-script run script/examples/console --api",
+          "command": "nl-script run script/examples/console --api --type NoSuchType",
           "preview": "example/m-sc1/run-badtype.png"
         },
         {
@@ -4828,7 +4830,7 @@
             "selftest"
           ],
           "expectExit": 0,
-          "expectLog": "audio selftest: PASS (33/33)",
+          "expectLog": "audio selftest: PASS (46/46)",
           "command": "audio-tools selftest"
         },
         {
@@ -4895,7 +4897,7 @@
             "{root}/example/audio-s1/bad-prov"
           ],
           "expectExit": 1,
-          "expectLog": "mismatch after re-render",
+          "expectLog": "hash mismatch",
           "command": "audio-tools check example/audio-s1/bad-prov"
         }
       ]
@@ -5097,6 +5099,7 @@
           ],
           "expectExit": 0,
           "expectLog": "debug: PASS",
+          "cwd": "{root}",
           "preview": "example/audio-s2/debug-panel.png",
           "command": "audio-tools debug assets/audio/test-tone.wav assets/audio/test-tone-b.wav example/audio-s2/debug"
         },
@@ -5208,6 +5211,10 @@
             "9"
           ],
           "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
+          "exe": {
+            "dx12": "build/DX12/viewer.exe",
+            "vulkan": "build/VULKAN/viewer.exe"
+          },
           "script": "example/ecs-parallel/run.bat"
         }
       ]
