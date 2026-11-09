@@ -115,6 +115,22 @@ add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 # core/simplify 的 QEM 是正式实现，不依赖 meshopt）----
 add_subdirectory(thirdparty/meshoptimizer EXCLUDE_FROM_ALL)
 
+# ---- P8 M-P0：Jolt Physics 5.3.1 vendored（纯 CPU，零图形 SDK / 零联网）----
+# 上游 Build/CMakeLists 作子目录接入；samples/tests 只在它是根项目时启用。
+# 统一 CRT / RTTI / 异常口径：默认是 /MT 静态 CRT，会和 nl_core/viewer 的 /MD
+# 混链打架（Carrot 同样显式关掉）。详见 thirdparty/jolt/VENDOR.md。
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+set(USE_ASSERTS OFF CACHE BOOL "" FORCE)
+set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -144,13 +160,14 @@ add_library(nl_core STATIC
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
+    core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
-target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 Jolt)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -323,10 +340,16 @@ target_link_libraries(nanite-scene PRIVATE nl_core)
 add_executable(nanite-console nanite-console/main.cpp)
 target_link_libraries(nanite-console PRIVATE nl_core)
 
+# ---- P8 M-P0：phys-tools —— 物理最小世界无头验收工具（A 类轨道）----
+# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 nanite-scene / 展示台 expectExit）。
+# 只链 nl_core（nl/physics PIMPL 把 Jolt 头挡在 cpp 内），零图形 API。
+add_executable(phys-tools phys-tools/main.cpp)
+target_link_libraries(phys-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console phys-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -509,3 +532,13 @@ set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
 add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
 set_tests_properties(e2-ecs-good-scene PROPERTIES
     PASS_REGULAR_EXPRESSION "PASS")
+
+# ---- P8 M-P0：物理最小世界（A 类工具版验收，零渲染依赖）----
+add_test(NAME p0-phys-selftest COMMAND phys-tools selftest)
+set_tests_properties(p0-phys-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "phys-p0 selftest: PASS")
+add_test(NAME p0-phys-drop COMMAND phys-tools simulate --frames 240)
+set_tests_properties(p0-phys-drop PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P0 drop trajectory")
+add_test(NAME p0-phys-bad-config COMMAND phys-tools simulate --restitution 1.5)
+set_tests_properties(p0-phys-bad-config PROPERTIES WILL_FAIL TRUE)

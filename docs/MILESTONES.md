@@ -1358,3 +1358,34 @@
 7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
 
 **下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
+
+
+## P8 M-P0：物理最小世界（feat/physics 轨道，2026-11-09，tag `phys-p0`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/PhysicsSystem.{h,cpp}` + `BodyUserData.h` + `Types.h`（2902 行 Jolt 集成层：单例生命周期 / 10MB TempAllocator / 1/60 累加器 / 三层过滤器 / 体关联）、Carrot `thirdparty/JoltPhysics/HelloWorld/HelloWorld.cpp`（最小世界范式，只读）、bevy `crates/` 与根 `Cargo.toml`（本体无物理 crate，仅 `examples/movement/physics_in_fixed_timestep.rs`）、UE 5.8.4 `Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`（自研 Chaos，**无 Jolt 后端**）；历史读 `MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `MEMORY.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PARALLEL-TRACKS.md`。
+- **拍板留痕**：用户指令「建 feat/physics 开发物理模块内容」提前解锁排期闸（计划 §排期约束括号内本就允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3 之后**，不随本轮解锁。master 侧注册表同步提交 `4f5a8ed`（AGENTS.md / PARALLEL-TRACKS §7.1b+§7.1e / wt_pool TRACKS / NON-RENDER-ROADMAP / UE-DIFFS D10）。
+- **建轨**：`wt_pool claim --track physics --milestone M-P0` → `git worktree add -b feat/physics E:/UE_STUDY_2026/nl-engine-physics` → junction 共享 `.workbuddy` / `thirdparty/slang/dist` + 本 wt 索引 `skip-worktree`（双向 status 自查干净，未碰 master 上另一会话的三份 WIP）。
+- **vendored**：从本地 Carrot 上游副本拷 Jolt Physics **5.3.1**（MIT，`Jolt/` 442 文件 + `Build/CMakeLists.txt` + LICENSE + README，共 445 文件 / 4.9MB，零联网），`thirdparty/jolt/VENDOR.md` 记来源/裁剪/升级纪律；CMake 以 `add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)` 接入，强制统一 CRT/RTTI/异常口径、关 IPO/install/shared/asserts。
+- **落码**：`nl/physics/World.{hpp,cpp}`（PIMPL，Jolt 头只在 cpp；进程级幂等 bootstrap；2 对象层 + 2 宽相层；静态地面 + 动态球；固定步长逐帧轨迹）、`phys-tools.exe`（selftest / simulate / check，退出码 0/1/2）、CMake `phys-tools` 目标 + ctest 三条。
+- **交代物**：`example/phys-p0/`（run.bat ALL GREEN + drop.tsv + 4 份真实日志 + `trajectory.png` / `acceptance.png` 两张证据图，均肉眼核验）、`example/cases.json` `phys-p0` 卡五用例、`docs/p8/PHYS-TOOLS-GUIDE.md`、计划 M-P0 标完成、`UE-DIFFS.md` D10。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p0`）；master 侧注册表/勘误提交 `4f5a8ed`。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 数值锚（默认 h=5.0 / r=0.5 / g=9.8 / e=0.6 / dt=1/60 / 240 帧）：自由落体段与半隐式欧拉闭式最大误差 **0.000001**；首次触地 frame 57 = **0.950 s** vs 解析 `sqrt(2(h-r)/g)=0.958 s`（差 < 3 步）；反弹峰值 **2.138943 m** @ frame 92 vs `r+e²(h-r)=2.120 m`；末帧 y=**0.500000**、末 10 帧极差 **0.000000**；世界体数 2。
+- 确定性硬判据：同 `DropConfig` 两次新建世界，241 个样本逐字段位一致（`phys-tools selftest` 断言锁死）。
+- selftest **23 条断言全 ok**（含 5 条负向配置）；`phys-tools check drop.tsv` PASS；`example/phys-p0/run.bat` **ALL GREEN** exit 0（重跑四用例 + 重生成两张证据图）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均 PASS；ctest `p0-phys-selftest` / `p0-phys-drop` / `p0-phys-bad-config` 3/3。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**（按总闸纪律）。
+- `python tools/showcase/server.py --check` exit 0；展示台卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。
+
+**踩坑情况**
+1. **CRT 混链**：Jolt 上游默认 `USE_STATIC_MSVC_RUNTIME_LIBRARY=ON`（/MT）与 nl-engine /MD 冲突，必须 FORCE OFF 并统一 RTTI/异常、关 IPO/install/shared/asserts（Carrot 同款）。
+2. **`AssertFailed` 返回 true 会 `JPH_BREAKPOINT`**：headless 工具里等于主动 int3，改为只打日志返回 false。
+3. **裸 shell 无 nmake**：`cmake --build --target phys-tools` 直跑失败，构建必须走 `scripts/build-m0.2.bat`（第二次踩，已固化）。
+4. **收敛判据**：e=0.6 时末 30 帧仍有第 3/4 次弹跳（极差 0.038），首版阈值 0.03 误判 FAIL；拆成「30 帧衰减 < 0.05」+「末 10 帧严格平坦 < 0.005」。
+5. **`check` 须读 TSV provenance**：不读头部参数就会拿默认 h/g/e 验自定义 dump = 假绿，已改为从 `# jolt=...` 行读回。
+6. **UE 口径勘误**：立项文档「UE 5.x 官方提供 Jolt 后端」实读不成立（本机 UE 5.8.4 只有 Chaos），P8-PHYS-PLAN / NON-RENDER-ROADMAP 已改，差异落 `UE-DIFFS.md` D10；结论「不自研求解器」不变。
+7. **证据图标注重叠**：首版 trajectory.png 的 floor/contact 标签撞车，移到红线下方后复验通过——工具版证据图同样要肉眼核验。
+
+**下一步**：M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联）；M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。

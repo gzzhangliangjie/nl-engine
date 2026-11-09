@@ -3833,6 +3833,77 @@
      "script": "example/pbr-direct/run.bat selftest"
     }
    ]
+  },
+  {
+   "id": "phys-p0",
+   "label": "P8 M-P0",
+   "name": "物理最小世界（vendored Jolt 5.3.1 + 落球轨迹）",
+   "tag": "phys-p0",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/physics 首个里程碑：本地 vendored Jolt Physics 5.3.1（MIT、纯 CPU、零联网），自写集成层 nl/physics（PIMPL 把 Jolt 头挡在 core cpp 内）；两层碰撞层 + 静态地面 + 动态球，固定 1/60 步长无头步进。工具版交代：phys-tools selftest / simulate / check + 真实 TSV 生成的证据图，不进 kStage、不进渲染回归。",
+   "acceptance": [
+    "自由落体段与半隐式欧拉闭式最大误差 0.000001；首次触地 0.950s vs 解析 sqrt(2h/g)=0.958s（差 < 3 步）",
+    "恢复系数能量律：反弹峰值 2.139m vs e^2 预测 2.120m；末 10 帧轨迹完全收敛到球心高度 0.500m",
+    "确定性硬判据：同 DropConfig 两次新建世界，241 个样本逐字段（float 位）完全一致",
+    "双后端构建 + viewer selftest 16/16 x2；phys-tools selftest 两树均 PASS；ctest p0-phys-* 3/3",
+    "交代物：example/phys-p0/（run.bat ALL GREEN + drop.tsv + 2 张真实输出证据图 + 4 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。phys-tools 是纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：自由落体 / 弹跳 / 收敛 / 确定性 23 条断言",
+     "kind": "tool",
+     "note": "真实 Jolt 5.3.1 世界跑 240 帧；--verbose 逐条 ok 行是 acceptance.png 的数据源。",
+     "args": ["selftest", "--verbose"],
+     "expectExit": 0,
+     "expectLog": "phys-p0 selftest: PASS",
+     "command": "phys-tools selftest --verbose"
+    },
+    {
+     "id": "simulate",
+     "name": "simulate：逐帧轨迹 TSV（真实求解器输出）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；头三行 provenance 记录版本/参数/体数，数据列 frame t y vy。",
+     "args": ["simulate", "--frames", "240"],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-P0 drop trajectory",
+     "command": "phys-tools simulate --frames 240"
+    },
+    {
+     "id": "check",
+     "name": "check：从归档 TSV 复验物理锚点",
+     "kind": "tool",
+     "note": "从 TSV 头读回真实参数，不假定默认值；用与 selftest 同一套锚点复验。",
+     "args": ["check", "{root}/example/phys-p0/drop.tsv"],
+     "expectExit": 0,
+     "expectLog": "phys-p0 check: PASS",
+     "command": "phys-tools check example/phys-p0/drop.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：非法恢复系数显式退出 2",
+     "kind": "tool",
+     "note": "--restitution 1.5 越界，参数校验先于任何 Jolt 调用拒绝。",
+     "args": ["simulate", "--restitution", "1.5"],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: restitution out of range",
+     "command": "phys-tools simulate --restitution 1.5"
+    }
+   ]
   }
  ]
 }

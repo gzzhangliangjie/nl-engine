@@ -1,0 +1,4 @@
+phys-p0 check: PASS (E:\UE_STUDY_2026\nl-engine-physics\example\phys-p0\drop.tsv, 241 samples)
+  frames=241 fall_frame=57 fall_t=0.950002 analytic_fall_t=0.958315
+  free_fall_max_err=0.000005 bounce_peak=2.138943 (frame 92)
+  rest_y=0.500000 rest_spread=0.038218 last10_spread=0.000000
