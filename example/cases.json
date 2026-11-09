@@ -3975,6 +3975,77 @@
      "command": "phys-tools layers --frames 0"
     }
    ]
+  },
+  {
+   "id": "phys-p2",
+   "label": "P8 M-P2",
+   "name": "物理堆叠稳定 + 休眠岛（6 箱体塔 10 秒长跑）",
+   "tag": "phys-p2",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/physics 第三里程碑：静态地面 + 6 个 1m 立方塔，固定 1/60 步进 600 帧；三个对照用例 baseline（摩擦 0.6 + 休眠）/ no_sleep（摩擦 0.6 关休眠）/ no_friction（摩擦 0 + 顶层侧向初速 0.5），逐体逐帧位姿与活跃体数 dump 成 TSV。结论：摩擦与接触求解器才是稳定来源，休眠只省算力。M-P0/M-P1 基线逐字节回归锁死。",
+   "acceptance": [
+    "baseline 六层末态 y=0.499839 / 1.498013 / 2.497626 / 3.497474 / 4.497100 / 5.497056（层距 ~1.0，无塌塔），末 60 帧位移极差 0.000000、速度 0.000000、活跃体 0（整岛休眠）、最大水平漂移 0.007372",
+    "no_sleep 同样稳定（顶 y=5.489297、尾段极差 0.000042）但活跃体 6 —— 休眠是优化不是稳定性来源；no_friction 顶层滑出 10.946865m、塔塌到地面（collapsed=1）",
+    "确定性：同配置 baseline 两次新建世界 601 帧 × 6 体逐字段（位置/速度/激活位/活跃体数）位一致；4 条参数校验负向用例被显式拒绝",
+    "selftest 71 条断言全绿（M-P0 23 + M-P1 21 + M-P2 27）、check-stack 从数据列独立重算收敛并与摘要交叉核对、ctest p0/p1/p2 7/7、DX12+VULKAN 双后端 BUILD OK + viewer 16/16 x2",
+    "M-P0 drop.tsv MD5 075ddfe9e4e513763c2728f7c801a1ed、M-P1 layers.tsv MD5 36c4b169e1d4f77124211c22f942111c 均逐字节不变；交代物：example/phys-p2/（run.bat ALL GREEN + stack.tsv + 2 张真实证据图 + 6 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md §9"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 stack / check-stack。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-P0/M-P1/M-P2 全锚点 + 堆叠确定性",
+     "kind": "tool",
+     "note": "真实 Jolt 5.3.1 世界跑三个 600 帧堆叠用例；--verbose 的 71 条 ok 行是 acceptance.png 的数据源。",
+     "args": ["selftest", "--verbose"],
+     "expectExit": 0,
+     "expectLog": "phys-p2 anchors: PASS",
+     "command": "phys-tools selftest --verbose"
+    },
+    {
+     "id": "stack",
+     "name": "stack：三用例逐体逐帧轨迹 TSV（真实求解器输出）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# jolt= 行是 provenance，# case 行记录每例摩擦/休眠/末态活跃体/尾段极差/漂移/是否塌塔。",
+     "args": ["stack", "--frames", "180"],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-P2 stacking stability",
+     "command": "phys-tools stack --frames 180"
+    },
+    {
+     "id": "check-stack",
+     "name": "check-stack：从归档 TSV 复验堆叠",
+     "kind": "tool",
+     "note": "从 # jolt= 头读回 boxes/frames/tail/half_extent；从数据列独立重算层高/层距/尾段收敛/活跃体/漂移，再与 # case 摘要交叉核对，防假绿。",
+     "args": ["check-stack", "{root}/example/phys-p2/stack.tsv"],
+     "expectExit": 0,
+     "expectLog": "phys-p2 check-stack: PASS",
+     "command": "phys-tools check-stack example/phys-p2/stack.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：stack --frames 0 显式退出 2",
+     "kind": "tool",
+     "note": "参数校验先于任何 Jolt 调用拒绝；非法 boxes/friction/gap 另有 selftest 断言覆盖。",
+     "args": ["stack", "--frames", "0"],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools stack --frames 0"
+    }
+   ]
   }
  ]
 }

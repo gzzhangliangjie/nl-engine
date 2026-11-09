@@ -26,7 +26,7 @@
 |---|---|---|
 | **M-P0** ✅ **2026-11-09 完成（tag `phys-p0`）** | vendored Jolt 5.3.1 + 最小世界（落下小球） | `phys-tools` 无头模拟 dump 轨迹 TSV → 证据图；弹跳曲线符合自由落体+恢复系数。实测见 §M-P0 固化与 `PHYS-TOOLS-GUIDE.md` |
 | **M-P1** ✅ **2026-11-09 完成（tag `phys-p1`）** | 体封装 + 碰撞层（引擎对象 ↔ Jolt 双向关联） | 层过滤矩阵用例：同层碰撞 / 异层穿透，dump 可验。实测见 §M-P1 固化口径与 `PHYS-TOOLS-GUIDE.md` §8 |
-| **M-P2** | 堆叠 + 地面（静态体） | 箱体堆叠稳定不抖（长时间步进位移收敛），dump 证据 |
+| **M-P2** ✅ **2026-11-09 完成（tag `phys-p2`）** | 堆叠 + 地面（静态体） | 箱体堆叠稳定不抖（长时间步进位移收敛），dump 证据。实测见 §M-P2 固化口径与 `PHYS-TOOLS-GUIDE.md` §9 |
 | **M-P3** | debug 渲染接 viewer（Jolt DebugRendering → ImGui/线框） | 场景内实时看碰撞形状；交互模式演示 |
 | **M-P4** | 角色胶囊（CharacterMovement 式：扫掠 + 地面检测 + 斜坡） | 胶囊走斜坡/台阶轨迹 dump；与动作系统（M-A 轨道）动画衔接预留接口 |
 | **M-P5** | 场景集成：E1/E3 场景物体挂碰撞体 + 序列化 | E1 场景（50 物体）物理正确；Inspector 可编辑碰撞参数 |
@@ -53,12 +53,23 @@
 
 - **选型二次拍板**：物理不自研（成本取舍），继续 Jolt 5.3.1；UE 口径不参与选型，详见 §选型评审结论。
 - **层模型**：`kLayerCount=4`（FLOOR/DEFAULT/DEBRIS/GHOST），对象层与宽相层 **1:1 映射**；同一个 `LayerMatrix` 同时驱动 `ObjectLayerPairFilter` 与 `ObjectVsBroadPhaseLayerFilter`。只改一处会因宽相层先筛掉碰撞对而失效。
-- **矩阵**：对称 bool 掩码 `rows[a] bit b`，`set()` 强制双向写，`validateLayerProbe` 拒绝非对称；UE 三态响应的简化差异见 `UE-DIFFS.md` D12。
+- **矩阵**：对称 bool 掩码 `rows[a] bit b`，`set()` 强制双向写，`validateLayerProbe` 拒绝非对称；UE 三态响应的简化差异见 `UE-DIFFS.md` D13。
 - **双向关联**：`Body::SetUserData` 存 `bodies` 索引（不存裸指针）；owner→BodyID 用 `unordered_map`，BodyID→userData→owner 用表反查；两方向每例在 TSV 的 `owner_ok` 留证。
 - **M-P0 兼容**：`simulateDrop()` 用「全开但 (floor,floor) 关」矩阵，M-P0 落球 TSV 逐字节回归（MD5 `075ddfe…a1ed`）锁死；过滤器重构不得改变该基线。
 - **验收判据**：允许对停在 `blocker_y + 2r = 3.5`；禁用对「低于挡板接触线且未穿透地板」（末段余弹是物理正常，不要求精确静息）；ghost 全层穿透持续自由落体；`check-layers` 从 TSV provenance 读真实参数，不硬编码阈值。
 - **确定性契约不变**：`JobSystemSingleThreaded` + 1/60 + `collisionSteps=1`。
 - **交代**：工具版（`example/phys-p1/` + `cases.json` `phys-p1` 卡 + `PHYS-TOOLS-GUIDE.md` §8），不进 `kStage` / 渲染总闸。
+
+
+### M-P2 固化口径（2026-11-09 验收后写回）
+
+- **场景**：静态地面（顶 y=0）+ `boxes=6` 个 1m 立方，初始 `y=0.5+i*(1.0+gap)`、`gap=0.005`；固定 `1/60` + `collisionSteps=1` + `JobSystemSingleThreaded`，确定性契约不变。
+- **三用例对照（权威）**：`baseline`（friction 0.6 / sleep on）、`no_sleep`（同摩擦、关 `mAllowSleeping`）、`no_friction`（friction 0 / sleep on / 顶层 `+x 0.5 m/s`）。前两例证明**休眠只省算力**，第三例证明**摩擦与接触求解器才是稳定来源**；不得把「休眠」写成稳定性来源。
+- **休眠口径**：`StackConfig::allowSleeping` 同时写 `JPH::PhysicsSettings::mAllowSleeping` 与 `BodyCreationSettings::mAllowSleeping`；`mTimeBeforeSleep=0.5s` / `mPointVelocitySleepThreshold=0.03` 用上游默认不暴露。只读 `GetNumActiveBodies(EBodyType::RigidBody)` 观测。UE 对应 `IslandManager` 整岛休眠，差异见 `UE-DIFFS.md` D14。
+- **稳定性指标**：`maxTailSpread`（末 60 帧全体 `|y(t)-y(end)|` 最大值）、`maxTailSpeed`、`maxDrift`/`topDrift`、`collapsed`、`finalActive`。判据按物理本质写，不要求精确静息高度；`no_sleep` 尾段速度非零属正常持续迭代，只有 baseline 要求速度严格为 0。
+- **复验防假绿**：`check-stack` 必须从 25 列数据**独立重算**末态层高、层距、尾段极差、活跃体、漂移，再与 `# case` 摘要行交叉核对；只验摘要不算验收。
+- **回归闸**：M-P0 `drop.tsv`（MD5 `075ddfe…a1ed`）与 M-P1 `layers.tsv`（MD5 `36c4b169…111c`）逐字节不变，任何新增世界不得扰动这两条基线。
+- **交代**：工具版（`example/phys-p2/` + `cases.json` `phys-p2` 卡 + `PHYS-TOOLS-GUIDE.md` §9），不进 `kStage` / 渲染总闸。
 
 ## 验收纪律
 

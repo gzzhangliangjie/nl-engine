@@ -87,7 +87,7 @@ M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联，`BodyUse
 
 ### 内核约定（写回 `P8-PHYS-PLAN.md`）
 - **层级**：`kLayerCount=4`（FLOOR=0 / DEFAULT=1 / DEBRIS=2 / GHOST=3），对象层与宽相层 **1:1 映射**，同一个 `LayerMatrix` 同时驱动 `ObjectLayerPairFilter` 与 `ObjectVsBroadPhaseLayerFilter`——只改一处过滤器会让宽相层先把碰撞对筛掉，矩阵看起来「没生效」。
-- **矩阵**：`rows[a] bit b` 对称 bool 掩码，`set()` 强制双向写入；`validateLayerProbe` 拒绝非对称矩阵。UE 用 `FCollisionResponseContainer` 的 Ignore/Overlap/Block 三态，我们简化的差异见 `UE-DIFFS.md` D12。
+- **矩阵**：`rows[a] bit b` 对称 bool 掩码，`set()` 强制双向写入；`validateLayerProbe` 拒绝非对称矩阵。UE 用 `FCollisionResponseContainer` 的 Ignore/Overlap/Block 三态，我们简化的差异见 `UE-DIFFS.md` D13。
 - **双向关联**：Jolt `Body::SetUserData` 存的是 `bodies` 向量的**索引**，不是对象裸指针（避免 move/销毁后悬垂）；owner -> BodyID 走 `unordered_map`，BodyID -> userData(index) -> owner 走表反查，两个方向都由 `ownerOk()` 在 TSV 里留证。
 - **M-P0 兼容**：`simulateDrop()` 用「全开但 (floor,floor) 关」的矩阵，过滤行为与原固定两层版本逐位一致；`run.bat` 用 MD5 逐字节回归把这条锁死。
 - **确定性契约不变**：`JobSystemSingleThreaded` + 1/60 + collisionSteps 1；`disabled_pair` 两次新建世界逐样本位一致。
@@ -101,3 +101,29 @@ M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联，`BodyUse
 
 ### 下一步
 M-P2 堆叠稳定 / M-P3 debug 渲染接 viewer / M-P4 角色胶囊；**M-P5 仍 gate 在 P8 E3 之后**。
+
+
+## 9. M-P2：堆叠稳定与休眠岛（2026-11-09，tag `phys-p2`）
+
+### 交付物
+- `example/phys-p2/run.bat`：重跑 selftest / stack / check-stack / M-P0+M-P1 双基线逐字节回归 / usage / 负向，再重生成两张证据图，全绿才退出 0。
+- `example/phys-p2/stack.tsv`：3 用例 × 601 帧 × 6 体真实 Jolt 输出（25 列）；`# jolt=` 是 provenance（boxes / half_extent / gap / frames / tail），`# case` 记录每例的摩擦、休眠开关、末态活跃体数、尾段极差/速度、最大漂移、顶层高度、是否塌塔。
+- `example/phys-p2/{trajectory,acceptance}.png`：`tools/make-phys-p2-evidence.py` 从真实 TSV 与真实日志渲染（六层高度曲线 + 三用例顶层对照 + 末 60 帧收敛放大 + 实测面板；验收图为完整日志，provenance 长行循环折行不截断）。
+- `tools/check-phys-regression.py`：M-P0 `drop.tsv` + M-P1 `layers.tsv` 双基线逐字节 + MD5 比对，输出纯 ASCII。
+
+### 内核约定（写回 `P8-PHYS-PLAN.md`）
+- **场景**：静态地面（Box 200×2×200，顶 y=0）+ `boxes` 个 1m 立方（halfExtent 0.5），初始中心 `y = 0.5 + i*(1.0+gap)`，`gap=0.005` 留微小下落让压实过程可见。固定 `1/60`、`collisionSteps=1`、`JobSystemSingleThreaded`——确定性契约不变。
+- **三用例对照**：`baseline`（friction 0.6 / sleep on / 无扰动）、`no_sleep`（同摩擦，关 `mAllowSleeping`）、`no_friction`（friction 0 / sleep on / 顶层 `+x 0.5 m/s`）。前两例证明「休眠只省算力」，第三例证明「摩擦才是稳定来源」。
+- **休眠开关**：`StackConfig::allowSleeping` 同时写 `JPH::PhysicsSettings::mAllowSleeping` 与 `BodyCreationSettings::mAllowSleeping`；`mTimeBeforeSleep=0.5s` / `mPointVelocitySleepThreshold=0.03` 用上游默认不暴露。只读 `GetNumActiveBodies(EBodyType::RigidBody)` 观测，不碰求解器。UE 对应 `IslandManager` 整岛休眠，差异见 `UE-DIFFS.md` D14。
+- **稳定性指标**：`maxTailSpread`（末 60 帧全体 |y(t)−y(end)| 最大值）、`maxTailSpeed`、`maxDrift`/`topDrift`（水平位移）、`collapsed`（任一层低于期望槽位半个立方）、`finalActive`。判据按物理本质写，不要求精确静息高度（M-P0/M-P1 同款教训）。
+- **复验防假绿**：`check-stack` 从 TSV 数据列**独立重算**末态层高、层距、尾段极差、活跃体、漂移，再与 `# case` 摘要行交叉核对；只验摘要不算验收。
+- **回归闸**：M-P0 落球与 M-P1 层矩阵 TSV 的 MD5 必须逐字节不变（`075ddfe…a1ed` / `36c4b169…111c`），证明新增堆叠世界未扰动既有基线。
+
+### CLI
+| 命令 | 行为 | 退出码 |
+|---|---|---|
+| `phys-tools stack [--out <tsv>] [--frames N] [--boxes N] [--gap G]` | 跑 3 个堆叠用例，输出逐体逐帧 TSV | 0 / 1 / 2 |
+| `phys-tools check-stack <tsv>` | 从归档 TSV 复验堆叠稳定性与休眠 | 0 / 1 / 2 |
+
+### 下一步
+M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）/ M-P4 角色胶囊；**M-P5 仍 gate 在 P8 E3 之后**。

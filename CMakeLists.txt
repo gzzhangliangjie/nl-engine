@@ -549,3 +549,10 @@ set_tests_properties(p1-phys-layers PROPERTIES
     PASS_REGULAR_EXPRESSION "nl-physics M-P1 collision layer matrix probe")
 add_test(NAME p1-phys-negative COMMAND phys-tools layers --frames 0)
 set_tests_properties(p1-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P2：堆叠稳定 / 休眠岛（A 类工具版验收）----
+add_test(NAME p2-phys-stack COMMAND phys-tools stack --frames 180)
+set_tests_properties(p2-phys-stack PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P2 stacking stability")
+add_test(NAME p2-phys-negative COMMAND phys-tools stack --frames 0)
+set_tests_properties(p2-phys-negative PROPERTIES WILL_FAIL TRUE)

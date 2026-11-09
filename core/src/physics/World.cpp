@@ -27,6 +27,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyType.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
@@ -394,5 +395,164 @@ LayerProbeResult World::simulateLayerProbe(const LayerMatrix& matrix,
     }
     return r;
 }
+
+// ---- M-P2: stacking stability ----------------------------------------------
+// UE Chaos counterpart (read only): IslandManager sleeps a whole island when
+// SleepLinearThresholdSq / SleepAngularThresholdSq stay under for
+// SleepCounterThreshold frames. Jolt exposes the same idea as
+// PhysicsSettings::mAllowSleeping + mTimeBeforeSleep +
+// mPointVelocitySleepThreshold. We keep the solver untouched and only READ the
+// active-body count, so the TSV shows whether the tower really went to sleep.
+bool validateStack(const StackConfig& cfg, std::string* err) {
+    auto bad = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    if (cfg.frames < 60 || cfg.frames > 100000) return bad("frames out of range [60,100000]");
+    if (!(cfg.dt >= 1.0 / 1000.0 && cfg.dt <= 1.0 / 30.0)) return bad("dt out of range [0.001,0.033333]");
+    if (!(cfg.gravity > 0.0f && cfg.gravity <= 1000.0f)) return bad("gravity out of range (0,1000]");
+    if (cfg.boxes < 2 || cfg.boxes > 16) return bad("boxes out of range [2,16]");
+    if (!(cfg.halfExtent > 0.0f && cfg.halfExtent <= 10.0f)) return bad("halfExtent out of range (0,10]");
+    if (!(cfg.gap >= 0.0f && cfg.gap <= cfg.halfExtent)) return bad("gap out of range [0,halfExtent]");
+    if (!(cfg.friction >= 0.0f && cfg.friction <= 1.0f)) return bad("friction out of range [0,1]");
+    if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f)) return bad("restitution out of range [0,1]");
+    if (!(cfg.lateralSpeed >= 0.0f && cfg.lateralSpeed <= 10.0f)) return bad("lateralSpeed out of range [0,10]");
+    if (!(cfg.damping >= 0.0f && cfg.damping <= 1.0f)) return bad("damping out of range [0,1]");
+    return true;
+}
+
+StackResult World::simulateStack(const StackConfig& cfg) {
+    StackResult r;
+    if (!validateStack(cfg, &r.error)) return r;
+    bootstrap();
+
+    // Same filter cadence as M-P0/M-P1: all pairs on except (floor,floor).
+    LayerMatrix matrix;
+    matrix.set(layers::kFloor, layers::kFloor, false);
+    JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
+    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(matrix);
+    ObjectLayerPairFilterImpl objectLayerPairFilter(matrix);
+    JPH::PhysicsSystem physicsSystem;
+
+    physicsSystem.Init(1024, 0, 1024, 1024,
+                       bpLayerInterface, objectVsBroadPhaseLayerFilter, objectLayerPairFilter);
+    JPH::PhysicsSettings settings;
+    settings.mAllowSleeping = cfg.allowSleeping;
+    physicsSystem.SetPhysicsSettings(settings);
+    physicsSystem.SetGravity(JPH::Vec3(0.0f, -cfg.gravity, 0.0f));
+    JPH::BodyInterface& bi = physicsSystem.GetBodyInterface();
+
+    JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(100.0f, 1.0f, 100.0f));
+    floorShapeSettings.SetEmbedded();
+    auto floorShapeResult = floorShapeSettings.Create();
+    if (floorShapeResult.HasError()) { r.error = "floor shape creation failed"; return r; }
+    JPH::ShapeRefC floorShape = floorShapeResult.Get();
+
+    const JPH::Vec3 he(cfg.halfExtent, cfg.halfExtent, cfg.halfExtent);
+    JPH::BoxShapeSettings boxShapeSettings(he);
+    boxShapeSettings.SetEmbedded();
+    auto boxShapeResult = boxShapeSettings.Create();
+    if (boxShapeResult.HasError()) { r.error = "box shape creation failed"; return r; }
+    JPH::ShapeRefC boxShape = boxShapeResult.Get();
+
+    std::vector<JPH::BodyID> ids;
+    auto add = [&](const JPH::ShapeRefC& shape, JPH::RVec3 pos, JPH::EMotionType motion,
+                   std::uint32_t layer) -> bool {
+        JPH::BodyCreationSettings s(shape, pos, JPH::Quat::sIdentity(), motion,
+                                    static_cast<JPH::ObjectLayer>(layer));
+        s.mFriction        = cfg.friction;
+        s.mRestitution     = cfg.restitution;
+        s.mAllowSleeping   = cfg.allowSleeping;
+        s.mLinearDamping   = cfg.damping;
+        s.mAngularDamping  = cfg.damping;
+        JPH::Body* body = bi.CreateBody(s);
+        if (!body) return false;
+        const JPH::BodyID id = body->GetID();
+        bi.AddBody(id, motion == JPH::EMotionType::Static
+                           ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        ids.push_back(id);
+        return true;
+    };
+
+    if (!add(floorShape, JPH::RVec3(0.0_r, -1.0_r, 0.0_r),
+             JPH::EMotionType::Static, layers::kFloor)) {
+        r.error = "floor body creation failed";
+        return r;
+    }
+    const float pitch = 2.0f * cfg.halfExtent + cfg.gap;
+    for (std::uint32_t i = 0; i < cfg.boxes; ++i) {
+        const float y = cfg.halfExtent + static_cast<float>(i) * pitch;
+        if (!add(boxShape, JPH::RVec3(0.0_r, JPH::Real(y), 0.0_r),
+                 JPH::EMotionType::Dynamic, layers::kDefault)) {
+            r.error = "box body creation failed";
+            return r;
+        }
+        if (i + 1 == cfg.boxes && cfg.lateralSpeed > 0.0f)
+            bi.SetLinearVelocity(ids.back(), JPH::Vec3(cfg.lateralSpeed, 0.0f, 0.0f));
+    }
+
+    physicsSystem.OptimizeBroadPhase();
+    impl_->lastBodyCount = physicsSystem.GetNumBodies();
+
+    r.frames.reserve(static_cast<std::size_t>(cfg.frames) + 1);
+    auto pushFrame = [&](int frame) {
+        StackFrame f;
+        f.frame = frame;
+        f.t = frame * cfg.dt;
+        f.activeBodies = physicsSystem.GetNumActiveBodies(JPH::EBodyType::RigidBody);
+        f.bodies.resize(cfg.boxes);
+        for (std::uint32_t i = 0; i < cfg.boxes; ++i) {
+            const JPH::BodyID id = ids[static_cast<std::size_t>(i) + 1];
+            const JPH::RVec3 p = bi.GetCenterOfMassPosition(id);
+            const JPH::Vec3  v = bi.GetLinearVelocity(id);
+            BodySample& bs = f.bodies[i];
+            bs.position = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                            static_cast<float>(p.GetZ()) };
+            bs.velocity = { v.GetX(), v.GetY(), v.GetZ() };
+            bs.active = bi.IsActive(id);
+        }
+        r.frames.push_back(std::move(f));
+    };
+
+    pushFrame(0);
+    for (int frame = 1; frame <= cfg.frames; ++frame) {
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        pushFrame(frame);
+    }
+
+    const StackFrame& last = r.frames.back();
+    r.finalActive = last.activeBodies;
+    const int tail = std::min(60, static_cast<int>(r.frames.size()));
+    const int from = static_cast<int>(r.frames.size()) - tail;
+    for (int k = from; k < static_cast<int>(r.frames.size()); ++k) {
+        for (std::uint32_t i = 0; i < cfg.boxes; ++i) {
+            const BodySample& b = r.frames[static_cast<std::size_t>(k)].bodies[i];
+            const float dy = std::abs(b.position.y - last.bodies[i].position.y);
+            r.maxTailSpread = std::max(r.maxTailSpread, dy);
+            const nl::math::Vec3& v = b.velocity;
+            const float speed = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            r.maxTailSpeed = std::max(r.maxTailSpeed, speed);
+        }
+    }
+    for (std::uint32_t i = 0; i < cfg.boxes; ++i) {
+        const BodySample& b = last.bodies[i];
+        const float drift = std::sqrt(b.position.x * b.position.x + b.position.z * b.position.z);
+        r.maxDrift = std::max(r.maxDrift, drift);
+        const float expectedY = cfg.halfExtent + static_cast<float>(i) * 2.0f * cfg.halfExtent;
+        if (b.position.y < expectedY - cfg.halfExtent) r.collapsed = true;
+    }
+    const BodySample& top = last.bodies[cfg.boxes - 1];
+    r.topDrift = std::sqrt(top.position.x * top.position.x + top.position.z * top.position.z);
+    r.topY = top.position.y;
+
+    for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
+        bi.RemoveBody(*rit);
+        bi.DestroyBody(*rit);
+    }
+    return r;
+}
+
 
 } // namespace nl::physics

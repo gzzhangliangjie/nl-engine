@@ -61,7 +61,7 @@ constexpr std::uint32_t kGhost   = 3;  // collides with nothing
 
 // Symmetric bool matrix: row a bit b == "a and b may collide".
 // UE counterpart is FCollisionResponseContainer's Ignore/Overlap/Block tri-state;
-// the A-class track keeps a bool mask (docs/s5/UE-DIFFS.md D12).
+// the A-class track keeps a bool mask (docs/s5/UE-DIFFS.md D13).
 struct LayerMatrix {
     std::uint32_t rows[kLayerCount]{};
 
@@ -114,6 +114,54 @@ struct LayerProbeResult {
 bool validateLayerProbe(const LayerProbeConfig& cfg, const LayerMatrix& matrix,
                         std::string* err);
 
+// ---- M-P2: stacking stability ----------------------------------------------
+// A tower of `boxes` unit cubes on a static floor, stepped for a long run.
+// Three cases (baseline / no_sleep / no_friction) make the stability sources
+// observable: contact solver + friction hold the tower, sleeping only removes
+// work. UE counterpart is Chaos IslandManager (velocity threshold + counter
+// sleeps a whole island) -- see docs/s5/UE-DIFFS.md D13.
+struct StackConfig {
+    int           frames        = 600;        // long run: 10 s at 1/60
+    double        dt            = 1.0 / 60.0;
+    float         gravity       = 9.8f;
+    std::uint32_t boxes         = 6;
+    float         halfExtent    = 0.5f;       // cube half edge => 1.0 m cubes
+    float         gap           = 0.005f;     // initial clearance between cubes
+    float         friction      = 0.6f;
+    float         restitution   = 0.0f;
+    float         lateralSpeed  = 0.0f;       // +x velocity given to the top cube
+    bool          allowSleeping = true;
+    float         damping       = 0.0f;       // 0 = no artificial damping
+};
+
+struct BodySample {
+    nl::math::Vec3 position{};
+    nl::math::Vec3 velocity{};
+    bool           active = true;
+};
+
+struct StackFrame {
+    int    frame = 0;
+    double t     = 0.0;
+    std::vector<BodySample> bodies;
+    std::uint32_t activeBodies = 0;
+};
+
+struct StackResult {
+    std::vector<StackFrame> frames;
+    std::string   error;
+    std::uint32_t finalActive   = 0;
+    float  maxTailSpread = 0.0f;  // max |y(t)-y(end)| over the last 60 frames, all cubes
+    float  maxTailSpeed  = 0.0f;  // max |velocity| over the last 60 frames, all cubes
+    float  maxDrift      = 0.0f;  // max horizontal displacement of any cube at t=end
+    float  topDrift      = 0.0f;  // horizontal displacement of the top cube at t=end
+    float  topY          = 0.0f;  // top cube center height at t=end
+    bool   collapsed     = false; // any cube ended more than half a cube below its slot
+    bool ok() const { return error.empty(); }
+};
+
+bool validateStack(const StackConfig& cfg, std::string* err);
+
 class World {
 public:
     World();
@@ -137,6 +185,10 @@ public:
     // the two-way engine<->Jolt association self-check.
     LayerProbeResult simulateLayerProbe(const LayerMatrix& matrix,
                                         const LayerProbeConfig& cfg);
+
+    // M-P2: floor + N-cube tower, stepped for a long run. Returns per-cube
+    // per-frame position/velocity/active flag plus the stability metrics.
+    StackResult simulateStack(const StackConfig& cfg);
 
 private:
     struct Impl;

@@ -1398,7 +1398,7 @@
 - **选型二次拍板**：用户「物理用现成的、没必要从头写、成本太高；纠结的只是用哪个」→ 复核后「继续走 Jolt 路线」。例外理由从「UE 口径 / 业界共识」改写为**成本取舍**，四处 canonical 文档（master `3d11f08`：NON-RENDER-ROADMAP / UE-DIFFS D10 / PARALLEL-TRACKS §7.1e / AGENTS.md；track：P8-PHYS-PLAN §选型评审结论）一次改到位；UE 口径不参与选型。
 - **建轨/占坑**：`wt_pool claim --track physics --milestone M-P1`，沿用 `feat/physics` worktree（junction 共享 + skip-worktree），未碰 master 上另一会话的 WIP。
 - **落码**：`World.hpp/.cpp` 新增 `LayerMatrix`（4 层对称 bool 掩码）/ `BodyInfo` / `LayerProbeConfig` / `LayerProbeResult` / `simulateLayerProbe()`；过滤器改为持有矩阵引用、宽相层 1:1 映射；体创建写入 userData 索引并建 owner<->BodyID 双向表。`phys-tools` 新增 `layers` / `check-layers` 与 M-P1 自测段；CMake 加 ctest 两条；新增 `make-phys-p1-evidence.py` 与 `check-phys-p0-regression.py`。
-- **交代物**：`example/phys-p1/`（run.bat ALL GREEN + layers.tsv + 2 张真实证据图 + 5 份日志 + drop-regen.tsv）、`cases.json` `phys-p1` 卡五用例、`PHYS-TOOLS-GUIDE.md` §8、计划 M-P1 标完成与固化口径、`UE-DIFFS.md` D12。
+- **交代物**：`example/phys-p1/`（run.bat ALL GREEN + layers.tsv + 2 张真实证据图 + 5 份日志 + drop-regen.tsv）、`cases.json` `phys-p1` 卡五用例、`PHYS-TOOLS-GUIDE.md` §8、计划 M-P1 标完成与固化口径、`UE-DIFFS.md` D13（原 D12 与 S16 TSR 条目撞号，M-P2 重编号）。
 
 **提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p1`）；master 侧选型改写提交 `3d11f08`。A 类轨道，不 bump `kStage`。
 
@@ -1420,3 +1420,31 @@
 8. **证据图布局**：首版 acceptance.png 把 selftest 截断在前 30 行（漏掉两条 PASS 行）、trajectory.png 图例压在曲线起点；去掉截断 + 图例移到右上空白后复验通过。
 
 **下一步**：M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+
+## P8 M-P2：堆叠稳定 + 休眠岛（feat/physics 轨道，2026-11-09，tag `phys-p2`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/PhysicsSystem.cpp`（`tick` 1/60 + `collisionSteps=3`、`cMaxContactConstraints=10240`、`SetContactListener`）与 `PhysicsBody.cpp`（接触事件分发），确认 Carrot 无专门堆叠/休眠配置；UE 5.8.4 `Experimental/Chaos/Public/Chaos/Defines.h`（`SleepingLinearThreshold` / `SleepingAngularThreshold` / `SleepCounterThreshold`）与 `Chaos/Public/Chaos/Island/IslandManager.h`（`SleepLinearThresholdSq` 等、整岛休眠）、`ParticleHandle.h`（`SleepThresholdMultiplier` 逐体倍率）只读；bevy `crates/` 复核仍无物理 crate，据实标注不作口径。Jolt 5.3.1 上游 `PhysicsSettings.h`（`mAllowSleeping` / `mTimeBeforeSleep=0.5` / `mPointVelocitySleepThreshold=0.03`）、`BodyCreationSettings.h`（`mFriction` / `mRestitution` / `mAllowSleeping`）、`BodyInterface.h`（`IsActive` / `GetLinearVelocity`）、`PhysicsSystem.h`（`GetNumActiveBodies(EBodyType)`）逐处核签名。历史读 `MILESTONES.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md` / M-P1 代码。
+- **占坑/建轨**：`wt_pool claim --track physics --milestone M-P2`，沿用 `feat/physics` worktree（junction 共享 + skip-worktree），未碰 master 上另一会话的 WIP。
+- **落码**：`World.hpp/.cpp` 新增 `StackConfig` / `BodySample` / `StackFrame` / `StackResult` / `validateStack` / `simulateStack()`（静态地面 + 6 立方塔，逐帧记录每体位姿/速度/激活位与活跃体数，算尾段收敛、水平漂移、塌塔标记）；`phys-tools` 新增 `stack` / `check-stack`、三用例 TSV（25 列）与 M-P2 自测段（27 条断言）；CMake 加 `p2-phys-stack` / `p2-phys-negative` 两条 ctest；新增 `make-phys-p2-evidence.py` 与 `check-phys-regression.py`。
+- **交代物**：`example/phys-p2/`（run.bat ALL GREEN + stack.tsv + 2 张真实证据图 + 6 份日志 + 双基线重生成 TSV）、`cases.json` `phys-p2` 卡五用例、`PHYS-TOOLS-GUIDE.md` §9、计划 M-P2 标完成与固化口径、`UE-DIFFS.md` D14；**顺手修复 M-P1 建档时 D12 与既有 S16 TSR 条目撞号**，重编号 D13 并同步四处引用。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p2`）；master 侧差异台账/注册表同步提交。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 三用例实测（`boxes=6 / halfExtent=0.5 / gap=0.005 / g=9.8 / dt=1/60 / frames=600 / tail=60`）：**baseline** 六层末态 `y=0.499839 / 1.498013 / 2.497626 / 3.497474 / 4.497100 / 5.497056`（层距 ~1.0、`collapsed=0`），末 60 帧 `maxTailSpread=0.000000`、`maxTailSpeed=0.000000`、`finalActive=0`（整岛休眠）、`maxDrift=0.007372`。
+- **no_sleep**：同样稳定（顶 `y=5.489297`、尾段极差 `0.000042`、速度 `0.036982`）但 `finalActive=6` —— 证明休眠只省算力、不是稳定性来源；**no_friction**：顶层滑出 `topDrift=10.946865`、塔落到地面 `top_y=0.497916`、`collapsed=1` —— 证明摩擦与接触求解器才是稳定来源。
+- `selftest` **71 条断言全绿**（M-P0 23 + M-P1 21 + M-P2 27），含 4 条参数负向、逐层槽位、尾段收敛、活跃体对照、601 帧 × 6 体逐字段确定性对拍；`check-stack` 从数据列独立重算层高/层距/尾段极差/活跃体/漂移并与摘要交叉核对，PASS；`example/phys-p2/run.bat` **ALL GREEN** exit 0。
+- **双基线逐字节回归**：M-P0 `drop.tsv` MD5 `075ddfe9e4e513763c2728f7c801a1ed`、M-P1 `layers.tsv` MD5 `36c4b169e1d4f77124211c22f942111c`，重生成文件均逐字节一致（新增堆叠世界未扰动既有基线）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均出三条 PASS、`stack` 两树均出 TSV；ctest `p0/p1/p2-phys-*` **7/7**。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**。
+- `python tools/showcase/server.py --check` exit 0；展示台 `phys-p2` 卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。两张证据图肉眼核验（图例压曲线、放大图时间轴、provenance 折行截断三轮修后复验通过）。
+
+**踩坑情况**
+1. **补丁转义层级**：首版 Python 补丁用普通字符串写 `\\n`，C 源码里变成 `\\\\n`，脚本在写盘前断言中止；构建跑的仍是旧代码却报 BUILD OK（假绿）。改用 raw string 写单反斜杠转义，并养成「补丁写盘后先 grep 新符号再构建」的顺序。
+2. **判据按物理本质**：`no_friction` 是顶层横向滑出而非「塔精确塌到某高度」，判据写 `topDrift > 0.3` + `collapsed`；`no_sleep` 求解器持续迭代使尾段速度 `0.037` 非零，只能对 baseline 要求速度严格为 0，不能把 no_sleep 误判成抖动。
+3. **`check-stack` 不能只验摘要**：从 `# case` 行读指标就放行等于 M-P0/M-P1 的「不读 provenance = 假绿」翻版；改为从 25 列数据独立重算再与摘要交叉核对。
+4. **证据图三轮布局**：右上图例压在 baseline/no_sleep 曲线上；末 60 帧放大沿用全时间轴只剩右端一小截（改用自身 t 范围）；provenance 长行**一次折行不够**（列头续行仍 176 字符被 `ln[:155]` 截），改循环折行 + 制表符展开，最终渲染行宽 ≤151。
+5. **D12 重号（上一轮遗留）**：M-P1 建档时未查最大编号，与既有 `D12 TSR` 撞号。本轮把物理碰撞过滤条目重编号 **D13**、休眠岛落 **D14**，并同步 `World.hpp` / `P8-PHYS-PLAN` / `PHYS-TOOLS-GUIDE` / `MILESTONES` 四处引用；S16 的 D12(TSR) 引用保持不动。
+
+**下一步**：M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。

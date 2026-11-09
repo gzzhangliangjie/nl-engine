@@ -12,10 +12,12 @@
 //   check <tsv>            re-verify a dumped trajectory with the same anchors
 //   layers [options]       M-P1: collision layer matrix probe TSV (4 cases)
 //   check-layers <tsv>     re-verify the layer matrix dump
+//   stack [options]        M-P2: stacking stability TSV (baseline/no_sleep/no_friction)
+//   check-stack <tsv>      re-verify the stacking dump
 //
-// Evidence rule: example/phys-p0/*.png and example/phys-p1/*.png are generated
-// from the REAL TSV by tools/make-phys-evidence.py / make-phys-p1-evidence.py.
-// No hand-drawn diagrams.
+// Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png and
+// example/phys-p2/*.png are generated from the REAL TSV by the matching
+// make-phys*-evidence.py. No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
 
@@ -53,6 +55,8 @@ void usage() {
     std::printf("  phys-tools check <tsv>\n");
     std::printf("  phys-tools layers [--out <tsv>] [--frames N] [--verbose]\n");
     std::printf("  phys-tools check-layers <tsv>\n");
+    std::printf("  phys-tools stack [--out <tsv>] [--frames N] [--boxes N] [--gap G]\n");
+    std::printf("  phys-tools check-stack <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -411,6 +415,273 @@ int runCheckLayers(const char* path) {
     return 0;
 }
 
+
+// ---- M-P2: stacking stability (3 real solver cases, long run) ----
+struct StackCase {
+    const char* name;
+    float friction;
+    bool  allowSleeping;
+    float lateralSpeed;
+};
+
+const StackCase kStackCases[] = {
+    {"baseline",    0.6f, true,  0.0f},  // friction + sleeping: tower should go quiet
+    {"no_sleep",    0.6f, false, 0.0f},  // same tower, solver keeps iterating forever
+    {"no_friction", 0.0f, true,  0.5f},  // top cube pushed sideways with no friction
+};
+constexpr int kStackCaseCount = 3;
+constexpr int kStackTail      = 60;
+
+nl::physics::StackResult runStackCase(const StackCase& c,
+                                      const nl::physics::StackConfig& base) {
+    nl::physics::StackConfig cfg = base;
+    cfg.friction      = c.friction;
+    cfg.allowSleeping = c.allowSleeping;
+    cfg.lateralSpeed  = c.lateralSpeed;
+    nl::physics::World world;
+    return world.simulateStack(cfg);
+}
+
+float frameTopDrift(const nl::physics::StackFrame& f) {
+    if (f.bodies.empty()) return 0.0f;
+    const nl::math::Vec3& p = f.bodies.back().position;
+    return std::sqrt(p.x * p.x + p.z * p.z);
+}
+
+std::string stackTSV(const nl::physics::StackConfig& cfg,
+                     const std::vector<nl::physics::StackResult>& rs) {
+    std::ostringstream os;
+    os << "# nl-physics M-P2 stacking stability (real Jolt " << nl::physics::kJoltVersion
+       << " solver output)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << cfg.dt << " gravity=" << cfg.gravity
+       << " boxes=" << cfg.boxes << " half_extent=" << cfg.halfExtent
+       << " gap=" << cfg.gap << " frames=" << cfg.frames
+       << " tail=" << kStackTail << "\n";
+    for (int i = 0; i < kStackCaseCount; ++i) {
+        const nl::physics::StackResult& r = rs[static_cast<std::size_t>(i)];
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+            "# case %s allow_sleep=%d friction=%.6f lateral=%.6f final_active=%u "
+            "max_tail_spread=%.6f max_tail_speed=%.6f max_drift=%.6f top_drift=%.6f "
+            "top_y=%.6f collapsed=%d bodies=%zu\n",
+            kStackCases[i].name, kStackCases[i].allowSleeping ? 1 : 0,
+            kStackCases[i].friction, kStackCases[i].lateralSpeed,
+            r.finalActive, r.maxTailSpread, r.maxTailSpeed, r.maxDrift,
+            r.topDrift, r.topY, r.collapsed ? 1 : 0,
+            r.frames.empty() ? 0 : r.frames.back().bodies.size());
+        os << buf;
+    }
+    os << "frame\tt";
+    for (int c = 0; c < kStackCaseCount; ++c)
+        for (std::uint32_t b = 0; b < cfg.boxes; ++b) os << "\t" << kStackCases[c].name << "_y" << b;
+    for (int c = 0; c < kStackCaseCount; ++c) os << "\t" << kStackCases[c].name << "_active";
+    os << "\tbase_top_drift\tnofric_top_drift\n";
+
+    const std::size_t n = rs[0].frames.size();
+    for (std::size_t f = 0; f < n; ++f) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%d\t%.6f",
+                      rs[0].frames[f].frame, rs[0].frames[f].t);
+        os << buf;
+        for (int c = 0; c < kStackCaseCount; ++c) {
+            const auto& fr = rs[static_cast<std::size_t>(c)].frames[f];
+            for (std::uint32_t b = 0; b < cfg.boxes; ++b) {
+                std::snprintf(buf, sizeof(buf), "\t%.6f", fr.bodies[b].position.y);
+                os << buf;
+            }
+        }
+        for (int c = 0; c < kStackCaseCount; ++c)
+            os << "\t" << rs[static_cast<std::size_t>(c)].frames[f].activeBodies;
+        std::snprintf(buf, sizeof(buf), "\t%.6f\t%.6f\n",
+                      frameTopDrift(rs[0].frames[f]), frameTopDrift(rs[2].frames[f]));
+        os << buf;
+    }
+    return os.str();
+}
+
+int runStack(int argc, char** argv) {
+    nl::physics::StackConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (key == "--verbose") { g_verbose = true; continue; }
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0; double d = 0.0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else if (key == "--boxes")  { if (!parseInt(val, &n)) return fail("bad --boxes"); cfg.boxes = static_cast<std::uint32_t>(n); }
+        else if (key == "--gap")    { if (!parseReal(val, &d)) return fail("bad --gap"); cfg.gap = static_cast<float>(d); }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    if (!nl::physics::validateStack(cfg, &err)) return fail(err);
+
+    std::vector<nl::physics::StackResult> rs;
+    rs.reserve(kStackCaseCount);
+    for (int i = 0; i < kStackCaseCount; ++i) {
+        auto r = runStackCase(kStackCases[i], cfg);
+        if (!r.ok()) {
+            std::printf("stack case %s failed: %s\n", kStackCases[i].name, r.error.c_str());
+            return 1;
+        }
+        rs.push_back(std::move(r));
+    }
+    const std::string tsv = stackTSV(cfg, rs);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s cases=%d boxes=%u frames=%d\n",
+                out.c_str(), kStackCaseCount, cfg.boxes, cfg.frames);
+    return 0;
+}
+
+int runCheckStack(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    struct CaseRow {
+        std::string name;
+        int    allowSleep = 0, finalActive = -1, collapsed = -1, bodies = -1;
+        double tailSpread = -1.0, topDrift = -1.0, topY = 0.0;
+    };
+    std::vector<CaseRow> rows;
+    int frames = -1, boxes = -1, tail = 60;
+    double halfExtent = 0.5;
+    bool headerSeen = false;
+    std::vector<std::vector<double>> baseY;  // [box][frame]
+    std::vector<std::vector<int>> active;    // [case][frame]
+    std::vector<double> nofricDrift;
+    int dataRows = 0;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("# jolt=", 0) == 0) {
+            std::istringstream is(line);
+            std::string tok;
+            while (is >> tok) {
+                const auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+                if      (k == "frames")      frames     = std::atoi(v.c_str());
+                else if (k == "boxes")       boxes      = std::atoi(v.c_str());
+                else if (k == "tail")        tail       = std::atoi(v.c_str());
+                else if (k == "half_extent") halfExtent = std::strtod(v.c_str(), nullptr);
+            }
+            continue;
+        }
+        if (line.rfind("# case ", 0) == 0) {
+            CaseRow r;
+            std::istringstream is(line);
+            std::string hash, tag, tok;
+            is >> hash >> tag >> r.name;
+            while (is >> tok) {
+                const auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+                if      (k == "allow_sleep")      r.allowSleep  = std::atoi(v.c_str());
+                else if (k == "final_active")     r.finalActive = std::atoi(v.c_str());
+                else if (k == "max_tail_spread")  r.tailSpread  = std::strtod(v.c_str(), nullptr);
+                else if (k == "top_drift")        r.topDrift    = std::strtod(v.c_str(), nullptr);
+                else if (k == "top_y")            r.topY        = std::strtod(v.c_str(), nullptr);
+                else if (k == "collapsed")        r.collapsed   = std::atoi(v.c_str());
+                else if (k == "bodies")           r.bodies      = std::atoi(v.c_str());
+            }
+            rows.push_back(r);
+            continue;
+        }
+        if (line.rfind("frame\t", 0) == 0) { headerSeen = true; continue; }
+        if (line.empty() || line[0] == '#') continue;
+
+        std::vector<std::string> cols;
+        std::istringstream is(line);
+        std::string cell;
+        while (std::getline(is, cell, '\t')) cols.push_back(cell);
+        const std::size_t expected = 3 * static_cast<std::size_t>(boxes < 0 ? 0 : boxes) + 7;
+        if (boxes > 0 && cols.size() != expected) {
+            std::printf("M-P2 dump column count mismatch at data row %d: %zu (expect %zu)\n",
+                        dataRows, cols.size(), expected);
+            return 1;
+        }
+        if (boxes > 0) {
+            if (baseY.empty()) {
+                baseY.assign(static_cast<std::size_t>(boxes), {});
+                active.assign(kStackCaseCount, {});
+            }
+            for (int b = 0; b < boxes; ++b)
+                baseY[static_cast<std::size_t>(b)].push_back(std::strtod(cols[2 + b].c_str(), nullptr));
+            for (int c = 0; c < kStackCaseCount; ++c)
+                active[static_cast<std::size_t>(c)].push_back(
+                    std::atoi(cols[2 + 3 * boxes + c].c_str()));
+            nofricDrift.push_back(std::strtod(cols[2 + 3 * boxes + 4].c_str(), nullptr));
+        }
+        ++dataRows;
+    }
+
+    expectTrue(headerSeen, "M-P2 dump has TSV column header");
+    expectTrue(frames > 0 && boxes >= 2 && dataRows == frames + 1,
+               "M-P2 dump row count = frames+1");
+    expectTrue(static_cast<int>(rows.size()) == kStackCaseCount, "M-P2 dump has 3 case rows");
+    if (g_failures || boxes < 2 || dataRows != frames + 1) {
+        std::printf("phys-p2 check-stack: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+
+    // Independently recompute stability from the DATA columns (never trust the
+    // summary rows alone -- that would be the M-P0/M-P1 "fake green" trap).
+    double dataSpread = 0.0;
+    const int from = std::max(0, dataRows - tail);
+    for (int b = 0; b < boxes; ++b) {
+        const auto& v = baseY[static_cast<std::size_t>(b)];
+        const double finalY = v.back();
+        const double expectedY = halfExtent + b * 2.0 * halfExtent;
+        expectTrue(std::abs(finalY - expectedY) < 0.15,
+                   ("M-P2 baseline cube " + std::to_string(b) + " held its slot").c_str());
+        for (int k = from; k < dataRows; ++k)
+            dataSpread = std::max(dataSpread, std::abs(v[static_cast<std::size_t>(k)] - finalY));
+    }
+    for (int b = 0; b + 1 < boxes; ++b) {
+        const double pitch = baseY[static_cast<std::size_t>(b + 1)].back() -
+                             baseY[static_cast<std::size_t>(b)].back();
+        expectTrue(std::abs(pitch - 2.0 * halfExtent) < 0.1,
+                   ("M-P2 layer pitch " + std::to_string(b) + " intact").c_str());
+    }
+    expectTrue(dataSpread < 0.005, "M-P2 baseline tail converged (no jitter)");
+    expectTrue(active[0].back() == 0, "M-P2 baseline island went to sleep");
+    expectTrue(active[1].back() > 0, "M-P2 no_sleep island stays active");
+    expectTrue(nofricDrift.back() > 0.3, "M-P2 no_friction top cube slid away");
+
+    for (int i = 0; i < kStackCaseCount; ++i) {
+        const CaseRow& r = rows[static_cast<std::size_t>(i)];
+        expectTrue(r.name == kStackCases[i].name, "M-P2 case name");
+        expectTrue(r.finalActive == active[static_cast<std::size_t>(i)].back(),
+                   ("M-P2 case " + r.name + " final_active matches data").c_str());
+        expectTrue(r.bodies == boxes, ("M-P2 case " + r.name + " body count").c_str());
+    }
+    expectTrue(std::abs(rows[0].tailSpread - dataSpread) < 1e-3,
+               "M-P2 summary tail spread matches recomputed data");
+    expectTrue(std::abs(rows[2].topDrift - nofricDrift.back()) < 1e-3,
+               "M-P2 summary top_drift matches recomputed data");
+    expectTrue(rows[0].collapsed == 0, "M-P2 baseline tower not collapsed");
+
+    if (g_failures) {
+        std::printf("phys-p2 check-stack: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-p2 check-stack: PASS (%s, 3 cases, %d boxes, %d frames)\n",
+                path, boxes, frames);
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -519,10 +790,76 @@ int runSelftest() {
     }
     expectTrue(layersIdentical, "M-P1 determinism: same case twice bit-identical");
 
+
+    // --- M-P2: stacking stability, sleep island, determinism ---
+    nl::physics::StackConfig scfg;
+    std::string serr;
+    nl::physics::StackConfig snegFrames = scfg; snegFrames.frames = 0;
+    expectTrue(!nl::physics::validateStack(snegFrames, &serr),
+               "M-P2 reject frames below 60");
+    nl::physics::StackConfig snegBoxes = scfg; snegBoxes.boxes = 1;
+    expectTrue(!nl::physics::validateStack(snegBoxes, &serr),
+               "M-P2 reject tower with fewer than 2 boxes");
+    nl::physics::StackConfig snegFriction = scfg; snegFriction.friction = 1.5f;
+    expectTrue(!nl::physics::validateStack(snegFriction, &serr),
+               "M-P2 reject friction out of range");
+    nl::physics::StackConfig snegGap = scfg; snegGap.gap = 2.0f;
+    expectTrue(!nl::physics::validateStack(snegGap, &serr),
+               "M-P2 reject gap larger than half extent");
+
+    std::vector<nl::physics::StackResult> srs;
+    for (int i = 0; i < kStackCaseCount; ++i) {
+        auto sr = runStackCase(kStackCases[i], scfg);
+        const std::string w = std::string("M-P2 ") + kStackCases[i].name;
+        expectTrue(sr.ok(), (w + " world ok").c_str());
+        expectTrue(static_cast<int>(sr.frames.size()) == scfg.frames + 1,
+                   (w + " frame count").c_str());
+        expectTrue(!sr.frames.empty() && sr.frames.back().bodies.size() == scfg.boxes,
+                   (w + " body count").c_str());
+        srs.push_back(std::move(sr));
+    }
+    const nl::physics::StackResult& sbase = srs[0];
+    const nl::physics::StackResult& snosleep = srs[1];
+    const nl::physics::StackResult& snofric = srs[2];
+    expectTrue(!sbase.collapsed, "M-P2 baseline tower did not collapse");
+    expectTrue(sbase.maxTailSpread < 0.005f, "M-P2 baseline tail converged (no jitter)");
+    expectTrue(sbase.maxTailSpeed < 0.05f, "M-P2 baseline tail at rest (no velocity)");
+    expectTrue(sbase.finalActive == 0, "M-P2 baseline island went to sleep");
+    const nl::physics::StackFrame& slast = sbase.frames.back();
+    for (std::uint32_t b = 0; b < scfg.boxes; ++b) {
+        const float expectedY = scfg.halfExtent + static_cast<float>(b) * 2.0f * scfg.halfExtent;
+        expectTrue(std::abs(slast.bodies[b].position.y - expectedY) < 0.15f,
+                   ("M-P2 baseline cube " + std::to_string(b) + " held its slot").c_str());
+    }
+    expectTrue(!snosleep.collapsed && snosleep.maxTailSpread < 0.005f,
+               "M-P2 no_sleep tower equally stable");
+    expectTrue(snosleep.finalActive > 0, "M-P2 no_sleep island stays active");
+    expectTrue(snofric.topDrift > 0.3f, "M-P2 no_friction top cube slid away");
+
+    const auto st1 = runStackCase(kStackCases[0], scfg);
+    const auto st2 = runStackCase(kStackCases[0], scfg);
+    bool stackIdentical = st1.frames.size() == st2.frames.size();
+    for (std::size_t k = 0; stackIdentical && k < st1.frames.size(); ++k) {
+        const auto& a = st1.frames[k];
+        const auto& b = st2.frames[k];
+        stackIdentical = a.frame == b.frame && a.t == b.t &&
+                         a.activeBodies == b.activeBodies && a.bodies.size() == b.bodies.size();
+        for (std::size_t j = 0; stackIdentical && j < a.bodies.size(); ++j) {
+            const auto& x = a.bodies[j];
+            const auto& y = b.bodies[j];
+            stackIdentical = x.position.x == y.position.x && x.position.y == y.position.y &&
+                             x.position.z == y.position.z && x.velocity.x == y.velocity.x &&
+                             x.velocity.y == y.velocity.y && x.velocity.z == y.velocity.z &&
+                             x.active == y.active;
+        }
+    }
+    expectTrue(stackIdentical, "M-P2 determinism: same tower twice bit-identical");
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)\n");
     std::printf("phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)\n");
     std::printf("phys-p0 selftest: PASS (Jolt %s, single-threaded, %d frames)\n",
                 nl::physics::kJoltVersion, cfg.frames);
@@ -666,6 +1003,11 @@ int main(int argc, char** argv) {
     if (cmd == "check-layers") {
         if (argc != 3) { usage(); return 2; }
         return runCheckLayers(argv[2]);
+    }
+    if (cmd == "stack") return runStack(argc, argv);
+    if (cmd == "check-stack") {
+        if (argc != 3) { usage(); return 2; }
+        return runCheckStack(argv[2]);
     }
     usage();
     return 2;
