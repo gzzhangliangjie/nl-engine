@@ -1,0 +1,6 @@
+spatial: steps=21 dMax=30 minDist=1 maxDist=20 rolloff=0.5 warmup=512 measure=1024
+spatial: attenuation.tsv bytes=939 hash=d8a692d21a393125
+spatial: mixing.tsv bytes=27549 hash=9dfe0c1873050bd2
+spatial: mix maxAbsDiff=0 exactSamples=1024
+spatial: cache clips=2 misses=2 hits=2 sources=4
+spatial: PASS

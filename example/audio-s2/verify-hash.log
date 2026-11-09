@@ -1,0 +1,4 @@
+hash ok: E:\UE_STUDY_2026\nl-engine-audio\example\audio-s2\volume  waveformHash=89a3885789ba4c52
+hash ok: E:\UE_STUDY_2026\nl-engine-audio\example\audio-s2\solo  waveformHash=b85b05bceb39795a
+hash ok: E:\UE_STUDY_2026\nl-engine-audio\example\audio-s2\freeze  waveformHash=b85b05bceb39795a
+verify-dump-hash: PASS (3 verified, 0 mismatch)

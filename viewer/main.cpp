@@ -6,6 +6,7 @@
 #include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
+#include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/renderer/renderer.hpp"
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/World.hpp"
@@ -584,6 +585,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // ---- M-C1 控制台注册表 + M-C2 真参数（cam.*/hud.* onChanged 打进相机/HUD）----
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
+    // P8 M-S2：audio.* 调试 CVar（audio.volume/debug/solo/freeze + audio.dump）。
+    nl::audio::registerAudioConsole(nl::core::console::Console::get());
     for (const auto& line : o.consoleExecLines) {
         const auto r = nl::core::console::Console::get().exec(line);
         nl::core::log::info("console exec [", r.exitCode(), "] ", line);

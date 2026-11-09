@@ -123,6 +123,12 @@ add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 # core/simplify 的 QEM 是正式实现，不依赖 meshopt）----
 add_subdirectory(thirdparty/meshoptimizer EXCLUDE_FROM_ALL)
 
+# ---- P8 M-S0：miniaudio v0.11.26 vendored（Public Domain / MIT-0 二选一，本项目选 PD）----
+# 单头库：MINIAUDIO_IMPLEMENTATION 只在 thirdparty/miniaudio/miniaudio.c 这一个 TU 展开。
+# nl/audio 只 include 声明头；零外部依赖、纯 C、不动双后端图形链。
+add_library(nl_miniaudio STATIC thirdparty/miniaudio/miniaudio.c)
+target_include_directories(nl_miniaudio PUBLIC ${THIRDPARTY}/miniaudio)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -158,6 +164,9 @@ add_library(nl_core STATIC
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
+    core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
+    core/src/audio/DebugController.cpp  # P8 M-S2：调试态单例（音量/独奏/冻结/面板开关）
+    core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
@@ -175,7 +184,7 @@ endif()
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 # M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
 target_link_libraries(nl_core PUBLIC taskflow)
-target_link_libraries(nl_core PRIVATE glfw nl_metis imm32)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -188,6 +197,7 @@ add_library(nl_renderer STATIC
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
+    renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -398,10 +408,19 @@ add_custom_command(TARGET nl-script POST_BUILD
 add_executable(nanite-console nanite-console/main.cpp)
 target_link_libraries(nanite-console PRIVATE nl_core)
 
+# ---- P8 M-S0：audio-tools（A 类轨道，工具版交代）----
+# 只链 nl_core（nl/audio + nl_miniaudio），零图形 API。
+# 退出码约定：0=PASS / 1=断言或运行失败 / 2=用法错误（展示台 expectExit 0/1/2）。
+add_executable(audio-tools audio-tools/main.cpp)
+target_link_libraries(audio-tools PRIVATE nl_core)
+target_compile_definitions(audio-tools PRIVATE
+    NL_AUDIO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
+    NL_AUDIO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -584,3 +603,10 @@ set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
 add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
 set_tests_properties(e2-ecs-good-scene PROPERTIES
     PASS_REGULAR_EXPRESSION "PASS")
+
+# ---- P8 M-S0：音频离线渲染确定性机械单测（A 类轨道，工具版交代）----
+# 不进渲染回归总闸；判据 = 两次独立 noDevice 渲染逐样本位级一致 +
+# provenance 篡改显式拒绝（防假绿，照 phys-tools check 教训）。
+add_test(NAME s0-audio-selftest COMMAND audio-tools selftest)
+set_tests_properties(s0-audio-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "audio selftest: PASS")

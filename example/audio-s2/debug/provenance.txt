@@ -1,0 +1,9 @@
+format=3
+tool=audio-tools
+milestone=M-S2/debug
+engine=noDevice|spatialization
+sampleRate=48000
+channels=2
+sources=2
+wavA=assets/audio/test-tone.wav
+wavB=assets/audio/test-tone-b.wav

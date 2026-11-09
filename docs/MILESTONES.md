@@ -1618,3 +1618,88 @@
 5. **kStage bump 波及符合预期**：HUD 首行 stage 文字变化 → m0.9/pbr-direct 的 4 张 --hud 基线按纪律重拍（512 px maxDelta 240 全部是 stage 字样区），重拍后 spot 回归三条全 bytes。
 
 **下一步**：M7.2 多材质 + 对照验收（materialId 间接表走 bindless、≥3 材质模型、传统 GBuffer 对照模式保留；S7 收口 tag `s7-done`）。
+
+## P8 M-S0：vendored miniaudio + nl/audio 封装 + 离线确定性 PCM（feat/audio 轨道，2026-11-09，tag `audio-s0`）
+
+**动作**：用户「开工 M-S0 建 feat/audio」= 提前解禁音频轨道 M-S0~S2 排期闸（M-S3 场景集成仍 gate 在 P8 E1/E1b 之后，照物理 §7.1e 先例）。基于 master 建 `feat/audio` worktree（`E:/UE_STUDY_2026/nl-engine-audio`，两处 junction 共享 + skip-worktree）。三处参考实读：Carrot `engine/audio/` 对象模型（Manager→SFX/Music→Sound→SoundSource→SoundListener，AudioThread 不抄）/ bevy `bevy_audio` `audio_output.rs`（无设备 `stream: None` 优雅降级）+ `audio.rs`（无 HRTF 只左右声像）/ UE `AudioDebug.cpp`（M-S2 调试字段口径，只读不抄）；ROADMAP 对照总表无音频行（A 类轨道），按铁律就近读三处音频同类模块。
+落地：`thirdparty/miniaudio/` vendored **v0.11.26（2026-10-31）**（`miniaudio.h` + 单实现 TU `miniaudio.c` + `VENDOR.md`，选 Public Domain / Unlicense）；CMake `nl_miniaudio` 静态目标 + `nl_core` 挂 `core/src/audio/AudioWorld.cpp` + `audio-tools` 工具 + ctest `s0-audio-selftest`；`nl/audio::AudioWorld` 薄封装（Clip 只读 WAV 头探测 / Source 同步预解码 / Listener 位置 / 离线 noDevice `ma_engine_read_pcm_frames` f32 2ch / 实时默认设备阻塞播放）；`scripts/make-audio-wav.py` 生成确定性 440Hz 衰减 WAV；`audio-tools`（selftest / probe / dump / check / play，退出码 0/1/2）；`example/audio-s0/` 交代物（run.bat 七段实跑 + 7 张 log + 波形/验收 PNG + bad provenance 负向夹具）+ `example/cases.json` `audio-s0` 卡 7 用例 + `docs/p8/AUDIO-TOOLS-GUIDE.md` 归档。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s0`
+
+**完成情况**：
+- **双后端 BUILD OK**：`scripts/build-audio-tools.bat DX12` 与 `VULKAN` 各自 configure + 编译 + `audio-tools selftest` **21/21 PASS**（A 类纯 CPU 工具，不进渲染 bytes/near 回归总闸、不动 kStage）。
+- **确定性硬判据**：两次独立 noDevice world 渲染 24000 帧 × 2 声道 = 48000 个 float **逐位一致**（memcmp）；单声道展开 L/R 完全相同；峰值 0.595886 / RMS 0.122469 / 非零帧 23950；前 512 帧 RMS > 后 512 帧 4 倍（指数衰减包络可见）。
+- **防假绿**：`check` 从 provenance 读参数（wav 写仓库相对路径、跨 checkout 可解析）、核 tsv 的 FNV-1a 哈希、再重建 world 重渲染，48000 个 float 位级 `==`；篡改 sampleRate=44100 在字段校验阶段显式 exit 1。展示台 `audio-s0` 卡 7 用例（usage 2 / selftest 0 / probe 0 / dump 0 / check 0 / 缺 WAV 1 / 坏 provenance 1），`server.py --check` OK。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s0/waveform.png`（真实 PCM dump 绘制的 L/R 双栏衰减波形，参数行/hash/峰值完整，无截断无方框）+ `acceptance.png`（七条命令真实 stdout 渲染，七节齐全）。两图均由 `tools/make-audio-evidence.py` 从真实输出生成，非手绘。
+- `example/audio-s0/run.bat` 全链 exit 0（AUDIO M-S0 ACCEPTANCE: ALL GREEN）。
+- **边界**：M-S0 不做 3D 空间化（M-S1）/ console cvar + ImGui 面板（M-S2）/ ECS 集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（用户未要求，轨道收口在 M-S3）。
+- **主树注册表同步**：`AGENTS.md`（音频表行 + 例外 4）、`docs/PARALLEL-TRACKS.md`（§7.1b 表 + 新增 §7.1f）、`docs/ROADMAP.md` E4 行、`docs/NON-RENDER-ROADMAP.md` 候选总表/例外段、`tools/wt_pool.py` TRACKS（`audio` planned→active + M-S3 gate note）已**就地同步但留在主树工作区未提交**：同文件含另一会话 M-J5a（job-system 重启）的未提交改动，精确 commit 会连带扫走别人现场；待该会话收口后一并提交。内容口径与本台账一致。
+
+**踩坑情况**：
+1. **Python `// 1` 不转整数**：`FRAMES = SAMPLE_RATE * DURATION_S // 1` 得到 float → `range()` TypeError；改 `int(...)`。
+2. **`git update-index` 的 `--stdin` 必须置于末尾**：`-z --stdin --skip-worktree` 报 `option 'stdin' must be the last argument`；正确 `-z --skip-worktree --stdin`。共享 `.workbuddy` 5 个 memory 文件靠这步 skip-worktree，否则 junction 内容一变工作树就脏。
+3. **provenance 写死本机绝对路径**：展示台换个 checkout 跑 `check` 就打不开 WAV。修 = `portableWav()`（写仓库相对路径）+ `resolveWav()`（读时拼编译期 `NL_AUDIO_ROOT`），坏路径仍显式 exit 1。
+4. **miniaudio 0.11.26 签名与 noDevice 契约**：`ma_sound_init_from_file` 是 **6 参**（新增 `ma_fence* pDoneFence`，传 nullptr）；`noDevice=TRUE` 时 `channels`/`sampleRate` **必须显式赋值**（头 1086-1099 行）否则 engine 无从推断格式；engine 内部恒 f32（78146 行注释实锤）。
+5. **生命周期顺序**：`ma_sound` 必须先于 `ma_engine` uninit（声源节点挂在 engine 的 node graph 上），`Impl::~Impl` 显式遍历再 `ma_engine_uninit`。
+6. **从 Bash 调 PowerShell 被安全策略拦**：junction 建立必须走独立 PowerShell 工具（`New-Item -ItemType Junction`），不能 Bash 里 `powershell -Command`。
+7. **MA_SOUND_FLAG 组合**：`DECODE` 同步全解码是离线确定性的前提（避开 resource manager 异步 job）；`NO_SPATIALIZATION` 是 M-S0 有意简化，3D 留 M-S1，已写进 GUIDE 与计划。
+8. **证据图全 ASCII 文本**：Consolas 无中文字形（M-SC0 中文方框教训），本轮预防性守住。
+
+**下一步**：M-S1（3D 定位 / 4 种距离衰减 / 多声源并发 / Clip 缓存）；M-S2 游戏内调试（console cvar + 独立 ImGui 窗口，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。
+
+## P8 M-S1：3D 定位 + 4 种距离衰减 + 多声源并发 + Clip 缓存（feat/audio 轨道，2026-11-09，tag `audio-s1`）
+
+**动作**：用户「继续做 M-S1」。先 `wt_pool claim --track audio --milestone M-S1` 占坑。三处参考**重读**（铁律：新里程碑即使同阶段也按对照总表重读）：Carrot `engine/audio/OpenAL.cpp:86` / `SoundSource.cpp:77` / `SoundListener.cpp`（只有 `setPosition` 转发 `alSource3f`，**无衰减模型参数**）/ bevy `audio_output.rs:330-380` / `audio.rs:56` / `sinks.rs:336-355`（`SpatialAudioSink` 仅 emitter/双耳 + `SpatialScale`，注释「无 HRTF、只左右声像」）/ UE `Engine/Classes/Engine/Attenuation.h:16-24`（**只读不抄**：`EAttenuationDistanceModel` 6 种 + 4 shape + LPF + `AudioComponent.h:815 IsInAudibleRange`）。结论：对象模型借 Carrot、衰减 API 不照抄；3D 不必 HRTF（bevy 印证）；超距判定口径借 UE `IsInAudibleRange`；落码依据 = miniaudio 原生 `ma_attenuation_model`（正好 4 种：none/inverse/linear/exponential，inverse 等价 OpenAL `INVERSE_DISTANCE_CLAMPED`，与 Carrot 底座同源）。`docs/carrot-history.md` / `bevy-history.md` 全文无音频条目，本轮以三处源码实读为准。
+落地：`AudioConfig` 加 `spatialization`（**默认 false** → M-S0 format=1 基线逐字节不变）；`nl/audio` 新增 4 种 `AttenuationModel` 枚举、声源/听者位置朝向 setter、超 maxDistance 按 UE 口径补增益 0 剔除、`ma_resource_manager` 承担 Clip 缓存（`registerClip` / `createSourceFromClip` / `clipCacheStats`）；`audio-tools` 新增 `spatial <outdir>`（21 距离 × 4 模型 = 84 次独立离线渲染 + 两声源并发混音）+ `check` 支持 format=1(M-S0)/format=2(M-S1) 双格式（M-S1 从 provenance 全量重渲染逐字比对）；`scripts/make-audio-wav.py` 加频率/幅度参数生成第二素材 `test-tone-b.wav`（原 `test-tone.wav` 默认参数不变、逐字节不变）；`tools/make-audio-evidence.py` 加衰减/混音/验收三图；`example/audio-s1/` 交代物（run.bat 全链 + 7 log + spatial/ 三文件 + bad/ 与 bad-prov/ 两个负向夹具 + 三证据图）+ `example/cases.json` `audio-s1` 卡 7 用例 + `docs/p8/AUDIO-TOOLS-GUIDE.md` 追加 M-S1 节 + `docs/s5/UE-DIFFS.md` 增 D17。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s1`
+
+**完成情况**：
+- **双后端 BUILD OK**：`build-audio-tools.bat DX12` 与 `VULKAN` 各自编译 + `audio-tools selftest` **33/33 PASS**（M-S0 21 + M-S1 12）；A 类纯 CPU 工具，不进渲染回归、不动 kStage。
+- **4 种衰减模型分离**：听者原点面向 +Z、声源沿 +Z 步进 21 点；每点 warmup 512 帧越过 `gainSmoothTimeInFrames=360`（7.5ms 增益平滑）后测 1024 帧 RMS。rolloff 取 **0.5**（rolloff=1 时 inverse≡exponential 数学恒等，曲线无法区分——实踩坑）；none 恒定 / inverse 最陡 / linear 线性 / exponential 幂律，4 条曲线肉眼可辨。
+- **超距静音**：maxDistance=20 后 inverse/linear/exponential 增益由 `nl/audio` 按 UE `IsInAudibleRange` 强制 0（miniaudio 公式在 d>max 仍给极小正值，不自动静音——D17 留痕），证据图 `z=20` 静音竖线可见。
+- **并发线性叠加**：声源 A（440Hz `test-tone.wav`）与 B（660Hz `test-tone-b.wav`）并发；MIX 与 A+B 逐样本 `maxAbsDiff=0 / exactSamples=1024`（残差零平线）。
+- **Clip 缓存**：`ma_resource_manager` 承担 PCM 去重；2 clips / 2 misses / 2 hits / 4 sources，缓存统计入 provenance 并由 `check` 重探测比对。
+- **防假绿 format=2**：`check` 不信任 tsv——从 provenance 重建 21×4 衰减 + 512 混音帧 + 重探测缓存统计，渲染成格式化文本逐字比较；两条负向夹具分别被抓：`bad/`（超距静音行篡改 → `attenuationHash` 校验阶段 exit 1）、`bad-prov/`（maxDistance 由 20→10 → 哈希合法、**重渲染后曲线不匹配**阶段 exit 1）。
+- **M-S0 基线零回归**：`test-tone.wav` 默认参数未动，重新 dump+check 仍 `waveformHash=4293b40fe2f9a770` 逐字节一致；`audio-s0` 展示台卡仍 PASS。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s1/attenuation.png`（4 曲线分离 + 静音竖线 + 参数/hash 完整）、`mixing.png`（A/B/MIX/RESIDUAL 四栏铺满全宽、残差零平线）、`acceptance.png`（七条命令真实 stdout、七节齐全、无中文方框）；均由 `make-audio-evidence.py` 从真实输出生成，非手绘。
+- `example/audio-s1/run.bat` 全链 exit 0（AUDIO M-S1 ACCEPTANCE: ALL GREEN）；`server.py --check` exit 0；展示台 `audio-s1` 卡 7 用例（usage 2 / selftest 0 / spatial 0 / check 0 / probe-b 0 / 坏 tsv 1 / 坏 provenance 1）实跑全绿。
+- **边界**：M-S1 不做 console cvar / ImGui 面板（M-S2）、不碰 ECS 场景集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（轨道收口在 M-S3）。
+
+**踩坑情况**：
+1. **rolloff=1 让 inverse≡exponential**：两者公式数学恒等（都是 `min/d`），证据图只剩 3 条可辨曲线；改 `rolloff=0.5` 分离四条。
+2. **增益平滑 warmup**：miniaudio `gainSmoothTimeInFrames=360`（7.5ms），直接读首帧量到过渡段而非稳态；每距离点先 warmup 512 帧再测 1024 帧。
+3. **超距不自动静音**：miniaudio 衰减公式 d>max 仍给极小正值；`nl/audio` 按 UE `IsInAudibleRange` 补 `gain=0` 剔除（D17 留痕）。
+4. **第二素材频率必须不同**：`test-tone-b.wav` 660Hz 与 `test-tone.wav` 440Hz 频率不同，才能证明并发是两路独立信号相加而非复制；默认参数脚本不改原素材（逐字节不变）。
+5. **证据图宽度铺满**：`draw_channel` 原 `cols=min(w,len)` 在 512 帧时只占左 43% 像被裁切；改按画布宽铺满（24000 帧的 M-S0 图不受影响）。
+6. **`const_cast<Impl*>` 误用**：4 个只读访问器重复该写法，抽成 `Impl::at()` 内联成员。
+7. **miniaudio `ma_attenuation_model` 正好 4 种**：落码即原生 4 种（计划 §4 已定），属计划内机械执行，不另请拍板；6 种 UE 模型（含 Custom / NaturalSound 等）不进本轮。
+
+**下一步**：M-S2 游戏内调试（console cvar `audio.volume/debug/solo/freeze/dump` + 独立 ImGui 声源面板，默认关、不动常驻 HUD）；M-S3 场景集成待 E1/E1b 收口。
+
+## P8 M-S2：游戏内音频调试——volume / solo / freeze 单步 / 声源快照（feat/audio 轨道，2026-11-09，tag `audio-s2`）
+
+**动作**：用户「继续做 M-S2」。`wt_pool claim --track audio --milestone M-S2` 占坑。三处参考重读：Carrot `engine/audio/`（无调试面，仅 AudioManager/SoundSource 基础面）/ bevy `audio.rs`（`play` + sink 即全部，无调试）/ UE `AudioDebug.cpp`（**只读不抄**：`au.DumpActiveSounds`、命令级 solo/mute、`au.3dVisualize.*` 字段口径——M-S2 快照字段清单照它定）。落码：`AudioDebugController`（core 层单例，零图形零 console，管 masterVolume/solo/frozen/debug 四态，默认纯透传保 M-S0/M-S1 基线逐字节不变）；`AudioWorld::refreshAudibility` 折叠 masterVolume+solo 因子进 effectiveGain；`readFrames` frozen 时返回 0 不推进时钟、`stepFrames` 跳过守卫单步推进（仅离线世界）；`SourceSnapshot`（entity/position/listenerPosition/distance/baseGain/effectiveGain/playing/audible/soloed/muted/clip/model）+ `snapshot()` + `setSourceEntity` + `bindToDebug`；`audio_cvars.cpp`（依赖 console 的唯一 TU：`audio.volume/debug/solo/freeze` 四 CVar + `audio.dump` 命令）；`renderer/src/audio_debug_ui.cpp` 独立 ImGui 窗口（默认关、`hud.cpp` 在 console 窗后调 drawAudioDebugWindow，**不动常驻 HUD**）；`audio-tools` 新增 `volume/solo/freeze/debug` 四子命令（format=3 provenance 记调试态 + waveformHash）+ selftest 13 条 M-S2 断言。
+
+**提交版本**：feat/audio 本轮 commit（hash 见收口回复），annotated tag `audio-s2`
+
+**完成情况**：
+- **双后端 BUILD OK**：DX12 与 VULKAN 各自编译 + `audio-tools selftest` **46/46 PASS**（M-S0 21 + M-S1 12 + M-S2 13）；A 类纯 CPU 工具，不进渲染回归、不动 kStage。
+- **volume 折叠**：masterVolume 0..2 经 `refreshAudibility` 折进 effectiveGain——x0 全零、x2 峰值翻倍、x0.5 峰值恰为一半（证据图 ratio=0.500000）。
+- **solo**：solo(id) 后他源 effectiveGain=0；solo(1) 混音与单源渲染逐字节一致；provenance 逐源记录 effGain（src1=1 / src2=0）。
+- **freeze 单步**：frozen 时 `readFrames` 返回 0（时钟保持）；`stepFrames` 跳过守卫推进 2048 帧且首块与未冻结世界逐字节一致；**solo 与 freeze 的 waveformHash 相同**（单步首块 == solo 混音），成为交叉验证锚点。
+- **debug 快照**：`snapshot.tsv` / `debug.txt`（同 ImGui 面板数据源）逐源 entity/pos/dist/gain/state；clip 路径经 `portableWav` 归一化为仓库相对路径（不含 `..\..` 冗余段）。
+- **防假绿 format=3 + 独立复算**：dumpDebugCore 写 `waveformHash=FNV-1a64(文件全字节)`；`example/audio-s2/verify-dump-hash.py`（python 复刻同参 FNV-1a64）独立复算——篡改波形样本（bad-volume/）与篡改存储哈希（bad-hash/）两条负向都被抓（exit 1），失败原因互异（波形改 / 哈希改）。
+- **CVar 接线分离**：`audio_cvars.cpp` 依赖 console，`AudioWorld`/`AudioDebugController` 保持零 console 零图形依赖；viewer 已注册 `registerAudioConsole`，ImGui 面板仅 `audio.debug` 为真时开窗（默认关）。
+- **亲眼可见证据（已肉眼核验）**：`example/audio-s2/volume.png`（x0.5 vs x1.0 双对照、ratio=0.500000）、`solo-freeze.png`（双波形 + hash 相同结论行）、`debug-panel.png`（两源快照表）、`acceptance.png`（十条命令真实 stdout、46/46 + 三负向齐全）——均由 `make-audio-evidence.py --s2` 从真实输出生成。
+- `example/audio-s2/run.bat` 全链 exit 0（AUDIO M-S2 ACCEPTANCE: ALL GREEN）；`server.py --check` exit 0；展示台 `audio-s2` 卡 7 用例（usage 2 / selftest 0 / volume 0 / solo 0 / freeze 0 / debug 0 / 负向缺参 2）实跑全绿。
+- **边界**：M-S2 不碰 ECS 场景集成（M-S3）；`core/audio/` 零图形符号；未 merge 回 master（轨道收口在 M-S3）。
+
+**踩坑情况**：
+1. **`std::vector` 漏 include**：`AudioWorld.hpp` 168 行 `snapshot()` 返回 `std::vector` 但头文件只 include 了 cstdint/memory/string——一个解析错误级联丢掉 `snapshot`/`impl_` 声明，报错点却落在别的 TU（`audio_cvars.cpp` 报「未定义类型」）。补 `#include <vector>` 一次修复。
+2. **frozen 态调用 `render()` 基准被拦**：selftest freeze 断言「单步首块 == 正常首块」在 frozen=true 时调 `render()` 生成基准——`render()` 按设计尊重 controller（volume/solo 断言正依赖此），其内部 `readFrames` 被 frozen 守卫拦成 0 → 基准为空 → 对比恒 FAIL。修法：渲染基准前临时解冻、渲后恢复。实现无 bug，是测试基准的顺序错误。
+3. **`dumpDebugCore` 参数类型不一致**：调用方传 `fs::path`、签名收 `std::string`，而函数体用 `outdir / "..."`（fs::path 语法）——统一为 `fs::path`。
+4. **快照 clip 路径带 `..\..`**：run.bat 传绝对路径后 `snapshot.tsv` 的 clip 字段出现冗余段；`cmdDebug` 改用 `portableWav()` 归一化后再 createSource（provenance 已归一化、快照漏了）。
+5. **VULKAN 构建树 cache 失效**：旧 cache `CMAKE_MAKE_PROGRAM=nmake`（裸名），build 报 generator 错误；显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure 后恢复。
+
+**下一步**：M-S3 场景集成（**gate 在 P8 E1 / E1b 收口之后**，不随本轮解锁）；feat/audio 轨道在 M-S3 收口时全量合回 master。

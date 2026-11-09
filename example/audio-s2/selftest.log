@@ -1,0 +1,50 @@
+audio selftest (M-S0):
+  ok   clip: WAV header anchors (48000/1/16/24000)
+  ok   clip: missing file explicitly rejected
+  ok   world: noDevice engine init
+  ok   world: sampleRate/channels readback
+  ok   source: createSource decodes WAV
+  ok   source: configure gain/loop
+  ok   source: start
+  ok   source: isPlaying after start
+  ok   source: count
+  ok   source: descriptor readback
+  ok   listener: position roundtrip
+  ok   render: two independent offline renders succeeded
+  ok   render: per-sample deterministic (bitwise)
+  ok   render: peak in (0.05, 1.0]
+  ok   render: non-zero frames
+  ok   render: mono clip expands to identical L/R
+  ok   render: exponential decay envelope (head RMS > 4x tail)
+  ok   dump: waveform.tsv + provenance.txt written
+  ok   check: re-render from provenance is per-sample identical
+  ok   provenance: sampleRate field present
+  ok   check: tampered provenance explicitly rejected (anti-false-green)
+audio selftest (M-S1):
+  ok   M-S1 attenuation: model name/parse roundtrip + bogus rejected
+  ok   M-S1 world: spatialization enabled
+  ok   M-S1 source: create in spatialized world
+  ok   M-S1 source: position/direction setters
+  ok   M-S1 source: spatial descriptor readback
+  ok   M-S1 attenuation: legal parameters accepted
+  ok   M-S1 attenuation: minDistance >= maxDistance rejected
+  ok   M-S1 listener: direction/worldUp readback
+  ok   M-S1 attenuation: beyond maxDistance is silent
+  ok   M-S1 attenuation: `none` is flat (no spatialization by design)
+  ok   M-S1 clip cache: 2 clips / 2 misses / 2 hits / 4 sources
+  ok   M-S1 mixing: two concurrent sources sum linearly
+audio selftest (M-S2):
+  ok   M-S2 controller: reset() restores passthrough defaults
+  ok   M-S2 volume: masterVolume=0 -> whole mix silent
+  ok   M-S2 volume: masterVolume=2 -> peak doubles
+  ok   M-S2 solo: two named sources created
+  ok   M-S2 solo: soloed source gain=1, other muted gain=0
+  ok   M-S2 solo: mix with solo(1) == source-1-only (other muted)
+  ok   M-S2 freeze: world + source ready
+  ok   M-S2 freeze: readFrames returns 0 while frozen (clock held)
+  ok   M-S2 freeze: stepFrames advances and produces audio
+  ok   M-S2 freeze: stepped block == normal first block (advances right)
+  ok   M-S2 freeze: readFrames still 0 after step (remains frozen)
+  ok   M-S2 debug: two positioned named sources + listener
+  ok   M-S2 debug: snapshot shows entity/position/distance/gain/state
+audio selftest: PASS (46/46)

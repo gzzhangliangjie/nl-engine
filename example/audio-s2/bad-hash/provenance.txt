@@ -1,0 +1,12 @@
+format=3
+tool=audio-tools
+milestone=M-S2/volume
+engine=noDevice
+masterVolume=0.5
+soloId=0
+frozen=0
+sampleRate=48000
+channels=2
+frames=2048
+requestedGain=0.5
+waveformHash=0000000089ba4c52

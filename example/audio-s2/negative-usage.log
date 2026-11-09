@@ -1,0 +1,13 @@
+audio-tools - nl-engine P8 audio track (M-S0/M-S1)
+usage:
+  audio-tools selftest                       deterministic unit tests (exit 0 = PASS)
+  audio-tools probe <wav>                    read-only WAV header probe
+  audio-tools dump <wav> <outdir> [frames]   M-S0 offline f32 PCM dump + provenance
+  audio-tools spatial <outdir>               M-S1 attenuation/mixing/cache dump
+  audio-tools check <outdir>                 re-render from provenance, per-sample compare
+  audio-tools play <wav>                     realtime playback on default device
+  audio-tools volume <gain> <wav> <outdir>   M-S2 master-volume scaling (gain 0..2)
+  audio-tools solo <id> <wavA> <wavB> <outdir>  M-S2 solo id (1|2), other source muted
+  audio-tools freeze <wav> <outdir>          M-S2 freeze pauses + step advances
+  audio-tools debug <wavA> <wavB> <outdir>   M-S2 source snapshot (entity/pos/dist/gain/state)
+exit codes: 0=ok 1=runtime/assert failure 2=usage error

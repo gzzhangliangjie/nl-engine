@@ -1,0 +1,2 @@
+hash MISMATCH: E:\UE_STUDY_2026\nl-engine-audio\example\audio-s2\bad-volume  computed=9589cf0fe660fc18  stored=89a3885789ba4c52
+verify-dump-hash: FAIL (0 verified, 1 mismatch)

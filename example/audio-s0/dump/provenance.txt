@@ -1,0 +1,12 @@
+format=1
+tool=audio-tools
+milestone=M-S0
+engine=noDevice
+wav=assets/audio/test-tone.wav
+sampleRate=48000
+channels=2
+frames=24000
+gain=1
+loop=0
+flags=decode|no-spatialization
+waveformHash=4293b40fe2f9a770
