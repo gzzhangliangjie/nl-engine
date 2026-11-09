@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段）。
+"""P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段
++ M-SC3 脚本热更段）。
 
 铁律：所有内容从工具**真实输出**渲染（example/<dir>/*.log，
 由 nl-script.exe 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
 复现：example/<dir>/run.bat（重跑用例 -> 重新生成本图 -> exit 0 校验）。
-用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2]   （缺省 m-sc0）
+用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3]   （缺省 m-sc0）
 """
 import os
 import sys
@@ -160,7 +161,35 @@ CASES_M_SC2 = [
      "dotnet build only; binding entry points require [UnmanagedCallersOnly] default signature."),
 ]
 
-CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2}[DIR_NAME]
+CASES_M_SC3 = [
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC3 hot reload (s8a-s8h, on top of s0-s5 + s6 + s7)",
+     "s8a ScriptHost::init (bootstrap 3 fn pointers) + console.reload-script registered / "
+     "s8b first load via collectible ALC (LoadFromStream, file not locked) + Entry rebinding / "
+     "s8c edit script source -> dotnet build overwrites same DLL name -> ScriptHost::reloadScript / "
+     "s8d behavior updated (echo prefix v1 -> [v2]) / s8e C++ state intact "
+     "(cvar values, entity tree, builtin commands, command ledger re-registered) / "
+     "s8f consecutive reload x3, handle drift 0 / s8g unloadScript -> weakref dead "
+     "(ALC fully collected) / s8h script commands gone, C++ exports still live."),
+    ("reload.log", "reload.png",
+     "s8 hot-reload section close-up (filtered from selftest.log)",
+     "reload-script lifecycle: unbind old ALC thunks (scriptUnregisterAll) -> Unload "
+     "(weakref dead after GC drain) -> reload same DLL -> Entry re-registers commands. "
+     "Key pitfall fixed: unload and GC drain must live in separate (NoInlining) methods -- "
+     "same-frame 'alc = null' is a JIT dead store, stack keeps rooting the ALC forever."),
+    ("run-api.log", "run-api.png",
+     "nl-script run --api on console example -- demo (exit 0)",
+     "Entry (managed, collectible-reflectable) behind [UnmanagedCallersOnly] EntryNative: "
+     "registers script.echo, sets script.count, execs back, drives builtin cvar.set, "
+     "dumps cvar.list."),
+    ("check.log", "check.png",
+     "nl-script check bootstrap -- compile only (exit 0)",
+     "Bootstrap is the non-collectible relay assembly (BootLoad/BootCall/BootUnload); "
+     "FDD contract: runtimeconfig.json via GenerateRuntimeConfigurationFiles."),
+]
+
+CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
+         "m-sc3": CASES_M_SC3}[DIR_NAME]
 
 
 def main():

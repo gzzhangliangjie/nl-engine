@@ -90,7 +90,9 @@ namespace NlScript.Examples
         }
 
         // run --api demo 入口：spawn → 挂组件 → 写字段 → 读回打印 → flush → 再验。
-        [UnmanagedCallersOnly(EntryPoint = "Entry")]
+        // M-SC3 拆两层口径：Entry = 普通静态方法（collectible ALC 反射路径专用——
+        // 运行时禁止托管代码调用 [UnmanagedCallersOnly] 方法）；EntryNative =
+        // [UnmanagedCallersOnly] 包装（默认 ALC getEntryPoint 函数指针路径）。
         public static int Entry(IntPtr args, int size)
         {
             Engine.Init(args);
@@ -139,5 +141,9 @@ namespace NlScript.Examples
             int rc = Ecs.FindByName(name, out ulong id);
             return rc == EcsCode.Ok ? id : 0;
         }
+
+        /// <summary>native 包装：默认 ALC getEntryPoint 函数指针路径用。</summary>
+        [UnmanagedCallersOnly(EntryPoint = "Entry")]
+        public static int EntryNative(IntPtr args, int size) => Entry(args, size);
     }
 }

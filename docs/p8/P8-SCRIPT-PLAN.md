@@ -45,7 +45,28 @@
 | **M-SC1** console 绑定 ✅ **已完成（2026-11-09，tag `m-sc1`）** | C++→C# 函数指针暴露：`cvar.get/set/list`、`console.exec`（ExecCode 0/1/2/3 → C# 返回）；C#→C++ 注册：`Console.Register(name, fn)` 进 console 命令表（fn 经异常边界调用）——**落地：ApiTable 6 导出随入口 args 传入（Carrot mono internal call 的 hostfxr 对应物）+ reverse P/Invoke（CoTaskMem 配对）+ Console 扩 unregisterCommand** | selftest：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码逐一对齐——**全部达成：selftest s6a~s6f 全绿（onChanged 恰触发/exec 调通/掩码 31 对齐/SEH 异常命令/双向读回/注销解绑），M-SC0 s0~s5 不回归，展示台 m-sc1 卡 4 条 + 4 张真实输出证据图，双后端构建+selftest 均 PASS** | console M-C3 merge 回 master ✓（9e12cc6） |
 | **M-SC2** ECS 绑定（数据面）✅ 2026-11-09 tag `m-sc2` | Bindings v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` 显式绑 World；C# `Ecs` 静态类 + `SceneEntity` wrapper（Carrot Entity 同构）；错误码 0..4（ok/NoWorld/NoEntity/Component/BadArg） | selftest s7a~s7g 全绿（M-SC0/SC1 不回归）：C# 建实体→挂 Transform→改字段→C++ 逐位读回；失效实体七项操作全 NoEntity 拒绝不崩；JSON roundtrip 字节一致；解绑后导出一律 NoWorld（M-SC3 兜底）。踩坑 4 条见 SCRIPT-TOOLS-GUIDE | E1a 已 merge（2d4ad49）✓ |
 | **M-SC2b**（可选，后定） | ScriptComponent 脚本逻辑组件：C++ 组件持程序集/类型名，tick 回调 `OnTick(self, dt)` | 视 M-SC2 后扩展需求决定，**默认不做** | M-SC2 |
-| **M-SC3** 热更 + 收口 | `console.reload-script`：新 DLL 载入新 collectible ALC → 重绑定 → 旧 ALC Unload；收口 merge 回 master | 验收：改 C# 脚本 → `dotnet build` → reload → cvar/命令/实体行为换新，C++ 侧状态无损（cvar 值/实体树不动）；连续 reload 无泄漏（句柄计数核）；全量回归绿 | M-SC0~SC2 |
+| **M-SC3** 热更 + 收口 ✅ 2026-11-09 tag `m-sc3` | `console.reload-script`：新 DLL 载入新 collectible ALC → 重绑定 → 旧 ALC Unload；收口 merge 回 master | 验收：改 C# 脚本 → `dotnet build` → reload → cvar/命令/实体行为换新，C++ 侧状态无损（cvar 值/实体树不动）；连续 reload 无泄漏（句柄计数核）；全量回归绿。**实测全过**：selftest s8a~s8h 全绿（reload 解绑 2 命令 + weakref dead + 行为换新 [v2] + 状态四锚 + 连续 reload x3 句柄漂移 0）；踩坑 5 条见 SCRIPT-TOOLS-GUIDE M-SC3 节 | M-SC0~SC2 |
+
+## M-SC3 落地拍板（2026-11-09，热更架构定稿）
+
+- **bootstrap 中转（官方 collectible 口径）**：hostfxr 只能把程序装配进默认 ALC
+  （不可卸载），collectible ALC 的创建/卸载必须托管侧完成 → 非收集 bootstrap
+  程序集（`script/bootstrap/`，常驻）暴露 BootLoad/BootCall/BootUnload 三函数指针
+  （C++ 一次性取用安全）；脚本程序集全部经 bootstrap `LoadFromStream` 进
+  collectible ALC（**不锁 DLL 文件**——`LoadFromAssemblyPath` 锁文件会让
+  `dotnet build` 同名覆盖必断，热更工作流关键通路）；脚本方法经 bootstrap
+  反射 Invoke（机制中转，绑定面照旧显式函数指针，「不做反射自动绑定」原则不破）。
+- **脚本入口拆两层**：普通 `Entry`（collectible 反射路径，**禁 [UnmanagedCallersOnly]**
+  ——运行时禁止托管代码反射调用它，实测 InvalidProgram）+ `[UnmanagedCallersOnly]
+  EntryNative`（默认 ALC `getEntryPoint` 函数指针路径）。
+- **卸载次序铁律**：先 `scriptUnregisterAll()`（脚本命令登记表批量解绑，解除对
+  旧 ALC reverse P/Invoke thunk 的全部 C++ 侧引用）→ 再 `scriptUnload()`。
+- ** unload 与 GC 排空不得同帧**（本轮最大坑，官方教程口径实证）：同方法内
+  `alc = null` 是 JIT dead store，栈引用永远 root；unload 必须放 NoInlining 小方法
+  返回 WeakReference、排空在调用方。详 SCRIPT-TOOLS-GUIDE M-SC3 踩坑存档。
+- **C++ 侧状态无损口径**：reload 不碰 cvar 值/实体树/内建命令；重绑定 = 新脚本
+  Entry 自己重新注册（脚本自描述，Carrot load-callback 同构）。连续 reload x3
+  `GetProcessHandleCount` 漂移 0。
 
 ## 有意简化清单（防范围失控，2026-11-09 定）
 

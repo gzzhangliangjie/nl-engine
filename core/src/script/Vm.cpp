@@ -9,6 +9,12 @@
 //   5. 析构：hostfxr_close + FreeLibrary
 // getEntryPoint = load_assembly_and_get_function_pointer(UNMANAGEDCALLERSONLY_METHOD)，
 // 返回的指针即默认签名 component_entry_point_fn（int(void*, int32)）。
+//
+// M-SC3 热更四件套（collectible ALC，bootstrap 中转）：ABI 协议与实现注释见
+// Vm.hpp（同文锚在 script/bootstrap/Bootstrap.cs）。核心结构：loadBootstrap 经
+// getEntryPoint 取 bootstrap（非收集，常驻安全）的 BootLoad/BootCall/BootUnload
+// 三函数指针；脚本程序集经 bootstrap LoadFromStream 进 collectible ALC，其函数
+// 指针一律不外泄（Unload 后悬空）。
 
 #include "nl/script/Vm.hpp"
 
@@ -17,6 +23,7 @@
 #include "nethost.h"
 
 #include <cstdio>
+#include <cstring>
 #include <windows.h>
 
 namespace nl::script {
@@ -56,6 +63,11 @@ struct Vm::Impl {
     HMODULE hostfxrModule = nullptr;
     hostfxr_handle context = nullptr;
     load_assembly_and_get_function_pointer_fn loadAndGetFn = nullptr;
+
+    // M-SC3 热更：bootstrap（非收集程序集）三函数指针，loadBootstrap 填充。
+    EntryPointFn bootLoad = nullptr;
+    EntryPointFn bootCall = nullptr;
+    EntryPointFn bootUnload = nullptr;
 };
 
 Vm::Vm() = default;
@@ -150,6 +162,111 @@ Result Vm::getEntryPoint(const std::string& assemblyPath, const std::string& typ
                                    " type=" + typeName + " method=" + methodName);
     }
     *out = reinterpret_cast<EntryPointFn>(fn);
+    return Result::success();
+}
+
+// ---- M-SC3 热更四件套 ----
+
+// BootCall 协议结构（与 Vm.hpp / Bootstrap.cs 注释同文；POD，栈上传地址，
+// bootstrap 按偏移手读：0=typeUtf8 / 8=methodUtf8 / 16=data / 24=size）。
+struct BootCallArgs {
+    const char* typeUtf8;
+    const char* methodUtf8;
+    void* data;
+    std::int32_t size;
+};
+static_assert(sizeof(BootCallArgs) == 32, "BootCallArgs ABI: x64 layout pinned by Bootstrap.cs offsets");
+
+Result Vm::loadBootstrap(const std::string& bootstrapDllPath) {
+    if (!impl_) return Result::fail(7, "Vm not initialized");
+
+    // bootstrap 三入口逐个取用（非收集程序集 → 指针常驻安全，Vm.hpp 口径）。
+    struct EntrySpec { const char* method; EntryPointFn* slot; const char* what; };
+    const EntrySpec specs[] = {
+        {"BootLoad",   &impl_->bootLoad,   "BootLoad"},
+        {"BootCall",   &impl_->bootCall,   "BootCall"},
+        {"BootUnload", &impl_->bootUnload, "BootUnload"},
+    };
+    for (const auto& spec : specs) {
+        Result r = getEntryPoint(bootstrapDllPath, "Nl.Script.Bootstrap.Bootstrap, NlScriptBootstrap",
+                                 spec.method, spec.slot);
+        if (!r.ok) {
+            r.message = "bootstrap " + std::string(spec.what) + ": " + r.message;
+            return r;
+        }
+    }
+    return Result::success();
+}
+
+Result Vm::scriptLoad(const std::string& assemblyPath) {
+    if (!impl_ || !impl_->bootLoad) return Result::fail(7, "bootstrap not loaded (call loadBootstrap first)");
+
+    // BootLoad args = struct { const char* assemblyPathUtf8; }（偏移 0；
+    // 传结构体地址——args 本身不是字符串指针，协议见 Vm.hpp）
+    struct BootLoadArgs { const char* assemblyPathUtf8; } load{assemblyPath.c_str()};
+    static_assert(sizeof(BootLoadArgs) == 8, "BootLoadArgs ABI: x64 layout pinned by Bootstrap.cs offset 0");
+    std::int32_t ret = 0;
+    std::uint32_t excCode = 0;
+    if (callEntryGuarded(impl_->bootLoad, &load, 0, &ret, &excCode) != 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%08x", excCode);
+        return Result::fail(6, "scriptLoad: managed exception at SEH boundary (code=0x" + std::string(buf) + ")");
+    }
+    if (ret != 0) {
+        const char* why = ret == -1 ? "assembly path missing/unreadable"
+                        : ret == -2 ? "load failed (stream read / dependency resolution)"
+                        : ret == -3 ? "previous script not unloaded (call scriptUnload first)"
+                                    : "unknown protocol code";
+        return Result::fail(8, "scriptLoad: bootstrap BootLoad returned " + std::to_string(ret) +
+                                   " (" + why + ") assembly=" + assemblyPath);
+    }
+    return Result::success();
+}
+
+Result Vm::scriptCall(const std::string& typeName, const std::string& methodName,
+                      void* args, std::int32_t sizeBytes, std::int32_t* ret) {
+    if (!impl_ || !impl_->bootCall) return Result::fail(7, "bootstrap not loaded (call loadBootstrap first)");
+
+    BootCallArgs call{typeName.c_str(), methodName.c_str(), args, sizeBytes};
+    std::int32_t result = 0;
+    std::uint32_t excCode = 0;
+    if (callEntryGuarded(impl_->bootCall, &call, sizeof(call), &result, &excCode) != 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%08x", excCode);
+        return Result::fail(6, "scriptCall: managed exception at SEH boundary (code=0x" + std::string(buf) + ")");
+    }
+    if (result == -100 || result == -101 || result == -102) {
+        const char* why = result == -100 ? "no script loaded"
+                        : result == -101 ? "type or method resolution failed"
+                                         : "managed exception inside script (caught at bootstrap)";
+        return Result::fail(8, "scriptCall: bootstrap BootCall returned " + std::to_string(result) +
+                                   " (" + why + ") type=" + typeName + " method=" + methodName);
+    }
+    if (ret) *ret = result;
+    return Result::success();
+}
+
+Result Vm::scriptUnload(bool* fullyUnloaded) {
+    if (!impl_ || !impl_->bootUnload) return Result::fail(7, "bootstrap not loaded (call loadBootstrap first)");
+    if (fullyUnloaded) *fullyUnloaded = false;
+
+    std::int32_t ret = 0;
+    std::uint32_t excCode = 0;
+    if (callEntryGuarded(impl_->bootUnload, nullptr, 0, &ret, &excCode) != 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%08x", excCode);
+        return Result::fail(6, "scriptUnload: managed exception at SEH boundary (code=0x" + std::string(buf) + ")");
+    }
+    if (ret == -1) return Result::fail(8, "scriptUnload: bootstrap BootUnload returned -1 (no script loaded)");
+    if (ret == 1) {
+        return Result::fail(9, "scriptUnload: ALC Unload called but GC has not fully collected "
+                               "(weakref alive after drain loop)");
+    }
+    if (ret != 0) {
+        return Result::fail(8, "scriptUnload: bootstrap BootUnload returned " + std::to_string(ret) +
+                                   " (unknown protocol code)");
+    }
+    if (fullyUnloaded) *fullyUnloaded = true;
     return Result::success();
 }
 

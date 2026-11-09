@@ -1386,3 +1386,13 @@
 4. **cases.json heredoc 转义**：内嵌 JSON 的引号转义层级数错一层即 JSONDecodeError——含引号 command 字段用 Python 单引号串承载再 replace 注入，插后 json.loads 复验。
 
 **下一步**：M-SC3 热更 + 收口（`console.reload-script`：新 DLL 载入 collectible ALC → 重绑定 → 旧 ALC Unload；改脚本 → dotnet build → reload → cvar/命令/实体行为换新 C++ 状态无损；连续 reload 句柄计数核；全量回归绿；merge 回 master）。
+
+## M-SC3：脚本热更（feat/script，2026-11-09，tag `m-sc3`）
+
+**动作**：wt_pool claim（track script / M-SC3）→ 三处证据（本轮模块=热更：官方《assembly unloadability》教程 = NoInlining 方法边界 + weakref 排空在调用方 + collectible ALC 完成条件三条款；Carrot = registerGameAssemblyLoadCallback/UnloadCallback 程序集换载时命令重 init——对应物 = scriptUnregisterAll + 新 ALC Entry 重注册（脚本自描述重绑定）；UE/bevy 据实标注无对应物）→ `script/bootstrap/`（NlScriptBootstrap：BootLoad/BootCall/BootUnload 三 UnmanagedCallersOnly + ScriptLoadContext collectible resolver）→ `Vm` 热更四件套（loadBootstrap/scriptLoad/scriptCall/scriptUnload + 阶段码 7/8/9）→ `ScriptHost`（单例编排 + `console.reload-script` 命令）→ `Bindings` 脚本命令登记表（登记/擦除/scriptUnregisterAll）→ 示例 Entry 拆两层（普通 Entry + EntryNative）→ nl-script selftest s8a~s8h → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc3/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc3 段 4 张真实输出图 → cases.json 尾插 `m-sc3` 卡 4 条（json.load 复验 39 卡）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc3`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+ScriptHost.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 + s7 不回归 + s8a~s8h：bootstrap 3 函数指针 + reload-script 注册 / 首载 collectible ALC + Entry 重绑定 / 改源→同名覆盖重编→reloadScript 解绑 2 命令 + weakref dead + 重装载 / 行为换新 [v2] / C++ 状态无损四锚 / 连续 reload x3 句柄漂移 0 / unloadScript weakref dead / 卸载后命令消失 + C++ 导出可用）；run --api demo exit 0；check bootstrap exit 0；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc3` 版本卡 4 条 tool 用例（selftest/reload 特写/run-api 正向 + check，expectExit 0/0/0/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC3 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC3 行标完成 + 热更架构拍板回写 + 踩坑 5 条存档（同帧 dead-store / UnmanagedCallersOnly 禁托管 Invoke / 锁文件 / 协议结构地址 / 登记表对称）。
+
+**计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。

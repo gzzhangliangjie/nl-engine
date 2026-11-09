@@ -28,9 +28,18 @@
 //        s7e 父子关系经绑定表 roundtrip（getChildIDs 视图一致）/
 //        s7f JSON roundtrip 不受脚本侧改动影响（字节一致）/
 //        s7g 解绑 World 后导出一律 NoWorld（M-SC3 热重载窗口兜底）
+//     s8 脚本热更（M-SC3，需第 4 个参数给出 bootstrap 工程目录）：
+//        s8a bootstrap 装载 + console.reload-script 注册（幂等 init）/
+//        s8b 首次装载（LoadFromStream collectible ALC）+ Entry 重绑定 /
+//        s8c 改脚本源 -> dotnet build 同名覆盖 -> ScriptHost::reloadScript /
+//        s8d 行为换新（echo 前缀 v1 -> [v2]）/ s8e C++ 状态无损（cvar 值/实体/
+//            内建命令不动 + 脚本命令表重登记）/
+//        s8f 连续 reload x3 无泄漏（GetProcessHandleCount 漂移阈值）/
+//        s8g unloadScript weakref 校验（完全卸载）/ s8h 卸载后命令 UnknownCommand
+//            + C++ 状态仍可用（ECS 导出/内建命令）
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs
+//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap
 //   nl-script run script/examples/hello --args ok
 //   nl-script run script/examples/console --api
 //   nl-script run script/examples/ecs --api
@@ -42,6 +51,7 @@
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"
 #include "nl/script/Bindings.hpp"
+#include "nl/script/ScriptHost.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -183,7 +193,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
         typeOverride.empty() ? ("NlScript.Examples." + stem + "Script, " + out->assemblyName) : typeOverride;
 
     nl::script::EntryPointFn entry = nullptr;
-    result = vm->getEntryPoint(out->assemblyDll.string(), typeName, "Entry", &entry);
+    result = vm->getEntryPoint(out->assemblyDll.string(), typeName, "EntryNative", &entry);
     if (!result.ok) {
         std::printf("run: FAIL getEntryPoint: code=%d %s\n", result.code, result.message.c_str());
         return 1;
@@ -214,7 +224,8 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 // ---- selftest ----
 
-int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir) {
+int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
+                const fs::path& bootstrapDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -236,7 +247,7 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
     // s2 取默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）
     const std::string typeName = "NlScript.Examples.HelloScript, " + base->assemblyName;
     nl::script::EntryPointFn entry = nullptr;
-    result = vm->getEntryPoint(base->assemblyDll.string(), typeName, "Entry", &entry);
+    result = vm->getEntryPoint(base->assemblyDll.string(), typeName, "EntryNative", &entry);
     expectTrue(result.ok && entry != nullptr, "s2 getEntryPoint Entry (default signature, UnmanagedCallersOnly)");
     if (!result.ok) {
         std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
@@ -335,7 +346,7 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
                 nl::script::EntryPointFn hotEntry = nullptr;
                 result = vm->getEntryPoint(hot->assemblyDll.string(),
                                            "NlScript.Examples.HelloScript, HelloScriptHot",
-                                           "Entry", &hotEntry);
+                                           "EntryNative", &hotEntry);
                 expectTrue(result.ok, "s5e load rebuilt assembly in same process (no host restart)");
                 if (result.ok) {
                     std::int32_t ret = 0;
@@ -598,6 +609,218 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s8 脚本热更（M-SC3；bootstrapDir 为空 = 跳过，同 s6/s7 口径）----
+    if (!bootstrapDir.empty()) {
+        // 前置：bootstrap 编译 + ScriptHost::init（幂等；含 console.reload-script 注册）
+        if (!dotnetBuild(bootstrapDir.string(), {})) {
+            expectTrue(false, "s8-pre dotnet build bootstrap");
+            std::printf("nl-script selftest: FAIL (bootstrap build)\n");
+            return 1;
+        }
+        auto bso = locateOutput(bootstrapDir, "NlScriptBootstrap");
+        expectTrue(bso.has_value(), "s8-pre locate NlScriptBootstrap build output");
+        if (bso) {
+            nl::script::Result ir = nl::script::ScriptHost::get().init(vm.get(), bso->assemblyDll.string());
+            expectTrue(ir.ok, "s8a ScriptHost::init (Vm::loadBootstrap 3 function pointers, idempotent)");
+            if (!ir.ok) {
+                std::printf("  init detail: code=%d %s\n", ir.code, ir.message.c_str());
+            } else {
+                // console.reload-script 已注册：无脚本时 exec 返回 CommandFailed + 提示文本
+                {
+                    const auto r = nl::core::console::Console::get().exec("console.reload-script");
+                    expectTrue(r.code == nl::core::console::ExecCode::CommandFailed &&
+                               r.output.find("no script loaded") != std::string::npos,
+                               "s8a2 console.reload-script registered (no-script case -> CommandFailed hint)");
+                }
+
+                // 热拷贝 console 工程到 temp（只源文件，ProjectReference 改绝对路径；
+                // 不改 AssemblyName —— 本里程碑验收「同名 DLL 覆盖」工作流，与 s5 换名口径对照）
+                std::error_code ec;
+                const fs::path hotRoot = fs::temp_directory_path(ec) / "nl-script-selftest-hot-s8";
+                fs::remove_all(hotRoot, ec);
+                fs::create_directories(hotRoot / "console", ec);
+                for (const auto& entry : fs::directory_iterator(consoleDir, ec)) {
+                    if (!entry.is_regular_file(ec)) continue;
+                    fs::copy(entry.path(), hotRoot / "console" / entry.path().filename(), ec);
+                }
+                expectTrue(!ec, "s8b copy console project to temp (sources only)");
+                const fs::path apiCsproj = consoleDir / "../../script-api/NlScriptApi.csproj";
+                const fs::path hotCsproj = hotRoot / "console" / "ConsoleScript.csproj";
+                {
+                    std::ifstream cin_(hotCsproj, std::ios::binary);
+                    std::string csprojText((std::istreambuf_iterator<char>(cin_)),
+                                           std::istreambuf_iterator<char>());
+                    cin_.close();
+                    const std::size_t refPos = csprojText.find("../../script-api/NlScriptApi.csproj");
+                    expectTrue(refPos != std::string::npos, "s8b2 locate ProjectReference in copied csproj");
+                    if (refPos != std::string::npos) {
+                        csprojText.replace(refPos, strlen("../../script-api/NlScriptApi.csproj"),
+                                           apiCsproj.lexically_normal().string());
+                        std::ofstream cout_(hotCsproj, std::ios::binary | std::ios::trunc);
+                        cout_ << csprojText;
+                        cout_.close();
+                    }
+                }
+
+                const fs::path hotConsole = hotRoot / "console";
+                expectTrue(dotnetBuild(hotConsole.string(), {}), "s8b3 dotnet build hot console (v1)");
+                auto hot = locateOutput(hotConsole, {});
+                expectTrue(hot.has_value(), "s8b4 locate v1 build output");
+                if (hot) {
+                    // 首次装载：LoadFromStream 进 collectible ALC + Entry 重绑定
+                    //（Entry 注册 script.echo + 设 script.count=77）
+                    nl::script::Result load = nl::script::ScriptHost::get().loadScript(
+                        hot->assemblyDll.string(), "NlScript.Examples.ConsoleScript");
+                    expectTrue(load.ok, "s8b5 first load via collectible ALC + Entry rebinding");
+                    if (!load.ok) std::printf("  load detail: code=%d %s\n", load.code, load.message.c_str());
+
+                    // s8b 判据：v1 行为锚（echo 前缀 = "script.echo: "）+ 脚本命令登记
+                    const auto r1 = nl::core::console::Console::get().exec("script.echo v1 hello");
+                    expectTrue(r1.ok() && r1.output.find("script.echo: v1 hello") != std::string::npos &&
+                               r1.output.find("[v2]") == std::string::npos,
+                               "s8b6 v1 echo anchor (prefix \"script.echo: \")");
+                    const auto regNames = nl::script::scriptRegisteredCommands();
+                    bool hasEcho = false;
+                    for (const auto& n : regNames) hasEcho |= (n == "script.echo");
+                    expectTrue(hasEcho, "s8b7 script command registered in C++ ledger");
+
+                    // C++ 状态锚（reload 不许动）：script.rate 由 C++ 设 2.5（脚本不碰）+
+                    // 实体 cppEnt（挂 Transform 锚值；World 绑定后 ECS 导出全程可用）
+                    static nl::scene::World world8;   // 绑定脚本生命周期 = 本工具进程
+                    nl::script::ecsSetWorld(&world8);
+                    auto& console8 = nl::core::console::Console::get();
+                    auto* rateCvar = console8.findCVar("script.rate");
+                    expectTrue(rateCvar != nullptr,
+                               "s8-pre3 script.rate cvar present (registered by s6 host preset)");
+                    if (rateCvar) rateCvar->setFloat(2.5);
+                    std::uint64_t cppEnt8 = 0;
+                    {
+                        using SpawnFnT = int(__cdecl*)(const char*, std::uint64_t*);
+                        using AddTFnT = int(__cdecl*)(std::uint64_t);
+                        using TSetFnT = int(__cdecl*)(std::uint64_t, const float*, const float*, const float*);
+                        const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                        const auto sp = reinterpret_cast<SpawnFnT>(table->ecsSpawn);
+                        const auto at = reinterpret_cast<AddTFnT>(table->ecsAddTransform);
+                        const auto ts = reinterpret_cast<TSetFnT>(table->ecsTransformSet);
+                        sp("cppEntHot", &cppEnt8);
+                        at(cppEnt8);
+                        const float pos[3] = {7.f, 8.f, 9.f};
+                        ts(cppEnt8, pos, nullptr, nullptr);
+                    }
+                    expectTrue(cppEnt8 != 0, "s8-pre2 C++ state anchor: cppEntHot spawned with transform");
+
+                    // s8c：改脚本源（echo 前缀 v1 -> [v2]）-> dotnet build 同名覆盖
+                    //（LoadFromStream 不锁文件，构建可写——本里程碑关键通路）
+                    const fs::path cs = hotConsole / "ConsoleScript.cs";
+                    std::ifstream in(cs, std::ios::binary);
+                    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    in.close();
+                    const std::size_t pos = src.find("\"script.echo: \" + string.Join(\" \", args)");
+                    expectTrue(pos != std::string::npos, "s8c locate echo prefix anchor in copied source");
+                    if (pos != std::string::npos) {
+                        // 全量替换：前缀在 RegisterCmd 与 Entry 的 lambda 各出现一处——
+                        // reload 后新 Entry 重注册用的是 Entry 里那份，只改第一处会让 s8d 行为锚失效
+                        const std::string from = "\"script.echo: \" + string.Join(\" \", args)";
+                        const std::string to = "\"[v2] script.echo: \" + string.Join(\" \", args)";
+                        std::size_t at = 0;
+                        int replaced = 0;
+                        while ((at = src.find(from, at)) != std::string::npos) {
+                            src.replace(at, from.size(), to);
+                            at += to.size();
+                            ++replaced;
+                        }
+                        expectTrue(replaced >= 2, "s8c2 echo prefix replaced in both lambdas");
+                        std::ofstream out(cs, std::ios::binary | std::ios::trunc);
+                        out << src;
+                        out.close();
+
+                        expectTrue(dotnetBuild(hotConsole.string(), {}),
+                                   "s8c2 dotnet build overwrite same DLL name (file not locked by LoadFromStream)");
+
+                        // ScriptHost::reloadScript：解绑 -> unload（weakref 校验）-> 重装载 -> Entry 重注册
+                        std::string info;
+                        const nl::script::Result rr = nl::script::ScriptHost::get().reloadScript(&info);
+                        expectTrue(rr.ok, "s8c3 ScriptHost::reloadScript (unbind -> unload -> load -> rebind)");
+                        if (!rr.ok) {
+                            std::printf("  reload detail: code=%d %s\n", rr.code, rr.message.c_str());
+                        } else {
+                            std::printf("  %s\n", info.c_str());
+                        }
+
+                        // s8d：行为换新（新映像 echo 前缀 [v2]）
+                        const auto r2 = nl::core::console::Console::get().exec("script.echo v2 reload");
+                        expectTrue(r2.ok() && r2.output.find("[v2] script.echo: v2 reload") != std::string::npos,
+                                   "s8d behavior updated after reload (echo prefix [v2])");
+
+                        // s8e：C++ 状态无损（cvar 值 / 实体树 / 内建命令 / 命令登记表）
+                        expectTrue(console8.findCVar("script.rate") &&
+                                       console8.findCVar("script.rate")->value().toString() == "2.5",
+                                   "s8e C++ cvar state intact (script.rate == 2.5)");
+                        {
+                            using TGetFnT = int(__cdecl*)(std::uint64_t, float*, float*, float*);
+                            const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                            const auto tg = reinterpret_cast<TGetFnT>(table->ecsTransformGet);
+                            float p[3] = {}, q[4] = {}, s[3] = {};
+                            expectInt(tg(cppEnt8, p, q, s), 0, "s8e2 entity alive after reload");
+                            expectTrue(p[0] == 7.f && p[1] == 8.f && p[2] == 9.f,
+                                       "s8e3 entity transform bits intact (7,8,9)");
+                        }
+                        {
+                            const auto r3 = console8.exec("cvar.set script.rate 2.6");
+                            expectTrue(r3.ok(), "s8e4 builtin cvar.set intact after reload");
+                            console8.findCVar("script.rate")->setFloat(2.5);   // 恢复锚值
+                        }
+                        bool regAgain = false;
+                        for (const auto& n : nl::script::scriptRegisteredCommands())
+                            regAgain |= (n == "script.echo");
+                        expectTrue(regAgain, "s8e5 script command re-registered by new Entry (ledger)");
+
+                        // s8f：连续 reload x3 无泄漏（同 DLL 换载链路；句柄计数漂移阈值 32）
+                        {
+                            DWORD h0 = 0, h1 = 0;
+                            GetProcessHandleCount(GetCurrentProcess(), &h0);
+                            bool allOk = true;
+                            for (int i = 0; i < 3 && allOk; ++i) {
+                                std::string infoN;
+                                allOk = nl::script::ScriptHost::get().reloadScript(&infoN).ok;
+                            }
+                            expectTrue(allOk, "s8f3 consecutive reload x3 all ok");
+                            GetProcessHandleCount(GetCurrentProcess(), &h1);
+                            const long long drift = static_cast<long long>(h1) - static_cast<long long>(h0);
+                            std::printf("  handle drift over 3 reloads: %lld (h0=%lu h1=%lu)\n",
+                                        drift, static_cast<unsigned long>(h0), static_cast<unsigned long>(h1));
+                            expectTrue(drift <= 32 && drift >= -32,
+                                       "s8f4 no handle leak over consecutive reloads (|drift| <= 32)");
+                        }
+
+                        // s8g：显式卸载 + weakref 校验（GC 排空后完全卸载）
+                        {
+                            bool fully = false;
+                            const nl::script::Result ur = nl::script::ScriptHost::get().unloadScript(&fully);
+                            expectTrue(ur.ok && fully,
+                                       "s8g unloadScript -> weakref dead (ALC fully collected)");
+                        }
+                        // s8h：卸载后脚本命令 UnknownCommand + C++ 状态仍可用
+                        {
+                            const auto r4 = nl::core::console::Console::get().exec("script.echo gone");
+                            expectTrue(r4.code == nl::core::console::ExecCode::UnknownCommand,
+                                       "s8h script command gone after unload -> UnknownCommand");
+                            using SpawnFnT = int(__cdecl*)(const char*, std::uint64_t*);
+                            const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                            const auto sp = reinterpret_cast<SpawnFnT>(table->ecsSpawn);
+                            std::uint64_t id = 0;
+                            expectInt(sp("afterUnload", &id), 0, "s8h2 ECS export still works (World bound in C++)");
+                            expectTrue(console8.findCVar("script.rate") &&
+                                           console8.findCVar("script.rate")->value().toString() == "2.5",
+                                       "s8h3 C++ cvar intact after unload");
+                        }
+                    }
+                    fs::remove_all(hotRoot, ec);
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -610,7 +833,7 @@ void usage() {
         "  nl-script check <projectDir>                       compile only (dotnet build)\n"
         "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
-        "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir]\n"
+        "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
         "                                                     full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
@@ -659,7 +882,8 @@ int main(int argc, char** argv) {
         }
         const fs::path consoleDir = argc >= 4 ? fs::weakly_canonical(argv[3]) : fs::path();
         const fs::path ecsDir = argc >= 5 ? fs::weakly_canonical(argv[4]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir);
+        const fs::path bootstrapDir = argc >= 6 ? fs::weakly_canonical(argv[5]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir);
     }
     usage();
     return 2;

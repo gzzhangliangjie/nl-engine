@@ -10,9 +10,11 @@ namespace NlScript.Examples
 {
     public static class HelloScript
     {
-        // UNMANAGEDCALLERSONLY_METHOD 路线要求 [UnmanagedCallersOnly]（coreclr_delegates.h 契约）。
-        // 签名必须精确匹配 component_entry_point_fn：int(IntPtr, int)。
-        [UnmanagedCallersOnly]
+        // M-SC3 拆两层口径：Entry = 普通静态方法（collectible ALC 反射路径专用——
+        // 运行时禁止托管代码调用 [UnmanagedCallersOnly] 方法）；EntryNative =
+        // [UnmanagedCallersOnly] 包装（默认 ALC getEntryPoint 函数指针路径，
+        // UNMANAGEDCALLERSONLY_METHOD 契约）。签名必须精确匹配
+        // component_entry_point_fn：int(IntPtr, int)。
         public static int Entry(IntPtr args, int sizeBytes)
         {
             string mode = ReadArgs(args, sizeBytes);
@@ -30,6 +32,10 @@ namespace NlScript.Examples
                     return -1;
             }
         }
+
+        /// <summary>native 包装：默认 ALC getEntryPoint 函数指针路径用。</summary>
+        [UnmanagedCallersOnly]
+        public static int EntryNative(IntPtr args, int sizeBytes) => Entry(args, sizeBytes);
 
         private static string ReadArgs(IntPtr args, int sizeBytes)
         {

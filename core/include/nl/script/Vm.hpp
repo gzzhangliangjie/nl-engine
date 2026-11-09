@@ -19,7 +19,8 @@
 //      必须有对应 *.runtimeconfig.json。
 //
 // 热更根基（UE/鸣潮共同口径，M-SC3 落地）：脚本无跨帧状态、状态全在 C++ 侧；
-// 本类只负责「装载运行时 + 取托管函数指针」，collectible ALC 卸载在 M-SC3 扩展。
+// 脚本程序集经 collectible ALC 轮换（loadBootstrap/scriptLoad/scriptCall/
+// scriptUnload），运行时本体全程不重初始化（单运行时硬限制①）。
 //
 // 纪律：core 零图形 API（NVRHI/ImGui 零 include）；头文件不暴露 hostfxr.h /
 // nethost.h（PIMPL，hostfxr 符号只在 Vm.cpp）；错误一律转 Result 结构，
@@ -39,6 +40,10 @@ namespace nl::script {
 //   4 = hostfxr_get_runtime_delegate 失败
 //   5 = 程集加载 / 类型·方法解析失败（load_assembly_and_get_function_pointer 返回错误）
 //   6 = 托管异常（互操作边界 SEH 捕获，异常码记录在 message）
+//   7 = bootstrap 未装载（M-SC3 热更 API 在 loadBootstrap 前调用）
+//   8 = 热更协议错误（bootstrap 返回负码：load -1/-2/-3、call -100/-101/-102、
+//       unload -1，逐码带语义）
+//   9 = 热更卸载未完成（bootstrap weakref 校验 GC 未收干净）
 struct Result {
     bool ok = false;
     int code = 0;
@@ -72,10 +77,50 @@ public:
     //   assemblyPath  — 托管 DLL 绝对路径
     //   typeName      — 程序集限定类型名（"命名空间.类名, 程序集名"）
     //   methodName    — 公共静态方法名（须兼容默认签名，且带 [UnmanagedCallersOnly]）
+    //   ⚠ 只许对**非收集**程序集使用（默认 ALC 装载，不可卸载）：函数指针指向
+    //     collectible 程序集时 Unload 后即悬空。脚本热更走下面四件套。
     Result getEntryPoint(const std::string& assemblyPath,
                          const std::string& typeName,
                          const std::string& methodName,
                          EntryPointFn* out);
+
+    // ---- M-SC3 热更四件套（collectible ALC，bootstrap 中转口径）----
+    //
+    // 结构（官方 collectible 口径）：hostfxr 只能把程序装配进默认 ALC（不可卸载），
+    // collectible ALC 的创建/卸载必须托管侧完成 → 用一个**非收集 bootstrap 程序集**
+    // （script/bootstrap/，常驻、其函数指针取用安全）中转：C++ 一次性取 bootstrap
+    // 的 BootLoad/BootCall/BootUnload 三个函数指针；脚本程序集全部经 bootstrap
+    // LoadFromStream 进 collectible ALC（不锁 DLL → dotnet build 同名覆盖可写），
+    // 脚本方法经 bootstrap 反射 Invoke 调用（机制中转，绑定面仍是显式函数指针）。
+    //
+    // ABI 协议（与 script/bootstrap/Bootstrap.cs 注释同文，写死防漂移；x64，
+    // C++ 栈上 POD 结构传地址，bootstrap 按偏移手读）：
+    //   BootLoad args   = struct { const char* assemblyPathUtf8; }          // 偏移 0
+    //   BootCall args   = struct { const char* typeUtf8;                    // 偏移 0
+    //                              const char* methodUtf8;                  // 偏移 8
+    //                              void* data;                              // 偏移 16
+    //                              std::int32_t size; }                     // 偏移 24
+    //   BootUnload args = nullptr
+    //
+    // 卸载次序铁律（ScriptHost 编排，Vm 只做单步）：先解绑一切指向旧 ALC 的
+    // C++ 侧引用（脚本注册命令 unregisterCommand——reverse P/Invoke thunk 在
+    // Unload 时被 CLR 注销，残留引用调用即崩），再 scriptUnload。
+
+    // 一次性装载 bootstrap：取 BootLoad/BootCall/BootUnload 三函数指针
+    //（bootstrapDllPath = script/bootstrap dotnet build 产出的 NlScriptBootstrap.dll）。
+    Result loadBootstrap(const std::string& bootstrapDllPath);
+
+    // 装载脚本程序集进新 collectible ALC（已有脚本未卸载 = code 8，协议 -3）。
+    Result scriptLoad(const std::string& assemblyPath);
+
+    // 经 bootstrap 反射调用当前 ALC 内脚本静态方法（args/size 原样透传）。
+    // 托管异常经 bootstrap 归一为协议码 -102（code 8）；SEH 仅兜底。
+    Result scriptCall(const std::string& typeName, const std::string& methodName,
+                      void* args, std::int32_t sizeBytes, std::int32_t* ret);
+
+    // 卸载当前 collectible ALC 并做 weakref 排空校验：*fullyUnloaded=false 表示
+    // Unload 已调但 GC 未收干净（code 9；继续跑 GC 可能最终收掉，判据从严）。
+    Result scriptUnload(bool* fullyUnloaded);
 
 private:
     Vm();

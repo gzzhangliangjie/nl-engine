@@ -82,10 +82,11 @@ namespace NlScript.Examples
             return Engine.ConsoleUnregister("script.echo");
         }
 
-        // ---- run --api 演示入口 ----
+        // ---- run --api 演示入口 / 热更重绑定入口（M-SC3 拆两层口径）----
 
-        /// <summary>完整演示：注册 + 赋值 + 执行 + 读回，结果走 stdout（run 用例肉眼可验）。</summary>
-        [UnmanagedCallersOnly(EntryPoint = "Entry")]
+        /// <summary>托管热更入口：普通静态方法（collectible ALC 反射路径专用——
+        /// 运行时禁止托管代码调用 [UnmanagedCallersOnly] 方法，BootCall 反射
+        /// Invoke 会 InvalidProgram，M-SC3 实测）。</summary>
         public static int Entry(IntPtr table, int size)
         {
             Engine.Init(table);
@@ -108,5 +109,9 @@ namespace NlScript.Examples
             Console.WriteLine("cvar list:" + Engine.CvarList());
             return 0;
         }
+
+        /// <summary>native 包装：默认 ALC getEntryPoint 函数指针路径用（UNMANAGEDCALLERSONLY_METHOD 契约）。</summary>
+        [UnmanagedCallersOnly(EntryPoint = "Entry")]
+        public static int EntryNative(IntPtr table, int size) => Entry(table, size);
     }
 }

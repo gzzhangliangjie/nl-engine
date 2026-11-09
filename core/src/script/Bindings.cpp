@@ -10,6 +10,7 @@
 #include "nl/scene/World.hpp"
 
 #include <objbase.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,14 @@
 namespace nl::script {
 
 namespace {
+
+// M-SC3 脚本命令登记表（Bindings.hpp 口径；set 有序去重，输出稳定）。
+// 定义放匿名 namespace 顶部：extern "C" 注册/注销路径与文件尾部的公开查询
+// 接口共用同一份存储（一次定义，整 TU 可见）。
+std::set<std::string>& scriptCommandTable() {
+    static std::set<std::string> names;
+    return names;
+}
 
 // ---- C++ → C# 返回值静态缓冲（下一次调用前有效；console 单线程约定下无竞态）----
 
@@ -99,6 +108,10 @@ extern "C" int nl_consoleRegister(const char* name, const char* help, void* fn) 
     if (Console::get().findCVar(name)) return 1;   // 不许遮蔽 CVar（统一注册表先查 CVar）
     ManagedCommandFn managed = reinterpret_cast<ManagedCommandFn>(fn);
     std::string nameCopy = name;
+    // M-SC3 登记：脚本注册的命令进台账（回调指向 collectible ALC thunk，
+    // 热重载 unload 前必须 scriptUnregisterAll 清空——thunk 卸载后悬空）。
+    scriptCommandTable().erase(nameCopy);
+    scriptCommandTable().insert(nameCopy);
     Console::get().registerCommand(name, help,
         [managed, nameCopy](const std::vector<std::string>& args) -> nl::core::console::CommandResult {
             // argv 生命周期：C++ 字符串在调用期间存活（lambda 参数持有）
@@ -130,6 +143,8 @@ extern "C" int nl_consoleRegister(const char* name, const char* help, void* fn) 
 
 extern "C" int nl_consoleUnregister(const char* name) {
     if (!name) return 1;
+    // M-SC3 对称擦除：C# 主动注销的命令同步出登记表。
+    scriptCommandTable().erase(name);
     return Console::get().unregisterCommand(name) ? 0 : 1;
 }
 
@@ -245,6 +260,19 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
 
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
+}
+
+// ---- M-SC3 脚本命令登记表公开接口（存储 = 匿名 namespace 顶部的 scriptCommandTable）----
+
+std::vector<std::string> scriptRegisteredCommands() {
+    return {scriptCommandTable().begin(), scriptCommandTable().end()};
+}
+
+std::vector<std::string> scriptUnregisterAll() {
+    std::vector<std::string> names(scriptCommandTable().begin(), scriptCommandTable().end());
+    for (const auto& n : names) Console::get().unregisterCommand(n);   // unknown 容错跳过
+    scriptCommandTable().clear();
+    return names;
 }
 
 const ApiTable* consoleApiTable() {

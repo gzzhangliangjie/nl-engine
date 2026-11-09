@@ -34,6 +34,8 @@
 #include "nl/script/Vm.hpp"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace nl::scene { class World; }
 
@@ -114,5 +116,22 @@ const ApiTable* consoleApiTable();
 // 宿主侧 World 绑定（M-SC2）：入口调用前设置，ECS 导出全部操作该实例；
 // nullptr = 解绑（此后 ECS 导出一律返回 kEcsNoWorld——M-SC3 热重载窗口的兜底）。
 void ecsSetWorld(scene::World* world);
+
+// ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
+//
+// nl_consoleRegister（C# → C++ 命令注册）把命令名登记进脚本命令表；
+// nl_consoleUnregister（C# 主动注销）对称擦除。表内命令的回调都指向
+// collectible ALC 内的 reverse P/Invoke thunk——Unload 会注销 thunk，
+// C++ 侧残留引用调用即崩，故 ScriptHost::reloadScript 必须先
+// scriptUnregisterAll()（逐个解绑 + 清表，返回解绑名单）再 vm->scriptUnload()。
+//
+// 热重载编排语义（铁律）：unload 前表必须清空（不然 = 卸载后调用悬空指针）。
+
+// 当前脚本注册的命令名快照（登记序；ScriptHost 输出信息 / selftest 断言用）。
+std::vector<std::string> scriptRegisteredCommands();
+
+// 逐个 unregisterCommand + 清登记表，返回被解绑的命令名（解除对旧 ALC thunk
+// 的全部 C++ 侧引用；unknown 命令跳过——登记表与命令表本应同步，容错不抛）。
+std::vector<std::string> scriptUnregisterAll();
 
 } // namespace nl::script

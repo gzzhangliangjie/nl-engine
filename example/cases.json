@@ -3882,6 +3882,88 @@
      "preview": "example/m-sc2/check.png"
     }
    ]
+  },
+  {
+   "id": "m-sc3",
+   "label": "P8 M-SC3",
+   "name": "脚本热更：collectible ALC 换载 + console.reload-script + C++ 状态无损（A 类轨道）",
+   "tag": "m-sc3",
+   "date": "2026-11-09",
+   "summary": "脚本热更定稿（bootstrap 中转口径）：hostfxr 只能把程序装配进默认 ALC（不可卸载），collectible ALC 的创建/卸载必须托管侧完成——非收集 bootstrap 程序集（script/bootstrap/，常驻安全）暴露 BootLoad/BootCall/BootUnload 三函数指针，脚本程序集经 LoadFromStream 进 collectible ALC（不锁 DLL 文件 → dotnet build 同名覆盖可写，热更工作流关键通路），脚本方法经 bootstrap 反射 Invoke（机制中转，绑定面照旧显式函数指针）；脚本入口拆两层（普通 Entry=collectible 反射路径 + [UnmanagedCallersOnly] EntryNative=默认 ALC 函数指针路径，运行时禁止托管调用 UnmanagedCallersOnly 方法）。C++ 侧 ScriptHost 单例编排：scriptUnregisterAll（脚本命令登记表解绑，解除对旧 ALC reverse P/Invoke thunk 的引用）→ scriptUnload（weakref 排空校验）→ 重装载 + Entry 重注册（脚本自描述重绑定，Carrot load-callback 同构）；cvar 值/实体树/内建命令全在 C++ 不动。踩坑固化：①unload 与 GC 排空不得同帧——同方法内 alc=null 是 JIT dead store，引用留栈永远 root（官方 NoInlining 方法边界口径，隔离实验三场景+纯托管对照实证）；②运行时禁止托管代码反射调用 UnmanagedCallersOnly 方法（InvalidProgram）。连续 reload x3 句柄漂移 0（无泄漏）。selftest s8a~s8h 叠加 s0~s7 不回归。",
+   "acceptance": [
+    "selftest s8a~s8h 全绿（s0~s5 + s6 + s7 不回归，PASS 0 failures）：bootstrap 装载+命令注册、首载 collectible ALC+Entry 重绑定、改源→同名覆盖重编→reloadScript（解绑 2 命令+weakref dead+重装载）、行为换新 [v2]、C++ 状态无损（cvar 值/实体逐位/内建命令/命令登记表重登记）、连续 reload x3 句柄漂移 0、unloadScript weakref dead、卸载后命令 UnknownCommand+C++ 导出仍可用",
+    "console.reload-script 命令可用（无参=重载当前脚本，带参=换路径）；unload 后 ECS 导出/内建命令不受影响（状态全在 C++ 口径实证）",
+    "双后端 DX12/VULKAN 构建+selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s8a~s8h：脚本热更机械单测（M-SC0/SC1/SC2 不回归）",
+     "kind": "tool",
+     "note": "s8a bootstrap 3 函数指针+console.reload-script 注册 / s8b 首载 collectible ALC（LoadFromStream 不锁文件）+Entry 重绑定 / s8c 改源→同名覆盖重编→ScriptHost::reloadScript / s8d 行为换新（echo 前缀 [v2]）/ s8e C++ 状态无损四锚 / s8f 连续 reload x3 句柄漂移 0 / s8g weakref dead / s8h 卸载后命令消失+C++ 导出可用。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap",
+     "preview": "example/m-sc3/selftest.png"
+    },
+    {
+     "id": "reload",
+     "name": "s8 热更段特写：解绑→Unload（weakref dead）→重装载→行为换新",
+     "kind": "tool",
+     "note": "reload-script 生命周期输出（从 selftest.log 过滤 s8 行）：unbound 2 command(s) [script.echo, script.throwcmd]，ALC fully unloaded (weakref dead)，重装载后 Entry ret=0、echo 前缀 [v2]、cvar/实体/内建命令锚全不变、连续 reload x3 句柄漂移 0。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "ALC fully unloaded (weakref dead)",
+     "command": "nl-script selftest ...（s8 段过滤展示）",
+     "preview": "example/m-sc3/reload.png"
+    },
+    {
+     "id": "run-api",
+     "name": "run --api console demo：EntryNative 函数指针路径（正向，exit 0）",
+     "kind": "tool",
+     "note": "默认 ALC 路径回归：Entry 拆两层后 native 入口改取 EntryNative（UNMANAGEDCALLERSONLY_METHOD 契约），托管 Entry 供 collectible 反射。行为与 M-SC1 一致（注册+赋值+执行+读回）。",
+     "args": [
+      "run",
+      "{root}/script/examples/console",
+      "--api"
+     ],
+     "expectExit": 0,
+     "expectLog": "run: ret=0",
+     "command": "nl-script run script/examples/console --api",
+     "preview": "example/m-sc3/run-api.png"
+    },
+    {
+     "id": "check",
+     "name": "check bootstrap：非收集中转程序集编译检查（exit 0）",
+     "kind": "tool",
+     "note": "bootstrap（BootLoad/BootCall/BootUnload）单独 dotnet build 校验；FDD 契约 runtimeconfig.json 由 GenerateRuntimeConfigurationFiles 产出。",
+     "args": [
+      "check",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/bootstrap",
+     "preview": "example/m-sc3/check.png"
+    }
+   ]
   }
  ]
 }

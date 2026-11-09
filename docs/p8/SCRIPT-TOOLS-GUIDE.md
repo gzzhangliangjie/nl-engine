@@ -213,3 +213,76 @@ nl-script check script/examples/ecs
 4. **cases.json 尾锚 + 转义**：heredoc 内嵌 JSON 的 `\\"` 要一层层数清（多一层 =
    JSONDecodeError line 3870）；command 含引号的字段用 Python 单引号串承载再 replace
    注入，插后 json.loads 复验。
+
+# M-SC3：脚本热更（2026-11-09，tag `m-sc3`）
+
+## 热更架构（bootstrap 中转，官方 collectible 口径）
+
+- **为什么必须中转**：hostfxr 的 `load_assembly_and_get_function_pointer` 一律进
+  **默认 ALC**（不可卸载）；collectible ALC 的创建/卸载只能在**托管侧**完成。
+  结构 = 非收集 **bootstrap 程序集**（`script/bootstrap/`，常驻，其函数指针取用
+  安全）+ collectible `ScriptLoadContext`（脚本程序集轮换）。
+- **bootstrap 三入口**（`Nl.Script.Bootstrap.Bootstrap`，[UnmanagedCallersOnly]）：
+  - `BootLoad(args)`：args = `struct{ const char* assemblyPathUtf8; }`（**结构体地址**，
+    x64 偏移 0）。新 collectible ALC + `LoadFromStream`——**不锁 DLL 文件**，
+    `dotnet build` 同名覆盖可写（热更工作流关键通路；`LoadFromAssemblyPath` 会锁）。
+  - `BootCall(args)`：args = `struct{ typeUtf8; methodUtf8; void* data; int32 size; }`
+    （偏移 0/8/16/24）。反射 Invoke 当前 ALC 脚本静态方法 `int(IntPtr,int)`；
+    异常 catch → -102（互操作边界归一，C++ SEH 仅兜底）。
+  - `BootUnload(args)`：Unload + weakref 排空校验。0=完全卸载 / 1=未完全 / -1=无脚本。
+- **依赖解析**（`ScriptLoadContext.Load`）：脚本 DLL 旁的本地依赖（NlScriptApi.dll 等）
+  `LoadFromStream` 进**同一** collectible ALC（Unload 时 `Engine._pinned` 保活列表
+  一并回收）；框架程序集返回 null 回退 Default（官方推荐口径）。
+- **脚本作者约定（Entry 拆两层）**：热更入口 = 普通 `static int(IntPtr,int)` 方法
+  （**禁 [UnmanagedCallersOnly]**——运行时禁止托管代码反射调用它，BootCall 会
+  InvalidProgram）；native 入口 = `[UnmanagedCallersOnly]` 包装方法（示例命名
+  `EntryNative`），供默认 ALC `getEntryPoint` 取函数指针。三个示例脚本均已按此改。
+- **C++ 侧**：`Vm` 热更四件套（`loadBootstrap`/`scriptLoad`/`scriptCall`/
+  `scriptUnload`，阶段码 7=bootstrap 未装载 / 8=协议负码 / 9=卸载未完成）；
+  `ScriptHost`（单例）编排 reload + 注册 **`console.reload-script`** 命令
+  （无参=重载当前脚本 DLL，带参=换路径）；`Bindings` 脚本命令登记表
+  （`nl_consoleRegister` 登记 / `nl_consoleUnregister` 对称擦除 /
+  `scriptUnregisterAll()` 批量解绑）。**卸载次序铁律**：先解绑命令（解除对旧 ALC
+  reverse P/Invoke thunk 的引用——Unload 时 CLR 注销 thunk，残留引用调用即崩）
+  → 再 `scriptUnload`。**状态全在 C++**：cvar 值/实体树/内建命令 reload 不动；
+  重绑定 = 新脚本 Entry 自己重新注册（脚本自描述，Carrot load-callback 同构）。
+
+## selftest 判据（s8 组，s0~s5 + s6 + s7 不回归）
+
+- s8a bootstrap 装载（3 函数指针）+ `console.reload-script` 注册（幂等 init）
+- s8b 首载 collectible ALC + Entry 重绑定（echo v1 锚 + 命令登记表）
+- s8c 改源 → `dotnet build` **同名覆盖** → `ScriptHost::reloadScript`
+- s8d 行为换新（echo 前缀 `[v2]`）
+- s8e C++ 状态无损四锚（cvar 值 / 实体逐位 / 内建命令 / 命令登记表重登记）
+- s8f 连续 reload x3 无泄漏（`GetProcessHandleCount` 漂移 ≤ 32，实测 0）
+- s8g `unloadScript` → weakref dead（ALC 完全收集）
+- s8h 卸载后脚本命令 UnknownCommand + C++ 导出仍可用
+
+## 验收复现
+
+```
+scripts\build-m0.2.bat DX12
+example\m-sc3\run.bat          # selftest + run --api + check bootstrap + 4 张证据图
+```
+
+## 踩坑存档（M-SC3 实测）
+
+1. **unload 与 GC 排空不得同帧（本轮最大坑）**：同方法内 `alc = null;` 是 JIT
+   dead store（赋值后不再读取即被删除），栈 slot 一直持有 ALC 引用 → weakref
+   **永远 alive**（30 轮强制 GC 都救不回）。官方《assembly unloadability》教程
+   口径 = unload 放 `[MethodImpl(NoInlining)]` 小方法、返回 WeakReference、
+   **排空在调用方**——方法边界是清除栈 root 的唯一可靠方式。诊断过程：三场景
+   隔离实验（裸 stream / resolver stream / AssemblyPath）+ 纯托管 `dotnet run`
+   对照全部 alive，定位到方法结构而非实现；同帧 vs 方法边界双 case 实证
+   （True/False）。
+2. **运行时禁止托管代码反射调用 [UnmanagedCallersOnly] 方法**：BootCall 的
+   `MethodInfo.Invoke` 直接 `InvalidProgram`。默认 ALC 取函数指针又必须该
+   attribute → Entry 拆两层（见脚本作者约定）。
+3. **LoadFromAssemblyPath 锁文件**：Windows 上锁 DLL → `dotnet build` 无法同名
+   覆盖 → 热更工作流必断；必须 `LoadFromStream`（不持文件句柄）。
+4. **BootLoad args 是结构体地址不是字符串指针**：首版直传 `const char*`，
+   bootstrap 按偏移 0 读指针 → AV。协议统一「C++ 栈上 POD 结构传地址 +
+   bootstrap 偏移手读」（与 Marshal 结构 marshal 的 packing 坑隔离）。
+5. **脚本命令登记表须对称维护**：`nl_consoleRegister` 登记 / `nl_consoleUnregister`
+   擦除 / `scriptUnregisterAll()` 批量清（unload 前表必须空——不然 = 卸载后调用
+   悬空 thunk）。登记表 set 有序去重，reload 输出解绑名单稳定可断言。
