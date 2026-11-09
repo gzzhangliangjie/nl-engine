@@ -185,9 +185,9 @@
 
 > 2026-11-09 用户拍板：ECS（P8 E1）是下游三轨的瓶颈，**E1a（纯逻辑内核）提前开 worktree**，E1b（渲染集成）后挂等 S6 收官。计划 `docs/p8/P8-ECS-PLAN.md`（M-E0~E3，Carrot 式 OOP 组件路线）。
 
-| 轨道 | worktree 绝对路径（待建） | 分支（待建） | 计划 |
+| 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs` | `feat/ecs` | 已立项 `docs/p8/P8-ECS-PLAN.md`（E1a 先行 / E1b 后挂） |
+| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs`（2026-11-09 已建，junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/ecs` | 已立项 `docs/p8/P8-ECS-PLAN.md`（E1a 先行 / E1b 后挂）；**M-E0 进行中**（World/Entity 核心） |
 
 ### 7.2 固化文档闸
 

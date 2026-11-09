@@ -59,6 +59,10 @@ TRACKS = {
         "wt": "E:/UE_STUDY_2026/nl-engine-console",
         "branch": "feat/console", "state": "active",
     },
+    "ecs": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-ecs",
+        "branch": "feat/ecs", "state": "active",
+    },
     "pathfinding": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pathfinding",
         "branch": "feat/pathfinding", "state": "planned",
