@@ -187,14 +187,14 @@
 | 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
 |---|---|---|---|
 | 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废；新阶梯 = vendored + 封装 + 编辑器结合 + E1 集成） |
-| ~~物理（Jolt vendored 集成）~~ | **已建** `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics`（已建） | **已提前开工**，见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
+| ~~物理（Jolt vendored 集成）~~ | ~~`E:/UE_STUDY_2026/nl-engine-physics`~~（**已拆**，2026-11-10；M-P5 gate E3，届时开新 wt 接入） | `feat/physics`（**分支保留**） | **全量 merge 回 master**（2026-11-10，merge `7d844ef`，M-P0~P4 + M-J5c，tags `phys-p0`~`phys-j5c` 随入）；见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
 | 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | ~~`E:/UE_STUDY_2026/nl-engine-audio`~~（**已拆**，2026-11-09；M-S3 后续开新 wt 接入） | `feat/audio`（**分支保留**） | **M-S0/M-S1/M-S2 已 merge 回 master**（2026-11-09，merge `1aac3d2`）；剩 M-S3 场景集成 gate 在 E1/E1b 后；`docs/p8/P8-AUDIO-PLAN.md` |
 
 ### 7.1e 物理轨道（2026-11-09 提前开工，M-P0~M-P3）
 
 | 轨道 | worktree 绝对路径 | 分支 | 状态 |
 |---|---|---|---|
-| 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/physics` | **M-P0 / M-P1 / M-P2 / M-P3 / M-P4 收口（tags `phys-p0` / `phys-p1` / `phys-p2` / `phys-p3` / `phys-p4`）**：vendored Jolt v5.3.1 + `nl/physics` 最小世界 + 4 层碰撞矩阵与 owner↔BodyID 双向关联 + 6 箱体堆叠稳定/休眠岛三用例 + 碰撞形状调试线框接 viewer + 角色胶囊走查（CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶，动作系统输入接口预留）；`phys-tools` layers/check-layers/stack/check-stack/debug/check-debug/character/check-character；M-P0 落球 + M-P1 层矩阵 + M-P2 堆叠 + M-P3 debug + M-P4 character 五基线逐字节回归锁死；A 类工具版交代，不进 `kStage`/渲染回归 |
+| 物理（Jolt vendored 集成） | ~~`E:/UE_STUDY_2026/nl-engine-physics`~~（**已拆**，2026-11-10——merge `7d844ef` 回 master 后回收；拆时 junction `.workbuddy`/`slang dist` 先以 PowerShell `[IO.Directory]::Delete($path,$false)` 摘链接再 force remove，主树共享内容核对无损） | `feat/physics`（**分支保留**） | **M-P0 / M-P1 / M-P2 / M-P3 / M-P4 收口（tags `phys-p0` / `phys-p1` / `phys-p2` / `phys-p3` / `phys-p4`）+ M-J5c 并行物理（tag `phys-j5c`，PoolJobSystem 适配器，N=1/N=4/串行逐位 IDENTICAL）**：vendored Jolt v5.3.1 + `nl/physics` 最小世界 + 4 层碰撞矩阵与 owner↔BodyID 双向关联 + 6 箱体堆叠稳定/休眠岛三用例 + 碰撞形状调试线框接 viewer + 角色胶囊走查（CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶，动作系统输入接口预留）；`phys-tools` layers/check-layers/stack/check-stack/debug/check-debug/character/check-character/check-jobs；M-P0 落球 + M-P1 层矩阵 + M-P2 堆叠 + M-P3 debug + M-P4 character 五基线逐字节回归锁死；**轨道已收官 merge 回 master（2026-11-10），wt 已拆**；A 类工具版交代，不进 `kStage`/渲染回归 |
 
 - 用户指令「建 feat/physics 开发物理模块内容」= 提前解锁排期闸（计划 §排期约束括号内已允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3（序列化 + Inspector）之后**，不随本轮解锁。
 - 三处口径二次核实（2026-11-09）：Carrot `engine/physics/` 2902 行 Jolt 集成层 + 本地 vendored JoltPhysics **v5.3.1**；bevy 本体无物理 crate（仅 `examples/movement/physics_in_fixed_timestep.rs` 示例），生态 avian，不作口径；UE 5.8.4 只有自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`），**全树无 Jolt 后端、ThirdParty 下亦无 PhysX SDK**——立项文档里「UE 官方提供 Jolt 后端」为误记，已勘误并落 `UE-DIFFS.md` D10。
