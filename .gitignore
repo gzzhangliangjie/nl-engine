@@ -1,42 +1,88 @@
-# build（根锚定：只忽略仓库根的构建输出目录，防止误伤 thirdparty/jolt/Build 等
-# vendored 上游 CMake 工程——M-P0 起该文件因 `build/` 无锚定一直未入库，主树
-# merge 后 configure 失败才发现。）
+# ============================================================
+# Build output（根锚定）
+# 教训（2026-11-10，commit 94bbb66）：`build/` 无锚定曾把
+# thirdparty/jolt/Build/（上游 CMake 工程）静默挡在 git 外，
+# merge 到新 checkout 才炸。目录名通用的规则一律根锚定。
+# ============================================================
 /build/
-# M-C1：Vulkan 后端独立配置目录（与 build/ 同性质，不入库）
 /build-vulkan/
-out/
-cmake-build-*/
-.cache/
+/out/
+/cmake-build-*/
+/.cache/
 
+# 编译/链接中间产物（构建树整目录已忽略，此处兜底防输出逃逸到源码树；
+# 注意：不加 *.lib / *.dll —— thirdparty/dotnet-hosting/ 的预编译件是故意入库的）
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.iobj
+*.ipdb
+
+# ============================================================
+# CMake generated（精确文件名；禁 *.cmake 通配——
+# thirdparty 里 10 份 vendored .cmake 工程文件是故意入库的）
+# ============================================================
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CMakeUserPresets.json
+/compile_commands.json
+
+# ============================================================
 # IDE
+# ============================================================
 .vs/
-.vscode/
 .idea/
+.vscode/
 *.user
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+ipch/
 
-# assets 生成物
-assets/*.nmesh
-
-# Slang 工具链（重下成本低，不入库；源码在 thirdparty/slang-reference/）
+# ============================================================
+# Vendored 工具链（重下成本低，不入库；源码在 thirdparty/slang-reference/）
+# ============================================================
 thirdparty/slang/dist/
 thirdparty/slang/_dl/
 thirdparty/slang/_test/
 
-# Python (showcase tool)
+# ============================================================
+# Python (tools/showcase)
+# ============================================================
 __pycache__/
 *.pyc
 
+# ============================================================
+# dotnet (script/ — nl-script 托管侧)
+# ============================================================
+script/**/bin/
+script/**/obj/
+
+# ============================================================
+# 项目生成物与运行期文件
+# ============================================================
+# .nmesh 转换器生成物：根层不入库；assets/meshlets/ 下的精选资产故意入库
+assets/*.nmesh
+# ImGui / imgui-node-editor 运行期布局
+imgui.ini
+NodeEditor.json
+# wt_pool 占坑闸锁与收口报告（跨 worktree 共享，见 tools/wt_pool.py）
+.wt_pool_busy.json
+/.wt_pool_close/
+
+# ============================================================
 # OS
+# ============================================================
 Thumbs.db
 Desktop.ini
-
 # Windows 保留名误产生的 0 字节幻影文件（git 无法 add，也不该入库）
 /nul
 
-# wt_pool 占坑闸锁文件（跨 worktree 共享，见 tools/wt_pool.py）
-.wt_pool_busy.json
-NodeEditor.json
-
-# M-SC0: dotnet build artifacts (script-api / examples)
-script/**/bin/
-script/**/obj/
+# 注意：*.log / *.tsv 绝不 ignore——example/ 下 113 份 log 与 40 份 tsv
+# 是逐字节验收的证据与基线，故意入库（行尾口径见 .gitattributes）。

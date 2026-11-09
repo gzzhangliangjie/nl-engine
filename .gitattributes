@@ -1,10 +1,39 @@
-# 行尾钉死（2026-11-10）：本机 core.autocrlf=true 会在 checkout 时把 LF blob
-# 翻成 CRLF，导致两类逐字节验收假阳性：
-#   1) check-phys-regression.py 跨目录 md5 对比（p2/stack.tsv vs p3/stack-regen.tsv）
-#   2) audio provenance FNV hash（hash 按 LF 内存串算，检出 CRLF 必 FAIL）
-# 工具生成的数据产物一律按 LF 检出，与 blob 原始字节一致（全仓库 0 个 CRLF blob）。
+# ============================================================
+# 行尾钉死：数据产物与验收文件（2026-11-10 根修，commit cbde0c9）
+# 本机 core.autocrlf=true 会在 checkout 时把 LF blob 翻成 CRLF，导致：
+#   1) check-phys-regression.py 跨目录 md5 对比假 FAIL
+#   2) audio provenance FNV hash 假 FAIL
+# 工具生成的数据产物一律按 LF 检出，与 blob 原始字节一致
+# （全仓库 0 个 CRLF blob）。
 # 注意：勿加全局 `* text=auto eol=lf`——.bat 必须 CRLF（cmd 的 goto/label 依赖）。
+# ============================================================
 *.tsv            text eol=lf
 *.log            text eol=lf
 provenance.txt   text eol=lf
 *.bat            text eol=crlf
+
+# ---- VS/MSVC 工程文件（MSBuild 生态传统 CRLF；当前仓库暂无，防未来新增）----
+*.sln             text eol=crlf
+*.vcxproj         text eol=crlf
+*.vcxproj.filters text eol=crlf
+
+# ---- 二进制类型显式钉死（防止任何未来的 text=auto 扫描误转换；
+#      dotnet-hosting 的 lib/dll 是故意 vendored 的预编译件）----
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.tga   binary
+*.dds   binary
+*.ico   binary
+*.wav   binary
+*.ttf   binary
+*.otf   binary
+*.pdf   binary
+*.zip   binary
+*.7z    binary
+*.glb   binary
+*.nmesh binary
+*.lib   binary
+*.dll   binary
+*.exe   binary
+*.pdb   binary
