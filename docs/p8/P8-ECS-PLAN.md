@@ -36,7 +36,7 @@
 
 | 里程碑 | 内容 | 验收判据（确定性，亲眼可验） |
 |---|---|---|
-| **M-E0** | World/Entity 核心：实体创建（递增 ID）/ 延迟增删 flush / 名字 / Flags(Hidden) / exists / getAllEntities；`nanite-scene` 工具骨架 + `selftest --suite ecs-core` | selftest 断言绿：增删 flush 前后存在性、名字读写、Hidden 过滤；tick 中删实体下一 tick 生效（延迟语义锚点） |
+| **M-E0** | World/Entity 核心：实体创建（递增 ID）/ 延迟增删 flush / 名字 / Flags(Hidden) / exists / getAllEntities；`nanite-scene` 工具骨架 + `selftest --suite ecs-core` | selftest 断言绿：增删 flush 前后存在性、名字读写、Hidden 过滤；tick 中删实体下一 tick 生效（延迟语义锚点）**✅ 已完成**（2026-11-09，feat/ecs tag `ecs-e0`：ctest e0 系 2/2，四栏台账 MILESTONES M-E0 节） |
 | **M-E1** | Component 基类（serialise/deserialise/duplicate/getComponentTypeID）+ ComponentLibrary 注册工厂 + `Transform`（pos/scale/quat）+ 层级：setParent / reparent 保世界变换 / 父删递归删子 / local→world 复合 | selftest 锚点：三层父子链复合矩阵数值锚（手算对照）；reparent 后世界变换不变；删父后子不存在；**duplicate 实体含组件深拷贝 |
 | **M-E2** | System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ `SignedSystem<Required...>` + 场景 JSON 序列化/反序列化 **roundtrip 字节一致** | selftest：System 只收 Signature 匹配实体（加/删组件自动进出列表）；roundtrip = `serialise→deserialise→serialise` 逐字节一致（正/负向：非法 JSON / 未知组件名显式退出码 2） |
 | **M-E3** | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json tool 卡三用例全过；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |

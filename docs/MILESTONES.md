@@ -1114,3 +1114,16 @@
 **踩坑**：①首轮按「薄转发头」实现后 anim-tools 炸出 C2039（其 using nl::anim::quatFromAxisAngle 依赖转发头全量注入）——用户当场拍板砍转发头直接改引用，按「类型注入 nl::anim（API 契约）/ 数学函数用 nl::math:: 限定（外部）」分层收口；②诊断期间撞上 M6.0 已记录的环境级 flake（「exit 0 + 空输出」签名，bash 手跑与 ctest 均随机中招、输出文件仍正常写出），一度误判为 cluster 崩溃——用 regression.py s1.0 双后端 6/6 绿 + exe 不含 anim/math 头 + 输出恢复三证据排除代码关联，ctest s1-nmesh-suzanne 的偶发红属环境 flake（regression 主体系绿）。
 
 **下一步**：建 `feat/ecs` worktree（wt_pool claim --track ecs --milestone M-E0）→ M-E0 World/Entity 核心。
+
+## M-E0：World/Entity 核心（feat/ecs 开篇，2026-11-09，tag `ecs-e0`）
+
+**动作**：wt_pool claim（track ecs / M-E0）→ 建 worktree `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy` + `thirdparty/slang/dist`，`.workbuddy` skip-worktree）→ 三处证据重读（Carrot `World.h/.cpp` + `EntityTypes.h` 定向读 M-E0 点名段：newEntity/newEntityWithID/removeEntity/flush/tick/exists/flags；bevy `entity_disabling.rs` 借语义：隐藏是标记不是删除、只禁自身不牵连子级）→ 落码 `core/include/nl/scene/World.hpp` + `core/src/scene/World.cpp`：实体创建（u64 递增，0=无效）、延迟增删（entitiesToAdd/Remove + flush 先加后删）、tick 开头 flush（延迟语义锚点）、名字表（exists=names_.contains，Carrot 口径）、Flags(Hidden) 位标志 + getEntitiesWithFlags 过滤、getAllEntities/findEntityByName O(N) 无缓存 → 工具 `nanite-scene`（anim-tools 先例）`selftest --suite ecs-core` 四组断言 → CMake：nl_core 挂 World.cpp + nanite-scene 目标 + ctest 正/负向注册。master 侧注册表三处同步（AGENTS.md / PARALLEL-TRACKS §7.1c / wt_pool TRACKS，commit 6647fcf）。
+
+**提交版本**：feat/ecs 本收口 commit（tag `ecs-e0`，即本条台账所在提交）；master 注册表同步 6647fcf。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16（全量构建顺带验证无回归）；`nanite-scene selftest --suite ecs-core` PASS：递增 ID / 增删 flush 前后存在性（Carrot 非对称口径：新建即时可见、删除 flush 后不可见）/ 名字读写与 findEntityByName / Hidden 过滤（隐藏≠删除、getAllEntities 不受 flags 影响）/ 重复 remove 幂等 / 延迟语义锚点（删实体下一 tick 生效）；ctest e0 系 2/2（正向 PASS + 负向未知 suite 退出码 2 WILL_FAIL）。收口前四项自查：①渲染交代物——本轮无（A 类 E1a 纯逻辑零渲染，如实写明）；②工具交代物——ctest 正/负向已注册并在构建树跑绿，展示台 tool 卡 + TOOLS-GUIDE 按计划留 M-E3 收口统一上；③MILESTONES 四栏已追加（本节）；④固化——P8-ECS-PLAN.md M-E0 行标完成 + 踩坑沉淀见下。
+
+**踩坑**：①`unordered_map::contains` 是 C++20，MSVC 本项目标准下 C2039 → 一律 `find != end`；②exists() 语义是 Carrot 非对称口径（名字表即时登记 / 全局实体表 flush 后才有）——首轮 selftest 在 flush 前调 findEntityByName 直接 FAIL，修测试（补 tick(0) flush）并把「flush 前查名 miss」固化为正向断言（把延迟语义本身锁进锚点，防后续实现漂移）；③构建必须走 `scripts/build-m0.2.bat`（裸 shell 无 nmake/MSVC 环境，cmake --build 直接炸 generator）。
+
+**下一步**：M-E1 Component 基类（serialise/deserialise/duplicate/类型 ID）+ ComponentLibrary 注册工厂 + Transform（pos/scale/quat，nl/math 扩展）+ 层级（setParent / reparent 保世界变换 / 父删递归删子 / local→world 复合 / duplicate 深拷贝）。
+
