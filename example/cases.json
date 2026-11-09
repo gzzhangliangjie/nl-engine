@@ -5115,6 +5115,72 @@
           "command": "audio-tools solo 1 assets/audio/test-tone.wav"
         }
       ]
+    },
+    {
+      "id": "ecs-parallel",
+      "label": "M-E1b.5",
+      "name": "ECS 轨道 M-E1b.5：并行 tick —— 读写集求解器 + jobgraph 静态 DAG + 结构变更守卫",
+      "tag": "ecs-e1b.5",
+      "date": "2026-11-09",
+      "summary": "E1b 轨道（feat/ecs，纯 CPU core/ 改动，不进 kStage/不进渲染基线）。把 job-system 接进 ECS：SignedSystem 模板参数展开为读写集（Read<T>/Write<T>/裸类型保守=写，M-E2 向后兼容），World::tickParallel 按 UE Mass FMassProcessorDependencySolver 口径求解——组件冲突（写读/写写）按注册序建边、读读并行，喂 M-J5a jobgraph 逐帧执行；bevy 的 access 反射没有，用显式声明代替（三处对照拍板 A）。契约固化：并行段内结构变更（newEntity/removeEntity/addComponent/removeComponent/setParent/reparent/duplicate/registerSystem）显式违约（ParallelTickViolation -> false + 可定位 err），不做静默数据竞争；确定性 = 冲突边注册序、构造无环、并行==串行逐位对拍。",
+      "acceptance": [
+        "selftest ecs-parallel 6 用例 30 断言 PASS：求解边数与 dot 确定性、真并行重叠证明（自旋互等双双通过）、并行==串行逐位对拍（3 帧链式系统 JSON dump 相等）、裸类型保守写、结构变更守卫（违约 false + err 含 forbidden/offending API、违约后 World 可继续用）、firstTick 恰一次",
+        "稳定性：DX12 连跑 5 遍全 PASS；VULKAN nanite-scene 同套件 PASS；nanite-scene selftest --all 5 suite 全绿（旧 suite 零回归）",
+        "渲染护栏：--only ecs-e1b 8/8 ALL GREEN（core-only 改动，kStage 不 bump，基线逐字节不变）",
+        "工具链 example/ecs-parallel/run-parallel.bat exit 0：usage 负向 exit 2 / 正向 verbose selftest / parallel-dot 真实求解 DOT / unknown-suite 负向 exit 2 + 2 张证据 PNG（scripts/make-ecs-parallel-evidence.py 从真实日志渲染）"
+      ],
+      "exe": {
+        "dx12": "build/DX12/nanite-scene.exe",
+        "vulkan": "build/VULKAN/nanite-scene.exe"
+      },
+      "cases": [
+        {
+          "id": "selftest-ecs-parallel",
+          "name": "selftest ecs-parallel：读写集求解 / 真并行重叠 / 串行对拍 / 守卫",
+          "kind": "tool",
+          "note": "6 tests 30 assertions: solver edge count + dot determinism, true-overlap spin proof, parallel==serial bitwise parity (3 frames chained), bare-type conservative Write, structural-change guard (violation -> false + located err), firstTick exactly once.",
+          "args": [
+            "selftest",
+            "--suite",
+            "ecs-parallel",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "ecs-parallel selftest: PASS",
+          "command": "nanite-scene selftest --suite ecs-parallel --verbose",
+          "preview": "example/ecs-parallel/selftest-ecs-parallel.png",
+          "script": "example/ecs-parallel/run-parallel.bat"
+        },
+        {
+          "id": "parallel-dot",
+          "name": "parallel-dot：固定演示场景的求解依赖图（真实 DOT 输出）",
+          "kind": "tool",
+          "note": "1 writer + 2 readers + 1 independent light system; solver emits 2 conflict edges (writer->readers), independent system edgeless = runs concurrently. DOT rendered to solver-graph.png from real output.",
+          "args": [
+            "parallel-dot"
+          ],
+          "expectExit": 0,
+          "expectLog": "digraph jobgraph",
+          "command": "nanite-scene parallel-dot",
+          "preview": "example/ecs-parallel/solver-graph.png",
+          "script": "example/ecs-parallel/run-parallel.bat"
+        },
+        {
+          "id": "negative-unknown-suite",
+          "name": "负向：未知 suite 名显式拒绝（退出码 2）",
+          "kind": "tool",
+          "note": "selftest --suite no-such-suite -> exit 2 + 'unknown selftest suite'（expectExit 约定 0/1/2 的 2 档）。",
+          "args": [
+            "selftest",
+            "--suite",
+            "no-such-suite"
+          ],
+          "expectExit": 2,
+          "expectLog": "unknown selftest suite",
+          "command": "nanite-scene selftest --suite no-such-suite",
+          "script": "example/ecs-parallel/run-parallel.bat"
+        }
+      ]
     }
   ]
 }

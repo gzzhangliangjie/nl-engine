@@ -1464,6 +1464,27 @@
 
 **下一步**：E1 轨道（E1b.0~E1b.4）收官 merge 回 master（12 文件冲突统一解）；点光阴影、多 cascade、PCF 质量提升不在本里程碑范围。
 
+## M-E1b.5 并行 tick：读写集求解 + jobgraph 接入（feat/ecs，2026-11-09，tag `ecs-e1b.5`）
+
+**动作**：wt_pool claim（track ecs / M-E1b.5）→ 三处证据（本轮模块 = system 间调度：Carrot `World::tick:313-332` 严格串行 + `System.h:86 parallelSubmit` 只做系统内数据并行；bevy `multi_threaded.rs:188` `access.is_compatible` 读写集冲突判定自动建边（access 由 Query 反射得出）；UE `MassRequirements.h:196-243 AddRequirement(ReadOnly/ReadWrite)` + `MassProcessorDependencySolver.h:95-236 FResourceUsage/PerformSolverStep/Solve` 显式声明 → 求解器建图）→ 用户拍板 A（UE 显式声明路线，bevy 反射不可抄）→ 落码：① `System.hpp`：`Read<T>`/`Write<T>` 访问标记 + `AccessTypeOf`/`IsWriteAccess` 萃取（裸类型保守 = 写，M-E2 向后兼容零改动），`SignedSystem` 构造展开签名位 + reads_/writes_，`forEachEntity` 经解包取组件；② `World.hpp/.cpp`：`tickParallel(dt, threads, err, dotOut)`——求解器 O(n²) 冲突矩阵（写读/写写建边、读读放行，边方向 = 注册序，构造无环）→ `jobgraph::Graph` 逐帧执行；结构变更守卫 `guardNoStructuralMutation`（inParallelTick_ 标志 + mutex 记账 violationMsg_ 带出具体 API，jobgraph 自捕获异常拿不到原始消息）；③ `nanite-scene` 新 suite `ecs-parallel`（6 用例 30 断言）+ `parallel-dot` CLI（真实求解 DOT 输出）；④ `example/ecs-parallel/`（run-parallel.bat usage/正向/负向三用例 + 2 张真实日志证据 PNG）+ `scripts/make-ecs-parallel-evidence.py` + cases.json `ecs-parallel` 版本卡（3 用例）。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.5`）；前置 = merge master 进 feat/ecs（`2b5ecf6`，jobgraph/Scheduler/jobsync 才与 ECS 同树）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：core-only 改动不进 kStage、渲染基线零触碰（`--only ecs-e1b` 8/8 ALL GREEN 佐证）；本轮无新渲染截图。
+2. 工具交代物：`example/ecs-parallel/` run-parallel.bat exit 0（usage 负向 exit 2 / selftest --verbose 正向 / parallel-dot / unknown-suite 负向 exit 2）+ `selftest-ecs-parallel.png`（30 断言）+ `solver-graph.png`（2 边 4 节点扇形图，DOT 解析非手绘）+ cases.json 版本卡 3 用例卡；`server.py --check` 退出 0。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` M-E1b.5 达成行 + **并行 tick 契约三条**（结构变更守卫 / 未声明访问 = 自足 / 确定性口径）、`System.hpp`/`World.hpp` 头注释同文、`MEMORY.md` E1b 段更新。
+- **证据图**：`example/ecs-parallel/{selftest-ecs-parallel,solver-graph}.png`；肉眼核验——求解图扇形无歧义（写者琥珀 → 两读者青色，ParLightC 独立无边）、断言列表 30 条全绿含契约说明。
+- 验收数字：`selftest ecs-parallel` 6/6 PASS（DX12 连跑 5 遍稳定 + VULKAN PASS）；`selftest --all` 5 suite 全绿（ecs-core/hier/system/serial/parallel，旧 suite 零回归）；`--only ecs-e1b` 8/8 ALL GREEN；`run-parallel.bat` exit 0。
+
+**踩坑情况（本轮三条）**
+1. **命名空间块插入漏闭合**：向 nanite-scene main.cpp 插 suite 时新 `namespace {` 未闭合就接下一个块 → C1075 未找到匹配令牌；插入整块后必须数大括号。
+2. **const 方法写成员**：`guardNoStructuralMutation` 声明为 const（便于在任意 API 里调用），`violationMsg_` 忘加 `mutable` → C2678；与 `violationMutex_` 一样需要 mutable。
+3. **jobgraph 异常消息带不出**：`Graph::run` 在封装层 `catch (...)` 只报「exception in task i (name)」——违约的具体 API 名必须**先记账（mutex 保护）再抛**，tickParallel 失败后从 `violationMsg_` 取回写 err，负向用例才能断言 "forbidden" + "newEntity"。
+
+**下一步**：E1b 链（E1b.0~E1b.5）收官 merge 回 master（feat/ecs 已同步 master 零冲突，`git merge feat/ecs` + 全量回归即可）；bevy 式访问反射 / MassCommandBuffer 式命令缓冲不在计划内，需要时单独拍板。
+
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。

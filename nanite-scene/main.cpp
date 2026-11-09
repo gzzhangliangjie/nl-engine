@@ -17,6 +17,9 @@
 //                 进出列表）/ firstTick 恰一次 / tick 计数与 dt 传递 / duplicate
 //   ecs-serial    M-E2 场景 roundtrip：serialise->deserialise->serialise 逐字节
 //                 一致 + 内容抽查 + 负向（未知组件名/未知父/未知系统名显式拒绝）
+//   ecs-parallel  M-E1b.5 并行 tick：读写集求解（边数/dot 确定性）/ 真并行重叠
+//                 证明 / 并行==串行逐位对拍 / 裸类型保守写 / 结构变更守卫
+//                 / firstTick 恰一次（World::tickParallel 契约 1~3 全覆盖）
 // 另有子命令 deserialise-check（负向判据显式退出码 2，见 main）。
 
 #include "nl/scene/Component.hpp"
@@ -24,10 +27,13 @@
 #include "nl/scene/World.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -760,6 +766,423 @@ void testDeserialiseExplicitReject() {
 } // namespace
 
 // ---------------------------------------------------------------------------
+// M-E1b.5：并行 tick（读写集求解 + jobgraph 静态 DAG + 结构变更守卫）
+// 口径：UE Mass 显式 AddRequirement(ReadOnly/ReadWrite) + 依赖求解器；
+// bevy access.is_compatible 冲突判据（显式声明代替反射）；Carrot 串行序作
+// 冲突边方向锚（注册序）。构造上无环；确定性 = 同配置逐位一致。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+using nl::scene::ComponentTypeID;
+using nl::scene::ParallelTickViolation;
+using nl::scene::Read;
+using nl::scene::SignedSystem;
+using nl::scene::Write;
+
+// 写 Transform：position.x = float(base + ticks)（整数值浮点，位精确）。
+class ParWriterT : public SignedSystem<Write<TransformComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParWriterT";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, TransformComponent& tc) {
+            tc.local.position.x = static_cast<float>(base + ticks);
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParWriterT>(o);
+        c->ticks = ticks;
+        return c;
+    }
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+    }
+    int base = 0;
+    int ticks = 0;
+};
+
+// 只读 Transform：把每个实体的 x 观测值记进自家列表（自足状态）。
+class ParReaderT : public SignedSystem<Read<TransformComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParReaderT";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, TransformComponent& tc) {
+            observed.push_back(static_cast<int>(tc.local.position.x));
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParReaderT>(o);
+        c->ticks = ticks;
+        c->observed = observed;
+        return c;
+    }
+    nlohmann::json serialise() const override {
+        return {{"ticks", ticks}, {"n", observed.size()}};
+    }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+        observed.resize(j.at("n").get<size_t>());
+    }
+    int ticks = 0;
+    std::vector<int> observed;
+};
+
+// 写 Model（M-E2 裸类型风格 = 保守写）：tint = {x,x,x}（读 Transform 的链式写）。
+class ParChainB : public SignedSystem<Read<TransformComponent>, Write<ModelComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParChainB";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, TransformComponent& tc, ModelComponent& mc) {
+            const float x = tc.local.position.x;
+            mc.tint = { x, x, x };
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParChainB>(o);
+        c->ticks = ticks;
+        return c;
+    }
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+    }
+    int ticks = 0;
+};
+
+// 写 Light（与 T/M 链独立——并行收益锚的第三方）。
+class ParLightC : public SignedSystem<Write<LightComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParLightC";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, LightComponent& lc) {
+            lc.intensity = static_cast<float>(100 + ticks);
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParLightC>(o);
+        c->ticks = ticks;
+        return c;
+    }
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+    }
+    int ticks = 0;
+};
+
+// 裸类型保守写（M-E2 向后兼容锚）：SignedSystem<ModelComponent> 不标 Write
+// 也必须被当成写者。
+class ParBareWriterM : public SignedSystem<ModelComponent> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParBareWriterM";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, ModelComponent& mc) {
+            mc.roughness = static_cast<float>(ticks);
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParBareWriterM>(o);
+        c->ticks = ticks;
+        return c;
+    }
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+    }
+    int ticks = 0;
+};
+
+// 只读 Model（与 ParBareWriterM 冲突——验证裸类型保守串行）。
+class ParReaderM : public SignedSystem<Read<ModelComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParReaderM";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        ++ticks;
+        forEachEntity([&](Entity&, ModelComponent& mc) {
+            observed.push_back(static_cast<int>(mc.roughness));
+        });
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        auto c = std::make_unique<ParReaderM>(o);
+        c->ticks = ticks;
+        c->observed = observed;
+        return c;
+    }
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override {
+        ticks = j.at("ticks").get<int>();
+    }
+    int ticks = 0;
+    std::vector<int> observed;
+};
+
+// 确定性对拍场景：3 实体，T+M+L 全套（链 A(Write T) -> B(R T, W M)，C(W L) 独立）。
+void buildParityScene(World& w) {
+    for (int i = 0; i < 3; ++i) {
+        Entity e = w.newEntity("p" + std::to_string(i));
+        auto* tc = static_cast<TransformComponent*>(
+            &e.addComponent(std::make_unique<TransformComponent>(e)));
+        tc->local.position = { static_cast<float>(i), 0.0f, 0.0f };
+        auto* mc = static_cast<ModelComponent*>(
+            &e.addComponent(std::make_unique<ModelComponent>(e)));
+        (void)mc;
+        auto* lc = static_cast<LightComponent*>(
+            &e.addComponent(std::make_unique<LightComponent>(e)));
+        (void)lc;
+    }
+    w.tick(0.0); // flush
+}
+
+// 并行重叠证明：两个独立系统互相等对方置位（自旋 + 2s 死线）。
+// 真并行 -> 双双快速通过；错误串行 -> 先跑者死线超时 -> 断言 FAIL。
+std::atomic<bool> g_spinX{false};
+std::atomic<bool> g_spinY{false};
+
+class ParSpinX : public SignedSystem<Write<TransformComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParSpinX";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        g_spinX.store(true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!g_spinY.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        sawPeer = g_spinY.load();
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        return std::make_unique<ParSpinX>(o);
+    }
+    bool sawPeer = false;
+};
+
+class ParSpinY : public SignedSystem<Write<ModelComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParSpinY";
+    const char* getName() const override { return kName; }
+    void tick(double) override {
+        g_spinY.store(true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!g_spinX.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        sawPeer = g_spinX.load();
+    }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        return std::make_unique<ParSpinY>(o);
+    }
+    bool sawPeer = false;
+};
+
+// 违约系统：并行 tick 内做结构变更（必须显式失败，不是静默竞争）。
+class ParBadStructural : public SignedSystem<Read<TransformComponent>> {
+public:
+    using SignedSystem::SignedSystem;
+    static constexpr const char* kName = "ParBadStructural";
+    const char* getName() const override { return kName; }
+    void tick(double) override { getWorld().newEntity("bad"); }
+    std::unique_ptr<System> duplicate(World& o) const override {
+        return std::make_unique<ParBadStructural>(o);
+    }
+};
+
+// ---- 用例 ----
+
+// 1. 读写集求解正确性：写者先于读者（冲突边）+ 图形状（边数）确定。
+void testParallelDependencyOrder() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    auto writer = std::make_unique<ParWriterT>(w);
+    auto readerA = std::make_unique<ParReaderT>(w);
+    auto readerB = std::make_unique<ParReaderT>(w);
+    ParWriterT* pW = writer.get();
+    ParReaderT* pA = readerA.get();
+    ParReaderT* pB = readerB.get();
+    w.registerSystem(std::move(writer));
+    w.registerSystem(std::move(readerA));
+    w.registerSystem(std::move(readerB));
+
+    std::string dot;
+    std::string err;
+    expectTrue(w.tickParallel(0.016, 4, err, &dot), "tickParallel ok");
+    if (!dot.empty()) {
+        // 3 节点：写 T + 读 T×2 -> 2 条冲突边（写->读两条；读读无边）。
+        size_t edges = 0;
+        for (size_t pos = dot.find("->"); pos != std::string::npos;
+             pos = dot.find("->", pos + 1))
+            ++edges;
+        expectSize(edges, 2, "solver builds exactly 2 edges (writer -> 2 readers)");
+        expectTrue(dot.find("digraph") != std::string::npos, "dotOut is DOT text");
+    }
+    expectTrue(pA->observed.size() == 3 && pB->observed.size() == 3,
+               "readers observed all 3 entities");
+    for (int v : pA->observed)
+        expectTrue(v == pW->base + pW->ticks, "readerA saw post-write value (writer ordered first)");
+    for (int v : pB->observed)
+        expectTrue(v == pW->base + pW->ticks, "readerB saw post-write value");
+
+    // 求解确定性：再跑一次 dot 逐字节一致。
+    std::string dot2;
+    w.tickParallel(0.016, 4, err, &dot2);
+    expectTrue(dot == dot2, "solver deterministic (dot byte-identical across runs)");
+}
+
+// 2. 真并行证明：两个无冲突系统互相等对方置位，双双快速通过。
+void testParallelTrueOverlap() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    auto sx = std::make_unique<ParSpinX>(w);
+    auto sy = std::make_unique<ParSpinY>(w);
+    ParSpinX* pX = sx.get();
+    ParSpinY* pY = sy.get();
+    w.registerSystem(std::move(sx));
+    w.registerSystem(std::move(sy));
+    std::string err;
+    expectTrue(w.tickParallel(0.016, 4, err), "tickParallel ok");
+    expectTrue(pX->sawPeer, "spinX saw spinY (true parallel overlap, not serialized)");
+    expectTrue(pY->sawPeer, "spinY saw spinX");
+}
+
+// 3. 确定性对拍：并行 tick 与串行 tick 结果逐位一致（JSON dump 相等）。
+void testParallelSerialParity() {
+    World ws;   // 串行
+    registerLibraries(ws);
+    buildParityScene(ws);
+    ws.registerSystem(std::make_unique<ParWriterT>(ws));
+    ws.registerSystem(std::make_unique<ParChainB>(ws));
+    ws.registerSystem(std::make_unique<ParLightC>(ws));
+
+    World wp;   // 并行
+    registerLibraries(wp);
+    buildParityScene(wp);
+    wp.registerSystem(std::make_unique<ParWriterT>(wp));
+    wp.registerSystem(std::make_unique<ParChainB>(wp));
+    wp.registerSystem(std::make_unique<ParLightC>(wp));
+
+    for (int i = 0; i < 3; ++i) {
+        ws.tick(0.016);
+        std::string err;
+        expectTrue(wp.tickParallel(0.016, 4, err), "parallel frame ok");
+    }
+    expectTrue(ws.serialise().dump() == wp.serialise().dump(),
+               "parallel == serial bitwise (3 frames, chained systems)");
+}
+
+// 4. 裸类型保守写：SignedSystem<ModelComponent>（不标 Write）与只读者串行。
+void testParallelBareTypeConservative() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    auto bw = std::make_unique<ParBareWriterM>(w);
+    auto rm = std::make_unique<ParReaderM>(w);
+    ParBareWriterM* pBW = bw.get();
+    ParReaderM* pRM = rm.get();
+    w.registerSystem(std::move(bw));   // 注册序 = 冲突边方向锚
+    w.registerSystem(std::move(rm));
+    std::string err;
+    expectTrue(w.tickParallel(0.016, 4, err), "tickParallel ok");
+    expectSize(pRM->observed.size(), 3, "readerM collected entities");
+    for (int v : pRM->observed)
+        expectTrue(v == pBW->ticks,
+                   "bare-type writer ordered before reader (conservative Write)");
+}
+
+// 5. 结构变更守卫：并行 tick 内 newEntity = 显式违约（false + err 可定位），
+//    违约后 World 可正常继续用（守卫是逐次检查不是状态污染）。
+void testParallelStructuralViolation() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    w.registerSystem(std::make_unique<ParBadStructural>(w));
+    std::string err;
+    expectTrue(!w.tickParallel(0.016, 4, err), "violation -> tickParallel false");
+    expectTrue(err.find("forbidden") != std::string::npos,
+               "err names the contract violation");
+    expectTrue(err.find("newEntity") != std::string::npos,
+               "err names the offending API");
+    // 守卫复位：串行 tick 不受影响（违约系统串行下跑 newEntity 合法；
+    // 延迟语义 = 新实体下一次 flush 才进全局表，所以跑两个 tick）。
+    w.tick(0.016);
+    w.tick(0.016);
+    expectTrue(w.getAllEntities().size() == 4, "world usable after violation (serial tick adds 1)");
+}
+
+// 6. firstTick 生命周期：tickParallel 里注册后首个 tick 恰一次（串行段跑）。
+void testParallelFirstTickOnce() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    auto cs = std::make_unique<CounterSystem>(w);
+    CounterSystem* p = cs.get();
+    w.registerSystem(std::move(cs));
+    std::string err;
+    expectTrue(w.tickParallel(0.016, 4, err), "tickParallel ok");
+    expectId(static_cast<nl::scene::EntityID>(p->firstTicks), 1, "firstTick exactly once");
+    expectId(static_cast<nl::scene::EntityID>(p->ticks), 1, "tick once per tickParallel");
+}
+
+// parallel-dot：固定演示场景（1 写者 + 2 只读者 + 1 独立写者）跑一次
+// tickParallel，stdout 打印求解图 DOT（真实求解器输出，证据图数据源不手绘）。
+// 拓扑：ParWriterT -(写 T)-> ParReaderT×2；ParLightC（写 L）独立无边。
+int runParallelDot() {
+    World w;
+    registerLibraries(w);
+    buildParityScene(w);
+    w.registerSystem(std::make_unique<ParWriterT>(w));
+    w.registerSystem(std::make_unique<ParReaderT>(w));
+    w.registerSystem(std::make_unique<ParReaderT>(w));
+    w.registerSystem(std::make_unique<ParLightC>(w));
+    std::string err;
+    std::string dot;
+    if (!w.tickParallel(0.016, 2, err, &dot)) {
+        std::printf("parallel-dot: tickParallel failed: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("%s", dot.c_str());
+    return 0;
+}
+
+int runSuiteEcsParallel() {
+    testParallelDependencyOrder();
+    testParallelTrueOverlap();
+    testParallelSerialParity();
+    testParallelBareTypeConservative();
+    testParallelStructuralViolation();
+    testParallelFirstTickOnce();
+
+    if (g_failures != 0) {
+        std::printf("ecs-parallel selftest: FAIL (%d assertion(s))\n", g_failures);
+        return 1;
+    }
+    std::printf("ecs-parallel selftest: PASS\n");
+    return 0;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -871,12 +1294,15 @@ void printUsage() {
     std::printf("usage:\n"
                 "  nanite-scene selftest --suite <name|all> [--verbose]\n"
                 "  nanite-scene deserialise-check <good|badjson|unknown>\n"
+                "  nanite-scene parallel-dot              M-E1b.5 solver graph DOT\n"
                 "suites:\n"
                 "  ecs-core    M-E0 World/Entity core (deferred add/remove, names, Hidden flags)\n"
                 "  ecs-hier    M-E1 components + hierarchy (world-matrix anchors, reparent, duplicate)\n"
                 "  ecs-system  M-E2 systems (signature matching, auto list, firstTick/tick)\n"
                 "  ecs-serial  M-E2 scene roundtrip (byte-identical, explicit rejections)\n"
-                "  all         run every suite in order (M-E1b.0 acceptance)\n");
+                "  ecs-parallel M-E1b.5 parallel tick (read/write solver, overlap proof,\n"
+                "              serial parity, structural-change guard)\n"
+                "  all         run every suite in order\n");
 }
 
 } // namespace
@@ -887,6 +1313,9 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string cmd = argv[1];
+    if (cmd == "parallel-dot") {
+        return runParallelDot();
+    }
     if (cmd == "deserialise-check") {
         if (argc < 3) {
             std::printf("deserialise-check requires <good|badjson|unknown>\n");
@@ -934,6 +1363,9 @@ int main(int argc, char** argv) {
     if (suite == "ecs-serial") {
         return runSuiteEcsSerial();
     }
+    if (suite == "ecs-parallel") {
+        return runSuiteEcsParallel();
+    }
     // M-E1b.0：--suite all 顺序跑全部四个 suite（每个 suite 前清零 g_failures，
     // 任一 FAIL 退出码 1——build/验收脚本用 `nanite-scene.exe selftest --all`）。
     if (suite == "all") {
@@ -946,6 +1378,8 @@ int main(int argc, char** argv) {
         if (rc3 != 0) anyFail = true;
         const int rc4 = (g_failures = 0, runSuiteEcsSerial());
         if (rc4 != 0) anyFail = true;
+        const int rc5 = (g_failures = 0, runSuiteEcsParallel());
+        if (rc5 != 0) anyFail = true;
         return anyFail ? 1 : 0;
     }
     std::printf("unknown selftest suite: %s\n", suite.c_str());

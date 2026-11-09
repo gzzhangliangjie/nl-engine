@@ -1,0 +1,31 @@
+  ok tickParallel ok
+  ok solver builds exactly 2 edges (writer -> 2 readers)
+  ok dotOut is DOT text
+  ok readers observed all 3 entities
+  ok readerA saw post-write value (writer ordered first)
+  ok readerA saw post-write value (writer ordered first)
+  ok readerA saw post-write value (writer ordered first)
+  ok readerB saw post-write value
+  ok readerB saw post-write value
+  ok readerB saw post-write value
+  ok solver deterministic (dot byte-identical across runs)
+  ok tickParallel ok
+  ok spinX saw spinY (true parallel overlap, not serialized)
+  ok spinY saw spinX
+  ok parallel frame ok
+  ok parallel frame ok
+  ok parallel frame ok
+  ok parallel == serial bitwise (3 frames, chained systems)
+  ok tickParallel ok
+  ok readerM collected entities
+  ok bare-type writer ordered before reader (conservative Write)
+  ok bare-type writer ordered before reader (conservative Write)
+  ok bare-type writer ordered before reader (conservative Write)
+  ok violation -> tickParallel false
+  ok err names the contract violation
+  ok err names the offending API
+  ok world usable after violation (serial tick adds 1)
+  ok tickParallel ok
+  ok firstTick exactly once
+  ok tick once per tickParallel
+ecs-parallel selftest: PASS
