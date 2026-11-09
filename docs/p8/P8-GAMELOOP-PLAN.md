@@ -48,3 +48,4 @@
 ## 6. 留痕
 
 - 2026-11-09：立项登记（用户拍板三点：双帧模型 / 起步不插值 / 与 M-S3 合并落点）。点光源阴影同日拍板**不排期**（见 `.workbuddy/memory/2026-11-09.md`）。
+- 2026-11-10：**M-GL0 收口（tag `gl-m0`，feat/gameloop 轨道首里程碑）**。UE 侧按铁律补实读：`UnrealEngine.cpp FEngineLoop::Tick`（3020-3160）——证实「渲染帧为主」流派，维持逻辑帧为主拍板。落码 `nl::core::GameClock`（kStep=1/60 / kMaxDelta=250ms / 暂停=bevy 时钟停摆语义——**拍板记录**：非 Carrot 烧 accumulator，语义是「时钟停摆」非「丢帧」/ timeScale∈[0,1024] / alpha 预留）+ `gl-tools`（selftest 30 锚点 + trace TSV）+ verify.py 独立 python 孪生逐行对拍全等 + example/gl0 工具版交代全套。详见 MILESTONES M-GL0 四栏与 `GAMELOOP-TOOLS-GUIDE.md`。

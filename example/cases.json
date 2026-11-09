@@ -5723,6 +5723,80 @@
           "command": "phys-tools simulate --jobs -1 --frames 240"
         }
       ]
+    },
+    {
+      "id": "gl0",
+      "label": "P8 M-GL0",
+      "name": "游戏循环双帧模型（GameClock：60Hz 逻辑帧 accumulator + 渲染帧变步长）",
+      "tag": "gl-m0",
+      "date": "2026-11-10",
+      "summary": "A 类游戏循环轨道第一步（计划 P8-GAMELOOP-PLAN，M-GL2 与 M-S3 合并收口）：nl/core GameClock 纯逻辑零依赖——逻辑帧固定 60Hz（kStep=1/60，对齐 Carrot PhysicsSystem accumulator）+ 单帧 delta 截断 250ms（kMaxDelta，对齐 bevy DEFAULT_MAX_DELTA 双重用途：大 delta 截断 + 追帧上限）+ 暂停=时钟停摆（bevy 语义：paused 帧 accumulator/simTime 全冻结，非 Carrot 的烧 accumulator）+ timeScale 倍速（[0,1024] 钳制）+ alpha 输出预留（起步不插值，用户拍板）。确定性纪律：纯 double 同序运算，同一 realDt 序列逐位重现 tick 序列。gl-tools：selftest 30 锚点全绿 + trace 确定性 TSV（C++ trace 与独立 python 孪生实现逐行对拍 240/9 行全等，防假绿）+ usage/负向退出码契约（0/1/2）。",
+      "acceptance": [
+        "selftest 30 锚点全 PASS：零/负/NaN dt、16ms 累积、100x16.7ms=100 tick、5000ms 截断=15 tick、暂停冻结/恢复无爆发、x2=120 tick/x0.5=30 tick、scale10x100ms 封顶 15 tick、scale 边界钳制、双跑逐位一致、reset 语义",
+        "trace --frames 240 --dt 16.7 → 240 tick / simTime=4.0s（60Hz 恒定节奏）；burst 序列（5000ms 突发 + pause/resume + scale2）→ 21 tick 逐行合理",
+        "verify.py 独立 python 孪生实现（不引 C++ 代码）重算两条 trace，逐行全等（240/9 行）——跨实现对拍防假绿",
+        "ctest gl0-selftest / gl0-trace / gl0-negative（DX12+VULKAN 双后端）；双后端构建 OK + viewer selftest 16/16",
+        "交代物：example/gl0/（run.bat ALL GREEN exit 0 + acceptance.png 真实日志证据图 + 8 份日志/TSV）+ 本卡四用例；M-GL1 viewer 接双帧 / M-GL2 接物理音频 ECS 不在本轮"
+      ],
+      "exe": {
+        "dx12": "build/dx12/gl-tools.exe",
+        "vulkan": "build/vulkan/gl-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：无参数（退出码 2，打印用法）",
+          "kind": "tool",
+          "note": "无子命令走 usage 路径，退出码契约 0=PASS 1=FAIL 2=usage error。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "exit: 0=PASS 1=FAIL 2=usage error",
+          "command": "gl-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：GameClock 30 锚点（累加/截断/暂停/倍速/追帧上限/确定性）",
+          "kind": "tool",
+          "note": "M-GL0 验收核心：锚点全部手算可验 + python 同参数预演核对（250ms→15 tick 等）。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "gl-m0 selftest: PASS",
+          "command": "gl-tools selftest --verbose"
+        },
+        {
+          "id": "trace",
+          "name": "trace：240 帧 x 16.7ms 恒定节奏（60Hz 逻辑帧 TSV）",
+          "kind": "tool",
+          "note": "240 tick / simTime=4.0s / alpha 收敛；TSV 落盘供 verify.py 独立复算。",
+          "args": [
+            "trace",
+            "--frames",
+            "240",
+            "--dt",
+            "16.7"
+          ],
+          "expectExit": 0,
+          "expectLog": "gl-m0 trace: PASS",
+          "command": "gl-tools trace --frames 240 --dt 16.7"
+        },
+        {
+          "id": "negative",
+          "name": "negative：trace --dt abc（退出码 2）",
+          "kind": "tool",
+          "note": "非法数值走 usage error 路径。",
+          "args": [
+            "trace",
+            "--dt",
+            "abc"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --dt",
+          "command": "gl-tools trace --dt abc"
+        }
+      ]
     }
   ]
 }

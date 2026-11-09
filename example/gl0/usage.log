@@ -1,0 +1,6 @@
+gl-tools - nl-engine P8 game-loop tools (M-GL0, GameClock dual-frame model)
+usage:
+  gl-tools selftest [--verbose]
+  gl-tools trace [--out <tsv>] [--frames N] [--dt MS] [--dts a,b,c]
+                 [--scale S] [--pause-at N] [--resume-at N]
+exit: 0=PASS 1=FAIL 2=usage error

@@ -184,6 +184,7 @@ add_library(nl_core STATIC
     core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
     core/src/audio/DebugController.cpp  # P8 M-S2：调试态单例（音量/独奏/冻结/面板开关）
     core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
+    core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
@@ -444,10 +445,16 @@ target_compile_definitions(audio-tools PRIVATE
 add_executable(phys-tools phys-tools/main.cpp)
 target_link_libraries(phys-tools PRIVATE nl_core)
 
+# ---- P8 M-GL0：gl-tools —— 游戏循环（双帧模型 GameClock）自测工具（A 类轨道）----
+# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 phys-tools / 展示台 expectExit）。
+# 只链 nl_core（nl/core GameClock 纯逻辑零依赖），零图形 API。
+add_executable(gl-tools gl-tools/main.cpp)
+target_link_libraries(gl-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools gl-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -693,3 +700,11 @@ add_test(NAME p-j5c-check COMMAND phys-tools check-jobs --threads 4 --frames 240
 set_tests_properties(p-j5c-check PROPERTIES PASS_REGULAR_EXPRESSION "phys-j5c check-jobs: PASS")
 add_test(NAME p-j5c-negative COMMAND phys-tools simulate --jobs -1 --frames 240)
 set_tests_properties(p-j5c-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-GL0: game loop (dual-frame GameClock) ----
+add_test(NAME gl0-selftest COMMAND gl-tools selftest)
+set_tests_properties(gl0-selftest PROPERTIES PASS_REGULAR_EXPRESSION "gl-m0 selftest: PASS")
+add_test(NAME gl0-trace COMMAND gl-tools trace --frames 240 --dt 16.7)
+set_tests_properties(gl0-trace PROPERTIES PASS_REGULAR_EXPRESSION "gl-m0 trace: PASS")
+add_test(NAME gl0-negative COMMAND gl-tools trace --dt abc)
+set_tests_properties(gl0-negative PROPERTIES WILL_FAIL TRUE)
