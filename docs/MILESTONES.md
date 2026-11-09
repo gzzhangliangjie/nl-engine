@@ -1157,7 +1157,7 @@
 1. ⭐**HUD hiz 区掉滚动区**：960x540 画布面板高被 `min(cap, H-28)=512` 钉死（cap 560 不生效），hiz 区放 frustum/cull GPU 行后会被截断、checkbox/occl 验收证据不可见——整段上移到 mode/model 行后。教训：新增 HUD 区块要按**最小画布**核算可见性，不是按 cap。
 2. ⭐**CPU 帧时间口径不敏感**：on/off CPU 循环均值 3.48 vs 3.51ms 几乎无差（draw 段轻，CPU 不是瓶颈）——GPU timer 才是帧时间验收的正确口径；而 deterministic 模式 GPU 计时原被 HUD 块吞掉（--no-hud 不 ensure timer）→ timer 移出 HUD 块无条件 ensure，真实值恒缓存 gpuLastMs_（deterministic 只是不写 HUD，基线 MD5 不受影响——timer 不写像素，回归验证 bytes 不变）。
 3. **GPU timer 与 nanite-tools.exe 链接锁**：后台 check-orient 跑着 DX12 侧 nanite-tools.exe，Windows 锁 exe 导致 NMake 重链 U1077——换 Vulkan 侧同名工具继续跑、DX12 侧解锁重链（两 exe 同源等价）。
-4. **1.3M 资产 check-orient 耗时**：全链 inward 扫描 >15 分钟（HizScene 2316 tri 秒级），后台异步跑、收口前补验（球部分复制自 S4 已验证资产、盒部分用 HizScene PASS 先例排列，重定基不改绕序——朝向有间接保障）。
+4. **1.3M 资产 check-orient 45 分钟（已定位已修复，2026-11-09）**：`countInwardNearest` 暴力最近邻 O(T×3×P)——ref=lod0 65.5 万点 × targets 124 万 tri ≈ 2.4e11 次距离计算，45 分钟是数学必然（原注释「组内规模都很小不值得建空间索引」只对小资产成立）。修为 uniform spatial hash（27 邻域 + <cell 判据硬保证 + fallback 暴力兜底），45min→4.9s（~550 倍），数值与暴力版逐位一致。**修复过程又踩一坑**：首版 counting sort 漏 `cursor[id]++`（每 cell 只留最后写入的一个点，ref 点几乎全丢 → 结果错但仍 PASS/FAIL 乱报），靠「hash vs 暴力逐查询对拍 assert + exit 9」定位——**加速类改动必须带对拍自证**。lod0 自身朝向补 `check-orient lod0 lod0` 自检（ref=target，worst +0.905 PASS，双后端一致）。
 5. **NMake 跳重链**：main.cpp/scene.cpp 改后 viewer.exe 未重链 → 删 exe 强制重链（§工具 exe 纪律同款）。
 
 **下一步**：S6 全部收官（tag `s6-done`）。主线下一站 S7（PBR + vis buffer + vertex pulling + 材质解析，`docs/s7/S7-PLAN.md`）或按 ROADMAP 插入项（PBR 直射光已排在 S1~S6 之间、SSR 排 S7 后）——开工前按铁律重读对应 PLAN + 三处对照，确认插入顺序与用户对齐。
