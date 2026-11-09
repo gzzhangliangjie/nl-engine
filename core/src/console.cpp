@@ -222,6 +222,45 @@ ExecResult Console::finish(ExecCode code, std::string output, Severity sev) {
     return ExecResult{code, std::move(output)};
 }
 
+// M-C2 内建命令集。UE ConsoleManager 把 help/dump 类查询内建在管理器本体（DumpObjects），
+// 这里同口径：注册表自己承担查询类命令，业务侧只注册引擎参数。
+// 注意 lambda 里不能用 exec()（会二次记 "> cmd" 日志行），直接走注册表原语。
+void Console::installBuiltins() {
+    if (builtinsInstalled_) return;
+    builtinsInstalled_ = true;
+
+    registerCommand("help", "list all commands", [this](const std::vector<std::string>&) {
+        std::string out = "commands:";
+        for (const auto& e : allEntries())
+            if (!e.isCVar) out += "\n  " + e.name + "  -  " + e.help;
+        out += "\n(use cvar.list for variables)";
+        return CommandResult{true, std::move(out)};
+    });
+
+    registerCommand("cvar.list", "list all registered cvars", [this](const std::vector<std::string>&) {
+        std::string out = "cvars:";
+        for (const auto& e : allEntries()) {
+            if (!e.isCVar) continue;
+            const CVar* cv = findCVar(e.name);
+            out += "\n  " + e.name + " = " + (cv ? cv->value().toString() : std::string("?")) +
+                   "  (" + (cv ? cvarTypeName(cv->type()) : "?") + ")  " + e.help;
+        }
+        return CommandResult{true, std::move(out)};
+    });
+
+    registerCommand("cvar.set", "set a cvar: cvar.set <name> <value>", [this](const std::vector<std::string>& args) {
+        if (args.size() != 2)
+            return CommandResult{false, "usage: cvar.set <name> <value>"};
+        CVar* cv = findCVar(args[0]);
+        if (!cv)
+            return CommandResult{false, "unknown cvar: " + args[0]};
+        if (!cv->setFromString(args[1]))
+            return CommandResult{false, "invalid value for " + args[0] + ": expected " +
+                                 std::string(cvarTypeName(cv->type())) + ", got '" + args[1] + "'"};
+        return CommandResult{true, args[0] + " = " + cv->value().toString()};
+    });
+}
+
 ExecResult Console::exec(const std::string& line) {
     appendLog(Severity::Info, "> " + line);
 

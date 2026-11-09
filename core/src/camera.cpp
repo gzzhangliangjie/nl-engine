@@ -99,6 +99,17 @@ void OrbitCamera::zoom(float scrollDelta) {
     distance_ = clamp(distance_ * std::exp(-scrollDelta * kZoomGain), kMinDist, kMaxDist);
 }
 
+void OrbitCamera::setDistance(float distance) {
+    distance_ = clamp(distance, kMinDist, kMaxDist);
+}
+
+void OrbitCamera::setFovYDegrees(float fovYDegrees) {
+    constexpr float kMinFovDeg = 20.0f, kMaxFovDeg = 120.0f;
+    fovY_ = clamp(fovYDegrees * kPi / 180.0f, kMinFovDeg * kPi / 180.0f, kMaxFovDeg * kPi / 180.0f);
+}
+
+float OrbitCamera::fovYDegrees() const { return fovY_ * 180.0f / kPi; }
+
 Matrix4 OrbitCamera::viewProjection() const {
     const float cp = std::cos(pitch_);
     const float eye[3] = {
@@ -108,7 +119,7 @@ Matrix4 OrbitCamera::viewProjection() const {
     };
     const float center[3] = {0.0f, 0.0f, 0.0f};
     const float up[3] = {0.0f, 1.0f, 0.0f};
-    return multiply(perspectiveZO(kFovY, aspect_, kNear, kFar), lookAt(eye, center, up));
+    return multiply(perspectiveZO(fovY_, aspect_, kNear, kFar), lookAt(eye, center, up));
 }
 
 Matrix4 OrbitCamera::model() const {
@@ -130,7 +141,7 @@ void OrbitCamera::eyePosition(float out[3]) const {
 }
 
 float OrbitCamera::projectionYScale() const {
-    return 1.0f / std::tan(kFovY * 0.5f);
+    return 1.0f / std::tan(fovY_ * 0.5f);
 }
 
 bool cameraSelfTest() {

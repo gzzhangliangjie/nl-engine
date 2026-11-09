@@ -249,6 +249,9 @@ void Hud::build(HudFrame& frame) {
     const float panelH = std::min(560.0f, frame.displayHeight - 28.0f);
     ImGui::SetNextWindowSize(ImVec2(330.0f, std::max(180.0f, panelH)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);   // 半透明：HUD 与背后的模型同时看得见
+    // M-C2：hud.show=false 只藏面板（ImGui 帧保持，控制台窗口照画）。
+    // 整块作用域包裹：面板内控件写回（resetCamera 等）在隐藏帧不发生，字段保持缺省。
+    if (frame.panelShow) {
     ImGui::Begin("nl-engine HUD", nullptr, ImGuiWindowFlags_NoResize);
     ImGui::TextWrapped("nl-engine  %s", frame.stage);
     ImGui::Separator();
@@ -349,6 +352,7 @@ void Hud::build(HudFrame& frame) {
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();
+    }   // frame.panelShow（M-C2：藏面板不藏控制台）
     // P8 M-C1：开发者控制台（` 呼出的独立窗口）。含 GLFW->ImGuiKey 输入映射与
     // wantCaptureKeyboard 回写；consoleOpen=false 时仍同步按键状态但零布局。
     drawConsoleWindow(frame);
@@ -488,6 +492,7 @@ bool hudSelfTest() {
     HudFrame f;
     if (!f.cullBack || f.frameMsCount != 0 || f.colorIndex != 0 ||
         f.resetCamera || f.wantCaptureMouse || f.deterministic) return false;
+    if (!f.panelShow) return false;   // M-C2：面板缺省可见（基线一像素不动的保证）
     if (f.gpuTimingAvailable || f.gpuMs != 0.0f || f.gpuMsCount != 0) return false;
     // M4.2：cull 计时通道缺省全零（非 cull 模式 HUD 布局一像素不动的保证）。
     if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;

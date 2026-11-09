@@ -1005,3 +1005,31 @@
 4. **检查工具链**：沙箱拦 .NET 动态编译与 COM 实例化；键盘注入改走 Python ctypes SendInput，截图走 GDI PrintWindow，均纯标准库/系统 API。
 
 **下一步**：用户真手验 UP/DOWN 历史（唯一遗留）→ M-C2 内建命令集（help/cvar.list/cvar.set/hud.*/cam.* + 变更回调）。
+
+
+## P8 M-C2 运行时调参 + 内建命令集（feat/console 轨道，2026-11-09）
+
+**动作**
+- **决策前置**：本里程碑点名证据重读——Carrot `console/RuntimeOption.hpp/.cpp`（bool-only 静态注册表二级体系，M-C0 已拍板不复刻，CVar 覆盖其用途）、UE `Core/Private/HAL/ConsoleManager.cpp`（help/dump 类查询内建在 ConsoleManager 本体——`DumpObjects`，CVar 注册 `RegisterConsoleVariableRef`+help 必填；bevy 无等价据实）。计划口径不变：内建命令进 core 注册表，业务侧只注册引擎参数。
+- **`Console::installBuiltins()`**（core，幂等二次调用无副作用）：`help`（列全部命令+hint）、`cvar.list`（列全部 CVar：名字 = 现值 (类型) help）、`cvar.set <名> <值>`（走 setFromString 同路径，脚本化执行用）。lambda 内不调 exec()（避免二次记 `> cmd` 日志行）。
+- **`OrbitCamera` FOV/距离可写**：`kFovY` 从 constexpr 降级为初值，实例字段 `fovY_`（缺省 = 历史 45°，老基线零波及）；新增 `setFovYDegrees`（clamp 20°..120°）/`fovYDegrees`/`setDistance`（clamp 与 zoom 同阈）。`viewProjection`/`projectionYScale` 改用 `fovY_`，数学路径不变。
+- **viewer 注册表 `demo.*` → 真参数**：`cam.fov`/`cam.dist`（onChanged 回调打进相机，cvar 初值取相机实际状态）、`hud.show`（onChanged 写 `hudEnabled` 本地可变量——`o` 是 const）；`echo`/`add` 保留；返回「相机实际值→cvar 静默回写」每帧同步函数（`g_syncing` 挡 onChanged 重入），滚轮 zoom / reset 后 `cam.dist` 不陈旧。
+- **HUD 面板与控制台解耦**（验收中发现的真问题：`hud.show false` 会把画在 HUD pass 里的控制台一起带走，且控制台死了就无法再敲 `hud.show true`）：`HudFrame.panelShow`（缺省 true）+ hud.cpp 面板整块作用域包裹；viewer 传参条件 `hudEnabled ? &hud : nullptr` → `(hudEnabled || consoleOpen) ? &hud : nullptr`。历史基线安全：HUD 关+控制台关时仍传 nullptr（零 ImGui，一像素不动），hudSelfTest 补 `panelShow` 缺省断言。
+- **nanite-console 自测第 8 节**：help 列表 / cvar.list 现值 / cvar.set 三态（成功 / 坏值保旧 / 未知名 / 缺参）/ double-install 幂等；demo 注册表挂 installBuiltins（M-C3 展示台用例真实执行体）。
+
+**提交版本**：feat/console 本轮 commit（M-C3 收口时打 tag merge）
+
+**完成情况**
+- selftest **49/49 PASS**（新增 7 条内建命令断言），viewer selftest 16/16（含 panelShow 缺省）。
+- **验收截图（DX12 960x540，亲眼可见）**：
+  - `build/out/mc2-registry-dx12.png`——`help` 列出 add/cvar.list/cvar.set/echo/help；`cvar.list` 列出 `cam.dist = 4.2 (float)` / `cam.fov = 45 (float)` / `hud.show = true (bool)`（相机实际值）；输入行 `cam.fov |` = `cam.fo` Tab 补全产物（新注册表下补全照常）。
+  - `build/out/mc2-fov100-dx12.png`——`cam.fov 100` 生效（模型透视明显变广 vs 45°）；`hud.show false` 只藏 HUD 面板、**控制台窗口存活**（解耦生效），日志回显 `cam.fov = 100` / `hud.show = false`。
+- Vulkan 后端编译 + 证据截图（console_ui 零 GPU 代码，通道层验证；P8-CONSOLE-PLAN 双后端画面回归豁免成立）。
+- 未跑渲染回归（总闸口径：panelShow 缺省 true + 传参条件在双关时仍为 nullptr，历史 HUD 基线零波及；hudSelfTest 缺省断言锁住）。
+
+**踩坑情况**
+1. **自测断言笔误**：`cvar.list` 断言写死 `st.count = 7`，但第 6 节回调测试已把它改成 8——首轮 48/49。教训：断言引用可变状态前先核对当前值。
+2. **`hud.show false` 连带杀控制台**（设计缺陷非代码 bug）：控制台画在 HUD pass 里，`hudEnabled=false` 连 ImGui 帧都不跑；且控制台死了无法再敲 `hud.show true`，等于单程票。修：`panelShow` 解耦面板可见性与 ImGui 帧存续。
+3. **首版注册表 lambda 悬垂**：`CVar&` 局部引用被 lambda 按引用捕获，函数返回即 UB——重写为 `CVar* const` 指针捕获（指向注册表 map 节点，与 Console 单例同寿）。
+
+**下一步**：M-C3 收口（展示台 tool 用例 usage/正向/负向 + TOOLS-GUIDE 归档 + tag + merge 回 master + wt_pool release）。

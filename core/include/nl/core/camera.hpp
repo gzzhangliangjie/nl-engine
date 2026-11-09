@@ -24,6 +24,13 @@ public:
     // 滚轮：正 = 拉近。距离有上下限，避免穿进模型或远到看不见。
     void zoom(float scrollDelta);
 
+    // M-C2：控制台运行时调参（cam.fov / cam.dist 的落点）。
+    // setDistance 与 zoom 同一个 clamp；setFovYDegrees clamp 20°..120°（过窄过广都失真）。
+    // 缺省值与历史 kFovY 一致 —— 老基线/回归零波及。
+    void setDistance(float distance);
+    void setFovYDegrees(float fovYDegrees);
+    float fovYDegrees() const;
+
     Matrix4 viewProjection() const;
     Matrix4 model() const;                 // M0.4 只画一个静态模型，返回单位阵
 
@@ -43,8 +50,9 @@ private:
     float pitch_    = 0.16f;   // rad
     float distance_ = 4.2f;
     float aspect_   = 16.0f / 9.0f;
+    float fovY_     = kFovY;          // 缺省 = 历史 kFovY（M-C2 起可运行时改，setFovYDegrees clamp 20°..120°）
 
-    static constexpr float kFovY      = 0.785398163f;  // 45°
+    static constexpr float kFovY      = 0.785398163f;  // 45°（fovY_ 缺省值；M-C2 起仅作初值）
     static constexpr float kNear      = 0.1f;
     static constexpr float kFar       = 100.0f;
     static constexpr float kMinPitch  = -1.45f;

@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -285,16 +286,31 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
     return true;
 }
 
-// M-C1：viewer 起步控制台注册表——让控制台一呼出就有真实内容可敲。
-// M-C2 换成真引擎参数（hud.* / cam.* + help / cvar.list 内建 + 变更回调），
-// 此处只验「` 呼出 -> 敲命令 -> 出结果 -> Tab 补全」整条通道。
-void registerViewerConsole() {
+// M-C2：真引擎参数注册表——运行中 `cam.fov 60` / `cam.dist 3` 立即生效（onChanged 回调
+// 打进相机），`hud.show` 开关 HUD 面板；内建 help / cvar.list / cvar.set 由
+// Console::installBuiltins 承担。echo/add 保留（日志与算术演示）。
+// 返回「相机实际值 -> cvar 静默回写」的每帧同步函数：滚轮 zoom / reset 后 cam.dist
+// 不至于显示陈旧值；g_syncing 挡住回写触发的 onChanged 重入（不再打相机 setter）。
+// CVar* 指向 Console 注册表 map 节点，生命周期与单例同寿，lambda 捕获安全。
+std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool* hudEnabled) {
     using namespace nl::core::console;
     Console& c = Console::get();
-    c.registerBool("demo.enabled", true, "demo bool cvar");
-    c.registerInt("demo.count", 3, "demo int cvar");
-    c.registerFloat("demo.fov", 60.0, "demo fov cvar");
-    c.registerString("demo.name", "nl-engine", "demo string cvar");
+    c.installBuiltins();
+
+    // cvar 初值取当前实际状态（相机可能被 --dist/--fov 类 CLI 预置过，别写死 45/4.2）
+    CVar* const fov  = &c.registerFloat("cam.fov", camera->fovYDegrees(), "vertical fov in degrees (20..120)");
+    CVar* const dist = &c.registerFloat("cam.dist", camera->distance(), "orbit distance (0.45..20)");
+    CVar* const hud  = &c.registerBool("hud.show", *hudEnabled, "toggle the HUD panel");
+
+    static bool g_syncing = false;   // 回写 cvar 时挡 onChanged 重入
+    fov->setOnChanged([camera](const CVar& cv) {
+        if (!g_syncing) camera->setFovYDegrees(static_cast<float>(cv.value().f));
+    });
+    dist->setOnChanged([camera](const CVar& cv) {
+        if (!g_syncing) camera->setDistance(static_cast<float>(cv.value().f));
+    });
+    hud->setOnChanged([hudEnabled](const CVar& cv) { *hudEnabled = cv.value().b; });
+
     c.registerCommand("echo", "print args joined", [](const std::vector<std::string>& args) {
         std::string out;
         for (std::size_t k = 0; k < args.size(); ++k) { if (k) out += ' '; out += args[k]; }
@@ -314,6 +330,13 @@ void registerViewerConsole() {
         std::snprintf(buf, sizeof(buf), "%g", sum);
         return CommandResult{true, std::string("add: ") + buf};
     });
+
+    return [fov, dist, camera]() {
+        g_syncing = true;
+        fov->setFloat(camera->fovYDegrees());
+        dist->setFloat(camera->distance());
+        g_syncing = false;
+    };
 }
 
 // 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
@@ -418,6 +441,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, o.distance);
     bool cullBack = o.cullBack;
+    bool hudEnabled = o.hudEnabled;   // M-C2：hud.show cvar 运行时改写（o 是 const）
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
@@ -446,7 +470,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             : " | no drill (" + std::to_string(dagGroupCount) + " groups available)";
     }
     nl::core::log::info("mode: ", nl::core::modeName(o.mode),
-                        " | HUD: ", o.hudEnabled ? "on" : "off",
+                        " | HUD: ", hudEnabled ? "on" : "off",
                         " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
                         lodLine, dagLine,
                         " | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG");
@@ -460,17 +484,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
                             std::filesystem::absolute(o.screenshotPath).string(),
                             " | cull=", cullBack ? "back" : "none",
-                            " | hud=", o.hudEnabled ? "on" : "off");
+                            " | hud=", hudEnabled ? "on" : "off");
     }
 
-    // ---- M-C1：控制台注册表 + 预执行命令行（结果留在控制台日志 = 截图证据）----
-    registerViewerConsole();
+    // ---- M-C1 控制台注册表 + M-C2 真参数（cam.*/hud.* onChanged 打进相机/HUD）----
+    // 预执行命令行（结果留在控制台日志 = 截图证据）。
+    const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     for (const auto& line : o.consoleExecLines) {
         const auto r = nl::core::console::Console::get().exec(line);
         nl::core::log::info("console exec [", r.exitCode(), "] ", line);
     }
     bool consoleOpen = o.consoleOpen;
-    if (consoleOpen && !o.hudEnabled)
+    if (consoleOpen && !hudEnabled)
         nl::core::log::warn("console requested but HUD is off; add --hud to see it");
     bool hudWantsKeyboard = false;  // 上一帧控制台输入行是否在打字（屏蔽游戏热键）
 
@@ -497,6 +522,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        syncCameraToCVar();   // M-C2：相机实际值回写 cam.fov/cam.dist（滚轮 zoom / reset 后不陈旧）
         // M-C1：` 边沿切换控制台；ESC 开着控制台时先收控制台，再退出
         if (window.keyPressed(nl::core::Key::Grave)) {
             consoleOpen = !consoleOpen;
@@ -605,8 +631,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.wireframe = wireframe;
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
+        // M-C2：hudEnabled=false 但控制台开着时也要跑 ImGui（面板藏、控制台在）。
         nl::renderer::HudFrame hud{};
-        if (o.hudEnabled) {
+        hud.panelShow = hudEnabled;
+        if (hudEnabled || consoleOpen) {
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
             hud.displayHeight = static_cast<float>(e.height);
@@ -721,14 +749,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   o.hudEnabled ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen) ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
         // M0.6：renderFrame 之后 renderer 可能已把最新 GPU 计时写回 hud.gpuMs，追加进曲线。
-        if (o.hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
+        if (hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
             if (gpuHistoryCount < 120) {
                 gpuHistory[gpuHistoryCount++] = hud.gpuMs;
             } else {
@@ -737,7 +765,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
         // M4.2：cull pass 计时同一条追加路（cullTimingAvailable 只在 cull 模式置位）。
-        if (o.hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
+        if (hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
             if (cullHistoryCount < 120) {
                 cullHistory[cullHistoryCount++] = hud.cullMs;
             } else {
@@ -745,7 +773,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (o.hudEnabled) {
+        if (hudEnabled) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
@@ -801,7 +829,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             std::ostringstream title;
             title << "nl-engine | " << stagePrefix << " | " << st.backend
                   << " | mode " << nl::core::modeName(o.mode)
-                  << " | HUD " << (o.hudEnabled ? "on" : "off")
+                  << " | HUD " << (hudEnabled ? "on" : "off")
                   << " | frame " << frame
                   << " | " << std::fixed << std::setprecision(1) << dtMs << " ms"
                   << " | yaw " << std::setprecision(1) << camera.yawDegrees()

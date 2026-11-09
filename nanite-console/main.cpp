@@ -135,6 +135,26 @@ static int selftestConsole() {
     c.clearLog();
     check(c.log().empty(), "log: clearLog");
 
+    // 8) 内建命令集（M-C2：help / cvar.list / cvar.set，UE ConsoleManager 内建口径）
+    c.installBuiltins();
+    c.installBuiltins();   // 幂等：二次调用不得产生重复注册副作用
+    ExecResult b1 = c.exec("help");
+    check(b1.ok() && b1.output.find("st.echo") != std::string::npos &&
+          b1.output.find("cvar.set") != std::string::npos, "builtins: help lists commands");
+    ExecResult b2 = c.exec("cvar.list");
+    check(b2.ok() && b2.output.find("st.count = 8") != std::string::npos &&
+          b2.output.find("st.fov") != std::string::npos, "builtins: cvar.list shows names+values");
+    ExecResult b3 = c.exec("cvar.set st.count 55");
+    check(b3.ok() && i.value().i == 55, "builtins: cvar.set assigns via setFromString");
+    ExecResult b4 = c.exec("cvar.set st.fov xyz");
+    check(b4.exitCode() == static_cast<int>(ExecCode::CommandFailed) && f.value().f == 0.25,
+          "builtins: cvar.set bad value -> fail, old value kept");
+    ExecResult b5 = c.exec("cvar.set st.no-such 1");
+    check(b5.exitCode() == static_cast<int>(ExecCode::CommandFailed), "builtins: cvar.set unknown cvar -> fail");
+    ExecResult b6 = c.exec("cvar.set st.count");
+    check(b6.exitCode() == static_cast<int>(ExecCode::CommandFailed), "builtins: cvar.set missing value -> usage fail");
+    check(c.completePrefix("cvar.").size() == 2, "builtins: double-install no dup registrations");
+
     if (failures == 0) { std::printf("console selftest: PASS\n"); return 0; }
     std::printf("console selftest: FAIL (%d case(s))\n", failures);
     return 1;
@@ -144,6 +164,7 @@ static int selftestConsole() {
 
 static void registerDemo() {
     Console& c = Console::get();
+    c.installBuiltins();   // M-C2：demo 注册表也挂内建 help / cvar.list / cvar.set（M-C3 展示台用例用）
     c.registerBool("demo.enabled", true, "demo bool cvar");
     c.registerInt("demo.count", 3, "demo int cvar");
     c.registerFloat("demo.fov", 60.0, "demo fov cvar");

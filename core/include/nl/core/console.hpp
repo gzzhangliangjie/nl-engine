@@ -126,6 +126,13 @@ public:
     CVar& registerString (const std::string& name, std::string   def, std::string help);
     void  registerCommand(const std::string& name, std::string help, CommandFn fn);
 
+    // M-C2 内建命令集（UE ConsoleManager 承担 help/dump 的口径）：
+    //   help           列全部命令（名字 + help）
+    //   cvar.list      列全部 CVar（名字 = 现值 (类型) help）
+    //   cvar.set <名> <值>  setFromString 赋值（与 `名字 值` 同路径，给脚本化执行用）
+    // 幂等：重复调用只登记一次（内置命令被业务方覆盖后不复活）。
+    void installBuiltins();
+
     CVar* findCVar(const std::string& name);
 
     // Tab 自动补全候选（前缀匹配，注册序=字典序），M-C1 前端消费。
@@ -147,6 +154,7 @@ private:
     CVar& registerCVar(const std::string& name, CVarValue def, std::string help);
     void appendLog(Severity sev, std::string text);
     ExecResult finish(ExecCode code, std::string output, Severity sev);
+    bool builtinsInstalled_ = false;   // installBuiltins 幂等闸
 
     std::map<std::string, std::unique_ptr<CVar>> cvars_;
     struct CommandEntry { std::string help; CommandFn fn; };

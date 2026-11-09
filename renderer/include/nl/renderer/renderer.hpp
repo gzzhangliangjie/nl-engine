@@ -97,6 +97,9 @@ struct HudFrame {
     bool cullBack          = true;
     int  colorIndex        = 0;
     bool resetCamera       = false;   // HUD 按钮置 true，viewer 消费后清零
+    // M-C2：hud.show cvar 只藏面板不藏控制台（ImGui 帧保持活着，控制台窗口照画）。
+    // 基线保证：viewer 仅在 hudEnabled||consoleOpen 时才传 HudFrame，缺省 true 不波及历史。
+    bool panelShow         = true;
     bool wantCaptureMouse  = false;   // HUD 输出：鼠标在面板上，viewer 别拖相机
     bool wantCaptureKeyboard = false; // M-C1 HUD 输出：控制台输入行在打字，viewer 屏蔽游戏热键
     // M2.3：LOD 层切换（仅 lod 模式；lodCount<=1 时 HUD 不画滑条）----
