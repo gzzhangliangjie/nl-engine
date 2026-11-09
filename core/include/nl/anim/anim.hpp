@@ -16,13 +16,19 @@
 // 纪律：core 零图形 API、零文件 IO（数据由调用方构造/将来由 glTF 导入器喂）；
 //       采样是纯函数 = 确定性单测。
 
-#include "nl/anim/anim_math.hpp"
+#include <nl/math/math.hpp>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace nl::anim {
+
+// 数学本体在 nl/math/math.hpp（2026-11-09 上移，docs/p8/P8-ECS-PLAN.md）。
+// 定向注入（非 using namespace，防泄漏）：nl/anim 内 unqualified 使用即可。
+using nl::math::Vec3;
+using nl::math::Quat;
+using nl::math::quatIdentity;
 
 enum class Interp : std::uint8_t {
     Linear,   // lerp / slerp（最短路径 + 归一化）
@@ -87,7 +93,7 @@ std::size_t findTrackIndex(const AnimClip& clip, const std::string& bone);
 // 线性混合：UE FTransform::Blend / bevy BlendInput 同式——平移/缩放 lerp、
 // 旋转 slerp（最短路径）。w=0 -> a，w=1 -> b，域外 clamp。
 // 加法混合：bevy blendable.rs 语义——平移 base + delta*w；
-// 旋转 slerp(IDENTITY, delta, w) * base（相对旋转叠加，见 anim_math.hpp scaleQuat）。
+// 旋转 slerp(IDENTITY, delta, w) * base（相对旋转叠加，见 nl/math/math.hpp scaleQuat）。
 // 混合要求两侧 pose 数组等长且骨骼顺序一致（同一骨架的两次采样天然满足；
 // 跨骨架按名重排在状态机层做，本层不背包袱）。
 

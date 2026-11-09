@@ -5,7 +5,7 @@
 // 不用 UE 的均匀帧布局。
 //   Linear: value = lerp(v0, v1, alpha)（UE FTransform::Blend 同式）
 //   Step:   value = v0（gltf STEP：保持前 key，alpha 直接置 0）
-//   Quat:   slerp（最短路径 + 归一化，见 anim_math.hpp 文件头）
+//   Quat:   slerp（最短路径 + 归一化，见 nl/math/math.hpp 文件头）
 
 #include "nl/anim/anim.hpp"
 
@@ -14,6 +14,7 @@
 #include <cstddef>
 
 namespace nl::anim {
+using namespace nl::math;   // 数学函数本体在 nl/math/math.hpp（2026-11-09 上移）
 namespace {
 
 bool finiteVec3(const Vec3& v) {

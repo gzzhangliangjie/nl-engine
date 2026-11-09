@@ -27,7 +27,7 @@
 ## 架构约束
 
 - **模块落点**：`core/include/nl/scene/`（hpp）+ `core/src/scene/`（cpp），对齐 `nl/anim` 先例；零图形符号（NVRHI/ImGui 零 include），不碰 kStage、不进渲染回归。
-- **数学（决策点，默认按推荐执行）**：Transform 需要 Vec3/Quat/**非均匀 scale 复合**/mat4。推荐：把 `nl/anim/anim_math.hpp` 的通用数学（Vec3/Quat 及函数）上移为 `core/include/nl/math/math.hpp`，`anim_math.hpp` 变薄转发头（anim 零改动兼容），nl/scene 直接消费；非均匀 scale 复合与 mat4 构造为 nl/math 新增。备选：nl/scene 自带最小数学（与 anim 有重复）。**理由**：一份数学不留两份漂移；上移是纯组织重构不改任何行为。待用户确认后动。
+- **数学（已执行，2026-11-09 拍板）**：通用数学（Vec3/Quat 及函数）已上移 `core/include/nl/math/math.hpp`（namespace `nl::math`）；`anim_math.hpp` 已删除，`anim.hpp` 直接 include nl/math 并定向注入类型 `Vec3/Quat/quatIdentity`（API 契约），anim 内部 cpp 用文件级 `using namespace nl::math;`，外部消费方（anim-tools）数学函数改用 `nl::math::` 限定。**用户拍板不设转发头**。ECS 的 Transform 层级数学（非均匀 scale 复合 / mat4）M-E1 起在 nl/math 新增（与 nl/anim::Mat4 合并时机届时定）；本次重构零行为变化（双后端构建 + anim 全系列 selftest 验证）。
 - **EntityID = u64 递增**（不用 Carrot 的 UUID：无网络/多编辑器场景，50 物体规模 u64 最简直接；序列化存数值）。组件类型 ID = `bitset<64>` 位（Signature），类型数 <64。
 - **序列化 = JSON**（tinygltf vendored 内嵌 nlohmann json.hpp，零新依赖）：场景文件 = 实体树 + 逐实体组件数组 + 组件名→工厂反序列化。**roundtrip 字节一致是硬判据**（序列化输出必须 key 排序 / 插入序固定——材质图轨道踩过 unordered_map 迭代序坑）。
 - **砍掉的范围（对 Carrot 有意简化，留痕）**：① 查询缓存 + invalidateQueries 砍掉——50 物体规模直接遍历 O(N) 足够，卡了再加；② ComponentReflection / FIELD 宏 / Inspector 砍掉——那是 E3 序列化 Inspector 的事；③ Prefab 砍掉——远期；④ repairLinks / CSharp / RenderSystem 分家砍掉——E1a 无引用型组件无渲染；⑤ rapidjson 换 tinygltf 内嵌 json。

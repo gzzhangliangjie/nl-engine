@@ -1,6 +1,12 @@
 #pragma once
 
-// M-A1：动作系统最小数学（nl/anim 专用，零第三方依赖）。
+// nl/math：通用最小数学（零第三方依赖）。
+//
+// 2026-11-09 ECS-lite 立项拍板（docs/p8/P8-ECS-PLAN.md「架构约束·数学」）：
+//   原 nl/anim/anim_math.hpp 的通用数学（Vec3/Quat 及函数）上移至此，
+//   anim_math.hpp 变薄转发头（using 引回 nl::anim），全部消费方零改动；
+//   ECS 的 Transform 层级数学（非均匀 scale 复合 / mat4）M-E1 起在本模块新增，
+//   与 nl/anim::Mat4（蒙皮专用，列主序）合并时机届时再定，本重构零行为变化。
 //
 // 选型记录（docs/action-system/ACTION-PLAN.md §4，2026-11-08 用户拍板）：
 //   自写最小 vec3/quat 而非 vendored glm——纯逻辑层数学面极窄（lerp/slerp/
@@ -17,7 +23,7 @@
 
 #include <cmath>
 
-namespace nl::anim {
+namespace nl::math {
 
 struct Vec3 {
     float x = 0.0f, y = 0.0f, z = 0.0f;
@@ -116,4 +122,4 @@ inline Quat quatFromAxisAngle(const Vec3& axis, float radians) {
     return { axis.x * s, axis.y * s, axis.z * s, std::cos(radians * 0.5f) };
 }
 
-} // namespace nl::anim
+} // namespace nl::math

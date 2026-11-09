@@ -1102,3 +1102,15 @@
 7. 工具 exe 纪律：`build/{DX12,VULKAN}/nanite-tools.exe` 是各后端构建树直接产物，根目录 `build/nanite-tools.exe` 是废弃旧树残留（误 cp 覆盖新产物致回归假 FAIL）；NMake 同秒 mtime 跳过重链须 rm exe 强制重链。
 
 **下一步**：M6.1 保守盒测试串进 DAG 遍历（拍板点：bevy 式 HZB second pass 长在队列多 pass 结构上 vs 现有单 dispatch 改造 = 是否顺带做 UE-DIFFS D3a 升级）→ M6.2 开关对照验收（tag `s6-done`，更新 UE-DIFFS D6）。
+
+## ECS 前置：通用数学上移 nl/math（master 在途，2026-11-09，无 tag——M-E0 前置重构）
+
+**动作**：用户拍板（docs/p8/P8-ECS-PLAN.md 数学决策点 + 「直接改引用不设转发头」）：nl/anim/anim_math.hpp 的通用数学（Vec3/Quat 及 13 个函数）上移 `core/include/nl/math/math.hpp`（namespace `nl::math`，选型/口径注释随行）；删 anim_math.hpp 转发层；anim.hpp 直接 include nl/math 并定向注入 `Vec3/Quat/quatIdentity`（API 契约类型）；anim/gltf_anim/skeleton 三个 cpp 加文件级 `using namespace nl::math;`（TU 局部不泄漏）；anim-tools 数学函数限定改 `nl::math::`（dotQuat×2 / quatFromAxisAngle×3）。ECS Transform 层级数学（非均匀 scale 复合 / mat4）留 M-E1 在 feat/ecs 内新增。
+
+**提交版本**：见收口 commit（本条随重构提交入库）。
+
+**完成情况**：DX12 + Vulkan 双后端构建 BUILD OK、viewer selftest 16/16×2；ctest anim 全系列双树全绿（DX12 5/5 + Vulkan 7/7 含 ma2-blend/ma3-statemachine/ma4-blendspace/ma4b-skeleton/ma5-skinning）；regression s1.0 抽验 6/6 ALL GREEN——零行为变化确认。
+
+**踩坑**：①首轮按「薄转发头」实现后 anim-tools 炸出 C2039（其 using nl::anim::quatFromAxisAngle 依赖转发头全量注入）——用户当场拍板砍转发头直接改引用，按「类型注入 nl::anim（API 契约）/ 数学函数用 nl::math:: 限定（外部）」分层收口；②诊断期间撞上 M6.0 已记录的环境级 flake（「exit 0 + 空输出」签名，bash 手跑与 ctest 均随机中招、输出文件仍正常写出），一度误判为 cluster 崩溃——用 regression.py s1.0 双后端 6/6 绿 + exe 不含 anim/math 头 + 输出恢复三证据排除代码关联，ctest s1-nmesh-suzanne 的偶发红属环境 flake（regression 主体系绿）。
+
+**下一步**：建 `feat/ecs` worktree（wt_pool claim --track ecs --milestone M-E0）→ M-E0 World/Entity 核心。

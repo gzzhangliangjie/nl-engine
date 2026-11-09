@@ -89,7 +89,7 @@ void testQuatSlerp() {
     nl::anim::Quat mid = nl::anim::sampleQuatTrack(track, 0.5f);
     expectNear(true, "slerp mid y", mid.y, s225, 1e-6f);
     expectNear(true, "slerp mid w", mid.w, c225, 1e-6f);
-    expectNear(true, "slerp mid norm", std::sqrt(nl::anim::dotQuat(mid, mid)), 1.0f, 1e-6f);
+    expectNear(true, "slerp mid norm", std::sqrt(nl::math::dotQuat(mid, mid)), 1.0f, 1e-6f);
 
     // 端点精确
     nl::anim::Quat at0 = nl::anim::sampleQuatTrack(track, 0.0f);
@@ -108,7 +108,7 @@ void testQuatSlerp() {
     tiny.values = { nl::anim::quatIdentity(), { 0, 1e-6f, 0, 1.0f } };
     nl::anim::Quat nearParallel = nl::anim::sampleQuatTrack(tiny, 0.5f);
     expectNear(true, "slerp near-parallel norm",
-               std::sqrt(nl::anim::dotQuat(nearParallel, nearParallel)), 1.0f, 1e-5f);
+               std::sqrt(nl::math::dotQuat(nearParallel, nearParallel)), 1.0f, 1e-5f);
 }
 
 void testStepAndConstant() {
@@ -1036,7 +1036,7 @@ using nl::anim::Vec3;
 void testSkeletonFkAnchors() {
     using nl::anim::findBoneIndex;
     using nl::anim::localToModel;
-    using nl::anim::quatFromAxisAngle;
+    using nl::math::quatFromAxisAngle;
     using nl::anim::validateSkeleton;
 
     // 三链：hip(-(1,0,0) 偏移? 不——直接用资产同款几何：hip 平移 (0,1,0))
@@ -1085,7 +1085,7 @@ void testGltfAssetLoad(const std::string& path) {
     using nl::anim::loadGltfAnim;
     using nl::anim::sampleClip;
     using nl::anim::localToModel;
-    using nl::anim::quatFromAxisAngle;
+    using nl::math::quatFromAxisAngle;
 
     Skeleton sk;
     std::vector<nl::anim::AnimClip> clips;
@@ -1206,7 +1206,7 @@ void testSkinningRigidAnchors() {
     // 姿态：hip 绕 Z 90°（与 FK 用例同款）→ spine(-0.5,1) / head(-1,1)
     std::vector<nl::anim::BonePose> local(3);
     local[0].translation = { 0, 1, 0 };
-    local[0].rotation = nl::anim::quatFromAxisAngle({ 0, 0, 1 }, 1.57079632679f);
+    local[0].rotation = nl::math::quatFromAxisAngle({ 0, 0, 1 }, 1.57079632679f);
     local[1].translation = { 0, 0.5f, 0 };
     local[2].translation = { 0, 0.5f, 0 };
     std::vector<nl::anim::BonePose> model;

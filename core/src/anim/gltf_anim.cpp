@@ -22,6 +22,7 @@
 #include <limits>
 
 namespace nl::anim {
+using namespace nl::math;   // 数学函数本体在 nl/math/math.hpp（2026-11-09 上移）
 namespace {
 
 using tinygltf::Model;

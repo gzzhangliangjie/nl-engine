@@ -5,6 +5,7 @@
 #include <set>
 
 namespace nl::anim {
+using namespace nl::math;   // 数学函数本体在 nl/math/math.hpp（2026-11-09 上移）
 
 std::size_t findBoneIndex(const Skeleton& skeleton, const std::string& bone) {
     for (std::size_t i = 0; i < skeleton.boneNames.size(); ++i)
