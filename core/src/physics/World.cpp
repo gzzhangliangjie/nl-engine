@@ -24,6 +24,7 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -33,6 +34,8 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Renderer/DebugRenderer.h>
+
+#include "nl/core/jobs.hpp"  // M-J5c: ThreadPool（PoolJobSystem 的执行底座）
 
 #include <atomic>
 
@@ -125,6 +128,7 @@ bool validateConfig(const DropConfig& cfg, std::string* err) {
         return bad("startHeight must exceed radius and be <= 1000");
     if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f))
         return bad("restitution out of range [0,1]");
+    if (cfg.jobsThreads < 0 || cfg.jobsThreads > 64) return bad("jobsThreads out of range [0,64]");
     return true;
 }
 
@@ -151,6 +155,77 @@ World::~World() = default;
 
 std::uint32_t World::bodyCount() const { return impl_->lastBodyCount; }
 
+// ===== M-J5c: Jolt JobSystem 适配器 → nl/core 池底座（决策前置读证 2026-11-09）=====
+// 三处证据：Jolt JobSystem.h 头注释三支柱合约（依赖计数在 JPH::Job 内部 /
+// Barrier 等待期可 AddJob / WaitForJobs 必须帮跑）；JobSystemWithBarrier.cpp
+// Wait() 自带帮跑（扫描执行 barrier 内可执行 job）= 合约 c 由 Jolt 基类兜底；
+// JobSystemThreadPool.cpp QueueJobInternal = 入队必须 AddRef、执行完 Release。
+// jobsync 原语（M-J5c-prep）与本类同构，但依赖计数留在 JPH::Job 内部完成，
+// 适配器只需把 QueueJob 映射到池 post —— 因此执行底座用 ThreadPool::post。
+// 边界：pool 生命周期必须覆盖整个 simulate 调用（unique_ptr 声明在
+// PhysicsSystem 之前 = 析构在其之后，满足 Jolt 对 JobSystem 的存活要求）。
+class PoolJobSystem final : public JPH::JobSystemWithBarrier {
+public:
+    explicit PoolJobSystem(nl::core::jobs::ThreadPool& pool)
+        : JPH::JobSystemWithBarrier(8)  // PhysicsSystem::Update 用 1 个 barrier，8 兜余量
+        , pool_(pool) {}
+
+    int GetMaxConcurrency() const override {
+        return static_cast<int>(pool_.threadCount());
+    }
+    // 注：Job / JobHandle 是 JobSystem 嵌套类型（派生类内可裸用）；
+    // ColorArg / uint32 / uint 是 JPH 命名空间类型（须限定）。
+    JobHandle CreateJob(const char* inName, JPH::ColorArg inColor,
+                        const JobFunction& inFunction, JPH::uint32 inNumDependencies) override {
+        // Job 为引用计数对象：构造即持 1 引（由 JobHandle 承接）；deps==0 直接入队
+        // （JobSystemThreadPool::CreateJob 同款次序）。
+        Job* job = new Job(inName, inColor, this, inFunction, inNumDependencies);
+        JobHandle handle(job);
+        if (inNumDependencies == 0) QueueJob(job);
+        return handle;
+    }
+    void QueueJob(Job* inJob) override {
+        // Jolt 合约：QueueJob 调用期内 job 保活，但异步闭包必须自持引用
+        //（AddRef 在投递前，闭包内 Execute + Release 成对）。
+        inJob->AddRef();
+        pool_.post([inJob] {
+            inJob->Execute();
+            inJob->Release();
+        });
+    }
+    void QueueJobs(Job** inJobs, JPH::uint inNumJobs) override {
+        for (JPH::uint i = 0; i < inNumJobs; ++i) QueueJob(inJobs[i]);
+    }
+    void FreeJob(Job* inJob) override { delete inJob; }
+
+private:
+    nl::core::jobs::ThreadPool& pool_;
+};
+
+// jobsThreads 语义：0 = 单线程字节基线路径（M-P0~P4 全部基线）；>=1 = 适配器 +
+// 独立 ThreadPool（不走 Scheduler 单例——configure 冻结使一进程多配置不可行，
+// 验收需 N=1/N=4 同进程对拍；Scheduler 常驻底座仍是推荐生产入口，见 §11 文档）。
+struct JobRuntime {
+    std::unique_ptr<nl::core::jobs::ThreadPool>      pool;
+    std::unique_ptr<JPH::JobSystemSingleThreaded>    st;
+    std::unique_ptr<PoolJobSystem>                   adapter;
+    JPH::JobSystem*                                  sys = nullptr;
+};
+
+JobRuntime makeJobRuntime(int jobsThreads) {
+    JobRuntime rt;
+    if (jobsThreads > 0) {
+        rt.pool = std::make_unique<nl::core::jobs::ThreadPool>(
+            static_cast<unsigned>(jobsThreads));
+        rt.adapter = std::make_unique<PoolJobSystem>(*rt.pool);
+        rt.sys = rt.adapter.get();
+    } else {
+        rt.st = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+        rt.sys = rt.st.get();
+    }
+    return rt;
+}
+
 SimResult World::simulateDrop(const DropConfig& cfg) {
     SimResult result;
     if (!validateConfig(cfg, &result.error)) return result;
@@ -162,7 +237,9 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
     LayerMatrix matrix;
     matrix.set(layers::kFloor, layers::kFloor, false);
     JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
-    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    // M-J5c：job system 按配置分流；声明在 physicsSystem 之前 = 析构在其之后。
+    JobRuntime jobRuntime = makeJobRuntime(cfg.jobsThreads);
+    JPH::JobSystem* jobSystem = jobRuntime.sys;
     BPLayerInterfaceImpl bpLayerInterface;
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(matrix);
     ObjectLayerPairFilterImpl objectLayerPairFilter(matrix);
@@ -225,7 +302,7 @@ SimResult World::simulateDrop(const DropConfig& cfg) {
     result.samples.reserve(static_cast<std::size_t>(cfg.frames) + 1);
     pushSample(0);
     for (int frame = 1; frame <= cfg.frames; ++frame) {
-        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, jobSystem);
         pushSample(frame);
     }
 
@@ -423,6 +500,7 @@ bool validateStack(const StackConfig& cfg, std::string* err) {
     if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f)) return bad("restitution out of range [0,1]");
     if (!(cfg.lateralSpeed >= 0.0f && cfg.lateralSpeed <= 10.0f)) return bad("lateralSpeed out of range [0,10]");
     if (!(cfg.damping >= 0.0f && cfg.damping <= 1.0f)) return bad("damping out of range [0,1]");
+    if (cfg.jobsThreads < 0 || cfg.jobsThreads > 64) return bad("jobsThreads out of range [0,64]");
     return true;
 }
 
@@ -435,7 +513,9 @@ StackResult World::simulateStack(const StackConfig& cfg) {
     LayerMatrix matrix;
     matrix.set(layers::kFloor, layers::kFloor, false);
     JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
-    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    // M-J5c：job system 按配置分流；声明在 physicsSystem 之前 = 析构在其之后。
+    JobRuntime jobRuntime = makeJobRuntime(cfg.jobsThreads);
+    JPH::JobSystem* jobSystem = jobRuntime.sys;
     BPLayerInterfaceImpl bpLayerInterface;
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(matrix);
     ObjectLayerPairFilterImpl objectLayerPairFilter(matrix);
@@ -523,7 +603,7 @@ StackResult World::simulateStack(const StackConfig& cfg) {
 
     pushFrame(0);
     for (int frame = 1; frame <= cfg.frames; ++frame) {
-        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, jobSystem);
         pushFrame(frame);
     }
 

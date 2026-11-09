@@ -186,3 +186,23 @@ M-P4 角色胶囊（Jolt `CharacterVirtual`）；**M-P5 场景集成仍 gate 在
 
 ### 下一步
 M-P4 预留动作系统衔接接口（`CharacterConfig.walkSpeed` 即输入接口的演示驱动；`groundState`/`GetGroundVelocity` 可直接喂动画状态机）；**M-P5 场景集成仍 gate 在 P8 E3 之后**。
+
+## 12. M-J5c：Jolt JobSystem 适配器（PoolJobSystem，并行物理，tag `phys-j5c`）
+
+### 交付物
+- `example/phys-j5c/run.bat`：selftest（含 j5c anchors）→ `check-jobs --threads 4`（6 条 IDENTICAL 硬闸）→ **`simulate --jobs 1` 全文件 vs `phys-p0/drop.tsv` `fc /b` 逐字节** → 五基线回归 → usage/负向 → 重生成 acceptance.png，全绿 exit 0。
+- `example/phys-j5c/acceptance.png`：`tools/make-phys-j5c-evidence.py` 从真实日志渲染（selftest + check-jobs 矩阵 + 五基线 MD5 + 负向）。
+- phys-tools `check-jobs [--threads N] [--frames F]`：drop/stack × {SingleThreaded, N=1, N=4×2} 共 12 次模拟的验收矩阵，ASCII-only 报告。
+
+### 内核要点（写回 canonical）
+- **适配器结构**（`World.cpp` `PoolJobSystem final : JPH::JobSystemWithBarrier`）：依赖计数留在 `JPH::Job` 内部；适配器实现 `CreateJob`（new Job，deps==0 即入队）/ `QueueJob`（**AddRef 投递 + 闭包内 Execute+Release 成对**——Jolt 合约「QueueJob 调用期保活、自存须自持引用」）/ `QueueJobs` / `FreeJob`（delete）/ `GetMaxConcurrency`（=池线程数）。Barrier 全部由 `JobSystemWithBarrier` 基类兜底（Wait 帮跑 = 三支柱合约 c），maxBarriers=8（`PhysicsSystem::Update` 用 1 个）。
+- **M-J5c-prep 原语的角色**：jobsync 的动态依赖计数/Barrier 与本适配器**同构**，但 Jolt 的依赖管理在 `JPH::Job` 内部闭环，适配器拿到的只有 QueueJob 回调——所以执行底座直接映射 `ThreadPool::post`，jobsync 用于自研调度场景（不强行套）。
+- **接口面**：`DropConfig`/`StackConfig` 各加 `int jobsThreads = 0`；0=SingleThreaded（**M-P0~P4 基线路径，默认不动**），>=1=适配器+专用 `ThreadPool(N)`；validate 拒 [0,64] 越界。TSV 格式零改动（jobs 是运行期旋钮，不入 provenance 头）→ 五基线字节稳定。
+- **底座选型偏差（如实记录）**：专用 `ThreadPool(N)` 而非 Scheduler 单例——`Scheduler::configure` 冻结后同进程无法跑 N=1/N=4 两档对拍；生产接入一行换 `Scheduler::instance().compute()`。
+- **确定性实测结论（本轮最有价值的产出）**：N=1 适配器 vs SingleThreaded 数据行**逐字节一致**（适配器正确性硬证明）；N=4 run-to-run 逐字节一致；**N=4 与串行逐字节一致**——Jolt 岛间无共享累加、并行调度不碰浮点结果，从「文档声称」升级为「本项目实测」。
+- **工具 CLI**：`simulate`/`stack` 加 `--jobs N`；`check-jobs` 矩阵命令（无参数按默认值运行——usage 负向用例须用 `--threads 0`）。
+- **ctest**：`p-j5c-check` / `p-j5c-negative`（物理+j5c 共 15/15，DX12/VULKAN 双后端）。
+- **踩坑**：`stackTSV` 按 case 索引 `rs[0..2]`——jobsMatrix 初版传单元素 vector 越界段错误，改整批传入。
+
+### 下一步
+ECS system 调度接入（走既有 `jobgraph.hpp`，Taskflow 静态 DAG）仍待 ECS 轨道腾手；physics 轨道 M-P5 场景集成仍 gate P8 E3。

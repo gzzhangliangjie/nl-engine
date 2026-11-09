@@ -660,3 +660,9 @@ set_tests_properties(p4-phys-character-check PROPERTIES
     PASS_REGULAR_EXPRESSION "phys-p4 check-character: PASS")
 add_test(NAME p4-phys-negative COMMAND phys-tools character --frames 0)
 set_tests_properties(p4-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-J5c: Jolt JobSystem adapter (pool-backed parallel physics) ----
+add_test(NAME p-j5c-check COMMAND phys-tools check-jobs --threads 4 --frames 240)
+set_tests_properties(p-j5c-check PROPERTIES PASS_REGULAR_EXPRESSION "phys-j5c check-jobs: PASS")
+add_test(NAME p-j5c-negative COMMAND phys-tools simulate --jobs -1 --frames 240)
+set_tests_properties(p-j5c-negative PROPERTIES WILL_FAIL TRUE)

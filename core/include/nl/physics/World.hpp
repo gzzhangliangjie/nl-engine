@@ -29,6 +29,11 @@ struct DropConfig {
     float         radius       = 0.5f;
     float         restitution  = 0.6f;       // 0 = inelastic, 1 = fully elastic
     std::uint32_t seed         = 0;          // recorded in dump; M-P0 has no RNG source
+    // M-J5c: 0 = JobSystemSingleThreaded (M-P0 byte baseline, default);
+    // >=1 = PhysicsSystem::Update runs on a dedicated ThreadPool via the
+    // JobSystem adapter (PoolJobSystem). Determinism anchors per mode are
+    // check-jobs' job (N=1 must be bit-identical to the baseline path).
+    int           jobsThreads  = 0;
 };
 
 struct Sample {
@@ -132,6 +137,7 @@ struct StackConfig {
     float         lateralSpeed  = 0.0f;       // +x velocity given to the top cube
     bool          allowSleeping = true;
     float         damping       = 0.0f;       // 0 = no artificial damping
+    int           jobsThreads   = 0;          // M-J5c: 0 = SingleThreaded (baseline), >=1 = pool adapter
 };
 
 struct BodySample {

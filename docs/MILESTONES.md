@@ -1744,3 +1744,12 @@
 5. **kStage bump 波及符合预期**：HUD 首行 stage 文字变化 → m0.9/pbr-direct 的 4 张 --hud 基线按纪律重拍（512 px maxDelta 240 全部是 stage 字样区），重拍后 spot 回归三条全 bytes。
 
 **下一步**：M7.2 多材质 + 对照验收（materialId 间接表走 bindless、≥3 材质模型、传统 GBuffer 对照模式保留；S7 收口 tag `s7-done`）。
+
+## P8 M-J5c：Jolt JobSystem 适配器接池（feat/physics 轨道穿插项，2026-11-09，tag `phys-j5c`）
+
+- **动作**：决策前置实读清单——`JobSystem.h` 三支柱合约 + `JobSystem.inl`（Job 引用计数/依赖流转）+ `JobSystemSingleThreaded.cpp`（inline 执行语义=基线路径）+ `JobSystemWithBarrier.cpp`（Wait 帮跑）+ `JobSystemThreadPool.cpp`（QueueJobInternal AddRef 流）+ `PhysicsSystem.cpp`（barrier 用量=1）+ `jobsync.hpp`/`scheduler.hpp`/`jobs.hpp`（M-J5b/c-prep 原语面）+ P8-JOB-PLAN M-J5c 计划节。`wt_pool claim --track physics --milestone M-J5c` 占坑（job-system wt 已拆，用户拍板「算 Physics 的，做第二层否则没意义」）。
+- **落码**：`World.hpp` DropConfig/StackConfig 加 `jobsThreads`；`World.cpp` PoolJobSystem（JobSystemWithBarrier 派生 + QueueJob→ThreadPool::post）+ makeJobRuntime 分流 + simulateDrop/simulateStack 接线 + validate [0,64]；phys-tools `check-jobs` 矩阵命令 + `simulate`/`stack` `--jobs` + selftest M-J5c 段；CMake p-j5c 两条 ctest；`make-phys-j5c-evidence.py` + `example/phys-j5c/`（run.bat + acceptance.png + 5 日志）。
+- **提交版本**：`feat/physics` M-J5c 提交（annotated tag `phys-j5c`）。A 类轨道，不 bump `kStage`。
+- **完成情况**：check-jobs 矩阵 6 条判定全 IDENTICAL（N=1 硬证明 / N=4 run-to-run / parallel vs serial，drop+stack 双路径）；`simulate --jobs 1` 全文件与 M-P0 drop.tsv `fc /b` 一致；selftest p0..p4+j5c 全 PASS；ctest 物理+j5c 15/15 双后端；五基线逐字节回归 OK（默认路径零扰动）；run.bat ALL GREEN exit 0；`server.py --check` exit 0；acceptance.png 肉眼核验。
+- **踩坑**：① stackTSV 按 rs[0..2] 索引，单元素 vector 传入越界段错误（改整批）；② check-jobs 无参数按默认值跑，usage 负向须 `--threads 0`；③ Scheduler configure 冻结 → 验收用专用 ThreadPool(N) 实例（偏差如实记录，生产一行换 compute() 池）。
+- **下一步**：ECS system 调度接入走 jobgraph（待 ECS 腾手）；M-P5 场景集成仍 gate P8 E3。

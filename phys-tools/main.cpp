@@ -20,6 +20,8 @@
 //   character [options]    M-P4: character walk-through TSV (Jolt CharacterVirtual,
 //                          CharacterMovement-style: 30deg ramp + 3 steps + 60deg block)
 //   check-character <tsv>  re-verify the walk dump (course + parking anchors)
+//   check-jobs [options]   M-J5c: JobSystem adapter matrix (N=1 bit-identical
+//                          hard proof + N>1 run-to-run determinism, drop+stack)
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
@@ -67,6 +69,7 @@ void usage() {
     std::printf("  phys-tools check-debug <tsv>\n");
     std::printf("  phys-tools character [--out <tsv>] [--frames N]\n");
     std::printf("  phys-tools check-character <tsv>\n");
+    std::printf("  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -528,6 +531,7 @@ int runStack(int argc, char** argv) {
         else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
         else if (key == "--boxes")  { if (!parseInt(val, &n)) return fail("bad --boxes"); cfg.boxes = static_cast<std::uint32_t>(n); }
         else if (key == "--gap")    { if (!parseReal(val, &d)) return fail("bad --gap"); cfg.gap = static_cast<float>(d); }
+        else if (key == "--jobs")   { if (!parseInt(val, &n)) return fail("bad --jobs"); cfg.jobsThreads = n; }
         else return fail("unknown option " + key);
     }
     std::string err;
@@ -1106,6 +1110,115 @@ int runCheckCharacter(const char* path) {
     return 0;
 }
 
+// ===== M-J5c: JobSystem 适配器验收（两层一起）=====
+// 提取数据行（跳过 '#' 头）：TSV 头含 config 但不含 jobs——jobs 是运行期旋钮，
+// 不入 TSV 保 M-P0~P4 基线字节稳定；跨 job-system 对拍只在数据行上做。
+std::string jobsDataRows(const std::string& tsv) {
+    std::string out;
+    std::istringstream is(tsv);
+    std::string line;
+    while (std::getline(is, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        out += line;
+        out += '\n';
+    }
+    return out;
+}
+
+// M-J5c 验收矩阵（ASCII-only 报告，供日志证据图渲染）：
+//   层1 硬证明：适配器 N=1 与 SingleThreaded 数据行逐字节一致（drop + stack）。
+//   层2 并行：N=threads 两次独立 fresh-world 模拟数据行逐字节一致（run-to-run）。
+//   信息行：并行 N 与串行是否数值一致（一致则说明 Jolt 岛间无共享累加，
+//   并行调度不影响浮点结果；不一致也不 FAIL，如实记录差异量级）。
+bool jobsMatrix(int threads, int frames, std::string* report) {
+    bool all = true;
+    auto line = [report](const std::string& s) { if (report) *report += s + "\n"; };
+
+    nl::physics::World world;
+    nl::physics::DropConfig d;
+    d.frames = frames;
+    nl::physics::SimResult rST  = world.simulateDrop(d);
+    d.jobsThreads = 1;
+    nl::physics::SimResult rN1  = world.simulateDrop(d);
+    d.jobsThreads = threads;
+    nl::physics::SimResult rPa  = world.simulateDrop(d);
+    nl::physics::SimResult rPb  = world.simulateDrop(d);
+    if (!rST.ok() || !rN1.ok() || !rPa.ok() || !rPb.ok()) {
+        line("drop sim failed: " + (rST.ok() ? (rN1.ok() ? (rPa.ok() ? rPb.error : rPa.error) : rN1.error) : rST.error));
+        return false;
+    }
+    const std::string a  = jobsDataRows(trajectoryTSV(d, rST.samples, world.bodyCount()));
+    const std::string b  = jobsDataRows(trajectoryTSV(d, rN1.samples, world.bodyCount()));
+    const std::string c1 = jobsDataRows(trajectoryTSV(d, rPa.samples, world.bodyCount()));
+    const std::string c2 = jobsDataRows(trajectoryTSV(d, rPb.samples, world.bodyCount()));
+    line("drop: frames=" + std::to_string(frames) + " threads=" + std::to_string(threads));
+    if (a == b) line("drop N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)");
+    else { line("drop N=1 adapter vs SingleThreaded: MISMATCH"); all = false; }
+    if (c1 == c2) line("drop N=" + std::to_string(threads) + " run-to-run: IDENTICAL");
+    else { line("drop N=" + std::to_string(threads) + " run-to-run: MISMATCH"); all = false; }
+    line(c1 == a ? "drop parallel vs serial: IDENTICAL (island-parallel determinism)"
+                 : "drop parallel vs serial: differs (informational, recorded)");
+
+    // stack 交叉确认：接触求解 + 休眠岛路径同样过一遍三层矩阵。
+    // （stackTSV 按 case 索引 rs[0..2]，必须整批传入，不能逐 case 调用。）
+    nl::physics::StackConfig s;
+    s.frames = frames < 600 ? 600 : frames;
+    std::vector<nl::physics::StackResult> rsST, rsN1, rsP1, rsP2;
+    for (int i = 0; i < kStackCaseCount; ++i) {
+        s.jobsThreads = 0;
+        rsST.push_back(runStackCase(kStackCases[i], s));
+        s.jobsThreads = 1;
+        rsN1.push_back(runStackCase(kStackCases[i], s));
+        s.jobsThreads = threads;
+        rsP1.push_back(runStackCase(kStackCases[i], s));
+        rsP2.push_back(runStackCase(kStackCases[i], s));
+    }
+    s.jobsThreads = 0;
+    bool stackOk = true;
+    for (int i = 0; i < kStackCaseCount; ++i)
+        stackOk = stackOk && rsST[i].ok() && rsN1[i].ok() && rsP1[i].ok() && rsP2[i].ok();
+    if (!stackOk) {
+        line("stack sim failed (see case errors above)");
+        return false;
+    }
+    const std::string stA  = jobsDataRows(stackTSV(s, rsST));
+    const std::string stB  = jobsDataRows(stackTSV(s, rsN1));
+    const std::string stC1 = jobsDataRows(stackTSV(s, rsP1));
+    const std::string stC2 = jobsDataRows(stackTSV(s, rsP2));
+    line("stack: cases=" + std::to_string(kStackCaseCount) + " frames=" + std::to_string(s.frames));
+    if (stA == stB) line("stack N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)");
+    else { line("stack N=1 adapter vs SingleThreaded: MISMATCH"); all = false; }
+    if (stC1 == stC2) line("stack N=" + std::to_string(threads) + " run-to-run: IDENTICAL");
+    else { line("stack N=" + std::to_string(threads) + " run-to-run: MISMATCH"); all = false; }
+    line(stC1 == stA ? "stack parallel vs serial: IDENTICAL (island-parallel determinism)"
+                     : "stack parallel vs serial: differs (informational, recorded)");
+    return all;
+}
+
+int runCheckJobs(int argc, char** argv) {
+    int threads = 4, frames = 240;
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (key == "--verbose") { g_verbose = true; continue; }
+        if (i + 1 >= argc) { std::printf("invalid arguments: missing value for %s\n", key.c_str()); return 2; }
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--threads") { if (!parseInt(val, &n) || n < 1 || n > 64) { std::printf("invalid arguments: bad --threads\n"); return 2; } threads = n; }
+        else if (key == "--frames")  { if (!parseInt(val, &n) || n < 1)          { std::printf("invalid arguments: bad --frames\n");  return 2; } frames = n; }
+        else { std::printf("invalid arguments: unknown option %s\n", key.c_str()); return 2; }
+    }
+    std::string report;
+    const bool pass = jobsMatrix(threads, frames, &report);
+    std::fputs(report.c_str(), stdout);
+    if (!pass) {
+        std::printf("phys-j5c check-jobs: FAIL\n");
+        return 1;
+    }
+    std::printf("phys-j5c check-jobs: PASS (adapter N=1 bit-identical, N=%d run-to-run deterministic)\n", threads);
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -1408,10 +1521,19 @@ int runSelftest() {
         expectTrue(charIdentical, "M-P4 determinism: same course twice bit-identical");
     }
 
+    // M-J5c：JobSystem 适配器两层矩阵（N=1 逐位硬证明 + N=4 run-to-run）。
+    {
+        std::string report;
+        expectTrue(jobsMatrix(4, 120, &report),
+                   "M-J5c adapter N=1 bit-identical + N=4 run-to-run deterministic");
+        if (g_verbose) std::fputs(report.c_str(), stdout);
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)\n");
     std::printf("phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)\n");
     std::printf("phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)\n");
     std::printf("phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)\n");
@@ -1440,6 +1562,7 @@ bool parseSimulateArgs(int argc, char** argv, int first,
         else if (key == "--radius")      { if (!parseReal(val, &d)) { *err = "bad --radius"; return false; } cfg->radius = static_cast<float>(d); }
         else if (key == "--restitution") { if (!parseReal(val, &d)) { *err = "bad --restitution"; return false; } cfg->restitution = static_cast<float>(d); }
         else if (key == "--seed")        { if (!parseInt(val, &n)) { *err = "bad --seed"; return false; } cfg->seed = static_cast<std::uint32_t>(n); }
+        else if (key == "--jobs")        { if (!parseInt(val, &n)) { *err = "bad --jobs"; return false; } cfg->jobsThreads = n; }
         else { *err = "unknown option " + key; return false; }
     }
     return nl::physics::validateConfig(*cfg, err);
@@ -1574,6 +1697,7 @@ int main(int argc, char** argv) {
         if (argc != 3) { usage(); return 2; }
         return runCheckCharacter(argv[2]);
     }
+    if (cmd == "check-jobs") return runCheckJobs(argc, argv);
     usage();
     return 2;
 }

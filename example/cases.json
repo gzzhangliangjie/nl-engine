@@ -5164,6 +5164,86 @@
           "script": "example/s7-pulling/run.bat selftest"
         }
       ]
+    },
+    {
+      "id": "phys-j5c",
+      "label": "P8 M-J5c",
+      "name": "Jolt JobSystem 适配器接池（PoolJobSystem，N=1 逐位硬证明 + N>1 并行）",
+      "tag": "phys-j5c",
+      "date": "2026-11-09",
+      "summary": "A 类物理轨道穿插项（计划 P8-JOB-PLAN M-J5c，两层一起做）：PoolJobSystem 实现 JPH::JobSystem 接口——继承 JobSystemWithBarrier（Barrier 等待期 AddJob/Wait 帮跑=合约 c 由 Jolt 基类兜底），QueueJob 按 Jolt 合约 AddRef 投递、闭包内 Execute+Release 成对，执行底座为专用 nl/core ThreadPool（不走 Scheduler 单例：configure 冻结使一进程多线程数对拍不可行；Scheduler 仍是生产推荐入口）。World 的 DropConfig/StackConfig 新增 jobsThreads（0=SingleThreaded 基线路径默认不动，>=1=适配器）。验收两层全绿且是最优结果：N=1 与 SingleThreaded 数据行逐字节一致（适配器正确性硬证明），N=4 run-to-run 逐字节一致，且 N=4 与串行逐字节一致（Jolt 岛间无共享累加、并行调度不碰浮点结果，实测坐实）；simulate --jobs 1 全文件与 M-P0 drop.tsv 基线 fc /b 逐字节一致。TSV 格式零改动（jobs 是运行期旋钮不入头），M-P0~P4 五基线字节稳定。",
+      "acceptance": [
+        "check-jobs 矩阵：drop/stack 两条路径，N=1 adapter vs SingleThreaded 数据行 IDENTICAL（硬证明）、N=4 run-to-run IDENTICAL、parallel vs serial IDENTICAL（island-parallel determinism 实测）",
+        "simulate --jobs 1 --frames 240 全文件（含头）与 example/phys-p0/drop.tsv fc /b 逐字节一致——适配器路径与归档 M-P0 基线零偏差",
+        "selftest 新增 M-J5c 段（jobsMatrix(4,120) 两条断言），p0..p4+j5c 全 PASS；ctest 物理 + j5c 共 15/15（DX12/VULKAN 双后端）",
+        "五基线逐字节回归锁死（drop/layers/stack/debug/character 全 OK）——jobsThreads 默认 0 保证 M-P0~P4 基线一字不动",
+        "交代物：example/phys-j5c/（run.bat ALL GREEN exit 0 + acceptance.png 真实日志证据图 + 5 份日志）+ 本卡四用例 + PHYS-TOOLS-GUIDE.md §12 + P8-JOB-PLAN.md M-J5c 收口"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：check-jobs --threads 0（非法线程数，退出码 2）",
+          "kind": "tool",
+          "note": "check-jobs 无参数会按默认值（threads=4）运行，非法 --threads 0 才触发 usage error 路径。",
+          "args": [
+            "check-jobs",
+            "--threads",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --threads",
+          "command": "phys-tools check-jobs --threads 0"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0..M-P4 + M-J5c 全锚点",
+          "kind": "tool",
+          "note": "M-J5c 段跑 jobsMatrix(4,120)：适配器 N=1 逐位硬证明 + N=4 run-to-run 确定性（drop+stack）。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-j5c anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "check-jobs",
+          "name": "check-jobs：适配器两层验收矩阵（N=4）",
+          "kind": "tool",
+          "note": "drop 240 帧 + stack 3 案例 600 帧 × {ST, N=1, N=4×2} 共 12 次模拟；6 条 IDENTICAL 判定 + PASS 行。",
+          "args": [
+            "check-jobs",
+            "--threads",
+            "4",
+            "--frames",
+            "240"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-j5c check-jobs: PASS",
+          "command": "phys-tools check-jobs --threads 4 --frames 240"
+        },
+        {
+          "id": "negative",
+          "name": "negative：simulate --jobs -1（退出码 2）",
+          "kind": "tool",
+          "note": "validateConfig 拒绝 jobsThreads 越界 [0,64]。",
+          "args": [
+            "simulate",
+            "--jobs",
+            "-1",
+            "--frames",
+            "240"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: jobsThreads out of range",
+          "command": "phys-tools simulate --jobs -1 --frames 240"
+        }
+      ]
     }
   ]
 }
