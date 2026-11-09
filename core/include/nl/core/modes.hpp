@@ -18,6 +18,7 @@ enum class ViewMode {
     Hiz = 7,      // M6.0：Hi-Z 深度预通道 + 手写 min 金字塔（dag 遍历 + 金字塔 + 层级可视化）
     Scene = 8,    // M-E1b.0：ECS 场景（--scene 读 World JSON，N 物体 M 方向灯实例化）
     Visbuf = 9,   // M7.0：visibility buffer 打包写入（u64 簇/三角/深度）+ 簇/三角可视化
+    Pulling = 10, // M7.1：vis buffer 材质反解（全屏 pass 顶点拉取 + 解析式 barycentrics + 材质着色）
     // S1 起依次追加：Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count

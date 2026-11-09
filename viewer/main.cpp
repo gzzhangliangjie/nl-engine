@@ -316,7 +316,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S7.0") != nullptr, "S7.0 stage reported");
+    check(std::strstr(st.stage, "S7.1") != nullptr, "S7.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -414,7 +414,7 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
-              bool visbufMode = false) {
+              bool visbufMode = false, bool pullingMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -438,7 +438,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
-                                                   visbufMode);
+                                                   /*sceneMode=*/false,
+                                                   visbufMode, pullingMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -1428,6 +1429,10 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/true);
+    case nl::core::ViewMode::Pulling:    // M7.1：vis buffer 材质反解（pulling）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -1463,8 +1468,8 @@ void printUsage() {
               << "                                     acceptance comparison evidence)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
-              << "  viewer.exe --model <name>          load assets/<name>: .glb for normal mode,\n"
-              << "                                     .nmesh for cluster/lod mode (default per mode)\n"
+              << "  viewer.exe --model <name>          load assets/<name>: .glb for normal/skin mode,\n"
+              << "                                     .nmesh for cluster/lod/visbuf/pulling mode (default per mode)\n"
               << "  viewer.exe --scene <file>          M-E1b.0: load an ECS scene JSON (World::serialise\n"
               << "                                     format); forces --mode scene. Objects/lights come\n"
               << "                                     from Model/Transform/Light components.\n"
@@ -1516,7 +1521,7 @@ int main(int argc, char** argv) {
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
-         o.mode == nl::core::ViewMode::Visbuf)
+         o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

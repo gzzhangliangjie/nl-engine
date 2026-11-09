@@ -148,6 +148,16 @@
 | 升级路径 | 若 NVRHI 上游自带 R64_UINT，或 S13 真上 shading binning / 软光栅需要纹理局部性，再把介质换回纹理；`visbuf_common.slangh` 的 `visIndex()` 与读写点集中，改动面可控。 |
 | 触发条件 | 出现 vis buffer 带宽瓶颈，或 NVRHI 升级后已具备 R64 格式且硬件 `shaderImageInt64Atomics` 实测可用。 |
 
+### D16 材质反解的导数坐标系：bevy `ddy *= -1.0` 翻转不带过来（M7.1 建档，2026-11-09；有意差异——宿主约定不同）
+
+| | 内容 |
+|---|---|
+| bevy 做法 | `compute_partial_derivatives`（visibility_buffer 材质 resolve）在算出屏幕空间 uv 导数后做 `ddy *= -1.0`——因为 wgpu/NDC 约定下其屏幕空间重建所用坐标系与纹理 V 方向相反，翻转后才能喂 `textureSampleGrad`。 |
+| 我们现状（M7.1） | **不翻转**。NVRHI 的 `SV_Position.xy` 已是像素坐标系（原点左上、y-down），与光栅 pass 输出的 viewport 变换（y 翻转）后的屏幕空间 barycentrics 同一直角系，`fragPos.xy` 直接进解析式，`SampleGrad(g_sampler, uvF, duv_dx, duv_dy)` 原样喂。验证：贴图纹理无镜像/倒置，与 M0.4 传统路径前景 99.71% 像素差 ≤2。 |
+| 定性 | **有意差异**（宿主坐标系约定不同，等价实现各取所需；照抄 bevy 的翻转反而上下颠倒）。 |
+| 关联坑 | 全屏 pass 内隐式 `ddx/ddy(uv)` 不可用（全屏三角形无网格邻接语义）——解析导数 + `SampleGrad` 是唯一正确路径，bevy/Carrot/The-Forge 三方口径一致。 |
+| 触发条件 | 无（S9/S10/S13 复用 `visbuf_common.slangh` + 本条约定即可）。 |
+
 ## 计划内待办（非偏差，挂账防丢）
 
 - **D8 资产分页 v4**（`NPAG` 页表 + 128KiB 字节预算）：对标 UE `FStreamOutMeshDataHeader`，代码落地排在 **P9 V1**（V1 即写 v4，不破 M3.2 回归基线）。
@@ -159,4 +169,4 @@
 - **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
 
 ---
-*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准；2026-11-09 S15/S16 只读预研二次确认后新增 D11（VSM 逆序渐进 / 「只读 GBuffer」底线修订）与 D12（TSR jitter 与离屏 post-chain 共享前置 / 卷积上采样核对齐 UE-bevy），开工前不再重复调研；2026-11-09 M-P2 收口修复编号撞号（M-P1 碰撞过滤条目原误编 D12，与 S16 TSR 的 D12 重号，改为 D13 并同步四处引用），新增 D13（碰撞过滤三态 vs bool 矩阵）与 D14（休眠岛口径）；2026-11-09 M7.0 收口新增 D15（vis buffer 载体 R64_UINT image atomic → u64 buffer atomic，含 buffer/image 能力位差异与升级触发条件）。*
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准；2026-11-09 S15/S16 只读预研二次确认后新增 D11（VSM 逆序渐进 / 「只读 GBuffer」底线修订）与 D12（TSR jitter 与离屏 post-chain 共享前置 / 卷积上采样核对齐 UE-bevy），开工前不再重复调研；2026-11-09 M-P2 收口修复编号撞号（M-P1 碰撞过滤条目原误编 D12，与 S16 TSR 的 D12 重号，改为 D13 并同步四处引用），新增 D13（碰撞过滤三态 vs bool 矩阵）与 D14（休眠岛口径）；2026-11-09 M7.0 收口新增 D15（vis buffer 载体 R64_UINT image atomic → u64 buffer atomic，含 buffer/image 能力位差异与升级触发条件）；2026-11-09 M7.1 收口新增 D16（bevy ddy 翻转不带过来——NVRHI SV_Position 已是 y-down 像素系 + 全屏 pass 必须 SampleGrad 的关联坑）。*

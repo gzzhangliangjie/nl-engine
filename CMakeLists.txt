@@ -276,6 +276,10 @@ set(_ENTRIES_DAG "csDag|cs|compute")
 # 与全屏可视化（解包 → 簇/三角颜色）。
 set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fragment"
                     "vsVisViz|vsvisviz|vertex" "psVisViz|psvisviz|fragment")
+# M7.1（S7）：material.slang 单全屏 pass——vis 反解 + 材质着色。无 u64 原子（只读
+# vis SRV），故不进 _SM66_ARTIFACTS 白名单，走默认 profile；与 visbuf.slang 同源
+# visbuf_common.slangh，故也吃 _SHADER_EXTRA_DEPS（见下方 STREQUAL 条件）。
+set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
@@ -298,6 +302,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_HIZ}")
     elseif(_SRC_NAME STREQUAL "visbuf")
         set(_ENTRIES "${_ENTRIES_VISBUF}")
+    elseif(_SRC_NAME STREQUAL "material")
+        set(_ENTRIES "${_ENTRIES_MATERIAL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -314,7 +320,7 @@ foreach(_SRC ${NL_SHADER_SRCS})
         endif()
         # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
-        if(_SRC_NAME STREQUAL "visbuf")
+        if(_SRC_NAME STREQUAL "visbuf" OR _SRC_NAME STREQUAL "material")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")

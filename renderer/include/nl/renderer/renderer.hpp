@@ -258,7 +258,10 @@ public:
                                             bool sceneMode = false,
                                             // M7.0：visbuf 模式吃 .nmesh，走独立
                                             // 的 u64 vis buffer 三段式 pass。
-                                            bool visbufMode = false);
+                                            bool visbufMode = false,
+                                            // M7.1：在 visbuf 之上叠加材质反解
+                                            // pass（pulling），复用 vis 资源 + PBR 贴图。
+                                            bool pullingMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

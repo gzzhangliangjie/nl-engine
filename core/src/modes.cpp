@@ -16,6 +16,7 @@ constexpr const char* kModeNames[] = {
     "hiz",       // M6.0：Hi-Z 深度预通道 + min 金字塔 + 层级可视化
     "scene",     // M-E1b.0：ECS 场景（--scene 读 World JSON，N 物体 M 方向灯）
     "visbuf",    // M7.0：u64 visibility buffer 打包写入 + 簇/三角可视化
+    "pulling",   // M7.1：vis buffer 材质反解（顶点拉取 + 解析式 barycentrics + 材质着色）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

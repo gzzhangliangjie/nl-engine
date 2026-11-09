@@ -111,7 +111,7 @@ public:
     // 64 位布局/打包函数唯一权威见 renderer/shaders/visbuf_common.slangh。
     bool initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
                     const char* vsEntry, const char* psEntry,
-                    const char* nmeshFile, std::string& outError);
+                    const char* nmeshFile, bool pulling, std::string& outError);
 
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
@@ -186,7 +186,7 @@ public:
         // cull 的四套 (fill×cull) 管线在 visbuf 下不必建（ensurePipelines 分支）。
         // vis buffer / 两个 binding set 随视口尺寸在 draw() 里懒建，不进 ready()：
         // backend 正是「!ready() 才调 ensurePipelines」，把它们算进来会首帧死锁。
-        if (visbuf_) return visRasterPSO_ && visVizPSO_;
+        if (visbuf_) return visRasterPSO_ && visVizPSO_ && (!pulling_ || matResolvePSO_);
         if (cull_)
             return pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_
                        && pipelineCullWireNone_ && cullBindingSet_;
@@ -437,6 +437,13 @@ private:
     nvrhi::BindingSetHandle      visVizSet_;
     nvrhi::GraphicsPipelineHandle visRasterPSO_;
     nvrhi::GraphicsPipelineHandle visVizPSO_;
+    // M7.1（S7.1）：材质反解 pass（pulling）。复用 vis 簇资源 + PBR 贴图。
+    bool                         pulling_ = false;                 // 是否启用材质反解
+    nvrhi::ShaderHandle          vsMatResolve_, psMatResolve_;
+    nvrhi::BufferHandle          matResolveConstants_;             // volatile CB 16B（b2）
+    nvrhi::BindingLayoutHandle   matResolveLayout_;                // b0+b1+b2+t0..t3+t4+t5+s0
+    nvrhi::BindingSetHandle      matResolveSet_;
+    nvrhi::GraphicsPipelineHandle matResolvePSO_;
     bool                         visbufFailed_ = false;  // 懒建失败只报一次
     bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                              std::string& outError);

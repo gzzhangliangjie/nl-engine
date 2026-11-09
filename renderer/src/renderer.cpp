@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S7.0 visibility buffer u64 packing + cluster/triangle viz";
+    "S7.1 visibility buffer material resolve (vertex pulling)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -118,7 +118,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
-                                           bool hizMode, bool sceneMode, bool visbufMode) {
+                                           bool hizMode, bool sceneMode, bool visbufMode,
+                                           bool pullingMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -155,7 +156,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
-                                 hizMode, sceneMode, visbufMode, r->impl_->error)) {
+                                 hizMode, sceneMode, visbufMode, pullingMode,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

@@ -1559,3 +1559,20 @@
 **完成情况**：DX12/VULKAN 双树 nl_core（+ScriptHost.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 + s7 不回归 + s8a~s8h：bootstrap 3 函数指针 + reload-script 注册 / 首载 collectible ALC + Entry 重绑定 / 改源→同名覆盖重编→reloadScript 解绑 2 命令 + weakref dead + 重装载 / 行为换新 [v2] / C++ 状态无损四锚 / 连续 reload x3 句柄漂移 0 / unloadScript weakref dead / 卸载后命令消失 + C++ 导出可用）；run --api demo exit 0；check bootstrap exit 0；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc3` 版本卡 4 条 tool 用例（selftest/reload 特写/run-api 正向 + check，expectExit 0/0/0/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC3 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC3 行标完成 + 热更架构拍板回写 + 踩坑 5 条存档（同帧 dead-store / UnmanagedCallersOnly 禁托管 Invoke / 锁文件 / 协议结构地址 / 登记表对称）。
 
 **计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。
+
+## M7.1：vis buffer 材质反解 pass（master 主线 S7，2026-11-09，tag `s7-pulling`）
+
+**动作**：`material.slang`（vsMatResolve 全屏三角形 + psMatResolve：u64 解包 → clusterMeta 查表 → localIndices+vertexPool 拉 3 顶点 → The-Forge 解析式屏幕空间 barycentrics + 每像素导数 → 透视正确插值 worldPos/normal/uv → mode 0/1/2/5，SampleGrad 吃解析导数，空像素 discard）→ CMake `_ENTRIES_MATERIAL` + `_VISBUF_COMMON` 依赖链 → `ViewMode::Pulling`(10) + modes/viewer/renderer/backend 全链穿线（initVisbuf 增 `pulling` 参：同 Scene 复用 vis 资源 + 从 .nmesh 推导 .glb 加载 baseColor/MR 真贴图 + LightConstants(80B,b1) + MatResolveConstants(16B,b2)）→ §2.7 单 BindingSet（b0~b2 + t0~t5 + s0）→ 双后端构建 → **发现 master visbuf 家族堆损坏崩溃（c0000374）→ ASan + 自写 dbghelp 符号化脚本定位 → 修 2 个既有 bug**（见踩坑栏）→ kStage S7.1 + selftest stage 校验同步 → `example/s7-pulling/`（4 张基线 + run.bat + verify.py）+ cases.json s7.1 卡 3 条 → verify.py ALL GREEN + server.py --check 0 → spot 回归 m0.9/s7.0/pbr-direct 三条 ALL GREEN（HUD 用例基线按 kStage bump 纪律重拍 4 张）→ S7-PLAN M7.1 勾选 + UE-DIFFS D16 → 本四栏 → 提交打 tag。
+
+**提交版本**：master 本收口 commit（tag `s7-pulling`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + selftest 16/16（44/44 shader 魔数，stage 校验 S7.1）；pulling 模式渲染出带 baseColor 贴图 + 直射光的 Suzanne，无裂缝/花斑；**对拍验收**：vs `--mode normal --shading 0` 轮廓差 0（64203 px 对 64203 px），前景 73.2% 像素逐位相同、99.71% 差 ≤2、孤立尾峰 15（mip/quad 插值固有噪声）、均值偏移 0.019（无系统性光照错配）——等价非逐位，口径偏离计划原话「逐像素一致」已如实落档 S7-PLAN；pulling 双后端 near（23 px ±1）；normal-reference 双后端 bytes；run.bat all exit 0；verify.py exit 0；server.py --check exit 0。收口四项自查：①渲染交代物——`example/s7-pulling/` 4 张基线 + run.bat + verify.py + cases.json s7.1 卡 3 条 + `--check` 退出 0；②工具交代物——**无**（本轮无独立工具产出）；③MILESTONES 四栏（本节）；④固化——S7-PLAN M7.1 勾选 + 落地实录 + UE-DIFFS D16 + ASan 诊断方法存档（`/fsanitize=address` + dbghelp 符号化，临时改动未入库）。
+
+**踩坑情况**
+1. **【既有 bug 修复】runNormal 漏传 sceneMode（实参错位一格）**：ECS 合并把 `Renderer::create` 的 `sceneMode` 插在 hizMode/visbufMode 之间，runScene 调用点同步了、runNormal 漏了 → `--mode visbuf` 实参整体右移一格（visbufMode=true 落进 sceneMode 槽）→ dispatch `if (sceneMode) sceneOk = true` 空 Scene 空跑 → 首帧 ensurePipelines 掉进 model 分支解引用 null shader → visbuf 家族双后端堆损坏崩溃。normal/cull/dag/hiz 各参恰好全 false 幸存，故 M7.0 验收后一直潜伏。bisect 定位到合并提交后，ASan + dbghelp 符号化（validation-device.cpp:1119 ← scene.cpp model 分支）一锤定音。修复 = runNormal 调用点补 `/*sceneMode=*/false`。
+2. **【M7.1 bug】6 个 matResolve 资源句柄漏加进 `Scene::shutdown()`**：退出时 matResolvePSO_ 活到 device 析构之后，RootSignature 释放摸 device 内部已释放缓存（ASan heap-use-after-free 实锤，栈指 `Scene::~Scene`）。修复 = shutdown() 补 6 句柄。**新增 GPU 资源必须同步 shutdown()**，与「slot 级同步表必进 createTargets()」同级纪律。
+3. **管道假阴性**：`viewer | tail` 后 `$?` 是 tail 的退出码——19:06 的「exit 0」全是假阴性，一度误判 VK/DX12 行为翻转。此后烟测一律无管道直取退出码。
+4. **bisect 中间态误读**：两次括号手术改坏 scene.cpp → 构建失败 exit 1 被误读为「不崩」，浪费两轮；构建命令用 `&&` 短路时后半（VULKAN 构建）根本没跑，旧 exe 被当成新代码测。教训：**每次烟测前先核对 exe mtime + 构建日志存在性**。
+5. **kStage bump 波及符合预期**：HUD 首行 stage 文字变化 → m0.9/pbr-direct 的 4 张 --hud 基线按纪律重拍（512 px maxDelta 240 全部是 stage 字样区），重拍后 spot 回归三条全 bytes。
+
+**下一步**：M7.2 多材质 + 对照验收（materialId 间接表走 bindless、≥3 材质模型、传统 GBuffer 对照模式保留；S7 收口 tag `s7-done`）。
