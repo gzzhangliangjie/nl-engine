@@ -5127,7 +5127,7 @@
         "selftest ecs-parallel 6 用例 30 断言 PASS：求解边数与 dot 确定性、真并行重叠证明（自旋互等双双通过）、并行==串行逐位对拍（3 帧链式系统 JSON dump 相等）、裸类型保守写、结构变更守卫（违约 false + err 含 forbidden/offending API、违约后 World 可继续用）、firstTick 恰一次",
         "稳定性：DX12 连跑 5 遍全 PASS；VULKAN nanite-scene 同套件 PASS；nanite-scene selftest --all 5 suite 全绿（旧 suite 零回归）",
         "渲染护栏：--only ecs-e1b 8/8 ALL GREEN（core-only 改动，kStage 不 bump，基线逐字节不变）",
-        "工具链 example/ecs-parallel/run-parallel.bat exit 0：usage 负向 exit 2 / 正向 verbose selftest / parallel-dot 真实求解 DOT / unknown-suite 负向 exit 2 + 2 张证据 PNG（scripts/make-ecs-parallel-evidence.py 从真实日志渲染）"
+        "工具链 example/ecs-parallel/run.bat exit 0：usage 负向 exit 2 / 正向 verbose selftest / parallel-dot 真实求解 DOT / unknown-suite 负向 exit 2 + 2 张证据 PNG（scripts/make-ecs-parallel-evidence.py 从真实日志渲染）"
       ],
       "exe": {
         "dx12": "build/DX12/nanite-scene.exe",
