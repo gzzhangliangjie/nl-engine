@@ -2,6 +2,7 @@
 
 > 对应总路线 `docs/ROADMAP.md` 的 **A 类并行轨道**（引擎化 / 非渲染，不进 `kStage`）。本计划把 P8 引擎化的「并发地基」前置为独立可验收轨道——它**现在就能开**（纯底层、零 GPU 依赖），第一个真实消费者是**离线管线**（`nanite-tools` / `core` 离线部分）。
 > 性质：S*-PLAN 风格里程碑草案。立项前已按铁律读三处参考（bevy_tasks / UE TaskGraph / Carrot）+ 开发历史（MILESTONES / ROADMAP / MEMORY / S-PLAN 格式样张 `s15/S15-PLAN.md`）。
+> **本文是 job 轨道唯一权威计划文档（2026-11-09 归并）**：原 `docs/p8/JOB-REUSE-REVIEW.md`（复用面 Review）已整段并入本文 §复用面盘点 / §M-J5，不再保留副本；其它文档中的待接消费者描述保持原样，本文 §消费者登记表只做指针索引，不复制正文，避免多处维护漂移。
 
 ---
 
@@ -70,6 +71,99 @@
 - [ ] **不在本轨道当前范围**：等 P9 V4 真实需要独立流式线程时再落，避免提前引入复杂度。
 - **自检**：仅接口桩 + 设计说明；无功能验收。
 
+> **能力边界（2026-11-09 复核，写死）**：M-J0~J3 交付的是「离线确定性批处理专用线程池」——只覆盖三处参考共识里的 (a) 数据并行 + (b) 同步 fork-join；缺 (c) 异步 lane / 跨帧长任务、(d) 前置依赖图（即 M-J4 留白）。池目前由消费者各自局部构造（`ThreadPool pool(...)`），无进程级常驻实例；因此**渲染运行时帧管线接入不在能力范围内**，需先完成 M-J5 升池。这不是欠账，是按 M-J4 已拍板边界交付的完整成果。
+
+### M-J5（待拍板）扩大复用面：从离线批处理件到进程级调度底座
+
+> **状态（2026-11-09）**：仅完成前置盘点与计划草案，**未开工、未改码、未占坑、未打 tag**。`wt_pool status` 显示 `job-system` 轨道为 **CLOSED**，claim 会被硬拒；重启属范围变更，须先批准并确认里程碑编号。
+
+- **目标**：把池从「每次调用 new 一个的局部工具」升成进程级常驻调度底座，并把已用别的方案 / 仍串行的真实消费者接回来，让「并发地基」名副其实。
+- **亲眼可见的用例**（A 类轨道工具版交代）：① 材质图热重载 4 路 slangc 并行的 wall-clock 对比图（每次改图都跑，收益直接可见）；② `anim-tools` 批量帧 dump 并行 vs 单线程逐字节一致报告；③ Jolt `JobSystem` 适配后的 selftest 输出；④ 负向用例（count=0 / 异常路径 exit 码）。
+- **验收判据**：
+  - **A 档**：产物 / 输出与单线程参考**逐字节一致**（硬判据，任何 MD5 不一致即 FAIL）；附耗时对比表；不进 `kStage`、不进渲染回归。
+  - **B 档**：常驻池 + 依赖计数 / barrier 单测（对 UE `TGraphTask::CreateTask(Prerequisites)` 与 Carrot `Async::Counter` 口径）；Jolt 适配后 selftest 全绿；ECS system 并行 vs 串行状态逐字段一致。
+  - **确定性契约**：物理 M-P0「逐样本位一致」若因换并行需放宽为「同线程数配置下逐样本位一致」，**单独拍板，不默认改**。
+- **范围分档**：A = #1/#3/#5/#7（零架构障碍，可先落）；B = #2 Jolt 适配 + #4 ECS system 调度（M-J5 实质内容，需升池）；C = #8~#12 保留现状；#6 为已在案合流点。详见 §复用面盘点。
+- **放行**：四项拍板齐全 → 按 `AGENTS.md` 铁律出三处参考对照 → 登记占坑 → 落码；tag 在验收后打。
+
+#### M-J5 开工前待拍板（四项）
+
+1. **编号与轨道**：M-J5 是否成立？`job-system` 轨道当前 CLOSED，重启属范围变更，需批准。
+2. **范围**：只做 A 档，还是 A + B 一起（B 决定池要不要升依赖图 / 常驻化）。
+3. **#2 单独项**：若做 Jolt 适配，M-P0 确定性契约是否允许放宽，须明确拍板，不默认改。
+4. 结论确认后按 `AGENTS.md` 铁律出 M-J5 实施细节 + 三处参考对照，再动手落码。
+
+---
+
+## 复用面盘点（M-J5 前置，2026-11-09）
+
+> 2026-11-09，归并自原 `docs/p8/JOB-REUSE-REVIEW.md`。性质：**只读盘点 + 结论落档**，未改任何代码、未占坑、未打 tag。
+> 触发：用户「已有的那些用了别的方案的也要 review 一下，看看能不能用回来」。
+> 底线：`core/jobs/` 零图形符号；`nl_core` 静态库已被全部工具链接（CMakeLists.txt:139），**任何 core 层 / 工具层消费者接入无需新增链接依赖**。
+
+### 本轮读过的证据
+
+#### 三处参考（按铁律定向读，只学与 job 系统覆盖面对应的模块）
+
+| 来源 | 文件 | 结论 |
+|---|---|---|
+| bevy | `crates/bevy_tasks/src/usages.rs:57-75`、`slice.rs:44-52/141-143` | `ComputeTaskPool`（帧内必须完成）/ `AsyncComputeTaskPool`（跨帧）/ `IoTaskPool`（阻塞 IO）三池分流；`par_chunks_map` 用 `scope.spawn` 逐块、按 index 回收。**分池 + 按类型挑池是常态**。 |
+| UE5 | `Core/Public/Async/ParallelFor.h:84-116/481-496`、`TaskGraphInterfaces.h:272-447` | `ParallelFor` 有 `MinBatchSize` / `ForceSingleThread` / `PumpRenderingThread`；TaskGraph 有 `WaitUntilTasksComplete` / `ProcessThreadUntilIdle` / `ENamedThreads`。**命名线程 + 前置依赖 + 等待**是工业口径；`ParallelFor` 允许在渲染线程帮忙执行，帧内数据并行不是禁区。 |
+| Carrot | `engine/task/TaskScheduler.h:102-186`、`.cpp:23-26/237-271/282-302`、`engine/physics/PhysicsSystem.h:159-161`、`.cpp:117` | 4 条 `TaskLane`（MainLoop / Rendering / FrameParallelWork / AssetLoading）+ fiber + `Async::Counter` 依赖计数；`parallelFor` 走 lane 调度、主线程参与。**关键**：`PhysicsSystem.h` 注释明写「you would implement the JobSystem interface yourself and let Jolt Physics run on top of your own job scheduler. JobSystemThreadPool is an example implementation」——第三方库的 JobSystem 接口本就应由引擎自己的调度器实现。Carrot 用的是 Jolt 自带 `JobSystemThreadPool`，是「没接管」的示例，不是正解。 |
+
+#### 开发历史
+
+本文 M-J0~J4 全篇、`docs/MILESTONES.md` P8 M-J0~J3 段、`docs/PARALLEL-TRACKS.md` §2.2/§2.4/§7、`docs/NON-RENDER-ROADMAP.md:28/43/63`、`docs/ROADMAP.md` P9 V4 段、`docs/p8/P8-{ECS,NAV,PHYS,AUDIO,SCRIPT}-PLAN.md`、`.workbuddy/memory/2026-11-09.md`、`MEMORY.md`（注入）。
+
+### 盘点清单：哪些地方「用了别的方案」
+
+| # | 落点 | 现在用的方案 | 能不能换回 `nl::core::jobs` | 判断 / 障碍 |
+|---|---|---|---|---|
+| 1 | `core/src/material_graph/compile.cpp:69-72`、`material-graph-tools/main.cpp:272-275` | **4 路 `std::system("slangc ...")` 全串行**（spirv×2 + dxil×2），编辑器 Compile 与 check/watch 各一份重复实现 | ✅ **能，零架构障碍** | 四路互不依赖、各写各的输出文件；`scope<bool>` 4 spawn 即可，结果按 spawn 序汇总。热重载每次都跑，wall-clock 收益直接可见。坑：① 两份实现要同步改（或抽共用 `recompileGraph`）；② `report +=` 是共享写，必须改按序收集；③ 需实测 `system()` 多线程并发拉 cmd.exe 是否干净（不同进程，dxcompiler.dll 无共享状态，理论安全）。 |
+| 2 | `thirdparty/jolt/Jolt/Core/JobSystem.h:150-166` + `nl/physics/World.cpp:160/299/433`（feat/physics） | **Jolt 自带 `JobSystemSingleThreaded`**；M-P0 确定性契约 = 单线程 + 1/60 + collisionSteps 1 | ⚠️ **技术上最该换回，但要升池 + 拍板** | Jolt 的 `JobSystem` 是可实现的抽象接口（`CreateJob` 带 `inNumDependencies`、`Barrier::AddJob`、`WaitForJobs` 支持等待期动态加 job），把它适配到自家池 = 让物理跑在引擎调度器上，是「并发地基」名副其实的落点。障碍：我们的池只有同步 fork-join + 无依赖 `spawn`，**表达不了依赖计数 / barrier**（正是 M-J4 留白的 (d) 前置依赖图）；且换并行会破 M-P0 已固化的「逐样本位一致」确定性契约，须单独拍板是否放宽。 |
+| 3 | `core/src/anim/skinning.cpp:100/121`（`skinPositions`/`skinNormals`）、`computePalette:87` | 逐顶点 / 逐骨骼**串行纯函数循环** | ✅ **离线段能，帧内段要等常驻池** | 只读 palette/base、写各槽位，天然 `parallelFor`，确定性最好保。`anim-tools` 批量帧 dump（`fkdump`/`skindump`）现在就能接；`renderer/src/scene.cpp:2378` 每帧调用点若接「每次 new 一个池」会亏，须先升常驻池。**注意**：CPU 并行不替代已定的 GPU 调色板升级路线，只作过渡/离线收益。 |
+| 4 | `core/src/scene/World.cpp:209-210` `World::tick` | 逐 `System*` **串行** `tick(dt)` | ⚠️ 能，但需依赖图 | 要安全并行得先有 system 间读写集 / 前置依赖声明（bevy access conflict / UE prerequisites 口径），否则 World 增删实体与 system tick 互相踩。50 物体规模本身收益存疑，价值在「把池升成调度底座」的验证消费者。 |
+| 5 | `nanite-tools/main.cpp:777` `check-orient` 多 target | 串行 for 循环（单 target 内已用 spatial hash 把 45min→4.9s） | ✅ 能，收益小 | 多 target 独立，`scope` 可并行。不是瓶颈，顺手做。 |
+| 6 | `docs/p8/P8-NAV-PLAN.md:45` 多 tile 并行烘焙 | **计划里已写明用 Job 系统合流**（「原 parallel_for 分块体素化作废，合流仅用于多 tile 并行烘焙，逐 tile MD5 一致」） | ✅ 已登记，不是别的方案 | M-N3 开工时复核任务卡写明「吃 `nl::core::jobs`，不自写 `std::thread`」即可。 |
+| 7 | `docs/PARALLEL-TRACKS.md:81` 动作系统多 clip / 多骨骼并行采样 | 登记为「可选吃 Job 系统」，实际未接 | ✅ 能 | 与 #3 同一批 core 层纯函数，一并纳入。 |
+| 8 | `tools/regression.py:48/327` | Python `ThreadPoolExecutor`（用例间并行、同用例双后端串行） | ❌ **不该换** | 并行单位是「起 viewer.exe 进程」，跨语言/跨进程；C++ 进程内池够不着。它已有同款确定性纪律（`records.sort` 按用例表定序，regression.py:332-339），属同构不同层，不是漏接。 |
+| 9 | 音频 miniaudio `ma_engine` / `ma_device` 回调线程 | 库内部实时音频线程 | ❌ **不该换** | 实时回调有硬实时约束，塞通用线程池会 glitch。库边界，非漏接。（旧 OpenAL 路线的 `AudioThread` 已随方案变更作废，P8-AUDIO-PLAN:70） |
+| 10 | 脚本轨道 .NET hosting / collectible ALC 热更 | CLR 自带线程池 / GC 线程 | ❌ 不该换 | 跨运行时边界。 |
+| 11 | `tools/showcase/server.py`、`tools/wt_pool.py`、`scripts/make-*-glb.py` | `subprocess` 起进程 / 串行生成 | ❌ 不该换 | 进程编排与资产生成，非 CPU 并行任务。 |
+| 12 | GPU 侧 cull / DAG 遍历 / Hi-Z（renderer + *.slang） | GPU compute 并行 | ❌ 不属本范畴 | 与 CPU job 系统是两套并行域，别混为一谈记漏账。 |
+
+### 分档结论
+
+- **A 档 · 立刻能用回来（零架构改动，纯 core/工具层）**：#1 四路 slangc 编译并行、#3 离线动画批量帧、#5 check-orient 多 target、#7 多 clip 采样。判据照旧：产物 / 输出逐字节一致 + 工具版交代 + 负向用例，不进 `kStage`、不进渲染回归。
+- **B 档 · 要先把池升成调度底座（M-J5 真正的内容）**：#2 Jolt `JobSystem` 适配、#4 ECS system 调度。前提 = 常驻池 + 依赖计数 / barrier（对 UE `TGraphTask::CreateTask(Prerequisites)` 与 Carrot `Async::Counter` 口径）+ 分池（对 bevy 三池 / Carrot 四 lane）。**#2 还需单独拍板物理确定性契约是否放宽**，不得默认改。
+- **C 档 · 保留现状，不算欠账**：#8~#12，跨语言 / 跨进程 / 库内部线程 / 实时约束 / GPU 域。
+- **#6 是已在案的合流点**，开工时落实即可。
+
+---
+
+## 消费者登记表（待接，只做指针索引）
+
+> 本表只做**索引**，权威正文仍在各自文档，本文不复制、不替代；改动消费者描述请改原文档，避免多处维护漂移。
+
+| 消费者 | 权威落点 | 触发条件 | 归属 | 状态 |
+|---|---|---|---|---|
+| 多 tile 并行烘焙 | `docs/p8/P8-NAV-PLAN.md:45` | M-N3 开工 | 已在案（#6） | 已写明吃 Job 系统 + 逐 tile MD5 一致；任务卡复核「不自写 `std::thread`」即可 |
+| 动作系统多 clip / 多骨骼采样 | `docs/PARALLEL-TRACKS.md:81`、`§7` 增量阶梯第四级 | 多角色 / 混合树 | A 档（#7） | 可选登记，实际未接 |
+| ECS system 并行调度 | `docs/p8/P8-ECS-PLAN.md`（E1b 渲染集成） | E1b | B 档（#4） | 需读写集 / 前置依赖声明；E1a 是纯逻辑内核，现无 system 调度器 |
+| Jolt `JobSystem` 适配 | `docs/p8/P8-PHYS-PLAN.md` + feat/physics `nl/physics/World.cpp` | M-J5 B 档拍板 | B 档（#2） | 依赖计数 / barrier + M-P0 确定性契约待拍板 |
+| P9 V4 residency / `IoTaskPool` | `docs/ROADMAP.md` P9 V4 段 + 本文 M-J4 | 超显存超大场景 + 独立流式线程 | M-J4 | 不排期，仅接口桩预留 |
+| 材质图 4 路编译 / 离线动画批量帧 / `check-orient` 多 target | 本文 §复用面盘点 #1/#3/#5 | 立即可接 | A 档 | 零架构障碍 |
+
+---
+
+## M-J5 不变量与已固化踩坑
+
+- `nl_core` 静态库已被全部工具链接（CMakeLists.txt:139），core / 工具层接入**无需新增链接依赖**；Job 系统只放 `core/jobs/`，图形 API / NVRHI / ImGui 符号零触及。
+- `parallelFor` **不可嵌套**（M-J0 写死）；多线程不可并发调同一实例；`spawn` 可嵌套但任务不得阻塞等待其它任务（M-J1，无前置依赖图）。
+- 池目前**无常驻实例**（消费者各自局部构造）；M-J5 升池之前不接帧内循环——每次 new 一个池会亏，且会污染帧时间与确定性判据。
+- **4 路 slangc 有两份重复实现**：编辑器 `compile.cpp` 走 `_mg_ed_*`，工具 `main.cpp` 走 `_mg_hot_*`；B4-PLAN 写的「check/watch 都走 recompileGraph，无重复实现」与实际不符。并行化时两处要同步改，或按原计划抽共用函数；`report +=` 是共享写，必须改成按 spawn 序收集。
+- 确定性是硬判据：并行化**不允许**改变输出，任何 MD5 不一致即 FAIL；任何为提速牺牲产物确定性的改法都禁止。
+
 ---
 
 ## 支线任务（2026-11-08 登记）：可视化证据图补交
@@ -97,6 +191,7 @@
 | M-J2 cluster / stat 并行 | 2~3 天 | `job-cluster` |
 | M-J3 simplify / dag 并行 | 3~4 天 | `job-offline` |
 | M-J4 命名线程（可选） | 不排期 | — |
+| M-J5 扩大复用面（待拍板） | 待定 | — |
 
 ---
 
@@ -125,3 +220,5 @@
 - 不引入第三方线程库（标准库 + 自写池足够，与「构建链不依赖厂商 SDK / 重依赖」一致）；bevy / UE 只学结构与边界处理，一行不抄。
 - 并行化离线管线时**先保确定性、再谈加速比**；任何为提速而牺牲产物确定性的改法都禁止。
 - 不动 S0~S14 编号；本轨道与渲染主线零冲突，可随时插做。
+- **单一源**：本文是 job 轨道唯一权威计划文档；待接消费者在其它计划文档里的描述保持原样，本文 §消费者登记表只做指针索引、不复制正文。盘点与实施计划同处一份，避免状态漂移。
+- **M-J5 未获批准前不得占坑 / 改码**：`job-system` 轨道 CLOSED，claim 会被硬拒；范围变更须用户明确批准编号与范围后再动。
