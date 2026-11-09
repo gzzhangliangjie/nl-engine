@@ -1,0 +1,21 @@
+  ok   job does not run before launch (creator-hold contract)
+  ok   create+launch runs single job to done
+  ok   null handle converts to false
+  ok   null handle isDone is false
+  ok   null handle removeDependency returns false
+  ok   manual release chain (Jolt pattern) orders A before B
+  ok   link accepts unpublished downstream
+  ok   linked chain executes strictly in order
+  ok   diamond links accepted
+  ok   diamond join runs exactly once
+  ok   diamond join runs after both branches
+  ok   fan-in 64->1 join runs exactly once
+  ok   fan-out 1->64 all complete
+  ok   barrier waits mixed done+queued jobs
+  ok   dynamic AddJob during wait is honored (Jolt contract)
+  ok   saturated pool: helping wait prevents starvation (no deadlock)
+  ok   same graph reruns bit-identical (resident determinism)
+  ok   job survives creator handle destruction (queue self-ref)
+  ok   link after publish is rejected (negative)
+  ok   over-release after queue is rejected (counter never wraps)
+jobsync selftest: PASS (20 cases)

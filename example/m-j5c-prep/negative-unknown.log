@@ -1,0 +1,1 @@
+selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler, jobsync)

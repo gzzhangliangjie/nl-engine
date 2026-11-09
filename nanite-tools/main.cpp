@@ -13,6 +13,7 @@
 #include "nl/core/jobs.hpp"      // P8 M-J0：线程池 + parallel_for
 #include "nl/core/jobgraph.hpp"  // P8 M-J5a：显式依赖 DAG（vendored Taskflow 薄封装）
 #include "nl/core/scheduler.hpp" // P8 M-J5b：进程级常驻调度底座（compute/io 分池）
+#include "nl/core/jobsync.hpp"   // P8 M-J5c-prep：动态依赖计数 job + Barrier（Jolt 合约同构）
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -60,7 +61,8 @@ void printUsage() {
         "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n"
         "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n"
         "  nanite-tools selftest jobgraph           P8 M-J5a dependency DAG / cycle / determinism\n"
-        "  nanite-tools selftest scheduler           P8 M-J5b resident Scheduler / compute+io pools / compat\n");
+        "  nanite-tools selftest scheduler           P8 M-J5b resident Scheduler / compute+io pools / compat\n"
+        "  nanite-tools selftest jobsync             P8 M-J5c-prep dynamic dependency counter / barrier / helping wait\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -3409,6 +3411,269 @@ int selftestScheduler() {
     return 1;
 }
 
+// ---- selftest jobsync：M-J5c-prep 动态依赖计数 + Barrier（Jolt JobSystem 同构，零 Jolt 头）----
+// Jolt 接入桩三支柱各带机械用例：动态依赖计数 / 等待期动态 AddJob / 帮跑不饿死；
+// 全部跑在常驻 Scheduler::compute() 上；老 jobs selftest 25 项为回归护栏独立复跑。
+int selftestSync() {
+    using nl::core::jobs::Barrier;
+    using nl::core::jobs::JobHandle;
+    using nl::core::jobs::JobSync;
+    using nl::core::jobs::Scheduler;
+    using nl::core::jobs::ThreadPool;
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    Scheduler::configure(4, 2);
+    Scheduler& sch = Scheduler::instance();
+    ThreadPool& pool = sch.compute();
+
+    // 1) create + launch：单任务执行且 Done；launch 前不跑（创建者持有契约 1）
+    {
+        std::atomic<bool> ran{false};
+        JobHandle h = JobSync::create([&] { ran.store(true); }, pool);
+        bool before = !ran.load() && !h.isDone();
+        JobSync::launch(h);
+        JobSync::wait(h, pool);
+        check(before, "job does not run before launch (creator-hold contract)", "");
+        check(ran.load() && h.isDone(), "create+launch runs single job to done", "");
+    }
+
+    // 2) null 句柄负向：不崩、返回安全值
+    {
+        JobHandle nullH;
+        check(!static_cast<bool>(nullH), "null handle converts to false", "");
+        check(!nullH.isDone(), "null handle isDone is false", "");
+        check(!nullH.removeDependency(), "null handle removeDependency returns false", "");
+    }
+
+    // 3) Jolt 手动释放链（Jolt 头注释同款用法）：子 job numDeps=1，父体尾 child.removeDependency()
+    {
+        std::atomic<int> order{0};
+        std::atomic<int> aOrder{-1}, bOrder{-1};
+        JobHandle child = JobSync::create([&order, &bOrder] { bOrder.store(order.fetch_add(1)); },
+                                          1, pool);                 // 带 1 个外部依赖
+        JobHandle parent = JobSync::create([&order, &aOrder, &child] {
+            aOrder.store(order.fetch_add(1));
+            child.removeDependency();                               // 父体尾显式释放（Jolt 模式）
+        }, pool);
+        JobSync::launch(child);                 // 释放创建者持有（剩 1 个外部依赖由父体释放）
+        JobSync::launch(parent);
+        JobSync::wait(parent, pool);
+        JobSync::wait(child, pool);
+        check(aOrder.load() == 0 && bOrder.load() == 1,
+              "manual release chain (Jolt pattern) orders A before B", "");
+    }
+
+    // 4) link 线性链 A→B→C：严格按序
+    {
+        std::atomic<int> order{0};
+        std::atomic<int> o[3]{{-1}, {-1}, {-1}};
+        JobHandle c = JobSync::create([&order, &o] { o[2].store(order.fetch_add(1)); }, pool);
+        JobHandle b = JobSync::create([&order, &o] { o[1].store(order.fetch_add(1)); }, pool);
+        JobHandle a = JobSync::create([&order, &o] { o[0].store(order.fetch_add(1)); }, pool);
+        bool l1 = JobSync::link(a, b);
+        bool l2 = JobSync::link(b, c);
+        JobSync::launch(a);
+        JobSync::launch(b);         // 释放创建者持有（仍被 a 的依赖计数压住，不会早跑）
+        JobSync::launch(c);
+        JobSync::wait(c, pool);
+        check(l1 && l2, "link accepts unpublished downstream", "");
+        check(o[0].load() == 0 && o[1].load() == 1 && o[2].load() == 2,
+              "linked chain executes strictly in order", "");
+    }
+
+    // 5) 菱形 A→B,C→D：join 恰一次且最后
+    {
+        std::atomic<int> order{0};
+        std::atomic<int> runsD{0}, oB{-1}, oC{-1}, oD{-1};
+        JobHandle d = JobSync::create([&] { runsD.fetch_add(1); oD.store(order.fetch_add(1)); }, pool);
+        JobHandle b = JobSync::create([&order, &oB] { oB.store(order.fetch_add(1)); }, pool);
+        JobHandle c2 = JobSync::create([&order, &oC] { oC.store(order.fetch_add(1)); }, pool);
+        JobHandle a = JobSync::create([] {}, pool);
+        check(JobSync::link(a, b) && JobSync::link(a, c2) && JobSync::link(b, d) && JobSync::link(c2, d),
+              "diamond links accepted", "");
+        JobSync::launch(a);
+        JobSync::launch(b);         // 释放创建者持有（依赖计数压住，不会早跑）
+        JobSync::launch(c2);
+        JobSync::launch(d);
+        JobSync::wait(d, pool);
+        check(runsD.load() == 1, "diamond join runs exactly once", "");
+        check(oD.load() == 2 && oB.load() >= 0 && oC.load() >= 0 && oB.load() != oC.load(),
+              "diamond join runs after both branches", "");
+    }
+
+    // 6) fan-in 64→1：join 恰一次
+    {
+        std::atomic<int> runs{0};
+        JobHandle join = JobSync::create([&runs] { runs.fetch_add(1); }, pool);
+        std::vector<JobHandle> leaves;
+        bool linked = true;
+        for (int i = 0; i < 64; ++i) {
+            JobHandle leaf = JobSync::create([] {}, pool);
+            linked = linked && JobSync::link(leaf, join);
+            JobSync::launch(leaf);
+            leaves.push_back(std::move(leaf));
+        }
+        JobSync::launch(join);
+        JobSync::wait(join, pool);
+        check(linked && runs.load() == 1, "fan-in 64->1 join runs exactly once", "");
+    }
+
+    // 7) fan-out 1→64：全部完成
+    {
+        std::atomic<int> done{0};
+        JobHandle root = JobSync::create([] {}, pool);
+        std::vector<JobHandle> outs;
+        for (int i = 0; i < 64; ++i) {
+            JobHandle out = JobSync::create([&done] { done.fetch_add(1); }, pool);
+            JobSync::link(root, out);
+            JobSync::launch(out);   // 释放创建者持有（被 root 压住）
+            outs.push_back(std::move(out));
+        }
+        JobSync::launch(root);
+        for (auto& h : outs) JobSync::wait(h, pool);
+        check(done.load() == 64, "fan-out 1->64 all complete", "");
+    }
+
+    // 8) Barrier 混合：已完成 + 排队中
+    {
+        Barrier bar(pool);
+        JobHandle doneJob = JobSync::create([] {}, pool);
+        JobSync::launch(doneJob);
+        JobSync::wait(doneJob, pool);
+        std::atomic<bool> ran{false};
+        JobHandle queued = JobSync::create([&ran] { ran.store(true); }, pool);
+        JobSync::launch(queued);
+        bar.addJob(doneJob);        // 已完成 → 即时对冲
+        bar.addJob(queued);
+        bar.wait();
+        check(ran.load() && bar.done() && queued.isDone(),
+              "barrier waits mixed done+queued jobs", "");
+    }
+
+    // 9) 等待期动态 AddJob（Jolt 合约 b）：慢任务撑开栅栏，另一线程 wait 中追加
+    {
+        Barrier bar(pool);
+        JobHandle slow = JobSync::create([] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        }, pool);
+        JobSync::launch(slow);
+        bar.addJob(slow);
+        std::atomic<int> runs{0};
+        std::thread t([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            JobHandle late = JobSync::create([&runs] { runs.fetch_add(1); }, pool);
+            bar.addJob(late);       // wait 期间动态加入（无法预先建全图）
+            JobSync::launch(late);
+        });
+        bar.wait();                 // 主线程帮跑等待
+        t.join();
+        check(runs.load() == 1 && bar.done(),
+              "dynamic AddJob during wait is honored (Jolt contract)", "");
+    }
+
+    // 10) 满池不饿死（Jolt 合约 c 帮跑）：2x 线程数的 blocker 各自 body 内等含 1 payload 的栅栏
+    {
+        const unsigned nb = pool.threadCount() * 2;
+        struct Item {
+            Barrier* bar = nullptr;
+            std::atomic<bool> payloadRan{false};
+        };
+        std::vector<Item> items(nb);
+        std::vector<JobHandle> blockers;
+        for (unsigned i = 0; i < nb; ++i) {
+            items[i].bar = new Barrier(pool);
+            Barrier* bar = items[i].bar;
+            Item* it = &items[i];
+            JobHandle payload = JobSync::create([it] { it->payloadRan.store(true); }, pool);
+            JobSync::launch(payload);          // 已入队（可能被忙着的 blocker 挤在队列里）
+            bar->addJob(payload);
+            JobHandle blocker = JobSync::create([bar] { bar->wait(); }, pool);
+            JobSync::launch(blocker);
+            blockers.push_back(std::move(blocker));
+        }
+        for (auto& h : blockers) JobSync::wait(h, pool);
+        bool all = true;
+        for (auto& it : items) if (!it.payloadRan.load()) all = false;
+        check(all, "saturated pool: helping wait prevents starvation (no deadlock)", "");
+        for (auto& it : items) delete it.bar;
+    }
+
+    // 11) 常驻多轮确定性：同图复跑 2 轮结果逐位一致
+    {
+        auto runGraph = [&pool](std::vector<std::uint64_t>& out) {
+            out.assign(8, 0);
+            std::atomic<int> joins{0};
+            JobHandle join = JobSync::create([&joins] { joins.fetch_add(1); }, pool);
+            std::vector<JobHandle> ws;
+            for (int i = 0; i < 8; ++i) {
+                JobHandle w = JobSync::create([i, &out] {
+                    std::uint64_t s = 0;
+                    for (int k = 0; k < 10000; ++k) s += std::uint64_t(i) * std::uint64_t(k);
+                    out[std::size_t(i)] = s;
+                }, pool);
+                JobSync::link(w, join);
+                JobSync::launch(w);
+                ws.push_back(std::move(w));
+            }
+            JobSync::launch(join);
+            JobSync::wait(join, pool);
+            return joins.load() == 1;
+        };
+        std::vector<std::uint64_t> r1, r2;
+        bool j1 = runGraph(r1), j2 = runGraph(r2);
+        check(j1 && j2 && r1 == r2, "same graph reruns bit-identical (resident determinism)", "");
+    }
+
+    // 12) 生命周期：创建者句柄先析构，job 由池闭包自持引用跑完（句柄复制计数正确）
+    {
+        std::atomic<bool> ran{false};
+        {
+            JobHandle h = JobSync::create([&ran] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                ran.store(true);
+            }, pool);
+            JobHandle copy = h;                 // 复制 → 引用 +1
+            (void)copy;
+            JobSync::launch(h);
+        }                                       // 句柄全部析构 → 创建者引用释放；队列自持跑完
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        check(ran.load(), "job survives creator handle destruction (queue self-ref)", "");
+    }
+
+    // 13) 负向：downstream 发布后 link 拒绝
+    {
+        JobHandle u = JobSync::create([] {}, pool);
+        JobHandle d = JobSync::create([] {}, pool);
+        JobSync::launch(d);                     // d 已发布
+        bool rejected = !JobSync::link(u, d);
+        JobSync::launch(u);
+        JobSync::wait(u, pool);
+        JobSync::wait(d, pool);
+        check(rejected, "link after publish is rejected (negative)", "");
+    }
+
+    // 14) 负向：过度 removeDependency 防御（已归 0 后再减返回 false，计数不回绕）
+    {
+        JobHandle h = JobSync::create([] {}, pool);
+        bool first = h.removeDependency();      // 归 0 → 入队
+        bool over = h.removeDependency();       // 过度释放 → 拒绝
+        JobSync::wait(h, pool);
+        check(first && !over && h.isDone(),
+              "over-release after queue is rejected (counter never wraps)", "");
+    }
+
+    if (failures == 0) {
+        std::printf("jobsync selftest: PASS (20 cases)\n");
+        return 0;
+    }
+    std::printf("jobsync selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3427,7 +3692,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "jobs") return selftestJobs();
         if (argc >= 3 && std::string(argv[2]) == "jobgraph") return selftestJobGraph();
         if (argc >= 3 && std::string(argv[2]) == "scheduler") return selftestScheduler();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler)\n");
+        if (argc >= 3 && std::string(argv[2]) == "jobsync") return selftestSync();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler, jobsync)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

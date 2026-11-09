@@ -50,6 +50,14 @@ public:
 
     unsigned threadCount() const { return threadCount_; }
 
+    // ---- M-J5c-prep：动态依赖执行器的两个最小原语（jobsync 专用，与 parallelFor/scope 共用队列）----
+    // post：投递单任务。闭包自含计账与异常处理（worker 只负责取任务执行）。
+    void post(std::function<void()> fn);
+    // runOne：帮跑原语——若队列有任务则取出一并执行；返回是否取到。
+    // 供等待方（Barrier::wait / JobSync::wait）阻塞期参与执行，防「全池都在等、被等任务饿死」。
+    // 闭包应自含异常处理；此处兜底吞异常（与 workerLoop 同款）。
+    bool runOne();
+
     // ---- M-J1：scoped fork-join（仿 bevy pool.scope）----
     // 同步 fork-join：fn 内 spawn 的任务（含嵌套 spawn）全部完成后才返回；
     // 结果按 spawn 顺序收集（bevy scope 同款语义）；任一任务抛异常 → 全部 join 后重抛第一个。

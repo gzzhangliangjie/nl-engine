@@ -103,7 +103,8 @@
 |---|---|---|
 | **M-J5a** | ① vendored Taskflow 3.11.0 + `nl/core/jobgraph.hpp` 薄封装（环检测 / 登记序归并）；② 抽共用 `recompileGraph` 消除两份 4 路 slangc 实现；③ 4 编译 job → 1 汇总 job 的 fan-in DAG 接到真实消费者；④ selftest + 证据图 + 展示台卡 | **已验收，收口中**（2026-11-09） |
 | M-J5b | 进程级常驻 `Scheduler` + Compute/IO 分池 + 老 `ThreadPool` 兼容层 | **已验收，收口中**（2026-11-09） |
-| M-J5c | physics 合回 master 后接 `JPH::JobSystem`；ECS E1b 稳定后接 system 调度 | 延后（`ecs` ACTIVE M-E1b.1 / `physics` ACTIVE / `audio` M-S0 占坑，现在碰会撞在途树） |
+| M-J5c-prep | 动态依赖计数 job + Barrier（Jolt JobSystem 同构桩，**Jolt 无关**，接口先行解 physics/ECS 互等死锁） | **已验收，收口中**（2026-11-09，用户拍板「直接在这个 wt 做」） |
+| M-J5c | physics 合回 master 后写 `JoltJobSystem` 适配器（JPH CreateJob/RemoveDependencyAndQueue/Barrier → M-J5c-prep 原语）；ECS E1b 稳定后接 system 调度（走既有 jobgraph） | 延后收窄为「纯绑定」（原 M-J5c 的通用能力部分已由 M-J5c-prep 交付）；`ecs` ACTIVE M-E1b.1 / `physics` ACTIVE / `audio` M-S0 占坑，现在碰会撞在途树 |
 
 ### M-J5a 实施计划（2026-11-09，落码依据）
 
@@ -152,6 +153,20 @@
   2. **cases.json 整文件重写陷阱**：`json.dump(indent=1)` 把原手工维护的 2-space 对象 / 3-space 键缩进整文件重排（223+/124− 噪音 diff）；改用精确字符串插入（匹配 `m-j5a-mg` → `m-sc0` 边界的原生缩进），diff 收敛到 66+/2−。
   3. **证据图高度**：jobs 25 项初版画布高 520 裁掉末 6 项，提到 720 后完整（ViewImage 复核确认）。
   4. **jobs selftest 实测量 = 25 项**（计划文档笼统写「26 项」），以实测为准，计划文档口径待同步。
+
+#### 落地纪要（2026-11-09，M-J5c-prep 验收通过）
+
+- **动机（用户拍板）**：M-J5c 被 physics/ECS 两轨道阻塞，但两边互相等会死锁；用户拍板「接口先行」+「直接在这个 wt 做」。把 M-J4 留白 (d) 的**动态依赖图**正身打在本轨道（Taskflow 静态 DAG 覆盖不了 Jolt 的运行中生长图），原 M-J5c 收窄为「纯绑定」。
+- **交付**：`core/include/nl/core/jobsync.hpp` + `core/src/jobsync.cpp`（`JobHandle` 引用计数句柄 + `JobSync` create/launch/link/wait + `Barrier` 动态 AddJob/帮跑 wait）；`ThreadPool` 仅加 `post()`/`runOne()` 两个公开原语（与 parallelFor/scope 共用 `Impl.queue`，worker 循环零改动）；`nanite-tools` 加 `selftest jobsync` 套件（20 检查）+ help/派发；`example/m-j5c-prep/`（5 真实日志 + 3 证据图 + run.bat）、`cases.json` 新增 `m-j5c-prep` 卡（外科式插入 65+/0−）、`scripts/make-j5c-prep-evidence.py`。
+- **合约读证（AGENTS.md 决策前置）**：`thirdparty/jolt/Jolt/Core/JobSystem.h` 头注释三支柱——(a) 子 job 带依赖计数、父体尾显式 RemoveDependency 归 0 由 JobSystem 入队；(b) Barrier::AddJob 等待期间合法；(c) WaitForJobs 必须帮跑否则全池互等饿死。三支柱各有专属机械用例。零 Jolt 头。
+- **验收实测（DX12）**：`jobsync selftest: PASS (20 cases)`（创建者持有防早跑 / null 句柄 / Jolt 手动释放链 / link 线性链严格有序 / 菱形 join 恰一次 / fan-in 64→1 / fan-out 1→64 / Barrier 混合 / 等待期动态 AddJob / 满池帮跑不饿死 / 常驻多轮逐位一致 / 句柄先析构 job 仍完成 / 发布后 link 拒绝 / 过度释放防回绕）；回归护栏 jobs 25 项、scheduler 11 项、jobgraph 9 项全绿；负向 exit 1；`server.py --check` 退出 0。
+- **生命周期契约（固化，防早跑竞态）**：create 后计数 = numDependencies + 1（创建者持有）；链接完上游必须 `launch()`/`removeDependency()` 发布；**每个 job 的创建者持有都必须显式释放——link 压住的计数只防早跑、不代替发布**（selftest 死锁教训，见踩坑 1）；发布后 link 拒绝；过度释放防回绕。
+- **边界（写死）**：physics 继续用 `JobSystemSingleThreaded`，**M-P0 逐样本位一致契约一字不动**，翻并行开关须用户单独拍板；ECS 静态 system 依赖图走既有 jobgraph，不经本原语；同实例 ThreadPool 的 parallelFor/scope 串行边界不变。
+- **踩坑（固化）**：
+  1. **自测死锁**：link 只加下游依赖计数，下游「创建者持有」未释放 → `wait` 永等；线性链/菱形/fan-out 三处用例同病同修（发布 = launch 释放持有）。
+  2. **用例断言脑补**：菱形根 job 体为空没碰 order 计数，join 序号应为 2 不是 3。
+  3. **PASS 行硬编码用例数漂移**：检查从 14 加到 20 后汇总行没同步；以日志解析实测为准。
+  4. **friend 缺失**：`Barrier` 访问 `JobHandle::job_` 需显式 `friend class Barrier`。
 
 ---
 
