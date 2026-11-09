@@ -21,7 +21,7 @@
 
 ## 每轮任务必做的 4 步前置（checklist，缺一不可）
 
-> **第 0 步 · 对话开场归属声明（2026-11-09 用户拍板，见并行轨道纪律第 7 条）**：每个对话开场先声明本次归属的**里程碑编号**；用户没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记，然后才动手。
+> **第 0 步 · 对话开场归属声明（2026-11-09 用户拍板，见并行轨道纪律第 7 条）**：每个对话开场先声明本次归属的**里程碑编号**；用户没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记，然后才动手。**收尾必须对称释放（2026-11-09 用户拍板）**：本轮里程碑做完（或对话要结束时），`python tools/wt_pool.py release --track <轨道> --milestone <编号>` 释放占用——否则 `.wt_pool_busy.json` 里的锁一直挂着，其他对话全被挡。正常收尾不带 `--force`（`--strict` 可校验文档闸）；异常中断后接手清理才用 `--force`。
 
 1. **Carrot 代码** — `E:\UE_STUDY_2026\Carrot\engine\engine\render\` + `engine\resources\shaders\`（.slang）。
 2. **bevy 代码** — `E:\UE_STUDY_2026\bevy\crates\bevy_pbr\src\meshlet\` + `crates\bevy_solari\src\realtime\`。
