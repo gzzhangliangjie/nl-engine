@@ -53,6 +53,13 @@ HERE = Path(__file__).resolve().parent          # tools/
 ROOT = HERE.parent                              # repo root
 sys.path.insert(0, str(HERE / "showcase"))      # reuse the showcase module
 
+# Cross-tree gate (2026-11-10): refuse when cwd tree != this script's tree.
+# Kills the "wt session ran the MAIN tree's regression / rewrote MAIN-tree
+# baselines" contamination class. See tools/tree_gate.py.
+sys.path.insert(0, str(HERE))
+import tree_gate as _tree_gate  # noqa: E402
+_tree_gate.gate(__file__)
+
 import server as show  # noqa: E402  (module-level side effects: loads cases.json)
 
 # 产物目录可用环境变量覆盖（CI/沙箱场景：指向全新目录则全程零删除——

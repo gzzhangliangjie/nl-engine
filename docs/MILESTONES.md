@@ -1965,3 +1965,11 @@
 - **完成情况**：selftest 30/30 PASS（零/负/NaN dt、16ms 累积不 tick、100×16.7ms=100 tick、5000ms 截断=15 tick（python 预演 IEEE 15*kStep==0.25 精确成立）、暂停全冻结/恢复无爆发、×2=120 tick/×0.5=30 tick、scale10×100ms 封顶 15 tick、scale 边界、双跑逐位一致、reset 语义）；trace 240×16.7ms→240 tick simTime=4.0s + burst/pause/scale 混合序列→21 tick；**verify.py 独立 python 孪生实现逐行对拍全等（240/9 行）**——跨实现防假绿；run.bat ALL GREEN exit 0；ctest gl0 三条 DX12/VULKAN 双后端全过；双后端构建 OK + viewer selftest 16/16；acceptance.png 肉眼核验（节奏条=恒 60Hz 真实数据）。
 - **踩坑**：① bash 工具 cwd 不跨命令保持——`cd wt && git update-index` 实际打在主树（skip-worktree 误设主树 .workbuddy，已撤销重打）、构建脚本先拿成主树脚本空跑一次、ctest 落主树报 no tests；**根治 = 一律 `git -C <wt>` / `ctest --test-dir` / 绝对路径，不依赖 cd**；② 证据脚本一度写进主树 tools/（纪律 7.3 落错树），当场迁移；③ 证据图首版节奏条 160 帧×10px 超出画布宽被裁 + 中部大片空白，改 140 帧 + 压缩画布高；④ verify.py `--dt` 未按默认 240 帧展开致 IndexError，run.bat 首跑即拦（run.bat 的门起作用了）。
 - **下一步**：M-GL1 viewer 主循环接双帧 + `game.pause`/`game.timeScale` console + `--anim-time` 兼容（截图基线：暂停帧 simTime 不变、渲染帧 HUD 活）；M-GL2 接物理/音频/ECS 与 M-S3 合并收口。
+
+## 工具维护：wt_pool 树边界闸（不占里程碑坑，2026-11-10）
+
+- **动作**：用户报告「已占 wt 坑的对话仍经常越界对主树或其他 wt 操作」。§7.6 占坑闸只防「碰别人已 claim 的 wt」，不防「占坑会话自己伸手出去」——补两道机械闸：①`wt_pool.py scope` cwd 自查子命令（自己 wt=0 / 主树且有活跃 claim=2 警告 / 别的 wt 或未 claim=1 拒绝）；②新 `tools/tree_gate.py` 接进共享入口（`regression.py` / `showcase/server.py` / `reshot-hud-s71.py`）：脚本所在树 ≠ cwd 树 → exit 2，逃生口 `NL_TREE_GATE_ALLOW=1`。
+- **提交版本**：主树工具维护提交（无 tag，非里程碑）。
+- **完成情况**：selftest 21/21 ALL GREEN（新增 5 项 scope 断言）；真实验证——主树 --check exit 0、gameloop wt cwd 跑主树三脚本全部 exit 2、wt 内 `scope --milestone M-GL0` OK。
+- **踩坑**：server.py 原本没 import sys，树闸首次接线即 NameError（regression 连带 --help exit 1），补 import 后全通。
+- **固化**：AGENTS.md 并行轨道第 8 条 + PARALLEL-TRACKS.md §7.7；`wt_pool.py` 自身不接树闸（跨树工具设计使然）。

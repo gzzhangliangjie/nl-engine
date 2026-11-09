@@ -23,6 +23,7 @@ All output is ASCII English (repo HUD convention).
 
 Usage examples:
   python tools/wt_pool.py claim --track console --milestone M-C1 --note "session X"
+  python tools/wt_pool.py scope  [--milestone M-C1]   # cwd boundary self-check (2026-11-10)
   python tools/wt_pool.py check --track material-graph --op delete
   python tools/wt_pool.py status
   python tools/wt_pool.py release --track console --milestone M-C1
@@ -82,6 +83,12 @@ TRACKS = {
     "audio": {
         "wt": "E:/UE_STUDY_2026/nl-engine-audio",
         "branch": "feat/audio", "state": "planned",
+    },
+    "gameloop": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-gameloop",
+        "branch": "feat/gameloop", "state": "active",
+        "note": "M-GL0 opened 2026-11-10 by user instruction (plan "
+                "docs/p8/P8-GAMELOOP-PLAN.md); M-GL2 merges with M-S3",
     },
     "pbr-direct": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
@@ -503,6 +510,64 @@ def cmd_guard(args):
     sys.exit(0)
 
 
+def _norm(p):
+    return os.path.normcase(os.path.normpath(p)) if p else None
+
+
+def _inside(root, cwd):
+    r, c = _norm(root), _norm(cwd)
+    return bool(r and c and (c == r or c.startswith(r + os.sep)))
+
+
+def cmd_scope(args):
+    """cwd boundary self-check (2026-11-10): a claimed conversation must work
+    inside ITS OWN wt only. Running in the main tree (or another track's wt)
+    while claims are active is the cross-contamination class this gate kills.
+
+    Exit codes: 0 = OK, 1 = blocked, 2 = warning (main tree with active claims).
+    Convention: run `scope` right after `claim`, and again after any cd.
+    """
+    cwd = os.getcwd()
+    # 1. inside a registered track wt?
+    for track, info in sorted(TRACKS.items()):
+        if _inside(info["wt"], cwd):
+            locks = load_locks()
+            cur = locks.get(track)
+            if info["state"] == "closed":
+                fail("scope: cwd is inside '%s' but that track is CLOSED "
+                     "(merged to master, wt removed). Do not work here." % track)
+            if cur is None:
+                fail("scope: cwd is inside '%s' wt but the track has NO active "
+                     "claim. `claim` first (conversation ownership, AGENTS.md)."
+                     % track, code=1)
+            if args.milestone and cur.get("milestone") != args.milestone:
+                print(fmt_entry(track, cur))
+                fail("scope: '%s' is claimed by a DIFFERENT milestone ('%s' vs "
+                     "yours '%s'). This wt is not yours -- do not touch."
+                     % (track, cur["milestone"], args.milestone), code=1)
+            print("scope: OK cwd is inside '%s' wt, claimed by '%s'."
+                  % (track, cur["milestone"]))
+            return
+    # 2. main tree?
+    if _inside(main_root(), cwd):
+        locks = load_locks()
+        if locks:
+            print("scope: WARN cwd is the MAIN tree while %d track(s) are "
+                  "claimed:" % len(locks))
+            for t in sorted(locks):
+                print(fmt_entry(t, locks[t]))
+            print("If this conversation holds one of those claims, go back to "
+                  "your own wt -- main-tree edits from a claimed session are "
+                  "the contamination class (2026-11-10). A mainline session "
+                  "(no claim) may ignore this warning after verifying.")
+            sys.exit(2)
+        print("scope: OK cwd is the main tree, no active claims (mainline "
+              "session).")
+        return
+    fail("scope: cwd is not inside any registered tree (main root or a track "
+         "wt): %s" % cwd, code=1)
+
+
 def cmd_status(args):
     locks = load_locks()
     print("wt_pool status  (lock=%s)" % lock_path())
@@ -641,6 +706,59 @@ def cmd_selftest(args):
         c, out = run(["status"])
         expect("stale pid flagged", "pid-dead" in out, "status flags dead pid")
 
+        # 11. scope: inside own claimed wt -> OK
+        wt_dir = fake["console"]["wt"]
+        os.makedirs(wt_dir, exist_ok=True)
+        open(os.path.join(wt_dir, ".git"), "w").close()  # wt .git is a file
+        old_cwd = os.getcwd()
+        os.chdir(wt_dir)
+        try:
+            c, out = run(["scope"])
+            expect("scope own wt ok", c == 0 and "scope: OK" in out,
+                   "scope OK inside own claimed wt")
+        finally:
+            os.chdir(old_cwd)
+
+        # 12. scope: inside wt with foreign milestone -> blocked
+        os.chdir(wt_dir)
+        try:
+            c, out = run(["scope", "--milestone", "M-C9"])
+            expect("scope foreign milestone blocked", c == 1,
+                   "scope blocks foreign milestone in claimed wt")
+        finally:
+            os.chdir(old_cwd)
+
+        # 13. scope: main tree with active claims -> warn exit 2
+        os.chdir(tmp)  # tmp IS the main root via NL_WT_POOL_LOCK
+        try:
+            c, out = run(["scope"])
+            expect("scope main tree warns", c == 2 and "WARN" in out,
+                   "scope warns in main tree with active claims")
+        finally:
+            os.chdir(old_cwd)
+
+        # 14. scope: main tree without claims -> OK
+        locks = load_locks()
+        del locks["console"]
+        save_locks(locks)
+        os.chdir(tmp)
+        try:
+            c, out = run(["scope"])
+            expect("scope main tree clean ok", c == 0 and "mainline" in out,
+                   "scope OK in main tree without claims")
+        finally:
+            os.chdir(old_cwd)
+
+        # 15. scope: inside unclaimed wt -> blocked
+        # (claim already removed by test 14)
+        os.chdir(wt_dir)
+        try:
+            c, out = run(["scope"])
+            expect("scope unclaimed wt blocked", c == 1 and "NO active claim" in out,
+                   "scope blocks wt without claim")
+        finally:
+            os.chdir(old_cwd)
+
         os.environ.pop("NL_WT_POOL_LOCK", None)
     print("selftest: %d/%d ALL GREEN" % (n[0], n[0]))
     sys.exit(0)
@@ -694,6 +812,13 @@ def main():
     p.add_argument("--milestone", default="")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_guard)
+
+    p = sub.add_parser("scope", help="cwd boundary self-check: claimed "
+                                     "sessions must work inside their own wt "
+                                     "(exit 0=ok, 1=blocked, 2=main-tree warn)")
+    p.add_argument("--milestone", default="",
+                   help="your milestone id; verifies the claim matches")
+    p.set_defaults(fn=cmd_scope)
 
     sub.add_parser("status", help="registry x lock cross-check").set_defaults(fn=cmd_status)
     sub.add_parser("selftest", help="in-process self test").set_defaults(fn=cmd_selftest)
