@@ -3630,7 +3630,9 @@
      "name": "selftest：确定性单测（49/49）",
      "kind": "tool",
      "note": "M-C0 42 条（tokenize 引号解析 / CVar 四类型 setFromString 校验 / exec 分档 / completePrefix / 重复注册）+ M-C2 内建 7 条（help / cvar.list / cvar.set 三态 / double-install 幂等）。退出 0 即 PASS。",
-     "args": ["selftest"],
+     "args": [
+      "selftest"
+     ],
      "expectExit": 0,
      "expectLog": "console selftest: PASS",
      "command": "nanite-console selftest"
@@ -3640,7 +3642,12 @@
      "name": "exec 正向：echo + cvar.list + cvar.set 三连（demo 注册表）",
      "kind": "tool",
      "note": "M-C2 installBuiltins 真实执行体：echo 输出拼接、cvar.list 列 demo.* 四类型 CVar 现值+help、cvar.set 改 demo.fov 60→90。退出码 = 多条命令的 worst（全 0 即 0）。",
-     "args": ["exec", "echo hello console", "cvar.list", "cvar.set demo.fov 90"],
+     "args": [
+      "exec",
+      "echo hello console",
+      "cvar.list",
+      "cvar.set demo.fov 90"
+     ],
      "expectExit": 0,
      "expectLog": "demo.fov = 90",
      "command": "nanite-console exec \"echo hello console\" \"cvar.list\" \"cvar.set demo.fov 90\""
@@ -3650,7 +3657,10 @@
      "name": "负向：未知命令显式拒绝（UnknownCommand=1）",
      "kind": "tool",
      "note": "注册表查无此名，显式报错退出 1，不许静默假成功。",
-     "args": ["exec", "nonsense.cmd"],
+     "args": [
+      "exec",
+      "nonsense.cmd"
+     ],
      "expectExit": 1,
      "expectLog": "unknown command: nonsense.cmd",
      "command": "nanite-console exec \"nonsense.cmd\""
@@ -3660,10 +3670,167 @@
      "name": "负向：cvar.set 坏值保旧（CommandFailed=3）",
      "kind": "tool",
      "note": "setFromString 类型校验拒绝非数字，旧值不动（demo.fov 保持 60），退出 3。ExecCode 分档：参数本身可解析但赋值失败归 CommandFailed 而非 BadRequest。",
-     "args": ["exec", "cvar.set demo.fov abc"],
+     "args": [
+      "exec",
+      "cvar.set demo.fov abc"
+     ],
      "expectExit": 3,
      "expectLog": "invalid value for demo.fov: expected float, got 'abc'",
      "command": "nanite-console exec \"cvar.set demo.fov abc\""
+    }
+   ]
+  },
+  {
+   "id": "pbr-direct",
+   "label": "pbr-direct",
+   "name": "PBR 直射光 + glTF 贴图采样（穿插项）",
+   "tag": "pbr-direct",
+   "date": "2026-11-09",
+   "summary": "S7 前置穿插项：model.slang 新增 shading mode 5 = Cook-Torrance 直射光（GGX + Smith 高度相关 V + Schlick F，公式与 bevy pbr_lighting.wesl / UE BRDF.ush / Carrot brdf.glsl 三处对拍同构）；glTF metallicRoughness 贴图进 GPU（t0 baseColor UNORM + t1 MR 线性 + s0 共用 sampler + 新开 b1 LightConstants 80B）；pbr 分支只编译进 psMain（t1 在 cull/dag 管线是 StructuredBuffer，同槽异型 Vulkan 非法——§2.7 单 BindingSet 纪律）；输出端 pow(1/2.2) gamma 编码（plan 边界不做 tonemap）。--pbr-naive 对照开关供 sRGB 验收。",
+   "acceptance": [
+    "--shading pbr 双后端 PNG 逐字节相同（MD5 54ff8a33…，bytes 档）、deviceErrors=0、调试层零输出",
+    "不带新参数行为不变：textured 基线 MD5 7e528087… 与 m0.4 冻结基线逐字节一致，selftest 16/16",
+    "sRGB 正确性对照：--pbr-naive（误用 UNORM 直读）明显泛灰偏亮，正确路径深色金属 + 金色眼高光",
+    "单源双目标 32/32 魔数（含 S6 的 hiz 全套）；HUD combo 加 pbr 项 960x540 面板不裁底",
+    "example/pbr-direct 归位 + cases.json + --check 退出 0"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "pbr",
+     "name": "Suzanne Cook-Torrance PBR（正确 sRGB 路径）",
+     "kind": "pair",
+     "note": "glTF metallic=0.98 全金属 + roughness=0.32：无 IBL（plan 边界）直射光下金属只剩 GGX 高光，身体深色是物理正确行为（S9 IBL 的活教材）；眼睛金色高光清晰。两后端逐字节相同。",
+     "baselines": {
+      "dx12": "example/pbr-direct/pbr-dx12.png",
+      "vulkan": "example/pbr-direct/pbr-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--shading",
+      "pbr"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --shading pbr",
+     "script": "example/pbr-direct/run.bat pbr"
+    },
+    {
+     "id": "naive",
+     "name": "sRGB 对照：--pbr-naive 误用 UNORM 直读",
+     "kind": "pair",
+     "note": "验收判据 3 的证据对：跳过 sRGB->linear 后整体泛灰偏亮、高光对比糊掉——「过亮的错误」一目了然。与 pbr 用例并排看。",
+     "baselines": {
+      "dx12": "example/pbr-direct/naive-dx12.png",
+      "vulkan": "example/pbr-direct/naive-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--shading",
+      "pbr",
+      "--pbr-naive"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --shading pbr --pbr-naive",
+     "script": "example/pbr-direct/run.bat naive"
+    },
+    {
+     "id": "hud",
+     "name": "HUD shading combo 显示 pbr（面板不裁底）",
+     "kind": "pair",
+     "note": "HUD combo 加 pbr 项；stage 行显示 pbr-direct。960x540 实拍确认面板底部（reset camera + 帮助行）完整。两张 PNG 不同是 backend/debug 文本，3D 部分一致。",
+     "baselines": {
+      "dx12": "example/pbr-direct/hud-dx12.png",
+      "vulkan": "example/pbr-direct/hud-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back",
+      "--shading",
+      "pbr"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --hud --size 960x540 --yaw 12 --pitch 9 --dist 4.2 --cull back --shading pbr",
+     "script": "example/pbr-direct/run.bat hud"
+    },
+    {
+     "id": "textured",
+     "name": "不变量：textured 基线逐字节不变",
+     "kind": "pair",
+     "note": "验收判据 2 的机械证据：不带新参数的 Suzanne --no-hud 输出 MD5 = 7e528087…，与 example/m0.4 冻结基线逐字节一致（M0.8 行为完全未动）。两后端同 MD5。",
+     "baselines": {
+      "dx12": "example/pbr-direct/textured-dx12.png",
+      "vulkan": "example/pbr-direct/textured-vulkan.png"
+     },
+     "args": [
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--cull",
+      "back"
+     ],
+     "command": "viewer.exe --screenshot <out.png> --frames 8 --no-hud --yaw 12 --pitch 9 --dist 4.2 --cull back",
+     "script": "example/pbr-direct/run.bat textured"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest（16/16，阶段校验 pbr-direct）",
+     "kind": "selftest",
+     "note": "stage 检查改为 pbr-direct；FrameParams POD 缺省校验照旧。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest",
+     "script": "example/pbr-direct/run.bat selftest"
     }
    ]
   }

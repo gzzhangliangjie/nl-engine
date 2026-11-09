@@ -13,7 +13,48 @@
 //   2 = uv -> color
 //   3 = triangle id (SV_PrimitiveID, integer hash) -> color
 //   4 = cluster color (M1.3): per-vertex CLUSTERCOLOR baked by the cluster scene
+// pbr-direct: 5 = Cook-Torrance PBR direct lighting (glTF metallicRoughness).
+//   NOTE: 4 was already taken by cluster color (M1.3), so pbr is 5 — the plan
+//   doc's "4" predates the cluster collision; renumbering cluster would touch
+//   viewer defaults and historical baselines for zero benefit.
+//   Scope limit (binding-layout reality, see §2.7): the pbr branch lives ONLY in
+//   psMain. The shared shade() body is also compiled into psCluster/psCull whose
+//   pipelines bind t1..t4 as STRUCTURED BUFFERS (vertex pool / indices / meta /
+//   visible list) — if psCull's SPIR-V referenced t1 as a Texture2D, the same
+//   descriptor slot would carry two resource types (illegal in a Vulkan
+//   descriptor set layout, DX12 root param conflict). So: normal (.glb) and
+//   skin scenes can select pbr; cluster/cull/dag scenes cannot (viewer forces
+//   mode 4 there anyway).
 //
+// Binding notes (per-entry-point compilation):
+//   t1 in the psMain call graph = metallicRoughness texture. The SAME register
+//   number is g_vertexPool in the vsCull call graph — that is not a conflict
+//   as long as the two never meet in one entry point: slangc compiles each
+//   entry separately and only includes resources the entry references; both
+//   bindings live in vk set 0 slot 1 of their own pipeline.
+
+cbuffer SceneConstants : register(b0)
+{
+    float4x4 g_mvp;        // view-projection * model, column-major
+    float4x4 g_model;      // model matrix, for normal transform
+    float4   g_lightDir;   // xyz = world-space light direction, w = ambient
+    float4   g_options;    // x = shading mode (0 textured / 1 normal / 2 uv / 3 tri-id / 4 cluster / 5 pbr)
+};
+
+// pbr-direct: light/material constants, 80 B (5 x float4). Kept out of
+// SceneConstants on purpose — it is strictly 160 B with a no-whole-memcpy rule.
+cbuffer LightConstants : register(b1)
+{
+    float4   g_lightDirW;    // xyz = direction TOWARDS the light (same convention as g_lightDir), w unused
+    float4   g_lightColor;   // rgb = color, a = intensity
+    float4   g_cameraPos;    // xyz = world-space camera position (FrameParams.eye)
+    float4   g_baseColorF;   // glTF baseColorFactor (spec default 1,1,1,1)
+    float4   g_mrF;          // x = metallicFactor, y = roughnessFactor, z = pbr-naive debug switch (>=0.5 skips sRGB->linear)
+};
+
+Texture2D<float4> g_baseColor : register(t0);
+Texture2D<float4> g_metallicRoughness : register(t1);
+SamplerState      g_sampler   : register(s0);
 // M1.3 entry points (two pairs, one source file):
 //   vsMain / psMain        - 3-attribute signature (normal scene). D3D12's debug
 //                            layer treats "VS input not provided by the input
@@ -21,17 +62,6 @@
 //                            live in a separate entry-point pair.
 //   vsCluster / psCluster  - 4-attribute signature (+CLUSTERCOLOR), cluster scene.
 // Wireframe is orthogonal: it is a raster fill mode, not a shader mode.
-
-cbuffer SceneConstants : register(b0)
-{
-    float4x4 g_mvp;        // view-projection * model, column-major
-    float4x4 g_model;      // model matrix, for normal transform
-    float4   g_lightDir;   // xyz = world-space light direction, w = ambient
-    float4   g_options;    // x = shading mode (0 textured / 1 normal / 2 uv / 3 tri-id / 4 cluster)
-};
-
-Texture2D<float4> g_baseColor : register(t0);
-SamplerState      g_sampler   : register(s0);
 
 struct VSInput
 {
@@ -45,6 +75,7 @@ struct VSOutput
     float4 position : SV_Position;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
+    float3 worldPos : WORLDPOS;   // pbr-direct: world-space position (view vector V)
 };
 
 VSOutput vsMain(VSInput input)
@@ -53,6 +84,7 @@ VSOutput vsMain(VSInput input)
     output.position = mul(g_mvp, float4(input.position, 1.0f));
     output.normal   = mul((float3x3)g_model, input.normal);
     output.uv       = input.uv;
+    output.worldPos = mul(g_model, float4(input.position, 1.0f)).xyz;
     return output;
 }
 
@@ -91,6 +123,7 @@ struct PSInput
     float4 position : SV_Position;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
+    float3 worldPos : WORLDPOS;
     uint   triId    : SV_PrimitiveID;
 };
 
@@ -114,8 +147,82 @@ float3 triIdColor(uint id)
     return float3(float(h & 255u), float((h >> 8u) & 255u), float((h >> 16u) & 255u)) / 255.0f;
 }
 
+// pbr-direct helpers. Formula authority: Filament §4 口径，三处参考对拍——
+//   D_GGX / V_SmithGGXCorrelated / F_Schlick 与 bevy pbr_lighting.wesl 逐式同构
+//   （D 的数值稳定重写 = walter07；V = Smith 高度相关精确式，UE BRDF.ush 的
+//   Vis_SmithJoint 同式、其 Approx 版是无 sqrt 代价换精度）；
+//   F0 = mix(0.04, baseColor, metallic) / diffuse = (1-F)*c_diff/π 与 Carrot
+//   brdf.glsl（glTF spec 路线）一致。
+// glTF channel semantics: metallicRoughness G = roughness, B = metallic
+// (glTF 2.0 spec §3.9.3) — 记反高光会诡异。
+float3 srgbToLinear(float3 c)
+{
+    // Exact piecewise conversion. t0 stays RGBA8_UNORM (mode-0 baseline is
+    // byte-frozen), so pbr mode converts explicitly instead of relying on an
+    // SRGB view format — changing t0's format would shift every old baseline.
+    return select(c <= 0.04045f, c / 12.92f, pow((c + 0.055f) / 1.055f, 2.4f));
+}
+
+static const float kPi = 3.14159265f;
+
+float D_GGX(float roughness, float NdotH)
+{
+    float a  = NdotH * roughness;
+    float k  = roughness / ((1.0f - NdotH * NdotH) + a * a);
+    return k * k * (1.0f / kPi);
+}
+
+float V_SmithGGXCorrelated(float roughness, float NdotV, float NdotL)
+{
+    float a2      = roughness * roughness;
+    float lambdaV = NdotL * sqrt((NdotV - a2 * NdotV) * NdotV + a2);
+    float lambdaL = NdotV * sqrt((NdotL - a2 * NdotL) * NdotL + a2);
+    return 0.5f / (lambdaV + lambdaL);
+}
+
+// Cook-Torrance direct light, single directional light + constant ambient.
+// Only reachable on the normal .glb scene (viewer forces mode 4 on nmesh scenes).
+float4 shadePbr(float3 normal, float3 worldPos, float2 uv)
+{
+    float3 n = normalize(normal);
+    float3 v = normalize(g_cameraPos.xyz - worldPos);
+    float3 l = normalize(g_lightDirW.xyz);          // towards the light (mode-0 convention)
+    float3 h = normalize(l + v);
+    float NdotL = saturate(dot(n, l));
+    float NdotV = max(dot(n, v), 1e-4f);            // avoid V divide blowups at grazing
+    float NdotH = saturate(dot(n, h));
+    float VdotH = saturate(dot(v, h));
+
+    float4 baseTex = g_baseColor.Sample(g_sampler, uv);
+    float3 baseColor = g_baseColorF.rgb *
+        (g_mrF.z >= 0.5f ? baseTex.rgb : srgbToLinear(baseTex.rgb));  // z>=0.5 = 误用 UNORM 直读的对照路径
+    float4 mrTex = g_metallicRoughness.Sample(g_sampler, uv);
+    float roughness = clamp(mrTex.g * g_mrF.y, 0.045f, 1.0f);   // 下限防 D 尖峰锯齿（k != 0）
+    float metallic  = saturate(mrTex.b * g_mrF.x);
+
+    float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
+    float3 cDiff  = baseColor * (1.0f - metallic);   // metallic 下 baseColor 不进 diffuse
+
+    float  D = D_GGX(roughness, NdotH);
+    float  V = V_SmithGGXCorrelated(roughness, NdotV, NdotL);
+    float3 F = F0 + (1.0f - F0) * pow(1.0f - VdotH, 5.0f);
+
+    float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL;
+    float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
+    float3 specular = D * V * F;
+    float3 ambient  = 0.03f * baseColor;
+
+    float alpha = g_baseColorF.a * baseTex.a;
+    // 输出端 gamma 编码（pow 1/2.2，显示变换——不算 tonemap，plan 边界不碰后处理）。
+    // Lo 是线性辐射度量，交换链 UNORM 直写，不编码整帧会过暗。
+    float3 encoded = pow(saturate((diffuse + specular) * radiance + ambient), 1.0f / 2.2f);
+    return float4(encoded, alpha);
+}
+
 // Shared shading body. clusterColor only participates in mode 4; callers on the
-// normal signature pass a dummy value.
+// normal signature pass a dummy value. Mode 5 (pbr) is NOT here on purpose —
+// see the binding-scope note at the top of this file: shade() is also compiled
+// into psCluster/psCull, which must not reference t1/b1.
 float4 shade(float3 normal, float2 uv, uint triId, uint mode, float3 clusterColor)
 {
     if (mode == 1u)
@@ -152,7 +259,11 @@ float4 shade(float3 normal, float2 uv, uint triId, uint mode, float3 clusterColo
 
 float4 psMain(PSInput input) : SV_Target
 {
-    return shade(input.normal, input.uv, input.triId, uint(g_options.x), float3(0.0f, 0.0f, 0.0f));
+    uint mode = uint(g_options.x);
+    // pbr-direct: mode 5 lives only on this entry (normal .glb / skin scenes);
+    // see the binding-scope note at the top of this file.
+    if (mode == 5u) return shadePbr(input.normal, input.worldPos, input.uv);
+    return shade(input.normal, input.uv, input.triId, mode, float3(0.0f, 0.0f, 0.0f));
 }
 
 float4 psCluster(PSInputCluster input) : SV_Target

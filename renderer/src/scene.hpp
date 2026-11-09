@@ -42,6 +42,17 @@ struct SceneConstants {
 };
 static_assert(sizeof(SceneConstants) == 160, "cbuffer layout must match shader");
 
+// pbr-direct：与 model.slang 的 LightConstants cbuffer（b1）逐字节对应（80 B）。
+// 不塞进 SceneConstants——它严格 160 B 且禁整块 memcpy 的老规矩不变。
+struct LightConstants {
+    float lightDirW[4];        // xyz = 指向光源的方向（与 b0 g_lightDir 同口径），w 未用
+    float lightColor[4];       // rgb = 颜色，a = 强度
+    float cameraPos[4];        // xyz = 世界空间相机位置（FrameParams.eye）
+    float baseColorFactor[4];  // glTF baseColorFactor
+    float mrFactor[4];         // x = metallicFactor，y = roughnessFactor，z = pbr-naive 对照开关
+};
+static_assert(sizeof(LightConstants) == 80, "cbuffer layout must match shader");
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -197,6 +208,15 @@ private:
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;
     nvrhi::TextureHandle          texture_;
+    // pbr-direct：metallicRoughness 贴图（t1，RGBA8_UNORM 线性数据；skin 场景
+    // 是 1x1 dummy）+ b1 LightConstants volatile CB。仅 init / initSkin 的绑定集
+    // 携带这两个槽位——pbr 分支只编译进 psMain，cluster/cull/dag 管线的 SPIR-V
+    // 不引用它们（t1 在那边是 StructuredBuffer，同槽异型是 Vulkan 布局非法）。
+    nvrhi::TextureHandle          mrTexture_;
+    nvrhi::BufferHandle           lightConstants_;
+    float pbrBaseColorFactor_[4] = {1.f, 1.f, 1.f, 1.f};
+    float pbrMetallicFactor_     = 1.0f;
+    float pbrRoughnessFactor_    = 1.0f;
     nvrhi::SamplerHandle          sampler_;
     nvrhi::InputLayoutHandle      inputLayout_;
     nvrhi::BindingLayoutHandle    bindingLayout_;

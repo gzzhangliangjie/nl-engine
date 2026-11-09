@@ -119,26 +119,68 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     texture_ = device->createTexture(texDesc);
     if (!texture_) { outError = "createTexture failed for base color texture"; return false; }
 
+    // pbr-direct：metallicRoughness 贴图（t1）。RGBA8_UNORM——MR 是线性数据
+    // （G=roughness B=metallic，glTF 2.0 spec §3.9.3），千万别学 baseColor 上
+    // SRGB 视图格式。无 MR 贴图的材质退 1x1 dummy（roughness=1, metallic=0）。
+    pbrBaseColorFactor_[0] = prim.baseColorFactor[0];
+    pbrBaseColorFactor_[1] = prim.baseColorFactor[1];
+    pbrBaseColorFactor_[2] = prim.baseColorFactor[2];
+    pbrBaseColorFactor_[3] = prim.baseColorFactor[3];
+    pbrMetallicFactor_  = prim.metallicFactor;
+    pbrRoughnessFactor_ = prim.roughnessFactor;
+    {
+        nvrhi::TextureDesc mrDesc;
+        mrDesc.format = nvrhi::Format::RGBA8_UNORM;
+        mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        mrDesc.keepInitialState = true;
+        if (prim.hasMR) {
+            mrDesc.width = prim.mrWidth;
+            mrDesc.height = prim.mrHeight;
+        } else {
+            mrDesc.width = 1;
+            mrDesc.height = 1;
+        }
+        const std::string mrName = std::string(modelFile) + "MetallicRoughness";
+        mrDesc.debugName = mrName.c_str();
+        mrTexture_ = device->createTexture(mrDesc);
+        if (!mrTexture_) { outError = "createTexture failed for metallicRoughness texture"; return false; }
+    }
+
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
     sampler_ = device->createSampler(samplerDesc);
     if (!sampler_) { outError = "createSampler failed"; return false; }
 
-    // 布局槽位与 model.slang 的 register(b0/t0/s0) 一致；
+    // 布局槽位与 model.slang 的 register(b0/t0/t1/s0/b0/b1) 一致；
     // Vulkan 侧由 NVRHI 默认 VulkanBindingOffsets 映射为 CB=256 / SRV=0 / Sampler=128，
-    // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。
+    // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。b1 = LightConstants
+    //（slot 1，pbr-direct 新开；SceneConstants 160 B 老规矩不动）。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
     bindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
 
     nvrhi::BindingSetDesc setDesc;
     setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrTexture_))
            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
            .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    if (!lightConstants_) {
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for light constants"; return false; }
+    }
+    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_));
     bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
     if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
 
@@ -171,6 +213,14 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
     upload->writeTexture(texture_, 0, 0, prim.baseColorRGBA.data(),
                          static_cast<size_t>(texWidth) * 4u);
+    // pbr-direct：MR 贴图同一命令列表上传（线性数据，无 gamma 语义）。
+    if (prim.hasMR) {
+        upload->writeTexture(mrTexture_, 0, 0, prim.metallicRoughnessRGBA.data(),
+                             static_cast<size_t>(prim.mrWidth) * 4u);
+    } else {
+        const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
+        upload->writeTexture(mrTexture_, 0, 0, dummyMR, 4u);
+    }
     upload->close();
     device->executeCommandList(upload);
 
@@ -181,6 +231,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
                         " triangles=", triangleCount_, " indices=", indexCount_,
                         " | baseColor ", texWidth, "x", texHeight,
+                        " | mr ", (prim.hasMR ? "tex" : "dummy"),
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -1986,6 +2037,23 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     texture_ = device->createTexture(texDesc);
     if (!texture_) { outError = "createTexture failed for skin white texture"; return false; }
 
+    // pbr-direct：skin 场景的 MR 贴图也是 1x1 dummy（rigged 资产暂不解析 PBR
+    // 材质）：roughness=1、metallic=0，psMain 的 pbr 分支绑定面必须齐（§2.7）。
+    {
+        nvrhi::TextureDesc mrDesc = texDesc;
+        mrDesc.debugName = "SkinDummyMR";
+        mrTexture_ = device->createTexture(mrDesc);
+        if (!mrTexture_) { outError = "createTexture failed for skin dummy MR"; return false; }
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for skin light constants"; return false; }
+    }
+
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
     sampler_ = device->createSampler(samplerDesc);
@@ -1994,15 +2062,19 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))    // pbr-direct：psMain 引用 t1
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));   // b1 LightConstants
     bindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
 
     nvrhi::BindingSetDesc setDesc;
     setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrTexture_))
            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
-           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_));
     bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
     if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
 
@@ -2029,6 +2101,8 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
     const std::uint8_t white[4] = { 255, 255, 255, 255 };
     upload->writeTexture(texture_, 0, 0, white, sizeof(white));
+    const std::uint8_t dummyMR[4] = { 0, 255, 0, 255 };   // roughness=1, metallic=0
+    upload->writeTexture(mrTexture_, 0, 0, dummyMR, sizeof(dummyMR));
     upload->close();
     device->executeCommandList(upload);
 
@@ -2323,6 +2397,26 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
     cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
 
+    // pbr-direct：b1 LightConstants 同款 volatile 每帧写。只有 init/initSkin 的
+    // 绑定集携带 b1（psMain 引用）；initCluster 场景（lod 模式同样走这里）没有
+    // b1 槽位、句柄为空，绝不能碰——写空句柄 = NVRHI 内部空指针段错误。
+    if (lightConstants_) {
+        LightConstants lc{};
+        lc.lightDirW[0] = params.lightDir[0];   // 方向沿用 b0 g_lightDir 的口径与缺省值
+        lc.lightDirW[1] = params.lightDir[1];
+        lc.lightDirW[2] = params.lightDir[2];
+        lc.lightColor[0] = 1.0f; lc.lightColor[1] = 1.0f; lc.lightColor[2] = 1.0f;
+        lc.lightColor[3] = 2.5f;                // 白光强度 2.5：金属体无 IBL 只剩直射高光
+        lc.cameraPos[0] = params.eye[0];
+        lc.cameraPos[1] = params.eye[1];
+        lc.cameraPos[2] = params.eye[2];
+        std::memcpy(lc.baseColorFactor, pbrBaseColorFactor_, sizeof(lc.baseColorFactor));
+        lc.mrFactor[0] = pbrMetallicFactor_;
+        lc.mrFactor[1] = pbrRoughnessFactor_;
+        lc.mrFactor[2] = params.options[0];     // --pbr-naive 对照开关（viewer 填 1）
+        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
+    }
+
     // M0.8：pipeline 按 (fill × cull) 四套里选一套，shader 不变。
     nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
         ? (params.cullBack ? pipelineWireBack_ : pipelineWireNone_)
@@ -2432,6 +2526,9 @@ void Scene::shutdown() {
     inputLayout_ = nullptr;
     sampler_ = nullptr;
     texture_ = nullptr;
+    // pbr-direct：新资源句柄同样要在 device 存活期间释放。
+    mrTexture_ = nullptr;
+    lightConstants_ = nullptr;
     constants_ = nullptr;
     indexBuffer_ = nullptr;
     vertexBuffer_ = nullptr;

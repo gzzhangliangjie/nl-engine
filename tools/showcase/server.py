@@ -196,7 +196,9 @@ def file_info(p: Path | None) -> dict:
 
 
 STAGE_FILE = ROOT / "renderer" / "src" / "renderer.cpp"
-STAGE_RE = re.compile(r'kStage\s*=\s*"((?:M|S)\d+(?:\.\d+)?)')
+# 具名穿插项（pbr-direct，2026-11-09）：ROADMAP 穿插项不占 M0.*/S* 编号，
+# kStage 直接用具名 tag 作前缀 —— STAGE_RE 放行具名穿插项，version id = 前缀小写。
+STAGE_RE = re.compile(r'kStage\s*=\s*"((?:M|S)\d+(?:\.\d+)?|pbr-direct)')
 
 
 def stage_sync() -> dict:

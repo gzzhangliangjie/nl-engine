@@ -1333,3 +1333,28 @@
 3. `server.py --check` 只按 kStage 校验渲染卡，工具卡不在其范围——JSON 合法性另行 `json.load` 校验，五用例退出码/输出以实跑为准。
 
 **下一步**：轨道收官。wt（nl-engine-console）按 §7.1b 保留分支拆 worktree；M-C4 级别的后续（命令自动补全模糊匹配、日志导出等）不在本计划，需要时另立项。
+
+## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
+
+**动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。
+
+**提交版本**：`d277bc7`（feat/pbr-direct，代码+example）+ 本条固化提交（docs），tag `pbr-direct`
+
+**完成情况**：
+- 机械判据：`--shading pbr` 双后端 PNG **逐字节相同**（MD5 `54ff8a33…`，bytes 档）；deviceErrors=0 ×2、调试层零输出；selftest 16/16 ×2；32 个 shader 产物魔数全 ok（单源双目标）。
+- 不变量判据：不带新参数行为不变——textured 基线 MD5 `7e528087…` 与 `example/m0.4` 冻结基线逐字节一致（双后端同 MD5）；回归 spot：s4.0 4/4 bytes、s5.1/s5-traverse-far 2/2 bytes（cluster/cull/dag 管线像素零扰动）。
+- sRGB 对照（验收判据 3）：`--pbr-naive`（误用 UNORM 直读）泛灰偏亮、高光对比糊掉；正确路径深色金属 + 金色眼 GGX 高光。Suzanne MR 实测 metallic≈0.98 / roughness≈0.32——无 IBL 直射光下金属只剩高光，身体深色是物理正确行为（S9 IBL 的活教材）。
+- 交代物：`example/pbr-direct/`（pbr/naive/hud/textured 四对基线 + run.bat + cases.json 卡 5 用例）+ `server.py --check` OK（stage=pbr-direct cases=5 baselines=8）。
+- kStage bump 波及：11 对 exe=current 的 HUD 基线（stage 文字行）全部重拍（m0.9/s2.0/s3.2/s4.1/s4.2/s5.0/s5.1/s5.2×2/s6.0×2）。
+- 固化：本条 + `docs/s0/PBR-DIRECT-PLAN.md` 状态与偏差记录。
+
+**踩坑情况**：
+1. ⭐pbr 分支只能编译进 psMain（§2.7 新例）：共享 `shade()` 也会被 psCluster/psCull 编译，而 cull/dag 管线的 t1~t4 是 StructuredBuffer（顶点池/索引/元数据/可见列表）——同一 descriptor slot 两种资源类型在 Vulkan descriptor set layout 里非法。pbr 移入 psMain 专属分支后 cluster/cull/dag 的 SPIR-V 不引用 t1/b1，绑定面只动 init/initSkin。
+2. ⭐写空 volatile CB = 段错误：draw() 常规路径无条件 `writeBuffer(lightConstants_)`，而 initCluster 场景（lod 模式走这里）没有 b1 槽位、句柄为空 → 0xC0000005。kStage 重拍 11 对基线时被 s2.0/s3.2/s5.0 六连崩暴露；`| tail` 管道吃掉退出码一度误判「手动跑不崩」（tail 恒 0），python subprocess 直跑退出码才现形。修复 = null 守卫（语义也正确：无 b1 的场景本来就不该写）。
+3. mode 编号：plan 预写的「mode 4 = pbr」与 M1.3 cluster 色撞号，改用 5（重编号 cluster 会动 viewer 缺省与历史基线，零收益）。
+4. t0 格式不能动：plan 的「t0 用 RGBA8_UNORM_SRGB」会让 M0.4 textured 基线全变（验收判据 2 是硬闸）——t0 保持 UNORM，pbr 分支在 shader 内做精确分段 sRGB→linear（`--pbr-naive` 跳过即对照路径）。
+5. HUD 回写钳制：非簇场景 `min(shading,3)` 会吞掉 pbr——改为只挡 4=cluster（唯一非法值），5=pbr 放行。
+6. STAGE_RE 闸口扩展：`tools/showcase/server.py` 原只认 `M*/S*` 前缀，具名穿插项（pbr-direct，不占 m0.*/S* 编号是 plan 明文）加进白名单，version id = 前缀小写。
+7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
+
+**下一步**：merge 回 master（master 树上有 M6.1 在途未提交改动，等用户拍板 merge 时机）；随后 PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
