@@ -61,7 +61,7 @@ TRACKS = {
     },
     "console": {
         "wt": "E:/UE_STUDY_2026/nl-engine-console",
-        "branch": "feat/console", "state": "active",
+        "branch": "feat/console", "state": "closed",
     },
     "ecs": {
         "wt": "E:/UE_STUDY_2026/nl-engine-ecs",
@@ -82,6 +82,10 @@ TRACKS = {
     "pbr-direct": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
         "branch": "feat/pbr-direct", "state": "active",
+    },
+    "script": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-script",
+        "branch": "feat/script", "state": "active",
     },
 }
 

@@ -1,5 +1,6 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
+#include "nl/core/console.hpp"
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -103,6 +105,10 @@ struct Options {
     // M-A5：skin 模式动画时间（秒）。未指定 = 实时累加；指定 = 固定（截图确定性）。
     bool animTimeSet = false;
     float animTime = 0.0f;
+    // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
+    bool consoleOpen = false;
+    std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
+    std::string consolePrefill;                 // 输入行预填（Tab 补全演示）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -197,8 +203,20 @@ Options parseArgs(int argc, char** argv) {
                           << "textured, normal, uv, tri-id\n";
                 std::exit(1);
             }
-        } else if (a == "--wireframe") {
+        }         else if (a == "--wireframe") {
             o.wireframe = true;
+        } else if (a == "--console" && i + 1 < argc) {   // M-C1：初始开关（on|off）
+            const std::string v = argv[++i];
+            if (v == "on" || v == "1") o.consoleOpen = true;
+            else if (v == "off" || v == "0") o.consoleOpen = false;
+            else {
+                std::cerr << "invalid --console '" << v << "' (expected on|off)\n";
+                std::exit(1);
+            }
+        } else if (a == "--console-exec" && i + 1 < argc) {  // M-C1：启动时执行的命令行
+            o.consoleExecLines.push_back(argv[++i]);
+        } else if (a == "--console-type" && i + 1 < argc) {  // M-C1：输入行预填（补全演示）
+            o.consolePrefill = argv[++i];
         } else if (a == "--yaw" && i + 1 < argc) {
             o.yawDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--pitch" && i + 1 < argc) {
@@ -303,6 +321,59 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
     if (ec) { outError = "cannot create screenshot dir: " + ec.message(); return false; }
     return true;
+}
+
+// M-C2：真引擎参数注册表——运行中 `cam.fov 60` / `cam.dist 3` 立即生效（onChanged 回调
+// 打进相机），`hud.show` 开关 HUD 面板；内建 help / cvar.list / cvar.set 由
+// Console::installBuiltins 承担。echo/add 保留（日志与算术演示）。
+// 返回「相机实际值 -> cvar 静默回写」的每帧同步函数：滚轮 zoom / reset 后 cam.dist
+// 不至于显示陈旧值；g_syncing 挡住回写触发的 onChanged 重入（不再打相机 setter）。
+// CVar* 指向 Console 注册表 map 节点，生命周期与单例同寿，lambda 捕获安全。
+std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool* hudEnabled) {
+    using namespace nl::core::console;
+    Console& c = Console::get();
+    c.installBuiltins();
+
+    // cvar 初值取当前实际状态（相机可能被 --dist/--fov 类 CLI 预置过，别写死 45/4.2）
+    CVar* const fov  = &c.registerFloat("cam.fov", camera->fovYDegrees(), "vertical fov in degrees (20..120)");
+    CVar* const dist = &c.registerFloat("cam.dist", camera->distance(), "orbit distance (0.45..20)");
+    CVar* const hud  = &c.registerBool("hud.show", *hudEnabled, "toggle the HUD panel");
+
+    static bool g_syncing = false;   // 回写 cvar 时挡 onChanged 重入
+    fov->setOnChanged([camera](const CVar& cv) {
+        if (!g_syncing) camera->setFovYDegrees(static_cast<float>(cv.value().f));
+    });
+    dist->setOnChanged([camera](const CVar& cv) {
+        if (!g_syncing) camera->setDistance(static_cast<float>(cv.value().f));
+    });
+    hud->setOnChanged([hudEnabled](const CVar& cv) { *hudEnabled = cv.value().b; });
+
+    c.registerCommand("echo", "print args joined", [](const std::vector<std::string>& args) {
+        std::string out;
+        for (std::size_t k = 0; k < args.size(); ++k) { if (k) out += ' '; out += args[k]; }
+        return CommandResult{true, out.empty() ? std::string("echo: (no args)") : "echo: " + out};
+    });
+    c.registerCommand("add", "sum float args", [](const std::vector<std::string>& args) {
+        if (args.empty()) return CommandResult{false, "usage: add <float>..."};
+        double sum = 0.0;
+        for (const auto& a : args) {
+            char* end = nullptr;
+            const double v = std::strtod(a.c_str(), &end);
+            if (end == a.c_str() || *end != '\0')
+                return CommandResult{false, "add: not a number: " + a};
+            sum += v;
+        }
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", sum);
+        return CommandResult{true, std::string("add: ") + buf};
+    });
+
+    return [fov, dist, camera]() {
+        g_syncing = true;
+        fov->setFloat(camera->fovYDegrees());
+        dist->setFloat(camera->distance());
+        g_syncing = false;
+    };
 }
 
 // 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
@@ -436,6 +507,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     bool cullBack = o.cullBack;
     // M6.2：Hi-Z 遮蔽剔除总开关（HUD checkbox 双向；缺省开 = M6.1 行为不变）。
     bool hizEnabled = o.hizOn;
+    bool hudEnabled = o.hudEnabled;   // M-C2：hud.show cvar 运行时改写（o 是 const）
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
@@ -481,6 +553,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                             " | hud=", hudOn ? "on" : "off");
     }
 
+    // ---- M-C1 控制台注册表 + M-C2 真参数（cam.*/hud.* onChanged 打进相机/HUD）----
+    // 预执行命令行（结果留在控制台日志 = 截图证据）。
+    const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
+    for (const auto& line : o.consoleExecLines) {
+        const auto r = nl::core::console::Console::get().exec(line);
+        nl::core::log::info("console exec [", r.exitCode(), "] ", line);
+    }
+    bool consoleOpen = o.consoleOpen;
+    if (consoleOpen && !hudEnabled)
+        nl::core::log::warn("console requested but HUD is off; add --hud to see it");
+    bool hudWantsKeyboard = false;  // 上一帧控制台输入行是否在打字（屏蔽游戏热键）
+
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
     double skinTime = 0.0;   // M-A5：skin 模式动画时间（--anim-time 固定 / 实时累加）
@@ -508,32 +592,52 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        syncCameraToCVar();   // M-C2：相机实际值回写 cam.fov/cam.dist（滚轮 zoom / reset 后不陈旧）
+        // M-C1：` 边沿切换控制台；ESC 开着控制台时先收控制台，再退出
+        if (window.keyPressed(nl::core::Key::Grave)) {
+            consoleOpen = !consoleOpen;
+            nl::core::log::info("console -> ", consoleOpen ? "open" : "closed");
+        }
         if (window.keyPressed(nl::core::Key::Escape)) {
-            nl::core::log::info("ESC -> exit");
-            break;
+            if (consoleOpen) {
+                consoleOpen = false;
+                nl::core::log::info("console -> closed (ESC)");
+            } else {
+                nl::core::log::info("ESC -> exit");
+                break;
+            }
         }
-        if (window.keyPressed(nl::core::Key::Space)) {
-            colorIndex = (colorIndex + 1) % kColorCount;
-            nl::core::log::info("clear color -> ", colorIndex);
-        }
-        if (window.keyPressed(nl::core::Key::C)) {
-            cullBack = !cullBack;
-            nl::core::log::info("back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
-        }
-        if (window.keyPressed(nl::core::Key::V)) {   // M0.8：线框开关
-            wireframe = !wireframe;
-            nl::core::log::info("wireframe -> ", wireframe ? "on" : "off");
-        }
-        if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
-            // cluster 场景五个模式全可用（textured 采 1x1 白占位）；normal 场景 4 会读
-            // 未绑定的 CLUSTERCOLOR，循环范围限 0..3。
-            const int cycleCount = (cluster || cullMode) ? kShadingCount : 4;
-            shading = (shading + 1) % cycleCount;
-            nl::core::log::info("shading -> ", shadingName(shading));
-        }
-        if (window.keyPressed(nl::core::Key::R)) {
-            camera.reset();
-            nl::core::log::info("camera reset");
+        // 控制台输入行持焦时屏蔽游戏热键（防把 cvar 值当热键吞掉）
+        if (hudWantsKeyboard) {
+            window.keyPressed(nl::core::Key::Space);   // 排干边沿
+            window.keyPressed(nl::core::Key::C);
+            window.keyPressed(nl::core::Key::V);
+            window.keyPressed(nl::core::Key::N);
+            window.keyPressed(nl::core::Key::R);
+        } else {
+            if (window.keyPressed(nl::core::Key::Space)) {
+                colorIndex = (colorIndex + 1) % kColorCount;
+                nl::core::log::info("clear color -> ", colorIndex);
+            }
+            if (window.keyPressed(nl::core::Key::C)) {
+                cullBack = !cullBack;
+                nl::core::log::info("back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
+            }
+            if (window.keyPressed(nl::core::Key::V)) {   // M0.8：线框开关
+                wireframe = !wireframe;
+                nl::core::log::info("wireframe -> ", wireframe ? "on" : "off");
+            }
+            if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
+                // cluster 场景五个模式全可用（textured 采 1x1 白占位）；normal 场景 4 会读
+                // 未绑定的 CLUSTERCOLOR，循环范围限 0..3。
+                const int cycleCount = (cluster || cullMode) ? kShadingCount : 4;
+                shading = (shading + 1) % cycleCount;
+                nl::core::log::info("shading -> ", shadingName(shading));
+            }
+            if (window.keyPressed(nl::core::Key::R)) {
+                camera.reset();
+                nl::core::log::info("camera reset");
+            }
         }
         float dx = 0.0f, dy = 0.0f, scroll = 0.0f, mouseX = 0.0f, mouseY = 0.0f;
         window.consumeMouse(dx, dy, scroll);
@@ -580,6 +684,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (dtMs > dtMaxMs) dtMaxMs = dtMs;
         }
 
+        // M-C1：键盘 / 文本事件泵——HUD 关着也必须排干（防 window 侧队列无限增长）。
+        // 事件随帧丢弃（不跨帧缓存）：ImGui 的按键状态以「本帧按下与否」为准。
+        nl::core::KeyEvent keyBuf[16];
+        unsigned int textBuf[32];
+        const std::size_t nKeys = window.consumeKeyEvents(keyBuf, 16);
+        const std::size_t nChars = window.consumeTextChars(textBuf, 32);
+
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
         const auto model = camera.model();
@@ -613,9 +724,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
+        // M-C2：hudEnabled=false 但控制台开着时也要跑 ImGui（面板藏、控制台在）。
         nl::renderer::HudFrame hud{};
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
-        if (hudOn) {
+        hud.panelShow = hudEnabled;   // M-C2：面板可见性独立于 ImGui 帧存续
+        if (hudEnabled || consoleOpen || editorActive) {
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
             hud.displayHeight = static_cast<float>(e.height);
@@ -663,6 +776,23 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.lodMaxError = info.lodMaxError;
             }
             hud.deterministic = o.screenshot;
+            // M-C1：控制台通道（事件在上方已泵出，这里只搬运进 POD）
+            for (std::size_t k = 0; k < nKeys && k < 16; ++k) {
+                hud.keyEvents[k].key = keyBuf[k].key;
+                hud.keyEvents[k].down = keyBuf[k].down;
+                hud.keyEvents[k].ctrl = keyBuf[k].ctrl;
+                hud.keyEvents[k].shift = keyBuf[k].shift;
+                hud.keyEvents[k].alt = keyBuf[k].alt;
+            }
+            hud.keyEventCount = static_cast<int>(std::min<std::size_t>(nKeys, 16));
+            for (std::size_t k = 0; k < nChars && k < 32; ++k) hud.textChars[k] = textBuf[k];
+            hud.textCharCount = static_cast<int>(std::min<std::size_t>(nChars, 32));
+            hud.consoleOpen = consoleOpen;
+            // Tab 边沿：真实按键，或截图演示模式下合成（applyTabCompletion 幂等：
+            // 补全完成后前缀为空/无进展直接返回，每帧合成不产生副作用）。
+            hud.consoleTab = consoleOpen && (window.keyPressed(nl::core::Key::Tab) ||
+                            (o.screenshot && !o.consolePrefill.empty()));
+            hud.consolePrefill = o.consolePrefill.c_str();
             // M4.1：GPU 剔除统计（DeviceInfo 由 backend 每帧 poll 后更新，只读显示）。
             hud.visibleClusters = info.visibleClusters;
             hud.totalClusters = static_cast<int>(info.totalClusters);
@@ -723,14 +853,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   hudOn ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive) ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
         // M0.6：renderFrame 之后 renderer 可能已把最新 GPU 计时写回 hud.gpuMs，追加进曲线。
-        if (hudOn && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
+        if (hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
             if (gpuHistoryCount < 120) {
                 gpuHistory[gpuHistoryCount++] = hud.gpuMs;
             } else {
@@ -744,7 +874,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             gpuMsSum += info.lastGpuMs;
             ++gpuMsFrames;
         }
-        if (hudOn && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
+        if (hudEnabled && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
             if (cullHistoryCount < 120) {
                 cullHistory[cullHistoryCount++] = hud.cullMs;
             } else {
@@ -752,7 +882,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudOn) {
+        if (hudEnabled || consoleOpen || editorActive) {   // 帧跑了才消费控件写回
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             if (hizMode) hizEnabled = hud.hizEnable;   // M6.2：开关写回
@@ -796,6 +926,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (dagTop && dagGroupCount > 0)
                 cutThresholdPx = std::clamp(hud.cutThresholdPx, 0.25f, 4.0f);
             hudWantsMouse = hud.wantCaptureMouse;
+            hudWantsKeyboard = hud.wantCaptureKeyboard;   // M-C1：输入行打字时屏蔽游戏热键
         }
         if (capturePath) {
             ++screenshotsSaved;
@@ -964,6 +1095,10 @@ void printUsage() {
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --editor <file.mg>      material graph editor window (T1); forces HUD on,\n"
               << "                                     scene background = current --mode (default normal)\n"
+              << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
+              << "                                     ESC closes; needs --hud)\n"
+              << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
+              << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
     for (int i = 0; i < nl::core::modeCount(); ++i) {
         if (i) std::cout << ", ";

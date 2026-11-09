@@ -629,11 +629,101 @@ int countInwardSamePool(const std::vector<float>& pos,
     return inward;
 }
 
-// 跨池：target canonical 点与 ref 无对应，按位置最近邻（brute force，
-// 组内规模与层数都很小，不值得建空间索引）。maxDist 顺带报位移上界。
+// 跨池：target canonical 点与 ref 无对应，按位置最近邻取参考法线。
+// （2026-11-09 修订）原实现是暴力扫 O(T*3*P)：OcclScene1M（ref 65.5 万点 ×
+// targets 124 万 tri ≈ 2.4e11 次距离计算）跑了 45 分钟——原注释「组内规模都
+// 很小，不值得建空间索引」只对 HizScene 级小资产成立。改 uniform spatial
+// hash：27 邻域内命中且距离 < cell ⇒ 全局最近点必在邻域内（正确性硬保证）；
+// 未命中（点云局部稀疏）回退暴力扫，只慢不错。
+struct OrientHash {
+    float cell = 0.f;                  // 实际 cell 尺寸（cap 后）
+    float lo[3] = {0.f, 0.f, 0.f};     // 网格原点（bbox − 1 cell）
+    int   dim[3] = {1, 1, 1};
+    std::vector<int> cellStart;        // 前缀和偏移，size = cells + 1
+    std::vector<std::uint32_t> items;  // 点号，按 cell counting sort 排列
+};
+
+static OrientHash buildOrientHash(const OrientationRef& ref) {
+    OrientHash h;
+    const std::uint32_t P = ref.pointCount;
+    if (P == 0) return h;
+    float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+    for (std::uint32_t r = 0; r < P; ++r) {
+        const float* p = &ref.pos[std::size_t(r) * 3];
+        for (int k = 0; k < 3; ++k) {
+            mn[k] = std::min(mn[k], p[k]);
+            mx[k] = std::max(mx[k], p[k]);
+        }
+    }
+    float span[3];
+    float vol = 1.f;
+    for (int k = 0; k < 3; ++k) {
+        span[k] = std::max(mx[k] - mn[k], 1e-6f);
+        vol *= span[k];
+    }
+    // 目标每 cell ~1~2 点：cell³ ≈ vol/P，略放大偏 27 邻域命中。
+    float cell = std::cbrt(vol / float(P)) * 1.5f;
+    // dim 护栏 256³（内存 ~64MB int×2）：cap 后 cell 变大，稀疏处走 fallback。
+    int dim[3];
+    for (int k = 0; k < 3; ++k) {
+        dim[k] = std::clamp(int(span[k] / cell) + 3, 1, 256);
+        cell = std::max(cell, span[k] / float(dim[k] - 2));
+    }
+    h.cell = cell;
+    for (int k = 0; k < 3; ++k) { h.lo[k] = mn[k] - cell; h.dim[k] = dim[k]; }
+    const std::size_t cells = std::size_t(dim[0]) * dim[1] * dim[2];
+    std::vector<int> count(cells + 1, 0);
+    auto cellId = [&](const float* q) {
+        const int c[3] = {
+            std::clamp(int((q[0] - h.lo[0]) / cell), 0, dim[0] - 1),
+            std::clamp(int((q[1] - h.lo[1]) / cell), 0, dim[1] - 1),
+            std::clamp(int((q[2] - h.lo[2]) / cell), 0, dim[2] - 1)};
+        return (std::size_t(c[0]) * dim[1] + c[1]) * dim[2] + c[2];
+    };
+    for (std::uint32_t r = 0; r < P; ++r) ++count[cellId(&ref.pos[std::size_t(r) * 3])];
+    int acc = 0;
+    for (std::size_t c = 0; c <= cells; ++c) { const int v = count[c]; count[c] = acc; acc += v; }
+    h.cellStart = std::move(count);
+    h.items.resize(P);
+    std::vector<int> cursor(h.cellStart.begin(), h.cellStart.end() - 1);
+    for (std::uint32_t r = 0; r < P; ++r)
+        h.items[cursor[cellId(&ref.pos[std::size_t(r) * 3])]++] = r;
+    return h;
+}
+
+// 27 邻域最近点。返回 true = 命中且 dist² < cell²（此时全局最近必在邻域内）。
+static bool nearestIn27(const OrientHash& h, const OrientationRef& ref,
+                        const float* q, float* outDist2, std::uint32_t* outIdx) {
+    int c[3];
+    for (int k = 0; k < 3; ++k)
+        c[k] = std::clamp(int((q[k] - h.lo[k]) / h.cell), 0, h.dim[k] - 1);
+    float best = 1e30f;
+    std::uint32_t bi = 0;
+    bool found = false;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int x = c[0] + dx, y = c[1] + dy, z = c[2] + dz;
+                if (x < 0 || y < 0 || z < 0 || x >= h.dim[0] || y >= h.dim[1] || z >= h.dim[2])
+                    continue;
+                const std::size_t id = (std::size_t(x) * h.dim[1] + y) * h.dim[2] + z;
+                for (int it = h.cellStart[id]; it < h.cellStart[id + 1]; ++it) {
+                    const float* rp = &ref.pos[std::size_t(h.items[it]) * 3];
+                    const float d[3] = { rp[0] - q[0], rp[1] - q[1], rp[2] - q[2] };
+                    const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                    if (dd < best) { best = dd; bi = h.items[it]; found = true; }
+                }
+            }
+    if (!found || best >= h.cell * h.cell) return false;
+    *outDist2 = best;
+    *outIdx = bi;
+    return true;
+}
+
 int countInwardNearest(const std::vector<float>& pos,
                        const std::vector<std::uint32_t>& idx,
                        const OrientationRef& ref,
+                       const OrientHash& hash,
                        float* outWorstCos, float* outMaxDist) {
     int inward = 0;
     float worst = 1.f, maxDist = 0.f;
@@ -646,11 +736,14 @@ int countInwardNearest(const std::vector<float>& pos,
         for (int k = 0; k < 3; ++k) {
             float best = 1e30f;
             std::uint32_t bi = 0;
-            for (std::uint32_t r = 0; r < ref.pointCount; ++r) {
-                const float* rp = &ref.pos[std::size_t(r) * 3];
-                const float d[3] = { rp[0] - p[k][0], rp[1] - p[k][1], rp[2] - p[k][2] };
-                const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                if (dd < best) { best = dd; bi = r; }
+            if (!nearestIn27(hash, ref, p[k], &best, &bi)) {
+                // fallback：27 邻域没吃到 < cell 的点（局部稀疏），暴力扫兜底。
+                for (std::uint32_t r = 0; r < ref.pointCount; ++r) {
+                    const float* rp = &ref.pos[std::size_t(r) * 3];
+                    const float d[3] = { rp[0] - p[k][0], rp[1] - p[k][1], rp[2] - p[k][2] };
+                    const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                    if (dd < best) { best = dd; bi = r; }
+                }
             }
             maxDist = std::max(maxDist, std::sqrt(best));
             for (int c = 0; c < 3; ++c) s[k][c] = ref.nrm[std::size_t(bi) * 3 + c];
@@ -678,6 +771,7 @@ int cmdCheckOrient(int argc, char** argv) {
         return 1;
     }
     const OrientationRef ref = buildOrientationRef(refMesh);
+    const OrientHash refHash = buildOrientHash(ref);   // 2026-11-09：大资产最近邻加速
 
     int rc = 0;
     for (int a = 1; a < argc; ++a) {
@@ -695,7 +789,7 @@ int cmdCheckOrient(int argc, char** argv) {
                 pos[std::size_t(canon[i]) * 3 + k] = nm.vertices[i].pos[k];
         nl::core::buildCanonicalTriangles(nm, idx);
         float worst = 1.f, maxDist = 0.f;
-        const int inward = countInwardNearest(pos, idx, ref, &worst, &maxDist);
+        const int inward = countInwardNearest(pos, idx, ref, refHash, &worst, &maxDist);
         std::printf("%-34s tris %-6u inward %-4d worst cos %+.3f  maxPosDrift %.4f  %s\n",
                     argv[a], static_cast<unsigned>(idx.size() / 3), inward, worst, maxDist,
                     inward == 0 ? "PASS" : "FAIL");

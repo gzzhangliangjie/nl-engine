@@ -1,5 +1,7 @@
 # build
 build/
+# M-C1：Vulkan 后端独立配置目录（与 build/ 同性质，不入库）
+build-vulkan/
 out/
 cmake-build-*/
 .cache/

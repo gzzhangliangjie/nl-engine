@@ -13,13 +13,19 @@
 
 | 来源 | 实况 | 我们取什么 |
 |---|---|---|
-| **Carrot** `engine/scripting/`（2363 行） | C#/.NET hosting：中央 `CSharpBindings` 缓存 CSClass/CSField/CSMethod 句柄；`bindings/` 按域拆文件；`ReflectionProperty` 属性暴露 | **直接同构可抄思路**（同为 C# hosting）：① 绑定按域拆文件、一个注册入口；② 句柄缓存 → C# 侧 Entity wrapper 与 C++ EntityID 映射；③ 属性暴露 → 统一注册表。其 mono 旧栈细节不抄（我们走 hostfxr 现代路径） |
+| **Carrot** | 两层共 3592 行（2026-11-09 全文精读）：① `core/core/scripting/csharp/` **1229 行** hosting 层（Engine/CSAppDomain/CSAssembly/CSClass/CSMethod/CSField/CSProperty/CSObject/CSProject）；② `engine/scripting/` **2363 行** 绑定层（中央 `CSharpBindings` 句柄缓存 + `bindings/` 按域拆文件 + `ReflectionProperty` 属性暴露）。⚠️ **底座是 Mono 不是 .NET**（`mono_jit_init`/`MonoDomain`，README 自述目标：「不让引擎代码与运行时耦合太深 + 支持热更」） | **抄结构不抄底座**：① hosting/绑定分层 + forward.h 不透明句柄（我们 PIMPL 同构）；② 热更重绑定 = `registerGameAssemblyLoadCallback`/`UnloadCallback` 程序集换载时组件重 init（CSharpComponent 实证）；③ CSAssembly classCache（unordered_map<ns+name, Class>）→ 我们类型解析缓存同构；④ CSProject 极简 .csproj 解析（只读源文件清单）→ 我们脚本构建清单可借；⑤ Mono 具体 API 全不抄（走 hostfxr，见下节） |
 | **bevy** crates 全列表 | **无脚本 crate**——原生系统立场 | 克制先例：只做最小嵌入，不造脚本框架 |
 | **UE / 鸣潮**（外部口径） | 鸣潮：UE4 + .NET 托管 C#（3.6 起）；UE 蓝图状态放 C++ 对象、脚本只是逻辑 | ① **脚本无状态、状态在 C++**（热更安全根基，两家共同口径）；② hostfxr 托管加载 = 鸣潮同款技术路线 |
 
+## 现成封装参考（2026-11-09 补充精读，回答「不用从头造」）
+
+- **hostfxr 权威口径**（Microsoft Learn《Write a custom .NET runtime host》已核）：全流程就 **3 个导出函数**——`hostfxr_initialize_for_runtime_config` → `hostfxr_get_runtime_delegate(hdt_load_assembly_and_get_function_pointer)` → `hostfxr_close`；nethost 的 `get_hostfxr_path` 定位 dll。头三件套 `nethost.h`/`hostfxr.h`/`coreclr_delegates.h` **随 .NET SDK 自带**（vendored 就是从本机 SDK 目录拷，KB 级）。**托管入口默认签名**：`component_entry_point_fn = int (*)(const void* args, int sizeBytes)`，C# 侧 `public delegate int ComponentEntryPoint(IntPtr args, int sizeBytes)`；要别的签名需在调用时传 assembly-qualified delegate 类型名。两条**硬限制**写死进设计：①单进程只能装一个运行时（重复 init 只做兼容性检查）；②hosting API 只支持 **FDD（框架依赖部署）**——脚本程序集不能 self-contained。
+- **M-SC0 的实际体量**：hosting 内核 ≈ 官方样例（dotnet/samples `core/hosting`）**200~300 行 C++**——`Vm` 类就是它的 RAII 化封装，不是大工程；真正工作量在绑定层（Carrot 2363 行是结构参照）。
+- **netcorehost**（github.com/nbigaouette/netcorehost）：header-only C++17 hostfxr RAII 封装，MIT。**记档不采用**——我们只需要三个函数 + 自己的 Result 错误约定，引第三方模板封装反而加耦合；官方样例直接够。
+
 ## 架构约束
 
-- **宿主侧**：`core/include/nl/script/` + `core/src/script/`，namespace `nl::script`。hosting bootstrap 用 **hostfxr/nethost**（dotnet 官方 Hosting API：`hostfxr_initialize_for_runtime_config` → `hostfxr_get_runtime_delegate` → `load_assembly_and_get_function_pointer`）；nethost 头文件+导入库 vendored 到 `thirdparty/dotnet-hosting/`（KB 级，照 METIS 先例），hostfxr.dll 从本机已装运行时加载。
+- **宿主侧**：`core/include/nl/script/` + `core/src/script/`，namespace `nl::script`。hosting bootstrap 用 **hostfxr/nethost**（口径见上节「现成封装参考」：3 导出函数 + `component_entry_point_fn` 默认签名 + FDD-only + 单运行时限制）；头三件套 vendored 到 `thirdparty/dotnet-hosting/`（从本机 SDK 拷，KB 级，照 METIS 先例），hostfxr.dll 从本机已装运行时加载。
 - **脚本侧**：C# classlib 两份——`script-api`（绑定面程序集：Console/CVar、World/Entity/Transform 的 C# 包装）+ 用户脚本程序集（引用前者）；`dotnet build` 构建（构建期步骤，SDK 9.0.304 本机已装，**目标 net8.0 LTS**）。
 - **互操作方向**：脚本调 C++ = C++ 暴露**非托管函数指针**（reverse P/Invoke delegate）给 C#——单向显式绑定面，不做自动 marshal 反射魔法。
 - **热更机制（定死）**：**collectible AssemblyLoadContext**——新版本 DLL 载入新 ALC、旧 ALC `Unload()`；C++ 侧状态（cvar/实体）不动。不做 Roslyn 运行时编译（构建期 `dotnet build` 出 DLL）。
