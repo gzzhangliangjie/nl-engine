@@ -29,6 +29,16 @@ struct PrimitiveMesh {
     std::uint32_t texWidth = 0;
     std::uint32_t texHeight = 0;
     std::vector<std::uint8_t> baseColorRGBA;
+    // pbr-direct：metallicRoughness 贴图（解码成 RGBA8，线性数据——G=roughness、
+    // B=metallic、R=occlusion 兼容位，glTF 2.0 spec §3.9.3）。无贴图 hasMR=false。
+    bool hasMR = false;
+    std::uint32_t mrWidth = 0;
+    std::uint32_t mrHeight = 0;
+    std::vector<std::uint8_t> metallicRoughnessRGBA;
+    // glTF 材质因子（spec 缺省：baseColor=[1,1,1,1]、metallic=1、roughness=1）。
+    float baseColorFactor[4] = {1.f, 1.f, 1.f, 1.f};
+    float metallicFactor  = 1.0f;
+    float roughnessFactor = 1.0f;
 };
 
 // 整个文件：遍历默认场景的所有 node × mesh × primitive，展平成子网格数组。
