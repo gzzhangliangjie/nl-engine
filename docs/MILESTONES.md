@@ -1358,3 +1358,26 @@
 7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
 
 **下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
+
+## P8 M-J5a：显式依赖 DAG（vendored Taskflow）+ 复用面扩张（tag `m-j5a`，2026-11-09，feat/job-system 重启轨道）
+
+**动作**：用户拍板「关联系统完全自己写的确意义不大，核心诉求是 nanite/lumen 手写」「复杂度一上来很多自己写的就不够用了」「成熟库必须开源且无使用风险」→ 重启已 CLOSED 的 job-system 轨道（ACTIVE，`claim --milestone M-J5a`，worktree `nl-engine-job-system` 从 master `6a718fb` 重建，junction + skip-worktree 齐），并把**原拟自研 JobGraph 换成 vendored Taskflow v3.11.0**（MIT / header-only / C++17；v4 要 C++20 故取 v3 末版；52 头 + LICENSE + `VENDOR.md`，排除 `cuda/`）。`AGENTS.md` 新增「自研边界与第三方库选型闸」为通例，`NON-RENDER-ROADMAP.md` / `P8-JOB-PLAN.md` / `P8-PHYS-PLAN.md` / `PARALLEL-TRACKS.md` / `jobs.hpp` 里的旧原则（从头写 / 不引第三方线程库 / 把 vendored 称「例外」）全部标注作废。**旧代码整理**：editor `_mg_ed_*` 与 CLI `_mg_hot_*` 两份 4 路 slangc 实现合并为唯一 `recompileGraph()`，工具侧 `findSlangc/findDxc/q/runSlangc` 与第二份 `recompileGraph` 连同残留调用点删除；失效的 slangc 默认路径（指向已拆 worktree）改指主树共享 junction；顺手清掉 C4456 变量遮蔽。新增 `nl/core/jobgraph.hpp` 薄封装（`tf::` 只在 `core/src/jobgraph.cpp`）、`nanite-tools selftest jobgraph`、`material-graph-tools compilepar` 对拍命令。老 `ThreadPool` 一行不动。
+
+**提交版本**：`e70f00e`（feat/job-system，代码 + vendored + 原则文档 + example + cases.json 共 79 文件）+ 本条固化提交（台账）；tag `m-j5a` 在验收通过后打。
+
+**完成情况**：
+- 双后端（DX12 / VULKAN）各自 configure + build `nanite-tools` / `material-graph-tools` 成功；`jobgraph selftest: PASS (9 cases)`（菱形 A→{B,C}→D、20 次执行逐字节一致、成环 / 重复边 / 自环 / 越界 / 空 body / 异常四类负向拒绝、dumpDot 确定）；老 `jobs selftest: PASS`（26 项不退）。
+- `compilepar : PASS`：串行参考 0.932s vs fan-in DAG 0.299s = **3.12×**；report bytes EQUAL（66 vs 66）、lane flags EQUAL、ps.spv/vs.spv/ps.dxil/vs.dxil FNV64 哈希 **4/4 MATCH**；`check` 经共用入口仍 `genslang OK`；负向 `selftest unknown-suite` exit 1。
+- 交代物：`example/m-j5a/`（4 份真实日志 + 4 张由日志解析生成的证据图 + run.bat）、`example/cases.json` 两张 `kind:tool` 卡（`m-j5a` 3 用例 / `m-j5a-mg` 2 用例）、`scripts/make-j5a-evidence.py`；`server.py --check` 退出 0（stage=pbr-direct cases=5 baselines=8）。
+- 固化：`docs/p8/P8-JOB-PLAN.md` §M-J5a 选型对照 / 实施计划 / 落地纪要 + 能力边界 + 不变量 + 底线；`thirdparty/taskflow/VENDOR.md` 版本 / 许可证 / 风险核查 / API 面 / 确定性注意。
+- 不进 `kStage`、不进 bytes-near 渲染回归、零 GPU 代码（A 类轨道铁律）。
+
+**踩坑情况**：
+1. **include root 搞错**：vendored 目录里还有一层 `taskflow/`，首次把 INTERFACE include root 设成 `.../taskflow` → `<taskflow/taskflow.hpp>` C1083；上游布局要求 root = 仓库根（本项目 = `${THIRDPARTY}`）。
+2. **Taskflow 静态图不做环检测**：成环会挂死，负向用例只能在封装层用 Kahn 拓扑排序拒环（同层按登记序出队，确定性）。
+3. **异常不在单 task 上**：v3.11.0 把异常挂在 topology（`core/executor.hpp:1863/1871`），`Task::has_exception_ptr()` 不保证置位；改封装层 `try/catch` 写 `errors[id]`，按登记序取第一个异常，兼得确定性。
+4. **旧代码整理要连调用点一起扫**：删掉工具侧四个辅助函数后 `cmdWatch` 残留两处 `findSlangc()` 编译报错；只删定义不删调用就是半吊子整理。
+5. **`std::system` 并发实测干净**：4 个独立 cmd.exe 各写各的产物；逐路 verbose 回显收集到各 lane、由 fan-in 汇总 job 按登记序打印，并行不改输出（report 逐字节对齐旧串行版）。
+6. **版本由 C++ 标准定死**：项目 `CMAKE_CXX_STANDARD 17` → 不能取 v4.x；v3.11.0 是 v3 末版（`TF_VERSION 301100`），`VENDOR.md` 记录升级条件。
+
+**下一步**：M-J5b（进程级常驻 Scheduler + Compute/IO 分池 + 兼容层）、M-J5c（physics 合回后接 `JPH::JobSystem` / ECS E1b 稳定后接 system 调度）；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。**merge 回 master 与 worktree 拆除尚未执行**（主树有 S7 在途改动，按纪律不碰），需用户批准后另行处理。
