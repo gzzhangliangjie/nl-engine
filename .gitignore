@@ -1,7 +1,9 @@
-# build
-build/
+# build（根锚定：只忽略仓库根的构建输出目录，防止误伤 thirdparty/jolt/Build 等
+# vendored 上游 CMake 工程——M-P0 起该文件因 `build/` 无锚定一直未入库，主树
+# merge 后 configure 失败才发现。）
+/build/
 # M-C1：Vulkan 后端独立配置目录（与 build/ 同性质，不入库）
-build-vulkan/
+/build-vulkan/
 out/
 cmake-build-*/
 .cache/
