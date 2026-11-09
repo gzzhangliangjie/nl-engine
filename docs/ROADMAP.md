@@ -78,8 +78,8 @@
 | S12 | `Carrot/.../lighting/svgf.slang`（现成 SVGF 实现）+ `temporal-denoise.compute.glsl` | — |
 | S13 | `Carrot/engine/resources/pipelines/compute/compute-rt-clusters.json`（逐簇 BLAS 聚合管线定义） | Carrot《Raytracing》（此题唯一详解） |
 | S14 | `bevy_solari/.../restir.wesl` vs `no_restir.wesl`（两条路线对照）；`bevy/.../meshlet/visibility_buffer_software_raster.wesl`（软光栅） | Scthe 软光栅系列博文 |
-| S15 | `UE5 .../VirtualShadowMaps/VirtualShadowMapArray.cpp`（`FVirtualShadowMapArray`、物理页池 `PhysicalPagePool`/`MaxPhysicalPages`）+ `VirtualShadowMapClipmap.cpp`（级联 clipmap）+ `VirtualShadowMapProjection.cpp`（OnePassProjection 投影采样）+ `VirtualShadowMapCacheManager.cpp`（页请求/缓存） | bevy/Carrot 无 VSM 等价实现（待开工按铁律二次确认）；**插入位置：S9 之后** |
-| S16 | `UE5 .../PostProcess/TemporalSuperResolution.cpp`（`HistoryUpdate` 历史重投影 / `RejectHistory` 拒绝掩码 / `ShadingRejection` 启发式 + 历史元数据 R11G11B10 编码） | bevy/Carrot 无 TSR 等价实现（待开工按铁律二次确认）；**拆分：velocity/history 基建 S7 后先建喂 S12，完整算法 S7 后轻量验证，最终 slot tonemap 前** |
+| S15 | `UE5 .../VirtualShadowMaps/{VirtualShadowMapArray,VirtualShadowMapClipmap,VirtualShadowMapProjection,VirtualShadowMapCacheManager}.cpp` + shader 侧 `VirtualShadowMapPageAccessCommon.ush` / `PageMarking.usf` / `BuildPerPageDrawCommands.usf`（2026-11-09 预研补全） | **二次确认已完成（2026-11-09）**：bevy/Carrot 无 VSM 本体，但 **bevy `meshlet/visibility_buffer_raster_node.rs` + `pipelines.rs` 有完整 meshlet 阴影视图构件**（M15.2 参照），Carrot 为「虚拟几何不投影」反例；两处由「否决检查」升级为「构件参照」。**插入位置：S9 之后**；预研结论见 `s15/S15-PLAN.md`，差异见 `s5/UE-DIFFS.md` D11 |
+| S16 | `UE5 .../PostProcess/{TemporalSuperResolution.cpp,PostProcessing.cpp,HaltonUtilities.h}` + `Engine/Shaders/Private/TemporalSuperResolution/{TSRCommon,TSRReprojectionField,TSRDepthVelocityAnalysis}.ush` 与 `{UpdateHistory,RejectShading,ResolveHistory,SpatialAntiAliasing}.usf`（2026-11-09 预研补全） | **二次确认已完成（2026-11-09）**：bevy/Carrot 无 TSR 本体，但 **bevy `taa.wesl`（5-tap Catmull-Rom / YCoCg 方差 clip / 8 点 Halton）+ `solari/gbuffer_utils.wesl`（`pixel_dissimilar`）、Carrot `CameraBufferObject.cpp`（R2 jitter + 双帧矩阵 + velocity 打包）为可审计构件**；两处由「否决检查」升级为「构件参照」。**拆分：velocity/history 基建 S7 后先建喂 S12，完整算法 S7 后轻量验证，最终 slot tonemap 前**；**共享前置 = 离屏 HDR RT + post-chain（与 SSR / bloom 同一份）**、jitter/分辨率分离并入 M16.0，预研结论见 `s16/S16-PLAN.md`，差异见 `s5/UE-DIFFS.md` D12 |
 
 ---
 
@@ -266,9 +266,9 @@ nl-engine/
 | 光栅阴影（ShadowMap / PCF / PCSS） | 深度 pass + 阴影贴图采样 + PCF 软化 / PCSS 半影估计 | **已由 VSM（S9 后插入）升级替代**，见下方 VSM 行 | 主线 S9 走**光追阴影射线**，光栅阴影为对照路线；VSM 是其工业级升级版 | GAMES202 hw1 拆解，开工时补计划 |
 | PRT 球谐环境光（静态场景） | 离线预计算 cubemap → SH 系数，运行时 SH(dot(n, wi)) 环境光 | `pbr-direct` 之后 | **PBR 穿插项「不做 IBL」缺口的廉价补法**；也可当 S9 参考图工作流的降级对照 | GAMES202 hw2 拆解，开工时补计划 |
 | 屏幕空间 AO（SSAO） | 深度/法线 buffer + 半球采样（或 GTAO 近似） | `pbr-direct` 之后 | 主线 S10 GI 才补间接光，SSAO 先填直光阶段的接触暗角；PhasmaEngine 用 FidelityFX CACAO 可对照 | 开工时补计划 |
-| 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | TAA 的 motion vector 与 S12 时间累积共享；PBR/卡通最终都要 tonemap 出片 | 开工时补计划 |
-| VSM（虚拟阴影贴图） | clipmap 级联 + 物理页池 + 页表，rasterized 阴影路线（替代 S9 光追阴影射线，作对照） | **S9 之后**（合并升级原 `shadow-map` 穿插项） | S15 正式计划；依赖 S4 簇光栅 + S7/S9 GBuffer，S9 已就绪 | `s15/S15-PLAN.md` |
-| TSR 基建（velocity/history） | 运动向量 GBuffer + 历史 ping-pong，喂 S12 时空滤波复用 motion vector | **S7 之后** | S16 前半段；避免 S12 重复建 motion vector 基建 | `s16/S16-PLAN.md` |
+| 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | **2026-11-09 预研补**：这份离屏 HDR RT + post-chain 是 **SSR / S16 TSR / bloom 三家共享前置**（SSR 笔记 §3/§4 与 S16 预研 §2 各自独立指出同一缺口），**只建一份、归属本行**，不各建一份；TSR 的「tonemap 前 slot」当前并不存在，须先有此链。TAA 的 motion vector 与 S12 时间累积共享 | 开工时补计划 |
+| VSM（虚拟阴影贴图） | clipmap 级联 + 物理页池 + 页表，rasterized 阴影路线（替代 S9 光追阴影射线，作对照） | **S9 之后**（合并升级原 `shadow-map` 穿插项） | S15 正式计划；依赖 S4 簇光栅 + S7/S9 GBuffer，S9 已就绪；2026-11-09 预研二次确认：bevy meshlet 阴影视图为 M15.2 构件参照、Carrot「虚拟几何不投影」为反例，差异见 UE-DIFFS D11 | `s15/S15-PLAN.md` |
+| TSR 基建（velocity/history） | **jitter（Halton）+ 双帧矩阵 + 渲染/输出分辨率分离** + 完整逐像素 velocity GBuffer + 历史 ping-pong | **S7 之后** | S16 前半段；**velocity 必须是完整逐像素版（含 jitter 剥离），不是相机版**——S12 复用同一张，不各建一份（S12-PLAN M12.0 已同步修订）；共享前置见上「后处理链」行；2026-11-09 预研结论见 S16-PLAN §1~§4，差异见 UE-DIFFS D12 | `s16/S16-PLAN.md` |
 | `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 | — |
 
 **外部技术点归宿对照（2026-11-07 对齐，不单开新线，防重复建设）**

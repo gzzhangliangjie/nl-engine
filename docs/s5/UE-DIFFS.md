@@ -92,6 +92,26 @@
 | 定性 | **有意简化**（引擎化阶段）：本项目目标是 Nanite×Lumen 渲染研究，物理只要能验收「物体按物理规律动」，不追 Chaos 的工业完备度（网络物理回滚、ChaosVehicles、GeometryCollection 破碎、CCD 全链路）。 |
 | 升级路径 | 需要 Chaos 级能力（破坏、载具、确定性网络回滚）时单独立项评估，不把 Jolt 换掉当默认；vendored Jolt 版本锁死 v5.3.1，**升级单独走一轮 M-P 验收**（确定性轨迹逐点比对 + 展示台卡全绿）。 |
 
+### D11 VSM：页请求/跨帧缓存排在 M15.1，M15.0 为静态整页分配（S15 预研，有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `VirtualShadowMapPageMarking.usf` 从 GBuffer 深度 / 前层半透明反投影标页 → `VirtualShadowMapArray.cpp::BuildPageAllocation` 分配（含 `CacheManager` 跨帧静态/动态页缓存与 GPU invalidation）→ 每页 GPU culling → Nanite 多视图 depth-only 直写物理页 atlas → 页级 HZB → `VirtualShadowMapProjection.cpp` 投影。**依赖链起点是「标页」，不是「页池」**。 |
+| 我们现状 | `docs/s15/S15-PLAN.md` M15.0 先做「物理页池 + 静态整页分配 + 投影采样」，M15.1 才补页请求/分配/回收，M15.2 才接簇级间接阴影——顺序与 UE 依赖链**相反**；M15.0 的「VSM」实为「带页表的静态 shadow map」。 |
+| 定性 | **有意简化**（先出画再补复杂度，2026-11-09 预研后用户拍板保留节奏不返工）。附带修正：原底线「绝不碰 GBuffer 主路径」与 UE 标页吃 GBuffer 冲突，已改为「不改主路径输出格式，只读其 depth/GBuffer」。 |
+| 升级路径 | M15.1 按 UE 链补齐标页 → 分配 → 缓存失效；M15.2 参照 bevy `meshlet/visibility_buffer_raster_node.rs` 的 ShadowView 变体（`R32Uint` + 两阶段 HZB）把簇几何接进阴影路径，不引入 bevy 的每帧全量重绘语义。 |
+| 触发条件 | 验收**不得按 UE 终态直接对标 M15.0**；若大场景近处阴影分辨率不足、或相机移动时页抖动明显，把标页与缓存提前到 M15.1 之前。 |
+
+### D12 TSR：缺 jitter/分辨率框架、离屏 post-chain 前置、卷积上采样核对（S16 预研，计划内待办）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `PostProcess/TemporalSuperResolution.cpp` + `HaltonUtilities.h`：`TemporalJitterPixels`（Halton）+ `PrimaryScreenPercentageMethod=TemporalUpscale` 决定渲染→输出分辨率分离；10+ pass（dilate velocity → reject shading → update history → resolve，Mitchell-Netravali / Nyquist + jacobian reprojection field）；位于 SeparateTranslucency/DOF 之后、Tonemap 之前；history 五套 array + pre-exposure / camera cut。 |
+| 我们现状（S6） | 原 `S16-PLAN.md` 全文未提 jitter / 渲染-输出分辨率分离；「已具备 HDR scene color（tonemap 前）」在当前代码**不成立**——swapchain framebuffer 直出 + `model.slang:216` 输出端 gamma 编码（注释明写「不算 tonemap」），无离屏 HDR RT / tonemap pass / post-chain / velocity GBuffer；原 M16.2 用 5×5 联合双边当上采样核（那是 S12 GI 降噪滤波器），三处参考无一采用。 |
+| 定性 | **计划内待办**（2026-11-09 预研后用户拍板）：jitter + 双帧矩阵 + 渲染/输出分辨率分离并入 M16.0；离屏 HDR RT + post-chain 单列为 SSR / S16 / bloom **共享前置**（`docs/s6/SSR-RESEARCH-NOTES.md` §3/§4 已独立指出同一缺口，不重复建设）；M16.2 改 5-tap Catmull-Rom 对齐 UE/bevy（tag 随之 `s16-bilateral`→`s16-upsample`）；S12/S16 共享同一张完整逐像素 velocity GBuffer。 |
+| 升级路径 | 卷积网络 shading rejection / parallax reprojection field / Nyquist 2× history / thin geometry 与 `r.Nanite.Foliage` 联动——质量层，S16 首版不做。 |
+| 触发条件 | 首版出现动目标 ghost / disocclusion smear / 亚像素细几何闪烁时，按 UE `TSRRejectShading.usf` + `TSRReprojectionField.ush` 补齐，**不要靠调 α 掩盖**。 |
+
 ## 计划内待办（非偏差，挂账防丢）
 
 - **D8 资产分页 v4**（`NPAG` 页表 + 128KiB 字节预算）：对标 UE `FStreamOutMeshDataHeader`，代码落地排在 **P9 V1**（V1 即写 v4，不破 M3.2 回归基线）。
@@ -103,4 +123,4 @@
 - **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
 
 ---
-*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准。*
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准；2026-11-09 S15/S16 只读预研二次确认后新增 D11（VSM 逆序渐进 / 「只读 GBuffer」底线修订）与 D12（TSR jitter 与离屏 post-chain 共享前置 / 卷积上采样核对齐 UE-bevy），开工前不再重复调研。*

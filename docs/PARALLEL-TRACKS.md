@@ -29,7 +29,7 @@
 |---|---|---|
 | GPU-Driven 间接绘制骨架 | **= S4**（硬件光栅+GPU视锥剔除+indirect draw，原文即"从本步起进入 GPU-driven"），**不重复建** | 主线本体 |
 | VSM（虚拟阴影贴图） | **S15，插入 S9 之后**（合并原 `shadow-map` 穿插项，作 rasterized 阴影对照） | B 类，已排期 |
-| TSR（时域超分） | **S16，拆两段**：velocity/history 基建 **S7 后**先建（喂 S12 复用 motion vector），完整算法 S7 后轻量验证，最终 slot tonemap 前 | B 类，已排期 |
+| TSR（时域超分） | **S16，拆两段**：velocity/history 基建 **S7 后**先建（喂 S12 复用 motion vector），完整算法 S7 后轻量验证，最终 slot tonemap 前 | B 类，已排期。**2026-11-09 预研补**：jitter(Halton)+双帧矩阵+渲染/输出分辨率分离并入 M16.0；velocity 统一为完整逐像素版（S12 复用同一张，不是相机版）；**离屏 HDR RT + post-chain 为 SSR/S16/bloom 三家共享前置**，归 ROADMAP「后处理链」行只建一份；结论见 `s16/S16-PLAN.md` 预研结论节、UE-DIFFS D12 |
 | VT（虚拟纹理） | **跳过**：P9 V4 用几何 residency + 纹理随 page 流式，不引入 feedback-buffer VT | 范围决策已定 |
 
 ---
