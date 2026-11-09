@@ -1380,7 +1380,7 @@
 5. **`std::system` 并发实测干净**：4 个独立 cmd.exe 各写各的产物；逐路 verbose 回显收集到各 lane、由 fan-in 汇总 job 按登记序打印，并行不改输出（report 逐字节对齐旧串行版）。
 6. **版本由 C++ 标准定死**：项目 `CMAKE_CXX_STANDARD 17` → 不能取 v4.x；v3.11.0 是 v3 末版（`TF_VERSION 301100`），`VENDOR.md` 记录升级条件。
 
-**下一步**：M-J5b（进程级常驻 Scheduler + Compute/IO 分池 + 兼容层）、M-J5c（physics 合回后接 `JPH::JobSystem` / ECS E1b 稳定后接 system 调度）；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。**merge 回 master 与 worktree 拆除尚未执行**（主树有 S7 在途改动，按纪律不碰），需用户批准后另行处理。
+**下一步**：M-J5b（进程级常驻 Scheduler + Compute/IO 分池 + 兼容层）、M-J5c（physics 合回后接 `JPH::JobSystem` / ECS E1b 稳定后接 system 调度）；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。**merge 状态（2026-11-09 16:3x 更新）**：`feat/job-system` 已 `git merge e783ef8`（已提交 S7.0 点）收敛，CMakeLists 自动合（taskflow 段 L34-43 与 S7.0 shader 段 L233-303 不重叠），两份追加型冲突（MILESTONES / cases.json）按「保留双方条目」手工解，`426ed1a` 提交；双后端（DX12/VULKAN）重配 + 编 `nanite-tools`/`material-graph-tools` 成功，jobgraph/jobs/compilepar/check 全绿、`server.py --check` 退出 0。**已 merge-ready，等主树 S7 WIP 落地后合回 master + 拆 worktree**（WIP 是另一会话活儿，不碰）。
 
 ## M7.0：visibility buffer 打包写入 + 簇/三角可视化（S7 首个里程碑，2026-11-09，tag `s7-visbuf`）
 
