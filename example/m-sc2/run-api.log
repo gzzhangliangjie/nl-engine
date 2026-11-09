@@ -1,0 +1,20 @@
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.96
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\ecs" -nologo -v q 
+script-api v0.3.0 ecs binding demo
+spawn demoRoot -> 0 id=1
+spawn demoLeaf -> 0 id=2
+setParent(leaf->root) -> 0
+getParent(leaf) -> 0 parent=1
+addTransform(root) -> 0
+transformSet(root) -> 0
+transformGet(root) -> 0 scale=2,1,1
+flush -> 0
+exists demoRoot=True demoLeaf=True
+remove demoRoot -> 0
+after flush: exists demoRoot=False demoLeaf=False
+run: ret=0

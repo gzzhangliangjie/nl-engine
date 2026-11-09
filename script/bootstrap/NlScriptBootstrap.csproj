@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- M-SC3 热更中转 bootstrap（docs/p8/P8-SCRIPT-PLAN.md「热更机制」定稿）：
+       非 collectible 常驻程序集——hostfxr 的 load_assembly_and_get_function_pointer 只能
+       进默认 ALC（不可卸载），collectible ALC 的创建/卸载必须托管侧完成，故本程序集
+       是唯一的 C++↔collectible ALC 中转。C++ 侧一次性取本程序集 3 个函数指针
+       （常驻安全，指向非收集代码），脚本程序集全部经本类 LoadFromStream 进
+       collectible ALC（不锁 DLL 文件 → dotnet build 可同名覆盖）。
+       反射 Invoke 只在本类内部做热更机制中转；绑定面（ApiTable 显式函数指针）
+       照旧手写——「不做反射自动绑定」原则不破。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <RootNamespace>Nl.Script.Bootstrap</RootNamespace>
+    <AssemblyName>NlScriptBootstrap</AssemblyName>
+    <!-- FDD 硬前置：hostfxr 装载必须有 runtimeconfig.json（M-SC0 踩坑同款） -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+
+</Project>

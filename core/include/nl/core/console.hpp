@@ -126,6 +126,10 @@ public:
     CVar& registerString (const std::string& name, std::string   def, std::string help);
     void  registerCommand(const std::string& name, std::string help, CommandFn fn);
 
+    // 注销命令（M-SC1 脚本绑定引入：C# 注册命令在热重载/M-SC3 侧需要解绑）。
+    // 未知命令返回 false；CVar 不在本表（findCVar 路径），不会误删。
+    bool unregisterCommand(const std::string& name);
+
     // M-C2 内建命令集（UE ConsoleManager 承担 help/dump 的口径）：
     //   help           列全部命令（名字 + help）
     //   cvar.list      列全部 CVar（名字 = 现值 (类型) help）

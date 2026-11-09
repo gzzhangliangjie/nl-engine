@@ -1334,6 +1334,85 @@
 
 **下一步**：轨道收官。wt（nl-engine-console）按 §7.1b 保留分支拆 worktree；M-C4 级别的后续（命令自动补全模糊匹配、日志导出等）不在本计划，需要时另立项。
 
+## P8 M-E1b.0：ECS 渲染集成（feat/ecs 轨道，2026-11-09）
+
+**动作**
+- S6 主线（Hi-Z / console M-C0~C3 / check-orient 加速）快进合入 `feat/ecs` worktree，双树重建 + `nanite-scene selftest --all` 四 suite 全绿。
+- `ModelComponent`（mesh 路径 + tint）/ `LightComponent`（direction + color + intensity）纯数据组件进 `nl/scene`，零图形符号纪律不破；`nanite-scene` ecs-serial suite 补 Model/Light roundtrip 字段级断言。
+- `viewer --scene <World JSON>`：`World::deserialise` 加载 → O(N) 遍历收集 → `Renderer::loadEcsScene` → `Scene::initScene` 按 meshFile 分组实例化。新入口对 `vsScene/psScene` + t5 实例缓冲 / t6 灯缓冲，既有 shader 入口与既有 draw 路径逐字节不动。
+- **用户拍板两条**：① 多灯 = 方向灯数组（点光源留给 pbr-direct merge 后）；② 照 console 轨道先例，**kStage 保持 S6.2 一字不动**，证据走 example 卡 + 截图 + `--only` 抽查。
+- 三处参考口径（Carrot ModelRenderSystem 双签名收集 + ModelComponent 路径 / bevy PointLight 纯数据灯 / UE ULightComponent 多灯注册）一致指向「组件纯数据 + 渲染侧收集」。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.0`）；主线 master 不合并（E1b 尚有后续分段，轨道未收官）。
+
+**完成情况（四项自查）**
+1. `example/ecs-e1b/`：`ecs-e1b.scene`（5 物体 + 3 灯，ambient 0.22）/ `run.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-DX12.png` + `shot-VULKAN.png` 基线 + 双后端 `.log`；`example/cases.json` 加 `ecs-e1b` 版本卡（pair 用例，args 用 `{root}` 绝对路径）。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS，双树 `BUILD OK`；`server.py --check` 退出 0（stage=S6.2 cases=5 baselines=12）。
+3. 台账：本段即四栏。
+4. 固化：`docs/p8/P8-ECS-PLAN.md` E1b 段标完成 + `docs/p8/ECS-TOOLS-GUIDE.md` M-E1b.0 节（含踩坑存档）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-dx12.png` / `ecs-e1b-vulkan.png`（归档，卡片直接展示）；肉眼核验 5 个 Suzanne 红绿蓝黄白、不同 TRS、顶面亮侧面暗的方向光层次。
+- 验收数字：双后端 `5 objects | 3 lights | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes ALL GREEN；抽查 `--only s6.2` 10/10 bytes ALL GREEN（既有路径零回归，kStage 未动）。
+
+**踩坑情况（本轮七条，前三条是 E1a 遗留隐藏 bug，一加渲染组件就爆）**
+1. **组件类型 ID 全为 0**：`ComponentOf<T>::nextTypeID()` 的 `static next` 写在类模板成员函数里 → 每个 T 各持一份计数器，所有组件都拿 id=0。后果：`getComponent<Light>` 把槽 0 上的 Model 强行 `static_cast` 后读内存（虚假灯数 + 稳定段错误 139）。修：计数器移到非模板 `inline allocateComponentTypeID()`（inline 函数级 static 全程序唯一）。E1a 只 3 个组件时未暴露，E1b 加两个组件才炸——**类型 ID 分配必须有多类型隔离的正向断言**。
+2. **BindingSet 早于缓冲创建**：`createBindingSet` 把还没建的 `sceneInstances_/sceneLights_` 绑进去，NVRHI 报 `Null resource bindings are not allowed for buffers` → load 失败。修：BindingSet 创建延后到两个缓冲建好之后（新增第 5.5 步）。
+3. **实例计数从没赋值**：`batchObjects` 分组收集了，但 `SceneMeshBatch::instanceStart/instanceCount` 保持默认 0，且实例数据按 objects 原序而非按 batch 连续排布 → `InstanceCount = 0` 空画面 + deviceErrors=8。修：实例数据按 batch 分组连续写入并顺带落两个计数字段。
+4. **多灯强度直接相加过曝**：ΣI≈4.7 经 `min(...,1.0)` 后全画面饱和，三灯的方向/色温差别完全看不出（等于没实现多灯）。修：按总强度归一化成加权平均（`1/ΣI` 由 CPU 预算进灯缓冲 [0].z，shader 只做乘法，避免 DXIL/SPIR-V 除法微差）；绝对强度/曝光留作 pbr-direct 升级项。
+5. **联合包围球第一个球漏算半径**：`first` 分支把 gmn/gmx 直接设为球心而非 ±r → 自动取景偏近。修：首球也按 ±r 展开。
+6. **回归以 exe 目录为 cwd**：`--scene example/...` 相对路径解析到 `build/DX12/example/...` → exit 2。修：用 `{root}` 占位符（仓库内文件引用的唯一白名单方式），`command` 文本同步。
+7. **Windows 大小写不敏感误删**：清理临时探针时用小写 `shot-dx12.png` 命中了真实基线 `shot-DX12.png`。修：立刻重拍恢复；**清理命令绝不用大小写近似名**。另：cases.json 是 CRLF，文本级插入锚点必须先归一化换行符。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 2/2）；两后端画面互比 `diffPixels=3 / maxDelta=2`，按项目 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**（GPU 取整噪声，非画面差异）；已去掉 shader 内多余的 `normalize` 与归一化除法仍存在，留作后续精度项。
+
+**下一步**：E1b 后续分段（E1b.1+，如点光源 / 材质响应 / 更多实体压力）或轨道收官 merge 回 master，按用户指令。wt_pool M-E1b.0 占坑已 release。
+
+---
+
+## M-E1b.1 — ECS 场景规模锚（50 物体 + 8 方向灯）（2026-11-09）
+
+**动作**：按 `docs/p8/P8-ECS-PLAN.md` 目标「50 物体 + 8 灯规模」把 `viewer --scene` 推到计划规模：10×5 网格 × 4 种 mesh（13/13/12/12 实例）= 4 个 batch、8 盏方向灯，共 58 实体。三处参考定向复核多实例 / 多灯容器均无硬上限（Carrot `ModelRenderSystem::renderModels` 逐实体 `parallelForEachEntity` 构造 `InstanceData`、UE `ScenePrivate.h` 的 `TArray<FLightSceneInfo*, TInlineAllocator<4>> DirectionalLights` + `AddLight/BatchAddLights` 动态数组、bevy clustered forward 未找到方向灯硬编码上限），故不改架构、只扩场景数据。结果暴露并修掉 M-E1b.0 的多 batch 实例化 bug（踩坑①）。kStage 保持 S6.2 不 bump。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.1`）；**不 merge 回 master**——master 此刻压着并行会话的 S7 vis buffer 在途 WIP（`CMakeLists.txt` / `renderer/*` / `viewer/main.cpp` 全脏且与 E1b 文件高度重叠），且 E1 轨道尚未整体收官。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-scale.scene`（58 实体）/ `run-scale.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-scale-DX12.png` + `shot-scale-VULKAN.png` + 双后端 `.log`；`example/cases.json` 在 `ecs-e1b` 卡加 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图（`docs/screenshots/ecs-e1b-scale-{dx12,vulkan}.png`）。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 规模锚标达成、`ECS-TOOLS-GUIDE.md` M-E1b.1 节、`SHADER-CONVENTIONS.md` 新增 §2.10（禁依赖 `startInstanceLocation` 的 `SV_InstanceID` 语义）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-scale-dx12.png` / `ecs-e1b-scale-vulkan.png`；肉眼核验 10×5 网格 50 个物体完整、4 种形状（猴头 / 棋盘球 / 环面 / 水滴）、彩虹色相全覆盖、无遮挡缺失，双后端布局一致。
+- 验收数字：双后端 `50 objects | 8 lights | batches=4 | triangles=540352 | deviceErrors=0`；`regression.py --only ecs-e1b` **4/4 bytes**（scene + scale 两卡）、抽查 `--only s6.2` **10/10 bytes**；M-E1b.0 既有基线复拍 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **多 batch 全部读实例槽 0（M-E1b.0 遗留隐藏 bug，单 batch 未暴露）**：旧实现把全场实例放一个 `sceneInstances_`，靠 `DrawArguments::setStartInstanceLocation(batch.instanceStart)` 划窗口，认定 `SV_InstanceID` 会是全局槽号。**DX12 实际不把 `StartInstanceLocation` 计入 `SV_InstanceID`** → 4 个 batch 全读槽 0..12，画面只剩 13 个物体、颜色却覆盖全色相环（连续排布的前 13 槽恰是第一个 batch 的实例）。2-batch 最小探针（两实例 x=±4）叠成一个 blob 定性；连通域统计 13 团与 `(col+row)%4==0` 的 13 个实例位置一一对应。修：**每个 batch 各持自己的 t5 实例缓冲**，`SV_InstanceID` 0-based 直接按 `id*5` 寻址，draw 不再设 `startInstanceLocation`。没走「同一 buffer 绑 SRV 子范围」是因为 Vulkan `minStorageBufferOffsetAlignment` 常为 64B 而批次起点按 80B 递增会踩对齐。单 batch 行为与 M-E1b.0 同构 → 既有基线无需重拍（实测 MD5 一致）。
+2. **自动取景被高密度 mesh 撑远**：联合包围球按各 mesh 局部球 × 实例尺度取并集，`IcoSphereDense` / `TorusKnotDense` 把半径拉大，`camDist = sph[3]*2.4` 让 50 物体挤在画面中央（x 250..740 / y 150..390），四周大片空白。修：规模卡固定 `--dist 18`（viewer 已有参数，不改自动取景公式、普通场景行为不变）；试 14/18/22 三档，18 铺满且不裁切。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 4/4）；两后端画面互比 `scale` = `diffPixels=6 / maxDelta=23`，按 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**。逐像素拆解：5 个是 ±1 取整噪声，第 6 个 `(690,369)` 是绿色环面边缘覆盖差（±23），属 GPU 边缘取整而非光照 / 几何差异。`scene` 卡互比仍 3px/maxDelta2（M-E1b.0 已知项）。精度项继续留痕，不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需等 master 的 S7 vis buffer WIP 提交且工作区干净）；或 E1b.2 点光源 / 材质响应（用户拍板留 pbr-direct merge 后）。wt_pool M-E1b.1 占坑已 release。
+
+---
+
+## M-E1b.2 ECS 场景点光源（2026-11-09）
+
+**动作**：`LightComponent` 扩展 `type`（0=Directional 默认 / 1=Point）、`position`（世界位置）、`range`（衰减截断半径）；`SceneLightDesc` 尾部追加同三个字段；t6 灯缓冲由每灯 2 个 float4 扩为 **3 个**（`{dir,I}`、`{color,type}`、`{position,InvRadius}`），头 slot 增 `pointCount`；`vsScene` 增 `WORLDPOS` 插值量，`psScene` 按 type 分支。点光衰减逐条照抄 UE `DeferredLightingCommon.ush:480-486` 实读公式（`1/(d²+1) × Square(saturate(1-Square(d²·InvRadius²)))`、`L=ToLight*rsqrt(d²)`、单面 `max(dot(N,L),0)`）；`InvRadius=1/range` 由 CPU 预算，shader 不做灯参数除法。点光按绝对强度**独立累加**、不进方向灯的 `1/ΣI` 归一化（否则 `att<<1` 会把点光压没）；无点光时 `psScene` 走 M-E1b.0 原表达式分支保护既有基线。三处参考定向实读：Carrot `GPULight::LightType` 枚举 + union（组件纯数据、灯池在渲染侧）、bevy `bevy_light/src/point_light.rs` `PointLight{color,intensity,range,radius}`、UE `UPointLightComponent` `bUseInverseSquaredFalloff` + `AttenuationRadius` + `LightFalloffExponent`。**不 merge master**：只读 `git merge-tree` 探查显示同步会撞至少 12 个文件冲突（S7 visbuf + pbr-direct 与 E1b 的 `renderer/*` / `model.slang` / `modes.hpp` 全重叠），本轮与 E1b.0/1 同构留在 wt 基线；因此点光暂为 Lambert 响应，PBR 材质响应留轨道收官 merge 后。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.2`）；**不 merge 回 master**（轨道未整体收官）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-point.scene`（7 白模 + 3 彩色点光 + 1 弱方向灯 = 11 实体）/ `run-point.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-point-{DX12,VULKAN}.{png,log}`；`example/cases.json` 在 `ecs-e1b` 卡加 `point` pair 用例与 3 条 acceptance；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染验证）；`nanite-scene selftest --all` 四 suite 在 DX12/VULKAN 双树各 PASS（ecs-serial 新增实体 E 点光字段逐字段 roundtrip + 方向灯不带新键断言）；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 段补 M-E1b.2、`ECS-TOOLS-GUIDE.md` 新增 M-E1b.2 节、`SHADER-CONVENTIONS.md` 新增 §2.11（灯缓冲布局 / 衰减公式 / 归一化 / 向后兼容铁律）、`UE-DIFFS.md` 追加 `D-E1b-1`（轨道局部编号，避开主线 D10~D15 撞号）、两张新证据图 + 两张重拍 scale 图归档 `docs/screenshots/`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-point-{dx12,vulkan}.png`；肉眼核验 7 个 Suzanne 一字排开，颜色由左至右呈红 → 红绿 → 绿 → 绿蓝 → 蓝的连续光池，近灯亮远灯暗，无过曝、无缺失，双后端布局与像素完全一致。
+- 验收数字：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` **6/6 bytes**（scene/scale/point 三卡 × 双后端）、抽查 `--only s6.2` **10/10 bytes**；`selftest --all` 双后端各 0、`--check` 0。`scene` 卡既有基线 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **`run-point.bat` 的 `echo ... (3 point) ...` 提前闭合 for 块**：ASCII bat 里 `for %%B in (...) do (...)` 块内出现未加引号 / 未 `^)` 转义的右括号，cmd 解析到 `)` 就闭合块，把后面的 ` / zero device errors` 当命令 → `此时不应有 /`、exit 255、两张图都没拍。修：块内 echo 文本一律不用圆括号（run-scale.bat 当初的文字没有括号所以没暴露）。
+2. **新增 `WORLDPOS` 插值量后 scale 卡复拍出现 1px / maxDelta1 差异**（`scene` 卡 MD5 逐字节不变）：`(208,402)` 单像素 G 通道 49→50，属 GPU 边缘取整噪声、按项目阈值是 near 档而非逻辑回归。按纪律重拍 `scale` 双后端基线并在台账 / cases.json 留痕；`point` 卡因 shader 里没有除法或 normalize 分歧，双后端 MD5 完全一致。
+
+**双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。
@@ -1418,3 +1497,65 @@
 9. **`--jobs 4` 全量回归偶发 1 条 FAIL（`s1-asset/roundtrip` vulkan：日志缺 `nmesh selftest: PASS`）** → 根因：工具用例写固定共享路径，用例间并行会争用（`tools/regression.py` 头部纪律已写明，并建议可疑 near/FAIL 用 `--jobs 1` 排除争用）；与本轮 M7.0 代码无关。处理：`--only s1-asset/roundtrip` 单跑 2/2 通过、`--jobs 2` 全量 286/286 ALL GREEN 后以低并发为准；不擅自改工具层的共享路径约定。
 
 **下一步**：M7.1 材质 pass（vis buffer 反解 → barycentrics → vertex pulling 取属性 → Carrot 式单全屏材质着色，D-S7-1 已拍板）；M7.2 多材质验收。
+## M-SC0：C# hosting 内核（feat/script，2026-11-09，tag `m-sc0`）
+
+**动作**：wt_pool claim（track script / M-SC0；script 轨道注册表同步进 wt_pool.py TRACKS）→ 三处证据（P8-SCRIPT-PLAN「三处参考口径」+「现成封装参考」2026-11-09 精读留痕：Carrot `core/core/scripting/csharp/` 1229 行 hosting 分层——抄结构不抄 Mono 底座；bevy 无脚本 crate——克制先例；Microsoft Learn《Write a custom .NET runtime host》——hostfxr 三导出 + `component_entry_point_fn=int(void*,int32)` 默认签名 + FDD-only/单运行时两硬限制）→ vendored `thirdparty/dotnet-hosting/`（SDK 8.0.19 pack：hostfxr.h / nethost.h / coreclr_delegates.h 三头件 + nethost.lib 真导入库 + nethost.dll）→ `nl::script::Vm`（PIMPL：头文件零 hostfxr 符号；create=定位→LoadLibrary→init_for_runtime_config→取 delegate；getEntryPoint=UNMANAGEDCALLERSONLY_METHOD 路线；析构 close+FreeLibrary）+ SEH 互操作边界 guard（托管异常转 Result code 6）→ CMake：Vm.cpp 进 nl_core + nethost 链接 + `nl-script` 工具目标（nethost.dll POST_BUILD copy）→ `script/script-api/` 骨架 classlib（net8.0，M-SC1/SC2 绑定落点）+ `script/examples/hello/` 最小用户脚本（mode 驱动：ok/echo/throw/default 四路）→ `nl-script/main.cpp`（check/run/selftest 三命令，退出码 0/1/2）→ selftest 17 项迭代全绿（4 轮修坑见踩坑栏）→ `example/m-sc0/run.bat` 五用例实跑 ALL GREEN + `tools/make-script-evidence.py` 5 张证据图（真实日志渲染）+ 逐张亲眼验收 → `example/cases.json` 追加 `m-sc0` 版本卡 5 条 tool 用例（diff 干净 90 行纯追加）→ `docs/p8/SCRIPT-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc0`，即本条台账所在提交）。
+
+**完成情况**：DX12 树 nl-script 构建过（VULKAN 树 nl_core 同步验证）；selftest 17/17（s0 产物定位 / s1 hostfxr 三导出装载 / s2 默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）/ s3 返回值锚 42/-1/0/-1 / s4 托管异常 SEH 捕获 0xe0434352 + 进程存活 + 异常后可复调 / s5 拷贝工程改 42→43 重编换名同进程装载 → 43）；`run --args ok` ret=42 exit 0、`run --args throw` exit 1、`check` exit 0、无参 exit 2；run.bat ALL GREEN；`server.py --check` exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，无截图无渲染基线卡；渲染集成属 E1b 之外的脚本渲染绑定，plan 未排）；②工具交代物——**本轮有**：展示台 `m-sc0` 版本卡 5 条（usage/正向 run-ok/负向 run-throw/check/selftest，expectExit 2/0/1/0/0）+ 5 张证据图（真实输出渲染，亲眼核验）+ SCRIPT-TOOLS-GUIDE + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC0 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 踩坑存档 7 条 + PARALLEL-TRACKS §7.1d wt 状态更新 + wt_pool.py TRACKS 注册 script 轨道。
+
+**踩坑情况**
+1. **libnethost.lib 是静态库**（1.6MB 无 `__imp_` 符号）与 nethost.h 默认 dllimport 语义不符 → LNK2019 `__imp_get_hostfxr_path`；换 nethost.lib（1.7KB 真导入库）+ nethost.dll 运行期紧挨 exe（官方样例布局），静态 lib 不入库。
+2. **classlib 默认不产 runtimeconfig.json**（FDD 加载硬前置缺失）→ csproj 显式 `<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>`。
+3. **`-p:AssemblyName` 是全局属性**：连带 ProjectReference 的 script-api 一起改名 → NuGet restore「Ambiguous project name 'HelloScriptHot'」；热重编换名必须改拷贝出的 csproj 本体。
+4. **拷贝工程带 obj/**：NuGet 缓存残留 FullPath 同样撞 Ambiguous → 热重编只拷源文件（csproj+.cs）。
+5. **`fs::path::extension()` 只取最后一个点**（runtimeconfig.json 的 extension 是 `.json`）+ 对 runtimeconfig 路径 `replace_extension(".dll")` 会拼出 `HelloScript.runtimeconfig.dll` —— 后缀判断改文件名 ends_with，DLL 名显式「程序集名+.dll」拼接。
+6. **hostfxr.h `initialize_for_runtime_config_fn` 是三参数**（path, parameters, out handle；parameters 可 nullptr），按两参数调用即 C2198。
+7. **托管异常 MSVC /EHsc 下 catch(...) 接不住**：必须 SEH `__try/__except`（guard 函数体内禁 C++ 对象），实测 0xe0434352 捕获、进程存活、入口可复调。
+8. C# `Api` 跨程序集引用漏 `using Nl.Script.Api;` → CS0103（首轮 dotnet build 失败）。
+
+**下一步**：M-SC1 console 绑定（gated on feat/console M-C3 merge 回 master）：C++→C# 函数指针暴露 cvar.get/set/list + console.exec，C#→C# 注册命令进 console 命令表。
+
+## M-SC1：console 绑定（feat/script，2026-11-09，tag `m-sc1`）
+
+**动作**：master 合入 feat/script（console M-C0~M-C3 merge `9e12cc6`，解 M-SC1 gate；冲突 4 处——CMakeLists 双工具目标并存 + MILESTONES/PLAN/cases.json 双方追加保留，cases.json 版本序 console-mc3→m-sc0）→ wt_pool claim（track script / M-SC1）→ 三处证据（本轮模块=脚本↔console 绑定面：Carrot `CSharpBindings.cpp` + `script-api/Carrot/` 精读——绑定面是 mono_add_internal_call 按名 internal call，hostfxr 路线对应物=显式函数指针表随入口传入，同构「单一显式绑定面」；UE IConsoleManager 无 C# 脚本绑定（Blueprint/Python），bevy 无 console 无脚本——均据实标注）→ `nl/script/Bindings.hpp/.cpp`（ApiTable 6 导出 C ABI + extern "C" 实现 + 托管命令回调 SEH POD guard + CoTaskMem 配对释放）→ core/console 扩 `unregisterCommand`（M-SC3 解绑落点）→ script-api `Engine` 静态类（Init 按偏移读表 + CvarGet/Set/List + ConsoleExec + ConsoleRegister 友好/Raw 双路 + ConsoleUnregister + delegate 保活）→ `script/examples/console/` 多入口示例（SetCvar/RegisterCmd/ErrorCodes/ThrowCmd/Readback/UnregisterCmd + Entry demo）→ nl-script 扩 `run --api`（宿主预注册 builtins + demo cvar）+ selftest s6a~s6f → 迭代修 4 坑（见踩坑栏）→ 全绿 → VULKAN 树同步构建 + selftest 复跑全绿（双后端对称）→ `example/m-sc1/run.bat` 四用例 ALL GREEN + 证据生成器扩 m-sc1 段 4 张真实输出图逐张亲眼验收（DOTNET_CLI_UI_LANGUAGE=en 根治中文方框复发）→ cases.json 文本级追加 `m-sc1` 卡 4 条（前缀逐字节保留断言 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc1`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+Bindings.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 不回归 + s6a~s6f：onChanged 恰触发一次 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 掩码 31 对齐 / 托管异常命令 SEH→CommandFailed 存活 / 双向读回 + cvar.list / 注销后 UnknownCommand）；run --api demo 全链路 exit 0；负向缺 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，与 M-SC0 同口径；证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc1` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC1 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC1 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面口径固化（ApiTable ABI/内存所有权两条路/异常边界/unregisterCommand）+ 踩坑 5 条存档。
+
+**踩坑情况**
+1. **script-api 与脚本工程都要 `<AllowUnsafeBlocks>true`**：`Engine` unsafe class（ApiTable 偏移读），只在示例 csproj 开 → CS0227。
+2. **lambda 参数显隐混用 CS0748**：`(argc, argv, out IntPtr text)` 非法，全显式。
+3. **selftest 漏 `installBuiltins()`**：`cvar.set` 命令路径断言拿到 UnknownCommand(1) 而非 CommandFailed(3)，掩码 27≠31——内建命令集是生产宿主动作，selftest 必须同口径装上。
+4. **`DOTNET_CLI_UI_LANGUAGE=en`**：dotnet 中文摘要在证据图 Consolas 下成方框（M-SC0 踩坑 1 复发），dotnetBuild 前置 set 根治。
+5. **cases.json 尾锚插入**：末卡四层嵌套闭括号，锚点切多一行就把 cases 数组 `]` 切掉（本轮两次 JSONDecodeError 后改「只切末三行保留 case 层 `}`」+ json.load 复验）。
+
+**下一步**：M-SC2 ECS 绑定（数据面：World.Spawn/Remove/SetParent、Entity 失效安全拒绝、TransformComponent 字段读写；E1a 已 merge 前置满足）。
+
+## M-SC2：ECS 数据面绑定（feat/script，2026-11-09，tag `m-sc2`）
+
+**动作**：wt_pool claim（track script / M-SC2）→ 三处证据（本轮模块=脚本↔ECS 数据面：Carrot 脚本↔ECS 桥 = C# World.Current 单例 + internal call 直接操作 World、句柄 = EntityID 数值——hostfxr 路线对应物 = ApiTable 尾部追加 + 宿主侧显式绑 World；UE/bevy 据实标注无对应物）→ `Bindings.hpp/.cpp` v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` + 错误码 0..4 写死 → script-api 升 0.3.0（`Ecs` 静态类偏移读表 + `SceneEntity` wrapper）→ `script/examples/ecs/` 多入口示例（SpawnSetup/ReadVerify/InvalidProbe/RemoveSpawned + Entry demo）→ nl-script selftest s7a~s7g + run --api 绑 World + 默认类型名按工程目录推导 → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc2/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc2 段 4 张真实输出图逐张亲眼验收 → cases.json 文本级追加 `m-sc2` 卡 4 条（前缀逐字节保留 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc2`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（v2 绑定面）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 不回归 + s7a~s7g：C# spawn→C++ 逐位读回 / C++ 锚值 C# 验证 / 失效实体七项操作全 NoEntity / 延迟删除 flush 非对称 + 表级安全拒绝 / 父子 roundtrip / JSON 字节一致 / 解绑 NoWorld）；run --api ecs demo 全链路 exit 0（含父删级联）；负向错 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc2` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC2 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC2 行标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面 v2 口径固化（10 导出 ABI/错误码/World 绑定时序/延迟非对称语义锚/JSON roundtrip 前置）+ 踩坑 4 条存档。
+
+**踩坑情况**
+1. **findEntityByName 走 flush 后全局表**（entities_），与 exists()（查 names_）非对称——spawn 后未 flush 按名查不到；绑定层照抄 Carrot 口径不改 World 语义（E1a 已 merge 不动 ECS 轨道），selftest s7a 补「host flush after script spawn」步骤。首轮 s7a 13 处 FAIL 全根因于此。
+2. **clone 世界工厂库默认空**：deserialise 报 unknown component name "Transform"——必须 registerComponent<TransformComponent>()（nanite-scene ecs-serial 先例同款）。
+3. **默认类型名硬编码 HelloScript**：ecs 工程 run 无 --type 直接 code=5——改按工程目录名推导（首字母大写 + Script，三示例统一）。
+4. **cases.json heredoc 转义**：内嵌 JSON 的引号转义层级数错一层即 JSONDecodeError——含引号 command 字段用 Python 单引号串承载再 replace 注入，插后 json.loads 复验。
+
+**下一步**：M-SC3 热更 + 收口（`console.reload-script`：新 DLL 载入 collectible ALC → 重绑定 → 旧 ALC Unload；改脚本 → dotnet build → reload → cvar/命令/实体行为换新 C++ 状态无损；连续 reload 句柄计数核；全量回归绿；merge 回 master）。
+
+## M-SC3：脚本热更（feat/script，2026-11-09，tag `m-sc3`）
+
+**动作**：wt_pool claim（track script / M-SC3）→ 三处证据（本轮模块=热更：官方《assembly unloadability》教程 = NoInlining 方法边界 + weakref 排空在调用方 + collectible ALC 完成条件三条款；Carrot = registerGameAssemblyLoadCallback/UnloadCallback 程序集换载时命令重 init——对应物 = scriptUnregisterAll + 新 ALC Entry 重注册（脚本自描述重绑定）；UE/bevy 据实标注无对应物）→ `script/bootstrap/`（NlScriptBootstrap：BootLoad/BootCall/BootUnload 三 UnmanagedCallersOnly + ScriptLoadContext collectible resolver）→ `Vm` 热更四件套（loadBootstrap/scriptLoad/scriptCall/scriptUnload + 阶段码 7/8/9）→ `ScriptHost`（单例编排 + `console.reload-script` 命令）→ `Bindings` 脚本命令登记表（登记/擦除/scriptUnregisterAll）→ 示例 Entry 拆两层（普通 Entry + EntryNative）→ nl-script selftest s8a~s8h → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc3/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc3 段 4 张真实输出图 → cases.json 尾插 `m-sc3` 卡 4 条（json.load 复验 39 卡）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc3`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+ScriptHost.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 + s7 不回归 + s8a~s8h：bootstrap 3 函数指针 + reload-script 注册 / 首载 collectible ALC + Entry 重绑定 / 改源→同名覆盖重编→reloadScript 解绑 2 命令 + weakref dead + 重装载 / 行为换新 [v2] / C++ 状态无损四锚 / 连续 reload x3 句柄漂移 0 / unloadScript weakref dead / 卸载后命令消失 + C++ 导出可用）；run --api demo exit 0；check bootstrap exit 0；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc3` 版本卡 4 条 tool 用例（selftest/reload 特写/run-api 正向 + check，expectExit 0/0/0/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC3 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC3 行标完成 + 热更架构拍板回写 + 踩坑 5 条存档（同帧 dead-store / UnmanagedCallersOnly 禁托管 Invoke / 锁文件 / 协议结构地址 / 登记表对称）。
+
+**计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。

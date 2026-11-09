@@ -459,6 +459,8 @@ namespace {
 
 using nl::scene::ComponentLibrary;
 using nl::scene::Entity;
+using nl::scene::LightComponent;
+using nl::scene::ModelComponent;
 using nl::scene::System;
 using nl::scene::TransformComponent;
 using nl::scene::World;
@@ -492,8 +494,12 @@ public:
 };
 
 // 统一注册（库注册顺序不影响 roundtrip——序列化走名字不走 ID）。
+// M-E1b.0：ModelComponent/LightComponent 也入注册表（ecs-serial 场景含 Model+Light
+// 实体，roundtrip 需要两个组件都能按名字还原）。
 void registerLibraries(World& w) {
     w.getComponentLibrary().registerComponent<TransformComponent>();
+    w.getComponentLibrary().registerComponent<ModelComponent>();
+    w.getComponentLibrary().registerComponent<LightComponent>();
     w.getSystemLibrary().registerSystem<CounterSystem>();
 }
 
@@ -582,6 +588,27 @@ void buildSerialiseScene(World& w, CounterSystem** outSys) {
     c.setParent(b.getID());
     w.setFlags(b.getID(), nl::scene::EntityFlags::Hidden);
 
+    // M-E1b.0：实体 D 挂 Model+Light（拍板口径字段值），验证两个渲染组件
+    // 走同一条 roundtrip 字节一致路径（JSON 序列化按组件名）。
+    Entity d = w.newEntity("D");
+    auto* dm = static_cast<ModelComponent*>(&d.addComponent(std::make_unique<ModelComponent>(d)));
+    dm->meshFile = "Suzanne.glb";
+    dm->tint = { 0.8f, 0.4f, 0.2f };
+    auto* dl = static_cast<LightComponent*>(&d.addComponent(std::make_unique<LightComponent>(d)));
+    dl->direction = { 0.3f, -0.8f, 0.52f };
+    dl->color = { 1.0f, 0.95f, 0.9f };
+    dl->intensity = 2.5f;
+
+    // M-E1b.2：实体 E 挂 Point Light（type=1），验证新字段 roundtrip 与
+    // 方向灯（D，type=0 不写新键）的向后兼容。
+    Entity e = w.newEntity("E");
+    auto* el = static_cast<LightComponent*>(&e.addComponent(std::make_unique<LightComponent>(e)));
+    el->type = 1;
+    el->color = { 0.3f, 0.8f, 1.0f };
+    el->intensity = 8.0f;
+    el->position = { -2.5f, 1.5f, 3.0f };
+    el->range = 9.0f;
+
     w.tick(0.0); // flush（serialise 序列化 flush 后世界）
     auto sys = std::make_unique<CounterSystem>(w);
     *outSys = sys.get();
@@ -591,22 +618,27 @@ void buildSerialiseScene(World& w, CounterSystem** outSys) {
 }
 
 void testRoundtripByteIdentical() {
+    std::printf("[step] enter roundtrip\n"); // 临时插桩
     World w;
     registerLibraries(w);
     CounterSystem* sys = nullptr;
     buildSerialiseScene(w, &sys);
+    std::printf("[step] build ok\n"); // 临时插桩
 
     const std::string dump1 = w.serialise().dump();
+    std::printf("[step] dump1 ok\n"); // 临时插桩
     World w2;
     registerLibraries(w2);
     std::string err;
     const bool ok = w2.deserialise(nlohmann::json::parse(dump1), err);
+    std::printf("[step] deserialise ok=%d err=%s\n", ok ? 1 : 0, err.c_str()); // 临时插桩
     expectTrue(ok, "deserialise succeeds");
     if (!ok) {
         std::printf("  (err: %s)\n", err.c_str());
         return;
     }
     const std::string dump2 = w2.serialise().dump();
+    std::printf("[step] dump2 ok\n"); // 临时插桩
     expectTrue(dump1 == dump2, "roundtrip byte-identical (M-E2 hard criterion)");
     if (dump1 != dump2) {
         std::printf("  dump1: %s\n  dump2: %s\n", dump1.c_str(), dump2.c_str());
@@ -636,9 +668,36 @@ void testRoundtripByteIdentical() {
         expectId(static_cast<nl::scene::EntityID>(sys2->ticks), 2, "system serialise data restored");
         expectSize(sys2->getEntities().size(), 3, "restored system collects 3 transform entities");
     }
-    // nextID 保留：新实体 ID 接续（4 = A 的 nextID）
+    // M-E1b.0：Model/Light 组件逐字段还原断言（D 占 id 4）
+    expectTrue(w2.exists(4), "D id preserved");
+    expectStr(w2.getName(4), "D", "D name preserved");
+    auto* dm2 = w2.getComponent<ModelComponent>(4);
+    expectTrue(dm2 != nullptr, "D ModelComponent restored");
+    if (dm2) {
+        expectTrue(dm2->meshFile == "Suzanne.glb", "meshFile preserved");
+        expectVec3(dm2->tint, { 0.8f, 0.4f, 0.2f }, kEps, "tint preserved");
+    }
+    auto* dl2 = w2.getComponent<LightComponent>(4);
+    expectTrue(dl2 != nullptr, "D LightComponent restored");
+    if (dl2) {
+        expectVec3(dl2->direction, { 0.3f, -0.8f, 0.52f }, kEps, "light direction preserved");
+        expectVec3(dl2->color, { 1.0f, 0.95f, 0.9f }, kEps, "light color preserved");
+        expectNear(dl2->intensity, 2.5f, kEps, "light intensity preserved");
+    }
+    // M-E1b.2：Point Light 新字段逐字段还原（E 占 id 5）；D 仍为方向灯且不带新键
+    auto* el2 = w2.getComponent<LightComponent>(5);
+    expectTrue(el2 != nullptr, "E LightComponent restored");
+    if (el2) {
+        expectTrue(el2->type == 1, "point light type preserved");
+        expectVec3(el2->position, { -2.5f, 1.5f, 3.0f }, kEps, "point light position preserved");
+        expectNear(el2->range, 9.0f, kEps, "point light range preserved");
+        expectVec3(el2->color, { 0.3f, 0.8f, 1.0f }, kEps, "point light color preserved");
+        expectNear(el2->intensity, 8.0f, kEps, "point light intensity preserved");
+    }
+    if (dl2) expectTrue(dl2->type == 0, "D stays directional (backward compat)");
+    // nextID 保留：新实体 ID 接续（6 = A/B/C/D/E 五实体后的 nextID）
     Entity e4 = w2.newEntity("E4");
-    expectId(e4.getID(), 4, "nextID preserved (no id reuse)");
+    expectId(e4.getID(), 6, "nextID preserved (no id reuse)");
 }
 
 void testDeserialiseExplicitReject() {
@@ -810,13 +869,14 @@ int runDeserialiseCheck(const std::string& mode) {
 
 void printUsage() {
     std::printf("usage:\n"
-                "  nanite-scene selftest --suite <name> [--verbose]\n"
+                "  nanite-scene selftest --suite <name|all> [--verbose]\n"
                 "  nanite-scene deserialise-check <good|badjson|unknown>\n"
                 "suites:\n"
                 "  ecs-core    M-E0 World/Entity core (deferred add/remove, names, Hidden flags)\n"
                 "  ecs-hier    M-E1 components + hierarchy (world-matrix anchors, reparent, duplicate)\n"
                 "  ecs-system  M-E2 systems (signature matching, auto list, firstTick/tick)\n"
-                "  ecs-serial  M-E2 scene roundtrip (byte-identical, explicit rejections)\n");
+                "  ecs-serial  M-E2 scene roundtrip (byte-identical, explicit rejections)\n"
+                "  all         run every suite in order (M-E1b.0 acceptance)\n");
 }
 
 } // namespace
@@ -841,6 +901,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     // selftest --suite <name> [--verbose]
+    std::setvbuf(stdout, nullptr, _IONBF, 0); // 临时插桩：崩溃前输出不丢（定位后移除）
     std::string suite;
     bool haveSuite = false;
     for (int i = 2; i < argc; ++i) {
@@ -848,6 +909,10 @@ int main(int argc, char** argv) {
             suite = argv[i + 1];
             haveSuite = true;
             ++i;
+        } else if (std::string(argv[i]) == "--all") {
+            // M-E1b.0：裸 --all 等价 --suite all（验收脚本口径）
+            suite = "all";
+            haveSuite = true;
         } else if (std::string(argv[i]) == "--verbose") {
             g_verbose = true;
         }
@@ -868,6 +933,20 @@ int main(int argc, char** argv) {
     }
     if (suite == "ecs-serial") {
         return runSuiteEcsSerial();
+    }
+    // M-E1b.0：--suite all 顺序跑全部四个 suite（每个 suite 前清零 g_failures，
+    // 任一 FAIL 退出码 1——build/验收脚本用 `nanite-scene.exe selftest --all`）。
+    if (suite == "all") {
+        bool anyFail = false;
+        const int rc1 = (g_failures = 0, runSuiteEcsCore());
+        if (rc1 != 0) anyFail = true;
+        const int rc2 = (g_failures = 0, runSuiteEcsHier());
+        if (rc2 != 0) anyFail = true;
+        const int rc3 = (g_failures = 0, runSuiteEcsSystem());
+        if (rc3 != 0) anyFail = true;
+        const int rc4 = (g_failures = 0, runSuiteEcsSerial());
+        if (rc4 != 0) anyFail = true;
+        return anyFail ? 1 : 0;
     }
     std::printf("unknown selftest suite: %s\n", suite.c_str());
     printUsage();

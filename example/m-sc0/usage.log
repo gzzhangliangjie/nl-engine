@@ -1,0 +1,7 @@
+nl-script -- C# hosting selftest tool (nl::script, A-class track)
+usage:
+  nl-script check <projectDir>                       compile only (dotnet build)
+  nl-script run <projectDir> [--args <s>] [--type <ns.Class, Assembly>]
+                                                     compile + load + call Entry
+  nl-script selftest <projectDir>                    full machine-checked acceptance
+exit codes: 0=PASS / 1=fail / 2=usage

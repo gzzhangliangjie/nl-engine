@@ -41,11 +41,17 @@
 | **M-E2** ✅ 已完成（tag `ecs-e2`，2026-11-09） | System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ `SignedSystem<Required...>` + 场景 JSON 序列化/反序列化 **roundtrip 字节一致** | selftest：System 只收 Signature 匹配实体（加/删组件自动进出列表）；roundtrip = `serialise→deserialise→serialise` 逐字节一致（正/负向：非法 JSON / 未知组件名显式退出码 2） |
 | **M-E3** ✅ 已完成（2026-11-09，tag `ecs-e3`） | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json `p8-ecs` 卡 4 条全过（expectExit 2/0/0/2）+ run.bat ALL GREEN + 4 张证据图亲眼验收；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |
 
-## E1b 后挂段（渲染集成，不在本 worktree 范围）
+## E1b 后挂段（渲染集成）—— M-E1b.0 + M-E1b.1 + M-E1b.2 已完成（2026-11-09）
 
-- viewer 加载场景文件画 N 物体 M 灯（M-E1b.0~x 届时另编号）；**触发渲染纪律**：kStage 体系 + 双后端画面回归。
-- 「50 物体 + 8 动态灯 GI 正确响应」完整验收卡主线 S10 之后；前置验收（多物体多灯正确绘制）可在 S6 收官（tag `s6-done`）后主线穿插。
-- ModelComponent / LightComponent 等渲染语义组件在 E1b 才进。
+> S6 收官（tag `s6-done`）后解禁，`feat/ecs` worktree 内开工；**里程碑编号定为 M-E1b.0**（E1a 的 M-E0~E3 已收官）。
+> 用户拍板：① 多灯 = **方向灯数组**（点光源留 pbr-direct merge 后）；② **不 bump kStage**（保持 S6.2），照 console 轨道先例，证据走 example 卡 + 截图 + `--only` 抽查。
+
+- **已落地**：`ModelComponent` / `LightComponent` 纯数据组件进 `nl/scene`；`viewer --scene <World JSON>` 反序列化后 O(N) 收集 → `Renderer::loadEcsScene` → `Scene::initScene` 按 meshFile 分组实例化；`vsScene/psScene` 新入口对 + t5 实例缓冲 / t6 灯缓冲，既有 shader 入口与既有 draw 路径逐字节不动。
+- **验收（M-E1b.0）**：`example/ecs-e1b/`（5 物体 + 3 方向灯，ambient 0.22）双后端 `deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes，`--only s6.2` 10/10 bytes（kStage 未动、既有路径零回归）；双后端画面互比 3px/maxDelta2（超 near 阈值，GPU 取整噪声，留精度项）。台账见 `docs/MILESTONES.md` M-E1b.0 段。
+- **M-E1b.1 规模锚已达成（2026-11-09）**：`ecs-e1b-scale.scene` = 10×5 网格 × 4 种 mesh（13/13/12/12 实例）= **50 物体 + 8 方向灯 / 4 batch / 58 实体**，双后端 `deviceErrors=0`、`--only ecs-e1b` 4/4 bytes、`--only s6.2` 10/10 bytes；`run-scale.bat` 机器断言。三处参考复核多实例 / 多灯容器均无硬上限（Carrot 逐实体 `InstanceData` / UE `DirectionalLights` 动态数组 / bevy clustered forward），不改架构。顺带修掉 M-E1b.0 的多 batch 实例化 bug：DX12 的 `SV_InstanceID` 不含 `StartInstanceLocation`，改为每 batch 各持自己的 t5 实例缓冲（详见 `docs/SHADER-CONVENTIONS.md` §2.10 与 MILESTONES M-E1b.1 踩坑①），M-E1b.0 基线 MD5 逐字节不变。
+- **M-E1b.2 点光源已达成（2026-11-09）**：`LightComponent` 增 `type`/`position`/`range`（方向灯不写新键，向后兼容），t6 灯缓冲每灯扩为 3 个 float4，`vsScene` 增 `WORLDPOS` 插值量；衰减照抄 UE `DeferredLightingCommon.ush:480-486`，点光绝对强度独立累加、方向灯 `1/ΣI` 归一化，无点光时走 M-E1b.0 原表达式分支。证据 `example/ecs-e1b/ecs-e1b-point.scene`（7 白模 + 3 彩色点光 + 1 弱方向灯），双后端 `deviceErrors=0`、`--only ecs-e1b` 6/6 bytes、`--only s6.2` 10/10 bytes，点光双后端画面 MD5 完全一致。三处参考实读：Carrot `GPULight::LightType`+union / bevy `PointLight{color,intensity,range,radius}` / UE `UPointLightComponent`（反平方 + AttenuationRadius）。
+- **未完成**：「50 物体 + 8 动态灯 GI 正确响应」完整验收仍卡主线 S10 之后；PBR 材质响应 / 阴影 / clustered 灯池留 E1b.3+（前置 = E1 轨道收官 merge 同步 master 的 pbr-direct，差异见 `docs/s5/UE-DIFFS.md` `D-E1b-1`）。
+- 三轮均只在本 worktree 提交 + tag，轨道未收官、不 merge 回 master：只读 `git merge-tree` 探查显示同步 master 会撞至少 12 个文件冲突（S7 visbuf + pbr-direct 与 E1b 的 `renderer/*` / `model.slang` / `modes.hpp` 全重叠），留待收官时统一解。
 
 ## 排期
 

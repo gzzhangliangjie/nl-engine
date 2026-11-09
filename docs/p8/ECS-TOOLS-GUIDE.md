@@ -74,3 +74,64 @@ ctest（构建目录内）：`e0-ecs-core-selftest` / `e0-ecs-unknown-suite`（W
 4. `duplicate(w).get()` 临时 unique_ptr 悬空 use-after-free —— 表现为 suite exit 127 无输出（stdout 缓冲随崩溃丢失）；所有权先落 named unique_ptr。
 5. 组件推送与实体 flush 时机非对称：组件增删**即时**推送 onEntitiesUpdated，实体增删走 flush——断言时机写错会假 FAIL。
 6. 工具输出字符串一律 ASCII（证据图 Consolas 无中文字形；注释保留中文）。
+
+## M-E1b.0：viewer --scene 渲染集成（2026-11-09）
+
+E1a 的纯逻辑内核接上渲染器。用户拍板：**方向灯数组** + **kStage 保持 S6.2 不 bump**（console 轨道先例）。
+
+### 用法
+
+```
+build/DX12/viewer.exe --scene example/ecs-e1b/ecs-e1b.scene --no-hud \
+    --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9
+example/ecs-e1b/run.bat          # 双后端复拍 + 机器断言，exit 0 = ok
+python tools/regression.py --only ecs-e1b
+```
+
+场景文件是 `World::serialise` 的 JSON（version=1 / nextID / entities[id 升序] / systems），加一个场景级扩展键 `ambient`（World 格式不感知，viewer 读取，缺省 0.28）。组件库显式注册 `Transform` / `Model` / `Light`；`Model` 必须有 `Transform`，`mesh` 只接受 assets 白名单内的 ASCII `*.glb` 文件名；`Light` 不需要 Transform，方向在 viewer 侧归一化。
+
+### 数据布局（新增资源，既有路径零改动）
+
+| 槽 | 内容 |
+|---|---|
+| t5 `g_instanceData` | 每实例 5 个 float4：4 列世界矩阵（列主序）+ `(tint.rgb, 0)`，按 meshFile 分组连续排布 |
+| t6 `g_lights` | `[0]=(lightCount, ambient, 1/ΣI, 0)`；之后每灯 2 个 float4：`{dir.xyz, intensity}`、`{color.rgb, 0}` |
+
+`vsScene` 用 `SV_InstanceID`（含 `startInstanceLocation` 的全局槽号）取世界矩阵，`psScene` 循环灯数组累加 `abs(dot(n,dir))*color*intensity`，按 `1/ΣI` 归一化成加权平均避免过曝，ambient 兜底。灯数为 0 时退化为纯 ambient。
+
+### 证据
+
+- `example/ecs-e1b/shot-DX12.png` / `shot-VULKAN.png`（基线）+ 双后端 `.log`；归档图 `docs/screenshots/ecs-e1b-dx12.png` / `ecs-e1b-vulkan.png`。
+- 肉眼核验：5 个 Suzanne（红/绿/蓝/黄/白）不同位置、朝向、缩放，顶面亮侧面暗的方向光层次。
+- 双后端 `5 objects | 3 lights | batches=1 | triangles=3936 | deviceErrors=0`；`run.bat` exit 0；`--only ecs-e1b` 2/2 bytes；`--only s6.2` 10/10 bytes（kStage 未动、既有路径零回归）。
+- 双后端互比 3px / maxDelta 2，超项目 near 阈值（≤2px 且 ≤1/255）→ 如实记 FAIL 档（GPU 取整噪声），各自对本后端基线是 bytes。
+
+### 踩坑（详版见 MILESTONES.md M-E1b.0 段）
+
+1. **组件类型 ID 全 0**（E1a 遗留）：`ComponentOf<T>::nextTypeID()` 的静态计数器在类模板成员函数里，每个 T 各一份 → `getComponent<Light>` cast 到 Model 内存 → 虚假灯数 + 段错误 139。修到非模板 `inline allocateComponentTypeID()`。**加新组件类型必须验 ID 隔离**。
+2. BindingSet 早于实例/灯缓冲创建 → NVRHI 拒绝空 buffer 绑定；延后到第 5.5 步。
+3. `instanceStart/instanceCount` 从没赋值 + 实例数据未按批连续排布 → `InstanceCount=0` 空画面。
+4. 多灯强度直接相加过曝（ΣI≈4.7 全 clamp 1.0）→ 归一化；`1/ΣI` 放 CPU 端让 shader 只做乘法。
+5. 联合包围球首球漏 ±r → 自动取景偏近。
+6. 回归 cwd = exe.parent，场景相对路径失效 → `{root}` 占位符。
+7. Windows 大小写不敏感：清理小写临时名误删大写基线；CRLF 文件文本插入要先归一化换行。
+
+## M-E1b.1 — 规模锚 50 物体 × 8 方向灯（2026-11-09）
+
+- 命令：`viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-scale.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18`；一键复拍 `example/ecs-e1b/run-scale.bat`（双后端 + 机器断言，exit 0）。
+- 场景：10×5 网格，4 种 mesh 按 `(col+row)%4` 分配 → 4 个 batch（13/13/12/12），58 实体（50 Model + 8 Light）；tint 走 HSV 全色相环，8 盏灯方向 / 色温 / 强度各异，ambient 0.22。
+- 口径：`P8-ECS-PLAN.md` 目标「50 物体 + 8 灯规模」达成；三处参考确认无硬上限，故本轮不改架构，只扩场景数据。kStage 仍 S6.2。
+- 双后端 `50 objects | 8 lights | batches=4 | triangles=540352 | deviceErrors=0`；`--only ecs-e1b` 4/4 bytes、`--only s6.2` 10/10 bytes；M-E1b.0 基线复拍 MD5 不变。
+- 展示台：`example/cases.json` 的 `ecs-e1b` 卡新增 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`--dist 18` 是为绕开自动取景被高密度 mesh 包围球撑远的问题，viewer 已有参数，不改取景公式。
+- **实例化铁律**：禁止用 `startInstanceLocation` 让 `SV_InstanceID` 当全局槽号（DX12 不把它计入实例号）→ 每个 batch 各持自己的 t5 实例缓冲。详 `docs/SHADER-CONVENTIONS.md` §2.10。
+- 双后端互比 6px / maxDelta 23 → 按阈值落 FAIL 档（5 个 ±1 取整 + 1 个环面边缘覆盖差），各自对本后端基线 bytes；如实留痕，不再折腾精度。
+
+## M-E1b.2：点光源（2026-11-09）
+
+- 命令：`viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-point.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18`；一键复拍 `example/ecs-e1b/run-point.bat`（双后端 + 机器断言，exit 0）。
+- 场景：7 个 Suzanne 白模（tint 全 1，颜色完全由灯决定）x=-9..9 一字排开；3 盏彩色点光（红 / 绿 / 蓝，z=+2、`range=8`、`intensity=8`）+ 1 盏弱方向灯轮廓，ambient 0.08，共 11 实体。肉眼可判三色光池与近亮远暗的距离衰减。
+- 组件字段：`LightComponent` 增 `type`(0=Directional 默认 / 1=Point) / `position` / `range`；**方向灯 `serialise()` 不写新键**，既有场景 JSON 与 ecs-serial roundtrip 逐字节兼容；viewer 收集段对非法 type 与非正 range 显式退出码 2。
+- 灯缓冲：t6 每灯 3 个 float4，头 slot 含 `pointCount`；`InvRadius=1/range` CPU 预算。衰减照抄 UE `DeferredLightingCommon.ush:480-486`；点光按绝对强度独立累加，方向灯仍 `1/ΣI` 归一化；无点光时走 M-E1b.0 原表达式分支。铁律详 `docs/SHADER-CONVENTIONS.md` §2.11。
+- 验收：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`--only ecs-e1b` 6/6 bytes、`--only s6.2` 10/10 bytes；`point` 卡双后端画面 MD5 完全一致（`f28ca72adda2cb0bbcc43a008e0b5592`，本轨首个互比 bytes）；`scene` 卡基线逐字节不变，`scale` 卡因新增 `WORLDPOS` 插值量重拍（1px/maxDelta1 取整噪声）。
+- **bat 铁律**：`for ... do ( ... )` 块内的 `echo` 文本禁止出现未转义的 `)`（右括号提前闭合块 → cmd「此时不应有 /」exit 255）；本轮 run-point.bat 初版踩过。
+- 未完成：点光的 PBR 材质响应 / 阴影 / clustered 灯池，见 `docs/s5/UE-DIFFS.md` `D-E1b-1`；前置是 E1 轨道收官 merge 回 master（同步 pbr-direct）。

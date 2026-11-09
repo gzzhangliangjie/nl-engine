@@ -83,6 +83,13 @@
 | 我们现状 | 无。微小簇漏画时无兜底（当前资产规模未见可见 artifacts）。 |
 | 升级路径 | 若 M5.x+ 大规模资产出现微小簇闪烁/漏画，评估 S 级软件光栅（工作量大，需单独立项）。 |
 
+### D-E1b-1 ECS 场景点光源的口径差异（M-E1b.2；轨道局部编号，避免与主线 D10~D15 撞号，收官 merge 时按主线序列重排）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `ULocalLightComponent` / `UPointLightComponent`：`bUseInverseSquaredFalloff` 默认开 + `AttenuationRadius` 夹紧 + 可选 `LightFalloffExponent` 非物理路径（8.0）；Intensity 单位 lumens/candela；`SourceRadius` 影响高光与软阴影；光照经 Cook-Torrance BRDF、clustered / deferred 灯池，另有阴影 / IES / 光照函数。 |
+| 我们现状 | M-E1b.2 点光 = `type=1` + 世界 `position` + `range` 的纯数据组件；**衰减公式逐条照抄** `DeferredLightingCommon.ush:480-486`（含 `1/(d²+1)` 与半径窗），但响应是 Lambert `max(dot(N,L),0)`，不是 PBR；无 `SourceRadius`、无非物理 FalloffExponent 路径、无阴影/IES；灯强是相对权重而非 lumens，方向灯另按 `1/ΣI` 归一化（UE 无此归一化）；t6 单 StructuredBuffer 顺序遍历，无 clustered culling。Carrot `GPULight` 的 `constant/linear/quadratic` 三项衰减路径也没做（三处参考里的第三条差异）。 |
+| 升级路径 | E1 轨道已收官 merge 回 master（pbr-direct 的 Cook-Torrance + t1 MR 贴图已在 master）：点光接进 PBR BRDF、灯强换 lumens 口径、clustered forward 灯池与阴影按 S8 预研另立项；轨道局部编号 `D-E1b-1` 保留以示来源（与主线 D10~D15 不连续）。 |
 ### D10 物理求解器：UE 自研 Chaos vs 我们 vendored Jolt（M-P0 建档，2026-11-09；有意简化）
 
 | | 内容 |

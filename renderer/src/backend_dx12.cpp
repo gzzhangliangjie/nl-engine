@@ -71,7 +71,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool visbufMode, std::string& outError) override {
+              bool sceneMode, bool visbufMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -152,7 +152,13 @@ public:
         // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
         // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
         bool sceneOk = false;
-        if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
+        if (sceneMode) {
+            // M-E1b.0：ECS 场景不在此初始化 Scene（swapchain/depth/framebuffer/
+            // present 照常）；场景资源由 loadEcsScene 建立后才可绘制（ready() 为
+            // false 时 draw 段跳过，与历史空场景行为一致）。
+            sceneOk = true;
+        }
+        else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
             sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
@@ -311,6 +317,22 @@ public:
         return true;
     }
 
+    // M-E1b.0：ECS 场景加载（sceneMode=true 的 init 之后由 Renderer 转发调用）。
+    // DX12 运行时入口名被 NVRHI 忽略（真正入口是编译期 -entry vsScene/psScene 写进
+    // blob 的），传真实名仅为可读性；Vulkan 侧恒传 "main"（§2.4 两阶段规则）。
+    bool loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                      const SceneLightDesc* lights, std::uint32_t lightCount,
+                      float ambient, const char* sceneName,
+                      std::string& outError) override {
+        if (!scene_.initScene(device_, "dxil", "vsScene", "psScene", objects, objectCount,
+                              lights, lightCount, ambient, sceneName, outError)) return false;
+        info_.modelName = scene_.modelName();
+        info_.triangleCount = scene_.triangleCount();
+        info_.instanceCount = scene_.instanceCount();
+        for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
+        return true;
+    }
+
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {
@@ -362,6 +384,7 @@ public:
         info_.hizTopFar = scene_.hizTopFar();                 // M6.1：金字塔最高 mip（最远表面）
         info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
+        info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();

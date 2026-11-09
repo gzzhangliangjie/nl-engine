@@ -41,11 +41,32 @@
 
 | 里程碑 | 内容 | 验收判据 | 依赖 |
 |---|---|---|---|
-| **M-SC0** hosting 内核 | `thirdparty/dotnet-hosting/` vendored（SDK 自带三头件）+ CMake 接 nethost；`nl::script::Vm`（官方三步口径：`initialize_for_runtime_config` → delegate 取 `load_assembly_and_get_function_pointer` → 调用；异常边界）；`script-api` 骨架 classlib + 用户脚本最小示例；`nl-script` 工具（`run` 编译+跑脚本 / `check` 只编译检查） | selftest：C++ 装载运行时→加载 DLL→经 `component_entry_point_fn`（`int(const void*, int)` 默认签名）调静态函数拿返回值→托管异常捕获转错误码；脚本改动经 `dotnet build` 重编后行为更新；工具版交代（usage+正向+负向 tool 卡） | 无（SDK 已装），即刻开工 |
-| **M-SC1** console 绑定 | C++→C# 函数指针暴露：`cvar.get/set/list`、`console.exec`（ExecCode 0/1/2/3 → C# 返回）；C#→C++ 注册：`Console.Register(name, fn)` 进 console 命令表（fn 经异常边界调用） | selftest：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码逐一对齐 | **console M-C3 merge 回 master** |
-| **M-SC2** ECS 绑定（数据面） | `World.Spawn/Remove/SetParent/GetParent`、Entity wrapper（与 EntityID 映射 + 失效安全拒绝）、TransformComponent 字段读写（pos/rot/scale） | selftest：C# 建实体→挂 Transform→改字段→C++ 读回一致；删除实体后 C# 访问得到失败结果不崩；JSON roundtrip 不受影响 | E1a 已 merge（2d4ad49）✓ |
+| **M-SC0** hosting 内核 ✅ **已完成（2026-11-09，tag `m-sc0`）** | `thirdparty/dotnet-hosting/` vendored + CMake 接 nethost；`nl::script::Vm`（runtime 初始化 / 加载程序集 / 取函数指针 / 调用与异常边界）；`script-api` 骨架 classlib + 用户脚本最小示例；`nl-script` 工具（`run` 编译+跑脚本 / `check` 只编译检查） | selftest：C++ 装载运行时→加载 DLL→调静态函数拿返回值→托管异常捕获转错误码；脚本改动经 `dotnet build` 重编后行为更新；工具版交代（usage+正向+负向 tool 卡）——**全部达成：selftest 17/17（含 s5 热重编 42→43 同进程行为更新）、展示台 m-sc0 卡 5 条 + 5 张真实输出证据图 + SCRIPT-TOOLS-GUIDE（踩坑 7 条存档）** | 无（SDK 已装），即刻开工 |
+| **M-SC1** console 绑定 ✅ **已完成（2026-11-09，tag `m-sc1`）** | C++→C# 函数指针暴露：`cvar.get/set/list`、`console.exec`（ExecCode 0/1/2/3 → C# 返回）；C#→C++ 注册：`Console.Register(name, fn)` 进 console 命令表（fn 经异常边界调用）——**落地：ApiTable 6 导出随入口 args 传入（Carrot mono internal call 的 hostfxr 对应物）+ reverse P/Invoke（CoTaskMem 配对）+ Console 扩 unregisterCommand** | selftest：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码逐一对齐——**全部达成：selftest s6a~s6f 全绿（onChanged 恰触发/exec 调通/掩码 31 对齐/SEH 异常命令/双向读回/注销解绑），M-SC0 s0~s5 不回归，展示台 m-sc1 卡 4 条 + 4 张真实输出证据图，双后端构建+selftest 均 PASS** | console M-C3 merge 回 master ✓（9e12cc6） |
+| **M-SC2** ECS 绑定（数据面）✅ 2026-11-09 tag `m-sc2` | Bindings v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` 显式绑 World；C# `Ecs` 静态类 + `SceneEntity` wrapper（Carrot Entity 同构）；错误码 0..4（ok/NoWorld/NoEntity/Component/BadArg） | selftest s7a~s7g 全绿（M-SC0/SC1 不回归）：C# 建实体→挂 Transform→改字段→C++ 逐位读回；失效实体七项操作全 NoEntity 拒绝不崩；JSON roundtrip 字节一致；解绑后导出一律 NoWorld（M-SC3 兜底）。踩坑 4 条见 SCRIPT-TOOLS-GUIDE | E1a 已 merge（2d4ad49）✓ |
 | **M-SC2b**（可选，后定） | ScriptComponent 脚本逻辑组件：C++ 组件持程序集/类型名，tick 回调 `OnTick(self, dt)` | 视 M-SC2 后扩展需求决定，**默认不做** | M-SC2 |
-| **M-SC3** 热更 + 收口 | `console.reload-script`：新 DLL 载入新 collectible ALC → 重绑定 → 旧 ALC Unload；收口 merge 回 master | 验收：改 C# 脚本 → `dotnet build` → reload → cvar/命令/实体行为换新，C++ 侧状态无损（cvar 值/实体树不动）；连续 reload 无泄漏（句柄计数核）；全量回归绿 | M-SC0~SC2 |
+| **M-SC3** 热更 + 收口 ✅ 2026-11-09 tag `m-sc3` | `console.reload-script`：新 DLL 载入新 collectible ALC → 重绑定 → 旧 ALC Unload；收口 merge 回 master | 验收：改 C# 脚本 → `dotnet build` → reload → cvar/命令/实体行为换新，C++ 侧状态无损（cvar 值/实体树不动）；连续 reload 无泄漏（句柄计数核）；全量回归绿。**实测全过**：selftest s8a~s8h 全绿（reload 解绑 2 命令 + weakref dead + 行为换新 [v2] + 状态四锚 + 连续 reload x3 句柄漂移 0）；踩坑 5 条见 SCRIPT-TOOLS-GUIDE M-SC3 节 | M-SC0~SC2 |
+
+## M-SC3 落地拍板（2026-11-09，热更架构定稿）
+
+- **bootstrap 中转（官方 collectible 口径）**：hostfxr 只能把程序装配进默认 ALC
+  （不可卸载），collectible ALC 的创建/卸载必须托管侧完成 → 非收集 bootstrap
+  程序集（`script/bootstrap/`，常驻）暴露 BootLoad/BootCall/BootUnload 三函数指针
+  （C++ 一次性取用安全）；脚本程序集全部经 bootstrap `LoadFromStream` 进
+  collectible ALC（**不锁 DLL 文件**——`LoadFromAssemblyPath` 锁文件会让
+  `dotnet build` 同名覆盖必断，热更工作流关键通路）；脚本方法经 bootstrap
+  反射 Invoke（机制中转，绑定面照旧显式函数指针，「不做反射自动绑定」原则不破）。
+- **脚本入口拆两层**：普通 `Entry`（collectible 反射路径，**禁 [UnmanagedCallersOnly]**
+  ——运行时禁止托管代码反射调用它，实测 InvalidProgram）+ `[UnmanagedCallersOnly]
+  EntryNative`（默认 ALC `getEntryPoint` 函数指针路径）。
+- **卸载次序铁律**：先 `scriptUnregisterAll()`（脚本命令登记表批量解绑，解除对
+  旧 ALC reverse P/Invoke thunk 的全部 C++ 侧引用）→ 再 `scriptUnload()`。
+- ** unload 与 GC 排空不得同帧**（本轮最大坑，官方教程口径实证）：同方法内
+  `alc = null` 是 JIT dead store，栈引用永远 root；unload 必须放 NoInlining 小方法
+  返回 WeakReference、排空在调用方。详 SCRIPT-TOOLS-GUIDE M-SC3 踩坑存档。
+- **C++ 侧状态无损口径**：reload 不碰 cvar 值/实体树/内建命令；重绑定 = 新脚本
+  Entry 自己重新注册（脚本自描述，Carrot load-callback 同构）。连续 reload x3
+  `GetProcessHandleCount` 漂移 0。
 
 ## 有意简化清单（防范围失控，2026-11-09 定）
 
@@ -55,5 +76,12 @@
 
 ## 注册表
 
-- worktree：`E:/UE_STUDY_2026/nl-engine-script`，分支 `feat/script`（待建）。
+- worktree：`E:/UE_STUDY_2026/nl-engine-script`，分支 `feat/script`（**已建**，wt_pool track `script` 已注册 active；junction 共享 `.workbuddy`/`slang dist` 实测在位）。M-SC0 收口 tag `m-sc0`（2026-11-09）。
 - 计划归属：ROADMAP E4 脚本段（2026-11-09 解禁，鸣潮方向）；物理已提前开工（`P8-PHYS-PLAN.md` M-P0~M-P3），音频 2026-11-09 定案 vendored miniaudio（`P8-AUDIO-PLAN.md`，排期闸仍排 E1 后）——两者均已不再「等游戏类型拍板」，见 ROADMAP E4 行。
+
+## M-SC0 实测补记（2026-11-09，踩坑详档见 docs/p8/SCRIPT-TOOLS-GUIDE.md）
+
+- vendored 实际落位：`include/`（hostfxr.h/nethost.h/coreclr_delegates.h）+ `lib/nethost.lib`（**真导入库**；pack 里的 libnethost.lib 是静态库，与 dllimport 语义不符，不入库）+ `bin/nethost.dll`（POST_BUILD copy 到 exe 旁，官方样例布局）。
+- `UNMANAGEDCALLERSONLY_METHOD` 路线实测可用：C# 方法标 `[UnmanagedCallersOnly]`、签名 `int(IntPtr, int)`，返回指针即默认签名——与官方口径一致。
+- 托管异常边界：MSVC /EHsc 下必须 SEH `__try/__except`（catch(...) 接不住），实测 0xe0434352 捕获、进程存活。
+- 热重编验收（s5）落地细节：拷工程只拷源文件；换 AssemblyName 改 csproj 本体（`-p:` 全局属性会污染 ProjectReference → NuGet「Ambiguous project name」）；classlib 需 `GenerateRuntimeConfigurationFiles=true` 才产 runtimeconfig.json。
