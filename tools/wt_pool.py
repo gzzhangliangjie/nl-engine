@@ -75,6 +75,10 @@ TRACKS = {
         "wt": "E:/UE_STUDY_2026/nl-engine-audio",
         "branch": "feat/audio", "state": "planned",
     },
+    "pbr-direct": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
+        "branch": "feat/pbr-direct", "state": "active",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
