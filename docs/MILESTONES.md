@@ -1395,3 +1395,65 @@
 9. **`--jobs 4` 全量回归偶发 1 条 FAIL（`s1-asset/roundtrip` vulkan：日志缺 `nmesh selftest: PASS`）** → 根因：工具用例写固定共享路径，用例间并行会争用（`tools/regression.py` 头部纪律已写明，并建议可疑 near/FAIL 用 `--jobs 1` 排除争用）；与本轮 M7.0 代码无关。处理：`--only s1-asset/roundtrip` 单跑 2/2 通过、`--jobs 2` 全量 286/286 ALL GREEN 后以低并发为准；不擅自改工具层的共享路径约定。
 
 **下一步**：M7.1 材质 pass（vis buffer 反解 → barycentrics → vertex pulling 取属性 → Carrot 式单全屏材质着色，D-S7-1 已拍板）；M7.2 多材质验收。
+## M-SC0：C# hosting 内核（feat/script，2026-11-09，tag `m-sc0`）
+
+**动作**：wt_pool claim（track script / M-SC0；script 轨道注册表同步进 wt_pool.py TRACKS）→ 三处证据（P8-SCRIPT-PLAN「三处参考口径」+「现成封装参考」2026-11-09 精读留痕：Carrot `core/core/scripting/csharp/` 1229 行 hosting 分层——抄结构不抄 Mono 底座；bevy 无脚本 crate——克制先例；Microsoft Learn《Write a custom .NET runtime host》——hostfxr 三导出 + `component_entry_point_fn=int(void*,int32)` 默认签名 + FDD-only/单运行时两硬限制）→ vendored `thirdparty/dotnet-hosting/`（SDK 8.0.19 pack：hostfxr.h / nethost.h / coreclr_delegates.h 三头件 + nethost.lib 真导入库 + nethost.dll）→ `nl::script::Vm`（PIMPL：头文件零 hostfxr 符号；create=定位→LoadLibrary→init_for_runtime_config→取 delegate；getEntryPoint=UNMANAGEDCALLERSONLY_METHOD 路线；析构 close+FreeLibrary）+ SEH 互操作边界 guard（托管异常转 Result code 6）→ CMake：Vm.cpp 进 nl_core + nethost 链接 + `nl-script` 工具目标（nethost.dll POST_BUILD copy）→ `script/script-api/` 骨架 classlib（net8.0，M-SC1/SC2 绑定落点）+ `script/examples/hello/` 最小用户脚本（mode 驱动：ok/echo/throw/default 四路）→ `nl-script/main.cpp`（check/run/selftest 三命令，退出码 0/1/2）→ selftest 17 项迭代全绿（4 轮修坑见踩坑栏）→ `example/m-sc0/run.bat` 五用例实跑 ALL GREEN + `tools/make-script-evidence.py` 5 张证据图（真实日志渲染）+ 逐张亲眼验收 → `example/cases.json` 追加 `m-sc0` 版本卡 5 条 tool 用例（diff 干净 90 行纯追加）→ `docs/p8/SCRIPT-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc0`，即本条台账所在提交）。
+
+**完成情况**：DX12 树 nl-script 构建过（VULKAN 树 nl_core 同步验证）；selftest 17/17（s0 产物定位 / s1 hostfxr 三导出装载 / s2 默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）/ s3 返回值锚 42/-1/0/-1 / s4 托管异常 SEH 捕获 0xe0434352 + 进程存活 + 异常后可复调 / s5 拷贝工程改 42→43 重编换名同进程装载 → 43）；`run --args ok` ret=42 exit 0、`run --args throw` exit 1、`check` exit 0、无参 exit 2；run.bat ALL GREEN；`server.py --check` exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，无截图无渲染基线卡；渲染集成属 E1b 之外的脚本渲染绑定，plan 未排）；②工具交代物——**本轮有**：展示台 `m-sc0` 版本卡 5 条（usage/正向 run-ok/负向 run-throw/check/selftest，expectExit 2/0/1/0/0）+ 5 张证据图（真实输出渲染，亲眼核验）+ SCRIPT-TOOLS-GUIDE + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC0 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 踩坑存档 7 条 + PARALLEL-TRACKS §7.1d wt 状态更新 + wt_pool.py TRACKS 注册 script 轨道。
+
+**踩坑情况**
+1. **libnethost.lib 是静态库**（1.6MB 无 `__imp_` 符号）与 nethost.h 默认 dllimport 语义不符 → LNK2019 `__imp_get_hostfxr_path`；换 nethost.lib（1.7KB 真导入库）+ nethost.dll 运行期紧挨 exe（官方样例布局），静态 lib 不入库。
+2. **classlib 默认不产 runtimeconfig.json**（FDD 加载硬前置缺失）→ csproj 显式 `<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>`。
+3. **`-p:AssemblyName` 是全局属性**：连带 ProjectReference 的 script-api 一起改名 → NuGet restore「Ambiguous project name 'HelloScriptHot'」；热重编换名必须改拷贝出的 csproj 本体。
+4. **拷贝工程带 obj/**：NuGet 缓存残留 FullPath 同样撞 Ambiguous → 热重编只拷源文件（csproj+.cs）。
+5. **`fs::path::extension()` 只取最后一个点**（runtimeconfig.json 的 extension 是 `.json`）+ 对 runtimeconfig 路径 `replace_extension(".dll")` 会拼出 `HelloScript.runtimeconfig.dll` —— 后缀判断改文件名 ends_with，DLL 名显式「程序集名+.dll」拼接。
+6. **hostfxr.h `initialize_for_runtime_config_fn` 是三参数**（path, parameters, out handle；parameters 可 nullptr），按两参数调用即 C2198。
+7. **托管异常 MSVC /EHsc 下 catch(...) 接不住**：必须 SEH `__try/__except`（guard 函数体内禁 C++ 对象），实测 0xe0434352 捕获、进程存活、入口可复调。
+8. C# `Api` 跨程序集引用漏 `using Nl.Script.Api;` → CS0103（首轮 dotnet build 失败）。
+
+**下一步**：M-SC1 console 绑定（gated on feat/console M-C3 merge 回 master）：C++→C# 函数指针暴露 cvar.get/set/list + console.exec，C#→C# 注册命令进 console 命令表。
+
+## M-SC1：console 绑定（feat/script，2026-11-09，tag `m-sc1`）
+
+**动作**：master 合入 feat/script（console M-C0~M-C3 merge `9e12cc6`，解 M-SC1 gate；冲突 4 处——CMakeLists 双工具目标并存 + MILESTONES/PLAN/cases.json 双方追加保留，cases.json 版本序 console-mc3→m-sc0）→ wt_pool claim（track script / M-SC1）→ 三处证据（本轮模块=脚本↔console 绑定面：Carrot `CSharpBindings.cpp` + `script-api/Carrot/` 精读——绑定面是 mono_add_internal_call 按名 internal call，hostfxr 路线对应物=显式函数指针表随入口传入，同构「单一显式绑定面」；UE IConsoleManager 无 C# 脚本绑定（Blueprint/Python），bevy 无 console 无脚本——均据实标注）→ `nl/script/Bindings.hpp/.cpp`（ApiTable 6 导出 C ABI + extern "C" 实现 + 托管命令回调 SEH POD guard + CoTaskMem 配对释放）→ core/console 扩 `unregisterCommand`（M-SC3 解绑落点）→ script-api `Engine` 静态类（Init 按偏移读表 + CvarGet/Set/List + ConsoleExec + ConsoleRegister 友好/Raw 双路 + ConsoleUnregister + delegate 保活）→ `script/examples/console/` 多入口示例（SetCvar/RegisterCmd/ErrorCodes/ThrowCmd/Readback/UnregisterCmd + Entry demo）→ nl-script 扩 `run --api`（宿主预注册 builtins + demo cvar）+ selftest s6a~s6f → 迭代修 4 坑（见踩坑栏）→ 全绿 → VULKAN 树同步构建 + selftest 复跑全绿（双后端对称）→ `example/m-sc1/run.bat` 四用例 ALL GREEN + 证据生成器扩 m-sc1 段 4 张真实输出图逐张亲眼验收（DOTNET_CLI_UI_LANGUAGE=en 根治中文方框复发）→ cases.json 文本级追加 `m-sc1` 卡 4 条（前缀逐字节保留断言 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc1`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+Bindings.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 不回归 + s6a~s6f：onChanged 恰触发一次 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 掩码 31 对齐 / 托管异常命令 SEH→CommandFailed 存活 / 双向读回 + cvar.list / 注销后 UnknownCommand）；run --api demo 全链路 exit 0；负向缺 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，与 M-SC0 同口径；证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc1` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC1 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC1 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面口径固化（ApiTable ABI/内存所有权两条路/异常边界/unregisterCommand）+ 踩坑 5 条存档。
+
+**踩坑情况**
+1. **script-api 与脚本工程都要 `<AllowUnsafeBlocks>true`**：`Engine` unsafe class（ApiTable 偏移读），只在示例 csproj 开 → CS0227。
+2. **lambda 参数显隐混用 CS0748**：`(argc, argv, out IntPtr text)` 非法，全显式。
+3. **selftest 漏 `installBuiltins()`**：`cvar.set` 命令路径断言拿到 UnknownCommand(1) 而非 CommandFailed(3)，掩码 27≠31——内建命令集是生产宿主动作，selftest 必须同口径装上。
+4. **`DOTNET_CLI_UI_LANGUAGE=en`**：dotnet 中文摘要在证据图 Consolas 下成方框（M-SC0 踩坑 1 复发），dotnetBuild 前置 set 根治。
+5. **cases.json 尾锚插入**：末卡四层嵌套闭括号，锚点切多一行就把 cases 数组 `]` 切掉（本轮两次 JSONDecodeError 后改「只切末三行保留 case 层 `}`」+ json.load 复验）。
+
+**下一步**：M-SC2 ECS 绑定（数据面：World.Spawn/Remove/SetParent、Entity 失效安全拒绝、TransformComponent 字段读写；E1a 已 merge 前置满足）。
+
+## M-SC2：ECS 数据面绑定（feat/script，2026-11-09，tag `m-sc2`）
+
+**动作**：wt_pool claim（track script / M-SC2）→ 三处证据（本轮模块=脚本↔ECS 数据面：Carrot 脚本↔ECS 桥 = C# World.Current 单例 + internal call 直接操作 World、句柄 = EntityID 数值——hostfxr 路线对应物 = ApiTable 尾部追加 + 宿主侧显式绑 World；UE/bevy 据实标注无对应物）→ `Bindings.hpp/.cpp` v2 尾部追加 10 导出（Spawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName）+ 宿主侧 `ecsSetWorld()` + 错误码 0..4 写死 → script-api 升 0.3.0（`Ecs` 静态类偏移读表 + `SceneEntity` wrapper）→ `script/examples/ecs/` 多入口示例（SpawnSetup/ReadVerify/InvalidProbe/RemoveSpawned + Entry demo）→ nl-script selftest s7a~s7g + run --api 绑 World + 默认类型名按工程目录推导 → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc2/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc2 段 4 张真实输出图逐张亲眼验收 → cases.json 文本级追加 `m-sc2` 卡 4 条（前缀逐字节保留 + json.load 复验）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc2`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（v2 绑定面）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 不回归 + s7a~s7g：C# spawn→C++ 逐位读回 / C++ 锚值 C# 验证 / 失效实体七项操作全 NoEntity / 延迟删除 flush 非对称 + 表级安全拒绝 / 父子 roundtrip / JSON 字节一致 / 解绑 NoWorld）；run --api ecs demo 全链路 exit 0（含父删级联）；负向错 --type exit 1 干净报错；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc2` 版本卡 4 条 tool 用例（selftest/run-api 正向 + run-badtype 负向 + check，expectExit 0/0/1/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC2 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC2 行标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 绑定面 v2 口径固化（10 导出 ABI/错误码/World 绑定时序/延迟非对称语义锚/JSON roundtrip 前置）+ 踩坑 4 条存档。
+
+**踩坑情况**
+1. **findEntityByName 走 flush 后全局表**（entities_），与 exists()（查 names_）非对称——spawn 后未 flush 按名查不到；绑定层照抄 Carrot 口径不改 World 语义（E1a 已 merge 不动 ECS 轨道），selftest s7a 补「host flush after script spawn」步骤。首轮 s7a 13 处 FAIL 全根因于此。
+2. **clone 世界工厂库默认空**：deserialise 报 unknown component name "Transform"——必须 registerComponent<TransformComponent>()（nanite-scene ecs-serial 先例同款）。
+3. **默认类型名硬编码 HelloScript**：ecs 工程 run 无 --type 直接 code=5——改按工程目录名推导（首字母大写 + Script，三示例统一）。
+4. **cases.json heredoc 转义**：内嵌 JSON 的引号转义层级数错一层即 JSONDecodeError——含引号 command 字段用 Python 单引号串承载再 replace 注入，插后 json.loads 复验。
+
+**下一步**：M-SC3 热更 + 收口（`console.reload-script`：新 DLL 载入 collectible ALC → 重绑定 → 旧 ALC Unload；改脚本 → dotnet build → reload → cvar/命令/实体行为换新 C++ 状态无损；连续 reload 句柄计数核；全量回归绿；merge 回 master）。
+
+## M-SC3：脚本热更（feat/script，2026-11-09，tag `m-sc3`）
+
+**动作**：wt_pool claim（track script / M-SC3）→ 三处证据（本轮模块=热更：官方《assembly unloadability》教程 = NoInlining 方法边界 + weakref 排空在调用方 + collectible ALC 完成条件三条款；Carrot = registerGameAssemblyLoadCallback/UnloadCallback 程序集换载时命令重 init——对应物 = scriptUnregisterAll + 新 ALC Entry 重注册（脚本自描述重绑定）；UE/bevy 据实标注无对应物）→ `script/bootstrap/`（NlScriptBootstrap：BootLoad/BootCall/BootUnload 三 UnmanagedCallersOnly + ScriptLoadContext collectible resolver）→ `Vm` 热更四件套（loadBootstrap/scriptLoad/scriptCall/scriptUnload + 阶段码 7/8/9）→ `ScriptHost`（单例编排 + `console.reload-script` 命令）→ `Bindings` 脚本命令登记表（登记/擦除/scriptUnregisterAll）→ 示例 Entry 拆两层（普通 Entry + EntryNative）→ nl-script selftest s8a~s8h → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc3/run.bat` 四用例 ALL GREEN + 证据生成器 m-sc3 段 4 张真实输出图 → cases.json 尾插 `m-sc3` 卡 4 条（json.load 复验 39 卡）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc3`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双树 nl_core（+ScriptHost.cpp）+ nl-script 构建过且 selftest 全绿（s0~s5 + s6 + s7 不回归 + s8a~s8h：bootstrap 3 函数指针 + reload-script 注册 / 首载 collectible ALC + Entry 重绑定 / 改源→同名覆盖重编→reloadScript 解绑 2 命令 + weakref dead + 重装载 / 行为换新 [v2] / C++ 状态无损四锚 / 连续 reload x3 句柄漂移 0 / unloadScript weakref dead / 卸载后命令消失 + C++ 导出可用）；run --api demo exit 0；check bootstrap exit 0；run.bat ALL GREEN；server.py --check exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——**本轮有**：展示台 `m-sc3` 版本卡 4 条 tool 用例（selftest/reload 特写/run-api 正向 + check，expectExit 0/0/0/0）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC3 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC3 行标完成 + 热更架构拍板回写 + 踩坑 5 条存档（同帧 dead-store / UnmanagedCallersOnly 禁托管 Invoke / 锁文件 / 协议结构地址 / 登记表对称）。
+
+**计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。

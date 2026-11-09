@@ -1,0 +1,17 @@
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.86
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine-script\script\examples\console" -nologo -v q 
+script-api v0.2.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  demo cvar bound to script (M-SC1)
+  script.rate = 1.5  (float)  demo float cvar (M-SC1)
+run: ret=0

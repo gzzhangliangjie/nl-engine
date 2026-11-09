@@ -3835,6 +3835,96 @@
    ]
   },
   {
+   "id": "m-sc0",
+   "label": "P8 M-SC0",
+   "name": "C# hosting 内核：hostfxr 装载 + 默认签名入口 + 热重编（A 类轨道）",
+   "tag": "m-sc0",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/script（不进 kStage/渲染回归，纯逻辑）：nl::script::Vm = Microsoft 官方 hosting 三导出口径（nethost 定位 hostfxr.dll -> initialize_for_runtime_config(FDD) -> get_runtime_delegate(hdt_load_assembly_and_get_function_pointer)），PIMPL 头文件不暴露 hostfxr.h；托管入口默认签名 int(void*,int32)（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）；托管异常在互操作边界 SEH 捕获转 Result（0xe0434352），不穿透析构；script-api 骨架 classlib + hello 用户脚本示例（双程序集布局）；selftest s5 热重编行为更新（拷贝工程改 42->43，dotnet build 换 AssemblyName 重编，同进程装载新 DLL -> 43，宿主不重启）。参考：Carrot hosting 分层（Mono 底座不抄，用户拍板走 .NET）/ bevy 无脚本 crate（克制先例）/ Microsoft Learn custom host 权威口径。",
+   "acceptance": [
+    "selftest 17 项全绿：s0 定位产物 / s1 运行时装载 / s2 默认签名入口 / s3 返回值锚 42/-1/0 / s4 SEH 边界捕获+异常后可复调 / s5 热重编 42->43",
+    "run 正向 ret=42（exit 0）、run 负向托管异常 exit 1、check 编译 exit 0、无参用法 exit 2（expectExit 对齐）",
+    "五张证据图全部由工具真实输出渲染（tools/make-script-evidence.py），run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：hosting 内核 + 热重编机械单测（17 项）",
+     "kind": "tool",
+     "note": "s1-s2 hosting（hostfxr 3 导出 + 默认签名入口）/ s3 返回值锚 / s4 托管异常 SEH 边界捕获 / s5 拷贝工程改 42->43 重编后同进程装载行为更新。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello",
+     "preview": "example/m-sc0/selftest.png"
+    },
+    {
+     "id": "run-ok",
+     "name": "run --args ok：编译+装载+调入口（正向）",
+     "kind": "tool",
+     "note": "dotnet build -> hostfxr init -> load HelloScript.dll -> Entry(\"ok\") -> ret 42。",
+     "args": [
+      "run",
+      "{root}/script/examples/hello",
+      "--args",
+      "ok"
+     ],
+     "expectExit": 0,
+     "expectLog": "run: ret=42",
+     "command": "nl-script run script/examples/hello --args ok",
+     "preview": "example/m-sc0/run-ok.png"
+    },
+    {
+     "id": "run-throw",
+     "name": "run --args throw：托管异常边界捕获（负向，exit 1）",
+     "kind": "tool",
+     "note": "托管 InvalidOperationException 在 CLR->native 交界呈 SEH 0xe0434352，__except 捕获转 Result，进程不崩、exit 1。",
+     "args": [
+      "run",
+      "{root}/script/examples/hello",
+      "--args",
+      "throw"
+     ],
+     "expectExit": 1,
+     "expectLog": "managed exception",
+     "command": "nl-script run script/examples/hello --args throw",
+     "preview": "example/m-sc0/run-throw.png"
+    },
+    {
+     "id": "check",
+     "name": "check：只编译不装载（正向）",
+     "kind": "tool",
+     "note": "构建期 dotnet build（plan 口径：不做 Roslyn 运行时编译）；FDD 契约由 GenerateRuntimeConfigurationFiles 满足。",
+     "args": [
+      "check",
+      "{root}/script/examples/hello"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/hello",
+     "preview": "example/m-sc0/check.png"
+    },
+    {
+     "id": "usage",
+     "name": "无参数：用法提示（负向，exit 2）",
+     "kind": "tool",
+     "note": "退出码约定 0=PASS / 1=失败 / 2=用法错误（展示台 expectExit 对齐）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "usage:",
+     "command": "nl-script",
+     "preview": "example/m-sc0/usage.png"
+    }
+   ]
+  },
+  {
    "id": "s7.0",
    "label": "S7.0",
    "name": "Visibility Buffer 打包写入（M7.0）",
@@ -3959,6 +4049,214 @@
      "expectLog": "SELFTEST PASS (16/16)",
      "command": "viewer.exe --selftest",
      "script": "example/s7-visbuf/run.bat selftest"
+    }
+   ]
+  },
+  {
+   "id": "m-sc1",
+   "label": "P8 M-SC1",
+   "name": "console 绑定：ApiTable 函数指针面 + C# 命令注册（A 类轨道）",
+   "tag": "m-sc1",
+   "date": "2026-11-09",
+   "summary": "console 绑定面（nl/script/Bindings）：C++ 暴露 6 导出 ApiTable（cvarGet/cvarSet/cvarList/consoleExec/consoleRegister/consoleUnregister）随托管入口 args 传入，C# 侧按偏移读指针转 delegate——对应 Carrot mono_add_internal_call 的 hostfxr 路线对应物（单向显式绑定面，无反射魔法）；C#→C++ 注册经 reverse P/Invoke（delegate 保活 + 原始 ABI int(argc,argv,outText)，CoTaskMem 配对释放）；托管命令回调 C++ 侧 SEH __except 捕获（0xe0434352→CommandFailed）；Console 扩 unregisterCommand（M-SC3 热重载解绑落点）；DOTNET_CLI_UI_LANGUAGE=en 根治 M-SC0 中文方框复发。selftest s6a~s6f：onChanged 触发 / 注册命令经 exec 调通 / ExecCode 0/1/2/3 逐一对齐（掩码 31）/ 托管异常命令 / 双向读回 / 注销解绑。",
+   "acceptance": [
+    "selftest s6a~s6f 全绿（M-SC0 s0~s5 不回归，PASS 0 failures）：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码 0/1/2/3 逐一对齐、托管异常命令 SEH 边界、双向读回、注销解绑",
+    "run --api demo 全链路（exit 0）：注册→赋值→回显→内建 cvar.set→C# 读回→cvar.list；负向 run 缺 --type exit 1（Result code=5 干净报错不崩）",
+    "双后端 DX12/VULKAN nl_core + nl-script 构建过，selftest 均 PASS；四张证据图全部由工具真实输出渲染（dotnet 输出英文化），run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s6a~s6f：console 绑定机械单测（M-SC0 s0~s5 不回归）",
+     "kind": "tool",
+     "note": "s6a C# cvar.set 触发 C++ onChanged（恰一次、值 77）/ s6b C# 注册命令经 console exec 调通 / s6c ExecCode 0/1/2/3 对齐掩码 31 / s6d 托管异常命令 SEH 边界转 CommandFailed 且 console 存活 / s6e C++ setFloat 后 C# 读回 + cvar.list 全量视图 / s6f 注销后 exec UnknownCommand。",
+     "args": ["selftest", "{root}/script/examples/hello", "{root}/script/examples/console"],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console",
+     "preview": "example/m-sc1/selftest.png"
+    },
+    {
+     "id": "run-api",
+     "name": "run --api demo：ApiTable 传入 + 全链路绑定（正向，exit 0）",
+     "kind": "tool",
+     "note": "Entry 收到 ApiTable*（6 导出）：C# 注册 script.echo、CvarSet script.count=77、exec 回显、经 exec 驱动内建 cvar.set 100、C# CvarGet 读回 100、cvar.list 全量视图。",
+     "args": ["run", "{root}/script/examples/console", "--api", "--type", "NlScript.Examples.ConsoleScript, ConsoleScript"],
+     "expectExit": 0,
+     "expectLog": "run: ret=0",
+     "command": "nl-script run script/examples/console --api --type \"NlScript.Examples.ConsoleScript, ConsoleScript\"",
+     "preview": "example/m-sc1/run-api.png"
+    },
+    {
+     "id": "run-badtype",
+     "name": "run --api 缺 --type：getEntryPoint 干净报错（负向，exit 1）",
+     "kind": "tool",
+     "note": "默认类型名在 ConsoleScript 程序集不存在 → Result{code=5} 经 'run: FAIL getEntryPoint' 报出，进程不崩 exit 1。",
+     "args": ["run", "{root}/script/examples/console", "--api"],
+     "expectExit": 1,
+     "expectLog": "run: FAIL getEntryPoint: code=5",
+     "command": "nl-script run script/examples/console --api",
+     "preview": "example/m-sc1/run-badtype.png"
+    },
+    {
+     "id": "check",
+     "name": "check console 示例：只编译不装载（正向，exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；绑定入口须 [UnmanagedCallersOnly] 默认签名（hostfxr UNMANAGEDCALLERSONLY_METHOD 路线）。",
+     "args": ["check", "{root}/script/examples/console"],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/console",
+     "preview": "example/m-sc1/check.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc2",
+   "label": "P8 M-SC2",
+   "name": "ECS 数据面绑定：ApiTable v2 + Entity wrapper + Transform 字段读写（A 类轨道）",
+   "tag": "m-sc2",
+   "date": "2026-11-09",
+   "summary": "ECS 数据面绑定（nl/script/Bindings v2 尾部追加 10 导出）：ecsSpawn/Remove/Flush/Exists/SetParent/GetParent/AddTransform/TransformGet/TransformSet/FindByName，World 实例由宿主侧 ecsSetWorld() 显式绑定（表内纯函数指针，与 M-SC1 显式绑定面同构）；C# 侧 Ecs 静态类 + SceneEntity 轻量 wrapper（Carrot Entity 同构，不持存储）；失效安全拒绝 = 每导出先查 exists() 回错误码（0=ok/1=NoWorld/2=NoEntity/3=Component/4=BadArg），C# 不抛异常不崩；延迟语义沿 World 口径（spawn 排队、flush 后进全局表——findEntityByName 走全局表，selftest s7a 实测锚）；JSON roundtrip 不受脚本侧改动影响（s7f 字节一致）；解绑 World 后导出一律 NoWorld（M-SC3 热重载窗口兜底，s7g）。selftest s7a~s7g 叠加 M-SC0 s0~s5 + M-SC1 s6 不回归。",
+   "acceptance": [
+    "selftest s7a~s7g 全绿（s0~s5 + s6 不回归，PASS 0 failures）：C# spawn+挂 Transform+改字段 C++ 逐位读回、C++ 锚值 C# 验证、失效实体全操作拒绝、延迟删除+flush 非对称、父子 roundtrip、JSON 字节一致、解绑 NoWorld",
+    "run --api ecs demo 全链路（exit 0）：spawn→parent→transform→flush→remove 级联→flush；负向错 --type exit 1（Result code=5 干净报错不崩）",
+    "双后端 DX12/VULKAN nl_core + nl-script 构建过，selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s7a~s7g：ECS 数据面绑定机械单测（M-SC0/SC1 不回归）",
+     "kind": "tool",
+     "note": "s7a C# spawn+Transform+字段 -> C++ 逐位读回（pos/quat/scale 锚）/ s7b C++ 经表设锚 C# 验证 / s7c 失效实体 7 项操作全 NoEntity 拒绝 / s7d 延迟删除 flush 非对称 + 表级 TransformGet 安全拒绝 / s7e 父子 roundtrip + getChildIDs 视图 / s7f JSON roundtrip 字节一致 / s7g 解绑后导出一律 NoWorld。",
+     "args": ["selftest", "{root}/script/examples/hello", "{root}/script/examples/console", "{root}/script/examples/ecs"],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs",
+     "preview": "example/m-sc2/selftest.png"
+    },
+    {
+     "id": "run-api",
+     "name": "run --api ecs demo：spawn→parent→transform→flush→remove 级联（正向，exit 0）",
+     "kind": "tool",
+     "note": "Entry 收到 ApiTable*（v2 16 导出）：spawn root+leaf、setParent/getParent、addTransform、transformSet/Get、flush、remove root（子级级联删）、再 flush。",
+     "args": ["run", "{root}/script/examples/ecs", "--api"],
+     "expectExit": 0,
+     "expectLog": "run: ret=0",
+     "command": "nl-script run script/examples/ecs --api",
+     "preview": "example/m-sc2/run-api.png"
+    },
+    {
+     "id": "run-badtype",
+     "name": "run --api 错 --type：getEntryPoint 干净报错（负向，exit 1）",
+     "kind": "tool",
+     "note": "HelloScript 类型不在 EcsScript 程序集 -> Result{code=5} 经 'run: FAIL getEntryPoint' 报出，进程不崩 exit 1。",
+     "args": ["run", "{root}/script/examples/ecs", "--api", "--type", "NlScript.Examples.HelloScript, EcsScript"],
+     "expectExit": 1,
+     "expectLog": "run: FAIL getEntryPoint: code=5",
+     "command": "nl-script run script/examples/ecs --api --type \"NlScript.Examples.HelloScript, EcsScript\"",
+     "preview": "example/m-sc2/run-badtype.png"
+    },
+    {
+     "id": "check",
+     "name": "check ecs 示例：只编译不装载（正向，exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；默认类型名约定 = 工程目录名首字母大写 + Script（ecs->EcsScript）。",
+     "args": ["check", "{root}/script/examples/ecs"],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/ecs",
+     "preview": "example/m-sc2/check.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc3",
+   "label": "P8 M-SC3",
+   "name": "脚本热更：collectible ALC 换载 + console.reload-script + C++ 状态无损（A 类轨道）",
+   "tag": "m-sc3",
+   "date": "2026-11-09",
+   "summary": "脚本热更定稿（bootstrap 中转口径）：hostfxr 只能把程序装配进默认 ALC（不可卸载），collectible ALC 的创建/卸载必须托管侧完成——非收集 bootstrap 程序集（script/bootstrap/，常驻安全）暴露 BootLoad/BootCall/BootUnload 三函数指针，脚本程序集经 LoadFromStream 进 collectible ALC（不锁 DLL 文件 → dotnet build 同名覆盖可写，热更工作流关键通路），脚本方法经 bootstrap 反射 Invoke（机制中转，绑定面照旧显式函数指针）；脚本入口拆两层（普通 Entry=collectible 反射路径 + [UnmanagedCallersOnly] EntryNative=默认 ALC 函数指针路径，运行时禁止托管调用 UnmanagedCallersOnly 方法）。C++ 侧 ScriptHost 单例编排：scriptUnregisterAll（脚本命令登记表解绑，解除对旧 ALC reverse P/Invoke thunk 的引用）→ scriptUnload（weakref 排空校验）→ 重装载 + Entry 重注册（脚本自描述重绑定，Carrot load-callback 同构）；cvar 值/实体树/内建命令全在 C++ 不动。踩坑固化：①unload 与 GC 排空不得同帧——同方法内 alc=null 是 JIT dead store，引用留栈永远 root（官方 NoInlining 方法边界口径，隔离实验三场景+纯托管对照实证）；②运行时禁止托管代码反射调用 UnmanagedCallersOnly 方法（InvalidProgram）。连续 reload x3 句柄漂移 0（无泄漏）。selftest s8a~s8h 叠加 s0~s7 不回归。",
+   "acceptance": [
+    "selftest s8a~s8h 全绿（s0~s5 + s6 + s7 不回归，PASS 0 failures）：bootstrap 装载+命令注册、首载 collectible ALC+Entry 重绑定、改源→同名覆盖重编→reloadScript（解绑 2 命令+weakref dead+重装载）、行为换新 [v2]、C++ 状态无损（cvar 值/实体逐位/内建命令/命令登记表重登记）、连续 reload x3 句柄漂移 0、unloadScript weakref dead、卸载后命令 UnknownCommand+C++ 导出仍可用",
+    "console.reload-script 命令可用（无参=重载当前脚本，带参=换路径）；unload 后 ECS 导出/内建命令不受影响（状态全在 C++ 口径实证）",
+    "双后端 DX12/VULKAN 构建+selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s8a~s8h：脚本热更机械单测（M-SC0/SC1/SC2 不回归）",
+     "kind": "tool",
+     "note": "s8a bootstrap 3 函数指针+console.reload-script 注册 / s8b 首载 collectible ALC（LoadFromStream 不锁文件）+Entry 重绑定 / s8c 改源→同名覆盖重编→ScriptHost::reloadScript / s8d 行为换新（echo 前缀 [v2]）/ s8e C++ 状态无损四锚 / s8f 连续 reload x3 句柄漂移 0 / s8g weakref dead / s8h 卸载后命令消失+C++ 导出可用。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap",
+     "preview": "example/m-sc3/selftest.png"
+    },
+    {
+     "id": "reload",
+     "name": "s8 热更段特写：解绑→Unload（weakref dead）→重装载→行为换新",
+     "kind": "tool",
+     "note": "reload-script 生命周期输出（从 selftest.log 过滤 s8 行）：unbound 2 command(s) [script.echo, script.throwcmd]，ALC fully unloaded (weakref dead)，重装载后 Entry ret=0、echo 前缀 [v2]、cvar/实体/内建命令锚全不变、连续 reload x3 句柄漂移 0。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "ALC fully unloaded (weakref dead)",
+     "command": "nl-script selftest ...（s8 段过滤展示）",
+     "preview": "example/m-sc3/reload.png"
+    },
+    {
+     "id": "run-api",
+     "name": "run --api console demo：EntryNative 函数指针路径（正向，exit 0）",
+     "kind": "tool",
+     "note": "默认 ALC 路径回归：Entry 拆两层后 native 入口改取 EntryNative（UNMANAGEDCALLERSONLY_METHOD 契约），托管 Entry 供 collectible 反射。行为与 M-SC1 一致（注册+赋值+执行+读回）。",
+     "args": [
+      "run",
+      "{root}/script/examples/console",
+      "--api"
+     ],
+     "expectExit": 0,
+     "expectLog": "run: ret=0",
+     "command": "nl-script run script/examples/console --api",
+     "preview": "example/m-sc3/run-api.png"
+    },
+    {
+     "id": "check",
+     "name": "check bootstrap：非收集中转程序集编译检查（exit 0）",
+     "kind": "tool",
+     "note": "bootstrap（BootLoad/BootCall/BootUnload）单独 dotnet build 校验；FDD 契约 runtimeconfig.json 由 GenerateRuntimeConfigurationFiles 产出。",
+     "args": [
+      "check",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/bootstrap",
+     "preview": "example/m-sc3/check.png"
     }
    ]
   }

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>NlScript.Examples</RootNamespace>
+    <AssemblyName>ConsoleScript</AssemblyName>
+    <!-- FDD 硬前置：classlib 默认不产 runtimeconfig.json（M-SC0 踩坑），hostfxr 装载必须有 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <!-- unsafe：Marshal.ReadIntPtr 读 ApiTable / argv 数组 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../script-api/NlScriptApi.csproj" />
+  </ItemGroup>
+
+</Project>
