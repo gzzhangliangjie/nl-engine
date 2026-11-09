@@ -1077,3 +1077,28 @@
 **完成情况**：DX12+Vulkan 双后端编译通过；ctest b2/b3/b4 全绿（M3 后复验 3/3，含 kitchenSink 双图 slangc SPIR-V/DXIL×vs/ps 四路真实编译）；证据图 t1-editor-window.png / b3-nodegraph.{svg,png}（GPU 回读/工具真实输出，非手绘）；editor=null 路径零改动既有基线不受影响。封顶定位：调试工具级，UI 不再加功能；唯一遗留 = 拆解 6 预览视口（等 B5/S7）。
 
 **踩坑情况**：① imgui-node-editor v0.9.4 API 是 PinKind（新版才叫 PinDirection）；② 库对 size<=0 回退「占满剩余」，底部状态条须外层包 ImGui host child 预留；③ NodeEditor.json 运行时状态污染确定性截图，拍摄前 rm；④ 本机 SDK 的 wrl/client.h 在 Include\<ver>\winrt 下（构建脚本 INCLUDE 补 winrt）；⑤ emitter memo 泄漏——上游多边引用把 visited key 写进生成代码（B3 潜伏雷，改 key→expr 记忆化）；⑥ props 按 unordered_map 迭代序写出致 roundtrip 非字节一致（改 key 排序）。
+
+## M6.0：Hi-Z 深度预通道 + 手写 min 金字塔（S6 开篇，2026-11-09，tag `s6-hiz`）
+
+**动作**：hiz.slang 6 入口（vsHizDepth/psHizDepth/csHizDown/csHizTop/vsHizViz/psHizViz）：prepass 深度写（度量 = 视点径向距离 `distance(worldPos, eye)`，与 M5.0 误差公式同空间）+ compute NMin 逐级金字塔 + 右下角 160x160 层级可视化覆盖层 + 最高层 top min 回读（环形 3 项延迟两帧）。Scene `initHiz`/`ensureHizTargets` 懒建；viewer `--mode hiz` + HUD `hiz top` 行 + pyramid mip 滑条；kStage bump S6.0。
+
+**提交版本**：`59d6b72`（master，tag `s6-hiz`）+ 交代物补齐提交（example/s6-hiz/ 卡 + 本台账）
+
+**完成情况**：
+- 机械判据：金字塔 top min dist 4.2 → 3.29377、dist 20 → 19.0659，双后端逐位一致（回读环形帧帧相同）；随距离单调增大 = 最近径向深度语义成立。
+- 肉眼判据：mip0 灰度猴头剪影近大远小、近亮远暗；视口外清屏 1e9 保守性不破。
+- deviceErrors=0 ×2（R32F RT setClearValue 后 D3D12 debug layer 9→0）；selftest 16/16 ×2；32 个 shader 产物全 ok。
+- 交代物：`example/s6-hiz/`（near/far pair × 双后端 4 基线 + run.bat verify findstr 断言 3.29/19.06 exit 0）+ cases.json s6.0 卡（3 用例）+ server.py --check OK（stage=S6.0 cases=3）；回归 s6.0 卡 6/6 全 bytes。
+- 全量回归闸 228/228 ALL GREEN（收口唯一一次全量；含 kStage 重拍 9 版本 × 双后端 18 张 HUD 基线）。
+- 固化：`docs/SHADER-CONVENTIONS.md` §2.7（每管线单 BindingSet）/ §2.8（Hi-Z 金字塔 POT + RT setClearValue）；MEMORY.md / 当日日志收口段。
+
+**踩坑情况**：
+1. ⭐Vulkan 多 BindingLayout 拆 set（§2.7 铁律）：prepass 初版两个 BindingSet（constants + hizConstants + SSBO），slangc 把资源全编进 vk set 0，NVRHI Vulkan legacy 模式把多 BindingLayout 拆成多个 vk descriptor set → 第二套 set 的 b1 绑不上读 NaN（DX12 无 set 概念侥幸正常，NVRHI validation 静默）。NaN 级联：prepass 写 NaN → NMin 丢 NaN 只剩清屏值 1e9 → top 恒 0xFFFFFFFF pending → 可视化饱和白剪影。合并为单 `hizPrepassSet_`（b0+b1+t1..t4）后双后端逐位一致。
+2. ⭐金字塔尺寸必须 POT（§2.8 铁律）：640 宽 ceil 对半链要 11 层超 DX12 `mipLevels ≤ floor(log2(maxdim))+1 = 10`（debug layer 报错；Vulkan 无 VVL 静默建坏）；视口向上取 2 的幂 1024x512，mip0 视口外清 1e9。
+3. 诊断手法沉淀：compute 写哨兵（0xDEADBEEF）验证 UAV/copy 链路；绝对 LOD 多点采样（mip0 角落/模型点/mip3/mip6）逐层定位坏层；像素统计量化（DX12 剪影 mean 80 vs Vulkan 255）。
+4. hizTop_ 动态状态跟踪试验报 NVRHI「Unknown prior state」+ Device Removed → 回退 keepInitialState=true（triCounter_ 同款双后端验证模式）；回读环形重建补 `initialState=CopyDest`。
+5. viz 常量槽位：W/H 填 `[1].y/z` 与 shader 读法对齐（首版填 `[2]` → 0/0 → NaN 四边形退化覆盖层消失）。
+6. ⭐回归 Flake（环境级，非代码）：Windows 并发拉起同镜像进程偶发「exit 0 + 空输出」「超时 + 零输出」两类不可能签名（单独复验必过；并发探针复现 0xC0000005，同 suite 并发写固定临时文件）。regression.py 对两类签名各自动重试一次后，第 5 次全量拿到干净 228/228。
+7. 工具 exe 纪律：`build/{DX12,VULKAN}/nanite-tools.exe` 是各后端构建树直接产物，根目录 `build/nanite-tools.exe` 是废弃旧树残留（误 cp 覆盖新产物致回归假 FAIL）；NMake 同秒 mtime 跳过重链须 rm exe 强制重链。
+
+**下一步**：M6.1 保守盒测试串进 DAG 遍历（拍板点：bevy 式 HZB second pass 长在队列多 pass 结构上 vs 现有单 dispatch 改造 = 是否顺带做 UE-DIFFS D3a 升级）→ M6.2 开关对照验收（tag `s6-done`，更新 UE-DIFFS D6）。
