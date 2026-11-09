@@ -1,0 +1,6 @@
+M-P0 drop.tsv byte-identical: OK
+  md5 archived = 075ddfe9e4e513763c2728f7c801a1ed
+  md5 regen    = 075ddfe9e4e513763c2728f7c801a1ed
+M-P1 layers.tsv byte-identical: OK
+  md5 archived = 36c4b169e1d4f77124211c22f942111c
+  md5 regen    = 36c4b169e1d4f77124211c22f942111c

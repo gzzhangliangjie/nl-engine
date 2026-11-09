@@ -1512,6 +1512,132 @@
 
 **下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
 
+
+## P8 M-P0：物理最小世界（feat/physics 轨道，2026-11-09，tag `phys-p0`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/PhysicsSystem.{h,cpp}` + `BodyUserData.h` + `Types.h`（2902 行 Jolt 集成层：单例生命周期 / 10MB TempAllocator / 1/60 累加器 / 三层过滤器 / 体关联）、Carrot `thirdparty/JoltPhysics/HelloWorld/HelloWorld.cpp`（最小世界范式，只读）、bevy `crates/` 与根 `Cargo.toml`（本体无物理 crate，仅 `examples/movement/physics_in_fixed_timestep.rs`）、UE 5.8.4 `Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`（自研 Chaos，**无 Jolt 后端**）；历史读 `MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `MEMORY.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PARALLEL-TRACKS.md`。
+- **拍板留痕**：用户指令「建 feat/physics 开发物理模块内容」提前解锁排期闸（计划 §排期约束括号内本就允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3 之后**，不随本轮解锁。master 侧注册表同步提交 `4f5a8ed`（AGENTS.md / PARALLEL-TRACKS §7.1b+§7.1e / wt_pool TRACKS / NON-RENDER-ROADMAP / UE-DIFFS D10）。
+- **建轨**：`wt_pool claim --track physics --milestone M-P0` → `git worktree add -b feat/physics E:/UE_STUDY_2026/nl-engine-physics` → junction 共享 `.workbuddy` / `thirdparty/slang/dist` + 本 wt 索引 `skip-worktree`（双向 status 自查干净，未碰 master 上另一会话的三份 WIP）。
+- **vendored**：从本地 Carrot 上游副本拷 Jolt Physics **5.3.1**（MIT，`Jolt/` 442 文件 + `Build/CMakeLists.txt` + LICENSE + README，共 445 文件 / 4.9MB，零联网），`thirdparty/jolt/VENDOR.md` 记来源/裁剪/升级纪律；CMake 以 `add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)` 接入，强制统一 CRT/RTTI/异常口径、关 IPO/install/shared/asserts。
+- **落码**：`nl/physics/World.{hpp,cpp}`（PIMPL，Jolt 头只在 cpp；进程级幂等 bootstrap；2 对象层 + 2 宽相层；静态地面 + 动态球；固定步长逐帧轨迹）、`phys-tools.exe`（selftest / simulate / check，退出码 0/1/2）、CMake `phys-tools` 目标 + ctest 三条。
+- **交代物**：`example/phys-p0/`（run.bat ALL GREEN + drop.tsv + 4 份真实日志 + `trajectory.png` / `acceptance.png` 两张证据图，均肉眼核验）、`example/cases.json` `phys-p0` 卡五用例、`docs/p8/PHYS-TOOLS-GUIDE.md`、计划 M-P0 标完成、`UE-DIFFS.md` D10。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p0`）；master 侧注册表/勘误提交 `4f5a8ed`。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 数值锚（默认 h=5.0 / r=0.5 / g=9.8 / e=0.6 / dt=1/60 / 240 帧）：自由落体段与半隐式欧拉闭式最大误差 **0.000001**；首次触地 frame 57 = **0.950 s** vs 解析 `sqrt(2(h-r)/g)=0.958 s`（差 < 3 步）；反弹峰值 **2.138943 m** @ frame 92 vs `r+e²(h-r)=2.120 m`；末帧 y=**0.500000**、末 10 帧极差 **0.000000**；世界体数 2。
+- 确定性硬判据：同 `DropConfig` 两次新建世界，241 个样本逐字段位一致（`phys-tools selftest` 断言锁死）。
+- selftest **23 条断言全 ok**（含 5 条负向配置）；`phys-tools check drop.tsv` PASS；`example/phys-p0/run.bat` **ALL GREEN** exit 0（重跑四用例 + 重生成两张证据图）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均 PASS；ctest `p0-phys-selftest` / `p0-phys-drop` / `p0-phys-bad-config` 3/3。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**（按总闸纪律）。
+- `python tools/showcase/server.py --check` exit 0；展示台卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。
+
+**踩坑情况**
+1. **CRT 混链**：Jolt 上游默认 `USE_STATIC_MSVC_RUNTIME_LIBRARY=ON`（/MT）与 nl-engine /MD 冲突，必须 FORCE OFF 并统一 RTTI/异常、关 IPO/install/shared/asserts（Carrot 同款）。
+2. **`AssertFailed` 返回 true 会 `JPH_BREAKPOINT`**：headless 工具里等于主动 int3，改为只打日志返回 false。
+3. **裸 shell 无 nmake**：`cmake --build --target phys-tools` 直跑失败，构建必须走 `scripts/build-m0.2.bat`（第二次踩，已固化）。
+4. **收敛判据**：e=0.6 时末 30 帧仍有第 3/4 次弹跳（极差 0.038），首版阈值 0.03 误判 FAIL；拆成「30 帧衰减 < 0.05」+「末 10 帧严格平坦 < 0.005」。
+5. **`check` 须读 TSV provenance**：不读头部参数就会拿默认 h/g/e 验自定义 dump = 假绿，已改为从 `# jolt=...` 行读回。
+6. **UE 口径勘误**：立项文档「UE 5.x 官方提供 Jolt 后端」实读不成立（本机 UE 5.8.4 只有 Chaos），P8-PHYS-PLAN / NON-RENDER-ROADMAP 已改，差异落 `UE-DIFFS.md` D10；结论「不自研求解器」不变。
+7. **证据图标注重叠**：首版 trajectory.png 的 floor/contact 标签撞车，移到红线下方后复验通过——工具版证据图同样要肉眼核验。
+
+**下一步**：M-P1 体封装 + 碰撞层矩阵（引擎对象 ↔ Jolt 双向关联）；M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+
+## P8 M-P1：碰撞层矩阵 + 体双向关联（feat/physics 轨道，2026-11-09，tag `phys-p1`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/CollisionLayers.{h,cpp}`（N×N `collisionMatrix`、默认全 true、层名/静态标记）、`PhysicsBody.h/.cpp`（接触回调 + `BodyAccessRead/Write` 锁封装）、`RigidBody.cpp`（`SetUserData((uint64)&bodyUserData)`）、`BodyUserData.h`（Type + BaseBody*）、`Types.h`（`CollisionLayerID = JPH::ObjectLayer`）；UE 5.8.4 `Engine/Classes/Engine/EngineTypes.h` 的 `FCollisionResponseContainer`（Ignore/Overlap/Block 三态）+ `CollisionProfile.h`（`ResponseToChannels` / `ObjectType`）只读；bevy `crates/` 复核仍无物理 crate。历史读 `MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `MEMORY.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md`。
+- **选型二次拍板**：用户「物理用现成的、没必要从头写、成本太高；纠结的只是用哪个」→ 复核后「继续走 Jolt 路线」。例外理由从「UE 口径 / 业界共识」改写为**成本取舍**，四处 canonical 文档（master `3d11f08`：NON-RENDER-ROADMAP / UE-DIFFS D10 / PARALLEL-TRACKS §7.1e / AGENTS.md；track：P8-PHYS-PLAN §选型评审结论）一次改到位；UE 口径不参与选型。
+- **建轨/占坑**：`wt_pool claim --track physics --milestone M-P1`，沿用 `feat/physics` worktree（junction 共享 + skip-worktree），未碰 master 上另一会话的 WIP。
+- **落码**：`World.hpp/.cpp` 新增 `LayerMatrix`（4 层对称 bool 掩码）/ `BodyInfo` / `LayerProbeConfig` / `LayerProbeResult` / `simulateLayerProbe()`；过滤器改为持有矩阵引用、宽相层 1:1 映射；体创建写入 userData 索引并建 owner<->BodyID 双向表。`phys-tools` 新增 `layers` / `check-layers` 与 M-P1 自测段；CMake 加 ctest 两条；新增 `make-phys-p1-evidence.py` 与 `check-phys-p0-regression.py`。
+- **交代物**：`example/phys-p1/`（run.bat ALL GREEN + layers.tsv + 2 张真实证据图 + 5 份日志 + drop-regen.tsv）、`cases.json` `phys-p1` 卡五用例、`PHYS-TOOLS-GUIDE.md` §8、计划 M-P1 标完成与固化口径、`UE-DIFFS.md` D13（原 D12 与 S16 TSR 条目撞号，M-P2 重编号）。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p1`）；master 侧选型改写提交 `3d11f08`。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 四用例实测（`h=6.0 / r=0.5 / blocker_y=2.5 / g=9.8 / e=0.6 / dt=1/60 / 180 帧`）：`same_layer` 与 `enabled_pair` 停在挡板接触线 **y=3.500000**；`disabled_pair` 穿过挡板被地板接住 **y=0.842475**（末段余弹）；`ghost` 全层穿透持续自由落体 **y=-38.345005**。四例 `owner_ok=1`、`bodies=3`。
+- `selftest` **44 条断言全绿**（M-P0 23 + M-P1 21，逐条计数自 selftest.log），含矩阵对称性、非法层拒绝、双向关联逐例、确定性逐样本位一致；`check-layers` 4 用例全绿；`example/phys-p1/run.bat` **ALL GREEN** exit 0。
+- **M-P0 逐字节回归**：`phys-p0/drop.tsv` 与重生成 TSV 的 MD5 同为 `075ddfe9e4e513763c2728f7c801a1ed`（过滤器重构未改变 M-P0 数值）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均 PASS、`layers` 两树均出 TSV；ctest `p0-phys-*` 3/3 + `p1-phys-*` 2/2。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**。
+- `python tools/showcase/server.py --check` exit 0；展示台 `phys-p1` 卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。两张证据图肉眼核验（图例/标注/日志完整性修过一轮后复验通过）。
+
+**踩坑情况**
+1. **`ShapeRefC` 无 `.Get()`**：`ShapeSettings::Create()` 的结果对象才有 `.Get()`；`ShapeRefC` 应直接传给 `BodyCreationSettings`（M-P0 就是这么写的）。
+2. **两级过滤器都要读矩阵**：只改 `ObjectLayerPairFilter` 时宽相层已把碰撞对筛掉，矩阵看似失效；对象层与宽相层必须 1:1 映射并共用同一矩阵。
+3. **M-P0 兼容**：新过滤器默认全开会让 (floor,floor) 从 false 变 true，须显式 `matrix.set(kFloor,kFloor,false)` 才能保住 M-P0 基线逐位一致（已用 MD5 闸锁死）。
+4. **收敛判据别写死静息高度**：穿透用例末帧仍在地板余弹（0.842475），首版要求精确 0.5 误判 FAIL；改按「低于挡板接触线且未穿透地板」的物理本质判据。
+5. **`check-layers` 必须读 provenance**：首版硬编码 3.5/0.5，重演 M-P0「不读 TSV 头=假绿」的坑；改为从 `# jolt=` 行读 `blocker_y / radius / frames`。
+6. **`fc /b` 中文 Windows 吐 GBK**：证据图按 ASCII 读会变问号；改用 `check-phys-p0-regression.py` 输出纯 ASCII 的字节/MD5 见证。
+7. **变量重名**：插入的 M-P1 自测段与 M-P0 段的 `r` / `identical` 撞名，MSVC C2374；改名 `lr` / `layersIdentical`。
+8. **证据图布局**：首版 acceptance.png 把 selftest 截断在前 30 行（漏掉两条 PASS 行）、trajectory.png 图例压在曲线起点；去掉截断 + 图例移到右上空白后复验通过。
+
+**下一步**：M-P2 堆叠稳定；M-P3 debug 渲染接 viewer；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+
+## P8 M-P2：堆叠稳定 + 休眠岛（feat/physics 轨道，2026-11-09，tag `phys-p2`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/physics/PhysicsSystem.cpp`（`tick` 1/60 + `collisionSteps=3`、`cMaxContactConstraints=10240`、`SetContactListener`）与 `PhysicsBody.cpp`（接触事件分发），确认 Carrot 无专门堆叠/休眠配置；UE 5.8.4 `Experimental/Chaos/Public/Chaos/Defines.h`（`SleepingLinearThreshold` / `SleepingAngularThreshold` / `SleepCounterThreshold`）与 `Chaos/Public/Chaos/Island/IslandManager.h`（`SleepLinearThresholdSq` 等、整岛休眠）、`ParticleHandle.h`（`SleepThresholdMultiplier` 逐体倍率）只读；bevy `crates/` 复核仍无物理 crate，据实标注不作口径。Jolt 5.3.1 上游 `PhysicsSettings.h`（`mAllowSleeping` / `mTimeBeforeSleep=0.5` / `mPointVelocitySleepThreshold=0.03`）、`BodyCreationSettings.h`（`mFriction` / `mRestitution` / `mAllowSleeping`）、`BodyInterface.h`（`IsActive` / `GetLinearVelocity`）、`PhysicsSystem.h`（`GetNumActiveBodies(EBodyType)`）逐处核签名。历史读 `MILESTONES.md` / 当日日志 / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md` / M-P1 代码。
+- **占坑/建轨**：`wt_pool claim --track physics --milestone M-P2`，沿用 `feat/physics` worktree（junction 共享 + skip-worktree），未碰 master 上另一会话的 WIP。
+- **落码**：`World.hpp/.cpp` 新增 `StackConfig` / `BodySample` / `StackFrame` / `StackResult` / `validateStack` / `simulateStack()`（静态地面 + 6 立方塔，逐帧记录每体位姿/速度/激活位与活跃体数，算尾段收敛、水平漂移、塌塔标记）；`phys-tools` 新增 `stack` / `check-stack`、三用例 TSV（25 列）与 M-P2 自测段（27 条断言）；CMake 加 `p2-phys-stack` / `p2-phys-negative` 两条 ctest；新增 `make-phys-p2-evidence.py` 与 `check-phys-regression.py`。
+- **交代物**：`example/phys-p2/`（run.bat ALL GREEN + stack.tsv + 2 张真实证据图 + 6 份日志 + 双基线重生成 TSV）、`cases.json` `phys-p2` 卡五用例、`PHYS-TOOLS-GUIDE.md` §9、计划 M-P2 标完成与固化口径、`UE-DIFFS.md` D14；**顺手修复 M-P1 建档时 D12 与既有 S16 TSR 条目撞号**，重编号 D13 并同步四处引用。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p2`）；master 侧差异台账/注册表同步提交。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- 三用例实测（`boxes=6 / halfExtent=0.5 / gap=0.005 / g=9.8 / dt=1/60 / frames=600 / tail=60`）：**baseline** 六层末态 `y=0.499839 / 1.498013 / 2.497626 / 3.497474 / 4.497100 / 5.497056`（层距 ~1.0、`collapsed=0`），末 60 帧 `maxTailSpread=0.000000`、`maxTailSpeed=0.000000`、`finalActive=0`（整岛休眠）、`maxDrift=0.007372`。
+- **no_sleep**：同样稳定（顶 `y=5.489297`、尾段极差 `0.000042`、速度 `0.036982`）但 `finalActive=6` —— 证明休眠只省算力、不是稳定性来源；**no_friction**：顶层滑出 `topDrift=10.946865`、塔落到地面 `top_y=0.497916`、`collapsed=1` —— 证明摩擦与接触求解器才是稳定来源。
+- `selftest` **71 条断言全绿**（M-P0 23 + M-P1 21 + M-P2 27），含 4 条参数负向、逐层槽位、尾段收敛、活跃体对照、601 帧 × 6 体逐字段确定性对拍；`check-stack` 从数据列独立重算层高/层距/尾段极差/活跃体/漂移并与摘要交叉核对，PASS；`example/phys-p2/run.bat` **ALL GREEN** exit 0。
+- **双基线逐字节回归**：M-P0 `drop.tsv` MD5 `075ddfe9e4e513763c2728f7c801a1ed`、M-P1 `layers.tsv` MD5 `36c4b169e1d4f77124211c22f942111c`，重生成文件均逐字节一致（新增堆叠世界未扰动既有基线）。
+- 双后端：DX12 + VULKAN 全树 BUILD OK、viewer selftest **16/16 ×2**、`phys-tools selftest` 两树均出三条 PASS、`stack` 两树均出 TSV；ctest `p0/p1/p2-phys-*` **7/7**。A 类不产 GPU 画面，**无 bytes/near 分档、未跑渲染回归总闸**。
+- `python tools/showcase/server.py --check` exit 0；展示台 `phys-p2` 卡五用例退出码 2/0/0/0/2 与 `expectLog` 均对真输出核对。两张证据图肉眼核验（图例压曲线、放大图时间轴、provenance 折行截断三轮修后复验通过）。
+
+**踩坑情况**
+1. **补丁转义层级**：首版 Python 补丁用普通字符串写 `\\n`，C 源码里变成 `\\\\n`，脚本在写盘前断言中止；构建跑的仍是旧代码却报 BUILD OK（假绿）。改用 raw string 写单反斜杠转义，并养成「补丁写盘后先 grep 新符号再构建」的顺序。
+2. **判据按物理本质**：`no_friction` 是顶层横向滑出而非「塔精确塌到某高度」，判据写 `topDrift > 0.3` + `collapsed`；`no_sleep` 求解器持续迭代使尾段速度 `0.037` 非零，只能对 baseline 要求速度严格为 0，不能把 no_sleep 误判成抖动。
+3. **`check-stack` 不能只验摘要**：从 `# case` 行读指标就放行等于 M-P0/M-P1 的「不读 provenance = 假绿」翻版；改为从 25 列数据独立重算再与摘要交叉核对。
+4. **证据图三轮布局**：右上图例压在 baseline/no_sleep 曲线上；末 60 帧放大沿用全时间轴只剩右端一小截（改用自身 t 范围）；provenance 长行**一次折行不够**（列头续行仍 176 字符被 `ln[:155]` 截），改循环折行 + 制表符展开，最终渲染行宽 ≤151。
+5. **D12 重号（上一轮遗留）**：M-P1 建档时未查最大编号，与既有 `D12 TSR` 撞号。本轮把物理碰撞过滤条目重编号 **D13**、休眠岛落 **D14**，并同步 `World.hpp` / `P8-PHYS-PLAN` / `PHYS-TOOLS-GUIDE` / `MILESTONES` 四处引用；S16 的 D12(TSR) 引用保持不动。
+
+**下一步**：M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+## P8 M-P3：碰撞形状调试线框接 viewer（feat/physics 轨道，2026-11-09，tag `phys-p3`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/render/`（debug 线渲染走 RenderDebug + LINE_LIST overlay 思路）与 `engine/resources/shaders/`；UE 5.8.4 `Runtime/Renderer/Private/` 只读定向核对 debug draw 通路（`PhysSceneDebug` 思路：物理引擎喊图元、渲染层收顶点画 overlay）；bevy `bevy_pbr` 复核无 debug-line 先例、据实标注。Jolt 上游 `Renderer/DebugRenderer.h`（纯虚接口清单：`DrawLine/DrawTriangle/DrawText3D/CreateTriangleBatch×2/DrawGeometry`）、`Reference.h`（`RefTargetVirtual::AddRef/Release` **非 const**）、`Shape.h`（`EShapeType` broad / `EShapeSubType` 细分）、`BodyInterface.h`（无 `TryGetBody`，用 `GetShape`+`GetCenterOfMassTransform`）逐处核签名。历史读 `MILESTONES.md` / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md` §9 / `SHADER-CONVENTIONS.md` §2.4 / M-P2 代码。
+- **占坑**：沿用 `feat/physics` worktree（`wt_pool` physics 轨道），未碰 master WIP。
+- **落码**：`core` 侧 `DebugScene`（PIMPL，`World.hpp` 零 Jolt 类型 POD：`build/step/extractLines/lastError/bodyCount`）+ `JoltLineRenderer`（匿名命名空间，全虚接口实现，batch `AddRef/Release` 引用计数，`DrawGeometry` 取 `mLODs.front()` 最细 LOD）；`renderer` 侧 `DebugLines` 类（固定容量动态 VB 262144 顶点 / LINE_LIST / depth test 开 write 关 / volatile CB b0，`ensurePipelines` 无条件 ensure、关闭时零开销）+ `FrameParams` 三个 debug 字段 + `debug_line.slang` 单源双目标 + `renderer.cpp` 4 份字节码产物；`viewer` 接 `--physics-debug/--physics-scenario/--physics-seed`，主循环每帧 step+extractLines 喂 LINE_LIST；`phys-tools` 新增 `debug`/`check-debug`（每帧几何度量 TSV 13 列 + 四分色桶，独立复验锚）与 selftest M-P3 段（12 条断言）；CMake 加 `p3-phys-debug` / `p3-phys-debug-check` / `p3-phys-negative` 三条 ctest；`check-phys-regression.py` 扩到四基线。
+- **修真实渲染 bug（本轮主坑）**：Vulkan `createGraphicsPipeline failed for debug lines` 每帧失败（`deviceErrors=240`）。定位链：临时插桩 vendored `vulkan-graphics.cpp` 打印 `vk::Result` → `ErrorUnknown` → 开 UE5.8 自带 VVL 排除管线状态（`Geometry` capability 报错是 model.ps 既有噪声）→ 排除法（LineList/深度状态/绑定布局/输入布局/3 属性布局逐一隔离均仍失败）→ 真因 = `DebugLines::ensure` 硬编码 `"vsMain"/"psMain"`，NVRHI Vulkan 把 `desc.entryName` 写进 `pName` 而 SPIR-V 入口恒 `main`。修复：传 `"main"`（compute 同款先例）。**该 bug 修复前打断所有 Vulkan 模式**（`ensurePipelines` 无条件调用）。
+- **交代物**：`example/phys-p3/`（run.bat ALL GREEN exit 0 + debug.tsv + viewer-dx12/vulkan.png 双后端真实截图 + wireframe/acceptance.png 两张真实证据图 + 9 份日志）、`cases.json` `phys-p3` 卡五用例、`PHYS-TOOLS-GUIDE.md` §10、`P8-PHYS-PLAN.md` M-P3 标完成 + 固化口径、`SHADER-CONVENTIONS.md` §2.4 实测扩充。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p3`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- `viewer --physics-debug` 双后端 240 帧 `deviceErrors=0`（修复前 Vulkan 240/240 失败），分色线框肉眼核验：绿盒 / 橙经纬球 / 品红胶囊 / 蓝地板网格，被 Suzanne 实体近面正确深度遮挡；稳态 `vertices=25488`、`lineY[-1, 1.6]` 两后端一致。互比 599px / maxDelta 242——薄线覆盖噪声，按 `scene`/`scale` 先例口径如实记 **FAIL 档**，各自对本后端基线 bytes。
+- `debug` TSV：241 帧 × 13 列，顶点数与四分色桶（box 72 / sphere 12288 / capsule 13056 / floor 72，和恒 25488）逐帧恒定；`check-debug` 从数据列独立复算：初始顶 4.8 / 静止顶 1.6 / 地板底 -1 / 地板 x ±5 / 末 30 帧 apex 极差 0.000000（睡眠岛冻结），PASS。
+- `selftest` 全绿（M-P0 23 + M-P1 21 + M-P2 27 + M-P3 12），含两场景 30 步线流逐 float 确定性对拍；ctest `p0/p1/p2/p3-phys-*` **10/10**（新增 3 条全过）；DX12 + VULKAN 全树 BUILD OK、viewer selftest 16/16 ×2。
+- **四基线逐字节回归**：M-P0 `drop.tsv` / M-P1 `layers.tsv` / M-P2 `stack.tsv` / M-P3 `debug.tsv` 全部 byte-identical OK（M-P3 渲染接线未扰动任何既有物理基线；抽查 `regression.py --only phys-p2 / phys-p0` 各 10/10 bytes 全绿，M-P0~P2 不进渲染总闸口径不变）。
+- `python tools/showcase/server.py --check` exit 0；`example/phys-p3/run.bat` **ALL GREEN** exit 0（含双后端 `deviceErrors=0` 硬闸）；三张 PNG（wireframe / acceptance / 双 viewer 截图）肉眼核验（MEASURED 面板首行溢出截断一轮修后复验通过）。
+
+**踩坑情况**
+1. **§2.4 共享 builder 变体（本轮主坑）**：入口名两阶段规则此前只防「后端传参错」，本轮证明**共享管线 builder 硬编码入口名**同样中招——DX12 忽略入口名蒙混过关，Vulkan 在**管线创建期**报 `VK_ERROR_UNKNOWN`（不是文档原先写的 createShader 返回 NULL），且 VVL 对管线**零报错**，极难定位。已写回 `SHADER-CONVENTIONS.md` §2.4（故障模式两种 + 定位手段：vendored 插桩打印 `vk::to_string(res)` + UE5.8 自带 VVL）。
+2. **VVL 报错要辨真伪**：`Geometry` capability（VUID-…08740）来自 model.ps 且驱动容忍（model 管线正常），与本坑无关；不能见报错就当根因。
+3. **自建 SPIR-V 解析器枚举要核对 spec**：Binding=33 / DescriptorSet=34，首版对照表写反导致误判「cbuffer 在 set 256」（实际是 set 0 / binding 256，与 NVRHI 布局吻合）。
+4. **`extractLines` 单帧消费**：返回 data 指向内部缓冲，再次调用即失效——selftest 确定性对拍必须在继续步进前完成对比，否则比对的是复用后的新缓冲。
+5. **证据图排版**：MEASURED 面板首行 70 字符溢出面板右缘被截，拆两行复验通过。
+
+**下一步**：M-P4 角色胶囊（Jolt `CharacterVirtual`，扫掠 + 地面检测 + 斜坡）；**M-P5 仍等 P8 E3**。
+
+## P8 M-P4：角色胶囊走查（feat/physics 轨道，2026-11-09，tag `phys-p4`）
+
+- **动作**：决策前置实读清单——Carrot `engine/physics/Character.{h,cpp}` + `PhysicsCharacterComponent/System`（用的是 JPH::Character 真实体式，jump TODO，无 CharacterVirtual 参考）；bevy 本体无物理 crate（既有核实，N/A）；UE 5.8.4 `CharacterMovementComponent.h`（MoveAlongFloor/FindFloor/MaxSlopeAmount 概念对照，只读）；Jolt vendored `CharacterVirtual.{h,cpp}`（接口 + mPosition 语义源码钉死）；开发历史（MILESTONES M-P0~P3 四栏、P8-PHYS-PLAN 固化口径、PHYS-TOOLS-GUIDE §10）。`wt_pool claim --track physics --milestone M-P4` 占坑。
+- **落码**：`World.hpp` M-P4 段（CharacterConfig/CharacterSample/CharacterResult/validateCharacter + simulateCharacter）；`World.cpp` CharacterHarness（走查场 8 静态体中心化 x−13 + CharacterVirtual + advance 重力/输入合成 + sample）+ simulateCharacter + DebugScene scenario=1（charH 接管 / step 走查 / extractLines 手动 DrawCapsule 亮黄胶囊 / bodyCount 分流）；`viewer` scenario=1 固定机位 + 场景日志文案分流；`phys-tools` character/check-character（10 列 TSV + 课程锚独立复算）+ selftest M-P4 段 12 条；CMake p4 三条 ctest；`check-phys-regression.py` 扩五基线；`make-phys-p4-evidence.py` 新增。
+- **提交版本**：`feat/physics` M-P4 提交（annotated tag `phys-p4`）。A 类轨道，不 bump `kStage`。
+- **完成情况**：selftest 全绿（p0 23 + p1 21 + p2 27 + p3 12 + p4 12），含角色轨迹两次模拟逐位一致；ctest 物理段 DX12/VULKAN 各 **13/13**；五基线（drop/layers/stack/debug/character）逐字节回归 OK；run.bat **ALL GREEN exit 0**（双后端 viewer 截图 `deviceErrors=0` 硬闸）；`server.py --check` exit 0；三张 PNG（trajectory/acceptance/双 viewer 截图）肉眼核验（两轮文字重叠修后复验通过）。
+- **踩坑**：① CharacterVirtual mPosition 是**胶囊几何中心**非脚底（COM 变换 PostTranslated(padding*up)），锚点初版按"脚底"写挂了平台贴合锚——读源码钉死后修正（脚底=py−1.08、贴地=top+1.10）；② 台阶爬升提前：胶囊半径前缘在台阶立面 0.5m 前接触，锚窗口 [4.3,7.2]；③ DebugScene::extractLines 的 `bodyInterface` guard 把 scenario=1（charH 接管、bodyInterface 为空）拦成空线流——guard 改 `!bodyInterface && !charH`；④ 本树 s1-nmesh-suzanne ctest 失败：**与本轮无关**（stash M-P4 后同样失败=因果排除；exe 在 MSYS bash 管道下零输出但 cmd/文件重定向正常，环境层问题留档不阻塞）。
+- **下一步**：M-P4 预留动作系统衔接接口（walkSpeed 输入 / groundState 状态机）；**M-P5 场景集成仍 gate P8 E3**。
+
 ## P8 M-J5a：显式依赖 DAG（vendored Taskflow）+ 复用面扩张（tag `m-j5a`，2026-11-09，feat/job-system 重启轨道）
 
 **动作**：用户拍板「关联系统完全自己写的确意义不大，核心诉求是 nanite/lumen 手写」「复杂度一上来很多自己写的就不够用了」「成熟库必须开源且无使用风险」→ 重启已 CLOSED 的 job-system 轨道（ACTIVE，`claim --milestone M-J5a`，worktree `nl-engine-job-system` 从 master `6a718fb` 重建，junction + skip-worktree 齐），并把**原拟自研 JobGraph 换成 vendored Taskflow v3.11.0**（MIT / header-only / C++17；v4 要 C++20 故取 v3 末版；52 头 + LICENSE + `VENDOR.md`，排除 `cuda/`）。`AGENTS.md` 新增「自研边界与第三方库选型闸」为通例，`NON-RENDER-ROADMAP.md` / `P8-JOB-PLAN.md` / `P8-PHYS-PLAN.md` / `PARALLEL-TRACKS.md` / `jobs.hpp` 里的旧原则（从头写 / 不引第三方线程库 / 把 vendored 称「例外」）全部标注作废。**旧代码整理**：editor `_mg_ed_*` 与 CLI `_mg_hot_*` 两份 4 路 slangc 实现合并为唯一 `recompileGraph()`，工具侧 `findSlangc/findDxc/q/runSlangc` 与第二份 `recompileGraph` 连同残留调用点删除；失效的 slangc 默认路径（指向已拆 worktree）改指主树共享 junction；顺手清掉 C4456 变量遮蔽。新增 `nl/core/jobgraph.hpp` 薄封装（`tf::` 只在 `core/src/jobgraph.cpp`）、`nanite-tools selftest jobgraph`、`material-graph-tools compilepar` 对拍命令。老 `ThreadPool` 一行不动。
@@ -1821,3 +1947,12 @@
 - **wt 拆除**：`nl-engine-ecs` junction 两处（`.workbuddy` / `slang dist`）PowerShell 原生 API 只摘链接、目标完好 → `git worktree remove --force` + prune；`feat/ecs` 分支保留。
 
 **下一步**：E1/E1b 双 gate 解除 → M-S3（音频场景集成）与 M-GL 游戏循环链可开工；P9 真实资产验收 V1~V4 排期不变。
+
+## P8 M-J5c：Jolt JobSystem 适配器接池（feat/physics 轨道穿插项，2026-11-09，tag `phys-j5c`）
+
+- **动作**：决策前置实读清单——`JobSystem.h` 三支柱合约 + `JobSystem.inl`（Job 引用计数/依赖流转）+ `JobSystemSingleThreaded.cpp`（inline 执行语义=基线路径）+ `JobSystemWithBarrier.cpp`（Wait 帮跑）+ `JobSystemThreadPool.cpp`（QueueJobInternal AddRef 流）+ `PhysicsSystem.cpp`（barrier 用量=1）+ `jobsync.hpp`/`scheduler.hpp`/`jobs.hpp`（M-J5b/c-prep 原语面）+ P8-JOB-PLAN M-J5c 计划节。`wt_pool claim --track physics --milestone M-J5c` 占坑（job-system wt 已拆，用户拍板「算 Physics 的，做第二层否则没意义」）。
+- **落码**：`World.hpp` DropConfig/StackConfig 加 `jobsThreads`；`World.cpp` PoolJobSystem（JobSystemWithBarrier 派生 + QueueJob→ThreadPool::post）+ makeJobRuntime 分流 + simulateDrop/simulateStack 接线 + validate [0,64]；phys-tools `check-jobs` 矩阵命令 + `simulate`/`stack` `--jobs` + selftest M-J5c 段；CMake p-j5c 两条 ctest；`make-phys-j5c-evidence.py` + `example/phys-j5c/`（run.bat + acceptance.png + 5 日志）。
+- **提交版本**：`feat/physics` M-J5c 提交（annotated tag `phys-j5c`）。A 类轨道，不 bump `kStage`。
+- **完成情况**：check-jobs 矩阵 6 条判定全 IDENTICAL（N=1 硬证明 / N=4 run-to-run / parallel vs serial，drop+stack 双路径）；`simulate --jobs 1` 全文件与 M-P0 drop.tsv `fc /b` 一致；selftest p0..p4+j5c 全 PASS；ctest 物理+j5c 15/15 双后端；五基线逐字节回归 OK（默认路径零扰动）；run.bat ALL GREEN exit 0；`server.py --check` exit 0；acceptance.png 肉眼核验。
+- **踩坑**：① stackTSV 按 rs[0..2] 索引，单元素 vector 传入越界段错误（改整批）；② check-jobs 无参数按默认值跑，usage 负向须 `--threads 0`；③ Scheduler configure 冻结 → 验收用专用 ThreadPool(N) 实例（偏差如实记录，生产一行换 compute() 池）。
+- **下一步**：ECS system 调度接入走 jobgraph（待 ECS 腾手）；M-P5 场景集成仍 gate P8 E3。

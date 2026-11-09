@@ -45,9 +45,8 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// M1.3：model 双入口（vs/vscluster/ps/pscluster）+ M4.0 再加 vscull/pscull 双入口，
-// M4.1 加 cull.cs compute 入口，M6.0 加 hiz 六入口，M0.5 加 hud 单入口，
-// M-E1b.0 加 model.vsscene/pscene 双入口：共 18 个产物名 × spv/dxil = 36。
+// 产物名共 24 个 × spv/dxil = 48：model 16（8 入口）+ cull.cs/dag.cs 4 +
+// hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+ visbuf 8（M7.0）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
     {"model.vs", true}, {"model.vs", false},
@@ -68,7 +67,10 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
-    // M7.0：visbuf.slang 四入口 × 双目标。
+    // M-P3：debug_line 单管线（vsMain/psMain），各 × spv/dxil = 4
+    {"debug_line.vs", true}, {"debug_line.vs", false},
+    {"debug_line.ps", true}, {"debug_line.ps", false},
+    // M7.0：visbuf.slang 四入口 × 双目标 = 8。
     {"visbuf.vsvisraster", true}, {"visbuf.vsvisraster", false},
     {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
     {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},

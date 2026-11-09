@@ -104,7 +104,7 @@
 | **M-J5a** | ① vendored Taskflow 3.11.0 + `nl/core/jobgraph.hpp` 薄封装（环检测 / 登记序归并）；② 抽共用 `recompileGraph` 消除两份 4 路 slangc 实现；③ 4 编译 job → 1 汇总 job 的 fan-in DAG 接到真实消费者；④ selftest + 证据图 + 展示台卡 | **已验收，收口中**（2026-11-09） |
 | M-J5b | 进程级常驻 `Scheduler` + Compute/IO 分池 + 老 `ThreadPool` 兼容层 | **已验收，收口中**（2026-11-09） |
 | M-J5c-prep | 动态依赖计数 job + Barrier（Jolt JobSystem 同构桩，**Jolt 无关**，接口先行解 physics/ECS 互等死锁） | **已验收，收口中**（2026-11-09，用户拍板「直接在这个 wt 做」） |
-| M-J5c | physics 合回 master 后写 `JoltJobSystem` 适配器（JPH CreateJob/RemoveDependencyAndQueue/Barrier → M-J5c-prep 原语）；ECS E1b 稳定后接 system 调度（走既有 jobgraph） | 延后收窄为「纯绑定」（原 M-J5c 的通用能力部分已由 M-J5c-prep 交付）；`ecs` ACTIVE M-E1b.1 / `physics` ACTIVE / `audio` M-S0 占坑，现在碰会撞在途树 |
+| M-J5c | physics 侧 Jolt 适配器：**已验收，收口中**（2026-11-09，tag `phys-j5c`，feat/physics wt 内做——job-system wt 已拆、用户拍板「算 Physics 的，做第二层否则没意义」）。`PoolJobSystem`（继承 `JobSystemWithBarrier`）+ QueueJob→ThreadPool::post（AddRef 投递/Execute+Release 成对）；`DropConfig/StackConfig.jobsThreads`（0=基线路径默认，>=1=适配器）。两层验收全绿：**N=1 与 SingleThreaded 数据行逐字节一致（硬证明）、N=4 run-to-run 逐字节一致、N=4 与串行逐字节一致（岛间无共享累加实测坐实）**；`simulate --jobs 1` 全文件与 M-P0 drop.tsv 逐字节一致。详见 §M-J5c 收口纪要。ECS system 调度接入（走 jobgraph）仍待 ECS 轨道 |
 
 ### M-J5a 实施计划（2026-11-09，落码依据）
 
@@ -153,6 +153,17 @@
   2. **cases.json 整文件重写陷阱**：`json.dump(indent=1)` 把原手工维护的 2-space 对象 / 3-space 键缩进整文件重排（223+/124− 噪音 diff）；改用精确字符串插入（匹配 `m-j5a-mg` → `m-sc0` 边界的原生缩进），diff 收敛到 66+/2−。
   3. **证据图高度**：jobs 25 项初版画布高 520 裁掉末 6 项，提到 720 后完整（ViewImage 复核确认）。
   4. **jobs selftest 实测量 = 25 项**（计划文档笼统写「26 项」），以实测为准，计划文档口径待同步。
+
+#### M-J5c 收口纪要（2026-11-09，feat/physics wt，tag `phys-j5c`）
+
+- **背景**：job-system wt 已拆（merge `fb2b4f4` 回 master，feat/physics 已整体合并 master 拿到 M-J5a/b/c-prep 成果），用户拍板「算 Physics 的，直接做第二层（真并行）否则没意义」→ physics 轨道占坑 M-J5c，两层一起交付。
+- **实现**（`core/src/physics/World.cpp`）：`PoolJobSystem final : JPH::JobSystemWithBarrier`——依赖计数留在 `JPH::Job` 内部（RemoveDependencyAndQueue→QueueJob 回调），适配器只做三件事：`CreateJob`（new Job + deps==0 即入队，ThreadPool 同款次序）、`QueueJob`（AddRef 投递 + 闭包 Execute/Release 成对，Jolt 合约「入队须自持引用」）、`FreeJob`（delete）；Barrier 由 Jolt 基类兜底（Wait 帮跑=合约 c），maxBarriers=8（PhysicsSystem::Update 用 1 个）。
+- **执行底座偏差（如实记录）**：用**专用 `ThreadPool(N)` 实例**而非 Scheduler 单例——Scheduler::configure 冻结使「同进程跑 N=1/N=4 两档对拍」不可行；生产接入仍推荐 Scheduler compute 池（构造 PoolJobSystem 时传 `Scheduler::instance().compute()` 即可，一行）。
+- **接口面**：`DropConfig/StackConfig` 各加 `int jobsThreads = 0`（0=JobSystemSingleThreaded 基线路径，M-P0~P4 基线一字不动；>=1=适配器+专用池）；validate 拒 [0,64] 越界。TSV 格式**零改动**（jobs 是运行期旋钮不入 provenance 头）→ 五基线字节稳定。
+- **验收结果（最优）**：check-jobs 矩阵（drop 240 帧 + stack 3 案例 600 帧 × {ST, N=1, N=4×2}）6 条判定全 IDENTICAL——①N=1 adapter vs SingleThreaded 逐字节（适配器正确性硬证明）；②N=4 run-to-run 逐字节（并行确定性）；③N=4 vs 串行逐字节（Jolt 岛间无共享累加、并行调度不碰浮点结果，实测坐实而非引用文档）。另 `simulate --jobs 1` 输出**全文件**（含头）与归档 M-P0 drop.tsv `fc /b` 一致。
+- **工具**：phys-tools `check-jobs [--threads N] [--frames F]`（ASCII-only 报告）；`simulate`/`stack` 加 `--jobs`；selftest M-J5c 段 2 条断言；ctest `p-j5c-check`/`p-j5c-negative`（物理+j5c 共 15/15 双后端）。
+- **踩坑**：stackTSV 按 case 索引 rs[0..2]，jobsMatrix 初版传单元素 vector 越界段错误——改整批传入；check-jobs 无参数按默认值运行（不报 usage），usage 负向用例须用 `--threads 0`。
+- **与 M-P0 确定性契约的关系**：契约**未动**——默认路径仍 SingleThreaded；并行路径的确定性是**新增实测结论**（不再是「Jolt 文档声称」），且以逐字节标准验收。
 
 #### 落地纪要（2026-11-09，M-J5c-prep 验收通过）
 
@@ -270,7 +281,8 @@
 | M-J4 命名线程 / IO 分池（可选） | 不排期（P9 V4） | — |
 | M-J5a DAG 内核 + A 档复用（vendored Taskflow） | 2026-11-09 收官 | `m-j5a` |
 | M-J5b 常驻池 + 分池 | 待 M-J5a 收口 | — |
-| M-J5c Jolt / ECS 接入 | 待各自轨道腾手 | — |
+| M-J5c Jolt 接入 | **2026-11-09 完成（tag `phys-j5c`）**：PoolJobSystem 两层验收全绿（N=1 逐位硬证明 / N=4 run-to-run 且与串行逐字节一致） | example/phys-j5c/ |
+| M-J5c ECS system 调度接入 | 待 ECS 轨道腾手（走既有 jobgraph） | — |
 
 ---
 

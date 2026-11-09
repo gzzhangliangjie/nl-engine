@@ -98,6 +98,7 @@ slangc <name>.slang -dxc-path <WinSDK_x64_dir> -target dxil -entry <vsMain|psMai
 
 后果与正确做法：
 - Vulkan 侧若把 `setEntryName` 设成 `"vsMain"`/`"vsCluster"` 等非 `"main"` 值，NVRHI 在 SPIR-V 里找不到该入口 → **`createShader` 静默返回 NULL** → pipeline 建不出来 → 画面全黑、调试层可能零报错，极难定位。
+- **M-P3 实测补充（2026-11-09，phys-p3 卡）**：故障模式不止一种。若 shader 模块创建成功但 `pName` 仍是错误入口名，拒绝发生在**管线创建期**：`vkCreateGraphicsPipelines` 每次调用返回 `VK_ERROR_UNKNOWN`，验证层（VVL）对管线上报**零错误**（`Geometry` capability 报错是 model.ps 的既有噪声，与本坑无关），错误只有我们自己的 `createGraphicsPipeline failed for ...` 一行——极难定位。踩法也更新了：不一定是后端传参错，**共享代码里的管线 builder 硬编码入口名**同样中招（M-P3 的 `DebugLines::ensure` 由 `ensurePipelines` 共享调用、写死 `"vsMain"/"psMain"`，DX12 恰好忽略入口名蒙混过关，Vulkan 每帧失败 240 次）。修复：共享 builder 一律传 `"main"`（与 compute 管线同款先例，DX12 忽略之，双后端通用），见 `scene.cpp` `ensurePipelines` 内注释。定位手段：临时在 vendored `vulkan-graphics.cpp` 的 `createGraphicsPipelines` 调用后打印 `vk::to_string(res)`（用完即撤），再用 UE 5.8 自带的 `VkLayer_khronos_validation`（`VK_LAYER_PATH` 指向 `Engine/Binaries/ThirdParty/Vulkan/Win64` + `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`）排除管线状态问题。
 - 两个后端现在的传参（固化在 `renderer/src/backend_dx12.cpp` 与 `backend_vulkan.cpp`，注释已对齐）：
   ```cpp
   // Vulkan：SPIR-V 入口恒 "main"（不管 normal/cluster/cull 哪套入口）

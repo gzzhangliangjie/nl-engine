@@ -1,0 +1,108 @@
+  ok reject frames=0
+  ok reject dt=1.0
+  ok reject gravity=0
+  ok reject height<=radius
+  ok reject restitution>1
+  ok accept default config
+  ok simulateDrop succeeded
+  ok body count = 2 (floor + sphere)
+  ok trajectory length = frames + 1
+  ok initial height = startHeight
+  ok initial vy = 0
+  ok physical anchors computable
+  ok first contact matches sqrt(2h/g) within 3 steps
+  ok free fall matches semi-implicit Euler closed form (<0.05)
+  ok sphere bounced above floor
+  ok bounce never exceeds drop height
+  ok bounce apex consistent with restitution^2 energy law
+  ok late bounces decay (30-frame spread < 0.05)
+  ok rest trajectory converged (last 10 frames flat)
+  ok rest height = sphere radius
+  ok determinism: two worlds match sample-by-sample
+  ok dump has TSV header
+  ok dump line count = header comments + samples
+  ok M-P1 matrix defaults all-on and symmetric
+  ok M-P1 set() keeps symmetry
+  ok M-P1 reject layer out of range
+  ok M-P1 reject height below blocker
+  ok M-P1 same_layer probe ok
+  ok M-P1 same_layer 3 bodies
+  ok M-P1 same_layer two-way association
+  ok M-P1 same_layer outcome
+  ok M-P1 enabled_pair probe ok
+  ok M-P1 enabled_pair 3 bodies
+  ok M-P1 enabled_pair two-way association
+  ok M-P1 enabled_pair outcome
+  ok M-P1 disabled_pair probe ok
+  ok M-P1 disabled_pair 3 bodies
+  ok M-P1 disabled_pair two-way association
+  ok M-P1 disabled_pair outcome
+  ok M-P1 ghost probe ok
+  ok M-P1 ghost 3 bodies
+  ok M-P1 ghost two-way association
+  ok M-P1 ghost outcome
+  ok M-P1 determinism: same case twice bit-identical
+  ok M-P2 reject frames below 60
+  ok M-P2 reject tower with fewer than 2 boxes
+  ok M-P2 reject friction out of range
+  ok M-P2 reject gap larger than half extent
+  ok M-P2 baseline world ok
+  ok M-P2 baseline frame count
+  ok M-P2 baseline body count
+  ok M-P2 no_sleep world ok
+  ok M-P2 no_sleep frame count
+  ok M-P2 no_sleep body count
+  ok M-P2 no_friction world ok
+  ok M-P2 no_friction frame count
+  ok M-P2 no_friction body count
+  ok M-P2 baseline tower did not collapse
+  ok M-P2 baseline tail converged (no jitter)
+  ok M-P2 baseline tail at rest (no velocity)
+  ok M-P2 baseline island went to sleep
+  ok M-P2 baseline cube 0 held its slot
+  ok M-P2 baseline cube 1 held its slot
+  ok M-P2 baseline cube 2 held its slot
+  ok M-P2 baseline cube 3 held its slot
+  ok M-P2 baseline cube 4 held its slot
+  ok M-P2 baseline cube 5 held its slot
+  ok M-P2 no_sleep tower equally stable
+  ok M-P2 no_sleep island stays active
+  ok M-P2 no_friction top cube slid away
+  ok M-P2 determinism: same tower twice bit-identical
+  ok M-P3 debug scene builds
+  ok M-P3 debug scene has 4 bodies
+  ok M-P3 wireframe stream non-empty
+  ok M-P3 LINE_LIST vertex pairs
+  ok M-P3 all four shape classes drawn
+  ok M-P3 color buckets partition vertices
+  ok M-P3 initial top = capsule apex 4.8
+  ok M-P3 wireframe topology independent of motion
+  ok M-P3 bodies fell after 30 steps
+  ok M-P3 second debug scene builds
+  ok M-P3 determinism: two scenes bit-identical
+  ok M-P3 floor bottom at -1
+  ok M-P3 settled capsule apex 1.6
+  ok M-P4 reject frames=0
+  ok M-P4 reject dt=1.0
+  ok M-P4 reject maxSlopeDeg=90
+  ok M-P4 simulateCharacter runs
+  ok M-P4 sample count = frames
+  ok M-P4 starts on ground
+  ok M-P4 blocked by 60deg slope at slope foot
+  ok M-P4 parked at platform2 height (feet on step top)
+  ok M-P4 no floor penetration
+  ok M-P4 groundState within enum range
+  ok M-P4 climbs 30deg ramp (y monotonic)
+  ok M-P4 crosses platform1
+  ok M-P4 walks all 3 steps
+  ok M-P4 crosses platform2
+  ok M-P4 tail 60 frames parked
+  ok M-P4 determinism: same course twice bit-identical
+phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)
+phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)
+phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)
+phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)
+phys-p0 selftest: PASS (Jolt 5.3.1, single-threaded, 240 frames)
+  frames=241 fall_frame=57 fall_t=0.950000 analytic_fall_t=0.958315
+  free_fall_max_err=0.000001 bounce_peak=2.138943 (frame 92)
+  rest_y=0.500000 rest_spread=0.038218 last10_spread=0.000000

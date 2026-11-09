@@ -5218,6 +5218,511 @@
           "script": "example/ecs-parallel/run.bat"
         }
       ]
+    },
+    {
+      "id": "phys-p0",
+      "label": "P8 M-P0",
+      "name": "物理最小世界（vendored Jolt 5.3.1 + 落球轨迹）",
+      "tag": "phys-p0",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道 feat/physics 首个里程碑：本地 vendored Jolt Physics 5.3.1（MIT、纯 CPU、零联网），自写集成层 nl/physics（PIMPL 把 Jolt 头挡在 core cpp 内）；两层碰撞层 + 静态地面 + 动态球，固定 1/60 步长无头步进。工具版交代：phys-tools selftest / simulate / check + 真实 TSV 生成的证据图，不进 kStage、不进渲染回归。",
+      "acceptance": [
+        "自由落体段与半隐式欧拉闭式最大误差 0.000001；首次触地 0.950s vs 解析 sqrt(2h/g)=0.958s（差 < 3 步）",
+        "恢复系数能量律：反弹峰值 2.139m vs e^2 预测 2.120m；末 10 帧轨迹完全收敛到球心高度 0.500m",
+        "确定性硬判据：同 DropConfig 两次新建世界，241 个样本逐字段（float 位）完全一致",
+        "双后端构建 + viewer selftest 16/16 x2；phys-tools selftest 两树均 PASS；ctest p0-phys-* 3/3",
+        "交代物：example/phys-p0/（run.bat ALL GREEN + drop.tsv + 2 张真实输出证据图 + 4 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数，退出码 2）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2。phys-tools 是纯 CPU 工具，两构建树产物等价。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "phys-tools - nl-engine P8 physics tools",
+          "command": "phys-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：自由落体 / 弹跳 / 收敛 / 确定性 23 条断言",
+          "kind": "tool",
+          "note": "真实 Jolt 5.3.1 世界跑 240 帧；--verbose 逐条 ok 行是 acceptance.png 的数据源。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p0 selftest: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "simulate",
+          "name": "simulate：逐帧轨迹 TSV（真实求解器输出）",
+          "kind": "tool",
+          "note": "stdout 直接出 TSV；头三行 provenance 记录版本/参数/体数，数据列 frame t y vy。",
+          "args": [
+            "simulate",
+            "--frames",
+            "240"
+          ],
+          "expectExit": 0,
+          "expectLog": "nl-physics M-P0 drop trajectory",
+          "command": "phys-tools simulate --frames 240"
+        },
+        {
+          "id": "check",
+          "name": "check：从归档 TSV 复验物理锚点",
+          "kind": "tool",
+          "note": "从 TSV 头读回真实参数，不假定默认值；用与 selftest 同一套锚点复验。",
+          "args": [
+            "check",
+            "{root}/example/phys-p0/drop.tsv"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p0 check: PASS",
+          "command": "phys-tools check example/phys-p0/drop.tsv"
+        },
+        {
+          "id": "negative",
+          "name": "负向：非法恢复系数显式退出 2",
+          "kind": "tool",
+          "note": "--restitution 1.5 越界，参数校验先于任何 Jolt 调用拒绝。",
+          "args": [
+            "simulate",
+            "--restitution",
+            "1.5"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: restitution out of range",
+          "command": "phys-tools simulate --restitution 1.5"
+        }
+      ]
+    },
+    {
+      "id": "phys-p1",
+      "label": "P8 M-P1",
+      "name": "物理碰撞层矩阵 + 引擎对象/Jolt 体双向关联",
+      "tag": "phys-p1",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道 feat/physics 第二里程碑：4 层对称碰撞矩阵同时驱动 Jolt 的 ObjectLayerPairFilter 与 ObjectVsBroadPhaseLayerFilter（宽相层 1:1 映射），体封装用 userData 索引做引擎 owner<->BodyID 双向关联（不存裸指针）。四个真实用例：同层碰撞 / 异层允许 / 异层禁用 / 幽灵全穿透，逐帧轨迹 TSV 出证据图。M-P0 落球基线逐字节不变。",
+      "acceptance": [
+        "允许对（same_layer / enabled_pair）落球停在挡板接触线 y=3.500000；禁用对（disabled_pair）穿过挡板被地板接住 y=0.842475；ghost 全层穿透持续自由落体 y=-38.345005",
+        "四个用例 owner_ok=1（BodyID -> userData -> owner 与 owner -> BodyID 双向一致）、bodies=3；矩阵 set() 强制对称、非法层索引被拒绝",
+        "确定性：disabled_pair 用例两次新建世界逐样本位一致；M-P0 drop.tsv 与 phys-p0 归档 MD5 均为 075ddfe9e4e513763c2728f7c801a1ed（逐字节回归）",
+        "selftest 44 条断言全绿（含 M-P1 锚点行）、check-layers 4 用例全绿、DX12+VULKAN 双后端 BUILD OK + viewer 16/16 x2、ctest p0/p1 5/5",
+        "交代物：example/phys-p1/（run.bat ALL GREEN + layers.tsv + 2 张真实输出证据图 + 5 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md M-P1 节"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数，退出码 2）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 layers / check-layers。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "phys-tools - nl-engine P8 physics tools",
+          "command": "phys-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0 锚点 + M-P1 层矩阵/双向关联/确定性",
+          "kind": "tool",
+          "note": "真实 Jolt 5.3.1 世界；--verbose 逐条 ok 行是 acceptance.png 的数据源。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p1 anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "layers",
+          "name": "layers：四用例逐帧轨迹 TSV（真实求解器输出）",
+          "kind": "tool",
+          "note": "stdout 直接出 TSV；# case 行记录矩阵、末帧高度、blocked、owner_ok、体数。",
+          "args": [
+            "layers",
+            "--frames",
+            "180"
+          ],
+          "expectExit": 0,
+          "expectLog": "nl-physics M-P1 collision layer matrix probe",
+          "command": "phys-tools layers --frames 180"
+        },
+        {
+          "id": "check-layers",
+          "name": "check-layers：从归档 TSV 复验层矩阵",
+          "kind": "tool",
+          "note": "从 # jolt= 头读回 blocker_y/radius/frames，不硬编码默认参数；逐用例验 owner_ok 与物理结局。",
+          "args": [
+            "check-layers",
+            "{root}/example/phys-p1/layers.tsv"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p1 check-layers: PASS",
+          "command": "phys-tools check-layers example/phys-p1/layers.tsv"
+        },
+        {
+          "id": "negative",
+          "name": "负向：frames=0 显式退出 2",
+          "kind": "tool",
+          "note": "参数校验先于任何 Jolt 调用拒绝；非法层索引另有 selftest 断言覆盖。",
+          "args": [
+            "layers",
+            "--frames",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --frames",
+          "command": "phys-tools layers --frames 0"
+        }
+      ]
+    },
+    {
+      "id": "phys-p2",
+      "label": "P8 M-P2",
+      "name": "物理堆叠稳定 + 休眠岛（6 箱体塔 10 秒长跑）",
+      "tag": "phys-p2",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道 feat/physics 第三里程碑：静态地面 + 6 个 1m 立方塔，固定 1/60 步进 600 帧；三个对照用例 baseline（摩擦 0.6 + 休眠）/ no_sleep（摩擦 0.6 关休眠）/ no_friction（摩擦 0 + 顶层侧向初速 0.5），逐体逐帧位姿与活跃体数 dump 成 TSV。结论：摩擦与接触求解器才是稳定来源，休眠只省算力。M-P0/M-P1 基线逐字节回归锁死。",
+      "acceptance": [
+        "baseline 六层末态 y=0.499839 / 1.498013 / 2.497626 / 3.497474 / 4.497100 / 5.497056（层距 ~1.0，无塌塔），末 60 帧位移极差 0.000000、速度 0.000000、活跃体 0（整岛休眠）、最大水平漂移 0.007372",
+        "no_sleep 同样稳定（顶 y=5.489297、尾段极差 0.000042）但活跃体 6 —— 休眠是优化不是稳定性来源；no_friction 顶层滑出 10.946865m、塔塌到地面（collapsed=1）",
+        "确定性：同配置 baseline 两次新建世界 601 帧 × 6 体逐字段（位置/速度/激活位/活跃体数）位一致；4 条参数校验负向用例被显式拒绝",
+        "selftest 71 条断言全绿（M-P0 23 + M-P1 21 + M-P2 27）、check-stack 从数据列独立重算收敛并与摘要交叉核对、ctest p0/p1/p2 7/7、DX12+VULKAN 双后端 BUILD OK + viewer 16/16 x2",
+        "M-P0 drop.tsv MD5 075ddfe9e4e513763c2728f7c801a1ed、M-P1 layers.tsv MD5 36c4b169e1d4f77124211c22f942111c 均逐字节不变；交代物：example/phys-p2/（run.bat ALL GREEN + stack.tsv + 2 张真实证据图 + 6 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md §9"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数，退出码 2）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 stack / check-stack。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "phys-tools - nl-engine P8 physics tools",
+          "command": "phys-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0/M-P1/M-P2 全锚点 + 堆叠确定性",
+          "kind": "tool",
+          "note": "真实 Jolt 5.3.1 世界跑三个 600 帧堆叠用例；--verbose 的 71 条 ok 行是 acceptance.png 的数据源。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p2 anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "stack",
+          "name": "stack：三用例逐体逐帧轨迹 TSV（真实求解器输出）",
+          "kind": "tool",
+          "note": "stdout 直接出 TSV；# jolt= 行是 provenance，# case 行记录每例摩擦/休眠/末态活跃体/尾段极差/漂移/是否塌塔。",
+          "args": [
+            "stack",
+            "--frames",
+            "180"
+          ],
+          "expectExit": 0,
+          "expectLog": "nl-physics M-P2 stacking stability",
+          "command": "phys-tools stack --frames 180"
+        },
+        {
+          "id": "check-stack",
+          "name": "check-stack：从归档 TSV 复验堆叠",
+          "kind": "tool",
+          "note": "从 # jolt= 头读回 boxes/frames/tail/half_extent；从数据列独立重算层高/层距/尾段收敛/活跃体/漂移，再与 # case 摘要交叉核对，防假绿。",
+          "args": [
+            "check-stack",
+            "{root}/example/phys-p2/stack.tsv"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p2 check-stack: PASS",
+          "command": "phys-tools check-stack example/phys-p2/stack.tsv"
+        },
+        {
+          "id": "negative",
+          "name": "负向：stack --frames 0 显式退出 2",
+          "kind": "tool",
+          "note": "参数校验先于任何 Jolt 调用拒绝；非法 boxes/friction/gap 另有 selftest 断言覆盖。",
+          "args": [
+            "stack",
+            "--frames",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --frames",
+          "command": "phys-tools stack --frames 0"
+        }
+      ]
+    },
+    {
+      "id": "phys-p3",
+      "label": "P8 M-P3",
+      "name": "物理调试线框接 viewer（Jolt DebugRenderer 分色线流）",
+      "tag": "phys-p3",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道 feat/physics 第四里程碑：DebugScene（静态地板 + 盒/球/胶囊三落体）每帧 step + extractLines，Jolt DebugRenderer 线流经 renderer 新增 DebugLines LINE_LIST 叠加层画进 viewer（--physics-debug，depth test 开/write 关，地板蓝、盒绿、球橙、胶囊品红）。工具侧 debug/check-debug 把线流汇总成每帧几何度量 TSV（顶点数/包围盒/四分色桶），check-debug 从数据列独立复算结构锚与物理锚。本轮修复一个真实渲染 bug：NVRHI Vulkan 把 desc.entryName 写进 vkPipelineShaderStageCreateInfo.pName，而 SPIR-V 入口恒为 main —— 传 vsMain/psMain 令 vkCreateGraphicsPipelines 以 VK_ERROR_UNKNOWN 每帧失败（ensurePipelines 无条件调用，即修复前打断所有 Vulkan 模式）；按 SHADER-CONVENTIONS §2.4 两阶段规则传 main 后 DX12/Vulkan 双后端 deviceErrors=0。",
+      "acceptance": [
+        "viewer --physics-debug 双后端 240 帧 deviceErrors=0，分色线框肉眼核验：绿盒/橙经纬球/品红胶囊/蓝地板网格，被 Suzanne 实体近面正确深度遮挡；稳态 vertices=25488、lineY[-1, 1.6] 两后端一致（互比 FAIL 档：599px/maxDelta242，薄线覆盖噪声，按 scene/scale 先例口径如实记录，各自对本后端基线 bytes）",
+        "debug TSV：241 帧 × 13 列，顶点数与四分色桶（box 72 / sphere 12288 / capsule 13056 / floor 72，和恒 25488）逐帧恒定（线框拓扑与位姿无关）；物理锚从数据列独立复算——初始顶 4.8、静止顶 1.6、地板底 -1、地板 x 覆盖 ±5、末 30 帧 apex 极差 0.000000（睡眠岛冻结）",
+        "selftest 断言全绿（M-P0 23 + M-P1 21 + M-P2 27 + M-P3 12），含两场景 30 步逐 float 确定性对拍；check-debug PASS；ctest p3-phys-debug / p3-phys-debug-check / p3-phys-negative 全过（物理段 10/10）",
+        "逐字节回归闸扩到四基线：M-P0 drop.tsv、M-P1 layers.tsv、M-P2 stack.tsv、M-P3 debug.tsv 全部 byte-identical OK（M-P3 内核与渲染接线未扰动任何既有物理基线；M-P0~P2 渲染基线不进渲染回归总闸的 A 类口径不变）",
+        "交代物：example/phys-p3/（run.bat ALL GREEN exit 0 + debug.tsv + viewer-dx12/vulkan.png 双后端截图 + wireframe/acceptance.png 两张真实证据图 + 9 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md §10 + SHADER-CONVENTIONS.md §2.4 Vulkan pName 扩充"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数，退出码 2）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 debug / check-debug。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "phys-tools - nl-engine P8 physics tools",
+          "command": "phys-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0..M-P3 全锚点 + 线流确定性",
+          "kind": "tool",
+          "note": "真实 Jolt 5.3.1 世界；M-P3 段 12 条断言覆盖线流非空/LINE_LIST 对/四分色桶划分/拓扑与运动无关/两场景逐 float 确定性/稳态位姿。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p3 anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "debug",
+          "name": "debug：碰撞形状线框逐帧度量 TSV（真实 DebugRenderer 输出）",
+          "kind": "tool",
+          "note": "与 viewer --physics-debug 共用 nl::physics::DebugScene；stdout 直接出 TSV，# colors 行记录四分色参考值（与 World.cpp extractLines 同源）。",
+          "args": [
+            "debug",
+            "--frames",
+            "120"
+          ],
+          "expectExit": 0,
+          "expectLog": "nl-physics M-P3 collision-shape debug wireframe",
+          "command": "phys-tools debug --frames 120"
+        },
+        {
+          "id": "check-debug",
+          "name": "check-debug：从归档 TSV 复验线框流",
+          "kind": "tool",
+          "note": "从数据列独立重算：拓扑逐帧恒定、四桶之和=顶点数、初始顶 4.8 / 静止顶 1.6 / 地板底 -1 / 地板 ±5、末 30 帧冻结；只验摘要不算验收。",
+          "args": [
+            "check-debug",
+            "{root}/example/phys-p3/debug.tsv"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p3 check-debug: PASS",
+          "command": "phys-tools check-debug example/phys-p3/debug.tsv"
+        },
+        {
+          "id": "negative",
+          "name": "负向：debug --frames 0 显式退出 2",
+          "kind": "tool",
+          "note": "参数校验先于任何 Jolt 调用拒绝（parseInt 下界 1）。",
+          "args": [
+            "debug",
+            "--frames",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --frames",
+          "command": "phys-tools debug --frames 0"
+        }
+      ]
+    },
+    {
+      "id": "phys-p4",
+      "label": "P8 M-P4",
+      "name": "角色胶囊走查（Jolt CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶）",
+      "tag": "phys-p4",
+      "date": "2026-11-09",
+      "summary": "A 类并行轨道 feat/physics 第五里程碑：nl/physics 新增 CharacterHarness（地板 -> 30° 斜坡 -> 平台 -> 3 级台阶 -> 平台 -> 60° 斜坡静态走查场，场地中心化到原点以便 viewer 轨道相机取景），Jolt CharacterVirtual 沿 +x 匀速 ExtendedUpdate 走查（重力/输入应用侧每帧合成，Jolt 约定；无真实体——DebugRenderer 不会自动画它，viewer scenario=1 手动补画亮黄胶囊线框）。位置语义从 CharacterVirtual 源码钉死：mPosition 是胶囊几何中心（COM 变换 PreTranslated(shapeOffset+COM).PostTranslated(padding*up)），贴地中心 = top + 1.10。工具侧 character/check-character 落 10 列 TSV（px/py/pz/vx/vy/vz/state/groundNy），check 从数据列独立复算课程锚：起步 OnGround、30° 段 y 单调、台阶覆盖 0.9、60° 被挡停在 x=10.41、末 60 帧冻结 spread 0.000000。mPosition 语义从 CharacterVirtual 源码钉死（不猜）。",
+      "acceptance": [
+        "viewer --physics-debug --physics-scenario 1 双后端 1200 帧 deviceErrors=0，亮黄胶囊停在 60° 坡脚（x=10.41），绿场地/蓝地板/Suzanne 深度参照肉眼核验；线流 vertices=13704、lineY[-1, 6.7985] 两后端一致（互比 1103px/maxDelta242 记 FAIL 档，薄线噪声 scene/scale 先例口径）",
+        "character TSV：1200 帧 × 10 列；物理锚从数据列独立复算——首帧 OnGround、无穿地（feet ≥ -0.01）、30° 段 y 非降、平台1 贴合 3.4094、台阶 y 覆盖 ≥ 0.85、平台2 贴合 4.3094、final x∈[10,11.6]（被挡）、末 60 帧 px/py 极差 0.000000",
+        "selftest 断言全绿（M-P0 23 + M-P1 21 + M-P2 27 + M-P3 12 + M-P4 12），含角色轨迹两次模拟逐位确定性；ctest p4-phys-character / p4-phys-character-check / p4-phys-negative 全过（物理段 DX12/VULKAN 各 13/13）",
+        "逐字节回归闸扩到五基线：M-P0 drop / M-P1 layers / M-P2 stack / M-P3 debug / M-P4 character 全部 byte-identical OK（A 类口径不变：不进渲染回归总闸）",
+        "交代物：example/phys-p4/（run.bat ALL GREEN exit 0 + character.tsv + viewer-dx12/vulkan.png 双后端截图 + trajectory/acceptance.png 两张真实证据图 + 8 份日志）+ 本卡五用例 + PHYS-TOOLS-GUIDE.md §11 + P8-PHYS-PLAN.md M-P4 固化口径"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：子命令总览（无参数，退出码 2）",
+          "kind": "tool",
+          "note": "不带参数启动打印 usage 并退出 2；usage 内已列出 character / check-character。",
+          "args": [],
+          "expectExit": 2,
+          "expectLog": "phys-tools - nl-engine P8 physics tools",
+          "command": "phys-tools"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0..M-P4 全锚点 + 走查确定性",
+          "kind": "tool",
+          "note": "真实 Jolt 5.3.1 世界；M-P4 段 12 条断言覆盖负向配置/起步贴地/60° 被挡/无穿地/30° 单调/平台贴合/台阶覆盖/静止冻结/两次模拟逐位一致。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p4 anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "character",
+          "name": "character：角色走查轨迹 TSV（真实 CharacterVirtual 输出）",
+          "kind": "tool",
+          "note": "stdout 直接出 TSV；# course 行记录场地布局（与 World.cpp CharacterHarness 同源）；groundState 数值 = EGroundState 枚举序。",
+          "args": [
+            "character",
+            "--frames",
+            "120"
+          ],
+          "expectExit": 0,
+          "expectLog": "nl-physics M-P4 character walk-through",
+          "command": "phys-tools character --frames 120"
+        },
+        {
+          "id": "check-character",
+          "name": "check-character：从归档 TSV 复验走查锚",
+          "kind": "tool",
+          "note": "从数据列独立重算：state 值域、起步 OnGround、无穿地、30° 单调、平台1/2 贴合、台阶覆盖 0.9、final x∈[10,11.6] 被挡、末 60 帧冻结；只验摘要不算验收。",
+          "args": [
+            "check-character",
+            "{root}/example/phys-p4/character.tsv"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-p4 check-character: PASS",
+          "command": "phys-tools check-character example/phys-p4/character.tsv"
+        },
+        {
+          "id": "negative",
+          "name": "负向：character --frames 0 显式退出 2",
+          "kind": "tool",
+          "note": "参数校验先于任何 Jolt 调用拒绝（validateCharacter 下界 60）。",
+          "args": [
+            "character",
+            "--frames",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --frames",
+          "command": "phys-tools character --frames 0"
+        }
+      ]
+    },
+    {
+      "id": "phys-j5c",
+      "label": "P8 M-J5c",
+      "name": "Jolt JobSystem 适配器接池（PoolJobSystem，N=1 逐位硬证明 + N>1 并行）",
+      "tag": "phys-j5c",
+      "date": "2026-11-09",
+      "summary": "A 类物理轨道穿插项（计划 P8-JOB-PLAN M-J5c，两层一起做）：PoolJobSystem 实现 JPH::JobSystem 接口——继承 JobSystemWithBarrier（Barrier 等待期 AddJob/Wait 帮跑=合约 c 由 Jolt 基类兜底），QueueJob 按 Jolt 合约 AddRef 投递、闭包内 Execute+Release 成对，执行底座为专用 nl/core ThreadPool（不走 Scheduler 单例：configure 冻结使一进程多线程数对拍不可行；Scheduler 仍是生产推荐入口）。World 的 DropConfig/StackConfig 新增 jobsThreads（0=SingleThreaded 基线路径默认不动，>=1=适配器）。验收两层全绿且是最优结果：N=1 与 SingleThreaded 数据行逐字节一致（适配器正确性硬证明），N=4 run-to-run 逐字节一致，且 N=4 与串行逐字节一致（Jolt 岛间无共享累加、并行调度不碰浮点结果，实测坐实）；simulate --jobs 1 全文件与 M-P0 drop.tsv 基线 fc /b 逐字节一致。TSV 格式零改动（jobs 是运行期旋钮不入头），M-P0~P4 五基线字节稳定。",
+      "acceptance": [
+        "check-jobs 矩阵：drop/stack 两条路径，N=1 adapter vs SingleThreaded 数据行 IDENTICAL（硬证明）、N=4 run-to-run IDENTICAL、parallel vs serial IDENTICAL（island-parallel determinism 实测）",
+        "simulate --jobs 1 --frames 240 全文件（含头）与 example/phys-p0/drop.tsv fc /b 逐字节一致——适配器路径与归档 M-P0 基线零偏差",
+        "selftest 新增 M-J5c 段（jobsMatrix(4,120) 两条断言），p0..p4+j5c 全 PASS；ctest 物理 + j5c 共 15/15（DX12/VULKAN 双后端）",
+        "五基线逐字节回归锁死（drop/layers/stack/debug/character 全 OK）——jobsThreads 默认 0 保证 M-P0~P4 基线一字不动",
+        "交代物：example/phys-j5c/（run.bat ALL GREEN exit 0 + acceptance.png 真实日志证据图 + 5 份日志）+ 本卡四用例 + PHYS-TOOLS-GUIDE.md §12 + P8-JOB-PLAN.md M-J5c 收口"
+      ],
+      "exe": {
+        "dx12": "build/dx12/phys-tools.exe",
+        "vulkan": "build/vulkan/phys-tools.exe"
+      },
+      "cases": [
+        {
+          "id": "usage",
+          "name": "usage：check-jobs --threads 0（非法线程数，退出码 2）",
+          "kind": "tool",
+          "note": "check-jobs 无参数会按默认值（threads=4）运行，非法 --threads 0 才触发 usage error 路径。",
+          "args": [
+            "check-jobs",
+            "--threads",
+            "0"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: bad --threads",
+          "command": "phys-tools check-jobs --threads 0"
+        },
+        {
+          "id": "selftest",
+          "name": "selftest：M-P0..M-P4 + M-J5c 全锚点",
+          "kind": "tool",
+          "note": "M-J5c 段跑 jobsMatrix(4,120)：适配器 N=1 逐位硬证明 + N=4 run-to-run 确定性（drop+stack）。",
+          "args": [
+            "selftest",
+            "--verbose"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-j5c anchors: PASS",
+          "command": "phys-tools selftest --verbose"
+        },
+        {
+          "id": "check-jobs",
+          "name": "check-jobs：适配器两层验收矩阵（N=4）",
+          "kind": "tool",
+          "note": "drop 240 帧 + stack 3 案例 600 帧 × {ST, N=1, N=4×2} 共 12 次模拟；6 条 IDENTICAL 判定 + PASS 行。",
+          "args": [
+            "check-jobs",
+            "--threads",
+            "4",
+            "--frames",
+            "240"
+          ],
+          "expectExit": 0,
+          "expectLog": "phys-j5c check-jobs: PASS",
+          "command": "phys-tools check-jobs --threads 4 --frames 240"
+        },
+        {
+          "id": "negative",
+          "name": "negative：simulate --jobs -1（退出码 2）",
+          "kind": "tool",
+          "note": "validateConfig 拒绝 jobsThreads 越界 [0,64]。",
+          "args": [
+            "simulate",
+            "--jobs",
+            "-1",
+            "--frames",
+            "240"
+          ],
+          "expectExit": 2,
+          "expectLog": "invalid arguments: jobsThreads out of range",
+          "command": "phys-tools simulate --jobs -1 --frames 240"
+        }
+      ]
     }
   ]
 }

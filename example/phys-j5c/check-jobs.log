@@ -1,0 +1,9 @@
+drop: frames=240 threads=4
+drop N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+drop N=4 run-to-run: IDENTICAL
+drop parallel vs serial: IDENTICAL (island-parallel determinism)
+stack: cases=3 frames=600
+stack N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+stack N=4 run-to-run: IDENTICAL
+stack parallel vs serial: IDENTICAL (island-parallel determinism)
+phys-j5c check-jobs: PASS (adapter N=1 bit-identical, N=4 run-to-run deterministic)

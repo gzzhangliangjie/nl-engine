@@ -1,0 +1,11 @@
+phys-tools - nl-engine P8 physics tools (Jolt 5.3.1, headless)
+usage:
+  phys-tools selftest [--verbose]
+  phys-tools simulate [--out <tsv>] [--frames N] [--dt S] [--gravity G]
+                      [--height H] [--radius R] [--restitution E] [--seed N]
+  phys-tools check <tsv>
+  phys-tools layers [--out <tsv>] [--frames N] [--verbose]
+  phys-tools check-layers <tsv>
+  phys-tools stack [--out <tsv>] [--frames N] [--boxes N] [--gap G]
+  phys-tools check-stack <tsv>
+exit: 0=PASS 1=FAIL 2=usage error

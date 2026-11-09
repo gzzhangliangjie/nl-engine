@@ -129,6 +129,22 @@ add_subdirectory(thirdparty/meshoptimizer EXCLUDE_FROM_ALL)
 add_library(nl_miniaudio STATIC thirdparty/miniaudio/miniaudio.c)
 target_include_directories(nl_miniaudio PUBLIC ${THIRDPARTY}/miniaudio)
 
+# ---- P8 M-P0：Jolt Physics 5.3.1 vendored（纯 CPU，零图形 SDK / 零联网）----
+# 上游 Build/CMakeLists 作子目录接入；samples/tests 只在它是根项目时启用。
+# 统一 CRT / RTTI / 异常口径：默认是 /MT 静态 CRT，会和 nl_core/viewer 的 /MD
+# 混链打架（Carrot 同样显式关掉）。详见 thirdparty/jolt/VENDOR.md。
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+set(USE_ASSERTS OFF CACHE BOOL "" FORCE)
+set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -161,6 +177,7 @@ add_library(nl_core STATIC
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
+    core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
@@ -184,7 +201,10 @@ endif()
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 # M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
 target_link_libraries(nl_core PUBLIC taskflow)
-target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio)
+target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio Jolt)
+# M-P3：启用 Jolt 调试渲染（碰撞形状线框提取）。Jolt 库本身已以 PUBLIC 带上该宏，
+# 这里显式复述，避免单配置 Release 下 generator-expression 传播的任何边界情况。
+target_compile_definitions(nl_core PRIVATE JPH_DEBUG_RENDERER)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -418,10 +438,16 @@ target_compile_definitions(audio-tools PRIVATE
     NL_AUDIO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
     NL_AUDIO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 
+# ---- P8 M-P0：phys-tools —— 物理最小世界无头验收工具（A 类轨道）----
+# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 nanite-scene / 展示台 expectExit）。
+# 只链 nl_core（nl/physics PIMPL 把 Jolt 头挡在 cpp 内），零图形 API。
+add_executable(phys-tools phys-tools/main.cpp)
+target_link_libraries(phys-tools PRIVATE nl_core)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -611,3 +637,59 @@ set_tests_properties(e2-ecs-good-scene PROPERTIES
 add_test(NAME s0-audio-selftest COMMAND audio-tools selftest)
 set_tests_properties(s0-audio-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "audio selftest: PASS")
+
+# ---- P8 M-P0：物理最小世界（A 类工具版验收，零渲染依赖）----
+add_test(NAME p0-phys-selftest COMMAND phys-tools selftest)
+set_tests_properties(p0-phys-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "phys-p0 selftest: PASS")
+add_test(NAME p0-phys-drop COMMAND phys-tools simulate --frames 240)
+set_tests_properties(p0-phys-drop PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P0 drop trajectory")
+add_test(NAME p0-phys-bad-config COMMAND phys-tools simulate --restitution 1.5)
+set_tests_properties(p0-phys-bad-config PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P1：碰撞层矩阵 + 体关联（A 类工具版验收）----
+add_test(NAME p1-phys-layers COMMAND phys-tools layers --frames 180)
+set_tests_properties(p1-phys-layers PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P1 collision layer matrix probe")
+add_test(NAME p1-phys-negative COMMAND phys-tools layers --frames 0)
+set_tests_properties(p1-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P2：堆叠稳定 / 休眠岛（A 类工具版验收）----
+add_test(NAME p2-phys-stack COMMAND phys-tools stack --frames 180)
+set_tests_properties(p2-phys-stack PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl-physics M-P2 stacking stability")
+add_test(NAME p2-phys-negative COMMAND phys-tools stack --frames 0)
+set_tests_properties(p2-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P3：碰撞形状调试线框流（A 类工具版验收，Jolt DebugRenderer 直出）----
+add_test(NAME p3-phys-debug COMMAND phys-tools debug --frames 240
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
+set_tests_properties(p3-phys-debug PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-p3-debug\\.tsv")
+add_test(NAME p3-phys-debug-check
+         COMMAND phys-tools check-debug ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
+set_tests_properties(p3-phys-debug-check PROPERTIES
+    DEPENDS p3-phys-debug
+    PASS_REGULAR_EXPRESSION "phys-p3 check-debug: PASS")
+add_test(NAME p3-phys-negative COMMAND phys-tools debug --frames 0)
+set_tests_properties(p3-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P4：角色走查（CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶）----
+add_test(NAME p4-phys-character COMMAND phys-tools character --frames 1200
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
+set_tests_properties(p4-phys-character PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-p4-character\\.tsv")
+add_test(NAME p4-phys-character-check
+         COMMAND phys-tools check-character ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
+set_tests_properties(p4-phys-character-check PROPERTIES
+    DEPENDS p4-phys-character
+    PASS_REGULAR_EXPRESSION "phys-p4 check-character: PASS")
+add_test(NAME p4-phys-negative COMMAND phys-tools character --frames 0)
+set_tests_properties(p4-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-J5c: Jolt JobSystem adapter (pool-backed parallel physics) ----
+add_test(NAME p-j5c-check COMMAND phys-tools check-jobs --threads 4 --frames 240)
+set_tests_properties(p-j5c-check PROPERTIES PASS_REGULAR_EXPRESSION "phys-j5c check-jobs: PASS")
+add_test(NAME p-j5c-negative COMMAND phys-tools simulate --jobs -1 --frames 240)
+set_tests_properties(p-j5c-negative PROPERTIES WILL_FAIL TRUE)

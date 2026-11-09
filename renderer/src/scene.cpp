@@ -26,6 +26,7 @@ static void clusterColor(std::uint32_t id, float out[3]) {
 bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
                  const char* vsEntry, const char* psEntry,
                  const char* modelFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     // ---- 1. 加载 Slang 双目标字节码（同一份 model.slang 出的 spv / dxil）----
     auto shaderPath = [shaderSuffix](const char* stage) {
         return std::string(NL_SHADER_DIR) + "/model." + stage + "." + shaderSuffix;
@@ -240,6 +241,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
 bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
                         const char* vsEntry, const char* psEntry,
                         const char* nmeshFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     // ---- 1. shader 对（cluster 专用入口 vsCluster/psCluster：签名多带 CLUSTERCOLOR。
     // vsEntry/psEntry 由后端传，SPIR-V 恒为 main——cluster 字节码是独立编译产物，
     // 入口在 slangc 时已定为 main；此处参数仅 DXIL 用）----
@@ -350,6 +352,7 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
 bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
                      const char* nmeshFile, bool frustumCull, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     frustumCull_ = frustumCull;
     cullTimer_.setLabel("cull");   // M4.2：resolve 日志标明这是 cull pass 实例
     // ---- 1. shader 对（cull 专用入口 vsCull/psCull）。DX12 入口名被忽略，Vulkan 恒 main ----
@@ -728,6 +731,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
 bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
                     const char* vsEntry, const char* psEntry,
                     const char* nmeshFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     frustumCull_ = true;          // 复用 M4 的 indirect + 计时 + 回读路径开关
     cullTimer_.setLabel("dag");   // resolve 日志标明这是 dag 遍历实例
 
@@ -1226,6 +1230,7 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
 bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
                     const char* vsEntry, const char* psEntry,
                     const char* nmeshFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     // S5 遍历场景原样建好——hiz 深度 pass 就画它的 indirect 输出（S6-PLAN 底线：
     // 第二遍剔除的输入接口 = S4 indirect buffer，不另起炉灶）。
     if (!initDag(device, shaderSuffix, vsEntry, psEntry, nmeshFile, outError)) return false;
@@ -2103,6 +2108,14 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
 
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
+    // M-P3：物理调试线框管线（LINE_LIST）。与主管线共用 framebuffer 格式，只建一次，
+    // 默认不画；debugLines 关闭时零开销（S7.0 渲染基线字节不变）。
+    // 入口名传 "main"：SPIR-V 恒 main（NVRHI Vulkan 把 desc.entryName 写进
+    // pName，传 vsMain 会令 vkCreateGraphicsPipelines 以 VK_ERROR_UNKNOWN 失败）；
+    // DX12 完全忽略 setEntryName、直接用 blob（§2.4 两阶段规则，compute 同款先例）。
+    if (!dbgLines_.ensure(device, info, shaderSuffix_.c_str(), "main", "main", outError))
+        return false;
+
     // M-E1b.0：ECS 场景 pipeline（vsScene_/psScene_/sceneInputLayout_）。
     // 深度/格式/fillMode/cullMode 与既有 pipeline 建法完全同款（2×2 组合）。
     if (sceneMode_) {
@@ -2288,6 +2301,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
 }
 
 void Scene::invalidatePipelines() {
+    // M-P3：调试管线随主管线一起重建（格式不变，重 ensure 即重建同格式 PSO）。
+    dbgLines_.invalidate();
     // M6.0：hiz 管线随主管线一起重建（纹理/绑定集按视口尺寸懒建，不受影响）。
     prepassPSO_ = nullptr;
     vizPSO_ = nullptr;
@@ -2313,6 +2328,7 @@ void Scene::invalidatePipelines() {
 bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
                      const char* modelFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     skinMode_ = true;
 
     // ---- 1. 同一份 model.slang 字节码：CPU 蒙皮后的顶点就是普通 POS/NORM/UV 流，
@@ -2611,6 +2627,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                       const SceneObjectDesc* objects, std::uint32_t objectCount,
                       const SceneLightDesc* lights, std::uint32_t lightCount,
                       float ambient, const char* sceneName, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     sceneMode_ = true;
     sceneAmbient_ = ambient;
     sceneLightCount_ = lightCount;
@@ -3808,6 +3825,146 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     cmd->drawIndexed(args);
 }
 
+// ---- M-P3：物理调试线框叠加管线（LINE_LIST）----
+// 固定容量动态 VB：ensure 时一次建足（kDebugLineCap 顶点），每帧 writeBuffer 重写
+// 当前帧的线段顶点流，绝不中途重建——规避 frame-in-flight 期间重建 VB 的隐患。
+namespace {
+constexpr std::uint32_t kDebugLineCap = 262144u;  // 顶点数（= 131072 段线），调试够用
+}
+
+bool DebugLines::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                        const char* shaderSuffix, const char* vsEntry, const char* psEntry,
+                        std::string& outError) {
+    if (pipeline_) return true;
+
+    // 加载 debug_line 双目标字节码（同一份 .slang 出 spv/dxil）。
+    auto path = [shaderSuffix](const char* stage) {
+        return std::string(NL_SHADER_DIR) + "/debug_line." + stage + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(path("vs").c_str(), vsBlob) ||
+        !readFileBytes(path("ps").c_str(), psBlob)) {
+        outError = std::string("failed to load debug_line shader (") + shaderSuffix + ")";
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName(vsEntry);
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName(psEntry);
+    vs_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vs_ || !ps_) { outError = "createShader failed for debug_line"; return false; }
+
+    // volatile CB：mvp（float4x4 = 64 B）
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = 64;
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "DebugLineConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for debug line constants"; return false; }
+
+    // 固定容量动态 VB（LINE_LIST 顶点流：6 float/顶点 = 24 B）
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = kDebugLineCap * 24u;
+    vbDesc.isVertexBuffer = true;
+    vbDesc.debugName = "DebugLineVB";
+    vbDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    vbDesc.keepInitialState = true;   // 每帧命令列表开头回 CopyDest → 可反复 writeBuffer
+    vertexBuffer_ = device->createBuffer(vbDesc);
+    if (!vertexBuffer_) { outError = "createBuffer failed for debug line VB"; return false; }
+    capacity_ = kDebugLineCap;
+
+    // 绑定布局：只有 b0（volatile CB）
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    bindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!bindingLayout_) { outError = "createBindingLayout failed for debug lines"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
+    if (!bindingSet_) { outError = "createBindingSet failed for debug lines"; return false; }
+
+    // 输入布局：POSITION(float3) + COLOR(float3)，stride 24
+    nvrhi::VertexAttributeDesc attrs[2] = {
+        nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0).setBufferIndex(0).setElementStride(24),
+        nvrhi::VertexAttributeDesc().setName("COLOR").setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(12).setBufferIndex(0).setElementStride(24),
+    };
+    inputLayout_ = device->createInputLayout(attrs, 2, vs_);
+    if (!inputLayout_) { outError = "createInputLayout failed for debug lines"; return false; }
+
+    nvrhi::GraphicsPipelineDesc desc;
+    desc.setPrimType(nvrhi::PrimitiveType::LineList)
+        .setVertexShader(vs_).setFragmentShader(ps_)
+        .setInputLayout(inputLayout_).addBindingLayout(bindingLayout_);
+    desc.renderState.rasterState
+        .setFrontCounterClockwise(true)
+        .setFillMode(nvrhi::RasterFillMode::Solid)
+        .setCullMode(nvrhi::RasterCullMode::None);
+    // 叠加层：depth test 开、depth write 关——被实体遮挡的线段不显示，但不写深度。
+    desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+    pipeline_ = device->createGraphicsPipeline(desc, info);
+    if (!pipeline_) { outError = "createGraphicsPipeline failed for debug lines"; return false; }
+    return true;
+}
+
+void DebugLines::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                      const nvrhi::Viewport& viewport, const FrameParams& params) {
+    if (!pipeline_ || !params.debugLineData || params.debugLineVertexCount == 0) return;
+    std::uint32_t n = params.debugLineVertexCount;
+    if (n > capacity_) {
+        // 超出固定容量（调试用途通常不会）：截断并告警一次，避免越界写。
+        nl::core::log::deviceError("DebugLines",
+            std::string("line vertex count ")
+                + std::to_string(n) + " exceeds fixed capacity "
+                + std::to_string(capacity_) + "; clamped");
+        n = capacity_;
+    }
+    // 每帧重写 mvp（volatile CB）+ 线段顶点流（动态 VB，CopyDest+keepInitialState）。
+    cmd->writeBuffer(constants_, params.mvp, 64);
+    cmd->writeBuffer(vertexBuffer_, params.debugLineData, n * 24u);
+
+    nvrhi::GraphicsState state;
+    state.setPipeline(pipeline_)
+         .setFramebuffer(framebuffer)
+         .addBindingSet(bindingSet_)
+         .addVertexBuffer(nvrhi::VertexBufferBinding()
+             .setBuffer(vertexBuffer_).setSlot(0).setOffset(0));
+    state.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(state);
+    nvrhi::DrawArguments args;
+    args.setVertexCount(n);   // LINE_LIST：顶点数即绘制顶点数
+    cmd->draw(args);
+}
+
+void DebugLines::invalidate() {
+    pipeline_     = nullptr;
+    inputLayout_  = nullptr;
+    bindingLayout_ = nullptr;
+    bindingSet_   = nullptr;
+    vs_ = nullptr;
+    ps_ = nullptr;
+    constants_    = nullptr;
+    vertexBuffer_ = nullptr;
+    capacity_     = 0;
+}
+
+void DebugLines::shutdown() {
+    invalidate();
+}
+
+void Scene::drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                           const nvrhi::Viewport& viewport, const FrameParams& params) {
+    // M-P3：仅当显式开启且数据非空才绘制（缺省零开销，S7.0 基线不变）。
+    if (!params.debugLines) return;
+    dbgLines_.draw(cmd, framebuffer, viewport, params);
+}
+
 void Scene::shutdown() {
     // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
     sceneMode_ = false;
@@ -3908,6 +4065,7 @@ void Scene::shutdown() {
     cullVisibleCount_ = -1;
     visibleTriangles_ = -1;
     cullTimer_.shutdown();   // M4.2：device 仍存活时释放 cull 计时 query
+    dbgLines_.shutdown();    // M-P3：释放调试线框管线 / 缓冲
     clusterCount_ = 0;
     frustumCull_ = false;
     vertexPool_ = nullptr;

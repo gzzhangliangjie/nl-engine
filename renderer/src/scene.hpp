@@ -61,6 +61,36 @@ struct ShadowConstantsCB {
 };
 static_assert(sizeof(ShadowConstantsCB) == 320, "cbuffer layout must match shader");
 
+// M-P3：物理调试线框叠加管线（LINE_LIST）。与 model.slang 同款单源/双目标约定：
+// 一份 debug_line.slang 出 spv/dxil；这里只负责收线顶点、画彩色线段叠加层。
+// depth test 开、depth write 关——尊重已有深度（被实体挡住的线段不显示），
+// 但不写深度（不遮挡后续 HUD）。默认不建/不画，debugLines 关闭时零开销。
+// 顶点布局（每顶点 6 float = 24 B）：POSITION(float3) + COLOR(float3)。
+class DebugLines {
+public:
+    // 用 framebuffer 格式信息建唯一一条 LINE_LIST 管线（只建一次）。shaderSuffix
+    // = "spv" / "dxil"；入口恒为 vsMain / psMain（debug_line.slang 只有这对）。
+    bool ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                const char* shaderSuffix, const char* vsEntry, const char* psEntry,
+                std::string& outError);
+    // 每帧：写 mvp 常量 → 上传线顶点（固定容量动态 VB，超容量截断）→ LINE_LIST 绘制。
+    // 调用方保证 debugLineData 在 cmd 记录期间有效（viewer 持有）。
+    void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+              const nvrhi::Viewport& viewport, const FrameParams& params);
+    void invalidate();
+    void shutdown();
+
+private:
+    nvrhi::ShaderHandle           vs_, ps_;
+    nvrhi::BufferHandle           constants_;    // volatile CB：mvp (64 B)
+    nvrhi::BufferHandle           vertexBuffer_; // 动态 VB（LINE_LIST 顶点流）
+    nvrhi::InputLayoutHandle      inputLayout_;
+    nvrhi::BindingLayoutHandle    bindingLayout_;
+    nvrhi::BindingSetHandle       bindingSet_;
+    nvrhi::GraphicsPipelineHandle pipeline_;
+    std::uint32_t                 capacity_ = 0; // 当前 VB 容量（顶点数）
+};
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -195,6 +225,11 @@ public:
     void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
               const nvrhi::Viewport& viewport, const FrameParams& params);
 
+    // M-P3：物理调试线框叠加层绘制入口。后端在 scene_.draw 之后、HUD 之前调用。
+    // 仅当 params.debugLines 且数据非空才绘制（缺省零开销）。
+    void drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params);
+
     bool ready() const {
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
             return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
@@ -256,6 +291,10 @@ private:
                            std::string& outError);
 
     nvrhi::ShaderHandle           vs_, ps_;
+    // M-P3：物理调试线框叠加层（LINE_LIST）。默认不建不画，debugLines 关闭时零开销。
+    DebugLines                    dbgLines_;
+    // 各 init* 写入，供 dbgLines_.ensure 定位 debug_line.{vs,ps}.<suffix> 字节码。
+    std::string                   shaderSuffix_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;
     nvrhi::TextureHandle          texture_;
     // pbr-direct：metallicRoughness 贴图（t1，RGBA8_UNORM 线性数据；skin 场景
