@@ -170,12 +170,21 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 - **`vsScene` 输出 `WORLDPOS` 插值量**供点光算距离；新增 interpolator 后必须复拍 `scene` / `scale` 两卡验证既有基线（本轮实测见 `MILESTONES.md` M-E1b.2 段）。
 - **组件序列化向后兼容铁律**：`LightComponent::serialise()` 对 `type=0` **不写新键**（既有场景 JSON 与 `ecs-serial` roundtrip 逐字节不变）；`deserialise` 缺键按方向灯处理；非法 `type` / `range<=0` 在 viewer 收集段显式报错退出码 2，不在组件层 assert。
 
+### 2.12 ⚠️ ECS 逐实例 PBR 材质 + Cook-Torrance 换代口径（2026-11-09，M-E1b.3）
+
+- **t5 = `g_instanceData` 扩到每实例 7 个 float4**：`[0..3]` 世界矩阵四列、`[4]=(tint.rgb,0)`、`[5]=(roughness, metallic, 0, 0)`。缺省 **roughness=1 / metallic=0**（matte 介电质）；`ModelComponent::serialise()` **不写这两键**（roundtrip 逐字节铁律，`selftest --all` 守护）。
+- **视向量 V 来源 = b1 `LightConstants.g_cameraPos`**：ECS 分支复用 pbr-direct 同款 80B volatile CB（`maxVersions=16`），每帧只写 `cameraPos = FrameParams.eye`；BindingLayout/BindingSet 必须同步扩 slot1，**漏扩 = Vulkan b1 读 NaN**（§2.7 单一 BindingSet 铁律的 ECS 版）。
+- **ambient 项必须乘 `cDiff`（= albedo·(1-metallic)）而非 `albedo`**：金属无漫反射环境光。乘 albedo 会把金属暗部染成粉底色、抹平 metallic 0/1 的材质对比——这是 M-E1b.3 起的铁律。
+- **亮度锚定**：Cook-Torrance `1/π` × 方向灯 `1/ΣI` 双重压缩比 Lambert 暗 ~3×。**shader 口径不动（与 shadePbr 同式拍板），亮度用场景布光补偿**（E1b 场景 ambient 0.9 / dir color ×4.2 / point ×3.0；白 matte 锚定 E1b.2 旧亮度 ±7）。金属物体物理性偏暗是无 IBL 的正确表现，**不要当 bug 修**。
+- **色彩管线**：ECS `psScene` 已换代为 `srgbToLinear(base.rgb) * tint` 进光、`pow(saturate(Lo), 1/2.2)` 出（替换旧 `*2.2f` sRGB 空间曝光补偿）；t0 贴图仍 `RGBA8_UNORM` 直读。彩色饱和度略低于 Lambert 时代 = 白色介电质 specular（F0=0.04）稀释，物理正确。
+- **改 shader 后先删 exe 再 build**：NMake 同秒 mtime 会跳重链（`Built target viewer` 但 exe 未更新），regression 过期门禁会拦；两次踩中。
+
 ## 3. 当前局限
 - **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增单入口 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`（默认 `vsMain/psMain` 双入口）；**多入口 shader 必须在 CMakeLists 登记 `_ENTRIES_<NAME>`**（model 6 / hiz 6 / visbuf 4 个入口），需要 SM6.6 的产物进 `_SM66_ARTIFACTS` 白名单（见 §2.9）。公共 `#include` 头用 `.slangh` 后缀避开 GLOB。注意 `file(GLOB)` 在 configure 时求值，纯新增文件若不触发重编，手动重跑一次 build 脚本即可。
 - **shader 名仍由共享类固定拼接**：M0.4 把两后端重复的路径/入口名收进了 `renderer/src/scene.cpp`，M0.5 又加了一个 `renderer/src/hud.cpp`（`<name>` = `hud`），两者各自是常量；多材质系统（shader 名 → 产物 + 入口 + pipeline 的注册表）留到 S1。
 - HUD 只绑一张字体图集、忽略 `ImDrawCmd::TextureId`；自定义纹理 / 中文 / 输入框 / docking 的扩法见 `docs/IMGUI-GUIDE.md`。
 - 多 pass / 多 render target 的 shader 尚未涉及，`-stage` 目前只用 `vertex`/`fragment`。
-- 贴图用 `RGBA8_UNORM`（不做 sRGB → linear 转换），`model.slang` 里乘 2.2 曝光补偿官方 Suzanne 贴图偏暗；正式色彩管理留到后续阶段。
+- 贴图用 `RGBA8_UNORM`（不做 sRGB → linear 转换），`model.slang` 里乘 2.2 曝光补偿官方 Suzanne 贴图偏暗；正式色彩管理留到后续阶段。**（2026-11-09 更新：pbr-direct `psMain` mode 5 与 ECS `psScene`（M-E1b.3，§2.12）均已改 `srgbToLinear` + gamma encode；2.2 补偿仅存于 mode 0 风格路径。）**
 
 ## 4. 验收自检
 ```bash

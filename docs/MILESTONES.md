@@ -1413,6 +1413,31 @@
 **双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
 
 **下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
+
+## M-E1b.3 逐实例 PBR 材质 + Cook-Torrance 换代（2026-11-09，用户拍板 A：阴影拆 E1b.4）
+
+**动作**：pbr-direct merge 回 master 后，E1b.3 的「依赖接口」全链落地——① `ModelComponent` 增 `roughness`(缺省 1=完全粗糙)/`metallic`(缺省 0=介电质)，copy ctor 同步拷贝；deserialise **缺键按默认、`serialise()` 不写这两键**（与 E1b.2 方向灯同套向后兼容铁律，保 E2 roundtrip 逐字节）；② `SceneObjectDesc` +2 字段，viewer `runScene` 收集；③ t5 实例缓冲 **5→7 个 float4**（`[5]=(roughness,metallic,0,0)`），`vsScene` 增 `ROUGH/METAL` 插值量透传；④ ECS 分支新开 b1 `LightConstants`（复用 pbr-direct 同款 80B volatile CB，`maxVersions=16`），每帧只写 `cameraPos`（`FrameParams.eye`），BindingLayout/BindingSet 同步扩 slot1；⑤ `psScene` **Lambert→Cook-Torrance 换代**：BRDF 式沿用 pbr-direct 收口时三处对拍的 `D_GGX/V_SmithGGXCorrelated/F_Schlick/(1-F)·cDiff/π`，逐实例材质进 F0/cDiff，视向量 V 从 b1 `g_cameraPos` 取；E1b.2 点光 UE 衰减与方向灯 `1/ΣI` 归一化结构**原样保留**；贴图 sRGB→linear、输出 gamma encode（替换旧 `*2.2f` sRGB 空间曝光补偿）；⑥ **ambient 项 `ambient*albedo`→`ambient*cDiff`**：金属无漫反射环境光（否则金属暗部被染粉、metallic 0/1 材质对比被抹平）。场景 `ecs-e1b.scene` 加材质演示键（红 0.15/0.9 金属、蓝 0.25/0.0 低粗糙、其余缺省 matte）。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.3`）；**不 merge 回 master**（轨道未整体收官，前置不变）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/` 三场景（主场景新增 roughness/metallic 演示键）+ 三条 `run*.bat` 双后端复拍 + 机器断言全 exit 0；`shot*-{DX12,VULKAN}.{png,log}` 基线重拍；`example/cases.json` 既有 `ecs-e1b` 卡 3 用例覆盖（scene/scale/point），无新卡；`server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染验证）；`nanite-scene selftest --all` 双树各 PASS（ModelComponent 扩字段后 ecs-serial roundtrip 不回归，序列化不写新键）；本轮有渲染证据图。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 段补 M-E1b.3、`ECS-TOOLS-GUIDE.md` 新增 M-E1b.3 节、`SHADER-CONVENTIONS.md` 新增 §2.12（逐实例材质布局 / b1 cameraPos / ambient·cDiff / 亮度锚定口径）、`UE-DIFFS.md` D-E1b-1 更新（点光已接 BRDF，阴影留 E1b.4）、证据图归档 `docs/screenshots/ecs-e1b.3-*.png`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b.3-{dx12,vulkan}.png`；肉眼核验——红 Suzanne 金属感（暗部无粉底色 + 高光）、蓝低粗糙宽高光、绿/黄/白哑光漫反射，三灯色温可辨，白锚定旧亮度，无过曝无死黑。
+- 验收数字：双后端 `5/7/50 objects | 3/4/8 lights | batches=1/1/4 | deviceErrors=0`；`regression.py --only ecs-e1b` **6/6 bytes**；抽查 `--only pbr-direct` **10/10**、`--only m0.9` **4/4**（psScene 是 ecs 专用入口，共享 model.slang 其他入口零波及）。
+
+**亮度锚定（两轮，写实）**：Cook-Torrance 的 `1/π` 能量守恒 × 方向灯 `1/ΣI` 归一化双重压缩，比 E1b.2 Lambert 暗 ~3×（第一轮低估，画面仍灰暗）。shader 口径不动（与 shadePbr 同式拍板），**场景布光补偿**：`ambient 0.22→0.9`（point 场景 `0.08→0.55`）、方向灯 color ×4.2、点光 ×3.0。实测白 Suzanne (111,107,109) vs 旧基线 (118,107,109) 锚定；红金属物理性偏暗（无 IBL 特性，恰是材质对比点）；彩色饱和度略降 = 白色介电质 specular（F0=0.04）稀释，物理正确。
+
+**踩坑情况（本轮三条）**
+1. **两棵构建树 cache 里 `CMAKE_MAKE_PROGRAM=nmake` 裸名失效**（与 audio wt 的 VULKAN 树同款坑）：generator 直接报错，显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure 解决。
+2. **NMake 同秒 mtime 跳重链（第二次踩）**：改 `model.slang` 后 `cmake --build` 显示 `Built target viewer` 但 exe 未重链，regression 过期门禁拦下才暴露；删 `viewer.exe` 强制重链解决。**改 shader 后凡涉及 exe 新鲜度校验，先删 exe 再 build。**
+3. **亮度双重压缩低估**：第一轮 ambient ×2.5 + color ×2.8 仍灰暗（white 通道实测与「albedo 线性值 ~0.26 而非假设的 0.6」的复算一致才定位）；第二轮按实测像素反推锚定。教训：**调光先量化采样（python PIL 取点），别凭肉眼印象迭代。**
+
+**双后端分档（如实报）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡互比：`point` = **bytes**（逐字节一致）；`scene` = 2px/maxDelta1 → **near 档**；`scale` = 7px/maxDelta6 → FAIL 档（但 maxDelta 由旧 23 降至 6，乘法-only 口径 + CPU 预算倒数的改善）；按既有拍板留痕不折腾。
+
+**下一步**：**阴影拆 E1b.4**（用户拍板 A，2026-11-09）；E1 轨道收官 merge 回 master 的前置不变（12 文件冲突统一解）。
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。

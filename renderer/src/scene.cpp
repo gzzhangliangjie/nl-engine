@@ -2479,10 +2479,24 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))   // b1 LightConstants（M-E1b.3：cameraPos）
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6));
     sceneBindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!sceneBindingLayout_) { outError = "createBindingLayout failed for ecs scene"; return false; }
+
+    // M-E1b.3：b1 LightConstants（含 cameraPos）—— psScene 视向量 V 从 b1 取；
+    // 复用 pbr-direct 同款 80B cbuffer，每帧由 sceneMode_ 渲染分支写 params.eye。
+    {
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants(EcsScene)";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for ecs scene LightConstants"; return false; }
+    }
 
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
@@ -2541,9 +2555,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     }
 
     // ---- 5. 每 batch 实例缓冲 + 全场灯缓冲（StructuredBuffer<float4>）----
-    // 实例：每实例 5 个 float4 —— [0..3] 列主序世界矩阵 4 列，[4]=(tint.rgb,0)。
-    // 灯：1+lightCount*2 个 float4 —— [0]=(lightCount, ambient, 1/ΣI, 0)，每灯
-    // {dir.xyz, intensity}、{color.rgb, 0}。
+    // 实例：每实例 7 个 float4（M-E1b.3 由 5 扩到 7）—— [0..3] 列主序世界矩阵 4 列，
+    // [4]=(tint.rgb,0)、[5]=(roughness, metallic, 0, 0)。
+    // 灯：1+lightCount*3 个 float4 —— [0]=(lightCount, ambient, 1/ΣI, pointCount)，每灯
+    // {dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}。
     // M-E1b.1：实例缓冲按 batch 各建一份，SV_InstanceID 就是本 batch 内 0-based
     // 槽号。旧做法把全场实例放一个缓冲、用 startInstanceLocation 划窗口，但 DX12
     // 的 SV_InstanceID 不含 StartInstanceLocation（2-batch 探针：两物体叠成一团）；
@@ -2555,11 +2570,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         SceneMeshBatch& batch = sceneBatches_[b];
         batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
         std::vector<float>& data = batchInstanceData[b];
-        data.assign(static_cast<std::size_t>(batch.instanceCount) * 5u * 4u, 0.0f);
+        data.assign(static_cast<std::size_t>(batch.instanceCount) * 7u * 4u, 0.0f);
         std::uint32_t slot = 0;
         for (std::uint32_t i : batchObjects[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
-            float* dst = data.data() + static_cast<std::size_t>(slot) * 5 * 4;
+            float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
             for (int c = 0; c < 4; ++c)
                 for (int r = 0; r < 4; ++r)
                     dst[c * 4 + r] = w[c * 4 + r];
@@ -2567,6 +2582,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
+            // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
+            dst[20] = objects[i].roughness;
+            dst[21] = objects[i].metallic;
+            dst[22] = 0.0f;
+            dst[23] = 0.0f;
             ++slot;
         }
         nvrhi::BufferDesc instDesc;
@@ -2626,6 +2646,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+               .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))   // b1（M-E1b.3：cameraPos）
                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, batch.instances))
                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, sceneLights_));
         batch.set = device->createBindingSet(setDesc, sceneBindingLayout_);
@@ -2745,6 +2766,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));  // w = ambient（viewer 透传）
         cb.options[0] = 0.0f;   // psScene 不读 options；保持 0
         cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
+
+        // M-E1b.3：b1 每帧写相机世界坐标（psScene 视向量 V 来源）。其余字段 E1b 不用。
+        LightConstants lc{};
+        lc.cameraPos[0] = params.eye[0];
+        lc.cameraPos[1] = params.eye[1];
+        lc.cameraPos[2] = params.eye[2];
+        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
 
         nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
             ? (params.cullBack ? pipelineSceneWireBack_ : pipelineSceneWireNone_)

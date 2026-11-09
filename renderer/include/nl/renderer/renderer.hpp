@@ -177,6 +177,8 @@ struct HudFrame {
 struct SceneObjectDesc {
     float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
     float tint[3];          // ModelComponent::tint
+    float roughness = 1.0f; // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）
+    float metallic  = 0.0f; // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）
     const char* meshFile;   // assets/ 下的 .glb 文件名（viewer 侧已过白名单校验）
 };
 struct SceneLightDesc {

@@ -145,6 +145,11 @@ nlohmann::json ModelComponent::serialise() const {
 void ModelComponent::deserialise(const nlohmann::json& j) {
     meshFile = j.at("mesh").get<std::string>();
     tint = {j.at("tint")[0], j.at("tint")[1], j.at("tint")[2]};
+    // M-E1b.3：逐实例 PBR 材质缺键按默认（roughness=1 / metallic=0），
+    // 与 LightComponent type=0 不写新键同套向后兼容铁律；序列化不写这两键，
+    // 保住 M-E2 roundtrip byte-identical 硬判据（见 ecs-e1a/run.bat）。
+    roughness = j.value("roughness", 1.0f);
+    metallic  = j.value("metallic", 0.0f);
 }
 
 nlohmann::json LightComponent::serialise() const {

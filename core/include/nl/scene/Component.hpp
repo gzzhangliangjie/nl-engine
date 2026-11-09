@@ -201,12 +201,15 @@ class ModelComponent : public ComponentOf<ModelComponent> {
 public:
     explicit ModelComponent(Entity owner) : ComponentOf<ModelComponent>(owner) {}
     ModelComponent(const ModelComponent& other, Entity newOwner)
-        : ComponentOf<ModelComponent>(newOwner), meshFile(other.meshFile), tint(other.tint) {}
+        : ComponentOf<ModelComponent>(newOwner), meshFile(other.meshFile), tint(other.tint),
+          roughness(other.roughness), metallic(other.metallic) {}
 
     static constexpr const char* kName = "Model";
 
     std::string meshFile;          // assets/ 下的资产文件名（白名单校验在 viewer 侧）。
     Vec3 tint{1.0f, 1.0f, 1.0f};   // 实体级着色（N 物体画面区分用；Carrot color 字段口径）。
+    float roughness = 1.0f;        // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）。
+    float metallic  = 0.0f;        // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）。
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;

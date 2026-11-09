@@ -1196,6 +1196,8 @@ int runScene(const Options& o) {
         d.tint[0] = model->tint.x;
         d.tint[1] = model->tint.y;
         d.tint[2] = model->tint.z;
+        d.roughness = model->roughness;   // M-E1b.3：逐实例 PBR 材质（缺省 1/0）
+        d.metallic  = model->metallic;
         d.meshFile = meshFiles[k].c_str();
         objects.push_back(d);
     }
@@ -1325,6 +1327,10 @@ int runScene(const Options& o) {
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;
+        // M-E1b.3：视向量 V 来源——真实相机世界坐标（psScene 从 b1 cameraPos 读）。
+        float eye3[3];
+        camera.eyePosition(eye3);
+        fp.eye[0] = eye3[0]; fp.eye[1] = eye3[1]; fp.eye[2] = eye3[2];
 
         nl::renderer::HudFrame hud{};
         if (hudOn) {
