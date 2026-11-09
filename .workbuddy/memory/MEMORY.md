@@ -27,7 +27,7 @@
 ## ECS / job-system 关键契约
 - `ComponentOf<T>::nextTypeID()` 计数器必须在非模板 inline 函数；`createBindingSet` 晚于 buffer 创建；多灯按 `1/ΣI` 归一化。jobgraph：create 后计数=numDeps+1，link 完必须 `launch()` 发布。并行 tick 契约：并行段禁结构变更、未声明访问=自足、确定性=并行==串行逐位。
 - **⚠️ JobRuntime 析构次序铁律（2026-11-10 实锤修复）**：Jolt `Job::Execute()` 末尾就通知 barrier 放行主线程，排队引用 `Release()` 在池 worker 闭包里更晚执行 → `JobRuntime` 必须 **pool 声明在 adapter 之后（析构 pool 先死）**，否则 worker 最后一条 Release 对已析构 JobSystem 虚调 FreeJob → 纯虚调用 fail-fast（崩率随线程数升，Heisenbug，时序扰动即消失）。ThreadPool ctor 已带 spawn 重试+降级；phys selftest M-J5c 段有 try/catch 转显式 FAIL。
-- **P1 遗留（未修）**：`m-j5c-prep/selftest-jobsync` 间歇 exit 1（2/20，「resident determinism」断言）= jobsync 完成通知链路另一处同步缺陷，需专开调试段（cdb/WinDbg）。全量闸遇 jobsync FAIL 先 `--only` 复验。
+- **P1 已解决（2026-11-10）**：`m-j5c-prep/selftest-jobsync` 间歇 exit 1 实锤 = 测试违反契约 3（launch 与 link 交错建图 → downstream 被提前发布 → 后续 link 全被拒）。新增 `JobSync::launchAll` 原语把「帧前建图全 link → 帧中统一放行 → 帧后回收」编码进 API；**jobsync 使用纪律：建图期全 link，放行统一走 launchAll，禁止单发 launch 与 link 交错**。
 
 ## 并行轨道易忘点（详 `docs/PARALLEL-TRACKS.md`）
 - wt_pool：开场声明编号 → claim；收口 close 硬闸 + release --done。树边界闸 `tools/tree_gate.py`：脚本树≠cwd 树 exit 2。worktree junction 只能 PowerShell 原生 API 建删；**分支保留**。python 孪生对拍防假绿（不适用并发类）。

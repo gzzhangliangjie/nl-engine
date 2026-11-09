@@ -190,6 +190,10 @@ void JobSync::launch(const JobHandle& job) {
     if (job.job_) job.job_->removeDependency(1);             // 释放创建者持有（契约 1）
 }
 
+void JobSync::launchAll(const std::vector<JobHandle>& jobs) {
+    for (const JobHandle& job : jobs) launch(job);           // 全 link 后统一放行（两阶段纪律）
+}
+
 bool JobSync::link(const JobHandle& upstream, const JobHandle& downstream) {
     if (!upstream.job_ || !downstream.job_) return false;
     if (downstream.job_->published()) return false;          // 已发布（契约 3）→ 拒绝

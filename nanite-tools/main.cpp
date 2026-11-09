@@ -3729,13 +3729,18 @@ int selftestSync() {
                     for (int k = 0; k < 10000; ++k) s += std::uint64_t(i) * std::uint64_t(k);
                     out[std::size_t(i)] = s;
                 }, pool);
-                JobSync::link(w, join);
-                JobSync::launch(w);
                 ws.push_back(std::move(w));
             }
+            // 契约 2/3：downstream（join）发布后 link 拒绝。上游 launch 与 link 交错时，
+            // w0 可在别的池线程跑完 → join.removeDependency(1) 即发布 → 后续 link(wi, join)
+            // 全被拒 → join 提前放行、out[] 未写完 → 假性非确定（2026-11-10 P1 实锤）。
+            // 两阶段纪律已编码进 launchAll：建图期全 link，放行期统一 launch。
+            bool linked = true;
+            for (auto& w : ws) linked = JobSync::link(w, join) && linked;
+            JobSync::launchAll(ws);
             JobSync::launch(join);
             JobSync::wait(join, pool);
-            return joins.load() == 1;
+            return linked && joins.load() == 1;
         };
         std::vector<std::uint64_t> r1, r2;
         bool j1 = runGraph(r1), j2 = runGraph(r2);

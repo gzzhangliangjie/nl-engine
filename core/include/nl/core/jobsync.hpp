@@ -98,6 +98,12 @@ public:
     }
     // 发布：释放创建者持有（等价 removeDependency()）。
     static void launch(const JobHandle& job);
+    // 两阶段建图放行原语：全部 link 完成后对一批 job 统一 launch。
+    // 单发 launch 与后续 link 交错时，upstream 可在其他池线程跑完并发布 downstream
+    // （契约 3），令后续 link 全被拒 → downstream 提前放行（2026-11-10 jobsync
+    // selftest「resident determinism」间歇 FAIL 实锤）。本原语把「帧前建图（全 link）
+    // → 帧中执行（统一放行）→ 帧后回收」的帧三段式编码进调用面，调用点无法交错违约。
+    static void launchAll(const std::vector<JobHandle>& jobs);
     // 链接 upstream → downstream：upstream 完成时自动对 downstream removeDependency(1)。
     // downstream 已发布 / 任一句柄为空 / upstream 已完成 → 拒绝返回 false（负向）。
     static bool link(const JobHandle& upstream, const JobHandle& downstream);
