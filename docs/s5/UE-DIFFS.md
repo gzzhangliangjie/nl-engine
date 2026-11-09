@@ -92,6 +92,15 @@
 | 定性 | **有意简化**（引擎化阶段）：本项目目标是 Nanite×Lumen 渲染研究，物理只要能验收「物体按物理规律动」，不追 Chaos 的工业完备度（网络物理回滚、ChaosVehicles、GeometryCollection 破碎、CCD 全链路）。 |
 | 升级路径 | 需要 Chaos 级能力（破坏、载具、确定性网络回滚）时单独立项评估，不把 Jolt 换掉当默认；vendored Jolt 版本锁死 v5.3.1，**升级单独走一轮 M-P 验收**（确定性轨迹逐点比对 + 展示台卡全绿）。 |
 
+### D12 碰撞过滤：UE 三态响应容器 vs 我们对称 bool 矩阵（M-P1 建档，2026-11-09；有意简化）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `Engine/Classes/Engine/EngineTypes.h` 的 `FCollisionResponseContainer` 对每个通道给 `ECollisionResponse`（Ignore / Overlap / Block **三态**）；`Engine/Classes/Engine/CollisionProfile.h` 的碰撞配置用 `ObjectType` + `ResponseToChannels` 组合，查询与模拟可配不同响应；通道是引擎级可命名、可在 Project Settings 编辑的资源。 |
+| 我们现状（M-P1） | `nl::physics::LayerMatrix` = 4 个固定层、对称 bool 掩码（可碰撞 / 不可碰撞），同时喂给 Jolt `ObjectLayerPairFilter` 与 `ObjectVsBroadPhaseLayerFilter`（宽相层 1:1 映射）。没有 Overlap-only、没有查询/模拟分响应、没有运行时命名通道。 |
+| 定性 | **有意简化**（A 类并行轨道）：M-P1 的目标是把层过滤与「引擎对象 ↔ Jolt 体」双向关联跑通，两条轨迹（停在挡板 / 穿透挡板）已足以自证；Overlap 事件与命名通道属编辑器 / 场景集成阶段（M-P5）的话题。 |
+| 升级路径 | M-P5 场景集成（P8 E3 序列化 + Inspector）需要触发器 / 重叠事件时，把 bool 矩阵扩成三态并接 Jolt `ContactListener`；层数量与通道命名届时才定，避免现在定死。 |
+
 ### D11 VSM：页请求/跨帧缓存排在 M15.1，M15.0 为静态整页分配（S15 预研，有意简化）
 
 | | 内容 |
