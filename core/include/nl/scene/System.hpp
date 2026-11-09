@@ -41,6 +41,36 @@ namespace nl::scene {
 using Signature = std::bitset<kMaxComponentTypes>;
 
 // ---------------------------------------------------------------------------
+// 读写集访问标记（M-E1b.5，UE Mass EMassFragmentAccess 口径裁剪版）：
+//   Read<T>  = 只读组件 T（多个只读者可并行）
+//   Write<T> = 读写组件 T（与任何触及 T 的系统互斥）
+// 裸组件类型 T = Write<T>（M-E2 SignedSystem<Required...> 向后兼容：Required
+// 保守视为读写，既有系统零改动、行为不变；要用并行就显式标 Read<>）。
+// 口径来源（三处对照，2026-11-09 精读留痕）：
+//   - UE Mass：FMassFragmentRequirements::AddRequirement(FragmentType,
+//     EMassFragmentAccess::ReadOnly/ReadWrite)（MassRequirements.h:196-243）
+//     + FMassProcessorDependencySolver 从读写需求求解依赖图（:95-236）。
+//   - bevy：MultiThreadedExecutor 用 system.access.is_compatible 冲突判定自动
+//     建边（multi_threaded.rs:188）——access 由 Query 参数反射得出，OOP ECS
+//     无反射，抄思路（读写集冲突判定）不抄实现（显式声明代替反射）。
+//   - Carrot：World::tick 严格串行（World.cpp:321-332），System::parallelSubmit
+//     只做系统内数据并行——系统间调度本项目按 UE 显式声明路线走（用户拍板 A）。
+// ---------------------------------------------------------------------------
+template <class T> struct Read  { using Type = T; };
+template <class T> struct Write { using Type = T; };
+
+// 访问标记解包：AccessTypeOf<Read<T>>::Type = AccessTypeOf<Write<T>>::Type =
+// AccessTypeOf<T>::Type = T（裸类型直通）。
+template <class A> struct AccessTypeOf { using Type = A; };
+template <class T> struct AccessTypeOf<Read<T>>  { using Type = T; };
+template <class T> struct AccessTypeOf<Write<T>> { using Type = T; };
+
+// 是否写访问：Write<T> 与裸类型 = true（保守），Read<T> = false。
+template <class A> struct IsWriteAccess : std::true_type {};
+template <class T> struct IsWriteAccess<Read<T>>  : std::false_type {};
+template <class T> struct IsWriteAccess<Write<T>> : std::true_type {};
+
+// ---------------------------------------------------------------------------
 // System 基类：Carrot System.h 口径裁剪版。
 // 约定：具体系统提供 static constexpr const char* kName（SystemLibrary 注册
 // / 场景序列化 key，与 Component::kName 同款纪律）。
@@ -53,6 +83,10 @@ public:
     virtual const char* getName() const = 0;
 
     const Signature& getSignature() const { return signature_; }
+    // 读写集（M-E1b.5 tickParallel 求解输入；基类默认空 = 未声明访问，
+    // 语义 = 自足系统不触碰任何共享组件——契约见 World::tickParallel 注释）。
+    const Signature& getReads() const { return reads_; }
+    const Signature& getWrites() const { return writes_; }
     // World 推送维护的实体列表（签名匹配者；含注册时已存在的全部匹配实体）。
     const std::vector<Entity>& getEntities() const { return entities_; }
     World& getWorld() const { return world_; }
@@ -82,26 +116,47 @@ protected:
     friend class World;
     World& world_;
     Signature signature_;
+    Signature reads_;    // M-E1b.5：只读组件集（SignedSystem 填充；基类空）
+    Signature writes_;   // M-E1b.5：写组件集（SignedSystem 填充；基类空）
     std::vector<Entity> entities_;
 };
 
 // ---------------------------------------------------------------------------
 // SignedSystem<Required...>：构造时把所需组件类型位加进签名（Carrot System.ipp
 // 口径：signature.addComponents<Required...>()）。forEachEntity 转发组件指针。
+//
+// M-E1b.5：模板参数同时展开为读写集——Read<T> 记只读、Write<T>/裸 T 记读写
+// （裸类型保守 = 写，保 M-E2 语义向后兼容：既有系统与触及同组件的系统保持
+// 串行，零行为变化；显式标 Read<> 才解锁并行）。
 // ---------------------------------------------------------------------------
 template <class... Required>
 class SignedSystem : public System {
 public:
     explicit SignedSystem(World& world) : System(world) {
-        (signature_.set(componentTypeID<Required>()), ...);
+        (setAccess<Required>(), ...);
     }
 
     // 逐实体回调（组件指针现查，无缓存——文件头裁剪留痕）。
+    // Required 可能是 Read<T>/Write<T> 包装——取组件前经 AccessTypeOf 解包。
     template <class F>
     void forEachEntity(F&& f) {
         for (Entity e : entities_) {
-            f(e, *(world_.getComponent<Required>(e.getID()))...);
+            f(e, *(world_.getComponent<typename AccessTypeOf<Required>::Type>(
+                      e.getID()))...);
         }
+    }
+
+private:
+    // 单参数展开：签名位 + 读位恒置；写位仅 Write<T>/裸 T 置。
+    // 注意 forEachEntity 的 getComponent<Required> 用的仍是原模板参数，
+    // Read<>/Write<> 不能直接当组件类型——解包见 AccessTypeOf。
+    template <class A>
+    void setAccess() {
+        const ComponentTypeID id =
+            componentTypeID<typename AccessTypeOf<A>::Type>();
+        signature_.set(id);
+        reads_.set(id);
+        if (IsWriteAccess<A>::value) writes_.set(id);
     }
 };
 

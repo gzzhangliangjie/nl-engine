@@ -52,6 +52,18 @@ cbuffer LightConstants : register(b1)
     float4   g_mrF;          // x = metallicFactor, y = roughnessFactor, z = pbr-naive debug switch (>=0.5 skips sRGB->linear)
 };
 
+// M-E1b.4：ECS 方向灯 2D 阴影——psScene 专用（shadePbr 不声明不读，pbr-direct 零波及）。
+// 正交 lightViewProj 由 CPU 侧按场景联合包围球预算；R32F 阴影图 t7（4 层
+// Texture2DArray，1024x1024 POT，§2.8 精神），整数 Load 采样 → 无采样器状态、
+// 双后端逐位一致（浮点 uv 采样会引入 DXIL/SPIR-V 差异）。无阴影场景时
+// psScene 的 shadowFactor 恒为字面量 1.0f，x*1.0f 在 IEEE 下精确 → M-E1b.3 基线逐字节不变。
+cbuffer ShadowConstants : register(b2)
+{
+    float4x4 g_shadowViewProj[4];   // 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）
+    float4   g_shadowParams[4];     // x=enabled(0/1), y=depth bias, z=mapSize, w 未用
+};
+Texture2DArray<float> g_shadowMap : register(t7);
+
 Texture2D<float4> g_baseColor : register(t0);
 Texture2D<float4> g_metallicRoughness : register(t1);
 SamplerState      g_sampler   : register(s0);
@@ -69,9 +81,10 @@ SamplerState      g_sampler   : register(s0);
 // （实例世界矩阵 + 实例 tint 走实例缓冲、灯数据走缓冲不走 cbuffer；多灯 =
 // 方向灯数组，每灯 direction+color+intensity；M-E1b.2 增补点光源 type/position/range）。
 // 资源布局（既有入口一个字符不动，本段为文件尾独立新增）：
-//   t5 = g_instanceData：每实例 5 个 float4：
+//   t5 = g_instanceData：每实例 7 个 float4（M-E1b.3 由 5 扩到 7）：
 //        [0..3] = 世界矩阵列主序 4 列（TransformComponent::getWorldMatrix()），
-//        [4]    = (tint.rgb, 0)（ModelComponent::tint）
+//        [4]    = (tint.rgb, 0)（ModelComponent::tint），
+//        [5]    = (roughness, metallic, 0, 0)（M-E1b.3 逐实例 PBR 材质，缺省 1/0）
 //   t6 = g_lights：[0] = (lightCount, ambient, 1/ΣI(方向灯), pointCount)，
 //        之后每灯 3 个 float4（M-E1b.2 从 2 个扩展）：
 //        {dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}
@@ -392,12 +405,14 @@ struct VSOutputScene
     float2 uv       : TEXCOORD;
     float3 tint     : TINT;
     float3 worldPos : WORLDPOS;   // M-E1b.2：点光衰减需要世界空间片元位置
+    float  roughness : ROUGH;     // M-E1b.3：逐实例 PBR 粗糙度（t5[base+5].x）
+    float  metallic  : METAL;     // M-E1b.3：逐实例 PBR 金属度（t5[base+5].y）
 };
 
 VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
 {
     VSOutputScene output;
-    const uint base = instanceId * 5u;
+    const uint base = instanceId * 7u;   // M-E1b.3：t5 扩到 7 个 float4
     // [0..3] 是列主序的 4 列；HLSL 的 float4x4 构造参数按行填充，transpose 一次
     // 还原成「列 = c0..c3」的数学矩阵（mul(world, v) 即标准列向量变换）。
     const float4x4 world = transpose(float4x4(
@@ -411,7 +426,37 @@ VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
     output.uv       = input.uv;
     output.tint     = g_instanceData[base + 4u].xyz;
     output.worldPos = worldPos;
+    output.roughness = g_instanceData[base + 5u].x;   // M-E1b.3：逐实例 PBR 材质
+    output.metallic  = g_instanceData[base + 5u].y;
     return output;
+}
+
+// M-E1b.4：阴影 depth pass（b0 = lightViewProj，shadow pass 语义下复用
+// SceneConstants 的 g_mvp 槽位；t5 实例缓冲与 vsScene 同一套）。正交投影下
+// z/w ∈ [0,1] 且线性，PS 直接落 R32F——整数精度双后端一致。
+struct VSOutputShadow
+{
+    float4 position : SV_Position;
+};
+
+VSOutputShadow vsShadow(VSInputScene input, uint instanceId : SV_InstanceID)
+{
+    VSOutputShadow output;
+    const uint base = instanceId * 7u;
+    // 与 vsScene 相同的列主序世界矩阵还原（transpose 一次）。
+    const float4x4 world = transpose(float4x4(
+        g_instanceData[base + 0u],
+        g_instanceData[base + 1u],
+        g_instanceData[base + 2u],
+        g_instanceData[base + 3u]));
+    const float3 worldPos = mul(world, float4(input.position, 1.0f)).xyz;
+    output.position = mul(g_mvp, float4(worldPos, 1.0f));   // g_mvp = lightViewProj
+    return output;
+}
+
+float4 psShadow(VSOutputShadow input) : SV_Target
+{
+    return float4(input.position.z, 0.0f, 0.0f, 1.0f);      // 正交深度（已除 w）
 }
 
 struct PSInputScene
@@ -421,63 +466,135 @@ struct PSInputScene
     float2 uv       : TEXCOORD;
     float3 tint     : TINT;
     float3 worldPos : WORLDPOS;
+    float  roughness : ROUGH;     // M-E1b.3：逐实例 PBR 粗糙度（VS 透传）
+    float  metallic  : METAL;     // M-E1b.3：逐实例 PBR 金属度
 };
 
 float4 psScene(PSInputScene input) : SV_Target
 {
-    // mode 0 风格：base.rgb * 2.2f 曝光补偿（Khronos Suzanne 贴图偏暗）× 实例 tint。
+    // M-E1b.3：逐实例 Cook-Torrance PBR 多灯（方向灯 + 点光），替换 M-E1b.2 的 Lambert。
+    // 口径与 shadePbr() 同式（Filament §4 / bevy / UE / Carrot 对拍，见 shadePbr 注释）；
+    // 多灯累加沿用 E1b.2 的「方向灯按 1/ΣI 归一化、点光绝对累加」结构，避免 ΣI≈4.7 过曝、
+    // 保住各灯色温差异（归一化只做乘法、倒数 CPU 预算 → 双后端 bytes 逐位一致）。
     float4 base = g_baseColor.Sample(g_sampler, input.uv);
-    float3 albedo = base.rgb * 2.2f * input.tint;
+    float3 albedo = srgbToLinear(base.rgb) * input.tint;   // 贴图 sRGB→线性（t0 保持 UNORM 直读）；tint 线性乘子
     float3 n = normalize(input.normal);
+    float3 v = normalize(g_cameraPos.xyz - input.worldPos); // 视向量 V（b1 cameraPos）
+
+    // 逐实例材质（t5[base+5]）：缺省 roughness=1 / metallic=0（matte dielectric）。
+    // 下限防 D 尖峰（k != 0），见 shadePbr 同款 clamp 理由。
+    float roughness = clamp(input.roughness, 0.045f, 1.0f);
+    float metallic  = saturate(input.metallic);
+    float3 F0    = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 cDiff = albedo * (1.0f - metallic);              // metallic 下 baseColor 不进 diffuse
 
     const float lightCount      = g_lights[0].x;
     const float ambient         = g_lights[0].y;
-    const float invSumIntensity = g_lights[0].z;   // CPU 端预算的 1/ΣI（仅方向灯）
-    const float pointCount      = g_lights[0].w;   // 点光源数（uniform 分支判据）
-    float3 direct = float3(0.0f, 0.0f, 0.0f);
-    float3 pointDirect = float3(0.0f, 0.0f, 0.0f);
+    const float invSumIntensity = g_lights[0].z;            // 方向灯 1/ΣI（CPU 预算，仅方向灯）
+
+    float3 Lo_dir = float3(0.0f, 0.0f, 0.0f);
+    float3 Lo_point = float3(0.0f, 0.0f, 0.0f);
     // 每灯 3 个 float4：{dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}
     for (uint i = 0u; i < (uint)lightCount; ++i)
     {
         const float4 dirInt = g_lights[1u + i * 3u];
         const float4 color  = g_lights[2u + i * 3u];
         const float4 posRng = g_lights[3u + i * 3u];
-        if (color.w > 0.5f)
+
+        float3 L;
+        float NdotL;
+        float3 radiance;
+        float shadowFactor = 1.0f;   // M-E1b.4：方向灯分支可改写；点光恒 1。
+        if (color.w > 0.5f)   // 点光
         {
-            // M-E1b.2 点光衰减 = UE DeferredLightingCommon.ush:480-486 实读口径：
+            // M-E1b.2 同款 UE DeferredLightingCommon.ush:480-486 实读口径：
             //   DistanceAttenuation = 1/(d²+1) * Square(saturate(1 - Square(d²/r²)))
             //   L = ToLight * rsqrt(d²)，NoL = saturate(dot(N,L))
-            // CPU 端写 InvRadius=1/range（UE LightData.InvRadius 同款），shader 只做
-            // 乘法；半径外窗函数平滑归零，避免硬截断。点光按绝对强度独立累加，
-            // 不进方向灯的 1/ΣI 归一化（否则 att<<1 会让点光几乎看不见）。
+            // CPU 端写 InvRadius=1/range（UE LightData.InvRadius 同款）；点光按绝对强度
+            // 独立累加，不进方向灯的 1/ΣI 归一化（否则 att<<1 会让点光几乎看不见）。
             const float3 toLight = posRng.xyz - input.worldPos;
             const float d2 = dot(toLight, toLight);
-            const float3 L = toLight * rsqrt(max(d2, 1e-8f));
-            const float q = d2 * posRng.w * posRng.w;   // d² * InvRadius²
+            L = toLight * rsqrt(max(d2, 1e-8f));
+            const float q = d2 * posRng.w * posRng.w;       // d² * InvRadius²
             const float radiusMask = saturate(1.0f - q * q);
             const float att = (1.0f / (d2 + 1.0f)) * radiusMask * radiusMask;
-            const float ndl = max(dot(n, L), 0.0f);     // 点光用单面（物理口径）
-            pointDirect += color.rgb * dirInt.w * ndl * att;
+            NdotL = max(dot(n, L), 0.0f);                   // 点光单面（物理口径）
+            radiance = color.rgb * dirInt.w * att;
         }
-        else
+        else                  // 方向灯
         {
-            // 方向灯：M-E1b.0/1 原表达式一字不动（既有画面基线逐字节依赖）。
-            // abs() 与 mode 0 同口径：关背面剔除时内壁也被照亮。
-            // dirInt.xyz 已由 viewer 侧归一化写进灯缓冲，shader 内不再 normalize。
-            const float ndl = abs(dot(n, dirInt.xyz));
-            direct += color.rgb * dirInt.w * ndl;
+            // 与 E1b.2 同口径：abs() 关背面剔除时内壁也照亮；dirInt.xyz 已由 viewer 归一化。
+            L = dirInt.xyz;
+            NdotL = abs(dot(n, L));
+            radiance = color.rgb * dirInt.w;
+
+            // M-E1b.4：方向灯 2D 阴影。t6 posRng.w 复用为 shadowSlot+1（0=无阴影；
+            // 方向灯分支原本不读该字段）。R32F 阴影图整数 texel Load + 3x3 PCF：
+            // DX 视口约定 clip.y=+1 → 图像第 0 行（NVRHI Vulkan 视口换算与 DX 对齐，
+            // 见 pipeline 注释），故接收侧 texel.y = (0.5 - ndc.y*0.5) * size。
+            // ortho 下 clip.w==1，recDepth = clip.z 已在 [0,1]；视锥外全亮。
+            const float slot = posRng.w;
+            if (slot > 0.5f)
+            {
+                const uint si = (uint)(slot) - 1u;
+                const float4 clip = mul(g_shadowViewProj[si], float4(input.worldPos, 1.0f));
+                const float2 ndc = clip.xy / clip.w;
+                const float recDepth = clip.z / clip.w;
+                if (recDepth > 0.0f && recDepth < 1.0f &&
+                    abs(ndc.x) <= 1.0f && abs(ndc.y) <= 1.0f)
+                {
+                    const float size = g_shadowParams[si].z;
+                    // 坡度缩放 bias：MIN 混合存 nearest 深度，斜面上 texel 内深度跨度
+                    // ∝ (1-NdotL)（PROBE-D2 实测：地面 ~0.004 / 头部斜面 ~0.028），
+                    // 固定 bias 0.003 盖不住 → 满屏自阴影。0.035×(1-NdotL) 实测覆盖。
+                    const float slopeBias = 0.035f * (1.0f - saturate(dot(n, L)));
+                    const float bias = g_shadowParams[si].y + slopeBias;
+                    const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+                    const int2 base = int2(floor(uv * size));
+                    const int2 maxSize = int2(size, size) - int2(1, 1);
+                    float lit = 0.0f;
+                    [unroll]
+                    for (int dy = -1; dy <= 1; ++dy)
+                    {
+                        [unroll]
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            const int2 t = clamp(base + int2(dx, dy), int2(0, 0), maxSize);
+                            lit += (g_shadowMap.Load(int4(t, si, 0)) >= recDepth - bias)
+                                       ? 1.0f : 0.0f;
+                        }
+                    }
+                    shadowFactor = lit * (1.0f / 9.0f);
+                }
+            }
         }
+        if (NdotL <= 0.0f) continue;
+
+        const float3 h = normalize(L + v);
+        const float NdotV = max(dot(n, v), 1e-4f);          // 掠射防 V 除零
+        const float NdotH = saturate(dot(n, h));
+        const float VdotH = saturate(dot(v, h));
+
+        const float D = D_GGX(roughness, NdotH);
+        const float Vis = V_SmithGGXCorrelated(roughness, NdotV, NdotL);
+        const float3 F = F0 + (1.0f - F0) * pow(1.0f - VdotH, 5.0f);
+        const float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
+        const float3 specular = D * Vis * F;
+        const float3 brdf = (diffuse + specular) * NdotL;
+
+        if (color.w > 0.5f) Lo_point += brdf * radiance;
+        else                Lo_dir   += brdf * radiance * shadowFactor;
     }
-    // 多灯强度直接相加会整体过曝（ΣI≈4.7，clamp 后全画面 1.0，三灯的
-    // 方向/色温差别完全看不出来）。按方向灯总强度归一化成「加权平均」；
-    // 归一化只做乘法（倒数 CPU 预算）→ DXIL/SPIR-V 逐位一致，双后端 bytes。
-    // **无点光时走原表达式**（M-E1b.0/1 基线逐字节不变）；有点光时额外累加。
-    // lightCount=0 时 invSumIntensity=0、direct=0 → 退化为纯 ambient。
-    float3 lighting;
-    if (pointCount > 0.5f)
-        lighting = min(ambient + direct * invSumIntensity + pointDirect, 1.0f);
-    else
-        lighting = min(ambient + direct * invSumIntensity, 1.0f);
-    float3 lit = albedo * lighting;
-    return float4(lit, 1.0f);
+
+    // ambient：flat irradiance = ambient·cDiff（无 IBL）。M-E1b.3：乘 (1-metallic)——
+    // 金属无漫反射环境光，ambient 原样乘 albedo 会把金属暗部染成「粉底色」，
+    // 还会抹平 metallic 0/1 的材质对比（E1b.3 验收主判据）。
+    // 方向灯按 1/ΣI 归一化成加权平均（保色温差异、防过曝），点光绝对累加。
+    // lightCount=0 时 invSumIntensity=0、Lo_dir=0 → 退化为纯 ambient。
+    // 亮度锚定：Cook-Torrance 的 1/π 能量守恒 + 方向灯 1/ΣI 双重压缩，比 E1b.2
+    // Lambert 整体暗 ~3×；shader 口径不动（与 shadePbr 同式），由场景布光补偿
+    // （ambient 0.55 / 灯 color ×2.8，见 ecs-e1b*.scene）。
+    float3 Lo = ambient * cDiff + Lo_dir * invSumIntensity + Lo_point;
+    float3 encoded = pow(saturate(Lo), 1.0f / 2.2f);        // 交换链 UNORM 直写 → gamma 编码
+    return float4(encoded, 1.0f);
 }

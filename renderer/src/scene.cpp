@@ -2533,6 +2533,79 @@ static bool validGlbAssetName(const char* name) {
     return true;
 }
 
+// ---- M-E1b.4：阴影 CPU 数学辅助（全部纯 CPU、列主序、D3D 深度 z∈[0,1] 约定，
+// 与 nl::core::Matrix4 的口径一致；core 层相机只做轨道透视，这里独立实现
+// 正交 lookAt，不改动 core）。双后端共享同一份 CPU 数值（bytes 口径前提）。----
+
+// 列主序矩阵变换点（w=1，不含透视除法——正交下 w 恒 1）。
+static void shadowTransformPoint(const float* m, const float p[3], float out[3]) {
+    out[0] = m[0] * p[0] + m[4] * p[1] + m[8]  * p[2] + m[12];
+    out[1] = m[1] * p[0] + m[5] * p[1] + m[9]  * p[2] + m[13];
+    out[2] = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+}
+
+// 列主序 3x3 部分的最大列长（均匀/非均匀缩放下联合球半径的保守放大）。
+static float shadowMaxScale(const float* m) {
+    float s = 0.0f;
+    for (int c = 0; c < 3; ++c) {
+        const float dx = m[c * 4 + 0], dy = m[c * 4 + 1], dz = m[c * 4 + 2];
+        s = std::max(s, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    return s;
+}
+
+// 左手 lookAt（D3D XMMatrixLookAtLH 口径：视线沿 +z，与 shadowOrtho 的 D3D
+// z∈[0,1] 深度映射配对——右手 lookAt 会让 clip.z 全负、深度图全被近平面裁掉）。
+// 列主序。
+static void shadowLookAt(const float eye[3], const float center[3], const float up[3],
+                         float out[16]) {
+    float z[3] = { center[0] - eye[0], center[1] - eye[1], center[2] - eye[2] };
+    const float zl = std::sqrt(z[0] * z[0] + z[1] * z[1] + z[2] * z[2]);
+    for (float& v : z) v /= zl;
+    float x[3] = {
+        up[1] * z[2] - up[2] * z[1],
+        up[2] * z[0] - up[0] * z[2],
+        up[0] * z[1] - up[1] * z[0],
+    };
+    const float xl = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+    for (float& v : x) v /= xl;
+    const float y[3] = {
+        z[1] * x[2] - z[2] * x[1],
+        z[2] * x[0] - z[0] * x[2],
+        z[0] * x[1] - z[1] * x[0],
+    };
+    out[0] = x[0]; out[1] = y[0]; out[2] = z[0]; out[3] = 0.0f;
+    out[4] = x[1]; out[5] = y[1]; out[6] = z[1]; out[7] = 0.0f;
+    out[8] = x[2]; out[9] = y[2]; out[10] = z[2]; out[11] = 0.0f;
+    out[12] = -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]);
+    out[13] = -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]);
+    out[14] = -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]);
+    out[15] = 1.0f;
+}
+
+// D3D 正交投影（z 映射 [0,1]），列主序。
+static void shadowOrtho(float l, float r, float b, float t, float n, float f, float out[16]) {
+    const float xx = 2.0f / (r - l), yy = 2.0f / (t - b), zz = 1.0f / (f - n);
+    out[0] = xx; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f;
+    out[4] = 0.0f; out[5] = yy; out[6] = 0.0f; out[7] = 0.0f;
+    out[8] = 0.0f; out[9] = 0.0f; out[10] = zz; out[11] = 0.0f;
+    out[12] = -(r + l) / (r - l);
+    out[13] = -(t + b) / (t - b);
+    out[14] = -n / (f - n);
+    out[15] = 1.0f;
+}
+
+// out = a * b（列主序 4x4）。
+static void shadowMul(const float* a, const float* b, float out[16]) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) {
+            float s = 0.0f;
+            for (int k = 0; k < 4; ++k)
+                s += a[k * 4 + r] * b[c * 4 + k];
+            out[c * 4 + r] = s;
+        }
+}
+
 bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                       const char* vsEntry, const char* psEntry,
                       const SceneObjectDesc* objects, std::uint32_t objectCount,
@@ -2585,6 +2658,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         }
         batchObjects[b].push_back(i);
     }
+    // M-E1b.5：固化分组映射，updateObjects 每帧按同一规则重打包（槽号一一对应）。
+    sceneBatchObjects_ = batchObjects;
+    sceneObjectCount_ = objectCount;
 
     // ---- 3. 每组读 GLB（首 primitive，照 Scene::init 第 2 步的校验与顶点展开）----
     struct PreparedBatch {
@@ -2661,10 +2737,28 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))   // b1 LightConstants（M-E1b.3：cameraPos）
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
-        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6));
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+        // M-E1b.4：b2 阴影矩阵 + t7 R32F 阴影图数组——无阴影场景也恒绑定
+        //（enabled=0 时 shader 分支不进、输出与 E1b.3 逐字节一致）。
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(7));
     sceneBindingLayout_ = device->createBindingLayout(layoutDesc);
     if (!sceneBindingLayout_) { outError = "createBindingLayout failed for ecs scene"; return false; }
+
+    // M-E1b.3：b1 LightConstants（含 cameraPos）—— psScene 视向量 V 从 b1 取；
+    // 复用 pbr-direct 同款 80B cbuffer，每帧由 sceneMode_ 渲染分支写 params.eye。
+    {
+        nvrhi::BufferDesc lcDesc;
+        lcDesc.byteSize = sizeof(LightConstants);
+        lcDesc.isConstantBuffer = true;
+        lcDesc.isVolatile = true;
+        lcDesc.maxVersions = 16;
+        lcDesc.debugName = "LightConstants(EcsScene)";
+        lightConstants_ = device->createBuffer(lcDesc);
+        if (!lightConstants_) { outError = "createBuffer failed for ecs scene LightConstants"; return false; }
+    }
 
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
@@ -2723,9 +2817,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     }
 
     // ---- 5. 每 batch 实例缓冲 + 全场灯缓冲（StructuredBuffer<float4>）----
-    // 实例：每实例 5 个 float4 —— [0..3] 列主序世界矩阵 4 列，[4]=(tint.rgb,0)。
-    // 灯：1+lightCount*2 个 float4 —— [0]=(lightCount, ambient, 1/ΣI, 0)，每灯
-    // {dir.xyz, intensity}、{color.rgb, 0}。
+    // 实例：每实例 7 个 float4（M-E1b.3 由 5 扩到 7）—— [0..3] 列主序世界矩阵 4 列，
+    // [4]=(tint.rgb,0)、[5]=(roughness, metallic, 0, 0)。
+    // 灯：1+lightCount*3 个 float4 —— [0]=(lightCount, ambient, 1/ΣI, pointCount)，每灯
+    // {dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}。
     // M-E1b.1：实例缓冲按 batch 各建一份，SV_InstanceID 就是本 batch 内 0-based
     // 槽号。旧做法把全场实例放一个缓冲、用 startInstanceLocation 划窗口，但 DX12
     // 的 SV_InstanceID 不含 StartInstanceLocation（2-batch 探针：两物体叠成一团）；
@@ -2737,11 +2832,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         SceneMeshBatch& batch = sceneBatches_[b];
         batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
         std::vector<float>& data = batchInstanceData[b];
-        data.assign(static_cast<std::size_t>(batch.instanceCount) * 5u * 4u, 0.0f);
+        data.assign(static_cast<std::size_t>(batch.instanceCount) * 7u * 4u, 0.0f);
         std::uint32_t slot = 0;
         for (std::uint32_t i : batchObjects[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
-            float* dst = data.data() + static_cast<std::size_t>(slot) * 5 * 4;
+            float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
             for (int c = 0; c < 4; ++c)
                 for (int r = 0; r < 4; ++r)
                     dst[c * 4 + r] = w[c * 4 + r];
@@ -2749,6 +2844,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
+            // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
+            dst[20] = objects[i].roughness;
+            dst[21] = objects[i].metallic;
+            dst[22] = 0.0f;
+            dst[23] = 0.0f;
             ++slot;
         }
         nvrhi::BufferDesc instDesc;
@@ -2768,6 +2868,20 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     std::vector<float> lightData(lightFloats, 0.0f);
     lightData[0] = static_cast<float>(lightCount);
     lightData[1] = ambient;
+    // M-E1b.4：方向灯阴影槽位分配——按场景序取前 kMaxShadowLights 盏 shadow=true
+    // 的方向灯；超出显式报错（不静默降级）。t6 的 posRng.w 对方向灯复用为
+    // shadowSlot+1（0=无阴影；方向灯分支原本不读该字段）。
+    std::vector<std::int32_t> lightShadowSlot(lightCount, -1);
+    std::uint32_t shadowSlotCount = 0;
+    for (std::uint32_t i = 0; i < lightCount; ++i) {
+        if (lights[i].type != 0 || !lights[i].shadow) continue;
+        if (shadowSlotCount >= Scene::kMaxShadowLights) {
+            outError = "initScene: too many shadow-casting directional lights (max 4)";
+            return false;
+        }
+        lightShadowSlot[i] = static_cast<std::int32_t>(shadowSlotCount++);
+    }
+    shadowCount_ = shadowSlotCount;
     float sumIntensity = 0.0f;     // 只统计方向灯：点光按绝对强度独立累加
     std::uint32_t pointCount = 0u;
     for (std::uint32_t i = 0; i < lightCount; ++i) {
@@ -2780,7 +2894,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         d1[3] = static_cast<float>(lights[i].type);
         d2[0] = lights[i].position[0]; d2[1] = lights[i].position[1];
         d2[2] = lights[i].position[2];
-        d2[3] = (lights[i].range > 0.0f) ? (1.0f / lights[i].range) : 0.0f;
+        // M-E1b.4：方向灯 posRng.w = shadowSlot+1（0=无阴影）；点光保持 InvRadius。
+        if (lights[i].type == 0)
+            d2[3] = static_cast<float>(lightShadowSlot[i] + 1);
+        else
+            d2[3] = (lights[i].range > 0.0f) ? (1.0f / lights[i].range) : 0.0f;
         if (lights[i].type == 0) sumIntensity += lights[i].intensity;
         else ++pointCount;
     }
@@ -2790,6 +2908,58 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // [0].w = 点光数量，仅作 uniform 分支判据（无点光时走 M-E1b.0 原表达式）。
     lightData[2] = (sumIntensity > 0.0f) ? (1.0f / sumIntensity) : 0.0f;
     lightData[3] = static_cast<float>(pointCount);
+
+    // ---- M-E1b.4：场景联合 AABB（世界空间）→ 每阴影灯的正交 lightViewProj ----
+    // 逐实例：batch 局部包围球经世界矩阵变换（中心变换 + 半径按最大列长放大），
+    // 累积成全场 AABB；灯视锥 = AABB 放大 10% + 0.25 margin，深度范围包住全场。
+    // 矩阵 CPU 一次预算、每帧原样写 b2（shader 只消费，双后端同数值）。
+    if (shadowCount_ > 0) {
+        float mn[3] = { 0.0f, 0.0f, 0.0f }, mx[3] = { 0.0f, 0.0f, 0.0f };
+        bool first = true;
+        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+            const PreparedBatch& pb = prepared[b];
+            for (std::uint32_t i : batchObjects[b]) {
+                const float* w = objects[i].world;
+                float c[3], r3[3];
+                shadowTransformPoint(w, pb.sphere, c);
+                const float r = pb.sphere[3] * shadowMaxScale(w);
+                for (int a = 0; a < 3; ++a) {
+                    r3[a] = r;
+                    if (first) { mn[a] = c[a] - r; mx[a] = c[a] + r; }
+                    else { mn[a] = std::min(mn[a], c[a] - r); mx[a] = std::max(mx[a], c[a] + r); }
+                }
+                first = false;
+            }
+        }
+        const float center[3] = { (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f,
+                                  (mn[2] + mx[2]) * 0.5f };
+        const float radius = 0.5f * std::sqrt((mx[0] - mn[0]) * (mx[0] - mn[0]) +
+                                              (mx[1] - mn[1]) * (mx[1] - mn[1]) +
+                                              (mx[2] - mn[2]) * (mx[2] - mn[2]));
+        const float half = radius * 1.1f + 0.25f;
+        const float dist = radius * 2.5f + 2.0f;
+        const float nearZ = std::max(0.05f, dist - radius - 0.5f);
+        const float farZ = dist + radius + 0.5f;
+        float ortho[16];
+        shadowOrtho(-half, half, -half, half, nearZ, farZ, ortho);
+        for (std::uint32_t i = 0; i < lightCount; ++i) {
+            const std::int32_t slot = lightShadowSlot[i];
+            if (slot < 0) continue;
+            const float* dir = lights[i].dir;   // 光照传播方向（已归一化）
+            const float eye[3] = { center[0] - dir[0] * dist,
+                                   center[1] - dir[1] * dist,
+                                   center[2] - dir[2] * dist };
+            // 灯方向接近竖直时换上轴，避免 lookAt 退化。
+            float up[3] = { 0.0f, 1.0f, 0.0f };
+            if (std::abs(dir[1]) > 0.99f) { up[1] = 0.0f; up[2] = 1.0f; }
+            float view[16];
+            shadowLookAt(eye, center, up, view);
+            shadowMul(ortho, view, shadowViewProj_[slot]);
+            // 固定 bias：正交 + 场景尺寸 ~个位数单位，0.002~0.005（归一化深度）实测干净。
+            shadowBias_[slot] = 0.003f;
+        }
+    }
+
     nvrhi::BufferDesc lightDesc;
     lightDesc.byteSize = lightData.size() * sizeof(float);
     lightDesc.structStride = 16;             // StructuredBuffer<float4>
@@ -2798,6 +2968,125 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     lightDesc.initialState = nvrhi::ResourceStates::CopyDest;
     sceneLights_ = device->createBuffer(lightDesc);
     if (!sceneLights_) { outError = "createBuffer failed for ecs scene lights"; return false; }
+
+    // ---- 5.6 M-E1b.4：阴影资源（恒建，无阴影场景也绑定空转的 b2/t7——
+    // §2.7 单 set 纪律下 layout 与 set 必须对齐；R32F 1024x1024x4 ≈ 16MB，
+    // POT 尺寸沿 §2.8 金字塔先例）----
+    {
+        nvrhi::TextureDesc smDesc;
+        smDesc.width = 1024;
+        smDesc.height = 1024;
+        smDesc.arraySize = Scene::kMaxShadowLights;
+        smDesc.format = nvrhi::Format::R32_FLOAT;
+        smDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
+        smDesc.isRenderTarget = true;
+        smDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        smDesc.setClearValue(nvrhi::Color(1.0f));   // 每帧 clear=最远；DX12 要求资源带 clear value（否则 perf 警告计数）
+        smDesc.debugName = "ShadowMapArray";
+        shadowMap_ = device->createTexture(smDesc);
+        if (!shadowMap_) { outError = "createTexture failed for shadow map array"; return false; }
+        for (std::uint32_t s = 0; s < Scene::kMaxShadowLights; ++s) {
+            nvrhi::FramebufferDesc fbDesc;
+            fbDesc.addColorAttachment(shadowMap_,
+                nvrhi::TextureSubresourceSet(0, 1, s, 1));
+            shadowFb_[s] = device->createFramebuffer(fbDesc);
+            if (!shadowFb_[s]) { outError = "createFramebuffer failed for shadow layer"; return false; }
+        }
+        // shadow pass 的 b0：与 SceneConstants 同 160B 形状（只用 g_mvp = lightViewProj）。
+        nvrhi::BufferDesc slcDesc;
+        slcDesc.byteSize = sizeof(SceneConstants);
+        slcDesc.isConstantBuffer = true;
+        slcDesc.isVolatile = true;
+        slcDesc.maxVersions = 16;
+        slcDesc.debugName = "ShadowLightCB";
+        shadowLightCB_ = device->createBuffer(slcDesc);
+        if (!shadowLightCB_) { outError = "createBuffer failed for shadow light CB"; return false; }
+        // psScene 读的 b2（ShadowConstantsCB 320B）。
+        nvrhi::BufferDesc scDesc;
+        scDesc.byteSize = sizeof(ShadowConstantsCB);
+        scDesc.isConstantBuffer = true;
+        scDesc.isVolatile = true;
+        scDesc.maxVersions = 16;
+        scDesc.debugName = "ShadowConstants";
+        shadowConstants_ = device->createBuffer(scDesc);
+        if (!shadowConstants_) { outError = "createBuffer failed for shadow constants"; return false; }
+
+        // shadow pass shader（vsShadow/psShadow 双目标产物；两阶段入口名约定同 initScene 第 1 步）。
+        std::vector<std::uint8_t> shVsBlob, shPsBlob;
+        if (!readFileBytes(shaderPath("vsshadow").c_str(), shVsBlob) ||
+            !readFileBytes(shaderPath("psshadow").c_str(), shPsBlob)) {
+            outError = std::string("failed to load shadow shaders (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName、直接用 blob 唯一
+        // 入口（编译期 -entry vsShadow/psShadow 写入）——§2.4 两阶段规则（M4.1 同款）。
+        nvrhi::ShaderDesc shVsDesc;
+        shVsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+        nvrhi::ShaderDesc shPsDesc;
+        shPsDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+        vsShadow_ = device->createShader(shVsDesc, shVsBlob.data(), shVsBlob.size());
+        psShadow_ = device->createShader(shPsDesc, shPsBlob.data(), shPsBlob.size());
+        if (!vsShadow_ || !psShadow_) { outError = "createShader failed for shadow pass"; return false; }
+
+        nvrhi::VertexAttributeDesc shAttrs[3] = {
+            nvrhi::VertexAttributeDesc().setName("POSITION")
+                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0)
+                .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+            nvrhi::VertexAttributeDesc().setName("NORMAL")
+                .setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(12)
+                .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+            nvrhi::VertexAttributeDesc().setName("TEXCOORD")
+                .setFormat(nvrhi::Format::RG32_FLOAT).setOffset(24)
+                .setBufferIndex(0).setElementStride(sizeof(SceneVertex)),
+        };
+        shadowInputLayout_ = device->createInputLayout(shAttrs, 3, vsShadow_);
+        if (!shadowInputLayout_) { outError = "createInputLayout failed for shadow pass"; return false; }
+
+        // shadow pass 单一 BindingSet：b0（lightViewProj）+ t5（实例）。
+        nvrhi::BindingLayoutDesc shLayoutDesc;
+        shLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5));
+        shadowBindingLayout_ = device->createBindingLayout(shLayoutDesc);
+        if (!shadowBindingLayout_) { outError = "createBindingLayout failed for shadow pass"; return false; }
+
+        // shadow 管线：cull=None（abs(NdotL) 双面照亮的几何同样投影）+ 无深度测试。
+        nvrhi::GraphicsPipelineDesc shPipeDesc;
+        shPipeDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+            .setInputLayout(shadowInputLayout_)
+            .setVertexShader(vsShadow_)
+            .setFragmentShader(psShadow_)
+            .addBindingLayout(shadowBindingLayout_);
+        shPipeDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        // 阴影图无 depth attachment——显式关深度/模板（默认状态会启用深度操作，
+        // 与「framebuffer 无深度格式」冲突，DX12 validation 直接拒绝建管线）。
+        shPipeDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        // M-E1b.4：nearest-depth 用 R32F MIN 混合实现（src/dst One + BlendOp::Min，
+        // 语义 = 深度测试 LessEqual 但顺序无关，免建 depth attachment）。
+        // D3D12 对 float32 RT 强制支持 MIN/MAX blend；Vulkan 规范同一张强制表
+        // （R32_SFLOAT 要求支持 VK_BLEND_OP_MIN/MAX），双后端对称。
+        // 踩坑：无深度测试 + 无混合时 psShadow 无条件写 → 后画的（地面盘覆盖
+        // 整个灯视锥）冲掉先画的物体深度 → 阴影图全是地面深度 → 永远判亮。
+        shPipeDesc.renderState.blendState.setRenderTarget(0,
+            nvrhi::BlendState::RenderTarget()
+                .setBlendEnable(true)
+                .setSrcBlend(nvrhi::BlendFactor::One)
+                .setDestBlend(nvrhi::BlendFactor::One)
+                .setBlendOp(nvrhi::BlendOp::Min)
+                .setSrcBlendAlpha(nvrhi::BlendFactor::One)
+                .setDestBlendAlpha(nvrhi::BlendFactor::One)
+                .setBlendOpAlpha(nvrhi::BlendOp::Min));
+        pipelineShadow_ = device->createGraphicsPipeline(shPipeDesc,
+                                                         shadowFb_[0]->getFramebufferInfo());
+        if (!pipelineShadow_) { outError = "createGraphicsPipeline failed for shadow pass"; return false; }
+    }
 
     // ---- 5.5 每 batch 一个 BindingSet（§2.7 单 set 纪律）----
     // 必须在实例/灯缓冲创建之后：t5/t6 绑空句柄会被 NVRHI 校验直接拒绝。
@@ -2808,10 +3097,21 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+               .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))   // b1（M-E1b.3：cameraPos）
                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, batch.instances))
-               .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, sceneLights_));
+               .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, sceneLights_))
+               // M-E1b.4：b2 阴影矩阵 + t7 阴影图数组（全 batch 共享同一资源）。
+               .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, shadowConstants_))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(7, shadowMap_));
         batch.set = device->createBindingSet(setDesc, sceneBindingLayout_);
         if (!batch.set) { outError = "createBindingSet failed for ecs scene batch"; return false; }
+
+        // shadow pass 的 set：b0 = shadowLightCB_ + t5 实例（同一 batch 缓冲复用）。
+        nvrhi::BindingSetDesc shSetDesc;
+        shSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, shadowLightCB_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, batch.instances));
+        batch.shadowSet = device->createBindingSet(shSetDesc, shadowBindingLayout_);
+        if (!batch.shadowSet) { outError = "createBindingSet failed for shadow pass batch"; return false; }
     }
 
     // ---- 6. 一次性上传：staging → 每 batch VB/IB/贴图 + 实例/灯缓冲 ----
@@ -2833,7 +3133,12 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
                             batchInstanceData[b].size() * sizeof(float));
-        upload->setPermanentBufferState(batch.instances, nvrhi::ResourceStates::ShaderResource);
+        // M-E1b.5：instances **不设 permanent**（SRV 冻结会让每帧 writeBuffer 的
+        // require(CopyDest) 直接报错——NVRHI 对 permanent buffer 不插 barrier）。
+        // 改走 tracking：末态由 instancesInSRV_ 跨列表跟踪（update 末态=CopyDest、
+        // draw 末态=SRV，序列完全确定），draw/update 各自在列表 open 后如实声明。
+        // 末态初值 = CopyDest（本列表 writeBuffer 无转换直接落盘）。
+        instanceTrackSRV_ = false;
     }
     upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
@@ -2902,9 +3207,71 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     nl::core::log::info("ecs scene ready: ", sceneName,
                         " | objects=", objectCount, " lights=", lightCount,
                         " ambient=", ambient,
+                        " shadowLights=", shadowCount_,
                         " | batches=", sceneBatches_.size(),
                         " | triangles=", triangleCount_,
                         " | shader=", shaderSuffix);
+    return true;
+}
+
+// M-E1b.5 渲染用例：每帧刷新实例数据。灯缓冲/顶点/纹理/管线全不动，只重打包
+// float4 实例（矩阵 4 列 + tint + roughness/metallic）后 writeBuffer 各 batch.instances。
+// upload 三步（beginTracking CopyDest → writeBuffer → setPermanent ShaderResource）
+// 与 initScene 第 6 步同款；close+execute 同帧生效（renderFrame 在其后才开命令列表）。
+bool Scene::updateObjects(nvrhi::IDevice* device,
+                          const SceneObjectDesc* objects, std::uint32_t objectCount,
+                          std::string& outError) {
+    if (!device) { outError = "updateObjects: device null"; return false; }
+    // 闸门不能用 ready()：四条 scene 管线在首次 renderFrame 的 ensurePipeline
+    // 才建（resize 也会置空重建），initScene 之后、首帧之前 ready() 恒 false。
+    // 这里只关心实例缓冲是否已建（initScene 第 5 步）。
+    if (sceneMode_ == false || sceneBatches_.empty() || !sceneBatches_[0].instances) {
+        outError = "updateObjects: scene instances not initialized (initScene first)";
+        return false;
+    }
+    if (objectCount != sceneObjectCount_) {
+        outError = "updateObjects: objectCount mismatch (initScene " +
+                   std::to_string(sceneObjectCount_) + " vs update " +
+                   std::to_string(objectCount) + ")";
+        return false;
+    }
+    // §2.8 铁律「帧内禁开第二 cmd list」精神：所有 batch 合并进单个 upload
+    // 命令列表，一次 open/close/execute（viewer 帧首调用，renderFrame 随后才开）。
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
+        SceneMeshBatch& batch = sceneBatches_[b];
+        const std::vector<std::uint32_t>& slotMap = sceneBatchObjects_[b];
+        std::vector<float> data(static_cast<std::size_t>(slotMap.size()) * 7u * 4u, 0.0f);
+        std::uint32_t slot = 0;
+        for (std::uint32_t i : slotMap) {
+            const float* w = objects[i].world;   // 列主序 m[col*4+row]
+            float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r)
+                    dst[c * 4 + r] = w[c * 4 + r];
+            dst[16] = objects[i].tint[0];
+            dst[17] = objects[i].tint[1];
+            dst[18] = objects[i].tint[2];
+            dst[19] = 0.0f;
+            dst[20] = objects[i].roughness;
+            dst[21] = objects[i].metallic;
+            dst[22] = 0.0f;
+            dst[23] = 0.0f;
+            ++slot;
+        }
+        // beginTrackingBufferState 参数 = **当前**状态（NVRHI 语义：informs the
+        // tracker of the current state）。instances 走 tracking 不冻结（见 initScene
+        // 注释），当前态由 instanceTrackSRV_ 跨列表跟踪；writeBuffer require
+        // CopyDest 由 tracker 自动插 barrier，write 后末态 = CopyDest。
+        upload->beginTrackingBufferState(batch.instances,
+            instanceTrackSRV_ ? nvrhi::ResourceStates::ShaderResource
+                              : nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(batch.instances, data.data(), data.size() * sizeof(float));
+    }
+    upload->close();
+    device->executeCommandList(upload);
+    instanceTrackSRV_ = false;   // update 列表末态 = CopyDest（writeBuffer 无转换落盘）
     return true;
 }
 
@@ -2917,6 +3284,74 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
     // 旧实现多 batch 时所有批次都读实例槽 0（详见第 5 步与 MILESTONES 踩坑）。
     if (sceneMode_) {
+        // ---- M-E1b.5：instances 状态如实登记（不设 permanent，见 initScene 注释）。
+        // 跟踪态不跨命令列表（NVRHI commandListSubmitted 清空），每个新列表必须在
+        // 首次绑定前声明当前态；SRV 绑定的 require 由 tracker 插 barrier，列表
+        // 末态 = SRV。
+        const nvrhi::ResourceStates instState = instanceTrackSRV_
+            ? nvrhi::ResourceStates::ShaderResource
+            : nvrhi::ResourceStates::CopyDest;
+        for (const SceneMeshBatch& batch : sceneBatches_)
+            cmd->beginTrackingBufferState(batch.instances, instState);
+
+        // ---- M-E1b.4：b2 阴影常量 + 阴影图状态登记（无条件做——主 pass 恒绑定
+        // b2/t7，无阴影场景也要写零版 b2（enabled=0 → psScene 阴影分支不进、
+        // factor 恒 1.0）并登记纹理状态，否则 volatile CB 未写即用 = NVRHI 报错）。
+        ShadowConstantsCB sc{};
+        for (std::uint32_t s = 0; s < shadowCount_; ++s) {
+            std::memcpy(sc.viewProj[s], shadowViewProj_[s], sizeof(sc.viewProj[s]));
+            sc.params[s][0] = 1.0f;
+            sc.params[s][1] = shadowBias_[s];
+            sc.params[s][2] = 1024.0f;   // 与 shadowMap_ 尺寸一致
+        }
+        cmd->writeBuffer(shadowConstants_, &sc, sizeof(sc));
+        // 本命令列表先登记阴影图初始状态（NVRHI 校验：未知 prior state 报错）。
+        cmd->beginTrackingTextureState(shadowMap_,
+            nvrhi::TextureSubresourceSet(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                         0, nvrhi::TextureSubresourceSet::AllArraySlices),
+            nvrhi::ResourceStates::ShaderResource);
+
+        // ---- shadow passes（先于主 pass；clear 在任何 setGraphicsState 之前——
+        // 与 visbuf clearBufferUInt 同款 Vulkan render pass 纪律）。
+        // 每阴影灯一层 R32F：clear=1.0（最远）→ 渲染深度 → 状态切回 SRV 供 psScene。
+        if (shadowCount_ > 0 && pipelineShadow_) {
+            for (std::uint32_t s = 0; s < shadowCount_; ++s) {
+                cmd->clearTextureFloat(shadowMap_,
+                    nvrhi::TextureSubresourceSet(0, 1, s, 1), nvrhi::Color(1.0f));
+            }
+            cmd->setTextureState(shadowMap_,
+                nvrhi::TextureSubresourceSet(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices),
+                nvrhi::ResourceStates::RenderTarget);
+
+            SceneConstants lcb{};   // b0 g_mvp = lightViewProj（shadow pass 语义）
+            for (std::uint32_t s = 0; s < shadowCount_; ++s) {
+                std::memcpy(lcb.mvp, shadowViewProj_[s], sizeof(lcb.mvp));
+                cmd->writeBuffer(shadowLightCB_, &lcb, sizeof(lcb));
+                for (const SceneMeshBatch& b : sceneBatches_) {
+                    nvrhi::GraphicsState state;
+                    state.setPipeline(pipelineShadow_)
+                         .setFramebuffer(shadowFb_[s])
+                         .addBindingSet(b.shadowSet)
+                         .addVertexBuffer(nvrhi::VertexBufferBinding()
+                             .setBuffer(b.vb).setSlot(0).setOffset(0))
+                         .setIndexBuffer(nvrhi::IndexBufferBinding()
+                             .setBuffer(b.ib).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+                    state.viewport.addViewportAndScissorRect(
+                        nvrhi::Viewport(1024.0f, 1024.0f));
+                    cmd->setGraphicsState(state);
+                    nvrhi::DrawArguments args;
+                    args.setVertexCount(b.indexCount)
+                        .setInstanceCount(b.instanceCount);
+                    cmd->drawIndexed(args);
+                }
+            }
+            cmd->setTextureState(shadowMap_,
+                nvrhi::TextureSubresourceSet(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices),
+                nvrhi::ResourceStates::ShaderResource);
+        }
+
         SceneConstants cb{};
         std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
         const float identity[16] = { 1.f, 0.f, 0.f, 0.f,   // model = 单位阵
@@ -2927,6 +3362,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));  // w = ambient（viewer 透传）
         cb.options[0] = 0.0f;   // psScene 不读 options；保持 0
         cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
+
+        // M-E1b.3：b1 每帧写相机世界坐标（psScene 视向量 V 来源）。其余字段 E1b 不用。
+        LightConstants lc{};
+        lc.cameraPos[0] = params.eye[0];
+        lc.cameraPos[1] = params.eye[1];
+        lc.cameraPos[2] = params.eye[2];
+        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
 
         nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
             ? (params.cullBack ? pipelineSceneWireBack_ : pipelineSceneWireNone_)
@@ -2949,6 +3391,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 .setInstanceCount(b.instanceCount);
             cmd->drawIndexed(args);
         }
+        instanceTrackSRV_ = true;   // 本列表末态 = SRV（所有绑定 require 已插 barrier）
         return;   // sceneMode_ 分支必须 return，不走既有路径
     }
 
@@ -3378,6 +3821,17 @@ void Scene::shutdown() {
     pipelineSceneNone_ = nullptr;
     pipelineSceneWireBack_ = nullptr;
     pipelineSceneWireNone_ = nullptr;
+    // M-E1b.4：阴影资源随场景一并清空（数组句柄置空 + 计数/矩阵归零）。
+    vsShadow_ = nullptr;
+    psShadow_ = nullptr;
+    shadowInputLayout_ = nullptr;
+    shadowBindingLayout_ = nullptr;
+    shadowLightCB_ = nullptr;
+    shadowConstants_ = nullptr;
+    shadowMap_ = nullptr;
+    for (auto& fb : shadowFb_) fb = nullptr;
+    pipelineShadow_ = nullptr;
+    shadowCount_ = 0;
     sceneAmbient_ = 0.28f;
     sceneLightCount_ = 0;
     sceneInstanceCount_ = 0;

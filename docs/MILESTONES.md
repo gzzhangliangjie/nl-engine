@@ -1413,6 +1413,80 @@
 **双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
 
 **下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
+
+## M-E1b.3 逐实例 PBR 材质 + Cook-Torrance 换代（2026-11-09，用户拍板 A：阴影拆 E1b.4）
+
+**动作**：pbr-direct merge 回 master 后，E1b.3 的「依赖接口」全链落地——① `ModelComponent` 增 `roughness`(缺省 1=完全粗糙)/`metallic`(缺省 0=介电质)，copy ctor 同步拷贝；deserialise **缺键按默认、`serialise()` 不写这两键**（与 E1b.2 方向灯同套向后兼容铁律，保 E2 roundtrip 逐字节）；② `SceneObjectDesc` +2 字段，viewer `runScene` 收集；③ t5 实例缓冲 **5→7 个 float4**（`[5]=(roughness,metallic,0,0)`），`vsScene` 增 `ROUGH/METAL` 插值量透传；④ ECS 分支新开 b1 `LightConstants`（复用 pbr-direct 同款 80B volatile CB，`maxVersions=16`），每帧只写 `cameraPos`（`FrameParams.eye`），BindingLayout/BindingSet 同步扩 slot1；⑤ `psScene` **Lambert→Cook-Torrance 换代**：BRDF 式沿用 pbr-direct 收口时三处对拍的 `D_GGX/V_SmithGGXCorrelated/F_Schlick/(1-F)·cDiff/π`，逐实例材质进 F0/cDiff，视向量 V 从 b1 `g_cameraPos` 取；E1b.2 点光 UE 衰减与方向灯 `1/ΣI` 归一化结构**原样保留**；贴图 sRGB→linear、输出 gamma encode（替换旧 `*2.2f` sRGB 空间曝光补偿）；⑥ **ambient 项 `ambient*albedo`→`ambient*cDiff`**：金属无漫反射环境光（否则金属暗部被染粉、metallic 0/1 材质对比被抹平）。场景 `ecs-e1b.scene` 加材质演示键（红 0.15/0.9 金属、蓝 0.25/0.0 低粗糙、其余缺省 matte）。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.3`）；**不 merge 回 master**（轨道未整体收官，前置不变）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/` 三场景（主场景新增 roughness/metallic 演示键）+ 三条 `run*.bat` 双后端复拍 + 机器断言全 exit 0；`shot*-{DX12,VULKAN}.{png,log}` 基线重拍；`example/cases.json` 既有 `ecs-e1b` 卡 3 用例覆盖（scene/scale/point），无新卡；`server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染验证）；`nanite-scene selftest --all` 双树各 PASS（ModelComponent 扩字段后 ecs-serial roundtrip 不回归，序列化不写新键）；本轮有渲染证据图。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 段补 M-E1b.3、`ECS-TOOLS-GUIDE.md` 新增 M-E1b.3 节、`SHADER-CONVENTIONS.md` 新增 §2.12（逐实例材质布局 / b1 cameraPos / ambient·cDiff / 亮度锚定口径）、`UE-DIFFS.md` D-E1b-1 更新（点光已接 BRDF，阴影留 E1b.4）、证据图归档 `docs/screenshots/ecs-e1b.3-*.png`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b.3-{dx12,vulkan}.png`；肉眼核验——红 Suzanne 金属感（暗部无粉底色 + 高光）、蓝低粗糙宽高光、绿/黄/白哑光漫反射，三灯色温可辨，白锚定旧亮度，无过曝无死黑。
+- 验收数字：双后端 `5/7/50 objects | 3/4/8 lights | batches=1/1/4 | deviceErrors=0`；`regression.py --only ecs-e1b` **6/6 bytes**；抽查 `--only pbr-direct` **10/10**、`--only m0.9` **4/4**（psScene 是 ecs 专用入口，共享 model.slang 其他入口零波及）。
+
+**亮度锚定（两轮，写实）**：Cook-Torrance 的 `1/π` 能量守恒 × 方向灯 `1/ΣI` 归一化双重压缩，比 E1b.2 Lambert 暗 ~3×（第一轮低估，画面仍灰暗）。shader 口径不动（与 shadePbr 同式拍板），**场景布光补偿**：`ambient 0.22→0.9`（point 场景 `0.08→0.55`）、方向灯 color ×4.2、点光 ×3.0。实测白 Suzanne (111,107,109) vs 旧基线 (118,107,109) 锚定；红金属物理性偏暗（无 IBL 特性，恰是材质对比点）；彩色饱和度略降 = 白色介电质 specular（F0=0.04）稀释，物理正确。
+
+**踩坑情况（本轮三条）**
+1. **两棵构建树 cache 里 `CMAKE_MAKE_PROGRAM=nmake` 裸名失效**（与 audio wt 的 VULKAN 树同款坑）：generator 直接报错，显式 `-DCMAKE_MAKE_PROGRAM=<nmake 绝对路径>` 重 configure 解决。
+2. **NMake 同秒 mtime 跳重链（第二次踩）**：改 `model.slang` 后 `cmake --build` 显示 `Built target viewer` 但 exe 未重链，regression 过期门禁拦下才暴露；删 `viewer.exe` 强制重链解决。**改 shader 后凡涉及 exe 新鲜度校验，先删 exe 再 build。**
+3. **亮度双重压缩低估**：第一轮 ambient ×2.5 + color ×2.8 仍灰暗（white 通道实测与「albedo 线性值 ~0.26 而非假设的 0.6」的复算一致才定位）；第二轮按实测像素反推锚定。教训：**调光先量化采样（python PIL 取点），别凭肉眼印象迭代。**
+
+**双后端分档（如实报）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡互比：`point` = **bytes**（逐字节一致）；`scene` = 2px/maxDelta1 → **near 档**；`scale` = 7px/maxDelta6 → FAIL 档（但 maxDelta 由旧 23 降至 6，乘法-only 口径 + CPU 预算倒数的改善）；按既有拍板留痕不折腾。
+
+**下一步**：**阴影拆 E1b.4**（用户拍板 A，2026-11-09）；E1 轨道收官 merge 回 master 的前置不变（12 文件冲突统一解）。
+
+## M-E1b.4 方向灯 2D 阴影图（feat/ecs，2026-11-09，tag `ecs-e1b.4`）
+
+**动作**：wt_pool claim（track ecs / M-E1b.4）→ 三处证据（本轮模块=阴影 pass：Carrot `ShadowMapPass` 方向灯单 cascade 正交投影 + depth-only pass；bevy directional light cascade shadow map 定向读 `bevy_core_pipeline` 阴影 pass 与 `shadow_sampling`（PCF/硬件 sampler 口径）；UE `ShadowRendering` SDirectionalLightShadow 阴影 pass 与 CSMLinux 保守读——三处共同口径：正交 lightViewProj + depth-only 渲染 + 接收侧 PCF/bias）→ 落码：① `LightComponent` +`shadow` 键（type=0 才写 JSON、deserialise 缺键默认 false，serialise 向后兼容铁律同 E1b.2/E1b.3）；② `SceneLightDesc` +shadow、viewer 收集（点光带 shadow 显式拒绝 exit 2）；③ `initScene`：灯打包 shadow 槽位（>4 盏显式报错）、场景 AABB 裁剪正交 lightViewProj（`shadowLookAt`/`shadowOrtho` 自写辅助，LH 口径）、GPU 资源（`Texture2DArray R32F 1024×1024×N` + b2 `ShadowConstantsCB`(viewProj[4]+params[4][3]，160B volatile) + vsShadow/psShadow 双目标编译产物 + per-batch shadowSet）；④ `draw()`：b2 写零无条件化 + beginTracking→clear→渲染→切 SRV 的 pass 顺序；⑤ `psScene` 方向灯分支 3×3 PCF 整数 texel Load。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.4`）；不 merge（轨道未收官）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/` 新增 `ecs-e1b-shadow.scene`（主灯 shadow=true + 地面盘）/`ecs-e1b-shadow-base.scene`（同场景 shadow=false 量化基线）+ `run-shadow.bat`（双后端复拍 4 张 + shadowLights/deviceErrors 断言 + 负向：点光 shadow=true 退出码 2）+ `check-shadow.py`（只变暗不变亮）；`cases.json` ecs-e1b 卡 +`shadow` 用例卡与 4 条验收条目；`server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染里程碑）；负向/量化断言收在 run-shadow.bat 内。
+3. 台账：本段即四栏。
+4. 固化：`SHADER-CONVENTIONS.md` 新增 §2.13（阴影 pass 口径五条）、`UE-DIFFS.md` D-E1b-2、`P8-ECS-PLAN.md` E1b 段、证据图归档 `docs/screenshots/ecs-e1b.4-*.png`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b.4-{dx12,vulkan}.png` + 差异图 `ecs-e1b.4-diff-dx12.png`；肉眼核验——5 个物体脚下朝灯光反方向成片暗斑、无条纹 acne、物体向光面亮度不变、下颌/颈底自阴影合理。
+- 验收数字：双后端 `shadowLights=1 / deviceErrors=0`；量化闸 DX12/VULKAN 均 **darker=14673 / brighter=0**；双后端互比 near 档（shadow 2px/maxDelta1、base 1px/maxDelta1）；`regression.py --only ecs-e1b` **6/6 ALL GREEN**（scene/scale/point 三链基线逐字节不变）。
+
+**踩坑情况（本轮五条，前两条是「采样无效果」连环假阴性的真根因）**
+1. **构建脚本 `%~dp0..` 定根**：用主树绝对路径调 `scripts/build-m0.2.bat` 会构建**主树**而非 worktree——worktree 构建必须用 worktree 自己的脚本路径。
+2. **NMake 同秒 mtime 跳重链（第三次踩，本次酿成连环假阴性）**：改 shader 后 build 显示成功但 exe 未重链，**shadowTry1~4、PROBE-S 的「采样无效果/永远判亮」结论全部作废**；本轮实测 shader 21:00 改完 exe 仍停在 20:56 才暴露。铁律重申：改 shader 后先 `rm viewer.exe` 再 build，**探针结论必须先核 exe mtime 新于 shader mtime 才有效**。
+3. **无深度测试 + 无混合 = 按绘制顺序覆盖**：阴影 pass 用 R32F 颜色目标当深度图、depth test/write 全禁（「framebuffer 无深度格式」报错的错误解法），psShadow 无条件写 → 后画的地面盘（覆盖整个灯视锥）冲掉物体深度 → 图里全是地面深度 → 永远判亮。PROBE-D 三通道诊断（R=图值 G=接收深度 B=差值×10）一眼定位：物体 texel 上 map=地面在物体后面的深度。正解 = **R32F MIN 混合**（src/dst One + `BlendOp::Min`，语义等价深度测试 LessEqual 且顺序无关；D3D12 强制支持 float32 RT 的 MIN/MAX，Vulkan 同一强制表，双后端对称），免建 depth attachment。
+4. **MIN 混合后坡度 acne**：nearest 深度在斜面 texel 内的深度跨度 ∝ (1−NdotL)，PROBE-D2 实测地面 ~0.004 / 头部斜面 ~0.028，固定 bias 0.003 盖不住 → 物体整体误阴影。坡度缩放 bias `0.003 + 0.035×(1−NdotL)` 实测覆盖。
+5. **量化基线选错**：`run-shadow.bat` 第一版拿 `ecs-e1b.scene`（无地面盘）当基线 →大面积「变亮」FAIL；量化闸必须用**同场景 shadow=false**（`ecs-e1b-shadow-base.scene`）。
+
+**双后端分档（如实报）**：`--only ecs-e1b` 6/6（bytes 5 / near 1 = scale 卡既有噪声）。shadow 卡对本后端基线 bytes；跨后端互比 near 档（2px/maxDelta1）。
+
+**下一步**：E1 轨道（E1b.0~E1b.4）收官 merge 回 master（12 文件冲突统一解）；点光阴影、多 cascade、PCF 质量提升不在本里程碑范围。
+
+## M-E1b.5 并行 tick：读写集求解 + jobgraph 接入（feat/ecs，2026-11-09，tag `ecs-e1b.5`）
+
+**动作**：wt_pool claim（track ecs / M-E1b.5）→ 三处证据（本轮模块 = system 间调度：Carrot `World::tick:313-332` 严格串行 + `System.h:86 parallelSubmit` 只做系统内数据并行；bevy `multi_threaded.rs:188` `access.is_compatible` 读写集冲突判定自动建边（access 由 Query 反射得出）；UE `MassRequirements.h:196-243 AddRequirement(ReadOnly/ReadWrite)` + `MassProcessorDependencySolver.h:95-236 FResourceUsage/PerformSolverStep/Solve` 显式声明 → 求解器建图）→ 用户拍板 A（UE 显式声明路线，bevy 反射不可抄）→ 落码：① `System.hpp`：`Read<T>`/`Write<T>` 访问标记 + `AccessTypeOf`/`IsWriteAccess` 萃取（裸类型保守 = 写，M-E2 向后兼容零改动），`SignedSystem` 构造展开签名位 + reads_/writes_，`forEachEntity` 经解包取组件；② `World.hpp/.cpp`：`tickParallel(dt, threads, err, dotOut)`——求解器 O(n²) 冲突矩阵（写读/写写建边、读读放行，边方向 = 注册序，构造无环）→ `jobgraph::Graph` 逐帧执行；结构变更守卫 `guardNoStructuralMutation`（inParallelTick_ 标志 + mutex 记账 violationMsg_ 带出具体 API，jobgraph 自捕获异常拿不到原始消息）；③ `nanite-scene` 新 suite `ecs-parallel`（6 用例 30 断言）+ `parallel-dot` CLI（真实求解 DOT 输出）；④ `example/ecs-parallel/`（run.bat usage/正向/负向三用例 + 2 张真实日志证据 PNG）+ `scripts/make-ecs-parallel-evidence.py` + cases.json `ecs-parallel` 版本卡（3 用例）。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.5`）；前置 = merge master 进 feat/ecs（`2b5ecf6`，jobgraph/Scheduler/jobsync 才与 ECS 同树）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：core-only 改动不进 kStage、渲染基线零触碰（`--only ecs-e1b` 8/8 ALL GREEN 佐证）；本轮无新渲染截图。
+2. 工具交代物：`example/ecs-parallel/` run.bat exit 0（usage 负向 exit 2 / selftest --verbose 正向 / parallel-dot / unknown-suite 负向 exit 2）+ `selftest-ecs-parallel.png`（30 断言）+ `solver-graph.png`（2 边 4 节点扇形图，DOT 解析非手绘）+ cases.json 版本卡 3 用例卡；`server.py --check` 退出 0。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` M-E1b.5 达成行 + **并行 tick 契约三条**（结构变更守卫 / 未声明访问 = 自足 / 确定性口径）、`System.hpp`/`World.hpp` 头注释同文、`MEMORY.md` E1b 段更新。
+- **证据图**：`example/ecs-parallel/{selftest-ecs-parallel,solver-graph}.png`；肉眼核验——求解图扇形无歧义（写者琥珀 → 两读者青色，ParLightC 独立无边）、断言列表 30 条全绿含契约说明。
+- 验收数字：`selftest ecs-parallel` 6/6 PASS（DX12 连跑 5 遍稳定 + VULKAN PASS）；`selftest --all` 5 suite 全绿（ecs-core/hier/system/serial/parallel，旧 suite 零回归）；`--only ecs-e1b` 8/8 ALL GREEN；`run.bat` exit 0。
+
+**踩坑情况（本轮三条）**
+1. **命名空间块插入漏闭合**：向 nanite-scene main.cpp 插 suite 时新 `namespace {` 未闭合就接下一个块 → C1075 未找到匹配令牌；插入整块后必须数大括号。
+2. **const 方法写成员**：`guardNoStructuralMutation` 声明为 const（便于在任意 API 里调用），`violationMsg_` 忘加 `mutable` → C2678；与 `violationMutex_` 一样需要 mutable。
+3. **jobgraph 异常消息带不出**：`Graph::run` 在封装层 `catch (...)` 只报「exception in task i (name)」——违约的具体 API 名必须**先记账（mutex 保护）再抛**，tickParallel 失败后从 `violationMsg_` 取回写 err，负向用例才能断言 "forbidden" + "newEntity"。
+
+**渲染证据补做（用户点名「渲染一波看看」，2026-11-09 深夜）**：viewer 增 `--tick off|serial|parallel`（默认 off 静态，既有基线零触碰），`SpinSystem(Write<Transform>)` 逐实体差异化旋转 + `ReadCountSystem(Read<Transform>)` 纯读并行；固定 dt=1/60 + 新增 `Scene::updateObjects`（单 upload 列表刷实例矩阵）。量化闸 DX12+VULKAN 双后端全绿：三档 deviceErrors=0、**serial==parallel 截图逐字节**（tickParallel 确定性的渲染链端到端证明）、animated!=static（56005 px = 物体真转）、`--tick warp` 负向拒绝；`--only ecs-e1b` 8/8 ALL GREEN。NVRHI 状态机踩坑（permanent 冻结卡每帧 writeBuffer / 跟踪态不跨列表 / beginTracking 参数=当前态）固化 **§2.15**。用户同步指认：固定 dt + 逻辑/渲染帧分离是**暂停 + fixed-step driver** 通用需求的简化版（accumulator + max catch-up + pause + 插值），独立立项待拍板（P8-ECS-PLAN 待办行）。
+
+**下一步**：E1b 链（E1b.0~E1b.5）收官 merge 回 master（feat/ecs 已同步 master 零冲突，`git merge feat/ecs` + 全量回归即可）；bevy 式访问反射 / MassCommandBuffer 式命令缓冲不在计划内，需要时单独拍板。
+
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）
 
 **动作**：feat/pbr-direct worktree（`E:/UE_STUDY_2026/nl-engine-pbr-direct`，junction 共享 `.workbuddy`/`slang dist`）。model.slang 新增 shading mode **5** = Cook-Torrance 直射光（D=GGX walter07 数值稳定式、V=Smith 高度相关精确式、F=Schlick、diffuse=Lambert*(1-F)*(1-metallic)；与 bevy `pbr_lighting.wesl` / UE `BRDF.ush` / Carrot `brdf.glsl` 三处对拍同构）；`core/mesh_io` 提取 metallicRoughness 贴图（G=roughness B=metallic，glTF 2.0 spec §3.9.3）与 baseColor/metallic/roughness 因子；scene 走 t1 MR 贴图（RGBA8_UNORM 线性）+ 新开 b1 `LightConstants`（80B volatile CB）+ init/initSkin 绑定集扩 slot1；viewer `--shading pbr` + `--pbr-naive` 对照开关 + HUD combo；输出端 pow(1/2.2) gamma 编码（不做 tonemap，plan 边界不变）；kStage bump `pbr-direct`。

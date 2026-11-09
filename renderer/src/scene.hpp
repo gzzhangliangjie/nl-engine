@@ -53,6 +53,14 @@ struct LightConstants {
 };
 static_assert(sizeof(LightConstants) == 80, "cbuffer layout must match shader");
 
+// M-E1b.4：与 model.slang 的 ShadowConstants cbuffer（b2，psScene 专用）逐字节对应。
+// 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）；params = enabled/bias/mapSize/未用。
+struct ShadowConstantsCB {
+    float viewProj[4][16];     // 4 个 float4x4（未启用槽保持零矩阵 + enabled=0）
+    float params[4][4];        // x=enabled, y=depthBias, z=mapSize, w 未用
+};
+static_assert(sizeof(ShadowConstantsCB) == 320, "cbuffer layout must match shader");
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -136,6 +144,15 @@ public:
                    const SceneObjectDesc* objects, std::uint32_t objectCount,
                    const SceneLightDesc* lights, std::uint32_t lightCount,
                    float ambient, const char* sceneName, std::string& outError);
+
+    // M-E1b.5 渲染用例：每帧刷新实例数据（世界矩阵/tint/材质），灯与拓扑不动。
+    // objectCount 必须与 initScene 一致（batch 分组按 meshFile 首现序稳定重建，
+    // batch 内保持 objects 原序——与 initScene 同一规则，槽号一一对应）。
+    // 世界矩阵逐字节来自 Transform::toMatrix()，parallel/serial 同 dt 序列下
+    // 输出逐位一致（spin 系统确定性由 tickParallel 串行对拍保证）。
+    bool updateObjects(nvrhi::IDevice* device,
+                       const SceneObjectDesc* objects, std::uint32_t objectCount,
+                       std::string& outError);
 
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
@@ -324,12 +341,35 @@ private:
         nvrhi::TextureHandle tex;
         nvrhi::SamplerHandle sampler;
         nvrhi::BindingSetHandle set;
+        nvrhi::BindingSetHandle shadowSet;   // M-E1b.4：shadow pass 用（b0=lightViewProj + t5 实例）
         std::uint32_t indexCount = 0;
         std::uint32_t instanceCount = 0;
     };
     std::vector<SceneMeshBatch> sceneBatches_;
+    // M-E1b.5：updateObjects 复用的 batch 分组映射（initScene 时固化——
+    // meshFile 首现序 + batch 内 objects 原序，重打包规则与 initScene 一致）。
+    std::vector<std::vector<std::uint32_t>> sceneBatchObjects_;
+    std::uint32_t sceneObjectCount_ = 0;
+    // instances 的 NVRHI 状态跟踪末态（不设 permanent——SRV 冻结会卡每帧
+    // writeBuffer 的 require(CopyDest)，见 initScene/updateObjects 注释）。
+    // true = 上一列表末态 ShaderResource；false = CopyDest。update 末态恒
+    // CopyDest、draw 末态恒 SRV，序列完全确定。
+    bool instanceTrackSRV_ = false;
     nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    // ---- M-E1b.4：方向灯 2D 阴影（最多 4 盏；R32F Texture2DArray 整数 Load 采样）----
+    static constexpr std::uint32_t kMaxShadowLights = 4;
+    nvrhi::ShaderHandle        vsShadow_, psShadow_;
+    nvrhi::InputLayoutHandle   shadowInputLayout_;       // 与 scene 同签名，绑 vsShadow_ 创建
+    nvrhi::BindingLayoutHandle shadowBindingLayout_;     // b0 + t5（§2.7：shadow 管线单一 set）
+    nvrhi::BufferHandle        shadowLightCB_;           // volatile 160B（b0 = lightViewProj）
+    nvrhi::BufferHandle        shadowConstants_;         // volatile 320B（b2，psScene 读）
+    nvrhi::TextureHandle       shadowMap_;               // R32F 1024x1024 arraySize=4（POT，§2.8 精神）
+    nvrhi::FramebufferHandle   shadowFb_[kMaxShadowLights];  // 每层一个（无 depth）
+    nvrhi::GraphicsPipelineHandle pipelineShadow_;       // cull=None + 无深度测试
+    std::uint32_t shadowCount_ = 0;
+    float shadowViewProj_[kMaxShadowLights][16];         // CPU 预算，每帧写 b2
+    float shadowBias_[kMaxShadowLights] = {};
     float         sceneAmbient_ = 0.28f;
     std::uint32_t sceneLightCount_ = 0;
     std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源

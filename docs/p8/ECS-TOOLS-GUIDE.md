@@ -135,3 +135,14 @@ python tools/regression.py --only ecs-e1b
 - 验收：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`--only ecs-e1b` 6/6 bytes、`--only s6.2` 10/10 bytes；`point` 卡双后端画面 MD5 完全一致（`f28ca72adda2cb0bbcc43a008e0b5592`，本轨首个互比 bytes）；`scene` 卡基线逐字节不变，`scale` 卡因新增 `WORLDPOS` 插值量重拍（1px/maxDelta1 取整噪声）。
 - **bat 铁律**：`for ... do ( ... )` 块内的 `echo` 文本禁止出现未转义的 `)`（右括号提前闭合块 → cmd「此时不应有 /」exit 255）；本轮 run-point.bat 初版踩过。
 - 未完成：点光的 PBR 材质响应 / 阴影 / clustered 灯池，见 `docs/s5/UE-DIFFS.md` `D-E1b-1`；前置是 E1 轨道收官 merge 回 master（同步 pbr-direct）。
+
+## M-E1b.3：逐实例 PBR 材质 + Cook-Torrance 换代（2026-11-09，阴影拆 E1b.4）
+
+- 命令：`viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9`；一键复拍 `example/ecs-e1b/run.bat`（双后端 + 机器断言，exit 0）。
+- 依赖接口全链：`ModelComponent.roughness/metallic`（缺省 1/0，缺键按默认、序列化不写新键）→ `SceneObjectDesc` +2 → t5 实例缓冲 5→7 float4（`[5]=(roughness,metallic,0,0)`）→ b1 `LightConstants`（80B volatile，每帧只写 `cameraPos`）→ `psScene` Cook-Torrance（与 shadePbr 同式，视向量 V 从 b1 取）。
+- **向后兼容铁律**：`serialise()` 不写 roughness/metallic 两键，既有场景 JSON 与 ecs-serial roundtrip 逐字节兼容（`selftest --all` 双树 PASS 验证）。
+- **ambient 口径变更**：`ambient*albedo` → `ambient*cDiff`——金属无漫反射环境光。这是 M-E1b.3 起的新铁律，详见 `docs/SHADER-CONVENTIONS.md` §2.12。
+- **亮度锚定口径**：物理正确 BRDF（1/π）+ 方向灯 1/ΣI 归一化双重压缩，比 Lambert 暗 ~3×。**shader 口径不动，场景布光补偿**（ambient 0.9 / dir color ×4.2 / point ×3.0）；锚定标准 = 白 matte 物体实测像素 (111,107,109) vs E1b.2 旧基线 (118,107,109)。金属物体物理性偏暗是无 IBL 的正确表现，不要当 bug 修。
+- 验收：三链 run.bat 双后端全过；`--only ecs-e1b` 6/6 bytes、`--only pbr-direct` 10/10、`--only m0.9` 4/4；互比 point=bytes、scene=near(2px/Δ1)、scale=FAIL(7px/Δ6，由旧 Δ23 改善)。
+- 踩坑：①构建树 cache 裸 nmake 失效 → 重 configure 带绝对路径；②NMake 同秒 mtime 跳重链第二次踩——**改 shader 后先删 exe 再 build**；③调光先 python 量化采样再迭代，别凭肉眼。
+- 证据图：`docs/screenshots/ecs-e1b.3-{dx12,vulkan}.png`（金属红 / 低粗糙蓝 / 哑光三色可辨）、`ecs-e1b.3-point-dx12.png`。

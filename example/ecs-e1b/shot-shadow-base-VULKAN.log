@@ -1,0 +1,15 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] features: rayQuery=0 shaderInt64Atomics=1 indirectDraw=1
+[nl:warn] feature report has unsupported items; S7/S8 需按此能力调整
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
+[nl:info] ecs scene: 6 objects | 3 lights (0 point) | ambient 0.9
+[nl:info] ecs scene ready: ecs-e1b-shadow-base.scene | objects=6 lights=3 ambient=0.9 shadowLights=0 | batches=2 | triangles=331616 | shader=spv
+[nl:info] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] mode: scene | objects=6 triangles=331616 model=ecs-e1b-shadow-base.scene | HUD: off | case: ESC=quit, F12=PNG
+[nl:info] screenshot mode: 8 frames -> E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-e1b\shot-shadow-base-VULKAN.png
+[nl:info] gpu timer resolved [frame]: 0.16576 ms (first successful NVRHI timestamp query)
+[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-e1b\shot-shadow-base-VULKAN.png
+[nl:info] shutdown ok (frames=8 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 8.42168 ms  max 51.0721 ms  over 8 frames (unthrottled)
+[nl:info] window destroyed

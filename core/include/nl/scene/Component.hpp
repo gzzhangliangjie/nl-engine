@@ -201,12 +201,15 @@ class ModelComponent : public ComponentOf<ModelComponent> {
 public:
     explicit ModelComponent(Entity owner) : ComponentOf<ModelComponent>(owner) {}
     ModelComponent(const ModelComponent& other, Entity newOwner)
-        : ComponentOf<ModelComponent>(newOwner), meshFile(other.meshFile), tint(other.tint) {}
+        : ComponentOf<ModelComponent>(newOwner), meshFile(other.meshFile), tint(other.tint),
+          roughness(other.roughness), metallic(other.metallic) {}
 
     static constexpr const char* kName = "Model";
 
     std::string meshFile;          // assets/ 下的资产文件名（白名单校验在 viewer 侧）。
     Vec3 tint{1.0f, 1.0f, 1.0f};   // 实体级着色（N 物体画面区分用；Carrot color 字段口径）。
+    float roughness = 1.0f;        // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）。
+    float metallic  = 0.0f;        // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）。
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;
@@ -224,7 +227,8 @@ public:
     LightComponent(const LightComponent& other, Entity newOwner)
         : ComponentOf<LightComponent>(newOwner),
           type(other.type), direction(other.direction), color(other.color),
-          intensity(other.intensity), position(other.position), range(other.range) {}
+          intensity(other.intensity), position(other.position), range(other.range),
+          shadow(other.shadow) {}
 
     static constexpr const char* kName = "Light";
 
@@ -238,6 +242,9 @@ public:
     float intensity = 1.0f;
     Vec3  position{0.0f, 0.0f, 0.0f};    // 点光世界位置（仅 type=1 生效）
     float range = 12.0f;                 // 衰减截断半径（bevy range / UE AttenuationRadius）
+    // M-E1b.4：方向灯投阴影开关（仅 type=0 生效，渲染侧最多取前 4 盏）。
+    // 缺省 false = 既有场景零行为变化；serialise() 不写新键（向后兼容铁律）。
+    bool  shadow = false;
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;

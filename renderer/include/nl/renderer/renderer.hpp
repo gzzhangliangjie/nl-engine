@@ -177,6 +177,8 @@ struct HudFrame {
 struct SceneObjectDesc {
     float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
     float tint[3];          // ModelComponent::tint
+    float roughness = 1.0f; // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）
+    float metallic  = 0.0f; // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）
     const char* meshFile;   // assets/ 下的 .glb 文件名（viewer 侧已过白名单校验）
 };
 struct SceneLightDesc {
@@ -187,6 +189,8 @@ struct SceneLightDesc {
     int   type        = 0;                    // 0=Directional / 1=Point
     float position[3] = {0.0f, 0.0f, 0.0f}; // 点光世界位置
     float range       = 12.0f;               // 衰减截断半径
+    // M-E1b.4：方向灯投阴影（仅 type=0 生效；scene 侧最多取前 kMaxShadowLights 盏）
+    bool  shadow      = false;
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
@@ -310,6 +314,11 @@ public:
     bool loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
                       const SceneLightDesc* lights, std::uint32_t lightCount,
                       float ambient, const char* sceneName);
+
+    // M-E1b.5 渲染用例：每帧刷新实例数据（世界矩阵/tint/材质），灯与拓扑不动。
+    // objectCount 必须与 loadEcsScene 一致（batch 槽号一一对应）。viewer 在每帧
+    // renderFrame 之前调用：World tick（serial/parallel）→ 收集矩阵 → 这里上传。
+    bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount);
 
 private:
     Renderer();

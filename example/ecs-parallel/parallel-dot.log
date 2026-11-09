@@ -1,0 +1,8 @@
+digraph jobgraph {
+  t0 [label="ParWriterT"];
+  t1 [label="ParReaderT"];
+  t2 [label="ParReaderT"];
+  t3 [label="ParLightC"];
+  t0 -> t1;
+  t0 -> t2;
+}

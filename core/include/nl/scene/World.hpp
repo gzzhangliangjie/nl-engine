@@ -1,7 +1,6 @@
 #pragma once
 
-// M-E0+M-E1：World/Entity 核心 + 组件/层级（P8 E1a 拆分段，docs/p8/P8-ECS-PLAN.md）。
-// Carrot 式 OOP 组件场景内核：实体注册表 + 延迟增删 + 名字 + Flags + 组件存储
+// M-E0+M-E1：World/Entity 核心 + 组件/层级（P8 E1a 拆分段，docs/p8/P8-ECS-PLAN.md）。// Carrot 式 OOP 组件场景内核：实体注册表 + 延迟增删 + 名字 + Flags + 组件存储
 // + 层级双结构（M-E1）。System 生命周期（M-E2）、JSON 序列化 roundtrip（M-E2）坐本层之上。
 //
 // 口径来源（三处对照，P8-ECS-PLAN.md「三处参考口径」+ 2026-11-09 精读留痕）：
@@ -33,7 +32,9 @@
 #include <bitset>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -87,6 +88,12 @@ template <class T> class ComponentOf;
 class System;
 class ComponentLibrary;
 class SystemLibrary;
+
+// M-E1b.5：并行 tick 结构变更违约（显式报错，不是静默数据竞争——
+// World::tickParallel 契约 1；jobgraph 自捕获后由 violationMsg_ 带出描述）。
+struct ParallelTickViolation : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 // 组件类型 ID 的静态获取（World::getComponent<T> 内部用）。
 template <class T>
@@ -170,6 +177,25 @@ public:
     // tick：开头先 flush -> firstTick（注册后恰一次）-> 逐系统 tick(dt)
     // （Carrot World::tick:313-321 口径）。
     void tick(double dt);
+
+    // M-E1b.5：并行 tick —— 读写集求解（UE Mass FMassProcessorDependencySolver
+    // 口径裁剪版）建 jobgraph 静态 DAG：系统对之间组件集冲突（写读/写写）按
+    // 注册序建边 -> 冲突者串行（保持注册序）、无冲突者并行；bevy 的 access
+    // 反射没有，用显式 Read<>/Write<> 声明代替（SignedSystem 扩展）。
+    // 契约（固化于 P8-ECS-PLAN「并行 tick 契约」）：
+    //   1. 并行段内禁止结构变更：newEntity/newEntityWithID/removeEntity/
+    //      addComponent/removeComponent/setParent/reparent/duplicate/
+    //      registerSystem/flush 在 tick 体里调用 = 显式违约（抛
+    //      ParallelTickViolation，tickParallel 返回 false + err 描述），
+    //      不是静默数据竞争。结构变更只允许帧首 flush 串行段发生。
+    //   2. 未声明访问的系统（直接继承 System 不经 SignedSystem）= 声明
+    //      「自足：不触碰任何共享组件」，可与其他系统并行。
+    //   3. 确定性：冲突边方向 = 注册序，构造上无环；同配置下逐位一致。
+    // 返回 false = 图执行失败（含违约），err 写 ASCII 原因（违约时含
+    // "forbidden during tickParallel" + API 名）；dotOut 非空时接收求解图
+    // 的 DOT 文本（jobgraph::dumpDot，证据图/调试用）。
+    bool tickParallel(double dt, unsigned threadCount, std::string& err,
+                      std::string* dotOut = nullptr);
 
     // ---- 层级（M-E1；双结构：parents_ 子->父 + children_ 父->子，Carrot 口径） ----
     void setParent(EntityID id, std::optional<EntityID> parent);  // 纯关系，不动变换
@@ -271,6 +297,15 @@ private:
     // duplicate 的递归内核（remap 表 M-E2 修链接时复用）。
     Entity duplicateWithRemap(EntityID src, std::optional<EntityID> newParent,
                               std::unordered_map<EntityID, EntityID>& remap);
+
+    // ---- M-E1b.5：并行 tick 守卫 ----
+    // 并行段内调用任何结构变更 API = 抛违约（消息进 violationMsg_，
+    // tickParallel 取出转 err——jobgraph 自捕获异常，原始消息带不出来）。
+    void guardNoStructuralMutation(const char* api) const;
+
+    bool inParallelTick_ = false;
+    mutable std::mutex violationMutex_;     // 违约写线程不确定，加锁防撕
+    mutable std::string violationMsg_;      // guardNoStructuralMutation 是 const
 };
 
 } // namespace nl::scene

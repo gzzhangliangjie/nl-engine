@@ -145,6 +145,11 @@ nlohmann::json ModelComponent::serialise() const {
 void ModelComponent::deserialise(const nlohmann::json& j) {
     meshFile = j.at("mesh").get<std::string>();
     tint = {j.at("tint")[0], j.at("tint")[1], j.at("tint")[2]};
+    // M-E1b.3：逐实例 PBR 材质缺键按默认（roughness=1 / metallic=0），
+    // 与 LightComponent type=0 不写新键同套向后兼容铁律；序列化不写这两键，
+    // 保住 M-E2 roundtrip byte-identical 硬判据（见 ecs-e1a/run.bat）。
+    roughness = j.value("roughness", 1.0f);
+    metallic  = j.value("metallic", 0.0f);
 }
 
 nlohmann::json LightComponent::serialise() const {
@@ -154,6 +159,7 @@ nlohmann::json LightComponent::serialise() const {
     j["intensity"] = intensity;
     // M-E1b.2：方向灯（type=0）不写新键 —— 既有 M-E1b.0/1 场景 JSON 与
     // ecs-serial roundtrip 逐字节判据零变化；点光才带 type/position/range。
+    // M-E1b.4：shadow 键同样不写（缺省 false），deserialise 缺键按默认。
     if (type != 0) {
         j["type"]     = type;
         j["position"] = {position.x, position.y, position.z};
@@ -175,6 +181,9 @@ void LightComponent::deserialise(const nlohmann::json& j) {
         if (j.find("range") != j.end())
             range = j["range"].get<float>();
     }
+    // M-E1b.4：方向灯阴影开关，缺键按 false（与 type/position/range 同套缺省铁律）。
+    if (j.find("shadow") != j.end())
+        shadow = j["shadow"].get<bool>();
 }
 
 } // namespace nl::scene

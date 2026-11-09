@@ -3,6 +3,7 @@
 
 #include "nl/scene/World.hpp"
 
+#include "nl/core/jobgraph.hpp"
 #include "nl/scene/Component.hpp"
 #include "nl/scene/System.hpp"
 
@@ -132,6 +133,7 @@ Entity World::newEntity(std::string_view name) {
 }
 
 Entity World::newEntityWithID(EntityID id, std::string_view name) {
+    guardNoStructuralMutation("newEntity");
     assert(id != kInvalidEntity && "entity id must be non-zero");
     assert(names_.find(id) == names_.end() && "duplicate entity id");
     names_.emplace(id, std::string(name));
@@ -140,6 +142,7 @@ Entity World::newEntityWithID(EntityID id, std::string_view name) {
 }
 
 void World::removeEntity(EntityID id) {
+    guardNoStructuralMutation("removeEntity");
     entitiesToRemove_.push_back(id);
     // M-E1 父删递归删子：立即把直接子全部递归压进待删队列（Carrot removeEntity
     // 口径——childrenCopy 后逐个 removeEntity）。flush 时统一落盘。
@@ -209,6 +212,68 @@ void World::tick(double dt) {
     for (auto& s : systems_) {
         s->tick(dt);
     }
+}
+
+// ---------------------------------------------------------------------------
+// World：并行 tick（M-E1b.5，读写集求解 + jobgraph 静态 DAG）
+// ---------------------------------------------------------------------------
+
+void World::guardNoStructuralMutation(const char* api) const {
+    if (!inParallelTick_) return;
+    // 先记账再抛：jobgraph 在封装层捕获异常，原始消息带不到 err——
+    // tickParallel 失败时从 violationMsg_ 取回具体违约 API（加锁防并行写撕）。
+    {
+        std::lock_guard<std::mutex> lock(violationMutex_);
+        violationMsg_ = std::string("structural change forbidden during tickParallel: ")
+                        + api;
+    }
+    throw ParallelTickViolation(violationMsg_);
+}
+
+bool World::tickParallel(double dt, unsigned threadCount, std::string& err,
+                         std::string* dotOut) {
+    err.clear();
+    violationMsg_.clear();
+    flushEntityCreationAndRemoval();
+    // firstTick 串行（Carrot firstTick 无并行语义；首个 tick 建内部状态）。
+    for (System* s : waitingForFirstTick_) {
+        s->firstTick();
+    }
+    waitingForFirstTick_.clear();
+
+    // 求解（UE Mass FMassProcessorDependencySolver 口径裁剪版）：
+    // 冲突 = 两系统的写集与对方读写集相交（写读 / 写写；读读不冲突——
+    // bevy access.is_compatible 同判据）。边方向 = 注册序（i<j 时 i 先于 j），
+    // 构造上无环，jobgraph 的 Kahn 拒环只是兜底闸。
+    nl::core::jobgraph::Graph graph;
+    for (auto& s : systems_) {
+        // 捕获裸指针：systems_ 持 unique_ptr 且并行段结构变更已封死，不悬垂。
+        System* raw = s.get();
+        graph.add(s->getName(), [raw, dt]() { raw->tick(dt); });
+    }
+    for (std::size_t i = 0; i < systems_.size(); ++i) {
+        for (std::size_t j = i + 1; j < systems_.size(); ++j) {
+            const Signature& wi = systems_[i]->getWrites();
+            const Signature& ri = systems_[i]->getReads();
+            const Signature& wj = systems_[j]->getWrites();
+            const Signature& rj = systems_[j]->getReads();
+            const bool conflict = (wi & rj).any() || (wi & wj).any() ||
+                                  (wj & ri).any();
+            if (conflict) graph.precede(i, j);
+        }
+    }
+    if (dotOut) *dotOut = graph.dumpDot();
+
+    inParallelTick_ = true;
+    const bool ok = graph.run(threadCount, &err);
+    inParallelTick_ = false;
+    if (!ok) {
+        // 违约消息比 jobgraph 的「exception in task i」更可定位，优先带出。
+        std::lock_guard<std::mutex> lock(violationMutex_);
+        if (!violationMsg_.empty()) err = violationMsg_;
+        err = "parallel tick failed: " + err;
+    }
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +360,7 @@ bool World::isVisible(EntityID id) const {
 // ---------------------------------------------------------------------------
 
 void World::setParent(EntityID id, std::optional<EntityID> parent) {
+    guardNoStructuralMutation("setParent");
     assert(id != kInvalidEntity && "setParent on invalid entity");
     if (parent) {
         assert(*parent != kInvalidEntity && "setParent to invalid parent");
@@ -402,6 +468,7 @@ Entity World::duplicate(EntityID src) {
 // ---------------------------------------------------------------------------
 
 Component& World::addComponent(EntityID id, std::unique_ptr<Component> comp) {
+    guardNoStructuralMutation("addComponent");
     assert(comp && "addComponent with null component");
     assert(exists(id) && "addComponent on non-existent entity");
     auto& slot = components_[id];
@@ -415,6 +482,7 @@ Component& World::addComponent(EntityID id, std::unique_ptr<Component> comp) {
 }
 
 void World::removeComponent(EntityID id, ComponentTypeID typeID) {
+    guardNoStructuralMutation("removeComponent");
     auto it = components_.find(id);
     if (it != components_.end()) {
         it->second.erase(typeID);
@@ -469,6 +537,7 @@ Signature World::getSignature(EntityID id) const {
 }
 
 void World::registerSystem(std::unique_ptr<System> system) {
+    guardNoStructuralMutation("registerSystem");
     assert(system && "registerSystem with null system");
     // 注册即收编：对现存实体表全量推送（Carrot addLogicSystem:838 口径），
     // 并排进 firstTick 等待列表（首个 tick 恰一次）。
