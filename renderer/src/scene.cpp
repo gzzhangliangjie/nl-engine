@@ -2293,22 +2293,26 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         // NVRHI 不允许 BindingSet 里绑空句柄，而 t5/t6 要先有实缓冲。
     }
 
-    // ---- 5. 实例缓冲 + 灯缓冲（StructuredBuffer<float4>，一次 writeBuffer）----
-    // 实例：objectCount*5 个 float4 —— [0..3] 列主序世界矩阵 4 列，[4]=(tint.rgb,0)。
+    // ---- 5. 每 batch 实例缓冲 + 全场灯缓冲（StructuredBuffer<float4>）----
+    // 实例：每实例 5 个 float4 —— [0..3] 列主序世界矩阵 4 列，[4]=(tint.rgb,0)。
     // 灯：1+lightCount*2 个 float4 —— [0]=(lightCount, ambient, 1/ΣI, 0)，每灯
     // {dir.xyz, intensity}、{color.rgb, 0}。
-    // 实例数据必须按 batch 分组连续排布：drawIndexed 用 startInstanceLocation +
-    // instanceCount 窗口，SV_InstanceID 是全局槽号，槽里的数据要与窗口一一对应。
-    // batch 内保持 objects 原序（稳定确定）；顺带把两个计数字段落到 batch 上。
-    std::vector<float> instanceData(objectCount * 5 * 4);
-    std::uint32_t slot = 0;
+    // M-E1b.1：实例缓冲按 batch 各建一份，SV_InstanceID 就是本 batch 内 0-based
+    // 槽号。旧做法把全场实例放一个缓冲、用 startInstanceLocation 划窗口，但 DX12
+    // 的 SV_InstanceID 不含 StartInstanceLocation（2-batch 探针：两物体叠成一团）；
+    // Vulkan 侧若改用 SRV 子范围又会撞 minStorageBufferOffsetAlignment。故彻底
+    // 不依赖 base 语义：单 batch 时与 M-E1b.0 逐字节同构，既有基线无需重拍。
+    // batch 内保持 objects 原序（稳定确定）。
+    std::vector<std::vector<float>> batchInstanceData(batchFiles.size());
     for (std::size_t b = 0; b < batchFiles.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
-        batch.instanceStart = slot;
         batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
+        std::vector<float>& data = batchInstanceData[b];
+        data.assign(static_cast<std::size_t>(batch.instanceCount) * 5u * 4u, 0.0f);
+        std::uint32_t slot = 0;
         for (std::uint32_t i : batchObjects[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
-            float* dst = instanceData.data() + static_cast<std::size_t>(slot) * 5 * 4;
+            float* dst = data.data() + static_cast<std::size_t>(slot) * 5 * 4;
             for (int c = 0; c < 4; ++c)
                 for (int r = 0; r < 4; ++r)
                     dst[c * 4 + r] = w[c * 4 + r];
@@ -2318,15 +2322,15 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[19] = 0.0f;
             ++slot;
         }
+        nvrhi::BufferDesc instDesc;
+        instDesc.byteSize = data.size() * sizeof(float);
+        instDesc.structStride = 16;              // StructuredBuffer<float4>
+        instDesc.canHaveTypedViews = true;
+        instDesc.debugName = "SceneInstances";
+        instDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        batch.instances = device->createBuffer(instDesc);
+        if (!batch.instances) { outError = "createBuffer failed for ecs scene instances"; return false; }
     }
-    nvrhi::BufferDesc instDesc;
-    instDesc.byteSize = instanceData.size() * sizeof(float);
-    instDesc.structStride = 16;              // StructuredBuffer<float4>
-    instDesc.canHaveTypedViews = true;
-    instDesc.debugName = "SceneInstances";
-    instDesc.initialState = nvrhi::ResourceStates::CopyDest;
-    sceneInstances_ = device->createBuffer(instDesc);
-    if (!sceneInstances_) { outError = "createBuffer failed for ecs scene instances"; return false; }
 
     const std::uint32_t lightFloats = (1u + lightCount * 2u) * 4u;
     std::vector<float> lightData(lightFloats, 0.0f);
@@ -2364,7 +2368,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
-               .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, sceneInstances_))
+               .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, batch.instances))
                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, sceneLights_));
         batch.set = device->createBindingSet(setDesc, sceneBindingLayout_);
         if (!batch.set) { outError = "createBindingSet failed for ecs scene batch"; return false; }
@@ -2386,10 +2390,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(batch.ib, nvrhi::ResourceStates::IndexBuffer);
         upload->writeTexture(batch.tex, 0, 0, pb.texRGBA.data(),
                              static_cast<size_t>(pb.texWidth) * 4u);
+        upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
+                            batchInstanceData[b].size() * sizeof(float));
+        upload->setPermanentBufferState(batch.instances, nvrhi::ResourceStates::ShaderResource);
     }
-    upload->beginTrackingBufferState(sceneInstances_, nvrhi::ResourceStates::CopyDest);
-    upload->writeBuffer(sceneInstances_, instanceData.data(), instanceData.size() * sizeof(float));
-    upload->setPermanentBufferState(sceneInstances_, nvrhi::ResourceStates::ShaderResource);
     upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
     upload->setPermanentBufferState(sceneLights_, nvrhi::ResourceStates::ShaderResource);
@@ -2467,10 +2472,10 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
 
-    // M-E1b.0：ECS 场景路径——逐 batch 绑定各自的 set/VB/IB，drawIndexed 按
-    // instanceStart..+instanceCount 窗口实例化；startInstanceLocation 让
-    // SV_InstanceID 是全局实例号（DX12 StartInstanceLocation 与 Vulkan
-    // gl_InstanceIndex 都含 base，vsScene 按 id*5 寻址实例缓冲两端一致）。
+    // M-E1b.1：ECS 场景路径——逐 batch 绑定各自的 set/VB/IB/t5 实例缓冲，
+    // drawIndexed 的 SV_InstanceID 从 0 起，直接按 id*5 寻址本 batch 实例数据。
+    // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
+    // 旧实现多 batch 时所有批次都读实例槽 0（详见第 5 步与 MILESTONES 踩坑）。
     if (sceneMode_) {
         SceneConstants cb{};
         std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
@@ -2501,8 +2506,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->setGraphicsState(state);
             nvrhi::DrawArguments args;
             args.setVertexCount(b.indexCount)          // drawIndexed 复用 vertexCount 表示索引数
-                .setInstanceCount(b.instanceCount)
-                .setStartInstanceLocation(b.instanceStart);
+                .setInstanceCount(b.instanceCount);
             cmd->drawIndexed(args);
         }
         return;   // sceneMode_ 分支必须 return，不走既有路径
@@ -2809,7 +2813,6 @@ void Scene::shutdown() {
     sceneMode_ = false;
     vsScene_ = nullptr;
     psScene_ = nullptr;
-    sceneInstances_ = nullptr;
     sceneLights_ = nullptr;
     sceneInputLayout_ = nullptr;
     sceneBindingLayout_ = nullptr;

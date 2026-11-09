@@ -274,21 +274,22 @@ private:
     // 既有路径（normal/cluster/cull/dag/hiz/skin）零改动。
     bool sceneMode_ = false;
     nvrhi::ShaderHandle        vsScene_, psScene_;
-    nvrhi::BufferHandle        sceneInstances_;   // StructuredBuffer<float4>，5/实例
-                                                  //（[0..3] 列主序世界矩阵，[4]=(tint,0)）
     nvrhi::BufferHandle        sceneLights_;      // StructuredBuffer<float4>，1+2/灯
-                                                  //（[0]=(lightCount,ambient,0,0)）
+                                                  //（[0]=(lightCount,ambient,1/ΣI,0)）
     nvrhi::InputLayoutHandle   sceneInputLayout_;
     nvrhi::BindingLayoutHandle sceneBindingLayout_;   // 单 layout：t0+s0+b0+t5+t6（§2.7）
-    // 每 mesh 一个批次（同一 meshFile 的所有实例共享 VB/IB/贴图，按
-    // instanceStart..+instanceCount 窗口寻址实例缓冲）。
+    // 每 mesh 一个批次（同一 meshFile 的所有实例共享 VB/IB/贴图/BindingSet）。
+    // M-E1b.1：每个 batch 持有自己的 t5 实例缓冲——SV_InstanceID 是 draw 内
+    // 0-based，不依赖 startInstanceLocation 的硬件语义（DX12 不把它计入实例号，
+    // 旧实现多 batch 时所有批次都读槽 0）；也避开 Vulkan storage buffer SRV
+    // 子范围的 minStorageBufferOffsetAlignment 约束（批次起点按 80B 递增）。
     struct SceneMeshBatch {
         nvrhi::BufferHandle vb, ib;
+        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，5/实例
         nvrhi::TextureHandle tex;
         nvrhi::SamplerHandle sampler;
         nvrhi::BindingSetHandle set;
         std::uint32_t indexCount = 0;
-        std::uint32_t instanceStart = 0;
         std::uint32_t instanceCount = 0;
     };
     std::vector<SceneMeshBatch> sceneBatches_;

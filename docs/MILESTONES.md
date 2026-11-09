@@ -1365,3 +1365,27 @@
 **双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 2/2）；两后端画面互比 `diffPixels=3 / maxDelta=2`，按项目 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**（GPU 取整噪声，非画面差异）；已去掉 shader 内多余的 `normalize` 与归一化除法仍存在，留作后续精度项。
 
 **下一步**：E1b 后续分段（E1b.1+，如点光源 / 材质响应 / 更多实体压力）或轨道收官 merge 回 master，按用户指令。wt_pool M-E1b.0 占坑已 release。
+
+---
+
+## M-E1b.1 — ECS 场景规模锚（50 物体 + 8 方向灯）（2026-11-09）
+
+**动作**：按 `docs/p8/P8-ECS-PLAN.md` 目标「50 物体 + 8 灯规模」把 `viewer --scene` 推到计划规模：10×5 网格 × 4 种 mesh（13/13/12/12 实例）= 4 个 batch、8 盏方向灯，共 58 实体。三处参考定向复核多实例 / 多灯容器均无硬上限（Carrot `ModelRenderSystem::renderModels` 逐实体 `parallelForEachEntity` 构造 `InstanceData`、UE `ScenePrivate.h` 的 `TArray<FLightSceneInfo*, TInlineAllocator<4>> DirectionalLights` + `AddLight/BatchAddLights` 动态数组、bevy clustered forward 未找到方向灯硬编码上限），故不改架构、只扩场景数据。结果暴露并修掉 M-E1b.0 的多 batch 实例化 bug（踩坑①）。kStage 保持 S6.2 不 bump。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.1`）；**不 merge 回 master**——master 此刻压着并行会话的 S7 vis buffer 在途 WIP（`CMakeLists.txt` / `renderer/*` / `viewer/main.cpp` 全脏且与 E1b 文件高度重叠），且 E1 轨道尚未整体收官。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-scale.scene`（58 实体）/ `run-scale.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-scale-DX12.png` + `shot-scale-VULKAN.png` + 双后端 `.log`；`example/cases.json` 在 `ecs-e1b` 卡加 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：`nanite-scene selftest --all` 四 suite PASS；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图（`docs/screenshots/ecs-e1b-scale-{dx12,vulkan}.png`）。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 规模锚标达成、`ECS-TOOLS-GUIDE.md` M-E1b.1 节、`SHADER-CONVENTIONS.md` 新增 §2.10（禁依赖 `startInstanceLocation` 的 `SV_InstanceID` 语义）。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-scale-dx12.png` / `ecs-e1b-scale-vulkan.png`；肉眼核验 10×5 网格 50 个物体完整、4 种形状（猴头 / 棋盘球 / 环面 / 水滴）、彩虹色相全覆盖、无遮挡缺失，双后端布局一致。
+- 验收数字：双后端 `50 objects | 8 lights | batches=4 | triangles=540352 | deviceErrors=0`；`regression.py --only ecs-e1b` **4/4 bytes**（scene + scale 两卡）、抽查 `--only s6.2` **10/10 bytes**；M-E1b.0 既有基线复拍 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **多 batch 全部读实例槽 0（M-E1b.0 遗留隐藏 bug，单 batch 未暴露）**：旧实现把全场实例放一个 `sceneInstances_`，靠 `DrawArguments::setStartInstanceLocation(batch.instanceStart)` 划窗口，认定 `SV_InstanceID` 会是全局槽号。**DX12 实际不把 `StartInstanceLocation` 计入 `SV_InstanceID`** → 4 个 batch 全读槽 0..12，画面只剩 13 个物体、颜色却覆盖全色相环（连续排布的前 13 槽恰是第一个 batch 的实例）。2-batch 最小探针（两实例 x=±4）叠成一个 blob 定性；连通域统计 13 团与 `(col+row)%4==0` 的 13 个实例位置一一对应。修：**每个 batch 各持自己的 t5 实例缓冲**，`SV_InstanceID` 0-based 直接按 `id*5` 寻址，draw 不再设 `startInstanceLocation`。没走「同一 buffer 绑 SRV 子范围」是因为 Vulkan `minStorageBufferOffsetAlignment` 常为 64B 而批次起点按 80B 递增会踩对齐。单 batch 行为与 M-E1b.0 同构 → 既有基线无需重拍（实测 MD5 一致）。
+2. **自动取景被高密度 mesh 撑远**：联合包围球按各 mesh 局部球 × 实例尺度取并集，`IcoSphereDense` / `TorusKnotDense` 把半径拉大，`camDist = sph[3]*2.4` 让 50 物体挤在画面中央（x 250..740 / y 150..390），四周大片空白。修：规模卡固定 `--dist 18`（viewer 已有参数，不改自动取景公式、普通场景行为不变）；试 14/18/22 三档，18 铺满且不裁切。
+
+**双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 4/4）；两后端画面互比 `scale` = `diffPixels=6 / maxDelta=23`，按 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**。逐像素拆解：5 个是 ±1 取整噪声，第 6 个 `(690,369)` 是绿色环面边缘覆盖差（±23），属 GPU 边缘取整而非光照 / 几何差异。`scene` 卡互比仍 3px/maxDelta2（M-E1b.0 已知项）。精度项继续留痕，不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需等 master 的 S7 vis buffer WIP 提交且工作区干净）；或 E1b.2 点光源 / 材质响应（用户拍板留 pbr-direct merge 后）。wt_pool M-E1b.1 占坑已 release。

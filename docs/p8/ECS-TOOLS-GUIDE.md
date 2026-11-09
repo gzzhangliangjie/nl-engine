@@ -115,3 +115,13 @@ python tools/regression.py --only ecs-e1b
 5. 联合包围球首球漏 ±r → 自动取景偏近。
 6. 回归 cwd = exe.parent，场景相对路径失效 → `{root}` 占位符。
 7. Windows 大小写不敏感：清理小写临时名误删大写基线；CRLF 文件文本插入要先归一化换行。
+
+## M-E1b.1 — 规模锚 50 物体 × 8 方向灯（2026-11-09）
+
+- 命令：`viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-scale.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18`；一键复拍 `example/ecs-e1b/run-scale.bat`（双后端 + 机器断言，exit 0）。
+- 场景：10×5 网格，4 种 mesh 按 `(col+row)%4` 分配 → 4 个 batch（13/13/12/12），58 实体（50 Model + 8 Light）；tint 走 HSV 全色相环，8 盏灯方向 / 色温 / 强度各异，ambient 0.22。
+- 口径：`P8-ECS-PLAN.md` 目标「50 物体 + 8 灯规模」达成；三处参考确认无硬上限，故本轮不改架构，只扩场景数据。kStage 仍 S6.2。
+- 双后端 `50 objects | 8 lights | batches=4 | triangles=540352 | deviceErrors=0`；`--only ecs-e1b` 4/4 bytes、`--only s6.2` 10/10 bytes；M-E1b.0 基线复拍 MD5 不变。
+- 展示台：`example/cases.json` 的 `ecs-e1b` 卡新增 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`--dist 18` 是为绕开自动取景被高密度 mesh 包围球撑远的问题，viewer 已有参数，不改取景公式。
+- **实例化铁律**：禁止用 `startInstanceLocation` 让 `SV_InstanceID` 当全局槽号（DX12 不把它计入实例号）→ 每个 batch 各持自己的 t5 实例缓冲。详 `docs/SHADER-CONVENTIONS.md` §2.10。
+- 双后端互比 6px / maxDelta 23 → 按阈值落 FAIL 档（5 个 ±1 取整 + 1 个环面边缘覆盖差），各自对本后端基线 bytes；如实留痕，不再折腾精度。

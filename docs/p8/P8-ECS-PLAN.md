@@ -41,15 +41,16 @@
 | **M-E2** ✅ 已完成（tag `ecs-e2`，2026-11-09） | System 基类（Signature 匹配 + 实体列表自动维护 + tick/firstTick 生命周期）+ `SignedSystem<Required...>` + 场景 JSON 序列化/反序列化 **roundtrip 字节一致** | selftest：System 只收 Signature 匹配实体（加/删组件自动进出列表）；roundtrip = `serialise→deserialise→serialise` 逐字节一致（正/负向：非法 JSON / 未知组件名显式退出码 2） |
 | **M-E3** ✅ 已完成（2026-11-09，tag `ecs-e3`） | 收口：工具版交代（展示台 tool 卡 usage/正向/负向 + TOOLS-GUIDE）+ MILESTONES 四栏 + tag + merge 回 master + 注册表同步 | §7.2 文档闸过；cases.json `p8-ecs` 卡 4 条全过（expectExit 2/0/0/2）+ run.bat ALL GREEN + 4 张证据图亲眼验收；master 侧 AGENTS/PARALLEL-TRACKS 状态更新 |
 
-## E1b 后挂段（渲染集成）—— M-E1b.0 已完成（2026-11-09）
+## E1b 后挂段（渲染集成）—— M-E1b.0 + M-E1b.1 已完成（2026-11-09）
 
 > S6 收官（tag `s6-done`）后解禁，`feat/ecs` worktree 内开工；**里程碑编号定为 M-E1b.0**（E1a 的 M-E0~E3 已收官）。
 > 用户拍板：① 多灯 = **方向灯数组**（点光源留 pbr-direct merge 后）；② **不 bump kStage**（保持 S6.2），照 console 轨道先例，证据走 example 卡 + 截图 + `--only` 抽查。
 
 - **已落地**：`ModelComponent` / `LightComponent` 纯数据组件进 `nl/scene`；`viewer --scene <World JSON>` 反序列化后 O(N) 收集 → `Renderer::loadEcsScene` → `Scene::initScene` 按 meshFile 分组实例化；`vsScene/psScene` 新入口对 + t5 实例缓冲 / t6 灯缓冲，既有 shader 入口与既有 draw 路径逐字节不动。
-- **验收**：`example/ecs-e1b/`（5 物体 + 3 方向灯，ambient 0.22）双后端 `deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes，`--only s6.2` 10/10 bytes（kStage 未动、既有路径零回归）；双后端画面互比 3px/maxDelta2（超 near 阈值，GPU 取整噪声，留精度项）。台账见 `docs/MILESTONES.md` M-E1b.0 段。
-- **未完成**：「50 物体 + 8 动态灯 GI 正确响应」完整验收仍卡主线 S10 之后；点光源 / 材质响应 / 阴影、更多实体压力留 E1b.1+ 或 pbr-direct merge 后。
-- 本轮只在本 worktree 提交 + tag，轨道未收官、不 merge 回 master。
+- **验收（M-E1b.0）**：`example/ecs-e1b/`（5 物体 + 3 方向灯，ambient 0.22）双后端 `deviceErrors=0`；`regression.py --only ecs-e1b` 2/2 bytes，`--only s6.2` 10/10 bytes（kStage 未动、既有路径零回归）；双后端画面互比 3px/maxDelta2（超 near 阈值，GPU 取整噪声，留精度项）。台账见 `docs/MILESTONES.md` M-E1b.0 段。
+- **M-E1b.1 规模锚已达成（2026-11-09）**：`ecs-e1b-scale.scene` = 10×5 网格 × 4 种 mesh（13/13/12/12 实例）= **50 物体 + 8 方向灯 / 4 batch / 58 实体**，双后端 `deviceErrors=0`、`--only ecs-e1b` 4/4 bytes、`--only s6.2` 10/10 bytes；`run-scale.bat` 机器断言。三处参考复核多实例 / 多灯容器均无硬上限（Carrot 逐实体 `InstanceData` / UE `DirectionalLights` 动态数组 / bevy clustered forward），不改架构。顺带修掉 M-E1b.0 的多 batch 实例化 bug：DX12 的 `SV_InstanceID` 不含 `StartInstanceLocation`，改为每 batch 各持自己的 t5 实例缓冲（详见 `docs/SHADER-CONVENTIONS.md` §2.10 与 MILESTONES M-E1b.1 踩坑①），M-E1b.0 基线 MD5 逐字节不变。
+- **未完成**：「50 物体 + 8 动态灯 GI 正确响应」完整验收仍卡主线 S10 之后；点光源 / 材质响应 / 阴影留 E1b.2+ 或 pbr-direct merge 后。
+- 两轮均只在本 worktree 提交 + tag，轨道未收官、不 merge 回 master（master 有并行会话的 S7 vis buffer 在途 WIP，需等其提交后另行收官）。
 
 ## 排期
 
