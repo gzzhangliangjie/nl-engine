@@ -27,7 +27,7 @@
 | **M-P0** ✅ **2026-11-09 完成（tag `phys-p0`）** | vendored Jolt 5.3.1 + 最小世界（落下小球） | `phys-tools` 无头模拟 dump 轨迹 TSV → 证据图；弹跳曲线符合自由落体+恢复系数。实测见 §M-P0 固化与 `PHYS-TOOLS-GUIDE.md` |
 | **M-P1** ✅ **2026-11-09 完成（tag `phys-p1`）** | 体封装 + 碰撞层（引擎对象 ↔ Jolt 双向关联） | 层过滤矩阵用例：同层碰撞 / 异层穿透，dump 可验。实测见 §M-P1 固化口径与 `PHYS-TOOLS-GUIDE.md` §8 |
 | **M-P2** ✅ **2026-11-09 完成（tag `phys-p2`）** | 堆叠 + 地面（静态体） | 箱体堆叠稳定不抖（长时间步进位移收敛），dump 证据。实测见 §M-P2 固化口径与 `PHYS-TOOLS-GUIDE.md` §9 |
-| **M-P3** | debug 渲染接 viewer（Jolt DebugRendering → ImGui/线框） | 场景内实时看碰撞形状；交互模式演示 |
+| **M-P3** ✅ **2026-11-09 完成（tag `phys-p3`）** | debug 渲染接 viewer（Jolt DebugRendering → ImGui/线框） | `viewer --physics-debug` 场景内实时看碰撞形状（地板蓝 / 盒绿 / 球橙 / 胶囊品红，depth test 开 / write 关），双后端 `deviceErrors=0`；工具侧 `debug`/`check-debug` 线流度量 TSV。实测见 §M-P3 固化口径与 `PHYS-TOOLS-GUIDE.md` §10；⚠️ §2.4 入口名坑的共享 builder 变体（`SHADER-CONVENTIONS.md` §2.4 已扩充） |
 | **M-P4** | 角色胶囊（CharacterMovement 式：扫掠 + 地面检测 + 斜坡） | 胶囊走斜坡/台阶轨迹 dump；与动作系统（M-A 轨道）动画衔接预留接口 |
 | **M-P5** | 场景集成：E1/E3 场景物体挂碰撞体 + 序列化 | E1 场景（50 物体）物理正确；Inspector 可编辑碰撞参数 |
 
@@ -70,6 +70,18 @@
 - **复验防假绿**：`check-stack` 必须从 25 列数据**独立重算**末态层高、层距、尾段极差、活跃体、漂移，再与 `# case` 摘要行交叉核对；只验摘要不算验收。
 - **回归闸**：M-P0 `drop.tsv`（MD5 `075ddfe…a1ed`）与 M-P1 `layers.tsv`（MD5 `36c4b169…111c`）逐字节不变，任何新增世界不得扰动这两条基线。
 - **交代**：工具版（`example/phys-p2/` + `cases.json` `phys-p2` 卡 + `PHYS-TOOLS-GUIDE.md` §9），不进 `kStage` / 渲染总闸。
+
+### M-P3 固化口径（2026-11-09 验收后写回）
+
+- **场景**：静态地板薄盒（半高 0.5，顶 y=0，半 extent 5）+ 盒(0.5³)/球(r0.5)/胶囊(r0.5,h0.3) 三落体，x = -2/0/+2 错开、初始 y=4；restitution 0.4 / friction 0.6 / damping 0；固定 `1/60` + `collisionSteps=1` + `JobSystemSingleThreaded`，确定性契约不变。稳态锚：地板线框 y∈[-1,0]、胶囊顶 1.6（半高 0.8）。
+- **分色（权威）**：地板蓝 `(60,120,255)`、盒绿 `(80,220,80)`、球橙 `(255,160,40)`、胶囊品红 `(230,80,230)`——`World.cpp extractLines` 与 `phys-tools debug` TSV `# colors` 行必须同源，改一处必须同步另一处。
+- **DebugRenderer 接线**：实现方收顶点、引擎只「喊」图元；`DrawGeometry` 取 `mLODs.front()`（最细 LOD）；`RefTargetVirtual::AddRef/Release` **非 const**；`GetType()` 是 broad `EShapeType`，分形用 `GetSubType()`。
+- **渲染层级**：`DebugScene`/`DebugLines` POD 全在 `nl/physics`（零 Jolt 类型，PIMPL）；线框管线（LINE_LIST / depth test 开 / write 关 / 固定容量动态 VB）在 `renderer/`，`ensurePipelines` 无条件 ensure、关闭时零开销（不 bump `kStage`，M-P0~P2 渲染基线不进渲染总闸口径不变）。
+- **⚠️ §2.4 共享 builder 变体**：`DebugLines::ensure` 硬编码 `"vsMain"/"psMain"` → Vulkan `vkCreateGraphicsPipelines` 每帧 `VK_ERROR_UNKNOWN`（VVL 对管线零报错）。共享 builder 一律传 `"main"`；详 `SHADER-CONVENTIONS.md` §2.4。
+- **复验防假绿**：`check-debug` 只信数据列——拓扑锚（顶点数/分色桶逐帧恒定，桶和=顶点数）、物理锚（包围盒列独立复算：初始顶 4.8 / 静止顶 1.6 / 地板底 -1 / 地板 ±5）、静止锚（末 30 帧 apex 极差 < 1e-4）。
+- **回归闸**：`check-phys-regression.py` 扩到四基线（M-P0 drop / M-P1 layers / M-P2 stack / M-P3 debug）逐字节 + MD5。
+- **双后端互比**：线框截图 599px / maxDelta 242，薄线覆盖噪声按 `scene`/`scale` 先例如实记 FAIL 档，各自对本后端基线 bytes。
+- **交代**：工具版 + 渲染证据双轨（`example/phys-p3/`：debug.tsv + 双后端 viewer 截图 + 2 张证据图 + `cases.json` `phys-p3` 卡 + `PHYS-TOOLS-GUIDE.md` §10），不进 `kStage` / 渲染总闸。
 
 ## 验收纪律
 

@@ -71,6 +71,15 @@ struct FrameParams {
     // M6.2：Hi-Z 遮蔽剔除总开关（hiz 模式消费；false = 只做视锥/误差遍历，退化
     // 可验证——S6-PLAN 底线「可整体开关的独立层」，UE r.Nanite.Culling.HZB 同定位）。
     bool  hizEnable   = true;
+
+    // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
+    // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
+    //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
+    // LINE_LIST 语义下每 2 个顶点为一段线。仅当 debugLines==true 且数据非空才绘制。
+    // 渲染器只读这块内存、不拥有它；调用方负责其生命周期（每帧重填）。
+    bool         debugLines           = false;
+    const float* debugLineData        = nullptr;
+    std::uint32_t debugLineVertexCount = 0;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。

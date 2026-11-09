@@ -127,3 +127,32 @@ M-P2 堆叠稳定 / M-P3 debug 渲染接 viewer / M-P4 角色胶囊；**M-P5 仍
 
 ### 下一步
 M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）/ M-P4 角色胶囊；**M-P5 仍 gate 在 P8 E3 之后**。
+
+
+## 10. M-P3：碰撞形状调试线框接 viewer（2026-11-09，tag `phys-p3`）
+
+### 交付物
+- `example/phys-p3/run.bat`：重跑 selftest / debug / check-debug / M-P0+M-P1+M-P2 三基线逐字节回归 / **双后端 viewer 截图（`deviceErrors=0` 硬闸）** / usage / 负向，再重生成两张证据图，全绿才退出 0。
+- `example/phys-p3/debug.tsv`：241 帧 × 13 列真实 Jolt DebugRenderer 线流汇总（`frame t vertices min/max xyz box_v sphere_v capsule_v floor_v`）；`# colors` 行记录四分色参考值，与 `World.cpp extractLines` 同源。
+- `example/phys-p3/{viewer-dx12,viewer-vulkan}.png`：viewer `--physics-debug` 真实 GPU 截图（DX12/Vulkan 各一，240 帧，`deviceErrors=0`）。绿盒 / 橙经纬球 / 品红胶囊 / 蓝地板网格，被 Suzanne 实体近面正确深度遮挡（depth test 开 / write 关）。
+- `example/phys-p3/{wireframe,acceptance}.png`：`tools/make-phys-p3-evidence.py` 从真实 TSV 与真实日志渲染（落下-回弹-静止曲线 + 四分色桶面板 + 末 30 帧冻结放大 + 实测面板；验收图为完整日志）。
+- `tools/check-phys-regression.py` 扩到四基线：M-P0 drop / M-P1 layers / M-P2 stack / M-P3 debug 全部逐字节 + MD5。
+
+### 内核与渲染接线（写回 canonical）
+- **`nl::physics::DebugScene`**（`World.hpp` 零 Jolt 类型 POD，PIMPL 挡头）：`build(scenario, seed, err)` 建世界（地板薄盒 + 盒/球/胶囊三落体，x 错开，restitution 0.4 / friction 0.6）；每帧 `step(1/60)` + `extractLines()`。`DebugLines{data, vertexCount}` 指向内部缓冲，**单帧消费模型**（下次 extractLines 即失效）。
+- **Jolt DebugRenderer 子类**（`World.cpp` 匿名命名空间）：实现 `DrawLine / DrawTriangle / DrawText3D / CreateTriangleBatch×2 / DrawGeometry`；batch 的 `AddRef/Release` **非 const**（`RefTargetVirtual` 纯虚签名），引用归零 `delete this`。`DrawGeometry` 取 `mLODs.front()`（最细 LOD；取 `back()` 球/胶囊呈星状）。`Shape::GetType()` 是 broad `EShapeType`（三者皆 `Convex`），分形要看 `GetSubType()`。
+- **renderer 侧 `DebugLines`**（`scene.hpp/.cpp`）：固定容量动态 VB（262144 顶点）、LINE_LIST、depth test 开 / depth write 关、volatile CB b0。`ensurePipelines` **无条件** ensure（默认不画、关闭时零开销）；`invalidate` 随主管线重建。
+- **⚠️ §2.4 实测扩充**：共享管线 builder **硬编码入口名**也会中招——`DebugLines::ensure` 曾写死 `"vsMain"/"psMain"`，DX12 忽略入口名蒙混过关，Vulkan `vkCreateGraphicsPipelines` 每帧 `VK_ERROR_UNKNOWN`（验证层对管线零报错，极难定位）。修复：一律传 `"main"`（compute 同款先例）。详 `SHADER-CONVENTIONS.md` §2.4。
+- **双后端互比**：分色线框截图 599px 差 / maxDelta 242——薄线光栅化覆盖噪声，按 `scene`/`scale` 先例口径如实记 **FAIL 档**，各自对本后端基线 bytes；三次尝试消不掉，不再折腾。
+
+### 工具 CLI
+| 命令 | 行为 | 退出码 |
+|---|---|---|
+| `phys-tools debug [--out <tsv>] [--frames N]` | 与 viewer 共用 DebugScene，逐帧汇总线流几何度量成 TSV | 0 / 1 / 2 |
+| `phys-tools check-debug <tsv>` | 从数据列独立复验：拓扑恒定、四桶划分、物理锚（初始顶 4.8 / 静止顶 1.6 / 地板底 -1 / 地板 ±5）、末 30 帧冻结 | 0 / 1 / 2 |
+
+### 复验防假绿
+`check-debug` 只信数据列：结构锚（顶点数与分色桶逐帧恒定、四桶之和=顶点数）+ 物理锚（从包围盒列独立复算，不信头注释）+ 静止锚（末 30 帧 apex 极差 < 1e-4，睡眠岛逐位冻结）。摘要行（`# jolt=` 头）只作 provenance。
+
+### 下一步
+M-P4 角色胶囊（Jolt `CharacterVirtual`）；**M-P5 场景集成仍 gate 在 P8 E3 之后**。

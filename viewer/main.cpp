@@ -7,6 +7,7 @@
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/renderer.hpp"
+#include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
 
 #include <algorithm>
 #include <chrono>
@@ -112,6 +113,9 @@ struct Options {
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
     std::string consolePrefill;                 // 输入行预填（Tab 补全演示）
+    bool physicsDebug = false;                   // M-P3：物理调试叠加层（Jolt 碰撞形状线框）
+    int  physicsScenario = 0;                    // M-P3：--physics-scenario N
+    std::uint32_t physicsSeed = 0;               // M-P3：--physics-seed N（当前仅记录）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -209,6 +213,12 @@ Options parseArgs(int argc, char** argv) {
             }
         }         else if (a == "--wireframe") {
             o.wireframe = true;
+        } else if (a == "--physics-debug") {       // M-P3：物理调试叠加层（Jolt 碰撞形状线框）
+            o.physicsDebug = true;
+        } else if (a == "--physics-scenario" && i + 1 < argc) {   // M-P3：场景选择（0 = 落体盒/球/胶囊）
+            o.physicsScenario = std::atoi(argv[++i]);
+        } else if (a == "--physics-seed" && i + 1 < argc) {       // M-P3：随机种子（当前仅记录）
+            o.physicsSeed = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (a == "--console" && i + 1 < argc) {   // M-C1：初始开关（on|off）
             const std::string v = argv[++i];
             if (v == "on" || v == "1") o.consoleOpen = true;
@@ -436,6 +446,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         editorActive = true;
         nl::core::log::info("editor: ", o.editorGraph, " (", editor->graphPath(), ")");
     }
+    // M-P3：物理调试场景（碰撞形状线框）。PIMPL 把 Jolt 头挡在 World.cpp 内，viewer
+    // 只持值对象。仅 --physics-debug 时 build；build 失败直接退出 1（绝不静默回退到
+    // 无叠加层——否则「以为在看物理」是假证据）。
+    nl::physics::DebugScene physicsScene;
+    if (o.physicsDebug) {
+        std::string perr;
+        if (!physicsScene.build(o.physicsScenario, o.physicsSeed, &perr)) {
+            nl::core::log::error("physics debug scene build failed: ", perr);
+            return 1;
+        }
+        nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
+                           " bodies (floor + dynamic box/sphere/capsule)");
+    }
+
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
     const bool hudOn = o.hudEnabled || editorActive;
 
@@ -726,6 +750,29 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (skinMode) {
             skinTime = o.animTimeSet ? o.animTime : skinTime + dtMs / 1000.0;
             fp.animTime = skinTime;
+        }
+
+        // M-P3：物理调试叠加层（Jolt 碰撞形状线框）。build 一次（renderer 创建后），
+        // 每帧 step + extractLines 喂给渲染器 LINE_LIST 叠加层。截图模式 240 帧足够
+        // 落体落到地板稳态；交互模式逐帧步进即实时动画。extractLines 返回的 data
+        // 指向 DebugScene 内部缓冲，本帧 renderFrame 后即失效（单帧消费模型）。
+        if (o.physicsDebug) {
+            physicsScene.step(1.0 / 60.0);
+            const nl::physics::DebugLines dl = physicsScene.extractLines();
+            fp.debugLines = true;
+            fp.debugLineData = dl.data;
+            fp.debugLineVertexCount = dl.vertexCount;
+            // 截图最终帧打一行稳态机械证据：线顶点数 + 线框 Y 跨度（落体应已落到 ~0.5）。
+            if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
+                float minY = 1e9f, maxY = -1e9f;
+                for (std::uint32_t k = 0; k + 1 < dl.vertexCount; ++k) {
+                    const float y = dl.data[k * 6 + 1];
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+                nl::core::log::info("phys-debug settled: vertices=", dl.vertexCount,
+                                    " lineY[", minY, ", ", maxY, "]");
+            }
         }
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
@@ -1109,6 +1156,11 @@ void printUsage() {
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
               << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"
+              << "  viewer.exe --physics-debug         M-P3 overlay: Jolt collision-shape wireframe\n"
+              << "                                     (floor + falling box/sphere/capsule);\n"
+              << "                                     forces --mode normal for depth reference\n"
+              << "  viewer.exe --physics-scenario N    M-P3 scene select (default 0)\n"
+              << "  viewer.exe --physics-seed N        M-P3 seed (recorded; no RNG yet)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
     for (int i = 0; i < nl::core::modeCount(); ++i) {
         if (i) std::cout << ", ";
@@ -1155,5 +1207,8 @@ int main(int argc, char** argv) {
     if (o.mode == nl::core::ViewMode::Skin && !o.distSet) {
         o.distance = 2.6f;
     }
+    // M-P3：物理调试叠加层（验证脚手架 = 静态盒线框）。强制 normal 背景场景，
+    // 由 Suzanne 提供深度参照以验证叠加层的深度遮挡纪律。
+    if (o.physicsDebug) o.mode = nl::core::ViewMode::Normal;
     return runMode(o.mode, o);
 }

@@ -195,4 +195,34 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// ---- M-P3：物理调试场景（碰撞形状线框叠加） ----
+// 头文件零 Jolt 类型：线框以 POD 视图（指针 + 顶点数）暴露，Jolt 头只在 World.cpp 内。
+// 用法：build() 建世界并预步进到稳态；每帧 step() 推进、extractLines() 取线流；
+// extractLines 返回的 data 指向 DebugScene 内部缓冲，仅在下次 extractLines 前有效
+// （同一帧内喂给 FrameParams 并 renderFrame 后即失效，符合 viewer 单帧消费模型）。
+struct DebugLines {
+    const float* data = nullptr;          // px,py,pz,r,g,b 交替，长度 = vertexCount*6
+    std::uint32_t vertexCount = 0;        // LINE_LIST：每 2 顶点为一段线
+};
+
+class DebugScene {
+public:
+    DebugScene();
+    ~DebugScene();
+    DebugScene(const DebugScene&) = delete;
+    DebugScene& operator=(const DebugScene&) = delete;
+
+    // scenario: 0 = 静态地板 + 落体盒/球/胶囊（落地稳态）。
+    // gravity 默认 9.8；seed 当前未驱动 RNG（确定性来自固定步 + 单线程 JobSystem）。
+    bool build(int scenario, std::uint32_t seed, std::string* err);
+    void step(double dt);                 // 推进一个固定步（dt 建议 1/60）
+    DebugLines extractLines();            // 提取所有刚体碰撞形状的线框（Jolt DebugRenderer 子类）
+    const char* lastError() const;
+    std::uint32_t bodyCount() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 } // namespace nl::physics

@@ -45,8 +45,8 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// M1.3：model 双入口（vs/vscluster/ps/pscluster）+ M4.0 再加 vscull/pscull 双入口，
-// M4.1 加 cull.cs compute 入口，加 hud 单入口，各 × spv/dxil = 18。
+// 产物总数 = model(12) + cull.cs(2) + dag.cs(2) + hiz(12) + hud(2) + debug_line(2) = 32，
+// 每个 × spv/dxil。M-P3 新增 debug_line 单入口（vsMain/psMain）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
     {"model.vs", true}, {"model.vs", false},
@@ -65,6 +65,9 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
+    // M-P3：debug_line 单入口（vsMain/psMain），各 × spv/dxil = 2
+    {"debug_line.vs", true}, {"debug_line.vs", false},
+    {"debug_line.ps", true}, {"debug_line.ps", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

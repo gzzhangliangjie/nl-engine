@@ -14,10 +14,13 @@
 //   check-layers <tsv>     re-verify the layer matrix dump
 //   stack [options]        M-P2: stacking stability TSV (baseline/no_sleep/no_friction)
 //   check-stack <tsv>      re-verify the stacking dump
+//   debug [options]        M-P3: collision-shape wireframe TSV (real Jolt
+//                          DebugRenderer line stream: floor + box/sphere/capsule)
+//   check-debug <tsv>      re-verify the wireframe dump (topology + settle anchors)
 //
-// Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png and
-// example/phys-p2/*.png are generated from the REAL TSV by the matching
-// make-phys*-evidence.py. No hand-drawn diagrams.
+// Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
+// example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
+// TSV by the matching make-phys*-evidence.py. No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
 
@@ -57,6 +60,8 @@ void usage() {
     std::printf("  phys-tools check-layers <tsv>\n");
     std::printf("  phys-tools stack [--out <tsv>] [--frames N] [--boxes N] [--gap G]\n");
     std::printf("  phys-tools check-stack <tsv>\n");
+    std::printf("  phys-tools debug [--out <tsv>] [--frames N]\n");
+    std::printf("  phys-tools check-debug <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -682,6 +687,232 @@ int runCheckStack(const char* path) {
     return 0;
 }
 
+
+// ---- M-P3: collision-shape debug wireframe (real Jolt DebugRenderer line stream) ----
+// 与 viewer --physics-debug 共用 nl::physics::DebugScene：每帧 step + extractLines，
+// 把线流按帧汇总成 TSV（不落 25k 顶点原始流，只落可独立复算的每帧几何度量）。
+constexpr double kDebugDt   = 1.0 / 60.0;
+constexpr int    kDebugTail = 30;   // 静止判定窗口（帧）
+
+struct DebugFrameRow {
+    int           frame    = 0;
+    double        t        = 0.0;
+    std::uint32_t vertices = 0;
+    double minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
+    std::uint32_t boxV = 0, sphereV = 0, capsuleV = 0, floorV = 0;
+};
+
+// 分色参考值必须与 core/src/physics/World.cpp extractLines 的分色一致：
+// 盒绿 / 球橙 / 胶囊品红 / 地板蓝。线流颜色是 0..1 float，按最近邻归类（穷举，
+// 保证四桶之和恒等于顶点总数）。
+struct RefColor { float r, g, b; };
+const RefColor kRefColors[4] = {
+    { 80.0f / 255.0f, 220.0f / 255.0f,  80.0f / 255.0f},  // box
+    {255.0f / 255.0f, 160.0f / 255.0f,  40.0f / 255.0f},  // sphere
+    {230.0f / 255.0f,  80.0f / 255.0f, 230.0f / 255.0f},  // capsule
+    { 60.0f / 255.0f, 120.0f / 255.0f, 255.0f / 255.0f},  // floor
+};
+
+int classifyVertex(const float* v) {  // v -> px,py,pz,r,g,b
+    const float r = v[3], g = v[4], b = v[5];
+    int   best  = 0;
+    float bestD = 1e9f;
+    for (int i = 0; i < 4; ++i) {
+        const float dr = r - kRefColors[i].r;
+        const float dg = g - kRefColors[i].g;
+        const float db = b - kRefColors[i].b;
+        const float d  = dr * dr + dg * dg + db * db;
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
+DebugFrameRow measureFrame(const nl::physics::DebugLines& dl, int frame, double t) {
+    DebugFrameRow r;
+    r.frame = frame;
+    r.t     = t;
+    r.vertices = dl.vertexCount;
+    double mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9, mnz = 1e9, mxz = -1e9;
+    std::uint32_t buckets[4] = {0, 0, 0, 0};
+    for (std::uint32_t i = 0; i < dl.vertexCount; ++i) {
+        const float* v = dl.data + static_cast<std::size_t>(i) * 6u;
+        const double x = v[0], y = v[1], z = v[2];
+        mnx = std::min(mnx, x); mxx = std::max(mxx, x);
+        mny = std::min(mny, y); mxy = std::max(mxy, y);
+        mnz = std::min(mnz, z); mxz = std::max(mxz, z);
+        ++buckets[classifyVertex(v)];
+    }
+    r.minX = mnx; r.maxX = mxx; r.minY = mny; r.maxY = mxy; r.minZ = mnz; r.maxZ = mxz;
+    r.boxV = buckets[0]; r.sphereV = buckets[1]; r.capsuleV = buckets[2]; r.floorV = buckets[3];
+    return r;
+}
+
+std::string debugTSV(int frames, std::uint32_t bodies,
+                     const std::vector<DebugFrameRow>& rows) {
+    std::ostringstream os;
+    os << "# nl-physics M-P3 collision-shape debug wireframe (real Jolt "
+       << nl::physics::kJoltVersion << " DebugRenderer line stream)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << kDebugDt << " frames=" << frames
+       << " scenario=0 bodies=" << bodies << "\n";
+    os << "# colors: box=80,220,80 sphere=255,160,40 capsule=230,80,230 floor=60,120,255\n";
+    os << "frame\tt\tvertices\tmin_y\tmax_y\tmin_x\tmax_x\tmin_z\tmax_z\t"
+          "box_v\tsphere_v\tcapsule_v\tfloor_v\n";
+    for (const DebugFrameRow& r : rows) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "%d\t%.6f\t%u\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%u\t%u\t%u\t%u\n",
+            r.frame, r.t, r.vertices,
+            r.minY, r.maxY, r.minX, r.maxX, r.minZ, r.maxZ,
+            r.boxV, r.sphereV, r.capsuleV, r.floorV);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runDebug(int argc, char** argv) {
+    std::string out;
+    int frames = 240;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); frames = n; }
+        else return fail("unknown option " + key);
+    }
+
+    nl::physics::DebugScene scene;
+    std::string err;
+    if (!scene.build(0, 0, &err)) {
+        std::printf("debug scene build failed: %s\n", err.c_str());
+        return 1;
+    }
+    std::vector<DebugFrameRow> rows;
+    rows.reserve(static_cast<std::size_t>(frames) + 1u);
+    double t = 0.0;
+    for (int f = 0; f <= frames; ++f) {
+        if (f > 0) { scene.step(kDebugDt); t += kDebugDt; }
+        const nl::physics::DebugLines dl = scene.extractLines();
+        if (dl.data == nullptr || dl.vertexCount == 0) {
+            std::printf("debug wireframe empty at frame %d\n", f);
+            return 1;
+        }
+        rows.push_back(measureFrame(dl, f, t));
+    }
+    const std::string tsv = debugTSV(frames, scene.bodyCount(), rows);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s frames=%d bodies=%u vertices=%u\n",
+                out.c_str(), frames, scene.bodyCount(), rows.back().vertices);
+    return 0;
+}
+
+int runCheckDebug(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    struct Row {
+        std::uint32_t vertices = 0, boxV = 0, sphereV = 0, capsuleV = 0, floorV = 0;
+        double minY = 0, maxY = 0, minX = 0, maxX = 0;
+    };
+    std::vector<Row> rows;
+    int  frames = -1, bodies = -1, dataRows = 0;
+    bool headerSeen = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("# jolt=", 0) == 0) {
+            std::istringstream is(line);
+            std::string tok;
+            while (is >> tok) {
+                const auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+                if      (k == "frames") frames = std::atoi(v.c_str());
+                else if (k == "bodies") bodies = std::atoi(v.c_str());
+            }
+            continue;
+        }
+        if (line.rfind("frame\t", 0) == 0) { headerSeen = true; continue; }
+        if (line.empty() || line[0] == '#') continue;
+        Row r;
+        int frame = 0; double t = 0, minZ = 0, maxZ = 0;
+        if (std::sscanf(line.c_str(),
+                        "%d %lf %u %lf %lf %lf %lf %lf %lf %u %u %u %u",
+                        &frame, &t, &r.vertices,
+                        &r.minY, &r.maxY, &r.minX, &r.maxX, &minZ, &maxZ,
+                        &r.boxV, &r.sphereV, &r.capsuleV, &r.floorV) != 13) {
+            std::printf("bad TSV row at data row %d\n", dataRows);
+            return 1;
+        }
+        rows.push_back(r);
+        ++dataRows;
+    }
+
+    expectTrue(headerSeen, "M-P3 dump has TSV column header");
+    expectTrue(frames > 0 && dataRows == frames + 1, "M-P3 dump row count = frames+1");
+    expectTrue(bodies == 4, "M-P3 scene has 4 bodies (floor + box/sphere/capsule)");
+    if (g_failures || rows.empty()) {
+        std::printf("phys-p3 check-debug: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+
+    // 结构锚（从数据列独立复算，不信头注释）：线框拓扑与刚体位姿无关，
+    // 顶点数与分色桶必须逐帧恒定。
+    bool constant = true;
+    for (const Row& r : rows) {
+        constant = constant && r.vertices == rows[0].vertices &&
+                   r.boxV == rows[0].boxV && r.sphereV == rows[0].sphereV &&
+                   r.capsuleV == rows[0].capsuleV && r.floorV == rows[0].floorV;
+    }
+    expectTrue(constant, "M-P3 wireframe topology constant across frames");
+    expectTrue(rows[0].vertices % 2 == 0, "M-P3 LINE_LIST vertex pairs");
+    bool sumOk = true;
+    for (const Row& r : rows)
+        sumOk = sumOk && (r.boxV + r.sphereV + r.capsuleV + r.floorV) == r.vertices;
+    expectTrue(sumOk, "M-P3 color buckets partition all vertices");
+    expectTrue(rows[0].boxV > 0 && rows[0].sphereV > 0 &&
+               rows[0].capsuleV > 0 && rows[0].floorV > 0,
+               "M-P3 all four shape classes present");
+
+    // 物理锚：场景几何已知——地板半 extent 5（x 覆盖 ±5）、地板底 -1；
+    // 胶囊(0.5,0.3) 半高 0.8，从 y=4 落下 → 初始顶 4.8、静止顶 1.6。
+    const Row& first = rows.front();
+    const Row& last  = rows.back();
+    expectTrue(std::abs(first.maxY - 4.8) < 0.05,
+               "M-P3 initial top = capsule apex 4.8");
+    expectTrue(std::abs(last.minY + 1.0) < 1e-3, "M-P3 floor bottom reaches -1");
+    expectTrue(std::abs(last.maxY - 1.6) < 0.05, "M-P3 settled capsule apex 1.6");
+    expectTrue(last.maxY < first.maxY - 2.0, "M-P3 bodies fell from drop height");
+    expectTrue(std::abs(last.minX + 5.0) < 1e-3 && std::abs(last.maxX - 5.0) < 1e-3,
+               "M-P3 floor spans x = +-5");
+
+    // 静止锚：末 30 帧 max_y 冻结（默认睡眠开启，岛入睡后位姿逐位不动）。
+    const int from = std::max(0, static_cast<int>(rows.size()) - kDebugTail);
+    double tailSpread = 0.0;
+    for (std::size_t i = static_cast<std::size_t>(from); i < rows.size(); ++i)
+        tailSpread = std::max(tailSpread, std::abs(rows[i].maxY - last.maxY));
+    expectTrue(tailSpread < 1e-4, "M-P3 tail 30 frames frozen (sleeping island)");
+
+    if (g_failures) {
+        std::printf("phys-p3 check-debug: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-p3 check-debug: PASS (%s, %d frames, %u vertices/frame)\n",
+                path, frames, last.vertices);
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -855,10 +1086,58 @@ int runSelftest() {
     }
     expectTrue(stackIdentical, "M-P2 determinism: same tower twice bit-identical");
 
+
+    // --- M-P3: collision-shape debug wireframe stream ---
+    {
+        nl::physics::DebugScene ds;
+        std::string derr;
+        expectTrue(ds.build(0, 0, &derr), "M-P3 debug scene builds");
+        expectTrue(ds.bodyCount() == 4, "M-P3 debug scene has 4 bodies");
+        const nl::physics::DebugLines l0 = ds.extractLines();
+        expectTrue(l0.data != nullptr && l0.vertexCount > 0,
+                   "M-P3 wireframe stream non-empty");
+        expectTrue(l0.vertexCount % 2 == 0, "M-P3 LINE_LIST vertex pairs");
+        const DebugFrameRow m0 = measureFrame(l0, 0, 0.0);
+        expectTrue(m0.boxV > 0 && m0.sphereV > 0 && m0.capsuleV > 0 && m0.floorV > 0,
+                   "M-P3 all four shape classes drawn");
+        expectTrue((m0.boxV + m0.sphereV + m0.capsuleV + m0.floorV) == m0.vertices,
+                   "M-P3 color buckets partition vertices");
+        expectTrue(std::abs(m0.maxY - 4.8) < 0.05, "M-P3 initial top = capsule apex 4.8");
+
+        for (int i = 0; i < 30; ++i) ds.step(kDebugDt);
+        const nl::physics::DebugLines l30 = ds.extractLines();
+        const DebugFrameRow m30 = measureFrame(l30, 30, 30.0 * kDebugDt);
+        expectTrue(m30.vertices == m0.vertices && m30.boxV == m0.boxV &&
+                   m30.sphereV == m0.sphereV && m30.capsuleV == m0.capsuleV &&
+                   m30.floorV == m0.floorV,
+                   "M-P3 wireframe topology independent of motion");
+        // 30 步 = 0.5s，自由落体距离 0.5*g*t^2 ≈ 1.22m（触地发生在 ~0.81s）。
+        expectTrue(m30.maxY < m0.maxY - 1.0, "M-P3 bodies fell after 30 steps");
+
+        // 确定性对比必须在 ds 继续步进之前完成：l30 的 data 指向 ds 内部缓冲，
+        // 再 extractLines 会复用同一缓冲（单帧消费模型）。
+        nl::physics::DebugScene ds2;
+        expectTrue(ds2.build(0, 0, &derr), "M-P3 second debug scene builds");
+        for (int i = 0; i < 30; ++i) ds2.step(kDebugDt);
+        const nl::physics::DebugLines l2 = ds2.extractLines();
+        bool dbgIdentical = l2.vertexCount == l30.vertexCount;
+        for (std::uint32_t k = 0; dbgIdentical && k < l30.vertexCount * 6u; ++k)
+            dbgIdentical = l30.data[k] == l2.data[k];
+        expectTrue(dbgIdentical, "M-P3 determinism: two scenes bit-identical");
+
+        // 稳态：步进到 240 帧（默认睡眠开启），线框几何冻结在已知位姿。
+        for (int i = 30; i < 240; ++i) ds.step(kDebugDt);
+        const nl::physics::DebugLines lr = ds.extractLines();
+        const DebugFrameRow mr = measureFrame(lr, 240, 240.0 * kDebugDt);
+        expectTrue(std::abs(mr.minY + 1.0) < 1e-3, "M-P3 floor bottom at -1");
+        expectTrue(std::abs(mr.maxY - 1.6) < 0.05, "M-P3 settled capsule apex 1.6");
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)\n");
     std::printf("phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)\n");
     std::printf("phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)\n");
     std::printf("phys-p0 selftest: PASS (Jolt %s, single-threaded, %d frames)\n",
@@ -1008,6 +1287,11 @@ int main(int argc, char** argv) {
     if (cmd == "check-stack") {
         if (argc != 3) { usage(); return 2; }
         return runCheckStack(argv[2]);
+    }
+    if (cmd == "debug") return runDebug(argc, argv);
+    if (cmd == "check-debug") {
+        if (argc != 3) { usage(); return 2; }
+        return runCheckDebug(argv[2]);
     }
     usage();
     return 2;

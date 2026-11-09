@@ -30,6 +30,10 @@
 #include <Jolt/Physics/Body/BodyType.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Renderer/DebugRenderer.h>
+
+#include <atomic>
 
 #include <cmath>
 #include <cstdarg>
@@ -553,6 +557,225 @@ StackResult World::simulateStack(const StackConfig& cfg) {
     }
     return r;
 }
+
+// ---- M-P3：物理调试场景（碰撞形状线框） ----
+// Jolt 头只进本 cpp。线框经 POD 视图（const float* + 顶点数）暴露，World.hpp 零 Jolt 类型。
+// 套路与 Carrot / Jolt 双实证一致：物理引擎只「喊」图元（DrawBox/DrawSphere/... ->
+// DrawGeometry），本类收顶点，不自己画几何。
+namespace {
+using namespace JPH;   // 本 anon namespace 内的 JoltLineRenderer 用到 RMat44Arg/AABox/ECullMode 等 JPH 类型
+
+// Jolt DebugRenderer 子类：把所有图元收进一个浮点线顶点流（LINE_LIST 语义）。
+class JoltLineRenderer final : public JPH::DebugRenderer {
+public:
+    JoltLineRenderer() { Initialize(); }
+
+    // 每帧 extractLines 前 clear 后重填。
+    std::vector<float> lines;
+
+    virtual void DrawLine(JPH::RVec3Arg inFrom, JPH::RVec3Arg inTo, JPH::ColorArg inColor) override {
+        push(inFrom, inColor);
+        push(inTo, inColor);
+    }
+    // 只取线框，忽略实心三角与 3D 文本。
+    virtual void DrawTriangle(JPH::RVec3Arg, JPH::RVec3Arg, JPH::RVec3Arg,
+                             JPH::ColorArg, ECastShadow) override {}
+    virtual void DrawText3D(JPH::RVec3Arg, const std::string_view&, JPH::ColorArg, float) override {}
+
+    // 三角形批：存顶点 + 索引，DrawGeometry 据此走边。
+    struct BatchData final : public JPH::RefTargetVirtual {
+        std::vector<JPH::DebugRenderer::Vertex> verts;
+        std::vector<std::uint32_t> indices;
+        mutable std::atomic<int> refCount{0};
+        virtual void AddRef() override { refCount.fetch_add(1, std::memory_order_relaxed); }
+        virtual void Release() override {
+            if (refCount.fetch_sub(1, std::memory_order_acq_rel) == 1) delete this;
+        }
+    };
+
+    virtual Batch CreateTriangleBatch(const Triangle* inTriangles, int inTriangleCount) override {
+        auto* b = new BatchData();
+        b->verts.reserve(static_cast<std::size_t>(inTriangleCount) * 3u);
+        b->indices.reserve(static_cast<std::size_t>(inTriangleCount) * 3u);
+        for (int i = 0; i < inTriangleCount; ++i) {
+            const Triangle& t = inTriangles[i];
+            const std::uint32_t base = static_cast<std::uint32_t>(b->verts.size());
+            b->verts.push_back(t.mV[0]); b->verts.push_back(t.mV[1]); b->verts.push_back(t.mV[2]);
+            b->indices.push_back(base); b->indices.push_back(base + 1u); b->indices.push_back(base + 2u);
+        }
+        return Batch(b);
+    }
+    virtual Batch CreateTriangleBatch(const Vertex* inVertices, int inVertexCount,
+                                     const std::uint32_t* inIndices, int inIndexCount) override {
+        auto* b = new BatchData();
+        b->verts.assign(inVertices, inVertices + inVertexCount);
+        b->indices.assign(inIndices, inIndices + inIndexCount);
+        return Batch(b);
+    }
+    virtual void DrawGeometry(RMat44Arg inModelMatrix, const AABox&, float,
+                              JPH::ColorArg inModelColor, const GeometryRef& inGeometry,
+                              ECullMode, ECastShadow, EDrawMode) override {
+        if (!inGeometry) return;
+        // 取最细 LOD：线框叠加层要清晰可读，细分多几段（盒/胶囊各档边结构一致，
+        // 球/胶囊细分越多越像「球/胶囊」而非星状）。代价是顶点略多，debug 场景可忽略。
+        const LOD& lod = inGeometry->mLODs.front();
+        BatchData* batch = static_cast<BatchData*>(lod.mTriangleBatch.GetPtr());
+        if (!batch) return;
+        const std::size_t n = batch->indices.size();
+        for (std::size_t i = 0; i + 2u < n; i += 3u) {
+            const Vertex& a = batch->verts[batch->indices[i]];
+            const Vertex& b = batch->verts[batch->indices[i + 1u]];
+            const Vertex& c = batch->verts[batch->indices[i + 2u]];
+            const JPH::RVec3 pa = inModelMatrix * JPH::Vec3(a.mPosition.x, a.mPosition.y, a.mPosition.z);
+            const JPH::RVec3 pb = inModelMatrix * JPH::Vec3(b.mPosition.x, b.mPosition.y, b.mPosition.z);
+            const JPH::RVec3 pc = inModelMatrix * JPH::Vec3(c.mPosition.x, c.mPosition.y, c.mPosition.z);
+            DrawLine(pa, pb, inModelColor);   // virtual -> 收集顶点
+            DrawLine(pb, pc, inModelColor);
+            DrawLine(pc, pa, inModelColor);
+        }
+    }
+
+private:
+    static void push(std::vector<float>& out, JPH::RVec3Arg p, JPH::ColorArg c) {
+        out.push_back(static_cast<float>(p.GetX()));
+        out.push_back(static_cast<float>(p.GetY()));
+        out.push_back(static_cast<float>(p.GetZ()));
+        out.push_back(c.r / 255.0f);
+        out.push_back(c.g / 255.0f);
+        out.push_back(c.b / 255.0f);
+    }
+    void push(JPH::RVec3Arg p, JPH::ColorArg c) { push(lines, p, c); }
+};
+
+} // namespace
+
+struct DebugScene::Impl {
+    std::uint32_t totalBodies = 0;
+    std::string error;
+    int scenario = 0;
+    bool valid = false;
+
+    // Jolt 生命周期对象（声明顺序 = 构造顺序；析构逆序，保证 filters 与 matrix
+    // 长于 physicsSystem，与 simulateDrop 同纪律）。
+    JPH::TempAllocatorImpl tempAllocator{10 * 1024 * 1024};
+    JPH::JobSystemSingleThreaded jobSystem{JPH::cMaxPhysicsJobs};
+    LayerMatrix matrix;
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter;
+    ObjectLayerPairFilterImpl objectLayerPairFilter;
+    JPH::PhysicsSystem physicsSystem;
+    JPH::BodyInterface* bodyInterface = nullptr;
+    std::vector<JPH::BodyID> dynamicIds;
+    JPH::BodyID floorId;
+    std::unique_ptr<JoltLineRenderer> renderer;
+    std::vector<float> lineBuffer;   // extractLines 持久输出，供本帧 renderFrame 消费
+
+    Impl()
+        : objectVsBroadPhaseLayerFilter(matrix)
+        , objectLayerPairFilter(matrix)
+    {}
+};
+
+DebugScene::DebugScene() = default;
+DebugScene::~DebugScene() = default;
+
+bool DebugScene::build(int scenario, std::uint32_t seed, std::string* err) {
+    World::bootstrap();
+    impl_ = std::make_unique<Impl>();
+    auto& I = *impl_;
+    I.scenario = scenario;
+    (void)seed;
+
+    // floor/floor 禁用；其余 pair 全开（M-P0 同口径）。
+    I.matrix.set(layers::kFloor, layers::kFloor, false);
+
+    I.physicsSystem.Init(1024, 0, 1024, 1024,
+                         I.bpLayerInterface, I.objectVsBroadPhaseLayerFilter, I.objectLayerPairFilter);
+    I.physicsSystem.SetGravity(JPH::Vec3(0.0f, -9.8f, 0.0f));
+    I.bodyInterface = &I.physicsSystem.GetBodyInterface();
+    JPH::BodyInterface& bi = *I.bodyInterface;
+
+    // 静态地板：薄盒（半高 0.5）顶面 y=0。
+    {
+        JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(5.0f, 0.5f, 5.0f));
+        floorShapeSettings.SetEmbedded();
+        auto fr = floorShapeSettings.Create();
+        if (fr.HasError()) { if (err) *err = "floor shape failed"; I.error = "floor shape failed"; return false; }
+        JPH::BodyCreationSettings s(fr.Get(), JPH::RVec3(0.0_r, -0.5_r, 0.0_r),
+                                    JPH::Quat::sIdentity(), JPH::EMotionType::Static, layers::kFloor);
+        JPH::Body* b = bi.CreateBody(s);
+        if (!b) { if (err) *err = "floor body failed"; I.error = "floor body failed"; return false; }
+        I.floorId = b->GetID();
+        bi.AddBody(I.floorId, JPH::EActivation::DontActivate);
+    }
+
+    // 三个落体：盒 / 球 / 胶囊，x 方向错开避免初始重叠。
+    auto addDynamic = [&](const JPH::ShapeRefC& shape, JPH::RVec3 pos) {
+        JPH::BodyCreationSettings s(shape, pos, JPH::Quat::sIdentity(),
+                                    JPH::EMotionType::Dynamic, layers::kDefault);
+        s.mRestitution = 0.4f;
+        s.mFriction = 0.6f;
+        s.mLinearDamping = 0.0f;
+        JPH::BodyID id = bi.CreateAndAddBody(s, JPH::EActivation::Activate);
+        if (!id.IsInvalid()) I.dynamicIds.push_back(id);
+    };
+    addDynamic(new JPH::BoxShape(JPH::Vec3(0.5f, 0.5f, 0.5f)), JPH::RVec3(-2.0_r, 4.0_r, 0.0_r));
+    addDynamic(new JPH::SphereShape(0.5f), JPH::RVec3(0.0_r, 4.0_r, 0.0_r));
+    addDynamic(new JPH::CapsuleShape(0.5f, 0.3f), JPH::RVec3(2.0_r, 4.0_r, 0.0_r));
+
+    I.physicsSystem.OptimizeBroadPhase();
+    I.totalBodies = I.physicsSystem.GetNumBodies();
+    I.renderer = std::make_unique<JoltLineRenderer>();
+    I.valid = true;
+    return true;
+}
+
+void DebugScene::step(double dt) {
+    if (!impl_ || !impl_->valid) return;
+    auto& I = *impl_;
+    I.physicsSystem.Update(static_cast<float>(dt), 1, &I.tempAllocator, &I.jobSystem);
+}
+
+DebugLines DebugScene::extractLines() {
+    DebugLines out;
+    if (!impl_ || !impl_->valid || !impl_->bodyInterface) return out;
+    auto& I = *impl_;
+    I.lineBuffer.clear();
+    I.renderer->lines.clear();
+
+    JPH::BodyInterface& bi = *I.bodyInterface;
+    auto drawBody = [&](JPH::BodyID id, const JPH::Color& color) {
+        JPH::RefConst<JPH::Shape> shape = bi.GetShape(id);
+        if (!shape) return;
+        const JPH::RMat44 xf = bi.GetCenterOfMassTransform(id);
+        // 物理引擎只「喊」图元；JoltLineRenderer 收顶点（线框走边）。
+        shape->Draw(I.renderer.get(), xf, JPH::Vec3::sOne(), color, false, true);
+    };
+
+    // 地板蓝；落体按形状分色（盒绿 / 球橙 / 胶囊品红 / 其它青）。
+    drawBody(I.floorId, JPH::Color(60, 120, 255));
+    for (JPH::BodyID id : I.dynamicIds) {
+        JPH::RefConst<JPH::Shape> shape = bi.GetShape(id);
+        if (!shape) continue;
+        // 盒/球/胶囊的 EShapeType 都是 Convex，区分三者要看 EShapeSubType。
+        const JPH::EShapeSubType t = shape->GetSubType();
+        JPH::Color c;
+        if (t == JPH::EShapeSubType::Box) c = JPH::Color(80, 220, 80);
+        else if (t == JPH::EShapeSubType::Sphere) c = JPH::Color(255, 160, 40);
+        else if (t == JPH::EShapeSubType::Capsule) c = JPH::Color(230, 80, 230);
+        else c = JPH::Color(80, 220, 220);
+        drawBody(id, c);
+    }
+
+    // 收集到的线流搬进持久缓冲（供本帧 renderFrame 消费）。
+    I.lineBuffer.swap(I.renderer->lines);
+    out.data = I.lineBuffer.data();
+    out.vertexCount = static_cast<std::uint32_t>(I.lineBuffer.size() / 6u);
+    return out;
+}
+
+const char* DebugScene::lastError() const { return impl_ ? impl_->error.c_str() : "not built"; }
+std::uint32_t DebugScene::bodyCount() const { return impl_ ? impl_->totalBodies : 0; }
 
 
 } // namespace nl::physics

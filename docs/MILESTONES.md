@@ -1448,3 +1448,30 @@
 5. **D12 重号（上一轮遗留）**：M-P1 建档时未查最大编号，与既有 `D12 TSR` 撞号。本轮把物理碰撞过滤条目重编号 **D13**、休眠岛落 **D14**，并同步 `World.hpp` / `P8-PHYS-PLAN` / `PHYS-TOOLS-GUIDE` / `MILESTONES` 四处引用；S16 的 D12(TSR) 引用保持不动。
 
 **下一步**：M-P3 debug 渲染接 viewer（Jolt DebugRenderer → ImGui / 线框）；M-P4 角色胶囊；**M-P5 仍等 P8 E3**。
+
+## P8 M-P3：碰撞形状调试线框接 viewer（feat/physics 轨道，2026-11-09，tag `phys-p3`）
+
+**动作**
+- **决策前置（铁律）**：本轮实读 Carrot `engine/render/`（debug 线渲染走 RenderDebug + LINE_LIST overlay 思路）与 `engine/resources/shaders/`；UE 5.8.4 `Runtime/Renderer/Private/` 只读定向核对 debug draw 通路（`PhysSceneDebug` 思路：物理引擎喊图元、渲染层收顶点画 overlay）；bevy `bevy_pbr` 复核无 debug-line 先例、据实标注。Jolt 上游 `Renderer/DebugRenderer.h`（纯虚接口清单：`DrawLine/DrawTriangle/DrawText3D/CreateTriangleBatch×2/DrawGeometry`）、`Reference.h`（`RefTargetVirtual::AddRef/Release` **非 const**）、`Shape.h`（`EShapeType` broad / `EShapeSubType` 细分）、`BodyInterface.h`（无 `TryGetBody`，用 `GetShape`+`GetCenterOfMassTransform`）逐处核签名。历史读 `MILESTONES.md` / `P8-PHYS-PLAN.md` / `PHYS-TOOLS-GUIDE.md` §9 / `SHADER-CONVENTIONS.md` §2.4 / M-P2 代码。
+- **占坑**：沿用 `feat/physics` worktree（`wt_pool` physics 轨道），未碰 master WIP。
+- **落码**：`core` 侧 `DebugScene`（PIMPL，`World.hpp` 零 Jolt 类型 POD：`build/step/extractLines/lastError/bodyCount`）+ `JoltLineRenderer`（匿名命名空间，全虚接口实现，batch `AddRef/Release` 引用计数，`DrawGeometry` 取 `mLODs.front()` 最细 LOD）；`renderer` 侧 `DebugLines` 类（固定容量动态 VB 262144 顶点 / LINE_LIST / depth test 开 write 关 / volatile CB b0，`ensurePipelines` 无条件 ensure、关闭时零开销）+ `FrameParams` 三个 debug 字段 + `debug_line.slang` 单源双目标 + `renderer.cpp` 4 份字节码产物；`viewer` 接 `--physics-debug/--physics-scenario/--physics-seed`，主循环每帧 step+extractLines 喂 LINE_LIST；`phys-tools` 新增 `debug`/`check-debug`（每帧几何度量 TSV 13 列 + 四分色桶，独立复验锚）与 selftest M-P3 段（12 条断言）；CMake 加 `p3-phys-debug` / `p3-phys-debug-check` / `p3-phys-negative` 三条 ctest；`check-phys-regression.py` 扩到四基线。
+- **修真实渲染 bug（本轮主坑）**：Vulkan `createGraphicsPipeline failed for debug lines` 每帧失败（`deviceErrors=240`）。定位链：临时插桩 vendored `vulkan-graphics.cpp` 打印 `vk::Result` → `ErrorUnknown` → 开 UE5.8 自带 VVL 排除管线状态（`Geometry` capability 报错是 model.ps 既有噪声）→ 排除法（LineList/深度状态/绑定布局/输入布局/3 属性布局逐一隔离均仍失败）→ 真因 = `DebugLines::ensure` 硬编码 `"vsMain"/"psMain"`，NVRHI Vulkan 把 `desc.entryName` 写进 `pName` 而 SPIR-V 入口恒 `main`。修复：传 `"main"`（compute 同款先例）。**该 bug 修复前打断所有 Vulkan 模式**（`ensurePipelines` 无条件调用）。
+- **交代物**：`example/phys-p3/`（run.bat ALL GREEN exit 0 + debug.tsv + viewer-dx12/vulkan.png 双后端真实截图 + wireframe/acceptance.png 两张真实证据图 + 9 份日志）、`cases.json` `phys-p3` 卡五用例、`PHYS-TOOLS-GUIDE.md` §10、`P8-PHYS-PLAN.md` M-P3 标完成 + 固化口径、`SHADER-CONVENTIONS.md` §2.4 实测扩充。
+
+**提交版本**：`feat/physics` 本轮提交（annotated tag `phys-p3`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**
+- `viewer --physics-debug` 双后端 240 帧 `deviceErrors=0`（修复前 Vulkan 240/240 失败），分色线框肉眼核验：绿盒 / 橙经纬球 / 品红胶囊 / 蓝地板网格，被 Suzanne 实体近面正确深度遮挡；稳态 `vertices=25488`、`lineY[-1, 1.6]` 两后端一致。互比 599px / maxDelta 242——薄线覆盖噪声，按 `scene`/`scale` 先例口径如实记 **FAIL 档**，各自对本后端基线 bytes。
+- `debug` TSV：241 帧 × 13 列，顶点数与四分色桶（box 72 / sphere 12288 / capsule 13056 / floor 72，和恒 25488）逐帧恒定；`check-debug` 从数据列独立复算：初始顶 4.8 / 静止顶 1.6 / 地板底 -1 / 地板 x ±5 / 末 30 帧 apex 极差 0.000000（睡眠岛冻结），PASS。
+- `selftest` 全绿（M-P0 23 + M-P1 21 + M-P2 27 + M-P3 12），含两场景 30 步线流逐 float 确定性对拍；ctest `p0/p1/p2/p3-phys-*` **10/10**（新增 3 条全过）；DX12 + VULKAN 全树 BUILD OK、viewer selftest 16/16 ×2。
+- **四基线逐字节回归**：M-P0 `drop.tsv` / M-P1 `layers.tsv` / M-P2 `stack.tsv` / M-P3 `debug.tsv` 全部 byte-identical OK（M-P3 渲染接线未扰动任何既有物理基线；抽查 `regression.py --only phys-p2 / phys-p0` 各 10/10 bytes 全绿，M-P0~P2 不进渲染总闸口径不变）。
+- `python tools/showcase/server.py --check` exit 0；`example/phys-p3/run.bat` **ALL GREEN** exit 0（含双后端 `deviceErrors=0` 硬闸）；三张 PNG（wireframe / acceptance / 双 viewer 截图）肉眼核验（MEASURED 面板首行溢出截断一轮修后复验通过）。
+
+**踩坑情况**
+1. **§2.4 共享 builder 变体（本轮主坑）**：入口名两阶段规则此前只防「后端传参错」，本轮证明**共享管线 builder 硬编码入口名**同样中招——DX12 忽略入口名蒙混过关，Vulkan 在**管线创建期**报 `VK_ERROR_UNKNOWN`（不是文档原先写的 createShader 返回 NULL），且 VVL 对管线**零报错**，极难定位。已写回 `SHADER-CONVENTIONS.md` §2.4（故障模式两种 + 定位手段：vendored 插桩打印 `vk::to_string(res)` + UE5.8 自带 VVL）。
+2. **VVL 报错要辨真伪**：`Geometry` capability（VUID-…08740）来自 model.ps 且驱动容忍（model 管线正常），与本坑无关；不能见报错就当根因。
+3. **自建 SPIR-V 解析器枚举要核对 spec**：Binding=33 / DescriptorSet=34，首版对照表写反导致误判「cbuffer 在 set 256」（实际是 set 0 / binding 256，与 NVRHI 布局吻合）。
+4. **`extractLines` 单帧消费**：返回 data 指向内部缓冲，再次调用即失效——selftest 确定性对拍必须在继续步进前完成对比，否则比对的是复用后的新缓冲。
+5. **证据图排版**：MEASURED 面板首行 70 字符溢出面板右缘被截，拆两行复验通过。
+
+**下一步**：M-P4 角色胶囊（Jolt `CharacterVirtual`，扫掠 + 地面检测 + 斜坡）；**M-P5 仍等 P8 E3**。

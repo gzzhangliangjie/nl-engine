@@ -378,6 +378,12 @@ public:
             scene_.draw(cmd, framebuffers_[index],
                         nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
         }
+        // M-P3：物理调试线框叠加层（LINE_LIST）。仅当 frame.debugLines 且数据非空才绘制，
+        // 缺省零开销；画在主场景之后、HUD 之前（尊重已有深度，不写深度）。
+        if (index < framebuffers_.size() && framebuffers_[index] && depth_) {
+            scene_.drawDebugLines(cmd, framebuffers_[index],
+                                 nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
+        }
         // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
         if (hud && index < framebuffers_.size() && framebuffers_[index]) {
             hud_.draw(cmd, framebuffers_[index],

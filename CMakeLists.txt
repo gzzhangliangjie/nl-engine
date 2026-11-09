@@ -168,6 +168,9 @@ target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/inclu
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 Jolt)
+# M-P3：启用 Jolt 调试渲染（碰撞形状线框提取）。Jolt 库本身已以 PUBLIC 带上该宏，
+# 这里显式复述，避免单配置 Release 下 generator-expression 传播的任何边界情况。
+target_compile_definitions(nl_core PRIVATE JPH_DEBUG_RENDERER)
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。
@@ -556,3 +559,16 @@ set_tests_properties(p2-phys-stack PROPERTIES
     PASS_REGULAR_EXPRESSION "nl-physics M-P2 stacking stability")
 add_test(NAME p2-phys-negative COMMAND phys-tools stack --frames 0)
 set_tests_properties(p2-phys-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-P3：碰撞形状调试线框流（A 类工具版验收，Jolt DebugRenderer 直出）----
+add_test(NAME p3-phys-debug COMMAND phys-tools debug --frames 240
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
+set_tests_properties(p3-phys-debug PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-p3-debug\\.tsv")
+add_test(NAME p3-phys-debug-check
+         COMMAND phys-tools check-debug ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
+set_tests_properties(p3-phys-debug-check PROPERTIES
+    DEPENDS p3-phys-debug
+    PASS_REGULAR_EXPRESSION "phys-p3 check-debug: PASS")
+add_test(NAME p3-phys-negative COMMAND phys-tools debug --frames 0)
+set_tests_properties(p3-phys-negative PROPERTIES WILL_FAIL TRUE)
