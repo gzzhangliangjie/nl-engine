@@ -1,12 +1,14 @@
-// M-E0+M-E1：World/Entity 核心 + 组件/层级实现。
+// M-E0+M-E1+M-E2：World/Entity 核心 + 组件/层级 + 系统/序列化实现。
 // 口径逐条对标 Carrot engine/ecs/World.cpp（2026-11-09 精读留痕，见 World.hpp 文件头）。
 
 #include "nl/scene/World.hpp"
 
 #include "nl/scene/Component.hpp"
+#include "nl/scene/System.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <sstream>
 
 namespace nl::scene {
 
@@ -151,8 +153,11 @@ void World::removeEntity(EntityID id) {
 
 void World::flushEntityCreationAndRemoval() {
     // 先加（Carrot flush 顺序：add 落表 -> remove 清理）
+    std::vector<EntityID> added;
+    std::vector<EntityID> removed;
     if (!entitiesToAdd_.empty()) {
         entities_.insert(entities_.end(), entitiesToAdd_.begin(), entitiesToAdd_.end());
+        added.swap(entitiesToAdd_);
         entitiesToAdd_.clear();
     }
     if (!entitiesToRemove_.empty()) {
@@ -180,14 +185,30 @@ void World::flushEntityCreationAndRemoval() {
             // 单独防重复排队/悬空条目）
             children_.erase(id);
         }
+        removed.swap(entitiesToRemove_);
         entitiesToRemove_.clear();
+    }
+    // M-E2：落盘后向系统推送（Carrot World.cpp:268/277 口径——flush 内统一推，
+    // 不在增删单点上推）。firstTick 等待中的系统也收（Carrot addSystem 先收编）。
+    if (!added.empty()) {
+        for (auto& s : systems_) s->onEntitiesAdded(added);
+    }
+    if (!removed.empty()) {
+        for (auto& s : systems_) s->onEntitiesRemoved(removed);
     }
 }
 
 void World::tick(double dt) {
-    (void)dt; // M-E2：dt 传给 system tick。
     flushEntityCreationAndRemoval();
-    // M-E2：system firstTick / tick 插在这里（flush 之后、收尾之前）。
+    // M-E2 系统循环（Carrot World::tick:313-321 口径裁剪版——Logic/Render 双
+    // 类目合并单列表）：firstTick 注册后首个 tick 恰一次，然后逐系统 tick。
+    for (System* s : waitingForFirstTick_) {
+        s->firstTick();
+    }
+    waitingForFirstTick_.clear();
+    for (auto& s : systems_) {
+        s->tick(dt);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +407,10 @@ Component& World::addComponent(EntityID id, std::unique_ptr<Component> comp) {
     auto& slot = components_[id];
     auto [it, inserted] = slot.emplace(comp->getComponentTypeID(), std::move(comp));
     assert(inserted && "duplicate component type on one entity (Carrot 同款一类型一实例)");
+    // M-E2：签名变化即时推送（Carrot addComponent -> onEntitiesUpdated 口径；
+    // Carrot 走 entitiesUpdated 队列 flush 推送，组件增删本身即时，我们即时推，
+    // 语义一致且省一队列——留痕）。
+    for (auto& s : systems_) s->onEntitiesUpdated({id});
     return *it->second;
 }
 
@@ -394,6 +419,7 @@ void World::removeComponent(EntityID id, ComponentTypeID typeID) {
     if (it != components_.end()) {
         it->second.erase(typeID);
         if (it->second.empty()) components_.erase(it);
+        for (auto& s : systems_) s->onEntitiesUpdated({id});
     }
 }
 
@@ -420,6 +446,179 @@ std::vector<Component*> World::getAllComponents(EntityID id) const {
     return list;
 }
 
+World::World() {
+    componentLibrary_ = std::make_unique<ComponentLibrary>();
+    systemLibrary_ = std::make_unique<SystemLibrary>();
+}
+
 World::~World() = default;
+
+// ---------------------------------------------------------------------------
+// World：系统 / 签名（M-E2，Carrot addLogicSystem/getLogicSystem/getSignature 口径）
+// ---------------------------------------------------------------------------
+
+Signature World::getSignature(EntityID id) const {
+    Signature sig;
+    auto it = components_.find(id);
+    if (it != components_.end()) {
+        for (auto& [tid, comp] : it->second) {
+            sig.set(tid);
+        }
+    }
+    return sig;
+}
+
+void World::registerSystem(std::unique_ptr<System> system) {
+    assert(system && "registerSystem with null system");
+    // 注册即收编：对现存实体表全量推送（Carrot addLogicSystem:838 口径），
+    // 并排进 firstTick 等待列表（首个 tick 恰一次）。
+    std::vector<EntityID> all = entities_;
+    system->onEntitiesAdded(all);
+    systems_.push_back(std::move(system));
+    waitingForFirstTick_.push_back(systems_.back().get());
+}
+
+System* World::findSystem(std::string_view name) {
+    for (auto& s : systems_) {
+        if (name == s->getName()) return s.get();
+    }
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// World：场景 JSON 序列化（M-E2；格式口径见 World.hpp serialise 注释）
+// ---------------------------------------------------------------------------
+
+nlohmann::json World::serialise() const {
+    nlohmann::json doc;
+    doc["version"] = 1;
+    doc["nextID"] = nextID_;
+
+    // 实体数组按 id 升序（确定性；序列化的是 flush 后世界，待加/待删队列不进）。
+    std::vector<EntityID> sorted = entities_;
+    std::sort(sorted.begin(), sorted.end());
+    nlohmann::json ents = nlohmann::json::array();
+    for (EntityID id : sorted) {
+        nlohmann::json e;
+        e["id"] = id;
+        e["name"] = getName(id);
+        e["flags"] = static_cast<std::uint64_t>(getFlags(id));
+        auto pid = getParentID(id);
+        e["parent"] = pid ? *pid : EntityID{0};
+        nlohmann::json comps = nlohmann::json::object();
+        for (Component* c : getAllComponents(id)) {
+            comps[c->getName()] = c->serialise();   // 键序由 nlohmann(std::map) 决定
+        }
+        e["components"] = comps;
+        ents.push_back(e);
+    }
+    doc["entities"] = ents;
+
+    nlohmann::json syss = nlohmann::json::array();
+    for (auto& s : systems_) {
+        nlohmann::json sj;
+        sj["name"] = s->getName();
+        sj["data"] = s->serialise();
+        syss.push_back(sj);
+    }
+    doc["systems"] = syss;
+    return doc;
+}
+
+bool World::deserialise(const nlohmann::json& doc, std::string& err) {
+    auto fail = [&err](const std::string& msg) { err = msg; return false; };
+
+    // ---- 结构校验 + 清空重建（工厂库保留；实体/组件/层级/系统全清） ----
+    if (!doc.is_object() || !doc.contains("version") || doc["version"] != 1) {
+        return fail("scene json: unsupported or missing \"version\" (expect 1)");
+    }
+    if (!doc.contains("nextID") || !doc["nextID"].is_number_unsigned()) {
+        return fail("scene json: missing \"nextID\"");
+    }
+    entities_.clear();
+    entitiesToAdd_.clear();
+    entitiesToRemove_.clear();
+    names_.clear();
+    flags_.clear();
+    parents_.clear();
+    children_.clear();
+    components_.clear();
+    systems_.clear();
+    waitingForFirstTick_.clear();
+
+    try {
+        const auto& ents = doc.at("entities");
+        if (!ents.is_array()) return fail("scene json: \"entities\" must be an array");
+
+        // 第一轮：实体壳（名字/flags/ID 校验显式报错，不 assert——负向判据）
+        for (const auto& e : ents) {
+            EntityID id = e.at("id").get<EntityID>();
+            if (id == kInvalidEntity) return fail("scene json: entity id 0 is invalid");
+            if (names_.find(id) != names_.end()) {
+                std::ostringstream oss;
+                oss << "scene json: duplicate entity id " << id;
+                return fail(oss.str());
+            }
+            newEntityWithID(id, e.value("name", "<unnamed>"));
+            if (e.contains("flags")) {
+                flags_[id] = static_cast<EntityFlags>(e["flags"].get<std::uint64_t>());
+            }
+        }
+        nextID_ = doc["nextID"].get<EntityID>();
+        for (const auto& e : ents) {
+            EntityID id = e.at("id").get<EntityID>();
+            if (id >= nextID_) nextID_ = id + 1;
+        }
+
+        // 第二轮：挂父 + 组件（父引用/组件名显式报错）
+        for (const auto& e : ents) {
+            EntityID id = e.at("id").get<EntityID>();
+            EntityID parent = e.value("parent", EntityID{0});
+            if (parent != kInvalidEntity) {
+                if (names_.find(parent) == names_.end()) {
+                    std::ostringstream oss;
+                    oss << "scene json: entity " << id << " references unknown parent " << parent;
+                    return fail(oss.str());
+                }
+                setParent(id, parent);
+            }
+            if (e.contains("components")) {
+                for (auto& [name, cj] : e.at("components").items()) {
+                    auto comp = componentLibrary_->create(name, wrap(id));
+                    if (!comp) {
+                        std::ostringstream oss;
+                        oss << "scene json: unknown component name \"" << name << "\"";
+                        return fail(oss.str());
+                    }
+                    comp->deserialise(cj);
+                    addComponent(id, std::move(comp));
+                }
+            }
+        }
+
+        // 壳落表（系统收编需要 flush 后实体表；注册系统随后全量收编）。
+        flushEntityCreationAndRemoval();
+
+        // 第三轮：系统（名字显式报错；注册序 = 数组序）
+        if (doc.contains("systems")) {
+            for (const auto& sj : doc.at("systems")) {
+                auto sys = systemLibrary_->create(sj.at("name").get<std::string>(), *this);
+                if (!sys) {
+                    std::ostringstream oss;
+                    oss << "scene json: unknown system name \""
+                        << sj.at("name").get<std::string>() << "\"";
+                    return fail(oss.str());
+                }
+                sys->deserialise(sj.at("data"));
+                registerSystem(std::move(sys));
+            }
+        }
+    } catch (const nlohmann::json::exception& ex) {
+        // 非法结构（缺键/类型错）显式报错（M-E2 负向判据：不静默）。
+        return fail(std::string("scene json: malformed document: ") + ex.what());
+    }
+    err.clear();
+    return true;
+}
 
 } // namespace nl::scene

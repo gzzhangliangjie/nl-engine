@@ -109,4 +109,25 @@ void TransformComponent::setWorldFromMatrix(const Mat4& worldMat) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TransformComponent：场景 roundtrip（M-E2）
+// 数组序固定 [x,y,z] / [x,y,z,w]；float -> json double -> float 无损
+// （float 值在 double 中精确表示）。缺键 = nlohmann 异常（World::deserialise
+// 统一 catch 转显式报错）。
+// ---------------------------------------------------------------------------
+
+nlohmann::json TransformComponent::serialise() const {
+    nlohmann::json j;
+    j["position"] = {local.position.x, local.position.y, local.position.z};
+    j["scale"]    = {local.scale.x, local.scale.y, local.scale.z};
+    j["rotation"] = {local.rotation.x, local.rotation.y, local.rotation.z, local.rotation.w};
+    return j;
+}
+
+void TransformComponent::deserialise(const nlohmann::json& j) {
+    local.position = {j.at("position")[0], j.at("position")[1], j.at("position")[2]};
+    local.scale    = {j.at("scale")[0], j.at("scale")[1], j.at("scale")[2]};
+    local.rotation = {j.at("rotation")[0], j.at("rotation")[1], j.at("rotation")[2], j.at("rotation")[3]};
+}
+
 } // namespace nl::scene

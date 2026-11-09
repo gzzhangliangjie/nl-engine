@@ -142,6 +142,7 @@ add_library(nl_core STATIC
     core/src/material_graph/compile.cpp # T1：图编译验收（emit + slangc 四路，纯进程调用）
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
+    core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
@@ -478,3 +479,21 @@ set_tests_properties(e0-ecs-unknown-suite PROPERTIES WILL_FAIL TRUE)
 add_test(NAME e1-ecs-hier-selftest COMMAND nanite-scene selftest --suite ecs-hier)
 set_tests_properties(e1-ecs-hier-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "ecs-hier selftest: PASS")
+
+# ---- M-E2：System + 场景 roundtrip（P8-ECS-PLAN.md 判据）----
+add_test(NAME e2-ecs-system-selftest COMMAND nanite-scene selftest --suite ecs-system)
+set_tests_properties(e2-ecs-system-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-system selftest: PASS")
+add_test(NAME e2-ecs-serial-selftest COMMAND nanite-scene selftest --suite ecs-serial)
+set_tests_properties(e2-ecs-serial-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "ecs-serial selftest: PASS")
+# 负向：非法 JSON / 未知组件名 = 显式退出码 2（M-E2 判据原样落地）
+add_test(NAME e2-ecs-badjson-exit2 COMMAND nanite-scene deserialise-check badjson)
+set_tests_properties(e2-ecs-badjson-exit2 PROPERTIES
+    PASS_REGULAR_EXPRESSION "rejected")
+add_test(NAME e2-ecs-unknown-comp-exit2 COMMAND nanite-scene deserialise-check unknown)
+set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
+    PASS_REGULAR_EXPRESSION "rejected")
+add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
+set_tests_properties(e2-ecs-good-scene PROPERTIES
+    PASS_REGULAR_EXPRESSION "PASS")

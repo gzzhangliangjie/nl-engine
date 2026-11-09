@@ -6,19 +6,27 @@
 //   1 = 断言失败（打印 "<suite> selftest: FAIL <detail>"）
 //   2 = 用法错误（未知子命令 / 缺 --suite / 未知 suite 名）
 //
-// 用例（docs/p8/P8-ECS-PLAN.md M-E0/M-E1 判据）：
+// 用例（docs/p8/P8-ECS-PLAN.md M-E0/M-E1/M-E2 判据）：
 //   ecs-core      World/Entity 核心：递增 ID 创建 / 增删 flush 前后存在性
 //                 （Carrot 口径：新建即时可见、删除 flush 后不可见）/
 //                 名字读写 / Flags(Hidden) 过滤 / 延迟语义锚点
 //                 （删实体下一 tick 生效；M-E2 有 system 后补 tick 内删除锚点）
 //   ecs-hier      M-E1 组件+层级：三层父子链复合矩阵数值锚（手算）/ reparent
 //                 保世界变换 / 删父递归删子 / duplicate 深拷 / 组件库工厂
+//   ecs-system    M-E2 System：签名匹配收编（注册收编/flush 收编/组件增删自动
+//                 进出列表）/ firstTick 恰一次 / tick 计数与 dt 传递 / duplicate
+//   ecs-serial    M-E2 场景 roundtrip：serialise->deserialise->serialise 逐字节
+//                 一致 + 内容抽查 + 负向（未知组件名/未知父/未知系统名显式拒绝）
+// 另有子命令 deserialise-check（负向判据显式退出码 2，见 main）。
 
 #include "nl/scene/Component.hpp"
+#include "nl/scene/System.hpp"
 #include "nl/scene/World.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -433,6 +441,255 @@ void testComponentLibrary() {
 } // namespace
 
 // ---------------------------------------------------------------------------
+// M-E2：System + 场景 roundtrip
+// ---------------------------------------------------------------------------
+
+namespace {
+
+using nl::scene::ComponentLibrary;
+using nl::scene::Entity;
+using nl::scene::System;
+using nl::scene::TransformComponent;
+using nl::scene::World;
+
+// 测试系统：要求 Transform（SignedSystem<Required...> 口径）；计数生命周期。
+class CounterSystem : public nl::scene::SignedSystem<TransformComponent> {
+public:
+    using SignedSystem::SignedSystem;
+
+    static constexpr const char* kName = "Counter";
+
+    const char* getName() const override { return kName; }
+    void firstTick() override { ++firstTicks; }
+    void tick(double dt) override { ++ticks; dtSum += dt; }
+
+    // duplicate = 数据成员拷贝（实体列表由 registerSystem 重新收编，不拷）。
+    std::unique_ptr<System> duplicate(World& newOwner) const override {
+        auto copy = std::make_unique<CounterSystem>(newOwner);
+        copy->ticks = ticks;
+        copy->firstTicks = firstTicks;
+        copy->dtSum = dtSum;
+        return copy;
+    }
+
+    nlohmann::json serialise() const override { return {{"ticks", ticks}}; }
+    void deserialise(const nlohmann::json& j) override { ticks = j.at("ticks").get<int>(); }
+
+    int firstTicks = 0;
+    int ticks = 0;
+    double dtSum = 0.0;
+};
+
+// 统一注册（库注册顺序不影响 roundtrip——序列化走名字不走 ID）。
+void registerLibraries(World& w) {
+    w.getComponentLibrary().registerComponent<TransformComponent>();
+    w.getSystemLibrary().registerSystem<CounterSystem>();
+}
+
+// ---------------------------------------------------------------------------
+// System：签名匹配收编 + 生命周期
+// ---------------------------------------------------------------------------
+
+void testSystemSignatureMatching() {
+    World w;
+    registerLibraries(w);
+    Entity a = w.newEntity("a");   // + Transform
+    Entity b = w.newEntity("b");   // 无组件（签名不匹配）
+    Entity c = w.newEntity("c");   // + Transform
+    a.addComponent(std::make_unique<TransformComponent>(a));
+    c.addComponent(std::make_unique<TransformComponent>(c));
+    w.tick(0.0); // flush（组件即时已挂，实体此刻落表）
+
+    // 路径 A：注册即收编现存匹配实体（Carrot addSystem -> onEntitiesAdded(entities)）
+    auto sys = std::make_unique<CounterSystem>(w);
+    CounterSystem* sysPtr = sys.get();
+    w.registerSystem(std::move(sys));
+    expectSize(sysPtr->getEntities().size(), 2, "register collects signature-matching entities");
+    expectTrue(std::none_of(sysPtr->getEntities().begin(), sysPtr->getEntities().end(),
+                            [&](const Entity& e) { return e.getID() == b.getID(); }),
+               "non-matching entity not collected");
+
+    // 路径 B：组件即时推送收编（Carrot 口径：组件增删即时 onEntitiesUpdated，
+    // 实体表才延迟——d 有 Transform 即匹配进列表，不等 flush；非对称留痕）
+    Entity d = w.newEntity("d");
+    d.addComponent(std::make_unique<TransformComponent>(d));
+    expectSize(sysPtr->getEntities().size(), 3, "component add collects immediately (即时推送)");
+    w.tick(0.016); // flush：d 落表 + firstTick + 第一次 tick
+    expectSize(sysPtr->getEntities().size(), 3, "unchanged after flush (已在列表)");
+
+    // 组件增删自动进出列表（即时推送 onEntitiesUpdated）
+    b.addComponent(std::make_unique<TransformComponent>(b));
+    expectSize(sysPtr->getEntities().size(), 4, "component add -> auto join list");
+    b.removeComponent(TransformComponent::typeID());
+    expectSize(sysPtr->getEntities().size(), 3, "component remove -> auto leave list");
+
+    // 删除实体：flush 推送 removed 出列表（延迟语义锚点）
+    d.remove();
+    expectSize(sysPtr->getEntities().size(), 3, "still in list right after remove");
+    w.tick(0.032);
+    expectSize(sysPtr->getEntities().size(), 2, "removed entity leaves list after flush");
+
+    // 生命周期：firstTick 恰一次（两个 tick），dt 传递累计
+    expectId(static_cast<nl::scene::EntityID>(sysPtr->firstTicks), 1, "firstTick exactly once");
+    expectId(static_cast<nl::scene::EntityID>(sysPtr->ticks), 2, "tick count == 2");
+    expectNear(static_cast<float>(sysPtr->dtSum), 0.016f + 0.032f, 1e-6f, "dt passed through");
+
+    // Signature 对标：系统签名 = Transform 位
+    expectTrue(sysPtr->getSignature()[TransformComponent::typeID()], "system signature has Transform bit");
+
+    // duplicate：数据拷贝 + 换 World（实体列表由新 World registerSystem 收编）
+    World w2;
+    registerLibraries(w2);
+    // 所有权先落 unique_ptr 再取裸指针（临时对象 .get() 会悬空——崩溃教训见台账）
+    std::unique_ptr<nl::scene::System> copyOwned = sysPtr->duplicate(w2);
+    auto* copy = static_cast<CounterSystem*>(copyOwned.get());
+    expectId(static_cast<nl::scene::EntityID>(copy->ticks), 2, "duplicate copies tick count");
+    w2.registerSystem(std::move(copyOwned));
+    expectSize(w2.findSystem("Counter")->getEntities().size(), 0,
+               "duplicate starts with empty list (new world has no entities)");
+}
+
+// ---------------------------------------------------------------------------
+// 场景 roundtrip：serialise -> deserialise -> serialise 逐字节一致
+// ---------------------------------------------------------------------------
+
+// 构建标准测试场景：三层链 + flags + 系统（数据来自 ecs-hier 数值锚场景）。
+void buildSerialiseScene(World& w, CounterSystem** outSys) {
+    Entity a = w.newEntity("A");
+    Entity b = w.newEntity("B");
+    Entity c = w.newEntity("C");
+    auto* ta = static_cast<TransformComponent*>(&a.addComponent(std::make_unique<TransformComponent>(a)));
+    ta->local.position = { 1.0f, 0.0f, 0.0f };
+    ta->local.scale = { 2.0f, 2.0f, 2.0f };
+    auto* tb = static_cast<TransformComponent*>(&b.addComponent(std::make_unique<TransformComponent>(b)));
+    tb->local.position = { 0.0f, 1.0f, 0.0f };
+    tb->local.scale = { 3.0f, 3.0f, 3.0f };
+    tb->local.rotation = nl::math::quatFromAxisAngle({ 0.0f, 0.0f, 1.0f }, 3.14159265f * 0.5f);
+    auto* tc = static_cast<TransformComponent*>(&c.addComponent(std::make_unique<TransformComponent>(c)));
+    tc->local.position = { 1.0f, 1.0f, 0.0f };
+    b.setParent(a.getID());
+    c.setParent(b.getID());
+    w.setFlags(b.getID(), nl::scene::EntityFlags::Hidden);
+
+    w.tick(0.0); // flush（serialise 序列化 flush 后世界）
+    auto sys = std::make_unique<CounterSystem>(w);
+    *outSys = sys.get();
+    w.registerSystem(std::move(sys));
+    w.tick(0.016);
+    w.tick(0.032); // 系统计数 firstTick=1 ticks=2（进 serialise data）
+}
+
+void testRoundtripByteIdentical() {
+    World w;
+    registerLibraries(w);
+    CounterSystem* sys = nullptr;
+    buildSerialiseScene(w, &sys);
+
+    const std::string dump1 = w.serialise().dump();
+    World w2;
+    registerLibraries(w2);
+    std::string err;
+    const bool ok = w2.deserialise(nlohmann::json::parse(dump1), err);
+    expectTrue(ok, "deserialise succeeds");
+    if (!ok) {
+        std::printf("  (err: %s)\n", err.c_str());
+        return;
+    }
+    const std::string dump2 = w2.serialise().dump();
+    expectTrue(dump1 == dump2, "roundtrip byte-identical (M-E2 硬判据)");
+    if (dump1 != dump2) {
+        std::printf("  dump1: %s\n  dump2: %s\n", dump1.c_str(), dump2.c_str());
+    }
+
+    // 内容抽查：ID/名字/层级/flags/组件数值/系统状态逐一还原
+    expectTrue(w2.exists(1) && w2.exists(2) && w2.exists(3), "ids preserved");
+    expectStr(w2.getName(1), "A", "name preserved");
+    expectTrue(w2.getParentID(1) == std::nullopt, "A root preserved");
+    expectTrue(w2.getParentID(2) == 1, "B.parent == A preserved");
+    expectTrue(w2.getParentID(3) == 2, "C.parent == B preserved");
+    expectTrue((w2.getFlags(2) & nl::scene::EntityFlags::Hidden) != nl::scene::EntityFlags::None,
+               "Hidden flags preserved");
+    auto* tc2 = w2.getComponent<TransformComponent>(3);
+    expectVec3(tc2->local.position, { 1.0f, 1.0f, 0.0f }, kEps, "C local position preserved");
+    expectVec3(tc2->local.scale, { 1.0f, 1.0f, 1.0f }, kEps, "C local scale preserved");
+    expectQuat(tc2->local.rotation, nl::math::quatIdentity(), kEps, "C local rotation preserved");
+    // 浮点无损锚：非平凡 quat（Rz90 的 float 值 double 往返必须逐位一致）
+    auto* tb2 = w2.getComponent<TransformComponent>(2);
+    expectQuat(tb2->local.rotation,
+               nl::math::quatFromAxisAngle({ 0.0f, 0.0f, 1.0f }, 3.14159265f * 0.5f),
+               kEps, "B rotation preserved (float->double->float lossless)");
+    expectMat4(tc2->getWorldMatrix(), expectedWorldC(), kEps, "world matrix rebuilt identically");
+    auto* sys2 = static_cast<CounterSystem*>(w2.findSystem("Counter"));
+    expectTrue(sys2 != nullptr, "system restored");
+    if (sys2) {
+        expectId(static_cast<nl::scene::EntityID>(sys2->ticks), 2, "system serialise data restored");
+        expectSize(sys2->getEntities().size(), 3, "restored system collects 3 transform entities");
+    }
+    // nextID 保留：新实体 ID 接续（4 = A 的 nextID）
+    Entity e4 = w2.newEntity("E4");
+    expectId(e4.getID(), 4, "nextID preserved (no id reuse)");
+}
+
+void testDeserialiseExplicitReject() {
+    // 未知组件名
+    {
+        World w;
+        registerLibraries(w);
+        std::string err;
+        nlohmann::json doc = nlohmann::json::parse(
+            "{\"version\":1,\"nextID\":2,\"entities\":[{\"id\":1,\"name\":\"e\","
+            "\"parent\":0,\"components\":{\"Bogus\":{}}}],\"systems\":[]}");
+        expectTrue(!w.deserialise(doc, err), "unknown component rejected");
+        expectTrue(err.find("unknown component") != std::string::npos, "err names unknown component");
+    }
+    // 未知父引用
+    {
+        World w;
+        registerLibraries(w);
+        std::string err;
+        nlohmann::json doc = nlohmann::json::parse(
+            "{\"version\":1,\"nextID\":2,\"entities\":[{\"id\":1,\"name\":\"e\","
+            "\"parent\":99,\"components\":{}}],\"systems\":[]}");
+        expectTrue(!w.deserialise(doc, err), "unknown parent rejected");
+        expectTrue(err.find("unknown parent") != std::string::npos, "err names unknown parent");
+    }
+    // 未知系统名
+    {
+        World w;
+        registerLibraries(w);
+        std::string err;
+        nlohmann::json doc = nlohmann::json::parse(
+            "{\"version\":1,\"nextID\":2,\"entities\":[{\"id\":1,\"name\":\"e\","
+            "\"parent\":0,\"components\":{}}],\"systems\":[{\"name\":\"Bogus\",\"data\":{}}]}");
+        expectTrue(!w.deserialise(doc, err), "unknown system rejected");
+        expectTrue(err.find("unknown system") != std::string::npos, "err names unknown system");
+    }
+    // 错误版本号 / 非法结构
+    {
+        World w;
+        registerLibraries(w);
+        std::string err;
+        nlohmann::json doc = nlohmann::json::parse("{\"version\":99,\"nextID\":1,\"entities\":[]}");
+        expectTrue(!w.deserialise(doc, err), "bad version rejected");
+        expectTrue(err.find("version") != std::string::npos, "err names version problem");
+    }
+    // 重复实体 ID（显式报错而非 assert——deserialise 数据不可信场景）
+    {
+        World w;
+        registerLibraries(w);
+        std::string err;
+        nlohmann::json doc = nlohmann::json::parse(
+            "{\"version\":1,\"nextID\":3,\"entities\":[{\"id\":1,\"name\":\"a\","
+            "\"parent\":0,\"components\":{}},{\"id\":1,\"name\":\"b\","
+            "\"parent\":0,\"components\":{}}],\"systems\":[]}");
+        expectTrue(!w.deserialise(doc, err), "duplicate id rejected");
+        expectTrue(err.find("duplicate") != std::string::npos, "err names duplicate id");
+    }
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -465,12 +722,90 @@ int runSuiteEcsHier() {
     return 0;
 }
 
+int runSuiteEcsSystem() {
+    testSystemSignatureMatching();
+
+    if (g_failures != 0) {
+        std::printf("ecs-system selftest: FAIL (%d assertion(s))\n", g_failures);
+        return 1;
+    }
+    std::printf("ecs-system selftest: PASS\n");
+    return 0;
+}
+
+int runSuiteEcsSerial() {
+    testRoundtripByteIdentical();
+    testDeserialiseExplicitReject();
+
+    if (g_failures != 0) {
+        std::printf("ecs-serial selftest: FAIL (%d assertion(s))\n", g_failures);
+        return 1;
+    }
+    std::printf("ecs-serial selftest: PASS\n");
+    return 0;
+}
+
+// deserialise-check <good|badjson|unknown>：负向判据显式退出码 2 的工具入口。
+//   good    = 内置合法场景 -> deserialise 成功 -> exit 0
+//   badjson = 非法 JSON 文本 -> parse 失败 -> stderr 报错 -> exit 2
+//   unknown = 合法结构但组件名未注册 -> deserialise 拒绝 -> stderr 报错 -> exit 2
+int runDeserialiseCheck(const std::string& mode) {
+    const char* kGoodScene =
+        "{\"version\":1,\"nextID\":2,\"entities\":[{\"id\":1,\"name\":\"e\","
+        "\"parent\":0,\"components\":{\"Transform\":{\"position\":[1,2,3],"
+        "\"scale\":[1,1,1],\"rotation\":[0,0,0,1]}}}],\"systems\":[]}";
+
+    World w;
+    registerLibraries(w);
+    if (mode == "good") {
+        std::string err;
+        if (!w.deserialise(nlohmann::json::parse(kGoodScene), err)) {
+            std::printf("deserialise-check: unexpected failure: %s\n", err.c_str());
+            return 1;
+        }
+        auto* tc = w.getComponent<TransformComponent>(1);
+        if (!tc || tc->local.position.x != 1.0f || tc->local.position.z != 3.0f) {
+            std::printf("deserialise-check: good scene content mismatch\n");
+            return 1;
+        }
+        std::printf("deserialise-check good: PASS\n");
+        return 0;
+    }
+    if (mode == "badjson") {
+        try {
+            nlohmann::json::parse("{ this is not json ]");
+            std::printf("deserialise-check: bad json unexpectedly parsed\n");
+            return 1;
+        } catch (const nlohmann::json::exception& ex) {
+            std::fprintf(stderr, "deserialise-check badjson: rejected (%s)\n", ex.what());
+            return 2; // 显式退出码 2（M-E2 负向判据）
+        }
+    }
+    if (mode == "unknown") {
+        nlohmann::json doc = nlohmann::json::parse(
+            "{\"version\":1,\"nextID\":2,\"entities\":[{\"id\":1,\"name\":\"e\","
+            "\"parent\":0,\"components\":{\"Bogus\":{}}}],\"systems\":[]}");
+        std::string err;
+        if (w.deserialise(doc, err)) {
+            std::printf("deserialise-check: unknown component unexpectedly accepted\n");
+            return 1;
+        }
+        std::fprintf(stderr, "deserialise-check unknown: rejected (%s)\n", err.c_str());
+        return 2; // 显式退出码 2（M-E2 负向判据）
+    }
+    std::printf("unknown deserialise-check mode: %s\n", mode.c_str());
+    return 2;
+}
+
 void printUsage() {
     std::printf("usage:\n"
                 "  nanite-scene selftest --suite <name>\n"
+                "  nanite-scene deserialise-check <good|badjson|unknown>\n"
                 "suites:\n"
                 "  ecs-core    M-E0 World/Entity core (deferred add/remove, names, Hidden flags)\n"
-                "  ecs-hier    M-E1 components + hierarchy (world-matrix anchors, reparent, duplicate)\n");
+                "  ecs-hier    M-E1 components + hierarchy (world-matrix anchors, reparent, duplicate)\n"
+                "  ecs-system  M-E2 systems (signature matching, auto list, firstTick/tick)\n"
+                "  ecs-serial  M-E2 scene roundtrip (byte-identical, explicit rejections)\n");
 }
 
 } // namespace
@@ -481,6 +816,14 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string cmd = argv[1];
+    if (cmd == "deserialise-check") {
+        if (argc < 3) {
+            std::printf("deserialise-check requires <good|badjson|unknown>\n");
+            printUsage();
+            return 2;
+        }
+        return runDeserialiseCheck(argv[2]);
+    }
     if (cmd != "selftest") {
         std::printf("unknown command: %s\n", cmd.c_str());
         printUsage();
@@ -505,6 +848,12 @@ int main(int argc, char** argv) {
     }
     if (suite == "ecs-hier") {
         return runSuiteEcsHier();
+    }
+    if (suite == "ecs-system") {
+        return runSuiteEcsSystem();
+    }
+    if (suite == "ecs-serial") {
+        return runSuiteEcsSerial();
     }
     std::printf("unknown selftest suite: %s\n", suite.c_str());
     printUsage();

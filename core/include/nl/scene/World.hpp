@@ -30,6 +30,7 @@
 //
 // 纪律：core 零图形 API（NVRHI/ImGui 零 include）；确定性 = selftest 数值锚。
 
+#include <bitset>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -37,6 +38,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#include "json.hpp"
 
 namespace nl::scene {
 
@@ -76,8 +79,14 @@ class World;
 using ComponentTypeID = std::uint32_t;
 inline constexpr std::uint32_t kMaxComponentTypes = 64;
 
+// 签名 = 组件类型 ID 位集（基础类型层定义；System.hpp 用同款 using 重声明）。
+using Signature = std::bitset<kMaxComponentTypes>;
+
 class Component;
 template <class T> class ComponentOf;
+class System;
+class ComponentLibrary;
+class SystemLibrary;
 
 // 组件类型 ID 的静态获取（World::getComponent<T> 内部用）。
 template <class T>
@@ -140,7 +149,7 @@ struct Entity {
 
 class World {
 public:
-    World() = default;
+    World();   // 工厂库 unique_ptr 构造（完整类型在 .cpp，头里只前向声明）
     ~World();   // unique_ptr<Component> 完整类型要求，实现在 World.cpp
     World(const World&) = delete;
     World& operator=(const World&) = delete;
@@ -156,8 +165,10 @@ public:
     void removeEntity(EntityID id);
     // 统一落盘：先加后删（Carrot flushEntityCreationAndRemoval 顺序）；
     // 删时清名字/flags/组件/层级双结构（parents_/children_ 双侧都摘）。
+    // M-E2：落盘后向系统推送 onEntitiesAdded/Removed（Carrot flush 推送点口径）。
     void flushEntityCreationAndRemoval();
-    // tick：开头先 flush（延迟语义锚点）。M-E2 在 flush 与收尾之间插 system。
+    // tick：开头先 flush -> firstTick（注册后恰一次）-> 逐系统 tick(dt)
+    // （Carrot World::tick:313-321 口径）。
     void tick(double dt);
 
     // ---- 层级（M-E1；双结构：parents_ 子->父 + children_ 父->子，Carrot 口径） ----
@@ -185,6 +196,35 @@ public:
     bool exists(EntityID id) const;             // = names_.contains（Carrot 口径）
     std::vector<Entity> getAllEntities() const; // flush 后的全局表
     std::vector<Entity> getEntitiesWithFlags(EntityFlags flags) const; // 位过滤
+    // 实体签名 = 该实体全部组件类型位（现算，Carrot World::getSignature:460 口径）。
+    Signature getSignature(EntityID id) const;
+
+    // ---- 系统（M-E2；Carrot addLogicSystem/getLogicSystem 口径裁剪版） ----
+    // 注册即收编：立即对现存实体推送 onEntitiesAdded，并排进 firstTick 等待列表。
+    void registerSystem(std::unique_ptr<System> system);
+    std::size_t getSystemCount() const { return systems_.size(); }
+    // 按名查找（找不到 = nullptr，Carrot getLogicSystem 口径）。
+    System* findSystem(std::string_view name);
+
+    // ---- 工厂库（serialise/deserialise 的组件/系统名解析用） ----
+    ComponentLibrary& getComponentLibrary() { return *componentLibrary_; }
+    const ComponentLibrary& getComponentLibrary() const { return *componentLibrary_; }
+    SystemLibrary& getSystemLibrary() { return *systemLibrary_; }
+    const SystemLibrary& getSystemLibrary() const { return *systemLibrary_; }
+
+    // ---- 场景 JSON 序列化（M-E2 判据：roundtrip 字节一致） ----
+    // 格式（本项目拍板自定，字段口径借 Carrot Scene::serialise：id/name/flags/
+    // 逐组件 serialise；层级 Carrot 用目录树表达，我们单文件用 parent 字段）：
+    //   {"version":1,"nextID":N,
+    //    "entities":[{"id":u64,"name":str,"flags":u64,"parent":u64(0=无父),
+    //                 "components":{"<组件名>":{...}}}, ...按 id 升序],
+    //    "systems":[{"name":str,"data":{...}}, ...按注册序]}
+    // 确定性：实体数组按 id 升序、组件对象键由 nlohmann（std::map）排序、
+    // 系统数组按注册序 -> serialise 输出可逐字节复现。
+    nlohmann::json serialise() const;
+    // 反序列化：非法结构 / 未知组件名 / 未知系统名 / 未知父引用 = 返回 false
+    // + err 描述（显式报错不静默；调用方决定退出码语义）。失败时 world 状态清空。
+    bool deserialise(const nlohmann::json& doc, std::string& err);
 
     // ---- 名字 ----
     const std::string& getName(EntityID id) const;
@@ -213,6 +253,16 @@ private:
 
     // ---- M-E1：组件存储（类型 ID -> 组件；增删即时，flush 只做删除清理） ----
     std::unordered_map<EntityID, std::unordered_map<ComponentTypeID, std::unique_ptr<Component>>> components_;
+
+    // ---- M-E2：系统列表（注册序）+ firstTick 等待列表（Carrot logicSystems /
+    // logicSystemsWaitingForFirstTick 口径；Logic/Render 双类目裁剪成单列表） ----
+    std::vector<std::unique_ptr<System>> systems_;
+    std::vector<System*> waitingForFirstTick_;
+
+    // ---- M-E2：工厂库（unique_ptr 持有避免 World.hpp include Component.hpp
+    // 造成环——Component.hpp/System.hpp 都 include 本头） ----
+    std::unique_ptr<ComponentLibrary> componentLibrary_;   // World.cpp 构造
+    std::unique_ptr<SystemLibrary> systemLibrary_;
 
     // duplicate 的递归内核（remap 表 M-E2 修链接时复用）。
     Entity duplicateWithRemap(EntityID src, std::optional<EntityID> newParent,

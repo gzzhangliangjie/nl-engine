@@ -176,6 +176,11 @@ public:
     // setGlobalTransform 逐字段路径（physics transform 不带 scale，scale 另算）；
     // 我们统一走矩阵路径——reparent 保世界矩阵严格成立优先于像素级对标。
     void setWorldFromMatrix(const Mat4& worldMat);
+
+    // ---- M-E2 场景 roundtrip（float -> json double -> float 无损：
+    // float 值的 double 表示精确，序列化数组 [x,y,z] / [x,y,z,w]）----
+    nlohmann::json serialise() const override;
+    void deserialise(const nlohmann::json& j) override;
 };
 
 } // namespace nl::scene
