@@ -53,8 +53,14 @@ def select_cases() -> list[tuple[dict, dict]]:
 
 
 def main() -> int:
+    # --force（2026-11-10 M8.0 沉淀）：人工追因核对通过后放行超签名重拍的合规
+    # 通道——先抽 1~2 张代表用例（非 dag 887px 档 + dag/hiz 位移档）逐像素确认
+    # diff 全部落在 HUD 面板区域内、模型区零差异，才允许带此参数批量重拍。
+    # 不带参数时行为不变（超签名只报告不动），防呆语义不弱化。
+    force = "--force" in sys.argv
     cases = select_cases()
-    print(f"[enumerate] --hud 且 exe=current 且有基线：{len(cases)} 用例")
+    print(f"[enumerate] --hud 且 exe=current 且有基线：{len(cases)} 用例"
+          f"{'（--force 人工确认已过）' if force else ''}")
 
     copied, skipped, failed = 0, 0, 0
     for v, case in cases:
@@ -82,10 +88,14 @@ def main() -> int:
                 skipped += 1
                 continue
             if dp > HUD_LINE_MAX_PIXELS:
-                print(f"[SKIP] {vid}/{cid} {backend}: diff {dp} px / maxDelta {md}"
-                      f" 超出 HUD 行签名，人工检查")
-                skipped += 1
-                continue
+                if force:
+                    print(f"[FORCE] {vid}/{cid} {backend}: diff {dp} px / maxDelta {md}"
+                          f" 超签名但人工确认通过 -> 覆盖 {baseline.name}")
+                else:
+                    print(f"[SKIP] {vid}/{cid} {backend}: diff {dp} px / maxDelta {md}"
+                          f" 超出 HUD 行签名，人工检查")
+                    skipped += 1
+                    continue
             if dp == 0:
                 print(f"[SAME] {vid}/{cid} {backend}: diff 0，基线无需更新")
                 continue

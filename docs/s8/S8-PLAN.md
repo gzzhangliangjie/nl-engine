@@ -67,13 +67,19 @@ S8 用到的签名（行号为 nvrhi.h 实测）：
 
 ---
 
-## M8.0 BLAS 预建（2 天）
+## M8.0 BLAS 预建（2 天）✅ 2026-11-10 完成
 
-- [ ] NVRHI AS 接口落地（预研 §1 签名表为准）：`rt::AccelStructDesc.addBottomLevelGeometry(GeometryTriangles)` + `createAccelStruct` + `buildBottomLevelAccelStruct`；flags = `PreferFastTrace`（静态场景）
-- [ ] 每个 mesh 一个 BLAS，用 fallback mesh 几何；`GeometryTriangles.vertexStride` 吃 `.nmesh` fallback 交错顶点布局，`vertexFormat` 声明 position 的 R32G32B32——**开工时先核 fallback mesh 顶点 buffer 是否需要拆 position-only buffer**（不用拆则零拷贝直指原 buffer）
-- [ ] AS 构建走 compute 命令列表，构建耗时计时进 HUD；构建后 BLAS device address 供 TLAS 实例引用
+- [x] NVRHI AS 接口落地（预研 §1 签名表为准）：`rt::AccelStructDesc.addBottomLevelGeometry(GeometryTriangles)` + `createAccelStruct` + `buildBottomLevelAccelStruct`；flags = `PreferFastTrace`（静态场景）
+- [x] 每个 mesh 一个 BLAS，用 fallback mesh 几何；`GeometryTriangles.vertexStride` 吃 `.nmesh` fallback 交错顶点布局，position 在 32B 交错布局偏移 0 → **零拷贝直指原 buffer**（NVRHI 格式枚举名实测为 `RGB32_FLOAT`，非 R32G32B32_FLOAT）；Suzanne lod0 fallback = 96 顶点 / 104 三角
+- [x] AS 构建走专用命令列表，构建耗时经 GpuTimer 一次性 resolve 进日志（DX12 0.22~0.32ms / Vulkan 0.18~0.37ms）与 HUD 证据行（deterministic 截图不显示 ms 保基线稳定）
 
-**自检**：BLAS 构建成功且无验证层输出（NVRHI validation 开着）；记录构建耗时。tag：`s8-blas`。
+**自检 ✅**：BLAS 构建成功且无验证层输出（NVRHI validation + DX12 debug layer 双开，deviceErrors=0）；构建耗时可测（日志一次性 `gpu timer resolved [blas]: X ms`）；HUD `BLAS : 104 tri` 证据行（dag/hiz 模式）；`example/s8-blas`（blas-hud 双后端基线 bytes 全等 + blas-build-log / blas-skip-v2 负向）+ 18 用例 HUD 基线重拍（kStage bump + BLAS 行插入，`--force` 人工追因后重拍）回归全过。tag：`s8-blas`。
+
+**实测踩坑（预研之外的新账）**：
+- **DX12 build-input 状态必须同列表显式转换**：上传（writeBuffer）后 `setBufferState(AccelStructBuildInput)` 必须与 build 在**同一条命令列表**。跨列表上传 + 列末 `setPermanentBufferState` 不产生物理 barrier（NVRHI 状态跟踪与 DX12 物理屏障脱节）→ build-input 物理态停 CopyDest → debug layer 执行期 RaiseException(0x87d) fail-fast，录制期 InfoQueue 零消息（纯执行期）。二分定位先例：`NL_NO_BLAS_BUILD=1`（跳 build）活 / `NL_BLAS_RECORD_ONLY=1`（只录不提交）活 → 执行期实锤。
+- **Vulkan RT 扩展链要显式喂给 NVRHI**：`VK_KHR_acceleration_structure` / `ray_query` / `buffer_device_address` / `deferred_host_operations` 从 `vkEnumerateDeviceExtensionProperties` 查得后经 `DeviceDesc.deviceExtensions` 传入，配合三段 feature pNext 链（bda→accel→rayQuery 依存组合）；缺一 NVRHI 内部能力位不置位。
+- **dag-top（M3.2 下钻）不走 initDag**：它走 initCluster 纯层加载 + 运行时下钻，BLAS hook 不触发——HUD 证据行只在 `--mode dag` / `--mode hiz` 出现（initCluster/initCull hook 只对 v3 资产生效）。
+- **现有全部 lod 链资产（Suzanne/HizScene/OcclScene1M）实测均为 v3 带 fallback**，skip 分支的现成负向资产不存在；真正无 fallback 的只有 v1 base（Suzanne.nmesh，cull 模式）。负向卡 expectLog 从实测复制（手写 skip 前提被实测推翻一次的教训）。
 
 ⚠️ 常见坑（预研更新）：
 - ~~容量猜错是最常见创建失败原因~~（修正：NVRHI 里 BLAS 尺寸 createAccelStruct 内部自算，**没有用户侧 scratch 容量查询**）；真正的坑是 build 时 geometry 描述符与 create 时不一致

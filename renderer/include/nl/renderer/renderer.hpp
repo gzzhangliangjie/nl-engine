@@ -161,6 +161,13 @@ struct HudFrame {
     int   totalClusters    = 0;       // 总簇数
     // ---- M5.2：GPU 可见三角数（与 visibleClusters 同一延迟窗口；-1 = 暂无数据）----
     int   visibleTriangles = -1;
+    // ---- M8.0（S8.0）：BLAS 预建（Lumen 光追地基，init 一次性构建）----
+    // blasTriangleCount>0 = 已建（dag/hiz 模式 + v3 lod0 资产）；0 = 未建不显示。
+    // blasMs 为 GPU timer resolve 的构建耗时（恒定值）；deterministic 不写真实值，
+    // HUD 只显示 tri 数保截图基线稳定。
+    int   blasTriangleCount   = 0;
+    float blasMs              = 0.0f;
+    bool  blasTimingAvailable = false;
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）

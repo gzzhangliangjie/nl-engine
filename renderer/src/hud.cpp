@@ -268,6 +268,21 @@ void Hud::build(HudFrame& frame) {
                       frame.model, frame.triangleCount);
         ImGui::TextUnformatted(modelLine);
     }
+    // M8.0（S8.0）：BLAS 预建证据行（仅 dag/hiz 模式 + v3 lod0 资产占位，其它
+    // 模式 blasTriangleCount==0 一像素不动）。deterministic 截图不显示 ms（基线
+    // 稳定），真实构建耗时看日志「gpu timer resolved [blas]」行。
+    if (frame.blasTriangleCount > 0) {
+        char blasLine[96];
+        if (frame.blasTimingAvailable && !frame.deterministic && frame.blasMs > 0.0f) {
+            std::snprintf(blasLine, sizeof(blasLine),
+                          "BLAS     : %d tri  built %.2f ms",
+                          frame.blasTriangleCount, frame.blasMs);
+        } else {
+            std::snprintf(blasLine, sizeof(blasLine), "BLAS     : %d tri",
+                          frame.blasTriangleCount);
+        }
+        ImGui::TextUnformatted(blasLine);
+    }
     // M6.2：Hi-Z 专属区**上移**到 mode/model 行之后、FPS 行之前——960x540 画布
     // 面板高度被 min(cap, H-28)=512 钉死，原位置（frustum/cull GPU 行之后）会让
     // 开关与 occl 行掉进滚动区截断，验收证据不可见。只影响 hiz 模式布局（其它
@@ -554,6 +569,8 @@ bool hudSelfTest() {
     if (f.cullTimingAvailable || f.cullMs != 0.0f || f.cullMsCount != 0) return false;
     // M5.2：可见三角数通道缺省无数据。
     if (f.visibleTriangles != -1) return false;
+    // M8.0：BLAS 通道缺省全零（非 dag/hiz 模式 HUD 布局一像素不动的保证）。
+    if (f.blasTriangleCount != 0 || f.blasMs != 0.0f || f.blasTimingAvailable) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     // M-C1：控制台通道缺省全关（HUD 关掉控制台 = 历史 HUD 基线一像素不动的保证）。
     if (f.consoleOpen || f.consoleTab || f.wantCaptureKeyboard) return false;

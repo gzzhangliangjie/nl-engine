@@ -381,6 +381,8 @@ public:
             }
             // M4.2：cull pass 计时同理，必须在 hud_.build() 之前写回标志。
             scene_.pollCullTimer(device_, hud);
+            // M8.0：BLAS 构建耗时（init 一次性；resolve 后恒定值）。
+            scene_.pollBlasTimer(device_, hud);
             // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
             hud_.build(*hud);
         }

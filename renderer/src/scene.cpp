@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -451,6 +452,9 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     if (nm.meshlets.empty() || nm.triangles.empty()) {
         outError = std::string(nmeshFile) + " has no meshlets"; return false;
     }
+    // M8.0：资产带 fallback 段（v3 lod0）时顺路预建 BLAS（S8-PLAN：S8 直接读
+    // S3 的 fallback，不重新生成）。v1 base 资产在 initBlas 内跳过，零扰动。
+    if (!initBlas(device, nm, nmeshFile, outError)) return false;
 
     // ---- 3. 铺 SSBO ----
     // vertexPool：整份 nm.vertices 展平成 float（8 float/顶点，与 MeshVertex 布局一致）。
@@ -871,6 +875,11 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         }
     }
     const std::uint32_t dagLevelCount = static_cast<std::uint32_t>(levels.size());
+
+    // M8.0：fallback 在链最细层 lod0 的 'NFLB' 段（S3 落定），用它预建 BLAS。
+    // initHiz 走本函数，dag/hiz 两模式由此覆盖；无 fallback 的资产跳过不拦路。
+    if (!initBlas(device, levels[0],
+                  (stem + ".lod0.nmesh").c_str(), outError)) return false;
 
     // 拼接目标数组（M4.0 同布局；vertexBase 重定基，vsCull 寻址不变；
     // localBase 逐簇取 localIndices.size()，天然就是全局地址，无需额外重定基）。
@@ -1790,6 +1799,112 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
                             " | shader=", shaderSuffix);
     }
     return true;
+}
+
+// ---- M8.0（S8.0）：BLAS 预建（S8-PLAN；NVRHI 签名见该文件预研 §1 速查表）----
+bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
+                     const char* assetName, std::string& outError) {
+    if (blasReady_) return true;   // initCull→initVisbuf / initDag→initHiz 双入口去重
+    blasTimer_.setLabel("blas");   // resolve 日志标明这是 BLAS 构建实例（默认 label 会撞 "frame"）
+    if (!nm.fallbackPresent || nm.fallbackVertices.empty() || nm.fallbackIndices.empty()) {
+        // 无 fallback 段非错误：cull 模式吃 v1 base 资产、visbuf 吃 Suzanne-materials
+        // （只有 NSUB 段），都不建。dag/hiz 模式 levels[0] 恒为 v3 lod0（带 NFLB）。
+        nl::core::log::info("blas: no fallback section in ", assetName,
+                            " — skipped (S8 BLAS needs a v3 lod0 with 'NFLB')");
+        return true;
+    }
+
+    // 1. fallback 几何 build-input 缓冲（Vulkan 侧需要
+    //    ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY usage，由 NVRHI 按
+    //    isAccelStructBuildInput 映射；DX12 靠状态跟踪）。
+    const std::uint32_t vertexCount = static_cast<std::uint32_t>(nm.fallbackVertices.size());
+    const std::uint32_t indexCount  = static_cast<std::uint32_t>(nm.fallbackIndices.size());
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = nm.fallbackVertices.size() * sizeof(nl::core::MeshVertex);   // 32B/顶点
+    vbDesc.setIsAccelStructBuildInput(true);
+    vbDesc.debugName = "BlasFallbackVB";
+    blasVB_ = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = nm.fallbackIndices.size() * sizeof(std::uint32_t);
+    ibDesc.setIsAccelStructBuildInput(true);
+    ibDesc.debugName = "BlasFallbackIB";
+    blasIB_ = device->createBuffer(ibDesc);
+    if (!blasVB_ || !blasIB_) {
+        outError = "createBuffer failed for BLAS fallback geometry"; return false;
+    }
+
+    // 2. createAccelStruct：BLAS 尺寸由 NVRHI 内部按 geometry 描述符自算
+    // （无用户侧 scratch 容量查询，S8-PLAN 预研 §1）；build 时必须传同一描述符。
+    // flags = PreferFastTrace（静态场景，UE/bevy/Carrot 三处口径一致）；
+    // AllowCompaction 不加——RTXMU 缺失时 API 是 no-op 且校验层会告警（预研 §1）。
+    nvrhi::rt::GeometryDesc geometry;
+    geometry.geometryData.triangles
+        .setVertexBuffer(blasVB_)
+        .setVertexFormat(nvrhi::Format::RGB32_FLOAT)       // position 在 32B 交错布局偏移 0
+        .setVertexStride(sizeof(nl::core::MeshVertex))
+        .setVertexCount(vertexCount)
+        .setIndexBuffer(blasIB_)
+        .setIndexFormat(nvrhi::Format::R32_UINT)
+        .setIndexCount(indexCount);
+    nvrhi::rt::AccelStructDesc asDesc;
+    asDesc.addBottomLevelGeometry(geometry);
+    asDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    asDesc.setDebugName("BlasFallback");
+    blas_ = device->createAccelStruct(asDesc);
+    if (!blas_) {
+        // 设备不支持 RT（无 DXR / 无 VK_KHR_acceleration_structure）：跳过不拦路，
+        // 既有渲染路径零扰动；真几何错误会在 DX12 校验层报 Error 由 drainMessages 统计。
+        nl::core::log::warn("blas: createAccelStruct failed for ", assetName,
+                            " — ray tracing unsupported? BLAS skipped");
+        return true;
+    }
+
+    // 3. 上传 + build 同命令列表（M8.0 实测教训：跨列表上传 + setPermanentBufferState
+    // 在 DX12 debug layer 下执行期 RaiseException(0x87d)——build-input 缓冲物理状态
+    // 未真正转换，被判定 CORRUPTION。同列表内显式 setBufferState 转换后状态跟踪与
+    // 物理 barrier 一致，问题消失）。NVRHI 校验层要求 AS build 记录在 Compute 能力级
+    // 列表（Graphics 队列列表满足 requireType 判定）；scratch 由列表内建 manager
+    // 分配；一次性提交异步执行，不 CPU 等待（S8-PLAN 底线）。
+    nvrhi::CommandListHandle cmd = device->createCommandList();
+    cmd->open();
+    cmd->beginTrackingBufferState(blasVB_, nvrhi::ResourceStates::CopyDest);
+    cmd->writeBuffer(blasVB_, nm.fallbackVertices.data(),
+                     nm.fallbackVertices.size() * sizeof(nl::core::MeshVertex));
+    cmd->setBufferState(blasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+    cmd->beginTrackingBufferState(blasIB_, nvrhi::ResourceStates::CopyDest);
+    cmd->writeBuffer(blasIB_, nm.fallbackIndices.data(),
+                     nm.fallbackIndices.size() * sizeof(std::uint32_t));
+    cmd->setBufferState(blasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+    if (blasTimer_.ensure(device)) blasTimer_.begin(cmd);
+    cmd->buildBottomLevelAccelStruct(blas_, &geometry, 1,
+                                     nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    blasTimer_.end(cmd);
+    // 列末态 = 永久态（静态场景，缓冲此后恒为 build-input；M8.1 TLAS 直接引用）。
+    cmd->setPermanentBufferState(blasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+    cmd->setPermanentBufferState(blasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+    cmd->close();
+    device->executeCommandList(cmd);
+
+    blasReady_ = true;
+    blasTriangleCount_ = indexCount / 3;
+    nl::core::log::info("blas built: ", assetName, " | vertices=", vertexCount,
+                        " triangles=", blasTriangleCount_, " (build ms via GPU timer)");
+    return true;
+}
+
+void Scene::pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
+    if (!blasReady_ || !hud) return;
+    // 与 pollCullTimer 同纪律：必须在 hud_.build() 之前调用。一次性构建：resolve
+    // 一次后 blasBuildMs_ 恒定。deterministic 只挡 HUD 写回（截图基线稳定），
+    // resolve 本身照跑——GpuTimer 的 resolvedOnce_ 日志在截图 run 的 log 里也落
+    // 一条真实构建毫秒数，作 M8.0 的机器可读证据。
+    if (blasTimer_.available()) {
+        float ms = 0.0f;
+        if (blasTimer_.poll(ms)) blasBuildMs_ = ms;
+        if (!hud->deterministic) hud->blasMs = blasBuildMs_;
+    }
+    hud->blasTriangleCount = blasTriangleCount_;
+    hud->blasTimingAvailable = blasTimer_.available();
 }
 
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
@@ -4170,6 +4285,14 @@ void Scene::drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
 }
 
 void Scene::shutdown() {
+    // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
+    blasReady_ = false;
+    blasTriangleCount_ = 0;
+    blasBuildMs_ = 0.0f;
+    blasTimer_.shutdown();
+    blas_ = nullptr;
+    blasVB_ = nullptr;
+    blasIB_ = nullptr;
     // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
     sceneMode_ = false;
     vsScene_ = nullptr;

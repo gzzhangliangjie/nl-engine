@@ -10,11 +10,12 @@
 ## 架构不变量（不可动摇）
 - NVRHI+Slang 通用管线；**构建链禁依赖任何厂商图形 SDK**（D3D12 走 Windows SDK；Vulkan 头 `NVRHI_FETCH_VULKAN_HEADERS`）。OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关。图形符号只在 `renderer/`；一份 .slang 双目标两后端加载 = 验收核心。
 
-## 当前进度（2026-11-10 03:00）
+## 当前进度（2026-11-10 05:10）
 - **主线 S0~S7 全收官（tag `s7-done`，commit `abe1acf`，全量 468/468 ALL GREEN）**：M7.2 多材质 = `.nmesh` 'NSUB' 尾段（v3 只加不改，材质 id=子网格序号随簇记录）+ GPUMaterial[4] 间接表 + NonUniformResourceIndex 选槽 + 传统直画 per-prim 批次化对照（model.slang 零改动）。A/B 终验 sil=0 / 99.991%≤2 / maxDelta 4。`milestone/s7-done` 分支留档。
-- 已 merge 回 master：physics（M-P0~P4+M-J5c）、audio、ECS E1a+E1b、job-system、console/material-graph/action-system、pbr-direct。E1/E1b gate 已解除。
-- 下一站：**S8 Lumen 预研已完成**（`docs/s8/S8-PLAN.md`，开工前确认 D-S8-1 TLAS 每帧全量 rebuild）；M-GL 游戏循环链（M-GL0 tag `gl-m0` 收官，M-GL2 与 M-S3 合并收口）；jobsync P1 follow-up（见下）。
-- UE 差异台账 `docs/s5/UE-DIFFS.md`（D1~D18）随手追加必须落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 的用例全重拍（`tools/reshot-hud-stage.py` 通用安全闸，超 527px 签名必须追因禁强刷）。
+- **M8.0 BLAS 预建收官（tag `s8-blas`，2026-11-10）**：`Scene::initBlas`（hook initDag levels[0]+initCull；initHiz 委托）零拷贝吃 fallback 32B 交错 buffer（NVRHI 枚举名 `RGB32_FLOAT`）；**⚠️ 0x87d 铁律：AS build-input 上传+`setBufferState`+build 必须同命令列表**（跨列表 setPermanentBufferState 无物理 barrier，DX12 debug layer 执行期 fail-fast、录制期零消息）。Vulkan RT 扩展链已接。HUD `BLAS : NNN tri` 行只在 dag/hiz 模式（dag-top 走 initCluster 不触发）。`reshot-hud-stage.py --force`=人工追因后放行超签名重拍的合规通道。
+- 已 merge 回 master：physics（M-P0~P4+M-J5c）、audio、ECS E1a+E1b、job-system、console/material-graph/action-system、pbr-direct、game-loop GL0~GL3。E1/E1b gate 已解除；jobsync P1 已解决（launchAll 原语）。
+- 下一站：**M8.1 TLAS 每帧重建（D-S8-1 待用户拍板：S8-PLAN §5 建议每帧全量 rebuild，UE 口径）→ M8.2 Ray Query 闭环**；卡上登记 M8.1 实例 buffer 沿用同列表状态转换纪律。
+- UE 差异台账 `docs/s5/UE-DIFFS.md`（D1~D18）随手追加必须落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 的用例全重拍（`tools/reshot-hud-stage.py` 通用安全闸，超 527px 签名必须追因禁强刷——追因过了才许 `--force`）。cases.json：version 卡必须带 tag 字段；text-only（无 {out}）viewer 不退出，log 断言卡一律 pair 小图+expectLog 双断言。
 
 ## 渲染 / HUD 关键约定（详 `docs/SHADER-CONVENTIONS.md`）
 - SPIR-V 绑定 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`；禁 `[[vk::binding]]`。DXIL 入口由 `-entry` 定，SPIR-V 恒 `main`。volatile CB `setMaxVersions(16)` **每帧全量覆写**（批内差异字段必须进 draw 期写入面）；SceneConstants 160B 禁整块 memcpy；`setFrontCounterClockwise(true)`。

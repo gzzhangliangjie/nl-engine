@@ -6,6 +6,7 @@
 
 #include "nl/renderer/renderer.hpp"
 #include "nl/anim/gltf_anim.hpp"   // M-A5：CPU 蒙皮（骨架/clips/绑定，纯逻辑层）
+#include "nl/core/meshlet_io.hpp"  // M8.0：initBlas 签名吃 nl::core::NMeshData（fallback 段）
 #include "gpu_timer.hpp"     // M4.2：cull pass 计时（renderer/src 内部共享，只依赖 NVRHI 抽象）
 
 #include <nvrhi/nvrhi.h>
@@ -197,7 +198,25 @@ public:
                        const SceneObjectDesc* objects, std::uint32_t objectCount,
                        std::string& outError);
 
-    // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
+    // M8.0（S8.0）：BLAS 预建——Lumen 光追地基（S8-PLAN）。每个 mesh 一个 BLAS，
+    // 几何 = .nmesh v3 'NFLB' fallback 段（S3 落定：S8 直接读，不重新生成）。
+    // 零拷贝核对结论（M8.0 开工项）：MeshVertex 32B 交错、position 在偏移 0，
+    // GeometryTriangles.vertexStride=32 直指专用 fallback buffer，无需拆
+    // position-only。构建走专用命令列表一次性提交（NVRHI 校验层要求 AS build
+    // 记录在 Compute 能力级列表上——Graphics 队列列表满足，见 validation
+    // requireType 判定），构建耗时 GPU timer 计量进 HUD。
+    // 资产无 fallback 段（v1 base / Suzanne-materials）或设备不支持 RT 时跳过
+    // （blasReady_ 保持 false，既有模式零扰动）；几何/构建失败才是硬错误。
+    bool initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
+                  const char* assetName, std::string& outError);
+    // M8.0：BLAS 构建耗时轮询。backend 在 hud_.build() 之前调用（与 pollCullTimer
+    // 同纪律：viewer 每帧重建 HudFrame，build 之后写的标志活不过当帧）。
+    // 一次性构建：resolve 一次后 blasBuildMs_ 恒定；deterministic 不写真实值保基线。
+    void pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud);
+    bool blasReady() const { return blasReady_; }
+    int  blasTriangleCount() const { return blasTriangleCount_; }
+
+    // M4.2：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
     // 没有数据（前两帧 / 非剔除路径）时 visibleClusters() 返回 -1。
@@ -562,6 +581,14 @@ private:
     bool                         visbufFailed_ = false;  // 懒建失败只报一次
     bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                              std::string& outError);
+
+    // ---- M8.0（S8.0）：BLAS 预建（fallback mesh 光追地基）----
+    bool                         blasReady_ = false;      // initBlas 成功后置位
+    nvrhi::rt::AccelStructHandle blas_;                   // 每 mesh 一个（当前单 mesh 资产）
+    nvrhi::BufferHandle          blasVB_, blasIB_;        // fallback 几何（32B 交错 / u32 索引）
+    GpuTimer                     blasTimer_;              // setLabel("blas")：init 一次性构建计时
+    float                        blasBuildMs_ = 0.0f;     // 最近一次 resolve 的构建耗时（恒定值）
+    int                          blasTriangleCount_ = 0;  // HUD 显示用（= fallback 三角数）
 };
 
 } // namespace nl::renderer::detail

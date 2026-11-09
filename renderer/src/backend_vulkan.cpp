@@ -311,6 +311,8 @@ public:
             }
             // M4.2：cull pass 计时同理，必须在 hud_.build() 之前写回标志。
             scene_.pollCullTimer(nvrhiDevice_, hud);
+            // M8.0：BLAS 构建耗时（init 一次性；resolve 后恒定值）。
+            scene_.pollBlasTimer(nvrhiDevice_, hud);
             hud_.build(*hud);
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
@@ -485,6 +487,9 @@ private:
         vkCreateWin32SurfaceKHR_ = loadProc<PFN_vkCreateWin32SurfaceKHR>(getInstanceProcAddr_, vulkanInstance_, "vkCreateWin32SurfaceKHR");
         vkCreateDevice_        = loadProc<PFN_vkCreateDevice>(getInstanceProcAddr_, vulkanInstance_, "vkCreateDevice");
         vkGetDeviceQueue_      = loadProc<PFN_vkGetDeviceQueue>(getInstanceProcAddr_, vulkanInstance_, "vkGetDeviceQueue");
+        // M8.0：设备扩展支持查询（RT 扩展按物理设备实际支持情况启用）。
+        vkEnumerateDeviceExtensionProperties_ = loadProc<PFN_vkEnumerateDeviceExtensionProperties>(
+            getInstanceProcAddr_, vulkanInstance_, "vkEnumerateDeviceExtensionProperties");
         vkGetPhysicalDeviceFeatures2_ = loadProc<PFN_vkGetPhysicalDeviceFeatures2>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceFeatures2");
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR_ = loadProc<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
         vkGetPhysicalDeviceSurfaceFormatsKHR_ = loadProc<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR>(getInstanceProcAddr_, vulkanInstance_, "vkGetPhysicalDeviceSurfaceFormatsKHR");
@@ -591,6 +596,50 @@ private:
             nl::core::log::warn("shaderBufferInt64Atomics unsupported; --mode visbuf will fail");
         }
 
+        // ---- M8.0（S8.0）：RT 扩展 + feature 链（BLAS 构建硬前提）----
+        // 按 S8-PLAN 预研：NVRHI 从 DeviceDesc.deviceExtensions 映射内部扩展标志
+        // （KHR_acceleration_structure / KHR_ray_query / buffer_device_address），
+        // 所以这里启用的扩展名单必须同时传给 NVRHI（createDevice 尾部）。
+        // 扩展依赖：VK_KHR_acceleration_structure 依赖 VK_KHR_deferred_host_operations。
+        uint32_t devExtCount = 0;
+        vkEnumerateDeviceExtensionProperties_(vulkanPhysicalDevice_, nullptr, &devExtCount, nullptr);
+        std::vector<VkExtensionProperties> devExts(devExtCount);
+        if (devExtCount > 0)
+            vkEnumerateDeviceExtensionProperties_(vulkanPhysicalDevice_, nullptr, &devExtCount, devExts.data());
+        auto hasExt = [&](const char* name) {
+            for (const auto& e : devExts)
+                if (std::strcmp(e.extensionName, name) == 0) return true;
+            return false;
+        };
+        const bool rtAccel = hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        const bool rtQuery = hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        bool bdaEnabled = false, rtEnabled = false;
+        if (rtAccel) {
+            deviceExts.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            deviceExts.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            if (rtQuery) deviceExts.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            if (hasExt(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME))
+                deviceExts.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+            bdaEnabled = true;
+            rtEnabled = true;
+        } else {
+            nl::core::log::warn("VK_KHR_acceleration_structure unsupported; --mode rt (S8) will fail");
+        }
+        // feature 链（pNext 逐个挂，pEnabledFeatures 保留 legacy 全 0 结构不变）：
+        //   bufferDeviceAddress（AS 构建按 device address 取几何）→ accelerationStructure
+        //   → rayQuery（M8.2 Slang RayQuery 用，提前开好）。
+        VkPhysicalDeviceBufferDeviceAddressFeatures bdaEnable{};
+        bdaEnable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        bdaEnable.bufferDeviceAddress = VK_TRUE;
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accelEnable{};
+        accelEnable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+        accelEnable.accelerationStructure = VK_TRUE;
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryEnable{};
+        rayQueryEnable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        rayQueryEnable.rayQuery = VK_TRUE;
+        bdaEnable.pNext = &accelEnable;
+        accelEnable.pNext = &rayQueryEnable;
+
         VkPhysicalDeviceFeatures features{}; // 默认特性足够画一个清屏三角形
 
         VkDeviceCreateInfo dci{};
@@ -600,7 +649,11 @@ private:
         dci.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
         dci.ppEnabledExtensionNames = deviceExts.data();
         dci.pEnabledFeatures = &features;
-        if (atom64Enabled) dci.pNext = &atom64Enable;
+        // pNext 链：atom64（M7.0，条件挂）→ RT 三兄弟（M8.0，条件挂）。
+        void* featureChain = nullptr;
+        if (atom64Enabled) { atom64Enable.pNext = featureChain; featureChain = &atom64Enable; }
+        if (bdaEnabled)    { bdaEnable.pNext = featureChain;    featureChain = &bdaEnable; }
+        dci.pNext = featureChain;
 
         const VkResult r = vkCreateDevice_(vulkanPhysicalDevice_, &dci, nullptr, &vulkanDevice_);
         if (r != VK_SUCCESS) {
@@ -618,11 +671,21 @@ private:
         desc.device = vulkanDevice_;
         desc.graphicsQueue = vulkanGraphicsQueue_;
         desc.graphicsQueueIndex = static_cast<int>(vulkanGraphicsFamily_);
+        // M8.0：NVRHI 按扩展名映射内部能力标志（KHR_acceleration_structure /
+        // KHR_ray_query / buffer_device_address），启用名单必须同步给它。
+        desc.deviceExtensions = deviceExts.data();
+        desc.numDeviceExtensions = deviceExts.size();
+        desc.bufferDeviceAddressSupported = bdaEnabled;
         nvrhiDeviceHandle_ = nvrhi::vulkan::createDevice(desc); // 内部会初始化 Vulkan 动态 dispatcher
         if (!nvrhiDeviceHandle_) { outError = "nvrhi::vulkan::createDevice returned null"; return false; }
         // 注意：Vulkan 的 semaphore 协调方法只在 raw vulkan::IDevice 上可用，
         // NVRHI 的 validation 包裹层不暴露它们，故这里直接用 raw device（Donut 同款做法）。
         nvrhiDevice_ = nvrhiDeviceHandle_;
+        if (rtEnabled) {
+            nl::core::log::info("rt extensions enabled: acceleration_structure",
+                                rtQuery ? "+ray_query" : "",
+                                bdaEnabled ? "+buffer_device_address" : "");
+        }
         return true;
     }
 
@@ -907,6 +970,8 @@ private:
     PFN_vkCreateWin32SurfaceKHR vkCreateWin32SurfaceKHR_ = nullptr;
     PFN_vkCreateDevice        vkCreateDevice_ = nullptr;
     PFN_vkGetDeviceQueue      vkGetDeviceQueue_ = nullptr;
+    // M8.0：设备扩展支持查询（RT 扩展按物理设备实际支持情况启用）。
+    PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties_ = nullptr;
     PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2_ = nullptr;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR_ = nullptr;
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR_ = nullptr;
