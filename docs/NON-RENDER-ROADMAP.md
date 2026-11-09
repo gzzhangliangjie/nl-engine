@@ -4,6 +4,7 @@
 >
 > **用户拍板（2026-11-08）：有参考的内容就考虑从头写**——不因「有现成开源库可 vendored」而改走集成路线；参照实现（Carrot 从零参照 / UE 工业终态只读 / 开源库源码）用于对照与节奏校准，不直接拿来用。
 > **2026-11-09 修订（用户拍板）**：本原则对**寻路**例外——改走 **vendored Recast/Detour 集成路线**（工具链成熟 + 要与编辑器结合 + 从零工作量过大），成为继物理之后的第二个例外；其余候选仍按原原则。详 `docs/p8/P8-NAV-PLAN.md`（旧「从零写」6 步阶梯作废留痕）。
+> **2026-11-09 二次拍板（物理路线复核）**：用户确认「物理用现成的，没必要从头写，成本太高；纠结的只是用哪个」——**不自研求解器的方向不变**，例外理由改写为**成本取舍**（自研求解器成本过高、物理是 A 类并行轨道配角），**不再是「UE 口径 / 业界共识」**：UE5 官方自研 Chaos，Jolt 与 PhysX 均非 UE5 后端，原「UE 5.x 官方提供 Jolt 后端」已于当日勘误（`UE-DIFFS.md` D10）。候选评审后确认**继续走 Jolt 5.3.1**：本机唯一零联网可得的 C++ 求解器源码 / MIT 与项目一致 / 纯 CPU 零图形 SDK / C++17 只依赖 STL / 确定性已实测可锁 / 自带 DebugRenderer 与 Character 接口 / Carrot 2902 行集成层可作本地参照；换库（PhysX 无本机副本且 UE5 已移除、Bullet 无逐位确定性、Rapier 系 Rust、Havok 商业授权）需摘除 446 文件、重写集成层、作废本地参照、重定确定性契约、重做 M-P0 交代物，无对应口径收益。**UE 口径不参与本选型**，仅作只读对照。
 
 ---
 
@@ -28,7 +29,7 @@
 | **寻路（vendored Recast/Detour）** | 中，几何喂给上游 `rcConfig`、集成层挂 `nl/scene`；编辑器吃 ImGui/console cvar 现成基建 | **集成层可见验收**：单模型烘焙 → Detour 查询/路径平滑 → 编辑器调参重烘焙 + `DebugUtils` 五阶段可视化 → E1 多物体场景 / tiled 增量重烘（每步出 PNG 证据） | **上游 recastnavigation（ZLib，1.6.0，Recast/Detour/DebugUtils/DetourTileCache）** / UE `Runtime/Navmesh`（`Recast.tps` 实证 vendored Recast v1.4.2 + Detour，工业做法实证，只读）/ Carrot `pathfinding`（2336 行从零，降级为验收口径与编辑器交互参照）/ bevy 无原生 | ★★★★ **已立项 `docs/p8/P8-NAV-PLAN.md`（2026-11-09 改拍 vendored 集成）；执行排 P8 场景整合（E1）之后** |
 | **GPU 粒子 / VFX** | 高，纯 compute | 单发射器 → 生灭 → SDF 碰撞 → 点/精灵/ribbon 渲染 | UE Niagara / bevy | ★★★ 自闭环 |
 | **3D 空间音频** | 低，独立子系统 | 单声源定位 → 距离衰减 → 遮挡 → 混响卷积 | Steam Audio(开源) / bevy rodio | ★★★ **已立项 `docs/p8/P8-AUDIO-PLAN.md`**（集成层+解码器从零写、设备混音用 OpenAL Soft，参照 Carrot `audio/` 分层）；执行排 P8 场景整合（E1）之后 |
-| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.8.4 自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/`，只读；**官方无 Jolt 后端**，2026-11-09 实读全树确认，勘误见 `UE-DIFFS.md` D10）/ bevy 本体无物理 crate、生态 avian | ★★★ **已立项 `docs/p8/P8-PHYS-PLAN.md`（vendored Jolt 不自研）；2026-11-09 用户指令提前开工 M-P0~M-P3（worktree `feat/physics` 已建、Jolt 锁 v5.3.1），M-P5 场景集成仍排 P8 E3 之后** |
+| **物理（Jolt 集成）** | 低，CPU 侧独立子系统 | **集成层可见验收**：掉落弹跳 → 堆叠 → 角色胶囊 → 碰撞层 → Jolt debug 渲染接 ImGui | **Carrot `physics/`（Jolt 集成层 2902 行，集成方式首选参照）** / UE 5.8.4 自研 **Chaos**（只读；**官方无 Jolt 后端 / 亦无 PhysX SDK 源码**，2026-11-09 实读全树确认，勘误见 `UE-DIFFS.md` D10）/ bevy 本体无物理 crate、生态 avian | ★★★ **已立项 `docs/p8/P8-PHYS-PLAN.md`（vendored Jolt 不自研）；选型依据 = 成本取舍 + 工程适配，非 UE 口径（2026-11-09 二次拍板）；提前开工 M-P0~M-P3（worktree `feat/physics` 已建、Jolt 锁 v5.3.1），M-P5 场景集成仍排 P8 E3 之后** |
 | **角色控制器** | 中低 | 胶囊扫掠 → 地面检测 → 斜坡 → 动画衔接 | UE CharacterMovement | ★★★ |
 | **Lua / 脚本 VM 接入** | 低，但参考极多 | 绑定核心 API → 调用渲染 → 游戏逻辑脚本化 | sol2 / 诸多实现 | ★★★ |
 | **网络同步 / 复制** | 低，体量爆炸 | 快照 → 状态同步 → 插值 → 回滚 | bevy_renet / UE replication | ★★ 里程碑不直观 |
@@ -41,7 +42,7 @@
 - **第一桶（最值得搞）**：骨骼动画、材质图、GPU 粒子、Job 系统——要么直接吃图形地基，要么参考现成，且每步都能出可见画面/数据。**寻路 2026-11-09 移出本桶**（改走 vendored 集成，见下方例外）。
 - **第二桶（能搞但要从零铺一层）**：ECS、3D 音频、Lua——参考丰富，但跟现有 GPU/渲染地基耦合松，等于另开一条线。
 - **第三桶（慎入）**：网络同步、完整编辑器、视觉脚本——参考要么体量爆炸、要么里程碑不直观，容易「写完才算数」。
-- **已拍板例外（2026-11-08 物理 / 2026-11-09 寻路）**：物理不进三桶分类，走 **vendored Jolt 集成路线**（三处均不自研求解器）；**寻路同样走 vendored Recast/Detour 集成路线**（工具链成熟 + 编辑器结合 + 从零工作量过大，`Recast.tps` 与上游 README 实证工业做法）。两条均见候选总表与各自 `P8-*-PLAN.md`。
+- **已拍板例外（2026-11-08 物理 / 2026-11-09 寻路）**：物理不进三桶分类，走 **vendored Jolt 集成路线**——理由经 2026-11-09 二次拍板改为**成本取舍**（自研求解器成本过高、物理为 A 类配角），**不是 UE 口径或业界共识**（UE 自研 Chaos 恰恰是自己写求解器，见 `UE-DIFFS.md` D10）；选型评审确认继续用 Jolt 5.3.1（本机可得 / MIT / 纯 CPU / 确定性 / 自带接口 / Carrot 集成层参照）。**寻路同样走 vendored Recast/Detour 集成路线**（工具链成熟 + 编辑器结合 + 从零工作量过大，`Recast.tps` 与上游 README 实证工业做法）。两条均见候选总表与各自 `P8-*-PLAN.md`。
 
 ---
 

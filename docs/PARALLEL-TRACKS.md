@@ -189,7 +189,8 @@
 | 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/physics` | **M-P0 开工中**：vendored Jolt v5.3.1（本地 Carrot `thirdparty/JoltPhysics` 上游副本，MIT，锁版本不升级）+ `nl/physics` 最小世界 + `phys-tools` 落球轨迹；A 类工具版交代，不进 `kStage`/渲染回归 |
 
 - 用户指令「建 feat/physics 开发物理模块内容」= 提前解锁排期闸（计划 §排期约束括号内已允许 M-P0~M-P3 与 E1 并行）；**M-P5 场景集成仍 gate 在 P8 E3（序列化 + Inspector）之后**，不随本轮解锁。
-- 三处口径二次核实（2026-11-09）：Carrot `engine/physics/` 2902 行 Jolt 集成层 + 本地 vendored JoltPhysics **v5.3.1**；bevy 本体无物理 crate（仅 `examples/movement/physics_in_fixed_timestep.rs` 示例），生态 avian，不作口径；UE 5.8.4 只有自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`），**全树无 Jolt 后端**——立项文档里「UE 官方提供 Jolt 后端」为误记，已勘误并落 `UE-DIFFS.md` D10。
+- 三处口径二次核实（2026-11-09）：Carrot `engine/physics/` 2902 行 Jolt 集成层 + 本地 vendored JoltPhysics **v5.3.1**；bevy 本体无物理 crate（仅 `examples/movement/physics_in_fixed_timestep.rs` 示例），生态 avian，不作口径；UE 5.8.4 只有自研 **Chaos**（`Runtime/Experimental/Chaos*` + `PhysicsCore/` + `Engine/Classes/PhysicsEngine/`），**全树无 Jolt 后端、ThirdParty 下亦无 PhysX SDK**——立项文档里「UE 官方提供 Jolt 后端」为误记，已勘误并落 `UE-DIFFS.md` D10。
+- **选型二次拍板（2026-11-09）**：用户「物理用现成的、没必要从头写、成本太高；纠结的只是用哪个」→ 不自研方向不变，**继续走 Jolt 5.3.1**；例外理由从「UE 口径 / 业界共识」改写为**成本取舍 + 工程适配**（本机唯一可得 / MIT / 纯 CPU / 确定性 / 自带接口 / Carrot 集成层参照）。UE 口径不参与选型，仅作只读对照。候选对比与换库代价见 `NON-RENDER-ROADMAP.md` 头部修订与 `P8-PHYS-PLAN.md` §选型评审结论。
 
 ### 7.1c ECS-lite 场景轨道（2026-11-09 立项，E1a 先行）
 

@@ -88,7 +88,7 @@
 | | 内容 |
 |---|---|
 | UE 做法 | 官方物理=自研 **Chaos** 求解器（`Engine/Source/Runtime/Experimental/Chaos/`、`ChaosCore/`、`ChaosSolverEngine/`、`ChaosSpatialPartitions/`、`Runtime/PhysicsCore/`、`Engine/Classes/PhysicsEngine/` 的 `BodyInstance`/`BodySetup`/`ConstraintInstance`）；引擎侧耦合面是 Scene/Actor + `FBodyInstance`，求解、宽相、约束、CCD 全在 Chaos 内。 |
-| 我们现状（M-P0） | 物理走 A 类并行轨道 `feat/physics`：**vendored Jolt Physics v5.3.1（MIT）**，自写集成层（世界生命周期 / 体封装 / 碰撞层 / debug 渲染），求解器一行不自研。UE 5.8.4 源码树中**不存在 Jolt 后端选项**——立项时 `P8-PHYS-PLAN.md` / `NON-RENDER-ROADMAP.md` 里「UE 5.x 官方另提供 Jolt 后端」系误记，本条一并勘误（结论「不自研求解器」不变，依据改为：Carrot 集成层 + bevy 生态第三方 + UE 工业自研三条路径均不要求我们自己写求解器）。 |
+| 我们现状（M-P0） | 物理走 A 类并行轨道 `feat/physics`：**vendored Jolt Physics v5.3.1（MIT）**，自写集成层（世界生命周期 / 体封装 / 碰撞层 / debug 渲染），求解器一行不自研。UE 5.8.4 源码树中**不存在 Jolt 后端选项**——立项时 `P8-PHYS-PLAN.md` / `NON-RENDER-ROADMAP.md` 里「UE 5.x 官方另提供 Jolt 后端」系误记，本条一并勘误。**2026-11-09 二次拍板**：结论「不自研求解器」不变，但依据改为**成本取舍**（自研成本过高、物理为 A 类配角），不再是「UE 口径 / 业界共识」——UE 自研 Chaos 恰恰是自己写求解器，不能反向论证（旧表述自相矛盾，已修正）。同日候选评审确认**继续用 Jolt 5.3.1**：本机唯一零联网可得的 C++ 求解器源码、MIT 与项目一致、纯 CPU 零图形 SDK、C++17 只依赖 STL、确定性已实测可锁、自带 DebugRenderer/Character、Carrot 2902 行集成层可作本地参照；UE 口径不参与选型。 |
 | 定性 | **有意简化**（引擎化阶段）：本项目目标是 Nanite×Lumen 渲染研究，物理只要能验收「物体按物理规律动」，不追 Chaos 的工业完备度（网络物理回滚、ChaosVehicles、GeometryCollection 破碎、CCD 全链路）。 |
 | 升级路径 | 需要 Chaos 级能力（破坏、载具、确定性网络回滚）时单独立项评估，不把 Jolt 换掉当默认；vendored Jolt 版本锁死 v5.3.1，**升级单独走一轮 M-P 验收**（确定性轨迹逐点比对 + 展示台卡全绿）。 |
 
