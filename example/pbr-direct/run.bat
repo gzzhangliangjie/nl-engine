@@ -65,7 +65,7 @@ echo           (= example/m0.4/suzanne-*.png, M0.8-era behavior unchanged)
 exit /b 0
 
 :selftest
-echo === pbr-direct selftest (16/16 each backend; stage check expects pbr-direct) ===
+echo === pbr-direct selftest (16/16 each backend; stage check follows kStage) ===
 "%DX%" --selftest || exit /b 1
 "%VK%" --selftest || exit /b 1
 exit /b 0

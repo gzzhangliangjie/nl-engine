@@ -14,6 +14,7 @@ constexpr const char* kModeNames[] = {
     "dag",       // M5.1：GPU DAG 遍历选层（compute 显式栈，误差阈值 cut）
     "skin",      // M-A5：CPU 蒙皮展示（rigged GLB 逐帧 LBS）
     "hiz",       // M6.0：Hi-Z 深度预通道 + min 金字塔 + 层级可视化
+    "visbuf",    // M7.0：u64 visibility buffer 打包写入 + 簇/三角可视化
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

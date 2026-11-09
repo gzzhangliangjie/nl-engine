@@ -16,7 +16,8 @@ enum class ViewMode {
     Dag = 5,      // M5.1：GPU DAG 遍历选层（compute 显式栈，输出复用 M4 indirect 通路）
     Skin = 6,     // M-A5：CPU 蒙皮展示——rigged GLB（skin+动画）逐帧 LBS，看角色动起来
     Hiz = 7,      // M6.0：Hi-Z 深度预通道 + 手写 min 金字塔（dag 遍历 + 金字塔 + 层级可视化）
-    // S1 起依次追加：Visbuf, Rt, Shadow,
+    Visbuf = 8,   // M7.0：visibility buffer 打包写入（u64 簇/三角/深度）+ 簇/三角可视化
+    // S1 起依次追加：Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };

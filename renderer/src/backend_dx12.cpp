@@ -71,7 +71,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              std::string& outError) override {
+              bool visbufMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -152,7 +152,9 @@ public:
         // NVRHI 忽略（真正入口是编译期 -entry 写进 blob 的），这里传真实入口名仅为可读性；
         // Vulkan 侧恒传 "main"（见 docs/SHADER-CONVENTIONS.md §2.4）。
         bool sceneOk = false;
-        if (skinMode)
+        if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
+            sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile, outError);
+        else if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (hizMode)
             sceneOk = scene_.initHiz(device_, "dxil", "vsCull", "psCull", modelFile, outError);
@@ -498,6 +500,16 @@ private:
             info_.shaderInt64Atomics =
                 options9.AtomicInt64OnTypedResourceSupported == TRUE ||
                 options9.AtomicInt64OnGroupSharedSupported == TRUE;
+        }
+        // M7.0（S7）：Options9 的两位是 typed resource（R64 纹理）与 group shared；
+        // 我们走 RWStructuredBuffer<uint64_t>，对应 Options11 的 descriptor heap
+        // resource 位——这一位才是 vis buffer 真正的硬件门槛，必须单独查。
+        D3D12_FEATURE_DATA_D3D12_OPTIONS11 options11{};
+        if (SUCCEEDED(device12_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS11,
+                                                     &options11, sizeof(options11)))) {
+            info_.shaderInt64Atomics =
+                info_.shaderInt64Atomics ||
+                options11.AtomicInt64OnDescriptorHeapResourceSupported == TRUE;
         }
         info_.indirectDraw = true;  // ExecuteIndirect / DrawIndirect 是 DX12 核心能力
 

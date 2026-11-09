@@ -71,6 +71,11 @@ struct FrameParams {
     // M6.2：Hi-Z 遮蔽剔除总开关（hiz 模式消费；false = 只做视锥/误差遍历，退化
     // 可验证——S6-PLAN 底线「可整体开关的独立层」，UE r.Nanite.Culling.HZB 同定位）。
     bool  hizEnable   = true;
+
+    // M7.0：vis buffer 可视化的解码档（仅 visbuf 模式消费，其它模式恒 0 不读）：
+    //   0 = clusterId → 颜色，1 = 全局三角 id (clusterId<<8|triId) → 颜色。
+    // 走 FrameParams 而不是 SceneConstants：g_options 的槽位已被 cull 遍历占用。
+    int   visVizMode  = 0;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -230,7 +235,10 @@ public:
                                             bool frustumCull = true,
                                             bool dagMode = false,
                                             bool skinMode = false,
-                                            bool hizMode = false);
+                                            bool hizMode = false,
+                                            // M7.0：visbuf 模式吃 .nmesh，走独立
+                                            // 的 u64 vis buffer 三段式 pass。
+                                            bool visbufMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
