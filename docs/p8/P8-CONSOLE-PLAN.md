@@ -3,6 +3,8 @@
 > A 类并行轨道（非渲染 / 引擎化），固定 worktree `feat/console`（`E:/UE_STUDY_2026/nl-engine-console`）。
 > 2026-11-08 用户拍板立项：单独开 worktree。执行不依赖 P8 E1 场景整合，随时可开工。
 > 对应总路线 `docs/ROADMAP.md`；并行纪律见 `AGENTS.md`「并行轨道 worktree 纪律」与 `docs/PARALLEL-TRACKS.md` §7。
+>
+> **✅ 已收官（2026-11-09）**：M-C0~C3 全部完成并 merge 回 master（merge commit `9e12cc6`，tag `console-mc3`，分支保留）。验收纪要 `docs/MILESTONES.md` P8 M-C 节；工具归档 `docs/p8/CONSOLE-TOOLS-GUIDE.md`；证据图 `docs/screenshots/CONSOLE-EVIDENCE.md`。worktree 拆除待批准；M-C4 级别增强（模糊补全/日志导出）需要时另立项。M-SC1（脚本轨道 console 绑定）就此解锁。
 
 ## 目标
 

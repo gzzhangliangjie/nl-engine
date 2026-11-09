@@ -3611,8 +3611,8 @@
     "归档 docs/p8/CONSOLE-TOOLS-GUIDE.md + MILESTONES 四栏 + tag console-mc3 + merge 回 master"
    ],
    "exe": {
-    "dx12": "build/nanite-console.exe",
-    "vulkan": "build/nanite-console.exe"
+    "dx12": "build/DX12/nanite-console.exe",
+    "vulkan": "build/VULKAN/nanite-console.exe"
    },
    "cases": [
     {
