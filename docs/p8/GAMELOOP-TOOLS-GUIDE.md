@@ -72,3 +72,16 @@ M-GL0 实测：240 行 + 9 行全等（ticks/tickCount 精确；simTime/alpha 1e
 - 双帧消费现状：skin 模式动画时间 = simTime（量化到 tick，起步不插值）；物理叠加层与 ECS scene tick 仍逐渲染帧步进，M-GL2 统一迁入。
 - 消费约定：`--console-exec "game.pause"` 在主循环前生效（命令注册先于预执行行）；截图终帧日志行 `game clock: simTime=... ticks=... paused=... scale=...` 与 PNG 同帧（口径见 PLAN §6 M-GL1 留痕）。
 - 验收复现：`example/gl1/run.bat all`（8 张 PNG + check.py 10 项 MD5 交叉对拍，exit 0 全绿）。
+
+## 场景模式双帧 + M-S3 音频集成（M-GL2 起）
+
+| 入口 | 语义 |
+|---|---|
+| `audio.play <wav> <entity>` | （scene 模式）createSource + 绑定 ECS 实体 + looping 播放；错误走 out-param 返回（createSource 不写 `error()`） |
+| `game.pause` | 逻辑时钟停摆 **且音频 mix 冻结**（复用 audio.freeze / DebugController，M-GL2 拍板 B）；恢复时解冻。runScene 亦注册（--console-exec 可用） |
+| `--fixed-dt <ms>` | runScene 同样生效（clockDtMs 钉点在 `++frame` 前）；迁移用例统一 `16.7`（floor(N×16.7/16.667)=N 保 tick 数） |
+
+- **双帧消费全景**（M-GL2 起）：逻辑帧 60Hz = ECS world.tick（serial/parallel）+ Jolt step（--physics-debug）+ 音频同步（声源位置 ← 实体 `getWorldPosition`）；渲染帧 = present / 相机 / HUD / listener（随相机，漫游时暂停听筒仍活）。
+- **gl2-audio.scene 设计**：orb-a/orb-b 是自转实体 spin-a/spin-b 的**轨道子实体**（E1a 层级）——SpinSystem 只改 rotation（原地自转），直接挂 spin 实体世界位置不变，证不了「随物体移动」；子实体偏移随父旋转形成轨道（半径 1.6/1.4 不变量 = verify.py 几何断言）。
+- **AudioWorld 生命周期**（scene 模式）：realtime 优先，设备初始化失败降级 offline（位置读回同步不依赖设备，无扬声器环境可跑全套验收）；listener 位置渲染帧同步，声源位置逻辑帧同步。
+- **验收复现**：`example/gl2/run.bat`（动/停两组 × 双后端 + verify.py 孪生全绿，exit 0）。

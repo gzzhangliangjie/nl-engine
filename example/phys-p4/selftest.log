@@ -98,6 +98,16 @@
   ok M-P4 crosses platform2
   ok M-P4 tail 60 frames parked
   ok M-P4 determinism: same course twice bit-identical
+  ok M-J5c adapter N=1 bit-identical + N=4 run-to-run deterministic
+drop: frames=120 threads=4
+drop N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+drop N=4 run-to-run: IDENTICAL
+drop parallel vs serial: IDENTICAL (island-parallel determinism)
+stack: cases=3 frames=600
+stack N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+stack N=4 run-to-run: IDENTICAL
+stack parallel vs serial: IDENTICAL (island-parallel determinism)
+phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)
 phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)
 phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)
 phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)

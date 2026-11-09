@@ -8,6 +8,7 @@
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
+#include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
@@ -460,6 +461,10 @@ void registerGameConsole(nl::core::GameClock* clock) {
             return CommandResult{false, "usage: game.pause [on|off]"};
         }
         clock->setPaused(target);
+        // P8 M-GL2 拍板（2026-11-10 用户选 B，UE 流派）：game.pause 连音频播放
+        // 一起冻——复用 M-S2 DebugController.setFrozen（与 audio.freeze 同一机制），
+        // 恢复时同步解冻。「游戏暂停」= 世界 + 声音全冻结。
+        nl::audio::AudioDebugController::get().setFrozen(target);
         return CommandResult{true, std::string("game.pause -> ") +
                              (target ? "on (logic clock frozen; render frames keep running)"
                                      : "off (logic clock running)")};
@@ -875,13 +880,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M-GL1：非 pin 路径改走 GameClock 双帧模型——渲染帧喂 dtMs，逻辑帧 60Hz
         // 消费（暂停=时钟停摆、timeScale 缩放、单帧大 delta 截断 250ms）；
         // simTime 量化到 tick（起步不插值，PLAN §2 拍板），渲染帧取最新逻辑帧状态。
+        // P8 M-GL2：双帧模型全量接线——每渲染帧喂一次时钟，逻辑帧 60Hz callback
+        // 消费（本循环的消费方 = 物理调试 step；场景模式的 ECS tick + 音频同步
+        // 在 runScene 同构）。暂停/倍速/250ms 截断都在时钟内（M-GL0 语义）。
+        gameClock.tick(dtMs, [&o, &physicsScene](double, std::uint64_t) {
+            if (o.physicsDebug) physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
+        });
         if (skinMode) {
-            if (o.animTimeSet) {
-                skinTime = o.animTime;   // M-A5 兼容：直接钉值，绕过时钟（既有基线零风险）
-            } else {
-                gameClock.tick(dtMs, [](double, std::uint64_t) {});   // 逻辑帧消费方 M-GL2 接入
-                skinTime = gameClock.simTime();
-            }
+            // M-A5：--anim-time 直接钉值（取值绕过时钟，既有基线零风险）；时钟本身
+            // 照常推进——pin 模式下物理等其它消费方仍然活着（M-GL2 口径）。
+            skinTime = o.animTimeSet ? o.animTime : gameClock.simTime();
             fp.animTime = skinTime;
             // 截图终帧机械证据：双帧模型状态一行（对拍日志锚）。注意口径：捕获判定
             // （上方 capturePath）在 ++frame 之前求值、持上一迭代 frame 值，PNG 实际
@@ -897,17 +905,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         // M-P3：物理调试叠加层（Jolt 碰撞形状线框）。build 一次（renderer 创建后），
-        // 每帧 step + extractLines 喂给渲染器 LINE_LIST 叠加层。截图模式 240 帧足够
-        // 落体落到地板稳态；交互模式逐帧步进即实时动画。extractLines 返回的 data
+        // 逻辑帧 step（M-GL2 起 step 在 gameClock callback 内，暂停即停）+ 每渲染帧
+        // extractLines 喂给渲染器 LINE_LIST 叠加层。截图模式 240 帧足够落体落到
+        // 地板稳态；交互模式逐逻辑帧步进即实时动画。extractLines 返回的 data
         // 指向 DebugScene 内部缓冲，本帧 renderFrame 后即失效（单帧消费模型）。
         if (o.physicsDebug) {
-            physicsScene.step(1.0 / 60.0);
             const nl::physics::DebugLines dl = physicsScene.extractLines();
             fp.debugLines = true;
             fp.debugLineData = dl.data;
             fp.debugLineVertexCount = dl.vertexCount;
             // 截图最终帧打一行稳态机械证据：线顶点数 + 线框 Y 跨度（落体应已落到 ~0.5）。
-            if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
+            // 口径同 M-GL1：此处已在 ++frame 之后，frame == o.frames 才与 PNG 同帧。
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
                 float minY = 1e9f, maxY = -1e9f;
                 for (std::uint32_t k = 0; k + 1 < dl.vertexCount; ++k) {
                     const float y = dl.data[k * 6 + 1];
@@ -1490,6 +1499,67 @@ int runScene(const Options& o) {
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
 
+    // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
+    nl::core::GameClock gameClock;
+    nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
+    registerGameConsole(&gameClock);          // game.pause/timeScale/status
+    nl::audio::registerAudioConsole(sceneConsole);
+    // M-S3：AudioWorld（realtime；设备不可用降级 offline——位置读回同步不依赖设备，
+    // 截图自动化无扬声器也能跑）。声源绑定实体（按名），每个逻辑帧同步位置。
+    nl::audio::AudioConfig audioCfg{};
+    audioCfg.offline = false;
+    audioCfg.spatialization = true;
+    std::unique_ptr<nl::audio::AudioWorld> audioWorld;
+    struct AudioBind { std::uint32_t src = 0; nl::scene::Entity ent{}; std::string name; };
+    std::vector<AudioBind> audioBinds;
+    auto ensureAudioWorld = [&]() -> nl::audio::AudioWorld* {
+        if (audioWorld) return audioWorld.get();
+        auto w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
+        if (!w->ok()) {
+            nl::core::log::info("audio: device init failed (", w->error(), ") -> offline fallback");
+            audioCfg.offline = true;
+            w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
+        }
+        if (!w->ok()) {
+            nl::core::log::error("audio: AudioWorld init failed: ", w->error());
+            return nullptr;
+        }
+        audioWorld = std::move(w);
+        return audioWorld.get();
+    };
+    sceneConsole.registerCommand("audio.play",
+        "create+start a looping spatial source bound to a scene entity: audio.play <wav> <entityName>",
+        [&](const std::vector<std::string>& args) -> nl::core::console::CommandResult {
+            if (args.size() != 2)
+                return {false, "usage: audio.play <wav> <entityName>"};
+            auto* w = ensureAudioWorld();
+            if (!w) return {false, "audio.play: AudioWorld unavailable"};
+            std::string createErr;
+            const auto id = w->createSource(args[0], &createErr);
+            if (id == 0) return {false, "audio.play: createSource failed: " + createErr};
+            const auto ent = world.findEntityByName(args[1]);
+            if (!ent) return {false, "audio.play: entity not found: " + args[1]};
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(ent->id);
+            if (!t) return {false, "audio.play: entity has no Transform: " + args[1]};
+            const auto p = t->getWorldPosition();
+            w->configureSource(id, 1.0f, /*looping=*/true);
+            w->setSourcePosition(id, {p.x, p.y, p.z});
+            w->startSource(id);
+            audioBinds.push_back({id, *ent, args[1]});
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "audio.play: src %u <-> %s @(%.3f, %.3f, %.3f)",
+                          id, args[1].c_str(), p.x, p.y, p.z);
+            return {true, std::string(buf)};
+        });
+    for (const auto& line : o.consoleExecLines) {
+        const auto r = sceneConsole.exec(line);
+        if (r.ok()) {
+            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+        } else {
+            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+        }
+    }
+
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
     nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
@@ -1546,6 +1616,9 @@ int runScene(const Options& o) {
         const auto now = clock::now();
         const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
+        // P8 M-GL2：钉渲染帧 delta（对拍确定性）——fixed-dt 下 240 帧恰好 240 tick，
+        // 与旧「逐渲染帧固定步长」轨迹逐位一致 → 既有基线零重拍。
+        const double clockDtMs = (o.fixedDtMs > 0.0) ? o.fixedDtMs : dtMs;
         ++frame;
         if (o.screenshot) {
             dtSumMs += dtMs;
@@ -1559,15 +1632,33 @@ int runScene(const Options& o) {
         // renderFrame 的命令列表执行）。
         if (ticking) {
             constexpr double kFixedDt = 1.0 / 60.0;
-            if (o.tickMode == "serial") {
-                world.tick(kFixedDt);
-            } else {
-                std::string tickErr;
-                if (!world.tickParallel(kFixedDt, 4, tickErr)) {
-                    nl::core::log::error("ecs tickParallel failed: ", tickErr);
-                    failed = true;
-                    break;
+            // P8 M-GL2：逐渲染帧固定步长 → GameClock 双帧驱动（暂停=game.pause、
+            // 倍速=game.timeScale、250ms 截断全在时钟内）。逻辑帧内：ECS tick +
+            // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
+            gameClock.tick(clockDtMs, [&](double, std::uint64_t) {
+                if (o.tickMode == "serial") {
+                    world.tick(kFixedDt);
+                } else {
+                    std::string tickErr;
+                    if (!world.tickParallel(kFixedDt, 4, tickErr)) {
+                        nl::core::log::error("ecs tickParallel failed: ", tickErr);
+                        failed = true;
+                        return;
+                    }
                 }
+                for (const auto& b : audioBinds) {
+                    const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
+                    if (!t) continue;
+                    const auto p = t->getWorldPosition();
+                    audioWorld->setSourcePosition(b.src, {p.x, p.y, p.z});
+                }
+            });
+            if (failed) break;
+            // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
+            if (audioWorld) {
+                float eye3[3];
+                camera.eyePosition(eye3);
+                audioWorld->setListenerPosition({eye3[0], eye3[1], eye3[2]});
             }
             // 刷新实例数据：Transform 重取世界矩阵（getWorldMatrix 递归现算，
             // 改 rotation 即生效）。tint/材质不变，updateEcsObjects 全量覆盖。
@@ -1588,6 +1679,34 @@ int runScene(const Options& o) {
                 failed = true;
                 break;
             }
+        }
+
+        // M-S3 机器证据（捕获帧，口径 frame == o.frames 与 PNG 同迭代）：AudioWorld
+        // snapshot 是 DebugController 之后的权威状态——声源位置应与实体世界位置一致。
+        // 暂停用例里这行即「暂停即停」的数值证词（位置冻结在暂停时刻）。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) &&
+            audioWorld && !audioBinds.empty()) {
+            for (const auto& b : audioBinds) {
+                for (const auto& s : audioWorld->snapshot()) {
+                    if (s.id != b.src) continue;
+                    const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
+                    const auto p = t ? t->getWorldPosition() : nl::math::Vec3{};
+                    const bool eq = std::fabs(p.x - s.position.x) < 1e-6f &&
+                                    std::fabs(p.y - s.position.y) < 1e-6f &&
+                                    std::fabs(p.z - s.position.z) < 1e-6f;
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf),
+                                  "audio readback: src=%u entity=%s entityPos=(%.6f, %.6f, %.6f)"
+                                  " srcPos=(%.6f, %.6f, %.6f) equal=%d",
+                                  s.id, b.name.c_str(), p.x, p.y, p.z,
+                                  s.position.x, s.position.y, s.position.z, eq ? 1 : 0);
+                    nl::core::log::info(buf);
+                }
+            }
+            nl::core::log::info("audio clock state: simTime=", gameClock.simTime(),
+                                " ticks=", gameClock.tickCount(),
+                                " paused=", gameClock.paused() ? 1 : 0,
+                                " scale=", gameClock.timeScale());
         }
 
         nl::renderer::FrameParams fp;
@@ -1766,6 +1885,8 @@ void printUsage() {
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
+              << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
+              << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"
               << "                                     (deterministic pause/timescale screenshot runs)\n"
               << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"
               << "  viewer.exe --physics-debug         M-P3 overlay: Jolt collision-shape wireframe\n"

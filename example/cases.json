@@ -4897,7 +4897,7 @@
             "{root}/example/audio-s1/bad-prov"
           ],
           "expectExit": 1,
-          "expectLog": "hash mismatch",
+          "expectLog": "attenuation.tsv mismatch",
           "command": "audio-tools check example/audio-s1/bad-prov"
         }
       ]
@@ -5198,6 +5198,8 @@
             "{root}/example/ecs-parallel/ecs-parallel-spin.scene",
             "--tick",
             "parallel",
+            "--fixed-dt",
+            "16.7",
             "--no-hud",
             "--screenshot",
             "{out}",
@@ -5210,7 +5212,7 @@
             "--pitch",
             "9"
           ],
-          "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
+          "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --fixed-dt 16.7 --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
           "exe": {
             "dx12": "build/DX12/viewer.exe",
             "vulkan": "build/VULKAN/viewer.exe"
@@ -5719,7 +5721,7 @@
             "240"
           ],
           "expectExit": 2,
-          "expectLog": "invalid arguments: jobsThreads out of range",
+          "expectLog": "invalid arguments: bad --jobs",
           "command": "phys-tools simulate --jobs -1 --frames 240"
         }
       ]
@@ -5826,11 +5828,17 @@
             "vulkan": "example/gl1/gl1-pause120-VULKAN.png"
           },
           "args": [
-            "--mode", "skin", "--hud",
-            "--screenshot", "{out}",
-            "--frames", "120",
-            "--fixed-dt", "16.7",
-            "--console-exec", "game.pause"
+            "--mode",
+            "skin",
+            "--hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "120",
+            "--fixed-dt",
+            "16.7",
+            "--console-exec",
+            "game.pause"
           ],
           "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 120 --fixed-dt 16.7 --console-exec \"game.pause\"",
           "script": "example/gl1/run.bat pause"
@@ -5845,14 +5853,116 @@
             "vulkan": "example/gl1/gl1-scale2-VULKAN.png"
           },
           "args": [
-            "--mode", "skin", "--hud",
-            "--screenshot", "{out}",
-            "--frames", "100",
-            "--fixed-dt", "16.7",
-            "--console-exec", "game.timeScale 2"
+            "--mode",
+            "skin",
+            "--hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "100",
+            "--fixed-dt",
+            "16.7",
+            "--console-exec",
+            "game.timeScale 2"
           ],
           "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 100 --fixed-dt 16.7 --console-exec \"game.timeScale 2\"",
           "script": "example/gl1/run.bat scale"
+        }
+      ]
+    },
+    {
+      "id": "gl2",
+      "label": "M-GL2",
+      "name": "游戏循环 M-GL2：物理/音频/ECS 统一接逻辑帧 + M-S3 场景音频",
+      "tag": "gl-m2",
+      "date": "2026-11-10",
+      "summary": "A 类并行轨道 feat/gameloop：物理调试 step / ECS world.tick / 音频场景同步全部收进 GameClock 逻辑帧 callback（runNormal 与 runScene 同构）；runScene 补落 --fixed-dt 并新增 audio.play <wav> <entity>（M-S3：声源挂 ECS 实体、listener 随相机、暂停即停）。game.pause 拍板连音频播放一起冻（复用 audio.freeze，UE 流派）。迁移零重拍：受影响用例加 --fixed-dt 16.7 后总 tick 数不变（floor(N×16.7/16.667)=N），ecs-parallel / phys-p3 / phys-p4 / gl1 基线全部逐字节复现。",
+      "acceptance": [
+        "声源随物体移动：gl2-audio.scene 轨道子实体（E1a 层级）挂自转父实体，声源读回位置 == 实体世界位置（equal=1）且在轨道圆上（半径 1.6/1.4 不变量）并已离开绑定时初始位",
+        "暂停即停：game.pause 后 ticks=0/simTime=0，读回位置冻结在绑定位（E1a 偏移合成未旋转），音频 mix 同步冻结（audio.freeze 联动）",
+        "跨后端逐位：move/pause 两组读回位置 DX12 == VULKAN（纯 CPU 逻辑）",
+        "迁移零重拍：ecs-parallel / phys-p3 / phys-p4 / gl1 复跑 PNG 全部逐字节不变；verify.py 独立孪生 12 检查 × 2 后端全绿"
+      ],
+      "exe": {
+        "dx12": "build/DX12/viewer.exe",
+        "vulkan": "build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "audio-move",
+          "name": "声源随实体移动（逻辑帧同步 + 轨道半径不变量）",
+          "kind": "image",
+          "note": "audio.play 绑 orb-a/orb-b（自转实体的轨道子实体），100 tick 后读回 == 实体世界位置、在轨道圆上、已离开初始位；verify.py 孪生断言全绿。",
+          "baselines": {
+            "dx12": "example/gl2/gl2-move-DX12.png",
+            "vulkan": "example/gl2/gl2-move-VULKAN.png"
+          },
+          "args": [
+            "--mode",
+            "scene",
+            "--scene",
+            "{root}/example/gl2/gl2-audio.scene",
+            "--tick",
+            "parallel",
+            "--fixed-dt",
+            "16.7",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "100",
+            "--size",
+            "960x540",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--console-exec",
+            "audio.play {root}/assets/audio/test-tone.wav orb-a",
+            "--console-exec",
+            "audio.play {root}/assets/audio/test-tone.wav orb-b"
+          ],
+          "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-a\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-b\"",
+          "script": "example/gl2/run.bat move"
+        },
+        {
+          "id": "audio-pause",
+          "name": "暂停即停（时钟停摆 + 音频 mix 冻结联动）",
+          "kind": "image",
+          "note": "game.pause 先于 audio.play：100 帧运行后 ticks=0/simTime=0，读回位置 == 绑定位（orb-a @(-0.6,0,0)、orb-b @(0,0,2.0)，E1a 偏移合成未旋转）。",
+          "baselines": {
+            "dx12": "example/gl2/gl2-pause-DX12.png",
+            "vulkan": "example/gl2/gl2-pause-VULKAN.png"
+          },
+          "args": [
+            "--mode",
+            "scene",
+            "--scene",
+            "{root}/example/gl2/gl2-audio.scene",
+            "--tick",
+            "parallel",
+            "--fixed-dt",
+            "16.7",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "100",
+            "--size",
+            "960x540",
+            "--no-hud",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9",
+            "--console-exec",
+            "game.pause",
+            "--console-exec",
+            "audio.play {root}/assets/audio/test-tone.wav orb-a",
+            "--console-exec",
+            "audio.play {root}/assets/audio/test-tone.wav orb-b"
+          ],
+          "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.pause\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-a\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-b\"",
+          "script": "example/gl2/run.bat pause"
         }
       ]
     }

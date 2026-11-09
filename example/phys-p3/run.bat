@@ -69,7 +69,7 @@ if errorlevel 1 (
 type "%D%regression.log"
 
 echo === viewer DX12 capture (deviceErrors must be 0) ===
-"%VIEW_DX12%" --physics-debug --screenshot "%D%viewer-dx12.png" --size 800x450 --frames 240 > "%D%viewer-dx12.log" 2>&1
+"%VIEW_DX12%" --physics-debug --fixed-dt 16.7 --screenshot "%D%viewer-dx12.png" --size 800x450 --frames 240 > "%D%viewer-dx12.log" 2>&1
 if errorlevel 1 (
     type "%D%viewer-dx12.log"
     echo [ERROR] DX12 physics-debug capture FAILED
@@ -81,7 +81,7 @@ findstr /c:"deviceErrors=0" "%D%viewer-dx12.log" >nul || (echo [ERROR] DX12 devi
 type "%D%viewer-dx12.log"
 
 echo === viewer VULKAN capture (deviceErrors must be 0) ===
-"%VIEW_VK%" --physics-debug --screenshot "%D%viewer-vulkan.png" --size 800x450 --frames 240 > "%D%viewer-vulkan.log" 2>&1
+"%VIEW_VK%" --physics-debug --fixed-dt 16.7 --screenshot "%D%viewer-vulkan.png" --size 800x450 --frames 240 > "%D%viewer-vulkan.log" 2>&1
 if errorlevel 1 (
     type "%D%viewer-vulkan.log"
     echo [ERROR] VULKAN physics-debug capture FAILED

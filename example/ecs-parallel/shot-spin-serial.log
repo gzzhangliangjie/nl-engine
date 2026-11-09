@@ -7,12 +7,12 @@
 [nl:info] ecs tick: serial | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>) | fixed dt=1/60
 [nl:info] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
 [nl:info] mode: scene | objects=4 triangles=331616 model=ecs-parallel-spin.scene | HUD: off | case: ESC=quit, F12=PNG
-[nl:info] screenshot mode: 30 frames -> E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-parallel\shot-spin-serial.png
-[nl:info] gpu timer resolved [frame]: 0.161792 ms (first successful NVRHI timestamp query)
+[nl:info] screenshot mode: 30 frames -> E:\UE_STUDY_2026\nl-engine-gameloop\example\ecs-parallel\shot-spin-serial.png
+[nl:info] gpu timer resolved [frame]: 0.160768 ms (first successful NVRHI timestamp query)
 [nl:info] ecs stats: objects 4 | triangles 331616 | lights 2
-[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-parallel\shot-spin-serial.png
+[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-gameloop\example\ecs-parallel\shot-spin-serial.png
 [nl:info] ecs stats: objects 4 | triangles 331616 | lights 2
 [nl:info] ecs tick summary: mode=serial frames=30 spinObjects=4
 [nl:info] shutdown ok (frames=30 screenshots=1 deviceErrors=0)
-[nl:info] frame timing: avg 2.24004 ms  max 19.1036 ms  over 30 frames (unthrottled)
+[nl:info] frame timing: avg 2.84446 ms  max 23.3161 ms  over 30 frames (unthrottled)
 [nl:info] window destroyed

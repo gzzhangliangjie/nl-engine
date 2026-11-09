@@ -60,7 +60,7 @@ findstr /c:"ecs scene ready" "%OUT%shot-spin-static.log" >nul
 if errorlevel 1 set FAIL=1
 
 echo [case] render: tick serial 30 frames exit 0 + deviceErrors=0 ...
-"%VEXE%" --scene "%OUT%ecs-parallel-spin.scene" --tick serial --screenshot "%OUT%shot-spin-serial.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-serial.log" 2>&1
+"%VEXE%" --scene "%OUT%ecs-parallel-spin.scene" --tick serial --fixed-dt 16.7 --screenshot "%OUT%shot-spin-serial.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-serial.log" 2>&1
 if errorlevel 1 set FAIL=1
 findstr /c:"deviceErrors=0" "%OUT%shot-spin-serial.log" >nul
 if errorlevel 1 set FAIL=1
@@ -68,7 +68,7 @@ findstr /c:"ecs tick summary: mode=serial" "%OUT%shot-spin-serial.log" >nul
 if errorlevel 1 set FAIL=1
 
 echo [case] render: tick parallel 30 frames exit 0 + deviceErrors=0 ...
-"%VEXE%" --scene "%OUT%ecs-parallel-spin.scene" --tick parallel --screenshot "%OUT%shot-spin-parallel.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-parallel.log" 2>&1
+"%VEXE%" --scene "%OUT%ecs-parallel-spin.scene" --tick parallel --fixed-dt 16.7 --screenshot "%OUT%shot-spin-parallel.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-parallel.log" 2>&1
 if errorlevel 1 set FAIL=1
 findstr /c:"deviceErrors=0" "%OUT%shot-spin-parallel.log" >nul
 if errorlevel 1 set FAIL=1
@@ -91,11 +91,11 @@ if errorlevel 1 set FAIL=1
 
 if exist "%ROOT%\build\VULKAN\viewer.exe" (
   echo [case] render VULKAN: tick parallel+serial 30 frames + byte-identical ...
-  "%ROOT%\build\VULKAN\viewer.exe" --scene "%OUT%ecs-parallel-spin.scene" --tick parallel --screenshot "%OUT%shot-spin-parallel-vk.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-parallel-vk.log" 2>&1
+  "%ROOT%\build\VULKAN\viewer.exe" --scene "%OUT%ecs-parallel-spin.scene" --tick parallel --fixed-dt 16.7 --screenshot "%OUT%shot-spin-parallel-vk.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-parallel-vk.log" 2>&1
   if errorlevel 1 set FAIL=1
   findstr /c:"deviceErrors=0" "%OUT%shot-spin-parallel-vk.log" >nul
   if errorlevel 1 set FAIL=1
-  "%ROOT%\build\VULKAN\viewer.exe" --scene "%OUT%ecs-parallel-spin.scene" --tick serial --screenshot "%OUT%shot-spin-serial-vk.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-serial-vk.log" 2>&1
+  "%ROOT%\build\VULKAN\viewer.exe" --scene "%OUT%ecs-parallel-spin.scene" --tick serial --fixed-dt 16.7 --screenshot "%OUT%shot-spin-serial-vk.png" --frames 30 --size 960x540 --no-hud --yaw 12 --pitch 9 > "%OUT%shot-spin-serial-vk.log" 2>&1
   if errorlevel 1 set FAIL=1
   findstr /c:"deviceErrors=0" "%OUT%shot-spin-serial-vk.log" >nul
   if errorlevel 1 set FAIL=1
