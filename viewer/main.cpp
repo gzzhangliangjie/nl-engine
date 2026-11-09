@@ -1134,6 +1134,20 @@ int runScene(const Options& o) {
             l.color[1] = light->color.y;
             l.color[2] = light->color.z;
             l.intensity = light->intensity;
+            // M-E1b.2：点光字段透传 + 显式拒绝（非法 type / 非正 range 退出码 2）
+            l.type = light->type;
+            if (l.type != 0 && l.type != 1) {
+                nl::core::log::error("--scene: entity ", id, " has unknown light type ", l.type);
+                return 2;
+            }
+            l.position[0] = light->position.x;
+            l.position[1] = light->position.y;
+            l.position[2] = light->position.z;
+            l.range = light->range;
+            if (l.type == 1 && l.range <= 0.0f) {
+                nl::core::log::error("--scene: entity ", id, " point light range must be > 0");
+                return 2;
+            }
             lights.push_back(l);
         }
         const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
@@ -1196,9 +1210,11 @@ int runScene(const Options& o) {
     }
     const std::string sceneName =
         std::filesystem::path(scenePath).filename().string();
-    // 机器出口（run.bat findstr 断言）：对象数 / 灯数 / ambient 一行。
+    // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
+    std::uint32_t pointLights = 0;
+    for (const auto& l : lights) if (l.type == 1) ++pointLights;
     nl::core::log::info("ecs scene: ", objects.size(), " objects | ", lights.size(),
-                        " lights | ambient ", ambient);
+                        " lights (", pointLights, " point) | ambient ", ambient);
     if (!renderer->loadEcsScene(objects.data(),
                                 static_cast<std::uint32_t>(objects.size()),
                                 lights.empty() ? nullptr : lights.data(),

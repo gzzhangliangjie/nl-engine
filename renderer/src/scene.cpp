@@ -2332,24 +2332,35 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!batch.instances) { outError = "createBuffer failed for ecs scene instances"; return false; }
     }
 
-    const std::uint32_t lightFloats = (1u + lightCount * 2u) * 4u;
+    // M-E1b.2：每灯 3 个 float4 —— {dir.xyz,I}、{color.rgb,type}、{pos.xyz,InvRadius}。
+    // 头 [0]=(lightCount, ambient, 1/ΣI(方向灯), pointCount)；InvRadius=1/range 由
+    // CPU 预算（UE LightData.InvRadius 同款），shader 只做乘法避免两后端除法微差。
+    const std::uint32_t lightFloats = (1u + lightCount * 3u) * 4u;
     std::vector<float> lightData(lightFloats, 0.0f);
     lightData[0] = static_cast<float>(lightCount);
     lightData[1] = ambient;
-    float sumIntensity = 0.0f;
+    float sumIntensity = 0.0f;     // 只统计方向灯：点光按绝对强度独立累加
+    std::uint32_t pointCount = 0u;
     for (std::uint32_t i = 0; i < lightCount; ++i) {
-        float* d0 = lightData.data() + (1u + i * 2u) * 4u;
+        float* d0 = lightData.data() + (1u + i * 3u) * 4u;
         float* d1 = d0 + 4;
+        float* d2 = d0 + 8;
         d0[0] = lights[i].dir[0]; d0[1] = lights[i].dir[1]; d0[2] = lights[i].dir[2];
         d0[3] = lights[i].intensity;
         d1[0] = lights[i].color[0]; d1[1] = lights[i].color[1]; d1[2] = lights[i].color[2];
-        d1[3] = 0.0f;
-        sumIntensity += lights[i].intensity;
+        d1[3] = static_cast<float>(lights[i].type);
+        d2[0] = lights[i].position[0]; d2[1] = lights[i].position[1];
+        d2[2] = lights[i].position[2];
+        d2[3] = (lights[i].range > 0.0f) ? (1.0f / lights[i].range) : 0.0f;
+        if (lights[i].type == 0) sumIntensity += lights[i].intensity;
+        else ++pointCount;
     }
-    // [0].z = 归一化因子的倒数，CPU 端算好让 shader 只做乘法：
+    // [0].z = 方向灯归一化因子的倒数，CPU 端算好让 shader 只做乘法：
     // shader 内做除法时 DXIL / SPIR-V 的浮点精度差会在个别像素上差 1~2/255，
     // 预乘倒数后两后端读同一份缓冲、运算完全一致（双后端 bytes 口径）。
+    // [0].w = 点光数量，仅作 uniform 分支判据（无点光时走 M-E1b.0 原表达式）。
     lightData[2] = (sumIntensity > 0.0f) ? (1.0f / sumIntensity) : 0.0f;
+    lightData[3] = static_cast<float>(pointCount);
     nvrhi::BufferDesc lightDesc;
     lightDesc.byteSize = lightData.size() * sizeof(float);
     lightDesc.structStride = 16;             // StructuredBuffer<float4>

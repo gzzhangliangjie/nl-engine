@@ -125,3 +125,13 @@ python tools/regression.py --only ecs-e1b
 - 展示台：`example/cases.json` 的 `ecs-e1b` 卡新增 `scale` pair 用例（`{root}` 绝对路径 + `--dist 18`）；`--dist 18` 是为绕开自动取景被高密度 mesh 包围球撑远的问题，viewer 已有参数，不改取景公式。
 - **实例化铁律**：禁止用 `startInstanceLocation` 让 `SV_InstanceID` 当全局槽号（DX12 不把它计入实例号）→ 每个 batch 各持自己的 t5 实例缓冲。详 `docs/SHADER-CONVENTIONS.md` §2.10。
 - 双后端互比 6px / maxDelta 23 → 按阈值落 FAIL 档（5 个 ±1 取整 + 1 个环面边缘覆盖差），各自对本后端基线 bytes；如实留痕，不再折腾精度。
+
+## M-E1b.2：点光源（2026-11-09）
+
+- 命令：`viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-point.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18`；一键复拍 `example/ecs-e1b/run-point.bat`（双后端 + 机器断言，exit 0）。
+- 场景：7 个 Suzanne 白模（tint 全 1，颜色完全由灯决定）x=-9..9 一字排开；3 盏彩色点光（红 / 绿 / 蓝，z=+2、`range=8`、`intensity=8`）+ 1 盏弱方向灯轮廓，ambient 0.08，共 11 实体。肉眼可判三色光池与近亮远暗的距离衰减。
+- 组件字段：`LightComponent` 增 `type`(0=Directional 默认 / 1=Point) / `position` / `range`；**方向灯 `serialise()` 不写新键**，既有场景 JSON 与 ecs-serial roundtrip 逐字节兼容；viewer 收集段对非法 type 与非正 range 显式退出码 2。
+- 灯缓冲：t6 每灯 3 个 float4，头 slot 含 `pointCount`；`InvRadius=1/range` CPU 预算。衰减照抄 UE `DeferredLightingCommon.ush:480-486`；点光按绝对强度独立累加，方向灯仍 `1/ΣI` 归一化；无点光时走 M-E1b.0 原表达式分支。铁律详 `docs/SHADER-CONVENTIONS.md` §2.11。
+- 验收：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`--only ecs-e1b` 6/6 bytes、`--only s6.2` 10/10 bytes；`point` 卡双后端画面 MD5 完全一致（`f28ca72adda2cb0bbcc43a008e0b5592`，本轨首个互比 bytes）；`scene` 卡基线逐字节不变，`scale` 卡因新增 `WORLDPOS` 插值量重拍（1px/maxDelta1 取整噪声）。
+- **bat 铁律**：`for ... do ( ... )` 块内的 `echo` 文本禁止出现未转义的 `)`（右括号提前闭合块 → cmd「此时不应有 /」exit 255）；本轮 run-point.bat 初版踩过。
+- 未完成：点光的 PBR 材质响应 / 阴影 / clustered 灯池，见 `docs/s5/UE-DIFFS.md` `D-E1b-1`；前置是 E1 轨道收官 merge 回 master（同步 pbr-direct）。

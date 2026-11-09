@@ -178,6 +178,10 @@ struct SceneLightDesc {
     float dir[3];           // 归一化后的光照传播方向（世界空间）
     float color[3];
     float intensity;
+    // M-E1b.2 尾部追加（POD；viewer 的 `SceneLightDesc l{}` 仍按默认值零初始化）
+    int   type        = 0;                    // 0=Directional / 1=Point
+    float position[3] = {0.0f, 0.0f, 0.0f}; // 点光世界位置
+    float range       = 12.0f;               // 衰减截断半径
 };
 
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。

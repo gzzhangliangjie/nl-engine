@@ -599,6 +599,16 @@ void buildSerialiseScene(World& w, CounterSystem** outSys) {
     dl->color = { 1.0f, 0.95f, 0.9f };
     dl->intensity = 2.5f;
 
+    // M-E1b.2：实体 E 挂 Point Light（type=1），验证新字段 roundtrip 与
+    // 方向灯（D，type=0 不写新键）的向后兼容。
+    Entity e = w.newEntity("E");
+    auto* el = static_cast<LightComponent*>(&e.addComponent(std::make_unique<LightComponent>(e)));
+    el->type = 1;
+    el->color = { 0.3f, 0.8f, 1.0f };
+    el->intensity = 8.0f;
+    el->position = { -2.5f, 1.5f, 3.0f };
+    el->range = 9.0f;
+
     w.tick(0.0); // flush（serialise 序列化 flush 后世界）
     auto sys = std::make_unique<CounterSystem>(w);
     *outSys = sys.get();
@@ -674,9 +684,20 @@ void testRoundtripByteIdentical() {
         expectVec3(dl2->color, { 1.0f, 0.95f, 0.9f }, kEps, "light color preserved");
         expectNear(dl2->intensity, 2.5f, kEps, "light intensity preserved");
     }
-    // nextID 保留：新实体 ID 接续（5 = A/B/C/D 四实体后的 nextID）
+    // M-E1b.2：Point Light 新字段逐字段还原（E 占 id 5）；D 仍为方向灯且不带新键
+    auto* el2 = w2.getComponent<LightComponent>(5);
+    expectTrue(el2 != nullptr, "E LightComponent restored");
+    if (el2) {
+        expectTrue(el2->type == 1, "point light type preserved");
+        expectVec3(el2->position, { -2.5f, 1.5f, 3.0f }, kEps, "point light position preserved");
+        expectNear(el2->range, 9.0f, kEps, "point light range preserved");
+        expectVec3(el2->color, { 0.3f, 0.8f, 1.0f }, kEps, "point light color preserved");
+        expectNear(el2->intensity, 8.0f, kEps, "point light intensity preserved");
+    }
+    if (dl2) expectTrue(dl2->type == 0, "D stays directional (backward compat)");
+    // nextID 保留：新实体 ID 接续（6 = A/B/C/D/E 五实体后的 nextID）
     Entity e4 = w2.newEntity("E4");
-    expectId(e4.getID(), 5, "nextID preserved (no id reuse)");
+    expectId(e4.getID(), 6, "nextID preserved (no id reuse)");
 }
 
 void testDeserialiseExplicitReject() {

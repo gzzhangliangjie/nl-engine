@@ -3,13 +3,13 @@
 [nl:warn] feature report has unsupported items; S7/S8 需按此能力调整
 [nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
 [nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
-[nl:info] ecs scene: 50 objects | 8 lights | ambient 0.22
+[nl:info] ecs scene: 50 objects | 8 lights (0 point) | ambient 0.22
 [nl:info] ecs scene ready: ecs-e1b-scale.scene | objects=50 lights=8 ambient=0.22 | batches=4 | triangles=540352 | shader=spv
 [nl:info] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
 [nl:info] mode: scene | objects=50 triangles=540352 model=ecs-e1b-scale.scene | HUD: off | case: ESC=quit, F12=PNG
 [nl:info] screenshot mode: 8 frames -> E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-e1b\shot-scale-VULKAN.png
-[nl:info] gpu timer resolved [frame]: 1.90867 ms (first successful NVRHI timestamp query)
+[nl:info] gpu timer resolved [frame]: 1.91187 ms (first successful NVRHI timestamp query)
 [nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-ecs\example\ecs-e1b\shot-scale-VULKAN.png
 [nl:info] shutdown ok (frames=8 screenshots=1 deviceErrors=0)
-[nl:info] frame timing: avg 8.67399 ms  max 55.5926 ms  over 8 frames (unthrottled)
+[nl:info] frame timing: avg 9.03313 ms  max 56.036 ms  over 8 frames (unthrottled)
 [nl:info] window destroyed

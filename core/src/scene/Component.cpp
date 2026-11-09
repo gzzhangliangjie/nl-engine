@@ -152,6 +152,13 @@ nlohmann::json LightComponent::serialise() const {
     j["direction"] = {direction.x, direction.y, direction.z};
     j["color"]     = {color.x, color.y, color.z};
     j["intensity"] = intensity;
+    // M-E1b.2：方向灯（type=0）不写新键 —— 既有 M-E1b.0/1 场景 JSON 与
+    // ecs-serial roundtrip 逐字节判据零变化；点光才带 type/position/range。
+    if (type != 0) {
+        j["type"]     = type;
+        j["position"] = {position.x, position.y, position.z};
+        j["range"]    = range;
+    }
     return j;
 }
 
@@ -159,6 +166,15 @@ void LightComponent::deserialise(const nlohmann::json& j) {
     direction = {j.at("direction")[0], j.at("direction")[1], j.at("direction")[2]};
     color     = {j.at("color")[0], j.at("color")[1], j.at("color")[2]};
     intensity = j.at("intensity").get<float>();
+    // 缺键 = 方向灯（向后兼容）。type 合法性与 range>0 由 viewer 收集段显式拒绝，
+    // 不在组件层 assert（五路负向口径：不静默、不崩、返回退出码 2）。
+    if (j.find("type") != j.end()) {
+        type = j.at("type").get<int>();
+        if (j.find("position") != j.end())
+            position = {j["position"][0], j["position"][1], j["position"][2]};
+        if (j.find("range") != j.end())
+            range = j["range"].get<float>();
+    }
 }
 
 } // namespace nl::scene

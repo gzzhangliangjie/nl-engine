@@ -223,13 +223,21 @@ public:
     explicit LightComponent(Entity owner) : ComponentOf<LightComponent>(owner) {}
     LightComponent(const LightComponent& other, Entity newOwner)
         : ComponentOf<LightComponent>(newOwner),
-          direction(other.direction), color(other.color), intensity(other.intensity) {}
+          type(other.type), direction(other.direction), color(other.color),
+          intensity(other.intensity), position(other.position), range(other.range) {}
 
     static constexpr const char* kName = "Light";
 
-    Vec3 direction{0.0f, -1.0f, 0.0f};  // 光照传播方向（世界空间，viewer 侧归一化）。
-    Vec3 color{1.0f, 1.0f, 1.0f};
+    // M-E1b.2 点光源：0=Directional（默认，M-E1b.0/1 既有场景 JSON 零键变化）、1=Point。
+    // 三处对照口径：Carrot GPULight::LightType 枚举 + union（组件只存纯数据、灯池在
+    // 渲染侧）、bevy PointLight{color,intensity,range}、UE UPointLightComponent
+    // bUseInverseSquaredFalloff + AttenuationRadius。
+    int   type = 0;
+    Vec3  direction{0.0f, -1.0f, 0.0f};  // 光照传播方向（世界空间，viewer 侧归一化）。
+    Vec3  color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
+    Vec3  position{0.0f, 0.0f, 0.0f};    // 点光世界位置（仅 type=1 生效）
+    float range = 12.0f;                 // 衰减截断半径（bevy range / UE AttenuationRadius）
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;

@@ -26,13 +26,15 @@
 // M-E1b.0：ECS 场景入口对（vsScene/psScene）—— N 物体 M 方向灯实例化渲染
 // （P8 ECS 轨道，viewer --scene 消费）。口径来源：Carrot ModelRenderSystem
 // （实例世界矩阵 + 实例 tint 走实例缓冲、灯数据走缓冲不走 cbuffer；多灯 =
-// 方向灯数组，每灯 direction+color+intensity，点光源不做——2026-11-09 拍板）。
+// 方向灯数组，每灯 direction+color+intensity；M-E1b.2 增补点光源 type/position/range）。
 // 资源布局（既有入口一个字符不动，本段为文件尾独立新增）：
 //   t5 = g_instanceData：每实例 5 个 float4：
 //        [0..3] = 世界矩阵列主序 4 列（TransformComponent::getWorldMatrix()），
 //        [4]    = (tint.rgb, 0)（ModelComponent::tint）
-//   t6 = g_lights：[0] = (lightCount, ambient, 1/ΣI, 0)，之后每灯 2 个 float4：
-//        {dir.xyz, intensity}、{color.rgb, 0}
+//   t6 = g_lights：[0] = (lightCount, ambient, 1/ΣI(方向灯), pointCount)，
+//        之后每灯 3 个 float4（M-E1b.2 从 2 个扩展）：
+//        {dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}
+//        type=0 方向灯 / 1 点光；InvRadius=1/range（UE LightData.InvRadius 口径）。
 //   b0/t0/s0 与既有入口共用（SceneConstants volatile CB / 贴图 / 采样器）。
 // 独立入口对的纪律同 vsCluster 先例：vsScene 输入多带 SV_InstanceID（D3D12
 // debug layer 对「VS 签名 vs input layout」严格对应，不与既有签名混用），
@@ -257,7 +259,9 @@ float4 psCull(PSCullInput input) : SV_Target
 }
 
 // ============================================================================
-// M-E1b.0：ECS 场景入口对（资源布局见文件头注释段）。
+// M-E1b.0 / M-E1b.2：ECS 场景入口对（资源布局见文件头注释段）。
+// M-E1b.2 点光源：t6 每灯扩为 3 个 float4，vsScene 多输出 WORLDPOS 插值量，
+// psScene 按 type 分支；方向灯分支的表达式保持 M-E1b.0 原样（基线逐字节依赖）。
 // ============================================================================
 
 StructuredBuffer<float4> g_instanceData : register(t5);
@@ -276,6 +280,7 @@ struct VSOutputScene
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
     float3 tint     : TINT;
+    float3 worldPos : WORLDPOS;   // M-E1b.2：点光衰减需要世界空间片元位置
 };
 
 VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
@@ -294,6 +299,7 @@ VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
     output.normal   = mul((float3x3)world, input.normal);
     output.uv       = input.uv;
     output.tint     = g_instanceData[base + 4u].xyz;
+    output.worldPos = worldPos;
     return output;
 }
 
@@ -303,6 +309,7 @@ struct PSInputScene
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
     float3 tint     : TINT;
+    float3 worldPos : WORLDPOS;
 };
 
 float4 psScene(PSInputScene input) : SV_Target
@@ -314,26 +321,52 @@ float4 psScene(PSInputScene input) : SV_Target
 
     const float lightCount      = g_lights[0].x;
     const float ambient         = g_lights[0].y;
-    const float invSumIntensity = g_lights[0].z;   // CPU 端预算的 1/ΣI（只在灯缓冲里）
+    const float invSumIntensity = g_lights[0].z;   // CPU 端预算的 1/ΣI（仅方向灯）
+    const float pointCount      = g_lights[0].w;   // 点光源数（uniform 分支判据）
     float3 direct = float3(0.0f, 0.0f, 0.0f);
-    // 方向灯数组：每灯 {dir.xyz, intensity}、{color.rgb, 0}（t6 布局见文件头）。
+    float3 pointDirect = float3(0.0f, 0.0f, 0.0f);
+    // 每灯 3 个 float4：{dir.xyz, intensity}、{color.rgb, type}、{position.xyz, InvRadius}
     for (uint i = 0u; i < (uint)lightCount; ++i)
     {
-        const float4 dirInt = g_lights[1u + i * 2u];
-        const float4 color  = g_lights[2u + i * 2u];
-        // abs() 与 mode 0 同口径：关背面剔除时内壁也被照亮。
-        // dirInt.xyz 已由 viewer 侧归一化后写进灯缓冲（同一份数据两后端共享）；
-        // shader 内再 normalize 一次是多余且 DXIL/SPIR-V 实现有微差 → 直接用。
-        const float ndl = abs(dot(n, dirInt.xyz));
-        direct += color.rgb * dirInt.w * ndl;
+        const float4 dirInt = g_lights[1u + i * 3u];
+        const float4 color  = g_lights[2u + i * 3u];
+        const float4 posRng = g_lights[3u + i * 3u];
+        if (color.w > 0.5f)
+        {
+            // M-E1b.2 点光衰减 = UE DeferredLightingCommon.ush:480-486 实读口径：
+            //   DistanceAttenuation = 1/(d²+1) * Square(saturate(1 - Square(d²/r²)))
+            //   L = ToLight * rsqrt(d²)，NoL = saturate(dot(N,L))
+            // CPU 端写 InvRadius=1/range（UE LightData.InvRadius 同款），shader 只做
+            // 乘法；半径外窗函数平滑归零，避免硬截断。点光按绝对强度独立累加，
+            // 不进方向灯的 1/ΣI 归一化（否则 att<<1 会让点光几乎看不见）。
+            const float3 toLight = posRng.xyz - input.worldPos;
+            const float d2 = dot(toLight, toLight);
+            const float3 L = toLight * rsqrt(max(d2, 1e-8f));
+            const float q = d2 * posRng.w * posRng.w;   // d² * InvRadius²
+            const float radiusMask = saturate(1.0f - q * q);
+            const float att = (1.0f / (d2 + 1.0f)) * radiusMask * radiusMask;
+            const float ndl = max(dot(n, L), 0.0f);     // 点光用单面（物理口径）
+            pointDirect += color.rgb * dirInt.w * ndl * att;
+        }
+        else
+        {
+            // 方向灯：M-E1b.0/1 原表达式一字不动（既有画面基线逐字节依赖）。
+            // abs() 与 mode 0 同口径：关背面剔除时内壁也被照亮。
+            // dirInt.xyz 已由 viewer 侧归一化写进灯缓冲，shader 内不再 normalize。
+            const float ndl = abs(dot(n, dirInt.xyz));
+            direct += color.rgb * dirInt.w * ndl;
+        }
     }
-    // 多灯强度直接相加会整体过曝（本期三点布光 ΣI≈4.7，clamp 后全画面 1.0，
-    // 三盏灯的方向/色温差别完全看不出来）。按总强度归一化成「加权平均」：
-    // 每盏灯的 intensity 变成权重，ndl 与 color 保留明暗/冷暖层次，ambient 兜底。
-    // 绝对强度语义（曝光 / tone mapping）留作 pbr-direct merge 后的升级项。
-    // 归一化只做乘法（倒数由 CPU 预算）→ DXIL/SPIR-V 逐位一致，双后端 bytes。
+    // 多灯强度直接相加会整体过曝（ΣI≈4.7，clamp 后全画面 1.0，三灯的
+    // 方向/色温差别完全看不出来）。按方向灯总强度归一化成「加权平均」；
+    // 归一化只做乘法（倒数 CPU 预算）→ DXIL/SPIR-V 逐位一致，双后端 bytes。
+    // **无点光时走原表达式**（M-E1b.0/1 基线逐字节不变）；有点光时额外累加。
     // lightCount=0 时 invSumIntensity=0、direct=0 → 退化为纯 ambient。
-    float3 lighting = min(ambient + direct * invSumIntensity, 1.0f);
+    float3 lighting;
+    if (pointCount > 0.5f)
+        lighting = min(ambient + direct * invSumIntensity + pointDirect, 1.0f);
+    else
+        lighting = min(ambient + direct * invSumIntensity, 1.0f);
     float3 lit = albedo * lighting;
     return float4(lit, 1.0f);
 }

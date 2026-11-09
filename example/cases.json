@@ -3673,7 +3673,7 @@
     "name": "ECS 渲染集成：viewer --scene 画 5 物体 × 3 方向灯（feat/ecs 并行轨道）",
     "tag": "ecs-e1b.0",
     "date": "2026-11-09",
-    "summary": "E1b 渲染集成分段：ModelComponent（mesh 路径 + tint）/ LightComponent（方向+颜色+强度）作为纯数据组件进 nl/scene；viewer --scene <World JSON> 反序列化后 O(N) 遍历收集，Renderer::loadEcsScene 按 meshFile 分组批量实例化，新入口对 vsScene/psScene 与 t5 实例缓冲 / t6 灯缓冲（既有 shader 入口逐字节不动，kStage 保持 S6.2 不 bump，照 console 轨道先例）。三处参考口径：Carrot ModelRenderSystem 双签名收集 + ModelComponent 路径、bevy PointLight 纯数据灯、UE ULightComponent 多灯注册。画面 5 个 Suzanne（不同 TRS/tint：红绿蓝黄白）+ 三点布光（暖白主光 / 冷蓝补光 / 暖橙轮廓），ambient 0.22，灯强按总强度归一化成加权平均避免过曝。M-E1b.1 规模锚：50 物体 + 8 方向灯、4 个 mesh batch（13/13/12/12）；修掉多 batch 实例化 bug——DX12 的 SV_InstanceID 不含 StartInstanceLocation，旧实现把全场实例放一个缓冲导致每个 batch 都读槽 0（5+3 单 batch 未暴露），改为每 batch 各持自己的 t5 实例缓冲，单 batch 画面逐字节不变。",
+    "summary": "E1b 渲染集成分段：ModelComponent（mesh 路径 + tint）/ LightComponent（方向+颜色+强度）作为纯数据组件进 nl/scene；viewer --scene <World JSON> 反序列化后 O(N) 遍历收集，Renderer::loadEcsScene 按 meshFile 分组批量实例化，新入口对 vsScene/psScene 与 t5 实例缓冲 / t6 灯缓冲（既有 shader 入口逐字节不动，kStage 保持 S6.2 不 bump，照 console 轨道先例）。三处参考口径：Carrot ModelRenderSystem 双签名收集 + ModelComponent 路径、bevy PointLight 纯数据灯、UE ULightComponent 多灯注册。画面 5 个 Suzanne（不同 TRS/tint：红绿蓝黄白）+ 三点布光（暖白主光 / 冷蓝补光 / 暖橙轮廓），ambient 0.22，灯强按总强度归一化成加权平均避免过曝。M-E1b.1 规模锚：50 物体 + 8 方向灯、4 个 mesh batch（13/13/12/12）；修掉多 batch 实例化 bug——DX12 的 SV_InstanceID 不含 StartInstanceLocation，旧实现把全场实例放一个缓冲导致每个 batch 都读槽 0（5+3 单 batch 未暴露），改为每 batch 各持自己的 t5 实例缓冲，单 batch 画面逐字节不变。M-E1b.2 点光源：LightComponent 增 type/position/range（type=0 方向灯不写新键，既有场景 JSON 与 roundtrip 逐字节兼容），t6 灯缓冲每灯扩为 3 个 float4，vsScene 增 WORLDPOS 插值量；衰减照抄 UE DeferredLightingCommon.ush:480-486 （1/(d²+1) x Square(saturate(1-Square(d²/r²)))），点光按绝对强度独立累加、方向灯仍按 1/ΣI 归一化，无点光时走 M-E1b.0 原表达式分支。",
     "acceptance": [
       "双后端 5 objects / 3 lights / batches=1 / triangles=3936 / deviceErrors=0（shot-*.log）",
       "example/ecs-e1b/run.bat exit 0：双后端复拍 + 机器断言（对象数/灯数/零设备错误/PNG 存在）",
@@ -3682,7 +3682,10 @@
       "既有路径无回归：kStage 一字未动，--only 抽查既有渲染用例分档不变",
       "M-E1b.1 规模锚：双后端 50 objects / 8 lights / batches=4 / triangles=540352 / deviceErrors=0（shot-scale-*.log）",
       "example/ecs-e1b/run-scale.bat exit 0：双后端复拍 + 机器断言（对象数/灯数/批次数/零设备错误/PNG 存在）",
-      "M-E1b.1 修复后 M-E1b.0 既有基线 MD5 逐字节不变（ce22b53226c7c5485f29e67efb602aef）"
+      "M-E1b.1 修复后 M-E1b.0 既有基线 MD5 逐字节不变（ce22b53226c7c5485f29e67efb602aef）",
+      "M-E1b.2：双后端 7 objects / 4 lights (3 point) / deviceErrors=0（shot-point-*.log）",
+      "example/ecs-e1b/run-point.bat exit 0：双后端复拍 + 机器断言（对象数/灯数/点光数/零设备错误/PNG 存在）",
+      "M-E1b.2 向后兼容：scene 卡基线 MD5 ce22b53226c7c5485f29e67efb602aef 逐字节不变；scale 卡因新增 WORLDPOS 插值量重拍双后端基线（复拍差异 1px/maxDelta1 = GPU 取整噪声）；point 卡双后端画面 MD5 完全一致（f28ca72adda2cb0bbcc43a008e0b5592）；nanite-scene ecs-serial 新增点光字段 roundtrip 断言全绿"
     ],
     "exe": {
       "dx12": "build/dx12/viewer.exe",
@@ -3744,6 +3747,35 @@
         ],
         "command": "viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-scale.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18",
         "script": "example/ecs-e1b/run-scale.bat"
+      },
+      {
+        "id": "point",
+        "name": "7 白模 × 3 彩色点光 + 1 弱方向灯（距离衰减 / 光池）",
+        "kind": "pair",
+        "note": "M-E1b.2：7 个 Suzanne 白模（tint 全 1）一字排开 x=-9..9，颜色完全来自 3 盏彩色点光（红/绿/蓝，z=+2、range=8、intensity=8）+ 1 盏弱方向灯做轮廓；ambient 0.08。点光衰减 = UE 反平方 + 半径窗，距离远出 range 的物体只受 ambient + 方向灯，肉眼可判近亮远暗与三色光池。LightComponent type=1 才写新键，方向灯路径逐字节兼容。",
+        "baselines": {
+          "dx12": "example/ecs-e1b/shot-point-DX12.png",
+          "vulkan": "example/ecs-e1b/shot-point-VULKAN.png"
+        },
+        "args": [
+          "--scene",
+          "{root}/example/ecs-e1b/ecs-e1b-point.scene",
+          "--no-hud",
+          "--screenshot",
+          "{out}",
+          "--frames",
+          "8",
+          "--size",
+          "960x540",
+          "--yaw",
+          "12",
+          "--pitch",
+          "9",
+          "--dist",
+          "18"
+        ],
+        "command": "viewer.exe --scene {root}/example/ecs-e1b/ecs-e1b-point.scene --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9 --dist 18",
+        "script": "example/ecs-e1b/run-point.bat"
       }
     ]
   }

@@ -1389,3 +1389,27 @@
 **双后端分档（如实报，不笼统说「一致」）**：各自对本后端基线 **bytes**（回归 4/4）；两后端画面互比 `scale` = `diffPixels=6 / maxDelta=23`，按 near 阈值（≤2px 且 ≤1/255）两项都超 → 互比落 **FAIL 档**。逐像素拆解：5 个是 ±1 取整噪声，第 6 个 `(690,369)` 是绿色环面边缘覆盖差（±23），属 GPU 边缘取整而非光照 / 几何差异。`scene` 卡互比仍 3px/maxDelta2（M-E1b.0 已知项）。精度项继续留痕，不折腾。
 
 **下一步**：E1 轨道收官 merge 回 master（需等 master 的 S7 vis buffer WIP 提交且工作区干净）；或 E1b.2 点光源 / 材质响应（用户拍板留 pbr-direct merge 后）。wt_pool M-E1b.1 占坑已 release。
+
+---
+
+## M-E1b.2 ECS 场景点光源（2026-11-09）
+
+**动作**：`LightComponent` 扩展 `type`（0=Directional 默认 / 1=Point）、`position`（世界位置）、`range`（衰减截断半径）；`SceneLightDesc` 尾部追加同三个字段；t6 灯缓冲由每灯 2 个 float4 扩为 **3 个**（`{dir,I}`、`{color,type}`、`{position,InvRadius}`），头 slot 增 `pointCount`；`vsScene` 增 `WORLDPOS` 插值量，`psScene` 按 type 分支。点光衰减逐条照抄 UE `DeferredLightingCommon.ush:480-486` 实读公式（`1/(d²+1) × Square(saturate(1-Square(d²·InvRadius²)))`、`L=ToLight*rsqrt(d²)`、单面 `max(dot(N,L),0)`）；`InvRadius=1/range` 由 CPU 预算，shader 不做灯参数除法。点光按绝对强度**独立累加**、不进方向灯的 `1/ΣI` 归一化（否则 `att<<1` 会把点光压没）；无点光时 `psScene` 走 M-E1b.0 原表达式分支保护既有基线。三处参考定向实读：Carrot `GPULight::LightType` 枚举 + union（组件纯数据、灯池在渲染侧）、bevy `bevy_light/src/point_light.rs` `PointLight{color,intensity,range,radius}`、UE `UPointLightComponent` `bUseInverseSquaredFalloff` + `AttenuationRadius` + `LightFalloffExponent`。**不 merge master**：只读 `git merge-tree` 探查显示同步会撞至少 12 个文件冲突（S7 visbuf + pbr-direct 与 E1b 的 `renderer/*` / `model.slang` / `modes.hpp` 全重叠），本轮与 E1b.0/1 同构留在 wt 基线；因此点光暂为 Lambert 响应，PBR 材质响应留轨道收官 merge 后。
+
+**提交版本**：feat/ecs 本轮 commit（tag `ecs-e1b.2`）；**不 merge 回 master**（轨道未整体收官）。
+
+**完成情况（四项自查）**
+1. 渲染交代物：`example/ecs-e1b/ecs-e1b-point.scene`（7 白模 + 3 彩色点光 + 1 弱方向灯 = 11 实体）/ `run-point.bat`（双后端复拍 + 机器断言，exit 0）/ `shot-point-{DX12,VULKAN}.{png,log}`；`example/cases.json` 在 `ecs-e1b` 卡加 `point` pair 用例与 3 条 acceptance；`python tools/showcase/server.py --check` 退出 0。
+2. 工具交代物：**本轮无新增展示台 tool 卡**（纯渲染验证）；`nanite-scene selftest --all` 四 suite 在 DX12/VULKAN 双树各 PASS（ecs-serial 新增实体 E 点光字段逐字段 roundtrip + 方向灯不带新键断言）；DX12/VULKAN 双树 BUILD OK；本轮有渲染证据图。
+3. 台账：本段即四栏。
+4. 固化：`P8-ECS-PLAN.md` E1b 段补 M-E1b.2、`ECS-TOOLS-GUIDE.md` 新增 M-E1b.2 节、`SHADER-CONVENTIONS.md` 新增 §2.11（灯缓冲布局 / 衰减公式 / 归一化 / 向后兼容铁律）、`UE-DIFFS.md` 追加 `D-E1b-1`（轨道局部编号，避开主线 D10~D15 撞号）、两张新证据图 + 两张重拍 scale 图归档 `docs/screenshots/`。
+- **渲染证据图**：`docs/screenshots/ecs-e1b-point-{dx12,vulkan}.png`；肉眼核验 7 个 Suzanne 一字排开，颜色由左至右呈红 → 红绿 → 绿 → 绿蓝 → 蓝的连续光池，近灯亮远灯暗，无过曝、无缺失，双后端布局与像素完全一致。
+- 验收数字：双后端 `7 objects | 4 lights (3 point) | batches=1 | triangles=3936 | deviceErrors=0`；`regression.py --only ecs-e1b` **6/6 bytes**（scene/scale/point 三卡 × 双后端）、抽查 `--only s6.2` **10/10 bytes**；`selftest --all` 双后端各 0、`--check` 0。`scene` 卡既有基线 MD5 `ce22b53226c7c5485f29e67efb602aef` **逐字节不变**。
+
+**踩坑情况（本轮两条）**
+1. **`run-point.bat` 的 `echo ... (3 point) ...` 提前闭合 for 块**：ASCII bat 里 `for %%B in (...) do (...)` 块内出现未加引号 / 未 `^)` 转义的右括号，cmd 解析到 `)` 就闭合块，把后面的 ` / zero device errors` 当命令 → `此时不应有 /`、exit 255、两张图都没拍。修：块内 echo 文本一律不用圆括号（run-scale.bat 当初的文字没有括号所以没暴露）。
+2. **新增 `WORLDPOS` 插值量后 scale 卡复拍出现 1px / maxDelta1 差异**（`scene` 卡 MD5 逐字节不变）：`(208,402)` 单像素 G 通道 49→50，属 GPU 边缘取整噪声、按项目阈值是 near 档而非逻辑回归。按纪律重拍 `scale` 双后端基线并在台账 / cases.json 留痕；`point` 卡因 shader 里没有除法或 normalize 分歧，双后端 MD5 完全一致。
+
+**双后端分档（如实报，不笼统说「一致」）**：`--only ecs-e1b` 6/6 **bytes**（各自对本后端基线）。三卡画面互比：`point` = `diffPixels=0 / maxDelta=0` → **bytes 档**（双后端逐字节一致，本轨首个）；`scene` = 3px/maxDelta2、`scale` = 7px/maxDelta23（重拍后由 6px 变 7px），两项都超 near 阈值（≤2px 且 ≤1/255）→ 互比落 **FAIL 档**（已知 GPU 取整 / 环面边缘覆盖差），继续留痕不折腾。
+
+**下一步**：E1 轨道收官 merge 回 master（需解 `cases.json` / `MILESTONES` / `SHADER-CONVENTIONS` / `UE-DIFFS` / `renderer/*` 双侧冲突，并同步 master 的 S7 visbuf + pbr-direct）；或 E1b.3 点光接 PBR BRDF / 阴影（前提是先收官 merge）。wt_pool M-E1b.2 占坑待 release。
