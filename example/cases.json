@@ -3164,16 +3164,16 @@
   {
    "id": "s6.0",
    "label": "M6.0",
-   "name": "Hi-Z 深度预通道 + 手写 min 金字塔（S6 开篇）",
+   "name": "Hi-Z 深度预通道 + 金字塔（S6 开篇；M6.1 修正为 max 口径）",
    "tag": "s6-hiz",
    "date": "2026-11-09",
-   "note": "hiz.slang 6 入口：prepass 深度写（视点径向距离 distance(worldPos, eye)，与 M5.0 误差公式同空间）+ compute NMin 逐级金字塔 + 层级可视化覆盖层 + top 回读（环形 3 项延迟两帧）。金字塔 POT 化 1024x512（SHADER-CONVENTIONS §2.8），prepass 单 BindingSet hizPrepassSet_（§2.7）。viewer --mode hiz + HUD pyramid mip 滑条 + 右下角 160x160 层级可视化。",
+   "note": "hiz.slang 6 入口：prepass 深度写（视点径向距离 distance(worldPos, eye)，与 M5.0 误差公式同空间）+ compute 逐级金字塔 + 层级可视化覆盖层 + top 回读（环形延迟两帧）。金字塔 POT 化 1024x512（SHADER-CONVENTIONS §2.8），prepass 单 BindingSet hizPrepassSet_（§2.7）。viewer --mode hiz + HUD pyramid mip 滑条 + 右下角 160x160 层级可视化。M6.1 拍板修正（2026-11-09）：遮挡判定 = 簇最近点 vs 区域最远表面（UE IsVisibleHZB / bevy occlusion_cull_screen_aabb 权威口径），金字塔 min→max（每 texel 最远表面径向距离）；top 回读三态（真实值 / -2 背景主导 / -1 无数据），基线随 kStage=S6.1 全量重拍。",
    "acceptance": [
-    "金字塔 top min 机械判据：dist 4.2 → 3.29377、dist 20 → 19.0659，双后端逐位一致（回读环形 12 项帧帧相同）；随距离单调增大 = 最近径向深度语义成立",
-    "层级可视化肉眼核对：右下角 160x160 mip0 灰度猴头剪影，近景大而亮 / 远景小，视口外清屏 1e9 保守性不破",
-    "deviceErrors=0 ×2（R32F RT setClearValue 后 D3D12 debug layer 归零）；selftest 16/16 ×2",
-    "全量回归闸 228/228 ALL GREEN（含 kStage=S6.0 重拍 9 版本 × 双后端 18 张 HUD 基线全 bytes）",
-    "example/s6-hiz/run.bat verify exit 0（findstr 断言 pyramid top min 3.29 / 19.06）"
+    "金字塔 top far 机械判据（max 口径）：Suzanne 近景 dist 4.2 hiz 自遮挡剔除背面簇 → visible 233 / 324（无剔除 dag 基线 237 / 324，4 簇差 = 凸形自遮挡余量）；远景 dist 20 粗层合并无自遮挡 → 237 / 324 == dag；top 回读链 background-dominates（画面有清屏背景像素时 1e9 合法主导）。双后端逐位一致",
+    "层级可视化肉眼核对：右下角 160x160 mip0 灰度剪影，近景大而亮 / 远景小，视口外清屏 1e9（max 口径下保守方向正确：只放大不缩小的 hizMax 永不多剔）",
+    "deviceErrors=0 ×2；selftest 16/16 ×2（stage 断言 S6.1）",
+    "example/s6-hiz/run.bat verify exit 0（findstr 断言 visible 233/237 per 324 + background-dominates）",
+    "全量回归闸在 M6.1 收口统一跑（kStage bump 波及 10 版本 × 双后端 48 张基线已重拍）"
    ],
    "exe": {
     "dx12": "build/dx12/viewer.exe",
@@ -3182,22 +3182,29 @@
    "cases": [
     {
      "id": "hiz-viz-near",
-     "name": "hiz 近景：金字塔 mip0 剪影 + hiz top 3.294（mip 10/10）",
+     "name": "hiz 近景：金字塔 mip0 剪影 + hiz 自遮挡 233/324",
      "kind": "pair",
-     "note": "dist 4.2：右下角 160x160 层级可视化显示 mip0 灰度剪影（视口外清 1e9），HUD hiz top = 3.294 == 回读日志 pyramid top min 3.29377（双后端逐位）。prepass 深度写 + NMin 金字塔全链在此一张图可见。",
+     "note": "dist 4.2：右下角 160x160 层级可视化显示 mip0 灰度剪影，HUD hiz top = bg （max 口径背景主导），HUD frustum 行 233 / 324 = 自遮挡剔除背面簇（dag 基线 237，4 簇差 = 凸形自遮挡）。prepass 深度写 + 金字塔全链一张图可见。",
      "baselines": {
       "dx12": "example/s6-hiz/hiz-viz-near-dx12.png",
       "vulkan": "example/s6-hiz/hiz-viz-near-vulkan.png"
      },
      "args": [
-      "--mode", "hiz",
+      "--mode",
+      "hiz",
       "--hud",
-      "--screenshot", "{out}",
-      "--frames", "8",
-      "--yaw", "12",
-      "--pitch", "9",
-      "--dist", "4.2",
-      "--size", "640x720"
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
      ],
      "command": "viewer.exe --mode hiz --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
      "script": "example/s6-hiz/run.bat verify",
@@ -3205,22 +3212,29 @@
     },
     {
      "id": "hiz-viz-far",
-     "name": "hiz 远景：剪影缩小 + hiz top 19.066（随距离增大）",
+     "name": "hiz 远景：剪影缩小 + 粗层合并 237/324",
      "kind": "pair",
-     "note": "dist 20：与近景同参数对照，模型剪影变小、top min 3.294 → 19.066 单调增大 = 金字塔存的是视点径向最近深度的直接证据。",
+     "note": "dist 20：与近景同参数对照，模型剪影变小；cut 收敛到粗层无自遮挡，237 / 324 == dag 基线 = 剔除零误伤的远景对照。",
      "baselines": {
       "dx12": "example/s6-hiz/hiz-viz-far-dx12.png",
       "vulkan": "example/s6-hiz/hiz-viz-far-vulkan.png"
      },
      "args": [
-      "--mode", "hiz",
+      "--mode",
+      "hiz",
       "--hud",
-      "--screenshot", "{out}",
-      "--frames", "8",
-      "--yaw", "12",
-      "--pitch", "9",
-      "--dist", "20",
-      "--size", "640x720"
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "20",
+      "--size",
+      "640x720"
      ],
      "command": "viewer.exe --mode hiz --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 20 --size 640x720",
      "script": "example/s6-hiz/run.bat verify",
@@ -3231,6 +3245,103 @@
      "name": "selftest（S6.0 stage 断言，16/16）",
      "kind": "tool",
      "note": "viewer --selftest：kStage=S6.0 stage 断言同步更新；套件数不变（Hi-Z 正确性由 pair 用例 + top min 机械判据覆盖）。",
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
+  },
+  {
+   "id": "s6.1",
+   "label": "M6.1",
+   "name": "Hi-Z 遮挡剔除串进 DAG 遍历（单 dispatch，一帧延迟）",
+   "tag": "s6-cull",
+   "date": "2026-11-09",
+   "note": "dag.slang csDag 栈循环内联 hizOccluded：Mara&Morgan 精确切线球投影（UE SphereToScreenRect 同款；view space 右手系 -z 朝前换轴）→ bevy firstLeadingBit mip 选择 + 4x4 采样 → 簇最近径向距离 > 区域 hizMax 剔除（连子树，成员球⊂父球）。金字塔消费上一帧（一帧延迟，UE OCCLUSION_MAIN / bevy first pass 同口径）；DagConstants 48B→128B（+g_dagHiz 开关/视口宽 + g_dagView）；t8 金字塔 SRV 双 set（dummy/真金字塔互斥，§2.7）。新资产 HizScene（墙 + 墙后 3 球 + 侧边对照球，make-hiz-scene-glb.py）。拍板点：单 dispatch 内联（S6-PLAN 原文方案），bevy 式 second pass 留 D3a 升级路径。",
+   "acceptance": [
+    "正面（yaw 12）：墙挡住墙后 3 球 → hiz visible 24 / 85 vs dag 基线 40 / 85（-16 簇 = 被遮挡簇整树剔除，HUD frustum 行同值）",
+    "侧面（yaw 75，穿墙视角）：墙不再遮挡 → hiz 40 / 85 == dag 40 / 85（零误剔 = 无漏画）",
+    " hiz vs dag 正面画面覆盖层外逐像素 0 差（剔除只减被深度测试挡住的簇，画面透明）",
+    "双后端 hiz-front/hiz-side/dag-front/dag-side 4 图 bytes 逐字节一致；deviceErrors=0 ×2；selftest 16/16 ×2",
+    "example/s6-cull/run.bat verify exit 0（findstr 断言 hiz 24/85 + dag/hiz-side 40/85）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hiz-occlude-front",
+     "name": "hiz 正面：墙后 3 球整树剔除 24/85（dag 基线 40/85）",
+     "kind": "pair",
+     "note": "yaw 12：墙占满主视野，墙后 3 球被 Hi-Z 判遮挡整树跳过（对照 dag 40/85 少 16 簇）；右侧对照球仍可见（剔除是逐簇选择性的）；右下角覆盖层 = 金字塔 mip0 墙剪影；HUD frustum 行 24 / 85 (28.2%)。",
+     "baselines": {
+      "dx12": "example/s6-cull/hiz-front-dx12.png",
+      "vulkan": "example/s6-cull/hiz-front-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "HizScene.nmesh",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model HizScene.nmesh --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 960x540",
+     "script": "example/s6-cull/run.bat verify",
+     "preview": "example/s6-cull/hiz-front-dx12.png"
+    },
+    {
+     "id": "hiz-occlude-side",
+     "name": "hiz 侧面（穿墙）：零误剔 40/85 == dag",
+     "kind": "pair",
+     "note": "yaw 75 侧看：墙不再介于相机与球之间 → hiz 40 / 85 与 dag 完全相同 = 无漏画（被剔簇恰好是被深度测试挡住的簇）；画面里墙 + 3 球完整无缺。",
+     "baselines": {
+      "dx12": "example/s6-cull/hiz-side-dx12.png",
+      "vulkan": "example/s6-cull/hiz-side-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "HizScene.nmesh",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "75",
+      "--pitch",
+      "5",
+      "--dist",
+      "4.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model HizScene.nmesh --hud --screenshot <out.png> --frames 8 --yaw 75 --pitch 5 --dist 4.2 --size 960x540",
+     "script": "example/s6-cull/run.bat verify",
+     "preview": "example/s6-cull/hiz-side-dx12.png"
+    },
+    {
+     "id": "s6.1-selftest",
+     "name": "selftest（S6.1 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S6.1 stage 断言同步更新；套件数不变（遮挡正确性由 pair 用例 + 剔除计数机械判据覆盖）。",
      "args": [
       "--selftest"
      ],

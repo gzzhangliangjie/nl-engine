@@ -143,6 +143,8 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 ### 2.8 ⚠️ Hi-Z 金字塔尺寸必须 POT（2026-11-09，S6.0 实测教训）
 - D3D12 与 Vulkan 都限制 `mipLevels ≤ floor(log2(maxdim)) + 1`：640 宽的非 POT 纹理上限 10 层，ceil 对半链（640→320→…→5→3→2→1）要 11 层直接超规格。DX12 debug layer 报错；**Vulkan 无 VVL 时驱动静默建坏**（SRV/UAV 全踩坑）。修法：Hi-Z 目标尺寸向上取 2 的幂（UE HZB 同款），mip0 视口外区域每帧清 1e9，保守性不破（min 金字塔「空 = 更远 = 不遮挡」方向正确）。
 - RT 贴图创建必须带 `setClearValue`（与每帧 clearColor 一致），否则 D3D12 debug layer 每帧报 ClearRenderTargetView info message 被计入 deviceErrors（acceptance 卡零容错）。
+- **遮挡金字塔口径 = max（每 texel 最远表面径向距离），不是 min**（M6.1 拍板修正，2026-11-09）：遮挡判定 =「簇最近点 vs 区域最远表面」（UE `NaniteHZBCull.ush IsVisibleHZB` inverted-Z 取 min、bevy `downsample_depth.wesl` reverse-Z 取 min，两者换算到径向距离度量都是 max）。S6-PLAN 原文 min 口径在径向距离下不保守会漏画。连锁语义：①边界 clamp 读「空 texel = 1e9 参与 max 只放大」保守方向仍正确；②top 回读三态（真实值 / -2 背景主导 / -1 无数据），画面有背景像素时 top far = 1e9 是**合法值**不是异常；③dag 遍历侧 view space 是右手系 -z 朝前（camera.cpp:28），Mara&Morgan/UE 球投影公式按 +z 朝前推导，必须 `wz = -vc.z` 换轴，否则剔除静默失效（hiz==dag 无剔除的假绿）。
+- **帧内禁止开第二个 immediate command list**（NVRHI「Two or more immediate command lists cannot be open」）：懒建资源（如金字塔首建）的补清屏用 just-created 标志挪到当前帧 cmd 执行，不能在 ensureHizTargets 里另开列表执行。
 
 ## 3. 当前局限
 - **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`，无需改 CMake，重新跑 build 脚本即触发重新 configure 并生成 `<name>.{vs,ps}.{spv,dxil}`。注意 `file(GLOB)` 在 configure 时求值，纯新增文件（不碰 CMakeLists）时若没触发重编，手动重跑一次 build 脚本即可。

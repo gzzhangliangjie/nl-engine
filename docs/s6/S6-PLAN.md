@@ -7,27 +7,45 @@
 
 ## M6.0 深度 pass + 手写 min 金字塔（2 天）
 
-- [ ] 第一遍：只写深度（无颜色），输出当前 cut 全部可见簇的 depth buffer
-- [ ] **compute 手写 min-mipmap**：逐级 2×2 取 min 生成金字塔——**不能用 GenerateMips**（它会做平均/过滤，不是纯 min，剔除结果错误）
-- [ ] 金字塔做成 R32F 纹理数组或单纹理带 LOD，ImGui 加层级可视化
+> **M6.1 拍板修正（2026-11-09，三处权威口径）**：遮挡判定 = 「簇最近点 vs 区域**最远**表面」
+> （UE `NaniteHZBCull.ush IsVisibleHZB`：inverted-Z 取 min = 最远表面；bevy
+> `downsample_depth.wesl` reverse-Z 取 min = 最远表面 + `occlusion_cull_screen_aabb`
+> 用 `aabb.max.z`=簇最近点比较）。换算到本项目径向距离度量（越近越小），金字塔必须逐级
+> 取 **max**。下方 M6.0 原文与 M6.1 原文写 min 口径（「clusterMinDepth > hizMinDepth →
+> 剔除」）在径向距离下**不保守会漏画**（texel 同盖近墙 3m 与远景 100m 时 min=3，簇最近
+> 50m 被误剔，但簇在 100m 像素侧实际可见），已按用户拍板修正为 max；M6.0 产物
+> `csHizDown`/top 回读语义随之翻转，基线随 kStage=S6.1 重拍。
+
+- [x] 第一遍：只写深度（无颜色），输出当前 cut 全部可见簇的 depth buffer（M6.0 收口）
+- [x] **compute 手写 min-mipmap**：逐级 2×2 取 min 生成金字塔——**不能用 GenerateMips**（它会做平均/过滤，不是纯 min，剔除结果错误）（M6.0 收口；M6.1 修正为取 max，理由见上）
+- [x] 金字塔做成 R32F 纹理数组或单纹理带 LOD，ImGui 加层级可视化（M6.0 收口：右下角 160x160 GPU 覆盖层 + HUD mip 滑条）
 
 **自检**：金字塔最高层 ≈ 整屏最近深度；层级可视化肉眼检查（近处亮远处暗）。tag：`s6-hiz`。
+（M6.1 修正后自检口径 = top 回读三态 + hiz 自遮挡计数，见 example/s6-hiz 卡）
 
 ⚠️ 常见坑：
 - GenerateMips 坑是本步第一大坑——kb/unity-handbook.html#pits 有专条，别赌「也许没关系」
-- 深度是非线性（透视）的：盒测试前先在线性化空间比较（比较 z/w 或重建视图空间 z），两种空间混用 = 随机漏画
+- 深度是非线性（透视）的：盒测试前先在线性化空间比较（比较 z/w 或重建视图空间 z），两种空间混用 = 随机漏画（本项目全链统一视点径向距离，M6.0 已定）
 
 ## M6.1 两遍剔除：保守盒测试（1~2 天）
 
-- [ ] 每簇投影包围球/盒 → 屏幕矩形 → 取矩形覆盖金字塔的最粗完整层级 → 查询该层级 min 深度
-- [ ] 判定：`clusterMinDepth > hizMinDepth`（簇整体在最近表面之后）→ 剔除，instanceCount=0
-- [ ] 串联进 S5 的遍历 compute：视锥通过 → Hi-Z 测试 → 写 indirect（一次 dispatch 完成，还是一遍遍历）
+> 原文口径勘误见 M6.0 节顶注。2026-11-09 用户拍板两项：①金字塔 min→max；②串进结构 =
+> **单 dispatch 内联**（即本节原文「一次 dispatch 完成」），bevy 式 HZB second pass
+> （被遮簇压队列、本帧 HZB 复测）**不做**——那要求先做 UE-DIFFS D3a 全局队列多 pass
+> 升级，触发条件（多实例/千组负载不均）未到；一帧延迟金字塔与 UE OCCLUSION_MAIN /
+> bevy first pass 同口径。
 
-**自检**：`--mode hiz` 室内场景：面墙后物体消失；穿墙看：无漏画。tag：`s6-cull`。
+- [x] 每簇投影包围球/盒 → 屏幕矩形 → 取矩形覆盖金字塔的最粗完整层级 → 查询该层级 min 深度（实现：Mara&Morgan 精确切线球投影（UE `SphereToScreenRect` 同款）+ bevy `firstLeadingBit` mip 选择 + 4×4 采样块；采样聚合取 max = 区域最远表面）
+- [x] 判定：`clusterNearestRadial > hizMax`（簇最近点在区域最远表面之后）→ 剔除，整树跳过（成员球 ⊂ 父球），instanceCount 不增
+- [x] 串联进 S5 的遍历 compute：视锥通过 → Hi-Z 测试 → 写 indirect（一次 dispatch 完成，还是一遍遍历）
+
+**自检**：`--mode hiz` + 新资产 HizScene（墙 + 墙后 3 球 + 侧边对照球）：面墙看 hiz 24/85 vs dag 40/85（墙后整树剔除）；侧看 hiz == dag == 40/85（穿墙无漏画）；hiz 与 dag 画面覆盖层外逐像素 0 差。tag：`s6-cull`。
 
 ⚠️ 常见坑：
-- 「最粗完整层级」取错（取了部分覆盖的层级）→ 边缘漏画；宁可取粗一级保守
-- 剔除与绘制同帧：深度是**上一帧**的（一帧延迟是行业常态），快速转动时接受少量过画即可
+- 「最粗完整层级」取错（取了部分覆盖的层级）→ 边缘漏画；宁可取粗一级保守（bevy 对齐检查 `+3` 后再 `+1` 已内建）
+- 剔除与绘制同帧：深度是**上一帧**的（一帧延迟是行业常态），快速转动时接受少量过画即可（UE OCCLUSION_MAIN / bevy first pass 同口径；本帧 HZB 复测 = D3a 升级路径）
+- ⭐（M6.1 实测新增）**view space 朝向**：本项目 `camera.lookAt` 是右手系 **-z 朝前**（camera.cpp:28），Mara&Morgan/UE 公式按 +z 朝前推导——直接用 `vc.z` 会让「跨近断面」判定恒真、剔除永远静默失效（首跑 hiz==dag 40/85 的根因）；须取 `wz = -vc.z` 换轴
+- ⭐（M6.1 实测新增）**帧内禁开第二个 immediate command list**（NVRHI「Two or more immediate command lists」）：懒建资源的补清屏用 just-created 标志挪到帧内 cmd 执行
 
 ## M6.2 开关对照 + 验收（1 天）
 
@@ -45,7 +63,6 @@
 | M6.0 深度+金字塔 | 2 天 | `s6-hiz` |
 | M6.1 两遍剔除 | 1~2 天 | `s6-cull` |
 | M6.2 开关验收 | 1 天 | `s6-done` |
-
 ## 卡住翻哪
 
 | 问题 | 翻 |

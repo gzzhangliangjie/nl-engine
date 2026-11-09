@@ -36,7 +36,7 @@
 | 我们现状 | `dag.slang`：每根簇线程持显式栈 `uint[512]`，单 pass 串行下钻；组展开用 `InterlockedExchange` 声标志去重（同组多个同误差父簇全部判失败时只让一个赢家压成员，防指数放大）。 |
 | 为什么 | S5-PLAN 定死的简单版（zeux CPU demo 的 GPU 平移）；单模型 ≤ 数百组，栈深实测 ≤ 3 层，512 上限绰绰有余，全局队列的负载均衡收益为负（同步开销 > 收益）。 |
 | 已知偏差 | 线程间工作量不均（近景根线程下钻深、远景瞬间 leaf emit）；无 early/late 两阶段，未来加遮蔽剔除（D6）需 second pass 时再评估。 |
-| 升级路径 | 多实例 / 千组级资产出现负载不均时，换 bevy 式全局队列 + 多 pass（输出接口不变，只动遍历内部）。 |
+| 升级路径 | 多实例 / 千组级资产出现负载不均时，换 bevy 式全局队列 + 多 pass（输出接口不变，只动遍历内部）。**M6.1 交汇记录（2026-11-09）**：Hi-Z second pass（本帧 HZB 复测被遮簇）长在队列多 pass 结构上，用户拍板本轮不做（单 dispatch 内联方案，见 D6），D3a 升级时一并评估。 |
 
 ### D3 DAG 遍历结构：单级组原子 cut vs UE 两级 hierarchical（S5 设计，有意简化）
 
@@ -65,13 +65,14 @@
 | 我们现状 | `SceneConstants` 无误差缩放字段；model 恒单位阵（M1.0 起节点变换烘进顶点）。 |
 | 升级路径 | 多实例（S8+）落地时加：CB 加 `errorScale` 标量（均匀）即可覆盖 90% 场景；非均匀需回到 D1 的 UE 口径。 |
 
-### D6 剔除维度：仅视锥 vs UE 视锥+遮蔽（M4.1，未实现）
+### D6 剔除维度：仅视锥 vs UE 视锥+遮蔽（M4.1 建档；**M6.1 遮蔽已实现，结构差异留痕**）
 
 | | 内容 |
 |---|---|
-| UE 做法 | 视锥剔除之外还有 hierarchical-Z 遮蔽剔除、two-pass（先保守后精确）、cluster swizzle 优化访存。 |
-| 我们现状 | 单 pass compute 视锥剔除（簇球 vs 6 平面，M4.1），1.3M tri 60fps 验收通过。 |
-| 升级路径 | 遮蔽剔除排在 S6+（先做 depth pyramid）；swizzle 视 profiler 证据再定。 |
+| UE 做法 | 视锥剔除之外还有 hierarchical-Z 遮蔽剔除、**三 pass culling**（`NaniteCullRaster.cpp` CULLING_PASS_NO_OCCLUSION / OCCLUSION_MAIN〔用上帧 HZB〕/ OCCLUSION_POST〔深度 prepass 后用本帧 HZB 复测被遮候选〕）、two-pass raster（RasterHomogeneous）、cluster swizzle 优化访存。HZB 测试口径 = `NaniteHZBCull.ush IsVisibleHZB`：簇最近点（Rect.Depth）≥ 区域最远表面（inverted-Z min）→ 可见。 |
+| 我们现状（M6.1） | **Hi-Z 遮蔽剔除已实现**：dag.slang 单 dispatch 内联 hizOccluded（Mara&Morgan 球投影 + bevy mip 选择/4×4 采样 + 簇最近径向距离 > 区域 hizMax 整树剔除），金字塔 max 口径与 UE/bevy 一致（hiz.slang 文件头）。**差异 = 结构**：单 pass + 上一帧 HZB（一帧延迟），无 UE 的 OCCLUSION_POST 本帧复测、无 two-pass raster、无 swizzle。 |
+| 为什么 | S6-PLAN M6.1 原文方案（2026-11-09 用户拍板）：单模型 ≤ 数百组，本帧复测需先建 D3a 队列多 pass 结构，收益（减少转动假遮挡过画）当前规模不显性。 |
+| 升级路径 | bevy 式 HZB second pass（被遮簇压 second-pass 队列、prepass 后本帧 HZB 复测）= 与 D3a 队列多 pass 绑定，触发条件同 D3a（多实例/千组级负载不均 + 转动假剔除实测明显）；swizzle 视 profiler 证据再定。 |
 
 ### D7 无软件光栅化兜底（未实现）
 
@@ -92,4 +93,4 @@
 - **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
 
 ---
-*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；出处行号以 2026-11-08 实读版本为准。*
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；出处行号以 2026-11-08~09 实读版本为准。*

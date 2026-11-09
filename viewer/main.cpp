@@ -262,7 +262,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S6.0") != nullptr, "S6.0 stage reported");
+    check(std::strstr(st.stage, "S6.1") != nullptr, "S6.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -577,6 +577,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             float eye[3];
             camera.eyePosition(eye);
             fp.eye[0] = eye[0]; fp.eye[1] = eye[1]; fp.eye[2] = eye[2];
+            // M6.1：world→view 矩阵（Mara&Morgan 球投影，与 viewProjection 同源）。
+            const auto vm = camera.view();
+            std::memcpy(fp.view, vm.m, sizeof(fp.view));
             fp.projYScale = camera.projectionYScale();
             fp.nearPlane = camera.nearPlane();
             const auto e = renderer->extent();
@@ -647,7 +650,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             hud.visibleTriangles = info.visibleTriangles;   // M5.2：-1 = 暂无数据
             // M6.0：Hi-Z 金字塔（hiz 模式才有 mipCount>0，HUD 才画滑条）。
             hud.hizMipCount = info.hizMipCount;
-            hud.hizTopMin = info.hizTopMin;
+            hud.hizTopFar = info.hizTopFar;   // M6.1：最远表面口径
             hud.hizViewLevel = hizViewLevel;
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -775,14 +778,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (o.screenshot && (cullMode || dagMode) && info.totalClusters > 0 &&
             info.visibleClusters >= 0) {
             if (hizMode) {
-                // M6.0：金字塔最高 mip 回读值（≈ 整屏最近径向距离的机械验收证据）。
-                if (info.hizTopMin >= 0.0f) {
-                    nl::core::log::info("hiz stats: pyramid top min ", info.hizTopMin,
+                // M6.1：金字塔最高 mip 回读值（≈ 整屏最远表面径向距离的机械验收
+                // 证据）+ 遮挡剔除后的可见簇数。-2 = 背景像素主导（max 口径合法）。
+                if (info.hizTopFar >= 0.0f) {
+                    nl::core::log::info("hiz stats: pyramid top far ", info.hizTopFar,
+                                        " (visible ", info.visibleClusters, " / ",
+                                        info.totalClusters, " clusters, mips ",
+                                        info.hizMipCount, ")");
+                } else if (info.hizTopFar <= -1.5f) {
+                    nl::core::log::info("hiz stats: pyramid top far background-dominates",
                                         " (visible ", info.visibleClusters, " / ",
                                         info.totalClusters, " clusters, mips ",
                                         info.hizMipCount, ")");
                 } else {
-                    nl::core::log::info("hiz stats: top min pending (mips ",
+                    nl::core::log::info("hiz stats: top far pending (mips ",
                                         info.hizMipCount, ")");
                 }
             } else if (dagMode) {

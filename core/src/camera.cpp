@@ -115,6 +115,20 @@ Matrix4 OrbitCamera::viewProjection() const {
     return multiply(perspectiveZO(kFovY, aspect_, kNear, farZ), lookAt(eye, center, up));
 }
 
+Matrix4 OrbitCamera::view() const {
+    // M6.1：与 viewProjection() 的 lookAt 完全同源（同一组 eye/center/up），
+    // hiz 遍历的 Mara&Morgan 球投影在 view space 进行（dag.slang g_dagView）。
+    const float cp = std::cos(pitch_);
+    const float eye[3] = {
+        distance_ * cp * std::sin(yaw_),
+        distance_ * std::sin(pitch_),
+        distance_ * cp * std::cos(yaw_)
+    };
+    const float center[3] = {0.0f, 0.0f, 0.0f};
+    const float up[3] = {0.0f, 1.0f, 0.0f};
+    return lookAt(eye, center, up);
+}
+
 Matrix4 OrbitCamera::model() const {
     Matrix4 m{};
     m.m[0] = m.m[5] = m.m[10] = m.m[15] = 1.0f;

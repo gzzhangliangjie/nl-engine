@@ -355,14 +355,18 @@ void Hud::build(HudFrame& frame) {
     }
     // M6.0：Hi-Z 金字塔——仅 hiz 模式（hizMipCount>0）占位，其它模式 HUD 布局
     // 一像素不动。mip 层滑条双向写回（viewer 传 FrameParams.hizViewMip 给 GPU
-    // 覆盖层），top-min 显示「金字塔最高层 ≈ 整屏最近径向距离」的回读值。
+    // 覆盖层）。M6.1：top 显示「金字塔最高层 ≈ 整屏最远表面径向距离」的回读值
+    // （金字塔 min→max 口径修正，hiz.slang 文件头）。
     if (frame.hizMipCount > 0) {
         ImGui::SliderInt("pyramid mip", &frame.hizViewLevel, 0, frame.hizMipCount - 1);
         char hizLine[96];
-        if (frame.hizTopMin >= 0.0f) {
+        if (frame.hizTopFar >= 0.0f) {
             std::snprintf(hizLine, sizeof(hizLine),
-                          "hiz top : %.3f (mip %d/%d, nearest depth)",
-                          frame.hizTopMin, frame.hizMipCount - 1, frame.hizMipCount - 1);
+                          "hiz top : %.3f (mip %d/%d, farthest depth)",
+                          frame.hizTopFar, frame.hizMipCount - 1, frame.hizMipCount - 1);
+        } else if (frame.hizTopFar <= -1.5f) {   // -2：背景像素主导（max 口径合法）
+            std::snprintf(hizLine, sizeof(hizLine), "hiz top : bg (mip %d/%d)",
+                          frame.hizMipCount - 1, frame.hizMipCount - 1);
         } else {
             std::snprintf(hizLine, sizeof(hizLine), "hiz top : -- (mips %d)",
                           frame.hizMipCount);

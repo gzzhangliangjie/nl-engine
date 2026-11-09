@@ -25,6 +25,8 @@ public:
     void zoom(float scrollDelta);
 
     Matrix4 viewProjection() const;
+    Matrix4 view() const;                  // M6.1：world→view（hiz 遍历 Mara&Morgan
+                                           //  球投影消费；与 viewProjection 的 lookAt 同源）
     Matrix4 model() const;                 // M0.4 只画一个静态模型，返回单位阵
 
     float yawDegrees() const;

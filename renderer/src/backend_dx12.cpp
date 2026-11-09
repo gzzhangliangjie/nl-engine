@@ -353,7 +353,7 @@ public:
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
         info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
-        info_.hizTopMin = scene_.hizTopMin();                 // M6.0：金字塔最高 mip
+        info_.hizTopFar = scene_.hizTopFar();                 // M6.1：金字塔最高 mip（最远表面）
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();

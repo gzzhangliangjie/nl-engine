@@ -173,8 +173,10 @@ public:
     const float* assetSphere() const { return assetSphere_; }
     const float* dagGroupSphere() const { return dagGroupSphere_; }
     // M6.0：Hi-Z 金字塔状态（仅 hiz 模式非零；-1 = 暂无数据）。
+    // M6.1：top 语义 = 全屏最远表面径向距离（金字塔 max 口径，hiz.slang 文件头）。
+    // 三态：≥0 = 真实值；-2 = 背景像素主导（max 口径合法）；-1 = 暂无数据。
     int   hizMipCount() const { return static_cast<int>(hizMipCount_); }
-    float hizTopMin() const { return hizTopMin_; }
+    float hizTopFar() const { return hizTopFar_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -284,12 +286,17 @@ private:
     nvrhi::ShaderHandle          csDag_;
     nvrhi::ComputePipelineHandle dagComputePSO_;
     nvrhi::BindingLayoutHandle   dagComputeLayout_;
-    nvrhi::BindingSetHandle      dagComputeSet_;
+    nvrhi::BindingSetHandle      dagComputeSet_;    // t8 = 1x1 dummy（hiz 关闭态）
+    nvrhi::BindingSetHandle      dagHizSet_;        // M6.1：t8 = 真金字塔（ensureHizTargets 建）
+    nvrhi::TextureHandle         hizDummyTex_;      // M6.1：1x1 R32F 占位（非 hiz 模式）
+    bool                         hizReady_ = false; // M6.1：金字塔已建，遍历可开遮挡测试
+    bool                         hizJustCreated_ = false;  // M6.1：刚（重）建，帧内补全 mip 清屏
     // args 重置模板直接复用 cullArgsReset_（indexCount 同一 identity stride）。
 
-    // ---- M6.0（S6.0）：Hi-Z 深度预通道 + min 金字塔 ----
-    // mip0 = 深度预通道颜色 RT（R32F，视点径向距离）；mip>=1 由 csHizDown 逐级
-    // min。hizDepth_ 是预通道专用 D32 附件（硬件 less 测试保证「最近」）。
+    // ---- M6.0（S6.0）：Hi-Z 深度预通道 + 金字塔（M6.1 拍板修正为 max 口径）----
+    // mip0 = 深度预通道颜色 RT（R32F，视点径向距离，每像素最近表面）；mip>=1
+    // 由 csHizDown 逐级 max（每 texel 最远表面——遮挡判定口径，hiz.slang 文件头）。
+    // hizDepth_ 是预通道专用 D32 附件（硬件 less 测试保证「最近」）。
     // 尺寸随 framebuffer，在 ensurePipelines 建/重建（resize 时随 pipeline 重建）。
     bool                         hiz_ = false;
     std::uint32_t                hizMipCount_ = 0;
@@ -314,7 +321,8 @@ private:
     nvrhi::ComputePipelineHandle topPSO_;
     // hizTop_ 清零值每帧 writeBuffer 后由 csHizTop 覆写；回读复用 cullReadback_ 环形
     // （槽位扩到 12B：[0]=可见簇数 [4]=三角数 [8]=asuint(最近径向距离)）。
-    float                        hizTopMin_ = -1.0f;
+    float                        hizTopFar_ = -1.0f;  // M6.1：top=最远表面径向距离
+                                                      //   （≥0 真实值 / -2 背景主导 / -1 无数据）
     float                        hizFarRange_ = 10.0f;  // 可视化对比度参考距离（每帧算）
     // 金字塔/预通道帧缓冲/各级绑定集随视口尺寸在 draw() 懒建（FramebufferInfo 只有
     // 格式没有尺寸；resize 后按 viewport 尺寸重建，绑定集随纹理重建）。

@@ -1114,3 +1114,27 @@
 **踩坑**：①首轮按「薄转发头」实现后 anim-tools 炸出 C2039（其 using nl::anim::quatFromAxisAngle 依赖转发头全量注入）——用户当场拍板砍转发头直接改引用，按「类型注入 nl::anim（API 契约）/ 数学函数用 nl::math:: 限定（外部）」分层收口；②诊断期间撞上 M6.0 已记录的环境级 flake（「exit 0 + 空输出」签名，bash 手跑与 ctest 均随机中招、输出文件仍正常写出），一度误判为 cluster 崩溃——用 regression.py s1.0 双后端 6/6 绿 + exe 不含 anim/math 头 + 输出恢复三证据排除代码关联，ctest s1-nmesh-suzanne 的偶发红属环境 flake（regression 主体系绿）。
 
 **下一步**：建 `feat/ecs` worktree（wt_pool claim --track ecs --milestone M-E0）→ M-E0 World/Entity 核心。
+
+## M6.1：Hi-Z 遮挡剔除串进 DAG 遍历（S6.1，2026-11-09，tag `s6-cull`）
+
+**动作**：两项用户拍板先行——①金字塔 min→max（三处权威口径：UE `NaniteHZBCull.ush IsVisibleHZB` inverted-Z 取 min=最远表面、bevy `downsample_depth.wesl` reverse-Z 取 min + `occlusion_cull_screen_aabb` 簇最近点比较；S6-PLAN 原文 min 口径在径向距离下不保守会漏画）；②单 dispatch 内联（S6-PLAN 原文方案），bevy 式 HZB second pass 不做（=D3a 升级，触发条件未到）。落地：hiz.slang `csHizDown` min→max + top 语义翻转；dag.slang 新增 `hizOccluded`（Mara&Morgan 精确切线球投影（UE `SphereToScreenRect` 同款）+ bevy `firstLeadingBit` mip 选择 + 4×4 采样 max 聚合 + 簇最近径向距离>区域 hizMax 整树 continue），DagConstants 48B→128B（+g_dagHiz 开关/视口宽 +g_dagView），t8 金字塔 SRV 双 set（dummy/真金字塔互斥，§2.7）；FrameParams 加 view[16]、OrbitCamera 加 view()（与 viewProjection 的 lookAt 同源）；ensureHizTargets 建 dagHizSet_ + just-created 帧内补全 mip 清屏；HizConstants/hizTopFar 三态回读（真实值/-2 背景主导/-1）；HUD `hiz top` 行 farthest depth 语义 + viewer 日志 pyramid top far；kStage bump S6.1。新资产 HizScene（墙+墙后 3 球+侧边对照球，`scripts/make-hiz-scene-glb.py`，6 层 lod 链 check-orient PASS + dag 校验 PASS）。
+
+**提交版本**：`s6-cull`（master，本表提交后回填短哈希）
+
+**完成情况**：
+- 机械判据：正面（yaw 12）墙挡墙后 3 球 → hiz visible **24/85** vs dag 基线 **40/85**（-16 簇整树剔除）；侧面（yaw 75 穿墙）hiz **40/85** == dag（零误剔）；hiz vs dag 正面画面**覆盖层外逐像素 0 差**（剔除对最终画面透明 = 只减被深度测试挡住的簇）；Suzanne 自遮挡 hiz 233/324 vs dag 237/324。
+- 双后端：hiz-front/hiz-side/dag-front/dag-side 4 图 bytes 逐字节一致；deviceErrors=0 ×2；selftest 16/16 ×2。
+- 交代物：`example/s6-cull/`（hiz-front/hiz-side 双后端 4 基线 + dag-front/side dx12 证据 + run.bat verify findstr 断言 hiz 24/85 + 40/85 ×3 exit 0）+ cases.json s6.1 卡（3 用例）+ server.py --check OK（stage=S6.1 cases=3 baselines=6）；s6-hiz 卡同步 max 口径（run.bat 断言 233/237 per 324 + background-dominates，exit 0）。
+- kStage bump 波及基线重拍：exe=current 10 版本 × 双后端 **48/48 全部重拍**（重拍脚本走 cases.json args 模板，deviceErrors=0 全验）。
+- 固化：S6-PLAN（M6.0/M6.1 口径勘误 + checklist 打勾 + 两条新坑）、UE-DIFFS D6（遮蔽已实现+结构差异）与 D3a（second pass 交汇拍板）、SHADER-CONVENTIONS §2.8（max 口径三连锁语义 + 帧内禁开第二 cmd list）、MEMORY.md、当日日志。
+
+**踩坑情况**：
+1. ⭐**view space 朝向**：`camera.lookAt` 是右手系 **-z 朝前**（camera.cpp:28），Mara&Morgan/UE 公式按 +z 朝前推导——首跑直接用 `vc.z` 使「跨近断面」判定恒真 → 剔除**静默失效**（hiz==dag 40/85 假绿）。修：`wz = -vc.z` 换轴后 40→26 立现。教训：三处参考的公式移植必须核对本项目坐标系约定。
+2. ⭐**金字塔方向是计划文字错误**：S6-PLAN M6.1「查 min 深度、clusterMinDepth > hizMinDepth」在径向距离度量下非保守（texel 同盖近墙 3m 与远景 100m 时 min=3，簇最近 50m 被误剔但实际在 100m 像素侧可见）——三处权威口径全部是「簇最近点 vs 区域最远表面」，即径向距离 max 金字塔。读参考代码时用具体数字推一遍保守方向，别信计划文字。
+3. ⭐**帧内禁开第二 immediate command list**：ensureHizTargets 首版自建 cmd list 清屏 → NVRHI「Two or more immediate command lists cannot be open」×4 + top 回读恒 pending。修：hizJustCreated_ 标志 + 帧内 cmd 补清全 mip。
+4. **top 回读 1e9 是 max 口径合法值**：画面有背景像素时 top far = 1e9（清屏值主导）——初版当作 pending 丢弃（v<1e8 过滤）恒显示 pending；改三态（≥0 真实值 / -2 背景主导 / -1 无数据），HUD 显示 `hiz top : bg`。
+5. **asset 生成 winding**：首版 HizScene 盒/球绕序内翻（check-orient exit 1，2116/2120 inward worst cos -1.000）——盒面角序未按「外视 CCW」排、球 [a,b,a+1] 绕向反；修正后 PASS。check-orient 是资产管线的硬闸，生成类资产必须过。
+6. **NMake 跳重链**：dag.slang 改后 viewer.exe 未重链（链接依赖未变）→ regression exe 新鲜度门禁拒绝（落后于 dag.slang）；删 exe 强制重链后过闸（§工具 exe 纪律同款）。
+7. 640x720 竖幅把对照球挤出画面（aspect 0.89 → ctrl 球 NDC x 1.61 > 1）——基线改 960x540 让「墙 + 对照球」同框，亲眼可见「剔除选择性」。
+
+**下一步**：M6.2 开关对照 + 验收（ImGui 一键开关 Hi-Z、HUD 剔除前/后簇数与帧时间、S4 1M+ 大模型+挡板帧时间对比；tag `s6-done`，`docs/screenshots/s6.png`）。

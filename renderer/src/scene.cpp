@@ -833,10 +833,22 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
 
     nvrhi::BufferDesc dcbDesc = cbDesc;
-    dcbDesc.byteSize = 48;   // 3×float4：DagConstants（dag.slang b0）
+    dcbDesc.byteSize = 128;  // 4×float4 + float4x4：DagConstants（dag.slang b0）
+                             //   M6.1 扩：g_dagHiz（开关/视口宽）+ g_dagView（球投影）
     dcbDesc.debugName = "DagConstants";
     dagConstants_ = device->createBuffer(dcbDesc);
     if (!dagConstants_) { outError = "createBuffer failed for dag constants"; return false; }
+
+    // M6.1：dag.slang t8 占位纹理（1x1 R32F）。非 hiz 模式 / 金字塔未就绪时绑定
+    // 它 + g_dagHiz.x=0，shader 侧直接跳过遮挡测试（分支预测友好，无采样代价风险）。
+    nvrhi::TextureDesc hdtDesc;
+    hdtDesc.width = 1; hdtDesc.height = 1;
+    hdtDesc.format = nvrhi::Format::R32_FLOAT;
+    hdtDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    hdtDesc.keepInitialState = true;
+    hdtDesc.debugName = "HizDummy1x1";
+    hizDummyTex_ = device->createTexture(hdtDesc);
+    if (!hizDummyTex_) { outError = "createTexture failed for hiz dummy"; return false; }
 
     nvrhi::TextureDesc texDesc;
     texDesc.width = 1; texDesc.height = 1;
@@ -959,8 +971,8 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // DAG 遍历 compute 绑定（dag.slang 寄存器一一对应）：
     //   b0 DagConstants / t1 spheres / t2 errors / t3 groups / t4 members /
-    //   t5 genGroup / t6 levels / t7 clusterMeta（M5.2）/ u0 visibleList / u1 args /
-    //   u2 expanded / u3 triCounter（M5.2）。
+    //   t5 genGroup / t6 levels / t7 clusterMeta（M5.2）/ t8 hiz 金字塔（M6.1）/
+    //   u0 visibleList / u1 args / u2 expanded / u3 triCounter（M5.2）。
     // M5.2：GPU 原子三角计数器（与 initCull 同款；dag 模式不调 initCull，各自建）。
     nvrhi::BufferDesc tDesc;
     tDesc.byteSize = sizeof(std::uint32_t);
@@ -982,6 +994,7 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(8))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2))
@@ -989,21 +1002,26 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     dagComputeLayout_ = device->createBindingLayout(dLayoutDesc);
     if (!dagComputeLayout_) { outError = "createBindingLayout failed for dag compute"; return false; }
 
-    nvrhi::BindingSetDesc dSetDesc;
-    dSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, dagConstants_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterSpheres_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, dagClusterErrors_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, dagGroups_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, dagMembers_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, dagGenGroup_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, dagClusterLevel_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(7, clusterMeta_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, triCounter_));
-    dagComputeSet_ = device->createBindingSet(dSetDesc, dagComputeLayout_);
-    if (!dagComputeSet_) { outError = "createBindingSet failed for dag compute"; return false; }
+    // 两个 set：关闭态（t8=dummy）与 hiz 态（t8=真金字塔，ensureHizTargets 建）。
+    // §2.7：每管线单一 BindingSet——两个 set 内容互斥，每帧只绑一个，不并存。
+    {
+        nvrhi::BindingSetDesc dSetDesc;
+        dSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, dagConstants_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterSpheres_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, dagClusterErrors_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, dagGroups_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, dagMembers_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, dagGenGroup_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, dagClusterLevel_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(7, clusterMeta_))
+                .addItem(nvrhi::BindingSetItem::Texture_SRV(8, hizDummyTex_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_))
+                .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, triCounter_));
+        dagComputeSet_ = device->createBindingSet(dSetDesc, dagComputeLayout_);
+        if (!dagComputeSet_) { outError = "createBindingSet failed for dag compute"; return false; }
+    }
 
     {
         auto dagShaderPath = [shaderSuffix](const char* artifact) {
@@ -1148,7 +1166,8 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
-// M6.0（S6.0）：Hi-Z 深度预通道 + 手写 min 金字塔。声明见 scene.hpp。
+// M6.0（S6.0）：Hi-Z 深度预通道 + 金字塔（M6.1 拍板：max 最远表面口径）。
+// 声明见 scene.hpp。
 bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
                     const char* vsEntry, const char* psEntry,
                     const char* nmeshFile, std::string& outError) {
@@ -1328,13 +1347,18 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
         cullVisibleCount_ = static_cast<int>(vals[0]);
         visibleTriangles_ = static_cast<int>(vals[1]);
         // M6.0：槽位 [8] = 金字塔最高 mip 的 asuint 位模式（仅 hiz 模式写入）。
-        // 0xFFFFFFFF 清零值 = asfloat NaN → 无数据时如实回 -1。
+        // M6.1：top 语义 = 全屏最远表面径向距离（max 口径，hiz.slang 文件头）。
+        // 三态：v ∈ [0,1e8) = 真实最远表面距离；v ≥ 1e8 = 画面有清屏背景像素
+        // （max 口径下合法值，返回 -2 = 背景主导哨兵）；NaN（0xFFFFFFFF 清零值）
+        // = 尚无数据，返回 -1。0xFFFFFFFF 清零值 = asfloat NaN。
         if (hiz_) {
             float v;
             std::memcpy(&v, &vals[2], sizeof(v));
-            hizTopMin_ = (v >= 0.0f && v < 1e8f) ? v : -1.0f;
+            if (v >= 0.0f && v < 1e8f)     hizTopFar_ = v;
+            else if (v >= 1e8f && v < 2e9f) hizTopFar_ = -2.0f;
+            else                            hizTopFar_ = -1.0f;
         } else {
-            hizTopMin_ = -1.0f;
+            hizTopFar_ = -1.0f;
         }
         device->unmapBuffer(cullReadback_[slot]);
     } else {
@@ -1600,6 +1624,7 @@ bool Scene::ensureHizTargets(nvrhi::IDevice* device, float viewportW, float view
     if (hizPyramid_ && hizW_ == pw && hizH_ == ph) return true;   // 懒建判据按 POT 尺寸
     hizW_ = pw;
     hizH_ = ph;
+    hizJustCreated_ = true;   // 帧内 cmd 补全 mip 清屏（draw 里消费后复位）
 
     // mip 层数：逐级 ceil 对半直至 1 texel（最高层 = 全屏最近距离）。POT 尺寸
     // 下 ceil 对半链长 == log2+1，与 D3D12/Vulkan mip 上限规则精确一致。
@@ -1688,6 +1713,31 @@ bool Scene::ensureHizTargets(nvrhi::IDevice* device, float viewportW, float view
     }
     if (!vizSet_) { outError = "createBindingSet failed for hiz viz"; return false; }
 
+    // M6.1：dag 遍历的 hiz 态绑定集（t8 = 真金字塔全 mip SRV）。布局与
+    // dagComputeSet_ 同一个（§2.7 互斥使用，不并存）。
+    {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, dagConstants_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterSpheres_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, dagClusterErrors_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, dagGroups_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, dagMembers_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, dagGenGroup_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, dagClusterLevel_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(7, clusterMeta_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(8, hizPyramid_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleList_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, indirectArgs_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, dagGroupExpanded_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, triCounter_));
+        dagHizSet_ = device->createBindingSet(sd, dagComputeLayout_);
+    }
+    if (!dagHizSet_) { outError = "createBindingSet failed for dag hiz set"; return false; }
+
+    // 新建/重建金字塔的全 mip 清屏放到**帧内 cmd**（draw 里 hizJustCreated_ 消费；
+    // 此处处于已打开的帧命令列表作用域，NVRHI 禁止再开第二个 immediate 列表）。
+    // 下一帧遍历读到「全部不遮挡」的保守缺省，避免首帧未定义数据造成假剔除。
+    hizReady_ = true;   // 下一帧起遍历可开遮挡测试（本帧遍历已跑完，天然一帧延迟）
     return true;
 }
 
@@ -2027,13 +2077,27 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             // M5.1：dag 遍历换 dag.slang csDag（显式栈）+ 自己的绑定/常量；
             // M4.1 路径保持原样。输出接口（visibleList + args）两者完全一致。
             if (dag_) {
-                const float dc[12] = {
+                // M6.1：DagConstants 扩到 128B（4×float4 + view 矩阵）。
+                // hizCullActive = hiz 模式且金字塔已就绪——遍历消费的是**上一帧**
+                // 金字塔（本帧金字塔在下面的预通道段才建，一帧延迟，S6-PLAN 明文
+                // 接受；UE OCCLUSION_MAIN / bevy first pass 同口径）。
+                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_;
+                const float dc[32] = {
                     params.projYScale, params.viewportHeight, params.nearPlane,
                     params.cutThresholdPx,
                     params.eye[0], params.eye[1], params.eye[2],
                     static_cast<float>(dagRootCount_),
                     // 根簇全局基址 = 总簇数 − 最粗层簇数（最粗层拼在最后）。
-                    static_cast<float>(clusterCount_ - dagRootCount_), 0.f, 0.f, 0.f};
+                    static_cast<float>(clusterCount_ - dagRootCount_), 0.f, 0.f, 0.f,
+                    hizCullActive ? 1.f : 0.f,                    // [12] g_dagHiz.x 开关
+                    static_cast<float>(viewport.maxX - viewport.minX),  // [13] 视口宽
+                    0.f, 0.f,
+                    // [16..31] g_dagView = world→view（Mara&Morgan 球投影；与
+                    // camera.view() 同源，viewer 每帧填 FrameParams.view）。
+                    params.view[0],  params.view[1],  params.view[2],  params.view[3],
+                    params.view[4],  params.view[5],  params.view[6],  params.view[7],
+                    params.view[8],  params.view[9],  params.view[10], params.view[11],
+                    params.view[12], params.view[13], params.view[14], params.view[15]};
                 cmd->writeBuffer(dagConstants_, dc, sizeof(dc));
                 // 组展开声明标志每帧清零（遍历 compute 的 atomicExchange 从干净态出发）。
                 std::uint32_t zeros[64] = {};
@@ -2047,8 +2111,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             }
 
             nvrhi::ComputeState cstate;
-            cstate.setPipeline(dag_ ? dagComputePSO_ : cullComputePSO_)
-                  .addBindingSet(dag_ ? dagComputeSet_ : cullComputeSet_);
+            {
+                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_;
+                cstate.setPipeline(dag_ ? dagComputePSO_ : cullComputePSO_)
+                      .addBindingSet(dag_ ? (hizCullActive ? dagHizSet_ : dagComputeSet_)
+                                          : cullComputeSet_);
+            }
             cmd->setComputeState(cstate);
             const std::uint32_t threads = dag_ ? dagRootCount_ : clusterCount_;
             cmd->dispatch((threads + 127u) / 128u, 1, 1);
@@ -2060,10 +2128,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], sizeof(std::uint32_t),
                             triCounter_, 0, sizeof(std::uint32_t));
 
-            // ---- M6.0：Hi-Z 深度预通道 + min 金字塔（hiz 模式）----
-            // 顺序：遍历 compute（上面）→ 深度预通道（mip0 = 视点径向距离）→
-            // 逐级 2x2 min → 最高 mip 落 4B 计数器。全部发生在主绘制之前，
-            // M6.1 的盒测试可以直接消费本帧金字塔（同帧两遍结构，S6-PLAN M6.1）。
+            // ---- M6.0：Hi-Z 深度预通道 + 金字塔（hiz 模式）----
+            // 顺序：遍历 compute（上面，消费**上一帧**金字塔做遮挡测试）→ 深度
+            // 预通道（mip0 = 视点径向距离）→ 逐级 2x2 max（M6.1 拍板：最远表面
+            // 口径）→ 最高 mip 落 4B 计数器。全部发生在主绘制之前；本段产出的
+            // 金字塔供下一帧遍历使用（一帧延迟，S6-PLAN 明文接受）。
             if (hiz_ && !hizFailed_) {
                 std::string hizErr;
                 if (!ensureHizTargets(hizDevice_, viewport.maxX - viewport.minX,
@@ -2079,6 +2148,16 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                                    std::max(assetSphere_[3], 1.0f);
                     const float w = static_cast<float>(hizW_);
                     const float h = static_cast<float>(hizH_);
+
+                    // M6.1：金字塔刚（重）建 → 帧内 cmd 补全 mip 清 1e9（保守缺省，
+                    // 防下一帧遍历读到未定义数据假剔除）。mip0 的常规清屏在下面。
+                    if (hizJustCreated_) {
+                        cmd->clearTextureFloat(hizPyramid_,
+                            nvrhi::TextureSubresourceSet(0, hizMipCount_, 0,
+                                                         nvrhi::TextureSubresourceSet::AllArraySlices),
+                            nvrhi::Color(1e9f, 1e9f, 1e9f, 1e9f));
+                        hizJustCreated_ = false;
+                    }
 
                     // 预通道常量：viewMip=0，dims=mip0 尺寸。
                     {
@@ -2271,6 +2350,9 @@ void Scene::shutdown() {
     dagComputePSO_ = nullptr;
     dagComputeLayout_ = nullptr;
     dagComputeSet_ = nullptr;
+    dagHizSet_ = nullptr;      // M6.1：hiz 态遍历绑定集
+    hizDummyTex_ = nullptr;    // M6.1：t8 占位纹理
+    hizReady_ = false;         // M6.1：金字塔就绪标志
     visibleList_ = nullptr;
     clusterSpheres_ = nullptr;
     for (auto& rb : cullReadback_) rb = nullptr;
@@ -2305,7 +2387,7 @@ void Scene::shutdown() {
     topLayout_ = nullptr;
     topSet_ = nullptr;
     topPSO_ = nullptr;
-    hizTopMin_ = -1.0f;
+    hizTopFar_ = -1.0f;
     cullSubmitted_ = 0;
     cullPolledSlot_ = -1;
     cullVisibleCount_ = -1;

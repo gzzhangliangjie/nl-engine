@@ -53,6 +53,8 @@ struct FrameParams {
     // 屏幕误差公式（bevy/zeux 口径，core/lod_error.hpp）：screenPx =
     //   worldError / max(dist(eye, center)-radius, near) * projYScale * 0.5 * viewportHeight
     float eye[3]             = {0.f, 0.f, 4.2f};  // 相机世界位置（轨道相机 eyePosition()）
+    float view[16]           = {};                // M6.1：world→view 矩阵（dag/hiz 遍历的
+                                                  //  Mara&Morgan 球投影消费；其它模式不读）
     float projYScale         = 2.4142f;           // 1/tan(fovY/2)，fovY=45° 时 2.4142
     float nearPlane          = 0.1f;              // 近断面（与相机投影一致）
     float viewportHeight     = 720.f;             // 投影用的视口高度（px）
@@ -129,9 +131,11 @@ struct HudFrame {
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
     float cutThresholdPx   = 1.0f;    // cut 阈值 px（双向；M5.1 GPU 遍历消费）
     // ---- M6.0：Hi-Z 金字塔（仅 hiz 模式非零/有效；其它模式不画对应控件）----
+    // ---- M6.1：top 语义修正 = 全屏最远表面径向距离（金字塔 max 口径，见
+    //      hiz.slang 文件头；字段名 hizTopMin→hizTopFar 同步改名）----
     int   hizMipCount      = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
     int   hizViewLevel     = 0;       // 可视化查看的 mip 层（双向，viewer 传 FrameParams）
-    float hizTopMin        = -1.0f;   // 最高 mip = 全屏最近径向距离（两帧延迟回读；<0 无数据）
+    float hizTopFar        = -1.0f;   // 最高 mip = 全屏最远表面径向距离（两帧延迟；<0 无数据）
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
@@ -174,8 +178,9 @@ struct DeviceInfo {
     float skinRadius = 0.0f;
 
     // M6.0：Hi-Z 金字塔状态（仅 hiz 模式非零；DeviceInfo 由 backend 每帧 poll 更新）。
+    // M6.1：top 语义 = 全屏最远表面径向距离（金字塔 max 口径）。
     int   hizMipCount = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
-    float hizTopMin   = -1.0f;   // 最高 mip 全屏最近径向距离（两帧延迟；<0 = 暂无数据）
+    float hizTopFar   = -1.0f;   // 最高 mip 全屏最远表面径向距离（两帧延迟；<0 = 暂无数据）
 };
 
 class Renderer {

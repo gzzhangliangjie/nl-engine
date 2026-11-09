@@ -1,8 +1,15 @@
-// M6.0 (S6.0): Hi-Z depth pre-pass + hand-rolled min-mipmap pyramid.
+// M6.0 (S6.0): Hi-Z depth pre-pass + hand-rolled max-mipmap pyramid.
 //
 // S6-PLAN M6.0: "第一遍只写深度（无颜色），输出当前 cut 全部可见簇的 depth
 // buffer；compute 手写 min-mipmap——不能用 GenerateMips（它是均值滤波，
 // 遮挡剔除要纯 min）"。
+// M6.1 拍板修正（2026-11-09，UE/bevy 权威口径）：遮挡判定 = 「簇最近点 vs
+// 区域最远表面」，金字塔必须逐级取 **max**（每 texel 最远表面径向距离）。
+// S6-PLAN 原文的 min 口径（"clusterMin > hizMin 剔除"）在径向距离度量下
+// 不保守会漏画：texel 同时盖近墙(3m)与远景(100m)时 min=3，簇最近 50m>3
+// 被误剔。参照：UE NaniteHZBCull.ush IsVisibleHZB（inverted-Z 取 min =
+// 最远表面）、bevy downsample_depth.wesl（reverse-Z 取 min = 最远表面）、
+// cull_shared.wesl occlusion_cull_screen_aabb（aabb.max.z=簇最近点 vs HZB）。
 //
 // 结构（与 bevy cull_bvh.wesl / UE NaniteCullRaster 的 HZB 前置一致）：
 //   1) vsHizDepth / psHizDepth —— 深度预通道：绘制 S5 DAG 遍历输出的可见簇
@@ -11,7 +18,8 @@
 //      存最近表面。PS 输出 = 视点径向距离 length(worldPos - eye)，与 M5.0
 //      屏幕误差公式的 d = distance(eye, center) - radius 同一度量口径
 //      （S6-PLAN 坑提示：盒测试比较空间必须一致——全链统一径向距离）。
-//   2) csHizDown —— 逐级 2x2 取 min 降采样（odd 边界 clamp 读，宁粗勿漏）。
+//   2) csHizDown —— 逐级 2x2 取 max 降采样（odd 边界 clamp 读，保守方向正确：
+//      视口外清屏 1e9 参与 max → 边界 texel 只会更大 → 剔除更难成立 → 宁粗勿漏）。
 //      SRV 绑 L-1 单 mip 子资源（Load 的 LOD 相对视图基 mip），UAV 绑 L。
 //   3) csHizTop —— 最高 mip 恒 1 texel = 全屏最近距离；写进 4B 计数器供
 //      CPU 延迟回读（M5.2 回读环形同款），作为「金字塔最高层 ≈ 整屏最近
@@ -109,9 +117,10 @@ float4 psHizDepth(PSDepthInput input) : SV_Target
 }
 
 // ============================================================================
-// 2) min 金字塔降采样：每线程 1 目标 texel，2x2 取 min，越界 clamp
-//    （S6-PLAN 坑提示：奇数宽高层取了部分覆盖层级会漏——这里 clamp 保证
-//    边界 texel 是「覆盖区域内全部源 texel 的 min」，保守方向正确）。
+// 2) max 金字塔降采样（M6.1 拍板修正：遮挡判定口径 = 簇最近点 vs 区域最远
+//    表面，见文件头）。每线程 1 目标 texel，2x2 取 max，越界 clamp
+//    （奇数宽高层 clamp 保证边界 texel 是「覆盖区域内全部源 texel 的 max」；
+//    视口外 1e9 参与 max 只会放大 → 剔除更难成立 → 保守方向正确）。
 //    SRV 绑定 = mip(L-1) 单 mip 子资源，Load LOD 0 相对视图基 mip。
 // ============================================================================
 
@@ -129,15 +138,16 @@ void csHizDown(uint3 id : SV_DispatchThreadID)
     const int2 hi   = int2(min(base.x + 1, srcW - 1), min(base.y + 1, srcH - 1));
 
     float v = g_hizPyramid.Load(int3(lo.x, lo.y, 0));
-    v = min(v, g_hizPyramid.Load(int3(hi.x, lo.y, 0)));
-    v = min(v, g_hizPyramid.Load(int3(lo.x, hi.y, 0)));
-    v = min(v, g_hizPyramid.Load(int3(hi.x, hi.y, 0)));
+    v = max(v, g_hizPyramid.Load(int3(hi.x, lo.y, 0)));
+    v = max(v, g_hizPyramid.Load(int3(lo.x, hi.y, 0)));
+    v = max(v, g_hizPyramid.Load(int3(hi.x, hi.y, 0)));
     g_hizDst[uint2(id.x, id.y)] = v;
 }
 
 // ============================================================================
 // 3) 最高 mip（1 texel）-> 4B 计数器。位型重解释 asuint 保留 float 位模式，
 //    CPU 端 asfloat 还原（NaN 即 0xFFFFFFFF 清零值 = 尚无数据）。
+//    M6.1 起 top 语义 = 全屏最远表面径向距离（金字塔方向 min→max 的连锁）。
 // ============================================================================
 
 RWStructuredBuffer<uint> g_hizTop : register(u0);
