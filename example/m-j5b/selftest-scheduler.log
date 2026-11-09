@@ -1,0 +1,12 @@
+  ok   instance() returns the same resident object
+  ok   compute pool size honored from configure
+  ok   io pool size honored from configure
+  ok   compute pool parallelFor matches serial sum
+  ok   compute pool scope returns spawn-ordered results
+  ok   compute and io are physically separate pools
+  ok   compute completes while io pool is blocking
+  ok   io blocking task also completed
+  ok   resident compute pool is deterministic across runs
+  ok   legacy ThreadPool still works alongside resident Scheduler
+  ok   configure after instance() is a no-op
+scheduler selftest: PASS

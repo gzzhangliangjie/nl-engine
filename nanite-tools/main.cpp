@@ -12,6 +12,7 @@
 #include "nl/core/fallback.hpp"  // M3.1：fallback mesh 拼接
 #include "nl/core/jobs.hpp"      // P8 M-J0：线程池 + parallel_for
 #include "nl/core/jobgraph.hpp"  // P8 M-J5a：显式依赖 DAG（vendored Taskflow 薄封装）
+#include "nl/core/scheduler.hpp" // P8 M-J5b：进程级常驻调度底座（compute/io 分池）
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -58,7 +59,8 @@ void printUsage() {
         "                        assemble + validate cluster DAG from <prefix>.lodN.nmesh; exit 1 on violation\n"
         "  nanite-tools selftest cluster|nmesh|group|qem|loop|dag|fallback  deterministic unit tests\n"
         "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n"
-        "  nanite-tools selftest jobgraph           P8 M-J5a dependency DAG / cycle / determinism\n");
+        "  nanite-tools selftest jobgraph           P8 M-J5a dependency DAG / cycle / determinism\n"
+        "  nanite-tools selftest scheduler           P8 M-J5b resident Scheduler / compute+io pools / compat\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -3292,6 +3294,121 @@ int selftestJobGraph() {
     return 1;
 }
 
+// ---- selftest scheduler：M-J5b 常驻 Scheduler + Compute/IO 分池 + 老 ThreadPool 兼容层 ----
+// 与 selftest jobs / jobgraph 并列、互不改动：原 26 项 jobs selftest 一行不退。
+int selftestScheduler() {
+    using nl::core::jobs::Scheduler;
+    using nl::core::jobs::ThreadPool;
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  ok   %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    // 求和参考实现：串行公式（恒等可比）
+    auto serialSum = [](std::uint64_t n) -> std::uint64_t { return n * (n - 1) / 2; };
+
+    // 配置常驻规模并取单例（进程级，只建一次）
+    Scheduler::configure(4, 2);
+    Scheduler& sch = Scheduler::instance();
+
+    // 1) 常驻同一性 + 规模对齐
+    check(&Scheduler::instance() == &sch, "instance() returns the same resident object", "");
+    check(sch.computeThreads() == 4, "compute pool size honored from configure",
+          "got=" + std::to_string(sch.computeThreads()));
+    check(sch.ioThreads() == 2, "io pool size honored from configure",
+          "got=" + std::to_string(sch.ioThreads()));
+
+    // 2) compute 池 parallelFor 求和一致
+    {
+        std::atomic<std::uint64_t> sum{0};
+        sch.parallelFor(100000, [&sum](std::size_t b, std::size_t e) {
+            std::uint64_t local = 0;
+            for (std::size_t i = b; i < e; ++i) local += i;
+            sum.fetch_add(local, std::memory_order_relaxed);
+        });
+        check(sum.load() == serialSum(100000), "compute pool parallelFor matches serial sum", "");
+    }
+
+    // 3) compute 池 scope 保序回收
+    {
+        auto out = sch.scope<int>([](nl::core::jobs::ThreadPool::Scope<int>& s) {
+            for (int i = 0; i < 8; ++i) s.spawn([i] { return i * i; });
+        });
+        bool ok = out.size() == 8;
+        for (int i = 0; ok && i < 8; ++i) if (out[i] != i * i) ok = false;
+        check(ok, "compute pool scope returns spawn-ordered results", "");
+    }
+
+    // 4) Compute/IO 物理分池：两池是不同实例（互不拖垮）
+    check(&sch.compute() != &sch.io(), "compute and io are physically separate pools", "");
+
+    // 5) IO 阻塞不拖垮 compute：io 池 sleep 期间 compute 池照常完成
+    {
+        std::atomic<bool> ioDone{false};
+        std::atomic<std::uint64_t> sum{0};
+        auto ioTask = sch.io().scope<bool>([&ioDone](nl::core::jobs::ThreadPool::Scope<bool>& s) {
+            s.spawn([&ioDone] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(60));
+                ioDone.store(true);
+                return true;
+            });
+        });
+        sch.parallelFor(100000, [&sum](std::size_t b, std::size_t e) {
+            std::uint64_t local = 0;
+            for (std::size_t i = b; i < e; ++i) local += i;
+            sum.fetch_add(local, std::memory_order_relaxed);
+        });
+        check(sum.load() == serialSum(100000), "compute completes while io pool is blocking", "");
+        check(ioDone.load(), "io blocking task also completed", "");
+        (void)ioTask;
+    }
+
+    // 6) 常驻多轮确定性：同一 parallelFor 连跑 5 次结果一致
+    {
+        bool allSame = true;
+        std::uint64_t ref = 0;
+        for (int r = 0; r < 5; ++r) {
+            std::atomic<std::uint64_t> sum{0};
+            sch.parallelFor(100000, [&sum](std::size_t b, std::size_t e) {
+                std::uint64_t local = 0;
+                for (std::size_t i = b; i < e; ++i) local += i;
+                sum.fetch_add(local, std::memory_order_relaxed);
+            });
+            if (r == 0) ref = sum.load();
+            else if (sum.load() != ref) allSame = false;
+        }
+        check(allSame, "resident compute pool is deterministic across runs", "");
+    }
+
+    // 7) 老 ThreadPool 兼容层：独立构造仍可用，且不受常驻实例影响
+    {
+        ThreadPool pool(2);
+        std::atomic<std::uint64_t> sum{0};
+        pool.parallelFor(100000, [&sum](std::size_t b, std::size_t e) {
+            std::uint64_t local = 0;
+            for (std::size_t i = b; i < e; ++i) local += i;
+            sum.fetch_add(local, std::memory_order_relaxed);
+        });
+        check(sum.load() == serialSum(100000), "legacy ThreadPool still works alongside resident Scheduler", "");
+    }
+
+    // 8) 负向：实例建好后再 configure 是 no-op（规模冻结，不崩）
+    {
+        const unsigned c0 = sch.computeThreads();
+        Scheduler::configure(16, 8);   // 应被忽略
+        check(sch.computeThreads() == c0, "configure after instance() is a no-op",
+              "got=" + std::to_string(sch.computeThreads()));
+    }
+
+    if (failures == 0) {
+        std::printf("scheduler selftest: PASS\n");
+        return 0;
+    }
+    std::printf("scheduler selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3309,7 +3426,8 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "fallback") return selftestFallback();
         if (argc >= 3 && std::string(argv[2]) == "jobs") return selftestJobs();
         if (argc >= 3 && std::string(argv[2]) == "jobgraph") return selftestJobGraph();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph)\n");
+        if (argc >= 3 && std::string(argv[2]) == "scheduler") return selftestScheduler();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);

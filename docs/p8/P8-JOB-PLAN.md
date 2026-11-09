@@ -102,7 +102,7 @@
 | 步 | 内容 | 状态 |
 |---|---|---|
 | **M-J5a** | ① vendored Taskflow 3.11.0 + `nl/core/jobgraph.hpp` 薄封装（环检测 / 登记序归并）；② 抽共用 `recompileGraph` 消除两份 4 路 slangc 实现；③ 4 编译 job → 1 汇总 job 的 fan-in DAG 接到真实消费者；④ selftest + 证据图 + 展示台卡 | **已验收，收口中**（2026-11-09） |
-| M-J5b | 进程级常驻 `Scheduler` + Compute/IO 分池 + 老 `ThreadPool` 兼容层 | 待 M-J5a 收口 |
+| M-J5b | 进程级常驻 `Scheduler` + Compute/IO 分池 + 老 `ThreadPool` 兼容层 | **已验收，收口中**（2026-11-09） |
 | M-J5c | physics 合回 master 后接 `JPH::JobSystem`；ECS E1b 稳定后接 system 调度 | 延后（`ecs` ACTIVE M-E1b.1 / `physics` ACTIVE / `audio` M-S0 占坑，现在碰会撞在途树） |
 
 ### M-J5a 实施计划（2026-11-09，落码依据）
@@ -141,6 +141,17 @@
   5. **旧默认路径失效**：core 的 `findSlangc()` 指向已拆除的 `nl-engine-material-graph` worktree，改指主树（各 worktree 的 `thirdparty/slang/dist` 是共享 junction）。
   6. **`std::system` 并发实测干净**：4 个独立 cmd.exe 各写各的输出文件；逐路命令回显也收集到各 lane，由汇总 job 按登记序打印，保证并行不改输出。
   7. **版本由 C++ 标准定死**：项目 `CMAKE_CXX_STANDARD 17`，Taskflow v4 起要 C++20 → 取 v3 末版 3.11.0（`TF_VERSION 301100`），不追最新。
+
+#### 落地纪要（2026-11-09，M-J5b 验收通过）
+
+- **交付**：`core/include/nl/core/scheduler.hpp` + `core/src/scheduler.cpp`（进程级常驻 `Scheduler`，组合 compute/io 两个既有 `jobs::ThreadPool`，复用已验证的 `parallelFor` / `scope` 内核，零确定性风险）；`CMakeLists.txt` 仅加 `scheduler.cpp` 一行；`nanite-tools/main.cpp` 加 `selftest scheduler` 新套件（11 检查）+ help/派发；**老 `ThreadPool` 一行不动**，M-J0~J3 全部消费者零改动；`example/m-j5b/`（3 真实日志 + 3 证据图 + run.bat）、`cases.json` 新增 `m-j5b` 卡（3 用例）、`scripts/make-j5b-evidence.py`。
+- **验收实测（DX12 / VULKAN 双后端各自跑过）**：`scheduler selftest: PASS (11 cases)`（常驻同一性 / compute·io 规模对齐 / compute parallelFor 求和一致 / scope 保序 / compute 与 io 物理分池 / io 阻塞不拖垮 compute / 常驻多轮确定性 / 老 ThreadPool 兼容层仍可用 / configure 后 no-op 负向）；老 `jobs selftest: PASS`（**25 项**不退）；负向 `selftest unknown-suite` exit 1；`server.py --check` 退出 0（stage=S7.0 cases=4 baselines=6）。
+- **设计取舍**：不新写池，直接组合两个已验证 `ThreadPool` —— 进程级常驻化 + 分池的同时复用既有并行内核，**零确定性风险**，且天然满足「老 `ThreadPool` 兼容层一行不动」。compute（CPU 密集）与 io（阻塞 IO / 资产预取，P9 V4 residency 预备位）物理分池，避免 io 阻塞拖垮计算帧。常驻规模以 `configure()` 在首次 `instance()` 前冻结、之后 no-op，防污染帧时间与确定性判据；底座与进程同生命周期不析构。
+- **踩坑（固化）**：
+  1. **构建纪律复犯（用户点名）**：Git Bash `export INCLUDE/LIB` 到不了 `cl.exe`（C1083）、临时 `scripts/j5b.bat` 走 `cmd //c` 被 MSYS 转义截坏 `BACKEND` 变量（`'2.bat' 不是命令`）——两处都踩中已固体化规范「构建统一走 `scripts/build-m0.2.bat`、一律 PowerShell 原生 API 不再 Git Bash export / 不再 `cmd //c`」。最终用 PowerShell 原生设置 `$env:INCLUDE/LIB/PATH` 后直接调 cmake 增量构建成功，并清理临时脚本。
+  2. **cases.json 整文件重写陷阱**：`json.dump(indent=1)` 把原手工维护的 2-space 对象 / 3-space 键缩进整文件重排（223+/124− 噪音 diff）；改用精确字符串插入（匹配 `m-j5a-mg` → `m-sc0` 边界的原生缩进），diff 收敛到 66+/2−。
+  3. **证据图高度**：jobs 25 项初版画布高 520 裁掉末 6 项，提到 720 后完整（ViewImage 复核确认）。
+  4. **jobs selftest 实测量 = 25 项**（计划文档笼统写「26 项」），以实测为准，计划文档口径待同步。
 
 ---
 

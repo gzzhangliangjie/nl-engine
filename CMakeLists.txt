@@ -146,6 +146,7 @@ add_library(nl_core STATIC
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
     core/src/jobgraph.cpp      # P8 M-J5a：显式依赖 DAG 薄封装（vendored Taskflow 只在此 TU 出现）
+    core/src/scheduler.cpp     # P8 M-J5b：进程级常驻调度底座（组合 compute/io 两个 ThreadPool）
     core/src/console.cpp       # P8 M-C0：开发者控制台纯逻辑内核（A 类轨道，零图形符号）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）

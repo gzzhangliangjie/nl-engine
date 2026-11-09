@@ -1461,6 +1461,27 @@
 
 **下一步**：M-J5b（进程级常驻 Scheduler + Compute/IO 分池 + 兼容层）、M-J5c（physics 合回后接 `JPH::JobSystem` / ECS E1b 稳定后接 system 调度）；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。**merge 状态（2026-11-09 16:3x 更新）**：`feat/job-system` 已 `git merge e783ef8`（已提交 S7.0 点）收敛，CMakeLists 自动合（taskflow 段 L34-43 与 S7.0 shader 段 L233-303 不重叠），两份追加型冲突（MILESTONES / cases.json）按「保留双方条目」手工解，`426ed1a` 提交；双后端（DX12/VULKAN）重配 + 编 `nanite-tools`/`material-graph-tools` 成功，jobgraph/jobs/compilepar/check 全绿、`server.py --check` 退出 0。**已 merge-ready，等主树 S7 WIP 落地后合回 master + 拆 worktree**（WIP 是另一会话活儿，不碰）。
 
+## P8 M-J5b：进程级常驻 Scheduler（compute + io 分池）+ 老 ThreadPool 兼容层（tag `m-j5b`，2026-11-09，feat/job-system 轨道）
+
+**动作**：M-J5a 把依赖 DAG 落了，但池仍是「消费者各自 `new` 一个的局部工具」，无进程级常驻实例（P8-JOB-PLAN.md M-J4 能力边界已记）。M-J5b 升池：新增 `core/include/nl/core/scheduler.hpp` + `core/src/scheduler.cpp`，`Scheduler` 组合两个既有 `jobs::ThreadPool`（compute + io），复用已验证的 `parallelFor` / `scope` 内核，**零确定性风险**。**老 `ThreadPool` 一行不动**：M-J0~J3 全部消费者零改动，`CMakeLists.txt` 仅加 `scheduler.cpp` 一行；`nanite-tools/main.cpp` 加 `selftest scheduler` 新套件（11 检查）与 help/派发，老 `selftest jobs` 26→实测 25 项套件一行不退。**分池语义**：compute() 喂 CPU 密集数据并行 / fork-join（material 编译、simplify、anim dump、check-orient），io() 独立实例喂阻塞 IO / 资产预取（P9 V4 residency 预备位，当前薄壳，隔离避免拖垮 compute）。**常驻纪律**：`configure(compute,io)` 必须在首次 `instance()` 前调用；实例建好后再次 `configure` 是 **no-op（冻结规模）**，防污染帧时间与确定性判据；底座 `~Scheduler()=default` 不析构，与进程同生命周期。不进 `kStage`、不进 bytes-near 渲染回归（纯 CPU 库，零图形符号）。
+
+**提交版本**：本会话收口后在 `feat/job-system` 本地提交 + 打 tag `m-j5b`（merge 回 master 待用户拍板，主树有 S7 WIP / ECS E1b 等在途改动，按前例不擅自合）。
+
+**完成情况**：
+- 双后端（DX12 / VULKAN）`build/` 增量重编 `nanite-tools` 成功（纯 CPU 改动，未动渲染器）；`selftest scheduler` **11/11 PASS**。
+- 11 检查全绿：① 常驻同一性（`instance()` 返回同一对象）② compute/io 规模对齐（configure(4,2) → 4/2）③ compute `parallelFor` 求和与串行参考一致 ④ compute `scope` 按 spawn 序回收 ⑤ compute 与 io **物理分池**（指针不同）⑥ io 池 sleep 期间 compute 池照常完成（io 不拖垮 compute）⑦ 常驻多轮确定性（同 `parallelFor` 连跑 5 次结果一致）⑧ 老 `ThreadPool` 兼容层仍可用（独立 `new` 池并行求和一致）⑨ `configure` 后 no-op 负向。
+- 老 `jobs selftest` 实测 **25 项全绿**（零回归，作为 M-J5b 回归护栏独立复跑）；负向 `selftest unknown-suite` exit 1。
+- 交代物：`example/m-j5b/`（3 份真实日志 + 3 张由日志解析生成的证据图 + run.bat）、`example/cases.json` 新增 `m-j5b` 卡（3 用例：selftest-scheduler / selftest-jobs-j5b / negative-unknown-j5b）、`scripts/make-j5b-evidence.py`；`server.py --check` 退出 0（stage=S7.0 cases=4 baselines=6）。
+- 不进 `kStage`、不进渲染回归、零 GPU 代码（A 类轨道铁律）。
+
+**踩坑情况**：
+1. **构建纪律复犯（固化规范已点名）**：曾试图 Git Bash `export INCLUDE/LIB` 后调 cmake（env 到不了 `cl.exe` → C1083），又写临时 `scripts/j5b.bat` 用 `cmd //c` 调（MSYS 转义截坏 `BACKEND` 变量 → `'2.bat' 不是命令`）——两处都踩中已固体化规范「构建统一走 `scripts/build-m0.2.bat`、一律 PowerShell 原生 API 不再 Git Bash export / 不再 `cmd //c`」。最终用 PowerShell 原生设置 `$env:INCLUDE/LIB/PATH` 后直接调 cmake 增量构建成功，并清理临时脚本。（用户原话：「这个是固化规范 为什么还犯一样的错误」）
+2. **cases.json 整文件重写陷阱**：第一版用 `json.dump(indent=1)` 改写 `cases.json`，但原文件是手工维护的 **2-space 对象 / 3-space 键**缩进（非 indent=1），导致整文件重排（223+/124− 噪音 diff）。改用**精确字符串插入**（匹配 `m-j5a-mg` → `m-sc0` 边界的原生缩进），diff 收敛到 66+/2−。
+3. **证据图高度裁切**：jobs 25 项初版画布高 520，末 6 项被裁；提到 720 后完整（ViewImage 复核确认）。
+4. **jobs selftest 实测量 = 25 项**（计划文档笼统写「26 项」）；以实测为准，计划文档口径待同步。
+
+**下一步**：M-J5c（physics 合回后接 `JPH::JobSystem`；ECS E1b 稳定后接 system 调度），仍待各自轨道腾手、不擅自扩范围；`P8-NAV-PLAN.md:45` 多 tile 并行烘焙为已在案合流点。merge 回 master 待用户拍板。
+
 ## M7.0：visibility buffer 打包写入 + 簇/三角可视化（S7 首个里程碑，2026-11-09，tag `s7-visbuf`）
 
 **动作**

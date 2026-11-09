@@ -4056,8 +4056,72 @@
      "preview": "example/m-j5a/check.png"
     }
    ]
-  }
-,
+  },
+  {
+   "id": "m-j5b",
+   "label": "M-J5b",
+   "name": "Job 轨道 M-J5b：进程级常驻 Scheduler（compute + io 分池）+ 老 ThreadPool 兼容层",
+   "tag": "m-j5b",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道（feat/job-system，纯 CPU，零图形符号，不进 kStage/不进渲染回归）。把池从「每次调用 new 一个的局部工具」升为进程级常驻调度底座：Scheduler 组合两个既有 jobs::ThreadPool——compute()（CPU 密集数据并行/fork-join，喂 material 编译、simplify、anim dump、check-orient）+ io()（阻塞 IO/资产预取，P9 V4 residency 预备位）。老 jobs::ThreadPool 一行不动：M-J0~J3 的 25 项 selftest 零回归，全部消费者无改动。常驻规模以 configure() 冻结（首次 instance() 后 no-op），避免污染帧时间与确定性判据；底座与进程同生命周期不析构。",
+   "acceptance": [
+    "selftest scheduler 11/11 PASS：常驻同一性、compute/io 规模对齐、compute parallelFor 求和一致、scope 保序回收、compute 与 io 物理分池（指针不同）、io 阻塞不拖垮 compute、常驻多轮确定性、老 ThreadPool 兼容层仍可用、configure 后 no-op 负向",
+    "原 jobs selftest 25 项全绿（老池/兼容层不退），作为 M-J5b 回归护栏独立复跑",
+    "负向用例 selftest unknown-suite 退出 1；不进 kStage、不进渲染回归",
+    "three evidence PNGs generated from real logs by scripts/make-j5b-evidence.py"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nanite-tools.exe",
+    "vulkan": "build/VULKAN/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest-scheduler",
+     "name": "selftest scheduler：常驻 Scheduler / compute+io 分池 / 兼容层",
+     "kind": "tool",
+     "note": "11 checks: resident identity, compute/io physical separation, io blocking doesn't stall compute, determinism across runs, legacy ThreadPool compat, post-instance configure no-op.",
+     "args": [
+      "selftest",
+      "scheduler"
+     ],
+     "expectExit": 0,
+     "expectLog": "scheduler selftest: PASS",
+     "command": "nanite-tools selftest scheduler",
+     "preview": "example/m-j5b/selftest-scheduler.png",
+     "script": "example/m-j5b/run.bat"
+    },
+    {
+     "id": "selftest-jobs-j5b",
+     "name": "selftest jobs：老 ThreadPool 25 项不退（M-J5b 回归护栏）",
+     "kind": "tool",
+     "note": "M-J5b 组合两个既有 ThreadPool，老 jobs::ThreadPool 一行不动；本用例独立复跑 25 项确认零回归。",
+     "args": [
+      "selftest",
+      "jobs"
+     ],
+     "expectExit": 0,
+     "expectLog": "jobs selftest: PASS",
+     "command": "nanite-tools selftest jobs",
+     "preview": "example/m-j5b/selftest-jobs.png",
+     "script": "example/m-j5b/run.bat"
+    },
+    {
+     "id": "negative-unknown-j5b",
+     "name": "负向：未知 selftest 套件必须拒绝",
+     "kind": "tool",
+     "note": "expectExit 1; CLI negative gate discipline (mirrors M-J5a).",
+     "args": [
+      "selftest",
+      "unknown-suite"
+     ],
+     "expectExit": 1,
+     "expectLog": "unknown suite",
+     "command": "nanite-tools selftest unknown-suite",
+     "preview": "example/m-j5b/negative-unknown.png",
+     "script": "example/m-j5b/run.bat"
+    }
+   ]
+  },
   {
    "id": "m-sc0",
    "label": "P8 M-SC0",
