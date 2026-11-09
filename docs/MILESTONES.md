@@ -1119,7 +1119,7 @@
 
 **动作**：两项用户拍板先行——①金字塔 min→max（三处权威口径：UE `NaniteHZBCull.ush IsVisibleHZB` inverted-Z 取 min=最远表面、bevy `downsample_depth.wesl` reverse-Z 取 min + `occlusion_cull_screen_aabb` 簇最近点比较；S6-PLAN 原文 min 口径在径向距离下不保守会漏画）；②单 dispatch 内联（S6-PLAN 原文方案），bevy 式 HZB second pass 不做（=D3a 升级，触发条件未到）。落地：hiz.slang `csHizDown` min→max + top 语义翻转；dag.slang 新增 `hizOccluded`（Mara&Morgan 精确切线球投影（UE `SphereToScreenRect` 同款）+ bevy `firstLeadingBit` mip 选择 + 4×4 采样 max 聚合 + 簇最近径向距离>区域 hizMax 整树 continue），DagConstants 48B→128B（+g_dagHiz 开关/视口宽 +g_dagView），t8 金字塔 SRV 双 set（dummy/真金字塔互斥，§2.7）；FrameParams 加 view[16]、OrbitCamera 加 view()（与 viewProjection 的 lookAt 同源）；ensureHizTargets 建 dagHizSet_ + just-created 帧内补全 mip 清屏；HizConstants/hizTopFar 三态回读（真实值/-2 背景主导/-1）；HUD `hiz top` 行 farthest depth 语义 + viewer 日志 pyramid top far；kStage bump S6.1。新资产 HizScene（墙+墙后 3 球+侧边对照球，`scripts/make-hiz-scene-glb.py`，6 层 lod 链 check-orient PASS + dag 校验 PASS）。
 
-**提交版本**：`f0dc46c`（M6.1 本体）+ `e5fd68c`（本台账回填）；tag `s6-cull` 落在 `e5fd68c`；全量回归闸 240/240 ALL GREEN 在 tag 前跑于 `f0dc46c` 工作树状态
+**提交版本**：`f0dc46c`（M6.1 本体，全量回归闸 240/240 ALL GREEN 跑于该状态）+ `e5fd68c` / `6936862`（台账回填与措辞修正，随改随提交）；tag `s6-cull` 挂在本节终版提交上
 
 **完成情况**：
 - 机械判据：正面（yaw 12）墙挡墙后 3 球 → hiz visible **24/85** vs dag 基线 **40/85**（-16 簇整树剔除）；侧面（yaw 75 穿墙）hiz **40/85** == dag（零误剔）；hiz vs dag 正面画面**覆盖层外逐像素 0 差**（剔除对最终画面透明 = 只减被深度测试挡住的簇）；Suzanne 自遮挡 hiz 233/324 vs dag 237/324。
