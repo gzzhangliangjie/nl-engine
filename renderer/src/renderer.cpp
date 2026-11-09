@@ -224,4 +224,15 @@ bool Renderer::loadEcsScene(const SceneObjectDesc* objects, std::uint32_t object
     return true;
 }
 
+// M-E1b.5 渲染用例：转发 backend 的 updateEcsObjects（每帧实例数据刷新）。
+bool Renderer::updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount) {
+    if (!impl_->backend) return false;
+    std::string err;
+    if (!impl_->backend->updateEcsObjects(objects, objectCount, err)) {
+        impl_->error = err;
+        return false;
+    }
+    return true;
+}
+
 } // namespace nl::renderer

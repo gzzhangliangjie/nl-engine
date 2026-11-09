@@ -1483,6 +1483,8 @@
 2. **const 方法写成员**：`guardNoStructuralMutation` 声明为 const（便于在任意 API 里调用），`violationMsg_` 忘加 `mutable` → C2678；与 `violationMutex_` 一样需要 mutable。
 3. **jobgraph 异常消息带不出**：`Graph::run` 在封装层 `catch (...)` 只报「exception in task i (name)」——违约的具体 API 名必须**先记账（mutex 保护）再抛**，tickParallel 失败后从 `violationMsg_` 取回写 err，负向用例才能断言 "forbidden" + "newEntity"。
 
+**渲染证据补做（用户点名「渲染一波看看」，2026-11-09 深夜）**：viewer 增 `--tick off|serial|parallel`（默认 off 静态，既有基线零触碰），`SpinSystem(Write<Transform>)` 逐实体差异化旋转 + `ReadCountSystem(Read<Transform>)` 纯读并行；固定 dt=1/60 + 新增 `Scene::updateObjects`（单 upload 列表刷实例矩阵）。量化闸 DX12+VULKAN 双后端全绿：三档 deviceErrors=0、**serial==parallel 截图逐字节**（tickParallel 确定性的渲染链端到端证明）、animated!=static（56005 px = 物体真转）、`--tick warp` 负向拒绝；`--only ecs-e1b` 8/8 ALL GREEN。NVRHI 状态机踩坑（permanent 冻结卡每帧 writeBuffer / 跟踪态不跨列表 / beginTracking 参数=当前态）固化 **§2.15**。用户同步指认：固定 dt + 逻辑/渲染帧分离是**暂停 + fixed-step driver** 通用需求的简化版（accumulator + max catch-up + pause + 插值），独立立项待拍板（P8-ECS-PLAN 待办行）。
+
 **下一步**：E1b 链（E1b.0~E1b.5）收官 merge 回 master（feat/ecs 已同步 master 零冲突，`git merge feat/ecs` + 全量回归即可）；bevy 式访问反射 / MassCommandBuffer 式命令缓冲不在计划内，需要时单独拍板。
 
 ## pbr-direct：PBR 直射光 + glTF 贴图采样（S7 前置穿插项，2026-11-09，tag `pbr-direct`）

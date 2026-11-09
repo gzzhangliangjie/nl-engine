@@ -190,6 +190,15 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 - **探针结论有效性前置**：改 shader 后跑任何画面探针，先核 `exe mtime > shader mtime`（NMake 同秒 mtime 跳重链，§2.12 尾条），否则结论全部作废——M-E1b.4 连环假阴性（shadowTry1~4/PROBE-S）的真实根因。
 
 
+### 2.15 ⚠️ NVRHI buffer 每帧写回：permanent 冻结与跨列表跟踪（2026-11-09，M-E1b.5 渲染链）
+
+- **`setPermanentBufferState(buf, X)` 是一次性冻结**：之后所有写路径（`writeBuffer`/`copyBuffer` 内部 `requireBufferState(CopyDest)`）对 permanent buffer **直接校验 permanent 位、不插 barrier**——permanent=ShaderResource 时每帧写必报 `Required: 0x1000(CopyDest), present: 0x60(SRV)`（首轮实测 deviceErrors=60，30 帧 × 2 batch）。混合位 permanent（`SRV|CopyDest`）能过校验但 Vulkan 端跨 submit 的 transfer→read hazard 无 barrier，禁用。
+- **跟踪状态不跨命令列表**：`commandListSubmitted()` 清空 `m_BufferStates`——每个新命令列表（initScene 的 upload 列表 / viewer 每帧 update 的 upload 列表 / renderFrame 的帧列表）都必须在自己的列表 open 后、首次绑定前 `beginTrackingBufferState(buf, 当前态)` 如实声明，否则「Unknown prior state」。
+- **`beginTrackingBufferState` 参数 = 当前态，不是目标态**（NVRHI 注释原话：informs the tracker **of the current state**）——谎报会让 writeBuffer 以为无需 barrier，错误留到绑定时才爆。
+- **可行解（M-E1b.5 实装）**：写读交替的 buffer **不设 permanent**，用代码成员跨列表跟踪末态（序列完全确定才可行）：`Scene::instanceTrackSRV_`——initScene/upload 列表末态恒 CopyDest（writeBuffer 无转换落盘），draw 帧列表绑定 SRV 后末态恒 SRV；update 与 draw 各自 beginTracking 如实声明，SRV↔CopyDest 的往返 barrier 由 tracker 自动插入。
+- **每帧实例刷新入口**：`Scene::updateObjects(device, objects, count, err)`（M-E1b.5 新增）——单 upload 命令列表写全部 batch 的 instances（§2.8「帧内禁开第二 cmd list」精神），batch 分组由 initScene 固化的 `sceneBatchObjects_` 重建（meshFile 首现序 + batch 内 objects 原序，槽号一一对应）；闸门不能查 `ready()`（四条 scene 管线是首帧 `ensurePipeline` 懒建的，initScene 后 ready() 恒 false），查 `sceneBatches_[0].instances` 存在性。
+
+
 ## 3. 当前局限
 - **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增单入口 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`（默认 `vsMain/psMain` 双入口）；**多入口 shader 必须在 CMakeLists 登记 `_ENTRIES_<NAME>`**（model 6 / hiz 6 / visbuf 4 个入口），需要 SM6.6 的产物进 `_SM66_ARTIFACTS` 白名单（见 §2.9）。公共 `#include` 头用 `.slangh` 后缀避开 GLOB。注意 `file(GLOB)` 在 configure 时求值，纯新增文件若不触发重编，手动重跑一次 build 脚本即可。
 - **shader 名仍由共享类固定拼接**：M0.4 把两后端重复的路径/入口名收进了 `renderer/src/scene.cpp`，M0.5 又加了一个 `renderer/src/hud.cpp`（`<name>` = `hud`），两者各自是常量；多材质系统（shader 名 → 产物 + 入口 + pipeline 的注册表）留到 S1。

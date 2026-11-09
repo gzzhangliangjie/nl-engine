@@ -2658,6 +2658,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         }
         batchObjects[b].push_back(i);
     }
+    // M-E1b.5：固化分组映射，updateObjects 每帧按同一规则重打包（槽号一一对应）。
+    sceneBatchObjects_ = batchObjects;
+    sceneObjectCount_ = objectCount;
 
     // ---- 3. 每组读 GLB（首 primitive，照 Scene::init 第 2 步的校验与顶点展开）----
     struct PreparedBatch {
@@ -3130,7 +3133,12 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
                             batchInstanceData[b].size() * sizeof(float));
-        upload->setPermanentBufferState(batch.instances, nvrhi::ResourceStates::ShaderResource);
+        // M-E1b.5：instances **不设 permanent**（SRV 冻结会让每帧 writeBuffer 的
+        // require(CopyDest) 直接报错——NVRHI 对 permanent buffer 不插 barrier）。
+        // 改走 tracking：末态由 instancesInSRV_ 跨列表跟踪（update 末态=CopyDest、
+        // draw 末态=SRV，序列完全确定），draw/update 各自在列表 open 后如实声明。
+        // 末态初值 = CopyDest（本列表 writeBuffer 无转换直接落盘）。
+        instanceTrackSRV_ = false;
     }
     upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
@@ -3206,6 +3214,67 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// M-E1b.5 渲染用例：每帧刷新实例数据。灯缓冲/顶点/纹理/管线全不动，只重打包
+// float4 实例（矩阵 4 列 + tint + roughness/metallic）后 writeBuffer 各 batch.instances。
+// upload 三步（beginTracking CopyDest → writeBuffer → setPermanent ShaderResource）
+// 与 initScene 第 6 步同款；close+execute 同帧生效（renderFrame 在其后才开命令列表）。
+bool Scene::updateObjects(nvrhi::IDevice* device,
+                          const SceneObjectDesc* objects, std::uint32_t objectCount,
+                          std::string& outError) {
+    if (!device) { outError = "updateObjects: device null"; return false; }
+    // 闸门不能用 ready()：四条 scene 管线在首次 renderFrame 的 ensurePipeline
+    // 才建（resize 也会置空重建），initScene 之后、首帧之前 ready() 恒 false。
+    // 这里只关心实例缓冲是否已建（initScene 第 5 步）。
+    if (sceneMode_ == false || sceneBatches_.empty() || !sceneBatches_[0].instances) {
+        outError = "updateObjects: scene instances not initialized (initScene first)";
+        return false;
+    }
+    if (objectCount != sceneObjectCount_) {
+        outError = "updateObjects: objectCount mismatch (initScene " +
+                   std::to_string(sceneObjectCount_) + " vs update " +
+                   std::to_string(objectCount) + ")";
+        return false;
+    }
+    // §2.8 铁律「帧内禁开第二 cmd list」精神：所有 batch 合并进单个 upload
+    // 命令列表，一次 open/close/execute（viewer 帧首调用，renderFrame 随后才开）。
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
+        SceneMeshBatch& batch = sceneBatches_[b];
+        const std::vector<std::uint32_t>& slotMap = sceneBatchObjects_[b];
+        std::vector<float> data(static_cast<std::size_t>(slotMap.size()) * 7u * 4u, 0.0f);
+        std::uint32_t slot = 0;
+        for (std::uint32_t i : slotMap) {
+            const float* w = objects[i].world;   // 列主序 m[col*4+row]
+            float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r)
+                    dst[c * 4 + r] = w[c * 4 + r];
+            dst[16] = objects[i].tint[0];
+            dst[17] = objects[i].tint[1];
+            dst[18] = objects[i].tint[2];
+            dst[19] = 0.0f;
+            dst[20] = objects[i].roughness;
+            dst[21] = objects[i].metallic;
+            dst[22] = 0.0f;
+            dst[23] = 0.0f;
+            ++slot;
+        }
+        // beginTrackingBufferState 参数 = **当前**状态（NVRHI 语义：informs the
+        // tracker of the current state）。instances 走 tracking 不冻结（见 initScene
+        // 注释），当前态由 instanceTrackSRV_ 跨列表跟踪；writeBuffer require
+        // CopyDest 由 tracker 自动插 barrier，write 后末态 = CopyDest。
+        upload->beginTrackingBufferState(batch.instances,
+            instanceTrackSRV_ ? nvrhi::ResourceStates::ShaderResource
+                              : nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(batch.instances, data.data(), data.size() * sizeof(float));
+    }
+    upload->close();
+    device->executeCommandList(upload);
+    instanceTrackSRV_ = false;   // update 列表末态 = CopyDest（writeBuffer 无转换落盘）
+    return true;
+}
+
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
@@ -3215,6 +3284,16 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
     // 旧实现多 batch 时所有批次都读实例槽 0（详见第 5 步与 MILESTONES 踩坑）。
     if (sceneMode_) {
+        // ---- M-E1b.5：instances 状态如实登记（不设 permanent，见 initScene 注释）。
+        // 跟踪态不跨命令列表（NVRHI commandListSubmitted 清空），每个新列表必须在
+        // 首次绑定前声明当前态；SRV 绑定的 require 由 tracker 插 barrier，列表
+        // 末态 = SRV。
+        const nvrhi::ResourceStates instState = instanceTrackSRV_
+            ? nvrhi::ResourceStates::ShaderResource
+            : nvrhi::ResourceStates::CopyDest;
+        for (const SceneMeshBatch& batch : sceneBatches_)
+            cmd->beginTrackingBufferState(batch.instances, instState);
+
         // ---- M-E1b.4：b2 阴影常量 + 阴影图状态登记（无条件做——主 pass 恒绑定
         // b2/t7，无阴影场景也要写零版 b2（enabled=0 → psScene 阴影分支不进、
         // factor 恒 1.0）并登记纹理状态，否则 volatile CB 未写即用 = NVRHI 报错）。
@@ -3312,6 +3391,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 .setInstanceCount(b.instanceCount);
             cmd->drawIndexed(args);
         }
+        instanceTrackSRV_ = true;   // 本列表末态 = SRV（所有绑定 require 已插 barrier）
         return;   // sceneMode_ 分支必须 return，不走既有路径
     }
 

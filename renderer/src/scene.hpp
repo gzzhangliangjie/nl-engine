@@ -145,6 +145,15 @@ public:
                    const SceneLightDesc* lights, std::uint32_t lightCount,
                    float ambient, const char* sceneName, std::string& outError);
 
+    // M-E1b.5 渲染用例：每帧刷新实例数据（世界矩阵/tint/材质），灯与拓扑不动。
+    // objectCount 必须与 initScene 一致（batch 分组按 meshFile 首现序稳定重建，
+    // batch 内保持 objects 原序——与 initScene 同一规则，槽号一一对应）。
+    // 世界矩阵逐字节来自 Transform::toMatrix()，parallel/serial 同 dt 序列下
+    // 输出逐位一致（spin 系统确定性由 tickParallel 串行对拍保证）。
+    bool updateObjects(nvrhi::IDevice* device,
+                       const SceneObjectDesc* objects, std::uint32_t objectCount,
+                       std::string& outError);
+
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
@@ -337,6 +346,15 @@ private:
         std::uint32_t instanceCount = 0;
     };
     std::vector<SceneMeshBatch> sceneBatches_;
+    // M-E1b.5：updateObjects 复用的 batch 分组映射（initScene 时固化——
+    // meshFile 首现序 + batch 内 objects 原序，重打包规则与 initScene 一致）。
+    std::vector<std::vector<std::uint32_t>> sceneBatchObjects_;
+    std::uint32_t sceneObjectCount_ = 0;
+    // instances 的 NVRHI 状态跟踪末态（不设 permanent——SRV 冻结会卡每帧
+    // writeBuffer 的 require(CopyDest)，见 initScene/updateObjects 注释）。
+    // true = 上一列表末态 ShaderResource；false = CopyDest。update 末态恒
+    // CopyDest、draw 末态恒 SRV，序列完全确定。
+    bool instanceTrackSRV_ = false;
     nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
     // ---- M-E1b.4：方向灯 2D 阴影（最多 4 盏；R32F Texture2DArray 整数 Load 采样）----

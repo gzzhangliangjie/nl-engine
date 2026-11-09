@@ -9,6 +9,7 @@
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/renderer/renderer.hpp"
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
+#include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
 #include "nl/scene/World.hpp"
 
 #include <algorithm>
@@ -107,6 +108,10 @@ struct Options {
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
+    // M-E1b.5 渲染用例：--tick off|serial|parallel。off（缺省）= 静态场景（既有
+    // 基线零风险）；serial/parallel = 帧循环注册 spin+read 系统并逐帧 tick（固定
+    // dt=1/60，截图确定性——parallel/serial 同帧数逐字节一致）。
+    std::string tickMode = "off";
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
@@ -243,6 +248,12 @@ Options parseArgs(int argc, char** argv) {
             o.consoleExecLines.push_back(argv[++i]);
         } else if (a == "--console-type" && i + 1 < argc) {  // M-C1：输入行预填（补全演示）
             o.consolePrefill = argv[++i];
+        } else if (a == "--tick" && i + 1 < argc) {   // M-E1b.5：off|serial|parallel
+            o.tickMode = argv[++i];
+            if (o.tickMode != "off" && o.tickMode != "serial" && o.tickMode != "parallel") {
+                std::cerr << "invalid --tick '" << o.tickMode << "' (expected off|serial|parallel)\n";
+                std::exit(1);
+            }
         } else if (a == "--yaw" && i + 1 < argc) {
             o.yawDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--pitch" && i + 1 < argc) {
@@ -1258,6 +1269,63 @@ int runScene(const Options& o) {
         return 1;
     }
 
+    // ---- M-E1b.5 渲染用例：--tick serial|parallel（帧循环逐帧 tick + 刷实例）----
+    // SpinSystem（Write<TransformComponent>）绕 Y 轴旋转，角速度按实体序号差异化
+    // （画面可辨：各物体转速不同）；ReadCountSystem（Read<TransformComponent>）
+    // 纯读统计——与 SpinSystem 无组件冲突，tickParallel 求解器让两者并行。
+    // 渲染结果只由 SpinSystem 决定：parallel 与 serial 同固定 dt 序列下
+    // 逐字节一致（浮点确定性由 tickParallel 串行对拍契约保证）。
+    // Spin 基础角速度 rad/s（首实体），逐实体 ×(1+0.5k)——转速差异画面可辨。
+    constexpr float kSpinBaseSpeed = 0.9f;
+    class SpinSystem final : public nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>> {
+    public:
+        using Base = nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>>;
+        explicit SpinSystem(nl::scene::World& w) : Base(w) {}
+        const char* getName() const override { return "Spin"; }
+        // duplicate = 无状态拷贝（SpinSystem 无数据成员）。
+        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
+            return std::make_unique<SpinSystem>(newOwner);
+        }
+        // 局部类禁静态数据成员（C2871），基础角速度用函数级常量 kSpinBaseSpeed。
+        void tick(double dt) override {
+            const float baseAngle = static_cast<float>(dt) * kSpinBaseSpeed;
+            std::uint32_t idx = 0;
+            forEachEntity([baseAngle, &idx](nl::scene::Entity,
+                                            nl::scene::TransformComponent& t) {
+                const float angle = baseAngle * (1.0f + 0.5f * static_cast<float>(idx++));
+                const auto q = nl::math::quatFromAxisAngle(
+                    nl::math::Vec3{0.0f, 1.0f, 0.0f}, angle);
+                t.local.rotation = nl::math::mulQuat(q, t.local.rotation);
+            });
+        }
+    };
+    class ReadCountSystem final : public nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>> {
+    public:
+        using Base = nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>>;
+        explicit ReadCountSystem(nl::scene::World& w) : Base(w) {}
+        const char* getName() const override { return "ReadCount"; }
+        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
+            auto copy = std::make_unique<ReadCountSystem>(newOwner);
+            copy->count = count;
+            return copy;
+        }
+        void tick(double) override {
+            count = 0;
+            forEachEntity([this](nl::scene::Entity, const nl::scene::TransformComponent&) {
+                ++count;
+            });
+        }
+        int count = 0;
+    };
+    const bool ticking = (o.tickMode != "off");
+    if (ticking) {
+        world.registerSystem(std::make_unique<SpinSystem>(world));
+        world.registerSystem(std::make_unique<ReadCountSystem>(world));
+        nl::core::log::info("ecs tick: ", o.tickMode,
+                            " | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>)",
+                            " | fixed dt=1/60");
+    }
+
     const bool hudOn = o.hudEnabled;
     // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
     // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
@@ -1332,6 +1400,44 @@ int runScene(const Options& o) {
             if (dtMs > dtMaxMs) dtMaxMs = dtMs;
         }
 
+        // ---- M-E1b.5 渲染用例：逐帧 tick + 刷实例矩阵 ----
+        // 固定 dt = 1/60（截图确定性：真实 dt 会让 parallel/serial 截图不可比；
+        // HUD deterministic 已有固定样本先例）。tick 在 renderFrame 之前——
+        // 本帧 tick 的矩阵本帧就上屏（updateEcsObjects 的 upload 先于
+        // renderFrame 的命令列表执行）。
+        if (ticking) {
+            constexpr double kFixedDt = 1.0 / 60.0;
+            if (o.tickMode == "serial") {
+                world.tick(kFixedDt);
+            } else {
+                std::string tickErr;
+                if (!world.tickParallel(kFixedDt, 4, tickErr)) {
+                    nl::core::log::error("ecs tickParallel failed: ", tickErr);
+                    failed = true;
+                    break;
+                }
+            }
+            // 刷新实例数据：Transform 重取世界矩阵（getWorldMatrix 递归现算，
+            // 改 rotation 即生效）。tint/材质不变，updateEcsObjects 全量覆盖。
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                const auto* m = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+                const auto wm = t->getWorldMatrix();
+                std::memcpy(objects[k].world, wm.m, sizeof(objects[k].world));
+                objects[k].tint[0] = m->tint.x;
+                objects[k].tint[1] = m->tint.y;
+                objects[k].tint[2] = m->tint.z;
+                objects[k].roughness = m->roughness;
+                objects[k].metallic  = m->metallic;
+            }
+            if (!renderer->updateEcsObjects(objects.data(),
+                                            static_cast<std::uint32_t>(objects.size()))) {
+                nl::core::log::error("ecs updateEcsObjects failed: ", renderer->lastError());
+                failed = true;
+                break;
+            }
+        }
+
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
@@ -1398,6 +1504,11 @@ int runScene(const Options& o) {
         if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
+    // M-E1b.5 机器出口（run.bat findstr 断言）：tick 模式 + 帧数 + 物体数。
+    if (ticking) {
+        nl::core::log::info("ecs tick summary: mode=", o.tickMode, " frames=", frame,
+                            " spinObjects=", modelIds.size());
+    }
     nl::core::log::info("shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");

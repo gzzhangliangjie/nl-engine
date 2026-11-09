@@ -315,6 +315,11 @@ public:
                       const SceneLightDesc* lights, std::uint32_t lightCount,
                       float ambient, const char* sceneName);
 
+    // M-E1b.5 渲染用例：每帧刷新实例数据（世界矩阵/tint/材质），灯与拓扑不动。
+    // objectCount 必须与 loadEcsScene 一致（batch 槽号一一对应）。viewer 在每帧
+    // renderFrame 之前调用：World tick（serial/parallel）→ 收集矩阵 → 这里上传。
+    bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount);
+
 private:
     Renderer();
     struct Impl;

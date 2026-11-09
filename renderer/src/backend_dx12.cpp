@@ -335,6 +335,12 @@ public:
         return true;
     }
 
+    // M-E1b.5 渲染用例：转发 scene_.updateObjects（每帧实例数据刷新）。
+    bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                          std::string& outError) override {
+        return scene_.updateObjects(device_, objects, objectCount, outError);
+    }
+
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {

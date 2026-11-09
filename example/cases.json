@@ -5127,7 +5127,8 @@
         "selftest ecs-parallel 6 用例 30 断言 PASS：求解边数与 dot 确定性、真并行重叠证明（自旋互等双双通过）、并行==串行逐位对拍（3 帧链式系统 JSON dump 相等）、裸类型保守写、结构变更守卫（违约 false + err 含 forbidden/offending API、违约后 World 可继续用）、firstTick 恰一次",
         "稳定性：DX12 连跑 5 遍全 PASS；VULKAN nanite-scene 同套件 PASS；nanite-scene selftest --all 5 suite 全绿（旧 suite 零回归）",
         "渲染护栏：--only ecs-e1b 8/8 ALL GREEN（core-only 改动，kStage 不 bump，基线逐字节不变）",
-        "工具链 example/ecs-parallel/run.bat exit 0：usage 负向 exit 2 / 正向 verbose selftest / parallel-dot 真实求解 DOT / unknown-suite 负向 exit 2 + 2 张证据 PNG（scripts/make-ecs-parallel-evidence.py 从真实日志渲染）"
+        "工具链 example/ecs-parallel/run.bat exit 0：usage 负向 exit 2 / 正向 verbose selftest / parallel-dot 真实求解 DOT / unknown-suite 负向 exit 2 + 2 张证据 PNG（scripts/make-ecs-parallel-evidence.py 从真实日志渲染）",
+        "M-E1b.5 渲染证据（用户点名补做）：spin 场景 3 物体并行 tick 驱动旋转——DX12/VULKAN 双后端 run.bat 渲染链 exit 0：static/serial/parallel 三档 deviceErrors=0、serial==parallel 截图逐字节（固定 dt 确定性）、animated!=static（56005 px 差异=真转动了）、--tick warp 负向拒绝 exit 1；--only ecs-e1b 8/8 ALL GREEN（默认 off，既有基线零触碰）"
       ],
       "exe": {
         "dx12": "build/DX12/nanite-scene.exe",
@@ -5178,6 +5179,35 @@
           "expectExit": 2,
           "expectLog": "unknown selftest suite",
           "command": "nanite-scene selftest --suite no-such-suite",
+          "script": "example/ecs-parallel/run.bat"
+        },
+        {
+          "id": "render-spin",
+          "name": "渲染链：--tick serial/parallel 驱动 spin 场景，30 帧截图逐字节一致",
+          "kind": "pair",
+          "note": "viewer --tick off|serial|parallel（默认 off 静态，基线零风险）。SpinSystem(Write<Transform>) 逐实体差异化绕 Y 旋转 + ReadCountSystem(Read<Transform>) 纯读并行；固定 dt=1/60（截图确定性）；每帧 getWorldMatrix 刷实例数据（Scene::updateObjects 单 upload 列表，instances 不设 permanent——NVRHI permanent 冻结会卡每帧 writeBuffer 的 require(CopyDest)，改走 tracking + instanceTrackSRV_ 跨列表末态跟踪）。量化闸：serial==parallel 逐字节（DX12+VULKAN 双后端）、animated!=static（物体真转，56005 px 差异）、deviceErrors=0。",
+          "baselines": {
+            "dx12": "example/ecs-parallel/shot-spin-parallel.png",
+            "vulkan": "example/ecs-parallel/shot-spin-parallel-vk.png"
+          },
+          "args": [
+            "--scene",
+            "{root}/example/ecs-parallel/ecs-parallel-spin.scene",
+            "--tick",
+            "parallel",
+            "--no-hud",
+            "--screenshot",
+            "{out}",
+            "--frames",
+            "30",
+            "--size",
+            "960x540",
+            "--yaw",
+            "12",
+            "--pitch",
+            "9"
+          ],
+          "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
           "script": "example/ecs-parallel/run.bat"
         }
       ]
