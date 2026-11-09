@@ -11,8 +11,11 @@ track deleted *other* tracks' worktrees. Rule fixed into AGENTS.md discipline
   - claim   : a conversation MUST claim its track+milestone before touching a wt
   - check   : before touching a wt (esp. delete/cleanup), check occupancy
   - guard   : hard gate for edit/merge/delete ops (exit code driven)
+  - close   : milestone CLOSE gate (2026-11-09) - mechanical checks (tag /
+              MILESTONES entry / example deliverable) then writes a checklist
+              report; release --done refuses while cells are unfilled
   - status  : registry x lock x git worktree three-way cross-check
-  - release : free the claim; prints documentation-gate checklist
+  - release : free the claim; --done = milestone closed, close report required
 
 Lock file lives at the MAIN worktree root (shared across all worktrees via
 `git rev-parse --git-common-dir`), so any session from any wt sees one truth.
@@ -29,6 +32,7 @@ Usage examples:
 import argparse
 import ctypes
 import datetime
+import glob
 import json
 import os
 import re
@@ -228,6 +232,27 @@ def cmd_release(args):
         fail("milestone mismatch: you said '%s', claim says '%s'. "
              "Refusing to release someone else's claim." % (ms, cur["milestone"]), code=2)
 
+    # HARD GATE (2026-11-09): releasing a CLOSED milestone requires a passed
+    # close gate with zero unfilled cells. Plain release (no --done) stays
+    # available for mid-work ends-of-conversation.
+    if args.done:
+        rp = close_report_path(track, ms)
+        if not os.path.exists(rp):
+            fail("release --done refused: no close report for %s/%s. "
+                 "Run first:\n  python tools/wt_pool.py close --track %s "
+                 "--milestone %s --tag <tag> [--version <example-ver>]"
+                 % (track, ms, track, ms), code=2)
+        with open(rp, "r", encoding="utf-8") as f:
+            rtext = f.read()
+        # only table rows count: the header prose legitimately mentions 待填
+        unfilled = [ln for ln in rtext.split("\n")
+                    if ln.startswith("| ") and ("待填" in ln or "待执行" in ln)]
+        if unfilled:
+            fail("release --done refused: close report has %d unfilled cell(s):%s%s. "
+                 "Fill the report first, paste it as the FIRST screen of the "
+                 "closing reply, then release."
+                 % (len(unfilled), os.linesep, os.linesep.join(unfilled)), code=2)
+
     # documentation gate reminder (soft, per PARALLEL-TRACKS 7.2/7.5)
     milestones_doc = os.path.join(os.getcwd(), "docs", "MILESTONES.md")
     if os.path.exists(milestones_doc):
@@ -245,6 +270,159 @@ def cmd_release(args):
     del locks[track]
     save_locks(locks)
     print("RELEASED: track='%s' milestone='%s'" % (track, ms))
+
+
+def close_report_path(track, ms):
+    """Close report lives next to the lock file (main root, shared by all wts)."""
+    return os.path.join(main_root(), ".wt_pool_close",
+                        "%s-%s.md" % (track, ms))
+
+
+def _git(args_git, cwd=None):
+    return subprocess.run(["git"] + args_git, capture_output=True, text=True,
+                          cwd=cwd)
+
+
+def cmd_close(args):
+    """Milestone CLOSE gate (2026-11-09): mechanical verification of the
+    closing evidence + machine-generated checklist. The checklist file is the
+    single source of truth: release --done refuses while it has unfilled
+    cells. Replaces 'write the closing reply from memory'."""
+    track, ms, tag = args.track, args.milestone, args.tag
+    if track not in TRACKS:
+        fail("track '%s' not in registry." % track)
+    errors = []
+
+    # -- 1. tag: exists, annotated, points at --commit (default: its own target)
+    commit = args.commit
+    r = _git(["tag", "-l", tag])
+    if not r.stdout.strip():
+        errors.append("tag '%s' does not exist in this tree (git tag -l)." % tag)
+    else:
+        rd = _git(["rev-parse", tag + "^{}"])
+        deref = rd.stdout.strip()
+        if rd.returncode != 0 or not deref:
+            errors.append("tag '%s' is lightweight; annotated tag required "
+                          "(git tag -a)." % tag)
+        else:
+            short = deref[:12]
+            if commit:
+                rc = _git(["rev-parse", commit])
+                if rc.returncode != 0 or rc.stdout.strip()[:12] != short:
+                    errors.append("tag '%s' points at %s, not --commit '%s'."
+                                  % (tag, short, commit))
+            else:
+                commit = short
+
+    # -- 2. per-commit modified-file list (machine-generated, never hand-typed)
+    stat = ""
+    if not errors and commit:
+        rs = _git(["show", "--stat", "--format=short", commit])
+        stat = rs.stdout
+        if rs.returncode != 0 or not stat.strip():
+            errors.append("git show --stat %s failed." % commit)
+
+    # -- 3. MILESTONES.md four-column entry contains the tag
+    msdoc = os.path.join(os.getcwd(), "docs", "MILESTONES.md")
+    if os.path.exists(msdoc):
+        with open(msdoc, "r", encoding="utf-8", errors="ignore") as f:
+            mstext = f.read()
+        if tag not in mstext:
+            errors.append("tag '%s' not found in docs/MILESTONES.md; write the "
+                          "four-column entry (动作/提交版本/完成情况/踩坑) first." % tag)
+    else:
+        errors.append("docs/MILESTONES.md not found under cwd (run close from "
+                      "the tree that holds the milestone entry).")
+
+    # -- 4. example deliverable: baselines + run.bat + showcase --check
+    evidence = []
+    if args.version:
+        edir = os.path.join(os.getcwd(), "example", args.version)
+        pngs = sorted(glob.glob(os.path.join(edir, "*.png")))
+        if not os.path.isdir(edir):
+            errors.append("example/%s/ does not exist." % args.version)
+        elif not pngs or not os.path.exists(os.path.join(edir, "run.bat")):
+            errors.append("example/%s/ missing run.bat or baseline PNGs."
+                          % args.version)
+        else:
+            rck = subprocess.run(
+                [sys.executable, os.path.join(os.getcwd(), "tools", "showcase",
+                                              "server.py"), "--check"],
+                capture_output=True, text=True)
+            if rck.returncode != 0:
+                errors.append("showcase --check FAILED (exit %d):"
+                              % rck.returncode)
+                errors.append(rck.stdout[-800:] or rck.stderr[-800:])
+            evidence = [os.path.relpath(p, os.getcwd()).replace("\\", "/")
+                        for p in pngs]
+
+    if errors:
+        for e in errors:
+            print("CLOSE-GATE FAIL: %s" % e)
+        fail("close gate NOT satisfied; NO report written. "
+             "release --done will refuse. Fix the items above and re-run.",
+             code=1)
+
+    # -- report: checklist with mechanical facts pre-filled
+    def row(ok, item, content):
+        return "| %s | %s | %s |" % (item, "OK" if ok else "待填", content)
+
+    lines = []
+    lines.append("# close report: track='%s' milestone='%s' "
+                 "(generated by wt_pool close, %s)"
+                 % (track, ms, datetime.date.today().isoformat()))
+    lines.append("")
+    lines.append("> 本文件由 close 闸机械校验后生成（全过才有此文件）。收口流程："
+                 "①补齐所有「待填」格；②本表原样作为收口回复的第一屏；"
+                 "③证据图用 present_files 打开后再把该格改为「已打开」；"
+                 "④`release --done` 会校验本文件无「待填/待执行」才放行。")
+    lines.append("")
+    lines.append("| 项 | 状态 | 内容 |")
+    lines.append("|---|---|---|")
+    lines.append(row(True, "提交版本",
+                     "tag `%s` -> `%s`" % (tag, commit)))
+    lines.append(row(True, "修改文件清单",
+                     "见下方 `git show --stat` 原文（机器生成，禁止手抄省略）"))
+    lines.append(row(False, "固化内容",
+                     "待填：本轮写进了哪些 canonical 文档/台账/注册表，各补/改了什么"))
+    if args.version:
+        lines.append(row(True, "① 渲染交代物",
+                         "example/%s/（%d 张基线 PNG + run.bat）+ "
+                         "`server.py --check` exit 0" % (args.version, len(evidence))))
+    else:
+        lines.append(row(False, "① 渲染交代物",
+                         "待填：纯研究轮次写「无渲染交代物」及原因"))
+    lines.append(row(False, "② 工具交代物",
+                     "待填：展示台 tool 卡 + TOOLS-GUIDE 归档；没有也要写「无工具交代物」"))
+    lines.append(row(True, "③ MILESTONES 四栏台账",
+                     "docs/MILESTONES.md 含 tag `%s`" % tag))
+    lines.append(row(False, "④ 固化文档",
+                     "待填：新约定/铁律写回的 canonical 文档清单"))
+    if evidence:
+        lines.append(row(False, "证据图 present_files",
+                         "待执行：打开以下 %d 张 -> %s"
+                         % (len(evidence), ", ".join(evidence[:4]))
+                         + (" ..." if len(evidence) > 4 else "")))
+    else:
+        lines.append(row(False, "证据图 present_files",
+                         "待执行：无基线 PNG；收口回复写「本轮无新证据图」后改此格"))
+    lines.append("")
+    lines.append("## git show --stat 原文（%s）" % commit)
+    lines.append("")
+    lines.append("```")
+    lines.extend(stat.rstrip("\n").split("\n"))
+    lines.append("```")
+    lines.append("")
+
+    rp = close_report_path(track, ms)
+    os.makedirs(os.path.dirname(rp), exist_ok=True)
+    with open(rp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print("CLOSE-GATE PASS: report written -> %s" % rp)
+    print("NEXT: fill the 待填 cells, paste the table as the FIRST screen of "
+          "the closing reply, present evidence images, then "
+          "`release --done --track %s --milestone %s`." % (track, ms))
+    sys.exit(0)
 
 
 def cmd_check(args):
@@ -475,7 +653,24 @@ def main():
     p.add_argument("--milestone", required=True)
     p.add_argument("--force", action="store_true")
     p.add_argument("--strict", action="store_true", help="block release if doc gate unsatisfied")
+    p.add_argument("--done", action="store_true",
+                   help="milestone is CLOSED: requires a passed close gate "
+                        "(wt_pool close) with zero unfilled cells")
     p.set_defaults(fn=cmd_release)
+
+    p = sub.add_parser("close", help="milestone CLOSE gate: mechanical checks "
+                                     "+ machine-generated checklist; required "
+                                     "before release --done")
+    p.add_argument("--track", required=True)
+    p.add_argument("--milestone", required=True)
+    p.add_argument("--tag", required=True,
+                   help="annotated tag of the closing commit (must exist, must "
+                        "be mentioned in docs/MILESTONES.md)")
+    p.add_argument("--commit", help="commit the tag must point at (default: "
+                                    "the tag's own target)")
+    p.add_argument("--version", help="example/<ver> deliverable dir: checks "
+                                     "run.bat + baseline PNGs + server --check")
+    p.set_defaults(fn=cmd_close)
 
     p = sub.add_parser("check", help="is a track touchable? exit 0=yes")
     p.add_argument("--track", required=True)
