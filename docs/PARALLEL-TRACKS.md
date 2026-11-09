@@ -167,7 +167,7 @@
 | 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官 / 全量 merge 回 master**（tag `mg-b2b4`(B2~B4) + `mg-t1`(T1 编辑器 M1~M3)，merge commit `e5505bc`）：B 路全阶梯——数据模型+序列化 / 图→Slang 双后端编译 / 热重载 / 交互式节点编辑器（imgui-node-editor v0.9.4，`viewer --editor`）+ 节点库 10 种 + uniform 曝光（`MaterialParams` b1，运行时绑定留 B5）；验收纪要 `docs/material-graph/B2-B4-ACCEPTANCE.md` + MILESTONES T1 节 + `SIDE-TASKS.md`（终点定义：调试工具级，UI 封顶）；主干 `viewer --editor` 冒烟截图验收（HUD+编辑器+场景叠加正常） | 全部内容在 master `e5505bc`+；B5 接 PBR pass + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 worktree |
 | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成（tags job-pool/job-scope/job-cluster/job-offline），已双向合并回 master，可视化证据图补交完成；M-J4 可选不排期（等 P9 V4） | 全部内容在 master `c136bcd`+；P9 V4 需要流式加载时按 §7.1b 重建 worktree |
 | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官 / M-A0~M-A5.4 全量 merge 回 master**（merge commit `5a1912f`，2026-11-09，tag `anim-ma1`~`anim-ma5c`）：nl/anim 纯逻辑层（采样/混合/状态机/1D blend space/FK/CPU LBS 蒙皮）+ anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页（CesiumMan/Fox Walk/Fox Run/RiggedFigure）+ Fox.glb 链路三修复；验收纪要 MILESTONES M-A 节 + ACTION-PLAN + ANIM-TOOLS-GUIDE；GPU 调色板等更大规模蒙皮资产再立项 |
-| 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **进行中 / M-C0~C1 完成**（2026-11-09，track 分支 b4787da）：纯逻辑内核 + ImGui 前端（呼出/日志配色/历史/Tab 补全），双后端证据截图 | M-C0~C3：`core/console/` 纯逻辑内核 → ImGui 前端 → RuntimeOption 运行时调参；不依赖场景整合；共享 junction |
+| 开发者控制台 | `E:/UE_STUDY_2026/nl-engine-console` | `feat/console` | **进行中 / M-C0~C2 完成**（2026-11-09，track 分支 0cb89a3）：纯逻辑内核 + ImGui 前端 + 运行时调参（内建 help/cvar.list/cvar.set + cam.*/hud.* 回调，selftest 49/49，双后端 bytes 档） | M-C0~C3：`core/console/` 纯逻辑内核 → ImGui 前端 → 运行时调参 → M-C3 收口（展示台用例 + tag merge）；不依赖场景整合；共享 junction |
 
 > 四个已建 worktree 均已 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
 
@@ -180,6 +180,14 @@
 | 寻路（NavMesh + A\*，从零写） | `E:/UE_STUDY_2026/nl-engine-pathfinding` | `feat/pathfinding` | 已立项 `docs/p8/P8-NAV-PLAN.md` |
 | 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics` | 已立项 `docs/p8/P8-PHYS-PLAN.md` |
 | 3D 空间音频（OpenAL Soft + 从零集成层） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | 已立项 `docs/p8/P8-AUDIO-PLAN.md` |
+
+### 7.1c ECS-lite 场景轨道（2026-11-09 立项，E1a 先行）
+
+> 2026-11-09 用户拍板：ECS（P8 E1）是下游三轨的瓶颈，**E1a（纯逻辑内核）提前开 worktree**，E1b（渲染集成）后挂等 S6 收官。计划 `docs/p8/P8-ECS-PLAN.md`（M-E0~E3，Carrot 式 OOP 组件路线）。
+
+| 轨道 | worktree 绝对路径（待建） | 分支（待建） | 计划 |
+|---|---|---|---|
+| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs` | `feat/ecs` | 已立项 `docs/p8/P8-ECS-PLAN.md`（E1a 先行 / E1b 后挂） |
 
 ### 7.2 固化文档闸
 
