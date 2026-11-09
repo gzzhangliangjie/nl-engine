@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- M-SC0 骨架 classlib（docs/p8/P8-SCRIPT-PLAN.md「架构约束」脚本侧第一份）：
+       绑定面程序集，M-SC1（console 绑定）/ M-SC2（ECS 数据面绑定）的 C# 包装都落这里。
+       本里程碑只立骨架 + 版本常量，给用户脚本程序集做引用目标（证明双程序集布局可编译可装载）。
+       FDD 约束：目标 net8.0 LTS（本机 8.x 运行时在场，2026-11-09 实测）。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <RootNamespace>Nl.Script.Api</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -3596,6 +3596,96 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "m-sc0",
+   "label": "P8 M-SC0",
+   "name": "C# hosting 内核：hostfxr 装载 + 默认签名入口 + 热重编（A 类轨道）",
+   "tag": "m-sc0",
+   "date": "2026-11-09",
+   "summary": "A 类并行轨道 feat/script（不进 kStage/渲染回归，纯逻辑）：nl::script::Vm = Microsoft 官方 hosting 三导出口径（nethost 定位 hostfxr.dll -> initialize_for_runtime_config(FDD) -> get_runtime_delegate(hdt_load_assembly_and_get_function_pointer)），PIMPL 头文件不暴露 hostfxr.h；托管入口默认签名 int(void*,int32)（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）；托管异常在互操作边界 SEH 捕获转 Result（0xe0434352），不穿透析构；script-api 骨架 classlib + hello 用户脚本示例（双程序集布局）；selftest s5 热重编行为更新（拷贝工程改 42->43，dotnet build 换 AssemblyName 重编，同进程装载新 DLL -> 43，宿主不重启）。参考：Carrot hosting 分层（Mono 底座不抄，用户拍板走 .NET）/ bevy 无脚本 crate（克制先例）/ Microsoft Learn custom host 权威口径。",
+   "acceptance": [
+    "selftest 17 项全绿：s0 定位产物 / s1 运行时装载 / s2 默认签名入口 / s3 返回值锚 42/-1/0 / s4 SEH 边界捕获+异常后可复调 / s5 热重编 42->43",
+    "run 正向 ret=42（exit 0）、run 负向托管异常 exit 1、check 编译 exit 0、无参用法 exit 2（expectExit 对齐）",
+    "五张证据图全部由工具真实输出渲染（tools/make-script-evidence.py），run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：hosting 内核 + 热重编机械单测（17 项）",
+     "kind": "tool",
+     "note": "s1-s2 hosting（hostfxr 3 导出 + 默认签名入口）/ s3 返回值锚 / s4 托管异常 SEH 边界捕获 / s5 拷贝工程改 42->43 重编后同进程装载行为更新。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello",
+     "preview": "example/m-sc0/selftest.png"
+    },
+    {
+     "id": "run-ok",
+     "name": "run --args ok：编译+装载+调入口（正向）",
+     "kind": "tool",
+     "note": "dotnet build -> hostfxr init -> load HelloScript.dll -> Entry(\"ok\") -> ret 42。",
+     "args": [
+      "run",
+      "{root}/script/examples/hello",
+      "--args",
+      "ok"
+     ],
+     "expectExit": 0,
+     "expectLog": "run: ret=42",
+     "command": "nl-script run script/examples/hello --args ok",
+     "preview": "example/m-sc0/run-ok.png"
+    },
+    {
+     "id": "run-throw",
+     "name": "run --args throw：托管异常边界捕获（负向，exit 1）",
+     "kind": "tool",
+     "note": "托管 InvalidOperationException 在 CLR->native 交界呈 SEH 0xe0434352，__except 捕获转 Result，进程不崩、exit 1。",
+     "args": [
+      "run",
+      "{root}/script/examples/hello",
+      "--args",
+      "throw"
+     ],
+     "expectExit": 1,
+     "expectLog": "managed exception",
+     "command": "nl-script run script/examples/hello --args throw",
+     "preview": "example/m-sc0/run-throw.png"
+    },
+    {
+     "id": "check",
+     "name": "check：只编译不装载（正向）",
+     "kind": "tool",
+     "note": "构建期 dotnet build（plan 口径：不做 Roslyn 运行时编译）；FDD 契约由 GenerateRuntimeConfigurationFiles 满足。",
+     "args": [
+      "check",
+      "{root}/script/examples/hello"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/hello",
+     "preview": "example/m-sc0/check.png"
+    },
+    {
+     "id": "usage",
+     "name": "无参数：用法提示（负向，exit 2）",
+     "kind": "tool",
+     "note": "退出码约定 0=PASS / 1=失败 / 2=用法错误（展示台 expectExit 对齐）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "usage:",
+     "command": "nl-script",
+     "preview": "example/m-sc0/usage.png"
+    }
+   ]
   }
  ]
 }

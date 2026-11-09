@@ -1,0 +1,374 @@
+// nl-script —— C# hosting（nl::script）自测工具，A 类并行轨道（feat/script worktree）。
+// 只依赖 core（nl/script Vm），零图形 API 符号；接线仿 nanite-scene 先例。
+//
+// 退出码约定（与 nanite-tools / 展示台 expectExit 0/1/2 对齐）：
+//   0 = 用例全过 / 脚本运行成功（打印 "PASS" / "run: ret=<n>"）
+//   1 = 断言失败 / dotnet build 失败 / 托管异常（SEH 边界捕获转 Result）
+//   2 = 用法错误（未知子命令 / 缺参数）
+//
+// 子命令（docs/p8/P8-SCRIPT-PLAN.md M-SC0 验收判据）：
+//   check  <projectDir>                        只编译（dotnet build），不装载运行时
+//   run    <projectDir> [--args <s>] [--type <asm-qualified>] 编译+装载+调入口
+//   selftest <projectDir>                      全量机械断言（M-SC0 验收）：
+//     s1 Vm::create(runtimeconfig) 装载运行时（官方 3 导出口径）
+//     s2 getEntryPoint 默认签名入口（[UnmanagedCallersOnly]，UNMANAGEDCALLERSONLY_METHOD）
+//     s3 调用返回值锚：args="ok" -> 42 / 空参数 -> -1 / "echo" -> 0
+//     s4 托管异常边界捕获：args="throw" -> SEH 转错误码，不崩进程
+//     s5 热重编行为更新：拷贝工程改 42->43，dotnet build -p:AssemblyName 换名重编，
+//        同进程装载新 DLL -> 43（「脚本改动经 dotnet build 重编后行为更新」验收）
+//
+// 用法示例：
+//   nl-script selftest script/examples/hello
+//   nl-script run script/examples/hello --args ok
+//   nl-script check script/examples/hello
+
+#include "nl/core/log.hpp"
+#include "nl/script/Vm.hpp"
+
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <windows.h>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+int g_failures = 0;
+
+// SEH guard（与 core/src/script/Vm.cpp 同口径；工具侧直调入口用）。
+// __try 函数体里不许有需要展开的 C++ 对象，故独立成纯 POD 函数。
+int guardedCall(nl::script::EntryPointFn fn, void* args, std::int32_t sizeBytes,
+                std::int32_t* ret, std::uint32_t* exceptionCode) {
+    __try {
+        *ret = fn(args, sizeBytes);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *exceptionCode = static_cast<std::uint32_t>(GetExceptionCode());
+        return 1;
+    }
+}
+
+void expectTrue(bool ok, const char* what) {
+    if (ok) {
+        std::printf("  ok  %s\n", what);
+        return;
+    }
+    std::printf("  FAIL %s\n", what);
+    ++g_failures;
+}
+
+void expectInt(long long got, long long want, const char* what) {
+    if (got == want) {
+        std::printf("  ok  %s (got %lld)\n", what, got);
+        return;
+    }
+    std::printf("  FAIL %s: got %lld want %lld\n", what, got, want);
+    ++g_failures;
+}
+
+// 定位 build 产物：bin/Debug/net8.0/*.runtimeconfig.json。
+// preferStem 非空时按程序集名精确匹配（热重编 -p:AssemblyName 换名场景），
+// 否则取 mtime 最新的一个（run/check 通用场景）。
+struct ScriptOutput {
+    fs::path runtimeConfig;
+    fs::path assemblyDll;
+    std::string assemblyName;
+};
+
+std::optional<ScriptOutput> locateOutput(const fs::path& projectDir, const std::string& preferStem) {
+    const fs::path outDir = projectDir / "bin" / "Debug" / "net8.0";
+    std::error_code ec;
+    if (!fs::exists(outDir, ec)) return std::nullopt;
+
+    std::optional<ScriptOutput> best;
+    bool haveBest = false;
+    fs::file_time_type bestTime{};
+    for (const auto& entry : fs::directory_iterator(outDir, ec)) {
+        // 注意：extension() 只取最后一个点（".json"），runtimeconfig 判断用文件名 ends_with
+        const std::string fname = entry.path().filename().string();
+        if (fname.size() <= strlen(".runtimeconfig.json") ||
+            fname.compare(fname.size() - strlen(".runtimeconfig.json"), strlen(".runtimeconfig.json"),
+                          ".runtimeconfig.json") != 0)
+            continue;
+        ScriptOutput out;
+        out.runtimeConfig = entry.path();
+        out.assemblyName = fname.substr(0, fname.size() - strlen(".runtimeconfig.json"));
+        // 注意不能 replace_extension（会把最后的 ".json" 换掉）：DLL = 同目录 / 程序集名 + ".dll"
+        out.assemblyDll = entry.path().parent_path() / (out.assemblyName + ".dll");
+        if (!fs::exists(out.assemblyDll, ec)) continue;
+        if (!preferStem.empty() && out.assemblyName != preferStem) continue;
+        auto t = fs::last_write_time(entry.path(), ec);
+        if (!preferStem.empty()) return out; // 精确匹配优先，命中即返回
+        if (!haveBest || t > bestTime) {
+            best = out;
+            bestTime = t;
+            haveBest = true;
+        }
+    }
+    return best;
+}
+
+// dotnet build（构建期编译，plan 口径：不做 Roslyn 运行时编译）。
+bool dotnetBuild(const std::string& projectDir, const std::string& extraArgs) {
+    const std::string cmd = "dotnet build \"" + projectDir + "\" -nologo -v q " + extraArgs;
+    std::printf("  $ %s\n", cmd.c_str());
+    const int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+        std::printf("  dotnet build failed (exit %d)\n", rc);
+        return false;
+    }
+    return true;
+}
+
+int cmdCheck(const fs::path& projectDir) {
+    if (!dotnetBuild(projectDir.string(), {})) return 1;
+    if (!locateOutput(projectDir, {})) {
+        std::printf("check: FAIL no *.runtimeconfig.json found under bin/Debug/net8.0\n");
+        return 1;
+    }
+    std::printf("check: PASS %s\n", projectDir.string().c_str());
+    return 0;
+}
+
+int cmdRun(const fs::path& projectDir, const std::string& args, const std::string& typeOverride) {
+    if (!dotnetBuild(projectDir.string(), {})) return 1;
+    auto out = locateOutput(projectDir, {});
+    if (!out) {
+        std::printf("run: FAIL no build output found\n");
+        return 1;
+    }
+
+    nl::script::Result result;
+    auto vm = nl::script::Vm::create(out->runtimeConfig.string(), &result);
+    if (!vm) {
+        std::printf("run: FAIL vm init: code=%d %s\n", result.code, result.message.c_str());
+        return 1;
+    }
+
+    // 类型名默认约定：RootNamespace.类名, AssemblyName（csproj 双锚，M-SC0 只有一个入口类型）。
+    const std::string typeName =
+        typeOverride.empty() ? ("NlScript.Examples.HelloScript, " + out->assemblyName) : typeOverride;
+
+    nl::script::EntryPointFn entry = nullptr;
+    result = vm->getEntryPoint(out->assemblyDll.string(), typeName, "Entry", &entry);
+    if (!result.ok) {
+        std::printf("run: FAIL getEntryPoint: code=%d %s\n", result.code, result.message.c_str());
+        return 1;
+    }
+
+    void* argPtr = args.empty() ? nullptr : const_cast<char*>(args.c_str());
+    const std::int32_t argSize = static_cast<std::int32_t>(args.size());
+    std::int32_t ret = 0;
+    std::uint32_t excCode = 0;
+    if (guardedCall(entry, argPtr, argSize, &ret, &excCode) != 0) {
+        std::printf("run: FAIL managed exception at boundary: SEH code=0x%08x\n", excCode);
+        return 1;
+    }
+    std::printf("run: ret=%d\n", ret);
+    return 0;
+}
+
+// ---- selftest ----
+
+int cmdSelftest(const fs::path& projectDir) {
+    std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
+
+    // 编译示例工程（热重编测试的工作目录也由此保证存在）
+    if (!dotnetBuild(projectDir.string(), {})) return 1;
+
+    auto base = locateOutput(projectDir, {});
+    expectTrue(base.has_value(), "s0 locate HelloScript build output (runtimeconfig + dll)");
+    if (!base) return 1;
+
+    // s1 装载运行时（官方 3 导出口径：init_for_runtime_config -> delegate -> [close]）
+    nl::script::Result result;
+    auto vm = nl::script::Vm::create(base->runtimeConfig.string(), &result);
+    expectTrue(vm != nullptr, "s1 Vm::create via runtimeconfig.json (hostfxr 3-export flow)");
+    if (!vm) {
+        std::printf("  init detail: code=%d %s\n", result.code, result.message.c_str());
+        return 1;
+    }
+
+    // s2 取默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）
+    const std::string typeName = "NlScript.Examples.HelloScript, " + base->assemblyName;
+    nl::script::EntryPointFn entry = nullptr;
+    result = vm->getEntryPoint(base->assemblyDll.string(), typeName, "Entry", &entry);
+    expectTrue(result.ok && entry != nullptr, "s2 getEntryPoint Entry (default signature, UnmanagedCallersOnly)");
+    if (!result.ok) {
+        std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+        return 1;
+    }
+
+    // s3 返回值锚
+    auto call = [&](const char* mode) {
+        std::int32_t ret = 0;
+        std::uint32_t exc = 0;
+        std::int32_t size = mode ? static_cast<std::int32_t>(std::strlen(mode)) : 0;
+        const int hit = guardedCall(entry, mode ? const_cast<char*>(mode) : nullptr, size, &ret, &exc);
+        return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -1000 - static_cast<std::int32_t>(exc)};
+    };
+    expectInt(call("ok").second, 42, "s3a args=\"ok\" -> 42");
+    expectInt(call("").second, -1, "s3b empty args -> -1");
+    expectInt(call("echo").second, 0, "s3c args=\"echo\" -> 0 (script-api Version printed above)");
+    expectInt(call("unknown-mode").second, -1, "s3d unknown mode -> -1");
+
+    // s4 托管异常边界捕获：进程不崩，SEH 码转错误
+    {
+        auto [hit, val] = call("throw");
+        expectTrue(hit != 0, "s4a managed exception caught at SEH boundary (process alive)");
+        std::printf("  exception code: 0x%08x (CLR managed exception 0xe0434352)\n",
+                    static_cast<unsigned>(-1000 - val));
+    }
+    // 边界之后入口仍可调用（异常未污染状态）
+    expectInt(call("ok").second, 42, "s4b entry callable again after exception");
+
+    // s5 热重编行为更新：拷贝工程 -> 改 42->43 -> 换名重编 -> 同进程装载新 DLL
+    {
+        std::error_code ec;
+        const fs::path hotRoot = fs::temp_directory_path(ec) / "nl-script-selftest-hot";
+        fs::remove_all(hotRoot, ec);
+        fs::create_directories(hotRoot, ec);
+        // 只拷工程源文件（csproj + .cs），跳过 bin/obj：带 obj 的 NuGet 缓存会让
+        // restore 撞出 "Ambiguous project name 'HelloScriptHot'"（M-SC0 踩坑）
+        fs::create_directories(hotRoot / "hello", ec);
+        for (const auto& entry : fs::directory_iterator(projectDir, ec)) {
+            if (!entry.is_regular_file(ec)) continue;
+            fs::copy(entry.path(), hotRoot / "hello" / entry.path().filename(), ec);
+        }
+        expectTrue(!ec, "s5a copy example project to temp dir");
+
+        // ProjectReference 是仓库相对路径，拷到 temp 后断链 → 改写成绝对路径
+        const fs::path apiCsproj = projectDir / "../../script-api/NlScriptApi.csproj";
+        const fs::path hotCsproj = hotRoot / "hello" / "HelloScript.csproj";
+        std::ifstream cin_(hotCsproj, std::ios::binary);
+        std::string csprojText((std::istreambuf_iterator<char>(cin_)), std::istreambuf_iterator<char>());
+        cin_.close();
+        const std::size_t refPos = csprojText.find("../../script-api/NlScriptApi.csproj");
+        expectTrue(refPos != std::string::npos, "s5a2 locate ProjectReference in copied csproj");
+        if (refPos != std::string::npos) {
+            csprojText.replace(refPos, strlen("../../script-api/NlScriptApi.csproj"),
+                               apiCsproj.lexically_normal().string());
+            std::ofstream cout_(hotCsproj, std::ios::binary | std::ios::trunc);
+            cout_ << csprojText;
+            cout_.close();
+        }
+        // AssemblyName 必须在 csproj 里改，不能用 -p:AssemblyName 全局属性：
+        // 全局属性会连带被 ProjectReference 的 script-api 一起改名 →
+        // NuGet restore "Ambiguous project name"（M-SC0 踩坑）
+        {
+            std::ifstream cin2(hotCsproj, std::ios::binary);
+            std::string t2((std::istreambuf_iterator<char>(cin2)), std::istreambuf_iterator<char>());
+            cin2.close();
+            const std::size_t ap = t2.find("<AssemblyName>HelloScript</AssemblyName>");
+            expectTrue(ap != std::string::npos, "s5a3 set hot AssemblyName in copied csproj");
+            if (ap != std::string::npos) {
+                t2.replace(ap, strlen("<AssemblyName>HelloScript</AssemblyName>"),
+                           "<AssemblyName>HelloScriptHot</AssemblyName>");
+                std::ofstream cout2(hotCsproj, std::ios::binary | std::ios::trunc);
+                cout2 << t2;
+            }
+        }
+
+        // 源码改动：42 -> 43（脚本改动）
+        const fs::path cs = hotRoot / "hello" / "HelloScript.cs";
+        std::ifstream in(cs, std::ios::binary);
+        std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        const std::size_t pos = src.find("return 42;");
+        expectTrue(pos != std::string::npos, "s5b locate anchor \"return 42;\" in copied source");
+        if (pos != std::string::npos) {
+            src.replace(pos, 10, "return 43;");
+            std::ofstream out(cs, std::ios::binary | std::ios::trunc);
+            out << src;
+            out.close();
+
+            // dotnet build 重编（csproj 内已换 AssemblyName，避免同标识程序集复用旧映像）
+            expectTrue(dotnetBuild((hotRoot / "hello").string(), {}),
+                       "s5c dotnet build rebuilt script (HelloScriptHot)");
+            auto hot = locateOutput(hotRoot / "hello", "HelloScriptHot");
+            expectTrue(hot.has_value(), "s5d locate rebuilt output");
+            if (hot) {
+                nl::script::EntryPointFn hotEntry = nullptr;
+                result = vm->getEntryPoint(hot->assemblyDll.string(),
+                                           "NlScript.Examples.HelloScript, HelloScriptHot",
+                                           "Entry", &hotEntry);
+                expectTrue(result.ok, "s5e load rebuilt assembly in same process (no host restart)");
+                if (result.ok) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    guardedCall(hotEntry, const_cast<char*>("ok"), 2, &ret, &exc);
+                    expectInt(ret, 43, "s5f rebuilt script behavior updated: \"ok\" -> 43");
+                }
+            }
+        }
+        fs::remove_all(hotRoot, ec);
+    }
+
+    std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
+                g_failures, g_failures == 1 ? "" : "s");
+    return g_failures == 0 ? 0 : 1;
+}
+
+void usage() {
+    std::printf(
+        "nl-script -- C# hosting selftest tool (nl::script, A-class track)\n"
+        "usage:\n"
+        "  nl-script check <projectDir>                       compile only (dotnet build)\n"
+        "  nl-script run <projectDir> [--args <s>] [--type <ns.Class, Assembly>]\n"
+        "                                                     compile + load + call Entry\n"
+        "  nl-script selftest <projectDir>                    full machine-checked acceptance\n"
+        "exit codes: 0=PASS / 1=fail / 2=usage\n");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        usage();
+        return 2;
+    }
+    const std::string cmd = argv[1];
+
+    if (cmd == "check") {
+        if (argc < 3) {
+            usage();
+            return 2;
+        }
+        return cmdCheck(fs::weakly_canonical(argv[2]));
+    }
+    if (cmd == "run") {
+        if (argc < 3) {
+            usage();
+            return 2;
+        }
+        std::string args, typeOverride;
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--args" && i + 1 < argc) {
+                args = argv[++i];
+            } else if (std::string(argv[i]) == "--type" && i + 1 < argc) {
+                typeOverride = argv[++i];
+            } else {
+                usage();
+                return 2;
+            }
+        }
+        return cmdRun(fs::weakly_canonical(argv[2]), args, typeOverride);
+    }
+    if (cmd == "selftest") {
+        if (argc < 3) {
+            usage();
+            return 2;
+        }
+        return cmdSelftest(fs::weakly_canonical(argv[2]));
+    }
+    usage();
+    return 2;
+}

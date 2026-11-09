@@ -35,7 +35,7 @@
 
 | 里程碑 | 内容 | 验收判据 | 依赖 |
 |---|---|---|---|
-| **M-SC0** hosting 内核 | `thirdparty/dotnet-hosting/` vendored + CMake 接 nethost；`nl::script::Vm`（runtime 初始化 / 加载程序集 / 取函数指针 / 调用与异常边界）；`script-api` 骨架 classlib + 用户脚本最小示例；`nl-script` 工具（`run` 编译+跑脚本 / `check` 只编译检查） | selftest：C++ 装载运行时→加载 DLL→调静态函数拿返回值→托管异常捕获转错误码；脚本改动经 `dotnet build` 重编后行为更新；工具版交代（usage+正向+负向 tool 卡） | 无（SDK 已装），即刻开工 |
+| **M-SC0** hosting 内核 ✅ **已完成（2026-11-09，tag `m-sc0`）** | `thirdparty/dotnet-hosting/` vendored + CMake 接 nethost；`nl::script::Vm`（runtime 初始化 / 加载程序集 / 取函数指针 / 调用与异常边界）；`script-api` 骨架 classlib + 用户脚本最小示例；`nl-script` 工具（`run` 编译+跑脚本 / `check` 只编译检查） | selftest：C++ 装载运行时→加载 DLL→调静态函数拿返回值→托管异常捕获转错误码；脚本改动经 `dotnet build` 重编后行为更新；工具版交代（usage+正向+负向 tool 卡）——**全部达成：selftest 17/17（含 s5 热重编 42→43 同进程行为更新）、展示台 m-sc0 卡 5 条 + 5 张真实输出证据图 + SCRIPT-TOOLS-GUIDE（踩坑 7 条存档）** | 无（SDK 已装），即刻开工 |
 | **M-SC1** console 绑定 | C++→C# 函数指针暴露：`cvar.get/set/list`、`console.exec`（ExecCode 0/1/2/3 → C# 返回）；C#→C++ 注册：`Console.Register(name, fn)` 进 console 命令表（fn 经异常边界调用） | selftest：C# 改 cvar 触发 onChanged、C# 注册命令经 console exec 调通、错误码逐一对齐 | **console M-C3 merge 回 master** |
 | **M-SC2** ECS 绑定（数据面） | `World.Spawn/Remove/SetParent/GetParent`、Entity wrapper（与 EntityID 映射 + 失效安全拒绝）、TransformComponent 字段读写（pos/rot/scale） | selftest：C# 建实体→挂 Transform→改字段→C++ 读回一致；删除实体后 C# 访问得到失败结果不崩；JSON roundtrip 不受影响 | E1a 已 merge（2d4ad49）✓ |
 | **M-SC2b**（可选，后定） | ScriptComponent 脚本逻辑组件：C++ 组件持程序集/类型名，tick 回调 `OnTick(self, dt)` | 视 M-SC2 后扩展需求决定，**默认不做** | M-SC2 |
@@ -49,5 +49,12 @@
 
 ## 注册表
 
-- worktree：`E:/UE_STUDY_2026/nl-engine-script`，分支 `feat/script`（待建）。
+- worktree：`E:/UE_STUDY_2026/nl-engine-script`，分支 `feat/script`（**已建**，wt_pool track `script` 已注册 active；junction 共享 `.workbuddy`/`slang dist` 实测在位）。M-SC0 收口 tag `m-sc0`（2026-11-09）。
 - 计划归属：ROADMAP E4 脚本段（2026-11-09 解禁，鸣潮方向）；物理/音频仍保持「等游戏类型拍板」原状。
+
+## M-SC0 实测补记（2026-11-09，踩坑详档见 docs/p8/SCRIPT-TOOLS-GUIDE.md）
+
+- vendored 实际落位：`include/`（hostfxr.h/nethost.h/coreclr_delegates.h）+ `lib/nethost.lib`（**真导入库**；pack 里的 libnethost.lib 是静态库，与 dllimport 语义不符，不入库）+ `bin/nethost.dll`（POST_BUILD copy 到 exe 旁，官方样例布局）。
+- `UNMANAGEDCALLERSONLY_METHOD` 路线实测可用：C# 方法标 `[UnmanagedCallersOnly]`、签名 `int(IntPtr, int)`，返回指针即默认签名——与官方口径一致。
+- 托管异常边界：MSVC /EHsc 下必须 SEH `__try/__except`（catch(...) 接不住），实测 0xe0434352 捕获、进程存活。
+- 热重编验收（s5）落地细节：拷工程只拷源文件；换 AssemblyName 改 csproj 本体（`-p:` 全局属性会污染 ProjectReference → NuGet「Ambiguous project name」）；classlib 需 `GenerateRuntimeConfigurationFiles=true` 才产 runtimeconfig.json。

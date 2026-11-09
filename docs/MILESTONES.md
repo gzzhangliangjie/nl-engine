@@ -1214,3 +1214,23 @@
 4. expectLog 必须与真实输出首行核对（usage 卡初版写了臆造的 banner 行，实测首行是 "usage:"，已改）。
 
 **下一步**：E1a 全链收口（merge 回 master + 注册表同步）；E1b（viewer 加载场景文件渲染 + ModelComponent/LightComponent）等 S6 收官（tag `s6-done`）后另编号开工。
+
+## M-SC0：C# hosting 内核（feat/script，2026-11-09，tag `m-sc0`）
+
+**动作**：wt_pool claim（track script / M-SC0；script 轨道注册表同步进 wt_pool.py TRACKS）→ 三处证据（P8-SCRIPT-PLAN「三处参考口径」+「现成封装参考」2026-11-09 精读留痕：Carrot `core/core/scripting/csharp/` 1229 行 hosting 分层——抄结构不抄 Mono 底座；bevy 无脚本 crate——克制先例；Microsoft Learn《Write a custom .NET runtime host》——hostfxr 三导出 + `component_entry_point_fn=int(void*,int32)` 默认签名 + FDD-only/单运行时两硬限制）→ vendored `thirdparty/dotnet-hosting/`（SDK 8.0.19 pack：hostfxr.h / nethost.h / coreclr_delegates.h 三头件 + nethost.lib 真导入库 + nethost.dll）→ `nl::script::Vm`（PIMPL：头文件零 hostfxr 符号；create=定位→LoadLibrary→init_for_runtime_config→取 delegate；getEntryPoint=UNMANAGEDCALLERSONLY_METHOD 路线；析构 close+FreeLibrary）+ SEH 互操作边界 guard（托管异常转 Result code 6）→ CMake：Vm.cpp 进 nl_core + nethost 链接 + `nl-script` 工具目标（nethost.dll POST_BUILD copy）→ `script/script-api/` 骨架 classlib（net8.0，M-SC1/SC2 绑定落点）+ `script/examples/hello/` 最小用户脚本（mode 驱动：ok/echo/throw/default 四路）→ `nl-script/main.cpp`（check/run/selftest 三命令，退出码 0/1/2）→ selftest 17 项迭代全绿（4 轮修坑见踩坑栏）→ `example/m-sc0/run.bat` 五用例实跑 ALL GREEN + `tools/make-script-evidence.py` 5 张证据图（真实日志渲染）+ 逐张亲眼验收 → `example/cases.json` 追加 `m-sc0` 版本卡 5 条 tool 用例（diff 干净 90 行纯追加）→ `docs/p8/SCRIPT-TOOLS-GUIDE.md` 归档 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script 本收口 commit（tag `m-sc0`，即本条台账所在提交）。
+
+**完成情况**：DX12 树 nl-script 构建过（VULKAN 树 nl_core 同步验证）；selftest 17/17（s0 产物定位 / s1 hostfxr 三导出装载 / s2 默认签名入口（[UnmanagedCallersOnly] + UNMANAGEDCALLERSONLY_METHOD）/ s3 返回值锚 42/-1/0/-1 / s4 托管异常 SEH 捕获 0xe0434352 + 进程存活 + 异常后可复调 / s5 拷贝工程改 42→43 重编换名同进程装载 → 43）；`run --args ok` ret=42 exit 0、`run --args throw` exit 1、`check` exit 0、无参 exit 2；run.bat ALL GREEN；`server.py --check` exit 0。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，无截图无渲染基线卡；渲染集成属 E1b 之外的脚本渲染绑定，plan 未排）；②工具交代物——**本轮有**：展示台 `m-sc0` 版本卡 5 条（usage/正向 run-ok/负向 run-throw/check/selftest，expectExit 2/0/1/0/0）+ 5 张证据图（真实输出渲染，亲眼核验）+ SCRIPT-TOOLS-GUIDE + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC0 标完成 + 踩坑回写 + SCRIPT-TOOLS-GUIDE 踩坑存档 7 条 + PARALLEL-TRACKS §7.1d wt 状态更新 + wt_pool.py TRACKS 注册 script 轨道。
+
+**踩坑情况**
+1. **libnethost.lib 是静态库**（1.6MB 无 `__imp_` 符号）与 nethost.h 默认 dllimport 语义不符 → LNK2019 `__imp_get_hostfxr_path`；换 nethost.lib（1.7KB 真导入库）+ nethost.dll 运行期紧挨 exe（官方样例布局），静态 lib 不入库。
+2. **classlib 默认不产 runtimeconfig.json**（FDD 加载硬前置缺失）→ csproj 显式 `<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>`。
+3. **`-p:AssemblyName` 是全局属性**：连带 ProjectReference 的 script-api 一起改名 → NuGet restore「Ambiguous project name 'HelloScriptHot'」；热重编换名必须改拷贝出的 csproj 本体。
+4. **拷贝工程带 obj/**：NuGet 缓存残留 FullPath 同样撞 Ambiguous → 热重编只拷源文件（csproj+.cs）。
+5. **`fs::path::extension()` 只取最后一个点**（runtimeconfig.json 的 extension 是 `.json`）+ 对 runtimeconfig 路径 `replace_extension(".dll")` 会拼出 `HelloScript.runtimeconfig.dll` —— 后缀判断改文件名 ends_with，DLL 名显式「程序集名+.dll」拼接。
+6. **hostfxr.h `initialize_for_runtime_config_fn` 是三参数**（path, parameters, out handle；parameters 可 nullptr），按两参数调用即 C2198。
+7. **托管异常 MSVC /EHsc 下 catch(...) 接不住**：必须 SEH `__try/__except`（guard 函数体内禁 C++ 对象），实测 0xe0434352 捕获、进程存活、入口可复调。
+8. C# `Api` 跨程序集引用漏 `using Nl.Script.Api;` → CS0103（首轮 dotnet build 失败）。
+
+**下一步**：M-SC1 console 绑定（gated on feat/console M-C3 merge 回 master）：C++→C# 函数指针暴露 cvar.get/set/list + console.exec，C#→C# 注册命令进 console 命令表。

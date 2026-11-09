@@ -196,7 +196,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（待建，junction 共享 `.workbuddy`/`slang dist`） | `feat/script`（待建） | M-SC0~SC3（`docs/p8/P8-SCRIPT-PLAN.md`）：hosting 内核 → console 绑定 → ECS 数据面绑定 → 热更收口 |
+| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（**已建**，wt_pool track `script` active；junction 共享 `.workbuddy`/`slang dist`） | `feat/script` | M-SC0~SC3（`docs/p8/P8-SCRIPT-PLAN.md`）：hosting 内核 → console 绑定 → ECS 数据面绑定 → 热更收口。**M-SC0 已收口（2026-11-09，tag `m-sc0`）**：`nl::script::Vm` hosting 内核 + `nl-script` 工具（selftest 17/17 含热重编行为更新）+ 展示台 m-sc0 卡 + SCRIPT-TOOLS-GUIDE |
 
 ### 7.2 固化文档闸
 

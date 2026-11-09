@@ -143,8 +143,18 @@ add_library(nl_core STATIC
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
+    core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+# dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
+# vendored）只允许 core/src/script/Vm.cpp 出现（PIMPL 纪律，Vm.hpp 不暴露），故 PRIVATE。
+target_include_directories(nl_core PRIVATE ${THIRDPARTY}/dotnet-hosting/include)
+# libnethost 不可用（是静态库，与 nethost.h 默认 dllimport 语义不符 → __imp_ 符号
+# 解析失败，M-SC0 踩坑）：用 nethost.lib 真导入库 + nethost.dll 运行期紧挨 exe
+# （官方 hosting 样例布局）。静态库 PRIVATE 依赖以 LINK_ONLY 传给 exe 链接行。
+if(MSVC)
+    target_link_libraries(nl_core PRIVATE ${THIRDPARTY}/dotnet-hosting/lib/nethost.lib)
+endif()
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
@@ -313,10 +323,19 @@ target_link_libraries(material-graph-tools PRIVATE nl_core)
 add_executable(nanite-scene nanite-scene/main.cpp)
 target_link_libraries(nanite-scene PRIVATE nl_core)
 
+# ---- M-SC0：nl-script —— C# hosting（nl/script）自测工具，A 类并行轨道 ----
+# 退出码约定：0=PASS / 1=断言失败或脚本运行失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
+# nethost.dll 运行期紧挨 exe（官方 hosting 样例布局：链 libnethost 导入库 + copy dll）。
+add_executable(nl-script nl-script/main.cpp)
+target_link_libraries(nl-script PRIVATE nl_core)
+add_custom_command(TARGET nl-script POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${THIRDPARTY}/dotnet-hosting/bin/nethost.dll $<TARGET_FILE_DIR:nl-script>)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nl-script)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
