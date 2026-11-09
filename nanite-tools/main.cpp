@@ -368,6 +368,47 @@ bool toNMeshData(const nl::core::PrimitiveMesh& prim,
     return true;
 }
 
+// M7.2：单子网格 BuiltMeshlets 追加进多子网格合并缓冲（D-M7.2-1 方案 A）。
+// 簇窗口按当前合并数组长度平移（vertexOffset / triangleOffset[字节]），
+// 追加后 push 一个从 0 起连续无缝的 submesh 区间；窗口合法性自检同 toNMeshData。
+bool appendSubmesh(const nl::core::PrimitiveMesh& prim,
+                   const nl::core::BuiltMeshlets& built,
+                   nl::core::NMeshData& merged, std::string& failReason) {
+    const std::uint32_t vertexBase =
+        static_cast<std::uint32_t>(merged.vertices.size());
+    const std::uint32_t triByteBase =
+        static_cast<std::uint32_t>(merged.triangles.size());
+    const std::uint32_t clusterFirst =
+        static_cast<std::uint32_t>(merged.meshlets.size());
+    for (const auto& m : built.meshlets) {
+        nl::core::Meshlet mm = m;
+        mm.vertexOffset += vertexBase;
+        mm.triangleOffset += triByteBase;
+        merged.meshlets.push_back(mm);
+    }
+    for (const auto& b : built.bounds) merged.bounds.push_back(b);
+    const size_t vertexAppendAt = merged.vertices.size();
+    merged.vertices.resize(merged.vertices.size() + built.vertices.size());
+    for (size_t i = 0; i < built.vertices.size(); ++i)
+        merged.vertices[vertexAppendAt + i] = prim.vertices[built.vertices[i]];
+    merged.triangles.insert(merged.triangles.end(),
+                            built.triangles.begin(), built.triangles.end());
+    merged.submeshesPresent = true;
+    merged.submeshes.push_back({clusterFirst,
+                                static_cast<std::uint32_t>(built.meshlets.size())});
+    // 窗口合法性自检（平移只加 base，这里防上游数据坏了难排查）
+    for (size_t i = 0; i < built.meshlets.size(); ++i) {
+        const auto& m = merged.meshlets[clusterFirst + i];
+        if (size_t(m.vertexOffset) + m.vertexCount > merged.vertices.size() ||
+            size_t(m.triangleOffset) + size_t(m.triangleCount) * 3 >
+                merged.triangles.size()) {
+            failReason = "merged meshlet window out of range";
+            return false;
+        }
+    }
+    return true;
+}
+
 int cmdCluster(int argc, char** argv) {
     if (argc < 1) {
         std::fprintf(stderr, "cluster: missing <model.gltf|.glb>\n");
@@ -403,12 +444,9 @@ int cmdCluster(int argc, char** argv) {
     }
 
     int failures = 0;
-    if (outPath && data.meshes.size() != 1) {
-        // M1.2 只支持单子网格落盘（当前资产都是单子网格）；多子网格等真出现了再定容器格式
-        std::fprintf(stderr, "cluster: -o needs exactly one submesh (got %zu)\n",
-                     data.meshes.size());
-        return 1;
-    }
+    // M7.2：多子网格落盘放开（D-M7.2-1 方案 A，2026-11-10 拍板）——各 prim
+    // 独立切簇后按序拼接成一份 .nmesh（NSUB 尾段记簇区间，材质 id = 子网格
+    // 序号）。simplify/lod/dag 链不消费多子网格文件（visbuf 光栅不吃 DAG）。
 
     // M-J2：多子网格走并行切簇（per-primitive 完全独立 → scope slot 输出，
     // 打印/后续落盘保序串行）；单子网格保持原串行路径（并行开销 > 收益，零回归风险）。
@@ -451,6 +489,33 @@ int cmdCluster(int argc, char** argv) {
         }
         std::printf("jobs       : %zu submeshes clustered in parallel (%.3fs, %u threads)\n",
                     data.meshes.size(), parallelSecs, poolThreadsUsed);
+        // M7.2：多子网格拼接落盘（任一子网格切簇失败则不落盘）。
+        if (outPath && failures == 0) {
+            nl::core::NMeshData merged;
+            // 名字取文件 stem（NMeshData.name 单值；子网格名进 NSUB 区间序号）
+            std::string stem = path;
+            const size_t slash = stem.find_last_of("/\\");
+            if (slash != std::string::npos) stem = stem.substr(slash + 1);
+            const size_t dot = stem.find_last_of('.');
+            if (dot != std::string::npos) stem = stem.substr(0, dot);
+            merged.name = stem;
+            bool ok = true;
+            std::string reason;
+            for (size_t i = 0; ok && i < data.meshes.size(); ++i)
+                ok = appendSubmesh(data.meshes[i], works[i].built, merged, reason);
+            if (ok) ok = nl::core::saveNMesh(outPath, merged, reason);
+            if (ok) {
+                nl::core::NMeshData back;
+                ok = nl::core::loadNMesh(outPath, back, reason);
+            }
+            if (!ok) {
+                std::fprintf(stderr, "cluster: save multi-submesh %s: %s\n",
+                             outPath, reason.c_str());
+                return 1;
+            }
+            std::printf("saved      : %s (multi-submesh, %zu ranges, reload ok)\n",
+                        outPath, merged.submeshes.size());
+        }
         return failures == 0 ? 0 : 1;
     }
 
@@ -1793,6 +1858,55 @@ int selftestNMesh() {
         std::fwrite(truncated.data(), 1, truncated.size(), fp);
         std::fclose(fp);
         check(!nl::core::loadNMesh(tmpB, nm, reason), "truncated file rejected", reason);
+    }
+
+    // ---- M7.2：NSUB 多子网格段 roundtrip + 负向 ----
+    {
+        // 正向：把既有簇拆成 2 段（写 side 原地拆，读回比对 + 重写逐字节一致）
+        nl::core::NMeshData multi = written;
+        const size_t n = multi.meshlets.size();
+        const size_t half = std::max<size_t>(1, n / 2);
+        multi.submeshesPresent = true;
+        multi.submeshes.clear();
+        multi.submeshes.push_back({0u, static_cast<std::uint32_t>(half)});
+        if (n > half)
+            multi.submeshes.push_back({static_cast<std::uint32_t>(half),
+                                       static_cast<std::uint32_t>(n - half)});
+        std::string r2;
+        check(nl::core::saveNMesh(tmpB, multi, r2), "saveNMesh multi-submesh", r2);
+        nl::core::NMeshData backMulti;
+        check(nl::core::loadNMesh(tmpB, backMulti, r2), "loadNMesh multi-submesh", r2);
+        check(backMulti.submeshesPresent && backMulti.submeshes == multi.submeshes,
+              "submesh ranges identical after roundtrip");
+
+        // 负向 1：手改区间不连续（第二段 clusterFirst 抬 1）
+        {
+            std::vector<std::uint8_t> raw;
+            readAll(tmpB, raw);
+            // NSUB 段在文件尾：16 B 头 + N×8 B 记录。第二条记录 = 尾部 -8 B 起
+            const size_t recOff = raw.size() - 2 * sizeof(nl::core::NMeshSubmeshRecord);
+            std::uint32_t badFirst = half + 1;
+            std::memcpy(raw.data() + recOff, &badFirst, sizeof(badFirst));
+            std::FILE* fp = std::fopen(tmpA, "wb");
+            std::fwrite(raw.data(), 1, raw.size(), fp);
+            std::fclose(fp);
+            nl::core::NMeshData nm;
+            check(!nl::core::loadNMesh(tmpA, nm, r2), "non-contiguous ranges rejected", r2);
+        }
+        // 负向 2：区间不覆盖全部 meshlet（第二段 clusterCount 减 1）
+        if (n > half + 1) {
+            std::vector<std::uint8_t> raw;
+            readAll(tmpB, raw);
+            const size_t cntOff = raw.size() - sizeof(nl::core::NMeshSubmeshRecord) +
+                                  sizeof(std::uint32_t);
+            std::uint32_t badCount = static_cast<std::uint32_t>(n - half - 1);
+            std::memcpy(raw.data() + cntOff, &badCount, sizeof(badCount));
+            std::FILE* fp = std::fopen(tmpA, "wb");
+            std::fwrite(raw.data(), 1, raw.size(), fp);
+            std::fclose(fp);
+            nl::core::NMeshData nm;
+            check(!nl::core::loadNMesh(tmpA, nm, r2), "partial coverage rejected", r2);
+        }
     }
 
     std::remove(tmpA);

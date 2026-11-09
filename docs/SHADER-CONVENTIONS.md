@@ -191,6 +191,15 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 - **探针结论有效性前置**：改 shader 后跑任何画面探针，先核 `exe mtime > shader mtime`（NMake 同秒 mtime 跳重链，§2.12 尾条），否则结论全部作废——M-E1b.4 连环假阴性（shadowTry1~4/PROBE-S）的真实根因。
 
 
+### 2.14 ⚠️ vis buffer 材质间接表（2026-11-10，M7.2；S9/S10/S13 复用纪律）
+
+- **材质归属构建期随簇记录，渲染期不猜**：`.nmesh` 'NSUB' 尾段（v3 只加不改）存子网格簇区间（clusterFirst/clusterCount 8B/项），`clusterMeta[3]` = materialId（子网格序号）；加载期按区间展开成逐簇 id 数组，渲染期一次 SRV 查表。UE 同口径（簇编码带 MaterialTableOffset/Length，`NaniteDataDecode.ush:116-117`）；无 NSUB 的旧文件恒 materialId=0。
+- **间接表布局（§2.7 单一 BindingSet 内）**：`GPUMaterial[4]` SSBO t12（32B/项：baseColorFactor float4 + mrFactor float2 + 贴图槽号 uint2）+ 贴图**固定槽数组** `g_baseColorTex[4]`(t4..t7) / `g_mrTex[4]`(t8..t11)。槽位在 Scene init 时静态分配（材质 0 沿用 texture_/mrTexture_ 句柄），空槽绑 1x1 dummy 纹理——**NVRHI 拒绝空纹理绑定**，即使 shader 逻辑上不会命中（NSUB 对账保证 materialId < materialCount）。
+- **materialId 逐像素非一致 → 资源数组选槽必须 `NonUniformResourceIndex`**：全屏三角形材质 pass 相邻像素可属不同子网格，裸下标会触发未定义行为/错误层级展开。Slang 双目标实测通过（DXIL 产出 `NVN`/dot 路径、SPIR-V 产出 `OpCompositeExtract` 非一致修饰），产物进 `_SM66_ARTIFACTS`。
+- **两个渲染路径共用同一份因子**：vis 路径因子在 GPUMaterial 表里；传统直画路径 per-prim 批次（共享 VB/IB 按 `startIndexLocation` 区间）把同值写进各自 b1 volatile CB——**volatile CB 全量覆写语义**（§2.5），光照/相机同值 + 各批因子必须在**每次 draw 前整块重写**，漏写因子=首帧后随机 tint。`model.slang` 零改动是多材质对照组的硬指标。
+- **`kMaxVisMaterials=4` 是渲染侧上限**（贴图槽 t4..t11 + 表项 4），不是 .nmesh 格式上限（NSUB 段无子网格数限制）；扩容 = 槽位数组 + GPUMaterial 数组 + dummy 绑定三处同步，且 initCull 对账检查 `materialCount == nmeshSubmeshCount_` 显式报错。
+
+
 ### 2.15 ⚠️ NVRHI buffer 每帧写回：permanent 冻结与跨列表跟踪（2026-11-09，M-E1b.5 渲染链）
 
 - **`setPermanentBufferState(buf, X)` 是一次性冻结**：之后所有写路径（`writeBuffer`/`copyBuffer` 内部 `requireBufferState(CopyDest)`）对 permanent buffer **直接校验 permanent 位、不插 barrier**——permanent=ShaderResource 时每帧写必报 `Required: 0x1000(CopyDest), present: 0x60(SRV)`（首轮实测 deviceErrors=60，30 帧 × 2 batch）。混合位 permanent（`SRV|CopyDest`）能过校验但 Vulkan 端跨 submit 的 transfer→read hazard 无 barrier，禁用。
@@ -225,3 +234,8 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 - **三角形 ID 用 `SV_PrimitiveID`，PS 直接收、VS 不用传**：rasterizer 生成的系统值，DXIL 侧签名匹配允许注入，SPIR-V 侧对应 `gl_PrimitiveID` 内建（fragment 输入合法）。**slangc 双目标实测通过**（2026-11-07，SPIR-V `03 02 23 07` / DXIL `DXBC`），NVRHI validation 与 D3D12 Debug Layer 零报错。颜色用整数 hash（pcg 风格），无浮点随机源 → 同参重渲染 PNG 确定，可进截图回归。
 - **线框不是 shader**：NVRHI `RasterState::setFillWireframe()`（光栅 fill mode），零几何 shader、零索引改动。Scene 的 pipeline 组合因此从 2 套扩到 **4 套（solid/wire × cull back/none）**，着色模式与线框正交。
 - **FrameParams 尾部新增 `int shading / bool wireframe`**，同样不进 cbuffer 整块拷贝：`Scene::draw` 只把 `shading` 写进 `options[0]`，其余 options 原样带过。
+
+### 2.16 ⚠️ Scene::draw 主路径重构：cluster 兜底与 spot 覆盖（2026-11-10，M7.2 真回归）
+- **`Scene::draw` 末段服务多类场景**：init（normal/pbr）、initSkin、**initCluster（lod/dag/s5 层次遍历）** 都走同一段尾绘。initCluster 场景 `modelBatches_` 为空、用自己的 b0-only 绑定集与 `indexCount_`——**改成 per-prim 批次循环时必须保留 `modelBatches_.empty()` 的老单批兜底**，否则三模式整只模型消失（M7.2 实测 s2.0/s3.2/s5.0 前景 0 px）。
+- **draw 主路径重构的 spot 回归必须覆盖 lod 或 dag 模式**：m0.9/pbr-direct/s7.0/s7.1 全走 init/per-prim/visbuf 路径，per-prim 重写把 cluster 路径炸空后 spot 依旧全绿——直到全量闸 HUD 基线 diff 6.4 万 px 才暴露。
+- **基线重拍安全闸是最后防线**：diff 超出「HUD 一行文本」签名（≈527 px / maxDelta 240）必须追因，禁止人工强刷进基线。「模型区整片白」= 位移/变色/消失三选一，用前景包围盒+质心一测便知；「diff 恰好一行 HUD 文本」才是 kStage bump 的健康签名。

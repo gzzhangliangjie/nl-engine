@@ -55,8 +55,10 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
     NMeshHeader header{};
     header.magic = kNMeshMagic;
     // M2.2：带 LOD 元数据的分层资产写 version 2（只加尾部 section）；
-    // M3.1：带 fallback 的写 version 3；普通资产仍写 version 1。
-    header.version = data.fallbackPresent ? kNMeshVersionFallback
+    // M3.1：带 fallback 的写 version 3；M7.2：多子网格（NSUB 尾段）也走
+    // version 3 机制（v4 号已被 P9 NPAG 分页占位，勿占用）；普通资产仍写 1。
+    header.version = (data.fallbackPresent || data.submeshesPresent)
+                         ? kNMeshVersionFallback
                      : data.lodMeta.present ? kNMeshVersionLod
                      : kNMeshVersion;
     header.nameLen = static_cast<std::uint16_t>(name.size());
@@ -192,6 +194,39 @@ bool saveNMesh(const char* path, const NMeshData& data, std::string& outError) {
         }
     }
 
+    // M7.2：多子网格尾段（追加在 fallback 之后；loadNMesh 按 magic 识别，
+    // 不依赖写入顺序）。约定：区间从 0 起连续无缝，写出前先自校验。
+    if (data.submeshesPresent) {
+        if (data.submeshes.empty() || data.submeshes.size() > 0xFFFFFFFFu) {
+            outError = "submesh section: empty";
+            return false;
+        }
+        std::uint32_t expectFirst = 0;
+        for (const auto& s : data.submeshes) {
+            if (s.clusterFirst != expectFirst || s.clusterCount == 0) {
+                outError = "submesh section: ranges must start at 0 and be contiguous";
+                return false;
+            }
+            expectFirst += s.clusterCount;
+        }
+        if (expectFirst != data.meshlets.size()) {
+            outError = "submesh section: cluster ranges don't cover all meshlets";
+            return false;
+        }
+        NMeshSubmeshHeader sh{};
+        sh.magic = kNMeshSubmeshMagic;
+        sh.submeshCount = static_cast<std::uint32_t>(data.submeshes.size());
+        sh.payloadBytes = static_cast<std::uint32_t>(
+            data.submeshes.size() * sizeof(NMeshSubmeshRecord));
+        const auto* shp = reinterpret_cast<const std::uint8_t*>(&sh);
+        blob.insert(blob.end(), shp, shp + sizeof(sh));
+        for (const auto& s : data.submeshes) {
+            NMeshSubmeshRecord rec{s.clusterFirst, s.clusterCount};
+            const auto* rp = reinterpret_cast<const std::uint8_t*>(&rec);
+            blob.insert(blob.end(), rp, rp + sizeof(rec));
+        }
+    }
+
     const std::string tmpPath = std::string(path) + ".tmp";
     {
         FileHandle h;
@@ -287,10 +322,11 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
         cursor += size_t(header.triangleCount) * 3;
     }
     if (header.version == kNMeshVersionLod || header.version == kNMeshVersionFallback) {
-        // 尾段按 magic 识别（NLOD meta / NFLB fallback），顺序不敏感，
-        // 重复段、未知段都拒绝。v2 必须有 meta；v3 至少一段。
+        // 尾段按 magic 识别（NLOD meta / NFLB fallback / NSUB 多子网格），
+        // 顺序不敏感，重复段、未知段都拒绝。v2 必须有 meta；v3 至少一段。
         bool metaRead = false;
         bool fallbackRead = false;
+        bool submeshRead = false;
         while (cursor < blob.size()) {
             if (!need(sizeof(std::uint32_t), "tail section magic")) return false;
             std::uint32_t magic;
@@ -414,6 +450,48 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
                         return false;
                     }
                 fallbackRead = true;
+            } else if (magic == kNMeshSubmeshMagic) {
+                // M7.2：多子网格段。簇按子网格序拼接，区间从 0 起连续无缝。
+                if (submeshRead) {
+                    outError = "duplicate submesh section: " + std::string(path);
+                    return false;
+                }
+                if (!need(sizeof(NMeshSubmeshHeader), "submesh header")) return false;
+                NMeshSubmeshHeader sh;
+                std::memcpy(&sh, blob.data() + cursor, sizeof(sh));
+                cursor += sizeof(sh);
+                const std::size_t expected = std::size_t(sh.submeshCount) *
+                                             sizeof(NMeshSubmeshRecord);
+                if (sh.magic != kNMeshSubmeshMagic || sh.reserved != 0 ||
+                    sh.submeshCount == 0 || sh.payloadBytes != expected) {
+                    outError = "bad submesh header: " + std::string(path);
+                    return false;
+                }
+                if (!need(sh.payloadBytes, "submesh payload")) return false;
+                out.submeshesPresent = true;
+                out.submeshes.resize(sh.submeshCount);
+                std::uint32_t expectFirst = 0;
+                for (std::uint32_t i = 0; i < sh.submeshCount; ++i) {
+                    NMeshSubmeshRecord rec;
+                    std::memcpy(&rec, blob.data() + cursor, sizeof(rec));
+                    cursor += sizeof(rec);
+                    if (rec.clusterFirst != expectFirst || rec.clusterCount == 0 ||
+                        std::size_t(rec.clusterFirst) + rec.clusterCount >
+                            header.meshletCount) {
+                        outError = "submesh ranges must start at 0, be contiguous "
+                                   "and cover the meshlet array: " + std::string(path);
+                        return false;
+                    }
+                    expectFirst = rec.clusterFirst + rec.clusterCount;
+                    out.submeshes[i].clusterFirst = rec.clusterFirst;
+                    out.submeshes[i].clusterCount = rec.clusterCount;
+                }
+                if (expectFirst != header.meshletCount) {
+                    outError = "submesh ranges don't cover all meshlets: " +
+                               std::string(path);
+                    return false;
+                }
+                submeshRead = true;
             } else {
                 outError = "unknown tail section (magic 0x" +
                            [&] {
@@ -428,7 +506,8 @@ bool loadNMesh(const char* path, NMeshData& out, std::string& outError) {
             outError = "version 2 file without lod meta section: " + std::string(path);
             return false;
         }
-        if (header.version == kNMeshVersionFallback && !metaRead && !fallbackRead) {
+        if (header.version == kNMeshVersionFallback && !metaRead && !fallbackRead &&
+            !submeshRead) {
             outError = "version 3 file without any tail section: " + std::string(path);
             return false;
         }

@@ -206,9 +206,19 @@ private:
 // 独立 ThreadPool（不走 Scheduler 单例——configure 冻结使一进程多配置不可行，
 // 验收需 N=1/N=4 同进程对拍；Scheduler 常驻底座仍是推荐生产入口，见 §11 文档）。
 struct JobRuntime {
-    std::unique_ptr<nl::core::jobs::ThreadPool>      pool;
+    // 【2026-11-10 崩溃修复】成员声明序 = 析构序的逆序，必须 pool 在 adapter
+    // 之后声明（析构时 pool 先死）：Jolt Job::Execute() 末尾就通知 barrier
+    // （JobSystem.h "Notify the barrier..."），而排队引用的 Release() 在池
+    // worker 闭包里 Execute 之后才跑 —— PhysicsSystem::Update 返回时可能仍有
+    // worker 卡在 Release() 前后；若 adapter（JobSystem 本体）先析构，最后
+    // 一条 Release() 减到 0 会对已析构对象虚调 FreeJob → 纯虚调用 → ucrtbase
+    // fail-fast 0xC0000409（本机实测 N=1 崩率 7% / N=4 27%，纳秒级窗口，
+    // 任何时序扰动都压得住的 Heisenbug）。pool 先析构 = join 全部 worker
+    // = 闭包全部跑完（含 FreeJob），adapter 才轮到析构，两种 last-ref 线程
+    // 次序都安全。
     std::unique_ptr<JPH::JobSystemSingleThreaded>    st;
     std::unique_ptr<PoolJobSystem>                   adapter;
+    std::unique_ptr<nl::core::jobs::ThreadPool>      pool;
     JPH::JobSystem*                                  sys = nullptr;
 };
 

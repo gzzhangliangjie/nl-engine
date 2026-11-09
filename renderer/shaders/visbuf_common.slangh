@@ -55,4 +55,26 @@ uint visIndex(uint2 pixel, uint width)
     return pixel.y * width + pixel.x;
 }
 
+// ============================================================================
+// M7.2（S7.2）：材质间接表 — SINGLE SOURCE OF TRUTH（S7-PLAN §4「查找函数集中
+// 一个头文件」，S9/S10/S13 复用）。CPU 侧布局见 renderer/src/scene.hpp 的
+// GPUMaterial（static_assert 锁 32B，漂移编译期就爆）。
+//
+// 归属链（D-M7.2-1 方案 A）：.nmesh NSUB 段记「子网格 → 簇区间」→ clusterMeta
+// 槽 3 = 子网格序号 = materialId → g_materialTable[materialId] → 贴图槽号。
+// 贴图槽号必须经 NonUniformResourceIndex 取（materialId 逐像素非一致；全屏
+// 三角形下相邻像素可属不同材质）。
+// ============================================================================
+
+// 与 scene.cpp 的上传数组逐字节对应：4 float + 2 float + 2 uint = 32B。
+struct GPUMaterial
+{
+    float4 baseColorFactor;   // glTF baseColorFactor（mode 5 用；mode 0 不乘因子）
+    float2 mrFactor;          // x = metallicFactor, y = roughnessFactor
+    uint   baseColorSlot;     // g_baseColorTex 下标
+    uint   mrSlot;            // g_mrTex 下标
+};
+
+static const uint kMaxVisMaterials = 4u;
+
 #endif // NL_VISBUF_COMMON_SLANGH

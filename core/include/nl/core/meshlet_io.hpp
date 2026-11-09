@@ -72,6 +72,21 @@ struct NMeshData {
     float fallbackMaxError = 0.f;          // 来源层 parent error（世界空间）
     std::vector<MeshVertex> fallbackVertices;   // weld 后无跨簇重复
     std::vector<std::uint32_t> fallbackIndices; // 3 × 三角数
+
+    // ---- M7.2：多子网格（可选，version 3 机制下的 'NSUB' 尾段）----
+    // D-M7.2-1 拍板（2026-11-10，方案 A）：材质归属构建期随簇记录——簇按子
+    // 网格序拼接，本段记每子网格的簇区间，材质 id = 子网格序号（renderer 建
+    // clusterMeta 时填槽 3）。各子网格独立走完 cluster（M1.1 语义）后拼接；
+    // simplify/lod/dag 链不消费多子网格文件（visbuf 光栅不吃 DAG）。
+    struct SubmeshRange {
+        std::uint32_t clusterFirst;   // 首簇号（全局簇 id）
+        std::uint32_t clusterCount;   // 簇数
+        bool operator==(const SubmeshRange& o) const {
+            return clusterFirst == o.clusterFirst && clusterCount == o.clusterCount;
+        }
+    };
+    bool submeshesPresent = false;
+    std::vector<SubmeshRange> submeshes;   // 单子网格文件不写此段（缺省单段）
 };
 
 // ---- 二进制格式（little-endian）----
@@ -87,9 +102,12 @@ struct NMeshData {
 //                     + NMeshDagGroupRecord[groupCount] 每个 32 B
 //                     + u32 clusterGroup[meshletCount]
 //   [version 3 only] 尾段按 magic 识别，顺序不敏感，至少一段（M3.1）：
-//     NMeshMetaHeader（可选，同上）或 NMeshFallbackHeader（可选）：
+//     NMeshMetaHeader（可选）或 NMeshFallbackHeader（可选）或
+//     NMeshSubmeshHeader（可选，M7.2 多子网格，簇按子网格序拼接）：
 //       NMeshFallbackHeader 24 B
 //       MeshVertex[vertexCount] + u32[indexCount]
+//       NMeshSubmeshHeader 16 B
+//       NMeshSubmeshRecord[submeshCount] 每个 8 B
 //
 // 全部紧密排列、无填充；字段布局用 static_assert 锁死，漂移编译期就爆。
 struct NMeshHeader {
@@ -145,6 +163,20 @@ struct NMeshFallbackHeader {
     float maxError;               // 来源层 parent error（世界空间）
 };
 
+// M7.2 多子网格尾段头（16 B，version 3 机制；材质归属随簇记录，D-M7.2-1 方案 A）。
+// payload = NMeshSubmeshRecord[submeshCount]，簇按子网格序拼接。
+struct NMeshSubmeshHeader {
+    std::uint32_t magic;          // 'N','S','U','B' → 0x4255534E (LE)
+    std::uint32_t payloadBytes;   // = submeshCount * sizeof(NMeshSubmeshRecord)
+    std::uint32_t submeshCount;
+    std::uint32_t reserved;       // 置 0
+};
+// 每子网格 8 B。约定：区间从 0 起连续无缝（拼接不变量），loadNMesh 强校验。
+struct NMeshSubmeshRecord {
+    std::uint32_t clusterFirst;
+    std::uint32_t clusterCount;
+};
+
 // ---- P9 / V4：分页友好页表尾段（DECIDED 2026-11-08，待 V1 落地）----
 // 设计：v4 = v3 + 强制 NPAG 页表尾段。meshlet 记录布局零改动（vertexOffset 等
 // 仍绝对指向共享 vertices/triangles 数组）；离线 page-builder 把顶点/索引重排成
@@ -184,6 +216,7 @@ inline constexpr std::uint16_t kNMeshMetaVersionDag = 2;  // 锁点 + DAG 血缘
 inline constexpr std::uint32_t kNMeshMagic = 0x48534D4Eu;     // "NMSH"
 inline constexpr std::uint32_t kNMeshLodMagic = 0x444F4C4Eu;  // "NLOD"
 inline constexpr std::uint32_t kNMeshFallbackMagic = 0x424C464Eu;  // "NFLB"
+inline constexpr std::uint32_t kNMeshSubmeshMagic = 0x4255534Eu;   // "NSUB"（M7.2 多子网格）
 inline constexpr std::uint32_t kNMeshPageMagic = 0x4741504Eu;     // "NPAG"（P9/V4，待落地）
 
 static_assert(sizeof(NMeshHeader) == 20, "NMeshHeader layout drift");
@@ -191,6 +224,8 @@ static_assert(sizeof(NMeshletRecord) == 52, "NMeshletRecord layout drift");
 static_assert(sizeof(NMeshMetaHeader) == 24, "NMeshMetaHeader layout drift");
 static_assert(sizeof(NMeshDagGroupRecord) == 32, "NMeshDagGroupRecord layout drift");
 static_assert(sizeof(NMeshFallbackHeader) == 24, "NMeshFallbackHeader layout drift");
+static_assert(sizeof(NMeshSubmeshHeader) == 16, "NMeshSubmeshHeader layout drift");
+static_assert(sizeof(NMeshSubmeshRecord) == 8, "NMeshSubmeshRecord layout drift");
 static_assert(sizeof(MeshVertex) == 32, "MeshVertex layout drift");
 static_assert(sizeof(NMeshPageTableHeader) == 24, "NMeshPageTableHeader layout drift");
 static_assert(sizeof(NMeshPageRecord) == 32, "NMeshPageRecord layout drift");

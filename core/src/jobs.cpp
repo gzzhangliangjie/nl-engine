@@ -5,6 +5,9 @@
 #include "nl/core/jobs.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <system_error>
+#include <thread>
 
 namespace nl::core {
 namespace jobs {
@@ -15,9 +18,29 @@ ThreadPool::ThreadPool(unsigned threadCount) {
     threadCount_ = n;
     impl_ = new Impl;
     impl_->workers.reserve(n);
+    // 【2026-11-10 崩溃加固】std::thread 创建在系统资源紧张时间窗会抛
+    // system_error（resource_unavailable_try_again / no thread resources），
+    // 原实现直接逃逸 → terminate → abort fail-fast（本机实测 phys selftest
+    // ~30% 启动即崩、零输出，WER 定位 ucrtbase fail-fast）。策略：每个
+    // worker 重试 5 次（瞬态资源不足通常自愈）；部分失败则收缩线程数继续
+    // —— 确定性契约与线程数无关（M-J5c N=1==serial、N=4 run-to-run 逐位
+    // 一致，M-E1b.5 并行==串行逐位），缩容只降吞吐不改结果；一个 worker
+    // 都没建出来才把异常抛给调用方定性。
+    unsigned spawned = 0;
     for (unsigned i = 0; i < n; ++i) {
-        impl_->workers.emplace_back([this] { workerLoop(); });
+        bool ok = false;
+        for (int attempt = 0; attempt < 5 && !ok; ++attempt) {
+            try {
+                impl_->workers.emplace_back([this] { workerLoop(); });
+                ok = true;
+            } catch (const std::system_error&) {
+                if (attempt == 4 && spawned == 0) throw;   // 0 worker：无解，上抛
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
+        if (ok) ++spawned;
     }
+    threadCount_ = spawned > 0 ? spawned : 1;
 }
 
 ThreadPool::~ThreadPool() {

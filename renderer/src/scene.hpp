@@ -53,6 +53,19 @@ struct LightConstants {
 };
 static_assert(sizeof(LightConstants) == 80, "cbuffer layout must match shader");
 
+// M7.2（S7.2）：vis buffer 材质间接表条目（shader 侧 GPUMaterial 同布局，见
+// visbuf_common.slangh——两处 static_assert 锁 32B，漂移编译期就爆）。
+// 归属链：.nmesh NSUB 段（子网格 → 簇区间）→ clusterMeta 槽 3 = materialId
+// → 本表条目 → 贴图槽号（shader NonUniformResourceIndex 选槽）。
+struct GPUMaterial {
+    float baseColorFactor[4];  // glTF baseColorFactor
+    float mrFactor[2];         // x = metallicFactor, y = roughnessFactor
+    std::uint32_t baseColorSlot;
+    std::uint32_t mrSlot;
+};
+static_assert(sizeof(GPUMaterial) == 32, "GPUMaterial must be 32B and match shader");
+inline constexpr std::uint32_t kMaxVisMaterials = 4;
+
 // M-E1b.4：与 model.slang 的 ShadowConstants cbuffer（b2，psScene 专用）逐字节对应。
 // 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）；params = enabled/bias/mapSize/未用。
 struct ShadowConstantsCB {
@@ -312,6 +325,21 @@ private:
     nvrhi::BindingSetHandle       bindingSet_;
     nvrhi::GraphicsPipelineHandle pipelineBack_, pipelineNone_;     // M0.4：solid × cull
     nvrhi::GraphicsPipelineHandle pipelineWireBack_, pipelineWireNone_; // M0.8：wireframe × cull
+    // M7.2：传统直画路径多材质对照组（D-M7.2-1）。每 prim 一套绑定（t0/t1 贴图
+    // + b1 因子独立），几何共享 VB/IB、按区间 drawIndexed(startIndex)。单 prim
+    // 资产 = 1 批，行为与 M0.4 逐字节一致；model.slang 因此零改动。
+    struct ModelPrimBatch {
+        nvrhi::BindingSetHandle set;
+        nvrhi::BufferHandle     lightConstants;   // 每 prim 因子独立的 b1 volatile CB
+        std::uint32_t           startIndex = 0;   // 共享 IB 内起始索引
+        std::uint32_t           indexCount = 0;
+        // M7.2：本批材质因子（glTF 提取，每帧随光照一起写进 b1——volatile CB
+        // 是全量覆写，因子不能只写一次）
+        float                   baseColorFactor[4] = {1.f, 1.f, 1.f, 1.f};
+        float                   metallicFactor = 1.0f;
+        float                   roughnessFactor = 1.0f;
+    };
+    std::vector<ModelPrimBatch> modelBatches_;
     std::uint32_t                 indexCount_ = 0;
     std::string                   modelName_;
     std::uint32_t                 triangleCount_ = 0;
@@ -339,6 +367,8 @@ private:
     bool                          frustumCull_ = false;   // --frustum off 时整条路径旁路
     std::uint32_t                 clusterCount_ = 0;      // 总簇数（static dispatch 用）
     std::uint32_t                 maxTriPerCluster_ = 0;  // M7.0：triId 8 位打包的断言依据
+    std::uint32_t                 nmeshSubmeshCount_ = 1; // M7.2：NSUB 段子网格数（无段=1），
+                                                          // visbuf 材质数对账用
     nvrhi::BufferHandle           clusterSpheres_;  // StructuredBuffer<float4>，世界空间球
     nvrhi::BufferHandle           visibleList_;     // StructuredBuffer<uint>，compute append / VS 读
     nvrhi::ShaderHandle           csCull_;
@@ -517,12 +547,18 @@ private:
     nvrhi::GraphicsPipelineHandle visRasterPSO_;
     nvrhi::GraphicsPipelineHandle visVizPSO_;
     // M7.1（S7.1）：材质反解 pass（pulling）。复用 vis 簇资源 + PBR 贴图。
+    // M7.2：贴图升级为每材质数组（baseColor t4..t7 / MR t8..t11）+ 材质间接表
+    // t12（GPUMaterial[kMaxVisMaterials]）；texture_/mrTexture_ 仍指材质 0 的
+    // 两张贴图（initCull 既有消费者语义不变）。
     bool                         pulling_ = false;                 // 是否启用材质反解
     nvrhi::ShaderHandle          vsMatResolve_, psMatResolve_;
     nvrhi::BufferHandle          matResolveConstants_;             // volatile CB 16B（b2）
-    nvrhi::BindingLayoutHandle   matResolveLayout_;                // b0+b1+b2+t0..t3+t4+t5+s0
+    nvrhi::BindingLayoutHandle   matResolveLayout_;                // b0+b1+b2+t0..t3+t4..t11+t12+s0
     nvrhi::BindingSetHandle      matResolveSet_;
     nvrhi::GraphicsPipelineHandle matResolvePSO_;
+    nvrhi::TextureHandle         matBaseColor_[kMaxVisMaterials];  // 材质 i 基色贴图
+    nvrhi::TextureHandle         matMR_[kMaxVisMaterials];         // 材质 i MR 贴图
+    nvrhi::BufferHandle          materialTable_;   // GPUMaterial SSBO（t12，stride 32）
     bool                         visbufFailed_ = false;  // 懒建失败只报一次
     bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                              std::string& outError);

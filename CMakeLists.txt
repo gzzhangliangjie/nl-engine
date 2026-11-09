@@ -309,15 +309,16 @@ set(_ENTRIES_DAG "csDag|cs|compute")
 # 与全屏可视化（解包 → 簇/三角颜色）。
 set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fragment"
                     "vsVisViz|vsvisviz|vertex" "psVisViz|psvisviz|fragment")
-# M7.1（S7）：material.slang 单全屏 pass——vis 反解 + 材质着色。无 u64 原子（只读
-# vis SRV），故不进 _SM66_ARTIFACTS 白名单，走默认 profile；与 visbuf.slang 同源
+# M7.1（S7）：material.slang 单全屏 pass——vis 反解 + 材质着色。与 visbuf.slang 同源
 # visbuf_common.slangh，故也吃 _SHADER_EXTRA_DEPS（见下方 STREQUAL 条件）。
+# M7.2：NonUniformResourceIndex 选槽（材质 id 逐像素非一致）进白名单 sm_6_6。
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
 set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
-                    "visbuf.vsvisviz" "visbuf.psvisviz")
+                    "visbuf.vsvisviz" "visbuf.psvisviz"
+                    "material.vsmatresolve" "material.psmatresolve")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"

@@ -4897,7 +4897,7 @@
             "{root}/example/audio-s1/bad-prov"
           ],
           "expectExit": 1,
-          "expectLog": "hash mismatch",
+          "expectLog": "attenuation.tsv mismatch after re-render from provenance",
           "command": "audio-tools check example/audio-s1/bad-prov"
         }
       ]
@@ -5719,10 +5719,97 @@
             "240"
           ],
           "expectExit": 2,
-          "expectLog": "invalid arguments: jobsThreads out of range",
+          "expectLog": "invalid arguments: bad --jobs",
           "command": "phys-tools simulate --jobs -1 --frames 240"
         }
       ]
     }
+  ,{
+ "id": "s7.2",
+ "label": "S7.2",
+ "name": "Visibility Buffer 多材质间接表（M7.2）",
+ "tag": "s7-done",
+ "date": "2026-11-10",
+ "summary": "M7.2（S7 收官里程碑）：多材质跑通材质间接表 + 传统路径对照组（D-M7.2-1 方案 A 拍板落地）。资产侧：.nmesh 尾段机制新增 'NSUB' 段（v3 只加不改纪律，v4 号留给 P9 NPAG）——子网格簇区间随簇记录，cluster -o 放开多子网格落盘（各 prim 独立切簇后拼接），clusterMeta 槽 3 从 pad 升级为 materialId=子网格序号（旧文件恒 0，cull/hiz/visbuf 光栅零扰动）；渲染侧 vis 路径：GPUMaterial[4] 间接表（因子 + 贴图槽号，SSBO t12）+ baseColor t4..t7 / MR t8..t11 固定槽贴图数组，shader 侧 NonUniformResourceIndex 选槽（materialId 逐像素非一致），material.* 产物进 sm_6_6 白名单；对照侧：传统直画路径 per-prim 批次化（共享 VB/IB 按 startIndex 区间 + 每 prim 独立 b1 因子/贴图绑定集，model.slang 零改动，单 prim 资产与 M0.4 逐字节同行为）；演示资产 Suzanne-materials（3 材质：抛光金属红 / 哑光绿 / 半金属蓝）。验收：A/B 轮廓差 0（42498 前景 px 对 42498 px）、99.991% 像素差 ≤2、maxDelta=4、均值偏移 0.0065（材质表错配会立刻炸 bias）——比 M7.1 的等价口径还干净一个量级；跨后端均为 near 档（各自对基线 bytes；PBR pow 舍入尾 maxDelta 10，pbr-direct scene/scale 同族先例）。",
+ "acceptance": [
+  "pulling 模式渲染三材质 Suzanne（红金属/绿哑光/蓝半金属），三只材质肉眼可辨且间接表逐材质正确（错配会换 tint/roughness）",
+  "与 --mode normal --shading 5 传统直画对照：轮廓差 0（42498 前景 px 对 42498 px）；99.991% 前景像素差 ≤2；maxDelta=4；均值偏移 0.0065（verify.py 逐像素核验，双后端同值）",
+  "四张基线复跑 MD5 全等；双后端跨互比 near（sil=0、>2px 各 1 px、maxDelta=10，PBR pow 舍入尾同 pbr-direct 先例口径）",
+  "nmesh selftest 10/10（新增 NSUB roundtrip + 非连续/不覆盖两条负向）；viewer selftest 16/16（stage 校验 S7.2）；deviceErrors=0",
+  "example/s7-done 归位（4 张基线 + run.bat + verify.py）+ cases.json + --check 退出 0；docs/screenshots/s7.png 证据图"
+ ],
+ "exe": {
+  "dx12": "build/DX12/viewer.exe",
+  "vulkan": "build/VULKAN/viewer.exe"
+ },
+ "cases": [
+  {
+   "id": "pulling",
+   "name": "vis buffer 多材质：间接表三材质（mode 5）",
+   "kind": "pair",
+   "note": "光栅 pass 写 u64 vis buffer，全屏材质 pass 解包后经 clusterMeta[3] 的 materialId 查 GPUMaterial 间接表，NonUniformResourceIndex 选贴图槽，Cook-Torrance 直射光。三材质=三子网格=.nmesh NSUB 段三个簇区间。",
+   "baselines": {
+    "dx12": "example/s7-done/materials-pulling-dx12.png",
+    "vulkan": "example/s7-done/materials-pulling-vulkan.png"
+   },
+   "args": [
+    "--mode",
+    "pulling",
+    "--model",
+    "Suzanne-materials.nmesh",
+    "--shading",
+    "5",
+    "--screenshot",
+    "{out}",
+    "--frames",
+    "8",
+    "--no-hud",
+    "--size",
+    "960x540",
+    "--yaw",
+    "12",
+    "--pitch",
+    "9",
+    "--dist",
+    "9"
+   ],
+   "command": "viewer.exe --mode pulling --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+   "script": "example/s7-done/run.bat pulling"
+  },
+  {
+   "id": "normal-reference",
+   "name": "对照组：传统直画 per-prim 批次（mode 5）",
+   "kind": "pair",
+   "note": "M0.4 传统路径多材质化：共享 VB/IB 按 startIndex 区间逐 prim 画，每 prim 独立绑定集（贴图+b1 因子），model.slang 零改动。verify.py 按各自背景色取前景掩码逐像素对拍：轮廓全等 + 颜色等价 = 材质间接表与 per-prim 绑定交付同一份材质。",
+   "baselines": {
+    "dx12": "example/s7-done/materials-normalref-dx12.png",
+    "vulkan": "example/s7-done/materials-normalref-vulkan.png"
+   },
+   "args": [
+    "--mode",
+    "normal",
+    "--model",
+    "Suzanne-materials.glb",
+    "--shading",
+    "5",
+    "--screenshot",
+    "{out}",
+    "--frames",
+    "8",
+    "--no-hud",
+    "--size",
+    "960x540",
+    "--yaw",
+    "12",
+    "--pitch",
+    "9",
+    "--dist",
+    "9"
+   ],
+   "command": "viewer.exe --mode normal --model Suzanne-materials.glb --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+   "script": "example/s7-done/run.bat reference"
+  }
+ ]
+}
   ]
 }

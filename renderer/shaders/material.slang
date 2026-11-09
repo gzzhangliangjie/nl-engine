@@ -14,14 +14,21 @@
 //
 // 资源寄存器（docs/SHADER-CONVENTIONS.md §2.7：每条管线单一 BindingSet）：
 //   b0 = SceneConstants (160B, 与 visbuf.slang/model.slang 同布局)
-//   b1 = LightConstants (80B, 仅 mode 5 用；复用 PBR-DIRECT-PLAN 的布局)
+//   b1 = LightConstants (80B, 仅 mode 5 用：光照 + 相机 + pbr-naive 开关；
+//        材质因子已迁材质表，b1 里的因子字段 mode 5 不再读)
 //   b2 = MatResolveConstants (16B): (width, height, _, _)
 //   t0 = vis buffer SRV（与 raster u0 同一块 u64 buffer 的 SRV 视角）
 //   t1..t3 = vertexPool / localIndices / clusterMeta（与 model.slang vsCull 同源）
-//   t4 = base color 贴图（RGBA8_UNORM，无 SRGB 视图，srgbToLinear 在 shader 内）
-//   t5 = metallicRoughness 贴图（RGBA8_UNORM，G=roughness B=metallic）
+//   t4..t7 = baseColor 贴图数组 [kMaxVisMaterials]（RGBA8_UNORM，srgbToLinear 在
+//            shader 内；材质 i 用 NonUniformResourceIndex 选槽）
+//   t8..t11 = metallicRoughness 贴图数组 [kMaxVisMaterials]（G=roughness B=metallic）
+//   t12 = 材质间接表（GPUMaterial[kMaxVisMaterials]，clusterMeta[3] 的 materialId
+//         直接寻址；查找逻辑集中 visbuf_common.slangh，S9/S10/S13 复用）
 //   s0 = sampler
 // SPIR-V 绑定平移：b→256, t→0, s→128, u→384（本 pass 无 UAV）；DX12 用各自 slot。
+//
+// M7.2 多材质：materialId = 簇的子网格序号（.nmesh NSUB 段约定，D-M7.2-1 方案 A），
+// 由 initCull 填进 clusterMeta 槽 3。三材质以上跑通间接表 = 本里程碑验收核心。
 //
 // 介质偏离：NVRHI 无 R64 格式，vis buffer 是 RWStructuredBuffer<uint64_t>（见
 // visbuf_common.slangh 与 docs/s5/UE-DIFFS.md D15）。
@@ -58,8 +65,9 @@ StructuredBuffer<uint64_t> g_visSRV          : register(t0);
 StructuredBuffer<float>    g_vertexPool      : register(t1);
 StructuredBuffer<uint>     g_localIndices    : register(t2);
 StructuredBuffer<uint>     g_clusterMeta     : register(t3);
-Texture2D<float4>          g_baseColor        : register(t4);
-Texture2D<float4>          g_metallicRoughness : register(t5);
+Texture2D<float4>          g_baseColorTex[kMaxVisMaterials] : register(t4);
+Texture2D<float4>          g_mrTex[kMaxVisMaterials]        : register(t8);
+StructuredBuffer<GPUMaterial> g_materialTable : register(t12);
 SamplerState               g_sampler          : register(s0);
 
 // ============================================================================
@@ -106,7 +114,8 @@ float V_SmithGGXCorrelated(float roughness, float NdotV, float NdotL)
     return 0.5f / (lambdaV + lambdaL);
 }
 
-float4 shadePbrGrad(float3 normal, float3 worldPos, float2 uv, float2 ddx_uv, float2 ddy_uv)
+float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
+                    float2 ddx_uv, float2 ddy_uv)
 {
     float3 n = normalize(normal);
     float3 v = normalize(g_cameraPos.xyz - worldPos);
@@ -117,12 +126,16 @@ float4 shadePbrGrad(float3 normal, float3 worldPos, float2 uv, float2 ddx_uv, fl
     float NdotH = saturate(dot(n, h));
     float VdotH = saturate(dot(v, h));
 
-    float4 baseTex = g_baseColor.SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
-    float3 baseColor = g_baseColorF.rgb *
+    // M7.2：贴图与因子全部走材质间接表；materialId 逐像素非一致，槽号必须
+    // NonUniformResourceIndex（贴图采样用解析导数，无硬件四边形导数依赖）。
+    float4 baseTex = g_baseColorTex[NonUniformResourceIndex(mat.baseColorSlot)]
+        .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
+    float3 baseColor = mat.baseColorFactor.rgb *
         (g_mrF.z >= 0.5f ? baseTex.rgb : srgbToLinear(baseTex.rgb));
-    float4 mrTex = g_metallicRoughness.SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
-    float roughness = clamp(mrTex.g * g_mrF.y, 0.045f, 1.0f);
-    float metallic  = saturate(mrTex.b * g_mrF.x);
+    float4 mrTex = g_mrTex[NonUniformResourceIndex(mat.mrSlot)]
+        .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
+    float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
+    float metallic  = saturate(mrTex.b * mat.mrFactor.x);
 
     float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float3 cDiff  = baseColor * (1.0f - metallic);
@@ -133,7 +146,7 @@ float4 shadePbrGrad(float3 normal, float3 worldPos, float2 uv, float2 ddx_uv, fl
     float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
     float3 specular = D * V * F;
     float3 ambient  = 0.03f * baseColor;
-    float alpha = g_baseColorF.a * baseTex.a;
+    float alpha = mat.baseColorFactor.a * baseTex.a;
     float3 encoded = pow(saturate((diffuse + specular) * radiance + ambient), 1.0f / 2.2f);
     return float4(encoded, alpha);
 }
@@ -155,12 +168,13 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
     float deviceZ;
     visUnpack(v, clusterId, triId, deviceZ);
 
-    // 簇元数据：[vertexBase, triCount, localBase, materialId]。materialId 槽（pad）
-    // 当前恒 0（单材质）；M7.2 多材质时改走材质间接表（bindless 数组，§2.7 单 set）。
+    // 簇元数据：[vertexBase, triCount, localBase, materialId]。M7.2：槽 3 =
+    // 子网格序号（.nmesh NSUB 段约定，initCull 填充），即材质间接表下标。
     const uint metaBase   = clusterId * 4u;
     const uint vertexBase = g_clusterMeta[metaBase + 0u];
     const uint localBase  = g_clusterMeta[metaBase + 2u];
     const uint materialId = g_clusterMeta[metaBase + 3u];
+    const GPUMaterial mat = g_materialTable[materialId];
 
     // vertex pulling：拉三顶点（8 float/顶点：pos/normal/uv）。
     float3 pos[3], nrm[3];
@@ -237,12 +251,13 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
         return float4(uvF, 0.0f, 1.0f);
     }
     if (mode == 5u) {                       // PBR 直光（复刻 model.slang::shadePbr）
-        return shadePbrGrad(normal, worldPos, uvF, duv_dx, duv_dy);
+        return shadePbrGrad(mat, normal, worldPos, uvF, duv_dx, duv_dy);
     }
 
     // mode 0：文本化（复刻 model.slang::shade 的 mode 0，与 M0.4 传统画法等价）。
-    // 注释：materialId 在 M7.1 恒 0，此处不分支；M7.2 多材质时按 materialId 走间接表。
-    float4 base = g_baseColor.SampleGrad(g_sampler, uvF, duv_dx, duv_dy);
+    // M7.2：贴图按材质槽选（因子不参与——model.slang mode 0 也不乘因子）。
+    float4 base = g_baseColorTex[NonUniformResourceIndex(mat.baseColorSlot)]
+        .SampleGrad(g_sampler, uvF, duv_dx, duv_dy);
     float3 n = normalize(normal);
     float ndl = abs(dot(n, normalize(g_lightDir.xyz)));
     float3 albedo = base.rgb * 2.2f;

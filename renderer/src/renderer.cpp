@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S7.1 visibility buffer material resolve (vertex pulling)";
+    "S7.2 visibility buffer multi-material indirect table";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。

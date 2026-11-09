@@ -178,6 +178,15 @@
 | 定性 | **有意简化 + 口径补强**：miniaudio 只提供 4 种模型（无 UE 的 NaturalSound/Custom/shape/LPF），属引擎能力边界不可改；但「超距静音」是听感正确性而非引擎特性，由 `nl/audio` 显式补上，避免远处声源残留极小底噪。6 种 UE 模型与 shape/LPF 不在本轮范围。 |
 | 升级路径 | M-S2 游戏内调试若需可视化衰减半径、或 M-S3 场景集成需按 UE `MaxDistance` 语义做剔除/LOD 式静音，本处已是统一入口；如需 NaturalSound/Custom 曲线，届时在 `nl/audio` 薄层内按 4 种 model 的扩展点接入，不碰 miniaudio 内部。 |
 | 触发条件 | 验收**不得**按 UE 终态 6 模型对标 M-S1；若发现超距声源残留底噪或衰减曲线形状与 UE 某模型不一致且影响听感，回到本处补强。 |
+### D18 材质归属编码：UE 簇内 MaterialTableOffset/Length vs 我们 NSUB 子网格序号（M7.2 建档，2026-11-10；等价实现——同一结论的不同编码）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 材质归属**构建期随簇记录**：每个 meshlet cluster 头带 `MaterialTableOffset` / `MaterialTableLength`（`NaniteDataDecode.ush:116-117`，渲染期 `NaniteShading` 用 `DecodeClusters` 解出后按像素 triId 落到 MaterialTable 区间查材质实例）。核心结论：**材质归属不能渲染期猜**，必须构建期可得。 |
+| 我们现状（M7.2） | 同一结论的更轻编码：`.nmesh` 'NSUB' 尾段（v3 只加不改）按**子网格**存簇区间（clusterFirst/clusterCount 8B/项），加载期展开成逐簇 materialId 数组填进 `clusterMeta[3]`，渲染期一次查表。材质 id = 子网格序号（每子网格一个材质，与本引擎「一个 prim 一个材质」的资产口径对齐）。UE 的 MaterialTableOffset/Length 支持簇内多材质段（更细粒度），我们单材质/子网格即可覆盖 S7~S13 需求。 |
+| 定性 | **等价实现**（编码粒度差异，核心结论逐字对齐：构建期随簇记录）。无 NSUB 的旧文件恒 materialId=0，cull/hiz/visbuf 光栅零扰动。 |
+| 升级路径 | 若未来需要「一个子网格多材质」（per-tri 材质段），再向 UE 的簇内 Offset/Length 编码迁移——NSUB 段按 magic 识别可加段不改旧段（v3 尾段纪律），`kMaxVisMaterials=4` 上限同步扩。 |
+| 触发条件 | S9/S10/S13 复用材质间接表时若出现 per-tri 材质需求，回本处评估编码升级；否则维持子网格粒度。 |
 
 
 ## 计划内待办（非偏差，挂账防丢）
@@ -191,4 +200,4 @@
 - **误差链权威源**：全链（S3 构建 → S5 投影）统一 zeux 口径，bevy 只是载体；与 D1 呼应。
 
 ---
-*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准；2026-11-09 S15/S16 只读预研二次确认后新增 D11（VSM 逆序渐进 / 「只读 GBuffer」底线修订）与 D12（TSR jitter 与离屏 post-chain 共享前置 / 卷积上采样核对齐 UE-bevy），开工前不再重复调研；2026-11-09 M-P2 收口修复编号撞号（M-P1 碰撞过滤条目原误编 D12，与 S16 TSR 的 D12 重号，改为 D13 并同步四处引用），新增 D13（碰撞过滤三态 vs bool 矩阵）与 D14（休眠岛口径）；2026-11-09 M7.0 收口新增 D15（vis buffer 载体 R64_UINT image atomic → u64 buffer atomic，含 buffer/image 能力位差异与升级触发条件）；2026-11-09 M7.1 收口新增 D16（bevy ddy 翻转不带过来——NVRHI SV_Position 已是 y-down 像素系 + 全屏 pass 必须 SampleGrad 的关联坑）；2026-11-09 P8 M-S1（feat/audio merge 回 master）建档 D17（音频距离衰减超 maxDistance 不自动静音，miniaudio 4 模型 vs UE 6 模型 + `IsInAudibleRange` 由 `nl/audio` 补剔除；feat/audio 分支上原编 D16 与 M7.1 的 D16 撞号，合并时改为 D17）。*
+*维护记录：2026-11-08 建（M5.0 收口），D1~D7 来自 S0~S5.0 实读 UE/bevy/Carrot 代码的对照结论；2026-11-08 M5.1 收口增补 D3a（遍历结构差异）；2026-11-09 M6.1 收口更新 D6（Hi-Z 遮蔽已实现，单 dispatch + 上帧 HZB 的结构差异留痕）与 D3a（second pass 交汇拍板记录）；2026-11-09 D6 补「已知偏差」行（度量空间径向距离 vs UE 设备深度 + max/min 等价换算说明，用户要求差异必须落档）；2026-11-09 M6.2 收口 D6 补开关实现差异（UE 编译期 permutation+CVar vs 我们 CB 运行时分支）与统计口径对齐说明（实读 NaniteCullRaster.cpp:250-262 r.Nanite.Culling.HZB/Frustum、NaniteDefinitions.h:517 FNaniteStats、bevy bindings.wesl:143-152 atomic counters、Carrot 无 Hi-Z 模块无对照）；出处行号以 2026-11-08~09 实读版本为准；2026-11-09 S15/S16 只读预研二次确认后新增 D11（VSM 逆序渐进 / 「只读 GBuffer」底线修订）与 D12（TSR jitter 与离屏 post-chain 共享前置 / 卷积上采样核对齐 UE-bevy），开工前不再重复调研；2026-11-09 M-P2 收口修复编号撞号（M-P1 碰撞过滤条目原误编 D12，与 S16 TSR 的 D12 重号，改为 D13 并同步四处引用），新增 D13（碰撞过滤三态 vs bool 矩阵）与 D14（休眠岛口径）；2026-11-09 M7.0 收口新增 D15（vis buffer 载体 R64_UINT image atomic → u64 buffer atomic，含 buffer/image 能力位差异与升级触发条件）；2026-11-09 M7.1 收口新增 D16（bevy ddy 翻转不带过来——NVRHI SV_Position 已是 y-down 像素系 + 全屏 pass 必须 SampleGrad 的关联坑）；2026-11-09 P8 M-S1（feat/audio merge 回 master）建档 D17（音频距离衰减超 maxDistance 不自动静音，miniaudio 4 模型 vs UE 6 模型 + `IsInAudibleRange` 由 `nl/audio` 补剔除；feat/audio 分支上原编 D16 与 M7.1 的 D16 撞号，合并时改为 D17）；2026-11-10 M7.2 收口（S7 收官）新增 D18（材质归属编码：UE 簇内 MaterialTableOffset/Length vs 我们 NSUB 子网格序号——「构建期随簇记录」结论逐字对齐，编码粒度等价实现）。*

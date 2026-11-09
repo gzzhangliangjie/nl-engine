@@ -1135,15 +1135,24 @@ bool jobsMatrix(int threads, int frames, std::string* report) {
     bool all = true;
     auto line = [report](const std::string& s) { if (report) *report += s + "\n"; };
 
+
     nl::physics::World world;
     nl::physics::DropConfig d;
     d.frames = frames;
+
     nl::physics::SimResult rST  = world.simulateDrop(d);
+
     d.jobsThreads = 1;
+
     nl::physics::SimResult rN1  = world.simulateDrop(d);
+
     d.jobsThreads = threads;
+
     nl::physics::SimResult rPa  = world.simulateDrop(d);
+
+
     nl::physics::SimResult rPb  = world.simulateDrop(d);
+
     if (!rST.ok() || !rN1.ok() || !rPa.ok() || !rPb.ok()) {
         line("drop sim failed: " + (rST.ok() ? (rN1.ok() ? (rPa.ok() ? rPb.error : rPa.error) : rN1.error) : rST.error));
         return false;
@@ -1165,6 +1174,7 @@ bool jobsMatrix(int threads, int frames, std::string* report) {
     nl::physics::StackConfig s;
     s.frames = frames < 600 ? 600 : frames;
     std::vector<nl::physics::StackResult> rsST, rsN1, rsP1, rsP2;
+
     for (int i = 0; i < kStackCaseCount; ++i) {
         s.jobsThreads = 0;
         rsST.push_back(runStackCase(kStackCases[i], s));
@@ -1193,6 +1203,7 @@ bool jobsMatrix(int threads, int frames, std::string* report) {
     else { line("stack N=" + std::to_string(threads) + " run-to-run: MISMATCH"); all = false; }
     line(stC1 == stA ? "stack parallel vs serial: IDENTICAL (island-parallel determinism)"
                      : "stack parallel vs serial: differs (informational, recorded)");
+
     return all;
 }
 
@@ -1524,7 +1535,21 @@ int runSelftest() {
     // M-J5c：JobSystem 适配器两层矩阵（N=1 逐位硬证明 + N=4 run-to-run）。
     {
         std::string report;
-        expectTrue(jobsMatrix(4, 120, &report),
+        // 【2026-11-10 崩溃加固】ThreadPool worker 的 std::thread 创建在系统
+        // 资源紧张时间窗会抛 system_error（本机实测 ~30% 启动崩、WER 定位
+        // ucrtbase fail-fast 0xC0000409、无缓冲定位崩在 jobsMatrix 首个
+        // spawn——M-P4 determinism 行后零输出即死）。未捕获异常 = terminate =
+        // abort fail-fast，整条 selftest 无声消失。这里转成显式 FAIL 行，
+        // 崩溃率归零；确定性契约不受影响（逐位性与线程数无关，M-J5c/M-E1b.5）。
+        bool j5c = false;
+        try {
+            j5c = jobsMatrix(4, 120, &report);
+        } catch (const std::exception& e) {
+            report += std::string("M-J5c aborted by exception: ") + e.what() + "\n";
+        } catch (...) {
+            report += "M-J5c aborted by unknown exception\n";
+        }
+        expectTrue(j5c,
                    "M-J5c adapter N=1 bit-identical + N=4 run-to-run deterministic");
         if (g_verbose) std::fputs(report.c_str(), stdout);
     }

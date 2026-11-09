@@ -60,31 +60,55 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     if (meshData.meshes.empty()) {
         outError = modelFile + std::string(" has no mesh primitive"); return false;
     }
-    const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
-    if (!prim.hasBaseColor) {
+    // M7.2：多材质对照组（D-M7.2-1）。所有 primitive 拼进共享 VB/IB，每 prim
+    // 一套绑定（t0/t1 贴图 + b1 因子）按区间 drawIndexed。单 prim 资产 = 1 批，
+    // 行为与 M0.4 逐字节一致（同一份顶点/索引/贴图/b1 内容，model.slang 零改动）。
+    for (const auto& prim : meshData.meshes) {
+        if (prim.indices.empty()) {
+            outError = modelFile + std::string(" has a primitive with no indices");
+            return false;
+        }
+    }
+    const nl::core::PrimitiveMesh& prim0 = meshData.meshes[0];
+    if (!prim0.hasBaseColor) {
         outError = modelFile + std::string(" has no base color texture"); return false;
     }
-    const size_t vertexCount = prim.vertices.size();
-    if (prim.indices.empty()) {
-        outError = modelFile + std::string(" first primitive has no indices"); return false;
+    size_t vertexCount = 0;
+    std::uint32_t totalIndexCount = 0;
+    for (const auto& p : meshData.meshes) {
+        vertexCount += p.vertices.size();
+        totalIndexCount += static_cast<std::uint32_t>(p.indices.size());
     }
-    const std::vector<std::uint32_t>& indices = prim.indices;
-
-    std::vector<SceneVertex> vertices(vertexCount);
-    for (size_t i = 0; i < vertexCount; ++i) {
-        const auto& mv = prim.vertices[i];
-        vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
-                        mv.normal[0], mv.normal[1], mv.normal[2],
-                        mv.uv[0], mv.uv[1] };
+    std::vector<SceneVertex> vertices;
+    vertices.reserve(vertexCount);
+    std::vector<std::uint32_t> indexAccum;
+    indexAccum.reserve(totalIndexCount);
+    struct PrimSpan { std::uint32_t firstIndex; std::uint32_t indexCount; };
+    std::vector<PrimSpan> primSpans;
+    primSpans.reserve(meshData.meshes.size());
+    for (const auto& p : meshData.meshes) {
+        const std::uint32_t base = static_cast<std::uint32_t>(vertices.size());
+        for (const auto& mv : p.vertices) {
+            vertices.push_back({ mv.pos[0], mv.pos[1], mv.pos[2],
+                                 mv.normal[0], mv.normal[1], mv.normal[2],
+                                 mv.uv[0], mv.uv[1] });
+        }
+        // prim 索引是子网格局部的 → 拼接后统一加顶点基址
+        const std::uint32_t firstIndex = primSpans.empty()
+            ? 0u : primSpans.back().firstIndex + primSpans.back().indexCount;
+        for (std::uint32_t idx : p.indices)
+            indexAccum.push_back(idx + base);
+        primSpans.push_back({firstIndex,
+                             static_cast<std::uint32_t>(p.indices.size())});
     }
-    indexCount_ = static_cast<std::uint32_t>(indices.size());
-    const auto texWidth = prim.texWidth;
-    const auto texHeight = prim.texHeight;
+    const std::vector<std::uint32_t>& indices = indexAccum;
+    indexCount_ = totalIndexCount;
+    const auto texWidth = prim0.texWidth;
+    const auto texHeight = prim0.texHeight;
 
     // ---- 3. 建 GPU 资源（debug 名带模型名，RenderDoc / validation 里分得清）----
     const std::string vbName = std::string(modelFile) + "VB";
     const std::string ibName = std::string(modelFile) + "IB";
-    const std::string texName = std::string(modelFile) + "BaseColor";
     nvrhi::BufferDesc vbDesc;
     vbDesc.byteSize = vertices.size() * sizeof(SceneVertex);
     vbDesc.isVertexBuffer = true;
@@ -110,80 +134,113 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
 
-    nvrhi::TextureDesc texDesc;
-    texDesc.width = texWidth;
-    texDesc.height = texHeight;
-    texDesc.format = nvrhi::Format::RGBA8_UNORM;
-    texDesc.debugName = texName.c_str();
-    texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-    texDesc.keepInitialState = true;
-    texture_ = device->createTexture(texDesc);
-    if (!texture_) { outError = "createTexture failed for base color texture"; return false; }
-
-    // pbr-direct：metallicRoughness 贴图（t1）。RGBA8_UNORM——MR 是线性数据
-    // （G=roughness B=metallic，glTF 2.0 spec §3.9.3），千万别学 baseColor 上
-    // SRGB 视图格式。无 MR 贴图的材质退 1x1 dummy（roughness=1, metallic=0）。
-    pbrBaseColorFactor_[0] = prim.baseColorFactor[0];
-    pbrBaseColorFactor_[1] = prim.baseColorFactor[1];
-    pbrBaseColorFactor_[2] = prim.baseColorFactor[2];
-    pbrBaseColorFactor_[3] = prim.baseColorFactor[3];
-    pbrMetallicFactor_  = prim.metallicFactor;
-    pbrRoughnessFactor_ = prim.roughnessFactor;
-    {
-        nvrhi::TextureDesc mrDesc;
-        mrDesc.format = nvrhi::Format::RGBA8_UNORM;
-        mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-        mrDesc.keepInitialState = true;
-        if (prim.hasMR) {
-            mrDesc.width = prim.mrWidth;
-            mrDesc.height = prim.mrHeight;
-        } else {
-            mrDesc.width = 1;
-            mrDesc.height = 1;
-        }
-        const std::string mrName = std::string(modelFile) + "MetallicRoughness";
-        mrDesc.debugName = mrName.c_str();
-        mrTexture_ = device->createTexture(mrDesc);
-        if (!mrTexture_) { outError = "createTexture failed for metallicRoughness texture"; return false; }
-    }
-
+    // M7.2：每 prim 一套贴图 + 因子 + 绑定集（共享 layout/sampler/constants_），
+    // 几何共享 VB/IB 按 drawIndexed(startIndex) 分区间画。缺贴图的 prim 用
+    // 1x1 dummy（白基色 / roughness=1 metallic=0），与 initCull 的占位语义一致。
     nvrhi::SamplerDesc samplerDesc;
     samplerDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
     sampler_ = device->createSampler(samplerDesc);
     if (!sampler_) { outError = "createSampler failed"; return false; }
+    modelBatches_.clear();
+    nvrhi::TextureHandle prim0BaseColor, prim0MR;
+    std::vector<nvrhi::TextureHandle> bcHandles, mrHandles;
+    for (size_t pi = 0; pi < meshData.meshes.size(); ++pi) {
+        const nl::core::PrimitiveMesh& prim = meshData.meshes[pi];
+        const std::string suffix = std::to_string(pi);
+        nvrhi::TextureHandle bcHandle;
+        {
+            nvrhi::TextureDesc bcDesc;
+            if (prim.hasBaseColor) {
+                bcDesc.width = prim.texWidth;
+                bcDesc.height = prim.texHeight;
+            } else {
+                bcDesc.width = 1;
+                bcDesc.height = 1;
+            }
+            bcDesc.format = nvrhi::Format::RGBA8_UNORM;
+            bcDesc.debugName = (std::string(modelFile) + "BaseColor" + suffix).c_str();
+            bcDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            bcDesc.keepInitialState = true;
+            bcHandle = device->createTexture(bcDesc);
+            if (!bcHandle) { outError = "createTexture failed for base color " + suffix; return false; }
+        }
+        // pbr-direct：metallicRoughness 贴图（t1）。RGBA8_UNORM——MR 是线性数据
+        // （G=roughness B=metallic，glTF 2.0 spec §3.9.3），千万别学 baseColor 上
+        // SRGB 视图格式。无 MR 贴图的材质退 1x1 dummy（roughness=1, metallic=0）。
+        nvrhi::TextureHandle mrHandle;
+        {
+            nvrhi::TextureDesc mrDesc;
+            mrDesc.format = nvrhi::Format::RGBA8_UNORM;
+            mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            mrDesc.keepInitialState = true;
+            if (prim.hasMR) {
+                mrDesc.width = prim.mrWidth;
+                mrDesc.height = prim.mrHeight;
+            } else {
+                mrDesc.width = 1;
+                mrDesc.height = 1;
+            }
+            mrDesc.debugName = (std::string(modelFile) + "MetallicRoughness" + suffix).c_str();
+            mrHandle = device->createTexture(mrDesc);
+            if (!mrHandle) { outError = "createTexture failed for metallicRoughness " + suffix; return false; }
+        }
+        // 每 prim 独立 b1（因子不同；光照/相机每帧同值写入各批）。
+        nvrhi::BufferHandle lcBuf;
+        {
+            nvrhi::BufferDesc lcDesc;
+            lcDesc.byteSize = sizeof(LightConstants);
+            lcDesc.isConstantBuffer = true;
+            lcDesc.isVolatile = true;
+            lcDesc.maxVersions = 16;
+            lcDesc.debugName = ("LightConstants" + suffix).c_str();
+            lcBuf = device->createBuffer(lcDesc);
+            if (!lcBuf) { outError = "createBuffer failed for light constants " + suffix; return false; }
+        }
 
-    // 布局槽位与 model.slang 的 register(b0/t0/t1/s0/b0/b1) 一致；
-    // Vulkan 侧由 NVRHI 默认 VulkanBindingOffsets 映射为 CB=256 / SRV=0 / Sampler=128，
-    // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。b1 = LightConstants
-    //（slot 1，pbr-direct 新开；SceneConstants 160 B 老规矩不动）。
-    nvrhi::BindingLayoutDesc layoutDesc;
-    layoutDesc.setVisibility(nvrhi::ShaderType::All)
-        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
-        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
-        .addItem(nvrhi::BindingLayoutItem::Sampler(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
-        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
-    bindingLayout_ = device->createBindingLayout(layoutDesc);
-    if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
-
-    nvrhi::BindingSetDesc setDesc;
-    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture_))
-           .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrTexture_))
-           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
-           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
-    if (!lightConstants_) {
-        nvrhi::BufferDesc lcDesc;
-        lcDesc.byteSize = sizeof(LightConstants);
-        lcDesc.isConstantBuffer = true;
-        lcDesc.isVolatile = true;
-        lcDesc.maxVersions = 16;
-        lcDesc.debugName = "LightConstants";
-        lightConstants_ = device->createBuffer(lcDesc);
-        if (!lightConstants_) { outError = "createBuffer failed for light constants"; return false; }
+        // 布局槽位与 model.slang 的 register(b0/t0/t1/s0/b0/b1) 一致；
+        // Vulkan 侧由 NVRHI 默认 VulkanBindingOffsets 映射为 CB=256 / SRV=0 / Sampler=128，
+        // 与 slangc 的 -fvk-b-shift 256 -fvk-s-shift 128 严格对应。b1 = LightConstants
+        //（slot 1，pbr-direct 新开；SceneConstants 160 B 老规矩不动）。
+        if (!bindingLayout_) {
+            nvrhi::BindingLayoutDesc layoutDesc;
+            layoutDesc.setVisibility(nvrhi::ShaderType::All)
+                .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+                .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+                .addItem(nvrhi::BindingLayoutItem::Sampler(0))
+                .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+                .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
+            bindingLayout_ = device->createBindingLayout(layoutDesc);
+            if (!bindingLayout_) { outError = "createBindingLayout failed"; return false; }
+        }
+        nvrhi::BindingSetDesc setDesc;
+        setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, bcHandle))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(1, mrHandle))
+               .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_))
+               .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+               .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lcBuf));
+        ModelPrimBatch batch;
+        batch.set = device->createBindingSet(setDesc, bindingLayout_);
+        if (!batch.set) { outError = "createBindingSet failed for prim " + suffix; return false; }
+        batch.lightConstants = lcBuf;
+        batch.startIndex = primSpans[pi].firstIndex;
+        batch.indexCount = primSpans[pi].indexCount;
+        std::memcpy(batch.baseColorFactor, prim.baseColorFactor,
+                    sizeof(batch.baseColorFactor));
+        batch.metallicFactor = prim.metallicFactor;
+        batch.roughnessFactor = prim.roughnessFactor;
+        modelBatches_.push_back(batch);
+        bcHandles.push_back(bcHandle);
+        mrHandles.push_back(mrHandle);
+        if (pi == 0) { prim0BaseColor = bcHandle; prim0MR = mrHandle; }
     }
-    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_));
-    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
-    if (!bindingSet_) { outError = "createBindingSet failed"; return false; }
+    // 老 fields 指向 prim 0（既有消费者/日志语义不变）。
+    texture_ = prim0BaseColor;
+    mrTexture_ = prim0MR;
+    lightConstants_ = modelBatches_[0].lightConstants;
+    bindingSet_ = modelBatches_[0].set;
+    std::memcpy(pbrBaseColorFactor_, prim0.baseColorFactor, sizeof(pbrBaseColorFactor_));
+    pbrMetallicFactor_  = prim0.metallicFactor;
+    pbrRoughnessFactor_ = prim0.roughnessFactor;
 
     nvrhi::VertexAttributeDesc attrs[3] = {
         nvrhi::VertexAttributeDesc().setName("POSITION")
@@ -212,15 +269,24 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->beginTrackingBufferState(indexBuffer_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(indexBuffer_, indices.data(), indices.size() * sizeof(std::uint32_t));
     upload->setPermanentBufferState(indexBuffer_, nvrhi::ResourceStates::IndexBuffer);
-    upload->writeTexture(texture_, 0, 0, prim.baseColorRGBA.data(),
-                         static_cast<size_t>(texWidth) * 4u);
-    // pbr-direct：MR 贴图同一命令列表上传（线性数据，无 gamma 语义）。
-    if (prim.hasMR) {
-        upload->writeTexture(mrTexture_, 0, 0, prim.metallicRoughnessRGBA.data(),
-                             static_cast<size_t>(prim.mrWidth) * 4u);
-    } else {
-        const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
-        upload->writeTexture(mrTexture_, 0, 0, dummyMR, 4u);
+    // pbr-direct：MR 贴图同一命令列表上传（线性数据，无 gamma 语义）；M7.2
+    // 起 per-prim 贴图逐套上传（句柄由创建循环的 bcHandles/mrHandles 给出）。
+    for (size_t pi = 0; pi < meshData.meshes.size(); ++pi) {
+        const nl::core::PrimitiveMesh& prim = meshData.meshes[pi];
+        if (prim.hasBaseColor) {
+            upload->writeTexture(bcHandles[pi], 0, 0, prim.baseColorRGBA.data(),
+                                 static_cast<size_t>(prim.texWidth) * 4u);
+        } else {
+            const std::uint8_t white[4] = {255u, 255u, 255u, 255u};
+            upload->writeTexture(bcHandles[pi], 0, 0, white, 4u);
+        }
+        if (prim.hasMR) {
+            upload->writeTexture(mrHandles[pi], 0, 0, prim.metallicRoughnessRGBA.data(),
+                                 static_cast<size_t>(prim.mrWidth) * 4u);
+        } else {
+            const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
+            upload->writeTexture(mrHandles[pi], 0, 0, dummyMR, 4u);
+        }
     }
     upload->close();
     device->executeCommandList(upload);
@@ -231,8 +297,8 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
 
     nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
                         " triangles=", triangleCount_, " indices=", indexCount_,
+                        " | prims=", meshData.meshes.size(),
                         " | baseColor ", texWidth, "x", texHeight,
-                        " | mr ", (prim.hasMR ? "tex" : "dummy"),
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -398,8 +464,22 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     }
 
     // localIndices：每簇 3×triCount 个局部索引（范围 [0,vertexCount)），随簇连续铺。
-    // clusterMeta：每簇 4 个 uint = [vertexBase, triCount, localBase, pad]。
+    // clusterMeta：每簇 4 个 uint = [vertexBase, triCount, localBase, materialId]。
+    // M7.2：槽 3 从 pad 升级为 materialId = 子网格序号（.nmesh NSUB 段约定，
+    // D-M7.2-1 方案 A：归属构建期随簇记录）。单子网格文件无 NSUB 段恒 0，
+    // cull/hiz/visbuf 光栅不读此槽（visbuf.slang 只读 0..2），老资产渲染零扰动。
+    // M7.2：槽 3 从 pad 升级为 materialId = 子网格序号（.nmesh NSUB 段约定，
+    // D-M7.2-1 方案 A：归属构建期随簇记录）。单子网格文件无 NSUB 段恒 0，
+    // cull/hiz/visbuf 光栅不读此槽（visbuf.slang 只读 0..2），老资产渲染零扰动。
     const std::uint32_t clusterCount = static_cast<std::uint32_t>(nm.meshlets.size());
+    std::vector<std::uint32_t> clusterMaterialId(clusterCount, 0);
+    if (nm.submeshesPresent) {
+        for (std::size_t s = 0; s < nm.submeshes.size(); ++s) {
+            const auto& r = nm.submeshes[s];
+            for (std::uint32_t c = 0; c < r.clusterCount; ++c)
+                clusterMaterialId[r.clusterFirst + c] = static_cast<std::uint32_t>(s);
+        }
+    }
     clusterCount_ = clusterCount;
     std::uint32_t maxTriCount = 0;
     std::vector<std::uint32_t> localIndices;
@@ -420,10 +500,13 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         clusterMeta.push_back(meshlet.vertexOffset);    // vertexBase
         clusterMeta.push_back(meshlet.triangleCount);  // triCount
         clusterMeta.push_back(localBase);               // localIndexBase
-        clusterMeta.push_back(0);                      // pad
+        clusterMeta.push_back(clusterMaterialId[m]);   // materialId（M7.2；老文件恒 0）
     }
     const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
     maxTriPerCluster_ = maxTriCount;                    // M7.0：visbuf triId 8 位断言
+    nmeshSubmeshCount_ = nm.submeshesPresent             // M7.2：visbuf 材质数对账
+                             ? static_cast<std::uint32_t>(nm.submeshes.size())
+                             : 1u;
 
     // M4.1：簇包围球（世界空间 center.xyz + radius.w，M1.0 Ritter 近似产物）。
     // 剔除开启时才需要；nm.bounds 与 nm.meshlets 一一对应。
@@ -1497,45 +1580,121 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         if (meshData.meshes.empty()) {
             outError = glb + std::string(" has no mesh primitive"); return false;
         }
-        const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
-        if (!prim.hasBaseColor) {
-            outError = glb + std::string(" has no base color texture"); return false;
+
+        // ---- M7.2：多材质间接表（D-M7.2-1 方案 A）。每个 primitive 一个材质，
+        // 数量与 .nmesh NSUB 段对账（错配 = 资产配对坏了，宁可显式失败也不静默
+        // 错材质）。材质 i：基色 t4+i、MR t8+i、因子进 GPUMaterial[i]。
+        const std::size_t materialCount = meshData.meshes.size();
+        if (materialCount > kMaxVisMaterials) {
+            outError = glb + std::string(" has ") + std::to_string(materialCount) +
+                       " materials, visbuf material path allows " +
+                       std::to_string(kMaxVisMaterials);
+            return false;
+        }
+        if (materialCount != nmeshSubmeshCount_) {
+            outError = glb + std::string(" has ") + std::to_string(materialCount) +
+                       " materials but " + std::string(nmeshFile) + " has " +
+                       std::to_string(nmeshSubmeshCount_) +
+                       " submeshes (.nmesh/glb pairing broken)";
+            return false;
         }
 
-        // 替换 initCull 的 1x1 白占位为真实基色贴图（RGBA8_UNORM，无 SRGB 视图）。
-        const std::string texName = glb + "BaseColor";
-        nvrhi::TextureDesc texDesc;
-        texDesc.width = prim.texWidth;
-        texDesc.height = prim.texHeight;
-        texDesc.format = nvrhi::Format::RGBA8_UNORM;
-        texDesc.debugName = texName.c_str();
-        texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-        texDesc.keepInitialState = true;
-        texture_ = device->createTexture(texDesc);
-        if (!texture_) { outError = "createTexture failed for material base color"; return false; }
-
-        pbrBaseColorFactor_[0] = prim.baseColorFactor[0];
-        pbrBaseColorFactor_[1] = prim.baseColorFactor[1];
-        pbrBaseColorFactor_[2] = prim.baseColorFactor[2];
-        pbrBaseColorFactor_[3] = prim.baseColorFactor[3];
-        pbrMetallicFactor_  = prim.metallicFactor;
-        pbrRoughnessFactor_ = prim.roughnessFactor;
-        {
-            nvrhi::TextureDesc mrDesc;
-            mrDesc.format = nvrhi::Format::RGBA8_UNORM;
-            mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-            mrDesc.keepInitialState = true;
-            if (prim.hasMR) {
-                mrDesc.width = prim.mrWidth;
-                mrDesc.height = prim.mrHeight;
-            } else {
-                mrDesc.width = 1;
-                mrDesc.height = 1;
+        std::vector<GPUMaterial> matTable(materialCount);
+        for (std::size_t i = 0; i < materialCount; ++i) {
+            const nl::core::PrimitiveMesh& prim = meshData.meshes[i];
+            if (!prim.hasBaseColor) {
+                outError = glb + std::string(" material ") + std::to_string(i) +
+                           " has no base color texture";
+                return false;
             }
-            const std::string mrName = glb + "MetallicRoughness";
-            mrDesc.debugName = mrName.c_str();
-            mrTexture_ = device->createTexture(mrDesc);
-            if (!mrTexture_) { outError = "createTexture failed for material MR"; return false; }
+            // 基色贴图（RGBA8_UNORM，无 SRGB 视图；srgbToLinear 在 shader 内）。
+            {
+                const std::string texName =
+                    glb + "BaseColor" + std::to_string(i);
+                nvrhi::TextureDesc texDesc;
+                texDesc.width = prim.texWidth;
+                texDesc.height = prim.texHeight;
+                texDesc.format = nvrhi::Format::RGBA8_UNORM;
+                texDesc.debugName = texName.c_str();
+                texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+                texDesc.keepInitialState = true;
+                matBaseColor_[i] = device->createTexture(texDesc);
+                if (!matBaseColor_[i]) {
+                    outError = "createTexture failed for material base color " +
+                               std::to_string(i);
+                    return false;
+                }
+            }
+            // MR 贴图（无则 1x1 dummy：roughness=1, metallic=0）。
+            {
+                const std::string mrName =
+                    glb + "MetallicRoughness" + std::to_string(i);
+                nvrhi::TextureDesc mrDesc;
+                mrDesc.format = nvrhi::Format::RGBA8_UNORM;
+                mrDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+                mrDesc.keepInitialState = true;
+                if (prim.hasMR) {
+                    mrDesc.width = prim.mrWidth;
+                    mrDesc.height = prim.mrHeight;
+                } else {
+                    mrDesc.width = 1;
+                    mrDesc.height = 1;
+                }
+                mrDesc.debugName = mrName.c_str();
+                matMR_[i] = device->createTexture(mrDesc);
+                if (!matMR_[i]) {
+                    outError = "createTexture failed for material MR " +
+                               std::to_string(i);
+                    return false;
+                }
+            }
+            GPUMaterial& m = matTable[i];
+            std::memcpy(m.baseColorFactor, prim.baseColorFactor, sizeof(m.baseColorFactor));
+            m.mrFactor[0] = prim.metallicFactor;
+            m.mrFactor[1] = prim.roughnessFactor;
+            m.baseColorSlot = static_cast<std::uint32_t>(i);
+            m.mrSlot = static_cast<std::uint32_t>(i);
+        }
+        // 材质 0 句柄沿用 texture_/mrTexture_ 老 fields（既有消费者语义不变）；
+        // 因子 fields 保留材质 0 值（仅日志/兼容用途，shader 已改走材质表）。
+        texture_ = matBaseColor_[0];
+        mrTexture_ = matMR_[0];
+        std::memcpy(pbrBaseColorFactor_, matTable[0].baseColorFactor,
+                    sizeof(pbrBaseColorFactor_));
+        pbrMetallicFactor_  = matTable[0].mrFactor[0];
+        pbrRoughnessFactor_ = matTable[0].mrFactor[1];
+
+        // 材质间接表 SSBO（t12）：静态上传一次，逐帧只读。
+        {
+            nvrhi::BufferDesc mtDesc;
+            mtDesc.byteSize = static_cast<std::uint32_t>(matTable.size() *
+                                                         sizeof(GPUMaterial));
+            mtDesc.structStride = sizeof(GPUMaterial);
+            mtDesc.debugName = "VisMaterialTable";
+            materialTable_ = device->createBuffer(mtDesc);
+            if (!materialTable_) {
+                outError = "createBuffer failed for vis material table";
+                return false;
+            }
+        }
+
+        // 空槽填充：贴图数组槽位是固定 4 个，未用槽绑 dummy（白基色 / 中性 MR），
+        // 否则 NVRHI 拒绝空句柄纹理绑定；shader 侧 NonUniformResourceIndex 只会
+        // 命中 [0, materialCount)（clusterMeta 槽 3 由 NSUB 对账保证）。
+        for (std::size_t i = materialCount; i < kMaxVisMaterials; ++i) {
+            nvrhi::TextureDesc dDesc;
+            dDesc.width = 1;
+            dDesc.height = 1;
+            dDesc.format = nvrhi::Format::RGBA8_UNORM;
+            dDesc.debugName = "VisMaterialDummy";
+            dDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            dDesc.keepInitialState = true;
+            matBaseColor_[i] = device->createTexture(dDesc);
+            matMR_[i] = matBaseColor_[i];
+            if (!matBaseColor_[i]) {
+                outError = "createTexture failed for material dummy";
+                return false;
+            }
         }
 
         // b1 LightConstants（材质 pass 的 PBR 直光用；initCull 未建，这里新建）。
@@ -1582,7 +1741,8 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!matResolveConstants_) { outError = "createBuffer failed for mat resolve constants"; return false; }
 
         // 材质 pass 布局（§2.7 单一 BindingSet）：b0 场景常量 + b1 光照 + b2 尺寸
-        // + t0 vis SRV + t1..t3 簇资源 + t4 基色 + t5 MR + s0 采样器。
+        // + t0 vis SRV + t1..t3 簇资源 + t4..t7 基色数组 + t8..t11 MR 数组
+        // + t12 材质间接表 + s0 采样器（M7.2 多材质；shader 见 material.slang 头注释）。
         nvrhi::BindingLayoutDesc mDesc;
         mDesc.setVisibility(nvrhi::ShaderType::All)
             .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
@@ -1592,30 +1752,41 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
-            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
-            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
-            .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12));
+        for (std::uint32_t slot = 4; slot < 4 + kMaxVisMaterials; ++slot)
+            mDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t4..t7 基色
+        for (std::uint32_t slot = 8; slot < 8 + kMaxVisMaterials; ++slot)
+            mDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t8..t11 MR
+        mDesc.addItem(nvrhi::BindingLayoutItem::Sampler(0));
         matResolveLayout_ = device->createBindingLayout(mDesc);
         if (!matResolveLayout_) { outError = "createBindingLayout failed for mat resolve"; return false; }
 
-        // 贴图上传（baseColor + MR，MR 无则 dummy）。
+        // 贴图与材质表上传（每材质 baseColor + MR，MR 无则 dummy）。
         nvrhi::CommandListHandle upload = device->createCommandList();
         upload->open();
-        upload->writeTexture(texture_, 0, 0, prim.baseColorRGBA.data(),
-                             static_cast<size_t>(prim.texWidth) * 4u);
-        if (prim.hasMR) {
-            upload->writeTexture(mrTexture_, 0, 0, prim.metallicRoughnessRGBA.data(),
-                                 static_cast<size_t>(prim.mrWidth) * 4u);
-        } else {
-            const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
-            upload->writeTexture(mrTexture_, 0, 0, dummyMR, 4u);
+        for (std::size_t i = 0; i < materialCount; ++i) {
+            const nl::core::PrimitiveMesh& prim = meshData.meshes[i];
+            upload->writeTexture(matBaseColor_[i], 0, 0, prim.baseColorRGBA.data(),
+                                 static_cast<size_t>(prim.texWidth) * 4u);
+            if (prim.hasMR) {
+                upload->writeTexture(matMR_[i], 0, 0, prim.metallicRoughnessRGBA.data(),
+                                     static_cast<size_t>(prim.mrWidth) * 4u);
+            } else {
+                const std::uint8_t dummyMR[4] = {0u, 255u, 0u, 255u};   // roughness=1, metallic=0
+                upload->writeTexture(matMR_[i], 0, 0, dummyMR, 4u);
+            }
         }
+        upload->beginTrackingBufferState(materialTable_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(materialTable_, matTable.data(),
+                            matTable.size() * sizeof(GPUMaterial));
+        upload->setPermanentBufferState(materialTable_, nvrhi::ResourceStates::ShaderResource);
         upload->close();
         device->executeCommandList(upload);
 
         nl::core::log::info("visbuf material resolve ready: ", glb,
-                            " | baseColor ", prim.texWidth, "x", prim.texHeight,
-                            " | mr ", (prim.hasMR ? "tex" : "dummy"),
+                            " | materials=", materialCount,
+                            " | baseColor ", meshData.meshes[0].texWidth, "x",
+                            meshData.meshes[0].texHeight,
                             " | shader=", shaderSuffix);
     }
     return true;
@@ -2097,9 +2268,12 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
-            .addItem(nvrhi::BindingSetItem::Texture_SRV(4, texture_))
-            .addItem(nvrhi::BindingSetItem::Texture_SRV(5, mrTexture_))
             .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+        for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
+            mSet.addItem(nvrhi::BindingSetItem::Texture_SRV(4 + i, matBaseColor_[i]));
+        for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
+            mSet.addItem(nvrhi::BindingSetItem::Texture_SRV(8 + i, matMR_[i]));
+        mSet.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(12, materialTable_));
         matResolveSet_ = device->createBindingSet(mSet, matResolveLayout_);
         if (!matResolveSet_) { outError = "createBindingSet failed for mat resolve"; return false; }
     }
@@ -3785,10 +3959,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
     cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
 
-    // pbr-direct：b1 LightConstants 同款 volatile 每帧写。只有 init/initSkin 的
-    // 绑定集携带 b1（psMain 引用）；initCluster 场景（lod 模式同样走这里）没有
-    // b1 槽位、句柄为空，绝不能碰——写空句柄 = NVRHI 内部空指针段错误。
-    if (lightConstants_) {
+    // pbr-direct：b1 LightConstants 同款 volatile 每帧写。M7.2：per-prim 批次
+    // 各写各的 b1（光照/相机同值，因子按批不同）。只有 init/initSkin 的绑定集
+    // 携带 b1（psMain 引用）；initCluster 场景（lod 模式同样走这里）没有 b1
+    // 槽位、modelBatches_ 为空，绝不能碰——写空句柄 = NVRHI 内部空指针段错误。
+    for (const ModelPrimBatch& b : modelBatches_) {
         LightConstants lc{};
         lc.lightDirW[0] = params.lightDir[0];   // 方向沿用 b0 g_lightDir 的口径与缺省值
         lc.lightDirW[1] = params.lightDir[1];
@@ -3798,11 +3973,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         lc.cameraPos[0] = params.eye[0];
         lc.cameraPos[1] = params.eye[1];
         lc.cameraPos[2] = params.eye[2];
-        std::memcpy(lc.baseColorFactor, pbrBaseColorFactor_, sizeof(lc.baseColorFactor));
-        lc.mrFactor[0] = pbrMetallicFactor_;
-        lc.mrFactor[1] = pbrRoughnessFactor_;
-        lc.mrFactor[2] = params.options[0];     // --pbr-naive 对照开关（viewer 填 1）
-        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
+        // M7.2：因子按批取各自材质（建批时从 glTF 提取存进批次）；mrFactor.z =
+        // --pbr-naive 对照开关。
+        std::memcpy(lc.baseColorFactor, b.baseColorFactor, sizeof(lc.baseColorFactor));
+        lc.mrFactor[0] = b.metallicFactor;
+        lc.mrFactor[1] = b.roughnessFactor;
+        lc.mrFactor[2] = params.options[0];
+        cmd->writeBuffer(b.lightConstants, &lc, sizeof(lc));
     }
 
     // M0.8：pipeline 按 (fill × cull) 四套里选一套，shader 不变。
@@ -3810,19 +3987,46 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         ? (params.cullBack ? pipelineWireBack_ : pipelineWireNone_)
         : (params.cullBack ? pipelineBack_ : pipelineNone_);
 
-    nvrhi::GraphicsState state;
-    state.setPipeline(pipeline)
-         .setFramebuffer(framebuffer)
-         .addBindingSet(bindingSet_)
-         .addVertexBuffer(nvrhi::VertexBufferBinding()
-             .setBuffer(vertexBuffer_).setSlot(0).setOffset(0))
-         .setIndexBuffer(nvrhi::IndexBufferBinding()
-             .setBuffer(indexBuffer_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
-    state.viewport.addViewportAndScissorRect(viewport);
-    cmd->setGraphicsState(state);
-    nvrhi::DrawArguments args;
-    args.setVertexCount(indexCount_);   // drawIndexed 复用 vertexCount 字段表示索引数
-    cmd->drawIndexed(args);
+    // initCluster 场景（lod/dag/s5 层次遍历等）modelBatches_ 为空：走老单批
+    // 路径（initCluster 自己的 b0-only 绑定集 + 全量索引）。M7.2 重写时曾把
+    // 这条兜底丢掉 → lod/dag/s5 三模式空画面（回归实测 s2.0/s3.2/s5.0 HUD
+    // 基线 6.4 万 px diff 才抓出来）。
+    if (modelBatches_.empty()) {
+        nvrhi::GraphicsState state;
+        state.setPipeline(pipeline)
+             .setFramebuffer(framebuffer)
+             .addBindingSet(bindingSet_)
+             .addVertexBuffer(nvrhi::VertexBufferBinding()
+                 .setBuffer(vertexBuffer_).setSlot(0).setOffset(0))
+             .setIndexBuffer(nvrhi::IndexBufferBinding()
+                 .setBuffer(indexBuffer_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+        state.viewport.addViewportAndScissorRect(viewport);
+        cmd->setGraphicsState(state);
+        nvrhi::DrawArguments args;
+        args.setVertexCount(indexCount_);   // drawIndexed 复用 vertexCount 字段表示索引数
+        cmd->drawIndexed(args);
+        return;
+    }
+
+    // M7.2：每 prim 一批（共享 VB/IB，按 startIndex 区间画）；单 prim 资产 =
+    // 1 批，与 M0.4 逐字节一致。本 NVRHI 无逐 draw setBindingSet，照 M-E1b
+    // sceneBatch 先例每批重建 GraphicsState（含 addBindingSet）。
+    for (const ModelPrimBatch& b : modelBatches_) {
+        nvrhi::GraphicsState state;
+        state.setPipeline(pipeline)
+             .setFramebuffer(framebuffer)
+             .addBindingSet(b.set)
+             .addVertexBuffer(nvrhi::VertexBufferBinding()
+                 .setBuffer(vertexBuffer_).setSlot(0).setOffset(0))
+             .setIndexBuffer(nvrhi::IndexBufferBinding()
+                 .setBuffer(indexBuffer_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+        state.viewport.addViewportAndScissorRect(viewport);
+        cmd->setGraphicsState(state);
+        nvrhi::DrawArguments args;
+        args.setVertexCount(b.indexCount)   // drawIndexed 复用 vertexCount 表示索引数
+            .setStartIndexLocation(b.startIndex);
+        cmd->drawIndexed(args);
+    }
 }
 
 // ---- M-P3：物理调试线框叠加管线（LINE_LIST）----
@@ -4110,6 +4314,14 @@ void Scene::shutdown() {
     matResolveLayout_ = nullptr;
     matResolveSet_ = nullptr;
     matResolvePSO_ = nullptr;
+    // M7.2：多材质资源（句柄活到 device 析构之后 = use-after-free，M7.1 教训）。
+    for (auto& t : matBaseColor_) t = nullptr;
+    for (auto& t : matMR_) t = nullptr;
+    materialTable_ = nullptr;
+    for (auto& b : modelBatches_) {
+        b.set = nullptr;
+        b.lightConstants = nullptr;
+    }
     constants_ = nullptr;
     indexBuffer_ = nullptr;
     vertexBuffer_ = nullptr;

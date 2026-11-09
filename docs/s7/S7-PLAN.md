@@ -92,12 +92,21 @@ bevy 的 `compute_partial_derivatives` 可整体移植（Slang 语法几乎兼�
 - 全屏 pass 的纹理采样**必须 SampleGrad**：`ddx(uv)` 在无映射导数的全屏三角形上是未定义/错误方向，bevy 同款坑
 - pulling 三顶点从 SRV 逐顶点 fetch（8 float/顶点：pos/normal/uv），不复制顶点缓冲
 
-## M7.2 多材质 + 对照验收（1 天）
+## M7.2 多材质 + 对照验收（2026-11-10 收官，tag `s7-done`）
 
-- [ ] 多材质模型（≥3 种材质/贴图）跑通间接表
-- [ ] 传统 GBuffer 直光路径保留为对照模式
+- [x] 多材质模型（≥3 种材质/贴图）跑通间接表
+- [x] 传统 GBuffer 直光路径保留为对照模式
 
-**自检（S7 验收）**：vis buffer 路径 vs 传统直画 GBuffer 对照组**逐像素一致**（模式开关对比，差异截图为证）。tag：`s7-done`，截图 `docs/screenshots/s7.png`（visbuf 调试图 + 一致性对比）。
+**自检（S7 验收，实测）**：vis buffer 路径 vs 传统直画对照组（`--mode normal --shading 5`）**轮廓差 0（42498 前景 px 对 42498 px）**；颜色为等价而非逐位——99.991% 像素差 ≤2、maxDelta=4、均值偏移 0.0065（材质表错配会立刻炸 bias，无系统性错配；比 M7.1 同口径的 73.2% 逐位干净一个量级）；pulling/normalref 各自双后端跨互比 **near 档**（PBR pow 跨后端舍入尾 maxDelta 10，pbr-direct scene/scale 同族先例口径）。验收口径偏离计划原话「逐像素一致」已如实落档（`example/s7-done/verify.py` 阈值与理由）。tag：`s7-done`，截图 `docs/screenshots/s7.png`（visbuf 调试图 cluster/triangle 两档 + A/B 一致性对比）。
+
+**落地实录**：
+1. **拍板点 D-M7.2-1（用户拍板 A）**：`.nmesh` 尾段机制新增 **'NSUB' 段**（v3 只加不改纪律，v4 号留给 P9 NPAG）——`NMeshSubmeshHeader`(16B) + `NMeshSubmeshRecord`(8B: clusterFirst/clusterCount)，子网格簇区间**构建期随簇记录**（对齐 UE `NaniteDataDecode.ush:116-117` 簇编码带 MaterialTableOffset/Length 的结论：材质归属必须构建期可得，不能渲染期猜）。saveNMesh 自校验区间从 0 起连续无缝且覆盖全部 meshlet；loadNMesh 拒绝重复段/不连续/不覆盖；旧文件（无 NSUB）恒 materialId=0，cull/hiz/visbuf 光栅零扰动。
+2. **资产管线**：`nanite-tools cluster -o` 放开多子网格落盘（各 prim 独立切簇后按 vertexBase/triByteBase 平移拼接），`scripts/make-multi-material-glb.py` 生成 3 材质 Suzanne（抛光金属红 1.0/0.15、哑光绿 0.0/0.85、半金属蓝 0.5/0.45，每拷贝独立 texture 条目复用 bufferView）→ `Suzanne-materials.nmesh`（711 簇/3 子网格/NSUB 段）。nmesh selftest 10/10（含 4 条 NSUB 用例：roundtrip 字节一致 + 非连续/不覆盖两条负向）。
+3. **渲染侧（vis 路径）**：`GPUMaterial[4]` 间接表（baseColorFactor float4 + mrFactor float2 + 贴图槽号 uint2 = 32B，SSBO t12）+ baseColor `t4..t7` / MR `t8..t11` 固定槽贴图数组；`clusterMeta[3]` 从 pad 升级为 materialId=子网格序号；shader 侧 `NonUniformResourceIndex` 选槽（materialId 逐像素非一致，Slang 双目标实测通过）；material.* 两条产物进 `_SM66_ARTIFACTS`。空槽绑 1x1 dummy（NVRHI 拒绝空纹理绑定；shader 只会命中 [0, materialCount)，NSUB 对账保证）。
+4. **对照侧（传统路径）**：per-prim 批次化——共享 VB/IB 按 `startIndexLocation` 区间 + 每 prim 独立 b1 因子/贴图 BindingSet，**`model.slang` 零改动**；单 prim 资产与 M0.4 逐字节同行为（实例化纪律 §2.10 不受影响：每批独立实例缓冲）。
+5. **验收**：`example/s7-done/`（4 基线 + verify.py A/B 四门限 + run.bat 五段式）+ cases.json s7.2 卡（2 pair 用例）；`server.py --check` exit 0。HUD 基线因 kStage bump 重拍 4 张（`tools/reshot-hud-s72.py` 安全闸范式，diff 全落 HUD 行签名内）。spot 回归 s7.0/s7.1/m0.9/pbr-direct 全绿。
+
+**⚠️ S7 收官备注**：三里程碑全收官。从 S8 起所有着色走 vis buffer 的底线生效（传统路径仅作对照保留）；材质间接表查找（`material.slang` 材质表 + `visbuf_common.slangh` GPUMaterial）按原计划留给 S9/S10/S13 复用。UE-DIFFS 建档 D18（材质归属编码：UE 簇内 MaterialTableOffset/Length vs 我们 NSUB 子网格序号全局簇区间）。
 
 ---
 
@@ -105,9 +114,11 @@ bevy 的 `compute_partial_derivatives` 可整体移植（Slang 语法几乎兼�
 
 | 里程碑 | 预计 | tag |
 |---|---|---|
-| M7.0 vis buffer 打包 | 1~2 天 | `s7-visbuf` |
-| M7.1 反解+PBR | 2 天 | `s7-pulling` |
-| M7.2 多材质+验收 | 1 天 | `s7-done` |
+| M7.0 vis buffer 打包 | 1~2 天 | `s7-visbuf` ✅ 2026-11-09 |
+| M7.1 反解+PBR | 2 天 | `s7-pulling` ✅ 2026-11-09 |
+| M7.2 多材质+验收 | 1 天 | `s7-done` ✅ 2026-11-10 |
+
+**S7 阶段收官（2026-11-10）**：Visibility Buffer + 材质解析 + PBR 直光全量交付，告别 GBuffer 达成——光栅 pass 只写一个 64 位值，材质在第二 pass 反解。
 
 ## 卡住翻哪
 

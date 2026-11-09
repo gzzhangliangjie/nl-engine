@@ -210,6 +210,15 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
     _timeout_marker = f"[regression] timeout after {RUN_TIMEOUT}s"
     if code == -1 and log.strip() == _timeout_marker:
         code, log = run_viewer(exe, argv, run_cwd)
+    # 同族抖动签名 3（2026-11-10，M7.2 收口全量闸实测）：文本用例 fail-fast 崩溃码
+    # —— 3221226505 (0xC0000409) / 3221225477 (0xC0000005)，进程秒崩（<350ms）。
+    # 当晚主力成因后经追因实锤为 JobRuntime 析构次序竞争（MILESTONES M7.2 踩坑 8，
+    # 已修复），但同签名还可能来自其他未知的进程启动期竞争，保留为兜底重试。
+    # 仅对「预期 exit 0 的文本用例」重试一次——重试仍崩照 FAIL，闸门不放松；
+    # 崩溃码若出现在渲染用例或预期非零用例上不重试（那些有真失败可能）。
+    if (code in (3221226505, 3221225477) and case.get("expectExit", 0) == 0
+            and not case.get("baselines")):
+        code, log = run_viewer(exe, argv, run_cwd)
     rec["ms"] = int((time.time() - started) * 1000)
     rec["exit"] = code
     rec["deviceErrors"] = check_device_errors(log)
