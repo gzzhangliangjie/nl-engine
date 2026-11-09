@@ -82,6 +82,7 @@ TRACKS = {
     "pbr-direct": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
         "branch": "feat/pbr-direct", "state": "active",
+        "note": "merged to master e57173d (tag pbr-direct); wt removal pending user approval",
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",

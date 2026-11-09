@@ -1357,4 +1357,4 @@
 6. STAGE_RE 闸口扩展：`tools/showcase/server.py` 原只认 `M*/S*` 前缀，具名穿插项（pbr-direct，不占 m0.*/S* 编号是 plan 明文）加进白名单，version id = 前缀小写。
 7. 光照强度 2.5：金属体无 IBL 直射高光偏弱，强度从 1 提到 2.5 让 GGX 形状醒目（光线方向沿用 b0 g_lightDir 缺省，确定性截图不受影响）。
 
-**下一步**：merge 回 master（master 树上有 M6.1 在途未提交改动，等用户拍板 merge 时机）；随后 PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
+**下一步**：已 merge 回 master（2026-11-09，merge commit `e57173d`，kStage=`pbr-direct`、17 对 exe=current HUD 基线随 bump 重拍、--check OK + pbr-direct 10/10 + s4.0 4/4 + s6.2 2/2 回归 bytes）；PRT 球谐环境光 / Kulla-Conty 两个 GAMES202 点解锁（ROADMAP 穿插项表），S7 只剩 vis buffer + vertex pulling + 材质解析。
