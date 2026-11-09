@@ -188,7 +188,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs`（2026-11-09 已建，junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/ecs` | 已立项 `docs/p8/P8-ECS-PLAN.md`（E1a 先行 / E1b 后挂）；**M-E0 进行中**（World/Entity 核心） |
+| ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy`/`slang dist`，`.workbuddy` 已 skip-worktree） | `feat/ecs` | **E1a 收官**（2026-11-09，M-E0~E3 完成 tags `ecs-e0`~`ecs-e3`，merge commit `2d4ad49`）：`nl/scene` 内核 + `nanite-scene` 工具 + 展示台 `p8-ecs` 卡 4 条 + `docs/p8/ECS-TOOLS-GUIDE.md`；wt 保留，**E1b（渲染集成）后挂等 S6 收官**（tag `s6-done`）后另编号开工 |
 
 ### 7.2 固化文档闸
 
