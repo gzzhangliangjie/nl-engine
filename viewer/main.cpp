@@ -8,14 +8,18 @@
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
+#include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
+#include "nl/scene/World.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>              // M-E1b.0：--scene 场景文件直读
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -81,6 +85,7 @@ struct Options {
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
     bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
     bool hizOn      = true;   // M6.2：Hi-Z 遮蔽剔除（--hiz off = 纯视锥/误差遍历，退化可验证）
+    int  visVizMode = 0;     // M7.0：visbuf 可视化档（0 cluster / 1 triangle）
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -101,6 +106,7 @@ struct Options {
     std::string screenshotPath;
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
+    std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
@@ -168,6 +174,12 @@ Options parseArgs(int argc, char** argv) {
             o.modelFile = argv[++i];
             o.modelSet = true;
         }
+        else if (a == "--scene" && i + 1 < argc) {
+            // M-E1b.0：ECS 场景文件（World::serialise 的 JSON）。路径按传入直读
+            //（不是 assets 白名单资产）；ASCII + 存在性校验在 runScene 落地，
+            // 失败走用法错误码 2。
+            o.scenePath = argv[++i];
+        }
         else if (a == "--editor" && i + 1 < argc) {
             // T1：材质图编辑器（material_graph v1 文本文件）。
             o.editorGraph = argv[++i];
@@ -192,6 +204,15 @@ Options parseArgs(int argc, char** argv) {
             else if (v == "off" || v == "0" || v == "none" || v == "false") o.hizOn = false;
             else {
                 std::cerr << "invalid --hiz '" << v << "' (expected on|off)\n";
+                std::exit(1);
+            }
+        } else if (a == "--vis-viz" && i + 1 < argc) {
+            // M7.0：vis buffer 解码档（仅 visbuf 模式消费；其它模式恒 0 不读）。
+            const std::string v = argv[++i];
+            if (v == "cluster" || v == "0") o.visVizMode = 0;
+            else if (v == "triangle" || v == "tri" || v == "1") o.visVizMode = 1;
+            else {
+                std::cerr << "invalid --vis-viz '" << v << "' (expected cluster|triangle)\n";
                 std::exit(1);
             }
         } else if (a == "--shading" && i + 1 < argc) {
@@ -305,7 +326,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "pbr-direct") != nullptr, "pbr-direct stage reported");
+    check(std::strstr(st.stage, "S7.1") != nullptr, "S7.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -315,7 +336,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (18 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (36 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -402,7 +423,8 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
-              bool skinMode = false, bool hizMode = false) {
+              bool skinMode = false, bool hizMode = false,
+              bool visbufMode = false, bool pullingMode = false) {
     nl::core::log::resetCounters();
 
     nl::core::WindowDesc desc;
@@ -425,7 +447,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
                                                    o.modelFile.c_str(), cluster, cullMode,
-                                                   o.frustumOn, dagMode, skinMode, hizMode);
+                                                   o.frustumOn, dagMode, skinMode, hizMode,
+                                                   /*sceneMode=*/false,
+                                                   visbufMode, pullingMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -738,6 +762,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
@@ -1097,6 +1122,342 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     return failed ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// M-E1b.0：ECS 场景模式（--scene <file>）。场景文件不是 assets 白名单资产，
+// 按传入路径直读；组件库显式注册后 World::deserialise（负向 = 用法错误码 2，
+// 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
+// SceneObjectDesc / SceneLightDesc，sceneMode=true 的 Renderer + loadEcsScene。
+// ---------------------------------------------------------------------------
+int runScene(const Options& o) {
+    // ---- 1. 读场景文件 + World 反序列化 ----
+    const std::string& scenePath = o.scenePath;
+    if (scenePath.empty()) { nl::core::log::error("--scene: path is empty"); return 2; }
+    for (const char c : scenePath) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u > 0x7E) {
+            nl::core::log::error("--scene: path must be printable ASCII: ", scenePath);
+            return 2;
+        }
+    }
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(std::filesystem::path(scenePath), ec) || ec) {
+            nl::core::log::error("--scene: file not found: ", scenePath);
+            return 2;
+        }
+    }
+    nl::scene::World world;
+    float ambient = 0.28f;   // 场景文件缺省（ambient 为场景级扩展键，World 格式不感知）
+    {
+        std::ifstream f(scenePath, std::ios::binary);
+        if (!f) { nl::core::log::error("--scene: cannot open ", scenePath); return 2; }
+        nlohmann::json doc;
+        try {
+            f >> doc;
+        } catch (const nlohmann::json::exception& ex) {
+            nl::core::log::error("--scene: malformed json: ", ex.what());
+            return 2;
+        }
+        // 注册组件库（与 nanite-scene 同款显式注册）→ World::deserialise。
+        world.getComponentLibrary().registerComponent<nl::scene::TransformComponent>();
+        world.getComponentLibrary().registerComponent<nl::scene::ModelComponent>();
+        world.getComponentLibrary().registerComponent<nl::scene::LightComponent>();
+        std::string err;
+        bool ok = false;
+        try {
+            ok = world.deserialise(doc, err);
+        } catch (const std::exception& ex) {
+            nl::core::log::error("--scene: deserialise threw: ", ex.what());
+            return 2;
+        }
+        if (!ok) {
+            nl::core::log::error("--scene: deserialise rejected: ", err);
+            return 2;
+        }
+        if (doc.contains("ambient") && doc["ambient"].is_number())
+            ambient = doc["ambient"].get<float>();
+    }
+
+    // ---- 2. O(N) 遍历实体收集渲染描述 ----
+    // meshFile 白名单校验（与 renderer.cpp validAssetFileName 同一套逻辑，
+    // scene.cpp 兜底同款复制；非法 = 显式报错退出 2，不静默跳过）。
+    auto validGlbAssetName = [](const std::string& s) {
+        if (s.empty()) return false;
+        if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
+        if (s.find("..") != std::string::npos) return false;
+        const std::string ext = ".glb";
+        if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
+            return false;
+        for (const char c : s) {
+            const auto u = static_cast<unsigned char>(c);
+            if (u < 0x21 || u > 0x7E) return false;
+        }
+        return true;
+    };
+    std::vector<nl::renderer::SceneLightDesc> lights;
+    std::vector<std::string> meshFiles;
+    std::vector<nl::scene::EntityID> modelIds;
+    for (nl::scene::EntityID id : world.getEntityIDs()) {
+        const auto* light = world.getComponent<nl::scene::LightComponent>(id);
+        if (light) {
+            nl::renderer::SceneLightDesc l{};
+            const float len = std::sqrt(light->direction.x * light->direction.x +
+                                        light->direction.y * light->direction.y +
+                                        light->direction.z * light->direction.z);
+            if (len > 1e-8f) {   // 归一化（零向量保原样，退化灯交给 shader abs(dot) 口径）
+                l.dir[0] = light->direction.x / len;
+                l.dir[1] = light->direction.y / len;
+                l.dir[2] = light->direction.z / len;
+            }
+            l.color[0] = light->color.x;
+            l.color[1] = light->color.y;
+            l.color[2] = light->color.z;
+            l.intensity = light->intensity;
+            // M-E1b.2：点光字段透传 + 显式拒绝（非法 type / 非正 range 退出码 2）
+            l.type = light->type;
+            if (l.type != 0 && l.type != 1) {
+                nl::core::log::error("--scene: entity ", id, " has unknown light type ", l.type);
+                return 2;
+            }
+            l.position[0] = light->position.x;
+            l.position[1] = light->position.y;
+            l.position[2] = light->position.z;
+            l.range = light->range;
+            if (l.type == 1 && l.range <= 0.0f) {
+                nl::core::log::error("--scene: entity ", id, " point light range must be > 0");
+                return 2;
+            }
+            lights.push_back(l);
+        }
+        const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
+        if (model) {
+            if (!world.getComponent<nl::scene::TransformComponent>(id)) {
+                nl::core::log::error("--scene: entity ", id, " has Model without Transform");
+                return 2;
+            }
+            if (!validGlbAssetName(model->meshFile)) {
+                nl::core::log::error("--scene: entity ", id, " meshFile '",
+                                     model->meshFile, "' rejected by asset whitelist (.glb)");
+                return 2;
+            }
+            meshFiles.push_back(model->meshFile);   // 指针先落到稳定存储再填 POD
+            modelIds.push_back(id);
+        }
+    }
+    std::vector<nl::renderer::SceneObjectDesc> objects;
+    objects.reserve(modelIds.size());
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        const auto* model = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+        const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+        nl::renderer::SceneObjectDesc d{};
+        const auto wm = t->getWorldMatrix();   // nl::math Mat4 列主序 m[col*4+row]，按列直拷
+        std::memcpy(d.world, wm.m, sizeof(d.world));
+        d.tint[0] = model->tint.x;
+        d.tint[1] = model->tint.y;
+        d.tint[2] = model->tint.z;
+        d.meshFile = meshFiles[k].c_str();
+        objects.push_back(d);
+    }
+
+    // ---- 3. 窗口 + sceneMode Renderer ----
+    nl::core::log::resetCounters();
+    nl::core::WindowDesc desc;
+    desc.width  = o.width;
+    desc.height = o.height;
+    desc.title  = "nl-engine | starting...";
+    // 截图回归模式隐藏窗口（与 runNormal 同口径：可见窗口会抢前台焦点）。
+    desc.visible = !o.screenshot;
+    nl::core::Window window(desc);
+    if (!window.valid()) {
+        nl::core::log::error("window creation failed");
+        return 1;
+    }
+    const auto nativeSize = window.framebufferSize();
+    const nl::renderer::Extent extent{
+        static_cast<std::uint32_t>(nativeSize.width),
+        static_cast<std::uint32_t>(nativeSize.height)
+    };
+    auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
+                                                   /*modelFile=*/nullptr,
+                                                   /*cluster=*/false, /*cullMode=*/false,
+                                                   /*frustumCull=*/false, /*dagMode=*/false,
+                                                   /*skinMode=*/false, /*hizMode=*/false,
+                                                   /*sceneMode=*/true);
+    if (!renderer->valid()) {
+        nl::core::log::error("renderer init failed: ", renderer->lastError());
+        return 1;
+    }
+    const std::string sceneName =
+        std::filesystem::path(scenePath).filename().string();
+    // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
+    std::uint32_t pointLights = 0;
+    for (const auto& l : lights) if (l.type == 1) ++pointLights;
+    nl::core::log::info("ecs scene: ", objects.size(), " objects | ", lights.size(),
+                        " lights (", pointLights, " point) | ambient ", ambient);
+    if (!renderer->loadEcsScene(objects.data(),
+                                static_cast<std::uint32_t>(objects.size()),
+                                lights.empty() ? nullptr : lights.data(),
+                                static_cast<std::uint32_t>(lights.size()),
+                                ambient, sceneName.c_str())) {
+        nl::core::log::error("ecs scene load failed: ", renderer->lastError());
+        return 1;
+    }
+
+    const bool hudOn = o.hudEnabled;
+    // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
+    // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
+    float camDist = o.distance;
+    if (!o.distSet) {
+        const float* sph = renderer->info().assetSphere;
+        if (sph[3] > 0.0f) camDist = std::max(camDist, sph[3] * 2.4f);
+    }
+    nl::core::OrbitCamera camera;
+    camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
+    camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
+
+    const auto st = nl::renderer::status();
+    const auto& info = renderer->info();
+    nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
+    nl::core::log::info("mode: scene | objects=", info.instanceCount,
+                        " triangles=", info.triangleCount,
+                        " model=", info.modelName,
+                        " | HUD: ", hudOn ? "on" : "off",
+                        " | case: ESC=quit, F12=PNG");
+
+    if (o.screenshot) {
+        std::string err;
+        if (!prepareScreenshotDirs(o.screenshotPath, err)) {
+            nl::core::log::error(err);
+            return 1;
+        }
+        nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
+                            std::filesystem::absolute(o.screenshotPath).string());
+    }
+
+    using clock = std::chrono::steady_clock;
+    auto last = clock::now();
+    std::uint64_t frame = 0;
+    int colorIndex = o.color;
+    int screenshotsSaved = 0;
+    bool failed = false;
+    double dtSumMs = 0.0;
+    double dtMaxMs = 0.0;
+
+    while (!window.shouldClose()) {
+        window.pollEvents();
+        if (window.keyPressed(nl::core::Key::Escape)) {
+            nl::core::log::info("ESC -> exit");
+            break;
+        }
+        float dx = 0.0f, dy = 0.0f, scroll = 0.0f;
+        window.consumeMouse(dx, dy, scroll);
+        if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
+        if (scroll != 0.0f) camera.zoom(scroll);
+
+        const char* capturePath = nullptr;
+        if (window.keyPressed(nl::core::Key::F12)) {
+            capturePath = o.screenshot ? o.screenshotPath.c_str() : nullptr;
+        }
+        if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames))
+            capturePath = o.screenshotPath.c_str();
+
+        nl::core::Extent resized{};
+        if (window.consumeResize(resized) && resized.width > 0 && resized.height > 0) {
+            renderer->resize({static_cast<std::uint32_t>(resized.width),
+                              static_cast<std::uint32_t>(resized.height)});
+            camera.setAspect(static_cast<float>(resized.width) / static_cast<float>(resized.height));
+        }
+
+        const auto now = clock::now();
+        const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
+        last = now;
+        ++frame;
+        if (o.screenshot) {
+            dtSumMs += dtMs;
+            if (dtMs > dtMaxMs) dtMaxMs = dtMs;
+        }
+
+        nl::renderer::FrameParams fp;
+        const auto vp = camera.viewProjection();
+        std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
+        fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
+        fp.cullBack = o.cullBack;
+        fp.shading = 0;                              // psScene 固定 mode 0 风格着色
+        fp.wireframe = o.wireframe;
+
+        nl::renderer::HudFrame hud{};
+        if (hudOn) {
+            const auto e = renderer->extent();
+            hud.displayWidth  = static_cast<float>(e.width);
+            hud.displayHeight = static_cast<float>(e.height);
+            hud.yawDeg = camera.yawDegrees();
+            hud.pitchDeg = camera.pitchDegrees();
+            hud.distance = camera.distance();
+            hud.backend = st.backend;
+            hud.adapter = info.adapterName.c_str();
+            hud.debugLayer = info.debugLayer.c_str();
+            hud.mode = nl::core::modeName(o.mode);       // 自动显示 "scene"
+            hud.stage = st.stage;
+            hud.model = info.modelName.c_str();
+            hud.triangleCount = static_cast<int>(info.triangleCount);
+            hud.cullBack = o.cullBack;
+            hud.colorIndex = colorIndex;
+            hud.deterministic = o.screenshot;
+            if (o.screenshot) {
+                hud.fps = 60.0f;
+                hud.frameMs = 16.67f;
+                hud.frameMsCount = kFixedSampleCount;
+                std::memcpy(hud.frameMsHistory, kFixedSamples, sizeof(kFixedSamples));
+                hud.gpuMs = 0.63f;
+                hud.gpuMsCount = kFixedSampleCount;
+                std::memcpy(hud.gpuMsHistory, kFixedGpuSamples, sizeof(kFixedGpuSamples));
+                hud.deltaSeconds = 1.0f / 60.0f;
+                hud.mouseX = -100.0f; hud.mouseY = -100.0f;
+            } else {
+                hud.fps = dtMs > 0.0 ? static_cast<float>(1000.0 / dtMs) : 0.0f;
+                hud.frameMs = static_cast<float>(dtMs);
+                hud.deltaSeconds = static_cast<float>(std::max(dtMs / 1000.0, 1.0 / 1000.0));
+            }
+        }
+
+        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath, hudOn ? &hud : nullptr)) {
+            nl::core::log::error("renderFrame failed: ", renderer->lastError());
+            failed = true;
+            break;
+        }
+        renderer->drainMessages();
+        if (capturePath) {
+            ++screenshotsSaved;
+            nl::core::log::info("screenshot written: ", capturePath);
+        }
+        if (o.screenshot && frame % 15 == 0) {
+            nl::core::log::info("ecs stats: objects ", info.instanceCount,
+                                " | triangles ", info.triangleCount,
+                                " | lights ", lights.size());
+        }
+        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+
+    nl::core::log::info("shutdown ok (frames=", frame,
+                        " screenshots=", screenshotsSaved,
+                        " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
+    if (o.screenshot && frame > 1) {
+        nl::core::log::info("frame timing: avg ",
+                            dtSumMs / static_cast<double>(frame), " ms  max ",
+                            dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
+    }
+    if (o.screenshot && screenshotsSaved == 0) {
+        nl::core::log::error("screenshot was not written");
+        failed = true;
+    }
+    if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
+        nl::core::log::error("acceptance failed: device/error counters must be zero");
+        failed = true;
+    }
+    return failed ? 1 : 0;
+}
+
 // S0 定型：所有里程碑共用这一个分发器，新增模式只加 case，不改 main。
 int runMode(nl::core::ViewMode mode, const Options& o) {
     switch (mode) {
@@ -1120,6 +1481,16 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/true, /*dagMode=*/true, /*skinMode=*/false,
                          /*hizMode=*/true);
+    case nl::core::ViewMode::Scene:      // M-E1b.0：ECS 场景（--scene 文件 → N 物体 M 灯）
+        return runScene(o);
+    case nl::core::ViewMode::Visbuf:     // M7.0：u64 vis buffer 打包 + 簇/三角可视化
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true);
+    case nl::core::ViewMode::Pulling:    // M7.1：vis buffer 材质反解（pulling）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -1146,14 +1517,20 @@ void printUsage() {
               << "                                     off = identity visible list, M4.0 behavior)\n"
               << "  viewer.exe --hiz on|off            Hi-Z occlusion culling in hiz mode (default on;\n"
               << "                                     off = frustum/error traversal only, M6.2 toggle)\n"
+              << "  viewer.exe --vis-viz cluster|triangle\n"
+              << "                                     visbuf mode: decode vis buffer by clusterId\n"
+              << "                                     or by global triangle id (default cluster)\n"
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id | pbr (default textured;\n"
               << "                                     N key cycles 0..3; pbr = Cook-Torrance direct light)\n"
               << "  viewer.exe --pbr-naive             pbr debug A/B: skip sRGB->linear (naive UNORM read,\n"
               << "                                     acceptance comparison evidence)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"
-              << "  viewer.exe --model <name>          load assets/<name>: .glb for normal mode,\n"
-              << "                                     .nmesh for cluster/lod mode (default per mode)\n"
+              << "  viewer.exe --model <name>          load assets/<name>: .glb for normal/skin mode,\n"
+              << "                                     .nmesh for cluster/lod/visbuf/pulling mode (default per mode)\n"
+              << "  viewer.exe --scene <file>          M-E1b.0: load an ECS scene JSON (World::serialise\n"
+              << "                                     format); forces --mode scene. Objects/lights come\n"
+              << "                                     from Model/Transform/Light components.\n"
               << "  viewer.exe --lod N                 lod mode: start at layer N (default 0); the\n"
               << "                                     HUD slider switches layers at runtime\n"
               << "  viewer.exe --dag-group N           dag-top mode: drill into group N of the\n"
@@ -1206,7 +1583,8 @@ int main(int argc, char** argv) {
 // 与 cluster 模式 CPU 端 clusterColor() 同式，逐像素一致。
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
-         o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz)
+         o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
+         o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }
@@ -1221,5 +1599,9 @@ int main(int argc, char** argv) {
     // M-P3：物理调试叠加层（验证脚手架 = 静态盒线框）。强制 normal 背景场景，
     // 由 Suzanne 提供深度参照以验证叠加层的深度遮挡纪律。
     if (o.physicsDebug) o.mode = nl::core::ViewMode::Normal;
+    // M-E1b.0：给了 --scene 就强制 mode=Scene（--mode 同给以 Scene 为准）。
+    if (!o.scenePath.empty() && !o.physicsDebug) {
+        o.mode = nl::core::ViewMode::Scene;
+    }
     return runMode(o.mode, o);
 }

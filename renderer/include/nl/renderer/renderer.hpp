@@ -80,6 +80,11 @@ struct FrameParams {
     bool         debugLines           = false;
     const float* debugLineData        = nullptr;
     std::uint32_t debugLineVertexCount = 0;
+
+    // M7.0：vis buffer 可视化的解码档（仅 visbuf 模式消费，其它模式恒 0 不读）：
+    //   0 = clusterId → 颜色，1 = 全局三角 id (clusterId<<8|triId) → 颜色。
+    // 走 FrameParams 而不是 SceneConstants：g_options 的槽位已被 cull 遍历占用。
+    int   visVizMode  = 0;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -176,6 +181,23 @@ struct HudFrame {
     class NodeEditor* editor = nullptr;
 };
 
+// M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。
+// 公开头只放 POD；meshFile 指向调用方稳定存储（viewer 侧字符串数组）。
+struct SceneObjectDesc {
+    float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
+    float tint[3];          // ModelComponent::tint
+    const char* meshFile;   // assets/ 下的 .glb 文件名（viewer 侧已过白名单校验）
+};
+struct SceneLightDesc {
+    float dir[3];           // 归一化后的光照传播方向（世界空间）
+    float color[3];
+    float intensity;
+    // M-E1b.2 尾部追加（POD；viewer 的 `SceneLightDesc l{}` 仍按默认值零初始化）
+    int   type        = 0;                    // 0=Directional / 1=Point
+    float position[3] = {0.0f, 0.0f, 0.0f}; // 点光世界位置
+    float range       = 12.0f;               // 衰减截断半径
+};
+
 // 设备能力与当前后端调试层来源，验收时打印出来做机械对照。
 struct DeviceInfo {
     std::string adapterName;
@@ -221,6 +243,8 @@ struct DeviceInfo {
     // M6.2：最近一次 resolve 的整帧 GPU 时间 ms（真实值，deterministic 模式也
     // 有效——只是不写回 HUD 保基线 MD5；0 = timer 不可用 / 尚无数据）。
     float lastGpuMs = 0.0f;
+    // M-E1b.0：ECS 场景实例数（--scene 模式非零；backend 每帧 poll 时从 scene_ 拷）。
+    std::uint32_t instanceCount = 0;
 };
 
 class Renderer {
@@ -239,7 +263,14 @@ public:
                                             bool frustumCull = true,
                                             bool dagMode = false,
                                             bool skinMode = false,
-                                            bool hizMode = false);
+                                            bool hizMode = false,
+                                            bool sceneMode = false,
+                                            // M7.0：visbuf 模式吃 .nmesh，走独立
+                                            // 的 u64 vis buffer 三段式 pass。
+                                            bool visbufMode = false,
+                                            // M7.1：在 visbuf 之上叠加材质反解
+                                            // pass（pulling），复用 vis 资源 + PBR 贴图。
+                                            bool pullingMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -279,6 +310,15 @@ public:
     // 边界顶点逐位一致）；验收 = dag-top 模式截图肉眼核对。
     bool setDagCut(int group);
     int  dagGroupCount() const; // 可下钻组数；0 = 无 DAG 血缘或层数不足
+
+    // M-E1b.0：ECS 场景加载（--scene 模式；sceneMode=true 的 Renderer 专用）。
+    // objects/lights 由 viewer 从 World 组件收集（O(N)），本方法转发 backend 的
+    // scene_.initScene：建实例缓冲/灯缓冲/逐 mesh 批次/绑定集，成功后 info() 回拷
+    // （modelName=sceneName、triangleCount、instanceCount、assetSphere——照
+    // setLodLevel 的回拷写法）。失败返回 false（lastError() 带原因），场景保持空。
+    bool loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                      const SceneLightDesc* lights, std::uint32_t lightCount,
+                      float ambient, const char* sceneName);
 
 private:
     Renderer();

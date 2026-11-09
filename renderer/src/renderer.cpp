@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "pbr-direct Cook-Torrance direct lighting + glTF metallicRoughness";
+    "S7.1 visibility buffer material resolve (vertex pulling)";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -45,16 +45,18 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物总数 = model(12) + cull.cs(2) + dag.cs(2) + hiz(12) + hud(2) + debug_line(2) = 32，
-// 每个 × spv/dxil。M-P3 新增 debug_line 单入口（vsMain/psMain）。
+// 产物名共 24 个 × spv/dxil = 48：model 16（8 入口）+ cull.cs/dag.cs 4 +
+// hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+ visbuf 8（M7.0）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
     {"model.vs", true}, {"model.vs", false},
     {"model.vscluster", true}, {"model.vscluster", false},
     {"model.vscull", true}, {"model.vscull", false},
+    {"model.vsscene", true}, {"model.vsscene", false},
     {"model.ps", true}, {"model.ps", false},
     {"model.pscluster", true}, {"model.pscluster", false},
     {"model.pscull", true}, {"model.pscull", false},
+    {"model.pscene", true}, {"model.pscene", false},
     {"cull.cs", true}, {"cull.cs", false},
     {"dag.cs", true}, {"dag.cs", false},
     {"hiz.vshizdepth", true}, {"hiz.vshizdepth", false},
@@ -65,9 +67,14 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
-    // M-P3：debug_line 单入口（vsMain/psMain），各 × spv/dxil = 2
+    // M-P3：debug_line 单管线（vsMain/psMain），各 × spv/dxil = 4
     {"debug_line.vs", true}, {"debug_line.vs", false},
     {"debug_line.ps", true}, {"debug_line.ps", false},
+    // M7.0：visbuf.slang 四入口 × 双目标 = 8。
+    {"visbuf.vsvisraster", true}, {"visbuf.vsvisraster", false},
+    {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
+    {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
+    {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -113,15 +120,21 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            const char* modelFile, bool clusterMode,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
-                                           bool hizMode) {
+                                           bool hizMode, bool sceneMode, bool visbufMode,
+                                           bool pullingMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
-    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode;
-    // M-A5：skin 模式吃 assets/models/ 下的 .glb（含 rigged/ 子目录——
-    // 标准演示资产在 assets/models/rigged/；仍禁 ".." 与其他路径分隔符）。
+    // M7.0：visbuf 模式同样吃 .nmesh（复用 M4 的簇数据）。
+    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode;
+    // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
+    // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
-    if (skinMode) {
+    if (sceneMode) {
+        nameOk = true;
+    } else if (skinMode) {
+        // M-A5：skin 模式吃 assets/models/ 下的 .glb（含 rigged/ 子目录——
+        // 标准演示资产在 assets/models/rigged/；仍禁 ".." 与其他路径分隔符）。
         const std::string prefix = "rigged/";
         if (modelFile && std::string(modelFile).rfind(prefix, 0) == 0)
             nameOk = validModelFileName(modelFile + prefix.size());
@@ -145,7 +158,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     }
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
-                                 hizMode, r->impl_->error)) {
+                                 hizMode, sceneMode, visbufMode, pullingMode,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;
@@ -198,5 +212,18 @@ bool Renderer::setDagCut(int group) {
 }
 
 int Renderer::dagGroupCount() const { return impl_->info.dagGroupCount; }
+
+// M-E1b.0：ECS 场景加载。转发 backend 的 loadEcsScene（scene_.initScene），
+// 成功后 info() 回拷——modelName/triangleCount/instanceCount/assetSphere 随场景更新
+//（照 setLodLevel 的写法），viewer 的 const 引用才能看到最新值。
+bool Renderer::loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                            const SceneLightDesc* lights, std::uint32_t lightCount,
+                            float ambient, const char* sceneName) {
+    if (!impl_->backend) return false;
+    if (!impl_->backend->loadEcsScene(objects, objectCount, lights, lightCount,
+                                      ambient, sceneName, impl_->error)) return false;
+    impl_->info = impl_->backend->info();
+    return true;
+}
 
 } // namespace nl::renderer

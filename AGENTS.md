@@ -19,6 +19,32 @@
 
 ---
 
+## 自研边界与第三方库选型闸（2026-11-09 用户拍板，覆盖旧原则）
+
+**核心诉求只有 nanite / lumen 手写**；关联系统（任务调度 / 物理 / 寻路 / 音频 / 脚本 hosting / 编辑器与工具链等）**优先 vendored 成熟库，不再以「有参考就从头写」为默认**。用户原话：「可以直接用 Taskflow，这些关联系统完全自己写的确意义不大，核心诉求是 nanite 和 lumen 手写」「复杂度一上来，很多自己写的就不够用了」「当然前提是那些成熟库，必须是开源并且无使用风险的」。
+
+本条**作废旧原则**：`docs/NON-RENDER-ROADMAP.md` 头部「有参考的内容就考虑从头写，参照实现只作对照与节奏校准」，以及各计划里把 Jolt / Recast-Detour / miniaudio / Taskflow 称作「例外」的表述。从此**用成熟库是通例，自研是例外**；自研只在「核心算法（nanite / lumen 及其渲染主线）/ 无成熟方案 / 成熟方案确不适用」三种情况下成立，且须单独拍板。
+
+### 选型硬闸（缺一不可，不得跳过）
+
+1. **开源且无使用风险**：宽松许可证（MIT / ZLib / Apache-2.0 / MIT-0 / Public Domain 等），**LICENSE 原文随 vendored 入库**；禁 copyleft 传染（GPL/LGPL/MPL 须单独评审）、禁 EULA 限制的厂商 SDK、禁只读参考实现的代码（UE）、禁来源不明或已停维护且无替代的项目。
+2. **许可文本与项目 MIT 兼容**：允许商用 / 修改 / 再分发；无已知专利 / 授权诉讼风险。**MIT 无显式专利授权条款这一事实必须如实写明，不许对外宣称「绝对零风险」**。
+3. **零构建期新依赖**：header-only 或纯源码，不联网拉取、不要求装厂商 SDK、不引入新运行时 DLL；本机 MSVC 14.38 / C++17 能编译（沿用「构建链不依赖任何厂商图形 SDK」铁律）。
+4. **溯源留档**：`thirdparty/<lib>/VENDOR.md` 写明版本 / tag 或 commit / 上游地址 / 许可证 / C++ 标准 / 入库子集与排除项 / 风险核查结论；升级时同步更新。
+5. **边界不变**：UE 源码仍只读不抄，Carrot / bevy 仍抄思路不抄代码；第三方库只解决关联系统，**不得替代 nanite / lumen 手写主线**。业务代码不直接暴露第三方类型，经 `nl/` 薄封装隔离，保证可替换。
+
+### 已按本闸落地（统一归档，不再称「例外」）
+
+| 库 | 版本 | 许可证 | 用途 |
+|---|---|---|---|
+| Taskflow | 3.11.0 | MIT | M-J5a 显式依赖 DAG（v4 要 C++20，故取 v3 末版） |
+| Jolt Physics | 5.3.1 | MIT | 物理 |
+| Recast/Detour | 上游 1.6.0 | ZLib | 寻路（计划已立项，待开工） |
+| miniaudio | 0.11.26 | Public Domain / Unlicense | 3D 音频 |
+| NVRHI / Slang / meshoptimizer / METIS / imgui / glfw / tinygltf 等 | — | 各自 LICENSE | 既有 vendored，沿用 |
+
+---
+
 ## 每轮任务必做的 4 步前置（checklist，缺一不可）
 
 > **第 0 步 · 对话开场归属声明（2026-11-09 用户拍板，见并行轨道纪律第 7 条）**：每个对话开场先声明本次归属的**里程碑编号**；用户没给就提示补充，补上后 `python tools/wt_pool.py claim --track <轨道> --milestone <编号>` 登记，然后才动手。**收尾必须对称释放（2026-11-09 用户拍板）**：本轮里程碑做完（或对话要结束时），`python tools/wt_pool.py release --track <轨道> --milestone <编号>` 释放占用——否则 `.wt_pool_busy.json` 里的锁一直挂着，其他对话全被挡。正常收尾不带 `--force`（`--strict` 可校验文档闸）；异常中断后接手清理才用 `--force`。
@@ -125,14 +151,17 @@
 
    | 轨道 | worktree 绝对路径 | 分支 | 计划归属 |
    |---|---|---|---|
-   | Job / Task 并行 | ~~`E:/UE_STUDY_2026/nl-engine-job-system`~~（worktree 已移除，2026-11-09） | `feat/job-system`（保留） | **已收官**：M-J0~J3 完成 + 已双向合并回 master + 可视化证据图补交；M-J4 等待 P9 V4，届时按 §7.1b 重建 |
+   | Job / Task 并行 | `E:/UE_STUDY_2026/nl-engine-job-system`（junction 共享 `.workbuddy`/`slang dist`） | `feat/job-system`（保留） | **M-J5a 已合回 master**（merge `0accf6e`，2026-11-09）：vendored Taskflow 3.11.0 做显式依赖 DAG + A 档 4 路 slangc fan-in 并行 + 抽共用编译入口 `recompileGraph`；M-J0~J3 已收官 + 双向合并回 master + 可视化证据图补交；M-J4 仍等 P9 V4，M-J5b/c 为后续步。计划 `docs/p8/P8-JOB-PLAN.md`（REUSE 盘点与后续消费者已并成一份） |
    | 材质图 → Slang | ~~`E:/UE_STUDY_2026/nl-engine-material-graph`~~（worktree 已移除，2026-11-09） | `feat/material-graph`（保留） | **已收官**：B2~B4（tag `mg-b2b4`）+ T1 编辑器 M1~M3（tag `mg-t1`，merge commit `e5505bc`）全量合入 master；B5 接 PBR + T1-6 预览视口排 S7 后，届时按 §7.1b 重建 |
    | 动作系统 / 动画控制器 | ~~`E:/UE_STUDY_2026/nl-engine-action-system`~~（worktree 已移除，2026-11-09） | `feat/action-system`（保留） | **已收官**：M-A0~M-A5.4 全量 merge 回 master（merge commit `5a1912f`，tag `anim-ma1`~`anim-ma5c`）；nl/anim 纯逻辑层 + anim-tools 自测 + viewer skin 模式 + skindump/skin-demo 四资产演示页；验收纪要 `docs/MILESTONES.md` M-A 节 + `docs/action-system/ACTION-PLAN.md` + `ANIM-TOOLS-GUIDE.md`；GPU 调色板等更大规模蒙皮资产再立项 |
-   | 开发者控制台 | ~~`E:/UE_STUDY_2026/nl-engine-console`~~（worktree 拆除待批准，merge 已落地 2026-11-09） | `feat/console`（保留） | **已收官**：M-C0~C3 全量 merge 回 master（merge commit `9e12cc6`，tag `console-mc3`）：core/console 纯逻辑内核（CVar 四类型 + ExecCode 四档）+ ImGui 前端（`` ` `` 呼出/Tab 补全/历史/可拖缩）+ installBuiltins（help/cvar.list/cvar.set）+ cam.*/hud.show 真参数回调 + panelShow 解耦；selftest 49/49、双后端构建+selftest 绿、展示台 console-mc3 卡五用例实跑；归档 `docs/p8/CONSOLE-TOOLS-GUIDE.md` + `docs/screenshots/CONSOLE-EVIDENCE.md`；计划 `docs/p8/P8-CONSOLE-PLAN.md` |
+   | 开发者控制台 | ~~`E:/UE_STUDY_2026/nl-engine-console`~~（worktree 已拆，2026-11-09） | `feat/console`（保留） | **已收官**：M-C0~C3 全量 merge 回 master（merge commit `9e12cc6`，tag `console-mc3`）：core/console 纯逻辑内核（CVar 四类型 + ExecCode 四档）+ ImGui 前端（`` ` `` 呼出/Tab 补全/历史/可拖缩）+ installBuiltins（help/cvar.list/cvar.set）+ cam.*/hud.show 真参数回调 + panelShow 解耦；selftest 49/49、双后端构建+selftest 绿、展示台 console-mc3 卡五用例实跑；归档 `docs/p8/CONSOLE-TOOLS-GUIDE.md` + `docs/screenshots/CONSOLE-EVIDENCE.md`；计划 `docs/p8/P8-CONSOLE-PLAN.md` |
    | ECS-lite 场景 | `E:/UE_STUDY_2026/nl-engine-ecs` | `feat/ecs` | **E1a 收官 / 全量 merge 回 master**（2026-11-09，merge commit `2d4ad49`，tags `ecs-e0`~`ecs-e3`）：Carrot 式 OOP 组件内核（World/Entity 延迟增删 + Component 层级 + System 签名收编 + 场景 JSON roundtrip 字节一致）+ `nanite-scene` 工具 + 展示台 `p8-ecs` 卡 4 条 + `docs/p8/ECS-TOOLS-GUIDE.md`；wt 保留（E1b 渲染集成后挂等 S6 收官 tag `s6-done`，届时另编号触发渲染纪律）；计划 `docs/p8/P8-ECS-PLAN.md` |
+   | 物理（Jolt vendored 集成） | `E:/UE_STUDY_2026/nl-engine-physics` | `feat/physics` | **M-P0 + M-P1 + M-P2 已收口**（tags `phys-p0` / `phys-p1` / `phys-p2`，2026-11-09 提前解锁排期闸）：worktree 已建（junction 共享 + skip-worktree），Jolt v5.3.1 + 最小世界 + 4 层碰撞矩阵与双向关联 + 6 箱体堆叠稳定/休眠岛三用例；M-P0/M-P1 TSV 双基线逐字节回归锁死；**M-P5 场景集成仍 gate 在 P8 E3 之后**；计划 `docs/p8/P8-PHYS-PLAN.md` |
+   | 3D 空间音频（vendored miniaudio） | `E:/UE_STUDY_2026/nl-engine-audio` | `feat/audio` | **M-S0 已收口**（tag `audio-s0`，2026-11-09 用户指令「开工 M-S0 建 feat/audio」= 提前解禁 M-S0~S2）：worktree 已建（junction 共享 + skip-worktree）；vendored v0.11.26 + `nl/audio` 薄封装 + `audio-tools` 离线确定性 PCM dump（双后端 selftest 21/21）+ 展示台 `audio-s0` 卡 7 用例 + 波形/验收双证据图；归档 `docs/p8/AUDIO-TOOLS-GUIDE.md`；**M-S3 场景集成仍 gate 在 P8 E1/E1b 之后**；计划 `docs/p8/P8-AUDIO-PLAN.md` |
 
    三者均 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`；`.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。
-   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（`docs/p8/P8-NAV-PLAN.md`）、物理 `feat/physics`（`docs/p8/P8-PHYS-PLAN.md`）、3D 音频 `feat/audio`（`docs/p8/P8-AUDIO-PLAN.md`）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）。**例外（2026-11-09 拍板）**：ECS 场景轨道（`feat/ecs`，`docs/p8/P8-ECS-PLAN.md`）作为 E1 的 E1a 拆分段**提前开工**，不受此排期闸限制；三条下游轨道仍排在其后。**例外 2（2026-11-09 拍板）**：脚本轨道（`feat/script`，`docs/p8/P8-SCRIPT-PLAN.md`）E4 脚本段**解禁提前**（鸣潮方向 C#/.NET hosting，目标扩展+热更），M-SC0 无依赖即刻开工。
+   **Junction 建/删操作铁律（2026-11-09 用户点名低级错误后固化——建与删的坑都踩过两遍）**：Git Bash 里一切 `cmd //c + Windows 路径` 的尝试都会被 MSYS 路径转换破坏（建：`mklink /J` 坏；删：`rmdir` 坏或进交互模式挂起），**禁止发起**，一律 PowerShell 工具原生 API 一次到位——**建**：`New-Item -ItemType Junction -Path <link> -Target <目标>`；**删**（只摘链接、绝不穿透目标）：`[IO.Directory]::Delete($path, $false)`。删完必验证目标目录内容完好再继续拆 wt（`git worktree remove --force` 前必须先摘全部 junction，否则 force 会穿透删共享内容）。
+   **待建 worktree（已立项，执行排 P8 场景整合 E1 之后）**：寻路 `feat/pathfinding`（vendored Recast/Detour，`docs/p8/P8-NAV-PLAN.md`，2026-11-09 方案变更）——2026-11-08 用户拍板先立项、场景整合后启动，届时按本节纪律建树并更新本表（见第 6 条）；**3D 音频 `feat/audio` 已按下方「例外 4」提前建树开工，不再属于待建**。**例外（2026-11-09 拍板）**：ECS 场景轨道（`feat/ecs`，`docs/p8/P8-ECS-PLAN.md`）作为 E1 的 E1a 拆分段**提前开工**，不受此排期闸限制。**例外 2（2026-11-09 拍板）**：脚本轨道（`feat/script`，`docs/p8/P8-SCRIPT-PLAN.md`）E4 脚本段**解禁提前**（鸣潮方向 C#/.NET hosting，目标扩展+热更），M-SC0 无依赖即刻开工。**→ 已收官（2026-11-09）**：M-SC0~SC3 全链 merge 回 master（merge commit `1b49b5f`，tags `m-sc0`~`m-sc3`；M-SC3 = 脚本热更 bootstrap 中转 + collectible ALC）；worktree 已拆（junction 链接先摘后拆，见上方铁律），`feat/script` 分支保留；归档 `docs/p8/SCRIPT-TOOLS-GUIDE.md`。**例外 3（2026-11-09 用户指令「建 feat/physics 开发物理模块内容」）**：物理轨道（上表行）提前开工 M-P0~M-P3（这几步只吃 Jolt 世界 + 体封装，不依赖场景整合；计划 §排期约束括号内亦允许与 E1 并行）；**E3（序列化 + Inspector）依赖的 M-P5 不解锁**，仍按原排期闸执行。**例外 4（2026-11-09 用户指令「开工 M-S0 建 feat/audio」）**：音频轨道（上表行）提前建树开工 **M-S0~S2**（纯逻辑 / 无设备离线渲染，不依赖场景整合，照物理 §7.1e 先例）；**M-S3 场景集成仍 gate 在 P8 E1/E1b 之后**，不随本轮解锁；M-S0 已收口（tag `audio-s0`），详见 `docs/p8/AUDIO-TOOLS-GUIDE.md` 与 `docs/MILESTONES.md` P8 M-S0 节。**选型二次确认（2026-11-09）**：用户拍板物理用现成库、不自研（成本取舍），候选评审后**继续走 Jolt 5.3.1**；例外理由不再是 UE 口径（UE5 自研 Chaos，见 `UE-DIFFS.md` D10），UE 口径不参与选型。
 3. **固化文档闸**：track 分支 **merge 回 master 前**，必须在本轨道 `S*-PLAN` / `MILESTONES.md` 写验收纪要（目标达成 / 判据 / 证据 / 踩坑），否则不 merge。坑点只活在工作记忆 = 下个会话必重踩。
 4. **假绿防护 · 占坑 ≠ 文件指向**：
    - 在 track worktree 干活时，所有编辑绝对路径、shell 每条命令的 cwd **显式在对应 wt 路径内**，不依赖默认落点；
@@ -148,6 +177,7 @@
 
 ## 本项目其余硬约束（速查，完整见各文档）
 
+- **回复语言：简体中文（2026-11-09 固化）**：本项目所有 Agent 回复默认使用简体中文；代码、标识符、技术术语、命令、文件路径等保留英文原文不翻译。
 - **UE 源码只读不抄**：EULA 与项目 MIT 不兼容，一行 UE 代码都不许进 repo；参考结构与边界情况处理思路。
 - **构建链不依赖任何厂商图形 SDK**：`CMakeLists.txt` 不得出现 `VULKAN_SDK` / `find_package(Vulkan)`。后端对称：D3D12 走 Windows SDK，Vulkan 头走 `NVRHI_FETCH_VULKAN_HEADERS`，Slang 独立获取。
 - **图形 API / NVRHI / ImGui 符号只允许在 `renderer/`**；`core/` / `viewer/` 零命中。

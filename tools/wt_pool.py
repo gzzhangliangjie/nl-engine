@@ -53,7 +53,9 @@ TRACKS = {
     },
     "job-system": {
         "wt": "E:/UE_STUDY_2026/nl-engine-job-system",
-        "branch": "feat/job-system", "state": "closed",
+        "branch": "feat/job-system", "state": "active",
+        "note": "M-J5a reopened 2026-11-09 by user instruction (reuse expansion); "
+                "wt rebuilt from master 6a718fb per PARALLEL-TRACKS 7.1b",
     },
     "action-system": {
         "wt": "E:/UE_STUDY_2026/nl-engine-action-system",
@@ -73,7 +75,9 @@ TRACKS = {
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
-        "branch": "feat/physics", "state": "planned",
+        "branch": "feat/physics", "state": "active",
+        "note": "M-P0 opened 2026-11-09 by user instruction (schedule gate lifted); "
+                "M-P5 still gated on P8 E3",
     },
     "audio": {
         "wt": "E:/UE_STUDY_2026/nl-engine-audio",
@@ -86,7 +90,8 @@ TRACKS = {
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "active",
+        "branch": "feat/script", "state": "closed",
+        "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
     },
 }
 

@@ -1,0 +1,10 @@
+  [ OK ] topo order diamond = 0,1,2,3
+  [ OK ] diamond run: fan-in D sees A,B,C completed
+  [ OK ] 20 runs byte-identical (registered-order merge)
+  [ OK ] cycle rejected (negative)
+  [ OK ] duplicate/self/out-of-range edges rejected (negative)
+  [ OK ] empty body rejected (negative)
+  [ OK ] task exception surfaced (negative)
+  [ OK ] empty graph OK
+  [ OK ] dumpDot deterministic (4 nodes / 4 edges)
+jobgraph selftest: PASS (9 cases)

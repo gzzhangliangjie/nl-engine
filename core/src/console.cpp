@@ -182,6 +182,14 @@ void Console::registerCommand(const std::string& name, std::string help, Command
     commands_.emplace(name, CommandEntry{std::move(help), std::move(fn)});
 }
 
+bool Console::unregisterCommand(const std::string& name) {
+    const auto it = commands_.find(name);
+    if (it == commands_.end()) return false;
+    commands_.erase(it);
+    appendLog(Severity::Info, "command unregistered: " + name);
+    return true;
+}
+
 CVar* Console::findCVar(const std::string& name) {
     auto it = cvars_.find(name);
     return it == cvars_.end() ? nullptr : it->second.get();

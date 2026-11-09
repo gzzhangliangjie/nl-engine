@@ -1,0 +1,10 @@
+compilepar : serial  OK  (0.932s, threads=1)
+compilepar : dag     OK  (0.299s, fan-in 4->1)
+compilepar : speedup 3.12x
+compilepar : report bytes EQUAL (66 vs 66)
+compilepar : lane flags   EQUAL
+compilepar : ps.spv  hash MATCH  (0x1ad29989c4104353)
+compilepar : vs.spv  hash MATCH  (0x0f8dfcf8e527b9c4)
+compilepar : ps.dxil hash MATCH  (0xc9b989e6193eaa2f)
+compilepar : vs.dxil hash MATCH  (0xd87ac947627e875f)
+compilepar : PASS

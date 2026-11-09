@@ -134,6 +134,15 @@ public:
                  const char* vsEntry, const char* psEntry,
                  const char* nmeshFile, std::string& outError);
 
+    // M7.0（S7.0）：visibility buffer 打包写入 + 可视化。复用 initCull 的全部
+    // .nmesh / vertex pulling 资源（frustum 恒关 = 全簇全画），再追加一个
+    // RWStructuredBuffer<uint64_t>（宽×高）与两条管线。每帧三段式：
+    //   clearBufferUInt(0xFFFFFFFF) → 簇光栅 atomicMin 写 vis → 全屏 viz 解包输出。
+    // 64 位布局/打包函数唯一权威见 renderer/shaders/visbuf_common.slangh。
+    bool initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
+                    const char* vsEntry, const char* psEntry,
+                    const char* nmeshFile, bool pulling, std::string& outError);
+
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
     // 纹理暂不用，先看形变），VB 按 CopyDest + keepInitialState 建立供每帧
@@ -143,6 +152,20 @@ public:
     bool initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
                   const char* vsEntry, const char* psEntry,
                   const char* modelFile, std::string& outError);
+
+    // M-E1b.0：ECS 场景（viewer --scene）。objects/lights 由 viewer 从 World 组件
+    // O(N) 收集（meshFile 已过白名单）；流程：model.vsscene/pscene 双目标字节码 →
+    // meshFile 分组（保持首次出现序）→ 每组 loadGltfScene 首 primitive 建 VB/IB/
+    // 贴图/采样/绑定集 → 实例缓冲（每实例 5 个 float4：世界矩阵列主序 4 列 + tint）
+    // 与灯缓冲（1+2/灯）一次 writeBuffer → 单 BindingLayout + 每 batch 一个
+    // BindingSet（§2.7 单 set 纪律）→ inputLayout（vsScene 三属性）→ 联合包围球写
+    // assetSphere_。device 不初始化 Scene 时（backend init sceneMode=true）由此
+    // 方法独占建场景资源；shaderSuffix/vsEntry/psEntry 规则同 init 系列。
+    bool initScene(nvrhi::IDevice* device, const char* shaderSuffix,
+                   const char* vsEntry, const char* psEntry,
+                   const SceneObjectDesc* objects, std::uint32_t objectCount,
+                   const SceneLightDesc* lights, std::uint32_t lightCount,
+                   float ambient, const char* sceneName, std::string& outError);
 
     // M4.1：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
@@ -191,6 +214,14 @@ public:
                        const nvrhi::Viewport& viewport, const FrameParams& params);
 
     bool ready() const {
+        if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
+            return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
+                   && pipelineSceneWireNone_ && !sceneBatches_.empty();
+        // M7.0：visbuf 复用 cull_ 的资源通路，但自己的两条管线才是判据——
+        // cull 的四套 (fill×cull) 管线在 visbuf 下不必建（ensurePipelines 分支）。
+        // vis buffer / 两个 binding set 随视口尺寸在 draw() 里懒建，不进 ready()：
+        // backend 正是「!ready() 才调 ensurePipelines」，把它们算进来会首帧死锁。
+        if (visbuf_) return visRasterPSO_ && visVizPSO_ && (!pulling_ || matResolvePSO_);
         if (cull_)
             return pipelineCullBack_ && pipelineCullNone_ && pipelineCullWireBack_
                        && pipelineCullWireNone_ && cullBindingSet_;
@@ -201,6 +232,8 @@ public:
     // M0.7：模型名 / 三角形数，backend 填进 DeviceInfo，HUD 截图自证加载了哪个模型。
     const std::string& modelName() const { return modelName_; }
     std::uint32_t triangleCount() const { return triangleCount_; }
+    // M-E1b.0：ECS 场景实例数（非 scene 模式恒 0；backend 拷进 DeviceInfo）。
+    std::uint32_t instanceCount() const { return sceneInstanceCount_; }
     // M2.3：当前层号与 parent error（v1 资产无 lodMeta → 0 / 0）。
     int   lodLevel() const { return lodLevel_; }
     float lodMaxError() const { return lodMaxError_; }
@@ -288,6 +321,7 @@ private:
     // ---- M4.1（S4.1）：GPU 视锥剔除（bevy cull_clusters.wesl 蓝本）----
     bool                          frustumCull_ = false;   // --frustum off 时整条路径旁路
     std::uint32_t                 clusterCount_ = 0;      // 总簇数（static dispatch 用）
+    std::uint32_t                 maxTriPerCluster_ = 0;  // M7.0：triId 8 位打包的断言依据
     nvrhi::BufferHandle           clusterSpheres_;  // StructuredBuffer<float4>，世界空间球
     nvrhi::BufferHandle           visibleList_;     // StructuredBuffer<uint>，compute append / VS 读
     nvrhi::ShaderHandle           csCull_;
@@ -308,6 +342,36 @@ private:
 
     // ---- M-A5：CPU 蒙皮 ----
     bool skinMode_ = false;                      // draw() 走逐帧蒙皮路径
+
+    // ---- M-E1b.0：ECS 场景资源（viewer --scene；N 实例化物体 + M 方向灯）----
+    // 与其他模式互斥：sceneMode_ 置位后 draw/ensurePipelines/ready 走专属分支，
+    // 既有路径（normal/cluster/cull/dag/hiz/skin）零改动。
+    bool sceneMode_ = false;
+    nvrhi::ShaderHandle        vsScene_, psScene_;
+    nvrhi::BufferHandle        sceneLights_;      // StructuredBuffer<float4>，1+2/灯
+                                                  //（[0]=(lightCount,ambient,1/ΣI,0)）
+    nvrhi::InputLayoutHandle   sceneInputLayout_;
+    nvrhi::BindingLayoutHandle sceneBindingLayout_;   // 单 layout：t0+s0+b0+t5+t6（§2.7）
+    // 每 mesh 一个批次（同一 meshFile 的所有实例共享 VB/IB/贴图/BindingSet）。
+    // M-E1b.1：每个 batch 持有自己的 t5 实例缓冲——SV_InstanceID 是 draw 内
+    // 0-based，不依赖 startInstanceLocation 的硬件语义（DX12 不把它计入实例号，
+    // 旧实现多 batch 时所有批次都读槽 0）；也避开 Vulkan storage buffer SRV
+    // 子范围的 minStorageBufferOffsetAlignment 约束（批次起点按 80B 递增）。
+    struct SceneMeshBatch {
+        nvrhi::BufferHandle vb, ib;
+        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，5/实例
+        nvrhi::TextureHandle tex;
+        nvrhi::SamplerHandle sampler;
+        nvrhi::BindingSetHandle set;
+        std::uint32_t indexCount = 0;
+        std::uint32_t instanceCount = 0;
+    };
+    std::vector<SceneMeshBatch> sceneBatches_;
+    nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
+    nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    float         sceneAmbient_ = 0.28f;
+    std::uint32_t sceneLightCount_ = 0;
+    std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源
     nl::anim::Skeleton        skinSkeleton_;
     std::vector<nl::anim::AnimClip> skinClips_;
     nl::anim::SkinBinding     skinBinding_;
@@ -394,6 +458,34 @@ private:
     bool                         hizFailed_ = false;   // 懒建失败只报一次，后续帧跳过 hiz
     bool ensureHizTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                           std::string& outError);
+
+    // ---- M7.0（S7.0）：visibility buffer ----
+    // 介质 = RWStructuredBuffer<uint64_t>，长度 宽×高。vendored NVRHI 全树无
+    // R64 纹理格式（预研实测），故从 UE/bevy 的 image atomic 改走 buffer atomic；
+    // 打包/clear/原子方向全部保持 Option A 口径，偏离登记 docs/s5/UE-DIFFS.md。
+    // 尺寸随视口，在 draw() 里懒建（与 ensureHizTargets 同一套纪律）。
+    bool                         visbuf_ = false;
+    nvrhi::IDevice*              visbufDevice_ = nullptr;
+    std::uint32_t                visW_ = 0, visH_ = 0;
+    nvrhi::ShaderHandle          vsVisRaster_, psVisRaster_, vsVisViz_, psVisViz_;
+    nvrhi::BufferHandle          visBuffer_;      // u64 buffer，宽×高
+    nvrhi::BufferHandle          visConstants_;   // volatile CB 16B（b1）
+    nvrhi::BindingLayoutHandle   visRasterLayout_; // b0 + b1 + t1..t4 + u0
+    nvrhi::BindingSetHandle      visRasterSet_;
+    nvrhi::BindingLayoutHandle   visVizLayout_;    // b1 + t0
+    nvrhi::BindingSetHandle      visVizSet_;
+    nvrhi::GraphicsPipelineHandle visRasterPSO_;
+    nvrhi::GraphicsPipelineHandle visVizPSO_;
+    // M7.1（S7.1）：材质反解 pass（pulling）。复用 vis 簇资源 + PBR 贴图。
+    bool                         pulling_ = false;                 // 是否启用材质反解
+    nvrhi::ShaderHandle          vsMatResolve_, psMatResolve_;
+    nvrhi::BufferHandle          matResolveConstants_;             // volatile CB 16B（b2）
+    nvrhi::BindingLayoutHandle   matResolveLayout_;                // b0+b1+b2+t0..t3+t4+t5+s0
+    nvrhi::BindingSetHandle      matResolveSet_;
+    nvrhi::GraphicsPipelineHandle matResolvePSO_;
+    bool                         visbufFailed_ = false;  // 懒建失败只报一次
+    bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                             std::string& outError);
 };
 
 } // namespace nl::renderer::detail

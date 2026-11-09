@@ -37,9 +37,14 @@ public:
     // true = 建 cull compute pass 并每帧剔除；false = 恒等可见列表（M4.0 行为）。
     // dagMode（M5.1）优先于 cullMode：多层 .lodN 驻留 + DAG 遍历 compute 选层。
     // hizMode（M6.0）优先于 dagMode：dag 遍历之上再加深度预通道 + min 金字塔。
+    // sceneMode（M-E1b.0）为 true 时不初始化 Scene（其余 swapchain/depth/
+    // framebuffer/present 照常）——场景资源由 loadEcsScene 建立后才可绘制。
+    // visbufMode（M7.0）独立优先级最高：吃 .nmesh，但走 vis buffer 三段式
+    // 光栅而不是 S4 的常规着色路径。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
+                      bool sceneMode, bool visbufMode, bool pullingMode,
                       std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
@@ -51,6 +56,14 @@ public:
     // group >= 0 = 挖掉该组在顶层生成的父簇区间、换回组内子簇。越界 / 无血缘
     // / 层数不足返回 false 且保持原画面。
     virtual bool setDagCut(int group, std::string& outError) = 0;
+
+    // M-E1b.0：ECS 场景加载（sceneMode=true 的 init 之后调用一次）。转发
+    // scene_.initScene 建 shader/批次/实例与灯缓冲/绑定集；成功后更新
+    // info().modelName / triangleCount / instanceCount / assetSphere。
+    virtual bool loadEcsScene(const SceneObjectDesc* objects, std::uint32_t objectCount,
+                              const SceneLightDesc* lights, std::uint32_t lightCount,
+                              float ambient, const char* sceneName,
+                              std::string& outError) = 0;
 
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
     // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。

@@ -34,6 +34,14 @@ message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no networ
 
 set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
+# ---- Taskflow v3.11.0（MIT / header-only / C++17）：M-J5a 显式依赖 DAG ----
+# 选型闸与风险核查见 thirdparty/taskflow/VENDOR.md；cuda/ 未入库，无 CUDA 依赖。
+# 只用 INTERFACE 目标暴露 include 路径：不编源、不产库、不联网、不新增 DLL。
+add_library(taskflow INTERFACE)
+# 上游布局：include root 是仓库根（vendored 后 = ${THIRDPARTY}），
+# 业务侧写 #include <taskflow/taskflow.hpp>；不可用 .../taskflow 本身作 root。
+target_include_directories(taskflow INTERFACE ${THIRDPARTY})
+
 # ---- 本地 headers targets：NVRHI 会按这些名字检测，检测到就不走 FetchContent 联网 ----
 add_library(Vulkan-Headers INTERFACE)
 target_include_directories(Vulkan-Headers INTERFACE ${THIRDPARTY}/vulkan-headers/include)
@@ -153,6 +161,9 @@ add_library(nl_core STATIC
     core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/jobgraph.cpp      # P8 M-J5a：显式依赖 DAG 薄封装（vendored Taskflow 只在此 TU 出现）
+    core/src/scheduler.cpp     # P8 M-J5b：进程级常驻调度底座（组合 compute/io 两个 ThreadPool）
+    core/src/jobsync.cpp       # P8 M-J5c-prep：动态依赖计数 job + Barrier（Jolt 合约同构，Jolt 无关）
     core/src/console.cpp       # P8 M-C0：开发者控制台纯逻辑内核（A 类轨道，零图形符号）
     core/src/material_graph/graph.cpp   # B 路材质图：节点图数据模型 + 序列化
     core/src/material_graph/emit.cpp    # B 路材质图：图 -> Slang 代码生成（B3）
@@ -161,12 +172,26 @@ add_library(nl_core STATIC
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
+    core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
+    core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
+    core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+# dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
+# vendored）只允许 core/src/script/Vm.cpp 出现（PIMPL 纪律，Vm.hpp 不暴露），故 PRIVATE。
+target_include_directories(nl_core PRIVATE ${THIRDPARTY}/dotnet-hosting/include)
+# libnethost 不可用（是静态库，与 nethost.h 默认 dllimport 语义不符 → __imp_ 符号
+# 解析失败，M-SC0 踩坑）：用 nethost.lib 真导入库 + nethost.dll 运行期紧挨 exe
+# （官方 hosting 样例布局）。静态库 PRIVATE 依赖以 LINK_ONLY 传给 exe 链接行。
+if(MSVC)
+    target_link_libraries(nl_core PRIVATE ${THIRDPARTY}/dotnet-hosting/lib/nethost.lib)
+endif()
 # tinygltf PUBLIC：M-E1 起组件序列化接口（nl/scene/Component.hpp）在头里暴露
 # vendored nlohmann json（P8-ECS-PLAN 拍板：tinygltf 内嵌 json.hpp，零新依赖），
 # 消费方（nanite-scene / M-E2 viewer）需解析 json.hpp 路径。
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
+# M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
+target_link_libraries(nl_core PUBLIC taskflow)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 Jolt)
 # M-P3：启用 Jolt 调试渲染（碰撞形状线框提取）。Jolt 库本身已以 PUBLIC 带上该宏，
 # 这里显式复述，避免单配置 Release 下 generator-expression 传播的任何边界情况。
@@ -237,9 +262,11 @@ endif()
 #   <name>.vs.{spv,dxil}          入口 vsMain
 #   <name>.vscluster.{spv,dxil}   入口 vsCluster（M1.3：多带 CLUSTERCOLOR 顶点属性）
 #   <name>.vscull.{spv,dxil}      入口 vsCull（M4.0：GPU vertex pulling）
+#   <name>.vsscene.{spv,dxil}     入口 vsScene（M-E1b.0：ECS 场景实例化，SV_InstanceID）
 #   <name>.ps.{spv,dxil}          入口 psMain
 #   <name>.pscluster.{spv,dxil}   入口 psCluster（M1.3）
 #   <name>.pscull.{spv,dxil}      入口 psCull（M4.0）
+#   <name>.pscene.{spv,dxil}      入口 psScene（M-E1b.0：N 物体 M 方向灯）
 # cull.slang 单 compute 入口（M4.1）：<name>.cs.{spv,dxil} 入口 csCull
 file(GLOB NL_SHADER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/*.slang")
 if(NOT NL_SHADER_SRCS)
@@ -253,13 +280,33 @@ set(_SHADER_ARTIFACTS "")
 # 入口清单按源文件给：model.slang 双入口（M1.3 cluster 场景），其余单入口。
 # D3D12 debug layer 对「VS 签名有但 input layout 不提供」的属性报 error，
 # 所以 normal 场景必须用不带 CLUSTERCOLOR 的 vsMain/psMain 对，两个场景各用各的入口。
+# M7.0（S7.0）：visbuf 路径的 4 个新入口全部收进独立的 visbuf.slang，
+# model.slang 一个字节都不动（老产物 100% 不变）。64 位原子在 DXIL 上必须
+# SM6.6（spike 实测：默认 profile 报 "64-bit atomic operations should only be
+# used in Shader Model 6.6+"），所以只给 _SM66_ARTIFACTS 列出的**新产物**
+# 加 -profile sm_6_6，否则 exe=current 的 HUD 基线要全部重拍。
 set(_ENTRIES_MODEL "vsMain|vs|vertex" "vsCluster|vscluster|vertex" "vsCull|vscull|vertex"
-                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment")
+                   "vsScene|vsscene|vertex"
+                   "psMain|ps|fragment" "psCluster|pscluster|fragment" "psCull|pscull|fragment"
+                   "psScene|pscene|fragment")
 set(_ENTRIES_DEFAULT "vsMain|vs|vertex" "psMain|ps|fragment")
 # M4.1：cull.slang 单 compute 入口（GPU 视锥剔除 pass）。
 set(_ENTRIES_CULL "csCull|cs|compute")
 # M5.1：dag.slang 单 compute 入口（DAG 遍历选层，显式栈）。
 set(_ENTRIES_DAG "csDag|cs|compute")
+# M7.0：visbuf.slang 四入口——簇光栅（vertex pulling + u64 atomicMin 写 vis）
+# 与全屏可视化（解包 → 簇/三角颜色）。
+set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fragment"
+                    "vsVisViz|vsvisviz|vertex" "psVisViz|psvisviz|fragment")
+# M7.1（S7）：material.slang 单全屏 pass——vis 反解 + 材质着色。无 u64 原子（只读
+# vis SRV），故不进 _SM66_ARTIFACTS 白名单，走默认 profile；与 visbuf.slang 同源
+# visbuf_common.slangh，故也吃 _SHADER_EXTRA_DEPS（见下方 STREQUAL 条件）。
+set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
+# 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
+set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
+# DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
+set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
+                    "visbuf.vsvisviz" "visbuf.psvisviz")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -275,6 +322,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_DAG}")
     elseif(_SRC_NAME STREQUAL "hiz")
         set(_ENTRIES "${_ENTRIES_HIZ}")
+    elseif(_SRC_NAME STREQUAL "visbuf")
+        set(_ENTRIES "${_ENTRIES_VISBUF}")
+    elseif(_SRC_NAME STREQUAL "material")
+        set(_ENTRIES "${_ENTRIES_MATERIAL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -283,6 +334,19 @@ foreach(_SRC ${NL_SHADER_SRCS})
         list(GET _SPEC_LIST 0 _entry)
         list(GET _SPEC_LIST 1 _suffix)
         list(GET _SPEC_LIST 2 _stage)
+        list(FIND _SM66_ARTIFACTS "${_SRC_NAME}.${_suffix}" _sm66_idx)
+        if(_sm66_idx GREATER_EQUAL 0)
+            set(_DXIL_PROFILE -profile sm_6_6)
+        else()
+            set(_DXIL_PROFILE "")
+        endif()
+        # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
+        # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
+        if(_SRC_NAME STREQUAL "visbuf" OR _SRC_NAME STREQUAL "material")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+        else()
+            set(_SHADER_EXTRA_DEPS "")
+        endif()
         list(APPEND _SHADER_ARTIFACTS "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
                                       "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil")
         # SPIR-V 目标必须按 NVRHI 的默认 VulkanBindingOffsets 平移寄存器：
@@ -294,12 +358,14 @@ foreach(_SRC ${NL_SHADER_SRCS})
                     -fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-u-shift 384 0
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.spv"
             MAIN_DEPENDENCY "${_SRC}"
+            DEPENDS ${_SHADER_EXTRA_DEPS}
             COMMENT "Slang -> SPIR-V (${_SRC_NAME}.${_suffix})")
         add_custom_command(OUTPUT "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             COMMAND "${SLANGC}" "${_SRC}" -dxc-path "${NL_DXC_DIR}"
-                    -target dxil -entry ${_entry} -stage ${_stage}
+                    -target dxil -entry ${_entry} -stage ${_stage} ${_DXIL_PROFILE}
                     -o "${_SHADER_OUT}/${_SRC_NAME}.${_suffix}.dxil"
             MAIN_DEPENDENCY "${_SRC}"
+            DEPENDS ${_SHADER_EXTRA_DEPS}
             COMMENT "Slang -> DXIL (${_SRC_NAME}.${_suffix})")
     endforeach()
 endforeach()
@@ -337,6 +403,15 @@ target_link_libraries(material-graph-tools PRIVATE nl_core)
 add_executable(nanite-scene nanite-scene/main.cpp)
 target_link_libraries(nanite-scene PRIVATE nl_core)
 
+# ---- M-SC0：nl-script —— C# hosting（nl/script）自测工具，A 类并行轨道 ----
+# 退出码约定：0=PASS / 1=断言失败或脚本运行失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
+# nethost.dll 运行期紧挨 exe（官方 hosting 样例布局：链 libnethost 导入库 + copy dll）。
+add_executable(nl-script nl-script/main.cpp)
+target_link_libraries(nl-script PRIVATE nl_core)
+add_custom_command(TARGET nl-script POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${THIRDPARTY}/dotnet-hosting/bin/nethost.dll $<TARGET_FILE_DIR:nl-script>)
+
 # ---- P8 M-C0：开发者控制台工具（A 类轨道，工具版交代）----
 # core/console 纯逻辑内核的机械单测 + demo 注册表执行器（selftest / exec）。
 # 只链 nl_core，零图形 API；不依赖 renderer / viewer。
@@ -352,7 +427,7 @@ target_link_libraries(phys-tools PRIVATE nl_core)
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console phys-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script phys-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()

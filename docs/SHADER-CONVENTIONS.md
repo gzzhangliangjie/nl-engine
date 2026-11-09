@@ -147,8 +147,32 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 - **遮挡金字塔口径 = max（每 texel 最远表面径向距离），不是 min**（M6.1 拍板修正，2026-11-09）：遮挡判定 =「簇最近点 vs 区域最远表面」（UE `NaniteHZBCull.ush IsVisibleHZB` inverted-Z 取 min、bevy `downsample_depth.wesl` reverse-Z 取 min，两者换算到径向距离度量都是 max）。S6-PLAN 原文 min 口径在径向距离下不保守会漏画。连锁语义：①边界 clamp 读「空 texel = 1e9 参与 max 只放大」保守方向仍正确；②top 回读三态（真实值 / -2 背景主导 / -1 无数据），画面有背景像素时 top far = 1e9 是**合法值**不是异常；③dag 遍历侧 view space 是右手系 -z 朝前（camera.cpp:28），Mara&Morgan/UE 球投影公式按 +z 朝前推导，必须 `wz = -vc.z` 换轴，否则剔除静默失效（hiz==dag 无剔除的假绿）。
 - **帧内禁止开第二个 immediate command list**（NVRHI「Two or more immediate command lists cannot be open」）：懒建资源（如金字塔首建）的补清屏用 just-created 标志挪到当前帧 cmd 执行，不能在 ensureHizTargets 里另开列表执行。
 
+### 2.9 ⚠️ 64 位原子：编译 profile、设备启用、介质三件事（2026-11-09，M7.0 实测）
+- **DXIL 必须 `-profile sm_6_6`**：默认 profile 下 slangc/DXC 报 `opcode '64-bit atomic operations' should only be used in Shader Model 6.6+`（纹理 / buffer / PS 三路全试过）。CMake 用 `_SM66_ARTIFACTS` 白名单**只给 visbuf 的 4 个新产物**加，老产物一个字节都不能动——否则 exe=current 的 HUD 基线要全量重拍。SPIR-V 不需要 profile，直通（`OpCapability Int64` + `Int64Atomics`）。
+- **Vulkan 查询 ≠ 启用**：`reportFeatures()` 里的 `vkGetPhysicalDeviceFeatures2` 只是查；真正用 64 位原子必须在 `vkCreateDevice` 的 `pNext` 挂 `VkPhysicalDeviceShaderAtomicInt64Features`（`shaderBufferInt64Atomics=VK_TRUE`）并在 device extension 里加 `VK_KHR_shader_atomic_int64`。只查不启 = SPIR-V 编得出、运行时被驱动拒。Vulkan 1.4 头文件里这个 feature 已从 `Vulkan12Features` 拆成独立结构。
+- **DX12 能力位在 Options11**：`AtomicInt64OnDescriptorHeapResourceSupported` 才对应 `RWStructuredBuffer`（structured/raw UAV）；Options9 的 `AtomicInt64OnTypedResourceSupported` / `AtomicInt64OnGroupSharedSupported` 分别管 typed resource 与 group shared，**不能拿它们当 buffer 原子的判据**。
+- **介质：u64 buffer，不是 R64 纹理**：vendored NVRHI 零 R64 格式；`InterlockedMin(RWStructuredBuffer<uint64_t>[idx], v)`。buffer desc 需 `structStride=8`、`canHaveUAVs=true`、`initialState=CopyDest`、`keepInitialState=true`。`clearBufferUInt(buf, 0xFFFFFFFFu)` 正好把每个 u64 清成 `VIS_EMPTY`（DX12 自动建 R32_UINT typed clear UAV，与 structured UAV 并存合法；Vulkan 走 fillBuffer）。
+- **clear 必须排在首个 `setGraphicsState` 之前**（Vulkan 的 `clearBufferUInt` 内部 `endRenderPass()`）；validation 层要求命令列表类型 ≤ `CommandQueue::Compute`，graphics 列表（枚举 0）满足。
+- **公共头用 `.slangh` 后缀**：`visbuf_common.slangh` 只被 `#include`，不进 CMake 的 `*.slang` GLOB（否则会被当成独立 shader 源去找 `vsMain/psMain`）。CMake 只给真正 include 它的产物加 `DEPENDS`，避免老产物的构建规则变动被 NMake 判为过期。
+
+### 2.10 ⚠️ 实例化禁止依赖 startInstanceLocation 的 SV_InstanceID 全局语义（2026-11-09，M-E1b.1 实测）
+
+- **现象**：ECS 场景多 batch 时把全场实例放一个 StructuredBuffer，用 `DrawArguments::setStartInstanceLocation(batch.instanceStart)` 划窗口，认定 `SV_InstanceID` 是全局槽号。**DX12 实际不把 `StartInstanceLocation` 计入 `SV_InstanceID`** → 每个 batch 都从槽 0 开始读，画面只剩第一个 batch 的实例。
+- **判据**：2-batch 最小探针（两实例 x=±4）叠成一个 blob；50 实例 / 4 batch 只剩 13 个物体，连通域位置恰与第一个 batch 的 13 个实例一一对应。单 batch 场景（M-E1b.0）不会暴露此坑。
+- **定稿**：**每个 draw 批次持有自己的实例 StructuredBuffer**，shader 用 0-based `SV_InstanceID` 直接按 `id*5` 寻址，`drawIndexed` 不设 `startInstanceLocation`。与 Carrot `ModelRenderSystem::renderModels` 逐 modelRenderer 交 `InstanceData` 同口径，也绕开 DXIL / SPIR-V 对实例 base 语义的差异。
+- **不走「同一 buffer 绑 SRV 子范围」**：`BindingSetItem::StructuredBuffer_SRV` 虽支持 `BufferRange`，但 Vulkan 的 `VkDescriptorBufferInfo.offset` 受 `minStorageBufferOffsetAlignment`（常 64B）约束，而批次起点按 5×16=80B 递增会踩对齐。
+- 单 batch 时新旧实现同构，既有画面基线逐字节不变（M-E1b.1 实测 MD5 一致）。
+
+### 2.11 ⚠️ ECS 场景点光源灯缓冲布局与向后兼容（2026-11-09，M-E1b.2）
+
+- **t6 = `g_lights` 定稿**：`[0] = (lightCount, ambient, 1/ΣI(仅方向灯), pointCount)`，之后**每灯 3 个 float4**：`{dir.xyz, intensity}`、`{color.rgb, type}`、`{position.xyz, InvRadius}`。`type=0` 方向灯 / `1` 点光；`InvRadius = 1/range` 由 CPU 预算（UE `LightData.InvRadius` 同款）——**shader 内禁止再对灯参数做除法**，DXIL / SPIR-V 的除法取整会拆散双后端 bytes。M-E1b.0/1 的「每灯 2 个 float4」布局已作废。
+- **衰减公式照抄 UE** `Engine/Shaders/Private/DeferredLightingCommon.ush:480-486`（实读）：`DistanceAttenuation = 1/(d²+1) * Square(saturate(1 - Square(d² * InvRadius²)))`；`L = ToLight * rsqrt(d²)`、`NoL = saturate(dot(N,L))`（点光单面；方向灯仍用 `abs(dot)` 兼容关背面剔除）。半径外窗函数平滑归零而非硬截断。
+- **归一化口径**：方向灯贡献按 `1/ΣI` 加权平均（M-E1b.0 口径，避免多灯过曝），点光按绝对强度**独立累加**、不进归一化（否则 `att<<1` 会让点光几乎不可见）。**无点光时 `psScene` 必须走 M-E1b.0 原表达式分支**（以 `[0].w = pointCount` 作 uniform 分支判据），否则既有画面基线会变。
+- **`vsScene` 输出 `WORLDPOS` 插值量**供点光算距离；新增 interpolator 后必须复拍 `scene` / `scale` 两卡验证既有基线（本轮实测见 `MILESTONES.md` M-E1b.2 段）。
+- **组件序列化向后兼容铁律**：`LightComponent::serialise()` 对 `type=0` **不写新键**（既有场景 JSON 与 `ecs-serial` roundtrip 逐字节不变）；`deserialise` 缺键按方向灯处理；非法 `type` / `range<=0` 在 viewer 收集段显式报错退出码 2，不在组件层 assert。
+
 ## 3. 当前局限
-- **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`，无需改 CMake，重新跑 build 脚本即触发重新 configure 并生成 `<name>.{vs,ps}.{spv,dxil}`。注意 `file(GLOB)` 在 configure 时求值，纯新增文件（不碰 CMakeLists）时若没触发重编，手动重跑一次 build 脚本即可。
+- **CMake 已改为 `file(GLOB renderer/shaders/*.slang)` 自动收集**：新增单入口 shader 只需在 `renderer/shaders/` 放一份 `<name>.slang`（默认 `vsMain/psMain` 双入口）；**多入口 shader 必须在 CMakeLists 登记 `_ENTRIES_<NAME>`**（model 6 / hiz 6 / visbuf 4 个入口），需要 SM6.6 的产物进 `_SM66_ARTIFACTS` 白名单（见 §2.9）。公共 `#include` 头用 `.slangh` 后缀避开 GLOB。注意 `file(GLOB)` 在 configure 时求值，纯新增文件若不触发重编，手动重跑一次 build 脚本即可。
 - **shader 名仍由共享类固定拼接**：M0.4 把两后端重复的路径/入口名收进了 `renderer/src/scene.cpp`，M0.5 又加了一个 `renderer/src/hud.cpp`（`<name>` = `hud`），两者各自是常量；多材质系统（shader 名 → 产物 + 入口 + pipeline 的注册表）留到 S1。
 - HUD 只绑一张字体图集、忽略 `ImDrawCmd::TextureId`；自定义纹理 / 中文 / 输入框 / docking 的扩法见 `docs/IMGUI-GUIDE.md`。
 - 多 pass / 多 render target 的 shader 尚未涉及，`-stage` 目前只用 `vertex`/`fragment`。
@@ -157,12 +181,12 @@ Vulkan 没有 b/t/s 三套独立寄存器命名空间，NVRHI 用 `VulkanBinding
 ## 4. 验收自检
 ```bash
 scripts/build-m0.2.bat DX12        # 或 VULKAN
-build/<backend>/viewer.exe --selftest                                   # 14/14，含 8 个产物魔数
+build/<backend>/viewer.exe --selftest                                   # 16/16，含 40 个产物魔数
 build/<backend>/viewer.exe --screenshot out.png --frames 8 --no-hud
 build/<backend>/viewer.exe --screenshot hud.png --frames 8 --hud --size 960x540
 build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 ```
-- `spv` = `03 02 23 07`、`dxil` = `DXBC`，`model` 与 `hud` 各 4 个产物共 8 个，由 `--selftest` 逐项核对并打印字节数。
+- `spv` = `03 02 23 07`、`dxil` = `DXBC`，当前共 **40 个产物**（model 12 / cull 2 / dag 2 / hiz 12 / hud 4 / visbuf 8），由 `--selftest` 逐项核对并打印字节数。
 - 两后端都渲染出带贴图的 Suzanne（黄色眼睛、灰色皮毛细节），`deviceErrors=0`，`--no-hud` 正常视角 PNG **逐字节相同**；`--hud` 两张必然不同（面板印的后端名 / 调试层不同），见 `docs/IMGUI-GUIDE.md` §5。
 - `--dist 0.6 --cull none` 相机在模型内部能看到带贴图内壁；同参数 `--cull back` 只剩背景，证明剔除真的生效。
 - 改 shader → 重新 build 自动重编字节码，无需手动跑 slangc。

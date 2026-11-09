@@ -3,8 +3,10 @@
 // 模型参考（只学结构不抄代码）：
 //   - bevy_tasks 固定池（TaskPoolBuilder.num_threads）+ scope 主线程 block_on 参与驱动；
 //   - UE ParallelFor：按 MinBatchSize 切块分给 TaskGraph，主线程 FinishedSignal->Wait。
-// 不引第三方线程库（P8-JOB-PLAN 底线）；标准库 mutex/cv 足够——离线管线任务粒度大
-// （每组数千三角），共享队列锁竞争可忽略，不做 per-thread deque 窃取（Carrot 反向证据）。
+// M-J0~J3 用标准库 mutex/cv 实现数据并行 + fork-join（离线任务粒度大、锁竞争可忽略，
+// 不做 per-thread deque 窃取，Carrot 反向证据）。M-J5a 起「有前置依赖」的任务改走
+// nl/core/jobgraph.hpp（vendored Taskflow 3.11.0）；本池保持原样、不替换。
+// 旧注释「不引第三方线程库」已按 2026-11-09 用户拍板作废（见 AGENTS.md 选型闸）。
 //
 // 边界（写死，防误用）：
 //   - parallelFor 不可嵌套调用同一实例；多线程不可并发调用同一实例的 parallelFor/scope。
@@ -47,6 +49,14 @@ public:
                      std::size_t minBatch = 1);
 
     unsigned threadCount() const { return threadCount_; }
+
+    // ---- M-J5c-prep：动态依赖执行器的两个最小原语（jobsync 专用，与 parallelFor/scope 共用队列）----
+    // post：投递单任务。闭包自含计账与异常处理（worker 只负责取任务执行）。
+    void post(std::function<void()> fn);
+    // runOne：帮跑原语——若队列有任务则取出一并执行；返回是否取到。
+    // 供等待方（Barrier::wait / JobSync::wait）阻塞期参与执行，防「全池都在等、被等任务饿死」。
+    // 闭包应自含异常处理；此处兜底吞异常（与 workerLoop 同款）。
+    bool runOne();
 
     // ---- M-J1：scoped fork-join（仿 bevy pool.scope）----
     // 同步 fork-join：fn 内 spawn 的任务（含嵌套 spawn）全部完成后才返回；
