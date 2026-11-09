@@ -5797,6 +5797,64 @@
           "command": "gl-tools trace --dt abc"
         }
       ]
+    },
+    {
+      "id": "gl1",
+      "label": "M-GL1",
+      "name": "游戏循环 M-GL1：viewer 接双帧（GameClock 暂停/倍速）",
+      "tag": "gl-m1",
+      "date": "2026-11-10",
+      "summary": "A 类并行轨道 feat/gameloop：M-GL0 的 nl::core::GameClock 接进 viewer 主循环（skin 模式非 --anim-time 路径走双帧模型：渲染帧喂 dt、逻辑帧 60Hz accumulator 消费、simTime 量化不插值）。控制台命令 game.pause（无参翻转，暂停=bevy 时钟停摆——画面冻结、HUD/相机照常）、game.timeScale（[0,1024] 钳制）、game.status（截图日志锚）；新增 --fixed-dt <ms> 钉渲染帧 delta（对拍确定性）。物理叠加层与 ECS scene tick 的统一迁入属 M-GL2（与 M-S3 合并收口）。",
+      "acceptance": [
+        "暂停冻结三重证：pause120 == pause60（渲染帧推进而姿态逐字节不变）== --anim-time 0（两条代码路径同一姿态），双后端成立",
+        "倍速轨迹等价证：timeScale 2 × fixed-dt 16.7 与 fixed-dt 33.4 × scale 1 每帧喂入逐位相同（16.7×2 与 33.4 的 double 乘法舍入可交换），PNG 逐字节相等，双后端成立",
+        "捕获帧日志锚：game clock: simTime/ticks/paused/scale 与 PNG 同帧（200 tick = 3.3333s 落 walk 周期中部，避开 240 tick=4.0s wrap 回 t0 的巧合等值）",
+        "run.bat ALL GREEN + check.py 10/10（含基线复现）+ gl0 ctest 双后端 3/3 + viewer selftest 16/16"
+      ],
+      "exe": {
+        "dx12": "build/DX12/viewer.exe",
+        "vulkan": "build/VULKAN/viewer.exe"
+      },
+      "cases": [
+        {
+          "id": "pause",
+          "name": "game.pause：逻辑时钟停摆，渲染帧照常",
+          "kind": "image",
+          "note": "--console-exec \"game.pause\" + --fixed-dt 16.7：120 帧运行，simTime 恒 0（HUD 全程在场 = 渲染帧活着）。基线 == pause60 == --anim-time 0 三方逐字节相等（check.py 交叉验证）。",
+          "baselines": {
+            "dx12": "example/gl1/gl1-pause120-DX12.png",
+            "vulkan": "example/gl1/gl1-pause120-VULKAN.png"
+          },
+          "args": [
+            "--mode", "skin", "--hud",
+            "--screenshot", "{out}",
+            "--frames", "120",
+            "--fixed-dt", "16.7",
+            "--console-exec", "game.pause"
+          ],
+          "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 120 --fixed-dt 16.7 --console-exec \"game.pause\"",
+          "script": "example/gl1/run.bat pause"
+        },
+        {
+          "id": "scale2",
+          "name": "game.timeScale 2：缩放馈入轨迹等价",
+          "kind": "image",
+          "note": "timeScale 2 × fixed-dt 16.7 与 fixed-dt 33.4（scale 1）每帧馈入逐位相同 → 捕获帧 200 tick = 3.3333s（walk 周期中部）姿态逐字节相等；与暂停组不同字节。",
+          "baselines": {
+            "dx12": "example/gl1/gl1-scale2-DX12.png",
+            "vulkan": "example/gl1/gl1-scale2-VULKAN.png"
+          },
+          "args": [
+            "--mode", "skin", "--hud",
+            "--screenshot", "{out}",
+            "--frames", "100",
+            "--fixed-dt", "16.7",
+            "--console-exec", "game.timeScale 2"
+          ],
+          "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 100 --fixed-dt 16.7 --console-exec \"game.timeScale 2\"",
+          "script": "example/gl1/run.bat scale"
+        }
+      ]
     }
   ]
 }

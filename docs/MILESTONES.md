@@ -1973,3 +1973,12 @@
 - **完成情况**：selftest 21/21 ALL GREEN（新增 5 项 scope 断言）；真实验证——主树 --check exit 0、gameloop wt cwd 跑主树三脚本全部 exit 2、wt 内 `scope --milestone M-GL0` OK。
 - **踩坑**：server.py 原本没 import sys，树闸首次接线即 NameError（regression 连带 --help exit 1），补 import 后全通。
 - **固化**：AGENTS.md 并行轨道第 8 条 + PARALLEL-TRACKS.md §7.7；`wt_pool.py` 自身不接树闸（跨树工具设计使然）。
+
+## P8 M-GL1：viewer 主循环接双帧 + game.* console + --fixed-dt（feat/gameloop，2026-11-10，tag `gl-m1`）
+
+- **动作**：M-GL0 的 `nl::core::GameClock` 接进 viewer——`runNormal` skin 模式非 `--anim-time` 路径改走 `GameClock::tick`（渲染帧喂 dtMs → 逻辑帧 60Hz accumulator 消费 → simTime 量化不插值）；`--anim-time` 兼容路径原样保留（绕过时钟，既有基线逐字节零风险）。控制台 `game.pause`（无参翻转；暂停=bevy 时钟停摆——simTime 冻结、HUD/相机照常）/ `game.timeScale`（[0,1024] 钳制，NaN/负→0）/ `game.status`（截图日志锚行）；CLI `--fixed-dt <ms>` 钉渲染帧 delta（对拍确定性，0=关）。命令注册先于 `--console-exec` 预执行。**用户拍板（本轮问询后确认方向）**：ECS scene tick / 物理叠加层 `physicsScene.step(1/60)` 统一迁入 GameClock 属 **M-GL2**（与 M-S3 合并收口），本站不动两处调用点；迁移路径已论证：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变（floor(240×16.7/16.667)=240）、终态轨迹一致、基线大概率零重拍。
+- **落码**：`viewer/main.cpp`（include game_clock.hpp / Options.fixedDtMs + 解析 / `registerGameConsole` 三命令 / runNormal 接线：dt 钉点在 `++frame` 前、skin 块走时钟 + 终帧日志 `frame == o.frames` / usage）；`example/gl1/`（run.bat 8 图两段 + check.py 10 项 MD5 交叉对拍 + 4 张基线 + evidence.png）+ `tools/make-gl1-evidence.py` + cases.json gl1 版本卡（pause/scale2 两 image 用例）。
+- **提交版本**：feat/gameloop 提交（annotated tag `gl-m1`）。A 类轨道，不 bump `kStage`（S7.1 不动，`server.py --check` OK）。
+- **完成情况**：暂停冻结三重证（pause120 == pause60 == --anim-time 0，DX12/VULKAN 双后端逐字节——渲染帧推进而姿态逐字节不变 = 双帧模型直接证据）；倍速轨迹等价证（timeScale 2×16.7ms 与 1×33.4ms 每帧馈入 double 逐位相同——×2 与 ×0.001 舍入对幂次缩放可交换，PNG 逐字节相等）；捕获帧日志与 PNG 同帧（200 tick = 3.33333s）；check.py 10/10 PASS exit 0；gl0 ctest 双后端 3/3；viewer selftest 16/16×2；`server.py --check` OK（stage=S7.1）；evidence.png 四真实基线拼板肉眼核验。
+- **踩坑**：① **viewer 截图捕获口径（新知）**：capturePath 判定在 `++frame` 之前求值 → PNG 实际落最后一个迭代；首版终帧日志写 `frame + 1 == o.frames`（自增后语境）打在了捕获帧前一迭代（58 vs 60 tick 之谜），修为 `frame == o.frames`；② **巧合等值陷阱**：240 tick = 4.0s 恰好是 CesiumMan Walk（2.0s）整周期 → 与 t0 姿态逐字节同，暂停组与倍速组 PNG 全同差点假绿——倍速用例改 100 帧（200 tick = 3.3333s 落周期中部）规避；③ 证据板自写 PNG 编码器 `bytes(rgb[y])` 单字节误用产全零 IDAT（全黑图），修为行切片——自写编码器第三次踩索引类坑，下轮考虑统一抽公共模块；④ check.py `fails` 计数器在 main 局部 + 闭包 `global` 声明冲突（UnboundLocalError），提模块级修复。
+- **下一步**：M-GL2 物理/音频/ECS 接逻辑帧 tick（含 ECS/phys 用例 `--fixed-dt` 迁移与基线核验）+ 与 M-S3 合并收口。

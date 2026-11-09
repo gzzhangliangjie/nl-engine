@@ -1,6 +1,7 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
 #include "nl/core/console.hpp"
+#include "nl/core/game_clock.hpp"  // P8 M-GL1：双帧模型（逻辑帧 60Hz accumulator）
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
@@ -121,6 +122,11 @@ struct Options {
     // M-A5：skin 模式动画时间（秒）。未指定 = 实时累加；指定 = 固定（截图确定性）。
     bool animTimeSet = false;
     float animTime = 0.0f;
+    // M-GL1：--fixed-dt <ms> 把渲染帧 delta 钉成常量（喂 GameClock + 帧统计）。
+    // 0 = 关（真实 dt）。截图/对拍确定性用：暂停帧、倍速帧的 PNG 才能逐字节对拍。
+    // 优先级：--anim-time > 时钟（animTimeSet 时 skinTime 直接钉值，绕过 GameClock，
+    // 既有基线逐字节零风险）；--fixed-dt 只钉「每帧喂多少」，不钉绝对时间。
+    double fixedDtMs = 0.0;
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -275,6 +281,14 @@ Options parseArgs(int argc, char** argv) {
             // M-A5：固定蒙皮动画时间（秒，clip 内循环采样）——截图确定性与验收用。
             o.animTimeSet = true;
             o.animTime = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--fixed-dt" && i + 1 < argc) {
+            // M-GL1：钉渲染帧 dt（毫秒，>0）。供 GameClock 双帧模型的对拍确定性。
+            const double v = std::atof(argv[++i]);
+            if (!(v > 0.0)) {
+                std::cerr << "invalid --fixed-dt (expected positive ms)\n";
+                std::exit(1);
+            }
+            o.fixedDtMs = v;
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -421,6 +435,61 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
         dist->setFloat(camera->distance());
         g_syncing = false;
     };
+}
+
+// M-GL1：game.* 控制台命令——双帧模型运行时控制（PLAN §3「运行时控制面」）。
+//   game.pause [on|off]    无参=翻转；暂停=逻辑时钟停摆（bevy 语义，simTime 冻结，
+//                          渲染帧照常——HUD 活、相机活，画面静止）。
+//   game.timeScale <f>     无参=查询；[0,1024] 钳制（GameClock::setTimeScale 同口径）。
+//   game.status            打印 simTime/ticks/paused/scale/alpha（截图日志证据行）。
+// 命令（非 CVar）：--console-exec "game.pause" 字面即用，且 pause 无「赋值后回读」
+// 的每帧同步需求（与 cam.fov 的 CVar 选型差异）。
+void registerGameConsole(nl::core::GameClock* clock) {
+    using namespace nl::core::console;
+    Console& c = Console::get();
+    c.registerCommand("game.pause", "toggle/set logic clock pause (on|off)",
+                      [clock](const std::vector<std::string>& args) {
+        bool target;
+        if (args.empty()) {
+            target = !clock->paused();
+        } else if (args[0] == "on" || args[0] == "1") {
+            target = true;
+        } else if (args[0] == "off" || args[0] == "0") {
+            target = false;
+        } else {
+            return CommandResult{false, "usage: game.pause [on|off]"};
+        }
+        clock->setPaused(target);
+        return CommandResult{true, std::string("game.pause -> ") +
+                             (target ? "on (logic clock frozen; render frames keep running)"
+                                     : "off (logic clock running)")};
+    });
+    c.registerCommand("game.timeScale", "query/set logic time scale ([0,1024])",
+                      [clock](const std::vector<std::string>& args) {
+        if (args.empty()) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%g", clock->timeScale());
+            return CommandResult{true, std::string("game.timeScale = ") + buf};
+        }
+        char* end = nullptr;
+        const double v = std::strtod(args[0].c_str(), &end);
+        if (end == args[0].c_str() || *end != '\0')
+            return CommandResult{false, "game.timeScale: not a number: " + args[0]};
+        clock->setTimeScale(v);   // 越界/NaN 钳制在 GameClock 内（selftest 锚定）
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", clock->timeScale());
+        return CommandResult{true, std::string("game.timeScale -> ") + buf};
+    });
+    c.registerCommand("game.status", "print logic clock state (simTime/ticks/paused/scale/alpha)",
+                      [clock](const std::vector<std::string>&) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "game: simTime=%.6fs ticks=%llu paused=%d scale=%g alpha=%.3f",
+                      clock->simTime(),
+                      static_cast<unsigned long long>(clock->tickCount()),
+                      clock->paused() ? 1 : 0, clock->timeScale(), clock->alpha());
+        return CommandResult{true, std::string(buf)};
+    });
 }
 
 // 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
@@ -630,9 +699,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     // ---- M-C1 控制台注册表 + M-C2 真参数（cam.*/hud.* onChanged 打进相机/HUD）----
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
+    // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
+    nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     // P8 M-S2：audio.* 调试 CVar（audio.volume/debug/solo/freeze + audio.dump）。
     nl::audio::registerAudioConsole(nl::core::console::Console::get());
+    registerGameConsole(&gameClock);   // P8 M-GL1：game.pause / game.timeScale / game.status
     for (const auto& line : o.consoleExecLines) {
         const auto r = nl::core::console::Console::get().exec(line);
         nl::core::log::info("console exec [", r.exitCode(), "] ", line);
@@ -753,8 +825,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         const auto now = clock::now();
-        const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
+        double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
+        // M-GL1：--fixed-dt 钉渲染帧 delta（GameClock 输入 + 帧统计同源）。
+        // 不钉绝对时间——只保证「每帧喂多少」确定，暂停/倍速对拍才可逐字节复现。
+        if (o.fixedDtMs > 0.0) dtMs = o.fixedDtMs;
         ++frame;
         if (o.screenshot) {
             dtSumMs += dtMs;
@@ -797,9 +872,28 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
         // M-A5：skin 模式动画时间——--anim-time 固定（截图确定性），否则实时累加。
+        // M-GL1：非 pin 路径改走 GameClock 双帧模型——渲染帧喂 dtMs，逻辑帧 60Hz
+        // 消费（暂停=时钟停摆、timeScale 缩放、单帧大 delta 截断 250ms）；
+        // simTime 量化到 tick（起步不插值，PLAN §2 拍板），渲染帧取最新逻辑帧状态。
         if (skinMode) {
-            skinTime = o.animTimeSet ? o.animTime : skinTime + dtMs / 1000.0;
+            if (o.animTimeSet) {
+                skinTime = o.animTime;   // M-A5 兼容：直接钉值，绕过时钟（既有基线零风险）
+            } else {
+                gameClock.tick(dtMs, [](double, std::uint64_t) {});   // 逻辑帧消费方 M-GL2 接入
+                skinTime = gameClock.simTime();
+            }
             fp.animTime = skinTime;
+            // 截图终帧机械证据：双帧模型状态一行（对拍日志锚）。注意口径：捕获判定
+            // （上方 capturePath）在 ++frame 之前求值、持上一迭代 frame 值，PNG 实际
+            // 落在本循环最后一个迭代（frame == o.frames）；此处已在 ++frame 之后，
+            // 同一迭代即 frame == o.frames——日志与 PNG 同帧。
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
+                nl::core::log::info("game clock: simTime=", gameClock.simTime(),
+                                    "s ticks=", gameClock.tickCount(),
+                                    " paused=", gameClock.paused() ? 1 : 0,
+                                    " scale=", gameClock.timeScale(),
+                                    " fixedDtMs=", o.fixedDtMs);
+            }
         }
 
         // M-P3：物理调试叠加层（Jolt 碰撞形状线框）。build 一次（renderer 创建后），
@@ -1671,6 +1765,8 @@ void printUsage() {
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
+              << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
+              << "                                     (deterministic pause/timescale screenshot runs)\n"
               << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"
               << "  viewer.exe --physics-debug         M-P3 overlay: Jolt collision-shape wireframe\n"
               << "                                     (floor + falling box/sphere/capsule);\n"

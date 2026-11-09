@@ -58,3 +58,17 @@ M-GL0 实测：240 行 + 9 行全等（ticks/tickCount 精确；simTime/alpha 1e
 - 逻辑帧 tick 顺序（PLAN §3）：input → script/action → physics → ECS transform sync → audio sync。
 - 暂停语义 = `setPaused(true)` 后逻辑时钟全冻结；渲染帧照常 present/HUD/console。
 - 确定性：GameClock 纯 double 同序运算；回放/对拍场景喂固定 realDt 序列即可逐位重现。
+
+## viewer 运行时控制（M-GL1 起）
+
+| 入口 | 语义 |
+|---|---|
+| `game.pause [on\|off]` | 逻辑时钟停摆/恢复；无参=翻转。暂停=bevy 语义：simTime/accumulator 全冻结，渲染帧照常（HUD 活、相机活） |
+| `game.timeScale <f>` | 逻辑时间缩放 [0,1024]（NaN/负→0 冻结，越界钳制）；无参=查询 |
+| `game.status` | 打印 `simTime/ticks/paused/scale/alpha`（截图日志锚） |
+| `--fixed-dt <ms>` | 钉渲染帧 delta（喂时钟+帧统计同源）；0=关。暂停/倍速截图对拍必开 |
+| `--anim-time <s>` | （M-A5 原有）直接钉 skinTime，绕过时钟——既有基线兼容路径，优先级高于时钟 |
+
+- 双帧消费现状：skin 模式动画时间 = simTime（量化到 tick，起步不插值）；物理叠加层与 ECS scene tick 仍逐渲染帧步进，M-GL2 统一迁入。
+- 消费约定：`--console-exec "game.pause"` 在主循环前生效（命令注册先于预执行行）；截图终帧日志行 `game clock: simTime=... ticks=... paused=... scale=...` 与 PNG 同帧（口径见 PLAN §6 M-GL1 留痕）。
+- 验收复现：`example/gl1/run.bat all`（8 张 PNG + check.py 10 项 MD5 交叉对拍，exit 0 全绿）。
