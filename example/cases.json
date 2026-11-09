@@ -5149,7 +5149,7 @@
           "expectLog": "ecs-parallel selftest: PASS",
           "command": "nanite-scene selftest --suite ecs-parallel --verbose",
           "preview": "example/ecs-parallel/selftest-ecs-parallel.png",
-          "script": "example/ecs-parallel/run-parallel.bat"
+          "script": "example/ecs-parallel/run.bat"
         },
         {
           "id": "parallel-dot",
@@ -5163,7 +5163,7 @@
           "expectLog": "digraph jobgraph",
           "command": "nanite-scene parallel-dot",
           "preview": "example/ecs-parallel/solver-graph.png",
-          "script": "example/ecs-parallel/run-parallel.bat"
+          "script": "example/ecs-parallel/run.bat"
         },
         {
           "id": "negative-unknown-suite",
@@ -5178,7 +5178,7 @@
           "expectExit": 2,
           "expectLog": "unknown selftest suite",
           "command": "nanite-scene selftest --suite no-such-suite",
-          "script": "example/ecs-parallel/run-parallel.bat"
+          "script": "example/ecs-parallel/run.bat"
         }
       ]
     }
