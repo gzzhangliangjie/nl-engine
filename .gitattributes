@@ -1,0 +1,10 @@
+# 行尾钉死（2026-11-10）：本机 core.autocrlf=true 会在 checkout 时把 LF blob
+# 翻成 CRLF，导致两类逐字节验收假阳性：
+#   1) check-phys-regression.py 跨目录 md5 对比（p2/stack.tsv vs p3/stack-regen.tsv）
+#   2) audio provenance FNV hash（hash 按 LF 内存串算，检出 CRLF 必 FAIL）
+# 工具生成的数据产物一律按 LF 检出，与 blob 原始字节一致（全仓库 0 个 CRLF blob）。
+# 注意：勿加全局 `* text=auto eol=lf`——.bat 必须 CRLF（cmd 的 goto/label 依赖）。
+*.tsv            text eol=lf
+*.log            text eol=lf
+provenance.txt   text eol=lf
+*.bat            text eol=crlf
