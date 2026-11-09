@@ -973,9 +973,10 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     //   b0 DagConstants / t1 spheres / t2 errors / t3 groups / t4 members /
     //   t5 genGroup / t6 levels / t7 clusterMeta（M5.2）/ t8 hiz 金字塔（M6.1）/
     //   u0 visibleList / u1 args / u2 expanded / u3 triCounter（M5.2）。
-    // M5.2：GPU 原子三角计数器（与 initCull 同款；dag 模式不调 initCull，各自建）。
+    // M5.2：GPU 原子计数器（与 initCull 同款；dag 模式不调 initCull，各自建）。
+    // M6.2：扩到 2 uint —— [0] = 可见三角数，[1] = 被 Hi-Z 剔除的簇节点数。
     nvrhi::BufferDesc tDesc;
-    tDesc.byteSize = sizeof(std::uint32_t);
+    tDesc.byteSize = 2 * sizeof(std::uint32_t);
     tDesc.structStride = sizeof(std::uint32_t);
     tDesc.canHaveUAVs = true;
     tDesc.initialState = nvrhi::ResourceStates::CopyDest;
@@ -1044,11 +1045,12 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!dagComputePSO_) { outError = "createComputePipeline failed for dag"; return false; }
     }
 
-    // 回读环形（M4.1 同款，M5.2 起 8B：[0]=可见簇数 [4]=可见三角数，dag 遍历同样
-    // 每帧回读）。
+    // 回读环形（M4.1 同款，M5.2 起 8B；M6.2 起 16B：[0]=可见簇数 [4]=可见三角数
+    // [8]=被 Hi-Z 剔除簇节点数，dag 遍历同样每帧回读；hiz 模式 ensureHizTargets
+    // 重建时再加 [12]=金字塔最高 mip）。
     for (auto& rb : cullReadback_) {
         nvrhi::BufferDesc rDesc;
-        rDesc.byteSize = 2 * sizeof(std::uint32_t);
+        rDesc.byteSize = 4 * sizeof(std::uint32_t);
         rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
         rDesc.debugName = "DagCountReadback";
         rb = device->createBuffer(rDesc);
@@ -1114,9 +1116,10 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
     }
     // M5.2：三角计数器初始清零（动态跟踪，writeBuffer/UAV/CopySource 轮转）。
-    const std::uint32_t dagTriZero = 0;
+    // M6.2：两个槽（tris + occluded）一起清。
+    const std::uint32_t dagTriZero[2] = {0, 0};
     upload->beginTrackingBufferState(triCounter_, nvrhi::ResourceStates::CopyDest);
-    upload->writeBuffer(triCounter_, &dagTriZero, sizeof(dagTriZero));
+    upload->writeBuffer(triCounter_, dagTriZero, sizeof(dagTriZero));
 
     upload->beginTrackingBufferState(identityIndex_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(identityIndex_, identity.data(), identity.size() * sizeof(std::uint32_t));
@@ -1300,13 +1303,14 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!vizLayout_) { outError = "createBindingLayout failed for hiz viz"; return false; }
     // 可视化绑定集也依赖纹理 → ensureHizTargets 懒建。
 
-    // 回读环形槽位扩到 12B：[0]=可见簇数 [4]=三角数 [8]=asuint(最高 mip 距离)。
-    // initDag 已建 8B 版，这里重建（旧句柄引用计数释放）。重建的是新 NVRHI 对象，
-    // 必须补状态：永久 CopyDest（只当拷贝目标 + CPU 读，与 initDag 老缓冲的
-    // setPermanentBufferState 同语义）——Vulkan 侧拷贝/回读同步依赖状态跟踪。
+    // 回读环形槽位扩到 16B（M6.2）：[0]=可见簇数 [4]=三角数 [8]=被 Hi-Z 剔除簇
+    // 节点数 [12]=asuint(最高 mip 距离)。initDag 已建同尺寸版（M6.2 起 4 uint），
+    // 这里重建（旧句柄引用计数释放）。重建的是新 NVRHI 对象，必须补状态：永久
+    // CopyDest（只当拷贝目标 + CPU 读，与 initDag 老缓冲的 setPermanentBufferState
+    // 同语义）——Vulkan 侧拷贝/回读同步依赖状态跟踪。
     for (auto& rb : cullReadback_) {
         nvrhi::BufferDesc rDesc;
-        rDesc.byteSize = 3 * sizeof(std::uint32_t);
+        rDesc.byteSize = 4 * sizeof(std::uint32_t);
         rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
         rDesc.initialState = nvrhi::ResourceStates::CopyDest;
         rDesc.keepInitialState = true;
@@ -1315,7 +1319,7 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!rb) { outError = "createBuffer failed for hiz readback"; return false; }
     }
 
-    nl::core::log::info("hiz scene ready (dag traversal + depth pre-pass + min pyramid)",
+    nl::core::log::info("hiz scene ready (dag traversal + depth pre-pass + max pyramid)",
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -1343,17 +1347,20 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
     void* p = device->mapBuffer(cullReadback_[slot], nvrhi::CpuAccessMode::Read);
     if (p) {
         // M5.2：槽位 8B —— [0]=可见簇数（args[1]）、[4]=可见三角数（triCounter[0]）。
+        // M6.2：dag 模式 [8]=被 Hi-Z 剔除簇节点数（triCounter[1]，整树语义：被遮
+        // 父簇的子树未访问不计入）。cull 模式回读环形仍 2 uint，不读 [8]。
         const auto* vals = static_cast<const std::uint32_t*>(p);
         cullVisibleCount_ = static_cast<int>(vals[0]);
         visibleTriangles_ = static_cast<int>(vals[1]);
-        // M6.0：槽位 [8] = 金字塔最高 mip 的 asuint 位模式（仅 hiz 模式写入）。
+        hizOccluded_ = dag_ ? static_cast<int>(vals[2]) : -1;
+        // M6.0：金字塔最高 mip 的 asuint 位模式（仅 hiz 模式写入；M6.2 起槽位 [12]）。
         // M6.1：top 语义 = 全屏最远表面径向距离（max 口径，hiz.slang 文件头）。
         // 三态：v ∈ [0,1e8) = 真实最远表面距离；v ≥ 1e8 = 画面有清屏背景像素
         // （max 口径下合法值，返回 -2 = 背景主导哨兵）；NaN（0xFFFFFFFF 清零值）
-        // = 尚无数据，返回 -1。0xFFFFFFFF 清零值 = asfloat NaN。
+        // = 尚无数据，返回 -1。
         if (hiz_) {
             float v;
-            std::memcpy(&v, &vals[2], sizeof(v));
+            std::memcpy(&v, &vals[3], sizeof(v));
             if (v >= 0.0f && v < 1e8f)     hizTopFar_ = v;
             else if (v >= 1e8f && v < 2e9f) hizTopFar_ = -2.0f;
             else                            hizTopFar_ = -1.0f;
@@ -1364,6 +1371,7 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
     } else {
         cullVisibleCount_ = -1;   // map 失败如实上报，不静默沿用旧值
         visibleTriangles_ = -1;
+        hizOccluded_ = -1;
     }
     cullPolledSlot_ = static_cast<int>(ready);
 }
@@ -2071,17 +2079,23 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             const bool cullTiming = cullTimer_.begin(cmd);
             cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
             // M5.2：三角计数器每帧清零（GPU atomicAdd 从 0 累加，与 args[1] 同款）。
-            const std::uint32_t triZero = 0;
-            cmd->writeBuffer(triCounter_, &triZero, sizeof(triZero));
+            // M6.2：dag 模式两个槽（tris + occluded）一起清；cull 模式 buffer 仍
+            // 1 uint 只清 [0]。
+            const std::uint32_t triZero[2] = {0, 0};
+            cmd->writeBuffer(triCounter_, &triZero,
+                             dag_ ? sizeof(triZero) : sizeof(std::uint32_t));
 
             // M5.1：dag 遍历换 dag.slang csDag（显式栈）+ 自己的绑定/常量；
             // M4.1 路径保持原样。输出接口（visibleList + args）两者完全一致。
             if (dag_) {
                 // M6.1：DagConstants 扩到 128B（4×float4 + view 矩阵）。
-                // hizCullActive = hiz 模式且金字塔已就绪——遍历消费的是**上一帧**
-                // 金字塔（本帧金字塔在下面的预通道段才建，一帧延迟，S6-PLAN 明文
-                // 接受；UE OCCLUSION_MAIN / bevy first pass 同口径）。
-                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_;
+                // hizCullActive = hiz 模式且金字塔已就绪且用户开关开（M6.2，
+                // FrameParams.hizEnable：关 = 只做视锥/误差遍历，退化可验证）——
+                // 遍历消费的是**上一帧**金字塔（本帧金字塔在下面的预通道段才建，
+                // 一帧延迟，S6-PLAN 明文接受；UE OCCLUSION_MAIN / bevy first pass
+                // 同口径）。
+                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_
+                                           && params.hizEnable;
                 const float dc[32] = {
                     params.projYScale, params.viewportHeight, params.nearPlane,
                     params.cutThresholdPx,
@@ -2112,7 +2126,8 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
 
             nvrhi::ComputeState cstate;
             {
-                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_;
+                const bool hizCullActive = hiz_ && !hizFailed_ && hizReady_
+                                           && params.hizEnable;   // M6.2 开关同口径
                 cstate.setPipeline(dag_ ? dagComputePSO_ : cullComputePSO_)
                       .addBindingSet(dag_ ? (hizCullActive ? dagHizSet_ : dagComputeSet_)
                                           : cullComputeSet_);
@@ -2121,12 +2136,19 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             const std::uint32_t threads = dag_ ? dagRootCount_ : clusterCount_;
             cmd->dispatch((threads + 127u) / 128u, 1, 1);
 
-            // 回读拷贝两段：槽位 [0]=args[1]（可见簇数，offset 4 字节处）、
-            // [4]=triCounter[0]（可见三角数）。pollCullStats 延迟两帧一起消费。
+            // 回读拷贝：槽位 [0]=args[1]（可见簇数，offset 4 字节处）、[4]=triCounter[0]
+            // （可见三角数）；M6.2 起 dag 模式再加 [8]=triCounter[1]（被 Hi-Z 剔除
+            // 簇节点数）。pollCullStats 延迟两帧一起消费。cull 模式回读环形仍 2 uint
+            // （initCull 建的），第三段只 dag 模式拷。
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], 0,
                             indirectArgs_, sizeof(std::uint32_t), sizeof(std::uint32_t));
             cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u], sizeof(std::uint32_t),
                             triCounter_, 0, sizeof(std::uint32_t));
+            if (dag_) {
+                cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u],
+                                2 * sizeof(std::uint32_t), triCounter_,
+                                sizeof(std::uint32_t), sizeof(std::uint32_t));
+            }
 
             // ---- M6.0：Hi-Z 深度预通道 + 金字塔（hiz 模式）----
             // 顺序：遍历 compute（上面，消费**上一帧**金字塔做遮挡测试）→ 深度
@@ -2211,7 +2233,8 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         cmd->dispatch((tgw + 7u) / 8u, (tgh + 7u) / 8u, 1);
                     }
 
-                    // 最高 mip（1 texel）→ 计数器 → 回读环形槽位偏移 8。
+                    // 最高 mip（1 texel）→ 计数器 → 回读环形槽位偏移 12
+                    //（M6.2 起 [12]；[8] 让位给 occluded 计数）。
                     {
                         const float hcT[12] = {
                             params.eye[0], params.eye[1], params.eye[2], hizFarRange_,
@@ -2224,7 +2247,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         cmd->dispatch(1, 1, 1);
                     }
                     cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u],
-                                    2 * sizeof(std::uint32_t), hizTop_, 0,
+                                    3 * sizeof(std::uint32_t), hizTop_, 0,
                                     sizeof(std::uint32_t));
                 }
             }
@@ -2388,6 +2411,7 @@ void Scene::shutdown() {
     topSet_ = nullptr;
     topPSO_ = nullptr;
     hizTopFar_ = -1.0f;
+    hizOccluded_ = -1;
     cullSubmitted_ = 0;
     cullPolledSlot_ = -1;
     cullVisibleCount_ = -1;

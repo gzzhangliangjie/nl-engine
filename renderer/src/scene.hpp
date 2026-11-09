@@ -177,6 +177,9 @@ public:
     // 三态：≥0 = 真实值；-2 = 背景像素主导（max 口径合法）；-1 = 暂无数据。
     int   hizMipCount() const { return static_cast<int>(hizMipCount_); }
     float hizTopFar() const { return hizTopFar_; }
+    // M6.2：被 Hi-Z 剔除的簇节点数（与 hizTopFar 同一延迟窗口；-1 = 暂无数据，
+    // 非 dag 模式恒 -1）。剔除前访问数 = visibleClusters() + hizOccluded()。
+    int   hizOccluded() const { return hizOccluded_; }
 
 private:
     // M2.3：读 .nmesh → 展开成 ClusterVertex/索引 → 建新 VB/IB 上传 → 替换句柄。
@@ -322,6 +325,7 @@ private:
     // hizTop_ 清零值每帧 writeBuffer 后由 csHizTop 覆写；回读复用 cullReadback_ 环形
     // （槽位扩到 12B：[0]=可见簇数 [4]=三角数 [8]=asuint(最近径向距离)）。
     float                        hizTopFar_ = -1.0f;  // M6.1：top=最远表面径向距离
+    int                          hizOccluded_ = -1;   // M6.2：被 Hi-Z 剔除簇节点数
                                                       //   （≥0 真实值 / -2 背景主导 / -1 无数据）
     float                        hizFarRange_ = 10.0f;  // 可视化对比度参考距离（每帧算）
     // 金字塔/预通道帧缓冲/各级绑定集随视口尺寸在 draw() 懒建（FramebufferInfo 只有

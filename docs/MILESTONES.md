@@ -1140,6 +1140,28 @@
 
 **下一步**：M6.2 开关对照 + 验收（ImGui 一键开关 Hi-Z、HUD 剔除前/后簇数与帧时间、S4 1M+ 大模型+挡板帧时间对比；tag `s6-done`，`docs/screenshots/s6.png`）。
 
+## M6.2：Hi-Z 运行时开关 + 剔除前/后簇数 + 1.3M 挡板场景（S6 收官，2026-11-09，tag `s6-done`）
+
+**动作**：三处前置（UE `NaniteCullRaster.cpp:250-262` `r.Nanite.Culling.HZB/Frustum` 独立 CVar + `NaniteDefinitions.h:517` FNaniteStats 单结构原子累加；bevy `bindings.wesl:143-152` 每 pass 分立 atomic counter、无运行时开关；Carrot 无 Hi-Z 模块无对照）→ 落码：①开关 FrameParams.hizEnable（ImGui checkbox 双向 + `--hiz on|off`，scene.cpp hizCullActive && hizEnable 两处同口径，UE permutation 差异进 UE-DIFFS D6）；②剔除计数 dag.slang hizOccluded 命中 `InterlockedAdd(g_triCounter[1])` + triCounter 4B→8B + 回读环形 dag 16B（[8]=occluded，hiz top 迁 [12]）+ DeviceInfo/HudFrame hizOccluded + HUD occl 行（剔除前 visited = emit+occluded 整树语义）；③HUD hiz 区上移 mode/model 行后（960x540 面板 512px 钉死，原位置掉滚动区——仅 hiz 模式布局变化）；④GPU timer 移出 HUD 块无条件 ensure（DeviceInfo.lastGpuMs + `gpu timing: avg` 日志——CPU 口径 draw 轻时不敏感，GPU 口径才显性）；⑤新资产 OcclScene1M（1.3M tri 球 + 前挡板，`make-occl-scene-glb.py`，挡板角宽 14.8° 盖球投影 18.2° 中央 ~2/3，lod0~8 链）；⑥kStage S6.2 + selftest 断言同步；⑦11 个 exe=current 版本 46/46 基线重拍（deviceErrors=0 全验）。
+
+**提交版本**：见收口回复（本节随提交回填）；tag `s6-done` 挂在本节终版提交上
+
+**完成情况**：
+- 机械判据：HizScene 开关 on 24/85 + occluded 10 of 34 visited；off 40/85（== dag 基线）+ occluded 0（一键回退）；侧视 on occluded 0（零误剔）。OcclScene1M：on 6861/43547（occluded 5378 of 12239，84% 簇被剔）vs off 12324/43547。
+- 性能：1920x1080 unthrottled NVRHI timer 3 轮均值 on ~2.74ms vs off ~4.03ms（**-32%**，被遮挡场景帧时间明显下降）；960x540 GPU 口径差距小（prepass 重复开销 ≈ 绘制节省）——验收用 1080p。
+- 无漏画：OcclScene1M hiz on/off 最终画面 MD5 逐字节一致（6c0d5a0a…）。
+- 双后端：toggle 三对 + occl1m 两张 bytes 一致（同数字 6861/5378/12239 ×2 后端）；selftest 16/16 ×2。
+- 交代物：`example/s6-done/`（toggle 三对双后端 6 基线 + occl1m-on/off 双后端 4 基线 + run.bat verify 6 条 findstr 断言 exit 0）+ cases.json s6.2 卡（5 用例）+ `docs/screenshots/s6.png`（开/关 HUD 对比拼接图）+ server.py --check OK（stage=S6.2 cases=5 baselines=12）。
+
+**踩坑情况**：
+1. ⭐**HUD hiz 区掉滚动区**：960x540 画布面板高被 `min(cap, H-28)=512` 钉死（cap 560 不生效），hiz 区放 frustum/cull GPU 行后会被截断、checkbox/occl 验收证据不可见——整段上移到 mode/model 行后。教训：新增 HUD 区块要按**最小画布**核算可见性，不是按 cap。
+2. ⭐**CPU 帧时间口径不敏感**：on/off CPU 循环均值 3.48 vs 3.51ms 几乎无差（draw 段轻，CPU 不是瓶颈）——GPU timer 才是帧时间验收的正确口径；而 deterministic 模式 GPU 计时原被 HUD 块吞掉（--no-hud 不 ensure timer）→ timer 移出 HUD 块无条件 ensure，真实值恒缓存 gpuLastMs_（deterministic 只是不写 HUD，基线 MD5 不受影响——timer 不写像素，回归验证 bytes 不变）。
+3. **GPU timer 与 nanite-tools.exe 链接锁**：后台 check-orient 跑着 DX12 侧 nanite-tools.exe，Windows 锁 exe 导致 NMake 重链 U1077——换 Vulkan 侧同名工具继续跑、DX12 侧解锁重链（两 exe 同源等价）。
+4. **1.3M 资产 check-orient 耗时**：全链 inward 扫描 >15 分钟（HizScene 2316 tri 秒级），后台异步跑、收口前补验（球部分复制自 S4 已验证资产、盒部分用 HizScene PASS 先例排列，重定基不改绕序——朝向有间接保障）。
+5. **NMake 跳重链**：main.cpp/scene.cpp 改后 viewer.exe 未重链 → 删 exe 强制重链（§工具 exe 纪律同款）。
+
+**下一步**：S6 全部收官（tag `s6-done`）。主线下一站 S7（PBR + vis buffer + vertex pulling + 材质解析，`docs/s7/S7-PLAN.md`）或按 ROADMAP 插入项（PBR 直射光已排在 S1~S6 之间、SSR 排 S7 后）——开工前按铁律重读对应 PLAN + 三处对照，确认插入顺序与用户对齐。
+
 ## M-E0：World/Entity 核心（feat/ecs 开篇，2026-11-09，tag `ecs-e0`）
 
 **动作**：wt_pool claim（track ecs / M-E0）→ 建 worktree `E:/UE_STUDY_2026/nl-engine-ecs`（junction 共享 `.workbuddy` + `thirdparty/slang/dist`，`.workbuddy` skip-worktree）→ 三处证据重读（Carrot `World.h/.cpp` + `EntityTypes.h` 定向读 M-E0 点名段：newEntity/newEntityWithID/removeEntity/flush/tick/exists/flags；bevy `entity_disabling.rs` 借语义：隐藏是标记不是删除、只禁自身不牵连子级）→ 落码 `core/include/nl/scene/World.hpp` + `core/src/scene/World.cpp`：实体创建（u64 递增，0=无效）、延迟增删（entitiesToAdd/Remove + flush 先加后删）、tick 开头 flush（延迟语义锚点）、名字表（exists=names_.contains，Carrot 口径）、Flags(Hidden) 位标志 + getEntitiesWithFlags 过滤、getAllEntities/findEntityByName O(N) 无缓存 → 工具 `nanite-scene`（anim-tools 先例）`selftest --suite ecs-core` 四组断言 → CMake：nl_core 挂 World.cpp + nanite-scene 目标 + ctest 正/负向注册。master 侧注册表三处同步（AGENTS.md / PARALLEL-TRACKS §7.1c / wt_pool TRACKS，commit 6647fcf）。

@@ -75,6 +75,7 @@ struct Options {
     bool resize     = false;
     bool cullBack   = true;   // C 键 / --cull / HUD 复选框控制
     bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
+    bool hizOn      = true;   // M6.2：Hi-Z 遮蔽剔除（--hiz off = 纯视锥/误差遍历，退化可验证）
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -167,6 +168,16 @@ Options parseArgs(int argc, char** argv) {
             else if (v == "off" || v == "0" || v == "none" || v == "false") o.frustumOn = false;
             else {
                 std::cerr << "invalid --frustum '" << v << "' (expected on|off)\n";
+                std::exit(1);
+            }
+        } else if (a == "--hiz" && i + 1 < argc) {
+            // M6.2：Hi-Z 遮蔽剔除开关（仅 hiz 模式消费；off = 只做视锥/误差遍历，
+            // 退化可验证——UE r.Nanite.Culling.HZB 同定位；缺省 on）。
+            const std::string v = argv[++i];
+            if (v == "on" || v == "1" || v == "true") o.hizOn = true;
+            else if (v == "off" || v == "0" || v == "none" || v == "false") o.hizOn = false;
+            else {
+                std::cerr << "invalid --hiz '" << v << "' (expected on|off)\n";
                 std::exit(1);
             }
         } else if (a == "--shading" && i + 1 < argc) {
@@ -262,7 +273,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S6.1") != nullptr, "S6.1 stage reported");
+    check(std::strstr(st.stage, "S6.2") != nullptr, "S6.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -423,6 +434,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     }
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
     bool cullBack = o.cullBack;
+    // M6.2：Hi-Z 遮蔽剔除总开关（HUD checkbox 双向；缺省开 = M6.1 行为不变）。
+    bool hizEnabled = o.hizOn;
     // M1.3：cluster 模式缺省看簇色。M2.3：lod 模式缺省 normal（几何不连续最刺眼），
     // 显式 --shading 则听用户的——注意 lod 也是 cluster 场景，必须在 cluster 缺省
     // 之后再判，否则显式 --shading normal 会被 4=cluster 静默吞掉。
@@ -489,6 +502,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 测的是纯渲染吞吐上限（无节流都能 ≤16.6ms，节流后必然稳 60fps）。
     double dtSumMs = 0.0;
     double dtMaxMs = 0.0;
+    // M6.2：整帧 GPU 时间累计（DeviceInfo.lastGpuMs 每帧由 backend poll 更新）。
+    double gpuMsSum = 0.0;
+    std::uint64_t gpuMsFrames = 0;
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -585,7 +601,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             const auto e = renderer->extent();
             fp.viewportHeight = static_cast<float>(e.height);
             fp.cutThresholdPx = cutThresholdPx;
-            if (hizMode) fp.hizViewMip = hizViewLevel;   // M6.0：金字塔可视化层
+            if (hizMode) {
+                fp.hizViewMip = hizViewLevel;   // M6.0：金字塔可视化层
+                fp.hizEnable = hizEnabled;      // M6.2：遮挡剔除总开关
+            }
         }
         // M-A5：skin 模式动画时间——--anim-time 固定（截图确定性），否则实时累加。
         if (skinMode) {
@@ -652,6 +671,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             hud.hizMipCount = info.hizMipCount;
             hud.hizTopFar = info.hizTopFar;   // M6.1：最远表面口径
             hud.hizViewLevel = hizViewLevel;
+            // M6.2：开关双向 + 剔除前/后对照（-1 = 暂无数据，HUD 画 -- 占位）。
+            if (hizMode) {
+                hud.hizEnable = hizEnabled;
+                hud.hizOccluded = info.hizOccluded;
+            }
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -715,6 +739,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
         // M4.2：cull pass 计时同一条追加路（cullTimingAvailable 只在 cull 模式置位）。
+        // M6.2：整帧 GPU 时间累计（lastGpuMs 由 backend 每帧 poll，真实值）。
+        if (o.screenshot && info.lastGpuMs > 0.0f) {
+            gpuMsSum += info.lastGpuMs;
+            ++gpuMsFrames;
+        }
         if (hudOn && !o.screenshot && hud.cullTimingAvailable && hud.cullMs > 0.0f) {
             if (cullHistoryCount < 120) {
                 cullHistory[cullHistoryCount++] = hud.cullMs;
@@ -726,6 +755,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (hudOn) {
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
+            if (hizMode) hizEnabled = hud.hizEnable;   // M6.2：开关写回
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
             if (!cluster && !cullMode) shading = std::min(shading, 3);  // 非簇场景无 CLUSTERCOLOR 属性
             wireframe = hud.wireframe;
@@ -780,15 +810,26 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (hizMode) {
                 // M6.1：金字塔最高 mip 回读值（≈ 整屏最远表面径向距离的机械验收
                 // 证据）+ 遮挡剔除后的可见簇数。-2 = 背景像素主导（max 口径合法）。
+                // M6.2：追加剔除前/后对照（occluded of visited，整树语义）——
+                // run.bat findstr 机器断言出口。
+                const bool occValid = info.hizOccluded >= 0;
+                const int visited = occValid ? info.visibleClusters + info.hizOccluded
+                                             : info.visibleClusters;
                 if (info.hizTopFar >= 0.0f) {
                     nl::core::log::info("hiz stats: pyramid top far ", info.hizTopFar,
                                         " (visible ", info.visibleClusters, " / ",
-                                        info.totalClusters, " clusters, mips ",
+                                        info.totalClusters, " clusters",
+                                        occValid ? ", occluded " : "",
+                                        occValid ? info.hizOccluded : 0, " of ",
+                                        visited, " visited, mips ",
                                         info.hizMipCount, ")");
                 } else if (info.hizTopFar <= -1.5f) {
                     nl::core::log::info("hiz stats: pyramid top far background-dominates",
                                         " (visible ", info.visibleClusters, " / ",
-                                        info.totalClusters, " clusters, mips ",
+                                        info.totalClusters, " clusters",
+                                        occValid ? ", occluded " : "",
+                                        occValid ? info.hizOccluded : 0, " of ",
+                                        visited, " visited, mips ",
                                         info.hizMipCount, ")");
                 } else {
                     nl::core::log::info("hiz stats: top far pending (mips ",
@@ -838,10 +879,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
     // M4.2：60fps 验收的 CPU 侧机械证据（截图模式无节流，测渲染吞吐上限）。
+    // M6.2：追加整帧 GPU 时间均值（NVRHI timer 真值，deterministic 也 resolve）——
+    // 帧时间下降验收的机器出口（CPU 循环在 draw 段轻时不敏感，GPU 口径才显性）。
     if (o.screenshot && frame > 1) {
         nl::core::log::info("frame timing: avg ",
                             dtSumMs / static_cast<double>(frame), " ms  max ",
                             dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
+        if (gpuMsSum > 0.0 && gpuMsFrames > 0)
+            nl::core::log::info("gpu timing: avg ", gpuMsSum / gpuMsFrames,
+                                " ms over ", gpuMsFrames, " resolved frames (NVRHI timer)");
     }
 
     if (o.screenshot && screenshotsSaved == 0) {
@@ -902,6 +948,8 @@ void printUsage() {
               << "  viewer.exe --cull back|none        back-face culling (default back; none shows inner wall)\n"
               << "  viewer.exe --frustum on|off        GPU frustum culling in cull mode (default on;\n"
               << "                                     off = identity visible list, M4.0 behavior)\n"
+              << "  viewer.exe --hiz on|off            Hi-Z occlusion culling in hiz mode (default on;\n"
+              << "                                     off = frustum/error traversal only, M6.2 toggle)\n"
               << "  viewer.exe --shading <name>        textured | normal | uv | tri-id (default textured; N key cycles)\n"
               << "  viewer.exe --wireframe             raster wireframe fill mode (V key toggles)\n"
               << "  viewer.exe --yaw D --pitch D       fixed orbit angles in degrees (screenshot reproducibility)\n"

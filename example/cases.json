@@ -3427,6 +3427,175 @@
      "preview": "example/ecs-e1a/negative-badjson.png"
     }
    ]
+  },
+  {
+   "id": "s6.2",
+   "label": "M6.2",
+   "name": "Hi-Z 运行时开关 + 剔除前/后簇数（S6 收官）",
+   "tag": "s6-done",
+   "date": "2026-11-09",
+   "note": "FrameParams.hizEnable 运行时开关（ImGui checkbox 双向 + --hiz on|off 命令行；定位同 UE r.Nanite.Culling.HZB 验收用退化开关，关 = 纯视锥/误差遍历立即回退）。dag.slang hizOccluded 命中时 u3[1] 原子累加被剔簇节点数；triCounter 4B→8B、回读环形 dag 16B（[0]簇数/[4]三角数/[8]occluded/[12]hiz top）；HUD hiz 区上移到 mode/model 行后（960x540 画布 512px 高度限制下原位置掉滚动区，仅 hiz 模式布局变化）+ checkbox + occl 剔除前/后行（剔除前=visited=emit+occluded，整树语义）。GPU timer 段移出 HUD 块无条件 ensure（DeviceInfo.lastGpuMs 机器出口，--no-hud 也能出帧时间；timer 不写像素，基线不受影响）。新资产 OcclScene1M（1.3M tri 球 + 前置挡板，make-occl-scene-glb.py，lod0~8 链）。",
+   "acceptance": [
+    "开关 on（yaw 12）：visible 24/85 + occluded 10 of 34 visited；开关 off：visible 40/85（== dag 基线）+ occluded 0 —— 一键回退，该层可独立关掉（S6-PLAN 底线）",
+    "OcclScene1M 正面：on = visible 6861/43547（occluded 5378 of 12239）vs off = visible 12324/43547（occluded 0）—— 84% 簇被剔，遮挡占比真实可感",
+    "性能（1920x1080 unthrottled NVRHI timer，3 轮均值）：on ~2.74ms vs off ~4.03ms（-32%）—— 被遮挡场景帧时间明显下降；CPU 循环口径不敏感（draw 段轻），GPU 口径才显性",
+    "无漏画：OcclScene1M hiz on/off 最终画面 MD5 逐字节一致（被剔簇本就被深度测试挡住）；侧面 yaw 75 occluded 0（零误剔）",
+    "双后端 toggle 三对 + occl1m 两张 bytes 一致（同数字 6861/5378/12239）；selftest 16/16 ×2；example/s6-done/run.bat verify exit 0（6 条 findstr 断言）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hiz-toggle-front",
+     "name": "开关 on：24/85 + occluded 10 of 34（checkbox 勾选）",
+     "kind": "pair",
+     "note": "yaw 12 面墙：HUD hiz 区上移后 checkbox + occl 行全可见。occl 行 = culled 10 / 34 visited (drawn 24)——剔除前访问 34 簇节点、Hi-Z 剔 10、实画 24；frustum 行 24 / 85 (28.2%)。",
+     "baselines": {
+      "dx12": "example/s6-done/hiz-toggle-front-dx12.png",
+      "vulkan": "example/s6-done/hiz-toggle-front-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "HizScene.nmesh",
+      "--hud",
+      "--hiz",
+      "on",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "10",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model HizScene.nmesh --hud --hiz on --screenshot <out.png> --frames 10 --yaw 12 --pitch 9 --dist 4.2 --size 960x540",
+     "script": "example/s6-done/run.bat verify",
+     "preview": "example/s6-done/hiz-toggle-front-dx12.png"
+    },
+    {
+     "id": "hiz-toggle-off",
+     "name": "开关 off：回退 dag 基线 40/85 + occluded 0（checkbox 空）",
+     "kind": "pair",
+     "note": "同一视角只切开关：occl = culled 0 / 40 visited (drawn 40)，frustum 行 40 / 85 (47.1%) == dag 基线——遮挡剔除层独立关掉立即回退（退化可验证）。",
+     "baselines": {
+      "dx12": "example/s6-done/hiz-toggle-off-dx12.png",
+      "vulkan": "example/s6-done/hiz-toggle-off-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "HizScene.nmesh",
+      "--hud",
+      "--hiz",
+      "off",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "10",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model HizScene.nmesh --hud --hiz off --screenshot <out.png> --frames 10 --yaw 12 --pitch 9 --dist 4.2 --size 960x540",
+     "script": "example/s6-done/run.bat verify",
+     "preview": "example/s6-done/hiz-toggle-off-dx12.png"
+    },
+    {
+     "id": "hiz-toggle-side",
+     "name": "开关 on 侧视（yaw 75）：零误剔 occluded 0",
+     "kind": "pair",
+     "note": "穿墙视角开关开着也不误剔：occluded 0 of 40 visited，与 dag 完全相同 = 无漏画（剔除选择性随视角自动适配）。",
+     "baselines": {
+      "dx12": "example/s6-done/hiz-toggle-side-dx12.png",
+      "vulkan": "example/s6-done/hiz-toggle-side-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "HizScene.nmesh",
+      "--hud",
+      "--hiz",
+      "on",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "10",
+      "--yaw",
+      "75",
+      "--pitch",
+      "5",
+      "--dist",
+      "4.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model HizScene.nmesh --hud --hiz on --screenshot <out.png> --frames 10 --yaw 75 --pitch 5 --dist 4.2 --size 960x540",
+     "script": "example/s6-done/run.bat verify",
+     "preview": "example/s6-done/hiz-toggle-side-dx12.png"
+    },
+    {
+     "id": "occl1m-toggle",
+     "name": "1.3M 场景开关对照：on 6861/43547 vs off 12324/43547",
+     "kind": "pair",
+     "note": "OcclScene1M（1.3M tri 球 + 前置红挡板）：on = occluded 5378 of 12239 visited（84% 簇被剔，15.8% visible），off = 12324 全画。画面里球边缘露出、挡板剪影进金字塔覆盖层 = 部分遮挡真实可感。GPU 帧时间 -32%（1080p 3 轮均值，见 acceptance）。",
+     "baselines": {
+      "dx12": "example/s6-done/occl1m-on-dx12.png",
+      "vulkan": "example/s6-done/occl1m-on-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--model",
+      "OcclScene1M.nmesh",
+      "--hud",
+      "--hiz",
+      "on",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "12",
+      "--yaw",
+      "0",
+      "--pitch",
+      "0",
+      "--dist",
+      "3.2",
+      "--size",
+      "960x540"
+     ],
+     "command": "viewer.exe --mode hiz --model OcclScene1M.nmesh --hud --hiz on --screenshot <out.png> --frames 12 --yaw 0 --pitch 0 --dist 3.2 --size 960x540",
+     "script": "example/s6-done/run.bat verify",
+     "preview": "example/s6-done/occl1m-on-dx12.png"
+    },
+    {
+     "id": "s6.2-selftest",
+     "name": "selftest（S6.2 stage 断言，16/16）",
+     "kind": "tool",
+     "note": "viewer --selftest：kStage=S6.2 stage 断言同步更新；新增 --hiz on|off 命令行开关（--help 可见）。",
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (16/16)",
+     "command": "viewer.exe --selftest"
+    }
+   ]
   }
  ]
 }

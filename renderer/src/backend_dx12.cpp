@@ -329,19 +329,23 @@ public:
 
         ensurePipeline(index);
         // HUD 全链路都不带 hud 参数时完全不碰：M0.4 及更早的回放基线保持不变。
+        // M6.2：GPU timer 段**移出 HUD 块**无条件 ensure+poll——真实整帧 GPU 时间
+        // 的机器出口（DeviceInfo.lastGpuMs，--no-hud 也要能出帧时间）；timer query
+        // 不写任何像素目标，画面基线不受影响（M6.2 收口跑回归验证 bytes 不变）。
+        if (gpuTimer_.ensure(device_)) {
+            float gpuMs = 0.0f;
+            if (gpuTimer_.poll(gpuMs)) gpuLastMs_ = gpuMs;
+            if (hud && hud->displayWidth > 0.0f) {
+                // 截图回归模式：viewer 已填固定 GPU 样本，不写回真实计时，保基线 MD5 稳定。
+                if (!hud->deterministic) hud->gpuMs = gpuLastMs_;
+                hud->gpuTimingAvailable = true;
+            }
+        }
         if (hud && hud->displayWidth > 0.0f) {
             if (!framebuffers_.empty() && framebuffers_[0]) {
                 std::string err;
                 if (!hud_.ensurePipeline(device_, framebuffers_[0]->getFramebufferInfo(), err))
                     nl::core::log::deviceError("DX12", err);
-            }
-            // M0.6：先轮询上一帧的 timer query（异步计时天然有 1~2 帧延迟），
-            // 再开始本帧；建 query 延迟到第一次需要 HUD 的帧，--no-hud 完全不碰。
-            if (gpuTimer_.ensure(device_)) {
-                float gpuMs = 0.0f;
-                // 截图回归模式：viewer 已填固定 GPU 样本，不写回真实计时，保基线 MD5 稳定。
-                if (!hud->deterministic && gpuTimer_.poll(gpuMs)) hud->gpuMs = gpuMs;
-                hud->gpuTimingAvailable = true;
             }
             // M4.2：cull pass 计时同理，必须在 hud_.build() 之前写回标志。
             scene_.pollCullTimer(device_, hud);
@@ -354,6 +358,8 @@ public:
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
         info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
         info_.hizTopFar = scene_.hizTopFar();                 // M6.1：金字塔最高 mip（最远表面）
+        info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
+        info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
 
         nvrhi::CommandListHandle cmd = device_->createCommandList();
         cmd->open();
@@ -626,6 +632,7 @@ private:
     Scene                                 scene_;
     Hud                                   hud_;
     GpuTimer                              gpuTimer_;
+    float                                 gpuLastMs_ = 0.0f;  // M6.2：最近一次 resolve 的整帧 GPU 时间
     nvrhi::TextureHandle                  depth_;
     std::vector<nvrhi::FramebufferHandle> framebuffers_;   // 每个 swapchain slot 一个
     std::vector<UINT64>                   frameFence_;     // frame-in-flight=2 同步安全网

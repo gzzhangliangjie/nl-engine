@@ -52,7 +52,9 @@
 //   u0 = visible cluster list (append target, read back by model.slang vsCull as t4)
 //   u1 = drawIndexedIndirect args as raw uints; element [1] = instanceCount
 //   u2 = per-group expansion claim (0/1, cleared every frame)
-//   u3 = triangle counter (M5.2: atomicAdd per emitted cluster, read back 2 frames later)
+//   u3 = stats counters (M5.2: [0] atomicAdd tri count per emitted cluster;
+//        M6.2: [1] occluded cluster nodes per hizOccluded hit, read back 2 frames
+//        later; CPU clears both every frame)
 //
 // On Vulkan the UAV registers map through slangc -fvk-u-shift 384 0, matching
 // NVRHI's default VulkanBindingOffsets::unorderedAccess = 384.
@@ -195,8 +197,9 @@ void csDag(uint dispatchThreadID : SV_DispatchThreadID)
         const uint c = stack[--sp];
 
         // M6.1: 遮挡测试先于一切 emit / drill 决策——父簇球被遮 ⇒ 球内全部
-        // 成员（子树）也被遮，整棵子树直接跳过。
-        if (hizOccluded(c)) continue;
+        // 成员（子树）也被遮，整棵子树直接跳过。M6.2: 被遮簇节点原子计数
+        // （u3[1]）——「剔除前」访问数 = emit 数 + 该计数，HUD 剔除前/后对照用。
+        if (hizOccluded(c)) { InterlockedAdd(g_triCounter[1], 1u); continue; }
 
         // M5.0 bevy/zeux projection: d = |center - eye| - radius, clamped to near.
         const float4 sphere = g_clusterSpheres[c];

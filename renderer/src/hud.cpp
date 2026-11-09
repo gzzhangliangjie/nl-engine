@@ -263,6 +263,43 @@ void Hud::build(HudFrame& frame) {
                       frame.model, frame.triangleCount);
         ImGui::TextUnformatted(modelLine);
     }
+    // M6.2：Hi-Z 专属区**上移**到 mode/model 行之后、FPS 行之前——960x540 画布
+    // 面板高度被 min(cap, H-28)=512 钉死，原位置（frustum/cull GPU 行之后）会让
+    // 开关与 occl 行掉进滚动区截断，验收证据不可见。只影响 hiz 模式布局（其它
+    // 模式 hizMipCount==0 一像素不动）；kStage bump S6.2 全量重拍基线。
+    if (frame.hizMipCount > 0) {
+        // M6.2：遮挡剔除总开关（双向写回，viewer 传 FrameParams.hizEnable）。
+        // 定位同 UE r.Nanite.Culling.HZB——验收用退化开关，关掉立即回退到纯
+        // 视锥/误差遍历（S6-PLAN 底线「可整体开关的独立层」）。
+        ImGui::Checkbox("hi-z occlusion", &frame.hizEnable);
+        ImGui::SliderInt("pyramid mip", &frame.hizViewLevel, 0, frame.hizMipCount - 1);
+        char hizLine[96];
+        if (frame.hizTopFar >= 0.0f) {
+            std::snprintf(hizLine, sizeof(hizLine),
+                          "hiz top : %.3f (mip %d/%d, farthest depth)",
+                          frame.hizTopFar, frame.hizMipCount - 1, frame.hizMipCount - 1);
+        } else if (frame.hizTopFar <= -1.5f) {   // -2：背景像素主导（max 口径合法）
+            std::snprintf(hizLine, sizeof(hizLine), "hiz top : bg (mip %d/%d)",
+                          frame.hizMipCount - 1, frame.hizMipCount - 1);
+        } else {
+            std::snprintf(hizLine, sizeof(hizLine), "hiz top : -- (mips %d)",
+                          frame.hizMipCount);
+        }
+        ImGui::TextUnformatted(hizLine);
+        // M6.2：剔除前/后簇数对照（整树语义：被遮父簇的子树未访问不计入剔除前）。
+        // 剔除前 = visibleClusters + hizOccluded（本轮访问的簇节点数），剔除后 =
+        // visibleClusters（实际 emit）。开关关掉时 culled 归 0、两数合一，立即回退。
+        if (frame.hizOccluded >= 0) {
+            const int visited = frame.visibleClusters + frame.hizOccluded;
+            std::snprintf(hizLine, sizeof(hizLine),
+                          "occl   : culled %d / %d visited (drawn %d)",
+                          frame.hizOccluded, visited, frame.visibleClusters);
+        } else {
+            std::snprintf(hizLine, sizeof(hizLine), "occl   : -- (delayed readback)");
+        }
+        ImGui::TextUnformatted(hizLine);
+        ImGui::Separator();
+    }
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,
@@ -353,26 +390,8 @@ void Hud::build(HudFrame& frame) {
                              0, nullptr, 0.0f, 1.0f, ImVec2(260.0f, 30.0f));
         }
     }
-    // M6.0：Hi-Z 金字塔——仅 hiz 模式（hizMipCount>0）占位，其它模式 HUD 布局
-    // 一像素不动。mip 层滑条双向写回（viewer 传 FrameParams.hizViewMip 给 GPU
-    // 覆盖层）。M6.1：top 显示「金字塔最高层 ≈ 整屏最远表面径向距离」的回读值
-    // （金字塔 min→max 口径修正，hiz.slang 文件头）。
-    if (frame.hizMipCount > 0) {
-        ImGui::SliderInt("pyramid mip", &frame.hizViewLevel, 0, frame.hizMipCount - 1);
-        char hizLine[96];
-        if (frame.hizTopFar >= 0.0f) {
-            std::snprintf(hizLine, sizeof(hizLine),
-                          "hiz top : %.3f (mip %d/%d, farthest depth)",
-                          frame.hizTopFar, frame.hizMipCount - 1, frame.hizMipCount - 1);
-        } else if (frame.hizTopFar <= -1.5f) {   // -2：背景像素主导（max 口径合法）
-            std::snprintf(hizLine, sizeof(hizLine), "hiz top : bg (mip %d/%d)",
-                          frame.hizMipCount - 1, frame.hizMipCount - 1);
-        } else {
-            std::snprintf(hizLine, sizeof(hizLine), "hiz top : -- (mips %d)",
-                          frame.hizMipCount);
-        }
-        ImGui::TextUnformatted(hizLine);
-    }
+    // M6.0/M6.2 的 Hi-Z 区已上移到 mode/model 行之后（见上方注释）——原位置
+    // 在 960x540 画布上会掉进滚动区截断。
     if (ImGui::Button("reset camera")) frame.resetCamera = true;
     ImGui::TextWrapped("drag=orbit  wheel=zoom  C=cull  V=wire  N=shading  R=reset  ESC=quit");
     ImGui::End();

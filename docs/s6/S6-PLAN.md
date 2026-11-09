@@ -49,10 +49,30 @@
 
 ## M6.2 开关对照 + 验收（1 天）
 
-- [ ] ImGui 一键开关 Hi-Z，HUD 同步显示「剔除前/后簇数」和帧时间
-- [ ] 场景：S4 的 1M+ 大模型 + 挡板
+- [x] ImGui 一键开关 Hi-Z，HUD 同步显示「剔除前/后簇数」和帧时间（M6.2 收口）
+  - 开关 = FrameParams.hizEnable（ImGui checkbox 双向 + `--hiz on|off` 命令行），定位同
+    UE `r.Nanite.Culling.HZB`（验收用退化开关）；实现是 CB 运行时分支非 UE 的编译期
+    permutation——compute 单分支开销可忽略且 ImGui 免重编 shader（差异留痕 UE-DIFFS D6）
+  - 剔除前/后：dag.slang hizOccluded 命中时 u3[1] 原子累加；剔除前访问数 = emit + occluded
+    （整树语义：被遮父簇的子树未访问不计入），HUD `occl : culled N / V visited (drawn X)`
+  - 帧时间：GPU timer 段移出 HUD 块无条件 ensure（DeviceInfo.lastGpuMs + viewer 退出前
+    `gpu timing: avg` 日志）——CPU 循环口径在 draw 轻时不敏感，GPU 口径才显性
+- [x] 场景：S4 的 1M+ 大模型 + 挡板（OcclScene1M = 1.3M tri 球 + 前置红挡板盒，
+  `scripts/make-occl-scene-glb.py`，挡板角宽 14.8° 盖住球投影 18.2° 的中央 ~2/3）
 
-**自检（S6 验收）**：被遮挡场景帧时间**明显下降**；关掉开关立即回退（该层可独立关掉=退化可验证）；遮挡边缘无漏画。tag：`s6-done`，截图 `docs/screenshots/s6.png`（开/关 HUD 对比）。
+**自检（S6 验收，2026-11-09 实测）**：
+- 被遮挡场景帧时间**明显下降** ✓：1920x1080 unthrottled NVRHI timer 3 轮均值
+  on ~2.74ms vs off ~4.03ms（**-32%**）；960x540 下 GPU 口径差距小（prepass 重复开销
+  ≈ 绘制节省，分辨率升到 1080p 主 pass 像素着色占比提升后才显性——验收用 1080p）
+- 关掉开关立即回退 ✓：`--hiz off` → visible 40/85 == dag 基线、occluded 0（HizScene）；
+  OcclScene1M off → 12324/43547 vs on 6861/43547（84% 簇被剔，occluded 5378 of 12239）
+- 遮挡边缘无漏画 ✓：OcclScene1M hiz on/off 最终画面 **MD5 逐字节一致**（被剔簇本就被
+  深度测试挡住）+ 侧视 yaw 75 occluded 0 零误剔
+- HUD 布局坑（M6.2 实测）：960x540 画布面板高被 min(cap, H-28)=512 钉死，hiz 区放原位
+  （frustum/cull GPU 行后）会掉进滚动区截断——整段上移到 mode/model 行后，仅 hiz 模式
+  布局变化（其它模式一像素不动）
+
+tag：`s6-done`，截图 `docs/screenshots/s6.png`（开/关 HUD 对比，两张 960x540 拼接）✓
 
 ---
 

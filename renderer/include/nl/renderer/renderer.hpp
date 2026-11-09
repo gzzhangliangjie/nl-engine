@@ -67,6 +67,10 @@ struct FrameParams {
     // M6.0：Hi-Z 金字塔可视化查看的 mip 层号（hiz 模式消费；0 = mip0 原始深度，
     // 其他模式不读，缺省无副作用）。层级可视化由 GPU 覆盖层绘制，HUD 滑条选层。
     int   hizViewMip  = 0;
+
+    // M6.2：Hi-Z 遮蔽剔除总开关（hiz 模式消费；false = 只做视锥/误差遍历，退化
+    // 可验证——S6-PLAN 底线「可整体开关的独立层」，UE r.Nanite.Culling.HZB 同定位）。
+    bool  hizEnable   = true;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -136,6 +140,11 @@ struct HudFrame {
     int   hizMipCount      = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
     int   hizViewLevel     = 0;       // 可视化查看的 mip 层（双向，viewer 传 FrameParams）
     float hizTopFar        = -1.0f;   // 最高 mip = 全屏最远表面径向距离（两帧延迟；<0 无数据）
+    // ---- M6.2：Hi-Z 开关 + 剔除前/后簇数对照（仅 hiz 模式消费）----
+    bool  hizEnable        = true;    // 开关（双向：HUD checkbox 写回，viewer 传 FrameParams）
+    int   hizOccluded      = -1;      // 被 Hi-Z 剔除的簇节点数（两帧延迟；-1 无数据）
+                                  // 剔除前访问数 = visibleClusters + hizOccluded（整树
+                                  // 语义：被遮父簇的子树未访问不计入）
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
@@ -181,6 +190,11 @@ struct DeviceInfo {
     // M6.1：top 语义 = 全屏最远表面径向距离（金字塔 max 口径）。
     int   hizMipCount = 0;       // 金字塔 mip 层数（0 = 非 hiz 模式）
     float hizTopFar   = -1.0f;   // 最高 mip 全屏最远表面径向距离（两帧延迟；<0 = 暂无数据）
+    // M6.2：被 Hi-Z 剔除的簇节点数（两帧延迟；-1 无数据，非 hiz 模式恒 -1）。
+    int   hizOccluded = -1;
+    // M6.2：最近一次 resolve 的整帧 GPU 时间 ms（真实值，deterministic 模式也
+    // 有效——只是不写回 HUD 保基线 MD5；0 = timer 不可用 / 尚无数据）。
+    float lastGpuMs = 0.0f;
 };
 
 class Renderer {
