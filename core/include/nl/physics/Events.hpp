@@ -20,7 +20,7 @@
 // Header stays Jolt-free: no JPH types, no Jolt includes. The listener lives in
 // core/src/physics/World.cpp (the only Jolt symbol surface inside nl_core).
 //
-// Q2 (user-approved default, P8-DRIVE-PLAN.md §7): owner pairs are cached in
+// Q2 (adopted default at M-D0 kickoff, no separate user sign-off; P8-DRIVE-PLAN.md §7): owner pairs are cached in
 // Added/Persisted; the cache entry is erased AFTER its Removed event is emitted.
 
 #include <cstdint>
