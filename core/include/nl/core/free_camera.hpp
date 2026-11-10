@@ -44,6 +44,10 @@ public:
     // lookDelta[2]：[0]=yaw 增量 rad，[1]=pitch 增量 rad；boost：速度档。
     void update(float dt, const float moveInput[3], const float lookDelta[2], bool boost);
 
+    // M-CAM1a：位姿直设（CameraDirector 切换种子用）。yaw/pitch 收度数，
+    // pitch 走同款 clamp；lookAt = eye + forward(yaw,pitch) 同源重算。
+    void setPose(const float eye[3], float yawDegrees, float pitchDegrees);
+
     // ---- 只读输出口径（rig 透传，同 OrbitCamera）----
     Matrix4 viewProjection() const { return rig_.viewProjection(); }
     Matrix4 view() const           { return rig_.view(); }

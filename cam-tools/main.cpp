@@ -14,6 +14,14 @@
 //   cam-check <tsv>      re-verify a dumped cam-trace with the same anchors
 //   free-trace           dump the 60-frame free-flight script as TSV
 //   free-check <tsv>     re-verify a dumped free-trace with the same anchors
+//   director-trace       dump the 90-frame director scenario (chase -> toggle ->
+//                        free fly -> toggle back) as per-frame pose TSV
+//   director-check <tsv> re-verify a dumped director-trace (mode-switch continuity)
+// sections: init chase-a chase-b chase-c chase-d free-e director-f
+//
+// M-CAM1a (wiring seam): spectator action map + input adapter + CameraDirector
+// (Chase<->Free mode manager with bit-exact switch continuity) + CinematicCamera
+// stub — headless infrastructure for viewer glue landing after drive M-D3.
 //
 // Evidence rule: no GPU screenshots — tool-card evidence images are generated
 // from trace TSV by a real-output script (no hand-drawn diagrams).
@@ -22,8 +30,11 @@
 // replays are bit-identical (逐位锚), cross-dt comparisons are convergence
 // anchors (阈值锚) — the two tiers are asserted explicitly in separate checks.
 
+#include "nl/core/camera_director.hpp"
+#include "nl/core/cinematic_camera.hpp"
 #include "nl/core/chase_camera.hpp"
 #include "nl/core/free_camera.hpp"
+#include "nl/core/input.hpp"   // InputState 注入路径 + GLFW 键码常量
 
 #include <cmath>
 #include <cstdio>
@@ -461,6 +472,119 @@ void selftestFreeE() {
     }
 }
 
+// ---- F: director 接线封装（spectator 映射 + 输入适配 + 模式管理 + cinematic 桩）----
+void selftestDirector() {
+    using namespace nl::core;
+
+    // F1: spectator 映射构建 + 合成输入适配（InputState 注入路径，M-I0 同款）
+    InputState in;
+    ActionMap map;
+    DrivingActions d = buildDrivingActionMap(map);
+    SpectatorActions s = buildSpectatorActionMap(map);
+    in.feedKey(GLFW_KEY_W, true);
+    in.feedKey(GLFW_KEY_D, true);
+    in.feedKey(GLFW_KEY_LEFT_SHIFT, true);
+    in.feedMouseDelta(8.0f, -4.0f);
+    map.update(in);
+    const FreeDrive fd = readFreeInputs(map, s, d);
+    check(fd.move[0] == 1.0f && fd.move[2] == 1.0f && fd.move[1] == 0.0f,
+          "F: adapter move axes (D=right, W=forward)");
+    check(fd.boost, "F: adapter boost (LeftShift)");
+    check(fd.lookPx[0] == 8.0f && fd.lookPx[1] == -4.0f,
+          "F: adapter look = driving set mouse delta (shared action)");
+    in.endFrame();
+
+    // F2: set 门控——spectator set 关停轴归零；look 语义在 driving set 侧
+    map.setActive(s.spectatorSet, false);
+    in.feedKey(GLFW_KEY_W, true);
+    map.update(in);
+    const FreeDrive fdOff = readFreeInputs(map, s, d);
+    check(fdOff.move[0] == 0.0f && fdOff.move[2] == 0.0f && !fdOff.boost,
+          "F: spectator set gating zeroes axes");
+    in.endFrame();
+    map.setActive(s.spectatorSet, true);
+
+    // F3: director 跟车 30 帧 -> C 边沿切 Free，切换帧位姿逐位连续
+    CameraDirector dir;
+    dir.reset();
+    dir.setAspect(640.0f / 360.0f);
+    ChassisState car;
+    car.valid = true;
+    DirectorInputs di{};
+    di.chassis = &car;
+    for (int f = 0; f < 30; ++f) {
+        car.pos[0] = 6.0f * (1.0f / 60.0f) * f;
+        car.vel[0] = 6.0f;
+        car.yawDegrees = 90.0f;
+        dir.update(1.0f / 60.0f, di);
+    }
+    check(dir.mode() == CameraDirector::Mode::Chase, "F: starts in Chase mode");
+    float eyePre[3];
+    dir.eyePosition(eyePre);
+
+    DirectorInputs tog{};
+    tog.camToggleEdge = true;
+    tog.chassis = &car;
+    dir.update(1.0f / 60.0f, tog);
+    check(dir.mode() == CameraDirector::Mode::Free, "F: camToggle edge -> Free");
+    float eyePost[3];
+    dir.eyePosition(eyePost);
+    check(std::memcmp(eyePre, eyePost, sizeof(eyePre)) == 0,
+          "F: Chase->Free switch frame pose bit-exact (seed = chase eye)");
+
+    // F4: 适配器 → FreeCamera 端到端（director 内走 readFreeInputs 同款轴口径）
+    for (int f = 0; f < 30; ++f) {
+        DirectorInputs fly{};
+        fly.free.move[2] = 1.0f;
+        dir.update(1.0f / 60.0f, fly);
+    }
+    float eyeFlew[3];
+    dir.eyePosition(eyeFlew);
+    check(eyeFlew[2] > eyePost[2] + 1.0f, "F: free fly forward via director moves +Z");
+
+    // F5: 切回 Chase——切换帧位姿逐位连续（snap 种子），车体回读恢复阻尼跟随
+    dir.update(1.0f / 60.0f, tog);
+    check(dir.mode() == CameraDirector::Mode::Chase, "F: camToggle edge -> Chase");
+    float eyeBack[3];
+    dir.eyePosition(eyeBack);
+    check(std::memcmp(eyeFlew, eyeBack, sizeof(eyeFlew)) == 0,
+          "F: Free->Chase switch frame pose bit-exact (snap seed)");
+    const float xBefore = eyeBack[0];
+    car.pos[0] = 50.0f;                     // 车体瞬移：期望机位远离 -> 阻尼必动
+    car.vel[0] = 6.0f;
+    dir.update(1.0f / 60.0f, di);
+    float eyeResume[3];
+    dir.eyePosition(eyeResume);
+    check(std::fabs(eyeResume[0] - xBefore) > 1e-4f,
+          "F: chase damped follow resumes after reseed");
+
+    // F6: 车体数据失效 -> chase 位姿冻结（不崩不漂）
+    car.valid = false;
+    float eyeHold[3] = {eyeResume[0], eyeResume[1], eyeResume[2]};
+    dir.update(1.0f / 60.0f, di);
+    float eyeFrozen[3];
+    dir.eyePosition(eyeFrozen);
+    check(std::memcmp(eyeHold, eyeFrozen, sizeof(eyeHold)) == 0,
+          "F: invalid chassis freezes chase pose");
+
+    // F7: cinematic 桩——API 形状（显式失败，不静默假成功；状态机真实现）
+    CinematicCamera cine;
+    check(!cine.loadTrack("no-such-track.tsv"),
+          "F: cinematic loadTrack stub fails explicitly (M-CAM3a pending)");
+    CameraRig rigOut;
+    check(!cine.sample(1.0f / 60.0f, rigOut), "F: cinematic sample stub no-op");
+    cine.play();
+    check(cine.state() == CinematicCamera::PlayState::Playing, "F: play state machine");
+    cine.sample(1.0f / 60.0f, rigOut);
+    check(cine.progressSeconds() > 0.0f, "F: sample advances progress while playing");
+    cine.pause();
+    check(cine.state() == CinematicCamera::PlayState::Paused, "F: pause state machine");
+    cine.stop();
+    check(cine.state() == CinematicCamera::PlayState::Stopped &&
+              cine.progressSeconds() == 0.0f,
+          "F: stop resets progress");
+}
+
 struct Section { const char* name; void (*fn)(); };
 
 // ---- cam-trace：150 帧 chase 场景 → TSV（evidence 管线数据源，真实工具输出）----
@@ -613,6 +737,94 @@ int runFreeCheck(int argc, char** argv) {
     return 0;
 }
 
+// ---- director-trace：90 帧模式切换场景 → TSV ----
+// 场景：f0..29 chase 直线跟车 -> f30 C 边沿切 Free -> f31..59 自由前飞
+//       -> f60 C 边沿切回 Chase -> f61..89 阻尼跟随恢复。
+int runDirectorTrace(int argc, char** argv) {
+    (void)argc; (void)argv;
+    using namespace nl::core;
+    CameraDirector dir;
+    dir.reset();
+    dir.setAspect(640.0f / 360.0f);
+    ChassisState car;
+    car.valid = true;
+    car.yawDegrees = 90.0f;
+    car.vel[0] = 6.0f;
+    std::printf("frame\tmode\teye_x\teye_y\teye_z\tyaw_deg\tpitch_deg\n");
+    for (int f = 0; f < 90; ++f) {
+        car.pos[0] = 6.0f * (1.0f / 60.0f) * f;
+        DirectorInputs in{};
+        in.chassis = &car;
+        in.camToggleEdge = (f == 30 || f == 60);
+        if (dir.mode() == CameraDirector::Mode::Free)
+            in.free.move[2] = 1.0f;          // Free 段沿视线前飞
+        dir.update(1.0f / 60.0f, in);
+        float eye[3], yawDeg = 0.0f, pitchDeg = 0.0f;
+        dir.eyePosition(eye);
+        if (dir.mode() == CameraDirector::Mode::Chase) {
+            dir.chase().lookDirection(yawDeg, pitchDeg);
+        } else {
+            yawDeg = dir.free().yawDegrees();
+            pitchDeg = dir.free().pitchDegrees();
+        }
+        std::printf("%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+                    f, dir.mode() == CameraDirector::Mode::Free ? 1 : 0,
+                    eye[0] + 0.0f, eye[1] + 0.0f, eye[2] + 0.0f,
+                    yawDeg + 0.0f, pitchDeg + 0.0f);
+    }
+    return 0;
+}
+
+// ---- director-check：TSV 重验（切换连续 + 模式带 + 阻尼恢复）----
+struct DirRow { int f; int mode; double ex, ey, ez, yaw, pitch; };
+
+int runDirectorCheck(int argc, char** argv) {
+    if (argc < 1) { std::printf("ERROR: director-check needs a <tsv> path\n"); return 2; }
+    std::FILE* fp = std::fopen(argv[0], "r");
+    if (!fp) { std::printf("ERROR: cannot open '%s'\n", argv[0]); return 1; }
+    char line[512];
+    std::vector<DirRow> rows;
+    while (std::fgets(line, sizeof(line), fp)) {
+        if (std::strstr(line, "frame\t") == line) continue;
+        DirRow r{};
+        if (std::sscanf(line, "%d\t%d\t%lf\t%lf\t%lf\t%lf\t%lf",
+                        &r.f, &r.mode, &r.ex, &r.ey, &r.ez, &r.yaw, &r.pitch) == 7)
+            rows.push_back(r);
+    }
+    std::fclose(fp);
+    auto at = [&](int f) -> const DirRow* {
+        for (const DirRow& r : rows) if (r.f == f) return &r;
+        return nullptr;
+    };
+    auto eyeDist = [](const DirRow& a, const DirRow& b) {
+        const double dx = a.ex - b.ex, dy = a.ey - b.ey, dz = a.ez - b.ez;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+    check(static_cast<int>(rows.size()) == 90, "director-check: 90 rows");
+    if (rows.size() < 90) { std::printf("director-check FAIL\n"); return 1; }
+    // f29 Chase -> f30 Free：切换帧位姿连续（TSV 六位小数精度下 1e-5）。
+    check(at(29)->mode == 0, "director-check: f29 in Chase mode");
+    check(at(30)->mode == 1, "director-check: f30 toggled to Free");
+    check(eyeDist(*at(29), *at(30)) < 1e-5,
+          "director-check: Chase->Free switch frame eye continuous");
+    // Free 段沿视线前飞：eye_z 严格递增。
+    bool fwd = true;
+    for (int f = 31; f <= 59; ++f) if (at(f)->ez <= at(f - 1)->ez) fwd = false;
+    check(fwd, "director-check: free segment eye_z strictly increasing");
+    // f59 Free -> f60 Chase：切换帧位姿连续。
+    check(at(59)->mode == 1, "director-check: f59 still Free");
+    check(at(60)->mode == 0, "director-check: f60 toggled back to Chase");
+    check(eyeDist(*at(59), *at(60)) < 1e-5,
+          "director-check: Free->Chase switch frame eye continuous");
+    // 切回后阻尼跟随恢复：eye_x 明显移动（车体在前方，期望机位在车尾）。
+    check(std::fabs(at(89)->ex - at(60)->ex) > 0.1,
+          "director-check: damped follow resumes after reseed");
+    check(at(89)->mode == 0, "director-check: f89 still Chase");
+    if (g_failures != 0) { std::printf("director-check FAIL\n"); return 1; }
+    std::printf("director-check PASS (90 rows, 9 anchors)\n");
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -625,19 +837,22 @@ int main(int argc, char** argv) {
             "  cam-tools cam-check <tsv>      re-verify a dumped cam-trace\n"
             "  cam-tools free-trace           dump the 60-frame free-flight script as TSV\n"
             "  cam-tools free-check <tsv>     re-verify a dumped free-trace\n"
-            "sections: init chase-a chase-b chase-c chase-d free-e\n"
+            "  cam-tools director-trace       dump the 90-frame mode-switch scenario as TSV\n"
+            "  cam-tools director-check <tsv> re-verify a dumped director-trace\n"
+            "sections: init chase-a chase-b chase-c chase-d free-e director-f\n"
             "exit codes: 0=PASS 1=failure 2=usage error\n");
         return 2;
     }
     const std::string cmd = argv[1];
     if (cmd == "selftest") {
         static const Section sections[] = {
-            {"init",    selftestInit},
-            {"chase-a", selftestChaseA},
-            {"chase-b", selftestChaseB},
-            {"chase-c", selftestChaseC},
-            {"chase-d", selftestChaseD},
-            {"free-e",  selftestFreeE},
+            {"init",       selftestInit},
+            {"chase-a",    selftestChaseA},
+            {"chase-b",    selftestChaseB},
+            {"chase-c",    selftestChaseC},
+            {"chase-d",    selftestChaseD},
+            {"free-e",     selftestFreeE},
+            {"director-f", selftestDirector},
         };
         const char* only = (argc >= 3) ? argv[2] : nullptr;
         bool ranAny = false;
@@ -654,13 +869,15 @@ int main(int argc, char** argv) {
             std::printf("selftest FAIL (%d failure(s))\n", g_failures);
             return 1;
         }
-        std::printf("selftest PASS (6 sections)\n");
+        std::printf("selftest PASS (7 sections)\n");
         return 0;
     }
-    if (cmd == "cam-trace")  return runCamTrace(argc - 2, argv + 2);
-    if (cmd == "free-trace") return runFreeTrace(argc - 2, argv + 2);
-    if (cmd == "cam-check")  return runCamCheck(argc - 2, argv + 2);
-    if (cmd == "free-check") return runFreeCheck(argc - 2, argv + 2);
+    if (cmd == "cam-trace")       return runCamTrace(argc - 2, argv + 2);
+    if (cmd == "free-trace")      return runFreeTrace(argc - 2, argv + 2);
+    if (cmd == "cam-check")       return runCamCheck(argc - 2, argv + 2);
+    if (cmd == "free-check")      return runFreeCheck(argc - 2, argv + 2);
+    if (cmd == "director-trace")  return runDirectorTrace(argc - 2, argv + 2);
+    if (cmd == "director-check")  return runDirectorCheck(argc - 2, argv + 2);
     std::printf("ERROR: unknown command '%s'\n", cmd.c_str());
     return 2;
 }

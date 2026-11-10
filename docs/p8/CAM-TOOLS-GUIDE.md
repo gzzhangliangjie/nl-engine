@@ -25,7 +25,7 @@
 `(-0.450649, 2.164500, 5.520267)`、f10 kick `12.032114°`、稳态高度 `4.0562`
 等数值均来自首次实跑 dump，check 只认 dump 本身。
 
-## 3. selftest 六节锚点
+## 3. selftest 七节锚点（M-CAM1a 起；M-CAM0 收口时为六节）
 
 | 节 | 锚 |
 |---|---|
@@ -63,3 +63,16 @@ M-CAM0 全部参数走类 setter（`setDistance/setStiffness/...`）；console c
 （`cam.chase.dist` / `cam.free.speed` / `cam.chase.stiffness` 等，照 `cam.fov`
 onChanged 回写先例）在 M-CAM1/M-CAM2 viewer 接线时落。正交模式 viewer 用途
 （俯视/工程调试视图）M-CAM1 起按需接。
+
+## 7. M-CAM1a 增量（director 接线封装层，2026-11-10）
+
+- 新命令：`director-trace`（90 帧模式切换场景 TSV）/ `director-check <tsv>`（9 锚：
+  f29→f30、f59→f60 切换帧位姿连续 1e-5、Free 段 eye_z 严格递增、切回阻尼恢复）。
+- 第七节 `director-f`：spectator 映射构建 + 合成输入适配（InputState 注入路径）、
+  set 门控、CameraDirector 双向切换逐位连续、chassis 失效冻结、CinematicCamera 桩形状。
+- 新 core 面：`camera_director.hpp/.cpp`（SpectatorActions / FreeDrive / ChassisState /
+  CameraDirector，切换帧=重种子+冻结一帧双向逐位连续）、`cinematic_camera.hpp/.cpp`
+  （播放状态机真实现；loadTrack/sample 显式失败待 M-CAM3a）、FreeCamera::setPose、
+  ChaseCamera::snapEyeTo / lookDirection（M-CAM0 类最小增量，既有锚不动）。
+- cam-tools 链 glfw（同 input-tools 理由：input.hpp 公开 API 用 GLFW 键码常量，非窗口）。
+- 证据：`example/cam-1a/`（director-trace.tsv 基线 + acceptance.png 四面板由 TSV 生成）。

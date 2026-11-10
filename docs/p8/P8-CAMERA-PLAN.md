@@ -6,7 +6,8 @@
 > **现状实证**：core 相机面只有 `OrbitCamera`（M0.4，纯 CPU 轨道相机，带 `cameraSelfTest` +
 > console cvar `cam.fov`/`cam.dist`）——零跟随/自由/轨迹相机；grep 全树无任何 chase/fly/track 语义。
 > **性质**：A 类并行轨道（不碰 `kStage`）。M-CAM0 全程零渲染（纯 CPU 逻辑 + 新工具 exe）；
-> M-CAM1~CAM3 触碰渲染接线面（`viewer/main.cpp`），统一排在 drive M-D3 之后串行做（同文件冲突面一次清）。
+> M-CAM1~CAM3 的 **viewer 胶水段**（b 段）触碰渲染接线面（`viewer/main.cpp`），排在 drive
+> M-D3 之后串行做（同文件冲突面一次清）；**封装段（a 段）无头可先行**（见下方当日拍板③）。
 > **归属**：track `camera`，里程碑 M-CAM0~M-CAM3；tag 名字制（`cam-m0` 起），不占 m0.* 编号。
 > **与 drive 轨的关系**：M-CAM0 不依赖 drive（Chase 用脚本轨迹当假目标）；M-CAM2 强依赖
 > drive M-D3（训练场 + 真车回读）；M-CAM1/M-CAM3 与 drive 无数据依赖，但 viewer 接线共用
@@ -145,9 +146,9 @@
   core 相机面仅 `camera.hpp` OrbitCamera；M-I1 `action_map.hpp:126/131/132` 已备 `camToggle`
   （C 边沿）+ `look`（Vec2 additive）；M-D2 回读（chassis pos/yaw/velocity）是 Chase 的
   viewer 数据源；轨迹相机 TSV 与 trace/check 工具链同族自洽。
-- 开工排序：M-CAM0 零依赖可先行/与 drive 并行；M-CAM1~CAM3 统一在 drive M-D3 之后串行
-  （viewer/main.cpp 同文件冲突面一次清 + 输入管线复用 M-D3 落的接线）。track `camera`
-  四里程碑，merge 一次收口。
+- 开工排序：M-CAM0 零依赖可先行/与 drive 并行；M-CAM1~CAM3 的 **viewer 胶水段（b 段）**
+  统一在 drive M-D3 之后串行（viewer/main.cpp 同文件冲突面一次清 + 输入管线复用 M-D3 落的
+  接线）。track `camera` 四里程碑，merge 一次收口。
 - 2026-11-10（M-CAM0 开工当日）：用户补拍板两轮——①「正交/透视区分」「镜头平滑/过渡/
   防抖」安排进计划：正交进 M-CAM0 基座（Projection 枚举 + orthoHeight，透视缺省零影响），
   平滑/过渡/防抖立项 **M-CAM4**（二阶 critically damped spring 默认关 + smoothstep 过渡
@@ -156,3 +157,18 @@
   §2 参考口径补 Unity Cinemachine（Damping/Blend/Noise 词汇表）、Godot Camera3D
   （平滑=可开关属性）、GDC「Juicing Your Cameras With Math」（trauma 模型）三行，
   全部抄思路不抄代码。track camera 扩为五里程碑（M-CAM0~CAM4）。
+- 2026-11-10（M-CAM0 收口后）：拍板③「先把封装做了，一定要落地才行么 / 实现没法做函数空
+  在那里也行，这都是基础设施得先有」——CAM1~CAM3 拆 **a 段（接线封装层，无头，不等 M-D3）**
+  与 **b 段（viewer 胶水，等 M-D3）**：
+  - **M-CAM1a（已落，tag `cam-1a`）**：`buildSpectatorActionMap`（新 SetId，driving set
+    零改动；look/camToggle 复用 driving set 既有动作）+ `readFreeInputs` 适配器（弧度换算
+    单点 `kLookRadiansPerPixel`）+ `ChassisState`（M-D2 回读规范结构）+ `CameraDirector`
+    （Chase↔Free 模式管理：C 边沿互切、切换帧重种子+冻结一帧双向位姿逐位连续、无车体数据
+    保持位姿）+ FreeCamera::setPose / ChaseCamera::snapEyeTo+lookDirection（M-CAM0 类最小
+    增量）+ CinematicCamera 桩（播放状态机真实现，轨迹加载/采样显式失败待 M-CAM3a）+
+    cam-tools 第七节 director-f + director-trace/check 闭环。
+  - **M-CAM2a**：Chase 侧同族封装（phys 回读桥的输入面随 M-D2 数据形态定，暂只落
+    ChassisState 结构）；**M-CAM3a**：CinematicCamera 轨迹实现（TSV 加载 + linear/
+    smoothstep 插值 + 播放控制，全无头）——均可不等 M-D3 随时开工。
+  - **b 段收敛面**：CAM1b/CAM2b/CAM3b viewer 胶水收敛为「glfw 轮询 → InputState →
+    readFreeInputs → director.update → 投影矩阵替换」几行调用 + HUD/cvar/截图基线。

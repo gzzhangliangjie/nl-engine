@@ -49,6 +49,17 @@ void FreeCamera::setSpeed(float unitsPerSecond) {
 float FreeCamera::yawDegrees() const   { return yaw_ / kDeg2Rad; }
 float FreeCamera::pitchDegrees() const { return pitch_ / kDeg2Rad; }
 
+void FreeCamera::setPose(const float eye[3], float yawDegrees, float pitchDegrees) {
+    yaw_   = yawDegrees * kDeg2Rad;
+    pitch_ = clampf(pitchDegrees * kDeg2Rad, -kMaxPitch, kMaxPitch);
+    rig_.eye[0] = eye[0]; rig_.eye[1] = eye[1]; rig_.eye[2] = eye[2];
+    // lookAt 同 update 前向公式（同源口径，下一帧 update 会重算一致）。
+    const float cp = std::cos(pitch_);
+    rig_.lookAt[0] = rig_.eye[0] + std::sin(yaw_) * cp;
+    rig_.lookAt[1] = rig_.eye[1] + std::sin(pitch_);
+    rig_.lookAt[2] = rig_.eye[2] + std::cos(yaw_) * cp;
+}
+
 void FreeCamera::update(float dt, const float moveInput[3], const float lookDelta[2],
                         bool boost) {
     if (!(dt > 0.0f) || !std::isfinite(dt)) return;   // 非法 dt：本帧冻结（确定性）

@@ -3,7 +3,9 @@
 # 只链 nl_core（ChaseCamera/FreeCamera 纯 CPU 类），零图形 API、零 GPU、不碰 kStage。
 # 2026-11-10 照 input-tools 三步骨架立（main.cpp -> 目录 CMakeLists -> 根清单一行）。
 add_executable(cam-tools main.cpp)
-target_link_libraries(cam-tools PRIVATE nl_core)
+# M-CAM1a：director-f 节吃 InputState 注入路径（input.hpp 公开 API 用 GLFW 键码
+# 常量），同 input-tools 链 glfw 的理由（拿 include 路径，非窗口）。
+target_link_libraries(cam-tools PRIVATE nl_core glfw)
 
 if(MSVC)
     target_compile_options(cam-tools PRIVATE /W4 /permissive- /utf-8 /bigobj)

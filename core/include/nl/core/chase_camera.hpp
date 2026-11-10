@@ -67,6 +67,12 @@ public:
     void setReverse(bool on);                 // 倒车自动后视
     void setPeekBack(bool on);                // 回头键按住（松开由调用方置 false）
 
+    // M-CAM1a：CameraDirector 切换种子——rig eye 直设（跳过阻尼，切换帧视口
+    // 位姿逐位连续；下一帧 update 起从该 eye 恢复阻尼）。
+    void snapEyeTo(const float eye[3]);
+    // M-CAM1a：当前视线方向（rig lookAt-eye 导出，度；director 种子 / HUD 用）。
+    void lookDirection(float outYawDegrees, float outPitchDegrees) const;
+
     // ---- 帧更新（确定性核心）----
     // targetPos：目标世界坐标；targetYawDegrees：目标朝向；targetVel：目标速度
     // （look-ahead 与倒车判定由调用方负责，本类只消费数值）。

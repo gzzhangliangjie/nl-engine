@@ -93,6 +93,21 @@ void ChaseCamera::setMode(Mode mode) {
 void ChaseCamera::setReverse(bool on)  { reverse_ = on; }
 void ChaseCamera::setPeekBack(bool on) { peekBack_ = on; }
 
+void ChaseCamera::snapEyeTo(const float eye[3]) {
+    rig_.eye[0] = eye[0]; rig_.eye[1] = eye[1]; rig_.eye[2] = eye[2];
+}
+
+void ChaseCamera::lookDirection(float outYawDegrees, float outPitchDegrees) const {
+    const float dx = rig_.lookAt[0] - rig_.eye[0];
+    const float dy = rig_.lookAt[1] - rig_.eye[1];
+    const float dz = rig_.lookAt[2] - rig_.eye[2];
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len <= 0.0f) { outYawDegrees = 0.0f; outPitchDegrees = 0.0f; return; }
+    constexpr float kRad2Deg = 180.0f / 3.14159265358979323846f;
+    outYawDegrees   = std::atan2(dx, dz) * kRad2Deg;   // yaw=0 朝 +Z 同源口径
+    outPitchDegrees = std::asin(dy / len) * kRad2Deg;
+}
+
 void ChaseCamera::update(float dt, const float targetPos[3], float targetYawDegrees,
                          const float targetVel[3]) {
     if (!(dt > 0.0f) || !std::isfinite(dt)) return;   // 非法 dt：本帧冻结（确定性）
