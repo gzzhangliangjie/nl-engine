@@ -267,6 +267,11 @@ public:
         return scene_.updateObjects(nvrhiDevice_, objects, objectCount, outError);
     }
 
+    // M-PT1：.nfx v1 加载端（转发 scene_.loadParticlesNfx；运行时零 Effekseer）。
+    bool loadParticlesNfx(const char* path, std::string& outError) override {
+        return scene_.loadParticlesNfx(path, outError);
+    }
+
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {

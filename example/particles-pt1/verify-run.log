@@ -1,0 +1,17 @@
+[nl:info] window created 640x720 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info] model ready: Suzanne.glb | vertices=11808 triangles=3936 indices=11808 | prims=1 | baseColor 1024x1024 | shader=dxil
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 640x720
+[nl:info] nfx loaded: CullingSprite.nfx
+[nl:info] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] debug layer: D3D12 Debug Layer (Windows SDK) + NVRHI validation | active=yes
+[nl:info] mode: normal | HUD: on | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info] screenshot mode: 120 frames -> E:\UE_STUDY_2026\nl-engine-particles\example\particles-pt1\verify-determinism.png | cull=back | hud=on
+[nl:info] gpu timer resolved [frame]: 0.037888 ms (first successful NVRHI timestamp query)
+[nl:info] particles steady: alive=101 (nfx)
+[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-particles\example\particles-pt1\verify-determinism.png
+[nl:info] shutdown ok (frames=120 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 2.43336 ms  max 31.7752 ms  over 120 frames (unthrottled)
+[nl:info] gpu timing: avg 0.0642108 ms over 119 resolved frames (NVRHI timer)
+[nl:info] window destroyed

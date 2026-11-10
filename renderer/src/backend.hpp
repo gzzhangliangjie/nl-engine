@@ -69,6 +69,10 @@ public:
     virtual bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount,
                                   std::string& outError) = 0;
 
+    // M-PT1：.nfx v1 加载端（viewer --nfx）。转发 scene_.loadParticlesNfx，
+    // 成功后模拟走 nfx 参数面（fp.particles 仍由 viewer 控制）。
+    virtual bool loadParticlesNfx(const char* path, std::string& outError) = 0;
+
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
     // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,

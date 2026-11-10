@@ -240,4 +240,17 @@ bool Renderer::updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t ob
     return true;
 }
 
+// M-PT1：.nfx v1 加载端。转发 backend 的 scene_.loadParticlesNfx（NFX1 JSON →
+// 粒子模拟参数面，运行时零 Effekseer 依赖）。失败原因进 lastError()。
+bool Renderer::loadParticlesNfx(const char* path) {
+    if (!impl_->backend) return false;
+    std::string err;
+    if (!impl_->backend->loadParticlesNfx(path, err)) {
+        impl_->error = err;
+        return false;
+    }
+    impl_->info = impl_->backend->info();
+    return true;
+}
+
 } // namespace nl::renderer

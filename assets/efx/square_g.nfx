@@ -1,0 +1,57 @@
+{
+  "efkVersion": 1610,
+  "emitter": {
+    "accel": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "life": [
+      1.6666667461395264,
+      1.6666667461395264
+    ],
+    "rate": [
+      60.0,
+      60.0
+    ],
+    "spawnPoint": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "velocityMax": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "velocityMin": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "magic": "NFX1",
+  "render": {
+    "blend": "alpha",
+    "colorEnd": [
+      0,
+      255,
+      0,
+      255
+    ],
+    "colorStart": [
+      0,
+      255,
+      0,
+      255
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "size": [
+      15.0,
+      15.0
+    ],
+    "texture": null
+  },
+  "source": "square_g.efkefc"
+}

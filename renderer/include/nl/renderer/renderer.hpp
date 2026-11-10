@@ -347,6 +347,11 @@ public:
     // renderFrame 之前调用：World tick（serial/parallel）→ 收集矩阵 → 这里上传。
     bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount);
 
+    // M-PT1：.nfx v1 加载端（viewer --nfx <path>）。转发 backend 的
+    // scene_.loadParticlesNfx：解析 NFX1 JSON → 折进粒子模拟参数面。运行时
+    // 零 Effekseer 依赖。失败返回 false（lastError() 带原因），legacy 喷泉不受影响。
+    bool loadParticlesNfx(const char* path);
+
 private:
     Renderer();
     struct Impl;

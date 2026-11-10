@@ -4,6 +4,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
+#include "json.hpp"                // M-PT1：.nfx v1 解析（vendored nlohmann，与 core 同源）
 
 #include <cmath>
 #include <algorithm>
@@ -4303,14 +4304,9 @@ float particleRand01(std::uint32_t v) {
     return static_cast<float>(v & 0xFFFFFFu) / 16777215.0f;
 }
 
-// 喷泉发射器常数（M-PT0 全部钉死，不做参数面——起步口径）。
+// 喷泉发射器常数：M-PT1 起参数面进 Particles::Params（scene.hpp），此处只留
+// legacy 锚点使用的发射点与固定步长（nfx 路径经 params_ 覆写）。
 constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
-constexpr float kEmitRate        = 300.0f;        // 粒子/秒
-constexpr float kParticleGravity = 9.8f;          // m/s²（向下）
-constexpr float kLifeMin   = 1.6f, kLifeSpan  = 0.7f;  // 寿命 [1.6, 2.3) s
-constexpr float kSpeedMin  = 2.0f, kSpeedSpan = 1.0f;  // 初速幅值 [2.0, 3.0) m/s
-constexpr float kSizeMin   = 0.05f, kSizeSpan = 0.05f; // 尺寸 [0.05, 0.10) m
-constexpr float kConeSpread = 0.35f;              // 初速水平锥散布
 constexpr float kEmitterPos[3] = {0.0f, -0.55f, 0.0f};
 
 // CB 布局（与 particles.slang 的 cbuffer b0 逐字节对应，112 B）。
@@ -4387,23 +4383,28 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     // 管线：TriangleList + 无 input layout（VS 用 SV_VertexID/SV_InstanceID 顶点
     // 拉取，cull 路径同款）。alpha blend + depth test 开 / write 关 + cull None
     // （billboard 两面可见）。不写深度 → 不遮挡后续 HUD。
-    nvrhi::GraphicsPipelineDesc desc;
-    desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
-        .setVertexShader(vs_).setFragmentShader(ps_)
-        .addBindingLayout(bindingLayout_);
-    desc.renderState.rasterState
-        .setFrontCounterClockwise(true)
-        .setFillMode(nvrhi::RasterFillMode::Solid)
-        .setCullMode(nvrhi::RasterCullMode::None);
-    desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
-    nvrhi::BlendState::RenderTarget rt;
-    rt.setBlendEnable(true);
-    rt.setSrcBlend(nvrhi::BlendFactor::SrcAlpha);
-    rt.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha);
-    rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
-    rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
-    desc.renderState.blendState.setRenderTarget(0, rt);
-    pipeline_ = device->createGraphicsPipeline(desc, info);
+    // M-PT1：additive 变体管线懒建（同一份 shader/绑定布局，仅混合方程不同；
+    // §2.7 单管线单一 BindingSet——两条管线共享同一 bindingLayout_/bindingSet_）。
+    auto makePipeline = [&](nvrhi::BlendFactor srcColor, nvrhi::BlendFactor dstColor) {
+        nvrhi::GraphicsPipelineDesc desc;
+        desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+            .setVertexShader(vs_).setFragmentShader(ps_)
+            .addBindingLayout(bindingLayout_);
+        desc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+        nvrhi::BlendState::RenderTarget rt;
+        rt.setBlendEnable(true);
+        rt.setSrcBlend(srcColor);
+        rt.setDestBlend(dstColor);
+        rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
+        rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+        desc.renderState.blendState.setRenderTarget(0, rt);
+        return device->createGraphicsPipeline(desc, info);
+    };
+    pipeline_ = makePipeline(nvrhi::BlendFactor::SrcAlpha, nvrhi::BlendFactor::InvSrcAlpha);
     if (!pipeline_) { outError = "createGraphicsPipeline failed for particles"; return false; }
     return true;
 }
@@ -4411,6 +4412,7 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
 void Particles::step(float dt) {
     // 1. 积分 + 摘除死亡（swap-remove；换上来的元素 continue 重进本帧积分，
     //    数组序 = spawn 序保持稳定，确定性不受摘除方式影响）。
+    //    M-PT1：加速度走 params_.accel（nfx 折算的常加速度；legacy = -y 重力）。
     for (std::size_t i = 0; i < pool_.size(); ) {
         Sim& p = pool_[i];
         p.life -= dt;
@@ -4419,35 +4421,55 @@ void Particles::step(float dt) {
             pool_.pop_back();
             continue;
         }
-        p.vel[1] -= kParticleGravity * dt;
+        p.vel[0] += params_.accel[0] * dt;
+        p.vel[1] += params_.accel[1] * dt;
+        p.vel[2] += params_.accel[2] * dt;
         p.pos[0] += p.vel[0] * dt;
         p.pos[1] += p.vel[1] * dt;
         p.pos[2] += p.vel[2] * dt;
         ++i;
     }
     // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
-    spawnAccum_ += kEmitRate * dt;
+    spawnAccum_ += params_.rate * dt;
     std::uint32_t spawn = static_cast<std::uint32_t>(spawnAccum_);
     spawnAccum_ -= static_cast<float>(spawn);
     for (std::uint32_t k = 0; k < spawn && pool_.size() < kMaxParticles; ++k) {
         const std::uint32_t s = spawnSeq_++;
-        const float rx = particleRand01(particleHash(s * 5u + 0u)) * 2.0f - 1.0f;
-        const float rz = particleRand01(particleHash(s * 5u + 1u)) * 2.0f - 1.0f;
-        const float rSpd = particleRand01(particleHash(s * 5u + 2u));
-        const float rLife = particleRand01(particleHash(s * 5u + 3u));
-        const float rSize = particleRand01(particleHash(s * 5u + 4u));
         Sim p;
-        p.pos[0] = kEmitterPos[0]; p.pos[1] = kEmitterPos[1]; p.pos[2] = kEmitterPos[2];
-        // 锥形初速：向上为主 + 水平散布，归一化后乘幅值。
-        const float dx = rx * kConeSpread, dy = 1.0f, dz = rz * kConeSpread;
-        const float invLen = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
-        const float speed = kSpeedMin + rSpd * kSpeedSpan;
-        p.vel[0] = dx * invLen * speed;
-        p.vel[1] = dy * invLen * speed;
-        p.vel[2] = dz * invLen * speed;
-        p.maxLife = kLifeMin + rLife * kLifeSpan;
-        p.life = p.maxLife;
-        p.size = kSizeMin + rSize * kSizeSpan;
+        if (!nfxActive_) {
+            // ---- M-PT0 legacy 喷泉（逐位不动：M-PT0 基线字节复现的前提）----
+            const float rx = particleRand01(particleHash(s * 5u + 0u)) * 2.0f - 1.0f;
+            const float rz = particleRand01(particleHash(s * 5u + 1u)) * 2.0f - 1.0f;
+            const float rSpd = particleRand01(particleHash(s * 5u + 2u));
+            const float rLife = particleRand01(particleHash(s * 5u + 3u));
+            const float rSize = particleRand01(particleHash(s * 5u + 4u));
+            p.pos[0] = kEmitterPos[0]; p.pos[1] = kEmitterPos[1]; p.pos[2] = kEmitterPos[2];
+            // 锥形初速：向上为主 + 水平散布，归一化后乘幅值。
+            const float dx = rx * params_.spread, dy = 1.0f, dz = rz * params_.spread;
+            const float invLen = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float speed = params_.speedMin + rSpd * params_.speedSpan;
+            p.vel[0] = dx * invLen * speed;
+            p.vel[1] = dy * invLen * speed;
+            p.vel[2] = dz * invLen * speed;
+            p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
+            p.life = p.maxLife;
+            p.size = params_.sizeMin + rSize * params_.sizeSpan;
+        } else {
+            // ---- M-PT1 .nfx：box 初速 min/max 逐轴 lerp + 定长寿命/尺寸 ----
+            const float rv0 = particleRand01(particleHash(s * 5u + 0u));
+            const float rv1 = particleRand01(particleHash(s * 5u + 1u));
+            const float rv2 = particleRand01(particleHash(s * 5u + 2u));
+            const float rLife = particleRand01(particleHash(s * 5u + 3u));
+            p.pos[0] = params_.spawn[0];
+            p.pos[1] = params_.spawn[1];
+            p.pos[2] = params_.spawn[2];
+            p.vel[0] = params_.velMin[0] + rv0 * (params_.velMax[0] - params_.velMin[0]);
+            p.vel[1] = params_.velMin[1] + rv1 * (params_.velMax[1] - params_.velMin[1]);
+            p.vel[2] = params_.velMin[2] + rv2 * (params_.velMax[2] - params_.velMin[2]);
+            p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
+            p.life = p.maxLife;
+            p.size = params_.sizeMin;
+        }
         pool_.push_back(p);
     }
     // 3. 填 GPU 绘制流：颜色/alpha 生命周期曲线在 CPU 端算好（shader 只画）。
@@ -4460,13 +4482,26 @@ void Particles::step(float dt) {
         g.posSize[1] = p.pos[1];
         g.posSize[2] = p.pos[2];
         g.posSize[3] = p.size * (0.6f + 0.4f * (1.0f - t));   // 随寿命略收缩
-        // 颜色：黄 → 橙红；alpha：出生快速淡入 × 死亡淡出（乘积曲线，无开关跳变）。
-        g.colorAlpha[0] = 1.0f;
-        g.colorAlpha[1] = 0.85f - 0.55f * t;
-        g.colorAlpha[2] = 0.35f - 0.27f * t;
-        const float aIn  = std::min(1.0f, t * 8.0f);
-        const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
-        g.colorAlpha[3] = aIn * aOut;
+        if (!nfxActive_) {
+            // legacy：黄 → 橙红；alpha：出生快速淡入 × 死亡淡出（乘积曲线，无开关跳变）。
+            g.colorAlpha[0] = 1.0f;
+            g.colorAlpha[1] = 0.85f - 0.55f * t;
+            g.colorAlpha[2] = 0.35f - 0.27f * t;
+            const float aIn  = std::min(1.0f, t * 8.0f);
+            const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
+            g.colorAlpha[3] = aIn * aOut;
+        } else {
+            // nfx：colorStart→colorEnd 线性 lerp；fadeIn/fadeOut（秒）乘积曲线。
+            g.colorAlpha[0] = params_.colorStart[0] + (params_.colorEnd[0] - params_.colorStart[0]) * t;
+            g.colorAlpha[1] = params_.colorStart[1] + (params_.colorEnd[1] - params_.colorStart[1]) * t;
+            g.colorAlpha[2] = params_.colorStart[2] + (params_.colorEnd[2] - params_.colorStart[2]) * t;
+            float aIn = 1.0f, aOut = 1.0f;
+            if (params_.fadeIn > 0.0f)
+                aIn = std::min(1.0f, (1.0f - p.life / p.maxLife) * p.maxLife / params_.fadeIn);
+            if (params_.fadeOut > 0.0f)
+                aOut = std::min(1.0f, p.life / params_.fadeOut);
+            g.colorAlpha[3] = params_.colorStart[3] * aIn * aOut;
+        }
         gpuData_.push_back(g);
     }
     aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
@@ -4483,6 +4518,33 @@ void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             return;
         }
     }
+    // M-PT1：additive 管线懒建（仅 nfx blend=additive 时需要；同 shader/绑定布局）。
+    nvrhi::GraphicsPipelineHandle activePipeline = pipeline_;
+    if (nfxActive_ && params_.additive && !pipelineAdditive_) {
+        nvrhi::GraphicsPipelineDesc desc;
+        desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+            .setVertexShader(vs_).setFragmentShader(ps_)
+            .addBindingLayout(bindingLayout_);
+        desc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+        nvrhi::BlendState::RenderTarget rt;
+        rt.setBlendEnable(true);
+        rt.setSrcBlend(nvrhi::BlendFactor::One);          // additive：src*1 + dst*1
+        rt.setDestBlend(nvrhi::BlendFactor::One);
+        rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
+        rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+        desc.renderState.blendState.setRenderTarget(0, rt);
+        pipelineAdditive_ = cmd->getDevice()->createGraphicsPipeline(
+            desc, framebuffer->getFramebufferInfo());
+        if (!pipelineAdditive_) {
+            nl::core::log::deviceError("Particles", "createGraphicsPipeline failed for additive (fall back to alpha)");
+        }
+    }
+    if (nfxActive_ && params_.additive && pipelineAdditive_)
+        activePipeline = pipelineAdditive_;
     // 每帧固定步长一步：粒子状态 = 已渲染帧数的纯函数（截图确定性前提）。
     step(kParticleStepDt);
     if (aliveCount_ == 0) return;
@@ -4501,7 +4563,7 @@ void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                      aliveCount_ * static_cast<std::uint32_t>(sizeof(ParticleGpu)));
 
     nvrhi::GraphicsState state;
-    state.setPipeline(pipeline_)
+    state.setPipeline(activePipeline)
          .setFramebuffer(framebuffer)
          .addBindingSet(bindingSet_);
     state.viewport.addViewportAndScissorRect(viewport);
@@ -4512,8 +4574,99 @@ void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     cmd->draw(args);
 }
 
+// M-PT1：.nfx v1 加载端。JSON → 模拟参数折算；运行时零 Effekseer 依赖
+// （转换期已把 Effekseer 参数面折进 NFX1 子集，子集外根本到不了这里）。
+// 成功后清空模拟状态重启时间线（spawnSeq 归零 = 确定性流重新出发）。
+bool Particles::loadNfx(const char* path, std::string& outError) {
+    std::vector<std::uint8_t> buf;
+    if (!readFileBytes(path, buf)) {
+        outError = std::string("cannot open .nfx: ") + path;
+        return false;
+    }
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(buf.data(), buf.data() + buf.size());
+    } catch (const std::exception& e) {
+        outError = std::string(".nfx json parse failed: ") + e.what();
+        return false;
+    }
+    if (!j.is_object() || j.value("magic", "") != "NFX1") {
+        outError = ".nfx bad magic (want NFX1)";
+        return false;
+    }
+    if (!j.contains("emitter") || !j.contains("render")) {
+        outError = ".nfx missing emitter/render section";
+        return false;
+    }
+    const nlohmann::json& e = j["emitter"];
+    const nlohmann::json& r = j["render"];
+    auto getArr2 = [&](const nlohmann::json& o, const char* k, float out[2]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 2) return false;
+        out[0] = o[k][0].get<float>();
+        out[1] = o[k][1].get<float>();
+        return true;
+    };
+    auto getArr3 = [&](const nlohmann::json& o, const char* k, float out[3]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 3) return false;
+        for (int a = 0; a < 3; ++a) out[a] = o[k][a].get<float>();
+        return true;
+    };
+    auto getArr4 = [&](const nlohmann::json& o, const char* k, float out[4]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 4) return false;
+        for (int c = 0; c < 4; ++c) out[c] = o[k][c].get<float>();
+        return true;
+    };
+
+    float rate[2], life[2], spawn[3], vMin[3], vMax[3], accel[3];
+    float cStart[4], cEnd[4], size[2];
+    if (!getArr2(e, "rate", rate) || !getArr2(e, "life", life) ||
+        !getArr3(e, "spawnPoint", spawn) || !getArr3(e, "velocityMin", vMin) ||
+        !getArr3(e, "velocityMax", vMax) || !getArr3(e, "accel", accel) ||
+        !getArr4(r, "colorStart", cStart) || !getArr4(r, "colorEnd", cEnd) ||
+        !r.contains("size") || !r["size"].is_array() || r["size"].size() != 2) {
+        outError = ".nfx malformed arrays";
+        return false;
+    }
+    size[0] = r["size"][0].get<float>();
+    size[1] = r["size"][1].get<float>();
+
+    Params p;             // 从 NFX1 缺省起折算（不复带 legacy 字段）
+    p.rate = 0.5f * (rate[0] + rate[1]);            // min/max 取均值（区间留档在 .nfx）
+    p.lifeMin = life[0];
+    p.lifeSpan = life[1] > life[0] ? (life[1] - life[0]) : 0.0f;
+    p.spawn[0] = spawn[0]; p.spawn[1] = spawn[1]; p.spawn[2] = spawn[2];
+    p.velMin[0] = vMin[0]; p.velMin[1] = vMin[1]; p.velMin[2] = vMin[2];
+    p.velMax[0] = vMax[0]; p.velMax[1] = vMax[1]; p.velMax[2] = vMax[2];
+    p.accel[0] = accel[0]; p.accel[1] = accel[1]; p.accel[2] = accel[2];
+    p.sizeMin = size[0];
+    p.sizeSpan = 0.0f;                               // v1 定长尺寸（sizeY 记录在案，billboard 用 X）
+    for (int c = 0; c < 4; ++c) {
+        p.colorStart[c] = cStart[c] / 255.0f;        // .nfx 色值 0..255 → 线性 0..1
+        p.colorEnd[c]   = cEnd[c] / 255.0f;
+    }
+    p.fadeIn = r.value("fadeIn", 0.0f);
+    p.fadeOut = r.value("fadeOut", 0.0f);
+    std::string blend = r.value("blend", "alpha");
+    p.additive = (blend == "additive");
+
+    params_ = p;
+    nfxActive_ = true;
+    nfxName_ = path;
+    const std::size_t slash = nfxName_.find_last_of("/\\");
+    if (slash != std::string::npos) nfxName_ = nfxName_.substr(slash + 1);
+
+    // 模拟状态归零重启：粒子时间线从加载帧出发（spawnSeq=0 → pcg 流确定性重启）。
+    pool_.clear();
+    gpuData_.clear();
+    aliveCount_ = 0;
+    spawnAccum_ = 0.0f;
+    spawnSeq_ = 0;
+    return true;
+}
+
 void Particles::invalidate() {
     pipeline_      = nullptr;
+    pipelineAdditive_ = nullptr;
     bindingLayout_ = nullptr;
     bindingSet_    = nullptr;
     vs_ = nullptr;

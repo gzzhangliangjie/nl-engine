@@ -2023,3 +2023,24 @@
 6. **冒烟 flag 笔误**：`--screenshot-path` 不存在，正确用法 `--screenshot <path> --frames N`。
 
 **下一步**：M-PT1 vfx-tools 转换器（Effekseer .efkefc → `.nfx` v1）+ 运行时 .nfx 加载端；转换器支持面/子集外显式报错清单开工前细化（PARTICLES-PLAN §M-PT1）。merge 回 master 待用户拍板。
+
+## PT M-PT1：.nfx v1 闭环——Effekseer 转换器 + 运行时加载端（feat/particles 轨道，2026-11-10，tag `particles-pt1`）
+
+**动作**：三处前置实读——Effekseer 源码解析层（镜像 shallow clone 实查：core MIT 自足 189 文件、EfkEfcFactory/SKFE chunk、参数结构逐字段实读、贴图路径 Get*ImagePath 公开 API、Network 子集无反向依赖）、Carrot `ParticleBlueprint`（资产 = 预编译 SPIR-V + 贴图索引，离线生成运行时零解析）、UE Niagara（authored → `FNiagaraEmitterCompiledData` 编译产物，工业口径同构）。拍板点三连（AskUserQuestion）：解析方案 = **vendored Effekseer core**；子集 = **基础 sprite 单发射器**；运行时加载端**并入本里程碑**。选型闸逐条核过（MIT/纯源码零构建依赖/许可入库/不替代主线），VENDOR.md 留档。
+
+**落码**：`thirdparty/effekseer/`（core 57 cpp/121 h + 自有 CMakeLists 显式列源 + LICENSE + VENDOR.md；**伞头 Network include 补丁**留注释）→ 主 CMakeLists `nl_effekseer` 静态库 + `vfx-tools` 目标 → `vfx-tools/main.cpp`（convert/selftest：SKFE 加载走 Setting 默认 EfkEfcFactory 路由、桩 loader 全 nullptr 免磁盘依赖、EffectNode 树遍历 + 子集白名单反面清单收集式 exit 2、NFX1 JSON 产出 + 镜像读回自证）→ `assets/efx/` 真实样例（镜像 git show 拉 7 个 .efkefc + 4 贴图占位）→ 运行时：`Particles::Params` 参数面 + `loadNfx`（NFX1 → box 初速/常加速度 nfx 路径，legacy 喷泉双代码路径逐位不动）+ additive 变体管线懒建 + `Renderer::loadParticlesNfx` 门面三层转发（backend.hpp 虚接口 + dx12/vk 一行转发）+ viewer `--nfx`（隐含 --particles，nfx loaded 锚点）→ `docs/particles/VFX-TOOLS-GUIDE.md` 归档 → `example/particles-pt1/`（nfx-hud/nfx-log × 双后端 4 基线 + run.bat verify：tool 正负向 + 确定性 fc /b + 双锚点 + 负向）+ cases.json particles-pt1 卡 5 用例（case 级 exe 覆盖 + **cwd {root}**）→ ctest p-mpt1-selftest/convert-positive 两条。
+
+**提交版本**：`feat/particles` M-PT1 提交（annotated tag `particles-pt1`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过（nl_effekseer + vfx-tools + viewer 全绿）；selftest PASS（JSON 往返 + 坏 magic + SKFE 探针）；**转换器真样例验收**：CullingSprite（v1500）/square_r-g-b（v1610）exit 0（**Effekseer 老版本迁移实测生效**），GpuParticles_emit_line exit 2 带 4 条实测原因、GpuParticles_mesh_simple exit 2、Laser01 exit 2（5 sprite 节点）；**运行时闭环**：viewer --nfx 红色 billboard 光晕肉眼可见 + HUD `Particles : 101 alive`（rate 60/s × life 1.67s 理论稳态命中）；**确定性硬证**：nfx 模式 DX12 同参两跑 PNG `fc /b` 逐字节同（MD5 `7fd2a033…`）、双后端 alive=101 同值；**legacy 零回归**：`--only particles-pt0` 6/6 全绿；pt1 回归 **10/10 ALL GREEN**（5 用例 × 双后端：bytes 全等）；ctest DX12/VULKAN 53/53（新增 2 条）；run.bat verify 全绿 exit 0；server.py --check exit 0。
+
+**踩坑情况**
+1. **伞头 Effekseer.h 引 Network 头**：删 Network 子集后 DefaultEffectLoader 编译炸 C1083——vendored 树打最小补丁（两行 include 移除 + 注释留痕 VENDOR.md）。
+2. **SIMD::Vec2f 无 X/Y 成员**：getter 是 GetX()/GetY()；`vector3d`（InternalStruct）是小写 x/y/z，`Vector3D`（Math 类）是大写——**同类异构成员命名必须回 vendored 头实核**，凭印象写连吃三组 C2039。
+3. **quad 轴对齐判据写错**：初版写成 `ulX != urX`（应为顶边横平 `ulY != urY`），正例 CullingSprite 被冤枉 exit 2——把实测角值打进报错信息后一眼定位（报错信息带现场数据的价值实证）。
+4. **SpritePosition.Default 语义**：v8+ 从文件读 4 角（可任意四边形），v8 以下才归一化 ±0.5——square 系样例 15×15 原始单位（Effekseer 示例侧 cm 习惯靠 magnification 缩放），1:1 折米 = 15m 大板把相机罩进去（近平面裁掉全隐）。子集口径 magnification≠1 → exit 2 是对的；正例选 CullingSprite（1×1）。
+5. **regression 默认 cwd = exe 目录**：卡里相对路径 `assets/efx/...` 全部失联（viewer 文件读不到、converter 把「文件不存在」也 exit 2 但原因清单缺失 → expectLog 双断言抓得住）——修复 = 5 张卡全加 `"cwd": "{root}"`（audio-tools debug 先例）。**带文件路径参数的卡必须显式 cwd**。
+6. **MaterialLoader::Load 签名**：单参无 bool、双参是 `(data,size,MaterialFileType)`——override 不匹配 C3668 编译期抓获。
+7. **s1-nmesh-suzanne ctest 间歇挂**：连跑 4 次全挂后全量 3 轮 = 过/挂/过——ENV-FLAKE 秒退族（missing anchor/空输出先例口径），与本里程碑零接触（用例未改），定性留痕不追码。
+
+**下一步**：M-PT2 候选——贴图采样端（stb_image vendored + particles.slang PS 贴图采样 + .nfx 贴图解析）、sizeY 非方形 billboard、rate 区间驱动、Effekseer easing/渐变颜色。merge 回 master 待用户拍板（M-PT0+M-PT1 一并）。

@@ -39,11 +39,12 @@
 ### 边界（起步不做，违反即扩权）
 compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积类、ribbon/trail、`.nfx`/转换器（归 M-PT1）、post-chain 集成（离屏 HDR RT 建成后再迁半透明合成，起步直画 LDR 主帧）。
 
-## M-PT1 · vfx-tools 转换器 + `.nfx` v1（已拍板待 M-PT0 收口后开工）
+## M-PT1 · vfx-tools 转换器 + `.nfx` v1（✅ 收官 2026-11-10，tag `particles-pt1`）
 
-- `vfx-tools/` 离线工具：`.efkefc` → `.nfx`（JSON 描述 + 贴图重打包），子集见上；不支持模块 exit 2 显式失败。
-- 交代：展示台 tool 卡（usage / 正向 / 负向，`expectExit` 0/1/2 约定）+ `docs/particles/VFX-TOOLS-GUIDE.md` 归档 + 真实输出生成的证据图。
-- 里程碑开工时按铁律重读三处对应模块（Effekseer 源码解析层 / Carrot 资产与蓝图拆分 / UE 导入转换姿势）。
+- `vfx-tools/` 离线工具：`.efkefc` → `.nfx`（JSON 描述 + 贴图路径记录），子集见上；不支持模块 exit 2 显式失败。✅ 落地：vendored Effekseer core（MIT，b570008，Network 排除）+ `vfx-tools/main.cpp`（convert/selftest，SKFE chunk v1500/v1610 老版本迁移实测生效）+ `assets/efx/` 真实样例（正例 CullingSprite/square_r-g-b + 负例 GpuParticles_* ×2）+ NFX1 schema（VFX-TOOLS-GUIDE.md 归档）。**已知边界（M-PT2 候选）**：贴图路径记录但运行时未采样（程序化软圆盘回退；上游贴图是 git-lfs 指针、镜像拉不到真体）；sizeY 记录未用；rate 区间取均值。
+- 运行时加载端并入（用户拍板「同里程碑」）：`Particles::loadNfx`（NFX1 JSON → 模拟参数面，box 初速 + 常加速度 nfx 路径；**legacy 喷泉逐位不动零回归**，pt0 spot 回归 6/6 全绿）+ additive 变体管线懒建 + viewer `--nfx`（隐含 --particles）。确定性实测：nfx 模式 DX12 同参两跑 PNG 逐字节同（MD5 7fd2a033…）、双后端 alive=101 同值命中理论稳态。
+- 交代：✅ 展示台 tool 卡 3 条（usage exit 2 / selftest exit 0 / convert 负向 exit 2 带实测原因清单，case 级 exe 覆盖 vfx-tools）+ `docs/particles/VFX-TOOLS-GUIDE.md` 归档 + 真实输出生成的证据图（nfx-hud 渲染基线 = 转换产物实跑画面）。
+- 里程碑开工时按铁律重读三处对应模块 ✅：Effekseer 源码解析层（EfkEfcFactory/SKFE chunk/参数结构面逐字段实读）、Carrot 资产与蓝图拆分（ParticleBlueprint = 预编译 SPIR-V + 贴图索引，离线生成运行时零解析）、UE 导入转换姿势（Niagara authored → FNiagaraEmitterCompiledData 编译产物，运行时零解析 = 工业口径同构）。
 
 ## 风险登记
 

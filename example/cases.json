@@ -6027,6 +6027,139 @@
     }
    ],
    "tag": "particles-pt0"
+  },
+  {
+   "id": "particles-pt1",
+   "label": "M-PT1",
+   "name": ".nfx v1 闭环：Effekseer 转换器 + 运行时加载端（M-PT1）",
+   "date": "2026-11-10",
+   "summary": "M-PT1（particles 轨道第二里程碑，路线 B 拍板落地）：① vfx-tools 离线转换器——vendored Effekseer core（MIT，commit b570008，Network 子集排除）解析 .efkefc（SKFE chunk，v1500/v1610 老版本迁移实测生效），遍历 EffectNode 树把参数面折算进 .nfx v1 子集（单 sprite 发射器：rate/life/spawn/速度盒/常加速度/颜色 Fixed-Random/尺寸 quad/blend/淡入淡出/贴图路径），子集外模块 exit 2 显式报错清单（模型/ribbon/GPU 粒子/动态参数引用/力场/碰撞/音效等，禁静默丢弃）；② 运行时加载端——Particles::loadNfx 解析 NFX1 JSON 折进模拟参数面（box 初速 + 常加速度双代码路径，legacy 喷泉逐位不动零回归），additive 变体管线懒建，viewer --nfx 开关（隐含 --particles）。确定性实测：nfx 模式 DX12 同参两跑 PNG 逐字节同（MD5 7fd2a033…），双后端 alive=101 同值（CullingSprite：rate 60/s × life 1.67s 理论值命中）。 Effekseer 仓库 MIT 样例资产入库 assets/efx/（正例 CullingSprite/square_r-g-b，负例 GpuParticles_* 2 份）。",
+   "acceptance": [
+    "转换器：CullingSprite.efkefc → .nfx exit 0（v1500 老版本迁移生效）；GpuParticles_emit_line.efkefc → exit 2 带 4 条原因清单；selftest PASS（JSON 往返 + 坏 magic + SKFE 探针）",
+    "加载端画面：viewer --nfx 红色 billboard 光晕可见（CullingSprite），HUD 'Particles : 101 alive'，deviceErrors=0 双后端",
+    "确定性：nfx 模式同参两次实跑 PNG 逐字节同（MD5 7fd2a033…）；双后端 alive=101 同值 = rate×life 理论值命中",
+    "legacy 零回归：--particles 喷泉路径逐位不动（spot 回归 particles-pt0 全绿）",
+    "example/particles-pt1 归位（nfx-hud/nfx-log × 双后端 + run.bat verify 全绿：tool 正负向 + 确定性 + 锚点 + 负向）+ cases.json 卡 5 用例"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "nfx-hud",
+     "name": ".nfx 加载端画面：CullingSprite.nfx 红色光晕 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "vfx-tools 转换产物经 viewer --nfx 加载驱动模拟（box 初速 + 常加速度 nfx 路径）；红色软圆盘粒子群在猴头后方发光。HUD Particles 行 alive=101 = rate 60/s × life 1.67s 理论稳态。",
+     "baselines": {
+      "dx12": "example/particles-pt1/particles-nfx-hud-dx12.png",
+      "vulkan": "example/particles-pt1/particles-nfx-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/CullingSprite.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --nfx assets/efx/CullingSprite.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/particles-pt1/run.bat",
+     "cwd": "{root}"
+    },
+    {
+     "id": "nfx-steady-log",
+     "name": ".nfx 加载 + 稳态计数日志证据（pair 小图 + expectLog）",
+     "kind": "pair",
+     "note": "text-only run viewer 不退出（M8.0 教训）→ pair 小图 + expectLog 双断言。expectLog 从实测 log 复制（禁手写纪律）：nfx loaded + particles steady (nfx)。",
+     "baselines": {
+      "dx12": "example/particles-pt1/particles-nfx-log-dx12.png",
+      "vulkan": "example/particles-pt1/particles-nfx-log-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/CullingSprite.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "particles steady: alive=101 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/CullingSprite.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt1/run.bat",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-usage",
+     "name": "vfx-tools usage：无参数（负向）",
+     "kind": "tool",
+     "note": "无参数启动打印 usage 并退出码 2（本工具用法错误 = 2，对齐 expectExit 约定）。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "vfx-tools convert <in.efkefc> <out.nfx>",
+     "command": "vfx-tools.exe",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-selftest",
+     "name": "vfx-tools selftest：JSON 往返 + 坏 magic + SKFE 探针",
+     "kind": "tool",
+     "note": ".nfx schema 自证：nfxToJson→nfxFromJson 字段逐个比对、NFX9 magic 拒绝、EfkEfcFile 对非 SKFE 数据判无效。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "nfx selftest: PASS",
+     "command": "vfx-tools.exe selftest",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-convert-negative",
+     "name": "vfx-tools convert 负向：GpuParticles_emit_line → exit 2 原因清单",
+     "kind": "tool",
+     "note": "子集外模块显式报错（禁静默丢弃）：GPU 粒子样例命中 4 条不支持的实测原因（removal timing / 发射位置 sphere / blend / 颜色 easing）。真实 Effekseer 仓库样例资产。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [
+      "convert",
+      "assets/efx/GpuParticles_emit_line.efkefc",
+      "out/nfx-negative-should-not-exist.nfx"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit 2: unsupported modules",
+     "command": "vfx-tools.exe convert assets/efx/GpuParticles_emit_line.efkefc out/nfx-negative-should-not-exist.nfx",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt1"
   }
  ]
 }

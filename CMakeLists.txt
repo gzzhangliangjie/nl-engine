@@ -145,6 +145,11 @@ set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)
 
+# ---- PT M-PT1：Effekseer core vendored（MIT，.efkefc 解析层，离线转换器专用）----
+# 单静态库零外部依赖（Network 子集未入库）；运行时（nl-engine）不碰它，只有
+# vfx-tools/nfx-convert 链接——运行时零新依赖铁律不破。详见 thirdparty/effekseer/VENDOR.md。
+add_subdirectory(thirdparty/effekseer EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -445,10 +450,16 @@ target_compile_definitions(audio-tools PRIVATE
 add_executable(phys-tools phys-tools/main.cpp)
 target_link_libraries(phys-tools PRIVATE nl_core)
 
+# ---- PT M-PT1：vfx-tools —— Effekseer .efkefc → .nfx 离线转换器（B 类轨道）----
+# 退出码：0=成功 / 1=断言失败 / 2=用法或子集外模块显式报错（对齐展示台 expectExit）。
+# 链 nl_core + nl_effekseer（vendored 解析层）；运行时不链 Effekseer。
+add_executable(vfx-tools vfx-tools/main.cpp)
+target_link_libraries(vfx-tools PRIVATE nl_core nl_effekseer)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools vfx-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -457,6 +468,16 @@ endif()
 # 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
 enable_testing()
 add_test(NAME m0.5-selftest COMMAND viewer --selftest)
+# PT M-PT1：vfx-tools 机械验收（selftest + 真实样例转换正负向）
+add_test(NAME p-mpt1-selftest
+         COMMAND vfx-tools selftest)
+set_tests_properties(p-mpt1-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nfx selftest: PASS")
+add_test(NAME p-mpt1-convert-positive
+         COMMAND vfx-tools convert ${CMAKE_CURRENT_SOURCE_DIR}/assets/efx/CullingSprite.efkefc
+                 ${CMAKE_CURRENT_BINARY_DIR}/p-mpt1-culling.nfx)
+set_tests_properties(p-mpt1-convert-positive PROPERTIES
+    PASS_REGULAR_EXPRESSION "converted: CullingSprite")
 # M1.0：nanite-tools 对官方 Suzanne 资产的机械验收（顶点 / 三角 / 子网格数）
 add_test(NAME s1-tools-stat
          COMMAND nanite-tools stat ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)

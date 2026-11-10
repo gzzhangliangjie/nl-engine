@@ -114,7 +114,7 @@ private:
 // 默认不建/不画（--particles 关闭时零开销，S7 渲染基线字节不变）。
 class Particles {
 public:
-    // 用 framebuffer 格式信息建唯一一条 billboard 管线（只建一次）。
+    // 用 framebuffer 格式信息建 billboard 管线（alpha/additive 各一条，懒建缓存）。
     // shaderSuffix = "spv" / "dxil"；入口恒 vsMain/psMain（后端传 "main"，§2.4）。
     bool ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                 const char* shaderSuffix, std::string& outError);
@@ -128,12 +128,36 @@ public:
 
     std::uint32_t aliveCount() const { return aliveCount_; }
 
+    // M-PT1：.nfx v1 加载端（vfx-tools 转换产物，运行时零 Effekseer 依赖）。
+    // 解析 JSON → 折进模拟参数；成功后模拟走 nfx 路径（legacy 喷泉代码路径
+    // 原样保留，M-PT0 基线零回归）。失败返回 false 且不清 legacy 参数。
+    bool loadNfx(const char* path, std::string& outError);
+    bool nfxActive() const { return nfxActive_; }
+    const std::string& nfxName() const { return nfxName_; }
+
 private:
     // CPU 固定步长模拟（喷泉发射器：发射率/初速锥/重力/寿命曲线全部常数，
     // RNG = pcg(序列号) 确定性流——run-to-run 与跨后端逐位一致）。
     void step(float dt);
 
     static constexpr std::uint32_t kMaxParticles = 4096;
+
+    // 模拟参数面（M-PT0 = 内置喷泉常数；M-PT1 起 .nfx 覆写 box 发射分支）。
+    struct Params {
+        float rate = 300.0f;                       // 粒子/秒
+        float lifeMin = 1.6f, lifeSpan = 0.7f;     // 寿命 [lifeMin, lifeMin+lifeSpan) s
+        float spawn[3] = {0.0f, -0.55f, 0.0f};     // 发射点（legacy 锥形发射用）
+        float speedMin = 2.0f, speedSpan = 1.0f;   // 锥形初速幅值（legacy）
+        float spread = 0.35f;                      // 锥形水平散布（legacy）
+        float velMin[3] = {0, 0, 0};               // box 初速 min（nfx）
+        float velMax[3] = {0, 0, 0};               // box 初速 max（nfx）
+        float accel[3] = {0.0f, -9.8f, 0.0f};      // 常加速度（两路共用，legacy = 重力）
+        float sizeMin = 0.05f, sizeSpan = 0.05f;   // 尺寸（nfx：sizeSpan=0 定值）
+        float colorStart[4] = {1.0f, 0.85f, 0.35f, 1.0f}; // nfx 颜色 t=0
+        float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
+        float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
+        bool  additive = false;                    // nfx blend（false = alpha blend）
+    };
 
     // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，32 B）。
     struct ParticleGpu {
@@ -156,12 +180,17 @@ private:
     std::uint32_t             spawnSeq_   = 0;     // RNG 流序号（pcg 输入）
     std::uint32_t             aliveCount_ = 0;
 
+    Params                     params_;     // 模拟参数面（loadNfx 覆写）
+    bool                       nfxActive_ = false;
+    std::string                nfxName_;
+
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           constants_;     // volatile CB 112 B（b0）
     nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×2（t0）
     nvrhi::BindingLayoutHandle    bindingLayout_;
     nvrhi::BindingSetHandle       bindingSet_;
-    nvrhi::GraphicsPipelineHandle pipeline_;
+    nvrhi::GraphicsPipelineHandle pipeline_;          // alpha blend（legacy + nfx 缺省）
+    nvrhi::GraphicsPipelineHandle pipelineAdditive_;  // additive（nfx blend=additive 时用）
 };
 
 class Scene {
@@ -328,6 +357,12 @@ public:
                        const nvrhi::Viewport& viewport, const FrameParams& params);
     // M-PT0：活粒子数（HUD/DeviceInfo 证据行数据源；--particles 关闭时恒 0）。
     int particlesAlive() const { return static_cast<int>(particles_.aliveCount()); }
+    // M-PT1：.nfx v1 加载端（viewer --nfx 调用；成功后模拟走 nfx 参数面）。
+    bool loadParticlesNfx(const char* path, std::string& outError) {
+        return particles_.loadNfx(path, outError);
+    }
+    bool particlesNfxActive() const { return particles_.nfxActive(); }
+    const std::string& particlesNfxName() const { return particles_.nfxName(); }
 
     bool ready() const {
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建

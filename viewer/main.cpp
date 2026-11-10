@@ -129,6 +129,7 @@ struct Options {
     int  physicsScenario = 0;                    // M-P3：--physics-scenario N
     std::uint32_t physicsSeed = 0;               // M-P3：--physics-seed N（当前仅记录）
     bool particles = false;                      // M-PT0：粒子叠加层（instanced billboard 喷泉）
+    std::string nfxPath;                         // M-PT1：.nfx v1 加载（隐含 --particles）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -242,6 +243,9 @@ Options parseArgs(int argc, char** argv) {
         } else if (a == "--wireframe") {
             o.wireframe = true;
         } else if (a == "--particles") {           // M-PT0：粒子叠加层（instanced billboard 喷泉）
+            o.particles = true;
+        } else if (a == "--nfx" && i + 1 < argc) { // M-PT1：.nfx v1 加载（隐含 --particles）
+            o.nfxPath = argv[++i];
             o.particles = true;
         } else if (a == "--physics-debug") {       // M-P3：物理调试叠加层（Jolt 碰撞形状线框）
             o.physicsDebug = true;
@@ -470,6 +474,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
+    }
+
+    // M-PT1：--nfx <path> 加载 .nfx v1（成功后模拟走 nfx 参数面；失败退 legacy 喷泉）。
+    // 机械锚点（run.bat 断言）：nfx loaded: <file>
+    if (!o.nfxPath.empty()) {
+        if (!renderer->loadParticlesNfx(o.nfxPath.c_str())) {
+            nl::core::log::error("--nfx: ", renderer->lastError(), " (fallback to legacy fountain)");
+        } else {
+            const std::size_t slash = o.nfxPath.find_last_of("/\\");
+            nl::core::log::info("nfx loaded: ",
+                                slash == std::string::npos ? o.nfxPath : o.nfxPath.substr(slash + 1));
+        }
     }
 
     // T1：--editor <file.mg> 挂材质图编辑器。复用当前场景模式做背景（缺省 normal），
@@ -978,9 +994,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         renderer->drainMessages();
         // M-PT0：稳态机械证据——最终帧的活粒子数（固定步长下 = 帧号的纯函数；
         // run.bat 断言落在发射率×平均寿命的理论区间 [rate*lifeMin, rate*lifeMax]）。
+        // M-PT1：--nfx 时锚点换 nfx 标记（rate/life 从资产读，数值进 .nfx 内容）。
         if (o.particles && o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
-            nl::core::log::info("particles steady: alive=", renderer->info().particleAlive,
-                                " (rate=300/s, life=[1.6,2.3]s)");
+            if (o.nfxPath.empty()) {
+                nl::core::log::info("particles steady: alive=", renderer->info().particleAlive,
+                                    " (rate=300/s, life=[1.6,2.3]s)");
+            } else {
+                nl::core::log::info("particles steady: alive=", renderer->info().particleAlive,
+                                    " (nfx)");
+            }
         }
         // M0.6：renderFrame 之后 renderer 可能已把最新 GPU 计时写回 hud.gpuMs，追加进曲线。
         if (hudEnabled && !o.screenshot && hud.gpuTimingAvailable && hud.gpuMs > 0.0f) {
@@ -1699,6 +1721,7 @@ void printUsage() {
               << "  viewer.exe --physics-scenario N    M-P3 scene select (default 0)\n"
               << "  viewer.exe --physics-seed N        M-P3 seed (recorded; no RNG yet)\n"
               << "  viewer.exe --particles             M-PT0 overlay: instanced billboard fountain\n"
+              << "  viewer.exe --nfx <file.nfx>        M-PT1: load .nfx v1 (implies --particles)\n"
               << "                                     (fixed-step CPU sim, HUD alive count)\n"
               << "  viewer.exe --mode <name>           run mode; available: ";
     for (int i = 0; i < nl::core::modeCount(); ++i) {
