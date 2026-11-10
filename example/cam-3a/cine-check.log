@@ -1,0 +1,14 @@
+  ok cine-check: 90 rows
+  ok cine-check: f0 first-frame pose (t=1/60, trace-derived)
+  ok cine-check: f29 lands on k1 boundary (t=0.5, trace-derived)
+  ok cine-check: wrap exactly at f64 (t 1.466667 -> ~0, trace-derived)
+  ok cine-check: f89 second-lap pose (trace-derived)
+  ok cine-check: pause band f30..34 freezes progress
+  ok cine-check: playing resumes at f35
+  ok cine-check: speed 2 doubles per-frame advance
+  ok cine-check: loop wrap happens (t drops past end)
+  ok cine-check: wrap frame pose returns to k0 neighborhood
+  ok cine-check: still playing across wrap (loop semantics)
+  ok cine-check: f89 still playing (loop alive)
+  ok cine-check: fov interpolates inside first segment
+cine-check PASS (90 rows, 12 anchors)

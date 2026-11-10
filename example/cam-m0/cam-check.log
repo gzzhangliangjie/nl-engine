@@ -1,0 +1,12 @@
+  ok cam-check: 150 rows
+  ok cam-check: f0 damped pose from reset (trace-derived)
+  ok cam-check: f0 boom offset 0
+  ok cam-check: f10 look kick (12.03 deg)
+  ok cam-check: f11 decay resumed
+  ok cam-check: offset monotonically decays f12..f89
+  ok cam-check: f90 turn residual spike (eye_z jump)
+  ok cam-check: steady-state height 2 + 6*sin(20.05 deg) (trace-derived)
+  ok cam-check: f120 orbit switch freezes offset
+  ok cam-check: f139 orbit keeps offset (no auto-return)
+  ok cam-check: f140 chase resumes decay
+cam-check PASS (150 rows, 10 anchors)

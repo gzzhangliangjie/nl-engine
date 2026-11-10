@@ -2259,3 +2259,51 @@
 5. **pt2 基线重拍的判据 clarity**——tex-hud 未漂（屏幕尺寸 ≥ 贴图尺寸 → LOD 0）而 tex-flame 漂（屏幕 30px < 128px 贴图 → 高层 mip），同一贴图链路两种结果完全可解释；重拍合规通道 = 特性演进 + note 落档原因。
 
 **下一步**：merge 回 master 待用户拍板（M-PT0~M-PT3 一并）；特效登记表下一批候选 = E1 rate 区间（小）/ E2 easing·渐变颜色（中，首次动 schema 演进样本已由 flipbook 可选字段模式铺好）/ E5 旋转 billboard（中）；主线 S8 M8.2 开工待指令。
+## P8 M-CAM0：玩法相机族无头核心——CameraRig 基座（正交/透视）+ Chase/Free 双相机 + cam-tools（feat/camera 轨道首里程碑，2026-11-10，tag `cam-m0`）
+
+**动作**：城市驾驶第 4 步（立项链：`docs/p8/P8-CAMERA-PLAN.md` 主树 `1acd491`，track `camera` 注册 wt_pool/PARALLEL-TRACKS 主树 `f6ebb8d`；wt 起点 master `1acd491`，junction 共享 `.workbuddy`/`slang dist` + skip-worktree）。三处参考实读（UE `SpringArmComponent.h` 位置/旋转 lag 分离 + `CameraLagSpeed`/`RotationLagSpeed`/`CameraLagMaxDistance` 实读、Carrot `CameraComponent/CameraSystem` 纯投影容器无 spring arm、bevy `bevy_render/camera` 无官方跟随相机——计划 §2 预口径全部实锤）→ `core/include/nl/core/camera_rig.hpp` + `core/src/camera_rig.cpp`（位姿+投影共享口径基座：列主序 ZO 矩阵同 OrbitCamera；**用户当日拍板加正交/透视双模式**，Perspective 缺省零影响）+ `chase_camera.hpp/.cpp`（boom rig = 朝向+180°+鼠标 look 累计+倒车/回头 XOR；位置/旋转双系数指数阻尼 `exp(-k·dt)` 帧率无关；look-ahead clamp；Mode 切换只改 auto-return 语义位姿逐位不动）+ `free_camera.hpp/.cpp`（无阻尼直出、归一化轴 moveInput + 弧度 lookDelta + boost 4x、俯仰 ±83° clamp）+ `cam-tools/`（六节 selftest：init clamp 族+基座断言 / chase-a 稳态 / chase-b 残差单调衰减 / chase-c 切换连续+orbit 冻结+XOR 变体 / chase-d 同 dt 逐位+跨 dt 收敛分档 / free-e 逐位+clamp+boost 倍率；cam-trace 150 帧 + cam-check 10 锚 / free-trace 60 帧 + free-check 6 锚，**锚全部实测 trace 反推**）+ CMake（nl_core 源单 3 行 + cam-tools target + ctest 2 条）+ `tools/make-cam-m0-evidence.py`（双 TSV → 确定性 PNG 四面板）+ `example/cam-m0/`（run.bat 双后端五段式 + acceptance.png 基线 + 双 TSV + 6 份日志）+ cases.json cam-m0 卡 5 用例 + `docs/p8/CAM-TOOLS-GUIDE.md` → 本四栏 → 提交打 tag。当日用户两次追加拍板：正交/透视进 M-CAM0 基座、平滑/过渡/防抖立项 M-CAM4（Cinemachine/Godot/GDC trauma 锚入计划 §2）。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-m0`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2（OrbitCamera 一字未动零回归）；cam-tools selftest 6 节全绿（含 D 档同 dt 150 帧重放 memcmp 逐位一致、跨 dt 2.5s 收敛差 < 0.2 理论值 0.05 吻合）；trace→check 双闭环 PASS（cam 150 行 10 锚 / free 60 行 6 锚，稳态滞后实测 ≈ v·Δt/α 理论 1.25 命中 [0.9,1.6]）；证据图双 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验四面板（kick 尖峰/orbit 冻结带/yaw 累计 90°/俯冲曲线与 TSV 吻合）；负向退出码实测（无参 2 / 未知节 2）；run.bat ALL GREEN exit 0；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **成员名遮蔽自由函数**：`CameraRig::lookAt` 字段把 camera_rig.cpp 匿名命名空间的 `lookAt()` 函数在成员函数体内遮蔽（C2064「项不会计算为接受 3 个参数的函数」）——辅助函数改名 `makeLookAt` 解决；新类字段命名要避开同文件工具函数名。
+2. **bat 三连坑再+1**：Edit 工具改 bat 会把行尾转 LF（cmd 解析炸成碎片）；`%~dp0` 尾反斜杠 + 引号 = `\"` 转义吃掉收尾引号（参数粘连报「不是内部或外部命令」）——bat 一律 python 显式 CRLF + ASCII 写全量，传路径参数给脚本时尾补 `.`。
+3. **trace 与 selftest 脚本必须单一定义源**：yaw 增量修了 selftest 侧没同步 runFreeTrace（同表达式两处手抄），trace 里 20 帧只累计 4.5° 而非 90°——脚本场景定义应共用一个常量/函数，两处手抄必漂。
+4. **测试断言的阻尼时序感**：倒车 XOR 锚初版单帧 update 后比对——指数阻尼单帧只走 8% 根本没到位；涉及阻尼状态的断言一律跑足 120 帧到稳态再比。
+5. **锚手写错再+1（同 M-I0 教训）**：look kick 阈值写 20°（实际 30px×0.007=12°）、boost 对照帧选了混入横移/yaw 的 f31、pitch clamp 边界写成 ±83.08~83.09（-1.45 rad=-83.078° 出界）——数值锚从实测 log 反推 + 边界断言留一位容差。
+
+**下一步**：M-CAM1 viewer FreeCamera 接线（M-D3 落输入管线后串行）；M-CAM4 平滑/过渡/防抖无头部分可随时插队（`CameraSmoother` 二阶 spring + trauma shake，锚已入计划 §2）；merge 回 master 与 drive/particles 队列一起排（冲突面仅 CMakeLists.txt，viewer/main.cpp 本里程碑未触碰）。
+
+## P8 M-CAM1a：相机接线封装层——spectator 映射 + 输入适配 + CameraDirector + Cinematic 桩（feat/camera，2026-11-10，tag `cam-1a`）
+
+**动作**：M-CAM0 收口后用户拍板③「先把封装做了，一定要落地才行么 / 实现没法做函数空在那里也行，这都是基础设施得先有」——CAM1~CAM3 拆 a 段（接线封装层，无头，不等 drive M-D3）与 b 段（viewer 胶水，等 M-D3），计划文档 §开工排序/拍板记录留痕。三处实读（ActionMap Bool/Float/Vec2+set 门控+边沿 API、buildDrivingActionMap 出厂激活口径、InputState 注入路径+GLFW 键码先例）→ `core/include/nl/core/camera_director.hpp/.cpp`（SpectatorActions + buildSpectatorActionMap 新 SetId 出厂激活、look/camToggle 复用 driving set 零重复定义；readFreeInputs 适配器弧度换算单点 kLookRadiansPerPixel=0.005；ChassisState M-D2 回读规范结构；CameraDirector Chase↔Free 模式管理）+ `cinematic_camera.hpp/.cpp` 桩（播放状态机真实现，loadTrack/sample 显式失败待 M-CAM3a）+ M-CAM0 类最小增量（FreeCamera::setPose；ChaseCamera::snapEyeTo/lookDirection，既有锚零改动）+ cam-tools 第七节 director-f（合成输入适配/门控/双向切换逐位连续/chassis 失效冻结/桩形状）+ director-trace/check 90 帧 9 锚闭环 + cam-tools 补链 glfw（input.hpp 键码常量，同 input-tools 理由）+ `tools/make-cam-1a-evidence.py`（TSV→确定性 PNG 双面板）+ `example/cam-1a/`（run.bat 五段式 + TSV/PNG 基线 + 日志）+ cases.json cam-1a 卡（cam-m0 卡 selftest expectLog 机械升级 7 节）+ CAM-TOOLS-GUIDE §7 → 本四栏 → tag。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-1a`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + selftest 7 节全绿 ×2；director-check 9 锚（f29→f30/f59→f60 切换帧位姿连续、Free 段 eye_z 严格递增、切回阻尼恢复）；证据图 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验双面板（蓝黄模式分段/红切换标/模式带吻合）；负向退出码实测；run.bat ALL GREEN exit 0；ctest 6/6（mcam0+mi0+mi1，--repeat until-pass:3）；viewer selftest 16/16 零回归（OrbitCamera 一字未动）；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **cam-tools 缺 glfw 链接**：director-f 吃 InputState 注入路径，input.hpp 公开 API 含 GLFW 键码常量 → C1083；工具链 glfw = include 路径用途（非窗口），照 input-tools 口径补 `target_link_libraries(cam-tools PRIVATE nl_core glfw)`。
+2. **切换帧语义初版不对称**：Chase→Free 种子后 Free 无输入 update = no-op 天然逐位连续，Free→Chase 种子后同帧阻尼 update 会动 eye——memcmp 炸；定性为「切换帧重种子+冻结一帧、输入下帧生效」双向同口径（模式管理器标准语义，且保证无跳变），锚改双向 memcmp。
+3. **测试顺序自坑**：F7 断言 progress>0 写在 play() 后但 sample() 调用在前——桩推进没发生；断言前先推进。
+4. **行尾又双叒**：本会话 Write 产出的 CMakeLists/指南是 LF、bat 必须 ASCII+CRLF——patch 前先探测行尾再替换（`nl = "\r\n" if "\r\n" in s else "\n"`）。
+
+**下一步**：M-CAM2a（Chase phys 回读桥，随 M-D2 数据形态）/ M-CAM3a（CinematicCamera 轨迹实现，全无头随时可开工）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，收敛面=readFreeInputs→director.update→投影替换，等 drive M-D3）；M-CAM4 平滑/防抖无头段可插队。merge 回 master 与 drive/particles 队列一起排。
+
+## P8 M-CAM3a：轨迹相机真实现——TSV 加载 + Linear/SmoothStep 逐位插值 + loop/倍速/自动收尾（feat/camera，2026-11-10，tag `cam-3a`）
+
+**动作**：M-CAM1a 收口后续做（用户「那就继续做后续工作」），按排程取全无头可开工的 M-CAM3a。三处定向实读（UE `InterpCurvePoint.h` EInterpCurveMode：CIM_Linear 缺省/CIM_CurveAuto/CIM_Constant + `MovieSceneSequencePlaybackSettings.h` PlayRate 缺省 1.f/LoopCount 循环；bevy `bevy_curve/src/easing.rs` EaseFunction::Linear|SmoothStep 运行时可选；Carrot grep 无轨迹相机系统——计划预口径全部实锤）→ `cinematic_camera.hpp/.cpp` 桩升真实现：loadTrack（TSV 8 列规范，'#' 注释/表头跳过，任一行列数错整体失败）+ loadTrackFromMemory（严格递增+有限校验，不隐藏排序）+ **加载即归一时间轴**（t'=t-t[0] 一次固化 → 端点精确分支逐位）+ whole-track Linear/SmoothStep 双模式（三通道同式同序）+ PlayRate/Loop/非 loop 自动收尾语义 + cam-tools 第八节 cine-g（G1 加载校验~G7 pause 倍速防抖共 7 组锚）+ cine-trace/check 90 帧 12 锚闭环 + `tools/make-cam-3a-evidence.py`（TSV→确定性 PNG 双面板）+ `example/cam-3a/`（run.bat 五段式 + TSV/PNG 基线 + 日志）+ cases.json cam-3a 卡（cam-m0/cam-1a 卡 expectLog 机械升级 8 节 + 两个旧 run.bat findstr 同步）+ CAM-TOOLS-GUIDE §8 → 本四栏 → tag。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-3a`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + selftest 8 节全绿 ×2；cine-check 12 锚（f0 首帧/f29 k1 边界/f64 wrap 实落/f89 第二圈 + pause 冻结带/倍速 2x/loop 存活/fov 插值）；**跨后端 cine-trace cmp 逐位一致**（确定性铁证）；证据图 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验双面板（矩形轨迹/关键帧圈/wrap 标记/pause 平段/fov 曲线吻合，标签压字已修）；负向退出码实测；run.bat ALL GREEN exit 0；ctest 6/6（--repeat until-pass:3）；viewer selftest 16/16 零回归；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **MSYS 路径转换咬 bat 引号（本会话新变种）**：Bash heredoc 里的 `findstr /c://"...//"` 落盘变成 `/c:/\"`（`\` 被转换层吃掉），findstr 报「无法打开」；且隔离复测时测试命令里的 Windows 路径同样被转成 `/`——**测试工具本身被污染，exit 1 全是假象**。铁律升级：bat 内容含 `\"` 序列时禁用 Bash heredoc 写入，用 Write 工具落 python 修复脚本再执行；复现测试前先核工具自身路径没被转换。
+2. **findstr 排障走弯路**：先怀疑 log 编码/文件锁/括号特殊字符，二分到「所有子串都匹配不上」才定性为路径被吃——应在第一时间 `2>&1` 看 stderr（「无法打开 E:selftest-dx12.log」一眼定位）。
+3. **锚精度 vs TSV 显示精度**：wrap 后 fmod 残差 ~1e-8 显示为 0.000000，解析回 0.0 使 `t > 0.0` 子条件假失败——TSV 六位小数精度下的锚不许断言「严格大于 0」，用上界单边断言。
+4. **双后端 exe 版本漂移**：Vulkan 树在锚修正前构建，check 对同一 TSV 文件 DX12 过 VK 挂——先疑玄学，实为 exe 旧版本；双后端验收必须同源代码版本（cmp TSV 一致反而帮了定位：文件一致而结果不一致 = 可执行文件不一致）。
+
+**下一步**：M-CAM2a（Chase phys 回读桥，等 M-D2 数据形态）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，等 drive M-D3；CAM3b = `--camera-track` 加载 + HUD 时间轴）/ M-CAM4 平滑防抖无头段可插队；feat/camera merge 回 master 待排（冲突面 CMakeLists.txt + MILESTONES/cases.json 语义合并）。

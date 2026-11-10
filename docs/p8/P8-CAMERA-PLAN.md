@@ -6,7 +6,8 @@
 > **现状实证**：core 相机面只有 `OrbitCamera`（M0.4，纯 CPU 轨道相机，带 `cameraSelfTest` +
 > console cvar `cam.fov`/`cam.dist`）——零跟随/自由/轨迹相机；grep 全树无任何 chase/fly/track 语义。
 > **性质**：A 类并行轨道（不碰 `kStage`）。M-CAM0 全程零渲染（纯 CPU 逻辑 + 新工具 exe）；
-> M-CAM1~CAM3 触碰渲染接线面（`viewer/main.cpp`），统一排在 drive M-D3 之后串行做（同文件冲突面一次清）。
+> M-CAM1~CAM3 的 **viewer 胶水段**（b 段）触碰渲染接线面（`viewer/main.cpp`），排在 drive
+> M-D3 之后串行做（同文件冲突面一次清）；**封装段（a 段）无头可先行**（见下方当日拍板③）。
 > **归属**：track `camera`，里程碑 M-CAM0~M-CAM3；tag 名字制（`cam-m0` 起），不占 m0.* 编号。
 > **与 drive 轨的关系**：M-CAM0 不依赖 drive（Chase 用脚本轨迹当假目标）；M-CAM2 强依赖
 > drive M-D3（训练场 + 真车回读）；M-CAM1/M-CAM3 与 drive 无数据依赖，但 viewer 接线共用
@@ -31,6 +32,7 @@
 | **M-CAM1 自由相机可见** | viewer 接线 FreeCamera（输入管线消费 + HUD 相机行 + console cvar），调试任意场景可立即飞行 | viewer 接线 + example 卡 / cases.json |
 | **M-CAM2 跟车可见** | viewer 接线 ChaseCamera：drive M-D3 训练场实时跟车（C 切模式 / 鼠标 look / auto-return）+ `--drive-demo` 截图基线扩展 | viewer 接线 + example 卡 / cases.json |
 | **M-CAM3 轨迹相机** | `CinematicCamera`：轨迹文件加载（TSV keyframe）+ 插值（线性 / smoothstep，逐位确定）+ 播放控制（play/pause/loop/倍速）+ cam-tools 锚 + viewer 播放与截图锚帧 | `cinematic_camera.hpp/.cpp`（新）+ cam-tools 扩节 + viewer 接线 + example 卡 |
+| **M-CAM4 平滑/过渡/防抖打磨段**（2026-11-10 用户拍板追加） | `CameraSmoother` 可组合平滑器（二阶 critically damped spring 位置/朝向，**默认关**——既有逐位锚不动）+ 切换过渡 blend（固定时长 smoothstep，逐位确定）+ 确定性 screen shake（trauma 模型：0..1 trauma 线性衰减、偏移 ∝ trauma² × 固定 seed 噪声，无 wall-clock）；cam-tools 扩锚 F/G/H + viewer cvar 接线 | `camera_smoother.hpp/.cpp`（新）+ cam-tools 扩节 + viewer 接线 + example 卡 |
 
 **关键设计约束**（历史约定对齐）：
 - **`OrbitCamera` 零改动零回归**：三个新类是兄弟类（同款纯 CPU / Matrix4 列主序 / `view()` 同源口径），viewer 既有轨道相机路径（`--selftest`、orbit 拖拽、cvar 同步）一字不动。
@@ -46,6 +48,9 @@
 |---|---|---|
 | **UE** SpringArm + CameraActor + Sequencer | Chase 锚：位置/旋转分离 lag（EnableCameraLag/RotationLag + LagSpeed）+ arm length/TargetOffset + bDoCollisionTest（探针）；**轨迹锚**：Sequencer keyframe track（时间轴 + 每通道 keyframe + 插值模式 Linear/Cubic） | 阻尼与 rig 的锚 / 轨迹文件格式与插值语义的锚；碰撞探针不做（§4） |
 | **UE** DefaultFlyCamera / Editor 视口相机（PIE spectator） | Free 锚：WASD 平移 + 鼠标 look + 滚轮/Shift 速度档；无阻尼（调试相机要跟手） | FreeCamera 键位与手感的锚 |
+| **Unity Cinemachine**（成熟方案词汇表，抄思路不抄代码） | Damping = critically damped spring（M-CAM4 二阶平滑锚）；Blend 曲线（ease-in/out，切换过渡锚）；Noise Profile + ImpulseSource（震动源与衰减锚） | M-CAM4 三件套（平滑/过渡/防抖）的设计语言锚 |
+| **Godot Camera3D** | position_smoothing / rotation_smoothing（速度参数化阻尼，可开关）——「平滑是可开关属性不是独立相机」的口径锚 | M-CAM4 平滑器**可组合、默认关**的接口形态锚 |
+| **GDC「Juicing Your Cameras With Math」**（Squirrel Eiserloh） | trauma 模型：shake 强度 = trauma²（0..1 trauma 线性衰减），偏移 = 强度 × 噪声函数——确定性（固定 seed）可复现 | M-CAM4 screen shake 的公式与确定性口径锚 |
 | **Jolt vendored** | 不适用——相机不在物理层（Chase 所需 chassis pose 走 M-D2 回读，不 raycast） | 据实标注：本轨唯一 Jolt 关联面 = M-CAM2 的目标位姿来自 M-D2 回读 API |
 | **Carrot / bevy** | Carrot 预判无 spring arm / 轨迹回放抽象；bevy 无官方相机跟随与 cinematic 轨迹（社区插件，core 不背） | 据实标注无对应物（铁律：标了就要开工实读确认） |
 | **内部先例** | `OrbitCamera`（clamp 族 / gain 常量 / selftest 机械断言）、viewer cvar 注册（onChanged 回写）、trace→check TSV 闭环（input-tools） | 代码风格与验收形态的锚 |
@@ -69,6 +74,7 @@
 - `cam-tools` 新工具 exe（照 input-tools 三步：main.cpp → 目录 CMakeLists → 根 add_subdirectory 一行；只链 nl_core glfw 同款口径）：
   - selftest 节：机械断言（初始化/clamp，照 cameraSelfTest 口径）+ Chase 锚场景 A~D + Free 锚场景 E（见 §5 表）。
   - `cam-trace` / `cam-check` 子命令：脚本输入 → per-frame 位姿 TSV dump → 数值锚重验闭环。**锚从实测 log 反推（禁手写锚，M-I0/I1 两连犯教训）**。
+- **CameraRig 正交/透视模式**（2026-11-10 用户拍板追加进 M-CAM0 基座）：`Projection` 枚举（Perspective 缺省 / Orthographic）+ `orthoHeight` 参数；正交矩阵同款列主序 ZO 口径（深度 [0,1]）；Chase/Free 缺省透视，既有口径与锚零影响。viewer 正交用途（俯视/工程视图调试）M-CAM1 起按需接线。
 
 ### M-CAM1 自由相机可见
 
@@ -92,10 +98,20 @@
 - viewer 接线：`--camera-track <file>` 播放 + HUD 行 + **截图锚帧**（轨迹确定性 → 双后端基线直接受益；展示台后续运镜片段的机位工具）。
 - example 卡 + cases.json：轨迹文件 + pair 双后端基线。
 
+### M-CAM4 平滑/过渡/防抖（2026-11-10 用户拍板立项，参考成熟方案）
+
+- **`CameraSmoother` 可组合平滑器**（`nl::core`，纯 CPU）：二阶 critically damped spring（半隐式欧拉积分，确定性逐位），位置/朝向双通道独立系数——Unity Cinemachine Damping 同款模型；**作为可开关组合件挂在任一相机的 update 输出之后，默认 off**（Godot Camera3D position_smoothing 的「平滑是属性不是相机」口径）——既有 A~E 锚逐位不动，平滑开时走 F 锚。
+- **切换过渡 blend**：模式/相机切换从「零跳变直切」升级为可选固定时长过渡（起止位姿精确 + 中段 smoothstep 逐位确定）——Cinemachine Blend 曲线词汇，曲率只取 smoothstep 一档（easing 库仍不立项）。
+- **确定性 screen shake**：trauma 模型（GDC Eiserloh）——trauma 0..1 由事件注入、线性衰减；shake 偏移 = trauma² × 固定 seed 噪声（叠加正弦，无 wall-clock 无随机 API），作为**位姿后处理偏移**叠加在相机 update 结果上（不改阻尼状态、不污染确定性轨迹）；UE Camera Shake 的 amplitude/frequency 语义做 cvar 落点。
+- **锚场景**：F 二阶平滑（收敛性 + 与一阶阻尼对比分档锚）；G 过渡 blend（起止逐位 + 中段逐位）；H shake（同 seed 重放逐位一致 + trauma 衰减到零锚）。
+- viewer 接线（cvar `cam.smooth.*` / `cam.shake.*`）与 example 卡排 M-D3 后串行段（与 CAM1~CAM3 同一冲突面）。
+
 ## 4. 候选池（盘过面、给推荐处置、待拍板）
 
 | 项 | 判断 | 推荐处置 |
 |---|---|---|
+| **正交/透视区分** | Carrot CameraComponent 有 isOrthographic 先例（实读确认）；工程/俯视调试视图有真实需求 | **采纳进 M-CAM0 基座**（2026-11-10 用户拍板）：CameraRig 加 Projection 枚举 + orthoHeight，透视缺省零影响 |
+| **镜头平滑/过渡/防抖** | 基础阻尼已在 M-CAM0；高级平滑/blend/shake 是打磨需求，成熟方案词汇齐（Cinemachine / Godot / GDC trauma） | **立项 M-CAM4**（2026-11-10 用户拍板）：设计见 §3 M-CAM4 节；无头部分可与 CAM0~CAM3 并行，viewer 段排 M-D3 后 |
 | **Hood / 驾驶舱第一人称** | Forza/GTA 标配，但 demo 阶段没有车壳资产——第一人称里只有引擎盖线条，体验空心 | **后置**到车壳资产落地（第 5 步游戏壳之后）；实现上就是 ChaseCamera 的零距离退化 + 贴车刚体位姿，届时是小活 |
 | **Replay / ghost 回放** | 是**状态录制系统**不是相机（相机只是消费端）——录全局状态快照 + 时间轴倒退，成本一个量级 | 不进本轨；第 11 步后视需求（圈速 ghost 有真实需求再立项） |
 | **后视镜（真实镜像 viewport）** | 镜像渲染 = 第二个 render pass，渲染管线成本翻倍级 | **不做**；HUD 小画面示意（不渲染镜像）够用且便宜，真要做随第 11 步打磨波 |
@@ -104,20 +120,21 @@
 ## 5. 不在范围
 
 - **相机碰撞探针**（SpringArm bDoCollisionTest：boom raycast 防穿墙）——城市生成（第 6 步）前没有楼可穿，后置到城市落地后（届时消费 `nl/physics` raycast 面）。
-- Chase 之外的自由相机阻尼（Free 要跟手，无 lag 是特性不是缺陷）；平滑高级模型（critically damped spring 二阶、Snap 语义）——指数阻尼够第 4 步验收，实测不够再升。
-- 轨迹样条插值（Catmull-Rom / Bezier）、easing 曲线库、轨道编辑器（只做文本 keyframe 手写 + trace 工具校验）。
-- 震动（screen shake）、fov 动态（速度感 zoom，第 11 步打磨波）。
+- ~~Chase 之外的自由相机阻尼~~ / ~~平滑高级模型~~——**二阶 critically damped spring 已随 2026-11-10 用户拍板立项 M-CAM4**（一阶指数阻尼仍是 M-CAM0 验收口径）；FreeCamera 本身仍无阻尼（跟手是特性）。
+- 轨迹样条插值（Catmull-Rom / Bezier）、easing 曲线库、轨道编辑器（只做文本 keyframe 手写 + trace 工具校验）——M-CAM4 的过渡 blend 也只取 smoothstep 一档，easing 库仍不立项。
+- ~~震动（screen shake）~~——**已随 2026-11-10 用户拍板立项 M-CAM4**（确定性 trauma 模型）；fov 动态（速度感 zoom）仍排第 11 步打磨波。
 - look-ahead 高级形状（速度圆弧/漂移侧偏——Forza 风格），一阶线性 lookAhead 够第 4 步验收。
-- CameraManager 框架（CameraRig 基座共享数据口径即可；场景模式开关够用）。
+- CameraManager 框架（CameraRig 基座共享数据口径即可；场景模式开关够用）——M-CAM4 的过渡 blend 是「位姿源切换后处理」，不构成 CameraManager。
 
 ## 6. 里程碑草案
 
 | 里程碑 | 内容 | 验收判据 |
 |---|---|---|
-| **M-CAM0** | `ChaseCamera` + `FreeCamera` 类 + `cam-tools` selftest 五锚场景 + trace→check 闭环 + ctest | 五锚全绿：**A 直线跟随**（目标匀速直线脚本，稳态 eye 距离/高度/偏航误差 ≤ ε）；**B 急转衰减**（boomYaw/视线残差 per-frame 衰减序列）；**C 模式切换**（C 边沿位姿连续零跳变 + orbit clamp）；**D 帧率无关**（dt=1/60 vs 1/30 各自逐位，跨 dt N 秒后 ≤ ε 阈值——分档显式）；**E 自由飞行**（脚本移动轴/look 增量 → eye/yaw/pitch 逐位序列 + clamp 断言）；负向退出码 0/1/2；双后端 spot 零回归（cameraSelfTest 不动）；tool 卡 |
+| **M-CAM0** | `ChaseCamera` + `FreeCamera` 类 + CameraRig 基座（含正交/透视模式）+ `cam-tools` selftest 五锚场景 + trace→check 闭环 + ctest | 五锚全绿：**A 直线跟随**（目标匀速直线脚本，稳态 eye 距离/高度/偏航误差 ≤ ε）；**B 急转衰减**（boomYaw/视线残差 per-frame 衰减序列）；**C 模式切换**（C 边沿位姿连续零跳变 + orbit clamp）；**D 帧率无关**（dt=1/60 vs 1/30 各自逐位，跨 dt N 秒后 ≤ ε 阈值——分档显式）；**E 自由飞行**（脚本移动轴/look 增量 → eye/yaw/pitch 逐位序列 + clamp 断言）；**基座机械断言**（正交矩阵数值锚 + 透视缺省不变）；负向退出码 0/1/2；双后端 spot 零回归（cameraSelfTest 不动）；tool 卡 |
 | **M-CAM1** | viewer FreeCamera 接线 + spectator set 增量 + HUD 行 + cvar + example 卡 + cases.json | 截图基线双后端 bytes；键鼠飞行肉眼可验；`OrbitCamera` 路径零回归（spot 不动）；`server.py --check` exit 0 |
 | **M-CAM2** | viewer 训练场 ChaseCamera 接线 + C/鼠标交互 + HUD 行 + cvar + `--drive-demo` 扩展 + 收口（close 硬闸） | 截图基线双后端 bytes；跟车/切模式肉眼可验；console 实调参数生效锚落盘；**前置硬闸 = drive M-D3 已收口** |
 | **M-CAM3** | `CinematicCamera` + 轨迹文件格式 + cam-tools 锚节 + viewer 播放 + 截图锚帧 + 收口 | 轨迹锚全绿（端点逐位/插值逐位/wrap 连续/pause 倍速时序）；轨迹文件驱动双后端截图基线 bytes 一致；`--camera-track` demo 卡落 cases.json |
+| **M-CAM4** | `CameraSmoother` 二阶平滑 + 切换过渡 blend + 确定性 shake（trauma）+ cam-tools F/G/H 锚 + viewer cvar 接线 + 收口 | F/G/H 锚全绿（平滑收敛分档 / blend 起止+中段逐位 / shake 同 seed 逐位 + 衰减到零）；平滑默认关 → A~E 锚逐位不动；viewer 卡落 cases.json |
 
 ## 7. 留痕
 
@@ -129,6 +146,29 @@
   core 相机面仅 `camera.hpp` OrbitCamera；M-I1 `action_map.hpp:126/131/132` 已备 `camToggle`
   （C 边沿）+ `look`（Vec2 additive）；M-D2 回读（chassis pos/yaw/velocity）是 Chase 的
   viewer 数据源；轨迹相机 TSV 与 trace/check 工具链同族自洽。
-- 开工排序：M-CAM0 零依赖可先行/与 drive 并行；M-CAM1~CAM3 统一在 drive M-D3 之后串行
-  （viewer/main.cpp 同文件冲突面一次清 + 输入管线复用 M-D3 落的接线）。track `camera`
-  四里程碑，merge 一次收口。
+- 开工排序：M-CAM0 零依赖可先行/与 drive 并行；M-CAM1~CAM3 的 **viewer 胶水段（b 段）**
+  统一在 drive M-D3 之后串行（viewer/main.cpp 同文件冲突面一次清 + 输入管线复用 M-D3 落的
+  接线）。track `camera` 四里程碑，merge 一次收口。
+- 2026-11-10（M-CAM0 开工当日）：用户补拍板两轮——①「正交/透视区分」「镜头平滑/过渡/
+  防抖」安排进计划：正交进 M-CAM0 基座（Projection 枚举 + orthoHeight，透视缺省零影响），
+  平滑/过渡/防抖立项 **M-CAM4**（二阶 critically damped spring 默认关 + smoothstep 过渡
+  blend + 确定性 trauma shake；无头部分可与 CAM0~CAM3 并行，viewer 段排 M-D3 后）；
+  §4 候选池正交/防抖两行改「采纳」，§5 对应条目划改留痕。②「可以参考一些成熟的方案」：
+  §2 参考口径补 Unity Cinemachine（Damping/Blend/Noise 词汇表）、Godot Camera3D
+  （平滑=可开关属性）、GDC「Juicing Your Cameras With Math」（trauma 模型）三行，
+  全部抄思路不抄代码。track camera 扩为五里程碑（M-CAM0~CAM4）。
+- 2026-11-10（M-CAM0 收口后）：拍板③「先把封装做了，一定要落地才行么 / 实现没法做函数空
+  在那里也行，这都是基础设施得先有」——CAM1~CAM3 拆 **a 段（接线封装层，无头，不等 M-D3）**
+  与 **b 段（viewer 胶水，等 M-D3）**：
+  - **M-CAM1a（已落，tag `cam-1a`）**：`buildSpectatorActionMap`（新 SetId，driving set
+    零改动；look/camToggle 复用 driving set 既有动作）+ `readFreeInputs` 适配器（弧度换算
+    单点 `kLookRadiansPerPixel`）+ `ChassisState`（M-D2 回读规范结构）+ `CameraDirector`
+    （Chase↔Free 模式管理：C 边沿互切、切换帧重种子+冻结一帧双向位姿逐位连续、无车体数据
+    保持位姿）+ FreeCamera::setPose / ChaseCamera::snapEyeTo+lookDirection（M-CAM0 类最小
+    增量）+ CinematicCamera 桩（播放状态机真实现，轨迹加载/采样显式失败待 M-CAM3a）+
+    cam-tools 第七节 director-f + director-trace/check 闭环。
+  - **M-CAM2a**：Chase 侧同族封装（phys 回读桥的输入面随 M-D2 数据形态定，暂只落
+    ChassisState 结构）；**M-CAM3a**：CinematicCamera 轨迹实现（TSV 加载 + linear/
+    smoothstep 插值 + 播放控制，全无头）——均可不等 M-D3 随时开工。
+  - **b 段收敛面**：CAM1b/CAM2b/CAM3b viewer 胶水收敛为「glfw 轮询 → InputState →
+    readFreeInputs → director.update → 投影矩阵替换」几行调用 + HUD/cvar/截图基线。

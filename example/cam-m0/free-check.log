@@ -1,0 +1,8 @@
+  ok free-check: 60 rows
+  ok free-check: f0 identity pose
+  ok free-check: f29 boost straight total (20f x 0.6667)
+  ok free-check: per-frame boost displacement 4x
+  ok free-check: f49 yaw accumulated 90 deg
+  ok free-check: f59 pitch dive (-0.02 rad x 10f)
+  ok free-check: yaw strictly increasing f31..f49
+free-check PASS (60 rows, 6 anchors)
