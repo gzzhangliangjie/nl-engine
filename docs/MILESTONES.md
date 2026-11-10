@@ -2322,4 +2322,4 @@
 3. **三处参考口径不一致**：Carrot 7 张 MRT、bevy meshlet 不落盘 / solari 单张 packed uint4、UE GBuffer ≤8 槽 MRT 而 **Lumen HWRT 直光根本不读屏幕 GBuffer**（读 Surface Cache atlas 的 WorldPosition/WorldNormal）。不摆证据直接选形态 = 擅做决定。
 4. **行尾**：`material.slang` / `CMakeLists.txt` / `AGENTS.md` / `UE-DIFFS.md` / `MILESTONES.md` 为 CRLF，改它们一律 Python 二进制 patch；`docs/s9/S9-PLAN.md` 与新建 `Q4-GBUFFER-OPTIONS.md` 为 LF（与原版一致）。
 
-**下一步**：等用户拍板 Q4（A 不落盘 / B 单张 packed `RGBA32_UINT` / C 精简 MRT 2~3 张 float）→ 结论写回 S9-PLAN Q4 行 + 删任务书第 3 条挂账句 → 固化绑定布局进 `SHADER-CONVENTIONS.md` → 才允许写第一行 RT/UAV/槽位 → M9.0 收口（example 卡 + `server.py --check` + 四栏收官条 + close 闸 + tag `s9-gbuffer`）。M9.1 `--mode shadow`、M9.2 `--mode reference` 依次推进。
+**下一步**：**Q4 已拍板 = 方案 A「不落盘，即取即算」**（2026-11-10 用户）。结论已写回 S9-PLAN Q4 行、任务书第 3 条「落盘形态待用户拍板」挂账句已删并改为 A 口径；冻结解除仅限与不落盘相容的落码，**新增 RT/UAV/绑定槽仍禁止**，落盘推迟 S10 与 S12 历史帧需求一起拍。剩余 = `--mode shadow` 无阴影版（compute 直光路径）与 mode 5 逐像素对照 → 固化 §2.18 绑定布局 → example 卡 + `server.py --check` → 四栏收官条 + close 闸 + tag `s9-gbuffer`。M9.1 阴影射线、M9.2 参考模式依次推进。
