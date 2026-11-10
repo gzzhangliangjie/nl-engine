@@ -27,6 +27,9 @@
 #include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/PhysicsSettings.h>
+#include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyType.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -37,6 +40,7 @@
 
 #include "nl/core/jobs.hpp"  // M-J5c: ThreadPool（PoolJobSystem 的执行底座）
 
+#include <algorithm>
 #include <atomic>
 
 #include <cmath>
@@ -44,6 +48,7 @@
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 using namespace JPH::literals;
 
@@ -480,6 +485,272 @@ LayerProbeResult World::simulateLayerProbe(const LayerMatrix& matrix,
         r.ownerFromId = r.bodies[static_cast<std::size_t>(userData)].owner;
     const auto it = ownerToId.find(cfg.probeOwner);
     if (it != ownerToId.end()) r.idFromOwner = it->second.GetIndexAndSequenceNumber();
+
+    for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
+        bi.RemoveBody(*rit);
+        bi.DestroyBody(*rit);
+    }
+    return r;
+}
+
+
+// ===== P8 M-D0: contact event bridge (Jolt ContactListener -> POD stream) =====
+// Three-source evidence and the removed-body hard constraint are documented in
+// Events.hpp. This is the ONLY place inside nl_core where JPH contact types appear.
+//
+// Determinism (M-P0 contract): the probe runs on JobSystemSingleThreaded, so
+// callback order equals frame order. We STILL stable-sort each frame's slice by
+// (minBodyId, maxBodyId, kind) so a future pool-backed JobSystem cannot alter the
+// byte stream (M-J5c: callbacks may arrive from arbitrary threads). The mutex is
+// defensive: M-D0 never enables the pool path, but the collector must remain
+// correct if a later milestone switches the course to parallel jobs.
+namespace {
+
+struct CachedContact {
+    std::uint64_t  ownerA  = 0;
+    std::uint64_t  ownerB  = 0;
+    std::uint32_t  bodyIdA = nl::physics::kInvalidBodyId;
+    std::uint32_t  bodyIdB = nl::physics::kInvalidBodyId;
+    nl::math::Vec3 worldPos{};
+    float          normalY = 0.0f;
+};
+
+// Key uses ONLY the body-id part of SubShapeIDPair. ContactListener.h:133-134
+// warns sub-shape IDs come from the previous step and may be invalid after a
+// shape change; body ids are stable for the pair's lifetime. Both ids are read
+// from the callback argument itself -- never via a Jolt body lookup.
+std::uint64_t contactPairKey(std::uint32_t a, std::uint32_t b) {
+    const std::uint32_t lo = a < b ? a : b;
+    const std::uint32_t hi = a < b ? b : a;
+    return (static_cast<std::uint64_t>(lo) << 32) | hi;
+}
+
+class ContactCollector final : public JPH::ContactListener {
+public:
+    explicit ContactCollector(const std::vector<std::uint64_t>& owners)
+        : owners_(owners) {}
+
+    void beginFrame(int frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        frame_.store(frame, std::memory_order_relaxed);
+        frameStart_ = events_.size();
+    }
+
+    void OnContactAdded(const JPH::Body& b1, const JPH::Body& b2,
+                        const JPH::ContactManifold& manifold,
+                        JPH::ContactSettings&) override {
+        record(nl::physics::ContactKind::Added, b1, b2, manifold);
+    }
+
+    void OnContactPersisted(const JPH::Body& b1, const JPH::Body& b2,
+                            const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings&) override {
+        record(nl::physics::ContactKind::Persisted, b1, b2, manifold);
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
+        // ContactListener.h:123-128 -- bodies may be destroyed by now. Do NOT
+        // call any body interface; the pair argument and the cache are all we read.
+        const std::uint32_t a = pair.GetBody1ID().GetIndexAndSequenceNumber();
+        const std::uint32_t b = pair.GetBody2ID().GetIndexAndSequenceNumber();
+        nl::physics::ContactEvent e;
+        e.frame   = frame_.load(std::memory_order_relaxed);
+        e.kind    = nl::physics::ContactKind::Removed;
+        e.bodyIdA = a;
+        e.bodyIdB = b;
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(contactPairKey(a, b));
+        if (it != cache_.end()) {
+            e.ownerA   = it->second.ownerA;
+            e.ownerB   = it->second.ownerB;
+            e.worldPos = it->second.worldPos;
+            e.normalY  = it->second.normalY;
+            cache_.erase(it);          // Q2: clear only after Removed is emitted
+        } else {
+            ++cacheMisses_;
+        }
+        events_.push_back(e);
+    }
+
+    // Frame-end stable sort: single-threaded baseline keeps callback order,
+    // pool-backed callbacks need this to stay bit-identical.
+    void finishFrame() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto cmpKey = [](const nl::physics::ContactEvent& e) {
+            const std::uint32_t lo = e.bodyIdA < e.bodyIdB ? e.bodyIdA : e.bodyIdB;
+            const std::uint32_t hi = e.bodyIdA < e.bodyIdB ? e.bodyIdB : e.bodyIdA;
+            return std::make_pair(std::make_pair(lo, hi), static_cast<int>(e.kind));
+        };
+        std::stable_sort(events_.begin() + static_cast<std::ptrdiff_t>(frameStart_),
+                         events_.end(),
+                         [&](const nl::physics::ContactEvent& x,
+                             const nl::physics::ContactEvent& y) {
+                             return cmpKey(x) < cmpKey(y);
+                         });
+    }
+
+    std::vector<nl::physics::ContactEvent> takeEvents() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return std::move(events_);
+    }
+    std::uint32_t cacheMisses() const { return cacheMisses_.load(std::memory_order_relaxed); }
+
+private:
+    void record(nl::physics::ContactKind kind, const JPH::Body& b1, const JPH::Body& b2,
+                const JPH::ContactManifold& manifold) {
+        const std::uint32_t id1 = b1.GetID().GetIndexAndSequenceNumber();
+        const std::uint32_t id2 = b2.GetID().GetIndexAndSequenceNumber();
+        const std::uint64_t u1  = b1.GetUserData();
+        const std::uint64_t u2  = b2.GetUserData();
+
+        nl::physics::ContactEvent e;
+        e.frame   = frame_.load(std::memory_order_relaxed);
+        e.kind    = kind;
+        e.bodyIdA = id1;
+        e.bodyIdB = id2;
+        e.ownerA  = (u1 < owners_.size()) ? owners_[static_cast<std::size_t>(u1)] : 0;
+        e.ownerB  = (u2 < owners_.size()) ? owners_[static_cast<std::size_t>(u2)] : 0;
+        if (manifold.mRelativeContactPointsOn1.size() > 0) {
+            const JPH::RVec3 p = manifold.GetWorldSpaceContactPointOn1(0);
+            e.worldPos = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                           static_cast<float>(p.GetZ()) };
+        } else {
+            const JPH::RVec3 p = manifold.mBaseOffset;
+            e.worldPos = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                           static_cast<float>(p.GetZ()) };
+        }
+        // mWorldSpaceNormal points along the direction that pushes body2 out of
+        // collision (ContactListener.h:30). Kept as-is, no sign flip.
+        e.normalY = manifold.mWorldSpaceNormal.GetY();
+
+        CachedContact c;
+        c.ownerA = e.ownerA;   c.ownerB = e.ownerB;
+        c.bodyIdA = id1;       c.bodyIdB = id2;
+        c.worldPos = e.worldPos; c.normalY = e.normalY;
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        cache_[contactPairKey(id1, id2)] = c;
+        events_.push_back(e);
+    }
+
+    const std::vector<std::uint64_t>& owners_;   // index == Body::GetUserData
+    std::mutex mutex_;
+    std::atomic<int> frame_{0};
+    std::size_t frameStart_ = 0;
+    std::atomic<std::uint32_t> cacheMisses_{0};
+    std::unordered_map<std::uint64_t, CachedContact> cache_;
+    std::vector<nl::physics::ContactEvent> events_;
+};
+
+} // namespace
+
+bool validateContactProbe(const ContactProbeConfig& cfg, std::string* err) {
+    auto bad = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    if (cfg.frames < 1 || cfg.frames > 100000) return bad("frames out of range [1,100000]");
+    if (!(cfg.dt >= 1.0 / 1000.0 && cfg.dt <= 1.0 / 30.0)) return bad("dt out of range [0.001,0.033333]");
+    if (!(cfg.gravity > 0.0f && cfg.gravity <= 1000.0f)) return bad("gravity out of range (0,1000]");
+    if (!(cfg.radius > 0.0f && cfg.radius <= 10.0f)) return bad("radius out of range (0,10]");
+    if (!(cfg.startHeight > cfg.blockerY + 2.0f * cfg.radius))
+        return bad("startHeight must clear the blocker");
+    if (!(cfg.blockerY > cfg.radius)) return bad("blockerY must clear the floor");
+    if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f))
+        return bad("restitution out of range [0,1]");
+    return true;
+}
+
+ContactProbeResult World::simulateContactProbe(const ContactProbeConfig& cfg) {
+    ContactProbeResult r;
+    if (!validateContactProbe(cfg, &r.error)) return r;
+    bootstrap();
+
+    // Declared first: filters hold references and PhysicsSystem holds pointers,
+    // so the matrix / owners / collector must outlive the system.
+    LayerMatrix local;
+    JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
+    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(local);
+    ObjectLayerPairFilterImpl objectLayerPairFilter(local);
+    std::vector<std::uint64_t> owners;         // vector index == Body::GetUserData
+    ContactCollector collector(owners);
+    JPH::PhysicsSystem physicsSystem;
+
+    physicsSystem.Init(1024, 0, 1024, 1024,
+                       bpLayerInterface, objectVsBroadPhaseLayerFilter, objectLayerPairFilter);
+    physicsSystem.SetGravity(JPH::Vec3(0.0f, -cfg.gravity, 0.0f));
+    physicsSystem.SetContactListener(&collector);
+    JPH::BodyInterface& bi = physicsSystem.GetBodyInterface();
+
+    JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(100.0f, 1.0f, 100.0f));
+    floorShapeSettings.SetEmbedded();
+    auto floorShapeResult = floorShapeSettings.Create();
+    if (floorShapeResult.HasError()) { r.error = "floor shape creation failed"; return r; }
+    JPH::ShapeRefC floorShape = floorShapeResult.Get();
+    JPH::ShapeRefC sphereShape = new JPH::SphereShape(cfg.radius);
+
+    std::vector<JPH::BodyID> ids;
+    // Engine object <-> Jolt body association, same index-in-vector trick as M-P1
+    // (userData is an INDEX, never a raw pointer, so a stale handle cannot dangle).
+    auto add = [&](const JPH::ShapeRefC& shape, JPH::RVec3 pos, JPH::EMotionType motion,
+                   std::uint32_t layer, std::uint64_t owner) -> bool {
+        JPH::BodyCreationSettings s(shape, pos, JPH::Quat::sIdentity(), motion,
+                                    static_cast<JPH::ObjectLayer>(layer));
+        s.mRestitution   = cfg.restitution;
+        s.mLinearDamping = 0.0f;
+        JPH::Body* body = bi.CreateBody(s);
+        if (!body) return false;
+        const std::uint32_t idx = static_cast<std::uint32_t>(owners.size());
+        body->SetUserData(static_cast<std::uint64_t>(idx));
+        owners.push_back(owner);
+        const JPH::BodyID id = body->GetID();
+        ids.push_back(id);
+        bi.AddBody(id, motion == JPH::EMotionType::Static
+                           ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        return true;
+    };
+
+    if (!add(floorShape, JPH::RVec3(0.0_r, -1.0_r, 0.0_r),
+             JPH::EMotionType::Static, layers::kFloor, cfg.floorOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.blockerY), 0.0_r),
+             JPH::EMotionType::Static, layers::kDefault, cfg.blockerOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.startHeight), 0.0_r),
+             JPH::EMotionType::Dynamic, layers::kDebris, cfg.probeOwner)) {
+        r.error = "body creation failed";
+        return r;
+    }
+
+    physicsSystem.OptimizeBroadPhase();
+    r.bodyCount = physicsSystem.GetNumBodies();
+    impl_->lastBodyCount = r.bodyCount;
+    const JPH::BodyID probeId = ids.back();
+
+    auto pushFrame = [&](int frame) {
+        const JPH::RVec3 p = bi.GetCenterOfMassPosition(probeId);
+        const JPH::Vec3  v = bi.GetLinearVelocity(probeId);
+        ContactProbeFrame s;
+        s.frame = frame;
+        s.t     = frame * cfg.dt;
+        s.y     = static_cast<float>(p.GetY());
+        s.vy    = v.GetY();
+        r.trajectory.push_back(s);
+    };
+
+    r.trajectory.reserve(static_cast<std::size_t>(cfg.frames) + 1);
+    pushFrame(0);
+    for (int frame = 1; frame <= cfg.frames; ++frame) {
+        collector.beginFrame(frame);
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        collector.finishFrame();          // stable sort this frame's slice
+        pushFrame(frame);
+    }
+    // Detach BEFORE teardown: Jolt may emit Removed on the NEXT Update after a
+    // body is removed (ContactListener.h:126) -- those are outside the probe window.
+    physicsSystem.SetContactListener(nullptr);
+    r.events = collector.takeEvents();
+    r.removedCacheMisses = collector.cacheMisses();
 
     for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
         bi.RemoveBody(*rit);

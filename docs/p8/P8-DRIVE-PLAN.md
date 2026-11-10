@@ -80,7 +80,7 @@
 | 项 | 落点 / 口径 | 依据 |
 |---|---|---|
 | `ContactEvent` POD | `{frame, kind(Added=0/Persisted=1/Removed=2), ownerA, ownerB, bodyIdA, bodyIdB, worldPos(xyz), normalY}`，Jolt-free | UE `FHitResult` 有用子集 + `World.hpp:79-85` `BodyInfo.owner` 既有地基 |
-| Removed 的 owner 来源 | **Added / Persisted 阶段缓存 `SubShapeIDPair → owner 对`**，removed 只读缓存、禁访问 Jolt body；缓存表清理时机待 Q2 | `ContactListener.h:126-128`（新增实证硬约束）；立项假设据此收窄 |
+| Removed 的 owner 来源 | **Added / Persisted 阶段缓存 `SubShapeIDPair → owner 对`**，removed 只读缓存、禁访问 Jolt body；缓存表 **removed 派发后清**（Q2 已按建议口径执行） | `ContactListener.h:126-128`（新增实证硬约束）；立项假设据此收窄 |
 | 稳定排序 | 帧末按 `(minBodyId, maxBodyId, kind)` 排序；单线程基线回调内联于 step（帧序即回调序），池模式兜底逐位 | M-P0 确定性契约 + M-J5c 池模式回调线程不定 |
 | 探针与 dump | `simulateContactProbe(ContactProbeConfig)` 照 `simulateLayerProbe`（M-P1）三体世界；逐帧事件流随轨迹 dump TSV | `PHYS-TOOLS-GUIDE.md` §1 / §3 |
 | 工具面 | phys-tools 扩 `contacts` selftest 节 + `contact-trace` / `contact-check`；**锚一律从实测 log 反推，禁手写** | M-I0 / M-I1 手写锚两连犯教训；`INPUT-TOOLS-GUIDE.md` §2 trace→check 闭环 |
@@ -152,12 +152,27 @@
   ② **Jolt `OnContactRemoved` 禁访问 body**，owner 对须前置缓存。另修正 bevy 事件模块路径
   `event.rs` → `event/mod.rs`。待拍板 Q1~Q4 见 §7。
 
+- 2026-11-10（**M-D0 收官**）：用户指令「开工」，Q1/Q2 按 §7 建议口径执行（Q1 维持 bevy 双缓冲 +
+  M-GL5 TickGroup、Carrot 只作同构佐证；Q2 缓存 removed 派发后清），Q3 边界 = 完整 M-D0 落码收口，
+  Q4 编号 `track drive / M-D0` 不变。落码：`core/include/nl/physics/Events.hpp`（新，Jolt-free POD）、
+  `World.hpp` 新增 `simulateContactProbe`、`World.cpp` 内 `ContactCollector`（唯一 Jolt 符号面，三回调）、
+  `phys-tools` 扩 `contact-trace` / `contact-check` / selftest `contacts` 节 + ctest 三条。
+  **实测锚（从真实 TSV 反推，非手写）**：240 帧 41 事件 = Added 6 / Persisted 29 / Removed 6；
+  首个 Added f44、首个 Removed f46、末事件 f185、其后 55 帧静息；接触点 (0,3,0)、normalY=1.0、
+  探针静息 y=3.5；`cache_misses=0` —— 6 个 Removed 全部命中缓存并携带 owner 对，Q2 口径实证成立。
+  **实现口径细化（有 vendored 依据，不改架构）**：缓存 key 取 `SubShapeIDPair` 的 **body id 部分**
+  （min/max 归一），不取 subshape id —— `ContactListener.h:133-134` 明示 subshape id 来自上一帧、
+  shape 变化后可能失效；body id 直接来自回调参数，removed 期间零 Jolt body 访问。
+  M-D1 双缓冲消费者 / M-D2 载具仍按 §5 排期，未提前落码。
+
 ## 7. 开工待确认（Q 编号，决策前置）
+
+> **状态（2026-11-10 用户「开工」）**：Q1 / Q2 按本表建议口径执行（未另行指定即视为采纳建议），Q3 = 完整 M-D0 落码收口，Q4 编号维持 `track drive / M-D0`。Q1 的「bevy 双缓冲 + M-GL5 TickGroup」落到 **M-D1**，本轮 M-D0 只产 POD 流与帧末排序；Q2 的清理时机已写进 `Events.hpp` 头注释与 §3 锚点表。
 
 | 编号 | 问题 | 建议 / 拿到答案改哪里 |
 |---|---|---|
 | **Q1** | 三处消费口径不一致（UE 立即委托 / Carrot 帧末主线程队列 / bevy 双缓冲两帧保活）：是否维持既定「bevy 双缓冲 + M-GL5 TickGroup Physics→PostPhysics」，Carrot 只作同构佐证？ | **建议维持**，不扩范围。确认后 §2.3 标「已拍板」，M-D1 按此落码 |
 | **Q2** | `OnContactRemoved` 期间 Jolt body 可能已销毁（`:126-128`）。owner 对改为 Added / Persisted 阶段缓存 + 本轨自持 `SubShapeIDPair → owner 对` 表；该缓存表清理时机是否定为「removed 派发后」？ | **建议 removed 派发后清**，避免 owner 查不到。确认后写进 §3 锚点表与 `Events.hpp` 头注释 |
-| **Q3** | 本轮交付边界：停在「开轨 + 计划做实」，还是继续 M-D0 落码（Events.hpp / World.cpp listener / phys-tools contacts / trace→check / 展示台 tool 卡 / 双后端 ctest / example / tag / close 闸）？ | 建议先定 Q1/Q2 再落码；M-D0 是完整里程碑，须按交付纪律收口 |
+| **Q3** | 本轮交付边界：停在「开轨 + 计划做实」，还是继续 M-D0 落码（Events.hpp / World.cpp listener / phys-tools contacts / trace→check / 展示台 tool 卡 / 双后端 ctest / example / tag / close 闸）？ | **已执行**：用户「开工」= 完整 M-D0 落码收口 |
 | **Q4** | 归属编号：本对话按 `track drive` / `M-D0` 登记（四里程碑中唯一可开工起点）。 | 若要改编号，同步改 claim 锁与本文状态行 |
 

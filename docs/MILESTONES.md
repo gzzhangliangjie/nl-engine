@@ -2307,3 +2307,20 @@
 4. **双后端 exe 版本漂移**：Vulkan 树在锚修正前构建，check 对同一 TSV 文件 DX12 过 VK 挂——先疑玄学，实为 exe 旧版本；双后端验收必须同源代码版本（cmp TSV 一致反而帮了定位：文件一致而结果不一致 = 可执行文件不一致）。
 
 **下一步**：M-CAM2a（Chase phys 回读桥，等 M-D2 数据形态）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，等 drive M-D3；CAM3b = `--camera-track` 加载 + HUD 时间轴）/ M-CAM4 平滑防抖无头段可插队；feat/camera merge 回 master 待排（冲突面 CMakeLists.txt + MILESTONES/cases.json 语义合并）。
+
+## P8 M-D0：碰撞事件桥（Jolt ContactListener → Jolt-free POD 事件流）（feat/drive，2026-11-10，tag `drive-m0`）
+
+**动作**：用户「开工」= M-D0 完整落码收口。三处参考源码按本里程碑点名面定向复读（Carrot `PhysicsSystem.h:73/.cpp:124,345` 单全局 listener + per-body 双通道派发；bevy `event/mod.rs:573,716` 双缓冲两帧保活；UE `PrimitiveComponent.h:274` Hit 委托字段子集）+ vendored `ContactListener.h:106/119/126-128` 三回调与 removed 禁访问 body 硬约束 + `docs/MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `P8-DRIVE-PLAN.md` / PHYS·INPUT-TOOLS-GUIDE 历史 → `core/include/nl/physics/Events.hpp`（Jolt-free POD：ContactEvent / ContactProbeConfig / ContactProbeResult / validate）+ `World.hpp` 加 `simulateContactProbe` 并把 `kInvalidBodyId` 收敛到 Events.hpp 单一真源 + `World.cpp` 内 `ContactCollector`（三回调、owner 缓存、帧末稳定排序、mutex 防御）+ 三体探针（floor / static blocker / dropped probe）+ `phys-tools` 扩 `contact-trace` / `contact-check` / selftest `contacts` 节 + ctest 三条 → `example/drive-m0/`（run.bat 五段式 + contacts.tsv + 5 份真实日志 + 双证据图）+ `tools/make-drive-m0-evidence.py` + cases.json `drive-m0` 卡五用例 + `docs/p8/DRIVE-TOOLS-GUIDE.md` + 计划 §6 留痕 / §7 状态 → 本四栏 → tag。A 类轨道，不 bump `kStage`。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m0`）。轨道注册 `b4ab3b0`（master）、计划实证化 `98314d2`（feat/drive）为前置。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest 16/16 ×2；phys-tools selftest（M-P0~P4 + j5c + contacts 节）两树 PASS；`contact-trace --frames 240` 真实输出 **41 事件 = Added 6 / Persisted 29 / Removed 6**，首个 Added f44 / 首个 Removed f46 / 末事件 f185 / 其后 55 帧静息，接触点 (0,3,0)、normalY=1.0、静息 y=3.5；`cache_misses=0` 且 6 个 Removed 全带 owner 对 = Q2 缓存硬证；两次新建世界事件流逐字段位一致；DX12/VULKAN contact-trace TSV 逐字节一致；ctest `d0-contact-{trace,check,negative}` + `p0-phys-selftest` 4/4（`--repeat until-pass:3`）；负向退出码 2（bad --frames）/ 1（缺文件）/ 2（未知命令）实测；run.bat 五段式 ALL GREEN（TSV + 两张证据图重生成 `fc /b` 逐字节一致）；`server.py --check` exit 0；证据图肉眼核验（事件时间线三行 / 标注 f44·f46·f185 / y(t) 曲线与接触点标记 / MEASURED 面板 / 完整日志板）。
+
+**踩坑情况**
+1. **junction 共享文件挡 merge**：`.workbuddy` 是主树/wt junction 共享 + skip-worktree，主树新日志 commit 使 wt 工作区 blob 领先 index → `git merge master` 报「local changes would be overwritten」。按 `AGENTS.md` 工作线粘性（一条工作线只在收尾 merge 一次）不做中途 merge，收尾 merge 回 master 自然带上；未污染他会话文件。
+2. **缓存 key 不能带 subshape id**：`ContactListener.h:133-134` 明示 removed 时 subshape id 来自上一帧、shape 变化后可能失效；改用 `SubShapeIDPair` 的 body id 部分（min/max 归一）作 key，实测 6/6 removed 命中、miss=0。若按全 pair 哈希做键，compound shape 场景会静默丢 owner。
+3. **锚必须机器反推**：首版只写结构锚；实跑后由一次性脚本读真实 TSV 生成 7 条数值锚注入 `contact-check` 与 selftest（M-I0/I1 手写锚两连犯教训），非标准 `--frames` 只跑结构锚、跳过数值锚。
+4. **selftest 输出新增一行**：`phys-d0 contacts: PASS` 追加在既有 5 条 PASS 行之前，`phys-p0 selftest: PASS` 锚文本一字未动，M-P0~P4 归档 TSV 基线零改动；phys-* 归档 log 为历史快照不重拍。
+5. **ctest 不在裸 shell PATH**：便携 cmake 3.31.6 的 ctest 必须走全路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`，命令统一带 `--repeat until-pass:3`。
+
+**下一步**：M-D1（`ContactEventStream` 双缓冲 + owner→Entity 映射 + PostPhysics 消费 System + M-GL5 TickGroup 时序自证）；M-D2 载具无头集成；M-D3 驾驶可见（viewer 接线，本轨唯一渲染面）。

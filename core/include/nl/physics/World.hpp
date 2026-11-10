@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "nl/math/math.hpp"
+#include "nl/physics/Events.hpp"   // M-D0: Jolt-free ContactEvent POD
 
 namespace nl::physics {
 
@@ -55,7 +56,7 @@ bool validateConfig(const DropConfig& cfg, std::string* err);
 // ---- M-P1: engine<->body association + configurable collision layer matrix ----
 // Header stays Jolt-free: BodyInfo::id is the raw JPH::BodyID value, not a Jolt type.
 constexpr std::uint32_t kLayerCount    = 4;
-constexpr std::uint32_t kInvalidBodyId = 0xffffffffu;
+// kInvalidBodyId now lives in Events.hpp (single source of truth).
 
 namespace layers {
 constexpr std::uint32_t kFloor   = 0;  // static geometry
@@ -241,6 +242,10 @@ public:
     // One fresh world per call (determinism contract); CharacterVirtual
     // ExtendedUpdate cadence, gravity/input composed app-side per Jolt docs.
     CharacterResult simulateCharacter(const CharacterConfig& cfg);
+
+    // M-D0: Jolt ContactListener -> Jolt-free POD event stream, three-body
+    // course (floor / static blocker / dropped probe). See Events.hpp.
+    ContactProbeResult simulateContactProbe(const ContactProbeConfig& cfg);
 
 private:
     struct Impl;

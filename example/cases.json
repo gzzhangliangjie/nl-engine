@@ -7519,6 +7519,95 @@
      "command": "cam-tools selftest bogus"
     }
    ]
+  },
+  {
+   "id": "drive-m0",
+   "label": "M-D0",
+   "name": "碰撞事件桥：Jolt ContactListener → Jolt-free POD 事件流（M-D0）",
+   "tag": "drive-m0",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴（track drive）首个里程碑，A 类并行轨道、零图形零 kStage。core/include/nl/physics/Events.hpp 新增 Jolt-free POD ContactEvent / ContactProbeConfig / ContactProbeResult；World.cpp 内实现唯一 Jolt 符号面 ContactListener 三回调（Added/Persisted/Removed），事件对携带 ownerA/ownerB、bodyId 对、接触点与法线；removed 期间禁访问 Jolt body（ContactListener.h:126-128），owner 对由 Added/Persisted 阶段缓存、removed 派发后清（Q2）。三体探针照 simulateLayerProbe 先例，帧末按 (minBodyId,maxBodyId,kind) 稳定排序保证确定性。phys-tools 扩 contact-trace / contact-check / selftest contacts 节，锚全部从真实 TSV 反推：240 帧 41 事件（Added 6 / Persisted 29 / Removed 6），首个 Added f44、首个 Removed f46、末事件 f185，之后静息；cache_misses=0 即 Q2 缓存命中硬证。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0..M-P4 + j5c + contacts 节）两树 PASS",
+    "contact-trace 240 帧真实输出 41 事件（6/29/6），contacts.tsv 逐字节稳定；contact-check 从 E/T 数据行独立复验结构锚 + 7 条实测数值锚",
+    "确定性：两次新建世界事件流逐字段位一致；DX12/VULKAN contact-trace TSV 逐字节一致",
+    "Q2 硬证：6 个 Removed 全部携带非零 owner 对，cache_misses=0（removed 期间零 Jolt body 访问）",
+    "ctest d0-contact-{trace,check,negative} + p0-phys-selftest 4/4（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m0/（run.bat 五段式 ALL GREEN + TSV + 5 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D0 新增 contact-trace / contact-check 两行。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：contacts 节（事件桥 / Q2 缓存 / 确定性）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c 既有锚全绿之外，新增 contacts 节：三类事件齐备、owner 全解析、两次世界逐位一致、实测数值锚 6/29/6。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d0 contacts: PASS",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "contact-trace",
+     "name": "contact-trace：真实 ContactListener 事件流 TSV",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，E 行 11 列事件、T 行 5 列轨迹。",
+     "args": [
+      "contact-trace",
+      "--frames",
+      "240"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D0 contact events",
+     "preview": "example/drive-m0/events.png",
+     "command": "phys-tools contact-trace --frames 240"
+    },
+    {
+     "id": "contact-check",
+     "name": "contact-check：从归档 TSV 复验事件锚",
+     "kind": "tool",
+     "note": "只信 E/T 数据行：结构锚（kind/owner/bodyId/帧序/帧末排序）+ 7 条从真实 TSV 反推的数值锚；摘要行仅作 provenance。",
+     "args": [
+      "contact-check",
+      "{root}/example/drive-m0/contacts.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d0 contact-check: PASS",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools contact-check example/drive-m0/contacts.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。",
+     "args": [
+      "contact-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools contact-trace --frames 0"
+    }
+   ]
   }
  ]
 }

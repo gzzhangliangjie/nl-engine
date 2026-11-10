@@ -22,6 +22,8 @@
 //   check-character <tsv>  re-verify the walk dump (course + parking anchors)
 //   check-jobs [options]   M-J5c: JobSystem adapter matrix (N=1 bit-identical
 //                          hard proof + N>1 run-to-run determinism, drop+stack)
+//   contact-trace [opts]   M-D0: ContactListener -> Jolt-free POD event TSV
+//   contact-check <tsv>    M-D0: re-verify the contact dump from data rows
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
@@ -70,6 +72,8 @@ void usage() {
     std::printf("  phys-tools character [--out <tsv>] [--frames N]\n");
     std::printf("  phys-tools check-character <tsv>\n");
     std::printf("  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)\n");
+    std::printf("  phys-tools contact-trace [--out <tsv>] [--frames N]  (M-D0 contact events)\n");
+    std::printf("  phys-tools contact-check <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -1110,6 +1114,234 @@ int runCheckCharacter(const char* path) {
     return 0;
 }
 
+
+// ===== P8 M-D0: contact event stream TSV + trace/check loop =====
+// Wire format (ASCII, tab separated). '#' lines are provenance ONLY -- the
+// checker recomputes everything from the E/T data rows (M-P2 anti-false-green
+// rule: never trust the summary lines).
+std::string contactsTSV(const nl::physics::ContactProbeConfig& cfg,
+                        const nl::physics::ContactProbeResult& r) {
+    std::ostringstream os;
+    os << "# nl-physics M-D0 contact events (real Jolt ContactListener output)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << cfg.dt << " gravity=" << cfg.gravity
+       << " radius=" << cfg.radius << " start_height=" << cfg.startHeight
+       << " blocker_y=" << cfg.blockerY << " restitution=" << cfg.restitution
+       << " frames=" << cfg.frames
+       << " bodies=" << r.bodyCount
+       << " events=" << r.events.size()
+       << " cache_misses=" << r.removedCacheMisses << "\n";
+    os << "# kind: 0=Added 1=Persisted 2=Removed; body/owner A is the low-id side\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB px py pz normalY\n";
+    char buf[320];
+    for (const auto& e : r.events) {
+        std::snprintf(buf, sizeof(buf),
+            "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%.6f\t%.6f\t%.6f\t%.6f\n",
+            e.frame, static_cast<int>(e.kind),
+            static_cast<unsigned long long>(e.ownerA),
+            static_cast<unsigned long long>(e.ownerB),
+            e.bodyIdA, e.bodyIdB,
+            e.worldPos.x, e.worldPos.y, e.worldPos.z, e.normalY);
+        os << buf;
+    }
+    os << "# trajectory: T frame t y vy\n";
+    for (const auto& s : r.trajectory) {
+        std::snprintf(buf, sizeof(buf), "T\t%d\t%.6f\t%.6f\t%.6f\n",
+                      s.frame, s.t, s.y, s.vy);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runContactTrace(int argc, char** argv) {
+    nl::physics::ContactProbeConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) return fail(err);
+
+    nl::physics::World world;
+    const nl::physics::ContactProbeResult r = world.simulateContactProbe(cfg);
+    if (!r.ok()) { std::printf("contact probe failed: %s\n", r.error.c_str()); return 1; }
+    const std::string tsv = contactsTSV(cfg, r);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s events=%zu frames=%d\n", out.c_str(), r.events.size(), cfg.frames);
+    return 0;
+}
+
+struct ContactRow {
+    int    frame = 0;
+    int    kind  = -1;
+    unsigned long long ownerA = 0, ownerB = 0;
+    unsigned int  bodyA = 0, bodyB = 0;
+    float  px = 0.0f, py = 0.0f, pz = 0.0f, normalY = 0.0f;
+};
+
+struct TrajectoryRow {
+    int    frame = 0;
+    double t = 0.0;
+    float  y = 0.0f, vy = 0.0f;
+};
+
+int runContactCheck(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    std::vector<ContactRow> evs;
+    std::vector<TrajectoryRow> traj;
+    int    frames = -1, bodies = -1, cacheMisses = -1, declaredEvents = -1;
+    double startHeight = -1.0;
+    bool   provenance = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            if (line.find("# jolt=") == 0) provenance = true;
+            auto grabInt = [&](const char* key, int* out) {
+                const std::string k = std::string(key) + "=";
+                const std::size_t p = line.find(k);
+                if (p != std::string::npos) *out = std::atoi(line.c_str() + p + k.size());
+            };
+            auto grabReal = [&](const char* key, double* out) {
+                const std::string k = std::string(key) + "=";
+                const std::size_t p = line.find(k);
+                if (p != std::string::npos) *out = std::strtod(line.c_str() + p + k.size(), nullptr);
+            };
+            grabInt("frames", &frames);
+            grabInt("bodies", &bodies);
+            grabInt("cache_misses", &cacheMisses);
+            grabInt("events", &declaredEvents);
+            grabReal("start_height", &startHeight);
+            continue;
+        }
+        std::istringstream is(line);
+        std::string tag;
+        is >> tag;
+        if (tag == "E") {
+            ContactRow e;
+            if (!(is >> e.frame >> e.kind >> e.ownerA >> e.ownerB
+                      >> e.bodyA >> e.bodyB >> e.px >> e.py >> e.pz >> e.normalY)) {
+                std::printf("phys-d0 contact-check: FAIL (malformed E row)\n");
+                return 1;
+            }
+            evs.push_back(e);
+        } else if (tag == "T") {
+            TrajectoryRow s;
+            if (!(is >> s.frame >> s.t >> s.y >> s.vy)) {
+                std::printf("phys-d0 contact-check: FAIL (malformed T row)\n");
+                return 1;
+            }
+            traj.push_back(s);
+        } else {
+            std::printf("phys-d0 contact-check: FAIL (unknown row tag)\n");
+            return 1;
+        }
+    }
+
+    expectTrue(provenance, "provenance header present");
+    expectTrue(frames > 0 && bodies == 3, "provenance frames>0 and bodies=3");
+    expectTrue(cacheMisses == 0, "Q2 owner cache: zero Removed misses");
+    expectTrue(declaredEvents >= 0 && static_cast<int>(evs.size()) == declaredEvents,
+               "declared event count matches data rows");
+    expectTrue(!evs.empty(), "event stream is non-empty");
+    expectTrue(traj.size() == static_cast<std::size_t>(frames) + 1,
+               "trajectory length = frames + 1");
+    if (!traj.empty()) {
+        expectTrue(traj.front().frame == 0 && traj.back().frame == frames,
+                   "trajectory frame range 0..frames");
+        expectTrue(std::abs(traj.front().y - startHeight) < 1e-4,
+                   "initial probe height matches provenance");
+    }
+
+    int added = 0, persisted = 0, removed = 0, firstAdded = -1, firstRemoved = -1;
+    bool badKind = false, badOwner = false, badId = false, badFrame = false, badOrder = false;
+    for (std::size_t i = 0; i < evs.size(); ++i) {
+        const ContactRow& e = evs[i];
+        if (e.kind < 0 || e.kind > 2) badKind = true;
+        if (e.kind == 0) { ++added; if (firstAdded < 0) firstAdded = e.frame; }
+        if (e.kind == 1) ++persisted;
+        if (e.kind == 2) { ++removed; if (firstRemoved < 0) firstRemoved = e.frame; }
+        // Every event, INCLUDING Removed, must carry a resolved owner pair:
+        // that is the observable proof of the Q2 cache (no body access allowed).
+        if (e.ownerA == 0 || e.ownerB == 0) badOwner = true;
+        if (e.bodyA == nl::physics::kInvalidBodyId ||
+            e.bodyB == nl::physics::kInvalidBodyId || e.bodyA == e.bodyB) badId = true;
+        if (e.frame < 0 || e.frame > frames) badFrame = true;
+        if (i > 0) {
+            const ContactRow& p = evs[i - 1];
+            if (e.frame < p.frame) badFrame = true;
+            if (e.frame == p.frame) {
+                auto key = [](const ContactRow& x) {
+                    return std::make_pair(
+                        std::make_pair(std::min(x.bodyA, x.bodyB), std::max(x.bodyA, x.bodyB)),
+                        x.kind);
+                };
+                if (key(e) < key(p)) badOrder = true;
+            }
+        }
+    }
+    expectTrue(!badKind, "kind values in {0,1,2}");
+    expectTrue(!badOwner, "every event (incl. Removed) has both owners");
+    expectTrue(!badId, "body id pairs valid and distinct");
+    expectTrue(!badFrame, "event frames in range and non-decreasing");
+    expectTrue(!badOrder, "frame-end stable sort order holds");
+    expectTrue(added > 0 && persisted > 0 && removed > 0,
+               "Added / Persisted / Removed all observed");
+    expectTrue(firstAdded > 0, "first Added occurs after frame 0");
+    expectTrue(firstRemoved > firstAdded, "first Removed occurs after first Added");
+
+    // MEASURED ANCHORS -- derived from the real 240-frame trace, not hand-written.
+    // Standard course only; a non-standard --frames value still gets every
+    // structural assertion above (event sequences are solver-derived, so their
+    // numeric anchors cannot be recomputed from provenance alone).
+    if (frames == 240) {
+        expectTrue(static_cast<int>(evs.size()) == 41,
+                   "measured: 41 events @240 frames");
+        expectTrue(added == 6 && persisted == 29 && removed == 6,
+                   "measured: Added/Persisted/Removed = 6/29/6");
+        expectTrue(firstAdded == 44, "measured: first Added at frame 44");
+        expectTrue(firstRemoved == 46, "measured: first Removed at frame 46");
+        const int lastEventFrame = evs.empty() ? -1 : evs.back().frame;
+        expectTrue(lastEventFrame == 185, "measured: last event at frame 185");
+        int lateEvents = 0;
+        for (const auto& e : evs) if (e.frame > 210) ++lateEvents;
+        expectTrue(lateEvents == 0, "measured: quiet final 30 frames");
+        bool contactOk = true;
+        for (const auto& e : evs)
+            if (std::abs(e.py - 3.000000f) > 1e-3f ||
+                std::abs(e.normalY - 1.000000f) > 1e-3f) contactOk = false;
+        expectTrue(contactOk, "measured: contact point y=3.0 / normalY=1.0");
+        expectTrue(!traj.empty() && std::abs(traj.back().y - 3.500000f) < 1e-3f,
+                   "measured: probe rests at y=3.500000");
+    }
+
+    if (g_failures) {
+        std::printf("phys-d0 contact-check: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-d0 contact-check: PASS (%s, %zu events, %zu trajectory rows)\n",
+                path, evs.size(), traj.size());
+    return 0;
+}
+
 // ===== M-J5c: JobSystem 适配器验收（两层一起）=====
 // 提取数据行（跳过 '#' 头）：TSV 头含 config 但不含 jobs——jobs 是运行期旋钮，
 // 不入 TSV 保 M-P0~P4 基线字节稳定；跨 job-system 对拍只在数据行上做。
@@ -1554,10 +1786,93 @@ int runSelftest() {
         if (g_verbose) std::fputs(report.c_str(), stdout);
     }
 
+
+    // ===== M-D0 contacts section: event bridge + Q2 cache + determinism =====
+    {
+        nl::physics::ContactProbeConfig cc;
+        std::string cerr;
+        auto badC = cc; badC.frames = 0;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject frames=0");
+        badC = cc; badC.dt = 1.0;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject dt=1.0");
+        badC = cc; badC.radius = 0.0f;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject radius=0");
+        badC = cc; badC.startHeight = cc.blockerY;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject startHeight<=blocker");
+        badC = cc; badC.restitution = 1.5f;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject restitution>1");
+        expectTrue(nl::physics::validateContactProbe(cc, &cerr), "contacts: accept default config");
+
+        nl::physics::World cw;
+        const nl::physics::ContactProbeResult a = cw.simulateContactProbe(cc);
+        expectTrue(a.ok(), "contacts: probe succeeded");
+        expectTrue(a.bodyCount == 3, "contacts: 3 bodies (floor/blocker/probe)");
+        expectTrue(a.trajectory.size() == static_cast<std::size_t>(cc.frames) + 1,
+                   "contacts: trajectory length = frames+1");
+        expectTrue(!a.events.empty(), "contacts: event stream non-empty");
+        expectTrue(a.removedCacheMisses == 0, "contacts: Q2 owner cache zero misses");
+
+        int ca = 0, cp = 0, cr = 0;
+        bool ownersOk = true, idsOk = true, sortedOk = true;
+        for (std::size_t i = 0; i < a.events.size(); ++i) {
+            const auto& e = a.events[i];
+            if (e.kind == nl::physics::ContactKind::Added) ++ca;
+            else if (e.kind == nl::physics::ContactKind::Persisted) ++cp;
+            else if (e.kind == nl::physics::ContactKind::Removed) ++cr;
+            if (e.ownerA == 0 || e.ownerB == 0) ownersOk = false;
+            if (e.bodyIdA == nl::physics::kInvalidBodyId ||
+                e.bodyIdB == nl::physics::kInvalidBodyId || e.bodyIdA == e.bodyIdB) idsOk = false;
+            if (i > 0 && e.frame < a.events[i - 1].frame) sortedOk = false;
+        }
+        expectTrue(ca > 0 && cp > 0 && cr > 0,
+                   "contacts: Added/Persisted/Removed all observed");
+        expectTrue(ownersOk, "contacts: every event carries a resolved owner pair");
+        expectTrue(idsOk, "contacts: body id pairs valid");
+        expectTrue(sortedOk, "contacts: events frame-ordered");
+
+        // Determinism: fresh world, byte-identical POD stream (incl. float bits).
+        const nl::physics::ContactProbeResult b = cw.simulateContactProbe(cc);
+        bool identical = b.ok() && b.events.size() == a.events.size();
+        if (identical) {
+            for (std::size_t i = 0; i < a.events.size(); ++i) {
+                const auto& x = a.events[i];
+                const auto& y = b.events[i];
+                if (x.frame != y.frame || x.kind != y.kind ||
+                    x.ownerA != y.ownerA || x.ownerB != y.ownerB ||
+                    x.bodyIdA != y.bodyIdA || x.bodyIdB != y.bodyIdB ||
+                    x.worldPos.x != y.worldPos.x || x.worldPos.y != y.worldPos.y ||
+                    x.worldPos.z != y.worldPos.z || x.normalY != y.normalY) {
+                    identical = false; break;
+                }
+            }
+        }
+        expectTrue(identical, "contacts: two worlds produce bit-identical events");
+
+        // MEASURED ANCHORS -- derived from the real 240-frame trace, not hand-written.
+        expectTrue(ca == 6 && cp == 29 && cr == 6,
+                   "contacts: measured kind counts 6/29/6");
+        expectTrue(static_cast<int>(a.events.size()) == 41,
+                   "contacts: measured 41 events");
+        int firstA = -1, firstR = -1, lastF = -1;
+        for (const auto& e : a.events) {
+            if (firstA < 0 && e.kind == nl::physics::ContactKind::Added) firstA = e.frame;
+            if (firstR < 0 && e.kind == nl::physics::ContactKind::Removed) firstR = e.frame;
+            lastF = e.frame;
+        }
+        expectTrue(firstA == 44, "contacts: first Added at frame 44");
+        expectTrue(firstR == 46, "contacts: first Removed at frame 46");
+        expectTrue(lastF == 185, "contacts: last event at frame 185");
+        if (g_verbose) {
+            std::printf("[contacts] added=%d persisted=%d removed=%d total=%zu misses=%u\n",
+                        ca, cp, cr, a.events.size(), a.removedCacheMisses);
+        }
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
     std::printf("phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)\n");
     std::printf("phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)\n");
     std::printf("phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)\n");
@@ -1723,6 +2038,11 @@ int main(int argc, char** argv) {
         return runCheckCharacter(argv[2]);
     }
     if (cmd == "check-jobs") return runCheckJobs(argc, argv);
+    if (cmd == "contact-trace") return runContactTrace(argc, argv);
+    if (cmd == "contact-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runContactCheck(argv[2]);
+    }
     usage();
     return 2;
 }
