@@ -125,6 +125,14 @@ TRACKS = {
                 "direction; plan docs/p8/P8-INPUT-PLAN.md; M-I0 core/input state layer "
                 "first; viewer wiring deferred to merge after M8.1 TLAS closes)",
     },
+    "drive": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-drive",
+        "branch": "feat/drive", "state": "active",
+        "note": "A-class track opened 2026-11-10 by user instruction "
+                "(city-driving game-dev steps 2+3 merged; plan "
+                "docs/p8/P8-DRIVE-PLAN.md, M-D0~D3; M-D3 is the only "
+                "milestone touching the viewer wiring seam)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
