@@ -6160,6 +6160,87 @@
     }
    ],
    "tag": "particles-pt1"
+  },
+  {
+   "id": "particles-pt2",
+   "label": "M-PT2",
+   "name": "贴图采样端 + sizeY 非方形（M-PT2）",
+   "date": "2026-11-10",
+   "summary": "M-PT2（particles 轨道第三里程碑）：① 贴图采样端——.nfx texture 字段消费（v1 记录未用→生效），stbi_image 声明头入 thirdparty/stb（复用 nl_core mesh_io 的 tinygltf 内嵌 v2.21 实现，禁重复展开），ensureTexture 惰性建纹（RGBA8_UNORM 原样采样不做 sRGB，与引擎线性直接算口径一致），像素上传推迟到 draw 里 writeTexture（建纹时无 cmd list；上传与 setTextureState 同列表——0x87d 第一坑同源纪律），无贴图绑 1x1 白 dummy（引擎空纹理槽先例），PS 双路径 branch 保形（g_params.y 开关：0=软圆盘逐字 M-PT0 原表达式）；② sizeY 非方形——Y/X 比走 CB 标量 g_params.z（单发射器子集所有粒子同比例；ratio=1.0 时 corner.y*1.0f 逐位恒等，基线零漂移；VS 里 if-else 会被 dxc select 化致 ±1 LSB 漂移 15 像素，实测弃用，教训落档）；③ 贴图资产：Effekseer 1.80.8 官方工具包 Sample/00_Basic（CC-0）Particle01/Flame01 入库 assets/efx/textures/，正例 .nfx 手工构造（全包 0 个子集内特效为预期——官方样例均教学复合特效；转换器 texture 提取已由 M-PT1 selftest 往返断言覆盖）。",
+   "acceptance": [
+    "贴图模式画面：tex_particle01（alpha blend 圆形光斑）/ tex_flame01_rect（additive 火焰 2:1 扁形）双后端可见，HUD 'Particles : 101 alive'，deviceErrors=0",
+    "确定性：贴图模式 DX12 同参两跑 PNG 逐字节同；双后端贴图采样区域逐位同（diff 仅 HUD adapter 文字）",
+    "基线零回归：particles-pt0 6/6 + particles-pt1 10/10 ALL GREEN 全逐字节（软圆盘路径 branch 保形 + ratio=1.0 恒等 + 32B 布局回退）",
+    "负向已验：texture 指向缺失文件 → log 'nfx texture not found ... (soft-disc fallback)' 回退软圆盘不炸帧（人工实证）",
+    "example/particles-pt2 归位（tex-hud/tex-flame × 双后端 4 基线）+ cases.json 卡 2 用例 + run.bat verify"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "tex-hud",
+     "name": "贴图采样端画面：Particle01 光斑 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "M-PT2 手工构造 .nfx（texture 模式）：128x128 CC-0 贴图进 RGBA8_UNORM，PS 贴图路径乘 color；发射点猴头右侧空域。expectLog 用贴图锚（log 由 scene 层 ensureTexture 打印）。",
+     "baselines": {
+      "dx12": "example/particles-pt2/particles-tex-hud-dx12.png",
+      "vulkan": "example/particles-pt2/particles-tex-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/tex_particle01.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "nfx texture: Particle01.png (128x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_particle01.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 3.2 --size 640x720",
+     "cwd": "{root}"
+    },
+    {
+     "id": "tex-flame-rect",
+     "name": "贴图 + 非方形 + additive 复合：Flame01 扁形火焰（120 帧稳态）",
+     "kind": "pair",
+     "note": "三特性同卡覆盖：texture 字段 + sizeY 2:1 非方形（ratioY=0.5 走 CB 标量 g_params.z）+ additive 变体管线（M-PT1 懒建路径复用）。",
+     "baselines": {
+      "dx12": "example/particles-pt2/particles-tex-flame-dx12.png",
+      "vulkan": "example/particles-pt2/particles-tex-flame-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/tex_flame01_rect.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "nfx texture: Flame01.png (128x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_flame01_rect.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 3.2 --size 640x720",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt2"
   }
  ]
 }

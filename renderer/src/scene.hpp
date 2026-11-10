@@ -140,6 +140,10 @@ private:
     // RNG = pcg(序列号) 确定性流——run-to-run 与跨后端逐位一致）。
     void step(float dt);
 
+    // M-PT2：nfx 贴图惰性建（textureDirty_ 门控；读 assets/efx/textures/<basename>
+    // → stbi 解码 RGBA → RGBA8_UNORM。失败返回 false，调用方回退软圆盘）。
+    bool ensureTexture(nvrhi::IDevice* device, std::string& outError);
+
     static constexpr std::uint32_t kMaxParticles = 4096;
 
     // 模拟参数面（M-PT0 = 内置喷泉常数；M-PT1 起 .nfx 覆写 box 发射分支）。
@@ -153,15 +157,20 @@ private:
         float velMax[3] = {0, 0, 0};               // box 初速 max（nfx）
         float accel[3] = {0.0f, -9.8f, 0.0f};      // 常加速度（两路共用，legacy = 重力）
         float sizeMin = 0.05f, sizeSpan = 0.05f;   // 尺寸（nfx：sizeSpan=0 定值）
+        float ratioY = 1.0f;                       // M-PT2：Y/X 尺寸比（nfx sizeYMin/sizeMin；
+                                                   // legacy/方形恒 1.0，CB g_params.z 下发）
         float colorStart[4] = {1.0f, 0.85f, 0.35f, 1.0f}; // nfx 颜色 t=0
         float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
         float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
         bool  additive = false;                    // nfx blend（false = alpha blend）
+        // M-PT2 贴图不走 Params：basename 进成员 textureBasename_（dirty 门控惰性建纹）
     };
 
     // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，32 B）。
+    // M-PT2：sizeY 不进实例流——单发射器子集所有粒子同 Y/X 比，走 CB 标量
+    // g_params.z（ratio=1.0 时 cy*1.0 逐位恒等，legacy/方形基线零漂移）。
     struct ParticleGpu {
-        float posSize[4];    // xyz = 世界位置，w = 尺寸
+        float posSize[4];    // xyz = 世界位置，w = 尺寸 X（Y = X × g_params.z）
         float colorAlpha[4]; // rgb = 颜色，a = alpha
     };
     static_assert(sizeof(ParticleGpu) == 32, "ParticleGpu must be 32B");
@@ -172,7 +181,7 @@ private:
         float vel[3];
         float life;     // 剩余寿命（秒）
         float maxLife;  // 总寿命（秒，alpha/size 曲线分母）
-        float size;     // 尺寸（米）
+        float size;     // 尺寸（米；Y = size × params_.ratioY）
     };
     std::vector<Sim>          pool_;       // 活粒子（spawn 序，swap-remove 摘死者）
     std::vector<ParticleGpu>  gpuData_;    // 每帧重填的绘制流（alive 顺序）
@@ -186,11 +195,25 @@ private:
 
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           constants_;     // volatile CB 112 B（b0）
-    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×2（t0）
+    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×3（t0，48 B/实例）
     nvrhi::BindingLayoutHandle    bindingLayout_;
     nvrhi::BindingSetHandle       bindingSet_;
     nvrhi::GraphicsPipelineHandle pipeline_;          // alpha blend（legacy + nfx 缺省）
     nvrhi::GraphicsPipelineHandle pipelineAdditive_;  // additive（nfx blend=additive 时用）
+
+    // M-PT2：贴图链。textureDirty_ 门控惰性建纹（loadNfx 只存 basename，文件 IO/
+    // 解码/建纹都推迟到首帧 draw 的 GPU 侧，loadNfx 失败面保持纯参数折算）；
+    // 无贴图时 setDesc 绑 1x1 白 dummy（引擎空纹理槽先例，过 NVRHI 校验），
+    // PS 经 g_params.y 开关回退软圆盘——M-PT0/M-PT1 画面逐位不变。
+    nvrhi::TextureHandle          texture_;       // t1（nfx texture 字段；nullptr = dummy）
+    nvrhi::TextureHandle          dummyTex_;      // 1x1 白（无贴图占位）
+    nvrhi::SamplerHandle          sampler_;       // s0 Linear clamp
+    bool                          textureDirty_ = false;         // loadNfx 标记 → ensure 建纹
+    bool                          texturePendingUpload_ = false; // 纹理已建待 cmd 上传
+    bool                          dummyPendingUpload_ = false;   // dummy 已建待 cmd 上传
+    std::string                   textureBasename_;              // assets/efx/textures/ 下文件名
+    std::vector<std::uint8_t>     texturePixels_;  // RGBA8 像素暂存（上传后清）
+    std::uint32_t                 texW_ = 0, texH_ = 0;
 };
 
 class Scene {

@@ -2044,3 +2044,25 @@
 7. **s1-nmesh-suzanne ctest 间歇挂**：连跑 4 次全挂后全量 3 轮 = 过/挂/过——ENV-FLAKE 秒退族（missing anchor/空输出先例口径），与本里程碑零接触（用例未改），定性留痕不追码。
 
 **下一步**：M-PT2 候选——贴图采样端（stb_image vendored + particles.slang PS 贴图采样 + .nfx 贴图解析）、sizeY 非方形 billboard、rate 区间驱动、Effekseer easing/渐变颜色。merge 回 master 待用户拍板（M-PT0+M-PT1 一并）。
+
+
+## PT M-PT2：贴图采样端 + sizeY 非方形（feat/particles 轨道，2026-11-10，tag `particles-pt2`）
+
+**动作**：前置实读——Effekseer sprite UV 口径（core 侧仅 ApplyUVHorizontalFlip，子集已 gate 掉 UV 动画/翻转 → 基础 sprite UV 恒等 [0,1]²；官方平台渲染器四角 UV 左上(0,0)起、V0=贴图顶部，与 stbi 解码行序天然一致，贴图数据无需翻转）、Carrot 粒子贴图同为 TODO（反向印证开源实现贴图普遍后做；其 UV 生成 `zx+0.5 + y*=-1` 模式参考）。拍板点两连（AskUserQuestion）：验收贴图 = **官网资源包**（用户拍板，gh-proxy 直链下载 Effekseer 1.80.8 官方工具包 96MB 绕过 LFS 指针问题）；子集 = **贴图采样 + sizeY**（rate 区间/easing 留 M-PT3）。
+
+**落码**：`thirdparty/stb/stb_image.h` 声明头（与 tinygltf 内嵌 v2.21 同版本副本；IMPLEMENTATION 仍只在 nl_core mesh_io.cpp 一份，renderer 只引声明复用符号，禁重复展开）→ `Particles::ensureTexture`（texture 字段 basename → `assets/efx/textures/`，stbi 强制 RGBA8 → RGBA8_UNORM 原样采样不做 sRGB；惰性建纹 device 侧 + 像素上传推迟到 draw 首帧 writeTexture——建纹时无 cmd list，上传与 setTextureState 同列表 0x87d 同源纪律）→ 绑定扩槽 t1 Texture_SRV + s0 Linear clamp Sampler，无贴图绑 1x1 白 dummy（引擎空纹理槽先例）→ PS 双路径 branch 保形（`g_params.y` 开关：0=软圆盘逐字 M-PT0 原表达式）→ sizeY 走 **CB 标量 `g_params.z` = ratioY**（单发射器子集所有粒子同比例，ratio=1.0 时 `corner.y*1.0f` 逐位恒等，实例流 32B 布局不变）→ 贴图资产 Particle01/Flame01（CC-0）入库 + 正例 .nfx 手工构造两张（全包 0 个子集内特效为预期，官方样例均教学复合特效）→ `example/particles-pt2/` 4 基线 + run.bat verify（双后端重拍 + DX12 确定性 fc /b + 贴图/steady 双锚点 + 默认关负向）→ cases.json particles-pt2 卡 2 用例（**文本级追加**——json.dump 整写会重排全文件，禁用）。
+
+**提交版本**：`feat/particles` M-PT2 提交（annotated tag `particles-pt2`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过 + selftest 16/16；**贴图模式验收**：tex_particle01（alpha 圆形光斑）/ tex_flame01_rect（additive 火焰 2:1 扁形）双后端可见 + alive=101 稳态 + deviceErrors=0；**确定性硬证**：贴图模式 DX12 同参两跑 PNG `fc /b` 逐字节同；**双后端贴图采样区域逐位同**（diff 仅 HUD adapter 文字——sampler 数值双后端一致）；**基线零回归**：pt0 6/6 + pt1 10/10 ALL GREEN 全逐字节；ctest DX12 一轮 100% 53/53（VULKAN 发作期最好 98%，挂卡全是与 M-PT2 零接触的 S1/S2 秒退族，手动同命令全过，定性见踩坑 6）；run.bat verify exit 0；server --check exit 0；负向人工实证（texture 缺失 → soft-disc fallback 不炸帧）。
+
+**踩坑情况**
+1. **VS if-else 被 dxc select 化**：sizeY 首版用 VS 内 branch（sizeY==size 走原表达式），DX12 基线漂 15 像素 ±1 LSB（编译器把两路径混合评估成 select）；对照实验（删 branch 恒用原式）单变量定位实锤。终版 = **CB 标量 ratioY**（`corner.y*g_params.z`，ratio=1.0 时乘 1.0 逐位恒等）——零 branch 零漂移且 32B 布局免扩。
+2. **PS lerp-0 同样漂**：`lerp(disc, tex.a, 0)` 被 DXIL FMA 展开致 ±1 LSB——「数学恒等」在编译器面前不可靠。PS branch（含 texture 采样的分支）实测不被 select 化，保形成立。
+3. **shader 保形铁律（沉淀）**：凡回归基线依赖的浮点表达式，禁 branch 化/lerp 化改写，只能逐字保留或精确恒等变换（×1.0）。
+4. **NL_ASSET_DIR 注入的是 assets/models**（M0.7 model 白名单口径）——粒子贴图路径取其父目录拼 `efx/textures`；发射点 (0,0,0) 会被猴头 mesh 深度遮挡（粒子群全在模型内部），验收 .nfx 的 spawnPoint 挪侧前方空域。
+5. **nlohmann value() 对 JSON null 抛 type_error**（M-PT1 转换器对无贴图特效的 texture 字段产物就是 null）——`r.value("texture","")` 遇 null 直接异常而非返回默认值，必须显式 `is_string()` 判。M-PT1 基线 CullingSprite.nfx 的直接回归雷，编码时即拦下。
+6. **ENV-FLAKE 发作期**：本里程碑 ctest 期间秒退块状高发（挂卡轮换 s1-nmesh/s2-loop/s3-fallback，0.09s 零输出，手动同命令全过，DX12 一轮 100% 证明无回归）——LightingService 观察期已知现象加重窗口，重跑纪律照旧（2~3 次定性），VULKAN 53 卡最好 98% 收口如实落档。
+7. **cases.json 追加必须文本级**：python json.dump 整文件重写把 3 空格缩进重排成 2 空格（diff 1.2 万行）——回滚后用 Edit 文本追加，diff +81 行干净。
+
+**下一步**：M-PT3 候选——rate 区间驱动、easing/渐变颜色；merge 回 master 待用户拍板（M-PT0~M-PT2 一并）。

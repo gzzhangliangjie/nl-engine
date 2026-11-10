@@ -46,6 +46,14 @@ compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积�
 - 交代：✅ 展示台 tool 卡 3 条（usage exit 2 / selftest exit 0 / convert 负向 exit 2 带实测原因清单，case 级 exe 覆盖 vfx-tools）+ `docs/particles/VFX-TOOLS-GUIDE.md` 归档 + 真实输出生成的证据图（nfx-hud 渲染基线 = 转换产物实跑画面）。
 - 里程碑开工时按铁律重读三处对应模块 ✅：Effekseer 源码解析层（EfkEfcFactory/SKFE chunk/参数结构面逐字段实读）、Carrot 资产与蓝图拆分（ParticleBlueprint = 预编译 SPIR-V + 贴图索引，离线生成运行时零解析）、UE 导入转换姿势（Niagara authored → FNiagaraEmitterCompiledData 编译产物，运行时零解析 = 工业口径同构）。
 
+## M-PT2 · 贴图采样端 + sizeY 非方形（✅ 收官 2026-11-10，tag `particles-pt2`）
+
+- 贴图采样端 ✅：`.nfx` texture 字段生效（v1 记录未用→消费）。stb_image 声明头入 `thirdparty/stb/`（与 tinygltf 内嵌 v2.21 同版本副本；`STB_IMAGE_IMPLEMENTATION` 仍只在 nl_core mesh_io.cpp 展开一份，renderer 只引声明复用符号）。`ensureTexture` 惰性建纹（RGBA8_UNORM **原样采样不做 sRGB**，与引擎粒子颜色线性直接算口径一致），像素上传推迟到 draw 里 `writeTexture`（建纹时无 cmd list；上传与 `setTextureState` 同帧同列表——0x87d 第一坑同源纪律）。无贴图绑 1x1 白 dummy（引擎空纹理槽先例），PS 双路径 branch 保形（`g_params.y` 开关：0 = 软圆盘逐字 M-PT0 原表达式）。
+- sizeY 非方形 ✅：**Y/X 比走 CB 标量 `g_params.z`**（单发射器子集所有粒子同比例；ratio=1.0 时 `corner.y*1.0f` 逐位恒等，基线零漂移，实例流 32B 布局不变）。⚠️ 实测教训：VS 里 if-else 会被 dxc select 化（两路径混合评估）致基线 ±1 LSB 漂移 15 像素；PS lerp-0「恒等」同样被 FMA 展开漂移——**shader 保形铁律：凡回归基线依赖的浮点表达式，禁 branch 化/lerp 化改写，只能逐字保留或用精确恒等变换（×1.0）**。
+- 贴图资产 ✅：Effekseer 1.80.8 官方工具包 `Sample/00_Basic`（CC-0）Particle01/Flame01 入库 `assets/efx/textures/`（gh-proxy 直链下载 96MB 工具包，LFS 指针问题绕过）。正例 .nfx 手工构造（全包 0 个子集内特效为预期——官方样例均教学复合特效；转换器 texture 提取已由 M-PT1 selftest 往返断言覆盖）。解析约定：`.nfx` texture 字段取 basename → `assets/efx/textures/<basename>`。
+- 验收 ✅：贴图模式双卡（tex_particle01 alpha 光斑 / tex_flame01_rect additive 火焰 2:1 扁形）双后端可见 + alive=101 稳态 + deviceErrors=0；贴图模式 DX12 同参两跑 PNG 逐字节同；**双后端贴图采样区域逐位同**（diff 仅 HUD adapter 文字）；pt0 6/6 + pt1 10/10 回归 ALL GREEN 全逐字节；负向人工实证（texture 缺失 → soft-disc fallback 不炸帧）。交代：`example/particles-pt2/` 4 基线 + run.bat verify 全绿 + cases.json 卡 2 用例。
+- 已知边界（M-PT3 候选）：rate 区间驱动、easing/渐变颜色仍留候选；sizeY 当前 per-emitter 定值比例（per-particle 随机 Y 需实例流扩字段，v1 子集内无此需求）；贴图无 mip 链（远处粒子闪烁，需时再加 mip）；sRGB 转换未做（引擎全链无 gamma 口径下一致，若未来引入 HDR/离屏 RT 需重议）。
+
 ## 风险登记
 
 - 半透明粒子与场景 blend 次序：起步单发射器无排序问题；多发射器/大粒子后的排序策略到时另议。

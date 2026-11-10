@@ -1,0 +1,57 @@
+{
+  "efkVersion": 1500,
+  "emitter": {
+    "accel": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "life": [
+      1.6666667461395264,
+      1.6666667461395264
+    ],
+    "rate": [
+      60.0,
+      60.0
+    ],
+    "spawnPoint": [
+      1.1,
+      0.35,
+      0.0
+    ],
+    "velocityMax": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "velocityMin": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "magic": "NFX1",
+  "render": {
+    "blend": "alpha",
+    "colorEnd": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "colorStart": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "size": [
+      0.4,
+      0.4
+    ],
+    "texture": "Particle01.png"
+  },
+  "source": "M-PT2 handcrafted (texture mode; particles from Effekseer Sample 00_Basic, CC-0)"
+}
