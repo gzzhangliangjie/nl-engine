@@ -2322,7 +2322,7 @@
 3. **main.cpp 内联注册 `->setOnChanged` 误用**：`c.registerBool(...)\n ->setOnChanged` 返回 `CVar&` 用 `->` → C2819/C2232；指针型 `fov->setOnChanged` 等无 8 空格前缀的不动，内联项改 `.setOnChanged`。
 4. **nethost.dll 缺失（环境缺口）**：`viewer.exe` 经 `nl_core` 的 `script/Vm.cpp` 硬导入 `nethost.dll`，本沙箱 System32 无此文件 → selftest 启动 `0xC0000135`。`dumpbin /dependents` 定位，PATH 补 .NET App-Host `native` 目录解决。
 
-**下一步 / 待补（带显示会话）**：CAM1b/CAM2b/CAM3b 的 viewer 胶水已在代码层落地（Free/Chase/Track 模式分发 + Key::T 切换 + cam.* cvar + HUD 模式名），但**三种相机模式在真实窗口里的交互/截图基线（free 飞行 / chase 跟车 / track 轨迹播放）与 M-CAM4 的平滑/过渡/抖动视觉效果，本沙箱无 GPU 显示无法验证**——待带显示会话补 `example/cam-b/`（run.bat 双后端 + pair PNG 基线）+ cases.json `cam-1b`/`cam-2b`/`cam-3b`/`cam-mcam4` 四张 viewer 卡（当前先落 `cam-b` 版本 selftest 卡作自动化下限）。feat/camera merge 回 master 走 §8 cases.json 语义合并 + §7.2 MILESTONES 四栏并集；merge 前需主工作树干净——当前主树有 s9-reference/s9-shadow 在途改动，待其提交/暂存后再合。
+**下一步 / 待补（带显示会话）**：CAM1b/CAM2b/CAM3b 的 viewer 胶水已在代码层落地（Free/Chase/Track 模式分发 + Key::T 切换 + cam.* cvar + HUD 模式名），但**三种相机模式在真实窗口里的交互/截图基线（free 飞行 / chase 跟车 / track 轨迹播放）与 M-CAM4 的平滑/过渡/抖动视觉效果，本沙箱无 GPU 显示无法验证**——待带显示会话补 `example/cam-b/`（run.bat 双后端 + pair PNG 基线）+ cases.json `cam-1b`/`cam-2b`/`cam-3b`/`cam-mcam4` 四张 viewer 卡（当前先落 `cam-b` 版本 selftest 卡作自动化下限）。feat/camera 已 merge 回 master（2026-11-11，merge commit `745ff83`，仅补 camera 代码 + 三处台账、零冲突；master 后续推进不影响已合入内容）。
 
 ## P8 M9.0：GBuffer 反解公共头 + Q4 开工闸 + compute 直光对照（含阶段性过程留痕，**2026-11-10 已收官**，tag `s9-gbuffer`）
 
