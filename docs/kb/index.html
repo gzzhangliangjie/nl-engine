@@ -1399,9 +1399,9 @@ grep -rn <span class="cs">"InterlockedMax\|atomicMax"</span> Engine/Shaders/Priv
         <td><a href="#lumen" style="color:var(--teal)">02 章</a>；Vulkan ray tracing examples（nvpro / kbladin）</td>
       </tr>
       <tr>
-        <td><b>S9</b></td><td>GBuffer + 直接光 + 阴影射线 + 离线参考模式</td>
+        <td><b>S9</b></td><td>GBuffer 公共反解 + 直接光 + 阴影射线 + 离线参考模式</td>
         <td><code>viewer --mode shadow</code>：每像素 1 条阴影射线；<code>--mode reference</code>：每像素 64+ 采样离线积分出「真值图」存盘</td>
-        <td>硬阴影正确；参考图噪声极低——这张图是后面 P5 调 GI 时<b>唯一的裁判</b></td>
+        <td>硬阴影正确；参考图噪声极低——<b>只算直光一跳</b>，是直光 / 硬阴影标准答案，<b>不是 GI 裁判</b>（2026-11-10 Q3 拍板勘误）；Q4 拍板方案 A：S9 不落 GBuffer 纹理</td>
         <td>BRDF 与余弦采样、阴影射线、tone mapping、参考图工作流</td>
         <td><a href="#lumen" style="color:var(--teal)">02 章</a>；<a href="graphics-handbook.html#path" style="color:var(--teal)">G8 路径追踪</a></td>
       </tr>
@@ -1415,7 +1415,7 @@ grep -rn <span class="cs">"InterlockedMax\|atomicMax"</span> Engine/Shaders/Priv
       <tr>
         <td><b>S10</b></td><td>屏幕探针一跳 GI：4 级 cascade 布点 + 八面体图 + final gather</td>
         <td><code>viewer --mode probe</code>：探针 pass + 1 条余弦采样射线/探针 + gather 插值；<code>--mode probe-viz</code> 可视化探针辐照度</td>
-        <td>开 GI：天光与一次弹射可见；与 S9 参考图并排对比，误差趋势一致；探针调试图里辐照度方向合理</td>
+        <td>开 GI：天光与一次弹射可见；与 <b>S10 自立的 GI 参考图</b>并排对比，误差趋势一致；探针调试图里辐照度方向合理（Q3：S9 一跳图只含直光，不能量 GI）</td>
         <td>八面体映射、余弦重要性采样、cascade 布局参数、探针插值权重</td>
         <td><a href="#lumen" style="color:var(--teal)">02 章</a>；UE <code>LumenScreenProbeGather*</code>；bevy_solari</td>
       </tr>

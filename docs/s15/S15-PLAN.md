@@ -45,8 +45,9 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 ---
 
 ## 前置（已具备，依赖 S4+S7/S9 在 S9 已全部就绪 → 插入 S9 之后，无需等 Lumen）
+> **2026-11-10 Q4 拍板方案 A 勘误**：S9 不落 GBuffer 纹理，交付的是 `gbuffer_common.slangh` 公共反解契约；下文凡「S9 GBuffer / 读 GBuffer」一律指 UE 侧概念或本项目 vis buffer 即取即算属性。
 - **S4 硬件光栅 + GPU 视锥剔除 + indirect draw**：VSM 的阴影深度渲染直接复用 S4 的簇渲染/剔除路径，只把渲染目标从屏幕换成物理页池。
-- **S7 vis buffer / S9 GBuffer**：最终着色采样 VSM 投影结果；M15.1 起页请求需要**只读**主视图 depth / GBuffer（见预研 §3，不改其输出格式）。
+- **S7 vis buffer / S9 公共反解契约**：最终着色采样 VSM 投影结果；M15.1 起页请求需要**只读**主视图 depth / vis buffer 即取即算属性（见预研 §3，不改其输出格式；Q4 方案 A 下无屏幕 GBuffer 纹理）。
 - VSM 与 S9 光追阴影射线是「阴影的两条平行路线」，互为验收对照，不互相替代。
 
 ## M15.0 单级 VSM 框架：物理页池 + 投影采样（2~3 天）
@@ -62,7 +63,7 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 ## M15.1 级联 clipmap + 页请求/分配/回收（3~4 天）
 - [ ] 多级 clipmap：按距相机距离分 N 级（对位 UE `VirtualShadowMapClipmap`），近处高分辨率、远处低分辨率。
 - [ ] 每帧页请求 → 分配物理页 → 渲染 → 未命中/失效页回收（对位 UE `VirtualShadowMapCacheManager`：缓存有效页跨帧复用）。
-- [ ] 页请求读主视图 depth / GBuffer（预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
+- [ ] 页请求读主视图 depth / vis buffer（Q4 方案 A 下无屏幕 GBuffer 纹理；预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
 - [ ] HUD 显示物理页占用 / 各级分辨率。
 
 **自检**：大场景近处清晰、远处不糊不抖；相机前后移动时各级分辨率过渡平滑无突跳。tag：`s15-clipmap`。
@@ -73,7 +74,7 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 - [ ] temporal / rejection 去闪烁：阴影页跨帧稳定，边缘不闪（参考 UE `ShadingRejection` 思路，但本模块只做阴影页稳定性，不搬 TSR 整套路）。
 - [ ] 双后端：DX12 / Vulkan 同图，分档 bytes/near。
 
-**自检**：阴影边缘静止稳定、移动无 ghosting；与 S9 参考图并排误差趋势一致；`regression.py` 全绿；kStage bump 后重拍 m0.9/s2.0 HUD 基线（M3.2 固化④）。tag：`s15-done`。
+**自检**：阴影边缘静止稳定、移动无 ghosting；与 S9 的直光分量参考图并排（Q3：一跳图不含间接光，GI 验收另立 S15 自立参考）；`regression.py` 全绿；kStage bump 后重拍 m0.9/s2.0 HUD 基线（M3.2 固化④）。tag：`s15-done`。
 
 ---
 
@@ -98,7 +99,7 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 | 不投影反例（避坑） | Carrot `ModelRenderer.cpp:387` `canUseTLAS = !hasVirtualizedGeometry` |
 
 ## 底线
-- VSM 是「阴影路线」不是「渲染路线」：**不改主路径输出格式，只读其 depth / GBuffer**（预研 §3 修订）；新增资源仅阴影深度目标 + 页表 GPU 资源 + 投影采样；S9 光追阴影作为对照保留。
+- VSM 是「阴影路线」不是「渲染路线」：**不改主路径输出格式，只读其 depth / vis buffer 属性**（预研 §3 修订；Q4 方案 A 后本项目无屏幕 GBuffer 纹理）；新增资源仅阴影深度目标 + 页表 GPU 资源 + 投影采样；S9 光追阴影作为对照保留。
 - 物理页池是核心资源，slot 级同步表必须在 `createTargets()` 初始化（沿用渲染约定，防首帧 139 段错误）。
 - 每次 kStage bump 必须重拍 m0.9 gate-hud 与 s2.0 lod-hud 两对基线（M3.2 固化④）。
 - M15.0~M15.2 相对 UE 依赖链为逆序渐进，定性「有意简化」见 `docs/s5/UE-DIFFS.md` D11，验收不按 UE 终态对标。

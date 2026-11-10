@@ -1,7 +1,7 @@
 # Q4 决策材料：GBuffer 落盘形态（S9 / M9.0，2026-11-10 补决策前置功课）
 
 > **状态：已拍板（2026-11-10 用户选方案 A「不落盘，即取即算」）。** 本文件保留为**决策证据**（三处实读 + 历史约定 + 三方案代价矩阵），**结论以 `S9-PLAN.md` 开工拍板记录 Q4 行为准**；§6 的「建议」在拍板前撰写，保留原样供追溯，不代表后续落码口径。
-> 拍板后动作**已执行**：结论已写回 `S9-PLAN.md` Q4 行、任务书第 3 条挂账句已删、范围口径已同步；冻结解除仅限与方案 A 相容的落码。
+> 拍板后动作**已执行**：结论已写回 `S9-PLAN.md` Q4 行、任务书挂账句已删（现为 T1~T8 任务表）、范围口径已同步；冻结解除仅限与方案 A 相容的落码。
 > 触发：M9.0 开工时 S9-PLAN Q4 仍标「待拍板」却已启动落码，用户 2026-11-10 点名「架构判定没拍板就开工」的别扭状态。按 `AGENTS.md` 决策前置铁律补功课。
 
 ---
@@ -11,7 +11,7 @@
 | 项 | 状态 |
 |---|---|
 | 新增独立 GBuffer 落盘（任何 RT / UAV / `register(u/t)` 槽位 / 格式） | **冻结** |
-| 绑定布局、BindingSet 扩建、纹理状态登记、CMake 新 entry | **冻结**（拍板前）。**澄清**：冻结的是「独立 GBuffer 落盘资源的形态与槽位」，不是 compute 直光 pass 按 §2.7 必备的单一 BindingSet |
+| 绑定布局、BindingSet 扩建、纹理状态登记、CMake 新 entry | **冻结（拍板前）**。**澄清**：冻结的是「独立 GBuffer 落盘资源的形态与槽位」，不是 compute 直光 pass 按 §2.7 必备的单一 BindingSet，也不是 T4 必需的 `direct.slang` shader entry 登记（CMake 新 entry 指 GBuffer 落盘 shader 的 entry） |
 | 在注释 / README / commit message / CMake 里顺手把形态写死 | **冻结** |
 | `renderer/shaders/gbuffer_common.slangh`（PURE MOVE，0 处资源声明） | **保留，不回滚**（合规机械执行） |
 | `material.slang` 纯搬移（-54/+11）+ `CMakeLists.txt` `_GBUFFER_COMMON` 依赖 | **保留，不回滚** |
@@ -88,7 +88,7 @@
 | `docs/MILESTONES.md` s8-done 段（2166-2180） | M8.2 已落 `rt.slang` `RWTexture2D<float4>` **RGBA32_FLOAT typed UAV**（`ensureRtTargets` 懒建 + 视口依赖 set）+ `csRt` 8×8 inline RayQuery + `vsRtPresent/psRtPresent` `Texture2D.Load` 逐字节确定；`kStage` bump `S8.2` 曾致 **50 张 HUD 基线重拍** | 已有可复用的 compute 8×8 + typed UAV 骨架；改 `kStage` 有确定的重拍代价 |
 | `.workbuddy/memory/MEMORY.md:19,23` | `kStage` bump 波及 = args 含 `--hud` 且 exe=current 的卡全重拍；`reshot-hud-stage.py` 超 527px 签名要追因才许 `--force`；§2.14 材质间接表 S9/S10/S13 复用 | 方案 C 若 bump，代价可量化；公共头已为 S10/S12 留好契约 |
 | 现状资源（`material.slang:39-72`） | b0/b1/b2 + t0 vis + t1 vertexPool + t2 localIndices + t3 clusterMeta + t4..t7 / t8..t11 贴图数组 + t12 `GPUMaterial` + s0，**单一 BindingSet** | 方案 A 的 compute 版读侧照这套 slot 分配（**另需 u0 输出**）；与 `rt` set 是两条资产链，不混编 |
-| 现状资源（`rt.slang:23-36,118`） | b0 `RtConstants` + t0 TLAS + u0 `RGBA32_FLOAT` UAV；present 端 t0 SRV | 方案 A 复用其 `RGBA32_FLOAT` 目标与 present 骨架；**不能把 vis 资源直接塞进这个 set**（`initRt → initDag` 不产 vis buffer） |
+| 现状资源（`rt.slang:23-36,118`） | b0 `RtConstants` + t0 TLAS + u0 `RGBA32_FLOAT` UAV；present 端 t0 SRV | 方案 A 复用其 `rtTarget_` 目标与 present 骨架；**不能把 vis 资源直接塞进这个 set**（`initRt → initDag` 不产 vis buffer）。`rtPresentLayout_` / present shader 由 `initRt` 创建、`rtComputeSet_` 在 `ensureRtTargets` 内绑定 `tlas_` → **需纯结构重构把两组初始化拆开**（`scene.cpp:2154-2192, 2200-2245`），不改画面语义 |
 
 ---
 
@@ -108,7 +108,7 @@
 
 | 维度 | 内容 |
 |---|---|
-| **RT/UAV 数量与格式** | **0 张新增 GBuffer 纹理**。M9.1 直光输出复用/扩 M8.2 已有的 `RGBA32_FLOAT` typed UAV（`rt.slang` u0）；无量化、无 packed |
+| **RT/UAV 数量与格式** | **0 张新增 GBuffer 纹理**。直光输出**复用 M8.2 已有的 `rtTarget_` 纹理对象**（`RGBA32_FLOAT`，不新建资源、不改格式）；无量化、无 packed |
 | **写入 pass 形态** | **compute 8×8**（`rt.cs` / Carrot `direct-raytracing.slang` 同款）：单 pass 内 `gbInterpolateVisTriangle` → 发 shadow ray → shade → 写输出 UAV。resolve 与 trace 同 pass，中间不落盘 |
 | **绑定布局** | **不预设槽位号**。compute 直光 pass 按 §2.7 建自己的**单一 BindingSet**：读侧照 `material.slang:39-72`（b0/b1/b2 + t0 vis + t1..t3 拉取资源 + t4..t11 贴图数组 + t12 材质表 + s0），写侧复用 M8.2 的 u0 `RGBA32_FLOAT`；资产链走 `initVisbuf(pulling=true)` 而非 `initRt → initDag`。shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0），**不改编译参数**；状态登记沿用 §2.15 / M8.2 口径。槽位表在落码时按实读固化进 `SHADER-CONVENTIONS.md` §2.18 |
 | **显存 / 带宽 / 精度** | 新增显存 **0 MiB**；带宽 = 每个消费端各自重做一次 vertex pulling + barycentrics（vis + vertexPool + indices + clusterMeta 四读），**算力重复**但无额外显存往返；精度 = 原生 float32，与 mode 5 逐位同源，保形零风险 |
@@ -163,7 +163,7 @@
 倾向 **方案 A**：
 
 1. 三处证据里 **UE Lumen 直光明确不读屏幕 GBuffer**、**bevy meshlet 材质 pass 即取即算**，与本项目 `material.slang` 现状同构；「阴影射线必须先有屏幕 GBuffer」不是工业终态的必然前提。
-2. M9.0 硬验收（S7 / pbr-direct / s8.2 双后端 `bytes` 不变；`--mode shadow` 与 mode 5 逐像素一致；反解数学逐字搬移）在 A 下零风险；B 的量化会直接破坏「逐像素一致」，C 需额外实测且有 1 LSB 风险。
+2. M9.0 硬验收（S7 / pbr-direct / s8.2 双后端 `bytes` 不变；`--mode shadow` 与 mode 5 逐像素一致；反解数学逐字搬移）在 A 下**资源形态零风险**；B 的量化会直接破坏「逐像素一致」，C 需额外实测且有 1 LSB 风险。**但实现路径不是零成本**：compute 输出要复用 M8.2 `rtTarget_` / present 骨架，需对 `initRt` / `ensureRtTargets` 做纯结构重构并跑 `s8.2` 回归；float→UNORM 与空像素 `discard` 对齐也须逐像素实测（见 `S9-PLAN.md` T5/T6）。
 3. 落盘的**真正需求方是 S12 的历史帧属性**（bevy 专门留了 `previous_gbuffer`）。现在拍格式等于替两个还没开工的里程碑定死资源契约；公共头已把「数学契约」抽出，将来选 B 或 C 都能复用 `gbInterpolateVisTriangle` / `gbReconstructWorldPos`，返工面被压到写入端一层。
 4. 代价要说清：**A 是范围收缩**（M9.0 交付从「公共头 + 落盘」缩为「公共头」），且 S10/S12 时落盘决策会回来；若用户要求 M9.0 就必须有可见的 GBuffer 资源，则 **C 比 B 更贴合硬验收**（无量化），但要接受 ~50 张 HUD 基线重拍的代价。
 
@@ -177,5 +177,5 @@
 2. **已执行**：M9.0 任务书按「任务 / 决策 / 实测 / 边界」四层重写为 T1~T8；删「落盘形态待用户拍板」挂账句与上一版编造的绑定槽位表，硬验收三条原样保留。
 3. **已执行**：本文件状态改为「已拍板，保留为决策证据」；`MILESTONES.md` 四栏「下一步」、`MEMORY.md` 进度行、当日日志的旧表述清理。
 4. **待办**：把方案 A 的绑定布局 / 状态登记口径固化进 `docs/SHADER-CONVENTIONS.md`（新增 §2.18）。
-5. **待办**：与 A 相容的第一行落码（T4：`--mode shadow` 无阴影版 compute 直光路径，用户拍板 ②）；**不新增独立 GBuffer 纹理 / RT / UAV**，compute pass 自身单一 BindingSet 按 §2.7 建并固化 §2.18。`kStage` 是否 bump 随实现定，bump 则按 `reshot-hud-stage.py` 安全闸重拍。
+5. **待办**：与 A 相容的第一行落码（T4：`--mode shadow` 无阴影版 compute 直光路径，用户拍板 ②）；**不新增独立 GBuffer 纹理 / MRT / 落盘 UAV**，compute pass 自身单一 BindingSet 按 §2.7 建并固化 §2.18；输出复用 `rtTarget_` 所需的 `initRt` / `ensureRtTargets` 纯结构重构属实现细节，不改资源形态，`s8.2` 回归必跑。`kStage` **不 bump**（现有卡不传新 mode），故无 `reshot-hud-stage.py` 重拍面。
 6. **待办**：M9.0 收口照 `AGENTS.md` 交付纪律 —— 四项自查、四栏台账、修改文件清单、`wt_pool.py close` 硬闸、tag `s9-gbuffer`。

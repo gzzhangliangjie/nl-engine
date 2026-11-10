@@ -117,7 +117,7 @@
 |---|---|
 | UE 做法 | `VirtualShadowMapPageMarking.usf` 从 GBuffer 深度 / 前层半透明反投影标页 → `VirtualShadowMapArray.cpp::BuildPageAllocation` 分配（含 `CacheManager` 跨帧静态/动态页缓存与 GPU invalidation）→ 每页 GPU culling → Nanite 多视图 depth-only 直写物理页 atlas → 页级 HZB → `VirtualShadowMapProjection.cpp` 投影。**依赖链起点是「标页」，不是「页池」**。 |
 | 我们现状 | `docs/s15/S15-PLAN.md` M15.0 先做「物理页池 + 静态整页分配 + 投影采样」，M15.1 才补页请求/分配/回收，M15.2 才接簇级间接阴影——顺序与 UE 依赖链**相反**；M15.0 的「VSM」实为「带页表的静态 shadow map」。 |
-| 定性 | **有意简化**（先出画再补复杂度，2026-11-09 预研后用户拍板保留节奏不返工）。附带修正：原底线「绝不碰 GBuffer 主路径」与 UE 标页吃 GBuffer 冲突，已改为「不改主路径输出格式，只读其 depth/GBuffer」。 |
+| 定性 | **有意简化**（先出画再补复杂度，2026-11-09 预研后用户拍板保留节奏不返工）。附带修正：原底线「绝不碰 GBuffer 主路径」与 UE 标页吃 GBuffer 冲突，已改为「不改主路径输出格式，只读其 depth/GBuffer」。**2026-11-10 Q4 方案 A 口径注记**：此处 GBuffer 是 UE 侧概念；本项目 S9 不落屏幕 GBuffer 纹理，M15.1 落码时按 `gbuffer_common.slangh` 公共反解契约消费 vis buffer / depth 属性，别照字面去找一张属性纹理。 |
 | 升级路径 | M15.1 按 UE 链补齐标页 → 分配 → 缓存失效；M15.2 参照 bevy `meshlet/visibility_buffer_raster_node.rs` 的 ShadowView 变体（`R32Uint` + 两阶段 HZB）把簇几何接进阴影路径，不引入 bevy 的每帧全量重绘语义。 |
 | 触发条件 | 验收**不得按 UE 终态直接对标 M15.0**；若大场景近处阴影分辨率不足、或相机移动时页抖动明显，把标页与缓存提前到 M15.1 之前。 |
 
