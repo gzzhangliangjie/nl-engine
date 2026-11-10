@@ -34,6 +34,7 @@
 // visbuf_common.slangh 与 docs/s5/UE-DIFFS.md D15）。
 
 #include "visbuf_common.slangh"
+#include "gbuffer_common.slangh"
 
 cbuffer SceneConstants : register(b0)
 {
@@ -188,60 +189,16 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
         uv[k]  = float2(g_vertexPool[b + 6u], g_vertexPool[b + 7u]);
     }
 
-    // 用与光栅 pass 相同的 g_mvp 重建裁剪坐标（w 一并保留，供透视正确插值）。
-    float4 clip[3];
-    clip[0] = mul(g_mvp, float4(pos[0], 1.0f));
-    clip[1] = mul(g_mvp, float4(pos[1], 1.0f));
-    clip[2] = mul(g_mvp, float4(pos[2], 1.0f));
-
-    // ---- The-Forge 解析式 barycentrics + 像素导数（屏幕空间，y-down）----
-    // 顶点屏幕坐标：NDC 经 viewport 变换（y 翻转，屏幕原点左上）。SV_Position.xy
-    // 已在同一直角系（像素，y-down），故片元位置直接取 fragPos.xy，无需再变换。
-    float w[3];
-    float2 s[3];
-    for (uint i = 0u; i < 3u; ++i) {
-        w[i] = 1.0f / clip[i].w;
-        const float2 ndc = clip[i].xy * w[i];
-        s[i] = float2((ndc.x * 0.5f + 0.5f) * width,
-                      (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
-    }
-    const float2 f = fragPos.xy;
-    const float area = (s[1].x - s[0].x) * (s[2].y - s[0].y)
-                     - (s[2].x - s[0].x) * (s[1].y - s[0].y);
-
-    // 屏幕空间 barycentrics（sum = 1）。
-    const float b1 = ((f.x - s[0].x) * (s[2].y - s[0].y) - (s[2].x - s[0].x) * (f.y - s[0].y)) / area;
-    const float b2 = ((f.x - s[1].x) * (s[0].y - s[1].y) - (s[0].x - s[1].x) * (f.y - s[1].y)) / area;
-    const float b0 = 1.0f - b1 - b2;
-
-    // 屏幕空间 barycentrics 的每像素导数。
-    const float db1_dx =  (s[2].y - s[0].y) / area;
-    const float db1_dy = -(s[2].x - s[0].x) / area;
-    const float db2_dx =  (s[0].y - s[1].y) / area;
-    const float db2_dy = -(s[0].x - s[1].x) / area;
-    const float db0_dx = -(db1_dx + db2_dx);
-    const float db0_dy = -(db1_dy + db2_dy);
-
-    // 透视正确插值：attr = (Σ b_i/w_i · attr_i) / (Σ b_i/w_i)。
-    const float invW   = b0 / w[0] + b1 / w[1] + b2 / w[2];
-    const float3 bcw   = float3(b0 / w[0], b1 / w[1], b2 / w[2]);
-
-    float3 wp[3], wn[3];
-    for (uint j = 0u; j < 3u; ++j) {
-        wp[j] = mul(g_model, float4(pos[j], 1.0f)).xyz;
-        wn[j] = mul((float3x3)g_model, nrm[j]);
-    }
-    const float3 worldPos = (bcw.x * wp[0] + bcw.y * wp[1] + bcw.z * wp[2]) / invW;
-    const float3 normal   = normalize((bcw.x * wn[0] + bcw.y * wn[1] + bcw.z * wn[2]) / invW);
-    const float2 uvF      = (bcw.x * uv[0]  + bcw.y * uv[1]  + bcw.z * uv[2])  / invW;
-
-    // uv 的透视正确像素导数（materialId 单材质时不参与选纹理，但导数用于 SampleGrad）。
-    const float dInvW_dx = db0_dx / w[0] + db1_dx / w[1] + db2_dx / w[2];
-    const float dInvW_dy = db0_dy / w[0] + db1_dy / w[1] + db2_dy / w[2];
-    const float2 duv_dx = ((db0_dx / w[0]) * uv[0] + (db1_dx / w[1]) * uv[1] + (db2_dx / w[2]) * uv[2]) / invW
-                        - uvF * (dInvW_dx / invW);
-    const float2 duv_dy = ((db0_dy / w[0]) * uv[0] + (db1_dy / w[1]) * uv[1] + (db2_dy / w[2]) * uv[2]) / invW
-                        - uvF * (dInvW_dy / invW);
+    // M9.0：几何反解数学已抽进 gbuffer_common.slangh（S9/S10/S12 共用契约）。
+    // 纯搬移：表达式逐字未改，保形由 S7 / pbr-direct / s8.2 spot 回归实测。
+    const GBufGeometry gbuf = gbInterpolateVisTriangle(
+        pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
+        uv[0], uv[1], uv[2], g_mvp, g_model, fragPos.xy, g_width, g_height);
+    const float3 worldPos = gbuf.worldPos;
+    const float3 normal   = gbuf.normal;
+    const float2 uvF      = gbuf.uv;
+    const float2 duv_dx   = gbuf.ddxUv;
+    const float2 duv_dy   = gbuf.ddyUv;
 
     const uint mode = uint(g_options.x);
     if (mode == 1u) {                       // 法线可视化

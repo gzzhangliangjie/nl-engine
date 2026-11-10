@@ -15,7 +15,7 @@
 - **M8.0 BLAS 预建收官（tag `s8-blas`，2026-11-10）**：`Scene::initBlas`（hook initDag levels[0]+initCull；initHiz 委托）零拷贝吃 fallback 32B 交错 buffer（NVRHI 枚举名 `RGB32_FLOAT`）；**⚠️ 0x87d 铁律：AS build-input 上传+`setBufferState`+build 必须同命令列表**（跨列表 setPermanentBufferState 无物理 barrier，DX12 debug layer 执行期 fail-fast、录制期零消息）。Vulkan RT 扩展链已接。HUD `BLAS : NNN tri` 行只在 dag/hiz 模式（dag-top 走 initCluster 不触发）。`reshot-hud-stage.py --force`=人工追因后放行超签名重拍的合规通道。
 - **M8.1 TLAS 每帧重建收官（tag `s8-tlas`，2026-11-10）**：initTlas（maxInstances=16 @ PreferFastTrace）+ buildTlasFrame 帧列表内每帧全量 rebuild（D-S8-1 UE 口径，DX12 0.128ms / Vulkan 0.0415ms @ 1 实例）；`--tlas-spin`（帧序号驱动 2.5°/帧）+ `--tlas-probe`（RayQuery 固定射线 hit t 回读，`tlas probe: seq=N t=X`）；HUD `TLAS : 1 inst` 行。**⚠️ 0x87D 第二坑铁律：DX12 帧命令列表必须常驻复用（`frameCmd_` 成员）**——per-frame 局部句柄析构连带销毁列表的 DXR scratch manager，AS build scratch chunk（DEFAULT 堆）ECL 飞行中 final-release → debug layer CORRUPTION #921（**仅 OutputDebugString 可见、InfoQueue 不落地**，取证用 `tools/dbwin_capture.py` DBWIN 抓 ODS）→ 后续帧 scratch 复用被释放页 → 帧 3 fail-fast。Vulkan 帧列表保持 per-frame 新建（NVRHI Vulkan 池队列侧自管，改常驻反而段错误——两后端语义不对称，勿顺手统一）。initBlas 尾部 `waitForIdle()` 压住 init 列表同款雷（一次性路径）。
 - 已 merge 回 master：physics（M-P0~P4+M-J5c）、audio、ECS E1a+E1b、job-system、console/material-graph/action-system、pbr-direct、game-loop GL0~GL3。E1/E1b gate 已解除；jobsync P1 已解决（launchAll 原语）。
-- 下一站：**M8.2 Ray Query 调试射线闭环**（t0=TLAS binding 已就位，debugLines 进 3D 视口）。
+- 下一站：**M9.0 GBuffer 抽取**（2026-11-10 开工；第一铲 = `gbuffer_common.slangh` PURE MOVE + `material.slang` 纯搬移，双后端 8/8 `bytes` 保形）。**⚠️ Q4「GBuffer 落盘形态」待用户拍板，独立落盘全冻结**；三处证据 + A/B/C 三方案代价矩阵见 `docs/s9/Q4-GBUFFER-OPTIONS.md`。S8 全线已收官（tag `s8-done`）。
 - UE 差异台账 `docs/s5/UE-DIFFS.md`（D1~D18）随手追加必须落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 的用例全重拍（`tools/reshot-hud-stage.py` 通用安全闸，超 527px 签名必须追因禁强刷——追因过了才许 `--force`）。cases.json：version 卡必须带 tag 字段；text-only（无 {out}）viewer 不退出，log 断言卡一律 pair 小图+expectLog 双断言。
 
 ## 渲染 / HUD 关键约定（详 `docs/SHADER-CONVENTIONS.md`）
@@ -38,4 +38,5 @@
 ## 工程纪律易忘点（详 `AGENTS.md`）
 - 收口回复第一屏=「四项自查+三要素」表格；渲染轮次主动展示证据图卡片。默认不跑全量回归（`--only` 挑 2~3 条），全量只在打 tag 收口跑一次；失败分组统计禁 `head` 截断。双后端分档 bytes/near/FAIL 禁笼统「一致」。工具 exe=`build/{DX12,VULKAN}/nanite-tools.exe`（根目录同名是废弃残留）。
 - git 危险操作闸门：checkout/restore/switch 前必先 `git status --porcelain -- <path>` 核对未提交修复；还原只许显式点名。Windows 清理临时文件禁通配。cases.json 负向卡 expectLog 必须从实测 log 复制禁手写；`--only` 语法是单个 `version[/case]`，逗号列表会静默跑 0 条报全绿。
+- **开工闸（AGENTS.md 2026-11-10 新增，决策前置 + 交付纪律第 10 条）**：计划内不得留「待拍板」架构判定；架构判定未定不许开里程碑落码；开工回复第一屏必须报「待拍板项 N / 已拍板 N / 冻结面清单」。拍板后写回 `S*-PLAN.md` 拍板记录 + 删任务书挂账句才许写第一行 RT/UAV/槽位。
 - UE 源码只读不抄；Carrot/bevy 抄思路不抄代码。回复语言简体中文（代码/标识符保留英文）。调试：L0 画面证据 → L1 RenderDoc → L2 NVRHI timestamp → L3 Nsight/PIX/PresentMon/Tracy；NVRHI 每处调用回 vendored `nvrhi.h` 核签名。

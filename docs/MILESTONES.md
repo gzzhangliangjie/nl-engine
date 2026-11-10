@@ -2307,3 +2307,19 @@
 4. **双后端 exe 版本漂移**：Vulkan 树在锚修正前构建，check 对同一 TSV 文件 DX12 过 VK 挂——先疑玄学，实为 exe 旧版本；双后端验收必须同源代码版本（cmp TSV 一致反而帮了定位：文件一致而结果不一致 = 可执行文件不一致）。
 
 **下一步**：M-CAM2a（Chase phys 回读桥，等 M-D2 数据形态）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，等 drive M-D3；CAM3b = `--camera-track` 加载 + HUD 时间轴）/ M-CAM4 平滑防抖无头段可插队；feat/camera merge 回 master 待排（冲突面 CMakeLists.txt + MILESTONES/cases.json 语义合并）。
+
+## P8 M9.0：GBuffer 反解公共头 + Q4 开工闸（阶段性，**未收官**，2026-11-10）
+
+**动作**：S9 开工三项用户拍板（Q1 重定义为 GBuffer 抽取 / Q2 接受 BLAS 粗代理差异并留痕 / Q3 参考图只算直光一跳）写回 `docs/s9/S9-PLAN.md`，`UE-DIFFS.md` 新增 D19；M9.0 第一铲 = `renderer/shaders/gbuffer_common.slangh`（PURE MOVE，0 处资源声明）+ `material.slang` 内联反解 55 行改一次函数调用（-54/+11，表达式逐字搬移）+ `CMakeLists.txt` `_GBUFFER_COMMON` 显式依赖（防改公共头不重编的假绿）。用户 17:2x 点名「架构判定没拍板就开工」→ **冻结独立 GBuffer 落盘**，补决策前置功课：定向实读 Carrot `direct-base.slang` / `direct-raytracing.slang` / `gbuffer_output.glsl` / `gbuffer_input.glsl` / `modules/gbuffer.slang`、bevy `visibility_buffer_resolve.wesl` / `gbuffer_utils.wesl` / `bindings.wesl` / `deferred/functions.wesl`、UE `SceneTextures.h` / `SceneTextures.cpp` / `GBufferInfo.h` / `LumenSceneDirectLightingHardwareRayTracing.usf`（只读未抄）+ 本项目 `SHADER-CONVENTIONS.md` §2.5/§2.7/§2.15/§2.16、s8-done 台账、`MEMORY.md`；产出 `docs/s9/Q4-GBUFFER-OPTIONS.md`（三处证据 + 历史约定 + A/B/C 三方案代价矩阵，待拍板）。按用户要求把「开工闸」写进 `AGENTS.md` 决策前置节与里程碑交付纪律第 10 条。
+
+**提交版本**：本阶段性 commit（**无 tag、无 example 版本卡、`wt_pool.py close` 硬闸未放行**；M9.0 待 Q4 拍板 + 范围确认 + `--mode shadow` 无阴影版验收后才收官）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + `viewer --selftest` 16/16 ×2 + Slang 单源 64/64（`material.psmatresolve.spv 17188B` / `.dxil 14884B` 重编）；删 `build/DX12/viewer.exe` 强制重链过 exe 新鲜度闸后，`--only` 逐条跑 `s7.2/pulling`、`pbr-direct/pbr`、`pbr-direct/textured`、`s8.2/rt-dist` = **8/8 `bytes`、near 0 / FAIL 0**（报告 `build/regression/m9-spot-*.md`）。`psMatResolve` 字节码因内联改函数调用 DIFF（VS 两目标逐字节不变），但画面逐字节保形 → 纯搬移策略成立。未跑全量回归。Q4 仍标「待拍板」，独立 GBuffer 落盘 **0 行**（冻结面机器核查 0 命中）。
+
+**踩坑情况**
+1. **架构判定留「待拍板」就开工（本轮用户点名）**：Q1 只拍「GBuffer 抽取 + 公共反解头」，助手自行把「新增独立 GBuffer 落盘」写进任务书第 3 条并标待拍板——第一行 RT/UAV/槽位就会把决策隐式拍死，S10/S12/S15 消费端返工最贵。已写进 `AGENTS.md` 开工闸防重犯。
+2. **NMake 未重链 → 回归闸拒绝**：本轮只改 shader/CMake/文档，DX12 `viewer.exe` mtime 落后 `material.slang` 约 37 分钟，`tools/regression.py` exe 新鲜度门禁会 exit 2；删 exe 强制重链解决。VULKAN 因 `core/camera_*.cpp` 重编连带重链所以是新的——两后端不对称，别只看一个。
+3. **三处参考口径不一致**：Carrot 7 张 MRT、bevy meshlet 不落盘 / solari 单张 packed uint4、UE GBuffer ≤8 槽 MRT 而 **Lumen HWRT 直光根本不读屏幕 GBuffer**（读 Surface Cache atlas 的 WorldPosition/WorldNormal）。不摆证据直接选形态 = 擅做决定。
+4. **行尾**：`material.slang` / `CMakeLists.txt` / `AGENTS.md` / `UE-DIFFS.md` / `MILESTONES.md` 为 CRLF，改它们一律 Python 二进制 patch；`docs/s9/S9-PLAN.md` 与新建 `Q4-GBUFFER-OPTIONS.md` 为 LF（与原版一致）。
+
+**下一步**：等用户拍板 Q4（A 不落盘 / B 单张 packed `RGBA32_UINT` / C 精简 MRT 2~3 张 float）→ 结论写回 S9-PLAN Q4 行 + 删任务书第 3 条挂账句 → 固化绑定布局进 `SHADER-CONVENTIONS.md` → 才允许写第一行 RT/UAV/槽位 → M9.0 收口（example 卡 + `server.py --check` + 四栏收官条 + close 闸 + tag `s9-gbuffer`）。M9.1 `--mode shadow`、M9.2 `--mode reference` 依次推进。

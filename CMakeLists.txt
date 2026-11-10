@@ -340,6 +340,8 @@ set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fr
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
+# M9.0 (S9): GBuffer 反解公共头（material.slang include；S9.1/S10/S12 复用）
+set(_GBUFFER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/gbuffer_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
 set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "visbuf.vsvisviz" "visbuf.psvisviz"
@@ -391,8 +393,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         endif()
         # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
-        if(_SRC_NAME STREQUAL "visbuf" OR _SRC_NAME STREQUAL "material")
+        if(_SRC_NAME STREQUAL "visbuf")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+        elseif(_SRC_NAME STREQUAL "material")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
         endif()

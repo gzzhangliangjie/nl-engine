@@ -1,0 +1,142 @@
+// M9.0 (S9): GBuffer geometry resolve — SINGLE SOURCE OF TRUTH for vis buffer
+// attribute interpolation + depth-based world position reconstruction.
+//
+// Why this header exists (S9-PLAN M9.0 重定义，2026-11-10 用户拍板):
+//   M7.1 put the vis buffer resolve math inline in material.slang::psMatResolve;
+//   M8.2 put a second, slightly different unprojection in rt.slang::csRt.
+//   S9.1 (shadow rays), S10 (screen probes) and S12 (temporal filter) all need
+//   the same worldPos / normal / uv / derivatives contract. S9-PLAN 底线:
+//   "GBuffer 反解函数进公共头：S10/S12 全靠它".
+//
+// Scope of this first slice: PURE MOVE. The body below is a verbatim copy of
+// material.slang lines 191-244 (M7.1/M7.2) — same local array names, same
+// statement order, same expressions, no branch / lerp / algebraic rewrite.
+// M-PT2/PT3 保形铁律: dxc may fuse a "math identity" into FMA and shift pixels
+// by 1 LSB, so the only safe refactor is literal relocation. Acceptance =
+// S7 / pbr-direct / s8.2 spot baselines bytes-identical on both backends.
+//
+// Resource-free by design: callers own their bindings (§2.7 每管线单一
+// BindingSet). This header only takes already-fetched vertex attributes and
+// matrices by value, mirroring bevy's split between resolve_vertex_output()
+// (resource reads) and compute_partial_derivatives() (pure math).
+//
+// .slangh suffix keeps the *.slang GLOB in CMakeLists.txt from treating this
+// as a standalone shader source; it is only ever #include'd.
+#ifndef NL_GBUFFER_COMMON_SLANGH
+#define NL_GBUFFER_COMMON_SLANGH
+
+struct GBufGeometry
+{
+    float3 worldPos;
+    float3 normal;
+    float2 uv;
+    float2 ddxUv;
+    float2 ddyUv;
+};
+
+// Perspective-correct interpolation of a vis-buffer triangle.
+// Inputs match material.slang::psMatResolve exactly:
+//   pos/nrm/uv = the three pulled vertices (8 float/vertex layout),
+//   mvp        = g_mvp (view-projection * model, column-major),
+//   model      = g_model (object -> world),
+//   fragPos    = SV_Position.xy (pixel coords, y-down),
+//   width/height = viewport size as float.
+GBufGeometry gbInterpolateVisTriangle(
+    float3 inPos0, float3 inPos1, float3 inPos2,
+    float3 inNrm0, float3 inNrm1, float3 inNrm2,
+    float2 inUv0,  float2 inUv1,  float2 inUv2,
+    float4x4 g_mvp, float4x4 g_model,
+    float2 fragPos, float inWidth, float inHeight)
+{
+    // Same uint locals as psMatResolve (not float): `s[i] * width` must keep
+    // the identical uint->float conversion in the emitted IR.
+    const uint width  = uint(inWidth);
+    const uint height = uint(inHeight);
+
+    // Verbatim locals: keeping the original names makes the body below a
+    // literal copy of psMatResolve (only the buffer fetches moved out).
+    float3 pos[3]; float3 nrm[3]; float2 uv[3];
+    pos[0] = inPos0; pos[1] = inPos1; pos[2] = inPos2;
+    nrm[0] = inNrm0; nrm[1] = inNrm1; nrm[2] = inNrm2;
+    uv[0]  = inUv0;  uv[1]  = inUv1;  uv[2]  = inUv2;
+
+    // 用与光栅 pass 相同的 g_mvp 重建裁剪坐标（w 一并保留，供透视正确插值）。
+    float4 clip[3];
+    clip[0] = mul(g_mvp, float4(pos[0], 1.0f));
+    clip[1] = mul(g_mvp, float4(pos[1], 1.0f));
+    clip[2] = mul(g_mvp, float4(pos[2], 1.0f));
+
+    // ---- The-Forge 解析式 barycentrics + 像素导数（屏幕空间，y-down）----
+    // 顶点屏幕坐标：NDC 经 viewport 变换（y 翻转，屏幕原点左上）。SV_Position.xy
+    // 已在同一直角系（像素，y-down），故片元位置直接取 fragPos.xy，无需再变换。
+    float w[3];
+    float2 s[3];
+    for (uint i = 0u; i < 3u; ++i) {
+        w[i] = 1.0f / clip[i].w;
+        const float2 ndc = clip[i].xy * w[i];
+        s[i] = float2((ndc.x * 0.5f + 0.5f) * width,
+                      (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+    }
+    const float2 f = fragPos.xy;
+    const float area = (s[1].x - s[0].x) * (s[2].y - s[0].y)
+                     - (s[2].x - s[0].x) * (s[1].y - s[0].y);
+
+    // 屏幕空间 barycentrics（sum = 1）。
+    const float b1 = ((f.x - s[0].x) * (s[2].y - s[0].y) - (s[2].x - s[0].x) * (f.y - s[0].y)) / area;
+    const float b2 = ((f.x - s[1].x) * (s[0].y - s[1].y) - (s[0].x - s[1].x) * (f.y - s[1].y)) / area;
+    const float b0 = 1.0f - b1 - b2;
+
+    // 屏幕空间 barycentrics 的每像素导数。
+    const float db1_dx =  (s[2].y - s[0].y) / area;
+    const float db1_dy = -(s[2].x - s[0].x) / area;
+    const float db2_dx =  (s[0].y - s[1].y) / area;
+    const float db2_dy = -(s[0].x - s[1].x) / area;
+    const float db0_dx = -(db1_dx + db2_dx);
+    const float db0_dy = -(db1_dy + db2_dy);
+
+    // 透视正确插值：attr = (Σ b_i/w_i · attr_i) / (Σ b_i/w_i)。
+    const float invW   = b0 / w[0] + b1 / w[1] + b2 / w[2];
+    const float3 bcw   = float3(b0 / w[0], b1 / w[1], b2 / w[2]);
+
+    float3 wp[3], wn[3];
+    for (uint j = 0u; j < 3u; ++j) {
+        wp[j] = mul(g_model, float4(pos[j], 1.0f)).xyz;
+        wn[j] = mul((float3x3)g_model, nrm[j]);
+    }
+    const float3 worldPos = (bcw.x * wp[0] + bcw.y * wp[1] + bcw.z * wp[2]) / invW;
+    const float3 normal   = normalize((bcw.x * wn[0] + bcw.y * wn[1] + bcw.z * wn[2]) / invW);
+    const float2 uvF      = (bcw.x * uv[0]  + bcw.y * uv[1]  + bcw.z * uv[2])  / invW;
+
+    // uv 的透视正确像素导数（materialId 单材质时不参与选纹理，但导数用于 SampleGrad）。
+    const float dInvW_dx = db0_dx / w[0] + db1_dx / w[1] + db2_dx / w[2];
+    const float dInvW_dy = db0_dy / w[0] + db1_dy / w[1] + db2_dy / w[2];
+    const float2 duv_dx = ((db0_dx / w[0]) * uv[0] + (db1_dx / w[1]) * uv[1] + (db2_dx / w[2]) * uv[2]) / invW
+                        - uvF * (dInvW_dx / invW);
+    const float2 duv_dy = ((db0_dy / w[0]) * uv[0] + (db1_dy / w[1]) * uv[1] + (db2_dy / w[2]) * uv[2]) / invW
+                        - uvF * (dInvW_dy / invW);
+
+    GBufGeometry o;
+    o.worldPos = worldPos;
+    o.normal   = normal;
+    o.uv       = uvF;
+    o.ddxUv    = duv_dx;
+    o.ddyUv    = duv_dy;
+    return o;
+}
+
+// Depth -> world position, for the future standalone GBuffer path (S10/S12).
+// Same perspectiveZO convention as rt.slang::csRt (ndc z=0 near, z=1 far) and
+// bevy solari/gbuffer_utils.wesl::reconstruct_world_position. invViewProj is
+// CPU-side inverseMat4 (nl/math/math.hpp, Mesa gluInvertMatrix expansion).
+// NOTE: no runtime consumer yet in M9.0 — included here so the contract is
+// compiled/checked on both targets; S10 is the first real consumer.
+float3 gbReconstructWorldPos(uint2 pixel, float deviceZ, float2 size,
+                             float4x4 invViewProj)
+{
+    float2 uv  = (float2(pixel) + 0.5f) / size;
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 h   = mul(invViewProj, float4(ndc, deviceZ, 1.0f));
+    return h.xyz / h.w;
+}
+
+#endif // NL_GBUFFER_COMMON_SLANGH
