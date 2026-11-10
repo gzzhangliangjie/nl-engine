@@ -110,6 +110,14 @@ TRACKS = {
                 ".workbuddy + slang dist, skip-worktree set); E-prefix rejected "
                 "to avoid ECS M-E0~E3 collision",
     },
+    "camera": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-camera",
+        "branch": "feat/camera", "state": "active",
+        "note": "A-class track opened 2026-11-10 (game-dev step 4 camera family; plan "
+                "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM3; wt built at master 1acd491, "
+                "junctions .workbuddy + slang dist, skip-worktree set; CAM1~CAM3 "
+                "serial after drive M-D3)",
+    },
     "input": {
         "wt": "E:/UE_STUDY_2026/nl-engine-input",
         "branch": "feat/input", "state": "active",
