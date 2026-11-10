@@ -103,6 +103,7 @@
    - **默认不跑回归**。改了什么就只跑受影响的几条关键用例：`python tools/regression.py --only <版本>[/用例]`（可叠加 `--backend` 单后端）挑 2~3 条即可。
    - **全量总闸（双后端 × 全部历史用例）只在打 tag 收口放行时跑一次**（M0.9 起生效，用 `--jobs N` 默认 4 提速）。除此之外任何场景——包括「验证 regression 工具本身的改动」——**禁止起全量**，一律小子集验证。
    - 并行口径：用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
+4b. **ctest 单测命令统一带 `--repeat until-pass:3`（2026-11-10 实锤固化）**：便携 cmake 3.31.6 的 ctest 对 0.07s 级快进程**随机丢全部 stdout**（竞态特征：`Required regular expression not found` + `<end of output>` + 时长正常），挂时**产物文件已写出**（进程实际跑完，纯 ctest 捕获竞态，python subprocess 直拉同命令 100/100 全过实锤）。凡 ctest 报 missing anchor / 空输出失败，先带 `--repeat until-pass:3` 重跑再定性——竞态重试即绿，**真回归稳定挂重试后仍挂，不会被此闸掩盖**。判别两族用 python 直拉对照：直拉也挂 = 真秒退（0xC0000409 族），直拉全过 = ctest 竞态。
 5. **每个小里程碑本地提交一波 + 打 tag**：`docs/MILESTONES.md` 四栏（动作 / 提交版本 / 完成情况 / 踩坑）写实追加，不许只写「done」。
    5b. **大版本里程碑收官必须留分支记录（2026-11-09 用户拍板）**：主工程每个大版本（S* 收官）打完 tag 后，必须**在同一 commit 上建 `milestone/<tag名>` 分支**（如 `milestone/s6-done`），与 tag 一并推远端（无 remote 时先建本地，配好远端后补推），推完用 `git ls-remote` 确认分支与 tag 都到了远端。并行轨道（feat/*）的 tag 不在此列。历史上 s0-done~s6-done 已于 2026-11-09 补建。
 6. **固化文档**：本阶段新产生的约定、不变量、口径变更，必须写回 canonical 文档（`docs/s*/S*-PLAN.md`、`docs/ROADMAP.md`、`docs/MILESTONES.md`、或 `.workbuddy/memory/MEMORY.md`），不许只活在 commit message 或口头里。
