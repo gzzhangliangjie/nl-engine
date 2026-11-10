@@ -33,6 +33,9 @@ endif()
 message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no network)")
 
 set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
+# 仓库根绝对路径：子目录 CMakeLists 里引用 assets/ 等根级路径统一用它
+# （2026-11-10 工具 target 拆分后，子目录的 CMAKE_CURRENT_SOURCE_DIR 不再是仓库根）
+set(NL_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---- Taskflow v3.11.0（MIT / header-only / C++17）：M-J5a 显式依赖 DAG ----
 # 选型闸与风险核查见 thirdparty/taskflow/VENDOR.md；cuda/ 未入库，无 CUDA 依赖。
@@ -406,363 +409,36 @@ add_custom_target(nl_shaders ALL DEPENDS ${_SHADER_ARTIFACTS})
 # renderer 按编译期注入的 NL_SHADER_DIR 绝对路径读取字节码，不依赖 CWD
 target_compile_definitions(nl_renderer PRIVATE NL_SHADER_DIR="${_SHADER_OUT}")
 
-# ---- viewer：可见用例 + 程序内截图（--screenshot） ----
-add_executable(viewer viewer/main.cpp)
-target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw)
-# shader 字节码先于 viewer 生成（viewer 运行时要读 NL_SHADER_DIR 下的 .spv/.dxil）
-add_dependencies(viewer nl_shaders)
-
-# ---- M1.0：nanite-tools —— S1 离线网格工具（cluster / simplify / dag / stat） ----
-# 只链 nl_core（日志 + mesh_io），零图形 API；不依赖 renderer / viewer。
-# M2.1：另链 meshoptimizer —— 仅 simplify 子命令的对照 oracle（打印对照行），
-# core 自身不依赖 meshopt；viewer 不链它。
-add_executable(nanite-tools nanite-tools/main.cpp)
-target_link_libraries(nanite-tools PRIVATE nl_core meshoptimizer)
-
-# ---- M-A1：anim-tools —— 动作系统（A 类并行轨道）自测工具，只链 nl_core ----
-# 退出码约定：0=PASS / 1=断言失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
-add_executable(anim-tools anim-tools/main.cpp)
-target_link_libraries(anim-tools PRIVATE nl_core)
-
-# ---- B 路材质图工具（A 类轨道，工具版交代）----
-# 第 2 步种子：节点图数据模型 + 稳定序列化。只链 nl_core（日志），零图形 API。
-add_executable(material-graph-tools material-graph-tools/main.cpp)
-target_link_libraries(material-graph-tools PRIVATE nl_core)
-
-# ---- M-E0：nanite-scene —— ECS-lite 场景（nl/scene）自测工具，A 类并行轨道 ----
-# 退出码约定：0=PASS / 1=断言失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
-add_executable(nanite-scene nanite-scene/main.cpp)
-target_link_libraries(nanite-scene PRIVATE nl_core)
-
-# ---- M-SC0：nl-script —— C# hosting（nl/script）自测工具，A 类并行轨道 ----
-# 退出码约定：0=PASS / 1=断言失败或脚本运行失败 / 2=用法错误（与展示台 expectExit 0/1/2 对齐）。
-# nethost.dll 运行期紧挨 exe（官方 hosting 样例布局：链 libnethost 导入库 + copy dll）。
-add_executable(nl-script nl-script/main.cpp)
-target_link_libraries(nl-script PRIVATE nl_core)
-add_custom_command(TARGET nl-script POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${THIRDPARTY}/dotnet-hosting/bin/nethost.dll $<TARGET_FILE_DIR:nl-script>)
-
-# ---- P8 M-C0：开发者控制台工具（A 类轨道，工具版交代）----
-# core/console 纯逻辑内核的机械单测 + demo 注册表执行器（selftest / exec）。
-# 只链 nl_core，零图形 API；不依赖 renderer / viewer。
-add_executable(nanite-console nanite-console/main.cpp)
-target_link_libraries(nanite-console PRIVATE nl_core)
-
-# ---- P8 M-S0：audio-tools（A 类轨道，工具版交代）----
-# 只链 nl_core（nl/audio + nl_miniaudio），零图形 API。
-# 退出码约定：0=PASS / 1=断言或运行失败 / 2=用法错误（展示台 expectExit 0/1/2）。
-add_executable(audio-tools audio-tools/main.cpp)
-target_link_libraries(audio-tools PRIVATE nl_core)
-target_compile_definitions(audio-tools PRIVATE
-    NL_AUDIO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
-    NL_AUDIO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
-
-# ---- P8 M-P0：phys-tools —— 物理最小世界无头验收工具（A 类轨道）----
-# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 nanite-scene / 展示台 expectExit）。
-# 只链 nl_core（nl/physics PIMPL 把 Jolt 头挡在 cpp 内），零图形 API。
-add_executable(phys-tools phys-tools/main.cpp)
-target_link_libraries(phys-tools PRIVATE nl_core)
-
-# ---- P8 M-N0：nav-tools —— 寻路烘焙/查询无头验收工具（A 类轨道）----
-# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 phys-tools / 展示台 expectExit）。
-# 只链 nl_core（nl/nav PIMPL 把 Recast/Detour 头挡在 cpp 内），零图形 API。
-add_executable(nav-tools nav-tools/main.cpp)
-target_link_libraries(nav-tools PRIVATE nl_core)
-
-# ---- P8 M-GL0：gl-tools —— 游戏循环（双帧模型 GameClock）自测工具（A 类轨道）----
-# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 phys-tools / 展示台 expectExit）。
-# 只链 nl_core（nl/core GameClock 纯逻辑零依赖），零图形 API。
-add_executable(gl-tools gl-tools/main.cpp)
-target_link_libraries(gl-tools PRIVATE nl_core)
-
-# ---- P8 M-I0：input-tools —— 输入状态层无头验收工具（A 类轨道）----
-# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 phys-tools / 展示台 expectExit）。
-# 只链 nl_core，注入路径（无窗口）跑全部数值锚；零图形 API。
-# glfw 链接说明：input.hpp 公开 API 里用 GLFW 键码常量（P8-INPUT-PLAN §3 口径），
-# 与 nl_renderer 链 glfw 的理由同款（console_ui.cpp 吃键值常量）。
-add_executable(input-tools input-tools/main.cpp)
-target_link_libraries(input-tools PRIVATE nl_core glfw)
-
+# ---- viewer 与全部工具：target 定义拆到各自目录的 CMakeLists.txt（2026-11-10）----
+# 目的：并行轨道加工具 / 加 ctest 用例不再改根文件（追加冲突源根治）。
+# 新轨道加工具 = 新建 <dir>/main.cpp + <dir>/CMakeLists.txt（照抄任一现役工具的骨架）
+# + 下面清单加一行 add_subdirectory(<dir>)。
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools nav-tools gl-tools input-tools)
-        target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
-        target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
-    endforeach()
+    target_compile_options(nl_core PRIVATE /W4 /permissive- /utf-8 /bigobj)
+    target_compile_definitions(nl_core PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(nl_renderer PRIVATE /W4 /permissive- /utf-8 /bigobj)
 endif()
 
-# 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
+# exe / dll 统一输出到顶层 build/<backend>/：cases.json 的 exe 路径与
+# scripts/build-m0.2.bat 的 selftest 都依赖这个布局（target 进子目录后
+# 默认会落到 build/<backend>/<dir>/，必须显式钉回去）。
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+# enable_testing 必须先于 add_subdirectory：目录属性在 add_subdirectory 时拷贝，
+# 后调用不会传播进子目录。
 enable_testing()
-add_test(NAME m0.5-selftest COMMAND viewer --selftest)
-# M1.0：nanite-tools 对官方 Suzanne 资产的机械验收（顶点 / 三角 / 子网格数）
-add_test(NAME s1-tools-stat
-         COMMAND nanite-tools stat ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
-set_tests_properties(s1-tools-stat PROPERTIES
-    PASS_REGULAR_EXPRESSION "triangles : 3936")
-# M1.1：切簇算法机械单测（覆盖率 / 128 tri 与 64 vert 上限 / bounds 合理性 / 负向输入）
-add_test(NAME s1-cluster-selftest COMMAND nanite-tools selftest cluster)
-# P8 M-C0：core/console 纯逻辑内核机械单测（A 类轨道，无渲染依赖）
-add_test(NAME p8-console-selftest COMMAND nanite-console selftest)
-set_tests_properties(s1-cluster-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "cluster selftest: PASS")
-# M1.1：真实资产切簇验收（覆盖率 100% + limits PASS）
-add_test(NAME s1-cluster-suzanne
-         COMMAND nanite-tools cluster ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
-set_tests_properties(s1-cluster-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "limits     : PASS")
-# M1.2：.nmesh roundtrip 单测（字段一致 + 逐字节重写一致 + 坏 magic / 截断拒绝）
-add_test(NAME s1-nmesh-roundtrip COMMAND nanite-tools selftest nmesh)
-set_tests_properties(s1-nmesh-roundtrip PROPERTIES
-    PASS_REGULAR_EXPRESSION "nmesh selftest: PASS")
-# M1.2：真实资产写盘 → stat 读回（-cluster -o 与 .nmesh stat 的端到端验收）
-add_test(NAME s1-nmesh-suzanne
-         COMMAND nanite-tools cluster ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb
-                 -o ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
-set_tests_properties(s1-nmesh-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "saved      :")
-# M2.0：聚组算法机械单测（覆盖连续 / 组号连续 / 组内连通交叉验证 / 断连块不跨组 / 负向）
-add_test(NAME s2-group-selftest COMMAND nanite-tools selftest group)
-set_tests_properties(s2-group-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "group selftest: PASS")
-# M2.0：真实资产聚组验收（Suzanne.nmesh 由 s1-nmesh-suzanne 先写出；依赖同目录测试顺序）
-add_test(NAME s2-group-suzanne
-         COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh)
-set_tests_properties(s2-group-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "connectivity: PASS"
-    DEPENDS s1-nmesh-suzanne)
-# M2.1：QEM 简化 + 边界锁定机械单测（边界点集合交叉验证 / 边界点逐点位级不变 /
-# 接缝边双侧存活 / 简化率 / 确定性重跑 / 负向拒绝）
-add_test(NAME s2-qem-selftest COMMAND nanite-tools selftest qem)
-set_tests_properties(s2-qem-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "qem selftest: PASS")
-# M2.1：真实资产 QEM 简化验收（Suzanne 3936 tri → ~50%，边界锁定 + meshopt oracle 对照）
-add_test(NAME s2-qem-suzanne
-         COMMAND nanite-tools simplify ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh -v)
-set_tests_properties(s2-qem-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "oracle      : meshopt LockBorder"
-    DEPENDS s1-nmesh-suzanne)
-# M2.2：逐层 LOD 循环机械单测（每层边界独立重算 / 约减半 / parent error 单调 / 簇上限 / v1-v2 资产兼容 / 确定性）
-add_test(NAME s2-loop-selftest COMMAND nanite-tools selftest loop)
-set_tests_properties(s2-loop-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "loop selftest: PASS")
-# M2.2：真实资产逐层落盘（L0..LN，每层 .nmesh v2 带 lockedPositions）
-add_test(NAME s2-loop-suzanne
-         COMMAND nanite-tools lod ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh
-                 -o ${CMAKE_CURRENT_BINARY_DIR}/lod-suzanne --max-levels 6)
-set_tests_properties(s2-loop-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "lod files   : "
-    DEPENDS s1-nmesh-suzanne)
-# M3.0：DAG 血缘机械单测（全链不变量 / 顶层 terminal / 按组重切产出 / v3 roundtrip / 篡改检测）
-add_test(NAME s3-dag-selftest COMMAND nanite-tools selftest dag)
-set_tests_properties(s3-dag-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "dag selftest: PASS")
-# M3.0：真实资产 DAG 装配 + 校验（每父簇恰一生成组 / error 链逐位精确 / 无环）
-add_test(NAME s3-dag-suzanne
-         COMMAND nanite-tools dag ${CMAKE_CURRENT_BINARY_DIR}/lod-suzanne)
-set_tests_properties(s3-dag-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "dag         : OK"
-    DEPENDS s2-loop-suzanne)
 
-# M3.1：fallback 拼接自检（weld 收敛、三角守恒、边流形 ≤2、v3 roundtrip）
-add_test(NAME s3-fallback-selftest COMMAND nanite-tools selftest fallback)
-set_tests_properties(s3-fallback-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "fallback selftest: PASS")
-
-# M3.1：真实资产 fallback 落盘（写进 lod0 尾段，输入文件不动）
-add_test(NAME s3-fallback-suzanne
-         COMMAND nanite-tools lod ${CMAKE_CURRENT_BINARY_DIR}/Suzanne.nmesh
-                 -o ${CMAKE_CURRENT_BINARY_DIR}/fb-suzanne --max-levels 6)
-set_tests_properties(s3-fallback-suzanne PROPERTIES
-    PASS_REGULAR_EXPRESSION "fallback    : "
-    DEPENDS s1-nmesh-suzanne)
-
-# ---- M-A 轨道（A 类并行：动作系统，工具版交代，不进渲染回归总闸） ----
-# M-A1：关键帧采样机械单测（lerp/slerp 锚点、clamp、Step、常量、wrap、validate 负向、确定性）
-add_test(NAME ma1-anim-curve-selftest COMMAND anim-tools selftest curve)
-set_tests_properties(ma1-anim-curve-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim curve selftest: PASS")
-# M-A1：负向——未知 selftest 用例显式拒绝（exit 2）
-add_test(NAME ma1-anim-unknown-case COMMAND anim-tools selftest bogus)
-set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
-# P8 M-I0：输入状态层机械单测（边沿三态 / 组合 / REPEAT / 鼠标 / 越界 / mods / 确定性）
-add_test(NAME mi0-input-selftest COMMAND input-tools selftest)
-add_test(NAME mi0-input-usage-negative COMMAND input-tools selftest bogus)
-set_tests_properties(mi0-input-usage-negative PROPERTIES WILL_FAIL TRUE)
-# P8 M-I1：映射层机械单测（Carrot 解析规则 / 组开关冻结 / 序列确定性）
-add_test(NAME mi1-input-actions-selftest COMMAND input-tools selftest actions)
-add_test(NAME mi1-input-actions-det-selftest COMMAND input-tools selftest actions-det)
-# M-A2：线性/加法混合机械单测（lerp 锚点 w=0/0.5/1、加法 quat 相对叠加语义、骨架不一致拒绝）
-add_test(NAME ma2-anim-blend-selftest COMMAND anim-tools selftest blend)
-set_tests_properties(ma2-anim-blend-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim blend selftest: PASS")
-# M-A3：状态机机械单测（优先级取首个、crossfade 权重曲线、UE 回退缩时+姿态连续、
-# 10 步确定性场景逐值断言、validate 负向、两次运行一致）
-add_test(NAME ma3-anim-statemachine-selftest COMMAND anim-tools selftest statemachine)
-set_tests_properties(ma3-anim-statemachine-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim statemachine selftest: PASS")
-# M-A4：1D blend space 机械单测（段权重锚点、域外 clamp、单 sample 退化、
-# validate 负向、参数域扫掠两次运行逐位一致）
-add_test(NAME ma4-anim-blendspace-selftest COMMAND anim-tools selftest blendspace)
-set_tests_properties(ma4-anim-blendspace-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim blendspace selftest: PASS")
-# M-A4b：骨架 FK + rigged glTF 入口机械单测（FK 手算锚点、sway t=0.5 世界位置、
-# wrap 循环、两次加载逐位一致、缺文件/scale/拓扑序负向）
-add_test(NAME ma4b-anim-skeleton-selftest
-         COMMAND anim-tools selftest skeleton
-                 ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/RiggedChain.glb)
-set_tests_properties(ma4b-anim-skeleton-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim skeleton selftest: PASS")
-
-# ---- M-A5：蒙皮确定性自测（刚体/LBS 手算锚点 + CesiumMan rest 调色板≈identity）----
-add_test(NAME ma5-anim-skinning-selftest
-         COMMAND anim-tools selftest skinning
-                 ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/rigged/CesiumMan.glb)
-set_tests_properties(ma5-anim-skinning-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "anim skinning selftest: PASS")
-
-# ---- B 路材质图：节点图数据模型 + 序列化机械单测（A 类轨道第 2 步验收）----
-# 不进渲染回归总闸（bytes/near），走工具版交代。
-add_test(NAME b2-graph-selftest COMMAND material-graph-tools selftest)
-set_tests_properties(b2-graph-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "material-graph selftest: PASS")
-
-# ---- B 路材质图 B3：图 -> Slang 代码生成 + 双后端编译验收（A 类轨道）----
-# 走工具版交代：emit 示例图 -> slangc 编译 SPIR-V + DXIL 各 vs/ps 入口。
-add_test(NAME b3-graph-genslang COMMAND material-graph-tools check)
-set_tests_properties(b3-graph-genslang PROPERTIES
-    PASS_REGULAR_EXPRESSION "genslang   : OK"
-    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
-
-# ---- B 路材质图 B4：热重载（改图即重编译）----
-# watch --once 对 fixture 图做单次 recompile（emit + 双后端编译），验收热重载链路本身；
-# 与 check 同源，只是走 watch 的加载 + 轮询首轮路径。不进渲染总闸，走工具版交代。
-add_test(NAME b4-graph-hot-reload
-         COMMAND material-graph-tools watch
-                 ${CMAKE_CURRENT_SOURCE_DIR}/material-graph-tools/sample.mg --once)
-set_tests_properties(b4-graph-hot-reload PROPERTIES
-    PASS_REGULAR_EXPRESSION "OK"
-    DEPENDS b3-graph-genslang
-    ENVIRONMENT "NL_SLANG_BIN=${NL_SLANG_BIN};NL_DXC_DIR=${NL_DXC_DIR}")
-
-# ---- M-E0：ECS-lite World/Entity 核心机械单测（A 类轨道，P8-ECS-PLAN.md 判据）----
-# 不进渲染回归总闸（bytes/near），走工具版交代。
-add_test(NAME e0-ecs-core-selftest COMMAND nanite-scene selftest --suite ecs-core)
-set_tests_properties(e0-ecs-core-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "ecs-core selftest: PASS")
-# 负向：未知 suite = 用法错误退出码 2
-add_test(NAME e0-ecs-unknown-suite COMMAND nanite-scene selftest --suite bogus)
-set_tests_properties(e0-ecs-unknown-suite PROPERTIES WILL_FAIL TRUE)
-
-# ---- M-E1：组件 + 层级机械单测（数值锚 = 手算对照，P8-ECS-PLAN.md 判据）----
-add_test(NAME e1-ecs-hier-selftest COMMAND nanite-scene selftest --suite ecs-hier)
-set_tests_properties(e1-ecs-hier-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "ecs-hier selftest: PASS")
-
-# ---- M-E2：System + 场景 roundtrip（P8-ECS-PLAN.md 判据）----
-add_test(NAME e2-ecs-system-selftest COMMAND nanite-scene selftest --suite ecs-system)
-set_tests_properties(e2-ecs-system-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "ecs-system selftest: PASS")
-add_test(NAME e2-ecs-serial-selftest COMMAND nanite-scene selftest --suite ecs-serial)
-set_tests_properties(e2-ecs-serial-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "ecs-serial selftest: PASS")
-# 负向：非法 JSON / 未知组件名 = 显式退出码 2（M-E2 判据原样落地）
-add_test(NAME e2-ecs-badjson-exit2 COMMAND nanite-scene deserialise-check badjson)
-set_tests_properties(e2-ecs-badjson-exit2 PROPERTIES
-    PASS_REGULAR_EXPRESSION "rejected")
-add_test(NAME e2-ecs-unknown-comp-exit2 COMMAND nanite-scene deserialise-check unknown)
-set_tests_properties(e2-ecs-unknown-comp-exit2 PROPERTIES
-    PASS_REGULAR_EXPRESSION "rejected")
-add_test(NAME e2-ecs-good-scene COMMAND nanite-scene deserialise-check good)
-set_tests_properties(e2-ecs-good-scene PROPERTIES
-    PASS_REGULAR_EXPRESSION "PASS")
-
-# ---- P8 M-S0：音频离线渲染确定性机械单测（A 类轨道，工具版交代）----
-# 不进渲染回归总闸；判据 = 两次独立 noDevice 渲染逐样本位级一致 +
-# provenance 篡改显式拒绝（防假绿，照 phys-tools check 教训）。
-add_test(NAME s0-audio-selftest COMMAND audio-tools selftest)
-set_tests_properties(s0-audio-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "audio selftest: PASS")
-
-# ---- P8 M-P0：物理最小世界（A 类工具版验收，零渲染依赖）----
-add_test(NAME p0-phys-selftest COMMAND phys-tools selftest)
-set_tests_properties(p0-phys-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "phys-p0 selftest: PASS")
-add_test(NAME p0-phys-drop COMMAND phys-tools simulate --frames 240)
-set_tests_properties(p0-phys-drop PROPERTIES
-    PASS_REGULAR_EXPRESSION "nl-physics M-P0 drop trajectory")
-add_test(NAME p0-phys-bad-config COMMAND phys-tools simulate --restitution 1.5)
-set_tests_properties(p0-phys-bad-config PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-P1：碰撞层矩阵 + 体关联（A 类工具版验收）----
-add_test(NAME p1-phys-layers COMMAND phys-tools layers --frames 180)
-set_tests_properties(p1-phys-layers PROPERTIES
-    PASS_REGULAR_EXPRESSION "nl-physics M-P1 collision layer matrix probe")
-add_test(NAME p1-phys-negative COMMAND phys-tools layers --frames 0)
-set_tests_properties(p1-phys-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-P2：堆叠稳定 / 休眠岛（A 类工具版验收）----
-add_test(NAME p2-phys-stack COMMAND phys-tools stack --frames 180)
-set_tests_properties(p2-phys-stack PROPERTIES
-    PASS_REGULAR_EXPRESSION "nl-physics M-P2 stacking stability")
-add_test(NAME p2-phys-negative COMMAND phys-tools stack --frames 0)
-set_tests_properties(p2-phys-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-P3：碰撞形状调试线框流（A 类工具版验收，Jolt DebugRenderer 直出）----
-add_test(NAME p3-phys-debug COMMAND phys-tools debug --frames 240
-         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
-set_tests_properties(p3-phys-debug PROPERTIES
-    PASS_REGULAR_EXPRESSION "wrote .*phys-p3-debug\\.tsv")
-add_test(NAME p3-phys-debug-check
-         COMMAND phys-tools check-debug ${CMAKE_CURRENT_BINARY_DIR}/phys-p3-debug.tsv)
-set_tests_properties(p3-phys-debug-check PROPERTIES
-    DEPENDS p3-phys-debug
-    PASS_REGULAR_EXPRESSION "phys-p3 check-debug: PASS")
-add_test(NAME p3-phys-negative COMMAND phys-tools debug --frames 0)
-set_tests_properties(p3-phys-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-P4：角色走查（CharacterVirtual，CharacterMovement 式扫掠/地面检测/斜坡台阶）----
-add_test(NAME p4-phys-character COMMAND phys-tools character --frames 1200
-         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
-set_tests_properties(p4-phys-character PROPERTIES
-    PASS_REGULAR_EXPRESSION "wrote .*phys-p4-character\\.tsv")
-add_test(NAME p4-phys-character-check
-         COMMAND phys-tools check-character ${CMAKE_CURRENT_BINARY_DIR}/phys-p4-character.tsv)
-set_tests_properties(p4-phys-character-check PROPERTIES
-    DEPENDS p4-phys-character
-    PASS_REGULAR_EXPRESSION "phys-p4 check-character: PASS")
-add_test(NAME p4-phys-negative COMMAND phys-tools character --frames 0)
-set_tests_properties(p4-phys-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-J5c: Jolt JobSystem adapter (pool-backed parallel physics) ----
-add_test(NAME p-j5c-check COMMAND phys-tools check-jobs --threads 4 --frames 240)
-set_tests_properties(p-j5c-check PROPERTIES PASS_REGULAR_EXPRESSION "phys-j5c check-jobs: PASS")
-add_test(NAME p-j5c-negative COMMAND phys-tools simulate --jobs -1 --frames 240)
-set_tests_properties(p-j5c-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-N0: nav-tools (Recast/Detour bake/dump, A-class track) ----
-add_test(NAME m-n0-nav-selftest COMMAND nav-tools selftest)
-set_tests_properties(m-n0-nav-selftest PROPERTIES
-    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
-add_test(NAME m-n0-nav-bake
-         COMMAND nav-tools bake ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/HizScene.glb
-                 ${CMAKE_CURRENT_BINARY_DIR}/nav-m0-hiz.nnav
-                 --cell-size 0.1 --agent-radius 0.2)
-set_tests_properties(m-n0-nav-bake PROPERTIES
-    PASS_REGULAR_EXPRESSION "saved       :")
-add_test(NAME m-n0-nav-dump
-         COMMAND nav-tools dump ${CMAKE_CURRENT_BINARY_DIR}/nav-m0-hiz.nnav)
-set_tests_properties(m-n0-nav-dump PROPERTIES
-    DEPENDS m-n0-nav-bake
-    PASS_REGULAR_EXPRESSION "polys       : [1-9]")
-add_test(NAME m-n0-nav-negative COMMAND nav-tools dump ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/Suzanne.glb)
-set_tests_properties(m-n0-nav-negative PROPERTIES WILL_FAIL TRUE)
-
-# ---- P8 M-GL0: game loop (dual-frame GameClock) ----
-add_test(NAME gl0-selftest COMMAND gl-tools selftest)
-set_tests_properties(gl0-selftest PROPERTIES PASS_REGULAR_EXPRESSION "gl-m0 selftest: PASS")
-add_test(NAME gl0-trace COMMAND gl-tools trace --frames 240 --dt 16.7)
-set_tests_properties(gl0-trace PROPERTIES PASS_REGULAR_EXPRESSION "gl-m0 trace: PASS")
-add_test(NAME gl0-negative COMMAND gl-tools trace --dt abc)
-set_tests_properties(gl0-negative PROPERTIES WILL_FAIL TRUE)
+add_subdirectory(viewer)
+add_subdirectory(nanite-tools)
+add_subdirectory(anim-tools)
+add_subdirectory(material-graph-tools)
+add_subdirectory(nanite-scene)
+add_subdirectory(nl-script)
+add_subdirectory(nanite-console)
+add_subdirectory(audio-tools)
+add_subdirectory(phys-tools)
+add_subdirectory(nav-tools)
+add_subdirectory(gl-tools)
+add_subdirectory(input-tools)

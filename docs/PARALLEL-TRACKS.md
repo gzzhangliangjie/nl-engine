@@ -268,3 +268,25 @@ worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道�
 - **脚本树闸 `tree_gate.py`**：共享入口工具（`tools/regression.py`、`tools/showcase/server.py`、`tools/reshot-hud-s71.py`；后续同类入口照接）开头调 `gate(__file__)`——**脚本所在树 ≠ cwd 所在树 → exit 2 拒绝**。判据零误伤：主线会话主树脚本+主树 cwd 放行；wt 会话自己树的脚本+自己树 cwd 放行；其余一律拒绝。刻意例外（CI 沙箱 cwd 无关等）设 `NL_TREE_GATE_ALLOW=1`（输出 WARN 放行）。
 - **`wt_pool.py` 本身不接树闸**：它就是跨树占坑工具（锁在共享 .git），从任何树跑都是合法的。
 - **作用边界**：树闸防的是「跑错树 / 写错树」；git 层面的还原类危险操作仍按 AGENTS.md「git 危险操作闸门」节执行（status --porcelain 闸门）。
+
+## 8. 合并冲突根治机制（2026-11-10 落地）
+
+> 背景：每条 feat/* 轨道都向 `example/cases.json`（1.2 万行）尾部追加版本对象、向根 `CMakeLists.txt` 追加工具 target 与 ctest 用例——git 文本合并不懂语义，**每次 merge 这两处必撞**（gameloop / input / nav 三次合并实测）。2026-11-10 用户拍板「1+2」方案根治。
+
+### 8.1 cases.json 语义合并驱动
+
+- **机制**：`.gitattributes` 登记 `example/cases.json merge=nlcases`；仓库 `.git/config`（worktree 共享，主仓设一次全轨道生效）登记 `merge.nlcases.driver = python tools/merge-cases.py %O %A %B %L %P`。
+- **语义**：三路 JSON 合并——`versions` / `cases` 数组按 `id` 做并集（各自追加的新条目自动合并、互不冲突），字典字段级合并；只有「两边改了**同一个**对象的同一个字段且值不同」才回落手工。
+- **规范格式**：`json.dumps(indent=1, ensure_ascii=False)` + 尾部换行（驱动输出统一此格式；2026-11-10 已把 input 轨道手工追加的 3 个单行压缩条目归一化）。**手工往 cases.json 追加条目时也要用这个格式**（用 python json 库写，别手拼字符串）。
+- **自检**：`python tools/merge-cases.py --selftest`（7 合成用例：追加并集 / 字段编辑+追加 / 真冲突 / 格式差异无关 / cases 子数组 / 字符串数组 / 标量编辑）。
+- **注意**：驱动失败（exit≠0）时 git 会标冲突回落手工，此时按老办法解；解完的文件必须仍是合法 JSON。
+
+### 8.2 CMakeLists.txt 拆分
+
+- **结构**：viewer + 11 个工具 target 的 `add_executable` 与**各自的 ctest 用例**已全部拆到 `<dir>/CMakeLists.txt`；根文件只留全局设置、thirdparty、nl_core/nl_renderer、shader 编译、`add_subdirectory` 清单。
+- **新轨道加工具的三步**：建 `<dir>/main.cpp` → 建 `<dir>/CMakeLists.txt`（照抄任一现役工具骨架：add_executable + target_link_libraries + if(MSVC) 编译选项 + 自己的 add_test）→ 根文件 `add_subdirectory(<dir>)` 清单加一行。此后新工具/新用例不再进冲突面。
+- **不变量（拆分时钉下的，勿动）**：
+  - 根文件 `set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})`——exe 必须落顶层 `build/<backend>/`（cases.json exe 路径 + build-m0.2.bat selftest 依赖）；
+  - `enable_testing()` 必须在 `add_subdirectory` 清单**之前**（目录属性在 add_subdirectory 时拷贝）；
+  - 根级 `set(NL_ROOT ${CMAKE_CURRENT_SOURCE_DIR})`——子目录引用 `assets/` 等根级路径统一用 `${NL_ROOT}`（子目录里 `CMAKE_CURRENT_SOURCE_DIR` 已不是仓库根）；
+  - ctest 测试间同工具依赖（如 s2 DEPENDS s1）搬到同目录后语义不变；**跨工具的测试依赖不许新增**（拆分保证各自目录自治）。

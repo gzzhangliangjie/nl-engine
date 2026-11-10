@@ -37,3 +37,6 @@ provenance.txt   text eol=lf
 *.dll   binary
 *.exe   binary
 *.pdb   binary
+
+# ---- cases.json 语义合并驱动（2026-11-10）：并行轨道向 versions 尾部追加不再撞冲突 ----
+example/cases.json merge=nlcases

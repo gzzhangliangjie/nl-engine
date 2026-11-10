@@ -33,6 +33,7 @@
 
 ## 并行轨道易忘点（详 `docs/PARALLEL-TRACKS.md`）
 - wt_pool：开场声明编号 → claim；收口 close 硬闸 + release --done。树边界闸 `tools/tree_gate.py`：脚本树≠cwd 树 exit 2。worktree junction 只能 PowerShell 原生 API 建删；**分支保留**。python 孪生对拍防假绿（不适用并发类）。
+- **合并冲突机制（2026-11-10）**：cases.json 走 `tools/merge-cases.py` 语义驱动（.gitattributes `merge=nlcases` + 仓库 config，worktree 共享一次生效）——versions/cases 按 id 并集自动合并，真冲突才回落手工；**手工追加 cases.json 条目必须用 python json 库写规范格式（indent=1 + 尾换行），禁手拼单行**。工具 target+ctest 已拆进各自 `<dir>/CMakeLists.txt`，新工具三步：main.cpp → 照抄骨架建目录 CMakeLists → 根文件 add_subdirectory 清单加一行；根文件三条不变量（RUNTIME_OUTPUT_DIRECTORY 钉顶层 build / enable_testing 先于 add_subdirectory / 子目录引用 assets 走 `${NL_ROOT}`）见 PARALLEL-TRACKS §8.2 勿动。
 
 ## 工程纪律易忘点（详 `AGENTS.md`）
 - 收口回复第一屏=「四项自查+三要素」表格；渲染轮次主动展示证据图卡片。默认不跑全量回归（`--only` 挑 2~3 条），全量只在打 tag 收口跑一次；失败分组统计禁 `head` 截断。双后端分档 bytes/near/FAIL 禁笼统「一致」。工具 exe=`build/{DX12,VULKAN}/nanite-tools.exe`（根目录同名是废弃残留）。

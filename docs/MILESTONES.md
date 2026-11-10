@@ -2148,3 +2148,17 @@
 4. **MSVC `<cstdio>` 不经间接引入**：input_debug.cpp 用 `std::snprintf` 需显式 include（imgui.h 不带）。
 
 **下一步**：input 轨道三里程碑（M-I0/I1/I2）全部收口，能力面 = 状态层 + 映射层 + 调试可见。接下来按 GAME-DEV-ORDER 第 2 步开碰撞事件桥（Jolt ContactListener → ECS 事件，可与本轨合并跑或独立 wt）或第 3 步载具物理；游戏壳（第 5 步独立 game target）是 updateFromWindow 的启用点。merge 回 master 冲突面 = viewer/main.cpp + CMakeLists.txt（M8.1 已先收口，预期小冲突）。
+
+## 基建：cases.json 语义合并驱动 + 根 CMakeLists.txt 拆分——并行轨道合并冲突根治（master，2026-11-10，无 tag）
+
+**动作**：用户拍板「1+2」组合。① `tools/merge-cases.py` git 三路语义合并驱动（versions/cases 按 id 并集、字段级合并、真冲突回落手工；`--selftest` 7 合成用例）+ `.gitattributes` 登记 `merge=nlcases` + 仓库 config 登记 driver（worktree 共享，一次生效全轨道）+ 端到端实战验证（临时仓双轨道各追加版本 + 一边改 title → 合并零冲突、条目与编辑全保留）；顺带把 input 轨道手工追加的 3 个单行压缩版本条目归一化成规范格式（`json.dumps(indent=1)`，`server.py --check` 复验 OK）。② viewer + 11 个工具 target 的 add_executable 与各自 ctest 用例全部拆进 `<dir>/CMakeLists.txt`，根文件只留全局设置/thirdparty/nl_core/nl_renderer/shader/`add_subdirectory` 清单；钉三条不变量：`CMAKE_RUNTIME_OUTPUT_DIRECTORY` 钉回顶层 build（exe 布局 + bat selftest 依赖）、`enable_testing()` 先于 add_subdirectory、根级 `NL_ROOT` 变量供子目录引用 assets。
+
+**提交版本**：本基建 commit（无 tag，非里程碑；约定固化于 `docs/PARALLEL-TRACKS.md` §8）。
+
+**完成情况**：双后端 `build-m0.2.bat` DX12/VULKAN 配置+增量构建+selftest 16/16×2 全绿；exe 布局不变（12 个 exe 仍落 build/<backend>/ 顶层）；ctest 抽样 5 条（gl0-selftest / p0-phys-selftest / s1-tools-stat / mi0-input-selftest / e0-ecs-core-selftest）5/5 PASS；merge driver selftest 7/7 + E2E 双轨道合并 PASS；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **exe 输出路径隐形变更**：target 挪进子目录后 NMake 默认输出 `build/<backend>/<dir>/`——cases.json exe 路径与 build-m0.2.bat 的 `%BUILDDIR%\viewer.exe` 全会断。解法 = 根文件显式 `set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})`（先于 add_subdirectory 清单）。
+2. **enable_testing() 时序**：目录属性在 add_subdirectory 时拷贝，先 add_subdirectory 后 enable_testing() 则子目录 add_test 全部失效（ctest 报 "No tests found"）——必须先 enable_testing。
+3. **子目录路径语义漂移**：`CMAKE_CURRENT_SOURCE_DIR` 进子目录后不再是仓库根，`assets/`、`material-graph-tools/sample.mg` 等引用全部改走根级 `NL_ROOT`；audio-tools 的 `NL_AUDIO_ASSET_DIR` 同理。
+4. **手工编辑格式污染**：input 轨道收口时往 cases.json 手工追加的是单行压缩 JSON（合法但非规范格式），全文件 diff 面扩大——驱动统一输出规范格式 + 手工追加也须走 python json 库（已写进 PARALLEL-TRACKS §8.1）。
