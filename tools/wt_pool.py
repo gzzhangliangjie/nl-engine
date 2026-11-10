@@ -110,6 +110,13 @@ TRACKS = {
                 ".workbuddy + slang dist, skip-worktree set); E-prefix rejected "
                 "to avoid ECS M-E0~E3 collision",
     },
+    "input": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-input",
+        "branch": "feat/input", "state": "active",
+        "note": "A-class track opened 2026-11-10 by user instruction (city-driving game "
+                "direction; plan docs/p8/P8-INPUT-PLAN.md; M-I0 core/input state layer "
+                "first; viewer wiring deferred to merge after M8.1 TLAS closes)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
