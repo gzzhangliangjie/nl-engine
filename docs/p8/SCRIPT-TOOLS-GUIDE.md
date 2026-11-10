@@ -3,6 +3,8 @@
 > 归档：feat/script worktree，M-SC0 收口段（2026-11-09，tag `m-sc0`）。
 > 工具 = C# hosting 内核（`nl::script::Vm`）的自测与演示入口，A 类并行轨道
 > （不进 kStage / 渲染回归，工具版交代）。计划：`docs/p8/P8-SCRIPT-PLAN.md`。
+> **C# 脚本怎么写、宿主怎么装、全流程与铁律速查** → `SCRIPT-CS-INTEROP.md`
+>（本文只收工具面与踩坑历史考证）。
 
 ## 工具定位
 
