@@ -11,6 +11,9 @@
 *.log            text eol=lf
 provenance.txt   text eol=lf
 *.bat            text eol=crlf
+# cases.json 是机器产出的数据文件（合并驱动 tools/merge-cases.py 按字节读写），
+# 必须 LF 钉死，防 autocrlf 在驱动三路输入里混入 CRLF（同上 md5 假 FAIL 教训）
+example/cases.json text eol=lf
 
 # ---- VS/MSVC 工程文件（MSBuild 生态传统 CRLF；当前仓库暂无，防未来新增）----
 *.sln             text eol=crlf
