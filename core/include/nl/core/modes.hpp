@@ -24,7 +24,8 @@ enum class ViewMode {
                   //  距离灰度 / id 伪彩两档；BLAS/TLAS 走 initDag 资产链）
     Shadow = 13,  // M9.0：compute 直光对照（M9.0 阶段不发射线；M9.1 起同 mode
                   //  默认每像素 1 条 shadow ray）。Q4 方案 A：属性即取即算
-    // S1 起依次追加：Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
+    Reference = 14, // M9.2：离线参考模式（渐进式多帧累积的直光真值图，裁判 M9.1 阴影射线）
+    // S1 起依次追加：Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };
 

@@ -94,6 +94,10 @@ struct FrameParams {
     // viewer kColors[0]，历史基线零扰动。
     float clearColor[4] = {0.05f, 0.08f, 0.15f, 1.0f};
 
+    // M9.2：--mode reference 的总累积帧数（viewer 传 o.frames；drawReference 读它算
+    // 进度分母；其它模式不读，缺省 0 = 无进度上报）。
+    std::uint32_t refFrames = 0;
+
     // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
     // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
     //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
@@ -343,7 +347,10 @@ public:
                                             bool rtMode = false,
                                             // M9.0：--mode shadow（compute 直光对照；
                                             // 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_）。
-                                            bool shadowMode = false);
+                                            bool shadowMode = false,
+                                            // M9.2：--mode reference（离线参考模式；
+                                            // 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_）。
+                                            bool referenceMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

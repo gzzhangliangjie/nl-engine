@@ -2362,6 +2362,17 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         rtPresentSet_ = device->createBindingSet(pd, rtPresentLayout_);
     }
     if (!rtPresentSet_) { outError = "createBindingSet failed for rt present set"; return false; }
+
+    // M9.2：reference 呈现 set（t1 SRV + b1 RefConstants），随 rtTarget_ 同步重建。
+    if (reference_) {
+        nvrhi::BindingSetDesc rpd;
+        rpd.addItem(nvrhi::BindingSetItem::Texture_SRV(1, rtTarget_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, refConstants_));
+        refPresentSet_ = device->createBindingSet(rpd, refPresentLayout_);
+        if (!refPresentSet_) {
+            outError = "createBindingSet failed for ref present set"; return false;
+        }
+    }
     return true;
 }
 
@@ -2505,6 +2516,231 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         nl::core::log::deviceError("shadow", err);
         shadowFailed_ = true;
     }
+}
+
+// M9.2（S9）：--mode reference —— 离线参考模式（渐进式多帧累积直光真值图）。
+// 与 initShadow 完全对称的独立初始化（不复用 initShadow 内部，守 M9.1 逐字节基线）：
+// 几何/材质走 initVisbuf(pulling)；呈现骨架走 initRtPresent（vs/ps + rtPresentLayout_）；
+// 多建 csReference compute 管线 + refConstants_（b4 累积参数）+ refPresent（÷samplesDone
+// 再 gamma）。不新建任何独立 GBuffer 资源（Q4 方案 A）。
+bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
+                          const char* vsEntry, const char* psEntry,
+                          const char* nmeshFile, std::string& outError) {
+    if (!initVisbuf(device, shaderSuffix, vsEntry, psEntry, nmeshFile,
+                    /*pulling=*/true, outError)) return false;
+    reference_ = true;
+
+    if (!initRtPresent(device, shaderSuffix, outError)) return false;
+
+    // csReference（direct.csref）：与 csDirect 同文件、同资源槽位族，仅入口不同。
+    const std::string csPath = std::string(NL_SHADER_DIR) + "/direct.csref." + shaderSuffix;
+    std::vector<std::uint8_t> blob;
+    if (!readFileBytes(csPath.c_str(), blob)) {
+        outError = "failed to load direct.csref (" + std::string(shaderSuffix) +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc desc;
+    desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+    csReference_ = device->createShader(desc, blob.data(), blob.size());
+    if (!csReference_) { outError = "createShader failed for direct.csref"; return false; }
+
+    // b3 DirectConstants（32B）：清屏色 + shadow 参数（与 drawShadow 同款，每帧覆写）。
+    {
+        nvrhi::BufferDesc dcDesc;
+        dcDesc.byteSize = 32;
+        dcDesc.isConstantBuffer = true;
+        dcDesc.isVolatile = true;
+        dcDesc.maxVersions = 16;
+        dcDesc.debugName = "DirectConstants";
+        directConstants_ = device->createBuffer(dcDesc);
+        if (!directConstants_) { outError = "createBuffer failed for direct constants"; return false; }
+    }
+
+    // b4 RefConstants（16B）：samplesPerFrame / samplesStart / samplesDone / pad。
+    {
+        nvrhi::BufferDesc rcDesc;
+        rcDesc.byteSize = 16;
+        rcDesc.isConstantBuffer = true;
+        rcDesc.isVolatile = true;
+        rcDesc.maxVersions = 16;
+        rcDesc.debugName = "RefConstants";
+        refConstants_ = device->createBuffer(rcDesc);
+        if (!refConstants_) { outError = "createBuffer failed for ref constants"; return false; }
+    }
+
+    // §2.7 单一 BindingSet：resolve 槽位表 + b3 清屏色 + b4 累积参数 + u0 输出 + t13 TLAS。
+    nvrhi::BindingLayoutDesc cDesc;
+    addResolveLayoutItems(cDesc);
+    cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4))
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+         .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
+    refComputeLayout_ = device->createBindingLayout(cDesc);
+    if (!refComputeLayout_) {
+        outError = "createBindingLayout failed for reference compute"; return false;
+    }
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csReference_).addBindingLayout(refComputeLayout_);
+        refPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!refPSO_) { outError = "createComputePipeline failed for reference"; return false; }
+
+    // psRefPresent（rt.psrefpresent）：÷samplesDone 再 gamma 的全屏呈现（复用 vsRtPresent_）。
+    auto rtPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+    };
+    auto loadRefPresent = [&](const char* artifact, nvrhi::ShaderType type,
+                              nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> pb;
+        if (!readFileBytes(rtPath(artifact).c_str(), pb)) {
+            outError = std::string("failed to load rt shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc pdesc;
+        pdesc.setShaderType(type).setEntryName("main");
+        out = device->createShader(pdesc, pb.data(), pb.size());
+        if (!out) outError = std::string("createShader failed for rt ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadRefPresent("psrefpresent", nvrhi::ShaderType::Pixel, psRefPresent_)) return false;
+
+    // 呈现布局：t1 = rt 目标 SRV（避开 rt.slang 的 t0 TLAS），b1 = RefConstants。
+    nvrhi::BindingLayoutDesc pLayoutDesc;
+    pLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1));
+    refPresentLayout_ = device->createBindingLayout(pLayoutDesc);
+    if (!refPresentLayout_) { outError = "createBindingLayout failed for ref present"; return false; }
+
+    nl::core::log::info("reference scene ready (progressive multi-frame direct-light",
+                        tlasReady_ ? ", shadow rays via TLAS)" :
+                                        ", shadow rays disabled: no TLAS)",
+                        " | shader=", shaderSuffix,
+                        " | spp/frame=", samplesPerFrame_);
+    return true;
+}
+
+// M9.2：compute 8x8 dispatch（每帧 samplesPerFrame 条抖动阴影射线）累积进线性 sum
+// buffer → presentRefTarget ÷总数 再 gamma。与 drawShadow 同列表顺序（clear vis →
+// raster → 本函数），barrier 由 NVRHI 状态跟踪插入。
+void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport, const FrameParams& params) {
+    if (!rtDevice_ || !framebuffer || !refPSO_ || refFailed_) return;
+
+    // TLAS 未就绪 → 无阴影射线，参考图退化为无硬阴影直光（与 shadow 同口径降级）。
+    if (!tlasReady_) {
+        if (!refNoTlasLogged_) {
+            nl::core::log::info("reference: TLAS not ready (no RT support or no fallback "
+                                "geometry) -- shadow rays disabled");
+            refNoTlasLogged_ = true;
+        }
+        return;
+    }
+
+    std::string err;
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    if (!ensureRtTargets(rtDevice_, vpW, vpH, err)) {
+        nl::core::log::deviceError("reference", err);
+        refFailed_ = true;
+        return;
+    }
+    if (rtW_ != visW_ || rtH_ != visH_) {
+        nl::core::log::deviceError("reference", "rt target size != vis buffer size");
+        refFailed_ = true;
+        return;
+    }
+
+    // 尺寸版本闸：resize 时 rtTarget_ 换新 → set 重建；samplesDone_ 归零（首帧覆盖残值）。
+    if (!refComputeSet_ || refW_ != rtW_ || refH_ != rtH_) {
+        nvrhi::BindingSetDesc sd;
+        addResolveSetItems(sd);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(4, refConstants_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
+                                                      nvrhi::Format::RGBA32_FLOAT))
+          .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
+        refComputeSet_ = rtDevice_->createBindingSet(sd, refComputeLayout_);
+        if (!refComputeSet_) {
+            nl::core::log::deviceError("reference", "createBindingSet failed for ref compute set");
+            refFailed_ = true;
+            return;
+        }
+        refW_ = rtW_;
+        refH_ = rtH_;
+        samplesDone_ = 0;   // 新尺寸：重新累积
+    }
+
+    writeResolveConstants(cmd, params);
+    const float cc[8] = {params.clearColor[0], params.clearColor[1],
+                         params.clearColor[2], params.clearColor[3],
+                         0.01f, 50.0f, 0.0f, 0.0f};
+    cmd->writeBuffer(directConstants_, cc, sizeof(cc));
+
+    // RefConstants：本帧起点 = 已累积总数（保证每帧抖动不同）；结束 = 起点 + spp。
+    const std::uint32_t start = samplesDone_;
+    const std::uint32_t done  = start + samplesPerFrame_;
+    const std::uint32_t rc[4] = {samplesPerFrame_, start, done, 0u};
+    cmd->writeBuffer(refConstants_, rc, sizeof(rc));
+
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(refPSO_).addBindingSet(refComputeSet_);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
+
+    if (!presentRefTarget(cmd, framebuffer, viewport, err)) {
+        nl::core::log::deviceError("reference", err);
+        refFailed_ = true;
+    }
+
+    samplesDone_ = done;
+    refFramesTarget_ = (params.refFrames > 0) ? static_cast<std::uint32_t>(params.refFrames) : 0;
+    const float totalTarget = static_cast<float>(refFramesTarget_) * static_cast<float>(samplesPerFrame_);
+    refProgress_ = (totalTarget > 0.0f) ? (static_cast<float>(samplesDone_) / totalTarget) : 0.0f;
+    // 进度日志（截图模式 HUD 关，靠日志看累积进度；每 8 帧一次避免刷屏）。
+    if (refFramesTarget_ > 0 && (samplesDone_ % (samplesPerFrame_ * 8) == 0 ||
+                                 samplesDone_ >= totalTarget)) {
+        nl::core::log::info("reference: ", samplesDone_, " / ", static_cast<std::uint32_t>(totalTarget),
+                            " spp (", static_cast<int>(refProgress_ * 100.0f), "%)");
+    }
+}
+
+bool Scene::presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                             const nvrhi::Viewport& viewport, std::string& outError) {
+    if (!rtDevice_ || !framebuffer || !rtTarget_ || !refPresentSet_) {
+        outError = "presentRefTarget: missing device/framebuffer/target/set";
+        return false;
+    }
+    if (!refPresentPSO_) {
+        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psRefPresent_)
+             .addBindingLayout(refPresentLayout_);
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        refPresentPSO_ = rtDevice_->createGraphicsPipeline(pDesc, info);
+        if (!refPresentPSO_) {
+            outError = "createGraphicsPipeline failed for ref present";
+            return false;
+        }
+    }
+    nvrhi::GraphicsState pstate;
+    pstate.setPipeline(refPresentPSO_)
+          .setFramebuffer(framebuffer)
+          .addBindingSet(refPresentSet_);
+    pstate.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(pstate);
+    nvrhi::DrawArguments vargs;
+    vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    cmd->draw(vargs);
+    return true;
 }
 
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
@@ -4415,8 +4651,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 cmd->setGraphicsState(rstate);
                 cmd->drawIndexedIndirect(0, 1);
 
-                // (5) shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
-                if (shadow_) {
+                // (5) reference ? 离线参考 : shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
+                if (reference_) {
+                    // M9.2 优先于 shadow：渐进式多帧累积直光真值图（裁判 M9.1 阴影射线）。
+                    drawReference(cmd, framebuffer, viewport, params);
+                } else if (shadow_) {
                     // b1/b2 与 pulling 共用写入（逐像素一致的前提）；b3 清屏色、
                     // dispatch、present 都在 drawShadow 内。
                     drawShadow(cmd, framebuffer, viewport, params);
@@ -5654,6 +5893,24 @@ void Scene::shutdown() {
     directConstants_ = nullptr;
     directW_ = 0;
     directH_ = 0;
+    // M9.2：reference 链句柄（rtTarget_ / present 共用对象已在上面统一释放）。
+    reference_ = false;
+    refFailed_ = false;
+    refNoTlasLogged_ = false;
+    samplesDone_ = 0;
+    refFramesTarget_ = 0;
+    refProgress_ = 0.0f;
+    refW_ = 0;
+    refH_ = 0;
+    csReference_ = nullptr;
+    psRefPresent_ = nullptr;
+    refPSO_ = nullptr;
+    refPresentPSO_ = nullptr;
+    refComputeLayout_ = nullptr;
+    refComputeSet_ = nullptr;
+    refPresentLayout_ = nullptr;
+    refPresentSet_ = nullptr;
+    refConstants_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
     particles_.shutdown();

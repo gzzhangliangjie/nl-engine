@@ -20,6 +20,7 @@ constexpr const char* kModeNames[] = {
     "input-hud", // P8 M-I2：输入调试面板（注入路径驱动；viewer 不调 updateFromWindow——单消费者铁律）
     "rt",        // M8.2：Ray Query 调试射线闭环（compute 每像素相机射线 + 两档调试图）
     "shadow",    // M9.0：compute 直光对照（M9.0 无阴影射线 / M9.1 起每像素 1 条）
+    "reference", // M9.2：离线参考模式（--mode reference，多帧累积直光真值图）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

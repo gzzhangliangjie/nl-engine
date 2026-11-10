@@ -70,7 +70,7 @@ public:
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-              bool shadowMode, std::string& outError) override {
+              bool shadowMode, bool referenceMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -101,29 +101,41 @@ public:
         // M-E1b.0：sceneMode 不在此初始化 Scene（与 DX12 对称）；场景资源由
         // loadEcsScene 建立后才可绘制。
         // M7.0：visbuf 优先于所有既有场景（吃 .nmesh，但走独立 vis 管线）。
-        const bool sceneOk = sceneMode
-            ? true
-            // M9.0：shadow 与 visbuf 同链，但要多建 compute 直光管线 + present。
-            : (shadowMode
-            ? scene_.initShadow(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : (visbufMode
-            ? scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile,
-                                 pullingMode, outError)
-            : (skinMode
-            ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : (hizMode
-            ? scene_.initHiz(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            // M8.2：rt 模式走 initDag 资产链（BLAS/TLAS 挂在 initDag → initBlas →
-            // initTlas 上），渲染只做 RayQuery compute + 调试图呈现。
-            : (rtMode
-            ? scene_.initRt(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : (dagMode
-            ? scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : (clusterMode
-            ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
-            : (cullMode
-                ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))))))))
+        bool sceneOk = false;
+        if (sceneMode) {
+            // M-E1b.0：ECS 场景不在此初始化 Scene（swapchain/depth/framebuffer/
+            // present 照常）；场景资源由 loadEcsScene 建立后才可绘制。
+            sceneOk = true;
+        }
+        // M9.2：reference 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现，
+        // 必须排在 visbufMode 之前（同一条链，但要多建 csReference compute 管线）。
+        else if (referenceMode)
+            sceneOk = scene_.initReference(nvrhiDevice_, "spv", "main", "main", modelFile,
+                                           outError);
+        // M9.0：shadow 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现，
+        // 必须排在 visbufMode 之前（同一条链，但要多建 compute 直光管线）。
+        else if (shadowMode)
+            sceneOk = scene_.initShadow(nvrhiDevice_, "spv", "main", "main", modelFile,
+                                        outError);
+        else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
+            sceneOk = scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile,
+                                        pullingMode, outError);
+        else if (skinMode)
+            sceneOk = scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+        else if (hizMode)
+            sceneOk = scene_.initHiz(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+        // M8.2：rt 模式走 initDag 资产链（BLAS/TLAS 挂在 initDag → initBlas →
+        // initTlas 上），渲染只做 RayQuery compute + 调试图呈现。
+        else if (rtMode)
+            sceneOk = scene_.initRt(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+        else if (dagMode)
+            sceneOk = scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+        else if (clusterMode)
+            sceneOk = scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
+        else if (cullMode)
+            sceneOk = scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError);
+        else
+            sceneOk = scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError);
         ;
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;

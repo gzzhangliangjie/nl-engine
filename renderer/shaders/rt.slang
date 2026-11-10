@@ -126,3 +126,28 @@ void psRtPresent(VsOut i, out float4 outColor : SV_Target)
     int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
     outColor = g_rtTex.Load(int3(pix, 0));
 }
+
+// M9.2 参考呈现：读线性 sum buffer（rtTarget_，由 csReference 累积）→ ÷已累积样本数
+// → 一次性 gamma。与 M9.1 单射线图（shadePbrGrad 末行 pow(1/2.2)）同一映射，故可
+// 并排当硬阴影 / 直光裁判（本 plan 用途）。RefConstants 绑 b1（与 csReference 的 b4
+// 是同一份 16B buffer，仅登记寄存器不同）；g_refTex 绑 t1（rtTarget_ 的 SRV 视角，
+// 避开 rt.slang 的 t0 TLAS，避免同文件寄存器冲突）。
+Texture2D<float4> g_refTex : register(t1);
+cbuffer RefConstants : register(b1)
+{
+    uint g_refSamplesPerFrame;
+    uint g_refSamplesStart;
+    uint g_refSamplesDone;
+    float g_refPad;
+}
+[shader("pixel")]
+void psRefPresent(VsOut i, out float4 outColor : SV_Target)
+{
+    uint w, h;
+    g_refTex.GetDimensions(w, h);
+    int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
+    float3 sum = g_refTex.Load(int3(pix, 0)).rgb;
+    float inv = 1.0f / max(float(g_refSamplesDone), 1.0f);
+    // 线性空间平均 → 一次性 gamma（与 M9.1 同映射）；alpha 固定 1（sum.a 恒 0）。
+    outColor = float4(pow(saturate(sum * inv), 1.0f / 2.2f), 1.0f);
+}

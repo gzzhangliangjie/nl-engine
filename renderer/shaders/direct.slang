@@ -64,6 +64,16 @@ cbuffer DirectConstants : register(b3)
                              // z/w 预留（offset 16）
 }
 
+// M9.2 参考累积常量（b4）。csReference 读前两项做抖动种子，psRefPresent 读第三项
+// 做 ÷总数；同一份 16B buffer 在不同入口绑不同寄存器（csReference b4 / psRefPresent b1）。
+cbuffer RefConstants : register(b4)
+{
+    uint g_refSamplesPerFrame;  // 本帧每像素射线条数（默认 64）
+    uint g_refSamplesStart;     // 本帧样本全局起点（= 已累积总数，保证每帧抖动不同）
+    uint g_refSamplesDone;      // 本帧结束后累积总数（present ÷用）
+    float g_refPad;
+}
+
 RaytracingAccelerationStructure g_tlas : register(t13);
 
 StructuredBuffer<uint64_t> g_visSRV          : register(t0);
@@ -211,4 +221,142 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
 
     g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
                                 gbuf.ddxUv, gbuf.ddyUv, shadow);
+}
+
+// ============================================================================
+// M9.2 离线参考模式（--mode reference）：渐进式多帧累积的直光「真值图」。
+// 与 M9.1 同一几何 / 同一 BRDF / 同一 TLAS，只把每像素 1 条阴影射线扩成
+// samplesPerFrame 条**子像素抖动**的阴影射线（NEE：每样本 = 抖动主光线 +
+// 朝 L 发 1 条阴影射线），累积进 g_out（线性空间，RGBA32_FLOAT 复用 rtTarget_），
+// present（psRefPresent）时 ÷总数 再一次性 gamma —— 与 M9.1 单射线图并排即当硬
+// 阴影 / 直光裁判（本 plan 的用途）。新增 0 个 GBuffer 落盘资源，守 Q4 冻结面。
+// ============================================================================
+
+// 线性空间 BRDF（不 bake gamma）：返回 (diffuse+specular)*radiance + ambient。
+// 与 shadePbrGrad 逐字同源，仅末行去掉 pow(1/2.2)；两者须同步维护，改一改另一。
+float3 shadePbrLinear(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
+                     float2 ddx_uv, float2 ddy_uv, float shadow)
+{
+    float3 n = normalize(normal);
+    float3 v = normalize(g_cameraPos.xyz - worldPos);
+    float3 l = normalize(g_lightDirW.xyz);
+    float3 h = normalize(l + v);
+    float NdotL = saturate(dot(n, l));
+    float NdotV = max(dot(n, v), 1e-4f);
+    float NdotH = saturate(dot(n, h));
+    float VdotH = saturate(dot(v, h));
+
+    float4 baseTex = g_baseColorTex[NonUniformResourceIndex(mat.baseColorSlot)]
+        .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
+    float3 baseColor = mat.baseColorFactor.rgb *
+        (g_mrF.z >= 0.5f ? baseTex.rgb : srgbToLinear(baseTex.rgb));
+    float4 mrTex = g_mrTex[NonUniformResourceIndex(mat.mrSlot)]
+        .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
+    float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
+    float metallic  = saturate(mrTex.b * mat.mrFactor.x);
+
+    float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
+    float3 cDiff  = baseColor * (1.0f - metallic);
+    float  D = D_GGX(roughness, NdotH);
+    float  V = V_SmithGGXCorrelated(roughness, NdotV, NdotL);
+    float3 F = F0 + (1.0f - F0) * pow(1.0f - VdotH, 5.0f);
+    float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL * shadow;
+    float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
+    float3 specular = D * V * F;
+    float3 ambient  = 0.03f * baseColor;
+    return (diffuse + specular) * radiance + ambient;   // LINEAR，未 gamma
+}
+
+// 子像素抖动：每像素每样本一个确定性 [0,1) 偏移（PCG 风格整数 hash）。
+uint pcgHash(uint x)
+{
+    x ^= x >> 16u; x *= 0x7feb352du;
+    x ^= x >> 15u; x *= 0x846ca68bu;
+    x ^= x >> 16u; return x;
+}
+float2 sampleJitter(uint2 pixel, uint sampleIndex)
+{
+    const uint s = pixel.x + 19349663u * pixel.y + 9781u * sampleIndex;
+    const uint a = pcgHash(s);
+    const uint b = pcgHash(s + 0x9e3779b9u);
+    return float2(float(a & 0xffffu) / 65535.0f, float(b & 0xffffu) / 65535.0f);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void csReference(uint3 tid : SV_DispatchThreadID)
+{
+    const uint2 pixel  = tid.xy;
+    const uint  width  = uint(g_width);
+    const uint  height = uint(g_height);
+    if (pixel.x >= width || pixel.y >= height) return;
+
+    const uint64_t v = g_visSRV[visIndex(pixel, width)];
+    // 空像素贡献 = pow(清屏色, 2.2)（线性空间）：present ÷samplesDone 再 pow(1/2.2)
+    // 恰好还原 g_clearColor，与 M9.1 单射线空像素（直写清屏色）逐字节一致。
+    const float3 clearLinearRef = pow(g_clearColor.rgb, 2.2f);
+    const float  spp = float(g_refSamplesPerFrame);
+
+    // 本帧累积（线性空间）。空像素贡献 clearLin * spp（present ÷samplesDone 后
+    // = clearLin，与 M9.1 背景一致）；非空像素贡献 spp 条采样之和。
+    float3 frameSum = 0.0f;
+    if (v != VIS_EMPTY) {
+        uint clusterId, triId;
+        float deviceZ;
+        visUnpack(v, clusterId, triId, deviceZ);
+
+        const uint metaBase   = clusterId * 4u;
+        const uint vertexBase = g_clusterMeta[metaBase + 0u];
+        const uint localBase  = g_clusterMeta[metaBase + 2u];
+        const uint materialId = g_clusterMeta[metaBase + 3u];
+        const GPUMaterial mat = g_materialTable[materialId];
+
+        float3 pos[3], nrm[3];
+        float2 uv[3];
+        for (uint k = 0u; k < 3u; ++k) {
+            const uint localIdx = g_localIndices[localBase + triId * 3u + k];
+            const uint gv = vertexBase + localIdx;
+            const uint b  = gv * 8u;
+            pos[k] = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+            nrm[k] = float3(g_vertexPool[b + 3u], g_vertexPool[b + 4u], g_vertexPool[b + 5u]);
+            uv[k]  = float2(g_vertexPool[b + 6u], g_vertexPool[b + 7u]);
+        }
+
+        const float3 L = normalize(g_lightDirW.xyz);
+        for (uint s = 0u; s < g_refSamplesPerFrame; ++s) {
+            const float2 jitter  = sampleJitter(pixel, g_refSamplesStart + s);
+            const float2 fragPos = float2(pixel) + jitter;   // 像素内子像素点
+            const GBufGeometry gbuf = gbInterpolateVisTriangle(
+                pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
+                uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
+
+            const float3 n3 = normalize(gbuf.normal);
+            float shadow = 0.0f;
+            if (dot(n3, L) > 0.0f) {
+                const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+                RayDesc ray;
+                ray.Origin    = origin;
+                ray.Direction = L;
+                ray.TMin      = 0.0f;
+                ray.TMax      = g_shadowParams.y;
+                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+                q.TraceRayInline(g_tlas,
+                                 RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                                 0xFF, ray);
+                q.Proceed();
+                shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+            }
+            frameSum += shadePbrLinear(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                       gbuf.ddxUv, gbuf.ddyUv, shadow);
+        }
+    } else {
+        frameSum = clearLinearRef * spp;
+    }
+
+    // 累积进持久线性 sum buffer（g_out == rtTarget_，跨帧保留）；每像素独立读写无竞争。
+    // 首帧（g_refSamplesStart==0）直接覆盖——buffer 可能含上一尺寸 / 上次运行的残值，
+    // 用 prev+add 会污染；resize 时 drawReference 把 samplesDone_ 归零即触发覆盖。
+    float4 add = float4(frameSum, 0.0f);
+    if (g_refSamplesStart == 0u) g_out[pixel] = add;
+    else                         g_out[pixel] = g_out[pixel] + add;
 }

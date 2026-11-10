@@ -88,11 +88,15 @@ static const Artifact kArtifacts[] = {
     {"rt.cs", true}, {"rt.cs", false},
     {"rt.vsrtpresent", true}, {"rt.vsrtpresent", false},
     {"rt.psrtpresent", true}, {"rt.psrtpresent", false},
+    // M9.2：rt.psrefpresent（参考图÷samplesDone 再 gamma 全屏呈现）× 双目标 = 2。
+    {"rt.psrefpresent", true}, {"rt.psrefpresent", false},
     // M-PT0：particles.slang 单管线（vsMain/psMain），各 × spv/dxil = 4。
     {"particles.vs", true}, {"particles.vs", false},
     {"particles.ps", true}, {"particles.ps", false},
     // M9.0：direct.slang 单 compute 入口（compute 直光对照）× 双目标 = 2。
+    // M9.2：direct.csref（离线参考模式 compute，追踪 64 条抖动阴影射线累积）× 双目标 = 2。
     {"direct.cs", true}, {"direct.cs", false},
+    {"direct.csref", true}, {"direct.csref", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -139,7 +143,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
                                            bool hizMode, bool sceneMode, bool visbufMode,
-                                           bool pullingMode, bool rtMode, bool shadowMode) {
+                                           bool pullingMode, bool rtMode, bool shadowMode, bool referenceMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -147,7 +151,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     // M8.2：rt 模式走 initDag 资产路径（BLAS/TLAS 挂在 initDag 链上），同样吃 .nmesh。
     // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
-                         rtMode || shadowMode;
+                         rtMode || shadowMode || referenceMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -180,7 +184,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
-                                 shadowMode, r->impl_->error)) {
+                                 shadowMode, referenceMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

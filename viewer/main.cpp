@@ -629,7 +629,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool skinMode = false, bool hizMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
-              bool shadowMode = false) {
+              bool shadowMode = false, bool referenceMode = false) {
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
@@ -657,7 +657,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode);
+                                                   shadowMode, referenceMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -1104,6 +1104,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
         fp.tlasSpin  = o.tlasSpin;              // M8.1：TLAS 实例 spin / 探针（BLAS 未就位时
         fp.tlasProbe = o.tlasProbe;             // renderer 内部直接返回，其它模式零扰动）
+        fp.refFrames = static_cast<std::uint32_t>(o.frames);  // M9.2：reference 进度分母
         // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
         // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，
         // 缺省零副作用。
@@ -1522,6 +1523,36 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (capturePath) {
             ++screenshotsSaved;
             nl::core::log::info("screenshot written: ", capturePath);
+        }
+        // M9.2：reference 模式截图后写同名 .json 侧车（相机/灯光/采样元数据），
+        // 供回归对拍与裁判 M9.1 阴影射线用。仅 reference 模式产出，且只在末帧触发。
+        if (referenceMode && capturePath) {
+            std::string jsonPath = capturePath;
+            const std::string pngExt = ".png";
+            if (jsonPath.size() >= pngExt.size() &&
+                jsonPath.compare(jsonPath.size() - pngExt.size(), pngExt.size(), pngExt) == 0)
+                jsonPath.replace(jsonPath.size() - pngExt.size(), pngExt.size(), ".json");
+            else
+                jsonPath += ".json";
+            nlohmann::json side;
+            side["mode"] = "reference";
+            side["model"] = o.modelFile;
+            side["size"] = {static_cast<int>(o.width), static_cast<int>(o.height)};
+            side["yaw"] = camera.yawDegrees();
+            side["pitch"] = camera.pitchDegrees();
+            side["dist"] = camera.distance();
+            side["lightDir"] = {fp.lightDir[0], fp.lightDir[1], fp.lightDir[2]};
+            side["lightColor"] = {1.0f, 1.0f, 1.0f, 2.5f};
+            side["frames"] = static_cast<int>(o.frames);
+            side["sppPerFrame"] = 64;
+            side["spp"] = static_cast<int>(o.frames) * 64;
+            std::ofstream js(jsonPath);
+            if (js) {
+                js << side.dump(2) << '\n';
+                nl::core::log::info("reference sidecar written: ", jsonPath);
+            } else {
+                nl::core::log::warn("reference sidecar write failed: ", jsonPath);
+            }
         }
         // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
         // 逐数字对照的机械证据（HUD 在截图基线里是关闭的，日志才是可解析出口）。
@@ -2525,6 +2556,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/true);
+    case nl::core::ViewMode::Reference: // M9.2：离线参考模式（渐进式多帧累积直光真值图）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -2635,7 +2672,8 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
          o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling ||
-         o.mode == nl::core::ViewMode::Rt || o.mode == nl::core::ViewMode::Shadow)
+         o.mode == nl::core::ViewMode::Rt || o.mode == nl::core::ViewMode::Shadow ||
+         o.mode == nl::core::ViewMode::Reference)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

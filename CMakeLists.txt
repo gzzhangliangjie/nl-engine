@@ -344,7 +344,7 @@ set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fr
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
 # M9.0（S9）：direct.slang 单 compute 入口（8x8 直光对照 pass）。BRDF 逐字搬移
 # material.slang mode 5，资源槽位与 material pass 同源（§2.7 单一 BindingSet）。
-set(_ENTRIES_DIRECT "csDirect|cs|compute")
+set(_ENTRIES_DIRECT "csDirect|cs|compute" "csReference|csref|compute")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # M9.0 (S9): GBuffer 反解公共头（material.slang include；S9.1/S10/S12 复用）
@@ -355,7 +355,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "material.vsmatresolve" "material.psmatresolve"
                     "tlas_probe.cs"
                     "rt.cs"
-                    "direct.cs")
+                    "direct.cs"
+                    "direct.csref")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -366,7 +367,7 @@ set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
 # 视觉调试射线留 M8.2）。Inline ray query DXIL 要 SM6.5+（进 _SM66_ARTIFACTS）。
 set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 # M8.2：rt.slang 三入口——RayQuery 每像素相机射线 compute + 调试图全屏呈现 vs/ps。
-set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment")
+set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")

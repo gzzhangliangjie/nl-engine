@@ -390,6 +390,22 @@ public:
     void drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     const nvrhi::Viewport& viewport, const FrameParams& params);
 
+    // ---- M9.2（S9）：--mode reference 的离线参考模式（Q4 方案 A，复用面同 shadow）----
+    // initReference = initVisbuf(pulling) + initRtPresent 呈现骨架 + direct.csref compute
+    // 管线 + refConstants_（b4 累积参数）+ refPresent（÷samplesDone 再 gamma）；不碰
+    // 任何独立 GBuffer 资源。与 shadow 互斥（一个 Scene 只跑一种）。
+    bool initReference(nvrhi::IDevice* device, const char* shaderSuffix,
+                       const char* vsEntry, const char* psEntry,
+                       const char* nmeshFile, std::string& outError);
+    void drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params);
+    bool presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport, std::string& outError);
+    // HUD / 日志进度源（Scene::draw 不持 hud，由 backend 在 renderFrame 后取用写回）。
+    bool               referenceActive() const { return reference_; }
+    std::uint32_t      referenceSamplesDone() const { return samplesDone_; }
+    float              referenceProgress() const { return refProgress_; }
+
     // 共用槽位表：material.slang 与 direct.slang 同源（§2.18 唯一权威，避免
     // 两条链各写一份槽位表而漂移）。
     void addResolveLayoutItems(nvrhi::BindingLayoutDesc& desc) const;
@@ -844,6 +860,28 @@ private:
     nvrhi::BindingSetHandle      directComputeSet_;
     nvrhi::BufferHandle          directConstants_;      // volatile CB 32B（b3：清屏色 + shadow 参数）
     std::uint32_t                directW_ = 0, directH_ = 0;  // set 绑定的尺寸版本
+
+    // ---- M9.2：reference 模式（离线参考，渐进式多帧累积直光真值）----
+    // 与 shadow 互斥（一个 Scene 只跑一种）。复用面：输出 = rtTarget_ /
+    // 呈现 = initRtPresent 的 vsRtPresent_ + 本模式的 psRefPresent_；几何与材质资源
+    // = initVisbuf(pulling)。不新建任何独立 GBuffer 纹理（Q4 方案 A）。
+    bool                         reference_ = false;
+    bool                         refFailed_ = false;          // 懒建失败只报一次
+    bool                         refNoTlasLogged_ = false;    // TLAS 未就绪的一次性日志
+    std::uint32_t                samplesPerFrame_ = 64;      // 每帧每像素射线条数（设计常量）
+    std::uint32_t                samplesDone_ = 0;            // 已累积样本总数
+    std::uint32_t                refFramesTarget_ = 0;        // viewer 传来的总帧数（进度分母）
+    float                        refProgress_ = 0.0f;          // 进度 0..1（日志/HUD）
+    std::uint32_t                refW_ = 0, refH_ = 0;        // 计算 set 尺寸版本
+    nvrhi::ShaderHandle          csReference_;               // direct.csref（compute）
+    nvrhi::ShaderHandle          psRefPresent_;              // rt.psrefpresent（fragment）
+    nvrhi::ComputePipelineHandle refPSO_;
+    nvrhi::GraphicsPipelineHandle refPresentPSO_;            // 随 framebuffer 信息建
+    nvrhi::BindingLayoutHandle   refComputeLayout_;          // resolve + b3 + b4 + u0 + t13 TLAS
+    nvrhi::BindingSetHandle      refComputeSet_;
+    nvrhi::BindingLayoutHandle   refPresentLayout_;          // t1 SRV + b1 RefConstants
+    nvrhi::BindingSetHandle      refPresentSet_;             // ensureRtTargets 建
+    nvrhi::BufferHandle          refConstants_;              // volatile CB 16B（b4/b1 累积参数）
 };
 
 } // namespace nl::renderer::detail

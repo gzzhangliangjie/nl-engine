@@ -7661,6 +7661,57 @@
    ]
   },
   {
+   "id": "s9-reference",
+   "label": "S9.2",
+   "name": "离线参考模式（M9.2）",
+   "tag": "s9-done",
+   "date": "2026-11-10",
+   "summary": "M9.2（S9 第三步，也是 S9 收官；在 M9.1 compute 直光 + 每像素阴影射线基础上补离线参考模式 --mode reference）：渐进式多帧累积的直光真值图，作为 M9.1 阴影射线与 VSM(S15) 的直光 / 硬阴影裁判。每帧 64 条朝光源的抖动阴影射线（子像素抖动的 NEE，余弦重要性采样在直线光 + 硬阴影下退化为均匀抖动）经 M8 TLAS 求平均降噪；线性 sum buffer 复用 rtTarget_(RGBA32_FLOAT，Q4 方案 A 不落盘、即取即算，零新增独立 GBuffer 纹理 / MRT / 落盘 UAV)；present 时 g_refSamplesDone 归一再一次性 pow(1/2.2) gamma（与 M9.1 同映射，不加 ACES）。字节一致性铁律：空像素线性贡献 = pow(g_clearColor, 2.2)，present 归一后还原 g_clearColor，与 M9.1 单射线空像素逐字节一致；首帧（g_refSamplesStart==0）直接覆盖 sum buffer，避免跨尺寸 / 运行残值污染。RefConstants 16B（b4 于 csReference / b1 于 psRefPresent，同一份 buffer 不同寄存器）；csReference 资源槽位与 M9.1 同源（S2.7 单一 BindingSet）：vis(t0) + resolve(b3) + RefConstants(b4) + g_out(u0) + TLAS(t13)；psRefPresent 复用 vsRtPresent_ + 绑 g_refTex(t1) + RefConstants(b1)。独立 initReference（不复用 initShadow 内部，守 M9.1 字节基线）。验收：放大 400% 无明显颗粒（64 帧 x 64 spp = 4096 spp）；硬阴影边缘干净；双后端 near 1px/0.00%（实质逐字节一致）；deviceErrors=0。同名 .json 侧车记录相机 / 灯光 / 采样元数据（yaw/pitch/dist/size/model/lightDir/lightColor/spp）。kStage 仍 S8.2；Q4 冻结面 0 新增独立 GBuffer 资源；S9 收官 tag s9-done。",
+   "acceptance": [
+    "--mode reference 双后端 re-shot 与冻结基线逐字节相同（确定性、无回归）；run.bat verify 全绿：双侧 exit 0 + bytes 2/2 + 日志锚 reference scene ready / 4096/4096 spp(100%) 存在且 TLAS not ready 缺失 + 双后端 near dx12/vulkan 1px 0.00% + 负向 exit 1",
+    "直光标准答案噪声极低：放大 400% 无明显颗粒（4096 spp 多帧累积）；空像素与 M9.1 单射线逐字节一致（字节一致性铁律：pow(清屏色,2.2) 线性贡献、present 归一还原）",
+    "硬阴影正确：每像素 64 条抖动阴影射线经 M8 TLAS，terminator 锐利无软阴影；是 M9.1 阴影射线与 VSM(S15) 的直光 / 硬阴影裁判",
+    "Q4 冻结面 0 新增独立 GBuffer 资源；复用 rtTarget_ 作线性 sum buffer；kStage 仍 S8.2；S9 收官 tag s9-done（不建里程碑分支）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "reference",
+     "name": "离线参考模式：渐进式多帧累积直光真值图（硬阴影裁判 M9.1/VSM）",
+     "kind": "pair",
+     "note": "M9.2 新增 --mode reference：每像素 64 条抖动阴影射线经 M8 TLAS 累积进线性 sum buffer（rtTarget_），64 帧 = 4096 spp 降噪；present 时 g_refSamplesDone 归一再一次性 gamma。这是 M9.1 阴影射线与 VSM(S15) 的直光 / 硬阴影真值裁判。基线取自 tag s9-done 构建产物（双后端）。同名 .json 侧车记录 yaw/pitch/dist/size/model/lightDir/lightColor/spp 供回归对拍。",
+     "baselines": {
+      "dx12": "example/s9-reference/reference-dx12.png",
+      "vulkan": "example/s9-reference/reference-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "reference",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "64",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9"
+     ],
+     "command": "viewer.exe --mode reference --model Suzanne-materials.nmesh --screenshot <out.png> --frames 64 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+     "script": "example/s9-reference/run.bat verify"
+    }
+   ]
+  },
+  {
    "id": "drive-m0",
    "label": "M-D0",
    "name": "碰撞事件桥：Jolt ContactListener → Jolt-free POD 事件流（M-D0）",

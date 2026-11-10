@@ -46,8 +46,8 @@ public:
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-                      bool shadowMode, std::string& outError) = 0;
+                     bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
+                     bool shadowMode, bool referenceMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，
