@@ -8,7 +8,7 @@ namespace nl::core {
 
 // M0.5：游戏热键边沿。M-C1：Grave(`)=控制台呼出、Tab=补全请求（viewer 边沿消费，
 // 不进 ImGui 文本流；其余键全量以 KeyEvent 通道喂 ImGui，见 consumeKeyEvents）。
-enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Grave, Tab, Count };
+enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Grave, Tab, T, Count };
 
 struct WindowDesc {
     int         width  = 1280;

@@ -30,6 +30,7 @@ Key mapKey(int glfwKey) {
         case GLFW_KEY_F12:    return Key::F12;
         case GLFW_KEY_GRAVE_ACCENT: return Key::Grave;  // M-C1：控制台呼出
         case GLFW_KEY_TAB:    return Key::Tab;   // M-C1：补全请求（viewer 边沿）
+        case GLFW_KEY_T:      return Key::T;     // P8 M-CAM4：Chase↔Free 切换边沿（C 已被 cull 占用）
         default:              return Key::Unknown;
     }
 }
