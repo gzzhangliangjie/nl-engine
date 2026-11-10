@@ -162,6 +162,9 @@ add_library(nl_core STATIC
     core/src/input.cpp         # P8 M-I0：输入状态层（三态 + 鼠标全量 + 注入 API，A 类轨道）
     core/src/action_map.cpp    # P8 M-I1：ActionMap/ActionSet 映射层（Carrot 解析规则，纯逻辑零 GLFW）
     core/src/camera.cpp
+    core/src/camera_rig.cpp    # P8 M-CAM0：CameraRig 基座（相机族共享矩阵口径 + 正交/透视）
+    core/src/chase_camera.cpp  # P8 M-CAM0：ChaseCamera 跟车（阻尼/boom/look-ahead，纯 CPU）
+    core/src/free_camera.cpp   # P8 M-CAM0：FreeCamera 自由飞行（无阻尼直出，纯 CPU）
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
     core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）
@@ -442,3 +445,4 @@ add_subdirectory(phys-tools)
 add_subdirectory(nav-tools)
 add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
+add_subdirectory(cam-tools)
