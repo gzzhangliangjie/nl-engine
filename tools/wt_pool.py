@@ -135,6 +135,12 @@ TRACKS = {
                 "merged to master a2e3cff (tags drive-m0~drive-m3); "
                 "wt removed 2026-11-10, branch kept",
     },
+    "editor": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-editor",
+        "branch": "feat/editor", "state": "active",
+        "note": "外置编辑器轨道（C++/ImGui 宿主 + 引擎侧 editor_bridge），独立于渲染主线；"
+                "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0 外壳 + M-E1 RPC 通路起步",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
