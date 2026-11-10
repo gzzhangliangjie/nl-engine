@@ -112,11 +112,11 @@ TRACKS = {
     },
     "camera": {
         "wt": "E:/UE_STUDY_2026/nl-engine-camera",
-        "branch": "feat/camera", "state": "active",
+        "branch": "feat/camera", "state": "closed",
         "note": "A-class track opened 2026-11-10 (game-dev step 4 camera family; plan "
                 "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM3; wt built at master 1acd491, "
                 "junctions .workbuddy + slang dist, skip-worktree set; CAM1~CAM3 "
-                "serial after drive M-D3)",
+                "serial after drive M-D3); merged to master 7b0f24a (tags cam-m0/cam-1a/cam-3a); wt removed 2026-11-10, branch kept; remaining CAM2a/CAM1b/CAM2b/CAM3b/CAM4 to reopen in a new wt",
     },
     "input": {
         "wt": "E:/UE_STUDY_2026/nl-engine-input",
