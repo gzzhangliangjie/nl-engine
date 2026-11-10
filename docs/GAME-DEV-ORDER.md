@@ -25,8 +25,8 @@
 | 序 | 内容 | 验收形态 | 前置 | 状态 |
 |---|---|---|---|---|
 | **1** | 输入层扩展（全键位 + action mapping） | tool 卡 + selftest，core 侧零图形 | 无 | **在轨**：track `input`，`docs/p8/P8-INPUT-PLAN.md`，M-I0 落码中 |
-| **2** | 碰撞事件桥（Jolt ContactListener → ECS 事件） | selftest 数值锚（命中事件时序），照 phys 先例 | 无，可与 1 并行 | 待开工 |
-| **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2 | 待开工 |
+| **2** | 碰撞事件桥（Jolt ContactListener → ECS 事件） | selftest 数值锚（命中事件时序），照 phys 先例 | 无，可与 1 并行 | **已立项**：`docs/p8/P8-COLLISION-PLAN.md`（track `collide`，M-CB0/CB1，2026-11-10），待开 wt |
+| **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2 | **已立项**：`docs/p8/P8-VEHICLE-PLAN.md`（track `vehicle`，M-V0/V1，2026-11-10；vendored Vehicle 模块全量实证在库），待开 wt |
 | **4** | Chase 相机（车辆跟随） | viewer 截图基线（跟车视角双后端） | 3 | 待开工 |
 | **5** | **游戏壳收拢**：独立 game target，GameClock 逻辑帧串起输入→载具→相机→World | 「能开一圈」截图 + 暂停语义回归 | 1+3+4 | 待开工（Q2 定 target 形态） |
 | **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 拍板 | 待开工 |
@@ -67,3 +67,8 @@
 - 2026-11-10：固化本文档（用户指令）；输入层（第 1 步）已先行立项开工（track `input`，
   `P8-INPUT-PLAN.md`，M-I0 落码中）；碰撞事件桥证据：core 全目录 grep 零
   `ContactListener`/trigger 回调（review 实证）。
+- 2026-11-10（续）：第 1 步 input 轨道 M-I0~I2 全收口合回主干（merge `0df16a0`）；第 2/3 步
+  立项出计划（用户指令「碰撞事件桥和载具物理先出文档」）——`P8-COLLISION-PLAN.md`（track
+  `collide`）+ `P8-VEHICLE-PLAN.md`（track `vehicle`）。vendored Jolt 实证：ContactListener.h
+  与 Physics/Vehicle/ 全模块在库；载具前置实情修正：VehicleConstraint 走 raycast 轮，
+  技术上不依赖第 2 步（软前置 = 玩法面），两轨可并行开 wt，文件重叠仅 CMakeLists.txt。
