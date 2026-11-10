@@ -6866,7 +6866,7 @@
    "date": "2026-11-10",
    "summary": "A 类相机轨道首里程碑（计划 docs/p8/P8-CAMERA-PLAN.md，track camera，城市驾驶第 4 步）：CameraRig 轻量基座（位姿+投影共享口径，列主序 ZO 矩阵同 OrbitCamera，2026-11-10 用户拍板加正交/透视双模式）+ ChaseCamera（位置/旋转 lag 分离指数阻尼（UE SpringArm 实读口径）、boom rig、look-ahead、C 边沿模式切换位姿逐位连续、倒车/回头 XOR 变体）+ FreeCamera（无阻尼直出、归一化轴输入、boost 4x）+ cam-tools 六节 selftest（A 直线跟随稳态/B 急转残差单调衰减/C 切换连续+orbit 冻结/D 同 dt 逐位+跨 dt 收敛分档/E 自由飞行逐位）+ cam-trace/check（150 帧场景 10 锚）+ free-trace/check（60 帧脚本 6 锚，锚全部从实测 trace 反推）。OrbitCamera 零改动零回归（viewer selftest 16/16 不动）。",
    "acceptance": [
-    "cam-tools selftest 7 节全绿（M-CAM1a 起）（init clamp 族+正交/透视基座断言 / chase-a~d / free-e），DX12+VULKAN 双构建树",
+    "cam-tools selftest 8 节全绿（M-CAM3a 起）（M-CAM1a 起）（init clamp 族+正交/透视基座断言 / chase-a~d / free-e），DX12+VULKAN 双构建树",
     "trace→check 闭环：cam-trace 150 帧 + cam-check 10 锚（f0 阻尼位姿/f10 look kick/单调衰减/转弯残差跳升/orbit 冻结/恢复衰减）；free-trace 60 帧 + free-check 6 锚；锚从实测 log 反推（M-I0/I1 教训口径）",
     "证据图由双 trace TSV 真实输出生成（make-cam-m0-evidence.py），run.bat 重生成后 fc /b 逐字节一致",
     "负向退出码：无参数 exit 2 / 未知节 exit 2（对齐 expectExit 约定 0/1/2）",
@@ -6892,12 +6892,12 @@
      "id": "selftest",
      "name": "selftest：6 节机械锚全绿",
      "kind": "tool",
-     "note": "init（clamp 族+正交/透视基座）/ chase-a 直线跟随稳态 / chase-b 急转残差衰减 / chase-c 切换连续+orbit 冻结 / chase-d 逐位+收敛分档 / free-e 自由飞行逐位。；M-CAM1a 起增 director-f 节（7 节）",
+     "note": "init（clamp 族+正交/透视基座）/ chase-a 直线跟随稳态 / chase-b 急转残差衰减 / chase-c 切换连续+orbit 冻结 / chase-d 逐位+收敛分档 / free-e 自由飞行逐位。；M-CAM1a 起增 director-f 节（7 节）；M-CAM3a 起增 cine-g 节（8 节）",
      "args": [
       "selftest"
      ],
      "expectExit": 0,
-     "expectLog": "selftest PASS (7 sections)",
+     "expectLog": "selftest PASS (8 sections)",
      "command": "cam-tools selftest"
     },
     {
@@ -6951,7 +6951,7 @@
    "date": "2026-11-10",
    "summary": "相机轨接线面基础设施（2026-11-10 用户拍板「封装先行，函数空在那里也行」）：CAM1~CAM3 卡 drive M-D3 的只是 viewer/main.cpp 胶水，本里程碑把链路里不依赖窗口/图形的部分先落库测完——buildSpectatorActionMap（新 SetId spectator 组：moveForward/moveRight/moveUp/boost，出厂激活；look/camToggle 复用 driving set 既有动作零重复定义）+ readFreeInputs（ActionMap 冻结值 → FreeCamera 轴口径适配，弧度换算单点 kLookRadiansPerPixel）+ ChassisState（M-D2 车体回读规范结构，drive 轨负责填充）+ CameraDirector（Chase↔Free 模式管理：C 边沿互切、切换帧重种子+冻结一帧双向位姿逐位连续、无车体数据保持位姿不崩不漂）+ FreeCamera::setPose / ChaseCamera::snapEyeTo+lookDirection（M-CAM0 类最小增量，既有路径零改动）+ CinematicCamera 桩（播放状态机真实现，轨迹加载/采样显式失败待 M-CAM3a）+ cam-tools 第七节 director-f（spectator 映射+门控+切换连续+阻尼恢复+桩形状）+ director-trace/check（90 帧模式切换场景 9 锚闭环）。",
    "acceptance": [
-    "cam-tools selftest 7 节全绿（新增 director-f：spectator 映射/门控/双向切换逐位连续/阻尼恢复/chassis 失效冻结/cinematic 桩形状），DX12+VULKAN 双构建树",
+    "cam-tools selftest 8 节全绿（M-CAM3a 起）（新增 director-f：spectator 映射/门控/双向切换逐位连续/阻尼恢复/chassis 失效冻结/cinematic 桩形状），DX12+VULKAN 双构建树",
     "director-trace 90 帧 + director-check 9 锚（f29→f30 / f59→f60 切换连续、Free 段 eye_z 严格递增、切回后阻尼恢复）；锚从实测 log 反推",
     "证据图由 director-trace TSV 真实输出生成（make-cam-1a-evidence.py），run.bat 重生成后 fc /b 逐字节一致",
     "负向退出码：无参数 exit 2 / 未知节 exit 2",
@@ -6967,12 +6967,12 @@
      "id": "selftest",
      "name": "selftest：7 节机械锚全绿（含 director-f）",
      "kind": "tool",
-     "note": "init（clamp 族+基座）/ chase-a~d / free-e / director-f（spectator 映射+输入适配+模式管理+cinematic 桩）。",
+     "note": "init（clamp 族+基座）/ chase-a~d / free-e / director-f（spectator 映射+输入适配+模式管理+cinematic 桩）。；M-CAM3a 起增 cine-g 节（8 节）",
      "args": [
       "selftest"
      ],
      "expectExit": 0,
-     "expectLog": "selftest PASS (7 sections)",
+     "expectLog": "selftest PASS (8 sections)",
      "preview": "example/cam-1a/acceptance.png",
      "command": "cam-tools selftest"
     },
@@ -6989,6 +6989,68 @@
      "expectLog": "director-check PASS (90 rows, 9 anchors)",
      "preview": "example/cam-1a/acceptance.png",
      "command": "cam-tools director-check example/cam-1a/director-trace.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：未知 selftest 节（退出码 2）",
+     "kind": "tool",
+     "note": "未知节显式 usage error，不静默假成功。",
+     "args": [
+      "selftest",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown selftest section",
+     "command": "cam-tools selftest bogus"
+    }
+   ]
+  },
+  {
+   "id": "cam-3a",
+   "label": "M-CAM3a",
+   "name": "轨迹相机真实现：TSV 加载 + Linear/SmoothStep 逐位插值 + loop/倍速/自动收尾（M-CAM3a）",
+   "tag": "cam-3a",
+   "date": "2026-11-10",
+   "summary": "M-CAM1a 桩升真实现（2026-11-10 拍板「封装先行」的轨迹面兑现）：loadTrack（TSV 列规范 t/eye xyz/look xyz/fovY，'#' 注释与表头跳过，任一行列数错整体失败不出半成品）+ loadTrackFromMemory（严格递增+有限校验，不做隐藏排序）+ **加载即归一时间轴**（t'=t-t[0] 一次固化，端点 t==0/t==duration 走精确分支逐位等于关键帧值）+ whole-track 双模式插值（Linear 缺省同 UE InterpCurve CIM_Linear；SmoothStep s=u*u*(3-2u) 同 bevy_curve EaseFunction::SmoothStep；eye/lookAt/fovY 三通道同式同序逐位确定）+ 播放语义对齐 UE MovieScene PlaybackSettings（PlayRate 倍速只收 >0 / Loop fmod 整圈精确回 t0 / 非 loop 播完当帧写终帧位姿后自动 Stopped 归零）+ cam-tools 第八节 cine-g（加载校验/端点逐位/插值逐位/smoothstep 与线性中点重合/wrap 回卷逐位/pause 冻结/倍速累积逐位/TSV 文件回路）+ cine-trace/check（90 帧播放场景 12 锚闭环，锚全部实测反推）+ 证据图 TSV 真实输出生成。跨后端 cine-trace 逐位一致（cmp 实证）。",
+   "acceptance": [
+    "cam-tools selftest 8 节全绿（新增 cine-g），DX12+VULKAN 双构建树",
+    "cine-trace 90 帧 + cine-check 12 锚（f0 首帧位姿/f29 k1 边界/f64 wrap 实落帧/f89 第二圈位姿/pause 冻结带/倍速步长 2x/loop 存活/fov 段内插值）；锚从实测 log 反推",
+    "跨后端确定性：DX12/VULKAN cine-trace 输出 cmp 逐位一致",
+    "证据图由 cine-trace TSV 真实输出生成，run.bat 重生成后 fc /b 逐字节一致",
+    "负向退出码：无参数 exit 2 / 未知节 exit 2",
+    "零回归：cam-m0/cam-1a 既有锚不动（expectLog 机械升级 8 节），OrbitCamera 一字未动 viewer selftest 16/16"
+   ],
+   "exe": {
+    "dx12": "build/dx12/cam-tools.exe",
+    "vulkan": "build/vulkan/cam-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：8 节机械锚全绿（含 cine-g）",
+     "kind": "tool",
+     "note": "init/chase-a~d/free-e/director-f/cine-g（轨迹加载校验+端点插值逐位+wrap/pause/倍速）。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest PASS (8 sections)",
+     "preview": "example/cam-3a/acceptance.png",
+     "command": "cam-tools selftest"
+    },
+    {
+     "id": "cine-check",
+     "name": "cine-check：90 帧轨迹播放场景按 12 锚重验",
+     "kind": "tool",
+     "note": "cine-trace 先 dump 真实输出（example/cam-3a/cine-trace.tsv），check 断言行数+实测数值锚+pause 冻结带+倍速+wrap 回卷+loop 存活。",
+     "args": [
+      "cine-check",
+      "{root}/example/cam-3a/cine-trace.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "cine-check PASS (90 rows, 12 anchors)",
+     "preview": "example/cam-3a/acceptance.png",
+     "command": "cam-tools cine-check example/cam-3a/cine-trace.tsv"
     },
     {
      "id": "negative",

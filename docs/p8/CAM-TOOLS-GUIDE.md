@@ -25,7 +25,7 @@
 `(-0.450649, 2.164500, 5.520267)`、f10 kick `12.032114°`、稳态高度 `4.0562`
 等数值均来自首次实跑 dump，check 只认 dump 本身。
 
-## 3. selftest 七节锚点（M-CAM1a 起；M-CAM0 收口时为六节）
+## 3. selftest 八节锚点（M-CAM3a 起；M-CAM1a 七节 / M-CAM0 六节）
 
 | 节 | 锚 |
 |---|---|
@@ -76,3 +76,18 @@ onChanged 回写先例）在 M-CAM1/M-CAM2 viewer 接线时落。正交模式 vi
   ChaseCamera::snapEyeTo / lookDirection（M-CAM0 类最小增量，既有锚不动）。
 - cam-tools 链 glfw（同 input-tools 理由：input.hpp 公开 API 用 GLFW 键码常量，非窗口）。
 - 证据：`example/cam-1a/`（director-trace.tsv 基线 + acceptance.png 四面板由 TSV 生成）。
+
+
+## 8. M-CAM3a 增量（轨迹相机真实现，2026-11-10）
+
+- 新命令：`cine-trace`（90 帧播放场景 TSV：speed1 → pause 5 帧 → speed2 → f60 起
+  loop，f64 越过终点 wrap 回卷）/ `cine-check <tsv>`（12 锚：f0 首帧位姿、f29 k1
+  边界、f64 wrap 实落帧、f89 第二圈位姿、pause 冻结带、倍速步长 2x、loop 存活、
+  fov 段内插值等；全部实测反推）。
+- 第八节 `cine-g`：加载校验（null/零长/时间相等/NaN 显式拒绝）、TSV 文件回路、
+  端点逐位（t=0→k0、t=duration→kEnd）、线性/SmoothStep 插值逐位（同式重算 memcmp）、
+  smoothstep 中点=线性中点、wrap 整圈 fmod 精确回 t0、pause 冻结、倍速累积逐位。
+- 轨迹格式：TSV 8 列 `t eye_x eye_y eye_z look_x look_y look_z fovY`，'#' 注释行
+  与 `t<TAB>` 表头跳过，任一行列数错 = 整体加载失败。加载即归一时间轴（t'=t-t[0]），
+  progress 即轨迹时间，端点走精确分支。
+- 确定性证据：DX12/VULKAN cine-trace 输出 cmp 逐位一致。

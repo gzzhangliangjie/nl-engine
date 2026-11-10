@@ -2195,3 +2195,19 @@
 4. **行尾又双叒**：本会话 Write 产出的 CMakeLists/指南是 LF、bat 必须 ASCII+CRLF——patch 前先探测行尾再替换（`nl = "\r\n" if "\r\n" in s else "\n"`）。
 
 **下一步**：M-CAM2a（Chase phys 回读桥，随 M-D2 数据形态）/ M-CAM3a（CinematicCamera 轨迹实现，全无头随时可开工）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，收敛面=readFreeInputs→director.update→投影替换，等 drive M-D3）；M-CAM4 平滑/防抖无头段可插队。merge 回 master 与 drive/particles 队列一起排。
+
+## P8 M-CAM3a：轨迹相机真实现——TSV 加载 + Linear/SmoothStep 逐位插值 + loop/倍速/自动收尾（feat/camera，2026-11-10，tag `cam-3a`）
+
+**动作**：M-CAM1a 收口后续做（用户「那就继续做后续工作」），按排程取全无头可开工的 M-CAM3a。三处定向实读（UE `InterpCurvePoint.h` EInterpCurveMode：CIM_Linear 缺省/CIM_CurveAuto/CIM_Constant + `MovieSceneSequencePlaybackSettings.h` PlayRate 缺省 1.f/LoopCount 循环；bevy `bevy_curve/src/easing.rs` EaseFunction::Linear|SmoothStep 运行时可选；Carrot grep 无轨迹相机系统——计划预口径全部实锤）→ `cinematic_camera.hpp/.cpp` 桩升真实现：loadTrack（TSV 8 列规范，'#' 注释/表头跳过，任一行列数错整体失败）+ loadTrackFromMemory（严格递增+有限校验，不隐藏排序）+ **加载即归一时间轴**（t'=t-t[0] 一次固化 → 端点精确分支逐位）+ whole-track Linear/SmoothStep 双模式（三通道同式同序）+ PlayRate/Loop/非 loop 自动收尾语义 + cam-tools 第八节 cine-g（G1 加载校验~G7 pause 倍速防抖共 7 组锚）+ cine-trace/check 90 帧 12 锚闭环 + `tools/make-cam-3a-evidence.py`（TSV→确定性 PNG 双面板）+ `example/cam-3a/`（run.bat 五段式 + TSV/PNG 基线 + 日志）+ cases.json cam-3a 卡（cam-m0/cam-1a 卡 expectLog 机械升级 8 节 + 两个旧 run.bat findstr 同步）+ CAM-TOOLS-GUIDE §8 → 本四栏 → tag。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-3a`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + selftest 8 节全绿 ×2；cine-check 12 锚（f0 首帧/f29 k1 边界/f64 wrap 实落/f89 第二圈 + pause 冻结带/倍速 2x/loop 存活/fov 插值）；**跨后端 cine-trace cmp 逐位一致**（确定性铁证）；证据图 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验双面板（矩形轨迹/关键帧圈/wrap 标记/pause 平段/fov 曲线吻合，标签压字已修）；负向退出码实测；run.bat ALL GREEN exit 0；ctest 6/6（--repeat until-pass:3）；viewer selftest 16/16 零回归；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **MSYS 路径转换咬 bat 引号（本会话新变种）**：Bash heredoc 里的 `findstr /c://"...//"` 落盘变成 `/c:/\"`（`\` 被转换层吃掉），findstr 报「无法打开」；且隔离复测时测试命令里的 Windows 路径同样被转成 `/`——**测试工具本身被污染，exit 1 全是假象**。铁律升级：bat 内容含 `\"` 序列时禁用 Bash heredoc 写入，用 Write 工具落 python 修复脚本再执行；复现测试前先核工具自身路径没被转换。
+2. **findstr 排障走弯路**：先怀疑 log 编码/文件锁/括号特殊字符，二分到「所有子串都匹配不上」才定性为路径被吃——应在第一时间 `2>&1` 看 stderr（「无法打开 E:selftest-dx12.log」一眼定位）。
+3. **锚精度 vs TSV 显示精度**：wrap 后 fmod 残差 ~1e-8 显示为 0.000000，解析回 0.0 使 `t > 0.0` 子条件假失败——TSV 六位小数精度下的锚不许断言「严格大于 0」，用上界单边断言。
+4. **双后端 exe 版本漂移**：Vulkan 树在锚修正前构建，check 对同一 TSV 文件 DX12 过 VK 挂——先疑玄学，实为 exe 旧版本；双后端验收必须同源代码版本（cmp TSV 一致反而帮了定位：文件一致而结果不一致 = 可执行文件不一致）。
+
+**下一步**：M-CAM2a（Chase phys 回读桥，等 M-D2 数据形态）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，等 drive M-D3；CAM3b = `--camera-track` 加载 + HUD 时间轴）/ M-CAM4 平滑防抖无头段可插队；feat/camera merge 回 master 待排（冲突面 CMakeLists.txt + MILESTONES/cases.json 语义合并）。

@@ -567,12 +567,13 @@ void selftestDirector() {
     check(std::memcmp(eyeHold, eyeFrozen, sizeof(eyeHold)) == 0,
           "F: invalid chassis freezes chase pose");
 
-    // F7: cinematic 桩——API 形状（显式失败，不静默假成功；状态机真实现）
+    // F7: cinematic 状态机（轨迹面 M-CAM3a 已实现，见 cine-g / cine-trace；这里保
+    // 状态机与显式失败语义回归面）
     CinematicCamera cine;
     check(!cine.loadTrack("no-such-track.tsv"),
-          "F: cinematic loadTrack stub fails explicitly (M-CAM3a pending)");
+          "F: cinematic loadTrack missing file fails explicitly");
     CameraRig rigOut;
-    check(!cine.sample(1.0f / 60.0f, rigOut), "F: cinematic sample stub no-op");
+    check(!cine.sample(1.0f / 60.0f, rigOut), "F: cinematic sample without track no-op");
     cine.play();
     check(cine.state() == CinematicCamera::PlayState::Playing, "F: play state machine");
     cine.sample(1.0f / 60.0f, rigOut);
@@ -583,6 +584,149 @@ void selftestDirector() {
     check(cine.state() == CinematicCamera::PlayState::Stopped &&
               cine.progressSeconds() == 0.0f,
           "F: stop resets progress");
+}
+
+// ---- G: cinematic 轨迹相机（M-CAM3a：加载校验 / 端点与插值逐位 / wrap / pause 倍速）----
+void selftestCineG() {
+    using namespace nl::core;
+
+    // G1: 加载校验——显式失败，不出半成品
+    TrackKeyframe bad[2] = {};
+    bad[0].timeSeconds = 0.0f; bad[1].timeSeconds = 0.0f;      // 时间相等
+    CinematicCamera cine;
+    check(!cine.loadTrackFromMemory(nullptr, 3), "G: null frames rejected");
+    check(!cine.loadTrackFromMemory(bad, 0), "G: zero count rejected");
+    check(!cine.loadTrackFromMemory(bad, 2), "G: equal times rejected");
+    TrackKeyframe nanK[2] = {};
+    nanK[0].timeSeconds = 0.0f; nanK[1].timeSeconds = 1.0f;
+    nanK[1].eye[0] = std::nanf("");
+    check(!cine.loadTrackFromMemory(nanK, 2), "G: NaN field rejected");
+
+    // G2: 基础轨迹（值全取二进制精确数，端点/中点可逐位断言）
+    TrackKeyframe keys[3] = {};
+    keys[0].timeSeconds = 0.0f;
+    keys[0].eye[0] = 0.0f; keys[0].eye[1] = 2.0f; keys[0].eye[2] = 6.0f;
+    keys[0].lookAt[2] = -1.0f;
+    keys[0].fovYDegrees = 45.0f;
+    keys[1].timeSeconds = 2.0f;
+    keys[1].eye[0] = 6.0f; keys[1].eye[1] = 2.0f; keys[1].eye[2] = 6.0f;
+    keys[1].lookAt[0] = 6.0f;
+    keys[1].fovYDegrees = 60.0f;
+    keys[2].timeSeconds = 4.0f;
+    keys[2].eye[0] = 6.0f; keys[2].eye[1] = 2.0f; keys[2].eye[2] = 0.0f;
+    keys[2].fovYDegrees = 45.0f;
+    check(cine.loadTrackFromMemory(keys, 3), "G: valid track loads");
+    check(cine.keyframeCount() == 3 && cine.duration() == 4.0f,
+          "G: keyframe count 3 + duration 4");
+
+    // TSV 文件回路：写临时文件 → loadTrack → 同时长
+    {
+        std::FILE* fp = std::fopen("cam-cine-selftest.tmp", "w");
+        check(fp != nullptr, "G: temp tsv writable");
+        if (fp) {
+            std::fprintf(fp, "t\teye_x\teye_y\teye_z\tlook_x\tlook_y\tlook_z\tfovY\n");
+            for (const TrackKeyframe& k : keys) {
+                std::fprintf(fp, "%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\n",
+                             k.timeSeconds,
+                             k.eye[0], k.eye[1], k.eye[2],
+                             k.lookAt[0], k.lookAt[1], k.lookAt[2],
+                             k.fovYDegrees);
+            }
+            std::fclose(fp);
+            CinematicCamera cine2;
+            check(cine2.loadTrack("cam-cine-selftest.tmp"), "G: loadTrack from TSV file");
+            check(cine2.keyframeCount() == 3 && cine2.duration() == cine.duration(),
+                  "G: TSV roundtrip matches memory load");
+            std::remove("cam-cine-selftest.tmp");
+        }
+    }
+
+    CameraRig rig;
+
+    // G3: 端点逐位（t=0 → k0；t=duration → kEnd，走精确分支）
+    cine.play();
+    check(cine.sample(0.0f, rig), "G: sample(dt=0) returns k0 pose");
+    check(rig.eye[0] == keys[0].eye[0] && rig.eye[1] == keys[0].eye[1] &&
+          rig.eye[2] == keys[0].eye[2] && rig.fovYDegrees == keys[0].fovYDegrees,
+          "G: t=0 pose bit-exact = first keyframe");
+    cine.stop();
+    cine.play();
+    check(cine.sample(4.0f, rig), "G: crossing end writes end pose once");
+    check(rig.eye[0] == keys[2].eye[0] && rig.eye[2] == keys[2].eye[2] &&
+          rig.fovYDegrees == keys[2].fovYDegrees,
+          "G: end pose bit-exact = last keyframe");
+    check(cine.state() == CinematicCamera::PlayState::Stopped,
+          "G: non-loop end auto-stops");
+    check(!cine.sample(1.0f / 60.0f, rig), "G: stopped sample no-op");
+
+    // G4: 线性插值逐位（t=1 → seg0 u=0.5，与实现同式重算必须逐位相等）
+    cine.stop();
+    cine.play();
+    check(cine.sample(1.0f, rig), "G: sample t=1");
+    for (int j = 0; j < 3; ++j) {
+        const float want = keys[0].eye[j] + (keys[1].eye[j] - keys[0].eye[j]) * 0.5f;
+        check(rig.eye[j] == want,
+              "G: linear midpoint bit-exact (same-expression recompute)");
+    }
+    check(rig.fovYDegrees == 45.0f + (60.0f - 45.0f) * 0.5f,
+          "G: fov linear midpoint bit-exact");
+
+    // G5: smoothstep 模式（u=0.25 → s=0.15625 二进制精确；中点与线性重合）
+    cine.stop();
+    cine.setInterpMode(CinematicCamera::InterpMode::SmoothStep);
+    cine.play();
+    check(cine.sample(0.5f, rig), "G: sample t=0.5 smooth");
+    const float sWant = 0.25f * 0.25f * (3.0f - 2.0f * 0.25f);   // = 0.15625
+    check(rig.eye[0] == keys[0].eye[0] + (keys[1].eye[0] - keys[0].eye[0]) * sWant,
+          "G: smoothstep u=0.25 bit-exact (s=0.15625)");
+    const float smoothAtQ = rig.eye[0];
+    cine.stop();
+    cine.setInterpMode(CinematicCamera::InterpMode::Linear);
+    cine.play();
+    cine.sample(0.5f, rig);
+    check(rig.eye[0] == 6.0f * 0.25f && smoothAtQ < rig.eye[0],
+          "G: smoothstep lags linear at u=0.25 (eases in)");
+    cine.stop();
+    cine.setInterpMode(CinematicCamera::InterpMode::SmoothStep);
+    cine.play();
+    cine.sample(1.0f, rig);
+    check(rig.eye[0] == keys[0].eye[0] + (keys[1].eye[0] - keys[0].eye[0]) * 0.5f,
+          "G: smoothstep midpoint = linear midpoint (s(0.5)=0.5)");
+    cine.setInterpMode(CinematicCamera::InterpMode::Linear);
+
+    // G6: wrap 连续（loop + speed2 + dt=1：t=2 落 k1 逐位；整圈回 t0 逐位）
+    cine.stop();
+    cine.setLoop(true);
+    cine.setSpeed(2.0f);
+    cine.play();
+    check(cine.sample(1.0f, rig), "G: loop sample t=2");
+    check(rig.eye[0] == keys[1].eye[0] && rig.eye[2] == keys[1].eye[2],
+          "G: t=2 lands on k1 bit-exact");
+    check(cine.sample(1.0f, rig), "G: loop sample crosses end -> wraps");
+    check(cine.progressSeconds() == 0.0f,
+          "G: wrap progress exactly 0 (fmod integral laps)");
+    check(rig.eye[0] == keys[0].eye[0] && rig.eye[2] == keys[0].eye[2],
+          "G: wrap pose returns exactly to t0 (bit-exact)");
+    cine.setLoop(false);
+    cine.setSpeed(1.0f);
+
+    // G7: pause 时序 + 倍速 + setSpeed 防御
+    cine.stop();
+    cine.play();
+    cine.sample(1.0f / 60.0f, rig);
+    const float kDt = 1.0f / 60.0f;
+    cine.pause();
+    check(!cine.sample(kDt, rig), "G: paused sample no-op");
+    check(cine.progressSeconds() == kDt, "G: pause freezes progress");
+    cine.setSpeed(0.0f);
+    check(cine.speed() == 1.0f, "G: setSpeed(0) rejected");
+    cine.setSpeed(2.0f);
+    cine.play();
+    cine.sample(kDt, rig);
+    check(cine.progressSeconds() == kDt + 2.0f * kDt,
+          "G: speed 2x doubles advance (bit-exact accumulate)");
+    cine.stop();
+    check(cine.progressSeconds() == 0.0f, "G: stop resets progress");
 }
 
 struct Section { const char* name; void (*fn)(); };
@@ -825,6 +969,142 @@ int runDirectorCheck(int argc, char** argv) {
     return 0;
 }
 
+// ---- cine-trace：90 帧轨迹播放场景 → TSV（M-CAM3a evidence 数据源，真实输出）----
+// 轨迹 4 键 t=0/0.5/1.0/1.5（时长 1.5s，dt=1/60）：
+//   f0..29  speed1 播放（progress 0 -> 0.5）
+//   f30..34 pause 5 帧（progress 冻结）
+//   f35..59 speed2 播放（progress -> ~1.333）
+//   f60..89 loop=true 继续 speed2（~f65 越过终点 wrap 回卷，第二圈播到尾）
+int runCineTrace(int argc, char** argv) {
+    (void)argc; (void)argv;
+    using namespace nl::core;
+    TrackKeyframe keys[4] = {};
+    keys[0].timeSeconds = 0.0f;
+    keys[0].eye[0] = 0.0f; keys[0].eye[1] = 2.0f; keys[0].eye[2] = 6.0f;
+    keys[0].fovYDegrees = 45.0f;
+    keys[1].timeSeconds = 0.5f;
+    keys[1].eye[0] = 4.0f; keys[1].eye[1] = 2.0f; keys[1].eye[2] = 6.0f;
+    keys[1].lookAt[0] = 4.0f;
+    keys[1].fovYDegrees = 50.0f;
+    keys[2].timeSeconds = 1.0f;
+    keys[2].eye[0] = 4.0f; keys[2].eye[1] = 2.0f; keys[2].eye[2] = 2.0f;
+    keys[2].lookAt[0] = 4.0f; keys[2].lookAt[2] = -4.0f;
+    keys[2].fovYDegrees = 60.0f;
+    keys[3].timeSeconds = 1.5f;
+    keys[3].eye[0] = 0.0f; keys[3].eye[1] = 2.0f; keys[3].eye[2] = 2.0f;
+    keys[3].lookAt[2] = -4.0f;
+    keys[3].fovYDegrees = 45.0f;
+
+    CinematicCamera cine;
+    if (!cine.loadTrackFromMemory(keys, 4)) {
+        std::printf("ERROR: cine-trace track load failed\n");
+        return 1;
+    }
+    std::printf("frame\tt\teye_x\teye_y\teye_z\tfov\tstate\n");
+    const float kDt = 1.0f / 60.0f;
+    CameraRig rig;
+    for (int f = 0; f < 90; ++f) {
+        const bool paused = (f >= 30 && f < 35);
+        if (paused) cine.pause();
+        else if (cine.state() != CinematicCamera::PlayState::Playing) cine.play();
+        if (f == 60) cine.setLoop(true);
+        if (f == 35) cine.setSpeed(2.0f);
+        const bool wrote = cine.sample(kDt, rig);
+        const int state = paused ? 2
+                        : (cine.state() == CinematicCamera::PlayState::Playing ? 1 : 0);
+        if (wrote) {
+            std::printf("%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\n",
+                        f, cine.progressSeconds() + 0.0f,
+                        rig.eye[0] + 0.0f, rig.eye[1] + 0.0f, rig.eye[2] + 0.0f,
+                        rig.fovYDegrees + 0.0f, state);
+        } else {
+            // 无位姿帧（pause 段 / 越过终点收尾后的 Stopped 帧）也落行，
+            // eye/fov 置 NaN 文本 nan 供 check 识别「out 不动」语义。
+            std::printf("%d\t%.6f\tnan\tnan\tnan\tnan\t%d\n",
+                        f, cine.progressSeconds() + 0.0f, state);
+        }
+    }
+    return 0;
+}
+
+// ---- cine-check：TSV 重验（pause 冻结 / 倍速 / wrap 回卷 / loop 存活）----
+struct CineRow { int f; double t, ex, ey, ez, fov; int state; };
+
+int runCineCheck(int argc, char** argv) {
+    if (argc < 1) { std::printf("ERROR: cine-check needs a <tsv> path\n"); return 2; }
+    std::FILE* fp = std::fopen(argv[0], "r");
+    if (!fp) { std::printf("ERROR: cannot open '%s'\n", argv[0]); return 1; }
+    char line[512];
+    std::vector<CineRow> rows;
+    while (std::fgets(line, sizeof(line), fp)) {
+        if (std::strstr(line, "frame\t") == line) continue;
+        CineRow r{};
+        if (std::sscanf(line, "%d\t%lf\t%lf\t%lf\t%lf\t%lf\t%d",
+                        &r.f, &r.t, &r.ex, &r.ey, &r.ez, &r.fov, &r.state) == 7)
+            rows.push_back(r);
+    }
+    std::fclose(fp);
+    auto at = [&](int f) -> const CineRow* {
+        for (const CineRow& r : rows) if (r.f == f) return &r;
+        return nullptr;
+    };
+    check(static_cast<int>(rows.size()) == 90, "cine-check: 90 rows");
+    if (rows.size() < 90) { std::printf("cine-check FAIL\n"); return 1; }
+    // 实测数值锚（trace 实测反推，M-I0/I1 口径；tol 对齐 TSV 六位小数精度）。
+    {
+        const CineRow* r0 = at(0);
+        check(r0->t > 0.016666 && r0->t < 0.016668 &&
+              r0->ex > 0.133332 && r0->ex < 0.133334 &&
+              r0->fov > 45.166667 && r0->fov < 45.166669,
+              "cine-check: f0 first-frame pose (t=1/60, trace-derived)");
+        const CineRow* r29 = at(29);
+        check(r29->t > 0.499999 && r29->t < 0.500001 &&
+              r29->ex > 3.999999 && r29->ex < 4.000001 &&
+              r29->fov > 49.99999 && r29->fov < 50.00001,
+              "cine-check: f29 lands on k1 boundary (t=0.5, trace-derived)");
+        check(at(63)->t > 1.466666 && at(63)->t < 1.466668 &&
+              at(64)->t < 0.00001 &&
+              at(64)->ez > 5.9999,
+              "cine-check: wrap exactly at f64 (t 1.466667 -> ~0, trace-derived)");
+        const CineRow* r89 = at(89);
+        check(r89->t > 0.833333 && r89->t < 0.833335 &&
+              r89->ez > 3.333329 && r89->ez < 3.333331 &&
+              r89->fov > 56.666675 && r89->fov < 56.666677,
+              "cine-check: f89 second-lap pose (trace-derived)");
+    }
+    // pause 带：f30..34 state=2 且 progress 冻结。
+    bool paused = true;
+    for (int f = 30; f <= 34; ++f)
+        if (at(f)->state != 2 || at(f)->t != at(30)->t) paused = false;
+    check(paused, "cine-check: pause band f30..34 freezes progress");
+    check(at(29)->state == 1 && at(35)->state == 1,
+          "cine-check: playing resumes at f35");
+    // 倍速：f35..f59 每帧步长 = 2 x f0..f29 段步长（同 dt，speed 翻倍）。
+    const double step1 = at(5)->t - at(4)->t;
+    const double step2 = at(40)->t - at(39)->t;
+    check(step2 > step1 * 1.999 && step2 < step1 * 2.001,
+          "cine-check: speed 2 doubles per-frame advance");
+    // wrap：f60 起 loop 开，越过终点某帧 t 骤降回 0 附近，位姿回到 k0 附近。
+    int wrapF = -1;
+    for (int f = 61; f < 75; ++f)
+        if (at(f)->t < at(f - 1)->t - 1.0) { wrapF = f; break; }
+    check(wrapF > 0, "cine-check: loop wrap happens (t drops past end)");
+    if (wrapF > 0) {
+        check(at(wrapF)->ex < 0.2 && at(wrapF)->ey > 1.8 && at(wrapF)->ez > 5.8,
+              "cine-check: wrap frame pose returns to k0 neighborhood");
+        check(at(wrapF)->state == 1,
+              "cine-check: still playing across wrap (loop semantics)");
+    }
+    // loop 存活：f89 仍在 Playing（非 loop 早已 Stopped）。
+    check(at(89)->state == 1, "cine-check: f89 still playing (loop alive)");
+    // 终点 fov 通道：k1 fov=50 段内（f13 附近 t≈0.2）fov 介于 45..50。
+    check(at(13)->fov > 45.0 && at(13)->fov < 50.0,
+          "cine-check: fov interpolates inside first segment");
+    if (g_failures != 0) { std::printf("cine-check FAIL\n"); return 1; }
+    std::printf("cine-check PASS (90 rows, 12 anchors)\n");
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -839,7 +1119,9 @@ int main(int argc, char** argv) {
             "  cam-tools free-check <tsv>     re-verify a dumped free-trace\n"
             "  cam-tools director-trace       dump the 90-frame mode-switch scenario as TSV\n"
             "  cam-tools director-check <tsv> re-verify a dumped director-trace\n"
-            "sections: init chase-a chase-b chase-c chase-d free-e director-f\n"
+            "  cam-tools cine-trace           dump the 90-frame cinematic playback as TSV\n"
+            "  cam-tools cine-check <tsv>     re-verify a dumped cine-trace\n"
+            "sections: init chase-a chase-b chase-c chase-d free-e director-f cine-g\n"
             "exit codes: 0=PASS 1=failure 2=usage error\n");
         return 2;
     }
@@ -853,6 +1135,7 @@ int main(int argc, char** argv) {
             {"chase-d",    selftestChaseD},
             {"free-e",     selftestFreeE},
             {"director-f", selftestDirector},
+            {"cine-g",     selftestCineG},
         };
         const char* only = (argc >= 3) ? argv[2] : nullptr;
         bool ranAny = false;
@@ -869,7 +1152,7 @@ int main(int argc, char** argv) {
             std::printf("selftest FAIL (%d failure(s))\n", g_failures);
             return 1;
         }
-        std::printf("selftest PASS (7 sections)\n");
+        std::printf("selftest PASS (8 sections)\n");
         return 0;
     }
     if (cmd == "cam-trace")       return runCamTrace(argc - 2, argv + 2);
@@ -878,6 +1161,8 @@ int main(int argc, char** argv) {
     if (cmd == "free-check")      return runFreeCheck(argc - 2, argv + 2);
     if (cmd == "director-trace")  return runDirectorTrace(argc - 2, argv + 2);
     if (cmd == "director-check")  return runDirectorCheck(argc - 2, argv + 2);
+    if (cmd == "cine-trace")      return runCineTrace(argc - 2, argv + 2);
+    if (cmd == "cine-check")      return runCineCheck(argc - 2, argv + 2);
     std::printf("ERROR: unknown command '%s'\n", cmd.c_str());
     return 2;
 }

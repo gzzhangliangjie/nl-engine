@@ -20,7 +20,7 @@ if errorlevel 1 (
     echo [ERROR] cam-tools selftest FAILED DX12
     exit /b 1
 )
-findstr /c:"selftest PASS (7 sections)" "%D%selftest-dx12.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
+findstr /c:"selftest PASS (8 sections)" "%D%selftest-dx12.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
 type "%D%selftest-dx12.log"
 
 echo === selftest (VULKAN build tree) ===
@@ -30,7 +30,7 @@ if errorlevel 1 (
     echo [ERROR] cam-tools selftest FAILED VULKAN
     exit /b 1
 )
-findstr /c:"selftest PASS (7 sections)" "%D%selftest-vulkan.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
+findstr /c:"selftest PASS (8 sections)" "%D%selftest-vulkan.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
 
 echo === director-trace + director-check (9 trace-derived anchors) ===
 "%ROOT%\build\DX12\cam-tools.exe" director-trace > "%D%director-trace.tsv" 2>&1
