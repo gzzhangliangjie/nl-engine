@@ -374,6 +374,12 @@ public:
     // 目标纹理随视口懒建（ensureRtTargets，resize 复用 hiz ensureTargets 模式）。
     void drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 const nvrhi::Viewport& viewport, const FrameParams& params);
+    // M9.0 T5：present 初始化 / 呈现抽成共用函数，rt 与 shadow 两条链复用同一张
+    // rtTarget_ (RGBA32_FLOAT) 与 psRtPresent；不碰 TLAS / rtComputeSet_。
+    bool initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
+                       std::string& outError);
+    bool presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                         const nvrhi::Viewport& viewport, std::string& outError);
   private:
     bool ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                          std::string& outError);
@@ -801,7 +807,7 @@ private:
     nvrhi::ComputePipelineHandle rtPSO_;
     nvrhi::GraphicsPipelineHandle rtPresentPSO_;          // 随 framebuffer 信息建
     nvrhi::BindingLayoutHandle   rtComputeLayout_;
-    nvrhi::BindingSetHandle      rtComputeSet_;           // TLAS + UAV 纹理（ensureRtTargets 建）
+    nvrhi::BindingSetHandle      rtComputeSet_;           // TLAS + UAV 纹理（drawRt 懒建，TLAS 就绪后）
     nvrhi::BindingLayoutHandle   rtPresentLayout_;
     nvrhi::BindingSetHandle      rtPresentSet_;           // SRV 纹理（ensureRtTargets 建）
     nvrhi::BufferHandle          rtConstants_;            // volatile CB 80B（每帧全量覆写）

@@ -2121,6 +2121,84 @@ void Scene::pollTlasProbe(nvrhi::IDevice* device) {
 // 深度吻合 = S8 验收（同一 viewProj、同一 TLAS 实例 transform）。
 // ============================================================================
 
+// ============================================================================
+// M9.0 T5：present 初始化 / 呈现从 initRt 抽出，供 rt 与 shadow 两条链共用。
+// shadow 走 initVisbuf(pulling)（initCull 链，无 TLAS），不调 initRt，但需要
+// 同一张 rtTarget_ (RGBA32_FLOAT) 与 psRtPresent 把 compute 结果呈现进 framebuffer。
+// 本组函数不碰 TLAS / BLAS / rtComputeSet_，只管 shader + 呈现 layout / PSO。
+// 纯结构重构：M8.2 的资源格式、BindingSet 内容、帧内顺序与画面语义一字未改。
+// ============================================================================
+bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
+                          std::string& outError) {
+    rtDevice_ = device;
+    auto rtPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+    };
+    auto loadPresent = [&](const char* artifact, nvrhi::ShaderType type,
+                           nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(rtPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load rt shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+        desc.setShaderType(type).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for rt ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadPresent("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
+        !loadPresent("psrtpresent", nvrhi::ShaderType::Pixel, psRtPresent_))
+        return false;
+
+    // 呈现布局：t0 = rt 目标 SRV（psRtPresent 用 Texture2D.Load，无采样器）。
+    nvrhi::BindingLayoutDesc pLayoutDesc;
+    pLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
+    rtPresentLayout_ = device->createBindingLayout(pLayoutDesc);
+    if (!rtPresentLayout_) { outError = "createBindingLayout failed for rt present"; return false; }
+    return true;
+}
+
+bool Scene::presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                            const nvrhi::Viewport& viewport, std::string& outError) {
+    if (!rtDevice_ || !framebuffer || !rtTarget_ || !rtPresentSet_) {
+        outError = "presentRtTarget: missing device/framebuffer/target/set";
+        return false;
+    }
+    // 呈现 PSO 懒建（framebuffer 格式定型后建一次；resize 只换尺寸不换格式）。
+    if (!rtPresentPSO_) {
+        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psRtPresent_)
+             .addBindingLayout(rtPresentLayout_);
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        // 深度测试/写入关（缺省即关）：全屏覆盖层，hiz viz 同款。
+        rtPresentPSO_ = rtDevice_->createGraphicsPipeline(pDesc, info);
+        if (!rtPresentPSO_) {
+            outError = "createGraphicsPipeline failed for rt present";
+            return false;
+        }
+    }
+    nvrhi::GraphicsState pstate;
+    pstate.setPipeline(rtPresentPSO_)
+          .setFramebuffer(framebuffer)
+          .addBindingSet(rtPresentSet_);
+    pstate.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(pstate);
+    nvrhi::DrawArguments vargs;
+    vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    cmd->draw(vargs);
+    return true;
+}
+
 bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
                    const char* vsEntry, const char* psEntry,
                    const char* nmeshFile, std::string& outError) {
@@ -2131,7 +2209,11 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
     rtDevice_ = device;
     rt_ = true;
 
-    // ---- shader（hiz 模式 loadShader lambda 同款）----
+    // M9.0 T5：present shader / layout 抽成共用初始化（shadow 链不调 initRt，
+    // 也要能复用 rtTarget_ + psRtPresent 呈现骨架）。
+    if (!initRtPresent(device, shaderSuffix, outError)) return false;
+
+    // ---- compute shader（hiz 模式 loadShader lambda 同款）----
     auto rtPath = [shaderSuffix](const char* artifact) {
         return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
     };
@@ -2150,11 +2232,7 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!out) outError = std::string("createShader failed for rt ") + artifact;
         return out != nullptr;
     };
-    if (!loadRtShader("cs", nvrhi::ShaderType::Compute, csRt_) ||
-        !loadRtShader("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
-        !loadRtShader("psrtpresent", nvrhi::ShaderType::Pixel, psRtPresent_)) {
-        return false;
-    }
+    if (!loadRtShader("cs", nvrhi::ShaderType::Compute, csRt_)) return false;
 
     // RtConstants（rt.slang b0，80B）：invViewProj 64B + params 16B。每帧 1 次写入
     // × frame-in-flight 2 → maxVersions 16 富余（SceneConstants 同款纪律：每帧
@@ -2184,13 +2262,7 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     if (!rtPSO_) { outError = "createComputePipeline failed for rt"; return false; }
 
-    // 呈现布局：t0 = rt 目标 SRV（psRtPresent 用 Texture2D.Load，无采样器）。
-    nvrhi::BindingLayoutDesc pLayoutDesc;
-    pLayoutDesc.setVisibility(nvrhi::ShaderType::All)
-        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
-    rtPresentLayout_ = device->createBindingLayout(pLayoutDesc);
-    if (!rtPresentLayout_) { outError = "createBindingLayout failed for rt present"; return false; }
-    // 呈现 PSO 随 framebuffer 格式在 drawRt 懒建（与 hiz vizPSO 同款）。
+    // 呈现布局 / PSO 已由 initRtPresent / presentRtTarget 共用初始化接管。
 
     nl::core::log::info("rt scene ready (RayQuery per-pixel debug rays)",
                         " | shader=", shaderSuffix);
@@ -2221,17 +2293,10 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     rtTarget_ = device->createTexture(tDesc);
     if (!rtTarget_) { outError = "createTexture failed for rt target"; return false; }
 
-    // compute set（TLAS 引用 M8.1 每帧 rebuild 的同一个对象——buildTlasFrame 在
-    // drawRt 之前已于 recordFrame 记录，同列表顺序保证射线打的是本帧 TLAS）。
-    {
-        nvrhi::BindingSetDesc sd;
-        sd.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(0, tlas_))
-           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
-                                                       nvrhi::Format::RGBA32_FLOAT))
-           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, rtConstants_));
-        rtComputeSet_ = device->createBindingSet(sd, rtComputeLayout_);
-    }
-    if (!rtComputeSet_) { outError = "createBindingSet failed for rt compute set"; return false; }
+    // M9.0 T5：compute set 依赖 tlas_（M8.1 每帧 rebuild 的同一对象），只有 rt
+    // 链有 TLAS；shadow 走 initVisbuf 时不能在这里建。置空让 drawRt 在
+    // tlasReady_ 之后按当前 rtTarget_ 懒建——帧内顺序与改动前一致。
+    rtComputeSet_ = nullptr;
 
     // 呈现 set（SRV 纹理重建后同步重建）。
     {
@@ -2265,22 +2330,17 @@ void Scene::drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         return;
     }
 
-    // 呈现 PSO 懒建（framebuffer 格式定型后建一次；resize 只换尺寸不换格式）。
-    if (!rtPresentPSO_) {
-        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
-        nvrhi::GraphicsPipelineDesc pDesc;
-        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
-             .setVertexShader(vsRtPresent_)
-             .setFragmentShader(psRtPresent_)
-             .addBindingLayout(rtPresentLayout_);
-        pDesc.renderState.rasterState
-            .setFrontCounterClockwise(true)
-            .setFillMode(nvrhi::RasterFillMode::Solid)
-            .setCullMode(nvrhi::RasterCullMode::None);
-        // 深度测试/写入关（缺省即关）：全屏覆盖层，hiz viz 同款。
-        rtPresentPSO_ = rtDevice_->createGraphicsPipeline(pDesc, info);
-        if (!rtPresentPSO_) {
-            nl::core::log::deviceError("rt", "createGraphicsPipeline failed for rt present");
+    // M9.0 T5：compute set 从 ensureRtTargets 移到这里（TLAS 就绪后按当前
+    // rtTarget_ 懒建；resize 时 ensureRtTargets 置空 → 自动重建）。
+    if (!rtComputeSet_) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(0, tlas_))
+           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
+                                                       nvrhi::Format::RGBA32_FLOAT))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, rtConstants_));
+        rtComputeSet_ = rtDevice_->createBindingSet(sd, rtComputeLayout_);
+        if (!rtComputeSet_) {
+            nl::core::log::deviceError("rt", "createBindingSet failed for rt compute set");
             return;
         }
     }
@@ -2311,16 +2371,10 @@ void Scene::drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     cmd->setComputeState(cstate);
     cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
 
-    // ---- 呈现：全屏 quad 把调试图画进 framebuffer（SV_Position Load 逐像素）----
-    nvrhi::GraphicsState pstate;
-    pstate.setPipeline(rtPresentPSO_)
-          .setFramebuffer(framebuffer)
-          .addBindingSet(rtPresentSet_);
-    pstate.viewport.addViewportAndScissorRect(viewport);
-    cmd->setGraphicsState(pstate);
-    nvrhi::DrawArguments vargs;
-    vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
-    cmd->draw(vargs);
+    // ---- 呈现：M9.0 T5 抽成共用函数（rt / shadow 两条链复用同一 rtTarget_）----
+    if (!presentRtTarget(cmd, framebuffer, viewport, err)) {
+        nl::core::log::deviceError("rt", err);
+    }
 }
 
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {

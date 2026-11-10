@@ -19,7 +19,7 @@
 | T2 | 公共头同时提供 `gbReconstructWorldPos(pixel, deviceZ, size, invViewProj)`，与 `rt.slang::csRt` 同源（perspectiveZO，z=0 近 / z=1 远） | ✅ |
 | T3 | `CMakeLists.txt` 显式登记 `_GBUFFER_COMMON` 依赖（防改公共头不重编的假绿）；双后端构建 + selftest + 抽查回归 | ✅ |
 | T4 | 新增 `--mode shadow` 开关：**枚举 / `core/src/modes.cpp` 注册表 / `viewer/main.cpp` `runMode()` 与模型白名单 / 两后端 `backend_{dx12,vulkan}.cpp` 分发**（该 mode 当前不存在，注册表末位是 `rt`）。无阴影版走 compute 8×8 直光 pass：`initVisbuf(..., pulling=true)` 产 vis buffer → `gbInterpolateVisTriangle` 即取即算 + **逐字搬移 mode 5 BRDF** → 写输出 → present；**不发阴影射线**。`kStage` **不 bump**（现有卡都不传新 mode，HUD 基线 0 改动） | ⬜ |
-| T5 | 按 §2.7 给该 compute pass 建**单一 BindingSet**；槽位与状态登记**以实读代码为准**（`material.slang:39-72`、`scene.cpp:2171-2177`），固化进 `docs/SHADER-CONVENTIONS.md` §2.18。**任务书不预设槽位号**。输出复用 M8.2 的 `rtTarget_` 纹理对象（`RGBA32_FLOAT`，**不新建资源**）与 `psRtPresent` 呈现骨架；为此需把 present shader / layout / PSO 与 UAV 纹理创建从 `initRt` / `ensureRtTargets` 抽成两条链共用，并把依赖 TLAS 的 `rtComputeSet_` 创建留在 `drawRt` —— **纯结构重构，不改任何资源格式 / 槽位 / 画面语义**，`s8.2/rt-dist` 回归必跑 | ⬜ |
+| T5 | 按 §2.7 给该 compute pass 建**单一 BindingSet**；槽位与状态登记**以实读代码为准**（`material.slang:39-72`、`scene.cpp:2171-2177`），固化进 `docs/SHADER-CONVENTIONS.md` §2.18。**任务书不预设槽位号**（前置纯结构重构已完成，见「实测留痕」）。输出复用 M8.2 的 `rtTarget_` 纹理对象（`RGBA32_FLOAT`，**不新建资源**）与 `psRtPresent` 呈现骨架；为此需把 present shader / layout / PSO 与 UAV 纹理创建从 `initRt` / `ensureRtTargets` 抽成两条链共用，并把依赖 TLAS 的 `rtComputeSet_` 创建留在 `drawRt` —— **纯结构重构，不改任何资源格式 / 槽位 / 画面语义**，`s8.2/rt-dist` 回归必跑 | ⬜ |
 | T6 | 对照卡：`--mode shadow` 无阴影版 vs mode 5 **逐像素一致**；比对口径写清（同机位同参数两张 PNG、空像素写清屏色 `(0,0,0,1)` 对齐 `discard` 语义、`RGBA32_FLOAT` UAV 原值 → `psRtPresent` 输出 → `RGBA8_UNORM` framebuffer 只有一次 float→UNORM 转换、present 的 UV 取像素与 `SV_Position` 对齐）；**对照卡锁定 tag `s9-gbuffer` 的 exe**，M9.1 起同 mode 语义变更不重跑 | ⬜ |
 | T7 | 交付物：`example/s9-gbuffer/` 基线 + `run.bat` + `cases.json` 卡 + `server.py --check` 退出 0 | ⬜ |
 | T8 | 收口：四栏台账写实 + `wt_pool.py close` 硬闸 + tag `s9-gbuffer` | ⬜ |
@@ -37,6 +37,7 @@
 - 双后端 `viewer --selftest` 16/16 ×2、`Slang 单源 64/64`；`material.psmatresolve.spv 17188B` / `.dxil 14884B` 重编。
 - `s7.2/pulling`、`pbr-direct/pbr`、`pbr-direct/textured`、`s8.2/rt-dist` 四条 × DX12/VULKAN = **8/8 `bytes`**（near 0 / FAIL 0，报告 `build/regression/m9-spot-*.md`）。`psMatResolve` 字节码因内联改函数调用 DIFF，画面逐字节保形 → 逐字搬移成立；VS 两目标逐字节不变。
 - 踩坑：只改 shader / CMake / 文档时 DX12 `viewer.exe` 未重链、mtime 落后 `material.slang` 37 分钟，触发回归闸 exe 新鲜度门禁；删 exe 强制重链解决（VULKAN 因 camera cpp 重编已重链）。
+- **T5 前置纯结构重构（2026-11-10 18:2x，已验）**：`initRtPresent`（present shader + layout）与 `presentRtTarget`（PSO 懒建 + 全屏 draw）从 `initRt` / `drawRt` 抽出，`rtComputeSet_` 创建移到 `drawRt`（TLAS 就绪后懒建），`ensureRtTargets` 只建 `rtTarget_` + `rtPresentSet_` 并置空 compute set。双后端构建 + selftest 16/16 ×2、shader 64/64；`s8.2/rt-dist`、`s8.2/rt-id`、`s8.1/tlas-spin-probe`、`pbr-direct/pbr` 四条 = **8/8 `bytes`**（near 0 / FAIL 0，报告 `build/regression/m9-t5-*.md`）→ M8.2 画面逐字节保形，重构无语义变化。
 
 ### 落码前实读事实（2026-11-10 补）
 
