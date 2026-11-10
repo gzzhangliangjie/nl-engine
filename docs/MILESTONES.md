@@ -2162,3 +2162,20 @@
 2. **enable_testing() 时序**：目录属性在 add_subdirectory 时拷贝，先 add_subdirectory 后 enable_testing() 则子目录 add_test 全部失效（ctest 报 "No tests found"）——必须先 enable_testing。
 3. **子目录路径语义漂移**：`CMAKE_CURRENT_SOURCE_DIR` 进子目录后不再是仓库根，`assets/`、`material-graph-tools/sample.mg` 等引用全部改走根级 `NL_ROOT`；audio-tools 的 `NL_AUDIO_ASSET_DIR` 同理。
 4. **手工编辑格式污染**：input 轨道收口时往 cases.json 手工追加的是单行压缩 JSON（合法但非规范格式），全文件 diff 面扩大——驱动统一输出规范格式 + 手工追加也须走 python json 库（已写进 PARALLEL-TRACKS §8.1）。
+
+## P8 M-CAM0：玩法相机族无头核心——CameraRig 基座（正交/透视）+ Chase/Free 双相机 + cam-tools（feat/camera 轨道首里程碑，2026-11-10，tag `cam-m0`）
+
+**动作**：城市驾驶第 4 步（立项链：`docs/p8/P8-CAMERA-PLAN.md` 主树 `1acd491`，track `camera` 注册 wt_pool/PARALLEL-TRACKS 主树 `f6ebb8d`；wt 起点 master `1acd491`，junction 共享 `.workbuddy`/`slang dist` + skip-worktree）。三处参考实读（UE `SpringArmComponent.h` 位置/旋转 lag 分离 + `CameraLagSpeed`/`RotationLagSpeed`/`CameraLagMaxDistance` 实读、Carrot `CameraComponent/CameraSystem` 纯投影容器无 spring arm、bevy `bevy_render/camera` 无官方跟随相机——计划 §2 预口径全部实锤）→ `core/include/nl/core/camera_rig.hpp` + `core/src/camera_rig.cpp`（位姿+投影共享口径基座：列主序 ZO 矩阵同 OrbitCamera；**用户当日拍板加正交/透视双模式**，Perspective 缺省零影响）+ `chase_camera.hpp/.cpp`（boom rig = 朝向+180°+鼠标 look 累计+倒车/回头 XOR；位置/旋转双系数指数阻尼 `exp(-k·dt)` 帧率无关；look-ahead clamp；Mode 切换只改 auto-return 语义位姿逐位不动）+ `free_camera.hpp/.cpp`（无阻尼直出、归一化轴 moveInput + 弧度 lookDelta + boost 4x、俯仰 ±83° clamp）+ `cam-tools/`（六节 selftest：init clamp 族+基座断言 / chase-a 稳态 / chase-b 残差单调衰减 / chase-c 切换连续+orbit 冻结+XOR 变体 / chase-d 同 dt 逐位+跨 dt 收敛分档 / free-e 逐位+clamp+boost 倍率；cam-trace 150 帧 + cam-check 10 锚 / free-trace 60 帧 + free-check 6 锚，**锚全部实测 trace 反推**）+ CMake（nl_core 源单 3 行 + cam-tools target + ctest 2 条）+ `tools/make-cam-m0-evidence.py`（双 TSV → 确定性 PNG 四面板）+ `example/cam-m0/`（run.bat 双后端五段式 + acceptance.png 基线 + 双 TSV + 6 份日志）+ cases.json cam-m0 卡 5 用例 + `docs/p8/CAM-TOOLS-GUIDE.md` → 本四栏 → 提交打 tag。当日用户两次追加拍板：正交/透视进 M-CAM0 基座、平滑/过渡/防抖立项 M-CAM4（Cinemachine/Godot/GDC trauma 锚入计划 §2）。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-m0`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2（OrbitCamera 一字未动零回归）；cam-tools selftest 6 节全绿（含 D 档同 dt 150 帧重放 memcmp 逐位一致、跨 dt 2.5s 收敛差 < 0.2 理论值 0.05 吻合）；trace→check 双闭环 PASS（cam 150 行 10 锚 / free 60 行 6 锚，稳态滞后实测 ≈ v·Δt/α 理论 1.25 命中 [0.9,1.6]）；证据图双 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验四面板（kick 尖峰/orbit 冻结带/yaw 累计 90°/俯冲曲线与 TSV 吻合）；负向退出码实测（无参 2 / 未知节 2）；run.bat ALL GREEN exit 0；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **成员名遮蔽自由函数**：`CameraRig::lookAt` 字段把 camera_rig.cpp 匿名命名空间的 `lookAt()` 函数在成员函数体内遮蔽（C2064「项不会计算为接受 3 个参数的函数」）——辅助函数改名 `makeLookAt` 解决；新类字段命名要避开同文件工具函数名。
+2. **bat 三连坑再+1**：Edit 工具改 bat 会把行尾转 LF（cmd 解析炸成碎片）；`%~dp0` 尾反斜杠 + 引号 = `\"` 转义吃掉收尾引号（参数粘连报「不是内部或外部命令」）——bat 一律 python 显式 CRLF + ASCII 写全量，传路径参数给脚本时尾补 `.`。
+3. **trace 与 selftest 脚本必须单一定义源**：yaw 增量修了 selftest 侧没同步 runFreeTrace（同表达式两处手抄），trace 里 20 帧只累计 4.5° 而非 90°——脚本场景定义应共用一个常量/函数，两处手抄必漂。
+4. **测试断言的阻尼时序感**：倒车 XOR 锚初版单帧 update 后比对——指数阻尼单帧只走 8% 根本没到位；涉及阻尼状态的断言一律跑足 120 帧到稳态再比。
+5. **锚手写错再+1（同 M-I0 教训）**：look kick 阈值写 20°（实际 30px×0.007=12°）、boost 对照帧选了混入横移/yaw 的 f31、pitch clamp 边界写成 ±83.08~83.09（-1.45 rad=-83.078° 出界）——数值锚从实测 log 反推 + 边界断言留一位容差。
+
+**下一步**：M-CAM1 viewer FreeCamera 接线（M-D3 落输入管线后串行）；M-CAM4 平滑/过渡/防抖无头部分可随时插队（`CameraSmoother` 二阶 spring + trauma shake，锚已入计划 §2）；merge 回 master 与 drive/particles 队列一起排（冲突面仅 CMakeLists.txt，viewer/main.cpp 本里程碑未触碰）。

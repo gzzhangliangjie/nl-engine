@@ -6857,6 +6857,91 @@
      "script": "example/input-m2/run.bat"
     }
    ]
+  },
+  {
+   "id": "cam-m0",
+   "label": "M-CAM0",
+   "name": "玩法相机族无头核心：CameraRig 基座（正交/透视）+ Chase/Free 双相机（M-CAM0）",
+   "tag": "cam-m0",
+   "date": "2026-11-10",
+   "summary": "A 类相机轨道首里程碑（计划 docs/p8/P8-CAMERA-PLAN.md，track camera，城市驾驶第 4 步）：CameraRig 轻量基座（位姿+投影共享口径，列主序 ZO 矩阵同 OrbitCamera，2026-11-10 用户拍板加正交/透视双模式）+ ChaseCamera（位置/旋转 lag 分离指数阻尼（UE SpringArm 实读口径）、boom rig、look-ahead、C 边沿模式切换位姿逐位连续、倒车/回头 XOR 变体）+ FreeCamera（无阻尼直出、归一化轴输入、boost 4x）+ cam-tools 六节 selftest（A 直线跟随稳态/B 急转残差单调衰减/C 切换连续+orbit 冻结/D 同 dt 逐位+跨 dt 收敛分档/E 自由飞行逐位）+ cam-trace/check（150 帧场景 10 锚）+ free-trace/check（60 帧脚本 6 锚，锚全部从实测 trace 反推）。OrbitCamera 零改动零回归（viewer selftest 16/16 不动）。",
+   "acceptance": [
+    "cam-tools selftest 6 节全绿（init clamp 族+正交/透视基座断言 / chase-a~d / free-e），DX12+VULKAN 双构建树",
+    "trace→check 闭环：cam-trace 150 帧 + cam-check 10 锚（f0 阻尼位姿/f10 look kick/单调衰减/转弯残差跳升/orbit 冻结/恢复衰减）；free-trace 60 帧 + free-check 6 锚；锚从实测 log 反推（M-I0/I1 教训口径）",
+    "证据图由双 trace TSV 真实输出生成（make-cam-m0-evidence.py），run.bat 重生成后 fc /b 逐字节一致",
+    "负向退出码：无参数 exit 2 / 未知节 exit 2（对齐 expectExit 约定 0/1/2）",
+    "ctest mcam0-cam-selftest + mcam0-cam-usage-negative（WILL_FAIL 口径）",
+    "零回归：OrbitCamera（camera.hpp/cpp）一字未动，viewer selftest 16/16"
+   ],
+   "exe": {
+    "dx12": "build/dx12/cam-tools.exe",
+    "vulkan": "build/vulkan/cam-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数总览（退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2；退出码 0 成功 / 1 断言失败 / 2 用法错误。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "exit codes: 0=PASS 1=failure 2=usage error",
+     "command": "cam-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：6 节机械锚全绿",
+     "kind": "tool",
+     "note": "init（clamp 族+正交/透视基座）/ chase-a 直线跟随稳态 / chase-b 急转残差衰减 / chase-c 切换连续+orbit 冻结 / chase-d 逐位+收敛分档 / free-e 自由飞行逐位。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest PASS (6 sections)",
+     "command": "cam-tools selftest"
+    },
+    {
+     "id": "cam-check",
+     "name": "cam-check：150 帧跟车场景按 10 锚重验",
+     "kind": "tool",
+     "note": "cam-trace 先 dump 真实输出（example/cam-m0/cam-trace.tsv），check 断言行数 + f0 阻尼位姿/f10 kick/单调衰减/转弯跳升/orbit 冻结等 10 锚；防假绿口径。",
+     "args": [
+      "cam-check",
+      "{root}/example/cam-m0/cam-trace.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "cam-check PASS (150 rows, 10 anchors)",
+     "preview": "example/cam-m0/acceptance.png",
+     "command": "cam-tools cam-check example/cam-m0/cam-trace.tsv"
+    },
+    {
+     "id": "free-check",
+     "name": "free-check：60 帧自由飞行按 6 锚重验",
+     "kind": "tool",
+     "note": "free-trace 真实输出（example/cam-m0/free-trace.tsv）重验：boost 4x 倍率/20 帧 yaw 累计 90°/俯冲 pitch/单调性。",
+     "args": [
+      "free-check",
+      "{root}/example/cam-m0/free-trace.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "free-check PASS (60 rows, 6 anchors)",
+     "preview": "example/cam-m0/acceptance.png",
+     "command": "cam-tools free-check example/cam-m0/free-trace.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：未知 selftest 节（退出码 2）",
+     "kind": "tool",
+     "note": "未知节显式 usage error，不静默假成功。",
+     "args": [
+      "selftest",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown selftest section",
+     "command": "cam-tools selftest bogus"
+    }
+   ]
   }
  ]
 }
