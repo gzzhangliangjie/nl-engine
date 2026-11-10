@@ -27,7 +27,7 @@
 | **1** | 输入层扩展（全键位 + action mapping） | tool 卡 + selftest，core 侧零图形 | 无 | **在轨**：track `input`，`docs/p8/P8-INPUT-PLAN.md`，M-I0 落码中 |
 | **2** | 碰撞事件桥（Jolt ContactListener → ECS 事件） | selftest 数值锚（命中事件时序），照 phys 先例 | 无，可与 1 并行 | **已立项**（合轨）：`docs/p8/P8-DRIVE-PLAN.md` track `drive` M-D0/D1（2026-11-10），待开 wt |
 | **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2（技术软前置：VehicleConstraint 走 raycast 轮不依赖事件） | **已立项**（合轨）：同上 M-D2/D3（2026-11-10；vendored Vehicle 模块全量实证在库），待开 wt |
-| **4** | Chase 相机（车辆跟随） | viewer 截图基线（跟车视角双后端） | 3 | 待开工 |
+| **4** | 玩法相机族：Chase 跟车 + 纯自由飞行 + 轨迹文件（CameraRig 基座；倒车/回头变体；候选池见计划 §4） | cam-tools 五锚 selftest + viewer 截图基线（自由/跟车/轨迹双后端） | 3（M-CAM0 无头不依赖；viewer 侧需 M-D3） | **已立项**：`docs/p8/P8-CAMERA-PLAN.md`（track `camera`，M-CAM0~CAM3，2026-11-10），待开 wt |
 | **5** | **游戏壳收拢**：独立 game target，GameClock 逻辑帧串起输入→载具→相机→World | 「能开一圈」截图 + 暂停语义回归 | 1+3+4 | 待开工（Q2 定 target 形态） |
 | **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 拍板 | 待开工 |
 | **7** | 小规模程序化城市 + 载具驾驶闭环 | **第一个 tag 门槛：最小可玩版**——能在生成的城市里开一圈、撞了有事件反馈 | 5+6 | 待开工 |
@@ -74,3 +74,8 @@
   （track `drive`，M-D0 事件流 / D1 ECS 消费 / D2 载具集成 / D3 驾驶可见），旧两份撤档。
   vendored Jolt 实证：ContactListener.h 与 Physics/Vehicle/ 全模块在库；载具前置实情修正：
   VehicleConstraint 走 raycast 轮，技术上不依赖第 2 步（软前置 = 玩法面）。
+- 2026-11-10（续 2）：第 4 步立项出计划——`P8-CAMERA-PLAN.md`（track `camera`）。范围经用户
+  两次复核扩为**相机族三件套**（Chase 跟车 + Free 自由飞行 + Cinematic 轨迹文件）+ 低成本变体
+  （倒车/回头）+ CameraRig 轻量基座；候选池四项（Hood 后置 / Replay 不进本轨 / 后视镜不做 /
+  Photo mode 整合活）留痕在计划 §4。M-CAM0 无头不依赖 drive，viewer 侧四里程碑统一排
+  drive M-D3 之后串行（viewer/main.cpp 同文件冲突面一次清）。
