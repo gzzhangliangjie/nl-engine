@@ -257,6 +257,40 @@ private:
 // 用法：build() 建世界并预步进到稳态；每帧 step() 推进、extractLines() 取线流；
 // extractLines 返回的 data 指向 DebugScene 内部缓冲，仅在下次 extractLines 前有效
 // （同一帧内喂给 FrameParams 并 renderFrame 后即失效，符合 viewer 单帧消费模型）。
+// ---- M-D3 (Q-D3-1 A / Q-D3-4 hook): Jolt-free drive POD views ----
+// DebugScene scenario 2 owns the long-lived VehicleConstraint inside its Impl;
+// viewer / HUD / camera b-segment only ever see these plain structs.
+struct DriveInputState {
+    float forward   = 0.0f;
+    float right     = 0.0f;
+    float brake     = 0.0f;
+    float handBrake = 0.0f;
+};
+
+// Q-D3-4 "folded hook": structurally identical to nl::core::ChassisState
+// (camera_director.hpp:45-50) but declared here so nl/physics stays free of
+// graphics/window headers. viewer converts it to nl::core::ChassisState with a
+// plain field copy -- camera b-segment then only has to fill the projection hook.
+struct DriveChassisState {
+    float pos[3]     = {0.0f, 0.0f, 0.0f};
+    float yawDegrees = 0.0f;
+    float vel[3]     = {0.0f, 0.0f, 0.0f};
+    bool  valid      = false;
+};
+
+struct DriveViewState {
+    float pos[3]          = {0.0f, 0.0f, 0.0f};
+    float vel[3]          = {0.0f, 0.0f, 0.0f};
+    float yaw             = 0.0f;   // radians, atan2(forward.x, forward.z)
+    float speed           = 0.0f;  // horizontal |v|
+    int   grounded        = 0;     // wheels with HasContact() this frame
+    std::uint32_t contactAdded     = 0;
+    std::uint32_t contactPersisted = 0;
+    std::uint32_t contactRemoved   = 0;
+    std::uint32_t wallHits         = 0; // chassis <-> training-ground wall
+    bool  valid           = false;
+};
+
 struct DebugLines {
     const float* data = nullptr;          // px,py,pz,r,g,b 交替，长度 = vertexCount*6
     std::uint32_t vertexCount = 0;        // LINE_LIST：每 2 顶点为一段线
@@ -274,12 +308,21 @@ public:
     //               平台 -> 60° 斜坡；CharacterVirtual 沿 +x 匀速走查，
     //               线框含亮黄角色胶囊——CharacterVirtual 无真实体，
     //               DebugRenderer 不会自动画它，由本类手动补画）。
+    //           2 = M-D3 车辆训练场（Q-D3-1 A）：大平地 + 直道/弯道标记 + 一面墙，
+    //               车体是同一 PhysicsSystem 内的真实刚体，故撞墙天然产
+    //               ContactListener 事件；层过滤全通（禁 floor/floor 会让轮 ray 全 miss）。
     // gravity 默认 9.8；seed 当前未驱动 RNG（确定性来自固定步 + 单线程 JobSystem）。
     bool build(int scenario, std::uint32_t seed, std::string* err);
     void step(double dt);                 // 推进一个固定步（dt 建议 1/60）
     DebugLines extractLines();            // 提取所有刚体碰撞形状的线框（Jolt DebugRenderer 子类）
     const char* lastError() const;
     std::uint32_t bodyCount() const;
+
+    // M-D3: scenario 2 only. Jolt-free POD interface; other scenarios leave
+    // driveState().valid == false and chassisState().valid == false.
+    void setDriveInput(const DriveInputState& input);
+    DriveViewState driveState() const;
+    DriveChassisState chassisState() const;      // Q-D3-4: camera b-segment hook
 
 private:
     struct Impl;

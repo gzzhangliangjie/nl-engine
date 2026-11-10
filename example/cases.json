@@ -7789,6 +7789,156 @@
      "command": "phys-tools drive-trace --frames 0"
     }
    ]
+  },
+  {
+   "id": "drive-m3",
+   "label": "M-D3",
+   "name": "驾驶可见：DebugScene scenario 2 + viewer 实时输入 + 独立 HUD 窗口 + console cvar（M-D3）",
+   "tag": "drive-m3",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第四里程碑，A 类并行轨道、kStage 保持 S8.2（70 张既有基线零波及）。用户拍板 Q-D3-1~4：Q-D3-1 A 车挂进 DebugScene scenario 2 长生命周期 Impl::physicsSystem，真抽 buildVehicle(PhysicsSystem&)（M-D2 收官时只是文档承诺），公开头零 Jolt 类型，车与墙同 world 故撞墙天然产 M-D0 ContactListener 事件；Q-D3-2 A 扩展 M-I2 注入管线，viewer 仍不调 updateFromWindow()，实时键鼠走 Window::rawKeyDown(int) 只读查询，--drive-demo 帧序号脚本走同一 feedKey 路径，渲染帧累积→Physics 逻辑帧消费；Q-D3-3 A 不 bump kStage，DriveDebugUi 独立兄弟窗口 + 默认关闸门（--drive-hud 或 vehicle.debug true 打开），console cvar vehicle.throttleScale / steerScale / debug 注册在 --console-exec 之前；Q-D3-4 折中留钩子，默认 OrbitCamera::viewProjection()，留 ChassisState POD 与投影源切换钩子，不接 Chase/Free、不拍相机基线。scenario 2 三 filter 全层对 collide=true（禁 floor/floor 会让四轮 ray 全 miss，M-D2 events=0 教训）。--fixed-dt 16.6667 是 drive-demo 真正驱动物理的前提（不带时 posZ≈0.0075 车不动）。实测 300 帧：speed 0→7.86643 m/s（f210）→f240 撞墙 wallHits=1→f300 0.0115737 m/s，posZ 15.2419 m（墙 z=18，车头触墙而车身中心未到），yaw -20.2322 deg，grounded 4/4，contacts 1/8/1，deviceErrors=0；10 组帧扫描 30..300 全部由真实 viewer 最终态日志反推，无手写数值。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2（--repeat until-pass:3 ctest 两后端各 12/12）；M-D0 contacts.tsv / M-D1 ecs.tsv / M-D2 drive.tsv 六组逐字节零回归，DX12/VULKAN drive-trace 逐字节一致",
+    "scenario 2 长生命周期车：buildVehicle(PhysicsSystem&) 装配 20 bodies，四轮射线 grounded=4/4，墙 z=18 真实 ContactListener 事件 contacts=1/8/1、wallHits=1（首次 f240）",
+    "确定性：--fixed-dt 16.6667 下 10 组帧扫描 speed/posZ/yaw/contacts 单调可复现，frames.tsv 两次重跑逐字节稳定；双后端 drive scene / drive hook 日志锚逐字一致",
+    "画面：OrbitCamera 取景 --dist 45 --yaw 90 --pitch 40，蓝色地面线框 / 绿色车道标记 / 红色墙 / 黄色车体线框同框；Drive Debug (M-D3) 独立窗口固定 (620,330) 316x140，6 行完整无滚动条无压字",
+    "默认关闸门：无 --drive-hud 时 PNG 与基线 DIFFER；vehicle.debug true 无 --drive-hud 时与基线逐字节一致；vehicle.throttleScale 0.5 实跑 speed=0.0592731、contacts=1/9/1（对照基线 0.0115737 / 1/8/1）",
+    "负向：--physics-scenario 0 不产生任何 M-D3 drive scene 日志；phys-tools 负向退出码 2/1 实测",
+    "交代物：example/drive-m3/（run.bat 五段式 ALL GREEN + 双后端基线 PNG + frames.tsv + 8 份真实日志 + 2 张由实测数据渲染的证据图）+ 本卡六用例 + DRIVE-TOOLS-GUIDE.md §11 + MILESTONES 四栏"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "M-D3 不新增 phys-tools 子命令；此卡证明 M-D0/D1/D2 工具面依然完整可点跑。expectLog 来自真实 usage 输出。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-D0/D1/D2 锚全绿（零回归底座）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c + contacts + ecs + vehicle 全部 PASS；M-D3 只动 viewer/DebugScene，物理内核零改动。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 vehicle: PASS",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "drive-check",
+     "name": "drive-check：从 M-D2 归档 TSV 复验载具锚",
+     "kind": "tool",
+     "note": "直接复验 example/drive-m2/drive.tsv 的 18 条结构/物理断言 + 6 组实测数值锚，证明 M-D3 接线没有污染 M-D2 fresh-world 路径。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m2/drive.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 drive-check: PASS",
+     "preview": "example/drive-m3/timeline.png",
+     "command": "phys-tools drive-check example/drive-m2/drive.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：drive-check 缺文件（退出码 1）",
+     "kind": "tool",
+     "note": "expectLog 从实测输出 cannot open ... 复制，禁手写。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m3/no-such.tsv"
+     ],
+     "expectExit": 1,
+     "expectLog": "cannot open",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools drive-check example/drive-m3/no-such.tsv"
+    },
+    {
+     "id": "drive-demo",
+     "name": "drive-demo：训练场 300 帧实跑（日志锚断言）",
+     "kind": "tool",
+     "note": "viewer --drive-demo 帧序号脚本驱动真实 VehicleConstraint；--fixed-dt 16.6667 让 GameClock 每渲染帧推进 1/60 逻辑帧。{out} 只用于让截图模式正常退出，不进图像比对。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "cwd": "{root}",
+     "args": [
+      "--physics-debug",
+      "--physics-scenario",
+      "2",
+      "--drive-demo",
+      "--drive-hud",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--dist",
+      "45",
+      "--yaw",
+      "90",
+      "--pitch",
+      "40",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "drive hook: chassis valid=1",
+     "preview": "example/drive-m3/timeline.png",
+     "command": "viewer.exe --physics-debug --physics-scenario 2 --drive-demo --drive-hud --fixed-dt 16.6667 --frames 300 --dist 45 --yaw 90 --pitch 40 --screenshot <out>"
+    },
+    {
+     "id": "drive-scene",
+     "name": "训练场双后端截图基线（车 / 车道 / 墙 / 独立 HUD）",
+     "kind": "pair",
+     "note": "同一帧序号脚本经 DX12 / VULKAN 两条路径写 PNG；两后端各自对本后端基线逐字节复验（GPU 计时与着色器路径不同，跨后端 PNG 不要求一致）。窗口 6 行参数由真实 DriveViewState 填充。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "cwd": "{root}",
+     "args": [
+      "--physics-debug",
+      "--physics-scenario",
+      "2",
+      "--drive-demo",
+      "--drive-hud",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--dist",
+      "45",
+      "--yaw",
+      "90",
+      "--pitch",
+      "40",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "drive scene: speed=",
+     "baselines": {
+      "dx12": "example/drive-m3/drive-dx12.png",
+      "vulkan": "example/drive-m3/drive-vulkan.png"
+     },
+     "command": "viewer.exe --physics-debug --physics-scenario 2 --drive-demo --drive-hud --fixed-dt 16.6667 --frames 300 --dist 45 --yaw 90 --pitch 40 --screenshot <out.png>",
+     "script": "example/drive-m3/run.bat verify"
+    }
+   ]
   }
  ]
 }

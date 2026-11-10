@@ -20,7 +20,7 @@
 | **M-D0 物理事件流** | Jolt `ContactListener` 三回调接进 `nl/physics`，事件以 Jolt-free POD 流出，per-frame 可 dump TSV | `core/include/nl/physics/Events.hpp`（新）+ `World.cpp`（唯一 Jolt 符号面内实现 listener） |
 | **M-D1 ECS 消费** | owner→EntityID 映射 + 事件双缓冲队列 + 消费 System + TickGroup 时序契约 | `core/src/physics/` 队列 + `scene::System` 消费者 |
 | **M-D2 载具无头集成** | `VehicleConstraint` 薄集成：建车 + 驱动输入脚本 + 轨迹/轮态 dump + 三锚场景参数表 | `core/include/nl/physics/Vehicle.hpp`（新，PIMPL）+ `Vehicle.cpp`；phys-tools 扩 selftest |
-| **M-D3 驾驶可见** | viewer 训练场：DebugScene 新 scenario + M-I1 驾驶映射实时驱动 + HUD 参数行 + console 实调（车撞事件顺手当 M-D1 消费 demo） | `DebugScene` scenario 2 + viewer 接线 + example 卡 / cases.json |
+| **M-D3 驾驶可见** | viewer 训练场：DebugScene scenario 2 + M-I2 注入管线 / 窗口只读键态实时驱动 + 默认关的独立 HUD 窗口 + console cvar 实调（车撞墙事件当 M-D1 消费 demo）；相机保持 OrbitCamera，只留 `ChassisState` POD + 投影源切换钩子 | `DebugScene` scenario 2 + viewer 接线（不 bump `kStage`）+ example 卡 / cases.json |
 
 **关键设计约束**（历史约定对齐）：
 - `nl/physics` 头文件零 Jolt 类型纪律不变（PIMPL / POD 视图，照 `World.hpp` BodyInfo 口径）；集成层只做调参/装配/输入/读出，算法全在 vendored Jolt 内。
@@ -118,8 +118,11 @@
 #### M-D2 开工锚点表（2026-11-10 三处实读 + 用户拍板后补全）
 
 > **Q-D2-1 已拍板 = 方案 A 探针式 fresh world**（用户 2026-11-10）：`Vehicle` 公开面只有 POD，
-> 每次 `simulateDrive` 自建 `PhysicsSystem`；`buildVehicle(JPH::PhysicsSystem&)` 只活在 `Vehicle.cpp`，
-> M-D3 由 `DebugScene` scenario 2 复用。证据与 A/B/C 代价矩阵见 `docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md`。
+> 每次 `simulateDrive` 自建 `PhysicsSystem`。**口径更正（M-D3 开工闸实读）**：M-D2 收官时装配逻辑
+> 全部内联在 `simulateDrive()`，`buildVehicle(JPH::PhysicsSystem&)` **当时并不存在**，只活在
+> `Vehicle.hpp:8` / 本文 `:121,224` / `D2-VEHICLE-OWNERSHIP-OPTIONS.md:54,72` 五处注释与文档承诺；
+> 该函数由 **M-D3 真抽出**后供 `DebugScene` scenario 2 复用（见 §3 M-D3 开工锚点表 Q-D3-1）。
+> 证据与 A/B/C 代价矩阵见 `docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md`。
 
 | 项 | 落点 / 口径 | 依据 |
 |---|---|---|
@@ -136,11 +139,30 @@
 | 退出码 | `0` PASS / `1` 断言或运行失败 / `2` 用法错误 | `PHYS-TOOLS-GUIDE.md` §2 |
 | 改动面 | `core/include/nl/physics/Vehicle.hpp`（新）、`core/src/physics/Vehicle.cpp`（新）、根 CMakeLists 两行、`phys-tools`、`example/drive-m2`、工具脚本与文档；**零图形、零 `kStage`、不碰 `World.cpp` / `viewer` / `DebugScene`** | A 类轨道纪律；用户拍板 A |
 
-### M-D3 驾驶可见
+### M-D3 驾驶可见（2026-11-10 开工闸拍板 Q-D3-1~4，当日收官）
 
-- `DebugScene` 新 scenario 2 = 车辆训练场（平地 + 直道 + 定角弯道标记物 + 一面撞墙——墙就是 M-D1 事件消费的 demo 载体；亮色车底线框——VehicleConstraint 有真实体，DebugRenderer 自动画）。
-- viewer 接线：M-I1 ActionMap 实时轮询（渲染帧）→ GameClock Physics 组 step 前灌 `SetDriverInput`（逻辑帧）→ HUD 追加参数行（speed / gear / 四轮 grounded / 最近碰撞事件，ASCII 口径）→ console cvar 实调（`vehicle.throttleScale` 等，GAME-DEV-ORDER「console 实调」验收口径）。
-- example 卡 + cases.json（image 用例 pair：`--drive-demo` 帧序号脚本注入 → 截图帧断言链，照 input-m2 双后端 PNG 基线先例）。
+- **`DebugScene` scenario 2 = 车辆训练场**：平地 + 直道 + 定角弯道标记物 + 一面撞墙（M-D1 事件消费的真实载体）；车体线框由 `DebugRenderer` 自动画（`VehicleConstraint` 的 chassis 是真实刚体）。车与墙、地面处于**同一个** `Impl::physicsSystem`（Q-D3-1 A），因此底盘撞墙天然产 M-D0 `ContactListener` 事件。
+- **真抽 `buildVehicle(JPH::PhysicsSystem&)`**：M-D2 拍板 A 的承诺当时未兑现（装配整体内联在 `simulateDrive()`），M-D3 把它抽成 `Vehicle.cpp` 内的装配函数，`simulateDrive()` 与 `DebugScene::build(2)` 共用同一装配序列，M-D2 归档 `drive.tsv` 逐字节零回归。`DebugScene::Impl` 新增长生命周期 `Ref<VehicleConstraint>` / controller / 车体 BodyID；公开头只加 Jolt-free `setDriveInput()` / `driveState()` / `chassisState()` POD。
+- **层过滤冲突必须解**：M-D2 三 filter 全层对 `ShouldCollide=true`（`floor/floor` 禁用会让 `VehicleCollisionTesterRay` 全轮 miss、实测 `events=0`），而 `World.cpp:1310` scenario 0 是 `I.matrix.set(kFloor,kFloor,false)`；scenario 2 沿用 M-D2 的全通口径，不改 M-D0 collector / 其它 scenario。
+- **输入（Q-D3-2 A）**：扩展 M-I2 注入管线 —— viewer **仍不调 `updateFromWindow`**（`input.hpp:21-23` / `viewer/main.cpp:857-858` 单消费者铁律），实时键鼠用窗口**只读键态查询**（不消费事件队列）→ `feedKey()` → `ActionMap::update()` → 渲染帧累积、Physics 逻辑帧消费（bevy `physics_in_fixed_timestep.rs:66-83,110-129` 同构）；`--drive-demo` 帧序号脚本走**同一条注入路径**作确定性截图源（照 `--input-demo` `viewer/main.cpp:1095-1112`），双后端逐字节复现。这条管线是 camera b 段（`P8-CAMERA-PLAN.md:41,173-174`）的复用契约。
+- **cvar / HUD**：注册 `vehicle.*` 数值 cvar 并接 `--console-exec`（`GAME-DEV-ORDER.md:29` 实调验收）；HUD 参数行（speed / grounded 轮数 / 最近碰撞事件）走 `hud.cpp:449-457` **独立兄弟窗口 + 默认关闸门**（零波及 35 用例 / 70 张既有 PNG 基线）。
+- **基线与相机（Q-D3-3 A / Q-D3-4 折中留钩子）**：`kStage` **保持 `S8.2`**，`server.py --check` 只校验 `s8.2` 卡；`drive-m3` 卡以 tool 卡为主 + 一组 pair 截图，齐备靠 `run.bat verify` + `--only drive-m3` 双验（M9.0 口径）。相机默认 `OrbitCamera::viewProjection()` 固定机位，**实测默认机位不框训练场**（主体是 Suzanne 头），截图卡改用命令行 `--dist 45 --yaw 90 --pitch 40` 取景、相机代码一行未改（7 组拼图对比定档，见 §6 收官留痕 / `DRIVE-TOOLS-GUIDE.md` §11.5）；**留两个接口**：`DebugScene` 暴露 Jolt-free `ChassisState` POD（`camera_director.hpp:45-50` 已定义）与 viewer「投影源可切换」钩子（默认 Orbit），**不接 Chase/Free 胶水、不拍相机基线、不验相机五锚** —— b 段仍按 `P8-CAMERA-PLAN.md:9-10,135,149-151` 排 M-D3 之后串行。
+
+#### M-D3 开工锚点表（2026-11-10 三处实读 + 用户拍板后补全）
+
+> **拍板结果**（用户 2026-11-10）：Q-D3-1 **A** / Q-D3-2 **A** / Q-D3-3 **A** / Q-D3-4 **折中留钩子**（A 的变体）。
+> 证据、A/B/C/D 代价矩阵见 `docs/p8/D3-DRIVE-VIEW-OPTIONS.md`；结论同步写回 §6 留痕 / §7 决策记录，挂账句与失真承诺已清理，开工闸满足：**待拍板架构项 0**。
+
+| 项 | 落点 / 口径 | 依据 |
+|---|---|---|
+| 挂载（Q-D3-1 A） | 车挂进 `DebugScene` scenario 2 的 `Impl::physicsSystem`；真抽 `buildVehicle(PhysicsSystem&)`；公开头只加 Jolt-free POD；车墙同 world → 撞墙天然产 M-D0 事件 | 用户拍板；`D3-DRIVE-VIEW-OPTIONS.md` §2.1/§2.3；`World.cpp:1253-1281` |
+| 层过滤 | scenario 2 沿用 M-D2 全层对 `ShouldCollide=true`；禁 `floor/floor` 会让轮 ray 全 miss（M-D2 实测 `events=0`）；不改 M-D0 collector 与其它 scenario | `Vehicle.cpp:44-69`；`World.cpp:1310`；M-D2 踩坑归档 |
+| 输入（Q-D3-2 A） | 注入管线扩展 + 窗口只读键态查询；viewer 绝不调 `updateFromWindow`；`--drive-demo` 帧序号脚本走同一 `feedKey` 路径作确定性基线；渲染帧累积 → Physics 逻辑帧消费 | `input.hpp:21-23`、`viewer/main.cpp:857-858`、`INPUT-TOOLS-GUIDE.md:76-83`；bevy `physics_in_fixed_timestep.rs:66-83,110-129` |
+| cvar | `vehicle.*` 数值 cvar + `--console-exec` 实调生效锚；组注册先于 console-exec | `GAMELOOP-TOOLS-GUIDE.md:57-59,84`；`GAME-DEV-ORDER.md:29` |
+| HUD / 基线（Q-D3-3 A） | 独立兄弟窗口 + 默认关；`kStage` 不 bump；`server.py --check` 只校验 `s8.2`，新卡由 `run.bat verify` + `--only drive-m3` 双验；70 张既有基线零波及 | `hud.cpp:449-457`；`reshot-hud-stage.py:31,36-52`；`server.py:214-216,230-245`；M9.0 口径 |
+| 相机（Q-D3-4 折中） | 默认 OrbitCamera 固定机位；留 `ChassisState` POD + 投影源切换钩子（默认 Orbit）；不接 Chase/Free、不拍相机基线、不验五锚 | `camera_director.hpp:45-50`；`viewer/main.cpp:978/999`；`P8-CAMERA-PLAN.md:9-10,135,149-151` |
+| 确定性 | `--drive-demo` 帧序号注入 + 固定步 1/60 + 单线程 JobSystem；DX12/VULKAN 截图 / TSV 逐字节对拍；M-D0/D1/D2 归档 TSV 零回归 | M-P0 契约；`run.bat verify` |
+| 改动面 | `core/src/physics/Vehicle.cpp`（抽函数）、`core/src/physics/World.cpp`（DebugScene scenario 2）、`viewer/main.cpp`、`renderer/src/hud.cpp`、cvar 注册点、`example/drive-m3`、`cases.json`、工具脚本与文档；**`kStage` / `ViewMode` / viewer selftest `S8.2` 锚 / 既有基线 PNG 全冻结** | A 类轨道纪律；§6 冻结面 |
 
 ## 4. 不在范围
 
@@ -159,7 +181,7 @@
 | **M-D0** | `core/physics` 事件流（listener + ContactEvent POD + contactProbe）+ phys-tools `contacts` 节 + trace→check 闭环 + ctest | selftest 数值锚全绿；事件时序逐位（单线程基线 + 池模式排序兜底）；负向退出码 0/1/2；双后端 spot 零回归；tool 卡 |
 | **M-D1** | `ContactEventStream` 双缓冲 + demo System 消费者 + TickGroup 时序契约自证 + ECS selftest | 消费节奏锚全绿（同帧 PostPhysics 可见、**已消费**事件次帧不可见、**未读**事件两帧保活、第三次 `update()` 清）；并行 tick 下自足消费 System 零违约；ctest 双后端 |
 | **M-D2** | `core/physics/Vehicle` PIMPL 集成 + DriveConfig 输入脚本 + phys-tools 参数表三锚场景 + 轮接触事件锚 + trace→check + ctest | selftest 数值锚全绿（加速/转向/手刹三场景逐位）；轮子状态回读自洽（contact 数 = 着地轮数）；M-D0 契约零回归（contacts 节逐字节不变）；tool 卡 |
-| **M-D3** | DebugScene scenario 2 + viewer M-I1 映射驱动 + HUD 参数行 + console cvar 实调 + example 卡 + cases.json + 收口（close 硬闸） | 截图基线双后端 bytes；键鼠实时驾驶肉眼可验；车撞墙事件反馈可见（HUD 行）；console 实调参数生效锚落盘；`server.py --check` exit 0 |
+| **M-D3** | DebugScene scenario 2 + viewer 注入管线 / 窗口只读键态驱动 + 默认关独立 HUD 窗口 + console cvar 实调 + example 卡 + cases.json + 收口（close 硬闸） | `--drive-demo` 截图基线双后端 bytes；键鼠实时驾驶肉眼可验；车撞墙事件反馈可见（独立 HUD 窗口）；console 实调参数生效锚落盘；`run.bat verify` + `--only drive-m3` 双验 + `server.py --check` exit 0；`kStage` 保持 `S8.2`、70 张既有基线零波及 |
 
 ## 6. 留痕
 
@@ -205,6 +227,12 @@
 
 - 2026-11-10（**Q1/Q2 口径勘误，M-D2 收口后**）：用户点名 `Events.hpp` 头注释 `Q2 (user-approved default, ...)` 措辞不准。事实：Q1 / Q2 是用户「开工」时按 §7 建议口径**默认采纳**，用户未对这两项单独拍板（§7 首段原话「未另行指定即视为采纳建议」）；本轨唯一单独拍板项是 Q-D2-1。注释已改为 `adopted default at M-D0 kickoff, no separate user sign-off`，与 §7 对齐。全轨扫 `user-approved default` / `approved default` 无其它残留；`tools/tree_gate.py` 与 `example/s6-hiz/run.bat` 的 `user-approved` 属各自语境（CI 例外 / M6.1 修正），不动。纯注释勘误，不改行为、不 bump `kStage`、不动 tag `drive-m2`。
 
+- 2026-11-10（**M-D3 开工闸 / 用户拍板 Q-D3-1~4**）：用户指令「下一步」= M-D3 驾驶可见。按铁律重读本里程碑点名面（**未复用 M-D0/D1/D2 证据**）：Carrot `Action.hpp:55-77,245-272` / `ActionSet.cpp:220-330` / `SceneManager.h:24-55` / `Console.cpp:39-54` / `ActionDebug.cpp:11-39`（有输入映射 / 场景注册 / 调试面板，无载具、console 仅 bool option）；bevy `button_input.rs:19-30,125-252` / `bevy_gizmos` / `main_schedule.rs:94-163,355-363` `FixedUpdate` / `physics_in_fixed_timestep.rs:66-83,110-129,291-319`（无官方物理 / 载具，输入累积→固定步消费为官方同构）；UE 5.8.4 `AWheeledVehiclePawn.h:12-20` / `ChaosVehicleMovementComponent.h:887/899/903/919` / `HUD.h:503` `DrawHUD()` / `ShowFlags.cpp:1114-1123`（插件全树 `SetupPlayerInputComponent|BindAction|BindAxis` 零命中 → 输入绑定在游戏层）。实读暴露 4 个硬偏差并落 `docs/p8/D3-DRIVE-VIEW-OPTIONS.md`：① **`buildVehicle(PhysicsSystem&)` 根本不存在**（5 处注释/文档承诺，装配全内联在 `simulateDrive()`，M-D2 拍板 A 的未兑现项）；② 层过滤冲突（M-D2 全通 vs scenario 0 禁 `floor/floor`，直接挂会让四轮 ray 全 miss）；③ M-I2「viewer 绝不调 `updateFromWindow`」与计划「实时轮询」冲突；④ HUD 常驻新行波及 70 张基线且 `server.py --check` 只校验 `s8.2`。用户拍板：**Q-D3-1 A / Q-D3-2 A / Q-D3-3 A / Q-D3-4 折中留钩子**（相机保持 Orbit、只留 `ChassisState` POD + 投影源切换钩子，不越 camera b 段串行排期）。结论写回 §3 M-D3 开工锚点表 / §7，同步更正 §3 M-D2 Q-D2-1 段与 `Vehicle.hpp:8` 的「`buildVehicle` 已存在」失真承诺、清掉决策材料的「待拍板」挂账句。**开工闸满足：待拍板架构项 0**，方允许落第一行架构代码；`core/` `phys-tools/` `renderer/` `viewer/` `CMakeLists.txt` `cases.json` 此刻 diff 全空。
+
+- 2026-11-10（**Q-D3 拍板后的口径勘误，与 Q1/Q2 勘误同性质**）：M-D2 收官时 `P8-DRIVE-PLAN.md:121,224`、`Vehicle.hpp:8`、`D2-VEHICLE-OWNERSHIP-OPTIONS.md:54,72` 共 5 处写「`buildVehicle(PhysicsSystem&)` 只活在 / 将复用」，但 `Vehicle.cpp` 全文零该函数 —— 是**文档承诺超前于代码**。M-D3 开工闸实读发现后同步改为「由 M-D3 真抽出」，并把 `D3-DRIVE-VIEW-OPTIONS.md` §2.1 的发现留档。此条不改 `simulateDrive()` 行为、不动 `drive.tsv`、不动 tag `drive-m2`。
+
+- 2026-11-10（**M-D3 收官**）：用户指令「下一步」= 完整 M-D3 落码收口，四项 Q-D3 拍板后按锚点表逐条兑现。落码：`VehicleInternal.hpp`（internal-only）+ 真抽 `buildVehicle(JPH::PhysicsSystem&)`（M-D2 承诺兑现，`simulateDrive()` 与 `DebugScene::build(2)` 共用装配序列、`drive.tsv` 逐字节零回归）+ `World.cpp` scenario 2 长生命周期车（**20 bodies** / 墙 z=18 / 全通层过滤）+ `World.hpp` 三个 Jolt-free POD + `Window::rawKeyDown(int)` 只读键态 + viewer 注入管线 / `--drive-demo` / `vehicle.*` cvar / 投影源切换钩子 + `hud.cpp` 默认关独立窗口 → `example/drive-m3/`（run.bat 五段式 + 双后端基线 PNG + `frames.tsv` + 8 份真实日志 + 双证据图）+ `tools/make-drive-m3-evidence.py` + cases.json `drive-m3` 卡 **6 用例** + `DRIVE-TOOLS-GUIDE.md` §11 + 本计划收官口径 → `MILESTONES.md` 四栏 → tag `drive-m3`。**实测锚（全部由真实 viewer 日志反推，禁手写）**：10 组帧扫描 30..300，top speed **7.86643 m/s**（f210）→ f240 撞墙 `wallHits=1` → f300 speed **0.0115737 m/s** / posZ **15.2419 m** / yaw **-20.2322 deg** / grounded **4/4** / contacts **1/8/1** / deviceErrors **0**；cvar `throttleScale 0.5` → speed 0.0592731 / contacts 1/9/1；`vehicle.debug true` 无 `--drive-hud` 与基线逐字节一致（默认关闸门）；负向 scenario 0 零 drive scene 日志。双后端截图各自对本后端基线逐字节相同、物理日志锚逐字一致；M-D0/D1/D2 归档 TSV 六组逐字节零回归；ctest 两后端各 **12/12**；`run.bat` 连续两轮 ALL GREEN；`regression.py --only drive-m3` **12/12 bytes ALL GREEN**；`server.py --check` exit 0（`s8.2` 零波及）；`kStage` 保持 `S8.2`、70 张既有基线零波及。**两处口径勘误**：① §3「训练场布在可见范围」被实跑证伪 —— 默认 OrbitCamera 只框 Suzanne，按 Q-D3-4 冻结面**不改相机代码**，改由命令行 `--dist 45 --yaw 90 --pitch 40` 取景（7 组拼图对比）；② Q-D2-1 行「装配函数由 M-D3 真抽出」已从将来时改为完成态。整轨 M-D0~D3 全部收官。
+
 ## 7. 决策记录（Q 编号，决策前置）
 
 > **状态（2026-11-10 用户「开工」）**：Q1 / Q2 按本表建议口径执行（未另行指定即视为采纳建议），Q3 = 完整 M-D0 落码收口，Q4 编号维持 `track drive / M-D0`。Q1 的「bevy 双缓冲 + M-GL5 TickGroup」落到 **M-D1**，本轮 M-D0 只产 POD 流与帧末排序；Q2 的清理时机已写进 `Events.hpp` 头注释与 §3 锚点表。
@@ -214,6 +242,10 @@
 > **状态（2026-11-10 用户拍板 Q-D2-1）**：M-D2 载具所有权形态拍板 **方案 A 探针式 fresh world**（`docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md` 三处证据 + A/B/C 代价矩阵）。结论写回 §3 M-D2 开工锚点表；Q1 / Q2 的历史「待确认 / 确认后」挂账句已同步删除（实际早已执行）。开工闸至此满足：**待拍板架构项 0**，才允许落第一行架构代码；M-D3 仍按 §5 排期未开工。
 >
 > **状态（2026-11-10 用户「下一步」= M-D2 收官）**：M-D2 已收官（tag `drive-m2`），Q-D2-1 方案 A 按拍板落地并自证；计划 §3 两处与实测不符的旧口径（轮接触天然产 `ContactListener` 事件 / 三段等比缩放）已更正，无「待拍板」架构项残留。M-D3 仍按 §5 排期未开工，是本轨唯一渲染接线面。上面两段为 M-D0 / M-D1 / 开工闸时点的历史快照。
+>
+> **状态（2026-11-10 用户拍板 Q-D3-1~4）**：M-D3 开工闸四项全部拍定 —— Q-D3-1 **A**（车挂 `DebugScene` scenario 2，真抽 `buildVehicle`）、Q-D3-2 **A**（注入管线扩展 + 窗口只读键态，viewer 仍不调 `updateFromWindow`）、Q-D3-3 **A**（`kStage` 不 bump + 独立 HUD 窗口默认关 + 工具版）、Q-D3-4 **折中留钩子**（OrbitCamera 固定机位 + 留 `ChassisState` POD / 投影源切换钩子，不接 Chase、不拍相机基线）。结论与证据见 §3 M-D3 开工锚点表 / `D3-DRIVE-VIEW-OPTIONS.md`；上面各段为历史时点快照。**待拍板架构项 0**，M-D3 允许落码。
+>
+> **状态（2026-11-10 M-D3 收官）**：`drive-m3` 已打 annotated tag，四项 Q-D3 全部按拍板落地并自证（证据见 `DRIVE-TOOLS-GUIDE.md` §11 / `MILESTONES.md` 四栏 / `example/drive-m3/`）。计划内**待拍板架构项 0**；整轨 M-D0~D3 收官，下一步是整轨 merge 回 master，camera b 段仍按 `P8-CAMERA-PLAN.md` 排在 M-D3 之后串行（钩子已留、胶水未接）。上面各段为历史时点快照。
 
 | 编号 | 问题 | 建议 / 拿到答案改哪里 |
 |---|---|---|
@@ -221,5 +253,8 @@
 | **Q2** | `OnContactRemoved` 期间 Jolt body 可能已销毁（`:126-128`）。owner 对改为 Added / Persisted 阶段缓存 + 本轨自持 `SubShapeIDPair → owner 对` 表；该缓存表清理时机是否定为「removed 派发后」？ | **已按建议 removed 派发后清**；已写进 §3 锚点表与 `Events.hpp` 头注释，M-D0 实测 `cache_misses=0` |
 | **Q3** | 本轮交付边界：停在「开轨 + 计划做实」，还是继续 M-D0 落码（Events.hpp / World.cpp listener / phys-tools contacts / trace→check / 展示台 tool 卡 / 双后端 ctest / example / tag / close 闸）？ | **已执行**：用户「开工」= 完整 M-D0 落码收口 |
 | **Q4** | 归属编号：本对话按 `track drive` / `M-D0` 登记（四里程碑中唯一可开工起点）。 | 若要改编号，同步改 claim 锁与本文状态行 |
-| **Q-D2-1** | `Vehicle` 与 `JPH::PhysicsSystem` 的所有权 / 公开面形态：A 探针式 fresh world / B 长生命周期对象 / C 薄层 attach 外部 world？ | **已拍板 A**（2026-11-10 用户）：fresh world per call + 帧序号输入脚本，公开头只有 POD；`buildVehicle(PhysicsSystem&)` 只在 `Vehicle.cpp` 内，M-D3 由 `DebugScene` scenario 2 复用。证据与代价矩阵见 `D2-VEHICLE-OWNERSHIP-OPTIONS.md`，结论见 §3 M-D2 开工锚点表 |
-
+| **Q-D2-1** | `Vehicle` 与 `JPH::PhysicsSystem` 的所有权 / 公开面形态：A 探针式 fresh world / B 长生命周期对象 / C 薄层 attach 外部 world？ | **已拍板 A**（2026-11-10 用户）：fresh world per call + 帧序号输入脚本，公开头只有 POD；装配函数**已由 M-D3 真抽出并兑现**（M-D2 收官时该函数不存在，仅 5 处文档承诺，见 §6 勘误），`simulateDrive()` 与 `DebugScene` scenario 2 共用、`drive.tsv` 逐字节零回归。证据与代价矩阵见 `D2-VEHICLE-OWNERSHIP-OPTIONS.md`，结论见 §3 M-D2 / M-D3 开工锚点表 |
+| **Q-D3-1** | 载具长生命周期挂载形态：A 挂进 `DebugScene` scenario 2 / B 独立 `DriveWorld` / C 每帧重跑 `simulateDrive`？ | **已拍板 A**（2026-11-10 用户）：真抽 `buildVehicle(PhysicsSystem&)`，`Impl` 持有长生命周期 constraint/controller/车体，车墙同 world；公开头只加 Jolt-free POD。见 §3 M-D3 锚点表 |
+| **Q-D3-2** | 实时键鼠与 M-I2「viewer 绝不调 `updateFromWindow`」单消费者铁律冲突，且该管线是 camera b 段复用契约？ | **已拍板 A**：注入管线扩展 + 窗口只读键态查询（`feedKey` → `ActionMap::update` → Physics 组灌输入），`--drive-demo` 帧序号脚本走同一路径作确定性基线；铁律不破。见 `D3-DRIVE-VIEW-OPTIONS.md` §3 |
+| **Q-D3-3** | A 类轨道首次落渲染接线面，`kStage` / HUD / 基线口径？ | **已拍板 A**：`kStage` 保持 `S8.2`、HUD 独立兄弟窗口默认关（70 张基线零波及）、`drive-m3` 卡以 tool 卡 + 一组 pair 为主，`run.bat verify` + `--only drive-m3` 双验。见 `D3-DRIVE-VIEW-OPTIONS.md` §3 |
+| **Q-D3-4** | 相机与 viewer 接线范围：A 固定机位 / B 顺手接 Chase / 折中留钩子？ | **已拍板「折中留钩子」**（A 的变体）：默认 OrbitCamera 固定机位；留 `ChassisState` POD + 投影源切换钩子（默认 Orbit）；不接 Chase/Free、不拍相机基线、不验五锚。b 段仍按 `P8-CAMERA-PLAN.md` 排 M-D3 之后串行 |

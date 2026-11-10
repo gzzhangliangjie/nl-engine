@@ -1,0 +1,4 @@
+DX12 drive-demo PNG byte-identical to baseline: OK 
+VULKAN drive-demo PNG byte-identical to baseline: OK 
+[nl:info] drive scene: speed=0.0115737 grounded=4 wallHits=1 contacts=1/8/1 fwd=0 hb=1
+DX12 / VULKAN physics anchors identical: OK 

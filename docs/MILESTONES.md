@@ -2360,3 +2360,25 @@
 7. **锚一律机器反推**：先只写结构 / 物理断言 + 一条故意失败占位（防忘注入），实跑后由 `make-drive-m2-evidence.py --anchors` 从真实 TSV 读出 6 组数值注入 `drive-check`（M-I0/I1 手写锚两连犯教训），非 480 帧只跑结构 / 物理断言。
 
 **下一步**：M-D3 驾驶可见（`DebugScene` scenario 2 + viewer M-I1 实时输入 + HUD 参数行 + console cvar 实调 + 截图基线，本轨唯一渲染接线面）。整轨 M-D0~D3 收官后 merge 回 master。
+
+
+## P8 M-D3：驾驶可见 DebugScene scenario 2 + viewer 接线（feat/drive，2026-11-10，tag `drive-m3`）
+
+**动作**：用户「下一步」= M-D3 完整落码收口。开工闸先扫计划内架构判定 → M-D3 §3 只有三条粗线条、无锚点表，且 M-D2 拍板 A 时明写「不提前定 M-D3 挂载契约」→ 两路定向实读本地 viewer/DebugScene/console/input/展示台 + Carrot 输入 ActionSet / SceneManager / Console / ActionDebug、bevy `ButtonInput` / gizmos / `FixedUpdate` / `physics_in_fixed_timestep.rs`、UE 5.8.4 `AWheeledVehiclePawn` / `DrawHUD` / `ShowFlag.%s` cvar + 历史文档，暴露 **4 个硬偏差**（`buildVehicle(PhysicsSystem&)` 根本不存在只活在 5 处注释；M-D2 全通层过滤 vs scenario 0 禁 `floor/floor`；M-I2「viewer 绝不调 `updateFromWindow`」与实时轮询冲突；常驻 HUD 新行波及 70 张基线且 `--check` 只校验 `s8.2`）→ `docs/p8/D3-DRIVE-VIEW-OPTIONS.md` 摊 Q-D3-1~4 代价矩阵交用户拍板：**Q-D3-1 A / Q-D3-2 A / Q-D3-3 A / Q-D3-4 折中留钩子**。结论写回计划 §3 锚点表 / §6 / §7、删除失真承诺与挂账句后才落第一行架构代码。落码：`VehicleInternal.hpp`（internal-only Jolt）+ 真抽 `buildVehicle(PhysicsSystem&)` + `World.cpp` scenario 2 长生命周期车（20 bodies / 墙 z=18 / 全通层过滤）+ `World.hpp` 三个 Jolt-free POD + `window.hpp/.cpp::rawKeyDown` + `viewer/main.cpp` 注入管线 / `--drive-demo` / cvar / 投影源钩子 + `renderer/src/hud.cpp` 独立默认关窗口 + `renderer.hpp::DriveDebugUi` → `example/drive-m3/`（run.bat 五段式 + 双后端基线 PNG + `frames.tsv` + 8 份真实日志 + 双证据图）+ `tools/make-drive-m3-evidence.py` + cases.json `drive-m3` 卡 6 用例 + `DRIVE-TOOLS-GUIDE.md` §11 + 计划收官口径 → 本四栏 → tag。A 类轨道，**`kStage` 保持 `S8.2`**，`ViewMode` / viewer selftest 锚 / 既有基线 PNG 全冻结。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m3`）。前置 `dc98a8f`（`Events.hpp` Q1/Q2 口径勘误）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest **16/16 ×2**；ctest 两后端各 **12/12**（`--repeat until-pass:3`）；M-D0 `contacts.tsv` / M-D1 `ecs.tsv` / M-D2 `drive.tsv` 六组逐字节零回归、DX/VK `drive-trace` 逐字节一致（本轮新增 warning **0**）。10 组真实帧扫描（30..300）实测：top speed **7.86643 m/s**（f210）→ f240 撞墙 `wallHits=1` → f300 末速 **0.0115737 m/s**、posZ **15.2419 m**（墙 z=18）、yaw **-20.2322 deg**、grounded **4/4**、contacts **1/8/1**、deviceErrors **0**。双后端截图各自对本后端基线逐字节相同（32021 B / 32923 B），物理日志锚逐字一致；cvar `vehicle.throttleScale 0.5` 实跑 speed 0.0592731 / contacts 1/9/1；`vehicle.debug true` 无 `--drive-hud` 与基线逐字节一致、无开关时 DIFFER（默认关闸门）；负向 `--physics-scenario 0` 无任何 M-D3 drive scene 日志。`run.bat` 连续两轮 **ALL GREEN**（`frames.tsv` + 两张证据图重生成 `fc /b` 逐字节稳定）；`regression.py --only drive-m3` **12/12 bytes ALL GREEN**；`server.py --check` exit 0（`s8.2` 旧阶段零波及）；两张证据图肉眼核验并修掉裁切 / 滚动条 / 红线压标题后重拍复验。
+
+**踩坑情况**
+1. **`--fixed-dt` 不是可选项**：截图模式默认 dt 近似 0，帧序号脚本灌了输入但物理几乎不推进（posZ≈0.0075）；`--fixed-dt 16.6667` 每渲染帧固定推进 1/60 逻辑帧后车才开到墙。
+2. **默认 OrbitCamera 不框训练场**（计划预口径被证伪）：首图主体是 Suzanne 头，车道 / 墙 / 车体基本不在视野。按 Q-D3-4 冻结面不改相机代码，用命令行 `--dist/--yaw/--pitch` 取景，7 组拼图对比后定 `--dist 45 --yaw 90 --pitch 40`；计划 §3「训练场布在可见范围」已同步勘误。
+3. **HUD 窗口被画布底边裁掉**：初版 `(18,430)` + 6 行在 540px 画布里 `WALL` 半截 / `CVAR` 全丢，首行被自动宽度裁字 → 挪右下 `(620,330)` + `ImGuiCond_Always` + 6 行 ≤40 字符；`316x124` 仍出竖向滚动条 → `316x140` 消除，基线重拍。
+4. **证据图坐标域不含墙**：`zmax` 取曲线峰值 ×1.15 = 17.62 < 墙 z=18，红线落到框外并压住标题 → 下限提到 20、下半图下移、标注移到线下方。
+5. **证据图不能读正在写的日志**（M-D2 坑 6 同族）：所有被 PNG 读取的 log 必须在生成前定稿，evidence 结论只写 `build/` 下临时 log。
+6. **混合版本卡必须 case 级 exe 覆盖 + `cwd:"{root}"`**：版本默认 exe = phys-tools，viewer 的 tool/pair 卡若不覆盖会跑错程序；cwd 不对齐则截图与基线不一致。
+7. **C4244 误判为新增 warning**：`viewer/main.cpp(1147)` 实为 M-A5 既有行 `fp.animTime = skinTime` 被 M-D3 新增 138 行推后，核对 `git show HEAD` 后确认本轮零新增 warning，不改既有代码。
+8. **双后端 PNG DIFFER 不是回归**：既有 pair 卡按「各自对本后端基线 bytes」判定，跨后端差异来自 GPU 计时 / 着色器路径，禁笼统写「一致」。
+9. **TSV 行尾必须与 `.gitattributes` 对齐**：`*.tsv text eol=lf`，而 Python `write_text()` 在 Windows 默认 CRLF —— 初版 `frames.tsv` 工作树 CRLF / blob LF，clone 后首次 `fc /b` 会假 FAIL。改 `newline="\n"` 显式写 LF（与 M-D0/D1/D2 归档 TSV 一致），重生成后连续两轮 `run.bat verify` ALL GREEN。
+
+**下一步**：整轨 M-D0~D3 已全部收官，可按 `docs/PARALLEL-TRACKS.md` §7 整轨 merge 回 master（四栏验收纪要随分支一次带入）；camera b 段仍按 `P8-CAMERA-PLAN.md` 排 M-D3 之后串行，M-D3 已留 `ChassisState` POD 与投影源切换钩子。

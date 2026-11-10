@@ -1,0 +1,4 @@
+M-D0 contacts.tsv byte-identical: OK 
+M-D1 ecs.tsv byte-identical: OK 
+M-D2 drive.tsv byte-identical: OK 
+DX12 / VULKAN drive-trace byte-identical: OK 

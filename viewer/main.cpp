@@ -10,6 +10,7 @@
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
+#include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
 #include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
@@ -104,6 +105,8 @@ struct Options {
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
+    bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
+    bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
     int  inputDemoStart = 5;  // 脚本起始迭代号（1-based；W@start D@+1 Space@+2 Esc@+3）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
@@ -354,6 +357,10 @@ Options parseArgs(int argc, char** argv) {
             o.inputDemo = true;
             if (i + 1 < argc && argv[i + 1][0] != '-')
                 o.inputDemoStart = std::max(1, std::atoi(argv[++i]));
+        } else if (a == "--drive-demo") {
+            o.driveDemo = true;
+        } else if (a == "--drive-hud") {
+            o.driveHud = true;
         } else if (a == "--size" && i + 1 < argc) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
@@ -450,6 +457,37 @@ bool prepareScreenshotDirs(const std::string& path, std::string& outError) {
 // 返回「相机实际值 -> cvar 静默回写」的每帧同步函数：滚轮 zoom / reset 后 cam.dist
 // 不至于显示陈旧值；g_syncing 挡住回写触发的 onChanged 重入（不再打相机 setter）。
 // CVar* 指向 Console 注册表 map 节点，生命周期与单例同寿，lambda 捕获安全。
+// ---- M-D3 (Q-D3-2 A / GAME-DEV-ORDER 第 3 步 "console 实调") ----
+struct VehicleCVars {
+    nl::core::console::CVar* throttleScale = nullptr;
+    nl::core::console::CVar* steerScale    = nullptr;
+    nl::core::console::CVar* debug         = nullptr;
+};
+VehicleCVars registerVehicleConsole(bool* driveHudOn) {
+    using namespace nl::core::console;
+    Console& c = Console::get();
+    VehicleCVars v;
+    v.throttleScale = &c.registerFloat("vehicle.throttleScale", 1.0,
+                                       "M-D3 drive throttle multiplier [0,2]");
+    v.steerScale    = &c.registerFloat("vehicle.steerScale", 1.0,
+                                       "M-D3 drive steer multiplier [0,2]");
+    v.debug         = &c.registerBool("vehicle.debug", false,
+                                      "show the M-D3 drive debug window");
+    v.debug->setOnChanged([driveHudOn](const CVar& cv) { *driveHudOn = cv.value().b; });
+    return v;
+}
+
+// Q-D3-4 "folded hook": projection source resolution lives in ONE place.
+// M-D3 ships exactly one active source (OrbitCamera). Camera b-segment only
+// replaces the Chase return below AFTER M-D3 closes -- no camera glue, no Chase
+// baselines, no five-anchor camera acceptance in this milestone.
+static auto resolveViewProjection(nl::core::OrbitCamera& camera,
+                                  nl::physics::DebugScene& scene)
+    -> decltype(camera.viewProjection()) {
+    (void)scene;   // reserved: scene.chassisState() feeds CameraDirector in b-segment
+    return camera.viewProjection();
+}
+
 std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool* hudEnabled) {
     using namespace nl::core::console;
     Console& c = Console::get();
@@ -664,6 +702,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
                                " static course bodies (floor + ramp/steps/platforms/steep slope/wall"
                                ", CharacterVirtual walks without a rigid body)");
+        else if (o.physicsScenario == 2)
+            nl::core::log::info("M-D3 drive scene: ", physicsScene.bodyCount(),
+                               " bodies (ground + lane markers + wall + VehicleConstraint chassis)");
         else
             nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
                                " bodies (floor + dynamic box/sphere/capsule)");
@@ -811,6 +852,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         });
     }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
+    // M-D3: drive CVars + gates. Registered BEFORE --console-exec so
+    // "vehicle.throttleScale 0.5" / "vehicle.debug true" work at startup.
+    bool driveHudOn = o.driveHud;
+    const VehicleCVars vehicleCVars = registerVehicleConsole(&driveHudOn);
+    const bool driveEnabled = o.physicsDebug && o.physicsScenario == 2;
     // P8 M-S2：audio.* 调试 CVar（audio.volume/debug/solo/freeze + audio.dump）。
     nl::audio::registerAudioConsole(nl::core::console::Console::get());
     registerGameConsole(&gameClock);   // P8 M-GL1：game.pause / game.timeScale / game.status
@@ -967,6 +1013,69 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (dtMs > dtMaxMs) dtMaxMs = dtMs;
         }
 
+        // ---- M-D3 (Q-D3-2 A): drive input injection --------------------------
+        // Extends the M-I2 injection pipeline. viewer STILL never calls
+        // updateFromWindow(): realtime keys use Window::rawKeyDown(), a pure
+        // read-only glfwGetKey query that consumes NO event queue; --drive-demo
+        // uses the very same feedKey path with a frame-indexed script so both
+        // backends reproduce byte-identical screenshots. Render frame feeds
+        // edges -> ActionMap::update -> Physics logic frame consumes.
+        if (driveEnabled) {
+            static bool driveHeld[5] = {};
+            auto feedEdge = [&](int code, bool want, bool& held) {
+                if (want != held) { inputState.feedKey(code, want); held = want; }
+            };
+            bool kw = false, ks = false, ka = false, kd = false, ksp = false;
+            if (o.driveDemo) {
+                // Deterministic script: accelerate -> steer -> brake into wall.
+                kw  = frame >= 2 && frame < 210;
+                kd  = frame >= 90 && frame < 150;
+                ksp = frame >= 210;
+            } else {
+                kw  = window.rawKeyDown(GLFW_KEY_W);
+                ks  = window.rawKeyDown(GLFW_KEY_S);
+                ka  = window.rawKeyDown(GLFW_KEY_A);
+                kd  = window.rawKeyDown(GLFW_KEY_D);
+                ksp = window.rawKeyDown(GLFW_KEY_SPACE);
+            }
+            feedEdge(GLFW_KEY_W, kw, driveHeld[0]);
+            feedEdge(GLFW_KEY_S, ks, driveHeld[1]);
+            feedEdge(GLFW_KEY_A, ka, driveHeld[2]);
+            feedEdge(GLFW_KEY_D, kd, driveHeld[3]);
+            feedEdge(GLFW_KEY_SPACE, ksp, driveHeld[4]);
+            drivingMap.update(inputState);
+            const float thr = drivingMap.floatValue(dActs.throttle) *
+                              static_cast<float>(vehicleCVars.throttleScale->value().f);
+            const float str = drivingMap.floatValue(dActs.steer) *
+                              static_cast<float>(vehicleCVars.steerScale->value().f);
+            nl::physics::DriveInputState di;
+            di.forward   = thr > 0.0f ? thr : 0.0f;
+            di.brake     = thr < 0.0f ? -thr : 0.0f;
+            di.right     = str;
+            di.handBrake = drivingMap.boolValue(dActs.handbrake) ? 1.0f : 0.0f;
+            physicsScene.setDriveInput(di);
+            inputState.endFrame();
+            // Q-D3-4 hook evidence: the Jolt-free POD really reaches the
+            // camera-side ChassisState shape (no camera glue is installed).
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
+                const auto dsLog = physicsScene.driveState();
+                nl::core::log::info("drive scene: speed=", dsLog.speed,
+                                    " grounded=", dsLog.grounded,
+                                    " wallHits=", dsLog.wallHits,
+                                    " contacts=", dsLog.contactAdded, "/",
+                                    dsLog.contactPersisted, "/", dsLog.contactRemoved,
+                                    " fwd=", di.forward, " hb=", di.handBrake);
+                const nl::physics::DriveChassisState dcs = physicsScene.chassisState();
+                nl::core::ChassisState cs{};
+                cs.pos[0] = dcs.pos[0]; cs.pos[1] = dcs.pos[1]; cs.pos[2] = dcs.pos[2];
+                cs.yawDegrees = dcs.yawDegrees;
+                cs.vel[0] = dcs.vel[0]; cs.vel[1] = dcs.vel[1]; cs.vel[2] = dcs.vel[2];
+                cs.valid = dcs.valid;
+                nl::core::log::info("drive hook: chassis valid=", cs.valid ? 1 : 0,
+                                    " posZ=", cs.pos[2], " yawDeg=", cs.yawDegrees);
+            }
+        }
+
         // M-C1：键盘 / 文本事件泵——HUD 关着也必须排干（防 window 侧队列无限增长）。
         // 事件随帧丢弃（不跨帧缓存）：ImGui 的按键状态以「本帧按下与否」为准。
         nl::core::KeyEvent keyBuf[16];
@@ -975,7 +1084,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const std::size_t nChars = window.consumeTextChars(textBuf, 32);
 
         nl::renderer::FrameParams fp;
-        const auto vp = camera.viewProjection();
+        const auto vp = resolveViewProjection(camera, physicsScene);
         const auto model = camera.model();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
         std::memcpy(fp.model, model.m, sizeof(fp.model));
@@ -1079,7 +1188,33 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
         hud.panelShow = hudEnabled;   // M-C2：面板可见性独立于 ImGui 帧存续
         if (inputHud) hud.panelShow = true;   // M-I2：input-hud 模式常驻面板即本体
-        if (hudEnabled || consoleOpen || editorActive || inputHud) {
+        // M-D3 (Q-D3-3 A): separate sibling window, default OFF. Only this
+        // milestone's own cards turn it on, so 70 existing baseline PNGs stay put.
+        if (driveEnabled && driveHudOn) {
+            const nl::physics::DriveViewState ds = physicsScene.driveState();
+            hud.driveDebug.show = true;
+            int n = 0;
+            // Short lines only: AutoResize fits the longest line, and a long
+            // first line used to get clipped at the window's right edge.
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "DRIVE  valid=%d  v=%.3fm/s  yaw=%.3f",
+                          ds.valid ? 1 : 0, ds.speed, ds.yaw);
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "POS    x=%.2f  y=%.2f  z=%.2f", ds.pos[0], ds.pos[1], ds.pos[2]);
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "WHEELS grounded=%d / 4", ds.grounded);
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "CONTACT add=%u per=%u rem=%u",
+                          ds.contactAdded, ds.contactPersisted, ds.contactRemoved);
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "WALL   hits=%u", ds.wallHits);
+            std::snprintf(hud.driveDebug.lines[n++], nl::renderer::DriveDebugUi::kLineChars,
+                          "CVAR   thr=%.2f str=%.2f",
+                          vehicleCVars.throttleScale->value().f,
+                          vehicleCVars.steerScale->value().f);
+            hud.driveDebug.lineCount = n;
+        }
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
             if (inputHud) {
                 // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
@@ -1282,7 +1417,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -1323,7 +1458,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) {   // 帧跑了才消费控件写回
             // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
             if (inputHud) {
                 reqState[0] = hud.inputDebug.reqW;
@@ -2435,6 +2570,11 @@ void printUsage() {
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
+              << "  viewer.exe --physics-scenario 2 --physics-debug [--drive-demo]\n"
+              << "                                     M-D3 drive training ground; --drive-demo =\n"
+              << "                                     deterministic frame-indexed input script\n"
+              << "  viewer.exe --drive-hud             M-D3 separate drive debug window (default off)\n"
+              << "                                     CVars: vehicle.throttleScale / steerScale / debug\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
               << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
               << "  viewer.exe --script <projectDir>   M-GL4: load script host (scene mode); host-level\n"

@@ -455,6 +455,24 @@ void Hud::build(HudFrame& frame) {
     // additive-sibling placement as the console/audio windows; with the gate
     // off it draws nothing, so no existing HUD baseline moves.
     if (frame.inputDebug.show) drawInputDebugUi(frame.inputDebug);
+    // P8 M-D3 (Q-D3-3 A): drive parameter panel -- separate sibling window,
+    // default-off gate. With the gate off it draws nothing, so no existing HUD
+    // baseline moves; only the drive-m3 showcase card turns it on.
+    if (frame.driveDebug.show) {
+        // Bottom-right so it clears the resident HUD (14,14 / 330 wide), the
+        // input-debug panel (356,14 / 272 wide) and the console (top-right,
+        // 300 tall). Fixed pos+size with Always keeps screenshot bytes stable
+        // and leaves a margin inside a 960x540 canvas (620+316=936, 330+124=454).
+        // 6 short ASCII lines fit in 316x140 (124 left a scrollbar); AutoResize
+        // used to grow to the canvas edge and clip the first line's right tail.
+        ImGui::SetNextWindowPos(ImVec2(620.0f, 330.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(316.0f, 140.0f), ImGuiCond_Always);
+        if (ImGui::Begin("Drive Debug (M-D3)", nullptr)) {
+            for (int i = 0; i < frame.driveDebug.lineCount; ++i)
+                ImGui::TextUnformatted(frame.driveDebug.lines[i]);
+        }
+        ImGui::End();
+    }
     ImGui::Render();
 
     frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;

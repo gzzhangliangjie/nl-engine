@@ -63,6 +63,12 @@ public:
     // 边沿触发：读一次即清除，避免长按重复响应
     bool keyPressed(Key key) const;
 
+    // M-D3 (Q-D3-2 A): READ-ONLY key state for real-time driving input.
+    // Pure glfwGetKey query -- it consumes NO event queue and does NOT clear
+    // the keyPressed() hotkey edge, so ImGui / console / hotkeys are untouched.
+    // glfwKey is a GLFW_KEY_* code (int keeps this header GLFW-free).
+    bool rawKeyDown(int glfwKey) const;
+
     // M-C1：ImGui 键盘输入通路（消费制）。按帧取走本帧累积的事件 / 字符；
     // 超出 cap 的部分丢弃。viewer 把它们塞进 HudFrame 的定长数组，ImGui 映射
     // 在 renderer 侧 console_ui.cpp（core 不许出现 ImGui 符号）。

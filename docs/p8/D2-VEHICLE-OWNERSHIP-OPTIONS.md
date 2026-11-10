@@ -4,6 +4,9 @@
 > 结论已写回 `docs/p8/P8-DRIVE-PLAN.md` §7 Q-D2-1 + §3 M-D2 开工锚点表，历史挂账句已删，开工闸满足后方落码；
 > **M-D2 已按 A 收官**（tag `drive-m2`，实测见 `DRIVE-TOOLS-GUIDE.md` §10）。
 > 本文件保留为决策依据快照（§4/§5 的「建议 / 非结论」是拍板前的原始措辞，不再代表当前状态）。
+> **2026-11-10 M-D3 开工闸勘误**：§4/§5/§6 里「M-D3 届时抽成 `buildVehicle(PhysicsSystem&)`」是
+> **承诺而非 M-D2 已实现**；M-D2 收官时装配全内联在 `simulateDrive()`，函数由 M-D3 按 Q-D3-1 A 真抽出，
+> 见 `D3-DRIVE-VIEW-OPTIONS.md` §2.1 与 `P8-DRIVE-PLAN.md` §3 M-D3 锚点表。
 > 依据：`AGENTS.md`「决策前置铁律」+「开工闸」（主树第 67 / 128 条，2026-11-10 固化，M9.0 教训）。
 
 ## 1. 为什么必须在落码前定
@@ -65,15 +68,16 @@
 | M-D0/D1 回归面 | 零（新探针独立） | 零 | 零 |
 | 提前定死架构的风险 | 低（所有权留给 M-D3） | 高 | 中高 |
 
-## 5. 建议（**非结论**）
+## 5. 建议 A（**已拍板，见文首拍板结果**）
 
 **建议 A**：与 `World.hpp:226-228`「A fresh world per call is what makes repeated runs bit-identical」不变量、
 M-P0~M-D4 / M-D0 全部探针先例、以及计划 §3「帧序号驱动输入脚本 + per-frame dump」完全同构；
 M-D3 的实时输入是另一个里程碑的问题，届时把 `Vehicle.cpp` 内的装配逻辑抽成 `buildVehicle(PhysicsSystem&)`
 供 `DebugScene` scenario 2 复用即可，不需要 M-D2 提前决定「谁持有 PhysicsSystem」。
 代价是 M-D3 要抽一次函数并补逐帧输入接口 —— 已列入 M-D3 范围，不是遗漏。
+> **兑现状态（M-D3 收官）**：M-D2 收官时该函数**未落**（文档承诺超前于代码）；**M-D3 已按 Q-D3-1 A 真抽出并兑现** —— `core/src/physics/Vehicle.cpp::buildVehicle(JPH::PhysicsSystem&)` 与 `core/src/physics/VehicleInternal.hpp`，`simulateDrive()` 和 `DebugScene::build(2)` 共用同一装配序列，M-D2 归档 `drive.tsv` 逐字节零回归。见 `D3-DRIVE-VIEW-OPTIONS.md` §2.1 / `DRIVE-TOOLS-GUIDE.md` §11.1。
 
-## 6. 拍板后动作清单（未执行）
+## 6. 拍板后动作清单（M-D2 已执行）
 
 1. 结论写回 `P8-DRIVE-PLAN.md` §7 拍板记录（新增 Q-D2-1 行 + 状态段），并在 §3 M-D2 补「开工锚点表」。
 2. 同步删掉历史挂账句：§2.3 标题「需用户拍板，见 Q1」/ 正文「列为 Q1 待确认」、§7 Q1 / Q2 建议栏「确认后 …」——Q1 / Q2 实际已在 M-D0 / M-D1 执行，属文字残留。

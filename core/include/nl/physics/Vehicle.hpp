@@ -5,9 +5,11 @@
 //   simulateDrive() builds a brand-new JPH::PhysicsSystem on every call, runs a
 //   frame-indexed input script to completion, and returns POD views only.
 //   World.hpp:226-228 keeps the "fresh world per call => bit-identical" contract;
-//   M-D3 will reuse the internal buildVehicle(PhysicsSystem&) helper to attach a
-//   car to DebugScene scenario 2. Ownership of a long-lived world is NOT decided
-//   here. See docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md and P8-DRIVE-PLAN.md §3.
+//   NOTE (M-D3 kickoff erratum): buildVehicle(PhysicsSystem&) did NOT exist at
+//   M-D2 close -- all assembly was inlined in simulateDrive(). M-D3 (Q-D3-1 A)
+//   really extracts it and shares it with DebugScene scenario 2. Ownership of a
+//   long-lived world was intentionally left to M-D3. See D3-DRIVE-VIEW-OPTIONS.md
+//   §2.1 and P8-DRIVE-PLAN.md §3 (M-D2 / M-D3 anchor tables).
 //
 // Three-source evidence (M-D2 open-day re-read, NOT M-D0/D1 evidence):
 //  - Carrot engine/engine/physics/ (16 files): zero Vehicle / StepListener /

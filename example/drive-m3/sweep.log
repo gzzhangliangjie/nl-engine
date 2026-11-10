@@ -1,0 +1,12 @@
+sweep: 10 real runs -> E:\UE_STUDY_2026\nl-engine-drive\example\drive-m3\frames.tsv
+  F  30 speed=1.18109    posZ=0.2357    yaw=-0.0000   wallHits=0
+  F  60 speed=2.4261     posZ=1.1540    yaw=-0.0000   wallHits=0
+  F  90 speed=3.69138    posZ=2.6938    yaw=-0.0000   wallHits=0
+  F 120 speed=4.47681    posZ=4.7111    yaw=-8.8606   wallHits=0
+  F 150 speed=5.38487    posZ=6.9161    yaw=-26.3559  wallHits=0
+  F 180 speed=6.6169     posZ=9.4509    yaw=-30.2694  wallHits=0
+  F 210 speed=7.86643    posZ=12.5788   yaw=-30.2668  wallHits=0
+  F 240 speed=1.82718    posZ=15.3219   yaw=-27.5609  wallHits=1
+  F 270 speed=0.173184   posZ=15.2188   yaw=-20.2393  wallHits=1
+  F 300 speed=0.0115737  posZ=15.2419   yaw=-20.2322  wallHits=1
+frames.tsv 10 real runs byte-stable: OK 

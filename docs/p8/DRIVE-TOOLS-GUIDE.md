@@ -284,3 +284,77 @@ d2-drive-negative   drive-trace --frames 0（WILL_FAIL）
 5. **selftest 新节变量遮蔽**：初版 `r1`/`r2` 触发 /W4 C4456 → 改名 `veh1`/`veh2`，warning 回落到既有 4 条。
 6. **证据图不能读正在写的日志**：`acceptance.png` 若读 `evidence.log`（python 自己的 stdout 正被重定向到该文件），冷启动与二次运行会产出不同 PNG 导致 `fc /b` 挂。改成只读第 ④ 段前已写完的 `drive-check.log` / `cross-backend.log`。
 7. **锚一律机器反推**：先只写结构 / 物理断言 + 一条故意失败的占位（防忘注入），实跑后由 `--anchors` 从真实 TSV 读出 6 组数值注入 `drive-check`（M-I0/I1 手写锚两连犯教训）。
+
+
+## 11. M-D3 驾驶可见：`DebugScene` scenario 2 + viewer 接线（tag `drive-m3`）
+
+A 类并行轨道**唯一**触碰渲染接线面的里程碑。`kStage` 保持 `S8.2`，不改 `ViewMode` / viewer selftest 锚 / 既有基线 PNG；70 张既有基线零波及。
+
+### 11.1 挂载与公开面（Q-D3-1 A）
+
+| 面 | 落点 |
+|---|---|
+| 装配函数 | `core/src/physics/VehicleInternal.hpp`（internal-only，允许 Jolt 类型）+ `Vehicle.cpp::buildVehicle(JPH::PhysicsSystem&)`；`simulateDrive()` 与 `DebugScene::build(2)` 共用同一序列，M-D2 `drive.tsv` 逐字节零回归 |
+| 长生命周期车 | `World.cpp` `DebugScene::Impl` 持有 `Ref<VehicleConstraint>` / controller / 车体 BodyID / wallId / `contactCounter`；scenario 2 建 **20 bodies**（地面 + 车道标记 + 墙 + chassis） |
+| 层过滤 | scenario 2 三 filter 全层对 `ShouldCollide=true`；`floor/floor` 禁用会让 `VehicleCollisionTesterRay` 四轮全 miss（M-D2 `events=0` 教训）。scenario 0 与其它 scenario 一行未改 |
+| 公开头 | `World.hpp` 只加 Jolt-free `DriveInputState` / `DriveViewState` / `DriveChassisState` POD + `setDriveInput()` / `driveState()` / `chassisState()`；`Vehicle.hpp` 继续零 Jolt |
+| 撞墙事件 | 车与墙同 `Impl::physicsSystem` → 底盘撞墙天然产 M-D0 `ContactListener` 事件，HUD 的 `CONTACT` / `WALL` 行直接读真实计数 |
+
+### 11.2 输入、cvar 与 HUD（Q-D3-2 A / Q-D3-3 A）
+
+- **单消费者铁律不破**：viewer 仍**不调** `InputState::updateFromWindow()`；实时键鼠走新增 `Window::rawKeyDown(int glfwKey)`（`glfwGetKey` 纯只读，不消费 `keyPressed()` 边沿），注入 `feedKey()` → `ActionMap::update()` → 渲染帧累积、Physics 逻辑帧消费。
+- `--drive-demo` 帧序号脚本走**同一条注入路径**作确定性截图源；`--fixed-dt 16.6667` 是物理真正推进的前提（不带时 GameClock 只推进极少逻辑帧，实测 `posZ≈0.0075` 车几乎不动）。
+- cvar `vehicle.throttleScale` / `vehicle.steerScale` / `vehicle.debug` 注册在 `--console-exec` 之前（满足 `GAME-DEV-ORDER.md` 第 3 步「console 实调」）。
+- `DriveDebugUi` 是 `HudFrame` 新增默认关 POD；`hud.cpp` 仅在 `show` 时画独立兄弟窗口 `"Drive Debug (M-D3)"`，固定 `(620,330)` / `316x140` / `ImGuiCond_Always`（截图确定性），6 行 ASCII 全部 ≤40 字符。
+
+### 11.3 实测锚（全部来自真实 viewer 日志，无手写数值）
+
+`python tools/make-drive-m3-evidence.py --sweep --exe build/DX12/viewer.exe` 跑 10 组独立 30..300 帧，从最终态 `drive scene:` / `drive hook:` 日志反推写 `example/drive-m3/frames.tsv`。
+
+| 量 | 实测 | 位置 |
+|---|---|---|
+| 帧扫描 | **10 组**（30..300，步长 30），逐字节稳定 | `frames.tsv` / `timeline.png` |
+| 最高速 | **7.86643 m/s**（f210，转向段末） | 速度曲线 |
+| f240 撞墙 | `wallHits=1` 首次出现，speed 骤降 7.86643 → **1.82718** | 相位色带边界 |
+| 末态 f300 | speed **0.0115737 m/s**、posZ **15.2419 m**、yaw **-20.2322 deg** | MEASURED 面板 |
+| 轮 / 事件 | grounded **4/4**、contacts **1/8/1**、deviceErrors **0** | `drive-dx12.log` |
+| 墙 | `World.cpp:1413` `z=18`；车身中心停在 15.24（车头触墙、中心未到 18） | chassis Z 曲线红线 |
+| cvar 实调 | `vehicle.throttleScale 0.5` → speed **0.0592731**、contacts **1/9/1**（对照基线 0.0115737 / 1/8/1） | `cvar.log` |
+| 默认关闸门 | 无 `--drive-hud` → PNG 与基线 DIFFER；`vehicle.debug true` 无 `--drive-hud` → 与基线**逐字节一致** | `cvar.log` / `negative.log` |
+| 负向 | `--physics-scenario 0` 不产生任何 M-D3 `drive scene:` 日志 | `negative.log` |
+| 双后端 | DX12/VULKAN 各自对本后端基线**逐字节相同**（32021 B / 32923 B）；物理日志锚逐字一致 | `cross-backend.log` |
+| 零回归 | M-D0 `contacts.tsv` / M-D1 `ecs.tsv` / M-D2 `drive.tsv` 六组逐字节 IDENTICAL；DX12/VULKAN `drive-trace` 逐字节一致 | `zero-regression.log` |
+
+> 两后端 PNG **DIFFER** 是既有 pair 卡口径（GPU 计时 / 着色器路径不同），按「各自对本后端基线 bytes」判定，不是回归；禁笼统写「一致」。
+
+### 11.4 五段式一键验收与交代物
+
+```
+example\drive-m3\run.bat     # 前置：scripts\build-m0.2.bat DX12 / VULKAN
+```
+
+① `phys-tools selftest --verbose`（9 条 PASS 锚 findstr 断言）→ ② M-D0/D1/D2 归档 TSV `fc /b` 零回归 + DX/VK trace 一致 → ③ DX12/VULKAN 训练场截图各自 `fc /b` 复验 + `drive scene/hook/deviceErrors=0` 日志锚 → ④ console cvar / 默认关闸门 / 负向 scenario 0 → ⑤ 10 组真实帧扫描 `frames.tsv` 逐字节自稳 + 两张证据图重生成 `fc /b` → `DRIVE-M3 ACCEPTANCE: ALL GREEN` exit 0。**连续跑两次**（重生成 + 逐字节复验）均 ALL GREEN。
+
+| 文件 | 来源 |
+|---|---|
+| `drive-dx12.png` / `drive-vulkan.png` | viewer `--screenshot` 真实渲染（取景 `--dist 45 --yaw 90 --pitch 40 --size 960x540`） |
+| `drive-*.log` | 双后端 viewer 真实 stdout（含 `M-D3 drive scene: 20 bodies` / `drive scene:` / `drive hook:`） |
+| `frames.tsv` | 10 组独立 viewer 实跑最终态日志反推（740 B） |
+| `{selftest,zero-regression,cross-backend,cvar,negative,sweep}.log` | run.bat 捕获的真实工具输出 |
+| `timeline.png` | 从 `frames.tsv` 渲染：speed / chassis Z 双曲线 + 四段相位色带 + `wall z=18` 红线 + MEASURED 面板 |
+| `acceptance.png` | 同一脚本从真实 logs 渲染的终端风格验收板（5 块 + FINAL STATE 条） |
+
+展示台：`example/cases.json` `drive-m3` 版本卡 **6 用例**（4 个 phys-tools tool 卡 + 1 个 viewer `drive-demo` tool 卡 + 1 组 `drive-scene` pair 截图）。版本默认 exe 为 phys-tools，两个 viewer 卡用 **case 级 `exe` 覆盖 + `cwd:"{root}"`**（否则默认 `exe.parent` 作 cwd，与基线生成时不一致）。`kStage` 不 bump → `server.py --check` 只校验 `s8.2` 卡（exit 0 证明旧阶段零回归），新卡齐备由 `run.bat` + `regression.py --only drive-m3` **12/12 bytes ALL GREEN** 双验。
+
+### 11.5 踩坑（本轮实锤）
+
+1. **`--fixed-dt` 不是可选项**：截图模式默认 dt 近似 0，`--drive-demo` 帧序号脚本虽在灌输入但物理几乎不推进；加 `--fixed-dt 16.6667` 后每渲染帧固定推进 1/60 逻辑帧，车才真正开到墙（posZ 15.24）。
+2. **默认 OrbitCamera 不框训练场**：首张截图主体是 Suzanne 头 + 蓝色地板线，车道标记 / 墙 / 车体基本不在视野。计划 §3「训练场布在可见范围」被实测证伪 → 按 Q-D3-4 冻结面**不改任何相机代码**，改用命令行 `--dist/--yaw/--pitch` 取景；四组 (A~D) + 三组 (E~G) 拼图对比后定 **E = `--dist 45 --yaw 90 --pitch 40`**。该口径已同步写回 `P8-DRIVE-PLAN.md` §3 / §6。
+3. **HUD 独立窗口被画布底边裁掉**：初版 `(18,430)` + 6 行 ≈110px 在 540px 画布里 `WALL` 只露一半、`CVAR` 全不可见，首行还被自动宽度裁字 → 挪右下 `(620,330)` 避开 resident HUD / input-debug / console，位置用 `ImGuiCond_Always`，6 行压到 ≤40 字符。
+4. **固定尺寸仍出竖向滚动条**：`316x124` 差几个像素 → `316x140` 消除；两张基线全部重拍。
+5. **证据图 `wall z=18` 超出坐标域**：`zmax` 只取曲线峰值 ×1.15 = 17.62，红线被算到图表框外、标注压住 `chassis Z (m)` 标题 → `zmax` 下限提到 20、下半图下移 10px、标注移到红线下方。
+6. **证据图不能读正在写的日志**（M-D2 坑 6 同族）：`sweep.log` / `cvar.log` 等在第 ⑤ 段 PNG 生成**之前**定稿，evidence 结论只写 `build/drive-m3-accept/evidence.log`（PNG 不读它），否则首轮与复验轮 PNG 不同、`fc /b` 挂。
+7. **混合卡必须 case 级 exe 覆盖**：`drive-m3` 版本默认 exe 是 phys-tools，viewer 卡若沿用默认会直接跑错程序；另需 `cwd:"{root}"` 对齐基线生成时的工作目录。
+8. **「新增 warning」误判**：VULKAN 构建报 `viewer/main.cpp(1147) C4244 double→float`，核对 `git show HEAD:viewer/main.cpp` 后确认是 M-A5 既有行 `fp.animTime = skinTime`（HEAD 在 1038 行，只被 M-D3 新增 138 行推后），phys-tools 的 4 条 C4456 同为 M-D0 前既有 → **本轮零新增 warning**，不改既有代码。
+9. **`run.bat` 参数与 cases.json `script` 对齐**：`script` 写 `example/drive-m3/run.bat verify`，run.bat 接受并忽略首个参数、始终跑完整五段闸（与 s8.2 卡同款展示惯例）。
+10. **TSV 必须显式写 LF**：`.gitattributes` 把 `*.tsv` 钉死 `text eol=lf`，而 Python `Path.write_text()` 在 Windows 上默认吐 CRLF。初版 `frames.tsv` 工作树是 CRLF、blob 是 LF，别人 clone 后首次跑 `run.bat` 第 ⑤ 段 `fc /b` 会假 FAIL。改为 `open(..., newline="\n")` 显式写 LF，与 M-D0/D1/D2 归档 TSV 对齐；重生成 + 连续两轮 `run.bat verify` ALL GREEN 复验。

@@ -1,0 +1,5 @@
+[nl:info] drive scene: speed=0.0592731 grounded=4 wallHits=1 contacts=1/9/1 fwd=0 hb=1
+cvar throttleScale 0.5: PNG differs from baseline OK  
+cvar vehicle.debug == drive-hud: PNG identical OK 
+default-off gate: no --drive-hud PNG differs OK  
+negative scenario 0: no M-D3 drive scene log OK 

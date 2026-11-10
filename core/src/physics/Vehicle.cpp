@@ -14,6 +14,11 @@
 // M-D1's ContactEventStream inside the same logic frame (update -> publish ->
 // drain), which is the first real gameplay consumption of that contract.
 // M-D0's ContactCollector / simulateContactProbe are untouched.
+//
+// M-D3 (Q-D3-1 A): chassis/wheel/constraint assembly is now detail::buildVehicle()
+// in this TU and shared with DebugScene scenario 2 (VehicleInternal.hpp).
+// simulateDrive() keeps its exact floor creation, OptimizeBroadPhase and frame
+// loop order so the M-D2 drive.tsv baseline stays byte-identical.
 
 #include <Jolt/Jolt.h> // must be the first Jolt header
 
@@ -34,6 +39,7 @@
 
 #include "nl/physics/World.hpp"                 // bootstrap(), layers, kLayerCount
 #include "nl/physics/ContactEventStream.hpp"    // M-D1 consumer contract
+#include "VehicleInternal.hpp"                  // M-D3: shared assembly contract
 
 #include <algorithm>
 #include <cmath>
@@ -80,6 +86,93 @@ float wrapDelta(float from, float to) {
 } // namespace
 
 namespace nl::physics {
+
+namespace detail {
+
+bool buildVehicle(JPH::PhysicsSystem& ps,
+                  const VehicleTuning& t,
+                  const JPH::RVec3& chassisStart,
+                  VehicleAssembly* out,
+                  std::string* err) {
+    auto fail = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    JPH::BodyInterface& bodyInterface = ps.GetBodyInterface();
+
+    // Chassis box. Jolt derives mass from density * volume; set the density so
+    // the configured mass is respected without overriding mass properties.
+    const float volume = 8.0f * t.halfWidth * t.halfHeight * t.halfLength;
+    JPH::BoxShapeSettings chassisShapeSettings(
+        JPH::Vec3(t.halfWidth, t.halfHeight, t.halfLength));
+    chassisShapeSettings.SetEmbedded();
+    chassisShapeSettings.mDensity = t.mass / volume;
+    auto chassisShapeResult = chassisShapeSettings.Create();
+    if (chassisShapeResult.HasError()) return fail("chassis shape creation failed");
+    JPH::BodyCreationSettings chassisBCS(
+        chassisShapeResult.Get(),
+        chassisStart,
+        JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic,
+        static_cast<JPH::ObjectLayer>(layers::kDefault));
+    chassisBCS.mUserData = 1;
+    chassisBCS.mLinearDamping = 0.0f;
+    chassisBCS.mAngularDamping = 0.0f;
+    JPH::Body* chassis = bodyInterface.CreateBody(chassisBCS);
+    if (!chassis) return fail("chassis body creation failed");
+    bodyInterface.AddBody(chassis->GetID(), JPH::EActivation::Activate);
+
+    // Vehicle settings: up/forward are normalized (VehicleConstraint.cpp:87-88
+    // asserts), wheels must be WheelSettingsWV (:160 ConstructWheel asserts).
+    JPH::VehicleConstraintSettings vehicleSettings;
+    vehicleSettings.mUp = JPH::Vec3(0.0f, 1.0f, 0.0f);
+    vehicleSettings.mForward = JPH::Vec3(0.0f, 0.0f, 1.0f);
+    vehicleSettings.mMaxPitchRollAngle = JPH::DegreesToRadians(60.0f);
+
+    JPH::WheeledVehicleControllerSettings* controllerSettings =
+        new JPH::WheeledVehicleControllerSettings();
+    JPH::VehicleDifferentialSettings diff;
+    diff.mLeftWheel = 2;              // defaults are -1 (VehicleDifferential.h:31-32)
+    diff.mRightWheel = 3;
+    diff.mEngineTorqueRatio = 1.0f;   // sum over differentials must be 1
+    controllerSettings->mDifferentials.push_back(diff);
+    vehicleSettings.mController = controllerSettings;
+
+    const float wx[4] = {-t.wheelOffsetX, t.wheelOffsetX, -t.wheelOffsetX, t.wheelOffsetX};
+    const float wz[4] = { t.wheelOffsetZ, t.wheelOffsetZ, -t.wheelOffsetZ, -t.wheelOffsetZ};
+    for (int i = 0; i < 4; ++i) {
+        JPH::WheelSettingsWV* w = new JPH::WheelSettingsWV();
+        w->mPosition = JPH::Vec3(wx[i], t.wheelAttachY, wz[i]);
+        w->mSuspensionDirection = JPH::Vec3(0.0f, -1.0f, 0.0f);
+        w->mSteeringAxis = JPH::Vec3(0.0f, 1.0f, 0.0f);
+        w->mWheelUp = JPH::Vec3(0.0f, 1.0f, 0.0f);
+        w->mWheelForward = JPH::Vec3(0.0f, 0.0f, 1.0f);
+        w->mSuspensionMinLength = t.suspMin;
+        w->mSuspensionMaxLength = t.suspMax;
+        w->mSuspensionSpring = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping, t.suspFrequency, t.suspDamping);
+        w->mRadius = t.wheelRadius;
+        w->mWidth = t.wheelWidth;
+        w->mMaxSteerAngle = (i < 2) ? JPH::DegreesToRadians(t.maxSteerDeg) : 0.0f;
+        vehicleSettings.mWheels.push_back(w);
+    }
+
+    JPH::Ref<JPH::VehicleConstraint> constraint =
+        new JPH::VehicleConstraint(*chassis, vehicleSettings);
+    constraint->SetVehicleCollisionTester(
+        new JPH::VehicleCollisionTesterRay(static_cast<JPH::ObjectLayer>(layers::kFloor)));
+    ps.AddConstraint(constraint.GetPtr());
+    ps.AddStepListener(constraint.GetPtr());
+
+    // Publish the borrowed handles. AddConstraint() already AddRef'd the
+    // constraint, so the caller's Ref outlives this local Ref.
+    out->constraint = constraint;
+    out->controller = static_cast<JPH::WheeledVehicleController*>(constraint->GetController());
+    out->chassis = chassis;
+    out->chassisId = chassis->GetID();
+    return true;
+}
+
+} // namespace detail
 
 bool validateDriveConfig(const DriveConfig& cfg, std::string* err) {
     auto bad = [err](const char* reason) -> bool {
@@ -146,80 +239,22 @@ DriveResult simulateDrive(const DriveConfig& cfg) {
         return r;
     }
 
-    // Chassis box. Jolt derives mass from density * volume; set the density so
-    // the configured mass is respected without overriding mass properties.
-    const float volume = 8.0f * t.halfWidth * t.halfHeight * t.halfLength;
-    JPH::BoxShapeSettings chassisShapeSettings(
-        JPH::Vec3(t.halfWidth, t.halfHeight, t.halfLength));
-    chassisShapeSettings.SetEmbedded();
-    chassisShapeSettings.mDensity = t.mass / volume;
-    auto chassisShapeResult = chassisShapeSettings.Create();
-    if (chassisShapeResult.HasError()) {
-        r.error = "chassis shape creation failed";
+    // M-D3 (Q-D3-1 A): the very same assembly helper is used by
+    // DebugScene::build(2). Floor creation and OptimizeBroadPhase stay here so
+    // M-D2's call order / drive.tsv stay byte-identical.
+    detail::VehicleAssembly assembly;
+    if (!detail::buildVehicle(physicsSystem, t,
+                             JPH::RVec3(JPH::Real(0), JPH::Real(t.startY), JPH::Real(0)),
+                             &assembly, &r.error)) {
         return r;
     }
-    JPH::BodyCreationSettings chassisBCS(
-        chassisShapeResult.Get(),
-        JPH::RVec3(JPH::Real(0), JPH::Real(t.startY), JPH::Real(0)),
-        JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic,
-        static_cast<JPH::ObjectLayer>(layers::kDefault));
-    chassisBCS.mUserData = 1;
-    chassisBCS.mLinearDamping = 0.0f;
-    chassisBCS.mAngularDamping = 0.0f;
-    JPH::Body* chassis = bodyInterface.CreateBody(chassisBCS);
-    if (!chassis) {
-        r.error = "chassis body creation failed";
-        return r;
-    }
-    bodyInterface.AddBody(chassis->GetID(), JPH::EActivation::Activate);
-
-    // Vehicle settings: up/forward are normalized (VehicleConstraint.cpp:87-88
-    // asserts), wheels must be WheelSettingsWV (:160 ConstructWheel asserts).
-    JPH::VehicleConstraintSettings vehicleSettings;
-    vehicleSettings.mUp = JPH::Vec3(0.0f, 1.0f, 0.0f);
-    vehicleSettings.mForward = JPH::Vec3(0.0f, 0.0f, 1.0f);
-    vehicleSettings.mMaxPitchRollAngle = JPH::DegreesToRadians(60.0f);
-
-    JPH::WheeledVehicleControllerSettings* controllerSettings =
-        new JPH::WheeledVehicleControllerSettings();
-    JPH::VehicleDifferentialSettings diff;
-    diff.mLeftWheel = 2;              // defaults are -1 (VehicleDifferential.h:31-32)
-    diff.mRightWheel = 3;
-    diff.mEngineTorqueRatio = 1.0f;   // sum over differentials must be 1
-    controllerSettings->mDifferentials.push_back(diff);
-    vehicleSettings.mController = controllerSettings;
-
-    const float wx[4] = {-t.wheelOffsetX, t.wheelOffsetX, -t.wheelOffsetX, t.wheelOffsetX};
-    const float wz[4] = { t.wheelOffsetZ, t.wheelOffsetZ, -t.wheelOffsetZ, -t.wheelOffsetZ};
-    for (int i = 0; i < 4; ++i) {
-        JPH::WheelSettingsWV* w = new JPH::WheelSettingsWV();
-        w->mPosition = JPH::Vec3(wx[i], t.wheelAttachY, wz[i]);
-        w->mSuspensionDirection = JPH::Vec3(0.0f, -1.0f, 0.0f);
-        w->mSteeringAxis = JPH::Vec3(0.0f, 1.0f, 0.0f);
-        w->mWheelUp = JPH::Vec3(0.0f, 1.0f, 0.0f);
-        w->mWheelForward = JPH::Vec3(0.0f, 0.0f, 1.0f);
-        w->mSuspensionMinLength = t.suspMin;
-        w->mSuspensionMaxLength = t.suspMax;
-        w->mSuspensionSpring = JPH::SpringSettings(
-            JPH::ESpringMode::FrequencyAndDamping, t.suspFrequency, t.suspDamping);
-        w->mRadius = t.wheelRadius;
-        w->mWidth = t.wheelWidth;
-        w->mMaxSteerAngle = (i < 2) ? JPH::DegreesToRadians(t.maxSteerDeg) : 0.0f;
-        vehicleSettings.mWheels.push_back(w);
-    }
-
-    JPH::Ref<JPH::VehicleConstraint> constraint =
-        new JPH::VehicleConstraint(*chassis, vehicleSettings);
-    constraint->SetVehicleCollisionTester(
-        new JPH::VehicleCollisionTesterRay(static_cast<JPH::ObjectLayer>(layers::kFloor)));
-    physicsSystem.AddConstraint(constraint.GetPtr());
-    physicsSystem.AddStepListener(constraint.GetPtr());
+    assembly.floorId = floorId;
     physicsSystem.OptimizeBroadPhase();
 
-    // GetController() returns the BASE VehicleController* (VehicleConstraint.h:
-    // 130/133); SetDriverInput lives only on the derived class, hence the cast.
-    auto* controller = static_cast<JPH::WheeledVehicleController*>(constraint->GetController());
-    auto& joltWheels = constraint->GetWheels();
+    auto* controller = assembly.controller;
+    auto& joltWheels = assembly.constraint->GetWheels();
+    JPH::Body* const chassis = assembly.chassis;
+
 
     ContactEventStream stream;
     bool prevContact[4] = {false, false, false, false};
@@ -337,8 +372,8 @@ DriveResult simulateDrive(const DriveConfig& cfg) {
     r.turnRadius = ayaw > 1.0e-3f ? dist / ayaw : 0.0f;
 
     // Detach before teardown: the step listener is a raw pointer in Jolt.
-    physicsSystem.RemoveStepListener(constraint.GetPtr());
-    physicsSystem.RemoveConstraint(constraint.GetPtr());
+    physicsSystem.RemoveStepListener(assembly.constraint.GetPtr());
+    physicsSystem.RemoveConstraint(assembly.constraint.GetPtr());
     return r;
 }
 
