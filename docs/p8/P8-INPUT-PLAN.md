@@ -61,7 +61,7 @@
 
 | 里程碑 | 内容 | 验收判据 |
 |---|---|---|
-| **M-I0** | `core/input` 状态层（全键位 + 三态 + 鼠标全量 + 注入 API）+ selftest + CMake/ctest 接线；viewer 现有热键回归 spot（--only 挑 2~3 条） | selftest 数值锚全绿；注入序列 → 三态逐位锚；双后端 spot 零回归；tool 卡 usage/正向/负向 |
+| **M-I0** | `core/input` 状态层（全键位 + 三态 + 鼠标全量 + 注入 API）+ selftest + CMake/ctest 接线；viewer 现有热键回归 spot（--only 挑 2~3 条） | selftest 数值锚全绿；注入序列 → 三态逐位锚；双后端 spot 零回归；tool 卡 usage/正向/负向 | ✅ **已收口**（tag `input-m0`，2026-11-10）：selftest 7 节 39 断言全绿、trace→check 5 锚闭环、证据图 fc /b 逐字节、spot 18/18 bytes、run.bat ALL GREEN、`server.py --check` exit 0；实测踩坑见 MILESTONES M-I0 节（bat CRLF / if 块内括号 / 锚禁手写 / glfw 链接面） |
 | **M-I1** | ActionMap/ActionSet 映射层 + 默认驾驶映射表 + selftest（合成事件 → 动作值锚） | selftest 全绿（含 OR/max 解析、组开关冻结语义）；tool 卡三条 |
 | **M-I2** | viewer `--mode input-hud` 调试面板 + example 卡 + cases.json + 收口（close 硬闸） | 截图基线双后端 bytes；`server.py --check` exit 0；注入按钮肉眼可验 |
 

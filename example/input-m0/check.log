@@ -1,0 +1,7 @@
+  ok check: 12 rows
+  ok check: f0 W pressed+down
+  ok check: f1 W down only
+  ok check: f3 LMB edge
+  ok check: f10 W released
+  ok check: f11 delta values
+check PASS (12 rows, 5 anchors)

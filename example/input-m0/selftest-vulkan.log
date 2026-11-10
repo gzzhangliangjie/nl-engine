@@ -1,0 +1,47 @@
+[edges]
+  ok GLFW_KEY_W == 87
+  ok GLFW_KEY_SPACE == 32
+  ok GLFW_KEY_ESCAPE == 256
+  ok GLFW_MOUSE_BUTTON_LAST == 7
+  ok key table size == GLFW_KEY_LAST+1
+  ok frame0: W idle
+  ok frame1: press -> down+pressed
+  ok frame2 after endFrame: down kept, edge cleared
+  ok frame2: release -> released only
+  ok frame3 after endFrame: all clear
+[combos]
+  ok same-frame press->release: released wins
+  ok combos: clean after endFrame
+  ok same-frame release->press: pressed wins
+[repeat]
+  ok repeat: justPressed exactly once this frame
+  ok repeat: down stays
+  ok next-frame repeat: no new justPressed
+[mouse]
+  ok mouse: left down+pressed
+  ok mouse: right down
+  ok mouse: left release edge
+  ok mouse: right unaffected by left release
+  ok mouse: delta accumulates
+  ok mouse: scroll accumulates
+  ok mouse: cursor position
+  ok mouse: increments cleared at endFrame
+  ok mouse: right down kept across endFrame
+  ok mouse: edge cleared at endFrame
+[oob]
+  ok oob key queries false
+  ok oob mouse queries false
+  ok oob feed did not corrupt table
+  ok oob endFrame survived
+[mods]
+  ok mods: ctrl+alt
+  ok mods: kept across endFrame (persistent state)
+  ok mods: cleared
+[determinism]
+  ok same sequence replays bit-identical across 12 frames
+  ok seq anchor: f0 W pressed+down
+  ok seq anchor: f1 W down only
+  ok seq anchor: f3 LMB edge
+  ok seq anchor: f10 W released
+  ok seq anchor: f11 delta values (0.5*(11%4), -0.25*(11%3))
+selftest PASS (7 sections)

@@ -2020,3 +2020,20 @@
 5. **诊断脚手架纪律**：本轮动过 env 开关（NL_TLAS_MAX_BUILD/NL_NO_TLAS_TIMER/NL_TLAS_DOUBLE）+ 双缓冲实验位，收口前全部移除，不留死代码。
 
 **下一步**：M8.2 Ray Query 调试射线闭环（debugLines 进 3D 视口；t0=TLAS binding 已就位）。
+
+## P8 M-I0：输入状态层——全键位三态 + 鼠标全量 + 注入 API（feat/input 轨道首里程碑，2026-11-10，tag `input-m0`）
+
+**动作**：城市驾驶游戏方向拍板后的 P0 第一步（立项链：review → 方向拍板 → `docs/p8/P8-INPUT-PLAN.md`，track `input` 注册 wt_pool/PARALLEL-TRACKS/ROADMAP，主树 `4a856c9`）。三处参考实读（Carrot `io/actions/` OpenXR 式 Action/ActionSet + 绑定解析规则、bevy `bevy_input` ButtonInput 三态 + W3C 物理键位、UE EnhancedInput InputMappingContext 只取上下文思想）→ `core/include/nl/core/input.hpp` + `core/src/input.cpp`（InputState：定长三态表 isDown/justPressed/justReleased、endFrame 帧末清边沿与增量、GLFW 全键位 kGlfwKeyTableSize、鼠标全按键/增量/滚轮/光标/mods、feed* 注入 API 与 updateFromWindow 共用 applyKey/applyMouseButton 内核）→ window.hpp/cpp **增量**扩第三通道（MouseButtonEvent + consumeMouseButtonEvents，既有热键边沿/ImGui 通道语义零改动；input.hpp 文件头固化单消费者铁律：游戏壳接线前 viewer 禁调 updateFromWindow）→ `input-tools/main.cpp`（selftest 7 节 39 断言 / trace TSV / check 5 锚重验 / 负向退出码 0/1/2 全契约）+ CMake（nl_core 源单 + input-tools target + /W4 清单 + ctest 2 条）+ `tools/make-input-m0-evidence.py`（trace TSV → 确定性 PNG）+ `example/input-m0/`（run.bat 五段式 + acceptance.png 基线 + input-trace.tsv + 4 份日志）+ cases.json input-m0 卡 4 用例 + `docs/p8/INPUT-TOOLS-GUIDE.md` → spot 回归证零回归 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m0`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2；input-tools selftest 7 节 39 断言全绿（含键码表数值锚 W=87/Space=32/ESC=256/MOUSE_LAST=7、同帧组合事件顺序语义、REPEAT 不重触发、越界防御不崩、12 帧序列重放逐位一致）；trace→check 闭环 PASS（12 行 + 5 锚）；证据图由真实 TSV 生成且 run.bat 重生成 `fc /b` 逐字节一致（肉眼核验：八行时间线边沿/持续态/滚轮标记与 TSV 逐一吻合）；负向退出码实测（未知节 2 / 缺文件 1 / 未知命令 2）；ctest mi0 2/2；spot 回归 m0.9 4/4 + pbr-direct 10/10 + s7.2 4/4 共 18/18 bytes ALL GREEN（window.cpp 增量改动零回归证实）；run.bat ALL GREEN exit 0；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **bat 文件必须 CRLF**：Write 工具落盘 LF，cmd 解析 `rem` 块直接炸（「'1.' 不是内部或外部命令」）——tools 侧生成 .bat 一律显式转 CRLF。
+2. **批处理括号坑再+1**：`if errorlevel 1 ( ... )` 块内 echo 文本含 `(DX12)` 圆括号 → 提前闭合 block，后续行被当顶层执行，报错行静默吞掉（表现为「卡在第一段后 exit 1 无输出」）。块内 echo 禁裸括号，reword 掉。
+3. **selftest 锚手写错（禁手写锚纪律再+1）**：f11 delta 锚初版写 dx=0.5/dy=0.0，实测 1.5/-0.5（0.5*(11%4)、-0.25*(11%3) 是序列公式不是终值）——锚必须从实测 log 反推，不许从脑内公式手写。
+4. **input.hpp 引 GLFW 头的链接面**：nl_core PRIVATE 链 glfw 不传播 include 路径 → input-tools 需显式链 glfw（与 nl_renderer 链 glfw 同理由：公开 API 用键码常量）。
+5. **`namespace kc = nl::core; (void)kc;` 编译错**：命名空间别名不能出现在表达式（C2882）——调试残留，删。
+
+**下一步**：M-I1 ActionMap/ActionSet 映射层（Carrot 解析规则 Bool=OR / Float=max abs / 组开关冻结 + 默认驾驶映射表 + selftest）；M-I2 viewer `--mode input-hud` 调试面板 + 渲染侧收口。游戏壳接线（updateFromWindow 启用点）排第 5 步独立 game target。merge 回 master 与 M8.1/particles/pathfinding 队列一起排（冲突面仅 CMakeLists.txt——viewer/main.cpp 本里程碑未触碰）。
