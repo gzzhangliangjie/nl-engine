@@ -7,7 +7,7 @@
 
 ## M12.0 Motion vector + 时间累积（2 天）
 
-- [ ] Motion vector：复用 **S16 前半段（S7 后）建好的完整逐像素 velocity GBuffer**（当前 clip pos vs 上一帧 clip pos，用 unjittered 矩阵剥离 jitter），本步不另建一份。~~物体全静态时先只做相机版~~（2026-11-09 S16 预研修订：TSR 必须逐像素物体速度，相机版会让动目标 ghost 直接爆；ROADMAP 的「S16 喂 S12 复用 motion vector」指的是同一张完整 velocity GBuffer，见 `s16/S16-PLAN.md` 预研 §4）
+- [ ] Motion vector：复用 **T0 里程碑落地的完整逐像素 velocity GBuffer**（独立 `RG16_FLOAT` 纹理，当前 clip pos vs 上一帧 clip pos，用 unjittered 矩阵剥离 jitter，jitter 剥离口径见 `t0/T0-PLAN.md`），本步不另建一份。~~物体全静态时先只做相机版~~（2026-11-09 S16 预研修订：TSR 必须逐像素物体速度，相机版会让动目标 ghost 直接爆；ROADMAP 的「T0 喂 S12 复用 motion vector」指的是同一张完整 velocity GBuffer，见 `t0/T0-PLAN.md` 与 `s16/S16-PLAN.md` 预研 §4）
 - [ ] 时间累积：当前帧 GI 与历史帧按 `α` 混合（α≈0.1 起步），历史位置 = motion vector 回投采样
   - 📋 预研证据（2026-11-09，`docs/s10/GI-RESEARCH-NOTES.md` §3）：bevy 世界缓存用**亮度 delta 自适应历史长度**——`alpha=|ΔL|/L`，`max_samples = mix(cap, 1, alpha^(1/8))`，变化快的区域自动短历史。像素级时间累积的历史长度可调可直接套这条曲线（出处 gboisse bsky，与 UE 探针重投影口径不冲突）
 - [ ] `--mode filter` 接入，α 与历史长度 ImGui 可调

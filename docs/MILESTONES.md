@@ -2395,7 +2395,7 @@
 4. **run.bat 顺序执行踩环境 GPU 间歇挂（第 3 个 viewer 实例 = 负向 missing-model），与 M9.0 踩坑 11 同性质**：run.bat 串跑 dx12 重拍 → vulkan 重拍 → 负向三轮 viewer，前两步 bytes 2/2 + log 锚 2/2 正常，第 3 轮（负向，缺失模型 init 即 exit 1）在本机环境（ArmouryCrate 残留 ~2.7% 占用）下间歇挂起（两次复跑均卡同点）；各断言已拆开独立验证绿（bytes 2/2 / ready / TLAS 缺失 / 100% / near 0.01 / 负向 exit 1），非代码回归，勿据顺序挂起误判。GPU 健康时 `regression.py` 连跑 6 轮 viewer 2s 全过，证明单实例正常。
 5. **误建 `nul` 垃圾文件**：早期 Git Bash `>nul` 重定向在 `example/s9-reference/` 落下 582B 名为 `nul` 的文件（Windows 保留设备名，标准 Win32 / ctypes `DeleteFileW` / `cmd del` 均解析不到真实文件、safe-delete 包装 fail-closed 拒删）；已清理其余 verify 瞬态（verify-reference-*.png/.json、verify-log.txt、verify-negative.txt、verify-log-dx12.* 及 s9-shadow 同名瞬态），`nul` 因 OS 保留名限制保留为未跟踪文件、不进提交。后续重定向用 `>nul 2>&1` 须走 cmd 语义或 `>/dev/null`。
 
-**下一步**：**S9 收官（tag `s9-done`）**：--mode reference 直光 / 硬阴影标准答案图已落地，供 M9.1 阴影射线与 VSM(S15) 对照（只算直光一跳、非 GI 裁判）；`kStage` 仍 S8.2，独立 GBuffer 落盘形态仍推迟到 S10 与 S12 历史帧需求一起拍。M9.2 验证口径绑定 tag `s9-done`；s9-gbuffer/shadow 为冻结的 M9.0/M9.1 基线、不再随当前 exe 重拍（shadow 卡 manual 锁定）。S10 起接 VSM / 历史帧。
+**下一步**：**S9 收官（tag `s9-done`）**：--mode reference 直光 / 硬阴影标准答案图已落地，供 M9.1 阴影射线与 VSM(S15) 对照（只算直光一跳、非 GI 裁判）；`kStage` 仍 S8.2，独立 GBuffer 落盘形态已由 **T0 里程碑**拍板：不落盘（即取即算），离屏 HDR RT + post-chain + velocity + history 由 T0 承载（S10/S12/S16 复用）；T0 任务书见 `docs/t0/T0-PLAN.md`。M9.2 验证口径绑定 tag `s9-done`；s9-gbuffer/shadow 为冻结的 M9.0/M9.1 基线、不再随当前 exe 重拍（shadow 卡 manual 锁定）。S10 起接 VSM / 历史帧（velocity/history 由 T0 提供）。
 
 ## P8 M-D0：碰撞事件桥（Jolt ContactListener → Jolt-free POD 事件流）（feat/drive，2026-11-10，tag `drive-m0`）
 
@@ -2489,3 +2489,20 @@
 5. **归档日志不许带 worktree 绝对路径**：`tools/make-drive-m3-evidence.py --sweep` 首行原打印 `OUT / "frames.tsv"` 的绝对路径，`example/drive-m3/sweep.log` 因此写入 `E:\UE_STUDY_2026\nl-engine-drive\...`；整轨 merge 回 master 后同一产物必然漂移到 `nl-engine\...`，任何新 clone / 新 worktree 跑 `run.bat` 都会产生伪 diff。改为固定相对路径 `example/drive-m3/frames.tsv`（证据图只读 `sweep.log` 最后 4 行，两张 PNG 基线零改动），连续两轮 `run.bat verify` ALL GREEN 复验。另：`.bat` 的 `echo >>` 在 Windows 写 CRLF，而 `.gitattributes *.log text eol=lf`，归档时统一转 LF，勿把工作树 CRLF 当内容变更提交。
 
 **下一步**：camera b 段（M-CAM1b / CAM2b / CAM3b）串行前置已解除，可从新 master 开轨，消费 M-D3 留的 `ChassisState` POD / 投影源切换钩子；`feat/drive` wt 是否拆除等用户拍板；主线下一站 M9.2 离线参考模式。
+
+## T0：共享 temporal / post-chain 基建（离屏 HDR + velocity/history + 最小 tonemap，2026-11-11，tag `t0-shared-infra`）
+
+**动作**：T0-PLAN（方案 A 最小集 + Q-H3 UE 口径，用户 2026-11-10 拍板）落地。① 离屏 HDR scene color `hdrSceneColor_`（RGBA32_FLOAT）+ 独立 velocity `RG16_FLOAT` + history ping-pong 双纹理 `RGBA32_FLOAT` + 最小 tonemap 直通 present（tonemap 无 gamma/ACES——gamma 已在 producer 端烤进 scene color，直通保字节）；② T2 主路径重构：场景管线按 RGBA32F+D32 `hdrInfo` 重建 ×6 组（sceneMode×4 / cull×4 / classic×4 / matResolve / visViz / hiz vizPSO，PSO 与 RT 格式锁定照 hiz prepassInfo 先例），raster 主路径（sceneMode/cull/lod/dag/hiz/skin/pulling）7 处渲染点重定向 `sceneFb`（t0Active=false 回落 swapchain）+ 6 个出口挂 `presentTonemap`；raster 懒建入口在 draw() 顶部（`t0Device_` 全模式有值）；③ 深度共享：backend `depth_`（D32 keepInitialState 永驻态）经 `setSharedDepth` 注入作 hdrSceneFb_ depth attachment，scene 不 clear 不 tracking（后端 recordFrame 先行清 1.0），overlay（dbgLines/particles）深度测试语义 = pre-T0；④ 新 shader 入口 `rt.psblittohdr` / `rt.pstonemap` 三处登记（CMake + selftest kArtifacts）；⑤ §2.19 T0 槽位同步表固化（SHADER-CONVENTIONS）+ T0-PLAN 落码期勘误两处（格式 RGBA32F / 深度共享）+ ROADMAP 旧口径同步。
+
+**提交版本**：master 本收口 commit（annotated tag `t0-shared-infra`）。T0 是基建里程碑非 S* 大版本收官，不建 `milestone/*` 分支、不 bump `kStage`（仍 S8.2，HUD 基线零重拍）；`wt_pool.py close` 不适用主线（AGENTS.md 1b 例外口径）。
+
+**完成情况**：双后端 `build-m0.2.bat` + selftest **16/16 ×2**、Slang **74/74**（新增 psblittohdr/pstonemap 双目标产出）。保形 spot 双后端全 **bytes**：s8.2(4) / s7.2(4) / pbr-direct(10) / s2.0-lod(16) / s3.2-dag(18) / s5.2-hiz(6) / s8.1(4) / s9-reference(2) / gl5(6) / particles-pt0~pt3(22) / drive-m3(12)。**全量总闸 `--jobs 1` 636/636 ALL GREEN（bytes 635 / near 1，near = ecs-e1b scale 既有噪声档）**。`server.py --check` exit 0（stage=S8.2 version=s8.2 cases=2 baselines=4）。Q4 冻结面 0 新增独立 GBuffer 资源（velocity/history 仅建纹理，消费归 S10/S12）；T3 velocity 写入归 S10、T4 history 消费归 S12。无新 example 卡（T0 字节保形、无新视觉产物，既有基线经全量闸 bytes 复验）。
+
+**踩坑情况**
+1. **NVRHI 默认 `depthTestEnable=true`**：无 depth attachment 的 framebuffer 上建 PSO 被 validation 拒（第二次踩——shadowMap 先例注释 4418 早写了）。全屏 blit/tonemap 显式 `disableDepthTest/Write/Stencil`。
+2. **Vulkan 段错误 139 三连**：① raster 懒建路径 null layout 建 BindingSet（blitLayout_/tonemapLayout_/rtPresentLayout_ 只在 initRtPresent 建）→ ensureRtTargets 懒建 shader+layout；② presentTonemap 懒建 PSO 用 `rtDevice_->`（raster 下 null）→ 改 `t0Device_`（ensurePipelines 全模式存）；③ T0 新句柄漏登记 `Scene::shutdown()` → Scene 析构晚于 vkDestroyDevice → UAF（backend_vulkan 964 注释早写了机理）。**教训：stdout 管道 vs 文件重定向会翻转 UAF 发作率（管道时序掩盖），勿以 stdout 方式定性；DX12 析构序不同不崩 ≠ 无问题。**
+3. **格式勘误（拍板级）**：R11G11B10_FLOAT 保形硬验收①（bytes 不变）不可行——B 通道 [0.5,1) ulp=4/255（实测 26k px/±4）；16F 在 8-bit 半步边界翻转（实测 5346 px/±1）；**任意浮点管线只有 FP32 中间格式字节精确**。改判 RGBA32_FLOAT（显存 3 张 ×2，S12 累积精度同惠）。教训：**「保形验收 + 中间格式」组合拍板时必须算 ulp**。
+4. **DX12 clear-value perf 警告**：debug layer 对无创建期 clear value / 色值不匹配的 CRTV/CDSV clear 按 ERROR 计 → acceptance 挂。清屏色随 --color/SPACE 动态变、hint 无法预知 → `drainMessages` 精确子串豁免两条 perf 提示（正确性消息照旧计错）。
+5. **overlay 深度遮蔽**：首版自建 t0Depth_ 使场景深度离开 backend depth_ → gl5/particles/drive-m3 三族 FAIL（overlay 对空深度测试，遮挡全失效）。修复 = 深度共享（方案见上）。教训：**「已知行为差异仅调试开关开启时有」的评估要拿回归卡核对，不能凭印象**（gl5/drive-m3 用例真开了 debugLines/particles）。
+
+**下一步**：S10 VSM / M10.0 消费 `velocity_`（T3 写入：velocity.slang + 双帧矩阵 + unjittered）；S12 M12.0 消费 history ping-pong（T4）。Q4「GBuffer 落盘形态」与 S10/S12 需求一起拍（维持推迟）。`kStage` 仍 S8.2。

@@ -923,6 +923,8 @@ private:
         depthDesc.setClearValue(nvrhi::Color(1.0f));
         depth_ = nvrhiDevice_->createTexture(depthDesc);
         if (!depth_) { outError = "createTexture failed for depth buffer"; return false; }
+        // T0：场景深度注入 Scene——离屏 HDR fb 复用本 depth_（overlay 深度语义不变）。
+        scene_.setSharedDepth(depth_);
         return true;
     }
 

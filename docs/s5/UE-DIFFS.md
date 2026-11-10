@@ -127,7 +127,7 @@
 |---|---|
 | UE 做法 | `PostProcess/TemporalSuperResolution.cpp` + `HaltonUtilities.h`：`TemporalJitterPixels`（Halton）+ `PrimaryScreenPercentageMethod=TemporalUpscale` 决定渲染→输出分辨率分离；10+ pass（dilate velocity → reject shading → update history → resolve，Mitchell-Netravali / Nyquist + jacobian reprojection field）；位于 SeparateTranslucency/DOF 之后、Tonemap 之前；history 五套 array + pre-exposure / camera cut。 |
 | 我们现状（S6） | 原 `S16-PLAN.md` 全文未提 jitter / 渲染-输出分辨率分离；「已具备 HDR scene color（tonemap 前）」在当前代码**不成立**——swapchain framebuffer 直出 + `model.slang:216` 输出端 gamma 编码（注释明写「不算 tonemap」），无离屏 HDR RT / tonemap pass / post-chain / velocity GBuffer；原 M16.2 用 5×5 联合双边当上采样核（那是 S12 GI 降噪滤波器），三处参考无一采用。 |
-| 定性 | **计划内待办**（2026-11-09 预研后用户拍板）：jitter + 双帧矩阵 + 渲染/输出分辨率分离并入 M16.0；离屏 HDR RT + post-chain 单列为 SSR / S16 / bloom **共享前置**（`docs/s6/SSR-RESEARCH-NOTES.md` §3/§4 已独立指出同一缺口，不重复建设）；M16.2 改 5-tap Catmull-Rom 对齐 UE/bevy（tag 随之 `s16-bilateral`→`s16-upsample`）；S12/S16 共享同一张完整逐像素 velocity GBuffer。 |
+| 定性 | **计划内待办已落地（2026-11-11 T0 拍板）**：jitter + 双帧矩阵 + 渲染/输出分辨率分离并入 M16.0；离屏 HDR RT + post-chain 已由 **T0 里程碑**单列为 SSR / S16 / bloom **共享前置**（见 `docs/t0/T0-PLAN.md`，`docs/s6/SSR-RESEARCH-NOTES.md` §3/§4 指出的同一缺口，不重复建设）；M16.2 改 5-tap Catmull-Rom 对齐 UE/bevy（tag 随之 `s16-bilateral`→`s16-upsample`）；S12/S16 共享的 velocity GBuffer 由 T0 落地。 |
 | 升级路径 | 卷积网络 shading rejection / parallax reprojection field / Nyquist 2× history / thin geometry 与 `r.Nanite.Foliage` 联动——质量层，S16 首版不做。 |
 | 触发条件 | 首版出现动目标 ghost / disocclusion smear / 亚像素细几何闪烁时，按 UE `TSRRejectShading.usf` + `TSRReprojectionField.ush` 补齐，**不要靠调 α 掩盖**。 |
 

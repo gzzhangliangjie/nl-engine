@@ -566,7 +566,22 @@ public:
                 auto* msg = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
                 if (FAILED(infoQueue_->GetMessage(i, msg, &bytes))) continue;
                 const std::string text = msg->pDescription ? msg->pDescription : "<null>";
-                if (msg->Severity >= D3D12_MESSAGE_SEVERITY_ERROR) {
+                // T0：clear-value 性能提示豁免——debug layer 比较 ClearRenderTargetView
+                // 运行期色 vs 创建期 optimized clear value。离屏 HDR 场景色（hdrSceneColor_）
+                // 的清屏色随 --color / SPACE 动态变化，创建期 hint 无法预知（swapchain
+                // backbuffer 由 DXGI 创建、不走此检查）。两条消息是性能提示而非正确性
+                // 问题，按精确子串豁免；其余 D3D12 消息照旧计错。
+                static const char* kBenignClearHints[] = {
+                    "did not pass any clear value",
+                    "do not match those passed to resource creation",
+                };
+                bool benign = false;
+                for (const char* pat : kBenignClearHints) {
+                    if (text.find(pat) != std::string::npos) { benign = true; break; }
+                }
+                if (benign) {
+                    nl::core::log::debug("D3D12: ", text);
+                } else if (msg->Severity >= D3D12_MESSAGE_SEVERITY_ERROR) {
                     nl::core::log::deviceError("D3D12", text);
                     ++errors;
                 } else {
@@ -695,6 +710,8 @@ private:
         depthDesc.setClearValue(nvrhi::Color(1.0f));
         depth_ = device_->createTexture(depthDesc);
         if (!depth_) { outError = "createTexture failed for depth buffer"; return false; }
+        // T0：场景深度注入 Scene——离屏 HDR fb 复用本 depth_（overlay 深度语义不变）。
+        scene_.setSharedDepth(depth_);
         return true;
     }
 

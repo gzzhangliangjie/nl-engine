@@ -269,3 +269,25 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 - **空像素语义**：PS 用 `discard` 让 framebuffer 清屏色透出；`psRtPresent` 全屏覆盖会盖掉 clear，故 CS 必须把当帧清屏色写进 u0 的空像素。`Renderer::renderFrame` 从 `ClearColor` 填 `FrameParams::clearColor[4]`（默认 `(0.05,0.08,0.15,1)`，**不是黑色**）；`--color` 四档可切，双后端 `pulling` vs `shadow` 逐字节一致实测。
 - **尺寸一致性**：`g_width/g_height` 来自 `visW_/visH_`，dispatch 尺寸来自 `rtW_/rtH_`，两者独立取整 → `drawShadow` 显式断言相等，`directComputeSet_` 带尺寸版本闸（resize 重建，别复用 `rtComputeSet_`，它依赖 TLAS）。
 - **新增 shader 入口必须登记 `shaderArtifactsSelfTest` 的 `kArtifacts`**（`renderer/src/renderer.cpp`）：清单只查列出项，漏登 = 产物丢失仍全绿（M8.1 已踩过一次）。M9.0 由 64 → 66（`direct.cs` 双目标）。
+
+### 2.19 ⚠️ T0 共享 temporal / post-chain 基建纪律（2026-11-11，T0 决策 A + UE 口径）
+- **范围**：T0 里程碑承载离屏 HDR RT（**`RGBA32_FLOAT`，落码期勘误：R11G11B10/16F 均破 8-bit 字节保形，实测见 T0-PLAN 落码期勘误**）+ 最小 post-chain + 独立 velocity 纹理（`RG16_FLOAT`）+ history 双纹理 ping-pong（`RGBA32_FLOAT`）；GBuffer 属性**不落盘**（Q4 方案 A 顺延项于 T0 拍「不落盘」，即取即算，详见 `docs/SHARED-INFRA-OPTIONS.md` / `docs/t0/T0-PLAN.md`）。
+- **每 pass 单一 BindingSet（§2.7）**：离屏 HDR / velocity / history / tonemap 各 pass 各建自己的单一 set，禁止跨 set 引用（多 set 在 Vulkan 静默读 NaN）；shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0），**不新增 shift 偏移**。
+- **纹理状态登记（§2.15 纹理侧对应）**：`createTargets()` 新增 slot 级同步表初始化；每张离屏 RT / velocity / history 逐帧 `beginTrackingTextureState` 如实声明「当前态」，按消费端在 `RenderTarget ↔ ShaderResource` 间切换；**ping-pong 纹理（history0/1）不设 permanent 态**（permanent 冻结 + 跨列表跟踪会漏 hazard）。
+- **clear 并入帧内 cmd list（§2.8）**：离屏 RT 首帧建 / clear 必须并入现有帧命令列表，不另开第二个 immediate command list。
+- **主路径重构保形（§2.16）**：主帧从直出 swapchain 改为渲到离屏 HDR RT 属主路径重构；spot 回归必含 lod / dag 模式，基线 diff 超 ≈527px 签名必须追因、禁强刷。
+- **不预设槽位号**：velocity / history / hdr 的具体 `register(u/t)` 在落码时按 `renderer/src/scene.cpp` 实读固化进本节，禁止凭记忆编表（Q4 材料 §0 纠偏教训）。
+
+#### T0 槽位同步表（落码实读固化，2026-11-11）
+
+| 资源 | 格式 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `hdrSceneColor_` | `RGBA32_FLOAT`（勘误） | `ensureRtTargets`（视口尺寸懒建；raster 主路径经 draw() 顶部懒建同入此） | `tonemapSet_` t0 SRV（读）/ blit 写点 RT | 每帧 `beginTrackingTextureState(ShaderResource=上帧末态)` → clear → `setTextureState(RenderTarget)` → 帧末 `setTextureState(ShaderResource)`；**不设 permanent** |
+| `t0Depth_`（共享 backend depth_） | `D32`（后端 keepInitialState=DepthWrite 永驻态） | `setSharedDepth`（createTargets 注入；resize 重调） | raster 场景 pass depth attachment（hdrSceneFb_） | **scene 不 clear 不 tracking**（后端 recordFrame 先行清 1.0）；overlay 深度测试语义 = pre-T0 |
+| `hdrColorFb_` | 仅 `hdrSceneColor_`（无 depth） | 同上 | — | blit 写点帧缓冲 |
+| `velocity_` | `RG16_FLOAT` | 同上 | T3 写入时建（MRT 附件） | T3 落码时登记（当前仅建纹理，未接管线） |
+| `history0_` / `history1_` | `RGBA32_FLOAT`（勘误） | 同上 | T4 使用时建（ping-pong） | 按帧奇偶交换 read/write，**不设 permanent**（T0 仅建纹理） |
+| blit：`blitSet_` | — | `ensureRtTargets` | t0 = `rtTarget_` SRV | 只读，无状态切换 |
+| tonemap：`tonemapSet_` | — | `ensureRtTargets` | t0 = `hdrSceneColor_` SRV | 只读，读前 `hdrSceneColor_` 已转 `ShaderResource` |
+
+> 落码铁律：ping-pong（history0/1）与 `hdrSceneColor_` 一律不设 permanent 态；PSO 随帧缓冲 **info**（格式/采样数）懒建、跨 resize 复用，set 随纹理重建。shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0）。

@@ -9,7 +9,7 @@
 
 ## M9.0 GBuffer 抽取 + 公共反解头（1 天）
 
-**范围**：Q1（重定义为抽取）/ Q4（方案 A 不落盘）/ 无阴影版实现路径 ②（新建 compute 直光 pass）均已拍板。交付 = 公共反解契约 + 一条 compute 直光对照路径 + 保形证据；**不新增独立 GBuffer 纹理 / RT / UAV 槽位**，落盘形态推迟到 S10 与 S12 历史帧需求一起拍（依据与 A/B/C 代价矩阵见 `docs/s9/Q4-GBUFFER-OPTIONS.md`）。
+**范围**：Q1（重定义为抽取）/ Q4（方案 A 不落盘）/ 无阴影版实现路径 ②（新建 compute 直光 pass）均已拍板。交付 = 公共反解契约 + 一条 compute 直光对照路径 + 保形证据；**不新增独立 GBuffer 纹理 / RT / UAV 槽位**。Q4 顺延项已于 **T0 里程碑**拍板：属性不落盘（即取即算，与方案 A 一致）；T0 承载离屏 HDR RT + post-chain + velocity + history，S10/S12 直接复用（T0 决策与代价值见 `docs/SHARED-INFRA-OPTIONS.md`，任务书见 `docs/t0/T0-PLAN.md`）。
 
 ### 任务书
 

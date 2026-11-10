@@ -2136,8 +2136,11 @@ bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
         return out != nullptr;
     };
     if (!loadPresent("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
-        !loadPresent("psrtpresent", nvrhi::ShaderType::Pixel, psRtPresent_))
+        !loadPresent("psrtpresent", nvrhi::ShaderType::Pixel, psRtPresent_) ||
+        !loadPresent("psblittohdr", nvrhi::ShaderType::Pixel, psBlitToHdr_) ||
+        !loadPresent("pstonemap", nvrhi::ShaderType::Pixel, psTonemap_))
         return false;
+    shaderSuffix_ = shaderSuffix;   // T0：供 ensureRtTargets 懒建 blit/tonemap set
 
     // 呈现布局：t0 = rt 目标 SRV（psRtPresent 用 Texture2D.Load，无采样器）。
     nvrhi::BindingLayoutDesc pLayoutDesc;
@@ -2145,6 +2148,18 @@ bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
     rtPresentLayout_ = device->createBindingLayout(pLayoutDesc);
     if (!rtPresentLayout_) { outError = "createBindingLayout failed for rt present"; return false; }
+
+    // T0：blit / tonemap 布局（每 pass 单一 BindingSet，§2.7；shift 沿用 §2.5 set 0）。
+    // t0 = 只读 SRV（blit 绑 rtTarget_、tonemap 绑 hdrSceneColor_）。
+    nvrhi::BindingLayoutDesc t0LayoutDesc;
+    t0LayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
+    blitLayout_ = device->createBindingLayout(t0LayoutDesc);
+    tonemapLayout_ = device->createBindingLayout(t0LayoutDesc);
+    if (!blitLayout_ || !tonemapLayout_) {
+        outError = "createBindingLayout failed for T0 blit/tonemap";
+        return false;
+    }
     return true;
 }
 
@@ -2154,34 +2169,109 @@ bool Scene::presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frame
         outError = "presentRtTarget: missing device/framebuffer/target/set";
         return false;
     }
-    // 呈现 PSO 懒建（framebuffer 格式定型后建一次；resize 只换尺寸不换格式）。
-    if (!rtPresentPSO_) {
+    // T0：rtTarget_(RGBA32_FLOAT) → hdrSceneColor_(RGBA16_FLOAT) 直拷（blit），
+    // 再 hdrSceneColor_ → swapchain 直通 tonemap。state 跟踪见 §2.15/§2.19。
+    if (!blitRtToHdr(cmd, viewport, outError)) return false;
+    if (!presentTonemap(cmd, framebuffer, viewport, outError)) return false;
+    return true;
+}
+
+// T0：rtTarget_(RGBA32_FLOAT) → hdrSceneColor_(RGBA16_FLOAT) 直拷。
+// hdrSceneColor_ 本帧首次作为 RenderTarget，先声明初始态（§2.19：ping-pong 不设
+// permanent，逐帧 beginTracking 如实登记），再切到 RT 写点。
+bool Scene::blitRtToHdr(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                        std::string& outError) {
+    if (!hdrSceneColor_ || !blitSet_) { outError = "blitRtToHdr: missing hdr/set"; return false; }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // beginTracking 声明的是上一帧末态（tonemap 收尾切回 SRV），照 shadowMap
+    // 先例（scene.cpp ~4690）：先如实登记，再 setTextureState 触发 SRV→RT barrier。
+    cmd->beginTrackingTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::RenderTarget);
+    if (!blitPSO_) {
+        const nvrhi::FramebufferInfo info = hdrColorFb_->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psBlitToHdr_)
+             .addBindingLayout(blitLayout_);
+        // hdrColorFb_ 无 depth attachment——显式关深度/模板（NVRHI 默认
+        // depthTestEnable=true，与「framebuffer 无深度格式」冲突，validation 拒建）。
+        pDesc.renderState.rasterState.setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        blitPSO_ = t0Device_->createGraphicsPipeline(pDesc, info);
+        if (!blitPSO_) { outError = "createGraphicsPipeline failed for T0 blit"; return false; }
+    }
+    nvrhi::GraphicsState pstate;
+    pstate.setPipeline(blitPSO_).setFramebuffer(hdrColorFb_).addBindingSet(blitSet_);
+    pstate.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(pstate);
+    nvrhi::DrawArguments vargs; vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    cmd->draw(vargs);
+    return true;
+}
+
+// T0：hdrSceneColor_ → swapchain 直通合成（最小 tonemap，无 gamma——gamma 已在
+// producer 端烤进 scene color，见 rt.slang psTonemap 注释）。读前把 hdrSceneColor_
+// 切回 ShaderResource（§2.15/§2.19 纹理状态登记）。
+bool Scene::presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                           const nvrhi::Viewport& viewport, std::string& outError) {
+    if (!hdrSceneColor_ || !tonemapSet_) { outError = "presentTonemap: missing hdr/set"; return false; }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    if (!tonemapPSO_) {
         const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
         nvrhi::GraphicsPipelineDesc pDesc;
         pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
              .setVertexShader(vsRtPresent_)
-             .setFragmentShader(psRtPresent_)
-             .addBindingLayout(rtPresentLayout_);
+             .setFragmentShader(psTonemap_)
+             .addBindingLayout(tonemapLayout_);
         pDesc.renderState.rasterState
             .setFrontCounterClockwise(true)
             .setFillMode(nvrhi::RasterFillMode::Solid)
             .setCullMode(nvrhi::RasterCullMode::None);
-        // 深度测试/写入关（缺省即关）：全屏覆盖层，hiz viz 同款。
-        rtPresentPSO_ = rtDevice_->createGraphicsPipeline(pDesc, info);
-        if (!rtPresentPSO_) {
-            outError = "createGraphicsPipeline failed for rt present";
-            return false;
-        }
+        // 同 blit：全屏拷贝显式关深度/模板（不依赖 swapchain fb 恰好带 depth）。
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        // t0Device_（ensurePipelines 存，全模式有值）：raster 主路径也走 tonemap，
+        // rtDevice_ 只在 rt 系 init 赋值——raster 下为 null，虚调用即段错误。
+        tonemapPSO_ = t0Device_->createGraphicsPipeline(pDesc, info);
+        if (!tonemapPSO_) { outError = "createGraphicsPipeline failed for T0 tonemap"; return false; }
     }
     nvrhi::GraphicsState pstate;
-    pstate.setPipeline(rtPresentPSO_)
-          .setFramebuffer(framebuffer)
-          .addBindingSet(rtPresentSet_);
+    pstate.setPipeline(tonemapPSO_).setFramebuffer(framebuffer).addBindingSet(tonemapSet_);
     pstate.viewport.addViewportAndScissorRect(viewport);
     cmd->setGraphicsState(pstate);
-    nvrhi::DrawArguments vargs;
-    vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    nvrhi::DrawArguments vargs; vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
     cmd->draw(vargs);
+    return true;
+}
+
+// T0 T2：场景主 pass 渲到 hdrSceneColor_ 前的清屏段——颜色 = params.clearColor
+//（与后端 swapchain 清屏同源，renderer.cpp 已核实）。深度不清：t0Depth_ 是 backend
+// depth_ 的共享句柄（keepInitialState=DepthWrite 永驻态，后端每帧 recordFrame 先行
+// 清 1.0），场景 pass 直接写入即可；scene 再 clear/tracking 会与后端的永驻态登记
+// 冲突且重复清屏。hdr 颜色不设 permanent，逐帧 beginTracking（§2.15/§2.19）。
+bool Scene::beginHdrSceneTarget(nvrhi::ICommandList* cmd, const float clearColor[4],
+                                std::string& outError) {
+    if (!hdrSceneColor_ || !t0Depth_ || !hdrSceneFb_) {
+        outError = "beginHdrSceneTarget: hdr target not ready";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // 声明上一帧末态（hdr = tonemap 收尾的 SRV），clear/setTextureState 照 shadowMap
+    // 先例顺序触发 SRV→RT barrier。
+    cmd->beginTrackingTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->clearTextureFloat(hdrSceneColor_, allSub,
+                           nvrhi::Color(clearColor[0], clearColor[1], clearColor[2], clearColor[3]));
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::RenderTarget);
     return true;
 }
 
@@ -2326,12 +2416,24 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// T0：backend 把 scene 深度（depth_，D32 keepInitialState）注入 Scene——离屏 HDR
+// framebuffer 的 depth attachment 直接复用它。场景深度留在 overlay 深度测试的
+// 原位（pre-T0 语义），后端 resize 重建 depth_ 后必须重新调用（本函数置空
+// hdrSceneFb_，下一帧 ensureRtTargets 按新深度整组重建）。
+void Scene::setSharedDepth(nvrhi::ITexture* depth) {
+    if (t0Depth_.Get() == depth) return;
+    t0Depth_ = depth;
+    hdrSceneFb_ = nullptr;   // 强制 ensureRtTargets 重建（闸条件含 hdrSceneFb_）
+}
+
 bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                             std::string& outError) {
     const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
     const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
     if (w == 0 || h == 0) { outError = "rt: zero viewport"; return false; }
-    if (rtTarget_ && rtW_ == w && rtH_ == h) return true;
+    // hdrSceneFb_ 在闸内：setSharedDepth 换深度句柄时置空 fb → 强制整组重建
+    //（resize / 后端深度重建路径）。
+    if (rtTarget_ && hdrSceneFb_ && rtW_ == w && rtH_ == h) return true;
     rtW_ = w;
     rtH_ = h;
 
@@ -2350,18 +2452,134 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     rtTarget_ = device->createTexture(tDesc);
     if (!rtTarget_) { outError = "createTexture failed for rt target"; return false; }
 
+    // T0（共享 temporal / post-chain 基建，决策 A + UE 口径）：离屏 HDR + velocity +
+    // history ping-pong。随视口尺寸懒建；ping-pong 与 hdrSceneColor_ 不设 permanent，
+    // 逐帧 beginTrackingTextureState 切换 RenderTarget↔ShaderResource（§2.15/§2.19）。
+    // velocity_ / history0_1_ 在 T0 仅建纹理（T3 写 velocity、T4 用 history；S10/S12 消费）。
+    t0W_ = w; t0H_ = h;
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;   // 离屏 HDR 场景色：FP32 往返零量化——任意浮点管线只有 FP32 中间格式才字节精确（16F 在 8-bit 半步边界翻转，实测 5346px/±1）
+        d.isRenderTarget = true;
+        // 创建态 = SRV（shadowMap 同款）：与帧首 beginTrackingTextureState 声明的
+        // 「上一帧末态 SRV」对齐，否则首帧 DX12 debug layer 报 COMMON/SRV 布局错位。
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        // DX12 debug layer：clear 前资源必须带 clear value，否则 perf 警告计入
+        // deviceErrors（shadowMap 同款纪律）；运行期 clear 色仍按帧传参。
+        d.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 1.f));
+        d.debugName = "HdrSceneColor";
+        hdrSceneColor_ = device->createTexture(d);
+        if (!hdrSceneColor_) { outError = "createTexture failed for hdrSceneColor"; return false; }
+    }
+    {
+        nvrhi::FramebufferDesc fb;
+        fb.addColorAttachment(hdrSceneColor_);   // 仅含 hdrSceneColor_（blit 写点，无 depth）
+        hdrColorFb_ = device->createFramebuffer(fb);
+        if (!hdrColorFb_) { outError = "createFramebuffer failed for hdrColorFb"; return false; }
+    }
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RG16_FLOAT;     // 独立 velocity（bevy 口径，比 Carrot 打包省 4×）
+        d.isRenderTarget = true;
+        d.debugName = "Velocity";
+        velocity_ = device->createTexture(d);
+        if (!velocity_) { outError = "createTexture failed for velocity"; return false; }
+    }
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;   // history ping-pong（FP32 同款：S12 时间累积精度 + 字节保形）
+        d.isRenderTarget = true;
+        d.debugName = "History0";
+        history0_ = device->createTexture(d);
+        d.debugName = "History1";
+        history1_ = device->createTexture(d);
+        if (!history0_ || !history1_) { outError = "createTexture failed for history"; return false; }
+    }
+    // T0 T2：离屏场景深度（D32）+ 含 depth 的 hdrSceneFb_（场景主 pass 渲点）。
+    // depth 不设 permanent/keepInitialState，逐帧 beginTracking（§2.15/§2.19）。
+    // T0：深度复用 backend depth_（setSharedDepth 注入，keepInitialState=DepthWrite
+    // 永驻态、后端每帧先清屏）——overlay（dbgLines/particles）在 tonemap 后仍对
+    // backend depth_ 做深度测试，场景深度必须留在原处，否则遮挡全失效（gl5/
+    // drive-m3 全量闸实测）。不再自建 t0Depth_。
+    if (!t0Depth_) {
+        outError = "t0: shared scene depth not set (backend must call setSharedDepth)";
+        return false;
+    }
+    {
+        nvrhi::FramebufferDesc fb;
+        fb.addColorAttachment(hdrSceneColor_);
+        fb.setDepthAttachment(t0Depth_);
+        hdrSceneFb_ = device->createFramebuffer(fb);
+        if (!hdrSceneFb_) { outError = "createFramebuffer failed for hdrSceneFb"; return false; }
+    }
+
+    // T0：raster 主路径不经 initRtPresent（那是 rt/shadow 的 init）——blit/tonemap
+    // 的 shader 与 layout 在此懒建（rt/shadow 已建时 null 守卫跳过；SPIR-V 恒 main、
+    // DX12 忽略 entryName，§2.4/§2.5）。raster 只用 tonemap（场景直渲 hdrSceneColor_），
+    // blit 系一并备好供 rt/shadow 复用。
+    if (!vsRtPresent_ || !psBlitToHdr_ || !psTonemap_) {
+        nvrhi::ShaderDesc t0sdesc;
+        auto loadT0Shader = [&](const char* artifact, nvrhi::ShaderType type,
+                                nvrhi::ShaderHandle& out) -> bool {
+            const std::string path = std::string(NL_SHADER_DIR) + "/rt." +
+                                     artifact + "." + shaderSuffix_;
+            std::vector<std::uint8_t> blob;
+            if (!readFileBytes(path.c_str(), blob)) return false;
+            t0sdesc.setShaderType(type).setEntryName("main");
+            out = device->createShader(t0sdesc, blob.data(), blob.size());
+            return out != nullptr;
+        };
+        if (!loadT0Shader("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
+            !loadT0Shader("psblittohdr", nvrhi::ShaderType::Pixel, psBlitToHdr_) ||
+            !loadT0Shader("pstonemap", nvrhi::ShaderType::Pixel, psTonemap_)) {
+            outError = "failed to load T0 blit/tonemap shaders";
+            return false;
+        }
+    }
+    if (!blitLayout_ || !tonemapLayout_) {
+        nvrhi::BindingLayoutDesc t0LayoutDesc;
+        t0LayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
+        blitLayout_ = device->createBindingLayout(t0LayoutDesc);
+        tonemapLayout_ = device->createBindingLayout(t0LayoutDesc);
+        if (!blitLayout_ || !tonemapLayout_) {
+            outError = "createBindingLayout failed for T0 blit/tonemap";
+            return false;
+        }
+    }
+
     // M9.0 T5：compute set 依赖 tlas_（M8.1 每帧 rebuild 的同一对象），只有 rt
     // 链有 TLAS；shadow 走 initVisbuf 时不能在这里建。置空让 drawRt 在
     // tlasReady_ 之后按当前 rtTarget_ 懒建——帧内顺序与改动前一致。
     rtComputeSet_ = nullptr;
 
-    // 呈现 set（SRV 纹理重建后同步重建）。
-    {
+    // 呈现 set（SRV 纹理重建后同步重建）——rt/shadow 链专用；raster 模式无
+    // rtPresentLayout_（initRtPresent 未跑），跳过（呈现走 tonemapSet_）。
+    if (rtPresentLayout_) {
         nvrhi::BindingSetDesc pd;
         pd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, rtTarget_));
         rtPresentSet_ = device->createBindingSet(pd, rtPresentLayout_);
+        if (!rtPresentSet_) { outError = "createBindingSet failed for rt present set"; return false; }
     }
-    if (!rtPresentSet_) { outError = "createBindingSet failed for rt present set"; return false; }
+
+    // T0：blit set（t0 = rtTarget_ SRV，写进 hdrSceneColor_）；tonemap set（t0 =
+    // hdrSceneColor_ SRV，写 swapchain）。每 pass 单一 BindingSet（§2.7），随纹理重建。
+    {
+        nvrhi::BindingSetDesc bd;
+        bd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, rtTarget_));
+        blitSet_ = device->createBindingSet(bd, blitLayout_);
+    }
+    if (!blitSet_) { outError = "createBindingSet failed for T0 blit"; return false; }
+    {
+        nvrhi::BindingSetDesc td;
+        td.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdrSceneColor_));
+        tonemapSet_ = device->createBindingSet(td, tonemapLayout_);
+    }
+    if (!tonemapSet_) { outError = "createBindingSet failed for T0 tonemap"; return false; }
 
     // M9.2：reference 呈现 set（t1 SRV + b1 RefConstants），随 rtTarget_ 同步重建。
     if (reference_) {
@@ -3282,6 +3500,9 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
 
 bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
                             std::string& outError) {
+    // T0：所有模式都会经后端 init 走到这里——存 device 供 raster 主路径在 draw()
+    // 里懒建 ensureRtTargets（Scene 不存通用 device，rtDevice_ 只在 rt 系模式赋值）。
+    t0Device_ = device;
     // M-P3：物理调试线框管线（LINE_LIST）。与主管线共用 framebuffer 格式，只建一次，
     // 默认不画；debugLines 关闭时零开销（S7.0 渲染基线字节不变）。
     // 入口名传 "main"：SPIR-V 恒 main（NVRHI Vulkan 把 desc.entryName 写进
@@ -3289,6 +3510,15 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
     // DX12 完全忽略 setEntryName、直接用 blob（§2.4 两阶段规则，compute 同款先例）。
     if (!dbgLines_.ensure(device, info, shaderSuffix_.c_str(), "main", "main", outError))
         return false;
+
+    // T0 T2：场景主 pass 改渲到离屏 HDR（RGBA16_FLOAT + D32）后再经 tonemap 直通
+    // 合成到 swapchain（Q-H3=UE 口径）。PSO 与渲染目标格式锁定，场景管线必须按
+    // hdr 格式建——照 hiz prepassInfo 先例直接按格式构造 FramebufferInfo，不依赖
+    // 真实纹理（hdrSceneFb_ 随视口在 ensureRtTargets 懒建）。swapchain RGBA8 的
+    // info 仍用于 dbgLines_/visRaster（overlay 画在 tonemap 输出之上）。
+    nvrhi::FramebufferInfo hdrInfo;
+    hdrInfo.addColorFormat(nvrhi::Format::RGBA32_FLOAT);
+    hdrInfo.setDepthFormat(nvrhi::Format::D32);
 
     // M-E1b.0：ECS 场景 pipeline（vsScene_/psScene_/sceneInputLayout_）。
     // 深度/格式/fillMode/cullMode 与既有 pipeline 建法完全同款（2×2 组合）。
@@ -3314,7 +3544,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
                                       : nvrhi::RasterFillMode::Solid)
                     .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
                 desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
-                auto pipeline = device->createGraphicsPipeline(desc, info);
+                auto pipeline = device->createGraphicsPipeline(desc, hdrInfo);
                 if (!pipeline) { outError = "createGraphicsPipeline failed for ecs scene"; return false; }
                 if (wire == 0)
                     (i == 0 ? pipelineSceneBack_ : pipelineSceneNone_) = pipeline;
@@ -3353,7 +3583,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
             .setFillMode(nvrhi::RasterFillMode::Solid)
             .setCullMode(nvrhi::RasterCullMode::None);
         // 深度测试/写入关（缺省即关）：覆盖层画在主场景之上，只读金字塔。
-        vizPSO_ = device->createGraphicsPipeline(vDesc, info);
+        vizPSO_ = device->createGraphicsPipeline(vDesc, hdrInfo);
         if (!vizPSO_) { outError = "createGraphicsPipeline failed for hiz viz"; return false; }
     }
     // M7.0（S7.0）：visbuf 两条管线。必须排在 cull 分支之前——visbuf 复用 cull_
@@ -3389,7 +3619,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
             .setFrontCounterClockwise(true)
             .setFillMode(nvrhi::RasterFillMode::Solid)
             .setCullMode(nvrhi::RasterCullMode::None);
-        visVizPSO_ = device->createGraphicsPipeline(vDesc, info);
+        visVizPSO_ = device->createGraphicsPipeline(vDesc, hdrInfo);
         if (!visVizPSO_) { outError = "createGraphicsPipeline failed for vis viz"; return false; }
 
         // M7.1（S7.1）：材质反解全屏 pass（pulling 模式替换 viz）。全屏三角形，
@@ -3404,7 +3634,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
                 .setFrontCounterClockwise(true)
                 .setFillMode(nvrhi::RasterFillMode::Solid)
                 .setCullMode(nvrhi::RasterCullMode::None);
-            matResolvePSO_ = device->createGraphicsPipeline(mDesc, info);
+            matResolvePSO_ = device->createGraphicsPipeline(mDesc, hdrInfo);
             if (!matResolvePSO_) { outError = "createGraphicsPipeline failed for mat resolve"; return false; }
         }
         return true;
@@ -3431,7 +3661,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
                                       : nvrhi::RasterFillMode::Solid)
                     .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
                 desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
-                auto pipeline = device->createGraphicsPipeline(desc, info);
+                auto pipeline = device->createGraphicsPipeline(desc, hdrInfo);
                 if (!pipeline) { outError = "createGraphicsPipeline failed for cull"; return false; }
                 if (wire == 0)
                     (i == 0 ? pipelineCullBack_ : pipelineCullNone_) = pipeline;
@@ -3466,7 +3696,7 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
                                   : nvrhi::RasterFillMode::Solid)
                 .setCullMode(i == 0 ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
             desc.renderState.depthStencilState.enableDepthTest().enableDepthWrite();
-            auto pipeline = device->createGraphicsPipeline(desc, info);
+            auto pipeline = device->createGraphicsPipeline(desc, hdrInfo);
             if (!pipeline) { outError = "createGraphicsPipeline failed for model"; return false; }
             if (wire == 0)
                 (i == 0 ? pipelineBack_ : pipelineNone_) = pipeline;
@@ -4482,6 +4712,36 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         return;
     }
 
+    // T0 T2：raster 主路径（sceneMode/cull/lod/hiz/skin）渲到离屏 HDR——懒建
+    // ensureRtTargets（rt/shadow 在各自分支懒建、reference 在 initReference 建，
+    // 均自管呈现，不在此列）。管线按 R11G11B10+D32 fbInfo 重建（hdrInfo，见
+    // ensurePipelines），故 raster 各模式必须走 HDR 帧缓冲——直渲 RGBA8 swapchain
+    // 会因 PSO 格式失配报 validation 错。建失败则回落直渲（t0Active=false）。
+    std::string t0Err;
+    bool t0Active = false;
+    nvrhi::IFramebuffer* sceneFb = framebuffer;
+    if (!rt_ && !shadow_ && !reference_ && framebuffer) {
+        if (!hdrSceneColor_) {
+            if (!t0Device_) {
+                nl::core::log::deviceError("t0", "device not captured yet");
+            } else {
+                const float vpW = viewport.maxX - viewport.minX;
+                const float vpH = viewport.maxY - viewport.minY;
+                if (ensureRtTargets(t0Device_, vpW, vpH, t0Err))
+                    nl::core::log::info("t0: offscreen HDR scene targets ready (raster path)");
+                else
+                    nl::core::log::deviceError("t0", t0Err);
+            }
+        }
+        t0Active = hdrSceneFb_ && t0Depth_ && hdrSceneColor_;
+        if (t0Active) sceneFb = hdrSceneFb_;
+        if (t0Active && !beginHdrSceneTarget(cmd, params.clearColor, t0Err)) {
+            t0Active = false;
+            sceneFb = framebuffer;
+            nl::core::log::deviceError("t0", t0Err);
+        }
+    }
+
     // M-E1b.1：ECS 场景路径——逐 batch 绑定各自的 set/VB/IB/t5 实例缓冲，
     // drawIndexed 的 SV_InstanceID 从 0 起，直接按 id*5 寻址本 batch 实例数据。
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
@@ -4581,7 +4841,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         for (const SceneMeshBatch& b : sceneBatches_) {
             nvrhi::GraphicsState state;
             state.setPipeline(pipeline)
-                 .setFramebuffer(framebuffer)
+                 .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
                  .addBindingSet(b.set)
                  .addVertexBuffer(nvrhi::VertexBufferBinding()
                      .setBuffer(b.vb).setSlot(0).setOffset(0))
@@ -4595,6 +4855,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->drawIndexed(args);
         }
         instanceTrackSRV_ = true;   // 本列表末态 = SRV（所有绑定 require 已插 barrier）
+        // T0 T2：HDR 场景色 → swapchain 直通合成（HUD/overlay 在其后叠加）。
+        if (t0Active) {
+            std::string tmErr;
+            if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+                nl::core::log::deviceError("t0", tmErr);
+        }
         return;   // sceneMode_ 分支必须 return，不走既有路径
     }
 
@@ -4665,25 +4931,38 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // 全屏三角形覆盖整屏：每像素反解 vis → 顶点拉取 → 材质着色。
                     nvrhi::GraphicsState mstate;
                     mstate.setPipeline(matResolvePSO_)
-                          .setFramebuffer(framebuffer)
+                          .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
                           .addBindingSet(matResolveSet_);
                     mstate.viewport.addViewportAndScissorRect(viewport);
                     cmd->setGraphicsState(mstate);
                     nvrhi::DrawArguments margs;
                     margs.setVertexCount(3);   // 覆盖屏的大三角形
                     cmd->draw(margs);
+                    // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
+                    // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
+                    if (t0Active) {
+                        std::string tmErr;
+                        if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+                            nl::core::log::deviceError("t0", tmErr);
+                    }
                 } else {
                     // 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
                     // 深度测试/写入关，整屏覆盖 (4) 的占位输出。
                     nvrhi::GraphicsState vstate;
                     vstate.setPipeline(visVizPSO_)
-                          .setFramebuffer(framebuffer)
+                          .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
                           .addBindingSet(visVizSet_);
                     vstate.viewport.addViewportAndScissorRect(viewport);
                     cmd->setGraphicsState(vstate);
                     nvrhi::DrawArguments vargs;
                     vargs.setVertexCount(3);   // 覆盖屏的大三角形
                     cmd->draw(vargs);
+                    // T0 T2：HDR → swapchain 直通合成（同 pulling 分支口径）。
+                    if (t0Active) {
+                        std::string tmErr;
+                        if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+                            nl::core::log::deviceError("t0", tmErr);
+                    }
                 }
             }
             return;
@@ -4896,7 +5175,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
 
         nvrhi::GraphicsState state;
         state.setPipeline(pipeline)
-             .setFramebuffer(framebuffer)
+             .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
              .addBindingSet(cullBindingSet_)
              .setIndexBuffer(nvrhi::IndexBufferBinding()
                  .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
@@ -4919,13 +5198,19 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->writeBuffer(hizConstants_, hcV, sizeof(hcV));
             nvrhi::GraphicsState vstate;
             vstate.setPipeline(vizPSO_)
-                  .setFramebuffer(framebuffer)
+                  .setFramebuffer(sceneFb)   // T0 T2：overlay 合成进 HDR（tonemap 统一输出）
                   .addBindingSet(vizSet_);
             vstate.viewport.addViewportAndScissorRect(viewport);
             cmd->setGraphicsState(vstate);
             nvrhi::DrawArguments vargs;
             vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
             cmd->draw(vargs);
+        }
+        // T0 T2：HDR 场景色 → swapchain 直通合成（HUD/overlay 在其后叠加）。
+        if (t0Active) {
+            std::string tmErr;
+            if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+                nl::core::log::deviceError("t0", tmErr);
         }
         return;
     }
@@ -5017,7 +5302,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     if (modelBatches_.empty()) {
         nvrhi::GraphicsState state;
         state.setPipeline(pipeline)
-             .setFramebuffer(framebuffer)
+             .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
              .addBindingSet(bindingSet_)
              .addVertexBuffer(nvrhi::VertexBufferBinding()
                  .setBuffer(vertexBuffer_).setSlot(0).setOffset(0))
@@ -5028,6 +5313,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         nvrhi::DrawArguments args;
         args.setVertexCount(indexCount_);   // drawIndexed 复用 vertexCount 字段表示索引数
         cmd->drawIndexed(args);
+        // T0 T2：HDR 场景色 → swapchain 直通合成（单批兜底路径出口）。
+        if (t0Active) {
+            std::string tmErr;
+            if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+                nl::core::log::deviceError("t0", tmErr);
+        }
         return;
     }
 
@@ -5037,7 +5328,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     for (const ModelPrimBatch& b : modelBatches_) {
         nvrhi::GraphicsState state;
         state.setPipeline(pipeline)
-             .setFramebuffer(framebuffer)
+             .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
              .addBindingSet(b.set)
              .addVertexBuffer(nvrhi::VertexBufferBinding()
                  .setBuffer(vertexBuffer_).setSlot(0).setOffset(0))
@@ -5049,6 +5340,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         args.setVertexCount(b.indexCount)   // drawIndexed 复用 vertexCount 表示索引数
             .setStartIndexLocation(b.startIndex);
         cmd->drawIndexed(args);
+    }
+    // T0 T2：HDR 场景色 → swapchain 直通合成（per-prim 批次路径出口）。
+    if (t0Active) {
+        std::string tmErr;
+        if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
+            nl::core::log::deviceError("t0", tmErr);
     }
 }
 
@@ -5869,6 +6166,7 @@ void Scene::shutdown() {
     rt_ = false;
     rtNoTlasLogged_ = false;
     rtDevice_ = nullptr;
+    t0Device_ = nullptr;
     rtW_ = 0;
     rtH_ = 0;
     csRt_ = nullptr;
@@ -5882,6 +6180,27 @@ void Scene::shutdown() {
     rtPresentSet_ = nullptr;
     rtConstants_ = nullptr;
     rtTarget_ = nullptr;
+    // T0：离屏 HDR / velocity / history ping-pong（raster 主路径懒建，device 存活期
+    // 释放——不在此置空会拖到 Scene 析构（晚于 vkDestroyDevice）→ use-after-free
+    // → 退出段错误（139），与上方 NVRHI device 包装的关停次序陷阱同机理）。
+    hdrSceneColor_ = nullptr;
+    hdrColorFb_ = nullptr;
+    velocity_ = nullptr;
+    history0_ = nullptr;
+    history1_ = nullptr;
+    t0Depth_ = nullptr;
+    hdrSceneFb_ = nullptr;
+    t0W_ = 0;
+    t0H_ = 0;
+    t0Parity_ = 0;
+    psBlitToHdr_ = nullptr;
+    blitPSO_ = nullptr;
+    blitLayout_ = nullptr;
+    blitSet_ = nullptr;
+    psTonemap_ = nullptr;
+    tonemapPSO_ = nullptr;
+    tonemapLayout_ = nullptr;
+    tonemapSet_ = nullptr;
     // M9.0：shadow 链句柄（rtTarget_ / present 共用对象已在上面统一释放）。
     shadow_ = false;
     shadowFailed_ = false;

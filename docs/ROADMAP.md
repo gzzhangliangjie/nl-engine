@@ -174,6 +174,12 @@ nl-engine/
 
 ## 阶段 P5 · Lumen 核心（约 4~6 周，最难的一段）
 
+### T0 共享 temporal / post-chain 基建（S9 之后、S10 之前，不占 S* 大版本号）
+- **产出**：离屏 HDR RT（`RGBA32_FLOAT`，落码期勘误：R11G11B10/16F 破 8-bit 字节保形，见 T0-PLAN）+ 最小 post-chain（ACES tonemap + gamma，tonemap 前预留 TSR 挂点）+ 独立 velocity 纹理（`RG16_FLOAT`，双帧矩阵 + unjittered 剥离 jitter）+ history 双纹理 ping-pong（`RGBA32_FLOAT`）；主帧从直出 swapchain 改为渲到离屏 HDR RT（§2.16 主路径重构）
+- **验收**：S10 M10.0 有真逐像素 motion vector（替代原 M12 简化版占位）；S12 M12.0 历史累积可直接复用；S16 M16.0/1 基建被承载；GBuffer 属性不落盘（Q4 方案 A 顺延项拍「不落盘」，Q-H3=UE 口径 tonemap 前）
+- **知识**：bevy prepass / UE SceneVelocity / UE PostProcessing 挂点顺序（tonemap 前 TSR）
+- **翻哪**：`docs/t0/T0-PLAN.md`；三处证据 `docs/SHARED-INFRA-OPTIONS.md` §2
+
 ### S10 屏幕探针一跳 GI
 - **做什么**：4 级 cascade 布点 + 八面体图 + final gather
 - **产出**：`viewer --mode probe`（探针 pass + 1 条余弦采样射线/探针 + gather 插值）；`--mode probe-viz` 可视化探针辐照度
@@ -266,9 +272,9 @@ nl-engine/
 | 光栅阴影（ShadowMap / PCF / PCSS） | 深度 pass + 阴影贴图采样 + PCF 软化 / PCSS 半影估计 | **已由 VSM（S9 后插入）升级替代**，见下方 VSM 行 | 主线 S9 走**光追阴影射线**，光栅阴影为对照路线；VSM 是其工业级升级版 | GAMES202 hw1 拆解，开工时补计划 |
 | PRT 球谐环境光（静态场景） | 离线预计算 cubemap → SH 系数，运行时 SH(dot(n, wi)) 环境光 | `pbr-direct` 之后 | **PBR 穿插项「不做 IBL」缺口的廉价补法**；也可当 S9 参考图工作流的降级对照 | GAMES202 hw2 拆解，开工时补计划 |
 | 屏幕空间 AO（SSAO） | 深度/法线 buffer + 半球采样（或 GTAO 近似） | `pbr-direct` 之后 | 主线 S10 GI 才补间接光，SSAO 先填直光阶段的接触暗角；PhasmaEngine 用 FidelityFX CACAO 可对照 | 开工时补计划 |
-| 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | **2026-11-09 预研补**：这份离屏 HDR RT + post-chain 是 **SSR / S16 TSR / bloom 三家共享前置**（SSR 笔记 §3/§4 与 S16 预研 §2 各自独立指出同一缺口），**只建一份、归属本行**，不各建一份；TSR 的「tonemap 前 slot」当前并不存在，须先有此链。TAA 的 motion vector 与 S12 时间累积共享 | 开工时补计划 |
+| 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **已由 T0 承载**（S9 之后、S10 之前；前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | **2026-11-09 预研补**：这份离屏 HDR RT + post-chain 是 **SSR / S16 TSR / bloom 三家共享前置**（SSR 笔记 §3/§4 与 S16 预研 §2 各自独立指出同一缺口），**只建一份、归属本行**，不各建一份；TSR 的「tonemap 前 slot」当前并不存在，须先有此链。TAA 的 motion vector 与 S12 时间累积共享 | 见 `docs/t0/T0-PLAN.md`（已立项里程碑 **T0**，插于 S9 之后、S10 之前；SSR / S16 TSR / bloom 共用同一份） |
 | VSM（虚拟阴影贴图） | clipmap 级联 + 物理页池 + 页表，rasterized 阴影路线（替代 S9 光追阴影射线，作对照） | **S9 之后**（合并升级原 `shadow-map` 穿插项） | S15 正式计划；依赖 S4 簇光栅 + S7 vis buffer + **S9 公共反解契约（Q4 方案 A：不落 GBuffer 纹理）**，S9 已就绪；2026-11-09 预研二次确认：bevy meshlet 阴影视图为 M15.2 构件参照、Carrot「虚拟几何不投影」为反例，差异见 UE-DIFFS D11 | `s15/S15-PLAN.md` |
-| TSR 基建（velocity/history） | **jitter（Halton）+ 双帧矩阵 + 渲染/输出分辨率分离** + 完整逐像素 velocity GBuffer + 历史 ping-pong | **S7 之后** | S16 前半段；**velocity 必须是完整逐像素版（含 jitter 剥离），不是相机版**——S12 复用同一张，不各建一份（S12-PLAN M12.0 已同步修订）；共享前置见上「后处理链」行；2026-11-09 预研结论见 S16-PLAN §1~§4，差异见 UE-DIFFS D12 | `s16/S16-PLAN.md` |
+| TSR 基建（velocity/history） | **jitter（Halton）+ 双帧矩阵 + 渲染/输出分辨率分离** + 完整逐像素 velocity GBuffer + 历史 ping-pong | **velocity/history 由 T0 承载**（S9 之后、S10 之前）；jitter/分辨率分离仍归 S16 M16.0 | S16 前半段；**velocity 必须是完整逐像素版（含 jitter 剥离），不是相机版**——S12 复用同一张，不各建一份（S12-PLAN M12.0 已同步修订）；共享前置见上「后处理链」行；2026-11-09 预研结论见 S16-PLAN §1~§4，差异见 UE-DIFFS D12 | `s16/S16-PLAN.md` |
 | 粒子系统（CPU 模拟 + GPU instanced 渲染） | CPU 侧发射器逐帧模拟（位置/速度/寿命/重力 + alpha 淡出，写 staging buffer），GPU 侧 instanced billboard quad 渲染进主帧（复用 S7 instanced 批次化与材质基础设施）；**起步不做** compute GPU 模拟、软粒子、碰撞 | 随时（与主线零耦合）；离屏 HDR RT 建成后可转半透明合成进 post-chain，起步直接画主帧即可 | **2026-11-10 拍板立项**。三处证据：Carrot 有 `render/particles/`（CPU 发射器 + GPU 渲染约 580 行，参照对象，抄思路不抄代码）；bevy **无官方粒子**（靠社区 hanabi，反面印证自研要克制起步）；UE 粒子走 VertexFactory 注入主渲染而非独立 pass。tag 用名字（如 `particles`），不占 m0.* 编号 | `docs/particles/PARTICLES-PLAN.md`（2026-11-10 已立项：M-PT0 运行时最小闭环 + M-PT1 vfx-tools 离线转换器→`.nfx` v1【用户拍板路线 B，吃现成 .efkefc 资产、子集外模块显式报错】，feat/particles `3606401`） |
 | 输入层扩展（全键位状态层 + Action 映射） | `core/input` 新模块：M-I0 状态层（bevy `ButtonInput` 三态节奏 + GLFW 全键位 + 鼠标全量 + 事件注入 selftest）；M-I1 ActionMap/ActionSet（Carrot OpenXR 式解析：Bool=OR / Float=max abs / 组开关冻结）；M-I2 viewer `--mode input-hud` 调试面板 | **城市驾驶游戏 P0 第一步**（见 `.workbuddy/memory/2026-11-10.md` 方向拍板）；window.cpp 既有热键/ImGui 通道零回归；UE EnhancedInput 只取映射上下文思想，Modifier/Trigger 链不做 | **已立项** `docs/p8/P8-INPUT-PLAN.md`（2026-11-10，三处口径实读在 §2）；track `input` / wt `nl-engine-input` / tag `input-m0` 起 | `docs/p8/P8-INPUT-PLAN.md` |
 | `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 | — |

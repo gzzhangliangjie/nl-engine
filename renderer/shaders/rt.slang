@@ -151,3 +151,35 @@ void psRefPresent(VsOut i, out float4 outColor : SV_Target)
     // 线性空间平均 → 一次性 gamma（与 M9.1 同映射）；alpha 固定 1（sum.a 恒 0）。
     outColor = float4(pow(saturate(sum * inv), 1.0f / 2.2f), 1.0f);
 }
+
+// ---- T0（共享 temporal / post-chain 基建，决策 A + UE 口径）：离屏 HDR + 最小 tonemap ----
+// 主帧从直出 swapchain 改为渲到离屏 HDR（hdrSceneColor_，R11G11B10_FLOAT），再经最小
+// tonemap 直通合成写 swapchain。gamma 已在 producer 端烤进 scene color（psRtPresent 直拷、
+// cs 输出即显示色），故 tonemap 不二次 gamma —— 否则双 gamma 破坏字节基线。未来 TSR 插入
+// 点即在此处之前加 temporal 累积。
+// T0-PLAN §1 / §2.19：每 pass 单一 BindingSet（§2.7），shift 沿用 §2.5（set 0）。
+
+// psBlitToHdr：把 compute 产出的 rtTarget_（RGBA32_FLOAT）拷进离屏 HDR（R11G11B10_FLOAT）。
+// 格式转换由管线在写点完成；本 pass 仅直拷、不二次 gamma。t0 = rtTarget_ SRV。
+Texture2D<float4> g_rtTexBlit : register(t0);
+[shader("pixel")]
+void psBlitToHdr(VsOut i, out float4 outColor : SV_Target)
+{
+    uint w, h;
+    g_rtTexBlit.GetDimensions(w, h);
+    int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
+    outColor = g_rtTexBlit.Load(int3(pix, 0));
+}
+
+// psTonemap：读离屏 HDR（hdrSceneColor_）→ 直通写到 swapchain（RGBA8_UNORM）。
+// 与 psRtPresent 同款直拷（无采样、无滤波、字节确定）；未来 TSR 在此前插入累积。
+// t0 = hdrSceneColor_ SRV。
+Texture2D<float4> g_hdrTex : register(t0);
+[shader("pixel")]
+void psTonemap(VsOut i, out float4 outColor : SV_Target)
+{
+    uint w, h;
+    g_hdrTex.GetDimensions(w, h);
+    int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
+    outColor = g_hdrTex.Load(int3(pix, 0));
+}

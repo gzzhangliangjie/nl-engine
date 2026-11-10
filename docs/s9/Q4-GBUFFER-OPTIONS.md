@@ -176,6 +176,6 @@
 1. **已执行**：结论写回 `docs/s9/S9-PLAN.md` 开工拍板记录 Q4 行（「已拍板：方案 A 不落盘，即取即算 + 依据」）。
 2. **已执行**：M9.0 任务书按「任务 / 决策 / 实测 / 边界」四层重写为 T1~T8；删「落盘形态待用户拍板」挂账句与上一版编造的绑定槽位表，硬验收三条原样保留。
 3. **已执行**：本文件状态改为「已拍板，保留为决策证据」；`MILESTONES.md` 四栏「下一步」、`MEMORY.md` 进度行、当日日志的旧表述清理。
-4. **待办**：把方案 A 的绑定布局 / 状态登记口径固化进 `docs/SHADER-CONVENTIONS.md`（新增 §2.18）。
+4. **已执行**：方案 A 的 vis-resolve 绑定布局 / 状态登记口径已固化进 `docs/SHADER-CONVENTIONS.md` §2.18（M9.0 落码实读）；T0 共享 temporal / post-chain 基建（velocity / history / ping-pong）的纪律另立 §2.19（2026-11-11 T0 拍板）。
 5. **待办**：与 A 相容的第一行落码（T4：`--mode shadow` 无阴影版 compute 直光路径，用户拍板 ②）；**不新增独立 GBuffer 纹理 / MRT / 落盘 UAV**，compute pass 自身单一 BindingSet 按 §2.7 建并固化 §2.18；输出复用 `rtTarget_` 所需的 `initRt` / `ensureRtTargets` 纯结构重构属实现细节，不改资源形态，`s8.2` 回归必跑。`kStage` **不 bump**（现有卡不传新 mode），故无 `reshot-hud-stage.py` 重拍面。
 6. **待办**：M9.0 收口照 `AGENTS.md` 交付纪律 —— 四项自查、四栏台账、修改文件清单、`wt_pool.py close` 硬闸、tag `s9-gbuffer`。

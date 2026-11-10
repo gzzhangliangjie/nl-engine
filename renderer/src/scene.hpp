@@ -380,6 +380,15 @@ public:
                        std::string& outError);
     bool presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                          const nvrhi::Viewport& viewport, std::string& outError);
+    // T0：rtTarget_(RGBA32) → hdrSceneColor_(R11G11B10) 直拷；hdrSceneColor_ → swapchain 直通 tonemap。
+    bool blitRtToHdr(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                     std::string& outError);
+    bool presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                        const nvrhi::Viewport& viewport, std::string& outError);
+    // T0 T2：场景主 pass 渲到 hdrSceneColor_ 前清 HDR 颜色 + 深度，并登记状态（§2.15/§2.19）。
+    // 返回 false 表示 hdr 目标未就绪（回落直渲 swapchain 由调用方决定）。
+    bool beginHdrSceneTarget(nvrhi::ICommandList* cmd, const float clearColor[4],
+                             std::string& outError);
 
     // ---- M9.0（S9）：--mode shadow 的 compute 直光对照路径（Q4 方案 A）----
     // initShadow = initVisbuf(pulling=true) 全套 vis/材质资源 + initRtPresent 共用
@@ -460,6 +469,11 @@ public:
     // 每帧：写 volatile CB（MVP）→ 绑资源 → drawIndexed。
     void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
               const nvrhi::Viewport& viewport, const FrameParams& params);
+
+    // T0：backend 注入共享场景深度（D32 keepInitialState）；离屏 HDR fb 的 depth
+    // attachment 复用它，overlay（dbgLines/particles）深度测试语义回到 pre-T0。
+    // resize 重建 depth_ 后须重调（内部置空 hdrSceneFb_ 触发整组重建）。
+    void setSharedDepth(nvrhi::ITexture* depth);
 
     // M-P3：物理调试线框叠加层绘制入口。后端在 scene_.draw 之后、HUD 之前调用。
     // 仅当 params.debugLines 且数据非空才绘制（缺省零开销）。
@@ -833,6 +847,7 @@ private:
     // ---- M8.2：rt 模式（RayQuery 调试射线闭环）----
     bool                         rt_ = false;             // initRt 成功后置位
     nvrhi::IDevice*              rtDevice_ = nullptr;     // initRt 存（ensureRtTargets 用，同 hizDevice_）
+    nvrhi::IDevice*              t0Device_ = nullptr;     // T0：ensurePipelines 存（raster 主路径懒建离屏 HDR 用）
     nvrhi::ShaderHandle          csRt_;
     nvrhi::ShaderHandle          vsRtPresent_;
     nvrhi::ShaderHandle          psRtPresent_;
@@ -846,6 +861,34 @@ private:
     nvrhi::TextureHandle         rtTarget_;               // RGBA32_FLOAT UAV 目标
     std::uint32_t                rtW_ = 0, rtH_ = 0;
     bool                         rtNoTlasLogged_ = false; // TLAS 未就绪的一次性日志
+
+    // ---- T0（S9 之后、S10 之前）：共享 temporal / post-chain 基建（决策 A + UE 口径）----
+    // 离屏 HDR 场景色 + 独立 velocity + history 双纹理 ping-pong；主帧从直出 swapchain 改为
+    // 渲到 hdrSceneColor_，经最小 tonemap 直通合成写 swapchain（Q-H3=UE：tonemap 前无 TSR 时
+    // 即最终输出）。属性 GBuffer 不落盘（Q-H2，即取即算）。状态纪律见 §2.19。
+    nvrhi::TextureHandle         hdrSceneColor_;   // R11G11B10_FLOAT 离屏 HDR 场景色
+    nvrhi::FramebufferHandle     hdrColorFb_;      // 仅 hdrSceneColor_（blit 写点，无 depth）
+    nvrhi::TextureHandle         velocity_;        // RG16_FLOAT 逐像素 motion vector
+    nvrhi::TextureHandle         history0_;        // R11G11B10_FLOAT ping-pong A
+    nvrhi::TextureHandle         history1_;        // R11G11B10_FLOAT ping-pong B
+    std::uint32_t                t0W_ = 0, t0H_ = 0;
+    std::uint32_t                t0Parity_ = 0;   // history ping-pong 帧奇偶（0/1 交换）
+
+    // T0 T2：离屏场景深度（D32）+ 含 depth 的 hdr 帧缓冲（场景主 pass 渲点）。
+    // 随视口尺寸懒建；depth 不设 permanent，逐帧 beginTracking（§2.15/§2.19）。
+    nvrhi::TextureHandle         t0Depth_;
+    nvrhi::FramebufferHandle     hdrSceneFb_;      // hdrSceneColor_ + t0Depth_
+
+    // blit：rtTarget_(RGBA32) → hdrSceneColor_(R11G11B10) 直拷（无 gamma）。
+    nvrhi::ShaderHandle          psBlitToHdr_;
+    nvrhi::GraphicsPipelineHandle blitPSO_;       // 随 hdrColorFb_ 信息建
+    nvrhi::BindingLayoutHandle   blitLayout_;
+    nvrhi::BindingSetHandle      blitSet_;        // t0 = rtTarget_ SRV
+    // tonemap：hdrSceneColor_ → swapchain 直通合成（无 gamma，gamma 已烤进 scene color）。
+    nvrhi::ShaderHandle          psTonemap_;
+    nvrhi::GraphicsPipelineHandle tonemapPSO_;    // 随 swapchain framebuffer 信息建
+    nvrhi::BindingLayoutHandle   tonemapLayout_;
+    nvrhi::BindingSetHandle      tonemapSet_;     // t0 = hdrSceneColor_ SRV
 
     // ---- M9.0：shadow 模式（compute 直光对照）----
     // 与其它 mode 互斥（一个 Scene 实例只跑一种）。复用面：输出 = rtTarget_ /

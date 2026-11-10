@@ -1,6 +1,8 @@
 # S16 详细开发路线图：TSR（Temporal Super Resolution，时域超分）
 
-> 对应总路线 `docs/ROADMAP.md` 的新增研究轨道 S16。**拆分：velocity/history 基建在 S7 之后先建（喂 S12 时空滤波复用 motion vector），完整算法在 S7 之后轻量直光场景隔离验证，最终集成 slot 仍在 tonemap 前（Lumen 之后主帧）**。预计 5 个里程碑、业余时间 2~2.5 周。
+> 对应总路线 `docs/ROADMAP.md` 的新增研究轨道 S16。**拆分：velocity/history 基建由 T0 里程碑承载（S9 之后、S10 之前，喂 S12 时空滤波复用 motion vector），完整算法（jitter/双帧矩阵/渲染-输出分辨率分离 + TSR 上采样）在 S16 内完成，最终集成 slot 在 tonemap 前（Lumen 之后主帧）**。预计 5 个里程碑、业余时间 2~2.5 周。
+>
+> **阶段拆分修正（2026-11-11 T0 拍板）**：原「三段拆分」中 velocity/history 基建 + 共享 post-chain 整段归 **T0 里程碑**（S9 之后、S10 之前）；本 S16 只做完整 TSR 算法（M16.0~M16.4），不再单列共享前置。M16.0 的 jitter / 双帧矩阵 / 分辨率分离为算法自身起点。
 > 目标：在 tonemap 之前的 HDR scene color 上做时域上采样，替代 TAA，把渲染分辨率降到 50~66% 仍接近全分辨率画质。全程 compute pass，完美契合本项目 Slang 单源双后端。
 >
 > **2026-11-09 预研轮（只读）**：三处参考按对照总表定向读完，并完成原文「待开工按铁律二次确认」。结论固化在下方「预研结论」节，开工前不再重复调研。用户 2026-11-09 拍板按建议落地（本轮只改文档：未动代码 / `kStage` / worktree / 回归 / tag）。UE 源码只读不抄（EULA）。
@@ -27,7 +29,7 @@
 ### 2. 前提「已具备 HDR scene color（tonemap 前）」在当前代码不成立
 
 S6 现状（2026-11-09 实读 `renderer/`）：swapchain framebuffer 直接出图，`model.slang:216` 输出端 gamma 编码（注释明写「不算 tonemap，plan 边界不碰后处理」）；只有 D32 `SceneDepth` / `HizPrepassDepth` 与 R32F `hizPyramid_`，**无离屏 HDR RT、无 tonemap pass、无 post-chain、无 velocity / normal GBuffer**。所谓「tonemap 前 slot」当前不存在。
-→ **离屏 HDR RT + post-chain 必须作为共享前置单列**：SSR 预研 `docs/s6/SSR-RESEARCH-NOTES.md` §3/§4 已独立指出同一缺口（「离屏 RT 合成与 post-chain 穿插项是同一份基建，别重复建设」）。归属写进 ROADMAP 穿插项表，SSR / S16 / 后续 bloom 共用，不各建一份。
+→ **离屏 HDR RT + post-chain 已由 T0 里程碑单列承载**（见 `docs/t0/T0-PLAN.md`）：SSR 预研 `docs/s6/SSR-RESEARCH-NOTES.md` §3/§4 已独立指出同一缺口（「离屏 RT 合成与 post-chain 穿插项是同一份基建，别重复建设」）。SSR / S16 / 后续 bloom 共用同一份，本模块不再自带共享前置。
 
 ### 3. 上采样核：原 M16.2「5×5 联合双边」与三处口径都不一致
 
@@ -52,11 +54,11 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 
 ---
 
-## 前置（拆分：velocity/history 基建 S7 后先建喂 S12，完整算法 S7 后轻量场景验证，最终 slot tonemap 前，不依赖 Lumen）
-- **共享前置（需新建，归属 post-chain 穿插项）**：离屏 HDR RT + tonemap / 合成 pass。SSR 与 S16 共用同一份，不重复建设（预研 §2；`docs/s6/SSR-RESEARCH-NOTES.md` §3/§4）。**S6 现状并无此 slot**。
-- **需新建**：完整逐像素 **velocity GBuffer**（当前 clip pos vs 上一帧 clip pos，用已有 volatile MVP CB + 双帧矩阵，jitter 剥离）。与 S12 共享同一张，不各建一份（预研 §4）。
+## 前置（velocity/history 基建由 T0 承载，完整算法在 S16 内完成，最终 slot tonemap 前、不依赖 Lumen）
+- **共享前置（已由 T0 里程碑承载）**：离屏 HDR RT + tonemap / 合成 pass（T0 建好，SSR 与 S16 共用同一份，不重复建设）。本模块不再另建 post-chain。
+- **复用 T0 的 velocity GBuffer**：完整逐像素（当前 clip pos vs 上一帧 clip pos，用 T0 的双帧矩阵 + unjittered 剥离 jitter）。不各建一份（预研 §4）。
 - **需新建**：jitter 序列 + 渲染分辨率 / 输出分辨率分离（预研 §1，并入 M16.0）。
-- **S7 / S9 之后具备**：depth / normal GBuffer（S7 vis buffer 材质 pass 反解，S9 GBuffer）、法线/粗糙度（SSR 亦依赖）。
+- **S7 / T0 之后具备**：depth / normal（S7 vis buffer 反解 + T0 `gbuffer_common.slangh` 公共反解契约）；**注意 S9 不落 GBuffer 纹理（Q4 方案 A），无屏幕属性纹理**，法线/粗糙度由 vis buffer 即取即算（SSR 亦依赖此口径）。
 - 与 S12 时空滤波共享 velocity 资源，但 S12 是 GI 降噪、TSR 是上采样，互不替代。
 
 ## M16.0 jitter + 双帧矩阵 + velocity + 半分辨率渲染 + 朴素双线性（3~4 天）
@@ -90,7 +92,7 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 
 ## M16.4 锐化 + 最终混合 + 双后端（2 天）
 - [ ] 锐化补偿卷积上采样带来的模糊（对位 UE 锐化系数 / `TSRSpatialAntiAliasing` 边缘浏览思路）。
-- [ ] 输出写 history，接入主帧（tonemap 前；需先有共享前置 post-chain）。
+- [ ] 输出写 history，接入主帧（tonemap 前；共享前置 post-chain 已由 T0 承载，直接复用其 HDR scene color / tonemap 出口）。
 - [ ] DX12 / Vulkan 同图，分档 bytes/near。
 
 **自检**：锐度接近全分辨率参考、客观误差（PSNR vs 全分辨率基线）可接受；`regression.py` 全绿；kStage bump 后重拍 m0.9/s2.0 HUD 基线。tag：`s16-done`。
@@ -120,7 +122,7 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 | 时域体系割裂反例 | Carrot `CarrotRenderingPipeline.cpp` 的 `finalTAA` vs `lighting/svgf.slang` vs `compute/temporal-denoise.compute.glsl` 三套并存 |
 
 ## 底线
-- TSR 在 **tonemap 之前、Lumen GI 之后** 插入主帧；但**该 slot 当前不存在**，须先落地「离屏 HDR RT + post-chain」共享前置（预研 §2），与 SSR / bloom 共用，不各建一份。
+- TSR 在 **tonemap 之前、Lumen GI 之后** 插入主帧；共享前置「离屏 HDR RT + post-chain」已由 **T0 里程碑**落地（见 `docs/t0/T0-PLAN.md`），本模块直接复用其 HDR scene color / tonemap 出口，与 SSR / bloom 共用，不各建一份。
 - **jitter 是超分的前提**：M16.0 必须先有抖动序列 + 双帧矩阵 + 渲染/输出分辨率分离；velocity 用 unjittered 矩阵剥离抖动。
 - **velocity 精度是第一大病源**（世界/屏幕空间、上一帧矩阵、轮廓精度、jitter 剥离）；M16.0 可视化验收不可省；与 S12 共享同一张完整逐像素 velocity GBuffer。
 - 「看着还行」是主观的：M16.0 起建全分辨率参考 + 客观误差指标（PSNR），接 `regression.py`。

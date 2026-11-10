@@ -90,6 +90,9 @@ static const Artifact kArtifacts[] = {
     {"rt.psrtpresent", true}, {"rt.psrtpresent", false},
     // M9.2：rt.psrefpresent（参考图÷samplesDone 再 gamma 全屏呈现）× 双目标 = 2。
     {"rt.psrefpresent", true}, {"rt.psrefpresent", false},
+    // T0：rt.psblittohdr（rtTarget_→离屏 HDR 直拷）× 双目标 = 2，rt.pstonemap（离屏 HDR→swapchain 直通）× 双目标 = 2。
+    {"rt.psblittohdr", true}, {"rt.psblittohdr", false},
+    {"rt.pstonemap", true}, {"rt.pstonemap", false},
     // M-PT0：particles.slang 单管线（vsMain/psMain），各 × spv/dxil = 4。
     {"particles.vs", true}, {"particles.vs", false},
     {"particles.ps", true}, {"particles.ps", false},
