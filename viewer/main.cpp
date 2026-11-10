@@ -343,6 +343,8 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
+    // 锚点跟随当前 kStage 前缀；每次 kStage bump 同步改这里（M-N0 修存量债：
+    // 原硬编码 "S7.2"，M8.0 bump 后从未重跑 selftest，s8-blas 收口漏网）。
     check(std::strstr(st.stage, "S8.1") != nullptr, "S8.1 stage reported");
 
     nl::renderer::FrameParams fp;

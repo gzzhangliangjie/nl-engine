@@ -6004,6 +6004,95 @@
      "script": "example/s8.1-tlas/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "nav-m0",
+   "label": "P8 M-N0",
+   "name": "寻路最小烘焙闭环（vendored Recast/Detour 1.6.0）",
+   "tag": "nav-m0",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/pathfinding 首个里程碑：vendored recastnavigation v1.6.0（ZLib、纯 CPU、零联网，UE 同源 vendored 1.4.2 口径留痕），自写集成层 nl/nav（PIMPL 把 Recast/Detour 头挡在 core cpp 内）+ 自管 NLNV 容器序列化。工具版交代：nav-tools selftest / bake / dump / wire / resave + 真实烘焙产物的俯视线框 PNG，不进 kStage、不进渲染回归。",
+   "acceptance": [
+    "HizScene.glb（cs=0.1, agentRadius=0.2）烘焙 4 多边形 / 16 顶点 / 0.50 m^2；确定性硬判据：同参数两次 bake 产物 fc /b 逐字节一致（fnv64 5e70947ba37dcd35）",
+    "save/load roundtrip：resave 产物与原文件逐字节一致（分配器所有权修复后）；selftest 含合成场景 bake/确定性/roundtrip/负向（空几何 / 纯竖墙 / 坏 magic）全绿",
+    "证据图 nav-wire.png = nav-tools wire 真实输出（512x512 俯视正交，4 个箱顶多边形轮廓与 polys=4 一致），不许手绘",
+    "DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16 x2（含 M-N0 修 S7.2 过期锚点存量债）；ctest m-n0-nav-* 4/4",
+    "交代物：example/nav-m0/（run.bat ALL GREEN + hiz-a.nnav + nav-wire.png + 6 份日志）+ 本卡五用例 + NAV-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 是纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：合成 bake / 确定性 / roundtrip / 负向断言",
+     "kind": "tool",
+     "note": "20x20 地板 + 中央障碍合成场景；确定性 = 两次 bake 产物逐字节一致；负向 = 空几何 / 纯竖墙 / 坏 magic / 缺文件。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "bake",
+     "name": "bake：HizScene.glb 烘焙 NavMesh（真实 Recast 流水线）",
+     "kind": "tool",
+     "note": "cs=0.1 + agentRadius=0.2（1m 箱顶场景的合身参数；0.5m 默认半径会把箱顶腐蚀光）。输出统计含 walkableTris/raster/filtered/compact/regions 诊断链。",
+     "args": [
+      "bake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "saved       :",
+     "command": "nav-tools bake assets/models/HizScene.glb <out> --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "dump",
+     "name": "dump：读回烘焙产物（统计 + fnv64 指纹）",
+     "kind": "tool",
+     "note": "loadNLNV 容器 -> dtNavMesh -> 统计重算；fnv64 是产物指纹（5e70947ba37dcd35）。",
+     "args": [
+      "dump",
+      "{root}/example/nav-m0/hiz-a.nnav"
+     ],
+     "expectExit": 0,
+     "expectLog": "fnv64       : 5e70947ba37dcd35",
+     "command": "nav-tools dump example/nav-m0/hiz-a.nnav"
+    },
+    {
+     "id": "negative",
+     "name": "负向：坏 magic 显式退出 1",
+     "kind": "tool",
+     "note": "非 NLNV 文件头在序列化层拒绝，错误信息可读。",
+     "args": [
+      "dump",
+      "{root}/assets/models/HizScene.glb"
+     ],
+     "expectExit": 1,
+     "expectLog": "bad magic (not an NLNV navmesh file)",
+     "command": "nav-tools dump assets/models/HizScene.glb"
+    }
+   ],
+   "tag": "nav-m0"
   }
  ]
 }
