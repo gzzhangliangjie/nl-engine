@@ -3,6 +3,7 @@
 // selftest 的数值锚只对内核背书，窗口路径接线（游戏壳里程碑）后自动继承。
 
 #include "nl/core/input.hpp"
+#include "nl/core/action_map.hpp"
 
 #include <algorithm>
 
@@ -139,6 +140,48 @@ void InputState::endFrame() {
     mouseDelta_ = {};
     scrollDelta_ = {};
     // 持续态（keyDown_/mouseDown_/cursor_/mods）跨帧保留——bevy 口径。
+}
+
+// ---- M-I1：默认驾驶映射表（口径见 action_map.hpp 文件头）----
+// 绑定符号面：W=+1/S=-1 油门、A=-1/D=+1 转向（Carrot Float=max-abs 轴口径，
+// 平局取先定义的绑定）。键码数值锚（W=87/A=65/S=83/D=68/C=67/Space=32/ESC=256）
+// 在 input-tools selftest [actions] 节钉死。
+
+DrivingActions buildDrivingActionMap(ActionMap& map) {
+    DrivingActions d{};
+    d.drivingSet = map.defineSet("driving");
+    d.uiSet      = map.defineSet("ui");
+
+    d.throttle = map.define("throttle", ActionMap::Type::Float);
+    map.bindKey(d.throttle, GLFW_KEY_W, +1.0f);
+    map.bindKey(d.throttle, GLFW_KEY_S, -1.0f);
+    map.setMembership(d.throttle, d.drivingSet);
+
+    d.steer = map.define("steer", ActionMap::Type::Float);
+    map.bindKey(d.steer, GLFW_KEY_A, -1.0f);
+    map.bindKey(d.steer, GLFW_KEY_D, +1.0f);
+    map.setMembership(d.steer, d.drivingSet);
+
+    d.handbrake = map.define("handbrake", ActionMap::Type::Bool);
+    map.bindKey(d.handbrake, GLFW_KEY_SPACE);
+    map.setMembership(d.handbrake, d.drivingSet);
+
+    d.camToggle = map.define("cam_toggle", ActionMap::Type::Bool);
+    map.bindKey(d.camToggle, GLFW_KEY_C);
+    map.setMembership(d.camToggle, d.drivingSet);
+
+    d.look = map.define("look", ActionMap::Type::Vec2);
+    map.bindMouseDelta(d.look, 0, +1.0f);
+    map.bindMouseDelta(d.look, 1, +1.0f);
+    map.setMembership(d.look, d.drivingSet);
+
+    d.pause = map.define("pause", ActionMap::Type::Bool);
+    map.bindKey(d.pause, GLFW_KEY_ESCAPE);
+    map.setMembership(d.pause, d.uiSet);
+
+    map.setActive(d.drivingSet, true);   // 出厂即驾驶态（游戏壳可切）
+    map.setActive(d.uiSet, false);
+    return d;
 }
 
 } // namespace nl::core

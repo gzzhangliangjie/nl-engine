@@ -13,9 +13,11 @@
 
 | 命令 | 形态 | 退出码 |
 |---|---|---|
-| `selftest [section]` | 7 节机械锚：`edges`（键码表数值锚 + 三态节奏）/ `combos`（同帧 press/release 组合）/ `repeat`（REPEAT 不重触发）/ `mouse`（全按键三态 + 增量累积）/ `oob`（越界防御）/ `mods`（修饰键）/ `determinism`（12 帧序列重放逐位一致）；无参 = 全跑 | 0=PASS / 1=断言失败 |
+| `selftest [section]` | 9 节机械锚：`edges` / `combos` / `repeat` / `mouse` / `oob` / `mods` / `determinism`（M-I0 状态层 7 节）+ `actions`（M-I1 映射层：OR/max-abs/平局/阈值 0.5/Vec2 additive/组开关冻结）/ `actions-det`（12 帧驾驶映射序列逐位确定性）；无参 = 全跑 | 0=PASS / 1=断言失败 |
 | `trace [--frames N]` | 确定性 12 帧驾驶序列 → TSV（15 列，frame + 三态 9 列 + dx/dy/scroll + mods 3 列）；真实工具输出，evidence 管线数据源 | 0 / 1（参数错） |
 | `check <tsv>` | 对 dump 出的 TSV 重验同一组 5 锚（12 行 + f0/f1/f3/f10/f11）——防假绿：不信任存档，逐行解析断言 | 0 / 1 |
+| `act-trace [--frames N]` | M-I1：12 帧驾驶映射序列 → TSV（9 列：throttle/steer/look xy/handbrake 及边沿/pause 及边沿；含 f8 ui 组开/f9 关停事件） | 0 / 1（参数错） |
+| `act-check <tsv>` | 对 dump 出的 act-trace 重验 9 锚（12 行 + f0/f2/f4 平局/f6/f8/f9/f10/f11） | 0 / 1 |
 | （无参 / 未知命令） | usage | 2 |
 
 退出码语义：`0` 成功 / `1` 断言或运行失败 / `2` 用法错误（对齐展示台 expectExit 约定）。
@@ -30,7 +32,7 @@ $ input-tools selftest
 [determinism]
   ok same sequence replays bit-identical across 12 frames
   ok seq anchor: f11 delta values (0.5*(11%4), -0.25*(11%3))
-selftest PASS (7 sections)
+selftest PASS (9 sections)
 
 $ input-tools check example/input-m0/input-trace.tsv
   ok check: 12 rows

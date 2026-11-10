@@ -2037,3 +2037,20 @@
 5. **`namespace kc = nl::core; (void)kc;` 编译错**：命名空间别名不能出现在表达式（C2882）——调试残留，删。
 
 **下一步**：M-I1 ActionMap/ActionSet 映射层（Carrot 解析规则 Bool=OR / Float=max abs / 组开关冻结 + 默认驾驶映射表 + selftest）；M-I2 viewer `--mode input-hud` 调试面板 + 渲染侧收口。游戏壳接线（updateFromWindow 启用点）排第 5 步独立 game target。merge 回 master 与 M8.1/particles/pathfinding 队列一起排（冲突面仅 CMakeLists.txt——viewer/main.cpp 本里程碑未触碰）。
+
+## P8 M-I1：ActionMap/ActionSet 映射层——Carrot 解析规则 + 组开关 + 默认驾驶映射表（feat/input 第二里程碑，2026-11-10，tag `input-m1`）
+
+**动作**：M-I0 收口后的直连里程碑（P8-INPUT-PLAN §M-I1）。三处参考重读（Carrot `io/actions/` 本轮细读 `Action.hpp`/`ActionSet.h/.cpp`/README：解析规则 README 明文 Bool=OR / Float=最大绝对值，代码实证 Bool←Float 阈值 `>=0.5f`、Float←Bool 1.0/0.0、非激活组回调 return、updatePrePoll 先搬 previous 再清零；bevy 无映射层——映射层口径由 Carrot 独供；UE MappingContext modifier/trigger 链不做）→ `core/include/nl/core/action_map.hpp` + `core/src/action_map.cpp`（ActionMap：三型 Bool/Float/Vec2、六源绑定带符号 scale、value+previousValue 冻结双值；ActionSet 位掩码 kMaxSets=32，关停=清零不保旧值——对 Carrot「跳过不写」的有意偏离防旧值漏模式，头文件留痕）→ `buildDrivingActionMap` 落库 input.cpp（W/S=油门±1、A/D=转向±1、Space=手刹、C=视角、鼠标增量=look、Esc=pause）→ input-tools 扩 selftest `actions`/`actions-det` 两节（9 节 60 断言）+ `act-trace`/`act-check` 子命令（12 帧驾驶序列 9 锚闭环）→ CMake（action_map.cpp 源单 + ctest mi1×2）+ `tools/make-input-m1-evidence.py`（数值条/布尔轨/events 三段时间线）+ `example/input-m1/`（run.bat 五段式 + acceptance.png 基线 + act-trace.tsv + 5 份日志）+ cases.json input-m1 卡 4 用例 + M-I0 卡 expectLog 7→9 节同步 + INPUT-TOOLS-GUIDE 更新 → 回归（input-m0 run.bat ALL GREEN + s7.2 spot 4/4 bytes + M-I0 trace/check 契约逐字节不变）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m1`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2；selftest 9 节 60 断言全绿（actions 节：OR/max-abs/平局取先定义/0.5 阈值/Vec2 additive/组开关冻结/未挂组恒参与；actions-det 节：12 帧驾驶序列重放逐位一致 + 9 序列锚）；act-trace→act-check 12 行 9 锚闭环 PASS；证据图由真实 TSV 生成、run.bat 重生成 `fc /b` 逐字节一致（肉眼核验：数值条正负双色/布尔轨边沿亮块/events 错位标签与 TSV 逐一吻合）；负向退出码实测（usage 2 / act-check 缺文件 1 / 未知节 2）；ctest mi0×2 + mi1×2 = 4/4；input-m0 run.bat ALL GREEN（M-I0 交付零回归）+ s7.2 spot 4/4 bytes；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **手写锚错误三连犯（M-I0 同款坑，纪律再+1）**：f11 look y 锚写成 0.0，实测 -0.5（`-0.25*(11%3)` 是序列公式不是终值）——两次栽在同一公式上，锚必须从实测 log 反推已两次实证。
+2. **新 exe 跑出旧行为 = NMake 同秒 mtime 跳重链**：`cmake --build` 空输出 exit 0 但 exe 是旧的（selftest 报 unknown section 'actions'）——删 exe 强制重链后才真编；本机已知坑再次现世。
+3. **裸 cmake 无法 configure**：bash 里直接调 cmake.exe 报「no such file or directory」（nmake 不在 PATH）——configure 必须走 build-m0.2.bat（自带 VS 环境）。
+4. **input.cpp/main.cpp 各漏 include action_map.hpp**： DrivingActions/ActionMap 类型不可见级联百错——新头文件接进两个使用点时各补一行。
+5. **run.bat 抢跑后台构建**：VULKAN 树还在编时跑五段式，旧 exe 跑出 7 节 PASS 行被 findstr 闸住（闸起了作用）——双后端验收前先等双构建完成。
+
+**下一步**：M-I2 viewer `--mode input-hud` 调试面板（键态矩阵 + 激活组动作值条 + ImGui 注入按钮）+ 渲染侧收口（唯一触碰渲染处，只加不改）。之后游戏壳接线（第 5 步独立 game target，updateFromWindow 启用点）。

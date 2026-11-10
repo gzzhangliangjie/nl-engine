@@ -151,6 +151,7 @@ add_library(nl_core STATIC
     core/src/assert.cpp
     core/src/window.cpp
     core/src/input.cpp         # P8 M-I0：输入状态层（三态 + 鼠标全量 + 注入 API，A 类轨道）
+    core/src/action_map.cpp    # P8 M-I1：ActionMap/ActionSet 映射层（Carrot 解析规则，纯逻辑零 GLFW）
     core/src/camera.cpp
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
@@ -567,6 +568,9 @@ set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
 add_test(NAME mi0-input-selftest COMMAND input-tools selftest)
 add_test(NAME mi0-input-usage-negative COMMAND input-tools selftest bogus)
 set_tests_properties(mi0-input-usage-negative PROPERTIES WILL_FAIL TRUE)
+# P8 M-I1：映射层机械单测（Carrot 解析规则 / 组开关冻结 / 序列确定性）
+add_test(NAME mi1-input-actions-selftest COMMAND input-tools selftest actions)
+add_test(NAME mi1-input-actions-det-selftest COMMAND input-tools selftest actions-det)
 # M-A2：线性/加法混合机械单测（lerp 锚点 w=0/0.5/1、加法 quat 相对叠加语义、骨架不一致拒绝）
 add_test(NAME ma2-anim-blend-selftest COMMAND anim-tools selftest blend)
 set_tests_properties(ma2-anim-blend-selftest PROPERTIES

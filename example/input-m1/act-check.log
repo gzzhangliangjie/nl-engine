@@ -1,0 +1,10 @@
+  ok act-check: 12 rows
+  ok act-check: f0 throttle +1
+  ok act-check: f2 steer +1, look (1.0,-0.5)
+  ok act-check: f4 W+S tie -> W
+  ok act-check: f6 handbrake press edge
+  ok act-check: f8 ui on -> pause edge
+  ok act-check: f9 ui off -> pause zeroed
+  ok act-check: f10 all released -> zeros
+  ok act-check: f11 look values
+act-check PASS (12 rows, 9 anchors)

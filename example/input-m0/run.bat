@@ -1,7 +1,7 @@
 @echo off
 rem P8 M-I0 acceptance: core/input state layer (A-class input track).
 rem Layers:
-rem   1. selftest on BOTH backend build trees (DX12 + VULKAN) — 7 sections,
+rem   1. selftest on BOTH backend build trees (DX12 + VULKAN) — 9 sections,
 rem      edges/combos/repeat/mouse/oob/mods/determinism, numeric anchors only
 rem   2. trace: dump the 12-frame synthetic drive sequence (real tool output)
 rem      + check: re-verify the dumped TSV against the same 5 anchors
@@ -22,7 +22,7 @@ if errorlevel 1 (
     echo [ERROR] input-tools selftest FAILED DX12
     exit /b 1
 )
-findstr /c:"selftest PASS (7 sections)" "%D%selftest-dx12.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
+findstr /c:"selftest PASS (9 sections)" "%D%selftest-dx12.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
 type "%D%selftest-dx12.log"
 
 echo === selftest (VULKAN build tree) ===
@@ -32,7 +32,7 @@ if errorlevel 1 (
     echo [ERROR] input-tools selftest FAILED VULKAN
     exit /b 1
 )
-findstr /c:"selftest PASS (7 sections)" "%D%selftest-vulkan.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
+findstr /c:"selftest PASS (9 sections)" "%D%selftest-vulkan.log" >nul || (echo [ERROR] missing PASS line & exit /b 1)
 
 echo === trace (real output) + check (5 anchors) ===
 "%ROOT%\build\DX12\input-tools.exe" trace --frames 12 > "%D%input-trace.tsv" 2>&1
