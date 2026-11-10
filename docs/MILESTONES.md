@@ -2451,7 +2451,7 @@
 1. **冲突预演必须先做**：`git merge-tree --write-tree --name-only master feat/drive`（Git 2.55）无副作用报出唯一冲突 `docs/MILESTONES.md`，`cases.json` / `CMakeLists.txt` / `viewer/main.cpp` / `renderer.hpp` 均自动合并 —— 先预演再 merge，避免带着未知冲突面进合并态。
 2. **Python `open('w')` 传 bytes 会先清空文件**：首版冲突解决脚本 `with p.open('w', ...) as f: f.write(out.encode())` 抛 `TypeError` 前已把 `docs/MILESTONES.md` truncate 成 0 字节。**恢复不用 `git checkout`**：从 `git show :1:/:2:/:3:docs/MILESTONES.md` 读三阶段 blob，实测两侧均为「以共同祖先为前缀的纯追加」，按 `base + master_append + drive_append` 字节级重建、写回 CRLF，零内容丢失。凡工作树写入一律 `Path.write_bytes()`，勿在文本句柄里传 bytes。
 3. **guard / scope 的 WARN 不是阻断**：claim 由短命 Python 进程登记，`guard --op merge` 报 `pid looks dead`（exit 2）、`scope` 报「cwd 在主树」（exit 2）。本次 merge 的合法落点就是主树，且 §7.5 明文要求注册表更新在主树提交；核对 claim note / 双树 status 后继续，勿把 WARN 当拒绝、也勿为凑 exit 0 去改注册表状态。
-4. **不擅自把轨道标 CLOSED / 不拆 wt**：用户只说「合回去」，拆 worktree / 改 `wt_pool.py TRACKS` state 属删除类动作，保持 `ACTIVE drive wt=exists`、`feat/drive` 分支保留，等明确指令。
+4. **不擅自把轨道标 CLOSED / 不拆 wt**：用户只说「合回去」，拆 worktree / 改 `wt_pool.py TRACKS` state 属删除类动作，保持 `ACTIVE drive wt=exists`、`feat/drive` 分支保留，等明确指令。（**后续**：2026-11-10 23:0x 用户明确指令「拆driver」并确认按 camera 惯例执行，wt 已拆、TRACKS 标 CLOSED、分支与四 tag 保留，见当日日志。）
 
 5. **归档日志不许带 worktree 绝对路径**：`tools/make-drive-m3-evidence.py --sweep` 首行原打印 `OUT / "frames.tsv"` 的绝对路径，`example/drive-m3/sweep.log` 因此写入 `E:\UE_STUDY_2026\nl-engine-drive\...`；整轨 merge 回 master 后同一产物必然漂移到 `nl-engine\...`，任何新 clone / 新 worktree 跑 `run.bat` 都会产生伪 diff。改为固定相对路径 `example/drive-m3/frames.tsv`（证据图只读 `sweep.log` 最后 4 行，两张 PNG 基线零改动），连续两轮 `run.bat verify` ALL GREEN 复验。另：`.bat` 的 `echo >>` 在 Windows 写 CRLF，而 `.gitattributes *.log text eol=lf`，归档时统一转 LF，勿把工作树 CRLF 当内容变更提交。
 

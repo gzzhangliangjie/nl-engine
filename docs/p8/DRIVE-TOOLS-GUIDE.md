@@ -1,6 +1,6 @@
 # DRIVE-TOOLS-GUIDE — 驾驶能力轴工具归档（M-D0：碰撞事件桥）
 
-> 轨道：`feat/drive`（A 类并行轨道，worktree `E:/UE_STUDY_2026/nl-engine-drive`）。
+> 轨道：`feat/drive`（A 类并行轨道，worktree `E:/UE_STUDY_2026/nl-engine-drive` —— **2026-11-10 整轨 merge 后已拆，分支与 `drive-m0`~`drive-m3` tag 留档；本文件为归档文档**）。
 > 计划：`docs/p8/P8-DRIVE-PLAN.md`（M-D0~M-D3）。本文件覆盖 **M-D0**，后续里程碑追加章节。
 > 性质：**工具版交代**——不进 `kStage`、不进 `bytes/near` 渲染回归总闸；证据来自 `phys-tools.exe` 的真实输出。
 

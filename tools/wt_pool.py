@@ -127,11 +127,13 @@ TRACKS = {
     },
     "drive": {
         "wt": "E:/UE_STUDY_2026/nl-engine-drive",
-        "branch": "feat/drive", "state": "active",
+        "branch": "feat/drive", "state": "closed",
         "note": "A-class track opened 2026-11-10 by user instruction "
                 "(city-driving game-dev steps 2+3 merged; plan "
                 "docs/p8/P8-DRIVE-PLAN.md, M-D0~D3; M-D3 is the only "
-                "milestone touching the viewer wiring seam)",
+                "milestone touching the viewer wiring seam); "
+                "merged to master a2e3cff (tags drive-m0~drive-m3); "
+                "wt removed 2026-11-10, branch kept",
     },
 }
 

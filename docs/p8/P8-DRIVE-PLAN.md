@@ -199,7 +199,7 @@
   `tools/wt_pool.py` TRACKS 新增 `drive`、`docs/PARALLEL-TRACKS.md` §7.1 新增轨道行、
   `docs/GAME-DEV-ORDER.md` 第 2/3 步状态改「在轨」。相机轨收官会话的未提交改动由其自行提交
   `4ff5551` + `351d216` 进入父链，本轮未代提交（定点暂存避开同文件改动）。
-  worktree `E:/UE_STUDY_2026/nl-engine-drive`（分支 `feat/drive`，起点 `b4ab3b0`，
+  worktree `E:/UE_STUDY_2026/nl-engine-drive`（**2026-11-10 整轨 merge 后已拆，此段为开轨时历史事实**；分支 `feat/drive`，起点 `b4ab3b0`，
   **已含 camera merge `7b0f24a` 全部内容**：`git merge master` 实测 `Already up to date`、
   `rev-list --count HEAD..master` = 0）；junction 共享 `.workbuddy` / `thirdparty/slang/dist`
   + 6 文件 skip-worktree；`wt_pool claim --track drive --milestone M-D0` 在册。
