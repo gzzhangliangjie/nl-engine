@@ -64,6 +64,8 @@
 #include <vector>
 
 #include <windows.h>
+#include <process.h>   // _getpid（selftest temp 目录加 PID 后缀——regression 并行跑
+                       // 同 case 双后端实例，固定目录名互踩 = m-sc3 间歇 FAIL 毒源）
 
 namespace fs = std::filesystem;
 
@@ -280,7 +282,8 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
     // s5 热重编行为更新：拷贝工程 -> 改 42->43 -> 换名重编 -> 同进程装载新 DLL
     {
         std::error_code ec;
-        const fs::path hotRoot = fs::temp_directory_path(ec) / "nl-script-selftest-hot";
+        const fs::path hotRoot = fs::temp_directory_path(ec) /
+            ("nl-script-selftest-hot-" + std::to_string(_getpid()));
         fs::remove_all(hotRoot, ec);
         fs::create_directories(hotRoot, ec);
         // 只拷工程源文件（csproj + .cs），跳过 bin/obj：带 obj 的 NuGet 缓存会让
@@ -636,7 +639,8 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
                 // 热拷贝 console 工程到 temp（只源文件，ProjectReference 改绝对路径；
                 // 不改 AssemblyName —— 本里程碑验收「同名 DLL 覆盖」工作流，与 s5 换名口径对照）
                 std::error_code ec;
-                const fs::path hotRoot = fs::temp_directory_path(ec) / "nl-script-selftest-hot-s8";
+                const fs::path hotRoot = fs::temp_directory_path(ec) /
+                    ("nl-script-selftest-hot-s8-" + std::to_string(_getpid()));
                 fs::remove_all(hotRoot, ec);
                 fs::create_directories(hotRoot / "console", ec);
                 for (const auto& entry : fs::directory_iterator(consoleDir, ec)) {

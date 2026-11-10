@@ -35,7 +35,7 @@
 
 ## 4. 不在范围
 
-- ~~帧间插值~~（**M-GL3 已解禁立项**，2026-11-10 用户拍板）、多逻辑帧速率分档（TickGroup 精细化）、回滚 netcode、多线程逻辑帧并行（Scheduler 已有 DAG）。
+- ~~帧间插值~~（**M-GL3 已解禁立项**，2026-11-10 用户拍板）、~~script OnTick 接逻辑帧~~（**M-GL4 已收官**，2026-11-10）、多逻辑帧速率分档（TickGroup 精细化）、回滚 netcode、多线程逻辑帧并行（Scheduler 已有 DAG）。
 
 ## 5. 里程碑草案（不排期，gate E1b merge 后开工）
 
@@ -45,6 +45,7 @@
 | **M-GL1** | viewer 主循环接双帧 + `game.pause`/`game.timeScale` + `--fixed-dt` 兼容 | 截图基线：暂停帧 simTime 不变、渲染帧 HUD 活；双后端对拍 |
 | **M-GL2** | 物理/音频/ECS 接逻辑帧 tick（与 **M-S3 合并收口**） | 声源随物体移动且暂停即停；全量回归 + 收口硬闸 |
 | **M-GL3** | 渲染帧插值（alpha 消费，2026-11-10 用户解禁立项） | 插值开/关截图逐字节同；fixed-dt 25 中帧 alpha=0.5 数值孪生（时钟 + 轨道位置 + slerp）；暂停冻结 |
+| **M-GL4** | script OnTick 接逻辑帧（宿主级单脚本，2026-11-10 用户解禁立项） | fixed-dt 16.7×100 → probe ticks=100 + 轨道公式孪生；mid [1,2,2] 累加器复推；pause ticks=0 冻结；OnTick 缺失 = 空转零波及（m-sc3 回归 8/8） |
 
 ## 6. 留痕
 
@@ -55,3 +56,4 @@
 - 2026-11-10：**M-GL2 收口（tag `gl-m2`）**。物理调试 step / ECS world.tick / 音频场景同步全部收进 GameClock 逻辑帧 callback（runNormal 与 runScene 同构）；runScene 补落 `--fixed-dt`；新增 `audio.play <wav> <entity>`（M-S3：声源挂 ECS 实体、listener 随相机、逻辑帧同步、暂停即停）。**拍板记录（用户选 B）**：`game.pause` 连音频播放一起冻（UE 流派，复用 audio.freeze 机制）；bevy「只停同步」流派被否。迁移零重拍：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变，ecs-parallel/phys-p3/phys-p4/gl1 基线全部逐字节复现。验收证据：gl2-audio.scene 轨道子实体（E1a 层级）上声源读回 == 实体世界位置（轨道半径不变量 + movement + freeze + 跨后端逐位，verify.py 独立孪生 12 检查 × 2 后端）。游戏循环双帧模型至此完整落地（全消费方接入）。
 - 2026-11-10：**新知（viewer 截图捕获口径补遗）**：phys-debug 的 settled 日志此前沿用 `frame + 1 == o.frames`（pre-increment 语境残留），与 PNG 实际落点差一迭代，M-GL2 起统一为 `frame == o.frames`（自增后语境）。另：场景 deserialise 严格拒绝重复实体 id（gl2 场景 id 7 撞 spin 场景即被拒）——手工拼场景 JSON 时 nextID 必须与已用 id 对账。
 - 2026-11-10：**M-GL3 立项 + 收口（tag `gl-m3`）**。用户从 §4 候选中拍板「帧间插值」。参考实读：bevy v0.16.1 `crates/bevy_time/src/fixed.rs:178-183`——Fixed 时钟 `overstep()/timestep()` 分数即插值 alpha（与 `GameClock::alpha()` 同构）；**bevy core 全树无内建 transform 插值器**（`git ls-tree` 0 命中，插值本体是社区 crate），PLAN §3 旧表述「bevy 有 interpolator」据此修正。落码：viewer runScene 每渲染帧 tick 前后快照 prev/curr 世界 TRS（列分解 + Shepperd 矩阵→四元数），交互态 `mat4TRS(lerp, slerpQuat, lerp)` 合成实例矩阵，渲染专用不回写 sim state；CLI `--interp` + console `game.interp`。**拍板（实现期）**：截图模式恒走不插值原路径——首版「钉 alpha=0 走分解重构」因 roundtrip 非逐位 PNG MD5 不等被否，字节恒等改由「同一代码路径」构造保证。验收：equal（开/关 PNG 逐字节 ×2 后端）+ mid（fixed-dt 25 → ticks [1,2,1]、alpha=0.5，verify.py 三重孪生：accumulator 复推 / SpinSystem 轨道位置 / slerp 自洽）+ pause（全冻结）+ smoke（console 负向计 acceptance 错误计数 → 非零退出，负向独立成 run）。
+- 2026-11-10：**M-GL4 立项 + 收口（tag `gl-m4`）**。用户解禁「script OnTick」。设计：`ScriptHost::scriptTick(double dt)` 在 clock callback 内 **world.tick 之前**调用（脚本 spawn/remove 排队、tick 开头 flush = World 宿主 tick 边界动作既有语义）；pause = callback 不触发 = 脚本同步冻结；OnTick **可选契约**（缺失 = tickFn_ 空 = 空转，旧脚本零波及——首版误设「必须存在」打爆 m-sc3 即回改）。**核心坑（双副本陷阱，实锤）**：OnTick 指针禁用 `Vm::getEntryPoint` 直拉脚本 dll——hostfxr `load_assembly_and_get_function_pointer` 会把程序集**再装一份进默认 ALC**（与 bootstrap 的 collectible ALC 静态字段独立一套，Engine.Init 状态不通 → 默认副本 OnTick 读 `_exists=0` 抛 ArgumentNullException）。修法 = bootstrap 新导出 **BootTickPtr**：从 `_lastAssembly`（collectible 正本）反射解析方法 → `UnmanagedFunctionPointer` 委托 thunk 带本机指针（delegate 保活列表，Unload 前清空防 rooted 挡回收）。连带修三处：`Assembly.GetType` 不吃 `", Asm"` 限定符（hostfxr 口径吃——BootCall/BootTickPtr 入口剥限定符统一兼容）；`ScriptHost::loadScript` 校验 Entry 返回值（非 0 回滚，不再吞出「loaded 但半初始化」假绿）；`ecsSetWorld` 先于 loadScript（Entry 装载期就 FindByName）。验收：orbit 示例（OnTick 轨道 r=1.6 ω=0.9）tick/mid/pause/smoke/negative 五组 × 双后端 + verify.py 三重孪生（25ms 步长落 2×step 浮点刀锋弃用改 30ms [1,2,2]）+ cases.json gl4 卡 6/6 + m-sc3 回归 8/8（顺手修 selftest temp 目录双后端并行互踩 flake：temp 名加 PID 后缀）+ 全量回归。详见 MILESTONES M-GL4 与 SCRIPT-TOOLS-GUIDE 踩坑存档。

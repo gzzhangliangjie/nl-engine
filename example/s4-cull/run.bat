@@ -1,5 +1,5 @@
 @echo off
-rem NOTE: !EXE!/!FRONT!/!INSIDE! delayed expansion is REQUIRED here â€” %VAR%
+rem NOTE: !EXE!/!FRONT!/!INSIDE! delayed expansion is REQUIRED here ¡ª %VAR%
 rem inside a parenthesized for-body expands at parse time (empty), which used
 rem to make the s4.0 script execute a literal "" command and silently no-op.
 setlocal enabledelayedexpansion

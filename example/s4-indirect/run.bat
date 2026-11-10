@@ -1,5 +1,5 @@
 @echo off
-rem NOTE: !EXE!/!CAM! delayed expansion is REQUIRED â€” %VAR% inside a
+rem NOTE: !EXE!/!CAM! delayed expansion is REQUIRED ¡ª %VAR% inside a
 rem parenthesized for-body expands at parse time (empty), which made this
 rem script execute a literal "" command and silently no-op (fixed in M4.1).
 setlocal enabledelayedexpansion

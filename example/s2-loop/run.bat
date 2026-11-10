@@ -1,5 +1,5 @@
 @echo off
-REM M2.2 / s2-loop å¤çŽ°ï¼šæ ‡å‡†é€å±‚ LOD è½ç›˜ -> ç”» 6 å±‚é‡‘å­—å¡”å¯¹æ¯”å›¾
+REM M2.2 / s2-loop ¸´ÏÖ£º±ê×¼Öð²ã LOD ÂäÅÌ -> »­ 6 ²ã½ð×ÖËþ¶Ô±ÈÍ¼
 cd /d "%~dp0..\.."
 if not exist build\qem mkdir build\qem
 build\dx12\nanite-tools.exe lod assets\meshlets\Suzanne.nmesh -o build\qem\lod-suzanne --max-levels 8

@@ -35,12 +35,23 @@
 //          -100=未装载 / -101=类型或方法解析失败 / -102=托管异常（Invoke 包装）
 //   BootUnload args = NULL
 //     返回 0=完全卸载（weakref dead）/ 1=未完全（Unload 已调）/ -1=无脚本
+//   BootTickPtr args = struct { const char* typeUtf8;               // 偏移 0（M-GL4）
+//                               const char* methodUtf8;             // 偏移 8
+//                               void** outFn; }                     // 偏移 16
+//     返回 0=ok（*outFn = 方法本机指针）/ -1=空参 / -100=未装载 /
+//          -101=类型或方法解析失败 / -102=托管异常（包装）
+//     **必须经本导出取 tick 指针**：hostfxr getEntryPoint 会把脚本程序集再装
+//     一份进默认 ALC（静态字段独立一套，Engine.Init 状态不通——M-GL4 实证
+//     默认副本 OnTick 读 _exists=0 崩）。本导出从 _lastAssembly（collectible
+//     正本）反射解析，经 UnmanagedFunctionPointer 委托 thunk 带出本机指针；
+//     thunk delegate 存 static 保活列表（Unload 前清空，否则 rooted 挡回收）。
 //
 // 脚本方法约定：公共静态 int(IntPtr, int)——反射 Invoke 路径不要求
 // [UnmanagedCallersOnly]（有也兼容，Invoke 走托管反射不走函数指针）。
 // 脚本异常：TargetInvocationException 在此 catch → -102（互操作边界归一，
 // 与 Vm.cpp SEH 口径一致；正常路径下异常不出本类，SEH 只是兜底）。
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -79,6 +90,12 @@ namespace Nl.Script.Bootstrap
     {
         static ScriptLoadContext? _alc;
         static Assembly? _lastAssembly;
+
+        // M-GL4：tick 指针 thunk 保活（BootTickPtr 填充，UnloadAndWeak 清空——
+        // delegate 引用 collectible 程序集内方法，不清 = rooted 挡回收）。
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int TickFn(IntPtr args, int size);
+        static readonly List<Delegate> _tickDelegates = new();
 
         static IntPtr PtrAt(IntPtr args, int offset) => Marshal.ReadIntPtr(args, offset);
 
@@ -128,6 +145,16 @@ namespace Nl.Script.Bootstrap
             try
             {
                 Type? t = _lastAssembly.GetType(type);
+                if (t is null)
+                {
+                    // Assembly.GetType 不接受 ", AssemblyName" 限定符（hostfxr
+                    // load_assembly_and_get_function_pointer 的类型参数口径**吃**
+                    // 限定符，两者约定必须统一兼容——否则 getEntryPoint 与
+                    // BootCall 同一 typeName 字符串一通一炸，M-GL4 实证）。
+                    int comma = type.IndexOf(',');
+                    if (comma > 0)
+                        t = _lastAssembly.GetType(type.Substring(0, comma).Trim());
+                }
                 if (t is null) return -101;
                 MethodInfo? m = t.GetMethod(method,
                     BindingFlags.Public | BindingFlags.Static,
@@ -141,6 +168,42 @@ namespace Nl.Script.Bootstrap
             catch (Exception)
             {
                 return -102;   // 托管异常 → 边界归一（与 Vm.cpp SEH 口径一致）
+            }
+        }
+
+        // ---- BootTickPtr（M-GL4）----
+
+        [UnmanagedCallersOnly(EntryPoint = "BootTickPtr")]
+        public static int BootTickPtr(IntPtr args, int size)
+        {
+            if (_alc is null || _lastAssembly is null) return -100;
+            string? type = args == IntPtr.Zero ? null : Utf8At(args, 0);
+            string? method = args == IntPtr.Zero ? null : Utf8At(args, 8);
+            IntPtr outFn = args == IntPtr.Zero ? IntPtr.Zero : Marshal.ReadIntPtr(args, 16);
+            if (type is null || method is null || outFn == IntPtr.Zero) return -1;
+
+            try
+            {
+                Type? t = _lastAssembly.GetType(type);
+                if (t is null)
+                {
+                    int comma = type.IndexOf(',');
+                    if (comma > 0)
+                        t = _lastAssembly.GetType(type.Substring(0, comma).Trim());
+                }
+                if (t is null) return -101;
+                MethodInfo? m = t.GetMethod(method,
+                    BindingFlags.Public | BindingFlags.Static,
+                    binder: null, types: new[] { typeof(IntPtr), typeof(int) }, modifiers: null);
+                if (m is null) return -101;
+                var del = (TickFn)m.CreateDelegate(typeof(TickFn));
+                _tickDelegates.Add(del);   // thunk 保活（Unload 前清空）
+                Marshal.WriteIntPtr(outFn, Marshal.GetFunctionPointerForDelegate(del));
+                return 0;
+            }
+            catch (Exception)
+            {
+                return -102;
             }
         }
 
@@ -173,6 +236,8 @@ namespace Nl.Script.Bootstrap
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static WeakReference? UnloadAndWeak(ScriptLoadContext alc)
         {
+            // 先清 tick thunk 保活（delegate rooted 挡回收——次序铁律），再 Unload。
+            _tickDelegates.Clear();
             WeakReference? weak = _lastAssembly is null ? null : new WeakReference(_lastAssembly);
             _lastAssembly = null;
             alc.Unload();

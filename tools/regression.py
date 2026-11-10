@@ -267,6 +267,17 @@ def main() -> int:
     args = ap.parse_args()
 
     backend_filter = (args.backend,) if args.backend else BACKENDS
+
+    # ---- bat 编码门禁（M-GL4 固化，事前检查）：全部 bat = UTF-8 无 BOM + CRLF，
+    # 含中文的头部必须 chcp 65001。违规即拒跑（LF+多字节曾实炸 gl4 run.bat）。
+    bat_check = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "check-bat-encoding.py")],
+        capture_output=True, text=True)
+    if bat_check.returncode != 0:
+        print("[regression] bat 编码门禁未过（详见下述），拒绝运行：", file=sys.stderr)
+        print(bat_check.stdout, file=sys.stderr)
+        return 2
+
     if args.only:
         vid, _, cid = args.only.partition("/")
         versions = [v for v in show.DATA["versions"] if v["id"] == vid]

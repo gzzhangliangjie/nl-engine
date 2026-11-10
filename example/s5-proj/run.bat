@@ -1,5 +1,5 @@
 @echo off
-rem NOTE: !EXE! delayed expansion is REQUIRED here â€” %VAR% inside a
+rem NOTE: !EXE! delayed expansion is REQUIRED here ¡ª %VAR% inside a
 rem parenthesized for-body expands at parse time (empty), which silently
 rem no-ops the whole block (M4.0 script disease, fixed since M4.1).
 setlocal enabledelayedexpansion

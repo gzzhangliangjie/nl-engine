@@ -6055,6 +6055,143 @@
           "script": "example/gl3/run.bat mid"
         }
       ]
-    }
+    },
+{
+ "id": "gl4",
+ "label": "M-GL4",
+ "name": "游戏循环 M-GL4：script OnTick 接逻辑帧（宿主级单脚本轨道）",
+ "tag": "gl-m4",
+ "date": "2026-11-10",
+ "summary": "A 类并行轨道 feat/gameloop：ScriptHost 新增宿主级 script OnTick（可选契约，缺失=空转零波及）——clock callback 内 world.tick 之前调 scriptTick(double dt)，pause=callback 不触发=脚本同步冻结。OnTick 指针经 bootstrap 新导出 BootTickPtr 从 collectible 正本带出（**禁 getEntryPoint 直拉脚本 dll**：hostfxr 会装第二份默认 ALC 副本，静态字段独立一套，Engine.Init 状态不通——实证默认副本 OnTick 读 _exists=0 崩）；Assembly.GetType 不吃 \", Asm\" 限定符（hostfxr 口径吃），BootCall/BootTickPtr 入口剥限定符兼容两种格式。配套修三处：loadScript 校验 Entry 返回值（非 0 回滚，不再吞）；ecsSetWorld 先于 loadScript（Entry 装载期就 FindByName）；BootTickPtr thunk delegate 保活列表 Unload 前清空（rooted 挡回收）。验收示例 orbit：OnTick 轨道 r=1.6 ω=0.9，verify.py 三重孪生+跨后端逐位。bootstrap 缺省相对路径仅 cwd=仓库根成立，回归卡一律显式 {root} 绝对传参。",
+ "acceptance": [
+  "tick 组：--script orbit --fixed-dt 16.7 x100 帧 → probe ticks=100，轨道位置与公式孪生（r=1.6, ω=0.9, t=ticks/60）逐位容差对拍",
+  "mid 组：fixed-dt 30 x3 帧 → 每帧 tick [1,2,2] 共 5（25ms 落 2xstep=33.333ms 浮点刀锋弃用）、轨道孪生、跨后端逐位",
+  "pause 组：game.pause 后 probe ticks=0 且位置停场景初始态（脚本随逻辑帧冻结）",
+  "smoke 组：game.script 状态行 tick=on（console-exec 在帧循环前，count 恒 0）",
+  "negative 组：无 --script 时 game.script 退出码 1 + 'no script loaded'（双后端）",
+  "m-sc3 回归 8/8 不回归（--jobs 4 并行；selftest temp 目录加 PID 后缀修复既有双后端互踩 flake）"
+ ],
+ "exe": {
+  "dx12": "build/DX12/viewer.exe",
+  "vulkan": "build/VULKAN/viewer.exe"
+ },
+ "cases": [
+  {
+   "id": "tick",
+   "name": "OnTick 轨道 100 帧（ticks 孪生 + 轨道公式对拍）",
+   "kind": "image",
+   "note": "clock callback 内 scriptTick(1/60) 先于 world.tick；probe 行读回 script-orb 世界位置 + 宿主 tickCount。",
+   "baselines": {
+    "dx12": "example/gl4/gl4-tick-DX12.png",
+    "vulkan": "example/gl4/gl4-tick-VULKAN.png"
+   },
+   "args": [
+    "--mode",
+    "scene",
+    "--scene",
+    "{root}/example/gl4/gl4-orbit.scene",
+    "--tick",
+    "parallel",
+    "--script",
+    "{root}/script/examples/orbit",
+    "--script-bootstrap",
+    "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+    "--fixed-dt",
+    "16.7",
+    "--screenshot",
+    "{out}",
+    "--frames",
+    "100",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--yaw",
+    "12",
+    "--pitch",
+    "9"
+   ],
+   "expectLog": "script probe: ticks=100 ",
+   "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --script {root}/script/examples/orbit --script-bootstrap {root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9",
+   "script": "example/gl4/run.bat tick"
+  },
+  {
+   "id": "pause",
+   "name": "暂停冻结（ticks=0 + 位置停初始态）",
+   "kind": "image",
+   "note": "game.pause 后 clock callback 不触发 = OnTick 从未执行；probe ticks=0 且 pos=场景初始 (1.6,0,0)。",
+   "baselines": {
+    "dx12": "example/gl4/gl4-pause-DX12.png",
+    "vulkan": "example/gl4/gl4-pause-VULKAN.png"
+   },
+   "args": [
+    "--mode",
+    "scene",
+    "--scene",
+    "{root}/example/gl4/gl4-orbit.scene",
+    "--tick",
+    "parallel",
+    "--script",
+    "{root}/script/examples/orbit",
+    "--script-bootstrap",
+    "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+    "--fixed-dt",
+    "16.7",
+    "--screenshot",
+    "{out}",
+    "--frames",
+    "5",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--yaw",
+    "12",
+    "--pitch",
+    "9",
+    "--console-exec",
+    "game.pause"
+   ],
+   "expectLog": "script probe: ticks=0 ",
+   "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --script {root}/script/examples/orbit --script-bootstrap {root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll --fixed-dt 16.7 --screenshot <out> --frames 5 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.pause\"",
+   "script": "example/gl4/run.bat pause"
+  },
+  {
+   "id": "negative",
+   "name": "无 --script 时 game.script 退出 1",
+   "kind": "image",
+   "note": "game.script 未载脚本 = console 命令失败 → acceptance error counter → exit 1；PNG 照写（负向基线）。",
+   "baselines": {
+    "dx12": "example/gl4/gl4-neg.png",
+    "vulkan": "example/gl4/gl4-neg-VULKAN.png"
+   },
+   "args": [
+    "--mode",
+    "scene",
+    "--scene",
+    "{root}/example/gl4/gl4-orbit.scene",
+    "--tick",
+    "parallel",
+    "--fixed-dt",
+    "16.7",
+    "--screenshot",
+    "{out}",
+    "--frames",
+    "2",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--yaw",
+    "12",
+    "--pitch",
+    "9",
+    "--console-exec",
+    "game.script"
+   ],
+   "expectExit": 1,
+   "expectLog": "no script loaded",
+   "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 2 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.script\"（无 --script）",
+   "script": "example/gl4/run.bat negative"
+  }
+ ]
+}
   ]
 }

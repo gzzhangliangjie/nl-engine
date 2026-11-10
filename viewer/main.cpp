@@ -14,6 +14,9 @@
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
 #include "nl/scene/World.hpp"
+#include "nl/script/Vm.hpp"         // M-GL4：--script 脚本宿主（OnTick 接逻辑帧）
+#include "nl/script/ScriptHost.hpp"
+#include "nl/script/Bindings.hpp"   // ecsSetWorld（宿主侧 World 绑定）
 
 #include <algorithm>
 #include <chrono>
@@ -132,6 +135,13 @@ struct Options {
     // overstep/timestep 同口径）。渲染专用不回写 sim state；截图模式恒走
     // 不插值原路径（PNG 与不插值逐字节同），插值证据走捕获帧 probe 日志。
     bool interp = false;
+    // M-GL4：--script <示例工程目录>（scene 模式）——脚本宿主装载 + 宿主级
+    // OnTick 接逻辑帧（nl-script 工具同款产物定位：proj/bin/Debug/net8.0/）。
+    // 空串 = 不装载脚本（viewer 默认零脚本依赖）。typeName 缺省推导
+    // "NlScript.Examples.<stem>Script, <stem>"；bootstrap 缺省仓库根相对路径。
+    std::string scriptProject;                 // --script
+    std::string scriptType;                    // --script-type（可省，缺省推导）
+    std::string scriptBootstrap = "script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll"; // --script-bootstrap
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -297,6 +307,13 @@ Options parseArgs(int argc, char** argv) {
         } else if (a == "--interp") {
             // M-GL3：渲染帧插值开关（见 Options::interp 注释）。
             o.interp = true;
+        } else if (a == "--script" && i + 1 < argc) {
+            // M-GL4：脚本示例工程目录（scene 模式装载脚本宿主 + OnTick 接逻辑帧）。
+            o.scriptProject = argv[++i];
+        } else if (a == "--script-type" && i + 1 < argc) {
+            o.scriptType = argv[++i];
+        } else if (a == "--script-bootstrap" && i + 1 < argc) {
+            o.scriptBootstrap = argv[++i];
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -1650,6 +1667,87 @@ int runScene(const Options& o) {
             }
             return {true, std::string("game.interp -> ") + (interpOn ? "on" : "off")};
         });
+    // ---- M-GL4：脚本宿主装载（--script，scene 模式）----
+    // 时序：exec lines 之前（脚本 Entry 注册的命令对 --console-exec 立即可用）；
+    // ecsSetWorld 绑定后 OnTick/ECS 导出才可用。产物定位 = nl-script 工具同款
+    //（proj/bin/Debug/net8.0/，GenerateRuntimeConfigurationFiles 保证唯一 rtc）。
+    std::unique_ptr<nl::script::Vm> scriptVm;
+    bool scriptLoaded = false;
+    if (!o.scriptProject.empty()) {
+        namespace fs = std::filesystem;
+        const fs::path proj = o.scriptProject;
+        const fs::path buildDir = proj / "bin" / "Debug" / "net8.0";
+        // 产物定位（nl-script 工具同款 glob 口径）：runtimeconfig 唯一，dll 名
+        // 按 AssemblyName（= runtimeconfig 名）——不按工程目录名（两者可不同）。
+        fs::path rtc, dll;
+        if (fs::is_directory(buildDir)) {
+            for (const auto& e : fs::directory_iterator(buildDir)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() >= 19 && n.rfind(".runtimeconfig.json") == n.size() - 19)
+                    rtc = e.path();
+            }
+            if (!rtc.empty()) {
+                // dll 名 = runtimeconfig 名去掉 ".runtimeconfig.json" 后缀 + ".dll"
+                //（不能 replace_extension——那会从最后一个点替换成 *.runtimeconfig.dll）。
+                const std::string n = rtc.filename().string();
+                dll = buildDir / (n.substr(0, n.size() - 19) + ".dll");
+            }
+        }
+        if (rtc.empty() || !fs::is_regular_file(dll)) {
+            nl::core::log::error("script: build outputs missing under ", buildDir.string(),
+                                 " (*.runtimeconfig.json + *.dll) — run: dotnet build ", proj.string());
+            return 1;
+        }
+        nl::script::Result vr;
+        // hosting API 口径：assembly/runtimeconfig 路径一律绝对化（相对路径在
+        // load_assembly_and_get_function_pointer 一步可能 0x80131509）。
+        scriptVm = nl::script::Vm::create(fs::absolute(rtc).string(), &vr);
+        if (!scriptVm) {
+            nl::core::log::error("script: Vm::create failed: ", vr.message);
+            return 1;
+        }
+        const auto ir = nl::script::ScriptHost::get().init(
+            scriptVm.get(), fs::absolute(o.scriptBootstrap).string());
+        if (!ir.ok) {
+            nl::core::log::error("script: ScriptHost init failed: ", ir.message);
+            return 1;
+        }
+        // typeName 缺省推导（nl-script 工具同款双锚约定）：类名 = 工程目录名
+        // 首字母大写 + "Script"，程序集名 = AssemblyName（= rtc 文件名，dll 同名）。
+        std::string dirStem = proj.filename().string();
+        if (!dirStem.empty())
+            dirStem[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(dirStem[0])));
+        // 程序集名 = rtc 文件名去掉 ".runtimeconfig.json"（19 字符）；stem() 只去
+        // ".json" 会残留 ".runtimeconfig"（BootCall -101 的教训）。
+        const std::string asmName = rtc.filename().string().substr(0, rtc.filename().string().size() - 19);
+        const std::string typeName = o.scriptType.empty()
+            ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
+        // World 绑定必须先于 loadScript：Entry（装载期）就会 FindByName，
+        // 未绑 World = EcsCode.NoWorld → Entry 返回非 0（M-GL4 实证教训）。
+        nl::script::ecsSetWorld(&world);
+        const auto lr2 = nl::script::ScriptHost::get().loadScript(
+            fs::absolute(dll).string(), typeName);
+        if (!lr2.ok) {
+            nl::core::log::error("script: loadScript failed: ", lr2.message);
+            return 1;
+        }
+        scriptLoaded = true;
+        nl::core::log::info("script: loaded ", dll.string(), " type=", typeName,
+                            " (host-level OnTick on logic frame)");
+    }
+    sceneConsole.registerCommand("game.script",
+        "script host status (loaded dll/type, tick enabled/count); requires --script",
+        [&](const std::vector<std::string>&) -> nl::core::console::CommandResult {
+            if (!scriptLoaded) return {false, "game.script: no script loaded (run with --script <projectDir>)"};
+            const auto& h = nl::script::ScriptHost::get();
+            char sbuf[256];
+            std::snprintf(sbuf, sizeof(sbuf),
+                          "script: %s type=%s tick=%s count=%llu",
+                          h.scriptDll().c_str(), h.scriptType().c_str(),
+                          h.tickEnabled() ? "on" : "off",
+                          static_cast<unsigned long long>(h.tickCount()));
+            return {true, std::string(sbuf)};
+        });
     for (const auto& line : o.consoleExecLines) {
         const auto r = sceneConsole.exec(line);
         if (r.ok()) {
@@ -1741,6 +1839,14 @@ int runScene(const Options& o) {
             // 倍速=game.timeScale、250ms 截断全在时钟内）。逻辑帧内：ECS tick +
             // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
             gameClock.tick(clockDtMs, [&](double, std::uint64_t) {
+                // M-GL4：脚本 OnTick 先于 world.tick（脚本 spawn/remove 排队，
+                // tick 开头 flush 落盘 = World「宿主 tick 边界动作」既有语义）。
+                // pause = callback 不触发 = 脚本同步冻结（M-GL2 同构）。
+                if (scriptLoaded) {
+                    const auto sr = nl::script::ScriptHost::get().scriptTick(kFixedDt);
+                    if (!sr.ok)
+                        nl::core::log::error("script: ", sr.message);
+                }
                 if (o.tickMode == "serial") {
                     world.tick(kFixedDt);
                 } else {
@@ -1866,6 +1972,29 @@ int runScene(const Options& o) {
                                 " scale=", gameClock.timeScale());
         }
 
+        // M-GL4 机器证据（捕获帧，口径 frame == o.frames 与 PNG 同迭代）：脚本实体
+        // 世界位置读回 + 宿主 tick 计数——verify.py 三重孪生（时钟 ticks 序列复推、
+        // 轨道公式、脚本态 t 与宿主 tickCount 相等性）。暂停用例里 ticks=0 且位置
+        // 停在场景初始态 = 「脚本随逻辑帧冻结」的数值证词。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) && scriptLoaded) {
+            const auto orb = world.findEntityByName("script-orb");
+            if (orb) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(orb->id);
+                if (t) {
+                    const auto p = t->getWorldPosition();
+                    char sbuf[200];
+                    std::snprintf(sbuf, sizeof(sbuf),
+                                  "script probe: ticks=%llu pos=(%.6f,%.6f,%.6f)",
+                                  static_cast<unsigned long long>(nl::script::ScriptHost::get().tickCount()),
+                                  p.x, p.y, p.z);
+                    nl::core::log::info(sbuf);
+                }
+            }
+            nl::core::log::info("script clock state: simTime=", gameClock.simTime(),
+                                " ticks=", gameClock.tickCount(),
+                                " paused=", gameClock.paused() ? 1 : 0);
+        }
+
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
@@ -1952,6 +2081,15 @@ int runScene(const Options& o) {
     if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
         nl::core::log::error("acceptance failed: device/error counters must be zero");
         failed = true;
+    }
+    // M-GL4 收尾（次序铁律）：先解绑 World（热重载窗口兜底口径，s7g 同源）→
+    // 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm（hostfxr context 收官）。
+    if (scriptLoaded) {
+        nl::script::ecsSetWorld(nullptr);
+        const auto ur = nl::script::ScriptHost::get().unloadScript();
+        if (!ur.ok)
+            nl::core::log::error("script: unloadScript failed: ", ur.message);
+        scriptVm.reset();
     }
     return failed ? 1 : 0;
 }
@@ -2043,7 +2181,10 @@ void printUsage() {
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
               << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
+              << "  viewer.exe --script <projectDir>   M-GL4: load script host (scene mode); host-level\n"
+              << "                                     OnTick driven by logic frame (--script-type/-bootstrap)\n"
               << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
+              << "  console: game.script (M-GL4: script host status)\n"
               << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"
               << "                                     (deterministic pause/timescale screenshot runs)\n"
               << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"

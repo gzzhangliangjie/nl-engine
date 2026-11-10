@@ -101,6 +101,12 @@ public:
     //                              void* data;                              // 偏移 16
     //                              std::int32_t size; }                     // 偏移 24
     //   BootUnload args = nullptr
+    //   BootTickPtr args = struct { const char* typeUtf8;               // 偏移 0
+    //                               const char* methodUtf8;             // 偏移 8
+    //                               void** outFn; }                     // 偏移 16
+    //     （M-GL4：从 collectible 正本解析 [签名 int(IntPtr,int)] 静态方法的本机
+    //      指针——不许 getEntryPoint 直拉脚本 dll，hostfxr 会装第二份进默认 ALC，
+    //      静态字段独立一套，M-GL4 实证）
     //
     // 卸载次序铁律（ScriptHost 编排，Vm 只做单步）：先解绑一切指向旧 ALC 的
     // C++ 侧引用（脚本注册命令 unregisterCommand——reverse P/Invoke thunk 在
@@ -121,6 +127,13 @@ public:
     // 卸载当前 collectible ALC 并做 weakref 排空校验：*fullyUnloaded=false 表示
     // Unload 已调但 GC 未收干净（code 9；继续跑 GC 可能最终收掉，判据从严）。
     Result scriptUnload(bool* fullyUnloaded);
+
+    // M-GL4：从当前 collectible 正本解析脚本静态方法本机指针（OnTick）。
+    // *outFn 指向 collectible ALC 内代码——unload/reload 前调用方必须先置空
+    // （指针生命周期铁律，ScriptHost 编排）。方法缺失 = code 8（调用方按
+    // 「可选契约」吞掉 = tick 空转）。
+    Result scriptTickFn(const std::string& typeName, const std::string& method,
+                        void** outFn);
 
 private:
     Vm();

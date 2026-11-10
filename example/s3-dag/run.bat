@@ -1,5 +1,5 @@
 @echo off
-REM M3.0 / s3-dag å¤çŽ°ï¼šå…¨é“¾æ ¡éªŒ + JSON å¯¼å‡º -> ç”»åˆ†å±‚ DAG ç»“æž„å›¾
+REM M3.0 / s3-dag ¸´ÏÖ£ºÈ«Á´Ð£Ñé + JSON µ¼³ö -> »­·Ö²ã DAG ½á¹¹Í¼
 cd /d "%~dp0..\.."
 build\dx12\nanite-tools.exe dag assets\meshlets\Suzanne --export build\showcase\runs\s3-dag-export.json || exit /b 1
 python tools\dag_preview.py build\showcase\runs\s3-dag-export.json example\s3-dag\dag-structure.png || exit /b 1
