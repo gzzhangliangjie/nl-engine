@@ -19,7 +19,13 @@
      伪装——utf-8 strict 可解码且含中文 = 存错了，转 GBK）。
 
 用法：python tools/check-bat-encoding.py [目录...]     # 缺省扫 example/ scripts/
+      python tools/check-bat-encoding.py --fix [目录...]  # LF-only 文件自动重 smudge 为 CRLF
 退出码：0 = 全绿；1 = 有违规（逐文件列原因）。regression.py preflight 每次调用。
+
+陈旧检出（2026-11-10 主树实锤）：`.gitattributes` eol 规则变更时 Git 不会自动
+重检出已有工作树文件——长寿命检出（主树）会留下旧 LF，index 里却是 LF 所以
+status 干净，只有本工具能抓到。--fix 对 LF-only 文件在磁盘上做 LF->CRLF 转换
+（纯工作树操作；index 本来就是 LF，git 零真实差异，幻影 M 用 `git add` 清）。
 """
 import sys
 from pathlib import Path
@@ -60,10 +66,24 @@ def check_file(path: Path):
     return problems
 
 
+def fix_lf_only(paths):
+    """LF-only bat 在磁盘上重 smudge 为 CRLF（陈旧检出的机械修复）。"""
+    fixed = 0
+    for path in paths:
+        data = path.read_bytes()
+        data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        path.write_bytes(data)
+        fixed += 1
+        print(f"[fix] {path} LF->CRLF 重 smudge 完成")
+    return fixed
+
+
 def main(argv):
-    roots = [Path(a) for a in argv[1:]] or [Path("example"), Path("scripts")]
+    do_fix = "--fix" in argv
+    roots = [Path(a) for a in argv[1:] if a != "--fix"] or [Path("example"), Path("scripts")]
     bad = 0
     checked = 0
+    lf_files = []
     for root in roots:
         if not root.is_dir():
             print(f"[skip] {root} 不存在")
@@ -79,6 +99,15 @@ def main(argv):
                 print(f"[FAIL] {path}")
                 for p in problems:
                     print(f"       - {p}")
+                if any("LF-only" in p for p in problems):
+                    lf_files.append(path)
+    if lf_files and not do_fix:
+        print(f"[hint] {len(lf_files)} 个 LF-only 文件可机械修复（陈旧检出/行尾笔误）：")
+        print("[hint]   python tools/check-bat-encoding.py --fix " + " ".join(str(r) for r in roots))
+    if do_fix and lf_files:
+        fixed = fix_lf_only(lf_files)
+        print(f"[hint] 已修复 {fixed} 个，复检：")
+        return main([a for a in argv if a != "--fix"] )
     print(f"bat encoding check: {checked} files, {bad} violations")
     return 1 if bad else 0
 

@@ -149,6 +149,7 @@
 3. **在途工作优先落盘**：会话中段要清理工作区时，正确顺序是先把在途修复 `git add` 到暂存或 `git stash push -- <修复文件>`，再清噪声；事后还原 stash 必须核对内容。
 4. **`git switch` / `git checkout <branch>` 同闸**：切分支前 `git status` 确认无未提交工作，或已妥善 stash/提交；禁止带脏工作区盲切。
 5. **危险操作后必须自证**：任何还原 / stash / 切分支动作执行后，立即重跑受影响面最小的验证（如单用例回归），确认预期内容仍在，才允许继续后续步骤。
+6. **行尾 / eol 规则变更必须当场体检（2026-11-10 固化，起因：主树 25 个 s 系 bat 陈旧 LF 检出）**：Git 在 `.gitattributes` 的 eol 规则变更时**不会自动重检出**已有工作树文件——index 是 LF、工作树也是 LF，status 干净，只有读原始字节的工具能抓到；长寿命检出（主树）永远比 wt 先踩。铁律：① 凡改 `.gitattributes` 的 eol/文本规则，**当场**跑 `git ls-files --eol` 审计（`i/lf + w/lf + attr eol=crlf` 交集 = 陈旧名单）并立即重 smudge，不留到下次回归才爆；② bat 门禁 FAIL 报 LF-only 时直接 `python tools/check-bat-encoding.py --fix` 机械修复（修复后 `git add` 清幻影 M，`git diff --cached` 必须为空才算干净）；③ 修复动作是纯工作树操作，index/提交零变化，**禁止**用「改完提交行尾 churn」的方式处理。
 
 ---
 
