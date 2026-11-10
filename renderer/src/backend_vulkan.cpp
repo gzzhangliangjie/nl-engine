@@ -313,10 +313,14 @@ public:
             scene_.pollCullTimer(nvrhiDevice_, hud);
             // M8.0：BLAS 构建耗时（init 一次性；resolve 后恒定值）。
             scene_.pollBlasTimer(nvrhiDevice_, hud);
+            // M8.1：TLAS 每帧 rebuild 耗时（每帧 begin/end，非确定性模式显示最近值）。
+            scene_.pollTlasTimer(nvrhiDevice_, hud);
             hud_.build(*hud);
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(nvrhiDevice_);
+        // M8.1：TLAS 探针 readback（--tlas-probe 才有数据；同样开列表前消费）。
+        scene_.pollTlasProbe(nvrhiDevice_);
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
         info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
@@ -325,11 +329,15 @@ public:
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
 
+        // Vulkan 帧列表 = 每帧新建局部句柄（NVRHI Vulkan 语义；见 createDevice 注释）。
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
         // M0.6：timer query 包住整帧 GPU 命令（clear + scene + hud）；
         // 找不到空闲 slot 时 begin 返回 false，本帧不计时、不报错。
         const bool gpuTiming = gpuTimer_.begin(cmd);
+        // M8.1：TLAS 每帧全量 rebuild + 探针 dispatch（进帧命令列表——§2.8 帧内
+        // 禁第二 cmd list，正好满足 0x87d 同列表纪律；BLAS 未就位时内部直接返回）。
+        scene_.buildTlasFrame(cmd, frame);
         cmd->clearTextureFloat(rhiTargets_[vulkanImageIndex_], nvrhi::TextureSubresourceSet(),
                                nvrhi::Color(color.r, color.g, color.b, color.a));
 
@@ -681,6 +689,9 @@ private:
         // 注意：Vulkan 的 semaphore 协调方法只在 raw vulkan::IDevice 上可用，
         // NVRHI 的 validation 包裹层不暴露它们，故这里直接用 raw device（Donut 同款做法）。
         nvrhiDevice_ = nvrhiDeviceHandle_;
+        // 注意：Vulkan 侧帧列表保持每帧新建（NVRHI Vulkan 的 scratch/upload 池生命
+        // 周期由队列侧引用跟踪管理，per-frame 模式全量回归实测绿；改成常驻复用反而
+        // 段错误——两后端列表复用语义不对称，M8.1 实测沉淀）。
         if (rtEnabled) {
             nl::core::log::info("rt extensions enabled: acceleration_structure",
                                 rtQuery ? "+ray_query" : "",

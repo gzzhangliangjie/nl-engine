@@ -2003,3 +2003,20 @@
 7. **cases.json version 卡必须带 tag 字段**：`exe_for` 无条件 `version["tag"]`（路径无 `{tag}` 占位也取）——s8.0 初卡漏 tag 直接 KeyError。
 
 **下一步**：M8.1 TLAS 每帧重建（拍板点 D-S8-1：S8-PLAN §5 建议每帧全量 rebuild（UE 口径），开工前需用户确认）；M8.2 Ray Query 调试射线闭环。BLAS 句柄/M8.0 资源已备 TLAS 实例引用（blasVB_/IB_ 列末态 = AccelStructBuildInput 永久态）。
+
+## M8.1：TLAS 每帧全量重建 + RayQuery 探针（master 主线 S8 第二步，2026-11-10，tag `s8-tlas`）
+
+**动作**：D-S8-1 拍板（每帧全量 rebuild，UE 口径；S8-PLAN §5 三处对照，用户开工即确认）→ `Scene::initTlas`（initBlas 成功链尾，top-level AS maxInstances=16 @ PreferFastTrace，createAccelStruct 失败不拦路）→ `buildTlasFrame` 进帧命令列表（§2.8 帧内禁第二 cmd list；每帧 CPU 组装 InstanceDesc + `buildTopLevelAccelStruct` 全量重建）→ `--tlas-spin` 固定帧序号绕 Y 2.5°/帧（transform 下帧生效证据，画面基线零扰动）→ `--tlas-probe` 懒建 `tlas_probe.cs` 管线（Slang RayQuery 固定射线 + 4B UAV→CopySource→readback 两帧窗口，`tlas probe: seq=N t=X` 日志；探针缓冲 keepInitialState=true 每列表自动回 UAV）→ 每帧构建耗时 GpuTimer 一次性 resolve（DX12 0.128ms / Vulkan 0.0415ms @ 1 实例）→ HUD `TLAS : 1 inst` 证据行（BLAS 行下，deterministic 不显示 ms）→ kStage S8.1 + shaderArtifactsSelfTest 补 material/tlas_probe 六产物 → `example/s8.1-tlas/`（tlas-hud + tlas-spin-probe 双后端四基线 + run.bat verify 四段式）+ cases.json s8.1 卡 → 42 张 HUD 基线重拍（kStage bump + TLAS 行插入；blas-hud 代表人工追因 diff 全限面板区后 `--force` 放行）→ S8-PLAN 勾选 + 本四栏 → 提交打 tag。
+
+**提交版本**：master 本收口 commit（tag `s8-tlas`）。
+
+**完成情况**：DX12/VULKAN 双后端 TLAS 每帧全量 rebuild 闭环（`tlas: per-frame rebuild active | instances=1` + 一次性 resolve + probe 22 条连续 t 值随旋转变化），NVRHI validation + DX12 debug layer 双开零输出；s8.1 回归 4/4 ALL GREEN（全 bytes）；全量回归见 build/regression-full-s81.md。
+
+**踩坑情况**
+1. **⚠️ 0x87D 第二坑：DX12 帧命令列表必须常驻复用（本轮核心教训）**：renderFrame 局部 `CommandListHandle` 每帧新建 → NVRHI DX12 的 DXR scratch manager 是列表对象成员 → 句柄析构连带销毁 AS build 的 scratch chunk（DEFAULT 堆 GPU 内存），ECL 飞行中 final-release → debug layer CORRUPTION **#921 OBJECT_DELETED_WHILE_STILL_IN_USE（仅 OutputDebugString 可见，InfoQueue 不落地）** → 后续帧 scratch 分配复用被释放页 → GPU 写入与飞行中 ECL 重叠 → 帧 3（首个复用 chunk 的 ECL）执行期 fail-fast exit 125/0x87D。失败包络：frames=2 过 / frames=3 必炸；NL_TLAS_MAX_BUILD=1 过 / ≥2 炸。修复 = `frameCmd_` 成员常驻（NVRHI 官方用法）。M8.0 的 init 列表同模式已埋雷，靠 initBlas 尾部 `waitForIdle()` 压住（一次性路径可忽略不计）。
+2. **排查工具沉淀：`tools/dbwin_capture.py`**（DBWIN 协议抓 OutputDebugString）——debug layer 执行期 CORRUPTION 的唯一取证通道；#921 现场一行定案。InfoQueue 只覆盖录制期，执行期消息别再从 InfoQueue 找。
+3. **两后端列表复用语义不对称**：DX12 帧列表常驻后全绿；Vulkan 同改常驻 24 帧段错误（NVRHI Vulkan 池生命周期队列侧自管）→ 回退 per-frame 新建，实测绿。此不对称落档防后人「顺手统一」。
+4. **LightingService 排除**：用户手动停服后帧 3 必炸依旧——秒退与环境无关，是确定性代码 bug（此前「秒退族」归因差点盖住它）。但停服本身仍值得（后台 3.5 分钟崩溃循环的噪音源已除）。
+5. **诊断脚手架纪律**：本轮动过 env 开关（NL_TLAS_MAX_BUILD/NL_NO_TLAS_TIMER/NL_TLAS_DOUBLE）+ 双缓冲实验位，收口前全部移除，不留死代码。
+
+**下一步**：M8.2 Ray Query 调试射线闭环（debugLines 进 3D 视口；t0=TLAS binding 已就位）。

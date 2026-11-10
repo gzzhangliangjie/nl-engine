@@ -92,6 +92,8 @@ struct Options {
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool pbrNaive   = false;  // pbr-direct：--pbr-naive 对照开关（跳过 sRGB->linear，验收证据用）
+    bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
+    bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
     float cutThresholdPx = 1.0f;  // M5.0/M5.1：cut 阈值 px（--cut-thr 设初值，HUD 滑条双向）
@@ -138,6 +140,9 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
+        // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
+        else if (a == "--tlas-spin") o.tlasSpin = true;
+        else if (a == "--tlas-probe") o.tlasProbe = true;
         else if (a == "--hud") { o.hudSet = true; o.hudEnabled = true; }
         else if (a == "--no-hud") { o.hudSet = true; o.hudEnabled = false; }
         else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
@@ -338,7 +343,7 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S7.2") != nullptr, "S7.2 stage reported");
+    check(std::strstr(st.stage, "S8.1") != nullptr, "S8.1 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -348,7 +353,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (36 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (60 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -778,6 +783,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.wireframe = wireframe;
         fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
+        fp.tlasSpin  = o.tlasSpin;              // M8.1：TLAS 实例 spin / 探针（BLAS 未就位时
+        fp.tlasProbe = o.tlasProbe;             // renderer 内部直接返回，其它模式零扰动）
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];

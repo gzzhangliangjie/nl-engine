@@ -216,6 +216,26 @@ public:
     bool blasReady() const { return blasReady_; }
     int  blasTriangleCount() const { return blasTriangleCount_; }
 
+    // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
+    // initTlas：BLAS 成功后建 TLAS（setTopLevelMaxInstances 预留容量；TLAS 尺寸
+    // NVRHI 自算，prebuild 查询可选不用）。设备不支持 RT 或 BLAS 未建时跳过不拦路。
+    bool initTlas(nvrhi::IDevice* device, std::string& outError);
+    // buildTlasFrame：每帧在**帧命令列表**上记录（§2.8 帧内禁第二 cmd list，正好
+    // 满足 0x87d 同列表纪律）。CPU 组装 rt::InstanceDesc 数组（S8-PLAN 拍板：
+    // 实例数个位数不值得 GPU 填充）→ buildTopLevelAccelStruct 全量 rebuild（无
+    // AllowUpdate）。frame.tlasSpin 时实例绕 Y 旋转（只改 TLAS，不碰光栅化）；
+    // frame.tlasProbe 时再记录 1 线程 RayQuery 探针 dispatch（hit t 读回日志）。
+    void buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame);
+    // TLAS rebuild 耗时轮询（每帧 begin/end，HUD 非确定性模式显示最近值）。
+    void pollTlasTimer(nvrhi::IDevice* device, HudFrame* hud);
+    // 探针 readback 轮询（两帧延迟窗口，同 pollCullStats 纪律；--tlas-probe 才有数据）。
+    void pollTlasProbe(nvrhi::IDevice* device);
+    bool tlasReady() const { return tlasReady_; }
+    int  tlasInstanceCount() const { return tlasInstanceCount_; }
+  private:
+    bool ensureTlasProbe(nvrhi::ICommandList* cmd);
+  public:
+
     // M4.2：轮询两帧前提交的剔除计数 readback（frame-in-flight=2 的延迟窗口，
     // mapBuffer 内部等 lastUseFence，正常零等待）。backend 在每帧开命令列表前调，
     // 结果经 visibleClusters()/clusterCount() 进 DeviceInfo → HUD / 日志。
@@ -589,6 +609,26 @@ private:
     GpuTimer                     blasTimer_;              // setLabel("blas")：init 一次性构建计时
     float                        blasBuildMs_ = 0.0f;     // 最近一次 resolve 的构建耗时（恒定值）
     int                          blasTriangleCount_ = 0;  // HUD 显示用（= fallback 三角数）
+
+    // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
+    bool                         tlasReady_ = false;      // initTlas 成功后置位
+    nvrhi::rt::AccelStructHandle tlas_;                   // top-level，容量 kMaxTlasInstances
+    static constexpr int         kMaxTlasInstances = 16;  // 预留容量（当前单实例）
+    GpuTimer                     tlasTimer_;              // setLabel("tlas")：每帧 rebuild 计时
+    float                        tlasBuildMs_ = 0.0f;     // 最近一次 resolve 的 rebuild 耗时
+    int                          tlasInstanceCount_ = 0;  // 当前帧实例数（单 mesh 场景 = 1）
+    std::uint32_t                tlasFrameIndex_ = 0;     // buildTlasFrame 自增（spin 角度相位）
+    // 探针管线（--tlas-probe 懒建，§2.7：每管线单一 BindingSet）
+    bool                         probeReady_ = false;
+    bool                         probeFailed_ = false;    // 懒建失败只报一次
+    nvrhi::ShaderHandle          csTlasProbe_;
+    nvrhi::BindingLayoutHandle   probeLayout_;
+    nvrhi::BindingSetHandle      probeSet_;
+    nvrhi::ComputePipelineHandle probePSO_;
+    nvrhi::BufferHandle          probeOut_;               // 4B hit t（UAV→CopySource 每帧转换）
+    nvrhi::BufferHandle          probeReadback_[2];       // 回读环形（两帧延迟，同 cull）
+    std::uint32_t                probeSubmitted_ = 0;
+    int                          probePolledSlot_ = -1;
 };
 
 } // namespace nl::renderer::detail

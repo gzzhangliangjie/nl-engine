@@ -13,8 +13,9 @@
 ## 当前进度（2026-11-10 05:10）
 - **主线 S0~S7 全收官（tag `s7-done`，commit `abe1acf`，全量 468/468 ALL GREEN）**：M7.2 多材质 = `.nmesh` 'NSUB' 尾段（v3 只加不改，材质 id=子网格序号随簇记录）+ GPUMaterial[4] 间接表 + NonUniformResourceIndex 选槽 + 传统直画 per-prim 批次化对照（model.slang 零改动）。A/B 终验 sil=0 / 99.991%≤2 / maxDelta 4。`milestone/s7-done` 分支留档。
 - **M8.0 BLAS 预建收官（tag `s8-blas`，2026-11-10）**：`Scene::initBlas`（hook initDag levels[0]+initCull；initHiz 委托）零拷贝吃 fallback 32B 交错 buffer（NVRHI 枚举名 `RGB32_FLOAT`）；**⚠️ 0x87d 铁律：AS build-input 上传+`setBufferState`+build 必须同命令列表**（跨列表 setPermanentBufferState 无物理 barrier，DX12 debug layer 执行期 fail-fast、录制期零消息）。Vulkan RT 扩展链已接。HUD `BLAS : NNN tri` 行只在 dag/hiz 模式（dag-top 走 initCluster 不触发）。`reshot-hud-stage.py --force`=人工追因后放行超签名重拍的合规通道。
+- **M8.1 TLAS 每帧重建收官（tag `s8-tlas`，2026-11-10）**：initTlas（maxInstances=16 @ PreferFastTrace）+ buildTlasFrame 帧列表内每帧全量 rebuild（D-S8-1 UE 口径，DX12 0.128ms / Vulkan 0.0415ms @ 1 实例）；`--tlas-spin`（帧序号驱动 2.5°/帧）+ `--tlas-probe`（RayQuery 固定射线 hit t 回读，`tlas probe: seq=N t=X`）；HUD `TLAS : 1 inst` 行。**⚠️ 0x87D 第二坑铁律：DX12 帧命令列表必须常驻复用（`frameCmd_` 成员）**——per-frame 局部句柄析构连带销毁列表的 DXR scratch manager，AS build scratch chunk（DEFAULT 堆）ECL 飞行中 final-release → debug layer CORRUPTION #921（**仅 OutputDebugString 可见、InfoQueue 不落地**，取证用 `tools/dbwin_capture.py` DBWIN 抓 ODS）→ 后续帧 scratch 复用被释放页 → 帧 3 fail-fast。Vulkan 帧列表保持 per-frame 新建（NVRHI Vulkan 池队列侧自管，改常驻反而段错误——两后端语义不对称，勿顺手统一）。initBlas 尾部 `waitForIdle()` 压住 init 列表同款雷（一次性路径）。
 - 已 merge 回 master：physics（M-P0~P4+M-J5c）、audio、ECS E1a+E1b、job-system、console/material-graph/action-system、pbr-direct、game-loop GL0~GL3。E1/E1b gate 已解除；jobsync P1 已解决（launchAll 原语）。
-- 下一站：**M8.1 TLAS 每帧重建（D-S8-1 待用户拍板：S8-PLAN §5 建议每帧全量 rebuild，UE 口径）→ M8.2 Ray Query 闭环**；卡上登记 M8.1 实例 buffer 沿用同列表状态转换纪律。
+- 下一站：**M8.2 Ray Query 调试射线闭环**（t0=TLAS binding 已就位，debugLines 进 3D 视口）。
 - UE 差异台账 `docs/s5/UE-DIFFS.md`（D1~D18）随手追加必须落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 的用例全重拍（`tools/reshot-hud-stage.py` 通用安全闸，超 527px 签名必须追因禁强刷——追因过了才许 `--force`）。cases.json：version 卡必须带 tag 字段；text-only（无 {out}）viewer 不退出，log 断言卡一律 pair 小图+expectLog 双断言。
 
 ## 渲染 / HUD 关键约定（详 `docs/SHADER-CONVENTIONS.md`）

@@ -88,11 +88,16 @@ S8 用到的签名（行号为 nvrhi.h 实测）：
 
 ## M8.1 TLAS 每帧重建（1~2 天）
 
-- [ ] `rt::AccelStructDesc.setTopLevelMaxInstances(场景实例上限)`；每帧填 `InstanceDesc` 数组（transform + setBLAS）→ `buildTopLevelAccelStruct` 全量 rebuild（拍板点 D-S8-1 建议）
-- [ ] 先支持静态场景（单实例也行），动态 transform 下帧生效验证
-- [ ] TLAS 绑进 §2.7 单一 BindingSet（`RayTracingAccelStruct` slot）
+- [x] `rt::AccelStructDesc.setTopLevelMaxInstances(场景实例上限)`；每帧填 `InstanceDesc` 数组（transform + setBLAS）→ `buildTopLevelAccelStruct` 全量 rebuild（拍板点 D-S8-1 建议）
+- [x] 先支持静态场景（单实例也行），动态 transform 下帧生效验证
+- [x] TLAS 绑进 §2.7 单一 BindingSet（`RayTracingAccelStruct` slot）
 
 **自检**：移动一个实例的 transform，下帧射线结果跟随变化。tag：`s8-tlas`。
+
+**实测踩坑（2026-11-10）**：
+1. **⚠️ 0x87D 第二坑：DX12 帧命令列表必须常驻复用**——renderFrame 局部句柄每帧新建时，句柄析构连带销毁该列表 NVRHI DX12 的 DXR scratch manager，AS build 的 scratch chunk（DEFAULT 堆）在 ECL 飞行中被 final-release（debug layer CORRUPTION #921，**仅 OutputDebugString 可见、InfoQueue 不落地**，DBWIN 协议抓的现场）；后续帧新 scratch 分配复用被释放页 → GPU 写入与飞行中 ECL 重叠 → 帧 3（首个复用 chunk 的 ECL）执行期 fail-fast exit 125/0x87D。M8.0 就埋着这颗雷（init 列表同模式，靠 waitForIdle 压住），帧路径无 AS build 时不会引爆。修复 = `frameCmd_` 成员创建一次每帧 open/close/execute 复用。Vulkan 侧 NVRHI 队列引用跟踪自管池生命周期，保持 per-frame 新建（改常驻反而段错误——两后端列表复用语义不对称）。
+2. **排查工具沉淀**：`tools/dbwin_capture.py`（DBWIN 协议抓 OutputDebugString，debug layer 执行期 CORRUPTION 的唯一取证通道）。
+3. 每帧 rebuild 实测开销可忽略（1 实例：DX12 0.128ms / Vulkan 0.0415ms），TLAS 对象单实例全量重建（update 模式待真有性能需求再上，登记 UE-DIFFS）。
 
 ## M8.2 Ray Query 调试射线闭环（2 天）
 

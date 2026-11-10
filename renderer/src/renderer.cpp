@@ -14,7 +14,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S8.0 ray tracing BLAS prebuild from fallback mesh";
+    "S8.1 ray tracing TLAS per-frame rebuild + RayQuery probe";
 
 // M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
 // 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
@@ -45,8 +45,9 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 24 个 × spv/dxil = 48：model 16（8 入口）+ cull.cs/dag.cs 4 +
-// hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+ visbuf 8（M7.0）。
+// 产物名共 30 个 × spv/dxil = 60：model 16（8 入口）+ cull.cs/dag.cs 4 +
+// hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+ visbuf 8（M7.0）+
+// material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
     {"model.vs", true}, {"model.vs", false},
@@ -75,6 +76,12 @@ static const Artifact kArtifacts[] = {
     {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
     {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
     {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
+    // M7.1：material.slang 双入口 × 双目标 = 4（M8.1 补登——此前清单漏收，
+    // selftest 只查列出项所以一直绿；kStage bump 纪律同理，新入口必须登记）。
+    {"material.vsmatresolve", true}, {"material.vsmatresolve", false},
+    {"material.psmatresolve", true}, {"material.psmatresolve", false},
+    // M8.1：tlas_probe.slang 单 compute 入口（RayQuery 探针）× 双目标 = 2。
+    {"tlas_probe.cs", true}, {"tlas_probe.cs", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

@@ -1884,16 +1884,30 @@ bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
     cmd->setPermanentBufferState(blasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
     cmd->close();
     device->executeCommandList(cmd);
+    // ⚠️ 0x87d 族第二坑（M8.1 实测）：NVRHI DX12 的 DXR scratch manager 是命令列表
+    // 对象的成员，AS build 的 scratch chunk（DEFAULT 堆 GPU 内存）随列表句柄析构
+    // 而 final-release。若此刻 build ECL 还在飞行，debug layer 记 CORRUPTION #921
+    // （OBJECT_DELETED_WHILE_STILL_IN_USE，OutputDebugString 才可见、InfoQueue 不
+    // 落地）；之后帧内新 build 分配 scratch 时分配器复用该页 → GPU 写入与飞行中
+    // ECL 重叠 → 帧 3（首个复用 chunk 的 ECL）执行期 fail-fast、exit 125。M8.0 就
+    // 埋着这颗雷，只因当时帧路径无 AS build 未引爆。init 一次性路径 CPU 等待可
+    // 忽略，不违反 S8「不逐帧等待」底线。
+    device->waitForIdle();
 
     blasReady_ = true;
     blasTriangleCount_ = indexCount / 3;
     nl::core::log::info("blas built: ", assetName, " | vertices=", vertexCount,
                         " triangles=", blasTriangleCount_, " (build ms via GPU timer)");
+
+    // M8.1：BLAS 就位后建 TLAS（每帧全量 rebuild 的实例引用目标）。失败不拦路，
+    // 与 BLAS skip 同口径（设备不支持 RT 的机器渲染照常）。
+    std::string tlasErr;
+    if (!initTlas(device, tlasErr)) { outError = tlasErr; return false; }
     return true;
 }
 
 void Scene::pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
-    if (!blasReady_ || !hud) return;
+    if (!blasReady_ || !hud || !device) return;
     // 与 pollCullTimer 同纪律：必须在 hud_.build() 之前调用。一次性构建：resolve
     // 一次后 blasBuildMs_ 恒定。deterministic 只挡 HUD 写回（截图基线稳定），
     // resolve 本身照跑——GpuTimer 的 resolvedOnce_ 日志在截图 run 的 log 里也落
@@ -1905,6 +1919,185 @@ void Scene::pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
     }
     hud->blasTriangleCount = blasTriangleCount_;
     hud->blasTimingAvailable = blasTimer_.available();
+}
+
+// ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（S8-PLAN M8.1；D-S8-1 拍板 = UE 口径）----
+// 三处口径：UE FRayTracingScene::Build 每帧无条件 rebuild（RayTracingScene.cpp，
+// 无 dirty/update 分支）；Carrot update+冷却（留作升级项）；bevy 双缓冲 TLAS。
+// 实例填充拍板 = CPU 组装 rt::InstanceDesc 数组 + buildTopLevelAccelStruct（CPU
+// 变体，NVRHI 内部管 staging 上传；S8-PLAN 预研 §1 签名表）。
+bool Scene::initTlas(nvrhi::IDevice* device, std::string& outError) {
+    // 现阶段 TLAS 所有失败路径都走 skip 不拦路（outError 留给未来硬错误：如
+    // TLAS 容量超限类几何错误），参数保留签名对称性。
+    (void)outError;
+    if (tlasReady_) return true;
+    if (!blasReady_ || !blas_) {
+        // BLAS 未建（无 fallback 资产 / 无 RT 设备）：TLAS 无引用目标，跳过不拦路。
+        nl::core::log::info("tlas: no BLAS available — skipped (S8 TLAS needs a BLAS)");
+        return true;
+    }
+    tlasTimer_.setLabel("tlas");
+    nvrhi::rt::AccelStructDesc tlasDesc;
+    tlasDesc.setTopLevelMaxInstances(kMaxTlasInstances);   // isTopLevel = true 随置位
+    // 每帧全量 rebuild（UE 口径）→ 不带 AllowUpdate/PerformUpdate；PreferFastTrace
+    // 与 BLAS 同口径（实例数个位数，rebuild 开销可忽略——M8.1 实测见 HUD/日志）。
+    tlasDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    tlasDesc.setDebugName("TlasPerFrame");
+    tlas_ = device->createAccelStruct(tlasDesc);
+    if (!tlas_) {
+        nl::core::log::warn("tlas: createAccelStruct failed — ray tracing unsupported? TLAS skipped");
+        return true;
+    }
+    tlasReady_ = true;
+    nl::core::log::info("tlas created: maxInstances=", kMaxTlasInstances,
+                        " | per-frame full rebuild (UE D-S8-1)");
+    return true;
+}
+
+void Scene::buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame) {
+    if (!tlasReady_ || !blasReady_) return;
+
+    // CPU 组装实例（当前单 mesh 场景 = 1 实例）。--tlas-spin 时绕 Y 每帧转
+    // 2.5°：只改 TLAS 实例 transform，光栅化路径照常（画面基线零扰动）；固定
+    // 帧序号驱动 → 截图模式天然确定（同一帧序号同一角度）。
+    nvrhi::rt::InstanceDesc inst;
+    if (frame.tlasSpin) {
+        const float angleRad = static_cast<float>(tlasFrameIndex_) * 2.5f * 3.14159265f / 180.0f;
+        const float c = std::cos(angleRad), s = std::sin(angleRad);
+        const float tf[12] = { c, 0.f, s, 0.f,
+                               0.f, 1.f, 0.f, 0.f,
+                              -s, 0.f, c, 0.f };
+        inst.setTransform(tf);
+    } // else：保持 InstanceDesc ctor 的 identity transform（静态场景语义）
+    inst.setInstanceID(0);
+    inst.setInstanceMask(0xFF);
+    inst.setInstanceContributionToHitGroupIndex(0);
+    inst.setBLAS(blas_);   // AccelStructHandle 隐式转 IAccelStruct*
+
+    // 每帧 rebuild + 计时（帧命令列表 = §2.8 帧内禁第二 cmd list；BLAS build-input
+    // 在 init 列表已置永久态 AccelStructBuildInput，TLAS build 只读其 device
+    // address，无需再次状态转换）。timer 4 槽环形 > frame-in-flight=2，正常不缺槽。
+    if (tlasTimer_.ensure(cmd->getDevice())) tlasTimer_.begin(cmd);
+    cmd->buildTopLevelAccelStruct(tlas_, &inst, 1,
+                                  nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    tlasTimer_.end(cmd);
+    tlasInstanceCount_ = 1;
+    if (tlasFrameIndex_ == 0)
+        nl::core::log::info("tlas: per-frame rebuild active | instances=1");
+    tlasFrameIndex_++;
+
+    // ---- 探针（--tlas-probe）：TLAS build 之后 dispatch，M8.1 自检的机器可读证据。
+    // 懒建（首次 probe 帧才建管线/缓冲，§2.7 每管线单一 BindingSet）。
+    if (frame.tlasProbe) {
+        if (!probeReady_ && !probeFailed_) ensureTlasProbe(cmd);
+        if (probeReady_) {
+            // probeOut_：UAV 写 → CopySource 拷回 → 下帧 UAV（NVRHI 状态跟踪插转换；
+            // 首帧 beginTracking 钉起点，之后靠跟踪动态晋升，visibleList_ 同口径）。
+            cmd->setBufferState(probeOut_, nvrhi::ResourceStates::UnorderedAccess);
+            nvrhi::ComputeState cstate;
+            cstate.setPipeline(probePSO_).addBindingSet(probeSet_);
+            cmd->setComputeState(cstate);
+            cmd->dispatch(1, 1, 1);
+            cmd->setBufferState(probeOut_, nvrhi::ResourceStates::CopySource);
+            const std::uint32_t slot = probeSubmitted_ & 1u;
+            cmd->copyBuffer(probeReadback_[slot], 0, probeOut_, 0, sizeof(std::uint32_t));
+            probeSubmitted_++;
+        }
+    }
+}
+
+// 探针管线懒建：tlas_probe.cs.{spv,dxil}（CMake _ENTRIES_TLAS_PROBE）+ 单一
+// BindingSet（t0 = TLAS + u0 = 4B hit t）。失败置 probeFailed_ 只报一次（不拦路）。
+bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
+    nvrhi::IDevice* device = cmd->getDevice();
+    if (probeReady_ || probeFailed_) return probeReady_;
+    std::vector<std::uint8_t> csBlob;
+    const std::string path = std::string(NL_SHADER_DIR) + "/tlas_probe.cs." + shaderSuffix_;
+    if (!readFileBytes(path.c_str(), csBlob)) {
+        nl::core::log::warn("tlas probe: failed to load shader from ", path, " — probe disabled");
+        probeFailed_ = true;
+        return false;
+    }
+    nvrhi::ShaderDesc csDesc;
+    csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");   // §2.4 两阶段规则
+    csTlasProbe_ = device->createShader(csDesc, csBlob.data(), csBlob.size());
+
+    nvrhi::BufferDesc outDesc;
+    outDesc.byteSize = sizeof(std::uint32_t);
+    outDesc.structStride = sizeof(std::uint32_t);
+    outDesc.canHaveUAVs = true;
+    outDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+    outDesc.keepInitialState = true;   // 跨列表跟踪不持久（per-list），每帧自动回 UAV
+    outDesc.debugName = "TlasProbeOut";
+    probeOut_ = device->createBuffer(outDesc);
+    for (auto& rb : probeReadback_) {
+        nvrhi::BufferDesc rDesc;
+        rDesc.byteSize = sizeof(std::uint32_t);
+        rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        rDesc.debugName = "TlasProbeReadback";
+        rb = device->createBuffer(rDesc);
+    }
+    if (!csTlasProbe_ || !probeOut_ || !probeReadback_[0] || !probeReadback_[1]) {
+        nl::core::log::warn("tlas probe: resource creation failed — probe disabled");
+        probeFailed_ = true;
+        return false;
+    }
+    // probeOut_ 用 initialState+keepInitialState 口径（实测：NVRHI 状态跟踪表是
+    // 每命令列表独立的，跨列表不持久——只设 initialState 不跟踪、beginTracking
+    // 也只管当前列表；每帧复用的缓冲必须 keepInitialState=true，每帧列表自动回
+    // 初态，indirectArgs_ 同款纪律）。帧内 UAV → CopySource 由 setBufferState
+    // 显式转换（0x87d 同列表纪律），列末自动转回 UAV。readback 缓冲 cpuAccess
+    // Read 不做状态检查（requireBufferState 直接 return）。
+    nvrhi::BindingLayoutDesc pLayout;
+    pLayout.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
+    probeLayout_ = device->createBindingLayout(pLayout);
+    nvrhi::BindingSetDesc pSet;
+    pSet.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(0, tlas_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, probeOut_));
+    probeSet_ = device->createBindingSet(pSet, probeLayout_);
+    nvrhi::ComputePipelineDesc cpDesc;
+    cpDesc.setComputeShader(csTlasProbe_).addBindingLayout(probeLayout_);
+    probePSO_ = device->createComputePipeline(cpDesc);
+    if (!probeLayout_ || !probeSet_ || !probePSO_) {
+        nl::core::log::warn("tlas probe: pipeline/binding creation failed — probe disabled");
+        probeFailed_ = true;
+        return false;
+    }
+    probeReady_ = true;
+    nl::core::log::info("tlas probe: pipeline ready (RayQuery fixed ray, hit t readback)");
+    return true;
+}
+
+void Scene::pollTlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
+    if (!tlasReady_ || !hud) return;
+    // 每帧 rebuild 计时：poll 取最近完成帧的 resolve（1~2 帧延迟，GpuTimer 环形）。
+    // deterministic 只挡 HUD 写回；首帧 resolve 落一条 resolvedOnce_ 日志作证据。
+    if (tlasTimer_.ensure(device)) {
+        float ms = 0.0f;
+        if (tlasTimer_.poll(ms)) tlasBuildMs_ = ms;
+        if (!hud->deterministic && tlasBuildMs_ > 0.0f) hud->tlasMs = tlasBuildMs_;
+        hud->tlasTimingAvailable = true;
+    }
+    hud->tlasInstanceCount = tlasInstanceCount_;
+}
+
+void Scene::pollTlasProbe(nvrhi::IDevice* device) {
+    if (!probeReady_ || probeSubmitted_ < 2) return;      // 两帧延迟窗口未填满
+    const std::uint32_t ready = probeSubmitted_ - 2;
+    if (probePolledSlot_ >= 0 && static_cast<std::uint32_t>(probePolledSlot_) >= ready) return;
+    const std::uint32_t slot = ready & 1u;
+    void* p = device->mapBuffer(probeReadback_[slot], nvrhi::CpuAccessMode::Read);
+    if (!p) return;
+    float t = 0.0f;
+    std::memcpy(&t, p, sizeof(float));
+    device->unmapBuffer(probeReadback_[slot]);
+    probePolledSlot_ = static_cast<int>(ready);
+    if (t < 0.0f)
+        nl::core::log::info("tlas probe: seq=", ready, " t=miss (no hit)");
+    else
+        nl::core::log::info("tlas probe: seq=", ready, " t=", t);
 }
 
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
@@ -4285,6 +4478,23 @@ void Scene::drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
 }
 
 void Scene::shutdown() {
+    // M8.1：TLAS 资源（AS 句柄 + 探针管线，device 存活期释放）。
+    tlasReady_ = false;
+    tlasInstanceCount_ = 0;
+    tlasBuildMs_ = 0.0f;
+    tlasFrameIndex_ = 0;
+    tlasTimer_.shutdown();
+    tlas_ = nullptr;
+    probeReady_ = false;
+    probeFailed_ = false;
+    probeSubmitted_ = 0;
+    probePolledSlot_ = -1;
+    csTlasProbe_ = nullptr;
+    probeLayout_ = nullptr;
+    probeSet_ = nullptr;
+    probePSO_ = nullptr;
+    probeOut_ = nullptr;
+    for (auto& rb : probeReadback_) rb = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     blasReady_ = false;
     blasTriangleCount_ = 0;

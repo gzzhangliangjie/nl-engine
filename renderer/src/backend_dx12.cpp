@@ -137,6 +137,10 @@ public:
         if (!rawDevice_) { outError = "nvrhi::d3d12::createDevice returned null"; return false; }
         device_ = nvrhi::validation::createValidationLayer(rawDevice_);
 
+        // M8.1：帧命令列表常驻（创建一次，每帧 open/close/execute 复用）。
+        frameCmd_ = device_->createCommandList();
+        if (!frameCmd_) { outError = "createCommandList for frame recording failed"; return false; }
+
         // frame-in-flight=2 的 fence：每帧提交后给当前 swapchain slot 记一个值，
         // 下一帧轮到同 slot 前先等它。删掉 renderFrame 里的等待 = CPU 在 GPU 仍持有该
         // backbuffer 时又画 → 同步报错（S0-PLAN 的校验点）。
@@ -383,11 +387,15 @@ public:
             scene_.pollCullTimer(device_, hud);
             // M8.0：BLAS 构建耗时（init 一次性；resolve 后恒定值）。
             scene_.pollBlasTimer(device_, hud);
+            // M8.1：TLAS 每帧 rebuild 耗时（每帧 begin/end，非确定性模式显示最近值）。
+            scene_.pollTlasTimer(device_, hud);
             // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
             hud_.build(*hud);
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(device_);
+        // M8.1：TLAS 探针 readback（--tlas-probe 才有数据；同样开列表前消费）。
+        scene_.pollTlasProbe(device_);
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
         info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
@@ -396,11 +404,17 @@ public:
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
 
-        nvrhi::CommandListHandle cmd = device_->createCommandList();
+        // M8.1：帧列表常驻复用（frameCmd_ 成员；每帧列表句柄析构会连带销毁 DXR
+        // scratch manager 的 chunk——AS build ECL 在飞行中就被 final-release，
+        // debug layer CORRUPTION #921 → 后续帧 fail-fast 0x87D，见成员声明注释）。
+        nvrhi::ICommandList* cmd = frameCmd_;
         cmd->open();
         // M0.6：timer query 包住整帧 GPU 命令（clear + scene + hud）；
         // 找不到空闲 slot 时 begin 返回 false，本帧不计时、不报错。
         const bool gpuTiming = gpuTimer_.begin(cmd);
+        // M8.1：TLAS 每帧全量 rebuild + 探针 dispatch（进帧命令列表——§2.8 帧内
+        // 禁第二 cmd list，正好满足 0x87d 同列表纪律；BLAS 未就位时内部直接返回）。
+        scene_.buildTlasFrame(cmd, frame);
         cmd->clearTextureFloat(rhiTargets_[index], nvrhi::TextureSubresourceSet(),
                                nvrhi::Color(color.r, color.g, color.b, color.a));
 
@@ -441,7 +455,7 @@ public:
         // M0.6：结束整帧计时（clear + scene + hud 都已记录）。
         if (gpuTiming) gpuTimer_.end(cmd);
         cmd->close();
-        device_->executeCommandList(cmd);
+        device_->executeCommandList(frameCmd_);
 
         // ---- 给这个 slot 记一个 fence 值（提交之后）----
         if (fence_) {
@@ -678,6 +692,13 @@ private:
     nvrhi::DeviceHandle rawDevice_;
     nvrhi::DeviceHandle device_;
     std::vector<nvrhi::TextureHandle> rhiTargets_;
+
+    // M8.1：帧命令列表常驻复用（NVRHI 官方用法：一个提交线程一个列表跟踪器）。
+    // ⚠️ 不能每帧新建——局部列表句柄析构时其 DXR scratch manager 随之销毁，AS build
+    // 的 scratch chunk（DEFAULT 堆）在 ECL 飞行中被 final-release → debug layer
+    // CORRUPTION #921（仅 OutputDebugString 可见）→ 后续帧 scratch 复用被释放页 →
+    // 执行期 fail-fast 0x87D（M8.1 帧三必炸的根因，DBWIN 抓的现场）。
+    nvrhi::CommandListHandle frameCmd_;
 
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;

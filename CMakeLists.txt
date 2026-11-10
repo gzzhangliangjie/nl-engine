@@ -318,12 +318,17 @@ set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.s
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
 set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "visbuf.vsvisviz" "visbuf.psvisviz"
-                    "material.vsmatresolve" "material.psmatresolve")
+                    "material.vsmatresolve" "material.psmatresolve"
+                    "tlas_probe.cs")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
                  "csHizDown|cs|compute" "csHizTop|cstop|compute"
                  "vsHizViz|vshizviz|vertex" "psHizViz|pshizviz|fragment")
+# M8.1：tlas_probe.slang 单 compute 入口（TLAS 闭环探针：Slang RayQuery 固定射线，
+# hit t 写回 4B 读回日志——M8.1 自检「transform 下帧生效」的机器可读证据；
+# 视觉调试射线留 M8.2）。Inline ray query DXIL 要 SM6.5+（进 _SM66_ARTIFACTS）。
+set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -338,6 +343,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_VISBUF}")
     elseif(_SRC_NAME STREQUAL "material")
         set(_ENTRIES "${_ENTRIES_MATERIAL}")
+    elseif(_SRC_NAME STREQUAL "tlas_probe")
+        set(_ENTRIES "${_ENTRIES_TLAS_PROBE}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()

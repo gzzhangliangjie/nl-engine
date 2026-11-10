@@ -283,6 +283,22 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::TextUnformatted(blasLine);
     }
+    // M8.1（S8.1）：TLAS 每帧 rebuild 证据行（跟 BLAS 行同门控：dag/hiz 模式 +
+    // v3 lod0 资产才占位，其它模式 tlasInstanceCount==0 一像素不动）。
+    // deterministic 截图不显示 ms（基线稳定）；真实 rebuild 耗时看
+    // 「gpu timer resolved [tlas]」日志行。
+    if (frame.tlasInstanceCount > 0) {
+        char tlasLine[96];
+        if (frame.tlasTimingAvailable && !frame.deterministic && frame.tlasMs > 0.0f) {
+            std::snprintf(tlasLine, sizeof(tlasLine),
+                          "TLAS     : %d inst  rebuild %.2f ms",
+                          frame.tlasInstanceCount, frame.tlasMs);
+        } else {
+            std::snprintf(tlasLine, sizeof(tlasLine), "TLAS     : %d inst",
+                          frame.tlasInstanceCount);
+        }
+        ImGui::TextUnformatted(tlasLine);
+    }
     // M6.2：Hi-Z 专属区**上移**到 mode/model 行之后、FPS 行之前——960x540 画布
     // 面板高度被 min(cap, H-28)=512 钉死，原位置（frustum/cull GPU 行之后）会让
     // 开关与 occl 行掉进滚动区截断，验收证据不可见。只影响 hiz 模式布局（其它
@@ -571,6 +587,8 @@ bool hudSelfTest() {
     if (f.visibleTriangles != -1) return false;
     // M8.0：BLAS 通道缺省全零（非 dag/hiz 模式 HUD 布局一像素不动的保证）。
     if (f.blasTriangleCount != 0 || f.blasMs != 0.0f || f.blasTimingAvailable) return false;
+    // M8.1：TLAS 通道缺省全零（同上）。
+    if (f.tlasInstanceCount != 0 || f.tlasMs != 0.0f || f.tlasTimingAvailable) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     // M-C1：控制台通道缺省全关（HUD 关掉控制台 = 历史 HUD 基线一像素不动的保证）。
     if (f.consoleOpen || f.consoleTab || f.wantCaptureKeyboard) return false;

@@ -5922,6 +5922,88 @@
     }
    ],
    "tag": "s8-blas"
+  },
+  {
+   "id": "s8.1",
+   "label": "S8.1",
+   "name": "TLAS 每帧全量重建 + RayQuery 探针（M8.1）",
+   "date": "2026-11-10",
+   "tag": "s8-tlas",
+   "summary": "M8.1（S8 第二步，D-S8-1 已拍板：每帧全量 rebuild，UE 口径）：initBlas 成功后 initTlas 建 top-level AS（maxInstances=16，PreferFastTrace），buildTlasFrame 在帧命令列表内每帧 CPU 组装实例 + buildTopLevelAccelStruct 全量重建（实例 buffer 沿用 M8.0 同列表状态转换纪律）。--tlas-spin 固定帧序号绕 Y 每帧转 2.5°（transform 下帧生效的可见证据）；--tlas-probe 懒建 tlas_probe.cs 管线（RayQuery 固定射线打重建后的 TLAS，hit t 经 4B UAV→CopySource→readback 两帧窗口回读，seq=N t=X 日志）。每帧构建耗时 GpuTimer 一次性 resolve（DX12 0.128ms / Vulkan 0.0415ms，1 实例）+ HUD 证据行 'TLAS : 1 inst'（deterministic 不显示 ms）。**M8.1 核心教训（0x87D 第二坑）**：DX12 帧命令列表原为 renderFrame 局部句柄每帧新建——NVRHI DX12 的 DXR scratch manager 是列表对象成员，句柄析构连带销毁 AS build 的 scratch chunk（DEFAULT 堆），ECL 飞行中 final-release → debug layer CORRUPTION #921（仅 OutputDebugString 可见，InfoQueue 不落地）→ 后续帧 scratch 分配复用被释放页 → GPU 写入与飞行中 ECL 重叠 → 帧 3 复用 chunk 的 ECL 执行期 fail-fast exit 125/0x87D。修复 = DX12 帧列表改常驻成员（NVRHI 官方用法：一个提交线程一个列表）；Vulkan 侧 NVRHI 队列引用跟踪自管池生命周期，保持 per-frame 新建（改常驻反而段错误，两后端语义不对称实测沉淀）。LightingService 崩溃循环与本 bug 无关（停服后必炸依旧），但已由用户手动停用。",
+   "acceptance": [
+    "TLAS 每帧全量 rebuild 跑通双后端：'tlas: per-frame rebuild active | instances=1' + 一次性 'gpu timer resolved [tlas]' 日志（DX12 0.128ms / Vulkan 0.0415ms 量级），NVRHI 校验层 + DX12 debug layer 零输出，deviceErrors=0",
+    "--tlas-spin --tlas-probe 24 帧：'tlas probe: seq=N t=X' 日志连续产出，t 值随实例旋转变化（transform 下帧生效的机器可读证据）",
+    "HUD 证据行 'TLAS : 1 inst'（BLAS 行下；deterministic 不显示 ms；非 dag/hiz 模式零像素扰动）",
+    "42 张 HUD 基线重拍后回归全过（kStage S8.1 bump + TLAS 行插入，diff 全限面板区，人工追因 blas-hud 代表后 --force 放行）",
+    "example/s8.1-tlas 归位（tlas-hud + tlas-spin-probe 双后端基线 + run.bat verify 全绿）+ cases.json s8.1 卡"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "tlas-hud",
+     "name": "TLAS 每帧重建 HUD 证据行（hiz 模式 Suzanne）",
+     "kind": "pair",
+     "note": "initHiz→initDag→initBlas→initTlas 链：HUD model 行下 BLAS : 104 tri + TLAS : 1 inst 两行证据。GPU timer resolve 日志在完整 log（deterministic 截图刻意不显示 ms）。",
+     "baselines": {
+      "dx12": "example/s8.1-tlas/tlas-hud-dx12.png",
+      "vulkan": "example/s8.1-tlas/tlas-hud-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode hiz --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s8.1-tlas/run.bat verify"
+    },
+    {
+     "id": "tlas-spin-probe",
+     "name": "spin+probe：重建 transform 下帧生效 + RayQuery 回读（pair 小图）",
+     "kind": "pair",
+     "note": "--tlas-spin 每帧绕 Y 转 2.5° + --tlas-probe RayQuery 固定射线回读 hit t：'tlas probe: seq=N t=X' 连续产出且 t 随旋转变化 = 每帧全量 rebuild 真实生效的机器可读证据。expectLog 子串从实测 log 复制（禁手写纪律）。",
+     "baselines": {
+      "dx12": "example/s8.1-tlas/tlas-spin-probe-dx12.png",
+      "vulkan": "example/s8.1-tlas/tlas-spin-probe-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "hiz",
+      "--hud",
+      "--tlas-spin",
+      "--tlas-probe",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "24",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "tlas probe: seq",
+     "command": "viewer.exe --mode hiz --hud --tlas-spin --tlas-probe --screenshot <out.png> --frames 24 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/s8.1-tlas/run.bat verify"
+    }
+   ]
   }
  ]
 }

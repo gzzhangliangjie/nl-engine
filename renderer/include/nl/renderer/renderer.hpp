@@ -72,6 +72,13 @@ struct FrameParams {
     // 可验证——S6-PLAN 底线「可整体开关的独立层」，UE r.Nanite.Culling.HZB 同定位）。
     bool  hizEnable   = true;
 
+    // M8.1：TLAS 实例每帧 spin（--tlas-spin）与 RayQuery 探针开关（--tlas-probe）。
+    // spin 只改 TLAS 实例 transform，不碰光栅化路径（画面基线不受影响）；
+    // probe = 每帧 1 线程 RayQuery 固定射线，hit t 读回日志（transform 下帧生效
+    // 的机器可读证据）。缺省全关 → 既有路径零扰动。
+    bool  tlasSpin    = false;
+    bool  tlasProbe   = false;
+
     // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
     // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
     //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
@@ -168,6 +175,13 @@ struct HudFrame {
     int   blasTriangleCount   = 0;
     float blasMs              = 0.0f;
     bool  blasTimingAvailable = false;
+    // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
+    // tlasInstanceCount>0 = TLAS 已建并每帧 rebuild（跟 BLAS 同模式门控）；
+    // tlasMs 为最近一帧 rebuild 的 GPU 耗时（每帧刷新）；deterministic 不写真实
+    // 值，HUD 只显示实例数保截图基线稳定。
+    int   tlasInstanceCount   = 0;
+    float tlasMs              = 0.0f;
+    bool  tlasTimingAvailable = false;
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
