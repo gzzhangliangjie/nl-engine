@@ -172,6 +172,7 @@ add_library(nl_core STATIC
     core/src/free_camera.cpp   # P8 M-CAM0：FreeCamera 自由飞行（无阻尼直出，纯 CPU）
     core/src/camera_director.cpp  # P8 M-CAM1a：相机接线封装层（spectator 映射+适配+模式管理）
     core/src/cinematic_camera.cpp # P8 M-CAM1a：CinematicCamera 桩（状态机真实现，轨迹面 M-CAM3a）
+    core/src/camera_smoother.cpp  # P8 M-CAM4：CameraSmoother / CameraTrauma（平滑/抖动，默认关）
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
     core/src/meshlet.cpp       # M1.1：meshlet 贪心切簇（参考 meshoptimizer clusterizer）

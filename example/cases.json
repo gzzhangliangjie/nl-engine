@@ -8130,6 +8130,35 @@
      "script": "example/drive-m3/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "cam-b",
+   "label": "M-CAM1b/2b/3b + M-CAM4",
+   "name": "三相机 viewer 接线 + M-CAM4 平滑/抖动（b 段收口）",
+   "tag": "cam-b",
+   "date": "2026-11-10",
+   "summary": "b 段三相机 viewer 胶水（ViewerCamera 同方法名包装层，双循环仅替换 OrbitCamera 实例；Key::T Chase↔Free 切换、--camera/--camera-track CLI、cam.* cvar、HUD 模式名）+ M-CAM4（CameraSmoother 二阶临界阻尼弹簧位置/朝向双通道 + CameraTrauma trauma² 确定性抖动）。OrbitCamera 一字未动零回归；free/chase/track/smooth/shake 的交互与截图基线待带显示会话补（example/cam-b/ + cam-1b/cam-2b/cam-3b/cam-mcam4 卡）。",
+   "acceptance": [
+    "DX12/VULKAN 双后端构建过 + viewer --selftest 16/16（OrbitCamera 委托路径逐位零回归）",
+    "viewer 集成后仍可起、selftest 退出 0（自动化下限；视觉/交互卡待补）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "viewer 集成后自检 16/16（OrbitCamera 零回归）",
+     "kind": "selftest",
+     "note": "b 段接线后 viewer 仍可构建并起无头自检；Orbit 路径矩阵/缩放/复位逐位不变。free/chase/track/smooth/shake 的窗口交互与截图基线待带显示会话补。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS",
+     "command": "viewer.exe --selftest"
+    }
+   ]
   }
  ]
 }

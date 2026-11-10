@@ -11,6 +11,7 @@
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
+#include "camera_mode.hpp"                 // P8 M-CAM b-segment：ViewerCamera 调度封装（orbit/free/chase/track）
 #include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
@@ -107,6 +108,8 @@ struct Options {
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
+    std::string cameraMode = "orbit";   // P8 M-CAM b-segment：初始相机模式 orbit|free|chase|track
+    std::string cameraTrack;            // --camera-track <file>：track 模式轨迹 tsv
     int  inputDemoStart = 5;  // 脚本起始迭代号（1-based；W@start D@+1 Space@+2 Esc@+3）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
@@ -239,6 +242,16 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.cullBack = (v != "none" && v != "off" && v != "0");
+        } else if (a == "--camera" && i + 1 < argc) {
+            o.cameraMode = argv[++i];
+            if (o.cameraMode != "orbit" && o.cameraMode != "free" &&
+                o.cameraMode != "chase" && o.cameraMode != "track") {
+                std::cerr << "invalid --camera '" << o.cameraMode
+                          << "' (expected orbit|free|chase|track)\n";
+                o.help = true;
+            }
+        } else if (a == "--camera-track" && i + 1 < argc) {
+            o.cameraTrack = argv[++i];
         } else if (a == "--frustum" && i + 1 < argc) {
             // M4.1：GPU 视锥剔除开关（仅 cull 模式消费；off = 恒等可见列表，M4.0 行为）。
             const std::string v = argv[++i];
@@ -481,14 +494,14 @@ VehicleCVars registerVehicleConsole(bool* driveHudOn) {
 // M-D3 ships exactly one active source (OrbitCamera). Camera b-segment only
 // replaces the Chase return below AFTER M-D3 closes -- no camera glue, no Chase
 // baselines, no five-anchor camera acceptance in this milestone.
-static auto resolveViewProjection(nl::core::OrbitCamera& camera,
+static auto resolveViewProjection(nl::viewer::ViewerCamera& camera,
                                   nl::physics::DebugScene& scene)
     -> decltype(camera.viewProjection()) {
-    (void)scene;   // reserved: scene.chassisState() feeds CameraDirector in b-segment
+    (void)scene;   // P8 M-CAM b-segment：chassis 钩子已在主循环每帧 feed（camera.chassis）
     return camera.viewProjection();
 }
 
-std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool* hudEnabled) {
+std::function<void()> registerViewerConsole(nl::viewer::ViewerCamera* camera, bool* hudEnabled) {
     using namespace nl::core::console;
     Console& c = Console::get();
     c.installBuiltins();
@@ -497,6 +510,47 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
     CVar* const fov  = &c.registerFloat("cam.fov", camera->fovYDegrees(), "vertical fov in degrees (20..120)");
     CVar* const dist = &c.registerFloat("cam.dist", camera->distance(), "orbit distance (0.45..20)");
     CVar* const hud  = &c.registerBool("hud.show", *hudEnabled, "toggle the HUD panel");
+    // P8 M-CAM b-segment + M-CAM4：相机模式 / 平滑 / 抖动 / 子相机参数（运行时调参）
+    c.registerCommand("cam.mode", "set camera mode: orbit|free|chase|track",
+        [camera](const std::vector<std::string>& args) {
+            if (args.empty())
+                return CommandResult{false, "usage: cam.mode <orbit|free|chase|track>"};
+            const std::string& m = args[0];
+            if (m == "orbit")      camera->setMode(nl::viewer::CameraMode::Orbit);
+            else if (m == "free")  camera->setMode(nl::viewer::CameraMode::Free);
+            else if (m == "chase") camera->setMode(nl::viewer::CameraMode::Chase);
+            else if (m == "track") camera->setMode(nl::viewer::CameraMode::Track);
+            else return CommandResult{false, "unknown mode: " + m};
+            return CommandResult{true, std::string("camera mode -> ") + camera->modeName()};
+        });
+    c.registerBool("cam.smooth.on", camera->smoother.enabled,
+                   "M-CAM4：位置/朝向二阶弹簧平滑（默认关，开时叠加在 chase/free 阻尼之上）")
+        .setOnChanged([camera](const CVar& cv) { camera->smoother.enabled = cv.value().b; });
+    c.registerFloat("cam.smooth.time", camera->smoother.smoothTime, "M-CAM4：平滑收敛时间常数（秒）")
+        .setOnChanged([camera](const CVar& cv) { camera->smoother.smoothTime = cv.value().f; });
+    c.registerCommand("cam.shake.add", "M-CAM4：注入 trauma [0..1]（确定性抖动，trauma² 模型）",
+        [camera](const std::vector<std::string>& args) {
+            const float v = args.empty() ? 1.0f
+                                        : static_cast<float>(std::strtod(args[0].c_str(), nullptr));
+            camera->trauma.addTrauma(v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v));
+            return CommandResult{true, "trauma -> " + std::to_string(camera->trauma.trauma01())};
+        });
+    c.registerFloat("cam.shake.decay", camera->trauma.decay, "M-CAM4：trauma 每秒线性衰减")
+        .setOnChanged([camera](const CVar& cv) { camera->trauma.decay = cv.value().f; });
+    c.registerFloat("cam.shake.amp", camera->trauma.amplitude, "M-CAM4：trauma 最大偏移（弧度）")
+        .setOnChanged([camera](const CVar& cv) { camera->trauma.amplitude = cv.value().f; });
+    c.registerFloat("cam.shake.freq", camera->trauma.frequency, "M-CAM4：trauma 抖动频率（Hz 风格，确定性非 wall-clock）")
+        .setOnChanged([camera](const CVar& cv) { camera->trauma.frequency = cv.value().f; });
+    c.registerFloat("cam.chase.dist", camera->director.chase().distance(), "Chase 机位臂长（clamp 1..50）")
+        .setOnChanged([camera](const CVar& cv) { camera->director.chase().setDistance(cv.value().f); });
+    c.registerFloat("cam.chase.stiff", camera->director.chase().stiffness(), "Chase 位置阻尼系数（clamp 0.1..50）")
+        .setOnChanged([camera](const CVar& cv) { camera->director.chase().setStiffness(cv.value().f); });
+    c.registerFloat("cam.chase.height", camera->director.chase().heightOffset(), "Chase 机位抬升（clamp 0..10）")
+        .setOnChanged([camera](const CVar& cv) { camera->director.chase().setHeightOffset(cv.value().f); });
+    c.registerFloat("cam.chase.lead", camera->director.chase().leadTime(), "Chase look-ahead 前视时长（clamp 0..1）")
+        .setOnChanged([camera](const CVar& cv) { camera->director.chase().setLeadTime(cv.value().f); });
+    c.registerFloat("cam.free.speed", camera->director.free().speed(), "Free 相机移动速度（世界单位/秒，clamp 0..500）")
+        .setOnChanged([camera](const CVar& cv) { camera->director.free().setSpeed(cv.value().f); });
 
     static bool g_syncing = false;   // 回写 cvar 时挡 onChanged 重入
     fov->setOnChanged([camera](const CVar& cv) {
@@ -775,7 +829,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         lodLevel = o.lod;
     }
 
-    nl::core::OrbitCamera camera;
+    nl::viewer::ViewerCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     // M-A5.4：skin 模式资产尺度自适应——Fox.glb 等资产单位远大于 1m，固定缺省
     // 距离会把相机放进模型肚子里。未显式 --dist 时按 t=0 蒙皮输出半径取景，
@@ -790,6 +844,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // （yaw 0 = 从 +z 看向原点的正面视角，pitch 28° 俯视全场）。
     if (o.physicsDebug && o.physicsScenario == 1 && !o.distSet) {
         camera.setOrbit(0.0f, 35.0f, 19.0f);
+    }
+    // P8 M-CAM b-segment：加载可选轨迹并按 CLI 选择相机模式（orbit 缺省 = 零回归）
+    if (!o.cameraTrack.empty()) {
+        if (!camera.loadTrack(o.cameraTrack.c_str()))
+            nl::core::log::warn("camera track load failed: ", o.cameraTrack);
+    }
+    {
+        nl::viewer::CameraMode m = nl::viewer::CameraMode::Orbit;
+        if (o.cameraMode == "free")       m = nl::viewer::CameraMode::Free;
+        else if (o.cameraMode == "chase") m = nl::viewer::CameraMode::Chase;
+        else if (o.cameraMode == "track" || !o.cameraTrack.empty()) m = nl::viewer::CameraMode::Track;
+        if (m != nl::viewer::CameraMode::Orbit) camera.setMode(m);
     }
     bool cullBack = o.cullBack;
     // M6.2：Hi-Z 遮蔽剔除总开关（HUD checkbox 双向；缺省开 = M6.1 行为不变）。
@@ -974,6 +1040,24 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
             if (scroll != 0.0f) camera.zoom(scroll);
         }
+        // P8 M-CAM b-segment：喂玩法相机输入（orbit 模式 orbit() 已吃 dx/dy，lookPx 在其下被忽略；
+        // 控制台/面板占输入时清空，避免打字或拖 HUD 时相机乱动）。
+        {
+            const bool camBlocked = hudWantsMouse || hudWantsKeyboard || consoleOpen;
+            if (camBlocked) {
+                camera.lookPx[0] = 0.0f; camera.lookPx[1] = 0.0f;
+                camera.freeInput = nl::core::FreeDrive{};
+            } else {
+                camera.lookPx[0] = dx; camera.lookPx[1] = dy;
+                nl::core::FreeDrive fd{};
+                fd.move[2] = (window.rawKeyDown(87) ? 1.0f : 0.0f) - (window.rawKeyDown(83) ? 1.0f : 0.0f); // W/S
+                fd.move[0] = (window.rawKeyDown(68) ? 1.0f : 0.0f) - (window.rawKeyDown(65) ? 1.0f : 0.0f); // D/A
+                fd.move[1] = (window.rawKeyDown(32) ? 1.0f : 0.0f) - (window.rawKeyDown(341) ? 1.0f : 0.0f); // Space/LCtrl
+                fd.boost   = window.rawKeyDown(340) != 0;  // LeftShift
+                camera.freeInput = fd;
+            }
+            camera.camToggleEdge = !camBlocked && window.keyPressed(nl::core::Key::T);
+        }
 
         const char* capturePath = nullptr;
         std::string manualPath;
@@ -1086,6 +1170,21 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const std::size_t nChars = window.consumeTextChars(textBuf, 32);
 
         nl::renderer::FrameParams fp;
+        // P8 M-CAM b-segment：每帧把车体回读（仅 drive scenario 有效）喂 Chase 相机，并推进玩法相机
+        // （orbit 模式 update 内部直出，逐位零回归）。chassisState 在 scenario==2 才有有效车体。
+        {
+            nl::core::ChassisState chassisState{};
+            if (driveEnabled) {
+                const nl::physics::DriveChassisState dcs = physicsScene.chassisState();
+                chassisState.pos[0] = dcs.pos[0]; chassisState.pos[1] = dcs.pos[1]; chassisState.pos[2] = dcs.pos[2];
+                chassisState.yawDegrees = dcs.yawDegrees;
+                chassisState.vel[0] = dcs.vel[0]; chassisState.vel[1] = dcs.vel[1]; chassisState.vel[2] = dcs.vel[2];
+                chassisState.valid = dcs.valid;
+            }
+            camera.chassis = chassisState.valid ? &chassisState : nullptr;
+            const float camDt = static_cast<float>(dtMs) * 0.001f;
+            camera.update(camDt);
+        }
         const auto vp = resolveViewProjection(camera, physicsScene);
         const auto model = camera.model();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
@@ -1615,6 +1714,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                   << " pitch " << camera.pitchDegrees()
                   << " dist " << camera.distance()
                   << " | cull " << (cullBack ? "back" : "none")
+                  << " | cam " << camera.modeName()
                   << " | shading " << shadingName(shading) << (wireframe ? " wire" : "")
                   << " | " << e.width << "x" << e.height;
             // M2.3：lod 模式在标题栏也标层号，交互时不必盯着 HUD 滑条。
@@ -1985,15 +2085,30 @@ int runScene(const Options& o) {
         const float* sph = renderer->info().assetSphere;
         if (sph[3] > 0.0f) camDist = std::max(camDist, sph[3] * 2.4f);
     }
-    nl::core::OrbitCamera camera;
+    nl::viewer::ViewerCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
+    // P8 M-CAM b-segment：加载可选轨迹并按 CLI 选择相机模式（orbit 缺省 = 零回归）
+    if (!o.cameraTrack.empty()) {
+        if (!camera.loadTrack(o.cameraTrack.c_str()))
+            nl::core::log::warn("camera track load failed: ", o.cameraTrack);
+    }
+    {
+        nl::viewer::CameraMode m = nl::viewer::CameraMode::Orbit;
+        if (o.cameraMode == "free")       m = nl::viewer::CameraMode::Free;
+        else if (o.cameraMode == "chase") m = nl::viewer::CameraMode::Chase;
+        else if (o.cameraMode == "track" || !o.cameraTrack.empty()) m = nl::viewer::CameraMode::Track;
+        if (m != nl::viewer::CameraMode::Orbit) camera.setMode(m);
+    }
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;
     nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
     registerGameConsole(&gameClock);          // game.pause/timeScale/status
     nl::audio::registerAudioConsole(sceneConsole);
+    // P8 M-CAM b-segment：相机 cvars（cam.mode/cam.smooth.*/cam.shake.*/cam.chase.*/cam.free.*）
+    bool viewerHudEnabled = o.hudEnabled;
+    registerViewerConsole(&camera, &viewerHudEnabled);
     // M-S3：AudioWorld（realtime；设备不可用降级 offline——位置读回同步不依赖设备，
     // 截图自动化无扬声器也能跑）。声源绑定实体（按名），每个逻辑帧同步位置。
     nl::audio::AudioConfig audioCfg{};
@@ -2229,6 +2344,17 @@ int runScene(const Options& o) {
         window.consumeMouse(dx, dy, scroll);
         if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
         if (scroll != 0.0f) camera.zoom(scroll);
+        // P8 M-CAM b-segment：玩法相机输入（WASD 移动 + 鼠标 look + T 切换 Chase↔Free）
+        camera.lookPx[0] = dx; camera.lookPx[1] = dy;
+        {
+            nl::core::FreeDrive fd{};
+            fd.move[2] = (window.rawKeyDown(87) ? 1.0f : 0.0f) - (window.rawKeyDown(83) ? 1.0f : 0.0f); // W/S
+            fd.move[0] = (window.rawKeyDown(68) ? 1.0f : 0.0f) - (window.rawKeyDown(65) ? 1.0f : 0.0f); // D/A
+            fd.move[1] = (window.rawKeyDown(32) ? 1.0f : 0.0f) - (window.rawKeyDown(341) ? 1.0f : 0.0f); // Space/LCtrl
+            fd.boost   = window.rawKeyDown(340) != 0;  // LeftShift
+            camera.freeInput = fd;
+        }
+        camera.camToggleEdge = window.keyPressed(nl::core::Key::T);
 
         const char* capturePath = nullptr;
         if (window.keyPressed(nl::core::Key::F12)) {
@@ -2407,6 +2533,8 @@ int runScene(const Options& o) {
         }
 
         nl::renderer::FrameParams fp;
+        // P8 M-CAM b-segment：runScene 无物理车体源（chassis 留空），仅推进玩法相机
+        camera.update(static_cast<float>(dtMs) * 0.001f);
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
         // M8.2：rt 模式射线生成输入（runScene 同构接线；其它模式不读）。
@@ -2432,7 +2560,7 @@ int runScene(const Options& o) {
             hud.backend = st.backend;
             hud.adapter = info.adapterName.c_str();
             hud.debugLayer = info.debugLayer.c_str();
-            hud.mode = nl::core::modeName(o.mode);       // 自动显示 "scene"
+            hud.mode = camera.modeName();       // P8 M-CAM b-segment：显示当前相机模式（orbit/free/chase/track）
             hud.stage = st.stage;
             hud.model = info.modelName.c_str();
             hud.triangleCount = static_cast<int>(info.triangleCount);
