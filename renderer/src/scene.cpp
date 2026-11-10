@@ -2217,9 +2217,10 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     csDirect_ = device->createShader(desc, blob.data(), blob.size());
     if (!csDirect_) { outError = "createShader failed for direct.cs"; return false; }
 
-    // b3 DirectConstants（16B）：当帧清屏色，每帧全量覆写（volatile CB 纪律）。
+    // b3 DirectConstants（32B）：g_clearColor（16B）+ g_shadowParams（16B：bias/tMax），
+    // 每帧全量覆写（volatile CB 纪律）。
     nvrhi::BufferDesc dcDesc;
-    dcDesc.byteSize = 16;
+    dcDesc.byteSize = 32;
     dcDesc.isConstantBuffer = true;
     dcDesc.isVolatile = true;
     dcDesc.maxVersions = 16;
@@ -2227,11 +2228,14 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     directConstants_ = device->createBuffer(dcDesc);
     if (!directConstants_) { outError = "createBuffer failed for direct constants"; return false; }
 
-    // §2.7 单一 BindingSet：共用 resolve 槽位表 + b3 清屏色 + u0 输出。
+    // §2.7 单一 BindingSet：共用 resolve 槽位表 + b3 清屏色 + u0 输出 + t13 TLAS。
+    // t13 = RayTracingAccelStruct（M9.1 阴影射线，照 rtComputeLayout_ 写法；t0..t12
+    // 已被 resolve 槽位表占用，TLAS 落 t13 不冲突）。
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
-         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+         .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
     directComputeLayout_ = device->createBindingLayout(cDesc);
     if (!directComputeLayout_) {
         outError = "createBindingLayout failed for direct compute"; return false;
@@ -2243,7 +2247,11 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     if (!directPSO_) { outError = "createComputePipeline failed for direct"; return false; }
 
-    nl::core::log::info("shadow scene ready (compute direct lighting, no shadow rays)",
+    // M9.1：TLAS 在 init 链 initTlas 已建（log 顺序 blas→tlas→本行可证），故此处
+    // tlasReady_ 已定；如实反映射线是否接通，避免 review 误读为 M9.0 无射线口径。
+    nl::core::log::info("shadow scene ready (compute direct lighting",
+                        tlasReady_ ? ", 1 shadow ray/pixel via TLAS)" :
+                                        ", shadow rays disabled: no TLAS)",
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -2433,6 +2441,18 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
                        const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!rtDevice_ || !framebuffer || !directPSO_ || shadowFailed_) return;
 
+    // M9.1：阴影射线打 M8 的 TLAS（粗代理几何）。TLAS 未就绪（设备不支持 RT /
+    // 资产无 fallback 段）→ 本模式无法追迹，log 一次后返回（与 rt 模式同口径降级；
+    // 主帧光栅 + 直光仍由其他 mode 提供，shadow 模式在此环境不可用）。
+    if (!tlasReady_) {
+        if (!shadowNoTlasLogged_) {
+            nl::core::log::info("shadow: TLAS not ready (no RT support or no fallback "
+                                "geometry) -- shadow rays disabled");
+            shadowNoTlasLogged_ = true;
+        }
+        return;
+    }
+
     std::string err;
     const float vpW = viewport.maxX - viewport.minX;
     const float vpH = viewport.maxY - viewport.minY;
@@ -2455,7 +2475,8 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         addResolveSetItems(sd);
         sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
-                                                      nvrhi::Format::RGBA32_FLOAT));
+                                                      nvrhi::Format::RGBA32_FLOAT))
+          .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
         directComputeSet_ = rtDevice_->createBindingSet(sd, directComputeLayout_);
         if (!directComputeSet_) {
             nl::core::log::deviceError("shadow", "createBindingSet failed for direct compute set");
@@ -2466,10 +2487,13 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         directH_ = rtH_;
     }
 
-    // b1/b2 与 pulling 分支共用写入；b3 = 当帧清屏色（对齐 PS 的 discard）。
+    // b1/b2 与 pulling 分支共用写入；b3 = [当帧清屏色(16B) | shadow 参数(16B)]。
+    // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
+    //（阴影射线有限最大距离，保精度；场景半径 ~1，50 足以覆盖全部遮挡物）。
     writeResolveConstants(cmd, params);
-    const float cc[4] = {params.clearColor[0], params.clearColor[1],
-                         params.clearColor[2], params.clearColor[3]};
+    const float cc[8] = {params.clearColor[0], params.clearColor[1],
+                         params.clearColor[2], params.clearColor[3],
+                         0.01f, 50.0f, 0.0f, 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
     nvrhi::ComputeState cstate;
@@ -5622,6 +5646,7 @@ void Scene::shutdown() {
     // M9.0：shadow 链句柄（rtTarget_ / present 共用对象已在上面统一释放）。
     shadow_ = false;
     shadowFailed_ = false;
+    shadowNoTlasLogged_ = false;
     csDirect_ = nullptr;
     directPSO_ = nullptr;
     directComputeLayout_ = nullptr;

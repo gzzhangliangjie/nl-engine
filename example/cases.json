@@ -7542,8 +7542,8 @@
     {
      "id": "shadow",
      "name": "compute 直光：--mode shadow（GBuffer 即取即算，无阴影射线）",
-     "kind": "pair",
-     "note": "Q4 方案 A：csDirect 8x8 dispatch 内调 gbInterpolateVisTriangle 反解 vis triangle 后直接算 mode 5 BRDF，不发射线、不落盘 GBuffer。输出复用 M8.2 rtTarget_，空像素由 UAV 写当帧清屏色。与 pulling 卡的逐字节互比由 run.bat verify 机器断言。【锁定口径 S9-PLAN T6】本卡基线取自 tag s9-gbuffer 提交时的构建产物；M9.1 起 --mode shadow 语义变更为每像素发射阴影射线，禁止用新 exe 重拍本卡基线，须转 manual 或指向 build/showcase/s9-gbuffer 快照。",
+     "kind": "manual",
+     "note": "【M9.1 已转 manual，不再随当前 exe 重拍】本卡是 M9.0 的 --mode shadow 无射线直光冻结基线（tag s9-gbuffer 构建产物）。M9.1 把 --mode shadow 语义升级为每像素发射 1 条 shadow ray 经 M8 TLAS（S3 fallback 104-tri 粗代理），故当前 build 重拍本卡会按设计偏离冻结基线、不可作为回归失败。当前 --mode shadow 的验证由兄弟版本卡 s9-shadow（kind pair，tag s9-shadow）承接。本卡如须复核，须用 build/showcase/s9-gbuffer 快照 exe 或退回 tag s9-gbuffer 重跑，禁止用 M9.1+ 的 exe 重拍本卡基线。",
      "baselines": {
       "dx12": "example/s9-gbuffer/shadow-dx12.png",
       "vulkan": "example/s9-gbuffer/shadow-vulkan.png"
@@ -7604,6 +7604,59 @@
      ],
      "command": "viewer.exe --mode pulling --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
      "script": "example/s9-gbuffer/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "s9-shadow",
+   "label": "S9.1",
+   "name": "compute 直光 + 每像素阴影射线（M9.1）",
+   "tag": "s9-shadow",
+   "date": "2026-11-10",
+   "summary": "M9.1（S9 第二步；在 M9.0 compute 直光基础上升级 --mode shadow 语义）：每像素发射 1 条 shadow ray（朝 g_lightDirW，被 S3 fallback 粗代理遮挡 -> 直光乘 0 仅保留环境光，否则 -> 完整 BRDF）。射线走 M8 的 TLAS（initCull->initBlas->initTlas 链在 init 阶段已建，drawShadow 守卫 tlasReady_）；DirectConstants 16->32B（b3 加 g_shadowParams：x=bias 0.01、y=tMax 50.0），directComputeLayout_ 加 RayTracingAccelStruct(13)，directComputeSet_ 绑定 g_tlas:register(t13)；direct.slang::csDirect 内 RayQuery<RAY_FLAG_FORCE_OPAQUE|RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> 调 TraceRayInline。资产修复：Suzanne-materials.nmesh 原先仅 NSUB 无 NFLB -> BLAS skip -> TLAS 未建 -> 射线被禁；就地追加 Suzanne.lod0.nmesh 的 NFLB 尾段（104 tri / 96 verts / L6 / maxErr 1.1375），保留原名（companion glb 按 stem 解析）。自检：射线只衰减不变亮（M9.1 vs M9.0 无射线基线 brighter=0、darker=1155、maxAbsDelta=97，完美符合）；硬阴影边缘干净；遮挡集中在眼窝/眉骨下/鼻下/耳内；双后端 near 一致（1px/0.00%）。几何差异可视化 geometry-diff.png（左=光栅 3936 tri 含阴影，右=104 tri 粗代理，中文标注 D19 设计本意非 bug）。修正 M9.0 遗留 init 日志如实反映射线是否接通。kStage 不 bump，HUD 基线零重拍。M9.0 的 s9-gbuffer 对照卡基线被锁定，禁止用新 exe 重拍。",
+   "acceptance": [
+    "--mode shadow 双后端 re-shot 与冻结 M9.1 基线逐字节相同（确定性、无回归）；run.bat verify 全绿：双侧 exit 0 + bytes 2/2 + 日志锚 shadow scene ready / 1 shadow ray/pixel via TLAS 存在且 TLAS not ready 缺失 + 只衰减 brighter=0 darker=1155 + near dx12/vulkan 1px 0.00% + geometry-diff.png 存在 + 负向 exit 1",
+    "射线只衰减不变亮：M9.1 vs M9.0 无射线基线 brighter=0（阴影绝不变亮）、darker>0（1155px 被遮挡）、maxAbsDelta<=97",
+    "M9.0 的 s9-gbuffer.shadow / pulling 两卡基线锁定：--mode shadow 语义已变更为每像素发射阴影射线，禁止用新 exe 重拍，须转 manual 或指向 build/showcase/s9-gbuffer 快照；本卡基线取自 tag s9-shadow 提交时构建产物",
+    "Q4 冻结面 0 新增独立 GBuffer 资源；TLAS 走 M8 既有链路零新增 AS 资源；kStage 仍 S8.2"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "shadow",
+     "name": "compute 直光 + 1 shadow ray/pixel 经 M8 TLAS（S3 fallback 104 tri 粗代理）",
+     "kind": "pair",
+     "note": "M9.1 把 --mode shadow 从 M9.0「无射线直光」升级为「每像素 1 条 shadow ray 经 M8 TLAS，S3 fallback 104-tri 粗代理」。故本图不再与 pulling 逐字节相同（M9.0 曾断言相同，本里程碑按设计打破）。基线取自 tag s9-shadow 构建产物。M9.0 的 example/s9-gbuffer/shadow-*.png 仍为无射线基线，被 run.bat verify 的 darken 门禁当作「无射线基线」参照（brighter 必须为 0）使用，二者语义不同不可混淆。",
+     "baselines": {
+      "dx12": "example/s9-shadow/shadow-dx12.png",
+      "vulkan": "example/s9-shadow/shadow-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "shadow",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9"
+     ],
+     "command": "viewer.exe --mode shadow --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+     "script": "example/s9-shadow/run.bat verify"
     }
    ]
   }

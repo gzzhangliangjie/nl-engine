@@ -90,11 +90,13 @@
 
 > **mode 语义分阶段**：M9.0 的 `--mode shadow` = compute 直光、**不发射线**（硬验收对照用）；M9.1 起同一个 mode 默认每像素发 1 条 shadow ray。硬验收第三条的对照卡以 tag `s9-gbuffer` 的 exe 为准，不要用 M9.1 之后的构建重跑。
 
-- [ ] `--mode shadow`：直光采样点每像素发 1 条 shadow ray（朝光源方向），被挡→0，否则→BRDF
-- [ ] 射线走 M8 的 TLAS；透明材质忽略（S9 不处理 alpha）
-- [ ] **几何差异留痕**：BLAS 吃 S3 fallback 粗代理（Suzanne 104 tri），光栅主帧是最细 LOD（3936 tri），两者轮廓本来就不重合（UE-DIFFS D19）；另出一张「光栅几何 / 射线代理几何」差异可视化图，防 review 误判为 bug
+- [x] `--mode shadow`：直光采样点每像素发 1 条 shadow ray（朝光源方向），被挡→0，否则→BRDF（direct.slang `RayQuery<RAY_FLAG_FORCE_OPAQUE|RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>` `TraceRayInline`，`g_tlas:register(t13)`，`DirectConstants` 16→32B 加 `g_shadowParams`:x=bias 0.01 / y=tMax 50.0）
+- [x] 射线走 M8 的 TLAS（initCull→initBlas→initTlas 链 init 阶段已建，`drawShadow` 守卫 `tlasReady_`）；透明材质忽略（S9 不处理 alpha）
+- [x] **几何差异留痕**：BLAS 吃 S3 fallback 粗代理（Suzanne 104 tri），光栅主帧是最细 LOD（3936 tri），两者轮廓本来就不重合（UE-DIFFS D19）；另出一张「光栅几何 / 射线代理几何」差异可视化图（`example/s9-shadow/geometry-diff.png`，中文标注 D19 设计本意非 bug），防 review 误判为 bug
 
-**自检（按拍板改写）**：**在粗代理几何上**硬阴影边缘干净；光源方向旋转阴影正确跟随；区域级遮挡判定正确；猴耳 / 眼窝等细模细节的影子与画面对不上属已知口径，不判 FAIL。几何对齐按 ROADMAP 原排期留 **S13 簇级 BLAS 聚合**，不在 M9 提前做。tag：`s9-shadow`。
+**自检（按拍板改写）**：**在粗代理几何上**硬阴影边缘干净；光源方向旋转阴影正确跟随；区域级遮挡判定正确；猴耳 / 眼窝等细模细节的影子与画面对不上属已知口径，不判 FAIL（M9.1 实测：M9.1 vs M9.0 无射线基线 brighter=0、darker=1155、maxAbsDelta=97，射线只衰减不变亮；遮挡集中在眼窝/眉骨下/鼻下/耳内；双后端 near 1px/0.00%）。几何对齐按 ROADMAP 原排期留 **S13 簇级 BLAS 聚合**，不在 M9 提前做。
+
+**M9.1 收官（2026-11-10，tag `s9-shadow`）**：资产修复 `Suzanne-materials.nmesh` 就地追加 NFLB 尾段（104 tri 粗代理，解决 M9.0 无 NFLB→BLAS skip→TLAS 未建→射线被禁根因）；`direct.slang` + `scene.cpp/.hpp` 落码每像素发线；交付 `example/s9-shadow/`（双后端基线 + `geometry-diff.png` + `run.bat verify` + `tools/check-s9shadow.py`）；`cases.json` 新增 `s9-shadow` 卡、`s9-gbuffer/shadow` 转 manual 锁定（M9.0 无射线基线禁止随当前 exe 重拍）。`run.bat verify` 全绿 / `regression.py --only s9-shadow` 2/2 ALL GREEN / 老路径 `s7.2/pulling`+`s9-gbuffer/pulling` 6/6 `bytes`；双后端 selftest 16/16×2 + Slang 66/66；`kStage` 仍 S8.2，Q4 冻结面 0 新增独立 GBuffer 资源、TLAS 走 M8 既有链路零新增 AS 资源。
 
 ⚠️ 常见坑：
 - shadow ray 的 tMax 设到光源距离即可，别无限远（性能与正确性双赢）

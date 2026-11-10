@@ -1,10 +1,13 @@
-// M9.0 (S9): compute direct-lighting comparison path (Q4 方案 A「不落盘，即取即算」
-// + 用户拍板 ②「新建 compute 8x8 直光 pass，逐字搬移 mode 5 BRDF」).
+// M9.1 (S9): compute direct-lighting + hard shadow-ray path（M9.0 的对照 pass 升级：
+// Q4 方案 A「不落盘，即取即算」+ 用户拍板 ② 逐字搬移 mode 5 BRDF 不变）。
 //
-// 语义（M9.0 阶段）：每像素读 vis buffer → 用 gbuffer_common.slangh 即取即算几何属性
-// → 逐字复刻 material.slang::psMatResolve 的 mode 5 BRDF → 写 M8.2 已有的
-// rtTarget_ (RGBA32_FLOAT UAV) → 由共用的 psRtPresent 呈现。**不发阴影射线**
-//（M9.1 起同 mode 才默认每像素 1 条 shadow ray，硬验收对照卡锁定 tag s9-gbuffer）。
+// 语义（M9.1 阶段）：每像素读 vis buffer → 用 gbuffer_common.slangh 即取即算几何属性
+// → 逐字复刻 material.slang::psMatResolve 的 mode 5 BRDF → **朝光源发 1 条 shadow ray**
+// 打 M8 的 TLAS（粗代理几何）→ 被挡→直光乘 0（环境光保留）、否则→完整 BRDF → 写
+// M8.2 已有的 rtTarget_ (RGBA32_FLOAT UAV) → 由共用的 psRtPresent 呈现。
+//
+// 对照卡（M9.0 T6）锁定 tag s9-gbuffer 的 exe：M9.1 起同 mode 语义变更（多了阴影射线），
+// 禁止用新 exe 重跑那两张基线；M9.1 自带 s9-shadow 基线。
 //
 // 与 mode 5 逐像素一致的三条口径（T6）：
 //   1) fragPos：PS 的 SV_Position.xy 是像素中心 (x+0.5, y+0.5)，compute 用
@@ -18,12 +21,13 @@
 //
 // 资源寄存器（§2.7 每管线单一 BindingSet；本 pass 自己的 layout/set）：
 //   b0 SceneConstants (160B) / b1 LightConstants (80B) / b2 MatResolveConstants (16B)
-//   b3 DirectConstants (16B)：当帧清屏色
+//   b3 DirectConstants (32B)：g_clearColor（当帧清屏色）+ g_shadowParams（x=bias 世界尺度法线偏移, y=tMax）
 //   t0 vis SRV / t1..t3 vertexPool / localIndices / clusterMeta
 //   t4..t7 baseColor / t8..t11 mrTex / t12 材质间接表 / s0 sampler
+//   t13 TLAS（M9.1 阴影射线；RayTracingAccelStruct，DXIL t 空间 / SPIR-V 同 t-shift）
 //   u0 输出 RGBA32_FLOAT（复用 rtTarget_，不新建资源）
 // SPIR-V 绑定平移与 material.slang 同：b→256, t→0, s→128, u→384。
-// DXIL 需要 SM6.6（NonUniformResourceIndex 选槽，同 material.psmatresolve）。
+// DXIL 需要 SM6.6（NonUniformResourceIndex 选槽 + RayQuery 内联射线，同 rt.slang）。
 
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
@@ -54,8 +58,13 @@ cbuffer MatResolveConstants : register(b2)
 
 cbuffer DirectConstants : register(b3)
 {
-    float4 g_clearColor;   // 与 framebuffer 的 ClearColor 逐值一致
+    float4 g_clearColor;     // 与 framebuffer 的 ClearColor 逐值一致（offset 0）
+    float4 g_shadowParams;   // x = bias（世界尺度法线偏移，防 proxy 自遮挡）
+                             // y = tMax（阴影射线最大距离，有限值保精度）
+                             // z/w 预留（offset 16）
 }
+
+RaytracingAccelerationStructure g_tlas : register(t13);
 
 StructuredBuffer<uint64_t> g_visSRV          : register(t0);
 StructuredBuffer<float>    g_vertexPool      : register(t1);
@@ -94,7 +103,7 @@ float V_SmithGGXCorrelated(float roughness, float NdotV, float NdotL)
 }
 
 float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
-                    float2 ddx_uv, float2 ddy_uv)
+                    float2 ddx_uv, float2 ddy_uv, float shadow)
 {
     float3 n = normalize(normal);
     float3 v = normalize(g_cameraPos.xyz - worldPos);
@@ -121,7 +130,9 @@ float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
     float  D = D_GGX(roughness, NdotH);
     float  V = V_SmithGGXCorrelated(roughness, NdotV, NdotL);
     float3 F = F0 + (1.0f - F0) * pow(1.0f - VdotH, 5.0f);
-    float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL;
+    // M9.1：shadow = 1 不被挡 / 0 被挡（朝光源的 RayQuery 命中 TLAS）。环境光
+    // 不乘 shadow（被挡仍保留环境项，符合硬阴影物理语义；直光被挡→0）。
+    float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL * shadow;
     float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
     float3 specular = D * V * F;
     float3 ambient  = 0.03f * baseColor;
@@ -176,6 +187,28 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
         pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
         uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
+    // M9.1 阴影射线：从表面沿世界法线偏移 bias（防 proxy 粗代理自遮挡，bevy
+    // initial_path.wesl 同款 ray_origin = worldPos + normal*RAY_T_MIN）发向光源，
+    // 打 M8 的 TLAS（粗代理几何）。命中=被挡→shadow 0（直光乘 0）；未命中=1。
+    // 背向光的面（NdotL<=0）本就无直射，ray 无意义，直接判 0。
+    const float3 n3 = normalize(gbuf.normal);
+    const float3 L  = normalize(g_lightDirW.xyz);
+    float shadow = 0.0f;
+    if (dot(n3, L) > 0.0f) {
+        const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+        RayDesc ray;
+        ray.Origin    = origin;
+        ray.Direction = L;
+        ray.TMin      = 0.0f;
+        ray.TMax      = g_shadowParams.y;
+        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+        q.TraceRayInline(g_tlas,
+                         RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                         0xFF, ray);
+        q.Proceed();
+        shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+    }
+
     g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                                gbuf.ddxUv, gbuf.ddyUv);
+                                gbuf.ddxUv, gbuf.ddyUv, shadow);
 }

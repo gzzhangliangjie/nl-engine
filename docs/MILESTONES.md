@@ -2345,3 +2345,21 @@
 12. **`near` 不是 FAIL，禁当失败重拍基线**：复跑仍有 `ecs-e1b/scale vulkan` 1 像素 / maxDelta 1/255 GPU 取整噪声档，报告为 ALL GREEN；按分档纪律只报 `bytes/near/FAIL`，不笼统写「一致」也不为 near 重拍。
 
 **下一步**：**Q4 已拍板 = 方案 A「不落盘，即取即算」**（2026-11-10 用户）。结论已写回 S9-PLAN Q4 行、任务书第 3 条「落盘形态待用户拍板」挂账句已删并改为 A 口径；冻结解除仅限与不落盘相容的落码，**新增独立 GBuffer 落盘资源（新增纹理 / MRT / 落盘 UAV）仍禁止**；compute 直光 pass 按 §2.7 必备的**单一 BindingSet 已由 T5 放行**，输出复用 M8.2 `rtTarget_` 成员不算新增资源。落盘推迟 S10 与 S12 历史帧需求一起拍。**M9.0 T1~T8 已全绿收官**（tag `s9-gbuffer`）：公共反解头 + compute 直光对照卡 + §2.18 槽位表 + example 交付物 + 四栏收官条全部落地，`kStage` 仍 `S8.2`。**M9.1 阴影射线开工前必须处理对照卡锁定口径**：`--mode shadow` 语义将变为每像素发射线，`example/cases.json::s9-gbuffer` 两张卡须转 `manual` 或改指 `build/showcase/s9-gbuffer` 快照，禁止用新 exe 重拍基线。M9.2 参考模式依次推进；独立 GBuffer 落盘形态仍推迟到 S10 与 S12 历史帧需求一起拍。
+
+## P8 M9.1：compute 直光 + 每像素阴影射线（2026-11-10 已收官，tag `s9-shadow`）
+
+**动作**：S9-PLAN M9.1 三项目标落地 —— ① 资产修复：Suzanne-materials.nmesh 原先仅 NSUB 无 NFLB -> initBlas 因 fallbackPresent=false 跳过 -> TLAS 未建 -> drawShadow 守卫 tlasReady_ 静默 return、阴影射线被禁用；就地追加 Suzanne.lod0.nmesh 的 NFLB 尾段（magic..EOF 整段 4344B，104 tri / 96 verts / L6 / maxErr 1.1375），保留原名（viewer 按模型名 stem 找同名 companion .glb，改名会缺 Suzanne-materials.glb）。② 落码：direct.slang::csDirect 内 RayQuery<RAY_FLAG_FORCE_OPAQUE|RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> 调 TraceRayInline(g_tlas:register(t13))，DirectConstants 16->32B（b3=g_clearColor + g_shadowParams:x=bias 0.01/y=tMax 50.0），shadePbrGrad 加 shadow 参数 radiance 乘 shadow；scene.cpp directComputeLayout_ 加 RayTracingAccelStruct(13)、directComputeSet_ 绑定 tlas_、drawShadow 守卫 tlasReady_、新增 shadowNoTlasLogged_ 成员、写常量 [clearColor×4, 0.01, 50.0, 0,0]；修正 M9.0 遗留 init 日志如实反映射线是否接通（TLAS ready 报 1 shadow ray/pixel via TLAS，否则报 shadow rays disabled: no TLAS）。③ 交付物：example/s9-shadow/（双后端基线 shadow-dx12/vulkan.png + geometry-diff.png 左 3936-tri 光栅含阴影 / 右 104-tri 粗代理、中文标注 UE-DIFFS D19 设计本意非 bug + run.bat verify 八段机器断言 + tools/check-s9shadow.py darken/near 两断言）；cases.json 新增 s9-shadow 版本卡（python json indent=1），s9-gbuffer/shadow 转 manual 锁定（M9.0 无射线基线不随当前 exe 重拍，由 s9-shadow 承接）。
+
+**提交版本**：master 本收口 commit（annotated tag `s9-shadow`）。M9.1 是 S9 第二步、非 S* 大版本收官，按交付纪律 5b 不建 milestone/* 分支（同 s9-gbuffer / s8-blas / s8-tlas 先例）；wt_pool.py close 硬闸经实读不适用主线，不强行跑、不新增注册表项。
+
+**完成情况**：run.bat verify 全绿 exit 0：双侧 exit 0 + bytes 2/2（re-shot vs 冻结 M9.1 基线）+ 日志锚 shadow scene ready / 1 shadow ray/pixel via TLAS 存在且 TLAS not ready 缺失 + darken brighter=0 darker=1155 maxAbsDelta=97（射线只衰减不变亮）+ near dx12/vulkan 1px 0.00% + geometry-diff.png 存在 + 负向 exit 1；regression.py --only s9-shadow 2/2 ALL GREEN。老路径零扰动：--only s7.2/pulling 2/2 bytes、--only s9-gbuffer 2/2（仅 pulling，shadow 转 manual），NFLB 只服务射线、光栅 3936-tri meshlet 输出逐字节保形。双后端 build-m0.2.bat + viewer --selftest 16/16×2 + Slang 66/66（direct.cs 已在 M9.0 登记，无新增入口），exe 新鲜度闸 STALE 0。kStage 仍 S8.2（T4 拍板不 bump，HUD 基线零重拍），Q4 冻结面 0 新增独立 GBuffer 资源、TLAS 走 M8 既有链路零新增 AS 资源。
+
+**踩坑情况**
+1. **NFLB 缺失是 M9.0 阴影射线被静默禁用的根因**：Suzanne-materials.nmesh 只有 NSUB 无 NFLB -> initBlas 的 fallbackPresent=false 直接 skip -> TLAS 未建 -> drawShadow 守卫 tlasReady_ return。修复=就地追加 Suzanne.lod0.nmesh 的 NFLB 尾段（magic..EOF 整段切片精确合法，104 tri/96 verts/L6/maxErr 1.1375）；像素拼接若按 payload+8 算段长会漏 16B 段头（实测 4344 vs 4328 断言失败），NFLB 是 lod0 最后一段须整段切片。
+2. **改名变体渲染失败（EXIT=1）**：曾新建 Suzanne-materials.lod0.nmesh 变体，但 viewer 按模型名 stem 找同名 companion .glb（Suzanne-materials.glb），变体名不匹配 -> Companion glb 缺失 -> 渲染失败。修正=就地给原 Suzanne-materials.nmesh 追加 NFLB 保留原名，删掉错误变体。
+3. **build-m0.2.bat 只吃第一个参数**：脚本取 %~1，build-m0.2.bat DX12 VULKAN 只编 DX12、VULKAN 未被重建 -> 多后端须分开调 build-m0.2.bat VULKAN。
+4. **run.bat 全部 [OK] 却 VERIFY FAILED 无 [FAIL] 行**：echo 文本内带括号/不成对引号破坏 .bat 块解析，重写 run.bat 清除所有 echo 内括号/引号；随后 bat 编码门禁报 LF-only（Write 工具写出 LF）-> tools/check-bat-encoding.py --fix 转 CRLF。
+5. **对照卡锁定（M9.1 语义变更按设计偏离 M9.0 冻结基线）**：M9.1 把 --mode shadow 从无射线升级为每像素发线，s9-gbuffer/shadow 卡（M9.0 无射线基线）按设计偏离 -> 转 manual 锁定，由 s9-shadow 卡承接当前验证；禁止用 M9.1+ 的 exe 重拍 s9-gbuffer/shadow 基线（须用 build/showcase/s9-gbuffer 快照或退回 tag s9-gbuffer）。
+6. **near 不是 FAIL**：dx12/vulkan 仍有 1px / maxDelta 1/255 GPU 取整噪声档，报告为 ALL GREEN，按分档纪律只报 bytes/near/FAIL，不为 near 重拍基线。
+
+**下一步**：M9.2 离线参考模式（64+ 采样/像素的直光 / 硬阴影标准答案，供 M9.1 阴影射线与 VSM(S15) 对照，只算一跳、不是 GI 裁判，tag `s9-done`）。kStage 仍 S8.2，独立 GBuffer 落盘形态仍推迟到 S10 与 S12 历史帧需求一起拍。M9.1 验证口径已绑定 tag s9-shadow，s9-gbuffer/shadow 为冻结的 M9.0 无射线基线、不再随当前 exe 重拍。

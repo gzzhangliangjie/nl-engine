@@ -837,11 +837,12 @@ private:
     // initVisbuf(pulling)（M7.1/7.2）。不新建任何独立 GBuffer 纹理（Q4 方案 A）。
     bool                         shadow_ = false;
     bool                         shadowFailed_ = false; // 懒建失败只报一次
+    bool                         shadowNoTlasLogged_ = false; // TLAS 未就绪的一次性日志
     nvrhi::ShaderHandle          csDirect_;
     nvrhi::ComputePipelineHandle directPSO_;
-    nvrhi::BindingLayoutHandle   directComputeLayout_;  // resolve 槽位表 + b3 + u0
+    nvrhi::BindingLayoutHandle   directComputeLayout_;  // resolve 槽位表 + b3 + u0 + t13 TLAS
     nvrhi::BindingSetHandle      directComputeSet_;
-    nvrhi::BufferHandle          directConstants_;      // volatile CB 16B（b3 清屏色）
+    nvrhi::BufferHandle          directConstants_;      // volatile CB 32B（b3：清屏色 + shadow 参数）
     std::uint32_t                directW_ = 0, directH_ = 0;  // set 绑定的尺寸版本
 };
 
