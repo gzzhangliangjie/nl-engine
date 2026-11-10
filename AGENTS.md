@@ -101,11 +101,11 @@
 > ⚠️ **本节是全部纪律里违反率最高的一节**（2026-11-09 用户再次暴怒点名：M6.0 收口漏 example 卡、漏台账、漏修改文件清单，「我不知道提醒多少次了 还是不听话」）。下面第 9 条的四项自查清单是硬闸：**清单没逐项打勾，不许宣布收口、不许打 tag**。每漏一项都视为失职，用户可追责。
 
 1. **先验收再放行**：每阶段节奏是 `目标 → 亲眼可见用例 → 验收判据 → 放行`。用例必须是能亲眼看到 / 截图 / 演示的东西，不能是「我觉得写完了」。
-   1b. **收口硬闸（2026-11-09 固化，机械强制）**：里程碑收口前必须跑 `python tools/wt_pool.py close --track <轨道> --milestone <编号> --tag <tag> [--version <example版本>]`——机械校验（tag annotated 且在 MILESTONES 台账、example 交付物齐 + `server.py --check`、`git show --stat` 原文机器生成）**任一失败 exit 1 = 不许宣布收口、不许打 tag 流程视为未完成**；通过后生成的报告（主树根 `.wt_pool_close/`）补齐「待填」格后**原样作为收口回复第一屏**；最后 `release --done`（校验报告无未填格才放行）。中途结束对话（里程碑没做完）仍用不带 `--done` 的 `release`。
+   1b. **收口硬闸（2026-11-09 固化，机械强制）**：里程碑收口前必须跑 `python tools/wt_pool.py close --track <轨道> --milestone <编号> --tag <tag> [--version <example版本>]`——机械校验（tag annotated 且在 MILESTONES 台账、example 交付物齐 + `server.py --check`、`git show --stat` 原文机器生成）**任一失败 exit 1 = 不许宣布收口、不许打 tag 流程视为未完成**；通过后生成的报告（主树根 `.wt_pool_close/`）补齐「待填」格后**原样作为收口回复第一屏**；最后 `release --done`（校验报告无未填格才放行）。中途结束对话（里程碑没做完）仍用不带 `--done` 的 `release`。**例外（2026-11-10 M9.0 实读澄清）**：该闸只对**并行轨道**生效 —— `TRACKS` 未注册主线轨道、`release --done` 强制要求 active claim，`.wt_pool_close/` 全部报告来自 feat/* 轨道；S7 / S8 主线收口从未跑过。**主线（master）收口按既有口径执行**：annotated tag + `MILESTONES.md` 四栏台账 + 全量总闸 + `server.py --check`，不新增 track、不 claim，也不要为凑闸去改注册表。
 2. **必须有「交代」**（渲染版本 / 工具版本各一套）：
    - **渲染版本** = `example/` 截图基线（基线 PNG + `run.bat` 进 `example/<版本>/`，登记唯一数据源 `example/cases.json`）。
    - **工具版本** = 展示台网页 `kind:"tool"` 用例（点运行实跑、输出展开；usage / 正向 / 负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s*/...-TOOLS-GUIDE.md` 式归档。工具不产 GPU 截图时，也要有从工具真实输出生成的证据图（cases.json `preview` 静态图，不许手绘示意）。
-3. **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`；验收 / tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。
+3. **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`；验收 / tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。**覆盖边界（2026-11-10 M9.0 实读澄清）**：`--check` 只校验 `kStage` 对应的那一张版本卡；若本里程碑按拍板**不 bump `kStage`**（如 M9.0 保持 `S8.2`），新版本卡不在其覆盖范围内 —— 此时新卡齐备必须由 `example/<版本>/run.bat verify` + `regression.py --only <版本>` 双重机械校验，`--check` 只用来证明旧阶段没回归，不得当成新卡已验收的证据。
 4. **回归按需跑，非必要不跑（2026-11-08 用户拍板，覆盖一切「顺手跑全量」的惯性）**：
    - **默认不跑回归**。改了什么就只跑受影响的几条关键用例：`python tools/regression.py --only <版本>[/用例]`（可叠加 `--backend` 单后端）挑 2~3 条即可。
    - **全量总闸（双后端 × 全部历史用例）只在打 tag 收口放行时跑一次**（M0.9 起生效，用 `--jobs N` 默认 4 提速）。除此之外任何场景——包括「验证 regression 工具本身的改动」——**禁止起全量**，一律小子集验证。

@@ -7519,6 +7519,93 @@
      "command": "cam-tools selftest bogus"
     }
    ]
+  },
+  {
+   "id": "s9-gbuffer",
+   "label": "S9.0",
+   "name": "GBuffer 抽取 + compute 直光对照（M9.0）",
+   "tag": "s9-gbuffer",
+   "date": "2026-11-10",
+   "summary": "M9.0（S9 第一步；Q1 重定义为 GBuffer 抽取 / Q4 拍板方案 A 不落盘即取即算 / ② 新建 compute 8x8 直光 pass）：gbuffer_common.slangh 把 material.slang::psMatResolve 的 vis buffer 几何反解逐字搬移进 resource-free 公共头（PURE MOVE，0 资源声明），material.slang 内联 55 行改一次函数调用；direct.slang::csDirect 用同一数学即取即算 + 逐字搬移 mode 5 BRDF，输出复用 M8.2 rtTarget_ (RGBA32_FLOAT) 与 psRtPresent，0 个新增独立 GBuffer 纹理 / MRT / 落盘 UAV。--mode shadow 五处注册，initVisbuf(pulling) 资产链 + initRtPresent 呈现骨架 + 三个共用函数（槽位表 §2.18 / b1b2 常量写入）按「无副作用前提下尽量复用」落地；放行条件改查 directPSO_、compute set 带尺寸版本闸、drawShadow 断言 rt 与 vis 尺寸一致。FrameParams::clearColor[4] 每帧传 b3，空像素写当帧清屏色对齐 PS 的 discard。kStage 不 bump，HUD 基线零重拍。",
+   "acceptance": [
+    "--mode shadow 与 --mode pulling 同机位同参双后端 PNG 逐字节相同（T6 硬验收第三条）；空像素 = 当帧清屏色 b3 而非黑色，--color 2 变体同样逐字节一致且确实改变画面",
+    "老路径零扰动：pulling 图与 s7.2 冻结基线逐字节相同；pbr-direct/pbr、pbr-direct/textured、s7.2/pulling、s8.2/rt-dist 双后端 8/8 bytes",
+    "direct.cs 双目标编译通过；selftest 产物清单 64 -> 66 已登记防假绿；双后端 viewer selftest 16/16 + Slang 66/66，deviceErrors=0",
+    "run.bat verify 六段全绿：基线 bytes 4/4 + shadow==pulling 2/2 + s7.2 参考 2/2 + color2 奇偶 2/2 + 图像变化 2/2 + log 锚 + 负向 exit 1",
+    "example/s9-gbuffer 四张基线 + run.bat + cases.json 归位；server.py --check 退出 0；Q4 冻结面 0 新增独立 GBuffer 资源"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "shadow",
+     "name": "compute 直光：--mode shadow（GBuffer 即取即算，无阴影射线）",
+     "kind": "pair",
+     "note": "Q4 方案 A：csDirect 8x8 dispatch 内调 gbInterpolateVisTriangle 反解 vis triangle 后直接算 mode 5 BRDF，不发射线、不落盘 GBuffer。输出复用 M8.2 rtTarget_，空像素由 UAV 写当帧清屏色。与 pulling 卡的逐字节互比由 run.bat verify 机器断言。【锁定口径 S9-PLAN T6】本卡基线取自 tag s9-gbuffer 提交时的构建产物；M9.1 起 --mode shadow 语义变更为每像素发射阴影射线，禁止用新 exe 重拍本卡基线，须转 manual 或指向 build/showcase/s9-gbuffer 快照。",
+     "baselines": {
+      "dx12": "example/s9-gbuffer/shadow-dx12.png",
+      "vulkan": "example/s9-gbuffer/shadow-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "shadow",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9"
+     ],
+     "command": "viewer.exe --mode shadow --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+     "script": "example/s9-gbuffer/run.bat verify"
+    },
+    {
+     "id": "pulling",
+     "name": "对照参考：--mode pulling（全屏 PS 材质反解，mode 5）",
+     "kind": "pair",
+     "note": "同一份 gbuffer_common.slangh 数学的全屏 PS 版本，参数与 s7.2/pulling 卡逐字相同，故本图同时与 example/s7-done/materials-pulling-*.png 逐字节相同（老路径零扰动证据）。参数、相机、帧数与 shadow 卡完全一致，构成 T6 对照卡。【锁定口径 S9-PLAN T6】本卡基线取自 tag s9-gbuffer 提交时的构建产物；M9.1 起 --mode shadow 语义变更为每像素发射阴影射线，禁止用新 exe 重拍本卡基线，须转 manual 或指向 build/showcase/s9-gbuffer 快照。",
+     "baselines": {
+      "dx12": "example/s9-gbuffer/pulling-dx12.png",
+      "vulkan": "example/s9-gbuffer/pulling-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9"
+     ],
+     "command": "viewer.exe --mode pulling --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9",
+     "script": "example/s9-gbuffer/run.bat verify"
+    }
+   ]
   }
  ]
 }
