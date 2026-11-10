@@ -36,7 +36,14 @@ vfx-tools selftest                          # JSON 往返 + 坏 magic + SKFE 探
     "colorEnd":   [r,g,b,a],
     "size":       [sx, sy],           // 米（sprite quad 角点 × 节点缩放；Default 归一化 ±0.5）
     "fadeIn": s, "fadeOut": s,        // 秒（RendererCommon FadeIn/Out 帧数 ÷ 60）
-    "texture": "path.png | null"      // M-PT2 起运行时采样：取 basename → assets/efx/textures/<basename>
+    "texture": "path.png | null",     // M-PT2 起运行时采样：取 basename → assets/efx/textures/<basename>
+    "flipbook": {                     // M-PT3 可选字段（缺省/缺字段 = 无；v1 老文件零改动兼容）
+      "frameLength": 12.0,            // 每帧时长，单位 = Efke 帧（1/60s）
+      "countX": 4, "countY": 2,       // 网格划分数
+      "loop": 1,                      // 0=once（末帧驻留）1=loop 2=reverse
+      "offset": [0.0, 0.0],           // UV 起始偏移（V0 = 贴图顶部）
+      "cell": [0.25, 0.5]             // 单帧 UV 尺寸
+    }
   }
 }
 ```
@@ -77,15 +84,24 @@ viewer.exe --nfx <file.nfx>       # 隐含 --particles；失败退 legacy 喷泉
 - **绑定**：t1 纹理 + s0 Linear clamp 采样器；无贴图时绑 1x1 白 dummy 过 NVRHI 校验，
   PS 用 CB `g_params.y` 开关走软圆盘路径（0 = 软圆盘逐字 M-PT0 原表达式）。
 - **sizeY**：`render.size` 的 sy 生效——**Y/X 比走 CB 标量 g_params.z**（单发射器子集
-  所有粒子同比例），实例流 32B 布局不变。ratio=1.0 时 shader 表达式逐位恒等，基线零漂移。
+  所有粒子同比例），ratio=1.0 时 shader 表达式逐位恒等，基线零漂移。
+- **mip 链（M-PT3）**：CPU box-filter 逐层 2×2 均值（纯整数/加法 = 逐位确定），全
+  mipLevels 建纹 + draw 首帧按层 `writeTexture` + sampler `setMipFilter(true)`。远处粒子
+  抗闪烁。基线影响：粒子屏幕尺寸 < 贴图尺寸时会采样进高层 mip（如 tex-flame 0.25m 高
+  粒子），该类基线随特性演进重拍。
+- **flipbook（M-PT3）**：帧号折算全在 CPU（Effekseer GetUV 同式纯整数；`elapsed×60+0.5f`
+  消浮点截断抖动），实例流 48B `progressMisc.xy` = (frameX, frameY)；VS 统一无 branch
+  公式 `flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)`，CB 128B `g_uvRect`——非
+  flipbook 时 uvRect=(0,0,1,1)，IEEE 精确恒等于 M-PT2 texUv（零漂移）。子集外：
+  StartFrame 随机 / LERP 帧间插值 / FrameLength≤0 或极大值 → 转换器 exit 2。
 
 ## 已知边界（历史快照）
 
 > 本节为 M-PT2 收口时点快照；**扩展点的活登记表见 `EFFECTS-STATUS.md`**（状态/改动面/触发场景逐项标注）。
 
 - rate min/max 区间取均值驱动模拟（区间本身留档在 .nfx）；easing/渐变颜色仍不支持。
-- 贴图无 mip 链（远处粒子闪烁，需时再加）；sizeY 为 per-emitter 定值比例
-  （per-particle 随机 Y 需实例流扩字段，子集内无此需求）。
+- sizeY 为 per-emitter 定值比例（per-particle 随机 Y 需实例流扩字段，子集内无此需求）；
+  flipbook 的 LERP 帧间插值 / StartFrame 随机未支持（M-PT3 起 mip 链已落地，其余见登记表）。
 - 样例资产（assets/efx/）来自 Effekseer 仓库 Examples/Resources（MIT + 官方声明
   无使用限制）；`.efkefc` 是真二进制，贴图 PNG 在上游是 LFS 指针文件（无真体）——
   M-PT2 贴图改从 Effekseer 1.80.8 官方工具包 Sample/00_Basic（CC-0）取得。

@@ -163,17 +163,34 @@ private:
         float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
         float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
         bool  additive = false;                    // nfx blend（false = alpha blend）
+        // M-PT3：flipbook 序列帧（.nfx 可选字段；enabled=false = 无，UV 恒等 [0,1]）。
+        // 帧选择与 Effekseer UVAnimationType::Animation 同式：frameNum =
+        // floor(livingFrames / frameLength) 按 loop 折算，行主序（frameX 先走）；
+        // livingFrames = (maxLife - life) × 60（出生起算，Effekseer LivingTime 口径）。
+        struct Flipbook {
+            bool  enabled = false;
+            float frameLength = 1.0f;              // 帧数（Efke 帧 1/60s）
+            int   countX = 1, countY = 1;
+            int   loopType = 0;                    // 0=once 1=loop 2=reverse
+            float offsetU = 0.0f, offsetV = 0.0f;  // UV 起始偏移（V0 = 贴图顶部）
+            float cellW = 1.0f, cellH = 1.0f;      // 单帧 UV 尺寸
+        } flipbook;
         // M-PT2 贴图不走 Params：basename 进成员 textureBasename_（dirty 门控惰性建纹）
     };
 
-    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，32 B）。
+    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，48 B）。
     // M-PT2：sizeY 不进实例流——单发射器子集所有粒子同 Y/X 比，走 CB 标量
     // g_params.z（ratio=1.0 时 cy*1.0 逐位恒等，legacy/方形基线零漂移）。
+    // M-PT3：flipbook progress 每粒子不同 → 实例流扩 float4×3（48 B）。
+    // 已有成员偏移不变（float4 对齐），world/颜色计算路径逐字保留——
+    // pt0/pt1 基线零漂移靠这一点 + PS 软圆盘分支逐字保留。
     struct ParticleGpu {
         float posSize[4];    // xyz = 世界位置，w = 尺寸 X（Y = X × g_params.z）
         float colorAlpha[4]; // rgb = 颜色，a = alpha
+        float progressMisc[4]; // x = 生命周期进度 [0,1]（flipbook 帧选择；非
+                               // flipbook 恒 0），yzw 预留
     };
-    static_assert(sizeof(ParticleGpu) == 32, "ParticleGpu must be 32B");
+    static_assert(sizeof(ParticleGpu) == 48, "ParticleGpu must be 48B");
 
     // CPU 侧模拟状态（SoA 向量化不如确定性重要，AoS 简单直接）。
     struct Sim {
@@ -214,6 +231,7 @@ private:
     std::string                   textureBasename_;              // assets/efx/textures/ 下文件名
     std::vector<std::uint8_t>     texturePixels_;  // RGBA8 像素暂存（上传后清）
     std::uint32_t                 texW_ = 0, texH_ = 0;
+    std::uint32_t                 texMipCount_ = 1;              // M-PT3：mip 链层数（1 = 无）
 };
 
 class Scene {

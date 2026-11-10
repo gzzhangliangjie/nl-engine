@@ -2066,3 +2066,22 @@
 7. **cases.json 追加必须文本级**：python json.dump 整文件重写把 3 空格缩进重排成 2 空格（diff 1.2 万行）——回滚后用 Edit 文本追加，diff +81 行干净。
 
 **下一步**：M-PT3 候选——rate 区间驱动、easing/渐变颜色；merge 回 master 待用户拍板（M-PT0~M-PT2 一并）。
+
+## PT M-PT3：贴图 mip 链 + flipbook 序列帧（feat/particles 轨道，2026-11-10，tag `particles-pt3`）
+
+**动作**：用户拍板「特效侧从 R2 → E6+R7 顺着做」→ 合并为单里程碑 M-PT3（同贴图采样域，一次 claim/收口）。前置实读——Effekseer flipbook 口径（`UVAnimationType::Animation`：`Position` rectf + `FrameLength` 帧数单位 1/60s + `FrameCountX/Y` + `LoopType` once/loop/reverse + `StartFrame` random_int {max,min} 序 + `InterpolationType` NONE/LERP v1600+；帧选择 = `floor(livingFrames/frameLength)` 行主序，全在 `UVFunctions::GetUV`）；现 sampler `setMipFilter(false)` + writeTexture 第 3 参 = mip 层号（全层上传天然支持）。
+
+**落码**：R2 = `ensureTexture` CPU box-filter 全链（纯整数逐位确定）+ `setMipLevels` + draw 首帧按层 `writeTexture` + `setMipFilter(true)`。E6+R7 = 转换器 UVs[0] Animation 子集提取 + `.nfx` v1 可选字段 `render.flipbook`（magic 不变向后兼容，selftest 加往返 + 老格式兼容双断言）+ 帧号 CPU 折算（once/loop/reverse 全支持）+ 实例流 32→48B `progressMisc`（已有成员偏移不变）+ **VS 统一无 branch 公式** `flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)`（非 flipbook = uvRect(0,0,1,1) IEEE 精确恒等 M-PT2 texUv）+ CB 112→128B `g_uvRect`。资产 = PIL 生成 4×2 帧编号色相环网格 + 手工正例 .nfx（散开初速让多帧共存）。交代物：`example/particles-pt3/` 2 基线 + run.bat + cases.json 1 卡（文本级追加）+ pt2 flame 卡 note 补重拍记录。
+
+**提交版本**：`feat/particles` M-PT3 提交（annotated tag `particles-pt3`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过 + selftest 16/16（新增 vfx flipbook 往返断言）；flipbook 画面多帧共存 + 数字正立（V 轴口径/cell 对齐画面实证）+ alive=101 稳态 + deviceErrors=0；flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）；**pt0 6/6 + pt1 10/10 全逐字节零回归**（48B 扩段 + CB 128B + texUv PS→VS 恒等移动全保形）+ pt2 4/4（tex-flame 因 mip 重拍：0.25m 高粒子采样进高层 mip 1652px maxDelta 28——正是 R2 要解决的问题本身，随特性演进合规重拍；tex-hud 逐字节未漂）；ctest DX12/VULKAN 100%（until-pass:3）；run.bat verify exit 0；server --check OK。
+
+**踩坑情况**
+1. **`setMipLevelCount` 不存在**——TextureDesc 的 API 是 `setMipLevels`（回 vendored nvrhi.h 实核，铁律再次生效）。
+2. **flipbook 首拍全粒子重叠**——初速全 0 时所有粒子同点叠加只可见最顶层（帧 0）；正例必须给散开初速（velMin/Max 区间 + 轻重力）让不同年龄粒子落不同位置，帧序才能画面验证。
+3. **帧号截断抖动**——`t*maxLife*60` 经浮点除法恢复有累积误差，`int(x+0.5f)` 四舍五入消除（帧切换时序 ±1 帧抖动的隐形雷）。
+4. **VS branch 教训的正面应用**——flipbook UV 用统一公式而非 if-else（M-PT2 select 化教训），非 flipbook 取值下的 IEEE 恒等让 pt0/pt1/pt2 软圆盘路径零漂移，一次到位。
+5. **pt2 基线重拍的判据 clarity**——tex-hud 未漂（屏幕尺寸 ≥ 贴图尺寸 → LOD 0）而 tex-flame 漂（屏幕 30px < 128px 贴图 → 高层 mip），同一贴图链路两种结果完全可解释；重拍合规通道 = 特性演进 + note 落档原因。
+
+**下一步**：merge 回 master 待用户拍板（M-PT0~M-PT3 一并）；特效登记表下一批候选 = E1 rate 区间（小）/ E2 easing·渐变颜色（中，首次动 schema 演进样本已由 flipbook 可选字段模式铺好）/ E5 旋转 billboard（中）；主线 S8 M8.2 开工待指令。

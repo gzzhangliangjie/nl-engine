@@ -8,15 +8,17 @@
 // HUD 之前，alpha blend，深度测试开 / 深度写入关）。
 //
 // 资源（两后端同名寄存器，Vulkan 走 -fvk-b-shift 256 / -fvk-t-shift 0 / -fvk-s-shift 128）：
-//   b0 = ParticleConstantsCB（volatile，每帧全量覆写，112 B）
-//   t0 = StructuredBuffer<ParticleGpu>（每实例 32 B：posSize + colorAlpha）
+//   b0 = ParticleConstantsCB（volatile，每帧全量覆写，128 B）
+//   t0 = StructuredBuffer<ParticleGpu>（每实例 48 B：posSize + colorAlpha + progressMisc）
 //   t1 = 粒子贴图（nfx texture 字段；无贴图绑 1x1 白 dummy）
-//   s0 = Linear clamp 采样器
+//   s0 = Linear clamp 采样器（M-PT3：mip 线性，纹理带全 mip 链）
 //   g_params.y = 贴图开关（0 = 软圆盘路径，1 = 贴图采样）
 //   g_params.z = Y/X 尺寸比（legacy/方形恒 1.0）
+//   g_params.w = flipbook 开关（0 = 恒等 UV，1 = 序列帧 cell 采样）
+//   g_uvRect   = UV 区域（xy = offset，zw = cell 尺寸；非 flipbook = (0,0,1,1)）
 //
 // 布局铁律：结构体与 scene.cpp 的 ParticleGpu / ParticleConstantsCB 逐字节
-// 对应（32 B / 128 B），漂移会直接画花而不是报错——改任何一侧必须同步另一侧。
+// 对应（48 B / 128 B），漂移会直接画花而不是报错——改任何一侧必须同步另一侧。
 
 cbuffer ParticleConstantsCB : register(b0)
 {
@@ -28,14 +30,18 @@ cbuffer ParticleConstantsCB : register(b0)
     // billboard 沿 right×up 展开，永远正对相机。
     float4 g_camRight;
     float4 g_camUp;
-    // 预留（当前 x=整体尺寸倍率，其余未用）。
+    // 预留（当前 x=整体尺寸倍率）。
     float4 g_params;
+    // M-PT3：flipbook UV 区域。非 flipbook 恒 (0,0,1,1)——此时 flipUv 公式
+    // 数学恒等于 M-PT2 的 texUv（×1.0 / +0.0 精确恒等，无 branch）。
+    float4 g_uvRect;
 };
 
 struct ParticleGpu
 {
-    float4 posSize;    // xyz = 世界位置，w = 尺寸 X（米；Y = X × g_params.z）
-    float4 colorAlpha; // rgb = 颜色，a = alpha（CPU 端按寿命曲线算好）
+    float4 posSize;      // xyz = 世界位置，w = 尺寸 X（米；Y = X × g_params.z）
+    float4 colorAlpha;   // rgb = 颜色，a = alpha（CPU 端按寿命曲线算好）
+    float4 progressMisc; // xy = flipbook 帧号 (frameX, frameY)（CPU 折算，非 flipbook = (0,0)），zw 预留
 };
 
 StructuredBuffer<ParticleGpu> g_particles : register(t0);
@@ -45,7 +51,8 @@ SamplerState    g_samp  : register(s0);
 struct VSOutput
 {
     float4 position : SV_Position;
-    float2 uv       : TEXCOORD;
+    float2 uv       : TEXCOORD0;   // corner ∈ [-1,1]²（软圆盘距离场）
+    float2 flipUv   : TEXCOORD1;   // M-PT3：纹理 UV（贴图路径采样用）
     float4 color    : COLOR;
 };
 
@@ -70,6 +77,12 @@ VSOutput vsMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     output.position = mul(g_mvp, float4(world, 1.0f));
     output.uv       = corner;
     output.color    = p.colorAlpha;
+    // M-PT3：统一 flipbook UV 公式（无 branch）。非 flipbook：g_uvRect=(0,0,1,1)、
+    // progressMisc.xy=(0,0) → flipUv = localUv = M-PT2 的 texUv 逐位恒等；
+    // flipbook：CPU 已折算帧号 → origin = offset + cell*frame，cell 内插值。
+    // V 轴口径：Effekseer V0 = 贴图顶部映 billboard 顶部（corner.y=+1）→ v 翻转。
+    const float2 localUv = float2(corner.x * 0.5f + 0.5f, 0.5f - corner.y * 0.5f);
+    output.flipUv = g_uvRect.xy + g_uvRect.zw * (p.progressMisc.xy + localUv);
     return output;
 }
 
@@ -81,12 +94,11 @@ float4 psMain(VSOutput input) : SV_Target
 
     // M-PT2：贴图采样分支保形——无贴图分支逐字保留 M-PT0 原表达式（uniform 分支
     // 全像素一致；DXIL 会把 lerp 展开成 FMA 造成 ±1 LSB 舍入，lerp-0「恒等」在
-    // DX12 实测漂 15 像素，禁用）。uv∈[-1,1] → [0,1]²，Effekseer 口径 V0 = 贴图
-    // 顶部映 billboard 顶部（camUp 正方向 = corner.y +1）→ v 轴翻转。
+    // DX12 实测漂 15 像素，禁用）。M-PT3：texUv 计算移到 VS 输出 flipUv（恒等
+    // 移动，非 flipbook 路径像素结果逐位同；软圆盘分支不读 flipUv 零影响）。
     if (g_params.y == 0.0f) {
         return float4(input.color.rgb, input.color.a * disc);
     }
-    const float2 texUv = float2(input.uv.x * 0.5f + 0.5f, 0.5f - input.uv.y * 0.5f);
-    const float4 tex = g_tex.Sample(g_samp, texUv);
+    const float4 tex = g_tex.Sample(g_samp, input.flipUv);
     return float4(input.color.rgb * tex.rgb, input.color.a * tex.a);
 }

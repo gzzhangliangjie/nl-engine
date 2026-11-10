@@ -6213,7 +6213,7 @@
      "id": "tex-flame-rect",
      "name": "贴图 + 非方形 + additive 复合：Flame01 扁形火焰（120 帧稳态）",
      "kind": "pair",
-     "note": "三特性同卡覆盖：texture 字段 + sizeY 2:1 非方形（ratioY=0.5 走 CB 标量 g_params.z）+ additive 变体管线（M-PT1 懒建路径复用）。",
+     "note": "三特性同卡覆盖：texture 字段 + sizeY 2:1 非方形（ratioY=0.5 走 CB 标量 g_params.z）+ additive 变体管线（M-PT1 懒建路径复用）。M-PT3 基线重拍：mip 链生效后 0.25m 高粒子采样进高层 mip（1652px maxDelta 28），随特性演进合规重拍双后端基线；tex-hud 卡逐字节未漂（粒子屏幕尺寸 ≥ 贴图尺寸，采样全落 layer 0）。",
      "baselines": {
       "dx12": "example/particles-pt2/particles-tex-flame-dx12.png",
       "vulkan": "example/particles-pt2/particles-tex-flame-vulkan.png"
@@ -6241,6 +6241,40 @@
     }
    ],
    "tag": "particles-pt2"
+  },
+  {
+   "id": "particles-pt3",
+   "label": "M-PT3",
+   "name": "贴图 mip 链 + flipbook 序列帧（M-PT3）",
+   "date": "2026-11-10",
+   "summary": "M-PT3（particles 轨道第四里程碑，R2+E6+R7）：① R2 贴图 mip 链——ensureTexture CPU box-filter 逐层下采样（纯整数/加法 = 跨次运行逐位确定，奇数尺寸 clamp 边缘），TextureDesc setMipLevels 全链建纹 + draw 首帧 writeTexture 按层循环上传（平铺布局层 n = (W>>n)×(H>>n)）+ sampler setMipFilter(true)；无贴图 dummy 1x1 无 mip 链零影响。② E6+R7 flipbook 序列帧——转换器 UVs[0] Animation 子集提取（StartFrame 恒 0/LERP 拒绝/FrameLength 正数非极大，LoopType once/loop/reverse 全支持），.nfx v1 可选字段 flipbook 向后兼容（magic 不变，缺省 = 无，老文件零改动）；帧号折算全在 CPU（Effekseer UVFunctions::GetUV 同式纯整数运算，elapsed×60+0.5f 消浮点截断抖动），实例流 32→48B 扩 progressMisc（已有成员偏移不变 float4 对齐）；VS 统一无 branch 公式 flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)——非 flipbook 时 uvRect=(0,0,1,1) IEEE 精确恒等于 M-PT2 texUv（texUv 计算从 PS 移到 VS，恒等移动）；CB 112→128B 加 g_uvRect。③ 贴图资产 flipbook_4x2.png（PIL 生成 4×2 帧编号色相环网格）。",
+   "acceptance": [
+    "flipbook 画面：4×2 帧编号色相环贴图，多帧共存可见（散开初速），数字正立（V 轴口径核对），cell 对齐正确，alive=101 稳态，deviceErrors=0",
+    "确定性：flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）",
+    "基线：pt0 6/6 + pt1 10/10 全逐字节零回归；pt2 4/4（tex-flame 因 mip 采样重拍合规落档，tex-hud 逐字节未漂）",
+    "example/particles-pt3 归位（flipbook-hud × 双后端 2 基线）+ cases.json 卡 1 用例 + run.bat verify"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "flipbook-hud",
+     "name": "flipbook 序列帧画面：4×2 帧编号贴图 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "R2 mip + E6+R7 flipbook 复合：256x128 4×2 网格贴图全 mip 链，帧号 CPU 折算 + VS 统一 UV 公式；散开初速让多帧共存（同点重叠只能看到最顶层）。expectLog 用贴图锚。",
+     "baselines": {
+      "dx12": "example/particles-pt3/particles-flipbook-hud-dx12.png",
+      "vulkan": "example/particles-pt3/particles-flipbook-hud-vulkan.png"
+     },
+     "args": ["--nfx", "assets/efx/tex_flipbook.nfx", "--hud", "--screenshot", "{out}", "--frames", "120", "--yaw", "12", "--pitch", "9", "--dist", "3.6", "--size", "640x720"],
+     "expectLog": "nfx texture: flipbook_4x2.png (256x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_flipbook.nfx --hud ...",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt3"
   }
  ]
 }

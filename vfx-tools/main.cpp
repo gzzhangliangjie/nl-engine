@@ -160,6 +160,19 @@ struct NfxDoc
     float sizeX = 1.0f, sizeY = 1.0f;
     float fadeIn = 0.0f, fadeOut = 0.0f; // seconds
     std::string texture;                 // 相对路径，"" = 无
+
+    // M-PT3：flipbook 序列帧（.nfx v1 可选字段；缺省 = 无）。UV 口径对齐
+    // Effekseer UVAnimationType::Animation：frameLength 单位 = Efke 帧（1/60s），
+    // offset/cell 是贴图 UV（V0 = 贴图顶部），帧序 = 行主序（frameX 先走）。
+    struct Flipbook
+    {
+        bool  enabled = false;
+        float frameLength = 1.0f; // 帧数（Effekseer 帧），>0 且非极大值
+        int   countX = 1, countY = 1;
+        int   loopType = 0; // 0=once 1=loop 2=reverse（Effekseer 原值）
+        float offsetU = 0.0f, offsetV = 0.0f; // Position.x/.y
+        float cellW = 1.0f, cellH = 1.0f;     // Position.w/.h
+    } flipbook;
 };
 
 json nfxToJson(const NfxDoc& d, const std::string& sourceName)
@@ -185,6 +198,17 @@ json nfxToJson(const NfxDoc& d, const std::string& sourceName)
         {"fadeOut", d.fadeOut},
         {"texture", d.texture.empty() ? json(nullptr) : json(d.texture)},
     };
+    if (d.flipbook.enabled)
+    {
+        j["render"]["flipbook"] = {
+            {"frameLength", d.flipbook.frameLength},
+            {"countX", d.flipbook.countX},
+            {"countY", d.flipbook.countY},
+            {"loop", d.flipbook.loopType}, // 0=once 1=loop 2=reverse
+            {"offset", {d.flipbook.offsetU, d.flipbook.offsetV}},
+            {"cell", {d.flipbook.cellW, d.flipbook.cellH}},
+        };
+    }
     return j;
 }
 
@@ -244,6 +268,27 @@ bool nfxFromJson(const json& j, NfxDoc& d, std::string& err)
     d.fadeIn = r.value("fadeIn", 0.0f);
     d.fadeOut = r.value("fadeOut", 0.0f);
     d.texture = r.value("texture", json(nullptr)) == json(nullptr) ? "" : r["texture"].get<std::string>();
+    // M-PT3：flipbook 可选字段（缺省 = 无，v1 老文件零改动兼容）
+    if (r.contains("flipbook"))
+    {
+        const json& fb = r["flipbook"];
+        if (!fb.is_object() || !fb.contains("frameLength") || !fb.contains("countX") ||
+            !fb.contains("countY") || !fb.contains("loop") || !fb.contains("offset") ||
+            !fb.contains("cell"))
+        {
+            err = "bad flipbook object";
+            return false;
+        }
+        d.flipbook.enabled = true;
+        d.flipbook.frameLength = fb["frameLength"].get<float>();
+        d.flipbook.countX = fb["countX"].get<int>();
+        d.flipbook.countY = fb["countY"].get<int>();
+        d.flipbook.loopType = fb["loop"].get<int>();
+        d.flipbook.offsetU = fb["offset"][0].get<float>();
+        d.flipbook.offsetV = fb["offset"][1].get<float>();
+        d.flipbook.cellW = fb["cell"][0].get<float>();
+        d.flipbook.cellH = fb["cell"][1].get<float>();
+    }
     return true;
 }
 
@@ -394,10 +439,48 @@ NfxDoc extract(const Effekseer::Effect* effect, Unsupported& unsup)
         d.fadeIn = rc.FadeIn.Frame * kFrame;
     if (rc.FadeOutType == ParameterRendererCommon::FADEOUT_WITHIN_LIFETIME)
         d.fadeOut = rc.FadeOut.Frame * kFrame;
-    for (const auto& uv : rc.UVs)
+    for (size_t uvi = 0; uvi < rc.UVs.size() && uvi < 4; uvi++)
     {
-        if (uv.Type != UVAnimationType::Default)
-            unsup.add("UV animation != Default");
+        const auto& uv = rc.UVs[uvi];
+        if (uv.Type == UVAnimationType::Default)
+            continue;
+        // M-PT3：sprite 主 UV（[0]）支持 Animation 子集（flipbook 序列帧）；
+        // 此处只有 sprite 节点能到达，其余 UV 通道与其它动画类型仍不支持。
+        if (uvi == 0 && uv.Type == UVAnimationType::Animation)
+        {
+            const auto& anim = uv.Animation;
+            // 子集边界：StartFrame 必须恒 0（random {max,min} 序）、无帧间插值、
+            // FrameLength 正数且非极大值（极大 = 固定帧，等价 Fixed UV，拒绝）。
+            if (anim.StartFrame.max != 0 || anim.StartFrame.min != 0)
+                unsup.add("flipbook StartFrame != 0 (random start)");
+            if (anim.InterpolationType != anim.NONE)
+                unsup.add("flipbook frame interpolation (LERP) not supported");
+            if (anim.FrameLength <= 0 ||
+                UVFunctions::IsInfiniteValue(anim.FrameLength))
+                unsup.add("flipbook FrameLength <= 0 or infinite");
+            if (anim.FrameCountX <= 0 || anim.FrameCountY <= 0)
+                unsup.add("flipbook FrameCount <= 0");
+            if (!unsup.empty())
+                continue;
+            d.flipbook.enabled = true;
+            d.flipbook.frameLength = float(anim.FrameLength);
+            d.flipbook.countX = anim.FrameCountX;
+            d.flipbook.countY = anim.FrameCountY;
+            d.flipbook.loopType = anim.LoopType;
+            d.flipbook.offsetU = anim.Position.x;
+            d.flipbook.offsetV = anim.Position.y;
+            d.flipbook.cellW = anim.Position.w;
+            d.flipbook.cellH = anim.Position.h;
+            continue;
+        }
+        const char* typeName = uv.Type == UVAnimationType::Fixed   ? "Fixed"
+                               : uv.Type == UVAnimationType::Scroll ? "Scroll"
+                               : uv.Type == UVAnimationType::FCurve ? "FCurve"
+                                                                    : "Animation";
+        unsup.add((std::string("UV animation != Default on channel ") +
+                   std::to_string(uvi) + " (" + typeName +
+                   (uvi == 0 ? ", subset violated)" : ")"))
+                      .c_str());
     }
 
     // sprite 专属段
@@ -567,6 +650,16 @@ int runSelftest()
     src.fadeIn = 0.15f;
     src.fadeOut = 0.4f;
     src.texture = "tex/particle01.png";
+    // M-PT3：flipbook 字段往返
+    src.flipbook.enabled = true;
+    src.flipbook.frameLength = 3.0f;
+    src.flipbook.countX = 4;
+    src.flipbook.countY = 2;
+    src.flipbook.loopType = 1;
+    src.flipbook.offsetU = 0.0f;
+    src.flipbook.offsetV = 0.5f;
+    src.flipbook.cellW = 0.25f;
+    src.flipbook.cellH = 0.5f;
 
     json j = nfxToJson(src, "roundtrip.efkefc");
     NfxDoc back;
@@ -580,7 +673,12 @@ int runSelftest()
               back.lifeMin == 1.6f && back.lifeMax == 2.3f && back.blend == "additive" &&
               back.colorStart[0] == 250 && back.colorEnd[2] == 30 && back.sizeX == 0.08f &&
               back.fadeIn == 0.15f && back.fadeOut == 0.4f && back.texture == "tex/particle01.png" &&
-              back.accel[1] == -9.8f && back.accel[0] == 0.0f && back.velMin[2] == 0.5f;
+              back.accel[1] == -9.8f && back.accel[0] == 0.0f && back.velMin[2] == 0.5f &&
+              // M-PT3：flipbook 往返
+              back.flipbook.enabled && back.flipbook.frameLength == 3.0f &&
+              back.flipbook.countX == 4 && back.flipbook.countY == 2 &&
+              back.flipbook.loopType == 1 && back.flipbook.offsetV == 0.5f &&
+              back.flipbook.cellW == 0.25f && back.flipbook.cellH == 0.5f;
     if (!ok)
     {
         printf("nfx selftest: FAIL (roundtrip field mismatch)\n");
@@ -594,6 +692,20 @@ int runSelftest()
     {
         printf("nfx selftest: FAIL (bad magic accepted)\n");
         return 1;
+    }
+
+    // 自证 2b：老格式兼容（无 flipbook 字段 → enabled=false）
+    {
+        json legacy = nfxToJson(src, "legacy.efkefc");
+        legacy["render"].erase("flipbook");
+        NfxDoc back2;
+        std::string err2;
+        if (!nfxFromJson(json::parse(legacy.dump()), back2, err2) || back2.flipbook.enabled)
+        {
+            printf("nfx selftest: FAIL (legacy no-flipbook parse: %s)\n",
+                   err2.empty() ? "flipbook enabled" : err2.c_str());
+            return 1;
+        }
     }
 
     // 自证 3：SKFE 魔数识别（拿真加载路径前面的工厂检查逻辑自证）——

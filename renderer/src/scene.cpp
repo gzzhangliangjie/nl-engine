@@ -4320,14 +4320,15 @@ float particleRand01(std::uint32_t v) {
 constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
 constexpr float kEmitterPos[3] = {0.0f, -0.55f, 0.0f};
 
-// CB 布局（与 particles.slang 的 cbuffer b0 逐字节对应，112 B）。
+// CB 布局（与 particles.slang 的 cbuffer b0 逐字节对应，128 B）。
 struct ParticleConstantsCB {
     float mvp[16];
     float camRight[4];
     float camUp[4];
-    float params[4];   // x = billboard 整体尺寸倍率
+    float params[4];   // x = billboard 整体尺寸倍率；y = 贴图开关；z = Y/X 比；w = flipbook 开关
+    float uvRect[4];   // M-PT3：flipbook UV 区域（xy=offset zw=cell；非 flipbook = 0,0,1,1）
 };
-static_assert(sizeof(ParticleConstantsCB) == 112, "particle cbuffer layout must match shader");
+static_assert(sizeof(ParticleConstantsCB) == 128, "particle cbuffer layout must match shader");
 
 } // namespace
 
@@ -4376,9 +4377,9 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
 
-    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT2 起 sizeY 独立段），structStride
-    // 必须与 shader 视角一致。每帧 CopyDest 起步（writeBuffer）→ 帧内 SRV 动态晋升
-    // （visibleList 同款状态纪律，§2.15 buffer 每帧写回登记）。
+    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT3 扩 progressMisc 段；已有成员
+    // 偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
+    // （writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态纪律，§2.15）。
     nvrhi::BufferDesc instDesc;
     instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
     instDesc.structStride = sizeof(ParticleGpu);
@@ -4415,7 +4416,7 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     if (!sampler_) {
         nvrhi::SamplerDesc sDesc;
         sDesc.setAllFilters(true)   // bool 语义：true = Linear（nvrhi.h 惯例）
-            .setMipFilter(false)    // 贴图无 mip 链
+            .setMipFilter(true)     // M-PT3：mip 线性（纹理带全 mip 链；dummy 1x1 无 mip 不受影响）
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
         sampler_ = device->createSampler(sDesc);
         if (!sampler_) { outError = "createSampler failed for particles"; return false; }
@@ -4486,15 +4487,52 @@ bool Particles::ensureTexture(nvrhi::IDevice* device, std::string& outError) {
     texW_ = uW;
     texH_ = uH;
 
+    // M-PT3：CPU box-filter mip 链（逐层 2×2 均值下采样，纯整数/加法运算
+    // = 跨次运行逐位确定；奇数尺寸层取 floor，右/下边缘用 clamp 取样）。
+    // 全链存进 texturePixels_ 平铺（层 0 = W×H，层 n = (W>>n)×(H>>n)，
+    // 每层行距 = 层宽×4 无 padding），上传时按层 writeTexture。
+    {
+        const std::uint32_t maxDim = (uW > uH) ? uW : uH;
+        std::uint32_t levels = 1;
+        while ((maxDim >> levels) > 0) ++levels;   // log2(maxDim)+1（1x1 封底）
+        texMipCount_ = levels;
+        std::vector<std::uint8_t> chain = texturePixels_;  // 层 0
+        std::uint32_t pw = uW, ph = uH;
+        for (std::uint32_t l = 1; l < levels; ++l) {
+            const std::uint32_t nw = (pw > 1) ? (pw >> 1) : 1;
+            const std::uint32_t nh = (ph > 1) ? (ph >> 1) : 1;
+            std::vector<std::uint8_t> nl(size_t(nw) * nh * 4u);
+            for (std::uint32_t y = 0; y < nh; ++y) {
+                for (std::uint32_t x = 0; x < nw; ++x) {
+                    // 2×2 均值；pw/ph 为 1 时采样越界 → clamp 到 0（同像素）
+                    const std::uint32_t x1 = (x * 2u + 1u < pw) ? x * 2u + 1u : x * 2u;
+                    const std::uint32_t y1 = (y * 2u + 1u < ph) ? y * 2u + 1u : y * 2u;
+                    const std::uint8_t* s00 = &chain[(size_t(y * 2u) * pw + x * 2u) * 4u];
+                    const std::uint8_t* s01 = &chain[(size_t(y * 2u) * pw + x1) * 4u];
+                    const std::uint8_t* s10 = &chain[(size_t(y1) * pw + x * 2u) * 4u];
+                    const std::uint8_t* s11 = &chain[(size_t(y1) * pw + x1) * 4u];
+                    std::uint8_t* dst = &nl[(size_t(y) * nw + x) * 4u];
+                    for (int c = 0; c < 4; ++c)
+                        dst[c] = std::uint8_t((s00[c] + s01[c] + s10[c] + s11[c]) >> 2);
+                }
+            }
+            chain.swap(nl);
+            texturePixels_.insert(texturePixels_.end(), chain.begin(), chain.end());
+            pw = nw; ph = nh;
+        }
+    }
+
     nvrhi::TextureDesc d;
     d.setWidth(uW).setHeight(uH);
     d.setFormat(nvrhi::Format::RGBA8_UNORM);
+    d.setMipLevels(texMipCount_);   // M-PT3：全 mip 链（远处粒子抗闪烁）
     d.setInitialState(nvrhi::ResourceStates::CopyDest);   // writeTexture 后转 ShaderResource
     d.keepInitialState = true;
     d.debugName = "ParticleTexture";
     texture_ = device->createTexture(d);
     if (!texture_) {
         texturePixels_.clear();
+        texMipCount_ = 1;
         outError = "createTexture failed for " + textureBasename_;
         return false;
     }
@@ -4597,6 +4635,31 @@ void Particles::step(float dt) {
                 aOut = std::min(1.0f, p.life / params_.fadeOut);
             g.colorAlpha[3] = params_.colorStart[3] * aIn * aOut;
         }
+        // M-PT3：flipbook 帧号 CPU 折算（Effekseer GetUV 同式，纯整数运算确定性
+        // 无碍）。elapsed 恢复出生起算秒数后 ×60 = LivingTime（Efke 帧单位），
+        // +0.5f 取整消除逐帧浮点减法累积误差的截断抖动。loop 折算三式与
+        // Effekseer UVFunctions::GetUV 逐式对应。非 flipbook 恒 (0,0)（配合
+        // CB uvRect=(0,0,1,1)，VS 统一公式恒等于 M-PT2 texUv）。
+        if (params_.flipbook.enabled) {
+            const float elapsed = p.maxLife - p.life;   // 出生起算秒数
+            const int livingFrames = int(elapsed * 60.0f + 0.5f);
+            int frameNum = int(float(livingFrames) / params_.flipbook.frameLength);
+            const int fc = params_.flipbook.countX * params_.flipbook.countY;
+            if (params_.flipbook.loopType == 0) {          // once：末帧驻留
+                if (frameNum >= fc) frameNum = fc - 1;
+            } else if (params_.flipbook.loopType == 1) {   // loop
+                frameNum %= fc;
+            } else {                                       // reverse（来回循环）
+                const bool rev = (frameNum / fc) % 2 == 1;
+                frameNum %= fc;
+                if (rev) frameNum = fc - 1 - frameNum;
+            }
+            g.progressMisc[0] = float(frameNum % params_.flipbook.countX);
+            g.progressMisc[1] = float(frameNum / params_.flipbook.countX);
+        } else {
+            g.progressMisc[0] = 0.0f; g.progressMisc[1] = 0.0f;
+        }
+        g.progressMisc[2] = 0.0f; g.progressMisc[3] = 0.0f;
         gpuData_.push_back(g);
     }
     aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
@@ -4649,7 +4712,19 @@ void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     if (texturePendingUpload_ || dummyPendingUpload_) {
         static const std::uint8_t kWhite[4] = {255, 255, 255, 255};
         if (texturePendingUpload_) {
-            cmd->writeTexture(texture_, 0, 0, texturePixels_.data(), texW_ * 4u);
+            // M-PT3：全 mip 层逐层上传（texturePixels_ 平铺布局见 ensureTexture；
+            // writeTexture 第 3 参 = mip 层号，NVRHI staging 内部按 subresource 路由）。
+            {
+                const std::uint8_t* base = texturePixels_.data();
+                std::uint32_t pw = texW_, ph = texH_;
+                std::size_t off = 0;
+                for (std::uint32_t l = 0; l < texMipCount_; ++l) {
+                    cmd->writeTexture(texture_, 0, l, base + off, pw * 4u);
+                    off += std::size_t(pw) * ph * 4u;
+                    pw = (pw > 1) ? (pw >> 1) : 1;
+                    ph = (ph > 1) ? (ph >> 1) : 1;
+                }
+            }
             cmd->setTextureState(texture_, nvrhi::AllSubresources,
                                  nvrhi::ResourceStates::ShaderResource);
             texturePixels_.clear();
@@ -4675,7 +4750,19 @@ void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     cb.params[0] = 1.0f;
     cb.params[1] = texture_ ? 1.0f : 0.0f;  // M-PT2：PS 贴图开关（0 = 软圆盘路径）
     cb.params[2] = params_.ratioY;          // M-PT2：Y/X 尺寸比（方形恒 1.0 保形）
-    cb.params[3] = 0.0f;
+    cb.params[3] = params_.flipbook.enabled ? 1.0f : 0.0f; // M-PT3：VS flipbook UV 开关
+    // M-PT3：flipbook UV 区域。非 flipbook 恒 (0,0,1,1)——VS 统一公式在此取值下
+    // 精确恒等于 M-PT2 的 texUv（×1.0/+0.0 IEEE 恒等，pt0/pt1/pt2 软圆盘+恒等
+    // 贴图路径零漂移）；flipbook 时 = .nfx offset/cell。
+    if (params_.flipbook.enabled) {
+        cb.uvRect[0] = params_.flipbook.offsetU;
+        cb.uvRect[1] = params_.flipbook.offsetV;
+        cb.uvRect[2] = params_.flipbook.cellW;
+        cb.uvRect[3] = params_.flipbook.cellH;
+    } else {
+        cb.uvRect[0] = 0.0f; cb.uvRect[1] = 0.0f;
+        cb.uvRect[2] = 1.0f; cb.uvRect[3] = 1.0f;
+    }
     cmd->writeBuffer(constants_, &cb, sizeof(cb));
     cmd->writeBuffer(instanceData_, gpuData_.data(),
                      aliveCount_ * static_cast<std::uint32_t>(sizeof(ParticleGpu)));
@@ -4768,6 +4855,34 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     p.fadeOut = r.value("fadeOut", 0.0f);
     std::string blend = r.value("blend", "alpha");
     p.additive = (blend == "additive");
+
+    // M-PT3：flipbook 可选字段（缺省/缺字段 = 无）。字段校验从严——畸形即拒
+    // （exit 路径返回 false，加载端保持 legacy 参数不变）。
+    if (r.contains("flipbook")) {
+        const nlohmann::json& fb = r["flipbook"];
+        if (!fb.is_object() || !fb.contains("frameLength") || !fb.contains("countX") ||
+            !fb.contains("countY") || !fb.contains("loop") || !fb.contains("offset") ||
+            !fb.contains("cell") || !fb["offset"].is_array() || fb["offset"].size() != 2 ||
+            !fb["cell"].is_array() || fb["cell"].size() != 2) {
+            outError = ".nfx malformed flipbook object";
+            return false;
+        }
+        p.flipbook.enabled = true;
+        p.flipbook.frameLength = fb["frameLength"].get<float>();
+        p.flipbook.countX = fb["countX"].get<int>();
+        p.flipbook.countY = fb["countY"].get<int>();
+        p.flipbook.loopType = fb["loop"].get<int>();
+        p.flipbook.offsetU = fb["offset"][0].get<float>();
+        p.flipbook.offsetV = fb["offset"][1].get<float>();
+        p.flipbook.cellW = fb["cell"][0].get<float>();
+        p.flipbook.cellH = fb["cell"][1].get<float>();
+        if (p.flipbook.frameLength <= 0.0f || p.flipbook.countX <= 0 || p.flipbook.countY <= 0 ||
+            p.flipbook.loopType < 0 || p.flipbook.loopType > 2 ||
+            p.flipbook.cellW <= 0.0f || p.flipbook.cellH <= 0.0f) {
+            outError = ".nfx flipbook params out of range";
+            return false;
+        }
+    }
 
     // M-PT2：贴图 basename（.efkefc 内部相对路径只取尾段；运行时解析为
     // assets/efx/textures/<basename>，首帧 ensureTexture 找不到/解码失败回退软圆盘）。

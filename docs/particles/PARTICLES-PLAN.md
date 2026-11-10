@@ -57,6 +57,14 @@ compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积�
 - 验收 ✅：贴图模式双卡（tex_particle01 alpha 光斑 / tex_flame01_rect additive 火焰 2:1 扁形）双后端可见 + alive=101 稳态 + deviceErrors=0；贴图模式 DX12 同参两跑 PNG 逐字节同；**双后端贴图采样区域逐位同**（diff 仅 HUD adapter 文字）；pt0 6/6 + pt1 10/10 回归 ALL GREEN 全逐字节；负向人工实证（texture 缺失 → soft-disc fallback 不炸帧）。交代：`example/particles-pt2/` 4 基线 + run.bat verify 全绿 + cases.json 卡 2 用例。
 - 已知边界（M-PT3 候选）：rate 区间驱动、easing/渐变颜色仍留候选；sizeY 当前 per-emitter 定值比例（per-particle 随机 Y 需实例流扩字段，v1 子集内无此需求）；贴图无 mip 链（远处粒子闪烁，需时再加 mip）；sRGB 转换未做（引擎全链无 gamma 口径下一致，若未来引入 HDR/离屏 RT 需重议）。
 
+## M-PT3 · 贴图 mip 链 + flipbook 序列帧（✅ 收官 2026-11-10，tag `particles-pt3`）
+
+- 贴图 mip 链（R2）✅：`ensureTexture` CPU box-filter 逐层 2×2 均值下采样（纯整数/加法 = 跨次运行逐位确定；奇数尺寸层 clamp 边缘取样），`TextureDesc::setMipLevels` 全链建纹 + draw 首帧 `writeTexture` 按层循环上传（texturePixels_ 平铺布局：层 n = (W>>n)×(H>>n)，行距 = 层宽×4 无 padding）+ sampler `setMipFilter(true)`。dummy 1x1 无 mip 链零影响。**基线影响如实落档**：tex-flame（0.25m 高粒子采样进高层 mip）双后端重拍（1652px maxDelta 28），tex-hud 逐字节未漂（粒子屏幕尺寸 ≥ 贴图尺寸采样全落 layer 0）。
+- flipbook 序列帧（E6+R7）✅：转换器 `UVs[0]` Animation 子集提取（StartFrame 恒 0 / LERP 帧间插值 / FrameLength≤0 或极大值 → exit 2；LoopType once/loop/reverse 全支持——三者皆 Effekseer `UVFunctions::GetUV` 无分支数学）；`.nfx` **v1 可选字段向后兼容**（magic 不变，`render.flipbook` 缺省 = 无，老文件零改动；selftest 加 flipbook 往返 + 老格式兼容双断言）；帧号折算**全在 CPU**（`elapsed×60+0.5f` 消浮点截断抖动，once 末帧驻留 / loop 取模 / reverse 来回，纯整数运算确定性无碍）；实例流 32→48B 扩 `progressMisc`（已有成员偏移不变 float4 对齐）；**VS 统一无 branch 公式** `flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)`——非 flipbook 时 `uvRect=(0,0,1,1)`、`frameXY=(0,0)`，IEEE 精确恒等于 M-PT2 的 texUv（texUv 从 PS 移到 VS 属恒等移动，软圆盘分支不读 flipUv 零影响）；CB 112→128B 加 `g_uvRect`。
+- 贴图资产：`flipbook_4x2.png`（PIL 生成 4×2 帧编号色相环网格，CC-0）+ 手工 `tex_flipbook.nfx` 正例（散开初速让不同年龄粒子落不同位置 → 多帧共存画面可验帧序）。
+- 验收 ✅：flipbook 画面多帧共存（红0/橙/绿/青/蓝/紫数字清晰正立——V 轴口径与 cell 对齐画面实证）+ alive=101 稳态 + deviceErrors=0；flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）；pt0 6/6 + pt1 10/10 全逐字节零回归 + pt2 4/4（重拍后）；ctest DX12/VULKAN 100%（until-pass:3，竞态卡重试即过）；run.bat verify exit 0；server --check OK。交代：`example/particles-pt3/` 2 基线 + run.bat + cases.json 卡 1 用例 + pt2 flame 卡 note 补重拍记录。
+- 已知边界（登记表见 EFFECTS-STATUS.md）：flipbook LERP 帧间插值（双采样混合）未支持；StartFrame 随机未支持；flipbook 测试贴图无真实美术素材（PIL 网格足够验口径）。
+
 ## 风险登记
 
 - 半透明粒子与场景 blend 次序：起步单发射器无排序问题；多发射器/大粒子后的排序策略到时另议。
