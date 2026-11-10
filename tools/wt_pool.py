@@ -102,6 +102,13 @@ TRACKS = {
         "branch": "feat/script", "state": "closed",
         "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
     },
+    "particles": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-particles",
+        "branch": "feat/particles", "state": "planned",
+        "note": "B-class rendering track approved 2026-11-10 (M-PT0 starter: CPU emitter "
+                "+ GPU instanced billboard; ROADMAP interleaved row + PARALLEL-TRACKS 7.1 "
+                "registered); E-prefix rejected to avoid ECS M-E0~E3 collision",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"

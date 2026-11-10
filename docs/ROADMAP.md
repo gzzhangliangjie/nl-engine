@@ -269,6 +269,7 @@ nl-engine/
 | 后处理链（tonemap / AA / bloom） | 离屏 RT + ACES tonemap → FXAA/TAA → bloom | **S7 之后**（前置 = 离屏 RT 基建，与 vis buffer 材质 pass 共享） | **2026-11-09 预研补**：这份离屏 HDR RT + post-chain 是 **SSR / S16 TSR / bloom 三家共享前置**（SSR 笔记 §3/§4 与 S16 预研 §2 各自独立指出同一缺口），**只建一份、归属本行**，不各建一份；TSR 的「tonemap 前 slot」当前并不存在，须先有此链。TAA 的 motion vector 与 S12 时间累积共享 | 开工时补计划 |
 | VSM（虚拟阴影贴图） | clipmap 级联 + 物理页池 + 页表，rasterized 阴影路线（替代 S9 光追阴影射线，作对照） | **S9 之后**（合并升级原 `shadow-map` 穿插项） | S15 正式计划；依赖 S4 簇光栅 + S7/S9 GBuffer，S9 已就绪；2026-11-09 预研二次确认：bevy meshlet 阴影视图为 M15.2 构件参照、Carrot「虚拟几何不投影」为反例，差异见 UE-DIFFS D11 | `s15/S15-PLAN.md` |
 | TSR 基建（velocity/history） | **jitter（Halton）+ 双帧矩阵 + 渲染/输出分辨率分离** + 完整逐像素 velocity GBuffer + 历史 ping-pong | **S7 之后** | S16 前半段；**velocity 必须是完整逐像素版（含 jitter 剥离），不是相机版**——S12 复用同一张，不各建一份（S12-PLAN M12.0 已同步修订）；共享前置见上「后处理链」行；2026-11-09 预研结论见 S16-PLAN §1~§4，差异见 UE-DIFFS D12 | `s16/S16-PLAN.md` |
+| 粒子系统（CPU 模拟 + GPU instanced 渲染） | CPU 侧发射器逐帧模拟（位置/速度/寿命/重力 + alpha 淡出，写 staging buffer），GPU 侧 instanced billboard quad 渲染进主帧（复用 S7 instanced 批次化与材质基础设施）；**起步不做** compute GPU 模拟、软粒子、碰撞 | 随时（与主线零耦合）；离屏 HDR RT 建成后可转半透明合成进 post-chain，起步直接画主帧即可 | **2026-11-10 拍板立项**。三处证据：Carrot 有 `render/particles/`（CPU 发射器 + GPU 渲染约 580 行，参照对象，抄思路不抄代码）；bevy **无官方粒子**（靠社区 hanabi，反面印证自研要克制起步）；UE 粒子走 VertexFactory 注入主渲染而非独立 pass。tag 用名字（如 `particles`），不占 m0.* 编号 | 开工时补计划 |
 | `--profile` 按 pass 拆分 GPU 计时 | M0.6 整帧计时扩成按 pass | 视需要 | 见 `s0/S0-PLAN.md`「可观测性与调试工具计划」L2 | — |
 
 **外部技术点归宿对照（2026-11-07 对齐，不单开新线，防重复建设）**
