@@ -72,3 +72,12 @@ example\input-m0\run.bat        # 前置：scripts\build-m0.2.bat DX12 / VULKAN
 mi0-input-selftest          # selftest 全节
 mi0-input-usage-negative    # selftest bogus → 非 0（WILL_FAIL 口径）
 ```
+
+## M-I2：viewer `--mode input-hud` 调试面板（2026-11-10，tag `input-m2`）
+
+viewer 侧的调试可见层（唯一触碰渲染处，只加不改）。与 input-tools 互补：工具版验数值锚，面板版肉眼看注入语义。
+
+- **入口**：`viewer.exe --mode input-hud`（S0 分发器只加 case；normal 场景 Suzanne 打底）。面板是常驻 HUD 右侧的独立 ImGui 窗口，默认关零布局——非 input-hud 模式基线一像素不动。
+- **数据流（单消费者铁律）**：viewer 绝不调 `updateFromWindow`（与 ImGui 键盘通道抢队列）。输入全走注入 API：面板 checkbox（W/A/S/D/Space/Esc/LMB 双向态 + release all + ui set 开关）→ 请求态持久在 runNormal 局部 → renderFrame 后读回 → 下帧首转 `feedKey/feedMouseButton` 边沿；帧节奏 feed → `ActionMap::update` → 面板快照 → `endFrame`。面板底部明示 `window-path input: off`。
+- **确定性截图**：`--input-demo [start]` 帧序号驱动注入脚本（W@start / D@+1 / Space@+2 / Esc@+3，只 press；可选起始迭代号缺省 5，无值形式直跟其它 --arg 不吞参）。配 `--frames 8` 时 Esc 的 PRESSED 边沿正好落在截图帧：面板可见 W/D/Space 绿 down + throttle/steer +1.00 + handbrake=1 + pause=1+PRESSED（ui 组由 viewer 显式激活——出厂关的组面板要演示 pause 就得开）。证据链：demo log 锚（`input-demo: inject key 256 at iter 8`）+ `fc /b` 双后端 PNG 逐字节基线（`example/input-m2/run.bat` 五段式）。
+- **ImGui 坑留痕**：`SameLine()` 后的 if/else-if 分支必须每支都有 item——悬空 SameLine 会把后续行全部折叠到本行（首版 pause 行整行消失并与 handbrake 行重叠，条值同值同位隐形）。

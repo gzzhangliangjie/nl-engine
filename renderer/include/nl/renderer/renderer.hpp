@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+#include "nl/renderer/input_debug.hpp"   // P8 M-I2：HudFrame::inputDebug 的 POD 定义
+
 namespace nl::renderer {
 
 struct Status {
@@ -200,6 +202,10 @@ struct HudFrame {
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
+    // ---- P8 M-I2：input-hud 调试面板（--mode input-hud 时 viewer 置 show；
+    // false = 零布局，既有基线不动。POD 定义与绘制接口见 input_debug.hpp，
+    // ImGui 符号封在 renderer/src/input_debug.cpp）----
+    InputDebugUi inputDebug;
 };
 
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。

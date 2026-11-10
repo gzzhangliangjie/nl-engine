@@ -443,6 +443,11 @@ void Hud::build(HudFrame& frame) {
     // (audio.debug CVar). Does not touch the resident HUD content above, so it
     // never forces a HUD baseline re-shoot; with the CVar off it draws nothing.
     drawAudioDebugWindow();
+    // P8 M-I2: input-hud debug panel — separate window, default-off gate
+    // (frame.inputDebug.show set by viewer only in --mode input-hud). Same
+    // additive-sibling placement as the console/audio windows; with the gate
+    // off it draws nothing, so no existing HUD baseline moves.
+    if (frame.inputDebug.show) drawInputDebugUi(frame.inputDebug);
     ImGui::Render();
 
     frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;

@@ -2054,3 +2054,19 @@
 5. **run.bat 抢跑后台构建**：VULKAN 树还在编时跑五段式，旧 exe 跑出 7 节 PASS 行被 findstr 闸住（闸起了作用）——双后端验收前先等双构建完成。
 
 **下一步**：M-I2 viewer `--mode input-hud` 调试面板（键态矩阵 + 激活组动作值条 + ImGui 注入按钮）+ 渲染侧收口（唯一触碰渲染处，只加不改）。之后游戏壳接线（第 5 步独立 game target，updateFromWindow 启用点）。
+
+## P8 M-I2：viewer `--mode input-hud` 调试面板——注入路径键态矩阵 + 动作值条 + ImGui 注入按钮（feat/input 第三里程碑，2026-11-10，tag `input-m2`）
+
+**动作**：M-I1 收口后的直连里程碑（P8-INPUT-PLAN §M-I2；input 轨道唯一触碰渲染处，只加不改）。core（`modes.hpp/.cpp` 追加 `InputHud=11`/"input-hud"，S0 分发器只加 case 口径）→ renderer 新模块 `input_debug.hpp/.cpp`（InputDebugUi POD 交换面 + drawInputDebugUi：键态三态格 / [-1,1] 动作条带符号 overlay / 注入 checkbox 区；增量兄弟窗口落位 console/audio 之后、Render 之前；默认关零布局不碰既有基线）+ `renderer.hpp` HudFrame 追加 inputDebug 字段 + hud.cpp 一行调用 + CMake 源单 → viewer（runNormal 追加尾参 + 分发器 case + 注入管线：请求态持久 runNormal 局部 → HUD 填充闸门内 feed 边沿/map.update/快照/endFrame + renderFrame 后读回 checkbox 写回；`--input-demo [start]` 帧序号脚本；三处闸门条件加 inputHud）→ `example/input-m2/`（run.bat 五段式 + 双后端 PNG 基线 ×2+expected ×2 + 4 份日志）+ cases.json input-m2 卡（pair 用例）+ TOOLS-GUIDE M-I2 节 → 回归（spot m0.9/s7.2 共 8/8 bytes）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m2`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + viewer selftest 16/16×2（modes 自检含 input-hud 名字往返/唯一性）；pair 用例双后端 PNG 逐字节基线复现（`fc /b`），截图帧断言链：W/D/Space 绿 down + throttle/steer +1.00 + handbrake=1 + Esc PRESSED + pause=1（Esc 注入在 iter8=截图帧，pausePressed 边沿可见；ui 组 viewer 显式激活）；run.bat 五段式 ALL GREEN（selftest 双后端 + findstr 双锚 + fc /b）；`server.py --check` exit 0；spot 回归 m0.9 4/4 + s7.2 4/4 bytes ALL GREEN（只加不改证实：grep 全 viewer 无 updateFromWindow 调用，既有热键/ImGui 键盘通道零触碰）；肉眼核验双后端截图排版（修复后 pause 行独立成行、底部提示行完整）。
+
+**踩坑情况**
+1. **悬空 SameLine 折叠整行（ImGui 反直觉坑，已固化 TOOLS-GUIDE）**：`SameLine()` 后跟 if/else-if 且当帧无分支命中 → SameLine 悬空，下一个函数的首 item 落回本行——pause 行整行消失：label/条与 handbrake 行重叠（条值同 1 同位完全隐形），sets 行接在后面。教训：SameLine 之后的每个分支（含 else）都必须产出 item；排查靠换注入节拍（边沿清零帧）隔离出「无边沿才触发」。
+2. **带值参数吞参**：`--input-demo` 初版写死 `i+1<argc` 必吃下一个 argv，直跟 `--frames` 时把 flag 当值 atoi=0 → start=1 全错位。改可选值语义（next 以 `-` 开头或缺席 = 缺省 5）。
+3. **HudFrame 每帧新建**：`HudFrame hud{}` 在循环体内声明——checkbox 双向态不能靠 HudFrame 跨帧，请求态必须持久在 runNormal 局部、renderFrame 后读回、下帧首消费（与 cullBack/lodLevel 同一条双向通道口径，初版注入块放错在 hud 声明前编译期才暴露）。
+4. **MSVC `<cstdio>` 不经间接引入**：input_debug.cpp 用 `std::snprintf` 需显式 include（imgui.h 不带）。
+
+**下一步**：input 轨道三里程碑（M-I0/I1/I2）全部收口，能力面 = 状态层 + 映射层 + 调试可见。接下来按 GAME-DEV-ORDER 第 2 步开碰撞事件桥（Jolt ContactListener → ECS 事件，可与本轨合并跑或独立 wt）或第 3 步载具物理；游戏壳（第 5 步独立 game target）是 updateFromWindow 的启用点。merge 回 master 冲突面 = viewer/main.cpp + CMakeLists.txt（M8.1 已先收口，预期小冲突）。
