@@ -1,0 +1,27 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info] ecs scene: 6 objects | 2 lights (0 point) | ambient 0.9
+[nl:info] ecs scene ready: gl2-audio.scene | objects=6 lights=2 ambient=0.9 shadowLights=0 | batches=2 | triangles=331616 | shader=dxil
+[nl:info] ecs tick: parallel | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>) | fixed dt=1/60
+[nl:info] console exec [0] audio.play E:\UE_STUDY_2026\nl-engine-gameloop\example\gl2\..\..\assets\audio\test-tone.wav orb-a -> audio.play: src 1 <-> orb-a @(-0.600, 0.000, 0.000)
+[nl:info] console exec [0] audio.play E:\UE_STUDY_2026\nl-engine-gameloop\example\gl2\..\..\assets\audio\test-tone.wav orb-b -> audio.play: src 2 <-> orb-b @(0.000, 0.000, 2.000)
+[nl:info] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] mode: scene | objects=6 triangles=331616 model=gl2-audio.scene | HUD: off | case: ESC=quit, F12=PNG
+[nl:info] screenshot mode: 100 frames -> E:\UE_STUDY_2026\nl-engine-gameloop\example\gl2\gl2-move-DX12.png
+[nl:info] gpu timer resolved [frame]: 0.165888 ms (first successful NVRHI timestamp query)
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] audio readback: src=1 entity=orb-a entityPos=(-2.086817, 0.000000, -1.595989) srcPos=(-2.086817, 0.000000, -1.595989) equal=1
+[nl:info] audio readback: src=2 entity=orb-b entityPos=(1.089297, 0.000000, -0.279434) srcPos=(1.089297, 0.000000, -0.279434) equal=1
+[nl:info] audio clock state: simTime=1.66667 ticks=100 paused=0 scale=1
+[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-gameloop\example\gl2\..\..\example\gl2\gl2-move-DX12.png
+[nl:info] ecs tick summary: mode=parallel frames=100 spinObjects=6
+[nl:info] shutdown ok (frames=100 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 3.25462 ms  max 27.0136 ms  over 100 frames (unthrottled)
+[nl:info] window destroyed

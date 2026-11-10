@@ -82,6 +82,33 @@
   ok M-P3 determinism: two scenes bit-identical
   ok M-P3 floor bottom at -1
   ok M-P3 settled capsule apex 1.6
+  ok M-P4 reject frames=0
+  ok M-P4 reject dt=1.0
+  ok M-P4 reject maxSlopeDeg=90
+  ok M-P4 simulateCharacter runs
+  ok M-P4 sample count = frames
+  ok M-P4 starts on ground
+  ok M-P4 blocked by 60deg slope at slope foot
+  ok M-P4 parked at platform2 height (feet on step top)
+  ok M-P4 no floor penetration
+  ok M-P4 groundState within enum range
+  ok M-P4 climbs 30deg ramp (y monotonic)
+  ok M-P4 crosses platform1
+  ok M-P4 walks all 3 steps
+  ok M-P4 crosses platform2
+  ok M-P4 tail 60 frames parked
+  ok M-P4 determinism: same course twice bit-identical
+  ok M-J5c adapter N=1 bit-identical + N=4 run-to-run deterministic
+drop: frames=120 threads=4
+drop N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+drop N=4 run-to-run: IDENTICAL
+drop parallel vs serial: IDENTICAL (island-parallel determinism)
+stack: cases=3 frames=600
+stack N=1 adapter vs SingleThreaded: IDENTICAL (hard proof)
+stack N=4 run-to-run: IDENTICAL
+stack parallel vs serial: IDENTICAL (island-parallel determinism)
+phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)
+phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)
 phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)
 phys-p2 anchors: PASS (3 stack cases, sleep island, determinism)
 phys-p1 anchors: PASS (4 layer cases, 2-way association, determinism)

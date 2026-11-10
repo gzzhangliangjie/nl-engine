@@ -3,6 +3,8 @@
 > 归档：feat/script worktree，M-SC0 收口段（2026-11-09，tag `m-sc0`）。
 > 工具 = C# hosting 内核（`nl::script::Vm`）的自测与演示入口，A 类并行轨道
 > （不进 kStage / 渲染回归，工具版交代）。计划：`docs/p8/P8-SCRIPT-PLAN.md`。
+> **C# 脚本怎么写、宿主怎么装、全流程与铁律速查** → `SCRIPT-CS-INTEROP.md`
+>（本文只收工具面与踩坑历史考证）。
 
 ## 工具定位
 
@@ -325,3 +327,36 @@ example\m-sc3\run.bat          # selftest + run --api + check bootstrap + 4 张�
 5. **脚本命令登记表须对称维护**：`nl_consoleRegister` 登记 / `nl_consoleUnregister`
    擦除 / `scriptUnregisterAll()` 批量清（unload 前表必须空——不然 = 卸载后调用
    悬空 thunk）。登记表 set 有序去重，reload 输出解绑名单稳定可断言。
+
+## 踩坑存档（M-GL4 实测）
+
+1. **hostfxr 双副本陷阱（本轮核心坑，实锤）**：同一脚本 dll，bootstrap
+   `LoadFromStream` 装进 collectible ALC 之后，再对它调 `Vm::getEntryPoint`
+   （hostfxr `load_assembly_and_get_function_pointer`）会把程序集**再装一份进
+   默认 ALC**——两份副本静态字段独立一套，collectible 副本里 `Engine.Init`
+   写的函数指针在默认副本里全是 `IntPtr.Zero` → 默认副本 OnTick 第一帧读
+   `_exists` 抛 ArgumentNullException（SEH 0xe0434352）。**规则：凡走
+   bootstrap 装载的脚本，一切入口（Entry 反射 + OnTick 指针）都必须从
+   collectible 正本取**——OnTick 经新导出 BootTickPtr（反射解析 +
+   `UnmanagedFunctionPointer` 委托 thunk + `GetFunctionPointerForDelegate`，
+   thunk delegate 存 static 保活列表、Unload 前清空防 rooted 挡回收）。
+2. **`Assembly.GetType` 不吃 `", Asm"` 限定符**：`"Ns.T, Asm"` 返回 null、
+   裸 `"Ns.T"` 才命中（hostfxr getEntryPoint 的类型参数口径**吃**限定符，
+   两条链口径必须统一兼容——BootCall/BootTickPtr 入口先原样再剥限定符重试）。
+   诊断：最小 C# 探针 stream 装载 + 两种格式对照（qualified NULL / plain OK）。
+3. **OnTick 是可选契约**：缺失 = tick 空转（hello/console/ecs 旧脚本零波及）。
+   首版误设「必须存在」打爆 m-sc3（8 FAIL）即回改——「旧脚本零波及」是
+   脚本面任何新功能的硬约束。
+4. **`ScriptHost::loadScript` 必须校验 Entry 返回值**：scriptCall 的 Result.ok
+   只代表 BootCall 协议层成功，脚本 Entry 返回 1（如目标实体不存在）会被吞出
+   「script: loaded」假绿 → OnTick 每帧返回 2 刷失败。非 0 = 回滚卸载。
+5. **`ecsSetWorld` 必须先于 loadScript**：Entry（装载期）就会 FindByName，
+   未绑 World = NoWorld → Entry 返回非 0（与坑 4 连锁直接装载失败）。
+6. **Assembly.GetType 限定符坑的同族**：dll 名从 runtimeconfig 推导时
+   `rtc.stem()` 只去 `.json` 残留 `.runtimeconfig`（`X.runtimeconfig, X.runtimeconfig`
+   → -101）；正解 = 按 `.runtimeconfig.json` 全后缀（19 字符）截断。
+7. **nl-script selftest 并行互踩（回归 flake 治理）**：selftest 的 s5/s8 temp
+   目录固定名（`nl-script-selftest-hot[-s8]`）——regression.py `--jobs 4`
+   同 case 双后端并行时两进程互踩 → 间歇 exit 1。temp 名加 `_getpid()` 后缀
+   根治。同族：**25ms 步长落 2×step=33.333ms 浮点刀锋**（舍入方向不定，
+   孪生复推与实跑可能不一致），对拍用例选离边界远的钉值（30ms → [1,2,2]）。

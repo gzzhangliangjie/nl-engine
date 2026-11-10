@@ -10,4 +10,7 @@ usage:
   phys-tools check-stack <tsv>
   phys-tools debug [--out <tsv>] [--frames N]
   phys-tools check-debug <tsv>
+  phys-tools character [--out <tsv>] [--frames N]
+  phys-tools check-character <tsv>
+  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)
 exit: 0=PASS 1=FAIL 2=usage error

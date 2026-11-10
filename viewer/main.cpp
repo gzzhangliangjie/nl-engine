@@ -1,17 +1,22 @@
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
 #include "nl/core/console.hpp"
+#include "nl/core/game_clock.hpp"  // P8 M-GL1：双帧模型（逻辑帧 60Hz accumulator）
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
+#include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
 #include "nl/scene/World.hpp"
+#include "nl/script/Vm.hpp"         // M-GL4：--script 脚本宿主（OnTick 接逻辑帧）
+#include "nl/script/ScriptHost.hpp"
+#include "nl/script/Bindings.hpp"   // ecsSetWorld（宿主侧 World 绑定）
 
 #include <algorithm>
 #include <chrono>
@@ -123,6 +128,22 @@ struct Options {
     // M-A5：skin 模式动画时间（秒）。未指定 = 实时累加；指定 = 固定（截图确定性）。
     bool animTimeSet = false;
     float animTime = 0.0f;
+    // M-GL1：--fixed-dt <ms> 把渲染帧 delta 钉成常量（喂 GameClock + 帧统计）。
+    // 0 = 关（真实 dt）。截图/对拍确定性用：暂停帧、倍速帧的 PNG 才能逐字节对拍。
+    // 优先级：--anim-time > 时钟（animTimeSet 时 skinTime 直接钉值，绕过 GameClock，
+    // 既有基线逐字节零风险）；--fixed-dt 只钉「每帧喂多少」，不钉绝对时间。
+    double fixedDtMs = 0.0;
+    // M-GL3：--interp 渲染帧插值（alpha = accumulator/step，bevy Fixed
+    // overstep/timestep 同口径）。渲染专用不回写 sim state；截图模式恒走
+    // 不插值原路径（PNG 与不插值逐字节同），插值证据走捕获帧 probe 日志。
+    bool interp = false;
+    // M-GL4：--script <示例工程目录>（scene 模式）——脚本宿主装载 + 宿主级
+    // OnTick 接逻辑帧（nl-script 工具同款产物定位：proj/bin/Debug/net8.0/）。
+    // 空串 = 不装载脚本（viewer 默认零脚本依赖）。typeName 缺省推导
+    // "NlScript.Examples.<stem>Script, <stem>"；bootstrap 缺省仓库根相对路径。
+    std::string scriptProject;                 // --script
+    std::string scriptType;                    // --script-type（可省，缺省推导）
+    std::string scriptBootstrap = "script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll"; // --script-bootstrap
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -280,6 +301,24 @@ Options parseArgs(int argc, char** argv) {
             // M-A5：固定蒙皮动画时间（秒，clip 内循环采样）——截图确定性与验收用。
             o.animTimeSet = true;
             o.animTime = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--fixed-dt" && i + 1 < argc) {
+            // M-GL1：钉渲染帧 dt（毫秒，>0）。供 GameClock 双帧模型的对拍确定性。
+            const double v = std::atof(argv[++i]);
+            if (!(v > 0.0)) {
+                std::cerr << "invalid --fixed-dt (expected positive ms)\n";
+                std::exit(1);
+            }
+            o.fixedDtMs = v;
+        } else if (a == "--interp") {
+            // M-GL3：渲染帧插值开关（见 Options::interp 注释）。
+            o.interp = true;
+        } else if (a == "--script" && i + 1 < argc) {
+            // M-GL4：脚本示例工程目录（scene 模式装载脚本宿主 + OnTick 接逻辑帧）。
+            o.scriptProject = argv[++i];
+        } else if (a == "--script-type" && i + 1 < argc) {
+            o.scriptType = argv[++i];
+        } else if (a == "--script-bootstrap" && i + 1 < argc) {
+            o.scriptBootstrap = argv[++i];
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -428,6 +467,85 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
         dist->setFloat(camera->distance());
         g_syncing = false;
     };
+}
+
+// M-GL1：game.* 控制台命令——双帧模型运行时控制（PLAN §3「运行时控制面」）。
+//   game.pause [on|off]    无参=翻转；暂停=逻辑时钟停摆（bevy 语义，simTime 冻结，
+//                          渲染帧照常——HUD 活、相机活，画面静止）。
+//   game.timeScale <f>     无参=查询；[0,1024] 钳制（GameClock::setTimeScale 同口径）。
+//   game.status            打印 simTime/ticks/paused/scale/alpha（截图日志证据行）。
+//   game.tickgroups        打印逻辑帧组序（枚举序=执行序）+ 各组注册状态（M-GL5）。
+// 命令（非 CVar）：--console-exec "game.pause" 字面即用，且 pause 无「赋值后回读」
+// 的每帧同步需求（与 cam.fov 的 CVar 选型差异）。
+void registerGameConsole(nl::core::GameClock* clock) {
+    using namespace nl::core::console;
+    Console& c = Console::get();
+    c.registerCommand("game.pause", "toggle/set logic clock pause (on|off)",
+                      [clock](const std::vector<std::string>& args) {
+        bool target;
+        if (args.empty()) {
+            target = !clock->paused();
+        } else if (args[0] == "on" || args[0] == "1") {
+            target = true;
+        } else if (args[0] == "off" || args[0] == "0") {
+            target = false;
+        } else {
+            return CommandResult{false, "usage: game.pause [on|off]"};
+        }
+        clock->setPaused(target);
+        // P8 M-GL2 拍板（2026-11-10 用户选 B，UE 流派）：game.pause 连音频播放
+        // 一起冻——复用 M-S2 DebugController.setFrozen（与 audio.freeze 同一机制），
+        // 恢复时同步解冻。「游戏暂停」= 世界 + 声音全冻结。
+        nl::audio::AudioDebugController::get().setFrozen(target);
+        return CommandResult{true, std::string("game.pause -> ") +
+                             (target ? "on (logic clock frozen; render frames keep running)"
+                                     : "off (logic clock running)")};
+    });
+    c.registerCommand("game.timeScale", "query/set logic time scale ([0,1024])",
+                      [clock](const std::vector<std::string>& args) {
+        if (args.empty()) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%g", clock->timeScale());
+            return CommandResult{true, std::string("game.timeScale = ") + buf};
+        }
+        char* end = nullptr;
+        const double v = std::strtod(args[0].c_str(), &end);
+        if (end == args[0].c_str() || *end != '\0')
+            return CommandResult{false, "game.timeScale: not a number: " + args[0]};
+        clock->setTimeScale(v);   // 越界/NaN 钳制在 GameClock 内（selftest 锚定）
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", clock->timeScale());
+        return CommandResult{true, std::string("game.timeScale -> ") + buf};
+    });
+    c.registerCommand("game.status", "print logic clock state (simTime/ticks/paused/scale/alpha)",
+                      [clock](const std::vector<std::string>&) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "game: simTime=%.6fs ticks=%llu paused=%d scale=%g alpha=%.3f",
+                      clock->simTime(),
+                      static_cast<unsigned long long>(clock->tickCount()),
+                      clock->paused() ? 1 : 0, clock->timeScale(), clock->alpha());
+        return CommandResult{true, std::string(buf)};
+    });
+    // M-GL5：组序显式契约的运行时视图——order 列恒为枚举序（执行序），active 列
+    // 只列本模式已注册组。--console-exec "game.tickgroups" 即验收锚（expectLog）。
+    c.registerCommand("game.tickgroups", "print logic-frame tick group order and registration",
+                      [clock](const std::vector<std::string>&) {
+        const nl::core::TickScheduler& s = clock->scheduler();
+        std::string order, active;
+        for (int g = 0; g < static_cast<int>(nl::core::TickGroup::Count); ++g) {
+            const auto grp = static_cast<nl::core::TickGroup>(g);
+            if (g) order += " -> ";
+            order += nl::core::tickGroupName(grp);
+            order += s.has(grp) ? "(on)" : "(off)";
+            if (s.has(grp)) {
+                if (!active.empty()) active += " -> ";
+                active += nl::core::tickGroupName(grp);
+            }
+        }
+        return CommandResult{true, "game.tickgroups: order " + order + " | active " +
+                             (active.empty() ? "(none)" : active)};
+    });
 }
 
 // 可见用例：带贴图 Suzanne + 轨道相机 +（默认）ImGui HUD；HUD 控件能改剔除 /
@@ -637,12 +755,30 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     // ---- M-C1 控制台注册表 + M-C2 真参数（cam.*/hud.* onChanged 打进相机/HUD）----
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
+    // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
+    nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
+    // P8 M-GL5：物理调试 step 挂 Physics 组（TickGroup 注册制，组序契约见
+    // tick_groups.hpp）。M-GL2 之前是 tick lambda 内联判断，现迁移为按组注册——
+    // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
+    if (o.physicsDebug) {
+        gameClock.scheduler().set(nl::core::TickGroup::Physics,
+                                  [&physicsScene](double, std::uint64_t) {
+            physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
+        });
+    }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     // P8 M-S2：audio.* 调试 CVar（audio.volume/debug/solo/freeze + audio.dump）。
     nl::audio::registerAudioConsole(nl::core::console::Console::get());
+    registerGameConsole(&gameClock);   // P8 M-GL1：game.pause / game.timeScale / game.status
     for (const auto& line : o.consoleExecLines) {
         const auto r = nl::core::console::Console::get().exec(line);
-        nl::core::log::info("console exec [", r.exitCode(), "] ", line);
+        // M-GL5：对齐 runScene——命令输出也进日志（否则 runNormal 模式下
+        // game.tickgroups 等查询命令的验收锚落不了盘）。
+        if (r.ok()) {
+            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+        } else {
+            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+        }
     }
     bool consoleOpen = o.consoleOpen;
     if (consoleOpen && !hudEnabled)
@@ -760,8 +896,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         const auto now = clock::now();
-        const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
+        double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
+        // M-GL1：--fixed-dt 钉渲染帧 delta（GameClock 输入 + 帧统计同源）。
+        // 不钉绝对时间——只保证「每帧喂多少」确定，暂停/倍速对拍才可逐字节复现。
+        if (o.fixedDtMs > 0.0) dtMs = o.fixedDtMs;
         ++frame;
         if (o.screenshot) {
             dtSumMs += dtMs;
@@ -806,23 +945,46 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
         // M-A5：skin 模式动画时间——--anim-time 固定（截图确定性），否则实时累加。
+        // M-GL1：非 pin 路径改走 GameClock 双帧模型——渲染帧喂 dtMs，逻辑帧 60Hz
+        // 消费（暂停=时钟停摆、timeScale 缩放、单帧大 delta 截断 250ms）；
+        // simTime 量化到 tick（起步不插值，PLAN §2 拍板），渲染帧取最新逻辑帧状态。
+        // P8 M-GL2：双帧模型全量接线——每渲染帧喂一次时钟，逻辑帧 60Hz callback
+        // 消费（本循环的消费方 = 物理调试 step；场景模式的 ECS tick + 音频同步
+        // 在 runScene 同构）。暂停/倍速/250ms 截断都在时钟内（M-GL0 语义）。
+        // P8 M-GL5：lambda 内联判断迁移为 Physics 组注册（帧循环前一次性 set），
+        // tick(dtMs) 走按组调度路径——执行序 = 枚举序，逐位同旧路径。
+        gameClock.tick(dtMs);
         if (skinMode) {
-            skinTime = o.animTimeSet ? o.animTime : skinTime + dtMs / 1000.0;
+            // M-A5：--anim-time 直接钉值（取值绕过时钟，既有基线零风险）；时钟本身
+            // 照常推进——pin 模式下物理等其它消费方仍然活着（M-GL2 口径）。
+            skinTime = o.animTimeSet ? o.animTime : gameClock.simTime();
             fp.animTime = skinTime;
+            // 截图终帧机械证据：双帧模型状态一行（对拍日志锚）。注意口径：捕获判定
+            // （上方 capturePath）在 ++frame 之前求值、持上一迭代 frame 值，PNG 实际
+            // 落在本循环最后一个迭代（frame == o.frames）；此处已在 ++frame 之后，
+            // 同一迭代即 frame == o.frames——日志与 PNG 同帧。
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
+                nl::core::log::info("game clock: simTime=", gameClock.simTime(),
+                                    "s ticks=", gameClock.tickCount(),
+                                    " paused=", gameClock.paused() ? 1 : 0,
+                                    " scale=", gameClock.timeScale(),
+                                    " fixedDtMs=", o.fixedDtMs);
+            }
         }
 
         // M-P3：物理调试叠加层（Jolt 碰撞形状线框）。build 一次（renderer 创建后），
-        // 每帧 step + extractLines 喂给渲染器 LINE_LIST 叠加层。截图模式 240 帧足够
-        // 落体落到地板稳态；交互模式逐帧步进即实时动画。extractLines 返回的 data
+        // 逻辑帧 step（M-GL2 起 step 在 gameClock callback 内，暂停即停）+ 每渲染帧
+        // extractLines 喂给渲染器 LINE_LIST 叠加层。截图模式 240 帧足够落体落到
+        // 地板稳态；交互模式逐逻辑帧步进即实时动画。extractLines 返回的 data
         // 指向 DebugScene 内部缓冲，本帧 renderFrame 后即失效（单帧消费模型）。
         if (o.physicsDebug) {
-            physicsScene.step(1.0 / 60.0);
             const nl::physics::DebugLines dl = physicsScene.extractLines();
             fp.debugLines = true;
             fp.debugLineData = dl.data;
             fp.debugLineVertexCount = dl.vertexCount;
             // 截图最终帧打一行稳态机械证据：线顶点数 + 线框 Y 跨度（落体应已落到 ~0.5）。
-            if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
+            // 口径同 M-GL1：此处已在 ++frame 之后，frame == o.frames 才与 PNG 同帧。
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
                 float minY = 1e9f, maxY = -1e9f;
                 for (std::uint32_t k = 0; k + 1 < dl.vertexCount; ++k) {
                     const float y = dl.data[k * 6 + 1];
@@ -1146,6 +1308,71 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 }
 
 // ---------------------------------------------------------------------------
+// P8 M-GL3：渲染帧插值（帧间插值，alpha = accumulator/step）。
+// 参考口径（2026-11-10 实读）：bevy v0.16.1 crates/bevy_time/src/fixed.rs:178-183
+// —— Fixed 时钟暴露 overstep()/timestep() 分数即插值 alpha（与 GameClock::alpha()
+// 同构）；bevy core 全树无内建 transform 插值器（git ls-tree 0 命中，插值本体是
+// 社区 crate bevy_transform_interpolation）。采用其公开设计纪律：插值结果
+// **渲染专用、绝不回写 sim state**（组件态只在逻辑帧内变化）。Carrot/UE 不插值
+// （PLAN §3 既有结论）。世界空间 TRS 插值（非局部递归）：E1a 层级子实体无需重算
+// 父链；均匀 scale 场景下分解严格成立（与 Component::setWorldTransform 同口径）。
+// 截图模式恒走不插值原路径（截图=确定性产物，PNG 与不插值逐字节同）；
+// 插值数值证据走捕获帧 probe 日志（verify.py 孪生复算）。
+// ---------------------------------------------------------------------------
+struct WorldSample {
+    nl::math::Vec3 pos{};
+    nl::math::Quat rot{};
+    nl::math::Vec3 scale{1.0f, 1.0f, 1.0f};
+};
+
+// Mat4 -> TRS 分解（列主序：三列长度 = scale、归一化列 = 旋转、m[12..14] = pos）。
+// 四元数用 Shepperd 法（quatToMat4 的逆变换，trace 判主元分支，数值稳定）；
+// 退化保护：任一 scale 列近零时不除（旋转按单位阵，组件层不允许奇异但防御）。
+static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
+    WorldSample s;
+    s.pos = {m.m[12], m.m[13], m.m[14]};
+    const float sx = std::sqrt(m.m[0] * m.m[0] + m.m[1] * m.m[1] + m.m[2] * m.m[2]);
+    const float sy = std::sqrt(m.m[4] * m.m[4] + m.m[5] * m.m[5] + m.m[6] * m.m[6]);
+    const float sz = std::sqrt(m.m[8] * m.m[8] + m.m[9] * m.m[9] + m.m[10] * m.m[10]);
+    s.scale = {sx, sy, sz};
+    if (sx < 1e-8f || sy < 1e-8f || sz < 1e-8f) return s;  // 退化：单位旋转
+    const float r[3][3] = {
+        {m.m[0] / sx, m.m[4] / sy, m.m[8] / sz},
+        {m.m[1] / sx, m.m[5] / sy, m.m[9] / sz},
+        {m.m[2] / sx, m.m[6] / sy, m.m[10] / sz},
+    };
+    const float tr = r[0][0] + r[1][1] + r[2][2];
+    nl::math::Quat q{};   // Quat{} = identity（quatIdentity 同默认）
+    if (tr > 0.0f) {
+        const float t = std::sqrt(tr + 1.0f) * 2.0f;
+        q.w = 0.25f * t;
+        q.x = (r[2][1] - r[1][2]) / t;
+        q.y = (r[0][2] - r[2][0]) / t;
+        q.z = (r[1][0] - r[0][1]) / t;
+    } else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) {
+        const float t = std::sqrt(1.0f + r[0][0] - r[1][1] - r[2][2]) * 2.0f;
+        q.w = (r[2][1] - r[1][2]) / t;
+        q.x = 0.25f * t;
+        q.y = (r[0][1] + r[1][0]) / t;
+        q.z = (r[0][2] + r[2][0]) / t;
+    } else if (r[1][1] > r[2][2]) {
+        const float t = std::sqrt(1.0f + r[1][1] - r[0][0] - r[2][2]) * 2.0f;
+        q.w = (r[0][2] - r[2][0]) / t;
+        q.x = (r[0][1] + r[1][0]) / t;
+        q.y = 0.25f * t;
+        q.z = (r[1][2] + r[2][1]) / t;
+    } else {
+        const float t = std::sqrt(1.0f + r[2][2] - r[0][0] - r[1][1]) * 2.0f;
+        q.w = (r[1][0] - r[0][1]) / t;
+        q.x = (r[0][2] + r[2][0]) / t;
+        q.y = (r[1][2] + r[2][1]) / t;
+        q.z = 0.25f * t;
+    }
+    s.rot = nl::math::normalizeQuat(q);
+    return s;
+}
+
+// ---------------------------------------------------------------------------
 // M-E1b.0：ECS 场景模式（--scene <file>）。场景文件不是 assets 白名单资产，
 // 按传入路径直读；组件库显式注册后 World::deserialise（负向 = 用法错误码 2，
 // 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
@@ -1292,6 +1519,16 @@ int runScene(const Options& o) {
         objects.push_back(d);
     }
 
+    // ---- P8 M-GL3：插值样本（prev/curr 世界 TRS，per modelId）----
+    // 每渲染帧 tick 前 snapshot prev（上一 tick 边界态）、tick 后 snapshot curr；
+    // 无条件维护（开销 = 每实体两次矩阵分解），game.interp 运行时切换零毛刺。
+    std::vector<WorldSample> interpPrev(modelIds.size());
+    std::vector<WorldSample> interpCurr(modelIds.size());
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+        interpPrev[k] = interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
+    }
+
     // ---- 3. 窗口 + sceneMode Renderer ----
     nl::core::log::resetCounters();
     nl::core::WindowDesc desc;
@@ -1405,6 +1642,209 @@ int runScene(const Options& o) {
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
 
+    // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
+    nl::core::GameClock gameClock;
+    nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
+    registerGameConsole(&gameClock);          // game.pause/timeScale/status
+    nl::audio::registerAudioConsole(sceneConsole);
+    // M-S3：AudioWorld（realtime；设备不可用降级 offline——位置读回同步不依赖设备，
+    // 截图自动化无扬声器也能跑）。声源绑定实体（按名），每个逻辑帧同步位置。
+    nl::audio::AudioConfig audioCfg{};
+    audioCfg.offline = false;
+    audioCfg.spatialization = true;
+    std::unique_ptr<nl::audio::AudioWorld> audioWorld;
+    struct AudioBind { std::uint32_t src = 0; nl::scene::Entity ent{}; std::string name; };
+    std::vector<AudioBind> audioBinds;
+    auto ensureAudioWorld = [&]() -> nl::audio::AudioWorld* {
+        if (audioWorld) return audioWorld.get();
+        auto w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
+        if (!w->ok()) {
+            nl::core::log::info("audio: device init failed (", w->error(), ") -> offline fallback");
+            audioCfg.offline = true;
+            w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
+        }
+        if (!w->ok()) {
+            nl::core::log::error("audio: AudioWorld init failed: ", w->error());
+            return nullptr;
+        }
+        audioWorld = std::move(w);
+        return audioWorld.get();
+    };
+    sceneConsole.registerCommand("audio.play",
+        "create+start a looping spatial source bound to a scene entity: audio.play <wav> <entityName>",
+        [&](const std::vector<std::string>& args) -> nl::core::console::CommandResult {
+            if (args.size() != 2)
+                return {false, "usage: audio.play <wav> <entityName>"};
+            auto* w = ensureAudioWorld();
+            if (!w) return {false, "audio.play: AudioWorld unavailable"};
+            std::string createErr;
+            const auto id = w->createSource(args[0], &createErr);
+            if (id == 0) return {false, "audio.play: createSource failed: " + createErr};
+            const auto ent = world.findEntityByName(args[1]);
+            if (!ent) return {false, "audio.play: entity not found: " + args[1]};
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(ent->id);
+            if (!t) return {false, "audio.play: entity has no Transform: " + args[1]};
+            const auto p = t->getWorldPosition();
+            w->configureSource(id, 1.0f, /*looping=*/true);
+            w->setSourcePosition(id, {p.x, p.y, p.z});
+            w->startSource(id);
+            audioBinds.push_back({id, *ent, args[1]});
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "audio.play: src %u <-> %s @(%.3f, %.3f, %.3f)",
+                          id, args[1].c_str(), p.x, p.y, p.z);
+            return {true, std::string(buf)};
+        });
+    // M-GL3：渲染帧插值开关（--interp 初值；game.interp 运行时切换）。
+    bool interpOn = o.interp;
+    sceneConsole.registerCommand("game.interp",
+        "toggle/set render-frame interpolation (on|off); render-only, never written back to sim",
+        [&](const std::vector<std::string>& args) -> nl::core::console::CommandResult {
+            if (args.size() == 1) {
+                const auto& v = args[0];
+                if (v == "on" || v == "1" || v == "true") interpOn = true;
+                else if (v == "off" || v == "0" || v == "false") interpOn = false;
+                else return {false, "usage: game.interp [on|off]"};
+            } else if (args.size() > 1) {
+                return {false, "usage: game.interp [on|off]"};
+            } else {
+                interpOn = !interpOn;   // 无参 = 翻转（game.pause 同款）
+            }
+            return {true, std::string("game.interp -> ") + (interpOn ? "on" : "off")};
+        });
+    // ---- M-GL4：脚本宿主装载（--script，scene 模式）----
+    // 时序：exec lines 之前（脚本 Entry 注册的命令对 --console-exec 立即可用）；
+    // ecsSetWorld 绑定后 OnTick/ECS 导出才可用。产物定位 = nl-script 工具同款
+    //（proj/bin/Debug/net8.0/，GenerateRuntimeConfigurationFiles 保证唯一 rtc）。
+    std::unique_ptr<nl::script::Vm> scriptVm;
+    bool scriptLoaded = false;
+    if (!o.scriptProject.empty()) {
+        namespace fs = std::filesystem;
+        const fs::path proj = o.scriptProject;
+        const fs::path buildDir = proj / "bin" / "Debug" / "net8.0";
+        // 产物定位（nl-script 工具同款 glob 口径）：runtimeconfig 唯一，dll 名
+        // 按 AssemblyName（= runtimeconfig 名）——不按工程目录名（两者可不同）。
+        fs::path rtc, dll;
+        if (fs::is_directory(buildDir)) {
+            for (const auto& e : fs::directory_iterator(buildDir)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() >= 19 && n.rfind(".runtimeconfig.json") == n.size() - 19)
+                    rtc = e.path();
+            }
+            if (!rtc.empty()) {
+                // dll 名 = runtimeconfig 名去掉 ".runtimeconfig.json" 后缀 + ".dll"
+                //（不能 replace_extension——那会从最后一个点替换成 *.runtimeconfig.dll）。
+                const std::string n = rtc.filename().string();
+                dll = buildDir / (n.substr(0, n.size() - 19) + ".dll");
+            }
+        }
+        if (rtc.empty() || !fs::is_regular_file(dll)) {
+            nl::core::log::error("script: build outputs missing under ", buildDir.string(),
+                                 " (*.runtimeconfig.json + *.dll) — run: dotnet build ", proj.string());
+            return 1;
+        }
+        nl::script::Result vr;
+        // hosting API 口径：assembly/runtimeconfig 路径一律绝对化（相对路径在
+        // load_assembly_and_get_function_pointer 一步可能 0x80131509）。
+        scriptVm = nl::script::Vm::create(fs::absolute(rtc).string(), &vr);
+        if (!scriptVm) {
+            nl::core::log::error("script: Vm::create failed: ", vr.message);
+            return 1;
+        }
+        const auto ir = nl::script::ScriptHost::get().init(
+            scriptVm.get(), fs::absolute(o.scriptBootstrap).string());
+        if (!ir.ok) {
+            nl::core::log::error("script: ScriptHost init failed: ", ir.message);
+            return 1;
+        }
+        // typeName 缺省推导（nl-script 工具同款双锚约定）：类名 = 工程目录名
+        // 首字母大写 + "Script"，程序集名 = AssemblyName（= rtc 文件名，dll 同名）。
+        std::string dirStem = proj.filename().string();
+        if (!dirStem.empty())
+            dirStem[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(dirStem[0])));
+        // 程序集名 = rtc 文件名去掉 ".runtimeconfig.json"（19 字符）；stem() 只去
+        // ".json" 会残留 ".runtimeconfig"（BootCall -101 的教训）。
+        const std::string asmName = rtc.filename().string().substr(0, rtc.filename().string().size() - 19);
+        const std::string typeName = o.scriptType.empty()
+            ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
+        // World 绑定必须先于 loadScript：Entry（装载期）就会 FindByName，
+        // 未绑 World = EcsCode.NoWorld → Entry 返回非 0（M-GL4 实证教训）。
+        nl::script::ecsSetWorld(&world);
+        const auto lr2 = nl::script::ScriptHost::get().loadScript(
+            fs::absolute(dll).string(), typeName);
+        if (!lr2.ok) {
+            nl::core::log::error("script: loadScript failed: ", lr2.message);
+            return 1;
+        }
+        scriptLoaded = true;
+        nl::core::log::info("script: loaded ", dll.string(), " type=", typeName,
+                            " (host-level OnTick on logic frame)");
+    }
+    sceneConsole.registerCommand("game.script",
+        "script host status (loaded dll/type, tick enabled/count); requires --script",
+        [&](const std::vector<std::string>&) -> nl::core::console::CommandResult {
+            if (!scriptLoaded) return {false, "game.script: no script loaded (run with --script <projectDir>)"};
+            const auto& h = nl::script::ScriptHost::get();
+            char sbuf[256];
+            std::snprintf(sbuf, sizeof(sbuf),
+                          "script: %s type=%s tick=%s count=%llu",
+                          h.scriptDll().c_str(), h.scriptType().c_str(),
+                          h.tickEnabled() ? "on" : "off",
+                          static_cast<unsigned long long>(h.tickCount()));
+            return {true, std::string(sbuf)};
+        });
+    // P8 M-GL5：TickGroup 注册制——逻辑帧组序的显式契约（tick_groups.hpp）。
+    // 注册必须在 console-exec 预执行之前（否则 game.tickgroups 读到全 off——
+    // 本轮实测教训：首版注册放帧循环前、预执行后，验收第一跑即暴露）。
+    // M-GL2 既有执行顺序原样固化到组序：script OnTick → ECS world.tick → audio
+    // 声源同步，映射为 PrePhysics → PostPhysics → PostUpdateWork（Physics 组本
+    // 模式不注册；空组 runTick 时跳过）。语义逐位同旧 lambda：
+    //   - scriptTick(dt) 先行（spawn/remove 排队，tick 开头 flush 语义不变）；
+    //   - tickParallel 失败置 failed（原 return 跳过当帧 audio → audio 组以
+    //     failed 为闸保持同语义）；
+    //   - audioBinds 运行期可被 audio.play 追加 → 各 lambda 按引用读活值。
+    bool failed = false;
+    gameClock.scheduler().set(nl::core::TickGroup::PrePhysics,
+                              [&scriptLoaded](double dt, std::uint64_t) {
+        if (!scriptLoaded) return;
+        const auto sr = nl::script::ScriptHost::get().scriptTick(dt);
+        if (!sr.ok)
+            nl::core::log::error("script: ", sr.message);
+    });
+    gameClock.scheduler().set(nl::core::TickGroup::PostPhysics,
+                              [&o, &world, &failed](double dt, std::uint64_t) {
+        if (o.tickMode == "serial") {
+            world.tick(dt);
+        } else {
+            std::string tickErr;
+            if (!world.tickParallel(dt, 4, tickErr)) {
+                nl::core::log::error("ecs tickParallel failed: ", tickErr);
+                failed = true;
+            }
+        }
+    });
+    gameClock.scheduler().set(nl::core::TickGroup::PostUpdateWork,
+                              [&failed, &world, &audioBinds, &audioWorld](double, std::uint64_t) {
+        if (failed) return;   // ECS tick 失败当帧跳过（旧 return 语义）
+        for (const auto& b : audioBinds) {
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
+            if (!t) continue;
+            const auto p = t->getWorldPosition();
+            audioWorld->setSourcePosition(b.src, {p.x, p.y, p.z});
+        }
+    });
+    nl::core::log::info("tick groups: ", nl::core::tickGroupName(nl::core::TickGroup::PrePhysics),
+                        "->", nl::core::tickGroupName(nl::core::TickGroup::PostPhysics),
+                        "->", nl::core::tickGroupName(nl::core::TickGroup::PostUpdateWork),
+                        " (registered=", gameClock.scheduler().registeredCount(), ")");
+    for (const auto& line : o.consoleExecLines) {
+        const auto r = sceneConsole.exec(line);
+        if (r.ok()) {
+            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+        } else {
+            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+        }
+    }
+
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
     nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
@@ -1429,7 +1869,6 @@ int runScene(const Options& o) {
     std::uint64_t frame = 0;
     int colorIndex = o.color;
     int screenshotsSaved = 0;
-    bool failed = false;
     double dtSumMs = 0.0;
     double dtMaxMs = 0.0;
 
@@ -1461,6 +1900,9 @@ int runScene(const Options& o) {
         const auto now = clock::now();
         const double dtMs = std::chrono::duration<double, std::milli>(now - last).count();
         last = now;
+        // P8 M-GL2：钉渲染帧 delta（对拍确定性）——fixed-dt 下 240 帧恰好 240 tick，
+        // 与旧「逐渲染帧固定步长」轨迹逐位一致 → 既有基线零重拍。
+        const double clockDtMs = (o.fixedDtMs > 0.0) ? o.fixedDtMs : dtMs;
         ++frame;
         if (o.screenshot) {
             dtSumMs += dtMs;
@@ -1473,23 +1915,53 @@ int runScene(const Options& o) {
         // 本帧 tick 的矩阵本帧就上屏（updateEcsObjects 的 upload 先于
         // renderFrame 的命令列表执行）。
         if (ticking) {
-            constexpr double kFixedDt = 1.0 / 60.0;
-            if (o.tickMode == "serial") {
-                world.tick(kFixedDt);
-            } else {
-                std::string tickErr;
-                if (!world.tickParallel(kFixedDt, 4, tickErr)) {
-                    nl::core::log::error("ecs tickParallel failed: ", tickErr);
-                    failed = true;
-                    break;
-                }
+            // 逻辑帧步长由 GameClock::kStep 携带（M-GL5 起组回调经 dt 参数透传）。
+            // P8 M-GL3：tick 前 snapshot prev（上一 tick 边界态 = 上帧 tick 后态）。
+            // 无条件维护（不依赖 interpOn——game.interp 运行时切换零毛刺）。
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                interpPrev[k] = decomposeWorldTRS(t->getWorldMatrix());
+            }
+            // P8 M-GL2：逐渲染帧固定步长 → GameClock 双帧驱动（暂停=game.pause、
+            // 倍速=game.timeScale、250ms 截断全在时钟内）。逻辑帧内：ECS tick +
+            // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
+            // P8 M-GL5：回调体迁移为 TickGroup 组注册（上方 PrePhysics/PostPhysics/
+            // PostUpdateWork 三组），这里只喂时钟——组序 = 枚举序 = 旧 lambda 顺序。
+            gameClock.tick(clockDtMs);
+            if (failed) break;
+            // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
+            if (audioWorld) {
+                float eye3[3];
+                camera.eyePosition(eye3);
+                audioWorld->setListenerPosition({eye3[0], eye3[1], eye3[2]});
+            }
+            // M-GL3：tick 后 snapshot curr（本帧最终 tick 边界态）。
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
             }
             // 刷新实例数据：Transform 重取世界矩阵（getWorldMatrix 递归现算，
             // 改 rotation 即生效）。tint/材质不变，updateEcsObjects 全量覆盖。
+            // M-GL3：交互态 interpOn 时渲染帧用 prev/curr 插值态（alpha =
+            // accumulator/step，bevy overstep/timestep 同口径），渲染专用不回写
+            // 组件。截图模式恒走原 getWorldMatrix() 路径（截图=确定性产物：
+            // 与不插值同一代码路径 → PNG 逐字节同；分解→重构 roundtrip 非逐位，
+            // 钉 alpha 仍会引入 1ulp 级差异，故不采用钉 alpha 方案——首版实测
+            // PNG MD5 不等即此因）。插值数值证据走捕获帧 probe 日志。
             for (std::size_t k = 0; k < modelIds.size(); ++k) {
                 const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
                 const auto* m = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
-                const auto wm = t->getWorldMatrix();
+                nl::math::Mat4 wm;
+                if (interpOn && !o.screenshot) {
+                    const float a = static_cast<float>(gameClock.alpha());
+                    const auto& s0 = interpPrev[k];
+                    const auto& s1 = interpCurr[k];
+                    wm = nl::math::mat4TRS(nl::math::lerpVec3(s0.pos, s1.pos, a),
+                                           nl::math::slerpQuat(s0.rot, s1.rot, a),
+                                           nl::math::lerpVec3(s0.scale, s1.scale, a));
+                } else {
+                    wm = t->getWorldMatrix();
+                }
                 std::memcpy(objects[k].world, wm.m, sizeof(objects[k].world));
                 objects[k].tint[0] = m->tint.x;
                 objects[k].tint[1] = m->tint.y;
@@ -1503,6 +1975,88 @@ int runScene(const Options& o) {
                 failed = true;
                 break;
             }
+        }
+
+        // M-GL3 机器证据（捕获帧）：插值探针——PNG 恒走 tick 边界原路径（见上），
+        // 日志记录真实 alpha 与 prev/curr/interp 数值（verify.py 孪生复算
+        // lerp/slerp + SpinSystem 轨道位置）。暂停帧 prev==curr，插值态恒等于冻结态。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) && interpOn &&
+            !modelIds.empty()) {
+            const double probeAlpha = gameClock.alpha();
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto& s0 = interpPrev[k];
+                const auto& s1 = interpCurr[k];
+                const auto ip = nl::math::lerpVec3(s0.pos, s1.pos,
+                                                   static_cast<float>(probeAlpha));
+                const auto iq = nl::math::slerpQuat(s0.rot, s1.rot,
+                                                    static_cast<float>(probeAlpha));
+                char buf[512];
+                std::snprintf(buf, sizeof(buf),
+                              "interp probe: k=%zu alpha=%.6f"
+                              " prev=(%.6f,%.6f,%.6f) curr=(%.6f,%.6f,%.6f)"
+                              " interp=(%.6f,%.6f,%.6f)"
+                              " pq=(%.6f,%.6f,%.6f,%.6f) cq=(%.6f,%.6f,%.6f,%.6f)"
+                              " iq=(%.6f,%.6f,%.6f,%.6f)",
+                              k, probeAlpha,
+                              s0.pos.x, s0.pos.y, s0.pos.z,
+                              s1.pos.x, s1.pos.y, s1.pos.z,
+                              ip.x, ip.y, ip.z,
+                              s0.rot.x, s0.rot.y, s0.rot.z, s0.rot.w,
+                              s1.rot.x, s1.rot.y, s1.rot.z, s1.rot.w,
+                              iq.x, iq.y, iq.z, iq.w);
+                nl::core::log::info(buf);
+            }
+        }
+
+        // M-S3 机器证据（捕获帧，口径 frame == o.frames 与 PNG 同迭代）：AudioWorld
+        // snapshot 是 DebugController 之后的权威状态——声源位置应与实体世界位置一致。
+        // 暂停用例里这行即「暂停即停」的数值证词（位置冻结在暂停时刻）。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) &&
+            audioWorld && !audioBinds.empty()) {
+            for (const auto& b : audioBinds) {
+                for (const auto& s : audioWorld->snapshot()) {
+                    if (s.id != b.src) continue;
+                    const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
+                    const auto p = t ? t->getWorldPosition() : nl::math::Vec3{};
+                    const bool eq = std::fabs(p.x - s.position.x) < 1e-6f &&
+                                    std::fabs(p.y - s.position.y) < 1e-6f &&
+                                    std::fabs(p.z - s.position.z) < 1e-6f;
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf),
+                                  "audio readback: src=%u entity=%s entityPos=(%.6f, %.6f, %.6f)"
+                                  " srcPos=(%.6f, %.6f, %.6f) equal=%d",
+                                  s.id, b.name.c_str(), p.x, p.y, p.z,
+                                  s.position.x, s.position.y, s.position.z, eq ? 1 : 0);
+                    nl::core::log::info(buf);
+                }
+            }
+            nl::core::log::info("audio clock state: simTime=", gameClock.simTime(),
+                                " ticks=", gameClock.tickCount(),
+                                " paused=", gameClock.paused() ? 1 : 0,
+                                " scale=", gameClock.timeScale());
+        }
+
+        // M-GL4 机器证据（捕获帧，口径 frame == o.frames 与 PNG 同迭代）：脚本实体
+        // 世界位置读回 + 宿主 tick 计数——verify.py 三重孪生（时钟 ticks 序列复推、
+        // 轨道公式、脚本态 t 与宿主 tickCount 相等性）。暂停用例里 ticks=0 且位置
+        // 停在场景初始态 = 「脚本随逻辑帧冻结」的数值证词。
+        if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames) && scriptLoaded) {
+            const auto orb = world.findEntityByName("script-orb");
+            if (orb) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(orb->id);
+                if (t) {
+                    const auto p = t->getWorldPosition();
+                    char sbuf[200];
+                    std::snprintf(sbuf, sizeof(sbuf),
+                                  "script probe: ticks=%llu pos=(%.6f,%.6f,%.6f)",
+                                  static_cast<unsigned long long>(nl::script::ScriptHost::get().tickCount()),
+                                  p.x, p.y, p.z);
+                    nl::core::log::info(sbuf);
+                }
+            }
+            nl::core::log::info("script clock state: simTime=", gameClock.simTime(),
+                                " ticks=", gameClock.tickCount(),
+                                " paused=", gameClock.paused() ? 1 : 0);
         }
 
         nl::renderer::FrameParams fp;
@@ -1592,6 +2146,15 @@ int runScene(const Options& o) {
         nl::core::log::error("acceptance failed: device/error counters must be zero");
         failed = true;
     }
+    // M-GL4 收尾（次序铁律）：先解绑 World（热重载窗口兜底口径，s7g 同源）→
+    // 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm（hostfxr context 收官）。
+    if (scriptLoaded) {
+        nl::script::ecsSetWorld(nullptr);
+        const auto ur = nl::script::ScriptHost::get().unloadScript();
+        if (!ur.ok)
+            nl::core::log::error("script: unloadScript failed: ", ur.message);
+        scriptVm.reset();
+    }
     return failed ? 1 : 0;
 }
 
@@ -1680,6 +2243,14 @@ void printUsage() {
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
+              << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
+              << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
+              << "  viewer.exe --script <projectDir>   M-GL4: load script host (scene mode); host-level\n"
+              << "                                     OnTick driven by logic frame (--script-type/-bootstrap)\n"
+              << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
+              << "  console: game.script (M-GL4: script host status)\n"
+              << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"
+              << "                                     (deterministic pause/timescale screenshot runs)\n"
               << "  viewer.exe --console-type <text>   prefill console input line (tab-complete demo)\n"
               << "  viewer.exe --physics-debug         M-P3 overlay: Jolt collision-shape wireframe\n"
               << "                                     (floor + falling box/sphere/capsule);\n"

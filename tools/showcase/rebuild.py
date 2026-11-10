@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -84,6 +85,11 @@ def apply_hidden_window_patch(dest: Path, tag: str) -> None:
     src = main_cpp.read_text(encoding="utf-8")
     if "desc.visible" in src:
         return  # 已打补丁
+    if "--screenshot" not in src:
+        # s0-init（m0.1）等早期 tag：无 --screenshot 选项，注入 desc.visible
+        # 会引用未声明的 o 导致 C2065（2026-11-10 实证）。按特征跳过。
+        log("  skipped hidden-window patch (tag predates --screenshot)")
+        return
 
     hpp = dest / "core" / "include" / "nl" / "core" / "window.hpp"
     cpp = dest / "core" / "src" / "window.cpp"
@@ -141,6 +147,8 @@ def main() -> int:
     ap.add_argument("--tags", nargs="*", help="limit to these tags")
     ap.add_argument("--backend", choices=["dx12", "vulkan", "all"], default="all")
     ap.add_argument("--force", action="store_true", help="rebuild even if exe exists")
+    ap.add_argument("--parallel", type=int, default=2,
+                    help="concurrent builds (NMake is single-core per build)")
     args = ap.parse_args()
 
     backends = list(BACKENDS) if args.backend == "all" else [args.backend]
@@ -150,6 +158,7 @@ def main() -> int:
         versions = [v for v in versions if v["tag"] in args.tags]
 
     failed = 0
+    tasks: list[tuple[dict, str]] = []
     for v in versions:
         log(f"\n=== {v['label']} {v['tag']} ===")
         need = [b for b in backends if args.force or not exe_path(v, b).is_file()]
@@ -158,9 +167,22 @@ def main() -> int:
             continue
         checkout(v["tag"], WORK / v["tag"])
         apply_hidden_window_patch(WORK / v["tag"], v["tag"])
-        for b in need:
-            if not build(v, b, WORK / v["tag"] / f"build-{b}.log"):
-                failed += 1
+        tasks.extend((v, b) for b in need)
+
+    if tasks:
+        workers = max(1, min(args.parallel, len(tasks)))
+        log(f"\nbuilding {len(tasks)} target(s), {workers} worker(s) …")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(build, v, b,
+                                   WORK / v["tag"] / f"build-{b}.log"): (v["tag"], b)
+                       for v, b in tasks}
+            for fut in as_completed(futures):
+                tag, b = futures[fut]
+                if fut.result():
+                    log(f"  finished {tag} [{BACKENDS[b]}]")
+                else:
+                    failed += 1
+                    log(f"  FAILED  {tag} [{BACKENDS[b]}]")
     log(f"\nDone. {failed} build(s) failed." if failed else "\nDone. All requested snapshots built.")
     return 1 if failed else 0
 

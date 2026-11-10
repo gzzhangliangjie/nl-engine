@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "nextID": 5,
+  "ambient": 0.9,
+  "systems": [],
+  "entities": [
+    {
+      "id": 1,
+      "name": "script-orb",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [1.6, 0.0, 0.0],
+          "scale": [1, 1, 1],
+          "rotation": [0, 0, 0, 1]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [0.25, 0.5, 0.95],
+          "roughness": 0.35,
+          "metallic": 0.2
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "floor",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [0.0, -1.6, 0.0],
+          "scale": [7.0, 0.05, 7.0],
+          "rotation": [0, 0, 0, 1]
+        },
+        "Model": {
+          "mesh": "IcoSphereDense.glb",
+          "tint": [0.55, 0.55, 0.55],
+          "roughness": 0.8,
+          "metallic": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "key-light",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [0.4, -0.8, 0.45],
+          "color": [4.2, 3.99, 3.696],
+          "intensity": 2.2
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "fill-light",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [-0.6, -0.3, 0.7],
+          "color": [1.89, 2.52, 4.2],
+          "intensity": 1.1
+        }
+      }
+    }
+  ]
+}

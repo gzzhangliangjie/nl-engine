@@ -10,3 +10,6 @@ M-P2 stack.tsv byte-identical: OK
 M-P3 debug.tsv byte-identical: OK
   md5 archived = 2d75d6042658870f6143e4530f4615f8
   md5 regen    = 2d75d6042658870f6143e4530f4615f8
+M-P4 character.tsv byte-identical: OK
+  md5 archived = ddeb70710a74bc8deeb60482b5181263
+  md5 regen    = ddeb70710a74bc8deeb60482b5181263

@@ -1,0 +1,28 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info] ecs scene: 6 objects | 2 lights (0 point) | ambient 0.9
+[nl:info] ecs scene ready: gl2-audio.scene | objects=6 lights=2 ambient=0.9 shadowLights=0 | batches=2 | triangles=331616 | shader=dxil
+[nl:info] ecs tick: parallel | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>) | fixed dt=1/60
+[nl:info] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] mode: scene | objects=6 triangles=331616 model=gl2-audio.scene | HUD: off | case: ESC=quit, F12=PNG
+[nl:info] screenshot mode: 100 frames -> E:\UE_STUDY_2026\nl-engine-gameloop\example\gl3\gl3-equal-on-DX12.png
+[nl:info] gpu timer resolved [frame]: 0.164864 ms (first successful NVRHI timestamp query)
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] ecs stats: objects 6 | triangles 331616 | lights 2
+[nl:info] interp probe: k=0 alpha=0.200000 prev=(-2.200000,0.000000,0.000000) curr=(-2.200000,0.000000,0.000000) interp=(-2.200000,0.000000,0.000000) pq=(0.000000,0.676131,0.000000,0.736781) cq=(0.000000,0.681638,0.000000,0.731690) iq=(0.000000,0.677235,0.000000,0.735766)
+[nl:info] interp probe: k=1 alpha=0.200000 prev=(0.000000,0.000000,0.600000) curr=(0.000000,0.000000,0.600000) interp=(0.000000,0.000000,0.600000) pq=(0.000000,0.897359,0.000000,0.441301) cq=(0.000000,0.902267,0.000000,0.431178) iq=(0.000000,0.898350,0.000000,0.439281)
+[nl:info] interp probe: k=2 alpha=0.200000 prev=(2.200000,0.000000,0.000000) curr=(2.200000,0.000000,0.000000) interp=(2.200000,0.000000,0.000000) pq=(0.000000,0.996322,0.000000,0.085691) cq=(0.000000,0.997495,0.000000,0.070737) iq=(0.000000,0.996574,0.000000,0.082701)
+[nl:info] interp probe: k=3 alpha=0.200000 prev=(0.000000,-1.600000,0.000000) curr=(0.000000,-1.600000,0.000000) interp=(0.000000,-1.600000,0.000000) pq=(0.000000,0.959534,0.000000,-0.281593) cq=(0.000000,0.954086,0.000000,-0.299533) iq=(0.000000,0.958471,0.000000,-0.285189)
+[nl:info] interp probe: k=4 alpha=0.200000 prev=(-2.062891,0.000000,-1.594112) curr=(-2.086817,0.000000,-1.595989) interp=(-2.067676,0.000000,-1.594487) pq=(0.000000,-0.170751,0.000000,0.985314) cq=(0.000000,-0.141119,0.000000,0.989993) iq=(0.000000,-0.164836,0.000000,0.986321)
+[nl:info] interp probe: k=5 alpha=0.200000 prev=(1.108807,0.000000,-0.254704) curr=(1.089297,0.000000,-0.279434) interp=(1.104905,0.000000,-0.259650) pq=(0.000000,0.540395,0.000000,0.841411) cq=(0.000000,0.571561,0.000000,0.820560) iq=(0.000000,0.546690,0.000000,0.837335)
+[nl:info] screenshot written: E:\UE_STUDY_2026\nl-engine-gameloop\example\gl3\..\..\example\gl3\gl3-equal-on-DX12.png
+[nl:info] ecs tick summary: mode=parallel frames=100 spinObjects=6
+[nl:info] shutdown ok (frames=100 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 3.39514 ms  max 36.6291 ms  over 100 frames (unthrottled)
+[nl:info] window destroyed

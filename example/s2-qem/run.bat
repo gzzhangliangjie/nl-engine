@@ -1,5 +1,5 @@
 @echo off
-REM M2.1 / s2-qem Â§çÁé∞ÔºöÂØºÂá∫ÁúüÂÆûÂá†‰Ωï -> ÁîªÁÆÄÂåñÂâçÂêéÂØπÊØîÂõæ
+REM M2.1 / s2-qem ∏¥œ÷£∫µº≥ˆ’Ê µº∏∫Œ -> ª≠ºÚªØ«∞∫Û∂‘±»Õº
 cd /d "%~dp0..\.."
 build\dx12\nanite-tools.exe simplify assets\meshlets\Suzanne.nmesh --obj build\qem\suzanne
 python tools\qem_preview.py build\qem\suzanne example\s2-qem\qem-suzanne.png

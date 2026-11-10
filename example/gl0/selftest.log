@@ -1,0 +1,31 @@
+  ok zero-dt frame produces no tick
+  ok negative-dt frame produces no tick
+  ok NaN-dt frame produces no tick
+  ok invalid dt leaves clock untouched
+  ok 16ms < step: no tick
+  ok 16ms accumulates
+  ok 16.7ms produces exactly one step tick at index 0
+  ok simTime == one step
+  ok alpha in [0,1)
+  ok 100x16.7ms -> exactly 100 ticks
+  ok simTime == 100 ticks worth
+  ok invariant simTime == tickCount*step
+  ok 5000ms clamped to 250ms -> exactly 15 ticks
+  ok simTime == 15 steps after burst
+  ok frameDt reports clamped delta
+  ok paused frame produces no tick
+  ok paused frame freezes accumulator and simTime exactly
+  ok paused frameDt is 0
+  ok resume continues tick index without burst
+  ok scale x2: 60x16.7ms -> 120 ticks
+  ok scale x2: simTime advances 2x real time
+  ok scale x0.5: 60x16.7ms -> 30 ticks
+  ok scale 10 x 100ms clamped to 250ms -> 15 ticks
+  ok negative scale clamped to 0
+  ok NaN scale clamped to 0
+  ok huge scale clamped to kMaxTimeScale
+  ok scale 0 freezes clock
+  ok identical dt sequence reproduces identical tick trace
+  ok reset zeroes the timeline
+  ok reset keeps timeScale/paused
+gl-m0 selftest: PASS (GameClock anchors)

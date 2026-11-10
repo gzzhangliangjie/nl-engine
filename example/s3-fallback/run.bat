@@ -1,6 +1,6 @@
 @echo off
-REM M3.1 / s3-fallback å¤ç°ï¼šé“¾å†ç”Ÿæˆï¼ˆlod0 å¸¦ v3 fallback å°¾æ®µï¼‰-> ç¦»çº¿æ¸²æŸ“è¯æ®å›¾
-REM æ³¨æ„ï¼š-o æŒ‡å‘ build ç›®å½•ï¼Œå…¥ä»“èµ„äº§ä¸è¢«è§¦ç¢°ï¼›fallback æ®µè½åœ¨ lod0 å°¾éƒ¨ã€‚
+REM M3.1 / s3-fallback ¸´ÏÖ£ºÁ´ÔÙÉú³É£¨lod0 ´ø v3 fallback Î²¶Î£©-> ÀëÏßäÖÈ¾Ö¤¾İÍ¼
+REM ×¢Òâ£º-o Ö¸Ïò build Ä¿Â¼£¬Èë²Ö×Ê²ú²»±»´¥Åö£»fallback ¶ÎÂäÔÚ lod0 Î²²¿¡£
 cd /d "%~dp0..\.."
 build\dx12\nanite-tools.exe lod assets\meshlets\Suzanne.nmesh -o build\showcase\runs\s3-fallback\lod --max-levels 6 || exit /b 1
 build\dx12\nanite-tools.exe selftest fallback || exit /b 1

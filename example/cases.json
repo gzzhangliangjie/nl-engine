@@ -4897,7 +4897,7 @@
       "{root}/example/audio-s1/bad-prov"
      ],
      "expectExit": 1,
-     "expectLog": "attenuation.tsv mismatch after re-render from provenance",
+     "expectLog": "attenuation.tsv mismatch",
      "command": "audio-tools check example/audio-s1/bad-prov"
     }
    ]
@@ -5198,6 +5198,8 @@
       "{root}/example/ecs-parallel/ecs-parallel-spin.scene",
       "--tick",
       "parallel",
+      "--fixed-dt",
+      "16.7",
       "--no-hud",
       "--screenshot",
       "{out}",
@@ -5210,7 +5212,7 @@
       "--pitch",
       "9"
      ],
-     "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
+     "command": "viewer.exe --scene {root}/example/ecs-parallel/ecs-parallel-spin.scene --tick parallel --fixed-dt 16.7 --no-hud --screenshot <out.png> --frames 30 --size 960x540 --yaw 12 --pitch 9",
      "exe": {
       "dx12": "build/DX12/viewer.exe",
       "vulkan": "build/VULKAN/viewer.exe"
@@ -6091,8 +6093,582 @@
      "expectLog": "bad magic (not an NLNV navmesh file)",
      "command": "nav-tools dump assets/models/HizScene.glb"
     }
+   ]
+  },
+  {
+   "id": "gl0",
+   "label": "P8 M-GL0",
+   "name": "游戏循环双帧模型（GameClock：60Hz 逻辑帧 accumulator + 渲染帧变步长）",
+   "tag": "gl-m0",
+   "date": "2026-11-10",
+   "summary": "A 类游戏循环轨道第一步（计划 P8-GAMELOOP-PLAN，M-GL2 与 M-S3 合并收口）：nl/core GameClock 纯逻辑零依赖——逻辑帧固定 60Hz（kStep=1/60，对齐 Carrot PhysicsSystem accumulator）+ 单帧 delta 截断 250ms（kMaxDelta，对齐 bevy DEFAULT_MAX_DELTA 双重用途：大 delta 截断 + 追帧上限）+ 暂停=时钟停摆（bevy 语义：paused 帧 accumulator/simTime 全冻结，非 Carrot 的烧 accumulator）+ timeScale 倍速（[0,1024] 钳制）+ alpha 输出预留（起步不插值，用户拍板）。确定性纪律：纯 double 同序运算，同一 realDt 序列逐位重现 tick 序列。gl-tools：selftest 30 锚点全绿 + trace 确定性 TSV（C++ trace 与独立 python 孪生实现逐行对拍 240/9 行全等，防假绿）+ usage/负向退出码契约（0/1/2）。",
+   "acceptance": [
+    "selftest 30 锚点全 PASS：零/负/NaN dt、16ms 累积、100x16.7ms=100 tick、5000ms 截断=15 tick、暂停冻结/恢复无爆发、x2=120 tick/x0.5=30 tick、scale10x100ms 封顶 15 tick、scale 边界钳制、双跑逐位一致、reset 语义",
+    "trace --frames 240 --dt 16.7 → 240 tick / simTime=4.0s（60Hz 恒定节奏）；burst 序列（5000ms 突发 + pause/resume + scale2）→ 21 tick 逐行合理",
+    "verify.py 独立 python 孪生实现（不引 C++ 代码）重算两条 trace，逐行全等（240/9 行）——跨实现对拍防假绿",
+    "ctest gl0-selftest / gl0-trace / gl0-negative（DX12+VULKAN 双后端）；双后端构建 OK + viewer selftest 16/16",
+    "交代物：example/gl0/（run.bat ALL GREEN exit 0 + acceptance.png 真实日志证据图 + 8 份日志/TSV）+ 本卡四用例；M-GL1 viewer 接双帧 / M-GL2 接物理音频 ECS 不在本轮"
    ],
-   "tag": "nav-m0"
+   "exe": {
+    "dx12": "build/dx12/gl-tools.exe",
+    "vulkan": "build/vulkan/gl-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数（退出码 2，打印用法）",
+     "kind": "tool",
+     "note": "无子命令走 usage 路径，退出码契约 0=PASS 1=FAIL 2=usage error。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "exit: 0=PASS 1=FAIL 2=usage error",
+     "command": "gl-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：GameClock 30 锚点（累加/截断/暂停/倍速/追帧上限/确定性）",
+     "kind": "tool",
+     "note": "M-GL0 验收核心：锚点全部手算可验 + python 同参数预演核对（250ms→15 tick 等）。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "gl-m0 selftest: PASS",
+     "command": "gl-tools selftest --verbose"
+    },
+    {
+     "id": "trace",
+     "name": "trace：240 帧 x 16.7ms 恒定节奏（60Hz 逻辑帧 TSV）",
+     "kind": "tool",
+     "note": "240 tick / simTime=4.0s / alpha 收敛；TSV 落盘供 verify.py 独立复算。",
+     "args": [
+      "trace",
+      "--frames",
+      "240",
+      "--dt",
+      "16.7"
+     ],
+     "expectExit": 0,
+     "expectLog": "gl-m0 trace: PASS",
+     "command": "gl-tools trace --frames 240 --dt 16.7"
+    },
+    {
+     "id": "negative",
+     "name": "negative：trace --dt abc（退出码 2）",
+     "kind": "tool",
+     "note": "非法数值走 usage error 路径。",
+     "args": [
+      "trace",
+      "--dt",
+      "abc"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --dt",
+     "command": "gl-tools trace --dt abc"
+    }
+   ]
+  },
+  {
+   "id": "gl1",
+   "label": "M-GL1",
+   "name": "游戏循环 M-GL1：viewer 接双帧（GameClock 暂停/倍速）",
+   "tag": "gl-m1",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/gameloop：M-GL0 的 nl::core::GameClock 接进 viewer 主循环（skin 模式非 --anim-time 路径走双帧模型：渲染帧喂 dt、逻辑帧 60Hz accumulator 消费、simTime 量化不插值）。控制台命令 game.pause（无参翻转，暂停=bevy 时钟停摆——画面冻结、HUD/相机照常）、game.timeScale（[0,1024] 钳制）、game.status（截图日志锚）；新增 --fixed-dt <ms> 钉渲染帧 delta（对拍确定性）。物理叠加层与 ECS scene tick 的统一迁入属 M-GL2（与 M-S3 合并收口）。",
+   "acceptance": [
+    "暂停冻结三重证：pause120 == pause60（渲染帧推进而姿态逐字节不变）== --anim-time 0（两条代码路径同一姿态），双后端成立",
+    "倍速轨迹等价证：timeScale 2 × fixed-dt 16.7 与 fixed-dt 33.4 × scale 1 每帧喂入逐位相同（16.7×2 与 33.4 的 double 乘法舍入可交换），PNG 逐字节相等，双后端成立",
+    "捕获帧日志锚：game clock: simTime/ticks/paused/scale 与 PNG 同帧（200 tick = 3.3333s 落 walk 周期中部，避开 240 tick=4.0s wrap 回 t0 的巧合等值）",
+    "run.bat ALL GREEN + check.py 10/10（含基线复现）+ gl0 ctest 双后端 3/3 + viewer selftest 16/16"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "pause",
+     "name": "game.pause：逻辑时钟停摆，渲染帧照常",
+     "kind": "image",
+     "note": "--console-exec \"game.pause\" + --fixed-dt 16.7：120 帧运行，simTime 恒 0（HUD 全程在场 = 渲染帧活着）。基线 == pause60 == --anim-time 0 三方逐字节相等（check.py 交叉验证）。",
+     "baselines": {
+      "dx12": "example/gl1/gl1-pause120-DX12.png",
+      "vulkan": "example/gl1/gl1-pause120-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "skin",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--fixed-dt",
+      "16.7",
+      "--console-exec",
+      "game.pause"
+     ],
+     "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 120 --fixed-dt 16.7 --console-exec \"game.pause\"",
+     "script": "example/gl1/run.bat pause"
+    },
+    {
+     "id": "scale2",
+     "name": "game.timeScale 2：缩放馈入轨迹等价",
+     "kind": "image",
+     "note": "timeScale 2 × fixed-dt 16.7 与 fixed-dt 33.4（scale 1）每帧馈入逐位相同 → 捕获帧 200 tick = 3.3333s（walk 周期中部）姿态逐字节相等；与暂停组不同字节。",
+     "baselines": {
+      "dx12": "example/gl1/gl1-scale2-DX12.png",
+      "vulkan": "example/gl1/gl1-scale2-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "skin",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "100",
+      "--fixed-dt",
+      "16.7",
+      "--console-exec",
+      "game.timeScale 2"
+     ],
+     "command": "viewer.exe --mode skin --hud --screenshot <out> --frames 100 --fixed-dt 16.7 --console-exec \"game.timeScale 2\"",
+     "script": "example/gl1/run.bat scale"
+    }
+   ]
+  },
+  {
+   "id": "gl2",
+   "label": "M-GL2",
+   "name": "游戏循环 M-GL2：物理/音频/ECS 统一接逻辑帧 + M-S3 场景音频",
+   "tag": "gl-m2",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/gameloop：物理调试 step / ECS world.tick / 音频场景同步全部收进 GameClock 逻辑帧 callback（runNormal 与 runScene 同构）；runScene 补落 --fixed-dt 并新增 audio.play <wav> <entity>（M-S3：声源挂 ECS 实体、listener 随相机、暂停即停）。game.pause 拍板连音频播放一起冻（复用 audio.freeze，UE 流派）。迁移零重拍：受影响用例加 --fixed-dt 16.7 后总 tick 数不变（floor(N×16.7/16.667)=N），ecs-parallel / phys-p3 / phys-p4 / gl1 基线全部逐字节复现。",
+   "acceptance": [
+    "声源随物体移动：gl2-audio.scene 轨道子实体（E1a 层级）挂自转父实体，声源读回位置 == 实体世界位置（equal=1）且在轨道圆上（半径 1.6/1.4 不变量）并已离开绑定时初始位",
+    "暂停即停：game.pause 后 ticks=0/simTime=0，读回位置冻结在绑定位（E1a 偏移合成未旋转），音频 mix 同步冻结（audio.freeze 联动）",
+    "跨后端逐位：move/pause 两组读回位置 DX12 == VULKAN（纯 CPU 逻辑）",
+    "迁移零重拍：ecs-parallel / phys-p3 / phys-p4 / gl1 复跑 PNG 全部逐字节不变；verify.py 独立孪生 12 检查 × 2 后端全绿"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "audio-move",
+     "name": "声源随实体移动（逻辑帧同步 + 轨道半径不变量）",
+     "kind": "image",
+     "note": "audio.play 绑 orb-a/orb-b（自转实体的轨道子实体），100 tick 后读回 == 实体世界位置、在轨道圆上、已离开初始位；verify.py 孪生断言全绿。",
+     "baselines": {
+      "dx12": "example/gl2/gl2-move-DX12.png",
+      "vulkan": "example/gl2/gl2-move-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl2/gl2-audio.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "100",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--console-exec",
+      "audio.play {root}/assets/audio/test-tone.wav orb-a",
+      "--console-exec",
+      "audio.play {root}/assets/audio/test-tone.wav orb-b"
+     ],
+     "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-a\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-b\"",
+     "script": "example/gl2/run.bat move"
+    },
+    {
+     "id": "audio-pause",
+     "name": "暂停即停（时钟停摆 + 音频 mix 冻结联动）",
+     "kind": "image",
+     "note": "game.pause 先于 audio.play：100 帧运行后 ticks=0/simTime=0，读回位置 == 绑定位（orb-a @(-0.6,0,0)、orb-b @(0,0,2.0)，E1a 偏移合成未旋转）。",
+     "baselines": {
+      "dx12": "example/gl2/gl2-pause-DX12.png",
+      "vulkan": "example/gl2/gl2-pause-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl2/gl2-audio.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "100",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--console-exec",
+      "game.pause",
+      "--console-exec",
+      "audio.play {root}/assets/audio/test-tone.wav orb-a",
+      "--console-exec",
+      "audio.play {root}/assets/audio/test-tone.wav orb-b"
+     ],
+     "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.pause\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-a\" --console-exec \"audio.play {root}/assets/audio/test-tone.wav orb-b\"",
+     "script": "example/gl2/run.bat pause"
+    }
+   ]
+  },
+  {
+   "id": "gl3",
+   "label": "M-GL3",
+   "name": "游戏循环 M-GL3：渲染帧插值（alpha 消费）",
+   "tag": "gl-m3",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/gameloop：GameClock alpha（=accumulator/step，bevy Fixed overstep/timestep 同口径）接进 runScene 渲染——每渲染帧 tick 前后快照 prev/curr 世界 TRS（列分解+Shepperd 四元数），交互态按 alpha lerp/slerp 合成实例矩阵；渲染专用绝不回写 sim state（社区 bevy_transform_interpolation 纪律，bevy core 全树无内建插值器 v0.16.1 实读 0 命中）。截图模式恒走不插值原路径（PNG 与不插值逐字节同），插值数值证据走捕获帧 probe 日志。",
+   "acceptance": [
+    "字节恒等：interp OFF vs ON（--fixed-dt 16.7 ×100 帧，截图态）PNG 逐字节同 ×2 后端（同一代码路径构造保证）",
+    "数值孪生：--fixed-dt 25 → 每帧 tick 数 [1,2,1]、捕获帧 alpha=0.5（python 独立复推 accumulator）；orb 轨道位置 prev/curr/interp 全对上 SpinSystem 公式孪生（w_i=0.9×(1+0.5·idx) rad/s）；interp 四元数 == slerp(pq,cq,alpha)",
+    "暂停冻结：game.pause 下 prev==curr==interp、alpha=0",
+    "跨后端逐位：mid 组 6 条 probe 行 DX12==VULKAN（纯 CPU）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "interp-equal",
+     "name": "插值开/关字节恒等（截图=确定性产物）",
+     "kind": "image",
+     "note": "--interp 开（截图态走不插值原路径）与关同参逐字节；log 内 probe 记录真实 alpha 的 lerp/slerp 数值（verify.py 自洽复算）。",
+     "baselines": {
+      "dx12": "example/gl3/gl3-equal-on-DX12.png",
+      "vulkan": "example/gl3/gl3-equal-on-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl2/gl2-audio.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "100",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--interp"
+     ],
+     "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9 --interp",
+     "script": "example/gl3/run.bat equal"
+    },
+    {
+     "id": "interp-mid",
+     "name": "中帧插值 alpha=0.5（时钟+轨道位置双重孪生）",
+     "kind": "image",
+     "note": "--fixed-dt 25 → 每帧 tick [1,2,1]，捕获帧 alpha=0.5；probe 日志 prev/curr/interp 与 SpinSystem 公式孪生复算逐位对上（orb-a idx0 / orb-b idx1 轨道）。",
+     "baselines": {
+      "dx12": "example/gl3/gl3-mid-DX12.png",
+      "vulkan": "example/gl3/gl3-mid-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl2/gl2-audio.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "25",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "3",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--interp",
+      "--console-exec",
+      "game.status"
+     ],
+     "command": "viewer.exe --mode scene --scene {root}/example/gl2/gl2-audio.scene --tick parallel --fixed-dt 25 --screenshot <out> --frames 3 --size 960x540 --no-hud --yaw 12 --pitch 9 --interp --console-exec \"game.status\"",
+     "script": "example/gl3/run.bat mid"
+    }
+   ]
+  },
+  {
+   "id": "gl4",
+   "label": "M-GL4",
+   "name": "游戏循环 M-GL4：script OnTick 接逻辑帧（宿主级单脚本轨道）",
+   "tag": "gl-m4",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/gameloop：ScriptHost 新增宿主级 script OnTick（可选契约，缺失=空转零波及）——clock callback 内 world.tick 之前调 scriptTick(double dt)，pause=callback 不触发=脚本同步冻结。OnTick 指针经 bootstrap 新导出 BootTickPtr 从 collectible 正本带出（**禁 getEntryPoint 直拉脚本 dll**：hostfxr 会装第二份默认 ALC 副本，静态字段独立一套，Engine.Init 状态不通——实证默认副本 OnTick 读 _exists=0 崩）；Assembly.GetType 不吃 \", Asm\" 限定符（hostfxr 口径吃），BootCall/BootTickPtr 入口剥限定符兼容两种格式。配套修三处：loadScript 校验 Entry 返回值（非 0 回滚，不再吞）；ecsSetWorld 先于 loadScript（Entry 装载期就 FindByName）；BootTickPtr thunk delegate 保活列表 Unload 前清空（rooted 挡回收）。验收示例 orbit：OnTick 轨道 r=1.6 ω=0.9，verify.py 三重孪生+跨后端逐位。bootstrap 缺省相对路径仅 cwd=仓库根成立，回归卡一律显式 {root} 绝对传参。",
+   "acceptance": [
+    "tick 组：--script orbit --fixed-dt 16.7 x100 帧 → probe ticks=100，轨道位置与公式孪生（r=1.6, ω=0.9, t=ticks/60）逐位容差对拍",
+    "mid 组：fixed-dt 30 x3 帧 → 每帧 tick [1,2,2] 共 5（25ms 落 2xstep=33.333ms 浮点刀锋弃用）、轨道孪生、跨后端逐位",
+    "pause 组：game.pause 后 probe ticks=0 且位置停场景初始态（脚本随逻辑帧冻结）",
+    "smoke 组：game.script 状态行 tick=on（console-exec 在帧循环前，count 恒 0）",
+    "negative 组：无 --script 时 game.script 退出码 1 + 'no script loaded'（双后端）",
+    "m-sc3 回归 8/8 不回归（--jobs 4 并行；selftest temp 目录加 PID 后缀修复既有双后端互踩 flake）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "tick",
+     "name": "OnTick 轨道 100 帧（ticks 孪生 + 轨道公式对拍）",
+     "kind": "image",
+     "note": "clock callback 内 scriptTick(1/60) 先于 world.tick；probe 行读回 script-orb 世界位置 + 宿主 tickCount。",
+     "baselines": {
+      "dx12": "example/gl4/gl4-tick-DX12.png",
+      "vulkan": "example/gl4/gl4-tick-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl4/gl4-orbit.scene",
+      "--tick",
+      "parallel",
+      "--script",
+      "{root}/script/examples/orbit",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "100",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectLog": "script probe: ticks=100 ",
+     "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --script {root}/script/examples/orbit --script-bootstrap {root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll --fixed-dt 16.7 --screenshot <out> --frames 100 --size 960x540 --no-hud --yaw 12 --pitch 9",
+     "script": "example/gl4/run.bat tick"
+    },
+    {
+     "id": "pause",
+     "name": "暂停冻结（ticks=0 + 位置停初始态）",
+     "kind": "image",
+     "note": "game.pause 后 clock callback 不触发 = OnTick 从未执行；probe ticks=0 且 pos=场景初始 (1.6,0,0)。",
+     "baselines": {
+      "dx12": "example/gl4/gl4-pause-DX12.png",
+      "vulkan": "example/gl4/gl4-pause-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl4/gl4-orbit.scene",
+      "--tick",
+      "parallel",
+      "--script",
+      "{root}/script/examples/orbit",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "5",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--console-exec",
+      "game.pause"
+     ],
+     "expectLog": "script probe: ticks=0 ",
+     "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --script {root}/script/examples/orbit --script-bootstrap {root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll --fixed-dt 16.7 --screenshot <out> --frames 5 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.pause\"",
+     "script": "example/gl4/run.bat pause"
+    },
+    {
+     "id": "negative",
+     "name": "无 --script 时 game.script 退出 1",
+     "kind": "image",
+     "note": "game.script 未载脚本 = console 命令失败 → acceptance error counter → exit 1；PNG 照写（负向基线）。",
+     "baselines": {
+      "dx12": "example/gl4/gl4-neg.png",
+      "vulkan": "example/gl4/gl4-neg-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl4/gl4-orbit.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "2",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--console-exec",
+      "game.script"
+     ],
+     "expectExit": 1,
+     "expectLog": "no script loaded",
+     "command": "viewer.exe --mode scene --scene {root}/example/gl4/gl4-orbit.scene --tick parallel --fixed-dt 16.7 --screenshot <out> --frames 2 --size 960x540 --no-hud --yaw 12 --pitch 9 --console-exec \"game.script\"（无 --script）",
+     "script": "example/gl4/run.bat negative"
+    }
+   ]
+  },
+  {
+   "id": "gl5",
+   "label": "P8 M-GL5",
+   "name": "游戏循环 M-GL5：TickGroup 注册制（逻辑帧组序显式契约）",
+   "tag": "gl-m5",
+   "date": "2026-11-10",
+   "summary": "A 类并行轨道 feat/gameloop：逻辑帧内执行顺序从 viewer main.cpp 两份内联 lambda 升级为命名 TickGroup 注册制（core/tick_groups TickScheduler，组序=枚举序编译期契约）。runScene 顺序原样固化：script OnTick->PrePhysics、ECS world.tick->PostPhysics、audio 声源同步->PostUpdateWork（Physics 组 runScene 不注册）；runNormal 物理 step 挂 Physics 组。三处口径（2026-11-10 实读）：UE EngineBaseTypes.h:83-110 ETickingGroup 组序+FTickPrerequisite 依赖图+TickInterval 调速（工业终态三机制叠加，本轮只取排序组）；bevy main_schedule.rs FixedMain 五阶段命名调度单速率（流派蓝本）；Carrot 全树无 TickGroup（反向印证）。多速率（UE TickInterval）与跨组依赖图留 PLAN §4 候选。注册必须在 console-exec 预执行之前（否则 game.tickgroups 读到全 off）；runNormal console-exec 日志对齐 runScene 补输出打印。验收：gl1/gl2/gl3/gl4/ecs-parallel/phys-p3/phys-p4/audio-s1 基线逐字节零重拍 + gl-tools selftest 新增 5 组锚点 + game.tickgroups 双模式组序日志锚。",
+   "acceptance": [
+    "scene 组：--mode scene + game.tickgroups -> order PrePhysics(on) -> Physics(off) -> PostPhysics(on) -> PostUpdateWork(on)，startup 行 registered=3，双后端一致",
+    "phys 组：--physics-debug + game.tickgroups -> order PrePhysics(off) -> Physics(on) -> PostPhysics(off) -> PostUpdateWork(off)，双后端一致",
+    "negative：未知命令 game.tickgroup -> exit 1 + 'unknown command'（双后端）",
+    "基线零重拍：gl1/gl2/gl3/gl4/ecs-parallel/phys-p3/phys-p4/audio-s1 全部逐字节 ALL GREEN（phys 两例各遇 1 次 0xC0000409 秒退族 ENV-FLAKE，重跑全绿定性）",
+    "gl-tools selftest：新增 M-GL5 锚点 5 组（组序=枚举序/空组跳过+组名/set 替换+clear/无回调路径节奏与透传契约/暂停倍速生效），双后端 PASS + ctest gl0 3/3x2"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "scene-groups",
+     "name": "scene 模式组序（Pre on/Physics off/Post on/PostWork on）",
+     "kind": "image",
+     "note": "TickScheduler 注册制下 runScene 三组链的运行时视图；game.tickgroups 输出即组序契约。",
+     "baselines": {
+      "dx12": "example/gl5/gl5-scene-DX12.png",
+      "vulkan": "example/gl5/gl5-scene-VULKAN.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl5/gl5-orbit.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--frames",
+      "5",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--console-exec",
+      "game.tickgroups",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "game.tickgroups: order PrePhysics(on) -> Physics(off) -> PostPhysics(on) -> PostUpdateWork(on)",
+     "command": "viewer.exe --mode scene --scene {root}/example/gl5/gl5-orbit.scene --tick parallel --fixed-dt 16.7 --frames 5 --size 960x540 --no-hud --console-exec \"game.tickgroups\" --screenshot <out>",
+     "script": "example/gl5/run.bat scene"
+    },
+    {
+     "id": "phys-groups",
+     "name": "phys 模式组序（仅 Physics 组注册）",
+     "kind": "image",
+     "note": "runNormal --physics-debug 只挂 Physics 组（M-P3 Jolt step），其余组空跳过。",
+     "baselines": {
+      "dx12": "example/gl5/gl5-phys-DX12.png",
+      "vulkan": "example/gl5/gl5-phys-VULKAN.png"
+     },
+     "args": [
+      "--physics-debug",
+      "--fixed-dt",
+      "16.7",
+      "--frames",
+      "5",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--console-exec",
+      "game.tickgroups",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "game.tickgroups: order PrePhysics(off) -> Physics(on) -> PostPhysics(off) -> PostUpdateWork(off)",
+     "command": "viewer.exe --physics-debug --fixed-dt 16.7 --frames 5 --size 960x540 --no-hud --console-exec \"game.tickgroups\" --screenshot <out>",
+     "script": "example/gl5/run.bat phys"
+    },
+    {
+     "id": "negative",
+     "name": "未知命令 game.tickgroup 退出 1",
+     "kind": "image",
+     "note": "console-exec 失败计入 acceptance 错误计数 -> 非零退出（M-GL3 拍板同款防呆）。",
+     "baselines": {
+      "dx12": "example/gl5/gl5-neg.png",
+      "vulkan": "example/gl5/gl5-neg-VULKAN.png"
+     },
+     "args": [
+      "--physics-debug",
+      "--fixed-dt",
+      "16.7",
+      "--frames",
+      "2",
+      "--size",
+      "960x540",
+      "--no-hud",
+      "--console-exec",
+      "game.tickgroup",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 1,
+     "expectLog": "unknown command: game.tickgroup",
+     "command": "viewer.exe --physics-debug --fixed-dt 16.7 --frames 2 --size 960x540 --no-hud --console-exec \"game.tickgroup\" --screenshot <out>（命令少 s = 负向）",
+     "script": "example/gl5/run.bat negative"
+    }
+   ]
   }
  ]
 }

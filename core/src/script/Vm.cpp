@@ -65,9 +65,11 @@ struct Vm::Impl {
     load_assembly_and_get_function_pointer_fn loadAndGetFn = nullptr;
 
     // M-SC3 热更：bootstrap（非收集程序集）三函数指针，loadBootstrap 填充。
+    // M-GL4 增补第四入口 BootTickPtr（collectible 正本 tick 指针解析）。
     EntryPointFn bootLoad = nullptr;
     EntryPointFn bootCall = nullptr;
     EntryPointFn bootUnload = nullptr;
+    EntryPointFn bootTickPtr = nullptr;
 };
 
 Vm::Vm() = default;
@@ -186,6 +188,7 @@ Result Vm::loadBootstrap(const std::string& bootstrapDllPath) {
         {"BootLoad",   &impl_->bootLoad,   "BootLoad"},
         {"BootCall",   &impl_->bootCall,   "BootCall"},
         {"BootUnload", &impl_->bootUnload, "BootUnload"},
+        {"BootTickPtr", &impl_->bootTickPtr, "BootTickPtr"},
     };
     for (const auto& spec : specs) {
         Result r = getEntryPoint(bootstrapDllPath, "Nl.Script.Bootstrap.Bootstrap, NlScriptBootstrap",
@@ -267,6 +270,37 @@ Result Vm::scriptUnload(bool* fullyUnloaded) {
                                    " (unknown protocol code)");
     }
     if (fullyUnloaded) *fullyUnloaded = true;
+    return Result::success();
+}
+
+Result Vm::scriptTickFn(const std::string& typeName, const std::string& method,
+                        void** outFn) {
+    if (!impl_ || !impl_->bootTickPtr) return Result::fail(7, "bootstrap not loaded (call loadBootstrap first)");
+    if (outFn) *outFn = nullptr;
+
+    // BootTickPtr args = { typeUtf8, methodUtf8, void** outFn }（Bootstrap.cs ABI）。
+    struct BootTickPtrArgs {
+        const char* typeUtf8;
+        const char* methodUtf8;
+        void** outFn;
+    } call{typeName.c_str(), method.c_str(), outFn};
+    static_assert(sizeof(BootTickPtrArgs) == 24, "BootTickPtrArgs ABI: x64 layout pinned by Bootstrap.cs offsets");
+
+    std::int32_t ret = 0;
+    std::uint32_t excCode = 0;
+    if (callEntryGuarded(impl_->bootTickPtr, &call, sizeof(call), &ret, &excCode) != 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%08x", excCode);
+        return Result::fail(6, "scriptTickFn: managed exception at SEH boundary (code=0x" + std::string(buf) + ")");
+    }
+    if (ret != 0) {
+        const char* why = ret == -1   ? "null args"
+                        : ret == -100 ? "no script loaded"
+                        : ret == -101 ? "type or method resolution failed"
+                                      : "managed exception inside bootstrap (caught)";
+        return Result::fail(8, "scriptTickFn: bootstrap BootTickPtr returned " + std::to_string(ret) +
+                                   " (" + why + ") type=" + typeName + " method=" + method);
+    }
     return Result::success();
 }
 
