@@ -112,11 +112,12 @@ TRACKS = {
     },
     "camera": {
         "wt": "E:/UE_STUDY_2026/nl-engine-camera",
-        "branch": "feat/camera", "state": "active",
-        "note": "A-class track opened 2026-11-10 (game-dev step 4 camera family; plan "
-                "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM3; wt built at master 1acd491, "
-                "junctions .workbuddy + slang dist, skip-worktree set; CAM1~CAM3 "
-                "serial after drive M-D3); merged to master 7b0f24a (tags cam-m0/cam-1a/cam-3a); wt removed 2026-11-10, branch kept; REOPENED 2026-11-10 (wt rebuilt at master dd767eb, junctions + skip-worktree re-established); remaining CAM2a/CAM1b/CAM2b/CAM3b/CAM4 in progress",
+        "branch": "feat/camera", "state": "closed",
+        "note": "A-class track (camera family, game-dev step 4; plan "
+                "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM4); a段(M-CAM0/CAM1a/CAM3a) "
+                "merged 7b0f24a (tags cam-m0/cam-1a/cam-3a) + b段(M-CAM1b/CAM2b/CAM3b + "
+                "M-CAM4) merged 745ff83 (tag cam-b); wt removed 2026-11-11, branch kept; "
+                "free/chase/track/smooth/shake 视觉卡待带显示会话补",
     },
     "input": {
         "wt": "E:/UE_STUDY_2026/nl-engine-input",
