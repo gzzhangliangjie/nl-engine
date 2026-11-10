@@ -190,7 +190,7 @@
 
 | 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
 |---|---|---|---|
-| 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding`（**已建，2026-11-10**，junction 共享 `.workbuddy`/`slang dist`） | `feat/pathfinding` | **M-N0 已收口**（2026-11-10，tag `nav-m0`，commit `bade82f`：vendored 1.6.0 + nl/nav 集成层 + nav-tools bake/dump/wire/resave/selftest + example/nav-m0 + NAV-TOOLS-GUIDE；close 闸 PASS + release --done）。**merge 回 master 待执行**：主树有 M8.1 TLAS 会话未提交改动挡 merge，待其收口后 `git merge feat/pathfinding` 补上；下一站 M-N1（findPath 封装） |
+| 寻路（vendored Recast/Detour，2026-11-09 方案变更） | `E:/UE_STUDY_2026/nl-engine-pathfinding`（**已建，2026-11-10**，junction 共享 `.workbuddy`/`slang dist`；M-N0 已 merge，暂留） | `feat/pathfinding` | **M-N0 已收口并 merge 回 master**（2026-11-10，tag `nav-m0` @ `bade82f`，merge commit `c3e9428`：vendored 1.6.0 + nl/nav 集成层 + nav-tools bake/dump/wire/resave/selftest + example/nav-m0 + NAV-TOOLS-GUIDE；close 闸 PASS + release --done）。M-N1 延后拍板：等 M-N2/M-N3 需要查询能力时按需插入（P8-NAV-PLAN 排期段留痕）；后续工作另开 wt |
 | ~~物理（Jolt vendored 集成）~~ | ~~`E:/UE_STUDY_2026/nl-engine-physics`~~（**已拆**，2026-11-10；M-P5 gate E3，届时开新 wt 接入） | `feat/physics`（**分支保留**） | **全量 merge 回 master**（2026-11-10，merge `7d844ef`，M-P0~P4 + M-J5c，tags `phys-p0`~`phys-j5c` 随入）；见 §7.1e；`docs/p8/P8-PHYS-PLAN.md` |
 | 3D 空间音频 + 游戏内调试（**vendored miniaudio + 自写薄集成层**，2026-11-09 方案变更） | ~~`E:/UE_STUDY_2026/nl-engine-audio`~~（**已拆**，2026-11-09；M-S3 后续开新 wt 接入） | `feat/audio`（**分支保留**） | **M-S0/M-S1/M-S2 已 merge 回 master**（2026-11-09，merge `1aac3d2`）；剩 M-S3 场景集成 gate 在 E1/E1b 后；`docs/p8/P8-AUDIO-PLAN.md` |
 
