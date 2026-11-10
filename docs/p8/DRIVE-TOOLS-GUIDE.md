@@ -100,3 +100,87 @@ d0-contact-negative   contact-trace --frames 0（WILL_FAIL）
 ## 8. 下一步（不属 M-D0）
 
 M-D1：`ContactEventStream` 双缓冲 + owner→Entity 映射 + PostPhysics 消费 System + M-GL5 TickGroup 时序自证（Q1 的落地处）；M-D2：载具无头集成 + 轮接触事件锚；M-D3：viewer 驾驶训练场（本轨唯一渲染接线面）。
+**M-D1 已于 2026-11-10 收官，见下方 §9；本节是 M-D0 当时的排期快照。**
+## 9. M-D1：ECS 消费契约（2026-11-10 收官，tag `drive-m1`）
+
+### 9.1 定位与边界
+
+| 项 | 口径 |
+|---|---|
+| 交付 | `core/include/nl/physics/ContactEventStream.hpp`（双缓冲，Jolt-free）+ `ContactEventSystem.hpp`（`scene::System` 消费者）+ 两个 .cpp + `phys-tools` 扩 `ecs-trace` / `ecs-check` / selftest `ecs` 节 + ctest 三条。 |
+| 层级纪律 | `nl/physics` 头文件零 Jolt 类型；消费者是 physics→ECS 桥，依赖 `nl/scene/System.hpp` 而非反向；`core/` 零图形 API；零 `kStage`。 |
+| 三处实读（M-D1 开工重读，非复用 M-D0 接触事件面） | Carrot `PhysicsBody.cpp:63-94`（帧内入队→帧末主线程派发并 clear）+ `CSharpBindings.cpp:1033-1075`（`mainThreadOnly=true` 消费者，两侧 `entity.exists()` 过滤）；bevy `event/mod.rs:573/680-701/704-719`（`update()` 换页 / `update_drain()` / 两次 update 才 empty）；UE `EngineBaseTypes.h:83-110`（`TG_PostPhysics` 组序语义）。UE 立即委托派发时机明确不借（§2.3 / Q1）。 |
+| 口径精确化 | 计划 §5 原写「次帧清」，与 §2.1 bevy 两帧保活、§3「读上一逻辑帧事件」措辞冲突。收口按更细的 §2.1 + §3 执行并改写 §5：**已消费事件次帧不可见；未读事件存活到次帧、第三次 `update()` 才丢**。二者同时成立，不是二选一。 |
+
+### 9.2 双缓冲契约
+
+| 调用 | 时机 | 语义 |
+|---|---|---|
+| `update()` | Physics 组帧首，publish 之前 | 丢最老页的未读事件（计数供两帧保活自证），把它回收为新写页；上一帧写页变为可读旧页 |
+| `publish(e)` / `publish(vector)` | Physics 组，Jolt step 之后 | 追加到当前写页 |
+| `drain()` | PostPhysics 组，消费者 `tick` 内 | 按「旧页→当前页」时间序取出全部未读事件并推进每页 cursor；同帧第二次 drain 返回空 |
+| `readableCount()` / `pendingCount()` / `*Total()` | 诊断 / TSV provenance | 只读，无隐藏状态 |
+
+消费者 `ContactEventSystem` 直接继承 `scene::System`（不经过 `SignedSystem<>`）→ 读写集为空 = 自足系统，`World::tickParallel` 契约 2 允许与其它系统并行；`tick` 只调 `World::exists()`（const 名字表查询）与 `stream_.drain()`，**不做结构变更**。`ownerA/B`（u64，来自 `BodyInfo.owner`）直接当 `scene::EntityID`，零新增映射表；未映射 owner 只累加 `unmapped*`，事件仍留在 `lastEvents()` 里，不丢。
+
+### 9.3 子命令与退出码
+
+| 命令 | 行为 | 退出码 |
+|---|---|---|
+| `ecs-trace [--out <tsv>] [--frames N]` | 跑 M-D0 三体探针取真实事件 → 逐帧 `TickScheduler::runTick`（Physics 组 publish / PostPhysics 组 ecs.tick / PostUpdateWork 组断言组序）→ 输出 F/E TSV | 0 / 1（运行失败）/ 2（参数错） |
+| `ecs-check <tsv>` | 只从 F/E 数据行独立复验结构锚 + 实测数值锚 | 0 / 1 / 2 |
+| `selftest [--verbose]` | 既有节 + **新增 ecs 节**（双缓冲单元语义 / 组序 / owner 过滤 / `tickParallel` 零违约 / 真实流 41 事件） | 0 / 1 |
+
+TSV：`#` provenance；`F` 行 11 列（frame / published / consumed / mappedA / mappedB / unmappedA / unmappedB / readable_before / readable_after / order_ok）；`E` 行 9 列（frame / kind / ownerA / ownerB / bodyIdA / bodyIdB / mappedA / mappedB）。`ecs-check` 交叉校验「E 行 mapped 汇总 == F 行 System 计数」，防两份计算各自假绿。
+
+退出码语义同 §3：0=PASS / 1=断言或运行失败 / 2=用法错误。负向实测：`ecs-trace --frames 0` → 2；`ecs-check <不存在>` → 1。
+
+### 9.4 M-D1 实测锚（`ecs-trace --frames 240` 真实输出反推，禁手写）
+
+| 量 | 实测 | 判定位置 |
+|---|---|---|
+| F / E 行数 | **240** / **41** | selftest ecs / ecs-check |
+| published / drained | **41** / **41**（每帧 published==consumed） | 同上 |
+| kind 分布 | Added **6** / Persisted **29** / Removed **6** | 同上 |
+| 首个 Added / 首个 Removed / 末事件 | **f44** / **f46** / **f185** | 同上 |
+| 有事件的帧 | **41**（每帧恰好 1 事件） | ecs-check |
+| owner 过滤 | mappedA **0** / mappedB **41** / unmappedA **41** / unmappedB **0** | selftest / check |
+| 换页 / 丢弃 / 组序 | updates **240** / dropped **0** / order_ok **240/240** | TSV provenance / F 行 |
+| 次帧清 | readable_before / readable_after 全帧恒 **0** | ecs-check |
+
+**owner 方向说明**：M-D0 事件 A 侧恒为 `blockerOwner`（…842）、B 侧恒为 `probeOwner`（…841）。`ecs-trace` 只给 probe 建实体，故 A 侧 41 个全未映射、B 侧 41 个全映射——「未映射原样透传」有真实数据，不是全命中假绿。
+
+### 9.5 交代物与一键复现
+
+```
+example\drive-m1\run.bat     # 前置：scripts\build-m0.2.bat DX12 / VULKAN
+```
+
+五段式：① `selftest --verbose`（8 条 PASS 锚 findstr 断言，含 `phys-d1 ecs: PASS`）→ ② `ecs-trace` 重生成 `ecs.tsv` 并 `fc /b` 逐字节自稳 + `ecs-check` → ③ DX12/VULKAN trace 逐字节一致 → ④ 负向退出码 2/1 → ⑤ 两张证据图重生成 + `fc /b` 比对 → `DRIVE-M1 ACCEPTANCE: ALL GREEN` exit 0。首次运行会先生成 PNG 基线并在第 ⑤ 段报一次「找不到 .base.png」（与 M-D0 同款），第二次起稳定全绿。
+
+| 文件 | 来源 |
+|---|---|
+| `example/drive-m1/ecs.tsv` | `ecs-trace --frames 240` 真实输出 |
+| `{selftest,ecs-trace,ecs-check,cross-backend,usage,negative}.log` | run.bat 捕获的真实工具输出 |
+| `timeline.png` | `tools/make-drive-m1-evidence.py` 从 TSV 渲染：消费事件时间线 + 累计 publish/drain 曲线 + 组序条带 + MEASURED 面板 |
+| `acceptance.png` | 同一脚本从真实 logs 渲染的终端风格验收板 |
+
+展示台：`example/cases.json` `drive-m1` 版本卡 5 用例（usage / selftest / ecs-trace / ecs-check / negative），`python tools/showcase/server.py --check` exit 0。
+
+### 9.6 ctest
+
+```
+d1-ecs-trace      ecs-trace --frames 240 --out <build>/phys-d1-ecs.tsv
+d1-ecs-check      ecs-check <上述 TSV>（DEPENDS trace）
+d1-ecs-negative   ecs-trace --frames 0（WILL_FAIL）
+```
+
+命令统一带 `--repeat until-pass:3`（见 §6）；裸 shell 无 ctest，走全路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`。双后端各 7/7（d1 三条 + d0 三条 + p0 selftest）。
+
+### 9.7 踩坑
+
+1. **「次帧清」不是「所有事件次帧清」**：计划 §5 简写与 §2.1 两帧保活表面冲突。实现用逐页 cursor 同时满足两者——drain 推进 cursor 使已消费事件次帧不可见，未读事件留到第三次 `update()` 才丢；selftest 两条分别断言。收口时把 §5 措辞改精确，避免下轮又捡回旧表述。
+2. **证据图不能含手绘/占位数据**：acceptance 板每一节都必须读真实 log 文件；曾想直接写死「ALL GREEN」两行，改为从 `ecs-check.log` / `cross-backend.log` 取真实行。
+3. **排版压字**：`timeline.png` 首版 f44 标注贴住面板标题、累计曲线平台与说明文字挤在一起 → 标注下移、曲线 scale 165→110、说明文字上移；`acceptance.png` 画布 660→600 收掉下方留白。修完重生成并复跑 run.bat `fc /b` 逐字节一致。
+4. **首次 run.bat 必挂一次**：PNG 基线不存在时 `copy /b` 造不出 `.base.png`，第 ⑤ 段 fc 报 ERROR；第二次起 ALL GREEN（M-D0 同款，属预期冷启动行为）。
+5. **selftest 变量遮蔽**：新增 ecs 节的局部 `st2` 遮蔽了既有 stack 节的 `st2`（/W4 C4456）→ 改名 `ecsStream2`。文件里其余 4 条同类 warning 是 M-D0 之前既有，未动。

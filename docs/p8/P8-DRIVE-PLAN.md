@@ -88,11 +88,24 @@
 | 改动面 | `core/include/nl/physics/Events.hpp`（新）、`core/src/physics/World.cpp`（唯一 Jolt 符号面）、`phys-tools/main.cpp` + `CMakeLists.txt`；**零图形、零 `kStage`** | 本计划 §1；A 类轨道纪律 |
 | 时序契约 | 事件在 Physics 组 step 内产出入队、PostPhysics 组消费；M-D1 由 M-GL5 注册制承载 | Carrot `dispatchEventsPostPhysicsMainThread` 同构 + 本计划 §1 |
 
-### M-D1 ECS 消费
+### M-D1 ECS 消费（2026-11-10 收官，开工锚点表见下）
 
-- `ContactEventStream`：双缓冲队列（当帧写 / 次帧读 / 两帧保活，bevy 口径），`drain()` 语义固化。
-- demo `scene::System` 消费者：tick 内读上一逻辑帧事件，owner→Entity 走 `scene::World::exists` 过滤（未映射的纯物理 owner 原样透传）。
-- 时序契约自证：GameClock Physics 组跑 step → PostPhysics 组跑消费 System（M-GL5 注册制）——selftest 断言「step 同帧产的事件，消费 System 在同帧 PostPhysics 段可见、下一帧不可见」。
+- `ContactEventStream`（`core/include/nl/physics/ContactEventStream.hpp`，Jolt-free）：双缓冲两页 + 逐页 read cursor，`update()` 帧首换页丢最老页、`publish()` Physics 组写当前页、`drain()` PostPhysics 组按「旧页→当前页」时间序取出未读事件并推进 cursor。bevy `event/mod.rs:573/715-718` 两帧保活与 `update_drain()` 口径，泛型 `Events<T>` 不做（§4）。
+- demo `scene::System` 消费者 `ContactEventSystem`：直接继承 `System`（读写集空 = 自足，可并行，`System.hpp` 契约 2）；`tick` 内 `drain()`，owner→Entity 走 `scene::World::exists` 过滤，**未映射的纯物理 owner 只计数不丢事件**（Carrot `CSharpBindings.cpp:1037-1056` 双 exists 过滤同构）。
+- 时序契约自证：M-GL5 `TickScheduler` 四组枚举序即执行序，**故意乱序注册**验证 `runTick` 仍按枚举序跑；Physics 组 `update()` + `publish()` 真实 M-D0 事件，PostPhysics 组 `scene::World::tick` 触发消费者，PostUpdateWork 组断言组序。
+- 工具面照 M-D0 trace→check：`ecs-trace` 输出 F/E 两类数据行（F = 每逻辑帧 publish/consume/owner 统计，E = 每消费事件明细），`ecs-check` 只信 F/E 行独立复验，锚从真实 TSV 反推。
+
+#### M-D1 开工锚点表（2026-11-10 实读后补全）
+
+| 项 | 落点 / 口径 | 依据 |
+|---|---|---|
+| 换页语义 | `update()` 在 Physics 组帧首调用；丢最老页未读事件并回收为写页 | bevy `event/mod.rs:680-701` `update_drain()` + `:704-719` 两次 update 才 empty |
+| 同帧可见 | `drain()` 同时读旧页与当前写页，故帧 N publish 的事件在帧 N PostPhysics 可见 | §5 验收判据 |
+| 次帧清 | 已 drain 的事件 cursor 已推进 → 帧 N+1 不可见；**未读**事件存活到帧 N+1、第三次 `update()` 才丢（两帧保活） | §2.1 bevy 口径与 §5 简写的精确化，二者不矛盾 |
+| 组序 | `TickGroup` 枚举序（PrePhysics→Physics→PostPhysics→PostUpdateWork）为唯一顺序源，乱序注册不改执行序 | `tick_groups.hpp` 确定性纪律；UE `EngineBaseTypes.h:83-110` |
+| owner 映射 | `ContactEvent.ownerA/B`（u64）直接当 `scene::EntityID`；零新增映射表 | §1 `BodyInfo.owner` 既有地基 |
+| 并行契约 | 消费者不声明读写集 → 自足系统，`tickParallel` 零结构变更违约 | `System.hpp` 契约 2 |
+| 改动面 | `core/{include/nl/physics,src/physics}` 新 4 文件 + 根 CMakeLists 两行 + `phys-tools`；零图形、零 `kStage` | A 类轨道纪律 |
 
 ### M-D2 载具无头集成
 
@@ -123,7 +136,7 @@
 | 里程碑 | 内容 | 验收判据 |
 |---|---|---|
 | **M-D0** | `core/physics` 事件流（listener + ContactEvent POD + contactProbe）+ phys-tools `contacts` 节 + trace→check 闭环 + ctest | selftest 数值锚全绿；事件时序逐位（单线程基线 + 池模式排序兜底）；负向退出码 0/1/2；双后端 spot 零回归；tool 卡 |
-| **M-D1** | `ContactEventStream` 双缓冲 + demo System 消费者 + TickGroup 时序契约自证 + ECS selftest | 消费节奏锚全绿（当帧产、同帧 PostPhysics 可见、次帧清）；并行 tick 下消费 System 只读零违约；ctest 双后端 |
+| **M-D1** | `ContactEventStream` 双缓冲 + demo System 消费者 + TickGroup 时序契约自证 + ECS selftest | 消费节奏锚全绿（同帧 PostPhysics 可见、**已消费**事件次帧不可见、**未读**事件两帧保活、第三次 `update()` 清）；并行 tick 下自足消费 System 零违约；ctest 双后端 |
 | **M-D2** | `core/physics/Vehicle` PIMPL 集成 + DriveConfig 输入脚本 + phys-tools 参数表三锚场景 + 轮接触事件锚 + trace→check + ctest | selftest 数值锚全绿（加速/转向/手刹三场景逐位）；轮子状态回读自洽（contact 数 = 着地轮数）；M-D0 契约零回归（contacts 节逐字节不变）；tool 卡 |
 | **M-D3** | DebugScene scenario 2 + viewer M-I1 映射驱动 + HUD 参数行 + console cvar 实调 + example 卡 + cases.json + 收口（close 硬闸） | 截图基线双后端 bytes；键鼠实时驾驶肉眼可验；车撞墙事件反馈可见（HUD 行）；console 实调参数生效锚落盘；`server.py --check` exit 0 |
 
@@ -165,9 +178,13 @@
   shape 变化后可能失效；body id 直接来自回调参数，removed 期间零 Jolt body 访问。
   M-D1 双缓冲消费者 / M-D2 载具仍按 §5 排期，未提前落码。
 
+- 2026-11-10（**M-D1 收官**）：用户指令「下一步」= 完整 M-D1 落码收口。开工按铁律重读三处**本里程碑点名面**（Carrot `PhysicsBody.cpp:63-94` + `CSharpBindings.cpp:1033-1075` 双 exists 过滤；bevy `event/mod.rs:573/680-701/704-719` 两帧保活与 `update_drain()`；UE `EngineBaseTypes.h:83-110` `TG_PostPhysics` 组序），**未复用 M-D0 的接触事件面证据**。落码：`ContactEventStream`（双缓冲 + cursor + update/publish/drain）+ `ContactEventSystem`（自足 `scene::System` 消费者） + `TickScheduler` 帧循环 + phys-tools `ecs-trace` / `ecs-check` / selftest `ecs` 节 + ctest 三条。**实测锚（真实 TSV 反推）**：240 F 行 / 41 E 行，published=consumed=41，kinds 6/29/6，f44/f46/f185，mappedA=0 / mappedB=41 / unmappedA=41 / unmappedB=0（A=blocker 未映射、B=probe 映射，owner 过滤双向有真实数据），updates=240、dropped=0、order_ok=240/240。**口径精确化**：§5「次帧清」指已消费事件；未读事件照 §2.1 两帧保活，表述已改（§9.1 归档）。M-D2 载具 / M-D3 驾驶可见未提前落码。
+
 ## 7. 开工待确认（Q 编号，决策前置）
 
 > **状态（2026-11-10 用户「开工」）**：Q1 / Q2 按本表建议口径执行（未另行指定即视为采纳建议），Q3 = 完整 M-D0 落码收口，Q4 编号维持 `track drive / M-D0`。Q1 的「bevy 双缓冲 + M-GL5 TickGroup」落到 **M-D1**，本轮 M-D0 只产 POD 流与帧末排序；Q2 的清理时机已写进 `Events.hpp` 头注释与 §3 锚点表。
+>
+> **状态（2026-11-10 用户「下一步」）**：M-D1 已收官（tag `drive-m1`），Q1 的「bevy 双缓冲 + M-GL5 TickGroup」在 M-D1 落地并自证；M-D2 / M-D3 未开工。上一段为 M-D0 收官时的历史快照。
 
 | 编号 | 问题 | 建议 / 拿到答案改哪里 |
 |---|---|---|

@@ -2324,3 +2324,20 @@
 5. **ctest 不在裸 shell PATH**：便携 cmake 3.31.6 的 ctest 必须走全路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`，命令统一带 `--repeat until-pass:3`。
 
 **下一步**：M-D1（`ContactEventStream` 双缓冲 + owner→Entity 映射 + PostPhysics 消费 System + M-GL5 TickGroup 时序自证）；M-D2 载具无头集成；M-D3 驾驶可见（viewer 接线，本轨唯一渲染面）。
+## P8 M-D1：ECS 消费 ContactEventStream 双缓冲（feat/drive，2026-11-10，tag `drive-m1`）
+
+**动作**：用户「下一步」= M-D1 完整落码收口。开工按铁律重读三处本里程碑点名面（Carrot `PhysicsBody.cpp:63-94` 帧内入队→帧末主线程派发 + `CSharpBindings.cpp:1033-1075` 脚本侧消费者双 `entity.exists()` 过滤；bevy `event/mod.rs:573/680-701/704-719` 两帧保活 / `update_drain()` / 两次 update 才 empty；UE `EngineBaseTypes.h:83-110` `TG_PostPhysics` 组序），**未复用 M-D0 的接触事件面证据**（AGENTS.md M5.1 教训）+ `docs/MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `ROADMAP.md` 对照总表（无 M-D1 行，按功能就近读同类模块）/ `MEMORY.md` / 当日日志 / `P8-DRIVE-PLAN.md` / `DRIVE-TOOLS-GUIDE.md` → `core/include/nl/physics/ContactEventStream.hpp`（双缓冲两页 + 逐页 cursor：update/publish/drain）+ `ContactEventSystem.hpp`（自足 `scene::System` 消费者，owner→Entity 过滤）+ 两个 .cpp + 根 CMakeLists 两行 + `phys-tools` 扩 `ecs-trace` / `ecs-check` / selftest `ecs` 节 + ctest 三条 → `example/drive-m1/`（run.bat 五段式 + ecs.tsv + 6 份真实日志 + 双证据图）+ `tools/make-drive-m1-evidence.py` + cases.json `drive-m1` 卡五用例 + `DRIVE-TOOLS-GUIDE.md` §9 + 计划 §3 锚点表 / §5 措辞精确化 / §6 留痕 / §7 状态 → 本四栏 → tag。A 类轨道，不 bump `kStage`。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m1`）。前置 `747f5b3`（`drive-m0`）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest 16/16 ×2；phys-tools selftest（M-P0~P4 + j5c + contacts + ecs 节）两树 PASS；`ecs-trace --frames 240` 真实输出 **240 F 行 + 41 E 行**，published=consumed=41、kinds 6/29/6、首个 Added f44 / 首个 Removed f46 / 末事件 f185（与 M-D0 实测锚逐项一致 = 零回归）；**owner 过滤双向有真实数据**：A 侧 41 个全未映射（blocker）、B 侧 41 个全映射（probe）；updates=240 / dropped=0 / order_ok=240/240，readable_before 与 readable_after 全帧恒 0；selftest 单测覆盖同帧可见 / 已消费次帧清 / 未读两帧保活 / TickGroup 乱序注册仍按枚举序 / `tickParallel` 零结构变更违约；DX12/VULKAN `ecs-trace` TSV 逐字节一致；ctest `d1-ecs-*` + `d0-contact-*` + `p0-phys-selftest` 双后端各 **7/7**（`--repeat until-pass:3`）；负向退出码 2（bad --frames）/ 1（缺文件）实测；run.bat 五段式 ALL GREEN（TSV + 两张证据图重生成 `fc /b` 逐字节一致）；`server.py --check` exit 0；两张证据图肉眼核验并修掉压字 / 留白后复验。
+
+**踩坑情况**
+1. **计划 §5「次帧清」与 §2.1 两帧保活表面冲突**：按更细的 §2.1 + §3 执行——逐页 cursor 让已消费事件次帧不可见、未读事件存活到第三次 `update()` 才丢；selftest 两条分别断言，收口时把 §5 措辞改精确并写进 `DRIVE-TOOLS-GUIDE.md §9.1`，避免下轮捡回旧表述。
+2. **证据图不许手绘 / 占位**：acceptance 板曾想直接写死「ALL GREEN」两行，改为从 `ecs-check.log` / `cross-backend.log` 读真实行；`timeline.png` 全部数值由 `ecs.tsv` F/E 行重算。
+3. **证据图排版两修**：f44 标注贴住面板标题、累计曲线平台与说明文字相挤 → 标注下移、scale 165→110、文字上移；acceptance 画布 660→600 收下方留白。复跑 run.bat 逐字节一致。
+4. **首次 run.bat 必挂一次**：PNG 基线不存在时 `copy /b` 造不出 `.base.png`，第 ⑤ 段 fc 报 ERROR；第二次起 ALL GREEN（M-D0 同款冷启动行为）。
+5. **selftest 新节变量遮蔽**：新增 `st2` 遮蔽既有 stack 节 `st2`（/W4 C4456）→ 改名 `ecsStream2`；其余 4 条同类 warning 为 M-D0 前既有，未动。
+6. **锚一律机器反推**：先只写结构锚，实跑后由脚本从真实 TSV 生成 6 组数值锚注入 `ecs-check` 与 selftest（M-I0/I1 手写锚两连犯教训），非 240 帧只跑结构锚。
+
+**下一步**：M-D2 载具无头集成（`Vehicle` PIMPL + `DriveConfig` 帧序号输入脚本 + 三锚场景 + 轮接触事件锚）；M-D3 驾驶可见（viewer 接线，本轨唯一渲染面）。整轨 M-D0~D3 收官后 merge 回 master。

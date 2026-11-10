@@ -77,3 +77,16 @@ set_tests_properties(d0-contact-check PROPERTIES
     PASS_REGULAR_EXPRESSION "phys-d0 contact-check: PASS")
 add_test(NAME d0-contact-negative COMMAND phys-tools contact-trace --frames 0)
 set_tests_properties(d0-contact-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-D1: ECS consumption of the M-D0 contact stream (A-class tool acceptance) ----
+add_test(NAME d1-ecs-trace COMMAND phys-tools ecs-trace --frames 240
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-d1-ecs.tsv)
+set_tests_properties(d1-ecs-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-d1-ecs\\.tsv")
+add_test(NAME d1-ecs-check
+         COMMAND phys-tools ecs-check ${CMAKE_CURRENT_BINARY_DIR}/phys-d1-ecs.tsv)
+set_tests_properties(d1-ecs-check PROPERTIES
+    DEPENDS d1-ecs-trace
+    PASS_REGULAR_EXPRESSION "phys-d1 ecs-check: PASS")
+add_test(NAME d1-ecs-negative COMMAND phys-tools ecs-trace --frames 0)
+set_tests_properties(d1-ecs-negative PROPERTIES WILL_FAIL TRUE)

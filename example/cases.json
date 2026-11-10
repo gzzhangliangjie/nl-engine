@@ -7608,6 +7608,96 @@
      "command": "phys-tools contact-trace --frames 0"
     }
    ]
+  },
+  {
+   "id": "drive-m1",
+   "label": "M-D1",
+   "name": "ECS 消费：ContactEventStream 双缓冲 + PostPhysics 消费 System（M-D1）",
+   "tag": "drive-m1",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第二里程碑，A 类并行轨道、零图形零 kStage。core/include/nl/physics/ContactEventStream.hpp 新增 Jolt-free 双缓冲事件流：两页 + 逐页 read cursor，update() 帧首换页丢最老页、publish() Physics 组写当前页、drain() PostPhysics 组按旧页到当前页的时间序取出未读事件并推进 cursor；bevy event/mod.rs:573/715-718 两帧保活口径，已消费事件次帧不可见、未读事件第三次 update 才丢。ContactEventSystem 直接继承 scene::System（读写集空 = 自足可并行），tick 内 drain，ownerA/B 直接当 EntityID 走 scene::World::exists 过滤，未映射 owner 只计数不丢事件。TickScheduler 故意乱序注册四组，runTick 仍按枚举序执行；Physics 组 publish 真实 M-D0 事件、PostPhysics 组 ecs.tick 消费、PostUpdateWork 组断言组序。phys-tools 扩 ecs-trace / ecs-check / selftest ecs 节，锚全部从真实 TSV 反推：240 F 行 / 41 E 行，published=consumed=41，kinds 6/29/6，f44/f46/f185，mappedA=0 / mappedB=41 / unmappedA=41 / unmappedB=0（A=blocker 未映射、B=probe 映射），updates=240、dropped=0、order_ok=240/240。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0..M-P4 + j5c + contacts + ecs 节）两树 PASS",
+    "ecs-trace 240 帧真实输出 240 F 行 + 41 E 行，ecs.tsv 逐字节稳定；ecs-check 只信 F/E 数据行独立复验结构锚 + 实测数值锚",
+    "时序契约：每帧 published==consumed（同帧 PostPhysics 可见）、readable_before/after 恒 0（已消费次帧清）、order_ok=240/240（乱序注册仍按枚举序）",
+    "owner 过滤双向有真实数据：41 个事件 A 侧全未映射、B 侧全映射；tickParallel 下自足消费 System 零结构变更违约",
+    "M-D0 零回归：41 事件 6/29/6 / f44 / f46 / f185 与 M-D0 实测锚逐项一致；DX12/VULKAN ecs-trace 逐字节一致",
+    "ctest d1-ecs-{trace,check,negative} + d0-contact-* + p0-phys-selftest 7/7 x2（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m1/（run.bat 五段式 ALL GREEN + TSV + 6 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md §9"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D1 新增 ecs-trace / ecs-check 两行。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：ecs 节（双缓冲 / 组序 / owner 过滤 / 并行零违约）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c + M-D0 contacts 既有锚全绿之外，新增 ecs 节：同帧可见 / 已消费次帧清 / 未读两帧保活 / TickGroup 乱序注册仍按枚举序 / tickParallel 零违约 / 真实流 41 事件全消费。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d1 ecs: PASS",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "ecs-trace",
+     "name": "ecs-trace：真实 TickGroup 帧循环消费 TSV",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，F 行 11 列逐帧时序、E 行 9 列消费事件明细。",
+     "args": [
+      "ecs-trace",
+      "--frames",
+      "240"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D1 ECS contact event consumption",
+     "preview": "example/drive-m1/timeline.png",
+     "command": "phys-tools ecs-trace --frames 240"
+    },
+    {
+     "id": "ecs-check",
+     "name": "ecs-check：从归档 TSV 复验消费锚",
+     "kind": "tool",
+     "note": "只信 F/E 数据行：结构锚（同帧可见 / 次帧清 / 组序 / owner 计数交叉校验）+ 6 组从真实 TSV 反推的实测数值锚；摘要行仅作 provenance。",
+     "args": [
+      "ecs-check",
+      "{root}/example/drive-m1/ecs.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d1 ecs-check: PASS",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools ecs-check example/drive-m1/ecs.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。expectLog 从 usage.log 实测输出复制。",
+     "args": [
+      "ecs-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools ecs-trace --frames 0"
+    }
+   ]
   }
  ]
 }

@@ -24,12 +24,20 @@
 //                          hard proof + N>1 run-to-run determinism, drop+stack)
 //   contact-trace [opts]   M-D0: ContactListener -> Jolt-free POD event TSV
 //   contact-check <tsv>    M-D0: re-verify the contact dump from data rows
+//   ecs-trace [opts]       M-D1: TickGroup frame loop -> ECS consumption TSV
+//   ecs-check <tsv>        M-D1: re-verify the consumption dump from data rows
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
 // TSV by the matching make-phys*-evidence.py. No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
+#include "nl/physics/ContactEventStream.hpp"
+#include "nl/physics/ContactEventSystem.hpp"
+#include "nl/core/tick_groups.hpp"
+#include "nl/scene/World.hpp"
+#include <cstdint>
+#include <memory>
 
 #include <algorithm>
 #include <cmath>
@@ -74,6 +82,8 @@ void usage() {
     std::printf("  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)\n");
     std::printf("  phys-tools contact-trace [--out <tsv>] [--frames N]  (M-D0 contact events)\n");
     std::printf("  phys-tools contact-check <tsv>\n");
+    std::printf("  phys-tools ecs-trace [--out <tsv>] [--frames N]  (M-D1 ECS consumption)\n");
+    std::printf("  phys-tools ecs-check <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -1462,6 +1472,332 @@ int runCheckJobs(int argc, char** argv) {
     return 0;
 }
 
+// ===== P8 M-D1: ECS consumption TSV + trace/check loop =====
+// Wire format (ASCII, tab separated). '#' lines are provenance ONLY -- the
+// checker recomputes everything from the F/E data rows (M-P2 anti-false-green
+// rule). F = one logic frame of the TickGroup loop, E = one consumed event.
+struct EcsFrameRow {
+    int frame = 0;
+    int published = 0, consumed = 0;
+    int mappedA = 0, mappedB = 0, unmappedA = 0, unmappedB = 0;
+    int readableBefore = 0, readableAfter = 0;
+    int orderOk = 0;
+};
+
+struct EcsEventRow {
+    int frame = 0, kind = -1;
+    unsigned long long ownerA = 0, ownerB = 0;
+    unsigned int bodyA = 0, bodyB = 0;
+    int mappedA = 0, mappedB = 0;
+};
+
+struct EcsTrace {
+    nl::physics::ContactProbeConfig cfg;
+    std::vector<EcsFrameRow> frames;
+    std::vector<EcsEventRow> events;
+    std::uint64_t updates = 0, published = 0, drained = 0, dropped = 0;
+    nl::physics::ContactConsumeStats stats;
+    int groupOrderBad = 0;
+    std::string error;
+    bool ok() const { return error.empty(); }
+};
+
+// Headless frame loop, M-GL5 group ordinal is the only order source:
+//   PrePhysics (marker reset) -> Physics (update + publish real M-D0 events)
+//   -> PostPhysics (ecs.tick -> ContactEventSystem::drain)
+//   -> PostUpdateWork (order assertion).
+// stream is declared BEFORE ecs so it outlives the system holding a reference.
+EcsTrace runEcsFrameLoop(const nl::physics::ContactProbeConfig& cfg) {
+    EcsTrace t;
+    t.cfg = cfg;
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) { t.error = err; return t; }
+
+    nl::physics::World physics;
+    const nl::physics::ContactProbeResult r = physics.simulateContactProbe(cfg);
+    if (!r.ok()) { t.error = r.error; return t; }
+
+    std::vector<std::vector<nl::physics::ContactEvent>> byFrame(
+        static_cast<std::size_t>(cfg.frames) + 1);
+    for (const auto& e : r.events) {
+        if (e.frame >= 1 && e.frame <= cfg.frames) {
+            byFrame[static_cast<std::size_t>(e.frame)].push_back(e);
+        }
+    }
+
+    nl::physics::ContactEventStream stream;
+    nl::scene::World ecs;
+    // Only the probe owner gets a live entity. The blocker/floor owners stay
+    // unmapped on purpose, so the owner->Entity filter has real both-way data
+    // instead of a vacuous "everything mapped" green.
+    ecs.newEntityWithID(static_cast<nl::scene::EntityID>(cfg.probeOwner), "probe");
+    auto* sys = new nl::physics::ContactEventSystem(ecs, stream);
+    ecs.registerSystem(std::unique_ptr<nl::scene::System>(sys));
+
+    nl::core::TickScheduler sched;
+    int marker = 0;
+    std::vector<int> order;
+    EcsFrameRow* row = nullptr;
+    t.frames.reserve(static_cast<std::size_t>(cfg.frames));
+
+    // Deliberately register in SCRAMBLED order: runTick must still execute in
+    // enum order (tick_groups.hpp contract: ordinal, not registration order).
+    sched.set(nl::core::TickGroup::PostUpdateWork, [&](double, std::uint64_t) {
+        order.push_back(3);
+        if (marker != 30) ++t.groupOrderBad;
+        marker = 40;
+        const std::size_t n = order.size();
+        if (n < 4 || order[n - 4] != 0 || order[n - 3] != 1 ||
+            order[n - 2] != 2 || order[n - 1] != 3) ++t.groupOrderBad;
+        if (row) row->orderOk = (t.groupOrderBad == 0) ? 1 : 0;
+    });
+    sched.set(nl::core::TickGroup::PostPhysics, [&](double, std::uint64_t) {
+        order.push_back(2);
+        if (marker != 20) ++t.groupOrderBad;
+        marker = 30;
+        const auto before = sys->stats();
+        ecs.tick(cfg.dt);
+        const auto& after = sys->stats();
+        if (row) {
+            row->consumed = static_cast<int>(after.events - before.events);
+            row->mappedA = static_cast<int>(after.mappedA - before.mappedA);
+            row->mappedB = static_cast<int>(after.mappedB - before.mappedB);
+            row->unmappedA = static_cast<int>(after.unmappedA - before.unmappedA);
+            row->unmappedB = static_cast<int>(after.unmappedB - before.unmappedB);
+            row->readableAfter = static_cast<int>(stream.readableCount());
+        }
+        // Independently recompute the mapped flags for the wire rows; ecs-check
+        // cross-checks these against the System's own counters in the F rows.
+        for (const auto& e : sys->lastEvents()) {
+            EcsEventRow er;
+            er.frame = e.frame;
+            er.kind = static_cast<int>(e.kind);
+            er.ownerA = e.ownerA;
+            er.ownerB = e.ownerB;
+            er.bodyA = e.bodyIdA;
+            er.bodyB = e.bodyIdB;
+            er.mappedA = ecs.exists(static_cast<nl::scene::EntityID>(e.ownerA)) ? 1 : 0;
+            er.mappedB = ecs.exists(static_cast<nl::scene::EntityID>(e.ownerB)) ? 1 : 0;
+            t.events.push_back(er);
+        }
+    });
+    sched.set(nl::core::TickGroup::PrePhysics, [&](double, std::uint64_t) {
+        order.push_back(0);
+        marker = 10;
+    });
+    sched.set(nl::core::TickGroup::Physics, [&](double, std::uint64_t tickIndex) {
+        order.push_back(1);
+        if (marker != 10) ++t.groupOrderBad;
+        marker = 20;
+        const int frame = static_cast<int>(tickIndex) + 1;
+        stream.update();
+        EcsFrameRow fr;
+        fr.frame = frame;
+        fr.readableBefore = static_cast<int>(stream.readableCount());
+        stream.publish(byFrame[static_cast<std::size_t>(frame)]);
+        fr.published = static_cast<int>(byFrame[static_cast<std::size_t>(frame)].size());
+        t.frames.push_back(fr);
+        row = &t.frames.back();
+    });
+
+    for (int f = 1; f <= cfg.frames; ++f) {
+        row = nullptr;
+        sched.runTick(cfg.dt, static_cast<std::uint64_t>(f - 1));
+    }
+    t.updates = stream.updateCount();
+    t.published = stream.publishedTotal();
+    t.drained = stream.drainedTotal();
+    t.dropped = stream.droppedTotal();
+    t.stats = sys->stats();
+    if (t.groupOrderBad) t.error = "tick group order violated";
+    return t;
+}
+
+std::string ecsTSV(const EcsTrace& t) {
+    std::ostringstream os;
+    os << "# nl-physics M-D1 ECS contact event consumption (real TickGroup frame loop)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << t.cfg.dt
+       << " frames=" << t.cfg.frames
+       << " events=" << t.events.size()
+       << " stream=double_buffer_2frame"
+       << " groups=PrePhysics,Physics,PostPhysics,PostUpdateWork"
+       << " updates=" << t.updates
+       << " published=" << t.published
+       << " drained=" << t.drained
+       << " dropped=" << t.dropped << "\n";
+    os << "# frames: F frame published consumed mappedA mappedB unmappedA unmappedB readable_before readable_after order_ok\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB mappedA mappedB\n";
+    char buf[320];
+    for (const auto& f : t.frames) {
+        std::snprintf(buf, sizeof(buf),
+            "F\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+            f.frame, f.published, f.consumed, f.mappedA, f.mappedB,
+            f.unmappedA, f.unmappedB, f.readableBefore, f.readableAfter, f.orderOk);
+        os << buf;
+    }
+    for (const auto& e : t.events) {
+        std::snprintf(buf, sizeof(buf),
+            "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%d\t%d\n",
+            e.frame, e.kind, e.ownerA, e.ownerB,
+            e.bodyA, e.bodyB, e.mappedA, e.mappedB);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runEcsTrace(int argc, char** argv) {
+    nl::physics::ContactProbeConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) return fail(err);
+    const EcsTrace t = runEcsFrameLoop(cfg);
+    if (!t.ok()) { std::printf("ecs frame loop failed: %s\n", t.error.c_str()); return 1; }
+    const std::string tsv = ecsTSV(t);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s frames=%d events=%zu\n", out.c_str(), cfg.frames, t.events.size());
+    return 0;
+}
+
+int runEcsCheck(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    std::vector<EcsFrameRow> frames;
+    std::vector<EcsEventRow> events;
+    int declaredFrames = -1, declaredEvents = -1;
+    bool provenance = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, 2, "# ") == 0) {
+            if (line.find("stream=double_buffer_2frame") != std::string::npos) provenance = true;
+            std::istringstream is(line.substr(2));
+            std::string kv;
+            while (is >> kv) {
+                if (kv.compare(0, 7, "frames=") == 0) declaredFrames = std::atoi(kv.c_str() + 7);
+                if (kv.compare(0, 7, "events=") == 0) declaredEvents = std::atoi(kv.c_str() + 7);
+            }
+            continue;
+        }
+        if (line.compare(0, 2, "F\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; EcsFrameRow r;
+            is >> tag >> r.frame >> r.published >> r.consumed >> r.mappedA >> r.mappedB
+               >> r.unmappedA >> r.unmappedB >> r.readableBefore >> r.readableAfter >> r.orderOk;
+            frames.push_back(r);
+        } else if (line.compare(0, 2, "E\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; EcsEventRow r;
+            is >> tag >> r.frame >> r.kind >> r.ownerA >> r.ownerB
+               >> r.bodyA >> r.bodyB >> r.mappedA >> r.mappedB;
+            events.push_back(r);
+        }
+    }
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        if (!ok) { std::printf("  FAIL %s\n", what); ++fails; }
+    };
+    check(provenance, "provenance line present");
+    check(declaredFrames == static_cast<int>(frames.size()) && declaredFrames > 0,
+          "frame row count matches provenance");
+    check(declaredEvents == static_cast<int>(events.size()),
+          "event row count matches provenance");
+
+    std::uint64_t sumConsumed = 0, sumPublished = 0;
+    int framesWithEvents = 0;
+    std::uint64_t sumMappedA = 0, sumMappedB = 0, sumUnmappedA = 0, sumUnmappedB = 0;
+    bool seqOk = true, perFrameOk = true, orderOk = true;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const auto& r = frames[i];
+        if (r.frame != static_cast<int>(i) + 1) seqOk = false;
+        if (r.published != r.consumed) perFrameOk = false;   // same-frame PostPhysics visibility
+        if (r.readableBefore != 0 || r.readableAfter != 0) perFrameOk = false; // next-frame clear
+        if (r.orderOk != 1) orderOk = false;
+        if (r.mappedA + r.unmappedA != r.consumed ||
+            r.mappedB + r.unmappedB != r.consumed) perFrameOk = false;
+        if (r.published > 0) ++framesWithEvents;
+        sumPublished += r.published;
+        sumConsumed += r.consumed;
+        sumMappedA += r.mappedA; sumMappedB += r.mappedB;
+        sumUnmappedA += r.unmappedA; sumUnmappedB += r.unmappedB;
+    }
+    check(seqOk, "frame rows are 1..N in order");
+    check(perFrameOk, "published==consumed, drain empties both pages, owner counts add up");
+    check(orderOk, "PrePhysics->Physics->PostPhysics->PostUpdateWork order in every frame");
+    check(sumConsumed == static_cast<std::uint64_t>(events.size()) && sumConsumed == sumPublished,
+          "consumed events == E rows == published events");
+    check(sumMappedA + sumUnmappedA == sumConsumed &&
+          sumMappedB + sumUnmappedB == sumConsumed,
+          "mapped/unmapped counts add up on both owner sides");
+
+    bool evOk = true, kindOk = true, frameOk = true, mapCrossOk = true;
+    int ca = 0, cp = 0, cr = 0, firstA = -1, firstR = -1, lastF = -1;
+    std::uint64_t evMappedA = 0, evMappedB = 0;
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        const auto& e = events[i];
+        if (e.kind == 0) ++ca; else if (e.kind == 1) ++cp; else if (e.kind == 2) ++cr;
+        else kindOk = false;
+        if (e.ownerA == 0 || e.ownerB == 0 ||
+            e.bodyA == 0xffffffffu || e.bodyB == 0xffffffffu ||
+            e.bodyA == e.bodyB) evOk = false;
+        if (e.mappedA < 0 || e.mappedA > 1 || e.mappedB < 0 || e.mappedB > 1) evOk = false;
+        if (i > 0 && e.frame < events[i - 1].frame) frameOk = false;
+        if (e.frame < 1 || e.frame > static_cast<int>(frames.size()) ||
+            frames[static_cast<std::size_t>(e.frame - 1)].published == 0) frameOk = false;
+        if (firstA < 0 && e.kind == 0) firstA = e.frame;
+        if (firstR < 0 && e.kind == 2) firstR = e.frame;
+        lastF = e.frame;
+        evMappedA += e.mappedA; evMappedB += e.mappedB;
+    }
+    mapCrossOk = (evMappedA == sumMappedA && evMappedB == sumMappedB);
+    check(evOk, "event owners/body ids/mapped flags valid");
+    check(kindOk, "event kind in {0,1,2}");
+    check(frameOk, "events frame-ordered and only on frames that published");
+    check(mapCrossOk, "E-row mapped flags cross-check System counters in F rows");
+    check(ca > 0 && cp > 0 && cr > 0, "Added/Persisted/Removed all consumed");
+
+    // MEASURED_ANCHORS_D1: numeric anchors are injected from the real TSV by
+    // scripts/_d1_delivery_patch.py (never hand-written, M-I0/I1 lesson).
+    if (declaredFrames == 240) {
+        check(declaredEvents == 41 && ca == 6 && cp == 29 && cr == 6,
+              "measured 41 events = 6/29/6 (M-D0 stream zero regression)");
+        check(firstA == 44 && firstR == 46 && lastF == 185,
+              "measured first Added f44 / first Removed f46 / last event f185");
+        check(sumMappedA == 0 && sumMappedB == 41 &&
+              sumUnmappedA == 41 && sumUnmappedB == 0 &&
+              evMappedA == 0 && evMappedB == 41,
+              "measured owner filter: A=blocker unmapped, B=probe mapped");
+        check(framesWithEvents == 41,
+              "measured 41 frames published exactly one event");
+    }
+
+    if (fails) {
+        std::printf("phys-d1 ecs-check: FAIL (%d)\n", fails);
+        return 1;
+    }
+    std::printf("phys-d1 ecs-check: PASS (frames=%d events=%zu, same-frame visible, next-frame clear, group order OK)\n",
+                declaredFrames, events.size());
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -1868,10 +2204,113 @@ int runSelftest() {
         }
     }
 
+    // ---- M-D1: ECS consumption / double buffer / TickGroup order ----
+    {
+        nl::physics::ContactEventStream st;
+        expectTrue(st.readableCount() == 0 && st.updateCount() == 0,
+                   "ecs: stream starts empty");
+        // Same-frame visibility + drain advances cursors.
+        nl::physics::ContactEvent e1; e1.frame = 1; e1.ownerA = 11; e1.ownerB = 12;
+        nl::physics::ContactEvent e2 = e1; e2.frame = 2;
+        nl::physics::ContactEvent e3 = e1; e3.frame = 3;
+        st.publish(e1); st.publish(e2); st.publish(e3);
+        expectTrue(st.readableCount() == 3, "ecs: 3 published events readable same frame");
+        expectTrue(st.drain().size() == 3, "ecs: PostPhysics drain sees all 3");
+        expectTrue(st.drain().empty() && st.readableCount() == 0,
+                   "ecs: second drain in same frame is empty");
+        expectTrue(st.update() == 0, "ecs: update drops nothing when all were drained");
+        expectTrue(st.drain().empty(), "ecs: consumed events are gone next frame");
+        // Two-frame survival of UNREAD events (bevy event/mod.rs:704-719).
+        st.update();
+        st.publish(e1); st.publish(e2);
+        st.update();
+        expectTrue(st.readableCount() == 2 && st.drain().size() == 2,
+                   "ecs: unread events survive into the next frame");
+        expectTrue(st.update() == 0 && st.readableCount() == 0,
+                   "ecs: third update drops the consumed page");
+        st.publish(e1);
+        st.update();
+        expectTrue(st.update() == 1 && st.droppedTotal() == 1,
+                   "ecs: unread events are dropped on the third update (two-frame survival)");
+        st.clear();
+        expectTrue(st.publishedTotal() == 0 && st.droppedTotal() == 0,
+                   "ecs: clear() resets counters");
+
+        // M-GL5 group ordinal beats registration order.
+        nl::core::TickScheduler sched;
+        std::vector<int> seq;
+        sched.set(nl::core::TickGroup::PostUpdateWork, [&](double, std::uint64_t) { seq.push_back(3); });
+        sched.set(nl::core::TickGroup::Physics,        [&](double, std::uint64_t) { seq.push_back(1); });
+        sched.set(nl::core::TickGroup::PrePhysics,     [&](double, std::uint64_t) { seq.push_back(0); });
+        sched.set(nl::core::TickGroup::PostPhysics,    [&](double, std::uint64_t) { seq.push_back(2); });
+        sched.runTick(1.0 / 60.0, 0);
+        expectTrue(seq.size() == 4 && seq[0] == 0 && seq[1] == 1 && seq[2] == 2 && seq[3] == 3,
+                   "ecs: TickGroup enum order is the only order source");
+
+        // owner -> EntityID filter (Carrot CSharpBindings.cpp:1037-1056),
+        // self-contained System + tickParallel zero violation (System.hpp contract 2).
+        nl::physics::ContactEventStream ecsStream2;
+        nl::scene::World w2;
+        w2.newEntityWithID(777, "mapped");
+        auto* sys2 = new nl::physics::ContactEventSystem(w2, ecsStream2);
+        w2.registerSystem(std::unique_ptr<nl::scene::System>(sys2));
+        expectTrue(sys2->getReads().none() && sys2->getWrites().none(),
+                   "ecs: consumer declares no component access (self-contained)");
+        nl::physics::ContactEvent se;
+        se.frame = 1; se.ownerA = 777; se.ownerB = 888; se.bodyIdA = 1; se.bodyIdB = 2;
+        ecsStream2.publish(se);
+        w2.tick(1.0 / 60.0);
+        expectTrue(sys2->stats().events == 1 && sys2->lastEvents().size() == 1,
+                   "ecs: System consumed exactly one event");
+        expectTrue(sys2->stats().mappedA == 1 && sys2->stats().unmappedA == 0 &&
+                   sys2->stats().mappedB == 0 && sys2->stats().unmappedB == 1,
+                   "ecs: mapped owner counted, unmapped owner passed through");
+        std::string perr;
+        const bool par = w2.tickParallel(1.0 / 60.0, 2, perr);
+        expectTrue(par && perr.empty(), "ecs: tickParallel has zero structural violations");
+
+        // Real M-D0 stream through the real frame loop: zero M-D0 regression.
+        nl::physics::ContactProbeConfig ec;
+        const EcsTrace t = runEcsFrameLoop(ec);
+        expectTrue(t.ok(), "ecs: real frame loop succeeded");
+        expectTrue(static_cast<int>(t.frames.size()) == ec.frames,
+                   "ecs: one F row per logic frame");
+        expectTrue(t.groupOrderBad == 0 && t.dropped == 0,
+                   "ecs: group order clean, no events dropped");
+        expectTrue(t.published == t.drained && t.drained == t.events.size(),
+                   "ecs: every published event was drained by PostPhysics");
+        expectTrue(t.stats.events == t.events.size(),
+                   "ecs: System consumed the whole real stream");
+        int eca = 0, ecp = 0, ecr = 0;
+        for (const auto& e : t.events) {
+            if (e.kind == 0) ++eca;
+            else if (e.kind == 1) ++ecp;
+            else if (e.kind == 2) ++ecr;
+        }
+        expectTrue(static_cast<int>(t.events.size()) == 41,
+                   "ecs: measured 41 consumed events");
+        expectTrue(eca == 6 && ecp == 29 && ecr == 6,
+                   "ecs: measured kind counts 6/29/6");
+        expectTrue(t.stats.mappedA == 0 && t.stats.mappedB == 41 &&
+                   t.stats.unmappedA == 41 && t.stats.unmappedB == 0,
+                   "ecs: measured owner->Entity filter in both directions");
+        expectTrue(t.updates == 240 && t.dropped == 0,
+                   "ecs: measured 240 page swaps, zero unread drops");
+        if (g_verbose) {
+            std::printf("[ecs] frames=%zu events=%zu updates=%llu dropped=%llu mappedB=%llu unmappedA=%llu\n",
+                        t.frames.size(), t.events.size(),
+                        static_cast<unsigned long long>(t.updates),
+                        static_cast<unsigned long long>(t.dropped),
+                        static_cast<unsigned long long>(t.stats.mappedB),
+                        static_cast<unsigned long long>(t.stats.unmappedA));
+        }
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-d1 ecs: PASS (double buffer, PostPhysics consumer, TickGroup order, zero regression)\n");
     std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
     std::printf("phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)\n");
     std::printf("phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)\n");
@@ -2038,6 +2477,11 @@ int main(int argc, char** argv) {
         return runCheckCharacter(argv[2]);
     }
     if (cmd == "check-jobs") return runCheckJobs(argc, argv);
+    if (cmd == "ecs-trace") return runEcsTrace(argc, argv);
+    if (cmd == "ecs-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runEcsCheck(argv[2]);
+    }
     if (cmd == "contact-trace") return runContactTrace(argc, argv);
     if (cmd == "contact-check") {
         if (argc != 3) { usage(); return 2; }
