@@ -36,12 +36,16 @@ void GameClock::tick(double realDtMs, const LogicTickFn& logicTick)
     frameDt_ = dt;
 
     // 4) accumulator 累加 + 固定步长 while 消费（Carrot PhysicsSystem 同构，推广为引擎级）。
+    // M-GL5：传了 lambda 走旧路径（gl-tools/selftest 契约）；否则按组调度
+    // （TickScheduler 枚举序 = 执行序，见 tick_groups.hpp）。
     accumulator_ += dt;
     while (accumulator_ >= kStep) {
         accumulator_ -= kStep;
         simTime_ += kStep;
         if (logicTick) {
             logicTick(kStep, tickCount_);
+        } else {
+            scheduler_.runTick(kStep, tickCount_);
         }
         ++tickCount_;
     }

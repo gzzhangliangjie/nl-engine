@@ -94,3 +94,42 @@ M-GL0 实测：240 行 + 9 行全等（ticks/tickCount 精确；simTime/alpha 1e
 - **截图 = 确定性产物**：截图模式恒走不插值原路径（`getWorldMatrix()`），PNG 与 `--interp` 缺省运行**逐字节同**。首版曾试「截图钉 alpha=0 走分解重构」——分解→重构 roundtrip 非逐位（normalize/sqrt 引入 1ulp 级差异），PNG MD5 不等，否决（留痕 viewer/main.cpp M-GL3 注释）。
 - **数值证据**：捕获帧 probe 日志（`interp probe: k=... alpha=... prev/curr/interp pq/cq/iq`）——verify.py 独立孪生复算三重：① lerp/slerp 自洽；② GameClock accumulator 复推（`--fixed-dt 25` → 每帧 tick [1,2,1]、捕获帧 alpha=0.5）；③ SpinSystem 公式孪生（`w_i = 0.9×(1+0.5·idx)` rad/s，idx = Transform 载体实体注册序）算轨道世界位置。
 - **验收复现**：`example/gl3/run.bat`（equal/mid/pause/smoke 四组 × 双后端，exit 0）。
+
+## TickGroup 注册制（M-GL5 起）
+
+`core/tick_groups.hpp`：逻辑帧内执行顺序的显式契约——`TickGroup` 枚举
+（PrePhysics → Physics → PostPhysics → PostUpdateWork，**枚举序 = 执行序**）+
+`TickScheduler` 组回调注册表。`GameClock::tick(dtMs)`（无回调重载）每逻辑帧按组序
+执行已注册组；旧 `tick(dtMs, lambda)` 重载原样保留（gl-tools selftest/trace 契约）。
+
+- **注册纪律（铁律）**：组注册必须先于 console-exec 预执行——预执行里的查询命令
+  （`game.tickgroups`）读的就是注册表，注册晚了读到全 off。
+- **组序契约**：组间顺序恒为枚举序（与注册先后无关）；组内单回调，同组多消费方由
+  注册方在一个 fn 内串联（调用序可审计）。空组 runTick 时跳过。
+- **三处口径**：UE ETickingGroup（组序+依赖图+TickInterval 三机制，本轮只取排序组）/
+  bevy FixedMain 五阶段单速率（流派蓝本）/ Carrot 无（反向印证）。多速率与依赖图
+  留 PLAN §4 候选。
+
+### game.tickgroups
+
+```
+game.tickgroups
+-> game.tickgroups: order PrePhysics(on) -> Physics(off) -> PostPhysics(on) -> PostUpdateWork(on) | active PrePhysics -> PostPhysics -> PostUpdateWork
+```
+
+order 列恒为枚举序（执行序），active 列只列已注册组。`--console-exec
+"game.tickgroups"` 即验收锚；scene 模式启动另有 `tick groups:
+PrePhysics->PostPhysics->PostUpdateWork (registered=3)` 行。
+
+### gl-tools selftest（M-GL5 新增锚点 [11]~[15]）
+
+组序=枚举序（乱序注册仍按 PrePhysics→Physics→PostPhysics 执行）/ 空组跳过 +
+组名诊断 / set 替换 + clear / 无回调路径与 lambda 路径 tick 节奏逐位一致 +
+dt==kStep、index 单调透传 / 暂停倍速对组调度生效。
+
+### 验收链（example/gl5/run.bat）
+
+scene 组序 / phys 组序（仅 Physics(on)）/ negative（`game.tickgroup` 少 s 未知命令
+exit 1）三组 × 双后端 + verify.py 独立孪生（组序行 + 启动链 + 跨后端一致 + 负向）+
+evidence.png（日志渲染证据板）。基线零重拍：gl1~gl4 / ecs-parallel / phys-p3/p4 /
+audio-s1 全部逐字节。

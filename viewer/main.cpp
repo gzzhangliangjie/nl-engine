@@ -467,6 +467,7 @@ std::function<void()> registerViewerConsole(nl::core::OrbitCamera* camera, bool*
 //                          渲染帧照常——HUD 活、相机活，画面静止）。
 //   game.timeScale <f>     无参=查询；[0,1024] 钳制（GameClock::setTimeScale 同口径）。
 //   game.status            打印 simTime/ticks/paused/scale/alpha（截图日志证据行）。
+//   game.tickgroups        打印逻辑帧组序（枚举序=执行序）+ 各组注册状态（M-GL5）。
 // 命令（非 CVar）：--console-exec "game.pause" 字面即用，且 pause 无「赋值后回读」
 // 的每帧同步需求（与 cam.fov 的 CVar 选型差异）。
 void registerGameConsole(nl::core::GameClock* clock) {
@@ -518,6 +519,25 @@ void registerGameConsole(nl::core::GameClock* clock) {
                       static_cast<unsigned long long>(clock->tickCount()),
                       clock->paused() ? 1 : 0, clock->timeScale(), clock->alpha());
         return CommandResult{true, std::string(buf)};
+    });
+    // M-GL5：组序显式契约的运行时视图——order 列恒为枚举序（执行序），active 列
+    // 只列本模式已注册组。--console-exec "game.tickgroups" 即验收锚（expectLog）。
+    c.registerCommand("game.tickgroups", "print logic-frame tick group order and registration",
+                      [clock](const std::vector<std::string>&) {
+        const nl::core::TickScheduler& s = clock->scheduler();
+        std::string order, active;
+        for (int g = 0; g < static_cast<int>(nl::core::TickGroup::Count); ++g) {
+            const auto grp = static_cast<nl::core::TickGroup>(g);
+            if (g) order += " -> ";
+            order += nl::core::tickGroupName(grp);
+            order += s.has(grp) ? "(on)" : "(off)";
+            if (s.has(grp)) {
+                if (!active.empty()) active += " -> ";
+                active += nl::core::tickGroupName(grp);
+            }
+        }
+        return CommandResult{true, "game.tickgroups: order " + order + " | active " +
+                             (active.empty() ? "(none)" : active)};
     });
 }
 
@@ -730,13 +750,28 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
     // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
     nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
+    // P8 M-GL5：物理调试 step 挂 Physics 组（TickGroup 注册制，组序契约见
+    // tick_groups.hpp）。M-GL2 之前是 tick lambda 内联判断，现迁移为按组注册——
+    // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
+    if (o.physicsDebug) {
+        gameClock.scheduler().set(nl::core::TickGroup::Physics,
+                                  [&physicsScene](double, std::uint64_t) {
+            physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
+        });
+    }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     // P8 M-S2：audio.* 调试 CVar（audio.volume/debug/solo/freeze + audio.dump）。
     nl::audio::registerAudioConsole(nl::core::console::Console::get());
     registerGameConsole(&gameClock);   // P8 M-GL1：game.pause / game.timeScale / game.status
     for (const auto& line : o.consoleExecLines) {
         const auto r = nl::core::console::Console::get().exec(line);
-        nl::core::log::info("console exec [", r.exitCode(), "] ", line);
+        // M-GL5：对齐 runScene——命令输出也进日志（否则 runNormal 模式下
+        // game.tickgroups 等查询命令的验收锚落不了盘）。
+        if (r.ok()) {
+            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+        } else {
+            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+        }
     }
     bool consoleOpen = o.consoleOpen;
     if (consoleOpen && !hudEnabled)
@@ -907,9 +942,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // P8 M-GL2：双帧模型全量接线——每渲染帧喂一次时钟，逻辑帧 60Hz callback
         // 消费（本循环的消费方 = 物理调试 step；场景模式的 ECS tick + 音频同步
         // 在 runScene 同构）。暂停/倍速/250ms 截断都在时钟内（M-GL0 语义）。
-        gameClock.tick(dtMs, [&o, &physicsScene](double, std::uint64_t) {
-            if (o.physicsDebug) physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
-        });
+        // P8 M-GL5：lambda 内联判断迁移为 Physics 组注册（帧循环前一次性 set），
+        // tick(dtMs) 走按组调度路径——执行序 = 枚举序，逐位同旧路径。
+        gameClock.tick(dtMs);
         if (skinMode) {
             // M-A5：--anim-time 直接钉值（取值绕过时钟，既有基线零风险）；时钟本身
             // 照常推进——pin 模式下物理等其它消费方仍然活着（M-GL2 口径）。
@@ -1748,6 +1783,50 @@ int runScene(const Options& o) {
                           static_cast<unsigned long long>(h.tickCount()));
             return {true, std::string(sbuf)};
         });
+    // P8 M-GL5：TickGroup 注册制——逻辑帧组序的显式契约（tick_groups.hpp）。
+    // 注册必须在 console-exec 预执行之前（否则 game.tickgroups 读到全 off——
+    // 本轮实测教训：首版注册放帧循环前、预执行后，验收第一跑即暴露）。
+    // M-GL2 既有执行顺序原样固化到组序：script OnTick → ECS world.tick → audio
+    // 声源同步，映射为 PrePhysics → PostPhysics → PostUpdateWork（Physics 组本
+    // 模式不注册；空组 runTick 时跳过）。语义逐位同旧 lambda：
+    //   - scriptTick(dt) 先行（spawn/remove 排队，tick 开头 flush 语义不变）；
+    //   - tickParallel 失败置 failed（原 return 跳过当帧 audio → audio 组以
+    //     failed 为闸保持同语义）；
+    //   - audioBinds 运行期可被 audio.play 追加 → 各 lambda 按引用读活值。
+    bool failed = false;
+    gameClock.scheduler().set(nl::core::TickGroup::PrePhysics,
+                              [&scriptLoaded](double dt, std::uint64_t) {
+        if (!scriptLoaded) return;
+        const auto sr = nl::script::ScriptHost::get().scriptTick(dt);
+        if (!sr.ok)
+            nl::core::log::error("script: ", sr.message);
+    });
+    gameClock.scheduler().set(nl::core::TickGroup::PostPhysics,
+                              [&o, &world, &failed](double dt, std::uint64_t) {
+        if (o.tickMode == "serial") {
+            world.tick(dt);
+        } else {
+            std::string tickErr;
+            if (!world.tickParallel(dt, 4, tickErr)) {
+                nl::core::log::error("ecs tickParallel failed: ", tickErr);
+                failed = true;
+            }
+        }
+    });
+    gameClock.scheduler().set(nl::core::TickGroup::PostUpdateWork,
+                              [&failed, &world, &audioBinds, &audioWorld](double, std::uint64_t) {
+        if (failed) return;   // ECS tick 失败当帧跳过（旧 return 语义）
+        for (const auto& b : audioBinds) {
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
+            if (!t) continue;
+            const auto p = t->getWorldPosition();
+            audioWorld->setSourcePosition(b.src, {p.x, p.y, p.z});
+        }
+    });
+    nl::core::log::info("tick groups: ", nl::core::tickGroupName(nl::core::TickGroup::PrePhysics),
+                        "->", nl::core::tickGroupName(nl::core::TickGroup::PostPhysics),
+                        "->", nl::core::tickGroupName(nl::core::TickGroup::PostUpdateWork),
+                        " (registered=", gameClock.scheduler().registeredCount(), ")");
     for (const auto& line : o.consoleExecLines) {
         const auto r = sceneConsole.exec(line);
         if (r.ok()) {
@@ -1781,7 +1860,6 @@ int runScene(const Options& o) {
     std::uint64_t frame = 0;
     int colorIndex = o.color;
     int screenshotsSaved = 0;
-    bool failed = false;
     double dtSumMs = 0.0;
     double dtMaxMs = 0.0;
 
@@ -1828,7 +1906,7 @@ int runScene(const Options& o) {
         // 本帧 tick 的矩阵本帧就上屏（updateEcsObjects 的 upload 先于
         // renderFrame 的命令列表执行）。
         if (ticking) {
-            constexpr double kFixedDt = 1.0 / 60.0;
+            // 逻辑帧步长由 GameClock::kStep 携带（M-GL5 起组回调经 dt 参数透传）。
             // P8 M-GL3：tick 前 snapshot prev（上一 tick 边界态 = 上帧 tick 后态）。
             // 无条件维护（不依赖 interpOn——game.interp 运行时切换零毛刺）。
             for (std::size_t k = 0; k < modelIds.size(); ++k) {
@@ -1838,32 +1916,9 @@ int runScene(const Options& o) {
             // P8 M-GL2：逐渲染帧固定步长 → GameClock 双帧驱动（暂停=game.pause、
             // 倍速=game.timeScale、250ms 截断全在时钟内）。逻辑帧内：ECS tick +
             // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
-            gameClock.tick(clockDtMs, [&](double, std::uint64_t) {
-                // M-GL4：脚本 OnTick 先于 world.tick（脚本 spawn/remove 排队，
-                // tick 开头 flush 落盘 = World「宿主 tick 边界动作」既有语义）。
-                // pause = callback 不触发 = 脚本同步冻结（M-GL2 同构）。
-                if (scriptLoaded) {
-                    const auto sr = nl::script::ScriptHost::get().scriptTick(kFixedDt);
-                    if (!sr.ok)
-                        nl::core::log::error("script: ", sr.message);
-                }
-                if (o.tickMode == "serial") {
-                    world.tick(kFixedDt);
-                } else {
-                    std::string tickErr;
-                    if (!world.tickParallel(kFixedDt, 4, tickErr)) {
-                        nl::core::log::error("ecs tickParallel failed: ", tickErr);
-                        failed = true;
-                        return;
-                    }
-                }
-                for (const auto& b : audioBinds) {
-                    const auto* t = world.getComponent<nl::scene::TransformComponent>(b.ent.id);
-                    if (!t) continue;
-                    const auto p = t->getWorldPosition();
-                    audioWorld->setSourcePosition(b.src, {p.x, p.y, p.z});
-                }
-            });
+            // P8 M-GL5：回调体迁移为 TickGroup 组注册（上方 PrePhysics/PostPhysics/
+            // PostUpdateWork 三组），这里只喂时钟——组序 = 枚举序 = 旧 lambda 顺序。
+            gameClock.tick(clockDtMs);
             if (failed) break;
             // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
             if (audioWorld) {

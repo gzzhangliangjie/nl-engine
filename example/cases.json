@@ -6192,6 +6192,114 @@
    "script": "example/gl4/run.bat negative"
   }
  ]
+},
+{
+ "id": "gl5",
+ "label": "P8 M-GL5",
+ "name": "游戏循环 M-GL5：TickGroup 注册制（逻辑帧组序显式契约）",
+ "tag": "gl-m5",
+ "date": "2026-11-10",
+ "summary": "A 类并行轨道 feat/gameloop：逻辑帧内执行顺序从 viewer main.cpp 两份内联 lambda 升级为命名 TickGroup 注册制（core/tick_groups TickScheduler，组序=枚举序编译期契约）。runScene 顺序原样固化：script OnTick->PrePhysics、ECS world.tick->PostPhysics、audio 声源同步->PostUpdateWork（Physics 组 runScene 不注册）；runNormal 物理 step 挂 Physics 组。三处口径（2026-11-10 实读）：UE EngineBaseTypes.h:83-110 ETickingGroup 组序+FTickPrerequisite 依赖图+TickInterval 调速（工业终态三机制叠加，本轮只取排序组）；bevy main_schedule.rs FixedMain 五阶段命名调度单速率（流派蓝本）；Carrot 全树无 TickGroup（反向印证）。多速率（UE TickInterval）与跨组依赖图留 PLAN §4 候选。注册必须在 console-exec 预执行之前（否则 game.tickgroups 读到全 off）；runNormal console-exec 日志对齐 runScene 补输出打印。验收：gl1/gl2/gl3/gl4/ecs-parallel/phys-p3/phys-p4/audio-s1 基线逐字节零重拍 + gl-tools selftest 新增 5 组锚点 + game.tickgroups 双模式组序日志锚。",
+ "acceptance": [
+  "scene 组：--mode scene + game.tickgroups -> order PrePhysics(on) -> Physics(off) -> PostPhysics(on) -> PostUpdateWork(on)，startup 行 registered=3，双后端一致",
+  "phys 组：--physics-debug + game.tickgroups -> order PrePhysics(off) -> Physics(on) -> PostPhysics(off) -> PostUpdateWork(off)，双后端一致",
+  "negative：未知命令 game.tickgroup -> exit 1 + 'unknown command'（双后端）",
+  "基线零重拍：gl1/gl2/gl3/gl4/ecs-parallel/phys-p3/phys-p4/audio-s1 全部逐字节 ALL GREEN（phys 两例各遇 1 次 0xC0000409 秒退族 ENV-FLAKE，重跑全绿定性）",
+  "gl-tools selftest：新增 M-GL5 锚点 5 组（组序=枚举序/空组跳过+组名/set 替换+clear/无回调路径节奏与透传契约/暂停倍速生效），双后端 PASS + ctest gl0 3/3x2"
+ ],
+ "exe": {
+  "dx12": "build/DX12/viewer.exe",
+  "vulkan": "build/VULKAN/viewer.exe"
+ },
+ "cases": [
+  {
+   "id": "scene-groups",
+   "name": "scene 模式组序（Pre on/Physics off/Post on/PostWork on）",
+   "kind": "image",
+   "note": "TickScheduler 注册制下 runScene 三组链的运行时视图；game.tickgroups 输出即组序契约。",
+   "baselines": {
+    "dx12": "example/gl5/gl5-scene-DX12.png",
+    "vulkan": "example/gl5/gl5-scene-VULKAN.png"
+   },
+   "args": [
+    "--mode",
+    "scene",
+    "--scene",
+    "{root}/example/gl5/gl5-orbit.scene",
+    "--tick",
+    "parallel",
+    "--fixed-dt",
+    "16.7",
+    "--frames",
+    "5",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--console-exec",
+    "game.tickgroups",
+    "--screenshot",
+    "{out}"
+   ],
+   "expectLog": "game.tickgroups: order PrePhysics(on) -> Physics(off) -> PostPhysics(on) -> PostUpdateWork(on)",
+   "command": "viewer.exe --mode scene --scene {root}/example/gl5/gl5-orbit.scene --tick parallel --fixed-dt 16.7 --frames 5 --size 960x540 --no-hud --console-exec \"game.tickgroups\" --screenshot <out>",
+   "script": "example/gl5/run.bat scene"
+  },
+  {
+   "id": "phys-groups",
+   "name": "phys 模式组序（仅 Physics 组注册）",
+   "kind": "image",
+   "note": "runNormal --physics-debug 只挂 Physics 组（M-P3 Jolt step），其余组空跳过。",
+   "baselines": {
+    "dx12": "example/gl5/gl5-phys-DX12.png",
+    "vulkan": "example/gl5/gl5-phys-VULKAN.png"
+   },
+   "args": [
+    "--physics-debug",
+    "--fixed-dt",
+    "16.7",
+    "--frames",
+    "5",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--console-exec",
+    "game.tickgroups",
+    "--screenshot",
+    "{out}"
+   ],
+   "expectLog": "game.tickgroups: order PrePhysics(off) -> Physics(on) -> PostPhysics(off) -> PostUpdateWork(off)",
+   "command": "viewer.exe --physics-debug --fixed-dt 16.7 --frames 5 --size 960x540 --no-hud --console-exec \"game.tickgroups\" --screenshot <out>",
+   "script": "example/gl5/run.bat phys"
+  },
+  {
+   "id": "negative",
+   "name": "未知命令 game.tickgroup 退出 1",
+   "kind": "image",
+   "note": "console-exec 失败计入 acceptance 错误计数 -> 非零退出（M-GL3 拍板同款防呆）。",
+   "baselines": {
+    "dx12": "example/gl5/gl5-neg.png",
+    "vulkan": "example/gl5/gl5-neg-VULKAN.png"
+   },
+   "args": [
+    "--physics-debug",
+    "--fixed-dt",
+    "16.7",
+    "--frames",
+    "2",
+    "--size",
+    "960x540",
+    "--no-hud",
+    "--console-exec",
+    "game.tickgroup",
+    "--screenshot",
+    "{out}"
+   ],
+   "expectExit": 1,
+   "expectLog": "unknown command: game.tickgroup",
+   "command": "viewer.exe --physics-debug --fixed-dt 16.7 --frames 2 --size 960x540 --no-hud --console-exec \"game.tickgroup\" --screenshot <out>（命令少 s = 负向）",
+   "script": "example/gl5/run.bat negative"
+  }
+ ]
 }
   ]
 }

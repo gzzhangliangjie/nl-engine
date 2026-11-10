@@ -184,6 +184,7 @@ add_library(nl_core STATIC
     core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
     core/src/audio/DebugController.cpp  # P8 M-S2：调试态单例（音量/独奏/冻结/面板开关）
     core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
+    core/src/tick_groups.cpp   # P8 M-GL5：命名 TickGroup 注册制（逻辑帧组序契约）
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)

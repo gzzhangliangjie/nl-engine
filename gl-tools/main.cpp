@@ -201,6 +201,87 @@ void selftest() {
         expectTrue(c.timeScale() == 2.0 && c.paused(), "reset keeps timeScale/paused");
     }
 
+    // ---- M-GL5：TickGroup 注册制（tick_groups.hpp 组序契约）----
+    using nl::core::TickGroup;
+    using nl::core::TickScheduler;
+
+    // [11] 组序契约：注册顺序与执行顺序无关——乱序注册（Post/Pre/Physics），
+    //      执行序仍为枚举序（PrePhysics -> Physics -> PostPhysics）。
+    {
+        TickScheduler s;
+        std::vector<int> order;
+        s.set(TickGroup::PostPhysics, [&](double, std::uint64_t) { order.push_back(2); });
+        s.set(TickGroup::PrePhysics,  [&](double, std::uint64_t) { order.push_back(0); });
+        s.set(TickGroup::Physics,     [&](double, std::uint64_t) { order.push_back(1); });
+        s.runTick(kStep, 0);
+        expectTrue(order == std::vector<int>{0, 1, 2},
+                   "execution order is enum order regardless of registration order");
+    }
+
+    // [12] 空组跳过 + registeredCount + 组名（诊断面契约）。
+    {
+        TickScheduler s;
+        expectTrue(s.registeredCount() == 0, "fresh scheduler registers nothing");
+        s.set(TickGroup::PrePhysics, [](double, std::uint64_t) {});
+        s.set(TickGroup::PostUpdateWork, [](double, std::uint64_t) {});
+        expectTrue(s.registeredCount() == 2 && s.has(TickGroup::PrePhysics) &&
+                   !s.has(TickGroup::Physics) && !s.has(TickGroup::PostPhysics) &&
+                   s.has(TickGroup::PostUpdateWork),
+                   "has/registeredCount reflect registration");
+        expectTrue(std::strcmp(nl::core::tickGroupName(TickGroup::Physics), "Physics") == 0,
+                   "tickGroupName returns the diagnostic name");
+    }
+
+    // [13] set 替换：同组重复注册只跑最新回调（注册制单回调契约）。
+    {
+        TickScheduler s;
+        int oldHits = 0, newHits = 0;
+        s.set(TickGroup::Physics, [&](double, std::uint64_t) { ++oldHits; });
+        s.set(TickGroup::Physics, [&](double, std::uint64_t) { ++newHits; });
+        s.runTick(kStep, 0);
+        expectTrue(oldHits == 0 && newHits == 1, "re-set replaces the group callback");
+        s.clear(TickGroup::Physics);
+        expectTrue(!s.has(TickGroup::Physics) && s.registeredCount() == 0, "clear removes a group");
+    }
+
+    // [14] tick(dtMs) 无回调路径 = 按组调度：与旧 lambda 重载的 tick 节奏逐位一致，
+    //      且组回调收到 dt==kStep、tickIndex 单调递增（GameClock 透传契约）。
+    {
+        const double dts[] = {16.7, 33.4, 8.0, 16.7, 4.0};
+        // 旧路径参照（lambda 计数）。
+        GameClock ref;
+        std::uint64_t refCalls = 0;
+        for (double d : dts) ref.tick(d, [&](double, std::uint64_t) { ++refCalls; });
+        // 新路径：scheduler 组里记录 (dt, index) 序列。
+        GameClock c;
+        std::vector<TickRecord> rec;
+        c.scheduler().set(TickGroup::PrePhysics, [&](double dt, std::uint64_t idx) {
+            rec.push_back({dt, idx});
+        });
+        for (double d : dts) c.tick(d);
+        expectTrue(rec.size() == refCalls && c.tickCount() == ref.tickCount(),
+                   "scheduler path ticks at the same rhythm as the lambda path");
+        bool passthrough = true;
+        for (std::size_t i = 0; passthrough && i < rec.size(); ++i)
+            passthrough = (rec[i].dt == kStep && rec[i].index == i);
+        expectTrue(passthrough && !rec.empty(),
+                   "scheduler receives dt==kStep and monotonically increasing index");
+    }
+
+    // [15] 暂停/倍速对组调度同样生效（M-GL0 语义在无回调路径不受影响）。
+    {
+        GameClock c;
+        int hits = 0;
+        c.scheduler().set(TickGroup::PrePhysics, [&](double, std::uint64_t) { ++hits; });
+        c.setPaused(true);
+        c.tick(1000.0);
+        expectTrue(hits == 0, "paused clock runs no groups");
+        c.setPaused(false);
+        c.setTimeScale(2.0);
+        for (int i = 0; i < 60; ++i) c.tick(16.7);
+        expectTrue(hits == 120, "scale x2 drives 120 group calls in 60 frames");
+    }
+
     std::printf("gl-m0 selftest: %s (%s)\n", g_failures ? "FAIL" : "PASS",
                 g_failures ? "see FAIL lines above" : "GameClock anchors");
 }

@@ -21,6 +21,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "nl/core/tick_groups.hpp"
+
 namespace nl::core {
 
 class GameClock {
@@ -46,6 +48,12 @@ public:
     // 调用方自查——工具链在 selftest 里锚定该行为）。
     void tick(double realDtMs, const LogicTickFn& logicTick);
 
+    // M-GL5：按组调度入口（TickScheduler 组序契约见 tick_groups.hpp）。
+    // 与旧 LogicTickFn 重载并存：传 lambda 走旧路径（gl-tools/selftest 契约不变），
+    // 不传则每逻辑帧按枚举序跑成员 scheduler_ 的已注册组。
+    void tick(double realDtMs) { tick(realDtMs, {}); }
+    TickScheduler& scheduler() { return scheduler_; }
+
     // ---- 状态查询（全部只读，渲染帧取值即「最新逻辑帧状态」，不插值）----
     double simTime() const { return simTime_; }          // 逻辑时间（秒），每 tick += kStep
     double frameDt() const { return frameDt_; }          // 本渲染帧实际喂入的缩放+截断后 delta（秒）；暂停帧恒 0
@@ -70,6 +78,7 @@ private:
     double timeScale_ = 1.0;
     bool   paused_ = false;
     std::uint64_t tickCount_ = 0;
+    TickScheduler scheduler_;   // M-GL5：tick(realDtMs) 无回调路径的按组调度
 };
 
 } // namespace nl::core
