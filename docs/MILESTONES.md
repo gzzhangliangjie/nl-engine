@@ -2179,3 +2179,19 @@
 5. **锚手写错再+1（同 M-I0 教训）**：look kick 阈值写 20°（实际 30px×0.007=12°）、boost 对照帧选了混入横移/yaw 的 f31、pitch clamp 边界写成 ±83.08~83.09（-1.45 rad=-83.078° 出界）——数值锚从实测 log 反推 + 边界断言留一位容差。
 
 **下一步**：M-CAM1 viewer FreeCamera 接线（M-D3 落输入管线后串行）；M-CAM4 平滑/过渡/防抖无头部分可随时插队（`CameraSmoother` 二阶 spring + trauma shake，锚已入计划 §2）；merge 回 master 与 drive/particles 队列一起排（冲突面仅 CMakeLists.txt，viewer/main.cpp 本里程碑未触碰）。
+
+## P8 M-CAM1a：相机接线封装层——spectator 映射 + 输入适配 + CameraDirector + Cinematic 桩（feat/camera，2026-11-10，tag `cam-1a`）
+
+**动作**：M-CAM0 收口后用户拍板③「先把封装做了，一定要落地才行么 / 实现没法做函数空在那里也行，这都是基础设施得先有」——CAM1~CAM3 拆 a 段（接线封装层，无头，不等 drive M-D3）与 b 段（viewer 胶水，等 M-D3），计划文档 §开工排序/拍板记录留痕。三处实读（ActionMap Bool/Float/Vec2+set 门控+边沿 API、buildDrivingActionMap 出厂激活口径、InputState 注入路径+GLFW 键码先例）→ `core/include/nl/core/camera_director.hpp/.cpp`（SpectatorActions + buildSpectatorActionMap 新 SetId 出厂激活、look/camToggle 复用 driving set 零重复定义；readFreeInputs 适配器弧度换算单点 kLookRadiansPerPixel=0.005；ChassisState M-D2 回读规范结构；CameraDirector Chase↔Free 模式管理）+ `cinematic_camera.hpp/.cpp` 桩（播放状态机真实现，loadTrack/sample 显式失败待 M-CAM3a）+ M-CAM0 类最小增量（FreeCamera::setPose；ChaseCamera::snapEyeTo/lookDirection，既有锚零改动）+ cam-tools 第七节 director-f（合成输入适配/门控/双向切换逐位连续/chassis 失效冻结/桩形状）+ director-trace/check 90 帧 9 锚闭环 + cam-tools 补链 glfw（input.hpp 键码常量，同 input-tools 理由）+ `tools/make-cam-1a-evidence.py`（TSV→确定性 PNG 双面板）+ `example/cam-1a/`（run.bat 五段式 + TSV/PNG 基线 + 日志）+ cases.json cam-1a 卡（cam-m0 卡 selftest expectLog 机械升级 7 节）+ CAM-TOOLS-GUIDE §7 → 本四栏 → tag。
+
+**提交版本**：feat/camera 本收口 commit（annotated tag `cam-1a`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + selftest 7 节全绿 ×2；director-check 9 锚（f29→f30/f59→f60 切换帧位姿连续、Free 段 eye_z 严格递增、切回阻尼恢复）；证据图 TSV 真实输出生成、run.bat 重生成 `fc /b` 逐字节一致、肉眼核验双面板（蓝黄模式分段/红切换标/模式带吻合）；负向退出码实测；run.bat ALL GREEN exit 0；ctest 6/6（mcam0+mi0+mi1，--repeat until-pass:3）；viewer selftest 16/16 零回归（OrbitCamera 一字未动）；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **cam-tools 缺 glfw 链接**：director-f 吃 InputState 注入路径，input.hpp 公开 API 含 GLFW 键码常量 → C1083；工具链 glfw = include 路径用途（非窗口），照 input-tools 口径补 `target_link_libraries(cam-tools PRIVATE nl_core glfw)`。
+2. **切换帧语义初版不对称**：Chase→Free 种子后 Free 无输入 update = no-op 天然逐位连续，Free→Chase 种子后同帧阻尼 update 会动 eye——memcmp 炸；定性为「切换帧重种子+冻结一帧、输入下帧生效」双向同口径（模式管理器标准语义，且保证无跳变），锚改双向 memcmp。
+3. **测试顺序自坑**：F7 断言 progress>0 写在 play() 后但 sample() 调用在前——桩推进没发生；断言前先推进。
+4. **行尾又双叒**：本会话 Write 产出的 CMakeLists/指南是 LF、bat 必须 ASCII+CRLF——patch 前先探测行尾再替换（`nl = "\r\n" if "\r\n" in s else "\n"`）。
+
+**下一步**：M-CAM2a（Chase phys 回读桥，随 M-D2 数据形态）/ M-CAM3a（CinematicCamera 轨迹实现，全无头随时可开工）/ M-CAM1b/CAM2b/CAM3b（viewer 胶水，收敛面=readFreeInputs→director.update→投影替换，等 drive M-D3）；M-CAM4 平滑/防抖无头段可插队。merge 回 master 与 drive/particles 队列一起排。
