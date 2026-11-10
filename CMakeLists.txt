@@ -154,6 +154,11 @@ add_subdirectory(thirdparty/jolt/Build EXCLUDE_FROM_ALL)
 # thirdparty/recastnavigation/VENDOR.md。
 add_subdirectory(thirdparty/recastnavigation EXCLUDE_FROM_ALL)
 
+# ---- PT M-PT1：Effekseer core vendored（MIT，.efkefc 解析层，离线转换器专用）----
+# 单静态库零外部依赖（Network 子集未入库）；运行时（nl-engine）不碰它，只有
+# vfx-tools/nfx-convert 链接——运行时零新依赖铁律不破。详见 thirdparty/effekseer/VENDOR.md。
+add_subdirectory(thirdparty/effekseer EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -447,3 +452,4 @@ add_subdirectory(phys-tools)
 add_subdirectory(nav-tools)
 add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
+add_subdirectory(vfx-tools)

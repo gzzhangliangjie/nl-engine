@@ -6941,6 +6941,375 @@
      "script": "example/input-m2/run.bat"
     }
    ]
+  },
+  {
+   "id": "particles-pt0",
+   "label": "M-PT0",
+   "name": "粒子叠加层：CPU 固定步长模拟 + GPU instanced billboard（M-PT0）",
+   "date": "2026-11-10",
+   "summary": "M-PT0（particles 穿插项首里程碑）：renderer 新增 Particles 叠加层——CPU 固定步长（1/60s，M-GL 物理同款确定性纪律）模拟喷泉发射器（rate 300/s、寿命 [1.6,2.3]s、初速锥、重力 −9.8），每帧写 StructuredBuffer（32 B/实例，visibleList 同款 CopyDest→SRV 帧内晋升纪律），GPU 侧 instanced billboard（无顶点缓冲，VS 按 SV_VertexID/SV_InstanceID 顶点拉取，cull 路径同款）画进主帧：主场景后、HUD 前，alpha blend、深度测试开 / 写入关。viewer --particles 开关（缺省关 = 既有基线一像素不动，负向卡实证）；HUD 'Particles : NNN alive' 证据行仅 particles 模式显示（BLAS 行先例）。确定性实测：DX12 同参两次跑 PNG 逐字节同（MD5 6bd87baa…），双后端 alive=567 同值（理论 = rate×平均寿命窗口 ≈ 567 ✓）。单源 particles.slang 双目标（spv/dxil 各 vs/ps 4 产物入 selftest 清单 52/52）。",
+   "acceptance": [
+    "粒子画面：--particles 模式喷泉粒子可见（橙色软圆盘、向上喷射扩散、深度遮挡正确），deviceErrors=0 双后端",
+    "确定性：同参两次实跑 PNG 逐字节同（MD5 6bd87baad5381dc8e47c1810d3584583）；固定步长模拟 = 帧号的纯函数",
+    "稳态锚点：日志 'particles steady: alive=567'（双后端同值；理论区间 [rate×lifeMin≈480, rate×lifeMax≈690] 实测命中）",
+    "HUD 证据行 'Particles : 567 alive'（仅 particles 模式；负向卡实证缺省无粒子、无该行、既有 HUD 布局一像素不动）",
+    "example/particles-pt0 归位（三卡 × 双后端基线 + run.bat verify 全绿）+ cases.json particles-pt0 卡"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "particles-hud",
+     "name": "粒子喷泉 + HUD 证据行（--particles 模式，120 帧稳态）",
+     "kind": "pair",
+     "note": "CPU 固定步长模拟 120 帧（2s 逻辑时间）→ alive=567 稳态；billboard 画在 Suzanne 场景后，深度测试开写入关。HUD Particles 行仅 particles 模式出现（BLAS 行先例）。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-hud-dx12.png",
+      "vulkan": "example/particles-pt0/particles-hud-vulkan.png"
+     },
+     "args": [
+      "--particles",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --particles --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/particles-pt0/run.bat verify"
+    },
+    {
+     "id": "particles-steady-log",
+     "name": "稳态粒子计数日志证据（pair 小图 + expectLog）",
+     "kind": "pair",
+     "note": "text-only run viewer 不退出（M8.0 教训）→ pair 小图 + expectLog 双断言。expectLog 从实测 log 复制（禁手写纪律）。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-log-dx12.png",
+      "vulkan": "example/particles-pt0/particles-log-vulkan.png"
+     },
+     "args": [
+      "--particles",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "particles steady: alive=567",
+     "command": "viewer.exe --particles --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt0/run.bat verify"
+    },
+    {
+     "id": "particles-off-default",
+     "name": "负向：缺省无 --particles → 无粒子、无 Particles 行（基线不变证明）",
+     "kind": "pair",
+     "note": "缺省零开销实证：不传 --particles 时无粒子画面、HUD 无 Particles 行（肉眼核验基线），既有模式基线一像素不动。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-off-dx12.png",
+      "vulkan": "example/particles-pt0/particles-off-vulkan.png"
+     },
+     "args": [
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "command": "viewer.exe --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt0/run.bat verify"
+    }
+   ],
+   "tag": "particles-pt0"
+  },
+  {
+   "id": "particles-pt1",
+   "label": "M-PT1",
+   "name": ".nfx v1 闭环：Effekseer 转换器 + 运行时加载端（M-PT1）",
+   "date": "2026-11-10",
+   "summary": "M-PT1（particles 轨道第二里程碑，路线 B 拍板落地）：① vfx-tools 离线转换器——vendored Effekseer core（MIT，commit b570008，Network 子集排除）解析 .efkefc（SKFE chunk，v1500/v1610 老版本迁移实测生效），遍历 EffectNode 树把参数面折算进 .nfx v1 子集（单 sprite 发射器：rate/life/spawn/速度盒/常加速度/颜色 Fixed-Random/尺寸 quad/blend/淡入淡出/贴图路径），子集外模块 exit 2 显式报错清单（模型/ribbon/GPU 粒子/动态参数引用/力场/碰撞/音效等，禁静默丢弃）；② 运行时加载端——Particles::loadNfx 解析 NFX1 JSON 折进模拟参数面（box 初速 + 常加速度双代码路径，legacy 喷泉逐位不动零回归），additive 变体管线懒建，viewer --nfx 开关（隐含 --particles）。确定性实测：nfx 模式 DX12 同参两跑 PNG 逐字节同（MD5 7fd2a033…），双后端 alive=101 同值（CullingSprite：rate 60/s × life 1.67s 理论值命中）。 Effekseer 仓库 MIT 样例资产入库 assets/efx/（正例 CullingSprite/square_r-g-b，负例 GpuParticles_* 2 份）。",
+   "acceptance": [
+    "转换器：CullingSprite.efkefc → .nfx exit 0（v1500 老版本迁移生效）；GpuParticles_emit_line.efkefc → exit 2 带 4 条原因清单；selftest PASS（JSON 往返 + 坏 magic + SKFE 探针）",
+    "加载端画面：viewer --nfx 红色 billboard 光晕可见（CullingSprite），HUD 'Particles : 101 alive'，deviceErrors=0 双后端",
+    "确定性：nfx 模式同参两次实跑 PNG 逐字节同（MD5 7fd2a033…）；双后端 alive=101 同值 = rate×life 理论值命中",
+    "legacy 零回归：--particles 喷泉路径逐位不动（spot 回归 particles-pt0 全绿）",
+    "example/particles-pt1 归位（nfx-hud/nfx-log × 双后端 + run.bat verify 全绿：tool 正负向 + 确定性 + 锚点 + 负向）+ cases.json 卡 5 用例"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "nfx-hud",
+     "name": ".nfx 加载端画面：CullingSprite.nfx 红色光晕 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "vfx-tools 转换产物经 viewer --nfx 加载驱动模拟（box 初速 + 常加速度 nfx 路径）；红色软圆盘粒子群在猴头后方发光。HUD Particles 行 alive=101 = rate 60/s × life 1.67s 理论稳态。",
+     "baselines": {
+      "dx12": "example/particles-pt1/particles-nfx-hud-dx12.png",
+      "vulkan": "example/particles-pt1/particles-nfx-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/CullingSprite.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --nfx assets/efx/CullingSprite.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/particles-pt1/run.bat",
+     "cwd": "{root}"
+    },
+    {
+     "id": "nfx-steady-log",
+     "name": ".nfx 加载 + 稳态计数日志证据（pair 小图 + expectLog）",
+     "kind": "pair",
+     "note": "text-only run viewer 不退出（M8.0 教训）→ pair 小图 + expectLog 双断言。expectLog 从实测 log 复制（禁手写纪律）：nfx loaded + particles steady (nfx)。",
+     "baselines": {
+      "dx12": "example/particles-pt1/particles-nfx-log-dx12.png",
+      "vulkan": "example/particles-pt1/particles-nfx-log-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/CullingSprite.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "particles steady: alive=101 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/CullingSprite.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt1/run.bat",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-usage",
+     "name": "vfx-tools usage：无参数（负向）",
+     "kind": "tool",
+     "note": "无参数启动打印 usage 并退出码 2（本工具用法错误 = 2，对齐 expectExit 约定）。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "vfx-tools convert <in.efkefc> <out.nfx>",
+     "command": "vfx-tools.exe",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-selftest",
+     "name": "vfx-tools selftest：JSON 往返 + 坏 magic + SKFE 探针",
+     "kind": "tool",
+     "note": ".nfx schema 自证：nfxToJson→nfxFromJson 字段逐个比对、NFX9 magic 拒绝、EfkEfcFile 对非 SKFE 数据判无效。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "nfx selftest: PASS",
+     "command": "vfx-tools.exe selftest",
+     "cwd": "{root}"
+    },
+    {
+     "id": "vfx-convert-negative",
+     "name": "vfx-tools convert 负向：GpuParticles_emit_line → exit 2 原因清单",
+     "kind": "tool",
+     "note": "子集外模块显式报错（禁静默丢弃）：GPU 粒子样例命中 4 条不支持的实测原因（removal timing / 发射位置 sphere / blend / 颜色 easing）。真实 Effekseer 仓库样例资产。",
+     "exe": {
+      "dx12": "build/DX12/vfx-tools.exe",
+      "vulkan": "build/VULKAN/vfx-tools.exe"
+     },
+     "args": [
+      "convert",
+      "assets/efx/GpuParticles_emit_line.efkefc",
+      "out/nfx-negative-should-not-exist.nfx"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit 2: unsupported modules",
+     "command": "vfx-tools.exe convert assets/efx/GpuParticles_emit_line.efkefc out/nfx-negative-should-not-exist.nfx",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt1"
+  },
+  {
+   "id": "particles-pt2",
+   "label": "M-PT2",
+   "name": "贴图采样端 + sizeY 非方形（M-PT2）",
+   "date": "2026-11-10",
+   "summary": "M-PT2（particles 轨道第三里程碑）：① 贴图采样端——.nfx texture 字段消费（v1 记录未用→生效），stbi_image 声明头入 thirdparty/stb（复用 nl_core mesh_io 的 tinygltf 内嵌 v2.21 实现，禁重复展开），ensureTexture 惰性建纹（RGBA8_UNORM 原样采样不做 sRGB，与引擎线性直接算口径一致），像素上传推迟到 draw 里 writeTexture（建纹时无 cmd list；上传与 setTextureState 同列表——0x87d 第一坑同源纪律），无贴图绑 1x1 白 dummy（引擎空纹理槽先例），PS 双路径 branch 保形（g_params.y 开关：0=软圆盘逐字 M-PT0 原表达式）；② sizeY 非方形——Y/X 比走 CB 标量 g_params.z（单发射器子集所有粒子同比例；ratio=1.0 时 corner.y*1.0f 逐位恒等，基线零漂移；VS 里 if-else 会被 dxc select 化致 ±1 LSB 漂移 15 像素，实测弃用，教训落档）；③ 贴图资产：Effekseer 1.80.8 官方工具包 Sample/00_Basic（CC-0）Particle01/Flame01 入库 assets/efx/textures/，正例 .nfx 手工构造（全包 0 个子集内特效为预期——官方样例均教学复合特效；转换器 texture 提取已由 M-PT1 selftest 往返断言覆盖）。",
+   "acceptance": [
+    "贴图模式画面：tex_particle01（alpha blend 圆形光斑）/ tex_flame01_rect（additive 火焰 2:1 扁形）双后端可见，HUD 'Particles : 101 alive'，deviceErrors=0",
+    "确定性：贴图模式 DX12 同参两跑 PNG 逐字节同；双后端贴图采样区域逐位同（diff 仅 HUD adapter 文字）",
+    "基线零回归：particles-pt0 6/6 + particles-pt1 10/10 ALL GREEN 全逐字节（软圆盘路径 branch 保形 + ratio=1.0 恒等 + 32B 布局回退）",
+    "负向已验：texture 指向缺失文件 → log 'nfx texture not found ... (soft-disc fallback)' 回退软圆盘不炸帧（人工实证）",
+    "example/particles-pt2 归位（tex-hud/tex-flame × 双后端 4 基线）+ cases.json 卡 2 用例 + run.bat verify"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "tex-hud",
+     "name": "贴图采样端画面：Particle01 光斑 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "M-PT2 手工构造 .nfx（texture 模式）：128x128 CC-0 贴图进 RGBA8_UNORM，PS 贴图路径乘 color；发射点猴头右侧空域。expectLog 用贴图锚（log 由 scene 层 ensureTexture 打印）。",
+     "baselines": {
+      "dx12": "example/particles-pt2/particles-tex-hud-dx12.png",
+      "vulkan": "example/particles-pt2/particles-tex-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/tex_particle01.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "nfx texture: Particle01.png (128x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_particle01.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 3.2 --size 640x720",
+     "cwd": "{root}"
+    },
+    {
+     "id": "tex-flame-rect",
+     "name": "贴图 + 非方形 + additive 复合：Flame01 扁形火焰（120 帧稳态）",
+     "kind": "pair",
+     "note": "三特性同卡覆盖：texture 字段 + sizeY 2:1 非方形（ratioY=0.5 走 CB 标量 g_params.z）+ additive 变体管线（M-PT1 懒建路径复用）。M-PT3 基线重拍：mip 链生效后 0.25m 高粒子采样进高层 mip（1652px maxDelta 28），随特性演进合规重拍双后端基线；tex-hud 卡逐字节未漂（粒子屏幕尺寸 ≥ 贴图尺寸，采样全落 layer 0）。",
+     "baselines": {
+      "dx12": "example/particles-pt2/particles-tex-flame-dx12.png",
+      "vulkan": "example/particles-pt2/particles-tex-flame-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/tex_flame01_rect.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "nfx texture: Flame01.png (128x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_flame01_rect.nfx --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 3.2 --size 640x720",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt2"
+  },
+  {
+   "id": "particles-pt3",
+   "label": "M-PT3",
+   "name": "贴图 mip 链 + flipbook 序列帧（M-PT3）",
+   "date": "2026-11-10",
+   "summary": "M-PT3（particles 轨道第四里程碑，R2+E6+R7）：① R2 贴图 mip 链——ensureTexture CPU box-filter 逐层下采样（纯整数/加法 = 跨次运行逐位确定，奇数尺寸 clamp 边缘），TextureDesc setMipLevels 全链建纹 + draw 首帧 writeTexture 按层循环上传（平铺布局层 n = (W>>n)×(H>>n)）+ sampler setMipFilter(true)；无贴图 dummy 1x1 无 mip 链零影响。② E6+R7 flipbook 序列帧——转换器 UVs[0] Animation 子集提取（StartFrame 恒 0/LERP 拒绝/FrameLength 正数非极大，LoopType once/loop/reverse 全支持），.nfx v1 可选字段 flipbook 向后兼容（magic 不变，缺省 = 无，老文件零改动）；帧号折算全在 CPU（Effekseer UVFunctions::GetUV 同式纯整数运算，elapsed×60+0.5f 消浮点截断抖动），实例流 32→48B 扩 progressMisc（已有成员偏移不变 float4 对齐）；VS 统一无 branch 公式 flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)——非 flipbook 时 uvRect=(0,0,1,1) IEEE 精确恒等于 M-PT2 texUv（texUv 计算从 PS 移到 VS，恒等移动）；CB 112→128B 加 g_uvRect。③ 贴图资产 flipbook_4x2.png（PIL 生成 4×2 帧编号色相环网格）。",
+   "acceptance": [
+    "flipbook 画面：4×2 帧编号色相环贴图，多帧共存可见（散开初速），数字正立（V 轴口径核对），cell 对齐正确，alive=101 稳态，deviceErrors=0",
+    "确定性：flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）",
+    "基线：pt0 6/6 + pt1 10/10 全逐字节零回归；pt2 4/4（tex-flame 因 mip 采样重拍合规落档，tex-hud 逐字节未漂）",
+    "example/particles-pt3 归位（flipbook-hud × 双后端 2 基线）+ cases.json 卡 1 用例 + run.bat verify"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "flipbook-hud",
+     "name": "flipbook 序列帧画面：4×2 帧编号贴图 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "R2 mip + E6+R7 flipbook 复合：256x128 4×2 网格贴图全 mip 链，帧号 CPU 折算 + VS 统一 UV 公式；散开初速让多帧共存（同点重叠只能看到最顶层）。expectLog 用贴图锚。",
+     "baselines": {
+      "dx12": "example/particles-pt3/particles-flipbook-hud-dx12.png",
+      "vulkan": "example/particles-pt3/particles-flipbook-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/tex_flipbook.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.6",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "nfx texture: flipbook_4x2.png (256x128)",
+     "command": "viewer.exe --nfx assets/efx/tex_flipbook.nfx --hud ...",
+     "cwd": "{root}"
+    }
+   ],
+   "tag": "particles-pt3"
   }
  ]
 }

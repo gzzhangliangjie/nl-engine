@@ -1,0 +1,71 @@
+{
+  "efkVersion": 1500,
+  "emitter": {
+    "accel": [
+      0.0,
+      -0.8,
+      0.0
+    ],
+    "life": [
+      1.6666667461395264,
+      1.6666667461395264
+    ],
+    "rate": [
+      60.0,
+      60.0
+    ],
+    "spawnPoint": [
+      0.75,
+      0.15,
+      0.0
+    ],
+    "velocityMax": [
+      0.25,
+      0.3,
+      0.0
+    ],
+    "velocityMin": [
+      -0.25,
+      -0.12,
+      0.0
+    ]
+  },
+  "magic": "NFX1",
+  "render": {
+    "blend": "alpha",
+    "colorEnd": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "colorStart": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "size": [
+      0.38,
+      0.38
+    ],
+    "texture": "flipbook_4x2.png",
+    "flipbook": {
+      "frameLength": 12.0,
+      "countX": 4,
+      "countY": 2,
+      "loop": 1,
+      "offset": [
+        0.0,
+        0.0
+      ],
+      "cell": [
+        0.25,
+        0.5
+      ]
+    }
+  },
+  "source": "M-PT3 handcrafted (flipbook 4x2; grid texture PIL-generated, CC-0)"
+}

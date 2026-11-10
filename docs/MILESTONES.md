@@ -2178,3 +2178,84 @@
 4. **`fc /b` 在 MSYS bash 是内建别名（历史命令），全程空跑**：spin 调试一度拿 bash 里跑的 `fc /b` 当「bytes identical」证据走弯路（先后疑 TLAS 冻结、疑 dispatch 单次）；逐字节比对必须 hashlib/PIL。bat 里的 fc 才是 cmd 的 fc。
 
 **下一步**：S8 全线收官（M8.0 `s8-blas` / M8.1 `s8-tlas` / M8.2 `s8-done`）。下一站候选按 GAME-DEV-ORDER：碰撞事件桥（Jolt ContactListener → ECS 事件）或 M-CAM1（feat/camera 轨道已登记 wt，M-CAM0 已 claim）；feat/pathfinding 的 M-N1 按需在 M-N2/M-N3 前插入。reshot-hud-stage.py 的筛选口径（args 含 --hud）需补 input-hud/self-hud 类自带 HUD 模式（本轮手工补拍兜底，工具升级挂账）。
+## PT M-PT0：粒子运行时最小闭环——CPU 发射器 + GPU instanced billboard（feat/particles 轨道 B 类起步，2026-11-10，tag `particles-pt0`）
+
+**动作**：立项登记（ROADMAP 穿插项表 + PARALLEL-TRACKS §7.1 B 类专列 + wt_pool TRACKS 注册，编号两轮收敛 E→PT 避 ECS 撞号）→ 格式兼容调研拍板**路线 B**：Effekseer（MIT runtime/CC-0 数据）离线转换器 → 自定义 `.nfx`，运行时零新依赖、子集外模块显式报错（PopcornFX/Niagara 私有不可移植，OpenVDB MPL-2.0 须单独评审）→ `docs/particles/PARTICLES-PLAN.md`（M-PT0 最小闭环 + M-PT1 转换器）→ `wt_pool claim --track particles` 开 wt → **决策前置实读**：Carrot `render/particles/`（CPU 发射器+GPU 渲染 ~580 行，抄思路）+ bevy（无官方粒子）+ UE（VertexFactory 注入主渲染非独立 pass，只读）+ nl-engine DebugLines 叠加层模板 + §2.15 buffer 写回纪律 → 落码。
+
+**落码**：`renderer/shaders/particles.slang`（单源双目标，b0=112B volatile CB + t0 StructuredBuffer，SV_VertexID 展开 6 顶点 billboard、SV_InstanceID 取实例，PS 软圆盘 smoothstep）→ `scene.hpp/cpp` `Particles` 类（kMaxParticles=4096，ParticleGpu 32B，ensure/step/draw/invalidate/shutdown；pcg hash 5 路 RNG 流、固定步长 1/60s、发射率 300/s、重力+锥形初速+寿命/尺寸随机、黄→橙红 lerp + alpha 淡入淡出 + 收缩；懒 ensure 失败本帧跳过不拦路）→ `renderer.hpp` FrameParams 加 `particles` + HUD/DeviceInfo 加 `particleAlive` → hud.cpp `Particles : N alive` 证据行（仅 particlesEnabled 显示）+ hudSelfTest 缺省全关断言 → backend_dx12/vulkan drawDebugLines 后插 drawParticles（画在主场景后 HUD 前）→ renderer.cpp kArtifacts 加 4 条 shader 产物 → viewer `--particles` flag + HUD 喂数 + 稳态日志锚点 `particles steady: alive=N` → `example/particles-pt0/`（6 基线：三卡×双后端 hud/log/off + run.bat verify：双后端重拍 + DX12 确定性 fc /b + 双后端稳态锚点断言 + 负向不得命中）→ cases.json particles-pt0 版本卡 3 用例 → 顺手修存量 selftest 期望（kStage 已 S8.0 而 selftest 未更，master 存量漏项非本轮引入）。
+
+**提交版本**：`feat/particles` M-PT0 提交（annotated tag `particles-pt0`）。B 类轨道，不 bump `kStage`、不动 HUD 基线（证据行仅专用模式）。
+
+**完成情况**：DX12/VULKAN 双后端构建过，NVRHI validation + DX12 debug layer 双开零输出；selftest 16/16（52 产物魔数）；冒烟截图肉眼核验（喷泉粒子 + HUD 证据行）；`run.bat verify` 全绿 exit 0——**确定性硬证**：DX12 同参两次跑 PNG `fc /b` 逐字节同（MD5 `6bd87baad5381dc8e47c1810d3584583`）、双后端稳态 alive=567 同值（理论值命中：300/s × 平均寿命 1.95s ≈ 585，稳态波动内）；负向卡（无 `--particles` 不得出现 steady 行）通过；双后端 PNG 不逐字节同（dx `6bd87baa` vs vk `6f36def7`）按 phys-p3/p4 薄线噪声先例口径属预期，run.bat 各自对基线不互比。
+
+**踩坑情况**
+1. **wt_pool 注册表真源是 py 硬编码 TRACKS 字典**（md 是人肉镜像）——只改 PARALLEL-TRACKS.md 不改字典，claim 报 track not in registry。
+2. **fresh worktree 的 `.workbuddy` 是真实目录**非 junction——Remove-Item 后重建 junction + 补 skip-worktree。
+3. **CB 尺寸笔误**：64+16+16+16 误算 128B，static_assert 编译期抓获改 112B（volatile CB 必须带 static_assert 纪律的价值实证）。
+4. **`nvrhi::Blend` 不存在**：正确枚举 `nvrhi::BlendFactor`，回 vendored `nvrhi.h` 核签名。
+5. **viewer parseArgs 误删 `else if` 链的 `}` / scene.hpp 误吞 `constants_` 成员声明**：两处编辑事故均当场发现恢复——大文件锚点编辑后必查邻近结构完整性。
+6. **冒烟 flag 笔误**：`--screenshot-path` 不存在，正确用法 `--screenshot <path> --frames N`。
+
+**下一步**：M-PT1 vfx-tools 转换器（Effekseer .efkefc → `.nfx` v1）+ 运行时 .nfx 加载端；转换器支持面/子集外显式报错清单开工前细化（PARTICLES-PLAN §M-PT1）。merge 回 master 待用户拍板。
+
+## PT M-PT1：.nfx v1 闭环——Effekseer 转换器 + 运行时加载端（feat/particles 轨道，2026-11-10，tag `particles-pt1`）
+
+**动作**：三处前置实读——Effekseer 源码解析层（镜像 shallow clone 实查：core MIT 自足 189 文件、EfkEfcFactory/SKFE chunk、参数结构逐字段实读、贴图路径 Get*ImagePath 公开 API、Network 子集无反向依赖）、Carrot `ParticleBlueprint`（资产 = 预编译 SPIR-V + 贴图索引，离线生成运行时零解析）、UE Niagara（authored → `FNiagaraEmitterCompiledData` 编译产物，工业口径同构）。拍板点三连（AskUserQuestion）：解析方案 = **vendored Effekseer core**；子集 = **基础 sprite 单发射器**；运行时加载端**并入本里程碑**。选型闸逐条核过（MIT/纯源码零构建依赖/许可入库/不替代主线），VENDOR.md 留档。
+
+**落码**：`thirdparty/effekseer/`（core 57 cpp/121 h + 自有 CMakeLists 显式列源 + LICENSE + VENDOR.md；**伞头 Network include 补丁**留注释）→ 主 CMakeLists `nl_effekseer` 静态库 + `vfx-tools` 目标 → `vfx-tools/main.cpp`（convert/selftest：SKFE 加载走 Setting 默认 EfkEfcFactory 路由、桩 loader 全 nullptr 免磁盘依赖、EffectNode 树遍历 + 子集白名单反面清单收集式 exit 2、NFX1 JSON 产出 + 镜像读回自证）→ `assets/efx/` 真实样例（镜像 git show 拉 7 个 .efkefc + 4 贴图占位）→ 运行时：`Particles::Params` 参数面 + `loadNfx`（NFX1 → box 初速/常加速度 nfx 路径，legacy 喷泉双代码路径逐位不动）+ additive 变体管线懒建 + `Renderer::loadParticlesNfx` 门面三层转发（backend.hpp 虚接口 + dx12/vk 一行转发）+ viewer `--nfx`（隐含 --particles，nfx loaded 锚点）→ `docs/particles/VFX-TOOLS-GUIDE.md` 归档 → `example/particles-pt1/`（nfx-hud/nfx-log × 双后端 4 基线 + run.bat verify：tool 正负向 + 确定性 fc /b + 双锚点 + 负向）+ cases.json particles-pt1 卡 5 用例（case 级 exe 覆盖 + **cwd {root}**）→ ctest p-mpt1-selftest/convert-positive 两条。
+
+**提交版本**：`feat/particles` M-PT1 提交（annotated tag `particles-pt1`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过（nl_effekseer + vfx-tools + viewer 全绿）；selftest PASS（JSON 往返 + 坏 magic + SKFE 探针）；**转换器真样例验收**：CullingSprite（v1500）/square_r-g-b（v1610）exit 0（**Effekseer 老版本迁移实测生效**），GpuParticles_emit_line exit 2 带 4 条实测原因、GpuParticles_mesh_simple exit 2、Laser01 exit 2（5 sprite 节点）；**运行时闭环**：viewer --nfx 红色 billboard 光晕肉眼可见 + HUD `Particles : 101 alive`（rate 60/s × life 1.67s 理论稳态命中）；**确定性硬证**：nfx 模式 DX12 同参两跑 PNG `fc /b` 逐字节同（MD5 `7fd2a033…`）、双后端 alive=101 同值；**legacy 零回归**：`--only particles-pt0` 6/6 全绿；pt1 回归 **10/10 ALL GREEN**（5 用例 × 双后端：bytes 全等）；ctest DX12/VULKAN 53/53（新增 2 条）；run.bat verify 全绿 exit 0；server.py --check exit 0。
+
+**踩坑情况**
+1. **伞头 Effekseer.h 引 Network 头**：删 Network 子集后 DefaultEffectLoader 编译炸 C1083——vendored 树打最小补丁（两行 include 移除 + 注释留痕 VENDOR.md）。
+2. **SIMD::Vec2f 无 X/Y 成员**：getter 是 GetX()/GetY()；`vector3d`（InternalStruct）是小写 x/y/z，`Vector3D`（Math 类）是大写——**同类异构成员命名必须回 vendored 头实核**，凭印象写连吃三组 C2039。
+3. **quad 轴对齐判据写错**：初版写成 `ulX != urX`（应为顶边横平 `ulY != urY`），正例 CullingSprite 被冤枉 exit 2——把实测角值打进报错信息后一眼定位（报错信息带现场数据的价值实证）。
+4. **SpritePosition.Default 语义**：v8+ 从文件读 4 角（可任意四边形），v8 以下才归一化 ±0.5——square 系样例 15×15 原始单位（Effekseer 示例侧 cm 习惯靠 magnification 缩放），1:1 折米 = 15m 大板把相机罩进去（近平面裁掉全隐）。子集口径 magnification≠1 → exit 2 是对的；正例选 CullingSprite（1×1）。
+5. **regression 默认 cwd = exe 目录**：卡里相对路径 `assets/efx/...` 全部失联（viewer 文件读不到、converter 把「文件不存在」也 exit 2 但原因清单缺失 → expectLog 双断言抓得住）——修复 = 5 张卡全加 `"cwd": "{root}"`（audio-tools debug 先例）。**带文件路径参数的卡必须显式 cwd**。
+6. **MaterialLoader::Load 签名**：单参无 bool、双参是 `(data,size,MaterialFileType)`——override 不匹配 C3668 编译期抓获。
+7. **s1-nmesh-suzanne ctest 间歇挂**：连跑 4 次全挂后全量 3 轮 = 过/挂/过——ENV-FLAKE 秒退族（missing anchor/空输出先例口径），与本里程碑零接触（用例未改），定性留痕不追码。
+
+**下一步**：M-PT2 候选——贴图采样端（stb_image vendored + particles.slang PS 贴图采样 + .nfx 贴图解析）、sizeY 非方形 billboard、rate 区间驱动、Effekseer easing/渐变颜色。merge 回 master 待用户拍板（M-PT0+M-PT1 一并）。
+
+
+## PT M-PT2：贴图采样端 + sizeY 非方形（feat/particles 轨道，2026-11-10，tag `particles-pt2`）
+
+**动作**：前置实读——Effekseer sprite UV 口径（core 侧仅 ApplyUVHorizontalFlip，子集已 gate 掉 UV 动画/翻转 → 基础 sprite UV 恒等 [0,1]²；官方平台渲染器四角 UV 左上(0,0)起、V0=贴图顶部，与 stbi 解码行序天然一致，贴图数据无需翻转）、Carrot 粒子贴图同为 TODO（反向印证开源实现贴图普遍后做；其 UV 生成 `zx+0.5 + y*=-1` 模式参考）。拍板点两连（AskUserQuestion）：验收贴图 = **官网资源包**（用户拍板，gh-proxy 直链下载 Effekseer 1.80.8 官方工具包 96MB 绕过 LFS 指针问题）；子集 = **贴图采样 + sizeY**（rate 区间/easing 留 M-PT3）。
+
+**落码**：`thirdparty/stb/stb_image.h` 声明头（与 tinygltf 内嵌 v2.21 同版本副本；IMPLEMENTATION 仍只在 nl_core mesh_io.cpp 一份，renderer 只引声明复用符号，禁重复展开）→ `Particles::ensureTexture`（texture 字段 basename → `assets/efx/textures/`，stbi 强制 RGBA8 → RGBA8_UNORM 原样采样不做 sRGB；惰性建纹 device 侧 + 像素上传推迟到 draw 首帧 writeTexture——建纹时无 cmd list，上传与 setTextureState 同列表 0x87d 同源纪律）→ 绑定扩槽 t1 Texture_SRV + s0 Linear clamp Sampler，无贴图绑 1x1 白 dummy（引擎空纹理槽先例）→ PS 双路径 branch 保形（`g_params.y` 开关：0=软圆盘逐字 M-PT0 原表达式）→ sizeY 走 **CB 标量 `g_params.z` = ratioY**（单发射器子集所有粒子同比例，ratio=1.0 时 `corner.y*1.0f` 逐位恒等，实例流 32B 布局不变）→ 贴图资产 Particle01/Flame01（CC-0）入库 + 正例 .nfx 手工构造两张（全包 0 个子集内特效为预期，官方样例均教学复合特效）→ `example/particles-pt2/` 4 基线 + run.bat verify（双后端重拍 + DX12 确定性 fc /b + 贴图/steady 双锚点 + 默认关负向）→ cases.json particles-pt2 卡 2 用例（**文本级追加**——json.dump 整写会重排全文件，禁用）。
+
+**提交版本**：`feat/particles` M-PT2 提交（annotated tag `particles-pt2`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过 + selftest 16/16；**贴图模式验收**：tex_particle01（alpha 圆形光斑）/ tex_flame01_rect（additive 火焰 2:1 扁形）双后端可见 + alive=101 稳态 + deviceErrors=0；**确定性硬证**：贴图模式 DX12 同参两跑 PNG `fc /b` 逐字节同；**双后端贴图采样区域逐位同**（diff 仅 HUD adapter 文字——sampler 数值双后端一致）；**基线零回归**：pt0 6/6 + pt1 10/10 ALL GREEN 全逐字节；ctest DX12 一轮 100% 53/53（VULKAN 发作期最好 98%，挂卡全是与 M-PT2 零接触的 S1/S2 秒退族，手动同命令全过，定性见踩坑 6）；run.bat verify exit 0；server --check exit 0；负向人工实证（texture 缺失 → soft-disc fallback 不炸帧）。
+
+**踩坑情况**
+1. **VS if-else 被 dxc select 化**：sizeY 首版用 VS 内 branch（sizeY==size 走原表达式），DX12 基线漂 15 像素 ±1 LSB（编译器把两路径混合评估成 select）；对照实验（删 branch 恒用原式）单变量定位实锤。终版 = **CB 标量 ratioY**（`corner.y*g_params.z`，ratio=1.0 时乘 1.0 逐位恒等）——零 branch 零漂移且 32B 布局免扩。
+2. **PS lerp-0 同样漂**：`lerp(disc, tex.a, 0)` 被 DXIL FMA 展开致 ±1 LSB——「数学恒等」在编译器面前不可靠。PS branch（含 texture 采样的分支）实测不被 select 化，保形成立。
+3. **shader 保形铁律（沉淀）**：凡回归基线依赖的浮点表达式，禁 branch 化/lerp 化改写，只能逐字保留或精确恒等变换（×1.0）。
+4. **NL_ASSET_DIR 注入的是 assets/models**（M0.7 model 白名单口径）——粒子贴图路径取其父目录拼 `efx/textures`；发射点 (0,0,0) 会被猴头 mesh 深度遮挡（粒子群全在模型内部），验收 .nfx 的 spawnPoint 挪侧前方空域。
+5. **nlohmann value() 对 JSON null 抛 type_error**（M-PT1 转换器对无贴图特效的 texture 字段产物就是 null）——`r.value("texture","")` 遇 null 直接异常而非返回默认值，必须显式 `is_string()` 判。M-PT1 基线 CullingSprite.nfx 的直接回归雷，编码时即拦下。
+6. **ENV-FLAKE 发作期**：本里程碑 ctest 期间秒退块状高发（挂卡轮换 s1-nmesh/s2-loop/s3-fallback，0.09s 零输出，手动同命令全过，DX12 一轮 100% 证明无回归）——LightingService 观察期已知现象加重窗口，重跑纪律照旧（2~3 次定性），VULKAN 53 卡最好 98% 收口如实落档。
+7. **cases.json 追加必须文本级**：python json.dump 整文件重写把 3 空格缩进重排成 2 空格（diff 1.2 万行）——回滚后用 Edit 文本追加，diff +81 行干净。
+
+**下一步**：M-PT3 候选——rate 区间驱动、easing/渐变颜色；merge 回 master 待用户拍板（M-PT0~M-PT2 一并）。
+
+## PT M-PT3：贴图 mip 链 + flipbook 序列帧（feat/particles 轨道，2026-11-10，tag `particles-pt3`）
+
+**动作**：用户拍板「特效侧从 R2 → E6+R7 顺着做」→ 合并为单里程碑 M-PT3（同贴图采样域，一次 claim/收口）。前置实读——Effekseer flipbook 口径（`UVAnimationType::Animation`：`Position` rectf + `FrameLength` 帧数单位 1/60s + `FrameCountX/Y` + `LoopType` once/loop/reverse + `StartFrame` random_int {max,min} 序 + `InterpolationType` NONE/LERP v1600+；帧选择 = `floor(livingFrames/frameLength)` 行主序，全在 `UVFunctions::GetUV`）；现 sampler `setMipFilter(false)` + writeTexture 第 3 参 = mip 层号（全层上传天然支持）。
+
+**落码**：R2 = `ensureTexture` CPU box-filter 全链（纯整数逐位确定）+ `setMipLevels` + draw 首帧按层 `writeTexture` + `setMipFilter(true)`。E6+R7 = 转换器 UVs[0] Animation 子集提取 + `.nfx` v1 可选字段 `render.flipbook`（magic 不变向后兼容，selftest 加往返 + 老格式兼容双断言）+ 帧号 CPU 折算（once/loop/reverse 全支持）+ 实例流 32→48B `progressMisc`（已有成员偏移不变）+ **VS 统一无 branch 公式** `flipUv = uvRect.xy + uvRect.zw*(frameXY + localUv)`（非 flipbook = uvRect(0,0,1,1) IEEE 精确恒等 M-PT2 texUv）+ CB 112→128B `g_uvRect`。资产 = PIL 生成 4×2 帧编号色相环网格 + 手工正例 .nfx（散开初速让多帧共存）。交代物：`example/particles-pt3/` 2 基线 + run.bat + cases.json 1 卡（文本级追加）+ pt2 flame 卡 note 补重拍记录。
+
+**提交版本**：`feat/particles` M-PT3 提交（annotated tag `particles-pt3`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建过 + selftest 16/16（新增 vfx flipbook 往返断言）；flipbook 画面多帧共存 + 数字正立（V 轴口径/cell 对齐画面实证）+ alive=101 稳态 + deviceErrors=0；flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）；**pt0 6/6 + pt1 10/10 全逐字节零回归**（48B 扩段 + CB 128B + texUv PS→VS 恒等移动全保形）+ pt2 4/4（tex-flame 因 mip 重拍：0.25m 高粒子采样进高层 mip 1652px maxDelta 28——正是 R2 要解决的问题本身，随特性演进合规重拍；tex-hud 逐字节未漂）；ctest DX12/VULKAN 100%（until-pass:3）；run.bat verify exit 0；server --check OK。
+
+**踩坑情况**
+1. **`setMipLevelCount` 不存在**——TextureDesc 的 API 是 `setMipLevels`（回 vendored nvrhi.h 实核，铁律再次生效）。
+2. **flipbook 首拍全粒子重叠**——初速全 0 时所有粒子同点叠加只可见最顶层（帧 0）；正例必须给散开初速（velMin/Max 区间 + 轻重力）让不同年龄粒子落不同位置，帧序才能画面验证。
+3. **帧号截断抖动**——`t*maxLife*60` 经浮点除法恢复有累积误差，`int(x+0.5f)` 四舍五入消除（帧切换时序 ±1 帧抖动的隐形雷）。
+4. **VS branch 教训的正面应用**——flipbook UV 用统一公式而非 if-else（M-PT2 select 化教训），非 flipbook 取值下的 IEEE 恒等让 pt0/pt1/pt2 软圆盘路径零漂移，一次到位。
+5. **pt2 基线重拍的判据 clarity**——tex-hud 未漂（屏幕尺寸 ≥ 贴图尺寸 → LOD 0）而 tex-flame 漂（屏幕 30px < 128px 贴图 → 高层 mip），同一贴图链路两种结果完全可解释；重拍合规通道 = 特性演进 + note 落档原因。
+
+**下一步**：merge 回 master 待用户拍板（M-PT0~M-PT3 一并）；特效登记表下一批候选 = E1 rate 区间（小）/ E2 easing·渐变颜色（中，首次动 schema 演进样本已由 flipbook 可选字段模式铺好）/ E5 旋转 billboard（中）；主线 S8 M8.2 开工待指令。

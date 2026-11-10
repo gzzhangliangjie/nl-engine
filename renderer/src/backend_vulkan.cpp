@@ -272,6 +272,11 @@ public:
         return scene_.updateObjects(nvrhiDevice_, objects, objectCount, outError);
     }
 
+    // M-PT1：.nfx v1 加载端（转发 scene_.loadParticlesNfx；运行时零 Effekseer）。
+    bool loadParticlesNfx(const char* path, std::string& outError) override {
+        return scene_.loadParticlesNfx(path, outError);
+    }
+
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
                      std::string& outError) override {
@@ -348,6 +353,7 @@ private:
         info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
+        info_.particleAlive = scene_.particlesAlive();        // M-PT0：活粒子数（关闭恒 0）
     }
 
     // ---- M8.2 t0 段二：recordFrame = 帧列表生命周期唯一落点 ----
@@ -382,6 +388,12 @@ private:
         if (vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_]
             && depth_) {
             scene_.drawDebugLines(cmd, framebuffers_[vulkanImageIndex_],
+                                 nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
+        }
+        // M-PT0：粒子叠加层（instanced billboard，alpha blend、深度测试开写入关）。
+        // 画在调试线框之后、HUD 之前；仅 frame.particles 开启时步进 + 绘制（缺省零开销）。
+        if (vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_] && depth_) {
+            scene_.drawParticles(cmd, framebuffers_[vulkanImageIndex_],
                                  nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
         }
         // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。

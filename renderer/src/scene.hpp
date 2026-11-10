@@ -105,6 +105,135 @@ private:
     std::uint32_t                 capacity_ = 0; // 当前 VB 容量（顶点数）
 };
 
+// M-PT0：粒子叠加层（instanced billboard）。与 DebugLines 同款单源/双目标约定：
+// 一份 particles.slang 出 spv/dxil。CPU 固定步长模拟（1/60s，与 M-GL 物理
+// 同款确定性纪律——截图基线逐字节复现的前提），每帧 writeBuffer 进
+// StructuredBuffer<float4>×2（32 B/实例），无顶点缓冲（VS 用 SV_VertexID/
+// SV_InstanceID，cull 路径同款）。alpha blend，深度测试开 / 深度写入关——
+// 被实体遮挡的粒子不显示，但不写深度（不遮挡后续 HUD）。
+// 默认不建/不画（--particles 关闭时零开销，S7 渲染基线字节不变）。
+class Particles {
+public:
+    // 用 framebuffer 格式信息建 billboard 管线（alpha/additive 各一条，懒建缓存）。
+    // shaderSuffix = "spv" / "dxil"；入口恒 vsMain/psMain（后端传 "main"，§2.4）。
+    bool ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                const char* shaderSuffix, std::string& outError);
+    // 每帧：CPU 固定步长模拟一步 → 写 volatile CB + 实例数据 → instanced 绘制。
+    // 只在 params.particles 开启时被调用（缺省零开销）。
+    void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+              const nvrhi::Viewport& viewport, const FrameParams& params,
+              const char* shaderSuffix);
+    void invalidate();
+    void shutdown();
+
+    std::uint32_t aliveCount() const { return aliveCount_; }
+
+    // M-PT1：.nfx v1 加载端（vfx-tools 转换产物，运行时零 Effekseer 依赖）。
+    // 解析 JSON → 折进模拟参数；成功后模拟走 nfx 路径（legacy 喷泉代码路径
+    // 原样保留，M-PT0 基线零回归）。失败返回 false 且不清 legacy 参数。
+    bool loadNfx(const char* path, std::string& outError);
+    bool nfxActive() const { return nfxActive_; }
+    const std::string& nfxName() const { return nfxName_; }
+
+private:
+    // CPU 固定步长模拟（喷泉发射器：发射率/初速锥/重力/寿命曲线全部常数，
+    // RNG = pcg(序列号) 确定性流——run-to-run 与跨后端逐位一致）。
+    void step(float dt);
+
+    // M-PT2：nfx 贴图惰性建（textureDirty_ 门控；读 assets/efx/textures/<basename>
+    // → stbi 解码 RGBA → RGBA8_UNORM。失败返回 false，调用方回退软圆盘）。
+    bool ensureTexture(nvrhi::IDevice* device, std::string& outError);
+
+    static constexpr std::uint32_t kMaxParticles = 4096;
+
+    // 模拟参数面（M-PT0 = 内置喷泉常数；M-PT1 起 .nfx 覆写 box 发射分支）。
+    struct Params {
+        float rate = 300.0f;                       // 粒子/秒
+        float lifeMin = 1.6f, lifeSpan = 0.7f;     // 寿命 [lifeMin, lifeMin+lifeSpan) s
+        float spawn[3] = {0.0f, -0.55f, 0.0f};     // 发射点（legacy 锥形发射用）
+        float speedMin = 2.0f, speedSpan = 1.0f;   // 锥形初速幅值（legacy）
+        float spread = 0.35f;                      // 锥形水平散布（legacy）
+        float velMin[3] = {0, 0, 0};               // box 初速 min（nfx）
+        float velMax[3] = {0, 0, 0};               // box 初速 max（nfx）
+        float accel[3] = {0.0f, -9.8f, 0.0f};      // 常加速度（两路共用，legacy = 重力）
+        float sizeMin = 0.05f, sizeSpan = 0.05f;   // 尺寸（nfx：sizeSpan=0 定值）
+        float ratioY = 1.0f;                       // M-PT2：Y/X 尺寸比（nfx sizeYMin/sizeMin；
+                                                   // legacy/方形恒 1.0，CB g_params.z 下发）
+        float colorStart[4] = {1.0f, 0.85f, 0.35f, 1.0f}; // nfx 颜色 t=0
+        float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
+        float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
+        bool  additive = false;                    // nfx blend（false = alpha blend）
+        // M-PT3：flipbook 序列帧（.nfx 可选字段；enabled=false = 无，UV 恒等 [0,1]）。
+        // 帧选择与 Effekseer UVAnimationType::Animation 同式：frameNum =
+        // floor(livingFrames / frameLength) 按 loop 折算，行主序（frameX 先走）；
+        // livingFrames = (maxLife - life) × 60（出生起算，Effekseer LivingTime 口径）。
+        struct Flipbook {
+            bool  enabled = false;
+            float frameLength = 1.0f;              // 帧数（Efke 帧 1/60s）
+            int   countX = 1, countY = 1;
+            int   loopType = 0;                    // 0=once 1=loop 2=reverse
+            float offsetU = 0.0f, offsetV = 0.0f;  // UV 起始偏移（V0 = 贴图顶部）
+            float cellW = 1.0f, cellH = 1.0f;      // 单帧 UV 尺寸
+        } flipbook;
+        // M-PT2 贴图不走 Params：basename 进成员 textureBasename_（dirty 门控惰性建纹）
+    };
+
+    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，48 B）。
+    // M-PT2：sizeY 不进实例流——单发射器子集所有粒子同 Y/X 比，走 CB 标量
+    // g_params.z（ratio=1.0 时 cy*1.0 逐位恒等，legacy/方形基线零漂移）。
+    // M-PT3：flipbook progress 每粒子不同 → 实例流扩 float4×3（48 B）。
+    // 已有成员偏移不变（float4 对齐），world/颜色计算路径逐字保留——
+    // pt0/pt1 基线零漂移靠这一点 + PS 软圆盘分支逐字保留。
+    struct ParticleGpu {
+        float posSize[4];    // xyz = 世界位置，w = 尺寸 X（Y = X × g_params.z）
+        float colorAlpha[4]; // rgb = 颜色，a = alpha
+        float progressMisc[4]; // x = 生命周期进度 [0,1]（flipbook 帧选择；非
+                               // flipbook 恒 0），yzw 预留
+    };
+    static_assert(sizeof(ParticleGpu) == 48, "ParticleGpu must be 48B");
+
+    // CPU 侧模拟状态（SoA 向量化不如确定性重要，AoS 简单直接）。
+    struct Sim {
+        float pos[3];
+        float vel[3];
+        float life;     // 剩余寿命（秒）
+        float maxLife;  // 总寿命（秒，alpha/size 曲线分母）
+        float size;     // 尺寸（米；Y = size × params_.ratioY）
+    };
+    std::vector<Sim>          pool_;       // 活粒子（spawn 序，swap-remove 摘死者）
+    std::vector<ParticleGpu>  gpuData_;    // 每帧重填的绘制流（alive 顺序）
+    float                     spawnAccum_ = 0.0f;  // 发射率积分残差（固定 dt 下确定性）
+    std::uint32_t             spawnSeq_   = 0;     // RNG 流序号（pcg 输入）
+    std::uint32_t             aliveCount_ = 0;
+
+    Params                     params_;     // 模拟参数面（loadNfx 覆写）
+    bool                       nfxActive_ = false;
+    std::string                nfxName_;
+
+    nvrhi::ShaderHandle           vs_, ps_;
+    nvrhi::BufferHandle           constants_;     // volatile CB 112 B（b0）
+    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×3（t0，48 B/实例）
+    nvrhi::BindingLayoutHandle    bindingLayout_;
+    nvrhi::BindingSetHandle       bindingSet_;
+    nvrhi::GraphicsPipelineHandle pipeline_;          // alpha blend（legacy + nfx 缺省）
+    nvrhi::GraphicsPipelineHandle pipelineAdditive_;  // additive（nfx blend=additive 时用）
+
+    // M-PT2：贴图链。textureDirty_ 门控惰性建纹（loadNfx 只存 basename，文件 IO/
+    // 解码/建纹都推迟到首帧 draw 的 GPU 侧，loadNfx 失败面保持纯参数折算）；
+    // 无贴图时 setDesc 绑 1x1 白 dummy（引擎空纹理槽先例，过 NVRHI 校验），
+    // PS 经 g_params.y 开关回退软圆盘——M-PT0/M-PT1 画面逐位不变。
+    nvrhi::TextureHandle          texture_;       // t1（nfx texture 字段；nullptr = dummy）
+    nvrhi::TextureHandle          dummyTex_;      // 1x1 白（无贴图占位）
+    nvrhi::SamplerHandle          sampler_;       // s0 Linear clamp
+    bool                          textureDirty_ = false;         // loadNfx 标记 → ensure 建纹
+    bool                          texturePendingUpload_ = false; // 纹理已建待 cmd 上传
+    bool                          dummyPendingUpload_ = false;   // dummy 已建待 cmd 上传
+    std::string                   textureBasename_;              // assets/efx/textures/ 下文件名
+    std::vector<std::uint8_t>     texturePixels_;  // RGBA8 像素暂存（上传后清）
+    std::uint32_t                 texW_ = 0, texH_ = 0;
+    std::uint32_t                 texMipCount_ = 1;              // M-PT3：mip 链层数（1 = 无）
+};
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -299,6 +428,20 @@ public:
     void drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                        const nvrhi::Viewport& viewport, const FrameParams& params);
 
+    // M-PT0：粒子叠加层绘制入口。后端在 scene_.draw 之后、HUD 之前调用（与
+    // drawDebugLines 同一挂点顺序：粒子在其后画）。仅当 params.particles 才
+    // 步进模拟 + 绘制（缺省零开销，既有模式基线一像素不动）。
+    void drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params);
+    // M-PT0：活粒子数（HUD/DeviceInfo 证据行数据源；--particles 关闭时恒 0）。
+    int particlesAlive() const { return static_cast<int>(particles_.aliveCount()); }
+    // M-PT1：.nfx v1 加载端（viewer --nfx 调用；成功后模拟走 nfx 参数面）。
+    bool loadParticlesNfx(const char* path, std::string& outError) {
+        return particles_.loadNfx(path, outError);
+    }
+    bool particlesNfxActive() const { return particles_.nfxActive(); }
+    const std::string& particlesNfxName() const { return particles_.nfxName(); }
+
     bool ready() const {
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
             return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
@@ -362,6 +505,8 @@ private:
     nvrhi::ShaderHandle           vs_, ps_;
     // M-P3：物理调试线框叠加层（LINE_LIST）。默认不建不画，debugLines 关闭时零开销。
     DebugLines                    dbgLines_;
+    // M-PT0：粒子叠加层（instanced billboard）。默认不建不画，particles 关闭时零开销。
+    Particles                     particles_;
     // 各 init* 写入，供 dbgLines_.ensure 定位 debug_line.{vs,ps}.<suffix> 字节码。
     std::string                   shaderSuffix_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;

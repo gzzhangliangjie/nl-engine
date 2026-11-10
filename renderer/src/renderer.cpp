@@ -87,6 +87,9 @@ static const Artifact kArtifacts[] = {
     {"rt.cs", true}, {"rt.cs", false},
     {"rt.vsrtpresent", true}, {"rt.vsrtpresent", false},
     {"rt.psrtpresent", true}, {"rt.psrtpresent", false},
+    // M-PT0：particles.slang 单管线（vsMain/psMain），各 × spv/dxil = 4。
+    {"particles.vs", true}, {"particles.vs", false},
+    {"particles.ps", true}, {"particles.ps", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -247,6 +250,19 @@ bool Renderer::updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t ob
         impl_->error = err;
         return false;
     }
+    return true;
+}
+
+// M-PT1：.nfx v1 加载端。转发 backend 的 scene_.loadParticlesNfx（NFX1 JSON →
+// 粒子模拟参数面，运行时零 Effekseer 依赖）。失败原因进 lastError()。
+bool Renderer::loadParticlesNfx(const char* path) {
+    if (!impl_->backend) return false;
+    std::string err;
+    if (!impl_->backend->loadParticlesNfx(path, err)) {
+        impl_->error = err;
+        return false;
+    }
+    impl_->info = impl_->backend->info();
     return true;
 }
 

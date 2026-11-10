@@ -5,6 +5,18 @@
 #include "nl/core/log.hpp"
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
+#include "json.hpp"                // M-PT1：.nfx v1 解析（vendored nlohmann，与 core 同源）
+
+// M-PT2：粒子贴图解码用 stb_image 声明头。实现（STB_IMAGE_IMPLEMENTATION）只在
+// nl_core 的 mesh_io.cpp 展开（tinygltf 内嵌 v2.21；thirdparty/stb/stb_image.h 为
+// 同版本声明副本）——renderer 侧只引声明复用符号，禁止重复展开（重复定义链接错）。
+#ifdef _MSC_VER
+#  pragma warning(push, 0)
+#endif
+#include <stb_image.h>
+#ifdef _MSC_VER
+#  pragma warning(pop)
+#endif
 
 #include <cmath>
 #include <algorithm>
@@ -2996,6 +3008,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
 void Scene::invalidatePipelines() {
     // M-P3：调试管线随主管线一起重建（格式不变，重 ensure 即重建同格式 PSO）。
     dbgLines_.invalidate();
+    // M-PT0：粒子管线随主管线一起重建（实例缓冲/模拟状态不清，draw 下帧懒建）。
+    particles_.invalidate();
     // M6.0：hiz 管线随主管线一起重建（纹理/绑定集按视口尺寸懒建，不受影响）。
     prepassPSO_ = nullptr;
     vizPSO_ = nullptr;
@@ -4715,6 +4729,661 @@ void Scene::drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     dbgLines_.draw(cmd, framebuffer, viewport, params);
 }
 
+// ---- M-PT0：粒子叠加层（CPU 固定步长模拟 + instanced billboard）----
+
+namespace {
+
+// 与 M1.3 clusterColor 同族的 pcg 整数 hash——粒子参数从发射序列号推导，
+// 无时间/时钟输入：run-to-run 与跨后端逐位一致（截图确定性前提）。
+std::uint32_t particleHash(std::uint32_t v) {
+    v = v * 747796405u + 2891336453u;
+    v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    v = (v >> 22u) ^ v;
+    return v;
+}
+// [0,1) 均匀（24 位精度）。
+float particleRand01(std::uint32_t v) {
+    return static_cast<float>(v & 0xFFFFFFu) / 16777215.0f;
+}
+
+// 喷泉发射器常数：M-PT1 起参数面进 Particles::Params（scene.hpp），此处只留
+// legacy 锚点使用的发射点与固定步长（nfx 路径经 params_ 覆写）。
+constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
+constexpr float kEmitterPos[3] = {0.0f, -0.55f, 0.0f};
+
+// CB 布局（与 particles.slang 的 cbuffer b0 逐字节对应，128 B）。
+struct ParticleConstantsCB {
+    float mvp[16];
+    float camRight[4];
+    float camUp[4];
+    float params[4];   // x = billboard 整体尺寸倍率；y = 贴图开关；z = Y/X 比；w = flipbook 开关
+    float uvRect[4];   // M-PT3：flipbook UV 区域（xy=offset zw=cell；非 flipbook = 0,0,1,1）
+};
+static_assert(sizeof(ParticleConstantsCB) == 128, "particle cbuffer layout must match shader");
+
+} // namespace
+
+bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                       const char* shaderSuffix, std::string& outError) {
+    // M-PT2：贴图惰性建（loadNfx 存 basename 后首帧触发；失败回退软圆盘不炸帧）。
+    // 纹理只在这里建（device 可用）；像素上传推迟到 draw 里（writeTexture 需要
+    // cmd list，DX12/Vulkan 走 upload buffer 内部 copy）。
+    if (textureDirty_) {
+        textureDirty_ = false;
+        std::string texErr;
+        if (!ensureTexture(device, texErr)) {
+            nl::core::log::deviceError("Particles", texErr + " (soft-disc fallback)");
+            texture_ = nullptr;
+        }
+    }
+    if (pipeline_) return true;
+
+    // 加载 particles 双目标字节码（同一份 .slang 出 spv/dxil）。
+    auto path = [shaderSuffix](const char* stage) {
+        return std::string(NL_SHADER_DIR) + "/particles." + stage + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(path("vs").c_str(), vsBlob) ||
+        !readFileBytes(path("ps").c_str(), psBlob)) {
+        outError = std::string("failed to load particles shader (") + shaderSuffix + ")";
+        return false;
+    }
+    // SPIR-V 恒 main、DXIL 入口由 -entry 定（NVRHI 忽略 DX12 entryName）——
+    // 两个后端统一传 "main"（debug_line 同款，§2.4）。
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+    vs_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vs_ || !ps_) { outError = "createShader failed for particles"; return false; }
+
+    // volatile CB：128 B（mvp + 相机基向量 + 预留），每帧全量覆写（§2.7 纪律）。
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(ParticleConstantsCB);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "ParticleConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
+
+    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT3 扩 progressMisc 段；已有成员
+    // 偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
+    // （writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态纪律，§2.15）。
+    nvrhi::BufferDesc instDesc;
+    instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
+    instDesc.structStride = sizeof(ParticleGpu);
+    instDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    instDesc.keepInitialState = true;
+    instDesc.debugName = "ParticleInstances";
+    instanceData_ = device->createBuffer(instDesc);
+    if (!instanceData_) { outError = "createBuffer failed for particle instances"; return false; }
+
+    // 绑定布局：b0 volatile CB + t0 StructuredBuffer + t1 贴图 + s0 采样器
+    // （M-PT2；§2.7：单管线单一 set）。
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+    bindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!bindingLayout_) { outError = "createBindingLayout failed for particles"; return false; }
+
+    // M-PT2：1x1 白 dummy（无贴图占位，引擎空纹理槽先例，过 NVRHI 校验）+ Linear
+    // clamp 采样器。像素上传走 draw 里的 writeTexture（dummyPendingUpload_ 门控）。
+    if (!dummyTex_) {
+        nvrhi::TextureDesc d;
+        d.setWidth(1).setHeight(1);
+        d.setFormat(nvrhi::Format::RGBA8_UNORM);
+        d.setInitialState(nvrhi::ResourceStates::CopyDest);
+        d.keepInitialState = true;
+        d.debugName = "ParticleTexDummy";
+        dummyTex_ = device->createTexture(d);
+        if (!dummyTex_) { outError = "createTexture failed for particle dummy"; return false; }
+        dummyPendingUpload_ = true;
+    }
+    if (!sampler_) {
+        nvrhi::SamplerDesc sDesc;
+        sDesc.setAllFilters(true)   // bool 语义：true = Linear（nvrhi.h 惯例）
+            .setMipFilter(true)     // M-PT3：mip 线性（纹理带全 mip 链；dummy 1x1 无 mip 不受影响）
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
+        sampler_ = device->createSampler(sDesc);
+        if (!sampler_) { outError = "createSampler failed for particles"; return false; }
+    }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    setDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceData_));
+    setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, texture_ ? texture_ : dummyTex_));
+    setDesc.addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
+    if (!bindingSet_) { outError = "createBindingSet failed for particles"; return false; }
+
+    // 管线：TriangleList + 无 input layout（VS 用 SV_VertexID/SV_InstanceID 顶点
+    // 拉取，cull 路径同款）。alpha blend + depth test 开 / write 关 + cull None
+    // （billboard 两面可见）。不写深度 → 不遮挡后续 HUD。
+    // M-PT1：additive 变体管线懒建（同一份 shader/绑定布局，仅混合方程不同；
+    // §2.7 单管线单一 BindingSet——两条管线共享同一 bindingLayout_/bindingSet_）。
+    auto makePipeline = [&](nvrhi::BlendFactor srcColor, nvrhi::BlendFactor dstColor) {
+        nvrhi::GraphicsPipelineDesc desc;
+        desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+            .setVertexShader(vs_).setFragmentShader(ps_)
+            .addBindingLayout(bindingLayout_);
+        desc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+        nvrhi::BlendState::RenderTarget rt;
+        rt.setBlendEnable(true);
+        rt.setSrcBlend(srcColor);
+        rt.setDestBlend(dstColor);
+        rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
+        rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+        desc.renderState.blendState.setRenderTarget(0, rt);
+        return device->createGraphicsPipeline(desc, info);
+    };
+    pipeline_ = makePipeline(nvrhi::BlendFactor::SrcAlpha, nvrhi::BlendFactor::InvSrcAlpha);
+    if (!pipeline_) { outError = "createGraphicsPipeline failed for particles"; return false; }
+    return true;
+}
+
+// M-PT2：nfx 贴图惰性建。读 <repo>/assets/efx/textures/<basename> → stbi 解码
+// （强制 4 通道 RGBA8）→ 建空 RGBA8_UNORM 纹理 + 像素暂存（draw 里 writeTexture
+// 上传——建纹时无 cmd list 可用）。颜色口径：原样采样不做 sRGB 转换，与引擎粒子
+// 颜色线性直接算的既有口径一致（M-PT0 起全链无 gamma）。
+// 注意 NL_ASSET_DIR 注入的是 assets/models（M0.7 model 白名单口径），粒子资产
+// 在 assets/efx——取其父目录拼 efx/textures。
+bool Particles::ensureTexture(nvrhi::IDevice* device, std::string& outError) {
+    const std::string path = std::string(NL_ASSET_DIR "/../efx/textures/") + textureBasename_;
+    std::vector<std::uint8_t> buf;
+    if (!readFileBytes(path.c_str(), buf)) {
+        outError = "nfx texture not found: " + path;
+        return false;
+    }
+    int w = 0, h = 0, comp = 0;
+    stbi_uc* pixels = stbi_load_from_memory(buf.data(), static_cast<int>(buf.size()),
+                                            &w, &h, &comp, 4);
+    if (!pixels || w <= 0 || h <= 0) {
+        outError = "nfx texture decode failed: " + textureBasename_;
+        return false;
+    }
+    const std::uint32_t uW = static_cast<std::uint32_t>(w);
+    const std::uint32_t uH = static_cast<std::uint32_t>(h);
+    texturePixels_.assign(reinterpret_cast<const std::uint8_t*>(pixels),
+                          reinterpret_cast<const std::uint8_t*>(pixels) + uW * uH * 4u);
+    stbi_image_free(pixels);
+    texW_ = uW;
+    texH_ = uH;
+
+    // M-PT3：CPU box-filter mip 链（逐层 2×2 均值下采样，纯整数/加法运算
+    // = 跨次运行逐位确定；奇数尺寸层取 floor，右/下边缘用 clamp 取样）。
+    // 全链存进 texturePixels_ 平铺（层 0 = W×H，层 n = (W>>n)×(H>>n)，
+    // 每层行距 = 层宽×4 无 padding），上传时按层 writeTexture。
+    {
+        const std::uint32_t maxDim = (uW > uH) ? uW : uH;
+        std::uint32_t levels = 1;
+        while ((maxDim >> levels) > 0) ++levels;   // log2(maxDim)+1（1x1 封底）
+        texMipCount_ = levels;
+        std::vector<std::uint8_t> chain = texturePixels_;  // 层 0
+        std::uint32_t pw = uW, ph = uH;
+        for (std::uint32_t l = 1; l < levels; ++l) {
+            const std::uint32_t nw = (pw > 1) ? (pw >> 1) : 1;
+            const std::uint32_t nh = (ph > 1) ? (ph >> 1) : 1;
+            std::vector<std::uint8_t> nl(size_t(nw) * nh * 4u);
+            for (std::uint32_t y = 0; y < nh; ++y) {
+                for (std::uint32_t x = 0; x < nw; ++x) {
+                    // 2×2 均值；pw/ph 为 1 时采样越界 → clamp 到 0（同像素）
+                    const std::uint32_t x1 = (x * 2u + 1u < pw) ? x * 2u + 1u : x * 2u;
+                    const std::uint32_t y1 = (y * 2u + 1u < ph) ? y * 2u + 1u : y * 2u;
+                    const std::uint8_t* s00 = &chain[(size_t(y * 2u) * pw + x * 2u) * 4u];
+                    const std::uint8_t* s01 = &chain[(size_t(y * 2u) * pw + x1) * 4u];
+                    const std::uint8_t* s10 = &chain[(size_t(y1) * pw + x * 2u) * 4u];
+                    const std::uint8_t* s11 = &chain[(size_t(y1) * pw + x1) * 4u];
+                    std::uint8_t* dst = &nl[(size_t(y) * nw + x) * 4u];
+                    for (int c = 0; c < 4; ++c)
+                        dst[c] = std::uint8_t((s00[c] + s01[c] + s10[c] + s11[c]) >> 2);
+                }
+            }
+            chain.swap(nl);
+            texturePixels_.insert(texturePixels_.end(), chain.begin(), chain.end());
+            pw = nw; ph = nh;
+        }
+    }
+
+    nvrhi::TextureDesc d;
+    d.setWidth(uW).setHeight(uH);
+    d.setFormat(nvrhi::Format::RGBA8_UNORM);
+    d.setMipLevels(texMipCount_);   // M-PT3：全 mip 链（远处粒子抗闪烁）
+    d.setInitialState(nvrhi::ResourceStates::CopyDest);   // writeTexture 后转 ShaderResource
+    d.keepInitialState = true;
+    d.debugName = "ParticleTexture";
+    texture_ = device->createTexture(d);
+    if (!texture_) {
+        texturePixels_.clear();
+        texMipCount_ = 1;
+        outError = "createTexture failed for " + textureBasename_;
+        return false;
+    }
+    texturePendingUpload_ = true;
+    nl::core::log::info("[Particles] nfx texture: ", textureBasename_,
+                        " (", w, "x", h, ")");
+    return true;
+}
+
+void Particles::step(float dt) {
+    // 1. 积分 + 摘除死亡（swap-remove；换上来的元素 continue 重进本帧积分，
+    //    数组序 = spawn 序保持稳定，确定性不受摘除方式影响）。
+    //    M-PT1：加速度走 params_.accel（nfx 折算的常加速度；legacy = -y 重力）。
+    for (std::size_t i = 0; i < pool_.size(); ) {
+        Sim& p = pool_[i];
+        p.life -= dt;
+        if (p.life <= 0.0f) {
+            p = pool_.back();
+            pool_.pop_back();
+            continue;
+        }
+        p.vel[0] += params_.accel[0] * dt;
+        p.vel[1] += params_.accel[1] * dt;
+        p.vel[2] += params_.accel[2] * dt;
+        p.pos[0] += p.vel[0] * dt;
+        p.pos[1] += p.vel[1] * dt;
+        p.pos[2] += p.vel[2] * dt;
+        ++i;
+    }
+    // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
+    spawnAccum_ += params_.rate * dt;
+    std::uint32_t spawn = static_cast<std::uint32_t>(spawnAccum_);
+    spawnAccum_ -= static_cast<float>(spawn);
+    for (std::uint32_t k = 0; k < spawn && pool_.size() < kMaxParticles; ++k) {
+        const std::uint32_t s = spawnSeq_++;
+        Sim p;
+        if (!nfxActive_) {
+            // ---- M-PT0 legacy 喷泉（逐位不动：M-PT0 基线字节复现的前提）----
+            const float rx = particleRand01(particleHash(s * 5u + 0u)) * 2.0f - 1.0f;
+            const float rz = particleRand01(particleHash(s * 5u + 1u)) * 2.0f - 1.0f;
+            const float rSpd = particleRand01(particleHash(s * 5u + 2u));
+            const float rLife = particleRand01(particleHash(s * 5u + 3u));
+            const float rSize = particleRand01(particleHash(s * 5u + 4u));
+            p.pos[0] = kEmitterPos[0]; p.pos[1] = kEmitterPos[1]; p.pos[2] = kEmitterPos[2];
+            // 锥形初速：向上为主 + 水平散布，归一化后乘幅值。
+            const float dx = rx * params_.spread, dy = 1.0f, dz = rz * params_.spread;
+            const float invLen = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float speed = params_.speedMin + rSpd * params_.speedSpan;
+            p.vel[0] = dx * invLen * speed;
+            p.vel[1] = dy * invLen * speed;
+            p.vel[2] = dz * invLen * speed;
+            p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
+            p.life = p.maxLife;
+            p.size = params_.sizeMin + rSize * params_.sizeSpan;
+        } else {
+            // ---- M-PT1 .nfx：box 初速 min/max 逐轴 lerp + 定长寿命/尺寸 ----
+            const float rv0 = particleRand01(particleHash(s * 5u + 0u));
+            const float rv1 = particleRand01(particleHash(s * 5u + 1u));
+            const float rv2 = particleRand01(particleHash(s * 5u + 2u));
+            const float rLife = particleRand01(particleHash(s * 5u + 3u));
+            p.pos[0] = params_.spawn[0];
+            p.pos[1] = params_.spawn[1];
+            p.pos[2] = params_.spawn[2];
+            p.vel[0] = params_.velMin[0] + rv0 * (params_.velMax[0] - params_.velMin[0]);
+            p.vel[1] = params_.velMin[1] + rv1 * (params_.velMax[1] - params_.velMin[1]);
+            p.vel[2] = params_.velMin[2] + rv2 * (params_.velMax[2] - params_.velMin[2]);
+            p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
+            p.life = p.maxLife;
+            p.size = params_.sizeMin;
+        }
+        pool_.push_back(p);
+    }
+    // 3. 填 GPU 绘制流：颜色/alpha 生命周期曲线在 CPU 端算好（shader 只画）。
+    gpuData_.clear();
+    gpuData_.reserve(pool_.size());
+    for (const Sim& p : pool_) {
+        const float t = 1.0f - p.life / p.maxLife;   // 0 = 新生，1 = 死亡
+        ParticleGpu g;
+        g.posSize[0] = p.pos[0];
+        g.posSize[1] = p.pos[1];
+        g.posSize[2] = p.pos[2];
+        g.posSize[3] = p.size * (0.6f + 0.4f * (1.0f - t));   // 随寿命略收缩
+        if (!nfxActive_) {
+            // legacy：黄 → 橙红；alpha：出生快速淡入 × 死亡淡出（乘积曲线，无开关跳变）。
+            g.colorAlpha[0] = 1.0f;
+            g.colorAlpha[1] = 0.85f - 0.55f * t;
+            g.colorAlpha[2] = 0.35f - 0.27f * t;
+            const float aIn  = std::min(1.0f, t * 8.0f);
+            const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
+            g.colorAlpha[3] = aIn * aOut;
+        } else {
+            // nfx：colorStart→colorEnd 线性 lerp；fadeIn/fadeOut（秒）乘积曲线。
+            g.colorAlpha[0] = params_.colorStart[0] + (params_.colorEnd[0] - params_.colorStart[0]) * t;
+            g.colorAlpha[1] = params_.colorStart[1] + (params_.colorEnd[1] - params_.colorStart[1]) * t;
+            g.colorAlpha[2] = params_.colorStart[2] + (params_.colorEnd[2] - params_.colorStart[2]) * t;
+            float aIn = 1.0f, aOut = 1.0f;
+            if (params_.fadeIn > 0.0f)
+                aIn = std::min(1.0f, (1.0f - p.life / p.maxLife) * p.maxLife / params_.fadeIn);
+            if (params_.fadeOut > 0.0f)
+                aOut = std::min(1.0f, p.life / params_.fadeOut);
+            g.colorAlpha[3] = params_.colorStart[3] * aIn * aOut;
+        }
+        // M-PT3：flipbook 帧号 CPU 折算（Effekseer GetUV 同式，纯整数运算确定性
+        // 无碍）。elapsed 恢复出生起算秒数后 ×60 = LivingTime（Efke 帧单位），
+        // +0.5f 取整消除逐帧浮点减法累积误差的截断抖动。loop 折算三式与
+        // Effekseer UVFunctions::GetUV 逐式对应。非 flipbook 恒 (0,0)（配合
+        // CB uvRect=(0,0,1,1)，VS 统一公式恒等于 M-PT2 texUv）。
+        if (params_.flipbook.enabled) {
+            const float elapsed = p.maxLife - p.life;   // 出生起算秒数
+            const int livingFrames = int(elapsed * 60.0f + 0.5f);
+            int frameNum = int(float(livingFrames) / params_.flipbook.frameLength);
+            const int fc = params_.flipbook.countX * params_.flipbook.countY;
+            if (params_.flipbook.loopType == 0) {          // once：末帧驻留
+                if (frameNum >= fc) frameNum = fc - 1;
+            } else if (params_.flipbook.loopType == 1) {   // loop
+                frameNum %= fc;
+            } else {                                       // reverse（来回循环）
+                const bool rev = (frameNum / fc) % 2 == 1;
+                frameNum %= fc;
+                if (rev) frameNum = fc - 1 - frameNum;
+            }
+            g.progressMisc[0] = float(frameNum % params_.flipbook.countX);
+            g.progressMisc[1] = float(frameNum / params_.flipbook.countX);
+        } else {
+            g.progressMisc[0] = 0.0f; g.progressMisc[1] = 0.0f;
+        }
+        g.progressMisc[2] = 0.0f; g.progressMisc[3] = 0.0f;
+        gpuData_.push_back(g);
+    }
+    aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
+}
+
+void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                     const nvrhi::Viewport& viewport, const FrameParams& params,
+                     const char* shaderSuffix) {
+    // 懒建（随视口格式一次建好；失败不炸整帧，本帧跳过下帧重试——hizFailed_ 同款口径）。
+    if (!pipeline_) {
+        std::string err;
+        if (!ensure(cmd->getDevice(), framebuffer->getFramebufferInfo(), shaderSuffix, err)) {
+            nl::core::log::deviceError("Particles", err + " (skipping this frame)");
+            return;
+        }
+    }
+    // M-PT1：additive 管线懒建（仅 nfx blend=additive 时需要；同 shader/绑定布局）。
+    nvrhi::GraphicsPipelineHandle activePipeline = pipeline_;
+    if (nfxActive_ && params_.additive && !pipelineAdditive_) {
+        nvrhi::GraphicsPipelineDesc desc;
+        desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+            .setVertexShader(vs_).setFragmentShader(ps_)
+            .addBindingLayout(bindingLayout_);
+        desc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+        nvrhi::BlendState::RenderTarget rt;
+        rt.setBlendEnable(true);
+        rt.setSrcBlend(nvrhi::BlendFactor::One);          // additive：src*1 + dst*1
+        rt.setDestBlend(nvrhi::BlendFactor::One);
+        rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
+        rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+        desc.renderState.blendState.setRenderTarget(0, rt);
+        pipelineAdditive_ = cmd->getDevice()->createGraphicsPipeline(
+            desc, framebuffer->getFramebufferInfo());
+        if (!pipelineAdditive_) {
+            nl::core::log::deviceError("Particles", "createGraphicsPipeline failed for additive (fall back to alpha)");
+        }
+    }
+    if (nfxActive_ && params_.additive && pipelineAdditive_)
+        activePipeline = pipelineAdditive_;
+    // 每帧固定步长一步：粒子状态 = 已渲染帧数的纯函数（截图确定性前提）。
+    step(kParticleStepDt);
+    if (aliveCount_ == 0) return;
+
+    // M-PT2：贴图像素上传（建纹时无 cmd list，推迟到首帧这里；writeTexture +
+    // setTextureState 同列表——0x87d 第一坑同源纪律：上传与状态转换不跨列表）。
+    if (texturePendingUpload_ || dummyPendingUpload_) {
+        static const std::uint8_t kWhite[4] = {255, 255, 255, 255};
+        if (texturePendingUpload_) {
+            // M-PT3：全 mip 层逐层上传（texturePixels_ 平铺布局见 ensureTexture；
+            // writeTexture 第 3 参 = mip 层号，NVRHI staging 内部按 subresource 路由）。
+            {
+                const std::uint8_t* base = texturePixels_.data();
+                std::uint32_t pw = texW_, ph = texH_;
+                std::size_t off = 0;
+                for (std::uint32_t l = 0; l < texMipCount_; ++l) {
+                    cmd->writeTexture(texture_, 0, l, base + off, pw * 4u);
+                    off += std::size_t(pw) * ph * 4u;
+                    pw = (pw > 1) ? (pw >> 1) : 1;
+                    ph = (ph > 1) ? (ph >> 1) : 1;
+                }
+            }
+            cmd->setTextureState(texture_, nvrhi::AllSubresources,
+                                 nvrhi::ResourceStates::ShaderResource);
+            texturePixels_.clear();
+            texturePixels_.shrink_to_fit();
+            texturePendingUpload_ = false;
+        }
+        if (dummyPendingUpload_) {
+            cmd->writeTexture(dummyTex_, 0, 0, kWhite, 4u);
+            cmd->setTextureState(dummyTex_, nvrhi::AllSubresources,
+                                 nvrhi::ResourceStates::ShaderResource);
+            dummyPendingUpload_ = false;
+        }
+    }
+
+    // 每帧重写 CB（volatile 全量覆写）：mvp + 相机基向量。
+    // 列主序 view 矩阵的 right/up = 第 0/1 行的 xyz（m[col*4+row]）。
+    ParticleConstantsCB cb;
+    std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
+    cb.camRight[0] = params.view[0]; cb.camRight[1] = params.view[4];
+    cb.camRight[2] = params.view[8]; cb.camRight[3] = 0.0f;
+    cb.camUp[0] = params.view[1]; cb.camUp[1] = params.view[5];
+    cb.camUp[2] = params.view[9]; cb.camUp[3] = 0.0f;
+    cb.params[0] = 1.0f;
+    cb.params[1] = texture_ ? 1.0f : 0.0f;  // M-PT2：PS 贴图开关（0 = 软圆盘路径）
+    cb.params[2] = params_.ratioY;          // M-PT2：Y/X 尺寸比（方形恒 1.0 保形）
+    cb.params[3] = params_.flipbook.enabled ? 1.0f : 0.0f; // M-PT3：VS flipbook UV 开关
+    // M-PT3：flipbook UV 区域。非 flipbook 恒 (0,0,1,1)——VS 统一公式在此取值下
+    // 精确恒等于 M-PT2 的 texUv（×1.0/+0.0 IEEE 恒等，pt0/pt1/pt2 软圆盘+恒等
+    // 贴图路径零漂移）；flipbook 时 = .nfx offset/cell。
+    if (params_.flipbook.enabled) {
+        cb.uvRect[0] = params_.flipbook.offsetU;
+        cb.uvRect[1] = params_.flipbook.offsetV;
+        cb.uvRect[2] = params_.flipbook.cellW;
+        cb.uvRect[3] = params_.flipbook.cellH;
+    } else {
+        cb.uvRect[0] = 0.0f; cb.uvRect[1] = 0.0f;
+        cb.uvRect[2] = 1.0f; cb.uvRect[3] = 1.0f;
+    }
+    cmd->writeBuffer(constants_, &cb, sizeof(cb));
+    cmd->writeBuffer(instanceData_, gpuData_.data(),
+                     aliveCount_ * static_cast<std::uint32_t>(sizeof(ParticleGpu)));
+
+    nvrhi::GraphicsState state;
+    state.setPipeline(activePipeline)
+         .setFramebuffer(framebuffer)
+         .addBindingSet(bindingSet_);
+    state.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(state);
+    nvrhi::DrawArguments args;
+    args.setVertexCount(6);          // 每实例两枚三角形（VS 按 SV_VertexID 展开）
+    args.setInstanceCount(aliveCount_);
+    cmd->draw(args);
+}
+
+// M-PT1：.nfx v1 加载端。JSON → 模拟参数折算；运行时零 Effekseer 依赖
+// （转换期已把 Effekseer 参数面折进 NFX1 子集，子集外根本到不了这里）。
+// 成功后清空模拟状态重启时间线（spawnSeq 归零 = 确定性流重新出发）。
+bool Particles::loadNfx(const char* path, std::string& outError) {
+    std::vector<std::uint8_t> buf;
+    if (!readFileBytes(path, buf)) {
+        outError = std::string("cannot open .nfx: ") + path;
+        return false;
+    }
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(buf.data(), buf.data() + buf.size());
+    } catch (const std::exception& e) {
+        outError = std::string(".nfx json parse failed: ") + e.what();
+        return false;
+    }
+    if (!j.is_object() || j.value("magic", "") != "NFX1") {
+        outError = ".nfx bad magic (want NFX1)";
+        return false;
+    }
+    if (!j.contains("emitter") || !j.contains("render")) {
+        outError = ".nfx missing emitter/render section";
+        return false;
+    }
+    const nlohmann::json& e = j["emitter"];
+    const nlohmann::json& r = j["render"];
+    auto getArr2 = [&](const nlohmann::json& o, const char* k, float out[2]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 2) return false;
+        out[0] = o[k][0].get<float>();
+        out[1] = o[k][1].get<float>();
+        return true;
+    };
+    auto getArr3 = [&](const nlohmann::json& o, const char* k, float out[3]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 3) return false;
+        for (int a = 0; a < 3; ++a) out[a] = o[k][a].get<float>();
+        return true;
+    };
+    auto getArr4 = [&](const nlohmann::json& o, const char* k, float out[4]) {
+        if (!o.contains(k) || !o[k].is_array() || o[k].size() != 4) return false;
+        for (int c = 0; c < 4; ++c) out[c] = o[k][c].get<float>();
+        return true;
+    };
+
+    float rate[2], life[2], spawn[3], vMin[3], vMax[3], accel[3];
+    float cStart[4], cEnd[4], size[2];
+    if (!getArr2(e, "rate", rate) || !getArr2(e, "life", life) ||
+        !getArr3(e, "spawnPoint", spawn) || !getArr3(e, "velocityMin", vMin) ||
+        !getArr3(e, "velocityMax", vMax) || !getArr3(e, "accel", accel) ||
+        !getArr4(r, "colorStart", cStart) || !getArr4(r, "colorEnd", cEnd) ||
+        !r.contains("size") || !r["size"].is_array() || r["size"].size() != 2) {
+        outError = ".nfx malformed arrays";
+        return false;
+    }
+    size[0] = r["size"][0].get<float>();
+    size[1] = r["size"][1].get<float>();
+
+    Params p;             // 从 NFX1 缺省起折算（不复带 legacy 字段）
+    p.rate = 0.5f * (rate[0] + rate[1]);            // min/max 取均值（区间留档在 .nfx）
+    p.lifeMin = life[0];
+    p.lifeSpan = life[1] > life[0] ? (life[1] - life[0]) : 0.0f;
+    p.spawn[0] = spawn[0]; p.spawn[1] = spawn[1]; p.spawn[2] = spawn[2];
+    p.velMin[0] = vMin[0]; p.velMin[1] = vMin[1]; p.velMin[2] = vMin[2];
+    p.velMax[0] = vMax[0]; p.velMax[1] = vMax[1]; p.velMax[2] = vMax[2];
+    p.accel[0] = accel[0]; p.accel[1] = accel[1]; p.accel[2] = accel[2];
+    p.sizeMin = size[0];
+    p.ratioY = (size[0] > 0.0f && size[1] != size[0])
+                   ? (size[1] / size[0]) : 1.0f;    // M-PT2：Y/X 比（方形精确 1.0 保形）
+    p.sizeSpan = 0.0f;                               // v1 定长尺寸
+    for (int c = 0; c < 4; ++c) {
+        p.colorStart[c] = cStart[c] / 255.0f;        // .nfx 色值 0..255 → 线性 0..1
+        p.colorEnd[c]   = cEnd[c] / 255.0f;
+    }
+    p.fadeIn = r.value("fadeIn", 0.0f);
+    p.fadeOut = r.value("fadeOut", 0.0f);
+    std::string blend = r.value("blend", "alpha");
+    p.additive = (blend == "additive");
+
+    // M-PT3：flipbook 可选字段（缺省/缺字段 = 无）。字段校验从严——畸形即拒
+    // （exit 路径返回 false，加载端保持 legacy 参数不变）。
+    if (r.contains("flipbook")) {
+        const nlohmann::json& fb = r["flipbook"];
+        if (!fb.is_object() || !fb.contains("frameLength") || !fb.contains("countX") ||
+            !fb.contains("countY") || !fb.contains("loop") || !fb.contains("offset") ||
+            !fb.contains("cell") || !fb["offset"].is_array() || fb["offset"].size() != 2 ||
+            !fb["cell"].is_array() || fb["cell"].size() != 2) {
+            outError = ".nfx malformed flipbook object";
+            return false;
+        }
+        p.flipbook.enabled = true;
+        p.flipbook.frameLength = fb["frameLength"].get<float>();
+        p.flipbook.countX = fb["countX"].get<int>();
+        p.flipbook.countY = fb["countY"].get<int>();
+        p.flipbook.loopType = fb["loop"].get<int>();
+        p.flipbook.offsetU = fb["offset"][0].get<float>();
+        p.flipbook.offsetV = fb["offset"][1].get<float>();
+        p.flipbook.cellW = fb["cell"][0].get<float>();
+        p.flipbook.cellH = fb["cell"][1].get<float>();
+        if (p.flipbook.frameLength <= 0.0f || p.flipbook.countX <= 0 || p.flipbook.countY <= 0 ||
+            p.flipbook.loopType < 0 || p.flipbook.loopType > 2 ||
+            p.flipbook.cellW <= 0.0f || p.flipbook.cellH <= 0.0f) {
+            outError = ".nfx flipbook params out of range";
+            return false;
+        }
+    }
+
+    // M-PT2：贴图 basename（.efkefc 内部相对路径只取尾段；运行时解析为
+    // assets/efx/textures/<basename>，首帧 ensureTexture 找不到/解码失败回退软圆盘）。
+    // 注意 texture 字段可能为 JSON null（M-PT1 转换器对无贴图特效的产物）——
+    // value() 遇 null 抛 type_error 而非返回默认值，必须显式判 null。
+    const std::string tex = (r.contains("texture") && r["texture"].is_string())
+                                ? r["texture"].get<std::string>() : "";
+    textureBasename_.clear();
+    textureDirty_ = false;
+    if (!tex.empty() && tex != "null") {
+        const std::size_t tp = tex.find_last_of("/\\");
+        textureBasename_ = (tp == std::string::npos) ? tex : tex.substr(tp + 1);
+        textureDirty_ = true;
+    }
+
+    params_ = p;
+    nfxActive_ = true;
+    nfxName_ = path;
+    const std::size_t slash = nfxName_.find_last_of("/\\");
+    if (slash != std::string::npos) nfxName_ = nfxName_.substr(slash + 1);
+
+    // 模拟状态归零重启：粒子时间线从加载帧出发（spawnSeq=0 → pcg 流确定性重启）。
+    pool_.clear();
+    gpuData_.clear();
+    aliveCount_ = 0;
+    spawnAccum_ = 0.0f;
+    spawnSeq_ = 0;
+    return true;
+}
+
+void Particles::invalidate() {
+    pipeline_      = nullptr;
+    pipelineAdditive_ = nullptr;
+    bindingLayout_ = nullptr;
+    bindingSet_    = nullptr;
+    vs_ = nullptr;
+    ps_ = nullptr;
+    constants_     = nullptr;
+    instanceData_  = nullptr;
+    // M-PT2：texture_/dummyTex_/sampler_ 是 device 级资源，随 resize 重建管线时
+    // 保留（bindingSet 重建会重新引用现句柄）；textureDirty_/pending 状态不动。
+    // CPU 模拟状态（pool_/gpuData_/spawnAccum_/spawnSeq_）不清：管线随 resize
+    // 重建是显示层的事，模拟时间线不能断（断续帧会破坏确定性叙事，也丢画面连续性）。
+}
+
+void Particles::shutdown() {
+    invalidate();
+    texture_ = nullptr;
+    dummyTex_ = nullptr;
+    sampler_ = nullptr;
+    textureDirty_ = false;
+    texturePendingUpload_ = false;
+    dummyPendingUpload_ = false;
+    textureBasename_.clear();
+    texturePixels_.clear();
+    texW_ = 0; texH_ = 0;
+    pool_.clear();
+    gpuData_.clear();
+    aliveCount_ = 0;
+    spawnAccum_ = 0.0f;
+    spawnSeq_   = 0;
+}
+
+void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport, const FrameParams& params) {
+    // M-PT0：仅当显式开启才步进 + 绘制（缺省零开销，既有模式基线一像素不动）。
+    if (!params.particles) return;
+    particles_.draw(cmd, framebuffer, viewport, params, shaderSuffix_.c_str());
+}
+
 void Scene::shutdown() {
     // M8.1：TLAS 资源（AS 句柄 + 探针管线，device 存活期释放）。
     tlasReady_ = false;
@@ -4751,6 +5420,8 @@ void Scene::shutdown() {
     rtConstants_ = nullptr;
     rtTarget_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
+    // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
+    particles_.shutdown();
     blasReady_ = false;
     blasTriangleCount_ = 0;
     blasBuildMs_ = 0.0f;

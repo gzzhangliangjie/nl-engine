@@ -101,6 +101,11 @@ struct FrameParams {
     //   0 = clusterId → 颜色，1 = 全局三角 id (clusterId<<8|triId) → 颜色。
     // 走 FrameParams 而不是 SceneConstants：g_options 的槽位已被 cull 遍历占用。
     int   visVizMode  = 0;
+
+    // M-PT0：粒子叠加层总开关（viewer --particles 传入；缺省 false = 既有模式
+    // 基线一像素不动）。开启时 renderer 每帧固定步长（1/60s）步进 CPU 模拟并
+    // instanced billboard 绘制（主场景后、HUD 前，alpha blend 深度测试开写入关）。
+    bool  particles   = false;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -191,6 +196,9 @@ struct HudFrame {
     int   tlasInstanceCount   = 0;
     float tlasMs              = 0.0f;
     bool  tlasTimingAvailable = false;
+    // ---- M-PT0：粒子证据行（仅 particles 模式显示，其它模式一像素不动）。
+    bool  particlesEnabled    = false;
+    int   particleAlive       = 0;
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
@@ -283,6 +291,9 @@ struct DeviceInfo {
     float lastGpuMs = 0.0f;
     // M-E1b.0：ECS 场景实例数（--scene 模式非零；backend 每帧 poll 时从 scene_ 拷）。
     std::uint32_t instanceCount = 0;
+    // M-PT0：粒子叠加层活粒子数（backend 每帧 poll 时从 scene_ 拷；--particles
+    // 关闭时恒 0——viewer 据此给 HUD 喂数与打稳态日志锚点）。
+    int particleAlive = 0;
 };
 
 class Renderer {
@@ -366,6 +377,11 @@ public:
     // objectCount 必须与 loadEcsScene 一致（batch 槽号一一对应）。viewer 在每帧
     // renderFrame 之前调用：World tick（serial/parallel）→ 收集矩阵 → 这里上传。
     bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount);
+
+    // M-PT1：.nfx v1 加载端（viewer --nfx <path>）。转发 backend 的
+    // scene_.loadParticlesNfx：解析 NFX1 JSON → 折进粒子模拟参数面。运行时
+    // 零 Effekseer 依赖。失败返回 false（lastError() 带原因），legacy 喷泉不受影响。
+    bool loadParticlesNfx(const char* path);
 
 private:
     Renderer();
