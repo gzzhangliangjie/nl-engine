@@ -1,12 +1,12 @@
 @echo off
 rem P8 M-I0 acceptance: core/input state layer (A-class input track).
 rem Layers:
-rem   1. selftest on BOTH backend build trees (DX12 + VULKAN) â€” 9 sections,
+rem   1. selftest on BOTH backend build trees (DX12 + VULKAN) ¡ª 9 sections,
 rem      edges/combos/repeat/mouse/oob/mods/determinism, numeric anchors only
 rem   2. trace: dump the 12-frame synthetic drive sequence (real tool output)
 rem      + check: re-verify the dumped TSV against the same 5 anchors
 rem   3. evidence PNG regenerated from the TSV and byte-compared to the
-rem      committed baseline (fc /b) â€” image must be a pure function of real output
+rem      committed baseline (fc /b) ¡ª image must be a pure function of real output
 rem   4. negative paths: unknown section (exit 2), missing tsv (exit 1)
 rem Exit 0 = all green. Build first:
 rem   scripts\build-m0.2.bat DX12
