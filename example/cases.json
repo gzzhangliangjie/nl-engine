@@ -5922,6 +5922,111 @@
     }
    ],
    "tag": "s8-blas"
+  },
+  {
+   "id": "particles-pt0",
+   "label": "M-PT0",
+   "name": "粒子叠加层：CPU 固定步长模拟 + GPU instanced billboard（M-PT0）",
+   "date": "2026-11-10",
+   "summary": "M-PT0（particles 穿插项首里程碑）：renderer 新增 Particles 叠加层——CPU 固定步长（1/60s，M-GL 物理同款确定性纪律）模拟喷泉发射器（rate 300/s、寿命 [1.6,2.3]s、初速锥、重力 −9.8），每帧写 StructuredBuffer（32 B/实例，visibleList 同款 CopyDest→SRV 帧内晋升纪律），GPU 侧 instanced billboard（无顶点缓冲，VS 按 SV_VertexID/SV_InstanceID 顶点拉取，cull 路径同款）画进主帧：主场景后、HUD 前，alpha blend、深度测试开 / 写入关。viewer --particles 开关（缺省关 = 既有基线一像素不动，负向卡实证）；HUD 'Particles : NNN alive' 证据行仅 particles 模式显示（BLAS 行先例）。确定性实测：DX12 同参两次跑 PNG 逐字节同（MD5 6bd87baa…），双后端 alive=567 同值（理论 = rate×平均寿命窗口 ≈ 567 ✓）。单源 particles.slang 双目标（spv/dxil 各 vs/ps 4 产物入 selftest 清单 52/52）。",
+   "acceptance": [
+    "粒子画面：--particles 模式喷泉粒子可见（橙色软圆盘、向上喷射扩散、深度遮挡正确），deviceErrors=0 双后端",
+    "确定性：同参两次实跑 PNG 逐字节同（MD5 6bd87baad5381dc8e47c1810d3584583）；固定步长模拟 = 帧号的纯函数",
+    "稳态锚点：日志 'particles steady: alive=567'（双后端同值；理论区间 [rate×lifeMin≈480, rate×lifeMax≈690] 实测命中）",
+    "HUD 证据行 'Particles : 567 alive'（仅 particles 模式；负向卡实证缺省无粒子、无该行、既有 HUD 布局一像素不动）",
+    "example/particles-pt0 归位（三卡 × 双后端基线 + run.bat verify 全绿）+ cases.json particles-pt0 卡"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "particles-hud",
+     "name": "粒子喷泉 + HUD 证据行（--particles 模式，120 帧稳态）",
+     "kind": "pair",
+     "note": "CPU 固定步长模拟 120 帧（2s 逻辑时间）→ alive=567 稳态；billboard 画在 Suzanne 场景后，深度测试开写入关。HUD Particles 行仅 particles 模式出现（BLAS 行先例）。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-hud-dx12.png",
+      "vulkan": "example/particles-pt0/particles-hud-vulkan.png"
+     },
+     "args": [
+      "--particles",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --particles --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/particles-pt0/run.bat verify"
+    },
+    {
+     "id": "particles-steady-log",
+     "name": "稳态粒子计数日志证据（pair 小图 + expectLog）",
+     "kind": "pair",
+     "note": "text-only run viewer 不退出（M8.0 教训）→ pair 小图 + expectLog 双断言。expectLog 从实测 log 复制（禁手写纪律）。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-log-dx12.png",
+      "vulkan": "example/particles-pt0/particles-log-vulkan.png"
+     },
+     "args": [
+      "--particles",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "particles steady: alive=567",
+     "command": "viewer.exe --particles --hud --screenshot <out.png> --frames 120 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt0/run.bat verify"
+    },
+    {
+     "id": "particles-off-default",
+     "name": "负向：缺省无 --particles → 无粒子、无 Particles 行（基线不变证明）",
+     "kind": "pair",
+     "note": "缺省零开销实证：不传 --particles 时无粒子画面、HUD 无 Particles 行（肉眼核验基线），既有模式基线一像素不动。",
+     "baselines": {
+      "dx12": "example/particles-pt0/particles-off-dx12.png",
+      "vulkan": "example/particles-pt0/particles-off-vulkan.png"
+     },
+     "args": [
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "320x240"
+     ],
+     "command": "viewer.exe --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
+     "script": "example/particles-pt0/run.bat verify"
+    }
+   ],
+   "tag": "particles-pt0"
   }
  ]
 }

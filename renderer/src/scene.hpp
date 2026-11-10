@@ -105,6 +105,65 @@ private:
     std::uint32_t                 capacity_ = 0; // 当前 VB 容量（顶点数）
 };
 
+// M-PT0：粒子叠加层（instanced billboard）。与 DebugLines 同款单源/双目标约定：
+// 一份 particles.slang 出 spv/dxil。CPU 固定步长模拟（1/60s，与 M-GL 物理
+// 同款确定性纪律——截图基线逐字节复现的前提），每帧 writeBuffer 进
+// StructuredBuffer<float4>×2（32 B/实例），无顶点缓冲（VS 用 SV_VertexID/
+// SV_InstanceID，cull 路径同款）。alpha blend，深度测试开 / 深度写入关——
+// 被实体遮挡的粒子不显示，但不写深度（不遮挡后续 HUD）。
+// 默认不建/不画（--particles 关闭时零开销，S7 渲染基线字节不变）。
+class Particles {
+public:
+    // 用 framebuffer 格式信息建唯一一条 billboard 管线（只建一次）。
+    // shaderSuffix = "spv" / "dxil"；入口恒 vsMain/psMain（后端传 "main"，§2.4）。
+    bool ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                const char* shaderSuffix, std::string& outError);
+    // 每帧：CPU 固定步长模拟一步 → 写 volatile CB + 实例数据 → instanced 绘制。
+    // 只在 params.particles 开启时被调用（缺省零开销）。
+    void draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+              const nvrhi::Viewport& viewport, const FrameParams& params,
+              const char* shaderSuffix);
+    void invalidate();
+    void shutdown();
+
+    std::uint32_t aliveCount() const { return aliveCount_; }
+
+private:
+    // CPU 固定步长模拟（喷泉发射器：发射率/初速锥/重力/寿命曲线全部常数，
+    // RNG = pcg(序列号) 确定性流——run-to-run 与跨后端逐位一致）。
+    void step(float dt);
+
+    static constexpr std::uint32_t kMaxParticles = 4096;
+
+    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，32 B）。
+    struct ParticleGpu {
+        float posSize[4];    // xyz = 世界位置，w = 尺寸
+        float colorAlpha[4]; // rgb = 颜色，a = alpha
+    };
+    static_assert(sizeof(ParticleGpu) == 32, "ParticleGpu must be 32B");
+
+    // CPU 侧模拟状态（SoA 向量化不如确定性重要，AoS 简单直接）。
+    struct Sim {
+        float pos[3];
+        float vel[3];
+        float life;     // 剩余寿命（秒）
+        float maxLife;  // 总寿命（秒，alpha/size 曲线分母）
+        float size;     // 尺寸（米）
+    };
+    std::vector<Sim>          pool_;       // 活粒子（spawn 序，swap-remove 摘死者）
+    std::vector<ParticleGpu>  gpuData_;    // 每帧重填的绘制流（alive 顺序）
+    float                     spawnAccum_ = 0.0f;  // 发射率积分残差（固定 dt 下确定性）
+    std::uint32_t             spawnSeq_   = 0;     // RNG 流序号（pcg 输入）
+    std::uint32_t             aliveCount_ = 0;
+
+    nvrhi::ShaderHandle           vs_, ps_;
+    nvrhi::BufferHandle           constants_;     // volatile CB 112 B（b0）
+    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×2（t0）
+    nvrhi::BindingLayoutHandle    bindingLayout_;
+    nvrhi::BindingSetHandle       bindingSet_;
+    nvrhi::GraphicsPipelineHandle pipeline_;
+};
+
 class Scene {
 public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
@@ -262,6 +321,14 @@ public:
     void drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                        const nvrhi::Viewport& viewport, const FrameParams& params);
 
+    // M-PT0：粒子叠加层绘制入口。后端在 scene_.draw 之后、HUD 之前调用（与
+    // drawDebugLines 同一挂点顺序：粒子在其后画）。仅当 params.particles 才
+    // 步进模拟 + 绘制（缺省零开销，既有模式基线一像素不动）。
+    void drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params);
+    // M-PT0：活粒子数（HUD/DeviceInfo 证据行数据源；--particles 关闭时恒 0）。
+    int particlesAlive() const { return static_cast<int>(particles_.aliveCount()); }
+
     bool ready() const {
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
             return pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_
@@ -325,6 +392,8 @@ private:
     nvrhi::ShaderHandle           vs_, ps_;
     // M-P3：物理调试线框叠加层（LINE_LIST）。默认不建不画，debugLines 关闭时零开销。
     DebugLines                    dbgLines_;
+    // M-PT0：粒子叠加层（instanced billboard）。默认不建不画，particles 关闭时零开销。
+    Particles                     particles_;
     // 各 init* 写入，供 dbgLines_.ensure 定位 debug_line.{vs,ps}.<suffix> 字节码。
     std::string                   shaderSuffix_;
     nvrhi::BufferHandle           vertexBuffer_, indexBuffer_, constants_;

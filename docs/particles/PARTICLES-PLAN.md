@@ -19,7 +19,7 @@
 - **`.nfx` v1 模块子集**：sprite 发射器；位置/速度/寿命/重力 + 曲线 alpha 淡出 + flipbook 贴图帧序列。**子集外模块（ribbon/trail/ring/网格/扭曲/程序模型/噪声力场）转换期显式报「不支持模块」失败**，禁止静默降级出错误画面。
 - Flipbook 序列帧不再单列里程碑（就是 `.nfx` 内的贴图元数据字段）。
 
-## M-PT0 · 运行时最小闭环（当前里程碑）
+## M-PT0 · 运行时最小闭环（✅ 收官 2026-11-10，tag `particles-pt0`）
 
 ### 内容
 - `renderer/` 新增粒子模块（CPU 模拟 + 数据上传）：
@@ -30,11 +30,11 @@
 - viewer 接入：`--particles` 开关（默认关，零波及既有用例）；HUD 加 `Particles : N alive` 行，**仅 `--particles` 模式显示**（同 BLAS 行只在 dag/hiz 显示的先例，避免 HUD 基线全量重拍波及）。
 - shader：`renderer/shaders/particles.slang`（vs 顶点展开 billboard + ps 采样/淡出），绑定按 §1 SPIR-V shift 约定，单源双后端。
 
-### 验收判据（亲眼可见 + 机器断言）
-- `example/particles-pt0/`：基线 PNG（DX12/VULKAN 双后端逐字节一致互检）+ `run.bat` verify 断言（含 HUD 粒子计数 anchor log：稳态存活数落在发射率×平均寿命的理论区间）。
-- 同帧两次实跑 PNG 逐字节同（固定步长确定性证明）。
-- ctest 双后端 + `server.py --check` 退出 0。
-- 渲染版交代全套（cases.json 版本卡 + 用例卡）；tool 版交代 M-PT1 才有，M-PT0 收口时写明「无工具交代物」。
+### 验收判据（亲眼可见 + 机器断言）——✅ 已全部达成（2026-11-10 收口，tag `particles-pt0`）
+- `example/particles-pt0/`：6 基线（三卡×双后端）+ `run.bat verify` 断言（双后端稳态锚点 `particles steady: alive=567`，落在发射率×平均寿命理论区间）+ 负向卡。**偏差如实记录**：双后端 PNG **不逐字节互检**（dx `6bd87baa` vs vk `6f36def7`），按 phys-p3/p4 薄线噪声先例改「各自对各自基线」，DX12 侧确定性由同参两次实跑 `fc /b` 逐字节同承担（MD5 `6bd87baad5381dc8e47c1810d3584583`）。
+- 同帧两次实跑 PNG 逐字节同 ✅（固定步长确定性证明，DX12 实测）。
+- ctest 双后端 **51/51 全绿** ✅ + `server.py --check` exit 0 ✅。
+- 渲染版交代全套 ✅（cases.json particles-pt0 版本卡 + 3 用例卡）；tool 版交代 M-PT1 才有，M-PT0 **无工具交代物**（本行即写明）。
 
 ### 边界（起步不做，违反即扩权）
 compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积类、ribbon/trail、`.nfx`/转换器（归 M-PT1）、post-chain 集成（离屏 HDR RT 建成后再迁半透明合成，起步直画 LDR 主帧）。

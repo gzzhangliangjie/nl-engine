@@ -2592,6 +2592,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
 void Scene::invalidatePipelines() {
     // M-P3：调试管线随主管线一起重建（格式不变，重 ensure 即重建同格式 PSO）。
     dbgLines_.invalidate();
+    // M-PT0：粒子管线随主管线一起重建（实例缓冲/模拟状态不清，draw 下帧懒建）。
+    particles_.invalidate();
     // M6.0：hiz 管线随主管线一起重建（纹理/绑定集按视口尺寸懒建，不受影响）。
     prepassPSO_ = nullptr;
     vizPSO_ = nullptr;
@@ -4284,8 +4286,264 @@ void Scene::drawDebugLines(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     dbgLines_.draw(cmd, framebuffer, viewport, params);
 }
 
+// ---- M-PT0：粒子叠加层（CPU 固定步长模拟 + instanced billboard）----
+
+namespace {
+
+// 与 M1.3 clusterColor 同族的 pcg 整数 hash——粒子参数从发射序列号推导，
+// 无时间/时钟输入：run-to-run 与跨后端逐位一致（截图确定性前提）。
+std::uint32_t particleHash(std::uint32_t v) {
+    v = v * 747796405u + 2891336453u;
+    v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    v = (v >> 22u) ^ v;
+    return v;
+}
+// [0,1) 均匀（24 位精度）。
+float particleRand01(std::uint32_t v) {
+    return static_cast<float>(v & 0xFFFFFFu) / 16777215.0f;
+}
+
+// 喷泉发射器常数（M-PT0 全部钉死，不做参数面——起步口径）。
+constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
+constexpr float kEmitRate        = 300.0f;        // 粒子/秒
+constexpr float kParticleGravity = 9.8f;          // m/s²（向下）
+constexpr float kLifeMin   = 1.6f, kLifeSpan  = 0.7f;  // 寿命 [1.6, 2.3) s
+constexpr float kSpeedMin  = 2.0f, kSpeedSpan = 1.0f;  // 初速幅值 [2.0, 3.0) m/s
+constexpr float kSizeMin   = 0.05f, kSizeSpan = 0.05f; // 尺寸 [0.05, 0.10) m
+constexpr float kConeSpread = 0.35f;              // 初速水平锥散布
+constexpr float kEmitterPos[3] = {0.0f, -0.55f, 0.0f};
+
+// CB 布局（与 particles.slang 的 cbuffer b0 逐字节对应，112 B）。
+struct ParticleConstantsCB {
+    float mvp[16];
+    float camRight[4];
+    float camUp[4];
+    float params[4];   // x = billboard 整体尺寸倍率
+};
+static_assert(sizeof(ParticleConstantsCB) == 112, "particle cbuffer layout must match shader");
+
+} // namespace
+
+bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,
+                       const char* shaderSuffix, std::string& outError) {
+    if (pipeline_) return true;
+
+    // 加载 particles 双目标字节码（同一份 .slang 出 spv/dxil）。
+    auto path = [shaderSuffix](const char* stage) {
+        return std::string(NL_SHADER_DIR) + "/particles." + stage + "." + shaderSuffix;
+    };
+    std::vector<std::uint8_t> vsBlob, psBlob;
+    if (!readFileBytes(path("vs").c_str(), vsBlob) ||
+        !readFileBytes(path("ps").c_str(), psBlob)) {
+        outError = std::string("failed to load particles shader (") + shaderSuffix + ")";
+        return false;
+    }
+    // SPIR-V 恒 main、DXIL 入口由 -entry 定（NVRHI 忽略 DX12 entryName）——
+    // 两个后端统一传 "main"（debug_line 同款，§2.4）。
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+    vs_ = device->createShader(vsDesc, vsBlob.data(), vsBlob.size());
+    ps_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
+    if (!vs_ || !ps_) { outError = "createShader failed for particles"; return false; }
+
+    // volatile CB：128 B（mvp + 相机基向量 + 预留），每帧全量覆写（§2.7 纪律）。
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = sizeof(ParticleConstantsCB);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "ParticleConstants";
+    constants_ = device->createBuffer(cbDesc);
+    if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
+
+    // 实例数据 SSBO：每实例 32 B（float4×2），structStride 必须与 shader 视角一致。
+    // 每帧 CopyDest 起步（writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态
+    // 纪律，§2.15 buffer 每帧写回登记）。
+    nvrhi::BufferDesc instDesc;
+    instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
+    instDesc.structStride = sizeof(ParticleGpu);
+    instDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    instDesc.keepInitialState = true;
+    instDesc.debugName = "ParticleInstances";
+    instanceData_ = device->createBuffer(instDesc);
+    if (!instanceData_) { outError = "createBuffer failed for particle instances"; return false; }
+
+    // 绑定布局：b0 volatile CB + t0 StructuredBuffer（§2.7：单管线单一 set）。
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0));
+    bindingLayout_ = device->createBindingLayout(layoutDesc);
+    if (!bindingLayout_) { outError = "createBindingLayout failed for particles"; return false; }
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_));
+    setDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceData_));
+    bindingSet_ = device->createBindingSet(setDesc, bindingLayout_);
+    if (!bindingSet_) { outError = "createBindingSet failed for particles"; return false; }
+
+    // 管线：TriangleList + 无 input layout（VS 用 SV_VertexID/SV_InstanceID 顶点
+    // 拉取，cull 路径同款）。alpha blend + depth test 开 / write 关 + cull None
+    // （billboard 两面可见）。不写深度 → 不遮挡后续 HUD。
+    nvrhi::GraphicsPipelineDesc desc;
+    desc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+        .setVertexShader(vs_).setFragmentShader(ps_)
+        .addBindingLayout(bindingLayout_);
+    desc.renderState.rasterState
+        .setFrontCounterClockwise(true)
+        .setFillMode(nvrhi::RasterFillMode::Solid)
+        .setCullMode(nvrhi::RasterCullMode::None);
+    desc.renderState.depthStencilState.enableDepthTest().disableDepthWrite();
+    nvrhi::BlendState::RenderTarget rt;
+    rt.setBlendEnable(true);
+    rt.setSrcBlend(nvrhi::BlendFactor::SrcAlpha);
+    rt.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha);
+    rt.setSrcBlendAlpha(nvrhi::BlendFactor::One);
+    rt.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+    desc.renderState.blendState.setRenderTarget(0, rt);
+    pipeline_ = device->createGraphicsPipeline(desc, info);
+    if (!pipeline_) { outError = "createGraphicsPipeline failed for particles"; return false; }
+    return true;
+}
+
+void Particles::step(float dt) {
+    // 1. 积分 + 摘除死亡（swap-remove；换上来的元素 continue 重进本帧积分，
+    //    数组序 = spawn 序保持稳定，确定性不受摘除方式影响）。
+    for (std::size_t i = 0; i < pool_.size(); ) {
+        Sim& p = pool_[i];
+        p.life -= dt;
+        if (p.life <= 0.0f) {
+            p = pool_.back();
+            pool_.pop_back();
+            continue;
+        }
+        p.vel[1] -= kParticleGravity * dt;
+        p.pos[0] += p.vel[0] * dt;
+        p.pos[1] += p.vel[1] * dt;
+        p.pos[2] += p.vel[2] * dt;
+        ++i;
+    }
+    // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
+    spawnAccum_ += kEmitRate * dt;
+    std::uint32_t spawn = static_cast<std::uint32_t>(spawnAccum_);
+    spawnAccum_ -= static_cast<float>(spawn);
+    for (std::uint32_t k = 0; k < spawn && pool_.size() < kMaxParticles; ++k) {
+        const std::uint32_t s = spawnSeq_++;
+        const float rx = particleRand01(particleHash(s * 5u + 0u)) * 2.0f - 1.0f;
+        const float rz = particleRand01(particleHash(s * 5u + 1u)) * 2.0f - 1.0f;
+        const float rSpd = particleRand01(particleHash(s * 5u + 2u));
+        const float rLife = particleRand01(particleHash(s * 5u + 3u));
+        const float rSize = particleRand01(particleHash(s * 5u + 4u));
+        Sim p;
+        p.pos[0] = kEmitterPos[0]; p.pos[1] = kEmitterPos[1]; p.pos[2] = kEmitterPos[2];
+        // 锥形初速：向上为主 + 水平散布，归一化后乘幅值。
+        const float dx = rx * kConeSpread, dy = 1.0f, dz = rz * kConeSpread;
+        const float invLen = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float speed = kSpeedMin + rSpd * kSpeedSpan;
+        p.vel[0] = dx * invLen * speed;
+        p.vel[1] = dy * invLen * speed;
+        p.vel[2] = dz * invLen * speed;
+        p.maxLife = kLifeMin + rLife * kLifeSpan;
+        p.life = p.maxLife;
+        p.size = kSizeMin + rSize * kSizeSpan;
+        pool_.push_back(p);
+    }
+    // 3. 填 GPU 绘制流：颜色/alpha 生命周期曲线在 CPU 端算好（shader 只画）。
+    gpuData_.clear();
+    gpuData_.reserve(pool_.size());
+    for (const Sim& p : pool_) {
+        const float t = 1.0f - p.life / p.maxLife;   // 0 = 新生，1 = 死亡
+        ParticleGpu g;
+        g.posSize[0] = p.pos[0];
+        g.posSize[1] = p.pos[1];
+        g.posSize[2] = p.pos[2];
+        g.posSize[3] = p.size * (0.6f + 0.4f * (1.0f - t));   // 随寿命略收缩
+        // 颜色：黄 → 橙红；alpha：出生快速淡入 × 死亡淡出（乘积曲线，无开关跳变）。
+        g.colorAlpha[0] = 1.0f;
+        g.colorAlpha[1] = 0.85f - 0.55f * t;
+        g.colorAlpha[2] = 0.35f - 0.27f * t;
+        const float aIn  = std::min(1.0f, t * 8.0f);
+        const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
+        g.colorAlpha[3] = aIn * aOut;
+        gpuData_.push_back(g);
+    }
+    aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
+}
+
+void Particles::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                     const nvrhi::Viewport& viewport, const FrameParams& params,
+                     const char* shaderSuffix) {
+    // 懒建（随视口格式一次建好；失败不炸整帧，本帧跳过下帧重试——hizFailed_ 同款口径）。
+    if (!pipeline_) {
+        std::string err;
+        if (!ensure(cmd->getDevice(), framebuffer->getFramebufferInfo(), shaderSuffix, err)) {
+            nl::core::log::deviceError("Particles", err + " (skipping this frame)");
+            return;
+        }
+    }
+    // 每帧固定步长一步：粒子状态 = 已渲染帧数的纯函数（截图确定性前提）。
+    step(kParticleStepDt);
+    if (aliveCount_ == 0) return;
+
+    // 每帧重写 CB（volatile 全量覆写）：mvp + 相机基向量。
+    // 列主序 view 矩阵的 right/up = 第 0/1 行的 xyz（m[col*4+row]）。
+    ParticleConstantsCB cb;
+    std::memcpy(cb.mvp, params.mvp, sizeof(cb.mvp));
+    cb.camRight[0] = params.view[0]; cb.camRight[1] = params.view[4];
+    cb.camRight[2] = params.view[8]; cb.camRight[3] = 0.0f;
+    cb.camUp[0] = params.view[1]; cb.camUp[1] = params.view[5];
+    cb.camUp[2] = params.view[9]; cb.camUp[3] = 0.0f;
+    cb.params[0] = 1.0f; cb.params[1] = 0.0f; cb.params[2] = 0.0f; cb.params[3] = 0.0f;
+    cmd->writeBuffer(constants_, &cb, sizeof(cb));
+    cmd->writeBuffer(instanceData_, gpuData_.data(),
+                     aliveCount_ * static_cast<std::uint32_t>(sizeof(ParticleGpu)));
+
+    nvrhi::GraphicsState state;
+    state.setPipeline(pipeline_)
+         .setFramebuffer(framebuffer)
+         .addBindingSet(bindingSet_);
+    state.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(state);
+    nvrhi::DrawArguments args;
+    args.setVertexCount(6);          // 每实例两枚三角形（VS 按 SV_VertexID 展开）
+    args.setInstanceCount(aliveCount_);
+    cmd->draw(args);
+}
+
+void Particles::invalidate() {
+    pipeline_      = nullptr;
+    bindingLayout_ = nullptr;
+    bindingSet_    = nullptr;
+    vs_ = nullptr;
+    ps_ = nullptr;
+    constants_     = nullptr;
+    instanceData_  = nullptr;
+    // CPU 模拟状态（pool_/gpuData_/spawnAccum_/spawnSeq_）不清：管线随 resize
+    // 重建是显示层的事，模拟时间线不能断（断续帧会破坏确定性叙事，也丢画面连续性）。
+}
+
+void Particles::shutdown() {
+    invalidate();
+    pool_.clear();
+    gpuData_.clear();
+    aliveCount_ = 0;
+    spawnAccum_ = 0.0f;
+    spawnSeq_   = 0;
+}
+
+void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport, const FrameParams& params) {
+    // M-PT0：仅当显式开启才步进 + 绘制（缺省零开销，既有模式基线一像素不动）。
+    if (!params.particles) return;
+    particles_.draw(cmd, framebuffer, viewport, params, shaderSuffix_.c_str());
+}
+
 void Scene::shutdown() {
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
+    // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
+    particles_.shutdown();
     blasReady_ = false;
     blasTriangleCount_ = 0;
     blasBuildMs_ = 0.0f;

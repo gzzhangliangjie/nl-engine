@@ -239,3 +239,10 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 - **`Scene::draw` 末段服务多类场景**：init（normal/pbr）、initSkin、**initCluster（lod/dag/s5 层次遍历）** 都走同一段尾绘。initCluster 场景 `modelBatches_` 为空、用自己的 b0-only 绑定集与 `indexCount_`——**改成 per-prim 批次循环时必须保留 `modelBatches_.empty()` 的老单批兜底**，否则三模式整只模型消失（M7.2 实测 s2.0/s3.2/s5.0 前景 0 px）。
 - **draw 主路径重构的 spot 回归必须覆盖 lod 或 dag 模式**：m0.9/pbr-direct/s7.0/s7.1 全走 init/per-prim/visbuf 路径，per-prim 重写把 cluster 路径炸空后 spot 依旧全绿——直到全量闸 HUD 基线 diff 6.4 万 px 才暴露。
 - **基线重拍安全闸是最后防线**：diff 超出「HUD 一行文本」签名（≈527 px / maxDelta 240）必须追因，禁止人工强刷进基线。「模型区整片白」= 位移/变色/消失三选一，用前景包围盒+质心一测便知；「diff 恰好一行 HUD 文本」才是 kStage bump 的健康签名。
+
+### 2.17 ⚠️ 粒子/程序化叠加层纪律（2026-11-10，M-PT0；M-PT1 .nfx 复用）
+- **CPU 模拟确定性契约**：固定步长 1/60s 每帧恰一步（M-GL 物理同款），RNG 用 pcg 整数 hash（`particleHash`，**禁时钟输入**）——粒子状态是帧号纯函数，同参重跑 PNG 逐字节同（DX12 实测 MD5 全等）。发射率积分用 floor 取整，禁止浮点累积比较。
+- **无 input layout 的 billboard 展开**：`particles.slang` VS 用 `SV_VertexID` 位式判定角点展开两枚三角形 + `SV_InstanceID` 取粒子实例；管线 `inputLayoutElements=0` + `CullMode::None`，顶点数恒 6、instanceCount=aliveCount。
+- **相机基向量来自 view 行**：billboard right/up 从列主序 view 矩阵第 0/1 行取（`view[0]/[4]/[8]`、`view[1]/[5]/[9]`），非 dag/hiz 模式下 `fp.view` 由 viewer 自行补填。
+- **实例 SSBO 每帧写回**：32B StructuredBuffer（posSize+colorAlpha）走 §2.15 同款 CopyDest + keepInitialState 帧内动态晋升；CB 112B volatile 每帧全量覆写（mvp + camRight + camUp + params）。
+- **叠加层证据行仅专用模式显示**：HUD `Particles : N alive` 行只在 `--particles` 开启时占位（BLAS 行先例），避免 kStage 波及全量 HUD 基线重拍。

@@ -2003,3 +2003,23 @@
 7. **cases.json version 卡必须带 tag 字段**：`exe_for` 无条件 `version["tag"]`（路径无 `{tag}` 占位也取）——s8.0 初卡漏 tag 直接 KeyError。
 
 **下一步**：M8.1 TLAS 每帧重建（拍板点 D-S8-1：S8-PLAN §5 建议每帧全量 rebuild（UE 口径），开工前需用户确认）；M8.2 Ray Query 调试射线闭环。BLAS 句柄/M8.0 资源已备 TLAS 实例引用（blasVB_/IB_ 列末态 = AccelStructBuildInput 永久态）。
+
+## PT M-PT0：粒子运行时最小闭环——CPU 发射器 + GPU instanced billboard（feat/particles 轨道 B 类起步，2026-11-10，tag `particles-pt0`）
+
+**动作**：立项登记（ROADMAP 穿插项表 + PARALLEL-TRACKS §7.1 B 类专列 + wt_pool TRACKS 注册，编号两轮收敛 E→PT 避 ECS 撞号）→ 格式兼容调研拍板**路线 B**：Effekseer（MIT runtime/CC-0 数据）离线转换器 → 自定义 `.nfx`，运行时零新依赖、子集外模块显式报错（PopcornFX/Niagara 私有不可移植，OpenVDB MPL-2.0 须单独评审）→ `docs/particles/PARTICLES-PLAN.md`（M-PT0 最小闭环 + M-PT1 转换器）→ `wt_pool claim --track particles` 开 wt → **决策前置实读**：Carrot `render/particles/`（CPU 发射器+GPU 渲染 ~580 行，抄思路）+ bevy（无官方粒子）+ UE（VertexFactory 注入主渲染非独立 pass，只读）+ nl-engine DebugLines 叠加层模板 + §2.15 buffer 写回纪律 → 落码。
+
+**落码**：`renderer/shaders/particles.slang`（单源双目标，b0=112B volatile CB + t0 StructuredBuffer，SV_VertexID 展开 6 顶点 billboard、SV_InstanceID 取实例，PS 软圆盘 smoothstep）→ `scene.hpp/cpp` `Particles` 类（kMaxParticles=4096，ParticleGpu 32B，ensure/step/draw/invalidate/shutdown；pcg hash 5 路 RNG 流、固定步长 1/60s、发射率 300/s、重力+锥形初速+寿命/尺寸随机、黄→橙红 lerp + alpha 淡入淡出 + 收缩；懒 ensure 失败本帧跳过不拦路）→ `renderer.hpp` FrameParams 加 `particles` + HUD/DeviceInfo 加 `particleAlive` → hud.cpp `Particles : N alive` 证据行（仅 particlesEnabled 显示）+ hudSelfTest 缺省全关断言 → backend_dx12/vulkan drawDebugLines 后插 drawParticles（画在主场景后 HUD 前）→ renderer.cpp kArtifacts 加 4 条 shader 产物 → viewer `--particles` flag + HUD 喂数 + 稳态日志锚点 `particles steady: alive=N` → `example/particles-pt0/`（6 基线：三卡×双后端 hud/log/off + run.bat verify：双后端重拍 + DX12 确定性 fc /b + 双后端稳态锚点断言 + 负向不得命中）→ cases.json particles-pt0 版本卡 3 用例 → 顺手修存量 selftest 期望（kStage 已 S8.0 而 selftest 未更，master 存量漏项非本轮引入）。
+
+**提交版本**：`feat/particles` M-PT0 提交（annotated tag `particles-pt0`）。B 类轨道，不 bump `kStage`、不动 HUD 基线（证据行仅专用模式）。
+
+**完成情况**：DX12/VULKAN 双后端构建过，NVRHI validation + DX12 debug layer 双开零输出；selftest 16/16（52 产物魔数）；冒烟截图肉眼核验（喷泉粒子 + HUD 证据行）；`run.bat verify` 全绿 exit 0——**确定性硬证**：DX12 同参两次跑 PNG `fc /b` 逐字节同（MD5 `6bd87baad5381dc8e47c1810d3584583`）、双后端稳态 alive=567 同值（理论值命中：300/s × 平均寿命 1.95s ≈ 585，稳态波动内）；负向卡（无 `--particles` 不得出现 steady 行）通过；双后端 PNG 不逐字节同（dx `6bd87baa` vs vk `6f36def7`）按 phys-p3/p4 薄线噪声先例口径属预期，run.bat 各自对基线不互比。
+
+**踩坑情况**
+1. **wt_pool 注册表真源是 py 硬编码 TRACKS 字典**（md 是人肉镜像）——只改 PARALLEL-TRACKS.md 不改字典，claim 报 track not in registry。
+2. **fresh worktree 的 `.workbuddy` 是真实目录**非 junction——Remove-Item 后重建 junction + 补 skip-worktree。
+3. **CB 尺寸笔误**：64+16+16+16 误算 128B，static_assert 编译期抓获改 112B（volatile CB 必须带 static_assert 纪律的价值实证）。
+4. **`nvrhi::Blend` 不存在**：正确枚举 `nvrhi::BlendFactor`，回 vendored `nvrhi.h` 核签名。
+5. **viewer parseArgs 误删 `else if` 链的 `}` / scene.hpp 误吞 `constants_` 成员声明**：两处编辑事故均当场发现恢复——大文件锚点编辑后必查邻近结构完整性。
+6. **冒烟 flag 笔误**：`--screenshot-path` 不存在，正确用法 `--screenshot <path> --frames N`。
+
+**下一步**：M-PT1 vfx-tools 转换器（Effekseer .efkefc → `.nfx` v1）+ 运行时 .nfx 加载端；转换器支持面/子集外显式报错清单开工前细化（PARTICLES-PLAN §M-PT1）。merge 回 master 待用户拍板。

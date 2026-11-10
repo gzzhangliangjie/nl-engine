@@ -283,6 +283,13 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::TextUnformatted(blasLine);
     }
+    // M-PT0：粒子证据行（仅 --particles 模式显示——particlesEnabled 由 viewer 喂，
+    // 其它模式一像素不动；粒子数 = scene_ 当帧活粒子，稳态区间由 run.bat 断言）。
+    if (frame.particlesEnabled) {
+        char partLine[96];
+        std::snprintf(partLine, sizeof(partLine), "Particles : %d alive", frame.particleAlive);
+        ImGui::TextUnformatted(partLine);
+    }
     // M6.2：Hi-Z 专属区**上移**到 mode/model 行之后、FPS 行之前——960x540 画布
     // 面板高度被 min(cap, H-28)=512 钉死，原位置（frustum/cull GPU 行之后）会让
     // 开关与 occl 行掉进滚动区截断，验收证据不可见。只影响 hiz 模式布局（其它
@@ -571,6 +578,8 @@ bool hudSelfTest() {
     if (f.visibleTriangles != -1) return false;
     // M8.0：BLAS 通道缺省全零（非 dag/hiz 模式 HUD 布局一像素不动的保证）。
     if (f.blasTriangleCount != 0 || f.blasMs != 0.0f || f.blasTimingAvailable) return false;
+    // M-PT0：粒子通道缺省全关（非 --particles 模式 HUD 布局一像素不动的保证）。
+    if (f.particlesEnabled || f.particleAlive != 0) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
     // M-C1：控制台通道缺省全关（HUD 关掉控制台 = 历史 HUD 基线一像素不动的保证）。
     if (f.consoleOpen || f.consoleTab || f.wantCaptureKeyboard) return false;

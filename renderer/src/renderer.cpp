@@ -75,6 +75,9 @@ static const Artifact kArtifacts[] = {
     {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
     {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
     {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
+    // M-PT0：particles.slang 单管线（vsMain/psMain），各 × spv/dxil = 4。
+    {"particles.vs", true}, {"particles.vs", false},
+    {"particles.ps", true}, {"particles.ps", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
