@@ -1,0 +1,2 @@
+ERROR: unknown selftest section 'bogus'
+usage: input-tools selftest [edges|combos|repeat|mouse|oob|mods|determinism|actions|actions-det]

@@ -61,9 +61,9 @@
 
 | 里程碑 | 内容 | 验收判据 |
 |---|---|---|
-| **M-I0** | `core/input` 状态层（全键位 + 三态 + 鼠标全量 + 注入 API）+ selftest + CMake/ctest 接线；viewer 现有热键回归 spot（--only 挑 2~3 条） | selftest 数值锚全绿；注入序列 → 三态逐位锚；双后端 spot 零回归；tool 卡 usage/正向/负向 |
-| **M-I1** | ActionMap/ActionSet 映射层 + 默认驾驶映射表 + selftest（合成事件 → 动作值锚） | selftest 全绿（含 OR/max 解析、组开关冻结语义）；tool 卡三条 |
-| **M-I2** | viewer `--mode input-hud` 调试面板 + example 卡 + cases.json + 收口（close 硬闸） | 截图基线双后端 bytes；`server.py --check` exit 0；注入按钮肉眼可验 |
+| **M-I0** | `core/input` 状态层（全键位 + 三态 + 鼠标全量 + 注入 API）+ selftest + CMake/ctest 接线；viewer 现有热键回归 spot（--only 挑 2~3 条） | selftest 数值锚全绿；注入序列 → 三态逐位锚；双后端 spot 零回归；tool 卡 usage/正向/负向 | ✅ **已收口**（tag `input-m0`，2026-11-10）：selftest 7 节 39 断言全绿、trace→check 5 锚闭环、证据图 fc /b 逐字节、spot 18/18 bytes、run.bat ALL GREEN、`server.py --check` exit 0；实测踩坑见 MILESTONES M-I0 节（bat CRLF / if 块内括号 / 锚禁手写 / glfw 链接面） |
+| **M-I1** | ActionMap/ActionSet 映射层 + 默认驾驶映射表 + selftest（合成事件 → 动作值锚） | selftest 全绿（含 OR/max 解析、组开关冻结语义）；tool 卡三条 | ✅ **已收口**（tag `input-m1`，2026-11-10）：`core/action_map` 三型动作 + 六源绑定 + Carrot 解析规则（Bool=OR / Float=max-abs 平局取先定义 / Bool←浮点源 0.5 阈值 / Vec2 additive）+ 位掩码组开关（关停=清零，有意偏离 Carrot 留痕）+ `buildDrivingActionMap` 落库；selftest 9 节 60 断言、act-trace→act-check 12 行 9 锚闭环、证据图 fc /b 逐字节、M-I0 契约零回归（trace/check 5 锚逐字节不变 + input-m0 run.bat ALL GREEN + s7.2 spot 4/4 bytes）、ctest 4/4 |
+| **M-I2** | viewer `--mode input-hud` 调试面板 + example 卡 + cases.json + 收口（close 硬闸） | 截图基线双后端 bytes；`server.py --check` exit 0；注入按钮肉眼可验 | ✅ **已收口**（tag `input-m2`，2026-11-10）：`ViewMode::InputHud=11` + `renderer/input_debug` 面板（增量兄弟窗口，默认关零布局）+ 注入管线（请求态局部持久 + 帧首转 feed 边沿 + feed→update→快照→endFrame 节奏）+ `--input-demo` 帧序号脚本（Esc PRESSED 落截图帧）+ pair 双后端 PNG 逐字节基线 + run.bat ALL GREEN + spot 回归 m0.9/s7.2 共 8/8 bytes 零回归；实测踩坑见 MILESTONES M-I2 节（悬空 SameLine 折叠行 / 可选值参数吞参 / HudFrame 每帧新建的请求态持久化） |
 
 ## 6. 留痕
 

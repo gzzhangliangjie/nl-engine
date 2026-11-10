@@ -156,6 +156,8 @@ add_library(nl_core STATIC
     core/src/log.cpp
     core/src/assert.cpp
     core/src/window.cpp
+    core/src/input.cpp         # P8 M-I0：输入状态层（三态 + 鼠标全量 + 注入 API，A 类轨道）
+    core/src/action_map.cpp    # P8 M-I1：ActionMap/ActionSet 映射层（Carrot 解析规则，纯逻辑零 GLFW）
     core/src/camera.cpp
     core/src/modes.cpp
     core/src/mesh_io.cpp       # M1.0：tinygltf 实现 TU 只在此展开（原在 scene.cpp）
@@ -227,6 +229,7 @@ add_library(nl_renderer STATIC
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
+    renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
 )
@@ -473,10 +476,18 @@ target_link_libraries(nav-tools PRIVATE nl_core)
 add_executable(gl-tools gl-tools/main.cpp)
 target_link_libraries(gl-tools PRIVATE nl_core)
 
+# ---- P8 M-I0：input-tools —— 输入状态层无头验收工具（A 类轨道）----
+# 退出码：0=PASS / 1=断言失败 / 2=用法错误（对齐 phys-tools / 展示台 expectExit）。
+# 只链 nl_core，注入路径（无窗口）跑全部数值锚；零图形 API。
+# glfw 链接说明：input.hpp 公开 API 里用 GLFW 键码常量（P8-INPUT-PLAN §3 口径），
+# 与 nl_renderer 链 glfw 的理由同款（console_ui.cpp 吃键值常量）。
+add_executable(input-tools input-tools/main.cpp)
+target_link_libraries(input-tools PRIVATE nl_core glfw)
+
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
-    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools nav-tools gl-tools)
+    foreach(t nl_core nl_renderer viewer nanite-tools anim-tools material-graph-tools nanite-scene nanite-console nl-script audio-tools phys-tools nav-tools gl-tools input-tools)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /bigobj)
         target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endforeach()
@@ -575,6 +586,13 @@ set_tests_properties(ma1-anim-curve-selftest PROPERTIES
 # M-A1：负向——未知 selftest 用例显式拒绝（exit 2）
 add_test(NAME ma1-anim-unknown-case COMMAND anim-tools selftest bogus)
 set_tests_properties(ma1-anim-unknown-case PROPERTIES WILL_FAIL TRUE)
+# P8 M-I0：输入状态层机械单测（边沿三态 / 组合 / REPEAT / 鼠标 / 越界 / mods / 确定性）
+add_test(NAME mi0-input-selftest COMMAND input-tools selftest)
+add_test(NAME mi0-input-usage-negative COMMAND input-tools selftest bogus)
+set_tests_properties(mi0-input-usage-negative PROPERTIES WILL_FAIL TRUE)
+# P8 M-I1：映射层机械单测（Carrot 解析规则 / 组开关冻结 / 序列确定性）
+add_test(NAME mi1-input-actions-selftest COMMAND input-tools selftest actions)
+add_test(NAME mi1-input-actions-det-selftest COMMAND input-tools selftest actions-det)
 # M-A2：线性/加法混合机械单测（lerp 锚点 w=0/0.5/1、加法 quat 相对叠加语义、骨架不一致拒绝）
 add_test(NAME ma2-anim-blend-selftest COMMAND anim-tools selftest blend)
 set_tests_properties(ma2-anim-blend-selftest PROPERTIES

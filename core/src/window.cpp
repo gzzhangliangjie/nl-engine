@@ -56,6 +56,9 @@ struct Window::Impl {
     std::vector<KeyEvent>     keyEvents;
     std::vector<unsigned int> textChars;
 
+    // P8 M-I0（增量扩展）：鼠标按键事件队列（InputState 消费通道，见 window.hpp）。
+    std::vector<MouseButtonEvent> mouseButtonEvents;
+
     void onKey(int glfwKey, int action, int mods) {
         // 游戏热键边沿（PRESS 才记，读一次即清）
         if (action == GLFW_PRESS) {
@@ -115,6 +118,8 @@ struct Window::Impl {
                 // HUD 需要每帧稳定的 MousePos，否则点击面板会丢一帧输入。
                 if (action == GLFW_PRESS) impl->haveDragBase = false;
             }
+            // P8 M-I0（增量扩展）：全部按键进事件队列（老 leftDown 语义不动）。
+            impl->mouseButtonEvents.push_back({button, action != GLFW_RELEASE});
         }
     }
 
@@ -207,6 +212,15 @@ std::size_t Window::consumeTextChars(unsigned int* out, std::size_t cap) {
     std::size_t n = 0;
     for (std::size_t i = 0; i < impl_->textChars.size() && n < cap; ++i) out[n++] = impl_->textChars[i];
     impl_->textChars.clear();
+    return n;
+}
+
+// P8 M-I0（增量扩展）：鼠标按键事件消费（消费制，节奏同 consumeKeyEvents）。
+std::size_t Window::consumeMouseButtonEvents(MouseButtonEvent* out, std::size_t cap) {
+    if (!valid() || cap == 0) { if (valid()) impl_->mouseButtonEvents.clear(); return 0; }
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < impl_->mouseButtonEvents.size() && n < cap; ++i) out[n++] = impl_->mouseButtonEvents[i];
+    impl_->mouseButtonEvents.clear();
     return n;
 }
 

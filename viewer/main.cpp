@@ -5,6 +5,8 @@
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
+#include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
+#include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
@@ -99,6 +101,8 @@ struct Options {
     bool pbrNaive   = false;  // pbr-direct：--pbr-naive 对照开关（跳过 sRGB->linear，验收证据用）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
+    bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
+    int  inputDemoStart = 5;  // 脚本起始迭代号（1-based；W@start D@+1 Space@+2 Esc@+3）
     bool hudSet     = false;  // 用户显式给了 --hud / --no-hud
     bool hudEnabled = false;  // 最终值：交互默认开，截图回归默认关
     float cutThresholdPx = 1.0f;  // M5.0/M5.1：cut 阈值 px（--cut-thr 设初值，HUD 滑条双向）
@@ -326,6 +330,12 @@ Options parseArgs(int argc, char** argv) {
             o.color = std::atoi(argv[++i]) % kColorCount;
         } else if (a == "--frames" && i + 1 < argc) {
             o.frames = std::max(1, std::atoi(argv[++i]));
+        } else if (a == "--input-demo") {
+            // P8 M-I2：注入脚本开关；可选起始迭代号（1-based，缺省 5；仅 input-hud
+            // 模式消费）。无值形式兼容 flag 直跟其它 --arg 的用法。
+            o.inputDemo = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                o.inputDemoStart = std::max(1, std::atoi(argv[++i]));
         } else if (a == "--size" && i + 1 < argc) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
@@ -561,8 +571,11 @@ void registerGameConsole(nl::core::GameClock* clock) {
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
-              bool visbufMode = false, bool pullingMode = false) {
+              bool visbufMode = false, bool pullingMode = false,
+              bool inputHudMode = false) {
     nl::core::log::resetCounters();
+    // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
+    const bool inputHud = inputHudMode;
 
     nl::core::WindowDesc desc;
     desc.width  = o.width;
@@ -627,7 +640,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     }
 
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
-    const bool hudOn = o.hudEnabled || editorActive;
+    // M-I2：input-hud 模式的面板就是本体，强制开（截图回归 --hud 同口径）。
+    const bool hudOn = o.hudEnabled || editorActive || inputHud;
 
     // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
     // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
@@ -809,6 +823,22 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M6.2：整帧 GPU 时间累计（DeviceInfo.lastGpuMs 每帧由 backend poll 更新）。
     double gpuMsSum = 0.0;
     std::uint64_t gpuMsFrames = 0;
+
+    // ---- P8 M-I2：input-hud 注入管线（唯一新增的输入通路；单消费者铁律——
+    // 绝不调 updateFromWindow，现有热键/ImGui 键盘通道零触碰）。注入来源两个：
+    // ① 面板 checkbox（HudFrame 每帧新建，请求态持久在本局部数组，renderFrame
+    // 后读回写回值）；② --input-demo 帧序号脚本（确定性截图）。
+    // 帧节奏 = feed 边沿 -> map.update -> 快照 -> endFrame。
+    nl::core::InputState inputState;
+    nl::core::ActionMap drivingMap;
+    const nl::core::DrivingActions dActs = nl::core::buildDrivingActionMap(drivingMap);
+    drivingMap.setActive(dActs.uiSet, true);   // 面板要演示 pause 动作，出厂关的 ui 组显式开
+    // 注入请求持久态（W/A/S/D/Space/Esc/LMB + ui 组开关期望值；与 hud.inputDebug.req* 双向同步）
+    bool reqState[7] = {};
+    bool reqUiSetActive = true;
+    bool prevReq[7] = {};      // 上一帧实际按下的态（边沿转换用）
+    // demo 脚本已按下的键（脚本只 press 不 release；W/D/Space/Esc 持续到退出）
+    bool demoHeld[4] = {};
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -1001,7 +1031,83 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::renderer::HudFrame hud{};
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
         hud.panelShow = hudEnabled;   // M-C2：面板可见性独立于 ImGui 帧存续
-        if (hudEnabled || consoleOpen || editorActive) {
+        if (inputHud) hud.panelShow = true;   // M-I2：input-hud 模式常驻面板即本体
+        if (hudEnabled || consoleOpen || editorActive || inputHud) {
+            // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
+            if (inputHud) {
+                // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
+                static constexpr int kReqCodes[7] = {87, 65, 83, 68, 32, 256, 0};  // GLFW W/A/S/D/Space/Escape + LMB
+                for (int i = 0; i < 7; ++i) {
+                    if (reqState[i] != prevReq[i]) {
+                        if (i < 6) inputState.feedKey(kReqCodes[i], reqState[i]);
+                        else       inputState.feedMouseButton(kReqCodes[i], reqState[i]);
+                        prevReq[i] = reqState[i];
+                    }
+                }
+                drivingMap.setActive(dActs.uiSet, reqUiSetActive);
+                // ② --input-demo 脚本：W@start / D@+1 / Space@+2 / Esc@+3（只 press；
+                // 缺省 start=5 + frames=8 → Esc 的 justPressed 边沿正好落在截图帧上）
+                if (o.inputDemo) {
+                    const std::uint64_t it = frame;
+                    struct DemoStep { std::uint64_t at; int key; };
+                    static constexpr DemoStep kScript[4] = {
+                        {0, GLFW_KEY_W}, {1, GLFW_KEY_D}, {2, GLFW_KEY_SPACE},
+                        {3, GLFW_KEY_ESCAPE}};  // +start 偏移
+                    for (int i = 0; i < 4; ++i) {
+                        const std::uint64_t at = o.inputDemoStart + kScript[i].at;
+                        if (it == at && !demoHeld[i]) {
+                            inputState.feedKey(kScript[i].key, true);
+                            demoHeld[i] = true;
+                            nl::core::log::info("input-demo: inject key ", kScript[i].key,
+                                                " at iter ", it);
+                        }
+                    }
+                }
+                // ③ 解析映射层（M-I1 冻结语义；必须在 endFrame 之前）
+                drivingMap.update(inputState);
+                // ④ 面板快照（边沿在 endFrame 清零前采样）+ 注入请求回填
+                hud.inputDebug.show = true;
+                int rowN = 0;
+                const auto fillRow = [&](const char* label, int code, bool mouse) {
+                    if (rowN >= hud.inputDebug.kMaxRows) return;
+                    auto& r = hud.inputDebug.rows[rowN++];
+                    r.label = label;
+                    r.down = mouse ? inputState.mouseIsDown(code) : inputState.isDown(code);
+                    r.pressed = mouse ? inputState.mouseJustPressed(code) : inputState.justPressed(code);
+                    r.released = mouse ? inputState.mouseJustReleased(code) : inputState.justReleased(code);
+                };
+                fillRow("W", GLFW_KEY_W, false);
+                fillRow("A", GLFW_KEY_A, false);
+                fillRow("S", GLFW_KEY_S, false);
+                fillRow("D", GLFW_KEY_D, false);
+                fillRow("Space", GLFW_KEY_SPACE, false);
+                fillRow("Esc", GLFW_KEY_ESCAPE, false);
+                fillRow("LMB", GLFW_MOUSE_BUTTON_LEFT, true);
+                hud.inputDebug.rowCount = rowN;
+                hud.inputDebug.throttle = drivingMap.floatValue(dActs.throttle);
+                hud.inputDebug.steer = drivingMap.floatValue(dActs.steer);
+                const auto lookV = drivingMap.vec2Value(dActs.look);
+                hud.inputDebug.lookX = lookV.x;
+                hud.inputDebug.lookY = lookV.y;
+                hud.inputDebug.handbrake = drivingMap.boolValue(dActs.handbrake) ? 1.0f : 0.0f;
+                hud.inputDebug.handbrakePressed = drivingMap.boolJustPressed(dActs.handbrake);
+                hud.inputDebug.handbrakeReleased = drivingMap.boolJustReleased(dActs.handbrake);
+                hud.inputDebug.pause = drivingMap.boolValue(dActs.pause) ? 1.0f : 0.0f;
+                hud.inputDebug.pausePressed = drivingMap.boolJustPressed(dActs.pause);
+                hud.inputDebug.pauseReleased = drivingMap.boolJustReleased(dActs.pause);
+                hud.inputDebug.drivingSetActive = drivingMap.isActive(dActs.drivingSet);
+                hud.inputDebug.uiSetActive = drivingMap.isActive(dActs.uiSet);
+                hud.inputDebug.reqW = reqState[0];
+                hud.inputDebug.reqA = reqState[1];
+                hud.inputDebug.reqS = reqState[2];
+                hud.inputDebug.reqD = reqState[3];
+                hud.inputDebug.reqSpace = reqState[4];
+                hud.inputDebug.reqEsc = reqState[5];
+                hud.inputDebug.reqLmb = reqState[6];
+                hud.inputDebug.reqUiSetActive = reqUiSetActive;
+                // ⑤ 帧末清边沿（快照已拷贝；下一帧边沿从零开始）
+                inputState.endFrame();
+            }
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
             hud.displayHeight = static_cast<float>(e.height);
@@ -1126,7 +1232,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud) ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -1155,7 +1261,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud) {   // 帧跑了才消费控件写回
+            // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
+            if (inputHud) {
+                reqState[0] = hud.inputDebug.reqW;
+                reqState[1] = hud.inputDebug.reqA;
+                reqState[2] = hud.inputDebug.reqS;
+                reqState[3] = hud.inputDebug.reqD;
+                reqState[4] = hud.inputDebug.reqSpace;
+                reqState[5] = hud.inputDebug.reqEsc;
+                reqState[6] = hud.inputDebug.reqLmb;
+                reqUiSetActive = hud.inputDebug.reqUiSetActive;
+            }
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             if (hizMode) hizEnabled = hud.hizEnable;   // M6.2：开关写回
@@ -2191,6 +2308,11 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true);
+    case nl::core::ViewMode::InputHud:   // P8 M-I2：输入调试面板（normal 场景打底 + 注入面板）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
+                         /*inputHudMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");

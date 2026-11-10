@@ -19,6 +19,7 @@ enum class ViewMode {
     Scene = 8,    // M-E1b.0：ECS 场景（--scene 读 World JSON，N 物体 M 方向灯实例化）
     Visbuf = 9,   // M7.0：visibility buffer 打包写入（u64 簇/三角/深度）+ 簇/三角可视化
     Pulling = 10, // M7.1：vis buffer 材质反解（全屏 pass 顶点拉取 + 解析式 barycentrics + 材质着色）
+    InputHud = 11, // P8 M-I2：输入调试面板（注入路径驱动的键态矩阵 + 动作值条 + ImGui 注入按钮）
     // S1 起依次追加：Rt, Shadow,
     //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count

@@ -1,0 +1,22 @@
+nl-engine M0.9 selftest
+[nl:info] hello 42
+  [PASS] log formatting + sink
+  [PASS] no errors on clean run
+  [PASS] device error counted separately
+  [PASS] assert failure captured
+  [PASS] window defaults (resizable)
+  [PASS] orbit camera matrices, zoom clamps, reset
+  [PASS] M5.0 screen-error projection, hand-computed cases
+  [PASS] view mode dispatcher (normal + cluster + lod + dag-top)
+  backend: vulkan (configured, no vendor SDK)
+  stage:   S8.1 ray tracing TLAS per-frame rebuild + RayQuery probe
+  [PASS] backend selected
+  [PASS] S8.1 stage reported
+  [PASS] frame params (MVP/cull/light) POD defaults
+  [PASS] M0.8 debug shading / wireframe POD defaults (= M0.7 behavior)
+  [PASS] HUD POD + projection arithmetic
+  [PASS] Slang single-source -> SPIR-V + DXIL (60 artifacts)
+  shaders: model.vs.spv(1764B) model.vs.dxil(5128B) model.vscluster.spv(1760B) model.vscluster.dxil(5120B) model.vscull.spv(4728B) model.vscull.dxil(6464B) model.vsscene.spv(3104B) model.vsscene.dxil(6252B) model.ps.spv(7012B) model.ps.dxil(7732B) model.pscluster.spv(3348B) model.pscluster.dxil(5904B) model.pscull.spv(3340B) model.pscull.dxil(5892B) model.pscene.spv(10932B) model.pscene.dxil(10060B) cull.cs.spv(3996B) cull.cs.dxil(5956B) dag.cs.spv(10540B) dag.cs.dxil(8912B) hiz.vshizdepth.spv(3148B) hiz.vshizdepth.dxil(5592B) hiz.pshizdepth.spv(916B) hiz.pshizdepth.dxil(3768B) hiz.cs.spv(2648B) hiz.cs.dxil(4184B) hiz.cstop.spv(836B) hiz.cstop.dxil(3228B) hiz.vshizviz.spv(2280B) hiz.vshizviz.dxil(3800B) hiz.pshizviz.spv(1868B) hiz.pshizviz.dxil(4488B) hud.vs.spv(1172B) hud.vs.dxil(4132B) hud.ps.spv(816B) hud.ps.dxil(4016B) debug_line.vs.spv(920B) debug_line.vs.dxil(4092B) debug_line.ps.spv(420B) debug_line.ps.dxil(2952B) visbuf.vsvisraster.spv(3304B) visbuf.vsvisraster.dxil(6112B) visbuf.psvisraster.spv(2144B) visbuf.psvisraster.dxil(4756B) visbuf.vsvisviz.spv(988B) visbuf.vsvisviz.dxil(2968B) visbuf.psvisviz.spv(3020B) visbuf.psvisviz.dxil(4508B) material.vsmatresolve.spv(992B) material.vsmatresolve.dxil(2984B) material.psmatresolve.spv(17284B) material.psmatresolve.dxil(14400B) tlas_probe.cs.spv(1316B) tlas_probe.cs.dxil(3824B)  [54/54 ok]
+  [PASS] renderer rejects null window safely
+  [PASS] selftest ends clean
+SELFTEST PASS (16/16)

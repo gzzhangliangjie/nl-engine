@@ -1,0 +1,83 @@
+[edges]
+  ok GLFW_KEY_W == 87
+  ok GLFW_KEY_SPACE == 32
+  ok GLFW_KEY_ESCAPE == 256
+  ok GLFW_MOUSE_BUTTON_LAST == 7
+  ok key table size == GLFW_KEY_LAST+1
+  ok frame0: W idle
+  ok frame1: press -> down+pressed
+  ok frame2 after endFrame: down kept, edge cleared
+  ok frame2: release -> released only
+  ok frame3 after endFrame: all clear
+[combos]
+  ok same-frame press->release: released wins
+  ok combos: clean after endFrame
+  ok same-frame release->press: pressed wins
+[repeat]
+  ok repeat: justPressed exactly once this frame
+  ok repeat: down stays
+  ok next-frame repeat: no new justPressed
+[mouse]
+  ok mouse: left down+pressed
+  ok mouse: right down
+  ok mouse: left release edge
+  ok mouse: right unaffected by left release
+  ok mouse: delta accumulates
+  ok mouse: scroll accumulates
+  ok mouse: cursor position
+  ok mouse: increments cleared at endFrame
+  ok mouse: right down kept across endFrame
+  ok mouse: edge cleared at endFrame
+[oob]
+  ok oob key queries false
+  ok oob mouse queries false
+  ok oob feed did not corrupt table
+  ok oob endFrame survived
+[mods]
+  ok mods: ctrl+alt
+  ok mods: kept across endFrame (persistent state)
+  ok mods: cleared
+[determinism]
+  ok same sequence replays bit-identical across 12 frames
+  ok seq anchor: f0 W pressed+down
+  ok seq anchor: f1 W down only
+  ok seq anchor: f3 LMB edge
+  ok seq anchor: f10 W released
+  ok seq anchor: f11 delta values (0.5*(11%4), -0.25*(11%3))
+[actions]
+  ok keycodes: A=65 S=83 D=68 C=67
+  ok define/find: named actions resolvable
+  ok find: unknown action -> kInvalidAction
+  ok define/find: sets resolvable
+  ok factory state: driving on, ui off
+  ok throttle: W -> +1 (Float=max-abs)
+  ok throttle: delta = value - prev
+  ok throttle: W+S tie -> first-defined W (+1)
+  ok throttle: S-only -> -1
+  ok steer: idle = 0
+  ok steer: D -> +1
+  ok handbrake: press -> value + justPressed
+  ok handbrake: held -> edge frozen (prev=value shift)
+  ok handbrake: release -> justReleased
+  ok cam_toggle: C justPressed
+  ok look: mouse delta axes -> vec2 (additive)
+  ok look: endFrame cleared source -> value 0, delta -2
+  ok zoom: |0.3| < 0.5 -> false
+  ok zoom: |1.0| >= 0.5 -> true (threshold 0.5)
+  ok set freeze: ui off -> pause zeroed despite Esc down
+  ok set switch on: pause value + justPressed
+  ok set switch on: driving set untouched (S still held)
+  ok set freeze: driving off -> throttle/steer zeroed
+  ok unassigned action: zoom stays governed by input regardless of sets
+  ok set freeze: ui off again -> pause zeroed
+[actions-det]
+  ok action sequence replays bit-identical across 12 frames
+  ok seq anchor: f0 throttle +1
+  ok seq anchor: f2 steer +1
+  ok seq anchor: f4 W+S tie -> W first-defined
+  ok seq anchor: f6 handbrake press edge
+  ok seq anchor: f8 ui on -> pause edge
+  ok seq anchor: f9 ui off -> pause zeroed
+  ok seq anchor: f10 all released -> zeros
+  ok seq anchor: f11 look (0.5*(11%4), -0.25*(11%3))
+selftest PASS (9 sections)

@@ -35,6 +35,14 @@ struct KeyEvent {
     bool alt = false;
 };
 
+// p8 M-I0（增量扩展）：鼠标原始按键事件（POD）。button 是 GLFW mouse button
+// 常量（GLFW_MOUSE_BUTTON_LEFT 等）。既有 leftButtonDown() 行为不变——
+// 本事件队列是**并列新增**的第三条通道（输入层 InputState 消费），不改老语义。
+struct MouseButtonEvent {
+    int  button = 0;
+    bool down = false;
+};
+
 // pimpl：GLFW / 平台头文件只出现在 window.cpp 里，公开 API 不泄漏图形或窗口库类型。
 class Window {
 public:
@@ -60,6 +68,10 @@ public:
     // 在 renderer 侧 console_ui.cpp（core 不许出现 ImGui 符号）。
     std::size_t consumeKeyEvents(KeyEvent* out, std::size_t cap);
     std::size_t consumeTextChars(unsigned int* out, std::size_t cap);
+
+    // P8 M-I0（增量扩展）：鼠标按键事件消费（消费制，与键盘事件同节奏）。
+    // 上限 = 调用方容量，溢出丢弃最旧。
+    std::size_t consumeMouseButtonEvents(MouseButtonEvent* out, std::size_t cap);
 
     // M0.4 轨道相机输入：拖动增量 / 滚轮增量按帧消费，左键按下状态用于判定拖动。
     void consumeMouse(float& deltaX, float& deltaY, float& scrollDelta);

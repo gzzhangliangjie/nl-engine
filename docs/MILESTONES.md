@@ -2098,3 +2098,53 @@
 - **完成情况**：gl5 run.bat 三组 × 双后端 ALL GREEN；verify.py 独立孪生 PASS（scene/phys 组序行 + registered=3 启动链 + 跨后端 tickgroups 行逐字一致 + 负向）；cases.json gl5 卡回归 6/6 逐字节；基线零重拍——gl1 4/4、gl2 4/4、gl3 4/4、gl4 6/6、ecs-parallel 8/8、phys-p3 10/10、phys-p4 10/10、audio-s1 14/14 全部逐字节 ALL GREEN（phys-p3/p4 各遇 1 次 0xC0000409 秒退族，重跑全绿定性 ENV-FLAKE）；gl-tools selftest 新增 5 组锚点双后端 PASS + ctest gl0 3/3×2；`server.py --check` OK。
 - **踩坑**：① **注册时序坑**——首版把组注册放帧循环前、console-exec 预执行之后，`game.tickgroups` 读到全 (off)，验收第一跑即暴露；注册块上移到预执行之前（与 registerGameConsole「必须先于 console-exec」同一条纪律的自然延伸）。② **runNormal console-exec 不打印输出**——runNormal 与 runScene 的预执行循环日志格式不一致（前者只有 exit code），phys 模式查询命令的输出落不了盘；对齐补齐。③ **cd 漏写落错树**（本轮会话级事故，已入当日日志；措辞修正 2026-11-10：~~「Bash 工具 cd 前缀丢失」~~ 实为执行者在 command 文本里漏写 cd——cd 只写进了命令描述，不是工具剥离；树闸本身工作正常，跨树 regression 被 exit 2 正确拒绝，缺口 = build-m0.2.bat/ctest 未接闸）：约 10 次漏写，构建/回归两次落错树（主树被误建 VULKAN/DX12 两次，源码与 master 一致无污染）；**用户拍板走指令层加固**（AGENTS.md §并行轨道纪律第 4 条扩写「cd 必须落在 command 文本里」），对策 = 「cd+pwd 双保险」或把 cd+命令写进临时 sh 脚本执行。④ 长行 PIL 证据板按文本实测宽度自适应画布（首版 1240px 固定宽截断 order 行）。
 - **下一步**：多逻辑帧速率分档（UE TickInterval 口径）/跨组依赖图 = §4 候选（有真实消费者再立项）。本机 exe 秒退处置 A/B/C 仍待拍板；bat 编码口径待终裁（本轮 run.bat 用纯 ASCII 注释规避）。
+
+## P8 M-I0：输入状态层——全键位三态 + 鼠标全量 + 注入 API（feat/input 轨道首里程碑，2026-11-10，tag `input-m0`）
+
+**动作**：城市驾驶游戏方向拍板后的 P0 第一步（立项链：review → 方向拍板 → `docs/p8/P8-INPUT-PLAN.md`，track `input` 注册 wt_pool/PARALLEL-TRACKS/ROADMAP，主树 `4a856c9`）。三处参考实读（Carrot `io/actions/` OpenXR 式 Action/ActionSet + 绑定解析规则、bevy `bevy_input` ButtonInput 三态 + W3C 物理键位、UE EnhancedInput InputMappingContext 只取上下文思想）→ `core/include/nl/core/input.hpp` + `core/src/input.cpp`（InputState：定长三态表 isDown/justPressed/justReleased、endFrame 帧末清边沿与增量、GLFW 全键位 kGlfwKeyTableSize、鼠标全按键/增量/滚轮/光标/mods、feed* 注入 API 与 updateFromWindow 共用 applyKey/applyMouseButton 内核）→ window.hpp/cpp **增量**扩第三通道（MouseButtonEvent + consumeMouseButtonEvents，既有热键边沿/ImGui 通道语义零改动；input.hpp 文件头固化单消费者铁律：游戏壳接线前 viewer 禁调 updateFromWindow）→ `input-tools/main.cpp`（selftest 7 节 39 断言 / trace TSV / check 5 锚重验 / 负向退出码 0/1/2 全契约）+ CMake（nl_core 源单 + input-tools target + /W4 清单 + ctest 2 条）+ `tools/make-input-m0-evidence.py`（trace TSV → 确定性 PNG）+ `example/input-m0/`（run.bat 五段式 + acceptance.png 基线 + input-trace.tsv + 4 份日志）+ cases.json input-m0 卡 4 用例 + `docs/p8/INPUT-TOOLS-GUIDE.md` → spot 回归证零回归 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m0`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2；input-tools selftest 7 节 39 断言全绿（含键码表数值锚 W=87/Space=32/ESC=256/MOUSE_LAST=7、同帧组合事件顺序语义、REPEAT 不重触发、越界防御不崩、12 帧序列重放逐位一致）；trace→check 闭环 PASS（12 行 + 5 锚）；证据图由真实 TSV 生成且 run.bat 重生成 `fc /b` 逐字节一致（肉眼核验：八行时间线边沿/持续态/滚轮标记与 TSV 逐一吻合）；负向退出码实测（未知节 2 / 缺文件 1 / 未知命令 2）；ctest mi0 2/2；spot 回归 m0.9 4/4 + pbr-direct 10/10 + s7.2 4/4 共 18/18 bytes ALL GREEN（window.cpp 增量改动零回归证实）；run.bat ALL GREEN exit 0；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **bat 文件必须 CRLF**：Write 工具落盘 LF，cmd 解析 `rem` 块直接炸（「'1.' 不是内部或外部命令」）——tools 侧生成 .bat 一律显式转 CRLF。
+2. **批处理括号坑再+1**：`if errorlevel 1 ( ... )` 块内 echo 文本含 `(DX12)` 圆括号 → 提前闭合 block，后续行被当顶层执行，报错行静默吞掉（表现为「卡在第一段后 exit 1 无输出」）。块内 echo 禁裸括号，reword 掉。
+3. **selftest 锚手写错（禁手写锚纪律再+1）**：f11 delta 锚初版写 dx=0.5/dy=0.0，实测 1.5/-0.5（0.5*(11%4)、-0.25*(11%3) 是序列公式不是终值）——锚必须从实测 log 反推，不许从脑内公式手写。
+4. **input.hpp 引 GLFW 头的链接面**：nl_core PRIVATE 链 glfw 不传播 include 路径 → input-tools 需显式链 glfw（与 nl_renderer 链 glfw 同理由：公开 API 用键码常量）。
+5. **`namespace kc = nl::core; (void)kc;` 编译错**：命名空间别名不能出现在表达式（C2882）——调试残留，删。
+
+**下一步**：M-I1 ActionMap/ActionSet 映射层（Carrot 解析规则 Bool=OR / Float=max abs / 组开关冻结 + 默认驾驶映射表 + selftest）；M-I2 viewer `--mode input-hud` 调试面板 + 渲染侧收口。游戏壳接线（updateFromWindow 启用点）排第 5 步独立 game target。merge 回 master 与 M8.1/particles/pathfinding 队列一起排（冲突面仅 CMakeLists.txt——viewer/main.cpp 本里程碑未触碰）。
+
+## P8 M-I1：ActionMap/ActionSet 映射层——Carrot 解析规则 + 组开关 + 默认驾驶映射表（feat/input 第二里程碑，2026-11-10，tag `input-m1`）
+
+**动作**：M-I0 收口后的直连里程碑（P8-INPUT-PLAN §M-I1）。三处参考重读（Carrot `io/actions/` 本轮细读 `Action.hpp`/`ActionSet.h/.cpp`/README：解析规则 README 明文 Bool=OR / Float=最大绝对值，代码实证 Bool←Float 阈值 `>=0.5f`、Float←Bool 1.0/0.0、非激活组回调 return、updatePrePoll 先搬 previous 再清零；bevy 无映射层——映射层口径由 Carrot 独供；UE MappingContext modifier/trigger 链不做）→ `core/include/nl/core/action_map.hpp` + `core/src/action_map.cpp`（ActionMap：三型 Bool/Float/Vec2、六源绑定带符号 scale、value+previousValue 冻结双值；ActionSet 位掩码 kMaxSets=32，关停=清零不保旧值——对 Carrot「跳过不写」的有意偏离防旧值漏模式，头文件留痕）→ `buildDrivingActionMap` 落库 input.cpp（W/S=油门±1、A/D=转向±1、Space=手刹、C=视角、鼠标增量=look、Esc=pause）→ input-tools 扩 selftest `actions`/`actions-det` 两节（9 节 60 断言）+ `act-trace`/`act-check` 子命令（12 帧驾驶序列 9 锚闭环）→ CMake（action_map.cpp 源单 + ctest mi1×2）+ `tools/make-input-m1-evidence.py`（数值条/布尔轨/events 三段时间线）+ `example/input-m1/`（run.bat 五段式 + acceptance.png 基线 + act-trace.tsv + 5 份日志）+ cases.json input-m1 卡 4 用例 + M-I0 卡 expectLog 7→9 节同步 + INPUT-TOOLS-GUIDE 更新 → 回归（input-m0 run.bat ALL GREEN + s7.2 spot 4/4 bytes + M-I0 trace/check 契约逐字节不变）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m1`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + viewer selftest 16/16×2；selftest 9 节 60 断言全绿（actions 节：OR/max-abs/平局取先定义/0.5 阈值/Vec2 additive/组开关冻结/未挂组恒参与；actions-det 节：12 帧驾驶序列重放逐位一致 + 9 序列锚）；act-trace→act-check 12 行 9 锚闭环 PASS；证据图由真实 TSV 生成、run.bat 重生成 `fc /b` 逐字节一致（肉眼核验：数值条正负双色/布尔轨边沿亮块/events 错位标签与 TSV 逐一吻合）；负向退出码实测（usage 2 / act-check 缺文件 1 / 未知节 2）；ctest mi0×2 + mi1×2 = 4/4；input-m0 run.bat ALL GREEN（M-I0 交付零回归）+ s7.2 spot 4/4 bytes；`server.py --check` exit 0。
+
+**踩坑情况**
+1. **手写锚错误三连犯（M-I0 同款坑，纪律再+1）**：f11 look y 锚写成 0.0，实测 -0.5（`-0.25*(11%3)` 是序列公式不是终值）——两次栽在同一公式上，锚必须从实测 log 反推已两次实证。
+2. **新 exe 跑出旧行为 = NMake 同秒 mtime 跳重链**：`cmake --build` 空输出 exit 0 但 exe 是旧的（selftest 报 unknown section 'actions'）——删 exe 强制重链后才真编；本机已知坑再次现世。
+3. **裸 cmake 无法 configure**：bash 里直接调 cmake.exe 报「no such file or directory」（nmake 不在 PATH）——configure 必须走 build-m0.2.bat（自带 VS 环境）。
+4. **input.cpp/main.cpp 各漏 include action_map.hpp**： DrivingActions/ActionMap 类型不可见级联百错——新头文件接进两个使用点时各补一行。
+5. **run.bat 抢跑后台构建**：VULKAN 树还在编时跑五段式，旧 exe 跑出 7 节 PASS 行被 findstr 闸住（闸起了作用）——双后端验收前先等双构建完成。
+
+**下一步**：M-I2 viewer `--mode input-hud` 调试面板（键态矩阵 + 激活组动作值条 + ImGui 注入按钮）+ 渲染侧收口（唯一触碰渲染处，只加不改）。之后游戏壳接线（第 5 步独立 game target，updateFromWindow 启用点）。
+
+## P8 M-I2：viewer `--mode input-hud` 调试面板——注入路径键态矩阵 + 动作值条 + ImGui 注入按钮（feat/input 第三里程碑，2026-11-10，tag `input-m2`）
+
+**动作**：M-I1 收口后的直连里程碑（P8-INPUT-PLAN §M-I2；input 轨道唯一触碰渲染处，只加不改）。core（`modes.hpp/.cpp` 追加 `InputHud=11`/"input-hud"，S0 分发器只加 case 口径）→ renderer 新模块 `input_debug.hpp/.cpp`（InputDebugUi POD 交换面 + drawInputDebugUi：键态三态格 / [-1,1] 动作条带符号 overlay / 注入 checkbox 区；增量兄弟窗口落位 console/audio 之后、Render 之前；默认关零布局不碰既有基线）+ `renderer.hpp` HudFrame 追加 inputDebug 字段 + hud.cpp 一行调用 + CMake 源单 → viewer（runNormal 追加尾参 + 分发器 case + 注入管线：请求态持久 runNormal 局部 → HUD 填充闸门内 feed 边沿/map.update/快照/endFrame + renderFrame 后读回 checkbox 写回；`--input-demo [start]` 帧序号脚本；三处闸门条件加 inputHud）→ `example/input-m2/`（run.bat 五段式 + 双后端 PNG 基线 ×2+expected ×2 + 4 份日志）+ cases.json input-m2 卡（pair 用例）+ TOOLS-GUIDE M-I2 节 → 回归（spot m0.9/s7.2 共 8/8 bytes）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/input 本收口 commit（annotated tag `input-m2`）。A 类轨道，不 bump `kStage`。
+
+**完成情况**：DX12/VULKAN 双构建 + viewer selftest 16/16×2（modes 自检含 input-hud 名字往返/唯一性）；pair 用例双后端 PNG 逐字节基线复现（`fc /b`），截图帧断言链：W/D/Space 绿 down + throttle/steer +1.00 + handbrake=1 + Esc PRESSED + pause=1（Esc 注入在 iter8=截图帧，pausePressed 边沿可见；ui 组 viewer 显式激活）；run.bat 五段式 ALL GREEN（selftest 双后端 + findstr 双锚 + fc /b）；`server.py --check` exit 0；spot 回归 m0.9 4/4 + s7.2 4/4 bytes ALL GREEN（只加不改证实：grep 全 viewer 无 updateFromWindow 调用，既有热键/ImGui 键盘通道零触碰）；肉眼核验双后端截图排版（修复后 pause 行独立成行、底部提示行完整）。
+
+**踩坑情况**
+1. **悬空 SameLine 折叠整行（ImGui 反直觉坑，已固化 TOOLS-GUIDE）**：`SameLine()` 后跟 if/else-if 且当帧无分支命中 → SameLine 悬空，下一个函数的首 item 落回本行——pause 行整行消失：label/条与 handbrake 行重叠（条值同 1 同位完全隐形），sets 行接在后面。教训：SameLine 之后的每个分支（含 else）都必须产出 item；排查靠换注入节拍（边沿清零帧）隔离出「无边沿才触发」。
+2. **带值参数吞参**：`--input-demo` 初版写死 `i+1<argc` 必吃下一个 argv，直跟 `--frames` 时把 flag 当值 atoi=0 → start=1 全错位。改可选值语义（next 以 `-` 开头或缺席 = 缺省 5）。
+3. **HudFrame 每帧新建**：`HudFrame hud{}` 在循环体内声明——checkbox 双向态不能靠 HudFrame 跨帧，请求态必须持久在 runNormal 局部、renderFrame 后读回、下帧首消费（与 cullBack/lodLevel 同一条双向通道口径，初版注入块放错在 hud 声明前编译期才暴露）。
+4. **MSVC `<cstdio>` 不经间接引入**：input_debug.cpp 用 `std::snprintf` 需显式 include（imgui.h 不带）。
+
+**下一步**：input 轨道三里程碑（M-I0/I1/I2）全部收口，能力面 = 状态层 + 映射层 + 调试可见。接下来按 GAME-DEV-ORDER 第 2 步开碰撞事件桥（Jolt ContactListener → ECS 事件，可与本轨合并跑或独立 wt）或第 3 步载具物理；游戏壳（第 5 步独立 game target）是 updateFromWindow 的启用点。merge 回 master 冲突面 = viewer/main.cpp + CMakeLists.txt（M8.1 已先收口，预期小冲突）。
