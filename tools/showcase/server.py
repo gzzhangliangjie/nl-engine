@@ -352,6 +352,13 @@ def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
         for stale in (out, out.with_name(out.name + ".before.png")):
             if stale.exists():
                 stale.unlink()
+    elif kind == "tool" and "{out}" in case.get("args", []):
+        # 【2026-11-10】kind:tool + {out}（如 nav-m0/bake）：给临时产物路径让
+        # argv 替换走通；判定只看 exit/expectLog，产物非 PNG 不进图像块，跑完即删。
+        # 与 regression.py 同口径修复（nav-m0 合入 master 后首次全量闸暴露）。
+        out = RUNS / f"{version['id']}-{case['id']}-{backend}-{int(started * 1000)}.toolout"
+        if out.exists():
+            out.unlink()
 
     try:
         argv = build_argv(case, params, out)
@@ -409,7 +416,14 @@ def run_one(version: dict, case: dict, backend: str, supplied: dict) -> dict:
         result["ok"] = False
         result["error"] = f"日志里没找到 {case['expectLog']!r}"
 
-    if out is not None:
+    if out is not None and kind == "tool":
+        # tool 产物非展示对象：确认落盘即删（.nnav 等私有格式，不进 runs 展示面）
+        if not out.is_file():
+            result["ok"] = False
+            result["error"] = (result.get("error", "") + " / 工具产物未落盘").strip(" /")
+        else:
+            out.unlink()
+    elif out is not None:
         if not out.is_file():
             result["ok"] = False
             result["error"] = (result.get("error", "") + " / 没有生成 PNG").strip(" /")

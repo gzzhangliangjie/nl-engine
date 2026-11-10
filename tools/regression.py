@@ -185,7 +185,19 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
         return rec
 
     kind = case.get("kind")
-    out = out_png if kind in ("image", "pair") else None
+    # 【2026-11-10】kind:tool + args 带 {out} 的工具用例（如 nav-m0/bake 烘焙
+    # 输出 .nnav）：给临时产物路径让 argv 替换走通，判定只看 exit/expectLog，
+    # 不进图像比对（out 是工具私有格式不是 PNG），跑完即删防垃圾堆积。
+    # 此前 tool 一律 out=None → {out} 用例在参数解析层直接 FAIL（nav-m0 合入
+    # master 后首次全量闸暴露）。
+    if kind in ("image", "pair"):
+        out = out_png
+    elif kind == "tool" and "{out}" in case.get("args", []):
+        out = out_png.with_suffix(".toolout")
+        if out.exists():
+            out.unlink()
+    else:
+        out = None
     try:
         params = show.validated_params(case, {})  # defaults = baseline params
         argv = show.build_argv(case, params, out)
@@ -243,7 +255,9 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
         rec["logTail"] = log[-1500:]
         return rec
 
-    if out is None:  # selftest / tool / 其他纯文本用例
+    if out is None or kind == "tool":  # selftest / tool / 其他纯文本用例
+        if out is not None and out.exists():
+            out.unlink()
         rec["verdict"] = "bytes"
         label = "selftest 通过" if kind == "selftest" else "文本用例通过"
         rec["detail"] = f"{label}（exit {code}，{case.get('expectLog', 'ok')}）"

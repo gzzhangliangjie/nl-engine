@@ -6008,6 +6008,90 @@
    ]
   },
   {
+   "id": "s8.2",
+   "label": "S8.2",
+   "name": "Ray Query 调试射线闭环：逐像素相机射线 + --mode rt（M8.2）",
+   "date": "2026-11-10",
+   "tag": "s8-done",
+   "summary": "M8.2（S8 收官，S8-PLAN 定义的 Ray Query 调试射线闭环）：initRt 在 initDag 资产链后懒建 RT 管线（csRt compute + present PSO，--mode rt 分流 Scene::draw 顶部）。csRt 8x8 dispatch：每像素 CPU inverseMat4（nl/math/math.hpp Mesa 展开式）求逆 viewProj 反投影出 near/far 点，inline RayQuery<RAY_FLAG_FORCE_OPAQUE> 打 TLAS（TMin 0.001 / mask 0xFF，bevy_solari trace_ray 口径）；命中距离灰度 1-saturate(t/range)，参考距离 = 相机轨道距离 x2（TMax 固定 1e4 曾致全黑——灰度标定教训），与 hiz viz 近亮远暗口径一致；--rt-debug id = instanceId hue（golden ratio frac）+ primitive 明度伪彩。命中图写 RGBA32_FLOAT typed UAV（DX12 store / Vulkan mandatory storage image 双安全），全屏 TriangleStrip present（Texture2D.Load 无采样器，逐字节确定）。帧结构 t0 重构：beginFrame/recordFrame/endFrame 三段（DX12 常驻 frameCmd_ / Vulkan per-frame 新建，语义不对称维持）。Renderer::FrameParams 新增 viewProj[16]，viewer 两条调用路径都填。灰度/伪彩/负向/spin 四类证据：--tlas-spin 转 TLAS 实例时命中图逐像素变化而 hiz 栅格基线逐字节不动（动态 transform 传播进射线结果的隔离证据）；--rt-debug xyz exit 1 不静默回退。run.bat verify 曾被『else 块内 echo 文本括号提前闭合 if 块』坑（set FAIL=1 无条件泄漏执行，最小用例实锤）——echo 文本禁括号纪律再次沉淀。",
+   "acceptance": [
+    "--mode rt 加载 Suzanne.lod0 双后端跑通：'rt scene ready (RayQuery per-pixel debug rays) | shader=dxil/spv' 日志，deviceErrors=0，NVRHI 校验层 + DX12 debug layer 零输出",
+    "同相机对比 docs/screenshots/s8.png：hiz 栅格画最细 LOD（3936 tri），rt 命中图画 BLAS fallback 粗网格（104 tri，M8.0 设计本意=粗代理）——射线结果确实来自 BLAS 几何，画面位置/尺度与同相机一致",
+    "--rt-debug id 伪彩图：instance hue + primitive 明度分层可辨",
+    "--tlas-spin：两帧数（12/200）命中图逐像素 DIFF，hiz 栅格基线 SAME（射线吃动态 TLAS、栅格路径零污染的隔离证据）",
+    "负向：--rt-debug xyz exit 1（不静默回退）",
+    "example/s8.2 归位（rt-dist/rt-id 双后端基线 + run.bat verify 全绿）+ cases.json s8.2 卡 + docs/screenshots/s8.png"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "rt-dist",
+     "name": "Ray Query 命中距离灰度图（rt 模式 Suzanne）",
+     "kind": "pair",
+     "note": "每像素相机射线打 TLAS，命中距离灰度（近亮远暗，参考距离=轨道距离 x2，hiz viz 口径）；轮廓与 hiz 栅格场景同相机吻合。spin/负向/log 断言由 run.bat verify 覆盖。",
+     "baselines": {
+      "dx12": "example/s8.2/rt-dist-dx12.png",
+      "vulkan": "example/s8.2/rt-dist-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "rt",
+      "--hud",
+      "--rt-debug",
+      "dist",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode rt --hud --rt-debug dist --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s8.2/run.bat verify"
+    },
+    {
+     "id": "rt-id",
+     "name": "Ray Query instance/primitive 伪彩图（rt 模式 Suzanne）",
+     "kind": "pair",
+     "note": "instanceId hue（golden ratio frac）+ primitive 明度分层伪彩：BLAS 子网格/三角形结构可辨。spin/负向/log 断言由 run.bat verify 覆盖。",
+     "baselines": {
+      "dx12": "example/s8.2/rt-id-dx12.png",
+      "vulkan": "example/s8.2/rt-id-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "rt",
+      "--hud",
+      "--rt-debug",
+      "id",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "command": "viewer.exe --mode rt --hud --rt-debug id --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s8.2/run.bat verify"
+    }
+   ]
+  },
+  {
    "id": "nav-m0",
    "label": "P8 M-N0",
    "name": "寻路最小烘焙闭环（vendored Recast/Detour 1.6.0）",

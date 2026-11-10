@@ -133,9 +133,9 @@ S8 用到的签名（行号为 nvrhi.h 实测）：
 
 ### t1~t3：Ray Query 主体
 
-- [ ] compute 里 Slang `RayQuery` 对象（SPIR-V/DXIL 都支持 ray query，无需完整 RT pipeline）：每像素从相机发 1 条射线
-- [ ] 命中距离 → 灰度可视化；命中 instanceId/triangleId → 伪彩色（两档调试）
-- [ ] `--mode rt` 接入模式分发
+- [x] compute 里 Slang `RayQuery` 对象（SPIR-V/DXIL 都支持 ray query，无需完整 RT pipeline）：每像素从相机发 1 条射线（csRt 8x8 dispatch，CPU inverseMat4 反投影 near/far，TMin 0.001 / mask 0xFF bevy trace_ray 口径；M8.2 收口实测 BLAS=fallback 粗代理 104 tri，见 s8.png 口径注记）
+- [x] 命中距离 → 灰度可视化；命中 instanceId/triangleId → 伪彩色（两档调试）（dist 灰度参考距离=轨道距离×2——TMax 固定 1e4 全黑教训；id = instanceId golden-ratio hue + primitive 明度）
+- [x] `--mode rt` 接入模式分发（ViewMode::Rt=12，Scene::draw 顶部分流；命中图 RGBA32_FLOAT typed UAV + 全屏 TriangleStrip present，Texture2D.Load 逐字节确定）
 
 **自检（S8 验收）**：射线可视化与场景**深度吻合**（边缘、轮廓都对）；HUD 显示 AS 构建/更新耗时。tag：`s8-done`，截图 `docs/screenshots/s8.png`（深度图 vs 命中距离图对比）。
 
