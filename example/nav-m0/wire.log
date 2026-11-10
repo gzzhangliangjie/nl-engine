@@ -1,0 +1,5 @@
+input       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-m0\hiz-a.nnav
+edges       : 16
+view        : top-down orthographic (x right, z down)
+canvas      : 512x512
+saved       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-m0\nav-wire.png

@@ -338,7 +338,9 @@ int runSelfTest() {
               << "  stage:   " << st.stage << '\n';
     check(st.backend != nullptr && std::strlen(st.backend) > 0 && !st.deviceReady,
           "backend selected");
-    check(std::strstr(st.stage, "S7.2") != nullptr, "S7.2 stage reported");
+    // M-N0 修存量债：锚点原硬编码 "S7.2"，M8.0 bump kStage 后从未重跑 selftest
+    // （s8-blas 收口漏网）。跟随当前 kStage 前缀；每次 kStage bump 同步改这里。
+    check(std::strstr(st.stage, "S8.0") != nullptr, "S8.0 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,

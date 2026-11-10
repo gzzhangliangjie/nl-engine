@@ -2003,3 +2003,22 @@
 7. **cases.json version 卡必须带 tag 字段**：`exe_for` 无条件 `version["tag"]`（路径无 `{tag}` 占位也取）——s8.0 初卡漏 tag 直接 KeyError。
 
 **下一步**：M8.1 TLAS 每帧重建（拍板点 D-S8-1：S8-PLAN §5 建议每帧全量 rebuild（UE 口径），开工前需用户确认）；M8.2 Ray Query 调试射线闭环。BLAS 句柄/M8.0 资源已备 TLAS 实例引用（blasVB_/IB_ 列末态 = AccelStructBuildInput 永久态）。
+
+## M-N0：寻路最小烘焙闭环——vendored Recast/Detour 1.6.0（feat/pathfinding 轨道首里程碑，2026-11-10，tag `nav-m0`）
+
+**动作**：按 P8-NAV-PLAN（2026-11-09 方案变更：vendored 上游，Carrot 降级为验收参照）执行 → gh-proxy 浅克隆 recastnavigation v1.6.0（锁 commit `6dc1667f`，ZLib 核对）→ vendored 子集 `Recast/`+`Detour/`+`DebugUtils/` 入 `thirdparty/recastnavigation/`（自写薄 CMakeLists 单静态目标 `nl_recast`；上游模块 CMakeLists 带 SOVERSION/install 且 DebugUtils 依赖未入库的 DetourTileCache，不能直接 add_subdirectory）→ `VENDOR.md` 溯源（版本/commit/许可证/子集/UE 1.4.2 口径差异留痕/升级纪律）→ 集成层 `core/include/nl/nav/Nav.hpp` + `core/src/nav/Nav.cpp`（PIMPL 挡上游符号，对齐 nl/physics 先例；BuildParams→rcConfig 换算照上游 Sample_SoloMesh.cpp 口径；NLNV 自管容器序列化 = params + tile 原始字节）→ `nav-tools` 五子命令（bake/dump/wire/resave/selftest）+ 失败诊断链（walkableTris/grid/rasterSpans/filteredSpans/compactSpans/regionCount）+ 自写零依赖 PNG 编码器（stored zlib，确定性字节）→ ctest 4 条 → `example/nav-m0/`（run.bat 含 bake 双跑 `fc /b` 确定性断言 + resave roundtrip 断言 + wire 证据图 + usage/负向）→ cases.json `nav-m0` 卡五用例（expectExit 2/0/0/0/1）→ `NAV-TOOLS-GUIDE.md` 归档 → 三处参考实读（上游 Sample_SoloMesh/集成指南、UE Navmesh Recast.tps 1.4.2 + DetourNavMeshBuilder.h、Carrot NavMeshBuilder.h BuildParams+DebugDrawType；bevy 无 crate 据实标注）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-m0`）；wt 开工登记在 master `35960bf`。
+
+**完成情况**：DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16 ×2；nav-tools selftest PASS（合成场景 bake/确定性逐字节/roundtrip 逐字节/负向四类）；HizScene.glb（cs=0.1, agentRadius=0.2）烘焙 4 多边形 / 16 顶点 / 0.50 m²，fnv64 `5e70947ba37dcd35`，两次 bake `fc /b` 逐字节一致；`nav-wire.png` 俯视正交 4 箱顶轮廓与 polys=4 一致（肉眼核验，真实工具输出）；ctest m-n0-nav-* 4/4 双后端；`server.py --check` 退出 0；展示台 nav-m0 卡五用例落卡（expectLog 全部从实测 log 复制）。
+
+**踩坑情况**
+1. **⚠️ Detour tile 内存所有权铁律（本轮最重坑，确定性崩溃）**：`load()` 把 `std::vector` 的 `operator new` 内存以 `DT_TILE_FREE_DATA` 移交 Detour → 析构时 `dtFree`（malloc 语义）对 new 内存 → 分配器不匹配 + UAF。症状 = resave 确定性秒退（5 连 127 零输出，先按 flake 重跑 5/5 复现才定性真崩）+ selftest roundtrip 字节差（resave 读悬垂内存）。修复 = tile 缓冲由 `Impl::ownedTiles` 持有、`addTile` flags=0；bake 路径 `dtCreateNavMeshData` 产物本就是 `dtAlloc` 的，FREE_DATA 移交合法。
+2. **1.6.0 API 事实两枚**：`dtNavMesh::getTile(int)` 非 const 重载 private（非 const 指针调用直接 C2248），读侧必须走 const 指针命中公开的 `getTile(int) const`；`getParams()` 返回指针非出参。
+3. **上游 DebugUtils/DetourDebugDraw.cpp 头依赖 DetourTileCacheBuilder.h**：TileCache 按计划不入库 → 该 TU 从构建剔除（文件入库、VENDOR.md 留痕），M-N2 NavMesh 叠加自绘（`NavMesh::polyEdges` 数据面已备）。
+4. **minRegionArea 口径**：RecastDemo 默认 regionMinSize=8（64 格²）假设几十米大地图，本项目 2~3m 测试资产可走区全被丢光（"no walkable contours"）；默认下调 2/6 + CLI 暴露 --min-region/--merge-region。同因：cs=0.3 粗网格 7×7 被 radius-2 腐蚀清空，cs=0.1 直接通过——粗网格+大腐蚀半径=小资产必死，诊断链逐级定位（walkableTris 482 正常 → filtered 22 → compact 0 → 死点在 erode）。
+5. **合成场景三角形缠绕**：Recast `norm[1] > cos(slope)` 标准右手叉积，俯视 CW 缠绕法线朝下全不可走；修为俯视 CCW。
+6. **存量债：viewer selftest 锚点硬编码 "S7.2"**，M8.0 bump kStage 后从未重跑（s8-blas 收口漏网，本 wt 首次全量构建即暴露）→ 修为跟随 "S8.0"；**kStage bump 必须同步改锚点并重跑 viewer --selftest**。
+7. **ctest 条目改后必须确认 configure 真跑了**：一次重建后 build 目录 CTestTestfile 仍是旧条目（Suzanne），重跑 configure 才刷新——「改了 CMakeLists 就核对生成物」进入检查清单。
+
+**下一步**：M-N1（dtNavQuery findPath/findStraightPath 封装 + 负向语义 + 绕障用例）；M-N2 编辑器结合（cvar + ImGui 面板 + 五阶段可视化，本轮拍板核心）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。参数默认值按本项目资产尺度已调（BuildParams 注释留痕），大场景资产回大 cs 即可。

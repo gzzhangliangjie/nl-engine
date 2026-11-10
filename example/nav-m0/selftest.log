@@ -1,0 +1,20 @@
+nav selftest:
+  ok synthetic bake succeeds
+  ok polys > 0
+  ok area > 0
+  ok area < full floor (obstacle eroded)
+  ok second bake succeeds
+  ok save a
+  ok save b
+  ok determinism: artifacts byte-identical
+  fnv64 a    : d47ed398875d59e8
+  ok roundtrip save 0
+  ok roundtrip load
+  ok roundtrip stats equal
+  ok roundtrip save 1
+  ok roundtrip: bytes identical
+  ok negative: empty geometry rejected
+  ok negative: vertical wall only rejected
+  ok negative: missing file rejected
+  ok negative: garbage magic rejected
+nav selftest: PASS
