@@ -12,6 +12,7 @@
 > **与 drive 轨的关系**：M-CAM0 不依赖 drive（Chase 用脚本轨迹当假目标）；M-CAM2 强依赖
 > drive M-D3（训练场 + 真车回读）；M-CAM1/M-CAM3 与 drive 无数据依赖，但 viewer 接线共用
 > M-D3 落的输入管线（窗口 → InputState → ActionMap），一并串行。
+> **2026-11-10 merge 状态更新**：drive 整轨 M-D0~D3 已 merge 回 master（merge commit `a2e3cff`），M-CAM1b / CAM2b / CAM3b 的 b 段前置硬闸**已解除**；M-D3 落的输入管线、`ChassisState` POD 与投影源切换钩子现已在 master 上，b 段可直接从新 master 开轨。
 
 ## 1. 目标
 

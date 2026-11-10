@@ -2438,3 +2438,21 @@
 9. **TSV 行尾必须与 `.gitattributes` 对齐**：`*.tsv text eol=lf`，而 Python `write_text()` 在 Windows 默认 CRLF —— 初版 `frames.tsv` 工作树 CRLF / blob LF，clone 后首次 `fc /b` 会假 FAIL。改 `newline="\n"` 显式写 LF（与 M-D0/D1/D2 归档 TSV 一致），重生成后连续两轮 `run.bat verify` ALL GREEN。
 
 **下一步**：整轨 M-D0~D3 已全部收官，可按 `docs/PARALLEL-TRACKS.md` §7 整轨 merge 回 master（四栏验收纪要随分支一次带入）；camera b 段仍按 `P8-CAMERA-PLAN.md` 排 M-D3 之后串行，M-D3 已留 `ChassisState` POD 与投影源切换钩子。
+
+## 轨道合并：feat/drive M-D0~D3 → master（2026-11-10，merge commit `a2e3cff`）
+
+**动作**：用户「那就合回去吧」= drive A 类并行轨道整轨收尾合并。按 `docs/PARALLEL-TRACKS.md` §7 过闸：`wt_pool.py claim / check / guard --op merge`（本轮归属 M-D3 合并收尾）、`git merge-tree --write-tree --name-only` 无副作用冲突预演、§7.2 验收纪要（上方 M-D0~D3 四栏）与 §7.3 双向自查（drive wt 干净、主树只有 M9.1 会话两个未跟踪 verify 日志、原样未动）齐备后 `git merge --no-ff feat/drive`。**冲突仅 1 处**：`docs/MILESTONES.md` 两侧都在文件末尾追加四栏 → 按「并集保留」把 master 侧 M9.0/M9.1 两节 + drive 侧 M-D0~D3 四节全部留下（由 `git show :1:/:2:/:3:` 三阶段 blob 判定为纯追加后字节级拼接，6 节全在、零丢弃）。`example/cases.json` 由 `.gitattributes merge=nlcases` + `tools/merge-cases.py` 语义驱动自动并集：master 80 张 + drive 4 张新卡 = **84 张**，无重复、LF + indent=1 规范。`CMakeLists.txt` / `viewer/main.cpp` / `renderer.hpp` 自动合并，两侧改动均在（drive 三个新 `.cpp` 与 M9.1 侧 Nav/Vm/Bindings 并存；`--drive-demo` / `rawKeyDown` / `vehicle.*` cvar 锚全在）。
+
+**提交版本**：merge commit `a2e3cff`（双 parent `f0b7616` master / `041226a` feat/drive）。annotated tags `drive-m0`~`drive-m3` 全部成为 master 祖先；track 四栏验收纪要随分支一次带入，主树 `AGENTS.md` / `PARALLEL-TRACKS.md` / `GAME-DEV-ORDER.md` / `P8-CAMERA-PLAN.md` / `P8-DRIVE-PLAN.md` / 当日日志按 §7.5 单独 docs commit 同步。
+
+**完成情况**：合并后主树重建 DX12/VULKAN + viewer selftest **16/16 ×2**；M-D0 `contacts.tsv` / M-D1 `ecs.tsv` / M-D2 `drive.tsv` 六组逐字节零回归 + DX/VK `drive.tsv` 互比一致；ctest 双后端各 **12/12**（`--repeat until-pass:3`）；`example/drive-m3/run.bat verify` **ALL GREEN**（证据图 / `frames.tsv` 重生成 `fc /b` 稳定）；`regression.py --only` = `drive-m3` **12/12 bytes** / `drive-m2` **10/10 bytes** / `s9-shadow` **2/2 bytes** / `s8.2` **4/4 bytes** 全 ALL GREEN；`server.py --check` exit 0（`stage=S8.2 version=s8.2 cases=2 baselines=4`，70 张既有基线零波及）。未跑全量总闸（纪律：只在打 tag 收口放行时跑一次，本轮不打 tag）。
+
+**踩坑情况**
+1. **冲突预演必须先做**：`git merge-tree --write-tree --name-only master feat/drive`（Git 2.55）无副作用报出唯一冲突 `docs/MILESTONES.md`，`cases.json` / `CMakeLists.txt` / `viewer/main.cpp` / `renderer.hpp` 均自动合并 —— 先预演再 merge，避免带着未知冲突面进合并态。
+2. **Python `open('w')` 传 bytes 会先清空文件**：首版冲突解决脚本 `with p.open('w', ...) as f: f.write(out.encode())` 抛 `TypeError` 前已把 `docs/MILESTONES.md` truncate 成 0 字节。**恢复不用 `git checkout`**：从 `git show :1:/:2:/:3:docs/MILESTONES.md` 读三阶段 blob，实测两侧均为「以共同祖先为前缀的纯追加」，按 `base + master_append + drive_append` 字节级重建、写回 CRLF，零内容丢失。凡工作树写入一律 `Path.write_bytes()`，勿在文本句柄里传 bytes。
+3. **guard / scope 的 WARN 不是阻断**：claim 由短命 Python 进程登记，`guard --op merge` 报 `pid looks dead`（exit 2）、`scope` 报「cwd 在主树」（exit 2）。本次 merge 的合法落点就是主树，且 §7.5 明文要求注册表更新在主树提交；核对 claim note / 双树 status 后继续，勿把 WARN 当拒绝、也勿为凑 exit 0 去改注册表状态。
+4. **不擅自把轨道标 CLOSED / 不拆 wt**：用户只说「合回去」，拆 worktree / 改 `wt_pool.py TRACKS` state 属删除类动作，保持 `ACTIVE drive wt=exists`、`feat/drive` 分支保留，等明确指令。
+
+5. **归档日志不许带 worktree 绝对路径**：`tools/make-drive-m3-evidence.py --sweep` 首行原打印 `OUT / "frames.tsv"` 的绝对路径，`example/drive-m3/sweep.log` 因此写入 `E:\UE_STUDY_2026\nl-engine-drive\...`；整轨 merge 回 master 后同一产物必然漂移到 `nl-engine\...`，任何新 clone / 新 worktree 跑 `run.bat` 都会产生伪 diff。改为固定相对路径 `example/drive-m3/frames.tsv`（证据图只读 `sweep.log` 最后 4 行，两张 PNG 基线零改动），连续两轮 `run.bat verify` ALL GREEN 复验。另：`.bat` 的 `echo >>` 在 Windows 写 CRLF，而 `.gitattributes *.log text eol=lf`，归档时统一转 LF，勿把工作树 CRLF 当内容变更提交。
+
+**下一步**：camera b 段（M-CAM1b / CAM2b / CAM3b）串行前置已解除，可从新 master 开轨，消费 M-D3 留的 `ChassisState` POD / 投影源切换钩子；`feat/drive` wt 是否拆除等用户拍板；主线下一站 M9.2 离线参考模式。

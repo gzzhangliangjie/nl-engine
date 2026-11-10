@@ -245,7 +245,7 @@
 >
 > **状态（2026-11-10 用户拍板 Q-D3-1~4）**：M-D3 开工闸四项全部拍定 —— Q-D3-1 **A**（车挂 `DebugScene` scenario 2，真抽 `buildVehicle`）、Q-D3-2 **A**（注入管线扩展 + 窗口只读键态，viewer 仍不调 `updateFromWindow`）、Q-D3-3 **A**（`kStage` 不 bump + 独立 HUD 窗口默认关 + 工具版）、Q-D3-4 **折中留钩子**（OrbitCamera 固定机位 + 留 `ChassisState` POD / 投影源切换钩子，不接 Chase、不拍相机基线）。结论与证据见 §3 M-D3 开工锚点表 / `D3-DRIVE-VIEW-OPTIONS.md`；上面各段为历史时点快照。**待拍板架构项 0**，M-D3 允许落码。
 >
-> **状态（2026-11-10 M-D3 收官）**：`drive-m3` 已打 annotated tag，四项 Q-D3 全部按拍板落地并自证（证据见 `DRIVE-TOOLS-GUIDE.md` §11 / `MILESTONES.md` 四栏 / `example/drive-m3/`）。计划内**待拍板架构项 0**；整轨 M-D0~D3 收官，下一步是整轨 merge 回 master，camera b 段仍按 `P8-CAMERA-PLAN.md` 排在 M-D3 之后串行（钩子已留、胶水未接）。上面各段为历史时点快照。
+> **状态（2026-11-10 M-D3 收官）**：`drive-m3` 已打 annotated tag，四项 Q-D3 全部按拍板落地并自证（证据见 `DRIVE-TOOLS-GUIDE.md` §11 / `MILESTONES.md` 四栏 / `example/drive-m3/`）。计划内**待拍板架构项 0**；整轨 M-D0~D3 已于 2026-11-10 全量 merge 回 master（merge commit `a2e3cff`，`MILESTONES.md` 一处冲突并集保留、`cases.json` 语义并集 84 卡、合并后双后端零回归全绿）；camera b 段仍按 `P8-CAMERA-PLAN.md` 排在 M-D3 之后串行，串行前置**已解除**（钩子已留、胶水未接）。上面各段为历史时点快照。
 
 | 编号 | 问题 | 建议 / 拿到答案改哪里 |
 |---|---|---|

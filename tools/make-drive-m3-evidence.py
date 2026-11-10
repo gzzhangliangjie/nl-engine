@@ -109,7 +109,10 @@ def sweep(exe: Path) -> int:
     # first time it regenerates this file. Match the M-D0/D1/D2 TSV blobs.
     with (OUT / "frames.tsv").open("w", encoding="ascii", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
-    print("sweep: %d real runs -> %s" % (len(rows), OUT / "frames.tsv"))
+    # Keep the archived log tree/machine independent: an absolute worktree
+    # path here made example/drive-m3/sweep.log differ after feat/drive was
+    # merged into master (and would differ on every fresh clone / worktree).
+    print("sweep: %d real runs -> example/drive-m3/frames.tsv" % len(rows))
     for r in rows:
         print("  F %3d speed=%-10.7g posZ=%-9.4f yaw=%-9.4f wallHits=%d" %
               (r[0], r[1], r[7], r[8], r[3]))
