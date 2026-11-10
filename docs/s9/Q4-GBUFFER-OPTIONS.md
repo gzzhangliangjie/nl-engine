@@ -11,13 +11,15 @@
 | 项 | 状态 |
 |---|---|
 | 新增独立 GBuffer 落盘（任何 RT / UAV / `register(u/t)` 槽位 / 格式） | **冻结** |
-| 绑定布局、BindingSet 扩建、纹理状态登记、CMake 新 entry | **冻结** |
+| 绑定布局、BindingSet 扩建、纹理状态登记、CMake 新 entry | **冻结**（拍板前）。**澄清**：冻结的是「独立 GBuffer 落盘资源的形态与槽位」，不是 compute 直光 pass 按 §2.7 必备的单一 BindingSet |
 | 在注释 / README / commit message / CMake 里顺手把形态写死 | **冻结** |
 | `renderer/shaders/gbuffer_common.slangh`（PURE MOVE，0 处资源声明） | **保留，不回滚**（合规机械执行） |
 | `material.slang` 纯搬移（-54/+11）+ `CMakeLists.txt` `_GBUFFER_COMMON` 依赖 | **保留，不回滚** |
 | 双后端构建 + 4 条 spot 回归（8/8 `bytes`） | 已完成，作为 M9.0 硬验收证据 |
 
 冻结面机器核查：`grep -n "RWTexture\|RWStructured\|RWBuffer\|register(u\|register(t\|Texture2D\|RenderTarget\|MRT\|SV_Target[1-9]" renderer/shaders/gbuffer_common.slangh` → 0 命中。
+
+> **2026-11-10 18:0x 纠偏**：本材料 §2 现状资源表与方案 A「绑定布局」曾把 `rt` 的 t0(TLAS) 与 `material` 的 t0(vis) 混编成一张槽表，漏写 `initRt → initDag`（不产 vis buffer）与 `initVisbuf(pulling)` 互斥、`--mode shadow` 尚未注册。已改为「槽位落码时按实读固化进 §2.18」，决策材料不再预设槽位号。依据见 `S9-PLAN.md`「落码前实读事实」。
 
 ---
 
@@ -85,8 +87,8 @@
 | §2.16（238-241） | draw 主路径重构保留 `modelBatches_.empty()` 兜底；spot 必须含 lod/dag；**基线 diff 超 ≈527px 签名必须追因、禁强刷** | 任何新增全屏 pass 若改变既有路径，spot 不能只测 init/per-prim |
 | `docs/MILESTONES.md` s8-done 段（2166-2180） | M8.2 已落 `rt.slang` `RWTexture2D<float4>` **RGBA32_FLOAT typed UAV**（`ensureRtTargets` 懒建 + 视口依赖 set）+ `csRt` 8×8 inline RayQuery + `vsRtPresent/psRtPresent` `Texture2D.Load` 逐字节确定；`kStage` bump `S8.2` 曾致 **50 张 HUD 基线重拍** | 已有可复用的 compute 8×8 + typed UAV 骨架；改 `kStage` 有确定的重拍代价 |
 | `.workbuddy/memory/MEMORY.md:19,23` | `kStage` bump 波及 = args 含 `--hud` 且 exe=current 的卡全重拍；`reshot-hud-stage.py` 超 527px 签名要追因才许 `--force`；§2.14 材质间接表 S9/S10/S13 复用 | 方案 C 若 bump，代价可量化；公共头已为 S10/S12 留好契约 |
-| 现状资源（`material.slang:39-70`） | b0/b1/b2 + t0 vis + t1 vertexPool + t2 localIndices + t3 clusterMeta + t4..t7 / t8..t11 贴图数组 + t12 `GPUMaterial` + s0，**单一 BindingSet** | 方案 A 的 compute 版可照抄这套 slot 分配 |
-| 现状资源（`rt.slang:23-36,118`） | b0 `RtConstants` + t0 TLAS + u0 `RGBA32_FLOAT` UAV；present 端 t0 SRV | 方案 A 可直接扩这个 set |
+| 现状资源（`material.slang:39-72`） | b0/b1/b2 + t0 vis + t1 vertexPool + t2 localIndices + t3 clusterMeta + t4..t7 / t8..t11 贴图数组 + t12 `GPUMaterial` + s0，**单一 BindingSet** | 方案 A 的 compute 版读侧照这套 slot 分配（**另需 u0 输出**）；与 `rt` set 是两条资产链，不混编 |
+| 现状资源（`rt.slang:23-36,118`） | b0 `RtConstants` + t0 TLAS + u0 `RGBA32_FLOAT` UAV；present 端 t0 SRV | 方案 A 复用其 `RGBA32_FLOAT` 目标与 present 骨架；**不能把 vis 资源直接塞进这个 set**（`initRt → initDag` 不产 vis buffer） |
 
 ---
 
@@ -108,7 +110,7 @@
 |---|---|
 | **RT/UAV 数量与格式** | **0 张新增 GBuffer 纹理**。M9.1 直光输出复用/扩 M8.2 已有的 `RGBA32_FLOAT` typed UAV（`rt.slang` u0）；无量化、无 packed |
 | **写入 pass 形态** | **compute 8×8**（`rt.cs` / Carrot `direct-raytracing.slang` 同款）：单 pass 内 `gbInterpolateVisTriangle` → 发 shadow ray → shade → 写输出 UAV。resolve 与 trace 同 pass，中间不落盘 |
-| **绑定布局** | 扩现有 `rt` 的**单一 BindingSet**（§2.7）：b0 `RtConstants` + t0 TLAS + t1 vis + t2 vertexPool + t3 localIndices + t4 clusterMeta + t5.. 材质表/贴图 + u0 输出。shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0），**不改编译参数**；TLAS / output 的 `beginTrackingTextureState` 沿用 M8.2 现成登记 |
+| **绑定布局** | **不预设槽位号**。compute 直光 pass 按 §2.7 建自己的**单一 BindingSet**：读侧照 `material.slang:39-72`（b0/b1/b2 + t0 vis + t1..t3 拉取资源 + t4..t11 贴图数组 + t12 材质表 + s0），写侧复用 M8.2 的 u0 `RGBA32_FLOAT`；资产链走 `initVisbuf(pulling=true)` 而非 `initRt → initDag`。shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0），**不改编译参数**；状态登记沿用 §2.15 / M8.2 口径。槽位表在落码时按实读固化进 `SHADER-CONVENTIONS.md` §2.18 |
 | **显存 / 带宽 / 精度** | 新增显存 **0 MiB**；带宽 = 每个消费端各自重做一次 vertex pulling + barycentrics（vis + vertexPool + indices + clusterMeta 四读），**算力重复**但无额外显存往返；精度 = 原生 float32，与 mode 5 逐位同源，保形零风险 |
 | **S10 / S12 / S15 扩展面** | S10 screen probes 需邻域像素属性 → 邻域也要重 resolve，代价 ×N；**S12 temporal 需要上一帧属性 → 等于必须补一份 history 落盘**（bevy `previous_gbuffer` 正是为此）；S15 VSM「只读 GBuffer」底线（D11）需重新理解成「只读反解契约」。**落盘决策被推迟，但不会消失** |
 | **现有基线改动面** | **0**。`kStage` 不 bump，现有 HUD / pbr-direct / s7.2 / s8.2 基线全不动；M9.0 交付 = 公共头 + 双后端 8/8 `bytes` 报告。M9.1 新增 `--mode shadow` 时才新建 `example/s9-shadow/` 基线 |
@@ -172,8 +174,8 @@
 ## 7. 拍板后动作清单（2026-11-10 已拍板 A，状态已同步）
 
 1. **已执行**：结论写回 `docs/s9/S9-PLAN.md` 开工拍板记录 Q4 行（「已拍板：方案 A 不落盘，即取即算 + 依据」）。
-2. **已执行**：M9.0 任务书第 3 条「落盘形态待用户拍板」挂账句删除，改为「不落盘，落盘决策推迟到 S10 与 S12 历史帧属性需求一起拍」；第 4 / 6 条同步适配，硬验收三条原样保留。
+2. **已执行**：M9.0 任务书按「任务 / 决策 / 实测 / 边界」四层重写为 T1~T8；删「落盘形态待用户拍板」挂账句与上一版编造的绑定槽位表，硬验收三条原样保留。
 3. **已执行**：本文件状态改为「已拍板，保留为决策证据」；`MILESTONES.md` 四栏「下一步」、`MEMORY.md` 进度行、当日日志的旧表述清理。
 4. **待办**：把方案 A 的绑定布局 / 状态登记口径固化进 `docs/SHADER-CONVENTIONS.md`（新增 §2.18）。
-5. **待办**：与 A 相容的第一行落码（`--mode shadow` 无阴影版 compute 直光路径；**不新增 RT / UAV / 槽位**），`kStage` 是否 bump 随实现定，bump 则按 `reshot-hud-stage.py` 安全闸重拍。
+5. **待办**：与 A 相容的第一行落码（T4：`--mode shadow` 无阴影版 compute 直光路径，用户拍板 ②）；**不新增独立 GBuffer 纹理 / RT / UAV**，compute pass 自身单一 BindingSet 按 §2.7 建并固化 §2.18。`kStage` 是否 bump 随实现定，bump 则按 `reshot-hud-stage.py` 安全闸重拍。
 6. **待办**：M9.0 收口照 `AGENTS.md` 交付纪律 —— 四项自查、四栏台账、修改文件清单、`wt_pool.py close` 硬闸、tag `s9-gbuffer`。

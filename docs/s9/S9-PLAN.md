@@ -1,7 +1,7 @@
-# S9 详细开发路线图：GBuffer + 直光 + 阴影射线 + 离线参考模式
+# S9 详细开发路线图：GBuffer 公共反解 + 直光 / 阴影射线 + 离线参考模式
 
 > 对应总路线 `docs/ROADMAP.md` 的 S9。预计 3 个里程碑、业余时间约 1 周。
-> 两件事：① 每像素 1 条阴影射线的硬阴影直光（Lumen 的直光层）；② **64+ 采样/像素的离线参考模式**——它产出的「直光 / 硬阴影标准答案」是 M9.1 阴影射线与 VSM（S15）对照的裁判。
+> 两件事：① 每像素 1 条阴影射线的硬阴影直光（Lumen 的直光层）；② **64+ 采样/像素的离线参考模式**——产出「直光 / 硬阴影标准答案」，供 M9.1 阴影射线与 VSM（S15）对照。**只算直光一跳，不是 GI 裁判**（Q3 拍板）。
 >
 > **2026-11-10 开工重定义**：原计划 M9.0 的「直光框架」在 S7 / `pbr-direct` 穿插项里已实现（`material.slang` 的 mode 5 = vis buffer 反解 + Cook-Torrance GGX 直射光，`LightConstants` 80B + 材质间接表），照字面重做属重复劳动。三项用户拍板见文末「开工拍板记录」，本文件据此重写验收判据。
 
@@ -9,17 +9,44 @@
 
 ## M9.0 GBuffer 抽取 + 公共反解头（1 天）
 
-- [x] 把 `material.slang::psMatResolve` 的 vis buffer 几何反解（vertex pulling → 透视正确 barycentrics → worldPos / normal / uv / uv 导数）抽进 **`renderer/shaders/gbuffer_common.slangh`** 公共头，表达式**逐字搬移、禁 branch/lerp 改写**（M-PT2/PT3 保形铁律），保证 S7 全部基线逐字节不变
-- [x] 公共头同时提供 `gbReconstructWorldPos(pixel, deviceZ, size, invViewProj)`（bevy `gbuffer_utils.wesl` 口径），供 S10 / S12 的 GBuffer 重建复用
-- [x] **Q4 已拍板：不新增独立 GBuffer 落盘**（方案 A，2026-11-10 用户）。M9.1 阴影射线在 **compute 8×8 单 pass** 内调 `gbInterpolateVisTriangle` 即取即算 → 发 shadow ray → 写 M8.2 已有的 `RGBA32_FLOAT` typed UAV；不写任何 RT / UAV 新增槽位。**落盘决策推迟到 S10 与 S12 历史帧属性需求一起拍**，届时 A/B/C 三方案代价矩阵见 `docs/s9/Q4-GBUFFER-OPTIONS.md`；写入端可复用本公共头，返工面只在资源层
-- [x] 直光只做**一致性对照**，不重写 BRDF：公共头反解与旧内联路径的等价性已由 `s7.2/pulling` / `pbr-direct/pbr` / `pbr-direct/textured` / `s8.2/rt-dist` 双后端 8/8 `bytes` 证明；M9.1 compute 直光路径上线时再与 mode 5 做逐像素对照
-- [ ] `--mode shadow` 的无阴影版先跑通（= compute 直光路径接上公共头反解，不发阴影射线）；**A 下不依赖任何 GBuffer 纹理**，绑定布局按 `Q4-GBUFFER-OPTIONS.md` 方案 A（扩现有 `rt` 单一 BindingSet：b0 / t0 TLAS / t1 vis / t2 vertexPool / t3 localIndices / t4 clusterMeta / u0 输出，shift 沿用 §2.5）。此项是 M9.0 硬验收第三条，拍 A 后**保留不丢**
+**范围**：Q1（重定义为抽取）/ Q4（方案 A 不落盘）/ 无阴影版实现路径 ②（新建 compute 直光 pass）均已拍板。交付 = 公共反解契约 + 一条 compute 直光对照路径 + 保形证据；**不新增独立 GBuffer 纹理 / RT / UAV 槽位**，落盘形态推迟到 S10 与 S12 历史帧需求一起拍（依据与 A/B/C 代价矩阵见 `docs/s9/Q4-GBUFFER-OPTIONS.md`）。
 
-**自检**：GBuffer 抽取前后 S7 / pbr-direct / s8.2 抽查基线 bytes 不变；`--mode shadow` 无阴影版与 mode 5 逐像素一致。tag：`s9-gbuffer`。
+### 任务书
 
-> **Q4 拍板后的范围口径（2026-11-10）**：方案 A 下 M9.0 的「独立 GBuffer 落盘」取消，交付 = 公共反解契约 + 保形验证 + `--mode shadow` 无阴影版对照卡；落盘形态不在本里程碑写死，S10 开工时与 S12 temporal 需求一并拍板。**硬验收三条原样保留**（见下）。
+| # | 任务 | 状态 |
+|---|---|---|
+| T1 | `gbuffer_common.slangh`：把 `material.slang::psMatResolve` 的 vis buffer 几何反解（vertex pulling → 透视正确 barycentrics → worldPos / normal / uv / uv 导数）**逐字搬移**进公共头，禁 branch / lerp / 代数改写（M-PT2/PT3 保形铁律） | ✅ |
+| T2 | 公共头同时提供 `gbReconstructWorldPos(pixel, deviceZ, size, invViewProj)`，与 `rt.slang::csRt` 同源（perspectiveZO，z=0 近 / z=1 远） | ✅ |
+| T3 | `CMakeLists.txt` 显式登记 `_GBUFFER_COMMON` 依赖（防改公共头不重编的假绿）；双后端构建 + selftest + 抽查回归 | ✅ |
+| T4 | 新增 `--mode shadow` 开关：**枚举 / `core/src/modes.cpp` 注册表 / `Scene` 分发 / `viewer/main.cpp` 白名单**四处同步（该 mode 当前不存在，注册表末位是 `rt`）。无阴影版走 compute 8×8 直光 pass：复用 `initVisbuf(pulling=true)` 产出的 vis buffer，调 `gbInterpolateVisTriangle` 即取即算 + **逐字搬移 mode 5 BRDF**，写 M8.2 已有 `RGBA32_FLOAT` UAV、复用 `rt` present 呈现；**不发阴影射线** | ⬜ |
+| T5 | 按 §2.7 给该 compute pass 建**单一 BindingSet**；槽位与状态登记**以实读代码为准**（`material.slang:39-72`、`scene.cpp:2171-2177`），固化进 `docs/SHADER-CONVENTIONS.md` §2.18。**任务书不预设槽位号** | ⬜ |
+| T6 | 对照卡：`--mode shadow` 无阴影版 vs mode 5 **逐像素一致**；比对口径写清（同机位同参数两张 PNG、空像素清屏色对齐、UAV float → framebuffer UNORM 的量化路径） | ⬜ |
+| T7 | 交付物：`example/s9-gbuffer/` 基线 + `run.bat` + `cases.json` 卡 + `server.py --check` 退出 0 | ⬜ |
+| T8 | 收口：四栏台账写实 + `wt_pool.py close` 硬闸 + tag `s9-gbuffer` | ⬜ |
 
-> **2026-11-10 第一铲实测（纯搬移已验证）**：双后端 `viewer --selftest` 16/16、`Slang 单源 64/64`；`s7.2/pulling`、`pbr-direct/pbr`、`pbr-direct/textured`、`s8.2/rt-dist` 四条 × DX12/VULKAN = **8/8 `bytes`**（near 0 / FAIL 0，报告 `build/regression/m9-spot-*.md`）。`psMatResolve` 字节码因内联改函数调用而 DIFF（spv 17188B / dxil 14884B），但画面逐字节保形，证实 M-PT2/PT3 的「逐字搬移」策略有效；VS 两目标逐字节不变。
+**硬验收三条（原样保留，不因方案 A 缩水）**：① 抽取前后 `s7.2` / `pbr-direct` / `s8.2` 抽查基线双后端 `bytes` 不变（已过）；② 反解数学逐字搬移、禁 branch / lerp 改写（已过）；③ `--mode shadow` 无阴影版与 mode 5 逐像素一致（待 T4 / T6）。tag：`s9-gbuffer`（T1~T8 全绿后打）。
+
+### 边界（防再写歪）
+
+- **决策**只在文末「开工拍板记录」，**实测数字**只在「实测留痕」，**任务**只在上表；三者不互相塞。
+- M9.0 不实现 M9.1 的射线（tMax / bias / 粗代理差异可视化见下一节）。② 的 compute 直光 pass 是**新管线**，按 §2.7 必须有自己的单一 BindingSet —— Q4 冻结的是「独立 GBuffer 落盘资源与形态」，**不是**这条管线的必备绑定集；**新增 RT / UAV 仍禁止**。
+- 落码前先核「落码前实读事实」，禁止再凭记忆编槽位表。
+
+### 实测留痕（2026-11-10 第一铲）
+
+- 双后端 `viewer --selftest` 16/16 ×2、`Slang 单源 64/64`；`material.psmatresolve.spv 17188B` / `.dxil 14884B` 重编。
+- `s7.2/pulling`、`pbr-direct/pbr`、`pbr-direct/textured`、`s8.2/rt-dist` 四条 × DX12/VULKAN = **8/8 `bytes`**（near 0 / FAIL 0，报告 `build/regression/m9-spot-*.md`）。`psMatResolve` 字节码因内联改函数调用 DIFF，画面逐字节保形 → 逐字搬移成立；VS 两目标逐字节不变。
+- 踩坑：只改 shader / CMake / 文档时 DX12 `viewer.exe` 未重链、mtime 落后 `material.slang` 37 分钟，触发回归闸 exe 新鲜度门禁；删 exe 强制重链解决（VULKAN 因 camera cpp 重编已重链）。
+
+### 落码前实读事实（2026-11-10 补）
+
+| 事实 | 出处 |
+|---|---|
+| `--mode shadow` / `reference` **当前不存在**于 `kModeNames`（末位 `rt`）；新增开关要改枚举 + 注册表 + 分发 + viewer 白名单 | `core/src/modes.cpp:8-22`、`viewer/main.cpp:2487-2491` |
+| `rt` 走 `initRt → initDag`（BLAS/TLAS 链），**不产出 vis buffer**；`pulling` 走 `initVisbuf(..., pulling=true)`；两条链互斥 | `scene.cpp:2129`、`1501` |
+| `rt` compute set 实际只有 3 项：b0 `RtConstants` / t0 TLAS / u0 `RGBA32_FLOAT`；present 端 t0 SRV | `scene.cpp:2171-2177`、`rt.slang:23-36,118` |
+| mode 5 实际绑定：b0 `SceneConstants` / b1 `LightConstants` / b2 `MatResolveConstants` / t0 vis / t1 vertexPool / t2 localIndices / t3 clusterMeta / t4..t7 baseColor / t8..t11 mrTex / t12 `GPUMaterial` / s0 sampler | `material.slang:39-72` |
+| 上一版任务书把 `rt` 的 t0(TLAS) 与 `material` 的 t0(vis) 混编成一张槽表、漏了贴图数组 / 材质表 / sampler / b1 / b2 → **已作废**；槽位以 §2.18 落码实读为准 | 本轮纠偏 |
 
 ## M9.1 阴影射线（1~2 天）
 
@@ -56,7 +83,7 @@
 
 | 问题 | 翻 |
 |---|---|
-| 直光+阴影射线的完整写法 | `Carrot/.../shaders/lighting/direct-raytracing.slang` + `direct-base.slang`（`PixelInfo` 从 GBuffer 取属性 + `sampleLights` 能力抽象） |
+| compute 直光 / 射线 pass 的写法 | `Carrot/.../shaders/lighting/direct-raytracing.slang` + `direct-base.slang`（8×8 dispatch、`sampleLights` 抽象）。**只借 compute 组织方式**：方案 A 下不落 GBuffer，属性由公共头即取即算，别照着去找 `PixelInfo` 的属性纹理 |
 | GBuffer 重建 / 打包属性 | bevy `solari/realtime/gbuffer_utils.wesl`（`gpixel_resolve` / `reconstruct_world_position`） |
 | vis buffer 反解插值 | bevy `meshlet/visibility_buffer_resolve.wesl`（透视正确 barycentrics + 像素导数） |
 | 阴影可见性射线 | bevy `solari/realtime/initial_path.wesl`（`trace_visibility` + `RAY_T_MIN/MAX`） |
@@ -65,7 +92,7 @@
 
 ## 底线
 
-- **GBuffer 反解函数进公共头**：S10/S12 全靠它（本轮 M9.0 落地）
+- **GBuffer 反解函数进公共头**：S10/S12 全靠它 —— M9.0 T1/T2 已落地（`gbuffer_common.slangh`，0 资源声明）
 - 参考图工作流从今天建立：**调直光 / 阴影时同机位并排对比标准答案**；GI 调参的裁判另立，别拿直光尺子量间接光
 
 ---
@@ -81,9 +108,9 @@
 
 ### Q4 拍板后动作（2026-11-10）
 
-1. 结论已写回上表 Q4 行；M9.0 任务书第 3 条的「落盘形态待用户拍板」挂账句**已删除**，改为方案 A 口径。
-2. 冻结解除范围：仅解除「与不落盘方案相容」的落码；**任何新增 RT / UAV / 绑定槽仍不许写**，除非 S10 重新拍板落盘。
-3. 待办：`--mode shadow` 无阴影版（compute 直光路径）→ 与 mode 5 逐像素对照 → `example/s9-gbuffer/` 基线 + `run.bat` + `cases.json` 卡 + `server.py --check` → 四栏收官条 + `wt_pool.py close` + tag `s9-gbuffer`。
-4. 选定方案的绑定布局 / 状态登记口径固化进 `docs/SHADER-CONVENTIONS.md`（新增 §2.18）。
+1. 结论已写回上表 Q4 行；M9.0 任务书按「任务 / 决策 / 实测 / 边界」四层重写为 T1~T8，删掉「落盘形态待用户拍板」挂账句与上一版编造的绑定槽位表；硬验收三条原样保留。
+2. **冻结边界（澄清）**：禁的是「独立 GBuffer 落盘资源（新增 RT / UAV / 纹理 / 形态）」；compute 直光 pass 按 §2.7 必需的**单一 BindingSet 不在此列**，槽位以 §2.18 落码实读固化。
+3. 待办 T4~T8 见任务书表；无阴影版实现路径按用户拍板 ②（新建 compute 8×8 直光 pass，逐字搬移 mode 5 BRDF，不碰 `material.slang`）。
+4. 落盘形态推迟 S10 与 S12 历史帧需求一起拍；本里程碑不写任何新增 RT / UAV。
 
 **前置实读清单（本轮，符合 AGENTS.md 决策前置铁律）**：Carrot `lighting/direct-raytracing.slang` + `direct-base.slang`；bevy `meshlet/visibility_buffer_resolve.wesl` + `solari/realtime/gbuffer_utils.wesl` + `initial_path.wesl`；UE 5.8.4（对照总表 S9 行未点名，按功能就近读）`Lumen/LumenSceneDirectLighting.cpp` + `LumenSceneDirectLightingHardwareRayTracing.cpp`；开发历史 `MILESTONES.md`（`s8-done` 收官段）/ `carrot-history.md` / `bevy-history.md` / `.workbuddy/memory/MEMORY.md` / `2026-11-10.md` / 本计划 / `SHADER-CONVENTIONS.md` §2.14、§2.16、§2.17 / `UE-DIFFS.md` 对齐确认节。
