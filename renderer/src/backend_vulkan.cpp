@@ -70,7 +70,7 @@ public:
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-              std::string& outError) override {
+              bool shadowMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -103,6 +103,9 @@ public:
         // M7.0：visbuf 优先于所有既有场景（吃 .nmesh，但走独立 vis 管线）。
         const bool sceneOk = sceneMode
             ? true
+            // M9.0：shadow 与 visbuf 同链，但要多建 compute 直光管线 + present。
+            : (shadowMode
+            ? scene_.initShadow(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (visbufMode
             ? scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile,
                                  pullingMode, outError)
@@ -120,7 +123,7 @@ public:
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))))))))
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))))))))
         ;
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;

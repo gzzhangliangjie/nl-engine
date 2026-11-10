@@ -45,10 +45,11 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 60 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 66 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
-// rt 6（M8.2）。
+// rt 6（M8.2）+ direct.cs 2（M9.0）。清单只查列出项：新增入口必须同步登记，
+// 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
     {"model.vs", true}, {"model.vs", false},
@@ -90,6 +91,8 @@ static const Artifact kArtifacts[] = {
     // M-PT0：particles.slang 单管线（vsMain/psMain），各 × spv/dxil = 4。
     {"particles.vs", true}, {"particles.vs", false},
     {"particles.ps", true}, {"particles.ps", false},
+    // M9.0：direct.slang 单 compute 入口（compute 直光对照）× 双目标 = 2。
+    {"direct.cs", true}, {"direct.cs", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -136,13 +139,15 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
                                            bool hizMode, bool sceneMode, bool visbufMode,
-                                           bool pullingMode, bool rtMode) {
+                                           bool pullingMode, bool rtMode, bool shadowMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
     // M7.0：visbuf 模式同样吃 .nmesh（复用 M4 的簇数据）。
     // M8.2：rt 模式走 initDag 资产路径（BLAS/TLAS 挂在 initDag 链上），同样吃 .nmesh。
-    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode || rtMode;
+    // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
+    const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
+                         rtMode || shadowMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -175,7 +180,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
-                                 r->impl_->error)) {
+                                 shadowMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;
@@ -198,7 +203,15 @@ void Renderer::resize(Extent extent) {
 bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
                            const char* screenshotPath, HudFrame* hud) {
     if (!impl_->backend) return false;
-    const bool ok = impl_->backend->renderFrame(color, frame, screenshotPath, hud, impl_->error);
+    // M9.0：把当帧清屏色带给 Scene（--mode shadow 的空像素写进 rtTarget_，
+    // 与 psMatResolve 的 discard 等价）。只做一次 POD 浅拷贝，绝不整块 memcpy
+    // 进 cbuffer（§2.15）；debugLineData 指针仍归调用方所有。
+    FrameParams resolved = frame;
+    resolved.clearColor[0] = color.r;
+    resolved.clearColor[1] = color.g;
+    resolved.clearColor[2] = color.b;
+    resolved.clearColor[3] = color.a;
+    const bool ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, impl_->error);
     // M4.1：剔除统计（visibleClusters）由 backend 每帧 poll 后更新，回拷进
     // Renderer 缓存的 DeviceInfo，viewer 的 const 引用才能看到最新值。
     if (ok) impl_->info = impl_->backend->info();

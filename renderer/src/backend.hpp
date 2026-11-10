@@ -42,11 +42,12 @@ public:
     // visbufMode（M7.0）独立优先级最高：吃 .nmesh，但走 vis buffer 三段式
     // 光栅而不是 S4 的常规着色路径。
     // rtMode（M8.2）走 initDag 资产链拿 BLAS/TLAS，渲染只做 RayQuery compute + 呈现。
+    // shadowMode（M9.0）走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
                       bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-                      std::string& outError) = 0;
+                      bool shadowMode, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

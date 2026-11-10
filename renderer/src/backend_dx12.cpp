@@ -72,7 +72,7 @@ public:
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-              std::string& outError) override {
+              bool shadowMode, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -163,6 +163,11 @@ public:
             // false 时 draw 段跳过，与历史空场景行为一致）。
             sceneOk = true;
         }
+        // M9.0：shadow 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现，
+        // 必须排在 visbufMode 之前（同一条链，但要多建 compute 直光管线）。
+        else if (shadowMode)
+            sceneOk = scene_.initShadow(device_, "dxil", "vsCull", "psCull", modelFile,
+                                        outError);
         else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
             sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile,
                                          pullingMode, outError);

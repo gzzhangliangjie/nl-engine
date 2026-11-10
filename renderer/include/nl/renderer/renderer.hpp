@@ -88,6 +88,12 @@ struct FrameParams {
     float viewProj[16] = {};
     int   rtDebugMode  = 0;
 
+    // M9.0：--mode shadow 的空像素必须写与 framebuffer 一致的清屏色（present
+    // 全屏覆盖会盖掉 clear，psMatResolve 的 discard 语义由 UAV 自己补）。
+    // Renderer::renderFrame 每帧从 ClearColor 填入；其它模式不读，缺省 =
+    // viewer kColors[0]，历史基线零扰动。
+    float clearColor[4] = {0.05f, 0.08f, 0.15f, 1.0f};
+
     // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
     // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
     //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
@@ -323,7 +329,10 @@ public:
                                             // M8.2：Ray Query 调试射线闭环
                                             //（--mode rt；走 initDag 资产路径拿
                                             // BLAS/TLAS，渲染只做 compute 射线 + 呈现）。
-                                            bool rtMode = false);
+                                            bool rtMode = false,
+                                            // M9.0：--mode shadow（compute 直光对照；
+                                            // 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_）。
+                                            bool shadowMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

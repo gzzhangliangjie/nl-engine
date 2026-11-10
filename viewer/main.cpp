@@ -422,7 +422,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (64 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (66 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -590,7 +590,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
               bool visbufMode = false, bool pullingMode = false,
-              bool inputHudMode = false, bool rtMode = false) {
+              bool inputHudMode = false, bool rtMode = false,
+              bool shadowMode = false) {
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
@@ -617,7 +618,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.modelFile.c_str(), cluster, cullMode,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
-                                                   visbufMode, pullingMode, rtMode);
+                                                   visbufMode, pullingMode, rtMode,
+                                                   shadowMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -2383,6 +2385,11 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
                          /*inputHudMode=*/false, /*rtMode=*/true);
+    case nl::core::ViewMode::Shadow: // M9.0：compute 直光对照（Q4 方案 A，无阴影射线）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -2488,7 +2495,7 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
          o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling ||
-         o.mode == nl::core::ViewMode::Rt)
+         o.mode == nl::core::ViewMode::Rt || o.mode == nl::core::ViewMode::Shadow)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

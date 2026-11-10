@@ -380,6 +380,22 @@ public:
                        std::string& outError);
     bool presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                          const nvrhi::Viewport& viewport, std::string& outError);
+
+    // ---- M9.0（S9）：--mode shadow 的 compute 直光对照路径（Q4 方案 A）----
+    // initShadow = initVisbuf(pulling=true) 全套 vis/材质资源 + initRtPresent 共用
+    // 呈现骨架 + direct.cs compute 管线；不碰 BLAS/TLAS/rays。
+    bool initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
+                    const char* vsEntry, const char* psEntry,
+                    const char* nmeshFile, std::string& outError);
+    void drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                    const nvrhi::Viewport& viewport, const FrameParams& params);
+
+    // 共用槽位表：material.slang 与 direct.slang 同源（§2.18 唯一权威，避免
+    // 两条链各写一份槽位表而漂移）。
+    void addResolveLayoutItems(nvrhi::BindingLayoutDesc& desc) const;
+    void addResolveSetItems(nvrhi::BindingSetDesc& desc) const;
+    // b1 LightConstants + b2 MatResolveConstants 每帧写入（pulling / shadow 共用）。
+    void writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& params);
   private:
     bool ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                          std::string& outError);
@@ -814,6 +830,19 @@ private:
     nvrhi::TextureHandle         rtTarget_;               // RGBA32_FLOAT UAV 目标
     std::uint32_t                rtW_ = 0, rtH_ = 0;
     bool                         rtNoTlasLogged_ = false; // TLAS 未就绪的一次性日志
+
+    // ---- M9.0：shadow 模式（compute 直光对照）----
+    // 与其它 mode 互斥（一个 Scene 实例只跑一种）。复用面：输出 = rtTarget_ /
+    // 呈现 = initRtPresent + presentRtTarget（M8.2）；几何与材质资源 =
+    // initVisbuf(pulling)（M7.1/7.2）。不新建任何独立 GBuffer 纹理（Q4 方案 A）。
+    bool                         shadow_ = false;
+    bool                         shadowFailed_ = false; // 懒建失败只报一次
+    nvrhi::ShaderHandle          csDirect_;
+    nvrhi::ComputePipelineHandle directPSO_;
+    nvrhi::BindingLayoutHandle   directComputeLayout_;  // resolve 槽位表 + b3 + u0
+    nvrhi::BindingSetHandle      directComputeSet_;
+    nvrhi::BufferHandle          directConstants_;      // volatile CB 16B（b3 清屏色）
+    std::uint32_t                directW_ = 0, directH_ = 0;  // set 绑定的尺寸版本
 };
 
 } // namespace nl::renderer::detail

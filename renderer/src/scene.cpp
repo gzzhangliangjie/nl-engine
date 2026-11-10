@@ -1762,24 +1762,10 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         matResolveConstants_ = device->createBuffer(mrcDesc);
         if (!matResolveConstants_) { outError = "createBuffer failed for mat resolve constants"; return false; }
 
-        // 材质 pass 布局（§2.7 单一 BindingSet）：b0 场景常量 + b1 光照 + b2 尺寸
-        // + t0 vis SRV + t1..t3 簇资源 + t4..t7 基色数组 + t8..t11 MR 数组
-        // + t12 材质间接表 + s0 采样器（M7.2 多材质；shader 见 material.slang 头注释）。
+        // 材质 pass 布局（§2.7 单一 BindingSet）：槽位表抽进 addResolveLayoutItems，
+        // 与 M9.0 direct.slang 的 compute 管线共用同一份定义（§2.18）。
         nvrhi::BindingLayoutDesc mDesc;
-        mDesc.setVisibility(nvrhi::ShaderType::All)
-            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
-            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
-            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
-            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12));
-        for (std::uint32_t slot = 4; slot < 4 + kMaxVisMaterials; ++slot)
-            mDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t4..t7 基色
-        for (std::uint32_t slot = 8; slot < 8 + kMaxVisMaterials; ++slot)
-            mDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t8..t11 MR
-        mDesc.addItem(nvrhi::BindingLayoutItem::Sampler(0));
+        addResolveLayoutItems(mDesc);
         matResolveLayout_ = device->createBindingLayout(mDesc);
         if (!matResolveLayout_) { outError = "createBindingLayout failed for mat resolve"; return false; }
 
@@ -2199,6 +2185,69 @@ bool Scene::presentRtTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frame
     return true;
 }
 
+// ============================================================================
+// M9.0（S9）：--mode shadow —— compute 直光对照路径（Q4 方案 A，无阴影射线）。
+// 复用面（副作用处置见 S9-PLAN「复用决策」表）：
+//   * initVisbuf(pulling=true)：M7.1/7.2 全套 vis + 材质资源（槽位同源）
+//   * initRtPresent：M8.2 的 vs/ps 呈现骨架 + rtPresentLayout_
+//   * rtTarget_ (RGBA32_FLOAT)：M8.2 已有成员，不新建任何 GBuffer 资源
+// 独立面：direct.cs compute 管线 + 自己的单一 BindingSet（§2.7），与 rt 链的
+// rtComputeSet_（依赖 TLAS）完全隔离。
+// ============================================================================
+bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
+                       const char* vsEntry, const char* psEntry,
+                       const char* nmeshFile, std::string& outError) {
+    if (!initVisbuf(device, shaderSuffix, vsEntry, psEntry, nmeshFile,
+                    /*pulling=*/true, outError)) return false;
+    shadow_ = true;
+
+    // T5 前置重构已把 present 从 initRt 拆出：这里只建 shader + layout，
+    // 不碰 BLAS / TLAS / rtComputeSet_。
+    if (!initRtPresent(device, shaderSuffix, outError)) return false;
+
+    const std::string csPath = std::string(NL_SHADER_DIR) + "/direct.cs." + shaderSuffix;
+    std::vector<std::uint8_t> blob;
+    if (!readFileBytes(csPath.c_str(), blob)) {
+        outError = "failed to load direct.cs (" + std::string(shaderSuffix) +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc desc;
+    desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+    csDirect_ = device->createShader(desc, blob.data(), blob.size());
+    if (!csDirect_) { outError = "createShader failed for direct.cs"; return false; }
+
+    // b3 DirectConstants（16B）：当帧清屏色，每帧全量覆写（volatile CB 纪律）。
+    nvrhi::BufferDesc dcDesc;
+    dcDesc.byteSize = 16;
+    dcDesc.isConstantBuffer = true;
+    dcDesc.isVolatile = true;
+    dcDesc.maxVersions = 16;
+    dcDesc.debugName = "DirectConstants";
+    directConstants_ = device->createBuffer(dcDesc);
+    if (!directConstants_) { outError = "createBuffer failed for direct constants"; return false; }
+
+    // §2.7 单一 BindingSet：共用 resolve 槽位表 + b3 清屏色 + u0 输出。
+    nvrhi::BindingLayoutDesc cDesc;
+    addResolveLayoutItems(cDesc);
+    cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+    directComputeLayout_ = device->createBindingLayout(cDesc);
+    if (!directComputeLayout_) {
+        outError = "createBindingLayout failed for direct compute"; return false;
+    }
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csDirect_).addBindingLayout(directComputeLayout_);
+        directPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!directPSO_) { outError = "createComputePipeline failed for direct"; return false; }
+
+    nl::core::log::info("shadow scene ready (compute direct lighting, no shadow rays)",
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
 bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
                    const char* vsEntry, const char* psEntry,
                    const char* nmeshFile, std::string& outError) {
@@ -2374,6 +2423,63 @@ void Scene::drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // ---- 呈现：M9.0 T5 抽成共用函数（rt / shadow 两条链复用同一 rtTarget_）----
     if (!presentRtTarget(cmd, framebuffer, viewport, err)) {
         nl::core::log::deviceError("rt", err);
+    }
+}
+
+// M9.0：compute 8x8 dispatch → RGBA32_FLOAT UAV → 共用的 psRtPresent 全屏呈现。
+// 与 draw() 的 visbuf 三段式同列表顺序：clear vis → raster → 本函数（读 vis SRV、
+// 写 rtTarget_ UAV）→ present（读 rtTarget_ SRV），barrier 由 NVRHI 状态跟踪插入。
+void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params) {
+    if (!rtDevice_ || !framebuffer || !directPSO_ || shadowFailed_) return;
+
+    std::string err;
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    if (!ensureRtTargets(rtDevice_, vpW, vpH, err)) {
+        nl::core::log::deviceError("shadow", err);
+        shadowFailed_ = true;
+        return;
+    }
+    // visW_/visH_ 与 rtW_/rtH_ 是两次独立取整；不一致会让 b2 尺寸与 dispatch
+    // 尺寸错位，直接显式报错而不是画一张错图。
+    if (rtW_ != visW_ || rtH_ != visH_) {
+        nl::core::log::deviceError("shadow", "rt target size != vis buffer size");
+        shadowFailed_ = true;
+        return;
+    }
+
+    // 尺寸版本闸：resize 时 rtTarget_ / visBuffer_ 都换对象，set 必须重建。
+    if (!directComputeSet_ || directW_ != rtW_ || directH_ != rtH_) {
+        nvrhi::BindingSetDesc sd;
+        addResolveSetItems(sd);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
+                                                      nvrhi::Format::RGBA32_FLOAT));
+        directComputeSet_ = rtDevice_->createBindingSet(sd, directComputeLayout_);
+        if (!directComputeSet_) {
+            nl::core::log::deviceError("shadow", "createBindingSet failed for direct compute set");
+            shadowFailed_ = true;
+            return;
+        }
+        directW_ = rtW_;
+        directH_ = rtH_;
+    }
+
+    // b1/b2 与 pulling 分支共用写入；b3 = 当帧清屏色（对齐 PS 的 discard）。
+    writeResolveConstants(cmd, params);
+    const float cc[4] = {params.clearColor[0], params.clearColor[1],
+                         params.clearColor[2], params.clearColor[3]};
+    cmd->writeBuffer(directConstants_, cc, sizeof(cc));
+
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(directPSO_).addBindingSet(directComputeSet_);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
+
+    if (!presentRtTarget(cmd, framebuffer, viewport, err)) {
+        nl::core::log::deviceError("shadow", err);
+        shadowFailed_ = true;
     }
 }
 
@@ -2798,6 +2904,65 @@ bool Scene::ensureHizTargets(nvrhi::IDevice* device, float viewportW, float view
     return true;
 }
 
+// ============================================================================
+// M9.0：material.slang（全屏 PS）与 direct.slang（compute CS）共用同一份绑定
+// 槽位表 / 常量写入，避免两条链各写一份而漂移。§2.18 以本函数为实读结论。
+// ============================================================================
+void Scene::addResolveLayoutItems(nvrhi::BindingLayoutDesc& desc) const {
+    desc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12));
+    for (std::uint32_t slot = 4; slot < 4 + kMaxVisMaterials; ++slot)
+        desc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t4..t7 基色
+    for (std::uint32_t slot = 8; slot < 8 + kMaxVisMaterials; ++slot)
+        desc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(slot));   // t8..t11 MR
+    desc.addItem(nvrhi::BindingLayoutItem::Sampler(0));
+}
+
+void Scene::addResolveSetItems(nvrhi::BindingSetDesc& desc) const {
+    desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+        .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))
+        .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, matResolveConstants_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+        .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+        .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+    for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
+        desc.addItem(nvrhi::BindingSetItem::Texture_SRV(4 + i, matBaseColor_[i]));
+    for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
+        desc.addItem(nvrhi::BindingSetItem::Texture_SRV(8 + i, matMR_[i]));
+    desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(12, materialTable_));
+}
+
+void Scene::writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
+    // 写 b1 光照常量 + b2 尺寸常量（每帧；原 pulling 分支逐字搬移，两链共享）。
+    LightConstants lc{};
+    lc.lightDirW[0] = params.lightDir[0];
+    lc.lightDirW[1] = params.lightDir[1];
+    lc.lightDirW[2] = params.lightDir[2];
+    lc.lightColor[0] = 1.0f; lc.lightColor[1] = 1.0f; lc.lightColor[2] = 1.0f;
+    lc.lightColor[3] = 2.5f;                // 白光强度 2.5：无 IBL 只剩直射高光
+    lc.cameraPos[0] = params.eye[0];
+    lc.cameraPos[1] = params.eye[1];
+    lc.cameraPos[2] = params.eye[2];
+    std::memcpy(lc.baseColorFactor, pbrBaseColorFactor_, sizeof(lc.baseColorFactor));
+    lc.mrFactor[0] = pbrMetallicFactor_;
+    lc.mrFactor[1] = pbrRoughnessFactor_;
+    lc.mrFactor[2] = params.options[0];     // --pbr-naive 对照开关
+    cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
+
+    const float mc[4] = {static_cast<float>(visW_), static_cast<float>(visH_),
+                         0.f, 0.f};
+    cmd->writeBuffer(matResolveConstants_, mc, sizeof(mc));
+}
+
 bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                                 std::string& outError) {
     const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
@@ -2843,22 +3008,12 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     visVizSet_ = device->createBindingSet(vSet, visVizLayout_);
     if (!visVizSet_) { outError = "createBindingSet failed for vis viz"; return false; }
 
-    // M7.1（S7.1）：材质反解绑定集——复用 vis 资源 + PBR 贴图 + 三个常量缓冲。
+    // M7.1 / M9.0：材质反解与 compute 直光共用同一份槽位表。visBuffer_ 换对象
+    // 时 directComputeSet_ 也必须重建（drawShadow 另有尺寸版本闸兜底）。
+    directComputeSet_ = nullptr;
     if (pulling_) {
         nvrhi::BindingSetDesc mSet;
-        mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
-            .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))
-            .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, matResolveConstants_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
-            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
-            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
-        for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
-            mSet.addItem(nvrhi::BindingSetItem::Texture_SRV(4 + i, matBaseColor_[i]));
-        for (std::uint32_t i = 0; i < kMaxVisMaterials; ++i)
-            mSet.addItem(nvrhi::BindingSetItem::Texture_SRV(8 + i, matMR_[i]));
-        mSet.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(12, materialTable_));
+        addResolveSetItems(mSet);
         matResolveSet_ = device->createBindingSet(mSet, matResolveLayout_);
         if (!matResolveSet_) { outError = "createBindingSet failed for mat resolve"; return false; }
     }
@@ -2944,7 +3099,10 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
     // M7.0（S7.0）：visbuf 两条管线。必须排在 cull 分支之前——visbuf 复用 cull_
     // 的资源通路，但那四套 (fill×cull) 管线在 visbuf 下完全用不上。
     if (visbuf_) {
-        if (visRasterPSO_ && visVizPSO_ && (!pulling_ || matResolvePSO_)) return true;
+        // M9.0：shadow 链不用 matResolvePSO_；放行条件改查 directPSO_，否则
+        // material PSO 建失败会连 vis raster 一起被跳过 → 全屏黑。
+        if (visRasterPSO_ && visVizPSO_ &&
+            (shadow_ ? (directPSO_ != nullptr) : (!pulling_ || matResolvePSO_))) return true;
         // 簇光栅：无顶点输入（VS 只读 SV_InstanceID/SV_VertexID + SSBO），
         // 深度测试照旧；PS 的 SV_Target 只是占位，真正产物是 u0 的 atomicMin。
         nvrhi::GraphicsPipelineDesc rDesc;
@@ -4196,7 +4354,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 }
             }
             if (!visbufFailed_ && visRasterPSO_ &&
-                (pulling_ ? (matResolvePSO_ != nullptr) : (visVizPSO_ != nullptr))) {
+                (shadow_ ? (directPSO_ != nullptr)
+                         : (pulling_ ? (matResolvePSO_ != nullptr)
+                                     : (visVizPSO_ != nullptr)))) {
                 // (1) b0 只写 MVP（visbuf.slang / material.slang 的 b0 与 model.slang
                 // 同 160B 布局；material.slang 的 g_options.x = 着色模式 = params.shading）。
                 SceneConstants cb{};
@@ -4231,27 +4391,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 cmd->setGraphicsState(rstate);
                 cmd->drawIndexedIndirect(0, 1);
 
-                // (5) pulling ? 材质反解 : 全屏 viz。
-                if (pulling_) {
-                    // 写 b1 光照常量 + b2 尺寸常量（每帧；与 init/initSkin 同款）。
-                    LightConstants lc{};
-                    lc.lightDirW[0] = params.lightDir[0];
-                    lc.lightDirW[1] = params.lightDir[1];
-                    lc.lightDirW[2] = params.lightDir[2];
-                    lc.lightColor[0] = 1.0f; lc.lightColor[1] = 1.0f; lc.lightColor[2] = 1.0f;
-                    lc.lightColor[3] = 2.5f;                // 白光强度 2.5：无 IBL 只剩直射高光
-                    lc.cameraPos[0] = params.eye[0];
-                    lc.cameraPos[1] = params.eye[1];
-                    lc.cameraPos[2] = params.eye[2];
-                    std::memcpy(lc.baseColorFactor, pbrBaseColorFactor_, sizeof(lc.baseColorFactor));
-                    lc.mrFactor[0] = pbrMetallicFactor_;
-                    lc.mrFactor[1] = pbrRoughnessFactor_;
-                    lc.mrFactor[2] = params.options[0];     // --pbr-naive 对照开关
-                    cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
-
-                    const float mc[4] = {static_cast<float>(visW_), static_cast<float>(visH_),
-                                         0.f, 0.f};
-                    cmd->writeBuffer(matResolveConstants_, mc, sizeof(mc));
+                // (5) shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
+                if (shadow_) {
+                    // b1/b2 与 pulling 共用写入（逐像素一致的前提）；b3 清屏色、
+                    // dispatch、present 都在 drawShadow 内。
+                    drawShadow(cmd, framebuffer, viewport, params);
+                } else if (pulling_) {
+                    writeResolveConstants(cmd, params);
 
                     // 全屏三角形覆盖整屏：每像素反解 vis → 顶点拉取 → 材质着色。
                     nvrhi::GraphicsState mstate;
@@ -5473,6 +5619,16 @@ void Scene::shutdown() {
     rtPresentSet_ = nullptr;
     rtConstants_ = nullptr;
     rtTarget_ = nullptr;
+    // M9.0：shadow 链句柄（rtTarget_ / present 共用对象已在上面统一释放）。
+    shadow_ = false;
+    shadowFailed_ = false;
+    csDirect_ = nullptr;
+    directPSO_ = nullptr;
+    directComputeLayout_ = nullptr;
+    directComputeSet_ = nullptr;
+    directConstants_ = nullptr;
+    directW_ = 0;
+    directH_ = 0;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
     particles_.shutdown();

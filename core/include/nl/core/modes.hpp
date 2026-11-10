@@ -22,8 +22,9 @@ enum class ViewMode {
     InputHud = 11, // P8 M-I2：输入调试面板（注入路径驱动的键态矩阵 + 动作值条 + ImGui 注入按钮）
     Rt = 12,      // M8.2：Ray Query 调试射线闭环（compute 每像素相机射线打 TLAS，
                   //  距离灰度 / id 伪彩两档；BLAS/TLAS 走 initDag 资产链）
-    // S1 起依次追加：Shadow,
-    //                Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
+    Shadow = 13,  // M9.0：compute 直光对照（M9.0 阶段不发射线；M9.1 起同 mode
+                  //  默认每像素 1 条 shadow ray）。Q4 方案 A：属性即取即算
+    // S1 起依次追加：Reference, Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };
 

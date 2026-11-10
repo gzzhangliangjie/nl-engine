@@ -246,3 +246,26 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 - **相机基向量来自 view 行**：billboard right/up 从列主序 view 矩阵第 0/1 行取（`view[0]/[4]/[8]`、`view[1]/[5]/[9]`），非 dag/hiz 模式下 `fp.view` 由 viewer 自行补填。
 - **实例 SSBO 每帧写回**：32B StructuredBuffer（posSize+colorAlpha）走 §2.15 同款 CopyDest + keepInitialState 帧内动态晋升；CB 112B volatile 每帧全量覆写（mvp + camRight + camUp + params）。
 - **叠加层证据行仅专用模式显示**：HUD `Particles : N alive` 行只在 `--particles` 开启时占位（BLAS 行先例），避免 kStage 波及全量 HUD 基线重拍。
+
+### 2.18 M9.0 vis-resolve 单一 BindingSet 槽位表（2026-11-10，落码实读固化）
+- **唯一权威 = `Scene::addResolveLayoutItems` / `addResolveSetItems`**（`renderer/src/scene.cpp`）：`material.slang::psMatResolve`（全屏 PS）与 `direct.slang::csDirect`（compute CS）共用同一份定义，禁止两条链各写一份槽表（任务书曾凭记忆编过一张错的，见 `MILESTONES.md` P8 M9.0 踩坑 5）。
+- SPIR-V 平移 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-u-shift 384 0`（§2.5）；DX12 用各自 slot。
+
+| 槽 | 资源 | 说明 |
+|---|---|---|
+| b0 | SceneConstants 160B | mvp/model/lightDir/options（§2.15，禁整块 memcpy） |
+| b1 | LightConstants 80B | 光色 / 相机 / pbr-naive 开关 |
+| b2 | MatResolveConstants 16B | (width, height, 0, 0) |
+| t0 | vis buffer SRV (u64) | 与 raster 的 u0 是同一块 buffer 的两个视图 |
+| t1..t3 | vertexPool / localIndices / clusterMeta | M4 vertex pulling 同源 |
+| t4..t7 | baseColor 贴图数组 [kMaxVisMaterials] | `NonUniformResourceIndex` 选槽 → DXIL SM6.6 |
+| t8..t11 | metallicRoughness 贴图数组 | |
+| t12 | GPUMaterial 间接表 | §2.14，S9/S10/S13 复用 |
+| s0 | sampler | |
+| **b3** | **DirectConstants 16B** | **仅 direct.slang**：当帧清屏色 |
+| **u0** | **RGBA32_FLOAT UAV** | **仅 direct.slang**：复用 M8.2 `rtTarget_`，不新建资源 |
+
+- 两条链各自一个 BindingSet（§2.7）：material = b0/b1/b2 + t0..t12 + s0；direct = 同表 + b3 + u0。`Scene::writeResolveConstants` 是 b1/b2 每帧写入的唯一入口（两链共用）。
+- **空像素语义**：PS 用 `discard` 让 framebuffer 清屏色透出；`psRtPresent` 全屏覆盖会盖掉 clear，故 CS 必须把当帧清屏色写进 u0 的空像素。`Renderer::renderFrame` 从 `ClearColor` 填 `FrameParams::clearColor[4]`（默认 `(0.05,0.08,0.15,1)`，**不是黑色**）；`--color` 四档可切，双后端 `pulling` vs `shadow` 逐字节一致实测。
+- **尺寸一致性**：`g_width/g_height` 来自 `visW_/visH_`，dispatch 尺寸来自 `rtW_/rtH_`，两者独立取整 → `drawShadow` 显式断言相等，`directComputeSet_` 带尺寸版本闸（resize 重建，别复用 `rtComputeSet_`，它依赖 TLAS）。
+- **新增 shader 入口必须登记 `shaderArtifactsSelfTest` 的 `kArtifacts`**（`renderer/src/renderer.cpp`）：清单只查列出项，漏登 = 产物丢失仍全绿（M8.1 已踩过一次）。M9.0 由 64 → 66（`direct.cs` 双目标）。

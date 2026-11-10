@@ -338,6 +338,9 @@ set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fr
 # visbuf_common.slangh，故也吃 _SHADER_EXTRA_DEPS（见下方 STREQUAL 条件）。
 # M7.2：NonUniformResourceIndex 选槽（材质 id 逐像素非一致）进白名单 sm_6_6。
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
+# M9.0（S9）：direct.slang 单 compute 入口（8x8 直光对照 pass）。BRDF 逐字搬移
+# material.slang mode 5，资源槽位与 material pass 同源（§2.7 单一 BindingSet）。
+set(_ENTRIES_DIRECT "csDirect|cs|compute")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # M9.0 (S9): GBuffer 反解公共头（material.slang include；S9.1/S10/S12 复用）
@@ -347,7 +350,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "visbuf.vsvisviz" "visbuf.psvisviz"
                     "material.vsmatresolve" "material.psmatresolve"
                     "tlas_probe.cs"
-                    "rt.cs")
+                    "rt.cs"
+                    "direct.cs")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -377,6 +381,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_TLAS_PROBE}")
     elseif(_SRC_NAME STREQUAL "rt")
         set(_ENTRIES "${_ENTRIES_RT}")
+    elseif(_SRC_NAME STREQUAL "direct")
+        set(_ENTRIES "${_ENTRIES_DIRECT}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -395,7 +401,7 @@ foreach(_SRC ${NL_SHADER_SRCS})
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
         if(_SRC_NAME STREQUAL "visbuf")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
-        elseif(_SRC_NAME STREQUAL "material")
+        elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
