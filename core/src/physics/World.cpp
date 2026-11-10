@@ -27,6 +27,9 @@
 #include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/PhysicsSettings.h>
+#include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyType.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -36,7 +39,9 @@
 #include <Jolt/Renderer/DebugRenderer.h>
 
 #include "nl/core/jobs.hpp"  // M-J5c: ThreadPool（PoolJobSystem 的执行底座）
+#include "VehicleInternal.hpp"  // M-D3: shared buildVehicle() (core/src only)
 
+#include <algorithm>
 #include <atomic>
 
 #include <cmath>
@@ -44,6 +49,7 @@
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 using namespace JPH::literals;
 
@@ -480,6 +486,272 @@ LayerProbeResult World::simulateLayerProbe(const LayerMatrix& matrix,
         r.ownerFromId = r.bodies[static_cast<std::size_t>(userData)].owner;
     const auto it = ownerToId.find(cfg.probeOwner);
     if (it != ownerToId.end()) r.idFromOwner = it->second.GetIndexAndSequenceNumber();
+
+    for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
+        bi.RemoveBody(*rit);
+        bi.DestroyBody(*rit);
+    }
+    return r;
+}
+
+
+// ===== P8 M-D0: contact event bridge (Jolt ContactListener -> POD stream) =====
+// Three-source evidence and the removed-body hard constraint are documented in
+// Events.hpp. This is the ONLY place inside nl_core where JPH contact types appear.
+//
+// Determinism (M-P0 contract): the probe runs on JobSystemSingleThreaded, so
+// callback order equals frame order. We STILL stable-sort each frame's slice by
+// (minBodyId, maxBodyId, kind) so a future pool-backed JobSystem cannot alter the
+// byte stream (M-J5c: callbacks may arrive from arbitrary threads). The mutex is
+// defensive: M-D0 never enables the pool path, but the collector must remain
+// correct if a later milestone switches the course to parallel jobs.
+namespace {
+
+struct CachedContact {
+    std::uint64_t  ownerA  = 0;
+    std::uint64_t  ownerB  = 0;
+    std::uint32_t  bodyIdA = nl::physics::kInvalidBodyId;
+    std::uint32_t  bodyIdB = nl::physics::kInvalidBodyId;
+    nl::math::Vec3 worldPos{};
+    float          normalY = 0.0f;
+};
+
+// Key uses ONLY the body-id part of SubShapeIDPair. ContactListener.h:133-134
+// warns sub-shape IDs come from the previous step and may be invalid after a
+// shape change; body ids are stable for the pair's lifetime. Both ids are read
+// from the callback argument itself -- never via a Jolt body lookup.
+std::uint64_t contactPairKey(std::uint32_t a, std::uint32_t b) {
+    const std::uint32_t lo = a < b ? a : b;
+    const std::uint32_t hi = a < b ? b : a;
+    return (static_cast<std::uint64_t>(lo) << 32) | hi;
+}
+
+class ContactCollector final : public JPH::ContactListener {
+public:
+    explicit ContactCollector(const std::vector<std::uint64_t>& owners)
+        : owners_(owners) {}
+
+    void beginFrame(int frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        frame_.store(frame, std::memory_order_relaxed);
+        frameStart_ = events_.size();
+    }
+
+    void OnContactAdded(const JPH::Body& b1, const JPH::Body& b2,
+                        const JPH::ContactManifold& manifold,
+                        JPH::ContactSettings&) override {
+        record(nl::physics::ContactKind::Added, b1, b2, manifold);
+    }
+
+    void OnContactPersisted(const JPH::Body& b1, const JPH::Body& b2,
+                            const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings&) override {
+        record(nl::physics::ContactKind::Persisted, b1, b2, manifold);
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
+        // ContactListener.h:123-128 -- bodies may be destroyed by now. Do NOT
+        // call any body interface; the pair argument and the cache are all we read.
+        const std::uint32_t a = pair.GetBody1ID().GetIndexAndSequenceNumber();
+        const std::uint32_t b = pair.GetBody2ID().GetIndexAndSequenceNumber();
+        nl::physics::ContactEvent e;
+        e.frame   = frame_.load(std::memory_order_relaxed);
+        e.kind    = nl::physics::ContactKind::Removed;
+        e.bodyIdA = a;
+        e.bodyIdB = b;
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(contactPairKey(a, b));
+        if (it != cache_.end()) {
+            e.ownerA   = it->second.ownerA;
+            e.ownerB   = it->second.ownerB;
+            e.worldPos = it->second.worldPos;
+            e.normalY  = it->second.normalY;
+            cache_.erase(it);          // Q2: clear only after Removed is emitted
+        } else {
+            ++cacheMisses_;
+        }
+        events_.push_back(e);
+    }
+
+    // Frame-end stable sort: single-threaded baseline keeps callback order,
+    // pool-backed callbacks need this to stay bit-identical.
+    void finishFrame() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto cmpKey = [](const nl::physics::ContactEvent& e) {
+            const std::uint32_t lo = e.bodyIdA < e.bodyIdB ? e.bodyIdA : e.bodyIdB;
+            const std::uint32_t hi = e.bodyIdA < e.bodyIdB ? e.bodyIdB : e.bodyIdA;
+            return std::make_pair(std::make_pair(lo, hi), static_cast<int>(e.kind));
+        };
+        std::stable_sort(events_.begin() + static_cast<std::ptrdiff_t>(frameStart_),
+                         events_.end(),
+                         [&](const nl::physics::ContactEvent& x,
+                             const nl::physics::ContactEvent& y) {
+                             return cmpKey(x) < cmpKey(y);
+                         });
+    }
+
+    std::vector<nl::physics::ContactEvent> takeEvents() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return std::move(events_);
+    }
+    std::uint32_t cacheMisses() const { return cacheMisses_.load(std::memory_order_relaxed); }
+
+private:
+    void record(nl::physics::ContactKind kind, const JPH::Body& b1, const JPH::Body& b2,
+                const JPH::ContactManifold& manifold) {
+        const std::uint32_t id1 = b1.GetID().GetIndexAndSequenceNumber();
+        const std::uint32_t id2 = b2.GetID().GetIndexAndSequenceNumber();
+        const std::uint64_t u1  = b1.GetUserData();
+        const std::uint64_t u2  = b2.GetUserData();
+
+        nl::physics::ContactEvent e;
+        e.frame   = frame_.load(std::memory_order_relaxed);
+        e.kind    = kind;
+        e.bodyIdA = id1;
+        e.bodyIdB = id2;
+        e.ownerA  = (u1 < owners_.size()) ? owners_[static_cast<std::size_t>(u1)] : 0;
+        e.ownerB  = (u2 < owners_.size()) ? owners_[static_cast<std::size_t>(u2)] : 0;
+        if (manifold.mRelativeContactPointsOn1.size() > 0) {
+            const JPH::RVec3 p = manifold.GetWorldSpaceContactPointOn1(0);
+            e.worldPos = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                           static_cast<float>(p.GetZ()) };
+        } else {
+            const JPH::RVec3 p = manifold.mBaseOffset;
+            e.worldPos = { static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
+                           static_cast<float>(p.GetZ()) };
+        }
+        // mWorldSpaceNormal points along the direction that pushes body2 out of
+        // collision (ContactListener.h:30). Kept as-is, no sign flip.
+        e.normalY = manifold.mWorldSpaceNormal.GetY();
+
+        CachedContact c;
+        c.ownerA = e.ownerA;   c.ownerB = e.ownerB;
+        c.bodyIdA = id1;       c.bodyIdB = id2;
+        c.worldPos = e.worldPos; c.normalY = e.normalY;
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        cache_[contactPairKey(id1, id2)] = c;
+        events_.push_back(e);
+    }
+
+    const std::vector<std::uint64_t>& owners_;   // index == Body::GetUserData
+    std::mutex mutex_;
+    std::atomic<int> frame_{0};
+    std::size_t frameStart_ = 0;
+    std::atomic<std::uint32_t> cacheMisses_{0};
+    std::unordered_map<std::uint64_t, CachedContact> cache_;
+    std::vector<nl::physics::ContactEvent> events_;
+};
+
+} // namespace
+
+bool validateContactProbe(const ContactProbeConfig& cfg, std::string* err) {
+    auto bad = [err](const char* reason) -> bool {
+        if (err) *err = reason;
+        return false;
+    };
+    if (cfg.frames < 1 || cfg.frames > 100000) return bad("frames out of range [1,100000]");
+    if (!(cfg.dt >= 1.0 / 1000.0 && cfg.dt <= 1.0 / 30.0)) return bad("dt out of range [0.001,0.033333]");
+    if (!(cfg.gravity > 0.0f && cfg.gravity <= 1000.0f)) return bad("gravity out of range (0,1000]");
+    if (!(cfg.radius > 0.0f && cfg.radius <= 10.0f)) return bad("radius out of range (0,10]");
+    if (!(cfg.startHeight > cfg.blockerY + 2.0f * cfg.radius))
+        return bad("startHeight must clear the blocker");
+    if (!(cfg.blockerY > cfg.radius)) return bad("blockerY must clear the floor");
+    if (!(cfg.restitution >= 0.0f && cfg.restitution <= 1.0f))
+        return bad("restitution out of range [0,1]");
+    return true;
+}
+
+ContactProbeResult World::simulateContactProbe(const ContactProbeConfig& cfg) {
+    ContactProbeResult r;
+    if (!validateContactProbe(cfg, &r.error)) return r;
+    bootstrap();
+
+    // Declared first: filters hold references and PhysicsSystem holds pointers,
+    // so the matrix / owners / collector must outlive the system.
+    LayerMatrix local;
+    JPH::TempAllocatorImpl tempAllocator(10 * 1024 * 1024);
+    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    BPLayerInterfaceImpl bpLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter(local);
+    ObjectLayerPairFilterImpl objectLayerPairFilter(local);
+    std::vector<std::uint64_t> owners;         // vector index == Body::GetUserData
+    ContactCollector collector(owners);
+    JPH::PhysicsSystem physicsSystem;
+
+    physicsSystem.Init(1024, 0, 1024, 1024,
+                       bpLayerInterface, objectVsBroadPhaseLayerFilter, objectLayerPairFilter);
+    physicsSystem.SetGravity(JPH::Vec3(0.0f, -cfg.gravity, 0.0f));
+    physicsSystem.SetContactListener(&collector);
+    JPH::BodyInterface& bi = physicsSystem.GetBodyInterface();
+
+    JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(100.0f, 1.0f, 100.0f));
+    floorShapeSettings.SetEmbedded();
+    auto floorShapeResult = floorShapeSettings.Create();
+    if (floorShapeResult.HasError()) { r.error = "floor shape creation failed"; return r; }
+    JPH::ShapeRefC floorShape = floorShapeResult.Get();
+    JPH::ShapeRefC sphereShape = new JPH::SphereShape(cfg.radius);
+
+    std::vector<JPH::BodyID> ids;
+    // Engine object <-> Jolt body association, same index-in-vector trick as M-P1
+    // (userData is an INDEX, never a raw pointer, so a stale handle cannot dangle).
+    auto add = [&](const JPH::ShapeRefC& shape, JPH::RVec3 pos, JPH::EMotionType motion,
+                   std::uint32_t layer, std::uint64_t owner) -> bool {
+        JPH::BodyCreationSettings s(shape, pos, JPH::Quat::sIdentity(), motion,
+                                    static_cast<JPH::ObjectLayer>(layer));
+        s.mRestitution   = cfg.restitution;
+        s.mLinearDamping = 0.0f;
+        JPH::Body* body = bi.CreateBody(s);
+        if (!body) return false;
+        const std::uint32_t idx = static_cast<std::uint32_t>(owners.size());
+        body->SetUserData(static_cast<std::uint64_t>(idx));
+        owners.push_back(owner);
+        const JPH::BodyID id = body->GetID();
+        ids.push_back(id);
+        bi.AddBody(id, motion == JPH::EMotionType::Static
+                           ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        return true;
+    };
+
+    if (!add(floorShape, JPH::RVec3(0.0_r, -1.0_r, 0.0_r),
+             JPH::EMotionType::Static, layers::kFloor, cfg.floorOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.blockerY), 0.0_r),
+             JPH::EMotionType::Static, layers::kDefault, cfg.blockerOwner) ||
+        !add(sphereShape, JPH::RVec3(0.0_r, JPH::Real(cfg.startHeight), 0.0_r),
+             JPH::EMotionType::Dynamic, layers::kDebris, cfg.probeOwner)) {
+        r.error = "body creation failed";
+        return r;
+    }
+
+    physicsSystem.OptimizeBroadPhase();
+    r.bodyCount = physicsSystem.GetNumBodies();
+    impl_->lastBodyCount = r.bodyCount;
+    const JPH::BodyID probeId = ids.back();
+
+    auto pushFrame = [&](int frame) {
+        const JPH::RVec3 p = bi.GetCenterOfMassPosition(probeId);
+        const JPH::Vec3  v = bi.GetLinearVelocity(probeId);
+        ContactProbeFrame s;
+        s.frame = frame;
+        s.t     = frame * cfg.dt;
+        s.y     = static_cast<float>(p.GetY());
+        s.vy    = v.GetY();
+        r.trajectory.push_back(s);
+    };
+
+    r.trajectory.reserve(static_cast<std::size_t>(cfg.frames) + 1);
+    pushFrame(0);
+    for (int frame = 1; frame <= cfg.frames; ++frame) {
+        collector.beginFrame(frame);
+        physicsSystem.Update(static_cast<float>(cfg.dt), 1, &tempAllocator, &jobSystem);
+        collector.finishFrame();          // stable sort this frame's slice
+        pushFrame(frame);
+    }
+    // Detach BEFORE teardown: Jolt may emit Removed on the NEXT Update after a
+    // body is removed (ContactListener.h:126) -- those are outside the probe window.
+    physicsSystem.SetContactListener(nullptr);
+    r.events = collector.takeEvents();
+    r.removedCacheMisses = collector.cacheMisses();
 
     for (auto rit = ids.rbegin(); rit != ids.rend(); ++rit) {
         bi.RemoveBody(*rit);
@@ -979,6 +1251,31 @@ private:
 
 } // namespace
 
+// M-D3 (Q-D3-1 A): a lightweight ContactListener for the training ground.
+// It counts real chassis<->world contacts (including the wall) without touching
+// M-D0's ContactCollector / simulateContactProbe (frozen baseline).
+namespace {
+class SceneContactCounter final : public JPH::ContactListener {
+public:
+    JPH::BodyID wallId;
+    std::uint32_t added     = 0;
+    std::uint32_t persisted = 0;
+    std::uint32_t removed   = 0;
+    std::uint32_t wallHits  = 0;
+
+    void OnContactAdded(const JPH::Body& b1, const JPH::Body& b2,
+                        const JPH::ContactManifold&, JPH::ContactSettings&) override {
+        ++added;
+        if (b1.GetID() == wallId || b2.GetID() == wallId) ++wallHits;
+    }
+    void OnContactPersisted(const JPH::Body&, const JPH::Body&,
+                            const JPH::ContactManifold&, JPH::ContactSettings&) override {
+        ++persisted;
+    }
+    void OnContactRemoved(const JPH::SubShapeIDPair&) override { ++removed; }
+};
+} // namespace
+
 struct DebugScene::Impl {
     std::uint32_t totalBodies = 0;
     std::string error;
@@ -1003,10 +1300,29 @@ struct DebugScene::Impl {
     // Impl 的 physicsSystem 不 Init、不 Update；scenario=0 时为空。
     std::unique_ptr<CharacterHarness> charH;
 
+    // M-D3 scenario=2：长生命周期载具（声明在 physicsSystem 之后 → 析构体先跑
+    // detach，再轮到成员析构；与 M-D2 的 RemoveStepListener 纪律一致）。
+    JPH::Ref<JPH::VehicleConstraint> vehicleConstraint;
+    JPH::WheeledVehicleController* vehicleController = nullptr;
+    JPH::Body* vehicleChassis = nullptr;
+    JPH::BodyID vehicleChassisId;
+    JPH::BodyID vehicleFloorId;
+    JPH::BodyID wallId;
+    std::vector<JPH::BodyID> courseIds;
+    DriveInputState driveInput;
+    std::unique_ptr<SceneContactCounter> contactCounter;
+
     Impl()
         : objectVsBroadPhaseLayerFilter(matrix)
         , objectLayerPairFilter(matrix)
     {}
+    ~Impl() {
+        if (vehicleConstraint) {
+            physicsSystem.RemoveStepListener(vehicleConstraint.GetPtr());
+            physicsSystem.RemoveConstraint(vehicleConstraint.GetPtr());
+        }
+        if (contactCounter) physicsSystem.SetContactListener(nullptr);
+    }
 };
 
 DebugScene::DebugScene() = default;
@@ -1035,8 +1351,106 @@ bool DebugScene::build(int scenario, std::uint32_t seed, std::string* err) {
         return true;
     }
 
-    // floor/floor 禁用；其余 pair 全开（M-P0 同口径）。
-    I.matrix.set(layers::kFloor, layers::kFloor, false);
+    // ---- M-D3 (Q-D3-1 A): scenario 2 = long-lived vehicle training ground ----
+    // Layer matrix stays ALL-TRUE: unlike scenario 0, floor/floor must collide
+    // because VehicleCollisionTesterRay casts the FLOOR layer against the floor
+    // body. Disabling it makes all four wheel rays miss (M-D2 measured events=0).
+    if (scenario == 2) {
+        I.physicsSystem.Init(1024, 0, 1024, 1024,
+                             I.bpLayerInterface, I.objectVsBroadPhaseLayerFilter,
+                             I.objectLayerPairFilter);
+        I.physicsSystem.SetGravity(JPH::Vec3(0.0f, -9.8f, 0.0f));
+        I.bodyInterface = &I.physicsSystem.GetBodyInterface();
+        JPH::BodyInterface& bi = *I.bodyInterface;
+        auto fail2 = [&](const char* why) -> bool {
+            I.error = why;
+            if (err) *err = why;
+            return false;
+        };
+
+        // Ground: 80x80 flat box, top face y=0.
+        {
+            JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(40.0f, 0.5f, 40.0f));
+            floorShapeSettings.SetEmbedded();
+            auto fr = floorShapeSettings.Create();
+            if (fr.HasError()) return fail2("drive-scene floor shape failed");
+            JPH::BodyCreationSettings s(fr.Get(), JPH::RVec3(0.0_r, -0.5_r, 0.0_r),
+                                        JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                        layers::kFloor);
+            JPH::Body* b = bi.CreateBody(s);
+            if (!b) return fail2("drive-scene floor body failed");
+            I.floorId = b->GetID();
+            bi.AddBody(I.floorId, JPH::EActivation::DontActivate);
+        }
+
+        // Static lane markers (straight) + a short corner arc, all static bodies.
+        auto addMarker = [&](JPH::RVec3 pos, JPH::Vec3 half) -> bool {
+            JPH::BoxShapeSettings ms(half);
+            ms.SetEmbedded();
+            auto r = ms.Create();
+            if (r.HasError()) return false;
+            JPH::BodyCreationSettings s(r.Get(), pos, JPH::Quat::sIdentity(),
+                                        JPH::EMotionType::Static, layers::kDefault);
+            JPH::BodyID id = bi.CreateAndAddBody(s, JPH::EActivation::DontActivate);
+            if (id.IsInvalid()) return false;
+            I.courseIds.push_back(id);
+            return true;
+        };
+        for (int z = 4; z <= 14; z += 2) {
+            const JPH::Real rz = static_cast<JPH::Real>(z);
+            if (!addMarker(JPH::RVec3(-3.0_r, 0.05_r, rz), JPH::Vec3(0.2f, 0.05f, 0.2f)) ||
+                !addMarker(JPH::RVec3( 3.0_r, 0.05_r, rz), JPH::Vec3(0.2f, 0.05f, 0.2f)))
+                return fail2("drive-scene lane marker failed");
+        }
+        for (int k = 0; k < 5; ++k) {
+            const float a = 0.35f * static_cast<float>(k);
+            if (!addMarker(JPH::RVec3(JPH::Real(3.0f + 2.0f * std::sin(a)), 0.05_r,
+                                      JPH::Real(14.0f + 2.0f * std::cos(a))),
+                           JPH::Vec3(0.2f, 0.05f, 0.2f)))
+                return fail2("drive-scene corner marker failed");
+        }
+
+        // Wall at z=18 -- the real ContactListener event source for HUD.
+        {
+            JPH::BoxShapeSettings ws(JPH::Vec3(12.0f, 2.0f, 0.5f));
+            ws.SetEmbedded();
+            auto r = ws.Create();
+            if (r.HasError()) return fail2("drive-scene wall shape failed");
+            JPH::BodyCreationSettings s(r.Get(), JPH::RVec3(0.0_r, 2.0_r, 18.0_r),
+                                        JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                        layers::kDefault);
+            JPH::BodyID id = bi.CreateAndAddBody(s, JPH::EActivation::DontActivate);
+            if (id.IsInvalid()) return fail2("drive-scene wall body failed");
+            I.wallId = id;
+        }
+
+        I.contactCounter = std::make_unique<SceneContactCounter>();
+        I.contactCounter->wallId = I.wallId;
+        I.physicsSystem.SetContactListener(I.contactCounter.get());
+
+        // Shared M-D2 assembly: same chassis / wheels / constraint / tester.
+        VehicleTuning tuning;
+        detail::VehicleAssembly va;
+        if (!detail::buildVehicle(I.physicsSystem, tuning,
+                                  JPH::RVec3(0.0_r, JPH::Real(tuning.startY), 0.0_r),
+                                  &va, &I.error)) {
+            if (err) *err = I.error.c_str();
+            return false;
+        }
+        I.vehicleConstraint = va.constraint;
+        I.vehicleController = va.controller;
+        I.vehicleChassis = va.chassis;
+        I.vehicleChassisId = va.chassisId;
+        I.vehicleFloorId = I.floorId;
+        I.physicsSystem.OptimizeBroadPhase();
+        I.totalBodies = I.physicsSystem.GetNumBodies();
+        I.renderer = std::make_unique<JoltLineRenderer>();
+        I.valid = true;
+        return true;
+    }
+
+    // floor/floor 禁用仅用于 scenario 0（M-P0 同口径）；scenario 2 必须全通。
+    if (scenario == 0) I.matrix.set(layers::kFloor, layers::kFloor, false);
 
     I.physicsSystem.Init(1024, 0, 1024, 1024,
                          I.bpLayerInterface, I.objectVsBroadPhaseLayerFilter, I.objectLayerPairFilter);
@@ -1088,6 +1502,10 @@ void DebugScene::step(double dt) {
         I.charH->advance(static_cast<float>(dt));
         return;
     }
+    if (I.vehicleController) {
+        I.vehicleController->SetDriverInput(I.driveInput.forward, I.driveInput.right,
+                                            I.driveInput.brake, I.driveInput.handBrake);
+    }
     I.physicsSystem.Update(static_cast<float>(dt), 1, &I.tempAllocator, &I.jobSystem);
 }
 
@@ -1134,6 +1552,20 @@ DebugLines DebugScene::extractLines() {
         shape->Draw(I.renderer.get(), xf, JPH::Vec3::sOne(), color, false, true);
     };
 
+    // M-D3 scenario 2: ground blue, lane markers green, wall red, chassis
+    // yellow. Wheels are raycast queries (no JPH::Body), so there is nothing
+    // for DebugRenderer to draw: only the chassis box is a real rigid body.
+    if (I.scenario == 2) {
+        drawBody(I.floorId, JPH::Color(60, 120, 255));
+        for (JPH::BodyID id : I.courseIds) drawBody(id, JPH::Color(80, 220, 80));
+        drawBody(I.wallId, JPH::Color(255, 80, 80));
+        drawBody(I.vehicleChassisId, JPH::Color(255, 230, 60));
+        I.lineBuffer.swap(I.renderer->lines);
+        out.data = I.lineBuffer.data();
+        out.vertexCount = static_cast<std::uint32_t>(I.lineBuffer.size() / 6u);
+        return out;
+    }
+
     // 地板蓝；落体按形状分色（盒绿 / 球橙 / 胶囊品红 / 其它青）。
     drawBody(I.floorId, JPH::Color(60, 120, 255));
     for (JPH::BodyID id : I.dynamicIds) {
@@ -1163,5 +1595,55 @@ std::uint32_t DebugScene::bodyCount() const {
     return impl_->totalBodies;
 }
 
+// ---- M-D3: Jolt-free drive POD interface (scenario 2 only) ----
+void DebugScene::setDriveInput(const DriveInputState& input) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return;
+    impl_->driveInput = input;
+}
+
+DriveViewState DebugScene::driveState() const {
+    DriveViewState out;
+    if (!impl_ || !impl_->valid || impl_->scenario != 2 || !impl_->vehicleChassis) return out;
+    const auto& I = *impl_;
+    const JPH::RVec3 p = I.vehicleChassis->GetPosition();
+    const JPH::Vec3 v = I.vehicleChassis->GetLinearVelocity();
+    const JPH::Vec3 fwd = I.vehicleChassis->GetRotation() * JPH::Vec3(0.0f, 0.0f, 1.0f);
+    out.pos[0] = static_cast<float>(p.GetX());
+    out.pos[1] = static_cast<float>(p.GetY());
+    out.pos[2] = static_cast<float>(p.GetZ());
+    out.vel[0] = v.GetX();
+    out.vel[1] = v.GetY();
+    out.vel[2] = v.GetZ();
+    out.yaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    out.speed = std::sqrt(v.GetX() * v.GetX() + v.GetZ() * v.GetZ());
+    for (const JPH::Wheel* w : I.vehicleConstraint->GetWheels()) {
+        if (w->HasContact()) ++out.grounded;
+    }
+    if (I.contactCounter) {
+        out.contactAdded = I.contactCounter->added;
+        out.contactPersisted = I.contactCounter->persisted;
+        out.contactRemoved = I.contactCounter->removed;
+        out.wallHits = I.contactCounter->wallHits;
+    }
+    out.valid = true;
+    return out;
+}
+
+DriveChassisState DebugScene::chassisState() const {
+    // Q-D3-4 "folded hook": M-D3 only exposes the POD; viewer still defaults to
+    // OrbitCamera. Camera b-segment fills in the projection-source switch later.
+    DriveChassisState out;
+    const DriveViewState d = driveState();
+    if (!d.valid) return out;
+    out.pos[0] = d.pos[0];
+    out.pos[1] = d.pos[1];
+    out.pos[2] = d.pos[2];
+    out.yawDegrees = d.yaw * 180.0f / 3.14159265358979323846f;
+    out.vel[0] = d.vel[0];
+    out.vel[1] = d.vel[1];
+    out.vel[2] = d.vel[2];
+    out.valid = true;
+    return out;
+}
 
 } // namespace nl::physics

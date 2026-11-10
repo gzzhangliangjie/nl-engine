@@ -2363,3 +2363,78 @@
 6. **near 不是 FAIL**：dx12/vulkan 仍有 1px / maxDelta 1/255 GPU 取整噪声档，报告为 ALL GREEN，按分档纪律只报 bytes/near/FAIL，不为 near 重拍基线。
 
 **下一步**：M9.2 离线参考模式（64+ 采样/像素的直光 / 硬阴影标准答案，供 M9.1 阴影射线与 VSM(S15) 对照，只算一跳、不是 GI 裁判，tag `s9-done`）。kStage 仍 S8.2，独立 GBuffer 落盘形态仍推迟到 S10 与 S12 历史帧需求一起拍。M9.1 验证口径已绑定 tag s9-shadow，s9-gbuffer/shadow 为冻结的 M9.0 无射线基线、不再随当前 exe 重拍。
+
+## P8 M-D0：碰撞事件桥（Jolt ContactListener → Jolt-free POD 事件流）（feat/drive，2026-11-10，tag `drive-m0`）
+
+**动作**：用户「开工」= M-D0 完整落码收口。三处参考源码按本里程碑点名面定向复读（Carrot `PhysicsSystem.h:73/.cpp:124,345` 单全局 listener + per-body 双通道派发；bevy `event/mod.rs:573,716` 双缓冲两帧保活；UE `PrimitiveComponent.h:274` Hit 委托字段子集）+ vendored `ContactListener.h:106/119/126-128` 三回调与 removed 禁访问 body 硬约束 + `docs/MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `P8-DRIVE-PLAN.md` / PHYS·INPUT-TOOLS-GUIDE 历史 → `core/include/nl/physics/Events.hpp`（Jolt-free POD：ContactEvent / ContactProbeConfig / ContactProbeResult / validate）+ `World.hpp` 加 `simulateContactProbe` 并把 `kInvalidBodyId` 收敛到 Events.hpp 单一真源 + `World.cpp` 内 `ContactCollector`（三回调、owner 缓存、帧末稳定排序、mutex 防御）+ 三体探针（floor / static blocker / dropped probe）+ `phys-tools` 扩 `contact-trace` / `contact-check` / selftest `contacts` 节 + ctest 三条 → `example/drive-m0/`（run.bat 五段式 + contacts.tsv + 5 份真实日志 + 双证据图）+ `tools/make-drive-m0-evidence.py` + cases.json `drive-m0` 卡五用例 + `docs/p8/DRIVE-TOOLS-GUIDE.md` + 计划 §6 留痕 / §7 状态 → 本四栏 → tag。A 类轨道，不 bump `kStage`。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m0`）。轨道注册 `b4ab3b0`（master）、计划实证化 `98314d2`（feat/drive）为前置。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest 16/16 ×2；phys-tools selftest（M-P0~P4 + j5c + contacts 节）两树 PASS；`contact-trace --frames 240` 真实输出 **41 事件 = Added 6 / Persisted 29 / Removed 6**，首个 Added f44 / 首个 Removed f46 / 末事件 f185 / 其后 55 帧静息，接触点 (0,3,0)、normalY=1.0、静息 y=3.5；`cache_misses=0` 且 6 个 Removed 全带 owner 对 = Q2 缓存硬证；两次新建世界事件流逐字段位一致；DX12/VULKAN contact-trace TSV 逐字节一致；ctest `d0-contact-{trace,check,negative}` + `p0-phys-selftest` 4/4（`--repeat until-pass:3`）；负向退出码 2（bad --frames）/ 1（缺文件）/ 2（未知命令）实测；run.bat 五段式 ALL GREEN（TSV + 两张证据图重生成 `fc /b` 逐字节一致）；`server.py --check` exit 0；证据图肉眼核验（事件时间线三行 / 标注 f44·f46·f185 / y(t) 曲线与接触点标记 / MEASURED 面板 / 完整日志板）。
+
+**踩坑情况**
+1. **junction 共享文件挡 merge**：`.workbuddy` 是主树/wt junction 共享 + skip-worktree，主树新日志 commit 使 wt 工作区 blob 领先 index → `git merge master` 报「local changes would be overwritten」。按 `AGENTS.md` 工作线粘性（一条工作线只在收尾 merge 一次）不做中途 merge，收尾 merge 回 master 自然带上；未污染他会话文件。
+2. **缓存 key 不能带 subshape id**：`ContactListener.h:133-134` 明示 removed 时 subshape id 来自上一帧、shape 变化后可能失效；改用 `SubShapeIDPair` 的 body id 部分（min/max 归一）作 key，实测 6/6 removed 命中、miss=0。若按全 pair 哈希做键，compound shape 场景会静默丢 owner。
+3. **锚必须机器反推**：首版只写结构锚；实跑后由一次性脚本读真实 TSV 生成 7 条数值锚注入 `contact-check` 与 selftest（M-I0/I1 手写锚两连犯教训），非标准 `--frames` 只跑结构锚、跳过数值锚。
+4. **selftest 输出新增一行**：`phys-d0 contacts: PASS` 追加在既有 5 条 PASS 行之前，`phys-p0 selftest: PASS` 锚文本一字未动，M-P0~P4 归档 TSV 基线零改动；phys-* 归档 log 为历史快照不重拍。
+5. **ctest 不在裸 shell PATH**：便携 cmake 3.31.6 的 ctest 必须走全路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`，命令统一带 `--repeat until-pass:3`。
+
+**下一步**：M-D1（`ContactEventStream` 双缓冲 + owner→Entity 映射 + PostPhysics 消费 System + M-GL5 TickGroup 时序自证）；M-D2 载具无头集成；M-D3 驾驶可见（viewer 接线，本轨唯一渲染面）。
+## P8 M-D1：ECS 消费 ContactEventStream 双缓冲（feat/drive，2026-11-10，tag `drive-m1`）
+
+**动作**：用户「下一步」= M-D1 完整落码收口。开工按铁律重读三处本里程碑点名面（Carrot `PhysicsBody.cpp:63-94` 帧内入队→帧末主线程派发 + `CSharpBindings.cpp:1033-1075` 脚本侧消费者双 `entity.exists()` 过滤；bevy `event/mod.rs:573/680-701/704-719` 两帧保活 / `update_drain()` / 两次 update 才 empty；UE `EngineBaseTypes.h:83-110` `TG_PostPhysics` 组序），**未复用 M-D0 的接触事件面证据**（AGENTS.md M5.1 教训）+ `docs/MILESTONES.md` / `carrot-history.md` / `bevy-history.md` / `ROADMAP.md` 对照总表（无 M-D1 行，按功能就近读同类模块）/ `MEMORY.md` / 当日日志 / `P8-DRIVE-PLAN.md` / `DRIVE-TOOLS-GUIDE.md` → `core/include/nl/physics/ContactEventStream.hpp`（双缓冲两页 + 逐页 cursor：update/publish/drain）+ `ContactEventSystem.hpp`（自足 `scene::System` 消费者，owner→Entity 过滤）+ 两个 .cpp + 根 CMakeLists 两行 + `phys-tools` 扩 `ecs-trace` / `ecs-check` / selftest `ecs` 节 + ctest 三条 → `example/drive-m1/`（run.bat 五段式 + ecs.tsv + 6 份真实日志 + 双证据图）+ `tools/make-drive-m1-evidence.py` + cases.json `drive-m1` 卡五用例 + `DRIVE-TOOLS-GUIDE.md` §9 + 计划 §3 锚点表 / §5 措辞精确化 / §6 留痕 / §7 状态 → 本四栏 → tag。A 类轨道，不 bump `kStage`。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m1`）。前置 `747f5b3`（`drive-m0`）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest 16/16 ×2；phys-tools selftest（M-P0~P4 + j5c + contacts + ecs 节）两树 PASS；`ecs-trace --frames 240` 真实输出 **240 F 行 + 41 E 行**，published=consumed=41、kinds 6/29/6、首个 Added f44 / 首个 Removed f46 / 末事件 f185（与 M-D0 实测锚逐项一致 = 零回归）；**owner 过滤双向有真实数据**：A 侧 41 个全未映射（blocker）、B 侧 41 个全映射（probe）；updates=240 / dropped=0 / order_ok=240/240，readable_before 与 readable_after 全帧恒 0；selftest 单测覆盖同帧可见 / 已消费次帧清 / 未读两帧保活 / TickGroup 乱序注册仍按枚举序 / `tickParallel` 零结构变更违约；DX12/VULKAN `ecs-trace` TSV 逐字节一致；ctest `d1-ecs-*` + `d0-contact-*` + `p0-phys-selftest` 双后端各 **7/7**（`--repeat until-pass:3`）；负向退出码 2（bad --frames）/ 1（缺文件）实测；run.bat 五段式 ALL GREEN（TSV + 两张证据图重生成 `fc /b` 逐字节一致）；`server.py --check` exit 0；两张证据图肉眼核验并修掉压字 / 留白后复验。
+
+**踩坑情况**
+1. **计划 §5「次帧清」与 §2.1 两帧保活表面冲突**：按更细的 §2.1 + §3 执行——逐页 cursor 让已消费事件次帧不可见、未读事件存活到第三次 `update()` 才丢；selftest 两条分别断言，收口时把 §5 措辞改精确并写进 `DRIVE-TOOLS-GUIDE.md §9.1`，避免下轮捡回旧表述。
+2. **证据图不许手绘 / 占位**：acceptance 板曾想直接写死「ALL GREEN」两行，改为从 `ecs-check.log` / `cross-backend.log` 读真实行；`timeline.png` 全部数值由 `ecs.tsv` F/E 行重算。
+3. **证据图排版两修**：f44 标注贴住面板标题、累计曲线平台与说明文字相挤 → 标注下移、scale 165→110、文字上移；acceptance 画布 660→600 收下方留白。复跑 run.bat 逐字节一致。
+4. **首次 run.bat 必挂一次**：PNG 基线不存在时 `copy /b` 造不出 `.base.png`，第 ⑤ 段 fc 报 ERROR；第二次起 ALL GREEN（M-D0 同款冷启动行为）。
+5. **selftest 新节变量遮蔽**：新增 `st2` 遮蔽既有 stack 节 `st2`（/W4 C4456）→ 改名 `ecsStream2`；其余 4 条同类 warning 为 M-D0 前既有，未动。
+6. **锚一律机器反推**：先只写结构锚，实跑后由脚本从真实 TSV 生成 6 组数值锚注入 `ecs-check` 与 selftest（M-I0/I1 手写锚两连犯教训），非 240 帧只跑结构锚。
+
+**下一步**：M-D2 载具无头集成（`Vehicle` PIMPL + `DriveConfig` 帧序号输入脚本 + 三锚场景 + 轮接触事件锚）；M-D3 驾驶可见（viewer 接线，本轨唯一渲染面）。整轨 M-D0~D3 收官后 merge 回 master。
+
+## P8 M-D2：无头载具集成 VehicleConstraint（feat/drive，2026-11-10，tag `drive-m2`）
+
+**动作**：用户「下一步」= M-D2 完整落码收口。开工闸先扫计划内架构判定 → 发现 `Vehicle` 与 `JPH::PhysicsSystem` 的所有权 / 公开面形态未写，第一行 `AddConstraint` / `AddStepListener` 会隐式拍死 → 先出 `docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md`（三处实读 + A/B/C 代价矩阵）交用户拍板，用户选 **A 探针式 fresh world**；结论写回 `P8-DRIVE-PLAN.md` §3 锚点表 / §7 并删 Q1/Q2 历史「待确认 / 确认后」挂账句后才落第一行架构代码。三处本里程碑点名面实读（**未复用 M-D0/D1 证据**）：Carrot physics 16 文件零 Vehicle/StepListener/Wheeled 命中；bevy 65 官方 crate 无官方物理、唯一命中是教学 Component 示例（如实记「无对应物」）；UE 5.8.4 ChaosVehicles 四输入 API + `FWheelStatus[]` 逐帧缓存回读；另逐行核 vendored Jolt `Physics/Vehicle/` 24 文件与 `PhysicsSystem.h`。落码：`core/include/nl/physics/Vehicle.hpp`（Jolt-free POD）+ `core/src/physics/Vehicle.cpp`（fresh world 装配 / 轮态回读 / 边沿合成事件）+ 根 CMakeLists 一行 + `phys-tools` 扩 `drive-trace` / `drive-check` / selftest `vehicle` 节 + `phys-tools/CMakeLists.txt` 三条 ctest + `example/drive-m2/`（run.bat 五段式 + drive.tsv + 7 份真实日志 + 双证据图）+ `tools/make-drive-m2-evidence.py` + cases.json `drive-m2` 卡五用例 + `DRIVE-TOOLS-GUIDE.md` §10 + 计划 §3 口径更正 / §6 留痕 / §7 状态 → 本四栏 → tag。A 类轨道，不 bump `kStage`，不碰 `World.cpp` / `viewer` / `DebugScene`。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m2`）。前置 `b2219e5`（`drive-m1`）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest 16/16 ×2；phys-tools selftest（M-P0~P4 + j5c + contacts + ecs + vehicle 节）两树 PASS；`drive-trace --frames 480` 真实输出 **481 F / 1924 W / 1920 E 行**，kinds 4/1916/0（四轮射线全程贴地故无 Removed）、首个接触 f1 / 末事件 f480、全接地帧 480、published=consumed=1920 / dropped=0；三锚实测：加速 reach f25 / top 9.298565 / 出段 6.261256 m/s，转向 yaw -0.838077 rad / 半径 18.007170 m / 前轮 0.5236 rad 后轮 0，手刹 9.298565 → 0.001434 m/s / 刹停 f402；`drive-check` 25 条结构 / 物理断言 + 6 组从真实 TSV 反推的数值锚全绿；selftest `vehicle` 节覆盖负向 config 六例 / 两次 fresh world 逐位一致 / 四轮接触 / 流零丢弃 / 三类物理行为；DX12/VULKAN `drive-trace` TSV 逐字节一致（**269658 B**）；M-D0 `contacts.tsv` / M-D1 `ecs.tsv` 双后端逐字节零回归；ctest `d2-drive-*` + `d1-ecs-*` + `d0-contact-*` + `p0-phys-selftest` 双后端各 **10/10**（`--repeat until-pass:3`）；负向退出码 2（bad --frames）/ 1（缺文件）实测；run.bat 连续两次 ALL GREEN（TSV + 两张证据图重生成 `fc /b` 逐字节一致，首次冷启动已修）；`server.py --check` exit 0；两张证据图肉眼核验（速度曲线 / 三段相位色带 / yaw 与四轮接触条带 / 累计 publish-drain / MEASURED 面板 / 完整日志板，无压字无重叠）。
+
+**踩坑情况**
+1. **对象层对过滤不能沿用 M-P0**：`ObjectLayerPairFilterImpl::ShouldCollide` 初版照抄 M-P0 禁用 `floor/floor`，`VehicleCollisionTesterRay` 用 floor 层去 cast floor body 全部 miss → 首跑 `events=0`、四轮 `contact=0`、车身坐地。改所有层对 `return true`（只在本 TU 内，`World.cpp` 逐字节不变）后 `events=1440`（360 帧口径）。
+2. **`--frames` 三段等比缩放是陷阱**：初版三段按 `N*5/12` / `N*3/4` 同时缩放，实测 N=360/480/600/720 的 `stop_frame` **恒 -1**（加速段一起变长，车速涨得比 1/4 长度手刹窗口快）。改「边界固定 150/270，额外帧只延长 phase 2」+ 新增 `--accel-end` / `--turn-end`，默认 `frames=480`，实测 f402 停住。
+3. **差速器轮索引默认 -1**：`VehicleDifferentialSettings::mLeftWheel/mRightWheel` 不显式填则动力不传轮；`GetController()` 返回基类指针，调 `SetDriverInput` 必须向下转换；手刹是 float 0~1 不是 UE 的 bool。
+4. **轮接触没有 ContactListener 事件**：Jolt 轮是 raycast query 不是刚体，立项「天然产 added/persisted 事件流」不成立 → 改由 `HasContact()` 边沿合成 `ContactEvent` POD 喂 M-D1 流。计划 §3 衔接段 / 锚点表 / `Vehicle.hpp` 头注释 / `DRIVE-TOOLS-GUIDE.md` §10.2 四处口径同步更正，杜绝下轮捡回旧表述。
+5. **新增 warning 当场清**：selftest 新节 `r1`/`r2` 触发 /W4 C4456 → 改名 `veh1`/`veh2`，warning 回落到既有 4 条。
+6. **证据图不能读正在写的日志**：`acceptance.png` 初版读 `evidence.log`（python stdout 正被重定向到该文件），冷启动与二次运行会产出不同 PNG 导致 `fc /b` 挂 → 改读第 ④ 段前已写完的 `drive-check.log` / `cross-backend.log`；同时修掉 M-D0/D1「首次 run.bat 必挂一次」，第 ⑤ 段基线不存在时先生成并跳过比对，首次即全绿。
+7. **锚一律机器反推**：先只写结构 / 物理断言 + 一条故意失败占位（防忘注入），实跑后由 `make-drive-m2-evidence.py --anchors` 从真实 TSV 读出 6 组数值注入 `drive-check`（M-I0/I1 手写锚两连犯教训），非 480 帧只跑结构 / 物理断言。
+
+**下一步**：M-D3 驾驶可见（`DebugScene` scenario 2 + viewer M-I1 实时输入 + HUD 参数行 + console cvar 实调 + 截图基线，本轨唯一渲染接线面）。整轨 M-D0~D3 收官后 merge 回 master。
+
+
+## P8 M-D3：驾驶可见 DebugScene scenario 2 + viewer 接线（feat/drive，2026-11-10，tag `drive-m3`）
+
+**动作**：用户「下一步」= M-D3 完整落码收口。开工闸先扫计划内架构判定 → M-D3 §3 只有三条粗线条、无锚点表，且 M-D2 拍板 A 时明写「不提前定 M-D3 挂载契约」→ 两路定向实读本地 viewer/DebugScene/console/input/展示台 + Carrot 输入 ActionSet / SceneManager / Console / ActionDebug、bevy `ButtonInput` / gizmos / `FixedUpdate` / `physics_in_fixed_timestep.rs`、UE 5.8.4 `AWheeledVehiclePawn` / `DrawHUD` / `ShowFlag.%s` cvar + 历史文档，暴露 **4 个硬偏差**（`buildVehicle(PhysicsSystem&)` 根本不存在只活在 5 处注释；M-D2 全通层过滤 vs scenario 0 禁 `floor/floor`；M-I2「viewer 绝不调 `updateFromWindow`」与实时轮询冲突；常驻 HUD 新行波及 70 张基线且 `--check` 只校验 `s8.2`）→ `docs/p8/D3-DRIVE-VIEW-OPTIONS.md` 摊 Q-D3-1~4 代价矩阵交用户拍板：**Q-D3-1 A / Q-D3-2 A / Q-D3-3 A / Q-D3-4 折中留钩子**。结论写回计划 §3 锚点表 / §6 / §7、删除失真承诺与挂账句后才落第一行架构代码。落码：`VehicleInternal.hpp`（internal-only Jolt）+ 真抽 `buildVehicle(PhysicsSystem&)` + `World.cpp` scenario 2 长生命周期车（20 bodies / 墙 z=18 / 全通层过滤）+ `World.hpp` 三个 Jolt-free POD + `window.hpp/.cpp::rawKeyDown` + `viewer/main.cpp` 注入管线 / `--drive-demo` / cvar / 投影源钩子 + `renderer/src/hud.cpp` 独立默认关窗口 + `renderer.hpp::DriveDebugUi` → `example/drive-m3/`（run.bat 五段式 + 双后端基线 PNG + `frames.tsv` + 8 份真实日志 + 双证据图）+ `tools/make-drive-m3-evidence.py` + cases.json `drive-m3` 卡 6 用例 + `DRIVE-TOOLS-GUIDE.md` §11 + 计划收官口径 → 本四栏 → tag。A 类轨道，**`kStage` 保持 `S8.2`**，`ViewMode` / viewer selftest 锚 / 既有基线 PNG 全冻结。
+
+**提交版本**：feat/drive 本收口 commit（annotated tag `drive-m3`）。前置 `dc98a8f`（`Events.hpp` Q1/Q2 口径勘误）。
+
+**完成情况**：DX12/VULKAN 双全树构建 + viewer selftest **16/16 ×2**；ctest 两后端各 **12/12**（`--repeat until-pass:3`）；M-D0 `contacts.tsv` / M-D1 `ecs.tsv` / M-D2 `drive.tsv` 六组逐字节零回归、DX/VK `drive-trace` 逐字节一致（本轮新增 warning **0**）。10 组真实帧扫描（30..300）实测：top speed **7.86643 m/s**（f210）→ f240 撞墙 `wallHits=1` → f300 末速 **0.0115737 m/s**、posZ **15.2419 m**（墙 z=18）、yaw **-20.2322 deg**、grounded **4/4**、contacts **1/8/1**、deviceErrors **0**。双后端截图各自对本后端基线逐字节相同（32021 B / 32923 B），物理日志锚逐字一致；cvar `vehicle.throttleScale 0.5` 实跑 speed 0.0592731 / contacts 1/9/1；`vehicle.debug true` 无 `--drive-hud` 与基线逐字节一致、无开关时 DIFFER（默认关闸门）；负向 `--physics-scenario 0` 无任何 M-D3 drive scene 日志。`run.bat` 连续两轮 **ALL GREEN**（`frames.tsv` + 两张证据图重生成 `fc /b` 逐字节稳定）；`regression.py --only drive-m3` **12/12 bytes ALL GREEN**；`server.py --check` exit 0（`s8.2` 旧阶段零波及）；两张证据图肉眼核验并修掉裁切 / 滚动条 / 红线压标题后重拍复验。
+
+**踩坑情况**
+1. **`--fixed-dt` 不是可选项**：截图模式默认 dt 近似 0，帧序号脚本灌了输入但物理几乎不推进（posZ≈0.0075）；`--fixed-dt 16.6667` 每渲染帧固定推进 1/60 逻辑帧后车才开到墙。
+2. **默认 OrbitCamera 不框训练场**（计划预口径被证伪）：首图主体是 Suzanne 头，车道 / 墙 / 车体基本不在视野。按 Q-D3-4 冻结面不改相机代码，用命令行 `--dist/--yaw/--pitch` 取景，7 组拼图对比后定 `--dist 45 --yaw 90 --pitch 40`；计划 §3「训练场布在可见范围」已同步勘误。
+3. **HUD 窗口被画布底边裁掉**：初版 `(18,430)` + 6 行在 540px 画布里 `WALL` 半截 / `CVAR` 全丢，首行被自动宽度裁字 → 挪右下 `(620,330)` + `ImGuiCond_Always` + 6 行 ≤40 字符；`316x124` 仍出竖向滚动条 → `316x140` 消除，基线重拍。
+4. **证据图坐标域不含墙**：`zmax` 取曲线峰值 ×1.15 = 17.62 < 墙 z=18，红线落到框外并压住标题 → 下限提到 20、下半图下移、标注移到线下方。
+5. **证据图不能读正在写的日志**（M-D2 坑 6 同族）：所有被 PNG 读取的 log 必须在生成前定稿，evidence 结论只写 `build/` 下临时 log。
+6. **混合版本卡必须 case 级 exe 覆盖 + `cwd:"{root}"`**：版本默认 exe = phys-tools，viewer 的 tool/pair 卡若不覆盖会跑错程序；cwd 不对齐则截图与基线不一致。
+7. **C4244 误判为新增 warning**：`viewer/main.cpp(1147)` 实为 M-A5 既有行 `fp.animTime = skinTime` 被 M-D3 新增 138 行推后，核对 `git show HEAD` 后确认本轮零新增 warning，不改既有代码。
+8. **双后端 PNG DIFFER 不是回归**：既有 pair 卡按「各自对本后端基线 bytes」判定，跨后端差异来自 GPU 计时 / 着色器路径，禁笼统写「一致」。
+9. **TSV 行尾必须与 `.gitattributes` 对齐**：`*.tsv text eol=lf`，而 Python `write_text()` 在 Windows 默认 CRLF —— 初版 `frames.tsv` 工作树 CRLF / blob LF，clone 后首次 `fc /b` 会假 FAIL。改 `newline="\n"` 显式写 LF（与 M-D0/D1/D2 归档 TSV 一致），重生成后连续两轮 `run.bat verify` ALL GREEN。
+
+**下一步**：整轨 M-D0~D3 已全部收官，可按 `docs/PARALLEL-TRACKS.md` §7 整轨 merge 回 master（四栏验收纪要随分支一次带入）；camera b 段仍按 `P8-CAMERA-PLAN.md` 排 M-D3 之后串行，M-D3 已留 `ChassisState` POD 与投影源切换钩子。

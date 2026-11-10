@@ -116,6 +116,16 @@ struct FrameParams {
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
 // 公开头只放 POD，viewer / core 不接触 ImGui 或任何图形 API 类型。
+// M-D3 (Q-D3-3 A): drive parameter panel. Separate sibling window with a
+// DEFAULT-OFF gate: when show==false it draws nothing, so none of the 35
+// existing --hud cases (70 baseline PNGs) moves. ASCII-only lines.
+struct DriveDebugUi {
+    bool show = false;
+    enum { kMaxLines = 6, kLineChars = 96 };
+    char lines[kMaxLines][kLineChars] = {};
+    int  lineCount = 0;
+};
+
 struct HudFrame {
     // ---- viewer -> HUD（显示数据）----
     float fps          = 0.0f;
@@ -227,6 +237,7 @@ struct HudFrame {
     // false = 零布局，既有基线不动。POD 定义与绘制接口见 input_debug.hpp，
     // ImGui 符号封在 renderer/src/input_debug.cpp）----
     InputDebugUi inputDebug;
+    DriveDebugUi driveDebug;
 };
 
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。

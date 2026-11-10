@@ -197,6 +197,11 @@ bool Window::keyPressed(Key key) const {
     return pressed;
 }
 
+bool Window::rawKeyDown(int glfwKey) const {
+    if (!valid()) return false;
+    return glfwGetKey(impl_->handle, glfwKey) == GLFW_PRESS;
+}
+
 // M-C1：键盘 / 字符事件消费。队列上限 = 调用方容量，溢出丢弃最旧（打字速率下
 // 一帧 16 键 / 32 字符绰绰有余；真溢出说明主循环卡了 N 帧，丢输入好过卡死）。
 std::size_t Window::consumeKeyEvents(KeyEvent* out, std::size_t cap) {

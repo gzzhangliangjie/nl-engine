@@ -7659,6 +7659,426 @@
      "script": "example/s9-shadow/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "drive-m0",
+   "label": "M-D0",
+   "name": "碰撞事件桥：Jolt ContactListener → Jolt-free POD 事件流（M-D0）",
+   "tag": "drive-m0",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴（track drive）首个里程碑，A 类并行轨道、零图形零 kStage。core/include/nl/physics/Events.hpp 新增 Jolt-free POD ContactEvent / ContactProbeConfig / ContactProbeResult；World.cpp 内实现唯一 Jolt 符号面 ContactListener 三回调（Added/Persisted/Removed），事件对携带 ownerA/ownerB、bodyId 对、接触点与法线；removed 期间禁访问 Jolt body（ContactListener.h:126-128），owner 对由 Added/Persisted 阶段缓存、removed 派发后清（Q2）。三体探针照 simulateLayerProbe 先例，帧末按 (minBodyId,maxBodyId,kind) 稳定排序保证确定性。phys-tools 扩 contact-trace / contact-check / selftest contacts 节，锚全部从真实 TSV 反推：240 帧 41 事件（Added 6 / Persisted 29 / Removed 6），首个 Added f44、首个 Removed f46、末事件 f185，之后静息；cache_misses=0 即 Q2 缓存命中硬证。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0..M-P4 + j5c + contacts 节）两树 PASS",
+    "contact-trace 240 帧真实输出 41 事件（6/29/6），contacts.tsv 逐字节稳定；contact-check 从 E/T 数据行独立复验结构锚 + 7 条实测数值锚",
+    "确定性：两次新建世界事件流逐字段位一致；DX12/VULKAN contact-trace TSV 逐字节一致",
+    "Q2 硬证：6 个 Removed 全部携带非零 owner 对，cache_misses=0（removed 期间零 Jolt body 访问）",
+    "ctest d0-contact-{trace,check,negative} + p0-phys-selftest 4/4（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m0/（run.bat 五段式 ALL GREEN + TSV + 5 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D0 新增 contact-trace / contact-check 两行。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：contacts 节（事件桥 / Q2 缓存 / 确定性）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c 既有锚全绿之外，新增 contacts 节：三类事件齐备、owner 全解析、两次世界逐位一致、实测数值锚 6/29/6。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d0 contacts: PASS",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "contact-trace",
+     "name": "contact-trace：真实 ContactListener 事件流 TSV",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，E 行 11 列事件、T 行 5 列轨迹。",
+     "args": [
+      "contact-trace",
+      "--frames",
+      "240"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D0 contact events",
+     "preview": "example/drive-m0/events.png",
+     "command": "phys-tools contact-trace --frames 240"
+    },
+    {
+     "id": "contact-check",
+     "name": "contact-check：从归档 TSV 复验事件锚",
+     "kind": "tool",
+     "note": "只信 E/T 数据行：结构锚（kind/owner/bodyId/帧序/帧末排序）+ 7 条从真实 TSV 反推的数值锚；摘要行仅作 provenance。",
+     "args": [
+      "contact-check",
+      "{root}/example/drive-m0/contacts.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d0 contact-check: PASS",
+     "preview": "example/drive-m0/acceptance.png",
+     "command": "phys-tools contact-check example/drive-m0/contacts.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。",
+     "args": [
+      "contact-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools contact-trace --frames 0"
+    }
+   ]
+  },
+  {
+   "id": "drive-m1",
+   "label": "M-D1",
+   "name": "ECS 消费：ContactEventStream 双缓冲 + PostPhysics 消费 System（M-D1）",
+   "tag": "drive-m1",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第二里程碑，A 类并行轨道、零图形零 kStage。core/include/nl/physics/ContactEventStream.hpp 新增 Jolt-free 双缓冲事件流：两页 + 逐页 read cursor，update() 帧首换页丢最老页、publish() Physics 组写当前页、drain() PostPhysics 组按旧页到当前页的时间序取出未读事件并推进 cursor；bevy event/mod.rs:573/715-718 两帧保活口径，已消费事件次帧不可见、未读事件第三次 update 才丢。ContactEventSystem 直接继承 scene::System（读写集空 = 自足可并行），tick 内 drain，ownerA/B 直接当 EntityID 走 scene::World::exists 过滤，未映射 owner 只计数不丢事件。TickScheduler 故意乱序注册四组，runTick 仍按枚举序执行；Physics 组 publish 真实 M-D0 事件、PostPhysics 组 ecs.tick 消费、PostUpdateWork 组断言组序。phys-tools 扩 ecs-trace / ecs-check / selftest ecs 节，锚全部从真实 TSV 反推：240 F 行 / 41 E 行，published=consumed=41，kinds 6/29/6，f44/f46/f185，mappedA=0 / mappedB=41 / unmappedA=41 / unmappedB=0（A=blocker 未映射、B=probe 映射），updates=240、dropped=0、order_ok=240/240。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0..M-P4 + j5c + contacts + ecs 节）两树 PASS",
+    "ecs-trace 240 帧真实输出 240 F 行 + 41 E 行，ecs.tsv 逐字节稳定；ecs-check 只信 F/E 数据行独立复验结构锚 + 实测数值锚",
+    "时序契约：每帧 published==consumed（同帧 PostPhysics 可见）、readable_before/after 恒 0（已消费次帧清）、order_ok=240/240（乱序注册仍按枚举序）",
+    "owner 过滤双向有真实数据：41 个事件 A 侧全未映射、B 侧全映射；tickParallel 下自足消费 System 零结构变更违约",
+    "M-D0 零回归：41 事件 6/29/6 / f44 / f46 / f185 与 M-D0 实测锚逐项一致；DX12/VULKAN ecs-trace 逐字节一致",
+    "ctest d1-ecs-{trace,check,negative} + d0-contact-* + p0-phys-selftest 7/7 x2（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m1/（run.bat 五段式 ALL GREEN + TSV + 6 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md §9"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D1 新增 ecs-trace / ecs-check 两行。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：ecs 节（双缓冲 / 组序 / owner 过滤 / 并行零违约）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c + M-D0 contacts 既有锚全绿之外，新增 ecs 节：同帧可见 / 已消费次帧清 / 未读两帧保活 / TickGroup 乱序注册仍按枚举序 / tickParallel 零违约 / 真实流 41 事件全消费。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d1 ecs: PASS",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "ecs-trace",
+     "name": "ecs-trace：真实 TickGroup 帧循环消费 TSV",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，F 行 11 列逐帧时序、E 行 9 列消费事件明细。",
+     "args": [
+      "ecs-trace",
+      "--frames",
+      "240"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D1 ECS contact event consumption",
+     "preview": "example/drive-m1/timeline.png",
+     "command": "phys-tools ecs-trace --frames 240"
+    },
+    {
+     "id": "ecs-check",
+     "name": "ecs-check：从归档 TSV 复验消费锚",
+     "kind": "tool",
+     "note": "只信 F/E 数据行：结构锚（同帧可见 / 次帧清 / 组序 / owner 计数交叉校验）+ 6 组从真实 TSV 反推的实测数值锚；摘要行仅作 provenance。",
+     "args": [
+      "ecs-check",
+      "{root}/example/drive-m1/ecs.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d1 ecs-check: PASS",
+     "preview": "example/drive-m1/acceptance.png",
+     "command": "phys-tools ecs-check example/drive-m1/ecs.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。expectLog 从 usage.log 实测输出复制。",
+     "args": [
+      "ecs-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "command": "phys-tools ecs-trace --frames 0"
+    }
+   ]
+  },
+  {
+   "id": "drive-m2",
+   "label": "M-D2",
+   "name": "载具物理：Jolt VehicleConstraint 无头集成 + 轮接触事件流（M-D2）",
+   "tag": "drive-m2",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第三里程碑，A 类并行轨道、零图形零 kStage。用户拍板 Q-D2-1 方案 A 探针式 fresh world：core/include/nl/physics/Vehicle.hpp 公开面全是 POD、零 Jolt 类型；simulateDrive 每次自建 JPH::PhysicsSystem，装配 static floor + chassis box + 4 个 WheelSettingsWV + WheeledVehicleControllerSettings（差速器显式 left=2/right=3，默认 -1 会让动力不传轮）+ VehicleCollisionTesterRay，按 AddBody -> new VehicleConstraint -> SetVehicleCollisionTester -> AddConstraint -> AddStepListener -> Update 固定顺序驱动。Jolt 轮是 raycast query 不是刚体、不发 ContactListener 回调，故轮接触事件由 HasContact() 边沿合成 M-D0 ContactEvent POD，喂 M-D1 ContactEventStream 的 update/publish/drain 契约，是事件流第一次真实玩法消费。三段帧序号输入脚本（加速 150 帧 / 转向 120 帧 / 手刹 210 帧）；额外帧只延长手刹窗口，三段按比例缩放会让车速涨得比刹车窗口快、stop_frame 恒 -1。phys-tools 扩 drive-trace / drive-check / selftest vehicle 节，锚全部从真实 TSV 的 F/W/E 行反推：481 F 行 / 1924 W 行 / 1920 E 行，kinds 4/1916/0，reach f25、top 9.298565、accel exit 6.261256、turn yaw -0.838077 rad / radius 18.007170 m、handbrake f270 9.298565 -> f480 0.001434 m/s、stop f402，published=consumed=1920、dropped=0。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0~M-P4 + j5c + contacts + ecs + vehicle 节）两树 PASS",
+    "drive-trace 480 帧真实输出 481 F / 1924 W / 1920 E 行，drive.tsv 逐字节稳定；drive-check 只信 F/W/E 数据行独立复验 18 条结构/物理断言 + 6 组实测数值锚",
+    "物理闭环：加速到 9.298565 m/s、转向 yaw -0.838077 rad / radius 18.007170 m、手刹在 f402 停住（末速 0.001434 m/s）；前轮最大转角 0.5236 rad、后轮恒 0",
+    "轮接触事件：4 Added + 1916 Persisted + 0 Removed（四轮射线全程贴地），每帧 published==consumed==grounded、dropped=0；M-D0 / M-D1 归档 TSV 逐字节零回归",
+    "确定性：fresh world per call 两次 TSV 逐字段位一致；DX12/VULKAN drive-trace TSV 逐字节一致（269658 B）",
+    "ctest d2-drive-{trace,check,negative} + d1-ecs-* + d0-contact-* + p0-phys-selftest 双后端各 10/10（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m2/（run.bat 五段式 ALL GREEN + drive.tsv + 7 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md §10"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D2 新增 drive-trace / drive-check 两行及 --accel-end / --turn-end 选项。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：vehicle 节（装配 / 轮接触 / 事件流 / 确定性）",
+     "kind": "tool",
+     "note": "既有 8 条 PASS 锚之外新增 vehicle 节：负向 config 六例、两次 fresh world 逐位一致、四轮射线接触、M-D1 流每帧 publish==consume、加速/转向/手刹三类物理行为。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 vehicle: PASS",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "drive-trace",
+     "name": "drive-trace：真实载具驾驶 TSV（480 帧）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，F 行 20 列逐帧车身状态、W 行 7 列逐轮接触/悬挂/转角、E 行 8 列消费事件明细。",
+     "args": [
+      "drive-trace",
+      "--frames",
+      "480"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D2 headless vehicle drive",
+     "preview": "example/drive-m2/timeline.png",
+     "command": "phys-tools drive-trace --frames 480"
+    },
+    {
+     "id": "drive-check",
+     "name": "drive-check：从归档 TSV 复验载具锚",
+     "kind": "tool",
+     "note": "只信 F/W/E 数据行：行序 / 相位 / 输入脚本 / speed 与 vx,vz 自洽 / 轮接触求和 / 前后轮转角 / 事件 owner 与 synthetic id / 物理三阶段 / 6 组实测数值锚；摘要行仅作 provenance。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m2/drive.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 drive-check: PASS",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools drive-check example/drive-m2/drive.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。expectLog 从 usage.log 实测输出复制。",
+     "args": [
+      "drive-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools drive-trace --frames 0"
+    }
+   ]
+  },
+  {
+   "id": "drive-m3",
+   "label": "M-D3",
+   "name": "驾驶可见：DebugScene scenario 2 + viewer 实时输入 + 独立 HUD 窗口 + console cvar（M-D3）",
+   "tag": "drive-m3",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第四里程碑，A 类并行轨道、kStage 保持 S8.2（70 张既有基线零波及）。用户拍板 Q-D3-1~4：Q-D3-1 A 车挂进 DebugScene scenario 2 长生命周期 Impl::physicsSystem，真抽 buildVehicle(PhysicsSystem&)（M-D2 收官时只是文档承诺），公开头零 Jolt 类型，车与墙同 world 故撞墙天然产 M-D0 ContactListener 事件；Q-D3-2 A 扩展 M-I2 注入管线，viewer 仍不调 updateFromWindow()，实时键鼠走 Window::rawKeyDown(int) 只读查询，--drive-demo 帧序号脚本走同一 feedKey 路径，渲染帧累积→Physics 逻辑帧消费；Q-D3-3 A 不 bump kStage，DriveDebugUi 独立兄弟窗口 + 默认关闸门（--drive-hud 或 vehicle.debug true 打开），console cvar vehicle.throttleScale / steerScale / debug 注册在 --console-exec 之前；Q-D3-4 折中留钩子，默认 OrbitCamera::viewProjection()，留 ChassisState POD 与投影源切换钩子，不接 Chase/Free、不拍相机基线。scenario 2 三 filter 全层对 collide=true（禁 floor/floor 会让四轮 ray 全 miss，M-D2 events=0 教训）。--fixed-dt 16.6667 是 drive-demo 真正驱动物理的前提（不带时 posZ≈0.0075 车不动）。实测 300 帧：speed 0→7.86643 m/s（f210）→f240 撞墙 wallHits=1→f300 0.0115737 m/s，posZ 15.2419 m（墙 z=18，车头触墙而车身中心未到），yaw -20.2322 deg，grounded 4/4，contacts 1/8/1，deviceErrors=0；10 组帧扫描 30..300 全部由真实 viewer 最终态日志反推，无手写数值。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2（--repeat until-pass:3 ctest 两后端各 12/12）；M-D0 contacts.tsv / M-D1 ecs.tsv / M-D2 drive.tsv 六组逐字节零回归，DX12/VULKAN drive-trace 逐字节一致",
+    "scenario 2 长生命周期车：buildVehicle(PhysicsSystem&) 装配 20 bodies，四轮射线 grounded=4/4，墙 z=18 真实 ContactListener 事件 contacts=1/8/1、wallHits=1（首次 f240）",
+    "确定性：--fixed-dt 16.6667 下 10 组帧扫描 speed/posZ/yaw/contacts 单调可复现，frames.tsv 两次重跑逐字节稳定；双后端 drive scene / drive hook 日志锚逐字一致",
+    "画面：OrbitCamera 取景 --dist 45 --yaw 90 --pitch 40，蓝色地面线框 / 绿色车道标记 / 红色墙 / 黄色车体线框同框；Drive Debug (M-D3) 独立窗口固定 (620,330) 316x140，6 行完整无滚动条无压字",
+    "默认关闸门：无 --drive-hud 时 PNG 与基线 DIFFER；vehicle.debug true 无 --drive-hud 时与基线逐字节一致；vehicle.throttleScale 0.5 实跑 speed=0.0592731、contacts=1/9/1（对照基线 0.0115737 / 1/8/1）",
+    "负向：--physics-scenario 0 不产生任何 M-D3 drive scene 日志；phys-tools 负向退出码 2/1 实测",
+    "交代物：example/drive-m3/（run.bat 五段式 ALL GREEN + 双后端基线 PNG + frames.tsv + 8 份真实日志 + 2 张由实测数据渲染的证据图）+ 本卡六用例 + DRIVE-TOOLS-GUIDE.md §11 + MILESTONES 四栏"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "M-D3 不新增 phys-tools 子命令；此卡证明 M-D0/D1/D2 工具面依然完整可点跑。expectLog 来自真实 usage 输出。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-D0/D1/D2 锚全绿（零回归底座）",
+     "kind": "tool",
+     "note": "M-P0~M-P4 + M-J5c + contacts + ecs + vehicle 全部 PASS；M-D3 只动 viewer/DebugScene，物理内核零改动。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 vehicle: PASS",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "drive-check",
+     "name": "drive-check：从 M-D2 归档 TSV 复验载具锚",
+     "kind": "tool",
+     "note": "直接复验 example/drive-m2/drive.tsv 的 18 条结构/物理断言 + 6 组实测数值锚，证明 M-D3 接线没有污染 M-D2 fresh-world 路径。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m2/drive.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 drive-check: PASS",
+     "preview": "example/drive-m3/timeline.png",
+     "command": "phys-tools drive-check example/drive-m2/drive.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：drive-check 缺文件（退出码 1）",
+     "kind": "tool",
+     "note": "expectLog 从实测输出 cannot open ... 复制，禁手写。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m3/no-such.tsv"
+     ],
+     "expectExit": 1,
+     "expectLog": "cannot open",
+     "preview": "example/drive-m3/acceptance.png",
+     "command": "phys-tools drive-check example/drive-m3/no-such.tsv"
+    },
+    {
+     "id": "drive-demo",
+     "name": "drive-demo：训练场 300 帧实跑（日志锚断言）",
+     "kind": "tool",
+     "note": "viewer --drive-demo 帧序号脚本驱动真实 VehicleConstraint；--fixed-dt 16.6667 让 GameClock 每渲染帧推进 1/60 逻辑帧。{out} 只用于让截图模式正常退出，不进图像比对。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "cwd": "{root}",
+     "args": [
+      "--physics-debug",
+      "--physics-scenario",
+      "2",
+      "--drive-demo",
+      "--drive-hud",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--dist",
+      "45",
+      "--yaw",
+      "90",
+      "--pitch",
+      "40",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "drive hook: chassis valid=1",
+     "preview": "example/drive-m3/timeline.png",
+     "command": "viewer.exe --physics-debug --physics-scenario 2 --drive-demo --drive-hud --fixed-dt 16.6667 --frames 300 --dist 45 --yaw 90 --pitch 40 --screenshot <out>"
+    },
+    {
+     "id": "drive-scene",
+     "name": "训练场双后端截图基线（车 / 车道 / 墙 / 独立 HUD）",
+     "kind": "pair",
+     "note": "同一帧序号脚本经 DX12 / VULKAN 两条路径写 PNG；两后端各自对本后端基线逐字节复验（GPU 计时与着色器路径不同，跨后端 PNG 不要求一致）。窗口 6 行参数由真实 DriveViewState 填充。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "cwd": "{root}",
+     "args": [
+      "--physics-debug",
+      "--physics-scenario",
+      "2",
+      "--drive-demo",
+      "--drive-hud",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--dist",
+      "45",
+      "--yaw",
+      "90",
+      "--pitch",
+      "40",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "drive scene: speed=",
+     "baselines": {
+      "dx12": "example/drive-m3/drive-dx12.png",
+      "vulkan": "example/drive-m3/drive-vulkan.png"
+     },
+     "command": "viewer.exe --physics-debug --physics-scenario 2 --drive-demo --drive-hud --fixed-dt 16.6667 --frames 300 --dist 45 --yaw 90 --pitch 40 --screenshot <out.png>",
+     "script": "example/drive-m3/run.bat verify"
+    }
+   ]
   }
  ]
 }

@@ -22,12 +22,25 @@
 //   check-character <tsv>  re-verify the walk dump (course + parking anchors)
 //   check-jobs [options]   M-J5c: JobSystem adapter matrix (N=1 bit-identical
 //                          hard proof + N>1 run-to-run determinism, drop+stack)
+//   contact-trace [opts]   M-D0: ContactListener -> Jolt-free POD event TSV
+//   contact-check <tsv>    M-D0: re-verify the contact dump from data rows
+//   ecs-trace [opts]       M-D1: TickGroup frame loop -> ECS consumption TSV
+//   ecs-check <tsv>        M-D1: re-verify the consumption dump from data rows
+//   drive-trace [opts]     M-D2: fresh-world VehicleConstraint drive TSV
+//   drive-check <tsv>      M-D2: re-verify the drive dump from F/W/E data rows
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
 // TSV by the matching make-phys*-evidence.py. No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
+#include "nl/physics/ContactEventStream.hpp"
+#include "nl/physics/ContactEventSystem.hpp"
+#include "nl/physics/Vehicle.hpp"
+#include "nl/core/tick_groups.hpp"
+#include "nl/scene/World.hpp"
+#include <cstdint>
+#include <memory>
 
 #include <algorithm>
 #include <cmath>
@@ -70,6 +83,12 @@ void usage() {
     std::printf("  phys-tools character [--out <tsv>] [--frames N]\n");
     std::printf("  phys-tools check-character <tsv>\n");
     std::printf("  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)\n");
+    std::printf("  phys-tools contact-trace [--out <tsv>] [--frames N]  (M-D0 contact events)\n");
+    std::printf("  phys-tools contact-check <tsv>\n");
+    std::printf("  phys-tools ecs-trace [--out <tsv>] [--frames N]  (M-D1 ECS consumption)\n");
+    std::printf("  phys-tools ecs-check <tsv>\n");
+    std::printf("  phys-tools drive-trace [--out <tsv>] [--frames N] [--accel-end N] [--turn-end N]  (M-D2 vehicle drive)\n");
+    std::printf("  phys-tools drive-check <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -1110,6 +1129,234 @@ int runCheckCharacter(const char* path) {
     return 0;
 }
 
+
+// ===== P8 M-D0: contact event stream TSV + trace/check loop =====
+// Wire format (ASCII, tab separated). '#' lines are provenance ONLY -- the
+// checker recomputes everything from the E/T data rows (M-P2 anti-false-green
+// rule: never trust the summary lines).
+std::string contactsTSV(const nl::physics::ContactProbeConfig& cfg,
+                        const nl::physics::ContactProbeResult& r) {
+    std::ostringstream os;
+    os << "# nl-physics M-D0 contact events (real Jolt ContactListener output)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << cfg.dt << " gravity=" << cfg.gravity
+       << " radius=" << cfg.radius << " start_height=" << cfg.startHeight
+       << " blocker_y=" << cfg.blockerY << " restitution=" << cfg.restitution
+       << " frames=" << cfg.frames
+       << " bodies=" << r.bodyCount
+       << " events=" << r.events.size()
+       << " cache_misses=" << r.removedCacheMisses << "\n";
+    os << "# kind: 0=Added 1=Persisted 2=Removed; body/owner A is the low-id side\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB px py pz normalY\n";
+    char buf[320];
+    for (const auto& e : r.events) {
+        std::snprintf(buf, sizeof(buf),
+            "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%.6f\t%.6f\t%.6f\t%.6f\n",
+            e.frame, static_cast<int>(e.kind),
+            static_cast<unsigned long long>(e.ownerA),
+            static_cast<unsigned long long>(e.ownerB),
+            e.bodyIdA, e.bodyIdB,
+            e.worldPos.x, e.worldPos.y, e.worldPos.z, e.normalY);
+        os << buf;
+    }
+    os << "# trajectory: T frame t y vy\n";
+    for (const auto& s : r.trajectory) {
+        std::snprintf(buf, sizeof(buf), "T\t%d\t%.6f\t%.6f\t%.6f\n",
+                      s.frame, s.t, s.y, s.vy);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runContactTrace(int argc, char** argv) {
+    nl::physics::ContactProbeConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) return fail(err);
+
+    nl::physics::World world;
+    const nl::physics::ContactProbeResult r = world.simulateContactProbe(cfg);
+    if (!r.ok()) { std::printf("contact probe failed: %s\n", r.error.c_str()); return 1; }
+    const std::string tsv = contactsTSV(cfg, r);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s events=%zu frames=%d\n", out.c_str(), r.events.size(), cfg.frames);
+    return 0;
+}
+
+struct ContactRow {
+    int    frame = 0;
+    int    kind  = -1;
+    unsigned long long ownerA = 0, ownerB = 0;
+    unsigned int  bodyA = 0, bodyB = 0;
+    float  px = 0.0f, py = 0.0f, pz = 0.0f, normalY = 0.0f;
+};
+
+struct TrajectoryRow {
+    int    frame = 0;
+    double t = 0.0;
+    float  y = 0.0f, vy = 0.0f;
+};
+
+int runContactCheck(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+
+    std::vector<ContactRow> evs;
+    std::vector<TrajectoryRow> traj;
+    int    frames = -1, bodies = -1, cacheMisses = -1, declaredEvents = -1;
+    double startHeight = -1.0;
+    bool   provenance = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            if (line.find("# jolt=") == 0) provenance = true;
+            auto grabInt = [&](const char* key, int* out) {
+                const std::string k = std::string(key) + "=";
+                const std::size_t p = line.find(k);
+                if (p != std::string::npos) *out = std::atoi(line.c_str() + p + k.size());
+            };
+            auto grabReal = [&](const char* key, double* out) {
+                const std::string k = std::string(key) + "=";
+                const std::size_t p = line.find(k);
+                if (p != std::string::npos) *out = std::strtod(line.c_str() + p + k.size(), nullptr);
+            };
+            grabInt("frames", &frames);
+            grabInt("bodies", &bodies);
+            grabInt("cache_misses", &cacheMisses);
+            grabInt("events", &declaredEvents);
+            grabReal("start_height", &startHeight);
+            continue;
+        }
+        std::istringstream is(line);
+        std::string tag;
+        is >> tag;
+        if (tag == "E") {
+            ContactRow e;
+            if (!(is >> e.frame >> e.kind >> e.ownerA >> e.ownerB
+                      >> e.bodyA >> e.bodyB >> e.px >> e.py >> e.pz >> e.normalY)) {
+                std::printf("phys-d0 contact-check: FAIL (malformed E row)\n");
+                return 1;
+            }
+            evs.push_back(e);
+        } else if (tag == "T") {
+            TrajectoryRow s;
+            if (!(is >> s.frame >> s.t >> s.y >> s.vy)) {
+                std::printf("phys-d0 contact-check: FAIL (malformed T row)\n");
+                return 1;
+            }
+            traj.push_back(s);
+        } else {
+            std::printf("phys-d0 contact-check: FAIL (unknown row tag)\n");
+            return 1;
+        }
+    }
+
+    expectTrue(provenance, "provenance header present");
+    expectTrue(frames > 0 && bodies == 3, "provenance frames>0 and bodies=3");
+    expectTrue(cacheMisses == 0, "Q2 owner cache: zero Removed misses");
+    expectTrue(declaredEvents >= 0 && static_cast<int>(evs.size()) == declaredEvents,
+               "declared event count matches data rows");
+    expectTrue(!evs.empty(), "event stream is non-empty");
+    expectTrue(traj.size() == static_cast<std::size_t>(frames) + 1,
+               "trajectory length = frames + 1");
+    if (!traj.empty()) {
+        expectTrue(traj.front().frame == 0 && traj.back().frame == frames,
+                   "trajectory frame range 0..frames");
+        expectTrue(std::abs(traj.front().y - startHeight) < 1e-4,
+                   "initial probe height matches provenance");
+    }
+
+    int added = 0, persisted = 0, removed = 0, firstAdded = -1, firstRemoved = -1;
+    bool badKind = false, badOwner = false, badId = false, badFrame = false, badOrder = false;
+    for (std::size_t i = 0; i < evs.size(); ++i) {
+        const ContactRow& e = evs[i];
+        if (e.kind < 0 || e.kind > 2) badKind = true;
+        if (e.kind == 0) { ++added; if (firstAdded < 0) firstAdded = e.frame; }
+        if (e.kind == 1) ++persisted;
+        if (e.kind == 2) { ++removed; if (firstRemoved < 0) firstRemoved = e.frame; }
+        // Every event, INCLUDING Removed, must carry a resolved owner pair:
+        // that is the observable proof of the Q2 cache (no body access allowed).
+        if (e.ownerA == 0 || e.ownerB == 0) badOwner = true;
+        if (e.bodyA == nl::physics::kInvalidBodyId ||
+            e.bodyB == nl::physics::kInvalidBodyId || e.bodyA == e.bodyB) badId = true;
+        if (e.frame < 0 || e.frame > frames) badFrame = true;
+        if (i > 0) {
+            const ContactRow& p = evs[i - 1];
+            if (e.frame < p.frame) badFrame = true;
+            if (e.frame == p.frame) {
+                auto key = [](const ContactRow& x) {
+                    return std::make_pair(
+                        std::make_pair(std::min(x.bodyA, x.bodyB), std::max(x.bodyA, x.bodyB)),
+                        x.kind);
+                };
+                if (key(e) < key(p)) badOrder = true;
+            }
+        }
+    }
+    expectTrue(!badKind, "kind values in {0,1,2}");
+    expectTrue(!badOwner, "every event (incl. Removed) has both owners");
+    expectTrue(!badId, "body id pairs valid and distinct");
+    expectTrue(!badFrame, "event frames in range and non-decreasing");
+    expectTrue(!badOrder, "frame-end stable sort order holds");
+    expectTrue(added > 0 && persisted > 0 && removed > 0,
+               "Added / Persisted / Removed all observed");
+    expectTrue(firstAdded > 0, "first Added occurs after frame 0");
+    expectTrue(firstRemoved > firstAdded, "first Removed occurs after first Added");
+
+    // MEASURED ANCHORS -- derived from the real 240-frame trace, not hand-written.
+    // Standard course only; a non-standard --frames value still gets every
+    // structural assertion above (event sequences are solver-derived, so their
+    // numeric anchors cannot be recomputed from provenance alone).
+    if (frames == 240) {
+        expectTrue(static_cast<int>(evs.size()) == 41,
+                   "measured: 41 events @240 frames");
+        expectTrue(added == 6 && persisted == 29 && removed == 6,
+                   "measured: Added/Persisted/Removed = 6/29/6");
+        expectTrue(firstAdded == 44, "measured: first Added at frame 44");
+        expectTrue(firstRemoved == 46, "measured: first Removed at frame 46");
+        const int lastEventFrame = evs.empty() ? -1 : evs.back().frame;
+        expectTrue(lastEventFrame == 185, "measured: last event at frame 185");
+        int lateEvents = 0;
+        for (const auto& e : evs) if (e.frame > 210) ++lateEvents;
+        expectTrue(lateEvents == 0, "measured: quiet final 30 frames");
+        bool contactOk = true;
+        for (const auto& e : evs)
+            if (std::abs(e.py - 3.000000f) > 1e-3f ||
+                std::abs(e.normalY - 1.000000f) > 1e-3f) contactOk = false;
+        expectTrue(contactOk, "measured: contact point y=3.0 / normalY=1.0");
+        expectTrue(!traj.empty() && std::abs(traj.back().y - 3.500000f) < 1e-3f,
+                   "measured: probe rests at y=3.500000");
+    }
+
+    if (g_failures) {
+        std::printf("phys-d0 contact-check: FAIL (%d)\n", g_failures);
+        return 1;
+    }
+    std::printf("phys-d0 contact-check: PASS (%s, %zu events, %zu trajectory rows)\n",
+                path, evs.size(), traj.size());
+    return 0;
+}
+
 // ===== M-J5c: JobSystem 适配器验收（两层一起）=====
 // 提取数据行（跳过 '#' 头）：TSV 头含 config 但不含 jobs——jobs 是运行期旋钮，
 // 不入 TSV 保 M-P0~P4 基线字节稳定；跨 job-system 对拍只在数据行上做。
@@ -1227,6 +1474,690 @@ int runCheckJobs(int argc, char** argv) {
         return 1;
     }
     std::printf("phys-j5c check-jobs: PASS (adapter N=1 bit-identical, N=%d run-to-run deterministic)\n", threads);
+    return 0;
+}
+
+// ===== P8 M-D1: ECS consumption TSV + trace/check loop =====
+// Wire format (ASCII, tab separated). '#' lines are provenance ONLY -- the
+// checker recomputes everything from the F/E data rows (M-P2 anti-false-green
+// rule). F = one logic frame of the TickGroup loop, E = one consumed event.
+struct EcsFrameRow {
+    int frame = 0;
+    int published = 0, consumed = 0;
+    int mappedA = 0, mappedB = 0, unmappedA = 0, unmappedB = 0;
+    int readableBefore = 0, readableAfter = 0;
+    int orderOk = 0;
+};
+
+struct EcsEventRow {
+    int frame = 0, kind = -1;
+    unsigned long long ownerA = 0, ownerB = 0;
+    unsigned int bodyA = 0, bodyB = 0;
+    int mappedA = 0, mappedB = 0;
+};
+
+struct EcsTrace {
+    nl::physics::ContactProbeConfig cfg;
+    std::vector<EcsFrameRow> frames;
+    std::vector<EcsEventRow> events;
+    std::uint64_t updates = 0, published = 0, drained = 0, dropped = 0;
+    nl::physics::ContactConsumeStats stats;
+    int groupOrderBad = 0;
+    std::string error;
+    bool ok() const { return error.empty(); }
+};
+
+// Headless frame loop, M-GL5 group ordinal is the only order source:
+//   PrePhysics (marker reset) -> Physics (update + publish real M-D0 events)
+//   -> PostPhysics (ecs.tick -> ContactEventSystem::drain)
+//   -> PostUpdateWork (order assertion).
+// stream is declared BEFORE ecs so it outlives the system holding a reference.
+EcsTrace runEcsFrameLoop(const nl::physics::ContactProbeConfig& cfg) {
+    EcsTrace t;
+    t.cfg = cfg;
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) { t.error = err; return t; }
+
+    nl::physics::World physics;
+    const nl::physics::ContactProbeResult r = physics.simulateContactProbe(cfg);
+    if (!r.ok()) { t.error = r.error; return t; }
+
+    std::vector<std::vector<nl::physics::ContactEvent>> byFrame(
+        static_cast<std::size_t>(cfg.frames) + 1);
+    for (const auto& e : r.events) {
+        if (e.frame >= 1 && e.frame <= cfg.frames) {
+            byFrame[static_cast<std::size_t>(e.frame)].push_back(e);
+        }
+    }
+
+    nl::physics::ContactEventStream stream;
+    nl::scene::World ecs;
+    // Only the probe owner gets a live entity. The blocker/floor owners stay
+    // unmapped on purpose, so the owner->Entity filter has real both-way data
+    // instead of a vacuous "everything mapped" green.
+    ecs.newEntityWithID(static_cast<nl::scene::EntityID>(cfg.probeOwner), "probe");
+    auto* sys = new nl::physics::ContactEventSystem(ecs, stream);
+    ecs.registerSystem(std::unique_ptr<nl::scene::System>(sys));
+
+    nl::core::TickScheduler sched;
+    int marker = 0;
+    std::vector<int> order;
+    EcsFrameRow* row = nullptr;
+    t.frames.reserve(static_cast<std::size_t>(cfg.frames));
+
+    // Deliberately register in SCRAMBLED order: runTick must still execute in
+    // enum order (tick_groups.hpp contract: ordinal, not registration order).
+    sched.set(nl::core::TickGroup::PostUpdateWork, [&](double, std::uint64_t) {
+        order.push_back(3);
+        if (marker != 30) ++t.groupOrderBad;
+        marker = 40;
+        const std::size_t n = order.size();
+        if (n < 4 || order[n - 4] != 0 || order[n - 3] != 1 ||
+            order[n - 2] != 2 || order[n - 1] != 3) ++t.groupOrderBad;
+        if (row) row->orderOk = (t.groupOrderBad == 0) ? 1 : 0;
+    });
+    sched.set(nl::core::TickGroup::PostPhysics, [&](double, std::uint64_t) {
+        order.push_back(2);
+        if (marker != 20) ++t.groupOrderBad;
+        marker = 30;
+        const auto before = sys->stats();
+        ecs.tick(cfg.dt);
+        const auto& after = sys->stats();
+        if (row) {
+            row->consumed = static_cast<int>(after.events - before.events);
+            row->mappedA = static_cast<int>(after.mappedA - before.mappedA);
+            row->mappedB = static_cast<int>(after.mappedB - before.mappedB);
+            row->unmappedA = static_cast<int>(after.unmappedA - before.unmappedA);
+            row->unmappedB = static_cast<int>(after.unmappedB - before.unmappedB);
+            row->readableAfter = static_cast<int>(stream.readableCount());
+        }
+        // Independently recompute the mapped flags for the wire rows; ecs-check
+        // cross-checks these against the System's own counters in the F rows.
+        for (const auto& e : sys->lastEvents()) {
+            EcsEventRow er;
+            er.frame = e.frame;
+            er.kind = static_cast<int>(e.kind);
+            er.ownerA = e.ownerA;
+            er.ownerB = e.ownerB;
+            er.bodyA = e.bodyIdA;
+            er.bodyB = e.bodyIdB;
+            er.mappedA = ecs.exists(static_cast<nl::scene::EntityID>(e.ownerA)) ? 1 : 0;
+            er.mappedB = ecs.exists(static_cast<nl::scene::EntityID>(e.ownerB)) ? 1 : 0;
+            t.events.push_back(er);
+        }
+    });
+    sched.set(nl::core::TickGroup::PrePhysics, [&](double, std::uint64_t) {
+        order.push_back(0);
+        marker = 10;
+    });
+    sched.set(nl::core::TickGroup::Physics, [&](double, std::uint64_t tickIndex) {
+        order.push_back(1);
+        if (marker != 10) ++t.groupOrderBad;
+        marker = 20;
+        const int frame = static_cast<int>(tickIndex) + 1;
+        stream.update();
+        EcsFrameRow fr;
+        fr.frame = frame;
+        fr.readableBefore = static_cast<int>(stream.readableCount());
+        stream.publish(byFrame[static_cast<std::size_t>(frame)]);
+        fr.published = static_cast<int>(byFrame[static_cast<std::size_t>(frame)].size());
+        t.frames.push_back(fr);
+        row = &t.frames.back();
+    });
+
+    for (int f = 1; f <= cfg.frames; ++f) {
+        row = nullptr;
+        sched.runTick(cfg.dt, static_cast<std::uint64_t>(f - 1));
+    }
+    t.updates = stream.updateCount();
+    t.published = stream.publishedTotal();
+    t.drained = stream.drainedTotal();
+    t.dropped = stream.droppedTotal();
+    t.stats = sys->stats();
+    if (t.groupOrderBad) t.error = "tick group order violated";
+    return t;
+}
+
+std::string ecsTSV(const EcsTrace& t) {
+    std::ostringstream os;
+    os << "# nl-physics M-D1 ECS contact event consumption (real TickGroup frame loop)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded"
+       << " dt=" << t.cfg.dt
+       << " frames=" << t.cfg.frames
+       << " events=" << t.events.size()
+       << " stream=double_buffer_2frame"
+       << " groups=PrePhysics,Physics,PostPhysics,PostUpdateWork"
+       << " updates=" << t.updates
+       << " published=" << t.published
+       << " drained=" << t.drained
+       << " dropped=" << t.dropped << "\n";
+    os << "# frames: F frame published consumed mappedA mappedB unmappedA unmappedB readable_before readable_after order_ok\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB mappedA mappedB\n";
+    char buf[320];
+    for (const auto& f : t.frames) {
+        std::snprintf(buf, sizeof(buf),
+            "F\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+            f.frame, f.published, f.consumed, f.mappedA, f.mappedB,
+            f.unmappedA, f.unmappedB, f.readableBefore, f.readableAfter, f.orderOk);
+        os << buf;
+    }
+    for (const auto& e : t.events) {
+        std::snprintf(buf, sizeof(buf),
+            "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%d\t%d\n",
+            e.frame, e.kind, e.ownerA, e.ownerB,
+            e.bodyA, e.bodyB, e.mappedA, e.mappedB);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runEcsTrace(int argc, char** argv) {
+    nl::physics::ContactProbeConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if      (key == "--out")    { out = val; }
+        else if (key == "--frames") { if (!parseInt(val, &n)) return fail("bad --frames"); cfg.frames = n; }
+        else return fail("unknown option " + key);
+    }
+    std::string err;
+    if (!nl::physics::validateContactProbe(cfg, &err)) return fail(err);
+    const EcsTrace t = runEcsFrameLoop(cfg);
+    if (!t.ok()) { std::printf("ecs frame loop failed: %s\n", t.error.c_str()); return 1; }
+    const std::string tsv = ecsTSV(t);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s frames=%d events=%zu\n", out.c_str(), cfg.frames, t.events.size());
+    return 0;
+}
+
+int runEcsCheck(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    std::vector<EcsFrameRow> frames;
+    std::vector<EcsEventRow> events;
+    int declaredFrames = -1, declaredEvents = -1;
+    bool provenance = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, 2, "# ") == 0) {
+            if (line.find("stream=double_buffer_2frame") != std::string::npos) provenance = true;
+            std::istringstream is(line.substr(2));
+            std::string kv;
+            while (is >> kv) {
+                if (kv.compare(0, 7, "frames=") == 0) declaredFrames = std::atoi(kv.c_str() + 7);
+                if (kv.compare(0, 7, "events=") == 0) declaredEvents = std::atoi(kv.c_str() + 7);
+            }
+            continue;
+        }
+        if (line.compare(0, 2, "F\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; EcsFrameRow r;
+            is >> tag >> r.frame >> r.published >> r.consumed >> r.mappedA >> r.mappedB
+               >> r.unmappedA >> r.unmappedB >> r.readableBefore >> r.readableAfter >> r.orderOk;
+            frames.push_back(r);
+        } else if (line.compare(0, 2, "E\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; EcsEventRow r;
+            is >> tag >> r.frame >> r.kind >> r.ownerA >> r.ownerB
+               >> r.bodyA >> r.bodyB >> r.mappedA >> r.mappedB;
+            events.push_back(r);
+        }
+    }
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        if (!ok) { std::printf("  FAIL %s\n", what); ++fails; }
+    };
+    check(provenance, "provenance line present");
+    check(declaredFrames == static_cast<int>(frames.size()) && declaredFrames > 0,
+          "frame row count matches provenance");
+    check(declaredEvents == static_cast<int>(events.size()),
+          "event row count matches provenance");
+
+    std::uint64_t sumConsumed = 0, sumPublished = 0;
+    int framesWithEvents = 0;
+    std::uint64_t sumMappedA = 0, sumMappedB = 0, sumUnmappedA = 0, sumUnmappedB = 0;
+    bool seqOk = true, perFrameOk = true, orderOk = true;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const auto& r = frames[i];
+        if (r.frame != static_cast<int>(i) + 1) seqOk = false;
+        if (r.published != r.consumed) perFrameOk = false;   // same-frame PostPhysics visibility
+        if (r.readableBefore != 0 || r.readableAfter != 0) perFrameOk = false; // next-frame clear
+        if (r.orderOk != 1) orderOk = false;
+        if (r.mappedA + r.unmappedA != r.consumed ||
+            r.mappedB + r.unmappedB != r.consumed) perFrameOk = false;
+        if (r.published > 0) ++framesWithEvents;
+        sumPublished += r.published;
+        sumConsumed += r.consumed;
+        sumMappedA += r.mappedA; sumMappedB += r.mappedB;
+        sumUnmappedA += r.unmappedA; sumUnmappedB += r.unmappedB;
+    }
+    check(seqOk, "frame rows are 1..N in order");
+    check(perFrameOk, "published==consumed, drain empties both pages, owner counts add up");
+    check(orderOk, "PrePhysics->Physics->PostPhysics->PostUpdateWork order in every frame");
+    check(sumConsumed == static_cast<std::uint64_t>(events.size()) && sumConsumed == sumPublished,
+          "consumed events == E rows == published events");
+    check(sumMappedA + sumUnmappedA == sumConsumed &&
+          sumMappedB + sumUnmappedB == sumConsumed,
+          "mapped/unmapped counts add up on both owner sides");
+
+    bool evOk = true, kindOk = true, frameOk = true, mapCrossOk = true;
+    int ca = 0, cp = 0, cr = 0, firstA = -1, firstR = -1, lastF = -1;
+    std::uint64_t evMappedA = 0, evMappedB = 0;
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        const auto& e = events[i];
+        if (e.kind == 0) ++ca; else if (e.kind == 1) ++cp; else if (e.kind == 2) ++cr;
+        else kindOk = false;
+        if (e.ownerA == 0 || e.ownerB == 0 ||
+            e.bodyA == 0xffffffffu || e.bodyB == 0xffffffffu ||
+            e.bodyA == e.bodyB) evOk = false;
+        if (e.mappedA < 0 || e.mappedA > 1 || e.mappedB < 0 || e.mappedB > 1) evOk = false;
+        if (i > 0 && e.frame < events[i - 1].frame) frameOk = false;
+        if (e.frame < 1 || e.frame > static_cast<int>(frames.size()) ||
+            frames[static_cast<std::size_t>(e.frame - 1)].published == 0) frameOk = false;
+        if (firstA < 0 && e.kind == 0) firstA = e.frame;
+        if (firstR < 0 && e.kind == 2) firstR = e.frame;
+        lastF = e.frame;
+        evMappedA += e.mappedA; evMappedB += e.mappedB;
+    }
+    mapCrossOk = (evMappedA == sumMappedA && evMappedB == sumMappedB);
+    check(evOk, "event owners/body ids/mapped flags valid");
+    check(kindOk, "event kind in {0,1,2}");
+    check(frameOk, "events frame-ordered and only on frames that published");
+    check(mapCrossOk, "E-row mapped flags cross-check System counters in F rows");
+    check(ca > 0 && cp > 0 && cr > 0, "Added/Persisted/Removed all consumed");
+
+    // MEASURED_ANCHORS_D1: numeric anchors are injected from the real TSV by
+    // scripts/_d1_delivery_patch.py (never hand-written, M-I0/I1 lesson).
+    if (declaredFrames == 240) {
+        check(declaredEvents == 41 && ca == 6 && cp == 29 && cr == 6,
+              "measured 41 events = 6/29/6 (M-D0 stream zero regression)");
+        check(firstA == 44 && firstR == 46 && lastF == 185,
+              "measured first Added f44 / first Removed f46 / last event f185");
+        check(sumMappedA == 0 && sumMappedB == 41 &&
+              sumUnmappedA == 41 && sumUnmappedB == 0 &&
+              evMappedA == 0 && evMappedB == 41,
+              "measured owner filter: A=blocker unmapped, B=probe mapped");
+        check(framesWithEvents == 41,
+              "measured 41 frames published exactly one event");
+    }
+
+    if (fails) {
+        std::printf("phys-d1 ecs-check: FAIL (%d)\n", fails);
+        return 1;
+    }
+    std::printf("phys-d1 ecs-check: PASS (frames=%d events=%zu, same-frame visible, next-frame clear, group order OK)\n",
+                declaredFrames, events.size());
+    return 0;
+}
+
+// ---- M-D2: headless VehicleConstraint drive trace --------------------------
+// F/W/E data rows are the only trusted source for drive-check. The # header
+// carries provenance (config + diagnostic anchors) for cross-checking, never
+// as a substitute for recomputing from the rows themselves.
+std::string driveTSV(const nl::physics::DriveConfig& cfg,
+                     const nl::physics::DriveResult& r) {
+    std::ostringstream os;
+    os << "# nl-physics M-D2 headless vehicle drive (Jolt VehicleConstraint + M-D1 stream)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded dt=" << cfg.dt
+       << " frames=" << cfg.frames
+       << " accel_end=" << cfg.accelEnd
+       << " turn_end=" << cfg.turnEnd
+       << " wheels=4 mass=" << cfg.tuning.mass
+       << " steer_deg=" << cfg.tuning.maxSteerDeg
+       << " susp_min=" << cfg.tuning.suspMin
+       << " susp_max=" << cfg.tuning.suspMax
+       << " radius=" << cfg.tuning.wheelRadius
+       << " events=" << r.events.size()
+       << " published=" << r.publishedTotal
+       << " consumed=" << r.consumedTotal
+       << " dropped=" << r.droppedTotal << "\n";
+    os << "# script: phase0 [0," << cfg.accelEnd << ") forward=" << cfg.accelForward
+       << " | phase1 [" << cfg.accelEnd << "," << cfg.turnEnd << ") forward=" << cfg.turnForward
+       << " right=" << cfg.turnRight
+       << " | phase2 [" << cfg.turnEnd << "," << cfg.frames << "] handbrake=" << cfg.handBrake << "\n";
+    os << "# frames: F frame phase t forward right brake handbrake px py pz vx vy vz yaw speed grounded published consumed dropped\n";
+    os << "# wheels: W frame wheel contact suspensionLength rotationAngle steerAngle\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB normalY\n";
+    char buf[768];
+    std::snprintf(buf, sizeof(buf),
+        "# anchors: reach_speed_frame=%d max_speed=%.6f final_speed=%.6f turn_yaw_delta=%.6f turn_radius=%.6f stop_frame=%d brake_start_speed=%.6f brake_end_speed=%.6f brake_yaw_delta=%.6f\n",
+        r.reachSpeedFrame, r.maxSpeed, r.finalSpeed, r.turnYawDelta,
+        r.turnRadius, r.stopFrame, r.brakeStartSpeed, r.brakeEndSpeed,
+        r.brakeYawDelta);
+    os << buf;
+    for (const auto& f : r.frames) {
+        std::snprintf(buf, sizeof(buf),
+            "F\t%d\t%d\t%.6f\t%.3f\t%.3f\t%.3f\t%.3f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\n",
+            f.frame, f.phase, f.t, f.forward, f.right, f.brake, f.handBrake,
+            f.position.x, f.position.y, f.position.z,
+            f.velocity.x, f.velocity.y, f.velocity.z,
+            f.yaw, f.speed, f.grounded, f.published, f.consumed, f.dropped);
+        os << buf;
+    }
+    for (const auto& w : r.wheels) {
+        std::snprintf(buf, sizeof(buf), "W\t%d\t%d\t%d\t%.6f\t%.6f\t%.6f\n",
+                      w.frame, w.wheel, w.contact, w.suspensionLength,
+                      w.rotationAngle, w.steerAngle);
+        os << buf;
+    }
+    for (const auto& e : r.events) {
+        std::snprintf(buf, sizeof(buf), "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%.6f\n",
+                      e.frame, static_cast<int>(e.kind),
+                      static_cast<unsigned long long>(e.ownerA),
+                      static_cast<unsigned long long>(e.ownerB),
+                      e.bodyIdA, e.bodyIdB, e.normalY);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runDriveTrace(int argc, char** argv) {
+    nl::physics::DriveConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    int framesArg = -1;
+    bool phasesGiven = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if (key == "--out") { out = val; }
+        else if (key == "--frames") {
+            if (!parseInt(val, &n)) return fail("bad --frames");
+            framesArg = n;
+        }
+        else if (key == "--accel-end" || key == "--turn-end") {
+            if (!parseInt(val, &n)) return fail("bad phase bound");
+            if (key == "--accel-end") cfg.accelEnd = n;
+            else cfg.turnEnd = n;
+            phasesGiven = true;
+        }
+        else return fail("unknown option " + key);
+    }
+    if (framesArg > 0) {
+        cfg.frames = framesArg;
+        // Measured M-D2 pitfall: scaling ALL phases with --frames makes top
+        // speed grow faster than the brake window (stop_frame stayed -1 for
+        // N=360/480/600/720). Extra frames must extend only phase 2.
+        if (!phasesGiven && framesArg < cfg.turnEnd) {
+            cfg.accelEnd = std::max(1, framesArg * 5 / 12);
+            cfg.turnEnd  = std::min(framesArg,
+                                    std::max(cfg.accelEnd + 1, framesArg * 3 / 4));
+        }
+    }
+    std::string err;
+    if (!nl::physics::validateDriveConfig(cfg, &err)) return fail(err);
+    const nl::physics::DriveResult r = nl::physics::simulateDrive(cfg);
+    if (!r.ok()) { std::printf("drive simulation failed: %s\n", r.error.c_str()); return 1; }
+    const std::string tsv = driveTSV(cfg, r);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s frames=%d wheels=%zu events=%zu\n",
+                out.c_str(), cfg.frames, r.wheels.size(), r.events.size());
+    return 0;
+}
+
+// ---- M-D2: drive-check (F/W/E rows only; # lines are provenance) -----------
+// Every assertion below is recomputed from the data rows. The # provenance is
+// used only for cross-checking row counts / declared totals, never as evidence.
+struct D2FrameRow {
+    int    frame = -1, phase = -1, grounded = -1;
+    int    published = -1, consumed = -1, dropped = -1;
+    double t = 0.0;
+    float  forward = 0.0f, right = 0.0f, brake = 0.0f, handBrake = 0.0f;
+    float  px = 0, py = 0, pz = 0, vx = 0, vy = 0, vz = 0, yaw = 0, speed = 0;
+};
+struct D2WheelRow {
+    int   frame = -1, wheel = -1, contact = -1;
+    float susp = 0, rot = 0, steer = 0;
+};
+struct D2EventRow {
+    int    frame = -1, kind = -1;
+    std::uint64_t ownerA = 0, ownerB = 0;
+    std::uint32_t bodyA = 0, bodyB = 0;
+    float  normalY = 0.0f;
+};
+
+int runDriveCheck(const char* path) {
+    std::ifstream f(path);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    int declaredFrames = -1, declaredEvents = -1, accelEnd = -1, turnEnd = -1;
+    long long declaredPublished = -1, declaredConsumed = -1, declaredDropped = -1;
+    double dt = 0.0;
+    bool provenance = false;
+    std::vector<D2FrameRow> frames;
+    std::vector<D2WheelRow> wheels;
+    std::vector<D2EventRow> events;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, 2, "# ") == 0) {
+            if (line.find("wheels=4") != std::string::npos) provenance = true;
+            std::istringstream is(line.substr(2));
+            std::string kv;
+            while (is >> kv) {
+                if (kv.compare(0, 7, "frames=") == 0) declaredFrames = std::atoi(kv.c_str() + 7);
+                else if (kv.compare(0, 7, "events=") == 0) declaredEvents = std::atoi(kv.c_str() + 7);
+                else if (kv.compare(0, 10, "accel_end=") == 0) accelEnd = std::atoi(kv.c_str() + 10);
+                else if (kv.compare(0, 9, "turn_end=") == 0) turnEnd = std::atoi(kv.c_str() + 9);
+                else if (kv.compare(0, 10, "published=") == 0)
+                    declaredPublished = std::strtoll(kv.c_str() + 10, nullptr, 10);
+                else if (kv.compare(0, 9, "consumed=") == 0)
+                    declaredConsumed = std::strtoll(kv.c_str() + 9, nullptr, 10);
+                else if (kv.compare(0, 8, "dropped=") == 0)
+                    declaredDropped = std::strtoll(kv.c_str() + 8, nullptr, 10);
+                else if (kv.compare(0, 3, "dt=") == 0) dt = std::atof(kv.c_str() + 3);
+            }
+            continue;
+        }
+        if (line.compare(0, 2, "F\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2FrameRow r;
+            is >> tag >> r.frame >> r.phase >> r.t >> r.forward >> r.right
+               >> r.brake >> r.handBrake >> r.px >> r.py >> r.pz
+               >> r.vx >> r.vy >> r.vz >> r.yaw >> r.speed
+               >> r.grounded >> r.published >> r.consumed >> r.dropped;
+            frames.push_back(r);
+        } else if (line.compare(0, 2, "W\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2WheelRow r;
+            is >> tag >> r.frame >> r.wheel >> r.contact >> r.susp >> r.rot >> r.steer;
+            wheels.push_back(r);
+        } else if (line.compare(0, 2, "E\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2EventRow r;
+            is >> tag >> r.frame >> r.kind >> r.ownerA >> r.ownerB
+               >> r.bodyA >> r.bodyB >> r.normalY;
+            events.push_back(r);
+        }
+    }
+
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        if (!ok) { std::printf("  FAIL %s\n", what); ++fails; }
+    };
+    check(provenance, "provenance line present (wheels=4)");
+    check(declaredFrames > 0 && accelEnd > 0 && accelEnd < turnEnd &&
+          turnEnd <= declaredFrames && dt > 0.0,
+          "declared frame / phase / dt bounds sane");
+    check(static_cast<int>(frames.size()) == declaredFrames + 1,
+          "F row count == frames+1 (frame 0 is the unstepped initial state)");
+    check(static_cast<int>(wheels.size()) == (declaredFrames + 1) * 4,
+          "W row count == (frames+1)*4");
+    check(static_cast<int>(events.size()) == declaredEvents,
+          "E row count matches provenance events=");
+
+    bool seqOk = true, timeOk = true, phaseOk = true, inputOk = true;
+    bool speedOk = true, streamOk = true, chassisOk = true;
+    int  grounded4 = 0, reachFrame = -1, stopFrame = -1;
+    float maxSpeed = 0.0f;
+    long long sumPublished = 0, sumConsumed = 0;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const D2FrameRow& r = frames[i];
+        if (r.frame != static_cast<int>(i)) seqOk = false;
+        if (std::fabs(r.t - static_cast<double>(i) * dt) > 2.0e-5) timeOk = false;
+        const int expectedPhase = r.frame < accelEnd ? 0 : (r.frame < turnEnd ? 1 : 2);
+        if (r.phase != expectedPhase) phaseOk = false;
+        if (expectedPhase == 0 && !(r.forward > 0.0f && r.right == 0.0f &&
+                                    r.brake == 0.0f && r.handBrake == 0.0f)) inputOk = false;
+        if (expectedPhase == 1 && !(r.forward > 0.0f && r.right > 0.0f &&
+                                    r.handBrake == 0.0f)) inputOk = false;
+        if (expectedPhase == 2 && !(r.forward == 0.0f && r.right == 0.0f &&
+                                    r.handBrake > 0.0f)) inputOk = false;
+        const float planar = std::sqrt(r.vx * r.vx + r.vz * r.vz);
+        if (std::fabs(r.speed - planar) > 1.0e-4f) speedOk = false;
+        if (r.published != r.consumed || r.published != r.grounded || r.dropped != 0)
+            streamOk = false;
+        if (!(r.py > 0.5f)) chassisOk = false;   // chassis never sits on its box
+        if (r.grounded == 4) ++grounded4;
+        if (r.speed > maxSpeed) maxSpeed = r.speed;
+        if (expectedPhase == 0 && reachFrame < 0 && r.speed >= 1.0f)
+            reachFrame = r.frame;
+        if (expectedPhase == 2 && stopFrame < 0 && r.speed <= 0.2f)
+            stopFrame = r.frame;
+        sumPublished += r.published;
+        sumConsumed += r.consumed;
+    }
+    check(seqOk, "F rows are 0..frames in order");
+    check(timeOk, "frame timestamps match declared dt");
+    check(phaseOk, "phase column matches accel_end / turn_end");
+    check(inputOk, "three-phase driver input script is present in every F row");
+    check(speedOk, "speed column == hypot(vx,vz) in every F row");
+    check(streamOk, "per-frame published==consumed==grounded, zero dropped (M-D1 contract)");
+    check(chassisOk, "chassis stays suspended (py>0.5), wheel rays carry the car");
+    check(sumPublished == declaredPublished && sumConsumed == declaredConsumed &&
+          declaredDropped == 0 && sumPublished == sumConsumed &&
+          sumPublished == static_cast<long long>(events.size()),
+          "F totals == provenance == E row count, zero stream loss");
+
+    bool wheelOk = true, steerOk = true;
+    if (wheels.size() == frames.size() * 4) {
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            int contacts = 0;
+            for (int w = 0; w < 4; ++w) {
+                const D2WheelRow& r = wheels[i * 4 + static_cast<std::size_t>(w)];
+                if (r.frame != static_cast<int>(i) || r.wheel != w ||
+                    (r.contact != 0 && r.contact != 1) ||
+                    !(r.susp > 0.0f && r.susp < 1.0f)) wheelOk = false;
+                contacts += r.contact;
+                if (w >= 2 && std::fabs(r.steer) > 1.0e-6f) steerOk = false;
+                if (frames[i].phase == 1 && w < 2 && std::fabs(r.steer) < 1.0e-4f)
+                    steerOk = false;
+            }
+            if (contacts != frames[i].grounded) wheelOk = false;
+        }
+    } else wheelOk = false;
+    check(wheelOk, "W rows: 4 wheels per frame, contact sum == F grounded, suspension in range");
+    check(steerOk, "front axle steers during phase 1, rear axle never steers");
+
+    bool evOk = true, evFrameOk = true, evGroupOk = true;
+    int ca = 0, cp = 0, cr = 0, firstAdded = -1, lastEvent = -1;
+    std::vector<int> perFrame(frames.size(), 0);
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        const D2EventRow& e = events[i];
+        if (e.kind == 0) { ++ca; if (firstAdded < 0) firstAdded = e.frame; }
+        else if (e.kind == 1) ++cp;
+        else if (e.kind == 2) ++cr;
+        else evOk = false;
+        if (e.ownerA < nl::physics::kDriveWheelOwnerBase ||
+            e.ownerA >= nl::physics::kDriveWheelOwnerBase + 4 ||
+            e.ownerB != nl::physics::kDriveFloorOwner ||
+            e.bodyA < nl::physics::kDriveWheelSlotBase ||
+            e.bodyA >= nl::physics::kDriveWheelSlotBase + 4 ||
+            e.bodyB == nl::physics::kInvalidBodyId ||
+            std::fabs(e.normalY - 1.0f) > 1.0e-6f) evOk = false;
+        if (e.frame < 0 || e.frame >= static_cast<int>(frames.size())) evFrameOk = false;
+        else ++perFrame[static_cast<std::size_t>(e.frame)];
+        if (i > 0 && e.frame < events[i - 1].frame) evFrameOk = false;
+        lastEvent = e.frame;
+    }
+    for (std::size_t i = 0; i < frames.size(); ++i)
+        if (perFrame[i] != frames[i].published) evGroupOk = false;
+    check(evOk, "E rows: kind/owner/synthetic body id/ground normal valid");
+    check(evFrameOk, "E rows are frame-ordered and inside the dump");
+    check(evGroupOk, "E rows per frame == F published (wheel contact edges)");
+    check(ca > 0 && cp > 0, "Added + Persisted wheel contact edges both present");
+
+    // Physics anchors, all recomputed from F rows (never from # anchors line).
+    const float finalSpeed = frames[static_cast<std::size_t>(accelEnd)].speed;
+    const float brakeStart = frames[static_cast<std::size_t>(turnEnd)].speed;
+    const float brakeEnd = frames.back().speed;
+    auto wrap = [](float d) {
+        const float kPi = 3.14159265358979323846f;
+        while (d > kPi) d -= 2.0f * kPi;
+        while (d < -kPi) d += 2.0f * kPi;
+        return d;
+    };
+    const float turnYaw = wrap(frames[static_cast<std::size_t>(turnEnd)].yaw -
+                               frames[static_cast<std::size_t>(accelEnd)].yaw);
+    const float dx = frames[static_cast<std::size_t>(turnEnd)].px -
+                     frames[static_cast<std::size_t>(accelEnd)].px;
+    const float dz = frames[static_cast<std::size_t>(turnEnd)].pz -
+                     frames[static_cast<std::size_t>(accelEnd)].pz;
+    const float turnDist = std::sqrt(dx * dx + dz * dz);
+    const float turnRadius = std::fabs(turnYaw) > 1.0e-3f ? turnDist / std::fabs(turnYaw) : 0.0f;
+    check(reachFrame >= 0 && reachFrame < accelEnd,
+          "engine reaches 1 m/s inside the accel phase (differential wired)");
+    check(maxSpeed > 5.0f && finalSpeed > 5.0f,
+          "measured top speed >5 m/s, accel phase exits above 5 m/s");
+    check(std::fabs(turnYaw) > 0.3f && turnDist > 5.0f,
+          "steering rotates the chassis and covers real ground in phase 1");
+    check(turnRadius > 5.0f && turnRadius < 60.0f, "measured turning radius is physical");
+    check(brakeStart > brakeEnd && stopFrame >= 0 && stopFrame <= declaredFrames &&
+          brakeEnd <= 0.2f,
+          "handbrake decelerates and parks the car inside the observation window");
+    check(grounded4 > declaredFrames * 3 / 4,
+          "four-wheel raycast contact holds for most of the run");
+
+    // MEASURED_ANCHORS_D2: every number below was read back from the real
+    // 480-frame TSV F/W/E rows (tools/make-drive-m2-evidence.py --anchors),
+    // never hand-written -- M-I0/I1 lesson. cr==0 is real: all four wheel rays
+    // keep contact for the whole run, so no Removed edge is ever emitted.
+    if (declaredFrames == 480) {
+        check(declaredEvents == 1920 && ca == 4 && cp == 1916 && cr == 0,
+              "measured 1920 wheel events = 4 Added / 1916 Persisted / 0 Removed");
+        check(firstAdded == 1 && lastEvent == 480,
+              "measured first wheel contact at f1, last event at f480");
+        check(grounded4 == 480 && sumPublished == 1920,
+              "measured 480 fully-grounded frames, 1920 published events");
+        check(reachFrame == 25 && std::fabs(maxSpeed - 9.298565f) < 1.0e-3f &&
+              std::fabs(finalSpeed - 6.261256f) < 1.0e-3f,
+              "measured reach f25 / top 9.298565 / accel exit 6.261256 m/s");
+        check(std::fabs(turnYaw + 0.838077f) < 1.0e-3f &&
+              std::fabs(turnRadius - 18.007170f) < 1.0e-2f,
+              "measured turn yaw -0.838077 rad / radius 18.007170 m");
+        check(stopFrame == 402 && std::fabs(brakeStart - 9.298565f) < 1.0e-3f &&
+              brakeEnd <= 0.002f,
+              "measured handbrake stop f402, 9.298565 -> 0.001434 m/s");
+    }
+
+    if (fails) {
+        std::printf("phys-d2 drive-check: FAIL (%d)\n", fails);
+        return 1;
+    }
+    std::printf("phys-d2 drive-check: PASS (frames=%d wheels=%zu events=%zu, accel/steer/handbrake-stop, stream zero-drop)\n",
+                declaredFrames, wheels.size(), events.size());
     return 0;
 }
 
@@ -1554,10 +2485,259 @@ int runSelftest() {
         if (g_verbose) std::fputs(report.c_str(), stdout);
     }
 
+
+    // ===== M-D0 contacts section: event bridge + Q2 cache + determinism =====
+    {
+        nl::physics::ContactProbeConfig cc;
+        std::string cerr;
+        auto badC = cc; badC.frames = 0;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject frames=0");
+        badC = cc; badC.dt = 1.0;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject dt=1.0");
+        badC = cc; badC.radius = 0.0f;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject radius=0");
+        badC = cc; badC.startHeight = cc.blockerY;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject startHeight<=blocker");
+        badC = cc; badC.restitution = 1.5f;
+        expectTrue(!nl::physics::validateContactProbe(badC, &cerr), "contacts: reject restitution>1");
+        expectTrue(nl::physics::validateContactProbe(cc, &cerr), "contacts: accept default config");
+
+        nl::physics::World cw;
+        const nl::physics::ContactProbeResult a = cw.simulateContactProbe(cc);
+        expectTrue(a.ok(), "contacts: probe succeeded");
+        expectTrue(a.bodyCount == 3, "contacts: 3 bodies (floor/blocker/probe)");
+        expectTrue(a.trajectory.size() == static_cast<std::size_t>(cc.frames) + 1,
+                   "contacts: trajectory length = frames+1");
+        expectTrue(!a.events.empty(), "contacts: event stream non-empty");
+        expectTrue(a.removedCacheMisses == 0, "contacts: Q2 owner cache zero misses");
+
+        int ca = 0, cp = 0, cr = 0;
+        bool ownersOk = true, idsOk = true, sortedOk = true;
+        for (std::size_t i = 0; i < a.events.size(); ++i) {
+            const auto& e = a.events[i];
+            if (e.kind == nl::physics::ContactKind::Added) ++ca;
+            else if (e.kind == nl::physics::ContactKind::Persisted) ++cp;
+            else if (e.kind == nl::physics::ContactKind::Removed) ++cr;
+            if (e.ownerA == 0 || e.ownerB == 0) ownersOk = false;
+            if (e.bodyIdA == nl::physics::kInvalidBodyId ||
+                e.bodyIdB == nl::physics::kInvalidBodyId || e.bodyIdA == e.bodyIdB) idsOk = false;
+            if (i > 0 && e.frame < a.events[i - 1].frame) sortedOk = false;
+        }
+        expectTrue(ca > 0 && cp > 0 && cr > 0,
+                   "contacts: Added/Persisted/Removed all observed");
+        expectTrue(ownersOk, "contacts: every event carries a resolved owner pair");
+        expectTrue(idsOk, "contacts: body id pairs valid");
+        expectTrue(sortedOk, "contacts: events frame-ordered");
+
+        // Determinism: fresh world, byte-identical POD stream (incl. float bits).
+        const nl::physics::ContactProbeResult b = cw.simulateContactProbe(cc);
+        bool identical = b.ok() && b.events.size() == a.events.size();
+        if (identical) {
+            for (std::size_t i = 0; i < a.events.size(); ++i) {
+                const auto& x = a.events[i];
+                const auto& y = b.events[i];
+                if (x.frame != y.frame || x.kind != y.kind ||
+                    x.ownerA != y.ownerA || x.ownerB != y.ownerB ||
+                    x.bodyIdA != y.bodyIdA || x.bodyIdB != y.bodyIdB ||
+                    x.worldPos.x != y.worldPos.x || x.worldPos.y != y.worldPos.y ||
+                    x.worldPos.z != y.worldPos.z || x.normalY != y.normalY) {
+                    identical = false; break;
+                }
+            }
+        }
+        expectTrue(identical, "contacts: two worlds produce bit-identical events");
+
+        // MEASURED ANCHORS -- derived from the real 240-frame trace, not hand-written.
+        expectTrue(ca == 6 && cp == 29 && cr == 6,
+                   "contacts: measured kind counts 6/29/6");
+        expectTrue(static_cast<int>(a.events.size()) == 41,
+                   "contacts: measured 41 events");
+        int firstA = -1, firstR = -1, lastF = -1;
+        for (const auto& e : a.events) {
+            if (firstA < 0 && e.kind == nl::physics::ContactKind::Added) firstA = e.frame;
+            if (firstR < 0 && e.kind == nl::physics::ContactKind::Removed) firstR = e.frame;
+            lastF = e.frame;
+        }
+        expectTrue(firstA == 44, "contacts: first Added at frame 44");
+        expectTrue(firstR == 46, "contacts: first Removed at frame 46");
+        expectTrue(lastF == 185, "contacts: last event at frame 185");
+        if (g_verbose) {
+            std::printf("[contacts] added=%d persisted=%d removed=%d total=%zu misses=%u\n",
+                        ca, cp, cr, a.events.size(), a.removedCacheMisses);
+        }
+    }
+
+    // ---- M-D1: ECS consumption / double buffer / TickGroup order ----
+    {
+        nl::physics::ContactEventStream st;
+        expectTrue(st.readableCount() == 0 && st.updateCount() == 0,
+                   "ecs: stream starts empty");
+        // Same-frame visibility + drain advances cursors.
+        nl::physics::ContactEvent e1; e1.frame = 1; e1.ownerA = 11; e1.ownerB = 12;
+        nl::physics::ContactEvent e2 = e1; e2.frame = 2;
+        nl::physics::ContactEvent e3 = e1; e3.frame = 3;
+        st.publish(e1); st.publish(e2); st.publish(e3);
+        expectTrue(st.readableCount() == 3, "ecs: 3 published events readable same frame");
+        expectTrue(st.drain().size() == 3, "ecs: PostPhysics drain sees all 3");
+        expectTrue(st.drain().empty() && st.readableCount() == 0,
+                   "ecs: second drain in same frame is empty");
+        expectTrue(st.update() == 0, "ecs: update drops nothing when all were drained");
+        expectTrue(st.drain().empty(), "ecs: consumed events are gone next frame");
+        // Two-frame survival of UNREAD events (bevy event/mod.rs:704-719).
+        st.update();
+        st.publish(e1); st.publish(e2);
+        st.update();
+        expectTrue(st.readableCount() == 2 && st.drain().size() == 2,
+                   "ecs: unread events survive into the next frame");
+        expectTrue(st.update() == 0 && st.readableCount() == 0,
+                   "ecs: third update drops the consumed page");
+        st.publish(e1);
+        st.update();
+        expectTrue(st.update() == 1 && st.droppedTotal() == 1,
+                   "ecs: unread events are dropped on the third update (two-frame survival)");
+        st.clear();
+        expectTrue(st.publishedTotal() == 0 && st.droppedTotal() == 0,
+                   "ecs: clear() resets counters");
+
+        // M-GL5 group ordinal beats registration order.
+        nl::core::TickScheduler sched;
+        std::vector<int> seq;
+        sched.set(nl::core::TickGroup::PostUpdateWork, [&](double, std::uint64_t) { seq.push_back(3); });
+        sched.set(nl::core::TickGroup::Physics,        [&](double, std::uint64_t) { seq.push_back(1); });
+        sched.set(nl::core::TickGroup::PrePhysics,     [&](double, std::uint64_t) { seq.push_back(0); });
+        sched.set(nl::core::TickGroup::PostPhysics,    [&](double, std::uint64_t) { seq.push_back(2); });
+        sched.runTick(1.0 / 60.0, 0);
+        expectTrue(seq.size() == 4 && seq[0] == 0 && seq[1] == 1 && seq[2] == 2 && seq[3] == 3,
+                   "ecs: TickGroup enum order is the only order source");
+
+        // owner -> EntityID filter (Carrot CSharpBindings.cpp:1037-1056),
+        // self-contained System + tickParallel zero violation (System.hpp contract 2).
+        nl::physics::ContactEventStream ecsStream2;
+        nl::scene::World w2;
+        w2.newEntityWithID(777, "mapped");
+        auto* sys2 = new nl::physics::ContactEventSystem(w2, ecsStream2);
+        w2.registerSystem(std::unique_ptr<nl::scene::System>(sys2));
+        expectTrue(sys2->getReads().none() && sys2->getWrites().none(),
+                   "ecs: consumer declares no component access (self-contained)");
+        nl::physics::ContactEvent se;
+        se.frame = 1; se.ownerA = 777; se.ownerB = 888; se.bodyIdA = 1; se.bodyIdB = 2;
+        ecsStream2.publish(se);
+        w2.tick(1.0 / 60.0);
+        expectTrue(sys2->stats().events == 1 && sys2->lastEvents().size() == 1,
+                   "ecs: System consumed exactly one event");
+        expectTrue(sys2->stats().mappedA == 1 && sys2->stats().unmappedA == 0 &&
+                   sys2->stats().mappedB == 0 && sys2->stats().unmappedB == 1,
+                   "ecs: mapped owner counted, unmapped owner passed through");
+        std::string perr;
+        const bool par = w2.tickParallel(1.0 / 60.0, 2, perr);
+        expectTrue(par && perr.empty(), "ecs: tickParallel has zero structural violations");
+
+        // Real M-D0 stream through the real frame loop: zero M-D0 regression.
+        nl::physics::ContactProbeConfig ec;
+        const EcsTrace t = runEcsFrameLoop(ec);
+        expectTrue(t.ok(), "ecs: real frame loop succeeded");
+        expectTrue(static_cast<int>(t.frames.size()) == ec.frames,
+                   "ecs: one F row per logic frame");
+        expectTrue(t.groupOrderBad == 0 && t.dropped == 0,
+                   "ecs: group order clean, no events dropped");
+        expectTrue(t.published == t.drained && t.drained == t.events.size(),
+                   "ecs: every published event was drained by PostPhysics");
+        expectTrue(t.stats.events == t.events.size(),
+                   "ecs: System consumed the whole real stream");
+        int eca = 0, ecp = 0, ecr = 0;
+        for (const auto& e : t.events) {
+            if (e.kind == 0) ++eca;
+            else if (e.kind == 1) ++ecp;
+            else if (e.kind == 2) ++ecr;
+        }
+        expectTrue(static_cast<int>(t.events.size()) == 41,
+                   "ecs: measured 41 consumed events");
+        expectTrue(eca == 6 && ecp == 29 && ecr == 6,
+                   "ecs: measured kind counts 6/29/6");
+        expectTrue(t.stats.mappedA == 0 && t.stats.mappedB == 41 &&
+                   t.stats.unmappedA == 41 && t.stats.unmappedB == 0,
+                   "ecs: measured owner->Entity filter in both directions");
+        expectTrue(t.updates == 240 && t.dropped == 0,
+                   "ecs: measured 240 page swaps, zero unread drops");
+        if (g_verbose) {
+            std::printf("[ecs] frames=%zu events=%zu updates=%llu dropped=%llu mappedB=%llu unmappedA=%llu\n",
+                        t.frames.size(), t.events.size(),
+                        static_cast<unsigned long long>(t.updates),
+                        static_cast<unsigned long long>(t.dropped),
+                        static_cast<unsigned long long>(t.stats.mappedB),
+                        static_cast<unsigned long long>(t.stats.unmappedA));
+        }
+    }
+
+    {
+        // --- M-D2: headless VehicleConstraint (plan A, fresh world per call) ---
+        nl::physics::DriveConfig vc;
+        vc.frames = 90; vc.accelEnd = 30; vc.turnEnd = 60;
+        std::string verr;
+        expectTrue(nl::physics::validateDriveConfig(vc, &verr),
+                   "vehicle: accept a valid short script");
+        auto badV = vc; badV.frames = 0;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject frames=0");
+        badV = vc; badV.dt = 1.0;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject dt=1.0");
+        badV = vc; badV.accelEnd = badV.turnEnd;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject non-increasing phase bounds");
+        badV = vc; badV.handBrake = 1.5f;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject handBrake>1");
+        badV = vc; badV.tuning.mass = 0.0f;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject zero mass");
+
+        const nl::physics::DriveResult veh1 = nl::physics::simulateDrive(vc);
+        const nl::physics::DriveResult veh2 = nl::physics::simulateDrive(vc);
+        expectTrue(veh1.ok() && veh2.ok(), "vehicle: two fresh worlds built and stepped");
+        expectTrue(driveTSV(vc, veh1) == driveTSV(vc, veh2),
+                   "vehicle: fresh world per call is bit-identical");
+        expectTrue(veh1.frames.size() == 91 && veh1.wheels.size() == 364,
+                   "vehicle: 91 F rows + 364 W rows for a 90-frame script");
+        int vehGrounded4 = 0, va = 0, vp = 0;
+        bool vehStreamOk = true;
+        for (const auto& fr : veh1.frames) {
+            if (fr.grounded == 4) ++vehGrounded4;
+            if (fr.published != fr.consumed || fr.dropped != 0) vehStreamOk = false;
+        }
+        for (const auto& e : veh1.events) {
+            if (e.kind == nl::physics::ContactKind::Added) ++va;
+            else if (e.kind == nl::physics::ContactKind::Persisted) ++vp;
+        }
+        expectTrue(vehGrounded4 > 60,
+                   "vehicle: four wheel rays stay in contact (collision tester wired)");
+        expectTrue(vehStreamOk, "vehicle: every frame publish==consume, zero dropped");
+        expectTrue(veh1.publishedTotal == veh1.consumedTotal &&
+                   veh1.events.size() == veh1.consumedTotal,
+                   "vehicle: M-D1 stream drained every wheel contact edge");
+        expectTrue(va > 0 && vp > 0,
+                   "vehicle: Added + Persisted wheel contact edges present");
+        expectTrue(veh1.frames.back().speed > veh1.frames.front().speed,
+                   "vehicle: engine accelerates the chassis");
+        expectTrue(veh1.turnYawDelta < -0.05f || veh1.turnYawDelta > 0.05f,
+                   "vehicle: front-axle steering rotates the chassis");
+        expectTrue(veh1.brakeStartSpeed > veh1.brakeEndSpeed,
+                   "vehicle: handbrake decelerates the chassis");
+        if (g_verbose) {
+            std::printf("[vehicle] frames=%zu wheels=%zu events=%zu max=%.4f yaw=%.4f brake=%.4f->%.4f\n",
+                        veh1.frames.size(), veh1.wheels.size(), veh1.events.size(),
+                        veh1.maxSpeed, veh1.turnYawDelta,
+                        veh1.brakeStartSpeed, veh1.brakeEndSpeed);
+        }
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-d2 vehicle: PASS (VehicleConstraint fresh world, 4 wheel rays, stream, determinism)\n");
+    std::printf("phys-d1 ecs: PASS (double buffer, PostPhysics consumer, TickGroup order, zero regression)\n");
+    std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
     std::printf("phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)\n");
     std::printf("phys-p4 anchors: PASS (character walk-through, ramp/steps/steep slope, determinism)\n");
     std::printf("phys-p3 anchors: PASS (debug wireframe stream, 4 bodies, determinism)\n");
@@ -1723,6 +2903,21 @@ int main(int argc, char** argv) {
         return runCheckCharacter(argv[2]);
     }
     if (cmd == "check-jobs") return runCheckJobs(argc, argv);
+    if (cmd == "drive-trace") return runDriveTrace(argc, argv);
+    if (cmd == "drive-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runDriveCheck(argv[2]);
+    }
+    if (cmd == "ecs-trace") return runEcsTrace(argc, argv);
+    if (cmd == "ecs-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runEcsCheck(argv[2]);
+    }
+    if (cmd == "contact-trace") return runContactTrace(argc, argv);
+    if (cmd == "contact-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runContactCheck(argv[2]);
+    }
     usage();
     return 2;
 }

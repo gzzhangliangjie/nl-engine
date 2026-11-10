@@ -65,3 +65,41 @@ add_test(NAME p-j5c-check COMMAND phys-tools check-jobs --threads 4 --frames 240
 set_tests_properties(p-j5c-check PROPERTIES PASS_REGULAR_EXPRESSION "phys-j5c check-jobs: PASS")
 add_test(NAME p-j5c-negative COMMAND phys-tools simulate --jobs -1 --frames 240)
 set_tests_properties(p-j5c-negative PROPERTIES WILL_FAIL TRUE)
+# ---- P8 M-D0: contact event bridge (A-class tool acceptance, zero graphics) ----
+add_test(NAME d0-contact-trace COMMAND phys-tools contact-trace --frames 240
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-d0-contacts.tsv)
+set_tests_properties(d0-contact-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-d0-contacts\\.tsv")
+add_test(NAME d0-contact-check
+         COMMAND phys-tools contact-check ${CMAKE_CURRENT_BINARY_DIR}/phys-d0-contacts.tsv)
+set_tests_properties(d0-contact-check PROPERTIES
+    DEPENDS d0-contact-trace
+    PASS_REGULAR_EXPRESSION "phys-d0 contact-check: PASS")
+add_test(NAME d0-contact-negative COMMAND phys-tools contact-trace --frames 0)
+set_tests_properties(d0-contact-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-D1: ECS consumption of the M-D0 contact stream (A-class tool acceptance) ----
+add_test(NAME d1-ecs-trace COMMAND phys-tools ecs-trace --frames 240
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-d1-ecs.tsv)
+set_tests_properties(d1-ecs-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-d1-ecs\\.tsv")
+add_test(NAME d1-ecs-check
+         COMMAND phys-tools ecs-check ${CMAKE_CURRENT_BINARY_DIR}/phys-d1-ecs.tsv)
+set_tests_properties(d1-ecs-check PROPERTIES
+    DEPENDS d1-ecs-trace
+    PASS_REGULAR_EXPRESSION "phys-d1 ecs-check: PASS")
+add_test(NAME d1-ecs-negative COMMAND phys-tools ecs-trace --frames 0)
+set_tests_properties(d1-ecs-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-D2: headless VehicleConstraint drive (A-class tool acceptance) ----
+add_test(NAME d2-drive-trace COMMAND phys-tools drive-trace --frames 480
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-d2-drive.tsv)
+set_tests_properties(d2-drive-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-d2-drive\\.tsv")
+add_test(NAME d2-drive-check
+         COMMAND phys-tools drive-check ${CMAKE_CURRENT_BINARY_DIR}/phys-d2-drive.tsv)
+set_tests_properties(d2-drive-check PROPERTIES
+    DEPENDS d2-drive-trace
+    PASS_REGULAR_EXPRESSION "phys-d2 drive-check: PASS")
+add_test(NAME d2-drive-negative COMMAND phys-tools drive-trace --frames 0)
+set_tests_properties(d2-drive-negative PROPERTIES WILL_FAIL TRUE)
