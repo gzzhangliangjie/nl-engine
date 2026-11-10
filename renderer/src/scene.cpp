@@ -4489,6 +4489,26 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 各写各的 b1（光照/相机同值，因子按批不同）。只有 init/initSkin 的绑定集
     // 携带 b1（psMain 引用）；initCluster 场景（lod 模式同样走这里）没有 b1
     // 槽位、modelBatches_ 为空，绝不能碰——写空句柄 = NVRHI 内部空指针段错误。
+    if (skinMode_) {
+        // M8.2 修漏（pbr-direct merge 起的既有回归）：initSkin 的绑定集同样
+        // 携带 b1（psMain 引用），但 skin 不走 per-prim 批次（modelBatches_
+        // 为空）——下面的循环写不到 skin 绑定的 lightConstants_ 成员，NVRHI
+        // 每帧报「volatile CB before written into」（gl1 双卡 120/100 帧各
+        // 计 1 次 deviceError，验收闸直接挂）。skin 补写成员句柄，口径与
+        // 批次路径一致（rigged 资产无 PBR 材质 → 因子用 dummy MR 值）。
+        LightConstants lc{};
+        lc.lightDirW[0] = params.lightDir[0];
+        lc.lightDirW[1] = params.lightDir[1];
+        lc.lightDirW[2] = params.lightDir[2];
+        lc.lightColor[0] = 1.0f; lc.lightColor[1] = 1.0f; lc.lightColor[2] = 1.0f;
+        lc.lightColor[3] = 2.5f;
+        lc.cameraPos[0] = params.eye[0];
+        lc.cameraPos[1] = params.eye[1];
+        lc.cameraPos[2] = params.eye[2];
+        lc.mrFactor[1] = 1.0f;   // roughness=1 / metallic=0（skin dummy MR 同款）
+        lc.mrFactor[2] = params.options[0];
+        cmd->writeBuffer(lightConstants_, &lc, sizeof(lc));
+    }
     for (const ModelPrimBatch& b : modelBatches_) {
         LightConstants lc{};
         lc.lightDirW[0] = params.lightDir[0];   // 方向沿用 b0 g_lightDir 的口径与缺省值
