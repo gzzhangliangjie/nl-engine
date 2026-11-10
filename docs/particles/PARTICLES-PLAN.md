@@ -1,5 +1,8 @@
 # PARTICLES-PLAN — 粒子系统穿插项（track `particles`，B 类渲染穿插项）
 
+> **能力现状与扩展点登记的唯一维护处在 `EFFECTS-STATUS.md`**——本文各里程碑的
+> 「已知边界」为收口时点的历史记录，后续演进以 EFFECTS-STATUS 登记表为准。
+
 > 立项：2026-11-10（ROADMAP 穿插项行 + PARALLEL-TRACKS §7.1 B 类专列 + wt_pool `particles`/M-PT0）。
 > 起点 master `50574e3`，worktree `E:/UE_STUDY_2026/nl-engine-particles`，分支 `feat/particles`。
 > tag 命名：`particles-pt0`、`particles-pt1` …（名字制，不占 m0.* 编号）。

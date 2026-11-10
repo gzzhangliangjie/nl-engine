@@ -79,7 +79,9 @@ viewer.exe --nfx <file.nfx>       # 隐含 --particles；失败退 legacy 喷泉
 - **sizeY**：`render.size` 的 sy 生效——**Y/X 比走 CB 标量 g_params.z**（单发射器子集
   所有粒子同比例），实例流 32B 布局不变。ratio=1.0 时 shader 表达式逐位恒等，基线零漂移。
 
-## 已知边界（M-PT3 候选）
+## 已知边界（历史快照）
+
+> 本节为 M-PT2 收口时点快照；**扩展点的活登记表见 `EFFECTS-STATUS.md`**（状态/改动面/触发场景逐项标注）。
 
 - rate min/max 区间取均值驱动模拟（区间本身留档在 .nfx）；easing/渐变颜色仍不支持。
 - 贴图无 mip 链（远处粒子闪烁，需时再加）；sizeY 为 per-emitter 定值比例
