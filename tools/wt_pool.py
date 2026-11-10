@@ -104,10 +104,11 @@ TRACKS = {
     },
     "particles": {
         "wt": "E:/UE_STUDY_2026/nl-engine-particles",
-        "branch": "feat/particles", "state": "planned",
-        "note": "B-class rendering track approved 2026-11-10 (M-PT0 starter: CPU emitter "
-                "+ GPU instanced billboard; ROADMAP interleaved row + PARALLEL-TRACKS 7.1 "
-                "registered); E-prefix rejected to avoid ECS M-E0~E3 collision",
+        "branch": "feat/particles", "state": "active",
+        "note": "B-class rendering track opened 2026-11-10 (M-PT0 starter: CPU emitter "
+                "+ GPU instanced billboard; wt built at 50574e3, junctions "
+                ".workbuddy + slang dist, skip-worktree set); E-prefix rejected "
+                "to avoid ECS M-E0~E3 collision",
     },
 }
 
