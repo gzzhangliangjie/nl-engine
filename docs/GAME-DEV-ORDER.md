@@ -26,7 +26,7 @@
 |---|---|---|---|---|
 | **1** | 输入层扩展（全键位 + action mapping） | tool 卡 + selftest，core 侧零图形 | 无 | **在轨**：track `input`，`docs/p8/P8-INPUT-PLAN.md`，M-I0 落码中 |
 | **2** | 碰撞事件桥（Jolt ContactListener → ECS 事件） | selftest 数值锚（命中事件时序），照 phys 先例 | 无，可与 1 并行 | **已立项**（合轨）：`docs/p8/P8-DRIVE-PLAN.md` track `drive` M-D0/D1（2026-11-10），**M-D0 / M-D1 均已收官**（tag `drive-m0` / `drive-m1`，2026-11-10）：ContactListener → Jolt-free POD 事件流 → PostPhysics ECS 消费闭环完成（双缓冲两帧保活、TickGroup 组序自证、240 帧 41 事件零丢弃）；**第 2 步无在轨里程碑** |
-| **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2（技术软前置：VehicleConstraint 走 raycast 轮不依赖事件） | **已立项**（合轨）：同上 M-D2/D3（2026-11-10；vendored Vehicle 模块全量实证在库），**在轨**：track `drive`，M-D0 / M-D1 已收官；M-D2/D3 待开工 |
+| **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2（技术软前置：VehicleConstraint 走 raycast 轮不依赖事件） | **已立项**（合轨）：同上 M-D2/D3（2026-11-10；vendored Vehicle 模块全量实证在库）。**M-D2 已收官**（tag `drive-m2`，2026-11-10）：Jolt `VehicleConstraint` 无头集成（Q-D2-1 用户拍板方案 A fresh world、Jolt-free 公开头）+ 三段帧序号输入脚本 480 帧 + 轮接触边沿事件喂 M-D1 流；实测 top 9.298565 m/s / 转向半径 18.007170 m / 手刹 f402 停住（末速 0.001434 m/s），DX12/VULKAN TSV 逐字节一致、ctest 双后端各 10/10；**M-D3 驾驶可见待开工**（本轨唯一渲染接线面） |
 | **4** | 玩法相机族：Chase 跟车 + 纯自由飞行 + 轨迹文件（CameraRig 基座；倒车/回头变体；候选池见计划 §4） | cam-tools 五锚 selftest + viewer 截图基线（自由/跟车/轨迹双后端） | 3（M-CAM0 无头不依赖；viewer 侧需 M-D3） | **已立项**：`docs/p8/P8-CAMERA-PLAN.md`（track `camera`，M-CAM0~CAM3，2026-11-10），待开 wt |
 | **5** | **游戏壳收拢**：独立 game target，GameClock 逻辑帧串起输入→载具→相机→World | 「能开一圈」截图 + 暂停语义回归 | 1+3+4 | 待开工（Q2 定 target 形态） |
 | **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 拍板 | 待开工 |
