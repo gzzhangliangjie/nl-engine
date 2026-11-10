@@ -284,6 +284,21 @@ public:
             return false;
         }
 
+        // M8.2 t0（S8-PLAN）：renderFrame 三段拆分——beginFrame / recordFrame /
+        // endFrame，与 DX12 同型；acquire 与 OUT_OF_DATE 重建路径留在编排层（早退
+        // 语义）。纯搬移零逻辑变化；逻辑 tick / 插值 alpha 消费留在 viewer game
+        // loop（renderFrame 调用之前），beginFrame 不吞逻辑 tick（M-GL3 口径）。
+        beginFrame(hud);
+        nvrhi::StagingTextureHandle staging =
+            recordFrame(color, frame, screenshotPath, hud);
+        return endFrame(staging, screenshotPath, outError);
+    }
+
+private:
+    // ---- M8.2 t0 段一：beginFrame = 回读消费只能发生在这里 ----
+    // imageAvailable semaphore 等待、pipeline ensure、全部 timer poll/回读消费、
+    // hud build（console/audio/inputDebug 三窗口，M-I2）、info_ 写回。
+    void beginFrame(HudFrame* hud) {
         // ---- frame in flight 同步安全网 ----
         // acquire 信号 imageAvailableSem；NVRHI 在下一次 submit 时等它。
         // 删掉这段等待 = 往仍被 present 占用的 image 里画 → 同步报错（S0-PLAN 校验点）。
@@ -328,8 +343,14 @@ public:
         info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
+    }
 
-        // Vulkan 帧列表 = 每帧新建局部句柄（NVRHI Vulkan 语义；见 createDevice 注释）。
+    // ---- M8.2 t0 段二：recordFrame = 帧列表生命周期唯一落点 ----
+    // 唯一 open/close/execute 落点。Vulkan 帧列表 = 每帧新建局部句柄（NVRHI Vulkan
+    // 语义；见 createDevice 注释；改常驻反而段错误——两后端列表复用语义不对称，
+    // 各自留在自己 recordFrame 内，结构统一、语义各自落档）。返回截图 staging。
+    nvrhi::StagingTextureHandle recordFrame(ClearColor color, const FrameParams& frame,
+                                            const char* screenshotPath, HudFrame* hud) {
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
         // M0.6：timer query 包住整帧 GPU 命令（clear + scene + hud）；
@@ -381,7 +402,12 @@ public:
         if (gpuTiming) gpuTimer_.end(cmd);
         cmd->close();
         nvrhiDevice_->executeCommandList(cmd);
+        return staging;
+    }
 
+    // ---- M8.2 t0 段三：endFrame = 截图 staging 回读 + semaphore 触发 + present ----
+    bool endFrame(nvrhi::StagingTextureHandle staging, const char* screenshotPath,
+                  std::string& outError) {
         bool ok = true;
         if (screenshotPath) {
             if (!staging) {
@@ -432,6 +458,7 @@ public:
         return ok;
     }
 
+public:
     // 无 VVL（零厂商 SDK），NVRHI 错误已由回调计入 log::deviceError；这里返回 0 不重复计数。
     int drainMessages() override { return 0; }
 

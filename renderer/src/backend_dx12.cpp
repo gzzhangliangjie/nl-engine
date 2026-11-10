@@ -355,6 +355,23 @@ public:
             return false;
         }
 
+        // M8.2 t0（S8-PLAN）：renderFrame 三段拆分——beginFrame（上一帧 GPU 结果
+        // 的消费 + 本帧渲染准备）/ recordFrame（唯一 open/close/execute，frameCmd_
+        // 唯一落点）/ endFrame（fence signal + 截图回读 + present）。纯搬移零逻辑
+        // 变化；逻辑 tick / 插值 alpha 消费留在 viewer game loop（renderFrame 调用
+        // 之前），beginFrame 不吞逻辑 tick（M-GL3 口径）。
+        beginFrame(index, hud);
+        nvrhi::StagingTextureHandle staging =
+            recordFrame(index, color, frame, screenshotPath, hud);
+        return endFrame(index, staging, screenshotPath, outError);
+    }
+
+private:
+    // ---- M8.2 t0 段一：beginFrame = 回读消费只能发生在这里 ----
+    // slot fence 等待、pipeline ensure、全部 timer poll/回读消费（GPU 整帧、cull
+    // stats、BLAS/TLAS 耗时、TLAS 探针）、hud build（console/audio/inputDebug 三
+    // 窗口，M-I2）、info_ 写回。「开列表前消费」从注释升级为结构防线。
+    void beginFrame(UINT index, HudFrame* hud) {
         // ---- frame in flight = 2 同步安全网 ----
         // 先等 GPU 用完这个 swapchain slot 上一帧的内容，再往里记录新一帧。
         // 删掉这段 = CPU 在 GPU 仍持有该 backbuffer 时又 clear/draw → 同步报错（S0-PLAN 校验点）。
@@ -403,7 +420,16 @@ public:
         info_.hizOccluded = scene_.hizOccluded();             // M6.2：被 Hi-Z 剔除簇节点数
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
+    }
 
+    // ---- M8.2 t0 段二：recordFrame = 帧列表生命周期唯一落点 ----
+    // 唯一 open/close/execute 落点，frameCmd_ 只在这里取；timer begin、
+    // buildTlasFrame、clear、scene/debugLines/hud draw、screenshot copy、timer end。
+    // 其他地方拿不到裸列表。返回截图 staging 句柄（endFrame 回读消费）。
+    nvrhi::StagingTextureHandle recordFrame(UINT index, ClearColor color,
+                                            const FrameParams& frame,
+                                            const char* screenshotPath,
+                                            HudFrame* hud) {
         // M8.1：帧列表常驻复用（frameCmd_ 成员；每帧列表句柄析构会连带销毁 DXR
         // scratch manager 的 chunk——AS build ECL 在飞行中就被 final-release，
         // debug layer CORRUPTION #921 → 后续帧 fail-fast 0x87D，见成员声明注释）。
@@ -456,7 +482,12 @@ public:
         if (gpuTiming) gpuTimer_.end(cmd);
         cmd->close();
         device_->executeCommandList(frameCmd_);
+        return staging;
+    }
 
+    // ---- M8.2 t0 段三：endFrame = fence signal + 截图 staging 回读 + present ----
+    bool endFrame(UINT index, nvrhi::StagingTextureHandle staging,
+                  const char* screenshotPath, std::string& outError) {
         // ---- 给这个 slot 记一个 fence 值（提交之后）----
         if (fence_) {
             const UINT64 v = ++fenceValue_;
@@ -496,6 +527,7 @@ public:
         return ok;
     }
 
+public:
     int drainMessages() override {
         int errors = 0;
         if (infoQueue_) {
