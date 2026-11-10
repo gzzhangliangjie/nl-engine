@@ -26,6 +26,8 @@
 //   contact-check <tsv>    M-D0: re-verify the contact dump from data rows
 //   ecs-trace [opts]       M-D1: TickGroup frame loop -> ECS consumption TSV
 //   ecs-check <tsv>        M-D1: re-verify the consumption dump from data rows
+//   drive-trace [opts]     M-D2: fresh-world VehicleConstraint drive TSV
+//   drive-check <tsv>      M-D2: re-verify the drive dump from F/W/E data rows
 //
 // Evidence rule: example/phys-p0/*.png, example/phys-p1/*.png,
 // example/phys-p2/*.png and example/phys-p3/*.png are generated from the REAL
@@ -34,6 +36,7 @@
 #include "nl/physics/World.hpp"
 #include "nl/physics/ContactEventStream.hpp"
 #include "nl/physics/ContactEventSystem.hpp"
+#include "nl/physics/Vehicle.hpp"
 #include "nl/core/tick_groups.hpp"
 #include "nl/scene/World.hpp"
 #include <cstdint>
@@ -84,6 +87,8 @@ void usage() {
     std::printf("  phys-tools contact-check <tsv>\n");
     std::printf("  phys-tools ecs-trace [--out <tsv>] [--frames N]  (M-D1 ECS consumption)\n");
     std::printf("  phys-tools ecs-check <tsv>\n");
+    std::printf("  phys-tools drive-trace [--out <tsv>] [--frames N] [--accel-end N] [--turn-end N]  (M-D2 vehicle drive)\n");
+    std::printf("  phys-tools drive-check <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -1798,6 +1803,364 @@ int runEcsCheck(const char* path) {
     return 0;
 }
 
+// ---- M-D2: headless VehicleConstraint drive trace --------------------------
+// F/W/E data rows are the only trusted source for drive-check. The # header
+// carries provenance (config + diagnostic anchors) for cross-checking, never
+// as a substitute for recomputing from the rows themselves.
+std::string driveTSV(const nl::physics::DriveConfig& cfg,
+                     const nl::physics::DriveResult& r) {
+    std::ostringstream os;
+    os << "# nl-physics M-D2 headless vehicle drive (Jolt VehicleConstraint + M-D1 stream)\n";
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " job_system=single_threaded dt=" << cfg.dt
+       << " frames=" << cfg.frames
+       << " accel_end=" << cfg.accelEnd
+       << " turn_end=" << cfg.turnEnd
+       << " wheels=4 mass=" << cfg.tuning.mass
+       << " steer_deg=" << cfg.tuning.maxSteerDeg
+       << " susp_min=" << cfg.tuning.suspMin
+       << " susp_max=" << cfg.tuning.suspMax
+       << " radius=" << cfg.tuning.wheelRadius
+       << " events=" << r.events.size()
+       << " published=" << r.publishedTotal
+       << " consumed=" << r.consumedTotal
+       << " dropped=" << r.droppedTotal << "\n";
+    os << "# script: phase0 [0," << cfg.accelEnd << ") forward=" << cfg.accelForward
+       << " | phase1 [" << cfg.accelEnd << "," << cfg.turnEnd << ") forward=" << cfg.turnForward
+       << " right=" << cfg.turnRight
+       << " | phase2 [" << cfg.turnEnd << "," << cfg.frames << "] handbrake=" << cfg.handBrake << "\n";
+    os << "# frames: F frame phase t forward right brake handbrake px py pz vx vy vz yaw speed grounded published consumed dropped\n";
+    os << "# wheels: W frame wheel contact suspensionLength rotationAngle steerAngle\n";
+    os << "# events: E frame kind ownerA ownerB bodyIdA bodyIdB normalY\n";
+    char buf[768];
+    std::snprintf(buf, sizeof(buf),
+        "# anchors: reach_speed_frame=%d max_speed=%.6f final_speed=%.6f turn_yaw_delta=%.6f turn_radius=%.6f stop_frame=%d brake_start_speed=%.6f brake_end_speed=%.6f brake_yaw_delta=%.6f\n",
+        r.reachSpeedFrame, r.maxSpeed, r.finalSpeed, r.turnYawDelta,
+        r.turnRadius, r.stopFrame, r.brakeStartSpeed, r.brakeEndSpeed,
+        r.brakeYawDelta);
+    os << buf;
+    for (const auto& f : r.frames) {
+        std::snprintf(buf, sizeof(buf),
+            "F\t%d\t%d\t%.6f\t%.3f\t%.3f\t%.3f\t%.3f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\n",
+            f.frame, f.phase, f.t, f.forward, f.right, f.brake, f.handBrake,
+            f.position.x, f.position.y, f.position.z,
+            f.velocity.x, f.velocity.y, f.velocity.z,
+            f.yaw, f.speed, f.grounded, f.published, f.consumed, f.dropped);
+        os << buf;
+    }
+    for (const auto& w : r.wheels) {
+        std::snprintf(buf, sizeof(buf), "W\t%d\t%d\t%d\t%.6f\t%.6f\t%.6f\n",
+                      w.frame, w.wheel, w.contact, w.suspensionLength,
+                      w.rotationAngle, w.steerAngle);
+        os << buf;
+    }
+    for (const auto& e : r.events) {
+        std::snprintf(buf, sizeof(buf), "E\t%d\t%d\t%llu\t%llu\t%u\t%u\t%.6f\n",
+                      e.frame, static_cast<int>(e.kind),
+                      static_cast<unsigned long long>(e.ownerA),
+                      static_cast<unsigned long long>(e.ownerB),
+                      e.bodyIdA, e.bodyIdB, e.normalY);
+        os << buf;
+    }
+    return os.str();
+}
+
+int runDriveTrace(int argc, char** argv) {
+    nl::physics::DriveConfig cfg;
+    std::string out;
+    auto fail = [](const std::string& e) -> int {
+        std::printf("invalid arguments: %s\n", e.c_str());
+        return 2;
+    };
+    int framesArg = -1;
+    bool phasesGiven = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + key);
+        const char* val = argv[++i];
+        int n = 0;
+        if (key == "--out") { out = val; }
+        else if (key == "--frames") {
+            if (!parseInt(val, &n)) return fail("bad --frames");
+            framesArg = n;
+        }
+        else if (key == "--accel-end" || key == "--turn-end") {
+            if (!parseInt(val, &n)) return fail("bad phase bound");
+            if (key == "--accel-end") cfg.accelEnd = n;
+            else cfg.turnEnd = n;
+            phasesGiven = true;
+        }
+        else return fail("unknown option " + key);
+    }
+    if (framesArg > 0) {
+        cfg.frames = framesArg;
+        // Measured M-D2 pitfall: scaling ALL phases with --frames makes top
+        // speed grow faster than the brake window (stop_frame stayed -1 for
+        // N=360/480/600/720). Extra frames must extend only phase 2.
+        if (!phasesGiven && framesArg < cfg.turnEnd) {
+            cfg.accelEnd = std::max(1, framesArg * 5 / 12);
+            cfg.turnEnd  = std::min(framesArg,
+                                    std::max(cfg.accelEnd + 1, framesArg * 3 / 4));
+        }
+    }
+    std::string err;
+    if (!nl::physics::validateDriveConfig(cfg, &err)) return fail(err);
+    const nl::physics::DriveResult r = nl::physics::simulateDrive(cfg);
+    if (!r.ok()) { std::printf("drive simulation failed: %s\n", r.error.c_str()); return 1; }
+    const std::string tsv = driveTSV(cfg, r);
+    if (out.empty()) { std::fputs(tsv.c_str(), stdout); return 0; }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) { std::printf("cannot write %s\n", out.c_str()); return 1; }
+    f << tsv;
+    f.close();
+    std::printf("wrote %s frames=%d wheels=%zu events=%zu\n",
+                out.c_str(), cfg.frames, r.wheels.size(), r.events.size());
+    return 0;
+}
+
+// ---- M-D2: drive-check (F/W/E rows only; # lines are provenance) -----------
+// Every assertion below is recomputed from the data rows. The # provenance is
+// used only for cross-checking row counts / declared totals, never as evidence.
+struct D2FrameRow {
+    int    frame = -1, phase = -1, grounded = -1;
+    int    published = -1, consumed = -1, dropped = -1;
+    double t = 0.0;
+    float  forward = 0.0f, right = 0.0f, brake = 0.0f, handBrake = 0.0f;
+    float  px = 0, py = 0, pz = 0, vx = 0, vy = 0, vz = 0, yaw = 0, speed = 0;
+};
+struct D2WheelRow {
+    int   frame = -1, wheel = -1, contact = -1;
+    float susp = 0, rot = 0, steer = 0;
+};
+struct D2EventRow {
+    int    frame = -1, kind = -1;
+    std::uint64_t ownerA = 0, ownerB = 0;
+    std::uint32_t bodyA = 0, bodyB = 0;
+    float  normalY = 0.0f;
+};
+
+int runDriveCheck(const char* path) {
+    std::ifstream f(path);
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    int declaredFrames = -1, declaredEvents = -1, accelEnd = -1, turnEnd = -1;
+    long long declaredPublished = -1, declaredConsumed = -1, declaredDropped = -1;
+    double dt = 0.0;
+    bool provenance = false;
+    std::vector<D2FrameRow> frames;
+    std::vector<D2WheelRow> wheels;
+    std::vector<D2EventRow> events;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, 2, "# ") == 0) {
+            if (line.find("wheels=4") != std::string::npos) provenance = true;
+            std::istringstream is(line.substr(2));
+            std::string kv;
+            while (is >> kv) {
+                if (kv.compare(0, 7, "frames=") == 0) declaredFrames = std::atoi(kv.c_str() + 7);
+                else if (kv.compare(0, 7, "events=") == 0) declaredEvents = std::atoi(kv.c_str() + 7);
+                else if (kv.compare(0, 10, "accel_end=") == 0) accelEnd = std::atoi(kv.c_str() + 10);
+                else if (kv.compare(0, 9, "turn_end=") == 0) turnEnd = std::atoi(kv.c_str() + 9);
+                else if (kv.compare(0, 10, "published=") == 0)
+                    declaredPublished = std::strtoll(kv.c_str() + 10, nullptr, 10);
+                else if (kv.compare(0, 9, "consumed=") == 0)
+                    declaredConsumed = std::strtoll(kv.c_str() + 9, nullptr, 10);
+                else if (kv.compare(0, 8, "dropped=") == 0)
+                    declaredDropped = std::strtoll(kv.c_str() + 8, nullptr, 10);
+                else if (kv.compare(0, 3, "dt=") == 0) dt = std::atof(kv.c_str() + 3);
+            }
+            continue;
+        }
+        if (line.compare(0, 2, "F\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2FrameRow r;
+            is >> tag >> r.frame >> r.phase >> r.t >> r.forward >> r.right
+               >> r.brake >> r.handBrake >> r.px >> r.py >> r.pz
+               >> r.vx >> r.vy >> r.vz >> r.yaw >> r.speed
+               >> r.grounded >> r.published >> r.consumed >> r.dropped;
+            frames.push_back(r);
+        } else if (line.compare(0, 2, "W\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2WheelRow r;
+            is >> tag >> r.frame >> r.wheel >> r.contact >> r.susp >> r.rot >> r.steer;
+            wheels.push_back(r);
+        } else if (line.compare(0, 2, "E\t") == 0) {
+            std::istringstream is(line);
+            std::string tag; D2EventRow r;
+            is >> tag >> r.frame >> r.kind >> r.ownerA >> r.ownerB
+               >> r.bodyA >> r.bodyB >> r.normalY;
+            events.push_back(r);
+        }
+    }
+
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        if (!ok) { std::printf("  FAIL %s\n", what); ++fails; }
+    };
+    check(provenance, "provenance line present (wheels=4)");
+    check(declaredFrames > 0 && accelEnd > 0 && accelEnd < turnEnd &&
+          turnEnd <= declaredFrames && dt > 0.0,
+          "declared frame / phase / dt bounds sane");
+    check(static_cast<int>(frames.size()) == declaredFrames + 1,
+          "F row count == frames+1 (frame 0 is the unstepped initial state)");
+    check(static_cast<int>(wheels.size()) == (declaredFrames + 1) * 4,
+          "W row count == (frames+1)*4");
+    check(static_cast<int>(events.size()) == declaredEvents,
+          "E row count matches provenance events=");
+
+    bool seqOk = true, timeOk = true, phaseOk = true, inputOk = true;
+    bool speedOk = true, streamOk = true, chassisOk = true;
+    int  grounded4 = 0, reachFrame = -1, stopFrame = -1;
+    float maxSpeed = 0.0f;
+    long long sumPublished = 0, sumConsumed = 0;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const D2FrameRow& r = frames[i];
+        if (r.frame != static_cast<int>(i)) seqOk = false;
+        if (std::fabs(r.t - static_cast<double>(i) * dt) > 2.0e-5) timeOk = false;
+        const int expectedPhase = r.frame < accelEnd ? 0 : (r.frame < turnEnd ? 1 : 2);
+        if (r.phase != expectedPhase) phaseOk = false;
+        if (expectedPhase == 0 && !(r.forward > 0.0f && r.right == 0.0f &&
+                                    r.brake == 0.0f && r.handBrake == 0.0f)) inputOk = false;
+        if (expectedPhase == 1 && !(r.forward > 0.0f && r.right > 0.0f &&
+                                    r.handBrake == 0.0f)) inputOk = false;
+        if (expectedPhase == 2 && !(r.forward == 0.0f && r.right == 0.0f &&
+                                    r.handBrake > 0.0f)) inputOk = false;
+        const float planar = std::sqrt(r.vx * r.vx + r.vz * r.vz);
+        if (std::fabs(r.speed - planar) > 1.0e-4f) speedOk = false;
+        if (r.published != r.consumed || r.published != r.grounded || r.dropped != 0)
+            streamOk = false;
+        if (!(r.py > 0.5f)) chassisOk = false;   // chassis never sits on its box
+        if (r.grounded == 4) ++grounded4;
+        if (r.speed > maxSpeed) maxSpeed = r.speed;
+        if (expectedPhase == 0 && reachFrame < 0 && r.speed >= 1.0f)
+            reachFrame = r.frame;
+        if (expectedPhase == 2 && stopFrame < 0 && r.speed <= 0.2f)
+            stopFrame = r.frame;
+        sumPublished += r.published;
+        sumConsumed += r.consumed;
+    }
+    check(seqOk, "F rows are 0..frames in order");
+    check(timeOk, "frame timestamps match declared dt");
+    check(phaseOk, "phase column matches accel_end / turn_end");
+    check(inputOk, "three-phase driver input script is present in every F row");
+    check(speedOk, "speed column == hypot(vx,vz) in every F row");
+    check(streamOk, "per-frame published==consumed==grounded, zero dropped (M-D1 contract)");
+    check(chassisOk, "chassis stays suspended (py>0.5), wheel rays carry the car");
+    check(sumPublished == declaredPublished && sumConsumed == declaredConsumed &&
+          declaredDropped == 0 && sumPublished == sumConsumed &&
+          sumPublished == static_cast<long long>(events.size()),
+          "F totals == provenance == E row count, zero stream loss");
+
+    bool wheelOk = true, steerOk = true;
+    if (wheels.size() == frames.size() * 4) {
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            int contacts = 0;
+            for (int w = 0; w < 4; ++w) {
+                const D2WheelRow& r = wheels[i * 4 + static_cast<std::size_t>(w)];
+                if (r.frame != static_cast<int>(i) || r.wheel != w ||
+                    (r.contact != 0 && r.contact != 1) ||
+                    !(r.susp > 0.0f && r.susp < 1.0f)) wheelOk = false;
+                contacts += r.contact;
+                if (w >= 2 && std::fabs(r.steer) > 1.0e-6f) steerOk = false;
+                if (frames[i].phase == 1 && w < 2 && std::fabs(r.steer) < 1.0e-4f)
+                    steerOk = false;
+            }
+            if (contacts != frames[i].grounded) wheelOk = false;
+        }
+    } else wheelOk = false;
+    check(wheelOk, "W rows: 4 wheels per frame, contact sum == F grounded, suspension in range");
+    check(steerOk, "front axle steers during phase 1, rear axle never steers");
+
+    bool evOk = true, evFrameOk = true, evGroupOk = true;
+    int ca = 0, cp = 0, cr = 0, firstAdded = -1, lastEvent = -1;
+    std::vector<int> perFrame(frames.size(), 0);
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        const D2EventRow& e = events[i];
+        if (e.kind == 0) { ++ca; if (firstAdded < 0) firstAdded = e.frame; }
+        else if (e.kind == 1) ++cp;
+        else if (e.kind == 2) ++cr;
+        else evOk = false;
+        if (e.ownerA < nl::physics::kDriveWheelOwnerBase ||
+            e.ownerA >= nl::physics::kDriveWheelOwnerBase + 4 ||
+            e.ownerB != nl::physics::kDriveFloorOwner ||
+            e.bodyA < nl::physics::kDriveWheelSlotBase ||
+            e.bodyA >= nl::physics::kDriveWheelSlotBase + 4 ||
+            e.bodyB == nl::physics::kInvalidBodyId ||
+            std::fabs(e.normalY - 1.0f) > 1.0e-6f) evOk = false;
+        if (e.frame < 0 || e.frame >= static_cast<int>(frames.size())) evFrameOk = false;
+        else ++perFrame[static_cast<std::size_t>(e.frame)];
+        if (i > 0 && e.frame < events[i - 1].frame) evFrameOk = false;
+        lastEvent = e.frame;
+    }
+    for (std::size_t i = 0; i < frames.size(); ++i)
+        if (perFrame[i] != frames[i].published) evGroupOk = false;
+    check(evOk, "E rows: kind/owner/synthetic body id/ground normal valid");
+    check(evFrameOk, "E rows are frame-ordered and inside the dump");
+    check(evGroupOk, "E rows per frame == F published (wheel contact edges)");
+    check(ca > 0 && cp > 0, "Added + Persisted wheel contact edges both present");
+
+    // Physics anchors, all recomputed from F rows (never from # anchors line).
+    const float finalSpeed = frames[static_cast<std::size_t>(accelEnd)].speed;
+    const float brakeStart = frames[static_cast<std::size_t>(turnEnd)].speed;
+    const float brakeEnd = frames.back().speed;
+    auto wrap = [](float d) {
+        const float kPi = 3.14159265358979323846f;
+        while (d > kPi) d -= 2.0f * kPi;
+        while (d < -kPi) d += 2.0f * kPi;
+        return d;
+    };
+    const float turnYaw = wrap(frames[static_cast<std::size_t>(turnEnd)].yaw -
+                               frames[static_cast<std::size_t>(accelEnd)].yaw);
+    const float dx = frames[static_cast<std::size_t>(turnEnd)].px -
+                     frames[static_cast<std::size_t>(accelEnd)].px;
+    const float dz = frames[static_cast<std::size_t>(turnEnd)].pz -
+                     frames[static_cast<std::size_t>(accelEnd)].pz;
+    const float turnDist = std::sqrt(dx * dx + dz * dz);
+    const float turnRadius = std::fabs(turnYaw) > 1.0e-3f ? turnDist / std::fabs(turnYaw) : 0.0f;
+    check(reachFrame >= 0 && reachFrame < accelEnd,
+          "engine reaches 1 m/s inside the accel phase (differential wired)");
+    check(maxSpeed > 5.0f && finalSpeed > 5.0f,
+          "measured top speed >5 m/s, accel phase exits above 5 m/s");
+    check(std::fabs(turnYaw) > 0.3f && turnDist > 5.0f,
+          "steering rotates the chassis and covers real ground in phase 1");
+    check(turnRadius > 5.0f && turnRadius < 60.0f, "measured turning radius is physical");
+    check(brakeStart > brakeEnd && stopFrame >= 0 && stopFrame <= declaredFrames &&
+          brakeEnd <= 0.2f,
+          "handbrake decelerates and parks the car inside the observation window");
+    check(grounded4 > declaredFrames * 3 / 4,
+          "four-wheel raycast contact holds for most of the run");
+
+    // MEASURED_ANCHORS_D2: every number below was read back from the real
+    // 480-frame TSV F/W/E rows (tools/make-drive-m2-evidence.py --anchors),
+    // never hand-written -- M-I0/I1 lesson. cr==0 is real: all four wheel rays
+    // keep contact for the whole run, so no Removed edge is ever emitted.
+    if (declaredFrames == 480) {
+        check(declaredEvents == 1920 && ca == 4 && cp == 1916 && cr == 0,
+              "measured 1920 wheel events = 4 Added / 1916 Persisted / 0 Removed");
+        check(firstAdded == 1 && lastEvent == 480,
+              "measured first wheel contact at f1, last event at f480");
+        check(grounded4 == 480 && sumPublished == 1920,
+              "measured 480 fully-grounded frames, 1920 published events");
+        check(reachFrame == 25 && std::fabs(maxSpeed - 9.298565f) < 1.0e-3f &&
+              std::fabs(finalSpeed - 6.261256f) < 1.0e-3f,
+              "measured reach f25 / top 9.298565 / accel exit 6.261256 m/s");
+        check(std::fabs(turnYaw + 0.838077f) < 1.0e-3f &&
+              std::fabs(turnRadius - 18.007170f) < 1.0e-2f,
+              "measured turn yaw -0.838077 rad / radius 18.007170 m");
+        check(stopFrame == 402 && std::fabs(brakeStart - 9.298565f) < 1.0e-3f &&
+              brakeEnd <= 0.002f,
+              "measured handbrake stop f402, 9.298565 -> 0.001434 m/s");
+    }
+
+    if (fails) {
+        std::printf("phys-d2 drive-check: FAIL (%d)\n", fails);
+        return 1;
+    }
+    std::printf("phys-d2 drive-check: PASS (frames=%d wheels=%zu events=%zu, accel/steer/handbrake-stop, stream zero-drop)\n",
+                declaredFrames, wheels.size(), events.size());
+    return 0;
+}
+
 int runSelftest() {
     nl::physics::DropConfig cfg;
     std::string err;
@@ -2306,10 +2669,73 @@ int runSelftest() {
         }
     }
 
+    {
+        // --- M-D2: headless VehicleConstraint (plan A, fresh world per call) ---
+        nl::physics::DriveConfig vc;
+        vc.frames = 90; vc.accelEnd = 30; vc.turnEnd = 60;
+        std::string verr;
+        expectTrue(nl::physics::validateDriveConfig(vc, &verr),
+                   "vehicle: accept a valid short script");
+        auto badV = vc; badV.frames = 0;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject frames=0");
+        badV = vc; badV.dt = 1.0;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject dt=1.0");
+        badV = vc; badV.accelEnd = badV.turnEnd;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject non-increasing phase bounds");
+        badV = vc; badV.handBrake = 1.5f;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject handBrake>1");
+        badV = vc; badV.tuning.mass = 0.0f;
+        expectTrue(!nl::physics::validateDriveConfig(badV, &verr),
+                   "vehicle: reject zero mass");
+
+        const nl::physics::DriveResult veh1 = nl::physics::simulateDrive(vc);
+        const nl::physics::DriveResult veh2 = nl::physics::simulateDrive(vc);
+        expectTrue(veh1.ok() && veh2.ok(), "vehicle: two fresh worlds built and stepped");
+        expectTrue(driveTSV(vc, veh1) == driveTSV(vc, veh2),
+                   "vehicle: fresh world per call is bit-identical");
+        expectTrue(veh1.frames.size() == 91 && veh1.wheels.size() == 364,
+                   "vehicle: 91 F rows + 364 W rows for a 90-frame script");
+        int vehGrounded4 = 0, va = 0, vp = 0;
+        bool vehStreamOk = true;
+        for (const auto& fr : veh1.frames) {
+            if (fr.grounded == 4) ++vehGrounded4;
+            if (fr.published != fr.consumed || fr.dropped != 0) vehStreamOk = false;
+        }
+        for (const auto& e : veh1.events) {
+            if (e.kind == nl::physics::ContactKind::Added) ++va;
+            else if (e.kind == nl::physics::ContactKind::Persisted) ++vp;
+        }
+        expectTrue(vehGrounded4 > 60,
+                   "vehicle: four wheel rays stay in contact (collision tester wired)");
+        expectTrue(vehStreamOk, "vehicle: every frame publish==consume, zero dropped");
+        expectTrue(veh1.publishedTotal == veh1.consumedTotal &&
+                   veh1.events.size() == veh1.consumedTotal,
+                   "vehicle: M-D1 stream drained every wheel contact edge");
+        expectTrue(va > 0 && vp > 0,
+                   "vehicle: Added + Persisted wheel contact edges present");
+        expectTrue(veh1.frames.back().speed > veh1.frames.front().speed,
+                   "vehicle: engine accelerates the chassis");
+        expectTrue(veh1.turnYawDelta < -0.05f || veh1.turnYawDelta > 0.05f,
+                   "vehicle: front-axle steering rotates the chassis");
+        expectTrue(veh1.brakeStartSpeed > veh1.brakeEndSpeed,
+                   "vehicle: handbrake decelerates the chassis");
+        if (g_verbose) {
+            std::printf("[vehicle] frames=%zu wheels=%zu events=%zu max=%.4f yaw=%.4f brake=%.4f->%.4f\n",
+                        veh1.frames.size(), veh1.wheels.size(), veh1.events.size(),
+                        veh1.maxSpeed, veh1.turnYawDelta,
+                        veh1.brakeStartSpeed, veh1.brakeEndSpeed);
+        }
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-d2 vehicle: PASS (VehicleConstraint fresh world, 4 wheel rays, stream, determinism)\n");
     std::printf("phys-d1 ecs: PASS (double buffer, PostPhysics consumer, TickGroup order, zero regression)\n");
     std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
     std::printf("phys-j5c anchors: PASS (PoolJobSystem adapter, N=1 bit-identical, N=4 parallel)\n");
@@ -2477,6 +2903,11 @@ int main(int argc, char** argv) {
         return runCheckCharacter(argv[2]);
     }
     if (cmd == "check-jobs") return runCheckJobs(argc, argv);
+    if (cmd == "drive-trace") return runDriveTrace(argc, argv);
+    if (cmd == "drive-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runDriveCheck(argv[2]);
+    }
     if (cmd == "ecs-trace") return runEcsTrace(argc, argv);
     if (cmd == "ecs-check") {
         if (argc != 3) { usage(); return 2; }

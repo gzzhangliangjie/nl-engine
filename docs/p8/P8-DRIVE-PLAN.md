@@ -56,7 +56,7 @@
 | **Jolt vendored** | `Physics/Vehicle/` 全模块在库（立项已实证）；`WheeledVehicleController.h:105-120` `SetDriverInput(forward, right, brake, handBrake)`，转向是 ±1 right 值非角度 | 集成层唯一权威锚，一切 API 以 vendored 头为准；M-D2 开工按行号再实读留痕 |
 | **bevy / Carrot** | bevy 无官方载具（社区 avian 亦无 vehicle controller）；Carrot `engine/engine/physics/` 全目录 16 文件 grep 零 `Vehicle` 模块——立项预口径「预判无」**实锤成立** | 据实标注无对应物，不强行找参照 |
 
-### 2.3 三端口径差异（需用户拍板，见 Q1）
+### 2.3 三端口径差异（Q1 已按建议口径执行，见 §7）
 
 | 来源 | 派发时机 | 消费者粒度 | 本轨取舍 |
 |---|---|---|---|
@@ -64,7 +64,7 @@
 | Carrot | 帧内入队 → `dispatchEventsPostPhysicsMainThread()` 帧末主线程派发 | per-body 回调 | 借时序（Physics 产 / PostPhysics 消费），不借 per-body 粒度 |
 | bevy | `Events<T>` 双缓冲换页，两帧保活 | 任意 System + Cursor | 借缓冲与 `drain()` 语义 |
 
-> 三者口径不一致。计划既定路线是「bevy 双缓冲 + M-GL5 TickGroup 时序」，Carrot 实读**只作同构佐证、不改既定路线**；按 AGENTS.md「不许擅做决定」，此综合口径列为 **Q1** 待确认。
+> 三者口径不一致。计划既定路线是「bevy 双缓冲 + M-GL5 TickGroup 时序」，Carrot 实读**只作同构佐证、不改既定路线**；按 AGENTS.md「不许擅做决定」曾列为 **Q1**，现已按建议口径执行（M-D1 落地自证，见 §7 拍板记录），不再是未决项。
 
 ## 3. 设计（逐里程碑细化，开工前补全锚点表）
 
@@ -107,13 +107,34 @@
 | 并行契约 | 消费者不声明读写集 → 自足系统，`tickParallel` 零结构变更违约 | `System.hpp` 契约 2 |
 | 改动面 | `core/{include/nl/physics,src/physics}` 新 4 文件 + 根 CMakeLists 两行 + `phys-tools`；零图形、零 `kStage` | A 类轨道纪律 |
 
-### M-D2 载具无头集成
+### M-D2 载具无头集成（2026-11-10 收官，tag `drive-m2`）
 
 - `VehicleTuning` POD：底盘（halfExtents / mass / 质心高）+ 4 轮（radius / width / 悬挂 stiffness / damping / travel / maxSteerAngle 前轴）+ 传动（auto，engine 参数缺省取 Jolt 默认，测出行为再调）。
-- `DriveConfig`：帧数 + **帧序号驱动输入脚本**（照 M-I2 `--input-demo` 先例：f∈[a,b) forward=1 等），输出 per-frame 轨迹（chassis pos / yaw / velocity）+ per-wheel 状态（contact flag / suspensionLength / rotationAngle）——轮子状态回读口径对 UE「动画轮同步」预留。
+- `DriveConfig`：帧数 + **帧序号驱动输入脚本**（照 M-I2 `--input-demo` 先例：f∈[a,b) forward=1 等），输出 per-frame 轨迹（chassis pos / yaw / velocity）+ per-wheel 状态（contact flag / suspensionLength / rotationAngle / steerAngle）——轮子状态回读口径对 UE「动画轮同步」预留。
 - 锚场景（参数表三行，GAME-DEV-ORDER 验收口径）：① 直线加速（0→达速帧 + 末速锚）；② 定角转向（转弯半径 / 角速度锚）；③ 手刹急停（刹停帧 + 横摆角锚）。
 - phys-tools 扩 selftest `vehicle` 节 + `drive-trace` / `drive-check` 子命令（TSV + 锚闭环）。
-- **与 M-D0/D1 的衔接**：载具探针的轮-地接触天然产 added/persisted 事件流——selftest 加一条「车辆行驶段轮接触事件序列」锚，M-D1 的消费契约第一次消费真实玩法数据。
+- **与 M-D0/D1 的衔接（M-D2 收官实测后更正）**：Jolt 车轮是 `VehicleCollisionTesterRay` 的 raycast query、**不是刚体**，天然不触发 `ContactListener` 回调（vendored `VehicleCollisionTester.h:84/93`）。因此轮接触事件由逐轮 `HasContact()` 边沿合成 `ContactEvent` POD（`false→true` Added / `true→true` Persisted / `true→false` Removed），`bodyIdA` 用稳定 synthetic wheel-slot id、`bodyIdB` 用 floor body id，再喂 M-D1 `ContactEventStream` 的 `update→publish→drain`。`World.cpp` 的 M-D0 `ContactCollector` / `simulateContactProbe` 一字未动（双后端 `contacts.tsv` 逐字节零回归）。selftest 加「车辆行驶段轮接触事件序列」锚，M-D1 的消费契约第一次消费真实玩法数据。
+
+#### M-D2 开工锚点表（2026-11-10 三处实读 + 用户拍板后补全）
+
+> **Q-D2-1 已拍板 = 方案 A 探针式 fresh world**（用户 2026-11-10）：`Vehicle` 公开面只有 POD，
+> 每次 `simulateDrive` 自建 `PhysicsSystem`；`buildVehicle(JPH::PhysicsSystem&)` 只活在 `Vehicle.cpp`，
+> M-D3 由 `DebugScene` scenario 2 复用。证据与 A/B/C 代价矩阵见 `docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md`。
+
+| 项 | 落点 / 口径 | 依据 |
+|---|---|---|
+| 所有权 | A：fresh world per call，公开头零 Jolt；不引入长生命周期 `Vehicle` 对象，不提前定 M-D3 挂载契约 | 用户拍板；`World.hpp:226-228` 确定性不变量；M-P0~M-D4 / M-D0 探针先例 |
+| 装配顺序 | AddBody(floor/chassis) → `new VehicleConstraint(body, settings)` → `SetVehicleCollisionTester(new VehicleCollisionTesterRay(kFloor))` → `AddConstraint` → `AddStepListener` → `Update(dt,1,...)` | `VehicleConstraint.h:44/69/79`、`PhysicsSystem.h:128/151/162`；`VehicleConstraint.cpp:219/232` 无空检查 |
+| 轮子配置 | 4 个 `WheelSettingsWV`（非基类 `WheelSettings`），前轴 `mMaxSteerAngle`，`mSuspensionMin/MaxLength`、`mRadius`、`mWidth`、`mPosition` 全部显式 | `WheeledVehicleController.h:19/160` ConstructWheel 断言；`Wheel.h:29-41` |
+| 传动 | `WheeledVehicleControllerSettings` + `VehicleDifferentialSettings` 显式填 `mLeftWheel/mRightWheel`（默认 -1 无效）与 `mEngineTorqueRatio=1` | `VehicleDifferential.h:31-36`；`WheeledVehicleController.h:72-86` |
+| 输入 | `static_cast<WheeledVehicleController*>(constraint->GetController())->SetDriverInput(f,r,b,hb)`；手刹 float 0~1（UE 是 bool，不照搬） | `WheeledVehicleController.h:105`；`VehicleConstraint.h:130/133` 返回基类；UE `:919` |
+| 轮态回读 | `HasContact()` / `GetSuspensionLength()` / `GetRotationAngle()` / `GetSteerAngle()`；接触类 getter 必须先 `HasContact()` | `Wheel.h:64/70/76/100`、`:85-97` JPH_ASSERT |
+| 输入脚本 | 三段帧序号脚本（加速 f0~149 → 定角转向 f150~269 → 手刹 f270~480），照 M-I2 `--input-demo`；**额外帧只延长手刹观察窗口**，`--frames N` 不再三段等比缩放（实测 N=360/480/600/720 等比缩放时车速涨得比刹车窗口快、`stop_frame` 恒 -1）；新增 `--accel-end` / `--turn-end` 显式覆盖 | `INPUT-TOOLS-GUIDE.md:82`；4 组 N 的实测 anchors 行；`Vehicle.hpp` 头注释 |
+| 三锚（收官实测） | ① 加速：reach f25 / top 9.298565 / 出段 6.261256 m/s；② 转向：yaw -0.838077 rad / 半径 18.007170 m / 前轮 0.5236 rad 后轮 0；③ 手刹：f270 9.298565 → f480 0.001434 m/s、刹停 f402。全部由 `tools/make-drive-m2-evidence.py --anchors` 从 F/W/E 行反推，禁手写 | `GAME-DEV-ORDER.md` 第 3 步；`PHYS-TOOLS-GUIDE.md` §5 / M-I0/I1 教训；`example/drive-m2/drive.tsv` |
+| 事件衔接（**收官更正**） | 轮子是 raycast query、无 `ContactListener` 回调 → 改由 `HasContact()` 边沿合成 `ContactEvent` POD 喂 M-D1 `ContactEventStream`；`World.cpp` 的 M-D0 collector 一字未动，contacts.tsv 双后端逐字节零回归 | `VehicleCollisionTester.h:84/93`；`Wheel.h:64`；实测 `drive-check` E 行 1920 条 |
+| TSV | `#` provenance + `F` 帧行 20 列（phase/input/车身轨迹/速度/着地数/stream 计数）+ `W` 轮行 7 列（contact/suspLen/rotAngle/steerAngle）+ `E` 消费事件行 8 列；**481 F / 1924 W / 1920 E**，`drive-check` 只信 F/W/E 数据行 | `DRIVE-TOOLS-GUIDE.md` §3 / §9.3 / §10.3 trace→check 口径 |
+| 退出码 | `0` PASS / `1` 断言或运行失败 / `2` 用法错误 | `PHYS-TOOLS-GUIDE.md` §2 |
+| 改动面 | `core/include/nl/physics/Vehicle.hpp`（新）、`core/src/physics/Vehicle.cpp`（新）、根 CMakeLists 两行、`phys-tools`、`example/drive-m2`、工具脚本与文档；**零图形、零 `kStage`、不碰 `World.cpp` / `viewer` / `DebugScene`** | A 类轨道纪律；用户拍板 A |
 
 ### M-D3 驾驶可见
 
@@ -163,7 +184,7 @@
 - 2026-11-10（同日）：M-D0 开工首日按 AGENTS.md 铁律实读三处点名文件，§2 由「立项预口径」升级为实证口径，
   §3 补 M-D0 开工锚点表。两处实质修订：① **Carrot 确有接触事件面且为双通道**（立项预口径「是否有」偏差最大）；
   ② **Jolt `OnContactRemoved` 禁访问 body**，owner 对须前置缓存。另修正 bevy 事件模块路径
-  `event.rs` → `event/mod.rs`。待拍板 Q1~Q4 见 §7。
+  `event.rs` → `event/mod.rs`。当时列出 Q1~Q4 见 §7，现均已按建议口径执行。
 
 - 2026-11-10（**M-D0 收官**）：用户指令「开工」，Q1/Q2 按 §7 建议口径执行（Q1 维持 bevy 双缓冲 +
   M-GL5 TickGroup、Carrot 只作同构佐证；Q2 缓存 removed 派发后清），Q3 边界 = 完整 M-D0 落码收口，
@@ -180,16 +201,23 @@
 
 - 2026-11-10（**M-D1 收官**）：用户指令「下一步」= 完整 M-D1 落码收口。开工按铁律重读三处**本里程碑点名面**（Carrot `PhysicsBody.cpp:63-94` + `CSharpBindings.cpp:1033-1075` 双 exists 过滤；bevy `event/mod.rs:573/680-701/704-719` 两帧保活与 `update_drain()`；UE `EngineBaseTypes.h:83-110` `TG_PostPhysics` 组序），**未复用 M-D0 的接触事件面证据**。落码：`ContactEventStream`（双缓冲 + cursor + update/publish/drain）+ `ContactEventSystem`（自足 `scene::System` 消费者） + `TickScheduler` 帧循环 + phys-tools `ecs-trace` / `ecs-check` / selftest `ecs` 节 + ctest 三条。**实测锚（真实 TSV 反推）**：240 F 行 / 41 E 行，published=consumed=41，kinds 6/29/6，f44/f46/f185，mappedA=0 / mappedB=41 / unmappedA=41 / unmappedB=0（A=blocker 未映射、B=probe 映射，owner 过滤双向有真实数据），updates=240、dropped=0、order_ok=240/240。**口径精确化**：§5「次帧清」指已消费事件；未读事件照 §2.1 两帧保活，表述已改（§9.1 归档）。M-D2 载具 / M-D3 驾驶可见未提前落码。
 
-## 7. 开工待确认（Q 编号，决策前置）
+- 2026-11-10（**M-D2 收官**）：用户指令「下一步」= 完整 M-D2 落码收口。开工闸先扫计划内架构判定 → 发现 `Vehicle` 与 `JPH::PhysicsSystem` 的所有权 / 公开面形态未写，而第一行 `AddConstraint` / `AddStepListener` 会把它隐式拍死 → 先出 `docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md`（三处实读 + A/B/C 代价矩阵）交用户拍板，用户选 **A 探针式 fresh world**，结论写回 §3 / §7 并删掉 Q1/Q2 历史「待确认 / 确认后」挂账句后才落第一行架构代码。三处本里程碑点名面实读（**未复用 M-D0/D1 证据**）：Carrot `engine/engine/physics/` 16 文件零 `Vehicle` / `StepListener` / `Wheeled` 命中；bevy `crates/` 65 官方 crate 无官方物理，唯一 vehicle 命中是 `bevy_ecs/src/component/mod.rs:52` 教学 Component 示例（如实记「无对应物」）；UE 5.8.4 ChaosVehicles 四输入 API（`ChaosVehicleMovementComponent.h:887/899/903/919`）+ `FWheelStatus[]` 逐帧缓存回读（`:716/:955`）；另逐行核 vendored Jolt `Physics/Vehicle/` 24 文件与 `PhysicsSystem.h:128/151/162`（vendored 不含 Samples / VehicleTest，装配序列只能从头文件推导）。落码：`Vehicle.hpp`（Jolt-free POD）/ `Vehicle.cpp`（fresh world 装配 + 轮态回读 + 事件边沿合成）+ 根 CMakeLists 一行 + phys-tools `drive-trace` / `drive-check` / selftest `vehicle` 节 + ctest 三条 + `example/drive-m2/` + `tools/make-drive-m2-evidence.py` + cases.json `drive-m2` 卡五用例。**实测锚（真实 TSV F/W/E 行反推，禁手写）**：481 F / 1924 W / 1920 E 行，kinds 4/1916/0（四轮射线全程贴地故无 Removed），reach f25 / top 9.298565 / accel exit 6.261256 m/s，turn yaw -0.838077 rad / radius 18.007170 m，handbrake 9.298565 → 0.001434 m/s、stop f402，published=consumed=1920 / dropped=0。**两处口径更正（同步落到 §3 与锚点表）**：① Jolt 轮是 raycast query 不是刚体、不发 `ContactListener`，事件改由 `HasContact()` 边沿合成；② `--frames` 不再三段等比缩放，额外帧只延长手刹观察窗口（等比缩放实测 N=360/480/600/720 的 `stop_frame` 恒 -1）。DX12/VULKAN 双后端 drive-trace TSV 逐字节一致（269658 B）、ctest 各 10/10；M-D0 `contacts.tsv` / M-D1 `ecs.tsv` 双后端逐字节零回归。M-D3 驾驶可见未开工。
+
+## 7. 决策记录（Q 编号，决策前置）
 
 > **状态（2026-11-10 用户「开工」）**：Q1 / Q2 按本表建议口径执行（未另行指定即视为采纳建议），Q3 = 完整 M-D0 落码收口，Q4 编号维持 `track drive / M-D0`。Q1 的「bevy 双缓冲 + M-GL5 TickGroup」落到 **M-D1**，本轮 M-D0 只产 POD 流与帧末排序；Q2 的清理时机已写进 `Events.hpp` 头注释与 §3 锚点表。
 >
 > **状态（2026-11-10 用户「下一步」）**：M-D1 已收官（tag `drive-m1`），Q1 的「bevy 双缓冲 + M-GL5 TickGroup」在 M-D1 落地并自证；M-D2 / M-D3 未开工。上一段为 M-D0 收官时的历史快照。
+>
+> **状态（2026-11-10 用户拍板 Q-D2-1）**：M-D2 载具所有权形态拍板 **方案 A 探针式 fresh world**（`docs/p8/D2-VEHICLE-OWNERSHIP-OPTIONS.md` 三处证据 + A/B/C 代价矩阵）。结论写回 §3 M-D2 开工锚点表；Q1 / Q2 的历史「待确认 / 确认后」挂账句已同步删除（实际早已执行）。开工闸至此满足：**待拍板架构项 0**，才允许落第一行架构代码；M-D3 仍按 §5 排期未开工。
+>
+> **状态（2026-11-10 用户「下一步」= M-D2 收官）**：M-D2 已收官（tag `drive-m2`），Q-D2-1 方案 A 按拍板落地并自证；计划 §3 两处与实测不符的旧口径（轮接触天然产 `ContactListener` 事件 / 三段等比缩放）已更正，无「待拍板」架构项残留。M-D3 仍按 §5 排期未开工，是本轨唯一渲染接线面。上面两段为 M-D0 / M-D1 / 开工闸时点的历史快照。
 
 | 编号 | 问题 | 建议 / 拿到答案改哪里 |
 |---|---|---|
-| **Q1** | 三处消费口径不一致（UE 立即委托 / Carrot 帧末主线程队列 / bevy 双缓冲两帧保活）：是否维持既定「bevy 双缓冲 + M-GL5 TickGroup Physics→PostPhysics」，Carrot 只作同构佐证？ | **建议维持**，不扩范围。确认后 §2.3 标「已拍板」，M-D1 按此落码 |
-| **Q2** | `OnContactRemoved` 期间 Jolt body 可能已销毁（`:126-128`）。owner 对改为 Added / Persisted 阶段缓存 + 本轨自持 `SubShapeIDPair → owner 对` 表；该缓存表清理时机是否定为「removed 派发后」？ | **建议 removed 派发后清**，避免 owner 查不到。确认后写进 §3 锚点表与 `Events.hpp` 头注释 |
+| **Q1** | 三处消费口径不一致（UE 立即委托 / Carrot 帧末主线程队列 / bevy 双缓冲两帧保活）：是否维持既定「bevy 双缓冲 + M-GL5 TickGroup Physics→PostPhysics」，Carrot 只作同构佐证？ | **已按建议维持**，不扩范围；§2.3 标「已拍板」，M-D1 已按此落码并自证（tag `drive-m1`） |
+| **Q2** | `OnContactRemoved` 期间 Jolt body 可能已销毁（`:126-128`）。owner 对改为 Added / Persisted 阶段缓存 + 本轨自持 `SubShapeIDPair → owner 对` 表；该缓存表清理时机是否定为「removed 派发后」？ | **已按建议 removed 派发后清**；已写进 §3 锚点表与 `Events.hpp` 头注释，M-D0 实测 `cache_misses=0` |
 | **Q3** | 本轮交付边界：停在「开轨 + 计划做实」，还是继续 M-D0 落码（Events.hpp / World.cpp listener / phys-tools contacts / trace→check / 展示台 tool 卡 / 双后端 ctest / example / tag / close 闸）？ | **已执行**：用户「开工」= 完整 M-D0 落码收口 |
 | **Q4** | 归属编号：本对话按 `track drive` / `M-D0` 登记（四里程碑中唯一可开工起点）。 | 若要改编号，同步改 claim 锁与本文状态行 |
+| **Q-D2-1** | `Vehicle` 与 `JPH::PhysicsSystem` 的所有权 / 公开面形态：A 探针式 fresh world / B 长生命周期对象 / C 薄层 attach 外部 world？ | **已拍板 A**（2026-11-10 用户）：fresh world per call + 帧序号输入脚本，公开头只有 POD；`buildVehicle(PhysicsSystem&)` 只在 `Vehicle.cpp` 内，M-D3 由 `DebugScene` scenario 2 复用。证据与代价矩阵见 `D2-VEHICLE-OWNERSHIP-OPTIONS.md`，结论见 §3 M-D2 开工锚点表 |
 

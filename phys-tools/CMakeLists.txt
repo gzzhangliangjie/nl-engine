@@ -90,3 +90,16 @@ set_tests_properties(d1-ecs-check PROPERTIES
     PASS_REGULAR_EXPRESSION "phys-d1 ecs-check: PASS")
 add_test(NAME d1-ecs-negative COMMAND phys-tools ecs-trace --frames 0)
 set_tests_properties(d1-ecs-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-D2: headless VehicleConstraint drive (A-class tool acceptance) ----
+add_test(NAME d2-drive-trace COMMAND phys-tools drive-trace --frames 480
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-d2-drive.tsv)
+set_tests_properties(d2-drive-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-d2-drive\\.tsv")
+add_test(NAME d2-drive-check
+         COMMAND phys-tools drive-check ${CMAKE_CURRENT_BINARY_DIR}/phys-d2-drive.tsv)
+set_tests_properties(d2-drive-check PROPERTIES
+    DEPENDS d2-drive-trace
+    PASS_REGULAR_EXPRESSION "phys-d2 drive-check: PASS")
+add_test(NAME d2-drive-negative COMMAND phys-tools drive-trace --frames 0)
+set_tests_properties(d2-drive-negative PROPERTIES WILL_FAIL TRUE)

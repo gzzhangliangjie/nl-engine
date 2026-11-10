@@ -201,6 +201,8 @@ add_library(nl_core STATIC
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
     core/src/physics/ContactEventStream.cpp # P8 M-D1：双缓冲 ContactEventStream（bevy 两帧保活，Jolt-free）
     core/src/physics/ContactEventSystem.cpp # P8 M-D1：scene::System 消费者（owner->Entity 过滤，自足系统）
+    core/src/physics/Vehicle.cpp # P8 M-D2：VehicleConstraint 探针式集成（fresh world，Jolt-free 公开头）
+
     core/src/nav/Nav.cpp       # P8 M-N0：nl/nav 集成层（PIMPL，core 内唯一 Recast/Detour 符号面）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）

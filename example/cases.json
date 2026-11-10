@@ -7698,6 +7698,97 @@
      "command": "phys-tools ecs-trace --frames 0"
     }
    ]
+  },
+  {
+   "id": "drive-m2",
+   "label": "M-D2",
+   "name": "载具物理：Jolt VehicleConstraint 无头集成 + 轮接触事件流（M-D2）",
+   "tag": "drive-m2",
+   "date": "2026-11-10",
+   "summary": "驾驶能力轴第三里程碑，A 类并行轨道、零图形零 kStage。用户拍板 Q-D2-1 方案 A 探针式 fresh world：core/include/nl/physics/Vehicle.hpp 公开面全是 POD、零 Jolt 类型；simulateDrive 每次自建 JPH::PhysicsSystem，装配 static floor + chassis box + 4 个 WheelSettingsWV + WheeledVehicleControllerSettings（差速器显式 left=2/right=3，默认 -1 会让动力不传轮）+ VehicleCollisionTesterRay，按 AddBody -> new VehicleConstraint -> SetVehicleCollisionTester -> AddConstraint -> AddStepListener -> Update 固定顺序驱动。Jolt 轮是 raycast query 不是刚体、不发 ContactListener 回调，故轮接触事件由 HasContact() 边沿合成 M-D0 ContactEvent POD，喂 M-D1 ContactEventStream 的 update/publish/drain 契约，是事件流第一次真实玩法消费。三段帧序号输入脚本（加速 150 帧 / 转向 120 帧 / 手刹 210 帧）；额外帧只延长手刹窗口，三段按比例缩放会让车速涨得比刹车窗口快、stop_frame 恒 -1。phys-tools 扩 drive-trace / drive-check / selftest vehicle 节，锚全部从真实 TSV 的 F/W/E 行反推：481 F 行 / 1924 W 行 / 1920 E 行，kinds 4/1916/0，reach f25、top 9.298565、accel exit 6.261256、turn yaw -0.838077 rad / radius 18.007170 m、handbrake f270 9.298565 -> f480 0.001434 m/s、stop f402，published=consumed=1920、dropped=0。",
+   "acceptance": [
+    "双后端全树构建 + viewer selftest 16/16 x2；phys-tools selftest（M-P0~M-P4 + j5c + contacts + ecs + vehicle 节）两树 PASS",
+    "drive-trace 480 帧真实输出 481 F / 1924 W / 1920 E 行，drive.tsv 逐字节稳定；drive-check 只信 F/W/E 数据行独立复验 18 条结构/物理断言 + 6 组实测数值锚",
+    "物理闭环：加速到 9.298565 m/s、转向 yaw -0.838077 rad / radius 18.007170 m、手刹在 f402 停住（末速 0.001434 m/s）；前轮最大转角 0.5236 rad、后轮恒 0",
+    "轮接触事件：4 Added + 1916 Persisted + 0 Removed（四轮射线全程贴地），每帧 published==consumed==grounded、dropped=0；M-D0 / M-D1 归档 TSV 逐字节零回归",
+    "确定性：fresh world per call 两次 TSV 逐字段位一致；DX12/VULKAN drive-trace TSV 逐字节一致（269658 B）",
+    "ctest d2-drive-{trace,check,negative} + d1-ecs-* + d0-contact-* + p0-phys-selftest 双后端各 10/10（--repeat until-pass:3）；负向退出码 2/1 实测",
+    "交代物：example/drive-m2/（run.bat 五段式 ALL GREEN + drive.tsv + 7 份真实日志 + 2 张 TSV/log 生成的证据图）+ 本卡五用例 + DRIVE-TOOLS-GUIDE.md §10"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；M-D2 新增 drive-trace / drive-check 两行及 --accel-end / --turn-end 选项。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：vehicle 节（装配 / 轮接触 / 事件流 / 确定性）",
+     "kind": "tool",
+     "note": "既有 8 条 PASS 锚之外新增 vehicle 节：负向 config 六例、两次 fresh world 逐位一致、四轮射线接触、M-D1 流每帧 publish==consume、加速/转向/手刹三类物理行为。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 vehicle: PASS",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools selftest"
+    },
+    {
+     "id": "drive-trace",
+     "name": "drive-trace：真实载具驾驶 TSV（480 帧）",
+     "kind": "tool",
+     "note": "stdout 直接出 TSV；# 头是 provenance，F 行 20 列逐帧车身状态、W 行 7 列逐轮接触/悬挂/转角、E 行 8 列消费事件明细。",
+     "args": [
+      "drive-trace",
+      "--frames",
+      "480"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-physics M-D2 headless vehicle drive",
+     "preview": "example/drive-m2/timeline.png",
+     "command": "phys-tools drive-trace --frames 480"
+    },
+    {
+     "id": "drive-check",
+     "name": "drive-check：从归档 TSV 复验载具锚",
+     "kind": "tool",
+     "note": "只信 F/W/E 数据行：行序 / 相位 / 输入脚本 / speed 与 vx,vz 自洽 / 轮接触求和 / 前后轮转角 / 事件 owner 与 synthetic id / 物理三阶段 / 6 组实测数值锚；摘要行仅作 provenance。",
+     "args": [
+      "drive-check",
+      "{root}/example/drive-m2/drive.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-d2 drive-check: PASS",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools drive-check example/drive-m2/drive.tsv"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--frames 0（退出码 2）",
+     "kind": "tool",
+     "note": "非法帧数显式 usage error，不静默假成功。expectLog 从 usage.log 实测输出复制。",
+     "args": [
+      "drive-trace",
+      "--frames",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: bad --frames",
+     "preview": "example/drive-m2/acceptance.png",
+     "command": "phys-tools drive-trace --frames 0"
+    }
+   ]
   }
  ]
 }
