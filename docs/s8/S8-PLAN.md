@@ -101,6 +101,38 @@ S8 用到的签名（行号为 nvrhi.h 实测）：
 
 ## M8.2 Ray Query 调试射线闭环（2 天）
 
+### t0：renderFrame 帧前/中/后三段拆分（0.5 天，纯结构性搬移）
+
+> **动机**（2026-11-10 用户拍板）：M8.1 的 0x87D 第二坑修复（DX12 帧列表常驻 `frameCmd_`）目前只靠「注释 + 成员」约束，帧列表生命周期约定不靠结构强制——后人往帧前/帧后随手插列表操作照样踩回去。M8.2 要往帧路径加 RayQuery dispatch，先把结构固化再往里加。
+
+**三处证据（2026-11-10 已核）**：
+- Carrot `VulkanRenderer.cpp:789-839`：显式 `newFrame`（frameIndex 轮换 + singleFrameAllocator.newFrame）→ `beginFrame`（等 CPU 计数器、重置 per-frame storage）→ 录制 pass → 提交；per-frame 资源生命周期绑定帧索引轮换。
+- UE `D3D12Device.h:112,233-239`：`TD3D12ObjectPool<FD3D12ContextCommon> Contexts` + `ObtainContext/ReleaseContext`——命令上下文池化复用、飞行中不销毁，ImmediateCommandContext 常驻；0x87D 类问题在 UE 的 RHI 层结构上不存在。
+- bevy：extract → prepare → render 三阶段 schedule，命令编码器生命周期由 render device 的 per-frame 帧槽管理。
+- **结论：三处一致都在用结构固化帧边界；本项目 renderFrame 是单函数混三类职责，靠注释守约定。**
+
+**合并后现状核对（2026-11-10，diff 7602a53..HEAD 实测）**：M8.1 后 master 已合入 feat/gameloop（M-GL0~GL5）+ feat/input（M-I0~I2），对 t0 的影响：
+- **backend 两文件自 M8.1 零改动**（diff 只见 hud.cpp +5 行 + input_debug 模块新增）——拆分基线干净。
+- **hud_.build 变胖（M-I2）**：`HudFrame` 新增 `InputDebugUi`（`renderer/include/nl/renderer/input_debug.hpp`，绘制在 `renderer/src/input_debug.cpp`），hud.cpp 的 build() 现含 console/audio/inputDebug 三个 additive sibling 窗口（各带 show gate 缺省关）——全部归 beginFrame 段，hud.cpp 本身 t0 不动。
+- **调用方节奏变了（M-GL1/M-GL3）**：viewer game loop 的逻辑 tick（GameClock 60Hz accumulator + pause/timeScale + TickGroup 注册制）与渲染帧 alpha 插值发生在 renderFrame **之前**（viewer/main.cpp 「tick 在 renderFrame 之前」注释处）——**t0 必须声明边界：renderFrame = 纯渲染帧边界，不吞逻辑 tick**；把 tick 拉进 beginFrame 属于越界，GameClock/TickGroup 是 viewer 侧 game loop 的职责。
+- **renderFrame 两个调用点**：viewer/main.cpp:1234（runNormal，物理步进路径）与 :2226（runScene，逻辑帧路径）——对外接口不动 → 两调用点零改动，但验收回归必须两条路径各覆盖一条。两处 fp/hud 组装逐字段同构重复是 M0.6 起的历史口径（M-GL2 注释明示「runScene 同构」接线），t0 不动 viewer、不抽公共 helper（放大回归面）；「抽帧准备 helper」登记为后续 viewer 清理候选，不在 t0 做。
+
+**拆法**（backend 内部私有方法，对外 `renderFrame` 接口不动，两后端同型拆分）：
+
+| 段 | 内容 | 结构性防线 |
+|---|---|---|
+| `beginFrame` | slot fence 等待、pipeline ensure、全部 timer poll/回读消费（cull stats、TLAS probe）、hud build（含 console/audio/inputDebug 三窗口，M-I2）、info_ 写回 | 回读消费只能发生在这里（「开列表前消费」从注释升级为结构）；不吞逻辑 tick（game loop 职责在 viewer） |
+| `recordFrame` | **唯一 open/close/execute 落点**，frameCmd_ 只在这里取；timer begin、buildTlasFrame、clear、scene/debugLines/hud draw、screenshot copy、timer end | 帧列表生命周期收进一个函数；其他地方拿不到裸列表 |
+| `endFrame` | fence signal、screenshot staging 回读 | — |
+
+**纪律**：
+- 两后端**列表获取语义不统一**：DX12 用常驻 `frameCmd_`（0x87D 第二坑）；Vulkan 保持 per-frame 新建（改常驻段错误）——各自留在自己 recordFrame 内，结构统一、语义各自落档。
+- 纯搬移零逻辑变化；**§2.16 教训适用**：搬移中不许顺手改任何行为，scene_ 各 draw 调用原样挪。
+- **帧边界声明（M-GL3 口径）**：逻辑 tick / 插值 alpha 消费留在 viewer game loop（renderFrame 调用之前）；beginFrame 只做「上一帧 GPU 结果的消费 + 本帧渲染准备」，不引入任何时间推进语义。
+- **验收（双调用点覆盖）**：双后端各挑 3 条关键基线 bytes 不变——s8.1（TLAS/帧列表路径）+ blas-hud（HUD+timer 全链）+ 一条 game loop 卡（如 gl3 或 input-m2，覆盖 runScene 调用点与 hud build 新窗口路径）；不跑全量。
+
+### t1~t3：Ray Query 主体
+
 - [ ] compute 里 Slang `RayQuery` 对象（SPIR-V/DXIL 都支持 ray query，无需完整 RT pipeline）：每像素从相机发 1 条射线
 - [ ] 命中距离 → 灰度可视化；命中 instanceId/triangleId → 伪彩色（两档调试）
 - [ ] `--mode rt` 接入模式分发
@@ -115,7 +147,7 @@ S8 用到的签名（行号为 nvrhi.h 实测）：
 |---|---|---|
 | M8.0 BLAS 预建 | 2 天 | `s8-blas` |
 | M8.1 TLAS 每帧 | 1~2 天 | `s8-tlas` |
-| M8.2 调试射线闭环 | 2 天 | `s8-done` |
+| M8.2 调试射线闭环（含 t0 帧三段拆分 0.5 天） | 2.5 天 | `s8-done` |
 
 ## 卡住翻哪
 

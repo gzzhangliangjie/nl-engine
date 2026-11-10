@@ -18,6 +18,7 @@ constexpr const char* kModeNames[] = {
     "visbuf",    // M7.0：u64 visibility buffer 打包写入 + 簇/三角可视化
     "pulling",   // M7.1：vis buffer 材质反解（顶点拉取 + 解析式 barycentrics + 材质着色）
     "input-hud", // P8 M-I2：输入调试面板（注入路径驱动；viewer 不调 updateFromWindow——单消费者铁律）
+    "rt",        // M8.2：Ray Query 调试射线闭环（compute 每像素相机射线 + 两档调试图）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

@@ -41,10 +41,11 @@ public:
     // framebuffer/present 照常）——场景资源由 loadEcsScene 建立后才可绘制。
     // visbufMode（M7.0）独立优先级最高：吃 .nmesh，但走 vis buffer 三段式
     // 光栅而不是 S4 的常规着色路径。
+    // rtMode（M8.2）走 initDag 资产链拿 BLAS/TLAS，渲染只做 RayQuery compute + 呈现。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-                      bool sceneMode, bool visbufMode, bool pullingMode,
+                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
                       std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 

@@ -4,7 +4,7 @@
 
 ## 本机环境（2026-11-10 实测）
 - VS2022 + MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版在 `E:\UE_STUDY_2026\.build-tools\cmake-3.31.6-windows-x86_64\`。必用 **NMake** → 构建统一 `scripts/build-m0.2.bat DX12|VULKAN`（worktree 用自己树的脚本）；NMake 同秒 mtime 跳重链 → 删 exe 强制重链；**探针结论有效性前置：先核 exe mtime > shader mtime**。
-- **本机 exe 间歇秒退两族（2026-11-10）**：① phys 0xC0000409 = JobRuntime 析构次序竞争，**已修复**（见「job-system」节）；② viewer 等本地 exe ~30-40% 秒退（bash 127 / 0xC0000409，零输出，块状 2~5 连挂后自愈）与 LightingService 服务崩溃循环疑似相关，根因待拍板处置（A 禁服务观察 / B harness 秒退零输出自动重试 / C 发作时管理员读 WER Report.wer）。**凡「missing anchor / 空日志」类失败先重跑 2~3 次再定性。**
+- **「间歇挂/秒退」定性修正（2026-11-10 14:10 实锤拆两族）**：① **ctest 输出捕获竞态（主力，非 exe 问题）**——便携 cmake 3.31.6 ctest 对 0.07s 级快进程随机丢全部 stdout（`Required regular expression not found` + `<end of output>` + 时长正常），**实锤法：挂时产物文件已写出**（进程跑完，ctest 没收到）+ python subprocess 直拉 100/100 全过；**处置 = ctest 命令统一带 `--repeat until-pass:3`**（重试即绿，真回归稳定挂不会被掩盖），双后端实测 100%。② **真秒退族（0xC0000409 零输出）** = 华硕 ArmouryCrate 生态干扰：LightingService（AURA 灯效服务，崩溃循环 WER 22 条 + 当日 07:56–09:16 每 3 分钟一崩）已停服务+禁自启；用户态 ArmouryCrate 全家桶亦已杀。停后发作率 30~40% → ~2.7%，残余部分观察期。**「missing anchor / 空日志」类失败先 `--repeat until-pass:3` 重跑再定性；python 直拉对照可区分两族。**
 - Bash cwd 不跨命令保持 → 一律 `git -C <wt>` / 绝对路径。网络：GitHub 直连断，push 走 SSH 443+代理+`KexAlgorithms=curve25519-sha256`（端口先 `echo $http_proxy` 核对）。**nl-engine 仓库无 remote**，tag/分支只落本地。
 
 ## 架构不变量（不可动摇）

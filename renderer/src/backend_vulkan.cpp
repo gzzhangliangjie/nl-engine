@@ -69,7 +69,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, bool visbufMode, bool pullingMode,
+              bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
@@ -110,13 +110,18 @@ public:
             ? scene_.initSkin(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (hizMode
             ? scene_.initHiz(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
+            // M8.2：rt 模式走 initDag 资产链（BLAS/TLAS 挂在 initDag → initBlas →
+            // initTlas 上），渲染只做 RayQuery compute + 调试图呈现。
+            : (rtMode
+            ? scene_.initRt(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (dagMode
             ? scene_.initDag(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (clusterMode
             ? scene_.initCluster(nvrhiDevice_, "spv", "main", "main", modelFile, outError)
             : (cullMode
                 ? scene_.initCull(nvrhiDevice_, "spv", "main", "main", modelFile, frustumCull, outError)
-                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError)))))));
+                : scene_.init(nvrhiDevice_, "spv", "main", "main", modelFile, outError))))))))
+        ;
         if (!sceneOk) return false;
         if (!hud_.init(nvrhiDevice_, "spv", "main", "main", outError)) return false;
         info_.modelName = scene_.modelName();

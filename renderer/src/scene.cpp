@@ -1,5 +1,6 @@
 #include "scene.hpp"
 #include "backend.hpp"       // readFileBytes（两后端共用的字节码读取）
+#include "nl/math/math.hpp" // M8.2：inverseMat4（viewProj 求逆做射线生成）
 
 #include "nl/core/log.hpp"
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
@@ -2100,6 +2101,216 @@ void Scene::pollTlasProbe(nvrhi::IDevice* device) {
         nl::core::log::info("tlas probe: seq=", ready, " t=", t);
 }
 
+// ============================================================================
+// M8.2（S8.2）：Ray Query 调试射线闭环（S8-PLAN M8.2 t1~t3）
+// compute 每像素从相机发 1 条射线打 TLAS（bevy_solari trace_ray 口径：TMin
+// 0.001 / mask 0xFF / FORCE_OPAQUE），命中距离灰度或 instanceId+triangleId
+// 伪彩两档调试，写 RGBA32_FLOAT UAV 目标后全屏呈现。射线可视化与光栅化场景
+// 深度吻合 = S8 验收（同一 viewProj、同一 TLAS 实例 transform）。
+// ============================================================================
+
+bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
+                   const char* vsEntry, const char* psEntry,
+                   const char* nmeshFile, std::string& outError) {
+    shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
+    // 资产链：initDag（vsCull/psCull + traverse 管线照建；BLAS/TLAS 挂在
+    // initDag → initBlas → initTlas 上，rt 模式免费拿光追地基）。
+    if (!initDag(device, shaderSuffix, vsEntry, psEntry, nmeshFile, outError)) return false;
+    rtDevice_ = device;
+    rt_ = true;
+
+    // ---- shader（hiz 模式 loadShader lambda 同款）----
+    auto rtPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+    };
+    auto loadRtShader = [&](const char* artifact, nvrhi::ShaderType type,
+                            nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(rtPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load rt shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+        desc.setShaderType(type).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for rt ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadRtShader("cs", nvrhi::ShaderType::Compute, csRt_) ||
+        !loadRtShader("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
+        !loadRtShader("psrtpresent", nvrhi::ShaderType::Pixel, psRtPresent_)) {
+        return false;
+    }
+
+    // RtConstants（rt.slang b0，80B）：invViewProj 64B + params 16B。每帧 1 次写入
+    // × frame-in-flight 2 → maxVersions 16 富余（SceneConstants 同款纪律：每帧
+    // 全量覆写，不做整块 memcpy 以外的槽位特判）。
+    nvrhi::BufferDesc rcDesc;
+    rcDesc.byteSize = 80;
+    rcDesc.isConstantBuffer = true;
+    rcDesc.isVolatile = true;
+    rcDesc.maxVersions = 16;
+    rcDesc.debugName = "RtConstants";
+    rtConstants_ = device->createBuffer(rcDesc);
+    if (!rtConstants_) { outError = "createBuffer failed for rt constants"; return false; }
+
+    // compute 布局：t0 TLAS + u0 RGBA32_FLOAT UAV + b0（单一 BindingSet，§2.7；
+    // UAV 纹理依赖视口 → set 在 ensureRtTargets 懒建，layout/PSO 此处建）。
+    nvrhi::BindingLayoutDesc cLayoutDesc;
+    cLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    rtComputeLayout_ = device->createBindingLayout(cLayoutDesc);
+    if (!rtComputeLayout_) { outError = "createBindingLayout failed for rt compute"; return false; }
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csRt_).addBindingLayout(rtComputeLayout_);
+        rtPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!rtPSO_) { outError = "createComputePipeline failed for rt"; return false; }
+
+    // 呈现布局：t0 = rt 目标 SRV（psRtPresent 用 Texture2D.Load，无采样器）。
+    nvrhi::BindingLayoutDesc pLayoutDesc;
+    pLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
+    rtPresentLayout_ = device->createBindingLayout(pLayoutDesc);
+    if (!rtPresentLayout_) { outError = "createBindingLayout failed for rt present"; return false; }
+    // 呈现 PSO 随 framebuffer 格式在 drawRt 懒建（与 hiz vizPSO 同款）。
+
+    nl::core::log::info("rt scene ready (RayQuery per-pixel debug rays)",
+                        " | shader=", shaderSuffix);
+    return true;
+}
+
+bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                            std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    if (w == 0 || h == 0) { outError = "rt: zero viewport"; return false; }
+    if (rtTarget_ && rtW_ == w && rtH_ == h) return true;
+    rtW_ = w;
+    rtH_ = h;
+
+    // 调试目标：RGBA32_FLOAT 全尺寸单 mip（DX12 typed UAV store / Vulkan mandatory
+    // storage image 双后端安全）。initialState=UnorderedAccess + keepInitialState：
+    // 每帧命令列表开头自动回到 UAV 态，呈现 SRV 转换由状态跟踪插 barrier
+    //（hiz 金字塔 ShaderResource 初始态同款模式）。
+    nvrhi::TextureDesc tDesc;
+    tDesc.width = rtW_;
+    tDesc.height = rtH_;
+    tDesc.format = nvrhi::Format::RGBA32_FLOAT;
+    tDesc.isUAV = true;
+    tDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+    tDesc.keepInitialState = true;
+    tDesc.debugName = "RtDebugTarget";
+    rtTarget_ = device->createTexture(tDesc);
+    if (!rtTarget_) { outError = "createTexture failed for rt target"; return false; }
+
+    // compute set（TLAS 引用 M8.1 每帧 rebuild 的同一个对象——buildTlasFrame 在
+    // drawRt 之前已于 recordFrame 记录，同列表顺序保证射线打的是本帧 TLAS）。
+    {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(0, tlas_))
+           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
+                                                       nvrhi::Format::RGBA32_FLOAT))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, rtConstants_));
+        rtComputeSet_ = device->createBindingSet(sd, rtComputeLayout_);
+    }
+    if (!rtComputeSet_) { outError = "createBindingSet failed for rt compute set"; return false; }
+
+    // 呈现 set（SRV 纹理重建后同步重建）。
+    {
+        nvrhi::BindingSetDesc pd;
+        pd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, rtTarget_));
+        rtPresentSet_ = device->createBindingSet(pd, rtPresentLayout_);
+    }
+    if (!rtPresentSet_) { outError = "createBindingSet failed for rt present set"; return false; }
+    return true;
+}
+
+void Scene::drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                   const nvrhi::Viewport& viewport, const FrameParams& params) {
+    if (!rtDevice_ || !framebuffer) return;
+    // TLAS 未就绪（设备不支持 RT / 资产无 fallback 段）：黑屏 + 一次性日志，
+    // 与 BLAS skip 同口径（渲染照常，不拦路）。
+    if (!tlasReady_) {
+        if (!rtNoTlasLogged_) {
+            nl::core::log::info("rt: TLAS not ready (no RT support or no fallback "
+                                "geometry) -- debug rays disabled");
+            rtNoTlasLogged_ = true;
+        }
+        return;
+    }
+
+    std::string err;
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    if (!ensureRtTargets(rtDevice_, vpW, vpH, err)) {
+        nl::core::log::deviceError("rt", err);
+        return;
+    }
+
+    // 呈现 PSO 懒建（framebuffer 格式定型后建一次；resize 只换尺寸不换格式）。
+    if (!rtPresentPSO_) {
+        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psRtPresent_)
+             .addBindingLayout(rtPresentLayout_);
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        // 深度测试/写入关（缺省即关）：全屏覆盖层，hiz viz 同款。
+        rtPresentPSO_ = rtDevice_->createGraphicsPipeline(pDesc, info);
+        if (!rtPresentPSO_) {
+            nl::core::log::deviceError("rt", "createGraphicsPipeline failed for rt present");
+            return;
+        }
+    }
+
+    // ---- RtConstants 每帧全量覆写（80B）：invViewProj = inverse(viewProj) ----
+    // viewProj 列主序（camera.hpp M0.4 口径），求逆后原布局直喂 cbuffer float4x4
+    //（与 g_mvp 同一矩阵路径，两后端同一份数值）。
+    nl::math::Mat4 vp{}, invVP{};
+    std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+    invVP = nl::math::inverseMat4(vp);
+    // params.x = TMax（自适应远平面内全命中可标定）；y = 调试档；z/w = 分辨率。
+    float rc[20];
+    std::memcpy(rc, invVP.m, sizeof(invVP.m));
+    // x = 灰度参考距离（轨道相机距离 ×2：资产半径 ~1 绕原点，t 落 [dist-1,
+    // dist+1] 映到可见中灰带；hiz viz 口径近亮远暗）。
+    const float eyeLen = std::sqrt(params.eye[0] * params.eye[0] +
+                                   params.eye[1] * params.eye[1] +
+                                   params.eye[2] * params.eye[2]);
+    rc[16] = std::max(2.0f * eyeLen, 0.5f);                     // x: gray range
+    rc[17] = (params.rtDebugMode == 1) ? 1.0f : 0.0f;           // y: debug mode
+    rc[18] = static_cast<float>(rtW_);                          // z: width
+    rc[19] = static_cast<float>(rtH_);                          // w: height
+    cmd->writeBuffer(rtConstants_, rc, sizeof(rc));
+
+    // ---- compute dispatch：每像素 1 条 RayQuery（8x8 线程组，越界线程早退）----
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(rtPSO_).addBindingSet(rtComputeSet_);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
+
+    // ---- 呈现：全屏 quad 把调试图画进 framebuffer（SV_Position Load 逐像素）----
+    nvrhi::GraphicsState pstate;
+    pstate.setPipeline(rtPresentPSO_)
+          .setFramebuffer(framebuffer)
+          .addBindingSet(rtPresentSet_);
+    pstate.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(pstate);
+    nvrhi::DrawArguments vargs;
+    vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    cmd->draw(vargs);
+}
+
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
     if (!cull_ || !frustumCull_ || !hud) return;
     // M4.2：cull pass 计时轮询。必须在 hud_.build() 之前调用（viewer 每帧重建
@@ -3778,6 +3989,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
 
+    // M8.2：rt 模式——不走光栅化路径，compute RayQuery 调试射线 + 全屏呈现
+    //（buildTlasFrame 已在 recordFrame 里先记录，同列表顺序保证射线打本帧 TLAS）。
+    if (rt_) {
+        drawRt(cmd, framebuffer, viewport, params);
+        return;
+    }
+
     // M-E1b.1：ECS 场景路径——逐 batch 绑定各自的 set/VB/IB/t5 实例缓冲，
     // drawIndexed 的 SV_InstanceID 从 0 起，直接按 id*5 寻址本 batch 实例数据。
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
@@ -4495,6 +4713,23 @@ void Scene::shutdown() {
     probePSO_ = nullptr;
     probeOut_ = nullptr;
     for (auto& rb : probeReadback_) rb = nullptr;
+    // M8.2：rt 调试射线资源（compute/呈现管线 + UAV 目标，device 存活期释放）。
+    rt_ = false;
+    rtNoTlasLogged_ = false;
+    rtDevice_ = nullptr;
+    rtW_ = 0;
+    rtH_ = 0;
+    csRt_ = nullptr;
+    vsRtPresent_ = nullptr;
+    psRtPresent_ = nullptr;
+    rtPSO_ = nullptr;
+    rtPresentPSO_ = nullptr;
+    rtComputeLayout_ = nullptr;
+    rtComputeSet_ = nullptr;
+    rtPresentLayout_ = nullptr;
+    rtPresentSet_ = nullptr;
+    rtConstants_ = nullptr;
+    rtTarget_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     blasReady_ = false;
     blasTriangleCount_ = 0;

@@ -95,6 +95,8 @@ struct Options {
     bool frustumOn  = true;   // M4.1：GPU 视锥剔除（--frustum off 走恒等列表 = M4.0 行为）
     bool hizOn      = true;   // M6.2：Hi-Z 遮蔽剔除（--hiz off = 纯视锥/误差遍历，退化可验证）
     int  visVizMode = 0;     // M7.0：visbuf 可视化档（0 cluster / 1 triangle）
+    // M8.2：--rt-debug <dist|id>（0 = 命中距离灰度 / 1 = instanceId+triangleId 伪彩）。
+    int  rtDebugMode = 0;
     int  shading    = 0;      // M0.8：0 textured / 1 normal / 2 uv / 3 tri-id；M1.3：4 cluster（N 键 / HUD combo）
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
@@ -168,6 +170,15 @@ Options parseArgs(int argc, char** argv) {
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
+        else if (a == "--rt-debug" && i + 1 < argc) {   // M8.2：rt 模式调试可视化档
+            const std::string v = argv[++i];
+            if (v == "dist" || v == "0") o.rtDebugMode = 0;
+            else if (v == "id" || v == "1") o.rtDebugMode = 1;
+            else {
+                std::cerr << "invalid --rt-debug '" << v << "' (expected dist|id)\n";
+                std::exit(1);
+            }
+        }
         else if (a == "--hud") { o.hudSet = true; o.hudEnabled = true; }
         else if (a == "--no-hud") { o.hudSet = true; o.hudEnabled = false; }
         else if (a == "--mode" && i + 1 < argc) o.modeText = argv[++i];
@@ -394,7 +405,7 @@ int runSelfTest() {
           "backend selected");
     // 锚点跟随当前 kStage 前缀；每次 kStage bump 同步改这里（M-N0 修存量债：
     // 原硬编码 "S7.2"，M8.0 bump 后从未重跑 selftest，s8-blas 收口漏网）。
-    check(std::strstr(st.stage, "S8.1") != nullptr, "S8.1 stage reported");
+    check(std::strstr(st.stage, "S8.2") != nullptr, "S8.2 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -572,7 +583,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
               bool visbufMode = false, bool pullingMode = false,
-              bool inputHudMode = false) {
+              bool inputHudMode = false, bool rtMode = false) {
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
@@ -599,7 +610,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.modelFile.c_str(), cluster, cullMode,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
-                                                   visbufMode, pullingMode);
+                                                   visbufMode, pullingMode, rtMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -956,6 +967,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
         fp.tlasSpin  = o.tlasSpin;              // M8.1：TLAS 实例 spin / 探针（BLAS 未就位时
         fp.tlasProbe = o.tlasProbe;             // renderer 内部直接返回，其它模式零扰动）
+        // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
+        // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，
+        // 缺省零副作用。
+        std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
+        fp.rtDebugMode = o.rtDebugMode;
+        if (rtMode) {
+            float rtEye[3];
+            camera.eyePosition(rtEye);
+            fp.eye[0] = rtEye[0]; fp.eye[1] = rtEye[1]; fp.eye[2] = rtEye[2];
+        }
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -2179,6 +2200,9 @@ int runScene(const Options& o) {
         nl::renderer::FrameParams fp;
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
+        // M8.2：rt 模式射线生成输入（runScene 同构接线；其它模式不读）。
+        std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
+        fp.rtDebugMode = o.rtDebugMode;
         fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
@@ -2313,6 +2337,11 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
                          /*inputHudMode=*/true);
+    case nl::core::ViewMode::Rt:         // M8.2：Ray Query 调试射线闭环（.nmesh 资产链拿 BLAS/TLAS）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
+                         /*inputHudMode=*/false, /*rtMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -2414,7 +2443,8 @@ int main(int argc, char** argv) {
     if ((o.mode == nl::core::ViewMode::Cluster || o.mode == nl::core::ViewMode::Lod ||
          o.mode == nl::core::ViewMode::DagTop || o.mode == nl::core::ViewMode::Cull ||
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
-         o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling)
+         o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling ||
+         o.mode == nl::core::ViewMode::Rt)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

@@ -71,7 +71,7 @@ public:
     bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
-              bool sceneMode, bool visbufMode, bool pullingMode,
+              bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
@@ -170,6 +170,10 @@ public:
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (hizMode)
             sceneOk = scene_.initHiz(device_, "dxil", "vsCull", "psCull", modelFile, outError);
+        // M8.2：rt 模式走 initDag 资产链（BLAS/TLAS 挂在 initDag → initBlas →
+        // initTlas 上），渲染只做 RayQuery compute + 调试图呈现。
+        else if (rtMode)
+            sceneOk = scene_.initRt(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (dagMode)
             sceneOk = scene_.initDag(device_, "dxil", "vsCull", "psCull", modelFile, outError);
         else if (clusterMode)

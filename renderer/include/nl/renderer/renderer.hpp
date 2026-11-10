@@ -81,6 +81,13 @@ struct FrameParams {
     bool  tlasSpin    = false;
     bool  tlasProbe   = false;
 
+    // M8.2：rt 模式消费——viewProj 矩阵（列主序，camera.viewProjection() 原样
+    // 传入；renderer 侧 inverseMat4 求逆做射线生成）与调试可视化档
+    // （0 = 命中距离灰度 / 1 = instanceId+triangleId 伪彩）。其它模式不读，
+    // 缺省零副作用（全零矩阵仅 rt 模式使用）。
+    float viewProj[16] = {};
+    int   rtDebugMode  = 0;
+
     // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
     // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
     //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
@@ -301,7 +308,11 @@ public:
                                             bool visbufMode = false,
                                             // M7.1：在 visbuf 之上叠加材质反解
                                             // pass（pulling），复用 vis 资源 + PBR 贴图。
-                                            bool pullingMode = false);
+                                            bool pullingMode = false,
+                                            // M8.2：Ray Query 调试射线闭环
+                                            //（--mode rt；走 initDag 资产路径拿
+                                            // BLAS/TLAS，渲染只做 compute 射线 + 呈现）。
+                                            bool rtMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

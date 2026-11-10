@@ -232,6 +232,23 @@ public:
     void pollTlasProbe(nvrhi::IDevice* device);
     bool tlasReady() const { return tlasReady_; }
     int  tlasInstanceCount() const { return tlasInstanceCount_; }
+
+    // ---- M8.2（S8.2）：Ray Query 调试射线闭环（S8-PLAN M8.2 t1~t3）----
+    // initRt：走 initDag 资产链（BLAS/TLAS 挂在 initDag → initBlas → initTlas 上），
+    // 再建 rt 专用 compute/呈现管线与 RtConstants。设备不支持 RT / BLAS 未建时
+    // 不拦路（drawRt 里黑屏 + 一次性日志，与 BLAS skip 同口径）。
+    bool initRt(nvrhi::IDevice* device, const char* shaderSuffix,
+                const char* vsEntry, const char* psEntry,
+                const char* nmeshFile, std::string& outError);
+    // drawRt：rt 模式渲染（Scene::draw 开头 rtMode_ 分支调用）——compute dispatch
+    // 每像素 1 条相机射线打 TLAS 写 RGBA32_FLOAT UAV 目标，再全屏呈现进 framebuffer。
+    // 目标纹理随视口懒建（ensureRtTargets，resize 复用 hiz ensureTargets 模式）。
+    void drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                const nvrhi::Viewport& viewport, const FrameParams& params);
+  private:
+    bool ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                         std::string& outError);
+  public:
   private:
     bool ensureTlasProbe(nvrhi::ICommandList* cmd);
   public:
@@ -629,6 +646,23 @@ private:
     nvrhi::BufferHandle          probeReadback_[2];       // 回读环形（两帧延迟，同 cull）
     std::uint32_t                probeSubmitted_ = 0;
     int                          probePolledSlot_ = -1;
+
+    // ---- M8.2：rt 模式（RayQuery 调试射线闭环）----
+    bool                         rt_ = false;             // initRt 成功后置位
+    nvrhi::IDevice*              rtDevice_ = nullptr;     // initRt 存（ensureRtTargets 用，同 hizDevice_）
+    nvrhi::ShaderHandle          csRt_;
+    nvrhi::ShaderHandle          vsRtPresent_;
+    nvrhi::ShaderHandle          psRtPresent_;
+    nvrhi::ComputePipelineHandle rtPSO_;
+    nvrhi::GraphicsPipelineHandle rtPresentPSO_;          // 随 framebuffer 信息建
+    nvrhi::BindingLayoutHandle   rtComputeLayout_;
+    nvrhi::BindingSetHandle      rtComputeSet_;           // TLAS + UAV 纹理（ensureRtTargets 建）
+    nvrhi::BindingLayoutHandle   rtPresentLayout_;
+    nvrhi::BindingSetHandle      rtPresentSet_;           // SRV 纹理（ensureRtTargets 建）
+    nvrhi::BufferHandle          rtConstants_;            // volatile CB 80B（每帧全量覆写）
+    nvrhi::TextureHandle         rtTarget_;               // RGBA32_FLOAT UAV 目标
+    std::uint32_t                rtW_ = 0, rtH_ = 0;
+    bool                         rtNoTlasLogged_ = false; // TLAS 未就绪的一次性日志
 };
 
 } // namespace nl::renderer::detail
