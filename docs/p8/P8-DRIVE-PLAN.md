@@ -30,32 +30,63 @@
 - 载具输入面与 M-I1 精确咬合：`buildDrivingActionMap` 的 W/S=油门±1、A/D=转向±1、Space=手刹 ↔ Jolt `SetDriverInput(forward, right, brake, handBrake)`（`WheeledVehicleController.h:105`，转向是 ±1 左右值非角度）。
 - 载具 step 挂 Physics TickGroup（runNormal 物理调试同款位），输入轮询在渲染帧、消费在逻辑帧（GameClock callback）。
 
-## 2. 三处参考口径（立项预口径；M-D0 开工首日按铁律实读点名文件后修订留痕，M-D2 同款重读）
+## 2. 三处参考口径（2026-11-10 M-D0 开工首日实读实证，替换立项预口径；M-D2 开工同款重读）
 
-### 事件桥（M-D0/D1）
+> 实读留痕（AGENTS.md 决策前置铁律：三处定向读、不漫游，UE 只读不抄）：
+> - **Carrot**：`engine/engine/physics/PhysicsSystem.h:73` / `PhysicsSystem.cpp:124,345`、`PhysicsBody.h:53` / `PhysicsBody.cpp:63-94`、`BodyUserData.h`；脚本侧消费者 `engine/engine/scripting/CSharpBindings.cpp:1037,1072`。
+> - **bevy**（本地 main / v0.16.0-rc.4）：`crates/bevy_ecs/src/event/mod.rs`（`update()` / `update_drain()` / 两帧保活测试 `:573`、double buffering 注释 `:716`）、`examples/events.rs`；`src/event/` 下仅 `mod.rs` + `trigger.rs`，集合实现 `collections.rs` 本地 sparse clone 未检出，据实标注。
+> - **UE 5.8.4**：`Runtime/Engine/Classes/Components/PrimitiveComponent.h:274,276,278,1457,1468,1475`；`Plugins/Experimental/ChaosVehiclesPlugin/Source/ChaosVehicles/Public/ChaosVehicleMovementComponent.h:887,899,903,919`（派生类 `ChaosWheeledVehicleMovementComponent.h:633`）。
+> - **开发历史**：`docs/MILESTONES.md`、`docs/carrot-history.md`、`docs/bevy-history.md`、`docs/ROADMAP.md` 步骤→代码对照总表、`.workbuddy/memory/MEMORY.md`、`.workbuddy/memory/2026-11-10.md`、`docs/p8/PHYS-TOOLS-GUIDE.md`、`docs/p8/INPUT-TOOLS-GUIDE.md`、本计划。
+> - **vendored 复核**：`thirdparty/jolt/Jolt/Physics/Collision/ContactListener.h:106,119,136`（另见 `:73,101,126-128`）。
 
-| 来源 | 预口径 | 用法 |
+### 2.1 事件桥（M-D0/D1）实证口径
+
+| 来源 | 实读结论 | 对本轨的约束 |
 |---|---|---|
-| **Carrot** `engine/physics/` + 事件系统（`Carrot::Event` 通道） | Jolt PhysicsWorld 是否有接触事件面 / trigger 语义，事件走 Async 还是 PassThrough 通道 | 桥的节奏参照；无接触事件面则据实标注（bevy 口径同款处理） |
-| **bevy** `crates/bevy_ecs/src/event.rs`（Events<T> 双缓冲） | 事件双缓冲：当帧写、下一 schedule 段读、帧末换页；**bevy 无官方物理**——碰撞事件是社区 crate（avian / bevy_rapier），core 不背 | **消费节奏的锚**：双缓冲「当帧产、次帧读、两帧保活」照抄到 ContactEventStream；泛型框架不做（§4） |
-| **UE** `Components/PrimitiveComponent.h`（OnComponentHit / BeginOverlap / EndOverlap 委托） | 玩法面三件套 = Hit（真实碰撞）/ Begin+End Overlap（触发器）；委托挂组件、带 HitResult（位置/法线/相对速度） | **事件字段的锚**：ContactEvent POD 对齐 HitResult 有用子集；overlap 触发器语义不做（§4） |
+| **Carrot** | **有接触事件面，且不是通用 Event 总线**：`PhysicsSystem : public JPH::ContactListener`（`PhysicsSystem.h:73`）、`jolt->SetContactListener(this)`（`.cpp:124`），**只实现 `OnContactAdded`**（`.cpp:345`），经 `BodyUserData::ptr` 转成 per-body `BaseBody::onContactAdded(otherBodyId)`。`PhysicsBody.cpp:68` `addContactListener(fn, mainThreadOnly)` 是**双通道**：`false` → `contactAddedCallbacks` 在物理线程立即回调；`true` → 入队 `contactAddedSinceLastPostPhysics`，由 `dispatchEventsPostPhysicsMainThread()`（`.cpp:87-94`）帧后主线程派发并清空 | **「Physics 组产 / PostPhysics 组消费」的既有同构先例**，直接印证 M-D1 的 TickGroup 时序契约。只取「帧内入队 → 帧末派发」节奏，不照抄 per-body 回调粒度 |
+| **bevy** | 事件模块实为 `bevy_ecs/src/event/mod.rs`（立项时写的 `event.rs` 路径不成立）；`Events<T>::update()` 换页，测试 `"reader_missed missed events unread after two update() calls"`（`:573`）与 `:716` double buffering 注释，实证「当帧产、次帧读、两帧保活」；`update_drain()`（`:688`）为帧末清页面。**bevy 无官方物理**，碰撞事件属社区 crate（avian / bevy_rapier），core 不背 | `ContactEventStream` 双缓冲 + `drain()` 语义照此锚；**泛型 `Events<T>` 不做**（§4 范围外），具体类型具体队列 |
+| **UE 5.8.4** | 玩法面三件套委托签名实锤：`OnComponentHit` 五参（`HitComponent / OtherActor / OtherComp / NormalImpulse / const FHitResult&`，`:274`、成员 `:1457`）、`OnComponentBeginOverlap` 六参（含 `bFromSweep` + `SweepResult`，`:276`、`:1468`）、`OnComponentEndOverlap` 四参（`:278`、`:1475`）；均为 `DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE`，挂组件、立即派发 | `ContactEvent` POD 对齐 `FHitResult` 有用子集；**overlap / 触发器语义不做**（§4）；UE 的立即委托与 Carrot/bevy 的缓冲派发不同，见 §2.3 |
+| **Jolt vendored** | `:106/119/136` 三回调签名与立项留痕一致；**新增硬约束**：`:73` / `:101` / `:126-128` 明示 `OnContactRemoved` 期间 body 可能已移除销毁、**禁止访问 body**，要求「在 Added / Persisted 阶段缓存所需数据，removed 只用缓存」；`:101` 亦注明休眠路径的派发时机 | 计划 §3 立项时假设 removed 可回查 owner 映射，**实证后收窄**：owner 对在 Added / Persisted 阶段缓存，`SubShapeIDPair → owner 对` 表由本轨自持，removed 回调不得回查 Jolt body；见 **Q2** |
 
-### 载具（M-D2/D3）
+### 2.2 载具（M-D2/D3）实证口径
 
-| 来源 | 预口径 | 用法 |
+| 来源 | 实读结论 | 对本轨的约束 |
 |---|---|---|
-| **Jolt vendored**（`Physics/Vehicle/` 实读 + 上游 JoltPhysics Samples 未 vendored，gh-proxy 浅读 `Samples/WheeledVehicle*` 补装配口径） | 装配路径：chassis Body（BoxShape）→ `WheeledVehicleControllerSettings`（每轮 WheelSettings：半径/宽/悬挂 stiffness/damping/travel/maxSteerAngle）→ differential → constraint 加进 body → controller 驱动 | **集成层的唯一权威锚**：一切 API 以 vendored 头为准（行号开工实读留痕） |
-| **UE** Chaos 载具（`ChaosVehicles` 插件 ChaosWheeledVehicleMovementComponent） | 引擎/传动/差速/四轮分块 + 输入映射面（throttle/steering/brake/handbrake 分立）+ 轮子状态回读给渲染 | 工业终态**只取思想**：分块结构对齐、输入分立对齐；WheeledVehiclePawn/动画轮同步等渲染侧不做 |
-| **bevy / Carrot** | bevy 无官方载具（社区 avian 亦无 vehicle controller）；Carrot 预判无 vehicle 模块 | 据实标注无对应物（铁律：标了就要开工实读确认） |
+| **UE 5.8.4 ChaosVehicles** | 派生类 `UChaosWheeledVehicleMovementComponent`（`ChaosWheeledVehicleMovementComponent.h:633`）；输入面四分立 API 在基类 `ChaosVehicleMovementComponent.h`：`SetThrottleInput(float)` `:887` / `SetBrakeInput(float)` `:899` / `SetSteeringInput(float)` `:903` / `SetHandbrakeInput(bool)` `:919` | 与 M-I1 `buildDrivingActionMap`（W/S 油门、A/D 转向、Space 手刹）逐项对齐；**只取分块 / 输入分立思想**，WheeledVehiclePawn、动画轮同步等渲染侧不做 |
+| **Jolt vendored** | `Physics/Vehicle/` 全模块在库（立项已实证）；`WheeledVehicleController.h:105-120` `SetDriverInput(forward, right, brake, handBrake)`，转向是 ±1 right 值非角度 | 集成层唯一权威锚，一切 API 以 vendored 头为准；M-D2 开工按行号再实读留痕 |
+| **bevy / Carrot** | bevy 无官方载具（社区 avian 亦无 vehicle controller）；Carrot `engine/engine/physics/` 全目录 16 文件 grep 零 `Vehicle` 模块——立项预口径「预判无」**实锤成立** | 据实标注无对应物，不强行找参照 |
+
+### 2.3 三端口径差异（需用户拍板，见 Q1）
+
+| 来源 | 派发时机 | 消费者粒度 | 本轨取舍 |
+|---|---|---|---|
+| UE | 委托立即派发（挂组件） | 组件 / Actor | 只借 POD 字段，不借派发时机 |
+| Carrot | 帧内入队 → `dispatchEventsPostPhysicsMainThread()` 帧末主线程派发 | per-body 回调 | 借时序（Physics 产 / PostPhysics 消费），不借 per-body 粒度 |
+| bevy | `Events<T>` 双缓冲换页，两帧保活 | 任意 System + Cursor | 借缓冲与 `drain()` 语义 |
+
+> 三者口径不一致。计划既定路线是「bevy 双缓冲 + M-GL5 TickGroup 时序」，Carrot 实读**只作同构佐证、不改既定路线**；按 AGENTS.md「不许擅做决定」，此综合口径列为 **Q1** 待确认。
 
 ## 3. 设计（逐里程碑细化，开工前补全锚点表）
 
 ### M-D0 物理事件流
 
-- `ContactEvent` POD（Jolt-free）：`{frame, kind(Added=0/Persisted=1/Removed=2), ownerA, ownerB, bodyIdA, bodyIdB, worldPos(xyz), normalY}`——对齐 UE HitResult 有用子集；removed 回调 Jolt 只给 SubShapeIDPair（`ContactListener.h:136`），owner 从既有映射表回查。
+- `ContactEvent` POD（Jolt-free）：`{frame, kind(Added=0/Persisted=1/Removed=2), ownerA, ownerB, bodyIdA, bodyIdB, worldPos(xyz), normalY}`——对齐 UE HitResult 有用子集；removed 回调 Jolt 只给 SubShapeIDPair（`ContactListener.h:136`），owner 对由 Added / Persisted 阶段缓存的 `SubShapeIDPair → owner` 表提供（`ContactListener.h:126-128`：removed 期间禁访问 body），见下方开工锚点表与 Q2。
 - `World` 新探针 `simulateContactProbe(ContactProbeConfig)`：照 `simulateLayerProbe`（M-P1）先例——floor + 静态 blocker + 掉落 probe 三体世界，逐帧事件流随轨迹一起 dump。listener 实现在 `World.cpp`（PIMPL 内），三回调原样转 POD。
-- **确定性**：单线程 JobSystem 基线回调内联于 step（帧序即回调序）；池模式回调线程不定 → 帧末按 `(minBodyId,maxBodyId,kind)` 稳定排序后逐位。OnContactRemoved 的派发时机（Jolt 口径：解激活/移除路径，下次 Update 派发）开工实读 `ContactListener.h` + `PhysicsSystem` 确认后写死注释。
+- **确定性**：单线程 JobSystem 基线回调内联于 step（帧序即回调序）；池模式回调线程不定 → 帧末按 `(minBodyId,maxBodyId,kind)` 稳定排序后逐位。OnContactRemoved 的派发时机已实读 `ContactListener.h:101,126-128`（解激活 / 移除路径，下次 Update 派发；回调期间 body 可能已销毁）——落码时写死进 `Events.hpp` 头注释。
 - phys-tools 扩 selftest `contacts` 节 + `contact-trace` / `contact-check` 子命令：掉落 → 首次接触帧（added）→ 静置段 persisted → 反弹段 removed→added 重触发 → 静息段无新 added；锚从实测 log 反推（禁手写锚，M-I0/I1 两连犯教训入册）。
+
+#### M-D0 开工锚点表（2026-11-10 实读后补全）
+
+| 项 | 落点 / 口径 | 依据 |
+|---|---|---|
+| `ContactEvent` POD | `{frame, kind(Added=0/Persisted=1/Removed=2), ownerA, ownerB, bodyIdA, bodyIdB, worldPos(xyz), normalY}`，Jolt-free | UE `FHitResult` 有用子集 + `World.hpp:79-85` `BodyInfo.owner` 既有地基 |
+| Removed 的 owner 来源 | **Added / Persisted 阶段缓存 `SubShapeIDPair → owner 对`**，removed 只读缓存、禁访问 Jolt body；缓存表清理时机待 Q2 | `ContactListener.h:126-128`（新增实证硬约束）；立项假设据此收窄 |
+| 稳定排序 | 帧末按 `(minBodyId, maxBodyId, kind)` 排序；单线程基线回调内联于 step（帧序即回调序），池模式兜底逐位 | M-P0 确定性契约 + M-J5c 池模式回调线程不定 |
+| 探针与 dump | `simulateContactProbe(ContactProbeConfig)` 照 `simulateLayerProbe`（M-P1）三体世界；逐帧事件流随轨迹 dump TSV | `PHYS-TOOLS-GUIDE.md` §1 / §3 |
+| 工具面 | phys-tools 扩 `contacts` selftest 节 + `contact-trace` / `contact-check`；**锚一律从实测 log 反推，禁手写** | M-I0 / M-I1 手写锚两连犯教训；`INPUT-TOOLS-GUIDE.md` §2 trace→check 闭环 |
+| 退出码 | `0` PASS / `1` 断言或运行失败 / `2` 用法错误（无参、未知子命令、非法参数） | `PHYS-TOOLS-GUIDE.md` §2；展示台 `expectExit` 约定 |
+| 改动面 | `core/include/nl/physics/Events.hpp`（新）、`core/src/physics/World.cpp`（唯一 Jolt 符号面）、`phys-tools/main.cpp` + `CMakeLists.txt`；**零图形、零 `kStage`** | 本计划 §1；A 类轨道纪律 |
+| 时序契约 | 事件在 Physics 组 step 内产出入队、PostPhysics 组消费；M-D1 由 M-GL5 注册制承载 | Carrot `dispatchEventsPostPhysicsMainThread` 同构 + 本计划 §1 |
 
 ### M-D1 ECS 消费
 
@@ -107,3 +138,26 @@
   `World.hpp:79-85`（BodyInfo.owner 既有地基）、layers 表（World.hpp:60-65）。
 - 冲突面预告：M-D3 是本轨唯一触碰 `viewer/main.cpp` + `CMakeLists.txt` 渲染接线面的里程碑；
   M-D0~D2 只动 core/physics + phys-tools + CMake（工具 target）。
+
+- 2026-11-10（**M-D0 开轨**）：用户指令「开新 wt 做 P8-DRIVE-PLAN.md」。主树注册提交 `b4ab3b0`——
+  `tools/wt_pool.py` TRACKS 新增 `drive`、`docs/PARALLEL-TRACKS.md` §7.1 新增轨道行、
+  `docs/GAME-DEV-ORDER.md` 第 2/3 步状态改「在轨」。相机轨收官会话的未提交改动由其自行提交
+  `4ff5551` + `351d216` 进入父链，本轮未代提交（定点暂存避开同文件改动）。
+  worktree `E:/UE_STUDY_2026/nl-engine-drive`（分支 `feat/drive`，起点 `b4ab3b0`，
+  **已含 camera merge `7b0f24a` 全部内容**：`git merge master` 实测 `Already up to date`、
+  `rev-list --count HEAD..master` = 0）；junction 共享 `.workbuddy` / `thirdparty/slang/dist`
+  + 6 文件 skip-worktree；`wt_pool claim --track drive --milestone M-D0` 在册。
+- 2026-11-10（同日）：M-D0 开工首日按 AGENTS.md 铁律实读三处点名文件，§2 由「立项预口径」升级为实证口径，
+  §3 补 M-D0 开工锚点表。两处实质修订：① **Carrot 确有接触事件面且为双通道**（立项预口径「是否有」偏差最大）；
+  ② **Jolt `OnContactRemoved` 禁访问 body**，owner 对须前置缓存。另修正 bevy 事件模块路径
+  `event.rs` → `event/mod.rs`。待拍板 Q1~Q4 见 §7。
+
+## 7. 开工待确认（Q 编号，决策前置）
+
+| 编号 | 问题 | 建议 / 拿到答案改哪里 |
+|---|---|---|
+| **Q1** | 三处消费口径不一致（UE 立即委托 / Carrot 帧末主线程队列 / bevy 双缓冲两帧保活）：是否维持既定「bevy 双缓冲 + M-GL5 TickGroup Physics→PostPhysics」，Carrot 只作同构佐证？ | **建议维持**，不扩范围。确认后 §2.3 标「已拍板」，M-D1 按此落码 |
+| **Q2** | `OnContactRemoved` 期间 Jolt body 可能已销毁（`:126-128`）。owner 对改为 Added / Persisted 阶段缓存 + 本轨自持 `SubShapeIDPair → owner 对` 表；该缓存表清理时机是否定为「removed 派发后」？ | **建议 removed 派发后清**，避免 owner 查不到。确认后写进 §3 锚点表与 `Events.hpp` 头注释 |
+| **Q3** | 本轮交付边界：停在「开轨 + 计划做实」，还是继续 M-D0 落码（Events.hpp / World.cpp listener / phys-tools contacts / trace→check / 展示台 tool 卡 / 双后端 ctest / example / tag / close 闸）？ | 建议先定 Q1/Q2 再落码；M-D0 是完整里程碑，须按交付纪律收口 |
+| **Q4** | 归属编号：本对话按 `track drive` / `M-D0` 登记（四里程碑中唯一可开工起点）。 | 若要改编号，同步改 claim 锁与本文状态行 |
+
