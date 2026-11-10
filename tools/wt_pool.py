@@ -72,7 +72,9 @@ TRACKS = {
     },
     "pathfinding": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pathfinding",
-        "branch": "feat/pathfinding", "state": "planned",
+        "branch": "feat/pathfinding", "state": "active",
+        "note": "M-N0 opened 2026-11-10 by user instruction (E1 gate lifted "
+                "2026-11-09; plan docs/p8/P8-NAV-PLAN.md, vendored Recast/Detour)",
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",

@@ -51,3 +51,5 @@
 
 **执行不提前**：NavMesh 烘焙吃场景几何（P8 E1 变换层级 / 多物体），提前做只能在单一合成网格上验证，验收价值打折。启动时机 = P8 E1 验收通过之后；届时新建 worktree 并更新本文件与注册表（2026-11-09 方案变更**未改排期**）。
 **前置就绪现状**：编辑器结合所需的 `viewer --editor` ImGui 基建（材质图 T1，已合入 master）与 console cvar（M-C2，已合入 master）均已就位；E1a 内核已合入（`2d4ad49`），E1b 渲染集成进行中。
+
+> **2026-11-10 开工登记（排期闸解除）**：E1a+E1b 链已全量 merge 回 master（2026-11-09，tags `ecs-e0`~`ecs-e1b.5`），启动条件满足。用户指令开工，worktree `E:/UE_STUDY_2026/nl-engine-pathfinding`（分支 `feat/pathfinding`，起点 master `7fd867b`）已建，junction 共享 `.workbuddy` / `slang dist`；wt_pool 已 claim **M-N0**。本条更新后，上方「E1b 渲染集成进行中」为过时留痕，不再修改。
