@@ -23,6 +23,7 @@ bool     g_announced = false;
 uint64_t g_hwnd = 0;
 int      g_pid = 0;
 int      g_proto = 0;
+char     g_caps[128] = "";   // M-E4b：announce.caps 摘要（分辨率/后端）
 std::vector<std::string> g_log;
 
 void logf(const char* fmt, ...) {
@@ -68,12 +69,30 @@ int main() {
     g_host.onEngineReady = []() { logf("engine connected"); };
     g_host.onEngineClose = []() {
         g_announced = false;
+        g_caps[0] = '\0';   // M-E4b：掉线清 caps（重连后随新 announce 刷新）
         g_viewport.detach();   // M-E2：引擎进程死了，拆容器回落占位（崩溃隔离可见证据）
         logf("engine closed (crash-isolation: editor keeps running)");
     };
-    g_host.onEngineAnnounce = [&](uint64_t hwnd, int pid, int proto, const nl::editor::host::RpcValue&) {
+    g_host.onEngineAnnounce = [&](uint64_t hwnd, int pid, int proto, const nl::editor::host::RpcValue& caps) {
         g_hwnd = hwnd; g_pid = pid; g_proto = proto; g_announced = true;
         logf("engine announced hwnd=0x%llx pid=%d proto=%d", (unsigned long long)hwnd, pid, proto);
+        // M-E4b：caps 摘要（w/h/backend）进 Connection 面板
+        if (caps.isMap()) {
+            const auto& m = caps.asMap();
+            auto num = [&m](const char* k) -> long long {
+                auto it = m.find(k);
+                if (it == m.end()) return -1;
+                if (it->second.isInt()) return it->second.asInt();
+                if (it->second.isDouble()) return (long long)it->second.asDouble();
+                return -1;
+            };
+            std::string backend = "?";
+            auto bit = m.find("backend");
+            if (bit != m.end() && bit->second.isStr()) backend = bit->second.asStr();
+            snprintf(g_caps, sizeof g_caps, "%lldx%lld %s", num("w"), num("h"), backend.c_str());
+        } else {
+            g_caps[0] = '\0';
+        }
         // M-E2：编辑器主动 SetParent（§6 拍板）——建容器子窗挂引擎 HWND
         g_viewport.attachEngine(hwnd, glfwGetWin32Window(w));
     };
@@ -98,6 +117,7 @@ int main() {
                 ImGui::Text("engine hwnd : 0x%llx", (unsigned long long)g_hwnd);
                 ImGui::Text("engine pid  : %d", g_pid);
                 ImGui::Text("protocol    : %d", g_proto);
+                if (g_caps[0]) ImGui::Text("caps        : %s", g_caps);
                 ImGui::Text("embed       : %s", g_viewport.attached() ? "SetParent ok" : "pending");
             }
             ImGui::Text("heartbeat    : ping 2s / timeout 6s");

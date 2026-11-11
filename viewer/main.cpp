@@ -641,20 +641,42 @@ void registerGameConsole(nl::core::GameClock* clock) {
 // 连接失败 = 静默降级单机运行（编辑器是可选外挂，崩溃隔离：引擎照常自渲染）。
 struct EditorEmbed {
     nl::editor::RpcBridge bridge;
+    bool enabled = false;      // M-E4a：--editor-bridge 且非截图模式才启用泵/重连
     bool connected = false;
+    void* engineHwnd = nullptr;
     nl::core::OrbitCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
+    std::chrono::steady_clock::time_point nextRetry{};  // M-E4a：重连退避时间点
 
-    void start(void* engineHwnd) {
-        connected = bridge.connect("tcp://127.0.0.1:29110");
-        if (!connected) {
-            nl::core::log::info("editor bridge: no editor at 127.0.0.1:29110 -> standalone mode");
-            return;
-        }
+    void start(void* engineHwnd_, bool enable) {
+        engineHwnd = engineHwnd_;
+        enabled = enable;
+        if (!enabled) return;
         bridge.registerHandler("engine.echo",
                                [](const nl::editor::RpcValue& p) { return p; });
-        nl::editor::EmbedWindow::announce(bridge, engineHwnd,
-                                          static_cast<int>(::GetCurrentProcessId()), 1);
-        nl::core::log::info("editor bridge: connected, hwnd announced to editor");
+        tryConnect(/*first=*/true);
+    }
+
+    // M-E4a/M-E4b：连接 + announce（caps 带窗体像素尺寸与渲染后端名）。
+    // 连不上不再永久降级：pump() 每 2s 重试，编辑器后启/重启都能被接管。
+    void tryConnect(bool first = false) {
+        if (bridge.connect()) {
+            connected = true;
+            nl::editor::msgpack::Map caps;
+            RECT rc{};
+            if (engineHwnd && GetClientRect(static_cast<HWND>(engineHwnd), &rc)) {
+                caps["w"] = (std::int64_t)(rc.right - rc.left);
+                caps["h"] = (std::int64_t)(rc.bottom - rc.top);
+            }
+            caps["backend"] = std::string(NL_BACKEND_NAME);
+            nl::editor::EmbedWindow::announce(bridge, engineHwnd,
+                                              static_cast<int>(::GetCurrentProcessId()), 1,
+                                              nl::editor::RpcValue(std::move(caps)));
+            nl::core::log::info(std::string("editor bridge: connected, hwnd+caps announced (backend=")
+                                + NL_BACKEND_NAME + ")");
+        } else {
+            nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+            if (first) nl::core::log::info("editor bridge: no editor at 127.0.0.1:29110 -> standalone (retry every 2s)");
+        }
     }
 
     // M-E3：相机控制 handler（编辑器插件经 RPC 驱动引擎相机）。
@@ -701,8 +723,92 @@ struct EditorEmbed {
         });
     }
 
+    // M-E4d：场景树数据源。runScene 传 &objects（每帧原地刷新，指针即实时）；
+    // runNormal 传 nullptr（model 模式：单模型无实例表）。
+    std::vector<nl::renderer::SceneObjectDesc>* sceneObjects = nullptr;
+
+    void bindScene(std::vector<nl::renderer::SceneObjectDesc>* objs) {
+        sceneObjects = objs;
+        if (!camera) return;
+        // getState 两模式都注册：model 模式返回 mode="model" 空表，编辑器可优雅显示
+        bridge.registerHandler("scene.getState", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Array arr;
+            if (sceneObjects) {
+                arr.reserve(sceneObjects->size());
+                for (const auto& d : *sceneObjects) {
+                    nl::editor::msgpack::Map o;
+                    o["mesh"] = std::string(d.meshFile ? d.meshFile : "?");
+                    // 世界矩阵平移分量（列主序 m[12..14]）
+                    nl::editor::msgpack::Array pos;
+                    pos.push_back((double)d.world[12]);
+                    pos.push_back((double)d.world[13]);
+                    pos.push_back((double)d.world[14]);
+                    o["pos"] = nl::editor::RpcValue(std::move(pos));
+                    nl::editor::msgpack::Array tint;
+                    tint.push_back((double)d.tint[0]);
+                    tint.push_back((double)d.tint[1]);
+                    tint.push_back((double)d.tint[2]);
+                    o["tint"] = nl::editor::RpcValue(std::move(tint));
+                    o["rough"] = (double)d.roughness;
+                    o["metal"] = (double)d.metallic;
+                    arr.push_back(nl::editor::RpcValue(std::move(o)));
+                }
+            }
+            nl::editor::msgpack::Map m;
+            m["mode"]  = std::string(sceneObjects ? "scene" : "model");
+            m["count"] = (std::int64_t)(sceneObjects ? sceneObjects->size() : 0);
+            m["objects"] = nl::editor::RpcValue(std::move(arr));
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            m["dist"]  = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        if (!sceneObjects) return;   // model 模式：无实例表，focus 无意义
+        // 聚焦：把 orbit 相机对准对象方向（eye 落在 origin→P 射线上，距离取 |P|·2.5）。
+        // 相机恒看 origin，因此对准 = 让 eye 方向与 P 同向，对象近似画面中心。
+        bridge.registerHandler("scene.focus", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            auto field = [](const nl::editor::RpcValue& v, const char* k) -> double {
+                if (v.isMap()) {
+                    auto it = v.asMap().find(k);
+                    if (it != v.asMap().end() && it->second.isInt()) return (double)it->second.asInt();
+                    if (it != v.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                }
+                return -1.0;
+            };
+            const long long idx = (long long)field(p, "i");
+            if (idx < 0 || idx >= (long long)sceneObjects->size())
+                return nl::editor::RpcError{100, "scene.focus: bad index"};
+            const auto& d = (*sceneObjects)[(size_t)idx];
+            const float px = d.world[12], py = d.world[13], pz = d.world[14];
+            const float rXZ = std::sqrt(px * px + pz * pz);
+            const float len = std::sqrt(px * px + py * py + pz * pz);
+            if (len < 1e-4f)
+                return nl::editor::RpcError{100, "scene.focus: object at origin"};
+            constexpr float kPiF = 3.14159265358979323846f;
+            const float yawDeg   = std::atan2(px, pz) * 180.0f / kPiF;
+            const float pitchDeg = std::atan2(py, rXZ) * 180.0f / kPiF;
+            camera->setOrbit(yawDeg, pitchDeg, len * 2.5f);
+            nl::core::log::info("scene.focus[", (long long)idx, "] -> yaw=", yawDeg, " pitch=", pitchDeg, " dist=", len * 2.5f);
+            nl::editor::msgpack::Map m;
+            m["yaw"]  = (double)camera->yawDegrees();
+            m["pitch"]= (double)camera->pitchDegrees();
+            m["dist"] = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
+        });
+    }
+
     void pump() {
-        if (connected) bridge.update();   // 泵入站 + 心跳（编辑器挂了也照跑）
+        if (!enabled) return;
+        if (connected) {
+            bridge.update();   // 泵入站 + 心跳（编辑器挂了也照跑）
+            if (!bridge.isConnected()) {   // M-E4a：掉线转重连态，2s 后重试
+                connected = false;
+                nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+                nl::core::log::info("editor bridge lost -> will retry connect every 2s");
+            }
+        } else if (std::chrono::steady_clock::now() >= nextRetry) {
+            tryConnect();
+        }
     }
 };
 
@@ -732,7 +838,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     // 截图回归模式不启用（隐藏窗口 + 定帧退出，嵌入无意义）。
     EditorEmbed edEmbed;
-    if (o.editorBridge && !o.screenshot) edEmbed.start(window.nativeHandle());
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot);   // M-E4a：enabled 内部判定，pump 统一重试
 
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
@@ -943,6 +1049,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（normal 模式）
+    edEmbed.bindScene(nullptr);           // M-E4d：model 模式（无实例表，getState 返回 mode=model）
     // M-D3: drive CVars + gates. Registered BEFORE --console-exec so
     // "vehicle.throttleScale 0.5" / "vehicle.debug true" work at startup.
     bool driveHudOn = o.driveHud;
@@ -1951,7 +2058,7 @@ int runScene(const Options& o) {
 
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     EditorEmbed edEmbed;
-    if (o.editorBridge && !o.screenshot) edEmbed.start(window.nativeHandle());
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot);   // M-E4a：enabled 内部判定，pump 统一重试
 
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
@@ -2053,6 +2160,7 @@ int runScene(const Options& o) {
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
+    edEmbed.bindScene(&objects);          // M-E4d：场景树数据源（每帧原地刷新）
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;

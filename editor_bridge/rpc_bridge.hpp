@@ -29,6 +29,7 @@ public:
     bool connect(const std::string& endpoint = "tcp://127.0.0.1:29110");
     void update();               // 必须由引擎主循环每帧调用：泵入站 + 心跳
     void shutdown();
+    bool isConnected() const;    // M-E4a：心跳超时/对端关闭后转 false（供上层重连判定）
 
     // 注册引擎侧可被执行的方法（编辑器 → 引擎调用，如 engine.echo）
     void registerHandler(std::string_view method, HandlerFn);

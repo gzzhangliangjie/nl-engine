@@ -110,6 +110,8 @@ bool RpcBridge::connect(const std::string& endpoint) {
         WSADATA wsa; if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
         i.wsainit = true;
     }
+    // M-E4a 重连前置：心跳超时路径只置 connected=false 不关 socket，先清掉旧句柄
+    if (i.sock != INVALID_SOCKET) { closesocket(i.sock); i.sock = INVALID_SOCKET; }
     i.sock = socket(AF_INET, SOCK_STREAM, 0);
     if (i.sock == INVALID_SOCKET) return false;
     sockaddr_in addr{};
@@ -210,5 +212,7 @@ void RpcBridge::shutdown() {
     i.connected = false;
     if (i.wsainit) { WSACleanup(); i.wsainit = false; }
 }
+
+bool RpcBridge::isConnected() const { return impl_->connected && impl_->sock != INVALID_SOCKET; }
 
 } // namespace nl::editor

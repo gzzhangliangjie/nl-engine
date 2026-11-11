@@ -171,5 +171,28 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 - SendInput 点击验收：编辑器可能被其他前台窗口盖住（本次实发：WorkBuddy 聊天窗在上层，首轮点击点进了别人窗口）——必须 SetForegroundWindow + 每次点击后核验 `GetForegroundWindow()==hwnd` 再动手。
 
 **待办**
-- M-E4 候选（EDITOR-PLAN §4 未排期项）：场景树/材质检查插件、bridge 周期重连、焦点路由实测、announce.caps 填充。
+### 2026-11-11 — M-E4 四件套：重连 + caps + 焦点路由 + 场景树插件（feat/editor worktree）
+
+**产物**
+- `editor_bridge/rpc_bridge.{hpp,cpp}`：`connect()` 重连前置关陈旧 socket（心跳超时路径只置位不关句柄）；新增 `isConnected()`。
+- `viewer/main.cpp`（EditorEmbed）：① M-E4a 周期重连——`enabled` 成员内部判定，`pump()` 掉线后 2s 退避重试，连不上保持单机零开销，编辑器后启/重启都能被接管；② M-E4b caps——announce 填窗体像素尺寸（GetClientRect）+ 后端名（编译定义 `NL_BACKEND_NAME` 注入，viewer/CMakeLists）；③ M-E4d `bindScene`——`scene.getState`（两模式都注册，model 模式返回 mode="model" 空表）+ `scene.focus`（orbit 相机 eye 落 origin→P 射线：yaw=atan2(px,pz)、pitch=atan2(py,rXz)、dist=|P|·2.5；越界/原点返回 error 100）。
+- `editor/main.cpp`：Connection 面板新增 `caps : WxH BACKEND` 行（onEngineAnnounce 解析 + onEngineClose 清除）。
+- `editor/plugin.cpp`：`SceneOutlinerPlugin`（Refresh/自动拉取 + 4 列实例表 + 行点击 scene.focus）；连接后首帧自动 getState（掉线重连后 have_ 被清也会自动再拉）。
+- `tools/m-e4-probe.py`：python 假编辑器 server 跨进程机械验收（M-E3 探针骨架扩展 fixarray 解码 + caps 断言）。
+
+**验收（双段全过）**
+- 段1 跨进程探针 `tools/m-e4-probe.py`：**18 断言 0 fail**——caps w/h=1280x720 + backend=DX12；scene.getState 5 实例 mesh/pos/tint/rough/metal 齐全、位置非退化；scene.focus[0]（P=(-4,0,0)）→ yaw=-90/pitch=0/dist=10 与理论值精确一致、getState 回读一致；focus[99]/focus[-1]/scene.bogus → error 100。实机还复验了 M-E4a 重连全链路：viewer 先启报 "standalone (retry every 2s)" → 编辑器 5s 后启动 → "connected, hwnd+caps announced"。
+- 段2 编辑器 UI：PrintWindow 截图——Connection 面板 `caps : 1280x720 DX12`；Scene Outliner 自动填充 `mode: scene objects: 5` + 5 行实例表（数据与探针一致）+ 行点击提示行。行点击 focus 的 UI 侧链路与 M-E3 CameraPlugin 同代码路径（SendInput 实点已证），本轮因用户实机占用焦点未再强抢，RPC 层由探针覆盖。
+
+**M-E4c 焦点路由实测（PASS）**
+- SendInput 在视口内拖拽（dx=+50, dy=+25）→ 引擎 HUD yaw 12.0→58.1（含两次拖拽累积）、Suzanne 可见旋转——**视口内点击/拖拽引擎窗直收鼠标**（Win32 子窗激活语义正常）；编辑器面板输入 M-E3 已证。键盘跟随同一激活模型，未单独测。
+
+**踩坑**
+- `nl::core::log::info` 非 printf 风格（"%s" 原样打印、参数被拼接输出）——带格式串要自己拼 string 再传。
+- ImGui 后端在窗口**未聚焦**时忽略 PostMessage 直投的 WM_MOUSEMOVE/WM_LBUTTONDOWN（合成点击不生效）；SendInput+SetForegroundWindow 会抢用户焦点——用户实机操作期间应改用「插件自动刷新 + PrintWindow 免焦点截图」验证，勿再强抢焦点。
+- imgui.ini 面板布局持久化：面板 z 序 = ini 文件内条目顺序（越靠后越高），被 Viewport 盖住的调试面板挪到文件尾即可置顶；面板尺寸/位置也直接改 ini 比手点稳。
+- `ImGuiChildFlags_Borders`：vendored imgui 1.91.9 支持（1.90 改名后），直接可用。
+
+**待办**
+- 后续候选：材质检查插件（scene.getState 已带 rough/metal，缺 texture/材质树接口）、动态扫描 plugins/ 目录加载、RPC 管道传输（§15）、多视口。
 - 体验缺口（已识别、未排期，做 M-E3 时拍板）：引擎先启/编辑器后启时 `--editor-bridge` 只连一次失败即永久降级单机，无周期重连；跨进程嵌入后的键盘/鼠标焦点路由未实测；`announce.caps` 仍空（分辨率/后端元信息预留位）。
