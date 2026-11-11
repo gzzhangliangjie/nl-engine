@@ -157,6 +157,17 @@ struct DriveDebugUi {
     int  lineCount = 0;
 };
 
+// M-TR0 (P8-TRACY-PLAN K1/K5/K2): standalone profiling stats window.
+// SAME DEFAULT-OFF discipline as DriveDebugUi / InputDebugUi: show=false draws
+// nothing, so all existing --hud baseline PNGs stay byte-identical (no kStage
+// bump, no re-shoot). ASCII-only POD lines; viewer fills them from DeviceInfo.
+struct ProfilingDebugUi {
+    bool show = false;
+    enum { kMaxLines = 6, kLineChars = 96 };
+    char lines[kMaxLines][kLineChars] = {};
+    int  lineCount = 0;
+};
+
 struct HudFrame {
     // ---- viewer -> HUD（显示数据）----
     float fps          = 0.0f;
@@ -287,6 +298,7 @@ struct HudFrame {
     // ImGui 符号封在 renderer/src/input_debug.cpp）----
     InputDebugUi inputDebug;
     DriveDebugUi driveDebug;
+    ProfilingDebugUi profilingDebug;   // M-TR0：默认关的独立性能统计窗口
 };
 
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。
@@ -357,6 +369,9 @@ struct DeviceInfo {
     float lastGpuMs = 0.0f;
     // M-E1b.0：ECS 场景实例数（--scene 模式非零；backend 每帧 poll 时从 scene_ 拷）。
     std::uint32_t instanceCount = 0;
+    // M-TR0：Scene::draw 主路径本帧提交的图形 draw call 数（含 initCluster 单批
+    // 兜底；不含 compute dispatch 与 ImGui UI，口径见 P8-TRACY-PLAN §2.5 K1）。
+    std::uint32_t drawCalls = 0;
     // M-PT0：粒子叠加层活粒子数（backend 每帧 poll 时从 scene_ 拷；--particles
     // 关闭时恒 0——viewer 据此给 HUD 喂数与打稳态日志锚点）。
     int particleAlive = 0;

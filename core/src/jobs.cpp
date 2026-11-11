@@ -3,6 +3,7 @@
 // （parallelFor 用 Impl.pending，scope 用 Scope<T>::State.pending），worker 只负责取任务执行。
 
 #include "nl/core/jobs.hpp"
+#include "nl/core/profiler.hpp"   // M-TR0：worker 线程命名 + job 执行 zone（OFF 空转）
 
 #include <algorithm>
 #include <chrono>
@@ -57,6 +58,7 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::workerLoop() {
+    NL_PROFILE_THREAD("JobWorker");   // M-TR0：worker 线程命名（时间线可读）
     Impl& im = *impl_;
     for (;;) {
         std::function<void()> task;
@@ -70,6 +72,7 @@ void ThreadPool::workerLoop() {
         // 任务闭包自含计账与异常处理（parallelFor/scope 各自管各自的计数）；
         // worker 层兜底吞异常防池死亡（正常路径不应到达）。
         try {
+            NL_PROFILE_ZONE("job.task");   // M-TR0：单个 job 执行段
             task();
         } catch (...) {
         }

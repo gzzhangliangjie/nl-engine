@@ -88,7 +88,7 @@
 
 | # | 数据 | 现状 | 定稿归属 |
 |---|---|---|---|
-| K1 | **drawCall 计数**（CPU 提交侧，draw 主路径计数器，含 initCluster 单批兜底） | 无 | **随 M-TR0**（惯例内机械执行，M4.1/M5.2 加字段先例；HUD 面板高≤560 内加行） |
+| K1 | **drawCall 计数**（CPU 提交侧，scene.cpp 全部 `cmd->draw*` 调用点计数，含 initCluster 单批兜底；不含 compute dispatch / ImGui UI） | 无 | **随 M-TR0**：⚠️ **实施形态修正**——不往常驻 HUD 面板加行（那会让 70 张既有 `--hud` 基线全量重拍，与本轨道「不 bump kStage」冲突），改为 `--profiling-hud` 默认关的**独立窗口**（DriveDebugUi / InputDebugUi 同款 add-on 先例，show=false 零布局）。计数在 backend `recordFrame` 帧开始清零、HUD 绘制后写入 `DeviceInfo.drawCalls` |
 | K2 | **进程内存占用**（PSAPI `GetProcessMemoryInfo` working set / private bytes，零图形依赖、双后端对称） | 无 | **随 M-TR1**：与 Tracy memory 曲线互补（Tracy 离线归因，HUD 常驻速览） |
 | K3 | **GPU 显存占用** | 无 | **本轮不做**（Q5 c）：DX12 DXGI / Vulkan `VK_EXT_memory_budget` 不对称，留到真需要时单独拍板；K2 先顶 |
 | K4 | **per-pass GPU 拆分**（GI / shadow / present 前后各自成段；目前只有整帧 + cull 两段） | 部分 | **不进本轨道**——S12/S13 性能验收需要时按 L2 惯例扩 timer 段 |
@@ -111,19 +111,32 @@
    - core job system worker 循环 + job 执行体 `ZoneScopedN`。
 4. **线程命名**：主线程 / job worker / 音频等用 `tracy::SetThreadName` 全部命名——不命名时间线上全是 Thread N，没法读（job worker 数量动态，worker 内命名随创建走）。
 5. Zone/线程命名全 ASCII（沿用 HUD 字符串约定）。
+6. **HUD K1/K5 展示**：`--profiling-hud` 默认关的独立窗口 `ProfilingDebugUi`（3 行：draw calls / instances / triangles），由 `DeviceInfo` 供数；`show=false` 时零布局，既有 `--hud` 基线逐字节不动。埋点薄封装 `core/include/nl/core/profiler.hpp`（`NL_PROFILE_*`，OFF 时连第三方头都不 include）。
 
 **验收判据（亲眼可见）**：
 - `NL_TRACY=ON` 构建 viewer 跑起来 → tracy-profiler GUI 连上，看到帧序列 + 各 zone 时间线 + **命名后的 job 线程分布**（截图留档）；首次运行 Windows 防火墙弹窗（client 监听 TCP 8086）属于预期，放行 localhost 即可；
 - `NL_TRACY=OFF`（默认）构建：行为零差异——`regression.py --only` 挑 2~3 条关键用例过；`grep TRACY_ENABLE` 确认 OFF 时未定义。
 
+**实施记录（2026-11-11，commit 见 feat/profiling，tag `tracy-m0`）**：
+- 代码面全部落地：vendored `thirdparty/tracy/public/` 子集 + `LICENSE` + `VENDOR.md`；GUI 解压落位 `.build-tools/tracy-gui/0.15.0/`；根 CMake 增 `nl_profiler` INTERFACE 目标 + 条件 `tracy_client` 静态库 + `option(NL_TRACY OFF)`；`core/include/nl/core/profiler.hpp` 薄封装 `NL_PROFILE_{FRAME,ZONE,THREAD}`（OFF 连第三方头都不 include）；viewer 主循环 `FrameMark`(present 处)/`ZoneScopedN`/`SetThreadName`、renderer 帧提交段、`jobs.cpp` worker 循环 + job 执行体埋点；`Scene::draw` 主路径 `noteDraw()` 计数 → 后端每帧清零/读入 `info_.drawCalls`；`--profiling-hud` 默认关的独立窗口 `ProfilingDebugUi`（draw calls / instances / triangles 三行）。
+- **构建验证（真实 exit code，非 `| tail` 掩盖）**：
+  - `build/DX12`（OFF）：configure + build viewer = **0** ✓
+  - `build/VULKAN`（OFF）：configure + build viewer = **0** ✓（首跑因 kill 残留半截 `gltf_anim.cpp.obj` 报 `LNK1136`，删损坏 obj 后重编通过，非代码问题）
+  - `build/DX12-TRACY`（`-DNL_TRACY=ON`）：configure + build viewer = **0** ✓（证明 TracyClient.cpp 编译链接、`TRACY_ENABLE` 经 `nl_profiler` PUBLIC 传播到 renderer/viewer、`FrameMark`/`ZoneScopedN`/`SetThreadName` 全部解析）
+- **构建期两处 bug 已就地修复**：
+  1. `noteDraw()` 是 `Scene` 成员，Python 批量插入时误放进 `DebugLines::draw` 与粒子类（非 Scene 作用域）→ 编译 `找不到标识符`；移除那两处，K1 只计 Scene 主路径（debug 线框/粒子补充绘制不计入，M-TR2 可再细化）。
+  2. 初版只把 `nl_profiler` 链进 `nl_core`，漏了 `nl_renderer`/`viewer` → ON 构建下这两侧 TU 的 `NL_TRACY` 不定义、宏全空转（等于开了也不埋点）；已显式补进两处 `target_link_libraries`。
+- **运行时验收被环境阻断（非代码问题，待用户在干净机器补验）**：本沙箱拉起 `viewer.exe` 任何形态（`--help` 亦同）均秒退 `0xC0000409`（3221225781）、零输出——属工作记忆记载的 **ArmouryCrate 生态 DLL 注入干扰**（LightingService 残余），进程极早期即崩，与本次改动无关（我的埋点代码不经过启动路径）。故 `regression.py --only` 与 ON 构建连 GUI 两项运行时判据**无法在此沙箱执行**，需在无 ArmouryCrate 注入的环境复跑：① OFF 构建 `regression.py --only` 2~3 条；② ON 构建起 viewer + tracy-profiler GUI 连上看到时间线。
+- 过程纪律：`| tail` 会吞掉 cmake 真实退出码（曾误报 0），后续一律 `> log 2>&1; echo EXIT=$?`；改 CMake 链接面后三棵树均重配（M-N6 实锤）。
+
 ### M-TR1 内存占用 + 泄漏检查
 
 **做什么**：
-1. 内存钩子：编 `client/TracyOverride.cpp`（全局 `operator new/delete` 钩子，一把覆盖全进程含 STL）——对应 bevy `trace_tracy_memory` 同款思路。
-2. **覆盖口径**：Tracy memory 只覆盖 **CPU 侧分配**（经过全局 new/delete 的部分）；NVRHI 显存/堆分配不经过全局 new 的不在此列——这正是 §2.5 K3「显存占用」是另一口径的原因，两者不混。
+1. 内存钩子：**引擎侧薄封装** `core/src/profiler_memory.cpp`（仅 `NL_TRACY=ON` 编入），自定义全局 `operator new/delete`（含 aligned 版），内部 `malloc/free` + `TracyAllocS(ptr,size,16)` / `TracyFreeS(ptr,16)` 上报（显式 depth 才有调用栈，`TRACY_CALLSTACK` 默认 0）。⚠️ **实测更正（2026-11-11 vendoring 时）**：Tracy **0.15 不自带全局 new/delete 钩**——`public/client/TracyOverride.cpp` 只剩 Linux `dlclose` 覆盖，全 `public/` 内 `operator new` 零命中；原计划的「编 TracyOverride.cpp」是旧版印象，作废。上游伞形 `TracyClient.cpp` 已含该文件，无需单独编译。见 `thirdparty/tracy/VENDOR.md`「0.15 实测要点」。
+2. **覆盖口径**：新/delete 钩覆盖 CPU 侧经全局分配器的部分（含 STL）；**NVRHI 显存/堆分配不经过全局 new 的不在此列**——这正是 §2.5 K3「显存占用」是另一口径的原因，两者不混。
 3. 泄漏口径：进程退出时的**存活分配残留清单**即泄漏候选（Tracy Memory 面板按调用栈归因）；Windows callstack 归因走 dbghelp（PDB 在旁即带行号，同 ASan 手册经验）。
 4. 分工写死：Tracy memory = 运行期曲线 + 退出残留归因；**CRT debug heap（`_CrtSetDbgFlag`）保留为兜底**——MSVC ASan 无 LSan 是本项目实测（`docs/ASAN-DIAGNOSIS.md` §4），Tracy 也不能替代双保险，只是主通道换 Tracy。
-5. 纪律核对：Tracy 0.15 文档明确 memory 上报需在锁内进行（release notes 实录），operator new 钩子路径本身满足；job 多线程分配归因到线程。
+5. 纪律核对：Tracy 0.15 文档明确 memory 上报需在锁内进行（release notes 实录）；job 多线程分配归因到线程。
 
 **验收判据**：
 - GUI Memory 面板看到实时分配/释放曲线（截图）；
@@ -167,7 +180,7 @@
 ## 6. 风险与坑
 
 1. **协议版本漂移**：GUI/client 成对升级，VENDOR.md 记死配对版本。
-2. **全局 new/delete 钩的重入**：TracyOverride 钩内不得触发再分配路径（库内已处理；我们侧禁止在全局 new 钩外再包一层分配）。job system 自有分配器若绕过全局 new，需逐个补 `TracyAlloc` 点——M-TR1 实测时核对。
+2. **全局 new/delete 钩的重入（自实现，非上游）**：`profiler_memory.cpp` 内上报路径不得再触发分配（只调 `malloc/free` + Tracy 的 MemAlloc/MemFree，禁止构造 std:: 容器 / 拼字符串）；job system 自有分配器若绕过全局 new，需逐个补 `TracyAllocS` 点——M-TR1 实测时核对。
 3. **退出残留 ≠ 全是真泄漏**：单例/静态池的存活分配（如世界缓存 GPU flat hashmap 的 CPU 侧）会出现在残留清单，需要人工分辨「有意存活」；TOOLS-GUIDE 里给白名单口径。
 4. **0.15 新行为**：memory 事件归因到虚拟 fiber 线程（release notes）——多线程分配归因读数时注意口径变化。
 5. **ON 构建的样本开销**：zone 埋点有纳秒级开销，性能基准（S4 沿用的基准）一律 OFF 构建跑，避免把探针开销算进基线。

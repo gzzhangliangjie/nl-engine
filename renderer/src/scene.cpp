@@ -2210,6 +2210,7 @@ bool Scene::blitRtToHdr(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewpor
     pstate.viewport.addViewportAndScissorRect(viewport);
     cmd->setGraphicsState(pstate);
     nvrhi::DrawArguments vargs; vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(vargs);
     return true;
 }
@@ -2249,6 +2250,7 @@ bool Scene::presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     pstate.viewport.addViewportAndScissorRect(viewport);
     cmd->setGraphicsState(pstate);
     nvrhi::DrawArguments vargs; vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(vargs);
     return true;
 }
@@ -3011,6 +3013,7 @@ bool Scene::presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
     cmd->setGraphicsState(pstate);
     nvrhi::DrawArguments vargs;
     vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+    noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(vargs);
     return true;
 }
@@ -3171,6 +3174,7 @@ void Scene::drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
     cmd->setGraphicsState(pstate);
     nvrhi::DrawArguments vargs;
     vargs.setVertexCount(4);
+    noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(vargs);
 }
 
@@ -3726,6 +3730,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         vstate.viewport.addViewportAndScissorRect(viewport);
         vstate.setIndirectParams(indirectArgs_);
         cmd->setGraphicsState(vstate);
+        noteDraw();  // M-TR0 K1: draw-call counter
         cmd->drawIndexedIndirect(0, 1);
         // 本帧矩阵存为上一帧（下一帧 velocity 的 prev 侧；首帧已初始化 = 本帧）。
         std::memcpy(probePrevViewProj_, params.viewProj, sizeof(probePrevViewProj_));
@@ -4203,6 +4208,7 @@ void Scene::drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     nvrhi::DrawArguments args;
     args.setVertexCount(4)          // triangle-strip quad
         .setInstanceCount(total);
+    noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(args);
     // atlas ping-pong 翻面：本帧 cur 变下一帧 prev（Q10-2）。
     probeParity_ ^= 1u;
@@ -5951,6 +5957,7 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
+    // M-TR0 K1: reset happens in backend recordFrame (frame start).
 
     // M8.2：rt 模式——不走光栅化路径，compute RayQuery 调试射线 + 全屏呈现
     //（buildTlasFrame 已在 recordFrame 里先记录，同列表顺序保证射线打本帧 TLAS）。
@@ -6053,6 +6060,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     nvrhi::DrawArguments args;
                     args.setVertexCount(b.indexCount)
                         .setInstanceCount(b.instanceCount);
+                    noteDraw();  // M-TR0 K1: draw-call counter
                     cmd->drawIndexed(args);
                 }
             }
@@ -6099,6 +6107,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             nvrhi::DrawArguments args;
             args.setVertexCount(b.indexCount)          // drawIndexed 复用 vertexCount 表示索引数
                 .setInstanceCount(b.instanceCount);
+            noteDraw();  // M-TR0 K1: draw-call counter
             cmd->drawIndexed(args);
         }
         instanceTrackSRV_ = true;   // 本列表末态 = SRV（所有绑定 require 已插 barrier）
@@ -6168,6 +6177,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 rstate.viewport.addViewportAndScissorRect(viewport);
                 rstate.setIndirectParams(indirectArgs_);
                 cmd->setGraphicsState(rstate);
+                noteDraw();  // M-TR0 K1: draw-call counter
                 cmd->drawIndexedIndirect(0, 1);
 
                 // (5) reference ? 离线参考 : shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
@@ -6190,6 +6200,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     cmd->setGraphicsState(mstate);
                     nvrhi::DrawArguments margs;
                     margs.setVertexCount(3);   // 覆盖屏的大三角形
+                    noteDraw();  // M-TR0 K1: draw-call counter
                     cmd->draw(margs);
                     // M10.0：probe-place 的 velocity prepass + cascade 布点
                     //（matResolve 之后——布点读的是本帧几何已经画完的状态；
@@ -6238,6 +6249,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     cmd->setGraphicsState(vstate);
                     nvrhi::DrawArguments vargs;
                     vargs.setVertexCount(3);   // 覆盖屏的大三角形
+                    noteDraw();  // M-TR0 K1: draw-call counter
                     cmd->draw(vargs);
                     // T0 T2：HDR → swapchain 直通合成（同 pulling 分支口径）。
                     if (t0Active) {
@@ -6412,6 +6424,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     pstate.viewport.addViewportAndScissorRect(viewport);
                     pstate.setIndirectParams(indirectArgs_);
                     cmd->setGraphicsState(pstate);
+                    noteDraw();  // M-TR0 K1: draw-call counter
                     cmd->drawIndexedIndirect(0, 1);
 
                     // 金字塔逐级 min：每级一版 HizConstants（src/tgt 尺寸）+ 一组绑定。
@@ -6468,6 +6481,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         state.viewport.addViewportAndScissorRect(viewport);
         state.setIndirectParams(indirectArgs_);
         cmd->setGraphicsState(state);
+        noteDraw();  // M-TR0 K1: draw-call counter
         cmd->drawIndexedIndirect(0, 1);
 
         // M6.0：右下角 160x160 层级可视化覆盖层（只读金字塔，近亮远暗）。
@@ -6490,6 +6504,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->setGraphicsState(vstate);
             nvrhi::DrawArguments vargs;
             vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
+            noteDraw();  // M-TR0 K1: draw-call counter
             cmd->draw(vargs);
         }
         // T0 T2：HDR 场景色 → swapchain 直通合成（HUD/overlay 在其后叠加）。
@@ -6598,6 +6613,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         cmd->setGraphicsState(state);
         nvrhi::DrawArguments args;
         args.setVertexCount(indexCount_);   // drawIndexed 复用 vertexCount 字段表示索引数
+        noteDraw();  // M-TR0 K1: draw-call counter
         cmd->drawIndexed(args);
         // T0 T2：HDR 场景色 → swapchain 直通合成（单批兜底路径出口）。
         if (t0Active) {
@@ -6625,6 +6641,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         nvrhi::DrawArguments args;
         args.setVertexCount(b.indexCount)   // drawIndexed 复用 vertexCount 表示索引数
             .setStartIndexLocation(b.startIndex);
+        noteDraw();  // M-TR0 K1: draw-call counter
         cmd->drawIndexed(args);
     }
     // T0 T2：HDR 场景色 → swapchain 直通合成（per-prim 批次路径出口）。

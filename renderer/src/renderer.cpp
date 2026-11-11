@@ -1,5 +1,6 @@
 #include "nl/renderer/renderer.hpp"
 #include "backend.hpp"
+#include "nl/core/profiler.hpp"   // M-TR0：renderer 帧提交 zone（OFF 空转）
 
 #include <cstdint>
 #include <cstring>
@@ -252,7 +253,11 @@ bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
     resolved.clearColor[1] = color.g;
     resolved.clearColor[2] = color.b;
     resolved.clearColor[3] = color.a;
-    const bool ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, impl_->error);
+    bool ok = false;
+    {
+        NL_PROFILE_ZONE("backend.renderFrame");   // M-TR0：renderer 帧提交关键段
+        ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, impl_->error);
+    }
     // M4.1：剔除统计（visibleClusters）由 backend 每帧 poll 后更新，回拷进
     // Renderer 缓存的 DeviceInfo，viewer 的 const 引用才能看到最新值。
     if (ok) impl_->info = impl_->backend->info();

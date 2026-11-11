@@ -10,6 +10,7 @@
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
+#include "nl/core/profiler.hpp"    // M-TR0：NL_PROFILE_* 薄封装（OFF 空转）
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
@@ -130,6 +131,7 @@ struct Options {
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
+    bool profilingHud = false; // M-TR0：--profiling-hud（默认关的独立性能统计窗口 K1/K5）
     std::string cameraMode = "orbit";   // P8 M-CAM b-segment：初始相机模式 orbit|free|chase|track
     std::string cameraTrack;            // --camera-track <file>：track 模式轨迹 tsv
     int  inputDemoStart = 5;  // 脚本起始迭代号（1-based；W@start D@+1 Space@+2 Esc@+3）
@@ -449,6 +451,8 @@ Options parseArgs(int argc, char** argv) {
             o.driveDemo = true;
         } else if (a == "--drive-hud") {
             o.driveHud = true;
+        } else if (a == "--profiling-hud") {
+            o.profilingHud = true;   // M-TR0：独立性能统计窗口，默认关
         } else if (a == "--size" && i + 1 < argc) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
@@ -1080,6 +1084,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool inputHudMode = false, bool rtMode = false,
               bool shadowMode = false, bool referenceMode = false,
               bool probeMode = false) {
+    NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
@@ -1900,6 +1905,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     bool demoHeld[4] = {};
 
     while (!window.shouldClose()) {
+        NL_PROFILE_ZONE("viewer.frame");   // M-TR0：整帧 zone
         window.pollEvents();
         edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         syncCameraToCVar();   // M-C2：相机实际值回写 cam.fov/cam.dist（滚轮 zoom / reset 后不陈旧）
@@ -2274,7 +2280,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                           vehicleCVars.steerScale->value().f);
             hud.driveDebug.lineCount = n;
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) {
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
             if (inputHud) {
                 // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
@@ -2358,6 +2364,20 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             hud.distance = camera.distance();
             hud.backend = st.backend;
             hud.adapter = info.adapterName.c_str();
+            // M-TR0 K1/K5：默认关的独立性能统计窗口（--profiling-hud）。
+            // 只开此窗口时藏掉常驻 HUD 面板，避免 --hud 基线与本开关耦合。
+            if (o.profilingHud) {
+                auto& pd = hud.profilingDebug;
+                pd.show = true;
+                pd.lineCount = 3;
+                std::snprintf(pd.lines[0], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "draw calls : %u", info.drawCalls);
+                std::snprintf(pd.lines[1], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "instances  : %u", info.instanceCount);
+                std::snprintf(pd.lines[2], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "triangles  : %u", info.triangleCount);
+                if (!o.hudEnabled) hud.panelShow = false;
+            }
             hud.debugLayer = info.debugLayer.c_str();
             hud.mode = nl::core::modeName(o.mode);
             hud.stage = st.stage;
@@ -2489,12 +2509,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) ? &hud : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
+        NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         // M-PT0：稳态机械证据——最终帧的活粒子数（固定步长下 = 帧号的纯函数；
         // run.bat 断言落在发射率×平均寿命的理论区间 [rate*lifeMin, rate*lifeMax]）。
         // M-PT1：--nfx 时锚点换 nfx 标记（rate/life 从资产读，数值进 .nfx 内容）。
@@ -2530,7 +2551,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {   // 帧跑了才消费控件写回
             // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
             if (inputHud) {
                 reqState[0] = hud.inputDebug.reqW;
@@ -2815,6 +2836,7 @@ static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
 // SceneObjectDesc / SceneLightDesc，sceneMode=true 的 Renderer + loadEcsScene。
 // ---------------------------------------------------------------------------
 int runScene(const Options& o) {
+    NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     // ---- 1. 读场景文件 + World 反序列化 ----
     const std::string& scenePath = o.scenePath;
     if (scenePath.empty()) { nl::core::log::errorCh("viewer", "--scene: path is empty"); return 2; }
@@ -3072,7 +3094,7 @@ int runScene(const Options& o) {
                             " | fixed dt=1/60");
     }
 
-    const bool hudOn = o.hudEnabled;
+    const bool hudOn = o.hudEnabled || o.profilingHud;   // M-TR0：独立性能窗口
     // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
     // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
     float camDist = o.distance;
@@ -3333,6 +3355,7 @@ int runScene(const Options& o) {
     double dtMaxMs = 0.0;
 
     while (!window.shouldClose()) {
+        NL_PROFILE_ZONE("viewer.frame");   // M-TR0：整帧 zone
         window.pollEvents();
         edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         if (window.keyPressed(nl::core::Key::Escape)) {
@@ -3558,6 +3581,20 @@ int runScene(const Options& o) {
             hud.distance = camera.distance();
             hud.backend = st.backend;
             hud.adapter = info.adapterName.c_str();
+            // M-TR0 K1/K5：默认关的独立性能统计窗口（--profiling-hud）。
+            // 只开此窗口时藏掉常驻 HUD 面板，避免 --hud 基线与本开关耦合。
+            if (o.profilingHud) {
+                auto& pd = hud.profilingDebug;
+                pd.show = true;
+                pd.lineCount = 3;
+                std::snprintf(pd.lines[0], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "draw calls : %u", info.drawCalls);
+                std::snprintf(pd.lines[1], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "instances  : %u", info.instanceCount);
+                std::snprintf(pd.lines[2], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "triangles  : %u", info.triangleCount);
+                if (!o.hudEnabled) hud.panelShow = false;
+            }
             hud.debugLayer = info.debugLayer.c_str();
             hud.mode = camera.modeName();       // P8 M-CAM b-segment：显示当前相机模式（orbit/free/chase/track）
             hud.stage = st.stage;
@@ -3589,6 +3626,7 @@ int runScene(const Options& o) {
             break;
         }
         renderer->drainMessages();
+        NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         if (capturePath) {
             ++screenshotsSaved;
             nl::core::log::infoCh("viewer", "screenshot written: ", capturePath);
@@ -3788,6 +3826,7 @@ void printUsage() {
               << "                                     M-D3 drive training ground; --drive-demo =\n"
               << "                                     deterministic frame-indexed input script\n"
               << "  viewer.exe --drive-hud             M-D3 separate drive debug window (default off)\n"
+              << "  viewer.exe --profiling-hud         M-TR0 separate perf stats window (default off)\n"
               << "                                     CVars: vehicle.throttleScale / steerScale / debug\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"
               << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"

@@ -500,6 +500,19 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::End();
     }
+    // M-TR0: standalone profiling stats window (--profiling-hud, DEFAULT OFF).
+    // Same additive-sibling placement as drive/input-debug windows: bottom-left
+    // clear of the resident HUD; fixed pos+size keeps screenshot bytes stable.
+    // With the gate off it draws nothing, so no existing baseline moves.
+    if (frame.profilingDebug.show) {
+        ImGui::SetNextWindowPos(ImVec2(14.0f, 330.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(300.0f, 124.0f), ImGuiCond_Always);
+        if (ImGui::Begin("Profiling (M-TR0)", nullptr)) {
+            for (int i = 0; i < frame.profilingDebug.lineCount; ++i)
+                ImGui::TextUnformatted(frame.profilingDebug.lines[i]);
+        }
+        ImGui::End();
+    }
     ImGui::Render();
 
     frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;
