@@ -14,7 +14,7 @@
 - S0~S7 收官（tag `s7-done`，全量 468/468）；M7.2 多材质 = NSUB 尾段 + GPUMaterial 间接表。
 - M8.0 BLAS（tag `s8-blas`）：⚠️ AS build 上传+setBufferState+build 必须同命令列表。M8.1 TLAS 每帧重建（tag `s8-tlas`）：⚠️ DX12 帧命令列表必须常驻 `frameCmd_` 成员（per-frame 局部句柄析构 → CORRUPTION #921 仅 ODS 可见）；Vulkan 帧列表保持 per-frame 新建——两后端语义不对称，勿顺手统一。
 - M9.0~M9.2 收官（tags `s9-gbuffer`/`s9-shadow`/`s9-done` @ `a8c255c`）：GBuffer / shadow ray / reference 真值图，S9 全收官。`kStage` 仍 S8.2；Q4 冻结：不新增独立 GBuffer 纹理 / MRT / 落盘 UAV，Q4 与 S10/S12 历史帧一起拍。
-- 下一站 **S11 探针弹射 / S12 历史帧**（M10.3 已收官 tag `s10-done`）。已 merge 回 master：physics / audio / ECS / job-system / console / material-graph / action-system / pbr-direct / game-loop / pathfinding(M-N0) / drive / input / camera / editor。
+- **S11 M11.0 GPU flat hashmap 世界缓存已收官**（tag `s11-hash` @ `5722c1c`，已随 master）；下一站 M11.1 探针命中点改查缓存（二级弹射）/ M11.2 多跳 GI / S12 历史帧。已 merge 回 master：physics / audio / ECS / job-system / console / material-graph / action-system / pbr-direct / game-loop / pathfinding(M-N0) / drive / input / camera / editor。
 - UE-DIFFS 台账（D1~D19）随手追加落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 用例全重拍（`reshot-hud-stage.py`，超 527px 签名须追因才许 `--force`）。
 - 日志轨道 **M-LOG0~M-LOG2 全收官**（tags `log-m0`/`log-m2`，已 merge 回 master `aaf43b8`，wt/分支保留待 CLOSED 化拍板）：vendored spdlog v1.17.0；**格式契约**：stdout 老入口 `[nl:level]`、通道 `[nl:level|channel]`（老锚点是前缀子串——回归零漂的依赖）、文件路加时间戳前缀；**时间戳命名 + 每次新建必须配同秒碰撞 -N 消歧**；M-LOG2 增量 = 帧号行尾 `#<n>`（行组装层追加，sink 收原始 message）+ console `log.*` 四命令（`registerLogCommands` 单一事实源）+ 滚动一代 + 现网 6 文件 185 处已迁移通道。工具卡传参：`log-tools exec` 每 arg = 一条完整命令行；并行跑时文件断言必须 PID 锚定（mtime 竞态实锤）。功能面闭环（M-LOG3 候选空），格式契约详 PLAN §8/§9。
 
