@@ -34,16 +34,19 @@
 
 ## 3. 传输层
 
-- **默认传输**：本地 TCP，`127.0.0.1`，默认端口 `29110`（避 Sunshine 的 29102）。可通过 `--rpc-port` 覆盖。
-- **备选传输**：Windows 命名管道 `\\.\pipe\nl-editor-rpc`（更低延迟、无端口冲突）；两类传输**共用同一套上层协议**，仅 `endpoint` 字符串不同（`tcp://127.0.0.1:29110` 与 `pipe://nl-editor-rpc`）。
-- **连接模型**：**编辑器为 TCP Server（监听），引擎为 Client（主动连接）**——对齐 Sunshine（引擎侧 `SDK_CLIENT` 连回编辑器 `Sunshine` server）。
-- **字节序**：所有多字节整型小端（LE）。
+- **默认传输**：本地 TCP，`127.0.0.1`，默认端口 `29110`（避 Sunshine 的 29102）。编辑器 `--rpc-endpoint <ep>`、引擎 `--editor-endpoint <ep>` 覆盖；两端必须给同一个 endpoint（早期文档写的 `--rpc-port` 从未实装，M-E6 一并勘误）。
+- **endpoint 语法（M-E6 实装）**：`tcp://127.0.0.1:29110` / `tcp://127.0.0.1`（省略端口取 29110）/ `pipe://<name>` / 裸端口号。`parseEndpoint` 只允许 loopback 主机 `127.0.0.1` / `localhost`，其它 host 与未知 scheme 直接报 `bad endpoint` 并禁用连接，**不静默回落到默认端口**。
+- **命名管道（M-E6 实装，可选）**：`pipe://<name>` 映射到 `\\.\pipe\<name>`；字节流模式 `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE` + `FILE_FLAG_OVERLAPPED` 异步读写，`PeekNamedPipe` 做可读探测，`PIPE_UNLIMITED_INSTANCES` 支持多引擎并发，每 accept 成功立即 arm 下一个实例。两类传输**共用同一套上层协议**（`editor_bridge/transport.hpp` 的 `Stream` / `Listener` 抽象），仅 endpoint 字符串不同。
+- **连接模型**：**编辑器为 Server（监听），引擎为 Client（主动连接）**——对齐 Sunshine（引擎侧 `SDK_CLIENT` 连回编辑器 `Sunshine` server）。M-E6 起 Server 可同时持有多个 client，按 `viewId` 路由（见 §9 / §10）。
+- **字节序**：msgpack 多字节整型按 msgpack 规范走**网络字节序（大端）**；4 字节长度前缀亦为**大端 uint32**（见 §4 勘误）。早期文档写作 LE 是笔误，实装自 M-E1 起从未变过。
 
 ---
 
 ## 4. 分帧（Framing）
 
-每条消息 = `4 字节 LE uint32 长度 N` + `N 字节 msgpack 编码的载荷`。
+每条消息 = `4 字节 BE uint32 长度 N` + `N 字节 msgpack 编码的载荷`。
+
+> **M-E6 勘误**：本节与 §3 早期写「LE / 小端」为文档笔误。C++ 实装（`rpc_host.cpp` / `rpc_bridge.cpp`）与历代 python 探针自 M-E1 起一律用大端（`>I`）。M-E6 **只勘误文档、不改线格式**，以保证既有版本卡 / 探针零变更。
 
 - 单个载荷上限 **8 MiB**（与 Sunshine `MAX_MESSAGE_LENGTH` 对齐）；超长直接断开并记错误。
 - 接收方按长度精确切分，无需分隔符；支持一个 TCP 包内粘多个消息、或一个消息跨多个包。
@@ -135,6 +138,13 @@
 - **崩溃隔离**：编辑器掉线时**引擎不得退出**，继续渲染自有窗口；编辑器掉线重连后重新 `announce`。
 - **编辑器掉线恢复**：编辑器显示「引擎未连接」空窗 + 自动重连（默认 1s 间隔），重连成功重走握手。
 
+**M-E6 多连接 / 多视口补充**
+- Server 持有 `vector<unique_ptr<Client>>`，每帧 `update()` 最多 accept 16 个连接，逐连接非阻塞 `waitReadable(0)` + `recvSome` + 粘包解析，不再假设「全局唯一 socket」。
+- `engine.announce` 增字段 `viewId`（缺省 `main`，老插件零改动兼容）；编辑器按 `viewId` 建独立 ImGui 视口 + 独立 `WS_CHILD` 容器，各挂一个引擎 HWND。重复 `viewId` 记 `[rpc] warning: duplicate viewId '...'`，同 key 覆盖而不新增容器。
+- `rpc.pong` **按连接定向回复**（单 client 时代抓全局 socket 的写法已废）；`RpcHost::callTo/notifyTo(viewId, ...)` 精确路由，`callTo` 未知视图返回 `RpcError{103,"unknown view"}`；`call()`/`notify()` 打给 `activeView`（首个连入的视图自动设为活动视图，UI 可切 Combo），找不到时回落首个连接。
+- 单个 `viewId` 掉线只拆该视图容器，其余视图与编辑器主循环不受影响；`onEngineClose(viewId)` 是新签名。
+- **明确不做**：单引擎进程多 HWND / 多 swapchain（本轨道范围内否决）；「多视口」语义恒为「一个编辑器接纳多个引擎进程」。
+
 ---
 
 ## 10. 初始方法注册表（分期落地）
@@ -184,6 +194,16 @@
 |---|---|---|---|
 | `scene.getMaterials` | 编辑器→引擎 | — | scene 模式 `{mode:"scene",count,objects:[{i,mesh,tint:[3],rough,metal}]}`；model 模式 `{mode:"model",file,nmesh:{name,meshlets,submeshCount,submeshes:[{materialId,clusterFirst,clusterCount}]}}`（.nmesh NSUB 表，材质 id=子网格序号；非 .nmesh 时 nmesh=null） |
 | `scene.setMaterial` | 编辑器→引擎 | `{i:int, tint?:[3], rough?:f, metal?:f}`（逐字段可选，clamp 0..1） | `{ok:1,i,tint,rough,metal}`；model 模式 / 坏索引 error 100 |
+
+### M-E6 实装（多视口路由 + 编辑器侧管理）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `engine.announce` | 引擎→编辑器 notify | `{pid,hwnd,proto,caps,viewId}`（`viewId` 缺省 `main`） | —（编辑器收到后建容器 + `SetParent`） |
+| `editor.views` | 任意→编辑器 | — | `[{viewId,hwnd,pid,proto,attached}]`（当前全部连入视图） |
+| `editor.pingView` | 任意→编辑器 | `{view:<id>}` | `{sent:bool,view}`；向该视图定向 `notifyTo` 一条 `editor.probe` |
+| `editor.callView` | 任意→编辑器 | `{view:<id>,method:<str>,params?}` | 转发 `callTo(view, method, params, 3000)` 的 `RpcResult`；缺 view/method → error 100，未知 view → error 103 |
+
+> `editor.views` / `editor.pingView` / `editor.callView` 由 `editor/main.cpp` 注册在 host 上，供探针与插件查询/定向调用；引擎侧 handler 集合（`engine.echo` / `camera.*` / `scene.*`）M-E6 零改动。
 
 ---
 
@@ -293,9 +313,12 @@ public:
 
 ---
 
-## 15. 待拍板 / 开放项
+## 15. 已拍板 / 开放项（M-E6 收口）
 
-- [ ] 端口 `29110` 是否固定，还是每次启动随机 + 通过命令行/文件通知引擎？
-- [ ] 命名管道是否作为默认（Windows 专属），还是 TCP 默认、管道可选？
-- [ ] `SetParent` 嵌入由**编辑器主动挂**（Sunshine 方式）还是引擎启动时带 `--parent-hwnd` 自建子窗口？（推荐前者，对启动顺序更鲁棒）
-- [ ] 是否需要「多视口」（同一引擎多个嵌入窗口）——影响 `engine.announce` 的 hwnd 结构（当前为单 hwnd）。
+- [x] **端口固定 `29110`**；两端用 `--rpc-endpoint` / `--editor-endpoint` 显式指定同一 endpoint，不做随机端口 + 通知文件。
+- [x] **TCP 为默认，命名管道为可选**（Windows 专属），不做命名管道默认。M-E6 已实装 `pipe://<name>`，CLI 显式切换。
+- [x] **`SetParent` 嵌入由编辑器主动挂**（Sunshine 方式）；引擎只上报自身 HWND，不带 `--parent-hwnd`，对启动顺序更鲁棒。
+- [x] **多视口 = 一个编辑器同时接纳多个引擎进程**，按 `viewId` 路由并各自嵌入独立视口面板；`viewId` 缺省 `main` 保持老插件兼容。M-E6 已实装。
+- [x] **单进程多 HWND / 多 swapchain 明确否决**，不进本轨道范围（避免把「多视口」误解成引擎侧多渲染目标）。
+
+> 开工闸口径：M-E6 开工前待拍板项 4 条已全部拍板并写回本表，冻结面（Q4 GBuffer / `renderer/` / `shader/` / `example/` / `tools/regression/cases.json`）零触碰。

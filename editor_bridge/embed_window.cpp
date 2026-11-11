@@ -5,12 +5,13 @@
 namespace nl::editor {
 
 void EmbedWindow::announce(RpcBridge& bridge, void* engineHwnd, int pid, int proto,
-                           const RpcValue& caps) {
+                           const RpcValue& caps, const std::string& viewId) {
     msgpack::Map a;
     a["hwnd"]  = msgpack::Value(int64_t(reinterpret_cast<uintptr_t>(engineHwnd)));
     a["pid"]   = msgpack::Value(int64_t(pid));
     a["proto"] = msgpack::Value(int64_t(proto));
     a["caps"]  = caps.isMap() ? caps : msgpack::Map{};
+    a["viewId"] = msgpack::Value(viewId);   // M-E6 多视口路由键（单视口恒 "main"）
     bridge.notify("engine.announce", msgpack::Value(a));
 }
 

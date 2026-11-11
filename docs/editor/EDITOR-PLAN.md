@@ -24,6 +24,8 @@
 | 2 | **RPC 传输 = msgpack + 4 字节长度前缀 + 本地 TCP** | 保留 JSON-RPC 2.0 语义，替换编码；编辑器=Server，引擎=Client（对齐 Sunshine 连回模型） |
 | 3 | **窗口嵌入 = Win32 `SetParent`** | 把引擎 GLFW 窗口 HWND 挂入编辑器 ImGui 视口框；每帧像素直绘屏幕，不进 RPC |
 | 4 | **崩溃隔离 = 心跳 2s / 超时 6s** | 编辑器掉线引擎继续自渲染；编辑器走空视口 + 1s 自动重连（需求 #1 硬保障） |
+| 5 | **M-E6 传输：TCP 默认、命名管道 CLI 显式可选** | 两类传输共用 `transport::Stream/Listener` 抽象与同一线格式；endpoint 只允许 loopback，坏 endpoint 报错不静默回落默认端口 |
+| 6 | **M-E6 多视口 = 一编辑器接纳多引擎进程，按 `viewId` 路由** | 每视图独立 ImGui 面板 + 独立 `WS_CHILD` 容器 + 一个引擎 HWND；`viewId` 缺省 `main` 保老插件兼容。**否决**单进程多 HWND / 多 swapchain |
 
 **第三方库现状**：`imgui` / `imgui-node-editor` / `glfw` / `nvrhi` / `tinygltf`(nlohmann json) / `taskflow` 均已 vendored 于 `thirdparty/`，**无需新增依赖、无需联网**。msgpack 编解码采用**自研极简实现**（仅覆盖信封所需类型 nil/bool/int/str/bin/float/array/map），零新增 vendored 库；后续如需完整 msgpack 再 vendored `msgpack-c`。
 
@@ -37,7 +39,7 @@
 - **M-E3** 第一个工具插件（相机/场景树）经 RPC 驱动引擎。 **[DONE 2026-11-11，跨进程探针 + UI 点击链路双验收全过]** — 引擎侧 `EditorEmbed::bindCamera`（runNormal/runScene 双模式各 bind 一次）注册 5 个 handler：`camera.getState`（fov/dist/yaw/pitch，度）/ `camera.setFov` / `camera.setDistance`（回读 clamp 后实际值）/ `camera.orbit`（像素增量 ×kOrbitGain=0.007 rad/px）/ `camera.reset`；params 统一命名 Map，未连接也注册（standalone 零开销）。编辑器侧 `CameraPlugin`（替换 stub）：Refresh 拉真值、FOV/Distance 滑条、Orbit 四向按钮（度数语义，deg→px 换算 kPxPerDeg≈2.4913 在编辑器侧，修正按钮"±15deg"实转 6° 的语义错位）、Reset；每次操作后 getState 对齐 UI。验收：`tools/m-e3-cam-probe.py`（python 假编辑器 server，真跨进程打 viewer handler）22 断言 0 fail（announce hwnd/pid/proto、setFov 45 与 clamp 500→120、setDistance clamp 0.01→0.45、orbit 增量精确匹配 0.007 rad/px、reset 回 4.2/0.21rad/0.16rad 且不动 fov、bogus method error 100）；UI 链路 SendInput 实点 Refresh+Orbit R 截屏双证据：状态行 `fov 45.0 dist 4.20 yaw 27.0`（12.0→27.0 精确 +15°）、引擎 HUD 同值、Suzanne 画面可见右转。
 - **M-E4** 重连全链路 / announce caps / 焦点路由 / 场景树插件。 **[DONE 2026-11-11]**（台账见 §8 M-E4 段）
 - **M-E5** 插件 DLL 动态扫描加载 + 材质检查插件。 **[DONE 2026-11-11]**（台账见 §8 M-E5 段）
-- **M-E6**（候选，未排期）命名管道传输（TCP 默认不变）+ 多视口（announce hwnd 结构扩展）。
+- **M-E6** 命名管道传输（TCP 默认不变）+ 多视口（`viewId` 路由，一编辑器接纳多引擎进程）。 **[DONE 2026-11-11]** — `editor_bridge/transport.{hpp,cpp}` 抽象 TCP/命名管道双链路（endpoint 解析 + 异步重叠 IO）；`RpcHost` 多 client 化 + `callTo/notifyTo` 定向路由；`RpcBridge` 真正消费 endpoint；`EmbedWindow::announce` 带 `viewId`；viewer `--editor-endpoint` / `--view-id`，editor `--rpc-endpoint` + 多视口平铺 + `editor.views` / `editor.pingView` / `editor.callView`；插件统一 500ms 快速失败避免冻结渲染线程。验收：`rpc_self_test.exe` TCP+pipe 全绿、`tools/m-e6-probe.py` 五段 33 断言 0 fail、双视口目击证据 `out/m-e6-multiview.png`。（台账见 §8 M-E6 段）
 
 ---
 
@@ -224,3 +226,41 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 - viewer 侧 `NL_MESHLET_DIR` 不能引用 `${NL_MESHLET_DIR}`（根 CMake 里它是 renderer 的内联宏定义，非变量）→ 展开成空串、loadNMesh 失败被 nmeshInfo 包成 error map，探针首版只看到字段缺失；修 `${CMAKE_SOURCE_DIR}/assets/meshlets`。
 - editor.exe 的 imgui.ini 按 CWD 解析（Popen 不带 cwd 时落在启动目录）——布局预置必须把 cwd 设到 exe 目录。
 - python 探针 msgpack 解码需支持 str8(0xd9)（引擎侧长错误串走 str8）；subprocess 管道用 `communicate(timeout)` 而非 `read(n)`（后者阻塞等 EOF）。
+
+### 2026-11-11 — M-E6 命名管道传输 + 多视口 `viewId` 路由（feat/editor worktree）
+
+**拍板（开工闸：待拍板 4 项全部拍板、已拍板 4 项）**
+1. TCP 仍为默认；命名管道经 CLI 显式切换，不改默认值。
+2. 多视口语义 = 「一个编辑器同时接纳多个引擎进程，按 `viewId` 路由并各自嵌入独立视口面板」；**否决**单进程多 HWND / 多 swapchain。
+3. `viewId` 缺省 `main`，老插件（相机 / 场景树 / 材质）零改动兼容。
+4. 冻结面：`renderer/` / `shader/` / `example/` / `tools/regression/cases.json` 全部零触碰；只动 `editor/`、`editor_bridge/`、`viewer/` 参数、`tools/m-e6-probe.py`、docs/editor。
+
+**产物**
+- `editor_bridge/transport.{hpp,cpp}`（新增）+ `nl_editor_transport` STATIC（`ws2_32`）：`Endpoint` / `parseEndpoint` / `Stream` / `Listener`；TCP 用 winsock2 blocking + `select`，命名管道用 `CreateNamedPipeA` + `FILE_FLAG_OVERLAPPED` + `PeekNamedPipe` + `PIPE_UNLIMITED_INSTANCES`。endpoint 语法 `tcp://127.0.0.1:29110` / `tcp://127.0.0.1` / `pipe://<name>` / 裸端口，只允许 loopback，坏 endpoint 不静默回落。
+- `editor_bridge/rpc_bridge.{hpp,cpp}`：`Impl` 从裸 `SOCKET` 改为 `unique_ptr<Stream> + Endpoint`；`connect(endpoint)` 真正解析 endpoint 并重连前先 `close/reset`；收发统一走 `sendAll/recvSome/waitReadable`；`shutdown()` 不再 `WSACleanup()`（Winsock 改进程级一次性管理）。
+- `editor_bridge/embed_window.{hpp,cpp}`：`announce(..., viewId="main")`，载荷增 `viewId` 字段。
+- `editor/rpc_host.{hpp,cpp}`：`vector<unique_ptr<Client>>`（每 client 独立 `recvBuf` / `viewId` / `lastRecvMs`），`update()` 每帧最多 accept 16、逐 client 非阻塞收包；`callTo/notifyTo(viewId,...)` 精确路由（未知视图 error 103）、`viewIds()/clientCount()/setActiveView()`；`rpc.pong` 按 `Client&` 定向回；重复 `viewId` 打 warning；`onEngineAnnounce/onEngineClose` 改带 `viewId` 签名。
+- `editor/main.cpp`：`--rpc-endpoint <ep>`；`std::map<string, ViewInfo> g_views`；`editor.views` / `editor.pingView` / `editor.callView` 三 handler；Connection 面板显示 endpoint / clients / active view Combo / 各视图 pid·caps·embed；`n<=2` 并排、`>2` 两列网格平铺 `Viewport [viewId]`；退出先 `g_views.clear()` 拆容器再 `host.stop()`。
+- `editor/viewport.{hpp,cpp}`：实例独立 `viewId` → 独立 ImGui 窗口 ID（`label()` 懒生成，`mutable`）；容器加 `WS_CLIPSIBLINGS` 防多容器互盖；析构 `detach()` 拆 `WS_CHILD`。
+- `editor/plugin.cpp` / `editor/plugins/hello_plugin.cpp`：`callQuick(host, method, p)` = `call(..., 500)`，替换内建插件全部同步调用（含示例 DLL），避免 5s 阻塞冻结渲染线程。
+- `viewer/main.cpp`：`Options.editorEndpoint/viewId`，`--editor-endpoint` / `--view-id`，`EditorEmbed::start(hwnd, enable, ep, vid)` 贯穿，announce 日志带 `view=` / `endpoint=`，`--help` 同步。
+- `editor/rpc_self_test.cpp`：阶段 E 新增管道双链路 + `viewId` / `callTo` / 未知视图断言。
+- `tools/m-e6-probe.py`：五段跨进程机械验收（极简 msgpack 编解码 + Win32 命名管道 ctypes 封装 + TCP/Pipe 统一 `Conn`）。
+- `docs/editor/RPC-SPEC.md`：§3 传输层 / endpoint 语法、§4 大端长度前缀勘误（早期「LE」是文档笔误，实装自 M-E1 起一直是 BE，M-E6 只勘误文档不改线格式）、§9 多连接生命周期、§10 M-E6 方法表、§15 四项开放项全部标记已拍板。
+
+**验收**
+- `scripts\build-m0.2.bat DX12` **BUILD OK**；viewer selftest 16/16。
+- `rpc_self_test.exe`：`=== M-E1 self-test PASS (0 failures) ===`，18 条 `[ ok ]`（收口复跑实测计数）含 `M-E6 named-pipe transport` / 管道 `engine.echo` 往返 / `callTo` 视图路由。
+- `tools/m-e6-probe.py`：**33 PASS / 0 FAIL，exit 0**。S1 真 viewer 走 `pipe://nl-e6-probe`（announce/caps/echo/scene.getState/camera.getState）；S2 默认 TCP 回归（`viewId=main`、materials count=5）；S3 真 editor + 2 假引擎（`editor.views` 两视图、`viewIds=[left,right]`、hwnd 保真、`pingView` 只投 right、`callView` 定向转发、未知视图 `sent=false` / error 103、duplicate warning、editor 存活）；S4 真 editor 监听 `pipe://nl-e6-editor`（`transport=pipe`）；S5 负向（无 pipe server 的 viewer 存活重试、`bogus://x` 不崩且日志 `bad endpoint`）。
+- 目击证据 `out/m-e6-multiview.png`（DPI-aware 实时屏幕合成）：`Viewport [left]` / `Viewport [right]` 两面板、`endpoint : tcp://127.0.0.1:29110`、`clients : 2 / views: 2`、两个视图 `pid` / `caps : 1280x720 DX12` / `embed : SetParent ok`、Log 里 `view=left` 与 `view=right` 两条 announce、左右各 5 个 Suzanne 各在自己面板内；`out/m-e6-multiview-marked.png` 叠加 Win32 窗口树矩形，两容器 `623x729` 位于 `(359,102)-(982,831)` / `(998,102)-(1621,831)`，与 ImGui 面板内容区严丝合缝、互不重叠。
+
+**踩坑**
+1. **⚠️ 验证脚本 DPI 坐标系混用（本轮最大坑，曾一度误判为产品代码回归）**：本机系统 150% DPI（物理 2560×1440，DPI-unaware 进程看 1707×1067）。python 默认 DPI-unaware，`GetWindowRect` / `EnumChildWindows` 返回**逻辑坐标**（÷1.5），而 `BitBlt(GetDC(NULL))` 抓的是**物理像素**；把逻辑坐标当物理坐标叠加到截图上，凭空造出 1.5 倍「容器比面板窄 / 整体右移」的假象，甚至怀疑是 M-E2 `ScreenToClient` bug 复现。修法：截图脚本开头 `SetProcessDpiAwarenessContext((void*)-4)`（PER_MONITOR_AWARE_V2）让窗口树与截图同处物理坐标系；DPI-aware 后后台启动窗常被系统最小化到 `-32000`，须 `ShowWindow(SW_RESTORE)` 轮询 `IsIconic` 恢复。**定性后产品代码零改动**：叠加图里两个容器与面板完全对齐。顺带纠正先前判断 —— 根因不是 `PrintWindow` 的 DWM 缓存帧（换实时 BitBlt 现象相同），而是坐标系。
+2. **插件在 ImGui 渲染线程同步 `host->call` 默认 5s 阻塞**：假引擎不回插件 req 时主循环冻结，后续 announce 排不进来，duplicate viewId 断言假 FAIL。修 `callQuick(..., 500)` + 探针尾段持续回插件 req；临时 `[f] A/B/C` / `[tick]` 插桩已全部删除。
+3. **探针 `collect()` 固定跑满 timeout** 制造 5s+ 静默，被 6s heartbeat 判掉线 → `ConnectionAbortedError(10053)`。修 `stop_when` 早退 + `req()` 命中目标 `resp id` 即返回。
+4. **单 client 时代「抓全局 socket 回 pong」在多 client 下回错连接**：`dispatch` 必须带 `Client&` 定向回。
+5. **命名管道必须 `FILE_FLAG_OVERLAPPED`**：同步 `ReadFile` 会阻塞整个 host 帧循环；用 `PeekNamedPipe` + `Sleep(1)` 探测可读，且每 accept 成功立即 arm 下一个实例，否则第二个 client 连不上。
+6. **坏 endpoint 禁止静默回落默认端口**：`bogus://x` 必须报错且 viewer 存活重试（S5 负向断言）。
+7. `Viewport::label()` 是 `const` 却懒生成 `label_` → C2678，须 `mutable std::string`。
+8. `replace_all` 把 `callQuick` 函数体自身也换成递归调用 → 改回 `host->call(method, p, 500)` 并补 `<string_view>`。
+9. `RpcBridge::shutdown()` 不再 `WSACleanup()`：Winsock 初始化已进程级一次性管理，per-bridge cleanup 会打断同进程其它连接。

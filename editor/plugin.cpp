@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <windows.h>
 #include <cstdio>
+#include <string_view>
 
 namespace nl::editor::ui {
 
@@ -11,6 +12,14 @@ using nl::editor::host::RpcHost;
 using nl::editor::host::RpcValue;
 using nl::editor::host::RpcError;
 using nl::editor::host::RpcResult;
+
+// M-E6：插件在 ImGui 渲染线程上直接发 RPC。Rpchost 默认 5s 阻塞超时意味着
+// 「引擎连上但不回包」时整个编辑器主循环会卡 5s（多视口下每帧都要刷多个插件，
+// 卡顿被放大成视口假死）。插件侧统一收敛到 500ms 快速失败——本机 loopback
+// 往返远小于此，且掉线时 UI 仍能保持帧率。
+static RpcResult callQuick(RpcHost* host, std::string_view method, const RpcValue& p) {
+    return host->call(method, p, 500);
+}
 
 // M-E3：相机工具插件——「编辑器 UI → RPC call → 引擎相机状态变化 → 嵌入画面动」
 // 的最小可见闭环。操作后回读 camera.getState 对齐 UI（引擎侧 clamp，回读为准）。
@@ -46,7 +55,7 @@ public:
         ImGui::SameLine();
         if (ImGui::Button("Orbit Dn")) { orbitDeg(host, 0.0f, 10.0f); }
         if (ImGui::Button("Reset")) {
-            auto r = host->call("camera.reset", RpcValue());
+            auto r = callQuick(host, "camera.reset", RpcValue());
             logErr(r, "camera.reset");
             refresh(host);
         }
@@ -59,7 +68,7 @@ private:
     static bool callField(RpcHost* host, const char* method, const char* key,
                           double val, float& outActual) {
         msgpack::Map m; m[key] = val;
-        auto r = host->call(method, RpcValue(std::move(m)));
+        auto r = callQuick(host, method, RpcValue(std::move(m)));
         if (std::holds_alternative<RpcValue>(r)) {
             const auto& v = std::get<RpcValue>(r);
             if (v.isDouble()) { outActual = (float)v.asDouble(); return true; }
@@ -78,13 +87,13 @@ private:
         msgpack::Map m;
         m["dx"] = degX * kPxPerDeg;
         m["dy"] = degY * kPxPerDeg;
-        auto r = host->call("camera.orbit", RpcValue(std::move(m)));
+        auto r = callQuick(host, "camera.orbit", RpcValue(std::move(m)));
         logErr(r, "camera.orbit");
         refresh(host);
     }
 
     void refresh(RpcHost* host) {
-        auto r = host->call("camera.getState", RpcValue());
+        auto r = callQuick(host, "camera.getState", RpcValue());
         if (!std::holds_alternative<RpcValue>(r)) {
             logErr(r, "camera.getState"); have_ = false; return;
         }
@@ -160,7 +169,7 @@ private:
     struct Row { std::string mesh; float x = 0, y = 0, z = 0, rough = 1, metal = 0; };
 
     void refresh(RpcHost* host) {
-        auto r = host->call("scene.getState", RpcValue());
+        auto r = callQuick(host, "scene.getState", RpcValue());
         if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getState"); have_ = false; return; }
         const auto& v = std::get<RpcValue>(r);
         if (!v.isMap()) { have_ = false; return; }
@@ -197,7 +206,7 @@ private:
 
     void focus(RpcHost* host, int i) {
         msgpack::Map p; p["i"] = (std::int64_t)i;
-        auto r = host->call("scene.focus", RpcValue(std::move(p)));
+        auto r = callQuick(host, "scene.focus", RpcValue(std::move(p)));
         if (std::holds_alternative<RpcValue>(r)) {
             const auto& v = std::get<RpcValue>(r);
             if (v.isMap()) {
@@ -325,7 +334,7 @@ private:
     }
 
     void refresh(RpcHost* host) {
-        auto r = host->call("scene.getMaterials", RpcValue());
+        auto r = callQuick(host, "scene.getMaterials", RpcValue());
         if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getMaterials"); have_ = false; return; }
         const auto& v = std::get<RpcValue>(r);
         if (!v.isMap()) { have_ = false; return; }
@@ -416,7 +425,7 @@ private:
         m["tint"] = RpcValue(std::move(tint));
         m["rough"] = (double)r.rough;
         m["metal"] = (double)r.metal;
-        auto rr = host->call("scene.setMaterial", RpcValue(std::move(m)));
+        auto rr = callQuick(host, "scene.setMaterial", RpcValue(std::move(m)));
         logErr(rr, "scene.setMaterial");
     }
 

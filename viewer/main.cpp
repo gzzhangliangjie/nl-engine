@@ -173,6 +173,10 @@ struct Options {
     bool particles = false;                      // M-PT0：粒子叠加层（instanced billboard 喷泉）
     std::string nfxPath;                         // M-PT1：.nfx v1 加载（隐含 --particles）
     bool editorBridge = false;                   // M-E2：--editor-bridge 连接外置编辑器（连不上降级单机）
+    // M-E6：传输 endpoint（TCP 默认 / 命名管道可选）+ 多视口路由键。
+    // 同一编辑器里跑多个 viewer 进程时，各带一个不同 --view-id，各自嵌入独立面板。
+    std::string editorEndpoint = "tcp://127.0.0.1:29110";
+    std::string viewId = "main";
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -181,6 +185,8 @@ Options parseArgs(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--selftest") o.selftest = true;
         else if (a == "--editor-bridge") o.editorBridge = true;   // M-E2：外置编辑器嵌入
+        else if (a == "--editor-endpoint" && i + 1 < argc) o.editorEndpoint = argv[++i]; // M-E6
+        else if (a == "--view-id" && i + 1 < argc) o.viewId = argv[++i];                 // M-E6
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
@@ -647,10 +653,17 @@ struct EditorEmbed {
     void* engineHwnd = nullptr;
     nl::core::OrbitCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
     std::chrono::steady_clock::time_point nextRetry{};  // M-E4a：重连退避时间点
+    // M-E6：endpoint 与多视口路由键（由 --editor-endpoint / --view-id 注入）
+    std::string endpoint = "tcp://127.0.0.1:29110";
+    std::string viewId = "main";
 
-    void start(void* engineHwnd_, bool enable) {
+    void start(void* engineHwnd_, bool enable,
+               const std::string& ep = "tcp://127.0.0.1:29110",
+               const std::string& vid = "main") {
         engineHwnd = engineHwnd_;
         enabled = enable;
+        endpoint = ep;
+        viewId = vid.empty() ? "main" : vid;
         if (!enabled) return;
         bridge.registerHandler("engine.echo",
                                [](const nl::editor::RpcValue& p) { return p; });
@@ -660,7 +673,7 @@ struct EditorEmbed {
     // M-E4a/M-E4b：连接 + announce（caps 带窗体像素尺寸与渲染后端名）。
     // 连不上不再永久降级：pump() 每 2s 重试，编辑器后启/重启都能被接管。
     void tryConnect(bool first = false) {
-        if (bridge.connect()) {
+        if (bridge.connect(endpoint)) {
             connected = true;
             nl::editor::msgpack::Map caps;
             RECT rc{};
@@ -669,14 +682,17 @@ struct EditorEmbed {
                 caps["h"] = (std::int64_t)(rc.bottom - rc.top);
             }
             caps["backend"] = std::string(NL_BACKEND_NAME);
+            // M-E6：viewId 让编辑器把本进程 HWND 嵌进对应视口面板
             nl::editor::EmbedWindow::announce(bridge, engineHwnd,
                                               static_cast<int>(::GetCurrentProcessId()), 1,
-                                              nl::editor::RpcValue(std::move(caps)));
-            nl::core::log::info(std::string("editor bridge: connected, hwnd+caps announced (backend=")
-                                + NL_BACKEND_NAME + ")");
+                                              nl::editor::RpcValue(std::move(caps)), viewId);
+            nl::core::log::info(std::string("editor bridge: connected view=") + viewId
+                                + " endpoint=" + bridge.endpoint()
+                                + " (backend=" + NL_BACKEND_NAME + ")");
         } else {
             nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-            if (first) nl::core::log::info("editor bridge: no editor at 127.0.0.1:29110 -> standalone (retry every 2s)");
+            if (first) nl::core::log::info(std::string("editor bridge: no editor at ") + endpoint
+                                           + " -> standalone (retry every 2s)");
         }
     }
 
@@ -963,7 +979,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     // 截图回归模式不启用（隐藏窗口 + 定帧退出，嵌入无意义）。
     EditorEmbed edEmbed;
-    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot);   // M-E4a：enabled 内部判定，pump 统一重试
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot,
+                  o.editorEndpoint, o.viewId);   // M-E4a/M-E6：enabled 内部判定，pump 统一重试
 
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
@@ -2184,7 +2201,8 @@ int runScene(const Options& o) {
 
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     EditorEmbed edEmbed;
-    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot);   // M-E4a：enabled 内部判定，pump 统一重试
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot,
+                  o.editorEndpoint, o.viewId);   // M-E4a/M-E6：enabled 内部判定，pump 统一重试
 
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
@@ -2876,6 +2894,8 @@ void printUsage() {
               << "  viewer.exe --editor-bridge         connect external editor at 127.0.0.1:29110;\n"
               << "                                     window gets embedded via SetParent (M-E2);\n"
               << "                                     no editor running -> standalone (graceful)\n"
+              << "  viewer.exe --editor-endpoint <ep>  M-E6: tcp://127.0.0.1:29110 (default) or pipe://name\n"
+              << "  viewer.exe --view-id <id>          M-E6: viewport key for multi-view editors (default main)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"

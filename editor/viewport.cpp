@@ -32,11 +32,20 @@ HWND ensureContainerClassAndCreate(HWND parent) {
         if (!RegisterClassExW(&wc)) return nullptr;
         registered = true;
     }
-    return CreateWindowExW(0, kHostClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+    // M-E6：WS_CLIPSIBLINGS —— 多个平铺容器互不遮挡（后建的默认压在先建的上面）
+    return CreateWindowExW(0, kHostClass, L"",
+                           WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                            0, 0, 16, 16, parent, nullptr, hInst, nullptr);
 }
 
 } // namespace
+
+const char* Viewport::label() const {
+    if (label_.empty()) label_ = "Viewport [" + viewId_ + "]";
+    return label_.c_str();
+}
+
+Viewport::~Viewport() { detach(); }
 
 void Viewport::attachEngine(uint64_t engineHwnd, void* editorWindowHwnd) {
     HWND parent = reinterpret_cast<HWND>(editorWindowHwnd);
@@ -81,7 +90,7 @@ void Viewport::syncNative(const ImVec2& contentPos, const ImVec2& contentSize) {
 }
 
 void Viewport::draw(bool connected) {
-    if (!ImGui::Begin("Viewport")) { ImGui::End(); return; }
+    if (!ImGui::Begin(label())) { ImGui::End(); return; }
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     if (attached_) {
         const ImVec2 pos = ImGui::GetCursorScreenPos();   // Dummy 之前取（Dummy 会推进光标）

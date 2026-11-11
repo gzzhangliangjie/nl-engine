@@ -18,7 +18,8 @@ public:
         if (up && ImGui::Button("engine.echo test")) {
             nl::editor::msgpack::Map m;
             m["msg"] = std::string("hello from dll plugin");
-            auto r = host->call("engine.echo", RpcValue(std::move(m)));
+            // M-E6：与内建插件同口径，500ms 快速失败，避免卡住编辑器渲染线程
+            auto r = host->call("engine.echo", RpcValue(std::move(m)), 500);
             if (std::holds_alternative<RpcValue>(r)) {
                 const auto& v = std::get<RpcValue>(r);
                 if (v.isMap()) {

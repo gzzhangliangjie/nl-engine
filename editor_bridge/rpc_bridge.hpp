@@ -1,13 +1,15 @@
 #pragma once
 // rpc_bridge.hpp — 引擎侧 RPC client（连接编辑器 server）
 // 角色：引擎 = Client，编辑器 = Server（对齐 Sunshine 引擎侧连回编辑器 server 模型）。
-// 依赖：msgpack_min.hpp（同目录，零依赖）；winsock2（Windows 自带）。
-// 协议：RPC-SPEC.md §3~§11（msgpack + 4 字节长度前缀 + JSON-RPC 2.0 信封语义）。
+// 依赖：msgpack_min.hpp + transport.hpp（同目录，零 vendored 依赖）。
+// 协议：RPC-SPEC.md §3~§11（msgpack + 4 字节大端长度前缀 + JSON-RPC 2.0 信封语义）。
+// M-E6：endpoint 真正生效（TCP 默认 / 命名管道可选），I/O 全走 transport::Stream。
 #include "msgpack_min.hpp"
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace nl::editor {
@@ -25,8 +27,9 @@ public:
     RpcBridge(const RpcBridge&) = delete;
     RpcBridge& operator=(const RpcBridge&) = delete;
 
-    // 引擎侧为 client，连接编辑器（默认 127.0.0.1:29110）
+    // 引擎侧为 client，连接编辑器（默认 tcp://127.0.0.1:29110；可传 pipe://name）
     bool connect(const std::string& endpoint = "tcp://127.0.0.1:29110");
+    std::string endpoint() const;   // 实际使用的 endpoint（日志/诊断）
     void update();               // 必须由引擎主循环每帧调用：泵入站 + 心跳
     void shutdown();
     bool isConnected() const;    // M-E4a：心跳超时/对端关闭后转 false（供上层重连判定）

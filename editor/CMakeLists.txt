@@ -15,8 +15,10 @@ target_include_directories(nl_editor_common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/editor_bridge   # msgpack_min.hpp
 )
-target_link_libraries(nl_editor_common PUBLIC ws2_32)
+# M-E6：RpcHost 走 transport 抽象（TCP/命名管道）；插件 DLL 也需要解析到这些符号
+target_link_libraries(nl_editor_common PUBLIC nl_editor_transport ws2_32)
 target_compile_options(nl_editor_common PRIVATE /utf-8)
+target_compile_definitions(nl_editor_common PRIVATE NOMINMAX)
 
 # 编辑器宿主 EXE
 add_executable(editor

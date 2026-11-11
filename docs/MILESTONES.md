@@ -2470,3 +2470,23 @@
 3. **viewer 侧 `NL_MESHLET_DIR` 不能引用 `${NL_MESHLET_DIR}`**（根 CMake 里它是 renderer 的内联宏定义，非变量）→ 展开空串 loadNMesh 失败被包成 error map；修 `${CMAKE_SOURCE_DIR}/assets/meshlets`。
 4. **editor.exe 的 imgui.ini 按 CWD 解析**（Popen 不带 cwd 落在启动目录）——布局预置须把 cwd 设到 exe 目录。
 5. **python 探针 msgpack 解码需支持 str8(0xd9)**（引擎侧长错误串走 str8）；subprocess 管道用 `communicate(timeout)` 而非 `read(n)`（后者阻塞等 EOF）。
+
+## editor轨道 M-E6：命名管道传输 + 多视口 `viewId` 路由（feat/editor，2026-11-11，tag `e-m6-done`）
+
+**动作**：wt_pool claim（track editor / M-E6）→ 开工闸 4 项待拍板全拍板（TCP 默认、管道 CLI 可选；多视口 = 一编辑器接纳多引擎进程按 `viewId` 路由、**否决**单进程多 HWND/多 swapchain；`viewId` 缺省 `main` 保老插件兼容；冻结面 `renderer/`/`shader/`/`example/`/`tools/regression/cases.json` 零触碰）→ 落码：①传输抽象 `editor_bridge/transport.{hpp,cpp}` + `nl_editor_transport` STATIC（`Endpoint`/`parseEndpoint`/`Stream`/`Listener`；TCP winsock2+select，命名管道 `CreateNamedPipeA` + `FILE_FLAG_OVERLAPPED` + `PeekNamedPipe` + `PIPE_UNLIMITED_INSTANCES`，两类传输共用同一线格式）；②`RpcBridge` 真正消费 endpoint（`SOCKET` → `unique_ptr<Stream>`，`shutdown` 不再 `WSACleanup`）；③`RpcHost` 多 client 化（`vector<unique_ptr<Client>>`、逐 client 非阻塞收包、每帧最多 accept 16、`callTo/notifyTo(viewId,...)` 定向路由 error 103、`rpc.pong` 按连接定向回、duplicate `viewId` warning、回调改带 `viewId` 签名）；④`EmbedWindow::announce` 增 `viewId`，viewer 加 `--editor-endpoint`/`--view-id`，editor 加 `--rpc-endpoint` + `g_views` 多视口平铺（`WS_CLIPSIBLINGS` 容器、独立 ImGui 窗口 ID、析构拆容器）+ `editor.views`/`editor.pingView`/`editor.callView` 三 handler + active view Combo；⑤插件统一 `callQuick(..., 500)` 快速失败；⑥`rpc_self_test.cpp` 阶段 E 管道双链路；⑦RPC-SPEC §3/§4/§9/§10/§15 勘误（4 字节长度前缀实际为**大端**，「LE」是早期文档笔误，只勘误文档不改线格式）。
+
+**提交版本**：feat/editor 分支本次落码提交，annotated tag `e-m6-done`（按 tag 定位版本）。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E6 段（editor 轨道权威台账）。
+
+**完成情况**：`scripts\build-m0.2.bat DX12` **BUILD OK** + viewer selftest 16/16；`rpc_self_test.exe` `=== M-E1 self-test PASS (0 failures) ===`（18 条 `[ ok ]`，含 M-E6 命名管道 accept/connect/`engine.echo` 往返与 `callTo` 路由）；`tools/m-e6-probe.py` 五段跨进程 **33 PASS / 0 FAIL，exit 0**：S1 真 viewer 走 `pipe://nl-e6-probe`（announce/caps/echo/scene.getState/camera.getState）、S2 默认 TCP 回归（`viewId=main`、materials count=5）、S3 真 editor + 2 假引擎（`editor.views` 两视图、`viewIds=[left,right]`、hwnd 保真、`pingView` 只投 right、`callView` 定向转发、未知视图 `sent=false`/error 103、duplicate warning、editor 存活）、S4 真 editor 监听 `pipe://nl-e6-editor`（`transport=pipe`）、S5 负向（无 pipe server 的 viewer 存活重试、`bogus://x` 不崩且日志 `bad endpoint`）。目击证据 `out/m-e6-multiview.png`（DPI-aware 实时屏幕合成：两视口面板 + `clients 2/views 2` + 左右各 5 Suzanne + Log 两条 `view=` announce）与 `out/m-e6-multiview-marked.png`（叠加 Win32 窗口树，两容器 `623x729` 分别在 `(359,102)-(982,831)` / `(998,102)-(1621,831)`，与 ImGui 面板严丝合缝、互不重叠）。
+
+**踩坑情况**
+1. **⚠️ 验证脚本 DPI 坐标系混用（本轮最大坑，曾误判为产品代码回归）**：本机 150% DPI（物理 2560×1440，DPI-unaware 进程看 1707×1067）。python 默认 DPI-unaware，`GetWindowRect`/`EnumChildWindows` 返回**逻辑坐标**（÷1.5），`BitBlt(GetDC(NULL))` 抓的是**物理像素**；把逻辑坐标当物理坐标叠加到截图上，凭空造出 1.5 倍「容器比面板窄/整体右移」假象，一度怀疑 M-E2 `ScreenToClient` bug 复现。修法：截图脚本开头 `SetProcessDpiAwarenessContext((void*)-4)`（PER_MONITOR_AWARE_V2）统一到物理坐标系；DPI-aware 后后台启动窗常被最小化到 `-32000`，须 `SW_RESTORE` 轮询 `IsIconic`。**定性后产品代码零改动**。另纠正先前判断：根因不是 `PrintWindow` 的 DWM 缓存帧（换实时 BitBlt 现象相同），而是坐标系。
+2. **插件在 ImGui 渲染线程同步 `host->call` 默认 5s 阻塞**：假引擎不回插件 req → 主循环冻结 → 后续 announce 排不进来 → duplicate viewId 断言假 FAIL。修 `callQuick(host,method,p)=call(...,500)`（内建插件 + hello_plugin）+ 探针尾段持续回插件 req；临时 `[f] A/B/C`/`[tick]` 插桩已全删。
+3. **探针 `collect()` 固定跑满 timeout** 制造 5s+ 静默 → 被 6s heartbeat 判掉线 `ConnectionAbortedError(10053)`。修 `stop_when` 早退 + `req()` 命中目标 `resp id` 即返回。
+4. **单 client 时代「抓全局 socket 回 pong」在多 client 下回错连接**：`dispatch` 须带 `Client&` 定向回。
+5. **命名管道必须 `FILE_FLAG_OVERLAPPED`**：同步 `ReadFile` 阻塞整个 host 帧循环；`PeekNamedPipe`+`Sleep(1)` 探测可读，每 accept 成功立即 arm 下一实例，否则第二个 client 连不上。
+6. **坏 endpoint 禁止静默回落默认端口**：`bogus://x` 报错且 viewer 存活重试（S5 断言）。
+7. `Viewport::label()` 为 `const` 却懒生成 `label_` → C2678，须 `mutable std::string`；`replace_all` 曾把 `callQuick` 函数体自身替换成递归调用，已改回 `host->call(method, p, 500)`。
+8. `RpcBridge::shutdown()` 不再 `WSACleanup()`：Winsock 已进程级一次性管理，per-bridge cleanup 会打断同进程其它连接。
+
+**下一步**：`feat/editor`（M-E0~M-E6）merge 回 master 待用户拍板；本轨道候选后续 = 编辑器侧资源浏览器 / 序列化回写 / 多引擎场景同步（尚未排期）。

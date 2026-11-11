@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <string>
 #include <thread>
 #include <windows.h>
 
@@ -21,6 +22,7 @@ static std::atomic<int>  g_failures{0};
 static uint64_t g_annHwnd = 0;
 static int      g_annPid  = 0;
 static int      g_annProto = 0;
+static std::string g_annView;   // M-E6：announce 的 viewId
 
 // 反向 echo：client.call(editor.echo) 在 client 线程执行，主线程泵 host.update() 派发
 static std::atomic<bool> g_startClientEcho{false};
@@ -41,10 +43,11 @@ int main() {
         if (p.isStr()) printf("  [notify] editor.log: %s\n", p.asStr().c_str());
     });
     host.registerNotify("rpc.ping", [](const nl::editor::host::RpcValue&) {}); // 自动回 pong
-    host.onEngineAnnounce = [](uint64_t hwnd, int pid, int proto, const nl::editor::host::RpcValue&) {
-        g_annHwnd = hwnd; g_annPid = pid; g_annProto = proto;
-        printf("  [event] onEngineAnnounce hwnd=0x%llx pid=%d proto=%d\n",
-               (unsigned long long)hwnd, pid, proto);
+    host.onEngineAnnounce = [](const std::string& viewId, uint64_t hwnd, int pid,
+                               int proto, const nl::editor::host::RpcValue&) {
+        g_annHwnd = hwnd; g_annPid = pid; g_annProto = proto; g_annView = viewId;
+        printf("  [event] onEngineAnnounce view=%s hwnd=0x%llx pid=%d proto=%d\n",
+               viewId.c_str(), (unsigned long long)hwnd, pid, proto);
     };
     bool started = host.start();
     CHECK(started, "RpcHost.start() 监听 127.0.0.1:29110");
@@ -63,6 +66,7 @@ int main() {
         a["proto"] = msgpack::Value(int64_t(1));
         msgpack::Map caps; caps["backend"] = msgpack::Value(std::string("DX12"));
         a["caps"]  = msgpack::Value(caps);
+        a["viewId"] = msgpack::Value(std::string("self-test"));   // M-E6 多视口路由键
         bridge.notify("engine.announce", msgpack::Value(a));
 
         // 等待主线程完成正向 echo（host.call），再做反向 echo
@@ -95,14 +99,27 @@ int main() {
     CHECK(g_annHwnd == 0xDEADBEEF, "engine.announce 上报 hwnd == 0xDEADBEEF");
     CHECK(g_annPid == (int)GetCurrentProcessId(), "engine.announce 上报 pid 正确");
     CHECK(g_annProto == 1, "engine.announce 上报 proto == 1");
+    CHECK(g_annView == "self-test", "M-E6 announce viewId == self-test");
+    CHECK(host.clientCount() == 1 && host.viewIds().size() == 1 && host.viewIds()[0] == "self-test",
+          "M-E6 clientCount/viewIds 单视图口径");
 
-    // 阶段 B：正向 echo：host.call -> client handler -> 回包
+    // 阶段 B：正向 echo：host.call -> client handler -> 回包（含 callTo 显式路由）
     auto r = host.call("engine.echo", msgpack::Value(std::string("hello-engine")));
     CHECK(std::holds_alternative<msgpack::Value>(r), "host.call(engine.echo) 成功返回 RpcValue");
     if (std::holds_alternative<msgpack::Value>(r)) {
         auto& v = std::get<msgpack::Value>(r);
         CHECK(v.isStr() && v.asStr() == "hello-engine", "回包内容 == 请求内容 (echo)");
     }
+    host.setActiveView("self-test");
+    auto rt = host.callTo("self-test", "engine.echo", msgpack::Value(std::string("routed")));
+    CHECK(std::holds_alternative<msgpack::Value>(rt) &&
+          std::get<msgpack::Value>(rt).isStr() &&
+          std::get<msgpack::Value>(rt).asStr() == "routed",
+          "M-E6 callTo(viewId) 定向路由 echo");
+    auto rbad = host.callTo("no-such-view", "engine.echo", msgpack::Value());
+    CHECK(std::holds_alternative<nl::editor::host::RpcError>(rbad) &&
+          std::get<nl::editor::host::RpcError>(rbad).code == 103,
+          "M-E6 callTo(未知视图) -> error 103");
 
     // 阶段 C：反向 echo：client.call(editor.echo) -> host handler -> 回包
     // 主线程需持续泵 host.update()，host 才能派发 client 的 req
@@ -129,6 +146,50 @@ int main() {
     g_stop = true;
     client.join();
     host.stop();
+
+    // 阶段 E（M-E6）：命名管道传输全链路——同一套上层协议换 endpoint 即走 Win32 pipe
+    printf("  -- M-E6 named-pipe transport --\n");
+    {
+        nl::editor::host::RpcHost ph;
+        ph.registerHandler("editor.echo",
+                           [](const nl::editor::host::RpcValue& p) { return p; });
+        ph.registerNotify("rpc.ping", [](const nl::editor::host::RpcValue&) {});
+        const bool phStarted = ph.start("pipe://nl-editor-selftest");
+        CHECK(phStarted, "RpcHost.start(pipe://nl-editor-selftest)");
+        CHECK(ph.endpoint() == "pipe://nl-editor-selftest", "M-E6 endpoint() 回读管道名");
+
+        std::atomic<bool> pstop{false};
+        std::atomic<bool> pconnected{false};
+        std::thread pc([&]() {
+            nl::editor::RpcBridge b;
+            b.registerHandler("engine.echo",
+                              [](const nl::editor::host::RpcValue& p) { return p; });
+            if (!b.connect("pipe://nl-editor-selftest")) {
+                printf("  [FAIL] bridge.connect(pipe://...) \n"); ++g_failures; return;
+            }
+            pconnected = true;
+            msgpack::Map a;
+            a["hwnd"] = msgpack::Value(int64_t(0x1234));
+            a["pid"]  = msgpack::Value(int64_t(GetCurrentProcessId()));
+            a["viewId"] = msgpack::Value(std::string("pipe-view"));
+            b.notify("engine.announce", msgpack::Value(a));
+            while (!pstop) { b.update(); std::this_thread::sleep_for(5ms); }
+            b.shutdown();
+        });
+        int tries = 0;
+        while (tries++ < 400 && !ph.isConnected()) { ph.update(); std::this_thread::sleep_for(5ms); }
+        CHECK(ph.isConnected(), "M-E6 命名管道 accept 成功");
+        CHECK(pconnected, "M-E6 命名管道 client.connect 成功");
+        auto pr = ph.call("engine.echo", msgpack::Value(std::string("pipe-ok")), 3000);
+        CHECK(std::holds_alternative<msgpack::Value>(pr) &&
+              std::get<msgpack::Value>(pr).isStr() &&
+              std::get<msgpack::Value>(pr).asStr() == "pipe-ok",
+              "M-E6 管道上 host.call(engine.echo) 往返一致");
+        pstop = true;
+        pc.join();
+        ph.stop();
+    }
+
     printf("=== M-E1 self-test %s (%d failures) ===\n",
            g_failures == 0 ? "PASS" : "FAIL", (int)g_failures);
     return g_failures == 0 ? 0 : 1;
