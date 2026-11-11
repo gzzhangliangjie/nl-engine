@@ -2631,7 +2631,7 @@
 
 **提交版本**：merge commit `ac50c10`（父 `e43eda1` + `0ca2715`）+ 集成修复 `fc34176`；tag `e-m0e2-done` / `e-m3-done` / `e-m4-done` / `e-m5-done` / `e-m6-done` 随分支进入 master 可达历史。本轮不打新 tag（非新里程碑收官）、不建 `milestone/*` 分支、不 bump `kStage`（仍 S8.2）。
 
-**完成情况**：主树 `build-m0.2.bat DX12` / `VULKAN` 双 **BUILD OK**，viewer selftest **16/16 ×2**、Slang **90/90**；`rpc_self_test.exe` **0 failures**；四个跨进程探针串行 **M-E3 25 / M-E4 18 / M-E5 30 / M-E6 33 = 106 PASS / 0 FAIL**。目击证据沿用 `out/m-e6-multiview.png` / `-marked.png`。冻结面 `renderer/` `shader/` `example/` `tools/regression/cases.json` 零触碰，无新基线 / 版本卡，`server.py --check` 未跑（本轮无 example 卡变更）。未跑全量总闸（纪律：只在打 tag 收口跑一次）。`feat/editor` 分支与 `nl-engine-editor` worktree 保留，未标 CLOSED / 未拆（用户只说合回主干，drive 轨道先例）。
+**完成情况**：主树 `build-m0.2.bat DX12` / `VULKAN` 双 **BUILD OK**，viewer selftest **16/16 ×2**、Slang **90/90**；`rpc_self_test.exe` **0 failures**；四个跨进程探针串行 **M-E3 25 / M-E4 18 / M-E5 30 / M-E6 33 = 106 PASS / 0 FAIL**。目击证据沿用 `out/m-e6-multiview.png` / `-marked.png`。冻结面 `renderer/` `shader/` `example/` `tools/regression/cases.json` 零触碰，无新基线 / 版本卡，`server.py --check` 未跑（本轮无 example 卡变更）。未跑全量总闸（纪律：只在打 tag 收口跑一次）。合并当时 `feat/editor` 分支与 `nl-engine-editor` worktree 均保留、未标 CLOSED（drive 轨道先例）；**同日用户「拆 editor」拍板后 worktree 已摘除**，分支保留（见本节拆除记录）。
 
 **踩坑情况**
 1. **⚠️ 文本三方合并通过 ≠ 语义兼容（本轮最重）**：合并后主树首编 `viewer/main.cpp` 报 **C2664 ×2** —— master 的 M-CAM b 段把两个渲染循环相机实例从 `nl::core::OrbitCamera` 换成 `nl::viewer::ViewerCamera`，而 editor 轨道 `EditorEmbed::bindCamera` 仍收 `OrbitCamera*`；两轨独立演进，`git merge` 完全无感。修 `EditorEmbed::camera` / `bindCamera` 为 `ViewerCamera*`（Orbit 模式同名方法逐位转发 `orbitCam`、非 Orbit 模式由 ViewerCamera 自身门控，不再「RPC 改了但画面不动」）；`ViewerCamera::setFovYDegrees` 自己的 `fovY_` 不 clamp，把 20..120 clamp 显式移到 `camera.setFov` RPC 侧，保住 M-E3 探针 `setFov 500 -> 120` 契约。**教训：并行轨道 merge 后必须实编双后端，不许只看 `git merge` 无冲突就宣布合完。**
@@ -2639,4 +2639,6 @@
 3. **冲突解决禁 `open('w')` 传 bytes**（M-D3 既有铁律）：`read_bytes` → 状态机剔除三个标记行 → `write_bytes`，断言标记数恰为 3 且块闭合，保留原 CRLF。
 4. **合并前核查不可省**：`git diff --name-only merge-base..feat/editor -- .workbuddy/` 为空 + 新增文件与 `git ls-files --others` 求交集为空，才敢在带在途改动的主树上执行 merge。
 
-**下一步**：editor 轨道候选 = 资源浏览器 / 序列化回写 / 多引擎场景同步（未排期）；worktree 是否拆除待用户拍板；主线下一站 M10.3 参考图对比验收。
+**worktree 拆除记录**（2026-11-11 17:0x，用户「拆 editor」拍板）：拆前核干净度 / 进程 / claim / tag 可达；`out/` 三份独有产物带回主树，`.workbuddy` 整目录归档到仓库外 `E:/UE_STUDY_2026/.archive/editor-wt-2026-11-11/`；`git worktree remove` 中途被 SIGTERM 打断成 `prunable` + 6809 文件残留，`git worktree prune` 清元数据后，单次回收站删除被 safe-delete 钩子 fail-closed 拦下，最终分批 `shutil.rmtree` 12.2s / 0 failures 删净。终态 worktree 目录与登记双消失、分支 / 5 tag 全保留、主树在途 10 项零触碰。细节与三条教训见 `docs/editor/EDITOR-PLAN.md` §8 附。
+
+**下一步**：editor 轨道候选 = 资源浏览器 / 序列化回写 / 多引擎场景同步（未排期）；worktree 已拆，仅剩「轨道是否标 CLOSED / 分支是否删」待拍板；主线下一站 M10.3 参考图对比验收。
