@@ -138,9 +138,12 @@ TRACKS = {
     },
     "editor": {
         "wt": "E:/UE_STUDY_2026/nl-engine-editor",
-        "branch": "feat/editor", "state": "active",
+        "branch": "feat/editor", "state": "closed",
         "note": "外置编辑器轨道（C++/ImGui 宿主 + 引擎侧 editor_bridge），独立于渲染主线；"
-                "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0 外壳 + M-E1 RPC 通路起步",
+                "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0~E6 全量 merge 回 "
+                "master ac50c10 + 集成修复 fc34176（tags e-m0e2-done~e-m6-done）；"
+                "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED by user instruction 2026-11-11 17:1x",
     },
 }
 
