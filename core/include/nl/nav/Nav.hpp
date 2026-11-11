@@ -92,6 +92,46 @@ public:
     struct Edge { float a[3]; float b[3]; };
     std::vector<Edge> polyEdges() const;
 
+    // ---- M-N1：Detour 查询封装 ----
+    // 链路：findNearestPoly（端点吸附）-> findPath（多边形走廊）-> findStraightPath
+    //（string-pulling 折线，即本层语义上的「路径平滑」；上游 RecastDemo/DetourCrowd
+    // 亦只到此为止，不引入 Catmull-Rom 类额外平滑）。
+    struct QueryParams {
+        float halfExtents[3] = {2.0f, 1.0f, 2.0f}; // 端点吸附搜索盒半宽（m）
+        int   maxNodes       = 4096;  // 节点预算（<=65535；硬闸下限 4——上游
+                                      //   dtNextPow2(maxNodes/4) 在 <4 时为 0，
+                                      //   hash 池 0 字节分配 → getNode 越界，M-N1 实测）
+        int   maxPathPolys   = 256;   // 多边形走廊缓冲
+        int   maxWaypoints   = 256;   // 折线点缓冲
+    };
+
+    // 明确错误码（计划负向语义：不可达 / 超出节点预算各占一态，不静默折算）。
+    // 上游 1.6.0 实测口径（DetourNavMeshQuery.cpp findPath 973-1165 行）：
+    //   不可达（open list 耗尽）= DT_SUCCESS|DT_PARTIAL_RESULT（非 FAILURE）
+    //   节点池分配失败          = 追加 DT_OUT_OF_NODES detail（可与 partial 并存）
+    //   缓冲不足                = DT_SUCCESS|DT_BUFFER_TOO_SMALL（截断填充）
+    enum class QueryStatus {
+        OK               = 0, // 直达终点
+        UNREACHABLE      = 1, // 端点不在 NavMesh 上，或搜索耗尽不可达
+        OUT_OF_NODES     = 2, // 节点预算耗尽（partial，best-effort 折线仍输出）
+        BUFFER_TOO_SMALL = 3, // 输出缓冲不足（路径截断填充）
+        NOT_INITIALIZED  = 4, // NavMesh 未 bake/load
+        INVALID_PARAM    = 5, // 参数非法（maxNodes 越界 / 非有限坐标等）
+    };
+    static const char* queryStatusName(QueryStatus s);
+
+    struct QueryResult {
+        QueryStatus status = QueryStatus::NOT_INITIALIZED;
+        bool reachedLimit = false; // 路径完整但邻居展开受节点池限制（OUT_OF_NODES 无 partial）
+        std::vector<float> waypoints; // xyz 连续；UNREACHABLE/OUT_OF_NODES 时为
+                                      // best-effort 前缀（到最近可达点）
+    };
+
+    // 完整查询链。结果状态与 out.status 一致；确定性：同 mesh 同参数同端点，
+    // waypoints 逐点一致（上游 A* 即确定性单线程）。
+    QueryStatus findPath(const float start[3], const float end[3],
+                         const QueryParams& params, QueryResult& out) const;
+
 private:
     struct Impl;
     Impl*      m_impl = nullptr;

@@ -12,6 +12,7 @@
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
+#include "DetourNavMeshQuery.h"
 #include "Recast.h"
 
 namespace nl::nav {
@@ -57,6 +58,12 @@ struct NavMesh::Impl {
     // resave 确定性 0xC0000409 同此根因）。bake 路径不受影响：dtCreateNavMeshData
     // 的产物本来就是 dtAlloc 的，init(..., DT_TILE_FREE_DATA) 移交合法。
     std::vector<std::vector<unsigned char>> ownedTiles;
+    // M-N1：查询对象缓存（init 的 maxNodes 是节点预算，变了才重建）。
+    dtNavMeshQuery* query = nullptr;
+    int queryMaxNodes = 0;
+    ~Impl() {
+        if (query) dtFreeNavMeshQuery(query);
+    }
 };
 
 NavMesh::NavMesh() : m_impl(new Impl()) {}
@@ -513,6 +520,121 @@ bool NavMesh::load(const char* path, std::string& outError) {
     }
     m_stats = s;
     return true;
+}
+
+const char* NavMesh::queryStatusName(QueryStatus s) {
+    switch (s) {
+    case QueryStatus::OK:               return "OK";
+    case QueryStatus::UNREACHABLE:      return "UNREACHABLE";
+    case QueryStatus::OUT_OF_NODES:     return "OUT_OF_NODES";
+    case QueryStatus::BUFFER_TOO_SMALL: return "BUFFER_TOO_SMALL";
+    case QueryStatus::NOT_INITIALIZED:  return "NOT_INITIALIZED";
+    case QueryStatus::INVALID_PARAM:    return "INVALID_PARAM";
+    }
+    return "?";
+}
+
+NavMesh::QueryStatus NavMesh::findPath(const float start[3], const float end[3],
+                                       const QueryParams& qp,
+                                       QueryResult& out) const {
+    out = QueryResult{};
+    if (!m_impl || !m_impl->mesh) {
+        out.status = QueryStatus::NOT_INITIALIZED;
+        return out.status;
+    }
+    // 参数闸（上游 findPath 对非法参数只回 FAILURE|INVALID_PARAM，这里给出
+    // 可区分的明确错误码；maxNodes 上限 = dtNodePool 的 65535 硬界）。
+    const bool finiteStart = std::isfinite(start[0]) && std::isfinite(start[1]) &&
+                             std::isfinite(start[2]);
+    const bool finiteEnd   = std::isfinite(end[0]) && std::isfinite(end[1]) &&
+                             std::isfinite(end[2]);
+    const bool finiteHe    = std::isfinite(qp.halfExtents[0]) &&
+                             std::isfinite(qp.halfExtents[1]) &&
+                             std::isfinite(qp.halfExtents[2]);
+    if (!finiteStart || !finiteEnd || !finiteHe ||
+        qp.maxNodes < 4 || qp.maxNodes > 65535 ||
+        qp.maxPathPolys <= 0 || qp.maxWaypoints <= 0 ||
+        qp.halfExtents[0] <= 0.f || qp.halfExtents[1] <= 0.f ||
+        qp.halfExtents[2] <= 0.f) {
+        out.status = QueryStatus::INVALID_PARAM;
+        return out.status;
+    }
+    // ⚠️ 上游真 bug（M-N1 实测，maxNodes<4 = 段错误）：dtNavMeshQuery::init 用
+    // dtNextPow2(maxNodes/4) 作 hash 桶数，maxNodes<4 时该值为 0（dtNextPow2 的
+    // v-- 对 0 下溢）→ dtNodePool 的 m_first 0 字节分配 → getNode 哈希索引越界。
+    // RecastDemo 默认 4096 从不触发。故封装层硬闸下限 4（hashSize>=1）。
+
+    // 查询对象：maxNodes 变化才重建（dtNavMeshQuery::init 分配节点池）。
+    if (!m_impl->query || m_impl->queryMaxNodes != qp.maxNodes) {
+        if (m_impl->query) { dtFreeNavMeshQuery(m_impl->query); m_impl->query = nullptr; }
+        m_impl->query = dtAllocNavMeshQuery();
+        if (!m_impl->query ||
+            dtStatusFailed(m_impl->query->init(m_impl->constMesh(),
+                                               qp.maxNodes))) {
+            if (m_impl->query) { dtFreeNavMeshQuery(m_impl->query); m_impl->query = nullptr; }
+            out.status = QueryStatus::INVALID_PARAM;
+            return out.status;
+        }
+        m_impl->queryMaxNodes = qp.maxNodes;
+    }
+
+    // 全 poly flag=1（bake 侧），默认 filter（include 0xffff）全放行。
+    dtQueryFilter filter;
+
+    // ---- 端点吸附：findNearestPoly ----
+    dtPolyRef sref = 0, eref = 0;
+    float spos[3], epos[3];
+    const dtStatus ss = m_impl->query->findNearestPoly(
+        start, qp.halfExtents, &filter, &sref, spos);
+    const dtStatus se = m_impl->query->findNearestPoly(
+        end, qp.halfExtents, &filter, &eref, epos);
+    if (dtStatusFailed(ss) || dtStatusFailed(se) || sref == 0 || eref == 0) {
+        out.status = QueryStatus::UNREACHABLE;
+        return out.status;
+    }
+
+    // ---- 走廊：findPath ----
+    // 上游语义（DetourNavMeshQuery.cpp:973-1165）：
+    //   不可达（open list 耗尽）= DT_SUCCESS|DT_PARTIAL_RESULT，折线为 best-effort
+    //   节点池分配失败          = detail DT_OUT_OF_NODES（可与 partial 并存）
+    //   走廊缓冲不足            = DT_SUCCESS|DT_BUFFER_TOO_SMALL（截断填充）
+    std::vector<dtPolyRef> corridor(static_cast<size_t>(qp.maxPathPolys));
+    int nPath = 0;
+    const dtStatus sp = m_impl->query->findPath(
+        sref, eref, spos, epos, &filter, corridor.data(), &nPath,
+        qp.maxPathPolys);
+    if (dtStatusFailed(sp)) {
+        out.status = QueryStatus::INVALID_PARAM; // 参数已闸过，防御性兜底
+        return out.status;
+    }
+    const bool partial    = dtStatusDetail(sp, DT_PARTIAL_RESULT) != 0;
+    const bool outOfNodes = dtStatusDetail(sp, DT_OUT_OF_NODES) != 0;
+    const bool bufSmallP  = dtStatusDetail(sp, DT_BUFFER_TOO_SMALL) != 0;
+    if (partial && outOfNodes)      out.status = QueryStatus::OUT_OF_NODES;
+    else if (partial)               out.status = QueryStatus::UNREACHABLE;
+    else if (outOfNodes)            { out.status = QueryStatus::OK; out.reachedLimit = true; }
+    else if (bufSmallP)             out.status = QueryStatus::BUFFER_TOO_SMALL;
+    else                            out.status = QueryStatus::OK;
+
+    // ---- 折线：findStraightPath（string-pulling）----
+    if (nPath > 0) {
+        std::vector<float> wp(static_cast<size_t>(qp.maxWaypoints) * 3);
+        int nWp = 0;
+        const dtStatus st = m_impl->query->findStraightPath(
+            spos, epos, corridor.data(), nPath, wp.data(), nullptr, nullptr,
+            &nWp, qp.maxWaypoints);
+        if (dtStatusFailed(st)) {
+            out.status = QueryStatus::INVALID_PARAM; // 走廊内故障，防御性兜底
+            return out.status;
+        }
+        // 折线阶段缓冲不足：仅在 OK 态升级为 BUFFER_TOO_SMALL（错误态信息优先）。
+        if (dtStatusDetail(st, DT_BUFFER_TOO_SMALL) &&
+            out.status == QueryStatus::OK) {
+            out.status = QueryStatus::BUFFER_TOO_SMALL;
+        }
+        out.waypoints.assign(wp.begin(), wp.begin() + static_cast<size_t>(nWp) * 3);
+    }
+    return out.status;
 }
 
 std::vector<NavMesh::Edge> NavMesh::polyEdges() const {

@@ -55,3 +55,5 @@
 > **2026-11-10 开工登记（排期闸解除）**：E1a+E1b 链已全量 merge 回 master（2026-11-09，tags `ecs-e0`~`ecs-e1b.5`），启动条件满足。用户指令开工，worktree `E:/UE_STUDY_2026/nl-engine-pathfinding`（分支 `feat/pathfinding`，起点 master `7fd867b`）已建，junction 共享 `.workbuddy` / `slang dist`；wt_pool 已 claim **M-N0**。本条更新后，上方「E1b 渲染集成进行中」为过时留痕，不再修改。
 
 > **2026-11-10 M-N0 收口 + M-N1 延后拍板**：M-N0（vendored Recast/Detour 1.6.0 + nl/nav 烘焙闭环 + nav-tools 五子命令）已在 `feat/pathfinding` 收口（tag `nav-m0`，commit `bade82f`；merge 回 master 待 M8.1 会话提交后补做）。用户拍板：**M-N1（findPath/findStraightPath 封装）延后**，不单独排期——查询 API 本身不依赖大场景（合成网格即可跑通），等 M-N2 编辑器可视化或 M-N3 E1 场景集成需要查询能力时**按需插入**，收益最高。阶梯顺序变为 M-N0 →（M-N2 / M-N3 按场景就绪节奏推进，M-N1 随需补）。
+
+> **2026-11-11 M-N1 启动（延后解除）**：用户指令「开启pathfinding M-N1」= 解除上方延后拍板，M-N1 按原阶梯行执行（Detour 查询封装 + 负向语义 + 绕障用例）。worktree 重建（ff 同步 master `991e36f`）+ wt_pool claim M-N1 已登记；M-N0 已确认 merge 回 master（`core/src/nav/` 在 master）。实现口径：`findStraightPath` string-pulling 即计划「路径平滑」语义（不引入 Catmull-Rom 类额外平滑）；`DT_PARTIAL_RESULT` 不静默折算、透传调用者（`QueryStatus::UNREACHABLE`/`OUT_OF_NODES`）。收口 tag `nav-n1`。

@@ -27,3 +27,30 @@ set_tests_properties(m-n0-nav-dump PROPERTIES
     PASS_REGULAR_EXPRESSION "polys       : [1-9]")
 add_test(NAME m-n0-nav-negative COMMAND nav-tools dump ${NL_ROOT}/assets/models/Suzanne.glb)
 set_tests_properties(m-n0-nav-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-N1: Detour query (findPath/findStraightPath + negative semantics) ----
+add_test(NAME m-n1-nav-selftest COMMAND nav-tools selftest --verbose)
+set_tests_properties(m-n1-nav-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
+add_test(NAME m-n1-nav-bake
+         COMMAND nav-tools bake ${NL_ROOT}/assets/models/HizScene.glb
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav
+                 --cell-size 0.1 --agent-radius 0.2)
+set_tests_properties(m-n1-nav-bake PROPERTIES
+    PASS_REGULAR_EXPRESSION "saved       :")
+add_test(NAME m-n1-nav-query-ok
+         COMMAND nav-tools query ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav
+                 --start -1.9,0,-2.1 --end -1.0,0,-1.0)
+set_tests_properties(m-n1-nav-query-ok PROPERTIES
+    DEPENDS m-n1-nav-bake
+    PASS_REGULAR_EXPRESSION "status      : OK")
+add_test(NAME m-n1-nav-query-unreachable
+         COMMAND nav-tools query ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav
+                 --start -1.8,0,-2.0 --end 100,0,100)
+set_tests_properties(m-n1-nav-query-unreachable PROPERTIES
+    DEPENDS m-n1-nav-bake
+    WILL_FAIL TRUE)
+add_test(NAME m-n1-nav-query-usage
+         COMMAND nav-tools query ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav)
+set_tests_properties(m-n1-nav-query-usage PROPERTIES
+    WILL_FAIL TRUE)

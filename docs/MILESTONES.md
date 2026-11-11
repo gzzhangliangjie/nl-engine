@@ -2048,6 +2048,25 @@
 7. **ctest 条目改后必须确认 configure 真跑了**：一次重建后 build 目录 CTestTestfile 仍是旧条目（Suzanne），重跑 configure 才刷新——「改了 CMakeLists 就核对生成物」进入检查清单。
 
 **下一步**：M-N1（dtNavQuery findPath/findStraightPath 封装 + 负向语义 + 绕障用例）；M-N2 编辑器结合（cvar + ImGui 面板 + 五阶段可视化，本轮拍板核心）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。参数默认值按本项目资产尺度已调（BuildParams 注释留痕），大场景资产回大 cs 即可。
+
+## M-N1：Detour 查询封装——findPath/findStraightPath + 负向语义（feat/pathfinding，2026-11-11，tag `nav-n1`）
+
+**动作**：用户指令解除 2026-11-10「M-N1 延后」拍板 → worktree 重建（`feat/pathfinding` ff 同步 master `991e36f`，junction 共享 `.workbuddy`/slang dist）+ wt_pool claim M-N1 → 三处实读（上游 `DetourNavMeshQuery.h` 全文 + `DetourStatus.h` + `findPath/findStraightPath/appendVertex` 实现段 973-1900；Carrot `AStar.h`/`NavPath.h` 空结果无错误码口径；UE `RecastNavMesh.cpp:3844+` 三态 + `PImplRecastNavMesh.cpp:1333/1372/1647` partial/OUT_OF_NODES 记录与 string-pulling；bevy 无原生寻路据实标注）→ `Nav.hpp` 新增 `QueryParams`/`QueryStatus` 六态枚举/`QueryResult`（reachedLimit 标记）+ `NavMesh::findPath`（完整链 findNearestPoly→findPath→findStraightPath，PIMPL 内 `dtNavMeshQuery` 按 maxNodes 缓存重建）→ `nav-tools` 新增 `query` 子命令（--start/--end/--max-nodes/--max-waypoints/--half-extents/--png，负向语义映射 exit 0/1/2）+ `WireCanvas` 抽公共（wire 与 query --png 同投影口径）+ selftest 新增 M-N1 查询锚点段（合成场景加孤立岛）→ ctest 5 条 → `example/nav-n1/`（run.bat：selftest + bake + query-ok 含 PNG + query 确定性 fc/b + unreachable exit1 + maxNodes=1 exit2 + usage）→ cases.json `nav-n1` 卡六用例（python json 规范写入）→ `NAV-TOOLS-GUIDE.md` M-N1 验收/踩坑归档 → `P8-NAV-PLAN.md` 启动记录（延后解除）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n1`）。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 30 项 PASS（M-N0 烘焙锚点 + M-N1 查询锚点：直连 OK / 绕障 >2 点+总长>直线+避障中心 / 孤立岛 UNREACHABLE 含 best-effort 前缀 / maxNodes=4 OUT_OF_NODES / 重复查询逐点一致 / maxNodes=1 崩雷硬闸 / 未初始化负向）；ctest m-n0+m-n1 9/9 双后端（`--repeat until-pass:3`）；`regression --only nav-n1` 12/12 ALL GREEN（tool 卡双后端）；`server.py --check` exit 0（stage=S8.2，A 类轨道不 bump）；run.bat 双后端 ALL GREEN（含 query 折线 PNG `fc /b` 确定性断言）；Vulkan 树 selftest fnv64 与 DX12 一致（`e7349583a994928d`，跨树确定性）；证据图 `query-path.png` 蓝十字+红折线+绿十字落在箱顶轮廓内（肉眼核验，真实工具输出）。
+
+**踩坑情况**
+1. **⚠️ 上游真 bug：`maxNodes < 4` = 段错误（本轮最重坑）**：`dtNavMeshQuery::init` 以 `dtNextPow2(maxNodes/4)` 作 `dtNodePool` hash 桶数，`maxNodes<4` 时该值为 0（`dtNextPow2` 的 `v--` 对 0 下溢回绕）→ `m_first` 0 字节分配 → `getNode` 哈希索引越界。RecastDemo 默认 4096 从不触发；selftest `maxNodes=3` 预算用例实爆（26 项 ok 后崩）。定位手段：`main` 开头 `setvbuf(stdout, _IONBF)` 无缓冲输出保住崩前日志（永久保留）。修复 = 封装层硬闸 `[4,65535]` INVALID_PARAM + CLI 同步拦截 + selftest `maxNodes=1` 负向锚点防回归；预算用例改 maxNodes=4（OUT_OF_NODES 语义不变）。
+2. **上游语义实据（错误映射依据）**：不可达（open list 耗尽）= `DT_SUCCESS|DT_PARTIAL_RESULT` **非 FAILURE**；节点池分配失败 = `DT_OUT_OF_NODES` detail 可与 partial 并存（partial+预算 → OUT_OF_NODES 优先；无 partial 的 OUT_OF_NODES → OK+reachedLimit，对齐 UE `SetSearchReachedLimit`）；缓冲不足 = `DT_SUCCESS|DT_BUFFER_TOO_SMALL` 截断填充（OK 态才升级为 BUFFER_TOO_SMALL，错误态信息优先）。
+3. **「路径平滑」口径**：`findStraightPath` string-pulling 即计划「平滑」语义（相对走廊口字折线已最直），不引入 Catmull-Rom 类额外算法防范围失控；partial 不静默折算、透传调用者（比 UE `bAllowPartialPaths` 折算透明）。
+4. **HizScene 连通性**：4 箱顶 poly 高差超 climb 互不连通——首版 ctest 正向端点（场景对角）实测 UNREACHABLE；连通对由 CLI 批量探测固化（`(-1.9,-2.1)→(-1.0,-1.0)`），expectLog 全部从实测复制。
+5. **证据图十字**：初版蓝十字画原始 start（吸附点外空白区视觉断开）→ 改标折线两端吸附后实际起讫点；run.bat 确定性断言从 log 改为折线 PNG `fc /b`（log 含 `png : <路径>` 行两次必不等）。
+6. **run.bat 确定性断言**：log 含 png 路径行 → 比对对象换 PNG 字节（画布=f(mesh,start,end)，更强）；PNG 十字修正后重拍一轮。
+
+**下一步**：M-N2 编辑器结合（烘焙参数 cvar + ImGui 面板 + DebugUtils 五阶段可视化 + 调参重烘焙闭环，2026-11-09 拍板核心；查询能力已就位，路径叠加可直接消费 `NavMesh::findPath`）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。
+
 ## P8 M-GL1：viewer 主循环接双帧 + game.* console + --fixed-dt（feat/gameloop，2026-11-10，tag `gl-m1`）
 
 - **动作**：M-GL0 的 `nl::core::GameClock` 接进 viewer——`runNormal` skin 模式非 `--anim-time` 路径改走 `GameClock::tick`（渲染帧喂 dtMs → 逻辑帧 60Hz accumulator 消费 → simTime 量化不插值）；`--anim-time` 兼容路径原样保留（绕过时钟，既有基线逐字节零风险）。控制台 `game.pause`（无参翻转；暂停=bevy 时钟停摆——simTime 冻结、HUD/相机照常）/ `game.timeScale`（[0,1024] 钳制，NaN/负→0）/ `game.status`（截图日志锚行）；CLI `--fixed-dt <ms>` 钉渲染帧 delta（对拍确定性，0=关）。命令注册先于 `--console-exec` 预执行。**用户拍板（本轮问询后确认方向）**：ECS scene tick / 物理叠加层 `physicsScene.step(1/60)` 统一迁入 GameClock 属 **M-GL2**（与 M-S3 合并收口），本站不动两处调用点；迁移路径已论证：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变（floor(240×16.7/16.667)=240）、终态轨迹一致、基线大概率零重拍。

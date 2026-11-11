@@ -8159,6 +8159,125 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "nav-n1",
+   "label": "P8 M-N1",
+   "name": "Detour 查询封装（findPath/findStraightPath + 负向语义）",
+   "tag": "nav-n1",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第二里程碑：nl/nav 查询封装链 findNearestPoly -> findPath（多边形走廊）-> findStraightPath（string-pulling 折线，即本层「路径平滑」口径）。明确错误码 OK/UNREACHABLE/OUT_OF_NODES/BUFFER_TOO_SMALL/NOT_INITIALIZED/INVALID_PARAM 不静默折算（对齐 UE 三态+partial 单独记录口径，超越 Carrot 空 vector 无错误码）。上游 1.6.0 实测语义：不可达 = SUCCESS|PARTIAL_RESULT 非 FAILURE；节点预算 = maxNodes 池上限。踩雷留痕：maxNodes<4 时上游 dtNextPow2(maxNodes/4)=0（v-- 下溢）→ hash 池 0 字节 → getNode 越界段错误，封装层硬闸下限 4。",
+   "acceptance": [
+    "selftest 30 项全绿：M-N0 锚点（合成 bake/确定性/roundtrip/负向）+ M-N1 查询锚点（直连 OK / 绕障 >2 点且总长>直线距且避开障碍中心 / 孤立岛 UNREACHABLE 含 best-effort 前缀 / maxNodes=4 OUT_OF_NODES / 重复查询逐点一致 / maxNodes=1 与未初始化负向）",
+    "HizScene 查询确定性：同参数两次 query 的折线 PNG fc /b 逐字节一致；ctest m-n1-nav-* 5/5（selftest/bake/query-ok/query-unreachable WILL_FAIL/query-usage WILL_FAIL）",
+    "证据图 query-path.png = nav-tools query --png 真实输出（512x512 俯视正交，蓝十字折线起点 + 红折线 + 绿十字终点落在箱顶轮廓内），不许手绘",
+    "上游语义实据（DetourNavMeshQuery.cpp 973-1165）：不可达（open list 耗尽）= DT_SUCCESS|DT_PARTIAL_RESULT；节点池分配失败 = detail DT_OUT_OF_NODES 可与 partial 并存；缓冲不足 = DT_SUCCESS|DT_BUFFER_TOO_SMALL 截断填充",
+    "交代物：example/nav-n1/（run.bat ALL GREEN + hiz-a.nnav + query-path.png + 6 份日志）+ 本卡六用例 + NAV-TOOLS-GUIDE.md 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 query 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0 烘焙锚点 + M-N1 查询锚点（30 项断言）",
+     "kind": "tool",
+     "note": "M-N1 新增：直连/绕障/孤立岛不可达/节点预算 OUT_OF_NODES/确定性逐点一致/maxNodes=1 上游崩雷硬闸/未初始化 mesh。合成场景较 M-N0 增加孤立岛（供 UNREACHABLE）。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "bake",
+     "name": "bake：HizScene.glb 烘焙（查询输入，M-N0 同参）",
+     "kind": "tool",
+     "note": "cs=0.1 + agentRadius=0.2；4 箱顶场景各 poly 高差超 climb 不连通，恰好同时供给可达（同区）与不可达（跨区/超界）两类查询用例。",
+     "args": [
+      "bake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "saved       :",
+     "command": "nav-tools bake assets/models/HizScene.glb <out> --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "query-ok",
+     "name": "query 正向：同区两点 OK + 折线 PNG（真实工具输出）",
+     "kind": "tool",
+     "note": "findNearestPoly 吸附 -> findPath 走廊 -> findStraightPath 折线；折线两端十字标吸附后实际起讫点。两次运行 PNG 逐字节一致（确定性硬判据）。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0",
+      "--png",
+      "{out}",
+      "--size",
+      "512"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : OK",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.9,0,-2.1 --end -1.0,0,-1.0 --png <out> --size 512"
+    },
+    {
+     "id": "query-unreachable",
+     "name": "query 负向：终点超界 UNREACHABLE（退出码 1）",
+     "kind": "tool",
+     "note": "end=(100,0,100) 在 halfExtents 搜索盒内无 poly 可吸附 -> 明确 UNREACHABLE（M-N1 计划负向语义：不可达给明确错误码，非静默）。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.8,0,-2.0",
+      "--end",
+      "100,0,100"
+     ],
+     "expectExit": 1,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.8,0,-2.0 --end 100,0,100"
+    },
+    {
+     "id": "query-usage",
+     "name": "query 负向：maxNodes=1 触碰上游崩雷硬闸（退出码 2）",
+     "kind": "tool",
+     "note": "上游 dtNextPow2(maxNodes/4) 在 maxNodes<4 时为 0（v-- 下溢）-> hash 池 0 字节分配 -> getNode 越界段错误；封装层硬闸 [4,65535]，CLI 层拦截退出 2。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.8,0,-2.0",
+      "--end",
+      "-1.0,0,-1.0",
+      "--max-nodes",
+      "1"
+     ],
+     "expectExit": 2,
+     "expectLog": "--max-nodes must be in [4, 65535]",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.8,0,-2.0 --end -1.0,0,-1.0 --max-nodes 1"
+    }
+   ]
   }
  ]
 }
