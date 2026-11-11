@@ -473,3 +473,5 @@ add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
 add_subdirectory(vfx-tools)
 add_subdirectory(cam-tools)
+add_subdirectory(editor_bridge)   # 引擎侧 bridge（静态库，M-E2 供 viewer 接线）
+add_subdirectory(editor)          # 编辑器宿主（C++/ImGui，独立进程）

@@ -31,9 +31,9 @@
 
 ## 3. 分期（里程碑编号沿用 `M-E*` 前缀，不占 m0.* / S* 编号）
 
-- **M-E0** 编辑器外壳骨架：独立 C++ 程序 + ImGui 主窗 + 可停靠视口框 + 最小插件加载器（无引擎也可启动）。
-- **M-E1** 最小 RPC 通路：`RpcHost`(server) + `RpcBridge`(client) + 握手/心跳/echo 双向跑通（含自研 msgpack 编解码 + TCP 分帧）。
-- **M-E2** 视口嵌入：`SetParent` 挂引擎 HWND + 随框尺寸同步 + 几何 watcher。
+- **M-E0** 编辑器外壳骨架：独立 C++ 程序 + ImGui 主窗 + 可停靠视口框 + 最小插件加载器（无引擎也可启动）。 **[DONE 2026-11-11]** — 全量编译链接通过（`editor.exe`/`rpc_self_test.exe` 均产出）。GUI 运行需桌面+GPU 会话，headless 沙箱无法跑 GUI（GLFW 在无证显会话里段错误，环境限制非代码缺陷）。
+- **M-E1** 最小 RPC 通路：`RpcHost`(server) + `RpcBridge`(client) + 握手/心跳/echo 双向跑通（含自研 msgpack 编解码 + TCP 分帧）。 **[DONE 2026-11-11]** — `rpc_self_test.exe` 无头自测 11 项全绿（accept / announce(hwnd·pid·proto) / 正向 echo / 反向 echo / 2.6s 心跳 ping-pong 不误判掉线）。
+- **M-E2** 视口嵌入：`SetParent` 挂引擎 HWND + 随框尺寸同步 + 几何 watcher。 **[DONE 2026-11-11，画面验收全过]** — 双端接线全量编译链接通过：viewer 加 `--editor-bridge`（可选启动，连不上降级单机；两个交互主循环每帧泵 `bridge.update()`）；编辑器 `attachEngine` 建 WS_CHILD 容器窗 + `EmbedWindow::attach` 跨进程 SetParent，每帧 `syncNative` 贴面板内容区 + 引擎窗铺满容器（WM_SIZE 驱动引擎侧 swapchain 重建）；`onEngineClose` 拆容器回落占位（崩溃隔离可视化）。验收三项实机全过：① 跨进程 SetParent 实挂（Win32 窗口树：容器 NlEditorViewportHost 与引擎窗 GLFW30 pid 跨进程、矩形完全重合）+ GDI 截屏确认 Suzanne 像素直出无偏移（修复 ImGui 坐标系双重 ScreenToClient 偏移 bug）；② resize 跟手（viewer log `resize -> 964x585`）；③ `taskkill viewer` 后编辑器存活、容器自动拆除回落占位（崩溃隔离实挂证据）。另修 GL2 后端移植 bug：客户端数组模式 `glVertexPointer` 第 4 参须传内存基址+偏移（原误传纯偏移 → 驱动近零地址读顶点段错误），并摘除误设的 `RendererHasVtxOffset`。
 - **M-E3** 第一个工具插件（相机/场景树）经 RPC 驱动引擎。
 
 ---
@@ -43,16 +43,18 @@
 ```
 editor/                        # 编辑器宿主进程（C++ / ImGui）
   CMakeLists.txt
-  main.cpp                     # 入口：建窗 + ImGui + 泵 update()
-  rpc_host.hpp / .cpp          # RpcHost（Server 角色，监听引擎 client）
-  msgpack_min.hpp              # 自研极简 msgpack 编解码（零依赖）
-  viewport.hpp / .cpp          # ImGui 视口框 + SetParent 嵌入控件
-  plugin.hpp                   # 插件扩展点 / Service 基类（隔离原则）
-  plugins/                     # 工具插件（M-E3 起）
+  main.cpp                     # 入口：建窗 + ImGui + 泵 update()；含 GL 上下文判空（headless 优雅退出）
+  rpc_host.hpp / .cpp          # RpcHost（Server 角色，监听引擎 client）+ isConnected() 状态查询
+  viewport.hpp / .cpp          # ImGui 视口框 + SetParent 嵌入控件（M-E2 接线点）
+  plugin.hpp / .cpp            # 插件扩展点 / Plugin 基类（隔离原则）+ CameraStub 内建样例
+  imgui_backend.hpp / .cpp     # 自建极简 ImGui 后端（GLFW + OpenGL 2.0 固定管线；vendored imgui 为
+                               #   标准版非 docking，ImTextureID=ImU64，需经 (ImTextureID) 强转）
+  rpc_self_test.cpp            # M-E1 无头自测：同进程双线程 server+client 跑通握手/announce/echo/心跳
 editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 renderer 图形路径）
   CMakeLists.txt
+  msgpack_min.hpp              # 自研极简 msgpack 编解码（零依赖，host/bridge 共用，落此目录）
   rpc_bridge.hpp / .cpp        # RpcBridge（Client 角色）+ update() 泵
-  embed_window.hpp / .cpp      # 接收父 HWND / 上报自身 HWND
+  embed_window.hpp / .cpp      # 接收父 HWND / 上报自身 HWND（M-E2 暴露 API）
 ```
 
 引擎侧 `editor_bridge/` 与渲染主线 `renderer/` 解耦，仅经 `update()` 在主循环每帧泵；不改动 `renderer/` 任何图形 API 路径。
@@ -68,12 +70,14 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 
 ---
 
-## 6. 待拍板（非架构，调参项，M-E1 落地前按一句话定）
+## 6. 待拍板项（调参，M-E1 落地时一句话定稿）
 
-- [ ] 端口固定 `29110` 还是随机 + 命令行/文件通知？
-- [ ] 命名管道作默认（Windows 专属）还是 TCP 默认、管道可选？
-- [ ] `SetParent` 由编辑器主动挂（推荐，对启动顺序更鲁棒）还是引擎带 `--parent-hwnd` 自建子窗？
-- [ ] 是否支持「多视口」（同一引擎多个嵌入窗）——影响 `engine.announce` 的 hwnd 结构。
+> 以下四项已在 M-E1 实现中按推荐值固化，记录备查；如需变更属 §15 范围扩展。
+
+- [x] **端口**：固定 `29110`（本机本地回路 127.0.0.1）。`RpcHost::start()` 已硬编码 `htons(29110)`；`endpoint` 形参预留给 §15 的命令行/文件通知扩展。
+- [x] **传输**：TCP 默认（msgpack + 4 字节小端长度前缀 + JSON-RPC 2.0 信封语义）。命名管道留作 §15 可选；`RpcBridge::connect(endpoint)` 形参已预留。
+- [x] **SetParent 方向**：编辑器主动挂。`EmbedWindow::attach(parentHwnd, engineHwnd)` 由编辑器侧调用（parent=编辑器视口原生子窗，child=引擎 HWND）。对启动顺序更鲁棒——引擎先起或后起均可，announce 到位即挂。
+- [x] **多视口**：M-E1 单视口。`engine.announce` 的 `hwnd` 为单值；多视口（同一引擎多个嵌入窗）是 M-E2+ 扩展，`caps` 字段已预留数组位。
 
 ---
 
@@ -82,3 +86,74 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 - 每里程碑产出可读证据（启动截图 / RPC echo 日志 / 嵌入画面）；
 - 不进渲染 `bytes/near` 总闸；
 - 收尾按 PARALLEL-TRACKS §7.6 双向自查 + 同步主树注册表 + merge 回 master（分支与 tag 留档）。
+
+---
+
+## 8. 进度台账
+
+### 2026-11-11 — M-E0 + M-E1 落地（feat/editor worktree）
+
+**产物（均未提交，留 worktree，遵守 tree_gate）**
+- `editor/` 宿主进程全量编译链接通过：`editor.exe`（GUI 外壳）、`rpc_self_test.exe`（M-E1 无头自测）。
+- `editor_bridge/` 静态库 `nl_editor_bridge` 编译通过，msgpack 编解码 + `RpcBridge`(client) + `EmbedWindow` 框架就位。
+- 根 `CMakeLists.txt` 追加 `add_subdirectory(editor_bridge)` 与 `add_subdirectory(editor)`（构建接入）。
+- 新增 `editor/build-editor.ps1`：PowerShell + 反斜杠 Windows 路径 + NMake + 自管 `INCLUDE/LIB`，供本机无 vcvars 环境构建（不入 git，属本地工具）。
+
+**M-E1 验收（`rpc_self_test.exe`，本地无头 PASS，0 failures）**
+```
+=== M-E1 RPC self-test ===
+  [ ok ] RpcHost.start() 监听 127.0.0.1:29110
+  [ ok ] 引擎 client 已连上（accept 成功）
+  [ ok ] engine.announce 上报 hwnd == 0xDEADBEEF
+  [ ok ] engine.announce 上报 pid 正确
+  [ ok ] engine.announce 上报 proto == 1
+  [ ok ] host.call(engine.echo) 成功返回 RpcValue
+  [ ok ] 回包内容 == 请求内容 (echo)
+  [ ok ] client.call(editor.echo) 回包内容 == 请求内容 (反向 echo)
+  [ ok ] 心跳 2.6s 内持续 ping/pong，host 未误判掉线
+=== M-E1 self-test PASS (0 failures) ===
+```
+覆盖：握手 / 双向 announce(hwnd·pid·proto) / 正向与反向 echo / 心跳 ping-pong 不误判掉线。
+
+**踩坑修正（已就地修复，不入 git 历史噪音）**
+- vendored imgui 标准版 `ImTextureID = typedef ImU64`（非 `void*`）→ `imgui_backend.cpp` 三处改 `(ImTextureID)` 强转。
+- `rpc_self_test.cpp` 直接用了 `msgpack::Map/Value`，但本构建命名空间是 `nl::editor::msgpack` → 加 `namespace msgpack = nl::editor::msgpack;` 别名。
+- 自测须泵 `RpcHost::update()` 才能 accept（与真实编辑器主循环一致）；反向 echo 等待期也须持续泵 `bridge.update()`，否则收不到 host 的 req。
+- `RpcHost` 新增 `isConnected()` 供连接状态 UI；`main.cpp` 加 `glfwGetCurrentContext()` 判空，headless/无 GPU 时优雅退出（非段错误）。
+
+**Headless 限制（明确标注）**
+- 本沙箱无桌面+GPU 会话，`editor.exe` 无法跑 GUI（GLFW 在无显示会话里硬段错误，属环境限制）。M-E1 已用无头 `rpc_self_test` 充分验证；GUI 画面验收需在有桌面的机器上跑 `editor.exe` + `viewer.exe`（M-E2 接线后）。
+
+**下一步**
+- M-E2：引擎 `viewer.exe` 接 `editor_bridge`——`EmbedWindow::announce(bridge, engineHwnd, pid, proto, caps)` + 主循环每帧 `bridge.update()`；编辑器侧 `onEngineAnnounce` 拿视口原生子窗 HWND 调 `EmbedWindow::attach` 完成 SetParent。
+- M-E3：`CameraStubPlugin` 接真实相机/场景树 RPC。
+
+### 2026-11-11 — M-E2 落码 + 画面验收全过（feat/editor worktree，未提交）
+
+**产物（未提交，留 worktree）**
+- `viewer/main.cpp`：`Options.editorBridge` + `--editor-bridge` 解析；`EditorEmbed` 辅助结构（connect 29110 → 注册 `engine.echo` handler → `EmbedWindow::announce` 上报 HWND/pid/proto）；`runNormal`/`runScene` 两个交互主循环 `pollEvents` 后各泵一次 `edEmbed.pump()`；截图回归模式强制不启用（隐藏窗 + 定帧退出，嵌入无意义）；usage 加三条文案。
+- `viewer/CMakeLists.txt`：`target_link_libraries(viewer ... nl_editor_bridge)`。
+- `editor/viewport.hpp/.cpp`：`attachEngine()`（建 WS_CHILD 容器窗 + `EmbedWindow::attach` 跨进程 SetParent，幂等可重连）、`detach()`（掉线拆容器）、`syncNative()`（每帧容器贴面板内容区 ScreenToClient+SetWindowPos；引擎窗 MoveWindow 铺满容器，同尺寸去抖）。
+- `editor/main.cpp`：`GLFW_EXPOSE_NATIVE_WIN32` + `glfwGetWin32Window(w)` 拿编辑器顶层 HWND；`onEngineAnnounce` → `attachEngine`；`onEngineClose` → `detach`（崩溃隔离可视化证据）；Connection 面板加 `embed : SetParent ok/pending` 状态行。
+
+**架构要点（对齐 §6 拍板口径）**
+- attach 由编辑器主动挂：引擎侧零 attach handler，只 announce + 泵；引擎窗挂入编辑器容器后引擎 GLFW 照常自转（WM_SIZE → consumeResize → swapchain 重建）。
+- 引擎 HWND 直接用 `Window::nativeHandle()`（实现本就返回 `glfwGetWin32Window`），core 零改动。
+- 像素直出：native child 永远盖在父窗 GL 内容之上，容器精确贴 Viewport 面板内容区，ImGui 只出面板 chrome。
+
+**验收（2026-11-11 实机全过，含画面三项）**
+- 三目标全量编译链接 0 error（editor / rpc_self_test / viewer）；`rpc_self_test` 回归 PASS（0 failures），M-E1 通路零回归。
+- ① **跨进程 SetParent 实挂**：Win32 窗口树枚举——容器 `NlEditorViewportHost` 与引擎窗 `GLFW30`（跨进程 pid）矩形完全重合（964x585 @150% DPI）；GDI BitBlt 截屏确认 Suzanne 像素直出、完整贴 Viewport 面板无偏移。期间修掉坐标系 bug：ImGui 的 `GetCursorScreenPos` 返回的已是窗口客户区坐标，`SetWindowPos` 子窗要的也是客户区相对坐标——原实现多了一次 `ScreenToClient`，双重相减导致整体偏移（用户目击"偏移了"即此根因）。
+- ② **resize 跟手**：拖编辑器窗角，viewer log `resize -> 964x585`，引擎 swapchain 随 WM_SIZE 链路重建。
+- ③ **崩溃隔离**：`taskkill viewer` 后编辑器存活（hwnd 不变）、`onEngineClose` 自动拆容器、子窗清零回落占位。
+- 另修 GL2 后端移植 bug（画面黑屏段错误根因）：客户端数组模式下 `glVertexPointer` 系列第 4 参必须传「内存基址+偏移」（`vtx + OFFSETOF`），原误传纯偏移导致驱动从近零地址读顶数据段错误；并摘除误设的 `ImGuiBackendFlags_RendererHasVtxOffset`（GL2 不支持，16 位索引溢出风险）。行级插桩法定位（mark() 逐步缩圈 → GL 上下文探针排除环境 → cmd0 数据 dump 确认数据合法 → 锁定 GL 调用参数），定位后插桩全清。
+
+**踩坑（本轮新增）**
+- `windows.h` 的 min/max 宏：`/permissive-` 并不自动压掉（错误认知）→ viewer/editor 两目标显式 `NOMINMAX`；editor 的 `std::max(1, ...)` 在 viewport.cpp 被宏撕碎（C2059）实锤。
+- windows.h 必须先于 glfw3.h 包含，否则 `APIENTRY` 重定义 C4005（glfw 官方口径）。
+- ImGui 面板内嵌原生窗的经典时序：`GetCursorScreenPos()` 必须在 `Dummy(avail)` 之前取（Dummy 推进光标，之后取会偏一行）。
+- 沙箱跑 viewer.exe 报 UCRT DLL 127：bash/Start-Process 环境缺 redist PATH + `HTTPS_PROXY/https_proxy` 大小写键冲突炸 Start-Process——均为环境问题，回归 harness（python subprocess + 系统 PATH）不受影响。
+
+**待办**
+- M-E3：`CameraStubPlugin` 接真实相机/场景树 RPC。
+- 体验缺口（已识别、未排期，做 M-E3 时拍板）：引擎先启/编辑器后启时 `--editor-bridge` 只连一次失败即永久降级单机，无周期重连；跨进程嵌入后的键盘/鼠标焦点路由未实测；`announce.caps` 仍空（分辨率/后端元信息预留位）。

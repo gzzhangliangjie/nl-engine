@@ -1,3 +1,8 @@
+// ---- M-E2：编辑器嵌入（可选启动）。windows.h 必须在最前——glfw3.h 若先定义
+// APIENTRY，windows.h 再定义会 C4005（glfw 官方口径：windows.h 先含）。
+#define NOMINMAX           // min/max 宏会撕碎本文件既有 std::max 调用（2469 等处）
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
 #include "nl/core/console.hpp"
@@ -36,6 +41,10 @@
 #include <sstream>
 #include <string>
 #include <thread>
+
+// ---- M-E2：编辑器嵌入（可选启动）。bridge 头不含 winsock/windows，无包含序风险。
+#include "rpc_bridge.hpp"
+#include "embed_window.hpp"
 
 namespace {
 
@@ -162,6 +171,7 @@ struct Options {
     std::uint32_t physicsSeed = 0;               // M-P3：--physics-seed N（当前仅记录）
     bool particles = false;                      // M-PT0：粒子叠加层（instanced billboard 喷泉）
     std::string nfxPath;                         // M-PT1：.nfx v1 加载（隐含 --particles）
+    bool editorBridge = false;                   // M-E2：--editor-bridge 连接外置编辑器（连不上降级单机）
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -169,6 +179,7 @@ Options parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") o.selftest = true;
+        else if (a == "--editor-bridge") o.editorBridge = true;   // M-E2：外置编辑器嵌入
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
@@ -624,6 +635,31 @@ void registerGameConsole(nl::core::GameClock* clock) {
 // M3.2：dagTop=true 时同一 cluster 场景，但初始渲染链最粗层（DAG 顶层组产出的
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
+// ---- M-E2：编辑器嵌入辅助（--editor-bridge 时启用，否则零开销零触碰）----
+// 职责：连接编辑器 RpcHost(29110) + 上报 HWND（engine.announce）+ 每帧泵 update。
+// attach 由编辑器主动 SetParent（EDITOR-PLAN §6 拍板），引擎侧无 attach handler。
+// 连接失败 = 静默降级单机运行（编辑器是可选外挂，崩溃隔离：引擎照常自渲染）。
+struct EditorEmbed {
+    nl::editor::RpcBridge bridge;
+    bool connected = false;
+
+    void start(void* engineHwnd) {
+        connected = bridge.connect("tcp://127.0.0.1:29110");
+        if (!connected) {
+            nl::core::log::info("editor bridge: no editor at 127.0.0.1:29110 -> standalone mode");
+            return;
+        }
+        bridge.registerHandler("engine.echo",
+                               [](const nl::editor::RpcValue& p) { return p; });
+        nl::editor::EmbedWindow::announce(bridge, engineHwnd,
+                                          static_cast<int>(::GetCurrentProcessId()), 1);
+        nl::core::log::info("editor bridge: connected, hwnd announced to editor");
+    }
+    void pump() {
+        if (connected) bridge.update();   // 泵入站 + 心跳（编辑器挂了也照跑）
+    }
+};
+
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
@@ -647,12 +683,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         return 1;
     }
 
+    // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
+    // 截图回归模式不启用（隐藏窗口 + 定帧退出，嵌入无意义）。
+    EditorEmbed edEmbed;
+    if (o.editorBridge && !o.screenshot) edEmbed.start(window.nativeHandle());
+
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
         static_cast<std::uint32_t>(nativeSize.width),
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
+
                                                    o.modelFile.c_str(), cluster, cullMode,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
@@ -920,6 +962,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         syncCameraToCVar();   // M-C2：相机实际值回写 cam.fov/cam.dist（滚轮 zoom / reset 后不陈旧）
         // M-C1：` 边沿切换控制台；ESC 开着控制台时先收控制台，再退出
         if (window.keyPressed(nl::core::Key::Grave)) {
@@ -1858,6 +1901,11 @@ int runScene(const Options& o) {
         nl::core::log::error("window creation failed");
         return 1;
     }
+
+    // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
+    EditorEmbed edEmbed;
+    if (o.editorBridge && !o.screenshot) edEmbed.start(window.nativeHandle());
+
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
         static_cast<std::uint32_t>(nativeSize.width),
@@ -2190,6 +2238,7 @@ int runScene(const Options& o) {
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         if (window.keyPressed(nl::core::Key::Escape)) {
             nl::core::log::info("ESC -> exit");
             break;
@@ -2541,6 +2590,9 @@ void printUsage() {
               << "  viewer.exe                         textured Suzanne + ImGui HUD; drag=orbit, wheel=zoom\n"
               << "                                     C=culling, V=wireframe, N=shading, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"
+              << "  viewer.exe --editor-bridge         connect external editor at 127.0.0.1:29110;\n"
+              << "                                     window gets embedded via SetParent (M-E2);\n"
+              << "                                     no editor running -> standalone (graceful)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
