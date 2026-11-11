@@ -1,0 +1,28 @@
+nav-tools - nl-engine P8 pathfinding tools (Recast/Detour 1.6.0, headless)
+usage:
+  nav-tools bake <in.glb|.nmesh> <out.nnav> [--cell-size F] [--cell-height F]
+          [--slope F] [--agent-height F] [--agent-radius F] [--agent-climb F]
+          [--min-region F] [--merge-region F]
+  nav-tools dump <in.nnav>
+  nav-tools wire <in.nnav> <out.png> [--size N]
+  nav-tools query <in.nnav> --start x,y,z --end x,y,z
+          [--max-nodes N] [--max-waypoints N]
+          [--half-extents x,y,z] [--png out.png]
+  nav-tools resave <in.nnav> <out.nnav>
+  nav-tools debug-stage <in.glb|.nmesh> <out.png> --stage <name>
+          [--size N] [--cell-size F ...]
+  nav-tools tilebake <in.glb|.nmesh|.scene> <out.nnav> [--tile-size N]
+          [--max-obstacles N] [--png out.png] [--size N] [--cell-size F ...]
+  nav-tools obstacle <in.nnav> --pos x,y,z --start x,y,z --end x,y,z
+          [--radius F] [--height F] [--png out.png]
+  nav-tools crowd [--arena | <in.nnav>] [--spawn x,y,z:x,y,z]...
+          [--preset crossing|line|none] [--frames N] [--dt F]
+          [--max-agents N] [--agent-radius F] [--speed F]
+          [--arrival F] [--trace out.ntraj] [--png out.png] [--size N]
+          M-N4: fixed-step dtCrowd multi-agent trace (.ntraj, v1/v2 .nnav)
+  nav-tools offmesh [--no-link] [--exclude] [--one-way] [--reverse]
+          [--start x,y,z] [--end x,y,z] [--link "ax,ay,az bx,by,bz"]
+          [--radius F] [--nav out.nnav] [--png out.png] [--size N]
+          M-N5: offmesh bake + .nnav v3 roundtrip + straight-path jump flags
+  nav-tools selftest [--verbose]
+exit codes: 0=PASS 1=failure 2=usage

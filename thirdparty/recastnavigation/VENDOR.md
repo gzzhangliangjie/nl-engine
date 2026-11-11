@@ -47,3 +47,9 @@ Intentionally **not** vendored：
 ## Upgrade discipline
 
 版本**锁死 1.6.0**。升级单独走一轮验收（照 Jolt 先例）：重 vendored → `nav-tools selftest` → 重出 bake/dump 产物 MD5 + 证据 PNG → 展示台卡复核。绝不静默 bump。
+
+## M-N5 留痕（2026-11-11，off-mesh connection）
+
+- **零新增入库文件、零上游编辑**：M-N5 的 off-mesh connection 全部消费**已入库** `Detour/` 的 `dtNavMeshCreateParams.offMeshCon*`（`DetourNavMeshBuilder.h:54-76`）、`dtOffMeshConnection`（`DetourNavMesh.h:224`）、`DT_OFFMESH_CON_BIDIR` 与 `DT_STRAIGHTPATH_OFFMESH_CONNECTION`；`DetourTileCache/` / `DetourCrowd/` 子集不变。
+- 上游 1.6.0 **无运行时 `addOffMeshConnection`**（`DetourNavMesh.h` 只有 `getOffMeshConnectionPolyEndPoints` / `getOffMeshConnectionByRef` 读 API），故链接必须烘焙期注入；UE 5.8.4 fork 的 `offMeshSegConCount`（segment connection）上游 1.6.0 不存在，本项目不抄、不模拟。
+- `VENDOR.md` 的锁定 commit `6dc1667f580357e8a2154c28b7867bea7e8ad3a7` 与 ZLib 授权结论均不变；本轮只扩自写集成层 `nl/nav` 与 `nav-tools`。

@@ -121,6 +121,12 @@ bool debugStageFromName(const char* name, DebugStage& out);  // 解析（小写�
 inline constexpr char kNavMagic[4] = {'N', 'L', 'N', 'V'};
 inline constexpr std::uint16_t kNavVersion = 1;       // Solo Mesh（M-N0 起）
 inline constexpr std::uint16_t kNavVersionTiled = 2;  // TileCache tiled（M-N3 起）
+// **v3 = Solo Mesh + off-mesh connection 描述段（M-N5 起）**：基础段布局与 v1
+// 完全一致（version 字段=3），尾部追加连接描述；v1/v2 分支一行不改。
+inline constexpr std::uint16_t kNavVersionOffMesh = 3;
+// offmesh poly 独占 flag 位（对齐 UE ARecastNavMesh::NavLinkFlag 的最高位口径），
+// 供 QueryParams::excludeOffMesh 用 dtQueryFilter::setExcludeFlags 排除。
+inline constexpr std::uint16_t kOffMeshExcludeFlag = 0x8000;
 
 // ---- M-N3：tiled 烘焙参数（方案 A / A-1 拍板）----
 // 复用 BuildParams 的换算口径（cellSize/agent* 等），新增上游 tileSize（体素/边）
@@ -129,6 +135,23 @@ struct TileBuildParams {
     BuildParams base;
     int  tileSize     = 48;   // 每 tile 边长（体素数）
     int  maxObstacles = 128;  // 动态障碍池上限（dtTileCacheParams）
+};
+
+// ---- M-N5：off-mesh connection（烘焙期注入，上游 1.6.0 无运行时 add API）----
+// 语义照上游 dtNavMeshCreateParams.offMeshCon*（DetourNavMeshBuilder.h:54-76）：
+// start=A / end=B，0 = 单向 A→B，bidirectional = 双向；radius 决定端点与
+// NavMesh poly 建立链接的搜索半径；flags 是 poly 通行标记，注入时自动 OR 上
+// kOffMeshExcludeFlag 以支持查询过滤；area/userId 原样交给上游。
+// 端点必须落在 tile bbox 内：上游 builder 的 classifyOffMeshPoint 对 bbox 外的
+// 连接直接丢弃（0xff），封装层在 bake 前显式校验并报错，不静默吞。
+struct OffMeshConnection {
+    float start[3] = {0.f, 0.f, 0.f};
+    float end[3]   = {0.f, 0.f, 0.f};
+    float radius   = 0.5f;
+    bool  bidirectional = true;
+    std::uint16_t flags = 1;       // 默认可走（bake 侧普通 poly 亦为 1）
+    std::uint8_t  area  = 1;       // RC_WALKABLE_AREA
+    std::uint32_t userId = 0;
 };
 
 // ---- NavMesh：bake 产物持有者（PIMPL）----
@@ -148,8 +171,20 @@ public:
     // 与 M-N0 行为逐字节一致。
     bool bake(const Geometry& geo, const BuildParams& params,
               std::string& outError, bool keepDebug = false);
+    // M-N5：带 off-mesh 连接表的烘焙重载。传空表 = 与上方 bake 逐字节一致
+    // （dparams.offMeshCon* 全 0，version 仍写 v1）。只支持 Solo Mesh 路径；
+    // tiled 连接注入属另一条链，本轮不做（见 PLAN Q5-3）。
+    bool bake(const Geometry& geo, const BuildParams& params,
+              const std::vector<OffMeshConnection>& links,
+              std::string& outError, bool keepDebug = false);
     bool save(const char* path, std::string& outError) const;
     bool load(const char* path, std::string& outError);
+
+    // M-N5：连接描述（bake 传入 / v3 load 读回）；offMeshPolyCount() 返回
+    // dtMeshHeader::offMeshConCount 之和（上游 builder 实际保留下来的条数，
+    // 可与上面描述条数不同——端点落 bbox 外会被丢弃）。
+    const std::vector<OffMeshConnection>& offMeshConnections() const;
+    int  offMeshPolyCount() const;
 
     const BuildStats& stats() const { return m_stats; }
 
@@ -174,6 +209,9 @@ public:
                                       //   hash 池 0 字节分配 → getNode 越界，M-N1 实测）
         int   maxPathPolys   = 256;   // 多边形走廊缓冲
         int   maxWaypoints   = 256;   // 折线点缓冲
+        // M-N5：排除 off-mesh 连接 poly（对齐 UE FilterOutNavLinksImpl 的独占
+        // flag 位）。默认 false = 放行，M-N1~M-N4 行为逐点不变。
+        bool  excludeOffMesh = false;
     };
 
     // 明确错误码（计划负向语义：不可达 / 超出节点预算各占一态，不静默折算）。
@@ -196,6 +234,10 @@ public:
         bool reachedLimit = false; // 路径完整但邻居展开受节点池限制（OUT_OF_NODES 无 partial）
         std::vector<float> waypoints; // xyz 连续；UNREACHABLE/OUT_OF_NODES 时为
                                       // best-effort 前缀（到最近可达点）
+        // M-N5：与 waypoints 一一对应的 dtStraightPathFlags（上游 0x04 =
+        // DT_STRAIGHTPATH_OFFMESH_CONNECTION，该点是跳跃段起点）。无连接时
+        // 全 0 向量保持尺寸 = waypoints/3，老路径语义不变。
+        std::vector<std::uint8_t> waypointFlags;
     };
 
     // 完整查询链。结果状态与 out.status 一致；确定性：同 mesh 同参数同端点，

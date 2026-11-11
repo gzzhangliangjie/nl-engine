@@ -164,3 +164,48 @@ add_test(NAME m-n4-nav-crowd-bad-nav
          COMMAND nav-tools crowd ${NL_ROOT}/assets/models/Suzanne.glb
                  --spawn -8,0.2,-8:8,0.2,8 --frames 30)
 set_tests_properties(m-n4-nav-crowd-bad-nav PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-N5: off-mesh connection (bake-time injection + .nnav v3 + jump flags) ----
+# 开工闸拍板 Q5-1..Q5-5：烘焙期注入 / v3 描述段（v1-v2 零回归）/ 只做 Solo /
+# DT_STRAIGHTPATH_OFFMESH_CONNECTION 透出 + excludeOffMesh / 连通性反转 + 确定性。
+add_test(NAME m-n5-nav-selftest COMMAND nav-tools selftest --verbose)
+set_tests_properties(m-n5-nav-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
+add_test(NAME m-n5-nav-offmesh
+         COMMAND nav-tools offmesh
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-main.nnav
+                 --png ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-main.png --size 640)
+set_tests_properties(m-n5-nav-offmesh PROPERTIES
+    PASS_REGULAR_EXPRESSION "result      : PASS")
+add_test(NAME m-n5-nav-offmesh-no-link
+         COMMAND nav-tools offmesh --no-link
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-nolink.nnav)
+set_tests_properties(m-n5-nav-offmesh-no-link PROPERTIES
+    PASS_REGULAR_EXPRESSION "status      : UNREACHABLE")
+# UE NavLinkFlag 口径：excludeOffMesh 精确排除链接 poly
+add_test(NAME m-n5-nav-offmesh-exclude
+         COMMAND nav-tools offmesh --exclude
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-exclude.nnav)
+set_tests_properties(m-n5-nav-offmesh-exclude PROPERTIES
+    PASS_REGULAR_EXPRESSION "status      : UNREACHABLE")
+add_test(NAME m-n5-nav-offmesh-one-way
+         COMMAND nav-tools offmesh --one-way
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-oneway.nnav)
+set_tests_properties(m-n5-nav-offmesh-one-way PROPERTIES
+    PASS_REGULAR_EXPRESSION "status      : OK")
+add_test(NAME m-n5-nav-offmesh-one-way-reverse
+         COMMAND nav-tools offmesh --one-way --reverse
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-reverse.nnav)
+set_tests_properties(m-n5-nav-offmesh-one-way-reverse PROPERTIES
+    PASS_REGULAR_EXPRESSION "status      : UNREACHABLE")
+# 负向：非法半径 / bbox 外端点（封装层显式拒绝，不静默吞）/ 用法错误
+add_test(NAME m-n5-nav-offmesh-radius
+         COMMAND nav-tools offmesh --radius 0
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-radius.nnav)
+set_tests_properties(m-n5-nav-offmesh-radius PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n5-nav-offmesh-bbox
+         COMMAND nav-tools offmesh --link "1,0,0 200,0,0"
+                 --nav ${CMAKE_CURRENT_BINARY_DIR}/nav-n5-bbox.nnav)
+set_tests_properties(m-n5-nav-offmesh-bbox PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n5-nav-offmesh-usage COMMAND nav-tools offmesh --bogus)
+set_tests_properties(m-n5-nav-offmesh-usage PROPERTIES WILL_FAIL TRUE)

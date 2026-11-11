@@ -1,0 +1,15 @@
+links       : 1
+offmesh poly: 1
+nnav version: 3
+nnav bytes  : 2052
+roundtrip   : identical
+descriptors : 1
+start       : (14.000, 0.000, 0.000)
+end         : (-8.000, 0.000, 0.000)
+exclude     : 0
+bidir       : 0
+status      : UNREACHABLE
+waypoints   : 2
+offmesh segs: 0
+expect      : UNREACHABLE
+result      : PASS

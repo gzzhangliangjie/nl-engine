@@ -9173,6 +9173,207 @@
      "cwd": "{root}"
     }
    ]
+  },
+  {
+   "id": "nav-n5",
+   "label": "P8 M-N5",
+   "name": "off-mesh connection：烘焙期链接注入 + .nnav v3 + 跳跃标志",
+   "tag": "nav-n5",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第六里程碑（2026-11-11 用户「直接在这里做」就地开工闸，Q5-1..Q5-5 一次拍板）。三处定向实读：上游 Detour 1.6.0 锁定 commit 6dc1667f 的 DetourNavMeshBuilder.{h,cpp}（dtNavMeshCreateParams.offMeshCon* 是唯一入口，classifyOffMeshPoint 静默丢弃 bbox 外端点；DetourNavMesh.h 只有 getOffMeshConnectionPolyEndPoints / getOffMeshConnectionByRef 读 API，全仓无运行时 addOffMeshConnection）、UE 5.8.4 RecastNavMesh.cpp（NavLinkFlag 独占最高位 + FRecastQueryFilter::FilterOutNavLinksImpl + bGenerateNavLinks/NavLinkJumpConfigs 生成期建链；UE fork 的 offMeshSegConCount 上游 1.6.0 无，不抄）、Carrot pathfinding 全目录无 offmesh/navlink/jump 概念与 bevy 全仓无 navmesh 均据实标注不作口径。Q5-1 烘焙期注入 OffMeshConnection POD（start/end/radius/bidir/flags/area/userId）；Q5-2 .nnav v3 尾部描述段、magic 与基础段布局完全同 v1/v2、v1/v2 loader 分支一行不改、M-N0 864 B 与 M-N3 7276 B 基线零回归；Q5-3 只做 Solo Mesh，tiled v2 注入链本轮不动；Q5-4 findStraightPath 的 DT_STRAIGHTPATH_OFFMESH_CONNECTION(0x04) 经 QueryResult::waypointFlags 透出 + QueryParams::excludeOffMesh（对齐 UE NavLinkFlag 独占位）；Q5-5 连通性反转 + 双向/单向 + 逐字节确定性。vendored 上游零编辑、零新增入库文件。",
+   "acceptance": [
+    "三处定向实读留痕写回 P8-NAV-PLAN.md 文末（上游/UE/Carrot/bevy 各自结论 + 5 项 Q 拍板 + 冻结面），删净「默认不做 / 须另起开工闸 / 待拍板」挂账句后才落第一行代码",
+    "Q5-1 硬判据：上游无运行时 add API，链接只能经 dtNavMeshCreateParams.offMeshCon* 在烘焙期注入；offMeshPolyCount() == 传入条数，builder 静默丢弃的情形由封装层 bbox 闸显式拒绝（负向 exit 1 + invalid off-mesh connection #0）",
+    "Q5-2 硬判据：bake 带连接写 version=3（2052 B），save->load->save 逐字节 identical；空连接表仍写 version=1 且与 example/nav-m0/hiz-a.nnav 864 字节基线 fc /b 一致；v1/v2 老卡全部零回归",
+    "Q5-4 硬判据：跨 2m 沟查询 status=OK、waypoints=6、offmesh segs=1；--exclude 与 --one-way --reverse 均回退 UNREACHABLE 且 segs=0；--no-link 对照 UNREACHABLE 且仍写 v1",
+    "Q5-5 硬判据：同参数两次 offmesh run 的 .nnav 与 PNG 分别 fc /b 逐字节一致；selftest 新增 M-N5 锚点（v3 往返 / 跳跃标志 / 排除 / 方向 / 半径与 bbox 两类负向）全绿",
+    "零回归：DX12/VULKAN 双后端 nav-tools BUILD OK、ctest m-n[012345]-nav 41/41 x2（--repeat until-pass:3）、run.bat 双后端 A~F ALL GREEN、regression 五张老卡全绿、server.py --check exit 0、check-bat-encoding 0 违规",
+    "冻结面：vendored 上游零编辑、.nnav v1/v2 字节基线与 loader 分支、nav-n1~nav-n4 与 nav-n3-panel 全部 PNG/.nnav/.ntraj 归档、kStage 仍 S8.2、外置 feat/editor、渲染回归与既有截图重拍，一律不碰",
+    "交代物：example/nav-n5/（run.bat + offmesh-bridge.nnav + offmesh-bridge.png + 10 份日志）+ 本卡 12 用例 + NAV-TOOLS-GUIDE.md §13 归档 + MILESTONES.md M-N5 四栏"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 offmesh 行（未知选项退出码 2）",
+     "kind": "tool",
+     "note": "--bogus 打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [
+      "offmesh",
+      "--bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools offmesh --bogus"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N4 锚点零回归 + M-N5 新增锚点",
+     "kind": "tool",
+     "note": "M-N5 新增：带链接 bake / builder 保留 1 poly / v3 version / v3 描述与 poly 往返 / 逐字节一致 / 跨沟 OK / OFFMESH 标志 / flags 与 waypoints 对齐 / exclude 阻断 / 单向 A->B 可达 B->A 不可达 / 半径与 bbox 两类负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "bridge",
+     "name": "offmesh：跨 2m 沟架桥后可达，.nnav v3 往返逐字节一致",
+     "kind": "tool",
+     "note": "20x20 主地板 + 12..16 孤立岛；连接 9.2,0,0 -> 12.8,0,0（radius 1）。{out} 走临时路径不写仓库基线。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result      : PASS",
+     "command": "nav-tools offmesh --nav <out>"
+    },
+    {
+     "id": "bridge-v3",
+     "name": "offmesh：version=3 与 builder 保留 1 条链接 poly",
+     "kind": "tool",
+     "note": "Q5-2：基础段布局同 v1/v2，只 version 字段=3 + 尾部描述段；Q5-1：offMeshPolyCount() 取自 dtMeshHeader::offMeshConCount。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nnav version: 3",
+     "command": "nav-tools offmesh --nav <out>"
+    },
+    {
+     "id": "bridge-png",
+     "name": "offmesh --png：俯视证据图（工具软光栅真实输出，跳跃段橙色）",
+     "kind": "tool",
+     "note": "黑 = NavMesh poly 边界，紫 = 连接直连 + 两端蓝十字，红 = 普通折线段、橙 = DT_STRAIGHTPATH_OFFMESH_CONNECTION 跳跃段。两次 fc /b 逐字节一致（run.bat C 段）。 未指定 --nav 时工具以 --png 路径派生临时 .nnav 并在跑完删除，零仓库残留。",
+     "args": [
+      "offmesh",
+      "--png",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "offmesh segs: 1",
+     "command": "nav-tools offmesh --png <out> --size 768"
+    },
+    {
+     "id": "no-link",
+     "name": "对照：--no-link 无连接不可达，且容器仍是 v1",
+     "kind": "tool",
+     "note": "Q5-2 零回归：空连接表让 version 回落 1，M-N0~M-N4 全部字节基线不动。",
+     "args": [
+      "offmesh",
+      "--no-link",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools offmesh --no-link --nav <out>"
+    },
+    {
+     "id": "exclude",
+     "name": "Q5-4：excludeOffMesh 按 UE NavLinkFlag 独占位排除链接",
+     "kind": "tool",
+     "note": "offmesh poly 注入时 flags |= 0x8000；dtQueryFilter::setExcludeFlags 精确排除，路径回退到无连接拓扑。",
+     "args": [
+      "offmesh",
+      "--exclude",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "exclude     : 1",
+     "command": "nav-tools offmesh --exclude --nav <out>"
+    },
+    {
+     "id": "one-way",
+     "name": "方向语义：单向 A->B 可达",
+     "kind": "tool",
+     "note": "上游 offMeshConDir=0（非 DT_OFFMESH_CON_BIDIR）只允许 A->B。",
+     "args": [
+      "offmesh",
+      "--one-way",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : OK",
+     "command": "nav-tools offmesh --one-way --nav <out>"
+    },
+    {
+     "id": "one-way-reverse",
+     "name": "方向语义：单向 B->A 不可达",
+     "kind": "tool",
+     "note": "反向查询把 start/end 对调，offMeshConDir=0 时上游不建反向链接。",
+     "args": [
+      "offmesh",
+      "--one-way",
+      "--reverse",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools offmesh --one-way --reverse --nav <out>"
+    },
+    {
+     "id": "radius-zero",
+     "name": "负向：--radius 0 拒绝（退出码 2）",
+     "kind": "tool",
+     "note": "radius<=0 会让上游 baseOffMeshLinks 无法可靠链接 poly，工具层先闸掉。",
+     "args": [
+      "offmesh",
+      "--radius",
+      "0",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools offmesh --radius 0 --nav <out>"
+    },
+    {
+     "id": "bbox-out",
+     "name": "负向：端点在几何 bbox 外必须显式拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "上游 classifyOffMeshPoint 会静默丢弃 bbox 外连接；封装层 bake 前显式校验并报错，不静默吞（Q5-1 硬判据）。",
+     "args": [
+      "offmesh",
+      "--link",
+      "1,0,0 200,0,0",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 1,
+     "expectLog": "invalid off-mesh connection #0",
+     "command": "nav-tools offmesh --link <a b> --nav <out>"
+    },
+    {
+     "id": "resave-v3",
+     "name": "v3 容器往返：save->load->save 逐字节 identical",
+     "kind": "tool",
+     "note": "loader 新增 v3 分支只读尾部描述段，v1/v2 分支一行不改；run.bat E 段另用 M-N0 老参数 bake 与 hiz-a.nnav 864 B 对照。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "roundtrip   : identical",
+     "command": "nav-tools offmesh --nav <out>"
+    }
+   ]
   }
  ]
 }

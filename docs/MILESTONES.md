@@ -2662,3 +2662,22 @@
 4. **负例 acceptance failed 误判**：`--nfx: malformed` 是 error 级日志 → `errorCount()=1` → viewer acceptance 行必报——**负例固有行为非回归**（error 日志本身就是负例断言目标），与 M-PT4 同款，run.bat findstr 管道只断言 log 锚。
 
 **下一步**：批次 E1/E2/E5/R1 四项全收官。R4 软粒子 depth fade 归主线协调（T0 `setSharedDepth` 后接口现成，主线会话单独 claim）；E3/E4/E8 用 misc2 spare 扩展不再触发布局级重拍；merge 回 master 待用户拍板（与 M-PT4 一并）。
+
+## M-N5：off-mesh connection 烘焙期注入 + .nnav v3 + 跳跃标志（feat/pathfinding，2026-11-11，tag `nav-n5`）
+
+**动作**：用户「直接在这里做」就地解除「off-mesh connection 未采纳 / 须另起开工闸」范围闸 → 同一会话内完成三处定向实读（上游 `DetourNavMeshBuilder.{h,cpp}` 无运行时 add API、`classifyOffMeshPoint` 静默丢弃 bbox 外端点、`findStraightPath` 的 0x04 标志；UE `RecastNavMesh.cpp` `NavLinkFlag` 独占最高位 + `FilterOutNavLinksImpl` + `NavLinkJumpConfigs` 生成期建链，UE fork 的 `offMeshSegConCount` 上游 1.6.0 无不抄；Carrot/bevy 据实标注不作口径）+ 历史约定 → Q5-1~Q5-5 一次拍板并写回 `P8-NAV-PLAN.md`、删净挂账句 → 落码：`Nav.hpp` 增 `OffMeshConnection` POD / `kNavVersionOffMesh=3` / `kOffMeshExcludeFlag=0x8000` / `bake` 带连接表重载 / `offMeshConnections()` / `offMeshPolyCount()` / `QueryParams::excludeOffMesh` / `QueryResult::waypointFlags`；`Nav.cpp` 落地 `dtNavMeshCreateParams.offMeshCon*` 烘焙期注入（6 个上游数组，生命周期覆盖 `dtCreateNavMeshData`）、v3 尾部描述段逐字段读写、loader 新 v3 分支（v1/v2 分支一行不改）、`findStraightPath` flags 透出 + `setExcludeFlags`；`nav-tools offmesh` 子命令（合成两岛 + 连通性反转 + 双向/单向/排除 + 俯视证据图，跳跃段橙色）+ selftest M-N5 锚点 + 9 条 ctest + 12 张展示台卡 + `example/nav-n5/run.bat` A~F 六段断言。**vendored 上游零编辑、零新增入库文件**，viewer/scene/renderer/`kStage` 一行未改。
+
+**提交版本**：`feat/pathfinding` M-N5 提交（annotated tag `nav-n5`）。A 类并行轨道，不 bump `kStage`、不进渲染回归、不重拍既有截图基线。
+
+**完成情况**：双后端全量 BUILD OK + viewer selftest 16/16 ×2（shader 86/86）；`ctest -R "m-n[012345]-nav" --repeat until-pass:3` **41/41 ×2**；`regression --only nav-n5` **24/24 ALL GREEN**（bytes 24 / near 0 / FAIL 0），六张老卡 nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 + nav-n3 22/22 + nav-n3-panel 8/8 + nav-n4 22/22 全绿；`server.py --check` exit 0（stage=S8.2，只证明旧卡没回归，新卡由 run.bat + `--only` 双验）；`check-bat-encoding` 93 文件 0 违规；`example/nav-n5/run.bat` DX12/VULKAN **A~F ALL GREEN**。Q5-2 硬判据：v3 产物 2052 B / fnv64 `4512ec3bb96b9dcd`，`save->load->save` 逐字节 identical，空连接表仍写 v1 且 M-N0 `hiz-a.nnav` 864 B 基线 `fc /b` 不变。Q5-4/5 硬判据：跨 2m 沟 `status=OK / waypoints=6 / offmesh segs=1`；`--exclude` / `--one-way --reverse` / `--no-link` 三路回退 `UNREACHABLE` 且 segs=0；`.nnav` 与 PNG 两次 `fc /b` 一致。冻结面（vendored 零编辑、v1/v2 loader 分支与字节基线、nav-n1~n4 与 nav-n3-panel 全部归档、`kStage`、外置编辑器、渲染回归）逐条兑现。
+
+**踩坑情况**
+1. 上游 1.6.0 **无运行时 `addOffMeshConnection`**（只有 `getOffMeshConnectionPolyEndPoints` / `getOffMeshConnectionByRef` 读 API）→ 只能烘焙期注入，`.nnav` 必须能复现连接参数，这是 v3 描述段的根因。
+2. `classifyOffMeshPoint` 对 bbox 外端点返回 `0xff` **静默丢弃**，会造成「bake 成功但路径仍不可达」假绿 → 封装层 bake 前用几何 bbox 显式拒绝 + 工具 bake 后 `offMeshPolyCount()` 与传入条数对拍双保险。
+3. 普通 poly 与 offmesh poly 默认 flags 都是 1，`setExcludeFlags(1)` 会排掉整张网格 → 照 UE `NavLinkFlag` 给 offmesh poly `flags |= 0x8000`，只排除这一位。
+4. 展示台 `{out}` 是单值，`--nav {out} --png {out}` 会互相覆盖 → `bridge-png` 卡只传 `--png`，工具派生临时 `.nnav` 并用局部 guard 在任意 return 删除。
+5. v3 描述段含 `bool` 与混宽整数，整块 memcpy struct 会把 padding 写进产物破坏确定性（M-N3 v2 同款铁律）→ 逐字段 `wrScalar`/`rdScalar`，bool 显式转 `std::uint8_t`。
+6. 只编 `nav-tools` target 后新鲜度闸仍拦下 6 个 exe 落后于 `core/src/nav/Nav.cpp` → 必须双后端 `cmake --build build/<backend>` 全量重编再跑回归（M9.2 教训）。
+7. Write 工具生成 run.bat 是 LF-only（第三次踩）→ `check-bat-encoding.py --fix example/nav-n5` 转 CRLF。
+
+**下一步**：M-N6（Q1=B：E1 ECS `NavAgent` 组件 + viewer `--nav-crowd` 多 Agent 可见渲染）同会话接续，按 PLAN 文末 Q6-1~Q6-4 执行；`feat/pathfinding` merge 回 master 仍待用户单独拍板。

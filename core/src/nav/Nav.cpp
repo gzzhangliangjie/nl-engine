@@ -199,6 +199,10 @@ struct NavMesh::Impl {
     TileBuildParams            tileParams;      // v2 扩展段落盘（重建参数）
     dtTileCacheParams          tcParams{};      // 上游参数原样（v2 落盘）
     dtNavMeshParams            meshParams{};    // tiled dtNavMesh 参数（v2 落盘）
+    // ---- M-N5：off-mesh 连接描述（bake 传入 / v3 load 读回）----
+    // 真正生效的 poly 在 tile 字节里（上游 builder 产物）；这里只存可复现的
+    // 参数描述，供 v3 容器往返与工具可视化，不参与 findPath。
+    std::vector<OffMeshConnection> offMeshCons;
     void releaseTiled() {
         if (tileCache) { dtFreeTileCache(tileCache); tileCache = nullptr; }
         delete talloc; talloc = nullptr;
@@ -244,7 +248,15 @@ NavMesh& NavMesh::operator=(NavMesh&& o) noexcept {
     return *this;
 }
 
+// M-N5：4 参数老入口转发到带连接表的重载（空表 = 逐字节等价于 M-N0 行为，
+// dparams.offMeshCon* 全 0、version 仍写 v1）。老卡零回归硬判据。
 bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
+                   std::string& outError, bool keepDebug) {
+    return bake(geo, bp, std::vector<OffMeshConnection>{}, outError, keepDebug);
+}
+
+bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
+                   const std::vector<OffMeshConnection>& links,
                    std::string& outError, bool keepDebug) {
     outError.clear();
     m_stats = BuildStats{};
@@ -273,6 +285,35 @@ bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
     for (int k = 0; k < 3; ++k) {
         m_stats.bmin[k] = gmin[k];
         m_stats.bmax[k] = gmax[k];
+    }
+
+    // ---- M-N5：off-mesh 连接参数闸 ----
+    // 上游 builder 的 classifyOffMeshPoint 会**静默丢弃** bbox 外的端点连接
+    //（DetourNavMeshBuilder.cpp:243-356）；本层显式拒绝，不静默吞。几何 bbox
+    // 是 pmesh bbox 的上界，故「几何盒外」必被丢弃；落在盒内但被 builder 丢的
+    // 残余由工具侧 offMeshPolyCount() 与传入条数对拍暴露。
+    if (links.size() > 4096) {
+        outError = "too many off-mesh connections (max 4096)";
+        return false;
+    }
+    for (std::size_t i = 0; i < links.size(); ++i) {
+        const OffMeshConnection& l = links[i];
+        bool finite = std::isfinite(l.radius);
+        bool inBox  = true;
+        for (int k = 0; k < 3; ++k) {
+            finite = finite && std::isfinite(l.start[k]) &&
+                     std::isfinite(l.end[k]);
+            inBox = inBox &&
+                    l.start[k] >= gmin[k] && l.start[k] <= gmax[k] &&
+                    l.end[k]   >= gmin[k] && l.end[k]   <= gmax[k];
+        }
+        if (!finite || !(l.radius > 0.f) || l.flags == 0 || !inBox) {
+            outError = "invalid off-mesh connection #" + std::to_string(i) +
+                       " (non-finite coords/radius, radius<=0, zero flags, or "
+                       "endpoint outside geometry bbox; upstream builder would "
+                       "silently drop it)";
+            return false;
+        }
     }
 
     SilentContext ctx;
@@ -482,6 +523,44 @@ bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
     dparams.ch         = cfg.ch;
     dparams.buildBvTree = true;
 
+    // ---- M-N5：off-mesh 连接烘焙期注入 ----
+    // 上游 1.6.0 无运行时 addOffMeshConnection（实读 DetourNavMesh.h 只有
+    // getOffMeshConnectionPolyEndPoints / getOffMeshConnectionByRef），唯一入口
+    // 是 dtNavMeshCreateParams.offMeshCon*（DetourNavMeshBuilder.h:54-76）。
+    // 这些 vector 必须活到 dtCreateNavMeshData 返回（上游只读不接管）。
+    std::vector<float>         omVerts, omRad;
+    std::vector<unsigned short> omFlags;
+    std::vector<unsigned char>  omAreas, omDir;
+    std::vector<unsigned int>   omUserId;
+    if (!links.empty()) {
+        omVerts.reserve(links.size() * 6);
+        omRad.reserve(links.size());
+        omFlags.reserve(links.size());
+        omAreas.reserve(links.size());
+        omDir.reserve(links.size());
+        omUserId.reserve(links.size());
+        for (const OffMeshConnection& l : links) {
+            for (int k = 0; k < 3; ++k) omVerts.push_back(l.start[k]);
+            for (int k = 0; k < 3; ++k) omVerts.push_back(l.end[k]);
+            omRad.push_back(l.radius);
+            // 独占最高位 = UE ARecastNavMesh::NavLinkFlag 口径，供
+            // QueryParams::excludeOffMesh 用 setExcludeFlags 精确排除。
+            omFlags.push_back(static_cast<unsigned short>(
+                l.flags | kOffMeshExcludeFlag));
+            omAreas.push_back(l.area);
+            omDir.push_back(l.bidirectional
+                ? static_cast<unsigned char>(DT_OFFMESH_CON_BIDIR) : 0);
+            omUserId.push_back(static_cast<unsigned int>(l.userId));
+        }
+        dparams.offMeshConVerts  = omVerts.data();
+        dparams.offMeshConRad    = omRad.data();
+        dparams.offMeshConFlags  = omFlags.data();
+        dparams.offMeshConAreas  = omAreas.data();
+        dparams.offMeshConDir    = omDir.data();
+        dparams.offMeshConUserID = omUserId.data();
+        dparams.offMeshConCount  = static_cast<int>(links.size());
+    }
+
     unsigned char* navData  = nullptr;
     int            navDataSize = 0;
     if (!dtCreateNavMeshData(&dparams, &navData, &navDataSize)) {
@@ -540,7 +619,24 @@ bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
         }
     }
     m_stats.walkableArea = area;
+    // v3 容器描述段来源（空表 → save 仍写 v1，M-N0~M-N4 字节零回归）
+    m_impl->offMeshCons = links;
     return true;
+}
+
+const std::vector<OffMeshConnection>& NavMesh::offMeshConnections() const {
+    static const std::vector<OffMeshConnection> empty;
+    return m_impl ? m_impl->offMeshCons : empty;
+}
+
+int NavMesh::offMeshPolyCount() const {
+    if (!m_impl || !m_impl->mesh) return 0;
+    int n = 0;
+    for (int i = 0; i < m_impl->mesh->getMaxTiles(); ++i) {
+        const dtMeshTile* t = m_impl->constMesh()->getTile(i);
+        if (t && t->header) n += t->header->offMeshConCount;
+    }
+    return n;
 }
 
 // ---- M-N3：tiled 烘焙（上游 Sample_TempObstacles::buildTiledNavigation 口径）----
@@ -803,9 +899,12 @@ bool NavMesh::save(const char* path, std::string& outError) const {
         return false;
     };
     if (std::fwrite(kNavMagic, 1, 4, f) != 4) return bail("magic");
-    // M-N3 A-1：同一容器语义升级，version=2 表示 tiled（尾部追加扩展段）。
+    // M-N3 A-1 / M-N5：同一容器语义升级，version=2 tiled（尾部 tiled 扩展段）、
+    // version=3 solo+off-mesh（尾部连接描述段）。空连接表仍写 v1，字节零回归。
     const bool tiled = m_impl->isTiled && m_impl->tileCache != nullptr;
-    const std::uint16_t version = tiled ? kNavVersionTiled : kNavVersion, zero = 0;
+    const std::uint16_t version = tiled ? kNavVersionTiled
+        : (m_impl->offMeshCons.empty() ? kNavVersion : kNavVersionOffMesh);
+    const std::uint16_t zero = 0;
     if (std::fwrite(&version, 2, 1, f) != 1) return bail("version");
     if (std::fwrite(&zero, 2, 1, f) != 1) return bail("reserved");
     // dtNavMeshParams 逐字段（f32 orig[3] + f32 tileW/H + i32 maxTiles/maxPolys）
@@ -873,6 +972,24 @@ bool NavMesh::save(const char* path, std::string& outError) const {
                 return bail("tiled tileData");
         }
     }
+    // ---- v3 off-mesh 描述段（M-N5；逐字段，禁整块 memcpy struct）----
+    // 真正生效的 poly 已在基础段 tile 字节里（上游 builder 产物）；本段只存
+    // 可复现的连接参数，供 v3 往返、dump 与工具可视化。
+    if (version == kNavVersionOffMesh) {
+        const std::uint32_t n =
+            static_cast<std::uint32_t>(m_impl->offMeshCons.size());
+        if (!wrScalar(f, n)) return bail("offmesh count");
+        for (const OffMeshConnection& l : m_impl->offMeshCons) {
+            for (int k = 0; k < 3; ++k)
+                if (!wrScalar(f, l.start[k]) || !wrScalar(f, l.end[k]))
+                    return bail("offmesh endpoints");
+            const std::uint8_t bidir = l.bidirectional ? 1 : 0;
+            if (!wrScalar(f, l.radius) || !wrScalar(f, bidir) ||
+                !wrScalar(f, l.flags) || !wrScalar(f, l.area) ||
+                !wrScalar(f, l.userId))
+                return bail("offmesh fields");
+        }
+    }
     if (std::fclose(f) != 0) { outError = "save failed: fclose"; return false; }
     return true;
 }
@@ -899,7 +1016,8 @@ bool NavMesh::load(const char* path, std::string& outError) {
         outError = "truncated header";
         return false;
     }
-    if (version != kNavVersion && version != kNavVersionTiled) {
+    if (version != kNavVersion && version != kNavVersionTiled &&
+        version != kNavVersionOffMesh) {
         std::fclose(f);
         outError = "unsupported version " + std::to_string(version);
         return false;
@@ -982,6 +1100,32 @@ bool NavMesh::load(const char* path, std::string& outError) {
             ext.tiles.push_back(std::move(t));
         }
     }
+    // ---- v3 off-mesh 描述段（M-N5；与 v2 段互斥）----
+    std::vector<OffMeshConnection> loadedLinks;
+    if (version == kNavVersionOffMesh) {
+        auto v3Bail = [&](const char* what) {
+            std::fclose(f);
+            outError = std::string("v3 extension: ") + what;
+            return false;
+        };
+        std::uint32_t n = 0;
+        if (!rdScalar(f, n) || n > 4096)
+            return v3Bail("bad connection count");
+        loadedLinks.reserve(n);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            OffMeshConnection l;
+            for (int k = 0; k < 3; ++k)
+                if (!rdScalar(f, l.start[k]) || !rdScalar(f, l.end[k]))
+                    return v3Bail("truncated endpoints");
+            std::uint8_t bidir = 0;
+            if (!rdScalar(f, l.radius) || !rdScalar(f, bidir) ||
+                !rdScalar(f, l.flags) || !rdScalar(f, l.area) ||
+                !rdScalar(f, l.userId))
+                return v3Bail("truncated fields");
+            l.bidirectional = (bidir != 0);
+            loadedLinks.push_back(l);
+        }
+    }
     std::fclose(f);
 
     if (m_impl->mesh) {
@@ -989,6 +1133,8 @@ bool NavMesh::load(const char* path, std::string& outError) {
         m_impl->mesh = nullptr;
     }
     m_impl->ownedTiles.clear();
+    // v1/v2 读到的是空表，v3 读回连接描述（tile 字节里已含生效 poly）
+    m_impl->offMeshCons = std::move(loadedLinks);
     m_impl->releaseTiled();
     if (m_impl->query) {
         dtFreeNavMeshQuery(m_impl->query);
@@ -1238,6 +1384,9 @@ NavMesh::QueryStatus NavMesh::findPath(const float start[3], const float end[3],
 
     // 全 poly flag=1（bake 侧），默认 filter（include 0xffff）全放行。
     dtQueryFilter filter;
+    // M-N5：UE NavLinkFlag 口径 —— offmesh poly 注入时带 kOffMeshExcludeFlag，
+    // excludeOffMesh=true 时精确排除，路径回退到无连接时的拓扑。
+    if (qp.excludeOffMesh) filter.setExcludeFlags(kOffMeshExcludeFlag);
 
     // ---- 端点吸附：findNearestPoly ----
     dtPolyRef sref = 0, eref = 0;
@@ -1277,9 +1426,13 @@ NavMesh::QueryStatus NavMesh::findPath(const float start[3], const float end[3],
     // ---- 折线：findStraightPath（string-pulling）----
     if (nPath > 0) {
         std::vector<float> wp(static_cast<size_t>(qp.maxWaypoints) * 3);
+        // M-N5：上游 DT_STRAIGHTPATH_OFFMESH_CONNECTION(0x04) 落在 flags 数组，
+        // 与 waypoints 一一对应（跳跃段起点）。老路径无连接时全 0。
+        std::vector<unsigned char> wf(
+            static_cast<size_t>(qp.maxWaypoints), 0);
         int nWp = 0;
         const dtStatus st = m_impl->query->findStraightPath(
-            spos, epos, corridor.data(), nPath, wp.data(), nullptr, nullptr,
+            spos, epos, corridor.data(), nPath, wp.data(), wf.data(), nullptr,
             &nWp, qp.maxWaypoints);
         if (dtStatusFailed(st)) {
             out.status = QueryStatus::INVALID_PARAM; // 走廊内故障，防御性兜底
@@ -1291,6 +1444,8 @@ NavMesh::QueryStatus NavMesh::findPath(const float start[3], const float end[3],
             out.status = QueryStatus::BUFFER_TOO_SMALL;
         }
         out.waypoints.assign(wp.begin(), wp.begin() + static_cast<size_t>(nWp) * 3);
+        out.waypointFlags.assign(wf.begin(),
+                                 wf.begin() + static_cast<size_t>(nWp));
     }
     return out.status;
 }
