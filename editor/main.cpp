@@ -1,6 +1,7 @@
 // main.cpp — 编辑器宿主入口（C++ / Dear ImGui，独立进程）
 // 流程：建 GLFW 窗 + ImGui(GL2 后端) + 起 RpcHost(server) + 每帧泵 update + 面板布局 + 插件。
 // 注：vendored imgui 为标准版（非 docking 分支），M-E0 用普通窗口初始布局，docking 后续再加。
+#include <windows.h>            // M-E5：GetModuleFileNameA（plugins/ 目录定位；须先于 glfw3.h 防 APIENTRY C4005）
 #include "imgui.h"
 #include "imgui_backend.hpp"
 #include "rpc_host.hpp"
@@ -99,6 +100,21 @@ int main() {
     if (!g_host.start()) logf("RpcHost.start failed (port 29110)");
 
     g_plugins.discover();
+
+    // M-E5：plugins/ 目录动态扫描（exe 同目录 plugins/*.dll，C ABI 校验，坏 DLL 跳过）
+    {
+        char exePath[MAX_PATH] = "";
+        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        std::string dir(exePath);
+        const size_t slash = dir.find_last_of("\\/");
+        dir = (slash == std::string::npos) ? "." : dir.substr(0, slash);
+        g_plugins.discoverDlls(dir + "\\plugins", [](const char* msg) {
+            logf("%s", msg);
+            // 机械验收通道：加载日志同步落 stdout（探针断言用）
+            fprintf(stdout, "[plugins] %s\n", msg);
+            fflush(stdout);
+        });
+    }
 
         while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();

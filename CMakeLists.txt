@@ -108,6 +108,20 @@ add_library(nl_imgui STATIC
 )
 target_include_directories(nl_imgui PUBLIC ${THIRDPARTY}/imgui)
 
+# ---- M-E5：imgui 共享 DLL（编辑器宿主与插件 DLL 必须共享同一 ImGuiContext）----
+# nl_imgui(STATIC) 保留给 renderer/viewer（不同进程，各持一份无碍）；editor.exe
+# 与 plugins/*.dll 全部链接本目标——若插件 DLL 静链一份 imgui 会产生第二个
+# ImGuiContext，宿主绘制/插件绘制互相看不到对方的状态，属必炸路径。
+# WINDOWS_EXPORT_ALL_SYMBOLS = MSVC 自动生成 .def 导出全部符号，免逐个 dllexport。
+add_library(nl_imgui_dll SHARED
+    thirdparty/imgui/imgui.cpp
+    thirdparty/imgui/imgui_draw.cpp
+    thirdparty/imgui/imgui_tables.cpp
+    thirdparty/imgui/imgui_widgets.cpp
+)
+target_include_directories(nl_imgui_dll PUBLIC ${THIRDPARTY}/imgui)
+set_target_properties(nl_imgui_dll PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
 # ---- T1：imgui-node-editor v0.9.4 vendored（MIT，MaterialX Graph Editor 同款节点 UI）----
 # 只收库本体源码；依赖 nl_imgui（v1.91.9）。
 add_library(nl_imgui_node_editor STATIC

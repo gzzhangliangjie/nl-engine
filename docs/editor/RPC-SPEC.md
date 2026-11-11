@@ -165,6 +165,25 @@
 | `editor.log` | 引擎→编辑器 | `{level:str, msg:str}`（notify） | — |
 
 > 方法表随插件增长扩展；新增方法须在本文「注册表」追加并标注所属里程碑。
+> 注：M-E3/M-E4 实装时方法名细化为 `camera.*` / `scene.*` 命名空间（与上表初稿的差异
+> 属命名收敛，语义一致）；以 M-E4/M-E5 实装表为准。
+
+### M-E4 实装（相机 + 场景树）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `camera.getState` | 编辑器→引擎 | — | `{fov,dist,yaw,pitch}`（度） |
+| `camera.setFov` | 编辑器→引擎 | `{fov:deg}` | clamp 后实际 fov |
+| `camera.setDistance` | 编辑器→引擎 | `{dist}` | clamp 后实际 dist |
+| `camera.orbit` | 编辑器→引擎 | `{dx,dy}`（像素增量） | `{yaw,pitch}` |
+| `camera.reset` | 编辑器→引擎 | — | nil ack |
+| `scene.getState` | 编辑器→引擎 | — | `{mode,count,objects:[{mesh,pos,tint,rough,metal}],yaw,pitch,dist}`（model 模式 objects 为空表） |
+| `scene.focus` | 编辑器→引擎 | `{i:int}` | `{yaw,pitch,dist}`；坏索引 error 100 |
+
+### M-E5 实装（材质检查）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.getMaterials` | 编辑器→引擎 | — | scene 模式 `{mode:"scene",count,objects:[{i,mesh,tint:[3],rough,metal}]}`；model 模式 `{mode:"model",file,nmesh:{name,meshlets,submeshCount,submeshes:[{materialId,clusterFirst,clusterCount}]}}`（.nmesh NSUB 表，材质 id=子网格序号；非 .nmesh 时 nmesh=null） |
+| `scene.setMaterial` | 编辑器→引擎 | `{i:int, tint?:[3], rough?:f, metal?:f}`（逐字段可选，clamp 0..1） | `{ok:1,i,tint,rough,metal}`；model 模式 / 坏索引 error 100 |
 
 ---
 

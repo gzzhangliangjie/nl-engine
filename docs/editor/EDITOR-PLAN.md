@@ -35,6 +35,9 @@
 - **M-E1** 最小 RPC 通路：`RpcHost`(server) + `RpcBridge`(client) + 握手/心跳/echo 双向跑通（含自研 msgpack 编解码 + TCP 分帧）。 **[DONE 2026-11-11]** — `rpc_self_test.exe` 无头自测 11 项全绿（accept / announce(hwnd·pid·proto) / 正向 echo / 反向 echo / 2.6s 心跳 ping-pong 不误判掉线）。
 - **M-E2** 视口嵌入：`SetParent` 挂引擎 HWND + 随框尺寸同步 + 几何 watcher。 **[DONE 2026-11-11，画面验收全过]** — 双端接线全量编译链接通过：viewer 加 `--editor-bridge`（可选启动，连不上降级单机；两个交互主循环每帧泵 `bridge.update()`）；编辑器 `attachEngine` 建 WS_CHILD 容器窗 + `EmbedWindow::attach` 跨进程 SetParent，每帧 `syncNative` 贴面板内容区 + 引擎窗铺满容器（WM_SIZE 驱动引擎侧 swapchain 重建）；`onEngineClose` 拆容器回落占位（崩溃隔离可视化）。验收三项实机全过：① 跨进程 SetParent 实挂（Win32 窗口树：容器 NlEditorViewportHost 与引擎窗 GLFW30 pid 跨进程、矩形完全重合）+ GDI 截屏确认 Suzanne 像素直出无偏移（修复 ImGui 坐标系双重 ScreenToClient 偏移 bug）；② resize 跟手（viewer log `resize -> 964x585`）；③ `taskkill viewer` 后编辑器存活、容器自动拆除回落占位（崩溃隔离实挂证据）。另修 GL2 后端移植 bug：客户端数组模式 `glVertexPointer` 第 4 参须传内存基址+偏移（原误传纯偏移 → 驱动近零地址读顶点段错误），并摘除误设的 `RendererHasVtxOffset`。
 - **M-E3** 第一个工具插件（相机/场景树）经 RPC 驱动引擎。 **[DONE 2026-11-11，跨进程探针 + UI 点击链路双验收全过]** — 引擎侧 `EditorEmbed::bindCamera`（runNormal/runScene 双模式各 bind 一次）注册 5 个 handler：`camera.getState`（fov/dist/yaw/pitch，度）/ `camera.setFov` / `camera.setDistance`（回读 clamp 后实际值）/ `camera.orbit`（像素增量 ×kOrbitGain=0.007 rad/px）/ `camera.reset`；params 统一命名 Map，未连接也注册（standalone 零开销）。编辑器侧 `CameraPlugin`（替换 stub）：Refresh 拉真值、FOV/Distance 滑条、Orbit 四向按钮（度数语义，deg→px 换算 kPxPerDeg≈2.4913 在编辑器侧，修正按钮"±15deg"实转 6° 的语义错位）、Reset；每次操作后 getState 对齐 UI。验收：`tools/m-e3-cam-probe.py`（python 假编辑器 server，真跨进程打 viewer handler）22 断言 0 fail（announce hwnd/pid/proto、setFov 45 与 clamp 500→120、setDistance clamp 0.01→0.45、orbit 增量精确匹配 0.007 rad/px、reset 回 4.2/0.21rad/0.16rad 且不动 fov、bogus method error 100）；UI 链路 SendInput 实点 Refresh+Orbit R 截屏双证据：状态行 `fov 45.0 dist 4.20 yaw 27.0`（12.0→27.0 精确 +15°）、引擎 HUD 同值、Suzanne 画面可见右转。
+- **M-E4** 重连全链路 / announce caps / 焦点路由 / 场景树插件。 **[DONE 2026-11-11]**（台账见 §8 M-E4 段）
+- **M-E5** 插件 DLL 动态扫描加载 + 材质检查插件。 **[DONE 2026-11-11]**（台账见 §8 M-E5 段）
+- **M-E6**（候选，未排期）命名管道传输（TCP 默认不变）+ 多视口（announce hwnd 结构扩展）。
 
 ---
 
@@ -193,6 +196,31 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 - imgui.ini 面板布局持久化：面板 z 序 = ini 文件内条目顺序（越靠后越高），被 Viewport 盖住的调试面板挪到文件尾即可置顶；面板尺寸/位置也直接改 ini 比手点稳。
 - `ImGuiChildFlags_Borders`：vendored imgui 1.91.9 支持（1.90 改名后），直接可用。
 
-**待办**
-- 后续候选：材质检查插件（scene.getState 已带 rough/metal，缺 texture/材质树接口）、动态扫描 plugins/ 目录加载、RPC 管道传输（§15）、多视口。
-- 体验缺口（已识别、未排期，做 M-E3 时拍板）：引擎先启/编辑器后启时 `--editor-bridge` 只连一次失败即永久降级单机，无周期重连；跨进程嵌入后的键盘/鼠标焦点路由未实测；`announce.caps` 仍空（分辨率/后端元信息预留位）。
+**待办（M-E4 收口时）**
+- ~~材质检查插件 / plugins 动态加载~~ → M-E5 已做；管道传输 / 多视口 → M-E6 候选。
+- ~~周期重连 / 焦点路由 / caps~~ → 本里程碑已全部落地。
+
+### 2026-11-11 — M-E5 插件 DLL 动态扫描加载 + 材质检查插件（feat/editor worktree）
+
+**产物**
+- `CMakeLists.txt`（根）：新增 `nl_imgui_dll`（SHARED，`WINDOWS_EXPORT_ALL_SYMBOLS ON`）——editor.exe 与插件 DLL 必须共享同一 ImGuiContext（插件静链 imgui = 双 context 必炸）；`nl_imgui`(STATIC) 保留给 renderer/viewer（跨进程各持一份无碍）。
+- `editor/CMakeLists.txt`：新增 `nl_editor_common`（STATIC：rpc_host.cpp，宿主与插件共享单一 RpcHost 实现）；editor 目标切 `nl_imgui`→`nl_imgui_dll`；新增 `editor_plugin_hello`（SHARED 示例插件）→ 输出 `${CMAKE_BINARY_DIR}/plugins/`。
+- `editor/plugin.hpp`：`kPluginAbiVersion=1` + `discoverDlls(dir, log)` + 析构对称卸载；`editor/plugin_export.hpp`：`NL_PLUGIN_EXPORTS(class)` 导出宏（`nl_plugin_abi/_create/_destroy` 三符号 C ABI）。
+- `editor/plugin.cpp`：`discoverDlls`（FindFirstFile 扫 `plugins/*.dll`，LoadLibrary + ABI 校验，坏 DLL 跳过不拖死宿主；加载日志同步落 stdout 供探针断言）+ 析构按 slot 逆序先 `destroy`（DLL 内 delete）再 `FreeLibrary`；新增 `MaterialInspectorPlugin`。
+- `editor/plugins/hello_plugin.cpp`：示例插件 DLL（连接状态 + engine.echo 按钮）。
+- `viewer/main.cpp`：`bindMaterials`——`scene.getMaterials`（scene 模式实例 tint/rough/metal；model 模式 loadNMesh 读 .nmesh NSUB 表：name/meshlets/submeshCount/submeshes[materialId,clusterFirst,clusterCount]，材质 id=子网格序号 M7.2 约定）+ `scene.setMaterial`（逐字段可选 tint/rough/metal，clamp 0..1，写回 sceneObjects 由 viewer 每帧原地刷新传 renderer，下一帧可见；model 模式 error 100）。
+- `viewer/CMakeLists.txt`：`NL_MESHLET_DIR` 编译定义（根 CMake 的同名宏是 renderer 内联定义不是变量，须用 `${CMAKE_SOURCE_DIR}/assets/meshlets` 自行注入）。
+- `tools/m-e5-probe.py`：三段跨进程机械验收探针。
+
+**验收（30 断言 0 fail，exit 0）**
+- 段1 scene 模式：getMaterials 5 实例字段齐全；setMaterial rough=0.5 / tint=[0.25,0.5,0.75] 写回 getMaterials 复读一致；rough=5 clamp 1；坏索引 [99]/[-1] error 100；scene.getState 回归不变。
+- 段2 model 模式（--mode cluster --model Suzanne-materials.nmesh）：nmesh.meshlets=711、submeshCount=3（NSUB 段）、materialId=0/1/2、clusterFirst=0、clusterCount=237×3 与资产实况一致；setMaterial → error 100。
+- 段3 editor.exe 插件扫描：stdout 出现 `plugin dll loaded: editor_plugin_hello.dll (Hello (DLL))`；注入坏 DLL（nl_imgui_dll.dll 改名 _bad_test.dll）→ `skipped: missing C ABI exports` 不拖死宿主。
+- 目击证据 `out/m-e5-editor-ui.png`（PrintWindow 免焦点）：Material Inspector 5 行实例材质表（tint 色块 + r/m 值）+ Hello (DLL) 面板（"loaded from plugins\hello_plugin.dll" + engine: connected）+ Scene Outliner + 嵌入视口 5 Suzanne + Log 三行（plugin loaded / connected / announced）。
+
+**踩坑**
+- 类内成员函数的**参数类型**在声明点必须可见（inline 函数体可以后置）——`setMaterial(..., const Row&)` 写在 `struct Row` 定义前直接 C4430/C2664，结构体须挪类体前部。
+- `RUNTIME_OUTPUT_DIRECTORY` 用 `CMAKE_CURRENT_BINARY_DIR` 在 editor 子目录上下文里是 `build/DX12/editor`，插件 DLL 落错层；要用 `${CMAKE_BINARY_DIR}/plugins`。
+- viewer 侧 `NL_MESHLET_DIR` 不能引用 `${NL_MESHLET_DIR}`（根 CMake 里它是 renderer 的内联宏定义，非变量）→ 展开成空串、loadNMesh 失败被 nmeshInfo 包成 error map，探针首版只看到字段缺失；修 `${CMAKE_SOURCE_DIR}/assets/meshlets`。
+- editor.exe 的 imgui.ini 按 CWD 解析（Popen 不带 cwd 时落在启动目录）——布局预置必须把 cwd 设到 exe 目录。
+- python 探针 msgpack 解码需支持 str8(0xd9)（引擎侧长错误串走 str8）；subprocess 管道用 `communicate(timeout)` 而非 `read(n)`（后者阻塞等 EOF）。

@@ -13,6 +13,7 @@
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
+#include "nl/core/meshlet_io.hpp"  // M-E5：scene.getMaterials 读 .nmesh NSUB 子网格/材质表
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
@@ -810,6 +811,130 @@ struct EditorEmbed {
             tryConnect();
         }
     }
+
+    // ---- M-E5：材质检查接口 ----
+    std::string modelFile_;   // runNormal 传入（model 模式 .nmesh 探测用）；scene 模式留空
+
+    // .nmesh NSUB 子网格/材质表读取（assets/meshlets/<file>；材质 id = 子网格序号，
+    // M7.2 约定）。非 .nmesh 返回 nil；读取失败返回 {error: msg}。
+    nl::editor::RpcValue nmeshInfo(const std::string& file) {
+        if (file.size() < 6 || file.compare(file.size() - 6, 6, ".nmesh") != 0)
+            return nl::editor::RpcValue();   // nil = 非 .nmesh 资产
+#ifdef NL_MESHLET_DIR
+        const std::string path = std::string(NL_MESHLET_DIR "/") + file;
+#else
+        const std::string path = "assets/meshlets/" + file;
+#endif
+        nl::core::NMeshData nm;
+        std::string err;
+        if (!nl::core::loadNMesh(path.c_str(), nm, err)) {
+            nl::editor::msgpack::Map e;
+            e["error"] = err;
+            return nl::editor::RpcValue(std::move(e));
+        }
+        nl::editor::msgpack::Map m;
+        m["name"] = nm.name;
+        m["meshlets"] = (std::int64_t)nm.meshlets.size();
+        const std::int64_t subCount = nm.submeshesPresent ? (std::int64_t)nm.submeshes.size() : 1;
+        m["submeshCount"] = subCount;
+        nl::editor::msgpack::Array subs;
+        if (nm.submeshesPresent) {
+            for (std::size_t i = 0; i < nm.submeshes.size(); ++i) {
+                nl::editor::msgpack::Map s;
+                s["materialId"]   = (std::int64_t)i;   // 材质 id = 子网格序号（M7.2）
+                s["clusterFirst"] = (std::int64_t)nm.submeshes[i].clusterFirst;
+                s["clusterCount"] = (std::int64_t)nm.submeshes[i].clusterCount;
+                subs.push_back(nl::editor::RpcValue(std::move(s)));
+            }
+        }
+        m["submeshes"] = nl::editor::RpcValue(std::move(subs));
+        return nl::editor::RpcValue(std::move(m));
+    }
+
+    // M-E5：scene.getMaterials（读）+ scene.setMaterial（写，仅 scene 模式）。
+    // setMaterial 改 (*sceneObjects)[i] 的 tint/rough/metal——viewer 每帧原地刷新
+    // 传给 renderer updateEcsObjects，改动下一帧可见。params 统一命名 Map，逐字段可选。
+    void bindMaterials(const char* modelFile) {
+        if (modelFile) modelFile_ = modelFile;
+        bridge.registerHandler("scene.getMaterials", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Map m;
+            if (!sceneObjects) {
+                m["mode"] = std::string("model");
+                m["file"] = modelFile_;
+                m["nmesh"] = nmeshInfo(modelFile_);
+                return nl::editor::RpcValue(std::move(m));
+            }
+            m["mode"]  = std::string("scene");
+            m["count"] = (std::int64_t)sceneObjects->size();
+            nl::editor::msgpack::Array arr;
+            arr.reserve(sceneObjects->size());
+            for (std::size_t i = 0; i < sceneObjects->size(); ++i) {
+                const auto& d = (*sceneObjects)[i];
+                nl::editor::msgpack::Map o;
+                o["i"] = (std::int64_t)i;
+                o["mesh"] = std::string(d.meshFile ? d.meshFile : "?");
+                nl::editor::msgpack::Array tint;
+                tint.push_back((double)d.tint[0]);
+                tint.push_back((double)d.tint[1]);
+                tint.push_back((double)d.tint[2]);
+                o["tint"]  = nl::editor::RpcValue(std::move(tint));
+                o["rough"] = (double)d.roughness;
+                o["metal"] = (double)d.metallic;
+                arr.push_back(nl::editor::RpcValue(std::move(o)));
+            }
+            m["objects"] = nl::editor::RpcValue(std::move(arr));
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("scene.setMaterial", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!sceneObjects)
+                return nl::editor::RpcError{100, "scene.setMaterial: model mode has no instance table"};
+            if (!p.isMap())
+                return nl::editor::RpcError{100, "scene.setMaterial: params must be a map"};
+            auto field = [](const nl::editor::RpcValue& v, const char* k) -> double {
+                auto it = v.asMap().find(k);
+                if (it != v.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                if (it != v.asMap().end() && it->second.isInt())    return (double)it->second.asInt();
+                return -1.0;
+            };
+            const long long idx = (long long)field(p, "i");
+            if (idx < 0 || idx >= (long long)sceneObjects->size())
+                return nl::editor::RpcError{100, "scene.setMaterial: bad index"};
+            auto& d = (*sceneObjects)[(std::size_t)idx];
+            auto itTint = p.asMap().find("tint");
+            if (itTint != p.asMap().end() && itTint->second.isArray() &&
+                itTint->second.asArray().size() == 3) {
+                const auto& ta = itTint->second.asArray();
+                for (int c = 0; c < 3; ++c) {
+                    if (ta[c].isDouble()) {
+                        d.tint[c] = (float)ta[c].asDouble();
+                        d.tint[c] = std::min(1.0f, std::max(0.0f, d.tint[c]));
+                    }
+                }
+            }
+            bool touched = false;
+            auto itRough = p.asMap().find("rough");
+            if (itRough != p.asMap().end() && itRough->second.isDouble()) {
+                d.roughness = std::min(1.0f, std::max(0.0f, (float)itRough->second.asDouble()));
+                touched = true;
+            }
+            auto itMetal = p.asMap().find("metal");
+            if (itMetal != p.asMap().end() && itMetal->second.isDouble()) {
+                d.metallic = std::min(1.0f, std::max(0.0f, (float)itMetal->second.asDouble()));
+                touched = true;
+            }
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["i"] = idx;
+            nl::editor::msgpack::Array tint;
+            tint.push_back((double)d.tint[0]);
+            tint.push_back((double)d.tint[1]);
+            tint.push_back((double)d.tint[2]);
+            m["tint"]  = nl::editor::RpcValue(std::move(tint));
+            m["rough"] = (double)d.roughness;
+            m["metal"] = (double)d.metallic;
+            return nl::editor::RpcValue(std::move(m));
+        });
+    }
 };
 
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
@@ -1050,6 +1175,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（normal 模式）
     edEmbed.bindScene(nullptr);           // M-E4d：model 模式（无实例表，getState 返回 mode=model）
+    edEmbed.bindMaterials(o.modelFile.c_str());   // M-E5：材质查询（model 模式 .nmesh NSUB 表）
     // M-D3: drive CVars + gates. Registered BEFORE --console-exec so
     // "vehicle.throttleScale 0.5" / "vehicle.debug true" work at startup.
     bool driveHudOn = o.driveHud;
@@ -2161,6 +2287,7 @@ int runScene(const Options& o) {
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
     edEmbed.bindScene(&objects);          // M-E4d：场景树数据源（每帧原地刷新）
+    edEmbed.bindMaterials(nullptr);       // M-E5：材质读写（scene 模式实例表）
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;
