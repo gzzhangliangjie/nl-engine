@@ -150,10 +150,10 @@ TRACKS = {
     "logging": {
         "wt": "E:/UE_STUDY_2026/nl-engine-logging",
         "branch": "feat/logging", "state": "active",
-        "note": "A-class track opened 2026-11-11 by user instruction (Q-L1 develop start; "
-                "plan docs/p8/P8-LOG-PLAN.md; M-LOG0+M-LOG1 merged scope = vendored "
-                "spdlog v1.17.0 + compat layer + file sink + ODS + categories + filter; "
-                "M-LOG2 deferred)",
+        "note": "A-class track opened 2026-11-11 by user instruction (Q-L1; plan "
+                "docs/p8/P8-LOG-PLAN.md); M-LOG0+M-LOG1+M-LOG2 closed (tags log-m0/log-m2) "
+                "and merged back to master aaf43b8 with post-merge acceptance green; "
+                "wt+branch kept, CLOSED-ization pending user call",
     },
 }
 
