@@ -945,6 +945,21 @@
 
 **下一步**：M-TR3 交代归档 + 轨道收口。
 
+## P8 M-TR3 交代归档 + 轨道收口（tag `tracy-m3`，2026-11-12，feat/profiling 轨道）
+
+**动作**：`docs/p8/TRACY-TOOLS-GUIDE.md` 归档（GUI 启动/连接/常见坑/与 RenderDoc 的互斥口径）；展示台 `kind:"tool"` 卡模板（Tracy 连机 / RenderDoc 抓帧 / 泄漏负向用例，case 级 `"exe"` 覆盖，明确仅装好工具+GPU 机器接入 cases.json、不进默认无头回归）；本计划 §0 拍板六问全部落地（M-TR0~M-TR3 / tag `tracy-m0`~`tracy-m3`）。
+
+**提交版本**：tracy-m3（feat/profiling 分支，本轮）
+
+**完成情况**
+- 工具卡 + TOOLS-GUIDE 归档完成；轨道闸 `wt_pool close` 生成 M-TR2/M-TR3 报告。
+- 裸机 GUI 连机截图 / `.tracy` / `.rdc` 证据待用户在本机交互桌面执行（沙箱无 GPU+GUI 跑不了，与代码正确性无关）。
+
+**踩坑情况**
+1. 工具卡不进默认无头回归：Tracy GUI 连机 + RenderDoc `.rdc` 抓帧都需 GPU+GUI，沙箱/默认无头回归跑不通必红，符合 M11.0「只跑能绿的卡」纪律 → 模板标注「仅在装好工具+GPU 机器接入 cases.json」。
+
+**下一步**：`wt_pool close` 收口 + 合并回 master（待 master 在途 s11/s10 工作落定后，避免与在途改动冲突）。
+
 ## P8 合并回 master + 回归门禁固化（exe 新鲜度闸 + 基线修正，2026-11-08）
 
 **动作**：主干先合入 feat 分支消化分歧（fd53670：解 CMakeLists/MILESTONES/cases.json 三处内容冲突 + PARALLEL-TRACKS/P8-JOB-PLAN 两处 add/add）→ feat/job-system 快进合回 master → 合并树双后端重编 + ctest 19/19 → 全量总闸揪出 4 对 vulkan HUD 基线为 M4.2 旧 exe 误拍（m0.9/gate-hud、s2.0/lod-hud、s4.1/cull-inside-hud、s4.2/dense-inside-hud）→ 逐对像素取证确认 actual 为正确产物（跨后端差异 895~907px = backend/debug 两行设备文本的既知口径）后重拍 → 按用户要求把「exe 版本」问题固化进门禁：`regression.py` 启动即查 `build/<backend>/*.exe` mtime 是否新于其依赖域全部源文件，过期整闸拒绝（exit 2）→ 增 `NL_REGRESSION_RUNS_DIR` 产物目录覆盖（新目录全程零删除，CI/沙箱友好）。

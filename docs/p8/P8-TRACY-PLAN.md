@@ -48,7 +48,7 @@
 | 层 | 用什么 | 状态 |
 |---|---|---|
 | L0 画面证据 | `--screenshot` + example/ 基线 | ✅ 已就位，不动 |
-| L1 帧结构（单帧逐 draw） | **RenderDoc**（权威口径在 `docs/s0/S0-PLAN.md` L1 节，本计划只管归属） | ⬜ 本机未装、代码侧未写；外部启动零代码即用，进程内抓帧定 **M-TR2**（Q4 b） |
+| L1 帧结构（单帧逐 draw） | **RenderDoc**（权威口径在 `docs/s0/S0-PLAN.md` L1 节，本计划只管归属） | ✅ M-TR2 已写 `--capture-frame N` 进程内抓帧（零链接，默认关）；外部启动零代码即用 |
 | L2 GPU 耗时 | NVRHI timestamp query → HUD | ✅ M6.2 已跑通，**本计划不碰** |
 | **L3 CPU 时间线** | **Tracy zone + FrameMark**（本计划核心①） | ✅ M-TR0 接入 |
 | **L3 内存占用/泄漏** | **Tracy memory profiler + 退出残留清单**（本计划核心②） | ✅ M-TR1 接入 |
@@ -165,6 +165,12 @@
 **做什么**：`--capture-frame N` + `renderdoc_app.h` 单头 + `LoadLibraryW(L"renderdoc.dll")` 的 in-app API（`StartFrameCapture`/`EndFrameCapture`），约 30 行、零链接依赖、默认关闭；device/window 句柄传空，viewer/core 零图形 API 符号。外部启动（零代码）不占里程碑，本机装好即用。
 
 **验收判据**：指定帧号跑一发，落出 `.rdc` 文件 + 工具输出证据；默认关闭时行为零差异（`--only` 抽查）。与 Tracy 不同时开（§2 互斥口径）。
+
+**实施记录（2026-11-12，commit 见 feat/profiling，tag `tracy-m2`）**：
+- 代码面：vendored `thirdparty/renderdoc/renderdoc_app.h`（仅头，MIT，clone HEAD `86cadb8…`，见 `thirdparty/renderdoc/VENDOR.md`）；`viewer/main.cpp` 新增 `Options::captureFrame`（默认 0=关）+ `--capture-frame N` CLI（`<1` 报用法错误 exit 2）；`initRenderDocCapture()` 在 main 起调，经 `GetModuleHandleA("renderdoc.dll")` + `GetProcAddress("RENDERDOC_GetAPI")` 被动拾取 in-app API（回退 `LoadLibraryW`），未注入时全程 no-op；`maybeTriggerRenderDocCapture(frame+1, o.captureFrame)` 注入主循环两处（普通循环 ~2515 与 ECS/脚本循环 ~3630），到达指定帧 `TriggerCapture()` 一次（fire-once 防重抓）；`--capture-frame N` 进 `printUsage` 帮助文本。
+- **零链接 / 零图形符号**：`renderdoc_app.h` 仅头文件，经 `viewer/CMakeLists.txt` 加 `target_include_directories(viewer PRIVATE .../thirdparty/renderdoc)`；viewer/core 不出现任何 D3D12/Vulkan 符号，符合 §M0.1 纪律。
+- **构建验证（真实 exit code，两棵树全过）**：`build/DX12`（OFF）重配 + 编 `viewer` = **0**；`build/DX12-TRACY`（`-DNL_TRACY=ON`）重配 + 编 `viewer` = **0**（日志 `Built target viewer`；`renderdoc_app.h` 的 `RENDERDOC_API_1_6_0`/`GetModuleHandleA`/`GetProcAddress`/`LoadLibraryW` 在 OFF/ON 两配置下均编译链接通过，无报错；既有 `/W4` 警告 C4244/C4458 与本次无关）。
+- 待裸机补验（要 RenderDoc + GPU，沙箱跑不了）：① RenderDoc Launch 拉起 `viewer --capture-frame N` 落 `.rdc`；② 非注入下启动行为零差异（`--only` 抽查）。
 
 ### M-TR3 交代归档
 
