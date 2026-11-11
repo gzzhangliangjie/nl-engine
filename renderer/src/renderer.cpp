@@ -52,7 +52,7 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
 // probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
-// world_cache 6（S11 M11.0）。
+// world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）。
 // （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
@@ -129,6 +129,9 @@ static const Artifact kArtifacts[] = {
     {"world_cache.cscachefill", true}, {"world_cache.cscachefill", false},
     {"world_cache.cscachedecay", true}, {"world_cache.cscachedecay", false},
     {"world_cache.cscacheviz", true}, {"world_cache.cscacheviz", false},
+    // S11 M11.1：cell 更新（update 需 SM6.6 RayQuery；blend 纯 buffer）×2 = 4。
+    {"world_cache.cscacheupdate", true}, {"world_cache.cscacheupdate", false},
+    {"world_cache.cscacheblend", true}, {"world_cache.cscacheblend", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

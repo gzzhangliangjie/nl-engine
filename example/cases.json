@@ -9961,6 +9961,80 @@
      "command": "log-tools exec \"log.level bogus\""
     }
    ]
+  },
+  {
+   "id": "s11-update",
+   "label": "M11.1",
+   "name": "探针命中点改查缓存（二级弹射）：csCacheUpdate/csCacheBlend 双 compute + CPU 收敛仿真",
+   "tag": "s11-update",
+   "date": "2026-11-11",
+   "summary": "S11 M11.1：cell 从命中点缓存升级为存入射辐照度 C，新两入口——csCacheUpdate（软目标 pcg(cell^frame)<p=0.25 抽样；DI 直光 shadow ray FORCE_OPAQUE|ACCEPT_FIRST_HIT 得 E_direct；Malley cosine 邻居射线命中点 hn=-d 量化查缓存得 E_ind=albedo*C(hit)，miss 天空 albedo*skyGradient；写 newRadiance w=1）+ csCacheBlend（只处理 newMark cell，1/min(n+1,64) 线性 cap，写 radiance 并清 newRadiance.w 标记）。CacheConstants CB 扩 160B（g_updateLight/g_updateCol/g_updateMat/g_updateCtl）。CPU 先行：gi-tools selftest 扩到 10 组 22 断言（DI 增量收敛差分法 / 二级弹射涌现 / blend 语义），cachesim --update 收敛门 early 0.014 -> late 0.003。⚠️ Q11-1 拍板 A：TLAS 每帧 rebuild 的 AS build 内部布局 D3D12/Vulkan 不保证 bit-exact，GI 邻居查询把 hitP 量化进 cell key，量化边界翻转 -> mode 1 radiance 图天生非逐字节可复现（实测 3 次 3 md5、约 9% 像素差 maxDelta 268）-> GPU 侧断言改统计口径（tools/check-s11-update.py：伪彩覆盖>=0.10 + 直光带/背光带 luma margin>=5.0），CPU 侧保持 bytes 级确定断言。踩坑实录：blend 首版漏清标记（newRadiance.w 恒 1 -> 帧首 w>0 防御把第二帧起 update 全挡）-> blend 写 g_newRadianceW[idx].w=0 + blendLayout 补 SB_UAV(4)；blend PSO 创建失败 = slang 消除未用绑定后反射无 t5 而 root sig 需可见 -> layout 补 SB_SRV(5)（decay 先例：layout 多于 shader 无害）。direct.slang 0xdeadbeef 守卫注释如实化：s10-refgi 冻结基线的 GI 项实为纯天穹（该段从不执行），留作 M11.2 重开的现成实现，重开必须重拍基线（单独拍板禁顺手改形态）。",
+   "acceptance": "gi-tools selftest 10 组 22 断言 PASS（新增 DI 增量收敛差分 / 二级弹射涌现 / blend 语义清标记）；cachesim --update 收敛门 early>late（实测 0.014->0.003）+ sim 热图 bytes 与冻结基线一致；双后端 cache-viz radiance 重拍 deviceErrors=0 + dispatch 锚 + check-s11-update.py stats 全 PASS（统计断言，Q11-1=A）；run.bat verify 全绿含负向非零退出；ctest s11-gi 6 用例双后端绿（新增 s11-gi-cachesim-update）；s11-hash/s10-refgi 回归保形；selftest 16/16 + 104/104 artifacts。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "sim",
+     "name": "cachesim --update：CPU 仿真二级弹射收敛（bytes 确定断言侧）",
+     "kind": "tool",
+     "note": "收敛统计 = 固定锚点 cell (4.5,-1,0.5) 逐帧亮度，前窗 vs 后窗帧间差；CPU 单线程确定，热图 bytes 与 example/s11-update/cacheupd-sim.png 逐字节一致（run.bat fc /b 断言）。",
+     "args": [
+      "cachesim",
+      "--frames",
+      "64",
+      "--update",
+      "--png",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "delta early",
+     "command": "gi-tools cachesim --frames 64 --update --png {out}",
+     "exe": {
+      "dx12": "build/DX12/gi-tools.exe",
+      "vulkan": "build/VULKAN/gi-tools.exe"
+     }
+    },
+    {
+     "id": "gpu-smoke",
+     "name": "cache-viz radiance 双后端重拍（dispatch 锚 + deviceErrors=0，不比 bytes）",
+     "kind": "tool",
+     "note": "Q11-1 拍板 A：GPU radiance 图非逐字节可复现（TLAS build 非确定 + hitP 量化进 cell key），本用例只断言退出码 / dispatch 锚 / 无 device error；数值断言归 gpu-stats 统计口径。",
+     "args": [
+      "--mode",
+      "cache-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "64",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--cache-viz-radiance",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "M11.1 update+blend on",
+     "command": "viewer.exe --mode cache-viz --model Suzanne-materials.nmesh --frames 64 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --cache-viz-radiance --screenshot {out}"
+    },
+    {
+     "id": "gpu-stats",
+     "name": "统计断言 + 收敛门 + 负向（Q11-1 拍板 A 全链）",
+     "kind": "manual",
+     "note": "run.bat verify：双后端重拍 deviceErrors=0 + 双锚 + check-s11-update.py stats（cover>=0.10 / lit-backlit margin>=5.0）+ cachesim --update 收敛门 + sim 热图 fc /b 逐字节 + 负向缺模型非零退出。",
+     "args": [],
+     "command": "example/s11-update/run.bat verify",
+     "script": "example/s11-update/run.bat verify"
+    }
+   ]
   }
  ]
 }

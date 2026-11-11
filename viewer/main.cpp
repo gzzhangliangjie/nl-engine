@@ -124,6 +124,7 @@ struct Options {
                               // 默认关保 M10.1 probe-viz 点色行为与 s10-probe 基线保形）
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
     bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
+    bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
@@ -217,6 +218,7 @@ Options parseArgs(int argc, char** argv) {
         // M10.3：--compare 右半参考图 / --sky-bg 解析天穹背景（Q14-2/Q14-4 拍板）。
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
+        else if (a == "--cache-viz-radiance") o.cacheVizRadiance = true;  // M11.1
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -517,7 +519,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (66 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (104 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -2154,6 +2156,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
         // S11 M11.0：cache-viz（probe 链基建复用；gather/dots 关，伪彩即最终画面）。
         fp.cacheViz = (o.mode == nl::core::ViewMode::CacheViz);
+        fp.cacheVizRadiance = o.cacheVizRadiance;   // M11.1：viz 亮度模式
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];

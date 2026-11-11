@@ -3851,14 +3851,17 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     };
     if (!loadCacheShader("world_cache.cscachefill", csCacheFill_) ||
         !loadCacheShader("world_cache.cscachedecay", csCacheDecay_) ||
-        !loadCacheShader("world_cache.cscacheviz", csCacheViz_))
+        !loadCacheShader("world_cache.cscacheviz", csCacheViz_) ||
+        !loadCacheShader("world_cache.cscacheupdate", csCacheUpdate_) ||
+        !loadCacheShader("world_cache.cscacheblend", csCacheBlend_))
         return false;
 
-    // cacheCB_（96B volatile）：[0..15] invViewProj / [16..19] eye+cellSize /
-    // [20..23] vpW/vpH/lifetime/frameIndex。⚠️ slang 端 cbuffer 实测 96B
-    // （g_params 在 byte 80），64B 会让 shader 读越界得 0 → viz 全线程早退。
+    // cacheCB_（160B volatile）：[0..15] invViewProj / [16..19] eye+cellSize /
+    // [20..23] vpW/vpH/lifetime/frameIndex / M11.1 [24..27] 灯向+强度 /
+    // [28..31] 灯色+bias / [32..35] albedo+tMax / [36..39] 软目标 p + vizMode。
+    // ⚠️ slang 端 cbuffer 实测布局为准（SSC §2.21）；全 compute 消费不触 §2.20。
     nvrhi::BufferDesc cbDesc;
-    cbDesc.byteSize = 96;
+    cbDesc.byteSize = 160;
     cbDesc.isConstantBuffer = true;
     cbDesc.isVolatile = true;
     cbDesc.maxVersions = 16;
@@ -3884,7 +3887,9 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     if (!makeTableBuffer(wcChecksums_, 4, "WcChecksums") ||
         !makeTableBuffer(wcLife_, 4, "WcLife") ||
         !makeTableBuffer(wcGeoPos_, 16, "WcGeoPos") ||
-        !makeTableBuffer(wcGeoNrm_, 16, "WcGeoNrm"))
+        !makeTableBuffer(wcGeoNrm_, 16, "WcGeoNrm") ||
+        !makeTableBuffer(wcRadiance_, 16, "WcRadiance") ||
+        !makeTableBuffer(wcNewRadiance_, 16, "WcNewRadiance"))
         return false;
 
     // fill/decay 共用布局：b0 + t0 probeDepth + u0..u3（decay 只碰 u0/u1，§2.7
@@ -3900,16 +3905,43 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     cacheFillLayout_ = device->createBindingLayout(fDesc);
     if (!cacheFillLayout_) { outError = "createBindingLayout failed for cache fill"; return false; }
 
-    // viz 布局：b0 + t0 probeDepth + t1/t2 表 SRV + u0 hdrSceneColor_。
+    // viz 布局：b0 + t0 probeDepth + t1/t2/t5 表 SRV（t5 = radiance，M11.1
+    // radiance 亮度模式）+ u0 hdrSceneColor_。
     nvrhi::BindingLayoutDesc vDesc;
     vDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
     cacheVizLayout_ = device->createBindingLayout(vDesc);
     if (!cacheVizLayout_) { outError = "createBindingLayout failed for cache viz"; return false; }
+
+    // update 布局（M11.1）：b0 + t7 TLAS + t1/t3/t4/t5 表 SRV + u4 newRadiance。
+    nvrhi::BindingLayoutDesc uDesc;
+    uDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(7))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4));
+    cacheUpdateLayout_ = device->createBindingLayout(uDesc);
+    if (!cacheUpdateLayout_) { outError = "createBindingLayout failed for cache update"; return false; }
+
+    // blend 布局：b0 + t5 radiance（旧值读）+ t6 newRadiance + u5 radiance 写
+    // + u4 newRadiance 清标记（消费后置 0，SSC M11.1 同 CPU 版语义）。
+    nvrhi::BindingLayoutDesc bDesc;
+    bDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5));
+    cacheBlendLayout_ = device->createBindingLayout(bDesc);
+    if (!cacheBlendLayout_) { outError = "createBindingLayout failed for cache blend"; return false; }
 
     { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheFill_).addBindingLayout(cacheFillLayout_);
       cacheFillPSO_ = device->createComputePipeline(p); }
@@ -3917,7 +3949,14 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
       cacheDecayPSO_ = device->createComputePipeline(p); }
     { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheViz_).addBindingLayout(cacheVizLayout_);
       cacheVizPSO_ = device->createComputePipeline(p); }
-    if (!cacheFillPSO_ || !cacheDecayPSO_ || !cacheVizPSO_) {
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheUpdate_).addBindingLayout(cacheUpdateLayout_);
+      cacheUpdatePSO_ = device->createComputePipeline(p);
+      if (!cacheUpdatePSO_) nl::core::log::infoCh("scene", "cache: update PSO failed"); }
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheBlend_).addBindingLayout(cacheBlendLayout_);
+      cacheBlendPSO_ = device->createComputePipeline(p);
+      if (!cacheBlendPSO_) nl::core::log::infoCh("scene", "cache: blend PSO failed"); }
+    if (!cacheFillPSO_ || !cacheDecayPSO_ || !cacheVizPSO_ ||
+        !cacheUpdatePSO_ || !cacheBlendPSO_) {
         outError = "createComputePipeline failed for world cache";
         return false;
     }
@@ -3939,6 +3978,32 @@ bool Scene::ensureCacheSets(nvrhi::IDevice* device, std::string& outError) {
         cacheFillSet_ = device->createBindingSet(d, cacheFillLayout_);
         if (!cacheFillSet_) { outError = "createBindingSet failed for cache fill"; return false; }
         cacheFillSetDepth_ = probeDepth_;
+    }
+    // update set（M11.1）：tlasReady_ 门控懒建（traceSet_ 同口径——无 RT / 无
+    // fallback 几何时 tlas_ 为 null，set 创建必败；就绪后某帧补建）。TLAS 是
+    // M8.1 每帧 rebuild 的同一对象 → set 只需建一次。
+    if (!cacheUpdateSet_ && tlasReady_) {
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, cacheCB_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, wcChecksums_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, wcGeoPos_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, wcGeoNrm_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, wcRadiance_));
+        d.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(7, tlas_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(4, wcNewRadiance_));
+        cacheUpdateSet_ = device->createBindingSet(d, cacheUpdateLayout_);
+        if (!cacheUpdateSet_) { outError = "createBindingSet failed for cache update"; return false; }
+    }
+    // blend set：不依赖纹理 / TLAS，probeDepth_ 就绪即建。
+    if (!cacheBlendSet_) {
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, cacheCB_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, wcRadiance_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, wcNewRadiance_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(4, wcNewRadiance_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(5, wcRadiance_));
+        cacheBlendSet_ = device->createBindingSet(d, cacheBlendLayout_);
+        if (!cacheBlendSet_) { outError = "createBindingSet failed for cache blend"; return false; }
     }
     return true;
 }
@@ -3969,25 +4034,40 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cmd->beginTrackingBufferState(wcLife_, nvrhi::ResourceStates::CopyDest);
         cmd->beginTrackingBufferState(wcGeoPos_, nvrhi::ResourceStates::CopyDest);
         cmd->beginTrackingBufferState(wcGeoNrm_, nvrhi::ResourceStates::CopyDest);
+        cmd->beginTrackingBufferState(wcRadiance_, nvrhi::ResourceStates::CopyDest);
+        cmd->beginTrackingBufferState(wcNewRadiance_, nvrhi::ResourceStates::CopyDest);
         cmd->writeBuffer(wcChecksums_, zeros.data(), zeros.size() * 4);
         cmd->writeBuffer(wcLife_, zeros.data(), zeros.size() * 4);
         cmd->writeBuffer(wcGeoPos_, zeros.data(), zeros.size() * 4);
         cmd->writeBuffer(wcGeoNrm_, zeros.data(), zeros.size() * 4);
+        cmd->writeBuffer(wcRadiance_, zeros.data(), zeros.size() * 4);
+        cmd->writeBuffer(wcNewRadiance_, zeros.data(), zeros.size() * 4);
     }
 
-    // cacheCB_ 每帧全量覆写（64B）：invViewProj / eye+cellSize / 尺寸+lifetime+帧号。
+    // cacheCB_ 每帧全量覆写（160B）：invViewProj / eye+cellSize / 尺寸+lifetime+
+    // 帧号 / M11.1 灯向+强度 / 灯色+bias / albedo+tMax / 软目标 p + vizMode。
     {
         nl::math::Mat4 vp{}, invVP{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
         invVP = nl::math::inverseMat4(vp);
-        float cb[24] = {};
+        float cb[40] = {};
         std::memcpy(cb, invVP.m, sizeof(invVP.m));
         cb[16] = params.eye[0]; cb[17] = params.eye[1]; cb[18] = params.eye[2];
         cb[19] = 0.5f;                       // cellSize（与 slang kCellSize 同口径）
         cb[20] = vpW; cb[21] = vpH;
         cb[22] = static_cast<float>(kWcLifetime);
         cb[23] = static_cast<float>(cacheFrame_);
-        cmd->writeBuffer(cacheCB_, cb, sizeof(cb));   // 96B 全量覆写
+        // M11.1 update 段（traceCB_ 同源口径：白光 2.5 / bias 0.01 / tMax 50 /
+        // 统一 albedo 0.45/0.39/0.30）
+        cb[24] = params.lightDir[0]; cb[25] = params.lightDir[1]; cb[26] = params.lightDir[2];
+        cb[27] = 2.5f;                       // 强度
+        cb[28] = 1.0f; cb[29] = 1.0f; cb[30] = 1.0f;   // 灯色
+        cb[31] = 0.01f;                      // shadowBias
+        cb[32] = 0.45f; cb[33] = 0.39f; cb[34] = 0.30f; // 统一间接反照率
+        cb[35] = 50.0f;                      // shadow tMax
+        cb[36] = 0.25f;                      // 软目标 p（每 cell 4 帧一轮）
+        cb[37] = params.cacheVizRadiance ? 1.0f : 0.0f;// viz 亮度模式
+        cmd->writeBuffer(cacheCB_, cb, sizeof(cb));   // 160B 全量覆写
     }
 
     // (1) 全表衰减（fill 之前——衰减后 fill 续命，同帧新样本不被衰减误伤）。
@@ -4004,6 +4084,21 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cmd->setComputeState(cstate);
         cmd->dispatch((std::uint32_t(vpW) / 2u + 7u) / 8u,
                       (std::uint32_t(vpH) / 2u + 7u) / 8u, 1u);
+    }
+    // (3) M11.1 cell 更新：DI shadow ray + 邻居射线查缓存（tlasReady_ 门控——
+    // set 未建（TLAS 未就绪）时跳过，cell 靠 fill 查询即插入维持存活）。
+    if (cacheUpdateSet_) {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(cacheUpdatePSO_).addBindingSet(cacheUpdateSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((kWcCapacity + 63u) / 64u, 1u, 1u);
+    }
+    // (4) M11.1 blend：时域混合（只处理本轮标记 cell）。
+    if (cacheBlendSet_) {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(cacheBlendPSO_).addBindingSet(cacheBlendSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((kWcCapacity + 63u) / 64u, 1u, 1u);
     }
     ++cacheFrame_;
     // cache-viz 跳过 dots/gather → place/trace 产物的 UAV→SRV 收尾转换（原来靠
@@ -4023,7 +4118,8 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     }
     if (!cacheLogged_) {
         nl::core::log::infoCh("scene", "cache: flat hashmap active (262144 slots, lifetime 10, "
-                            "cell 0.5m, probe steps 3 -- Q11-0 plan A)");
+                            "cell 0.5m, probe steps 3 -- Q11-0 plan A; M11.1 update+blend ",
+                            cacheUpdateSet_ ? "on" : "waiting-tlas", ")");
         cacheLogged_ = true;
     }
 }
@@ -4042,6 +4138,7 @@ bool Scene::drawCacheViz(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewpo
         d.addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
         d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, wcChecksums_));
         d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, wcLife_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, wcRadiance_));
         d.addItem(nvrhi::BindingSetItem::Texture_UAV(0, hdrSceneColor_));
         cacheVizSet_ = probeDevice_->createBindingSet(d, cacheVizLayout_);
         if (!cacheVizSet_) { outError = "createBindingSet failed for cache viz"; return false; }
@@ -7663,20 +7760,30 @@ void Scene::shutdown() {
     csCacheFill_ = nullptr;
     csCacheDecay_ = nullptr;
     csCacheViz_ = nullptr;
+    csCacheUpdate_ = nullptr;
+    csCacheBlend_ = nullptr;
     cacheCB_ = nullptr;
     wcChecksums_ = nullptr;
     wcLife_ = nullptr;
     wcGeoPos_ = nullptr;
     wcGeoNrm_ = nullptr;
+    wcRadiance_ = nullptr;
+    wcNewRadiance_ = nullptr;
     cacheFillLayout_ = nullptr;
     cacheVizLayout_ = nullptr;
+    cacheUpdateLayout_ = nullptr;
+    cacheBlendLayout_ = nullptr;
     cacheFillSet_ = nullptr;
     cacheVizSet_ = nullptr;
+    cacheUpdateSet_ = nullptr;
+    cacheBlendSet_ = nullptr;
     cacheFillSetDepth_ = nullptr;
     cacheVizSetHdr_ = nullptr;
     cacheFillPSO_ = nullptr;
     cacheDecayPSO_ = nullptr;
     cacheVizPSO_ = nullptr;
+    cacheUpdatePSO_ = nullptr;
+    cacheBlendPSO_ = nullptr;
     cacheFrame_ = 0;
     cacheFirstClear_ = true;
     cacheLogged_ = false;

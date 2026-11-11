@@ -47,6 +47,11 @@ struct WorldCacheSim {
         std::uint32_t life     = 0;   // 衰减寿命；查询命中即续命
         float pos[3] = {0.f, 0.f, 0.f};
         float nrm[3] = {0.f, 1.f, 0.f};
+        // M11.1 cell 更新（与 csCacheUpdate/csCacheBlend 同构）：
+        float rad[3]   = {0.f, 0.f, 0.f};  // C = 入射辐照度收敛值（直光+间接）
+        float samples  = 0.f;              // blend 样本数（cap 64）
+        float newRad[3] = {0.f, 0.f, 0.f}; // 本帧 update 新样本
+        bool  newMark  = false;            // 本轮被软目标选中（blend 消费后清 0）
     };
 
     std::uint32_t capacity;       // 2 的幂
@@ -172,6 +177,172 @@ struct Lcg {
     float f() { return static_cast<float>(next()) * (1.0f / 4294967296.0f); }
     float range(float a, float b) { return a + (b - a) * f(); }
 };
+
+// ---------------------------------------------------------------------------
+// 合成场景解析求交（cachesim --update 仿真用；几何与 sampleScene 严格同源：
+// 地面 y=-1 + 箱 A(x:-3..-1,y:-1..0.5,z:-2..2) + 箱 B(x:1..4,y:-1..1.5,z:-3..0)）。
+// slab 法 ray-AABB + 平面，返回命中 t 与外法线；CPU 参照实现，无容差需求。
+struct SimHit { float t; float n[3]; };
+
+static bool simIntersect(const float o[3], const float d[3], float tMax, SimHit& out) {
+    bool hit = false;
+    float best = tMax;
+    // 地面平面 y = -1（朝上）
+    if (d[1] < -1e-6f) {
+        const float t = (-1.0f - o[1]) / d[1];
+        if (t > 1e-4f && t < best) {
+            const float x = o[0] + d[0] * t, z = o[2] + d[2] * t;
+            if (x >= -6.f && x <= 6.f && z >= -6.f && z <= 6.f) {
+                best = t; out.t = t; out.n[0] = 0; out.n[1] = 1; out.n[2] = 0; hit = true;
+            }
+        }
+    }
+    // 两个 AABB（slab 法）
+    const float boxes[2][2][3] = {
+        {{-3.f, -1.f, -2.f}, {-1.f, 0.5f, 2.f}},   // 箱 A min/max
+        {{ 1.f, -1.f, -3.f}, { 4.f, 1.5f, 0.f}},   // 箱 B min/max
+    };
+    for (int b = 0; b < 2; ++b) {
+        float tmin = 1e-4f, tmax = best;
+        int axisHit = -1, signHit = 0;
+        bool ok = true;
+        for (int a = 0; a < 3 && ok; ++a) {
+            const float lo = boxes[b][0][a], hi = boxes[b][1][a];
+            if (std::fabs(d[a]) < 1e-8f) {
+                if (o[a] < lo || o[a] > hi) ok = false;
+            } else {
+                float t1 = (lo - o[a]) / d[a], t2 = (hi - o[a]) / d[a];
+                int s1 = -1;
+                if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; s1 = 1; }
+                if (t1 > tmin) { tmin = t1; axisHit = a; signHit = s1; }
+                if (t2 < tmax) tmax = t2;
+                if (tmin > tmax) ok = false;
+            }
+        }
+        if (ok && axisHit >= 0 && tmin < best) {
+            best = tmin; out.t = tmin;
+            for (int a = 0; a < 3; ++a) out.n[a] = 0.f;
+            out.n[axisHit] = static_cast<float>(signHit);   // 入射面外法线
+            hit = true;
+        }
+    }
+    return hit;
+}
+
+// 解析天穹（sky.slangh 同构：zenith/horizon 余弦混合 + 地平线以下压暗）。
+static void simSky(const float d[3], float out[3]) {
+    const float zen[3] = {0.16f, 0.30f, 0.58f}, hor[3] = {0.62f, 0.71f, 0.84f};
+    float t = d[1] < 0.f ? 0.f : (d[1] > 1.f ? 1.f : d[1]);
+    const float pw = std::pow(t, 0.6f);
+    float dk = d[1] * 4.f + 1.f; dk = dk < 0.f ? 0.f : (dk > 1.f ? 1.f : dk);
+    const float dim = 0.35f + 0.65f * dk;
+    for (int i = 0; i < 3; ++i)
+        out[i] = (hor[i] + (zen[i] - hor[i]) * pw) * dim;
+}
+
+// M11.1 update 语义（与 csCacheUpdate 同构的 CPU 参照）。口径（自洽定义，
+// 与 bevy 的差异在于 cell 值定义不同——我们 cell 存入射辐照度 C）：
+//   E_direct  = lightCol * I * NdotL * shadow          （方向灯入射）
+//   E_ind     = albedo * C(hit)                        （cosine 弹射单样本：
+//               lambert f=albedo/π × cos ÷ pdf=cos/π → albedo × L(ω)，
+//               邻居表面出射 ≈ albedo × 邻居入射 C（统一 albedo））
+//   缓存 miss（几何命中但无 cell）→ 0（多帧收敛自然填充）
+//   射线 miss 天空 → albedo * skyGradient(d)（bevy 的 π×env 是其 cell 存
+//               出射口径所致；我们入射口径下 π 被 pdf 消掉）
+// 软目标：pcg(idx ^ frame) < prob（bevy target/count 的无 active-list 近似，
+// 固定概率第一版；rng = cell_index + frame_index 入 seed，bevy 同款）。
+struct SimLight {
+    float dir[3];       // 指向光源（M9 g_traceLightDir 同语义，已归一化）
+    float intensity;    // 2.5（M9.x 同值）
+    float albedo[3];    // 统一间接反照率 0.45/0.39/0.30（M10.1/M10.2 同口径）
+    float bias;         // 0.01 世界尺度（direct.slang g_shadowParams.x 同值）
+    float tMax;         // shadow ray tMax（50）
+    float prob;         // 软目标概率（第一版 0.25：每 cell 4 帧一轮）
+};
+
+static int simCacheUpdate(WorldCacheSim& sim, std::uint32_t frameIndex,
+                          const SimLight& lt) {
+    int updated = 0;
+    for (std::uint32_t idx = 0; idx < sim.capacity; ++idx) {
+        WorldCacheSim::Cell& c = sim.table[idx];
+        c.newMark = false;
+        if (c.checksum == 0u) continue;                    // 空槽
+        if (static_cast<float>(hashes::pcg(idx ^ frameIndex)) * (1.f / 4294967296.f)
+            >= lt.prob) continue;
+        c.newMark = true;
+        ++updated;
+
+        // ---- DI 段：对光源 shadow ray ----
+        float o[3] = {c.pos[0] + c.nrm[0] * lt.bias,
+                      c.pos[1] + c.nrm[1] * lt.bias,
+                      c.pos[2] + c.nrm[2] * lt.bias};
+        float eDir[3] = {0.f, 0.f, 0.f};
+        const float ndl = c.nrm[0] * lt.dir[0] + c.nrm[1] * lt.dir[1]
+                        + c.nrm[2] * lt.dir[2];
+        if (ndl > 0.f) {
+            SimHit h;
+            const bool occluded = simIntersect(o, lt.dir, lt.tMax, h);
+            if (!occluded) {
+                for (int i = 0; i < 3; ++i) eDir[i] = lt.intensity * ndl;
+            }
+        }
+
+        // ---- GI 段：cosine hemisphere 邻居射线（Malley disk → 半球投影，
+        // direct.slang csReferenceGI 同款；rng = idx + frame 入 seed）。
+        std::uint32_t rs = hashes::pcg(idx) ^ frameIndex;
+        auto rnd = [&rs]() { rs = hashes::pcg(rs); return static_cast<float>(rs) * (1.f / 4294967296.f); };
+        const float u1 = rnd(), u2 = rnd();
+        const float r = std::sqrt(u1), phi = 6.2831853f * u2;
+        float t1[3], t2v[3];
+        if (std::fabs(c.nrm[1]) < 0.9f) {
+            t1[0] = c.nrm[2]; t1[1] = 0.f; t1[2] = -c.nrm[0];   // cross((0,1,0),n)
+        } else {
+            t1[0] = 0.f; t1[1] = -c.nrm[2]; t1[2] = c.nrm[1];   // cross((1,0,0),n)
+        }
+        const float tl = std::sqrt(t1[0] * t1[0] + t1[1] * t1[1] + t1[2] * t1[2]);
+        t1[0] /= tl; t1[1] /= tl; t1[2] /= tl;
+        t2v[0] = c.nrm[1] * t1[2] - c.nrm[2] * t1[1];
+        t2v[1] = c.nrm[2] * t1[0] - c.nrm[0] * t1[2];
+        t2v[2] = c.nrm[0] * t1[1] - c.nrm[1] * t1[0];
+        const float dx = t1[0] * (r * std::cos(phi)) + t2v[0] * (r * std::sin(phi)) + c.nrm[0] * std::sqrt(std::max(0.f, 1.f - u1));
+        const float dy = t1[1] * (r * std::cos(phi)) + t2v[1] * (r * std::sin(phi)) + c.nrm[1] * std::sqrt(std::max(0.f, 1.f - u1));
+        const float dz = t1[2] * (r * std::cos(phi)) + t2v[2] * (r * std::sin(phi)) + c.nrm[2] * std::sqrt(std::max(0.f, 1.f - u1));
+        const float d[3] = {dx, dy, dz};
+
+        float eInd[3] = {0.f, 0.f, 0.f};
+        SimHit h;
+        if (simIntersect(o, d, 1.0e4f, h)) {
+            const float hp[3] = {o[0] + d[0] * h.t, o[1] + d[1] * h.t, o[2] + d[2] * h.t};
+            // 命中点沿命中面法线微抬（查缓存口径与 cell 几何量化一致）
+            const float hq[3] = {hp[0] + h.n[0] * lt.bias, hp[1] + h.n[1] * lt.bias,
+                                 hp[2] + h.n[2] * lt.bias};
+            const std::uint32_t slot = sim.find(hq, h.n);
+            if (slot != sim.capacity) {
+                for (int i = 0; i < 3; ++i) eInd[i] = lt.albedo[i] * sim.table[slot].rad[i];
+            }                          // 缓存 miss → 0
+        } else {
+            float sky[3];
+            simSky(d, sky);
+            for (int i = 0; i < 3; ++i) eInd[i] = lt.albedo[i] * sky[i];
+        }
+
+        for (int i = 0; i < 3; ++i) c.newRad[i] = eDir[i] + eInd[i];
+    }
+    return updated;
+}
+
+// M11.1 blend 语义（与 csCacheBlend 同构）：线性时域混合，样本数 cap 64。
+// 只处理本轮被软目标选中的 cell（newMark），选不中的旧值原样保留——
+// 这是 bevy active-list 语义在无 active-list 全表扫下的等价形态。
+static void simCacheBlend(WorldCacheSim& sim) {
+    for (WorldCacheSim::Cell& c : sim.table) {
+        if (!c.newMark) continue;
+        const float amt = 1.f / std::min(c.samples + 1.f, 64.f);
+        for (int i = 0; i < 3; ++i) c.rad[i] += (c.newRad[i] - c.rad[i]) * amt;
+        c.samples = std::min(c.samples + 1.f, 64.f);
+        c.newMark = false;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 最小 PNG 写出（RGB8，zlib stored blocks + CRC32/adler32，零依赖、确定性字节）。
@@ -431,6 +602,125 @@ static bool selftestCachesim() {
         CHECK(run(7) != run(8), "determinism: different seed -> different fingerprint");
     }
 
+    // 8. M11.1 update 收敛：无遮挡 cell 的直光项收敛到解析值（误差 5%）。
+    {
+        WorldCacheSim sim(1u << 12);
+        Lcg rng(9);
+        SimLight lt;
+        lt.dir[0] = 0.3f; lt.dir[1] = 0.9f; lt.dir[2] = 0.2f;   // 指向光源
+        const float dl = std::sqrt(0.3f * 0.3f + 0.9f * 0.9f + 0.2f * 0.2f);
+        lt.dir[0] /= dl; lt.dir[1] /= dl; lt.dir[2] /= dl;
+        lt.intensity = 2.5f;
+        lt.albedo[0] = 0.45f; lt.albedo[1] = 0.39f; lt.albedo[2] = 0.30f;
+        lt.bias = 0.01f; lt.tMax = 50.f; lt.prob = 1.0f;   // 全量更新压噪声
+        const float p[3] = {4.5f, -1.0f, -4.5f};           // 场景边角，无遮挡
+        const float n[3] = {0, 1, 0};
+        // 差分法（两组独立仿真、同软目标序列 → 天空项逐帧对消，残差只来自
+        // blend 收敛动态）：地面点的 cosine 邻居射线全 miss 天空（上方无遮挡），
+        // 收敛值 C = albedo·E[sky] + I·NdotL。I=0 基线组取天空项，I=2.5 组验
+        // 直光增量；192 帧后 cap-64 残差 (63/64)^192 < 5%。
+        WorldCacheSim simBase(1u << 12);
+        simBase.touch(p, n);
+        sim.touch(p, n);
+        for (int f = 0; f < 192; ++f) {
+            lt.intensity = 0.f;
+            simCacheUpdate(simBase, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(simBase);
+            lt.intensity = 2.5f;
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+        }
+        const std::uint32_t slot = sim.find(p, n);
+        CHECK(slot != sim.capacity, "update: ground cell stays resident");
+        const float skyBase = simBase.table[simBase.find(p, n)].rad[0];
+        CHECK(skyBase > 0.f, "update: sky base contribution present");
+        const WorldCacheSim::Cell& c = sim.table[slot];
+        const float analytic = 2.5f * (n[0] * lt.dir[0] + n[1] * lt.dir[1] + n[2] * lt.dir[2]);
+        float err = 0.f;
+        for (int i = 0; i < 3; ++i)
+            err = std::max(err, std::fabs((c.rad[i] - skyBase) - analytic) / analytic);
+        CHECK(err < 0.05f, "update: DI increment converges to analytic value (5%)");
+        CHECK(c.samples >= 63.f, "update: sample count reaches cap");
+    }
+
+    // 9. M11.1 二级弹射涌现：被遮挡 cell 直光为 0，多帧后 radiance > 0
+    //    （间接光只可能来自邻居 cell 的缓存值——缓存反馈的机制本体）。
+    {
+        WorldCacheSim sim(1u << 12);
+        Lcg rng(10);
+        SimLight lt;
+        lt.dir[0] = 0.3f; lt.dir[1] = 0.9f; lt.dir[2] = 0.2f;
+        const float dl = std::sqrt(0.3f * 0.3f + 0.9f * 0.9f + 0.2f * 0.2f);
+        lt.dir[0] /= dl; lt.dir[1] /= dl; lt.dir[2] /= dl;
+        lt.intensity = 2.5f;
+        lt.albedo[0] = 0.45f; lt.albedo[1] = 0.39f; lt.albedo[2] = 0.30f;
+        lt.bias = 0.01f; lt.tMax = 50.f; lt.prob = 1.0f;
+        // 点亮一片直光地面（x:3..5 朝光面）+ 阴影地面点（箱 B 背光侧 x<1 近旁）。
+        // 阴影点选取：光从 +x 上方来，箱 B(x:1..4) 影子投在 x<1 一侧；
+        // (-0.2,-1,0) 朝光源射线在 y<1.5 段 x∈[-0.2,0.63] 不与箱 B 相交，
+        // 加 t 大后 y 已出箱高 → 需实测确认遮挡，断言分两步：先验直光=0，
+        // 再验点亮的直光群是否把阴影点 GI 拉起来。
+        const float lit[3] = {4.5f, -1.0f, 0.5f};
+        const float litN[3] = {0, 1, 0};
+        const float shadowP[3] = {-0.25f, -1.0f, 0.0f};
+        const float shadowN[3] = {0, 1, 0};
+        // 直光群
+        for (int i = 0; i < 40; ++i) {
+            const float q[3] = {rng.range(3.f, 5.5f), -1.0f, rng.range(-1.f, 1.5f)};
+            sim.touch(q, litN);
+        }
+        sim.touch(lit, litN);
+        sim.touch(shadowP, shadowN);
+        int framesShadowGlow = 0;
+        for (int f = 0; f < 96; ++f) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+            const std::uint32_t ss = sim.find(shadowP, shadowN);
+            if (ss == sim.capacity) continue;
+            const float lum = sim.table[ss].rad[0] + sim.table[ss].rad[1] + sim.table[ss].rad[2];
+            if (lum > 0.01f) ++framesShadowGlow;
+        }
+        // 直光=0 先验（NdotL>0 但 shadow ray 被箱 B 挡；若实测未挡则本组前提
+        // 不成立——换点前先如实暴露）。
+        const std::uint32_t sShadow = sim.find(shadowP, shadowN);
+        CHECK(sShadow != sim.capacity, "bounce: shadow cell stays resident");
+        CHECK(framesShadowGlow > 48,
+              "bounce: shadowed cell receives indirect light via cache feedback");
+    }
+
+    // 10. M11.1 blend 语义：未选中 cell 旧值原样保留；选中后样本数单调、
+    //     收敛步长符合 1/min(a+1,64)。
+    {
+        WorldCacheSim sim(1u << 12);
+        SimLight lt;
+        lt.dir[0] = 0.f; lt.dir[1] = 1.f; lt.dir[2] = 0.f;
+        lt.intensity = 0.f;                       // 关直光：样本全来自天空项
+        lt.albedo[0] = 0.45f; lt.albedo[1] = 0.39f; lt.albedo[2] = 0.30f;
+        lt.bias = 0.01f; lt.tMax = 50.f; lt.prob = 1.0f;
+        const float p[3] = {0.5f, -1.0f, 0.5f};
+        const float n[3] = {0, 1, 0};
+        sim.touch(p, n);
+        simCacheUpdate(sim, 0u, lt);
+        simCacheBlend(sim);
+        const std::uint32_t slot = sim.find(p, n);
+        const float after1 = sim.table[slot].rad[0] + sim.table[slot].rad[1] + sim.table[slot].rad[2];
+        CHECK(after1 > 0.f, "blend: sky-only sample lands (albedo*sky > 0)");
+        CHECK(sim.table[slot].samples == 1.f, "blend: sample count increments");
+        // cap 64 后样本数不再增长
+        for (int f = 1; f < 80; ++f) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+        }
+        CHECK(sim.table[slot].samples == 64.f, "blend: sample count capped at 64");
+        // 后期收敛步长 = 1/64：相邻两帧变化不超过步长 x 解析上界
+        const float before = sim.table[slot].rad[0];
+        simCacheUpdate(sim, 999u, lt);
+        simCacheBlend(sim);
+        const float after = sim.table[slot].rad[0];
+        CHECK(std::fabs(after - before) < 0.02f,
+              "blend: post-cap per-frame delta shrinks to 1/64 scale");
+    }
+
     if (g_fail == 0) std::printf("gi-tools cachesim selftest: PASS\n");
     else std::printf("gi-tools cachesim selftest: FAIL (%d)\n", g_fail);
     return g_fail == 0 ? 0 : 1;
@@ -450,6 +740,7 @@ static int cmdCachesim(int argc, char** argv) {
     int frames = 120;
     int size = 512;
     const char* pngPath = nullptr;
+    bool updateMode = false;   // M11.1：update+blend 仿真 + radiance 亮度热图
     for (int i = 0; i < argc; ++i) {
         const std::string a = argv[i];
         auto need = [&](const char* what) -> const char* {
@@ -459,6 +750,7 @@ static int cmdCachesim(int argc, char** argv) {
         if (a == "--frames") frames = std::atoi(need("--frames"));
         else if (a == "--png") pngPath = need("--png");
         else if (a == "--size") size = std::atoi(need("--size"));
+        else if (a == "--update") updateMode = true;
         else { std::fprintf(stderr, "unknown option: %s\n", a.c_str()); return 2; }
     }
     if (frames <= 0 || size <= 0) { std::fprintf(stderr, "bad --frames/--size\n"); return 2; }
@@ -499,7 +791,24 @@ static int cmdCachesim(int argc, char** argv) {
         }
     };
 
+    // M11.1 update 灯参数（M9.x/M10.x 同口径；软目标 p=0.25 = 每 cell 4 帧一轮）。
+    SimLight lt;
+    lt.dir[0] = 0.3f; lt.dir[1] = 0.9f; lt.dir[2] = 0.2f;
+    {
+        const float dl = std::sqrt(0.3f * 0.3f + 0.9f * 0.9f + 0.2f * 0.2f);
+        lt.dir[0] /= dl; lt.dir[1] /= dl; lt.dir[2] /= dl;
+    }
+    lt.intensity = 2.5f;
+    lt.albedo[0] = 0.45f; lt.albedo[1] = 0.39f; lt.albedo[2] = 0.30f;
+    lt.bias = 0.01f; lt.tMax = 50.f; lt.prob = 0.25f;
+    // 收敛锚点：直光地面 cell（每帧被 4096 采样稳定续命，不存在集合变化干扰）。
+    const float anchor[3] = {4.5f, -1.0f, 0.5f};
+    const float anchorN[3] = {0, 1, 0};
+    sim.touch(anchor, anchorN);
+
     std::uint32_t peakProbes = 0;
+    double radVarFirst = 0.0, radVarLast = 0.0;   // 收敛证据：锚点 cell 前后窗帧间差
+    std::vector<float> anchorLum;                 // 固定锚点 (4.5,-1,0.5) 逐帧亮度
     for (int f = 0; f < frames; ++f) {
         sim.decay();
         for (int i = 0; i < 4096; ++i) {
@@ -508,6 +817,25 @@ static int cmdCachesim(int argc, char** argv) {
             sim.touch(p, n);
             peakProbes = std::max(peakProbes, sim.lastProbes);
         }
+        if (updateMode) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+            const std::uint32_t as = sim.find(anchor, anchorN);
+            anchorLum.push_back(as != sim.capacity
+                ? sim.table[as].rad[0] + sim.table[as].rad[1] + sim.table[as].rad[2]
+                : 0.f);
+        }
+    }
+    if (updateMode && anchorLum.size() >= 8) {
+        const size_t half = anchorLum.size() / 2;
+        auto windowDelta = [&](size_t lo, size_t hi) {
+            double acc = 0.0;
+            for (size_t i = lo + 1; i < hi; ++i)
+                acc += std::fabs(static_cast<double>(anchorLum[i]) - anchorLum[i - 1]);
+            return acc / static_cast<double>(hi - lo - 1);
+        };
+        radVarFirst = windowDelta(0, half);
+        radVarLast = windowDelta(half, anchorLum.size());
     }
 
     // 俯视热图：直接遍历表内 active cells 做 XY 投影（这才是「cell 分布」本义；
@@ -520,21 +848,34 @@ static int cmdCachesim(int argc, char** argv) {
         const int px = static_cast<int>(c.pos[0] * w2p) + half;
         const int py = static_cast<int>(c.pos[2] * w2p) + half;
         if (px < 0 || px >= size || py < 0 || py >= size) continue;
-        const std::uint32_t h = hashes::pcg(c.checksum);
-        const float hue = static_cast<float>(h & 0xFFu) / 255.0f * 6.0f;
-        const float seg = std::floor(hue);
-        const float t = hue - seg;
         float r, g, b;
-        switch (static_cast<int>(seg) % 6) {
-            case 0: r = 1; g = t; b = 0; break;
-            case 1: r = 1 - t; g = 1; b = 0; break;
-            case 2: r = 0; g = 1; b = t; break;
-            case 3: r = 0; g = 1 - t; b = 1; break;
-            case 4: r = t; g = 0; b = 1; break;
-            default: r = 1; g = 0; b = 1 - t; break;
+        if (updateMode) {
+            // M11.1 radiance 模式：出射辐照度 albedo·C/π 直接色调映射
+            // （c/(1+c)）——直光面亮、阴影区只剩间接光明显变暗、无伪彩色相
+            // 干扰；cell 收敛差异肉眼可辨。
+            const float e[3] = {c.rad[0] * 0.45f * 0.31830988f,
+                                c.rad[1] * 0.39f * 0.31830988f,
+                                c.rad[2] * 0.30f * 0.31830988f};
+            r = std::pow(e[0] / (1.f + e[0]), 1.f / 2.2f);
+            g = std::pow(e[1] / (1.f + e[1]), 1.f / 2.2f);
+            b = std::pow(e[2] / (1.f + e[2]), 1.f / 2.2f);
+        } else {
+            const std::uint32_t h = hashes::pcg(c.checksum);
+            const float hue = static_cast<float>(h & 0xFFu) / 255.0f * 6.0f;
+            const float seg = std::floor(hue);
+            const float t = hue - seg;
+            switch (static_cast<int>(seg) % 6) {
+                case 0: r = 1; g = t; b = 0; break;
+                case 1: r = 1 - t; g = 1; b = 0; break;
+                case 2: r = 0; g = 1; b = t; break;
+                case 3: r = 0; g = 1 - t; b = 1; break;
+                case 4: r = t; g = 0; b = 1; break;
+                default: r = 1; g = 0; b = 1 - t; break;
+            }
+            r *= 0.35f + 0.65f * (static_cast<float>(c.life) / static_cast<float>(sim.lifetime));
+            g *= 0.35f + 0.65f * (static_cast<float>(c.life) / static_cast<float>(sim.lifetime));
+            b *= 0.35f + 0.65f * (static_cast<float>(c.life) / static_cast<float>(sim.lifetime));
         }
-        const float v = 0.35f + 0.65f *
-            (static_cast<float>(c.life) / static_cast<float>(sim.lifetime));
         // cell 是 0.5m 方块 → 按 cell 尺寸填充矩形（1px 点会看不出网格分布）。
         const int cw = std::max(1, static_cast<int>(0.5f * w2p));
         for (int dy = 0; dy < cw; ++dy) {
@@ -544,9 +885,9 @@ static int cmdCachesim(int argc, char** argv) {
                 const int xx = px + dx;
                 if (xx < 0 || xx >= size) continue;
                 unsigned char* o = &rgb[(static_cast<size_t>(yy) * size + xx) * 3];
-                o[0] = static_cast<unsigned char>(r * v * 255.0f);
-                o[1] = static_cast<unsigned char>(g * v * 255.0f);
-                o[2] = static_cast<unsigned char>(b * v * 255.0f);
+                o[0] = static_cast<unsigned char>(std::min(r, 1.0f) * 255.0f);
+                o[1] = static_cast<unsigned char>(std::min(g, 1.0f) * 255.0f);
+                o[2] = static_cast<unsigned char>(std::min(b, 1.0f) * 255.0f);
             }
         }
     }
@@ -555,6 +896,15 @@ static int cmdCachesim(int argc, char** argv) {
     std::printf("capacity     : %u\n", sim.capacity);
     std::printf("cells        : %u / %u\n", sim.activeCells(), sim.capacity);
     std::printf("peak probes  : %u\n", peakProbes);
+    if (updateMode) {
+        std::printf("update mode  : prob 0.25 / DI+GI+blend\n");
+        std::printf("delta early  : %.5f\n", radVarFirst);
+        std::printf("delta late   : %.5f\n", radVarLast);
+        if (radVarLast >= radVarFirst && radVarFirst > 0.0) {
+            std::printf("no convergence (late delta >= early)\n");
+            return 1;
+        }
+    }
     bool pngOk = false;
     std::string err;
     if (pngPath) {

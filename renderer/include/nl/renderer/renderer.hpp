@@ -142,6 +142,7 @@ struct FrameParams {
     // ---- S11 M11.0：--mode cache-viz 世界缓存占用伪彩（probe 链之上叠加
     //  fill/decay/viz 三个 compute；其它模式不读，缺省 false 零扰动）。
     bool  cacheViz          = false;
+    bool  cacheVizRadiance  = false;   // M11.1：viz 亮度 = 出射辐照度（0=life 模式）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。

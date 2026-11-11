@@ -483,7 +483,12 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
             giray.TMin      = 0.001f;                                  // rt.slang/bevy 口径
             giray.TMax      = 1.0e4f;                                  // 截太小漏天光（bevy 注释）
             float3 lin = skyGradient(d);                               // miss 默认 → 天穹（Q12-3）
-            if (g_refSamplesStart == 0xdeadbeefu)   // 【二分 A】RayQuery 段暂时禁用（定性用，勿提交）
+            // ⚠️ 命中面 GI 段（M10.3 二分遗留形态）：`g_refSamplesStart ==
+            // 0xdeadbeefu` 正常恒 false —— s10-refgi 冻结基线的 GI 项实为
+            // 纯天穹（本段从不执行）。段内容 = probe_trace hit 分支同口径，
+            // 留作 M11.2 探针查缓存后重开此段的现成实现；重开必须重拍
+            // s10-refgi 基线（单独拍板，禁顺手改形态）。
+            if (g_refSamplesStart == 0xdeadbeefu)
             {
                 RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> gq;
                 gq.TraceRayInline(g_tlas,
@@ -506,8 +511,6 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
                                       0xFF, sray);
                     sq.Proceed();
                     const float sh2 = (sq.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
-                    // 命中点出射 radiance ≈ albedo × (E_direct/π + E_ambient)
-                    //（probe_trace.slang hit 分支逐字同口径，无 NdotL 降级备案）。
                     lin = giAlbedo * (g_lightColor.rgb * g_lightColor.a * sh2 * (1.0f / kPi) + giAmb);
                 }
             }

@@ -1113,13 +1113,20 @@ private:
     // kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / 探测上限 3。
     static constexpr std::uint32_t kWcCapacity = 1u << 18;
     static constexpr std::uint32_t kWcLifetime = 10;
+    // M11.1：csCacheUpdate（DI shadow ray + 邻居射线查缓存）/ csCacheBlend（时域
+    // 混合 cap 64）—— cell 更新 = 多跳反馈的机制本体（S11-PLAN M11.1）。
     nvrhi::ShaderHandle          csCacheFill_, csCacheDecay_, csCacheViz_;
-    nvrhi::BufferHandle          cacheCB_;               // volatile 64B
+    nvrhi::ShaderHandle          csCacheUpdate_, csCacheBlend_;
+    nvrhi::BufferHandle          cacheCB_;               // volatile 160B（M11.1 扩）
     nvrhi::BufferHandle          wcChecksums_, wcLife_;  // 4B×2^18 each
     nvrhi::BufferHandle          wcGeoPos_, wcGeoNrm_;   // 16B×2^18 each
+    nvrhi::BufferHandle          wcRadiance_, wcNewRadiance_; // M11.1：16B×2^18 each
     nvrhi::BindingLayoutHandle   cacheFillLayout_, cacheVizLayout_;
+    nvrhi::BindingLayoutHandle   cacheUpdateLayout_, cacheBlendLayout_;
     nvrhi::BindingSetHandle      cacheFillSet_, cacheVizSet_;
+    nvrhi::BindingSetHandle      cacheUpdateSet_, cacheBlendSet_;
     nvrhi::ComputePipelineHandle cacheFillPSO_, cacheDecayPSO_, cacheVizPSO_;
+    nvrhi::ComputePipelineHandle cacheUpdatePSO_, cacheBlendPSO_;
     nvrhi::TextureHandle         cacheFillSetDepth_;     // set 依赖登记（probeDepth_ 重建则 set 重建）
     nvrhi::TextureHandle         cacheVizSetHdr_;        // set 依赖登记（hdrSceneColor_ 重建则 set 重建）
     std::uint32_t                cacheFrame_ = 0;        // 帧号（r2 抖动种子，确定性）

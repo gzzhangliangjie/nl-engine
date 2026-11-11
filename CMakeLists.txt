@@ -408,7 +408,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "direct.cs"
                     "direct.csref"
                     "direct.csrefgi"
-                    "probe_trace.cstrace")
+                    "probe_trace.cstrace"
+                    "world_cache.cscacheupdate")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -436,7 +437,7 @@ set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
 set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgathercompose|compute")
 # S11 M11.0：world_cache.slang 三 compute 入口——世界缓存 flat hashmap（Q11-0 方案 A：
 # 无墓碑 + life 衰减清零立即重用 + 3 步探测）。半分辨率填充 / 全表衰减 / cache-viz 伪彩。
-set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute")
+set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute" "csCacheUpdate|cscacheupdate|compute" "csCacheBlend|cscacheblend|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")

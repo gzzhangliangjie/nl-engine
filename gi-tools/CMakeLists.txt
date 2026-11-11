@@ -25,3 +25,11 @@ add_test(NAME s11-gi-cachesim-usage COMMAND gi-tools cachesim --bogus)
 set_tests_properties(s11-gi-cachesim-usage PROPERTIES WILL_FAIL TRUE)
 add_test(NAME s11-gi-cachesim-badframes COMMAND gi-tools cachesim --frames 0)
 set_tests_properties(s11-gi-cachesim-badframes PROPERTIES WILL_FAIL TRUE)
+
+# ---- S11 M11.1: probe-hit cache update / secondary bounce (ctest) ----
+# 锚点 "delta early"：收敛统计（锚 cell 前窗 vs 后窗帧间差，early > late）。
+add_test(NAME s11-gi-cachesim-update
+         COMMAND gi-tools cachesim --frames 64 --update
+                 --png ${CMAKE_CURRENT_BINARY_DIR}/s11-cachesim-update.png --size 512)
+set_tests_properties(s11-gi-cachesim-update PROPERTIES
+    PASS_REGULAR_EXPRESSION "delta early")

@@ -366,3 +366,15 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | viz set 依赖登记 | `hdrSceneColor_`（u0 UAV 全替换写，T0 已带 isUAV=true） | `drawCacheViz` 懒建（cacheVizSetHdr_ 判重建） | cacheVizSet_ | dispatch 前 `setTextureState(hdr, UAV)`；RMW 纪律同 M10.2（每线程只写自己 texel） |
 | 四常量三方同口径 | kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / probeSteps=3 | slang / scene.cpp / gi-tools 同抄 | — | 改任一处必须全 grep 勘误 |
 | CPU 仿真先行 | `gi-tools`（selftest 7 组 18 断言 + `cachesim` 确定性热图） | gi-tools/main.cpp 与 shader 同构 | — | 语义验证在 GPU 落码前完成（本里程碑计划底线） |
+
+#### M11.1 探针命中改查缓存槽位同步表（落码实读固化，2026-11-11，tag `s11-update`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `cacheCB_` | **160B volatile**（§2.21 反汇编核对）：[24..27] 灯向+强度 / [28..31] 灯色+bias / [32..35] albedo+w tMax / [36..37] 软目标 p=0.25 / vizMode | `initCache`（扩容后） | b0（fill/decay/update/blend/viz 五 set 共用） | 每帧全量覆写；`dxc -dumpbin` 实测 Size=160 |
+| `wcRadiance_` / `wcNewRadiance_` | `float4` × 1<<18（cell 存**入射辐照度 C**；newRadiance.w = newMark 标记，blend **消费后清 0**） | `initCache`（首帧清零） | updateSet t5/t6 SRV + u4 UAV；blendSet t5/t6/u5 SRV + u4/u5 UAV；vizSet t5 SRV | 内容跨帧保留；newMark 单帧生命周期 |
+| `world_cache.slang` 新入口 | `csCacheUpdate`（64×1 软目标 pcg(cell^frame)<p；DI shadow ray + Malley cosine 邻居射线命中量化点查缓存；`wcRand(inout uint)` —— **slang 无 lambda**）+ `csCacheBlend`（1/min(n+1,64) 线性 cap + 清标记） | CMake `_ENTRIES_WORLD_CACHE` + `_SM66_ARTIFACTS`（**RayQuery 需 SM6.6**）+ kArtifacts 四项 | updateLayout（b0 + SB_SRV(1,3,4,5) + AccelStruct(7) + SB_UAV(4)）/ blendLayout（b0 + SB_SRV(5,6) + SB_UAV(4,5)） | updateSet **tlasReady_ 门控懒建**（traceSet_ 同口径）；blendSet probeDepth_ 就绪即建 |
+| root sig 反射铁律 | slang **消除入口未用的 CB/SRV 绑定** → dxil 反射缺号而 root sig 必须可见 | ensureCachePipelines | blend 首版漏 SB_SRV(5) → PSO 创建失败实锤 | layout 多于 shader 无害（decay 先例）；少了必挂 |
+| drawCacheFrame 顺序 | decay → fill → update（cacheUpdateSet_ 门控）→ blend | drawCacheFrame | — | 日志锚 `M11.1 update+blend on` / `waiting-tlas`；viz 加 mode 1 radiance（albedo·C/π 色调映射） |
+| ⚠️ Q11-1 拍板 A | GPU radiance 图**非逐字节可复现**：每帧 rebuild 的 AS build 内部布局 D3D12/Vulkan 不保证 bit-exact，GI 查询把 hitP 量化进 cell key → 量化边界翻转（实测 3 次 3 md5、约 9% 像素差） | tools/check-s11-update.py | GPU 侧断言 = 统计口径（cover≥0.10 + 直光/背光 luma margin≥5.0）；CPU 侧（cachesim --update）保持 bytes 级确定断言 | 二值/伪彩类（不读 radiance 数值）不受影响，仍 bytes 断言 |
+| CPU 仿真扩展 | selftest 10 组 22 断言（+DI 增量收敛差分 / 二级弹射涌现 / blend 语义）+ `cachesim --update` 收敛门（early 0.014 → late 0.003） | gi-tools/main.cpp 与 shader 同构 | — | ctest `s11-gi-cachesim-update` 锚 `delta early`（新增用例后**双后端 re-configure**，M-N6） |

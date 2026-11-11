@@ -24,10 +24,13 @@
 
 ## M11.1 cell 更新：光源射线 + 邻居射线（2 天）
 
-- [ ] 每帧对每个活跃 cell：1 条**对光源**的 shadow ray（判可见性）+ 1 条**随机方向**射线（命中别的 cell → 把它的 irradiance 乘 albedo 加进自己——多跳反馈的机制本体）
-- [ ] 随机方向每帧变化（帧号入 seed），多帧覆盖球面
+- [x] 每帧对每个活跃 cell：1 条**对光源**的 shadow ray（判可见性）+ 1 条**随机方向**射线（命中别的 cell → 把它的 irradiance 乘 albedo 加进自己——多跳反馈的机制本体）
+- [x] 随机方向每帧变化（帧号入 seed），多帧覆盖球面
 
 **自检**：`cache-viz` 中 cell 颜色随帧号逐渐丰富（单帧噪声多帧收敛）。tag：`s11-update`。
+
+- ✅ **Q11-1 拍板（2026-11-11）**：cache-viz radiance 模式的 example 卡断言形态 = **方案 A 统计断言**。根因实锤：每帧 rebuild 的 AS build 内部布局 D3D12/Vulkan 规范不保证 bit-exact，GI 邻居查询把 hitP 量化进 cell key，量化边界翻转 → mode 1 radiance 图**天生非逐字节可复现**（实测 3 次运行 3 个 md5、约 9% 像素差 maxDelta 268）。落地：GPU 侧改统计口径（`tools/check-s11-update.py`：伪彩覆盖 ≥0.10 + 直光/背光带 luma margin ≥5.0，标定实测余量 3 倍以上）；CPU 侧 `cachesim --update` 保持 bytes 级确定断言不变。
+- ✅ **实施实录（2026-11-11）**：cell 从命中点缓存升级为**存入射辐照度 C**（E_direct = lightCol·I·NdotL·shadow；E_ind = albedo×C(hit)，lambert f×cos÷pdf 约分；miss 天空 albedo×skyGradient——bevy 的 π×env 是其 cell 存出射口径所致，我们不抄）；软目标 p=0.25 为 bevy target/count 的无 active-list 近似；blend 只处理 newMark cell、1/min(n+1,64) 线性 cap、**消费后清标记**。新增 selftest 8~10 组共 22 断言（DI 增量收敛差分法 / 二级弹射涌现 / blend 语义）。踩坑：blend 首版漏清标记 → newRadiance.w 恒 1 把第二帧起 update 全挡（帧首 w>0 防御与标记生命周期冲突，防御已删）；blend PSO 创建失败 = slang 消除未用绑定后反射缺 t5 → layout 补 SB_SRV(5)。`direct.slang` 0xdeadbeef 守卫注释如实化：**s10-refgi 冻结基线的 GI 项实为纯天穹**（该段从不执行），留作 M11.2 重开的现成实现，重开必须重拍基线（单独拍板禁顺手改形态）。
 
 ## M11.2 探针查缓存 + 二跳 gather（1~2 天）
 
