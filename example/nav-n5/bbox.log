@@ -1,0 +1,1 @@
+nav-tools offmesh: bake failed: invalid off-mesh connection #0 (non-finite coords/radius, radius<=0, zero flags, or endpoint outside geometry bbox; upstream builder would silently drop it)

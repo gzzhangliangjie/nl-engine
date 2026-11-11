@@ -1,0 +1,14 @@
+navmesh     : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\hiz-tiled.nnav
+tiles       : 2
+polysBefore : 4
+polysBlocked: 3
+edgesBlocked: 12
+obstacle    : (-0.35, -1.00, -1.70) r=0.50 h=3.00 ref=65536
+before      : OK (2 wp)
+blocked     : UNREACHABLE (0 wp)
+obstacles   : 1
+png         : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\obstacle.png (768x768)
+after       : OK (2 wp)
+obstacles   : 0 (after remove)
+restored    : 1
+result      : PASS

@@ -8562,6 +8562,1175 @@
      "cwd": "{root}"
     }
    ]
+  },
+  {
+   "id": "nav-n1",
+   "label": "P8 M-N1",
+   "name": "Detour 查询封装（findPath/findStraightPath + 负向语义）",
+   "tag": "nav-n1",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第二里程碑：nl/nav 查询封装链 findNearestPoly -> findPath（多边形走廊）-> findStraightPath（string-pulling 折线，即本层「路径平滑」口径）。明确错误码 OK/UNREACHABLE/OUT_OF_NODES/BUFFER_TOO_SMALL/NOT_INITIALIZED/INVALID_PARAM 不静默折算（对齐 UE 三态+partial 单独记录口径，超越 Carrot 空 vector 无错误码）。上游 1.6.0 实测语义：不可达 = SUCCESS|PARTIAL_RESULT 非 FAILURE；节点预算 = maxNodes 池上限。踩雷留痕：maxNodes<4 时上游 dtNextPow2(maxNodes/4)=0（v-- 下溢）→ hash 池 0 字节 → getNode 越界段错误，封装层硬闸下限 4。",
+   "acceptance": [
+    "selftest 30 项全绿：M-N0 锚点（合成 bake/确定性/roundtrip/负向）+ M-N1 查询锚点（直连 OK / 绕障 >2 点且总长>直线距且避开障碍中心 / 孤立岛 UNREACHABLE 含 best-effort 前缀 / maxNodes=4 OUT_OF_NODES / 重复查询逐点一致 / maxNodes=1 与未初始化负向）",
+    "HizScene 查询确定性：同参数两次 query 的折线 PNG fc /b 逐字节一致；ctest m-n1-nav-* 5/5（selftest/bake/query-ok/query-unreachable WILL_FAIL/query-usage WILL_FAIL）",
+    "证据图 query-path.png = nav-tools query --png 真实输出（512x512 俯视正交，蓝十字折线起点 + 红折线 + 绿十字终点落在箱顶轮廓内），不许手绘",
+    "上游语义实据（DetourNavMeshQuery.cpp 973-1165）：不可达（open list 耗尽）= DT_SUCCESS|DT_PARTIAL_RESULT；节点池分配失败 = detail DT_OUT_OF_NODES 可与 partial 并存；缓冲不足 = DT_SUCCESS|DT_BUFFER_TOO_SMALL 截断填充",
+    "交代物：example/nav-n1/（run.bat ALL GREEN + hiz-a.nnav + query-path.png + 6 份日志）+ 本卡六用例 + NAV-TOOLS-GUIDE.md 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 query 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0 烘焙锚点 + M-N1 查询锚点（30 项断言）",
+     "kind": "tool",
+     "note": "M-N1 新增：直连/绕障/孤立岛不可达/节点预算 OUT_OF_NODES/确定性逐点一致/maxNodes=1 上游崩雷硬闸/未初始化 mesh。合成场景较 M-N0 增加孤立岛（供 UNREACHABLE）。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "bake",
+     "name": "bake：HizScene.glb 烘焙（查询输入，M-N0 同参）",
+     "kind": "tool",
+     "note": "cs=0.1 + agentRadius=0.2；4 箱顶场景各 poly 高差超 climb 不连通，恰好同时供给可达（同区）与不可达（跨区/超界）两类查询用例。",
+     "args": [
+      "bake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "saved       :",
+     "command": "nav-tools bake assets/models/HizScene.glb <out> --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "query-ok",
+     "name": "query 正向：同区两点 OK + 折线 PNG（真实工具输出）",
+     "kind": "tool",
+     "note": "findNearestPoly 吸附 -> findPath 走廊 -> findStraightPath 折线；折线两端十字标吸附后实际起讫点。两次运行 PNG 逐字节一致（确定性硬判据）。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0",
+      "--png",
+      "{out}",
+      "--size",
+      "512"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : OK",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.9,0,-2.1 --end -1.0,0,-1.0 --png <out> --size 512"
+    },
+    {
+     "id": "query-unreachable",
+     "name": "query 负向：终点超界 UNREACHABLE（退出码 1）",
+     "kind": "tool",
+     "note": "end=(100,0,100) 在 halfExtents 搜索盒内无 poly 可吸附 -> 明确 UNREACHABLE（M-N1 计划负向语义：不可达给明确错误码，非静默）。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.8,0,-2.0",
+      "--end",
+      "100,0,100"
+     ],
+     "expectExit": 1,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.8,0,-2.0 --end 100,0,100"
+    },
+    {
+     "id": "query-usage",
+     "name": "query 负向：maxNodes=1 触碰上游崩雷硬闸（退出码 2）",
+     "kind": "tool",
+     "note": "上游 dtNextPow2(maxNodes/4) 在 maxNodes<4 时为 0（v-- 下溢）-> hash 池 0 字节分配 -> getNode 越界段错误；封装层硬闸 [4,65535]，CLI 层拦截退出 2。",
+     "args": [
+      "query",
+      "{root}/example/nav-n1/hiz-a.nnav",
+      "--start",
+      "-1.8,0,-2.0",
+      "--end",
+      "-1.0,0,-1.0",
+      "--max-nodes",
+      "1"
+     ],
+     "expectExit": 2,
+     "expectLog": "--max-nodes must be in [4, 65535]",
+     "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.8,0,-2.0 --end -1.0,0,-1.0 --max-nodes 1"
+    }
+   ]
+  },
+  {
+   "id": "nav-n2",
+   "label": "P8 M-N2",
+   "name": "编辑器结合：五阶段可视化 + cvar 调参 + 重烘焙闭环",
+   "tag": "nav-n2",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第三里程碑（2026-11-09 拍板核心）。nl/nav 五阶段调试层：bake(keepDebug) 保留 rc 中间产物（紧凑高度场/轮廓/多边形网格）+ DebugPrims POD 图元收集器（上游 duDebugDraw 接口消费，RecastDebugDraw 直用；DetourDebugDraw TU 不入库沿用 M-N0 留痕，NavMesh 阶段自绘 poly fan）。消费端两处：nav-tools debug-stage 俯视软光栅 PNG（证据图取工具真实输出，三角边函数填充 + alpha 混合）+ viewer --nav-panel ImGui 面板（ImDrawList 画布，NodeEditor 同款封装纪律）。参数唯一真源 = nav.* cvar 13 项（面板滑条与 console cvar.set 双向同源），重烘焙 = 面板 Bake 按钮 / console nav.bake（UE 显式 rebuild 口径）。踩坑留痕：HudFrame POD 每帧重建，面板写回必须走边沿标志（stageDirty/paramsChanged），显示状态由 viewer 侧持久变量每帧回填，否则 cvar 被面板归零踩掉。",
+   "acceptance": [
+    "selftest 全绿：M-N0/M-N1 锚点 + M-N2 调试锚点（七阶段 roundtrip / 图元流非空 / 顶点区间合法 / voxels>>navmesh / 重 bake 图元流逐字段一致 / 无中间产物负向 / 未装载负向）",
+    "五阶段证据图 = nav-tools debug-stage 真实输出（768px 俯视正交：voxels 体素簇灰环+青核心 / regions / contours / polymesh / navmesh），同参数两次 PNG fc /b 逐字节一致（确定性硬判据）",
+    "ctest m-n[012]-nav-* 15/15（五阶段 + bogus 负向 WILL_FAIL）；HizScene bake 输出与 M-N1 基线 864 字节逐字节一致（loadGeometry 抽共享层零回归实锤）",
+    "viewer --nav-panel 闭环截图 nav-panel.png（--console-exec 'nav.bake' + 'nav.stage 6' 驱动：stage 下拉 navmesh + 状态行 polys/area + 画布 poly 图形，deviceErrors=0）",
+    "交代物：example/nav-n2/（run.bat ALL GREEN + 五阶段 PNG + nav-panel.png + 日志）+ 本卡五用例 + NAV-TOOLS-GUIDE.md 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 debug-stage 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0 bake + M-N1 查询 + M-N2 调试锚点",
+     "kind": "tool",
+     "note": "M-N2 新增：七阶段名 roundtrip / keepDebug 图元非空 / 顶点区间合法 / voxels verts >> navmesh（cell 级 vs poly 级）/ 重 bake 图元流逐字段一致 / 无中间产物 rc 阶段拒绝 / NavMesh 阶段无中间产物可用。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "debug-voxels",
+     "name": "debug-stage voxels：高度场体素俯视图（真实工具输出）",
+     "kind": "tool",
+     "note": "bake keepDebug -> duDebugDrawCompactHeightfieldSolid 收集 -> 软光栅 PNG（TRI 边函数填充 + QUADS 拆两三角 + alpha 混合）。两次运行 PNG 逐字节一致（确定性硬判据）。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "voxels",
+      "--size",
+      "768",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "stage       : voxels",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage voxels --size 768 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "debug-navmesh",
+     "name": "debug-stage navmesh：最终 NavMesh 多边形俯视图",
+     "kind": "tool",
+     "note": "DetourDebugDraw TU 不入库（M-N0 留痕），NavMesh 阶段自绘：dtMeshTile poly fan TRIS（duIntToCol 按 poly 序号着色）+ 边界 LINES。无中间产物时亦可用（只消费 dtNavMesh）。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "navmesh",
+      "--size",
+      "768",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "stage       : navmesh",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage navmesh --size 768 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "debug-usage",
+     "name": "debug-stage 负向：未知阶段名（退出码 2）",
+     "kind": "tool",
+     "note": "debugStageFromName 拒绝未知名，usage 错误退出 2。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown --stage",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage bogus"
+    }
+   ]
+  },
+  {
+   "id": "nav-n3",
+   "label": "P8 M-N3",
+   "name": "场景集成：DetourTileCache tiled 增量重烘 + .nnav v2 + 动态障碍",
+   "tag": "nav-n3",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第四里程碑（2026-11-11 开工闸拍板：方案 A + A-1）。方案 A = DetourTileCache tiled 增量重烘（上游 1.6.0 Sample_TempObstacles 官方样板 + UE FRecastTileGenerator 同方案；全量重烘实测 4 物体约 500ms/次、50 物体外推 2~4s/次不可用）。A-1 = .nnav 容器语义升级 v2：magic 与基础段布局不变、version 字段分流，尾部追加 tiled 扩展段（bbox / dtTileCacheParams / TileBuildParams / compressed tile 数据 / tx,ty,tlayer），loader 兼容 v1，M-N0~M-N2 老基线字节零回归。vendored 补入 DetourTileCache 4 文件（同一锁定 commit 6dc1667f，零编辑），自写三个注入实现：TileLinearAllocator（1MiB arena）/ TilePassthroughCompressor（4B 长度头，零新依赖）/ TileWalkableMeshProcess（polyFlags=1）。E1 场景集成 = core/src/nav/SceneGeo.cpp 吃 nl::scene World JSON 的 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（含父子层级复合），按 meshFile 缓存 glb。动态障碍 = addObstacle/removeObstacle/updateObstacles，只重建受影响 tile。viewer 面板本轮不加障碍交互按钮（M-N2 闭环已收官，留用户点名再做）【当时口径；2026-11-11 后已由用户点名解禁，见 nav-n3-panel 卡】。",
+   "acceptance": [
+    "selftest 全绿：M-N0/M-N1/M-N2 锚点零回归 + M-N3 新增 21 项锚点（v2 逐字节确定性 / roundtrip / v1 兼容 / 障碍闭环 / E1 层级复合 / 白名单负向）",
+    "v1 零回归硬判据：solo bake 产物与 example/nav-m0/hiz-a.nnav 864 字节逐字节一致；v2 两次 bake fc /b 一致、resave 后 fc /b 一致",
+    "动态障碍闭环：polys 4→3、edgesBlocked 12（3 quads × 4 边，可视化与统计一致）、before OK (2 wp) → blocked UNREACHABLE (0 wp) → after OK (2 wp)、restored=1、障碍池清零",
+    "E1 场景：nav-n3.scene 3 Model entity / 3972 verts / 6948 tris → 8 tiles / 12 polys；ecs-e1b-scale.scene 50 entity / 6645600 tris 汇集约 0.6s（曲面模型无可走面，tiles=0 属几何语义）",
+    "ctest m-n[0123]-nav-* 24/24（含 tilebake / dump-v2 / obstacle / scene / 50 物体 / 三条 WILL_FAIL 负向）；example/nav-n3 run.bat ALL GREEN（10 段断言 + 三张工具真实输出 PNG）",
+    "交代物：example/nav-n3/（run.bat + nav-n3.scene + 三张 PNG + 三份 .nnav 基线 + 日志）+ 本卡 11 用例 + NAV-TOOLS-GUIDE.md §9/§10 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 tilebake / obstacle 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0/1/2 锚点 + M-N3 tiled / v2 / 动态障碍 / 场景层级锚点",
+     "kind": "tool",
+     "note": "M-N3 新增：两次 tiled bake 逐字节一致 / v2 load+resave 逐字节一致 / 加障碍路径被打断 / 移除后折线逐点恢复且障碍池清零 / v1 load 仍 solo 且拒绝障碍 / 非法 tileSize 拒绝 / E1 World JSON 父子世界矩阵复合 / meshFile 路径穿越白名单拒绝。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "tilebake",
+     "name": "tilebake：HizScene.glb → .nnav v2 tiled 容器（2 tiles / 4 polys）",
+     "kind": "tool",
+     "note": "方案 A：逐 tile rcBuildHeightfieldLayers + dtBuildTileCacheLayer 压成 compressed tile，dtTileCache::addTile 后 buildNavMeshTilesAt 生成 dtNavMesh tile。version=2 与 M-N0 v1 同容器分流。",
+     "args": [
+      "tilebake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--tile-size",
+      "32",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "version     : 2",
+     "command": "nav-tools tilebake assets/models/HizScene.glb <out> --tile-size 32 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "tilebake-scene",
+     "name": "tilebake .scene：E1 World JSON 几何汇集（3 Model entity，含父子层级）",
+     "kind": "tool",
+     "note": "吃 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（父变换复合进子几何），按 meshFile 缓存 glb；8 tiles / 12 polys。selftest 另有两份内联 fixture 断言 parent 复合生效。",
+     "args": [
+      "tilebake",
+      "{root}/example/nav-n3/nav-n3.scene",
+      "{out}",
+      "--tile-size",
+      "32",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "entities    : 3",
+     "command": "nav-tools tilebake example/nav-n3/nav-n3.scene <out> --tile-size 32 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "tilebake-50",
+     "name": "tilebake .scene：E1 50 物体规模锚（ecs-e1b-scale.scene）",
+     "kind": "tool",
+     "note": "50 个 Model entity / 3970980 verts / 6645600 tris 汇集耗时约 0.6s。现成 E1 场景全是曲面装饰模型、无水平可走面，tiles=0 / polys=0 属几何语义结果，不是管线故障；可走面正确性由 tilebake-scene 与 tilebake 卡覆盖。",
+     "args": [
+      "tilebake",
+      "{root}/example/ecs-e1b/ecs-e1b-scale.scene",
+      "{out}",
+      "--tile-size",
+      "64"
+     ],
+     "expectExit": 0,
+     "expectLog": "entities    : 50",
+     "command": "nav-tools tilebake example/ecs-e1b/ecs-e1b-scale.scene <out> --tile-size 64"
+    },
+    {
+     "id": "dump-v2",
+     "name": "dump：读回 v2 容器统计（polys / fnv64）",
+     "kind": "tool",
+     "note": "v2 基础段布局同 v1，尾部追加 tiled 扩展段；dump 只读基础统计，7276 字节 / fnv64 404a98fcacdd6b75。",
+     "args": [
+      "dump",
+      "{root}/example/nav-n3/hiz-tiled.nnav"
+     ],
+     "expectExit": 0,
+     "expectLog": "polys       : 4",
+     "command": "nav-tools dump example/nav-n3/hiz-tiled.nnav"
+    },
+    {
+     "id": "wire-v2",
+     "name": "wire：v2 tiled 容器俯视线框证据图（工具真实输出）",
+     "kind": "tool",
+     "note": "读归档 v2 基线画 dtNavMesh poly 边界（4 quads = 16 edges），只读仓库文件、PNG 输出走展示台 {out} 临时路径。tile 网格图 tiles.png / 障碍对比图 obstacle.png / E1 场景图 scene-tiles.png 归档在 example/nav-n3/，均由 nav-tools 软光栅真实输出，非手绘。",
+     "args": [
+      "wire",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "edges       : 16",
+     "command": "nav-tools wire example/nav-n3/hiz-tiled.nnav <out> --size 768"
+    },
+    {
+     "id": "obstacle",
+     "name": "obstacle：动态障碍闭环（add → blocked → remove → restored）",
+     "kind": "tool",
+     "note": "圆柱障碍经 dtTileCache::addObstacle + update 只重建受影响 tile：polys 4→3、edges 12（3 quads）、原路径变 UNREACHABLE；removeObstacle 后折线逐点恢复且障碍池清零。result=PASS。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "--pos",
+      "-0.35,-1,-1.70",
+      "--radius",
+      "0.5",
+      "--height",
+      "3",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0"
+     ],
+     "expectExit": 0,
+     "expectLog": "result      : PASS",
+     "command": "nav-tools obstacle example/nav-n3/hiz-tiled.nnav --pos -0.35,-1,-1.70 --radius 0.5 --height 3 --start -1.9,0,-2.1 --end -1.0,0,-1.0"
+    },
+    {
+     "id": "obstacle-v1",
+     "name": "obstacle 负向：v1 solo 容器必须明确拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "v1 无 dtTileCache，静默当 tiled 处理会掩盖错误。A-1 兼容口径 = v1 老路径一行不改、只读可用，不获动态障碍能力。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-v1.nnav",
+      "--pos",
+      "-0.35,-1,-1.70",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0"
+     ],
+     "expectExit": 1,
+     "expectLog": "nav-tools obstacle: not a tiled navmesh (use tilebake, v2)",
+     "command": "nav-tools obstacle example/nav-n3/hiz-v1.nnav --pos -0.35,-1,-1.70 --start -1.9,0,-2.1 --end -1.0,0,-1.0"
+    },
+    {
+     "id": "tilebake-usage",
+     "name": "tilebake 负向：--tile-size 越界（退出码 2）",
+     "kind": "tool",
+     "note": "tileSize 硬闸 [8, 256]；越界直接用法错误，不进入栅格化。",
+     "args": [
+      "tilebake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--tile-size",
+      "1"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools tilebake: --tile-size must be in [8, 256]",
+     "command": "nav-tools tilebake assets/models/HizScene.glb <out> --tile-size 1"
+    },
+    {
+     "id": "obstacle-usage",
+     "name": "obstacle 负向：缺 --pos/--start/--end（退出码 2）",
+     "kind": "tool",
+     "note": "三端点必填，缺一即用法错误，不做默认坐标猜测。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-tiled.nnav"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools obstacle: --pos/--start/--end are required",
+     "command": "nav-tools obstacle example/nav-n3/hiz-tiled.nnav"
+    }
+   ]
+  },
+  {
+   "id": "nav-n3-panel",
+   "label": "P8 M-N3 面板补充",
+   "name": "viewer NavPanel 动态障碍交互：tiled 双模式 + add/clear + 路径叠加",
+   "tag": "nav-n3-panel",
+   "date": "2026-11-11",
+   "summary": "M-N3 冻结面解禁（用户点名）。面板原本只走 bake() Solo Mesh，无 dtTileCache 因而无法加障碍；本轮做双模式分流：默认 nav.tiled=0 保持 M-N2 五阶段可视化逐字节零回归，nav.tiled=1 时 bake 改走 bakeTiled()（.nnav v2），障碍控件才启用。新增 cvar nav.tiled / nav.tileSize / nav.obsX / nav.obsZ / nav.obsRadius / nav.obsHeight / nav.obsPanel 与命令 nav.obsAdd / nav.obsClear；面板加默认折叠的 dynamic obstacles 区（checkbox + 四滑条 + add/clear 按钮 + 障碍数/路径状态行），画布叠加红色障碍圆与蓝色 findPath 折线。--nav-model 把面板烘焙输入与渲染模型解耦（HizScene.glb 无 baseColor 不能作 --model），缺省仍等于 --model。tiled 画布 bounds 改用实际图元 AABB，避免整份几何盒把 poly 缩成小点。HudFrame POD 每帧归零：所有写回走边沿标志，显示侧由 viewer 每帧无条件回填（M-N2 铁律沿用）。",
+   "acceptance": [
+    "example/nav-n3-panel/run.bat A~E 五段 ALL GREEN：tiled bake polys=4/tiles=2 → 加障碍 polys=3 + path UNREACHABLE → clear 后 polys=4 + path OK 逐点恢复 + 障碍池清零",
+    "截图逐字节确定性：两次同参数 viewer --screenshot fc /b 一致；deviceErrors=0",
+    "零回归：默认 nav.tiled=0 仍 bake ok mode=solo、nav.stage 4 无 debug stage failed；M-N2 五阶段 PNG 与 nav-n3 基线不动",
+    "负向：Solo Mesh 上 nav.obsAdd 明确拒绝（不静默 no-op）",
+    "展示台本卡 4 用例（双后端文本断言，{out} 走临时路径不写仓库）+ 三张 viewer 真实截图 obstacle-panel.png / cleared-panel.png / solo-panel.png"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "obstacle",
+     "name": "障碍生效：tiled bake 4 polys → 加障碍 3 polys，路径 OK → UNREACHABLE",
+     "kind": "tool",
+     "note": "viewer --nav-panel 面板闭环。nav.tiled=1 让 bake 走 bakeTiled()（.nnav v2 + dtTileCache）；障碍圆柱 y 下界固定 -1 跨过 tile 高度域（M-N3 铁律）。画布叠加红色障碍圆与蓝色路径折线，路径不可达时折线消失。",
+     "args": [
+      "--nav-model",
+      "HizScene.glb",
+      "--nav-panel",
+      "--console-exec",
+      "nav.obsPanel 1",
+      "--console-exec",
+      "nav.tiled 1",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: path UNREACHABLE (0 wp) polys=3 obstacles=1",
+     "command": "viewer --nav-model HizScene.glb --nav-panel --console-exec 'nav.obsPanel 1' --console-exec 'nav.tiled 1' --console-exec 'nav.bake' --console-exec 'nav.obsAdd' --screenshot <out>"
+    },
+    {
+     "id": "cleared",
+     "name": "障碍移除：polys 3 → 4，路径逐点恢复、障碍池清零",
+     "kind": "tool",
+     "note": "removeObstacle 只重建受影响 tile；日志两条 path OK (2 wp) polys=4 obstacles=0 分别对应 bake 后与 clear 后。",
+     "args": [
+      "--nav-model",
+      "HizScene.glb",
+      "--nav-panel",
+      "--console-exec",
+      "nav.obsPanel 1",
+      "--console-exec",
+      "nav.tiled 1",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--console-exec",
+      "nav.obsClear",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: obstacles cleared polys=4 left=0",
+     "command": "viewer ... --console-exec 'nav.obsClear' --screenshot <out>"
+    },
+    {
+     "id": "solo",
+     "name": "零回归：默认 nav.tiled=0 仍走 Solo Mesh，五阶段 rc 调试可用",
+     "kind": "tool",
+     "note": "M-N2 面板默认路径一字不改：bake(keepDebug=true) 保留中间产物，nav.stage 4（raw-contours）正常收集图元，日志无 'debug stage failed'。",
+     "args": [
+      "--nav-panel",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.stage 4",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: bake ok mode=solo",
+     "command": "viewer --nav-panel --console-exec 'nav.bake' --console-exec 'nav.stage 4' --screenshot <out>"
+    },
+    {
+     "id": "solo-reject",
+     "name": "负向语义：Solo Mesh 无 dtTileCache，障碍请求必须明确拒绝而非静默",
+     "kind": "tool",
+     "note": "A-1 兼容口径：v1 老路径只读可用、不获动态障碍能力。日志锚 nav-panel: obstacle rejected (not tiled)。",
+     "args": [
+      "--nav-panel",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--frames",
+      "4",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: obstacle rejected",
+     "command": "viewer --nav-panel --console-exec 'nav.bake' --console-exec 'nav.obsAdd' --screenshot <out>"
+    }
+   ]
+  },
+  {
+   "id": "nav-n4",
+   "label": "P8 M-N4",
+   "name": "DetourCrowd 多 Agent 群体避障：固定步长轨迹 + .ntraj 容器",
+   "tag": "nav-n4",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第五里程碑（2026-11-11 开工闸拍板 Q1=A / Q2=A-1 / Q3=A）。范围闸由用户点名「DetourCrowd 要做」解除，三处实读：上游 DetourCrowd 6 头 + 6 源（锁定 commit 6dc1667f，零编辑、零新依赖）、UE UCrowdManager（Tick 四步拆分 + ICrowdAgentInterface）、Carrot 静态 AStar / bevy 无原生 navmesh 均据实标注不作口径。Q1=A 工具版：nav-tools crowd 子命令 + nl::nav::Crowd 薄封装（PIMPL，公开面零第三方符号）+ selftest + 俯视轨迹 PNG + .ntraj 二进制容器 + cases.json 卡，纯 CPU 不碰 viewer/scene/renderer/渲染回归。Q2=A-1：Crowd 只消费已加载 NavMesh（v1 solo / v2 tiled 均可），经 NavMesh::nativeHandle() 的 opaque const void* 桥接；.nnav 不升 v3、不落 agent 状态，M-N0/M-N3 全部字节基线一字不动。Q3=A：固定 dt=1/60 + 固定帧数 600 + 固定 agent 顺序 + 全显式参数，轨迹逐帧采样 npos[3]，两次运行 .ntraj 与 PNG 均 fc /b 逐字节一致（上游 DetourCrowd.cpp 无 RNG 实读取证）。vendored 补入 DetourCrowd 12 文件，nl_recast CMake 显式枚举 + include 目录，不引入上游 CMake/install 链。",
+   "acceptance": [
+    "vendored 12 文件按锁定 commit 6dc1667f 逐文件 md5 一致、零编辑；上游 CMakeLists.txt 按薄脚本纪律不入库；逐个 TU 的 #include 只指向已入库 Detour/Include 与 C 标准头",
+    "selftest 全绿：M-N0/M-N1/M-N2/M-N3 老锚点零回归 + M-N4 新增 25 项（轨迹逐点确定性 / .ntraj 逐字节 / 换序敏感 / 4 agent 抵达 / RVO 最小间距 >= 2*radius / v1+v2 兼容 / 七条负向）",
+    "Q3=A 硬判据：同参数两次 crowd run 的 .ntraj 与 PNG 分别 fc /b 一致；28924 字节 / fnv64 5cbf9ce63eb1b273；arrived 4/4、minPairDist 0.6003 m（>= 2*radius=0.6）",
+    "Q2=A-1 硬判据：v1 solo 与 v2 tiled 归档 .nnav 直接被 Crowd 消费且单 agent 抵达；solo bake 与 example/nav-m0/hiz-a.nnav 864 字节基线不变、tiled 7276 字节基线不变",
+    "零回归：双后端 BUILD OK + viewer selftest 16/16x2、ctest m-n[01234]-nav 32/32 x2、regression 老五卡全绿、server.py --check exit 0、example/nav-n4/run.bat DX12+VULKAN A~F ALL GREEN",
+    "冻结面：vendored 零编辑、.nnav v1/v2 字节基线、M-N2 五阶段与 nav-n3-panel 四张 viewer 截图、kStage 仍 S8.2、外置编辑器、渲染回归，一律不碰",
+    "交代物：example/nav-n4/（run.bat + crowd-arena.ntraj + crowd-arena.png + 8 份日志）+ 本卡 11 用例 + NAV-TOOLS-GUIDE.md §12 归档"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 crowd 行（crowd 无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带任何参数的 crowd 打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [
+      "crowd"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools crowd"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N3 锚点零回归 + M-N4 新增 25 项 crowd 锚点",
+     "kind": "tool",
+     "note": "M-N4 新增：两次 run 轨迹逐点一致 / .ntraj 两次写入逐字节一致 / agent 换序轨迹不同 / 4 agent 全部抵达 / RVO 最小间距 >= 2*radius / v1 solo 与 v2 tiled 均可消费 / dt=0、frames=0、超半径、非法 flag、超容量、网格外 spawn、未装载 NavMesh 七条负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "arena-trace",
+     "name": "crowd --arena：4 agent 对角穿越 + .ntraj 固定步长轨迹容器",
+     "kind": "tool",
+     "note": "Q3=A：dt=1/60、600 帧、agent 顺序固定；20x20 合成地板 + 中央 2x2x2 障碍，两对对角穿越。轨迹 = 601 帧 x 4 agent x xyz 扁平 float，28924 字节 / fnv64 5cbf9ce63eb1b273。{out} 走临时路径，不写仓库基线。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--frames",
+      "600",
+      "--trace",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result       : PASS",
+     "command": "nav-tools crowd --arena --frames 600 --trace <out>"
+    },
+    {
+     "id": "arena-png",
+     "name": "crowd --png：俯视轨迹证据图（工具软光栅真实输出）",
+     "kind": "tool",
+     "note": "黑色 = dtNavMesh poly 边界，四条彩色折线 = 4 个 agent 的 600 帧轨迹，起终点十字。两次同参数 --screenshot/--png fc /b 逐字节一致（run.bat C 段）。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--frames",
+      "600",
+      "--png",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived      : 4 / 4",
+     "command": "nav-tools crowd --arena --frames 600 --png <out> --size 768"
+    },
+    {
+     "id": "line",
+     "name": "crowd --preset line：4 agent 编队同向推进，minPairDist 1.3276 m",
+     "kind": "tool",
+     "note": "第二套固定顺序输入，验证 agent 顺序与初始位置是确定性输入的一部分；同样 4/4 抵达、result=PASS。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--preset",
+      "line",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "minPairDist  : 1.32",
+     "command": "nav-tools crowd --arena --preset line --frames 600"
+    },
+    {
+     "id": "v1",
+     "name": "A-1：v1 solo .nnav 直接被 Crowd 消费（容器一字不改）",
+     "kind": "tool",
+     "note": "Crowd 只吃已加载 NavMesh，经 NavMesh::nativeHandle() 的 opaque const void* 桥接取 dtNavMesh*；.nnav 不升 v3、M-N0 864 字节基线不动。单 agent 60 帧抵达。",
+     "args": [
+      "crowd",
+      "{root}/example/nav-n3/hiz-v1.nnav",
+      "--spawn",
+      "-1.9,0.2,-2.1:-1.0,0.2,-1.0",
+      "--frames",
+      "60"
+     ],
+     "expectExit": 0,
+     "expectLog": "mode         : solo (v1)",
+     "command": "nav-tools crowd example/nav-n3/hiz-v1.nnav --spawn <a:b> --frames 60"
+    },
+    {
+     "id": "v2",
+     "name": "A-1：v2 tiled .nnav 直接被 Crowd 消费（容器一字不改）",
+     "kind": "tool",
+     "note": "M-N3 的 dtTileCache tiled 容器同样可直接跑多 Agent；selector 只看 isTiled()，不触碰序列化格式。单 agent 60 帧抵达。",
+     "args": [
+      "crowd",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "--spawn",
+      "-1.9,0.2,-2.1:-1.0,0.2,-1.0",
+      "--frames",
+      "60"
+     ],
+     "expectExit": 0,
+     "expectLog": "mode         : tiled (v2)",
+     "command": "nav-tools crowd example/nav-n3/hiz-tiled.nnav --spawn <a:b> --frames 60"
+    },
+    {
+     "id": "dt-zero",
+     "name": "负向：--dt 0 拒绝（退出码 2，变 dt 不纳入验收）",
+     "kind": "tool",
+     "note": "Q3=A 固定步长口径：dt 必须落在 (0, 0.25]；零步长会让上游积分除零/停滞，工具层先闸掉。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--dt",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools crowd: --dt must be in (0, 0.25]",
+     "command": "nav-tools crowd --arena --dt 0"
+    },
+    {
+     "id": "offmesh",
+     "name": "负向：网格外 spawn 必须明确拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "findNearestPoly 失败或 ref=0 时 Crowd::run 返回 false，不静默把 agent 放在无路径的空槽。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--spawn",
+      "100,0,100:-8,0.2,-8",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "not on navmesh",
+     "command": "nav-tools crowd --arena --spawn 100,0,100:-8,0.2,-8 --frames 30"
+    },
+    {
+     "id": "bad-nav",
+     "name": "负向：非 .nnav 输入被容器 magic 闸拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "Suzanne.glb 不是 NLNV 容器，load 阶段即失败，不进入 crowd 初始化。",
+     "args": [
+      "crowd",
+      "{root}/assets/models/Suzanne.glb",
+      "--spawn",
+      "-8,0.2,-8:8,0.2,8",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "bad magic",
+     "command": "nav-tools crowd assets/models/Suzanne.glb --spawn <a:b> --frames 30"
+    },
+    {
+     "id": "over-capacity",
+     "name": "负向：spawn 数超过 --max-agents 拒绝（退出码 2）",
+     "kind": "tool",
+     "note": "默认 preset crossing 4 个 agent，--max-agents 2 时必须在参数闸拒绝，不让上游 addAgent 静默返回 -1。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--max-agents",
+      "2",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 2,
+     "expectLog": "spawn count exceeds --max-agents",
+     "command": "nav-tools crowd --arena --max-agents 2 --frames 30"
+    }
+   ]
+  },
+  {
+   "id": "nav-n5",
+   "label": "P8 M-N5",
+   "name": "off-mesh connection：烘焙期链接注入 + .nnav v3 + 跳跃标志",
+   "tag": "nav-n5",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第六里程碑（2026-11-11 用户「直接在这里做」就地开工闸，Q5-1..Q5-5 一次拍板）。三处定向实读：上游 Detour 1.6.0 锁定 commit 6dc1667f 的 DetourNavMeshBuilder.{h,cpp}（dtNavMeshCreateParams.offMeshCon* 是唯一入口，classifyOffMeshPoint 静默丢弃 bbox 外端点；DetourNavMesh.h 只有 getOffMeshConnectionPolyEndPoints / getOffMeshConnectionByRef 读 API，全仓无运行时 addOffMeshConnection）、UE 5.8.4 RecastNavMesh.cpp（NavLinkFlag 独占最高位 + FRecastQueryFilter::FilterOutNavLinksImpl + bGenerateNavLinks/NavLinkJumpConfigs 生成期建链；UE fork 的 offMeshSegConCount 上游 1.6.0 无，不抄）、Carrot pathfinding 全目录无 offmesh/navlink/jump 概念与 bevy 全仓无 navmesh 均据实标注不作口径。Q5-1 烘焙期注入 OffMeshConnection POD（start/end/radius/bidir/flags/area/userId）；Q5-2 .nnav v3 尾部描述段、magic 与基础段布局完全同 v1/v2、v1/v2 loader 分支一行不改、M-N0 864 B 与 M-N3 7276 B 基线零回归；Q5-3 只做 Solo Mesh，tiled v2 注入链本轮不动；Q5-4 findStraightPath 的 DT_STRAIGHTPATH_OFFMESH_CONNECTION(0x04) 经 QueryResult::waypointFlags 透出 + QueryParams::excludeOffMesh（对齐 UE NavLinkFlag 独占位）；Q5-5 连通性反转 + 双向/单向 + 逐字节确定性。vendored 上游零编辑、零新增入库文件。",
+   "acceptance": [
+    "三处定向实读留痕写回 P8-NAV-PLAN.md 文末（上游/UE/Carrot/bevy 各自结论 + 5 项 Q 拍板 + 冻结面），删净「默认不做 / 须另起开工闸 / 待拍板」挂账句后才落第一行代码",
+    "Q5-1 硬判据：上游无运行时 add API，链接只能经 dtNavMeshCreateParams.offMeshCon* 在烘焙期注入；offMeshPolyCount() == 传入条数，builder 静默丢弃的情形由封装层 bbox 闸显式拒绝（负向 exit 1 + invalid off-mesh connection #0）",
+    "Q5-2 硬判据：bake 带连接写 version=3（2052 B），save->load->save 逐字节 identical；空连接表仍写 version=1 且与 example/nav-m0/hiz-a.nnav 864 字节基线 fc /b 一致；v1/v2 老卡全部零回归",
+    "Q5-4 硬判据：跨 2m 沟查询 status=OK、waypoints=6、offmesh segs=1；--exclude 与 --one-way --reverse 均回退 UNREACHABLE 且 segs=0；--no-link 对照 UNREACHABLE 且仍写 v1",
+    "Q5-5 硬判据：同参数两次 offmesh run 的 .nnav 与 PNG 分别 fc /b 逐字节一致；selftest 新增 M-N5 锚点（v3 往返 / 跳跃标志 / 排除 / 方向 / 半径与 bbox 两类负向）全绿",
+    "零回归：DX12/VULKAN 双后端 nav-tools BUILD OK、ctest m-n[012345]-nav 41/41 x2（--repeat until-pass:3）、run.bat 双后端 A~F ALL GREEN、regression 五张老卡全绿、server.py --check exit 0、check-bat-encoding 0 违规",
+    "冻结面：vendored 上游零编辑、.nnav v1/v2 字节基线与 loader 分支、nav-n1~nav-n4 与 nav-n3-panel 全部 PNG/.nnav/.ntraj 归档、kStage 仍 S8.2、外置 feat/editor、渲染回归与既有截图重拍，一律不碰",
+    "交代物：example/nav-n5/（run.bat + offmesh-bridge.nnav + offmesh-bridge.png + 10 份日志）+ 本卡 12 用例 + NAV-TOOLS-GUIDE.md §13 归档 + MILESTONES.md M-N5 四栏"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 offmesh 行（未知选项退出码 2）",
+     "kind": "tool",
+     "note": "--bogus 打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [
+      "offmesh",
+      "--bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools offmesh --bogus"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N4 锚点零回归 + M-N5 新增锚点",
+     "kind": "tool",
+     "note": "M-N5 新增：带链接 bake / builder 保留 1 poly / v3 version / v3 描述与 poly 往返 / 逐字节一致 / 跨沟 OK / OFFMESH 标志 / flags 与 waypoints 对齐 / exclude 阻断 / 单向 A->B 可达 B->A 不可达 / 半径与 bbox 两类负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "bridge",
+     "name": "offmesh：跨 2m 沟架桥后可达，.nnav v3 往返逐字节一致",
+     "kind": "tool",
+     "note": "20x20 主地板 + 12..16 孤立岛；连接 9.2,0,0 -> 12.8,0,0（radius 1）。{out} 走临时路径不写仓库基线。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result      : PASS",
+     "command": "nav-tools offmesh --nav <out>"
+    },
+    {
+     "id": "bridge-v3",
+     "name": "offmesh：version=3 与 builder 保留 1 条链接 poly",
+     "kind": "tool",
+     "note": "Q5-2：基础段布局同 v1/v2，只 version 字段=3 + 尾部描述段；Q5-1：offMeshPolyCount() 取自 dtMeshHeader::offMeshConCount。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nnav version: 3",
+     "command": "nav-tools offmesh --nav <out>"
+    },
+    {
+     "id": "bridge-png",
+     "name": "offmesh --png：俯视证据图（工具软光栅真实输出，跳跃段橙色）",
+     "kind": "tool",
+     "note": "黑 = NavMesh poly 边界，紫 = 连接直连 + 两端蓝十字，红 = 普通折线段、橙 = DT_STRAIGHTPATH_OFFMESH_CONNECTION 跳跃段。两次 fc /b 逐字节一致（run.bat C 段）。 未指定 --nav 时工具以 --png 路径派生临时 .nnav 并在跑完删除，零仓库残留。",
+     "args": [
+      "offmesh",
+      "--png",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "offmesh segs: 1",
+     "command": "nav-tools offmesh --png <out> --size 768"
+    },
+    {
+     "id": "no-link",
+     "name": "对照：--no-link 无连接不可达，且容器仍是 v1",
+     "kind": "tool",
+     "note": "Q5-2 零回归：空连接表让 version 回落 1，M-N0~M-N4 全部字节基线不动。",
+     "args": [
+      "offmesh",
+      "--no-link",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools offmesh --no-link --nav <out>"
+    },
+    {
+     "id": "exclude",
+     "name": "Q5-4：excludeOffMesh 按 UE NavLinkFlag 独占位排除链接",
+     "kind": "tool",
+     "note": "offmesh poly 注入时 flags |= 0x8000；dtQueryFilter::setExcludeFlags 精确排除，路径回退到无连接拓扑。",
+     "args": [
+      "offmesh",
+      "--exclude",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "exclude     : 1",
+     "command": "nav-tools offmesh --exclude --nav <out>"
+    },
+    {
+     "id": "one-way",
+     "name": "方向语义：单向 A->B 可达",
+     "kind": "tool",
+     "note": "上游 offMeshConDir=0（非 DT_OFFMESH_CON_BIDIR）只允许 A->B。",
+     "args": [
+      "offmesh",
+      "--one-way",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : OK",
+     "command": "nav-tools offmesh --one-way --nav <out>"
+    },
+    {
+     "id": "one-way-reverse",
+     "name": "方向语义：单向 B->A 不可达",
+     "kind": "tool",
+     "note": "反向查询把 start/end 对调，offMeshConDir=0 时上游不建反向链接。",
+     "args": [
+      "offmesh",
+      "--one-way",
+      "--reverse",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "status      : UNREACHABLE",
+     "command": "nav-tools offmesh --one-way --reverse --nav <out>"
+    },
+    {
+     "id": "radius-zero",
+     "name": "负向：--radius 0 拒绝（退出码 2）",
+     "kind": "tool",
+     "note": "radius<=0 会让上游 baseOffMeshLinks 无法可靠链接 poly，工具层先闸掉。",
+     "args": [
+      "offmesh",
+      "--radius",
+      "0",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools offmesh --radius 0 --nav <out>"
+    },
+    {
+     "id": "bbox-out",
+     "name": "负向：端点在几何 bbox 外必须显式拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "上游 classifyOffMeshPoint 会静默丢弃 bbox 外连接；封装层 bake 前显式校验并报错，不静默吞（Q5-1 硬判据）。",
+     "args": [
+      "offmesh",
+      "--link",
+      "1,0,0 200,0,0",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 1,
+     "expectLog": "invalid off-mesh connection #0",
+     "command": "nav-tools offmesh --link <a b> --nav <out>"
+    },
+    {
+     "id": "resave-v3",
+     "name": "v3 容器往返：save->load->save 逐字节 identical",
+     "kind": "tool",
+     "note": "loader 新增 v3 分支只读尾部描述段，v1/v2 分支一行不改；run.bat E 段另用 M-N0 老参数 bake 与 hiz-a.nnav 864 B 对照。",
+     "args": [
+      "offmesh",
+      "--nav",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "roundtrip   : identical",
+     "command": "nav-tools offmesh --nav <out>"
+    }
+   ]
+  },
+  {
+   "id": "nav-n6",
+   "label": "M-N6",
+   "name": "Q1=B 引擎集成：E1 ECS NavAgent + NavAgentSystem + viewer --nav-crowd",
+   "tag": "nav-n6",
+   "date": "2026-11-11",
+   "summary": "Q1=B 解除：新增 E1 ECS NavAgentComponent（crowd 参数 + target）与 NavAgentSystem（dt 累加器固定步长驱动 Crowd 增量链路，位置写回 Transform）；viewer --nav-crowd 独立模式复用 NavPanel 的 ImDrawList 俯视画布画 NavMesh 线框 + 多 Agent 圆点 + 轨迹。kStage 仍 S8.2，既有截图基线零重拍，3D 实体级 Agent 不属本轮范围。",
+   "acceptance": "nav-tools ecs-crowd 600 固定步 4/4 抵达、Transform 写回 4/4；ECS 轨迹与 M-N4 Crowd::run 逐点一致且 .ntraj 与 example/nav-n4/crowd-arena.ntraj 逐字节相同（fnv64 5cbf9ce63eb1b273）；selftest 18 项 M-N6 锚点；viewer 双后端 --nav-crowd 截图。run.bat A~F 与 regression --only nav-n6 双验。",
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：未知选项退出码 2",
+     "kind": "tool",
+     "note": "M-N6 子命令参数闸；用法错误退出 2（对齐展示台 expectExit 约定）。",
+     "args": [
+      "ecs-crowd",
+      "--bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown option",
+     "command": "nav-tools ecs-crowd --bogus"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N5 零回归 + 18 项 M-N6 锚点",
+     "kind": "tool",
+     "note": "新增锚点含组件 roundtrip / duplicate / 600 固定步 / Transform 写回 / ECS 与 Crowd::run 逐点一致 / .ntraj 字节一致 / 三类负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "ecs-arena",
+     "name": "ecs-crowd：4 ECS agent 对角穿越 600 固定步",
+     "kind": "tool",
+     "note": "Q3=A 口径：dt=1/60、600 步、agent 顺序固定；{out} 走临时路径不写仓库基线。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600",
+      "--trace",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result       : PASS",
+     "command": "nav-tools ecs-crowd --frames 600 --trace {out}"
+    },
+    {
+     "id": "ecs-world",
+     "name": "ECS World：4 实体 + 1 系统",
+     "kind": "tool",
+     "note": "实体由 World 按 <NavAgent, Transform> 签名推送给系统，系统不自扫（Carrot System 口径）。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "world        : entities=4 systems=1",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-steps",
+     "name": "dt 累加器：恰 600 个固定步",
+     "kind": "tool",
+     "note": "每步积分恒为 cfg.dt；帧侧与系统侧用同一个 float 值的 double 表示，避免 600 帧少跑一步。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "steps        : 600",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-writeback",
+     "name": "Q1=B 实质：Crowd 位置写回 Transform 4/4",
+     "kind": "tool",
+     "note": "每步把 npos 写回 NavAgentComponent::pos 与 TransformComponent::local.position，渲染/脚本消费同一份数据。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "transform    : writeback 4 / 4",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-parity",
+     "name": "抵达判定：4 / 4（与 M-N4 数值等价）",
+     "kind": "tool",
+     "note": "minPairDist 0.6003 m，与 M-N4 A 类工具版一致，RVO 生效。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived      : 4 / 4",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-eight",
+     "name": "规模锚：8 ECS agent 编队 + 写回 8/8",
+     "kind": "tool",
+     "note": "viewer 与工具共用 8 组 spawn/target 表；--agents 上限 8 由参数闸拒绝越界。",
+     "args": [
+      "ecs-crowd",
+      "--agents",
+      "8",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "transform    : writeback 8 / 8",
+     "command": "nav-tools ecs-crowd --agents 8 --frames 600"
+    },
+    {
+     "id": "ecs-bad-spawn",
+     "name": "负向：起点不在 NavMesh 必须显式拒绝",
+     "kind": "tool",
+     "note": "M-N4 踩坑同款：上游 addAgent 会静默收无路径 agent，封装层用独立 findNearestPoly 显式拒绝。",
+     "args": [
+      "ecs-crowd",
+      "--bad-spawn",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "not on navmesh",
+     "command": "nav-tools ecs-crowd --bad-spawn --frames 30"
+    },
+    {
+     "id": "ecs-dt-zero",
+     "name": "负向：dt=0 退出码 2",
+     "kind": "tool",
+     "note": "固定步长口径不允许变 dt / 零 dt。",
+     "args": [
+      "ecs-crowd",
+      "--dt",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "--dt must be in",
+     "command": "nav-tools ecs-crowd --dt 0"
+    },
+    {
+     "id": "ecs-agents-zero",
+     "name": "负向：agents=0 退出码 2",
+     "kind": "tool",
+     "note": "空 ECS World 无 NavAgent 实体，参数闸先拒绝。",
+     "args": [
+      "ecs-crowd",
+      "--agents",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "--agents must be in",
+     "command": "nav-tools ecs-crowd --agents 0"
+    },
+    {
+     "id": "viewer-crowd",
+     "name": "viewer --nav-crowd：独立 2D 画布多 Agent 可见渲染",
+     "kind": "tool",
+     "note": "Q6-2 最小 hook：复用 NavPanel 的 POD / ImDrawList 画布，零 renderer/shader/scene 主路径改动、零 kStage bump、零既有截图重拍。{out} 走临时路径。",
+     "args": [
+      "--nav-crowd",
+      "--frames",
+      "8",
+      "--nav-crowd-steps",
+      "75",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-crowd: final agents=4 steps=600 arrived=4",
+     "command": "viewer --nav-crowd --frames 8 --nav-crowd-steps 75 --size 1280x720 --screenshot",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     }
+    },
+    {
+     "id": "viewer-crowd-init",
+     "name": "viewer --nav-crowd：ECS 初始化锚",
+     "kind": "tool",
+     "note": "arena 合成几何 bake（12 polys）+ NavMesh 阶段 DebugPrims 线框；截图 8 帧 x 75 步 = 600 固定步。",
+     "args": [
+      "--nav-crowd",
+      "--frames",
+      "8",
+      "--nav-crowd-steps",
+      "75",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-crowd: ECS agents=4 systems=1",
+     "command": "viewer --nav-crowd --frames 8 --nav-crowd-steps 75 --size 1280x720 --screenshot",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     }
+    }
+   ]
   }
  ]
 }

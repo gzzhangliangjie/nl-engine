@@ -1,0 +1,16 @@
+input       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\nav-n3.scene
+mode        : tiled
+entities    : 3
+verts/tris  : 3972 / 6948
+tileSize    : 32
+tiles       : 8
+navmesh     : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\scene-tiled.nnav
+walkable tri: 6948
+polys       : 12
+verts       : 48
+detail tris : 24
+area        : 1.50 m^2
+bounds      : (-1.95, -1.35, -2.20)-(11.80, 1.15, 4.65)
+version     : 2
+saved       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\scene-tiled.nnav
+png         : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\scene-tiles.png (768x768)

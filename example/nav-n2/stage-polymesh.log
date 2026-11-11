@@ -1,0 +1,8 @@
+input       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n2\..\..\assets\models\HizScene.glb
+stage       : polymesh
+groups      : 3
+prims       : 4 groups / 72 verts
+polys       : 4 | compact spans: 56 | regions: 56
+view        : top-down orthographic (x right, z down)
+canvas      : 768x768
+saved       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n2\stage-polymesh.png

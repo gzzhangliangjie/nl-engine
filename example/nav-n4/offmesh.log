@@ -1,0 +1,4 @@
+navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)
+mode         : solo (v1)
+polys        : 12
+nav-tools crowd: spawn #0 not on navmesh

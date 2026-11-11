@@ -219,6 +219,12 @@ add_library(nl_core STATIC
     core/src/physics/Vehicle.cpp # P8 M-D2：VehicleConstraint 探针式集成（fresh world，Jolt-free 公开头）
 
     core/src/nav/Nav.cpp       # P8 M-N0：nl/nav 集成层（PIMPL，core 内唯一 Recast/Detour 符号面）
+    core/src/nav/GeoLoad.cpp   # P8 M-N2：glb 几何汇集共享层（viewer 面板与 nav-tools 同源）
+    core/src/nav/SceneGeo.cpp  # P8 M-N3：E1 场景 World JSON -> nav Geometry（组件 + 层级变换）
+    core/src/nav/Crowd.cpp     # P8 M-N4：DetourCrowd 薄封装（PIMPL，core 内唯一 Crowd 符号面）
+    core/src/nav/NavAgentComponent.cpp  # P8 M-N6：E1 ECS NavAgent 组件序列化
+    core/src/nav/NavAgentSystem.cpp     # P8 M-N6：固定步长 ECS 系统驱动 Crowd 增量链路
+    core/src/nav/Arena.cpp              # P8 M-N6：viewer --nav-crowd 合成 arena 几何
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
@@ -259,6 +265,7 @@ add_library(nl_renderer STATIC
     renderer/src/scene.cpp
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
+    renderer/src/nav_panel.cpp     # P8 M-N2：NavMesh 调参/五阶段面板（ImDrawList 画布）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
     renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）

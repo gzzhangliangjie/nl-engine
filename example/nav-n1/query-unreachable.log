@@ -1,0 +1,7 @@
+navmesh     : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n1\hiz-a.nnav
+start       : (-1.800, 0.000, -2.000)
+end         : (100.000, 0.000, 100.000)
+maxNodes    : 4096
+status      : UNREACHABLE
+reachedLimit: 0
+waypoints   : 0

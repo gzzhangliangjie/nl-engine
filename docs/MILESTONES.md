@@ -2048,6 +2048,96 @@
 7. **ctest 条目改后必须确认 configure 真跑了**：一次重建后 build 目录 CTestTestfile 仍是旧条目（Suzanne），重跑 configure 才刷新——「改了 CMakeLists 就核对生成物」进入检查清单。
 
 **下一步**：M-N1（dtNavQuery findPath/findStraightPath 封装 + 负向语义 + 绕障用例）；M-N2 编辑器结合（cvar + ImGui 面板 + 五阶段可视化，本轮拍板核心）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。参数默认值按本项目资产尺度已调（BuildParams 注释留痕），大场景资产回大 cs 即可。
+## M-N1：Detour 查询封装——findPath/findStraightPath + 负向语义（feat/pathfinding，2026-11-11，tag `nav-n1`）
+
+**动作**：用户指令解除 2026-11-10「M-N1 延后」拍板 → worktree 重建（`feat/pathfinding` ff 同步 master `991e36f`，junction 共享 `.workbuddy`/slang dist）+ wt_pool claim M-N1 → 三处实读（上游 `DetourNavMeshQuery.h` 全文 + `DetourStatus.h` + `findPath/findStraightPath/appendVertex` 实现段 973-1900；Carrot `AStar.h`/`NavPath.h` 空结果无错误码口径；UE `RecastNavMesh.cpp:3844+` 三态 + `PImplRecastNavMesh.cpp:1333/1372/1647` partial/OUT_OF_NODES 记录与 string-pulling；bevy 无原生寻路据实标注）→ `Nav.hpp` 新增 `QueryParams`/`QueryStatus` 六态枚举/`QueryResult`（reachedLimit 标记）+ `NavMesh::findPath`（完整链 findNearestPoly→findPath→findStraightPath，PIMPL 内 `dtNavMeshQuery` 按 maxNodes 缓存重建）→ `nav-tools` 新增 `query` 子命令（--start/--end/--max-nodes/--max-waypoints/--half-extents/--png，负向语义映射 exit 0/1/2）+ `WireCanvas` 抽公共（wire 与 query --png 同投影口径）+ selftest 新增 M-N1 查询锚点段（合成场景加孤立岛）→ ctest 5 条 → `example/nav-n1/`（run.bat：selftest + bake + query-ok 含 PNG + query 确定性 fc/b + unreachable exit1 + maxNodes=1 exit2 + usage）→ cases.json `nav-n1` 卡六用例（python json 规范写入）→ `NAV-TOOLS-GUIDE.md` M-N1 验收/踩坑归档 → `P8-NAV-PLAN.md` 启动记录（延后解除）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n1`）。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 30 项 PASS（M-N0 烘焙锚点 + M-N1 查询锚点：直连 OK / 绕障 >2 点+总长>直线+避障中心 / 孤立岛 UNREACHABLE 含 best-effort 前缀 / maxNodes=4 OUT_OF_NODES / 重复查询逐点一致 / maxNodes=1 崩雷硬闸 / 未初始化负向）；ctest m-n0+m-n1 9/9 双后端（`--repeat until-pass:3`）；`regression --only nav-n1` 12/12 ALL GREEN（tool 卡双后端）；`server.py --check` exit 0（stage=S8.2，A 类轨道不 bump）；run.bat 双后端 ALL GREEN（含 query 折线 PNG `fc /b` 确定性断言）；Vulkan 树 selftest fnv64 与 DX12 一致（`e7349583a994928d`，跨树确定性）；证据图 `query-path.png` 蓝十字+红折线+绿十字落在箱顶轮廓内（肉眼核验，真实工具输出）。
+
+**踩坑情况**
+1. **⚠️ 上游真 bug：`maxNodes < 4` = 段错误（本轮最重坑）**：`dtNavMeshQuery::init` 以 `dtNextPow2(maxNodes/4)` 作 `dtNodePool` hash 桶数，`maxNodes<4` 时该值为 0（`dtNextPow2` 的 `v--` 对 0 下溢回绕）→ `m_first` 0 字节分配 → `getNode` 哈希索引越界。RecastDemo 默认 4096 从不触发；selftest `maxNodes=3` 预算用例实爆（26 项 ok 后崩）。定位手段：`main` 开头 `setvbuf(stdout, _IONBF)` 无缓冲输出保住崩前日志（永久保留）。修复 = 封装层硬闸 `[4,65535]` INVALID_PARAM + CLI 同步拦截 + selftest `maxNodes=1` 负向锚点防回归；预算用例改 maxNodes=4（OUT_OF_NODES 语义不变）。
+2. **上游语义实据（错误映射依据）**：不可达（open list 耗尽）= `DT_SUCCESS|DT_PARTIAL_RESULT` **非 FAILURE**；节点池分配失败 = `DT_OUT_OF_NODES` detail 可与 partial 并存（partial+预算 → OUT_OF_NODES 优先；无 partial 的 OUT_OF_NODES → OK+reachedLimit，对齐 UE `SetSearchReachedLimit`）；缓冲不足 = `DT_SUCCESS|DT_BUFFER_TOO_SMALL` 截断填充（OK 态才升级为 BUFFER_TOO_SMALL，错误态信息优先）。
+3. **「路径平滑」口径**：`findStraightPath` string-pulling 即计划「平滑」语义（相对走廊口字折线已最直），不引入 Catmull-Rom 类额外算法防范围失控；partial 不静默折算、透传调用者（比 UE `bAllowPartialPaths` 折算透明）。
+4. **HizScene 连通性**：4 箱顶 poly 高差超 climb 互不连通——首版 ctest 正向端点（场景对角）实测 UNREACHABLE；连通对由 CLI 批量探测固化（`(-1.9,-2.1)→(-1.0,-1.0)`），expectLog 全部从实测复制。
+5. **证据图十字**：初版蓝十字画原始 start（吸附点外空白区视觉断开）→ 改标折线两端吸附后实际起讫点；run.bat 确定性断言从 log 改为折线 PNG `fc /b`（log 含 `png : <路径>` 行两次必不等）。
+6. **run.bat 确定性断言**：log 含 png 路径行 → 比对对象换 PNG 字节（画布=f(mesh,start,end)，更强）；PNG 十字修正后重拍一轮。
+
+**下一步**：M-N2 编辑器结合（烘焙参数 cvar + ImGui 面板 + DebugUtils 五阶段可视化 + 调参重烘焙闭环，2026-11-09 拍板核心；查询能力已就位，路径叠加可直接消费 `NavMesh::findPath`）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。
+
+## M-N2：编辑器结合——五阶段可视化 + cvar 调参 + 重烘焙闭环（feat/pathfinding，2026-11-11，tag `nav-n2`）
+
+**动作**：用户拍板「先不外置，直接开工」（M-N2 维持 viewer `--editor` 内嵌 ImGui 面板口径，不挂 feat/editor 外置编辑器）→ wt_pool claim M-N2 → wt merge master（`s10-place` `5774a37`）→ 三处实读（上游 `DebugDraw.h` duDebugDraw 抽象接口 + `RecastDebugDraw.h` 五阶段绘制函数 + `DebugUtils` CMake 剔除留痕；Carrot `NavMeshBuilder.h` DebugDrawType 8 态 + BuildParams + debugDraw(renderContext,type)；UE `RecastNavMesh.h:555-711` config UPROPERTY + `RecastNavMeshGenerator.cpp:3710+` DrawHeightfield 分模式 duDebugDraw 渲染）→ nl/nav 五阶段调试层：`bake(..., keepDebug)` 保留 rc 中间产物（Impl 持 `rcCompactHeightfield`/`rcContourSet`/`rcPolyMesh`/`rcPolyMeshDetail`，false 路径与 M-N0 逐字节一致）+ `DebugPrims` POD 图元收集器（实现 `duDebugDraw`，uv 重载落 plain 防丢顶点）+ `debugDrawStage` 七阶段导出（RecastDebugDraw 直用；`DetourDebugDraw.cpp` 不入库沿用 M-N0 留痕 → NavMesh 阶段自绘 dtMeshTile poly fan TRIS + 边界 LINES）+ `loadGeometryFromGltf` 几何汇集抽 core 共享层（viewer 面板与 nav-tools 同源）→ nav-tools `debug-stage` 子命令（俯视软光栅：TRI 边函数填充 w>=-0.5 收共享边缝 + QUADS 拆两三角 + alpha 混合，绘制顺序=图元流顺序）+ ctest 6 条 → renderer `NavPanel`（`nav_panel.hpp` 全 POD State + `nav_panel.cpp` ImGui 封装，HudFrame 挂指针同 NodeEditor 先例；ImDrawList 画布 x→右 z→下与工具同投影口径）→ viewer `--nav-panel`（`nav.*` cvar 13 项 + `nav.stage` + `nav.bake` 命令；cvar 唯一真源，面板滑条/`cvar.set` 双向同源；Bake 按钮/命令同一条重烘路径，UE 显式 rebuild 口径）→ `example/nav-n2/`（run.bat：selftest + 五阶段出图 + `fc /b` 确定性 + bogus exit2 + usage）→ cases.json `nav-n2` 卡五用例（python json 规范写入）→ `NAV-TOOLS-GUIDE.md` §2/§7/§8 归档 → `P8-NAV-PLAN.md` M-N2 启动留痕 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n2`）。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2（DX12 树实跑 `shutdown ok deviceErrors=0`）；nav-tools selftest 新增 M-N2 锚点约 20 项全绿（七阶段名 roundtrip / 各阶段图元非空 / 顶点区间合法 / voxels verts >> navmesh / 重 bake 图元流逐字段一致 / 无中间产物 rc 阶段拒绝 / NavMesh 阶段无中间产物可用 / 未装载负向）；ctest `m-n[012]-nav` **15/15 双后端**（`--repeat until-pass:3`）；HizScene bake 输出与 M-N1 基线 **864 字节逐字节一致**（loadGeometry 抽共享层零回归实锤）；`regression` nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 全 ALL GREEN；`server.py --check` exit 0（A 类轨道不 bump kStage）；run.bat 双后端 ALL GREEN（五阶段 PNG + `fc /b` 确定性 + bogus exit2）；viewer `--nav-panel` 闭环截图（`--console-exec "nav.bake" "nav.stage 6"` 驱动：stage 下拉 navmesh + 状态行 polys/area + 画布 poly，deviceErrors=0）；五阶段证据图肉眼核验（voxels 灰环=agent 腐蚀带/青=可走核心，底部条带在 polymesh 消失 = minRegionArea 过滤语义正确）。
+
+**踩坑情况**
+1. **⚠️ HudFrame POD 每帧重建 vs 面板写回（本轮最重坑）**：`HudFrame hud{}` 每帧值初始化 → 面板写入的 `st.stage` 下一帧归零，viewer「st.stage != navStage 即面板改动」的判定把归零当改动，反过来 `setInt(0)` 踩掉 cvar（实测：首帧 bake 成功 stage=6，第二帧 stage 回 0、cvar 被踩）；同时 status/baked/prims 也每帧清空。修复 = **双向通道全部边沿化**（`stageDirty`/`paramsChanged`/`bakeRequested`）+ 显示状态由 viewer 持久变量（navStatus/navPrimsValid/navStage）每帧无条件回填。教训：POD 每帧重建的结构上，「检测差异」语义必须区分「面板真实写回」与「POD 归零」。
+2. **`DetourDebugDraw.cpp` 不入库的下游影响**：M-N0 剔除留痕（1.6.0 头依赖 DetourTileCacheBuilder.h）→ `duDebugDrawNavMesh*` 不可用，M-N2 NavMesh 阶段自绘（poly fan + duIntToCol 配色），与留痕口径一致，没有为省事把 TileCache 链拉进来。
+3. **cmdDebugStage 参数回退错位**：参数循环 `--i` 回退把 `--size` 的值（768）当选项名喂 `parseBakeArgs` → "unknown option: 768"；修复 = 不回退，从当前位置直接交给解析器。
+4. **ImVec2 无 operator+ / toScreen 签名漂移**：本树 ImGui 未定义 IMGUI_DEFINE_MATH_OPERATORS（`min + ImVec2` 编译错）；toScreen 去 yUp 参后多处调用点（宽空格排版 + 双括号）漏改——正则统一修。
+5. **regression `--only` 单值语义再次确认**：一次传多个 `--only` 只生效最后一个（nav-n2 10/10 而非三卡 32 条）；零回归验证须逐卡分开跑。
+6. **`nl::core::Console` 在嵌套命名空间 `nl::core::console`**：viewer 全限定名写错 `nl::core::Console::get()` 连环报错；对齐 viewer 既有 `nl::core::console::` 用法。
+
+**下一步**：M-N3 E1 多物体场景集成（动态物体 `DetourTileCache` 届时连同 DetourDebugDraw 重评；E1 场景烘焙直接消费同一 bake 入口）；M-N1 查询能力 + M-N2 调参闭环均已就位，路径叠加 / 五阶段可视化可在面板内直接消费。
+
+## M-N3：场景集成——DetourTileCache tiled 增量重烘 + .nnav v2 + 动态障碍（feat/pathfinding，2026-11-11，tag `nav-n3`）
+
+**动作**：用户「继续」启动 M-N3 → 开工闸发现计划行挂账「DetourTileCache 增量重烘 or 全量重烘，开工前按上游口径定」属未拍板架构判定，**不落码**，先 wt_pool claim M-N3 + merge master（`653dc42` particles-pt5）+ 三处实读（上游 `DetourTileCache.h` / `DetourTileCacheBuilder.h` + `RecastDemo/Source/Sample_TempObstacles.cpp` 官方样板 `rasterizeTileLayers`；UE `RecastNavMeshGenerator.cpp:1558/1655/2400` fork 同套接口 + `FRecastTileGenerator`/`FTileCacheCompressor`/`FTileCacheAllocator`/`TileSizeUU`；Carrot 自研静态 AStar 无动态导航不作口径；E1 `nl::scene::World` deserialise + `TransformComponent::getWorldMatrix()` 层级复合）+ 基准数据（全量重烘 4 物体 ≈500ms/次、50 物体外推 2~4s/次不可用）→ 摆 A/B（增量 vs 全量）与 A-1/A-2（`.nnav` v2 同容器 vs 新增 `.ntcache`）交用户拍板，用户「按建议来」= **方案 A + A-1**，写回 `P8-NAV-PLAN.md`（M-N3 阶梯行删备选）/ `VENDOR.md` / `NAV-TOOLS-GUIDE.md` §6 §8 后才写第一行代码 → 落码：① `DetourTileCache/` 4 文件按锁定 commit `6dc1667f` 零编辑入库 + `nl_recast` CMake 接 sources/include；② `Nav.hpp` 新增 `kNavVersionTiled=2`/`TileBuildParams`/`bakeTiled`/`isTiled`/`compressedTileCount`/`obstacleCount`/`addObstacle`/`removeObstacle`/`updateObstacles`/`geometryEntityCount`/`loadGeometryFromScene`；③ `Nav.cpp` 自写 `TileLinearAllocator`（1 MiB arena 16B 对齐 + `reset()` 回收）/`TilePassthroughCompressor`（4B 长度头，零新依赖替代上游 FastLZ）/`TileWalkableMeshProcess`（按 `RC_NULL_AREA` 设 `polyFlags=1`）+ 逐 tile 烘焙链 + v2 save/load 逐字段读写 + 障碍 API；④ `core/src/nav/SceneGeo.cpp` 新建（World JSON → Geometry，组件注册 + 父子世界矩阵复合 + meshFile 白名单 + 按 meshFile 缓存 glb）；⑤ `nav-tools` 新增 `tilebake`/`obstacle` 子命令 + selftest 21 项锚点 + ctest 9 条 → `example/nav-n3/`（run.bat 10 段机器断言 + `nav-n3.scene` + 三张工具真实输出 PNG + 三份 .nnav 基线）→ cases.json `nav-n3` 卡 11 用例（python json 规范写入）→ `NAV-TOOLS-GUIDE.md` §2/§6/§9/§10 + `P8-NAV-PLAN.md` 启动/收官留痕 + `VENDOR.md` 入库子集 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n3`）。A 类轨道，不 bump `kStage`、不进渲染回归。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 全绿（M-N0/M-N1/M-N2 锚点零回归 + M-N3 新增 21 项：v2 两次 bake 逐字节一致 / load+resave 逐字节一致 / v1 load 仍 solo 且拒绝障碍 / 障碍闭环 / E1 父子矩阵复合 / meshFile 路径穿越拒绝 / 非法 tileSize 拒绝）；ctest `m-n[0123]-nav` **24/24 ×2 后端**（`--repeat until-pass:3`）；VULKAN 树 selftest fnv64 `e7349583a994928d` 与 DX12 一致（跨树确定性）；`regression` nav-n3 22/22 + nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 全 ALL GREEN；`server.py --check` exit 0（stage=S8.2）；`example/nav-n3/run.bat` ALL GREEN。**零回归硬判据**：solo bake `hiz-v1.nnav` 与 `example/nav-m0/hiz-a.nnav` **864 字节逐字节一致**；v2 两次 tilebake `fc /b` 一致、resave 后 `fc /b` 一致。**动态障碍闭环**：`polys 4→3`、`edgesBlocked 12`（3 quads×4 边）、`before OK (2 wp) → blocked UNREACHABLE (0 wp) → after OK (2 wp)`、`restored=1`、障碍池清零、`result PASS`。**E1 场景**：`nav-n3.scene` 3 Model entity / 3972 verts / 6948 tris → 8 tiles / 12 polys / 1.50 m²；`ecs-e1b-scale.scene` 50 entity / 3970980 verts / 6645600 tris 汇集约 0.6s（曲面模型无可走面 `tiles=0` 属几何语义，非故障）。三张证据图（tile 网格 / 障碍对比 / E1 场景 tile 网格）均为 nav-tools 软光栅真实输出、肉眼核验非空。冻结面全部守住：vendored 4 文件零编辑、v1 老路径一行不改、M-N2 五阶段 PNG 基线锁定、`DetourDebugDraw.cpp` 继续不启用、外置编辑器不碰。
+
+**踩坑情况**
+1. **上游 `void` 函数被写成布尔判定（C2171/C2451）**：`rcMarkWalkableTriangles` / `rcFilterLowHangingWalkableObstacles` / `rcFilterLedgeSpans` / `rcFilterWalkableLowHeightSpans` 在 1.6.0 均返回 `void`，照 Solo Mesh 直觉写 `if (!fn(...))` 编译失败；修复 = 照 M-N0 bake 同款直接调用（回 vendored 头核签名纪律）。
+2. **⚠️ 动态障碍首版完全不影响路径（本轮最重坑）**：`--pos -1.45,0,-1.55 --height 2` 时 before/blocked/after 全 `OK (2 wp)`。先加 polys 诊断确认 tile 确实重建（4→3），再逐点 dump waypoint 才发现真实吸附折线在 `(-0.35,-0.35,-1.90)→(-0.35,-0.35,-1.50)`，障碍放错箱顶/高度域。**铁律：TileCache 圆柱障碍 y 区间必须跨过 tile 高度域下界**（HizScene 约 -1.35）→ 改 `--pos -0.35,-1,-1.70 --height 3` 后闭环 PASS；诊断用 `dumpWp` 在验收前已清理，正式日志只留 polys/edges 证据。
+3. **v2 load 的 compressed tile 所有权**：`addTile(..., DT_COMPRESSEDTILE_FREE_DATA)` 会让 Detour 用 `dtFree` 释放数据，直接交 `std::vector::data()` 就重演 M-N0 的 new/malloc 分配器不匹配 UAF；修复 = 读出字节用 `dtAlloc` 分配 memcpy 后再移交。
+4. **「50 物体锚」语义陷阱**：现成 E1 场景全是 Suzanne / IcoSphere / TorusKnot 曲面装饰模型，无水平可走面 → `tiles=0/polys=0` 是几何语义结果不是管线故障（M-N0 踩坑 5 同族）。必须另造含可走面的 `nav-n3.scene` 才能证明 NavMesh 正确性，两条证据分开写清。
+5. **`polyEdges()` 与 `stats().polyCount` 视觉误读**：障碍后 PNG 黑框看着像 4 个而日志 `polysBlocked: 3` → 加 `edgesBlocked: 12` 诊断行确认 3 quads×4 边口径一致，并做成 run.bat 机器断言防后续误判。
+6. **展示台 tool 卡 `{out}` 单占位符 + 只读纪律**：`server.py`/`regression.py` 只把精确等于 `{out}` 的 token 换成临时 `.toolout`，`{out}.png` 会抛 `unresolved placeholder`；`tilebake` 同时要 .nnav 与 PNG，若把 .nnav 写成 `{root}/example/nav-n3/hiz-tiled.nnav` 就等于回归时重写仓库归档基线。修复 = 归档基线只读，证据图卡改 `wire <归档 v2 基线> {out}`，PNG 走临时路径跑完即删。
+
+**下一步**：M-N0~M-N3 四站全收官；**M-N4（`DetourCrowd/` 多 Agent 避让/路径跟随）为可选项**，VENDOR.md 已留痕未入库，若要启动须另起开工闸（vendored 子集 + 三处实读 + 用户拍板）。viewer 面板的动态障碍交互按钮按本轮拍板边界留用户点名再做；merge 回 master 待用户拍板（与 M-N1/M-N2 一并）。（**本行为当时口径留痕；2026-11-11 后两项均已由用户点名推进：面板按钮见 `nav-n3-panel` 四栏、M-N4 已立项见 PLAN 文末**）
+
+## M-N3 面板补充：viewer NavPanel 动态障碍交互（feat/pathfinding，2026-11-11，tag `nav-n3-panel`）
+
+**动作**：用户「继续做」点名解禁 M-N3 收官冻结面「viewer 面板不加障碍交互按钮」，同时点名 M-N4 `DetourCrowd` 立项（后者按开工闸只做前置检查、零落码）→ wt_pool claim + 核对 master 无新提交（无需 merge）→ 落码只在 viewer/renderer：① `NavPanel::State` 加 `tiledMode/tiledModeDirty/tiled/obsParamsChanged/obsPanelOpen`、障碍参数与 `addObstacleRequested`/`clearObstaclesRequested`、障碍圆与路径折线定长 POD 数组；② `nav_panel.cpp` 加默认折叠 `dynamic obstacles (tiled)` 区（checkbox + 4 滑条 + add/clear 按钮 + 障碍数/路径状态行）、证据模式 `ImGuiCond_Once` 展开 + 窗口 700px、画布叠加红圆与蓝折线；③ `viewer/main.cpp` 注册 7 项 cvar（`nav.tiled`/`nav.tileSize`/`nav.obsX`/`nav.obsZ`/`nav.obsRadius`/`nav.obsHeight`/`nav.obsPanel`）+ 2 条命令（`nav.obsAdd`/`nav.obsClear`）、bake 按 `nav.tiled` 分流到 `bakeTiled()`（v2）并把 stage 钉到 6、障碍 add/clear 走 `NavMesh` API、`findPath` 刷新状态与折线、显示侧每帧无条件回填；④ 新增 `--nav-model` 把面板烘焙输入与渲染模型解耦（`HizScene.glb` 无 baseColor 不能作 `--model`），缺省仍等于 `--model`；⑤ tiled 画布 bounds 改用 `DebugPrims` 实际顶点 + 障碍圆 AABB（solo 分支一字不改）→ `example/nav-n3-panel/`（run.bat A~E 五段 + 4 张 viewer 真实截图 + 4 份日志）→ cases.json `nav-n3-panel` 卡 4 用例（`exe` 指向 viewer.exe、`kind:"tool"` 文本断言、`{out}` 临时路径）→ `NAV-TOOLS-GUIDE.md` §11/§11.1 + `P8-NAV-PLAN.md` 面板补充/M-N4 范围闸两段留痕 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n3-panel`）。A 类轨道，不 bump `kStage`、不进渲染回归；`nl::nav` / nav-tools / vendored / `.nnav` 格式 / CMake 全部一行未改。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；ctest `m-n[0123]-nav` **24/24 ×2 后端**（`--repeat until-pass:3`）；`regression --only nav-n3-panel` **8/8 ALL GREEN**（双后端），老卡 nav-n3 22/22 + nav-n2 10/10 + nav-n1 12/12 + nav-m0 10/10 全 ALL GREEN；`server.py --check` exit 0（stage=S8.2）；`check-bat-encoding` 1 文件 0 违规；`example/nav-n3-panel/run.bat` **DX12 与 VULKAN 各 A~E ALL GREEN**（含两次 `--screenshot` `fc /b` 逐字节一致），全程 `deviceErrors=0`。**闭环锚**：`bake ok mode=tiled polys=4 tiles=2` → `path OK (2 wp) polys=4 obstacles=0` → `obstacle added ref=65536 polys=3` → `path UNREACHABLE (0 wp) polys=3 obstacles=1` → `obstacles cleared polys=4 left=0` → `path OK (2 wp) polys=4 obstacles=0`。**零回归硬判据**：默认 `nav.tiled=0` 仍 `bake ok mode=solo`、`nav.stage 4` 无 `debug stage failed`，M-N2 五阶段 PNG 与 nav-n3 三份 `.nnav` 基线一个字节未动。**负向语义**：Solo Mesh 上 `nav.obsAdd` 打 `nav-panel: obstacle rejected`，明确拒绝不静默。四张证据图肉眼核验非空（展开的障碍控件 / 红圆 + 3 个剩余 poly / 恢复后蓝色折线 / M-N2 默认布局）。
+
+**踩坑情况**
+1. **`--console-exec` 一次只吃一个参数**：`--console-exec "nav.tiled 1" "nav.bake" "nav.obsAdd"` 实测只执行第一条，首版只有 `nav.tiled=1` 无 bake（假绿）。修复 = 每条命令重复 flag；M-N2 GUIDE §7 的并列简写在脚本里不成立，已在 §11.1 勘误。
+2. **面板 bake 输入默认等于渲染模型**：缺省 `Suzanne.glb`，tiled 后只有 1 poly、路径端点全不可达、障碍无效；直接换 `--model HizScene.glb` 又因无 baseColor 贴图让 renderer init 失败。修复 = `--nav-model` 解耦，缺省仍 `--model` 保 M-N2 零回归。
+3. **tiled 画布 bounds 用 `stats()` 几何盒把 poly 缩成小黑点**：`statsFromMesh` 的 bbox 覆盖整份几何（含无可走面的箱子）。修复 = tiled 时按 `DebugPrims` 顶点 + 障碍圆 AABB 收紧投影，solo 分支原样。
+4. **展开障碍区后画布被挤成一条缝**：`build params` 默认展开占满 600px 窗口。修复 = 证据模式窗口 700px + `SetNextItemOpen(false, Cond_Once)` 收参数区 + 障碍区 `Cond_Once` 展开；默认 0 两条逻辑都不触发。
+5. **`obstacleCount()` 只数 `DT_OBSTACLE_PROCESSED`**：add 后必须 `updateObstacles()` 才变 1；日志锚必须同时断言 `polys` 与 `obstacles` 两个数，单看一个会误判（首版 Suzanne 场景两个数都不变就是障碍根本不在 tile 覆盖域）。
+6. **HudFrame POD 每帧归零纪律沿用**：新增 7 个显示字段全部由 viewer 每帧无条件回填，5 个写回字段全部走 `stageDirty`/`paramsChanged` 同款边沿标志；tiled bake 改 `nav.stage` 时 cvar 与持久变量必须同改，否则下一帧被 ② 的 cvar 差异分支拉回。
+
+**下一步**：**M-N4 已由用户点名「DetourCrowd 要做」解除范围闸并立项**，本轮按开工闸完成三处实读（上游 `DetourCrowd/` 12 文件零新依赖 / UE `UCrowdManager` 四步 tick / Carrot 静态 A* 与 bevy 无原生模块不作口径），Q1 验收形态 / Q2 容器接口 / Q3 确定性口径三项待用户拍板，**拍板写回 `P8-NAV-PLAN.md` 前零 M-N4 代码**；建议 A / A-1 / A。merge 回 master 待用户拍板（与 M-N1/M-N2/M-N3 一并）。（**本行为当时口径留痕；同日 15:3x 用户「按推荐来」已拍板 A / A-1 / A 并收官，见下方 M-N4 四栏**）
+
+## M-N4：DetourCrowd 多 Agent 群体避障（feat/pathfinding，2026-11-11，tag `nav-n4`）
+
+**动作**：用户点名「DetourCrowd 要做」解除原范围闸 → 开工闸三处实读（上游 `DetourCrowd/` 12 文件零新依赖 / UE `UCrowdManager` Tick 四步 + `ICrowdAgentInterface` / Carrot 静态 A* 与 bevy 无原生 navmesh 据实标注不作口径）+ `DetourCrowd.cpp` 无 RNG 取证 → 摆 Q1/Q2/Q3 证据矩阵交用户拍板 → 用户「按推荐来」= **Q1=A（A 类工具版）/ Q2=A-1（`.nnav` 不升 v3）/ Q3=A（固定 dt+帧数+顺序）**，写回 `P8-NAV-PLAN.md` 拍板记录并删「拍板前零落码」挂账句后才落第一行代码 → ① vendored `DetourCrowd/` 6 头 + 6 源按锁定 commit `6dc1667f` 零编辑入库（逐文件 md5 一致），`nl_recast` CMake 显式枚举 6 TU + include；② 新增 `core/include/nl/nav/Crowd.hpp`（POD 配置/轨迹/类，零第三方符号）+ `core/src/nav/Crowd.cpp`（PIMPL，唯一 DetourCrowd 符号面），`NavMesh::nativeHandle()` 以 opaque `const void*` 桥接 `dtNavMesh*`；③ `nav-tools crowd` 子命令（`--arena` 内联合成 20×20 地板 + 中央障碍，或 load v1/v2 `.nnav`）+ `.ntraj` 容器（magic `NLTR` / version 1 / targets / 601×4×3 f32 samples / fnv64）+ 俯视轨迹 PNG + 25 项 selftest 锚点 + 8 条 ctest → `example/nav-n4/`（run.bat A~F + `crowd-arena.ntraj` + `crowd-arena.png` + 8 份日志）→ cases.json `nav-n4` 11 卡 → `VENDOR.md` 入库子集 / `NAV-TOOLS-GUIDE.md` §2/§12/§12.1 / PLAN 拍板+收官留痕 / 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n4`）。A 类轨道，不 bump `kStage`（仍 S8.2）、不进渲染回归；`viewer` / `scene` / `renderer` / `.nnav` 序列化格式 / M-N2 五阶段 PNG / `nav-n3-panel` 四张截图全部一行未改。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 全绿（M-N0~M-N3 老锚点零回归 + M-N4 新增 25 项）；ctest `m-n[01234]-nav` **32/32 ×2 后端**（`--repeat until-pass:3`）；`regression --only nav-n4` **22/22 ALL GREEN**，五张老卡 nav-n3 22/22 + nav-n3-panel 8/8 + nav-n2 10/10 + nav-n1 12/12 + nav-m0 10/10 全 ALL GREEN；`server.py --check` exit 0（stage=S8.2）；`check-bat-encoding` 0 违规；`example/nav-n4/run.bat` **DX12 与 VULKAN 各 A~F ALL GREEN**。**Q3=A 硬判据**：同参数两次 run 的 `.ntraj`（28924 字节 / fnv64 `5cbf9ce63eb1b273`）与 PNG 分别 `fc /b` 逐字节一致；`arrived 4/4`、`minPairDist 0.6003 m`（≥ 2×radius=0.6，RVO 避让生效）；`--preset line` 第二套固定顺序亦 4/4 抵达。**Q2=A-1 硬判据**：`example/nav-n3/hiz-v1.nnav`（864 B）与 `hiz-tiled.nnav`（7276 B）直接被 `Crowd` 消费且单 agent 60 帧抵达，两个 `.nnav` 基线字节未动（solo bake 仍与 `example/nav-m0/hiz-a.nnav` 逐字节一致）。**负向七条**：dt=0 / frames=0 / radius>maxAgentRadius / 非法 updateFlags / spawn 超容量 / 网格外 spawn / 未装载 NavMesh 全部明确拒绝，另有 `--dt 0` exit 2、offmesh exit 1、bad navmesh exit 1、over capacity exit 2 四条工具级负向。证据图 `crowd-arena.png` 肉眼核验：黑色 poly 边界 + 四条彩色轨迹绕开中央障碍 + 起终点十字，非手绘。
+
+**踩坑情况**
+1. **180 帧跑不完 20 m 对角**：首版 `arrived 0/4 / result=FAIL` 是帧数不足（3 s），不是 crowd 失效。3.5 m/s + 加速段 + 绕行实测约需 600 帧（10 s），故 `CrowdConfig::frames` 默认提到 600，且 run.bat / ctest / 展示台卡全部显式写死（Q3=A 固定帧数）。
+2. **`targetHalfExtents` y 半宽 4 m 跨高度层误吸附**：HizScene 箱顶 poly y=1.25、下层 y=-0.35 相差 1.6 m，y=4 把 target 吸到下层导致跨层不可达（240 帧末距目标 0.857 m）。修复 = 收紧到 `{2,1,2}`，与 M-N1 `QueryParams` 默认同口径；改后 v1/v2 单 agent 60 帧均 `arrived 1/1`。arena 是单高度地面，轨迹 fnv64 未变。
+3. **「v1/v2 轨迹逐点相同」是错误期望**：solo 与 tiled 的 poly 划分不同（tile 切边），走廊/局部边界本就不同。A-1 正确断言 = 两种容器都能消费并产出**完整同形状**轨迹（`samples.size()` / `agentCount` / `frames`），不比较逐点值。
+4. **`dtCrowd::addAgent` 会静默接受无路径 agent**：上游内部 `findNearestPoly` 失败时仅置 `ref=0` 仍返回有效 idx。封装层必须先用独立 `dtNavMeshQuery` 显式校验 startRef / targetRef，任一失败立即返回 false，否则「网格外 spawn」会变假绿。
+5. **上游路径队列一帧最多 8 个请求**：`dtPathQueue::update` 每帧处理上限 8，agent 数 >8 时建路径跨帧；本轮 preset 均 4 个一帧建完，固定帧数仍须给足以免只采到加速段。
+6. **vendored md5 核对要排除上游 `CMakeLists.txt`**：该项目自带 CMake 脚本按薄脚本纪律故意不入库，首版全目录核对把它标成 `DIFF`（假报）；改为只比 12 个 `.h`/`.cpp` 后 `ALL_BYTE_IDENTICAL=True`。
+
+**下一步**：M-N0~M-N4 五站全收官。off-mesh connection（跳跃/传送门）仍在「不做」清单；E1 ECS + viewer 多 Agent 渲染（Q1=B 备选）未采纳，若要做得另起开工闸。`feat/pathfinding` merge 回 master 待用户拍板（M-N1/N2/N3/N3-panel/N4 一并）。
+
 ## P8 M-GL1：viewer 主循环接双帧 + game.* console + --fixed-dt（feat/gameloop，2026-11-10，tag `gl-m1`）
 
 - **动作**：M-GL0 的 `nl::core::GameClock` 接进 viewer——`runNormal` skin 模式非 `--anim-time` 路径改走 `GameClock::tick`（渲染帧喂 dtMs → 逻辑帧 60Hz accumulator 消费 → simTime 量化不插值）；`--anim-time` 兼容路径原样保留（绕过时钟，既有基线逐字节零风险）。控制台 `game.pause`（无参翻转；暂停=bevy 时钟停摆——simTime 冻结、HUD/相机照常）/ `game.timeScale`（[0,1024] 钳制，NaN/负→0）/ `game.status`（截图日志锚行）；CLI `--fixed-dt <ms>` 钉渲染帧 delta（对拍确定性，0=关）。命令注册先于 `--console-exec` 预执行。**用户拍板（本轮问询后确认方向）**：ECS scene tick / 物理叠加层 `physicsScene.step(1/60)` 统一迁入 GameClock 属 **M-GL2**（与 M-S3 合并收口），本站不动两处调用点；迁移路径已论证：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变（floor(240×16.7/16.667)=240）、终态轨迹一致、基线大概率零重拍。
@@ -2659,3 +2749,54 @@
 5. NMake 同秒 mtime 跳重链再踩（删 exe 强制重链规避）；`kInvPi` 是 probe_trace.slang 符号、direct.slang 只有 kPi（Slang E30015，`(1.0f/kPi)` 替代）；DX12 slangc 报错 grep 模式须匹配 `error[E...]`（旧 "error C" 模式漏检）。
 
 **下一步**：**S10 全收官**（Q4 冻结面 0 新增独立 GBuffer 资源；`kStage` 仍 S8.2）。下一站 S11 探针弹射（irradiance 二级传播）/ S12 历史帧；M9.2 直光参考图 + M10.3 GI 参考图双标准答案就位。
+## M-N5：off-mesh connection 烘焙期注入 + .nnav v3 + 跳跃标志（feat/pathfinding，2026-11-11，tag `nav-n5`）
+
+**动作**：用户「直接在这里做」就地解除「off-mesh connection 未采纳 / 须另起开工闸」范围闸 → 同一会话内完成三处定向实读（上游 `DetourNavMeshBuilder.{h,cpp}` 无运行时 add API、`classifyOffMeshPoint` 静默丢弃 bbox 外端点、`findStraightPath` 的 0x04 标志；UE `RecastNavMesh.cpp` `NavLinkFlag` 独占最高位 + `FilterOutNavLinksImpl` + `NavLinkJumpConfigs` 生成期建链，UE fork 的 `offMeshSegConCount` 上游 1.6.0 无不抄；Carrot/bevy 据实标注不作口径）+ 历史约定 → Q5-1~Q5-5 一次拍板并写回 `P8-NAV-PLAN.md`、删净挂账句 → 落码：`Nav.hpp` 增 `OffMeshConnection` POD / `kNavVersionOffMesh=3` / `kOffMeshExcludeFlag=0x8000` / `bake` 带连接表重载 / `offMeshConnections()` / `offMeshPolyCount()` / `QueryParams::excludeOffMesh` / `QueryResult::waypointFlags`；`Nav.cpp` 落地 `dtNavMeshCreateParams.offMeshCon*` 烘焙期注入（6 个上游数组，生命周期覆盖 `dtCreateNavMeshData`）、v3 尾部描述段逐字段读写、loader 新 v3 分支（v1/v2 分支一行不改）、`findStraightPath` flags 透出 + `setExcludeFlags`；`nav-tools offmesh` 子命令（合成两岛 + 连通性反转 + 双向/单向/排除 + 俯视证据图，跳跃段橙色）+ selftest M-N5 锚点 + 9 条 ctest + 12 张展示台卡 + `example/nav-n5/run.bat` A~F 六段断言。**vendored 上游零编辑、零新增入库文件**，viewer/scene/renderer/`kStage` 一行未改。
+
+**提交版本**：`feat/pathfinding` M-N5 提交（annotated tag `nav-n5`）。A 类并行轨道，不 bump `kStage`、不进渲染回归、不重拍既有截图基线。
+
+**完成情况**：双后端全量 BUILD OK + viewer selftest 16/16 ×2（shader 86/86）；`ctest -R "m-n[012345]-nav" --repeat until-pass:3` **41/41 ×2**；`regression --only nav-n5` **24/24 ALL GREEN**（bytes 24 / near 0 / FAIL 0），六张老卡 nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 + nav-n3 22/22 + nav-n3-panel 8/8 + nav-n4 22/22 全绿；`server.py --check` exit 0（stage=S8.2，只证明旧卡没回归，新卡由 run.bat + `--only` 双验）；`check-bat-encoding` 93 文件 0 违规；`example/nav-n5/run.bat` DX12/VULKAN **A~F ALL GREEN**。Q5-2 硬判据：v3 产物 2052 B / fnv64 `4512ec3bb96b9dcd`，`save->load->save` 逐字节 identical，空连接表仍写 v1 且 M-N0 `hiz-a.nnav` 864 B 基线 `fc /b` 不变。Q5-4/5 硬判据：跨 2m 沟 `status=OK / waypoints=6 / offmesh segs=1`；`--exclude` / `--one-way --reverse` / `--no-link` 三路回退 `UNREACHABLE` 且 segs=0；`.nnav` 与 PNG 两次 `fc /b` 一致。冻结面（vendored 零编辑、v1/v2 loader 分支与字节基线、nav-n1~n4 与 nav-n3-panel 全部归档、`kStage`、外置编辑器、渲染回归）逐条兑现。
+
+**踩坑情况**
+1. 上游 1.6.0 **无运行时 `addOffMeshConnection`**（只有 `getOffMeshConnectionPolyEndPoints` / `getOffMeshConnectionByRef` 读 API）→ 只能烘焙期注入，`.nnav` 必须能复现连接参数，这是 v3 描述段的根因。
+2. `classifyOffMeshPoint` 对 bbox 外端点返回 `0xff` **静默丢弃**，会造成「bake 成功但路径仍不可达」假绿 → 封装层 bake 前用几何 bbox 显式拒绝 + 工具 bake 后 `offMeshPolyCount()` 与传入条数对拍双保险。
+3. 普通 poly 与 offmesh poly 默认 flags 都是 1，`setExcludeFlags(1)` 会排掉整张网格 → 照 UE `NavLinkFlag` 给 offmesh poly `flags |= 0x8000`，只排除这一位。
+4. 展示台 `{out}` 是单值，`--nav {out} --png {out}` 会互相覆盖 → `bridge-png` 卡只传 `--png`，工具派生临时 `.nnav` 并用局部 guard 在任意 return 删除。
+5. v3 描述段含 `bool` 与混宽整数，整块 memcpy struct 会把 padding 写进产物破坏确定性（M-N3 v2 同款铁律）→ 逐字段 `wrScalar`/`rdScalar`，bool 显式转 `std::uint8_t`。
+6. 只编 `nav-tools` target 后新鲜度闸仍拦下 6 个 exe 落后于 `core/src/nav/Nav.cpp` → 必须双后端 `cmake --build build/<backend>` 全量重编再跑回归（M9.2 教训）。
+7. Write 工具生成 run.bat 是 LF-only（第三次踩）→ `check-bat-encoding.py --fix example/nav-n5` 转 CRLF。
+
+**下一步**：M-N6（Q1=B：E1 ECS `NavAgent` 组件 + viewer `--nav-crowd` 多 Agent 可见渲染）同会话接续，按 PLAN 文末 Q6-1~Q6-4 执行；`feat/pathfinding` merge 回 master 仍待用户单独拍板。
+
+## M-N6：Q1=B E1 ECS NavAgent + NavAgentSystem + viewer --nav-crowd 多 Agent 可见渲染（feat/pathfinding，2026-11-11，tag `nav-n6`）
+
+**动作**：用户「直接在这里做」就地解除 M-N4 收官留痕里「Q1=B 未采纳 / 须另起开工闸」范围闸 → 同一会话完成 Q6-1~Q6-4 一次拍板写回 `P8-NAV-PLAN.md`、删净挂账句（待拍板 0 / 已拍板 2 / 冻结面清单）→ 落码：① `core/include/nl/scene/NavAgentComponent.hpp` + `core/src/nav/NavAgentComponent.cpp`（POD 组件：crowd 参数 + spawn/target/pos + `serialise`/`deserialise` + duplicate 换 owner 深拷；不 include `nl/nav`，避免 `scene -> nav` 反向依赖）；② `core/include/nl/nav/NavAgentSystem.hpp` + `core/src/nav/NavAgentSystem.cpp`（`SignedSystem<NavAgentComponent, TransformComponent>`，EntityID 升序固定注册顺序，dt 累加器固定步长，每步 `Crowd::step()` 后把 `npos` 写回组件 `pos` 与 `TransformComponent::local.position`）；③ `Crowd.hpp/.cpp` 新增 `begin/addAgent/step/agentPosition/running` 增量链路（`addAgent` 先 `findNearestPoly` 校 start/target ref），**`run()` 本体一行未改**；④ `core/include/nl/nav/Arena.hpp/.cpp` 另立 `makeArenaGeometry()`（逐顶点/逐三角形复制工具侧 `syntheticScene()`，为锁 M-N0~M-N5 字节基线故意保留两份）；⑤ `renderer/include/nl/renderer/nav_panel.hpp` + `renderer/src/nav_panel.cpp` 追加定长 POD crowd 字段（默认全 0）与 crowdMode 叠加绘制（8 色彩色圆点 + 轨迹折线 + 绿色目标十字），非 crowdMode 分支逐像素原样；⑥ `viewer/main.cpp` 新增 `--nav-crowd` / `--nav-crowd-agents` / `--nav-crowd-steps` 独立模式（ECS World + 8 组 spawn + `navPanelSync` crowd 分支 + 帧循环 tick）；⑦ `nav-tools ecs-crowd` 子命令 + 18 项 selftest 锚点 + 9 条 ctest + `example/nav-n6/run.bat` A~F + cases.json `nav-n6` 13 卡（2 张 viewer 卡用 case 级 `exe` 覆盖）。`nl/scene` 既有三头、`hud.cpp`、`renderer.cpp`、shader、`kStage` 一行未改；vendored 上游零编辑、零新增入库文件。
+
+**提交版本**：`feat/pathfinding` M-N6 提交（annotated tag `nav-n6`）。A 类并行轨道，不 bump `kStage`、不进渲染回归、不重拍既有截图基线；3D 场景实体级 Agent 渲染按 Q6-2 拍板不属本轮范围。
+
+**完成情况**：双后端全量 BUILD OK + viewer selftest 16/16 ×2；`ctest -R "m-n[0123456]-nav" --repeat until-pass:3` **50/50 ×2**；`regression --only nav-n6` **26/26 ALL GREEN**（bytes 26 / near 0 / FAIL 0），七张老卡 nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 + nav-n3 22/22 + nav-n3-panel 8/8 + nav-n4 22/22 + nav-n5 24/24 **全 bytes 零回归**（`NavPanel::State` 新字段默认全 0、非 crowdMode 画布逐像素不变，实锤）；`example/nav-n6/run.bat` DX12/VULKAN **A~F ALL GREEN**（4 agent `steps=600 / arrived=4/4 / transform writeback 4/4 / minPairDist 0.6003`，8 agent `writeback 8/8`）；双后端 `viewer-crowd-{DX12,VULKAN}.png` 284711 B / fnv64 `f8f6666063bbf554` **逐字节相同**；`server.py --check` exit 0（stage=S8.2，M9.0 口径只证明旧卡没回归）；`check-bat-encoding` 全仓 94 文件 0 违规。**Q1=B 强自证**：`nav-tools ecs-crowd` 的 `arena-crowd.ntraj` 28924 B / fnv64 `5cbf9ce63eb1b273` 与 `example/nav-n4/crowd-arena.ntraj` `fc /b` 逐字节相同（run.bat C 段机器断言），selftest 另有「ECS trace == Crowd::run point-by-point」逐点断言 —— 引擎集成版没有改变上游 `dtCrowd::update` 积分语义。冻结面（vendored 零编辑、`nav-n1`~`nav-n5` 与 `nav-n3-panel` 全部归档基线、`kStage` 仍 S8.2、外置编辑器、既有渲染回归）逐条兑现；`VENDOR.md` 已追加 M-N6 零新增入库留痕。
+
+**踩坑情况**
+1. **`Component` 构造吃 `Entity` 壳不是 `EntityID`**：首版 `NavAgentComponent(e.getID())` 编译 C2665（`size_t` 无法转 `Entity`），必须用 `World::newEntity` 返回的 `Entity e` 本身，与 viewer `--scene` 既有路径一致。
+2. **dt 累加器 float/double 精度不一致导致 600 帧只跑 599 步**：`CrowdConfig::dt` 是 `float`，系统侧 `fixedDt_` 存该 float 转 double（0.0166666675359…），帧侧若传 `1.0/60.0`（略小），累加器永远差一点。修法 = 两侧统一 `static_cast<double>(cfg.dt)`，viewer 与 nav-tools 各改一处。**这是确定性铁律，不是可容忍的浮点噪声。**
+3. **`ids_` 必须与 `crowdIdx_` 逐位对齐**：disabled 组件不注册进 Crowd，若留在写回表会把 agent i 的位置写到错误 Transform；init 单独收集 `active`，注册成功后 `ids_ = std::move(active)`。
+4. **合成 arena 几何故意保留两份**：工具侧 `syntheticScene()` 被 M-N0~M-N5 全部字节基线锁死，viewer 侧另立 `makeArenaGeometry()`；「一份共享函数」的工程洁癖会让老基线承担不必要风险。
+5. **`NavPanel::State` 新字段必须默认全 0**：crowdMode=false 时窗口标题/尺寸/控件/画布叠加严格原样，既有 `--nav-panel` 截图零重拍（七张老卡全 bytes 零回归实证）。
+6. **新增 ctest 后必须重新 configure 每个后端构建目录**：`add_test` 只在 configure 写进 `CTestTestfile.cmake`；M-N6 追加 9 条后 DX12 侧直接跑 ctest 仍报 41/41 旧清单，须双后端各跑一次 `scripts/build-m0.2.bat <BACKEND>` 触发 configure 才拿到 50/50 ×2。
+7. **`run.bat` LF-only（第四次踩）**：`check-bat-encoding.py --fix example/nav-n6` 转 CRLF 后全仓复检 0 违规。
+8. **展示台 viewer 卡必须 case 级 `exe` 覆盖**：`regression.py` 默认 `build/<backend>/nav-tools.exe`，2 张 viewer 卡要在 case 内显式写 `exe: {dx12: build/DX12/viewer.exe, vulkan: build/VULKAN/viewer.exe}`，否则拿工具 exe 跑 viewer 参数。
+
+**下一步**：M-N0~M-N6 七站全收官。`feat/pathfinding` merge 回 master 仍待用户单独拍板（基于 `991e36f`，主线已到 T0/S10，本轮不 merge、不制造跨树冲突）；3D 场景实体级 Agent 渲染若需要另立范围，非阻塞挂账。
+
+## 轨道合并：feat/pathfinding M-N0~M-N6 → master（2026-11-11）
+
+- **动作**：`git merge --no-ff feat/pathfinding`；merge-base `96892a4`（merge feat/particles），轨道侧 9 commits / master 侧 15 commits。`feat/pathfinding` 分支与 `E:/UE_STUDY_2026/nl-engine-pathfinding` worktree 依 §7.6 保留，未拆、未删。
+
+- **冲突只有 2 处且均为文档**：`.workbuddy/memory/2026-11-11.md`（`.workbuddy` 是 junction 指向主树，主树侧已含轨道侧全部 26 段 → 取 ours）；本文档（双方各追加四栏 → 按共有段落锚点保序 union，theirs 独有 7 段 M-N1~N6 与 ours 独有 5 段 M10.2 / editor M-E5 / M-E6 / 整轨 merge / M10.3 全部保留，零信息丢失）。
+
+- **`example/cases.json`**：`merge=nlcases` 语义驱动自动合并，99 张版本卡并集；`nav-n0`~`nav-n6`、`s10-*`、`s9-reference`、`s8.2` 全在，`nav-n6` 13 卡完整。其余双方共改文件（CMakeLists / viewer/main.cpp / renderer.hpp / hud.cpp / viewer/CMakeLists）自动合并成功，`--nav-crowd` 与 `--compare` / `--sky-bg` / `--mode reference-gi` 并存。
+
+- **冻结面**：`kStage` 保持 `S8.2`；既有 example 截图基线零重拍；合并前主树已有的他会话未提交改动（`docs/PARALLEL-TRACKS.md` 日志系统立项行、s10 verify 产物、`example/s9-reference/nul`）未暂存、未提交、未修改。
+
+- **踩坑**：跨 worktree 的 `.workbuddy` 是 junction，轨道侧 `git status` 会显示主树写入的 memory 改动——共享目录的正常表现，不是落错树，别据此回滚；同理合并中出现的 `MEMORY.md` 33 行精简版属他会话未提交工作，不卷入 merge commit。
+

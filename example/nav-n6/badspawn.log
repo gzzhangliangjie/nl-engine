@@ -1,0 +1,2 @@
+navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)
+nav-tools ecs-crowd: spawn #0 not on navmesh

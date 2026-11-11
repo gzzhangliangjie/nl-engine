@@ -1,0 +1,116 @@
+nav selftest:
+  ok synthetic bake succeeds
+  ok polys > 0
+  ok area > 0
+  ok area < full floor (obstacle eroded)
+  ok second bake succeeds
+  ok save a
+  ok save b
+  ok determinism: artifacts byte-identical
+  fnv64 a    : e7349583a994928d
+  ok roundtrip save 0
+  ok roundtrip load
+  ok roundtrip stats equal
+  ok roundtrip save 1
+  ok roundtrip: bytes identical
+  ok negative: empty geometry rejected
+  ok negative: vertical wall only rejected
+  ok negative: missing file rejected
+  ok negative: garbage magic rejected
+  ok query: diagonal reachable = OK
+  ok query: diagonal waypoints >= 2
+  ok query: last waypoint lands on end
+  ok query: around obstacle = OK
+  ok query: detour longer than straight line, >2 waypoints
+  ok query: detour avoids obstacle interior
+  ok query: disconnected island = UNREACHABLE
+  ok query: UNREACHABLE still returns best-effort prefix
+  ok query: tiny node budget = OUT_OF_NODES
+  ok query: deterministic (repeat query identical)
+  ok query: maxNodes=1 rejected (upstream crash guard)
+  ok query: uninitialized mesh rejected
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: unknown stage name rejected
+  ok debug: bake keepDebug=true
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: voxels verts >> navmesh verts (cell vs poly)
+  ok debug: deterministic prim stream (repeat bake)
+  ok debug: no-intermediates voxels rejected
+  ok debug: navmesh stage works without intermediates
+  ok debug: unloaded mesh navmesh stage rejected
+  ok tiled: deterministic v2 bytes (two bakes)
+  ok tiled: v2 load ok
+  ok tiled: isTiled after v2 load
+  ok tiled: compressed tiles preserved by v2 roundtrip
+  ok tiled: v2 resave ok
+  ok tiled: v2 save/load/save byte-identical
+  ok tiled: baseline path OK
+  ok tiled: addObstacle ok
+  ok tiled: obstacle processed (update converged)
+  ok tiled: obstacle affects path (hole / detour)
+  ok tiled: removeObstacle ok
+  ok tiled: path restored point-by-point, no hole left
+  ok tiled: solo v1 baseline bake
+  ok tiled: solo v1 save
+  ok tiled: v1 load stays solo (backward compatible)
+  ok tiled: obstacle on v1 solo mesh rejected
+  ok tiled: invalid tileSize rejected
+  ok scene: two inline World JSON fixtures written
+  ok scene: geometryEntityCount counts Model entities
+  ok scene: World JSON -> nav Geometry (both fixtures)
+  ok scene: parent world matrix composes into child geometry
+  ok scene: meshFile path traversal rejected by whitelist
+  ok crowd: arena bake ok
+  ok crowd: nativeHandle non-null after bake
+  ok crowd: nativeHandle null on unloaded mesh
+  ok crowd: run ok
+  ok crowd: second run ok
+  ok crowd: deterministic trace point-by-point (two runs)
+  ok crowd: trace shape = frames*agents*3
+  ok crowd: all 4 agents reach their targets
+  ok crowd: agents never overlap (RVO keeps >= 2*radius)
+  ok crowd: agentCount reflects last run
+  ok crowd: two .ntraj writes ok
+  ok crowd: .ntraj byte-identical
+  ok crowd: reordered run ok
+  ok crowd: agent order is part of determinism input
+  ok crowd: v2 tiled bake ok
+  ok crowd: v2 tiled navmesh accepted (A-1)
+  ok crowd: v1 solo save ok
+  ok crowd: v1 solo load ok
+  ok crowd: v1 loaded navmesh accepted (A-1)
+  ok crowd: v1/v2 both yield full-length single-agent traces (A-1)
+  ok crowd: dt=0 rejected
+  ok crowd: frames=0 rejected
+  ok crowd: radius > maxAgentRadius rejected
+  ok crowd: unknown updateFlags bit rejected
+  ok crowd: spawn count > maxAgents rejected
+  ok crowd: off-mesh spawn rejected
+  ok crowd: unloaded navmesh rejected
+nav selftest: PASS

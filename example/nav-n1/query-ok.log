@@ -1,0 +1,10 @@
+navmesh     : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n1\hiz-a.nnav
+start       : (-1.900, 0.000, -2.100)
+end         : (-1.000, 0.000, -1.000)
+maxNodes    : 4096
+status      : OK
+reachedLimit: 0
+waypoints   : 2
+  wp[0]     : (-0.350, -0.350, -1.900)
+  wp[1]     : (-0.350, -0.350, -1.500)
+png         : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n1\query-path.png (512x512)

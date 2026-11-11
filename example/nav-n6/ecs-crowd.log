@@ -1,0 +1,13 @@
+navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)
+world        : entities=4 systems=1
+component    : NavAgent + Transform (E1 ECS)
+dt           : 0.016667 (fixed, accumulator)
+agents       : 4
+steps        : 600
+frames       : 601 (600 updates + initial)
+arrived      : 4 / 4
+minPairDist  : 0.6003 m
+transform    : writeback 4 / 4
+trace        : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n6\arena-crowd.ntraj (28924 bytes, fnv64 5cbf9ce63eb1b273)
+png          : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n6\arena-crowd.png (768x768)
+result       : PASS

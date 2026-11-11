@@ -1,0 +1,11 @@
+navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)
+mode         : solo (v1)
+polys        : 12
+agents       : 4
+frames       : 601 (600 updates + initial)
+dt           : 0.016667
+arrived      : 4 / 4
+minPairDist  : 1.3276 m
+trace        : (not written)
+png          : (not written)
+result       : PASS

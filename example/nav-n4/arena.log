@@ -1,0 +1,11 @@
+navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)
+mode         : solo (v1)
+polys        : 12
+agents       : 4
+frames       : 601 (600 updates + initial)
+dt           : 0.016667
+arrived      : 4 / 4
+minPairDist  : 0.6003 m
+trace        : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n4\crowd-arena.ntraj (28924 bytes, fnv64 5cbf9ce63eb1b273)
+png          : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n4\crowd-arena.png (768x768)
+result       : PASS

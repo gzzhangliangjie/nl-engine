@@ -1,0 +1,1 @@
+nav-tools query: --max-nodes must be in [4, 65535]

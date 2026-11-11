@@ -15,7 +15,10 @@ add_dependencies(viewer nl_shaders)
 
 if(MSVC)
     target_compile_options(viewer PRIVATE /W4 /permissive- /utf-8 /bigobj)
-    target_compile_definitions(viewer PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(viewer PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        NL_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/models"   # P8 M-N2：--nav-panel 面板烘焙取 --model 几何
+    )
 endif()
 
 # 无窗口、无 GPU 的机械验收用例：CI 里 `ctest` 直接跑
