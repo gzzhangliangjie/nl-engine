@@ -22,7 +22,7 @@
 - `CMakeLists.txt` — **nl-engine 自写薄脚本**（唯一非上游文件）：单静态目标 `nl_recast`，源文件显式枚举。不直接 `add_subdirectory` 上游模块脚本的原因：上游脚本带 SOVERSION/LIB_VERSION（依赖仓库根变量）、install() 导出，且 DebugUtils 链接 `DetourTileCache`（M-N0 时未入库；M-N3 已补入但仍维持薄脚本，避免引入上游 install/导出链）。
 
 Intentionally **not** vendored：
-- `DetourCrowd/` — 群体避障，M-N4 可选项，默认不做。
+- `DetourCrowd/` — 群体避障。**2026-11-11 勘误**：原「M-N4 可选项，默认不做」的范围闸已由用户点名「DetourCrowd 要做」解除，M-N4 已立项；本文件写作时仍未入库，原因是开工闸 Q1/Q2/Q3 架构判定待拍板（见 `docs/p8/P8-NAV-PLAN.md` 文末留痕）。拍板后按同一锁定 commit `6dc1667f` 补入 6 头 + 6 源并同步更新本节，仍须零编辑 + ZLib 同一 `License.txt`。
 - `RecastDemo/` — 依赖 SDL/OpenGL，违反构建链纪律；`Sample_SoloMesh.cpp`（烘焙流水线样板）与 `NavMeshTesterTool.cpp`（查询样板）**只读作参照，不抄代码**。
 - `Tests/`、`Docs/`（doxygen 工程）、`.github/`、根 CMakeLists 等仓库管理文件。
 

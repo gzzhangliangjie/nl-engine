@@ -73,7 +73,8 @@
 ## 6. 下一站
 
 - M-N3（**2026-11-11 已收官，tag `nav-n3`**）：方案 A（`DetourTileCache` tiled 增量重烘）+ A-1（`.nnav` v2 同容器语义升级、v1 兼容）已按用户「按建议来」拍板落地，详见 §9/§10。冻结面全部守住：vendored 四文件零编辑、v1 序列化/烘焙老路径一行不改（`hiz-a.nnav` 864 字节逐字节零回归）、M-N2 五阶段 PNG 基线锁定、`kStage` 不 bump、外置编辑器不碰。
-- 下一站 **M-N4（可选）**：`DetourCrowd/` 尚未入库（VENDOR.md 留痕），若要做多 Agent 避让/路径跟随需另起一轮开工闸（vendored 子集 + 三处实读 + 用户拍板）。viewer 面板的动态障碍交互按钮亦留用户点名再做（M-N2 面板闭环已收官，本轮按拍板边界不加）。
+- **M-N3 面板补充（2026-11-11 已收官，tag `nav-n3-panel`）**：用户点名解禁「viewer 面板不加障碍交互按钮」的冻结面，双模式分流（`nav.tiled=0` 保 M-N2 / `=1` 走 tiled）+ add/clear + 路径叠加已落地，详见 §11/§11.1。
+- 下一站 **M-N4（2026-11-11 已立项，范围闸解除）**：`DetourCrowd/` 尚未入库（VENDOR.md 留痕），开工闸三处实读已完成，Q1（验收形态）/ Q2（容器接口）/ Q3（确定性口径）待用户拍板，拍板写回 `P8-NAV-PLAN.md` 前零落码；证据与方案矩阵见该文末留痕。
 
 ## 7. M-N2 验收记录（2026-11-11）
 
@@ -109,3 +110,24 @@
 4. **「50 物体锚」的语义陷阱**：现成 E1 场景（`ecs-e1b-scale.scene` 等）全是 Suzanne / IcoSphere / TorusKnot 曲面装饰模型，无水平可走面 → `tiles=0 / polys=0 / area=0` 是**几何语义结果，不是管线故障**（与 M-N0 踩坑 5「小资产 + 粗网格腐蚀吃光」同类）。因此必须另造 `nav-n3.scene` 用 HizScene.glb（含箱顶可走面）验证 NavMesh 正确性，两条证据分开写清，不能用「tiles=0」冒充失败、也不能拿它证明正确。
 5. **`polyEdges()` 与 `stats().polyCount` 的视觉误读**：障碍后 PNG 上黑色方框看着像 4 个，而日志 `polysBlocked : 3`。加 `edgesBlocked : 12` 诊断行后确认 = 3 quads × 4 边，两者口径一致；把 `edgesBlocked: 12` 一并做成 run.bat 机器断言，防止后续看图误判为可视化漏绘。
 6. **展示台 tool 卡 `{out}` 单占位符 + 只读纪律**：`server.py`/`regression.py` 只把**精确等于** `{out}` 的 token 换成临时 `.toolout` 路径，`{out}.png` 这类拼接会抛 `unresolved placeholder`。而 `tilebake` 同时需要 `.nnav` 与 PNG 两个输出，若把 `.nnav` 写成 `{root}/example/nav-n3/hiz-tiled.nnav` 就等于回归时重写仓库归档基线。修复 = 归档基线只读，证据图卡改用 `wire <归档 v2 基线> {out}`，PNG 走临时路径跑完即删。
+
+## 11. M-N3 面板补充验收记录（2026-11-11，tag `nav-n3-panel`）
+
+> 本节记录 M-N3 收官时冻结的「viewer 面板不加障碍交互按钮」被用户点名解禁后的补充交付。本节全部是 **viewer / renderer 侧**，nav-tools 与 `nl::nav` 一行未改，因此 §2 子命令表不变、ctest 沿用既有 24 条。
+
+- **拍板口径**：用户「继续做」点名两项 → ① viewer `NavPanel` 加障碍交互按钮（**冻结面解禁**）；② M-N4 `DetourCrowd` 立项（见 `P8-NAV-PLAN.md` 文末，架构判定未拍板前零落码）。本轮只交付 ①。
+- **绕不开的前提**：M-N2 面板 bake 走 `bake()` Solo Mesh（`.nnav` v1），**没有 `dtTileCache`**，障碍 API 一律拒绝。因此做双模式分流：`nav.tiled=0`（缺省）保持 M-N2 全部行为；`nav.tiled=1` 时 bake 改走 `bakeTiled()`（v2），障碍控件才启用。tiled 不保留 rc 中间产物，五阶段只 NavMesh 可用，viewer 把 `nav.stage` 钉到 6（cvar 与持久变量同改，防下一帧被 cvar 差异拉回）。
+- **接口**：新增 cvar `nav.tiled` / `nav.tileSize` / `nav.obsX` / `nav.obsZ` / `nav.obsRadius` / `nav.obsHeight` / `nav.obsPanel`，命令 `nav.obsAdd` / `nav.obsClear`；新增 `--nav-model <name>` 把**面板烘焙输入**与**渲染模型**解耦（`HizScene.glb` 无 baseColor，不能作 `--model`：实测 `renderer init failed: HizScene.glb has no base color texture`），缺省仍等于 `--model`，M-N2 零回归。障碍 y 下界固定 `-1`，沿用 M-N3「必须跨过 tile 高度域下界」铁律。
+- **面板**：`dynamic obstacles (tiled)` 折叠头（默认收起 → M-N2 首屏只多一行）+ `tiled bake (v2)` checkbox + 四条滑条 + `add obstacle` / `clear obstacles` 按钮 + 障碍数/路径状态行；画布在 NavMesh 图元之上叠加红色障碍圆与蓝色 `findPath` 折线。`nav.obsPanel 1` 用 `ImGuiCond_Once` 展开该区、收起 build params 并把窗口调到 700px，专供证据脚本截图（默认 0 时严格是 M-N2 的 460×600）。
+- **验收数据**：DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；`example/nav-n3-panel/run.bat` 双后端 **A~E 五段 ALL GREEN**（含两次 `--screenshot` `fc /b` 逐字节一致）；ctest `m-n[0123]-nav` 24/24 ×2；`regression --only nav-n3-panel` **8/8 ALL GREEN**（双后端文本断言），四张老卡 nav-n3 22/22 + nav-n2 10/10 + nav-n1 12/12 + nav-m0 10/10；`server.py --check` exit 0（kStage 仍 S8.2）；`check-bat-encoding` 1 文件 0 违规。全程 `deviceErrors=0`。
+- **闭环锚点**：`bake ok mode=tiled polys=4 tiles=2` → `path OK (2 wp) polys=4 obstacles=0` → `obstacle added ref=65536 polys=3` → `path UNREACHABLE (0 wp) polys=3 obstacles=1` → `obstacles cleared polys=4 left=0` → `path OK (2 wp) polys=4 obstacles=0`。负向：Solo Mesh 上 `nav.obsAdd` 打 `nav-panel: obstacle rejected`（明确拒绝，不静默 no-op）。零回归锚：`bake ok mode=solo` + `nav.stage 4` 且日志无 `debug stage failed`。
+- **证据图**（viewer `--screenshot` 真实 GPU 回读，1280×720，非手绘）：`obstacle-panel.png`（展开的障碍区 + 红色障碍圆 + 3 个剩余 poly + `obstacles: 1 / path: UNREACHABLE (0 wp)`）、`cleared-panel.png`（恢复后的蓝色折线，无红圆）、`solo-panel.png`（M-N2 默认布局未变）。另 `reject.png` 为负向用例截图。
+- **交代物**：`example/nav-n3-panel/`（run.bat + 4 张 PNG + 4 份日志）、cases.json `nav-n3-panel` 卡 4 用例（`exe` 指向 `viewer.exe`、`kind:"tool"` 只做文本断言、`{out}` 走临时路径不写仓库）、`P8-NAV-PLAN.md` / `MILESTONES.md` 留痕。
+
+### 11.1 踩坑（写实）
+
+1. **`--console-exec` 一次只吃一个参数**：`--console-exec "nav.tiled 1" "nav.bake" "nav.obsAdd"` 实测只有第一条进日志（后两条被当位置参数丢弃），首版假绿（只有 `nav.tiled=1`、无 bake）。修复 = 每条命令重复一次 flag：`--console-exec "nav.tiled 1" --console-exec "nav.bake" --console-exec "nav.obsAdd"`。M-N2 GUIDE §7 写的「`"nav.bake" "nav.stage 6"`」是简写，脚本里必须按 flag 重复写。
+2. **面板默认 bake 输入是渲染模型**：`o.modelFile` 缺省 `Suzanne.glb`，直接换 `--model HizScene.glb` 会因无 baseColor 贴图让 renderer init 失败；而继续用 Suzanne 则 tiled 只有 1 poly、路径端点全不可达（`path UNREACHABLE obstacles=0`），障碍也无效。修复 = `--nav-model` 解耦，缺省仍 `--model`。
+3. **tiled 画布 bounds 不能用 `stats()` 几何盒**：`statsFromMesh` 的 bbox 是整份几何盒（含大量无可走面的箱子），首版截图里 4 个 poly 缩成几个小黑点。修复 = tiled 时改用 `DebugPrims` 实际顶点 + 障碍圆的 AABB 收紧投影（solo 分支一字不改，保 M-N2 字节）。
+4. **展开障碍区后画布被挤成一条缝**：`build params` 默认展开占掉 600px 窗口的大部分。修复 = 证据模式下（`nav.obsPanel=1`）窗口 700px + `SetNextItemOpen(false, Cond_Once)` 收起参数区 + 障碍区 `Cond_Once` 展开；默认 0 时两条逻辑都不触发。
+5. **`obstacleCount()` 计数口径**：它只数 `DT_OBSTACLE_PROCESSED` 状态，add 后立即 `updateObstacles()` 才会变 1（首版 Suzanne 场景显示 0 是因为障碍根本不在 tile 覆盖域）。日志锚必须同时断言 `polys` 与 `obstacles` 两个数，单看一个会误判。

@@ -8440,7 +8440,7 @@
    "name": "场景集成：DetourTileCache tiled 增量重烘 + .nnav v2 + 动态障碍",
    "tag": "nav-n3",
    "date": "2026-11-11",
-   "summary": "feat/pathfinding 第四里程碑（2026-11-11 开工闸拍板：方案 A + A-1）。方案 A = DetourTileCache tiled 增量重烘（上游 1.6.0 Sample_TempObstacles 官方样板 + UE FRecastTileGenerator 同方案；全量重烘实测 4 物体约 500ms/次、50 物体外推 2~4s/次不可用）。A-1 = .nnav 容器语义升级 v2：magic 与基础段布局不变、version 字段分流，尾部追加 tiled 扩展段（bbox / dtTileCacheParams / TileBuildParams / compressed tile 数据 / tx,ty,tlayer），loader 兼容 v1，M-N0~M-N2 老基线字节零回归。vendored 补入 DetourTileCache 4 文件（同一锁定 commit 6dc1667f，零编辑），自写三个注入实现：TileLinearAllocator（1MiB arena）/ TilePassthroughCompressor（4B 长度头，零新依赖）/ TileWalkableMeshProcess（polyFlags=1）。E1 场景集成 = core/src/nav/SceneGeo.cpp 吃 nl::scene World JSON 的 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（含父子层级复合），按 meshFile 缓存 glb。动态障碍 = addObstacle/removeObstacle/updateObstacles，只重建受影响 tile。viewer 面板本轮不加障碍交互按钮（M-N2 闭环已收官，留用户点名再做）。",
+   "summary": "feat/pathfinding 第四里程碑（2026-11-11 开工闸拍板：方案 A + A-1）。方案 A = DetourTileCache tiled 增量重烘（上游 1.6.0 Sample_TempObstacles 官方样板 + UE FRecastTileGenerator 同方案；全量重烘实测 4 物体约 500ms/次、50 物体外推 2~4s/次不可用）。A-1 = .nnav 容器语义升级 v2：magic 与基础段布局不变、version 字段分流，尾部追加 tiled 扩展段（bbox / dtTileCacheParams / TileBuildParams / compressed tile 数据 / tx,ty,tlayer），loader 兼容 v1，M-N0~M-N2 老基线字节零回归。vendored 补入 DetourTileCache 4 文件（同一锁定 commit 6dc1667f，零编辑），自写三个注入实现：TileLinearAllocator（1MiB arena）/ TilePassthroughCompressor（4B 长度头，零新依赖）/ TileWalkableMeshProcess（polyFlags=1）。E1 场景集成 = core/src/nav/SceneGeo.cpp 吃 nl::scene World JSON 的 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（含父子层级复合），按 meshFile 缓存 glb。动态障碍 = addObstacle/removeObstacle/updateObstacles，只重建受影响 tile。viewer 面板本轮不加障碍交互按钮（M-N2 闭环已收官，留用户点名再做）【当时口径；2026-11-11 后已由用户点名解禁，见 nav-n3-panel 卡】。",
    "acceptance": [
     "selftest 全绿：M-N0/M-N1/M-N2 锚点零回归 + M-N3 新增 21 项锚点（v2 逐字节确定性 / roundtrip / v1 兼容 / 障碍闭环 / E1 层级复合 / 白名单负向）",
     "v1 零回归硬判据：solo bake 产物与 example/nav-m0/hiz-a.nnav 864 字节逐字节一致；v2 两次 bake fc /b 一致、resave 后 fc /b 一致",
@@ -8632,6 +8632,129 @@
      "expectExit": 2,
      "expectLog": "nav-tools obstacle: --pos/--start/--end are required",
      "command": "nav-tools obstacle example/nav-n3/hiz-tiled.nnav"
+    }
+   ]
+  },
+  {
+   "id": "nav-n3-panel",
+   "label": "P8 M-N3 面板补充",
+   "name": "viewer NavPanel 动态障碍交互：tiled 双模式 + add/clear + 路径叠加",
+   "tag": "nav-n3-panel",
+   "date": "2026-11-11",
+   "summary": "M-N3 冻结面解禁（用户点名）。面板原本只走 bake() Solo Mesh，无 dtTileCache 因而无法加障碍；本轮做双模式分流：默认 nav.tiled=0 保持 M-N2 五阶段可视化逐字节零回归，nav.tiled=1 时 bake 改走 bakeTiled()（.nnav v2），障碍控件才启用。新增 cvar nav.tiled / nav.tileSize / nav.obsX / nav.obsZ / nav.obsRadius / nav.obsHeight / nav.obsPanel 与命令 nav.obsAdd / nav.obsClear；面板加默认折叠的 dynamic obstacles 区（checkbox + 四滑条 + add/clear 按钮 + 障碍数/路径状态行），画布叠加红色障碍圆与蓝色 findPath 折线。--nav-model 把面板烘焙输入与渲染模型解耦（HizScene.glb 无 baseColor 不能作 --model），缺省仍等于 --model。tiled 画布 bounds 改用实际图元 AABB，避免整份几何盒把 poly 缩成小点。HudFrame POD 每帧归零：所有写回走边沿标志，显示侧由 viewer 每帧无条件回填（M-N2 铁律沿用）。",
+   "acceptance": [
+    "example/nav-n3-panel/run.bat A~E 五段 ALL GREEN：tiled bake polys=4/tiles=2 → 加障碍 polys=3 + path UNREACHABLE → clear 后 polys=4 + path OK 逐点恢复 + 障碍池清零",
+    "截图逐字节确定性：两次同参数 viewer --screenshot fc /b 一致；deviceErrors=0",
+    "零回归：默认 nav.tiled=0 仍 bake ok mode=solo、nav.stage 4 无 debug stage failed；M-N2 五阶段 PNG 与 nav-n3 基线不动",
+    "负向：Solo Mesh 上 nav.obsAdd 明确拒绝（不静默 no-op）",
+    "展示台本卡 4 用例（双后端文本断言，{out} 走临时路径不写仓库）+ 三张 viewer 真实截图 obstacle-panel.png / cleared-panel.png / solo-panel.png"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "obstacle",
+     "name": "障碍生效：tiled bake 4 polys → 加障碍 3 polys，路径 OK → UNREACHABLE",
+     "kind": "tool",
+     "note": "viewer --nav-panel 面板闭环。nav.tiled=1 让 bake 走 bakeTiled()（.nnav v2 + dtTileCache）；障碍圆柱 y 下界固定 -1 跨过 tile 高度域（M-N3 铁律）。画布叠加红色障碍圆与蓝色路径折线，路径不可达时折线消失。",
+     "args": [
+      "--nav-model",
+      "HizScene.glb",
+      "--nav-panel",
+      "--console-exec",
+      "nav.obsPanel 1",
+      "--console-exec",
+      "nav.tiled 1",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: path UNREACHABLE (0 wp) polys=3 obstacles=1",
+     "command": "viewer --nav-model HizScene.glb --nav-panel --console-exec 'nav.obsPanel 1' --console-exec 'nav.tiled 1' --console-exec 'nav.bake' --console-exec 'nav.obsAdd' --screenshot <out>"
+    },
+    {
+     "id": "cleared",
+     "name": "障碍移除：polys 3 → 4，路径逐点恢复、障碍池清零",
+     "kind": "tool",
+     "note": "removeObstacle 只重建受影响 tile；日志两条 path OK (2 wp) polys=4 obstacles=0 分别对应 bake 后与 clear 后。",
+     "args": [
+      "--nav-model",
+      "HizScene.glb",
+      "--nav-panel",
+      "--console-exec",
+      "nav.obsPanel 1",
+      "--console-exec",
+      "nav.tiled 1",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--console-exec",
+      "nav.obsClear",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: obstacles cleared polys=4 left=0",
+     "command": "viewer ... --console-exec 'nav.obsClear' --screenshot <out>"
+    },
+    {
+     "id": "solo",
+     "name": "零回归：默认 nav.tiled=0 仍走 Solo Mesh，五阶段 rc 调试可用",
+     "kind": "tool",
+     "note": "M-N2 面板默认路径一字不改：bake(keepDebug=true) 保留中间产物，nav.stage 4（raw-contours）正常收集图元，日志无 'debug stage failed'。",
+     "args": [
+      "--nav-panel",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.stage 4",
+      "--frames",
+      "6",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: bake ok mode=solo",
+     "command": "viewer --nav-panel --console-exec 'nav.bake' --console-exec 'nav.stage 4' --screenshot <out>"
+    },
+    {
+     "id": "solo-reject",
+     "name": "负向语义：Solo Mesh 无 dtTileCache，障碍请求必须明确拒绝而非静默",
+     "kind": "tool",
+     "note": "A-1 兼容口径：v1 老路径只读可用、不获动态障碍能力。日志锚 nav-panel: obstacle rejected (not tiled)。",
+     "args": [
+      "--nav-panel",
+      "--console-exec",
+      "nav.bake",
+      "--console-exec",
+      "nav.obsAdd",
+      "--frames",
+      "4",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-panel: obstacle rejected",
+     "command": "viewer --nav-panel --console-exec 'nav.bake' --console-exec 'nav.obsAdd' --screenshot <out>"
     }
    ]
   },

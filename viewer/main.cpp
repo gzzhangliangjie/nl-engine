@@ -25,6 +25,7 @@
 #include "nl/script/Bindings.hpp"   // ecsSetWorld（宿主侧 World 绑定）
 
 #include <algorithm>
+#include <array>      // P8 M-N3 补充：NavPanel 障碍/折线 POD 数组的镜像
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -136,6 +137,9 @@ struct Options {
     std::string tickMode = "off";
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     bool navPanelOn = false;                // M-N2：--nav-panel 挂 NavMesh 调参面板
+    // M-N3 补充：面板烘焙输入可与渲染模型解耦（HizScene.glb 无 baseColor，
+    // 不能作 --model）。缺省 = modelFile，M-N2 行为与截图逐字节不变。
+    std::string navModelFile;
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
     int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
@@ -243,8 +247,12 @@ Options parseArgs(int argc, char** argv) {
             o.editorGraph = argv[++i];
         }
         else if (a == "--nav-panel") {
-            // M-N2：NavMesh 调参/五阶段面板（--model 几何为烘焙输入）。
+            // M-N2：NavMesh 调参/五阶段面板（默认 --model 几何为烘焙输入）。
             o.navPanelOn = true;
+        }
+        else if (a == "--nav-model" && i + 1 < argc) {
+            // M-N3 补充：只换面板烘焙输入，不动渲染模型（--model 仍需可贴图资产）。
+            o.navModelFile = argv[++i];
         }
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
@@ -397,6 +405,8 @@ Options parseArgs(int argc, char** argv) {
     if (o.screenshot && !o.sizeSet) { o.width = 640; o.height = 360; }
     if (o.frames < 1) o.frames = 1;
     if (!o.hudSet) o.hudEnabled = !o.screenshot;
+    // M-N3 补充：未显式 --nav-model 时沿用 --model（M-N2 零回归）。
+    if (o.navModelFile.empty()) o.navModelFile = o.modelFile;
     return o;
 }
 
@@ -767,6 +777,37 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     int  navStage       = 0;       // 生效阶段（cvar nav.stage 镜像 + 面板边沿写回）
     char navStatus[160] = {};      // 持久状态行（HudFrame POD 每帧重置，回填用）
     bool navBakeCmd     = false;   // console nav.bake 命令置位（与面板按钮同路径）
+    // M-N3 补充：动态障碍闭环的持久侧（HudFrame POD 每帧归零，不存这里就会丢）
+    bool navObsAddCmd   = false;   // console nav.obsAdd
+    bool navObsClearCmd = false;   // console nav.obsClear
+    std::vector<std::uint32_t>      navObsRefs;  // dtTileCache ref（移除用）
+    std::vector<std::array<float, 3>> navObsDraw;  // x,z,radius（画布叠加）
+    std::vector<std::array<float, 2>> navPathPts;  // x,z（画布折线）
+    char navPathStatus[64] = {};   // 持久路径状态（回填 State.pathStatus）
+    auto navRefreshPath = [&]() {
+        navPathPts.clear();
+        if (!navBaked) {
+            std::snprintf(navPathStatus, sizeof(navPathStatus), "no bake");
+            return;
+        }
+        // M-N3 实测有效端点（HizScene 左前连通区）；固定端点才能把
+        // 「加障碍前后路径变化」做成可复现的机器断言。
+        const float s[3] = {-1.9f, 0.f, -2.1f};
+        const float e[3] = {-1.0f, 0.f, -1.0f};
+        nl::nav::NavMesh::QueryParams qp;
+        nl::nav::NavMesh::QueryResult qr;
+        const auto qs = navMesh.findPath(s, e, qp, qr);
+        const int nwp = static_cast<int>(qr.waypoints.size() / 3);
+        std::snprintf(navPathStatus, sizeof(navPathStatus), "%s (%d wp)",
+                      nl::nav::NavMesh::queryStatusName(qs), nwp);
+        for (std::size_t k = 0; k + 2 < qr.waypoints.size() &&
+                                navPathPts.size() < 32; k += 3)
+            navPathPts.push_back(std::array<float, 2>{
+                qr.waypoints[k], qr.waypoints[k + 2]});
+        nl::core::log::info("nav-panel: path ", navPathStatus,
+                            " polys=", navMesh.stats().polyCount,
+                            " obstacles=", navMesh.obstacleCount());
+    };
     if (o.navPanelOn) {
         navPanel = nl::renderer::NavPanel::create();
         navPanelActive = true;
@@ -786,6 +827,33 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         con.registerFloat("nav.detailMaxError", 1.0, "NavMesh bake detailSampleMaxError (m)");
         con.registerInt("nav.vertsPerPoly", 6, "NavMesh bake vertsPerPoly (3..6)");
         con.registerInt("nav.stage", 0, "NavMesh debug stage (0 voxels..6 navmesh)");
+        // M-N3 补充：tiled 模式 + 动态障碍。默认 nav.tiled=0，bake 仍走 Solo
+        // Mesh（M-N2 五阶段可视化零回归）；置 1 后 bake 改走 bakeTiled()，
+        // 只有此时 dtTileCache 存在，障碍 API 才可用。
+        con.registerInt("nav.tiled", 0,
+                        "NavMesh panel: 1 = tiled bake (v2 + dynamic obstacles)");
+        con.registerInt("nav.tileSize", 32,
+                        "NavMesh panel: tile side in voxels [8,256]");
+        con.registerFloat("nav.obsX", -0.35, "Dynamic obstacle center X (m)");
+        con.registerFloat("nav.obsZ", -1.70, "Dynamic obstacle center Z (m)");
+        con.registerFloat("nav.obsRadius", 0.50, "Dynamic obstacle radius (m)");
+        con.registerFloat("nav.obsHeight", 3.0, "Dynamic obstacle height (m)");
+        con.registerInt("nav.obsPanel", 0,
+                        "NavMesh panel: expand 'dynamic obstacles' section for evidence shots");
+        con.registerCommand("nav.obsAdd",
+                            "NavMesh panel: add cylinder obstacle with current nav.obs* values",
+                            [&](const std::vector<std::string>&) {
+                                navObsAddCmd = true;
+                                return nl::core::console::CommandResult{true,
+                                    "nav.obsAdd requested"};
+                            });
+        con.registerCommand("nav.obsClear",
+                            "NavMesh panel: remove all dynamic obstacles",
+                            [&](const std::vector<std::string>&) {
+                                navObsClearCmd = true;
+                                return nl::core::console::CommandResult{true,
+                                    "nav.obsClear requested"};
+                            });
         // nav.bake：console 驱动的重烘焙（与面板 Bake 按钮同一条 bakeRequested
         // 路径；截图/脚本用 --console-exec "nav.bake" 驱动闭环，不靠鼠标）。
         con.registerCommand("nav.bake",
@@ -795,7 +863,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                 return nl::core::console::CommandResult{true,
                                     "nav.bake requested"};
                             });
-        nl::core::log::info("nav-panel: bake input = assets/models/", o.modelFile);
+        nl::core::log::info("nav-panel: bake input = assets/models/",
+                            o.navModelFile, " (render model = ", o.modelFile, ")");
     }
     // 每帧同步（主循环 hud{} 创建后调用；cvar <-> 面板状态 <-> 烘焙产物）。
     // HudFrame POD 每帧重建：显示侧（status/baked/prims/bounds）由本函数
@@ -822,6 +891,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             con.findCVar("nav.vertsPerPoly")->setInt(st.vertsPerPoly);
             st.paramsChanged = false;
         }
+        // M-N3 补充：tiled 开关 / 障碍参数同样走「面板边沿 -> cvar」单向写回
+        if (st.tiledModeDirty) {
+            con.findCVar("nav.tiled")->setInt(st.tiledMode ? 1 : 0);
+            st.tiledModeDirty = false;
+        }
+        if (st.obsParamsChanged) {
+            con.findCVar("nav.obsX")->setFloat(st.obsX);
+            con.findCVar("nav.obsZ")->setFloat(st.obsZ);
+            con.findCVar("nav.obsRadius")->setFloat(st.obsRadius);
+            con.findCVar("nav.obsHeight")->setFloat(st.obsHeight);
+            st.obsParamsChanged = false;
+        }
 
         // ② cvar -> state（面板显示镜像；含 console cvar.set 驱动的阶段切换）
         auto F = [&](const char* n) {
@@ -840,6 +921,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         st.detailDist = F("nav.detailDist");
         st.detailMaxError = F("nav.detailMaxError");
         st.vertsPerPoly = static_cast<int>(con.findCVar("nav.vertsPerPoly")->value().i);
+        st.tiledMode = con.findCVar("nav.tiled")->value().i != 0;
+        st.obsX      = F("nav.obsX");
+        st.obsZ      = F("nav.obsZ");
+        st.obsRadius = F("nav.obsRadius");
+        st.obsHeight = F("nav.obsHeight");
+        st.obsPanelOpen = con.findCVar("nav.obsPanel")->value().i != 0;
         bool regen = false;
         const int cvarStage = static_cast<int>(con.findCVar("nav.stage")->value().i);
         if (st.stageDirty) {                // 面板下拉本帧真实改动（边沿）
@@ -861,7 +948,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             navBakeCmd = false;
             if (!navGeoLoaded) {
                 const std::string p =
-                    std::string(NL_ASSET_DIR "/") + o.modelFile;
+                    std::string(NL_ASSET_DIR "/") + o.navModelFile;
                 std::string gerr;
                 if (nl::nav::loadGeometryFromGltf(p.c_str(), navGeo, gerr)) {
                     navGeoLoaded = true;
@@ -886,19 +973,105 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 bp.detailSampleMaxError = st.detailMaxError;
                 bp.vertsPerPoly = st.vertsPerPoly;
                 std::string berr;
-                if (navMesh.bake(navGeo, bp, berr, /*keepDebug=*/true)) {
+                // M-N3 补充：双模式分流。solo 路径与 M-N2 一字不差（含
+                // keepDebug=true 的五阶段中间产物）；tiled 走 bakeTiled()。
+                const bool wantTiled = con.findCVar("nav.tiled")->value().i != 0;
+                bool ok = false;
+                if (wantTiled) {
+                    nl::nav::TileBuildParams tp;
+                    tp.base = bp;
+                    tp.tileSize = static_cast<int>(
+                        con.findCVar("nav.tileSize")->value().i);
+                    ok = navMesh.bakeTiled(navGeo, tp, berr);
+                } else {
+                    ok = navMesh.bake(navGeo, bp, berr, /*keepDebug=*/true);
+                }
+                if (ok) {
                     navBaked = true;
                     regen = true;
+                    // 重烘会让旧 dtTileCache obstacle ref 全部失效
+                    navObsRefs.clear();
+                    navObsDraw.clear();
+                    if (wantTiled) {
+                        // tiled 不保留 rc 中间产物，五阶段只 NavMesh 可用：
+                        // 把 stage 钉到 6（cvar 与持久变量一起改，避免下一帧
+                        // cvar 差异把它拉回去）。
+                        navStage = 6;
+                        con.findCVar("nav.stage")->setInt(6);
+                        st.stage = 6;
+                    }
                     const auto& s = navMesh.stats();
-                    std::snprintf(navStatus, sizeof(navStatus),
-                                  "polys=%d area=%.2fm2 v=%d dt=%d",
-                                  s.polyCount, s.walkableArea, s.vertCount,
-                                  s.detailTriCount);
+                    if (wantTiled) {
+                        std::snprintf(navStatus, sizeof(navStatus),
+                                      "tiled polys=%d tiles=%d (stage pinned)",
+                                      s.polyCount, navMesh.compressedTileCount());
+                    } else {
+                        std::snprintf(navStatus, sizeof(navStatus),
+                                      "polys=%d area=%.2fm2 v=%d dt=%d",
+                                      s.polyCount, s.walkableArea, s.vertCount,
+                                      s.detailTriCount);
+                    }
+                    nl::core::log::info("nav-panel: bake ok mode=",
+                                        wantTiled ? "tiled" : "solo",
+                                        " polys=", s.polyCount,
+                                        " tiles=", navMesh.compressedTileCount());
+                    navRefreshPath();
                 } else {
                     navBaked = false;
                     std::snprintf(navStatus, sizeof(navStatus),
                                   "bake failed: %.120s", berr.c_str());
                 }
+            }
+        }
+
+        // ③b M-N3 补充：动态障碍（面板按钮 / console 命令边沿驱动）。
+        // 只在 tiled 上可用；y 下界固定 -1，跨过 HizScene tile 高度域下界
+        //（M-N3 铁律：y 区间没跨过下界时 tile 会重建但路径完全不受影响）。
+        if (st.addObstacleRequested || navObsAddCmd) {
+            st.addObstacleRequested = false;
+            navObsAddCmd = false;
+            if (!navMesh.isTiled()) {
+                std::snprintf(navStatus, sizeof(navStatus),
+                              "not tiled: enable 'tiled bake' then bake");
+                nl::core::log::info(
+                    "nav-panel: obstacle rejected (not tiled)");
+            } else {
+                const float p[3] = {st.obsX, -1.f, st.obsZ};
+                std::uint32_t ref = 0;
+                std::string oerr;
+                if (navMesh.addObstacle(p, st.obsRadius, st.obsHeight,
+                                        ref, oerr)) {
+                    navObsRefs.push_back(ref);
+                    navObsDraw.push_back(std::array<float, 3>{
+                        st.obsX, st.obsZ, st.obsRadius});
+                    regen = true;
+                    const auto& s = navMesh.stats();
+                    std::snprintf(navStatus, sizeof(navStatus),
+                                  "tiled polys=%d obstacles=%d",
+                                  s.polyCount, navMesh.obstacleCount());
+                    navRefreshPath();
+                    nl::core::log::info("nav-panel: obstacle added ref=", ref,
+                                        " polys=", s.polyCount);
+                } else {
+                    std::snprintf(navStatus, sizeof(navStatus),
+                                  "obstacle failed: %.110s", oerr.c_str());
+                }
+            }
+        }
+        if (st.clearObstaclesRequested || navObsClearCmd) {
+            st.clearObstaclesRequested = false;
+            navObsClearCmd = false;
+            if (navMesh.isTiled()) {
+                std::string oerr;
+                for (std::uint32_t ref : navObsRefs)
+                    navMesh.removeObstacle(ref, oerr);
+                navObsRefs.clear();
+                navObsDraw.clear();
+                regen = true;
+                navRefreshPath();
+                nl::core::log::info("nav-panel: obstacles cleared polys=",
+                                    navMesh.stats().polyCount,
+                                    " left=", navMesh.obstacleCount());
             }
         }
 
@@ -921,11 +1094,47 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             st.baked = true;
             st.prims = &navPrims;
             const auto& s = navMesh.stats();
-            for (int k = 0; k < 3; ++k) {
-                st.bmin[k] = s.bmin[k];
-                st.bmax[k] = s.bmax[k];
+            if (navMesh.isTiled() && !navPrims.verts.empty()) {
+                // tiled 的 stats bbox 是整份几何盒（含大量无可走面的箱子），
+                // 直接投影会让 poly 缩成几个小点。改用实际图元 + 障碍圆的
+                // AABB 收紧画布；solo 路径保持 M-N2 原样（逐字节零回归）。
+                float lx = navPrims.verts[0].pos[0], hx = lx;
+                float lz = navPrims.verts[0].pos[2], hz = lz;
+                for (const auto& v : navPrims.verts) {
+                    lx = std::min(lx, v.pos[0]); hx = std::max(hx, v.pos[0]);
+                    lz = std::min(lz, v.pos[2]); hz = std::max(hz, v.pos[2]);
+                }
+                for (const auto& o : navObsDraw) {
+                    lx = std::min(lx, o[0] - o[2]); hx = std::max(hx, o[0] + o[2]);
+                    lz = std::min(lz, o[1] - o[2]); hz = std::max(hz, o[1] + o[2]);
+                }
+                const float pad = 0.15f * std::max(hx - lx, hz - lz) + 0.05f;
+                st.bmin[0] = lx - pad; st.bmax[0] = hx + pad;
+                st.bmin[2] = lz - pad; st.bmax[2] = hz + pad;
+                st.bmin[1] = s.bmin[1]; st.bmax[1] = s.bmax[1];
+            } else {
+                for (int k = 0; k < 3; ++k) {
+                    st.bmin[k] = s.bmin[k];
+                    st.bmax[k] = s.bmax[k];
+                }
             }
         }
+        // M-N3 补充：障碍/路径显示侧无条件回填（POD 每帧归零）
+        st.tiled = navMesh.isTiled();
+        st.obstacleCount = navMesh.obstacleCount();
+        std::snprintf(st.pathStatus, sizeof(st.pathStatus), "%s", navPathStatus);
+        const int nObs = navObsDraw.size() > 8 ? 8
+                         : static_cast<int>(navObsDraw.size());
+        st.obsDrawCount = nObs;
+        for (int k = 0; k < nObs; ++k)
+            for (int j = 0; j < 3; ++j)
+                st.obsDraw[k][j] = navObsDraw[k][j];
+        const int nPts = navPathPts.size() > 32 ? 32
+                         : static_cast<int>(navPathPts.size());
+        st.pathPointCount = nPts;
+        for (int k = 0; k < nPts; ++k)
+            for (int j = 0; j < 2; ++j)
+                st.pathPoints[k][j] = navPathPts[k][j];
     };
     // M-P3：物理调试场景（碰撞形状线框）。PIMPL 把 Jolt 头挡在 World.cpp 内，viewer
     // 只持值对象。仅 --physics-debug 时 build；build 失败直接退出 1（绝不静默回退到
@@ -2974,6 +3183,8 @@ void printUsage() {
               << "                                     scene background = current --mode (default normal)\n"
               << "  viewer.exe --nav-panel             M-N2 NavMesh tuning/five-stage debug panel;\n"
               << "                                     bakes from current --model (.glb), cvars nav.*\n"
+              << "  viewer.exe --nav-model <name>      M-N3: separate panel bake input from --model;\n"
+              << "                                     nav.tiled 1 -> tiled bake + dynamic obstacles\n"
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"

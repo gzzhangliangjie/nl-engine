@@ -30,7 +30,10 @@ std::unique_ptr<NavPanel> NavPanel::create() {
 }
 
 void NavPanel::drawWindow(State& st) {
-    ImGui::SetNextWindowSize(ImVec2(460.f, 600.f), ImGuiCond_FirstUseEver);
+    // 证据脚本展开障碍区时把窗口调高，并让 build params 收起，给俯视画布
+    // 留出空间；默认（nav.obsPanel=0）仍严格是 M-N2 的 460x600 布局。
+    ImGui::SetNextWindowSize(ImVec2(460.f, st.obsPanelOpen ? 700.f : 600.f),
+                             ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("NavMesh Debug")) {
         ImGui::End();
         return;
@@ -60,6 +63,7 @@ void NavPanel::drawWindow(State& st) {
     ImGui::TextUnformatted(st.status);
 
     // ---- 参数区（cvar 镜像；控件写回置 paramsChanged，viewer 同步 cvar）----
+    if (st.obsPanelOpen) ImGui::SetNextItemOpen(false, ImGuiCond_Once);
     if (ImGui::CollapsingHeader("build params",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         auto f = [&](const char* label, float& v, float mn, float mx) {
@@ -79,6 +83,34 @@ void NavPanel::drawWindow(State& st) {
         f("detailMaxErr",st.detailMaxError,0.1f,  5.f);
         if (ImGui::SliderInt("vertsPerPoly", &st.vertsPerPoly, 3, 6))
             st.paramsChanged = true;
+    }
+
+    // ---- M-N3 补充：动态障碍（默认折叠，M-N2 首屏布局只多一行 header）----
+    // tiled 模式下 rc 中间产物不保留，五阶段只有 NavMesh 可用，viewer 会
+    // 把 stage 钉到 6 并在状态行提示；障碍按钮只在 tiled bake 成功后可用。
+    // ImGuiCond_Once：只在窗口首次出现时按脚本意图展开，之后用户手动
+    // 折叠/展开不被每帧覆盖（与 cvar 唯一真源不冲突——这是纯显示初值）。
+    if (st.obsPanelOpen) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    if (ImGui::CollapsingHeader("dynamic obstacles (tiled)")) {
+        if (ImGui::Checkbox("tiled bake (v2)", &st.tiledMode))
+            st.tiledModeDirty = true;
+        auto of = [&](const char* label, float& v, float mn, float mx) {
+            if (ImGui::SliderFloat(label, &v, mn, mx)) st.obsParamsChanged = true;
+        };
+        of("obsX",      st.obsX,      -4.f,  4.f);
+        of("obsZ",      st.obsZ,      -4.f,  4.f);
+        of("obsRadius", st.obsRadius, 0.1f,  2.f);
+        of("obsHeight", st.obsHeight, 0.5f,  6.f);
+        if (!st.tiled) {
+            ImGui::TextColored(ImVec4(0.55f, 0.25f, 0.25f, 1.f),
+                               "check 'tiled bake' then press 'bake' first");
+        } else {
+            if (ImGui::Button("add obstacle")) st.addObstacleRequested = true;
+            ImGui::SameLine();
+            if (ImGui::Button("clear obstacles"))
+                st.clearObstaclesRequested = true;
+        }
+        ImGui::Text("obstacles: %d   path: %s", st.obstacleCount, st.pathStatus);
     }
 
     // ---- 俯视画布（x→右、z→下；与 nav-tools 同投影口径）----
@@ -180,6 +212,28 @@ void NavPanel::drawWindow(State& st) {
                 dl->AddTriangleFilled(a, c, d, col0);
             }
         }
+    }
+
+    // ---- M-N3 补充：动态障碍 + 路径折线叠加（viewer 回填的 POD 数据）----
+    // 画在 NavMesh 图元之上：半透明红圆 = 圆柱障碍俯视投影，蓝折线 =
+    // findPath 当前结果。障碍生效时折线消失 / 退化即为闭环的可视证据。
+    const int nObs = st.obsDrawCount > 8 ? 8 : st.obsDrawCount;
+    for (int i = 0; i < nObs; ++i) {
+        ImVec2 c;
+        toScreen(st.obsDraw[i][0], st.obsDraw[i][1], c);
+        const float r = st.obsDraw[i][2] * scale;
+        if (r <= 0.f) continue;
+        dl->AddCircleFilled(c, r, IM_COL32(220, 60, 60, 80));
+        dl->AddCircle(c, r, IM_COL32(190, 40, 40, 255), 0, 2.f);
+    }
+    const int nPts = st.pathPointCount > 32 ? 32 : st.pathPointCount;
+    if (nPts >= 2) {
+        ImVec2 pts[32];
+        for (int i = 0; i < nPts; ++i)
+            toScreen(st.pathPoints[i][0], st.pathPoints[i][1], pts[i]);
+        dl->AddPolyline(pts, nPts, IM_COL32(30, 90, 220, 255), false, 2.5f);
+        dl->AddCircleFilled(pts[0], 3.5f, IM_COL32(30, 90, 220, 255));
+        dl->AddCircleFilled(pts[nPts - 1], 3.5f, IM_COL32(30, 160, 60, 255));
     }
     dl->PopClipRect();
     ImGui::End();

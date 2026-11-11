@@ -48,6 +48,32 @@ public:
         float detailDist    = 6.f;
         float detailMaxError= 1.f;
         int   vertsPerPoly  = 6;
+
+        // ---- M-N3 补充：动态障碍交互（用户点名解禁的冻结面）----
+        // 双模式：nav.tiled=0 保持 M-N2 Solo Mesh（五阶段可视化零回归）；
+        // nav.tiled=1 时 bake 走 bakeTiled()（v2 + dtTileCache），才具备加障碍能力。
+        // 与 build params 同款纪律：面板控件写回置边沿，viewer 写 cvar（唯一真源），
+        // 显示侧由 viewer 每帧无条件回填（HudFrame POD 每帧归零）。
+        bool  tiledMode     = false;   // cvar nav.tiled 镜像（bake 分流开关）
+        bool  tiledModeDirty= false;   // 面板勾选本帧真实改动（边沿）
+        bool  obsPanelOpen  = false;   // cvar nav.obsPanel：证据脚本展开折叠头
+                                       //（默认 0 = M-N2 首屏一行不动）
+        bool  tiled         = false;   // viewer 回填：当前 navMesh 是 v2 tiled
+        bool  obsParamsChanged = false; // 障碍参数滑条改动（边沿）
+        bool  addObstacleRequested   = false;
+        bool  clearObstaclesRequested= false;
+        float obsX      = -0.35f;      // 圆柱中心 x（cvar nav.obsX 镜像）
+        float obsZ      = -1.70f;      // 圆柱中心 z（cvar nav.obsZ 镜像）
+        float obsRadius = 0.5f;        // cvar nav.obsRadius
+        float obsHeight = 3.f;         // cvar nav.obsHeight；y 下界由 viewer 固定
+                                       // 为 -1（M-N3 铁律：必须跨过 tile 高度域下界）
+        int   obstacleCount = 0;       // viewer 回填（dtTileCache 已处理障碍数）
+        char  pathStatus[64] = {};     // viewer 回填（路径查询状态 + 折线点数）
+        // 画布叠加（viewer 回填；定长 POD，避免 State 内出现 STL）
+        int   obsDrawCount = 0;
+        float obsDraw[8][3] = {};      // 每项 x, z, radius
+        int   pathPointCount = 0;
+        float pathPoints[32][2] = {};  // 每项 x, z
     };
 
     static std::unique_ptr<NavPanel> create();
