@@ -115,7 +115,7 @@ srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("127.0.0.1", PORT)); srv.listen(1)
 print("listening on 127.0.0.1:%d ..." % PORT)
 
-ROOT = r"E:\UE_STUDY_2026\nl-engine-editor"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 scene = os.path.join(ROOT, "example", "ecs-e1b", "ecs-e1b.scene")
 proc = subprocess.Popen([os.path.join(ROOT, "build", "DX12", "viewer.exe"),
                          "--scene", scene, "--editor-bridge", "--no-hud"])

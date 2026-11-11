@@ -708,7 +708,7 @@ struct EditorEmbed {
     bool enabled = false;      // M-E4a：--editor-bridge 且非截图模式才启用泵/重连
     bool connected = false;
     void* engineHwnd = nullptr;
-    nl::core::OrbitCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
+    nl::viewer::ViewerCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
     std::chrono::steady_clock::time_point nextRetry{};  // M-E4a：重连退避时间点
     // M-E6：endpoint 与多视口路由键（由 --editor-endpoint / --view-id 注入）
     std::string endpoint = "tcp://127.0.0.1:29110";
@@ -756,7 +756,7 @@ struct EditorEmbed {
     // M-E3：相机控制 handler（编辑器插件经 RPC 驱动引擎相机）。
     // params 统一命名 Map（RPC-SPEC）；set 类回读 clamp 后实际值，编辑器 UI 直接对齐。
     // 未连接也照常注册（无 RPC 泵就不会被调到），standalone 零开销。
-    void bindCamera(nl::core::OrbitCamera* cam) {
+    void bindCamera(nl::viewer::ViewerCamera* cam) {
         camera = cam;
         if (!camera) return;
         auto field = [](const nl::editor::RpcValue& p, const char* k, double def) -> double {
@@ -776,7 +776,10 @@ struct EditorEmbed {
             return nl::editor::RpcValue(std::move(m));
         });
         bridge.registerHandler("camera.setFov", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
-            camera->setFovYDegrees((float)field(p, "fov", camera->fovYDegrees()));  // 内部 clamp 20..120
+            float fov = (float)field(p, "fov", camera->fovYDegrees());
+            if (fov < 20.0f) fov = 20.0f;
+            if (fov > 120.0f) fov = 120.0f;
+            camera->setFovYDegrees(fov);  // M-CAM b-segment 合并适配：ViewerCamera 自身 fovY_ 不 clamp，RPC 侧守住 20..120 契约
             return nl::editor::RpcValue((double)camera->fovYDegrees());
         });
         bridge.registerHandler("camera.setDistance", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {

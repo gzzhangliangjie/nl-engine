@@ -3,7 +3,10 @@
 # viewer --editor-bridge 作为 client 连上 29110，本脚本收 announce 后直打
 # 引擎侧 5 个 camera.* handler，断言行为（clamp / 增量 / reset / 负向）。
 # 协议：4 字节大端长度前缀 + msgpack 信封 Map{jsonrpc:1,id,type,method,params}。
-import socket, struct, subprocess, sys, time, threading
+import socket, struct, subprocess, sys, time, threading, os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 PORT = 29110
 fails = []
@@ -107,7 +110,7 @@ srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("127.0.0.1", PORT)); srv.listen(1)
 print("listening on 127.0.0.1:%d ..." % PORT)
 
-proc = subprocess.Popen([r"E:\UE_STUDY_2026\nl-engine-editor\build\DX12\viewer.exe",
+proc = subprocess.Popen([os.path.join(ROOT, "build", "DX12", "viewer.exe"),
                          "--editor-bridge"])
 try:
     srv.settimeout(15)

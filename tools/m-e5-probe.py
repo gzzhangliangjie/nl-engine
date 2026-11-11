@@ -134,7 +134,7 @@ def start_server():
     srv.bind(("127.0.0.1", PORT)); srv.listen(1)
     return srv
 
-ROOT = r"E:\UE_STUDY_2026\nl-engine-editor"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "build", "DX12", "viewer.exe")
 SCENE = os.path.join(ROOT, "example", "ecs-e1b", "ecs-e1b.scene")
 

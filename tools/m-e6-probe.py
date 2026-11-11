@@ -9,7 +9,7 @@
 import ctypes, os, select, socket, struct, subprocess, sys, time
 from ctypes import wintypes
 
-ROOT = r"E:\UE_STUDY_2026\nl-engine-editor"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build", "DX12")
 EXE_VIEWER = os.path.join(BUILD, "viewer.exe")
 EXE_EDITOR = os.path.join(BUILD, "editor.exe")
