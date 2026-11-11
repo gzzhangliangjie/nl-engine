@@ -156,6 +156,14 @@ TRACKS = {
                 "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
                 "state CLOSED by user instruction 2026-11-11 22:0x",
     },
+    "profiling": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-profiling",
+        "branch": "feat/profiling", "state": "active",
+        "note": "A-class track opened 2026-11-11 by user instruction (Q1~Q6 "
+                "confirmed; plan docs/p8/P8-TRACY-PLAN.md): Tracy v0.15.0 "
+                "(BSD-3-Clause) performance + memory profiling, RenderDoc "
+                "in-app capture as M-TR2; M-TR0~M-TR3, tags tracy-m0~tracy-m3",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
