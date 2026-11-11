@@ -2869,3 +2869,31 @@
 **下一步**：日志轨道功能面按 §8 拍板清单闭环（M-LOG3 候选为空）；merge 回 master 待用户拍板（与 log-m0 同批）。
 
 - **验收（主树合并后实跑，2026-11-11，merge commit `aaf43b8`）**：用户「合回master」→ 只读预演 `merge-tree`（3 处冲突预告：CMakeLists/MILESTONES/viewer-main.cpp；`cases.json` 由 `.gitattributes` 的 `merge=nlcases` 自动并出 102 张版本卡并集，log-m0/log-m2/s10-*/s11-hash/nav-* 全在）；唯一 untracked 阻塞物主树 `docs/p8/P8-LOG-PLAN.md` 备份后移开（feat 版内容超集、仅行尾差异，实测坐实后放行）。冲突解算：CMakeLists 双 add_subdirectory 并行；MILESTONES 保序 union（ours 72 行 + theirs 37 行零丢失）；viewer/main.cpp 两 hunk = master 新逻辑（navPanel 条件 / nav-crowd 收尾块）× feat 通道迁移干净并集。连带迁移 master 侧新增的 12 处老入口调用（viewer 10 + scene.cpp S11 cache 2）到分类通道，与拍板⑤同规。验收：双后端 BUILD OK + selftest 16/16×2；ctest log/nav 子集 **15/15×2**；`--only log-m0` 8/8 + `--only log-m2` 8/8 + `--only s11-hash` 6/6（迁移 cache 行后零漂）+ `--only m0.9` 4/4 + `--only nav-m0` 10/10 全 bytes ALL GREEN；`server.py --check` exit 0；bat 编码 99 文件 0 违规。纪律留痕：主树工作区并行会话未提交改动（MEMORY.md/PARALLEL-TRACKS/wt_pool.py 注册表 + s10/s11 verify 产物）全程未卷入 merge commit；未起全量总闸（非 tag 收口）；wt `nl-engine-logging` 与 `feat/logging` 分支保留。
+
+## A类 M-W0：大世界生成工具立项（A 类并行轨道，2026-11-12）
+
+**动作**：立项调研（按 AGENTS.md 铁律实读三处参考 + 业界方案）。三处参考：① Carrot `engine/render/` 全目录 + `InstanceData.h` —— **零 world/terrain/streaming/city 模块**，实例仅为 transform+UUID 扁平结构，反向印证「流式是后期重活」；② bevy `examples/large_scenes/bevy_city/`（`spawn_city(seed,size,car_density,stats)`：规则网格 block 5.5×4.0、SmallRng::seed_from_u64 确定性、OpenSimplex 噪声分密度区、单 road asset 旋转拉伸、Road{start,end}/Car 车道语义、CityStats 计数锚；定位「extremely large scenes 压力测试」+ VisibilityRange LOD + simulate_cars）；③ UE5 `WorldPartition.h`/`WorldPartitionRuntimeHash.h`/`WorldPartitionRuntimeCell.h`/`Plugins/PCG/Public/PCGGraph.h` —— 工业终态把**生成**（PCG = Node/Pin/Settings 的 DAG）与**分区流式**（runtime cell + ObjectMapping→package/path/GUID）**解耦两层**，离线产资产是一等公民，5.8 官方新增 Mesh Terrain + 城市街道 PCG 图示例。业界方案分族：A 引擎内置（UE World Partition+PCG+HLOD / Unity DOTS SubScene / Godot 社区 chunk loader）、B DCC 规则建模（Houdini PDG / CityEngine CGA / Blender Geometry Nodes，只抄算法不入库）、C 开源 C++ city gen（demo 级，不建议 vendored）、D 数据驱动（OSM+OSMnx / CityDreamer，只借路网语义）。**定位**：离线工具产资产 + 元数据（`city-tools --seed N --size N → city.scene + 分块 .nmesh + roadnet.json`），与 UE「Asset 型 PCG 图」同构、与 bevy_city seed/size/统计锚同构；不碰 renderer / 不动 `kStage` / 不重拍冻结基线（A 类工具版交代）。**待拍板**：Q-B（资产来源=程序化，GAME-DEV-ORDER §4 已写建议待显式拍板）、Q-W1 产物形态（单 .nmesh / 分块集合 / World JSON 引用现有资产）、Q-W2 roadnet 与第 8 步 lane graph 契约、Q-W3 算法级 vendored 取舍、Q-C 流式时机。计划落 `docs/worldgen/W0-OPTIONS.md` 方案矩阵。
+
+**提交版本**：待开工（OPTIONS 矩阵经用户拍板后出 `docs/worldgen/W0-PLAN.md`，届时登记 track `worldgen` + branch `feat/worldgen` + tag 名字制 `w0-*`，不占 m0.* 编号）。
+
+**完成情况**
+- 🟡 仅完成立项调研（三处实读 + 业界分族 + 定位 + 待拍板清单），**零落码、零台账改动**（除本立项节与 PARALLEL-TRACKS §7.1b / GAME-DEV-ORDER 第 6 步登记）。
+
+**踩坑情况**
+- 无（未落码）。
+
+**下一步**：出 `docs/worldgen/W0-OPTIONS.md` 方案矩阵（Q-W1~Q-W3 + Q-C 四问各列候选 + 推荐项 + 代价）→ 用户拍板 → 登记 track `worldgen` 开工 → 首里程碑 M-W0.x 落 `city-tools` 最小闭环（seed/size → 分块 .nmesh + roadnet.json → 城市俯视证据图）。
+
+## A类 天气变化立项（穿插项，2026-11-12）
+
+**动作**：立项调研（按 AGENTS.md 铁律实读三处参考 + 开源参考 + 许可证核查）。三处参考：① Carrot `Skybox.hpp`（静态 cubemap）+ `merge-lighting.slang` 线性雾 + `lighting.glsl` GI miss 采样 —— GI 能吃天空但无时变参数（反面教材）；② bevy `atmosphere.wesl:7-22` **大气透射率直接乘进 GI 直光贡献** + `volumetric_fog.wesl` 物理参数 —— 与用户「别浪费 Lumen」最同构；③ UE5 `SkyAtmosphereRendering.cpp`（StateVersioning：LUT 按状态变化重算）+ `VolumetricCloudRendering.cpp`（cloud tracing → Lumen translucent volume）+ `Lumen.cpp:228`（实时捕获动态天光）—— 动态天光是 Lumen 一等输入。开源参考（许可证已核、零 vendored）：bevy_weather 0.2.0（MIT/Apache，天气=时钟+seed 纯函数、云影进 DirectionalLight、日落色不预红化）、Wicked Engine（MIT，`WeatherComponent` 参数全集）、Godot 4（MIT，体积雾 GI Inject 分层、时域拖影）、Bruneton（BSD-3-Clause，天空辐照度与探针同源）、bevy_atmosphere（MIT/Apache）。**定位**：天气 = 时变光照/介质/表面参数，交给现有 Nanite×Lumen 主线求解（不浪费 Lumen）；方案 A 参数化驱动（M-WEA0~WEA3），方案 B 大气 LUT+体积云列入远期（S13 后）。**待拍板已清**：Q-WE1=A、Q-WE2=参数层排穿插项/高级远期、Q-WE3/4/6 随 A 隐式决定；**Q-WE5（冻结基线重拍授权）留作 M-WEA1 开工闸门**。计划落 `docs/WEATHER-PLAN.md`（调研附录 `WEATHER-PLAN-DRAFT.md`）。
+
+**提交版本**：待开工（OPTIONS 已定，出 `WEATHER-PLAN.md` 任务书；开工时登记 track `weather` + branch `feat/weather` + tag 名字制 `weather-w0`~`weather-w3`，不占 m0.* 编号、不 bump `kStage`）。
+
+**完成情况**
+- 🟡 仅完成立项调研（三处实读 + 开源分族 + 许可证核查 + 方案定案 + 拍板记录），**零落码、零台账改动**（除本立项节与 ROADMAP 穿插项表两行 + GAME-DEV-ORDER 第 11 步标注）。
+
+**踩坑情况**
+- 无（未落码）。
+
+**下一步**：M-WEA0 天气状态层开工（纯 CPU 时钟函数 + 工具 dump，零渲染改动、零基线影响）→ 验收同 seed 重放逐字节一致 → claim track `weather` → 后续 M-WEA1 改 `sky.slangh` 前先清 Q-WE5 重拍闸门。
