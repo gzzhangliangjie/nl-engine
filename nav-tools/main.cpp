@@ -75,6 +75,10 @@ void usage() {
     std::printf("  nav-tools resave <in.nnav> <out.nnav>\n");
     std::printf("  nav-tools debug-stage <in.glb|.nmesh> <out.png> --stage <name>\n");
     std::printf("          [--size N] [--cell-size F ...]\n");
+    std::printf("  nav-tools tilebake <in.glb|.nmesh|.scene> <out.nnav> [--tile-size N]\n");
+    std::printf("          [--max-obstacles N] [--png out.png] [--size N] [--cell-size F ...]\n");
+    std::printf("  nav-tools obstacle <in.nnav> --pos x,y,z --start x,y,z --end x,y,z\n");
+    std::printf("          [--radius F] [--height F] [--png out.png]\n");
     std::printf("  nav-tools selftest [--verbose]\n");
     std::printf("exit codes: 0=PASS 1=failure 2=usage\n");
 }
@@ -840,6 +844,279 @@ nl::nav::Geometry syntheticScene() {
     return g;
 }
 
+// ---------------------------------------------------------------------------
+// M-N3：tilebake（E1 场景 / glb -> v2 tiled 容器）与 obstacle（动态障碍闭环）
+// ---------------------------------------------------------------------------
+static bool endsWithPath(const char* s, const char* suffix) {
+    const std::size_t n = std::strlen(s), m = std::strlen(suffix);
+    return n >= m && std::strcmp(s + n - m, suffix) == 0;
+}
+
+int cmdTileBake(int argc, char** argv) {
+    if (argc < 2) { usage(); return 2; }
+    const char* inPath  = argv[0];
+    const char* outPath = argv[1];
+    nl::nav::TileBuildParams tp;
+    const char* pngPath = nullptr;
+    int pngSize = 768;
+    std::string err;
+
+    // 先把 tiled 专属选项摘出来，剩下的 bake 参数整批交给 parseBakeArgs
+    //（parseBakeArgs 从 i 一路吃到 argc，混着专属选项会误报 unknown）。
+    std::vector<char*> bakeArgs;
+    bakeArgs.push_back(argv[0]);
+    bakeArgs.push_back(argv[1]);
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto needVal = [&]() -> const char* {
+            if (i + 1 >= argc) return nullptr;
+            return argv[++i];
+        };
+        if (a == "--tile-size") {
+            const char* v = needVal();
+            if (!v || (tp.tileSize = std::atoi(v)) < 8 || tp.tileSize > 256) {
+                std::printf("nav-tools tilebake: --tile-size must be in [8, 256]\n");
+                return 2;
+            }
+        } else if (a == "--max-obstacles") {
+            const char* v = needVal();
+            if (!v || (tp.maxObstacles = std::atoi(v)) <= 0) {
+                std::printf("nav-tools tilebake: --max-obstacles must be >= 1\n");
+                return 2;
+            }
+        } else if (a == "--png") {
+            pngPath = needVal();
+            if (!pngPath) {
+                std::printf("nav-tools tilebake: --png needs a path\n");
+                return 2;
+            }
+        } else if (a == "--size") {
+            const char* v = needVal();
+            if (!v || (pngSize = std::atoi(v)) < 64 || pngSize > 4096) {
+                std::printf("nav-tools tilebake: --size must be in [64, 4096]\n");
+                return 2;
+            }
+        } else {
+            bakeArgs.push_back(argv[i]);
+        }
+    }
+    BakeOptions opt;
+    opt.params = tp.base;
+    int bi = 2;
+    if (!parseBakeArgs(static_cast<int>(bakeArgs.size()), bakeArgs.data(),
+                       bi, opt, err)) {
+        std::printf("nav-tools tilebake: %s\n", err.c_str());
+        return 2;
+    }
+    tp.base = opt.params;
+
+    nl::nav::Geometry geo;
+    int entities = 0;
+    if (endsWithPath(inPath, ".scene")) {
+        entities = nl::nav::geometryEntityCount(inPath, err);
+        if (entities < 0) {
+            std::printf("nav-tools tilebake: %s\n", err.c_str());
+            return 1;
+        }
+        if (!nl::nav::loadGeometryFromScene(inPath, NL_ASSET_DIR, geo, err)) {
+            std::printf("nav-tools tilebake: %s\n", err.c_str());
+            return 1;
+        }
+    } else if (!loadGeometry(inPath, geo, err)) {
+        std::printf("nav-tools tilebake: geometry load failed: %s\n", err.c_str());
+        return 1;
+    }
+    nl::nav::NavMesh nav;
+    if (!nav.bakeTiled(geo, tp, err)) {
+        std::printf("nav-tools tilebake: %s\n", err.c_str());
+        return 1;
+    }
+    if (!nav.save(outPath, err)) {
+        std::printf("nav-tools tilebake: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("input       : %s\n", inPath);
+    std::printf("mode        : tiled\n");
+    if (endsWithPath(inPath, ".scene"))
+        std::printf("entities    : %d\n", entities);
+    std::printf("verts/tris  : %zu / %zu\n", geo.verts.size() / 3,
+                geo.tris.size() / 3);
+    std::printf("tileSize    : %d\n", tp.tileSize);
+    std::printf("tiles       : %d\n", nav.compressedTileCount());
+    printStats(outPath, nav, nullptr);
+    std::printf("version     : %d\n", nl::nav::kNavVersionTiled);
+    std::printf("saved       : %s\n", outPath);
+
+    if (pngPath) {
+        WireCanvas canvas;
+        if (!makeWireCanvas(nav, pngSize, canvas)) {
+            std::printf("nav-tools tilebake: degenerate bounds (no png)\n");
+            return 1;
+        }
+        // tile 网格（淡蓝）：从几何 bmin 起，每 tileSize*cellSize 一条
+        const auto& s = nav.stats();
+        const float step = static_cast<float>(tp.tileSize) * tp.base.cellSize;
+        for (float x = s.bmin[0]; x <= s.bmax[0] + step; x += step)
+            canvas.line(x, s.bmin[2], x, s.bmax[2], 190, 205, 235);
+        for (float z = s.bmin[2]; z <= s.bmax[2] + step; z += step)
+            canvas.line(s.bmin[0], z, s.bmax[0], z, 190, 205, 235);
+        if (!png::write(pngPath, pngSize, pngSize, canvas.rgb, err)) {
+            std::printf("nav-tools tilebake: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("png         : %s (%dx%d)\n", pngPath, pngSize, pngSize);
+    }
+    return 0;
+}
+
+int cmdObstacle(int argc, char** argv) {
+    if (argc < 1) { usage(); return 2; }
+    const char* inPath = argv[0];
+    float pos[3] = {0, 0, 0}, start[3] = {0, 0, 0}, end[3] = {0, 0, 0};
+    float radius = 0.5f, height = 2.f;
+    bool havePos = false, haveStart = false, haveEnd = false;
+    const char* pngPath = nullptr;
+    int pngSize = 768;
+    std::string err;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto needVal = [&]() -> const char* {
+            if (i + 1 >= argc) return nullptr;
+            return argv[++i];
+        };
+        if (a == "--pos") {
+            const char* v = needVal();
+            if (!v || !parseVec3(v, pos)) {
+                std::printf("nav-tools obstacle: --pos needs x,y,z\n"); return 2;
+            }
+            havePos = true;
+        } else if (a == "--start") {
+            const char* v = needVal();
+            if (!v || !parseVec3(v, start)) {
+                std::printf("nav-tools obstacle: --start needs x,y,z\n"); return 2;
+            }
+            haveStart = true;
+        } else if (a == "--end") {
+            const char* v = needVal();
+            if (!v || !parseVec3(v, end)) {
+                std::printf("nav-tools obstacle: --end needs x,y,z\n"); return 2;
+            }
+            haveEnd = true;
+        } else if (a == "--radius") {
+            const char* v = needVal();
+            if (!v || (radius = static_cast<float>(std::atof(v))) <= 0.f) {
+                std::printf("nav-tools obstacle: --radius must be > 0\n"); return 2;
+            }
+        } else if (a == "--height") {
+            const char* v = needVal();
+            if (!v || (height = static_cast<float>(std::atof(v))) <= 0.f) {
+                std::printf("nav-tools obstacle: --height must be > 0\n"); return 2;
+            }
+        } else if (a == "--png") {
+            pngPath = needVal();
+            if (!pngPath) {
+                std::printf("nav-tools obstacle: --png needs a path\n"); return 2;
+            }
+        } else if (a == "--size") {
+            const char* v = needVal();
+            if (!v || (pngSize = std::atoi(v)) < 64 || pngSize > 4096) {
+                std::printf("nav-tools obstacle: --size must be in [64, 4096]\n");
+                return 2;
+            }
+        } else {
+            std::printf("nav-tools obstacle: unknown option: %s\n", argv[i]);
+            return 2;
+        }
+    }
+    if (!havePos || !haveStart || !haveEnd) {
+        std::printf("nav-tools obstacle: --pos/--start/--end are required\n");
+        return 2;
+    }
+
+    nl::nav::NavMesh nav;
+    if (!nav.load(inPath, err)) {
+        std::printf("nav-tools obstacle: %s\n", err.c_str());
+        return 1;
+    }
+    if (!nav.isTiled()) {
+        std::printf("nav-tools obstacle: not a tiled navmesh (use tilebake, v2)\n");
+        return 1;
+    }
+    nl::nav::NavMesh::QueryParams qp;
+    nl::nav::NavMesh::QueryResult r0, r1, r2;
+    const auto s0 = nav.findPath(start, end, qp, r0);
+    const int polysBefore = nav.stats().polyCount;
+
+    std::uint32_t ref = 0;
+    if (!nav.addObstacle(pos, radius, height, ref, err)) {
+        std::printf("nav-tools obstacle: %s\n", err.c_str());
+        return 1;
+    }
+    const auto s1 = nav.findPath(start, end, qp, r1);
+    std::printf("navmesh     : %s\n", inPath);
+    std::printf("tiles       : %d\n", nav.compressedTileCount());
+    std::printf("polysBefore : %d\n", polysBefore);
+    std::printf("polysBlocked: %d\n", nav.stats().polyCount);
+    std::printf("edgesBlocked: %zu\n", nav.polyEdges().size());
+    std::printf("obstacle    : (%.2f, %.2f, %.2f) r=%.2f h=%.2f ref=%u\n",
+                pos[0], pos[1], pos[2], radius, height, ref);
+    std::printf("before      : %s (%zu wp)\n",
+                nl::nav::NavMesh::queryStatusName(s0), r0.waypoints.size() / 3);
+    std::printf("blocked     : %s (%zu wp)\n",
+                nl::nav::NavMesh::queryStatusName(s1), r1.waypoints.size() / 3);
+    std::printf("obstacles   : %d\n", nav.obstacleCount());
+
+    if (pngPath) {
+        WireCanvas canvas;
+        if (!makeWireCanvas(nav, pngSize, canvas)) {
+            std::printf("nav-tools obstacle: degenerate bounds (no png)\n");
+            return 1;
+        }
+        // 无障碍原路径（蓝）→ 障碍后路径（红）→ 障碍圆柱俯视圈（绿）
+        auto path = [&](const nl::nav::NavMesh::QueryResult& r,
+                        unsigned char R, unsigned char G, unsigned char B) {
+            for (std::size_t k = 3; k < r.waypoints.size(); k += 3)
+                canvas.line(r.waypoints[k - 3], r.waypoints[k - 1],
+                            r.waypoints[k], r.waypoints[k + 1], R, G, B);
+        };
+        path(r0, 60, 100, 220);
+        path(r1, 220, 50, 50);
+        constexpr int kSeg = 48;
+        for (int k = 0; k < kSeg; ++k) {
+            const float a0 = 6.2831853f * k / kSeg;
+            const float a1 = 6.2831853f * (k + 1) / kSeg;
+            canvas.line(pos[0] + radius * std::cos(a0),
+                        pos[2] + radius * std::sin(a0),
+                        pos[0] + radius * std::cos(a1),
+                        pos[2] + radius * std::sin(a1), 40, 170, 70);
+        }
+        if (!png::write(pngPath, pngSize, pngSize, canvas.rgb, err)) {
+            std::printf("nav-tools obstacle: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("png         : %s (%dx%d)\n", pngPath, pngSize, pngSize);
+    }
+
+    if (!nav.removeObstacle(ref, err)) {
+        std::printf("nav-tools obstacle: %s\n", err.c_str());
+        return 1;
+    }
+    const auto s2 = nav.findPath(start, end, qp, r2);
+    std::printf("after       : %s (%zu wp)\n",
+                nl::nav::NavMesh::queryStatusName(s2), r2.waypoints.size() / 3);
+    std::printf("obstacles   : %d (after remove)\n", nav.obstacleCount());
+
+    const bool affected = (s1 != nl::nav::NavMesh::QueryStatus::OK) ||
+                          (r1.waypoints != r0.waypoints);
+    const bool restored = (s2 == s0 && r2.waypoints == r0.waypoints &&
+                           nav.obstacleCount() == 0);
+    const bool pass = (s0 == nl::nav::NavMesh::QueryStatus::OK) &&
+                      affected && restored;
+    std::printf("restored    : %d\n", restored ? 1 : 0);
+    std::printf("result      : %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 int cmdSelftest(int argc, char** argv) {
     for (int i = 0; i < argc; ++i) {
         if (std::strcmp(argv[i], "--verbose") == 0) g_verbose = true;
@@ -1059,6 +1336,135 @@ int cmdSelftest(int argc, char** argv) {
                    "debug: unloaded mesh navmesh stage rejected");
     }
 
+    // ---- M-N3：tiled / v2 容器 / 动态障碍（方案 A + A-1）----
+    {
+        using QS = nl::nav::NavMesh::QueryStatus;
+        const nl::nav::Geometry tiledGeo = syntheticScene();
+        nl::nav::TileBuildParams tp;
+        tp.tileSize     = 16;
+        tp.maxObstacles = 16;
+        std::string tErr;
+        auto bakeTiledBytes = [&](const char* path) {
+            nl::nav::NavMesh tn;
+            if (!tn.bakeTiled(tiledGeo, tp, tErr))
+                return std::vector<unsigned char>{};
+            if (!tn.save(path, tErr))
+                return std::vector<unsigned char>{};
+            return readFileBytes(path, tErr);
+        };
+        const auto v2a = bakeTiledBytes("nav-selftest-tiled-a.nnav");
+        const auto v2b = bakeTiledBytes("nav-selftest-tiled-b.nnav");
+        expectTrue(!v2a.empty() && v2a == v2b,
+                   "tiled: deterministic v2 bytes (two bakes)");
+
+        nl::nav::NavMesh tiled;
+        expectTrue(tiled.load("nav-selftest-tiled-a.nnav", tErr),
+                   "tiled: v2 load ok");
+        expectTrue(tiled.isTiled(), "tiled: isTiled after v2 load");
+        expectTrue(tiled.compressedTileCount() > 0,
+                   "tiled: compressed tiles preserved by v2 roundtrip");
+        expectTrue(tiled.save("nav-selftest-tiled-c.nnav", tErr),
+                   "tiled: v2 resave ok");
+        expectTrue(readFileBytes("nav-selftest-tiled-c.nnav", tErr) == v2a,
+                   "tiled: v2 save/load/save byte-identical");
+
+        const float tStart[3] = {-8.f, 0.f, -8.f};
+        const float tEnd[3]   = { 8.f, 0.f,  8.f};
+        nl::nav::NavMesh::QueryParams qp;
+        nl::nav::NavMesh::QueryResult q0, q1, q2;
+        const QS before = tiled.findPath(tStart, tEnd, qp, q0);
+        expectTrue(before == QS::OK, "tiled: baseline path OK");
+        const float obs[3] = {4.f, -1.f, 4.f};   // y 下限须覆盖 tile 高度域
+        std::uint32_t ref = 0;
+        expectTrue(tiled.addObstacle(obs, 2.f, 3.f, ref, tErr),
+                   "tiled: addObstacle ok");
+        expectTrue(tiled.obstacleCount() == 1,
+                   "tiled: obstacle processed (update converged)");
+        const QS blocked = tiled.findPath(tStart, tEnd, qp, q1);
+        expectTrue(blocked != QS::OK || q1.waypoints != q0.waypoints,
+                   "tiled: obstacle affects path (hole / detour)");
+        expectTrue(tiled.removeObstacle(ref, tErr),
+                   "tiled: removeObstacle ok");
+        const QS after = tiled.findPath(tStart, tEnd, qp, q2);
+        expectTrue(after == before && q2.waypoints == q0.waypoints &&
+                   tiled.obstacleCount() == 0,
+                   "tiled: path restored point-by-point, no hole left");
+
+        // v1 兼容 + 负向语义
+        nl::nav::NavMesh solo;
+        expectTrue(solo.bake(tiledGeo, nl::nav::BuildParams{}, tErr),
+                   "tiled: solo v1 baseline bake");
+        expectTrue(solo.save("nav-selftest-solo-v1.nnav", tErr),
+                   "tiled: solo v1 save");
+        nl::nav::NavMesh v1;
+        expectTrue(v1.load("nav-selftest-solo-v1.nnav", tErr) && !v1.isTiled(),
+                   "tiled: v1 load stays solo (backward compatible)");
+        std::uint32_t badRef = 0;
+        expectTrue(!v1.addObstacle(obs, 2.f, 3.f, badRef, tErr),
+                   "tiled: obstacle on v1 solo mesh rejected");
+        nl::nav::TileBuildParams badTp;
+        badTp.tileSize = 1;
+        nl::nav::NavMesh badNav;
+        expectTrue(!badNav.bakeTiled(tiledGeo, badTp, tErr),
+                   "tiled: invalid tileSize rejected");
+
+        // E1 场景汇集：同一份 HizScene.glb，child 挂在位移 (8,0,0) 的父下时
+        // 世界矩阵必须把父变换复合进来（否则 child 仍停在原点）。
+        auto writeScene = [](const char* path, const char* parent,
+                             const char* mesh) {
+            std::FILE* f = std::fopen(path, "wb");
+            if (!f) return false;
+            std::fprintf(f,
+                "{\"version\":1,\"nextID\":3,\"ambient\":0.9,\"systems\":[],"
+                "\"entities\":["
+                "{\"id\":1,\"name\":\"anchor\",\"flags\":0,\"parent\":0,"
+                "\"components\":{\"Transform\":{\"position\":[8,0,0],"
+                "\"scale\":[1,1,1],\"rotation\":[0,0,0,1]}}},"
+                "{\"id\":2,\"name\":\"child\",\"flags\":0,\"parent\":%s,"
+                "\"components\":{\"Transform\":{\"position\":[0,0,0],"
+                "\"scale\":[1,1,1],\"rotation\":[0,0,0,1]},"
+                "\"Model\":{\"mesh\":\"%s\",\"tint\":[0.5,0.5,0.5],"
+                "\"roughness\":0.8,\"metallic\":0}}}]}",
+                parent, mesh);
+            std::fclose(f);
+            return true;
+        };
+        auto minX = [](const nl::nav::Geometry& g) {
+            if (g.verts.empty()) return 0.f;
+            float m = g.verts[0];
+            for (std::size_t i = 3; i < g.verts.size(); i += 3)
+                if (g.verts[i] < m) m = g.verts[i];
+            return m;
+        };
+        expectTrue(writeScene("nav-selftest-scene-a.scene", "0", "HizScene.glb") &&
+                   writeScene("nav-selftest-scene-b.scene", "1", "HizScene.glb"),
+                   "scene: two inline World JSON fixtures written");
+        expectTrue(nl::nav::geometryEntityCount("nav-selftest-scene-b.scene",
+                                                tErr) == 1,
+                   "scene: geometryEntityCount counts Model entities");
+        nl::nav::Geometry gA, gB;
+        const bool okA = nl::nav::loadGeometryFromScene(
+            "nav-selftest-scene-a.scene", NL_ASSET_DIR, gA, tErr);
+        const bool okB = nl::nav::loadGeometryFromScene(
+            "nav-selftest-scene-b.scene", NL_ASSET_DIR, gB, tErr);
+        expectTrue(okA && okB && gA.verts.size() == gB.verts.size(),
+                   "scene: World JSON -> nav Geometry (both fixtures)");
+        expectTrue(okA && okB && minX(gB) > minX(gA) + 7.f,
+                   "scene: parent world matrix composes into child geometry");
+        expectTrue(writeScene("nav-selftest-scene-bad.scene", "0", "../evil.glb") &&
+                   !nl::nav::loadGeometryFromScene(
+                       "nav-selftest-scene-bad.scene", NL_ASSET_DIR, gA, tErr),
+                   "scene: meshFile path traversal rejected by whitelist");
+
+        std::remove("nav-selftest-scene-a.scene");
+        std::remove("nav-selftest-scene-b.scene");
+        std::remove("nav-selftest-scene-bad.scene");
+        std::remove("nav-selftest-tiled-a.nnav");
+        std::remove("nav-selftest-tiled-b.nnav");
+        std::remove("nav-selftest-tiled-c.nnav");
+        std::remove("nav-selftest-solo-v1.nnav");
+    }
+
     if (g_failures == 0) {
         std::printf("nav selftest: PASS\n");
         return 0;
@@ -1095,6 +1501,8 @@ int main(int argc, char** argv) {
     if (cmd == "wire")     return cmdWire(argc - 2, argv + 2);
     if (cmd == "query")    return cmdQuery(argc - 2, argv + 2);
     if (cmd == "debug-stage") return cmdDebugStage(argc - 2, argv + 2);
+    if (cmd == "tilebake") return cmdTileBake(argc - 2, argv + 2);
+    if (cmd == "obstacle") return cmdObstacle(argc - 2, argv + 2);
     if (cmd == "resave")   return cmdResave(argc - 2, argv + 2);
     if (cmd == "selftest") return cmdSelftest(argc - 2, argv + 2);
     usage();

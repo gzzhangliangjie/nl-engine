@@ -20,7 +20,9 @@
 | `query <in.nnav> --start x,y,z --end x,y,z [--max-nodes N] [--max-waypoints N] [--half-extents x,y,z] [--png out.png] [--size N]` | M-N1：`findNearestPoly` → `findPath`（走廊）→ `findStraightPath`（string-pulling 折线）；打印 status + reachedLimit + 逐点 waypoints，可叠画路径 PNG | 0=OK / 1=UNREACHABLE·OUT_OF_NODES·BUFFER_TOO_SMALL / 2=INVALID_PARAM·NOT_INITIALIZED·用法错 |
 | `resave <in.nnav> <out.nnav>` | load → save roundtrip（容器自检） | 0/1 |
 | `debug-stage <in.glb\|.nmesh> <out.png> --stage <voxels\|regions\|distance\|contours\|raw-contours\|polymesh\|navmesh> [--size N] [bake params...]` | M-N2：五阶段叠加图——`bake(keepDebug=true)` 保留 rc 中间产物 → `duDebugDraw` 图元收集 → 俯视软光栅 PNG（TRI 边函数填充 + QUADS 拆两三角 + alpha 混合）；证据图取工具真实输出 | 0/1/2 |
-| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向 / M-N1 查询 / M-N2 调试锚点 | 0/1/2 |
+| `tilebake <in.glb\|.nmesh\|.scene> <out.nnav> [--tile-size N] [--max-obstacles N] [--png out.png] [--size N] [bake params...]` | M-N3：`DetourTileCache` tiled 增量烘焙，写 `.nnav` **v2**（基础段同 v1 + 尾部 tiled 扩展段）；`.scene` 走 `nl::scene` World JSON 几何汇集（组件 + 父子世界矩阵复合，按 meshFile 缓存 glb）；`--png` 叠画淡蓝 tile 网格 | 0/1/2 |
+| `obstacle <in.nnav> --pos x,y,z --start x,y,z --end x,y,z [--radius F] [--height F] [--png out.png] [--size N]` | M-N3：动态障碍闭环——原路径查询 → `addObstacle` → 被挡查询 → `removeObstacle` → 恢复查询；打印 polys/edges 变化与 `result : PASS`。蓝线=无障碍原路径、红线=障碍后路径、绿圈=圆柱障碍俯视 | 0/1/2 |
+| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向 / M-N1 查询 / M-N2 调试锚点 / M-N3 tiled·v2·障碍·E1 层级锚点 | 0/1/2 |
 
 - 几何入口：`.glb`（`nl::nav::loadGeometryFromGltf`，M-N2 抽到 core 与 viewer 面板同源）或 `.nmesh`（v3 fallback 尾段；v1 base 无 fallback 会明确报错）。
 - 失败诊断链：bake 失败时打印 `walkableTris / grid WxH / rasterSpans / filteredSpans / compactSpans / regionCount`，逐级定位死点（M-N0 调参实测：HizScene 在 cs=0.3 下 erosion 半径吃光箱顶，cs=0.1 + radius 0.2 才有产物）。
@@ -70,7 +72,8 @@
 
 ## 6. 下一站
 
-- M-N3：E1 多物体场景集成；动态物体走 `DetourTileCache`（届时连 `DetourDebugDraw` 一起重评）。查询能力（M-N1）与调参闭环（M-N2）均已就位，E1 场景烘焙直接消费同一 `bake` 入口。
+- M-N3（**2026-11-11 已收官，tag `nav-n3`**）：方案 A（`DetourTileCache` tiled 增量重烘）+ A-1（`.nnav` v2 同容器语义升级、v1 兼容）已按用户「按建议来」拍板落地，详见 §9/§10。冻结面全部守住：vendored 四文件零编辑、v1 序列化/烘焙老路径一行不改（`hiz-a.nnav` 864 字节逐字节零回归）、M-N2 五阶段 PNG 基线锁定、`kStage` 不 bump、外置编辑器不碰。
+- 下一站 **M-N4（可选）**：`DetourCrowd/` 尚未入库（VENDOR.md 留痕），若要做多 Agent 避让/路径跟随需另起一轮开工闸（vendored 子集 + 三处实读 + 用户拍板）。viewer 面板的动态障碍交互按钮亦留用户点名再做（M-N2 面板闭环已收官，本轮按拍板边界不加）。
 
 ## 7. M-N2 验收记录（2026-11-11）
 
@@ -82,6 +85,27 @@
 ## 8. M-N2 踩坑（写实）
 
 1. **HudFrame POD 每帧重建 vs 面板写回**：`HudFrame hud{}` 每帧值初始化，面板改的 `st.stage` 下一帧归零——viewer 侧「st.stage != navStage 就采纳面板」的判定把 POD 归零当成面板改动，反过来把 cvar `nav.stage` 踩回 0（实测首帧 bake 成功、第二帧阶段被重置）。**铁律：HudFrame 双向字段必须走边沿标志（`stageDirty`/`paramsChanged`/`bakeRequested`），显示状态（status/prims/bounds）由 viewer 持久变量每帧无条件回填**——与 cull/color 既有双向通道同款纪律，但「检测差异」不能建立在 POD 旧值上。
-2. **`DetourDebugDraw.cpp` 不入库的下游影响**：M-N0 因 1.6.0 头依赖 `DetourTileCacheBuilder.h` 剔除该 TU，`duDebugDrawNavMesh*` 不可用——M-N2 NavMesh 阶段自绘（`dtMeshTile` poly fan TRIS + 边界 LINES，`duIntToCol` 配色），与 M-N0 CMake 留痕口径一致。
+2. **`DetourDebugDraw.cpp` 不入库的下游影响**：M-N0 因 1.6.0 头依赖 `DetourTileCacheBuilder.h` 剔除该 TU，`duDebugDrawNavMesh*` 不可用——M-N2 NavMesh 阶段自绘（`dtMeshTile` poly fan TRIS + 边界 LINES，`duIntToCol` 配色），与 M-N0 CMake 留痕口径一致。**M-N3 勘误（2026-11-11）**：TileCache 已按方案 A 入库，头依赖已满足；重评结论仍是**不启用**该 TU（启用会改 M-N2 自绘 PNG 基线字节），此处不再留「届时重评」挂账，需要上游全套 `duDebugDrawNavMesh*` 时另起一轮验收 + 重拍基线。
 3. **cmdDebugStage 参数回退错位**：自定义参数循环里 `--i` 回退后把 `--size` 的值（768）当选项名喂给 `parseBakeArgs`。修复 = 不回退、直接让 `parseBakeArgs` 从当前位置吃。
 4. **regression `--only` 单值语义再次确认**：一次传多个 `--only` 只生效最后一个（nav-n2 10/10 而非三卡 32 条）——三卡零回归须分开跑（M-N1 已踩过逗号列表跑 0 条，本轮是变体）。
+
+## 9. M-N3 验收记录（2026-11-11，tag `nav-n3`）
+
+- **拍板口径**：用户「按建议来」= ① **方案 A** `DetourTileCache` tiled 增量重烘（不走「全量重烘」备选，实测 4 物体约 500ms/次、50 物体外推 2~4s/次不可用）；② **A-1** `.nnav` 同一容器语义升级 v2，v1 向后兼容，不新增 `.ntcache`。三处实读：上游 `DetourTileCache.h`（`addTile`/`addObstacle`/`removeObstacle`/`update`/`buildNavMeshTilesAt`）+ `RecastDemo/Source/Sample_TempObstacles.cpp`（`rasterizeTileLayers` 逐 tile 切片 + tcparams）、UE `RecastNavMeshGenerator.cpp:1558/1655/2400`（fork 的同套 dtTileCache 接口 + `FRecastTileGenerator`/`FTileCacheCompressor`/`TileSizeUU`）、Carrot 自研静态 AStar 无动态导航不作口径。
+- **交付面**：`thirdparty/recastnavigation/DetourTileCache/` 4 文件入库（2 头 + 2 .cpp，同一锁定 commit `6dc1667f`，**零编辑**）；`nl_recast` CMake 接 sources/include；`Nav.hpp` 新增 `kNavVersionTiled=2` / `TileBuildParams` / `bakeTiled` / `isTiled` / `compressedTileCount` / `obstacleCount` / `addObstacle` / `removeObstacle` / `updateObstacles` / `geometryEntityCount` / `loadGeometryFromScene`；`Nav.cpp` 自写三个注入实现（`TileLinearAllocator` 1 MiB arena 16B 对齐 + `reset()` 回收、`TilePassthroughCompressor` 4B 长度头零新依赖、`TileWalkableMeshProcess` 按 `RC_NULL_AREA` 设 `polyFlags=1`）；`core/src/nav/SceneGeo.cpp` 新建（E1 World JSON → Geometry，组件注册 + `getWorldMatrix()` 父子复合 + meshFile 白名单 + 按 meshFile 缓存 glb）；`nav-tools` 新增 `tilebake` / `obstacle` 子命令 + selftest 锚点 + ctest 9 条。
+- **v2 容器**：magic `NLNV` 与基础段布局同 v1，仅 `version=2`；尾部追加 tiled 扩展段（几何 bbox、`dtTileCacheParams`、`TileBuildParams`/`BuildParams` 逐字段、compressed tile 字节 + `tx/ty/tlayer`）。`save()` 按 `isTiled` 分流，`load()` 按 version 分流；v1 老路径一行不改。禁整块 memcpy struct（padding 破坏确定性），逐字段 `wrScalar`/`rdScalar`。
+- **验收数据**：DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 全绿（M-N0/M-N1/M-N2 锚点零回归 + M-N3 新增 21 项）；ctest `m-n[0123]-nav` **24/24 ×2 后端**（`--repeat until-pass:3`）；VULKAN 树 selftest fnv64 `e7349583a994928d` 与 DX12 一致（跨树确定性）；`regression` nav-n3 22/22 + nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 全 ALL GREEN；`server.py --check` exit 0（kStage 仍 S8.2，A 类轨道不 bump）；`example/nav-n3/run.bat` ALL GREEN（10 段机器断言）。
+- **零回归硬判据**：solo bake `hiz-v1.nnav` 与 `example/nav-m0/hiz-a.nnav` **864 字节逐字节一致**；v2 两次 `tilebake` `fc /b` 一致；v2 `resave` 后 `fc /b` 一致。
+- **动态障碍闭环**：`polysBefore 4 → polysBlocked 3`，`edgesBlocked 12`（3 quads × 4 边，可视化与统计口径一致），`before : OK (2 wp) → blocked : UNREACHABLE (0 wp) → after : OK (2 wp)`，`restored=1`、障碍池清零、`result : PASS`。障碍参数 `--pos -0.35,-1,-1.70 --radius 0.5 --height 3`。
+- **E1 场景**：`example/nav-n3/nav-n3.scene`（3 个 Model entity，`nav-block-child` 挂在位移 `(8,0,0)` 的父下）→ `entities : 3` / `verts/tris : 3972 / 6948` / `tiles : 8` / `polys : 12` / `area 1.50 m²`；selftest 另用两份内联 World JSON fixture 断言「父世界矩阵必须复合进子几何」及 `meshFile` 路径穿越拒绝。规模锚 `example/ecs-e1b/ecs-e1b-scale.scene` 50 个 Model entity / 3970980 verts / 6645600 tris 汇集约 0.6s。
+- **证据图**（均为 nav-tools 软光栅真实输出，768px 俯视正交，非手绘）：`tiles.png`（淡蓝 tile 网格 + 黑 poly 边界）、`obstacle.png`（蓝=无障碍原路径、红=障碍后路径（本例 0 wp 故不可见）、绿圈=圆柱障碍俯视、黑=挖洞后剩余 poly）、`scene-tiles.png`（3 组 HizScene 箱顶 + 8 tile 网格，可见父子层级把第三组推到 x≈8 / z≈4）。
+- **交代物**：`example/nav-n3/`（run.bat + nav-n3.scene + 三张 PNG + `hiz-tiled.nnav` / `hiz-v1.nnav` / `scene-tiled.nnav` 三份基线 + 12 份日志）；cases.json `nav-n3` 卡 11 用例（usage / selftest / tilebake / scene / 50 物体 / dump-v2 / wire-v2 / obstacle / obstacle-v1 / 两条 usage 负向）；`P8-NAV-PLAN.md` 收官留痕 + `MILESTONES.md` 四栏 + `VENDOR.md` 入库子集。
+
+## 10. M-N3 踩坑（写实）
+
+1. **上游 `void` 返回函数被写成布尔判定（C2171 / C2451）**：`rcMarkWalkableTriangles` / `rcFilterLowHangingWalkableObstacles` / `rcFilterLedgeSpans` / `rcFilterWalkableLowHeightSpans` 在 1.6.0 均返回 `void`，照 Solo Mesh 直觉写 `if (!fn(...))` 直接编译失败。修复 = 照 M-N0 bake 同款直接调用，**NVRHI/上游每处调用回 vendored 头核签名**纪律再次生效。
+2. **动态障碍首版完全不影响路径（最重坑）**：`--pos -1.45,0,-1.55 --height 2` 时 before/blocked/after 全 `OK (2 wp)`。先加 `polysBefore/polysBlocked` 诊断确认 tile 确实在重建（4→3），再逐点 dump waypoint 才发现真实吸附折线在 `(-0.35,-0.35,-1.90)→(-0.35,-0.35,-1.50)`，障碍放错箱顶/高度域。**铁律：TileCache 圆柱障碍的 y 区间必须跨过 tile 高度域下界**（HizScene 下界约 -1.35），改 `--pos -0.35,-1,-1.70 --height 3` 后闭环 PASS。诊断用 `dumpWp` 在验收前已清理，正式日志只保留 polys/edges 两行证据。
+3. **v2 load 的 compressed tile 内存所有权**：`dtTileCache::addTile(..., DT_COMPRESSEDTILE_FREE_DATA)` 会让 Detour 用 `dtFree` 释放数据；若直接把 `std::vector` 的 `data()` 交出去，就重演 M-N0 的 `new`/malloc 分配器不匹配 UAF。修复 = 读出的 tile 字节用 `dtAlloc` 分配并 memcpy 后再移交；solo v1 路径继续由 `Impl::ownedTiles` 持有（flags=0）。
+4. **「50 物体锚」的语义陷阱**：现成 E1 场景（`ecs-e1b-scale.scene` 等）全是 Suzanne / IcoSphere / TorusKnot 曲面装饰模型，无水平可走面 → `tiles=0 / polys=0 / area=0` 是**几何语义结果，不是管线故障**（与 M-N0 踩坑 5「小资产 + 粗网格腐蚀吃光」同类）。因此必须另造 `nav-n3.scene` 用 HizScene.glb（含箱顶可走面）验证 NavMesh 正确性，两条证据分开写清，不能用「tiles=0」冒充失败、也不能拿它证明正确。
+5. **`polyEdges()` 与 `stats().polyCount` 的视觉误读**：障碍后 PNG 上黑色方框看着像 4 个，而日志 `polysBlocked : 3`。加 `edgesBlocked : 12` 诊断行后确认 = 3 quads × 4 边，两者口径一致；把 `edgesBlocked: 12` 一并做成 run.bat 机器断言，防止后续看图误判为可视化漏绘。
+6. **展示台 tool 卡 `{out}` 单占位符 + 只读纪律**：`server.py`/`regression.py` 只把**精确等于** `{out}` 的 token 换成临时 `.toolout` 路径，`{out}.png` 这类拼接会抛 `unresolved placeholder`。而 `tilebake` 同时需要 `.nnav` 与 PNG 两个输出，若把 `.nnav` 写成 `{root}/example/nav-n3/hiz-tiled.nnav` 就等于回归时重写仓库归档基线。修复 = 归档基线只读，证据图卡改用 `wire <归档 v2 基线> {out}`，PNG 走临时路径跑完即删。

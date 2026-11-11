@@ -9,6 +9,9 @@ if(MSVC)
     target_compile_options(nav-tools PRIVATE /W4 /permissive- /utf-8 /bigobj)
     target_compile_definitions(nav-tools PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
+# M-N3：E1 场景 .scene 里的 meshFile 是 basename，需拼 assets/models 绝对路径。
+target_compile_definitions(nav-tools PRIVATE
+    NL_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/models")
 
 # ---- P8 M-N0: nav-tools (Recast/Detour bake/dump, A-class track) ----
 add_test(NAME m-n0-nav-selftest COMMAND nav-tools selftest)
@@ -70,3 +73,56 @@ add_test(NAME m-n2-nav-debug-usage
          COMMAND nav-tools debug-stage ${NL_ROOT}/assets/models/HizScene.glb
                  ${CMAKE_CURRENT_BINARY_DIR}/nav-n2-bad.png --stage bogus)
 set_tests_properties(m-n2-nav-debug-usage PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-N3: DetourTileCache tiled bake + .nnav v2 + dynamic obstacles ----
+# 方案 A（tiled 增量重烘）+ A-1（同一容器 v2，v1 兼容）；A 类轨道不进渲染回归。
+add_test(NAME m-n3-nav-selftest COMMAND nav-tools selftest --verbose)
+set_tests_properties(m-n3-nav-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
+add_test(NAME m-n3-nav-tilebake
+         COMMAND nav-tools tilebake ${NL_ROOT}/assets/models/HizScene.glb
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-hiz.nnav
+                 --tile-size 32 --cell-size 0.1 --agent-radius 0.2)
+set_tests_properties(m-n3-nav-tilebake PROPERTIES
+    PASS_REGULAR_EXPRESSION "version     : 2")
+add_test(NAME m-n3-nav-dump-v2
+         COMMAND nav-tools dump ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-hiz.nnav)
+set_tests_properties(m-n3-nav-dump-v2 PROPERTIES
+    DEPENDS m-n3-nav-tilebake
+    PASS_REGULAR_EXPRESSION "polys       : [1-9]")
+add_test(NAME m-n3-nav-obstacle
+         COMMAND nav-tools obstacle ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-hiz.nnav
+                 --pos -0.35,-1,-1.70 --radius 0.5 --height 3
+                 --start -1.9,0,-2.1 --end -1.0,0,-1.0)
+set_tests_properties(m-n3-nav-obstacle PROPERTIES
+    DEPENDS m-n3-nav-tilebake
+    PASS_REGULAR_EXPRESSION "result      : PASS")
+# E1 场景：专门造的含可走面场景（3 Model entity，含 parent 层级复合）
+add_test(NAME m-n3-nav-scene
+         COMMAND nav-tools tilebake ${NL_ROOT}/example/nav-n3/nav-n3.scene
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-scene.nnav
+                 --tile-size 32 --cell-size 0.1 --agent-radius 0.2)
+set_tests_properties(m-n3-nav-scene PROPERTIES
+    PASS_REGULAR_EXPRESSION "entities    : 3")
+# 50 物体规模锚：现成 E1 scale 场景（曲面模型无可走面，tiles=0 属几何语义）
+add_test(NAME m-n3-nav-scene-50
+         COMMAND nav-tools tilebake ${NL_ROOT}/example/ecs-e1b/ecs-e1b-scale.scene
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-scale.nnav --tile-size 64)
+set_tests_properties(m-n3-nav-scene-50 PROPERTIES
+    PASS_REGULAR_EXPRESSION "entities    : 50")
+add_test(NAME m-n3-nav-tilebake-usage
+         COMMAND nav-tools tilebake ${NL_ROOT}/assets/models/HizScene.glb
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-bad.nnav --tile-size 1)
+set_tests_properties(m-n3-nav-tilebake-usage PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n3-nav-obstacle-usage
+         COMMAND nav-tools obstacle ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-hiz.nnav)
+set_tests_properties(m-n3-nav-obstacle-usage PROPERTIES
+    DEPENDS m-n3-nav-tilebake
+    WILL_FAIL TRUE)
+# v1 solo 容器必须被 obstacle 明确拒绝（不静默当 tiled 处理）
+add_test(NAME m-n3-nav-obstacle-v1
+         COMMAND nav-tools obstacle ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav
+                 --pos -0.35,-1,-1.70 --start -1.9,0,-2.1 --end -1.0,0,-1.0)
+set_tests_properties(m-n3-nav-obstacle-v1 PROPERTIES
+    DEPENDS m-n1-nav-bake
+    WILL_FAIL TRUE)

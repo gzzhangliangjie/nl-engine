@@ -16,12 +16,12 @@
 - `Recast/{Include,Source}` — NavMesh 生成（体素化 → 高度场 → 区域 → 轮廓 → 多边形网格），10 个 .cpp + 头，无编辑。
 - `Detour/{Include,Source}` — 运行时加载 / 寻路 / 查询（dtNavMesh / dtNavMeshQuery），7 个 .cpp + 头，无编辑。
 - `DebugUtils/{Include,Source}` — `duDebugDraw*` 调试可视化 API（M-N2 五阶段叠加图消费），4 个 .cpp + 头，无编辑。
-  - **例外：`DebugUtils/Source/DetourDebugDraw.cpp` 未编入**（文件已入库但排除在构建外）：上游 1.6.0 该 TU 头依赖 `DetourTileCacheBuilder.h`，而 TileCache 按计划不入库。M-N2 的 NavMesh 叠加图自绘（`nl/nav NavMesh::polyEdges` 数据面已具备）；届时若确需 `duDebugDrawNavMesh*` 全套，连 TileCache 一起重评（升级纪律同款流程）。
+  - **例外：`DebugUtils/Source/DetourDebugDraw.cpp` 仍未编入**（文件已入库但排除在构建外）：M-N0 剔除理由 = 头依赖 `DetourTileCacheBuilder.h` 而当时 TileCache 未入库；**M-N3 TileCache 已入库、该依赖已满足，但重评结论 = 继续不启用**——M-N2 NavMesh 阶段自绘 PNG 基线字节已锁定，启用上游 TU 会改动 NavMesh 叠加图输出。若将来确需 `duDebugDrawNavMesh*` 全套，单独一轮验收 + 重拍基线（升级纪律同款流程）。
+- `DetourTileCache/{Include,Source}` — **M-N3 补入**（2026-11-11 用户拍板方案 A）：`DetourTileCache.h` / `DetourTileCacheBuilder.h` / `DetourTileCache.cpp` / `DetourTileCacheBuilder.cpp` 共 4 文件，取自同一锁定 commit `6dc1667f`（本地只读 clone `E:/UE_STUDY_2026/_tmp_recast` 实证 HEAD），**无编辑**，ZLib 同一 `License.txt` 覆盖。用途 = tiled 增量重烘 + 动态障碍（`addObstacle`/`removeObstacle`/`update`）。
 - `License.txt` — 上游许可证原文，无编辑。
-- `CMakeLists.txt` — **nl-engine 自写薄脚本**（唯一非上游文件）：单静态目标 `nl_recast`，源文件显式枚举。不直接 `add_subdirectory` 上游模块脚本的原因：上游脚本带 SOVERSION/LIB_VERSION（依赖仓库根变量）、install() 导出，且 DebugUtils 链接 `DetourTileCache`（本轨道默认不入库）。
+- `CMakeLists.txt` — **nl-engine 自写薄脚本**（唯一非上游文件）：单静态目标 `nl_recast`，源文件显式枚举。不直接 `add_subdirectory` 上游模块脚本的原因：上游脚本带 SOVERSION/LIB_VERSION（依赖仓库根变量）、install() 导出，且 DebugUtils 链接 `DetourTileCache`（M-N0 时未入库；M-N3 已补入但仍维持薄脚本，避免引入上游 install/导出链）。
 
 Intentionally **not** vendored：
-- `DetourTileCache/` — tiled 流式与增量重烘，视 M-N3 动态物体需求再纳入（P8-NAV-PLAN §架构约束）。
 - `DetourCrowd/` — 群体避障，M-N4 可选项，默认不做。
 - `RecastDemo/` — 依赖 SDL/OpenGL，违反构建链纪律；`Sample_SoloMesh.cpp`（烘焙流水线样板）与 `NavMeshTesterTool.cpp`（查询样板）**只读作参照，不抄代码**。
 - `Tests/`、`Docs/`（doxygen 工程）、`.github/`、根 CMakeLists 等仓库管理文件。

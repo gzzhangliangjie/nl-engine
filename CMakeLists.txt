@@ -206,6 +206,7 @@ add_library(nl_core STATIC
 
     core/src/nav/Nav.cpp       # P8 M-N0：nl/nav 集成层（PIMPL，core 内唯一 Recast/Detour 符号面）
     core/src/nav/GeoLoad.cpp   # P8 M-N2：glb 几何汇集共享层（viewer 面板与 nav-tools 同源）
+    core/src/nav/SceneGeo.cpp  # P8 M-N3：E1 场景 World JSON -> nav Geometry（组件 + 层级变换）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）

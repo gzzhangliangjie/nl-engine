@@ -66,6 +66,14 @@ struct BuildStats {
 // viewer 的 --nav-panel 面板烘焙只走 glb）。零第三方符号入头文件。
 bool loadGeometryFromGltf(const char* path, Geometry& out, std::string& outError);
 
+// M-N3：E1 场景几何汇集 —— nl::scene World JSON（.scene）→ Geometry。
+// 吃 ModelComponent.meshFile + TransformComponent 世界矩阵（含父子层级复合），
+// meshDir 是 glb 资产目录（如 ${NL_ROOT}/assets/models）；meshFile 白名单同
+// viewer --scene（basename + .glb，拒路径穿越）。按 mesh 缓存避免重复加载。
+int  geometryEntityCount(const char* scenePath, std::string& outError);
+bool loadGeometryFromScene(const char* scenePath, const char* meshDir,
+                           Geometry& out, std::string& outError);
+
 // ---- M-N2：五阶段调试可视化（上游 DebugUtils duDebugDraw 口径）----
 // 落地形态（P8-NAV-PLAN 拍板语义内）：nl/nav 只产出 POD 图元流，消费端两处——
 // nav-tools debug-stage 软光栅 PNG（证据图取工具真实输出）+ viewer NavPanel
@@ -106,8 +114,22 @@ bool debugStageFromName(const char* name, DebugStage& out);  // 解析（小写�
 //   dtNavMeshParams 原样落盘：f32 orig[3], f32 tileWidth/tileHeight, i32 maxTiles/maxPolys
 //   u32 tileCount；每 tile：u32 dataBytes + 原始 tile 字节（dtCreateNavMeshData 产物）
 // 全部小端、无对齐 padding（逐字段 fwrite），同参数产物逐字节可复现（MD5 硬判据）。
+// v1 = Solo Mesh（M-N0）；**v2 = tiled（M-N3 拍板 A-1）**：基础段布局完全同 v1
+// （version 字段=2），尾部追加 tiled 扩展段：tcparams/buildParams 参数 +
+// dtTileCache compressed tile 数据（每个含 tx/ty/tlayer）。loader 按 version
+// 分流：v1 走原路径（老基线字节零回归）；v2 走 tiled 重建（动态障碍能力保留）。
 inline constexpr char kNavMagic[4] = {'N', 'L', 'N', 'V'};
-inline constexpr std::uint16_t kNavVersion = 1;
+inline constexpr std::uint16_t kNavVersion = 1;       // Solo Mesh（M-N0 起）
+inline constexpr std::uint16_t kNavVersionTiled = 2;  // TileCache tiled（M-N3 起）
+
+// ---- M-N3：tiled 烘焙参数（方案 A / A-1 拍板）----
+// 复用 BuildParams 的换算口径（cellSize/agent* 等），新增上游 tileSize（体素/边）
+// 与障碍池上限。tileSize=48 是上游 RecastDemo Sample_TempObstacles 默认值。
+struct TileBuildParams {
+    BuildParams base;
+    int  tileSize     = 48;   // 每 tile 边长（体素数）
+    int  maxObstacles = 128;  // 动态障碍池上限（dtTileCacheParams）
+};
 
 // ---- NavMesh：bake 产物持有者（PIMPL）----
 class NavMesh {
@@ -183,6 +205,22 @@ public:
     // 返回 false 且 outError 带可读原因。
     bool debugDrawStage(DebugStage stage, DebugPrims& out,
                         std::string& outError) const;
+
+    // ---- M-N3：tiled 增量重烘 + 动态障碍（方案 A / A-1）----
+    // bakeTiled：几何 -> 逐 tile rasterizeTileLayers -> dtTileCache compressed tile
+    // -> dtNavMesh tiled tiles（上游 Sample_TempObstacles 主流程口径）。与 Solo
+    // Mesh bake 是两条独立路径；save 写 v2，load 按 version 分流。
+    bool bakeTiled(const Geometry& geo, const TileBuildParams& params,
+                   std::string& outError);
+    bool isTiled() const;
+    int  compressedTileCount() const;  // dtTileCache 内有效 compressed tile 数
+    int  obstacleCount() const;        // 当前已处理的动态障碍数
+    // 圆柱障碍：addObstacle 立即触发 update 到 upToDate（只重建受影响 tile）；
+    // removeObstacle 同样。ref 供移除用。查询直接消费更新后的 dtNavMesh。
+    bool addObstacle(const float pos[3], float radius, float height,
+                     std::uint32_t& outRef, std::string& outError);
+    bool removeObstacle(std::uint32_t ref, std::string& outError);
+    bool updateObstacles(std::string& outError);
 
 private:
     struct Impl;

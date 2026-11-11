@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "nextID": 5,
+  "ambient": 0.9,
+  "systems": [],
+  "entities": [
+    {
+      "id": 1,
+      "name": "nav-block-a",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "HizScene.glb",
+          "tint": [0.55, 0.62, 0.70],
+          "roughness": 0.8,
+          "metallic": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "nav-block-b",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [8.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "HizScene.glb",
+          "tint": [0.55, 0.62, 0.70],
+          "roughness": 0.8,
+          "metallic": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "nav-block-child",
+      "flags": 0,
+      "parent": 2,
+      "components": {
+        "Transform": {
+          "position": [0.0, 0.0, 4.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "HizScene.glb",
+          "tint": [0.55, 0.62, 0.70],
+          "roughness": 0.8,
+          "metallic": 0.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "key-light",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [0.4, -0.8, 0.45],
+          "color": [4.2, 3.99, 3.696],
+          "intensity": 2.2
+        }
+      }
+    }
+  ]
+}

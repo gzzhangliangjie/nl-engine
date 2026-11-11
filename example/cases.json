@@ -8435,6 +8435,207 @@
    ]
   },
   {
+   "id": "nav-n3",
+   "label": "P8 M-N3",
+   "name": "场景集成：DetourTileCache tiled 增量重烘 + .nnav v2 + 动态障碍",
+   "tag": "nav-n3",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第四里程碑（2026-11-11 开工闸拍板：方案 A + A-1）。方案 A = DetourTileCache tiled 增量重烘（上游 1.6.0 Sample_TempObstacles 官方样板 + UE FRecastTileGenerator 同方案；全量重烘实测 4 物体约 500ms/次、50 物体外推 2~4s/次不可用）。A-1 = .nnav 容器语义升级 v2：magic 与基础段布局不变、version 字段分流，尾部追加 tiled 扩展段（bbox / dtTileCacheParams / TileBuildParams / compressed tile 数据 / tx,ty,tlayer），loader 兼容 v1，M-N0~M-N2 老基线字节零回归。vendored 补入 DetourTileCache 4 文件（同一锁定 commit 6dc1667f，零编辑），自写三个注入实现：TileLinearAllocator（1MiB arena）/ TilePassthroughCompressor（4B 长度头，零新依赖）/ TileWalkableMeshProcess（polyFlags=1）。E1 场景集成 = core/src/nav/SceneGeo.cpp 吃 nl::scene World JSON 的 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（含父子层级复合），按 meshFile 缓存 glb。动态障碍 = addObstacle/removeObstacle/updateObstacles，只重建受影响 tile。viewer 面板本轮不加障碍交互按钮（M-N2 闭环已收官，留用户点名再做）。",
+   "acceptance": [
+    "selftest 全绿：M-N0/M-N1/M-N2 锚点零回归 + M-N3 新增 21 项锚点（v2 逐字节确定性 / roundtrip / v1 兼容 / 障碍闭环 / E1 层级复合 / 白名单负向）",
+    "v1 零回归硬判据：solo bake 产物与 example/nav-m0/hiz-a.nnav 864 字节逐字节一致；v2 两次 bake fc /b 一致、resave 后 fc /b 一致",
+    "动态障碍闭环：polys 4→3、edgesBlocked 12（3 quads × 4 边，可视化与统计一致）、before OK (2 wp) → blocked UNREACHABLE (0 wp) → after OK (2 wp)、restored=1、障碍池清零",
+    "E1 场景：nav-n3.scene 3 Model entity / 3972 verts / 6948 tris → 8 tiles / 12 polys；ecs-e1b-scale.scene 50 entity / 6645600 tris 汇集约 0.6s（曲面模型无可走面，tiles=0 属几何语义）",
+    "ctest m-n[0123]-nav-* 24/24（含 tilebake / dump-v2 / obstacle / scene / 50 物体 / 三条 WILL_FAIL 负向）；example/nav-n3 run.bat ALL GREEN（10 段断言 + 三张工具真实输出 PNG）",
+    "交代物：example/nav-n3/（run.bat + nav-n3.scene + 三张 PNG + 三份 .nnav 基线 + 日志）+ 本卡 11 用例 + NAV-TOOLS-GUIDE.md §9/§10 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 tilebake / obstacle 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0/1/2 锚点 + M-N3 tiled / v2 / 动态障碍 / 场景层级锚点",
+     "kind": "tool",
+     "note": "M-N3 新增：两次 tiled bake 逐字节一致 / v2 load+resave 逐字节一致 / 加障碍路径被打断 / 移除后折线逐点恢复且障碍池清零 / v1 load 仍 solo 且拒绝障碍 / 非法 tileSize 拒绝 / E1 World JSON 父子世界矩阵复合 / meshFile 路径穿越白名单拒绝。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "tilebake",
+     "name": "tilebake：HizScene.glb → .nnav v2 tiled 容器（2 tiles / 4 polys）",
+     "kind": "tool",
+     "note": "方案 A：逐 tile rcBuildHeightfieldLayers + dtBuildTileCacheLayer 压成 compressed tile，dtTileCache::addTile 后 buildNavMeshTilesAt 生成 dtNavMesh tile。version=2 与 M-N0 v1 同容器分流。",
+     "args": [
+      "tilebake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--tile-size",
+      "32",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "version     : 2",
+     "command": "nav-tools tilebake assets/models/HizScene.glb <out> --tile-size 32 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "tilebake-scene",
+     "name": "tilebake .scene：E1 World JSON 几何汇集（3 Model entity，含父子层级）",
+     "kind": "tool",
+     "note": "吃 ModelComponent.meshFile + TransformComponent.getWorldMatrix()（父变换复合进子几何），按 meshFile 缓存 glb；8 tiles / 12 polys。selftest 另有两份内联 fixture 断言 parent 复合生效。",
+     "args": [
+      "tilebake",
+      "{root}/example/nav-n3/nav-n3.scene",
+      "{out}",
+      "--tile-size",
+      "32",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "entities    : 3",
+     "command": "nav-tools tilebake example/nav-n3/nav-n3.scene <out> --tile-size 32 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "tilebake-50",
+     "name": "tilebake .scene：E1 50 物体规模锚（ecs-e1b-scale.scene）",
+     "kind": "tool",
+     "note": "50 个 Model entity / 3970980 verts / 6645600 tris 汇集耗时约 0.6s。现成 E1 场景全是曲面装饰模型、无水平可走面，tiles=0 / polys=0 属几何语义结果，不是管线故障；可走面正确性由 tilebake-scene 与 tilebake 卡覆盖。",
+     "args": [
+      "tilebake",
+      "{root}/example/ecs-e1b/ecs-e1b-scale.scene",
+      "{out}",
+      "--tile-size",
+      "64"
+     ],
+     "expectExit": 0,
+     "expectLog": "entities    : 50",
+     "command": "nav-tools tilebake example/ecs-e1b/ecs-e1b-scale.scene <out> --tile-size 64"
+    },
+    {
+     "id": "dump-v2",
+     "name": "dump：读回 v2 容器统计（polys / fnv64）",
+     "kind": "tool",
+     "note": "v2 基础段布局同 v1，尾部追加 tiled 扩展段；dump 只读基础统计，7276 字节 / fnv64 404a98fcacdd6b75。",
+     "args": [
+      "dump",
+      "{root}/example/nav-n3/hiz-tiled.nnav"
+     ],
+     "expectExit": 0,
+     "expectLog": "polys       : 4",
+     "command": "nav-tools dump example/nav-n3/hiz-tiled.nnav"
+    },
+    {
+     "id": "wire-v2",
+     "name": "wire：v2 tiled 容器俯视线框证据图（工具真实输出）",
+     "kind": "tool",
+     "note": "读归档 v2 基线画 dtNavMesh poly 边界（4 quads = 16 edges），只读仓库文件、PNG 输出走展示台 {out} 临时路径。tile 网格图 tiles.png / 障碍对比图 obstacle.png / E1 场景图 scene-tiles.png 归档在 example/nav-n3/，均由 nav-tools 软光栅真实输出，非手绘。",
+     "args": [
+      "wire",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "edges       : 16",
+     "command": "nav-tools wire example/nav-n3/hiz-tiled.nnav <out> --size 768"
+    },
+    {
+     "id": "obstacle",
+     "name": "obstacle：动态障碍闭环（add → blocked → remove → restored）",
+     "kind": "tool",
+     "note": "圆柱障碍经 dtTileCache::addObstacle + update 只重建受影响 tile：polys 4→3、edges 12（3 quads）、原路径变 UNREACHABLE；removeObstacle 后折线逐点恢复且障碍池清零。result=PASS。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "--pos",
+      "-0.35,-1,-1.70",
+      "--radius",
+      "0.5",
+      "--height",
+      "3",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0"
+     ],
+     "expectExit": 0,
+     "expectLog": "result      : PASS",
+     "command": "nav-tools obstacle example/nav-n3/hiz-tiled.nnav --pos -0.35,-1,-1.70 --radius 0.5 --height 3 --start -1.9,0,-2.1 --end -1.0,0,-1.0"
+    },
+    {
+     "id": "obstacle-v1",
+     "name": "obstacle 负向：v1 solo 容器必须明确拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "v1 无 dtTileCache，静默当 tiled 处理会掩盖错误。A-1 兼容口径 = v1 老路径一行不改、只读可用，不获动态障碍能力。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-v1.nnav",
+      "--pos",
+      "-0.35,-1,-1.70",
+      "--start",
+      "-1.9,0,-2.1",
+      "--end",
+      "-1.0,0,-1.0"
+     ],
+     "expectExit": 1,
+     "expectLog": "nav-tools obstacle: not a tiled navmesh (use tilebake, v2)",
+     "command": "nav-tools obstacle example/nav-n3/hiz-v1.nnav --pos -0.35,-1,-1.70 --start -1.9,0,-2.1 --end -1.0,0,-1.0"
+    },
+    {
+     "id": "tilebake-usage",
+     "name": "tilebake 负向：--tile-size 越界（退出码 2）",
+     "kind": "tool",
+     "note": "tileSize 硬闸 [8, 256]；越界直接用法错误，不进入栅格化。",
+     "args": [
+      "tilebake",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--tile-size",
+      "1"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools tilebake: --tile-size must be in [8, 256]",
+     "command": "nav-tools tilebake assets/models/HizScene.glb <out> --tile-size 1"
+    },
+    {
+     "id": "obstacle-usage",
+     "name": "obstacle 负向：缺 --pos/--start/--end（退出码 2）",
+     "kind": "tool",
+     "note": "三端点必填，缺一即用法错误，不做默认坐标猜测。",
+     "args": [
+      "obstacle",
+      "{root}/example/nav-n3/hiz-tiled.nnav"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools obstacle: --pos/--start/--end are required",
+     "command": "nav-tools obstacle example/nav-n3/hiz-tiled.nnav"
+    }
+   ]
+  },
+  {
    "id": "s10-probe",
    "label": "S10.1",
    "name": "屏幕探针八面体辐照度追踪 + viz（M10.1）",

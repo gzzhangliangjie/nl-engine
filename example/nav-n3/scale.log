@@ -1,0 +1,15 @@
+input       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\..\..\example\ecs-e1b\ecs-e1b-scale.scene
+mode        : tiled
+entities    : 50
+verts/tris  : 3970980 / 6645600
+tileSize    : 64
+tiles       : 0
+navmesh     : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\..\..\build\dx12\nav-n3-scale.nnav
+walkable tri: 6645600
+polys       : 0
+verts       : 0
+detail tris : 0
+area        : 0.00 m^2
+bounds      : (-11.49, -5.40, -1.75)-(11.49, 5.40, 1.77)
+version     : 2
+saved       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n3\..\..\build\dx12\nav-n3-scale.nnav
