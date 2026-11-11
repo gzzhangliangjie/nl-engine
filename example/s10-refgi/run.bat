@@ -17,7 +17,7 @@ rem   - reference-gi re-shot on both backends exits 0, deviceErrors=0
 rem   - re-shot == frozen baseline (bytes; 1024 spp deterministic accumulation)
 rem   - log anchor: reference-gi: 1024 / 1024 spp (100%)
 rem   - trend gate: probe gather baseline vs GI reference tile-luma pearson
-rem     (Q3 errata: trend ruler, not per-pixel judge; measured 0.960 / MAD 3.4)
+rem     (Q3 errata: trend ruler, not per-pixel judge; measured 0.959 / MAD 3.5 after Q11-2b reopen)
 rem   - --compare overlay smoke: exit 0, deviceErrors=0, right half matches
 rem     reference mean (python spot check)
 rem   - negative: missing model exits nonzero

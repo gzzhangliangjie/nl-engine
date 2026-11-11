@@ -483,12 +483,12 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
             giray.TMin      = 0.001f;                                  // rt.slang/bevy 口径
             giray.TMax      = 1.0e4f;                                  // 截太小漏天光（bevy 注释）
             float3 lin = skyGradient(d);                               // miss 默认 → 天穹（Q12-3）
-            // ⚠️ 命中面 GI 段（M10.3 二分遗留形态）：`g_refSamplesStart ==
-            // 0xdeadbeefu` 正常恒 false —— s10-refgi 冻结基线的 GI 项实为
-            // 纯天穹（本段从不执行）。段内容 = probe_trace hit 分支同口径，
-            // 留作 M11.2 探针查缓存后重开此段的现成实现；重开必须重拍
-            // s10-refgi 基线（单独拍板，禁顺手改形态）。
-            if (g_refSamplesStart == 0xdeadbeefu)
+            // Q11-2b 重开（2026-11-12 用户拍板）：命中面 GI 段原被
+            // `g_refSamplesStart == 0xdeadbeefu` 守卫恒 false 跳过（s10-refgi
+            // 冻结基线实为纯天穹）。现改 `if (true)` 无条件执行 = 真·单弹射
+            // GI 名义（hit→giAlbedo×(直光+amb)，与 probe_trace hit 分支同口径）。
+            // 段内逻辑未动；重开须重拍 s10-refgi 4 张基线 + 重标定 trend 门。
+            if (true)
             {
                 RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> gq;
                 gq.TraceRayInline(g_tlas,
