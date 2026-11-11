@@ -30,6 +30,8 @@ cbuffer ProbeConstants : register(b0)
     // [4..] 可视化侧字段（probe_viz.slang 读；本文件不用，共用一份 CB 少建一 buffer）
     float4x4 g_vizViewProj;    // 本帧 viewProj（atlas 世界位置反投影回屏幕）
     float4   g_vizParams;      // x=dotRadiusPx y=width z=height w=baseRes
+    float4   g_vizExtra;       // M10.1：x=dotMode（0=级别色 / 1=八面体辐照度采样）
+                               //（192B 布点侧无感，只扩容不改已用字段）
 }
 
 Texture2D          g_probeDepth  : register(t0);   // D32（velocity pass 写入）

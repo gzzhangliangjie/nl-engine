@@ -1,0 +1,18 @@
+// M10.1 (S10): 解析渐变天穹 — 探针 miss 天光（S10-PLAN M10.1，2026-11-11 Q12-3
+// 拍板：bevy atmosphere.wesl 简化版）。zenith/horizon 两色 + 方向余弦混合，
+// 地平线以下压暗（地面反弹弱）。常量化在此头（自检「天光渐变正确」= miss texel
+// 颜色由本函数确定性输出）；渲染背景暂不替换（仍 clearColor，M10.3 可选切换）。
+// S10/S12 复用。
+
+float3 skyGradient(float3 dir)
+{
+    // 常量与 M9.x 清屏色族（kColors[0] 深蓝 0.05/0.08/0.15）区分开：
+    // 天穹整体更亮更蓝，探针辐照度的「朝天亮」趋势才可见。
+    const float3 zenith  = float3(0.16f, 0.30f, 0.58f);
+    const float3 horizon = float3(0.62f, 0.71f, 0.84f);
+    const float t = saturate(dir.y);
+    float3 c = lerp(horizon, zenith, pow(t, 0.6f));
+    // 地平线以下（dir.y<0）压暗到 35%：八面体下半球 miss 有可辨识的暗地面色。
+    c *= lerp(0.35f, 1.0f, saturate(dir.y * 4.0f + 1.0f));
+    return c;
+}

@@ -1,0 +1,51 @@
+// M10.1 (S10): 八面体映射头文件 — 方向 ↔ 八面体 texel（S10-PLAN M10.1，S12 复用）。
+//
+// 布局口径（2026-11-11 Q12-2 拍板 + GI-RESEARCH-NOTES §1 精读）：
+//   core N×N texel + 1 texel border ring = (N+2)² 存储（UE ScreenProbeGather
+//   OctahedronResolutionWithBorder 口径）。border texel 经 wrap 回绕到对侧
+//   core texel（UE OctahedralMapWrapBorder 语义：border texel 与某 core texel
+//   方向相同，双线性采样跨 seam 时取到对侧值 → 无缝）。M10.1 无 mip，border
+//   在 trace 时就按 wrap 方向直接算（单 pass 填满整张含边框图）；S12 落 mip
+//   时在带边框图上逐级做（研究笔记口径）。
+//
+// 映射公式（八面体标准定义，方向须已归一化）：
+//   dir → uv：d = dir/(|x|+|y|+|z|)；uv = d.xy；d.z<0 时折叠
+//             uv = (1-|d.yx|)·signNotZero(d.xy)。
+//   uv → texel：t = floor((uv·0.5+0.5)·N)，clamp 到 [0,N-1]（core 内）。
+//   texel → dir（trace 用）：core texel 中心 uv = ((i+0.5)/N)·2-1；
+//             z = 1-|uv.x|-|uv.y|；z≥0 直取，z<0 反折叠回八面体球面。
+
+float2 octaSignNotZero(float2 v)
+{
+    return select(v >= float2(0.0f, 0.0f), float2(1.0f, 1.0f), float2(-1.0f, -1.0f));
+}
+
+// 方向 → core texel 坐标 [0, N-1]²（viz 采样用；采样时配 border 格偏移 +1）。
+int2 octaDirToTexel(float3 dir, uint coreRes)
+{
+    const float3 d = dir / (abs(dir.x) + abs(dir.y) + abs(dir.z));
+    float2 uv = d.xy;
+    if (d.z < 0.0f)
+        uv = (1.0f - abs(d.yx)) * octaSignNotZero(d.xy);
+    const float2 f = (uv * 0.5f + 0.5f) * float(coreRes);
+    const int2 t = int2(floor(f));
+    return clamp(t, int2(0, 0), int2(int(coreRes) - 1, int(coreRes) - 1));
+}
+
+// 存储 texel（含 border，范围 [-1, N]）→ 方向。border texel wrap 到对侧 core
+// texel（同方向，见文件头）；整除负数语义用两段取模保证非负。
+float3 octaTexelToDir(int2 texel, uint coreRes)
+{
+    const int n = int(coreRes);
+    const int2 core = ((texel % n) + n) % n;
+    const float2 uv = ((float2(core) + 0.5f) / float(coreRes)) * 2.0f - 1.0f;
+    const float z = 1.0f - abs(uv.x) - abs(uv.y);
+    float3 dir;
+    if (z >= 0.0f)
+        dir = float3(uv.x, uv.y, z);
+    else
+        dir = float3(octaSignNotZero(float2(uv.x, uv.y)).x * (1.0f - abs(uv.y)),
+                     octaSignNotZero(float2(uv.x, uv.y)).y * (1.0f - abs(uv.x)),
+                     z);
+    return normalize(dir);
+}

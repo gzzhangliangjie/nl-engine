@@ -949,6 +949,20 @@ private:
     nvrhi::BindingSetHandle      refPresentSet_;             // ensureRtTargets 建
     nvrhi::BufferHandle          refConstants_;              // volatile CB 16B（b4/b1 累积参数）
 
+    // ---- M10.1：probe 探针追踪（Q12-1/Q12-2/Q12-3 拍板 UE 口径）----
+    // 每探针每八面体 texel 1 条方向射线（8×8 core + 1 texel border = 10×10 存储
+    // texel/探针）；miss → skyGradient 解析天穹；hit → 命中点直光（M9.1 口径
+    // 降级备案：统一 albedo + 无 NdotL，命中点朝主灯 1 条 shadow ray）。
+    // irradiance atlas：每级一张 RGBA16F（res_l·10 × res_l·10），M10.1 无时间
+    // 混合（单份不 ping-pong，降噪归 M10.3/S14）。
+    nvrhi::ShaderHandle          csTrace_;               // probe_trace.cstrace
+    nvrhi::BufferHandle          traceCB_;               // volatile 64B（灯 + 命中材质 + 参数）
+    nvrhi::BindingLayoutHandle   traceLayout_;           // b0 + t0..t3 atlas SRV + t4 TLAS + u0..u3
+    nvrhi::BindingSetHandle      traceSet_[2];           // 每 parity 一份（绑 cur place atlas）
+    nvrhi::ComputePipelineHandle tracePSO_;
+    nvrhi::TextureHandle         irradAtlas_[4];         // RGBA16F（探针格 × 10×10）
+    bool                         probeTraceLogged_ = false; // 追踪日志锚只打一次
+
     // ---- M10.0：probe-place 资源（Q10-1/Q10-2 拍板 UE 口径）----
     // velocity prepass：独立小 pass（vsVelocity/psVelocity）自建 D32 深度
     //（probeDepth_，velocity 写入 + csPlace SRV 读——共享 backend depth_ 是

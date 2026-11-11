@@ -8210,6 +8210,57 @@
      "script": "example/s10-place/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s10-probe",
+   "label": "S10.1",
+   "name": "屏幕探针八面体辐照度追踪 + viz（M10.1）",
+   "tag": "s10-probe",
+   "date": "2026-11-11",
+   "summary": "M10.1（S10 第二步，探针追踪，2026-11-11 用户「按推荐的来」拍板 Q12-1/Q12-2/Q12-3）：① Q12-1 射线预算 = 每探针每八面体 texel 1 条方向射线（8×8=64 条/探针，UE TracingOctahedronResolution=8 口径，勘误 PLAN 旧字面「1 条/探针」）；② Q12-2 = trace 与存储同分辨率 8×8 core + 1 texel border（10×10 存储 texel/探针，octahedral.slangh 落 UE OctahedralMapWrapBorder 口径，S12 复用）；③ Q12-3 = 解析渐变天穹 sky.slangh（zenith/horizon 两色 + 方向余弦混合，bevy atmosphere 简化版），探针 miss 与 M10.2 天光共用，渲染背景暂不替换。csTraceProbe dispatch z=4 级：探针 pos → texel 方向 RayQuery 打 M8 TLAS → miss 天空 / hit 命中点直光（M9.1 口径降级备案：统一 albedo + 无 NdotL + 命中点 shadow ray，origin 沿射线回退 bias）。irradiance atlas 每级一张 RGBA16F（res_l·10²），M10.1 无时间混合。probe-viz 点色 = 探针法线方向八面体采样（法线 probeDepth 3-tap 重建，vs 内重算——「探针→眼睛」方向凸面恒 miss 冒烟实锤后改法线方向；自检「朝天亮=天空蓝 miss、朝暗处黑=hit 阴影 texel」）。模型 = Suzanne-materials.nmesh（三猴头三材质，M7.2 对拍模型；TLAS 需 v3 lod0 NFLB fallback——Suzanne.nmesh 无 fallback trace 降级）。踩坑：CMake _ENTRIES 第二段是产物短后缀（cstrace 非 cstraceprobe，tlas_probe.cs 口径）；traceSet 必须 tlasReady_ 门控懒建（tlas_ null 时 createBindingSet 必败）；viz 采样漏加探针格基址 probeT·10 全黑排查定位。基线 dist=7 双后端 near 39 像素 1 LSB（pow/texel 边界噪声档，frac=0.0075% < 1%）。kStage 仍 S8.2；Q4 冻结面 0 新增独立 GBuffer 资源（viz 法线重建用已有 probeDepth_，零新增）。",
+   "acceptance": [
+    "run.bat verify 八段全绿：双后端 exit 0 + deviceErrors=0 + bytes 2/2 对基线 + 日志锚 probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64 + near dx12/vulkan（39 像素 1 LSB 噪声档）+ dots 门禁 skyBlue 347/346 + 红色级别色残留 0 + 负向 exit 非 0",
+    "双后端 viewer selftest 16/16 + Slang 产物 86/86（新增 probe_trace.cstrace 2 个已登记 kArtifacts=78 防假绿）",
+    "跨后端确定性：同后端重拍 bytes 逐字节一致；探针点色跨后端 near 档一致",
+    "Q4 冻结面 0 新增独立 GBuffer 资源；kStage 仍 S8.2；tag s10-probe"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "probe-viz",
+     "name": "探针八面体辐照度追踪 + 法线方向点色可视化（64 射线/探针）",
+     "kind": "pair",
+     "note": "M10.1 新增 --mode probe-viz：csTraceProbe 每探针每 texel 1 条方向射线（8×8 core + border = 10×10 存储）打 M8 TLAS，miss→解析天穹（sky.slangh 渐变）／hit→命中点直光（M9.1 口径降级：统一 albedo + shadow ray）。点色 = 探针法线方向八面体辐照度采样（法线 = probeDepth 3-tap 重建；空旷场景表面法线多朝天 → 天空蓝 miss 点为主，猴头间遮挡方向呈暗 hit 点 = 方向合理性画面证据）。模型 Suzanne-materials.nmesh 三猴头（TLAS fallback 需要）。基线取自 tag s10-probe 构建产物（双后端）。同名 .json 侧车记录相机/trace 参数。跨后端 near 39 像素 1 LSB（射线边界 + pow 噪声档）。",
+     "baselines": {
+      "dx12": "example/s10-probe/probe-dx12.png",
+      "vulkan": "example/s10-probe/probe-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "probe-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode probe-viz --model Suzanne-materials.nmesh --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "script": "example/s10-probe/run.bat verify"
+    }
+   ]
   }
  ]
 }

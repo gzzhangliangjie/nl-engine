@@ -123,6 +123,8 @@ struct FrameParams {
     int   probeBaseRes      = 16;     // 0 级 cascade 分辨率（4..32；1~3 级逐级减半）
     float probeNormalOffset = 0.10f;  // 法线偏移系数（× 探针世界间距，UE NormalBias 口径）
     float probeDotSize      = 3.0f;   // viz 点半径（px）
+    bool  probeVizIrradiance = false; // M10.1：--mode probe-viz（点色 = 八面体辐照度
+                                      // 采样；false = probe-place 级别色点，保形）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。

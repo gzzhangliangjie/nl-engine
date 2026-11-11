@@ -45,10 +45,11 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 76 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 78 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
-// rt 6（M8.2）+ direct.cs 4（M9.0/M9.2）+ velocity/probe/probe_viz 10（M10.0）。
+// rt 6（M8.2）+ direct.cs 4（M9.0/M9.2）+ velocity/probe/probe_viz 10（M10.0）+
+// probe_trace.cstrace 2（M10.1）。
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -109,6 +110,8 @@ static const Artifact kArtifacts[] = {
     {"probe.csplace", true}, {"probe.csplace", false},
     {"probe_viz.vsprobedots", true}, {"probe_viz.vsprobedots", false},
     {"probe_viz.psprobedots", true}, {"probe_viz.psprobedots", false},
+    // M10.1：probe_trace.slang 单 compute 入口（探针追踪，Q12-1/2 拍板）× 双目标 = 2。
+    {"probe_trace.cstrace", true}, {"probe_trace.cstrace", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

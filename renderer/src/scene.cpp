@@ -3007,14 +3007,15 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!loadShader("velocity.vsvelocity", nvrhi::ShaderType::Vertex, vsVelocity_) ||
         !loadShader("velocity.psvelocity", nvrhi::ShaderType::Pixel, psVelocity_) ||
         !loadShader("probe.csplace", nvrhi::ShaderType::Compute, csPlace_) ||
+        !loadShader("probe_trace.cstrace", nvrhi::ShaderType::Compute, csTrace_) ||
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
 
-    // probeCB_（176B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
-    // 批内差异字段必须进写入面——§2.15 纪律）。
+    // probeCB_（192B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
+    // 批内差异字段必须进写入面——§2.15 纪律）。M10.1 扩 176→192B（g_vizExtra）。
     nvrhi::BufferDesc cbDesc;
-    cbDesc.byteSize = 176;
+    cbDesc.byteSize = 192;
     cbDesc.isConstantBuffer = true;
     cbDesc.isVolatile = true;
     cbDesc.maxVersions = 16;
@@ -3032,6 +3033,17 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     vcbDesc.debugName = "VelocityConstants";
     velocityCB_ = device->createBuffer(vcbDesc);
     if (!velocityCB_) { outError = "createBuffer failed for velocity constants"; return false; }
+
+    // traceCB_（64B volatile，M10.1）：probe_trace.slang 布局
+    //（[0..3] 灯向 / [4..7] 灯色·强度 / [8..11] 命中 albedo·ambient / [12..15] 参数）。
+    nvrhi::BufferDesc tcbDesc;
+    tcbDesc.byteSize = 64;
+    tcbDesc.isConstantBuffer = true;
+    tcbDesc.isVolatile = true;
+    tcbDesc.maxVersions = 16;
+    tcbDesc.debugName = "TraceConstants";
+    traceCB_ = device->createBuffer(tcbDesc);
+    if (!traceCB_) { outError = "createBuffer failed for trace constants"; return false; }
 
     // ---- velocity prepass 布局：b0 + t1..t4（pulling 几何池，visbuf.slang 同槽）。
     nvrhi::BindingLayoutDesc vDesc;
@@ -3058,7 +3070,7 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     placeLayout_ = device->createBindingLayout(pDesc);
     if (!placeLayout_) { outError = "createBindingLayout failed for probe place"; return false; }
 
-    // ---- dots 布局：b0 + t0..t4 SRV。
+    // ---- dots 布局：b0 + t0..t4 SRV + t5..t8 irradiance SRV（M10.1）。
     nvrhi::BindingLayoutDesc dDesc;
     dDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
@@ -3066,9 +3078,30 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
-        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4));
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(7))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(8))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(9));
     dotsLayout_ = device->createBindingLayout(dDesc);
     if (!dotsLayout_) { outError = "createBindingLayout failed for probe dots"; return false; }
+
+    // ---- csTrace 布局（M10.1）：b0 + t0..t3 place atlas SRV + t4 TLAS + u0..u3 UAV。
+    nvrhi::BindingLayoutDesc tDesc;
+    tDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(4))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+    traceLayout_ = device->createBindingLayout(tDesc);
+    if (!traceLayout_) { outError = "createBindingLayout failed for probe trace"; return false; }
 
     {
         nvrhi::ComputePipelineDesc cpDesc;
@@ -3076,6 +3109,13 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         placePSO_ = device->createComputePipeline(cpDesc);
     }
     if (!placePSO_) { outError = "createComputePipeline failed for probe place"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csTrace_).addBindingLayout(traceLayout_);
+        tracePSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!tracePSO_) { outError = "createComputePipeline failed for probe trace"; return false; }
 
     nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
@@ -3156,6 +3196,25 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         if (!probePrevDelta_) { outError = "createTexture failed for probe prevDelta"; return false; }
     }
 
+    // irradiance atlas（M10.1）：每级一张 RGBA16F，每探针占 (oct+2)²=10×10 格
+    //（8 core + 1 texel border，Q12-2）。M10.1 无时间混合 → 单份不 ping-pong。
+    // 创建态 = SRV（与帧首 beginTracking 声明对齐，probeDepth_ 同款纪律）。
+    for (std::uint32_t level = 0; level < 4; ++level) {
+        const std::uint32_t res_l = (res >> level) * 10u;
+        nvrhi::TextureDesc iDesc;
+        iDesc.width = res_l;
+        iDesc.height = res_l;
+        iDesc.format = nvrhi::Format::RGBA16_FLOAT;    // HDR 颜色 16F 足够（位置才用 32F）
+        iDesc.isUAV = true;
+        iDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        iDesc.debugName = "ProbeIrradAtlas";
+        irradAtlas_[level] = device->createTexture(iDesc);
+        if (!irradAtlas_[level]) {
+            outError = "createTexture failed for probe irradiance atlas";
+            return false;
+        }
+    }
+
     // 绑定集：velocity 一份（无 parity，绑自己的 144B CB）；place/dots 各两份
     //（atlas 绑定随 parity）。
     {
@@ -3184,8 +3243,27 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         for (std::uint32_t level = 0; level < 4; ++level)
             dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
         dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4, probePrevDelta_));
+        for (std::uint32_t level = 0; level < 4; ++level)
+            dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(5 + level, irradAtlas_[level]));
+        dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(9, probeDepth_));   // M10.1 法线重建
         dotsSet_[parity] = device->createBindingSet(dsDesc, dotsLayout_);
         if (!dotsSet_[parity]) { outError = "createBindingSet failed for probe dots"; return false; }
+
+        // trace set（M10.1）：读 cur parity place atlas + 写 irradiance atlas。
+        // tlasReady_ 门控懒建——无 RT / 无 fallback 几何时 tlas_ 为 null，set
+        // 创建必败（shadow 模式 tlasReady_ 检查同口径降级；TLAS 就绪后的某帧
+        // 补建，drawProbeFrame 的 tlasReady_ 分支保证 dispatch 只在就绪时跑）。
+        if (tlasReady_) {
+            nvrhi::BindingSetDesc tsDesc;
+            tsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, traceCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                tsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+            tsDesc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(4, tlas_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                tsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level, irradAtlas_[level]));
+            traceSet_[parity] = device->createBindingSet(tsDesc, traceLayout_);
+            if (!traceSet_[parity]) { outError = "createBindingSet failed for probe trace"; return false; }
+        }
     }
 
     // velocity PSO（RG16F+D32 framebuffer 格式锁定，照 hiz prepassInfo 先例按
@@ -3209,13 +3287,14 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         if (!velocityPSO_) { outError = "createGraphicsPipeline failed for velocity prepass"; return false; }
     }
 
-    // 一次性日志锚（机器断言用）：级联结构 + 总探针数。
+    // 一次性日志锚（机器断言用）：级联结构 + 总探针数 + 追踪预算。
     if (!probeLogged_) {
         const std::uint32_t total = res * res + (res >> 1) * (res >> 1) +
                                     (res >> 2) * (res >> 2) + (res >> 3) * (res >> 3);
         nl::core::log::info("probe: cascades=4 base=", res,
                             " grid=", res, "/", (res >> 1), "/", (res >> 2), "/", (res >> 3),
-                            " probes=", total);
+                            " probes=", total,
+                            " oct=", 8, " raysPerProbe=", 8 * 8);
         probeLogged_ = true;
     }
     return true;
@@ -3241,12 +3320,15 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
                                               0, nvrhi::TextureSubresourceSet::AllArraySlices);
     // ---- 帧首状态声明（上一帧末态：depth=SRV（csPlace 读）/ velocity=SRV /
-    // prevDelta=SRV（dots 读）/ atlas[cur]=SRV（dots 读））。
+    // prevDelta=SRV（dots 读）/ atlas[cur]=SRV（dots 读）/ irrad=SRV（dots 读））。
     cmd->beginTrackingTextureState(probeDepth_, allSub, nvrhi::ResourceStates::ShaderResource);
     cmd->beginTrackingTextureState(velocity_, allSub, nvrhi::ResourceStates::ShaderResource);
     cmd->beginTrackingTextureState(probePrevDelta_, allSub, nvrhi::ResourceStates::ShaderResource);
     for (std::uint32_t level = 0; level < 4; ++level)
         cmd->beginTrackingTextureState(probeAtlas_[probeParity_][level], allSub,
+                                       nvrhi::ResourceStates::ShaderResource);
+    for (std::uint32_t level = 0; level < 4; ++level)
+        cmd->beginTrackingTextureState(irradAtlas_[level], allSub,
                                        nvrhi::ResourceStates::ShaderResource);
     // ---- 清屏（都在首个 setGraphicsState 之前——Vulkan render pass 纪律）。
     cmd->setTextureState(probeDepth_, allSub, nvrhi::ResourceStates::DepthWrite);
@@ -3270,10 +3352,10 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     vcb[33] = vpH;
     cmd->writeBuffer(velocityCB_, vcb, sizeof(vcb));
 
-    // ---- probeCB_ 每帧全量覆写（176B）：布局见 probe.slang。
+    // ---- probeCB_ 每帧全量覆写（192B）：布局见 probe.slang。
     //   [0..15] invViewProj / [16..19] eye(+projYScale) / [20..23] placeParams /
-    //   [24..39] vizViewProj / [40..43] vizParams。
-    float cb[44] = {};
+    //   [24..39] vizViewProj / [40..43] vizParams / [44..47] vizExtra。
+    float cb[48] = {};
     {
         nl::math::Mat4 vp{}, invVP{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
@@ -3294,8 +3376,25 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cb[41] = vpW;
         cb[42] = vpH;
         cb[43] = static_cast<float>(probeBaseRes_);
+        // vizExtra：dotMode = probe-viz 模式开辐照度点色；TLAS 未就绪时降级回
+        // 级别色（probe-place 保形，无 RT 设备 M10.0 行为不变）。
+        cb[44] = (params.probeVizIrradiance && tlasReady_) ? 1.0f : 0.0f;
     }
     cmd->writeBuffer(probeCB_, cb, sizeof(cb));
+
+    // ---- traceCB_ 每帧全量覆写（64B）：灯参数与 writeResolveConstants 同源
+    //（白光强度 2.5）；命中材质 = M10.1 降级口径（统一 albedo + ambient）；
+    // shadow 参数 = M9.1 g_shadowParams 同值（bias 0.01 / tMax 50）。
+    {
+        const float tcb[16] = {
+            params.lightDir[0], params.lightDir[1], params.lightDir[2], 0.0f,
+            1.0f, 1.0f, 1.0f, 2.5f,
+            0.45f, 0.39f, 0.30f, params.lightDir[3],   // 统一模型色（暖灰）+ 环境光
+            0.01f, 50.0f,
+            static_cast<float>(probeBaseRes_), 8.0f,
+        };
+        cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
+    }
 
     // ---- (1) velocity prepass：与 visRaster 同一间接几何（identityIndex +
     // indirectArgs），换自己的 VS/PS 与 framebuffer（Q10-1 独立 pass 口径）。
@@ -3322,6 +3421,23 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 1u);
+    }
+
+    // ---- (3) csTrace 探针追踪 dispatch（M10.1）：place atlas cur parity SRV ←
+    // 刚写完 → irradiance atlas UAV 写；SRV↔UAV 转换由 trace set require 自动插。
+    // TLAS 未就绪（无 RT / 无 fallback 几何）→ 一次性日志后跳过（probe-place
+    // 的布点/点可视化不受影响，M10.0 行为保形；shadow 模式同口径降级）。
+    if (tlasReady_) {
+        const std::uint32_t store = 10u;
+        nvrhi::ComputeState tstate;
+        tstate.setPipeline(tracePSO_).addBindingSet(traceSet_[probeParity_]);
+        cmd->setComputeState(tstate);
+        cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
+                      ((probeBaseRes_ * store) + 7u) / 8u, 4u);
+    } else if (!probeTraceLogged_) {
+        nl::core::log::info("probe: TLAS not ready (no RT support or no fallback "
+                            "geometry) -- probe tracing disabled");
+        probeTraceLogged_ = true;
     }
 }
 
@@ -6657,28 +6773,36 @@ void Scene::shutdown() {
     probeH_ = 0;
     probeBaseRes_ = 0;
     probeLogged_ = false;
+    probeTraceLogged_ = false;
     vsVelocity_ = nullptr;
     psVelocity_ = nullptr;
     csPlace_ = nullptr;
+    csTrace_ = nullptr;
     vsProbeDots_ = nullptr;
     psProbeDots_ = nullptr;
     velocityCB_ = nullptr;
     probeCB_ = nullptr;
+    traceCB_ = nullptr;
     velocityLayout_ = nullptr;
     velocitySet_ = nullptr;
     placeLayout_ = nullptr;
     placeSet_[0] = nullptr;
     placeSet_[1] = nullptr;
+    traceLayout_ = nullptr;
+    traceSet_[0] = nullptr;
+    traceSet_[1] = nullptr;
     dotsLayout_ = nullptr;
     dotsSet_[0] = nullptr;
     dotsSet_[1] = nullptr;
     velocityPSO_ = nullptr;
     placePSO_ = nullptr;
+    tracePSO_ = nullptr;
     dotsPSO_ = nullptr;
     probeDepth_ = nullptr;
     velocityFb_ = nullptr;
     for (auto& row : probeAtlas_)
         for (auto& t : row) t = nullptr;
+    for (auto& t : irradAtlas_) t = nullptr;
     probePrevDelta_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
