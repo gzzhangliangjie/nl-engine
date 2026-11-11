@@ -146,7 +146,12 @@ float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
     float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL;
     float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
     float3 specular = D * V * F;
-    float3 ambient  = 0.03f * baseColor;
+    // M10.2：g_options.z=1（probe gather 态）时 ambient 置零 = 真替换——间接光
+    // 由 probe_gather.slang csGatherCompose 补上（Q13-2 防双重计费）。probe-viz
+    // 场景渲染走本 matResolve 管线（model.slang psMain 不参与），开关必须落在这；
+    // g_options.z 全路径空闲（g_options.y 被 frustumCull clusterCount /
+    // pbr-naive 开关双重占用，禁复用）。默认 0 = 既有 visbuf/pulling 用例保形。
+    float3 ambient  = ((g_options.z > 0.5f) ? 0.0f : 0.03f) * baseColor;
     float alpha = mat.baseColorFactor.a * baseTex.a;
     float3 encoded = pow(saturate((diffuse + specular) * radiance + ambient), 1.0f / 2.2f);
     return float4(encoded, alpha);
@@ -218,6 +223,11 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
     float3 n = normalize(normal);
     float ndl = abs(dot(n, normalize(g_lightDir.xyz)));
     float3 albedo = base.rgb * 2.2f;
-    float3 lit = min(albedo * (g_lightDir.w + (1.0f - g_lightDir.w) * ndl), 1.0f);
+    // M10.2：g_options.z=1（probe gather 态）时 ambient 因子置零 = 真替换——
+    // 间接光由 probe_gather.slang csGatherCompose 补上（Q13-2 防双重计费）。
+    // probe-viz 场景走本 mode 0 分支（shadePbrGrad 只在 mode 5），开关必须落这；
+    // g_options.z 全路径空闲（g_options.y 被 clusterCount / pbr-naive 双重占用）。
+    const float amb = (g_options.z > 0.5f) ? 0.03f : g_lightDir.w;
+    float3 lit = min(albedo * (amb + (1.0f - amb) * ndl), 1.0f);
     return float4(lit, 1.0f);
 }

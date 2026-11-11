@@ -324,3 +324,16 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 **M10.1 viz 采样口径**：点色 = 八面体图按**探针法线方向**采样（法线 = probeDepth 3-tap 反投影 cross，vs 内重算）；「探针→眼睛」方向在凸面上恒 miss（画面全天空色无信息量，冒烟实锤后改法线）。atlas 全局 texel = `probeTexel·(octRes+2) + octT + 1`——**漏乘探针格基址会全黑**（读成 (0,0) 格的天空 texel）。
 
 **M10.1 降级备案（S10-PLAN Q12 已定项）**：命中点直光 = 统一 albedo（暖灰）+ 无 NdotL（命中点法线在 104-tri 粗代理上不可得）；S11 世界缓存接管后按 hit 材质重算。探针射线 tMax=1e4（bevy 注释：截断处 miss ≠ 真 miss，截太小漏天光）；shadow ray tMax=50 / bias=0.01（M9.1 g_shadowParams 同值）。
+
+#### M10.2 Final Gather 槽位同步表（落码实读固化，2026-11-11，tag `s10-gather`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `gatherLinear_` | `RGBA16_FLOAT` 全屏（gather 输出：rgb=间接光，a=合成权重和） | `ensureProbeTargets`（视口尺寸懒建，`probeGatherFirst_=true`） | `gatherSet_[parity]` u0 UAV + t8 SRV | 创建态 SRV；**帧首 beginTracking 分支**：首帧声明 SRV / 后续帧声明 UAV（上帧末态 = csGatherCompose UAV 读，**UAV 末态不是 SRV**）；重建纹理时复位 first |
+| `hdrSceneColor_`（T0 建） | `RGBA32_FLOAT`，**补 `isUAV=true` flag**（NVRHI validation 对 UAV 绑定硬查 flag，L1631） | `ensureRtTargets` | `gatherSet_[parity]` u1 UAV（RMW 写）+ t9 SRV（读） | csGatherCompose dispatch 前 `setTextureState(UAV)`；RMW = 同纹理 SRV 读 + UAV RMW 写，每线程只碰自己 texel |
+| `probePrevDelta_`（M10.0 建） | `RGBA32_FLOAT` | 同上 | `gatherSet_[parity]` t7 SRV | gather 态跳过 drawProbeDots → 原靠 dots require 的 UAV→SRV 收尾转换无执行点 → drawProbeGather 显式 `setTextureState(SRV)` 补转换 |
+| `gatherCB_` | 128B volatile：[0..15] invVP（独立块重求逆，不复用 cb 作用域 invVP）/ [20] viewport(x,y,z,w) / [21] (res, res, baseRes, pad) / [22] params / [24..26] 间接光 albedo 0.45/0.39/0.30 / [27] MIN_WEIGHT 0.01 / [28..30] cascade 级阈 3/5/7 | `initProbe` | b0（gatherSet_） | 每帧全量覆写 |
+| `csGather_` / `csGatherCompose_` | compute `probe_gather.csgather` / `probe_gather.csgathercompose`（8×8） | `initProbe` | 单一 gatherLayout_（b0 + t0..t9 + u0..u1） | dispatch 每像素 1 线程 |
+| `material.slang` ambient 开关 | psMatResolve mode 0 分支：`amb = (g_options.z > 0.5) ? 0.03 : g_lightDir.w`（**probe-viz 场景渲染走 matResolve 材质管线，model.slang psMain 不参与**——首版改错文件 PNG 逐字节零差异实锤）；shadePbrGrad（mode 5）另有同款 0.03 底开关 | material.slang | — | gather 态 visbuf 路径写 `cb.options[2]=1`（**g_options.y 被 frustumCull clusterCount / params.options[0] pbr-naive 开关双重占用，禁复用**——首版误占 g_options.y 导致 pbr-direct/naive ambient 被误清零，全量回归 64125px maxDelta52 实锤）；**语义 = ambient 微底 0.03（2026-11-11 用户拍板）**：纯零替换探针 GI 撑不住暗面（单跳直光+天空、无弹射，M10.1 降级备案）→ 死黑 3.66%；0.03 底死黑 1.43%、双计费量级可忽略，S11 补弹射后收紧 |
+
+**M10.2 gather 权重口径（UE `LumenScreenProbeGather.usf` 实读锁定）**：cascade 级选择按**线性深度**分段（sceneDepth = length(wp−eye)，阈 3/5/7）——deviceZ 分段被冒烟实锤否掉（透视非线性全落 L3 权重全灭 → 全黑）。tile 映射 = `gridF = pix·res/viewport` 连续格坐标（**csPlace 探针屏幕格距 = viewport/res_l 非 2 的幂**；用 2 的幂 stride 会越界 8×8 atlas，Texture2D.Load 越界静默返 0）。权重 = 双线性 corner × `exp2(-10000·(planeDist/sceneDepth)²)` 主权重 + `exp2(-1000·x²)` Fallback 两级降级 × `MIN_PROBE_INTERPOLATION_WEIGHT=0.01` 门限；合成 = `pow(saturate(pow(enc,2.2)+gi), 1/2.2)`（enc 已 gamma 编码需先转线性再叠加）。间接光 = albedo × 八面体出射 radiance，采样方向 = 像素法线（probeDepth 3-tap，与 probe.slang 同口径）。

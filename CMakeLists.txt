@@ -384,6 +384,9 @@ set(_ENTRIES_PROBE_VIZ "vsProbeDots|vsprobedots|vertex" "psProbeDots|psprobedots
 # 方向射线 + 命中点直光 shadow ray，Q12-1/Q12-2 拍板 UE 口径）。
 # 后缀短名 cstrace（tlas_probe.cs 同款口径）；产物 = probe_trace.cstrace。
 set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
+# M10.2（S10）：probe_gather.slang 双 compute 入口——final gather（每像素探针
+# 插值 Q13-1 深度选级 + UE 权重）与直光合成（Q13-2 ambient 替换）。
+set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgathercompose|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -412,6 +415,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_VIZ}")
     elseif(_SRC_NAME STREQUAL "probe_trace")
         set(_ENTRIES "${_ENTRIES_PROBE_TRACE}")
+    elseif(_SRC_NAME STREQUAL "probe_gather")
+        set(_ENTRIES "${_ENTRIES_PROBE_GATHER}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -435,6 +440,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
+        elseif(_SRC_NAME STREQUAL "probe_gather")
+            set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_viz")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
         else()

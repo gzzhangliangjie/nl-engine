@@ -351,6 +351,9 @@ void Hud::build(HudFrame& frame) {
         ImGui::SliderInt("probe base res", &frame.probeBaseRes, 4, 32);
         ImGui::SliderFloat("normal offset", &frame.probeNormalOffset, 0.0f, 0.50f, "%.2f");
         ImGui::SliderFloat("dot size px", &frame.probeDotSize, 1.0f, 8.0f, "%.1f");
+        // M10.2（Q13-3）：viz 三态切换——false = 探针点（级别色/辐照度采样），
+        // true = final gather 全屏合成（ambient 替换，无点叠加）。双向 checkbox。
+        ImGui::Checkbox("final gather (replace ambient)", &frame.probeGatherMode);
         const int b = frame.probeBaseRes;
         const int total = b * b + (b >> 1) * (b >> 1) + (b >> 2) * (b >> 2) + (b >> 3) * (b >> 3);
         char probeLine[96];

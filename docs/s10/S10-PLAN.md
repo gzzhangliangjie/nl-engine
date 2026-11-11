@@ -39,9 +39,15 @@
 
 ## M10.2 Final Gather（2 天）
 
-- [ ] 全屏 pass：每像素找最近 4 个同级探针 → 查八面体图按方向插值 → 权重（距离+法线一致性）加权
-  - 📋 预研证据（2026-11-09）：UE 的具体公式 = **双线性 corner 权重 × 平面深度权重**——后者是探针世界位置到「像素法线+位置」定义平面的距离的 `exp2(k·(d/depth)²)`，且带一组指数更弱的 FallbackWeights 降级链路。即「距离+法线一致性」的具体化，按 UE 口径实现（对齐官方）
-- [ ] 与直光合成输出
+> **拍板记录（2026-11-11，用户「按推荐的来」，Q13-1/Q13-2/Q13-3 全取方案 A）**：
+> - **Q13-1 cascade 级选择 = 按像素深度分段选级**：deviceZ 分 4 段（0.25/0.5/0.75 阈值），近像素 L0、远像素 L3——cascade「近密远疏」意图闭环，L1~L3 辐照度图有消费端。三处参考全是单级网格（UE 单级 DownsampleFactor、Carrot 单级 ScreenProbeSize、bevy 无对应物），此为本项目自设计唯一无对应项。
+> - **Q13-2 合成方式 = 替换现有 ambient 环境光项**（`lightDir.w` 加色位置）：UE Lumen 就是替换 skylight/ambient 位置——叠加会双重打光、「角落不再死黑」自检无意义。**落码期勘误（2026-11-11 用户拍板）**：替换落地为 **0.03 微底** 而非纯零——纯零替换实测暗面死黑 3.66%（M10.1 探针 GI 单跳直光+天空、无弹射，撑不住暗面）；0.03 微底 = UE 风格 ambient 底（双计费量级 = 原 0.28 的 1/10 可忽略），dead 降至 1.43%，S11 世界缓存补弹射后收紧。开关位置实锤在 `material.slang` psMatResolve（probe-viz 场景走 matResolve 材质管线，model.slang psMain 不参与）；开关位用 `g_options.z`（`g_options.y` 被 clusterCount / pbr-naive 开关双重占用，误占曾致 pbr-direct/naive 全量回归）。
+> - **Q13-3 输出形态 = `--mode probe-viz` 第三态**（dotMode=2 = 全屏 gather 合成画面，无探针点叠加），HUD 模式切换；M10.3 的 `--mode probe` 完整链路在此之上补调参。
+> - **已定项**：权重公式 = UE 口径（实读 `CalculateUniformUpsampleInterpolationWeights` 双向证实：双线性 corner `BilinearExpand=1` × 平面深度 `exp2(-10000·(planeDist/depth)²)` + Fallback 弱指数 `-10000×0.1` 两级降级 + MIN 门限清零 + `W/=max(sum,MIN)` 归一化）；每像素法线 = 深度邻域 3-tap 重建（Q4 冻结延续）；探针位置/深度 = M10.0 atlas rgb+a(deviceZ)，零新增资源；gather 纯采样零射线；天空像素早退输出 clearColor（Carrot isSky 口径）。
+
+- [x] 全屏 pass：每像素按 Q13-1 选级 → 双线性 2×2 corner → 查八面体图按方向插值 → UE 平面深度权重 + Fallback 两级降级
+  - 📋 预研证据（2026-11-09）：UE 的具体公式 = **双线性 corner 权重 × 平面深度权重**——后者是探针世界位置到「像素法线+位置」定义平面的距离的 `exp2(k·(d/depth)²)`，且带一组指数更弱的 FallbackWeights 降级链路。即「距离+法线一致性的具体化，按 UE 口径实现（对齐官方）」（2026-11-11 实读 CVar 默认 DepthWeight=1.0 / Fallback=0.1 / scale=-10000 锁定数值）
+- [x] 与直光合成输出（按 Q13-2 替换 ambient 项）
 
 **自检**：画面出现天光间接照明；角落不再死黑。tag：`s10-gather`。
 

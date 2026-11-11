@@ -242,7 +242,13 @@ float4 shadePbr(float3 normal, float3 worldPos, float2 uv)
     float3 radiance = g_lightColor.rgb * g_lightColor.a * NdotL;
     float3 diffuse  = cDiff * (1.0f - F) * (1.0f / kPi);
     float3 specular = D * V * F;
-    float3 ambient  = 0.03f * baseColor;
+    // M10.2：g_options.z=1（probe gather 模式）时 ambient 置零——间接光由
+    // probe_gather.slang csGatherCompose 补上（Q13-2 真替换，防双重计费）。
+    // g_options.z 全路径空闲（g_options.y 被 frustumCull 的 clusterCount 与
+    // params.options[0] pbr-naive 开关双重占用——首版误占 g_options.y 导致
+    // pbr-direct/naive ambient 被误清零，全量回归实锤后挪位）。
+    const float ambientScale = (g_options.z > 0.5f) ? 0.0f : 0.03f;
+    float3 ambient  = ambientScale * baseColor;
 
     float alpha = g_baseColorF.a * baseTex.a;
     // 输出端 gamma 编码（pow 1/2.2，显示变换——不算 tonemap，plan 边界不碰后处理）。
@@ -285,7 +291,13 @@ float4 shade(float3 normal, float2 uv, uint triId, uint mode, float3 clusterColo
     // Khronos 官方 Suzanne_BaseColor.png 是中灰底；乘一档曝光让贴图细节（含黄色眼睛）
     // 在验收截图里肉眼可见，避免看起来像「没贴图的纯色模型」。
     float3 albedo = base.rgb * 2.2f;
-    float3 lit = min(albedo * (g_lightDir.w + (1.0f - g_lightDir.w) * ndl), 1.0f);
+    // M10.2：g_options.z=1（probe gather 态）时 ambient 因子置零 = 真替换——
+    // 间接光由 probe_gather.slang csGatherCompose 补上（Q13-2 防双重计费）。
+    // g_options.z 全路径空闲（g_options.y 被 frustumCull clusterCount /
+    // params.options[0] pbr-naive 开关双重占用——首版误占 g_options.y 且漏改
+    // 本条 textured 路径，全量回归 + PNG 逐字节对照双重实锤后修复）。
+    const float amb = (g_options.z > 0.5f) ? 0.0f : g_lightDir.w;
+    float3 lit = min(albedo * (amb + (1.0f - amb) * ndl), 1.0f);
     return float4(lit, 1.0f);
 }
 

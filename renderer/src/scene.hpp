@@ -472,6 +472,12 @@ public:
     // 画在 swapchain 上（深度关，全探针可见——布点覆盖性证据）。
     void drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                        const nvrhi::Viewport& viewport, const FrameParams& params);
+    // drawProbeGather（M10.2）：csGather 每像素探针插值（深度选级 + UE 权重）
+    // → csGatherCompose 与直光合成（读 hdr 写 rtTarget_ → blitRtToHdr 回 hdr）。
+    // 在 drawProbeFrame 之后、presentTonemap 之前调用（gather 读本帧 atlas）；
+    // gather 态下调用方跳过 drawProbeDots（Q13-3：无点叠加）。
+    bool drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                         const FrameParams& params, std::string& outError);
   private:
     // 懒建 probe 资源（D32 自建深度 / velocityFb_ / atlas×2 parity / prevDelta /
     // sets / PSO）。baseRes 变化（ImGui）→ 参数入闸 → 纹理与 set 整组重建。
@@ -1003,6 +1009,23 @@ private:
     nvrhi::ComputePipelineHandle tracePSO_;
     nvrhi::TextureHandle         irradAtlas_[4];         // RGBA16F（探针格 × 10×10）
     bool                         probeTraceLogged_ = false; // 追踪日志锚只打一次
+
+    // ---- M10.2：final gather（Q13-1/Q13-2/Q13-3 拍板 UE 口径）----
+    // csGather 每像素深度选级 + UE 双线性 corner × 平面深度权重 + Fallback 降级
+    // （纯采样零射线）；csGatherCompose 同纹理 RMW hdrSceneColor_（SRV 读 +
+    // UAV 写，每线程只碰自己 texel）——免 rtTarget_ 中转，presentTonemap 现成
+    // 链路直通。两入口共用同一 BindingSet（§2.7）。
+    nvrhi::ShaderHandle          csGather_;              // probe_gather.csgather
+    nvrhi::ShaderHandle          csGatherCompose_;       // probe_gather.csgathercompose
+    nvrhi::BufferHandle          gatherCB_;              // volatile 128B（invViewProj+eye+params+mat+levels）
+    nvrhi::BindingLayoutHandle   gatherLayout_;          // b0 + t0..t9 SRV + u0..u1 UAV
+    nvrhi::BindingSetHandle      gatherSet_[2];          // 每 parity 一份（绑 cur place atlas）
+    nvrhi::ComputePipelineHandle gatherPSO_;
+    nvrhi::ComputePipelineHandle gatherComposePSO_;
+    nvrhi::TextureHandle         gatherLinear_;          // RGBA16F 全屏（每像素间接光）
+    bool                         probeGatherLogged_ = false; // gather 日志锚只打一次
+    bool                         probeGatherFirst_ = true;   // gatherLinear_ 帧首声明分支
+                                                             //（首帧=创建态 SRV/后续帧=UAV 末态）
 
     // ---- M10.0：probe-place 资源（Q10-1/Q10-2 拍板 UE 口径）----
     // velocity prepass：独立小 pass（vsVelocity/psVelocity）自建 D32 深度

@@ -125,6 +125,9 @@ struct FrameParams {
     float probeDotSize      = 3.0f;   // viz 点半径（px）
     bool  probeVizIrradiance = false; // M10.1：--mode probe-viz（点色 = 八面体辐照度
                                       // 采样；false = probe-place 级别色点，保形）
+    bool  probeGather       = false; // M10.2：final gather 态（Q13-3：dotMode=2，
+                                      // 全屏 gather 合成 + ambient 替换，无点叠加；
+                                      // 与 probeVizIrradiance 互斥，gather 优先）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -235,6 +238,9 @@ struct HudFrame {
     int   probeBaseRes        = 16;     // 双向（4..32）
     float probeNormalOffset   = 0.10f;  // 双向（× 探针世界间距）
     float probeDotSize        = 3.0f;   // 双向（px）
+    bool  probeGatherMode     = false;  // M10.2：viz 三态切换（Q13-3：false=点色
+                                        // 级别/辐照度采样，true=final gather 全屏
+                                        // 合成；双向 checkbox，gather 优先）
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）

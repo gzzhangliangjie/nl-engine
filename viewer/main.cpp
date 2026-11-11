@@ -103,6 +103,8 @@ struct Options {
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool pbrNaive   = false;  // pbr-direct：--pbr-naive 对照开关（跳过 sRGB->linear，验收证据用）
+    bool probeGather = false; // M10.2：--probe-gather（probe-viz gather 态，Q13-3；
+                              // 默认关保 M10.1 probe-viz 点色行为与 s10-probe 基线保形）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
@@ -175,6 +177,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
+        else if (a == "--probe-gather") o.probeGather = true;   // M10.2：final gather 态
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -875,6 +878,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     int probeBaseRes = 16;
     float probeNormalOffset = 0.10f;
     float probeDotSize = 3.0f;
+    // M10.2：viz 三态（Q13-3）——默认关（M10.1 probe-viz 点色保形），--probe-gather
+    // 或 HUD checkbox 开；probe-place 模式恒 false。
+    bool probeGatherMode = (o.mode == nl::core::ViewMode::ProbeViz) && o.probeGather;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -1232,7 +1238,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeDotSize = probeDotSize;
         // M10.1：probe-viz 模式 = 点色改八面体辐照度采样（管线与 probe-place 全同，
         // 仅 viz 分支差异——trace pass 两模式都跑，布点+追踪一体）。
-        fp.probeVizIrradiance = (o.mode == nl::core::ViewMode::ProbeViz);
+        // M10.2（Q13-3）：gather 态 = 全屏 final gather + ambient 替换（与点色
+        // 互斥，gather 优先）；probe-place 模式恒 false 保形。
+        const bool isProbeViz = (o.mode == nl::core::ViewMode::ProbeViz);
+        fp.probeVizIrradiance = (isProbeViz && !probeGatherMode);
+        fp.probeGather = (isProbeViz && probeGatherMode);
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -1497,6 +1507,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.probeBaseRes = probeBaseRes;
                 hud.probeNormalOffset = probeNormalOffset;
                 hud.probeDotSize = probeDotSize;
+                hud.probeGatherMode = isProbeViz && probeGatherMode;   // M10.2 双向
             }
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -1606,6 +1617,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 probeBaseRes = std::clamp(hud.probeBaseRes, 4, 32);
                 probeNormalOffset = hud.probeNormalOffset;
                 probeDotSize = hud.probeDotSize;
+                if (isProbeViz) probeGatherMode = hud.probeGatherMode;   // M10.2 写回
             }
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
             // 非簇场景唯一非法值是 4=cluster（无 CLUSTERCOLOR 属性）；5=pbr 合法

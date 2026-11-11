@@ -2462,6 +2462,10 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         d.width = w; d.height = h;
         d.format = nvrhi::Format::RGBA32_FLOAT;   // 离屏 HDR 场景色：FP32 往返零量化——任意浮点管线只有 FP32 中间格式才字节精确（16F 在 8-bit 半步边界翻转，实测 5346px/±1）
         d.isRenderTarget = true;
+        // M10.2：isUAV 开——csGatherCompose 同纹理 SRV 读 + UAV RMW 写（每线程
+        // 只碰自己 texel；NVRHI validation 对 UAV 绑定硬查 isUAV flag，M10.2
+        // 实锤）。flag 只影响资源创建，格式/内容不变——既有用例 bytes 保形。
+        d.isUAV = true;
         // 创建态 = SRV（shadowMap 同款）：与帧首 beginTrackingTextureState 声明的
         // 「上一帧末态 SRV」对齐，否则首帧 DX12 debug layer 报 COMMON/SRV 布局错位。
         d.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -3008,6 +3012,8 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         !loadShader("velocity.psvelocity", nvrhi::ShaderType::Pixel, psVelocity_) ||
         !loadShader("probe.csplace", nvrhi::ShaderType::Compute, csPlace_) ||
         !loadShader("probe_trace.cstrace", nvrhi::ShaderType::Compute, csTrace_) ||
+        !loadShader("probe_gather.csgather", nvrhi::ShaderType::Compute, csGather_) ||
+        !loadShader("probe_gather.csgathercompose", nvrhi::ShaderType::Compute, csGatherCompose_) ||
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
@@ -3044,6 +3050,17 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     tcbDesc.debugName = "TraceConstants";
     traceCB_ = device->createBuffer(tcbDesc);
     if (!traceCB_) { outError = "createBuffer failed for trace constants"; return false; }
+
+    // gatherCB_（112B volatile，M10.2）：probe_gather.slang 布局
+    //（[0..15] invViewProj float4x4 / [16..19] eye / [20..23] params / [24..27] mat·MIN）。
+    nvrhi::BufferDesc gcbDesc;
+    gcbDesc.byteSize = 128;   // M10.2：112→128B（+g_gLevels 线性深度分段阈值）
+    gcbDesc.isConstantBuffer = true;
+    gcbDesc.isVolatile = true;
+    gcbDesc.maxVersions = 16;
+    gcbDesc.debugName = "GatherConstants";
+    gatherCB_ = device->createBuffer(gcbDesc);
+    if (!gatherCB_) { outError = "createBuffer failed for gather constants"; return false; }
 
     // ---- velocity prepass 布局：b0 + t1..t4（pulling 几何池，visbuf.slang 同槽）。
     nvrhi::BindingLayoutDesc vDesc;
@@ -3103,6 +3120,20 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     traceLayout_ = device->createBindingLayout(tDesc);
     if (!traceLayout_) { outError = "createBindingLayout failed for probe trace"; return false; }
 
+    // ---- csGather/csGatherCompose 布局（M10.2）：两入口共用一份
+    //（§2.7 每管线单一 BindingSet——同一 set 可服务两条管线）：
+    //   b0 + t0..t3 place atlas + t4..t7 irrad atlas + t8 probeDepth_
+    //   + t9 hdrSceneColor_ + u0 gatherLinear_ + u1 rtTarget_。
+    nvrhi::BindingLayoutDesc gDesc;
+    gDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    for (std::uint32_t s = 0; s < 10; ++s)
+        gDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(s));
+    gDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+    gDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
+    gatherLayout_ = device->createBindingLayout(gDesc);
+    if (!gatherLayout_) { outError = "createBindingLayout failed for probe gather"; return false; }
+
     {
         nvrhi::ComputePipelineDesc cpDesc;
         cpDesc.setComputeShader(csPlace_).addBindingLayout(placeLayout_);
@@ -3116,6 +3147,19 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         tracePSO_ = device->createComputePipeline(cpDesc);
     }
     if (!tracePSO_) { outError = "createComputePipeline failed for probe trace"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csGather_).addBindingLayout(gatherLayout_);
+        gatherPSO_ = device->createComputePipeline(cpDesc);
+    }
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csGatherCompose_).addBindingLayout(gatherLayout_);
+        gatherComposePSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!gatherPSO_ || !gatherComposePSO_)
+        { outError = "createComputePipeline failed for probe gather"; return false; }
 
     nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
@@ -3215,6 +3259,24 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         }
     }
 
+    // gatherLinear_（M10.2）：全屏 RGBA16F，csGather 输出每像素间接光。
+    // 创建态 ShaderResource 对齐帧首 beginTracking 声明（hdrSceneColor_ 同款铁律）。
+    {
+        nvrhi::TextureDesc glDesc;
+        glDesc.width = std::uint32_t(viewportW);
+        glDesc.height = std::uint32_t(viewportH);
+        glDesc.format = nvrhi::Format::RGBA16_FLOAT;
+        glDesc.isUAV = true;
+        glDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        glDesc.debugName = "ProbeGatherLinear";
+        gatherLinear_ = device->createTexture(glDesc);
+        if (!gatherLinear_) {
+            outError = "createTexture failed for probe gather linear";
+            return false;
+        }
+        probeGatherFirst_ = true;   // 新纹理创建态 SRV——帧首声明分支复位
+    }
+
     // 绑定集：velocity 一份（无 parity，绑自己的 144B CB）；place/dots 各两份
     //（atlas 绑定随 parity）。
     {
@@ -3263,6 +3325,26 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
                 tsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level, irradAtlas_[level]));
             traceSet_[parity] = device->createBindingSet(tsDesc, traceLayout_);
             if (!traceSet_[parity]) { outError = "createBindingSet failed for probe trace"; return false; }
+        }
+
+        // gather set（M10.2）：t0..t3 cur parity place atlas + t4..t7 irrad atlas
+        // + t8 probeDepth_ + t9 hdrSceneColor_（SRV 读）+ u0 gatherLinear_
+        // + u1 hdrSceneColor_（UAV 写，同纹理 RMW——每线程只碰自己 texel）。
+        // tlasReady_ 同款门控（trace 没跑时 irrad 全 0，gather 输出 0 = 画面
+        // 回退纯直光，安全降级）。
+        if (tlasReady_ && hdrSceneColor_) {
+            nvrhi::BindingSetDesc gsDesc;
+            gsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, gatherCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                gsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                gsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4 + level, irradAtlas_[level]));
+            gsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(8, probeDepth_));
+            gsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(9, hdrSceneColor_));
+            gsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(0, gatherLinear_));
+            gsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(1, hdrSceneColor_));
+            gatherSet_[parity] = device->createBindingSet(gsDesc, gatherLayout_);
+            if (!gatherSet_[parity]) { outError = "createBindingSet failed for probe gather"; return false; }
         }
     }
 
@@ -3396,6 +3478,30 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
     }
 
+    // ---- gatherCB_ 每帧全量覆写（112B，M10.2）：invViewProj 与 probeCB_ 同源
+    //（本帧重求逆——cb 作用域外的独立块）；mat/参数与 traceCB_ g_traceHitMat
+    // 同源（统一暖灰 + MIN 0.01 = UE #define MIN_PROBE_INTERPOLATION_WEIGHT）。
+    {
+        nl::math::Mat4 vp{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
+        float gcb[32] = {};
+        std::memcpy(gcb, invVP.m, sizeof(invVP.m));   // [0..15] invViewProj
+        gcb[16] = params.eye[0];
+        gcb[17] = params.eye[1];
+        gcb[18] = params.eye[2];
+        gcb[20] = static_cast<float>(probeBaseRes_);
+        gcb[21] = vpW;
+        gcb[22] = vpH;
+        gcb[23] = 8.0f;                          // oct core res（Q12-2）
+        gcb[24] = 0.45f; gcb[25] = 0.39f; gcb[26] = 0.30f;   // albedo 暖灰（同 traceCB）
+        gcb[27] = 0.01f;                         // MIN_PROBE_INTERPOLATION_WEIGHT
+        // Q13-1 线性深度分段阈值（欧氏）：L0<3 / L1<5 / L2<7 / else L3——
+        // 缺省机位模型在 2~5 单位，三细级全覆盖（deviceZ 分段冒烟实锤不可用）。
+        gcb[28] = 3.0f; gcb[29] = 5.0f; gcb[30] = 7.0f;
+        cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
+    }
+
     // ---- (1) velocity prepass：与 visRaster 同一间接几何（identityIndex +
     // indirectArgs），换自己的 VS/PS 与 framebuffer（Q10-1 独立 pass 口径）。
     {
@@ -3439,6 +3545,73 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
                             "geometry) -- probe tracing disabled");
         probeTraceLogged_ = true;
     }
+}
+
+// M10.2：final gather（drawProbeFrame 之后、presentTonemap 之前）。csGather 写
+// gatherLinear_ → csGatherCompose 同纹理 RMW hdrSceneColor_。hdr 当前态 =
+// RenderTarget（matResolve 刚写完，同帧顺序明确），显式 setTextureState 转
+// UAV（beginHdrSceneTarget 之后帧内状态已知，presentTonemap 2225 行同款显式
+// 转换口径）；presentTonemap 自己再转回 SRV（barrier 落盘）。gatherLinear_
+// 创建态 SRV 与帧首声明对齐（hdrSceneColor_ 同款铁律），UAV↔SRV 由 set
+// require 自动插。tlasReady_ 未就绪（trace 跳过、irrad 全 0）→ 整段跳过 =
+// 纯直光 + ambient 置零的降级画面（log 一次性锚）。
+bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                            const FrameParams& params, std::string& outError) {
+    if (!probe_ || probeFailed_ || !tlasReady_) {
+        if (!probeGatherLogged_ && probe_ && !tlasReady_)
+            nl::core::log::info("probe: gather disabled (TLAS not ready, pure "
+                                "direct light + no ambient this frame)");
+        probeGatherLogged_ = true;
+        return true;
+    }
+    if (!gatherSet_[probeParity_] || !gatherPSO_ || !gatherComposePSO_) {
+        outError = "probe gather: set/pipeline missing";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+
+    // gather 态跳过 drawProbeDots → prevDelta 的 UAV→SRV 收尾转换（原来靠 dots
+    // set require）没有执行点 → 这里显式补（当前态 UAV = csPlace 刚写完），保持
+    // 「帧首声明 SRV」的跨帧契约。
+    cmd->setTextureState(probePrevDelta_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (1) csGather：gatherLinear_ 帧首状态声明 = **上一帧末态 UAV**
+    //（csGather UAV 写 + compose UAV 读，帧末停留 UAV；首帧 = 创建态 UAV……
+    // 创建态是 ShaderResource？——不是：声明必须如实，首帧也走 UAV（NVRHI
+    // keepInitialState 缺省下创建态 SRV，但首帧 dispatch require UAV 会插
+    // SRV→UAV barrier，声明 UAV 会错）。创建态 SRV + 帧首声明分支：
+    // 首帧 SRV / 后续帧 UAV。
+    cmd->beginTrackingTextureState(gatherLinear_, allSub,
+                                   probeGatherFirst_ ? nvrhi::ResourceStates::ShaderResource
+                                                     : nvrhi::ResourceStates::UnorderedAccess);
+    probeGatherFirst_ = false;
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(gatherPSO_).addBindingSet(gatherSet_[probeParity_]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    }
+
+    // ---- (2) csGatherCompose：hdr RenderTarget（matResolve 刚写完）→ UAV RMW。
+    // place atlas cur parity / irrad atlas 的 SRV 态来自 drawProbeFrame 帧首声明
+    //（写完 UAV 后 require SRV 自动回插 barrier）。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(gatherComposePSO_).addBindingSet(gatherSet_[probeParity_]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    }
+    if (!probeGatherLogged_) {
+        nl::core::log::info("probe: gather active (depth-banded cascade levels, "
+                            "UE bilinear corner x plane-depth weights, ambient "
+                            "replaced by gather)");
+        probeGatherLogged_ = true;
+    }
+    return true;
 }
 
 // M10.0：探针点可视化（tonemap 之后、swapchain 上）。PSO 对 swapchain 格式懒建
@@ -5415,6 +5588,12 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 std::memcpy(cb.model, params.model, sizeof(cb.model));
                 std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
                 cb.options[0] = static_cast<float>(params.shading);
+                // M10.2（Q13-2）：probe gather 态把直光管线 ambient 置零
+                //（model.slang psMain ambientScale 开关读 g_options.z——
+                //  g_options.y 被 frustumCull clusterCount / pbr-naive 开关占用，
+                //  首版误占 g_options.y 全量回归实锤后挪位）。
+                if (probe_ && params.probeGather && tlasReady_)
+                    cb.options[2] = 1.0f;
                 cmd->writeBuffer(constants_, &cb, sizeof(cb));
 
                 // (2) b1 = (宽, 高, 可视化档, 未用)。宽高用 float 传递，像素数
@@ -5467,6 +5646,14 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     //（matResolve 之后——布点读的是本帧几何已经画完的状态；
                     // tonemap 之前——布点与本帧 HDR 输出同帧）。
                     if (probe_) drawProbeFrame(cmd, viewport, params);
+                    // M10.2（Q13-3）：gather 态 = 全屏探针插值 + 直光合成（hdr 同
+                    // 纹理 RMW，ambient 已置零）；无点叠加。非 gather 态保持
+                    // M10.0/M10.1 点可视化保形。
+                    if (probe_ && params.probeGather && tlasReady_) {
+                        std::string gErr;
+                        if (!drawProbeGather(cmd, viewport, params, gErr))
+                            nl::core::log::deviceError("probe-gather", gErr);
+                    }
                     // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
                     // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
                     if (t0Active) {
@@ -5476,7 +5663,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     }
                     // M10.0：探针点可视化（tonemap 之后画在 swapchain 上，
                     // 深度关——全探针可见，布点覆盖性证据优先于遮挡正确性）。
-                    if (probe_) drawProbeDots(cmd, framebuffer, viewport, params);
+                    // M10.2：gather 态跳过（Q13-3 无点叠加）。
+                    if (probe_ && !(params.probeGather && tlasReady_))
+                        drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
                     // 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
                     // 深度测试/写入关，整屏覆盖 (4) 的占位输出。
@@ -5508,6 +5697,10 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         std::memcpy(cb.options + 1, params.options, sizeof(cb.options) - sizeof(float));
         // M4.1：cull.slang 从 g_options.y 读总簇数（整数 ≤2^24 float 精确无损）。
         if (frustumCull_) cb.options[1] = static_cast<float>(clusterCount_);
+        // M10.2（Q13-2）：probe gather 态 ambient 置零开关读 g_options.z
+        //（g_options.y 被 clusterCount / pbr-naive 开关双重占用，禁复用）。
+        if (probe_ && params.probeGather && tlasReady_)
+            cb.options[2] = 1.0f;
         cmd->writeBuffer(constants_, &cb, sizeof(cb));
 
         nvrhi::GraphicsPipelineHandle pipeline = params.wireframe
@@ -6951,15 +7144,20 @@ void Scene::shutdown() {
     probeBaseRes_ = 0;
     probeLogged_ = false;
     probeTraceLogged_ = false;
+    probeGatherLogged_ = false;
+    probeGatherFirst_ = true;
     vsVelocity_ = nullptr;
     psVelocity_ = nullptr;
     csPlace_ = nullptr;
     csTrace_ = nullptr;
+    csGather_ = nullptr;
+    csGatherCompose_ = nullptr;
     vsProbeDots_ = nullptr;
     psProbeDots_ = nullptr;
     velocityCB_ = nullptr;
     probeCB_ = nullptr;
     traceCB_ = nullptr;
+    gatherCB_ = nullptr;
     velocityLayout_ = nullptr;
     velocitySet_ = nullptr;
     placeLayout_ = nullptr;
@@ -6968,6 +7166,12 @@ void Scene::shutdown() {
     traceLayout_ = nullptr;
     traceSet_[0] = nullptr;
     traceSet_[1] = nullptr;
+    gatherLayout_ = nullptr;
+    gatherSet_[0] = nullptr;
+    gatherSet_[1] = nullptr;
+    gatherPSO_ = nullptr;
+    gatherComposePSO_ = nullptr;
+    gatherLinear_ = nullptr;
     dotsLayout_ = nullptr;
     dotsSet_[0] = nullptr;
     dotsSet_[1] = nullptr;

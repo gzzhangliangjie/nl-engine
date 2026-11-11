@@ -8425,6 +8425,58 @@
      "cwd": "{root}"
     }
    ]
+  },
+  {
+   "id": "s10-gather",
+   "label": "S10.2",
+   "name": "Final Gather + ambient 替换（M10.2）",
+   "tag": "s10-gather",
+   "date": "2026-11-11",
+   "summary": "M10.2（S10 第三步，final gather；2026-11-11 用户「按推荐的来」拍板 Q13-1/Q13-2/Q13-3 全取方案 A；三处参考实读：UE CalculateUniformUpsampleInterpolationWeights usf L147-210 + CVar 默认值 cpp + Carrot read-screen-probes.slang 187 行全文 + bevy 无对应物确认）：① Q13-1 cascade 级选择 = 线性深度分段（sceneDepth=length(wp-eye)，阈值 3/5/7 进 CB g_gLevels）——deviceZ 分段冒烟实锤不可用（透视非线性挤压全落 L3 2×2 网格→权重全灭→gather 输出全黑）；② Q13-2 合成 = ambient 微底替换（落码期拍板勘误：material.slang psMatResolve mode0 amb=(g_options.z>0.5)?0.03:g_lightDir.w——probe-viz 场景走 matResolve 材质管线 model.slang 不参与（改错文件 PNG 零差异实锤）；g_options.z 全路径空闲，g_options.y 被 clusterCount/pbr-naive 开关双重占用首版误占致 pbr-direct/naive 回归全量 FAIL2 实锤后挪位；纯零替换探针 GI 无弹射撑不住暗面 dead 3.66% → 用户拍板 0.03 微底 dead 1.43%；csGatherCompose 补 gather 间接光：pow(enc,2.2)+gi→pow(1/2.2)，hdr 同纹理 SRV 读+UAV RMW 写——每线程只碰自己 texel，hdrSceneColor_ 补 isUAV flag，NVRHI validation L1631 对 UAV 绑定硬查 flag 实锤）；③ Q13-3 = probe-viz 第三态（--probe-gather 命令行 + HUD checkbox 双向，默认关保 M10.1 点色基线保形）。权重公式 = UE 口径（实读锁定：双线性 corner BilinearExpand=1 × exp2(-10000·(planeDist/depth)²) 主权重 + exp2(-1000·x²) Fallback 两级降级 + MIN 0.01 门限清零 + 归一化）。踩坑实录：① gather tile 映射必须用 csPlace 屏幕格距 viewport/res_l（非 2 的幂）——baseRes>>level 当 stride 会把 tile 算到 atlas 越界，Load 越界静默返 0 → probe.w 全 0 → 权重全灭 gather 全黑（debug 可视化六级定位：wp/法线/level/depth/sum/probe.w 逐层排查）；② gatherLinear_ 帧首 beginTracking 声明 = 上一帧末态 UAV（非 SRV，首帧=创建态 SRV 需分支）；③ gather 态跳过 dots → probePrevDelta_ 的 UAV→SRV 收尾转换（原来靠 dots set require）没有执行点 → drawProbeGather 显式补。跨后端 near 0 像素差异（dist=7 机位）。模型区亮度 p5=18.3、死黑占比 1.43% 过校准门槛（原 p5≥50/dead<0.001 是双计费叠加画面签名，0.03 微底拍板后校准 p5≥18/dead<0.02）。kStage 仍 S8.2；Q4 冻结面 0 新增独立 GBuffer 资源（法线/深度全走已有 probeDepth_）。",
+   "acceptance": [
+    "run.bat verify 八段全绿：双后端 exit 0 + deviceErrors=0 + bytes 2/2 对基线 + 双日志锚（cascade 布点 + gather active）+ near dx12/vulkan 0 像素差异 + bbox 门禁（模型区 70945 px、p5=18.3 GI 抬升、死黑 1.43% < 0.02 校准门槛）+ 负向 exit 非 0",
+    "双后端 viewer selftest 16/16 + Slang 产物 90/90（新增 probe_gather.csgather/csgathercompose 4 个已登记 kArtifacts=82 防假绿）",
+    "ambient 语义三组对照实测：叠加 p5=63.7/dead=0（双计费语义错误）/ 纯替换 p5=13.3/dead=3.66% / 0.03 微底 p5=18.3/dead=1.43%（拍板采纳）；gather ON vs OFF 非点像素 mean +10.2、63604 px 变亮（间接光真实叠加）",
+    "Q4 冻结面 0 新增独立 GBuffer 资源；kStage 仍 S8.2；tag s10-gather"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gather",
+     "name": "Final Gather 全屏探针插值 + ambient 真替换（UE 双线性 corner × 平面深度权重）",
+     "kind": "pair",
+     "note": "M10.2 新增 --probe-gather 态（probe-viz 第三态）：csGather 每像素线性深度选级 + UE 双线性 corner × 平面深度权重（主 -10000 / fallback -1000 两级降级 + MIN 0.01）八面体采样按像素法线方向；csGatherCompose hdr 同纹理 RMW 合成（去 gamma + gather + 回 gamma），直光管线 ambient 经 g_options.z=1 压到 0.03 微底 = GI 为主的替换（2026-11-11 拍板，纯零替换探针 GI 无弹射死黑 3.66% 不可接受）。间接光 = albedo(统一暖灰) × 八面体出射 radiance。画面自检：模型暗面被天光/弹射照亮（p5=18.3）、无死黑；探针格 8×8 插值块状痕迹 = M10.1 无滤波预期降级（滤波归 M10.3/S14）。基线取自 tag s10-gather 构建产物（双后端 near 0 像素差异）。",
+     "baselines": {
+      "dx12": "example/s10-gather/gather-dx12.png",
+      "vulkan": "example/s10-gather/gather-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "probe-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--probe-gather"
+     ],
+     "command": "viewer.exe --mode probe-viz --model Suzanne-materials.nmesh --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --probe-gather",
+     "script": "example/s10-gather/run.bat verify"
+    }
+   ]
   }
  ]
 }
