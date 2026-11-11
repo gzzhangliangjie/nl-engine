@@ -57,11 +57,13 @@
 
 ## M11.3 稳定性验收（1~2 天）
 
-- [ ] cell 生命周期打磨：回收延迟、新 cell 置信度预热（避免新 cell 一帧全亮闪）
-- [ ] 摄像机快速移动压力测试
-- [ ] **候选（Q11-2b 名义债，用户「记入S11」）**：s10-refgi 冻结基线 GI 项实为纯天穹（0xdeadbeef 守卫恒 false），与 Q14-1 拍板的「单弹射 GI」名义不符；恢复名义 = 重开该段 + 重拍 refgi/compare 4 张基线 + 重标定 trend 门，须单独拍板，禁顺手改形态
+- [x] cell 生命周期打磨：回收延迟、新 cell 置信度预热（避免新 cell 一帧全亮闪）→ **M11.3 收官实测（2026-11-12）：不补**。方案 A（无墓碑+立即重用+时域混合）稳态收敛实证：静态 6 档长帧数（64~512）末帧 atlas 相邻差 <0.026、static 64 帧序列逐帧差全 0（bytes 级）——无残影死 cell、无回收闪烁，无预热必要（Q11-0 拍板「超标才补」，实测无超标）。
+- [x] 摄像机快速移动压力测试 → **沙箱工具化完成（替代裸机录屏）**：`viewer --orbit-speed <deg/帧>` + `--screenshot-seq <dir>`（确定性旋转 + 逐帧回读）。移动 1.5°/帧×64 帧：ON（mean 1.23/max 6.60）≤ OFF（mean 1.32/max 6.66），最大 spike ON/OFF 几乎相同（视角公共项），VULKAN 1.2340 与 DX12 一致，全程 deviceErrors=0 → 无 cell 涌现感。录屏 `docs/screenshots/s11_*.png` 由本口径替代。
+- [x] **Q11-2b 名义债（用户拍板 2026-11-12「现在重开」）**：s10-refgi 冻结基线 GI 项实为纯天穹（0xdeadbeef 守卫恒 false），与 Q14-1 拍板的「单弹射 GI」名义不符；恢复名义 = 重开该段 + 重拍 refgi/compare 4 张基线 + 重标定 trend 门，须单独拍板，禁顺手改形态 → **已重开**：`direct.slang` 守卫改 `if (true)`（段内逻辑未动），4 张基线重拍（旧图备份 `backup-pre-q11-2b/`，新旧 meandiff ~0.2/255 = 弹射项真实生效、方向变暗物理合理），trend 0.959/3.5（门限 0.60/30 不变），run.bat verify 全绿；老路径 s9-reference/s10-probe 各 2/2 bytes 保形。
 
-**自检（S11 验收）**：渗透+余晖稳定出现；cell 回收**无闪烁**；快速移动无明显 cell 涌现感。tag：`s11-done`，录屏 `docs/screenshots/s11_*.png`。
+**自检（S11 验收）**：渗透+余晖稳定出现（M11.2 CPU+GPU 双链实证）；cell 回收**无闪烁**（M11.3 稳态收敛实证）；快速移动无明显 cell 涌现感（M11.3 ON≤OFF 逐帧差分实证）。tag：`s11-done`，录屏 `docs/screenshots/s11_*.png`（→ 由 `--orbit-speed`+`--screenshot-seq` 序列口径替代）。
+
+**S11 收官记录（2026-11-12）**：M11.0~M11.3 全部收官，tag `s11-done`。验收链：CPU `gi-tools selftest`（bounce 96/96 + afterglow）→ GPU atlas-dump ON/OFF（check-s11-bounce-atlas.py，合成图在本场景结构性盲已勘误）→ 稳态 6 档收敛 → 移动逐帧差分 ON≤OFF → Q11-2b 重开后 refgi 链 run.bat verify 全绿 + 老路径保形。下一步 S12 历史帧并轨。
 
 ---
 

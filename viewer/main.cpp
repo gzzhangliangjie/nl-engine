@@ -151,6 +151,8 @@ struct Options {
     bool distSet = false;                     // 用户显式给了 --dist（skin 模式缺省距离不同）
     float distance  = 4.2f;
     std::string screenshotPath;
+    float orbitSpeed = 0.0f;               // M11.3：每帧 yaw 增量（度/帧），快速移动压力测试
+    std::string screenshotSeqDir;          // M11.3：逐帧序列截图目录（非空时每帧落 PNG）
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
@@ -417,6 +419,10 @@ Options parseArgs(int argc, char** argv) {
             o.yawDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--pitch" && i + 1 < argc) {
             o.pitchDeg = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--orbit-speed" && i + 1 < argc) {
+            o.orbitSpeed = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--screenshot-seq" && i + 1 < argc) {
+            o.screenshotSeqDir = argv[++i];
         } else if (a == "--dist" && i + 1 < argc) {
             o.distance = static_cast<float>(std::atof(argv[++i]));
             o.distSet = true;
@@ -1966,6 +1972,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (window.leftButtonDown() && (dx != 0.0f || dy != 0.0f)) camera.orbit(dx, dy);
             if (scroll != 0.0f) camera.zoom(scroll);
         }
+        // M11.3：快速移动压力测试——每帧自动 yaw 旋转（--orbit-speed 度/帧），
+        // 与 --screenshot-seq 组合产出移动中的 atlas 时域序列（无窗口输入依赖）。
+        if (o.orbitSpeed != 0.0f) camera.orbit(o.orbitSpeed, 0.0f);
         // P8 M-CAM b-segment：喂玩法相机输入（orbit 模式 orbit() 已吃 dx/dy，lookPx 在其下被忽略；
         // 控制台/面板占输入时清空，避免打字或拖 HUD 时相机乱动）。
         {
@@ -1988,6 +1997,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const char* capturePath = nullptr;
         std::string manualPath;
         std::string beforePath;
+        std::string seqPath;
         if (window.keyPressed(nl::core::Key::F12)) {
             manualPath = "docs/screenshots/m0.5-" + std::string(st.backend) + "-manual.png";
             std::string err;
@@ -2001,7 +2011,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
             capturePath = o.screenshotPath.c_str();
         }
-
+        // M11.3：逐帧序列截图（--screenshot-seq <dir>，与 --screenshot 同用截图
+        // 模式主循环；优先级高于末帧单图，目录沿用 prepareScreenshotDirs 创建）。
+        if (!o.screenshotSeqDir.empty()) {
+            char name[512];
+            std::snprintf(name, sizeof(name), "%s/f%05llu.png",
+                          o.screenshotSeqDir.c_str(),
+                          static_cast<unsigned long long>(frame + 1));
+            seqPath = name;
+            std::string seqErr;
+            if (prepareScreenshotDirs(seqPath, seqErr)) capturePath = seqPath.c_str();
+            else nl::core::log::errorCh("viewer", "screenshot-seq: ", seqErr);
+        }
         nl::core::Extent resized{};
         if (window.consumeResize(resized) && resized.width > 0 && resized.height > 0) {
             renderer->resize({static_cast<std::uint32_t>(resized.width),
