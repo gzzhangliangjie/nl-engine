@@ -2821,3 +2821,40 @@
 | **日期 / tag** | 2026-11-11 / annotated tag `s11-hash`（master 本收口 commit；M11.0 非大版本收官 → 不建 milestone 分支、不 bump `kStage`，仍 S8.2） |
 | **交付** | world_cache.slang 三 compute 入口：csCacheFill（半分辨率 R2 帧抖动 + 查询即插入，bevy/Carrot 回收口径：CAS 无墓碑 / life 衰减到 0 清零立即重用 / 线性探测 3 步）、csCacheDecay（全表 life-1）、csCacheViz（全像素 query-only hash 伪彩 × 寿命亮度，gamma 域 pow 1/2.2 全替换 hdrSceneColor_）。双独立哈希 pcg 定槽 + iqint 校验和（0 保留空槽）；四常量三方同口径（kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / probeSteps=3，slang / scene.cpp / gi-tools）。CPU 仿真先行：gi-tools（selftest 7 组 18 断言 + cachesim 确定性热图）语义验证先于 GPU 落码。新 viewer --mode cache-viz（Modes::CacheViz=19，visbuf+pulling+probe 全开）。Q11-0 拍板 A（跟 bevy/Carrot）已写回 S11-PLAN。 |
 | **验收 / 踩坑** | 验收：`example/s11-hash/run.bat verify` 全绿 exit 0（双后端重拍 deviceErrors=0 + bytes 2/2 对冻结基线 + dispatch 锚 + 负向缺模型非零退出）；`regression --only s11-hash` 双后端 **3/3 ALL GREEN**（selftest / cachesim / cacheviz bytes 逐字节）；保形 spot s10-refgi 2/2 + s9-shadow 1/1 全绿；ctest s11-gi 5 用例双后端绿（**新增用例后双后端重新 configure**，M-N6 教训落实）；selftest 16/16 ×2 + Slang 产物 **100/100**（world_cache 三入口 ×2 已登记 kArtifacts）；`server.py --check` exit 0。踩坑（写实，§2.21 固化）：① CacheConstants CB 分配 64B 但 slang 端 cbuffer 实测 96B（g_params 在 byte 80）→ shader 读越界得 0 → viz 全线程早退一个像素不写，**dispatch 照常执行无 validation 错**——SDK `dxc -dumpbin` 反汇编 regIndex 定位；② 连带 `float cb[16]` 写 cb[16..23] 栈越界 UB 同源修复；③ fill 段收尾显式 setTextureState(SRV) 补 probeAtlas/irradAtlas/probePrevDelta 转换（M10.2 同族坑，冒烟 deviceErrors=35 实锤）；④ cases.json 首版两处口径错（selftest expectLog、cachesim `--png` 参数名）+ tool 用例缺 case 级 exe 覆盖（regression 拿版本级 viewer.exe 跑 gi-tools 子命令 → 窗口循环 120s 超时），均首跑暴露即修。**下一步**：M11.1 探针命中点改查缓存（二级弹射）→ M11.2 多跳 GI；S12 历史帧并轨。 |
+
+## A类 M-LOG0+M-LOG1：日志系统升级（2026-11-11，tag `log-m0`，feat/logging）
+
+**动作**：A 类并行轨道首里程碑（Q-L1~L3 三项 2026-11-11 用户拍板，`docs/p8/P8-LOG-PLAN.md` §6）。① vendored **spdlog v1.17.0**（MIT，`thirdparty/spdlog/` include+src+LICENSE 113 文件，排除 tests/bench/example，`VENDOR.md` 溯源留档）；② `nl::core::log` 内核替换——兼容铁律全保：老入口签名行为零改动（现网调用面 grep 实核 6 文件）、stdout 锚点 `[nl:level]` 格式不漂（spdlog pattern `%v` + wrapper 自拼前缀）、`errorCount/deviceErrorCount` 口径逐字保留（含「被闸滤掉的 error 也计数」）、spdlog 类型不进 log.hpp（PIMPL）；③ 文件落盘（Q-L2）：`out/log/<exe>-<backend>-<yyyymmdd-hhmmss>.log` 首条日志懒建、旧文件不清理、行前缀 `[日期 时间.毫秒]`（锚点仍是子串）、backend 编译期宏 `NL_LOG_BACKEND_NAME` 注入 nl_core；④ ODS 转发：`msvc_sink_mt(false)` 无条件 OutputDebugStringA（喂 L3 调试链路）；⑤ 分类通道 + 过滤指令（M-LOG1，bevy EnvFilter 口径）：`writeCh/*Ch`（`[nl:level|channel]` 新格式，老入口不动）+ `setFilter("nl:info,renderer=warn")` / `renderer=off` / `setChannelLevel`，非法指令显式拒绝且原面不动；⑥ 工具 exe `log-tools`（selftest 六段 / demo / usage，退出码 0/1/2）。
+
+**提交版本**：feat/logging 本收口 commit（annotated tag `log-m0`）。
+
+**完成情况**：双后端 BUILD OK + viewer selftest 16/16×2；ctest `log-m0-*` 3/3×2（`--repeat until-pass:3`）；`log-tools selftest` 六段全绿（M0.1 兼容语义 / 文件落盘 / 过滤正向 / 过滤负向 8 类 / setChannelLevel / 4×200 并发零丢失）；`example/log-m0/run.bat` 七段机器断言 ALL GREEN exit 0；cases.json `log-m0` 卡 4 用例（usage/selftest/filter-demo/negative）`regression --only log-m0` **8/8 ALL GREEN**；`server.py --check` exit 0（kStage 仍 S8.2，本卡不在其覆盖面，双验走 run.bat + --only）；log 锚点回归抽查 `m0.9` 4/4 + `nav-m0` 10/10 + `s1-asset` 6/6 全 bytes ALL GREEN（expectLog 零漂）；证据图 `example/log-m0/log-m0-evidence.png` 由 run.bat 真实输出生成（PIL 渲染非手绘）；viewer 回归跑实测在 `out/log/` 落 `viewer-DX12/VULKAN-*.log`（Q-L2 人肉排查痛点直接受益）。
+
+**踩坑情况**
+1. **⚠️ 文件落盘同秒碰撞互吞（selftest 自抓）**：同秒启动多进程 → 同名时间戳文件 `basic_file_sink(truncate)` 后写吞先写（327 B 残文件实锤）。修 = 存在性探测加 `-2/-3` 后缀消歧（拍板形态不变）。**命名含时间戳 + 每次新建 = 必须配碰撞消歧，这是同一条铁律的两半。**
+2. **`ensureLogger(withFile)` 参数形同虚设**：broadcast 恒传 false → 文件路永不建立（首版 selftest FAIL 实抓）。修 = 进程内一次性建齐三路，删布尔参数。
+3. **ODS DBWIN 实测被会话沙箱拦截**：`dbwin_capture.py` 能收到沙箱自身 ODS 但收不到子进程（log-tools/viewer）的；python ctypes 直调 OutputDebugStringA 在沙箱下连进程都段错误。机制级留证（vendored msvc_sink 源码 + 构造路径 selftest 覆盖），**真取证留待带真调试器/非沙箱会话**——不阻塞 M-LOG0。
+4. **bash cwd 不跨命令再踩（落错树构建）**：`cmd //c scripts\build-m0.2.bat DX12` 没带 `cd <wt>` 前缀 → 以主树 cwd 解析出主树 build（编的是主树旧代码，产物字节同、零源码污染，但主树 exe mtime 被刷新）。§7.3「每条命令显式 cwd」必须逐条执行，不能靠上一条残留。
+5. **v1.17.0 src 无 common.cpp**（老版本记忆）；fmt bundled 强制 `/utf-8`（base.h 静态断言）；`log(level, string_view)` 非 format 重载才不解释 `{}`（日志行含 GLSL 花括号会炸 format 路径——已核 logger.h:126 签名）。
+
+**实现决策留档（计划偏差 1 处）**：M-LOG0 阶梯原文「异步写」，落码取**同步 basic_file_sink_mt + 每条 flush**——日志量小、取证正确性优先，避免 async 线程池退出期丢尾行破坏回归取证；async 化留 M-LOG2（console cvar 轮）随滚动策略一起议。已写回 `P8-LOG-PLAN.md`。
+
+**下一步**：M-LOG2（帧号注入 + viewer console `log.*` cvar + 文件滚动）后置待拍板；现网 6 文件调用点按需迁移 `*Ch` 分类通道（零强制）。merge 回 master 待用户拍板（pathfinding M-N6 同款先例）。
+
+## A类 M-LOG2：日志系统二轮（2026-11-11，tag `log-m2`，feat/logging）
+
+**动作**：M-LOG0 收口后 §8 五项待拍板四项合并拍板（AskUserQuestion 单轮四问全取推荐项，第五项并入）。① 帧号注入 wrapper 全局：`setLogFrame(uint64_t)`/`clearLogFrame()`，viewer 主循环 `++frame` 处每帧覆写，行组装层行尾追加 ` #<帧号>`（stdout/文件同格式），sink 仍收原始 message（M0.1 保形口径不破）；② console `log.*` 四命令（level/channel/filter/status）实现下沉 `nl::core::console::registerLogCommands`（core/console.cpp），viewer 与 `log-tools exec` 共用单一事实源，全走 `setFilter` 唯一解析面；③ 文件滚动一代：`setFileRollLimit(bytes)`（默认 50 MiB、下限 1 KiB、热重建文件路），spdlog rotating_file_sink `<name>.log`→`<name>.1`；④ async 不重开（M-LOG0 偏差留档理由仍成立）；⑤ 现网 6 文件 185 处调用点迁移分类通道（`renderer`/`scene`/`viewer`），老 6 级别入口与 `deviceError` 计数入口不动；⑥ 工具面：`log-tools exec` 子命令 + selftest 扩 8 段 + ctest 6 条。
+
+**提交版本**：feat/logging 本收口 commit（annotated tag `log-m2`）。
+
+**完成情况**：双后端 BUILD OK + viewer `--selftest` 16/16×2；ctest `log-*` 6/6×2（`--repeat until-pass:3`）；`log-tools selftest` 8 段全绿；`example/log-m2/run.bat` 五段机器断言 ALL GREEN exit 0（usage/exec 链/exec 负向/selftest/帧号文件证据）；cases.json `log-m2` 卡 4 用例 `regression --only log-m2` **8/8 ALL GREEN**；通道迁移零漂实测：锚点抽查 m0.9 4/4 + nav-m0 10/10 + s1-asset 6/6 + log-m0 8/8 全 bytes ALL GREEN；viewer 真渲染路径取证 `[nl:info|viewer] console exec [0] ... #4`（screenshot 模式 + console-exec 链，沙箱可跑）；`server.py --check` exit 0；log-m0 卡并行竞态修复后 3 轮连跑全绿；证据图由真实输出渲染。
+
+**踩坑情况**
+1. **spdlog rotating 语义两处反直觉**：命名是 `<name>.1`（数字插 basename 与扩展名间，非 `.log.1`）；「先滚后写」滚出文件可略小于 max_size（8142 < 8192 实测）——尺寸下限断言必挂，改内容级验证（`fileContains(rolled, "roll filler 0")`）。一代保留 `.1` 只装最后一滚，"filler 0" 早期内容被 9 次滚动覆盖（77KB/8KB），断言写「首行内容」会假绿。
+2. **`exec` argv 语义与 regression 传参错位**：exec 每 arg = 一条完整命令行（viewer --console-exec 同构），卡里 args 拆散传 → 命令名/参数各成一条「命令」（usage 错 + unknown command，exit 1）。修 = cases.json args 合并成带空格单 arg。**cases.json 工具卡传参形态必须与工具语义对齐，写卡前先手跑一遍**。
+3. **同秒多进程 mtime 竞态（log-m0 卡 regression 1 FAIL 偶发实锤）**：`newestLogFile()` 按 mtime 选「自己的」文件，并行 selftest 同秒启动时选到别人的文件（断言文本在对方文件里不存在）。修 = 全部改 PID 锚定（行文带 PID，按内容搜自己的文件），删 mtime 选择函数；3 轮连跑全绿。**工具并发跑时「最新文件 = 我的文件」不成立**。
+4. **渲染窗口被沙箱回收（SIGTERM）**：viewer 直接跑渲染循环（`--frames 3`）在沙箱下被杀；`--screenshot` 模式（跑 N 帧截图退出）能完整跑通——渲染类取证一律走 screenshot 形态。
+
+**实现决策留档**：`log.channel` 不走 `setChannelLevel`（该入口不支持 off）——统一走回读指令追加段再整面 `setFilter` 应用（同通道重复 = 后者覆盖，M-LOG1 口径），四命令一个解析面、错误文案单源。帧号注入选行组装层而非 sink/pattern：sink 保形 + spdlog pattern 零改动 + 回归锚点前缀子串关系不变。
+
+**下一步**：日志轨道功能面按 §8 拍板清单闭环（M-LOG3 候选为空）；merge 回 master 待用户拍板（与 log-m0 同批）。

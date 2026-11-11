@@ -476,7 +476,7 @@ int runSelfTest() {
 
     std::string captured;
     nl::core::log::setSink([&](nl::core::log::Level, const std::string& m) { captured += m; });
-    nl::core::log::info("hello ", 42);
+    nl::core::log::infoCh("viewer", "hello ", 42);
     nl::core::log::resetSink();
     check(captured == "hello 42", "log formatting + sink");
     check(nl::core::log::errorCount() == 0, "no errors on clean run");
@@ -656,6 +656,10 @@ std::function<void()> registerViewerConsole(nl::viewer::ViewerCamera* camera, bo
         return CommandResult{true, std::string("add: ") + buf};
     });
 
+    // M-LOG2 拍板 ②：log.* 四命令——实现下沉在 nl::core::console::
+    // registerLogCommands（core/console.cpp，viewer 与 log-tools 共用单一事实源）。
+    nl::core::console::registerLogCommands(c);
+
     return [fov, dist, camera]() {
         g_syncing = true;
         fov->setFloat(camera->fovYDegrees());
@@ -797,12 +801,12 @@ struct EditorEmbed {
             nl::editor::EmbedWindow::announce(bridge, engineHwnd,
                                               static_cast<int>(::GetCurrentProcessId()), 1,
                                               nl::editor::RpcValue(std::move(caps)), viewId);
-            nl::core::log::info(std::string("editor bridge: connected view=") + viewId
+            nl::core::log::infoCh("viewer", std::string("editor bridge: connected view=") + viewId
                                 + " endpoint=" + bridge.endpoint()
                                 + " (backend=" + NL_BACKEND_NAME + ")");
         } else {
             nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-            if (first) nl::core::log::info(std::string("editor bridge: no editor at ") + endpoint
+            if (first) nl::core::log::infoCh("viewer", std::string("editor bridge: no editor at ") + endpoint
                                            + " -> standalone (retry every 2s)");
         }
     }
@@ -849,7 +853,7 @@ struct EditorEmbed {
         });
         bridge.registerHandler("camera.reset", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
             camera->reset();
-            nl::core::log::info("camera reset (via editor RPC)");
+            nl::core::log::infoCh("viewer", "camera reset (via editor RPC)");
             return nl::editor::RpcValue();  // nil = ack
         });
     }
@@ -919,7 +923,7 @@ struct EditorEmbed {
             const float yawDeg   = std::atan2(px, pz) * 180.0f / kPiF;
             const float pitchDeg = std::atan2(py, rXZ) * 180.0f / kPiF;
             camera->setOrbit(yawDeg, pitchDeg, len * 2.5f);
-            nl::core::log::info("scene.focus[", (long long)idx, "] -> yaw=", yawDeg, " pitch=", pitchDeg, " dist=", len * 2.5f);
+            nl::core::log::infoCh("viewer", "scene.focus[", (long long)idx, "] -> yaw=", yawDeg, " pitch=", pitchDeg, " dist=", len * 2.5f);
             nl::editor::msgpack::Map m;
             m["yaw"]  = (double)camera->yawDegrees();
             m["pitch"]= (double)camera->pitchDegrees();
@@ -935,7 +939,7 @@ struct EditorEmbed {
             if (!bridge.isConnected()) {   // M-E4a：掉线转重连态，2s 后重试
                 connected = false;
                 nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-                nl::core::log::info("editor bridge lost -> will retry connect every 2s");
+                nl::core::log::infoCh("viewer", "editor bridge lost -> will retry connect every 2s");
             }
         } else if (std::chrono::steady_clock::now() >= nextRetry) {
             tryConnect();
@@ -1087,7 +1091,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     desc.visible = !o.screenshot;
     nl::core::Window window(desc);
     if (!window.valid()) {
-        nl::core::log::error("window creation failed");
+        nl::core::log::errorCh("viewer", "window creation failed");
         return 1;
     }
 
@@ -1110,23 +1114,23 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    visbufMode, pullingMode, rtMode,
                                                    shadowMode, referenceMode, probeMode);
     if (!renderer->valid()) {
-        nl::core::log::error("renderer init failed: ", renderer->lastError());
+        nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
     }
 
     // M10.3（Q14-2）：--compare <png> 右半参考图。失败只告警不断言——画面保持全 live。
     if (!o.comparePath.empty() && !renderer->loadCompareImage(o.comparePath.c_str())) {
-        nl::core::log::error("compare load failed: ", renderer->lastError());
+        nl::core::log::errorCh("viewer", "compare load failed: ", renderer->lastError());
     }
 
     // M-PT1：--nfx <path> 加载 .nfx v1（成功后模拟走 nfx 参数面；失败退 legacy 喷泉）。
     // 机械锚点（run.bat 断言）：nfx loaded: <file>
     if (!o.nfxPath.empty()) {
         if (!renderer->loadParticlesNfx(o.nfxPath.c_str())) {
-            nl::core::log::error("--nfx: ", renderer->lastError(), " (fallback to legacy fountain)");
+            nl::core::log::errorCh("viewer", "--nfx: ", renderer->lastError(), " (fallback to legacy fountain)");
         } else {
             const std::size_t slash = o.nfxPath.find_last_of("/\\");
-            nl::core::log::info("nfx loaded: ",
+            nl::core::log::infoCh("viewer", "nfx loaded: ",
                                 slash == std::string::npos ? o.nfxPath : o.nfxPath.substr(slash + 1));
         }
     }
@@ -1140,11 +1144,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         std::string err;
         editor = nl::renderer::NodeEditor::create(o.editorGraph.c_str(), &err);
         if (!editor->valid()) {
-            nl::core::log::error("--editor: ", err);
+            nl::core::log::errorCh("viewer", "--editor: ", err);
             return 1;
         }
         editorActive = true;
-        nl::core::log::info("editor: ", o.editorGraph, " (", editor->graphPath(), ")");
+        nl::core::log::infoCh("viewer", "editor: ", o.editorGraph, " (", editor->graphPath(), ")");
     }
     // P8 M-N2：--nav-panel 挂 NavMesh 调参/五阶段面板。nl/nav 是纯 CPU 集成层
     //（viewer 只持值对象与 POD 状态），ImGui 全在 renderer/。cvar nav.* 是
@@ -1188,7 +1192,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                 navPathPts.size() < 32; k += 3)
             navPathPts.push_back(std::array<float, 2>{
                 qr.waypoints[k], qr.waypoints[k + 2]});
-        nl::core::log::info("nav-panel: path ", navPathStatus,
+        nl::core::log::infoCh("viewer", "nav-panel: path ", navPathStatus,
                             " polys=", navMesh.stats().polyCount,
                             " obstacles=", navMesh.obstacleCount());
     };
@@ -1207,12 +1211,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         std::string cerr;
         const nl::nav::Geometry arena = nl::nav::makeArenaGeometry();
         if (!navMesh.bake(arena, nl::nav::BuildParams{}, cerr, true)) {
-            nl::core::log::error("nav-crowd: arena bake failed: ", cerr);
+            nl::core::log::errorCh("viewer", "nav-crowd: arena bake failed: ", cerr);
             return 1;
         }
         navBaked = true;
         if (!navMesh.debugDrawStage(nl::nav::DebugStage::NavMesh, navPrims, cerr)) {
-            nl::core::log::error("nav-crowd: debug stage failed: ", cerr);
+            nl::core::log::errorCh("viewer", "nav-crowd: debug stage failed: ", cerr);
             return 1;
         }
         navPrimsValid = true;
@@ -1255,11 +1259,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::nav::CrowdConfig cfg;   // dt=1/60 固定（M-N4 Q3=A 同口径）
         cfg.maxAgents = 16;
         if (!navCrowdSystem || !navCrowdSystem->init(navMesh, cfg, cerr)) {
-            nl::core::log::error("nav-crowd: system init failed: ", cerr);
+            nl::core::log::errorCh("viewer", "nav-crowd: system init failed: ", cerr);
             return 1;
         }
         navCrowdFixedDt = static_cast<double>(cfg.dt);
-        nl::core::log::info("nav-crowd: ECS agents=", navCrowdSystem->agentCount(),
+        nl::core::log::infoCh("viewer", "nav-crowd: ECS agents=", navCrowdSystem->agentCount(),
                             " systems=", navCrowdWorld->getSystemCount(),
                             " dt=0.016667 steps/frame=", o.navCrowdSteps,
                             " polys=", navMesh.stats().polyCount);
@@ -1320,7 +1324,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                 return nl::core::console::CommandResult{true,
                                     "nav.bake requested"};
                             });
-        nl::core::log::info("nav-panel: bake input = assets/models/",
+        nl::core::log::infoCh("viewer", "nav-panel: bake input = assets/models/",
                             o.navModelFile, " (render model = ", o.modelFile, ")");
     }
     // 每帧同步（主循环 hud{} 创建后调用；cvar <-> 面板状态 <-> 烘焙产物）。
@@ -1513,7 +1517,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                       s.polyCount, s.walkableArea, s.vertCount,
                                       s.detailTriCount);
                     }
-                    nl::core::log::info("nav-panel: bake ok mode=",
+                    nl::core::log::infoCh("viewer", "nav-panel: bake ok mode=",
                                         wantTiled ? "tiled" : "solo",
                                         " polys=", s.polyCount,
                                         " tiles=", navMesh.compressedTileCount());
@@ -1535,7 +1539,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (!navMesh.isTiled()) {
                 std::snprintf(navStatus, sizeof(navStatus),
                               "not tiled: enable 'tiled bake' then bake");
-                nl::core::log::info(
+                nl::core::log::infoCh("viewer", 
                     "nav-panel: obstacle rejected (not tiled)");
             } else {
                 const float p[3] = {st.obsX, -1.f, st.obsZ};
@@ -1552,7 +1556,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                   "tiled polys=%d obstacles=%d",
                                   s.polyCount, navMesh.obstacleCount());
                     navRefreshPath();
-                    nl::core::log::info("nav-panel: obstacle added ref=", ref,
+                    nl::core::log::infoCh("viewer", "nav-panel: obstacle added ref=", ref,
                                         " polys=", s.polyCount);
                 } else {
                     std::snprintf(navStatus, sizeof(navStatus),
@@ -1571,7 +1575,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 navObsDraw.clear();
                 regen = true;
                 navRefreshPath();
-                nl::core::log::info("nav-panel: obstacles cleared polys=",
+                nl::core::log::infoCh("viewer", "nav-panel: obstacles cleared polys=",
                                     navMesh.stats().polyCount,
                                     " left=", navMesh.obstacleCount());
             }
@@ -1645,18 +1649,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (o.physicsDebug) {
         std::string perr;
         if (!physicsScene.build(o.physicsScenario, o.physicsSeed, &perr)) {
-            nl::core::log::error("physics debug scene build failed: ", perr);
+            nl::core::log::errorCh("viewer", "physics debug scene build failed: ", perr);
             return 1;
         }
         if (o.physicsScenario == 1)
-            nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
+            nl::core::log::infoCh("viewer", "physics debug scene: ", physicsScene.bodyCount(),
                                " static course bodies (floor + ramp/steps/platforms/steep slope/wall"
                                ", CharacterVirtual walks without a rigid body)");
         else if (o.physicsScenario == 2)
-            nl::core::log::info("M-D3 drive scene: ", physicsScene.bodyCount(),
+            nl::core::log::infoCh("viewer", "M-D3 drive scene: ", physicsScene.bodyCount(),
                                " bodies (ground + lane markers + wall + VehicleConstraint chassis)");
         else
-            nl::core::log::info("physics debug scene: ", physicsScene.bodyCount(),
+            nl::core::log::infoCh("viewer", "physics debug scene: ", physicsScene.bodyCount(),
                                " bodies (floor + dynamic box/sphere/capsule)");
     }
 
@@ -1672,7 +1676,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (lodMode || dagTop) {
         lodCount = renderer->lodLevelCount();
         if (lodCount <= 0) {
-            nl::core::log::error("--mode ", nl::core::modeName(o.mode),
+            nl::core::log::errorCh("viewer", "--mode ", nl::core::modeName(o.mode),
                                  ": no layered assets for ", o.modelFile,
                                  " (expected assets/meshlets/<stem>.lodN.nmesh; run "
                                  "nanite-tools lod <base>.nmesh -o assets/meshlets/<stem>)");
@@ -1690,34 +1694,34 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         dagGroupCount = renderer->dagGroupCount();
         if (o.dagGroup >= 0) {
             if (lodCount < 2) {
-                nl::core::log::error("--dag-group ", o.dagGroup, " needs >= 2 layers, ",
+                nl::core::log::errorCh("viewer", "--dag-group ", o.dagGroup, " needs >= 2 layers, ",
                                      o.modelFile, " has ", lodCount);
                 return 1;
             }
             if (o.dagGroup >= dagGroupCount) {
-                nl::core::log::error("--dag-group ", o.dagGroup, " out of range 0..",
+                nl::core::log::errorCh("viewer", "--dag-group ", o.dagGroup, " out of range 0..",
                                      dagGroupCount - 1);
                 return 1;
             }
             if (!renderer->setDagCut(o.dagGroup)) {
-                nl::core::log::error("dag cut failed: ", renderer->lastError());
+                nl::core::log::errorCh("viewer", "dag cut failed: ", renderer->lastError());
                 return 1;
             }
             dagGroup = o.dagGroup;
         } else if (!renderer->setLodLevel(lodCount - 1)) {
             // 纯顶层：直接渲染最粗层（与 lod 模式同一条 uploadClusterMesh 路径）。
-            nl::core::log::error("top level load failed: ", renderer->lastError());
+            nl::core::log::errorCh("viewer", "top level load failed: ", renderer->lastError());
             return 1;
         }
         lodLevel = lodCount - 1;
     } else if (lodMode) {
         if (o.lod >= lodCount) {
-            nl::core::log::error("--lod ", o.lod, " out of range: ", o.modelFile,
+            nl::core::log::errorCh("viewer", "--lod ", o.lod, " out of range: ", o.modelFile,
                                  " has ", lodCount, " layers (0..", lodCount - 1, ")");
             return 1;
         }
         if (!renderer->setLodLevel(o.lod)) {
-            nl::core::log::error("lod level ", o.lod, " load failed: ", renderer->lastError());
+            nl::core::log::errorCh("viewer", "lod level ", o.lod, " load failed: ", renderer->lastError());
             return 1;
         }
         lodLevel = o.lod;
@@ -1742,7 +1746,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // P8 M-CAM b-segment：加载可选轨迹并按 CLI 选择相机模式（orbit 缺省 = 零回归）
     if (!o.cameraTrack.empty()) {
         if (!camera.loadTrack(o.cameraTrack.c_str()))
-            nl::core::log::warn("camera track load failed: ", o.cameraTrack);
+            nl::core::log::warnCh("viewer", "camera track load failed: ", o.cameraTrack);
     }
     {
         nl::viewer::CameraMode m = nl::viewer::CameraMode::Orbit;
@@ -1779,8 +1783,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
-    nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
-    nl::core::log::info("debug layer: ", info.debugLayer,
+    nl::core::log::infoCh("viewer", "backend: ", st.backend, " | ", info.adapterName);
+    nl::core::log::infoCh("viewer", "debug layer: ", info.debugLayer,
                         " | active=", info.debugLayerActive ? "yes" : "no");
     const std::string lodLine = lodMode
         ? " | lod layers: " + std::to_string(lodCount) + " (level " + std::to_string(lodLevel) + ")"
@@ -1794,7 +1798,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             ? " | drill g" + std::to_string(dagGroup) + " (" + std::to_string(dagGroupCount) + " groups)"
             : " | no drill (" + std::to_string(dagGroupCount) + " groups available)";
     }
-    nl::core::log::info("mode: ", nl::core::modeName(o.mode),
+    nl::core::log::infoCh("viewer", "mode: ", nl::core::modeName(o.mode),
                         " | HUD: ", hudOn ? "on" : "off",
                         " | shading: ", shadingName(shading), wireframe ? " | wireframe" : "",
                         lodLine, dagLine,
@@ -1803,10 +1807,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (o.screenshot) {
         std::string err;
         if (!prepareScreenshotDirs(o.screenshotPath, err)) {
-            nl::core::log::error(err);
+            nl::core::log::errorCh("viewer", err);
             return 1;
         }
-        nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
+        nl::core::log::infoCh("viewer", "screenshot mode: ", o.frames, " frames -> ",
                             std::filesystem::absolute(o.screenshotPath).string(),
                             " | cull=", cullBack ? "back" : "none",
                             " | hud=", hudOn ? "on" : "off");
@@ -1842,14 +1846,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M-GL5：对齐 runScene——命令输出也进日志（否则 runNormal 模式下
         // game.tickgroups 等查询命令的验收锚落不了盘）。
         if (r.ok()) {
-            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+            nl::core::log::infoCh("viewer", "console exec [0] ", line, " -> ", r.output);
         } else {
-            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+            nl::core::log::errorCh("viewer", "console exec [", r.exitCode(), "] ", line, " -> ", r.output);
         }
     }
     bool consoleOpen = o.consoleOpen;
     if (consoleOpen && !hudEnabled)
-        nl::core::log::warn("console requested but HUD is off; add --hud to see it");
+        nl::core::log::warnCh("viewer", "console requested but HUD is off; add --hud to see it");
     bool hudWantsKeyboard = false;  // 上一帧控制台输入行是否在打字（屏蔽游戏热键）
 
     using clock = std::chrono::steady_clock;
@@ -1900,14 +1904,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M-C1：` 边沿切换控制台；ESC 开着控制台时先收控制台，再退出
         if (window.keyPressed(nl::core::Key::Grave)) {
             consoleOpen = !consoleOpen;
-            nl::core::log::info("console -> ", consoleOpen ? "open" : "closed");
+            nl::core::log::infoCh("viewer", "console -> ", consoleOpen ? "open" : "closed");
         }
         if (window.keyPressed(nl::core::Key::Escape)) {
             if (consoleOpen) {
                 consoleOpen = false;
-                nl::core::log::info("console -> closed (ESC)");
+                nl::core::log::infoCh("viewer", "console -> closed (ESC)");
             } else {
-                nl::core::log::info("ESC -> exit");
+                nl::core::log::infoCh("viewer", "ESC -> exit");
                 break;
             }
         }
@@ -1921,26 +1925,26 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         } else {
             if (window.keyPressed(nl::core::Key::Space)) {
                 colorIndex = (colorIndex + 1) % kColorCount;
-                nl::core::log::info("clear color -> ", colorIndex);
+                nl::core::log::infoCh("viewer", "clear color -> ", colorIndex);
             }
             if (window.keyPressed(nl::core::Key::C)) {
                 cullBack = !cullBack;
-                nl::core::log::info("back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
+                nl::core::log::infoCh("viewer", "back-face culling -> ", cullBack ? "on" : "off (inner wall visible)");
             }
             if (window.keyPressed(nl::core::Key::V)) {   // M0.8：线框开关
                 wireframe = !wireframe;
-                nl::core::log::info("wireframe -> ", wireframe ? "on" : "off");
+                nl::core::log::infoCh("viewer", "wireframe -> ", wireframe ? "on" : "off");
             }
             if (window.keyPressed(nl::core::Key::N)) {   // M0.8：循环切调试着色模式
                 // cluster/cull 场景循环 0..4（pbr 只在 psMain 的 SPIR-V 里有意义）；
                 // normal 场景循环 0..3（4=cluster 需要 CLUSTERCOLOR 属性）。
                 const int cycleCount = (cluster || cullMode) ? (kShadingCount - 1) : 4;
                 shading = (shading + 1) % cycleCount;
-                nl::core::log::info("shading -> ", shadingName(shading));
+                nl::core::log::infoCh("viewer", "shading -> ", shadingName(shading));
             }
             if (window.keyPressed(nl::core::Key::R)) {
                 camera.reset();
-                nl::core::log::info("camera reset");
+                nl::core::log::infoCh("viewer", "camera reset");
             }
         }
         float dx = 0.0f, dy = 0.0f, scroll = 0.0f, mouseX = 0.0f, mouseY = 0.0f;
@@ -1994,7 +1998,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
         if (resizeFrame != 0 && frame + 1 == resizeFrame) {
             window.setSize(o.resizeWidth, o.resizeHeight);
-            nl::core::log::info("resize case: request ", o.resizeWidth, "x", o.resizeHeight);
+            nl::core::log::infoCh("viewer", "resize case: request ", o.resizeWidth, "x", o.resizeHeight);
         }
 
         const auto now = clock::now();
@@ -2004,6 +2008,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // 不钉绝对时间——只保证「每帧喂多少」确定，暂停/倍速对拍才可逐字节复现。
         if (o.fixedDtMs > 0.0) dtMs = o.fixedDtMs;
         ++frame;
+        nl::core::log::setLogFrame(frame); // M-LOG2 拍板 ①：日志行尾 #<帧号> 上下文
         if (o.screenshot) {
             dtSumMs += dtMs;
             if (dtMs > dtMaxMs) dtMaxMs = dtMs;
@@ -2055,7 +2060,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             // camera-side ChassisState shape (no camera glue is installed).
             if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
                 const auto dsLog = physicsScene.driveState();
-                nl::core::log::info("drive scene: speed=", dsLog.speed,
+                nl::core::log::infoCh("viewer", "drive scene: speed=", dsLog.speed,
                                     " grounded=", dsLog.grounded,
                                     " wallHits=", dsLog.wallHits,
                                     " contacts=", dsLog.contactAdded, "/",
@@ -2067,7 +2072,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cs.yawDegrees = dcs.yawDegrees;
                 cs.vel[0] = dcs.vel[0]; cs.vel[1] = dcs.vel[1]; cs.vel[2] = dcs.vel[2];
                 cs.valid = dcs.valid;
-                nl::core::log::info("drive hook: chassis valid=", cs.valid ? 1 : 0,
+                nl::core::log::infoCh("viewer", "drive hook: chassis valid=", cs.valid ? 1 : 0,
                                     " posZ=", cs.pos[2], " yawDeg=", cs.yawDegrees);
             }
         }
@@ -2187,7 +2192,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             // 落在本循环最后一个迭代（frame == o.frames）；此处已在 ++frame 之后，
             // 同一迭代即 frame == o.frames——日志与 PNG 同帧。
             if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
-                nl::core::log::info("game clock: simTime=", gameClock.simTime(),
+                nl::core::log::infoCh("viewer", "game clock: simTime=", gameClock.simTime(),
                                     "s ticks=", gameClock.tickCount(),
                                     " paused=", gameClock.paused() ? 1 : 0,
                                     " scale=", gameClock.timeScale(),
@@ -2214,7 +2219,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     if (y < minY) minY = y;
                     if (y > maxY) maxY = y;
                 }
-                nl::core::log::info("phys-debug settled: vertices=", dl.vertexCount,
+                nl::core::log::infoCh("viewer", "phys-debug settled: vertices=", dl.vertexCount,
                                     " lineY[", minY, ", ", maxY, "]");
             }
         }
@@ -2292,7 +2297,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                         if (it == at && !demoHeld[i]) {
                             inputState.feedKey(kScript[i].key, true);
                             demoHeld[i] = true;
-                            nl::core::log::info("input-demo: inject key ", kScript[i].key,
+                            nl::core::log::infoCh("viewer", "input-demo: inject key ", kScript[i].key,
                                                 " at iter ", it);
                         }
                     }
@@ -2482,7 +2487,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
                                    (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) ? &hud : nullptr)) {
-            nl::core::log::error("renderFrame failed: ", renderer->lastError());
+            nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
@@ -2492,10 +2497,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M-PT1：--nfx 时锚点换 nfx 标记（rate/life 从资产读，数值进 .nfx 内容）。
         if (o.particles && o.screenshot && frame + 1 == static_cast<std::uint64_t>(o.frames)) {
             if (o.nfxPath.empty()) {
-                nl::core::log::info("particles steady: alive=", renderer->info().particleAlive,
+                nl::core::log::infoCh("viewer", "particles steady: alive=", renderer->info().particleAlive,
                                     " (rate=300/s, life=[1.6,2.3]s)");
             } else {
-                nl::core::log::info("particles steady: alive=", renderer->info().particleAlive,
+                nl::core::log::infoCh("viewer", "particles steady: alive=", renderer->info().particleAlive,
                                     " (nfx)");
             }
         }
@@ -2561,7 +2566,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     if (renderer->setLodLevel(want)) {
                         lodLevel = want;
                     } else {
-                        nl::core::log::error("lod switch failed: ", renderer->lastError());
+                        nl::core::log::errorCh("viewer", "lod switch failed: ", renderer->lastError());
                         failed = true;
                     }
                 }
@@ -2573,7 +2578,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     if (renderer->setDagCut(want)) {
                         dagGroup = want;
                     } else {
-                        nl::core::log::error("dag cut switch failed: ", renderer->lastError());
+                        nl::core::log::errorCh("viewer", "dag cut switch failed: ", renderer->lastError());
                         failed = true;
                     }
                 }
@@ -2593,7 +2598,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
         if (capturePath) {
             ++screenshotsSaved;
-            nl::core::log::info("screenshot written: ", capturePath);
+            nl::core::log::infoCh("viewer", "screenshot written: ", capturePath);
         }
         // M9.2：reference 模式截图后写同名 .json 侧车（相机/灯光/采样元数据），
         // 供回归对拍与裁判 M9.1 阴影射线用。仅 reference 模式产出，且只在末帧触发。
@@ -2620,9 +2625,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             std::ofstream js(jsonPath);
             if (js) {
                 js << side.dump(2) << '\n';
-                nl::core::log::info("reference sidecar written: ", jsonPath);
+                nl::core::log::infoCh("viewer", "reference sidecar written: ", jsonPath);
             } else {
-                nl::core::log::warn("reference sidecar write failed: ", jsonPath);
+                nl::core::log::warnCh("viewer", "reference sidecar write failed: ", jsonPath);
             }
         }
         // M4.1：截图模式下把 GPU 剔除计数写进日志——自检脚本与 frustum_check.py
@@ -2640,7 +2645,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 const int visited = occValid ? info.visibleClusters + info.hizOccluded
                                              : info.visibleClusters;
                 if (info.hizTopFar >= 0.0f) {
-                    nl::core::log::info("hiz stats: pyramid top far ", info.hizTopFar,
+                    nl::core::log::infoCh("viewer", "hiz stats: pyramid top far ", info.hizTopFar,
                                         " (visible ", info.visibleClusters, " / ",
                                         info.totalClusters, " clusters",
                                         occValid ? ", occluded " : "",
@@ -2648,7 +2653,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                         visited, " visited, mips ",
                                         info.hizMipCount, ")");
                 } else if (info.hizTopFar <= -1.5f) {
-                    nl::core::log::info("hiz stats: pyramid top far background-dominates",
+                    nl::core::log::infoCh("viewer", "hiz stats: pyramid top far background-dominates",
                                         " (visible ", info.visibleClusters, " / ",
                                         info.totalClusters, " clusters",
                                         occValid ? ", occluded " : "",
@@ -2656,16 +2661,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                         visited, " visited, mips ",
                                         info.hizMipCount, ")");
                 } else {
-                    nl::core::log::info("hiz stats: top far pending (mips ",
+                    nl::core::log::infoCh("viewer", "hiz stats: top far pending (mips ",
                                         info.hizMipCount, ")");
                 }
             } else if (dagMode) {
-                nl::core::log::info("dag stats: visible ", info.visibleClusters, " / ",
+                nl::core::log::infoCh("viewer", "dag stats: visible ", info.visibleClusters, " / ",
                                     info.totalClusters, " clusters (threshold ",
                                     cutThresholdPx, " px, tris ",
                                     info.visibleTriangles, ")");
             } else {
-                nl::core::log::info("cull stats: visible ", info.visibleClusters, " / ",
+                nl::core::log::infoCh("viewer", "cull stats: visible ", info.visibleClusters, " / ",
                                     info.totalClusters, " clusters (frustum on, tris ",
                                     info.visibleTriangles, ")");
             }
@@ -2704,32 +2709,32 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         char pair[96];
         std::snprintf(pair, sizeof(pair), "minPairDist=%.4f",
                       navCrowdSystem->minPairDistance());
-        nl::core::log::info("nav-crowd: final agents=", navCrowdSystem->agentCount(),
+        nl::core::log::infoCh("viewer", "nav-crowd: final agents=", navCrowdSystem->agentCount(),
                             " steps=", navCrowdSystem->stepCount(),
                             " arrived=", navCrowdSystem->arrivedCount(),
                             " ", pair);
     }
-    nl::core::log::info("shutdown ok (frames=", frame,
+    nl::core::log::infoCh("viewer", "shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
     // M4.2：60fps 验收的 CPU 侧机械证据（截图模式无节流，测渲染吞吐上限）。
     // M6.2：追加整帧 GPU 时间均值（NVRHI timer 真值，deterministic 也 resolve）——
     // 帧时间下降验收的机器出口（CPU 循环在 draw 段轻时不敏感，GPU 口径才显性）。
     if (o.screenshot && frame > 1) {
-        nl::core::log::info("frame timing: avg ",
+        nl::core::log::infoCh("viewer", "frame timing: avg ",
                             dtSumMs / static_cast<double>(frame), " ms  max ",
                             dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
         if (gpuMsSum > 0.0 && gpuMsFrames > 0)
-            nl::core::log::info("gpu timing: avg ", gpuMsSum / gpuMsFrames,
+            nl::core::log::infoCh("viewer", "gpu timing: avg ", gpuMsSum / gpuMsFrames,
                                 " ms over ", gpuMsFrames, " resolved frames (NVRHI timer)");
     }
 
     if (o.screenshot && screenshotsSaved == 0) {
-        nl::core::log::error("screenshot was not written");
+        nl::core::log::errorCh("viewer", "screenshot was not written");
         failed = true;
     }
     if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
-        nl::core::log::error("acceptance failed: device/error counters must be zero");
+        nl::core::log::errorCh("viewer", "acceptance failed: device/error counters must be zero");
         failed = true;
     }
     return failed ? 1 : 0;
@@ -2809,18 +2814,18 @@ static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
 int runScene(const Options& o) {
     // ---- 1. 读场景文件 + World 反序列化 ----
     const std::string& scenePath = o.scenePath;
-    if (scenePath.empty()) { nl::core::log::error("--scene: path is empty"); return 2; }
+    if (scenePath.empty()) { nl::core::log::errorCh("viewer", "--scene: path is empty"); return 2; }
     for (const char c : scenePath) {
         const auto u = static_cast<unsigned char>(c);
         if (u < 0x20 || u > 0x7E) {
-            nl::core::log::error("--scene: path must be printable ASCII: ", scenePath);
+            nl::core::log::errorCh("viewer", "--scene: path must be printable ASCII: ", scenePath);
             return 2;
         }
     }
     {
         std::error_code ec;
         if (!std::filesystem::is_regular_file(std::filesystem::path(scenePath), ec) || ec) {
-            nl::core::log::error("--scene: file not found: ", scenePath);
+            nl::core::log::errorCh("viewer", "--scene: file not found: ", scenePath);
             return 2;
         }
     }
@@ -2828,12 +2833,12 @@ int runScene(const Options& o) {
     float ambient = 0.28f;   // 场景文件缺省（ambient 为场景级扩展键，World 格式不感知）
     {
         std::ifstream f(scenePath, std::ios::binary);
-        if (!f) { nl::core::log::error("--scene: cannot open ", scenePath); return 2; }
+        if (!f) { nl::core::log::errorCh("viewer", "--scene: cannot open ", scenePath); return 2; }
         nlohmann::json doc;
         try {
             f >> doc;
         } catch (const nlohmann::json::exception& ex) {
-            nl::core::log::error("--scene: malformed json: ", ex.what());
+            nl::core::log::errorCh("viewer", "--scene: malformed json: ", ex.what());
             return 2;
         }
         // 注册组件库（与 nanite-scene 同款显式注册）→ World::deserialise。
@@ -2845,11 +2850,11 @@ int runScene(const Options& o) {
         try {
             ok = world.deserialise(doc, err);
         } catch (const std::exception& ex) {
-            nl::core::log::error("--scene: deserialise threw: ", ex.what());
+            nl::core::log::errorCh("viewer", "--scene: deserialise threw: ", ex.what());
             return 2;
         }
         if (!ok) {
-            nl::core::log::error("--scene: deserialise rejected: ", err);
+            nl::core::log::errorCh("viewer", "--scene: deserialise rejected: ", err);
             return 2;
         }
         if (doc.contains("ambient") && doc["ambient"].is_number())
@@ -2894,7 +2899,7 @@ int runScene(const Options& o) {
             // M-E1b.2：点光字段透传 + 显式拒绝（非法 type / 非正 range 退出码 2）
             l.type = light->type;
             if (l.type != 0 && l.type != 1) {
-                nl::core::log::error("--scene: entity ", id, " has unknown light type ", l.type);
+                nl::core::log::errorCh("viewer", "--scene: entity ", id, " has unknown light type ", l.type);
                 return 2;
             }
             l.position[0] = light->position.x;
@@ -2902,14 +2907,14 @@ int runScene(const Options& o) {
             l.position[2] = light->position.z;
             l.range = light->range;
             if (l.type == 1 && l.range <= 0.0f) {
-                nl::core::log::error("--scene: entity ", id, " point light range must be > 0");
+                nl::core::log::errorCh("viewer", "--scene: entity ", id, " point light range must be > 0");
                 return 2;
             }
             // M-E1b.4：方向灯阴影开关透传；点光不投阴影（2D shadow map 只做方向灯），
             // 带键显式拒绝（不静默忽略，五路负向口径）。
             l.shadow = light->shadow;
             if (l.type == 1 && l.shadow) {
-                nl::core::log::error("--scene: entity ", id,
+                nl::core::log::errorCh("viewer", "--scene: entity ", id,
                                      " point light does not support shadow (directional only)");
                 return 2;
             }
@@ -2918,11 +2923,11 @@ int runScene(const Options& o) {
         const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
         if (model) {
             if (!world.getComponent<nl::scene::TransformComponent>(id)) {
-                nl::core::log::error("--scene: entity ", id, " has Model without Transform");
+                nl::core::log::errorCh("viewer", "--scene: entity ", id, " has Model without Transform");
                 return 2;
             }
             if (!validGlbAssetName(model->meshFile)) {
-                nl::core::log::error("--scene: entity ", id, " meshFile '",
+                nl::core::log::errorCh("viewer", "--scene: entity ", id, " meshFile '",
                                      model->meshFile, "' rejected by asset whitelist (.glb)");
                 return 2;
             }
@@ -2967,7 +2972,7 @@ int runScene(const Options& o) {
     desc.visible = !o.screenshot;
     nl::core::Window window(desc);
     if (!window.valid()) {
-        nl::core::log::error("window creation failed");
+        nl::core::log::errorCh("viewer", "window creation failed");
         return 1;
     }
 
@@ -2988,7 +2993,7 @@ int runScene(const Options& o) {
                                                    /*skinMode=*/false, /*hizMode=*/false,
                                                    /*sceneMode=*/true);
     if (!renderer->valid()) {
-        nl::core::log::error("renderer init failed: ", renderer->lastError());
+        nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
     }
     const std::string sceneName =
@@ -2996,14 +3001,14 @@ int runScene(const Options& o) {
     // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
     std::uint32_t pointLights = 0;
     for (const auto& l : lights) if (l.type == 1) ++pointLights;
-    nl::core::log::info("ecs scene: ", objects.size(), " objects | ", lights.size(),
+    nl::core::log::infoCh("viewer", "ecs scene: ", objects.size(), " objects | ", lights.size(),
                         " lights (", pointLights, " point) | ambient ", ambient);
     if (!renderer->loadEcsScene(objects.data(),
                                 static_cast<std::uint32_t>(objects.size()),
                                 lights.empty() ? nullptr : lights.data(),
                                 static_cast<std::uint32_t>(lights.size()),
                                 ambient, sceneName.c_str())) {
-        nl::core::log::error("ecs scene load failed: ", renderer->lastError());
+        nl::core::log::errorCh("viewer", "ecs scene load failed: ", renderer->lastError());
         return 1;
     }
 
@@ -3059,7 +3064,7 @@ int runScene(const Options& o) {
     if (ticking) {
         world.registerSystem(std::make_unique<SpinSystem>(world));
         world.registerSystem(std::make_unique<ReadCountSystem>(world));
-        nl::core::log::info("ecs tick: ", o.tickMode,
+        nl::core::log::infoCh("viewer", "ecs tick: ", o.tickMode,
                             " | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>)",
                             " | fixed dt=1/60");
     }
@@ -3078,7 +3083,7 @@ int runScene(const Options& o) {
     // P8 M-CAM b-segment：加载可选轨迹并按 CLI 选择相机模式（orbit 缺省 = 零回归）
     if (!o.cameraTrack.empty()) {
         if (!camera.loadTrack(o.cameraTrack.c_str()))
-            nl::core::log::warn("camera track load failed: ", o.cameraTrack);
+            nl::core::log::warnCh("viewer", "camera track load failed: ", o.cameraTrack);
     }
     {
         nl::viewer::CameraMode m = nl::viewer::CameraMode::Orbit;
@@ -3111,12 +3116,12 @@ int runScene(const Options& o) {
         if (audioWorld) return audioWorld.get();
         auto w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
         if (!w->ok()) {
-            nl::core::log::info("audio: device init failed (", w->error(), ") -> offline fallback");
+            nl::core::log::infoCh("viewer", "audio: device init failed (", w->error(), ") -> offline fallback");
             audioCfg.offline = true;
             w = std::make_unique<nl::audio::AudioWorld>(audioCfg);
         }
         if (!w->ok()) {
-            nl::core::log::error("audio: AudioWorld init failed: ", w->error());
+            nl::core::log::errorCh("viewer", "audio: AudioWorld init failed: ", w->error());
             return nullptr;
         }
         audioWorld = std::move(w);
@@ -3190,7 +3195,7 @@ int runScene(const Options& o) {
             }
         }
         if (rtc.empty() || !fs::is_regular_file(dll)) {
-            nl::core::log::error("script: build outputs missing under ", buildDir.string(),
+            nl::core::log::errorCh("viewer", "script: build outputs missing under ", buildDir.string(),
                                  " (*.runtimeconfig.json + *.dll) — run: dotnet build ", proj.string());
             return 1;
         }
@@ -3199,13 +3204,13 @@ int runScene(const Options& o) {
         // load_assembly_and_get_function_pointer 一步可能 0x80131509）。
         scriptVm = nl::script::Vm::create(fs::absolute(rtc).string(), &vr);
         if (!scriptVm) {
-            nl::core::log::error("script: Vm::create failed: ", vr.message);
+            nl::core::log::errorCh("viewer", "script: Vm::create failed: ", vr.message);
             return 1;
         }
         const auto ir = nl::script::ScriptHost::get().init(
             scriptVm.get(), fs::absolute(o.scriptBootstrap).string());
         if (!ir.ok) {
-            nl::core::log::error("script: ScriptHost init failed: ", ir.message);
+            nl::core::log::errorCh("viewer", "script: ScriptHost init failed: ", ir.message);
             return 1;
         }
         // typeName 缺省推导（nl-script 工具同款双锚约定）：类名 = 工程目录名
@@ -3224,11 +3229,11 @@ int runScene(const Options& o) {
         const auto lr2 = nl::script::ScriptHost::get().loadScript(
             fs::absolute(dll).string(), typeName);
         if (!lr2.ok) {
-            nl::core::log::error("script: loadScript failed: ", lr2.message);
+            nl::core::log::errorCh("viewer", "script: loadScript failed: ", lr2.message);
             return 1;
         }
         scriptLoaded = true;
-        nl::core::log::info("script: loaded ", dll.string(), " type=", typeName,
+        nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
                             " (host-level OnTick on logic frame)");
     }
     sceneConsole.registerCommand("game.script",
@@ -3260,7 +3265,7 @@ int runScene(const Options& o) {
         if (!scriptLoaded) return;
         const auto sr = nl::script::ScriptHost::get().scriptTick(dt);
         if (!sr.ok)
-            nl::core::log::error("script: ", sr.message);
+            nl::core::log::errorCh("viewer", "script: ", sr.message);
     });
     gameClock.scheduler().set(nl::core::TickGroup::PostPhysics,
                               [&o, &world, &failed](double dt, std::uint64_t) {
@@ -3269,7 +3274,7 @@ int runScene(const Options& o) {
         } else {
             std::string tickErr;
             if (!world.tickParallel(dt, 4, tickErr)) {
-                nl::core::log::error("ecs tickParallel failed: ", tickErr);
+                nl::core::log::errorCh("viewer", "ecs tickParallel failed: ", tickErr);
                 failed = true;
             }
         }
@@ -3284,23 +3289,23 @@ int runScene(const Options& o) {
             audioWorld->setSourcePosition(b.src, {p.x, p.y, p.z});
         }
     });
-    nl::core::log::info("tick groups: ", nl::core::tickGroupName(nl::core::TickGroup::PrePhysics),
+    nl::core::log::infoCh("viewer", "tick groups: ", nl::core::tickGroupName(nl::core::TickGroup::PrePhysics),
                         "->", nl::core::tickGroupName(nl::core::TickGroup::PostPhysics),
                         "->", nl::core::tickGroupName(nl::core::TickGroup::PostUpdateWork),
                         " (registered=", gameClock.scheduler().registeredCount(), ")");
     for (const auto& line : o.consoleExecLines) {
         const auto r = sceneConsole.exec(line);
         if (r.ok()) {
-            nl::core::log::info("console exec [0] ", line, " -> ", r.output);
+            nl::core::log::infoCh("viewer", "console exec [0] ", line, " -> ", r.output);
         } else {
-            nl::core::log::error("console exec [", r.exitCode(), "] ", line, " -> ", r.output);
+            nl::core::log::errorCh("viewer", "console exec [", r.exitCode(), "] ", line, " -> ", r.output);
         }
     }
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
-    nl::core::log::info("backend: ", st.backend, " | ", info.adapterName);
-    nl::core::log::info("mode: scene | objects=", info.instanceCount,
+    nl::core::log::infoCh("viewer", "backend: ", st.backend, " | ", info.adapterName);
+    nl::core::log::infoCh("viewer", "mode: scene | objects=", info.instanceCount,
                         " triangles=", info.triangleCount,
                         " model=", info.modelName,
                         " | HUD: ", hudOn ? "on" : "off",
@@ -3309,10 +3314,10 @@ int runScene(const Options& o) {
     if (o.screenshot) {
         std::string err;
         if (!prepareScreenshotDirs(o.screenshotPath, err)) {
-            nl::core::log::error(err);
+            nl::core::log::errorCh("viewer", err);
             return 1;
         }
-        nl::core::log::info("screenshot mode: ", o.frames, " frames -> ",
+        nl::core::log::infoCh("viewer", "screenshot mode: ", o.frames, " frames -> ",
                             std::filesystem::absolute(o.screenshotPath).string());
     }
 
@@ -3328,7 +3333,7 @@ int runScene(const Options& o) {
         window.pollEvents();
         edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         if (window.keyPressed(nl::core::Key::Escape)) {
-            nl::core::log::info("ESC -> exit");
+            nl::core::log::infoCh("viewer", "ESC -> exit");
             break;
         }
         float dx = 0.0f, dy = 0.0f, scroll = 0.0f;
@@ -3435,7 +3440,7 @@ int runScene(const Options& o) {
             }
             if (!renderer->updateEcsObjects(objects.data(),
                                             static_cast<std::uint32_t>(objects.size()))) {
-                nl::core::log::error("ecs updateEcsObjects failed: ", renderer->lastError());
+                nl::core::log::errorCh("viewer", "ecs updateEcsObjects failed: ", renderer->lastError());
                 failed = true;
                 break;
             }
@@ -3468,7 +3473,7 @@ int runScene(const Options& o) {
                               s0.rot.x, s0.rot.y, s0.rot.z, s0.rot.w,
                               s1.rot.x, s1.rot.y, s1.rot.z, s1.rot.w,
                               iq.x, iq.y, iq.z, iq.w);
-                nl::core::log::info(buf);
+                nl::core::log::infoCh("viewer", buf);
             }
         }
 
@@ -3491,10 +3496,10 @@ int runScene(const Options& o) {
                                   " srcPos=(%.6f, %.6f, %.6f) equal=%d",
                                   s.id, b.name.c_str(), p.x, p.y, p.z,
                                   s.position.x, s.position.y, s.position.z, eq ? 1 : 0);
-                    nl::core::log::info(buf);
+                    nl::core::log::infoCh("viewer", buf);
                 }
             }
-            nl::core::log::info("audio clock state: simTime=", gameClock.simTime(),
+            nl::core::log::infoCh("viewer", "audio clock state: simTime=", gameClock.simTime(),
                                 " ticks=", gameClock.tickCount(),
                                 " paused=", gameClock.paused() ? 1 : 0,
                                 " scale=", gameClock.timeScale());
@@ -3515,10 +3520,10 @@ int runScene(const Options& o) {
                                   "script probe: ticks=%llu pos=(%.6f,%.6f,%.6f)",
                                   static_cast<unsigned long long>(nl::script::ScriptHost::get().tickCount()),
                                   p.x, p.y, p.z);
-                    nl::core::log::info(sbuf);
+                    nl::core::log::infoCh("viewer", sbuf);
                 }
             }
-            nl::core::log::info("script clock state: simTime=", gameClock.simTime(),
+            nl::core::log::infoCh("viewer", "script clock state: simTime=", gameClock.simTime(),
                                 " ticks=", gameClock.tickCount(),
                                 " paused=", gameClock.paused() ? 1 : 0);
         }
@@ -3576,17 +3581,17 @@ int runScene(const Options& o) {
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath, hudOn ? &hud : nullptr)) {
-            nl::core::log::error("renderFrame failed: ", renderer->lastError());
+            nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
         if (capturePath) {
             ++screenshotsSaved;
-            nl::core::log::info("screenshot written: ", capturePath);
+            nl::core::log::infoCh("viewer", "screenshot written: ", capturePath);
         }
         if (o.screenshot && frame % 15 == 0) {
-            nl::core::log::info("ecs stats: objects ", info.instanceCount,
+            nl::core::log::infoCh("viewer", "ecs stats: objects ", info.instanceCount,
                                 " | triangles ", info.triangleCount,
                                 " | lights ", lights.size());
         }
@@ -3596,23 +3601,23 @@ int runScene(const Options& o) {
 
     // M-E1b.5 机器出口（run.bat findstr 断言）：tick 模式 + 帧数 + 物体数。
     if (ticking) {
-        nl::core::log::info("ecs tick summary: mode=", o.tickMode, " frames=", frame,
+        nl::core::log::infoCh("viewer", "ecs tick summary: mode=", o.tickMode, " frames=", frame,
                             " spinObjects=", modelIds.size());
     }
-    nl::core::log::info("shutdown ok (frames=", frame,
+    nl::core::log::infoCh("viewer", "shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
     if (o.screenshot && frame > 1) {
-        nl::core::log::info("frame timing: avg ",
+        nl::core::log::infoCh("viewer", "frame timing: avg ",
                             dtSumMs / static_cast<double>(frame), " ms  max ",
                             dtMaxMs, " ms  over ", frame, " frames (unthrottled)");
     }
     if (o.screenshot && screenshotsSaved == 0) {
-        nl::core::log::error("screenshot was not written");
+        nl::core::log::errorCh("viewer", "screenshot was not written");
         failed = true;
     }
     if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
-        nl::core::log::error("acceptance failed: device/error counters must be zero");
+        nl::core::log::errorCh("viewer", "acceptance failed: device/error counters must be zero");
         failed = true;
     }
     // M-GL4 收尾（次序铁律）：先解绑 World（热重载窗口兜底口径，s7g 同源）→
@@ -3621,7 +3626,7 @@ int runScene(const Options& o) {
         nl::script::ecsSetWorld(nullptr);
         const auto ur = nl::script::ScriptHost::get().unloadScript();
         if (!ur.ok)
-            nl::core::log::error("script: unloadScript failed: ", ur.message);
+            nl::core::log::errorCh("viewer", "script: unloadScript failed: ", ur.message);
         scriptVm.reset();
     }
     return failed ? 1 : 0;
@@ -3713,7 +3718,7 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*referenceMode=*/false, /*probeMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
-        nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
+        nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");
         return 1;
     }
     }

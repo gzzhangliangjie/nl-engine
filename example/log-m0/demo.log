@@ -1,0 +1,10 @@
+filter instruction (initial): nl:debug
+[nl:info] [before] plain info line
+[nl:debug] [before] plain debug line
+[nl:info|renderer] [before] renderer info
+[nl:warn|renderer] [before] renderer warn
+[nl:info|asset] [before] asset info
+filter instruction (applied): nl:info,renderer=warn
+[nl:info] [after] plain info line
+[nl:warn|renderer] [after] renderer warn
+[nl:info|asset] [after] asset info

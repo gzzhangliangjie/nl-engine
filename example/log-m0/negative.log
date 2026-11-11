@@ -1,0 +1,7 @@
+filter instruction (initial): nl:debug
+[nl:info] [before] plain info line
+[nl:debug] [before] plain debug line
+[nl:info|renderer] [before] renderer info
+[nl:warn|renderer] [before] renderer warn
+[nl:info|asset] [before] asset info
+[nl:error] invalid filter: invalid filter segment 'bogus': expected <level> or <channel>=<level>

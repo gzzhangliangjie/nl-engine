@@ -45,6 +45,26 @@ add_library(taskflow INTERFACE)
 # 业务侧写 #include <taskflow/taskflow.hpp>；不可用 .../taskflow 本身作 root。
 target_include_directories(taskflow INTERFACE ${THIRDPARTY})
 
+# ---- spdlog v1.17.0（MIT / 编译型 + bundled fmt）：A 类日志轨道 M-LOG0 内核 ----
+# 选型闸与风险核查见 thirdparty/spdlog/VENDOR.md；tests/bench/example 未入库。
+# SPDLOG_COMPILED_LIB 必须 PUBLIC：消费方（nl_core log.cpp）走同一套非 header-only
+# 符号面，防止头内 inline 定义与库内定义重复。
+add_library(nl_spdlog STATIC
+    thirdparty/spdlog/src/spdlog.cpp
+    thirdparty/spdlog/src/async.cpp
+    thirdparty/spdlog/src/cfg.cpp
+    thirdparty/spdlog/src/color_sinks.cpp
+    thirdparty/spdlog/src/file_sinks.cpp
+    thirdparty/spdlog/src/stdout_sinks.cpp
+    thirdparty/spdlog/src/bundled_fmtlib_format.cpp
+)
+target_include_directories(nl_spdlog PUBLIC ${THIRDPARTY}/spdlog/include)
+target_compile_definitions(nl_spdlog PUBLIC SPDLOG_COMPILED_LIB)
+if(MSVC)
+    # fmt bundled：Unicode 支持强制 /utf-8（base.h 静态断言），对齐 nl_core 同款口径。
+    target_compile_options(nl_spdlog PRIVATE /utf-8)
+endif()
+
 # ---- 本地 headers targets：NVRHI 会按这些名字检测，检测到就不走 FetchContent 联网 ----
 add_library(Vulkan-Headers INTERFACE)
 target_include_directories(Vulkan-Headers INTERFACE ${THIRDPARTY}/vulkan-headers/include)
@@ -251,6 +271,11 @@ target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 # M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
 target_link_libraries(nl_core PUBLIC taskflow)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio Jolt nl_recast)
+# M-LOG0：spdlog 内核只进 log.cpp（PIMPL 纪律：log.hpp 不暴露 spdlog 类型，故 PRIVATE）。
+target_link_libraries(nl_core PRIVATE nl_spdlog)
+# M-LOG0：文件落盘命名 `<exe>-<backend>-<时间戳>.log`（Q-L2 拍板）——backend 以编译期
+# 字符串宏注入 nl_core（与 viewer 的 NL_BACKEND_NAME 同源，core 不碰任何图形 API 头）。
+target_compile_definitions(nl_core PRIVATE NL_LOG_BACKEND_NAME="${NL_BACKEND_UPPER}")
 # M-P3：启用 Jolt 调试渲染（碰撞形状线框提取）。Jolt 库本身已以 PUBLIC 带上该宏，
 # 这里显式复述，避免单配置 Release 下 generator-expression 传播的任何边界情况。
 target_compile_definitions(nl_core PRIVATE JPH_DEBUG_RENDERER)
@@ -540,5 +565,6 @@ add_subdirectory(input-tools)
 add_subdirectory(vfx-tools)
 add_subdirectory(cam-tools)
 add_subdirectory(gi-tools)        # S11 M11.0：世界缓存 CPU 仿真（hashmap 语义先仿真后上 GPU）
+add_subdirectory(log-tools)       # A 类日志轨道 M-LOG0：nl::core::log 无头验收
 add_subdirectory(editor_bridge)   # 引擎侧 bridge（静态库，M-E2 供 viewer 接线）
 add_subdirectory(editor)          # 编辑器宿主（C++/ImGui，独立进程）

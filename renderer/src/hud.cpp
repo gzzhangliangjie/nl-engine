@@ -150,7 +150,7 @@ bool Hud::init(nvrhi::IDevice* device, const char* shaderSuffix,
     upload->close();
     device->executeCommandList(upload);
 
-    nl::core::log::info("HUD ready: ImGui ", ImGui::GetVersion(),
+    nl::core::log::infoCh("renderer", "HUD ready: ImGui ", ImGui::GetVersion(),
                         " | font atlas ", fontW, "x", fontH,
                         " | shader=", shaderSuffix);
     return true;
@@ -552,7 +552,7 @@ void Hud::build(HudFrame& frame) {
 
     std::string err;
     if (!ensureCapacity(vertices_.size(), indices_.size(), err)) {
-        nl::core::log::error("HUD: ", err);
+        nl::core::log::errorCh("renderer", "HUD: ", err);
         commands_.clear();
         return;
     }

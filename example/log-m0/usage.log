@@ -1,0 +1,3 @@
+log-tools - nl-engine logging tools (A-class track, M-LOG0)
+usage: log-tools selftest [--negative-only]
+       log-tools demo [--filter <instruction>]

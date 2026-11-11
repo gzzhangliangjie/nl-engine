@@ -55,10 +55,10 @@ public:
             nl::core::log::deviceError("NVRHI", text);
             break;
         case nvrhi::MessageSeverity::Warning:
-            nl::core::log::warn("NVRHI: ", text);
+            nl::core::log::warnCh("renderer", "NVRHI: ", text);
             break;
         default:
-            nl::core::log::debug("NVRHI: ", text);
+            nl::core::log::debugCh("renderer", "NVRHI: ", text);
             break;
         }
     }
@@ -145,7 +145,7 @@ public:
         // 下一帧轮到同 slot 前先等它。删掉 renderFrame 里的等待 = CPU 在 GPU 仍持有该
         // backbuffer 时又画 → 同步报错（S0-PLAN 的校验点）。
         if (FAILED(device12_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_))))
-            nl::core::log::warn("DX12: CreateFence failed; frame-in-flight gating unavailable");
+            nl::core::log::warnCh("renderer", "DX12: CreateFence failed; frame-in-flight gating unavailable");
         fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
         reportFeatures();
@@ -217,7 +217,7 @@ public:
             info_.lodLevelCount = lodLevelCount_;
             info_.lodLevel = scene_.lodLevel();
             info_.lodMaxError = scene_.lodMaxError();
-            nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+            nl::core::log::infoCh("renderer", "lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
             // M3.2：可下钻组数 = 链第二粗层（lodCount-2）的 dagGroups。读它的
             // meta 只为了拿组数；加载失败不是错误（dag-top 纯顶层照样画，
             // 只是 HUD 不出下钻滑条）。
@@ -234,7 +234,7 @@ public:
             info_.dagGroupCount = dagGroupCount_;
         }
 
-        nl::core::log::info("device ready: ", info_.adapterName,
+        nl::core::log::infoCh("renderer", "device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
                             " | swapchain ", extent_.width, "x", extent_.height);
         return true;
@@ -258,11 +258,11 @@ public:
         depth_ = nullptr;
         rhiTargets_.clear();
         nativeTargets_.clear();
-        nl::core::log::debug("resize: old targets released");
+        nl::core::log::debugCh("renderer", "resize: old targets released");
 
         const HRESULT hr = swapchain_->ResizeBuffers(kBufferCount, extent.width, extent.height,
                                                      kSwapFormat, 0);
-        nl::core::log::debug("resize: ResizeBuffers returned");
+        nl::core::log::debugCh("renderer", "resize: ResizeBuffers returned");
         if (FAILED(hr)) {
             nl::core::log::deviceError("DX12", hrMessage("ResizeBuffers", hr));
             return;
@@ -270,7 +270,7 @@ public:
         extent_ = extent;
         std::string unused;
         createTargets(unused);
-        nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
+        nl::core::log::infoCh("renderer", "resize -> ", extent_.width, "x", extent_.height);
     }
 
     // M2.3：切 LOD 层——只重传 VB/IB（scene_.setClusterLevel），pipeline / binding 不动。
@@ -295,7 +295,7 @@ public:
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
         for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
-        nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
+        nl::core::log::infoCh("renderer", "lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
         return true;
     }
@@ -572,7 +572,7 @@ public:
         int errors = 0;
         if (infoQueue_) {
             const UINT64 count = infoQueue_->GetNumStoredMessages();
-            if (count) nl::core::log::debug("D3D12 info queue messages: ", count);
+            if (count) nl::core::log::debugCh("renderer", "D3D12 info queue messages: ", count);
             for (UINT64 i = 0; i < count; ++i) {
                 SIZE_T bytes = 0;
                 if (FAILED(infoQueue_->GetMessage(i, nullptr, &bytes))) continue;
@@ -594,12 +594,12 @@ public:
                     if (text.find(pat) != std::string::npos) { benign = true; break; }
                 }
                 if (benign) {
-                    nl::core::log::debug("D3D12: ", text);
+                    nl::core::log::debugCh("renderer", "D3D12: ", text);
                 } else if (msg->Severity >= D3D12_MESSAGE_SEVERITY_ERROR) {
                     nl::core::log::deviceError("D3D12", text);
                     ++errors;
                 } else {
-                    nl::core::log::debug("D3D12: ", text);
+                    nl::core::log::debugCh("renderer", "D3D12: ", text);
                 }
             }
             if (count) infoQueue_->ClearStoredMessages();
@@ -653,11 +653,11 @@ private:
         }
         info_.indirectDraw = true;  // ExecuteIndirect / DrawIndirect 是 DX12 核心能力
 
-        nl::core::log::info("features: rayQuery=", info_.rayQuery ? 1 : 0,
+        nl::core::log::infoCh("renderer", "features: rayQuery=", info_.rayQuery ? 1 : 0,
                             " shaderInt64Atomics=", info_.shaderInt64Atomics ? 1 : 0,
                             " indirectDraw=", info_.indirectDraw ? 1 : 0);
         if (!info_.rayQuery || !info_.shaderInt64Atomics) {
-            nl::core::log::warn("feature report has unsupported items; S7/S8 需按此能力调整");
+            nl::core::log::warnCh("renderer", "feature report has unsupported items; S7/S8 需按此能力调整");
         }
     }
 
