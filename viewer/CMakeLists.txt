@@ -1,7 +1,15 @@
 # ---- viewer：可见用例 + 程序内截图（--screenshot） ----
 # 2026-11-10 自根 CMakeLists.txt 拆出：新轨道不再改根文件（追加冲突根治）。
 add_executable(viewer main.cpp)
-target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw)
+# M-E2：nl_editor_bridge = 编辑器 RPC client + SetParent 嵌入（--editor-bridge 时用）
+target_link_libraries(viewer PRIVATE nl_core nl_renderer glfw nl_editor_bridge)
+# M-E4b：announce.caps 需要后端名；根 CMake 决议后的 NL_BACKEND_UPPER 以字符串宏注入
+# M-E5：scene.getMaterials 的 .nmesh 探测需要 meshlets 资产目录（编译期绝对路径，
+# 与 renderer 的同口径——根 CMake 的 NL_MESHLET_DIR 是 renderer 内联宏，不是变量）
+target_compile_definitions(viewer PRIVATE
+    NL_BACKEND_NAME="${NL_BACKEND_UPPER}"
+    NL_MESHLET_DIR="${CMAKE_SOURCE_DIR}/assets/meshlets"
+)
 # shader 字节码先于 viewer 生成（viewer 运行时要读 NL_SHADER_DIR 下的 .spv/.dxil）
 add_dependencies(viewer nl_shaders)
 

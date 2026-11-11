@@ -2590,3 +2590,37 @@
 4. **负例 acceptance failed 误判**：`--nfx: malformed` 是 error 级日志 → `errorCount()=1` → viewer acceptance 行必报——**负例固有行为非回归**（error 日志本身就是负例断言目标），与 M-PT4 同款，run.bat findstr 管道只断言 log 锚。
 
 **下一步**：批次 E1/E2/E5/R1 四项全收官。R4 软粒子 depth fade 归主线协调（T0 `setSharedDepth` 后接口现成，主线会话单独 claim）；E3/E4/E8 用 misc2 spare 扩展不再触发布局级重拍；merge 回 master 待用户拍板（与 M-PT4 一并）。
+## editor轨道 M-E5：插件 DLL 动态扫描加载 + 材质检查插件（feat/editor，2026-11-11，tag `e-m5-done`，commit `00084b5`）
+
+**动作**：wt_pool claim（track editor / M-E5）→ 沿用 editor 轨道先例（三源对照豁免：与渲染源码正交，见 EDITOR-PLAN §5 冻结面）落码：①插件 DLL 动态扫描加载——根 CMake 新增 `nl_imgui_dll`（SHARED + `WINDOWS_EXPORT_ALL_SYMBOLS ON`，宿主与插件 DLL 必须共享同一 ImGuiContext，插件静链 imgui = 双 context 必炸；`nl_imgui` STATIC 保留给 renderer/viewer 跨进程各持一份）+ `nl_editor_common`（STATIC 共享 RpcHost 实现）；`editor/plugin.hpp` `kPluginAbiVersion` + `discoverDlls`（FindFirstFile 扫 exe 同目录 `plugins/*.dll`，C ABI `nl_plugin_abi/_create/_destroy` 三符号 + 版本校验，坏 DLL 跳过不拖死宿主）+ 析构按 slot 逆序先 DLL 内 delete 再 FreeLibrary；`editor/plugin_export.hpp` `NL_PLUGIN_EXPORTS` 导出宏 + `editor/plugins/hello_plugin.cpp` 示例 DLL（落 `${CMAKE_BINARY_DIR}/plugins/`）；②材质检查插件——引擎侧 `viewer/main.cpp` `bindMaterials`：`scene.getMaterials`（scene 模式实例 tint/rough/metal；model 模式 `loadNMesh` 读 .nmesh NSUB 表 name/meshlets/submeshCount/submeshes，材质 id=子网格序号 M7.2 约定）+ `scene.setMaterial`（逐字段可选 tint/rough/metal、clamp 0..1、写回 sceneObjects 随 viewer 每帧原地刷新下一帧可见；model 模式 error 100）；编辑器侧 `MaterialInspectorPlugin`（实例表 + tint ColorEdit3 + rough/metal 滑条实时下发）；RPC-SPEC 补 M-E4/M-E5 实装方法表。
+
+**提交版本**：commit `00084b5`（feat/editor，12 files +890/-14），annotated tag `e-m5-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E5 段（editor 轨道权威台账）。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16；`tools/m-e5-probe.py` 三段跨进程 **30 断言 0 fail**：段1 scene 模式（getMaterials 5 实例字段齐全；setMaterial rough=0.5/tint=[0.25,0.5,0.75] 写回 getMaterials 复读一致；rough=5 clamp 1；坏索引 [99]/[-1] error 100；scene.getState 回归不变）；段2 model 模式（--mode cluster --model Suzanne-materials.nmesh：nmesh.meshlets=711、submeshCount=3、materialId=0/1/2、clusterFirst=0、clusterCount=237×3 与资产实况一致；setMaterial → error 100）；段3 editor.exe 插件扫描（stdout `plugin dll loaded: editor_plugin_hello.dll (Hello (DLL))`；注入坏 DLL → `skipped: missing C ABI exports` 不拖死宿主）。目击证据 `out/m-e5-editor-ui.png`（PrintWindow 免焦点：Material Inspector 5 行材质表 + Hello (DLL) 面板 + Scene Outliner + 嵌入视口 5 Suzanne + Log 载入行）。
+
+**踩坑情况**
+1. **类内成员函数参数类型在声明点必须可见**（inline 函数体可后置）：`setMaterial(..., const Row&)` 写在 `struct Row` 定义前 → C4430/C2664，结构体须挪类体前部。
+2. **`RUNTIME_OUTPUT_DIRECTORY` 的 `CMAKE_CURRENT_BINARY_DIR` 在 editor 子目录上下文 = `build/DX12/editor`**，插件 DLL 落错层；要用 `${CMAKE_BINARY_DIR}/plugins`。
+3. **viewer 侧 `NL_MESHLET_DIR` 不能引用 `${NL_MESHLET_DIR}`**（根 CMake 里它是 renderer 的内联宏定义，非变量）→ 展开空串 loadNMesh 失败被包成 error map；修 `${CMAKE_SOURCE_DIR}/assets/meshlets`。
+4. **editor.exe 的 imgui.ini 按 CWD 解析**（Popen 不带 cwd 落在启动目录）——布局预置须把 cwd 设到 exe 目录。
+5. **python 探针 msgpack 解码需支持 str8(0xd9)**（引擎侧长错误串走 str8）；subprocess 管道用 `communicate(timeout)` 而非 `read(n)`（后者阻塞等 EOF）。
+
+## editor轨道 M-E6：命名管道传输 + 多视口 `viewId` 路由（feat/editor，2026-11-11，tag `e-m6-done`）
+
+**动作**：wt_pool claim（track editor / M-E6）→ 开工闸 4 项待拍板全拍板（TCP 默认、管道 CLI 可选；多视口 = 一编辑器接纳多引擎进程按 `viewId` 路由、**否决**单进程多 HWND/多 swapchain；`viewId` 缺省 `main` 保老插件兼容；冻结面 `renderer/`/`shader/`/`example/`/`tools/regression/cases.json` 零触碰）→ 落码：①传输抽象 `editor_bridge/transport.{hpp,cpp}` + `nl_editor_transport` STATIC（`Endpoint`/`parseEndpoint`/`Stream`/`Listener`；TCP winsock2+select，命名管道 `CreateNamedPipeA` + `FILE_FLAG_OVERLAPPED` + `PeekNamedPipe` + `PIPE_UNLIMITED_INSTANCES`，两类传输共用同一线格式）；②`RpcBridge` 真正消费 endpoint（`SOCKET` → `unique_ptr<Stream>`，`shutdown` 不再 `WSACleanup`）；③`RpcHost` 多 client 化（`vector<unique_ptr<Client>>`、逐 client 非阻塞收包、每帧最多 accept 16、`callTo/notifyTo(viewId,...)` 定向路由 error 103、`rpc.pong` 按连接定向回、duplicate `viewId` warning、回调改带 `viewId` 签名）；④`EmbedWindow::announce` 增 `viewId`，viewer 加 `--editor-endpoint`/`--view-id`，editor 加 `--rpc-endpoint` + `g_views` 多视口平铺（`WS_CLIPSIBLINGS` 容器、独立 ImGui 窗口 ID、析构拆容器）+ `editor.views`/`editor.pingView`/`editor.callView` 三 handler + active view Combo；⑤插件统一 `callQuick(..., 500)` 快速失败；⑥`rpc_self_test.cpp` 阶段 E 管道双链路；⑦RPC-SPEC §3/§4/§9/§10/§15 勘误（4 字节长度前缀实际为**大端**，「LE」是早期文档笔误，只勘误文档不改线格式）。
+
+**提交版本**：feat/editor 分支本次落码提交，annotated tag `e-m6-done`（按 tag 定位版本）。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E6 段（editor 轨道权威台账）。
+
+**完成情况**：`scripts\build-m0.2.bat DX12` **BUILD OK** + viewer selftest 16/16；`rpc_self_test.exe` `=== M-E1 self-test PASS (0 failures) ===`（18 条 `[ ok ]`，含 M-E6 命名管道 accept/connect/`engine.echo` 往返与 `callTo` 路由）；`tools/m-e6-probe.py` 五段跨进程 **33 PASS / 0 FAIL，exit 0**：S1 真 viewer 走 `pipe://nl-e6-probe`（announce/caps/echo/scene.getState/camera.getState）、S2 默认 TCP 回归（`viewId=main`、materials count=5）、S3 真 editor + 2 假引擎（`editor.views` 两视图、`viewIds=[left,right]`、hwnd 保真、`pingView` 只投 right、`callView` 定向转发、未知视图 `sent=false`/error 103、duplicate warning、editor 存活）、S4 真 editor 监听 `pipe://nl-e6-editor`（`transport=pipe`）、S5 负向（无 pipe server 的 viewer 存活重试、`bogus://x` 不崩且日志 `bad endpoint`）。目击证据 `out/m-e6-multiview.png`（DPI-aware 实时屏幕合成：两视口面板 + `clients 2/views 2` + 左右各 5 Suzanne + Log 两条 `view=` announce）与 `out/m-e6-multiview-marked.png`（叠加 Win32 窗口树，两容器 `623x729` 分别在 `(359,102)-(982,831)` / `(998,102)-(1621,831)`，与 ImGui 面板严丝合缝、互不重叠）。
+
+**踩坑情况**
+1. **⚠️ 验证脚本 DPI 坐标系混用（本轮最大坑，曾误判为产品代码回归）**：本机 150% DPI（物理 2560×1440，DPI-unaware 进程看 1707×1067）。python 默认 DPI-unaware，`GetWindowRect`/`EnumChildWindows` 返回**逻辑坐标**（÷1.5），`BitBlt(GetDC(NULL))` 抓的是**物理像素**；把逻辑坐标当物理坐标叠加到截图上，凭空造出 1.5 倍「容器比面板窄/整体右移」假象，一度怀疑 M-E2 `ScreenToClient` bug 复现。修法：截图脚本开头 `SetProcessDpiAwarenessContext((void*)-4)`（PER_MONITOR_AWARE_V2）统一到物理坐标系；DPI-aware 后后台启动窗常被最小化到 `-32000`，须 `SW_RESTORE` 轮询 `IsIconic`。**定性后产品代码零改动**。另纠正先前判断：根因不是 `PrintWindow` 的 DWM 缓存帧（换实时 BitBlt 现象相同），而是坐标系。
+2. **插件在 ImGui 渲染线程同步 `host->call` 默认 5s 阻塞**：假引擎不回插件 req → 主循环冻结 → 后续 announce 排不进来 → duplicate viewId 断言假 FAIL。修 `callQuick(host,method,p)=call(...,500)`（内建插件 + hello_plugin）+ 探针尾段持续回插件 req；临时 `[f] A/B/C`/`[tick]` 插桩已全删。
+3. **探针 `collect()` 固定跑满 timeout** 制造 5s+ 静默 → 被 6s heartbeat 判掉线 `ConnectionAbortedError(10053)`。修 `stop_when` 早退 + `req()` 命中目标 `resp id` 即返回。
+4. **单 client 时代「抓全局 socket 回 pong」在多 client 下回错连接**：`dispatch` 须带 `Client&` 定向回。
+5. **命名管道必须 `FILE_FLAG_OVERLAPPED`**：同步 `ReadFile` 阻塞整个 host 帧循环；`PeekNamedPipe`+`Sleep(1)` 探测可读，每 accept 成功立即 arm 下一实例，否则第二个 client 连不上。
+6. **坏 endpoint 禁止静默回落默认端口**：`bogus://x` 报错且 viewer 存活重试（S5 断言）。
+7. `Viewport::label()` 为 `const` 却懒生成 `label_` → C2678，须 `mutable std::string`；`replace_all` 曾把 `callQuick` 函数体自身替换成递归调用，已改回 `host->call(method, p, 500)`。
+8. `RpcBridge::shutdown()` 不再 `WSACleanup()`：Winsock 已进程级一次性管理，per-bridge cleanup 会打断同进程其它连接。
+
+**下一步**：`feat/editor`（M-E0~M-E6）merge 回 master 待用户拍板；本轨道候选后续 = 编辑器侧资源浏览器 / 序列化回写 / 多引擎场景同步（尚未排期）。

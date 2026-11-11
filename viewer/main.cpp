@@ -1,3 +1,8 @@
+// ---- M-E2：编辑器嵌入（可选启动）。windows.h 必须在最前——glfw3.h 若先定义
+// APIENTRY，windows.h 再定义会 C4005（glfw 官方口径：windows.h 先含）。
+#define NOMINMAX           // min/max 宏会撕碎本文件既有 std::max 调用（2469 等处）
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include "nl/core/assert.hpp"
 #include "nl/core/camera.hpp"
 #include "nl/core/console.hpp"
@@ -8,6 +13,7 @@
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
+#include "nl/core/meshlet_io.hpp"  // M-E5：scene.getMaterials 读 .nmesh NSUB 子网格/材质表
 #include "nl/renderer/editor.hpp"
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
@@ -37,6 +43,10 @@
 #include <sstream>
 #include <string>
 #include <thread>
+
+// ---- M-E2：编辑器嵌入（可选启动）。bridge 头不含 winsock/windows，无包含序风险。
+#include "rpc_bridge.hpp"
+#include "embed_window.hpp"
 
 namespace {
 
@@ -167,6 +177,11 @@ struct Options {
     std::uint32_t physicsSeed = 0;               // M-P3：--physics-seed N（当前仅记录）
     bool particles = false;                      // M-PT0：粒子叠加层（instanced billboard 喷泉）
     std::string nfxPath;                         // M-PT1：.nfx v1 加载（隐含 --particles）
+    bool editorBridge = false;                   // M-E2：--editor-bridge 连接外置编辑器（连不上降级单机）
+    // M-E6：传输 endpoint（TCP 默认 / 命名管道可选）+ 多视口路由键。
+    // 同一编辑器里跑多个 viewer 进程时，各带一个不同 --view-id，各自嵌入独立面板。
+    std::string editorEndpoint = "tcp://127.0.0.1:29110";
+    std::string viewId = "main";
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -174,6 +189,9 @@ Options parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") o.selftest = true;
+        else if (a == "--editor-bridge") o.editorBridge = true;   // M-E2：外置编辑器嵌入
+        else if (a == "--editor-endpoint" && i + 1 < argc) o.editorEndpoint = argv[++i]; // M-E6
+        else if (a == "--view-id" && i + 1 < argc) o.viewId = argv[++i];                 // M-E6
         else if (a == "--help") o.help = true;
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
@@ -681,6 +699,317 @@ void registerGameConsole(nl::core::GameClock* clock) {
 // M3.2：dagTop=true 时同一 cluster 场景，但初始渲染链最粗层（DAG 顶层组产出的
 // 父簇集合 = 正确粗模），--dag-group N 任选组下钻一层（挖掉其父簇、换回组内
 // 子簇）验证父子衔接无洞——S5 组原子 cut 的离线预演。
+// ---- M-E2：编辑器嵌入辅助（--editor-bridge 时启用，否则零开销零触碰）----
+// 职责：连接编辑器 RpcHost(29110) + 上报 HWND（engine.announce）+ 每帧泵 update。
+// attach 由编辑器主动 SetParent（EDITOR-PLAN §6 拍板），引擎侧无 attach handler。
+// 连接失败 = 静默降级单机运行（编辑器是可选外挂，崩溃隔离：引擎照常自渲染）。
+struct EditorEmbed {
+    nl::editor::RpcBridge bridge;
+    bool enabled = false;      // M-E4a：--editor-bridge 且非截图模式才启用泵/重连
+    bool connected = false;
+    void* engineHwnd = nullptr;
+    nl::core::OrbitCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
+    std::chrono::steady_clock::time_point nextRetry{};  // M-E4a：重连退避时间点
+    // M-E6：endpoint 与多视口路由键（由 --editor-endpoint / --view-id 注入）
+    std::string endpoint = "tcp://127.0.0.1:29110";
+    std::string viewId = "main";
+
+    void start(void* engineHwnd_, bool enable,
+               const std::string& ep = "tcp://127.0.0.1:29110",
+               const std::string& vid = "main") {
+        engineHwnd = engineHwnd_;
+        enabled = enable;
+        endpoint = ep;
+        viewId = vid.empty() ? "main" : vid;
+        if (!enabled) return;
+        bridge.registerHandler("engine.echo",
+                               [](const nl::editor::RpcValue& p) { return p; });
+        tryConnect(/*first=*/true);
+    }
+
+    // M-E4a/M-E4b：连接 + announce（caps 带窗体像素尺寸与渲染后端名）。
+    // 连不上不再永久降级：pump() 每 2s 重试，编辑器后启/重启都能被接管。
+    void tryConnect(bool first = false) {
+        if (bridge.connect(endpoint)) {
+            connected = true;
+            nl::editor::msgpack::Map caps;
+            RECT rc{};
+            if (engineHwnd && GetClientRect(static_cast<HWND>(engineHwnd), &rc)) {
+                caps["w"] = (std::int64_t)(rc.right - rc.left);
+                caps["h"] = (std::int64_t)(rc.bottom - rc.top);
+            }
+            caps["backend"] = std::string(NL_BACKEND_NAME);
+            // M-E6：viewId 让编辑器把本进程 HWND 嵌进对应视口面板
+            nl::editor::EmbedWindow::announce(bridge, engineHwnd,
+                                              static_cast<int>(::GetCurrentProcessId()), 1,
+                                              nl::editor::RpcValue(std::move(caps)), viewId);
+            nl::core::log::info(std::string("editor bridge: connected view=") + viewId
+                                + " endpoint=" + bridge.endpoint()
+                                + " (backend=" + NL_BACKEND_NAME + ")");
+        } else {
+            nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+            if (first) nl::core::log::info(std::string("editor bridge: no editor at ") + endpoint
+                                           + " -> standalone (retry every 2s)");
+        }
+    }
+
+    // M-E3：相机控制 handler（编辑器插件经 RPC 驱动引擎相机）。
+    // params 统一命名 Map（RPC-SPEC）；set 类回读 clamp 后实际值，编辑器 UI 直接对齐。
+    // 未连接也照常注册（无 RPC 泵就不会被调到），standalone 零开销。
+    void bindCamera(nl::core::OrbitCamera* cam) {
+        camera = cam;
+        if (!camera) return;
+        auto field = [](const nl::editor::RpcValue& p, const char* k, double def) -> double {
+            if (p.isMap()) {
+                auto it = p.asMap().find(k);
+                if (it != p.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                if (it != p.asMap().end() && it->second.isInt()) return (double)it->second.asInt();
+            }
+            return def;
+        };
+        bridge.registerHandler("camera.getState", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Map m;
+            m["fov"]   = (double)camera->fovYDegrees();
+            m["dist"]  = (double)camera->distance();
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("camera.setFov", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->setFovYDegrees((float)field(p, "fov", camera->fovYDegrees()));  // 内部 clamp 20..120
+            return nl::editor::RpcValue((double)camera->fovYDegrees());
+        });
+        bridge.registerHandler("camera.setDistance", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->setDistance((float)field(p, "dist", camera->distance()));       // 内部 clamp
+            return nl::editor::RpcValue((double)camera->distance());
+        });
+        bridge.registerHandler("camera.orbit", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->orbit((float)field(p, "dx", 0.0), (float)field(p, "dy", 0.0));  // 增量（度）
+            nl::editor::msgpack::Map m;
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("camera.reset", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            camera->reset();
+            nl::core::log::info("camera reset (via editor RPC)");
+            return nl::editor::RpcValue();  // nil = ack
+        });
+    }
+
+    // M-E4d：场景树数据源。runScene 传 &objects（每帧原地刷新，指针即实时）；
+    // runNormal 传 nullptr（model 模式：单模型无实例表）。
+    std::vector<nl::renderer::SceneObjectDesc>* sceneObjects = nullptr;
+
+    void bindScene(std::vector<nl::renderer::SceneObjectDesc>* objs) {
+        sceneObjects = objs;
+        if (!camera) return;
+        // getState 两模式都注册：model 模式返回 mode="model" 空表，编辑器可优雅显示
+        bridge.registerHandler("scene.getState", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Array arr;
+            if (sceneObjects) {
+                arr.reserve(sceneObjects->size());
+                for (const auto& d : *sceneObjects) {
+                    nl::editor::msgpack::Map o;
+                    o["mesh"] = std::string(d.meshFile ? d.meshFile : "?");
+                    // 世界矩阵平移分量（列主序 m[12..14]）
+                    nl::editor::msgpack::Array pos;
+                    pos.push_back((double)d.world[12]);
+                    pos.push_back((double)d.world[13]);
+                    pos.push_back((double)d.world[14]);
+                    o["pos"] = nl::editor::RpcValue(std::move(pos));
+                    nl::editor::msgpack::Array tint;
+                    tint.push_back((double)d.tint[0]);
+                    tint.push_back((double)d.tint[1]);
+                    tint.push_back((double)d.tint[2]);
+                    o["tint"] = nl::editor::RpcValue(std::move(tint));
+                    o["rough"] = (double)d.roughness;
+                    o["metal"] = (double)d.metallic;
+                    arr.push_back(nl::editor::RpcValue(std::move(o)));
+                }
+            }
+            nl::editor::msgpack::Map m;
+            m["mode"]  = std::string(sceneObjects ? "scene" : "model");
+            m["count"] = (std::int64_t)(sceneObjects ? sceneObjects->size() : 0);
+            m["objects"] = nl::editor::RpcValue(std::move(arr));
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            m["dist"]  = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        if (!sceneObjects) return;   // model 模式：无实例表，focus 无意义
+        // 聚焦：把 orbit 相机对准对象方向（eye 落在 origin→P 射线上，距离取 |P|·2.5）。
+        // 相机恒看 origin，因此对准 = 让 eye 方向与 P 同向，对象近似画面中心。
+        bridge.registerHandler("scene.focus", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            auto field = [](const nl::editor::RpcValue& v, const char* k) -> double {
+                if (v.isMap()) {
+                    auto it = v.asMap().find(k);
+                    if (it != v.asMap().end() && it->second.isInt()) return (double)it->second.asInt();
+                    if (it != v.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                }
+                return -1.0;
+            };
+            const long long idx = (long long)field(p, "i");
+            if (idx < 0 || idx >= (long long)sceneObjects->size())
+                return nl::editor::RpcError{100, "scene.focus: bad index"};
+            const auto& d = (*sceneObjects)[(size_t)idx];
+            const float px = d.world[12], py = d.world[13], pz = d.world[14];
+            const float rXZ = std::sqrt(px * px + pz * pz);
+            const float len = std::sqrt(px * px + py * py + pz * pz);
+            if (len < 1e-4f)
+                return nl::editor::RpcError{100, "scene.focus: object at origin"};
+            constexpr float kPiF = 3.14159265358979323846f;
+            const float yawDeg   = std::atan2(px, pz) * 180.0f / kPiF;
+            const float pitchDeg = std::atan2(py, rXZ) * 180.0f / kPiF;
+            camera->setOrbit(yawDeg, pitchDeg, len * 2.5f);
+            nl::core::log::info("scene.focus[", (long long)idx, "] -> yaw=", yawDeg, " pitch=", pitchDeg, " dist=", len * 2.5f);
+            nl::editor::msgpack::Map m;
+            m["yaw"]  = (double)camera->yawDegrees();
+            m["pitch"]= (double)camera->pitchDegrees();
+            m["dist"] = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
+        });
+    }
+
+    void pump() {
+        if (!enabled) return;
+        if (connected) {
+            bridge.update();   // 泵入站 + 心跳（编辑器挂了也照跑）
+            if (!bridge.isConnected()) {   // M-E4a：掉线转重连态，2s 后重试
+                connected = false;
+                nextRetry = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+                nl::core::log::info("editor bridge lost -> will retry connect every 2s");
+            }
+        } else if (std::chrono::steady_clock::now() >= nextRetry) {
+            tryConnect();
+        }
+    }
+
+    // ---- M-E5：材质检查接口 ----
+    std::string modelFile_;   // runNormal 传入（model 模式 .nmesh 探测用）；scene 模式留空
+
+    // .nmesh NSUB 子网格/材质表读取（assets/meshlets/<file>；材质 id = 子网格序号，
+    // M7.2 约定）。非 .nmesh 返回 nil；读取失败返回 {error: msg}。
+    nl::editor::RpcValue nmeshInfo(const std::string& file) {
+        if (file.size() < 6 || file.compare(file.size() - 6, 6, ".nmesh") != 0)
+            return nl::editor::RpcValue();   // nil = 非 .nmesh 资产
+#ifdef NL_MESHLET_DIR
+        const std::string path = std::string(NL_MESHLET_DIR "/") + file;
+#else
+        const std::string path = "assets/meshlets/" + file;
+#endif
+        nl::core::NMeshData nm;
+        std::string err;
+        if (!nl::core::loadNMesh(path.c_str(), nm, err)) {
+            nl::editor::msgpack::Map e;
+            e["error"] = err;
+            return nl::editor::RpcValue(std::move(e));
+        }
+        nl::editor::msgpack::Map m;
+        m["name"] = nm.name;
+        m["meshlets"] = (std::int64_t)nm.meshlets.size();
+        const std::int64_t subCount = nm.submeshesPresent ? (std::int64_t)nm.submeshes.size() : 1;
+        m["submeshCount"] = subCount;
+        nl::editor::msgpack::Array subs;
+        if (nm.submeshesPresent) {
+            for (std::size_t i = 0; i < nm.submeshes.size(); ++i) {
+                nl::editor::msgpack::Map s;
+                s["materialId"]   = (std::int64_t)i;   // 材质 id = 子网格序号（M7.2）
+                s["clusterFirst"] = (std::int64_t)nm.submeshes[i].clusterFirst;
+                s["clusterCount"] = (std::int64_t)nm.submeshes[i].clusterCount;
+                subs.push_back(nl::editor::RpcValue(std::move(s)));
+            }
+        }
+        m["submeshes"] = nl::editor::RpcValue(std::move(subs));
+        return nl::editor::RpcValue(std::move(m));
+    }
+
+    // M-E5：scene.getMaterials（读）+ scene.setMaterial（写，仅 scene 模式）。
+    // setMaterial 改 (*sceneObjects)[i] 的 tint/rough/metal——viewer 每帧原地刷新
+    // 传给 renderer updateEcsObjects，改动下一帧可见。params 统一命名 Map，逐字段可选。
+    void bindMaterials(const char* modelFile) {
+        if (modelFile) modelFile_ = modelFile;
+        bridge.registerHandler("scene.getMaterials", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Map m;
+            if (!sceneObjects) {
+                m["mode"] = std::string("model");
+                m["file"] = modelFile_;
+                m["nmesh"] = nmeshInfo(modelFile_);
+                return nl::editor::RpcValue(std::move(m));
+            }
+            m["mode"]  = std::string("scene");
+            m["count"] = (std::int64_t)sceneObjects->size();
+            nl::editor::msgpack::Array arr;
+            arr.reserve(sceneObjects->size());
+            for (std::size_t i = 0; i < sceneObjects->size(); ++i) {
+                const auto& d = (*sceneObjects)[i];
+                nl::editor::msgpack::Map o;
+                o["i"] = (std::int64_t)i;
+                o["mesh"] = std::string(d.meshFile ? d.meshFile : "?");
+                nl::editor::msgpack::Array tint;
+                tint.push_back((double)d.tint[0]);
+                tint.push_back((double)d.tint[1]);
+                tint.push_back((double)d.tint[2]);
+                o["tint"]  = nl::editor::RpcValue(std::move(tint));
+                o["rough"] = (double)d.roughness;
+                o["metal"] = (double)d.metallic;
+                arr.push_back(nl::editor::RpcValue(std::move(o)));
+            }
+            m["objects"] = nl::editor::RpcValue(std::move(arr));
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("scene.setMaterial", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!sceneObjects)
+                return nl::editor::RpcError{100, "scene.setMaterial: model mode has no instance table"};
+            if (!p.isMap())
+                return nl::editor::RpcError{100, "scene.setMaterial: params must be a map"};
+            auto field = [](const nl::editor::RpcValue& v, const char* k) -> double {
+                auto it = v.asMap().find(k);
+                if (it != v.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                if (it != v.asMap().end() && it->second.isInt())    return (double)it->second.asInt();
+                return -1.0;
+            };
+            const long long idx = (long long)field(p, "i");
+            if (idx < 0 || idx >= (long long)sceneObjects->size())
+                return nl::editor::RpcError{100, "scene.setMaterial: bad index"};
+            auto& d = (*sceneObjects)[(std::size_t)idx];
+            auto itTint = p.asMap().find("tint");
+            if (itTint != p.asMap().end() && itTint->second.isArray() &&
+                itTint->second.asArray().size() == 3) {
+                const auto& ta = itTint->second.asArray();
+                for (int c = 0; c < 3; ++c) {
+                    if (ta[c].isDouble()) {
+                        d.tint[c] = (float)ta[c].asDouble();
+                        d.tint[c] = std::min(1.0f, std::max(0.0f, d.tint[c]));
+                    }
+                }
+            }
+            bool touched = false;
+            auto itRough = p.asMap().find("rough");
+            if (itRough != p.asMap().end() && itRough->second.isDouble()) {
+                d.roughness = std::min(1.0f, std::max(0.0f, (float)itRough->second.asDouble()));
+                touched = true;
+            }
+            auto itMetal = p.asMap().find("metal");
+            if (itMetal != p.asMap().end() && itMetal->second.isDouble()) {
+                d.metallic = std::min(1.0f, std::max(0.0f, (float)itMetal->second.asDouble()));
+                touched = true;
+            }
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["i"] = idx;
+            nl::editor::msgpack::Array tint;
+            tint.push_back((double)d.tint[0]);
+            tint.push_back((double)d.tint[1]);
+            tint.push_back((double)d.tint[2]);
+            m["tint"]  = nl::editor::RpcValue(std::move(tint));
+            m["rough"] = (double)d.roughness;
+            m["metal"] = (double)d.metallic;
+            return nl::editor::RpcValue(std::move(m));
+        });
+    }
+};
+
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
@@ -705,12 +1034,19 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         return 1;
     }
 
+    // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
+    // 截图回归模式不启用（隐藏窗口 + 定帧退出，嵌入无意义）。
+    EditorEmbed edEmbed;
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot,
+                  o.editorEndpoint, o.viewId);   // M-E4a/M-E6：enabled 内部判定，pump 统一重试
+
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
         static_cast<std::uint32_t>(nativeSize.width),
         static_cast<std::uint32_t>(nativeSize.height)
     };
     auto renderer = nl::renderer::Renderer::create(window.nativeHandle(), extent, o.debug,
+
                                                    o.modelFile.c_str(), cluster, cullMode,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
@@ -931,6 +1267,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         });
     }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
+    edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（normal 模式）
+    edEmbed.bindScene(nullptr);           // M-E4d：model 模式（无实例表，getState 返回 mode=model）
+    edEmbed.bindMaterials(o.modelFile.c_str());   // M-E5：材质查询（model 模式 .nmesh NSUB 表）
     // M-D3: drive CVars + gates. Registered BEFORE --console-exec so
     // "vehicle.throttleScale 0.5" / "vehicle.debug true" work at startup.
     bool driveHudOn = o.driveHud;
@@ -997,6 +1336,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         syncCameraToCVar();   // M-C2：相机实际值回写 cam.fov/cam.dist（滚轮 zoom / reset 后不陈旧）
         // M-C1：` 边沿切换控制台；ESC 开着控制台时先收控制台，再退出
         if (window.keyPressed(nl::core::Key::Grave)) {
@@ -2033,6 +2373,12 @@ int runScene(const Options& o) {
         nl::core::log::error("window creation failed");
         return 1;
     }
+
+    // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
+    EditorEmbed edEmbed;
+    edEmbed.start(window.nativeHandle(), o.editorBridge && !o.screenshot,
+                  o.editorEndpoint, o.viewId);   // M-E4a/M-E6：enabled 内部判定，pump 统一重试
+
     const auto nativeSize = window.framebufferSize();
     const nl::renderer::Extent extent{
         static_cast<std::uint32_t>(nativeSize.width),
@@ -2144,6 +2490,9 @@ int runScene(const Options& o) {
         else if (o.cameraMode == "track" || !o.cameraTrack.empty()) m = nl::viewer::CameraMode::Track;
         if (m != nl::viewer::CameraMode::Orbit) camera.setMode(m);
     }
+    edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
+    edEmbed.bindScene(&objects);          // M-E4d：场景树数据源（每帧原地刷新）
+    edEmbed.bindMaterials(nullptr);       // M-E5：材质读写（scene 模式实例表）
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;
@@ -2380,6 +2729,7 @@ int runScene(const Options& o) {
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
         if (window.keyPressed(nl::core::Key::Escape)) {
             nl::core::log::info("ESC -> exit");
             break;
@@ -2762,6 +3112,11 @@ void printUsage() {
               << "  viewer.exe                         textured Suzanne + ImGui HUD; drag=orbit, wheel=zoom\n"
               << "                                     C=culling, V=wireframe, N=shading, R=reset, SPACE=clear, F12=PNG, ESC=quit\n"
               << "  viewer.exe --selftest              headless checks\n"
+              << "  viewer.exe --editor-bridge         connect external editor at 127.0.0.1:29110;\n"
+              << "                                     window gets embedded via SetParent (M-E2);\n"
+              << "                                     no editor running -> standalone (graceful)\n"
+              << "  viewer.exe --editor-endpoint <ep>  M-E6: tcp://127.0.0.1:29110 (default) or pipe://name\n"
+              << "  viewer.exe --view-id <id>          M-E6: viewport key for multi-view editors (default main)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
