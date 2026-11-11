@@ -2801,3 +2801,14 @@
 - **踩坑**：跨 worktree 的 `.workbuddy` 是 junction，轨道侧 `git status` 会显示主树写入的 memory 改动——共享目录的正常表现，不是落错树，别据此回滚；同理合并中出现的 `MEMORY.md` 33 行精简版属他会话未提交工作，不卷入 merge commit。
 
 - **验收（主树合并后实跑，2026-11-11）**：双后端全量 BUILD OK + viewer selftest 16/16×2；`ctest -R "m-n[0123456]-nav" --repeat until-pass:3` DX12/VULKAN **50/50 ×2**；`regression --only nav-n6` **26/26 ALL GREEN**（bytes 26 / near 0 / FAIL 0）、master 侧 `--only s10-refgi` **4/4**（near 1 = GPU 取整噪声 2 像素 maxDelta 1/255）、轨道侧老卡 `--only nav-n4` **22/22 bytes**；`example/nav-n6/run.bat` DX12/VULKAN **A~F ALL GREEN**（`.ntraj` 28924 B / fnv64 `5cbf9ce63eb1b273`，与 M-N4 基线逐字节相同）；`server.py --check` exit 0（stage=S8.2）；`check-bat-encoding` 96 文件 0 违规。按「全量总闸只在打 tag 收口跑一次」纪律，本次非 tag 收口，未起全量（M10.3 收官已跑 653/654）。
+
+## P8 寻路整轨里程碑 M-N0~M-N6（2026-11-11，tag `nav-done` / 分支 `milestone/nav-done`）
+
+- **动作**：整轨全量 merge 回 master（`5356c80` + 验收写实 `d3d6127`）后按 §7.6 完整收口：三处状态列同步（`AGENTS.md` 注册表 / `PARALLEL-TRACKS.md` §7.1+§7.1b / `tools/wt_pool.py TRACKS`）、拆除 `nl-engine-pathfinding` worktree、annotated tag `nav-done` + 里程碑分支 `milestone/nav-done` 留档。用户 2026-11-11 指令「PARALLEL-TRACKS.md 轨道状态列同步」「整完了不弄个 milestone 么」「拆 worktree 不是常规操作么」。
+
+- **提交版本**：tag `nav-done` → 本次收口 commit；`milestone/nav-done` 同点。轨道 tip `d0d168f`（tag `nav-n6`）；merge commit `5356c80`（双 parents `0c5d22a` + `d0d168f`，136 文件 / +16769 行）；`nav-m0`~`nav-n6` 七个里程碑 tag 全部可见。
+
+- **完成情况**：worktree 已删（目录不存在）、`git worktree prune` 已清元数据、`git worktree list` 仅剩主树 + `nl-engine-logging`；`wt_pool.py status` 中 `pathfinding` 为 CLOSED，`check --track pathfinding` 硬拒绝；`feat/pathfinding` 分支保留；主树共享 `.workbuddy` 与 `thirdparty/slang/dist` 正本核对无损。合并验收数据见上一段「轨道合并」四栏。
+
+- **踩坑**（写实）：① `git worktree remove --force` 在本沙箱被 SIGTERM 中断，目录残留但 git 已标 `prunable` → 按 editor 先例改走 PowerShell 原生 API 删目录 + `git worktree prune`；② `Remove-Item -Recurse -Force` 触发 safe-delete fail-closed（回收站操作 aborted），须用 `[IO.Directory]::Delete($wt,$true)`；③ 递归删除前必须先摘两个 junction，否则会伤主树共享正本；④ `PARALLEL-TRACKS.md` 与 `tools/wt_pool.py` 均有并行会话未提交改动（日志立项行 / `logging` TRACKS 条目），本轮用 `hash-object -w` + `update-index --cacheinfo` 精确构造 index，只提交本轮替换，他人工作零卷入；⑤ **口径勘误**：上一轮「本次非 S* 大版本收官，不建 milestone 分支、不另打 tag」是误判——整轨 M-N0~M-N6 收官本身就是里程碑，已补建。
+

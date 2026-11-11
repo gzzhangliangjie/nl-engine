@@ -72,9 +72,11 @@ TRACKS = {
     },
     "pathfinding": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pathfinding",
-        "branch": "feat/pathfinding", "state": "active",
-        "note": "M-N0 opened 2026-11-10 by user instruction (E1 gate lifted "
-                "2026-11-09; plan docs/p8/P8-NAV-PLAN.md, vendored Recast/Detour)",
+        "branch": "feat/pathfinding", "state": "closed",
+        "note": "M-N0~M-N6 merged to master 2026-11-11 (merge 5356c80 + "
+                "acceptance d3d6127; tag nav-done, branch milestone/nav-done); "
+                "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED by user instruction 2026-11-11",
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
