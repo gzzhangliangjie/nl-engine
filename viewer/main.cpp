@@ -642,6 +642,7 @@ void registerGameConsole(nl::core::GameClock* clock) {
 struct EditorEmbed {
     nl::editor::RpcBridge bridge;
     bool connected = false;
+    nl::core::OrbitCamera* camera = nullptr;   // M-E3：相机 RPC 的操作目标（两处主循环各 bind 一次）
 
     void start(void* engineHwnd) {
         connected = bridge.connect("tcp://127.0.0.1:29110");
@@ -655,6 +656,51 @@ struct EditorEmbed {
                                           static_cast<int>(::GetCurrentProcessId()), 1);
         nl::core::log::info("editor bridge: connected, hwnd announced to editor");
     }
+
+    // M-E3：相机控制 handler（编辑器插件经 RPC 驱动引擎相机）。
+    // params 统一命名 Map（RPC-SPEC）；set 类回读 clamp 后实际值，编辑器 UI 直接对齐。
+    // 未连接也照常注册（无 RPC 泵就不会被调到），standalone 零开销。
+    void bindCamera(nl::core::OrbitCamera* cam) {
+        camera = cam;
+        if (!camera) return;
+        auto field = [](const nl::editor::RpcValue& p, const char* k, double def) -> double {
+            if (p.isMap()) {
+                auto it = p.asMap().find(k);
+                if (it != p.asMap().end() && it->second.isDouble()) return it->second.asDouble();
+                if (it != p.asMap().end() && it->second.isInt()) return (double)it->second.asInt();
+            }
+            return def;
+        };
+        bridge.registerHandler("camera.getState", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Map m;
+            m["fov"]   = (double)camera->fovYDegrees();
+            m["dist"]  = (double)camera->distance();
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("camera.setFov", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->setFovYDegrees((float)field(p, "fov", camera->fovYDegrees()));  // 内部 clamp 20..120
+            return nl::editor::RpcValue((double)camera->fovYDegrees());
+        });
+        bridge.registerHandler("camera.setDistance", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->setDistance((float)field(p, "dist", camera->distance()));       // 内部 clamp
+            return nl::editor::RpcValue((double)camera->distance());
+        });
+        bridge.registerHandler("camera.orbit", [this, field](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            camera->orbit((float)field(p, "dx", 0.0), (float)field(p, "dy", 0.0));  // 增量（度）
+            nl::editor::msgpack::Map m;
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("camera.reset", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            camera->reset();
+            nl::core::log::info("camera reset (via editor RPC)");
+            return nl::editor::RpcValue();  // nil = ack
+        });
+    }
+
     void pump() {
         if (connected) bridge.update();   // 泵入站 + 心跳（编辑器挂了也照跑）
     }
@@ -896,6 +942,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         });
     }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
+    edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（normal 模式）
     // M-D3: drive CVars + gates. Registered BEFORE --console-exec so
     // "vehicle.throttleScale 0.5" / "vehicle.debug true" work at startup.
     bool driveHudOn = o.driveHud;
@@ -2005,6 +2052,7 @@ int runScene(const Options& o) {
     nl::core::OrbitCamera camera;
     camera.setAspect(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     camera.setOrbit(o.yawDeg, o.pitchDeg, camDist);
+    edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;

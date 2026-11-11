@@ -34,7 +34,7 @@
 - **M-E0** 编辑器外壳骨架：独立 C++ 程序 + ImGui 主窗 + 可停靠视口框 + 最小插件加载器（无引擎也可启动）。 **[DONE 2026-11-11]** — 全量编译链接通过（`editor.exe`/`rpc_self_test.exe` 均产出）。GUI 运行需桌面+GPU 会话，headless 沙箱无法跑 GUI（GLFW 在无证显会话里段错误，环境限制非代码缺陷）。
 - **M-E1** 最小 RPC 通路：`RpcHost`(server) + `RpcBridge`(client) + 握手/心跳/echo 双向跑通（含自研 msgpack 编解码 + TCP 分帧）。 **[DONE 2026-11-11]** — `rpc_self_test.exe` 无头自测 11 项全绿（accept / announce(hwnd·pid·proto) / 正向 echo / 反向 echo / 2.6s 心跳 ping-pong 不误判掉线）。
 - **M-E2** 视口嵌入：`SetParent` 挂引擎 HWND + 随框尺寸同步 + 几何 watcher。 **[DONE 2026-11-11，画面验收全过]** — 双端接线全量编译链接通过：viewer 加 `--editor-bridge`（可选启动，连不上降级单机；两个交互主循环每帧泵 `bridge.update()`）；编辑器 `attachEngine` 建 WS_CHILD 容器窗 + `EmbedWindow::attach` 跨进程 SetParent，每帧 `syncNative` 贴面板内容区 + 引擎窗铺满容器（WM_SIZE 驱动引擎侧 swapchain 重建）；`onEngineClose` 拆容器回落占位（崩溃隔离可视化）。验收三项实机全过：① 跨进程 SetParent 实挂（Win32 窗口树：容器 NlEditorViewportHost 与引擎窗 GLFW30 pid 跨进程、矩形完全重合）+ GDI 截屏确认 Suzanne 像素直出无偏移（修复 ImGui 坐标系双重 ScreenToClient 偏移 bug）；② resize 跟手（viewer log `resize -> 964x585`）；③ `taskkill viewer` 后编辑器存活、容器自动拆除回落占位（崩溃隔离实挂证据）。另修 GL2 后端移植 bug：客户端数组模式 `glVertexPointer` 第 4 参须传内存基址+偏移（原误传纯偏移 → 驱动近零地址读顶点段错误），并摘除误设的 `RendererHasVtxOffset`。
-- **M-E3** 第一个工具插件（相机/场景树）经 RPC 驱动引擎。
+- **M-E3** 第一个工具插件（相机/场景树）经 RPC 驱动引擎。 **[DONE 2026-11-11，跨进程探针 + UI 点击链路双验收全过]** — 引擎侧 `EditorEmbed::bindCamera`（runNormal/runScene 双模式各 bind 一次）注册 5 个 handler：`camera.getState`（fov/dist/yaw/pitch，度）/ `camera.setFov` / `camera.setDistance`（回读 clamp 后实际值）/ `camera.orbit`（像素增量 ×kOrbitGain=0.007 rad/px）/ `camera.reset`；params 统一命名 Map，未连接也注册（standalone 零开销）。编辑器侧 `CameraPlugin`（替换 stub）：Refresh 拉真值、FOV/Distance 滑条、Orbit 四向按钮（度数语义，deg→px 换算 kPxPerDeg≈2.4913 在编辑器侧，修正按钮"±15deg"实转 6° 的语义错位）、Reset；每次操作后 getState 对齐 UI。验收：`tools/m-e3-cam-probe.py`（python 假编辑器 server，真跨进程打 viewer handler）22 断言 0 fail（announce hwnd/pid/proto、setFov 45 与 clamp 500→120、setDistance clamp 0.01→0.45、orbit 增量精确匹配 0.007 rad/px、reset 回 4.2/0.21rad/0.16rad 且不动 fov、bogus method error 100）；UI 链路 SendInput 实点 Refresh+Orbit R 截屏双证据：状态行 `fov 45.0 dist 4.20 yaw 27.0`（12.0→27.0 精确 +15°）、引擎 HUD 同值、Suzanne 画面可见右转。
 
 ---
 
@@ -154,6 +154,22 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 - ImGui 面板内嵌原生窗的经典时序：`GetCursorScreenPos()` 必须在 `Dummy(avail)` 之前取（Dummy 推进光标，之后取会偏一行）。
 - 沙箱跑 viewer.exe 报 UCRT DLL 127：bash/Start-Process 环境缺 redist PATH + `HTTPS_PROXY/https_proxy` 大小写键冲突炸 Start-Process——均为环境问题，回归 harness（python subprocess + 系统 PATH）不受影响。
 
+### 2026-11-11 — M-E3 相机插件（feat/editor worktree）
+
+**产物**
+- `viewer/main.cpp`：`EditorEmbed` 加 `camera` 成员 + `bindCamera()`（5 handler，见上）+ 两处主循环 bind 点。
+- `editor/plugin.cpp`：`CameraStubPlugin` → `CameraPlugin`（Refresh/滑条/Orbit 四向/Reset，操作后 getState 回读对齐）。
+- `tools/m-e3-cam-probe.py`：python 极简 msgpack 假编辑器 server（4 字节大端长度帧 + 信封），跨进程机械验收引擎 handler。
+
+**验收（双段）**
+- 段1 跨进程 RPC：probe 22 断言 0 fail（含 clamp 两向、orbit 增量与 kOrbitGain 精确匹配、reset 语义、负向 error 100）。
+- 段2 编辑器 UI 链路：SetForegroundWindow 核验后 SendInput 实点 Refresh + Orbit R → 截屏：状态行 fov 45.0 dist 4.20 yaw 27.0（+15° 精确）、引擎 HUD 同值、Suzanne 可见右转。
+
+**踩坑**
+- 探针首版 3 条假 FAIL 全是脚本自身问题，引擎无错：reset 后 getState 返回**度**（12.032°=0.21rad），探针拿 0.21 当度数比；`orbit()` 参数是**像素**（×0.007 rad/px）不是度；msgpack fixstr 解码要覆盖 0xA0..0xBF（`(o&0xE0)==0xA0`，只判 `&0xF0` 漏一半）。
+- 插件 orbit 按钮原写"±15deg"实转 6°（直传 15 给像素参数）——语义错位，deg→px 换算放编辑器侧（引擎 API 保持像素语义不动）。
+- SendInput 点击验收：编辑器可能被其他前台窗口盖住（本次实发：WorkBuddy 聊天窗在上层，首轮点击点进了别人窗口）——必须 SetForegroundWindow + 每次点击后核验 `GetForegroundWindow()==hwnd` 再动手。
+
 **待办**
-- M-E3：`CameraStubPlugin` 接真实相机/场景树 RPC。
+- M-E4 候选（EDITOR-PLAN §4 未排期项）：场景树/材质检查插件、bridge 周期重连、焦点路由实测、announce.caps 填充。
 - 体验缺口（已识别、未排期，做 M-E3 时拍板）：引擎先启/编辑器后启时 `--editor-bridge` 只连一次失败即永久降级单机，无周期重连；跨进程嵌入后的键盘/鼠标焦点路由未实测；`announce.caps` 仍空（分辨率/后端元信息预留位）。
