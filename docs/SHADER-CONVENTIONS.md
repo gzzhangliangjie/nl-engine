@@ -291,3 +291,19 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | tonemap：`tonemapSet_` | — | `ensureRtTargets` | t0 = `hdrSceneColor_` SRV | 只读，读前 `hdrSceneColor_` 已转 `ShaderResource` |
 
 > 落码铁律：ping-pong（history0/1）与 `hdrSceneColor_` 一律不设 permanent 态；PSO 随帧缓冲 **info**（格式/采样数）懒建、跨 resize 复用，set 随纹理重建。shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0）。
+
+#### M10.0 探针管线槽位同步表（落码实读固化，2026-11-11，tag `s10-place`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `velocity_`（T0 建） | `RG16_FLOAT`，`vsVelocity`/`psVelocity` 写（`velocity.xy = curUV - prevUV`，消费端 `prevUV = curUV - velocity`） | `ensureRtTargets`（velocity prepass 帧缓冲色附件） | `velocitySet_`：b0 `velocityCB_`(144B volatile) + t1..t4 pulling 池 SRV | 创建态 = `ShaderResource` + keepInitialState（**必须与帧首 beginTracking 声明对齐**，否则首帧 DX12 ECL 校验 fail）；clear value 必须与创建期一致（perf 警告计 deviceErrors） |
+| `probeDepth_` | `D32`（非 permanent；velocity prepass 深度附件 + csPlace SRV 读——共享 backend `depth_` keepInitialState 永驻态不能切 SRV） | `ensureProbeTargets`（视口尺寸懒建） | `placeSet_[2]` t0 SRV | 同上：创建态 SRV + keepInitialState；逐帧 `setTextureState(DepthWrite)` → clear 1.0 → 写 → csPlace 读 |
+| `probeAtlas_[2][4]` | `RGBA32_FLOAT` ×2 parity ×4 级（16/8/4/2；rgb=探针世界位置，a=deviceZ，a=0=天空） | `ensureProbeTargets` | `placeSet_[parity]` u0..u3 UAV；`dotsSet_[parity]` t0..t3 SRV | 创建态 SRV；UAV↔SRV 转换由绑定 require 自动插 barrier |
+| `probePrevDelta_` | `RGBA32_FLOAT`（**RG32F typed UAV store 是 DX12 可选特性，退 RGBA32F**，rtTarget_ 先例） | `ensureProbeTargets` | `placeSet_[parity]` u4 UAV；`dotsSet_[parity]` t4 SRV | 同 atlas |
+| `probeCB_` | 176B volatile：[0..15] invViewProj / [16..19] eye+projYScale / [20..23] placeParams / [24..39] vizViewProj / [40..43] vizParams（place 与 viz 共用同一份 buffer 各读自己的段） | `initProbe` | b0（placeSet_ / dotsSet_） | 每帧全量覆写 |
+| `velocityCB_` | 144B volatile：[0..15] cur viewProj / [16..31] prev viewProj / [32..35] (w,h,pad,pad) | `initProbe` | b0（velocitySet_） | 每帧全量覆写（**独立 CB 不与 probeCB_ 共用**——布局不同） |
+| PSO | `velocityPSO_`（RG16F+D32 格式锁定、深度测试+写入 ON、cull Back）/ `placePSO_`（compute）/ `dotsPSO_`（swapchain 格式懒建、深度关、cull None） | initProbe / drawProbeDots | 各自单一 layout | — |
+
+**M10.0 shader 产物命名铁律**：产物 = `文件名.小写入口.后缀`（如 `velocity.vsvelocity.spv`、`probe.csplace.dxil`）——kArtifacts 登记、loadShader、CMake `_ENTRIES_*` 三处必须同口径，写 `velocity.vs` 这类短名会 selftest BAD(-1B) 或运行时加载失败。新增入口三处登记：CMakeLists `_ENTRIES_*` + `kArtifacts` + loadShader。
+
+> M10.0 补充纪律：dispatch 是 `cmd->dispatch(x,y,z)` 三参（NVRHI 无 `DispatchArguments`）；`ComparisonFunc` 枚举值是 `LessOrEqual` 非 `LessEqual`。探针法线 = 深度邻域 3-tap 反投影 cross（GBuffer 不落盘 Q4 冻结，纯 compute 无 ddx/ddy）。

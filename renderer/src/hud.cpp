@@ -343,6 +343,21 @@ void Hud::build(HudFrame& frame) {
         ImGui::TextUnformatted(hizLine);
         ImGui::Separator();
     }
+    // M10.0：探针 cascade 参数面板（仅 probe-place 模式显示，probePanelShow 由
+    // viewer 门控；双向通道同 hizEnable——滑条写回 HudFrame，viewer 回填
+    // FrameParams，HUD 不直接碰渲染资源）。基线缺省值（16 / 0.10 / 3.0）与
+    // renderer.hpp FrameParams 一致，截图回归不受滑条影响。
+    if (frame.probePanelShow) {
+        ImGui::SliderInt("probe base res", &frame.probeBaseRes, 4, 32);
+        ImGui::SliderFloat("normal offset", &frame.probeNormalOffset, 0.0f, 0.50f, "%.2f");
+        ImGui::SliderFloat("dot size px", &frame.probeDotSize, 1.0f, 8.0f, "%.1f");
+        const int b = frame.probeBaseRes;
+        const int total = b * b + (b >> 1) * (b >> 1) + (b >> 2) * (b >> 2) + (b >> 3) * (b >> 3);
+        char probeLine[96];
+        std::snprintf(probeLine, sizeof(probeLine), "probes : %d (4 levels, base %d)", total, b);
+        ImGui::TextUnformatted(probeLine);
+        ImGui::Separator();
+    }
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,

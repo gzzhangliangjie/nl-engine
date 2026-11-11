@@ -45,10 +45,11 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 66 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 76 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
-// rt 6（M8.2）+ direct.cs 2（M9.0）。清单只查列出项：新增入口必须同步登记，
+// rt 6（M8.2）+ direct.cs 4（M9.0/M9.2）+ velocity/probe/probe_viz 10（M10.0）。
+// 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
 static const Artifact kArtifacts[] = {
@@ -100,6 +101,14 @@ static const Artifact kArtifacts[] = {
     // M9.2：direct.csref（离线参考模式 compute，追踪 64 条抖动阴影射线累积）× 双目标 = 2。
     {"direct.cs", true}, {"direct.cs", false},
     {"direct.csref", true}, {"direct.csref", false},
+    // M10.0：velocity.slang 双入口（velocity prepass，Q10-1 UE 口径）× 双目标 = 4；
+    // probe.slang 单 compute 入口（cascade 探针布点）× 双目标 = 2；
+    // probe_viz.slang 双入口（探针点可视化）× 双目标 = 4。
+    {"velocity.vsvelocity", true}, {"velocity.vsvelocity", false},
+    {"velocity.psvelocity", true}, {"velocity.psvelocity", false},
+    {"probe.csplace", true}, {"probe.csplace", false},
+    {"probe_viz.vsprobedots", true}, {"probe_viz.vsprobedots", false},
+    {"probe_viz.psprobedots", true}, {"probe_viz.psprobedots", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -146,15 +155,17 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool cullMode, bool frustumCull,
                                            bool dagMode, bool skinMode,
                                            bool hizMode, bool sceneMode, bool visbufMode,
-                                           bool pullingMode, bool rtMode, bool shadowMode, bool referenceMode) {
+                                           bool pullingMode, bool rtMode, bool shadowMode, bool referenceMode,
+                                           bool probeMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
     // M7.0：visbuf 模式同样吃 .nmesh（复用 M4 的簇数据）。
     // M8.2：rt 模式走 initDag 资产路径（BLAS/TLAS 挂在 initDag 链上），同样吃 .nmesh。
     // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
+    // M10.0：probe-place 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
-                         rtMode || shadowMode || referenceMode;
+                         rtMode || shadowMode || referenceMode || probeMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -187,7 +198,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
-                                 shadowMode, referenceMode, r->impl_->error)) {
+                                 shadowMode, referenceMode, probeMode, r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

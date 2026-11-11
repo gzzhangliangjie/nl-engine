@@ -2484,6 +2484,12 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         d.width = w; d.height = h;
         d.format = nvrhi::Format::RG16_FLOAT;     // 独立 velocity（bevy 口径，比 Carrot 打包省 4×）
         d.isRenderTarget = true;
+        // 创建态 = SRV + keepInitialState（hdrSceneColor_ 同款）：与 probe 帧首
+        // beginTracking 声明的「上一帧末态 SRV」对齐，否则首帧 DX12 ECL 校验
+        // fail（barrier 起点 SRV ≠ 实际 COMMON）。clear value 同理必须匹配。
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 0.f));
         d.debugName = "Velocity";
         velocity_ = device->createTexture(d);
         if (!velocity_) { outError = "createTexture failed for velocity"; return false; }
@@ -2959,6 +2965,409 @@ bool Scene::presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
     vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
     cmd->draw(vargs);
     return true;
+}
+
+// ============================================================================
+// M10.0（S10）：--mode probe-place —— 屏幕探针 cascade 布点（Q10-1/Q10-2 拍板
+// UE 口径）。复用面（S10-PLAN「复用决策」同 shadow/reference 口径）：
+//   * initVisbuf(pulling=true)：M7.1/7.2 全套 vis + 材质资源（M10.1 直光查表机器
+//     已备，本里程碑只消费其几何池做 velocity prepass）
+//   * velocity_：T0 已建的 RG16F 纹理（T3 写入在本里程碑落地）
+// 独立面：velocity prepass（自建 probeDepth_ 深度）+ csPlace cascade 布点 +
+// probe_viz 点可视化；不碰 T2 场景 PSO / 共享 depth_ / Q4 冻结面（0 新增
+// GBuffer 属性资源——atlas 是探针位置，不是表面属性）。
+// ============================================================================
+bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
+                      const char* vsEntry, const char* psEntry,
+                      const char* nmeshFile, std::string& outError) {
+    if (!initVisbuf(device, shaderSuffix, vsEntry, psEntry, nmeshFile,
+                    /*pulling=*/true, outError)) return false;
+    probe_ = true;
+    probeDevice_ = device;
+    shaderSuffix_ = shaderSuffix;   // M-P3：dbgLines_.ensure 定位字节码（同 initRt）
+
+    auto probePath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix;
+    };
+    auto loadShader = [&](const char* artifact, nvrhi::ShaderType type,
+                          nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(probePath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+        desc.setShaderType(type).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadShader("velocity.vsvelocity", nvrhi::ShaderType::Vertex, vsVelocity_) ||
+        !loadShader("velocity.psvelocity", nvrhi::ShaderType::Pixel, psVelocity_) ||
+        !loadShader("probe.csplace", nvrhi::ShaderType::Compute, csPlace_) ||
+        !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
+        !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
+        return false;
+
+    // probeCB_（176B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
+    // 批内差异字段必须进写入面——§2.15 纪律）。
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = 176;
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "ProbeConstants";
+    probeCB_ = device->createBuffer(cbDesc);
+    if (!probeCB_) { outError = "createBuffer failed for probe constants"; return false; }
+
+    // velocityCB_（144B volatile）：velocity.slang 专用布局
+    //（[0..15] cur viewProj / [16..31] prev viewProj / [32..35] 尺寸）。
+    nvrhi::BufferDesc vcbDesc;
+    vcbDesc.byteSize = 144;
+    vcbDesc.isConstantBuffer = true;
+    vcbDesc.isVolatile = true;
+    vcbDesc.maxVersions = 16;
+    vcbDesc.debugName = "VelocityConstants";
+    velocityCB_ = device->createBuffer(vcbDesc);
+    if (!velocityCB_) { outError = "createBuffer failed for velocity constants"; return false; }
+
+    // ---- velocity prepass 布局：b0 + t1..t4（pulling 几何池，visbuf.slang 同槽）。
+    nvrhi::BindingLayoutDesc vDesc;
+    vDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4));
+    velocityLayout_ = device->createBindingLayout(vDesc);
+    if (!velocityLayout_) { outError = "createBindingLayout failed for velocity prepass"; return false; }
+
+    // ---- csPlace 布局：b0 + t0 depth SRV + t1 velocity SRV + u0..u4 UAV。
+    nvrhi::BindingLayoutDesc pDesc;
+    pDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(4));
+    placeLayout_ = device->createBindingLayout(pDesc);
+    if (!placeLayout_) { outError = "createBindingLayout failed for probe place"; return false; }
+
+    // ---- dots 布局：b0 + t0..t4 SRV。
+    nvrhi::BindingLayoutDesc dDesc;
+    dDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4));
+    dotsLayout_ = device->createBindingLayout(dDesc);
+    if (!dotsLayout_) { outError = "createBindingLayout failed for probe dots"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csPlace_).addBindingLayout(placeLayout_);
+        placePSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!placePSO_) { outError = "createComputePipeline failed for probe place"; return false; }
+
+    nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
+                        ", viz dots) | shader=", shaderSuffix);
+    return true;
+}
+
+// M10.0：probe 资源懒建。velocityFb_（velocity_ + probeDepth_）与 atlas 随视口
+// 尺寸重建；baseRes（ImGui 参数）入闸 → atlas/prevDelta/sets 整组重建
+//（PSO 与 CB 不依赖尺寸，复用）。
+bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                               std::uint32_t baseRes, std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    const std::uint32_t res = baseRes < 4u ? 4u : (baseRes > 32u ? 32u : baseRes);
+    if (w == 0 || h == 0) { outError = "probe: zero viewport"; return false; }
+    if (probeDepth_ && velocityFb_ && probeW_ == w && probeH_ == h &&
+        probeBaseRes_ == res)
+        return true;
+    probeW_ = w;
+    probeH_ = h;
+    probeBaseRes_ = res;
+
+    // probeDepth_（D32）：velocity prepass 的深度附件（写）+ csPlace 的 SRV（读）。
+    // 不设 permanent——逐帧 DepthWrite↔SRV tracking（§2.15/§2.19；共享 backend
+    // depth_ 是 keepInitialState 永驻态，不能切 SRV）。创建态 = SRV +
+    // keepInitialState：与帧首 beginTracking 声明的「上一帧末态 SRV」对齐
+    //（hdrSceneColor_ 同款）——首帧创建态若为 DepthWrite，DX12 ECL 校验直接
+    // fail（barrier 起点 SRV ≠ 实际 DepthWrite，2026-11-11 冒烟实锤）。
+    {
+        nvrhi::TextureDesc dDesc;
+        dDesc.width = w;
+        dDesc.height = h;
+        dDesc.format = nvrhi::Format::D32;
+        dDesc.isRenderTarget = true;
+        dDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        dDesc.keepInitialState = true;
+        dDesc.setClearValue(nvrhi::Color(1.0f));
+        dDesc.debugName = "ProbeDepth";
+        probeDepth_ = device->createTexture(dDesc);
+        if (!probeDepth_) { outError = "createTexture failed for probe depth"; return false; }
+    }
+    {
+        nvrhi::FramebufferDesc fb;
+        fb.addColorAttachment(velocity_);
+        fb.setDepthAttachment(probeDepth_);
+        velocityFb_ = device->createFramebuffer(fb);
+        if (!velocityFb_) { outError = "createFramebuffer failed for velocityFb"; return false; }
+    }
+
+    // cascade atlas：4 级 RGBA32_FLOAT（rgb=世界位置，a=deviceZ）× 2 帧 ping-pong。
+    // 创建态 = SRV（hdrSceneColor_ 同款：与帧首 beginTracking 声明的上一帧末态对齐）。
+    for (std::uint32_t parity = 0; parity < 2; ++parity) {
+        for (std::uint32_t level = 0; level < 4; ++level) {
+            const std::uint32_t res_l = res >> level;
+            nvrhi::TextureDesc aDesc;
+            aDesc.width = res_l;
+            aDesc.height = res_l;
+            aDesc.format = nvrhi::Format::RGBA32_FLOAT;   // typed UAV store 双后端安全（rtTarget_ 先例）
+            aDesc.isUAV = true;
+            aDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            aDesc.debugName = "ProbeAtlas";
+            probeAtlas_[parity][level] = device->createTexture(aDesc);
+            if (!probeAtlas_[parity][level]) {
+                outError = "createTexture failed for probe atlas";
+                return false;
+            }
+        }
+    }
+    {
+        nvrhi::TextureDesc pdDesc;
+        pdDesc.width = res;
+        pdDesc.height = res;
+        pdDesc.format = nvrhi::Format::RGBA32_FLOAT;   // RG32F typed UAV store 是 DX12 可选特性，退 32F（rtTarget_ 先例）
+        pdDesc.isUAV = true;
+        pdDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        pdDesc.debugName = "ProbePrevDelta";
+        probePrevDelta_ = device->createTexture(pdDesc);
+        if (!probePrevDelta_) { outError = "createTexture failed for probe prevDelta"; return false; }
+    }
+
+    // 绑定集：velocity 一份（无 parity，绑自己的 144B CB）；place/dots 各两份
+    //（atlas 绑定随 parity）。
+    {
+        nvrhi::BindingSetDesc sDesc;
+        sDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, velocityCB_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_));
+        velocitySet_ = device->createBindingSet(sDesc, velocityLayout_);
+        if (!velocitySet_) { outError = "createBindingSet failed for velocity prepass"; return false; }
+    }
+    for (std::uint32_t parity = 0; parity < 2; ++parity) {
+        nvrhi::BindingSetDesc psDesc;
+        psDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(1, velocity_));
+        for (std::uint32_t level = 0; level < 4; ++level)
+            psDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level, probeAtlas_[parity][level]));
+        psDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(4, probePrevDelta_));
+        placeSet_[parity] = device->createBindingSet(psDesc, placeLayout_);
+        if (!placeSet_[parity]) { outError = "createBindingSet failed for probe place"; return false; }
+
+        nvrhi::BindingSetDesc dsDesc;
+        dsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_));
+        for (std::uint32_t level = 0; level < 4; ++level)
+            dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+        dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4, probePrevDelta_));
+        dotsSet_[parity] = device->createBindingSet(dsDesc, dotsLayout_);
+        if (!dotsSet_[parity]) { outError = "createBindingSet failed for probe dots"; return false; }
+    }
+
+    // velocity PSO（RG16F+D32 framebuffer 格式锁定，照 hiz prepassInfo 先例按
+    // 格式构造）：深度测试开 + 写入开（本 pass 即探针模式的深度来源），cull=Back。
+    if (!velocityPSO_) {
+        const nvrhi::FramebufferInfo info = velocityFb_->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc gpDesc;
+        gpDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+              .setVertexShader(vsVelocity_)
+              .setFragmentShader(psVelocity_)
+              .addBindingLayout(velocityLayout_);
+        gpDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setCullMode(nvrhi::RasterCullMode::Back);
+        gpDesc.renderState.depthStencilState
+            .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual)
+            .enableDepthTest()
+            .enableDepthWrite()
+            .disableStencil();
+        velocityPSO_ = device->createGraphicsPipeline(gpDesc, info);
+        if (!velocityPSO_) { outError = "createGraphicsPipeline failed for velocity prepass"; return false; }
+    }
+
+    // 一次性日志锚（机器断言用）：级联结构 + 总探针数。
+    if (!probeLogged_) {
+        const std::uint32_t total = res * res + (res >> 1) * (res >> 1) +
+                                    (res >> 2) * (res >> 2) + (res >> 3) * (res >> 3);
+        nl::core::log::info("probe: cascades=4 base=", res,
+                            " grid=", res, "/", (res >> 1), "/", (res >> 2), "/", (res >> 3),
+                            " probes=", total);
+        probeLogged_ = true;
+    }
+    return true;
+}
+
+// M10.0：velocity prepass + cascade 布点（pulling 分支内、tonemap 前调用）。
+// 状态纪律（§2.15/§2.19）：probeDepth_ / velocity_ / prevDelta / atlas 全部非
+// permanent，帧首 beginTracking 声明上一帧末态，后续转换由 setTextureState /
+// 绑定 require 自动插 barrier。
+void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                           const FrameParams& params) {
+    if (!probe_ || probeFailed_ || !probeDevice_ || !velocity_) return;
+    std::string err;
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    if (!ensureProbeTargets(probeDevice_, vpW, vpH,
+                            static_cast<std::uint32_t>(params.probeBaseRes), err)) {
+        nl::core::log::deviceError("probe", err);
+        probeFailed_ = true;   // 只报一次，后续帧跳过（与 visbuf/hiz 懒建失败同口径）
+        return;
+    }
+
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // ---- 帧首状态声明（上一帧末态：depth=SRV（csPlace 读）/ velocity=SRV /
+    // prevDelta=SRV（dots 读）/ atlas[cur]=SRV（dots 读））。
+    cmd->beginTrackingTextureState(probeDepth_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(velocity_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(probePrevDelta_, allSub, nvrhi::ResourceStates::ShaderResource);
+    for (std::uint32_t level = 0; level < 4; ++level)
+        cmd->beginTrackingTextureState(probeAtlas_[probeParity_][level], allSub,
+                                       nvrhi::ResourceStates::ShaderResource);
+    // ---- 清屏（都在首个 setGraphicsState 之前——Vulkan render pass 纪律）。
+    cmd->setTextureState(probeDepth_, allSub, nvrhi::ResourceStates::DepthWrite);
+    cmd->clearDepthStencilTexture(probeDepth_, nvrhi::TextureSubresourceSet(),
+                                  true, 1.0f, false, 0);
+    cmd->clearTextureFloat(velocity_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+    cmd->setTextureState(velocity_, allSub, nvrhi::ResourceStates::RenderTarget);
+
+    // ---- 首帧：prevViewProj = 本帧（velocity=0，截图首帧即稳态，无大速度污染）。
+    if (probeFirstFrame_) {
+        probeFirstFrame_ = false;
+        std::memcpy(probePrevViewProj_, params.viewProj, sizeof(probePrevViewProj_));
+    }
+
+    // ---- velocityCB_ 每帧全量覆写（144B）：[0..15] cur viewProj /
+    // [16..31] prev viewProj / [32..35] (width, height, pad, pad)。
+    float vcb[36] = {};
+    std::memcpy(vcb, params.viewProj, sizeof(params.viewProj));
+    std::memcpy(vcb + 16, probePrevViewProj_, sizeof(probePrevViewProj_));
+    vcb[32] = vpW;
+    vcb[33] = vpH;
+    cmd->writeBuffer(velocityCB_, vcb, sizeof(vcb));
+
+    // ---- probeCB_ 每帧全量覆写（176B）：布局见 probe.slang。
+    //   [0..15] invViewProj / [16..19] eye(+projYScale) / [20..23] placeParams /
+    //   [24..39] vizViewProj / [40..43] vizParams。
+    float cb[44] = {};
+    {
+        nl::math::Mat4 vp{}, invVP{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        invVP = nl::math::inverseMat4(vp);
+        std::memcpy(cb, invVP.m, sizeof(invVP.m));
+        // eye：rt 模式同源（FrameParams.eye 由 viewer 在 probe 模式填入）。
+        cb[16] = params.eye[0];
+        cb[17] = params.eye[1];
+        cb[18] = params.eye[2];
+        cb[19] = params.projYScale;
+        cb[20] = vpW;
+        cb[21] = vpH;
+        cb[22] = static_cast<float>(probeBaseRes_);
+        cb[23] = params.probeNormalOffset;
+        // viz 侧：viewProj = 本帧；dotRadius / 尺寸 / baseRes。
+        std::memcpy(cb + 24, params.viewProj, sizeof(params.viewProj));
+        cb[40] = params.probeDotSize;
+        cb[41] = vpW;
+        cb[42] = vpH;
+        cb[43] = static_cast<float>(probeBaseRes_);
+    }
+    cmd->writeBuffer(probeCB_, cb, sizeof(cb));
+
+    // ---- (1) velocity prepass：与 visRaster 同一间接几何（identityIndex +
+    // indirectArgs），换自己的 VS/PS 与 framebuffer（Q10-1 独立 pass 口径）。
+    {
+        nvrhi::GraphicsState vstate;
+        vstate.setPipeline(velocityPSO_)
+              .setFramebuffer(velocityFb_)
+              .addBindingSet(velocitySet_)
+              .setIndexBuffer(nvrhi::IndexBufferBinding()
+                  .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT)
+                  .setOffset(0));
+        vstate.viewport.addViewportAndScissorRect(viewport);
+        vstate.setIndirectParams(indirectArgs_);
+        cmd->setGraphicsState(vstate);
+        cmd->drawIndexedIndirect(0, 1);
+        // 本帧矩阵存为上一帧（下一帧 velocity 的 prev 侧；首帧已初始化 = 本帧）。
+        std::memcpy(probePrevViewProj_, params.viewProj, sizeof(probePrevViewProj_));
+    }
+
+    // ---- (2) csPlace cascade 布点 dispatch（depth/velocity/prevDelta/atlas 的
+    // SRV↔UAV 转换由绑定 require 自动插 barrier）。
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 1u);
+    }
+}
+
+// M10.0：探针点可视化（tonemap 之后、swapchain 上）。PSO 对 swapchain 格式懒建
+//（blitPSO_ 同款）；atlas/prevDelta 的 UAV→SRV 转换由 dots set require 自动插。
+void Scene::drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport, const FrameParams& params) {
+    if (!probe_ || probeFailed_ || !framebuffer) return;
+    if (!dotsPSO_) {
+        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc gpDesc;
+        gpDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+              .setVertexShader(vsProbeDots_)
+              .setFragmentShader(psProbeDots_)
+              .addBindingLayout(dotsLayout_);
+        gpDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        // overlay 语义：深度关（全探针可见，布点覆盖性证据优先于遮挡正确性）。
+        gpDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        dotsPSO_ = probeDevice_->createGraphicsPipeline(gpDesc, info);
+        if (!dotsPSO_) {
+            nl::core::log::deviceError("probe", "createGraphicsPipeline failed for dots");
+            probeFailed_ = true;
+            return;
+        }
+    }
+    nvrhi::GraphicsState state;
+    state.setPipeline(dotsPSO_)
+         .setFramebuffer(framebuffer)
+         .addBindingSet(dotsSet_[probeParity_]);
+    state.viewport.addViewportAndScissorRect(viewport);
+    cmd->setGraphicsState(state);
+    const std::uint32_t total = probeBaseRes_ * probeBaseRes_ +
+                                (probeBaseRes_ >> 1) * (probeBaseRes_ >> 1) +
+                                (probeBaseRes_ >> 2) * (probeBaseRes_ >> 2) +
+                                (probeBaseRes_ >> 3) * (probeBaseRes_ >> 3);
+    nvrhi::DrawArguments args;
+    args.setVertexCount(4)          // triangle-strip quad
+        .setInstanceCount(total);
+    cmd->draw(args);
+    // atlas ping-pong 翻面：本帧 cur 变下一帧 prev（Q10-2）。
+    probeParity_ ^= 1u;
 }
 
 void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
@@ -4938,6 +5347,10 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     nvrhi::DrawArguments margs;
                     margs.setVertexCount(3);   // 覆盖屏的大三角形
                     cmd->draw(margs);
+                    // M10.0：probe-place 的 velocity prepass + cascade 布点
+                    //（matResolve 之后——布点读的是本帧几何已经画完的状态；
+                    // tonemap 之前——布点与本帧 HDR 输出同帧）。
+                    if (probe_) drawProbeFrame(cmd, viewport, params);
                     // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
                     // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
                     if (t0Active) {
@@ -4945,6 +5358,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         if (!presentTonemap(cmd, framebuffer, viewport, tmErr))
                             nl::core::log::deviceError("t0", tmErr);
                     }
+                    // M10.0：探针点可视化（tonemap 之后画在 swapchain 上，
+                    // 深度关——全探针可见，布点覆盖性证据优先于遮挡正确性）。
+                    if (probe_) drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
                     // 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
                     // 深度测试/写入关，整屏覆盖 (4) 的占位输出。
@@ -6230,6 +6646,40 @@ void Scene::shutdown() {
     refPresentLayout_ = nullptr;
     refPresentSet_ = nullptr;
     refConstants_ = nullptr;
+    // M10.0：probe-place 资源（velocity/probe/dots 三管线 + 自建深度 + atlas
+    // ping-pong，device 存活期释放——T0 教训：漏登记 = 析构晚于 vkDestroyDevice UAF）。
+    probe_ = false;
+    probeFailed_ = false;
+    probeDevice_ = nullptr;
+    probeFirstFrame_ = true;
+    probeParity_ = 0;
+    probeW_ = 0;
+    probeH_ = 0;
+    probeBaseRes_ = 0;
+    probeLogged_ = false;
+    vsVelocity_ = nullptr;
+    psVelocity_ = nullptr;
+    csPlace_ = nullptr;
+    vsProbeDots_ = nullptr;
+    psProbeDots_ = nullptr;
+    velocityCB_ = nullptr;
+    probeCB_ = nullptr;
+    velocityLayout_ = nullptr;
+    velocitySet_ = nullptr;
+    placeLayout_ = nullptr;
+    placeSet_[0] = nullptr;
+    placeSet_[1] = nullptr;
+    dotsLayout_ = nullptr;
+    dotsSet_[0] = nullptr;
+    dotsSet_[1] = nullptr;
+    velocityPSO_ = nullptr;
+    placePSO_ = nullptr;
+    dotsPSO_ = nullptr;
+    probeDepth_ = nullptr;
+    velocityFb_ = nullptr;
+    for (auto& row : probeAtlas_)
+        for (auto& t : row) t = nullptr;
+    probePrevDelta_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
     particles_.shutdown();

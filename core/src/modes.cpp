@@ -21,6 +21,7 @@ constexpr const char* kModeNames[] = {
     "rt",        // M8.2：Ray Query 调试射线闭环（compute 每像素相机射线 + 两档调试图）
     "shadow",    // M9.0：compute 直光对照（M9.0 无阴影射线 / M9.1 起每像素 1 条）
     "reference", // M9.2：离线参考模式（--mode reference，多帧累积直光真值图）
+    "probe-place", // M10.0：屏幕探针 cascade 布点（velocity prepass + 布点 + 点可视化）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

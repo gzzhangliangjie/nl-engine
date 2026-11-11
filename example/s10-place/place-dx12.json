@@ -1,0 +1,23 @@
+{
+  "mode": "probe-place",
+  "model": "Suzanne.nmesh",
+  "frames": 8,
+  "size": [
+    960,
+    540
+  ],
+  "yaw": 12.0,
+  "pitch": 9.0,
+  "dist": 4.0,
+  "probeBaseRes": 16,
+  "cascades": 4,
+  "grid": [
+    16,
+    8,
+    4,
+    2
+  ],
+  "probes": 340,
+  "probeNormalOffset": 0.1,
+  "probeDotSize": 3.0
+}

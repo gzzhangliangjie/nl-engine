@@ -415,6 +415,29 @@ public:
     std::uint32_t      referenceSamplesDone() const { return samplesDone_; }
     float              referenceProgress() const { return refProgress_; }
 
+    // ---- M10.0（S10）：--mode probe-place 屏幕探针 cascade 布点 ----
+    // initProbe = initVisbuf(pulling=true) 资产链（M10.1 直光查表机器已备）+
+    // velocity prepass 管线（Q10-1 UE 口径独立 pass）+ csPlace 布点 compute +
+    // probe_viz 点可视化。资源懒建在 ensureProbeTargets（随视口/参数重建）。
+    bool initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
+                   const char* vsEntry, const char* psEntry,
+                   const char* nmeshFile, std::string& outError);
+    // drawProbeFrame：velocity prepass（自建 probeDepth_ 做深度测试+写入，写
+    // velocity_ = curUV-prevUV）+ csPlace cascade 布点 dispatch。在 pulling 分支
+    // matResolve 之后、tonemap 之前调用（布点读的是本帧 velocity/深度）。
+    void drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                        const FrameParams& params);
+    // drawProbeDots：探针点可视化（每探针一实例 quad，按级着色）。tonemap 之后
+    // 画在 swapchain 上（深度关，全探针可见——布点覆盖性证据）。
+    void drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& viewport, const FrameParams& params);
+  private:
+    // 懒建 probe 资源（D32 自建深度 / velocityFb_ / atlas×2 parity / prevDelta /
+    // sets / PSO）。baseRes 变化（ImGui）→ 参数入闸 → 纹理与 set 整组重建。
+    bool ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                            std::uint32_t baseRes, std::string& outError);
+  public:
+
     // 共用槽位表：material.slang 与 direct.slang 同源（§2.18 唯一权威，避免
     // 两条链各写一份槽位表而漂移）。
     void addResolveLayoutItems(nvrhi::BindingLayoutDesc& desc) const;
@@ -925,6 +948,39 @@ private:
     nvrhi::BindingLayoutHandle   refPresentLayout_;          // t1 SRV + b1 RefConstants
     nvrhi::BindingSetHandle      refPresentSet_;             // ensureRtTargets 建
     nvrhi::BufferHandle          refConstants_;              // volatile CB 16B（b4/b1 累积参数）
+
+    // ---- M10.0：probe-place 资源（Q10-1/Q10-2 拍板 UE 口径）----
+    // velocity prepass：独立小 pass（vsVelocity/psVelocity）自建 D32 深度
+    //（probeDepth_，velocity 写入 + csPlace SRV 读——共享 backend depth_ 是
+    // keepInitialState 永驻态不能切 SRV，故 probe 模式自建，UE velocity pass
+    // 自带 depth 的口径）；velocity_ 沿用 T0 已建的 RG16F 纹理。
+    // cascade atlas：每级一张 RGBA32_FLOAT（rgb=探针世界位置+a=deviceZ）× 2 帧
+    // ping-pong（[parity][level]），上一帧探针 = parity 翻转后的另一份（Q10-2）。
+    bool                         probe_ = false;
+    bool                         probeLogged_ = false;   // 布点日志锚只打一次
+    nvrhi::IDevice*              probeDevice_ = nullptr;
+    nvrhi::ShaderHandle          vsVelocity_, psVelocity_;
+    nvrhi::ShaderHandle          csPlace_;
+    nvrhi::ShaderHandle          vsProbeDots_, psProbeDots_;
+    nvrhi::BufferHandle          velocityCB_;            // volatile 144B（cur/prev viewProj + 尺寸）
+    nvrhi::BufferHandle          probeCB_;               // volatile 176B（布点+viz 共用一份）
+    nvrhi::BindingLayoutHandle   velocityLayout_;        // b0 + t1..t4（pulling 池）
+    nvrhi::BindingSetHandle      velocitySet_;
+    nvrhi::BindingLayoutHandle   placeLayout_;           // b0 + t0/t1 SRV + u0..u4 UAV
+    nvrhi::BindingSetHandle      placeSet_[2];           // 每 parity 一份（atlas 绑定不同）
+    nvrhi::BindingLayoutHandle   dotsLayout_;            // b0 + t0..t4 SRV
+    nvrhi::BindingSetHandle      dotsSet_[2];
+    nvrhi::GraphicsPipelineHandle velocityPSO_;          // velocityFb_（RG16F+D32）格式
+    nvrhi::ComputePipelineHandle placePSO_;
+    nvrhi::GraphicsPipelineHandle dotsPSO_;              // swapchain 格式（懒建，深度关）
+    nvrhi::TextureHandle         probeDepth_;            // D32（非 permanent，逐帧 tracking）
+    nvrhi::FramebufferHandle     velocityFb_;            // velocity_ + probeDepth_
+    nvrhi::TextureHandle         probeAtlas_[2][4];      // [parity][level] RGBA32F
+    nvrhi::TextureHandle         probePrevDelta_;        // RGBA32F baseRes²（prevUV 增量）
+    std::uint32_t                probeParity_ = 0;       // atlas ping-pong 帧奇偶
+    std::uint32_t                probeW_ = 0, probeH_ = 0, probeBaseRes_ = 0;
+    bool                         probeFirstFrame_ = true; // 首帧 prevViewProj = 本帧（vel=0）
+    float                        probePrevViewProj_[16] = {}; // 上一帧 viewProj
 };
 
 } // namespace nl::renderer::detail

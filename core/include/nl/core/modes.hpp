@@ -25,6 +25,8 @@ enum class ViewMode {
     Shadow = 13,  // M9.0：compute 直光对照（M9.0 阶段不发射线；M9.1 起同 mode
                   //  默认每像素 1 条 shadow ray）。Q4 方案 A：属性即取即算
     Reference = 14, // M9.2：离线参考模式（渐进式多帧累积的直光真值图，裁判 M9.1 阴影射线）
+    ProbePlace = 15, // M10.0：屏幕探针 cascade 布点（velocity prepass + 布点 compute
+                     //  + 探针点可视化；S10-PLAN Q10-1/Q10-2 拍板 UE 口径）
     // S1 起依次追加：Probe, ProbeViz, Cache, CacheViz, Filter, Final
     Count
 };

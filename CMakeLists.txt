@@ -369,6 +369,13 @@ set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
 set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 # M8.2：rt.slang 三入口——RayQuery 每像素相机射线 compute + 调试图全屏呈现 vs/ps。
 set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment")
+# M10.0（S10）：velocity.slang 双入口——独立 velocity prepass（Q10-1 拍板 UE 口径：
+# 单独一条小 pass 重画几何写 velocity_，不碰 T2 场景 PSO）。
+set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|fragment")
+# M10.0（S10）：probe.slang 单 compute 入口——cascade 探针布点（反投影+法线偏移）。
+set(_ENTRIES_PROBE "csPlace|csplace|compute")
+# M10.0（S10）：probe_viz.slang 双入口——探针点可视化（每探针一实例 quad + 按级着色）。
+set(_ENTRIES_PROBE_VIZ "vsProbeDots|vsprobedots|vertex" "psProbeDots|psprobedots|fragment")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -389,6 +396,12 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_RT}")
     elseif(_SRC_NAME STREQUAL "direct")
         set(_ENTRIES "${_ENTRIES_DIRECT}")
+    elseif(_SRC_NAME STREQUAL "velocity")
+        set(_ENTRIES "${_ENTRIES_VELOCITY}")
+    elseif(_SRC_NAME STREQUAL "probe")
+        set(_ENTRIES "${_ENTRIES_PROBE}")
+    elseif(_SRC_NAME STREQUAL "probe_viz")
+        set(_ENTRIES "${_ENTRIES_PROBE_VIZ}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -407,7 +420,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
         if(_SRC_NAME STREQUAL "visbuf")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
-        elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct")
+        elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
+               OR _SRC_NAME STREQUAL "probe")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
