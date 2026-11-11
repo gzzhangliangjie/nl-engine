@@ -1,49 +1,34 @@
 # nl-engine 项目长期约定
 
-> 铁律/决策前置/里程碑纪律权威落点：仓库根 `AGENTS.md`；并行轨道：`docs/PARALLEL-TRACKS.md`；逐里程碑台账：`docs/MILESTONES.md`。本文件只记「AGENTS.md 没写、但容易忘」的不变量与当前状态。
+> 铁律权威落点：根 `AGENTS.md`；并行轨道：`docs/PARALLEL-TRACKS.md`；台账：`docs/MILESTONES.md`。本文件只记「AGENTS.md 没写、但容易忘」的不变量与当前状态。
 
-## 本机环境（2026-11-10 实测）
-- VS2022 + MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版在 `E:\UE_STUDY_2026\.build-tools\cmake-3.31.6-windows-x86_64\`。必用 **NMake** → 构建统一 `scripts/build-m0.2.bat DX12|VULKAN`（worktree 用自己树的脚本）；NMake 同秒 mtime 跳重链 → 删 exe 强制重链；**探针结论有效性前置：先核 exe mtime > shader mtime**。
-- **「间歇挂/秒退」定性修正（2026-11-10 14:10 实锤拆两族）**：① **ctest 输出捕获竞态（主力，非 exe 问题）**——便携 cmake 3.31.6 ctest 对 0.07s 级快进程随机丢全部 stdout（`Required regular expression not found` + `<end of output>` + 时长正常），**实锤法：挂时产物文件已写出**（进程跑完，ctest 没收到）+ python subprocess 直拉 100/100 全过；**处置 = ctest 命令统一带 `--repeat until-pass:3`**（重试即绿，真回归稳定挂不会被掩盖），双后端实测 100%。② **真秒退族（0xC0000409 零输出）** = 华硕 ArmouryCrate 生态干扰：LightingService（AURA 灯效服务，崩溃循环 WER 22 条 + 当日 07:56–09:16 每 3 分钟一崩）已停服务+禁自启；用户态 ArmouryCrate 全家桶亦已杀。停后发作率 30~40% → ~2.7%，残余部分观察期。**「missing anchor / 空日志」类失败先 `--repeat until-pass:3` 重跑再定性；python 直拉对照可区分两族。**
-- Bash cwd 不跨命令保持 → 一律 `git -C <wt>` / 绝对路径。网络：GitHub 直连断，push 走 SSH 443+代理+`KexAlgorithms=curve25519-sha256`（端口先 `echo $http_proxy` 核对）。**nl-engine 仓库无 remote**，tag/分支只落本地。
+## 本机环境
+- VS2022 MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版在 `E:\UE_STUDY_2026\.build-tools\`。NMake 构建：`scripts/build-m0.2.bat DX12|VULKAN`（wt 用自己树脚本）；同秒 mtime 跳重链 → 删 exe 强制重链；探针结论先核 exe mtime > shader mtime。
+- ctest 间歇挂两族（2026-11-10 实锤）：①便携 ctest 对 0.07s 快进程随机丢 stdout（非回归）→ ctest 统一带 `--repeat until-pass:3`；②真秒退 0xC0000409 = ArmouryCrate 生态（LightingService 已停，残余观察）。missing anchor 先重跑再定性；python subprocess 直拉可区分两族。
+- Bash cwd 不跨命令 → 一律 `git -C <wt>` / 绝对路径。GitHub 直连断；nl-engine 无 remote，tag/分支只落本地。
 
-## 架构不变量（不可动摇）
-- NVRHI+Slang 通用管线；**构建链禁依赖任何厂商图形 SDK**（D3D12 走 Windows SDK；Vulkan 头 `NVRHI_FETCH_VULKAN_HEADERS`）。OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关。图形符号只在 `renderer/`；一份 .slang 双目标两后端加载 = 验收核心。
+## 架构不变量
+- NVRHI+Slang 通用管线；构建链禁任何厂商图形 SDK；OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关；图形符号只在 renderer/；一份 .slang 双后端 = 验收核心。
 
-## 当前进度（2026-11-10 05:10）
-- **M9.0 已收官（2026-11-10 19:2x，tag `s9-gbuffer`）**：T1~T8 全绿。`example/s9-gbuffer/` 四张双后端基线 + `run.bat verify`（17 项机器断言：bytes 保形 / shadow==pulling / s7.2 参考 / `--color 2` 清屏色 / log 锚 / 负向）+ cases.json 版本卡两张 pair 卡（tag 锁定 `s9-gbuffer`，M9.1 起 `--mode shadow` 语义变更须转 manual 或指快照，禁用新 exe 重拍）。**全量总闸**：首跑 `--jobs 4` 588/590（FAIL 2 = `m-sc0` 并发 dotnet build 竞态，单跑 10/10 + python 直拉 4/4 证非回归；near 1 = ecs-e1b scale 噪声档）→ `--jobs 1` 串行复跑 **590/590 ALL GREEN**（364s）。**三处口径勘误已写回 `AGENTS.md` 1b / 第 3 条 + `S9-PLAN.md`**：① `wt_pool.py close` 闸只适用并行轨道，主线收口按 tag+四栏台账+全量总闸+`--check`；② `--check` 由 `kStage` 判定，不 bump 时只校验旧版本卡，新卡齐备须 run.bat verify + `--only` 双验；③ 版本卡 exe 工程惯例指当前树，非 tag 快照。`kStage` 仍 `S8.2`、Q4 冻结面 0 新增独立 GBuffer 资源；M9.0 非 S* 大版本收官 → 不建 milestone 分支。
-- **M9.1 已收官（2026-11-10 ~20:2x，tag `s9-shadow`）**：`--mode shadow` 升级为每像素 1 条 shadow ray 经 M8 TLAS（S3 fallback 104-tri 粗代理）；根因修复 `Suzanne-materials.nmesh` 补 NFLB（解决 M9.0 射线被静默禁用）；`direct.slang`/`scene.cpp/.hpp` 落码 + `geometry-diff.png` 差异可视化（UE-DIFFS D19 设计本意非 bug）；`cases.json` 新增 `s9-shadow` 卡、`s9-gbuffer/shadow` 转 manual 锁定（M9.0 无射线基线禁随当前 exe 重拍）。`run.bat verify` 全绿 + 全量总闸 `--jobs 1` 590/590 ALL GREEN。`kStage` 仍 S8.2，Q4 冻结面 0 新增独立 GBuffer 资源。
-- **M9.2 已收官（2026-11-11，tag `s9-done`，commit `a8c255c`）**：S9 第三步也是 S9 收官。`--mode reference` 渐进式多帧累积直光真值图（每像素 64 条抖动阴影射线经 M8 TLAS 求平均降噪），复用 `rtTarget_` 作线性 sum buffer（Q4 方案 A 不落盘），present 时 `g_refSamplesDone` 归一再一次性 gamma；字节一致性铁律（空像素 `pow(g_clearColor,2.2)` 线性贡献、归一还原）。纯增量：参数链贯穿 modes→viewer→Renderer→backend→scene `initReference`；新增 `csReference`/`psRefPresent` 两 shader 入口（CMake `_ENTRIES_DIRECT`/`_SM66_ARTIFACTS` + selftest `kArtifacts` 三处登记）。交付物 `example/s9-reference/`（双后端基线 reference-{dx12,vulkan}.png + 同名 .json 侧车 + run.bat verify 七段断言）；cases.json 新增 `s9-reference` 卡。`regression --only s9-reference` 2/2 ALL GREEN；老路径 `s9-shadow`/`s9-gbuffer` bytes 不变；`server.py --check` exit 0；双后端 selftest 16/16×2、Slang 70/70。**S9 全收官**：`kStage` 仍 S8.2，Q4 冻结面 0 新增独立 GBuffer 资源，不建 milestone 分支。踩坑：backend_vulkan.cpp 嵌套三元加 referenceMode 层括号错位 C1075→if/else-if 链；run.bat LF-only 触编码门禁→`check-bat-encoding.py --fix`；DX12 exe 落后 `backend_vulkan.cpp` 末次修正→重编过新鲜度闸；run.bat 顺序跑踩环境 GPU 间歇挂（第3 viewer 实例=负向 missing-model，与 M9.0 踩坑11 同性质，非回归，七项断言独立全绿）；误建 `nul` 垃圾文件（Git Bash `>nul` 落下，Windows 保留设备名，Win32/ctypes/cmd del 均不可删，safe-delete fail-closed，留未跟踪不进提交）。
-- **主线 S0~S7 全收官（tag `s7-done`，commit `abe1acf`，全量 468/468 ALL GREEN）**：M7.2 多材质 = `.nmesh` 'NSUB' 尾段（v3 只加不改，材质 id=子网格序号随簇记录）+ GPUMaterial[4] 间接表 + NonUniformResourceIndex 选槽 + 传统直画 per-prim 批次化对照（model.slang 零改动）。A/B 终验 sil=0 / 99.991%≤2 / maxDelta 4。`milestone/s7-done` 分支留档。
-- **M8.0 BLAS 预建收官（tag `s8-blas`，2026-11-10）**：`Scene::initBlas`（hook initDag levels[0]+initCull；initHiz 委托）零拷贝吃 fallback 32B 交错 buffer（NVRHI 枚举名 `RGB32_FLOAT`）；**⚠️ 0x87d 铁律：AS build-input 上传+`setBufferState`+build 必须同命令列表**（跨列表 setPermanentBufferState 无物理 barrier，DX12 debug layer 执行期 fail-fast、录制期零消息）。Vulkan RT 扩展链已接。HUD `BLAS : NNN tri` 行只在 dag/hiz 模式（dag-top 走 initCluster 不触发）。`reshot-hud-stage.py --force`=人工追因后放行超签名重拍的合规通道。
-- **M8.1 TLAS 每帧重建收官（tag `s8-tlas`，2026-11-10）**：initTlas（maxInstances=16 @ PreferFastTrace）+ buildTlasFrame 帧列表内每帧全量 rebuild（D-S8-1 UE 口径，DX12 0.128ms / Vulkan 0.0415ms @ 1 实例）；`--tlas-spin`（帧序号驱动 2.5°/帧）+ `--tlas-probe`（RayQuery 固定射线 hit t 回读，`tlas probe: seq=N t=X`）；HUD `TLAS : 1 inst` 行。**⚠️ 0x87D 第二坑铁律：DX12 帧命令列表必须常驻复用（`frameCmd_` 成员）**——per-frame 局部句柄析构连带销毁列表的 DXR scratch manager，AS build scratch chunk（DEFAULT 堆）ECL 飞行中 final-release → debug layer CORRUPTION #921（**仅 OutputDebugString 可见、InfoQueue 不落地**，取证用 `tools/dbwin_capture.py` DBWIN 抓 ODS）→ 后续帧 scratch 复用被释放页 → 帧 3 fail-fast。Vulkan 帧列表保持 per-frame 新建（NVRHI Vulkan 池队列侧自管，改常驻反而段错误——两后端语义不对称，勿顺手统一）。initBlas 尾部 `waitForIdle()` 压住 init 列表同款雷（一次性路径）。
-- 已 merge 回 master：physics（M-P0~P4+M-J5c）、audio、ECS E1a+E1b、job-system、console/material-graph/action-system、pbr-direct、game-loop GL0~GL3。E1/E1b gate 已解除；jobsync P1 已解决（launchAll 原语）。
-- 下一站：**S10 VSM / 历史帧**（M9.2 已是 S9 收官 tag `s9-done`；Q4「GBuffer 落盘形态」与 S10/S12 历史帧需求一起拍，Q4 之前不许写任何新增独立 GBuffer 纹理 / MRT / 落盘 UAV）。M9.2 直光/硬阴影标准答案供 S10 VSM 与 M9.1 阴影射线对照（只算直光一跳、非 GI 裁判）。`kStage` 仍 S8.2。
-- UE 差异台账 `docs/s5/UE-DIFFS.md`（D1~D18）随手追加必须落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 的用例全重拍（`tools/reshot-hud-stage.py` 通用安全闸，超 527px 签名必须追因禁强刷——追因过了才许 `--force`）。cases.json：version 卡必须带 tag 字段；text-only（无 {out}）viewer 不退出，log 断言卡一律 pair 小图+expectLog 双断言。
+## 当前进度（2026-11-11）
+- S0~S7 收官（tag `s7-done`，全量 468/468）；M7.2 多材质 = NSUB 尾段 + GPUMaterial 间接表。
+- M8.0 BLAS（tag `s8-blas`）：⚠️ AS build 上传+setBufferState+build 必须同命令列表。M8.1 TLAS 每帧重建（tag `s8-tlas`）：⚠️ DX12 帧命令列表必须常驻 `frameCmd_` 成员（per-frame 局部句柄析构 → CORRUPTION #921 仅 ODS 可见）；Vulkan 帧列表保持 per-frame 新建——两后端语义不对称，勿顺手统一。
+- M9.0~M9.2 收官（tags `s9-gbuffer`/`s9-shadow`/`s9-done` @ `a8c255c`）：GBuffer / shadow ray / reference 真值图，S9 全收官。`kStage` 仍 S8.2；Q4 冻结：不新增独立 GBuffer 纹理 / MRT / 落盘 UAV，Q4 与 S10/S12 历史帧一起拍。
+- 下一站 **S11 探针弹射 / S12 历史帧**（M10.3 已收官 tag `s10-done`）。已 merge 回 master：physics / audio / ECS / job-system / console / material-graph / action-system / pbr-direct / game-loop / pathfinding(M-N0) / drive / input / camera / editor。
+- UE-DIFFS 台账（D1~D19）随手追加落档；kStage bump 波及 = args 含 `--hud` 且 exe=current 用例全重拍（`reshot-hud-stage.py`，超 527px 签名须追因才许 `--force`）。
+- 日志轨道 **M-LOG0~M-LOG2 全收官**（tags `log-m0`/`log-m2`，已 merge 回 master `aaf43b8`，wt/分支保留待 CLOSED 化拍板）：vendored spdlog v1.17.0；**格式契约**：stdout 老入口 `[nl:level]`、通道 `[nl:level|channel]`（老锚点是前缀子串——回归零漂的依赖）、文件路加时间戳前缀；**时间戳命名 + 每次新建必须配同秒碰撞 -N 消歧**；M-LOG2 增量 = 帧号行尾 `#<n>`（行组装层追加，sink 收原始 message）+ console `log.*` 四命令（`registerLogCommands` 单一事实源）+ 滚动一代 + 现网 6 文件 185 处已迁移通道。工具卡传参：`log-tools exec` 每 arg = 一条完整命令行；并行跑时文件断言必须 PID 锚定（mtime 竞态实锤）。功能面闭环（M-LOG3 候选空），格式契约详 PLAN §8/§9。
 
-## 渲染 / HUD 关键约定（详 `docs/SHADER-CONVENTIONS.md`）
-- SPIR-V 绑定 `-fvk-b-shift 256 0 -fvk-t-shift 0 0 -fvk-s-shift 128 0`；禁 `[[vk::binding]]`。DXIL 入口由 `-entry` 定，SPIR-V 恒 `main`。volatile CB `setMaxVersions(16)` **每帧全量覆写**（批内差异字段必须进 draw 期写入面）；SceneConstants 160B 禁整块 memcpy；`setFrontCounterClockwise(true)`。
-- **§2.7 每管线单一 BindingSet；§2.8 Hi-Z POT+R32F 1e9+帧内禁第二 cmd list；§2.9 64 位原子；§2.10 禁 startInstanceLocation 的 SV_InstanceID 全局语义；§2.13 阴影 R32F MIN 混合+PCF 整数 texel+坡度 bias；§2.14 材质间接表（S9/S10/S13 复用）；§2.15 buffer 每帧写回状态登记；§2.16 draw 主路径重构必须保留 initCluster 场景 `modelBatches_.empty()` 单批兜底 + spot 必须含 lod/dag 模式**（M7.2 真回归教训：重写丢兜底 → 三模式空画面，spot 全绿全因测的都是别的路径）。
-- GPU 资源 slot 级同步表必在 `createTargets()` 初始化；空纹理槽绑 1x1 dummy 过 NVRHI 校验。HUD：`hudProjection()` Y 尺度负、面板高≤560、字符串 ASCII。
+## 渲染 / HUD 约定（详 SHADER-CONVENTIONS.md）
+- SPIR-V 绑定 shift 256/0/128；禁 `[[vk::binding]]`；volatile CB `setMaxVersions(16)` 每帧全量覆写；SceneConstants 160B 禁整块 memcpy；§2.7~2.16 各节铁律（含 §2.16 draw 主路径重构必须保留 initCluster 单批兜底 + spot 必须含 lod/dag 模式）；HUD 面板高≤560、字符串 ASCII。
 
-## .nmesh / 简化器
-- 尾段按 magic 识别：v2='NLOD'、v3='NFLB'（+'NSUB' 子网格段，4 条 selftest）、v4='NPAG' 留 P9。**`Meshlet::triangleOffset` 是字节偏移不是三角号**。简化器=meshopt 多 pass+link condition+双层边界锁+朝向锚；`check-orient` 扫全链 inward；加速类改动必须带对拍自证。
+## .nmesh / ECS / job
+- 尾段 magic：NLOD / NFLB+NSUB / NPAG；**Meshlet::triangleOffset 是字节偏移不是三角号**。ComponentOf 计数器在非模板 inline；jobgraph link 完必须 launch；jobsync 纪律：建图期全 link、放行统一走 `launchAll`。⚠️ JobRuntime 析构次序：pool 声明在 adapter 之后（pool 先死）。
 
-## ECS / job-system 关键契约
-- `ComponentOf<T>::nextTypeID()` 计数器必须在非模板 inline 函数；`createBindingSet` 晚于 buffer 创建；多灯按 `1/ΣI` 归一化。jobgraph：create 后计数=numDeps+1，link 完必须 `launch()` 发布。并行 tick 契约：并行段禁结构变更、未声明访问=自足、确定性=并行==串行逐位。
-- **⚠️ JobRuntime 析构次序铁律（2026-11-10 实锤修复）**：Jolt `Job::Execute()` 末尾就通知 barrier 放行主线程，排队引用 `Release()` 在池 worker 闭包里更晚执行 → `JobRuntime` 必须 **pool 声明在 adapter 之后（析构 pool 先死）**，否则 worker 最后一条 Release 对已析构 JobSystem 虚调 FreeJob → 纯虚调用 fail-fast（崩率随线程数升，Heisenbug，时序扰动即消失）。ThreadPool ctor 已带 spawn 重试+降级；phys selftest M-J5c 段有 try/catch 转显式 FAIL。
-- **P1 已解决（2026-11-10）**：`m-j5c-prep/selftest-jobsync` 间歇 exit 1 实锤 = 测试违反契约 3（launch 与 link 交错建图 → downstream 被提前发布 → 后续 link 全被拒）。新增 `JobSync::launchAll` 原语把「帧前建图全 link → 帧中统一放行 → 帧后回收」编码进 API；**jobsync 使用纪律：建图期全 link，放行统一走 launchAll，禁止单发 launch 与 link 交错**。
+## 并行轨道易忘点（详 PARALLEL-TRACKS §7~8）
+- wt junction 建/删只用 PowerShell 原生 API（`New-Item -ItemType Junction` / `[IO.Directory]::Delete($p,$false)`），禁 cmd；wt junction 共享 `.workbuddy` + slang dist + skip-worktree。CLOSED 轨道 = wt 移除 + 分支保留（明文规定，不是待拍板项），重开走 §7.1b。
+- cases.json 合并走 `merge-cases.py` 语义驱动；手工追加必须 python json 库 indent=1 + 尾换行。树闸 `tree_gate.py`；开场 `claim` / 收尾 `release` 对称。
 
-## 并行轨道易忘点（详 `docs/PARALLEL-TRACKS.md`）
-- wt_pool：开场声明编号 → claim；收口 close 硬闸 + release --done。树边界闸 `tools/tree_gate.py`：脚本树≠cwd 树 exit 2。worktree junction 只能 PowerShell 原生 API 建删；**分支保留**。python 孪生对拍防假绿（不适用并发类）。
-- **合并冲突机制（2026-11-10）**：cases.json 走 `tools/merge-cases.py` 语义驱动（.gitattributes `merge=nlcases` + 仓库 config，worktree 共享一次生效）——versions/cases 按 id 并集自动合并，真冲突才回落手工；**手工追加 cases.json 条目必须用 python json 库写规范格式（indent=1 + 尾换行），禁手拼单行**。工具 target+ctest 已拆进各自 `<dir>/CMakeLists.txt`，新工具三步：main.cpp → 照抄骨架建目录 CMakeLists → 根文件 add_subdirectory 清单加一行；根文件三条不变量（RUNTIME_OUTPUT_DIRECTORY 钉顶层 build / enable_testing 先于 add_subdirectory / 子目录引用 assets 走 `${NL_ROOT}`）见 PARALLEL-TRACKS §8.2 勿动。
-
-## 工程纪律易忘点（详 `AGENTS.md`）
-- 收口回复第一屏=「四项自查+三要素」表格；渲染轮次主动展示证据图卡片。默认不跑全量回归（`--only` 挑 2~3 条），全量只在打 tag 收口跑一次；失败分组统计禁 `head` 截断。双后端分档 bytes/near/FAIL 禁笼统「一致」。工具 exe=`build/{DX12,VULKAN}/nanite-tools.exe`（根目录同名是废弃残留）。
-- git 危险操作闸门：checkout/restore/switch 前必先 `git status --porcelain -- <path>` 核对未提交修复；还原只许显式点名。Windows 清理临时文件禁通配。cases.json 负向卡 expectLog 必须从实测 log 复制禁手写；`--only` 语法是单个 `version[/case]`，逗号列表会静默跑 0 条报全绿。
-- **开工闸（AGENTS.md 2026-11-10 新增，决策前置 + 交付纪律第 10 条）**：计划内不得留「待拍板」架构判定；架构判定未定不许开里程碑落码；开工回复第一屏必须报「待拍板项 N / 已拍板 N / 冻结面清单」。拍板后写回 `S*-PLAN.md` 拍板记录 + 删任务书挂账句才许写第一行 RT/UAV/槽位。
-- **拍板后全仓扫旧口径（2026-11-10 18:1x 教训）**：Q3「参考图不是 GI 裁判」/ Q4「方案 A 不落 GBuffer 纹理」的副本散在 `ROADMAP.md`、`s10/S10-PLAN.md`、`s12/S12-PLAN.md`、`s15/S15-PLAN.md`、`UE-DIFFS.md` D11、`MILESTONES.md`、`Q4-GBUFFER-OPTIONS.md`；只改 `S9-PLAN.md` 会留下带病推进。结论变更 → 立刻 `grep` 全仓旧词并同步勘误（含台账与当日日志 append）。
-- **列「待拍板项」前先对照既有铁律（2026-11-11 用户点名）**：`PARALLEL-TRACKS.md` §7.6 与 `tools/wt_pool.py` TRACKS 注释明文 **CLOSED 轨道 = wt 移除 + 分支保留（branch kept）**，drive/camera/script/console 一律只拆 wt、留分支；把已明文规定的动作重新抛给用户 = 制造不存在的决策点、且让台账互相打架。轨道标 CLOSED 只需 `TRACKS["<track>"].state` → `closed` + 同步 §7.1 / MILESTONES / 轨道 PLAN 三处台账，验收 = `selftest` 21 项 + `status` 显示 CLOSED + `claim` 负向硬拒绝 exit 1；重开按 §7.1b 重建 wt 并更新注册表。
-- UE 源码只读不抄；Carrot/bevy 抄思路不抄代码。回复语言简体中文（代码/标识符保留英文）。调试：L0 画面证据 → L1 RenderDoc → L2 NVRHI timestamp → L3 Nsight/PIX/PresentMon/Tracy；NVRHI 每处调用回 vendored `nvrhi.h` 核签名。
-- **ctest 新增用例后必须双后端重新 configure（2026-11-11 M-N6 实锤）**：`add_test` 只在 configure 写进 `CTestTestfile.cmake`，只编 target 不刷新；DX12 未 configure 时 ctest 仍报 M-N0~M-N5 的 41/41 旧清单，刚 configure 过的 VULKAN 已是 50/50。收口前以**测试条数**核对，别把旧清单当成新用例漏跑或假绿。
-- **固定步长累加器 float/double 必须同源（2026-11-11 M-N6 实锤）**：配置侧 `float dt` 与帧侧 `1.0/60.0` double 略有差，累加 600 帧会少跑一步（599）。两侧统一 `static_cast<double>(cfg.dt)`；这类确定性偏差不是可容忍噪声，按回归处理而非「浮点误差」。
+## 工程纪律易忘点
+- 收口第一屏 = 四项自查+三要素表格；默认不跑全量回归（`--only` 挑 2~3），全量只在 tag 收口跑一次；双后端分档 bytes/near/FAIL 禁笼统「一致」。git checkout/restore/switch 前必 `status --porcelain`；还原只许显式点名。负向卡 expectLog 从实测 log 复制禁手写；`--only` 是单个 `version[/case]`。
+- 开工闸：待拍板未清不许落码；第一屏报「待拍板 N / 已拍板 N / 冻结面」。拍板后全仓 grep 旧口径同步勘误。**ctest 新增用例后必须双后端重新 configure**（add_test 只在 configure 写入，M-N6 实锤）。固定步长累加 float/double 必须同源（M-N6）。工具 exe = `build/{DX12,VULKAN}/nanite-tools.exe`。
+- M11.0 实锤（SSC §2.21）：CB 分配尺寸必须以 `dxc -dumpbin` 反汇编的 slang cbuffer Size/offset 为准——分配小于声明 → shader 读越界得 0 → early-out 恒真全线程静默早退（dispatch 照常、无 validation 错）；CPU 常量数组长度 = cbuffer 字节/4，禁顺手 [16]。cases.json 工具卡（gi-tools 等）**必须带 case 级 "exe" 覆盖**，否则 regression 拿版本级 viewer.exe 跑子命令 → 窗口循环 120s 超时；工具子命令名/参数名/expectLog 锚以 `exe --help` 与实测 log 为准，禁手写。
