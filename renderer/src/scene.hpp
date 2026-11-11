@@ -485,7 +485,28 @@ public:
     // gather 态下调用方跳过 drawProbeDots（Q13-3：无点叠加）。
     bool drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                          const FrameParams& params, std::string& outError);
+
+    // ---- S11 M11.0（S11）：--mode cache-viz 世界缓存 flat hashmap ----
+    // initCache = 缓冲（checksums/life/geo ×kCacheCapacity）+ 三 compute 管线；
+    // 由 initProbe 尾部调用（cache-viz 复用 probe 链的 probeDepth_ 反投影基建）。
+    bool initCache(nvrhi::IDevice* device, const char* shaderSuffix,
+                   std::string& outError);
+    // drawCacheFrame = 首帧清零 + csCacheDecay（全表衰减）+ csCacheFill（半分辨率
+    // 查询即插入）。在 drawProbeFrame 之后调用（同帧深度/几何已就绪）。
+    void drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                        const FrameParams& params);
+    // drawCacheViz = csCacheViz 全像素 query-only 查表伪彩（hdrSceneColor_ UAV 全
+    // 替换，同 csGatherCompose 呈现链口径）。presentTonemap 之前调用。
+    bool drawCacheViz(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                      const FrameParams& params, std::string& outError);
   private:
+    // 懒建 cache sets（依赖 probeDepth_ / hdrSceneColor_，句柄变了就重建——
+    // set 是不可变对象，纹理重建后必须换新 set）。
+    bool ensureCacheSets(nvrhi::IDevice* device, std::string& outError);
+    // 懒建 cache 管线（shader/PSO/缓冲/CB；尺寸固定不随视口重建）。
+    bool ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                              std::string& outError);
+  public:
     // 懒建 probe 资源（D32 自建深度 / velocityFb_ / atlas×2 parity / prevDelta /
     // sets / PSO）。baseRes 变化（ImGui）→ 参数入闸 → 纹理与 set 整组重建。
     bool ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
@@ -1086,6 +1107,25 @@ private:
     std::uint32_t                probeW_ = 0, probeH_ = 0, probeBaseRes_ = 0;
     bool                         probeFirstFrame_ = true; // 首帧 prevViewProj = 本帧（vel=0）
     float                        probePrevViewProj_[16] = {}; // 上一帧 viewProj
+
+    // ---- S11 M11.0：世界缓存（flat hashmap，Q11-0 方案 A）----
+    // 常量与 world_cache.slang / gi-tools WorldCacheSim 三方逐字同口径：
+    // kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / 探测上限 3。
+    static constexpr std::uint32_t kWcCapacity = 1u << 18;
+    static constexpr std::uint32_t kWcLifetime = 10;
+    nvrhi::ShaderHandle          csCacheFill_, csCacheDecay_, csCacheViz_;
+    nvrhi::BufferHandle          cacheCB_;               // volatile 64B
+    nvrhi::BufferHandle          wcChecksums_, wcLife_;  // 4B×2^18 each
+    nvrhi::BufferHandle          wcGeoPos_, wcGeoNrm_;   // 16B×2^18 each
+    nvrhi::BindingLayoutHandle   cacheFillLayout_, cacheVizLayout_;
+    nvrhi::BindingSetHandle      cacheFillSet_, cacheVizSet_;
+    nvrhi::ComputePipelineHandle cacheFillPSO_, cacheDecayPSO_, cacheVizPSO_;
+    nvrhi::TextureHandle         cacheFillSetDepth_;     // set 依赖登记（probeDepth_ 重建则 set 重建）
+    nvrhi::TextureHandle         cacheVizSetHdr_;        // set 依赖登记（hdrSceneColor_ 重建则 set 重建）
+    std::uint32_t                cacheFrame_ = 0;        // 帧号（r2 抖动种子，确定性）
+    bool                         cacheFirstClear_ = true;// 首帧清零表（uninit 内存防假命中）
+    bool                         cacheLogged_ = false;   // cache 日志锚只打一次
+    bool                         cacheVizLogged_ = false;// viz compose 日志锚只打一次
 };
 
 } // namespace nl::renderer::detail

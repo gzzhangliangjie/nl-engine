@@ -409,6 +409,9 @@ set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
 # M10.2（S10）：probe_gather.slang 双 compute 入口——final gather（每像素探针
 # 插值 Q13-1 深度选级 + UE 权重）与直光合成（Q13-2 ambient 替换）。
 set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgathercompose|compute")
+# S11 M11.0：world_cache.slang 三 compute 入口——世界缓存 flat hashmap（Q11-0 方案 A：
+# 无墓碑 + life 衰减清零立即重用 + 3 步探测）。半分辨率填充 / 全表衰减 / cache-viz 伪彩。
+set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -439,6 +442,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_TRACE}")
     elseif(_SRC_NAME STREQUAL "probe_gather")
         set(_ENTRIES "${_ENTRIES_PROBE_GATHER}")
+    elseif(_SRC_NAME STREQUAL "world_cache")
+        set(_ENTRIES "${_ENTRIES_WORLD_CACHE}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -464,6 +469,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
+        elseif(_SRC_NAME STREQUAL "world_cache")
+            set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_viz")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
         else()
@@ -532,5 +539,6 @@ add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
 add_subdirectory(vfx-tools)
 add_subdirectory(cam-tools)
+add_subdirectory(gi-tools)        # S11 M11.0：世界缓存 CPU 仿真（hashmap 语义先仿真后上 GPU）
 add_subdirectory(editor_bridge)   # 引擎侧 bridge（静态库，M-E2 供 viewer 接线）
 add_subdirectory(editor)          # 编辑器宿主（C++/ImGui，独立进程）

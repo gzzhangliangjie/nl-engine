@@ -2147,6 +2147,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
         std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
+        // S11 M11.0：cache-viz（probe 链基建复用；gather/dots 关，伪彩即最终画面）。
+        fp.cacheViz = (o.mode == nl::core::ViewMode::CacheViz);
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -2420,8 +2422,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.hizEnable = hizEnabled;
                 hud.hizOccluded = info.hizOccluded;
             }
-            // M10.0：探针参数面板（probe-place 模式专属；双向通道同 hizEnable）。
-            if (probeMode) {
+            // M10.0：探针参数面板（probe-place 系模式专属；双向通道同 hizEnable）。
+            // S11 M11.0：cache-viz 复用 probe 链但探针调参无意义——面板不画。
+            if (probeMode && o.mode != nl::core::ViewMode::CacheViz) {
                 hud.probePanelShow = true;
                 hud.probeBaseRes = probeBaseRes;
                 hud.probeNormalOffset = probeNormalOffset;
@@ -3702,6 +3705,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/true);
+    case nl::core::ViewMode::CacheViz:   // S11 M11.0：世界缓存占用伪彩（probe 链基建复用）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -3833,6 +3842,10 @@ int main(int argc, char** argv) {
     // M10.1：probe-viz 缺省带 fallback 段的资产——探针追踪打 TLAS（M8 粗代理
     // 需 v3 lod0 'NFLB'），Suzanne.nmesh 无 fallback = TLAS 不就绪 trace 降级。
     if (o.mode == nl::core::ViewMode::ProbeViz && !o.modelSet) {
+        o.modelFile = "Suzanne-materials.nmesh";
+    }
+    // S11 M11.0：cache-viz 同口径（probe 链基建，TLAS 不就绪也只影响 trace 段）。
+    if (o.mode == nl::core::ViewMode::CacheViz && !o.modelSet) {
         o.modelFile = "Suzanne-materials.nmesh";
     }
     // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。

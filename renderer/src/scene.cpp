@@ -3366,6 +3366,8 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
 
     nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
+    // S11 M11.0：世界缓存基建随 probe 链初始化（cache-viz 复用 probeDepth_ 反投影）。
+    if (!initCache(device, shaderSuffix, outError)) return false;
     return true;
 }
 
@@ -3822,6 +3824,247 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
     }
     return true;
 }
+
+// ---- S11 M11.0：世界缓存 flat hashmap（Q11-0 方案 A）----
+// 语义三方同口径：world_cache.slang（GPU）↔ gi-tools WorldCacheSim（CPU 参照，
+// 先仿真后上 GPU 的计划底线）↔ 本文件（资源/常量）。容量 2^18 / lifetime 10 /
+// cellSize 0.5m / 探测上限 3。
+
+bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                                 std::string& outError) {
+    if (cacheFillPSO_) return true;
+    auto cachePath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix;
+    };
+    auto loadCacheShader = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(cachePath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadCacheShader("world_cache.cscachefill", csCacheFill_) ||
+        !loadCacheShader("world_cache.cscachedecay", csCacheDecay_) ||
+        !loadCacheShader("world_cache.cscacheviz", csCacheViz_))
+        return false;
+
+    // cacheCB_（96B volatile）：[0..15] invViewProj / [16..19] eye+cellSize /
+    // [20..23] vpW/vpH/lifetime/frameIndex。⚠️ slang 端 cbuffer 实测 96B
+    // （g_params 在 byte 80），64B 会让 shader 读越界得 0 → viz 全线程早退。
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize = 96;
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile = true;
+    cbDesc.maxVersions = 16;
+    cbDesc.debugName = "CacheConstants";
+    cacheCB_ = device->createBuffer(cbDesc);
+    if (!cacheCB_) { outError = "createBuffer failed for cache constants"; return false; }
+
+    // 表缓冲：初始 CopyDest + keepInitialState（visibleList_ 先例——每条命令列表
+    // 从 CopyDest 假设出发，UAV/SRV 动态晋升；内容跨帧保留，首帧显式清零）。
+    auto makeTableBuffer = [&](nvrhi::BufferHandle& out, std::uint32_t stride,
+                               const char* name) -> bool {
+        nvrhi::BufferDesc d;
+        d.byteSize = kWcCapacity * stride;
+        d.structStride = stride;
+        d.canHaveUAVs = true;
+        d.initialState = nvrhi::ResourceStates::CopyDest;
+        d.keepInitialState = true;
+        d.debugName = name;
+        out = device->createBuffer(d);
+        if (!out) { outError = std::string("createBuffer failed for ") + name; return false; }
+        return true;
+    };
+    if (!makeTableBuffer(wcChecksums_, 4, "WcChecksums") ||
+        !makeTableBuffer(wcLife_, 4, "WcLife") ||
+        !makeTableBuffer(wcGeoPos_, 16, "WcGeoPos") ||
+        !makeTableBuffer(wcGeoNrm_, 16, "WcGeoNrm"))
+        return false;
+
+    // fill/decay 共用布局：b0 + t0 probeDepth + u0..u3（decay 只碰 u0/u1，§2.7
+    // 单一 BindingSet 服务多条管线）。
+    nvrhi::BindingLayoutDesc fDesc;
+    fDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3));
+    cacheFillLayout_ = device->createBindingLayout(fDesc);
+    if (!cacheFillLayout_) { outError = "createBindingLayout failed for cache fill"; return false; }
+
+    // viz 布局：b0 + t0 probeDepth + t1/t2 表 SRV + u0 hdrSceneColor_。
+    nvrhi::BindingLayoutDesc vDesc;
+    vDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+    cacheVizLayout_ = device->createBindingLayout(vDesc);
+    if (!cacheVizLayout_) { outError = "createBindingLayout failed for cache viz"; return false; }
+
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheFill_).addBindingLayout(cacheFillLayout_);
+      cacheFillPSO_ = device->createComputePipeline(p); }
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheDecay_).addBindingLayout(cacheFillLayout_);
+      cacheDecayPSO_ = device->createComputePipeline(p); }
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheViz_).addBindingLayout(cacheVizLayout_);
+      cacheVizPSO_ = device->createComputePipeline(p); }
+    if (!cacheFillPSO_ || !cacheDecayPSO_ || !cacheVizPSO_) {
+        outError = "createComputePipeline failed for world cache";
+        return false;
+    }
+    return true;
+}
+
+bool Scene::ensureCacheSets(nvrhi::IDevice* device, std::string& outError) {
+    // set 是不可变对象：probeDepth_ / hdrSceneColor_ 重建（懒建/视口变化）即重建。
+    if (cacheFillSet_ && cacheFillSetDepth_ == probeDepth_) return true;
+    if (!probeDepth_) { outError = "cache sets: probeDepth_ not ready"; return false; }
+    {
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, cacheCB_));
+        d.addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, wcChecksums_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, wcLife_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, wcGeoPos_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, wcGeoNrm_));
+        cacheFillSet_ = device->createBindingSet(d, cacheFillLayout_);
+        if (!cacheFillSet_) { outError = "createBindingSet failed for cache fill"; return false; }
+        cacheFillSetDepth_ = probeDepth_;
+    }
+    return true;
+}
+
+bool Scene::initCache(nvrhi::IDevice* device, const char* shaderSuffix,
+                      std::string& outError) {
+    if (!ensureCachePipelines(device, shaderSuffix, outError)) return false;
+    return true;
+}
+
+void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                           const FrameParams& params) {
+    if (!probe_ || probeFailed_ || !cacheFillPSO_) return;
+    std::string err;
+    if (!ensureCacheSets(probeDevice_, err)) {
+        nl::core::log::deviceError("cache", err);
+        probeFailed_ = true;
+        return;
+    }
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+
+    // 首帧清零表（uninit 内存当 checksum 会假命中；一次 10MB 足够）。
+    if (cacheFirstClear_) {
+        cacheFirstClear_ = false;
+        const std::vector<std::uint32_t> zeros(kWcCapacity, 0);
+        cmd->beginTrackingBufferState(wcChecksums_, nvrhi::ResourceStates::CopyDest);
+        cmd->beginTrackingBufferState(wcLife_, nvrhi::ResourceStates::CopyDest);
+        cmd->beginTrackingBufferState(wcGeoPos_, nvrhi::ResourceStates::CopyDest);
+        cmd->beginTrackingBufferState(wcGeoNrm_, nvrhi::ResourceStates::CopyDest);
+        cmd->writeBuffer(wcChecksums_, zeros.data(), zeros.size() * 4);
+        cmd->writeBuffer(wcLife_, zeros.data(), zeros.size() * 4);
+        cmd->writeBuffer(wcGeoPos_, zeros.data(), zeros.size() * 4);
+        cmd->writeBuffer(wcGeoNrm_, zeros.data(), zeros.size() * 4);
+    }
+
+    // cacheCB_ 每帧全量覆写（64B）：invViewProj / eye+cellSize / 尺寸+lifetime+帧号。
+    {
+        nl::math::Mat4 vp{}, invVP{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        invVP = nl::math::inverseMat4(vp);
+        float cb[24] = {};
+        std::memcpy(cb, invVP.m, sizeof(invVP.m));
+        cb[16] = params.eye[0]; cb[17] = params.eye[1]; cb[18] = params.eye[2];
+        cb[19] = 0.5f;                       // cellSize（与 slang kCellSize 同口径）
+        cb[20] = vpW; cb[21] = vpH;
+        cb[22] = static_cast<float>(kWcLifetime);
+        cb[23] = static_cast<float>(cacheFrame_);
+        cmd->writeBuffer(cacheCB_, cb, sizeof(cb));   // 96B 全量覆写
+    }
+
+    // (1) 全表衰减（fill 之前——衰减后 fill 续命，同帧新样本不被衰减误伤）。
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(cacheDecayPSO_).addBindingSet(cacheFillSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((kWcCapacity + 63u) / 64u, 1u, 1u);
+    }
+    // (2) 半分辨率填充（Carrot CacheDownscaleFactor=2；r2 帧抖动覆盖 2×2 子格）。
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(cacheFillPSO_).addBindingSet(cacheFillSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((std::uint32_t(vpW) / 2u + 7u) / 8u,
+                      (std::uint32_t(vpH) / 2u + 7u) / 8u, 1u);
+    }
+    ++cacheFrame_;
+    // cache-viz 跳过 dots/gather → place/trace 产物的 UAV→SRV 收尾转换（原来靠
+    // dots set require）没有执行点（M10.2 同族坑）→ 显式补，保持「帧首声明 SRV」
+    // 的跨帧契约（drawProbeFrame 帧首 beginTracking 口径）。
+    {
+        const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                                  0, nvrhi::TextureSubresourceSet::AllArraySlices);
+        for (std::uint32_t level = 0; level < 4; ++level)
+            cmd->setTextureState(probeAtlas_[probeParity_][level], allSub,
+                                 nvrhi::ResourceStates::ShaderResource);
+        for (std::uint32_t level = 0; level < 4; ++level)
+            cmd->setTextureState(irradAtlas_[level], allSub,
+                                 nvrhi::ResourceStates::ShaderResource);
+        cmd->setTextureState(probePrevDelta_, allSub,
+                             nvrhi::ResourceStates::ShaderResource);
+    }
+    if (!cacheLogged_) {
+        nl::core::log::info("cache: flat hashmap active (262144 slots, lifetime 10, "
+                            "cell 0.5m, probe steps 3 -- Q11-0 plan A)");
+        cacheLogged_ = true;
+    }
+}
+
+bool Scene::drawCacheViz(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                         const FrameParams& params, std::string& outError) {
+    (void)params;
+    if (!cacheVizPSO_) { outError = "cache viz: pipeline not ready"; return false; }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // viz set 依赖 hdrSceneColor_（懒建/重建即重建 set）。
+    if (!cacheVizSet_ || cacheVizSetHdr_ != hdrSceneColor_) {
+        if (!hdrSceneColor_) { outError = "cache viz: hdrSceneColor_ not ready"; return false; }
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, cacheCB_));
+        d.addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, wcChecksums_));
+        d.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, wcLife_));
+        d.addItem(nvrhi::BindingSetItem::Texture_UAV(0, hdrSceneColor_));
+        cacheVizSet_ = probeDevice_->createBindingSet(d, cacheVizLayout_);
+        if (!cacheVizSet_) { outError = "createBindingSet failed for cache viz"; return false; }
+        cacheVizSetHdr_ = hdrSceneColor_;
+    }
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    // hdr 当前态 = RenderTarget（matResolve 刚写完）→ UAV 全替换（gather 同款显式
+    // 转换口径）；presentTonemap 自己再转回 SRV。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(cacheVizPSO_).addBindingSet(cacheVizSet_);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    if (!cacheVizLogged_) {
+        nl::core::log::info("cache: viz compose dispatch ", std::uint32_t(vpW), "x",
+                            std::uint32_t(vpH), " hdr=", hdrSceneColor_ ? "ok" : "null",
+                            " set=", cacheVizSet_ ? "ok" : "null");
+        cacheVizLogged_ = true;
+    }
+    return true;
+}
+
 
 // M10.0：探针点可视化（tonemap 之后、swapchain 上）。PSO 对 swapchain 格式懒建
 //（blitPSO_ 同款）；atlas/prevDelta 的 UAV→SRV 转换由 dots set require 自动插。
@@ -5855,6 +6098,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     //（matResolve 之后——布点读的是本帧几何已经画完的状态；
                     // tonemap 之前——布点与本帧 HDR 输出同帧）。
                     if (probe_) drawProbeFrame(cmd, viewport, params);
+                    // S11 M11.0：cache-viz = 全表衰减 + 半分辨率查询即插入
+                    //（drawProbeFrame 之后——probeDepth_ 本帧深度/几何已就绪）。
+                    if (probe_ && params.cacheViz) drawCacheFrame(cmd, viewport, params);
                     // M10.2（Q13-3）：gather 态 = 全屏探针插值 + 直光合成（hdr 同
                     // 纹理 RMW，ambient 已置零）；无点叠加。非 gather 态保持
                     // M10.0/M10.1 点可视化保形。
@@ -5862,6 +6108,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         std::string gErr;
                         if (!drawProbeGather(cmd, viewport, params, gErr))
                             nl::core::log::deviceError("probe-gather", gErr);
+                    }
+                    // S11 M11.0：cache-viz 伪彩（hdr UAV 全替换，gather 同款呈现
+                    // 链口径；presentTonemap 自己转回 SRV）。
+                    if (probe_ && params.cacheViz) {
+                        std::string cvErr;
+                        if (!drawCacheViz(cmd, viewport, params, cvErr))
+                            nl::core::log::deviceError("cache-viz", cvErr);
                     }
                     // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
                     // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
@@ -5873,7 +6126,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // M10.0：探针点可视化（tonemap 之后画在 swapchain 上，
                     // 深度关——全探针可见，布点覆盖性证据优先于遮挡正确性）。
                     // M10.2：gather 态跳过（Q13-3 无点叠加）。
-                    if (probe_ && !(params.probeGather && tlasReady_))
+                    // S11 M11.0：cache-viz 无点叠加（伪彩即最终画面）。
+                    if (probe_ && !params.cacheViz &&
+                        !(params.probeGather && tlasReady_))
                         drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
                     // 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
@@ -7404,6 +7659,28 @@ void Scene::shutdown() {
         for (auto& t : row) t = nullptr;
     for (auto& t : irradAtlas_) t = nullptr;
     probePrevDelta_ = nullptr;
+    // S11 M11.0：世界缓存资源（同 T0 教训——漏登记 = 析构晚于 vkDestroyDevice UAF）。
+    csCacheFill_ = nullptr;
+    csCacheDecay_ = nullptr;
+    csCacheViz_ = nullptr;
+    cacheCB_ = nullptr;
+    wcChecksums_ = nullptr;
+    wcLife_ = nullptr;
+    wcGeoPos_ = nullptr;
+    wcGeoNrm_ = nullptr;
+    cacheFillLayout_ = nullptr;
+    cacheVizLayout_ = nullptr;
+    cacheFillSet_ = nullptr;
+    cacheVizSet_ = nullptr;
+    cacheFillSetDepth_ = nullptr;
+    cacheVizSetHdr_ = nullptr;
+    cacheFillPSO_ = nullptr;
+    cacheDecayPSO_ = nullptr;
+    cacheVizPSO_ = nullptr;
+    cacheFrame_ = 0;
+    cacheFirstClear_ = true;
+    cacheLogged_ = false;
+    cacheVizLogged_ = false;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。
     particles_.shutdown();

@@ -2812,3 +2812,12 @@
 
 - **踩坑**（写实）：① `git worktree remove --force` 在本沙箱被 SIGTERM 中断，目录残留但 git 已标 `prunable` → 按 editor 先例改走 PowerShell 原生 API 删目录 + `git worktree prune`；② `Remove-Item -Recurse -Force` 触发 safe-delete fail-closed（回收站操作 aborted），须用 `[IO.Directory]::Delete($wt,$true)`；③ 递归删除前必须先摘两个 junction，否则会伤主树共享正本；④ `PARALLEL-TRACKS.md` 与 `tools/wt_pool.py` 均有并行会话未提交改动（日志立项行 / `logging` TRACKS 条目），本轮用 `hash-object -w` + `update-index --cacheinfo` 精确构造 index，只提交本轮替换，他人工作零卷入；⑤ **口径勘误**：上一轮「本次非 S* 大版本收官，不建 milestone 分支、不另打 tag」是误判——整轨 M-N0~M-N6 收官本身就是里程碑，已补建。
 
+
+## S11 M11.0 — GPU flat hashmap 世界缓存基础设施（tag `s11-hash`）
+
+| 栏 | 内容 |
+|---|---|
+| **版本** | S11 M11.0（2026-11-11） |
+| **日期 / tag** | 2026-11-11 / annotated tag `s11-hash`（master 本收口 commit；M11.0 非大版本收官 → 不建 milestone 分支、不 bump `kStage`，仍 S8.2） |
+| **交付** | world_cache.slang 三 compute 入口：csCacheFill（半分辨率 R2 帧抖动 + 查询即插入，bevy/Carrot 回收口径：CAS 无墓碑 / life 衰减到 0 清零立即重用 / 线性探测 3 步）、csCacheDecay（全表 life-1）、csCacheViz（全像素 query-only hash 伪彩 × 寿命亮度，gamma 域 pow 1/2.2 全替换 hdrSceneColor_）。双独立哈希 pcg 定槽 + iqint 校验和（0 保留空槽）；四常量三方同口径（kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / probeSteps=3，slang / scene.cpp / gi-tools）。CPU 仿真先行：gi-tools（selftest 7 组 18 断言 + cachesim 确定性热图）语义验证先于 GPU 落码。新 viewer --mode cache-viz（Modes::CacheViz=19，visbuf+pulling+probe 全开）。Q11-0 拍板 A（跟 bevy/Carrot）已写回 S11-PLAN。 |
+| **验收 / 踩坑** | 验收：`example/s11-hash/run.bat verify` 全绿 exit 0（双后端重拍 deviceErrors=0 + bytes 2/2 对冻结基线 + dispatch 锚 + 负向缺模型非零退出）；`regression --only s11-hash` 双后端 **3/3 ALL GREEN**（selftest / cachesim / cacheviz bytes 逐字节）；保形 spot s10-refgi 2/2 + s9-shadow 1/1 全绿；ctest s11-gi 5 用例双后端绿（**新增用例后双后端重新 configure**，M-N6 教训落实）；selftest 16/16 ×2 + Slang 产物 **100/100**（world_cache 三入口 ×2 已登记 kArtifacts）；`server.py --check` exit 0。踩坑（写实，§2.21 固化）：① CacheConstants CB 分配 64B 但 slang 端 cbuffer 实测 96B（g_params 在 byte 80）→ shader 读越界得 0 → viz 全线程早退一个像素不写，**dispatch 照常执行无 validation 错**——SDK `dxc -dumpbin` 反汇编 regIndex 定位；② 连带 `float cb[16]` 写 cb[16..23] 栈越界 UB 同源修复；③ fill 段收尾显式 setTextureState(SRV) 补 probeAtlas/irradAtlas/probePrevDelta 转换（M10.2 同族坑，冒烟 deviceErrors=35 实锤）；④ cases.json 首版两处口径错（selftest expectLog、cachesim `--png` 参数名）+ tool 用例缺 case 级 exe 覆盖（regression 拿版本级 viewer.exe 跑 gi-tools 子命令 → 窗口循环 120s 超时），均首跑暴露即修。**下一步**：M11.1 探针命中点改查缓存（二级弹射）→ M11.2 多跳 GI；S12 历史帧并轨。 |

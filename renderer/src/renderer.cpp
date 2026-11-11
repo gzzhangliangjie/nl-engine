@@ -45,13 +45,14 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 94 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 100 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
 // rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
-// probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）。
+// probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
+// world_cache 6（S11 M11.0）。
 // （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
@@ -123,6 +124,11 @@ static const Artifact kArtifacts[] = {
     // rt.pscompare（Q14-2 --compare 右半参考图贴片）× 双目标 = 2。
     {"direct.csrefgi", true}, {"direct.csrefgi", false},
     {"rt.pscompare", true}, {"rt.pscompare", false},
+    // S11 M11.0：world_cache.slang 三 compute 入口（fill/decay/viz，Q11-0 方案 A）
+    // × 双目标 = 6。
+    {"world_cache.cscachefill", true}, {"world_cache.cscachefill", false},
+    {"world_cache.cscachedecay", true}, {"world_cache.cscachedecay", false},
+    {"world_cache.cscacheviz", true}, {"world_cache.cscacheviz", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

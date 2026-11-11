@@ -9731,6 +9731,89 @@
      }
     }
    ]
+  },
+  {
+   "id": "s11-hash",
+   "label": "M11.0",
+   "name": "GPU flat hashmap 世界缓存基础设施（fill/decay/viz 三 compute + CPU 仿真先行）",
+   "tag": "s11-hash",
+   "date": "2026-11-11",
+   "summary": "S11 世界缓存 M11.0：world_cache.slang 三入口——csCacheFill 半分辨率 R2 帧抖动查询即插入（bevy/Carrot 口径 CAS 无墓碑，life 衰减到 0 清零立即重用，线性探测 3 步）、csCacheDecay 全表 life-1、csCacheViz 全像素 query-only hash 伪彩 x 寿命亮度（gamma 域 pow 1/2.2）。双独立哈希 pcg 定槽 + iqint 校验和，0 保留空槽；kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / probeSteps=3 四常量三方同口径（slang/scene.cpp/gi-tools）。语义先在 gi-tools CPU 仿真验证（7 组 18 断言 + 确定性 cachesim 俯视热图）再上 GPU。新 viewer --mode cache-viz（Modes::CacheViz=19）。⚠️ 踩坑实录：CacheConstants slang 端实测 96B（g_params 在 byte 80），CB 分配 64B 时 shader 读越界得 0 -> viz 全线程早退一个像素不写（dispatch 照常执行），dxc -dumpbin 反汇编 regIndex 定位；连带的 float cb[16] 写 cb[16..23] 栈越界同源修复。fill 段收尾显式 setTextureState(SRV) 补 probeAtlas/irradAtlas/probePrevDelta 转换（M10.2 同族坑）。",
+   "acceptance": "gi-tools selftest 7 组 18 断言 PASS（空表 miss/CAS 插入/查询续命/寿命清零重用/探测上限/容量回绕/负向）；cachesim 740 cells 热图目检；selftest 16/16 + 100/100 artifacts；cache-viz 双后端重拍 bytes 与冻结基线一致（确定 fill+viz 管线）；run.bat verify 全绿（deviceErrors=0 + dispatch 锚 + 负向缺模型非零退出）；ctest s11-gi 5 用例双后端绿；regression --only 双后端。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "gi-tools selftest：hashmap 语义 7 组 18 断言（CPU 仿真先行）",
+     "kind": "tool",
+     "note": "touch/find/decay/makeKey 与 shader 同构（7 组 18 断言）；cachesim 为 selftest 附加段。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "gi-tools cachesim selftest: PASS",
+     "command": "gi-tools selftest",
+     "exe": {
+      "dx12": "build/DX12/gi-tools.exe",
+      "vulkan": "build/VULKAN/gi-tools.exe"
+     }
+    },
+    {
+     "id": "cachesim",
+     "name": "cachesim：确定性仿真 + 俯视热图落盘",
+     "kind": "tool",
+     "note": "确定性仿真：16 帧 740 cells / peak probes 1；热图 active cells XY 投影按 cell 尺寸填充，hash 伪彩 x life 亮度。",
+     "args": [
+      "cachesim",
+      "--frames",
+      "16",
+      "--png",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "cells        : 740",
+     "command": "gi-tools cachesim --frames 16 --png {out}",
+     "exe": {
+      "dx12": "build/DX12/gi-tools.exe",
+      "vulkan": "build/VULKAN/gi-tools.exe"
+     }
+    },
+    {
+     "id": "cacheviz",
+     "name": "cache-viz 伪彩可视化（双后端 bytes 一致）",
+     "kind": "pair",
+     "note": "三 Suzanne 实例 cell 伪彩全覆盖（同 cell 同色异 cell 异色，色块边界即 0.5m 网格），背景暗底 pow(1/2.2)。半分辨率 fill + R2 抖动 + 查询即插入，16 帧确定性管线。json 侧车 mode=cache-viz。",
+     "baselines": {
+      "dx12": "example/s11-hash/cacheviz-dx12.png",
+      "vulkan": "example/s11-hash/cacheviz-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "cache-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "expectLog": "cache: viz compose dispatch",
+     "command": "viewer.exe --mode cache-viz --model Suzanne-materials.nmesh --screenshot <out.png> --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "script": "example/s11-hash/run.bat verify"
+    }
+   ]
   }
  ]
 }

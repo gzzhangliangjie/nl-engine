@@ -33,7 +33,9 @@ enum class ViewMode {
                      //  渲染模式：无点叠加恒 gather 态 + ImGui 全调参 + --sky-bg）
     ReferenceGI = 18, // M10.3：--mode reference-gi（Q14-1 拍板：渐进累积 GI 参考图
                       //  = 直光真值 + 单弹射蒙特卡洛，与 M10.1 探针物理逐项同口径）
-    // S1 起依次追加：Cache, CacheViz, Filter, Final
+    CacheViz = 19,    // S11 M11.0：--mode cache-viz 世界缓存 flat hashmap 占用伪彩
+                      //  （Q11-0 方案 A：无墓碑 + life 衰减清零立即重用 + 3 步探测）
+    // S1 起依次追加：Cache, Filter, Final
     Count
 };
 

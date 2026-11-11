@@ -349,3 +349,20 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 ### 2.20 ⚠️ 跨 compute/graphics 绑定的 volatile CB 尺寸铁律（2026-11-11，M10.3 实锤）
 
 **refConstants_（b4/b1，M9.2 跨 compute dispatch 与 graphics present 两 set 共用）从 16B 扩 32B → 双后端 device removed**（DX12 `Present failed (0x887a0005)`；Vulkan 每帧 12s 后 removed，deviceErrors=0 无任何 validation 消息，连未扩 CB 的 M9.2 旧 `--mode reference` 都稳定挂，3/3 复现）。二分定位：A 剥 RayQuery 无效、B 禁新 PSO 创建无效、**C 回 16B 绿**。修法 = RefConstants 保持 16B，GI 参数走**独立 16B compute-only CB 绑 b5**（同 DirectConstants 32B compute-only 一直安全的先例）。**推论：跨阶段（compute+graphics）共用的 volatile CB 不许扩尺寸；要加参数就开独立 CB 新槽位**。另一同族坑：`psCompare` 等 overlay 全屏 strip 的 PSO 必须显式 `depthStencilState.disableDepthTest()`——NVRHI `DepthStencilState` 默认 `depthTestEnable=true + depthFunc=Less`，swapchain framebuffer 的 depth_ 有场景残留深度时 quad 输出整体被吞（纯红实验 `red frac=0.0` 实锤「draw 提交但不可见」），blit/refpresent 前例同款纪律。
+
+### 2.21 ⚠️ CB 分配尺寸必须以 slang 端 cbuffer 反汇编布局为准（2026-11-11，M11.0 实锤）
+
+**CacheConstants CB 分配 64B 但 slang 端 cbuffer 实测 96B → csCacheViz 全线程早退、一个像素不写，dispatch 照常执行、无任何 validation 错**。静默失败链：CPU `float cb[16]` 声明却写 `cb[16..23]`（**栈越界 UB**）→ `writeBuffer` 只上传 64B → shader 读 byte 80（g_params = vpW/vpH）越界得 0 → early-out `pix >= 0` 恒真全线程 return。定位靠 SDK `dxc.exe -dumpbin <.dxil>` 反汇编：Buffer Definitions 段直接给 `Size: 96` 与各字段 byte offset，Resource Bindings 段给寄存器分配（regIndex = 16B 粒度）。**铁律：① CPU 常量数组长度 = slang cbuffer 实际字节 / 4，禁顺手写 [16]；② 新 CB 落码先 `dxc -dumpbin` 核对 Size 与 offset 三方同口径（slang / scene.cpp / 若有 CPU 仿真工具同抄）；③ 「dispatch 有锚 + 画面零变化」先查 CB 尺寸布局再查状态绑定（纯红二分无效即指向输入侧）**。与 §2.20 区别：本坑是 compute-only 单 CB（不跨 graphics），扩 64→96 无副作用。
+
+#### M11.0 世界缓存槽位同步表（落码实读固化，2026-11-11，tag `s11-hash`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `wcChecksums_` / `wcLife_` | `uint` × 1<<18 StructuredBuffer（**0 = 空槽保留**，双独立哈希：pcg 定槽 key + iqint 校验和） | `initCache`（初始 CopyDest + keepInitialState，visibleList_ 先例） | fillSet u0/u1 UAV；vizSet t1/t2 SRV | 首帧 `cacheFirstClear_` 显式清零；内容跨帧保留（世界缓存本体） |
+| `wcGeoPos_` / `wcGeoNrm_` | `float4` × 1<<18 StructuredBuffer（cell 几何快照，重插时 CAS 命中即覆写） | 同上 | fillSet u2/u3 UAV | 同上 |
+| `cacheCB_` | **96B volatile**（§2.21）：[0..15] invViewProj / [16..19] eye+cellSize(0.5) / [20..23] vpW/vpH/lifetime(10)/frameIndex | `initCache` | b0（fillSet / vizSet 共用同一 buffer，compute-only 不触 §2.20） | 每帧全量覆写 |
+| `world_cache.slang` | 三入口 `csCacheFill`（半分辨率 8×8，R2 帧抖动 + 查询即插入，CAS 无墓碑 / life 到 0 清零立即重用 / 线性探测 3 步 = bevy/Carrot 口径）/ `csCacheDecay`（64×1 全表 life-1）/ `csCacheViz`（8×8 全像素 query-only hash 伪彩 × life 亮度，gamma 域 pow 1/2.2 全替换 hdrSceneColor_） | CMake `_ENTRIES_WORLD_CACHE` + kArtifacts + loadShader 三处登记（M10.0 铁律） | fillLayout_（b0+t0+u0..u3）/ vizLayout_（b0+t0+t1+t2+u0） | fill dispatch `(vpW/2+7)/8 × (vpH/2+7)/8`；viz dispatch `(vpW+7)/8 × (vpH+7)/8` |
+| fill set 依赖登记 | `probeDepth_`（t0，缓存查询 = 深度反投影世界位置）+ probeAtlas_[parity][0..3] + irradAtlas_[0..3] + probePrevDelta_ | `ensureCacheSets`（probeDepth_ 重建即重建 set） | cacheFillSetDepth_ 登记判重建 | **收尾显式 `setTextureState(SRV)` 补转换**（跳过 dots/gather 时 UAV→SRV 无执行点，M10.2 同族坑，冒烟 deviceErrors=35 实锤） |
+| viz set 依赖登记 | `hdrSceneColor_`（u0 UAV 全替换写，T0 已带 isUAV=true） | `drawCacheViz` 懒建（cacheVizSetHdr_ 判重建） | cacheVizSet_ | dispatch 前 `setTextureState(hdr, UAV)`；RMW 纪律同 M10.2（每线程只写自己 texel） |
+| 四常量三方同口径 | kCacheCapacity=1<<18 / lifetime=10 / cellSize=0.5m / probeSteps=3 | slang / scene.cpp / gi-tools 同抄 | — | 改任一处必须全 grep 勘误 |
+| CPU 仿真先行 | `gi-tools`（selftest 7 组 18 断言 + `cachesim` 确定性热图） | gi-tools/main.cpp 与 shader 同构 | — | 语义验证在 GPU 落码前完成（本里程碑计划底线） |
