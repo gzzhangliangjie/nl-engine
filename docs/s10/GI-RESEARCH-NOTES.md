@@ -17,7 +17,7 @@
 - UE 探针八面体图带 **1 texel border ring**（`ScreenProbeGatherOctahedronResolutionWithBorder`），边界 texel 经 `OctahedralMapWrapBorder` 回绕到对侧——seam 采样无缝。这验证了我们 PLAN 里「边界 texel 卷绕要做对」的坑点，且给出了具体做法：**边框在生成 mip 前就回绕填充**（filtering.usf 里 mip 链也基于 WithBorder 尺寸逐级生成）。S10-PLAN 补强：八面体图按「core + 1texel border」布局，mip 生成在带边框的图上做。
 
 ### 探针追踪与辐照度来源（M10.1）
-- bevy 的对应物（initial_path.wesl）是 ReSTIR PT 风格的完整路径追踪器，比我们的「每探针 1 条余弦射线」激进得多；我们 S10 只做一跳，口径以 UE 的 Screen Probe 单探针少射线 + bevy 的世界缓存兜底为参照。bevy 给了两个可抄的思路：
+- bevy 的对应物（initial_path.wesl）是 ReSTIR PT 风格的完整路径追踪器，比我们的「每探针每 texel 1 条方向射线（8×8=64 条，2026-11-11 Q12-1 拍板，UE TracingOctahedronResolution=8 口径）」激进得多；我们 S10 只做一跳，口径以 UE 的 Screen Probe 单探针少射线 + bevy 的世界缓存兜底为参照。bevy 给了两个可抄的思路：
   1. **cache 终止门**（`terminate_into_cache`）：只有 BRDF 采样立体角足够宽（lobe_solid_angle ≥ π）才允许路径提前终止进缓存——粗糙面才信缓存，光滑面继续追；且射线必须**穿出当前 cell 的对角**（t > √3·cellSize）否则不信（防 cell 跨遮挡漏光）。这两个门我们 S11 二跳时直接可用。
   2. **max_gi_ray_distance 截断的漏光警告**：bevy 注释明确说射线截断处 miss ≠ 真 miss（可能远处有面），截断太小会漏天光。我们 S10 探针射线设 tMax 时要留这个余量。
 

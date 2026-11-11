@@ -3007,14 +3007,15 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!loadShader("velocity.vsvelocity", nvrhi::ShaderType::Vertex, vsVelocity_) ||
         !loadShader("velocity.psvelocity", nvrhi::ShaderType::Pixel, psVelocity_) ||
         !loadShader("probe.csplace", nvrhi::ShaderType::Compute, csPlace_) ||
+        !loadShader("probe_trace.cstrace", nvrhi::ShaderType::Compute, csTrace_) ||
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
 
-    // probeCB_（176B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
-    // 批内差异字段必须进写入面——§2.15 纪律）。
+    // probeCB_（192B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
+    // 批内差异字段必须进写入面——§2.15 纪律）。M10.1 扩 176→192B（g_vizExtra）。
     nvrhi::BufferDesc cbDesc;
-    cbDesc.byteSize = 176;
+    cbDesc.byteSize = 192;
     cbDesc.isConstantBuffer = true;
     cbDesc.isVolatile = true;
     cbDesc.maxVersions = 16;
@@ -3032,6 +3033,17 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     vcbDesc.debugName = "VelocityConstants";
     velocityCB_ = device->createBuffer(vcbDesc);
     if (!velocityCB_) { outError = "createBuffer failed for velocity constants"; return false; }
+
+    // traceCB_（64B volatile，M10.1）：probe_trace.slang 布局
+    //（[0..3] 灯向 / [4..7] 灯色·强度 / [8..11] 命中 albedo·ambient / [12..15] 参数）。
+    nvrhi::BufferDesc tcbDesc;
+    tcbDesc.byteSize = 64;
+    tcbDesc.isConstantBuffer = true;
+    tcbDesc.isVolatile = true;
+    tcbDesc.maxVersions = 16;
+    tcbDesc.debugName = "TraceConstants";
+    traceCB_ = device->createBuffer(tcbDesc);
+    if (!traceCB_) { outError = "createBuffer failed for trace constants"; return false; }
 
     // ---- velocity prepass 布局：b0 + t1..t4（pulling 几何池，visbuf.slang 同槽）。
     nvrhi::BindingLayoutDesc vDesc;
@@ -3058,7 +3070,7 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     placeLayout_ = device->createBindingLayout(pDesc);
     if (!placeLayout_) { outError = "createBindingLayout failed for probe place"; return false; }
 
-    // ---- dots 布局：b0 + t0..t4 SRV。
+    // ---- dots 布局：b0 + t0..t4 SRV + t5..t8 irradiance SRV（M10.1）。
     nvrhi::BindingLayoutDesc dDesc;
     dDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
@@ -3066,9 +3078,30 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
-        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4));
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(7))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(8))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(9));
     dotsLayout_ = device->createBindingLayout(dDesc);
     if (!dotsLayout_) { outError = "createBindingLayout failed for probe dots"; return false; }
+
+    // ---- csTrace 布局（M10.1）：b0 + t0..t3 place atlas SRV + t4 TLAS + u0..u3 UAV。
+    nvrhi::BindingLayoutDesc tDesc;
+    tDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(4))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+    traceLayout_ = device->createBindingLayout(tDesc);
+    if (!traceLayout_) { outError = "createBindingLayout failed for probe trace"; return false; }
 
     {
         nvrhi::ComputePipelineDesc cpDesc;
@@ -3076,6 +3109,13 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         placePSO_ = device->createComputePipeline(cpDesc);
     }
     if (!placePSO_) { outError = "createComputePipeline failed for probe place"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csTrace_).addBindingLayout(traceLayout_);
+        tracePSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!tracePSO_) { outError = "createComputePipeline failed for probe trace"; return false; }
 
     nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
@@ -3156,6 +3196,25 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         if (!probePrevDelta_) { outError = "createTexture failed for probe prevDelta"; return false; }
     }
 
+    // irradiance atlas（M10.1）：每级一张 RGBA16F，每探针占 (oct+2)²=10×10 格
+    //（8 core + 1 texel border，Q12-2）。M10.1 无时间混合 → 单份不 ping-pong。
+    // 创建态 = SRV（与帧首 beginTracking 声明对齐，probeDepth_ 同款纪律）。
+    for (std::uint32_t level = 0; level < 4; ++level) {
+        const std::uint32_t res_l = (res >> level) * 10u;
+        nvrhi::TextureDesc iDesc;
+        iDesc.width = res_l;
+        iDesc.height = res_l;
+        iDesc.format = nvrhi::Format::RGBA16_FLOAT;    // HDR 颜色 16F 足够（位置才用 32F）
+        iDesc.isUAV = true;
+        iDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        iDesc.debugName = "ProbeIrradAtlas";
+        irradAtlas_[level] = device->createTexture(iDesc);
+        if (!irradAtlas_[level]) {
+            outError = "createTexture failed for probe irradiance atlas";
+            return false;
+        }
+    }
+
     // 绑定集：velocity 一份（无 parity，绑自己的 144B CB）；place/dots 各两份
     //（atlas 绑定随 parity）。
     {
@@ -3184,8 +3243,27 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         for (std::uint32_t level = 0; level < 4; ++level)
             dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
         dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4, probePrevDelta_));
+        for (std::uint32_t level = 0; level < 4; ++level)
+            dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(5 + level, irradAtlas_[level]));
+        dsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(9, probeDepth_));   // M10.1 法线重建
         dotsSet_[parity] = device->createBindingSet(dsDesc, dotsLayout_);
         if (!dotsSet_[parity]) { outError = "createBindingSet failed for probe dots"; return false; }
+
+        // trace set（M10.1）：读 cur parity place atlas + 写 irradiance atlas。
+        // tlasReady_ 门控懒建——无 RT / 无 fallback 几何时 tlas_ 为 null，set
+        // 创建必败（shadow 模式 tlasReady_ 检查同口径降级；TLAS 就绪后的某帧
+        // 补建，drawProbeFrame 的 tlasReady_ 分支保证 dispatch 只在就绪时跑）。
+        if (tlasReady_) {
+            nvrhi::BindingSetDesc tsDesc;
+            tsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, traceCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                tsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+            tsDesc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(4, tlas_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                tsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level, irradAtlas_[level]));
+            traceSet_[parity] = device->createBindingSet(tsDesc, traceLayout_);
+            if (!traceSet_[parity]) { outError = "createBindingSet failed for probe trace"; return false; }
+        }
     }
 
     // velocity PSO（RG16F+D32 framebuffer 格式锁定，照 hiz prepassInfo 先例按
@@ -3209,13 +3287,14 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         if (!velocityPSO_) { outError = "createGraphicsPipeline failed for velocity prepass"; return false; }
     }
 
-    // 一次性日志锚（机器断言用）：级联结构 + 总探针数。
+    // 一次性日志锚（机器断言用）：级联结构 + 总探针数 + 追踪预算。
     if (!probeLogged_) {
         const std::uint32_t total = res * res + (res >> 1) * (res >> 1) +
                                     (res >> 2) * (res >> 2) + (res >> 3) * (res >> 3);
         nl::core::log::info("probe: cascades=4 base=", res,
                             " grid=", res, "/", (res >> 1), "/", (res >> 2), "/", (res >> 3),
-                            " probes=", total);
+                            " probes=", total,
+                            " oct=", 8, " raysPerProbe=", 8 * 8);
         probeLogged_ = true;
     }
     return true;
@@ -3241,12 +3320,15 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
                                               0, nvrhi::TextureSubresourceSet::AllArraySlices);
     // ---- 帧首状态声明（上一帧末态：depth=SRV（csPlace 读）/ velocity=SRV /
-    // prevDelta=SRV（dots 读）/ atlas[cur]=SRV（dots 读））。
+    // prevDelta=SRV（dots 读）/ atlas[cur]=SRV（dots 读）/ irrad=SRV（dots 读））。
     cmd->beginTrackingTextureState(probeDepth_, allSub, nvrhi::ResourceStates::ShaderResource);
     cmd->beginTrackingTextureState(velocity_, allSub, nvrhi::ResourceStates::ShaderResource);
     cmd->beginTrackingTextureState(probePrevDelta_, allSub, nvrhi::ResourceStates::ShaderResource);
     for (std::uint32_t level = 0; level < 4; ++level)
         cmd->beginTrackingTextureState(probeAtlas_[probeParity_][level], allSub,
+                                       nvrhi::ResourceStates::ShaderResource);
+    for (std::uint32_t level = 0; level < 4; ++level)
+        cmd->beginTrackingTextureState(irradAtlas_[level], allSub,
                                        nvrhi::ResourceStates::ShaderResource);
     // ---- 清屏（都在首个 setGraphicsState 之前——Vulkan render pass 纪律）。
     cmd->setTextureState(probeDepth_, allSub, nvrhi::ResourceStates::DepthWrite);
@@ -3270,10 +3352,10 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     vcb[33] = vpH;
     cmd->writeBuffer(velocityCB_, vcb, sizeof(vcb));
 
-    // ---- probeCB_ 每帧全量覆写（176B）：布局见 probe.slang。
+    // ---- probeCB_ 每帧全量覆写（192B）：布局见 probe.slang。
     //   [0..15] invViewProj / [16..19] eye(+projYScale) / [20..23] placeParams /
-    //   [24..39] vizViewProj / [40..43] vizParams。
-    float cb[44] = {};
+    //   [24..39] vizViewProj / [40..43] vizParams / [44..47] vizExtra。
+    float cb[48] = {};
     {
         nl::math::Mat4 vp{}, invVP{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
@@ -3294,8 +3376,25 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cb[41] = vpW;
         cb[42] = vpH;
         cb[43] = static_cast<float>(probeBaseRes_);
+        // vizExtra：dotMode = probe-viz 模式开辐照度点色；TLAS 未就绪时降级回
+        // 级别色（probe-place 保形，无 RT 设备 M10.0 行为不变）。
+        cb[44] = (params.probeVizIrradiance && tlasReady_) ? 1.0f : 0.0f;
     }
     cmd->writeBuffer(probeCB_, cb, sizeof(cb));
+
+    // ---- traceCB_ 每帧全量覆写（64B）：灯参数与 writeResolveConstants 同源
+    //（白光强度 2.5）；命中材质 = M10.1 降级口径（统一 albedo + ambient）；
+    // shadow 参数 = M9.1 g_shadowParams 同值（bias 0.01 / tMax 50）。
+    {
+        const float tcb[16] = {
+            params.lightDir[0], params.lightDir[1], params.lightDir[2], 0.0f,
+            1.0f, 1.0f, 1.0f, 2.5f,
+            0.45f, 0.39f, 0.30f, params.lightDir[3],   // 统一模型色（暖灰）+ 环境光
+            0.01f, 50.0f,
+            static_cast<float>(probeBaseRes_), 8.0f,
+        };
+        cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
+    }
 
     // ---- (1) velocity prepass：与 visRaster 同一间接几何（identityIndex +
     // indirectArgs），换自己的 VS/PS 与 framebuffer（Q10-1 独立 pass 口径）。
@@ -3322,6 +3421,23 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 1u);
+    }
+
+    // ---- (3) csTrace 探针追踪 dispatch（M10.1）：place atlas cur parity SRV ←
+    // 刚写完 → irradiance atlas UAV 写；SRV↔UAV 转换由 trace set require 自动插。
+    // TLAS 未就绪（无 RT / 无 fallback 几何）→ 一次性日志后跳过（probe-place
+    // 的布点/点可视化不受影响，M10.0 行为保形；shadow 模式同口径降级）。
+    if (tlasReady_) {
+        const std::uint32_t store = 10u;
+        nvrhi::ComputeState tstate;
+        tstate.setPipeline(tracePSO_).addBindingSet(traceSet_[probeParity_]);
+        cmd->setComputeState(tstate);
+        cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
+                      ((probeBaseRes_ * store) + 7u) / 8u, 4u);
+    } else if (!probeTraceLogged_) {
+        nl::core::log::info("probe: TLAS not ready (no RT support or no fallback "
+                            "geometry) -- probe tracing disabled");
+        probeTraceLogged_ = true;
     }
 }
 
@@ -5922,6 +6038,45 @@ float particleRand01(std::uint32_t v) {
     return static_cast<float>(v & 0xFFFFFFu) / 16777215.0f;
 }
 
+// M-PT4 E2：分段线性关键帧采样（端点 clamp；退化段 area==0 取左键——
+// 与 Effekseer Gradient::GetColorAndIntensity/GetAlpha 同构：lower_bound 找段
+// → 线性插值；keys 按 t 非降序，loadNfx 从严校验）。keys 每键 = {t, v...}。
+float particleSampleKey1(const std::vector<std::array<float, 2>>& keys, float t) {
+    if (t <= keys.front()[0]) return keys.front()[1];
+    if (t >= keys.back()[0])  return keys.back()[1];
+    std::size_t i = 1;
+    while (i < keys.size() && keys[i][0] < t) ++i;
+    if (i >= keys.size()) return keys.back()[1];
+    const float area = keys[i][0] - keys[i - 1][0];
+    if (area <= 0.0f) return keys[i - 1][1];
+    const float a = (t - keys[i - 1][0]) / area;
+    return keys[i][1] * a + keys[i - 1][1] * (1.0f - a);
+}
+void particleSampleKey3(const std::vector<std::array<float, 4>>& keys, float t, float out[3]) {
+    if (t <= keys.front()[0]) {
+        out[0] = keys.front()[1]; out[1] = keys.front()[2]; out[2] = keys.front()[3];
+        return;
+    }
+    if (t >= keys.back()[0]) {
+        out[0] = keys.back()[1]; out[1] = keys.back()[2]; out[2] = keys.back()[3];
+        return;
+    }
+    std::size_t i = 1;
+    while (i < keys.size() && keys[i][0] < t) ++i;
+    if (i >= keys.size()) {
+        out[0] = keys.back()[1]; out[1] = keys.back()[2]; out[2] = keys.back()[3];
+        return;
+    }
+    const float area = keys[i][0] - keys[i - 1][0];
+    if (area <= 0.0f) {
+        out[0] = keys[i - 1][1]; out[1] = keys[i - 1][2]; out[2] = keys[i - 1][3];
+        return;
+    }
+    const float a = (t - keys[i - 1][0]) / area;
+    for (int c = 0; c < 3; ++c)
+        out[c] = keys[i][c + 1] * a + keys[i - 1][c + 1] * (1.0f - a);
+}
+
 // 喷泉发射器常数：M-PT1 起参数面进 Particles::Params（scene.hpp），此处只留
 // legacy 锚点使用的发射点与固定步长（nfx 路径经 params_ 覆写）。
 constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
@@ -5984,8 +6139,8 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
 
-    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT3 扩 progressMisc 段；已有成员
-    // 偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
+    // 实例数据 SSBO：每实例 64 B（float4×4，M-PT5 扩 misc2 spare 段；v0~v2
+    // 成员偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
     // （writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态纪律，§2.15）。
     nvrhi::BufferDesc instDesc;
     instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
@@ -6167,10 +6322,23 @@ void Particles::step(float dt) {
         p.pos[0] += p.vel[0] * dt;
         p.pos[1] += p.vel[1] * dt;
         p.pos[2] += p.vel[2] * dt;
+        // M-PT5 E5：角度积分（Effekseer rotation velocity 同口径，无旋转恒
+        // angVel=0 → angle += 0.0f*dt = angle IEEE 精确不变）。
+        p.angle += p.angVel * dt;
         ++i;
     }
     // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
-    spawnAccum_ += params_.rate * dt;
+    //    M-PT4 E1：nfx 路径 rate 区间驱动——每帧从 rate 专用 pcg 序列（rateSeq_，
+    //    与粒子 spawnSeq_ 流完全独立，新占位禁复用纪律）抽 [rateMin, rateMin+rateSpan]。
+    //    rateSpan=0 时 rRate = rateMin + rnd*0 = rateMin（IEEE 精确恒等），存量
+    //    定值 .nfx 与旧均值口径逐位同 → pt1~pt3 基线零漂移。legacy 路径逐字保留。
+    float rateThisFrame = params_.rate;
+    if (nfxActive_) {
+        const float rRate = particleRand01(particleHash(rateSeq_ * 11u + 0x5EED1u));
+        rateThisFrame = params_.rateMin + rRate * params_.rateSpan;
+        ++rateSeq_;
+    }
+    spawnAccum_ += rateThisFrame * dt;
     std::uint32_t spawn = static_cast<std::uint32_t>(spawnAccum_);
     spawnAccum_ -= static_cast<float>(spawn);
     for (std::uint32_t k = 0; k < spawn && pool_.size() < kMaxParticles; ++k) {
@@ -6194,6 +6362,8 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin + rSize * params_.sizeSpan;
+            // M-PT5：legacy 恒无旋转/方形（VS 恒等链的 CPU 侧锚点）。
+            p.angle = 0.0f; p.angVel = 0.0f; p.ratioY = 1.0f;
         } else {
             // ---- M-PT1 .nfx：box 初速 min/max 逐轴 lerp + 定长寿命/尺寸 ----
             const float rv0 = particleRand01(particleHash(s * 5u + 0u));
@@ -6209,6 +6379,19 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin;
+            // M-PT5 E5/R1：新随机槽（s*7u+0x100u+{0,1,2}，输入空间与旧 5 槽
+            // s*5u+{0..4} 永不相交——2s=slot-256 无解——存量字段公式一字不动
+            // = 逐位零漂移）。span=0 时 min + rnd*0 = min（IEEE 恒等，与 M-PT4
+            // E1 rate span=0 论证同构）：无旋转资产 angle 恒 0、无 sizeYRange
+            // 资产 ratioY 逐粒子复制 params_.ratioY（与 CB 标量同值同位模式）。
+            const float rAng   = particleRand01(particleHash(s * 7u + 0x100u + 0u));
+            const float rAngV  = particleRand01(particleHash(s * 7u + 0x100u + 1u));
+            const float rSizeY = particleRand01(particleHash(s * 7u + 0x100u + 2u));
+            p.angle  = params_.angMin + rAng * params_.angSpan;
+            p.angVel = params_.angVelMin + rAngV * params_.angVelSpan;
+            p.ratioY = params_.sizeYRangeEnabled
+                     ? (params_.sizeYAbsMin + rSizeY * params_.sizeYAbsSpan) / params_.sizeMin
+                     : params_.ratioY;
         }
         pool_.push_back(p);
     }
@@ -6230,8 +6413,23 @@ void Particles::step(float dt) {
             const float aIn  = std::min(1.0f, t * 8.0f);
             const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
             g.colorAlpha[3] = aIn * aOut;
+        } else if (params_.colorCurve.enabled) {
+            // M-PT4 E2：colorCurve 关键帧采样（RGB 三键 + alpha 键；fadeIn/fadeOut
+            // 乘在曲线上，与线性路径同口径）。CPU 采样零 shader 改动。
+            float rgb[3];
+            particleSampleKey3(params_.colorCurve.colorKeys, t, rgb);
+            g.colorAlpha[0] = rgb[0];
+            g.colorAlpha[1] = rgb[1];
+            g.colorAlpha[2] = rgb[2];
+            float aIn = 1.0f, aOut = 1.0f;
+            if (params_.fadeIn > 0.0f)
+                aIn = std::min(1.0f, (1.0f - p.life / p.maxLife) * p.maxLife / params_.fadeIn);
+            if (params_.fadeOut > 0.0f)
+                aOut = std::min(1.0f, p.life / params_.fadeOut);
+            g.colorAlpha[3] = particleSampleKey1(params_.colorCurve.alphaKeys, t) * aIn * aOut;
         } else {
-            // nfx：colorStart→colorEnd 线性 lerp；fadeIn/fadeOut（秒）乘积曲线。
+            // nfx：colorStart→colorEnd 线性 lerp（M-PT1 原式逐字保留，基线字节复现前提）；
+            // fadeIn/fadeOut（秒）乘积曲线。
             g.colorAlpha[0] = params_.colorStart[0] + (params_.colorEnd[0] - params_.colorStart[0]) * t;
             g.colorAlpha[1] = params_.colorStart[1] + (params_.colorEnd[1] - params_.colorStart[1]) * t;
             g.colorAlpha[2] = params_.colorStart[2] + (params_.colorEnd[2] - params_.colorStart[2]) * t;
@@ -6266,7 +6464,12 @@ void Particles::step(float dt) {
         } else {
             g.progressMisc[0] = 0.0f; g.progressMisc[1] = 0.0f;
         }
-        g.progressMisc[2] = 0.0f; g.progressMisc[3] = 0.0f;
+        // M-PT5：z = 该粒子角度（弧度，无旋转恒 0 → VS cos/sin IEEE 恒等），
+        // w = 该粒子 Y/X 比（定值 = params_.ratioY 精确复制 → 与旧 CB 标量
+        // g_params.z 同值，VS cy*w 逐位同 cy*z）。misc2 = spare 恒 0。
+        g.progressMisc[2] = p.angle;
+        g.progressMisc[3] = p.ratioY;
+        g.misc2[0] = 0.0f; g.misc2[1] = 0.0f; g.misc2[2] = 0.0f; g.misc2[3] = 0.0f;
         gpuData_.push_back(g);
     }
     aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
@@ -6443,7 +6646,10 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     size[1] = r["size"][1].get<float>();
 
     Params p;             // 从 NFX1 缺省起折算（不复带 legacy 字段）
-    p.rate = 0.5f * (rate[0] + rate[1]);            // min/max 取均值（区间留档在 .nfx）
+    // M-PT4 E1：rate 区间驱动（原「0.5*(min+max) 取均值」降级移除）。span=0 =
+    // 定值，step 端 IEEE 恒等；负 span 钳 0（min>max 视作定值 min）。
+    p.rateMin = rate[0];
+    p.rateSpan = rate[1] > rate[0] ? (rate[1] - rate[0]) : 0.0f;
     p.lifeMin = life[0];
     p.lifeSpan = life[1] > life[0] ? (life[1] - life[0]) : 0.0f;
     p.spawn[0] = spawn[0]; p.spawn[1] = spawn[1]; p.spawn[2] = spawn[2];
@@ -6462,6 +6668,91 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     p.fadeOut = r.value("fadeOut", 0.0f);
     std::string blend = r.value("blend", "alpha");
     p.additive = (blend == "additive");
+
+    // M-PT5 E5：可选旋转（emitter.ang / emitter.angVel，弧度区间 = vendored
+    // Effekseer runtime 口径）。缺省/缺字段 = 无旋转（angSpan=angVelSpan=0 →
+    // spawn 端 angle 恒 0，VS cos=1/sin=0 IEEE 恒等）。校验从严——畸形即拒。
+    if (e.contains("ang") || e.contains("angVel")) {
+        if (!e.contains("ang") || !e.contains("angVel") ||
+            !e["ang"].is_array() || e["ang"].size() != 2 ||
+            !e["angVel"].is_array() || e["angVel"].size() != 2) {
+            outError = ".nfx malformed ang/angVel (want [min,max] radian pairs)";
+            return false;
+        }
+        const float aMin = e["ang"][0].get<float>();
+        const float aMax = e["ang"][1].get<float>();
+        const float aVelMin = e["angVel"][0].get<float>();
+        const float aVelMax = e["angVel"][1].get<float>();
+        p.angMin = aMin;
+        p.angSpan = aMax > aMin ? (aMax - aMin) : 0.0f;   // 负区间钳 0（同 rate 口径）
+        p.angVelMin = aVelMin;
+        p.angVelSpan = aVelMax > aVelMin ? (aVelMax - aVelMin) : 0.0f;
+    }
+
+    // M-PT5 R1：可选 per-particle sizeY（render.sizeYRange，绝对米区间；折算
+    // 成 Y/X 比进实例流，VS 弃 CB 标量 g_params.z）。缺省 = 无 → sizeYRange
+    // 不启用，spawn 端 ratioY 逐粒子复制 params_.ratioY（与旧 CB 同值恒等）。
+    if (r.contains("sizeYRange")) {
+        if (!r["sizeYRange"].is_array() || r["sizeYRange"].size() != 2) {
+            outError = ".nfx malformed sizeYRange (want [min,max] meter pair)";
+            return false;
+        }
+        const float syMin = r["sizeYRange"][0].get<float>();
+        const float syMax = r["sizeYRange"][1].get<float>();
+        if (!(syMin > 0.0f) || !(syMax > 0.0f)) {
+            outError = ".nfx sizeYRange values must be > 0";
+            return false;
+        }
+        p.sizeYRangeEnabled = true;
+        p.sizeYAbsMin = syMin;
+        p.sizeYAbsSpan = syMax > syMin ? (syMax - syMin) : 0.0f;
+    }
+
+    // M-PT4 E2：可选 colorCurve（缺省/缺字段 = 无 → 走 colorStart/colorEnd 线性
+    // lerp 原路径）。校验从严——畸形即拒（返回 false，加载端保持 legacy 参数）。
+    // 键值单位与 colorStart/colorEnd 一致为 0..255，此处在校验通过后归一化 0..1；
+    // t ∈ [0,1] 非降序（NaN 因比较恒 false 一并拒）。
+    if (r.contains("colorCurve")) {
+        const nlohmann::json& cc = r["colorCurve"];
+        if (!cc.is_object() || !cc.contains("colorKeys") || !cc.contains("alphaKeys") ||
+            !cc["colorKeys"].is_array() || !cc["alphaKeys"].is_array() ||
+            cc["colorKeys"].empty() || cc["alphaKeys"].empty()) {
+            outError = ".nfx malformed colorCurve object";
+            return false;
+        }
+        auto parseKeys = [](const nlohmann::json& arr, int nch,
+                            std::vector<std::array<float, 4>>& out4,   // colorKeys 落这里
+                            std::vector<std::array<float, 2>>& out2,   // alphaKeys 落这里
+                            bool isColor) -> bool {
+            float prevT = -1.0f;
+            for (const auto& k : arr) {
+                if (!k.is_array() || static_cast<int>(k.size()) != nch + 1) return false;
+                const float t = k[0].get<float>();
+                if (!(t >= 0.0f && t <= 1.0f) || t < prevT) return false;
+                if (isColor) {
+                    std::array<float, 4> v = {t, 0.0f, 0.0f, 0.0f};
+                    for (int c = 0; c < 3; ++c) {
+                        const float x = k[c + 1].get<float>();
+                        if (!(x >= 0.0f && x <= 255.0f)) return false;
+                        v[c + 1] = x / 255.0f;
+                    }
+                    out4.push_back(v);
+                } else {
+                    const float a = k[1].get<float>();
+                    if (!(a >= 0.0f && a <= 255.0f)) return false;
+                    out2.push_back({t, a / 255.0f});
+                }
+                prevT = t;
+            }
+            return true;
+        };
+        if (!parseKeys(cc["colorKeys"], 3, p.colorCurve.colorKeys, p.colorCurve.alphaKeys, true) ||
+            !parseKeys(cc["alphaKeys"], 1, p.colorCurve.colorKeys, p.colorCurve.alphaKeys, false)) {
+            outError = ".nfx colorCurve keys out of range (want [t,r,g,b]/[t,a], t 0..1 non-decreasing, values 0..255)";
+            return false;
+        }
+        p.colorCurve.enabled = true;
+    }
 
     // M-PT3：flipbook 可选字段（缺省/缺字段 = 无）。字段校验从严——畸形即拒
     // （exit 路径返回 false，加载端保持 legacy 参数不变）。
@@ -6517,6 +6808,7 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     aliveCount_ = 0;
     spawnAccum_ = 0.0f;
     spawnSeq_ = 0;
+    rateSeq_ = 0;   // M-PT4 E1：rate 采样序列随时间线归零
     return true;
 }
 
@@ -6551,6 +6843,7 @@ void Particles::shutdown() {
     aliveCount_ = 0;
     spawnAccum_ = 0.0f;
     spawnSeq_   = 0;
+    rateSeq_    = 0;   // M-PT4 E1：rate 采样序列同步归零
 }
 
 void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
@@ -6657,28 +6950,36 @@ void Scene::shutdown() {
     probeH_ = 0;
     probeBaseRes_ = 0;
     probeLogged_ = false;
+    probeTraceLogged_ = false;
     vsVelocity_ = nullptr;
     psVelocity_ = nullptr;
     csPlace_ = nullptr;
+    csTrace_ = nullptr;
     vsProbeDots_ = nullptr;
     psProbeDots_ = nullptr;
     velocityCB_ = nullptr;
     probeCB_ = nullptr;
+    traceCB_ = nullptr;
     velocityLayout_ = nullptr;
     velocitySet_ = nullptr;
     placeLayout_ = nullptr;
     placeSet_[0] = nullptr;
     placeSet_[1] = nullptr;
+    traceLayout_ = nullptr;
+    traceSet_[0] = nullptr;
+    traceSet_[1] = nullptr;
     dotsLayout_ = nullptr;
     dotsSet_[0] = nullptr;
     dotsSet_[1] = nullptr;
     velocityPSO_ = nullptr;
     placePSO_ = nullptr;
+    tracePSO_ = nullptr;
     dotsPSO_ = nullptr;
     probeDepth_ = nullptr;
     velocityFb_ = nullptr;
     for (auto& row : probeAtlas_)
         for (auto& t : row) t = nullptr;
+    for (auto& t : irradAtlas_) t = nullptr;
     probePrevDelta_ = nullptr;
     // M8.0：BLAS 资源（AS 句柄与 build-input 缓冲，device 存活期释放）。
     // M-PT0：粒子资源随场景一并释放（模拟状态归零）。

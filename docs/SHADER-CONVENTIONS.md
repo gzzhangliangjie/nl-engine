@@ -307,3 +307,20 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 **M10.0 shader 产物命名铁律**：产物 = `文件名.小写入口.后缀`（如 `velocity.vsvelocity.spv`、`probe.csplace.dxil`）——kArtifacts 登记、loadShader、CMake `_ENTRIES_*` 三处必须同口径，写 `velocity.vs` 这类短名会 selftest BAD(-1B) 或运行时加载失败。新增入口三处登记：CMakeLists `_ENTRIES_*` + `kArtifacts` + loadShader。
 
 > M10.0 补充纪律：dispatch 是 `cmd->dispatch(x,y,z)` 三参（NVRHI 无 `DispatchArguments`）；`ComparisonFunc` 枚举值是 `LessOrEqual` 非 `LessEqual`。探针法线 = 深度邻域 3-tap 反投影 cross（GBuffer 不落盘 Q4 冻结，纯 compute 无 ddx/ddy）。
+
+#### M10.1 探针追踪管线槽位同步表（落码实读固化，2026-11-11，tag `s10-probe`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `irradAtlas_[4]` | `RGBA16_FLOAT` ×4 级（res_l·10 × res_l·10；每探针占 10×10 格 = 8 core + 1 texel border，Q12-2；a=1 有效标记） | `ensureProbeTargets` | `traceSet_[2]` u0..u3 UAV；`dotsSet_[parity]` t5..t8 SRV | 创建态 SRV（与帧首 beginTracking 声明对齐）；UAV↔SRV 由绑定 require 自动插；**M10.1 单份不 ping-pong**（无时间混合） |
+| `traceCB_` | 64B volatile：[0..3] 灯向 / [4..7] 灯色·强度(白 2.5，writeResolveConstants 同源) / [8..11] 命中 albedo(统一暖灰)+ambient / [12..15] shadowBias(0.01)+tMax(50)+baseRes+octRes | `initProbe` | b0（traceSet_） | 每帧全量覆写 |
+| `traceSet_[2]` | 每 parity 一份（t0..t3 绑 cur place atlas + t4 TLAS） | `ensureProbeTargets` | — | **必须 `tlasReady_` 门控懒建**——`tlas_` null（无 RT / 无 NFLB fallback 资产）时 createBindingSet 必败；TLAS 就绪后帧内补建 |
+| `tracePSO_` / `csTrace_` | compute `probe_trace.cstrace`（**CMake `_ENTRIES` 第二段 = 产物短后缀**：`cstrace` 非 `cstraceprobe`，tlas_probe.cs 口径；RayQuery 进 `_SM66_ARTIFACTS`） | initProbe / ensureProbeTargets | 单一 traceLayout_ | dispatch z=4 级，线程 = 探针格 × 10×10 展平 |
+| 八面体头 `octahedral.slangh` | core N×N + 1 texel border（存储 (N+2)²）；border texel wrap 对侧 core texel（UE `OctahedralMapWrapBorder` 口径，trace 时按 wrap 方向单 pass 直算）；S12 复用 | — | — | — |
+| 天穹头 `sky.slangh` | `skyGradient(dir)`：zenith(0.16,0.30,0.58)/horizon(0.62,0.71,0.84) + dir.y 余弦混合，地平线下 ×0.35（常量化确定性输出，Q12-3） | — | — | 渲染背景暂不替换（仍 clearColor，M10.3 可选） |
+| dots set 扩展 | t9 = `probeDepth_` SRV（viz 法线 3-tap 重建输入，零新增资源） | `ensureProbeTargets` | `dotsSet_[parity]` t9 | 与 t0..t8 同份 set |
+| `probeCB_` | **176→192B**：新增 [44..47] `g_vizExtra`（x=dotMode 0=级别色/1=辐照度采样；TLAS 未就绪时降级回 0） | `initProbe` | b0（placeSet_ / dotsSet_） | 每帧全量覆写 |
+
+**M10.1 viz 采样口径**：点色 = 八面体图按**探针法线方向**采样（法线 = probeDepth 3-tap 反投影 cross，vs 内重算）；「探针→眼睛」方向在凸面上恒 miss（画面全天空色无信息量，冒烟实锤后改法线）。atlas 全局 texel = `probeTexel·(octRes+2) + octT + 1`——**漏乘探针格基址会全黑**（读成 (0,0) 格的天空 texel）。
+
+**M10.1 降级备案（S10-PLAN Q12 已定项）**：命中点直光 = 统一 albedo（暖灰）+ 无 NdotL（命中点法线在 104-tri 粗代理上不可得）；S11 世界缓存接管后按 hit 材质重算。探针射线 tMax=1e4（bevy 注释：截断处 miss ≠ 真 miss，截太小漏天光）；shadow ray tMax=50 / bias=0.01（M9.1 g_shadowParams 同值）。

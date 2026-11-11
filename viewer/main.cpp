@@ -1412,6 +1412,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeBaseRes = probeBaseRes;
         fp.probeNormalOffset = probeNormalOffset;
         fp.probeDotSize = probeDotSize;
+        // M10.1：probe-viz 模式 = 点色改八面体辐照度采样（管线与 probe-place 全同，
+        // 仅 viz 分支差异——trace pass 两模式都跑，布点+追踪一体）。
+        fp.probeVizIrradiance = (o.mode == nl::core::ViewMode::ProbeViz);
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -2914,6 +2917,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::ProbeViz:   // M10.1：探针辐照度可视化（追踪 + 点色采样）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -3030,6 +3039,11 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::Reference || o.mode == nl::core::ViewMode::ProbePlace)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
+    }
+    // M10.1：probe-viz 缺省带 fallback 段的资产——探针追踪打 TLAS（M8 粗代理
+    // 需 v3 lod0 'NFLB'），Suzanne.nmesh 无 fallback = TLAS 不就绪 trace 降级。
+    if (o.mode == nl::core::ViewMode::ProbeViz && !o.modelSet) {
+        o.modelFile = "Suzanne-materials.nmesh";
     }
     // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。
     if (o.mode == nl::core::ViewMode::Skin && !o.modelSet) {

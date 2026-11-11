@@ -27,7 +27,9 @@ enum class ViewMode {
     Reference = 14, // M9.2：离线参考模式（渐进式多帧累积的直光真值图，裁判 M9.1 阴影射线）
     ProbePlace = 15, // M10.0：屏幕探针 cascade 布点（velocity prepass + 布点 compute
                      //  + 探针点可视化；S10-PLAN Q10-1/Q10-2 拍板 UE 口径）
-    // S1 起依次追加：Probe, ProbeViz, Cache, CacheViz, Filter, Final
+    ProbeViz = 16,   // M10.1：探针辐照度可视化（管线同 ProbePlace + 探针追踪 compute，
+                     //  点色 = 八面体图按视线方向采样；S10-PLAN Q12-1/2/3 拍板）
+    // S1 起依次追加：Probe, Cache, CacheViz, Filter, Final
     Count
 };
 

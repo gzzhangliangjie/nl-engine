@@ -352,6 +352,9 @@ set(_ENTRIES_DIRECT "csDirect|cs|compute" "csReference|csref|compute")
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # M9.0 (S9): GBuffer 反解公共头（material.slang include；S9.1/S10/S12 复用）
 set(_GBUFFER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/gbuffer_common.slangh")
+# M10.1：八面体映射 / 解析天穹公共头（probe_trace/probe_viz include；S12 复用）
+set(_OCTAHEDRAL_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/octahedral.slangh")
+set(_SKY_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/sky.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
 set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "visbuf.vsvisviz" "visbuf.psvisviz"
@@ -359,7 +362,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "tlas_probe.cs"
                     "rt.cs"
                     "direct.cs"
-                    "direct.csref")
+                    "direct.csref"
+                    "probe_trace.cstrace")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -378,6 +382,10 @@ set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|frag
 set(_ENTRIES_PROBE "csPlace|csplace|compute")
 # M10.0（S10）：probe_viz.slang 双入口——探针点可视化（每探针一实例 quad + 按级着色）。
 set(_ENTRIES_PROBE_VIZ "vsProbeDots|vsprobedots|vertex" "psProbeDots|psprobedots|fragment")
+# M10.1（S10）：probe_trace.slang 单 compute 入口——探针追踪（每探针每 texel 1 条
+# 方向射线 + 命中点直光 shadow ray，Q12-1/Q12-2 拍板 UE 口径）。
+# 后缀短名 cstrace（tlas_probe.cs 同款口径）；产物 = probe_trace.cstrace。
+set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -404,6 +412,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE}")
     elseif(_SRC_NAME STREQUAL "probe_viz")
         set(_ENTRIES "${_ENTRIES_PROBE_VIZ}")
+    elseif(_SRC_NAME STREQUAL "probe_trace")
+        set(_ENTRIES "${_ENTRIES_PROBE_TRACE}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -425,6 +435,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
                OR _SRC_NAME STREQUAL "probe")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}")
+        elseif(_SRC_NAME STREQUAL "probe_trace")
+            set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
+        elseif(_SRC_NAME STREQUAL "probe_viz")
+            set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
         endif()

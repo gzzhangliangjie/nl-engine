@@ -2559,3 +2559,52 @@
 4. **粗级探针落天空是设计行为不是 bug**：dist=9 时 L2（4×4 网格）与模型轮廓相位擦边蓝点=0；dist=4 三级全可见（987/256/54）。**教训：探针全屏网格落在背景的探针按 a=0 剔除（UE 同款），基线机位要让模型占屏足够大才能给全级覆盖证据；dots 门禁不硬断言 L3（2×2 网格落模型概率纯几何）。**
 
 **下一步**：S10 M10.1（探针照明 gather：屏幕探针向 M9.2 直光真值 / VSM 取照明写 irradiance atlas）；`probePrevDelta_`/prevUV 链路 M10.1 时域复用；Q4 冻结面维持（0 新增独立 GBuffer 资源）；`kStage` 仍 S8.2。
+
+## M10.1：屏幕探针八面体辐照度追踪 + viz（2026-11-11，tag `s10-probe`）
+
+**动作**：M10.1（S10 第二步，探针追踪；2026-11-11 用户「按推荐的来」拍板 Q12-1/Q12-2/Q12-3，三处参考实读：UE LumenScreenProbeGather.usf/.cpp + bevy initial_path.wesl + Carrot 无屏幕探针追踪对应物）落地。① Q12-1 射线预算 = **每探针每八面体 texel 1 条方向射线（8×8=64 条/探针）**——UE 实锤口径（线程数 = 探针数 × TracingOctahedronResolution 默认 8），勘误 PLAN 旧字面「每探针 1 条」（1 条填不满八面体图，M10.2 查图无数据）；② Q12-2 = trace 与存储同分辨率 **8×8 core + 1 texel border（10×10 存储 texel/探针）**，`octahedral.slangh` 落 UE `OctahedralMapWrapBorder` 口径（border texel wrap 对侧 core texel，trace 时按 wrap 方向单 pass 直算，S12 复用）；③ Q12-3 = `sky.slangh` 解析渐变天穹（zenith/horizon + dir.y 余弦混合，地平线下压暗，bevy atmosphere 简化版），探针 miss 与 M10.2 天光共用，渲染背景暂不替换；④ `probe_trace.slang::csTraceProbe`（dispatch z=4 级）：探针 pos → texel 方向 RayQuery 打 M8 TLAS → miss 天空 / hit 命中点直光（M9.1 口径降级备案：统一 albedo + 无 NdotL + 命中点 shadow ray origin 沿射线回退 bias；探针 tMax=1e4 防 bevy 注释的「截断漏天光」）；⑤ irradiance atlas 每级一张 RGBA16F（res_l·10²，M10.1 无时间混合单份不 ping-pong）；⑥ `probe_viz.slang` 点色 = 探针法线方向八面体辐照度采样（法线 probeDepth 3-tap 重建 vs 内重算 + t9 SRV；「探针→眼睛」方向凸面恒 miss 冒烟实锤后改法线方向）；⑦ `--mode probe-viz` 注册（ProbeViz=16，缺省 Suzanne-materials.nmesh——TLAS 需 NFLB fallback，Suzanne.nmesh 无 fallback trace 降级）+ `tools/check-s10-probe.py` dots 门禁 + `example/s10-probe/` 卡（双后端基线 + json 侧车 + run.bat verify 八段）+ cases.json s10-probe 卡。UE 口径备注：UE 分两步（trace 8×8 → integrate 16×16）是为 importance sampling filtering，第一步不需要；Carrot 探针 = 世界缓存 cell 无本里程碑对应物，`read-screen-probes.slang` 留 M10.2 final gather 开工时精读。
+
+**提交版本**：master 本收口 commit（annotated tag `s10-probe`）。M10.1 非 S* 大版本收官 → 不建 milestone 分支、不 bump `kStage`（仍 S8.2）。
+
+**完成情况**：双后端 `build-m0.2.bat` + selftest **16/16 ×2**、Slang 产物 **86/86**（新增 probe_trace.cstrace 2 个，kArtifacts 76→78 三处登记）。`example/s10-probe/run.bat verify` **八段 ALL GREEN**（双后端 exit 0 + deviceErrors=0 + bytes 2/2 + 日志锚 `probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64` + near dx12/vulkan 39 像素 1 LSB 噪声档 frac=0.0075% + dots 门禁 skyBlue 347/346 + 红色级别色残留 0 + 负向 exit 非 0）。保形 spot：s10-probe 2/2 + s7.2/pulling 2/2 + s6.2/hiz-toggle-front 2/2 + s9-reference/reference 2/2 + s2.0/lod-l5 2/2 + s3.2/dag-top 2/2 全 **bytes**。`server.py --check` exit 0（stage=S8.2 version=s8.2）。Q4 冻结面 0 新增独立 GBuffer 资源（viz 法线重建用已有 probeDepth_，零新增纹理）。
+
+**踩坑情况**
+1. **CMake `_ENTRIES` 第二段是产物短后缀不是入口小写全名**：写 `csTraceProbe|cstraceprobe|compute` 产物拼成 `probe_trace.cstraceprobe` → SM6.6 白名单（`probe_trace.cstrace`）匹配不上 → dxc 报 `AllocateRayQuery not valid in cs_6_0`。修 = 短后缀 `cstrace`（tlas_probe.cs 口径）。
+2. **traceSet 必须 `tlasReady_` 门控懒建**：`tlas_` null（无 RT / 资产无 NFLB fallback）时 `createBindingSet` 必败 → probeFailed_ 永久停机。修 = tlasReady_ 才建 set，未就绪时 trace dispatch 跳过（probe-place 布点不受影响，与 shadow 模式降级口径同款）。
+3. **viz 采样漏乘探针格基址**：`loadIrradAtlas(level, octT+1)` 少了 `probeTexel·(octRes+2)` 基址 → 全部读成 (0,0) 格的天空 texel → 点全黑。修 = 全局 texel = `probeTexel·10 + octT + 1`。
+4. **viz 采样方向口径**：「探针→眼睛」在凸面上恒 miss（画面全天空蓝无信息量）→ 改探针法线方向（probeDepth 3-tap 重建），自检「朝天亮=天空 miss 蓝、朝暗处黑=hit 阴影」成立；空旷场景表面法线多朝天 → 蓝点为主 + 猴头间遮挡方向暗点，物理正确。
+5. **编码门禁**：Write 工具写 run.bat 落 LF-only → regression 跑前 `check-bat-encoding.py --fix` 转 CRLF（M9.2 同款坑二次）。
+
+**下一步**：S10 M10.2 Final Gather（每像素找最近 4 同级探针 → 八面体图按方向插值 → UE 双线性 corner × 平面深度权重公式）；`read-screen-probes.slang`（Carrot final gather）开工时精读；M10.1 的 irradiance atlas 直接作为 gather 输入；Q4 冻结面维持；`kStage` 仍 S8.2。
+
+## PT M-PT4：E1 rate 区间驱动 + E2 渐变颜色 colorCurve（feat/particles 轨道，2026-11-11，tag `particles-pt4`）
+
+**动作**：批次开工（E1/E2/E5/R1 四项提名，用户拍板 Q1=b 拆 M-PT4/M-PT5、Q2=a E5 per-particle、Q3=b 实例流 48→64B——后两项归 M-PT5）→ 拍板写回 `EFFECTS-STATUS.md`/`PARTICLES-PLAN.md` → **决策前置实读**：Carrot `ParticleEmitter.cpp`（rateError 确定性累加器，本项目 spawnAccum_ floor 口径保留）/ bevy（无官方粒子）/ UE `NiagaraDataInterfaceColorCurve`（FRichCurve 逐通道曲线 = 曲线驱动是标准能力）+ vendored Effekseer 权威参数面（`Effekseer.AllTypeColor.h` type2 Easing = `easing_color` 三次曲线、type4 Gradient = ≤8+8 key `GetColor` 分段线性 × intensity）→ 落码：① E1 运行时——`loadNfx` 去均值降级（`rateMin/rateSpan`），step 每帧从 **rateSeq_ 专用 pcg 序列**采样（与 spawnSeq_ 粒子流完全独立）；span=0 时 `rateMin + rnd*0 = rateMin` IEEE 恒等，存量 7 份 .nfx 全定值实测 → pt0~pt3 基线零漂移；转换器本就写真 min/max 零改动。② E2——.nfx 可选 `render.colorCurve`（colorKeys/alphaKeys 0..255、t∈[0,1] 非降序、运行时 /255 归一），CPU 采样填实例流（端点 clamp 分段线性，Effekseer GetColor 同构），**PS 零改动**；v1 线性路径逐字保留；转换器收 Easing（start/end 定值+RGBA，三次曲线烘焙 17 键）+ Gradient（intensity 全等折进色值直映射），HSVA/随机 start/end/非均匀 intensity/乱序 key/FCurve exit 2；selftest 增往返+老格式兼容+4 类畸形拒绝。
+
+**提交版本**：`feat/particles` M-PT4 提交（annotated tag `particles-pt4`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建 + selftest 16/16 ×2、Slang 74/74（particles shader 未动）；vfx-tools selftest 双份 PASS（增 colorCurve 段）；ctest `p-mpt` 双后端 2/2（until-pass:3）。正例资产 2 份（e1_rate_range [60,120]/s、e2_gradient 三关键帧红→绿→蓝）+ 负例 1 份（e_bad_colorcurve 空 alphaKeys）。`run.bat verify` exit 0：双后端 pair ×2 + e2 DX12 确定性逐字节（MD5 b5b747b8…）+ 双后端锚点 alive=146/101 同值 + 双负向。回归 **pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 + pt4 4/4 全 bytes ALL GREEN**（22 张存量基线零重拍）。`server.py --check` exit 0（kStage 仍 S8.2）。cases.json particles-pt4 卡（tag 字段齐，python json 规范写入）。A1 命中率抽查：仓内 6 份 .efkefc → 3 转换 OK 参数不变、3 exit 2 全为结构性别名（多 sprite/GPU 粒子），E1/E2 放宽不改变命中面；官方工具包不在盘，A1 全量复扫随下次取包一并。
+
+**踩坑情况**
+1. **schema 单位口径自摆乌龙**：转换器写 0..255（与 colorStart 同单位）而运行时首版按 0..1 校验 → e2 正例被拒。统一为「schema 0..255、运行时校验后 /255」。
+2. **python json.dump 未关句柄**：`json.dump(obj, open(...))` 后紧跟 `open(...,'a')` 追加换行，缓冲未刷 → 文件截断，viewer 加载失败静默回落 legacy（alive=567 暴露）。必须 with 块写整文件。
+3. **越界读自纠**：colorStart/colorEnd 折算初版写 `(&f[1])[c]` c 到 3——colorKeys 只有 {t,r,g,b} 四元，index 3 越界；alpha 必须取自 alphaKeys。提交前自查抓出。
+4. **树边界踩线一次**：一条探针命令漏 `cd` → 主树 exe + 探针 PNG 落主树 out/（§7.7 闸防的是脚本入口，裸命令不设防）；发现后显式点名清理三份 PNG 并 `git status --porcelain -- out/` 核零残留。教训：**wt 会话每条裸命令都要带 cd 前缀，勿依赖 cwd 粘性**。
+
+**下一步**：M-PT5（E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B，**pt0~pt3 全量基线重拍预算**，拍板已齐）；R4 软粒子 depth fade 归主线协调（T0 setSharedDepth 后接口现成，主线会话单独 claim）。merge 回 master 待收口后与 M-PT5 一并拍板。
+
+## PT M-PT5：E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B（feat/particles 轨道，2026-11-11，tag `particles-pt5`）
+
+**动作**：M-PT4 收口同日接续（坑位已 claim）→ 拍板沿用 M-PT4 收口前已齐的 Q2=a（E5 per-particle 实例流字段）/ Q3=b（48→64B float4 对齐 + spare）→ **决策前置实读**：vendored Effekseer `Effekseer.Rotation.h/.cpp`（八型参数面：None/Fixed/PVA/Easing/AxisPVA/AxisEasing/FCurve/RotateToViewpoint/Velocity；**加载链无度→弧度转换，CalculateRotation 直接吃弧度 = .nfx 弧度口径权威依据**）+ 本仓实例流/VS 现状（progressMisc.xy 已被 flipbook 帧号占用、zw 写 0 预留；spawn 端 RNG 是**派生式** `particleHash(s*5u+slot)` 非流式——决定新槽占位方案）→ 落码：① 实例流 48→64B——progressMisc.z=angle（弧度）/ .w=每粒子 Y/X 比、misc2[4]=spare（E3/E4/E8 免二次布局级重拍）；SSBO `sizeof(ParticleGpu)` 自适应零改动。② VS——无 branch 2D 旋转矩阵（cos/sin 作用 corner；旋转只作用几何角点，uv/flipUv 绑 quad 局部坐标→贴图随 quad 转、软圆盘径向对称不转）+ per-instance sizeY（CB g_params.z 退役，CB 布局不动）。③ spawn/step——新随机槽 `s*7u+0x100u+{0,1,2}` 派生 angle/angVel/ratioY（**与旧 5 槽输入空间永不相交：2s=slot-256 无解**→存量字段公式一字不动）；step 端 `angle += angVel*dt`（angVel=0 IEEE 不变）。④ 转换器——Rotation 收 None/Fixed（Position.Z）/PVA（rotation/velocity.z 区间；x/y 非零、accel 非零、RefEq exit 2）+ Scaling PVA 的 y 区间（X 定值、velocity/accel 非零 exit 2）；selftest 增旋转/sizeYRange 往返 + 5 类畸形拒绝。⑤ 正例资产——e5_spin（**ArrowNE.png 程序化生成非对称箭头贴图**，纯 zlib/struct 手写 PNG；Particle01 径向对称旋转不可辨的教训）+ r1_sizey；负例 e_bad_ang/e_bad_sizey。
+
+**提交版本**：`feat/particles` M-PT5 提交（annotated tag `particles-pt5`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建 + selftest 16/16 ×2；vfx-tools selftest 双份 PASS（增 rot/sizeYRange 段）；ctest `p-mpt` 双后端 2/2（until-pass:3）。**零漂移双保险兑现：pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 全 bytes 逐字节同——「全量基线重拍预算」零消耗，22 张存量基线一张没重拍**（angle=0→cos=1/sin=0 IEEE 恒等 + w=旧 ratioY 同值 float→cy*w 逐位同 cy*z + RNG 旧槽不动，三链条各自闭环）。正例 alive=51（30/s×1.667s=50 理论命中）双后端同值；e5 DX12 确定性 MD5 01abd003… 逐字节同；`run.bat verify` exit 0（双后端 pair ×2 + 确定性 + 锚点 + 三负向）；`server.py --check` exit 0（kStage 仍 S8.2）。cases.json particles-pt5 卡 2 用例（规范写入）。
+
+**踩坑情况**
+1. **Effekseer 字段名大小写不一致**：`ParameterRotationPVA` 用小写 `rotation/velocity/acceleration`，`ParameterScalingPVA` 用 PascalCase `Position/Velocity/Acceleration`；`RefMinMax` 是 `Min/Max` 大写——照 Rotation 抄 Scaling 编译三连错，vendored 头为准逐个核对。
+2. **selftest 测试代码自身 bug**：expectRejectRot 分发 `key[0]=='r'` 判 render 段，sizeYRange 首字母是 's' → 畸形用例错进 emitter 段 → 「sizeYRange short accepted」假阳性；修正为 `'s'`。
+3. **验收画面可辨性**：E5 首版用 Particle01（径向对称发光圆）旋转完全不可见——生成非对称箭头贴图 ArrowNE.png 才让 per-particle 旋转可见；R1 首版粒子重叠成团——稀疏化（rate 30）+ 缩小 size 后形状差异可辨。教训：**正例资产必须先论证「该特性在此贴图/密度下肉眼可辨」**。
+4. **负例 acceptance failed 误判**：`--nfx: malformed` 是 error 级日志 → `errorCount()=1` → viewer acceptance 行必报——**负例固有行为非回归**（error 日志本身就是负例断言目标），与 M-PT4 同款，run.bat findstr 管道只断言 log 锚。
+
+**下一步**：批次 E1/E2/E5/R1 四项全收官。R4 软粒子 depth fade 归主线协调（T0 `setSharedDepth` 后接口现成，主线会话单独 claim）；E3/E4/E8 用 misc2 spare 扩展不再触发布局级重拍；merge 回 master 待用户拍板（与 M-PT4 一并）。

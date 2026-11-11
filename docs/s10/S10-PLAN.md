@@ -1,7 +1,7 @@
 # S10 详细开发路线图：屏幕探针一跳 GI
 
 > 对应总路线 `docs/ROADMAP.md` 的 S10。预计 4 个里程碑、业余时间约 2 周。**P5 最难段的开始。**
-> Lumen Screen Probe：在屏幕可见点上稀疏布探针，每探针打 1 条射线存八面体辐照度图，final gather 逐像素插值。先做一跳（直接天光+直光面反弹一次），世界缓存 S11 再补多跳。
+> Lumen Screen Probe：在屏幕可见点上稀疏布探针，每探针存八面体辐照度图（每 texel 一条方向射线），final gather 逐像素插值。先做一跳（直接天光+直光面反弹一次），世界缓存 S11 再补多跳。
 
 ---
 
@@ -20,9 +20,15 @@
 
 ## M10.1 八面体图 + 探针追踪（2~3 天）
 
-- [ ] 八面体映射：方向→八面体 uv（14×14 或 16×16 texel 起步），集中一个 slang 头文件（S12 复用）
-- [ ] 探针 pass：每探针 1 条**余弦重要性采样**射线（本里程碑先 1 条/探针；多条平均留给降噪），命中 → 查命中点直光辐照度（用 M9.1 的直光）写入八面体图；未命中 → 天空色
-- [ ] `--mode probe-viz`：直接显示探针辐照度颜色
+> **M10.1 拍板记录（2026-11-11 用户拍板「按推荐的来」，三处参考实读：UE LumenScreenProbeGather.usf/.cpp + bevy initial_path.wesl + Carrot 无屏幕探针追踪对应物）**：
+> - **Q12-1 探针射线预算 = 每探针每八面体 texel 1 条方向射线（8×8=64 条/探针）**——UE 实锤口径（线程数 = 探针数 × TracingOctahedronResolution，默认 8）；PLAN 旧字面「每探针 1 条」与八面体图矛盾（1 条填不满图），勘误。备选（1 条+时间轮转多帧填图）否决——M10.1 就要历史混合且收敛慢。预算 340 探针 × 64 ≈ 2.2 万 trace/帧 + 命中点 shadow ray 同量级，M9.2 实跑 3900 万/帧无压力。
+> - **Q12-2 八面体分辨率 = trace 与存储同分辨率 8×8 + 1 texel border（10×10 存储 texel/探针）**；UE 分两步（trace 8×8 → integrate 16×16）是为 importance sampling filtering，第一步不需要。备选 16×16（射线 ×4 且无滤波意义）否决。
+> - **Q12-3 天空函数 = 解析渐变天穹**（zenith/horizon 两色 + 方向余弦混合，bevy atmosphere 简化版，落 slang 头 S10/S12 复用）：探针 miss 与 M10.2 天光共用；**渲染背景暂不替换**（仍 clearColor，M10.3 可选切换）。
+> - **已定项（复用既有拍板）**：命中点直光 = M9.1 口径（albedo × 主灯 shadow ray，每 texel 射线命中后再发 1 条阴影射线）；命中点 albedo = 统一模型色——如实降级备案：TLAS 的 BLAS 是 M9.1 S3 fallback 104-tri 粗代理，primitive→细材质查不了（M7.2 GPUMaterial 表挂真网格簇）；探针辐照度 atlas = 每级一张 RGBA16F atlas（每探针 10×10 格），**M10.1 不做时间混合**（单份不 ping-pong，降噪归 M10.3/S14）；射线走 M8 RayQuery compute + M9.x TLAS 惯例；`--mode probe-viz` 复用 M10.0 dots 管线（点色改按「探针→眼睛」方向采样八面体辐照度，probe-place 保持级别色点保形）。
+
+- [ ] 八面体映射：方向→八面体 uv（**8×8 texel + 1 texel border，按 Q12-2**），集中一个 slang 头文件（S12 复用）
+- [ ] 探针 pass：每探针每 texel 1 条方向射线（**按 Q12-1，64 条/探针**），命中 → 查命中点直光辐照度（M9.1 口径 shadow ray）写入八面体图；未命中 → 天空渐变色（**按 Q12-3**）
+- [ ] `--mode probe-viz`：直接显示探针辐照度颜色（点色 = 八面体图按视线方向采样）
 
 **自检**：探针颜色方向合理（朝天亮、朝暗处黑），天光渐变正确。tag：`s10-probe`。
 
