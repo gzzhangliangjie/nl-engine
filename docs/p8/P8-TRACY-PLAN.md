@@ -119,11 +119,11 @@
 ### M-TR1 内存占用 + 泄漏检查
 
 **做什么**：
-1. 内存钩子：编 `client/TracyOverride.cpp`（全局 `operator new/delete` 钩子，一把覆盖全进程含 STL）——对应 bevy `trace_tracy_memory` 同款思路。
-2. **覆盖口径**：Tracy memory 只覆盖 **CPU 侧分配**（经过全局 new/delete 的部分）；NVRHI 显存/堆分配不经过全局 new 的不在此列——这正是 §2.5 K3「显存占用」是另一口径的原因，两者不混。
+1. 内存钩子：**引擎侧薄封装** `core/src/profiler_memory.cpp`（仅 `NL_TRACY=ON` 编入），自定义全局 `operator new/delete`（含 aligned 版），内部 `malloc/free` + `TracyAllocS(ptr,size,16)` / `TracyFreeS(ptr,16)` 上报（显式 depth 才有调用栈，`TRACY_CALLSTACK` 默认 0）。⚠️ **实测更正（2026-11-11 vendoring 时）**：Tracy **0.15 不自带全局 new/delete 钩**——`public/client/TracyOverride.cpp` 只剩 Linux `dlclose` 覆盖，全 `public/` 内 `operator new` 零命中；原计划的「编 TracyOverride.cpp」是旧版印象，作废。上游伞形 `TracyClient.cpp` 已含该文件，无需单独编译。见 `thirdparty/tracy/VENDOR.md`「0.15 实测要点」。
+2. **覆盖口径**：新/delete 钩覆盖 CPU 侧经全局分配器的部分（含 STL）；**NVRHI 显存/堆分配不经过全局 new 的不在此列**——这正是 §2.5 K3「显存占用」是另一口径的原因，两者不混。
 3. 泄漏口径：进程退出时的**存活分配残留清单**即泄漏候选（Tracy Memory 面板按调用栈归因）；Windows callstack 归因走 dbghelp（PDB 在旁即带行号，同 ASan 手册经验）。
 4. 分工写死：Tracy memory = 运行期曲线 + 退出残留归因；**CRT debug heap（`_CrtSetDbgFlag`）保留为兜底**——MSVC ASan 无 LSan 是本项目实测（`docs/ASAN-DIAGNOSIS.md` §4），Tracy 也不能替代双保险，只是主通道换 Tracy。
-5. 纪律核对：Tracy 0.15 文档明确 memory 上报需在锁内进行（release notes 实录），operator new 钩子路径本身满足；job 多线程分配归因到线程。
+5. 纪律核对：Tracy 0.15 文档明确 memory 上报需在锁内进行（release notes 实录）；job 多线程分配归因到线程。
 
 **验收判据**：
 - GUI Memory 面板看到实时分配/释放曲线（截图）；
@@ -167,7 +167,7 @@
 ## 6. 风险与坑
 
 1. **协议版本漂移**：GUI/client 成对升级，VENDOR.md 记死配对版本。
-2. **全局 new/delete 钩的重入**：TracyOverride 钩内不得触发再分配路径（库内已处理；我们侧禁止在全局 new 钩外再包一层分配）。job system 自有分配器若绕过全局 new，需逐个补 `TracyAlloc` 点——M-TR1 实测时核对。
+2. **全局 new/delete 钩的重入（自实现，非上游）**：`profiler_memory.cpp` 内上报路径不得再触发分配（只调 `malloc/free` + Tracy 的 MemAlloc/MemFree，禁止构造 std:: 容器 / 拼字符串）；job system 自有分配器若绕过全局 new，需逐个补 `TracyAllocS` 点——M-TR1 实测时核对。
 3. **退出残留 ≠ 全是真泄漏**：单例/静态池的存活分配（如世界缓存 GPU flat hashmap 的 CPU 侧）会出现在残留清单，需要人工分辨「有意存活」；TOOLS-GUIDE 里给白名单口径。
 4. **0.15 新行为**：memory 事件归因到虚拟 fiber 线程（release notes）——多线程分配归因读数时注意口径变化。
 5. **ON 构建的样本开销**：zone 埋点有纳秒级开销，性能基准（S4 沿用的基准）一律 OFF 构建跑，避免把探针开销算进基线。
