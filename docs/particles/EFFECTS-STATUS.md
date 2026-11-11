@@ -25,8 +25,8 @@ CPU 固定步长模拟（1/60s，pcg 确定性流） → 32B 实例流 → insta
 
 | 环节 | 能力 | 状态 |
 |---|---|---|
-| 发射 | 定点发射、rate/life 定值、box 初速 min/max 逐轴、常加速度 | ✅ |
-| 渲染 | instanced billboard（X/Y 定值尺寸 + sizeY 非方形 per-emitter 比例）、alpha/additive 双管线（懒建变体）、出生→消亡线性色、fadeIn/fadeOut | ✅ |
+| 发射 | 定点发射、rate 区间按帧随机采样（E1 ✅）/定值、life 定值、box 初速 min/max 逐轴、常加速度 | ✅ |
+| 渲染 | instanced billboard（X/Y 定值尺寸 + sizeY 非方形 per-emitter 比例）、alpha/additive 双管线（懒建变体）、出生→消亡线性色、fadeIn/fadeOut、渐变 colorCurve（E2 ✅） | ✅ |
 | 贴图 | texture 字段消费、basename → `assets/efx/textures/`、RGBA8_UNORM 采样 + CPU box-filter mip 链、缺失回退软圆盘 | ✅ |
 | 序列帧 | flipbook 网格贴图（固定步长 once/loop/reverse，帧号 CPU 折算） | ✅ |
 | 混合 | alpha blend / additive（One/One） | ✅ |
@@ -42,11 +42,11 @@ CPU 固定步长模拟（1/60s，pcg 确定性流） → 32B 实例流 → insta
 
 | # | 功能点 | 状态 | 差什么 | 改动面 | 触发场景 |
 |---|---|---|---|---|---|
-| E1 | rate 区间驱动（min≠max 随机） | ⚠️ 取均值 | step 里 per-frame 发射概率随机化（RNG 序列要新占位防串流） | 小 | 吃到真实样例后发射密度失真明显时 |
-| E2 | easing/渐变颜色（ColorAll Easing/Gradient） | ❌ | .nfx schema v2 加 colorCurve 字段（关键帧数组或 easing 参数对）+ CPU 采样或 PS 曲线 | 中 | 烟雾/火焰类样例颜色形态要求高 |
+| E1 | rate 区间驱动（min≠max 随机） | ✅ M-PT4（rateSeq_ 专用 pcg 序列按帧采样；span=0 IEEE 恒等零漂移） | — | 小 | 吃到真实样例后发射密度失真明显时 |
+| E2 | easing/渐变颜色（ColorAll Easing/Gradient） | ✅ M-PT4（.nfx 可选 colorCurve，CPU 采样 PS 零改动；Easing 烘焙 17 键 / Gradient 直映射，子集边界见 VFX-TOOLS-GUIDE 映射表） | — | 中 | 烟雾/火焰类样例颜色形态要求高 |
 | E3 | PVA accel 随机范围 | ❌ | accel 折 min/max 盒进模拟（nfx 路径已有盒初速先例） | 小 | 动态感样例 |
 | E4 | 缩放生命周期曲线（ScalingType PVA/Easing/FCurve） | ❌ | 实例流或 CB 加 scale 曲线；现只有硬编码收缩 | 中 | 爆炸类「先大后小」样例 |
-| E5 | 旋转（2D rotation / PVA/Easing/FCurve） | ❌ | billboard 加角度（CB 标量或实例流扩字段）+ 转换器放宽 | 中 | 碎片/纸屑类样例 |
+| E5 | 旋转（2D rotation / PVA/Easing/FCurve） | 🔨 M-PT5 立项（2026-11-11 拍板 Q2=a：per-particle 实例流） | 实例流扩字段（与 R1 合并一次扩）+ 转换器放宽 | 中 | 碎片/纸屑类样例 |
 | E6 | UV 动画 / flipbook 序列帧 | ✅ M-PT3（转换器侧） | .nfx `render.flipbook` 可选字段（v1 向后兼容）；StartFrame 随机 / LERP 插值仍 exit 2 | 中 | 序列帧火焰/烟雾（最常见的贴图特效形态） |
 | E7 | 发射位置扩展（sphere/circle/line/model 表面） | ❌ | spawnPoint 扩为 spawn 形状描述 + step 内按形状采样 | 小~中 | 场景型特效（水面涟漪、体积光尘） |
 | E8 | 生成 timing（Burst≠1 / MaxGeneration≠1） | ❌ | spawnSeq 流加爆发段/世代循环 | 小 | 一次性爆炸 + 世代刷新 |
@@ -61,7 +61,7 @@ CPU 固定步长模拟（1/60s，pcg 确定性流） → 32B 实例流 → insta
 
 | # | 功能点 | 状态 | 差什么 | 改动面 | 触发场景 |
 |---|---|---|---|---|---|
-| R1 | per-particle 随机 sizeY | ⚠️ per-emitter 定值比例（CB 标量 g_params.z） | 实例流 32→40B 加 sizeY 字段 + shader 换 per-instance 读 | 小 | 单发射器内粒子形状要随机分布时 |
+| R1 | per-particle 随机 sizeY | 🔨 M-PT5 立项（2026-11-11 拍板 Q3=b：实例流 48→64B float4） | 实例流扩字段（与 E5 合并一次扩）+ shader 换 per-instance 读 + 转换器收 sizeY 随机区间 | 小 | 单发射器内粒子形状要随机分布时 |
 | R2 | 贴图 mip 链 | ✅ M-PT3 | CPU box-filter 全链 + setMipLevels + 按层 writeTexture + mipFilter linear；PS 不动（硬件 tri） | 小 | 粒子远离相机场景后闪烁可见 |
 | R3 | sRGB/gamma 正确性 | ⚠️ 原样采样（全链无 gamma 口径下一致） | 引擎引入 HDR/离屏 RT 时统一重议（**不是粒子单侧能改**） | 大（引擎级） | post-chain / 离屏 HDR RT 建成后 |
 | R4 | 软粒子（depth fade 防硬裁剪边） | ❌ | PS 读深度缓冲做边缘衰减——依赖深度图暴露给粒子 pass | 中 | 粒子贴地/穿插模型出现硬切边时 |
@@ -92,8 +92,9 @@ CPU 固定步长模拟（1/60s，pcg 确定性流） → 32B 实例流 → insta
 | `particles-pt1` | vfx-tools 转换器 + .nfx v1 + 运行时加载端 | `6363180` |
 | `particles-pt2` | 贴图采样端 + sizeY 非方形 | `285716b` |
 | `particles-pt3` | 贴图 mip 链 + flipbook 序列帧（E6/R2/R7） | `6859e8e` |
+| `particles-pt4` | E1 rate 区间驱动 + E2 渐变颜色 colorCurve | （本轨收口 tag） |
 
-feat/particles（M-PT0~PT3）merge 回 master 待拍板；未做项速查与实施要点见第 5 节。
+feat/particles（M-PT0~PT3）已全部合入 master（2026-11-11 核实）；M-PT4/M-PT5 立项与拍板记录见 `PARTICLES-PLAN.md`，未做项速查与实施要点见第 5 节。
 
 ## 5. 未做项实施要点（冷启动速查）
 
@@ -119,8 +120,8 @@ feat/particles（M-PT0~PT3）merge 回 master 待拍板；未做项速查与实�
 
 ### E5 · 旋转 billboard（中，shader 保形风险最高的一项）
 
-- **实施要点**：CB 标量角度（per-emitter 定值起步）或实例流扩字段（per-particle，可与 R1 合并扩）；
-  VS 里 2D 旋转矩阵作用于 corner。
+- **拍板（2026-11-11 Q2=a）**：per-particle 实例流字段，与 R1 的 sizeY **同次扩布局（只扩一次、只重拍一轮）**；per-emitter CB 标量方案否决（会复制 M-PT1「取均值」降级，与 E1 区间驱动初衷矛盾）。
+- **实施要点**：实例流扩字段（新 float4：sizeY + angle + spare）+ VS 里 2D 旋转矩阵作用于 corner。
 - **⚠️ 保形路线**：照 M-PT3 flipbook 的成功先例——**统一无 branch 公式 + angle=0 逐位恒等**：
   `cos(0)=1, sin(0)=0` 时旋转矩阵退化为 `(x*1 - y*0, x*0 + y*1)`，IEEE 精确恒等；禁 if-else
   分支（M-PT2 实锤 VS branch 会被 dxc select 化漂基线）。落码后先跑 pt0/pt2 基线逐位对照再继续。
@@ -134,10 +135,10 @@ feat/particles（M-PT0~PT3）merge 回 master 待拍板；未做项速查与实�
   必须整体重立粒子基线或寻找恒等写法，开工前先做单变量对照实验。
 - **验收思路**：StartFrame 随机正例（同屏多粒子起始帧不同）+ 非 flipbook 用例逐位零回归。
 
-### R1 · per-particle 随机 sizeY（小，可并进 E5 的实例流扩字段）
+### R1 · per-particle 随机 sizeY（小，已并进 E5 的实例流扩字段）
 
-- **实施要点**：实例流 32→40B 加 sizeY 字段（或与 E5 旋转角度合并一次扩到 40B），shader 换
-  per-instance 读替代 CB 标量 `g_params.z`；转换器收 sizeY 随机区间进模拟。
+- **拍板（2026-11-11 Q3=b）**：实例流 48→64B（新 float4 = sizeY + angle + 2 spare，16B stride 对齐；spare 留给 E3/E4/E8，避免二次布局级重拍）。本节旧文「32→40B」为 pt3 前旧口径。
+- **实施要点**：shader 换 per-instance 读替代 CB 标量 `g_params.z`；转换器收 sizeY 随机区间进模拟；sizeY/角度随机各自**新占 pcg 位**。
 - **⚠️ 前置代价**：实例流布局变更 = **全部粒子基线重拍**（pt0/pt1/pt2/pt3 全量），这不是回归是预期，
   但要有重拍预算；per-emitter 定值路径（现网）必须逐位不变。
 - **验收思路**：随机 sizeY 正例（同屏粒子高矮不一）+ ratioY=1.0 老用例重拍后与旧基线 diff 仅帧号水印级差异。

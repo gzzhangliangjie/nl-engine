@@ -8159,6 +8159,88 @@
      "command": "viewer.exe --selftest"
     }
    ]
+  },
+  {
+   "id": "particles-pt4",
+   "label": "M-PT4",
+   "tag": "particles-pt4",
+   "name": "E1 rate 区间驱动 + E2 渐变颜色 colorCurve（M-PT4）",
+   "date": "2026-11-11",
+   "summary": "M-PT4（particles 轨道第五里程碑，E1+E2，2026-11-11 拍板 Q1=b 拆 M-PT4/M-PT5）：① E1 rate 区间——.nfx emit.rate 本是 [min,max] 二元组，M-PT1~PT3 在 loadNfx 折均值，本里程碑起按帧从 rate 专用 pcg 序列（rateSeq_，与 spawnSeq_ 粒子流完全独立，新占位禁复用纪律）采样 [rateMin, rateMin+rateSpan]；span=0 时 rateMin + rnd*0 = rateMin（IEEE 精确恒等），存量全定值 .nfx 与旧均值口径逐位同 → pt0~pt3 基线零漂移（转换器本就写真 min/max，无 schema 改动）。② E2 渐变颜色——.nfx 可选 render.colorCurve（colorKeys [t,r,g,b] + alphaKeys [t,a]，0..255 与 colorStart 同单位，t ∈ [0,1] 非降序，运行时 /255 归一），采样全在 CPU 填实例流时（端点 clamp 分段线性，Effekseer GetColor 同构），PS 零改动零 shader 保形风险；v1 线性路径逐字保留。转换器收 Effekseer ColorAll Easing（start/end 定值+RGBA 模式，三次曲线 d=A·t³+B·t²+C·t 烘焙 17 关键帧）与 Gradient（≤8+8 key 直映射，intensity 全等折进色值；非均匀 intensity/乱序 key/HSVA/per-particle 随机 start/end exit 2），FCurve 仍 exit 2。selftest 增 colorCurve 往返+老格式兼容+4 类畸形拒绝。",
+   "acceptance": [
+    "E1 正例画面：e1_rate_range.nfx（rate [60,120]/s）喷泉粒子可见，alive=146 稳态（理论 E[rate]=90/s × 1.667s = 150，区间 [100,200] 命中），deviceErrors=0 双后端",
+    "E2 正例画面：e2_gradient.nfx 三关键帧红→绿→蓝渐变，同屏三色相粒子共存可见，alive=101 稳态（60/s × 1.667s 理论命中）",
+    "确定性：e2 DX12 同参两跑 PNG 逐字节同（MD5 b5b747b8bc75febbd53d67e5dac688b4）；双后端 alive 同值 146/101",
+    "负向：e_bad_colorcurve.nfx（空 alphaKeys）→ '--nfx: .nfx malformed colorCurve object (fallback to legacy fountain)' 不炸帧；缺省无 --nfx 无任何 nfx 日志行",
+    "基线零回归：particles-pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 全逐字节（rate span=0 IEEE 恒等 + colorCurve 缺省走原路径）",
+    "example/particles-pt4 归位（e1-rate/e2-gradient × 双后端 4 基线）+ run.bat verify 全绿（双后端 pair + 确定性 + 锚点 + 双负向）+ cases.json 卡 2 用例"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "e1-rate-hud",
+     "name": "E1 rate 区间驱动：[60,120]/s 随机发射 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "rate 区间按帧随机采样（rateSeq_ 专用 pcg 序列）；alive=146 落在理论区间 [100,200]。span=0 定值路径 IEEE 恒等零回归。",
+     "baselines": {
+      "dx12": "example/particles-pt4/particles-e1-rate-hud-dx12.png",
+      "vulkan": "example/particles-pt4/particles-e1-rate-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/e1_rate_range.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.6",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "particles steady: alive=146 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/e1_rate_range.nfx --hud ...",
+     "cwd": "{root}"
+    },
+    {
+     "id": "e2-gradient-hud",
+     "name": "E2 渐变颜色：三关键帧红→绿→蓝 colorCurve + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "colorCurve CPU 采样（端点 clamp 分段线性），PS 不动；出生 alpha 120 让红段可见。DX12 同参两跑逐字节同（MD5 b5b747b8...）。",
+     "baselines": {
+      "dx12": "example/particles-pt4/particles-e2-gradient-hud-dx12.png",
+      "vulkan": "example/particles-pt4/particles-e2-gradient-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/e2_gradient.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.6",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "particles steady: alive=101 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/e2_gradient.nfx --hud ...",
+     "cwd": "{root}"
+    }
+   ]
   }
  ]
 }

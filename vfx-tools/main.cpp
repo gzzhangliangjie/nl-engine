@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <array>
 
 using json = nlohmann::json;
 
@@ -173,6 +174,16 @@ struct NfxDoc
         float offsetU = 0.0f, offsetV = 0.0f; // Position.x/.y
         float cellW = 1.0f, cellH = 1.0f;     // Position.w/.h
     } flipbook;
+
+    // M-PT4 E2：渐变颜色（ColorAll Easing 烘焙 / Gradient 直映射；缺省 = 无）。
+    // 关键帧 {t, v...}，t ∈ [0,1] 非降序；v 单位 0..255（与 colorStart/colorEnd
+    // 同单位，运行时 /255 归一化）。
+    struct ColorCurve
+    {
+        bool enabled = false;
+        std::vector<std::array<float, 4>> colorKeys; // {t, r, g, b}
+        std::vector<std::array<float, 2>> alphaKeys; // {t, a}
+    } colorCurve;
 };
 
 json nfxToJson(const NfxDoc& d, const std::string& sourceName)
@@ -208,6 +219,17 @@ json nfxToJson(const NfxDoc& d, const std::string& sourceName)
             {"offset", {d.flipbook.offsetU, d.flipbook.offsetV}},
             {"cell", {d.flipbook.cellW, d.flipbook.cellH}},
         };
+    }
+    // M-PT4 E2：可选 colorCurve（缺省 = 无，v1 老文件零改动兼容）
+    if (d.colorCurve.enabled)
+    {
+        json ck = json::array();
+        for (const auto& k : d.colorCurve.colorKeys)
+            ck.push_back({k[0], k[1], k[2], k[3]});
+        json ak = json::array();
+        for (const auto& k : d.colorCurve.alphaKeys)
+            ak.push_back({k[0], k[1]});
+        j["render"]["colorCurve"] = {{"colorKeys", ck}, {"alphaKeys", ak}};
     }
     return j;
 }
@@ -288,6 +310,59 @@ bool nfxFromJson(const json& j, NfxDoc& d, std::string& err)
         d.flipbook.offsetV = fb["offset"][1].get<float>();
         d.flipbook.cellW = fb["cell"][0].get<float>();
         d.flipbook.cellH = fb["cell"][1].get<float>();
+    }
+    // M-PT4 E2：可选 colorCurve 读回（校验与运行时 loadNfx 同口径：t ∈ [0,1]
+    // 非降序、键值 0..255、数组长度恰为 4/2）
+    if (r.contains("colorCurve"))
+    {
+        const json& cc = r["colorCurve"];
+        if (!cc.is_object() || !cc.contains("colorKeys") || !cc.contains("alphaKeys") ||
+            !cc["colorKeys"].is_array() || !cc["alphaKeys"].is_array() ||
+            cc["colorKeys"].empty() || cc["alphaKeys"].empty())
+        {
+            err = "bad colorCurve object";
+            return false;
+        }
+        auto parseKeys = [](const json& arr, int nch, std::vector<std::array<float, 4>>& out4,
+                            std::vector<std::array<float, 2>>& out2, bool isColor) -> bool {
+            float prevT = -1.0f;
+            for (const json& k : arr)
+            {
+                if (!k.is_array() || static_cast<int>(k.size()) != nch + 1)
+                    return false;
+                const float t = k[0].get<float>();
+                if (!(t >= 0.0f && t <= 1.0f) || t < prevT)
+                    return false;
+                if (isColor)
+                {
+                    std::array<float, 4> v = {t, 0.0f, 0.0f, 0.0f};
+                    for (int c = 0; c < 3; c++)
+                    {
+                        const float x = k[c + 1].get<float>();
+                        if (!(x >= 0.0f && x <= 255.0f))
+                            return false;
+                        v[c + 1] = x;
+                    }
+                    out4.push_back(v);
+                }
+                else
+                {
+                    const float a = k[1].get<float>();
+                    if (!(a >= 0.0f && a <= 255.0f))
+                        return false;
+                    out2.push_back({t, a});
+                }
+                prevT = t;
+            }
+            return true;
+        };
+        if (!parseKeys(cc["colorKeys"], 3, d.colorCurve.colorKeys, d.colorCurve.alphaKeys, true) ||
+            !parseKeys(cc["alphaKeys"], 1, d.colorCurve.colorKeys, d.colorCurve.alphaKeys, false))
+        {
+            err = "colorCurve keys out of range";
+            return false;
+        }
+        d.colorCurve.enabled = true;
     }
     return true;
 }
@@ -507,9 +582,105 @@ NfxDoc extract(const Effekseer::Effect* effect, Unsupported& unsup)
             }
         }
     }
+    else if (ac.type == AllTypeColorParameter::Easing)
+    {
+        // M-PT4 E2：Easing 颜色子集——start/end 定值 + RGBA 模式，d = A·t³+B·t²+C·t
+        // （easing_color::setValueToArg 同式）烘焙成 17 个关键帧（对 8bit 输出量化
+        // 误差可忽略）。HSVA 模式与 per-particle 随机 start/end（单发射器关键帧
+        // 无法表达逐粒子曲线）仍子集外 exit 2。
+        const auto& ec = ac.easing.all;
+        if (ec.start.mode != COLOR_MODE_RGBA || ec.end.mode != COLOR_MODE_RGBA)
+            unsup.add("easing color mode != RGBA (HSVA)");
+        else if (!(ec.start.max == ec.start.min) || !(ec.end.max == ec.end.min))
+            unsup.add("easing color start/end is random per particle (baked curve = fixed only)");
+        else
+        {
+            constexpr int kBake = 17;
+            const Color s = ec.start.min, e = ec.end.min;
+            auto lerpCh = [s, e](int ch, float dd) {
+                const float s0 = (&s.R)[ch], e0 = (&e.R)[ch];
+                const float v = s0 + (e0 - s0) * dd;
+                return v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v);
+            };
+            for (int i = 0; i < kBake; ++i)
+            {
+                const float t = float(i) / float(kBake - 1);
+                const float dd = ec.easingA * t * t * t + ec.easingB * t * t + ec.easingC * t;
+                d.colorCurve.colorKeys.push_back(
+                    {t, lerpCh(0, dd), lerpCh(1, dd), lerpCh(2, dd)});
+                d.colorCurve.alphaKeys.push_back({t, lerpCh(3, dd)});
+            }
+            d.colorCurve.enabled = true;
+            const auto& f = d.colorCurve.colorKeys.front();
+            const auto& l = d.colorCurve.colorKeys.back();
+            const auto& fa = d.colorCurve.alphaKeys.front();
+            const auto& la = d.colorCurve.alphaKeys.back();
+            for (int c = 0; c < 3; c++)
+            {
+                d.colorStart[c] = int(f[c + 1] + 0.5f);
+                d.colorEnd[c] = int(l[c + 1] + 0.5f);
+            }
+            d.colorStart[3] = int(fa[1] + 0.5f);
+            d.colorEnd[3] = int(la[1] + 0.5f);
+        }
+    }
+    else if (ac.type == AllTypeColorParameter::Gradient_)
+    {
+        // M-PT4 E2：Gradient 颜色子集——直映射。GetColor = lerp(color)×lerp(intensity)
+        // 分段线性（端点 clamp，0 color 键 = 白、0 alpha 键 = 1）：intensity 全等时
+        // 折进色值逐键精确；非均匀 intensity 是二次曲线，线性关键帧无法精确表达。
+        const auto& g = *ac.gradient;
+        bool uniform = true;
+        for (int i = 1; i < g.ColorCount; i++)
+            if (g.Colors[i].Intensity != g.Colors[0].Intensity)
+                uniform = false;
+        auto sorted = [](const auto* keys, int n) {
+            for (int i = 1; i < n; i++)
+                if (keys[i].Position < keys[i - 1].Position)
+                    return false;
+            return true;
+        };
+        if (!uniform)
+            unsup.add("gradient color intensity non-uniform (linear keyframes cannot express lerped-color x lerped-intensity)");
+        if (!sorted(g.Colors.data(), g.ColorCount) || !sorted(g.Alphas.data(), g.AlphaCount))
+            unsup.add("gradient keys unsorted (GetColor lower_bound assumes order)");
+        if (unsup.empty())
+        {
+            const float k = g.Colors[0].Intensity;
+            if (g.ColorCount == 0)
+            {
+                d.colorCurve.colorKeys.push_back({0.0f, 255.0f, 255.0f, 255.0f});
+            }
+            else
+            {
+                for (int i = 0; i < g.ColorCount; i++)
+                    d.colorCurve.colorKeys.push_back(
+                        {g.Colors[i].Position, g.Colors[i].Color[0] * k * 255.0f,
+                         g.Colors[i].Color[1] * k * 255.0f, g.Colors[i].Color[2] * k * 255.0f});
+            }
+            if (g.AlphaCount == 0)
+                d.colorCurve.alphaKeys.push_back({0.0f, 255.0f});
+            else
+                for (int i = 0; i < g.AlphaCount; i++)
+                    d.colorCurve.alphaKeys.push_back(
+                        {g.Alphas[i].Position, g.Alphas[i].Alpha * 255.0f});
+            d.colorCurve.enabled = true;
+            const auto& f = d.colorCurve.colorKeys.front();
+            const auto& l = d.colorCurve.colorKeys.back();
+            const auto& fa = d.colorCurve.alphaKeys.front();
+            const auto& la = d.colorCurve.alphaKeys.back();
+            for (int c = 0; c < 3; c++)
+            {
+                d.colorStart[c] = int(std::min(255.0f, std::max(0.0f, f[c + 1])) + 0.5f);
+                d.colorEnd[c] = int(std::min(255.0f, std::max(0.0f, l[c + 1])) + 0.5f);
+            }
+            d.colorStart[3] = int(std::min(255.0f, std::max(0.0f, fa[1])) + 0.5f);
+            d.colorEnd[3] = int(std::min(255.0f, std::max(0.0f, la[1])) + 0.5f);
+        }
+    }
     else
     {
-        unsup.add("color type != Fixed/Random (Easing/FCurve/Gradient)");
+        unsup.add("color type != Fixed/Random/Easing/Gradient (FCurve)");
     }
 
     // 尺寸四角：Default 加载期已归一化为 ±0.5；Fixed 取轴对齐宽高
@@ -660,6 +831,17 @@ int runSelftest()
     src.flipbook.offsetV = 0.5f;
     src.flipbook.cellW = 0.25f;
     src.flipbook.cellH = 0.5f;
+    // M-PT4 E2：colorCurve 往返（三 RGB 键 + 两 alpha 键，0..255 单位）
+    src.colorCurve.enabled = true;
+    src.colorCurve.colorKeys = {
+        {0.0f, 255.0f, 90.0f, 40.0f},
+        {0.5f, 60.0f, 200.0f, 255.0f},
+        {1.0f, 255.0f, 255.0f, 255.0f},
+    };
+    src.colorCurve.alphaKeys = {
+        {0.0f, 0.0f},
+        {1.0f, 255.0f},
+    };
 
     json j = nfxToJson(src, "roundtrip.efkefc");
     NfxDoc back;
@@ -678,7 +860,13 @@ int runSelftest()
               back.flipbook.enabled && back.flipbook.frameLength == 3.0f &&
               back.flipbook.countX == 4 && back.flipbook.countY == 2 &&
               back.flipbook.loopType == 1 && back.flipbook.offsetV == 0.5f &&
-              back.flipbook.cellW == 0.25f && back.flipbook.cellH == 0.5f;
+              back.flipbook.cellW == 0.25f && back.flipbook.cellH == 0.5f &&
+              // M-PT4 E2：colorCurve 往返
+              back.colorCurve.enabled && back.colorCurve.colorKeys.size() == 3 &&
+              back.colorCurve.alphaKeys.size() == 2 &&
+              back.colorCurve.colorKeys[1] ==
+                  std::array<float, 4>{0.5f, 60.0f, 200.0f, 255.0f} &&
+              back.colorCurve.alphaKeys[1] == std::array<float, 2>{1.0f, 255.0f};
     if (!ok)
     {
         printf("nfx selftest: FAIL (roundtrip field mismatch)\n");
@@ -694,18 +882,48 @@ int runSelftest()
         return 1;
     }
 
-    // 自证 2b：老格式兼容（无 flipbook 字段 → enabled=false）
+    // 自证 2b：老格式兼容（无 flipbook/colorCurve 字段 → enabled=false）
     {
         json legacy = nfxToJson(src, "legacy.efkefc");
         legacy["render"].erase("flipbook");
+        legacy["render"].erase("colorCurve");
         NfxDoc back2;
         std::string err2;
-        if (!nfxFromJson(json::parse(legacy.dump()), back2, err2) || back2.flipbook.enabled)
+        if (!nfxFromJson(json::parse(legacy.dump()), back2, err2) || back2.flipbook.enabled ||
+            back2.colorCurve.enabled)
         {
             printf("nfx selftest: FAIL (legacy no-flipbook parse: %s)\n",
-                   err2.empty() ? "flipbook enabled" : err2.c_str());
+                   err2.empty() ? "flipbook/colorCurve enabled" : err2.c_str());
             return 1;
         }
+    }
+
+    // 自证 2c：colorCurve 畸形拒绝（t 越界 / t 非降序 / 键长不对 / 空数组）
+    {
+        auto expectReject = [](const char* tag, json ccPatch) {
+            json bad = nfxToJson(NfxDoc{}, "cc.efkefc");
+            bad["render"]["colorCurve"] = ccPatch;
+            NfxDoc back3;
+            std::string err3;
+            if (nfxFromJson(json::parse(bad.dump()), back3, err3))
+            {
+                printf("nfx selftest: FAIL (colorCurve %s accepted)\n", tag);
+                return false;
+            }
+            return true;
+        };
+        bool pass =
+            expectReject("t out of range", json{{"colorKeys", json::array({json::array({-0.5f, 0, 0, 0})}),
+                                                 {"alphaKeys", json::array({json::array({0.0f, 255})})}}}) &&
+            expectReject("t unsorted", json{{"colorKeys", json::array({json::array({0.8f, 0, 0, 0}),
+                                                                      json::array({0.2f, 0, 0, 0})})},
+                                            {"alphaKeys", json::array({json::array({0.0f, 255})})}}) &&
+            expectReject("short key", json{{"colorKeys", json::array({json::array({0.0f, 0, 0})})},
+                                           {"alphaKeys", json::array({json::array({0.0f, 255})})}}) &&
+            expectReject("empty alphaKeys", json{{"colorKeys", json::array({json::array({0.0f, 0, 0, 0})})},
+                                                 {"alphaKeys", json::array()}});
+        if (!pass)
+            return 1;
     }
 
     // 自证 3：SKFE 魔数识别（拿真加载路径前面的工厂检查逻辑自证）——
@@ -720,7 +938,7 @@ int runSelftest()
         }
     }
 
-    printf("nfx selftest: PASS (json roundtrip + bad magic + SKFE probe)\n");
+    printf("nfx selftest: PASS (json roundtrip + bad magic + legacy compat + colorCurve malformed + SKFE probe)\n");
     return 0;
 }
 

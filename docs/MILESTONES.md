@@ -2506,3 +2506,19 @@
 5. **overlay 深度遮蔽**：首版自建 t0Depth_ 使场景深度离开 backend depth_ → gl5/particles/drive-m3 三族 FAIL（overlay 对空深度测试，遮挡全失效）。修复 = 深度共享（方案见上）。教训：**「已知行为差异仅调试开关开启时有」的评估要拿回归卡核对，不能凭印象**（gl5/drive-m3 用例真开了 debugLines/particles）。
 
 **下一步**：S10 VSM / M10.0 消费 `velocity_`（T3 写入：velocity.slang + 双帧矩阵 + unjittered）；S12 M12.0 消费 history ping-pong（T4）。Q4「GBuffer 落盘形态」与 S10/S12 需求一起拍（维持推迟）。`kStage` 仍 S8.2。
+
+## PT M-PT4：E1 rate 区间驱动 + E2 渐变颜色 colorCurve（feat/particles 轨道，2026-11-11，tag `particles-pt4`）
+
+**动作**：批次开工（E1/E2/E5/R1 四项提名，用户拍板 Q1=b 拆 M-PT4/M-PT5、Q2=a E5 per-particle、Q3=b 实例流 48→64B——后两项归 M-PT5）→ 拍板写回 `EFFECTS-STATUS.md`/`PARTICLES-PLAN.md` → **决策前置实读**：Carrot `ParticleEmitter.cpp`（rateError 确定性累加器，本项目 spawnAccum_ floor 口径保留）/ bevy（无官方粒子）/ UE `NiagaraDataInterfaceColorCurve`（FRichCurve 逐通道曲线 = 曲线驱动是标准能力）+ vendored Effekseer 权威参数面（`Effekseer.AllTypeColor.h` type2 Easing = `easing_color` 三次曲线、type4 Gradient = ≤8+8 key `GetColor` 分段线性 × intensity）→ 落码：① E1 运行时——`loadNfx` 去均值降级（`rateMin/rateSpan`），step 每帧从 **rateSeq_ 专用 pcg 序列**采样（与 spawnSeq_ 粒子流完全独立）；span=0 时 `rateMin + rnd*0 = rateMin` IEEE 恒等，存量 7 份 .nfx 全定值实测 → pt0~pt3 基线零漂移；转换器本就写真 min/max 零改动。② E2——.nfx 可选 `render.colorCurve`（colorKeys/alphaKeys 0..255、t∈[0,1] 非降序、运行时 /255 归一），CPU 采样填实例流（端点 clamp 分段线性，Effekseer GetColor 同构），**PS 零改动**；v1 线性路径逐字保留；转换器收 Easing（start/end 定值+RGBA，三次曲线烘焙 17 键）+ Gradient（intensity 全等折进色值直映射），HSVA/随机 start/end/非均匀 intensity/乱序 key/FCurve exit 2；selftest 增往返+老格式兼容+4 类畸形拒绝。
+
+**提交版本**：`feat/particles` M-PT4 提交（annotated tag `particles-pt4`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建 + selftest 16/16 ×2、Slang 74/74（particles shader 未动）；vfx-tools selftest 双份 PASS（增 colorCurve 段）；ctest `p-mpt` 双后端 2/2（until-pass:3）。正例资产 2 份（e1_rate_range [60,120]/s、e2_gradient 三关键帧红→绿→蓝）+ 负例 1 份（e_bad_colorcurve 空 alphaKeys）。`run.bat verify` exit 0：双后端 pair ×2 + e2 DX12 确定性逐字节（MD5 b5b747b8…）+ 双后端锚点 alive=146/101 同值 + 双负向。回归 **pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 + pt4 4/4 全 bytes ALL GREEN**（22 张存量基线零重拍）。`server.py --check` exit 0（kStage 仍 S8.2）。cases.json particles-pt4 卡（tag 字段齐，python json 规范写入）。A1 命中率抽查：仓内 6 份 .efkefc → 3 转换 OK 参数不变、3 exit 2 全为结构性别名（多 sprite/GPU 粒子），E1/E2 放宽不改变命中面；官方工具包不在盘，A1 全量复扫随下次取包一并。
+
+**踩坑情况**
+1. **schema 单位口径自摆乌龙**：转换器写 0..255（与 colorStart 同单位）而运行时首版按 0..1 校验 → e2 正例被拒。统一为「schema 0..255、运行时校验后 /255」。
+2. **python json.dump 未关句柄**：`json.dump(obj, open(...))` 后紧跟 `open(...,'a')` 追加换行，缓冲未刷 → 文件截断，viewer 加载失败静默回落 legacy（alive=567 暴露）。必须 with 块写整文件。
+3. **越界读自纠**：colorStart/colorEnd 折算初版写 `(&f[1])[c]` c 到 3——colorKeys 只有 {t,r,g,b} 四元，index 3 越界；alpha 必须取自 alphaKeys。提交前自查抓出。
+4. **树边界踩线一次**：一条探针命令漏 `cd` → 主树 exe + 探针 PNG 落主树 out/（§7.7 闸防的是脚本入口，裸命令不设防）；发现后显式点名清理三份 PNG 并 `git status --porcelain -- out/` 核零残留。教训：**wt 会话每条裸命令都要带 cd 前缀，勿依赖 cwd 粘性**。
+
+**下一步**：M-PT5（E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B，**pt0~pt3 全量基线重拍预算**，拍板已齐）；R4 软粒子 depth fade 归主线协调（T0 setSharedDepth 后接口现成，主线会话单独 claim）。merge 回 master 待收口后与 M-PT5 一并拍板。

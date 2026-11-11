@@ -65,6 +65,44 @@ compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积�
 - 验收 ✅：flipbook 画面多帧共存（红0/橙/绿/青/蓝/紫数字清晰正立——V 轴口径与 cell 对齐画面实证）+ alive=101 稳态 + deviceErrors=0；flipbook DX12 同参两跑 PNG 逐字节同；双后端粒子采样区域逐位同（diff 仅 HUD 文字区）；pt0 6/6 + pt1 10/10 全逐字节零回归 + pt2 4/4（重拍后）；ctest DX12/VULKAN 100%（until-pass:3，竞态卡重试即过）；run.bat verify exit 0；server --check OK。交代：`example/particles-pt3/` 2 基线 + run.bat + cases.json 卡 1 用例 + pt2 flame 卡 note 补重拍记录。
 - 已知边界（登记表见 EFFECTS-STATUS.md）：flipbook LERP 帧间插值（双采样混合）未支持；StartFrame 随机未支持；flipbook 测试贴图无真实美术素材（PIL 网格足够验口径）。
 
+## M-PT4 · E1 rate 区间 + E2 easing/渐变颜色（✅ 收官 2026-11-11，tag `particles-pt4`）
+
+### 拍板记录（2026-11-11 用户「按照推荐来」）
+- **Q1=b**：拆 M-PT4（E1+E2，零基线波及先收口）+ M-PT5（E5+R1，扩字段+全量重拍隔离）。
+- **Q2=a**：E5 旋转走 per-particle 实例流字段（M-PT5）。
+- **Q3=b**：实例流 48→64B float4（M-PT5，spare 留 E3/E4/E8）。
+
+### 内容
+- **E1 rate 区间驱动（小）**：vfx-tools 收 Effekseer `EmitSpeed` min/max → `.nfx` `emit.rateMin/rateMax`（v1 向后兼容，缺省 = 现行定值 `rate`）；模拟 step 的「每帧固定发射数」改为**整数部分 + 小数部分概率**随机化——**新占 pcg 流位**（确定性纪律：禁复用初速/寿命位）；rate 定值路径逐字保留零回归。
+- **E2 easing/渐变颜色（中）**：`.nfx` 可选 `render.colorCurve` 关键帧数组 `{t,rgba}`（照 M-PT3 flipbook 可选字段向后兼容模式，v1 「出生→消亡线性」= 两点曲线特例，magic 不变老文件零改动）；采样**全在 CPU**（每帧填实例流 colorAlpha 时按曲线插值），**PS 不动**——零 shader 保形风险。转换器收 Effekseer ColorAll 的 Easing/Gradient 子集；FCurve 等子集外显式 exit 2（负例清单式报错）。
+
+### 验收判据（拍板后按此放行）——✅ 已全部达成（2026-11-11 收口）
+- E1 正例 e1_rate_range.nfx（rate [60,120]/s）喷泉可见，alive=146 稳态（理论 E[rate]×life=150，区间 [100,200] 命中）；E2 正例 e2_gradient.nfx 三关键帧红→绿→蓝同屏三色相共存，alive=101（60/s×1.667s 理论命中）✅
+- 转换器负例与畸形：selftest 往返 + 老格式兼容 + 4 类畸形拒绝全 PASS；e_bad_colorcurve.nfx 运行时 `'--nfx: .nfx malformed colorCurve object (fallback to legacy fountain)'` 不炸帧 ✅
+- rate 定值 / v1 线性色老路径逐位零回归：pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 全 bytes ALL GREEN（存量 7 份 .nfx 全 rate=[60,60] 实测，span=0 IEEE 恒等坐实零漂移）✅
+- 确定性：e2 DX12 同参两跑 PNG 逐字节同（MD5 `b5b747b8bc75febbd53d67e5dac688b4`）；双后端 alive 同值 146/101 ✅
+- 交代：`example/particles-pt4/` 4 基线 + run.bat verify exit 0（pair×2 + 确定性 + 锚点 + 双负向）+ cases.json 卡 2 用例（tag 字段齐）+ VFX-TOOLS-GUIDE schema/映射表增补 + A1 抽查（仓内 6 样例：3 OK 参数不变 / 3 结构性 exit 2，命中面不变）✅
+- ctest `p-mpt` 双后端 2/2（until-pass:3）；`server.py --check` exit 0 ✅
+
+### 边界
+- 不动实例流布局（48B 保持）、不动 shader；StartFrame 随机 / LERP 插值仍 exit 2；FCurve 旋转/缩放曲线仍 exit 2（归 M-PT5 及后续）。
+
+## M-PT5 · E5 旋转 billboard（per-particle）+ R1 per-particle sizeY（🔨 立项 2026-11-11，拍板齐备）
+
+### 内容
+- **实例流 48→64B（Q3=b）**：新 float4 = `{sizeY, angle, spare0, spare1}`；shader 换 per-instance 读替代 CB 标量 `g_params.z`；per-emitter 定值路径（ratioY 定值 / angle=0）**逐位恒等**——shader 保形铁律：统一无 branch 公式，`cos(0)=1/sin(0)=0` IEEE 恒等，禁 branch/lerp 化改写（M-PT2 实锤）。VS 2D 旋转矩阵作用于 corner。
+- **E5 转换器子集（Q2=a）**：Rotation 收 PVA 随机区间（初角/角速度 min/max）；Easing/FCurve 旋转仍 exit 2。sizeY 随机区间同步收进 `.nfx`（R1）。
+- **RNG**：sizeY、角度随机各自**新占 pcg 位**。
+- **⚠️ 全量重拍预算（用户已列入）**：实例流扩字段 = pt0~pt3 全部基线重拍，属预期非回归；per-emitter 定值用例重拍后与旧基线 diff 应仅帧号水印级差异，逐张核对后更新版本卡。
+
+### 验收判据
+- 旋转正例（贴图粒子 visibly 转动）+ 随机 sizeY 正例（同屏高矮不一）+ angle=0/ratioY=1 重拍对照 + 双后端一致 + DX12 同参两跑逐字节。
+- pt0~pt3 重拍记录逐张落台账；run.bat verify 全绿；cases.json 更新（规范写入）。
+- tag `particles-pt5`。
+
+### 边界
+- R4 软粒子 depth fade **不在本轨**：深度图暴露是主渲染管线侧改动（T0 `setSharedDepth` 后接口现成），按归属声明走主线协调，主线会话单独 claim；本轨一行不碰。粒子直画 swapchain 保持。
+
 ## 风险登记
 
 - 半透明粒子与场景 blend 次序：起步单发射器无排序问题；多发射器/大粒子后的排序策略到时另议。

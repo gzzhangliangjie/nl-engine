@@ -11,8 +11,10 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nl::renderer::detail {
 
@@ -148,7 +150,11 @@ private:
 
     // 模拟参数面（M-PT0 = 内置喷泉常数；M-PT1 起 .nfx 覆写 box 发射分支）。
     struct Params {
-        float rate = 300.0f;                       // 粒子/秒
+        float rate = 300.0f;                       // 粒子/秒（legacy 锚定；nfx 路径用 rateMin/rateSpan）
+        // M-PT4 E1：nfx rate 区间驱动。.nfx emit.rate 本是 [min,max] 二元组，
+        // M-PT1~PT3 在 loadNfx 折均值——本里程碑起按帧随机采样（rateSpan=0 =
+        // 定值，IEEE 恒等：rateMin + rnd*0 = rateMin，存量全定值基线零漂移）。
+        float rateMin = 300.0f, rateSpan = 0.0f;
         float lifeMin = 1.6f, lifeSpan = 0.7f;     // 寿命 [lifeMin, lifeMin+lifeSpan) s
         float spawn[3] = {0.0f, -0.55f, 0.0f};     // 发射点（legacy 锥形发射用）
         float speedMin = 2.0f, speedSpan = 1.0f;   // 锥形初速幅值（legacy）
@@ -161,6 +167,18 @@ private:
                                                    // legacy/方形恒 1.0，CB g_params.z 下发）
         float colorStart[4] = {1.0f, 0.85f, 0.35f, 1.0f}; // nfx 颜色 t=0
         float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
+        // M-PT4 E2：渐变颜色曲线（.nfx 可选 render.colorCurve；enabled=false =
+        // 无，走 colorStart/colorEnd 线性 lerp 原路径逐字保留）。采样全在 CPU
+        // （step 填实例流时），PS 零改动——零 shader 保形风险。键值归一化 0..1
+        // （.nfx 0..255 / 255），t ∈ [0,1] 非降序（loadNfx 从严校验），采样端点
+        // clamp（Effekseer GetColor 同构）。Easing 三次曲线由转换器烘焙成关键帧
+        // （17 样本 ≤ 8bit 输出量化误差），Gradient 直映射（intensity 折进色值，
+        // 仅全等 intensity 收子集）。
+        struct ColorCurve {
+            bool enabled = false;
+            std::vector<std::array<float, 4>> colorKeys; // {t, r, g, b}
+            std::vector<std::array<float, 2>> alphaKeys; // {t, a}
+        } colorCurve;
         float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
         bool  additive = false;                    // nfx blend（false = alpha blend）
         // M-PT3：flipbook 序列帧（.nfx 可选字段；enabled=false = 无，UV 恒等 [0,1]）。
@@ -204,6 +222,8 @@ private:
     std::vector<ParticleGpu>  gpuData_;    // 每帧重填的绘制流（alive 顺序）
     float                     spawnAccum_ = 0.0f;  // 发射率积分残差（固定 dt 下确定性）
     std::uint32_t             spawnSeq_   = 0;     // RNG 流序号（pcg 输入）
+    std::uint32_t             rateSeq_    = 0;     // M-PT4 E1：rate 采样专用 pcg 序列（与
+                                                // spawnSeq_ 完全独立——新占位禁复用纪律）
     std::uint32_t             aliveCount_ = 0;
 
     Params                     params_;     // 模拟参数面（loadNfx 覆写）
