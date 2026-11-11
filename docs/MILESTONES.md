@@ -2681,3 +2681,23 @@
 7. Write 工具生成 run.bat 是 LF-only（第三次踩）→ `check-bat-encoding.py --fix example/nav-n5` 转 CRLF。
 
 **下一步**：M-N6（Q1=B：E1 ECS `NavAgent` 组件 + viewer `--nav-crowd` 多 Agent 可见渲染）同会话接续，按 PLAN 文末 Q6-1~Q6-4 执行；`feat/pathfinding` merge 回 master 仍待用户单独拍板。
+
+## M-N6：Q1=B E1 ECS NavAgent + NavAgentSystem + viewer --nav-crowd 多 Agent 可见渲染（feat/pathfinding，2026-11-11，tag `nav-n6`）
+
+**动作**：用户「直接在这里做」就地解除 M-N4 收官留痕里「Q1=B 未采纳 / 须另起开工闸」范围闸 → 同一会话完成 Q6-1~Q6-4 一次拍板写回 `P8-NAV-PLAN.md`、删净挂账句（待拍板 0 / 已拍板 2 / 冻结面清单）→ 落码：① `core/include/nl/scene/NavAgentComponent.hpp` + `core/src/nav/NavAgentComponent.cpp`（POD 组件：crowd 参数 + spawn/target/pos + `serialise`/`deserialise` + duplicate 换 owner 深拷；不 include `nl/nav`，避免 `scene -> nav` 反向依赖）；② `core/include/nl/nav/NavAgentSystem.hpp` + `core/src/nav/NavAgentSystem.cpp`（`SignedSystem<NavAgentComponent, TransformComponent>`，EntityID 升序固定注册顺序，dt 累加器固定步长，每步 `Crowd::step()` 后把 `npos` 写回组件 `pos` 与 `TransformComponent::local.position`）；③ `Crowd.hpp/.cpp` 新增 `begin/addAgent/step/agentPosition/running` 增量链路（`addAgent` 先 `findNearestPoly` 校 start/target ref），**`run()` 本体一行未改**；④ `core/include/nl/nav/Arena.hpp/.cpp` 另立 `makeArenaGeometry()`（逐顶点/逐三角形复制工具侧 `syntheticScene()`，为锁 M-N0~M-N5 字节基线故意保留两份）；⑤ `renderer/include/nl/renderer/nav_panel.hpp` + `renderer/src/nav_panel.cpp` 追加定长 POD crowd 字段（默认全 0）与 crowdMode 叠加绘制（8 色彩色圆点 + 轨迹折线 + 绿色目标十字），非 crowdMode 分支逐像素原样；⑥ `viewer/main.cpp` 新增 `--nav-crowd` / `--nav-crowd-agents` / `--nav-crowd-steps` 独立模式（ECS World + 8 组 spawn + `navPanelSync` crowd 分支 + 帧循环 tick）；⑦ `nav-tools ecs-crowd` 子命令 + 18 项 selftest 锚点 + 9 条 ctest + `example/nav-n6/run.bat` A~F + cases.json `nav-n6` 13 卡（2 张 viewer 卡用 case 级 `exe` 覆盖）。`nl/scene` 既有三头、`hud.cpp`、`renderer.cpp`、shader、`kStage` 一行未改；vendored 上游零编辑、零新增入库文件。
+
+**提交版本**：`feat/pathfinding` M-N6 提交（annotated tag `nav-n6`）。A 类并行轨道，不 bump `kStage`、不进渲染回归、不重拍既有截图基线；3D 场景实体级 Agent 渲染按 Q6-2 拍板不属本轮范围。
+
+**完成情况**：双后端全量 BUILD OK + viewer selftest 16/16 ×2；`ctest -R "m-n[0123456]-nav" --repeat until-pass:3` **50/50 ×2**；`regression --only nav-n6` **26/26 ALL GREEN**（bytes 26 / near 0 / FAIL 0），七张老卡 nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 + nav-n3 22/22 + nav-n3-panel 8/8 + nav-n4 22/22 + nav-n5 24/24 **全 bytes 零回归**（`NavPanel::State` 新字段默认全 0、非 crowdMode 画布逐像素不变，实锤）；`example/nav-n6/run.bat` DX12/VULKAN **A~F ALL GREEN**（4 agent `steps=600 / arrived=4/4 / transform writeback 4/4 / minPairDist 0.6003`，8 agent `writeback 8/8`）；双后端 `viewer-crowd-{DX12,VULKAN}.png` 284711 B / fnv64 `f8f6666063bbf554` **逐字节相同**；`server.py --check` exit 0（stage=S8.2，M9.0 口径只证明旧卡没回归）；`check-bat-encoding` 全仓 94 文件 0 违规。**Q1=B 强自证**：`nav-tools ecs-crowd` 的 `arena-crowd.ntraj` 28924 B / fnv64 `5cbf9ce63eb1b273` 与 `example/nav-n4/crowd-arena.ntraj` `fc /b` 逐字节相同（run.bat C 段机器断言），selftest 另有「ECS trace == Crowd::run point-by-point」逐点断言 —— 引擎集成版没有改变上游 `dtCrowd::update` 积分语义。冻结面（vendored 零编辑、`nav-n1`~`nav-n5` 与 `nav-n3-panel` 全部归档基线、`kStage` 仍 S8.2、外置编辑器、既有渲染回归）逐条兑现；`VENDOR.md` 已追加 M-N6 零新增入库留痕。
+
+**踩坑情况**
+1. **`Component` 构造吃 `Entity` 壳不是 `EntityID`**：首版 `NavAgentComponent(e.getID())` 编译 C2665（`size_t` 无法转 `Entity`），必须用 `World::newEntity` 返回的 `Entity e` 本身，与 viewer `--scene` 既有路径一致。
+2. **dt 累加器 float/double 精度不一致导致 600 帧只跑 599 步**：`CrowdConfig::dt` 是 `float`，系统侧 `fixedDt_` 存该 float 转 double（0.0166666675359…），帧侧若传 `1.0/60.0`（略小），累加器永远差一点。修法 = 两侧统一 `static_cast<double>(cfg.dt)`，viewer 与 nav-tools 各改一处。**这是确定性铁律，不是可容忍的浮点噪声。**
+3. **`ids_` 必须与 `crowdIdx_` 逐位对齐**：disabled 组件不注册进 Crowd，若留在写回表会把 agent i 的位置写到错误 Transform；init 单独收集 `active`，注册成功后 `ids_ = std::move(active)`。
+4. **合成 arena 几何故意保留两份**：工具侧 `syntheticScene()` 被 M-N0~M-N5 全部字节基线锁死，viewer 侧另立 `makeArenaGeometry()`；「一份共享函数」的工程洁癖会让老基线承担不必要风险。
+5. **`NavPanel::State` 新字段必须默认全 0**：crowdMode=false 时窗口标题/尺寸/控件/画布叠加严格原样，既有 `--nav-panel` 截图零重拍（七张老卡全 bytes 零回归实证）。
+6. **新增 ctest 后必须重新 configure 每个后端构建目录**：`add_test` 只在 configure 写进 `CTestTestfile.cmake`；M-N6 追加 9 条后 DX12 侧直接跑 ctest 仍报 41/41 旧清单，须双后端各跑一次 `scripts/build-m0.2.bat <BACKEND>` 触发 configure 才拿到 50/50 ×2。
+7. **`run.bat` LF-only（第四次踩）**：`check-bat-encoding.py --fix example/nav-n6` 转 CRLF 后全仓复检 0 违规。
+8. **展示台 viewer 卡必须 case 级 `exe` 覆盖**：`regression.py` 默认 `build/<backend>/nav-tools.exe`，2 张 viewer 卡要在 case 内显式写 `exe: {dx12: build/DX12/viewer.exe, vulkan: build/VULKAN/viewer.exe}`，否则拿工具 exe 跑 viewer 参数。
+
+**下一步**：M-N0~M-N6 七站全收官。`feat/pathfinding` merge 回 master 仍待用户单独拍板（基于 `991e36f`，主线已到 T0/S10，本轮不 merge、不制造跨树冲突）；3D 场景实体级 Agent 渲染若需要另立范围，非阻塞挂账。

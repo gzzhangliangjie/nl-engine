@@ -30,15 +30,20 @@ std::unique_ptr<NavPanel> NavPanel::create() {
 }
 
 void NavPanel::drawWindow(State& st) {
+    // M-N6：crowdMode 用独立窗口名，与既有 "NavMesh Debug" 互不干扰；
+    // 非 crowdMode 的标题 / 尺寸 / 全部控件严格保持 M-N2~M-N5 原样。
+    const char* title = st.crowdMode ? "NavMesh Crowd" : "NavMesh Debug";
     // 证据脚本展开障碍区时把窗口调高，并让 build params 收起，给俯视画布
     // 留出空间；默认（nav.obsPanel=0）仍严格是 M-N2 的 460x600 布局。
     ImGui::SetNextWindowSize(ImVec2(460.f, st.obsPanelOpen ? 700.f : 600.f),
                              ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("NavMesh Debug")) {
+    if (!ImGui::Begin(title)) {
         ImGui::End();
         return;
     }
 
+    // crowd 模式只画画布（NavMesh 线框 + 多 Agent 圆点 + 轨迹），不挂调参控件。
+    if (!st.crowdMode) {
     // ---- 阶段下拉（nl/nav 单一命名源；stageDirty 边沿 = 面板真实改动，
     // viewer 据此写回 cvar 并重收集图元）----
     int stage = st.stage;
@@ -111,6 +116,13 @@ void NavPanel::drawWindow(State& st) {
                 st.clearObstaclesRequested = true;
         }
         ImGui::Text("obstacles: %d   path: %s", st.obstacleCount, st.pathStatus);
+    }
+    }   // !st.crowdMode
+
+    if (st.crowdMode) {
+        ImGui::TextUnformatted(st.crowdStatus);
+        ImGui::Text("agents: %d   steps: %d   arrived: %d",
+                    st.crowdAgentCount, st.crowdStepCount, st.crowdArrived);
     }
 
     // ---- 俯视画布（x→右、z→下；与 nav-tools 同投影口径）----
@@ -234,6 +246,43 @@ void NavPanel::drawWindow(State& st) {
         dl->AddPolyline(pts, nPts, IM_COL32(30, 90, 220, 255), false, 2.5f);
         dl->AddCircleFilled(pts[0], 3.5f, IM_COL32(30, 90, 220, 255));
         dl->AddCircleFilled(pts[nPts - 1], 3.5f, IM_COL32(30, 160, 60, 255));
+    }
+
+    // ---- M-N6：多 Agent 可见渲染（仅 --nav-crowd；Q6-2 独立模式）----
+    // 复用同一 toScreen / ImDrawList：彩色折线 = 固定步长采样轨迹，绿十字 =
+    // 终点，彩色实心圆 = 当前 Agent（半径取组件 radius）。st.crowdMode=false
+    // 时整块不执行，M-N2~M-N5 画布逐像素零变化。
+    if (st.crowdMode) {
+        static const ImU32 kAgentCol[8] = {
+            IM_COL32(220, 40, 40, 255),  IM_COL32(30, 90, 220, 255),
+            IM_COL32(30, 160, 60, 255),  IM_COL32(160, 60, 190, 255),
+            IM_COL32(230, 140, 20, 255), IM_COL32(20, 160, 170, 255),
+            IM_COL32(120, 80, 20, 255),  IM_COL32(90, 90, 200, 255)
+        };
+        const int nA = st.crowdAgentCount > 16 ? 16 : st.crowdAgentCount;
+        for (int i = 0; i < nA; ++i) {
+            const ImU32 col = kAgentCol[i % 8];
+            int nt = st.crowdTrailCount[i];
+            if (nt > 32) nt = 32;
+            if (nt >= 2) {
+                ImVec2 pts[32];
+                for (int k = 0; k < nt; ++k)
+                    toScreen(st.crowdTrail[i][k][0], st.crowdTrail[i][k][1], pts[k]);
+                dl->AddPolyline(pts, nt, col, false, 2.f);
+            }
+            ImVec2 tp;
+            toScreen(st.crowdTargets[i][0], st.crowdTargets[i][1], tp);
+            dl->AddLine(ImVec2(tp.x - 4.f, tp.y), ImVec2(tp.x + 4.f, tp.y),
+                        IM_COL32(20, 130, 50, 255), 1.5f);
+            dl->AddLine(ImVec2(tp.x, tp.y - 4.f), ImVec2(tp.x, tp.y + 4.f),
+                        IM_COL32(20, 130, 50, 255), 1.5f);
+            ImVec2 ap;
+            toScreen(st.crowdAgents[i][0], st.crowdAgents[i][1], ap);
+            float r = st.crowdAgents[i][2] * scale;
+            if (r < 5.f) r = 5.f;   // 小场景下保证 Agent 圆点肉眼可辨
+            dl->AddCircleFilled(ap, r, col);
+            dl->AddCircle(ap, r, IM_COL32(255, 255, 255, 255), 0, 1.2f);
+        }
     }
     dl->PopClipRect();
     ImGui::End();

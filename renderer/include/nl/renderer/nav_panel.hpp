@@ -74,6 +74,20 @@ public:
         float obsDraw[8][3] = {};      // 每项 x, z, radius
         int   pathPointCount = 0;
         float pathPoints[32][2] = {};  // 每项 x, z
+
+        // ---- M-N6：--nav-crowd 独立模式（Q6-2 最小 hook）----
+        // 全 0 = M-N2~M-N5 面板布局逐字节不变；viewer 仅在 --nav-crowd 时
+        // 每帧回填。复用同一个 ImDrawList 俯视画布与 toScreen 投影，不新增
+        // HudFrame 字段、不改 renderer/shader/scene 主路径、不 bump kStage。
+        bool  crowdMode       = false;
+        int   crowdAgentCount = 0;
+        int   crowdStepCount  = 0;
+        int   crowdArrived    = 0;
+        char  crowdStatus[96] = {};
+        float crowdAgents[16][4] = {};      // 每项 x, z, radius, arrived(0/1)
+        float crowdTargets[16][2] = {};     // 每项 x, z
+        float crowdTrail[16][32][2] = {};   // 每 agent 最多 32 个采样点 x,z
+        int   crowdTrailCount[16] = {};
     };
 
     static std::unique_ptr<NavPanel> create();

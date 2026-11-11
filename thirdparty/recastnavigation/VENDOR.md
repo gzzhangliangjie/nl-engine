@@ -53,3 +53,9 @@ Intentionally **not** vendored：
 - **零新增入库文件、零上游编辑**：M-N5 的 off-mesh connection 全部消费**已入库** `Detour/` 的 `dtNavMeshCreateParams.offMeshCon*`（`DetourNavMeshBuilder.h:54-76`）、`dtOffMeshConnection`（`DetourNavMesh.h:224`）、`DT_OFFMESH_CON_BIDIR` 与 `DT_STRAIGHTPATH_OFFMESH_CONNECTION`；`DetourTileCache/` / `DetourCrowd/` 子集不变。
 - 上游 1.6.0 **无运行时 `addOffMeshConnection`**（`DetourNavMesh.h` 只有 `getOffMeshConnectionPolyEndPoints` / `getOffMeshConnectionByRef` 读 API），故链接必须烘焙期注入；UE 5.8.4 fork 的 `offMeshSegConCount`（segment connection）上游 1.6.0 不存在，本项目不抄、不模拟。
 - `VENDOR.md` 的锁定 commit `6dc1667f580357e8a2154c28b7867bea7e8ad3a7` 与 ZLib 授权结论均不变；本轮只扩自写集成层 `nl/nav` 与 `nav-tools`。
+
+## M-N6 留痕（2026-11-11，Q1=B E1 ECS + viewer 多 Agent）
+
+- **零新增入库文件、零上游编辑**：M-N6 的 `NavAgentSystem` 与 `Crowd` 增量驱动链只消费**已入库** `DetourCrowd/`（`dtCrowd::init` / `addAgent` / `requestMoveTarget` / `update` / `getAgent`）与 `Detour/`（`dtNavMeshQuery::findNearestPoly`），未新增任何上游文件、未改动任何 vendored TU；`Detour/` / `DetourTileCache/` / `DetourCrowd/` / `DebugUtils/` 子集均不变。
+- 上游 `dtCrowd::update(dt, debug)` 为单线程固定步长确定性积分（M-N4 开工闸已实读取证，全文无 RNG），这是 M-N6 「ECS 逐帧轨迹 == M-N4 `Crowd::run()` 逐点一致、`arena-crowd.ntraj` 与 `example/nav-n4/crowd-arena.ntraj` `fc /b` 逐字节相同」硬判据的基础；**`Crowd::run()` 本体一行未改**，M-N4 归档字节基线锁定。新增的 `begin/addAgent/step/agentPosition/running` 是对同一 `dtCrowd` API 的增量封装，不改变上游积分语义。
+- `VENDOR.md` 的锁定 commit `6dc1667f580357e8a2154c28b7867bea7e8ad3a7` 与 ZLib 授权结论均不变；本轮只扩自写集成层 `nl/nav`、`nl/scene`、`renderer/nav_panel`、`viewer`、`nav-tools`。

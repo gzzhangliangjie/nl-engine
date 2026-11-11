@@ -9374,6 +9374,226 @@
      "command": "nav-tools offmesh --nav <out>"
     }
    ]
+  },
+  {
+   "id": "nav-n6",
+   "label": "M-N6",
+   "name": "Q1=B 引擎集成：E1 ECS NavAgent + NavAgentSystem + viewer --nav-crowd",
+   "tag": "nav-n6",
+   "date": "2026-11-11",
+   "summary": "Q1=B 解除：新增 E1 ECS NavAgentComponent（crowd 参数 + target）与 NavAgentSystem（dt 累加器固定步长驱动 Crowd 增量链路，位置写回 Transform）；viewer --nav-crowd 独立模式复用 NavPanel 的 ImDrawList 俯视画布画 NavMesh 线框 + 多 Agent 圆点 + 轨迹。kStage 仍 S8.2，既有截图基线零重拍，3D 实体级 Agent 不属本轮范围。",
+   "acceptance": "nav-tools ecs-crowd 600 固定步 4/4 抵达、Transform 写回 4/4；ECS 轨迹与 M-N4 Crowd::run 逐点一致且 .ntraj 与 example/nav-n4/crowd-arena.ntraj 逐字节相同（fnv64 5cbf9ce63eb1b273）；selftest 18 项 M-N6 锚点；viewer 双后端 --nav-crowd 截图。run.bat A~F 与 regression --only nav-n6 双验。",
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：未知选项退出码 2",
+     "kind": "tool",
+     "note": "M-N6 子命令参数闸；用法错误退出 2（对齐展示台 expectExit 约定）。",
+     "args": [
+      "ecs-crowd",
+      "--bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown option",
+     "command": "nav-tools ecs-crowd --bogus"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N5 零回归 + 18 项 M-N6 锚点",
+     "kind": "tool",
+     "note": "新增锚点含组件 roundtrip / duplicate / 600 固定步 / Transform 写回 / ECS 与 Crowd::run 逐点一致 / .ntraj 字节一致 / 三类负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "ecs-arena",
+     "name": "ecs-crowd：4 ECS agent 对角穿越 600 固定步",
+     "kind": "tool",
+     "note": "Q3=A 口径：dt=1/60、600 步、agent 顺序固定；{out} 走临时路径不写仓库基线。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600",
+      "--trace",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result       : PASS",
+     "command": "nav-tools ecs-crowd --frames 600 --trace {out}"
+    },
+    {
+     "id": "ecs-world",
+     "name": "ECS World：4 实体 + 1 系统",
+     "kind": "tool",
+     "note": "实体由 World 按 <NavAgent, Transform> 签名推送给系统，系统不自扫（Carrot System 口径）。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "world        : entities=4 systems=1",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-steps",
+     "name": "dt 累加器：恰 600 个固定步",
+     "kind": "tool",
+     "note": "每步积分恒为 cfg.dt；帧侧与系统侧用同一个 float 值的 double 表示，避免 600 帧少跑一步。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "steps        : 600",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-writeback",
+     "name": "Q1=B 实质：Crowd 位置写回 Transform 4/4",
+     "kind": "tool",
+     "note": "每步把 npos 写回 NavAgentComponent::pos 与 TransformComponent::local.position，渲染/脚本消费同一份数据。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "transform    : writeback 4 / 4",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-parity",
+     "name": "抵达判定：4 / 4（与 M-N4 数值等价）",
+     "kind": "tool",
+     "note": "minPairDist 0.6003 m，与 M-N4 A 类工具版一致，RVO 生效。",
+     "args": [
+      "ecs-crowd",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived      : 4 / 4",
+     "command": "nav-tools ecs-crowd --frames 600"
+    },
+    {
+     "id": "ecs-eight",
+     "name": "规模锚：8 ECS agent 编队 + 写回 8/8",
+     "kind": "tool",
+     "note": "viewer 与工具共用 8 组 spawn/target 表；--agents 上限 8 由参数闸拒绝越界。",
+     "args": [
+      "ecs-crowd",
+      "--agents",
+      "8",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "transform    : writeback 8 / 8",
+     "command": "nav-tools ecs-crowd --agents 8 --frames 600"
+    },
+    {
+     "id": "ecs-bad-spawn",
+     "name": "负向：起点不在 NavMesh 必须显式拒绝",
+     "kind": "tool",
+     "note": "M-N4 踩坑同款：上游 addAgent 会静默收无路径 agent，封装层用独立 findNearestPoly 显式拒绝。",
+     "args": [
+      "ecs-crowd",
+      "--bad-spawn",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "not on navmesh",
+     "command": "nav-tools ecs-crowd --bad-spawn --frames 30"
+    },
+    {
+     "id": "ecs-dt-zero",
+     "name": "负向：dt=0 退出码 2",
+     "kind": "tool",
+     "note": "固定步长口径不允许变 dt / 零 dt。",
+     "args": [
+      "ecs-crowd",
+      "--dt",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "--dt must be in",
+     "command": "nav-tools ecs-crowd --dt 0"
+    },
+    {
+     "id": "ecs-agents-zero",
+     "name": "负向：agents=0 退出码 2",
+     "kind": "tool",
+     "note": "空 ECS World 无 NavAgent 实体，参数闸先拒绝。",
+     "args": [
+      "ecs-crowd",
+      "--agents",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "--agents must be in",
+     "command": "nav-tools ecs-crowd --agents 0"
+    },
+    {
+     "id": "viewer-crowd",
+     "name": "viewer --nav-crowd：独立 2D 画布多 Agent 可见渲染",
+     "kind": "tool",
+     "note": "Q6-2 最小 hook：复用 NavPanel 的 POD / ImDrawList 画布，零 renderer/shader/scene 主路径改动、零 kStage bump、零既有截图重拍。{out} 走临时路径。",
+     "args": [
+      "--nav-crowd",
+      "--frames",
+      "8",
+      "--nav-crowd-steps",
+      "75",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-crowd: final agents=4 steps=600 arrived=4",
+     "command": "viewer --nav-crowd --frames 8 --nav-crowd-steps 75 --size 1280x720 --screenshot",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     }
+    },
+    {
+     "id": "viewer-crowd-init",
+     "name": "viewer --nav-crowd：ECS 初始化锚",
+     "kind": "tool",
+     "note": "arena 合成几何 bake（12 polys）+ NavMesh 阶段 DebugPrims 线框；截图 8 帧 x 75 步 = 600 固定步。",
+     "args": [
+      "--nav-crowd",
+      "--frames",
+      "8",
+      "--nav-crowd-steps",
+      "75",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav-crowd: ECS agents=4 systems=1",
+     "command": "viewer --nav-crowd --frames 8 --nav-crowd-steps 75 --size 1280x720 --screenshot",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     }
+    }
+   ]
   }
  ]
 }

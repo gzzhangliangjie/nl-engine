@@ -209,3 +209,36 @@ add_test(NAME m-n5-nav-offmesh-bbox
 set_tests_properties(m-n5-nav-offmesh-bbox PROPERTIES WILL_FAIL TRUE)
 add_test(NAME m-n5-nav-offmesh-usage COMMAND nav-tools offmesh --bogus)
 set_tests_properties(m-n5-nav-offmesh-usage PROPERTIES WILL_FAIL TRUE)
+
+# ---- P8 M-N6: Q1=B E1 ECS NavAgent + NavAgentSystem + viewer --nav-crowd ----
+# 开工闸拍板 Q6-1..Q6-4：ECS 固定步长驱动 Crowd 增量链路 / 位置写回 Transform /
+# viewer 独立 2D 画布（零 kStage bump、零既有截图重拍）/ 新卡 run.bat + regression 双验。
+# 强自证：ECS .ntraj 与 example/nav-n4/crowd-arena.ntraj 逐字节一致（run.bat C 段）。
+add_test(NAME m-n6-nav-selftest COMMAND nav-tools selftest --verbose)
+set_tests_properties(m-n6-nav-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
+add_test(NAME m-n6-nav-ecs-crowd
+         COMMAND nav-tools ecs-crowd --frames 600
+                 --trace ${CMAKE_CURRENT_BINARY_DIR}/nav-n6-ecs.ntraj
+                 --png ${CMAKE_CURRENT_BINARY_DIR}/nav-n6-ecs.png --size 640)
+set_tests_properties(m-n6-nav-ecs-crowd PROPERTIES
+    PASS_REGULAR_EXPRESSION "result       : PASS")
+add_test(NAME m-n6-nav-ecs-steps COMMAND nav-tools ecs-crowd --frames 600)
+set_tests_properties(m-n6-nav-ecs-steps PROPERTIES
+    PASS_REGULAR_EXPRESSION "steps        : 600")
+add_test(NAME m-n6-nav-ecs-writeback COMMAND nav-tools ecs-crowd --frames 120)
+set_tests_properties(m-n6-nav-ecs-writeback PROPERTIES
+    PASS_REGULAR_EXPRESSION "transform    : writeback 4 / 4")
+add_test(NAME m-n6-nav-ecs-eight COMMAND nav-tools ecs-crowd --agents 8 --frames 120)
+set_tests_properties(m-n6-nav-ecs-eight PROPERTIES
+    PASS_REGULAR_EXPRESSION "transform    : writeback 8 / 8")
+# 负向：用法错误 / 网格外 spawn / 零 dt / 零 agent（显式拒绝，不静默吞）
+add_test(NAME m-n6-nav-ecs-usage COMMAND nav-tools ecs-crowd --bogus)
+set_tests_properties(m-n6-nav-ecs-usage PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n6-nav-ecs-bad-spawn
+         COMMAND nav-tools ecs-crowd --bad-spawn --frames 30)
+set_tests_properties(m-n6-nav-ecs-bad-spawn PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n6-nav-ecs-dt COMMAND nav-tools ecs-crowd --dt 0)
+set_tests_properties(m-n6-nav-ecs-dt PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n6-nav-ecs-agents COMMAND nav-tools ecs-crowd --agents 0)
+set_tests_properties(m-n6-nav-ecs-agents PROPERTIES WILL_FAIL TRUE)

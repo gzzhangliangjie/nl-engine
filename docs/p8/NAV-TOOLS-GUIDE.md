@@ -168,3 +168,24 @@
 5. **v3 描述段必须逐字段 `wrScalar`/`rdScalar`**：`OffMeshConnection` 含 `bool` 与不同宽度整数，整块 memcpy struct 会把 padding 字节写进产物、破坏确定性（M-N3 v2 段同款铁律）。bool 落盘显式转 `std::uint8_t`。
 6. **Write 工具生成 run.bat 是 LF-only**（第三次踩）：`check-bat-encoding.py --fix example/nav-n5` 转 CRLF 后复检 93 文件 0 违规。
 7. **新鲜度闸**：只编 `nav-tools` target 后 `regression.py` 仍拦下 `viewer.exe` / `nanite-tools.exe` 等 6 个 exe 落后于 `core/src/nav/Nav.cpp`。按 M9.2 教训必须 `cmake --build build/<backend>` 全量重编双后端再跑回归。
+
+## 14. M-N6 验收记录（2026-11-11，tag `nav-n6`）
+
+- **Q1=B 解除**：M-N4 拍板选了 Q1=A（A 类工具版），`Q1=B`（E1 ECS 组件 + viewer 多 Agent 渲染）是未选项；用户「直接在这里做」把两者与 off-mesh 一并立项，`P8-NAV-PLAN.md` 文末 Q6-1~Q6-4 一次拍板、待拍板 0 后落码。
+- **交付面**：core 新增 `nl/scene/NavAgentComponent.hpp`（POD 组件 + serialise/duplicate）、`nl/nav/NavAgentSystem.hpp/.cpp`（`SignedSystem<NavAgentComponent, TransformComponent>` + dt 累加器 + Transform 写回）、`nl/nav/Arena.hpp/.cpp`（viewer 侧合成 arena）；`Crowd.hpp/.cpp` 新增 `begin/addAgent/step/agentPosition/running` 增量 API，**`run()` 本体一行未改**；`nav-panel.hpp/.cpp` 增加 crowdMode POD 字段与叠加绘制；`viewer/main.cpp` 增加 `--nav-crowd` / `--nav-crowd-agents` / `--nav-crowd-steps`；`nav-tools ecs-crowd` 子命令 + 18 项 selftest 锚点 + 9 条 ctest + 13 张展示台卡 + `example/nav-n6/run.bat` A~F。`nl/scene` 既有三头、`hud.cpp`、`renderer.cpp`、shader、`kStage` 一行未改。
+- **强自证（Q1=B 没有改变上游积分语义）**：`nav-tools ecs-crowd` 产出的 `arena-crowd.ntraj` 28924 B / fnv64 `5cbf9ce63eb1b273`，与 `example/nav-n4/crowd-arena.ntraj` **`fc /b` 逐字节相同**（run.bat C 段机器断言）；selftest 另有「ECS trace == Crowd::run point-by-point」逐点断言。两条共同证明 ECS 帧驱动与 M-N4 一次性 `run()` 等价。
+- **验收数据**（2026-11-11 双后端实测写实）：双后端全量 BUILD OK + viewer selftest 16/16 ×2；`ctest -R "m-n[0123456]-nav" --repeat until-pass:3` **50/50 ×2**；`regression --only nav-n6` **26/26 ALL GREEN**（bytes 26 / near 0 / FAIL 0）、七张老卡 nav-m0 10/10 · nav-n1 12/12 · nav-n2 10/10 · nav-n3 22/22 · nav-n3-panel 8/8 · nav-n4 22/22 · nav-n5 24/24 **全 bytes 零回归**；`example/nav-n6/run.bat` DX12/VULKAN **A~F ALL GREEN**（4 agent `steps=600 / arrived=4/4 / transform writeback 4/4 / minPairDist 0.6003`，8 agent 规模锚 `writeback 8/8`）；viewer 收尾锚 `nav-crowd: final agents=4 steps=600 arrived=4 minPairDist=0.6003`；`server.py --check` exit 0（stage=S8.2，M9.0 口径只证明旧卡没回归）；`check-bat-encoding` 全仓 94 文件 0 违规。
+- **证据图**：`example/nav-n6/arena-crowd.png`（768×768，nav-tools 软光栅真实输出：黑色 poly 边界 + 4 条彩色 600 帧轨迹 + 起终点十字）；`example/nav-n6/viewer-crowd-DX12.png` 与 `viewer-crowd-VULKAN.png`（1280×720，viewer `--nav-crowd` 独立窗口：NavMesh poly 线框 + 4 个彩色 Agent 圆点 + 轨迹折线 + 绿色目标十字 + `agents/steps/arrived` 状态行），可肉眼确认多 Agent 确实在画布上移动。**双后端两张 viewer PNG 均为 284711 B / fnv64 `f8f6666063bbf554`，逐字节相同**（NavPanel 走纯 CPU ImDrawList，画布输出与图形后端无关；不是「看起来差不多」，是字节级一致）。
+- **交代物**：`example/nav-n6/`（run.bat + `.ntraj` + 工具 PNG + 双后端 viewer PNG + 日志）、cases.json `nav-n6` 13 卡（2 张 viewer 卡用 case 级 `exe` 覆盖）、`P8-NAV-PLAN.md` 收官留痕、`MILESTONES.md` M-N6 四栏、`VENDOR.md` 零新增入库留痕。
+
+### 14.1 踩坑（写实）
+
+1. **`Component` 构造吃 `Entity` 壳不是 `EntityID`**：首版 `std::make_unique<NavAgentComponent>(e.getID())` 编译 C2665（u64 无法转 `Entity`）。必须用 `e` 本身（`World::newEntity` 返回值），与 viewer `--scene` 既有路径一致。
+2. **dt 累加器精度不一致导致 600 帧只跑 599 步**：`CrowdConfig::dt` 是 `float`，`NavAgentSystem::fixedDt_` 存该 float 转成的 double（0.0166666675359…），而帧侧若传 `1.0/60.0`（double 0.0166666666666…，略小），累加器永远差一点，600 次 tick 少跑一步。修法：两侧统一 `static_cast<double>(cfg.dt)`，每帧恰一步。**这是确定性铁律，不是可容忍的浮点噪声。**
+3. **`ids_` 必须与 `crowdIdx_` 逐位对齐**：`NavAgentComponent::enabled=false` 的实体不注册进 Crowd，若仍留在写回表里，`capturePositions()` 会把 agent i 的位置写到错误的 Transform。修法：init 里单独收集 `active` id，注册成功后 `ids_ = std::move(active)`。
+4. **合成 arena 几何故意保留两份**：`nav-tools/main.cpp::syntheticScene()` 被 M-N0~M-N5 的全部字节基线锁死，不宜改动；viewer 侧另立 `nl::nav::makeArenaGeometry()`（逐顶点/逐三角形同参数），两处注释交叉引用。用「一份共享函数」的工程洁癖会让老基线承担不必要风险。
+5. **`NavPanel::State` 新字段必须默认全 0**：`HudFrame hud{}` 每帧值初始化，crowdMode=false 时窗口标题、尺寸、全部控件与画布叠加严格原样，`nav_panel.cpp` 只在 `if (st.crowdMode)` 分支画 Agent。这样既有 `--nav-panel` 截图逐像素零变化，无需重拍。
+6. **`--screenshot` 会关掉 HUD 但不关独立窗口**：`hud.cpp` 的 `navPanel->drawWindow()` 在 `frame.panelShow` 之外，所以 crowd 画布在截图模式下仍出图；不要为了「让画布可见」去改 `hudEnabled`（会污染全部 HUD 基线）。
+7. **`run.bat` LF-only（第四次踩）**：Write 工具生成 LF-only，`check-bat-encoding.py --fix example/nav-n6` 转 CRLF 后全仓复检 0 违规。
+8. **新增 ctest 后必须重新 configure 每个后端构建目录**：`add_test` 只在 CMake configure 时写进 `CTestTestfile.cmake`。M-N6 追加 9 条后，DX12 侧直接跑 ctest 仍只报 **41/41**（M-N0~M-N5 旧清单），而刚跑过 `build-m0.2.bat VULKAN` 的一侧已是 50/50 —— 差点把「DX12 41/41」误读成 M-N6 未注册或漏跑。修法 = 双后端**各**跑一遍 `scripts/build-m0.2.bat <BACKEND>` 触发 configure，再 `ctest -R "m-n[0123456]-nav" --repeat until-pass:3` 复核 50/50 ×2。**「只编 target 不 configure」不会刷新测试注册，收口前必须以测试条数为准核对。**
+9. **双后端 viewer 截图逐字节相同是加分硬判据，不是巧合**：`viewer-crowd-{DX12,VULKAN}.png` 均 284711 B / fnv64 `f8f6666063bbf554`。NavPanel 是 CPU 侧 ImGui `ImDrawList` 2D 画布，不消费任何后端相关状态，故两后端 readback 完全一致；若哪天两图分叉，说明 crowd 叠加被误接进了 GPU 后端路径，应立即追因。

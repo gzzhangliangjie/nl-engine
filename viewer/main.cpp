@@ -11,6 +11,10 @@
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/nav_panel.hpp"   // P8 M-N2：--nav-panel 面板（ImGui 在 renderer 内）
 #include "nl/nav/Nav.hpp"              // P8 M-N2：面板烘焙（nl/nav 纯 CPU 集成层）
+#include "nl/nav/Arena.hpp"            // P8 M-N6：--nav-crowd 合成 arena 几何
+#include "nl/nav/Crowd.hpp"            // P8 M-N6：增量 Crowd 配置（固定 dt）
+#include "nl/nav/NavAgentSystem.hpp"   // P8 M-N6：E1 ECS 固定步长系统
+#include "nl/scene/NavAgentComponent.hpp"  // P8 M-N6：E1 ECS NavAgent 组件
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
 #include "camera_mode.hpp"                 // P8 M-CAM b-segment：ViewerCamera 调度封装（orbit/free/chase/track）
@@ -137,6 +141,11 @@ struct Options {
     std::string tickMode = "off";
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
     bool navPanelOn = false;                // M-N2：--nav-panel 挂 NavMesh 调参面板
+    // M-N6 Q1=B：--nav-crowd 独立模式（隐含 navPanelOn，复用其 ImDrawList 画布）。
+    // ECS World / NavAgentSystem 只在本模式创建；kStage 不 bump、既有截图不重拍。
+    bool navCrowdOn = false;
+    int  navCrowdAgents = 4;               // [1, 8]
+    int  navCrowdSteps = 1;                // 每渲染帧跑几个固定步（截图 8 帧 ×75 = 600）
     // M-N3 补充：面板烘焙输入可与渲染模型解耦（HizScene.glb 无 baseColor，
     // 不能作 --model）。缺省 = modelFile，M-N2 行为与截图逐字节不变。
     std::string navModelFile;
@@ -249,6 +258,29 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--nav-panel") {
             // M-N2：NavMesh 调参/五阶段面板（默认 --model 几何为烘焙输入）。
             o.navPanelOn = true;
+        }
+        else if (a == "--nav-crowd") {
+            // M-N6 Q6-2：独立模式，复用 NavPanel 的 POD / ImDrawList 俯视画布
+            // 画 NavMesh 线框 + 多 Agent 圆点 + 轨迹。cvar 注册沿用面板路径，
+            // 但 crowd 模式下 navPanelSync 跳过全部参数双向同步。
+            o.navCrowdOn = true;
+            o.navPanelOn = true;
+        }
+        else if (a == "--nav-crowd-agents" && i + 1 < argc) {
+            const int n = std::atoi(argv[++i]);
+            if (n < 1 || n > 8) {
+                std::cerr << "invalid --nav-crowd-agents (expected 1..8)\n";
+                std::exit(1);
+            }
+            o.navCrowdAgents = n;
+        }
+        else if (a == "--nav-crowd-steps" && i + 1 < argc) {
+            const int n = std::atoi(argv[++i]);
+            if (n < 1 || n > 600) {
+                std::cerr << "invalid --nav-crowd-steps (expected 1..600)\n";
+                std::exit(1);
+            }
+            o.navCrowdSteps = n;
         }
         else if (a == "--nav-model" && i + 1 < argc) {
             // M-N3 补充：只换面板烘焙输入，不动渲染模型（--model 仍需可贴图资产）。
@@ -808,6 +840,79 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                             " polys=", navMesh.stats().polyCount,
                             " obstacles=", navMesh.obstacleCount());
     };
+    // ---- M-N6：--nav-crowd 独立模式（Q6-2 最小 hook）----
+    // 复用 navMesh / navPrims / NavPanel 画布；ECS World 只在本模式创建，
+    // 每帧 world.tick(1/60) 驱动 NavAgentSystem（位置写回 Transform），
+    // 再由 navPanelSync 把 POD 快照填进 hud.navPanelState 的 crowd 字段。
+    // 非本模式时以下变量全为空，主帧循环一行额外开销都没有。
+    std::unique_ptr<nl::scene::World> navCrowdWorld;
+    nl::nav::NavAgentSystem* navCrowdSystem = nullptr;
+    // 累加器精度统一：cfg.dt 是 float，若帧侧传 1.0/60.0(double) 会比
+    // fixedDt_ 略小，累积 600 帧会少跑一步（实测 599）。两侧都用同一个
+    // float 值的 double 表示，每帧恰一步，步数与 M-N4 600 帧严格对齐。
+    double navCrowdFixedDt = 1.0 / 60.0;
+    if (o.navCrowdOn) {
+        std::string cerr;
+        const nl::nav::Geometry arena = nl::nav::makeArenaGeometry();
+        if (!navMesh.bake(arena, nl::nav::BuildParams{}, cerr, true)) {
+            nl::core::log::error("nav-crowd: arena bake failed: ", cerr);
+            return 1;
+        }
+        navBaked = true;
+        if (!navMesh.debugDrawStage(nl::nav::DebugStage::NavMesh, navPrims, cerr)) {
+            nl::core::log::error("nav-crowd: debug stage failed: ", cerr);
+            return 1;
+        }
+        navPrimsValid = true;
+        navStage = 6;
+        std::snprintf(navStatus, sizeof(navStatus),
+                      "nav-crowd: arena baked (%d polys)", navMesh.stats().polyCount);
+
+        navCrowdWorld = std::make_unique<nl::scene::World>();
+        auto& clib = navCrowdWorld->getComponentLibrary();
+        clib.registerComponent<nl::scene::TransformComponent>();
+        clib.registerComponent<nl::scene::NavAgentComponent>();
+        // 与 M-N4 crossing preset 同款对角穿越（前 4 个）；后 4 个是 line
+        // 编队，供 5~8 agent 规模锚。坐标全在 arena 可走面上。
+        static const float kSpawn[8][6] = {
+            {-8.f, 0.2f, -8.f,  8.f, 0.2f,  8.f},
+            { 8.f, 0.2f,  8.f, -8.f, 0.2f, -8.f},
+            {-8.f, 0.2f,  8.f,  8.f, 0.2f, -8.f},
+            { 8.f, 0.2f, -8.f, -8.f, 0.2f,  8.f},
+            {-8.f, 0.2f, -4.f,  8.f, 0.2f, -4.f},
+            {-8.f, 0.2f,  0.f,  8.f, 0.2f,  0.f},
+            {-8.f, 0.2f,  4.f,  8.f, 0.2f,  4.f},
+            {-8.f, 0.2f,  6.f,  8.f, 0.2f,  6.f},
+        };
+        for (int k = 0; k < o.navCrowdAgents; ++k) {
+            auto e = navCrowdWorld->newEntity("nav-agent-" + std::to_string(k));
+            e.addComponent(std::make_unique<nl::scene::TransformComponent>(e));
+            auto a = std::make_unique<nl::scene::NavAgentComponent>(e);
+            for (int c = 0; c < 3; ++c) {
+                a->spawn[c]  = kSpawn[k][c];
+                a->target[c] = kSpawn[k][c + 3];
+                a->pos[c]    = kSpawn[k][c];
+            }
+            e.addComponent(std::move(a));
+        }
+        navCrowdWorld->flushEntityCreationAndRemoval();
+        navCrowdWorld->registerSystem(
+            std::make_unique<nl::nav::NavAgentSystem>(*navCrowdWorld));
+        navCrowdSystem = static_cast<nl::nav::NavAgentSystem*>(
+            navCrowdWorld->findSystem(nl::nav::NavAgentSystem::kName));
+        nl::nav::CrowdConfig cfg;   // dt=1/60 固定（M-N4 Q3=A 同口径）
+        cfg.maxAgents = 16;
+        if (!navCrowdSystem || !navCrowdSystem->init(navMesh, cfg, cerr)) {
+            nl::core::log::error("nav-crowd: system init failed: ", cerr);
+            return 1;
+        }
+        navCrowdFixedDt = static_cast<double>(cfg.dt);
+        nl::core::log::info("nav-crowd: ECS agents=", navCrowdSystem->agentCount(),
+                            " systems=", navCrowdWorld->getSystemCount(),
+                            " dt=0.016667 steps/frame=", o.navCrowdSteps,
+                            " polys=", navMesh.stats().polyCount);
+    }
+
     if (o.navPanelOn) {
         navPanel = nl::renderer::NavPanel::create();
         navPanelActive = true;
@@ -873,6 +978,51 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (!navPanel) return;
         auto& con = nl::core::console::Console::get();
         auto& st = hud.navPanelState;
+
+        // M-N6 crowd 模式：只回填画布 POD，跳过全部参数/cvar 双向同步
+        //（面板控件在本模式不绘制，cvar 不是数据源；ECS 组件才是）。
+        if (o.navCrowdOn && navCrowdSystem) {
+            st.crowdMode = true;
+            st.crowdAgentCount = navCrowdSystem->agentCount();
+            st.crowdStepCount  = navCrowdSystem->stepCount();
+            st.crowdArrived    = navCrowdSystem->arrivedCount();
+            std::snprintf(st.crowdStatus, sizeof(st.crowdStatus),
+                          "nav-crowd: ECS + Crowd dt=1/60 (%s)",
+                          navCrowdSystem->ready() ? "running" : "halted");
+            constexpr int kCap = 16;
+            constexpr int kTrail = nl::nav::NavAgentSystem::kMaxTrail;
+            const int n = std::min(st.crowdAgentCount, kCap);
+            const auto& snap = navCrowdSystem->snapshot();
+            const auto& tgt  = navCrowdSystem->targets();
+            const auto& tr   = navCrowdSystem->trail();
+            const auto& tc   = navCrowdSystem->trailCounts();
+            for (int i = 0; i < n; ++i) {
+                st.crowdAgents[i][0] = snap[static_cast<std::size_t>(i) * 3 + 0];
+                st.crowdAgents[i][1] = snap[static_cast<std::size_t>(i) * 3 + 2];
+                st.crowdAgents[i][2] = 0.30f;   // cfg.agent.radius
+                st.crowdAgents[i][3] = 0.f;
+                st.crowdTargets[i][0] = tgt[static_cast<std::size_t>(i) * 3 + 0];
+                st.crowdTargets[i][1] = tgt[static_cast<std::size_t>(i) * 3 + 2];
+                const int cnt = std::min(tc[static_cast<std::size_t>(i)], kTrail);
+                st.crowdTrailCount[i] = cnt;
+                for (int k = 0; k < cnt; ++k) {
+                    st.crowdTrail[i][k][0] =
+                        tr[(static_cast<std::size_t>(i) * kTrail + k) * 2 + 0];
+                    st.crowdTrail[i][k][1] =
+                        tr[(static_cast<std::size_t>(i) * kTrail + k) * 2 + 1];
+                }
+            }
+            if (navPrimsValid) {
+                st.baked = true;
+                st.prims = &navPrims;
+                const auto& s = navMesh.stats();
+                for (int k = 0; k < 3; ++k) {
+                    st.bmin[k] = s.bmin[k];
+                    st.bmax[k] = s.bmax[k];
+                }
+            }
+            return;
+        }
 
         // ① 面板参数编辑写回 cvar（onChanged 链触发；cvar 保持唯一真源）
         if (st.paramsChanged) {
@@ -1696,6 +1846,14 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         // ---- M0.5：每帧把显示数据交给 HUD，控件结果由 HUD 写回同一个 POD ----
         // M-C2：hudEnabled=false 但控制台开着时也要跑 ImGui（面板藏、控制台在）。
+        // M-N6：E1 ECS 帧驱动。固定 dt=1/60（与 M-N4 Q3=A 同口径），
+        // navCrowdSteps 只决定「这一渲染帧补几步」，截图 8 帧 ×75 = 600 步
+        // 与工具版 600 帧轨迹对齐；非 crowd 模式整块不执行。
+        if (o.navCrowdOn && navCrowdWorld && navCrowdSystem) {
+            for (int s = 0; s < o.navCrowdSteps; ++s)
+                navCrowdWorld->tick(navCrowdFixedDt);
+        }
+
         nl::renderer::HudFrame hud{};
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
         // P8 M-N2：NavMesh 面板挂入 + 每帧同步（cvar <-> 面板 <-> 烘焙产物）。
@@ -2158,6 +2316,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
+    if (o.navCrowdOn && navCrowdSystem) {
+        char pair[96];
+        std::snprintf(pair, sizeof(pair), "minPairDist=%.4f",
+                      navCrowdSystem->minPairDistance());
+        nl::core::log::info("nav-crowd: final agents=", navCrowdSystem->agentCount(),
+                            " steps=", navCrowdSystem->stepCount(),
+                            " arrived=", navCrowdSystem->arrivedCount(),
+                            " ", pair);
+    }
     nl::core::log::info("shutdown ok (frames=", frame,
                         " screenshots=", screenshotsSaved,
                         " deviceErrors=", nl::core::log::deviceErrorCount(), ")");
@@ -3185,6 +3352,10 @@ void printUsage() {
               << "                                     bakes from current --model (.glb), cvars nav.*\n"
               << "  viewer.exe --nav-model <name>      M-N3: separate panel bake input from --model;\n"
               << "                                     nav.tiled 1 -> tiled bake + dynamic obstacles\n"
+              << "  viewer.exe --nav-crowd             M-N6: E1 ECS NavAgent + Crowd fixed-step agents\n"
+              << "                                     on the NavMesh debug canvas (standalone mode)\n"
+              << "  viewer.exe --nav-crowd-agents N    M-N6: agent count 1..8 (default 4)\n"
+              << "  viewer.exe --nav-crowd-steps N     M-N6: fixed steps per rendered frame 1..600\n"
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"

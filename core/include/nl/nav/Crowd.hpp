@@ -93,7 +93,20 @@ public:
              const std::vector<CrowdSpawn>& spawns,
              CrowdTrace& out, std::string& outError);
 
-    int agentCount() const;  // 上一次 run 成功注册的 agent 数
+    int agentCount() const;  // 上一次 run / begin 成功注册的 agent 数
+
+    // ---- M-N6：增量驱动 API（Q1=B，E1 ECS NavAgentSystem 固定步长消费）----
+    // 与 run() 共享同一上游 dtCrowd 语义，但由调用方逐帧驱动：
+    //   begin(nav,cfg) -> addAgent(pos,target,params)* -> step()* -> agentPosition()
+    // run() 本体一行未改（M-N4 的 .ntraj / PNG 字节基线锁定）；增量链路不写
+    // 任何 .ntraj / .nnav 容器，轨迹由消费方（nav-tools / viewer）自行采样。
+    // addAgent 返回本层顺序号 [0, agentCount)，与注册顺序一致（确定性输入）。
+    bool begin(const NavMesh& nav, const CrowdConfig& cfg, std::string& outError);
+    int  addAgent(const float pos[3], const float target[3],
+                  const CrowdAgentParams& params, std::string& outError);
+    bool step(std::string& outError);
+    bool agentPosition(int localIndex, float outPos[3]) const;
+    bool running() const;
 
 private:
     struct Impl;
