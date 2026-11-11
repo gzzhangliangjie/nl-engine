@@ -8241,6 +8241,88 @@
      "cwd": "{root}"
     }
    ]
+  },
+  {
+   "id": "particles-pt5",
+   "label": "M-PT5",
+   "tag": "particles-pt5",
+   "name": "E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B（M-PT5）",
+   "date": "2026-11-11",
+   "summary": "M-PT5（particles 轨道第六里程碑，2026-11-11 拍板 Q2=a per-particle/Q3=b 64B）：① 实例流 48→64B（float4×4）——progressMisc.z=angle（弧度）、progressMisc.w=每粒子 Y/X 比、misc2[4]=spare（E3/E4/E8 未来字段免二次布局级重拍）；VS 弃 CB 标量 g_params.z 改 per-instance 读（CB 布局不动）。② E5 旋转——.nfx emitter 可选 ang/angVel（弧度，口径=vendored Effekseer runtime 直存弧度），spawn 端从新随机槽派生初始角/角速度，step 端 angle+=angVel*dt 积分，VS 2D 旋转矩阵无 branch 作用 corner（旋转只作用几何角点，uv/flipUv 绑 quad 局部坐标→贴图随 quad 转）。③ R1 sizeY——.nfx render 可选 sizeYRange（绝对米区间），spawn 端折算 per-particle Y/X 比。零漂移双保险：旧随机槽 s*5u+{0..4} 公式一字不动，新槽 s*7u+0x100u+{0,1,2} 输入空间永不相交（2s=slot-256 无解）；angle=0→cos=1/sin=0 IEEE 恒等、w=旧 ratioY 同值 float→cy*w 逐位同 cy*z——pt0~pt3 回归 22/22 全 bytes 逐字节同（重拍预算零消耗，一张没重拍）。转换器收 Rotation None/Fixed/PVA 的 Z 分量（x/y 非零/accel 非零/Easing/Axis*/FCurve/RotateToViewpoint/Velocity exit 2）+ Scaling PVA 的 y 区间（X 定值、velocity/accel 非零 exit 2）。selftest 增旋转/sizeYRange 往返+老格式兼容+5 类畸形拒绝。",
+   "acceptance": [
+    "E5 正例画面：e5_spin.nfx（ArrowNE 非对称箭头贴图，ang [0,2π]+angVel [1.5,4] rad/s）箭头朝向随机各异可见，alive=51（30/s×1.667s=50 理论命中）",
+    "R1 正例画面：r1_sizey.nfx（sizeYRange [0.25,1.6]m 软圆盘）压扁/拉长形状随机可见，alive=51",
+    "零回归铁律：实例流 48→64B + VS 重写后 pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 全 bytes 逐字节同（22 张存量基线零重拍）",
+    "确定性：e5 DX12 同参两跑 PNG 逐字节同（MD5 01abd003841ad613bfb22893ee753089）；双后端 alive 同值 51",
+    "负向：e_bad_ang.nfx（ang 单元素）→ malformed ang/angVel 拒绝回退；e_bad_sizey.nfx（单元素）→ malformed sizeYRange 拒绝回退；缺省无 --nfx 无任何 nfx 日志行",
+    "example/particles-pt5 归位（e5-spin/r1-sizey × 双后端 4 基线）+ run.bat verify exit 0（双后端 pair + 确定性 + 锚点 + 三负向）+ cases.json 卡 2 用例"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "e5-spin-hud",
+     "name": "E5 per-particle 旋转：非对称箭头贴图随机朝向 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "ang [0,2π] 出生角 + angVel [1.5,4] rad/s 每粒子积分；VS 2D 旋转矩阵 angle=0 IEEE 恒等保 pt0~pt3 零漂移。",
+     "baselines": {
+      "dx12": "example/particles-pt5/particles-e5-spin-hud-dx12.png",
+      "vulkan": "example/particles-pt5/particles-e5-spin-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/e5_spin.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.6",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "particles steady: alive=51 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/e5_spin.nfx --hud ...",
+     "cwd": "{root}"
+    },
+    {
+     "id": "r1-sizey-hud",
+     "name": "R1 per-particle sizeY：软圆盘压扁/拉长随机 + HUD 证据行（120 帧稳态）",
+     "kind": "pair",
+     "note": "sizeYRange [0.25,1.6]m per-particle Y/X 比；定值路径逐粒子复制 ratioY 与旧 CB 标量同值逐位。",
+     "baselines": {
+      "dx12": "example/particles-pt5/particles-r1-sizey-hud-dx12.png",
+      "vulkan": "example/particles-pt5/particles-r1-sizey-hud-vulkan.png"
+     },
+     "args": [
+      "--nfx",
+      "assets/efx/r1_sizey.nfx",
+      "--hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "120",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.6",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "particles steady: alive=51 (nfx)",
+     "command": "viewer.exe --nfx assets/efx/r1_sizey.nfx --hud ...",
+     "cwd": "{root}"
+    }
+   ]
   }
  ]
 }

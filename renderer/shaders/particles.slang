@@ -9,11 +9,13 @@
 //
 // 资源（两后端同名寄存器，Vulkan 走 -fvk-b-shift 256 / -fvk-t-shift 0 / -fvk-s-shift 128）：
 //   b0 = ParticleConstantsCB（volatile，每帧全量覆写，128 B）
-//   t0 = StructuredBuffer<ParticleGpu>（每实例 48 B：posSize + colorAlpha + progressMisc）
+//   t0 = StructuredBuffer<ParticleGpu>（每实例 64 B：posSize + colorAlpha +
+//        progressMisc(z=angle,w=sizeY比) + misc2 spare）
 //   t1 = 粒子贴图（nfx texture 字段；无贴图绑 1x1 白 dummy）
 //   s0 = Linear clamp 采样器（M-PT3：mip 线性，纹理带全 mip 链）
 //   g_params.y = 贴图开关（0 = 软圆盘路径，1 = 贴图采样）
-//   g_params.z = Y/X 尺寸比（legacy/方形恒 1.0）
+//   g_params.z = [M-PT5 退役] Y/X 尺寸比改 per-instance progressMisc.w；
+//                CB 布局不动（z 仍写 ratioY 但 shader 不再读）
 //   g_params.w = flipbook 开关（0 = 恒等 UV，1 = 序列帧 cell 采样）
 //   g_uvRect   = UV 区域（xy = offset，zw = cell 尺寸；非 flipbook = (0,0,1,1)）
 //
@@ -39,9 +41,12 @@ cbuffer ParticleConstantsCB : register(b0)
 
 struct ParticleGpu
 {
-    float4 posSize;      // xyz = 世界位置，w = 尺寸 X（米；Y = X × g_params.z）
+    float4 posSize;      // xyz = 世界位置，w = 尺寸 X（米；Y = X × progressMisc.w）
     float4 colorAlpha;   // rgb = 颜色，a = alpha（CPU 端按寿命曲线算好）
-    float4 progressMisc; // xy = flipbook 帧号 (frameX, frameY)（CPU 折算，非 flipbook = (0,0)），zw 预留
+    float4 progressMisc; // xy = flipbook 帧号 (frameX, frameY)（CPU 折算，非
+                         // flipbook = (0,0)）；M-PT5：z = 角度（弧度，无旋转
+                         // 恒 0），w = 该粒子 Y/X 尺寸比
+    float4 misc2;        // M-PT5 spare（E3/E4/E8 未来字段，恒 0）
 };
 
 StructuredBuffer<ParticleGpu> g_particles : register(t0);
@@ -68,11 +73,20 @@ VSOutput vsMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     ParticleGpu p = g_particles[iid];
 
     VSOutput output;
-    // M-PT2：Y/X 尺寸比走 CB 标量 g_params.z（单发射器子集所有粒子同比例；
-    // legacy/方形恒 1.0——cy*1.0f 逐位恒等 cy，M-PT0 表达式保形无 branch。
-    // 教训：VS 里 if-else 会被 dxc select 化，动态 branch 混合评估致基线 ±1 LSB）。
+    // M-PT5 R1：Y/X 尺寸比从 CB 标量 g_params.z 改 per-instance 读（R1 随机
+    // sizeY per-particle，拍板 Q3=b）。定值路径：CPU spawn 端逐粒子复制
+    // params_.ratioY 同一 float → cy*w 与旧 cy*g_params.z 逐位同。
+    // M-PT5 E5：billboard 屏幕平面旋转（2D 旋转矩阵作用 corner，无 branch）。
+    // 保形路线（M-PT2/M-PT3 先例）：angle=0 → cos(0)=1.0、sin(0)=0.0 精确，
+    // rc = (cx*1 - cy*0, cx*0 + cy*1) = (cx, cy) IEEE 逐位恒等（corner ∈ ±1，
+    // 无 ±0 舍入歧途）；旋转只作用于几何展开角点，output.uv/flipUv 保持原
+    // corner（贴图绑定 quad 局部坐标 → 贴图随 quad 转；软圆盘径向对称）。
+    const float ca = cos(p.progressMisc.z);
+    const float sa = sin(p.progressMisc.z);
+    const float2 rc = float2(corner.x * ca - corner.y * sa,
+                             corner.x * sa + corner.y * ca);
     const float3 world = p.posSize.xyz
-                       + (g_camRight.xyz * corner.x + g_camUp.xyz * (corner.y * g_params.z))
+                       + (g_camRight.xyz * rc.x + g_camUp.xyz * (rc.y * p.progressMisc.w))
                          * p.posSize.w * g_params.x;
     output.position = mul(g_mvp, float4(world, 1.0f));
     output.uv       = corner;

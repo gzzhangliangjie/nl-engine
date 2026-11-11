@@ -2522,3 +2522,19 @@
 4. **树边界踩线一次**：一条探针命令漏 `cd` → 主树 exe + 探针 PNG 落主树 out/（§7.7 闸防的是脚本入口，裸命令不设防）；发现后显式点名清理三份 PNG 并 `git status --porcelain -- out/` 核零残留。教训：**wt 会话每条裸命令都要带 cd 前缀，勿依赖 cwd 粘性**。
 
 **下一步**：M-PT5（E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B，**pt0~pt3 全量基线重拍预算**，拍板已齐）；R4 软粒子 depth fade 归主线协调（T0 setSharedDepth 后接口现成，主线会话单独 claim）。merge 回 master 待收口后与 M-PT5 一并拍板。
+
+## PT M-PT5：E5 per-particle 旋转 + R1 per-particle sizeY，实例流 48→64B（feat/particles 轨道，2026-11-11，tag `particles-pt5`）
+
+**动作**：M-PT4 收口同日接续（坑位已 claim）→ 拍板沿用 M-PT4 收口前已齐的 Q2=a（E5 per-particle 实例流字段）/ Q3=b（48→64B float4 对齐 + spare）→ **决策前置实读**：vendored Effekseer `Effekseer.Rotation.h/.cpp`（八型参数面：None/Fixed/PVA/Easing/AxisPVA/AxisEasing/FCurve/RotateToViewpoint/Velocity；**加载链无度→弧度转换，CalculateRotation 直接吃弧度 = .nfx 弧度口径权威依据**）+ 本仓实例流/VS 现状（progressMisc.xy 已被 flipbook 帧号占用、zw 写 0 预留；spawn 端 RNG 是**派生式** `particleHash(s*5u+slot)` 非流式——决定新槽占位方案）→ 落码：① 实例流 48→64B——progressMisc.z=angle（弧度）/ .w=每粒子 Y/X 比、misc2[4]=spare（E3/E4/E8 免二次布局级重拍）；SSBO `sizeof(ParticleGpu)` 自适应零改动。② VS——无 branch 2D 旋转矩阵（cos/sin 作用 corner；旋转只作用几何角点，uv/flipUv 绑 quad 局部坐标→贴图随 quad 转、软圆盘径向对称不转）+ per-instance sizeY（CB g_params.z 退役，CB 布局不动）。③ spawn/step——新随机槽 `s*7u+0x100u+{0,1,2}` 派生 angle/angVel/ratioY（**与旧 5 槽输入空间永不相交：2s=slot-256 无解**→存量字段公式一字不动）；step 端 `angle += angVel*dt`（angVel=0 IEEE 不变）。④ 转换器——Rotation 收 None/Fixed（Position.Z）/PVA（rotation/velocity.z 区间；x/y 非零、accel 非零、RefEq exit 2）+ Scaling PVA 的 y 区间（X 定值、velocity/accel 非零 exit 2）；selftest 增旋转/sizeYRange 往返 + 5 类畸形拒绝。⑤ 正例资产——e5_spin（**ArrowNE.png 程序化生成非对称箭头贴图**，纯 zlib/struct 手写 PNG；Particle01 径向对称旋转不可辨的教训）+ r1_sizey；负例 e_bad_ang/e_bad_sizey。
+
+**提交版本**：`feat/particles` M-PT5 提交（annotated tag `particles-pt5`）。B 类轨道，不 bump `kStage`、不动 HUD 基线。
+
+**完成情况**：双后端构建 + selftest 16/16 ×2；vfx-tools selftest 双份 PASS（增 rot/sizeYRange 段）；ctest `p-mpt` 双后端 2/2（until-pass:3）。**零漂移双保险兑现：pt0 6/6 + pt1 10/10 + pt2 4/4 + pt3 2/2 全 bytes 逐字节同——「全量基线重拍预算」零消耗，22 张存量基线一张没重拍**（angle=0→cos=1/sin=0 IEEE 恒等 + w=旧 ratioY 同值 float→cy*w 逐位同 cy*z + RNG 旧槽不动，三链条各自闭环）。正例 alive=51（30/s×1.667s=50 理论命中）双后端同值；e5 DX12 确定性 MD5 01abd003… 逐字节同；`run.bat verify` exit 0（双后端 pair ×2 + 确定性 + 锚点 + 三负向）；`server.py --check` exit 0（kStage 仍 S8.2）。cases.json particles-pt5 卡 2 用例（规范写入）。
+
+**踩坑情况**
+1. **Effekseer 字段名大小写不一致**：`ParameterRotationPVA` 用小写 `rotation/velocity/acceleration`，`ParameterScalingPVA` 用 PascalCase `Position/Velocity/Acceleration`；`RefMinMax` 是 `Min/Max` 大写——照 Rotation 抄 Scaling 编译三连错，vendored 头为准逐个核对。
+2. **selftest 测试代码自身 bug**：expectRejectRot 分发 `key[0]=='r'` 判 render 段，sizeYRange 首字母是 's' → 畸形用例错进 emitter 段 → 「sizeYRange short accepted」假阳性；修正为 `'s'`。
+3. **验收画面可辨性**：E5 首版用 Particle01（径向对称发光圆）旋转完全不可见——生成非对称箭头贴图 ArrowNE.png 才让 per-particle 旋转可见；R1 首版粒子重叠成团——稀疏化（rate 30）+ 缩小 size 后形状差异可辨。教训：**正例资产必须先论证「该特性在此贴图/密度下肉眼可辨」**。
+4. **负例 acceptance failed 误判**：`--nfx: malformed` 是 error 级日志 → `errorCount()=1` → viewer acceptance 行必报——**负例固有行为非回归**（error 日志本身就是负例断言目标），与 M-PT4 同款，run.bat findstr 管道只断言 log 锚。
+
+**下一步**：批次 E1/E2/E5/R1 四项全收官。R4 软粒子 depth fade 归主线协调（T0 `setSharedDepth` 后接口现成，主线会话单独 claim）；E3/E4/E8 用 misc2 spare 扩展不再触发布局级重拍；merge 回 master 待用户拍板（与 M-PT4 一并）。

@@ -30,7 +30,10 @@ vfx-tools selftest                          # JSON 往返 + 坏 magic + SKFE 探
     "spawnPoint":  [x, y, z],         // 发射点（Point 型；随机范围 → exit 2）
     "velocityMin": [x, y, z],         // 初速盒 min（PVA velocity）
     "velocityMax": [x, y, z],         // 初速盒 max
-    "accel":       [x, y, z]          // 常加速度（PVA accel min==max 才收）
+    "accel":       [x, y, z],         // 常加速度（PVA accel min==max 才收）
+    "ang":         [min, max],        // M-PT5 E5 可选字段：初始角（弧度；口径 =
+                                      // vendored Effekseer runtime 直存弧度）
+    "angVel":      [min, max]         // M-PT5 E5 可选字段：角速度（弧度/秒）
   },
   "render": {
     "blend": "alpha | additive",      // Opacity/Blend→alpha，Add→additive
@@ -49,12 +52,33 @@ vfx-tools selftest                          # JSON 往返 + 坏 magic + SKFE 探
     "colorCurve": {                   // M-PT4 E2 可选字段（缺省 = 无 → colorStart/colorEnd 线性 lerp 原路径）
       "colorKeys": [[t,r,g,b], ...],  // t ∈ [0,1] 非降序；rgb 0..255（与 colorStart 同单位，运行时 /255）
       "alphaKeys": [[t,a], ...]       // a 0..255；两数组均非空，采样端点 clamp 分段线性
-    }
+    },
+    "sizeYRange": [min, max]          // M-PT5 R1 可选字段：per-particle Y 绝对尺寸
+                                      // 区间（米）；缺省 = 无 → per-emitter size[1]
+                                      // 口径不变。启用时 size[1] 语义由本字段承担
   }
 }
 ```
 
 坐标口径：Effekseer 默认 Y-up，与本引擎 sim 同轴（重力 -Y），v1 不做轴映射。
+
+## 旋转 / sizeY 来源映射（M-PT5 E5/R1）
+
+| Effekseer 参数面 | 收子集 | .nfx 落点 | 子集外 |
+|---|---|---|---|
+| Rotation None | 全收 | 缺省（无字段） | — |
+| Rotation Fixed `Position.Z` | Z 定值 | `emitter.ang = [Z, Z]` | X/Y 非 0 exit 2（billboard 只认屏幕平面） |
+| Rotation PVA `rotation/velocity.z` | Z 区间 | `emitter.ang` / `emitter.angVel` | rotation/velocity X/Y 区间非 0、acceleration 非 0 exit 2 |
+| Rotation Easing/AxisPVA/AxisEasing/FCurve/RotateToViewpoint/Velocity | — | — | exit 2 |
+| Scaling None/Fixed | 全收 | `render.size` | RefEq exit 2 |
+| Scaling PVA `position.y` 区间 | y 随机 | `render.sizeYRange` | X 区间非定值、velocity/acceleration 非 0 exit 2 |
+| Scaling Easing/FCurve | — | — | exit 2 |
+
+运行时口径（M-PT5 实例流 64B）：`progressMisc.z = angle`（弧度，每粒子 spawn 派生 +
+step 积分 `angle += angVel*dt`）、`progressMisc.w = 该粒子 Y/X 比`、VS 弃 CB 标量
+`g_params.z` 改 per-instance 读。**零漂移双保险**：旧随机槽 `s*5u+{0..4}` 公式一字
+不动，新槽 `s*7u+0x100u+{0,1,2}` 输入空间永不相交；`angle=0` 时 VS 旋转公式
+IEEE 恒等、`w` 定值路径逐粒子复制旧 `ratioY` 同一 float——pt0~pt3 基线逐字节零重拍。
 
 ## colorCurve 来源映射（M-PT4 E2）
 
@@ -118,7 +142,9 @@ viewer.exe --nfx <file.nfx>       # 隐含 --particles；失败退 legacy 喷泉
 
 - ~~rate min/max 区间取均值~~（M-PT4 E1 已落地：区间按帧随机采样，span=0 IEEE 恒等）；
   ~~easing/渐变颜色仍不支持~~（M-PT4 E2 已落地：colorCurve 可选字段，见来源映射表）。
-- sizeY 为 per-emitter 定值比例（per-particle 随机 Y 需实例流扩字段 = M-PT5 拍板项）；
+- ~~sizeY 为 per-emitter 定值比例~~（M-PT5 R1 已落地：sizeYRange 可选字段 per-particle 随机，
+  实例流 64B per-instance 读）；~~旋转 billboard 不支持~~（M-PT5 E5 已落地：屏幕平面 Z 分量
+  Fixed/PVA，Easing/Axis*/FCurve/RotateToViewpoint/Velocity 仍 exit 2，见来源映射表）。
   flipbook 的 LERP 帧间插值 / StartFrame 随机未支持（M-PT3 起 mip 链已落地，其余见登记表）。
 - 样例资产（assets/efx/）来自 Effekseer 仓库 Examples/Resources（MIT + 官方声明
   无使用限制）；`.efkefc` 是真二进制，贴图 PNG 在上游是 LFS 指针文件（无真体）——

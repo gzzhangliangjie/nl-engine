@@ -87,7 +87,16 @@ compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积�
 ### 边界
 - 不动实例流布局（48B 保持）、不动 shader；StartFrame 随机 / LERP 插值仍 exit 2；FCurve 旋转/缩放曲线仍 exit 2（归 M-PT5 及后续）。
 
-## M-PT5 · E5 旋转 billboard（per-particle）+ R1 per-particle sizeY（🔨 立项 2026-11-11，拍板齐备）
+## M-PT5 · E5 旋转 billboard（per-particle）+ R1 per-particle sizeY（✅ 收官 2026-11-11，tag `particles-pt5`）
+
+> **验收写实（2026-11-11 收口）**：实例流 64B 落地（progressMisc.z=angle / .w=每粒子 Y/X 比 /
+> misc2 spare float4）；VS 无 branch 2D 旋转 + per-instance sizeY（CB g_params.z 退役，布局不动）；
+> 转换器收 Rotation None/Fixed/PVA 的 Z 分量 + Scaling PVA y 区间；selftest 增旋转/sizeYRange
+> 往返 + 5 类畸形拒绝；新随机槽 `s*7u+0x100u+{0,1,2}` 与旧 5 槽输入空间不相交。
+> **零漂移双保险兑现**：angle=0 IEEE 恒等 + w=旧 ratioY 同值 → **pt0~pt3 回归 22/22 全 bytes
+> 逐字节同，「全量重拍预算」零消耗（一张没重拍）**。正例 e5_spin（ArrowNE 非对称箭头贴图 +
+> 程序化生成，旋转朝向随机可见）/ r1_sizey（软圆盘压扁拉长可见），alive=51 双后端同值；
+> e5 DX12 确定性 MD5 01abd003… 逐字节同；run.bat verify exit 0（含三负向）。
 
 ### 内容
 - **实例流 48→64B（Q3=b）**：新 float4 = `{sizeY, angle, spare0, spare1}`；shader 换 per-instance 读替代 CB 标量 `g_params.z`；per-emitter 定值路径（ratioY 定值 / angle=0）**逐位恒等**——shader 保形铁律：统一无 branch 公式，`cos(0)=1/sin(0)=0` IEEE 恒等，禁 branch/lerp 化改写（M-PT2 实锤）。VS 2D 旋转矩阵作用于 corner。
@@ -95,9 +104,9 @@ compute GPU 模拟、软粒子、碰撞、深度/不透明排序优化、体积�
 - **RNG**：sizeY、角度随机各自**新占 pcg 位**。
 - **⚠️ 全量重拍预算（用户已列入）**：实例流扩字段 = pt0~pt3 全部基线重拍，属预期非回归；per-emitter 定值用例重拍后与旧基线 diff 应仅帧号水印级差异，逐张核对后更新版本卡。
 
-### 验收判据
-- 旋转正例（贴图粒子 visibly 转动）+ 随机 sizeY 正例（同屏高矮不一）+ angle=0/ratioY=1 重拍对照 + 双后端一致 + DX12 同参两跑逐字节。
-- pt0~pt3 重拍记录逐张落台账；run.bat verify 全绿；cases.json 更新（规范写入）。
+### 验收判据（已全过）
+- ~~旋转正例（贴图粒子 visibly 转动）~~ ✅ 箭头贴图朝向随机各异；~~随机 sizeY 正例~~ ✅ 软圆盘高矮胖瘦不一；双后端 alive=51 同值 + DX12 确定性逐字节。
+- ~~pt0~pt3 重拍记录逐张落台账~~ ✅ **零重拍**：回归 22/22 全 bytes 逐字节同（恒等论证兑现，重拍预算未动用）；run.bat verify exit 0；cases.json particles-pt5 卡 2 用例（规范写入）。
 - tag `particles-pt5`。
 
 ### 边界

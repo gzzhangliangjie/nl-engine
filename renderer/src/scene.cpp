@@ -5607,8 +5607,8 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
 
-    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT3 扩 progressMisc 段；已有成员
-    // 偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
+    // 实例数据 SSBO：每实例 64 B（float4×4，M-PT5 扩 misc2 spare 段；v0~v2
+    // 成员偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
     // （writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态纪律，§2.15）。
     nvrhi::BufferDesc instDesc;
     instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
@@ -5790,6 +5790,9 @@ void Particles::step(float dt) {
         p.pos[0] += p.vel[0] * dt;
         p.pos[1] += p.vel[1] * dt;
         p.pos[2] += p.vel[2] * dt;
+        // M-PT5 E5：角度积分（Effekseer rotation velocity 同口径，无旋转恒
+        // angVel=0 → angle += 0.0f*dt = angle IEEE 精确不变）。
+        p.angle += p.angVel * dt;
         ++i;
     }
     // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
@@ -5827,6 +5830,8 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin + rSize * params_.sizeSpan;
+            // M-PT5：legacy 恒无旋转/方形（VS 恒等链的 CPU 侧锚点）。
+            p.angle = 0.0f; p.angVel = 0.0f; p.ratioY = 1.0f;
         } else {
             // ---- M-PT1 .nfx：box 初速 min/max 逐轴 lerp + 定长寿命/尺寸 ----
             const float rv0 = particleRand01(particleHash(s * 5u + 0u));
@@ -5842,6 +5847,19 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin;
+            // M-PT5 E5/R1：新随机槽（s*7u+0x100u+{0,1,2}，输入空间与旧 5 槽
+            // s*5u+{0..4} 永不相交——2s=slot-256 无解——存量字段公式一字不动
+            // = 逐位零漂移）。span=0 时 min + rnd*0 = min（IEEE 恒等，与 M-PT4
+            // E1 rate span=0 论证同构）：无旋转资产 angle 恒 0、无 sizeYRange
+            // 资产 ratioY 逐粒子复制 params_.ratioY（与 CB 标量同值同位模式）。
+            const float rAng   = particleRand01(particleHash(s * 7u + 0x100u + 0u));
+            const float rAngV  = particleRand01(particleHash(s * 7u + 0x100u + 1u));
+            const float rSizeY = particleRand01(particleHash(s * 7u + 0x100u + 2u));
+            p.angle  = params_.angMin + rAng * params_.angSpan;
+            p.angVel = params_.angVelMin + rAngV * params_.angVelSpan;
+            p.ratioY = params_.sizeYRangeEnabled
+                     ? (params_.sizeYAbsMin + rSizeY * params_.sizeYAbsSpan) / params_.sizeMin
+                     : params_.ratioY;
         }
         pool_.push_back(p);
     }
@@ -5914,7 +5932,12 @@ void Particles::step(float dt) {
         } else {
             g.progressMisc[0] = 0.0f; g.progressMisc[1] = 0.0f;
         }
-        g.progressMisc[2] = 0.0f; g.progressMisc[3] = 0.0f;
+        // M-PT5：z = 该粒子角度（弧度，无旋转恒 0 → VS cos/sin IEEE 恒等），
+        // w = 该粒子 Y/X 比（定值 = params_.ratioY 精确复制 → 与旧 CB 标量
+        // g_params.z 同值，VS cy*w 逐位同 cy*z）。misc2 = spare 恒 0。
+        g.progressMisc[2] = p.angle;
+        g.progressMisc[3] = p.ratioY;
+        g.misc2[0] = 0.0f; g.misc2[1] = 0.0f; g.misc2[2] = 0.0f; g.misc2[3] = 0.0f;
         gpuData_.push_back(g);
     }
     aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
@@ -6113,6 +6136,45 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     p.fadeOut = r.value("fadeOut", 0.0f);
     std::string blend = r.value("blend", "alpha");
     p.additive = (blend == "additive");
+
+    // M-PT5 E5：可选旋转（emitter.ang / emitter.angVel，弧度区间 = vendored
+    // Effekseer runtime 口径）。缺省/缺字段 = 无旋转（angSpan=angVelSpan=0 →
+    // spawn 端 angle 恒 0，VS cos=1/sin=0 IEEE 恒等）。校验从严——畸形即拒。
+    if (e.contains("ang") || e.contains("angVel")) {
+        if (!e.contains("ang") || !e.contains("angVel") ||
+            !e["ang"].is_array() || e["ang"].size() != 2 ||
+            !e["angVel"].is_array() || e["angVel"].size() != 2) {
+            outError = ".nfx malformed ang/angVel (want [min,max] radian pairs)";
+            return false;
+        }
+        const float aMin = e["ang"][0].get<float>();
+        const float aMax = e["ang"][1].get<float>();
+        const float aVelMin = e["angVel"][0].get<float>();
+        const float aVelMax = e["angVel"][1].get<float>();
+        p.angMin = aMin;
+        p.angSpan = aMax > aMin ? (aMax - aMin) : 0.0f;   // 负区间钳 0（同 rate 口径）
+        p.angVelMin = aVelMin;
+        p.angVelSpan = aVelMax > aVelMin ? (aVelMax - aVelMin) : 0.0f;
+    }
+
+    // M-PT5 R1：可选 per-particle sizeY（render.sizeYRange，绝对米区间；折算
+    // 成 Y/X 比进实例流，VS 弃 CB 标量 g_params.z）。缺省 = 无 → sizeYRange
+    // 不启用，spawn 端 ratioY 逐粒子复制 params_.ratioY（与旧 CB 同值恒等）。
+    if (r.contains("sizeYRange")) {
+        if (!r["sizeYRange"].is_array() || r["sizeYRange"].size() != 2) {
+            outError = ".nfx malformed sizeYRange (want [min,max] meter pair)";
+            return false;
+        }
+        const float syMin = r["sizeYRange"][0].get<float>();
+        const float syMax = r["sizeYRange"][1].get<float>();
+        if (!(syMin > 0.0f) || !(syMax > 0.0f)) {
+            outError = ".nfx sizeYRange values must be > 0";
+            return false;
+        }
+        p.sizeYRangeEnabled = true;
+        p.sizeYAbsMin = syMin;
+        p.sizeYAbsSpan = syMax > syMin ? (syMax - syMin) : 0.0f;
+    }
 
     // M-PT4 E2：可选 colorCurve（缺省/缺字段 = 无 → 走 colorStart/colorEnd 线性
     // lerp 原路径）。校验从严——畸形即拒（返回 false，加载端保持 legacy 参数）。

@@ -184,6 +184,23 @@ struct NfxDoc
         std::vector<std::array<float, 4>> colorKeys; // {t, r, g, b}
         std::vector<std::array<float, 2>> alphaKeys; // {t, a}
     } colorCurve;
+
+    // M-PT5 E5：旋转（Rotation None/Fixed/PVA 的 Z 分量；缺省 rotEnabled=false）。
+    // 口径对齐 vendored Effekseer runtime：加载链无度→弧度转换，
+    // CalculateRotation 直接吃弧度（Mat43f::RotationZXY）→ .nfx 存弧度。
+    // billboard 子集只认屏幕平面 Z：PVA 的 rotation/velocity x/y 分量与
+    // acceleration 非零、Easing/AxisPVA/AxisEasing/FCurve/RotateToViewpoint/
+    // Velocity 全部 exit 2。
+    bool  rotEnabled = false;
+    float angMin = 0.0f, angMax = 0.0f;         // 初始角（弧度，PVA rotation.z）
+    float angVelMin = 0.0f, angVelMax = 0.0f;   // 角速度（弧度/秒，PVA velocity.z）
+
+    // M-PT5 R1：per-particle 随机 sizeY（Scaling PVA 的 y 区间；缺省 = 无）。
+    // 绝对米口径（与 size 同单位）；X 必须定值（position.x min==max），
+    // scaling 的 velocity/acceleration 非零 exit 2。运行时折算 per-particle
+    // Y/X 比进实例流（VS 弃 CB 标量 g_params.z）。
+    bool  sizeYRangeEnabled = false;
+    float sizeYRangeMin = 0.0f, sizeYRangeMax = 0.0f;
 };
 
 json nfxToJson(const NfxDoc& d, const std::string& sourceName)
@@ -200,11 +217,19 @@ json nfxToJson(const NfxDoc& d, const std::string& sourceName)
         {"velocityMax", {d.velMax[0], d.velMax[1], d.velMax[2]}},
         {"accel", {d.accel[0], d.accel[1], d.accel[2]}},
     };
+    // M-PT5 E5：旋转（缺省/None 不写字段 = 老格式零改动兼容）
+    if (d.rotEnabled)
+    {
+        j["emitter"]["ang"]    = {d.angMin, d.angMax};
+        j["emitter"]["angVel"] = {d.angVelMin, d.angVelMax};
+    }
     j["render"] = {
         {"blend", d.blend},
         {"colorStart", {d.colorStart[0], d.colorStart[1], d.colorStart[2], d.colorStart[3]}},
         {"colorEnd", {d.colorEnd[0], d.colorEnd[1], d.colorEnd[2], d.colorEnd[3]}},
-        {"size", {d.sizeX, d.sizeY}},
+        // M-PT5 R1：sizeYRange 启用时 Y 语义由 sizeYRange 承担，size[1] 写
+        // sizeX 占位（方形折算 ratioY=1.0 被运行时 sizeYRange 覆盖）
+        {"size", {d.sizeX, d.sizeYRangeEnabled ? d.sizeX : d.sizeY}},
         {"fadeIn", d.fadeIn},
         {"fadeOut", d.fadeOut},
         {"texture", d.texture.empty() ? json(nullptr) : json(d.texture)},
@@ -230,6 +255,11 @@ json nfxToJson(const NfxDoc& d, const std::string& sourceName)
         for (const auto& k : d.colorCurve.alphaKeys)
             ak.push_back({k[0], k[1]});
         j["render"]["colorCurve"] = {{"colorKeys", ck}, {"alphaKeys", ak}};
+    }
+    // M-PT5 R1：可选 sizeYRange（缺省 = 无，per-emitter size[1] 口径不变）
+    if (d.sizeYRangeEnabled)
+    {
+        j["render"]["sizeYRange"] = {d.sizeYRangeMin, d.sizeYRangeMax};
     }
     return j;
 }
@@ -364,6 +394,33 @@ bool nfxFromJson(const json& j, NfxDoc& d, std::string& err)
         }
         d.colorCurve.enabled = true;
     }
+    // M-PT5 E5：可选旋转读回（emitter.ang / emitter.angVel，长度 2 弧度区间）
+    if (e.contains("ang") || e.contains("angVel"))
+    {
+        if (!e.contains("ang") || !e.contains("angVel") || !e["ang"].is_array() ||
+            e["ang"].size() != 2 || !e["angVel"].is_array() || e["angVel"].size() != 2)
+        {
+            err = "bad ang/angVel arrays";
+            return false;
+        }
+        d.rotEnabled = true;
+        d.angMin = e["ang"][0].get<float>();
+        d.angMax = e["ang"][1].get<float>();
+        d.angVelMin = e["angVel"][0].get<float>();
+        d.angVelMax = e["angVel"][1].get<float>();
+    }
+    // M-PT5 R1：可选 sizeYRange 读回（绝对米区间，两元素）
+    if (r.contains("sizeYRange"))
+    {
+        if (!r["sizeYRange"].is_array() || r["sizeYRange"].size() != 2)
+        {
+            err = "bad sizeYRange array";
+            return false;
+        }
+        d.sizeYRangeEnabled = true;
+        d.sizeYRangeMin = r["sizeYRange"][0].get<float>();
+        d.sizeYRangeMax = r["sizeYRange"][1].get<float>();
+    }
     return true;
 }
 
@@ -480,7 +537,8 @@ NfxDoc extract(const Effekseer::Effect* effect, Unsupported& unsup)
     d.lifeMin = float(cv.life.min) * kFrame;
     d.lifeMax = float(cv.life.max) * kFrame;
 
-    // 缩放：None/Fixed
+    // 缩放：None/Fixed/PVA（M-PT5 R1：PVA 的 y 区间收进 per-particle sizeYRange；
+    // X 必须定值 position.x min==max；scaling velocity/acceleration 非零 exit 2）
     const auto& sp = n.ScalingParam;
     if (sp.ScalingType == ParameterScalingType::ParameterScalingType_None)
     {
@@ -493,9 +551,29 @@ NfxDoc extract(const Effekseer::Effect* effect, Unsupported& unsup)
         if (sp.ScalingFixed.RefEq >= 0)
             unsup.add("dynamic parameter reference (RefEq) on scaling");
     }
+    else if (sp.ScalingType == ParameterScalingType::ParameterScalingType_PVA)
+    {
+        const auto& pos = sp.ScalingPVA.Position;
+        const auto& sv = sp.ScalingPVA.Velocity;
+        const auto& sa = sp.ScalingPVA.Acceleration;
+        if (pos.min.x != pos.max.x)
+            unsup.add("scaling PVA X range != 0 (R1 subset is Y-only random)");
+        if (sv.min.x != 0.0f || sv.max.x != 0.0f || sv.min.y != 0.0f || sv.max.y != 0.0f ||
+            sv.min.z != 0.0f || sv.max.z != 0.0f ||
+            sa.min.x != 0.0f || sa.max.x != 0.0f || sa.min.y != 0.0f || sa.max.y != 0.0f ||
+            sa.min.z != 0.0f || sa.max.z != 0.0f)
+            unsup.add("scaling PVA velocity/acceleration != 0");
+        if (sp.ScalingPVA.RefEqP.Min >= 0 || sp.ScalingPVA.RefEqV.Min >= 0 ||
+            sp.ScalingPVA.RefEqA.Min >= 0)
+            unsup.add("dynamic parameter reference (RefEq) on scaling PVA");
+        d.sizeX = pos.min.x;              // X 定值（min==max 已校验）
+        d.sizeYRangeEnabled = true;
+        d.sizeYRangeMin = pos.min.y;
+        d.sizeYRangeMax = pos.max.y;
+    }
     else
     {
-        unsup.add("scaling type != None/Fixed (PVA/Easing/FCurve)");
+        unsup.add("scaling type != None/Fixed/PVA (Easing/FCurve)");
     }
 
     // 渲染公共段
@@ -705,10 +783,48 @@ NfxDoc extract(const Effekseer::Effect* effect, Unsupported& unsup)
         d.sizeY *= (h > 0 ? h : 1.0f);
     }
 
-    // 反例清单：旋转/力场/碰撞/音效/GPU 粒子/KillRules/LOD/Falloff/AlphaCutoff
-    if (n.RotationParam.RotationType != ParameterRotationType::ParameterRotationType_None &&
-        n.RotationParam.RotationType != ParameterRotationType::ParameterRotationType_Fixed)
-        unsup.add("rotation type != None/Fixed (PVA/Easing/FCurve)");
+    // 反例清单：力场/碰撞/音效/GPU 粒子/KillRules/LOD/Falloff/AlphaCutoff
+    // M-PT5 E5：旋转放宽为 None/Fixed/PVA 的屏幕平面 Z 分量（billboard 子集）。
+    // 口径 = vendored runtime：加载链无度→弧度，.nfx 直存弧度。
+    const auto& rp = n.RotationParam;
+    if (rp.RotationType == ParameterRotationType::ParameterRotationType_None)
+    {
+        // 无旋转（缺省）
+    }
+    else if (rp.RotationType == ParameterRotationType::ParameterRotationType_Fixed)
+    {
+        if (rp.RotationFixed.RefEq >= 0)
+            unsup.add("dynamic parameter reference (RefEq) on rotation");
+        d.rotEnabled = true;
+        d.angMin = d.angMax = rp.RotationFixed.Position.Z;
+        if (rp.RotationFixed.Position.X != 0.0f || rp.RotationFixed.Position.Y != 0.0f)
+            unsup.add("rotation Fixed X/Y != 0 (billboard subset is Z-only)");
+    }
+    else if (rp.RotationType == ParameterRotationType::ParameterRotationType_PVA)
+    {
+        const auto& rot = rp.RotationPVA.rotation;
+        const auto& vel = rp.RotationPVA.velocity;
+        const auto& acc = rp.RotationPVA.acceleration;
+        if (rot.min.x != 0.0f || rot.max.x != 0.0f || rot.min.y != 0.0f || rot.max.y != 0.0f)
+            unsup.add("rotation PVA X/Y range != 0 (billboard subset is Z-only)");
+        if (vel.min.x != 0.0f || vel.max.x != 0.0f || vel.min.y != 0.0f || vel.max.y != 0.0f)
+            unsup.add("rotation velocity X/Y range != 0 (billboard subset is Z-only)");
+        if (acc.min.z != 0.0f || acc.max.z != 0.0f || acc.min.x != 0.0f || acc.max.x != 0.0f ||
+            acc.min.y != 0.0f || acc.max.y != 0.0f)
+            unsup.add("rotation PVA acceleration != 0");
+        if (rp.RotationPVA.RefEqP.Min >= 0 || rp.RotationPVA.RefEqV.Min >= 0 ||
+            rp.RotationPVA.RefEqA.Min >= 0)
+            unsup.add("dynamic parameter reference (RefEq) on rotation PVA");
+        d.rotEnabled = true;
+        d.angMin = rot.min.z;
+        d.angMax = rot.max.z;
+        d.angVelMin = vel.min.z;
+        d.angVelMax = vel.max.z;
+    }
+    else
+    {
+        unsup.add("rotation type != None/Fixed/PVA (Easing/AxisPVA/AxisEasing/FCurve/RotateToViewpoint/Velocity)");
+    }
     if (n.LocalForceField.HasValue || n.LocalForceField.IsGlobalEnabled)
         unsup.add("force field enabled");
     if (n.Collisions.IsGroundCollisionEnabled)
@@ -788,6 +904,12 @@ int runConvert(const fs::path& inPath, const fs::path& outPath)
            doc.velMax[1], doc.velMin[2], doc.velMax[2]);
     printf("  accel      : (%.2f, %.2f, %.2f)\n", doc.accel[0], doc.accel[1], doc.accel[2]);
     printf("  blend/size : %s / (%.2f, %.2f)\n", doc.blend.c_str(), doc.sizeX, doc.sizeY);
+    if (doc.rotEnabled)
+        printf("  rotation   : ang [%.4f, %.4f] rad, angVel [%.4f, %.4f] rad/s\n",
+               doc.angMin, doc.angMax, doc.angVelMin, doc.angVelMax);
+    if (doc.sizeYRangeEnabled)
+        printf("  sizeYRange : [%.4f, %.4f] m (per-particle)\n",
+               doc.sizeYRangeMin, doc.sizeYRangeMax);
     printf("  fade       : in %.2fs out %.2fs\n", doc.fadeIn, doc.fadeOut);
     printf("  texture    : %s\n", doc.texture.empty() ? "(none)" : doc.texture.c_str());
     return 0;
@@ -842,6 +964,15 @@ int runSelftest()
         {0.0f, 0.0f},
         {1.0f, 255.0f},
     };
+    // M-PT5 E5/R1：旋转 + sizeYRange 往返
+    src.rotEnabled = true;
+    src.angMin = 0.0f;
+    src.angMax = 1.5707964f;    // π/2
+    src.angVelMin = -3.1415927f;
+    src.angVelMax = 3.1415927f;
+    src.sizeYRangeEnabled = true;
+    src.sizeYRangeMin = 0.4f;
+    src.sizeYRangeMax = 1.2f;
 
     json j = nfxToJson(src, "roundtrip.efkefc");
     NfxDoc back;
@@ -866,7 +997,12 @@ int runSelftest()
               back.colorCurve.alphaKeys.size() == 2 &&
               back.colorCurve.colorKeys[1] ==
                   std::array<float, 4>{0.5f, 60.0f, 200.0f, 255.0f} &&
-              back.colorCurve.alphaKeys[1] == std::array<float, 2>{1.0f, 255.0f};
+              back.colorCurve.alphaKeys[1] == std::array<float, 2>{1.0f, 255.0f} &&
+              // M-PT5 E5/R1：旋转 + sizeYRange 往返（π/2 等常量往返逐位）
+              back.rotEnabled && back.angMax == 1.5707964f &&
+              back.angVelMin == -3.1415927f && back.angVelMax == 3.1415927f &&
+              back.sizeYRangeEnabled && back.sizeYRangeMin == 0.4f &&
+              back.sizeYRangeMax == 1.2f;
     if (!ok)
     {
         printf("nfx selftest: FAIL (roundtrip field mismatch)\n");
@@ -882,23 +1018,53 @@ int runSelftest()
         return 1;
     }
 
-    // 自证 2b：老格式兼容（无 flipbook/colorCurve 字段 → enabled=false）
+    // 自证 2b：老格式兼容（无 flipbook/colorCurve/ang/sizeYRange 字段 → 全 false）
     {
         json legacy = nfxToJson(src, "legacy.efkefc");
         legacy["render"].erase("flipbook");
         legacy["render"].erase("colorCurve");
+        legacy["render"].erase("sizeYRange");
+        legacy["emitter"].erase("ang");
+        legacy["emitter"].erase("angVel");
         NfxDoc back2;
         std::string err2;
         if (!nfxFromJson(json::parse(legacy.dump()), back2, err2) || back2.flipbook.enabled ||
-            back2.colorCurve.enabled)
+            back2.colorCurve.enabled || back2.rotEnabled || back2.sizeYRangeEnabled)
         {
-            printf("nfx selftest: FAIL (legacy no-flipbook parse: %s)\n",
-                   err2.empty() ? "flipbook/colorCurve enabled" : err2.c_str());
+            printf("nfx selftest: FAIL (legacy no-optfield parse: %s)\n",
+                   err2.empty() ? "optional field enabled" : err2.c_str());
             return 1;
         }
     }
 
-    // 自证 2c：colorCurve 畸形拒绝（t 越界 / t 非降序 / 键长不对 / 空数组）
+    // 自证 2c-rot：ang/angVel/sizeYRange 畸形拒绝
+    {
+        auto expectRejectRot = [](const char* tag, const char* key, json patch) {
+            json bad = nfxToJson(NfxDoc{}, "rot.efkefc");
+            if (key[0] == 's' && key[1] == 'i') // sizeYRange → render
+                bad["render"][key] = patch;
+            else
+                bad["emitter"][key] = patch;
+            NfxDoc back3;
+            std::string err3;
+            if (nfxFromJson(json::parse(bad.dump()), back3, err3))
+            {
+                printf("nfx selftest: FAIL (%s accepted)\n", tag);
+                return false;
+            }
+            return true;
+        };
+        bool pass =
+            expectRejectRot("ang alone", "ang", json::array({0.0f, 1.0f})) &&
+            expectRejectRot("angVel short", "angVel", json::array({0.0f})) &&
+            expectRejectRot("ang bad type", "ang", json("not-array")) &&
+            expectRejectRot("sizeYRange short", "sizeYRange", json::array({0.5f})) &&
+            expectRejectRot("sizeYRange bad type", "sizeYRange", json(42));
+        if (!pass)
+            return 1;
+    }
+
+    // 自证 2d：colorCurve 畸形拒绝（t 越界 / t 非降序 / 键长不对 / 空数组）
     {
         auto expectReject = [](const char* tag, json ccPatch) {
             json bad = nfxToJson(NfxDoc{}, "cc.efkefc");
@@ -938,7 +1104,7 @@ int runSelftest()
         }
     }
 
-    printf("nfx selftest: PASS (json roundtrip + bad magic + legacy compat + colorCurve malformed + SKFE probe)\n");
+    printf("nfx selftest: PASS (json roundtrip + bad magic + legacy compat + rot/sizeYRange/colorCurve malformed + SKFE probe)\n");
     return 0;
 }
 
