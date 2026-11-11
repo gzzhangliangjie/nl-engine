@@ -246,6 +246,7 @@ add_library(nl_core STATIC
     core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/profiler_memory.cpp  # P8 M-TR1：Tracy 内存钩（operator new/delete -> TracyAllocS/FreeS）+ K2 PSAPI 进程内存
     core/src/jobgraph.cpp      # P8 M-J5a：显式依赖 DAG 薄封装（vendored Taskflow 只在此 TU 出现）
     core/src/scheduler.cpp     # P8 M-J5b：进程级常驻调度底座（组合 compute/io 两个 ThreadPool）
     core/src/jobsync.cpp       # P8 M-J5c-prep：动态依赖计数 job + Barrier（Jolt 合约同构，Jolt 无关）

@@ -14,6 +14,17 @@
 #    pragma warning(pop)
 #  endif
 
+// M-TR1：强制链接 profiler_memory.cpp 里的全局 operator new/delete 钩。
+// 这些符号定义在静态库 nl_core 中；若 exe 不显式引用该 .obj，链接器会整块丢弃，
+// 钩子静默失效（Tracy 0.15 也正是因此不内置全局钩）。用 /INCLUDE 拉入整 obj
+// （一个符号被强制引用即整 obj 进链接，对齐版 new/delete 一并带上）。
+#  if defined(_MSC_VER)
+#    pragma comment(linker, "/INCLUDE:??2@YAPEAX_K@Z")    // operator new(size_t)
+#    pragma comment(linker, "/INCLUDE:??3@YAXPEAX@Z")    // operator delete(void*)
+#    pragma comment(linker, "/INCLUDE:??_U@YAPEAX_K@Z")   // operator new[](size_t)
+#    pragma comment(linker, "/INCLUDE:??_V@YAXPEAX@Z")    // operator delete[](void*)
+#  endif
+
 // 帧边界：调用点固定在 viewer 主循环 present 完成处，与 RenderDoc 的 Present 帧
 // 边界对齐（P8-TRACY-PLAN §2）。
 #  define NL_PROFILE_FRAME()            FrameMark

@@ -11,6 +11,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/profiler.hpp"    // M-TR0：NL_PROFILE_* 薄封装（OFF 空转）
+#include "nl/core/profiler_memory.hpp"  // M-TR1 K2：进程内存查询（始终可用）
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
@@ -2364,18 +2365,21 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             hud.distance = camera.distance();
             hud.backend = st.backend;
             hud.adapter = info.adapterName.c_str();
-            // M-TR0 K1/K5：默认关的独立性能统计窗口（--profiling-hud）。
+            // M-TR0 K1/K5 + M-TR1 K2：默认关的独立性能统计窗口（--profiling-hud）。
             // 只开此窗口时藏掉常驻 HUD 面板，避免 --hud 基线与本开关耦合。
             if (o.profilingHud) {
                 auto& pd = hud.profilingDebug;
                 pd.show = true;
-                pd.lineCount = 3;
+                pd.lineCount = 4;
                 std::snprintf(pd.lines[0], nl::renderer::ProfilingDebugUi::kLineChars,
                               "draw calls : %u", info.drawCalls);
                 std::snprintf(pd.lines[1], nl::renderer::ProfilingDebugUi::kLineChars,
                               "instances  : %u", info.instanceCount);
                 std::snprintf(pd.lines[2], nl::renderer::ProfilingDebugUi::kLineChars,
                               "triangles  : %u", info.triangleCount);
+                std::snprintf(pd.lines[3], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "proc mem   : %.1f MB",
+                              nl::profiler::processWorkingSetBytes() / 1e6);
                 if (!o.hudEnabled) hud.panelShow = false;
             }
             hud.debugLayer = info.debugLayer.c_str();
@@ -3581,18 +3585,21 @@ int runScene(const Options& o) {
             hud.distance = camera.distance();
             hud.backend = st.backend;
             hud.adapter = info.adapterName.c_str();
-            // M-TR0 K1/K5：默认关的独立性能统计窗口（--profiling-hud）。
+            // M-TR0 K1/K5 + M-TR1 K2：默认关的独立性能统计窗口（--profiling-hud）。
             // 只开此窗口时藏掉常驻 HUD 面板，避免 --hud 基线与本开关耦合。
             if (o.profilingHud) {
                 auto& pd = hud.profilingDebug;
                 pd.show = true;
-                pd.lineCount = 3;
+                pd.lineCount = 4;
                 std::snprintf(pd.lines[0], nl::renderer::ProfilingDebugUi::kLineChars,
                               "draw calls : %u", info.drawCalls);
                 std::snprintf(pd.lines[1], nl::renderer::ProfilingDebugUi::kLineChars,
                               "instances  : %u", info.instanceCount);
                 std::snprintf(pd.lines[2], nl::renderer::ProfilingDebugUi::kLineChars,
                               "triangles  : %u", info.triangleCount);
+                std::snprintf(pd.lines[3], nl::renderer::ProfilingDebugUi::kLineChars,
+                              "proc mem   : %.1f MB",
+                              nl::profiler::processWorkingSetBytes() / 1e6);
                 if (!o.hudEnabled) hud.panelShow = false;
             }
             hud.debugLayer = info.debugLayer.c_str();
