@@ -12,6 +12,7 @@
 #include "nl/core/modes.hpp"
 #include "nl/core/profiler.hpp"    // M-TR0：NL_PROFILE_* 薄封装（OFF 空转）
 #include "nl/core/profiler_memory.hpp"  // M-TR1 K2：进程内存查询（始终可用）
+#include "renderdoc_app.h"              // M-TR2：RenderDoc 进程内抓帧（单头，零链接）
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
@@ -133,6 +134,7 @@ struct Options {
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
     bool profilingHud = false; // M-TR0：--profiling-hud（默认关的独立性能统计窗口 K1/K5）
+    int  captureFrame = 0;     // M-TR2：--capture-frame N（0=关）；RenderDoc 进程内抓第 N 帧，默认关
     std::string cameraMode = "orbit";   // P8 M-CAM b-segment：初始相机模式 orbit|free|chase|track
     std::string cameraTrack;            // --camera-track <file>：track 模式轨迹 tsv
     int  inputDemoStart = 5;  // 脚本起始迭代号（1-based；W@start D@+1 Space@+2 Esc@+3）
@@ -205,6 +207,33 @@ struct Options {
     std::string editorEndpoint = "tcp://127.0.0.1:29110";
     std::string viewId = "main";
 };
+
+// ---- M-TR2：RenderDoc 进程内抓帧（单头 + 零链接，默认关） ----
+// renderdoc.dll 在「用 RenderDoc 启动 viewer」时自行注入；这里只被动拾取它的 in-app
+// API，不主动链接任何图形 SDK。未注入时 GetModuleHandle 返回空、LoadLibrary 也失败
+// → 全程 no-op，行为零差异（与 Tracy 开关正交）。
+static RENDERDOC_API_1_6_0* g_rdocApi = nullptr;
+
+static void initRenderDocCapture() {
+    HMODULE h = GetModuleHandleA("renderdoc.dll");
+    if (!h) h = LoadLibraryW(L"renderdoc.dll");   // 用户把 dll 放 exe 旁的次选路径
+    if (!h) return;
+    auto getApi = reinterpret_cast<pRENDERDOC_GetAPI>(
+        GetProcAddress(h, "RENDERDOC_GetAPI"));
+    if (!getApi) return;
+    getApi(eRENDERDOC_API_Version_1_6_0, reinterpret_cast<void**>(&g_rdocApi));
+}
+
+// 在帧循环里每帧调用一次；到达指定帧时 TriggerCapture（抓该帧 present 后的状态）。
+static void maybeTriggerRenderDocCapture(std::uint64_t frameOneBased, int wantFrame) {
+    static bool fired = false;
+    if (!g_rdocApi || fired || wantFrame <= 0) return;
+    if (frameOneBased == static_cast<std::uint64_t>(wantFrame)) {
+        g_rdocApi->TriggerCapture();
+        fired = true;
+        nl::core::log::infoCh("viewer", "RenderDoc capture triggered at frame ", frameOneBased);
+    }
+}
 
 Options parseArgs(int argc, char** argv) {
     Options o;
@@ -454,6 +483,14 @@ Options parseArgs(int argc, char** argv) {
             o.driveHud = true;
         } else if (a == "--profiling-hud") {
             o.profilingHud = true;   // M-TR0：独立性能统计窗口，默认关
+        } else if (a == "--capture-frame" && i + 1 < argc) {  // M-TR2
+            const int n = std::atoi(argv[++i]);
+            if (n < 1) {
+                std::cerr << "invalid --capture-frame '" << n
+                          << "' (expected an integer >= 1)\n";
+                std::exit(1);
+            }
+            o.captureFrame = n;
         } else if (a == "--size" && i + 1 < argc) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
@@ -2512,6 +2549,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
 
+        maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
                                    (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) ? &hud : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
@@ -3627,6 +3665,7 @@ int runScene(const Options& o) {
             }
         }
 
+        maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath, hudOn ? &hud : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
@@ -3787,6 +3826,7 @@ void printUsage() {
               << "  viewer.exe --view-id <id>          M-E6: viewport key for multi-view editors (default main)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
               << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
+              << "  viewer.exe --capture-frame N       M-TR2: launched under RenderDoc, capture frame N to .rdc\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
               << "  viewer.exe --resize WxH            mid-run resize regression; saves <path>.before.png too\n"
@@ -3867,6 +3907,7 @@ void printUsage() {
 
 int main(int argc, char** argv) {
     Options o = parseArgs(argc, argv);
+    initRenderDocCapture();   // M-TR2：拾取 RenderDoc in-app API（无 RenderDoc 时 no-op）
     if (o.selftest) return runSelfTest();
     if (o.help) { printUsage(); return 0; }
     if (!nl::core::parseViewMode(o.modeText.c_str(), o.mode)) {
