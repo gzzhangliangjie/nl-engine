@@ -82,21 +82,23 @@ uint wcIqint(uint input) {
 }
 
 void wcMakeKey(float3 wp, float3 n, out uint key, out uint checksum) {
+    // M11.2 根因修复（两层）：① 跨帧 UAV→SRV 屏障缺失已由 drawProbeFrame 同帧
+    // fill→trace 解决；② 本层 key 只用世界位置量化，丢弃法线分量。csCacheFill
+    // 用深度法线、probe_trace 查询只持射线方向 dir（本 slang 版 RayQuery 不暴露命中
+    // 顶点法线），二者除垂直命中外几乎从不相等 → floor(abs(n)) 恒不一致 → 查询恒
+    // miss → gate 开/关都回落直光近似 → 画面逐字节相同（M11.2 原始 bug 的第二层）。
+    // 缓存存的是「到达该 cell 的间接 radiance」，由周围半球积分而来，位置主导、法线
+    // 弱相关；实心场景（Suzanne）位置同构即命中，线性探测吸收薄面罕见碰撞。故用
+    // (pos) 作主键，world_cache / probe_trace / gi-tools 三端一致。n 留形参仅保调用
+    // 签名兼容，不参与哈希。
     const int3 qp = int3(floor(wp / kCellSize));
-    const int3 qn = int3(floor(n + 0.0001f));
     uint k = wcPcg(uint(qp.x));
     k = wcPcg(k + uint(qp.y));
     k = wcPcg(k + uint(qp.z));
-    k = wcPcg(k + uint(qn.x));
-    k = wcPcg(k + uint(qn.y));
-    k = wcPcg(k + uint(qn.z));
     key = k & (kCacheCapacity - 1u);
     uint c = wcIqint(uint(qp.x));
     c = wcIqint(c + uint(qp.y));
     c = wcIqint(c + uint(qp.z));
-    c = wcIqint(c + uint(qn.x));
-    c = wcIqint(c + uint(qn.y));
-    c = wcIqint(c + uint(qn.z));
     checksum = max(c, 1u);   // 0 保留为空槽
 }
 

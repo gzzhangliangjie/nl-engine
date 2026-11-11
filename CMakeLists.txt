@@ -438,6 +438,9 @@ set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgatherc
 # S11 M11.0：world_cache.slang 三 compute 入口——世界缓存 flat hashmap（Q11-0 方案 A：
 # 无墓碑 + life 衰减清零立即重用 + 3 步探测）。半分辨率填充 / 全表衰减 / cache-viz 伪彩。
 set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute" "csCacheUpdate|cscacheupdate|compute" "csCacheBlend|cscacheblend|compute")
+# M11.2 验收：probe_atlas_dump.slang 单 compute 入口——irradAtlas_[0] 直出画面
+#（纯拷贝，无 RayQuery → 不入 _SM66 白名单，DXIL 用默认 profile）。
+set(_ENTRIES_PROBE_ATLAS_DUMP "csIrradDump|csirraddump|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -470,6 +473,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_GATHER}")
     elseif(_SRC_NAME STREQUAL "world_cache")
         set(_ENTRIES "${_ENTRIES_WORLD_CACHE}")
+    elseif(_SRC_NAME STREQUAL "probe_atlas_dump")
+        set(_ENTRIES "${_ENTRIES_PROBE_ATLAS_DUMP}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()

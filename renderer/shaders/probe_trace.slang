@@ -8,7 +8,12 @@
 //   有效探针沿 octaTexelToDir(octTexel)（border wrap 同方向口径）发 1 条
 //   RayQuery 射线打 M8 TLAS：
 //     miss  → skyGradient(dir)（Q12-3 解析天穹）
-//     hit   → 命中点直光（M9.1 口径降级备案，S10-PLAN Q12 已定项）：
+//     hit   → 【M11.2】命中点先查 S11 世界缓存：命中 → albedo ×
+//             (C(hit)/π + ambient)；未命中 → 退回 M10.1 直光近似（备案）。
+//             Q11-2c 补正拍板：命中分支也带 ambient 微底，与兜底同起跑线。
+//             开关 --probe-cache-bounce 默认关（Q11-2a=A），关闭时整段查缓存
+//             不执行，s10-* 冻结基线零漂。
+//             M10.1 兜底（备案）：命中点直光（M9.1 口径降级）：
 //             albedo(统一模型色) × (lightColor·intensity·shadow/π + ambient)，
 //             shadow = 命中点朝主灯的 1 条阴影射线（origin 沿探针射线回退
 //             bias 防自遮挡——命中点法线在 104-tri 粗代理上不可得，无 NdotL
@@ -17,8 +22,9 @@
 //   漏天光」（GI-RESEARCH-NOTES §1）。
 //
 // Registers（§2.7 每管线单一 BindingSet；§2.5 SPIR-V 平移 b→256/t→0/u→384）：
-//   b0 = TraceConstants(64B volatile) + t0..t3 place atlas SRV（cur parity）
-//        + t4 TLAS + u0..u3 irradiance atlas UAV（RGBA16F，每级一张）
+//   b0 = TraceConstants(80B volatile) + t0..t3 place atlas SRV（cur parity）
+//        + t4 TLAS + t5 wcChecksums / t6 wcRadiance（M11.2 查缓存，只加 SRV
+//        不动 Q4 冻结面）+ u0..u3 irradiance atlas UAV（RGBA16F，每级一张）
 // （M10.1 无时间混合：单份不 ping-pong，降噪归 M10.3/S14。）
 
 #include "octahedral.slangh"
@@ -31,6 +37,10 @@ cbuffer TraceConstants : register(b0)
     float4 g_traceHitMat;     // rgb = 命中点 albedo（统一模型色），a = 环境光
     float4 g_traceParams;     // x = shadowBias（世界尺度，M9.1 g_shadowParams.x 同值）
                               // y = shadow tMax / z = baseRes / w = oct core res(8)
+    // M11.2（SSC §2.21：CPU 布局逐字段对齐，scene.cpp tcb[16..19]）
+    float4 g_traceBounce;     // x = 查缓存有效开关（probeCacheBounce && cacheFrame>0
+                              //     ——首帧无「上一帧收敛值」，必须走兜底）,
+                              // y/z/w = 保留
 }
 
 Texture2D<float4> g_placeAtlas0 : register(t0);   // 布点 atlas（RGBA32F cur parity）
@@ -39,12 +49,51 @@ Texture2D<float4> g_placeAtlas2 : register(t2);
 Texture2D<float4> g_placeAtlas3 : register(t3);
 RaytracingAccelerationStructure g_tlas : register(t4);
 
+// M11.2：世界缓存只读视图（与 world_cache.slang t1/t5 同一 buffer，跨 set 复用）。
+StructuredBuffer<uint>   g_wcChecksums : register(t5);
+StructuredBuffer<float4> g_wcRadiance  : register(t6);
+
 RWTexture2D<float4> g_irrad0 : register(u0);      // 辐照度 atlas（RGBA16F，a=1 有效）
 RWTexture2D<float4> g_irrad1 : register(u1);
 RWTexture2D<float4> g_irrad2 : register(u2);
 RWTexture2D<float4> g_irrad3 : register(u3);
 
 static const float kInvPi = 0.31830988f;
+
+// ---- M11.2 世界缓存查询（与 world_cache.slang wcPcg/wcIqint/wcMakeKey
+// 逐字同构，只改前缀避免链接期重名）。⚠️ 两处必须同步维护：改任一处
+// 的哈希链 / kCellSize / 容量，另一处与 gi-tools WorldCacheSim 三方同改
+//（SHADER-CONVENTIONS M11.2 槽位表登记）。此处复制而非抽公共头，是为了
+// 不动 world_cache.slang 的冻结编译形态（s11-hash cacheviz bytes 基线）。
+static const uint  ptCacheCapacity = 1u << 18;
+static const uint  ptMaxProbeSteps = 3u;
+static const float ptCellSize      = 0.5f;
+
+uint ptPcg(uint input) {
+    const uint state = input * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+uint ptIqint(uint input) {
+    const uint n = (input << 13u) ^ input;
+    return n * (n * n * 15731u + 789221u) + 1376312589u;
+}
+void ptMakeKey(float3 wp, float3 n, out uint key, out uint checksum) {
+    // M11.2 根因修复（两层）：① 跨帧屏障由 drawProbeFrame 同帧 fill→trace 解决；
+    // ② key 只用世界位置量化，丢弃法线分量（与 wcMakeKey 同构：csCacheFill 用深度
+    // 法线、查询只持 dir，二者除垂直命中外几乎从不相等 → 查询恒 miss → 修正前
+    // ON/OFF 逐字节相同）。缓存存间接 radiance（位置主导），实心场景位置同构即命中。
+    // n 留形参保签名兼容，不参与哈希。
+    const int3 qp = int3(floor(wp / ptCellSize));
+    uint k = ptPcg(uint(qp.x));
+    k = ptPcg(k + uint(qp.y));
+    k = ptPcg(k + uint(qp.z));
+    key = k & (ptCacheCapacity - 1u);
+    uint c = ptIqint(uint(qp.x));
+    c = ptIqint(c + uint(qp.y));
+    c = ptIqint(c + uint(qp.z));
+    checksum = max(c, 1u);   // 0 保留为空槽
+}
 
 // place atlas 4 路分支读（纹理数组不能动态索引，probe_viz 同款）。
 float4 loadPlaceAtlas(uint level, uint2 texel)
@@ -91,27 +140,69 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
         }
         else
         {
-            // 命中点直光（M9.1 口径降级：统一 albedo + 无 NdotL，S10-PLAN 备案）。
-            // 命中点直光 shadow ray：origin 沿探针射线回退 bias 防粗代理自遮挡
-            //（命中点法线不可得，direct.slang 的 normal 偏移在此不可用）。
             const float3 hitP = probe.xyz + dir * q.CommittedRayT();
-            const float3 so   = hitP - dir * g_traceParams.x;
-            RayDesc sray;
-            sray.Origin    = so;
-            sray.Direction = g_traceLightDir.xyz;
-            sray.TMin      = 0.0f;
-            sray.TMax      = g_traceParams.y;
-            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
-            sq.TraceRayInline(g_tlas,
-                              RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                              0xFF, sray);
-            sq.Proceed();
-            const float shadow = (sq.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
-            // 漫反射出射 radiance ≈ albedo/π · E_direct + albedo · E_ambient
-            //（shadePbrLinear diffuse 项口径；E_direct 无 NdotL 项 = 降级备案）。
-            radiance = g_traceHitMat.rgb *
-                       (g_traceLightCol.rgb * g_traceLightCol.a * shadow * kInvPi +
-                        g_traceHitMat.a);
+            // ---- M11.2：命中点先查世界缓存（Q11-2a=A：只在开关开且缓存已
+            // 跑过至少一帧时；帧序由 drawProbeFrame 同帧 fill→trace 保证读到本帧缓存）----
+            // 命中分支（M10.1 兜底同款口径）：命中 → albedo×(C/π+ambient)；
+            // 未命中 → 退回 M10.1 直光近似（PLAN「未命中 cell 才退回直光近似」）。
+            // Q11-2c 补正拍板：命中分支也带 ambient 微底，与兜底同起跑线。
+            // ── M11.2 根因修复口径（验收核心，两层）────────────────────────
+            // ① 跨帧 UAV→SRV 屏障缺失：原帧序 trace 跨命令列表读上帧缓存，nvrhi 不
+            // 插屏障 → trace 读清零/陈旧全零 → 已改 drawProbeFrame 同帧 fill→trace。
+            // ② key 只量化世界位置（wcMakeKey/ptMakeKey 均丢弃法线）：csCacheFill 用
+            // 深度法线、查询只持射线方向 dir（本 slang 版 RayQuery 不暴露命中顶点法线），
+            // 二者除垂直命中外几乎从不相等 → 旧 normal-key 查询恒 miss → 画面逐字节相同。
+            // 缓存存间接 radiance（位置主导），实心场景位置同构即命中；薄面罕见碰撞靠
+            // 线性探测吸收。
+            float3 bounced = float3(0.0f);
+            bool cacheHit = false;
+            if (g_traceBounce.x > 0.5f)
+            {
+                // M11.2 层② 2b 根因修复：查询点用探针原点 probe.xyz（必为可见已填
+                // cell），不用命中点 hitP。本测试场景仅 Suzanne 凸体、无地面、
+                // probeNormalOffset=0.10，探针射线射入物体内部打到背面/非可见面 →
+                // hitP 所在 cell 从未被 csCacheFill 填过 → 校验码恒不匹配（绿=0）。
+                // 探针原点沿法线偏置 0.10 仍落在自身可见面 cell 内，与缓存填充同构
+                // → 命中。物理语义：探针沿各向取出的间接 radiance ≈ 其原点 cell 的
+                // 间接 radiance（Lambert 出射项，正是 irrad atlas 想要的）。
+                const float3 hq = probe.xyz;
+                uint key, checksum;
+                ptMakeKey(hq, dir, key, checksum);      // dir 仅占位，key 只用位置
+                [loop]
+                for (uint i = 0u; i < ptMaxProbeSteps; ++i) {
+                    const uint existing = g_wcChecksums[key];
+                    if (existing == 0u) break;          // 探测链撞空槽 = 必不存在
+                    if (existing == checksum) {
+                        const float3 cacheC = g_wcRadiance[key].xyz;
+                        bounced = g_traceHitMat.rgb * (cacheC * kInvPi + g_traceHitMat.a);
+                        cacheHit = true;
+                        break;
+                    }
+                    key = (key + 1u) & (ptCacheCapacity - 1u);
+                }
+            }
+            if (!cacheHit)
+            {
+                // ---- M10.1 兜底（备案）：命中点直光近似（无 NdotL 项，降级如实）----
+                // 朝主灯发 1 条阴影射线（origin 沿探针射线回退 bias 防自遮挡）。
+                const float3 so = hitP - dir * g_traceParams.x;
+                RayDesc sray;
+                sray.Origin    = so;
+                sray.Direction = g_traceLightDir.xyz;
+                sray.TMin      = 0.0f;
+                sray.TMax      = g_traceParams.y;
+                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+                sq.TraceRayInline(g_tlas,
+                                  RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                                  0xFF, sray);
+                sq.Proceed();
+                const float shadow = (sq.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+                // 漫反射出射 radiance ≈ albedo/π · E_direct + albedo · E_ambient
+                bounced = g_traceHitMat.rgb *
+                          (g_traceLightCol.rgb * g_traceLightCol.a * shadow * kInvPi +
+                           g_traceHitMat.a);
+            }
+            radiance = bounced;
         }
     }
 

@@ -143,6 +143,12 @@ struct FrameParams {
     //  fill/decay/viz 三个 compute；其它模式不读，缺省 false 零扰动）。
     bool  cacheViz          = false;
     bool  cacheVizRadiance  = false;   // M11.1：viz 亮度 = 出射辐照度（0=life 模式）
+    // ---- S11 M11.2：探针命中查缓存（Q11-2a=A，默认关 = 老 s10-* 卡零漂）----
+    bool  probeCacheBounce  = false;   // 命中先查世界缓存，miss 才退回直光近似
+    float probeLightScale   = 1.0f;    // 0..1，同步缩放 trace/cache 灯强度+ambient
+    bool  probeCacheDiag    = false;   // M11.2 调试：命中查缓存结果按 RGB 伪彩（红=命中/绿=占未中/蓝=空）
+                                       //（关灯余晖序列用；1.0 = 老路径基线）
+    bool  probeAtlasDump     = false;   // M11.2 验收：把 irradAtlas_[0] 直出画面，绕开 gather 做开关开/关自比
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。

@@ -125,6 +125,10 @@ struct Options {
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
     bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
     bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
+    bool probeCacheBounce = false; // M11.2：--probe-cache-bounce（命中查缓存，默认关保形）
+    float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
+    bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
+    bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
@@ -219,6 +223,12 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
         else if (a == "--cache-viz-radiance") o.cacheVizRadiance = true;  // M11.1
+        // M11.2：探针命中查缓存（默认关）+ 灯强度缩放（关灯余晖取证）。
+        else if (a == "--probe-cache-bounce") o.probeCacheBounce = true;
+        else if (a == "--probe-light-scale" && i + 1 < argc)
+            o.probeLightScale = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
+        else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2157,6 +2167,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // S11 M11.0：cache-viz（probe 链基建复用；gather/dots 关，伪彩即最终画面）。
         fp.cacheViz = (o.mode == nl::core::ViewMode::CacheViz);
         fp.cacheVizRadiance = o.cacheVizRadiance;   // M11.1：viz 亮度模式
+        // M11.2（Q11-2a=A）：默认关 → 老 s10-* 卡零漂；S=1 → 老路径基线。
+        fp.probeCacheBounce = o.probeCacheBounce;
+        fp.probeLightScale = o.probeLightScale;
+        fp.probeAtlasDump = o.probeAtlasDump;
+        fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];

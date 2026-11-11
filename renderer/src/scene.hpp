@@ -499,6 +499,11 @@ public:
     // 替换，同 csGatherCompose 呈现链口径）。presentTonemap 之前调用。
     bool drawCacheViz(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                       const FrameParams& params, std::string& outError);
+    // drawIrradDump（M11.2 验收）：csIrradDump 把 irradAtlas_[0] 直出到
+    // hdrSceneColor_（全替换，绕开 gather——合成图在该场景读不到 M11.2 增量）。
+    // 仅 --probe-atlas-dump 时调用，presentTonemap 之前。
+    bool drawIrradDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                       const FrameParams& params, std::string& outError);
   private:
     // 懒建 cache sets（依赖 probeDepth_ / hdrSceneColor_，句柄变了就重建——
     // set 是不可变对象，纹理重建后必须换新 set）。
@@ -1117,18 +1122,23 @@ private:
     // 混合 cap 64）—— cell 更新 = 多跳反馈的机制本体（S11-PLAN M11.1）。
     nvrhi::ShaderHandle          csCacheFill_, csCacheDecay_, csCacheViz_;
     nvrhi::ShaderHandle          csCacheUpdate_, csCacheBlend_;
+    nvrhi::ShaderHandle          csIrradDump_;          // M11.2 验收：atlas 直出
     nvrhi::BufferHandle          cacheCB_;               // volatile 160B（M11.1 扩）
     nvrhi::BufferHandle          wcChecksums_, wcLife_;  // 4B×2^18 each
     nvrhi::BufferHandle          wcGeoPos_, wcGeoNrm_;   // 16B×2^18 each
     nvrhi::BufferHandle          wcRadiance_, wcNewRadiance_; // M11.1：16B×2^18 each
     nvrhi::BindingLayoutHandle   cacheFillLayout_, cacheVizLayout_;
     nvrhi::BindingLayoutHandle   cacheUpdateLayout_, cacheBlendLayout_;
+    nvrhi::BindingLayoutHandle   irradDumpLayout_;       // M11.2 验收
     nvrhi::BindingSetHandle      cacheFillSet_, cacheVizSet_;
     nvrhi::BindingSetHandle      cacheUpdateSet_, cacheBlendSet_;
+    nvrhi::BindingSetHandle      irradDumpSet_;          // M11.2 验收
     nvrhi::ComputePipelineHandle cacheFillPSO_, cacheDecayPSO_, cacheVizPSO_;
     nvrhi::ComputePipelineHandle cacheUpdatePSO_, cacheBlendPSO_;
+    nvrhi::ComputePipelineHandle irradDumpPSO_;          // M11.2 验收
     nvrhi::TextureHandle         cacheFillSetDepth_;     // set 依赖登记（probeDepth_ 重建则 set 重建）
     nvrhi::TextureHandle         cacheVizSetHdr_;        // set 依赖登记（hdrSceneColor_ 重建则 set 重建）
+    nvrhi::TextureHandle         irradDumpSetHdr_;       // M11.2 验收 set 依赖登记
     std::uint32_t                cacheFrame_ = 0;        // 帧号（r2 抖动种子，确定性）
     bool                         cacheFirstClear_ = true;// 首帧清零表（uninit 内存防假命中）
     bool                         cacheLogged_ = false;   // cache 日志锚只打一次

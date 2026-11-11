@@ -3243,10 +3243,12 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     velocityCB_ = device->createBuffer(vcbDesc);
     if (!velocityCB_) { outError = "createBuffer failed for velocity constants"; return false; }
 
-    // traceCB_（64B volatile，M10.1）：probe_trace.slang 布局
-    //（[0..3] 灯向 / [4..7] 灯色·强度 / [8..11] 命中 albedo·ambient / [12..15] 参数）。
+    // traceCB_（80B volatile，M10.1 64B → M11.2 80B）：probe_trace.slang 布局
+    //（[0..3] 灯向 / [4..7] 灯色·强度 / [8..11] 命中 albedo·ambient /
+    //  [12..15] 参数 / [16..19] 查缓存开关+保留）。⚠️ SSC §2.21：扩 CB 前
+    // 以 dxc -dumpbin 反汇编的 cbuffer Size 为准。
     nvrhi::BufferDesc tcbDesc;
-    tcbDesc.byteSize = 64;
+    tcbDesc.byteSize = 80;
     tcbDesc.isConstantBuffer = true;
     tcbDesc.isVolatile = true;
     tcbDesc.maxVersions = 16;
@@ -3316,6 +3318,10 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
         .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(4))
+        // M11.2：世界缓存只读视图（只加 SRV，不动 Q4 冻结面）。slang 消除
+        // 未用绑定 → 这两个槽必须与实际反射一致（SSC M11.1 root sig 铁律）。
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
@@ -3526,6 +3532,9 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
             for (std::uint32_t level = 0; level < 4; ++level)
                 tsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
             tsDesc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(4, tlas_));
+            // M11.2：与 world_cache.slang 共用同一 buffer（t5 checksums / t6 radiance）。
+            tsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, wcChecksums_));
+            tsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, wcRadiance_));
             for (std::uint32_t level = 0; level < 4; ++level)
                 tsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level, irradAtlas_[level]));
             traceSet_[parity] = device->createBindingSet(tsDesc, traceLayout_);
@@ -3669,18 +3678,33 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     }
     cmd->writeBuffer(probeCB_, cb, sizeof(cb));
 
-    // ---- traceCB_ 每帧全量覆写（64B）：灯参数与 writeResolveConstants 同源
-    //（白光强度 2.5）；命中材质 = M10.1 降级口径（统一 albedo + ambient）；
+    // ---- traceCB_ 每帧全量覆写（80B，M11.2）：灯参数与 writeResolveConstants
+    // 同源（白光强度 2.5）；命中材质 = M10.1 降级口径（统一 albedo + ambient）；
     // shadow 参数 = M9.1 g_shadowParams 同值（bias 0.01 / tMax 50）。
+    // M11.2：--probe-light-scale S 同乘主灯强度与 ambient（关灯序列 S=0）；
+    // 查缓存有效开关 = 用户开关 && cacheFrame_>0（首帧无上帧收敛值必须走兜底，
+    // 也避开 drawCacheFrame 首帧清零发生在 trace 之后的未初始化窗口）。
     {
-        const float tcb[16] = {
+        const float ls = params.probeLightScale;
+        const float tcb[20] = {
             params.lightDir[0], params.lightDir[1], params.lightDir[2], 0.0f,
-            1.0f, 1.0f, 1.0f, 2.5f,
-            0.45f, 0.39f, 0.30f, params.lightDir[3],   // 统一模型色（暖灰）+ 环境光
+            1.0f, 1.0f, 1.0f, 2.5f * ls,
+            0.45f, 0.39f, 0.30f, params.lightDir[3] * ls,   // 统一模型色 + 环境光
             0.01f, 50.0f,
             static_cast<float>(probeBaseRes_), 8.0f,
+            (params.probeCacheBounce && cacheFrame_ > 0) ? 1.0f : 0.0f,
+            params.probeCacheDiag ? 1.0f : 0.0f,   // y = DIAG 伪彩开关
+            0.0f, 0.0f,
         };
         cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
+        // M11.2 一次性日志锚：实读 CB 开关与 cacheFrame_（诊断 + 验收锚）。
+        static bool bounceGateLogged = false;
+        if (!bounceGateLogged && cacheFrame_ > 0) {
+            nl::core::log::infoCh("scene", "probe: M11.2 bounce gate=", tcb[16],
+                                  " cacheFrame=", cacheFrame_,
+                                  " lightScale=", ls);
+            bounceGateLogged = true;
+        }
     }
 
     // ---- gatherCB_ 每帧全量覆写（112B，M10.2）：invViewProj 与 probeCB_ 同源
@@ -3855,6 +3879,9 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
         !loadCacheShader("world_cache.cscacheupdate", csCacheUpdate_) ||
         !loadCacheShader("world_cache.cscacheblend", csCacheBlend_))
         return false;
+    // M11.2 验收：atlas 直出 shader（独立 loadCacheShader 风格：同 dist 目录）。
+    if (!loadCacheShader("probe_atlas_dump.csirraddump", csIrradDump_))
+        return false;
 
     // cacheCB_（160B volatile）：[0..15] invViewProj / [16..19] eye+cellSize /
     // [20..23] vpW/vpH/lifetime/frameIndex / M11.1 [24..27] 灯向+强度 /
@@ -3918,6 +3945,14 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     cacheVizLayout_ = device->createBindingLayout(vDesc);
     if (!cacheVizLayout_) { outError = "createBindingLayout failed for cache viz"; return false; }
 
+    // M11.2 验收：irrad atlas 直出布局（t0 SRV 读 atlas + u0 UAV 写 hdr，无 CB）。
+    nvrhi::BindingLayoutDesc iDesc;
+    iDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+    irradDumpLayout_ = device->createBindingLayout(iDesc);
+    if (!irradDumpLayout_) { outError = "createBindingLayout failed for irrad dump"; return false; }
+
     // update 布局（M11.1）：b0 + t7 TLAS + t1/t3/t4/t5 表 SRV + u4 newRadiance。
     nvrhi::BindingLayoutDesc uDesc;
     uDesc.setVisibility(nvrhi::ShaderType::All)
@@ -3955,6 +3990,9 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     { nvrhi::ComputePipelineDesc p; p.setComputeShader(csCacheBlend_).addBindingLayout(cacheBlendLayout_);
       cacheBlendPSO_ = device->createComputePipeline(p);
       if (!cacheBlendPSO_) nl::core::log::infoCh("scene", "cache: blend PSO failed"); }
+    { nvrhi::ComputePipelineDesc p; p.setComputeShader(csIrradDump_).addBindingLayout(irradDumpLayout_);
+      irradDumpPSO_ = device->createComputePipeline(p);
+      if (!irradDumpPSO_) nl::core::log::infoCh("scene", "irrad-dump: PSO failed"); }
     if (!cacheFillPSO_ || !cacheDecayPSO_ || !cacheVizPSO_ ||
         !cacheUpdatePSO_ || !cacheBlendPSO_) {
         outError = "createComputePipeline failed for world cache";
@@ -4060,7 +4098,7 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         // M11.1 update 段（traceCB_ 同源口径：白光 2.5 / bias 0.01 / tMax 50 /
         // 统一 albedo 0.45/0.39/0.30）
         cb[24] = params.lightDir[0]; cb[25] = params.lightDir[1]; cb[26] = params.lightDir[2];
-        cb[27] = 2.5f;                       // 强度
+        cb[27] = 2.5f * params.probeLightScale;   // 强度（M11.2 关灯序列同步缩放）
         cb[28] = 1.0f; cb[29] = 1.0f; cb[30] = 1.0f;   // 灯色
         cb[31] = 0.01f;                      // shadowBias
         cb[32] = 0.45f; cb[33] = 0.39f; cb[34] = 0.30f; // 统一间接反照率
@@ -4158,6 +4196,54 @@ bool Scene::drawCacheViz(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewpo
                             std::uint32_t(vpH), " hdr=", hdrSceneColor_ ? "ok" : "null",
                             " set=", cacheVizSet_ ? "ok" : "null");
         cacheVizLogged_ = true;
+    }
+    return true;
+}
+
+bool Scene::drawIrradDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                          const FrameParams& params, std::string& outError) {
+    (void)params;
+    if (!irradDumpPSO_) { outError = "irrad dump: pipeline not ready"; return false; }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // set 依赖 irradAtlas_[0] / hdrSceneColor_（懒建/重建即重建 set）。
+    if (!irradDumpSet_ || irradDumpSetHdr_ != hdrSceneColor_ || !irradAtlas_[0]) {
+        if (!hdrSceneColor_ || !irradAtlas_[0]) {
+            outError = "irrad dump: atlas/hdr not ready"; return false;
+        }
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::Texture_SRV(0, irradAtlas_[0]));
+        d.addItem(nvrhi::BindingSetItem::Texture_UAV(0, hdrSceneColor_));
+        irradDumpSet_ = probeDevice_->createBindingSet(d, irradDumpLayout_);
+        if (!irradDumpSet_) { outError = "createBindingSet failed for irrad dump"; return false; }
+        irradDumpSetHdr_ = hdrSceneColor_;
+    }
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    // irradAtlas_[0]：csTrace 写完是 UAV → 转 SRV（OFF 态无 drawCacheFrame 兜底，
+    // 这里显式转，保证读的是本帧 trace 结果）。
+    cmd->setTextureState(irradAtlas_[0], allSub, nvrhi::ResourceStates::ShaderResource);
+    // hdr 当前态 = RenderTarget（matResolve 刚写完）→ UAV 全替换；presentTonemap
+    // 自己再转回 SRV。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(irradDumpPSO_).addBindingSet(irradDumpSet_);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    // 跨帧契约收尾（drawCacheFrame 同款）：probe place/trace 产物 UAV→SRV，保持
+    // 「帧首声明 SRV」。atlas-dump 在 drawCacheFrame 跳过时（OFF 态）也必须补，
+    // 否则下一帧 beginTracking 的 SRV 声明与实际 UAV 态冲突（D3D12 校验 252 错）。
+    {
+        const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                                  0, nvrhi::TextureSubresourceSet::AllArraySlices);
+        for (std::uint32_t level = 0; level < 4; ++level)
+            cmd->setTextureState(probeAtlas_[probeParity_][level], allSub,
+                                 nvrhi::ResourceStates::ShaderResource);
+        for (std::uint32_t level = 0; level < 4; ++level)
+            cmd->setTextureState(irradAtlas_[level], allSub,
+                                 nvrhi::ResourceStates::ShaderResource);
+        cmd->setTextureState(probePrevDelta_, allSub,
+                             nvrhi::ResourceStates::ShaderResource);
     }
     return true;
 }
@@ -6195,13 +6281,24 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     //（matResolve 之后——布点读的是本帧几何已经画完的状态；
                     // tonemap 之前——布点与本帧 HDR 输出同帧）。
                     if (probe_) drawProbeFrame(cmd, viewport, params);
-                    // S11 M11.0：cache-viz = 全表衰减 + 半分辨率查询即插入
-                    //（drawProbeFrame 之后——probeDepth_ 本帧深度/几何已就绪）。
-                    if (probe_ && params.cacheViz) drawCacheFrame(cmd, viewport, params);
+                    // S11 M11.2（Q11-2a）：帧序保持 trace→cache→gather 不动。csTrace
+                    // 读上一帧收敛缓存（bevy 同款时域滞后），drawCacheFrame 在本帧
+                    // trace 之后填表供下一帧命中。前移填表会破坏 csCacheFill 依赖本帧
+                    // probeDepth_ 的契约（probeDepth_ 在 drawProbeFrame 的 velocity
+                    // prepass 才写好），故缓存填表必须落在 drawProbeFrame 之后。
+                    if (probe_ && (params.cacheViz || params.probeCacheBounce))
+                        drawCacheFrame(cmd, viewport, params);
+                    // M11.2 验收（--probe-atlas-dump）：跳过 gather，把 irradAtlas_[0]
+                    // 直出到画面做开关开/关自比（合成图在该场景读不到 M11.2 增量）。
+                    if (probe_ && params.probeAtlasDump && tlasReady_) {
+                        std::string adErr;
+                        if (!drawIrradDump(cmd, viewport, params, adErr))
+                            nl::core::log::deviceError("irrad-dump", adErr);
+                    }
                     // M10.2（Q13-3）：gather 态 = 全屏探针插值 + 直光合成（hdr 同
                     // 纹理 RMW，ambient 已置零）；无点叠加。非 gather 态保持
                     // M10.0/M10.1 点可视化保形。
-                    if (probe_ && params.probeGather && tlasReady_) {
+                    if (probe_ && params.probeGather && !params.probeAtlasDump && tlasReady_) {
                         std::string gErr;
                         if (!drawProbeGather(cmd, viewport, params, gErr))
                             nl::core::log::deviceError("probe-gather", gErr);
@@ -6225,7 +6322,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // M10.2：gather 态跳过（Q13-3 无点叠加）。
                     // S11 M11.0：cache-viz 无点叠加（伪彩即最终画面）。
                     if (probe_ && !params.cacheViz &&
-                        !(params.probeGather && tlasReady_))
+                        !(params.probeGather && tlasReady_) && !params.probeAtlasDump)
                         drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
                     // 全屏 viz：读同一块 buffer 的 SRV 视角，解包 → 簇色/三角色。
@@ -7762,6 +7859,7 @@ void Scene::shutdown() {
     csCacheViz_ = nullptr;
     csCacheUpdate_ = nullptr;
     csCacheBlend_ = nullptr;
+    csIrradDump_ = nullptr;
     cacheCB_ = nullptr;
     wcChecksums_ = nullptr;
     wcLife_ = nullptr;
@@ -7773,17 +7871,21 @@ void Scene::shutdown() {
     cacheVizLayout_ = nullptr;
     cacheUpdateLayout_ = nullptr;
     cacheBlendLayout_ = nullptr;
+    irradDumpLayout_ = nullptr;
     cacheFillSet_ = nullptr;
     cacheVizSet_ = nullptr;
     cacheUpdateSet_ = nullptr;
     cacheBlendSet_ = nullptr;
+    irradDumpSet_ = nullptr;
     cacheFillSetDepth_ = nullptr;
     cacheVizSetHdr_ = nullptr;
+    irradDumpSetHdr_ = nullptr;
     cacheFillPSO_ = nullptr;
     cacheDecayPSO_ = nullptr;
     cacheVizPSO_ = nullptr;
     cacheUpdatePSO_ = nullptr;
     cacheBlendPSO_ = nullptr;
+    irradDumpPSO_ = nullptr;
     cacheFrame_ = 0;
     cacheFirstClear_ = true;
     cacheLogged_ = false;

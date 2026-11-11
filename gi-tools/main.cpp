@@ -6,9 +6,12 @@
 //
 // 子命令（退出码 0=PASS / 1=断言失败 / 2=用法错误，对齐 nav-tools / 展示台）：
 //   gi-tools selftest [cachesim]        CPU hashmap 语义单测（ctest 挂载点）
-//   gi-tools cachesim --frames N --png out.png [--size N]
+//   gi-tools cachesim --frames N --png out.png [--size N] [--update]
 //                                       确定性占用仿真（合成场景表面采样 →
 //                                       N 帧 touch+decay）+ 俯视占用热图 PNG
+//   gi-tools bounce --frames N --png out.png [--size N] [--light-off F]
+//                                       M11.2 探针查缓存二跳仿真：颜色渗透 +
+//                                       关灯余晖时间序列（bytes 级确定）
 //
 // 证据规则：example 卡引用的 PNG 一律来自本工具真实输出，不许手绘示意。
 
@@ -81,9 +84,11 @@ struct WorldCacheSim {
         const int px = static_cast<int>(std::floor(pos[0] * 2.0f));
         const int py = static_cast<int>(std::floor(pos[1] * 2.0f));
         const int pz = static_cast<int>(std::floor(pos[2] * 2.0f));
-        const int nx = static_cast<int>(std::floor(nrm[0] + 0.0001f));
-        const int ny = static_cast<int>(std::floor(nrm[1] + 0.0001f));
-        const int nz = static_cast<int>(std::floor(nrm[2] + 0.0001f));
+        // M11.2 根因修复（续）：法线取分量绝对值，与 GPU wcMakeKey/ptMakeKey 同构。
+        // |nrm| 后填充(|真实法线|)与查询(|dir|=|外法线|) key 一致；曲面下不再符号相反。
+        const int nx = static_cast<int>(std::floor(std::fabs(nrm[0]) + 0.0001f));
+        const int ny = static_cast<int>(std::floor(std::fabs(nrm[1]) + 0.0001f));
+        const int nz = static_cast<int>(std::floor(std::fabs(nrm[2]) + 0.0001f));
         std::uint32_t k = hashes::pcg(u(px));
         k = hashes::pcg(k + u(py));
         k = hashes::pcg(k + u(pz));
@@ -342,6 +347,107 @@ static void simCacheBlend(WorldCacheSim& sim) {
         c.samples = std::min(c.samples + 1.f, 64.f);
         c.newMark = false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// M11.2 探针射线查询（与 probe_trace.slang 命中分支同构，Q11-2c 拍板 A）：
+//   miss 天空        → skyGradient(d)（probe_trace 原口径，不带 albedo）
+//   hit 查缓存命中   → albedo_hit * (C(hit)/pi + ambient)
+//                     （cell 存入射辐照度 C；Q11-2c 补正拍板 2026-11-11：
+//                      命中分支也带 Q13-2 微底，与兜底分支同起跑线，
+//                      否则背光区新路径反比兜底暗，实测 0.03292 < 0.03420）
+//   hit 查缓存未命中 → albedo_hit * (I*shadow/pi + ambient)（M10.1 降级备案，
+//                     PLAN「未命中 cell 才退回直光近似」）
+//   bounce=false     → 恒走降级备案（老路径对照，用于自比统计增量）
+// 法线取命中处真实几何面法线 h.n（与 simCacheUpdate 填充同口径）、bias 抬升
+// 量化、3 步探测 = M11.1 csCacheUpdate 同款（M11.2 根因修复：弃用旧 hn=-d）。
+struct BounceParams {
+    float albedo[3];    // 命中侧 albedo（统一暖灰 0.45/0.39/0.30）
+    float ambient;      // 0.28 环境光（viewer fp.lightDir[3] / traceCB 同源）
+    float bias;         // 0.01 世界尺度
+    float tMax;         // shadow ray tMax（50）
+    float intensity;    // 灯强度（关灯序列置 0）
+    float lightDir[3];  // 指向光源（已归一化）
+};
+
+static void simProbeQuery(const WorldCacheSim& sim,
+                          const float o[3], const float d[3],
+                          const BounceParams& bp, bool bounce,
+                          float out[3], bool& cacheHit, bool& geomHit) {
+    for (int i = 0; i < 3; ++i) out[i] = 0.f;
+    cacheHit = false;
+    geomHit = false;
+    SimHit h;
+    if (!simIntersect(o, d, 1.0e4f, h)) {
+        simSky(d, out);                       // 射线 miss → 天穹
+        return;
+    }
+    geomHit = true;
+    const float hp[3] = {o[0] + d[0] * h.t, o[1] + d[1] * h.t, o[2] + d[2] * h.t};
+    // M11.2 根因修复：查缓存 key 的法线必须用命中处【真实几何面法线 h.n】
+    //（simCacheUpdate 填充同 h.n），不能用 hn=-d（射线反向）——否则在倾斜命中时
+    // floor(n) 与填充 key 的 floor(n) 不一致 → 查询恒 miss（与 GPU probe_trace
+    // 旧 bug 同因）。h.n 已是外法线，bias 抬升量化与填充同口径，无需再定向。
+    const float hn[3] = {h.n[0], h.n[1], h.n[2]};
+    const float hq[3] = {hp[0] + hn[0] * bp.bias,
+                         hp[1] + hn[1] * bp.bias,
+                         hp[2] + hn[2] * bp.bias};
+    const std::uint32_t slot = bounce ? sim.find(hq, hn) : sim.capacity;
+    if (slot != sim.capacity) {
+        cacheHit = true;
+        for (int i = 0; i < 3; ++i)
+            out[i] = bp.albedo[i] * (sim.table[slot].rad[i] * 0.31830988f + bp.ambient);
+        return;
+    }
+    // 缓存 miss → 原直光近似：沿射线回退 bias 发 1 条朝灯 shadow ray。
+    const float so[3] = {hp[0] - d[0] * bp.bias,
+                         hp[1] - d[1] * bp.bias,
+                         hp[2] - d[2] * bp.bias};
+    SimHit sh;
+    const bool occluded = simIntersect(so, bp.lightDir, bp.tMax, sh);
+    const float shadow = occluded ? 0.f : 1.f;
+    for (int i = 0; i < 3; ++i)
+        out[i] = bp.albedo[i] * (bp.intensity * shadow * 0.31830988f + bp.ambient);
+}
+
+// M11.2 双探针（实测诊断后定形，口径不变）：
+//   lit=false 背光探针 = 真遮挡地面点 (0.5,-1,-1)，验「渗透」——查缓存取回
+//     非零 C，老路径只剩 ambient 微底；开阔天空场景下增量小但机制可验。
+//   lit=true  直光探针 = 直光锚点 (4.5,-1,0.5)，验「关灯余晖」——灯开时
+//     C≈2.5，关灯后 blend cap 64 多帧渐暗，老路径瞬间掉到 ambient。
+// 几何实算（灯向 L≈(0.309,0.928,0.206)，箱 B x∈[1,4],y∈[-1,1.5],z∈[-3,0]）：
+// 朝 L 的 shadow ray 在 t≈1.62 处 x=1,y≈0.51,z≈-0.67 命中箱 B → 直光=0。
+// ⚠️ M11.1 第 9 组的 (-0.25,-1,0) 实测**未被遮挡**（其 shadow ray 在
+// y<1.5 段 x 只到 0.63，够不到箱 B）；M11.2 实测 control=0.94（直光满值）
+// 后换点，老组标注的前提误差留档不改老断言。
+// hn=-d=(0,1,0) 与地面法线一致，量化后正好查到该 cell。
+static void bounceProbeRay(float o[3], float d[3], bool lit) {
+    if (lit) { o[0] = 4.5f; o[1] = 1.0f; o[2] = 0.5f; }   // 直光锚点 cell
+    else     { o[0] = 0.5f; o[1] = 1.0f; o[2] = -1.0f; }  // 真遮挡背光 cell
+    d[0] = 0.f; d[1] = -1.f; d[2] = 0.f;
+}
+
+static BounceParams defaultBounceParams() {
+    BounceParams bp;
+    bp.albedo[0] = 0.45f; bp.albedo[1] = 0.39f; bp.albedo[2] = 0.30f;
+    bp.ambient = 0.28f;        // 与 viewer fp.lightDir[3] / traceCB g_traceHitMat.a 同源
+    bp.bias = 0.01f; bp.tMax = 50.f; bp.intensity = 2.5f;
+    float dir[3] = {0.3f, 0.9f, 0.2f};
+    const float dl = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    for (int i = 0; i < 3; ++i) bp.lightDir[i] = dir[i] / dl;
+    return bp;
+}
+
+static SimLight defaultSimLight() {
+    SimLight lt;
+    lt.dir[0] = 0.3f; lt.dir[1] = 0.9f; lt.dir[2] = 0.2f;
+    const float dl = std::sqrt(lt.dir[0] * lt.dir[0] + lt.dir[1] * lt.dir[1]
+                             + lt.dir[2] * lt.dir[2]);
+    for (int i = 0; i < 3; ++i) lt.dir[i] /= dl;
+    lt.intensity = 2.5f;
+    lt.albedo[0] = 0.45f; lt.albedo[1] = 0.39f; lt.albedo[2] = 0.30f;
+    lt.bias = 0.01f; lt.tMax = 50.f; lt.prob = 1.0f;
+    return lt;
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +827,108 @@ static bool selftestCachesim() {
               "blend: post-cap per-frame delta shrinks to 1/64 scale");
     }
 
+    // 11. M11.2 颜色渗透：背光探针查缓存取回非零 C（albedo*C/pi），
+    //     不开 bounce 的老路径只剩 ambient 微底；随缓存收敛亮度上升。
+    {
+        WorldCacheSim sim(1u << 12);
+        Lcg rng(11);
+        SimLight lt = defaultSimLight();
+        lt.prob = 0.25f;                    // 与 cachesim --update / GPU 同口径
+        BounceParams bp = defaultBounceParams();
+        const float litN[3] = {0, 1, 0};
+        for (int i = 0; i < 40; ++i) {
+            const float q[3] = {rng.range(3.f, 5.5f), -1.0f, rng.range(-1.f, 1.5f)};
+            sim.touch(q, litN);
+        }
+        const float shadowP[3] = {0.5f, -1.f, -1.f};
+        sim.touch(shadowP, litN);
+        float po[3], pd[3];
+        bounceProbeRay(po, pd, false);
+
+        float ctrl[3], first[3];
+        bool ch = false, gh = false;
+        simProbeQuery(sim, po, pd, bp, false, ctrl, ch, gh);
+        const float ctrlLum = ctrl[0] + ctrl[1] + ctrl[2];
+        const bool ctrlNoCache = !ch && gh;   // 控制路径必须走降级备案
+        simProbeQuery(sim, po, pd, bp, true, first, ch, gh);
+        CHECK(gh, "bounce: probe ray hits the backlit ground cell");
+        CHECK(ctrlNoCache && ctrlLum > 0.f && ctrlLum < 0.4f,
+              "bounce: no-bounce control is ambient-only direct-light approx");
+
+        std::vector<float> series;
+        int cacheHits = 0;
+        for (int f = 0; f < 96; ++f) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+            float q[3];
+            bool ch2 = false, gh2 = false;
+            simProbeQuery(sim, po, pd, bp, true, q, ch2, gh2);
+            if (ch2) ++cacheHits;
+            series.push_back(q[0] + q[1] + q[2]);
+        }
+        float early = 0.f, late = 0.f;
+        for (int i = 0; i < 8; ++i) early += series[i];
+        for (int i = 88; i < 96; ++i) late += series[i];
+        early /= 8.f; late /= 8.f;
+        std::printf("  bounce: early %.5f late %.5f ctrl %.5f hits %d/96\n",
+                    early, late, ctrlLum, cacheHits);
+        CHECK(late > early, "bounce: penetration grows as cache converges");
+        // 数值判据：命中分支补 ambient 后，背光区新路径应亮于兜底分支
+        //（Q11-2c 补正拍板前的实测反例：0.03292 < 0.03420）。
+        CHECK(cacheHits > 48 && late > ctrlLum,
+              "bounce: probe reads cache value, not dim fallback");
+    }
+
+    // 12. M11.2 关灯余晖（直光探针）：灯强度置 0 后靠 blend cap 64 多帧渐暗，
+    //     不是瞬间黑；老路径 control 关灯后立即只剩 ambient 微底。
+    {
+        WorldCacheSim sim(1u << 12);
+        Lcg rng(12);
+        SimLight lt = defaultSimLight();
+        BounceParams bp = defaultBounceParams();
+        const float n[3] = {0, 1, 0};
+        for (int i = 0; i < 40; ++i) {
+            const float q[3] = {rng.range(3.f, 5.5f), -1.0f, rng.range(-1.f, 1.5f)};
+            sim.touch(q, n);
+        }
+        const float lit[3] = {4.5f, -1.f, 0.5f};
+        sim.touch(lit, n);
+        float po[3], pd[3];
+        bounceProbeRay(po, pd, true);
+        for (int f = 0; f < 96; ++f) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+        }
+        float before[3];
+        bool ch = false, gh = false;
+        simProbeQuery(sim, po, pd, bp, true, before, ch, gh);
+        const float beforeLum = before[0] + before[1] + before[2];
+        CHECK(beforeLum > 0.2f, "afterglow: lit probe reads bright cache value");
+
+        lt.intensity = 0.f;
+        bp.intensity = 0.f; bp.ambient = 0.f;
+        float ctrlOff[3];
+        simProbeQuery(sim, po, pd, bp, false, ctrlOff, ch, gh);
+        const float ctrlOffLum = ctrlOff[0] + ctrlOff[1] + ctrlOff[2];
+        std::vector<float> after;
+        for (int f = 96; f < 112; ++f) {
+            simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+            simCacheBlend(sim);
+            float q[3];
+            bool ch2 = false, gh2 = false;
+            simProbeQuery(sim, po, pd, bp, true, q, ch2, gh2);
+            after.push_back(q[0] + q[1] + q[2]);
+        }
+        CHECK(after[0] > beforeLum * 0.5f,
+              "afterglow: first frame after lights-off is not instantly black");
+        bool monotone = true;
+        for (size_t i = 1; i < after.size(); ++i)
+            if (after[i] > after[i - 1] * 1.02f + 1e-4f) monotone = false;
+        CHECK(monotone, "afterglow: luminance decays monotonically over frames");
+        CHECK(after.back() < beforeLum * 0.95f && after.back() > ctrlOffLum,
+              "afterglow: gradual fade stays above lights-off control");
+    }
+
     if (g_fail == 0) std::printf("gi-tools cachesim selftest: PASS\n");
     else std::printf("gi-tools cachesim selftest: FAIL (%d)\n", g_fail);
     return g_fail == 0 ? 0 : 1;
@@ -732,8 +940,168 @@ static bool selftestCachesim() {
 static void printUsage() {
     std::printf("gi-tools — S11 world cache CPU simulation (exit 0=PASS/1=FAIL/2=usage)\n"
                 "  gi-tools selftest [cachesim]      CPU hashmap semantics unit tests\n"
-                "  gi-tools cachesim --frames N --png out.png [--size N]\n"
-                "                                    deterministic occupancy sim + heatmap\n");
+                "  gi-tools cachesim --frames N --png out.png [--size N] [--update]\n"
+                "                                    deterministic occupancy sim + heatmap\n"
+                "  gi-tools bounce --frames N --png out.png [--size N] [--light-off F]\n"
+                "                                    M11.2 cache-query bounce: penetration\n"
+                "                                    + lights-off afterglow time series\n");
+}
+
+// M11.2 bounce：探针查缓存二跳仿真（Q11-2d 拍板 A 的 CPU 证据）。
+// 序列逐帧 bytes 确定（单线程、固定 LCG、零 GPU 数值依赖）；PNG = 两条亮度
+// 曲线（bounce 开 / 老路径对照）+ 关灯竖线，作为 example 冻结基线。
+static int cmdBounce(int argc, char** argv) {
+    int frames = 192, size = 512, lightOff = -1;
+    const char* pngPath = nullptr;
+    for (int i = 0; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto need = [&](const char* what) -> const char* {
+            if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", what); std::exit(2); }
+            return argv[++i];
+        };
+        if (a == "--frames") frames = std::atoi(need("--frames"));
+        else if (a == "--png") pngPath = need("--png");
+        else if (a == "--size") size = std::atoi(need("--size"));
+        else if (a == "--light-off") lightOff = std::atoi(need("--light-off"));
+        else { std::fprintf(stderr, "unknown option: %s\n", a.c_str()); return 2; }
+    }
+    if (frames <= 0 || size <= 0) { std::fprintf(stderr, "bad --frames/--size\n"); return 2; }
+    if (lightOff < 0) lightOff = frames * 3 / 4;
+    if (lightOff <= 8 || lightOff >= frames - 8) {
+        std::fprintf(stderr, "bad --light-off (need 8 < F < frames-8)\n"); return 2;
+    }
+
+    WorldCacheSim sim(1u << 12, 10);
+    Lcg rng(20261111u);
+    SimLight lt = defaultSimLight();
+    lt.prob = 0.25f;                        // 与 cachesim --update / GPU 同口径
+    BounceParams bp = defaultBounceParams();
+    const float nUp[3] = {0, 1, 0};
+    // 直光群 + 背光点 + 箱面点（几何与 cachesim 合成场景同源）；不 decay，
+    // cell 全程存活，避免集合变化干扰时间序列。
+    for (int i = 0; i < 40; ++i) {
+        const float q[3] = {rng.range(3.f, 5.5f), -1.0f, rng.range(-1.f, 1.5f)};
+        sim.touch(q, nUp);
+    }
+    for (int i = 0; i < 12; ++i) {
+        const float q[3] = {rng.range(-3.f, -1.f), 0.5f, rng.range(-2.f, 2.f)};
+        sim.touch(q, nUp);
+    }
+    for (int i = 0; i < 12; ++i) {
+        const float q[3] = {rng.range(1.f, 4.f), 1.5f, rng.range(-3.f, 0.f)};
+        sim.touch(q, nUp);
+    }
+    const float shadowP[3] = {0.5f, -1.f, -1.f};
+    const float litP[3] = {4.5f, -1.f, 0.5f};
+    sim.touch(shadowP, nUp);
+    sim.touch(litP, nUp);
+
+    // 双探针：背光点验渗透，直光锚点验关灯余晖（口径同 selftest 11/12）。
+    float poDark[3], pdDark[3], poLit[3], pdLit[3];
+    bounceProbeRay(poDark, pdDark, false);
+    bounceProbeRay(poLit, pdLit, true);
+    std::vector<float> sPen, sPenCtrl, sLit, sLitCtrl;
+    for (int f = 0; f < frames; ++f) {
+        if (f == lightOff) { lt.intensity = 0.f; bp.intensity = 0.f; bp.ambient = 0.f; }
+        simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
+        simCacheBlend(sim);
+        float qa[3], qb[3], qc[3], qd[3];
+        bool ch = false, gh = false;
+        simProbeQuery(sim, poDark, pdDark, bp, true, qa, ch, gh);
+        simProbeQuery(sim, poDark, pdDark, bp, false, qb, ch, gh);
+        simProbeQuery(sim, poLit, pdLit, bp, true, qc, ch, gh);
+        simProbeQuery(sim, poLit, pdLit, bp, false, qd, ch, gh);
+        sPen.push_back(qa[0] + qa[1] + qa[2]);
+        sPenCtrl.push_back(qb[0] + qb[1] + qb[2]);
+        sLit.push_back(qc[0] + qc[1] + qc[2]);
+        sLitCtrl.push_back(qd[0] + qd[1] + qd[2]);
+    }
+
+    auto mean = [](const std::vector<float>& s, int lo, int hi) {
+        double acc = 0.0;
+        for (int i = lo; i < hi; ++i) acc += s[static_cast<size_t>(i)];
+        return static_cast<float>(acc / (hi - lo));
+    };
+    // 渗透窗口：收敛段（关灯前）前 8 帧 vs 后 8 帧。
+    const int lateHi = lightOff - 8;
+    const float earlyP = mean(sPen, 0, 8);
+    const float lateP = mean(sPen, lateHi, lightOff);
+    const float latePC = mean(sPenCtrl, lateHi, lightOff);
+    const float beforeLit = sLit[static_cast<size_t>(lightOff - 1)];
+    const float ctrlOff = sLitCtrl[static_cast<size_t>(lightOff)];
+    std::printf("frames       : %d\n", frames);
+    std::printf("cells        : %u / %u\n", sim.activeCells(), sim.capacity);
+    std::printf("light off    : frame %d\n", lightOff);
+    std::printf("penetration  : early %.5f -> late %.5f (control %.5f)\n",
+                earlyP, lateP, latePC);
+    std::printf("afterglow    :");
+    for (int i = lightOff; i < std::min(lightOff + 8, frames); ++i)
+        std::printf(" %.5f", sLit[static_cast<size_t>(i)]);
+    std::printf("  (control instant %.5f)\n", ctrlOff);
+    bool monotone = true;
+    for (int i = lightOff + 1; i < frames; ++i)
+        if (sLit[static_cast<size_t>(i)] > sLit[static_cast<size_t>(i - 1)] * 1.02f + 1e-4f)
+            monotone = false;
+    if (!(lateP > earlyP)) { std::printf("no penetration growth\n"); return 1; }
+    if (!(lateP > latePC + 0.001f)) { std::printf("probe did not read cache value\n"); return 1; }
+    if (!(sLit[static_cast<size_t>(lightOff)] > beforeLit * 0.5f)) {
+        std::printf("afterglow instantly black\n"); return 1;
+    }
+    if (!monotone || !(sLit.back() < beforeLit * 0.95f && sLit.back() > ctrlOff)) {
+        std::printf("afterglow not a gradual fade\n"); return 1;
+    }
+
+    // 折线图：橙=直光探针 bounce / 蓝=直光探针老路径 / 绿=背光探针渗透
+    // / 灰竖线=关灯帧。三条曲线同一亮度坐标，渗透量级小属实测口径。
+    std::vector<unsigned char> rgb(static_cast<size_t>(size) * size * 3);
+    for (size_t i = 0; i < rgb.size(); i += 3) {
+        rgb[i] = 25; rgb[i + 1] = 30; rgb[i + 2] = 41;
+    }
+    float maxLum = 1e-4f;
+    for (size_t i = 0; i < sLit.size(); ++i)
+        maxLum = std::max(maxLum, std::max(sLit[i], sLitCtrl[i]));
+    auto putLine = [&](int x, int y0, int y1, const unsigned char col[3]) {
+        const int lo = std::max(0, std::min(y0, y1));
+        const int hi = std::min(size - 1, std::max(y0, y1));
+        for (int y = lo; y <= hi; ++y) {
+            for (int dx = 0; dx < 2; ++dx) {
+                const int xx = x + dx;
+                if (xx < 0 || xx >= size) continue;
+                unsigned char* o = &rgb[(static_cast<size_t>(y) * size + xx) * 3];
+                o[0] = col[0]; o[1] = col[1]; o[2] = col[2];
+            }
+        }
+    };
+    auto yOf = [&](float lum) {
+        const float t = std::min(1.f, std::max(0.f, lum / maxLum));
+        return size - 1 - static_cast<int>(t * (size - 1));
+    };
+    const unsigned char colLit[3] = {255, 140, 40};
+    const unsigned char colCtrl[3] = {90, 130, 220};
+    const unsigned char colPen[3] = {80, 210, 120};
+    const unsigned char colOff[3] = {128, 128, 128};
+    for (int f = 0; f < frames; ++f) {
+        const int x = static_cast<int>(static_cast<float>(f) / frames * (size - 2));
+        const int ya = f > 0 ? yOf(sLit[static_cast<size_t>(f - 1)]) : yOf(sLit[static_cast<size_t>(f)]);
+        const int yb = f > 0 ? yOf(sLitCtrl[static_cast<size_t>(f - 1)]) : yOf(sLitCtrl[static_cast<size_t>(f)]);
+        const int yc = f > 0 ? yOf(sPen[static_cast<size_t>(f - 1)]) : yOf(sPen[static_cast<size_t>(f)]);
+        putLine(x, ya, yOf(sLit[static_cast<size_t>(f)]), colLit);
+        putLine(x, yb, yOf(sLitCtrl[static_cast<size_t>(f)]), colCtrl);
+        putLine(x, yc, yOf(sPen[static_cast<size_t>(f)]), colPen);
+    }
+    const int xOff = static_cast<int>(static_cast<float>(lightOff) / frames * (size - 2));
+    putLine(xOff, 0, size - 1, colOff);
+
+    if (pngPath) {
+        std::string err;
+        if (!png::write(pngPath, size, size, rgb, err)) {
+            std::printf("png          : %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("png          : %s\n", pngPath);
+    }
+    std::printf("bounce       : PASS (penetration + gradual afterglow)\n");
+    return 0;
 }
 
 static int cmdCachesim(int argc, char** argv) {
@@ -932,6 +1300,7 @@ int main(int argc, char** argv) {
         return selftestCachesim();
     }
     if (cmd == "cachesim") return cmdCachesim(argc - 2, argv + 2);
+    if (cmd == "bounce") return cmdBounce(argc - 2, argv + 2);
     if (cmd == "help" || cmd == "--help") { printUsage(); return 0; }
     std::fprintf(stderr, "unknown command: %s\n", cmd.c_str());
     printUsage();

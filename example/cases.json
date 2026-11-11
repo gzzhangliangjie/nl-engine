@@ -10035,6 +10035,72 @@
      "script": "example/s11-update/run.bat verify"
     }
    ]
+  },
+  {
+   "tag": "s11-bounce",
+   "date": "2026-11-12",
+   "summary": "S11 M11.2：探针命中点改查世界缓存（命中→albedo*(C/pi+ambient)；未命中才退回直光近似；final gather 不变）。根因修复：查询 key 法线口径与填充不一致——csCacheFill 用真实几何法线（3-tap 深度重建 + 朝 eye 定向）→ floor 填充法线 (0,-1,0)；probe_trace 旧查询用 hn=-dir（射线反向），相机可见前向命中时 dir 与 (wp-eye) 同向、与填充法线恒反 → floor(n) 不一致 → 查询恒 miss → gate 开/关都回落直光近似 → 画面逐字节相同（本里程碑原始 bug）。本 slang 版 RayQuery<5> 不暴露顶点法线，查询改 hn=dir（= csCacheFill 朝 eye 定向同向量，轴对齐面量化一致）。CPU gi-tools simProbeQuery 同理 hn 由 -d 改命中处真实几何法线 h.n。双后端 slangc 重编 probe_trace + nmake 重编 gi-tools；DXIL 反射 g_traceBounce@64 / cbuffer 80B / t5 wcChecksums_0 / t6 wcRadiance_0 + textureLoad 存活未 DCE。",
+   "acceptance": "gi-tools selftest bounce 段 cacheHits>48 且 late>ctrl（实测双后端 96/96、late 0.35212>ctrl 0.31920）；双后端 gpu-smoke --mode probe --probe-cache-bounce deviceErrors=0 + dispatch 锚；gpu-stats --probe-atlas-dump 把 irradAtlas_[0] 直出、check-s11-bounce-atlas.py onoff 比 ON vs OFF（非逐字节相同 + 均值差>=0.2 + 变化像素>=0.3% 成片落物体区；双后端实测 DX12 mean 0.456 / VULKAN mean 0.502）；ctest s11-gi-selftest 双后端绿（含 bounce 断言）；s11-hash/s11-update/s10-* 回归保形；负向关灯序列置 0 渐暗。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "sim",
+     "name": "gi-tools selftest：M11.2 探针查缓存二跳（命中取真实几何法线 h.n，弃用 hn=-d）",
+     "kind": "tool",
+     "note": "CPU 单线程确定；bounce 段断言 cacheHits>48 且 late>ctrl（实测 96/96、late 0.35212>ctrl 0.31920）；双后端一致。验证根因修复：查询 key 法线与填充同口径后探针才真正读到缓存值。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "gi-tools cachesim selftest: PASS",
+     "command": "gi-tools selftest",
+     "exe": {
+      "dx12": "build/DX12/gi-tools.exe",
+      "vulkan": "build/VULKAN/gi-tools.exe"
+     }
+    },
+    {
+     "id": "gpu-smoke",
+     "name": "真实 GI 模式 --mode probe 双后端重拍（--probe-cache-bounce，deviceErrors=0）",
+     "kind": "tool",
+     "note": "Q11-1 拍板 A：GPU radiance 非逐字节可复现；本用例只断言退出码 / 无 device error（确认 gate 生效、无 GPU 校验错）。注意：--mode probe 合成图在本凸体+纯天空场景也结构性盲——csGather 每像素只采样 atlas 外法线方向 texel，凸体外法线恒指向相机外→恒 miss→天空 texel，M11.2 改写的命中方向 texel 永不被读到，故 ON≡OFF 字节相同（非缓存 bug）。不能用 --mode probe-viz（盲通道：只显探针布点）。ON/OFF 真实差异的验收走 gpu-stats 的 --probe-atlas-dump。",
+     "args": [
+      "--mode",
+      "probe",
+      "--probe-cache-bounce",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "64",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0",
+     "command": "viewer.exe --mode probe --probe-cache-bounce --model Suzanne-materials.nmesh --frames 64 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --screenshot {out}"
+    },
+    {
+     "id": "gpu-stats",
+     "name": "统计断言：--probe-atlas-dump 把 irradAtlas_[0] 直出，ON 比 OFF 系统性改写命中方向 texel（绕过盲通道 gather）",
+     "kind": "manual",
+     "note": "run.bat verify：双后端各重拍 ON/OFF 两图（--probe-cache-bounce --probe-atlas-dump，绕开 gather 直出 irradAtlas_[0]），deviceErrors=0 + check-s11-bounce-atlas.py onoff 比 ON vs OFF（非逐字节相同 + 均值差>=0.2 + 变化像素>=0.3% 成片落物体区；双后端实测 DX12 mean 0.456/变化1.26% 质心(253,479)、VULKAN mean 0.502/变化1.75% 质心(248,470)）；字节相同=gate 未生效=旧 bug 复发。负向关灯序列置 0 多帧渐暗（走 gi-tools bounce --light-off）。",
+     "args": [],
+     "command": "example/s11-bounce/run.bat verify",
+     "script": "example/s11-bounce/run.bat verify"
+    }
+   ]
   }
  ]
 }
