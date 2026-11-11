@@ -22,7 +22,8 @@
 | `debug-stage <in.glb\|.nmesh> <out.png> --stage <voxels\|regions\|distance\|contours\|raw-contours\|polymesh\|navmesh> [--size N] [bake params...]` | M-N2：五阶段叠加图——`bake(keepDebug=true)` 保留 rc 中间产物 → `duDebugDraw` 图元收集 → 俯视软光栅 PNG（TRI 边函数填充 + QUADS 拆两三角 + alpha 混合）；证据图取工具真实输出 | 0/1/2 |
 | `tilebake <in.glb\|.nmesh\|.scene> <out.nnav> [--tile-size N] [--max-obstacles N] [--png out.png] [--size N] [bake params...]` | M-N3：`DetourTileCache` tiled 增量烘焙，写 `.nnav` **v2**（基础段同 v1 + 尾部 tiled 扩展段）；`.scene` 走 `nl::scene` World JSON 几何汇集（组件 + 父子世界矩阵复合，按 meshFile 缓存 glb）；`--png` 叠画淡蓝 tile 网格 | 0/1/2 |
 | `obstacle <in.nnav> --pos x,y,z --start x,y,z --end x,y,z [--radius F] [--height F] [--png out.png] [--size N]` | M-N3：动态障碍闭环——原路径查询 → `addObstacle` → 被挡查询 → `removeObstacle` → 恢复查询；打印 polys/edges 变化与 `result : PASS`。蓝线=无障碍原路径、红线=障碍后路径、绿圈=圆柱障碍俯视 | 0/1/2 |
-| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向 / M-N1 查询 / M-N2 调试锚点 / M-N3 tiled·v2·障碍·E1 层级锚点 | 0/1/2 |
+| `crowd [--arena \| <in.nnav>] [--spawn x,y,z:x,y,z]... [--preset crossing\|line\|none] [--frames N] [--dt F] [--max-agents N] [--agent-radius F] [--speed F] [--arrival F] [--trace out.ntraj] [--png out.png] [--size N]` | M-N4：`DetourCrowd` 多 Agent 固定步长模拟。`--arena` 用内联合成 20×20 地板 + 中央 2×2×2 障碍（不落盘）；不传则 load `<in.nnav>`（v1/v2 均可）。轨迹写 `.ntraj`（magic `NLTR` + 601×4×3 f32 + fnv64），`--png` 叠画 poly 边界 + 每 agent 一条彩色轨迹折线 | 0/1/2 |
+| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向 / M-N1 查询 / M-N2 调试锚点 / M-N3 tiled·v2·障碍·E1 层级锚点 / M-N4 crowd·`.ntraj`·v1+v2 兼容·七条负向锚点 | 0/1/2 |
 
 - 几何入口：`.glb`（`nl::nav::loadGeometryFromGltf`，M-N2 抽到 core 与 viewer 面板同源）或 `.nmesh`（v3 fallback 尾段；v1 base 无 fallback 会明确报错）。
 - 失败诊断链：bake 失败时打印 `walkableTris / grid WxH / rasterSpans / filteredSpans / compactSpans / regionCount`，逐级定位死点（M-N0 调参实测：HizScene 在 cs=0.3 下 erosion 半径吃光箱顶，cs=0.1 + radius 0.2 才有产物）。
@@ -74,7 +75,7 @@
 
 - M-N3（**2026-11-11 已收官，tag `nav-n3`**）：方案 A（`DetourTileCache` tiled 增量重烘）+ A-1（`.nnav` v2 同容器语义升级、v1 兼容）已按用户「按建议来」拍板落地，详见 §9/§10。冻结面全部守住：vendored 四文件零编辑、v1 序列化/烘焙老路径一行不改（`hiz-a.nnav` 864 字节逐字节零回归）、M-N2 五阶段 PNG 基线锁定、`kStage` 不 bump、外置编辑器不碰。
 - **M-N3 面板补充（2026-11-11 已收官，tag `nav-n3-panel`）**：用户点名解禁「viewer 面板不加障碍交互按钮」的冻结面，双模式分流（`nav.tiled=0` 保 M-N2 / `=1` 走 tiled）+ add/clear + 路径叠加已落地，详见 §11/§11.1。
-- 下一站 **M-N4（2026-11-11 已立项，范围闸解除）**：`DetourCrowd/` 尚未入库（VENDOR.md 留痕），开工闸三处实读已完成，Q1（验收形态）/ Q2（容器接口）/ Q3（确定性口径）待用户拍板，拍板写回 `P8-NAV-PLAN.md` 前零落码；证据与方案矩阵见该文末留痕。
+- 下一站 **M-N4（2026-11-11 已立项并拍板，Q1/Q2/Q3 = A / A-1 / A）**：`DetourCrowd/` 按同一锁定 commit `6dc1667f` 补入（6 头 + 6 源零编辑），`nl::nav::Crowd` + `nav-tools crowd` 工具版交付；`.nnav` 容器不升 v3、渲染基线不碰；固定 dt=1/60 + 固定帧数 + 固定 agent 顺序，`.ntraj` 轨迹 `fc /b` 逐字节可复现。开工闸证据与拍板记录见 `P8-NAV-PLAN.md` 文末，验收记录见本指南 §12。
 
 ## 7. M-N2 验收记录（2026-11-11）
 
@@ -131,3 +132,20 @@
 3. **tiled 画布 bounds 不能用 `stats()` 几何盒**：`statsFromMesh` 的 bbox 是整份几何盒（含大量无可走面的箱子），首版截图里 4 个 poly 缩成几个小黑点。修复 = tiled 时改用 `DebugPrims` 实际顶点 + 障碍圆的 AABB 收紧投影（solo 分支一字不改，保 M-N2 字节）。
 4. **展开障碍区后画布被挤成一条缝**：`build params` 默认展开占掉 600px 窗口的大部分。修复 = 证据模式下（`nav.obsPanel=1`）窗口 700px + `SetNextItemOpen(false, Cond_Once)` 收起参数区 + 障碍区 `Cond_Once` 展开；默认 0 时两条逻辑都不触发。
 5. **`obstacleCount()` 计数口径**：它只数 `DT_OBSTACLE_PROCESSED` 状态，add 后立即 `updateObstacles()` 才会变 1（首版 Suzanne 场景显示 0 是因为障碍根本不在 tile 覆盖域）。日志锚必须同时断言 `polys` 与 `obstacles` 两个数，单看一个会误判。
+
+## 12. M-N4 验收记录（2026-11-11，tag `nav-n4`）
+
+- **开工闸（拍板先于落码）**：用户点名「DetourCrowd 要做」解除 `P8-NAV-PLAN.md` 原「默认不做 / 不在本轨道交付范围」范围闸 → 三处实读（上游 `DetourCrowd/` 6 头 + 6 源零新依赖、UE `UCrowdManager` Tick 四步、Carrot 静态 A\* 与 bevy 无原生 navmesh 据实标注不作口径）+ 上游 `DetourCrowd.cpp` 无 RNG 取证 → 用户「按推荐来」拍板 **Q1=A（A 类工具版）/ Q2=A-1（`.nnav` 不升 v3）/ Q3=A（固定 dt + 固定帧数 + 固定顺序）**，写回计划并删「拍板前不许写第一行代码」挂账句后才落第一行代码。
+- **交付面**：vendored `DetourCrowd/` 12 文件（锁定 commit `6dc1667f`，逐文件 md5 一致、零编辑）+ `nl_recast` CMake 显式枚举 6 TU 与 include 目录；`core/include/nl/nav/Crowd.hpp`（POD 配置 / 轨迹 / 类，零第三方符号）+ `core/src/nav/Crowd.cpp`（唯一 DetourCrowd 符号面，PIMPL）；`NavMesh::nativeHandle()` 以 opaque `const void*` 桥接 `dtNavMesh*`；`nav-tools crowd` 子命令 + `.ntraj` 容器（magic `NLTR` / version 1 / agentCount / frames / dt / targets / samples / fnv64）+ 俯视轨迹 PNG + 25 项 selftest 锚点 + 8 条 ctest + cases.json `nav-n4` 11 卡。`viewer` / `scene` / `renderer` / `.nnav` 序列化 / `kStage` 一行未改。
+- **验收数据**：DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16×2；nav-tools selftest 全绿（M-N0~M-N3 老锚点零回归 + M-N4 新增 25 项）；ctest `m-n[01234]-nav` **32/32 ×2**（`--repeat until-pass:3`）；`regression --only nav-n4` 22/22 + 五张老卡全绿；`server.py --check` exit 0；`example/nav-n4/run.bat` 双后端 **A~F ALL GREEN**；`check-bat-encoding` 0 违规。**Q3=A 硬判据**：同参数两次 run 的 `.ntraj`（28924 字节 / fnv64 `5cbf9ce63eb1b273`）与 PNG 分别 `fc /b` 逐字节一致；`arrived 4/4`、`minPairDist 0.6003 m`（≥ 2×radius=0.6，RVO 生效）。**Q2=A-1 硬判据**：`example/nav-n3/hiz-v1.nnav`（864 B）与 `hiz-tiled.nnav`（7276 B）直接被 `Crowd` 消费且单 agent 抵达，两个基线字节未动。
+- **证据图**：`example/nav-n4/crowd-arena.png`（768×768，nav-tools 软光栅真实输出，非手绘）——黑色 = dtNavMesh poly 边界（20×20 地板 + 中央障碍 + 孤立岛），四条彩色折线 = 两对对角穿越的 600 帧轨迹，可清楚看到绕开中央障碍与中心区的避让弯曲，起终点十字标记。
+- **交代物**：`example/nav-n4/`（run.bat + `crowd-arena.ntraj` + `crowd-arena.png` + 8 份日志）、cases.json `nav-n4` 11 卡（`{out}` 走临时路径不写仓库）、`VENDOR.md` 入库子集、`P8-NAV-PLAN.md` 拍板/收官留痕、`MILESTONES.md` M-N4 四栏。
+
+### 12.1 踩坑（写实）
+
+1. **180 帧不够跑完 20 m 对角**：首版 `frames=180`（3 s）时 `arrived 0/4`、`result=FAIL`，是帧数不足不是 crowd 失效。3.5 m/s × 绕行 + 加速段实测约需 600 帧（10 s），故把 `CrowdConfig::frames` 默认提到 600，并在 `run.bat` / ctest / 展示台卡全部显式写死（Q3=A「固定帧数」）。
+2. **`targetHalfExtents` y 半宽 4 m 把终点吸附到错误高度层**：HizScene 箱顶 poly y=1.25、下层 poly y=-0.35 相差 1.6 m；`findNearestPoly` 用 `{2,4,2}` 时 target 被吸到 y=-0.35，agent 留在箱顶跨层不可达（240 帧末距目标仍 0.857 m）。修复 = 收紧到 `{2,1,2}`，与 M-N1 `QueryParams::halfExtents` 默认口径一致；改后 v1/v2 单 agent 60 帧均 `arrived 1/1`。**arena 单高度地面不受影响，fnv64 未变。**
+3. **「v1/v2 轨迹逐点相同」是错误期望**：solo 与 tiled 的多边形划分不同（tile 切边），同一几何的走廊/局部边界不同，轨迹本就不该一致。A-1 的正确断言 = 两种容器**都能被消费并产出完整同形状轨迹**（`samples.size()` / `agentCount` / `frames` 一致），不比较逐点值。
+4. **`dtCrowd::addAgent` 会静默接受无路径的 agent**：上游 `addAgent` 内部 `findNearestPoly` 失败时仅把 `ref=0`、`nearest=pos`，仍返回有效 idx。封装层必须**先用自己的 `dtNavMeshQuery` 显式校验 startRef / targetRef**，任一 `ref==0` 或 `dtStatusFailed` 立即返回 false，否则会把「网格外 spawn」变成假绿。
+5. **上游路径队列一帧最多 8 个请求**：`dtPathQueue::update` 每帧处理上限 8，agent 数超过 8 时建路径要跨帧；默认 `crossing`/`line` 均 4 个，一帧建完。固定帧数须给足，否则前几帧的位置只反映加速段。
+6. **vendored md5 核对要排除上游 CMakeLists.txt**：`DetourCrowd/` 上游自带 `CMakeLists.txt`，本项目按薄脚本纪律**故意不入库**；首版核对脚本遍历整个目录把该文件标成 `DIFF`（假报），改为只比 12 个 `.h`/`.cpp` 后 `ALL_BYTE_IDENTICAL=True`。

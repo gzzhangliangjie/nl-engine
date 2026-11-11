@@ -37,6 +37,7 @@
 #include "nl/core/mesh_io.hpp"
 #include "nl/core/meshlet_io.hpp"
 #include "nl/nav/Nav.hpp"
+#include "nl/nav/Crowd.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -79,6 +80,11 @@ void usage() {
     std::printf("          [--max-obstacles N] [--png out.png] [--size N] [--cell-size F ...]\n");
     std::printf("  nav-tools obstacle <in.nnav> --pos x,y,z --start x,y,z --end x,y,z\n");
     std::printf("          [--radius F] [--height F] [--png out.png]\n");
+    std::printf("  nav-tools crowd [--arena | <in.nnav>] [--spawn x,y,z:x,y,z]...\n");
+    std::printf("          [--preset crossing|line|none] [--frames N] [--dt F]\n");
+    std::printf("          [--max-agents N] [--agent-radius F] [--speed F]\n");
+    std::printf("          [--arrival F] [--trace out.ntraj] [--png out.png] [--size N]\n");
+    std::printf("          M-N4: fixed-step dtCrowd multi-agent trace (.ntraj, v1/v2 .nnav)\n");
     std::printf("  nav-tools selftest [--verbose]\n");
     std::printf("exit codes: 0=PASS 1=failure 2=usage\n");
 }
@@ -1117,6 +1123,273 @@ int cmdObstacle(int argc, char** argv) {
     return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// M-N4：crowd —— DetourCrowd 多 Agent 固定步长模拟 + .ntraj 轨迹容器 + 俯视图
+// Q1=A（工具版，纯 CPU）/ Q2=A-1（只吃已加载 NavMesh，.nnav 不升 v3）/
+// Q3=A（固定 dt + 固定帧数 + 固定 agent 顺序，轨迹逐字节可复现）。
+// ---------------------------------------------------------------------------
+
+// .ntraj v1：magic "NLTR" / u16 version / u16 reserved / i32 agentCount /
+// i32 frames / f32 dt / targets[agentCount*3] f32 / samples[frames*agentCount*3]
+// f32 / u64 fnv1a64(前面全部字节)。小端 IEEE754，同机器两构建树逐字节一致。
+bool writeNtraj(const char* path, const nl::nav::CrowdTrace& t,
+                std::string& err) {
+    std::vector<unsigned char> b;
+    auto put = [&](const void* p, std::size_t n) {
+        const unsigned char* q = static_cast<const unsigned char*>(p);
+        b.insert(b.end(), q, q + n);
+    };
+    const char magic[4] = {'N', 'L', 'T', 'R'};
+    put(magic, 4);
+    const std::uint16_t version = 1, reserved = 0;
+    put(&version, sizeof(version));
+    put(&reserved, sizeof(reserved));
+    const std::int32_t agentCount = static_cast<std::int32_t>(t.agentCount);
+    const std::int32_t frames = static_cast<std::int32_t>(t.frames);
+    put(&agentCount, sizeof(agentCount));
+    put(&frames, sizeof(frames));
+    put(&t.dt, sizeof(t.dt));
+    put(t.targets.data(), t.targets.size() * sizeof(float));
+    put(t.samples.data(), t.samples.size() * sizeof(float));
+    const std::uint64_t hash = fnv1a64(b.data(), b.size());
+    put(&hash, sizeof(hash));
+
+    std::FILE* f = std::fopen(path, "wb");
+    if (!f) { err = std::string("cannot write: ") + path; return false; }
+    const bool ok = std::fwrite(b.data(), 1, b.size(), f) == b.size();
+    std::fclose(f);
+    if (!ok) { err = std::string("short write: ") + path; return false; }
+    return true;
+}
+
+bool parseSpawn(const char* s, nl::nav::CrowdSpawn& out) {
+    return s && std::sscanf(s, "%f,%f,%f:%f,%f,%f",
+                            &out.pos[0], &out.pos[1], &out.pos[2],
+                            &out.target[0], &out.target[1], &out.target[2]) == 6 &&
+           std::isfinite(out.pos[0]) && std::isfinite(out.pos[1]) &&
+           std::isfinite(out.pos[2]) && std::isfinite(out.target[0]) &&
+           std::isfinite(out.target[1]) && std::isfinite(out.target[2]);
+}
+
+void addSpawn(std::vector<nl::nav::CrowdSpawn>& v,
+              float ax, float ay, float az, float bx, float by, float bz) {
+    nl::nav::CrowdSpawn s;
+    s.pos[0] = ax; s.pos[1] = ay; s.pos[2] = az;
+    s.target[0] = bx; s.target[1] = by; s.target[2] = bz;
+    v.push_back(s);
+}
+
+int cmdCrowd(int argc, char** argv) {
+    bool arena = false;
+    const char* inPath = nullptr;
+    const char* tracePath = nullptr;
+    const char* pngPath = nullptr;
+    const char* preset = "crossing";
+    std::vector<nl::nav::CrowdSpawn> spawns;
+    nl::nav::CrowdConfig cfg;
+    int pngSize = 768;
+
+    for (int i = 0; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto needVal = [&]() -> const char* {
+            return (i + 1 < argc) ? argv[++i] : nullptr;
+        };
+        if (a == "--arena") { arena = true; }
+        else if (a == "--spawn") {
+            const char* v = needVal();
+            nl::nav::CrowdSpawn s;
+            if (!parseSpawn(v, s)) {
+                std::printf("nav-tools crowd: --spawn needs x,y,z:x,y,z\n");
+                return 2;
+            }
+            spawns.push_back(s);
+        }
+        else if (a == "--preset") {
+            const char* v = needVal();
+            if (!v) { std::printf("nav-tools crowd: --preset needs a name\n"); return 2; }
+            preset = v;
+        }
+        else if (a == "--frames") {
+            const char* v = needVal();
+            if (!v || (cfg.frames = std::atoi(v)) < 1 || cfg.frames > 10000) {
+                std::printf("nav-tools crowd: --frames must be in [1, 10000]\n");
+                return 2;
+            }
+        }
+        else if (a == "--dt") {
+            const char* v = needVal();
+            if (!v || (cfg.dt = static_cast<float>(std::atof(v))) <= 0.f ||
+                cfg.dt > 0.25f) {
+                std::printf("nav-tools crowd: --dt must be in (0, 0.25]\n");
+                return 2;
+            }
+        }
+        else if (a == "--max-agents") {
+            const char* v = needVal();
+            if (!v || (cfg.maxAgents = std::atoi(v)) < 1 || cfg.maxAgents > 256) {
+                std::printf("nav-tools crowd: --max-agents must be in [1, 256]\n");
+                return 2;
+            }
+        }
+        else if (a == "--agent-radius") {
+            const char* v = needVal();
+            if (!v || (cfg.agent.radius = static_cast<float>(std::atof(v))) <= 0.f) {
+                std::printf("nav-tools crowd: --agent-radius must be > 0\n");
+                return 2;
+            }
+        }
+        else if (a == "--speed") {
+            const char* v = needVal();
+            if (!v || (cfg.agent.maxSpeed = static_cast<float>(std::atof(v))) <= 0.f) {
+                std::printf("nav-tools crowd: --speed must be > 0\n");
+                return 2;
+            }
+        }
+        else if (a == "--arrival") {
+            const char* v = needVal();
+            if (!v || (cfg.arrivalRadius = static_cast<float>(std::atof(v))) < 0.f) {
+                std::printf("nav-tools crowd: --arrival must be >= 0\n");
+                return 2;
+            }
+        }
+        else if (a == "--trace") { tracePath = needVal(); if (!tracePath) { usage(); return 2; } }
+        else if (a == "--png")   { pngPath = needVal();   if (!pngPath)   { usage(); return 2; } }
+        else if (a == "--size") {
+            const char* v = needVal();
+            if (!v || (pngSize = std::atoi(v)) < 64 || pngSize > 4096) {
+                std::printf("nav-tools crowd: --size must be in [64, 4096]\n");
+                return 2;
+            }
+        }
+        else if (a.rfind("--", 0) == 0) {
+            std::printf("nav-tools crowd: unknown option: %s\n", a.c_str());
+            return 2;
+        }
+        else if (!inPath) { inPath = argv[i]; }
+        else { usage(); return 2; }
+    }
+    if (arena && inPath) {
+        std::printf("nav-tools crowd: --arena and <in.nnav> are mutually exclusive\n");
+        return 2;
+    }
+    if (!arena && !inPath) { usage(); return 2; }
+
+    if (spawns.empty()) {
+        if (std::strcmp(preset, "crossing") == 0) {
+            // 两对对角穿越中央 2x2x2 障碍：速度避障 + 绕行双向交互
+            addSpawn(spawns, -8, 0.2f, -8,  8, 0.2f,  8);
+            addSpawn(spawns,  8, 0.2f,  8, -8, 0.2f, -8);
+            addSpawn(spawns, -8, 0.2f,  8,  8, 0.2f, -8);
+            addSpawn(spawns,  8, 0.2f, -8, -8, 0.2f,  8);
+        } else if (std::strcmp(preset, "line") == 0) {
+            addSpawn(spawns, -8, 0.2f, -2, 8, 0.2f, -2);
+            addSpawn(spawns, -8, 0.2f,  0, 8, 0.2f,  0);
+            addSpawn(spawns, -8, 0.2f,  2, 8, 0.2f,  2);
+            addSpawn(spawns, -8, 0.2f,  4, 8, 0.2f,  4);
+        } else if (std::strcmp(preset, "none") != 0) {
+            std::printf("nav-tools crowd: unknown preset: %s\n", preset);
+            return 2;
+        }
+    }
+    if (spawns.empty()) {
+        std::printf("nav-tools crowd: need --spawn or --preset crossing|line\n");
+        return 2;
+    }
+    if (static_cast<int>(spawns.size()) > cfg.maxAgents) {
+        std::printf("nav-tools crowd: spawn count exceeds --max-agents\n");
+        return 2;
+    }
+    if (cfg.agent.radius > cfg.maxAgentRadius) {
+        std::printf("nav-tools crowd: --agent-radius exceeds maxAgentRadius (0.60)\n");
+        return 2;
+    }
+
+    nl::nav::NavMesh nav;
+    std::string err;
+    if (arena) {
+        // Q2=A-1：内联合成几何 bake 出的 NavMesh 与 load 出来的等价，
+        // 两者都不改 .nnav 容器（arena 不落盘）。
+        if (!nav.bake(syntheticScene(), nl::nav::BuildParams{}, err)) {
+            std::printf("nav-tools crowd: arena bake failed: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("navmesh      : arena (synthetic 20x20 floor + 2x2x2 obstacle)\n");
+    } else {
+        if (!nav.load(inPath, err)) {
+            std::printf("nav-tools crowd: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("navmesh      : %s\n", inPath);
+    }
+    std::printf("mode         : %s\n", nav.isTiled() ? "tiled (v2)" : "solo (v1)");
+    std::printf("polys        : %d\n", nav.stats().polyCount);
+
+    nl::nav::Crowd crowd;
+    nl::nav::CrowdTrace trace;
+    if (!crowd.run(nav, cfg, spawns, trace, err)) {
+        std::printf("nav-tools crowd: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("agents       : %d\n", trace.agentCount);
+    std::printf("frames       : %d (%d updates + initial)\n",
+                trace.frames, trace.frames - 1);
+    std::printf("dt           : %.6f\n", trace.dt);
+    std::printf("arrived      : %d / %d\n", trace.arrivedCount, trace.agentCount);
+    std::printf("minPairDist  : %.4f m\n", trace.minPairDistance);
+
+    if (tracePath) {
+        if (!writeNtraj(tracePath, trace, err)) {
+            std::printf("nav-tools crowd: %s\n", err.c_str());
+            return 1;
+        }
+        const std::vector<unsigned char> bytes = readFileBytes(tracePath, err);
+        std::printf("trace        : %s (%zu bytes, fnv64 %016llx)\n", tracePath,
+                    bytes.size(),
+                    static_cast<unsigned long long>(fnv1a64(bytes.data(), bytes.size())));
+    } else {
+        std::printf("trace        : (not written)\n");
+    }
+
+    if (pngPath) {
+        WireCanvas canvas;
+        if (!makeWireCanvas(nav, pngSize, canvas)) {
+            std::printf("nav-tools crowd: degenerate bounds\n");
+            return 1;
+        }
+        // 每个 agent 一条固定颜色折线（帧序绘制 → 逐像素确定性）
+        static const unsigned char kColors[8][3] = {
+            {220, 40, 40}, {30, 90, 220}, {30, 160, 60}, {160, 60, 190},
+            {230, 140, 20}, {20, 160, 170}, {120, 80, 20}, {90, 90, 200}
+        };
+        const int n = trace.agentCount;
+        for (int i = 0; i < n; ++i) {
+            const unsigned char* col = kColors[i % 8];
+            for (int f = 0; f + 1 < trace.frames; ++f) {
+                const float* a = &trace.samples[(static_cast<std::size_t>(f) * n + i) * 3];
+                const float* b = &trace.samples[(static_cast<std::size_t>(f + 1) * n + i) * 3];
+                canvas.line(a[0], a[2], b[0], b[2], col[0], col[1], col[2]);
+            }
+            const float* s0 = &trace.samples[i * 3];
+            const float* s1 = &trace.finalPos[static_cast<std::size_t>(i) * 3];
+            canvas.cross(s0[0], s0[2], col[0], col[1], col[2]);
+            canvas.cross(s1[0], s1[2], 20, 20, 20);
+        }
+        if (!png::write(pngPath, pngSize, pngSize, canvas.rgb, err)) {
+            std::printf("nav-tools crowd: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("png          : %s (%dx%d)\n", pngPath, pngSize, pngSize);
+    } else {
+        std::printf("png          : (not written)\n");
+    }
+
+    // PASS = 模拟成功 + 至少一个 agent 抵达 + 群体未重叠（>1 agent 时）。
+    const bool pass = trace.arrivedCount > 0 && !trace.samples.empty() &&
+                      (trace.agentCount < 2 || trace.minPairDistance > 0.f);
+    std::printf("result       : %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 int cmdSelftest(int argc, char** argv) {
     for (int i = 0; i < argc; ++i) {
         if (std::strcmp(argv[i], "--verbose") == 0) g_verbose = true;
@@ -1465,6 +1738,128 @@ int cmdSelftest(int argc, char** argv) {
         std::remove("nav-selftest-solo-v1.nnav");
     }
 
+    // ---- M-N4：DetourCrowd 固定步长轨迹（方案 A / A-1 / A）----
+    {
+        using nl::nav::Crowd;
+        using nl::nav::CrowdConfig;
+        using nl::nav::CrowdSpawn;
+        using nl::nav::CrowdTrace;
+        using nl::nav::NavMesh;
+        std::string cErr;
+        const nl::nav::Geometry crowdGeo = syntheticScene();
+
+        NavMesh arena;
+        expectTrue(arena.bake(crowdGeo, nl::nav::BuildParams{}, cErr),
+                   "crowd: arena bake ok");
+        expectTrue(arena.nativeHandle() != nullptr,
+                   "crowd: nativeHandle non-null after bake");
+        NavMesh unloaded;
+        expectTrue(unloaded.nativeHandle() == nullptr,
+                   "crowd: nativeHandle null on unloaded mesh");
+
+        std::vector<CrowdSpawn> sp;
+        addSpawn(sp, -8, 0.2f, -8,  8, 0.2f,  8);
+        addSpawn(sp,  8, 0.2f,  8, -8, 0.2f, -8);
+        addSpawn(sp, -8, 0.2f,  8,  8, 0.2f, -8);
+        addSpawn(sp,  8, 0.2f, -8, -8, 0.2f,  8);
+
+        CrowdConfig cfg;
+        cfg.frames = 600;   // 固定帧数（Q3=A）；10s@1/60 才够 20x20 对角穿越
+        Crowd c1, c2;
+        CrowdTrace t1, t2;
+        expectTrue(c1.run(arena, cfg, sp, t1, cErr), "crowd: run ok");
+        expectTrue(c2.run(arena, cfg, sp, t2, cErr), "crowd: second run ok");
+        expectTrue(t1.samples == t2.samples && t1.finalPos == t2.finalPos &&
+                   t1.targets == t2.targets && t1.dt == t2.dt,
+                   "crowd: deterministic trace point-by-point (two runs)");
+        expectTrue(t1.agentCount == 4 && t1.frames == cfg.frames + 1 &&
+                   t1.samples.size() ==
+                       static_cast<std::size_t>(t1.frames) * t1.agentCount * 3,
+                   "crowd: trace shape = frames*agents*3");
+        expectTrue(t1.arrivedCount == 4, "crowd: all 4 agents reach their targets");
+        expectTrue(t1.minPairDistance > 0.f &&
+                   t1.minPairDistance >= cfg.agent.radius * 2.f - 0.02f,
+                   "crowd: agents never overlap (RVO keeps >= 2*radius)");
+        expectTrue(c1.agentCount() == 4, "crowd: agentCount reflects last run");
+
+        // .ntraj 容器逐字节确定性（Q3=A 的硬判据）
+        expectTrue(writeNtraj("nav-selftest-crowd-a.ntraj", t1, cErr) &&
+                   writeNtraj("nav-selftest-crowd-b.ntraj", t1, cErr),
+                   "crowd: two .ntraj writes ok");
+        expectTrue(readFileBytes("nav-selftest-crowd-a.ntraj", cErr) ==
+                       readFileBytes("nav-selftest-crowd-b.ntraj", cErr),
+                   "crowd: .ntraj byte-identical");
+
+        // agent 顺序是确定性输入的一部分（换序 => 轨迹字节不同）
+        std::vector<CrowdSpawn> reordered = sp;
+        const CrowdSpawn tmp = reordered[0];
+        reordered[0] = reordered[1];
+        reordered[1] = tmp;
+        Crowd c3;
+        CrowdTrace t3;
+        expectTrue(c3.run(arena, cfg, reordered, t3, cErr),
+                   "crowd: reordered run ok");
+        expectTrue(t3.samples != t1.samples,
+                   "crowd: agent order is part of determinism input");
+
+        // A-1：v1 solo（含 load 路径）与 v2 tiled 都能被 Crowd 直接消费
+        std::vector<CrowdSpawn> one;
+        addSpawn(one, -8, 0.2f, -8, 8, 0.2f, 8);
+        nl::nav::TileBuildParams tp;
+        tp.tileSize = 16;
+        tp.maxObstacles = 16;
+        NavMesh tiled;
+        expectTrue(tiled.bakeTiled(crowdGeo, tp, cErr),
+                   "crowd: v2 tiled bake ok");
+        Crowd ct;
+        CrowdTrace tt;
+        expectTrue(ct.run(tiled, cfg, one, tt, cErr),
+                   "crowd: v2 tiled navmesh accepted (A-1)");
+        expectTrue(arena.save("nav-selftest-crowd-v1.nnav", cErr),
+                   "crowd: v1 solo save ok");
+        NavMesh loaded;
+        expectTrue(loaded.load("nav-selftest-crowd-v1.nnav", cErr) &&
+                   !loaded.isTiled(), "crowd: v1 solo load ok");
+        Crowd cl;
+        CrowdTrace tl;
+        expectTrue(cl.run(loaded, cfg, one, tl, cErr),
+                   "crowd: v1 loaded navmesh accepted (A-1)");
+        // v1 solo 与 v2 tiled 的多边形划分不同（tile 切边），轨迹逐点相同是错误
+        // 期望；A-1 只要求两种容器都能被消费并产出完整轨迹。
+        expectTrue(tt.samples.size() == tl.samples.size() &&
+                   tt.agentCount == 1 && tl.agentCount == 1 &&
+                   !tt.samples.empty() && tt.frames == tl.frames,
+                   "crowd: v1/v2 both yield full-length single-agent traces (A-1)");
+
+        // 负向：参数闸与上游状态一律明确拒绝，不静默 no-op
+        CrowdTrace discard;
+        CrowdConfig bad = cfg; bad.dt = 0.f;
+        expectTrue(!c1.run(arena, bad, sp, discard, cErr),
+                   "crowd: dt=0 rejected");
+        bad = cfg; bad.frames = 0;
+        expectTrue(!c1.run(arena, bad, sp, discard, cErr),
+                   "crowd: frames=0 rejected");
+        bad = cfg; bad.agent.radius = bad.maxAgentRadius + 0.1f;
+        expectTrue(!c1.run(arena, bad, sp, discard, cErr),
+                   "crowd: radius > maxAgentRadius rejected");
+        bad = cfg; bad.agent.updateFlags |= 0x20u;
+        expectTrue(!c1.run(arena, bad, sp, discard, cErr),
+                   "crowd: unknown updateFlags bit rejected");
+        bad = cfg; bad.maxAgents = 2;
+        expectTrue(!c1.run(arena, bad, sp, discard, cErr),
+                   "crowd: spawn count > maxAgents rejected");
+        std::vector<CrowdSpawn> off;
+        addSpawn(off, 100, 0.f, 100, -8, 0.2f, -8);
+        expectTrue(!c1.run(arena, cfg, off, discard, cErr),
+                   "crowd: off-mesh spawn rejected");
+        expectTrue(!c1.run(unloaded, cfg, sp, discard, cErr),
+                   "crowd: unloaded navmesh rejected");
+
+        std::remove("nav-selftest-crowd-a.ntraj");
+        std::remove("nav-selftest-crowd-b.ntraj");
+        std::remove("nav-selftest-crowd-v1.nnav");
+    }
+
     if (g_failures == 0) {
         std::printf("nav selftest: PASS\n");
         return 0;
@@ -1503,6 +1898,7 @@ int main(int argc, char** argv) {
     if (cmd == "debug-stage") return cmdDebugStage(argc - 2, argv + 2);
     if (cmd == "tilebake") return cmdTileBake(argc - 2, argv + 2);
     if (cmd == "obstacle") return cmdObstacle(argc - 2, argv + 2);
+    if (cmd == "crowd")    return cmdCrowd(argc - 2, argv + 2);
     if (cmd == "resave")   return cmdResave(argc - 2, argv + 2);
     if (cmd == "selftest") return cmdSelftest(argc - 2, argv + 2);
     usage();

@@ -216,6 +216,12 @@ struct NavMesh::Impl {
     }
 };
 
+// M-N4：Crowd.cpp 的 opaque 桥接点。公开面只有 void*，dtNavMesh 类型仍只在本 TU
+// 与 Crowd.cpp 内出现；句柄生命周期严格跟随 NavMesh（A-1 不落盘、不跨重建保存）。
+const void* NavMesh::nativeHandle() const {
+    return m_impl ? static_cast<const void*>(m_impl->mesh) : nullptr;
+}
+
 NavMesh::NavMesh() : m_impl(new Impl()) {}
 NavMesh::~NavMesh() {
     if (m_impl) {

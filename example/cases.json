@@ -8759,6 +8759,207 @@
    ]
   },
   {
+   "id": "nav-n4",
+   "label": "P8 M-N4",
+   "name": "DetourCrowd 多 Agent 群体避障：固定步长轨迹 + .ntraj 容器",
+   "tag": "nav-n4",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第五里程碑（2026-11-11 开工闸拍板 Q1=A / Q2=A-1 / Q3=A）。范围闸由用户点名「DetourCrowd 要做」解除，三处实读：上游 DetourCrowd 6 头 + 6 源（锁定 commit 6dc1667f，零编辑、零新依赖）、UE UCrowdManager（Tick 四步拆分 + ICrowdAgentInterface）、Carrot 静态 AStar / bevy 无原生 navmesh 均据实标注不作口径。Q1=A 工具版：nav-tools crowd 子命令 + nl::nav::Crowd 薄封装（PIMPL，公开面零第三方符号）+ selftest + 俯视轨迹 PNG + .ntraj 二进制容器 + cases.json 卡，纯 CPU 不碰 viewer/scene/renderer/渲染回归。Q2=A-1：Crowd 只消费已加载 NavMesh（v1 solo / v2 tiled 均可），经 NavMesh::nativeHandle() 的 opaque const void* 桥接；.nnav 不升 v3、不落 agent 状态，M-N0/M-N3 全部字节基线一字不动。Q3=A：固定 dt=1/60 + 固定帧数 600 + 固定 agent 顺序 + 全显式参数，轨迹逐帧采样 npos[3]，两次运行 .ntraj 与 PNG 均 fc /b 逐字节一致（上游 DetourCrowd.cpp 无 RNG 实读取证）。vendored 补入 DetourCrowd 12 文件，nl_recast CMake 显式枚举 + include 目录，不引入上游 CMake/install 链。",
+   "acceptance": [
+    "vendored 12 文件按锁定 commit 6dc1667f 逐文件 md5 一致、零编辑；上游 CMakeLists.txt 按薄脚本纪律不入库；逐个 TU 的 #include 只指向已入库 Detour/Include 与 C 标准头",
+    "selftest 全绿：M-N0/M-N1/M-N2/M-N3 老锚点零回归 + M-N4 新增 25 项（轨迹逐点确定性 / .ntraj 逐字节 / 换序敏感 / 4 agent 抵达 / RVO 最小间距 >= 2*radius / v1+v2 兼容 / 七条负向）",
+    "Q3=A 硬判据：同参数两次 crowd run 的 .ntraj 与 PNG 分别 fc /b 一致；28924 字节 / fnv64 5cbf9ce63eb1b273；arrived 4/4、minPairDist 0.6003 m（>= 2*radius=0.6）",
+    "Q2=A-1 硬判据：v1 solo 与 v2 tiled 归档 .nnav 直接被 Crowd 消费且单 agent 抵达；solo bake 与 example/nav-m0/hiz-a.nnav 864 字节基线不变、tiled 7276 字节基线不变",
+    "零回归：双后端 BUILD OK + viewer selftest 16/16x2、ctest m-n[01234]-nav 32/32 x2、regression 老五卡全绿、server.py --check exit 0、example/nav-n4/run.bat DX12+VULKAN A~F ALL GREEN",
+    "冻结面：vendored 零编辑、.nnav v1/v2 字节基线、M-N2 五阶段与 nav-n3-panel 四张 viewer 截图、kStage 仍 S8.2、外置编辑器、渲染回归，一律不碰",
+    "交代物：example/nav-n4/（run.bat + crowd-arena.ntraj + crowd-arena.png + 8 份日志）+ 本卡 11 用例 + NAV-TOOLS-GUIDE.md §12 归档"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nav-tools.exe",
+    "vulkan": "build/VULKAN/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 crowd 行（crowd 无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带任何参数的 crowd 打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [
+      "crowd"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools crowd"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0..M-N3 锚点零回归 + M-N4 新增 25 项 crowd 锚点",
+     "kind": "tool",
+     "note": "M-N4 新增：两次 run 轨迹逐点一致 / .ntraj 两次写入逐字节一致 / agent 换序轨迹不同 / 4 agent 全部抵达 / RVO 最小间距 >= 2*radius / v1 solo 与 v2 tiled 均可消费 / dt=0、frames=0、超半径、非法 flag、超容量、网格外 spawn、未装载 NavMesh 七条负向。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "arena-trace",
+     "name": "crowd --arena：4 agent 对角穿越 + .ntraj 固定步长轨迹容器",
+     "kind": "tool",
+     "note": "Q3=A：dt=1/60、600 帧、agent 顺序固定；20x20 合成地板 + 中央 2x2x2 障碍，两对对角穿越。轨迹 = 601 帧 x 4 agent x xyz 扁平 float，28924 字节 / fnv64 5cbf9ce63eb1b273。{out} 走临时路径，不写仓库基线。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--frames",
+      "600",
+      "--trace",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "result       : PASS",
+     "command": "nav-tools crowd --arena --frames 600 --trace <out>"
+    },
+    {
+     "id": "arena-png",
+     "name": "crowd --png：俯视轨迹证据图（工具软光栅真实输出）",
+     "kind": "tool",
+     "note": "黑色 = dtNavMesh poly 边界，四条彩色折线 = 4 个 agent 的 600 帧轨迹，起终点十字。两次同参数 --screenshot/--png fc /b 逐字节一致（run.bat C 段）。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--frames",
+      "600",
+      "--png",
+      "{out}",
+      "--size",
+      "768"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived      : 4 / 4",
+     "command": "nav-tools crowd --arena --frames 600 --png <out> --size 768"
+    },
+    {
+     "id": "line",
+     "name": "crowd --preset line：4 agent 编队同向推进，minPairDist 1.3276 m",
+     "kind": "tool",
+     "note": "第二套固定顺序输入，验证 agent 顺序与初始位置是确定性输入的一部分；同样 4/4 抵达、result=PASS。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--preset",
+      "line",
+      "--frames",
+      "600"
+     ],
+     "expectExit": 0,
+     "expectLog": "minPairDist  : 1.32",
+     "command": "nav-tools crowd --arena --preset line --frames 600"
+    },
+    {
+     "id": "v1",
+     "name": "A-1：v1 solo .nnav 直接被 Crowd 消费（容器一字不改）",
+     "kind": "tool",
+     "note": "Crowd 只吃已加载 NavMesh，经 NavMesh::nativeHandle() 的 opaque const void* 桥接取 dtNavMesh*；.nnav 不升 v3、M-N0 864 字节基线不动。单 agent 60 帧抵达。",
+     "args": [
+      "crowd",
+      "{root}/example/nav-n3/hiz-v1.nnav",
+      "--spawn",
+      "-1.9,0.2,-2.1:-1.0,0.2,-1.0",
+      "--frames",
+      "60"
+     ],
+     "expectExit": 0,
+     "expectLog": "mode         : solo (v1)",
+     "command": "nav-tools crowd example/nav-n3/hiz-v1.nnav --spawn <a:b> --frames 60"
+    },
+    {
+     "id": "v2",
+     "name": "A-1：v2 tiled .nnav 直接被 Crowd 消费（容器一字不改）",
+     "kind": "tool",
+     "note": "M-N3 的 dtTileCache tiled 容器同样可直接跑多 Agent；selector 只看 isTiled()，不触碰序列化格式。单 agent 60 帧抵达。",
+     "args": [
+      "crowd",
+      "{root}/example/nav-n3/hiz-tiled.nnav",
+      "--spawn",
+      "-1.9,0.2,-2.1:-1.0,0.2,-1.0",
+      "--frames",
+      "60"
+     ],
+     "expectExit": 0,
+     "expectLog": "mode         : tiled (v2)",
+     "command": "nav-tools crowd example/nav-n3/hiz-tiled.nnav --spawn <a:b> --frames 60"
+    },
+    {
+     "id": "dt-zero",
+     "name": "负向：--dt 0 拒绝（退出码 2，变 dt 不纳入验收）",
+     "kind": "tool",
+     "note": "Q3=A 固定步长口径：dt 必须落在 (0, 0.25]；零步长会让上游积分除零/停滞，工具层先闸掉。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--dt",
+      "0"
+     ],
+     "expectExit": 2,
+     "expectLog": "nav-tools crowd: --dt must be in (0, 0.25]",
+     "command": "nav-tools crowd --arena --dt 0"
+    },
+    {
+     "id": "offmesh",
+     "name": "负向：网格外 spawn 必须明确拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "findNearestPoly 失败或 ref=0 时 Crowd::run 返回 false，不静默把 agent 放在无路径的空槽。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--spawn",
+      "100,0,100:-8,0.2,-8",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "not on navmesh",
+     "command": "nav-tools crowd --arena --spawn 100,0,100:-8,0.2,-8 --frames 30"
+    },
+    {
+     "id": "bad-nav",
+     "name": "负向：非 .nnav 输入被容器 magic 闸拒绝（退出码 1）",
+     "kind": "tool",
+     "note": "Suzanne.glb 不是 NLNV 容器，load 阶段即失败，不进入 crowd 初始化。",
+     "args": [
+      "crowd",
+      "{root}/assets/models/Suzanne.glb",
+      "--spawn",
+      "-8,0.2,-8:8,0.2,8",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 1,
+     "expectLog": "bad magic",
+     "command": "nav-tools crowd assets/models/Suzanne.glb --spawn <a:b> --frames 30"
+    },
+    {
+     "id": "over-capacity",
+     "name": "负向：spawn 数超过 --max-agents 拒绝（退出码 2）",
+     "kind": "tool",
+     "note": "默认 preset crossing 4 个 agent，--max-agents 2 时必须在参数闸拒绝，不让上游 addAgent 静默返回 -1。",
+     "args": [
+      "crowd",
+      "--arena",
+      "--max-agents",
+      "2",
+      "--frames",
+      "30"
+     ],
+     "expectExit": 2,
+     "expectLog": "spawn count exceeds --max-agents",
+     "command": "nav-tools crowd --arena --max-agents 2 --frames 30"
+    }
+   ]
+  },
+  {
    "id": "s10-probe",
    "label": "S10.1",
    "name": "屏幕探针八面体辐照度追踪 + viz（M10.1）",

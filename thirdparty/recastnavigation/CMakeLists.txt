@@ -26,6 +26,13 @@ add_library(nl_recast STATIC
     # M-N3：DetourTileCache（同一 v1.6.0 锁定 commit，零编辑，ZLib）。
     DetourTileCache/Source/DetourTileCache.cpp
     DetourTileCache/Source/DetourTileCacheBuilder.cpp
+    # M-N4：DetourCrowd（同一 v1.6.0 锁定 commit，零编辑，ZLib，6 TU 零新依赖）。
+    DetourCrowd/Source/DetourCrowd.cpp
+    DetourCrowd/Source/DetourLocalBoundary.cpp
+    DetourCrowd/Source/DetourObstacleAvoidance.cpp
+    DetourCrowd/Source/DetourPathCorridor.cpp
+    DetourCrowd/Source/DetourPathQueue.cpp
+    DetourCrowd/Source/DetourProximityGrid.cpp
     DebugUtils/Source/DebugDraw.cpp
     # DetourDebugDraw.cpp 上游 1.6.0 头依赖 DetourTileCacheBuilder.h
     #（M-N0 剔除留痕；M-N3 TileCache 已入库，重评结论仍不启用——M-N2 自绘 PNG 基线锁定）。
@@ -38,5 +45,6 @@ target_include_directories(nl_recast PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Recast/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/Detour/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/DetourTileCache/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/DetourCrowd/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/DebugUtils/Include
 )

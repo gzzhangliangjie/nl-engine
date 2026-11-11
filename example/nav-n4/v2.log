@@ -1,0 +1,11 @@
+navmesh      : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n4\..\..\example\nav-n3\hiz-tiled.nnav
+mode         : tiled (v2)
+polys        : 4
+agents       : 1
+frames       : 61 (60 updates + initial)
+dt           : 0.016667
+arrived      : 1 / 1
+minPairDist  : 0.0000 m
+trace        : (not written)
+png          : (not written)
+result       : PASS

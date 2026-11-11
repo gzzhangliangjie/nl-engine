@@ -126,3 +126,41 @@ add_test(NAME m-n3-nav-obstacle-v1
 set_tests_properties(m-n3-nav-obstacle-v1 PROPERTIES
     DEPENDS m-n1-nav-bake
     WILL_FAIL TRUE)
+
+# ---- P8 M-N4: DetourCrowd fixed-step multi-agent trace ----
+# 开工闸拍板 Q1=A（工具版）/ Q2=A-1（.nnav 不升 v3）/ Q3=A（固定 dt + 帧数 + 顺序）。
+add_test(NAME m-n4-nav-selftest COMMAND nav-tools selftest --verbose)
+set_tests_properties(m-n4-nav-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "nav selftest: PASS")
+add_test(NAME m-n4-nav-crowd-arena
+         COMMAND nav-tools crowd --arena --frames 600
+                 --trace ${CMAKE_CURRENT_BINARY_DIR}/nav-n4-arena.ntraj
+                 --png ${CMAKE_CURRENT_BINARY_DIR}/nav-n4-arena.png --size 768)
+set_tests_properties(m-n4-nav-crowd-arena PROPERTIES
+    PASS_REGULAR_EXPRESSION "result       : PASS")
+# A-1：v1 solo 与 v2 tiled 容器都能被 Crowd 直接消费（.nnav 格式一字不改）
+add_test(NAME m-n4-nav-crowd-v1
+         COMMAND nav-tools crowd ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav
+                 --spawn -1.9,0.2,-2.1:-1.0,0.2,-1.0 --frames 60)
+set_tests_properties(m-n4-nav-crowd-v1 PROPERTIES
+    DEPENDS m-n1-nav-bake
+    PASS_REGULAR_EXPRESSION "mode         : solo \\(v1\\)")
+add_test(NAME m-n4-nav-crowd-v2
+         COMMAND nav-tools crowd ${CMAKE_CURRENT_BINARY_DIR}/nav-n3-hiz.nnav
+                 --spawn -1.9,0.2,-2.1:-1.0,0.2,-1.0 --frames 60)
+set_tests_properties(m-n4-nav-crowd-v2 PROPERTIES
+    DEPENDS m-n3-nav-tilebake
+    PASS_REGULAR_EXPRESSION "mode         : tiled \\(v2\\)")
+# 负向：缺参数 / 零步长 / 网格外 spawn / 非 .nnav 输入，全部明确拒绝
+add_test(NAME m-n4-nav-crowd-usage COMMAND nav-tools crowd)
+set_tests_properties(m-n4-nav-crowd-usage PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n4-nav-crowd-dt
+         COMMAND nav-tools crowd --arena --dt 0)
+set_tests_properties(m-n4-nav-crowd-dt PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n4-nav-crowd-offmesh
+         COMMAND nav-tools crowd --arena --spawn 100,0,100:-8,0.2,-8 --frames 30)
+set_tests_properties(m-n4-nav-crowd-offmesh PROPERTIES WILL_FAIL TRUE)
+add_test(NAME m-n4-nav-crowd-bad-nav
+         COMMAND nav-tools crowd ${NL_ROOT}/assets/models/Suzanne.glb
+                 --spawn -8,0.2,-8:8,0.2,8 --frames 30)
+set_tests_properties(m-n4-nav-crowd-bad-nav PROPERTIES WILL_FAIL TRUE)

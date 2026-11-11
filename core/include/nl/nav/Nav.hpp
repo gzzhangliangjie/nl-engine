@@ -157,6 +157,12 @@ public:
     struct Edge { float a[3]; float b[3]; };
     std::vector<Edge> polyEdges() const;
 
+    // ---- M-N4：opaque 原生 dtNavMesh 句柄 ----
+    // 仅供 core/src/nav/Crowd.cpp 内部桥接（A-1：Crowd 只吃已加载 NavMesh，
+    // .nnav 不升 v3）。返回 const void* 是为了让公开面保持零第三方符号：
+    // 业务侧不得解引用、不得跨 NavMesh 重建/析构保存；未装载时返回 nullptr。
+    const void* nativeHandle() const;
+
     // ---- M-N1：Detour 查询封装 ----
     // 链路：findNearestPoly（端点吸附）-> findPath（多边形走廊）-> findStraightPath
     //（string-pulling 折线，即本层语义上的「路径平滑」；上游 RecastDemo/DetourCrowd
