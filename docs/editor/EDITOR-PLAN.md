@@ -264,3 +264,11 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 7. `Viewport::label()` 是 `const` 却懒生成 `label_` → C2678，须 `mutable std::string`。
 8. `replace_all` 把 `callQuick` 函数体自身也换成递归调用 → 改回 `host->call(method, p, 500)` 并补 `<string_view>`。
 9. `RpcBridge::shutdown()` 不再 `WSACleanup()`：Winsock 初始化已进程级一次性管理，per-bridge cleanup 会打断同进程其它连接。
+
+## §8 附：整轨 merge 回 master（2026-11-11，用户「合回主干」拍板）
+
+- **合并形态**：`feat/editor` 与 master 真分叉（merge-base `b5c16a3`，master 独有 16 提交 = S10 T0/M10.0~M10.2 + particles，editor 独有 6 提交 = M-E0~E6），`--no-ff` 生成双父 merge commit `ac50c10`（父 `e43eda1` + `0ca2715`）。合并前 `git merge-tree --write-tree` 无副作用预演：根 `CMakeLists.txt` 自动合并；`docs/MILESTONES.md`（两侧四栏纯追加）与 `viewer/main.cpp`（相机初始化 vs `edEmbed.bind*` 独立接线）两处冲突，按字节剔除三行冲突标记、保留双方全部内容，CRLF 原样；`git add` 只显式点名两个冲突文件，主树在途日志与 9 个未跟踪产物零触碰。
+- **集成修复 `fc34176`（合并后实编才发现，文本三方合并看不出）**：① master 的 M-CAM b 段把两个渲染循环相机实例从 `nl::core::OrbitCamera` 换成 `nl::viewer::ViewerCamera`，而 `EditorEmbed::bindCamera` 仍收 `OrbitCamera*` → C2664 ×2；改持 `ViewerCamera*`（Orbit 模式同名方法逐位转发 `orbitCam`，非 Orbit 模式由 ViewerCamera 自身门控，不再假生效），并把 fov 20..120 clamp 显式移到 `camera.setFov` RPC 侧（`ViewerCamera::setFovYDegrees` 自身 `fovY_` 不 clamp），保住 `m-e3-cam-probe.py` 的 `setFov 500 -> 120` 契约。② `tools/m-e{3,4,5,6}-probe.py` 四个探针把仓库根硬编码成 `E://UE_STUDY_2026//nl-engine-editor`，在主树跑会启旧 worktree 的 exe = 假绿（M-D3 归档绝对路径同款坑），统一改 `ROOT = dirname(dirname(abspath(__file__)))`。
+- **验收（主树，不在 worktree）**：`build-m0.2.bat DX12` / `VULKAN` 双 **BUILD OK**，viewer selftest **16/16 ×2**、Slang **90/90**；`rpc_self_test.exe` **0 failures**；四探针串行 **M-E3 25 / M-E4 18 / M-E5 30 / M-E6 33 = 106 PASS / 0 FAIL**。冻结面 `renderer/` `shader/` `example/` `tools/regression/cases.json` 零触碰，`kStage` 仍 S8.2，无新基线 / 版本卡。
+- **合并纪律**：用户只说「合回主干」→ 不标 CLOSED、不拆 worktree、不改 `wt_pool.py TRACKS` state（drive 轨道先例）；`feat/editor` 分支与 `nl-engine-editor` worktree 保留待拍板。
+- **教训固化**：并行轨道 merge 后**必须实编双后端** —— `git merge` 无冲突 ≠ 语义兼容；归档探针与产物禁带 worktree 绝对路径（两棵树都要能跑）。
