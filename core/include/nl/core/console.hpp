@@ -166,5 +166,14 @@ private:
     std::vector<LogLine> log_;
 };
 
+// M-LOG2 拍板 ②（docs/p8/P8-LOG-PLAN.md §9）：log.* 四命令注册，单一事实源——
+// viewer（ImGui 前端）与 log-tools（无头工具）共用同一实现，不各自复制。
+//   log.level <level>            全局缺省（setFilter 单段语义）
+//   log.channel <ch> <lv|off>    单通道调整（追加段走 setFilter 复用解析面）
+//   log.filter <instruction...>  整面替换（bevy EnvFilter 口径）
+//   log.status                   回读当前过滤指令
+// 全部复用 nl::core::log 过滤面 API；非法指令显式报错（CommandFailed，exit 3）。
+void registerLogCommands(Console& console);
+
 } // namespace console
 } // namespace nl::core

@@ -6,14 +6,19 @@
 //   ③ M-LOG1 过滤指令：正向（全局缺省 + 通道覆盖 + off）与负向（非法指令
 //     显式拒绝、原面不动），bevy EnvFilter 口径。
 //   ④ 并发冒烟：多线程并发写不崩、计数不丢（spdlog mt sink + wrapper mutex）。
+//   ⑤ M-LOG2 帧号注入：setLogFrame 后行尾 " #<n>" 后缀（sink 收原始 message 不带
+//     后缀——帧号拼在 wrapper 行组装层，不进 sink 消息面）。
+//   ⑥ M-LOG2 文件滚动：setFileRollLimit 注入小阈值，写超限后 <name>.1 存在。
 // 退出码：0=PASS / 1=断言失败 / 2=用法错误。
 
+#include "nl/core/console.hpp"
 #include "nl/core/log.hpp"
 
 #include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <process.h>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -28,22 +33,6 @@ void check(bool ok, const std::string& what) {
     if (!ok) ++g_failures;
 }
 
-std::string newestLogFile() {
-    namespace fs = std::filesystem;
-    std::string best;
-    std::filesystem::file_time_type bestT{};
-    std::error_code ec;
-    if (!fs::exists("out/log")) return {};
-    for (const auto& e : fs::directory_iterator("out/log", ec)) {
-        if (e.is_directory()) continue;
-        const std::string name = e.path().filename().string();
-        if (name.rfind("log-tools-", 0) != 0 || name.find(".log") == std::string::npos) continue;
-        auto t = e.last_write_time(ec);
-        if (!ec && (best.empty() || t > bestT)) { best = e.path().string(); bestT = t; }
-    }
-    return best;
-}
-
 bool fileContains(const std::string& path, const std::string& needle) {
     std::ifstream f(path);
     if (!f) return false;
@@ -51,6 +40,40 @@ bool fileContains(const std::string& path, const std::string& needle) {
     while (std::getline(f, line))
         if (line.find(needle) != std::string::npos) return true;
     return false;
+}
+
+// 整行「以 suffix 结尾」判定（getline 已剥换行；防 needle 子串误匹配行尾数字）。
+bool fileHasLineEnding(const std::string& path, const std::string& suffix) {
+    std::ifstream f(path);
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line))
+        if (line.size() >= suffix.size()
+                && line.compare(line.size() - suffix.size(), suffix.size(), suffix) == 0)
+            return true;
+    return false;
+}
+
+// 本进程唯一文本锚（ctest/regression 并行跑 selftest 时，同秒建的同前缀文件
+// mtime 平局会让「最新文件」选错——PID 锚定只认本进程写的行）。
+std::string pidTag() {
+    return "pid" + std::to_string(_getpid());
+}
+
+// 在 out/log 里找含 needle 行的 log-tools-<backend>-*.log（excludeRotated 时
+// 跳过滚动产物 <name>.1.log——它是滚动前旧内容，不是「当前文件」）。
+std::string findFileContaining(const std::string& needle, bool excludeRotated) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists("out/log")) return {};
+    for (const auto& e : fs::directory_iterator("out/log", ec)) {
+        if (e.is_directory()) continue;
+        const std::string name = e.path().filename().string();
+        if (name.rfind("log-tools-", 0) != 0) continue;
+        if (excludeRotated && name.find(".1.log") != std::string::npos) continue;
+        if (fileContains(e.path().string(), needle)) return e.path().string();
+    }
+    return {};
 }
 
 // 每个用例段前重置过滤面（避免用例间串扰；全局缺省回到出厂 Debug）。
@@ -90,8 +113,9 @@ void testCompatSemantics() {
 void testFileSink() {
     std::cout << "segment 2: file sink (Q-L2)" << std::endl;
     resetFilter();
-    nl::core::log::info("file-sink anchor line");
-    const std::string path = newestLogFile();
+    const std::string tag = pidTag();
+    nl::core::log::info("file-sink anchor line ", tag);
+    const std::string path = findFileContaining("[nl:info] file-sink anchor line " + tag, false);
     check(!path.empty(), "log file created under out/log/ named <exe>-<backend>-<stamp>");
     if (!path.empty()) {
         std::cout << "  [file] " << path << std::endl;
@@ -192,10 +216,88 @@ void testConcurrentSmoke() {
     resetFilter();
 }
 
+void testFrameContext() {
+    std::cout << "segment 7: M-LOG2 frame context injection" << std::endl;
+    resetFilter();
+
+    // 帧号拼在行组装层：sink 仍收原始 message（不带后缀），stdout 行带 " #<n>"。
+    const std::string tag = pidTag();
+    std::string captured;
+    nl::core::log::setSink([&](nl::core::log::Level, const std::string& m) { captured += m; });
+    nl::core::log::setLogFrame(1234);
+    nl::core::log::info("frame ctx line ", tag);
+    check(captured == "frame ctx line " + tag,
+          "sink message stays raw (frame suffix not in message)");
+
+    // 文件路同格式：行尾 #1234（行内容 = [nl:info] ... #1234）。
+    nl::core::log::infoCh("renderer", "frame ctx channel line ", tag);
+    const std::string path = findFileContaining("frame ctx line " + tag, false);
+    check(!path.empty(), "file exists for frame-suffix check");
+    if (!path.empty()) {
+        // channel 行 + 帧号后缀的组合形态
+        check(fileContains(path, "[nl:info|renderer] frame ctx channel line " + tag + " #1234"),
+              "channel line carries frame suffix in file");
+        check(fileContains(path, "[nl:info] frame ctx line " + tag + " #1234"),
+              "plain line carries frame suffix in file");
+    }
+
+    nl::core::log::clearLogFrame();
+    nl::core::log::info("no frame ctx ", tag);
+    // 整行尾匹配：确认行尾无 "#<n>"（fileContains 的子串语义挡不住 "#1234" 类尾迹）
+    check(fileHasLineEnding(path, "[nl:info] no frame ctx " + tag),
+          "clearLogFrame drops suffix");
+    resetFilter();
+}
+
+void testFileRolling() {
+    std::cout << "segment 8: M-LOG2 file rolling (size limit, one generation)" << std::endl;
+    resetFilter();
+    // 文件路懒建于首条 emit——注入小阈值必须在此之前。
+    nl::core::log::setFileRollLimit(8 * 1024); // 8 KiB：几十行即滚
+    check(nl::core::log::fileRollLimit() == 8 * 1024, "roll limit setter takes effect");
+
+    // 打 ~64KB 行文（约 220 行 x 350B）触发滚动；PID 锚定本进程行
+    //（历史轮/并行进程的 filler 行不认）。
+    const std::string tag = pidTag();
+    const std::string payload(300, 'x');
+    for (int i = 0; i < 220; ++i)
+        nl::core::log::info("roll filler ", i, " ", payload, " ", tag);
+
+    namespace fs = std::filesystem;
+    // 当前文件 = 含本进程最后一行 filler（219）的非滚动文件
+    //（.1.log 是滚动前旧代，最高只到中段序号，且被排除）。
+    const std::string cur = findFileContaining("roll filler 219 " + payload + " " + tag, true);
+    check(!cur.empty(), "current log file alive after rolling");
+    std::string rolled;
+    if (!cur.empty()) {
+        // spdlog rotating 原生命名：calc_filename("x.log", 1) = "x.1.log"
+        //（数字插 basename 与扩展名之间，rotating_file_sink-inl.h:52 实读）。
+        // 碰撞形态 x-2.log -> x-2.1.log 同规则。拍板口径「<name>.log.1」按实现
+        // 名留档为「<name>.1.log（spdlog 原生）」。
+        const std::string rotated = cur.substr(0, cur.size() - 4) + ".1.log";
+        if (fs::exists(rotated)) rolled = rotated;
+        check(!rolled.empty(), "rotated file <name>.1.log exists after exceeding limit");
+        if (!rolled.empty()) {
+            std::error_code ec;
+            const auto sz1 = fs::file_size(cur, ec);
+            const auto sz0 = fs::file_size(rolled, ec);
+            // 一代保留语义：8KB 限下 220 行滚 ~9 次，.1 只装「最后一滚」的尾部段
+            //（filler 0 早已被后续滚动覆盖），所以验证「含滚动前的 filler 行」即可。
+            check(!ec && sz0 > 0 && fileContains(rolled, "roll filler"),
+                  "rolled file carries pre-rotation content");
+            std::cout << "  [roll] current=" << sz1 << "B rotated=" << sz0 << "B" << std::endl;
+        }
+    }
+    // 不恢复默认上限：文件 sink 的 max_size 构造时固化（热重建会再开新文件），
+    // 本进程即将退出；下一进程按默认 50 MiB 建，无跨进程状态。
+    resetFilter();
+}
+
 void printUsage() {
     std::cout << "log-tools - nl-engine logging tools (A-class track, M-LOG0)\n"
                  "usage: log-tools selftest [--negative-only]\n"
-                 "       log-tools demo [--filter <instruction>]\n";
+                 "       log-tools demo [--filter <instruction>]\n"
+                 "       log-tools exec <line> [<line>...]  (console log.* commands)\n";
 }
 
 } // namespace
@@ -216,6 +318,8 @@ int main(int argc, char** argv) {
             testFilterNegative();
             testRuntimeChannelLevel();
             testConcurrentSmoke();
+            testFrameContext();
+            testFileRolling();
         }
         std::cout << "log selftest: " << (g_failures ? "FAIL" : "PASS")
                   << " (" << g_failures << " failures)" << std::endl;
@@ -246,6 +350,23 @@ int main(int argc, char** argv) {
         }
         printUsage();
         return 2;
+    }
+
+    if (cmd == "exec") {
+        // M-LOG2 拍板 ② 工具面验收：console log.* 四命令经 nl::core::Console
+        // 无头执行（registerLogCommands 单一事实源，与 viewer --console-exec
+        // 同一路径）。任一行失败 -> exit 1（ExecCode 1/2/3 都算失败）。
+        if (argc < 3) { printUsage(); return 2; }
+        nl::core::console::Console& c = nl::core::console::Console::get();
+        c.installBuiltins();
+        nl::core::console::registerLogCommands(c);
+        int bad = 0;
+        for (int i = 2; i < argc; ++i) {
+            const auto r = c.exec(argv[i]);
+            std::cout << r.output << std::endl;
+            if (!r.ok()) bad = 1;
+        }
+        return bad;
     }
 
     printUsage();

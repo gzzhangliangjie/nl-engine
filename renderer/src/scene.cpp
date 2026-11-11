@@ -69,7 +69,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!nl::core::loadGltfScene(modelPath.c_str(), meshData, loadWarning)) {
         outError = modelFile + std::string(": ") + loadWarning; return false;
     }
-    if (!loadWarning.empty()) nl::core::log::debug(loadWarning);
+    if (!loadWarning.empty()) nl::core::log::debugCh("scene", loadWarning);
     // M0.4 起的约定：只画第一个子网格；其余子网格留给 nanite-tools 侧处理。
     if (meshData.meshes.empty()) {
         outError = modelFile + std::string(" has no mesh primitive"); return false;
@@ -309,7 +309,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     modelName_ = modelFile;
     triangleCount_ = indexCount_ / 3;
 
-    nl::core::log::info("model ready: ", modelFile, " | vertices=", vertexCount,
+    nl::core::log::infoCh("scene", "model ready: ", modelFile, " | vertices=", vertexCount,
                         " triangles=", triangleCount_, " indices=", indexCount_,
                         " | prims=", meshData.meshes.size(),
                         " | baseColor ", texWidth, "x", texHeight,
@@ -415,7 +415,7 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
 
     if (!uploadClusterMesh(device, nmeshFile, outError)) return false;
 
-    nl::core::log::info("cluster scene ready: ", nmeshFile,
+    nl::core::log::infoCh("scene", "cluster scene ready: ", nmeshFile,
                         " | triangles=", triangleCount_,
                         " | shader=", shaderSuffix);
     return true;
@@ -812,7 +812,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     for (const auto& m : nm.meshlets) totalTri += m.triangleCount;
     triangleCount_ = totalTri;
 
-    nl::core::log::info("cull (vertex pulling) scene ready: ", nmeshFile,
+    nl::core::log::infoCh("scene", "cull (vertex pulling) scene ready: ", nmeshFile,
                         " | meshlets=", clusterCount,
                         " | triangles=", triangleCount_,
                         " | stride=", stride,
@@ -1318,7 +1318,7 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         assetSphere_[3] = std::sqrt(r2);
     }
 
-    nl::core::log::info("dag (traversal) scene ready: ", stem, ".lod0..lod",
+    nl::core::log::infoCh("scene", "dag (traversal) scene ready: ", stem, ".lod0..lod",
                         dagLevelCount - 1,
                         " | levels=", dagLevelCount,
                         " | clusters=", totalClusters,
@@ -1481,7 +1481,7 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!rb) { outError = "createBuffer failed for hiz readback"; return false; }
     }
 
-    nl::core::log::info("hiz scene ready (dag traversal + depth pre-pass + max pyramid)",
+    nl::core::log::infoCh("scene", "hiz scene ready (dag traversal + depth pre-pass + max pyramid)",
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -1598,7 +1598,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
             outError = glb + std::string(": ") + loadWarning;
             return false;
         }
-        if (!loadWarning.empty()) nl::core::log::debug(loadWarning);
+        if (!loadWarning.empty()) nl::core::log::debugCh("scene", loadWarning);
         if (meshData.meshes.empty()) {
             outError = glb + std::string(" has no mesh primitive"); return false;
         }
@@ -1791,7 +1791,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->close();
         device->executeCommandList(upload);
 
-        nl::core::log::info("visbuf material resolve ready: ", glb,
+        nl::core::log::infoCh("scene", "visbuf material resolve ready: ", glb,
                             " | materials=", materialCount,
                             " | baseColor ", meshData.meshes[0].texWidth, "x",
                             meshData.meshes[0].texHeight,
@@ -1808,7 +1808,7 @@ bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
     if (!nm.fallbackPresent || nm.fallbackVertices.empty() || nm.fallbackIndices.empty()) {
         // 无 fallback 段非错误：cull 模式吃 v1 base 资产、visbuf 吃 Suzanne-materials
         // （只有 NSUB 段），都不建。dag/hiz 模式 levels[0] 恒为 v3 lod0（带 NFLB）。
-        nl::core::log::info("blas: no fallback section in ", assetName,
+        nl::core::log::infoCh("scene", "blas: no fallback section in ", assetName,
                             " — skipped (S8 BLAS needs a v3 lod0 with 'NFLB')");
         return true;
     }
@@ -1853,7 +1853,7 @@ bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
     if (!blas_) {
         // 设备不支持 RT（无 DXR / 无 VK_KHR_acceleration_structure）：跳过不拦路，
         // 既有渲染路径零扰动；真几何错误会在 DX12 校验层报 Error 由 drainMessages 统计。
-        nl::core::log::warn("blas: createAccelStruct failed for ", assetName,
+        nl::core::log::warnCh("scene", "blas: createAccelStruct failed for ", assetName,
                             " — ray tracing unsupported? BLAS skipped");
         return true;
     }
@@ -1895,7 +1895,7 @@ bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
 
     blasReady_ = true;
     blasTriangleCount_ = indexCount / 3;
-    nl::core::log::info("blas built: ", assetName, " | vertices=", vertexCount,
+    nl::core::log::infoCh("scene", "blas built: ", assetName, " | vertices=", vertexCount,
                         " triangles=", blasTriangleCount_, " (build ms via GPU timer)");
 
     // M8.1：BLAS 就位后建 TLAS（每帧全量 rebuild 的实例引用目标）。失败不拦路，
@@ -1932,7 +1932,7 @@ bool Scene::initTlas(nvrhi::IDevice* device, std::string& outError) {
     if (tlasReady_) return true;
     if (!blasReady_ || !blas_) {
         // BLAS 未建（无 fallback 资产 / 无 RT 设备）：TLAS 无引用目标，跳过不拦路。
-        nl::core::log::info("tlas: no BLAS available — skipped (S8 TLAS needs a BLAS)");
+        nl::core::log::infoCh("scene", "tlas: no BLAS available — skipped (S8 TLAS needs a BLAS)");
         return true;
     }
     tlasTimer_.setLabel("tlas");
@@ -1944,11 +1944,11 @@ bool Scene::initTlas(nvrhi::IDevice* device, std::string& outError) {
     tlasDesc.setDebugName("TlasPerFrame");
     tlas_ = device->createAccelStruct(tlasDesc);
     if (!tlas_) {
-        nl::core::log::warn("tlas: createAccelStruct failed — ray tracing unsupported? TLAS skipped");
+        nl::core::log::warnCh("scene", "tlas: createAccelStruct failed — ray tracing unsupported? TLAS skipped");
         return true;
     }
     tlasReady_ = true;
-    nl::core::log::info("tlas created: maxInstances=", kMaxTlasInstances,
+    nl::core::log::infoCh("scene", "tlas created: maxInstances=", kMaxTlasInstances,
                         " | per-frame full rebuild (UE D-S8-1)");
     return true;
 }
@@ -1982,7 +1982,7 @@ void Scene::buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame) {
     tlasTimer_.end(cmd);
     tlasInstanceCount_ = 1;
     if (tlasFrameIndex_ == 0)
-        nl::core::log::info("tlas: per-frame rebuild active | instances=1");
+        nl::core::log::infoCh("scene", "tlas: per-frame rebuild active | instances=1");
     tlasFrameIndex_++;
 
     // ---- 探针（--tlas-probe）：TLAS build 之后 dispatch，M8.1 自检的机器可读证据。
@@ -2013,7 +2013,7 @@ bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
     std::vector<std::uint8_t> csBlob;
     const std::string path = std::string(NL_SHADER_DIR) + "/tlas_probe.cs." + shaderSuffix_;
     if (!readFileBytes(path.c_str(), csBlob)) {
-        nl::core::log::warn("tlas probe: failed to load shader from ", path, " — probe disabled");
+        nl::core::log::warnCh("scene", "tlas probe: failed to load shader from ", path, " — probe disabled");
         probeFailed_ = true;
         return false;
     }
@@ -2037,7 +2037,7 @@ bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
         rb = device->createBuffer(rDesc);
     }
     if (!csTlasProbe_ || !probeOut_ || !probeReadback_[0] || !probeReadback_[1]) {
-        nl::core::log::warn("tlas probe: resource creation failed — probe disabled");
+        nl::core::log::warnCh("scene", "tlas probe: resource creation failed — probe disabled");
         probeFailed_ = true;
         return false;
     }
@@ -2060,12 +2060,12 @@ bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
     cpDesc.setComputeShader(csTlasProbe_).addBindingLayout(probeLayout_);
     probePSO_ = device->createComputePipeline(cpDesc);
     if (!probeLayout_ || !probeSet_ || !probePSO_) {
-        nl::core::log::warn("tlas probe: pipeline/binding creation failed — probe disabled");
+        nl::core::log::warnCh("scene", "tlas probe: pipeline/binding creation failed — probe disabled");
         probeFailed_ = true;
         return false;
     }
     probeReady_ = true;
-    nl::core::log::info("tlas probe: pipeline ready (RayQuery fixed ray, hit t readback)");
+    nl::core::log::infoCh("scene", "tlas probe: pipeline ready (RayQuery fixed ray, hit t readback)");
     return true;
 }
 
@@ -2094,9 +2094,9 @@ void Scene::pollTlasProbe(nvrhi::IDevice* device) {
     device->unmapBuffer(probeReadback_[slot]);
     probePolledSlot_ = static_cast<int>(ready);
     if (t < 0.0f)
-        nl::core::log::info("tlas probe: seq=", ready, " t=miss (no hit)");
+        nl::core::log::infoCh("scene", "tlas probe: seq=", ready, " t=miss (no hit)");
     else
-        nl::core::log::info("tlas probe: seq=", ready, " t=", t);
+        nl::core::log::infoCh("scene", "tlas probe: seq=", ready, " t=", t);
 }
 
 // ============================================================================
@@ -2339,7 +2339,7 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // M9.1：TLAS 在 init 链 initTlas 已建（log 顺序 blas→tlas→本行可证），故此处
     // tlasReady_ 已定；如实反映射线是否接通，避免 review 误读为 M9.0 无射线口径。
-    nl::core::log::info("shadow scene ready (compute direct lighting",
+    nl::core::log::infoCh("scene", "shadow scene ready (compute direct lighting",
                         tlasReady_ ? ", 1 shadow ray/pixel via TLAS)" :
                                         ", shadow rays disabled: no TLAS)",
                         " | shader=", shaderSuffix);
@@ -2411,7 +2411,7 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // 呈现布局 / PSO 已由 initRtPresent / presentRtTarget 共用初始化接管。
 
-    nl::core::log::info("rt scene ready (RayQuery per-pixel debug rays)",
+    nl::core::log::infoCh("scene", "rt scene ready (RayQuery per-pixel debug rays)",
                         " | shader=", shaderSuffix);
     return true;
 }
@@ -2611,7 +2611,7 @@ void Scene::drawRt(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 与 BLAS skip 同口径（渲染照常，不拦路）。
     if (!tlasReady_) {
         if (!rtNoTlasLogged_) {
-            nl::core::log::info("rt: TLAS not ready (no RT support or no fallback "
+            nl::core::log::infoCh("scene", "rt: TLAS not ready (no RT support or no fallback "
                                 "geometry) -- debug rays disabled");
             rtNoTlasLogged_ = true;
         }
@@ -2685,7 +2685,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     // 主帧光栅 + 直光仍由其他 mode 提供，shadow 模式在此环境不可用）。
     if (!tlasReady_) {
         if (!shadowNoTlasLogged_) {
-            nl::core::log::info("shadow: TLAS not ready (no RT support or no fallback "
+            nl::core::log::infoCh("scene", "shadow: TLAS not ready (no RT support or no fallback "
                                 "geometry) -- shadow rays disabled");
             shadowNoTlasLogged_ = true;
         }
@@ -2879,7 +2879,7 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     refPresentLayout_ = device->createBindingLayout(pLayoutDesc);
     if (!refPresentLayout_) { outError = "createBindingLayout failed for ref present"; return false; }
 
-    nl::core::log::info("reference scene ready (progressive multi-frame direct-light",
+    nl::core::log::infoCh("scene", "reference scene ready (progressive multi-frame direct-light",
                         tlasReady_ ? ", shadow rays via TLAS)" :
                                         ", shadow rays disabled: no TLAS)",
                         " | shader=", shaderSuffix,
@@ -2897,7 +2897,7 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     // TLAS 未就绪 → 无阴影射线，参考图退化为无硬阴影直光（与 shadow 同口径降级）。
     if (!tlasReady_) {
         if (!refNoTlasLogged_) {
-            nl::core::log::info("reference: TLAS not ready (no RT support or no fallback "
+            nl::core::log::infoCh("scene", "reference: TLAS not ready (no RT support or no fallback "
                                 "geometry) -- shadow rays disabled");
             refNoTlasLogged_ = true;
         }
@@ -2974,7 +2974,7 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     // 进度日志（截图模式 HUD 关，靠日志看累积进度；每 8 帧一次避免刷屏）。
     if (refFramesTarget_ > 0 && (samplesDone_ % (samplesPerFrame_ * 8) == 0 ||
                                  samplesDone_ >= totalTarget)) {
-        nl::core::log::info(params.referenceGI ? "reference-gi: " : "reference: ",
+        nl::core::log::infoCh("scene", params.referenceGI ? "reference-gi: " : "reference: ",
                             samplesDone_, " / ", static_cast<std::uint32_t>(totalTarget),
                             " spp (", static_cast<int>(refProgress_ * 100.0f), "%)");
     }
@@ -3059,7 +3059,7 @@ bool Scene::loadCompareImage(const char* path, std::string& outError) {
     comparePendingUpload_ = true;
     compareW_ = static_cast<std::uint32_t>(w);
     compareH_ = static_cast<std::uint32_t>(h);
-    nl::core::log::info("compare: loaded ", path, " (", w, "x", h, ")");
+    nl::core::log::infoCh("scene", "compare: loaded ", path, " (", w, "x", h, ")");
     return true;
 }
 
@@ -3364,7 +3364,7 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!gatherPSO_ || !gatherComposePSO_)
         { outError = "createComputePipeline failed for probe gather"; return false; }
 
-    nl::core::log::info("probe scene ready (velocity prepass + 4-level cascade placement",
+    nl::core::log::infoCh("scene", "probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
     return true;
 }
@@ -3576,7 +3576,7 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
     if (!probeLogged_) {
         const std::uint32_t total = res * res + (res >> 1) * (res >> 1) +
                                     (res >> 2) * (res >> 2) + (res >> 3) * (res >> 3);
-        nl::core::log::info("probe: cascades=4 base=", res,
+        nl::core::log::infoCh("scene", "probe: cascades=4 base=", res,
                             " grid=", res, "/", (res >> 1), "/", (res >> 2), "/", (res >> 3),
                             " probes=", total,
                             " oct=", 8, " raysPerProbe=", 8 * 8);
@@ -3750,7 +3750,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
                       ((probeBaseRes_ * store) + 7u) / 8u, 4u);
     } else if (!probeTraceLogged_) {
-        nl::core::log::info("probe: TLAS not ready (no RT support or no fallback "
+        nl::core::log::infoCh("scene", "probe: TLAS not ready (no RT support or no fallback "
                             "geometry) -- probe tracing disabled");
         probeTraceLogged_ = true;
     }
@@ -3768,7 +3768,7 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
                             const FrameParams& params, std::string& outError) {
     if (!probe_ || probeFailed_ || !tlasReady_) {
         if (!probeGatherLogged_ && probe_ && !tlasReady_)
-            nl::core::log::info("probe: gather disabled (TLAS not ready, pure "
+            nl::core::log::infoCh("scene", "probe: gather disabled (TLAS not ready, pure "
                                 "direct light + no ambient this frame)");
         probeGatherLogged_ = true;
         return true;
@@ -3815,7 +3815,7 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
     }
     if (!probeGatherLogged_) {
-        nl::core::log::info("probe: gather active (depth-banded cascade levels, "
+        nl::core::log::infoCh("scene", "probe: gather active (depth-banded cascade levels, "
                             "UE bilinear corner x plane-depth weights, ambient "
                             "replaced by gather)");
         probeGatherLogged_ = true;
@@ -3986,7 +3986,7 @@ bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
     dagGroup_ = -1;          // 纯层加载：无下钻状态
     dagGroupError_ = 0.0f;
     dagGroupSphere_[0] = dagGroupSphere_[1] = dagGroupSphere_[2] = dagGroupSphere_[3] = 0.0f;
-    nl::core::log::debug("cluster mesh uploaded: ", nmeshFile,
+    nl::core::log::debugCh("scene", "cluster mesh uploaded: ", nmeshFile,
                          " vertices=", vertices.size(),
                          " triangles=", triangleCount_,
                          " meshlets=", nm.meshlets.size(),
@@ -4068,7 +4068,7 @@ bool Scene::setDagCut(nvrhi::IDevice* device, const char* topFile, const char* c
     dagGroup_ = drillGroup;
     dagGroupError_ = group.error;
     for (int i = 0; i < 4; ++i) dagGroupSphere_[i] = group.sphere[i];
-    nl::core::log::info("dag cut: ", topFile, " minus parents [", group.genFirst, ", ",
+    nl::core::log::infoCh("scene", "dag cut: ", topFile, " minus parents [", group.genFirst, ", ",
                         group.genFirst + group.genCount, ") <- ", childFile,
                         " group ", drillGroup,
                         " (error=", group.error, ") | triangles=", triangleCount_);
@@ -4833,7 +4833,7 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
 
     modelName_ = modelFile;
     triangleCount_ = indexCount_ / 3;
-    nl::core::log::info(
+    nl::core::log::infoCh("scene", 
         "skin model ready: ", modelFile,
         " | bones=", skinSkeleton_.boneCount(),
         " clips=", skinClips_.size(),
@@ -5011,7 +5011,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!nl::core::loadGltfScene(modelPath.c_str(), meshData, loadWarning)) {
             outError = batchFiles[b] + std::string(": ") + loadWarning; return false;
         }
-        if (!loadWarning.empty()) nl::core::log::debug(loadWarning);
+        if (!loadWarning.empty()) nl::core::log::debugCh("scene", loadWarning);
         if (meshData.meshes.empty()) {
             outError = batchFiles[b] + std::string(" has no mesh primitive"); return false;
         }
@@ -5537,7 +5537,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     triangleCount_ = 0;
     for (const SceneMeshBatch& b : sceneBatches_) triangleCount_ += b.indexCount / 3;
 
-    nl::core::log::info("ecs scene ready: ", sceneName,
+    nl::core::log::infoCh("scene", "ecs scene ready: ", sceneName,
                         " | objects=", objectCount, " lights=", lightCount,
                         " ambient=", ambient,
                         " shadowLights=", shadowCount_,
@@ -5635,7 +5635,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 const float vpW = viewport.maxX - viewport.minX;
                 const float vpH = viewport.maxY - viewport.minY;
                 if (ensureRtTargets(t0Device_, vpW, vpH, t0Err))
-                    nl::core::log::info("t0: offscreen HDR scene targets ready (raster path)");
+                    nl::core::log::infoCh("scene", "t0: offscreen HDR scene targets ready (raster path)");
                 else
                     nl::core::log::deviceError("t0", t0Err);
             }
@@ -6701,7 +6701,7 @@ bool Particles::ensureTexture(nvrhi::IDevice* device, std::string& outError) {
         return false;
     }
     texturePendingUpload_ = true;
-    nl::core::log::info("[Particles] nfx texture: ", textureBasename_,
+    nl::core::log::infoCh("scene", "[Particles] nfx texture: ", textureBasename_,
                         " (", w, "x", h, ")");
     return true;
 }

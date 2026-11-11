@@ -2678,3 +2678,21 @@
 **实现决策留档（计划偏差 1 处）**：M-LOG0 阶梯原文「异步写」，落码取**同步 basic_file_sink_mt + 每条 flush**——日志量小、取证正确性优先，避免 async 线程池退出期丢尾行破坏回归取证；async 化留 M-LOG2（console cvar 轮）随滚动策略一起议。已写回 `P8-LOG-PLAN.md`。
 
 **下一步**：M-LOG2（帧号注入 + viewer console `log.*` cvar + 文件滚动）后置待拍板；现网 6 文件调用点按需迁移 `*Ch` 分类通道（零强制）。merge 回 master 待用户拍板（pathfinding M-N6 同款先例）。
+
+## A类 M-LOG2：日志系统二轮（2026-11-11，tag `log-m2`，feat/logging）
+
+**动作**：M-LOG0 收口后 §8 五项待拍板四项合并拍板（AskUserQuestion 单轮四问全取推荐项，第五项并入）。① 帧号注入 wrapper 全局：`setLogFrame(uint64_t)`/`clearLogFrame()`，viewer 主循环 `++frame` 处每帧覆写，行组装层行尾追加 ` #<帧号>`（stdout/文件同格式），sink 仍收原始 message（M0.1 保形口径不破）；② console `log.*` 四命令（level/channel/filter/status）实现下沉 `nl::core::console::registerLogCommands`（core/console.cpp），viewer 与 `log-tools exec` 共用单一事实源，全走 `setFilter` 唯一解析面；③ 文件滚动一代：`setFileRollLimit(bytes)`（默认 50 MiB、下限 1 KiB、热重建文件路），spdlog rotating_file_sink `<name>.log`→`<name>.1`；④ async 不重开（M-LOG0 偏差留档理由仍成立）；⑤ 现网 6 文件 185 处调用点迁移分类通道（`renderer`/`scene`/`viewer`），老 6 级别入口与 `deviceError` 计数入口不动；⑥ 工具面：`log-tools exec` 子命令 + selftest 扩 8 段 + ctest 6 条。
+
+**提交版本**：feat/logging 本收口 commit（annotated tag `log-m2`）。
+
+**完成情况**：双后端 BUILD OK + viewer `--selftest` 16/16×2；ctest `log-*` 6/6×2（`--repeat until-pass:3`）；`log-tools selftest` 8 段全绿；`example/log-m2/run.bat` 五段机器断言 ALL GREEN exit 0（usage/exec 链/exec 负向/selftest/帧号文件证据）；cases.json `log-m2` 卡 4 用例 `regression --only log-m2` **8/8 ALL GREEN**；通道迁移零漂实测：锚点抽查 m0.9 4/4 + nav-m0 10/10 + s1-asset 6/6 + log-m0 8/8 全 bytes ALL GREEN；viewer 真渲染路径取证 `[nl:info|viewer] console exec [0] ... #4`（screenshot 模式 + console-exec 链，沙箱可跑）；`server.py --check` exit 0；log-m0 卡并行竞态修复后 3 轮连跑全绿；证据图由真实输出渲染。
+
+**踩坑情况**
+1. **spdlog rotating 语义两处反直觉**：命名是 `<name>.1`（数字插 basename 与扩展名间，非 `.log.1`）；「先滚后写」滚出文件可略小于 max_size（8142 < 8192 实测）——尺寸下限断言必挂，改内容级验证（`fileContains(rolled, "roll filler 0")`）。一代保留 `.1` 只装最后一滚，"filler 0" 早期内容被 9 次滚动覆盖（77KB/8KB），断言写「首行内容」会假绿。
+2. **`exec` argv 语义与 regression 传参错位**：exec 每 arg = 一条完整命令行（viewer --console-exec 同构），卡里 args 拆散传 → 命令名/参数各成一条「命令」（usage 错 + unknown command，exit 1）。修 = cases.json args 合并成带空格单 arg。**cases.json 工具卡传参形态必须与工具语义对齐，写卡前先手跑一遍**。
+3. **同秒多进程 mtime 竞态（log-m0 卡 regression 1 FAIL 偶发实锤）**：`newestLogFile()` 按 mtime 选「自己的」文件，并行 selftest 同秒启动时选到别人的文件（断言文本在对方文件里不存在）。修 = 全部改 PID 锚定（行文带 PID，按内容搜自己的文件），删 mtime 选择函数；3 轮连跑全绿。**工具并发跑时「最新文件 = 我的文件」不成立**。
+4. **渲染窗口被沙箱回收（SIGTERM）**：viewer 直接跑渲染循环（`--frames 3`）在沙箱下被杀；`--screenshot` 模式（跑 N 帧截图退出）能完整跑通——渲染类取证一律走 screenshot 形态。
+
+**实现决策留档**：`log.channel` 不走 `setChannelLevel`（该入口不支持 off）——统一走回读指令追加段再整面 `setFilter` 应用（同通道重复 = 后者覆盖，M-LOG1 口径），四命令一个解析面、错误文案单源。帧号注入选行组装层而非 sink/pattern：sink 保形 + spdlog pattern 零改动 + 回归锚点前缀子串关系不变。
+
+**下一步**：日志轨道功能面按 §8 拍板清单闭环（M-LOG3 候选为空）；merge 回 master 待用户拍板（与 log-m0 同批）。

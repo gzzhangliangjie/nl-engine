@@ -49,10 +49,10 @@ public:
             nl::core::log::deviceError("NVRHI", text);
             break;
         case nvrhi::MessageSeverity::Warning:
-            nl::core::log::warn("NVRHI: ", text);
+            nl::core::log::warnCh("renderer", "NVRHI: ", text);
             break;
         default:
-            nl::core::log::debug("NVRHI: ", text);
+            nl::core::log::debugCh("renderer", "NVRHI: ", text);
             break;
         }
     }
@@ -159,7 +159,7 @@ public:
             info_.lodLevelCount = lodLevelCount_;
             info_.lodLevel = scene_.lodLevel();
             info_.lodMaxError = scene_.lodMaxError();
-            nl::core::log::info("lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
+            nl::core::log::infoCh("renderer", "lod layers: ", lodLevelCount_, " | stem: ", lodStem_);
             // M3.2：可下钻组数 = 第二粗层 dagGroups（与 DX12 同一条探测逻辑）。
             if (lodLevelCount_ >= 2) {
                 const std::string childFile = lodMeshFileName(lodStem_, lodLevelCount_ - 2);
@@ -174,7 +174,7 @@ public:
             info_.dagGroupCount = dagGroupCount_;
         }
 
-        nl::core::log::info("device ready: ", info_.adapterName,
+        nl::core::log::infoCh("renderer", "device ready: ", info_.adapterName,
                             " | ", info_.debugLayer,
                             " | swapchain ", extent_.width, "x", extent_.height);
         return true;
@@ -203,7 +203,7 @@ public:
         }
         std::string unused;
         createTargets(unused);
-        nl::core::log::info("resize -> ", extent_.width, "x", extent_.height);
+        nl::core::log::infoCh("renderer", "resize -> ", extent_.width, "x", extent_.height);
     }
 
     // M2.3：切 LOD 层——只重传 VB/IB，pipeline / binding 不动；失败保持原层。
@@ -227,7 +227,7 @@ public:
         info_.dagGroup = scene_.dagGroup();
         info_.dagGroupError = scene_.dagGroupError();
         for (int i = 0; i < 4; ++i) info_.assetSphere[i] = scene_.assetSphere()[i];
-        nl::core::log::info("lod -> ", file, " | triangles=", info_.triangleCount,
+        nl::core::log::infoCh("renderer", "lod -> ", file, " | triangles=", info_.triangleCount,
                             " maxError=", info_.lodMaxError);
         return true;
     }
@@ -674,7 +674,7 @@ private:
             deviceExts.push_back(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
             atom64Enabled = true;
         } else {
-            nl::core::log::warn("shaderBufferInt64Atomics unsupported; --mode visbuf will fail");
+            nl::core::log::warnCh("renderer", "shaderBufferInt64Atomics unsupported; --mode visbuf will fail");
         }
 
         // ---- M8.0（S8.0）：RT 扩展 + feature 链（BLAS 构建硬前提）----
@@ -704,7 +704,7 @@ private:
             bdaEnabled = true;
             rtEnabled = true;
         } else {
-            nl::core::log::warn("VK_KHR_acceleration_structure unsupported; --mode rt (S8) will fail");
+            nl::core::log::warnCh("renderer", "VK_KHR_acceleration_structure unsupported; --mode rt (S8) will fail");
         }
         // feature 链（pNext 逐个挂，pEnabledFeatures 保留 legacy 全 0 结构不变）：
         //   bufferDeviceAddress（AS 构建按 device address 取几何）→ accelerationStructure
@@ -766,7 +766,7 @@ private:
         // 周期由队列侧引用跟踪管理，per-frame 模式全量回归实测绿；改成常驻复用反而
         // 段错误——两后端列表复用语义不对称，M8.1 实测沉淀）。
         if (rtEnabled) {
-            nl::core::log::info("rt extensions enabled: acceleration_structure",
+            nl::core::log::infoCh("renderer", "rt extensions enabled: acceleration_structure",
                                 rtQuery ? "+ray_query" : "",
                                 bdaEnabled ? "+buffer_device_address" : "");
         }
@@ -791,11 +791,11 @@ private:
         info_.shaderInt64Atomics = (atom64.shaderBufferInt64Atomics == VK_TRUE)
                                 || (atom64.shaderSharedInt64Atomics == VK_TRUE);
 
-        nl::core::log::info("features: rayQuery=", info_.rayQuery ? 1 : 0,
+        nl::core::log::infoCh("renderer", "features: rayQuery=", info_.rayQuery ? 1 : 0,
                             " shaderInt64Atomics=", info_.shaderInt64Atomics ? 1 : 0,
                             " indirectDraw=", info_.indirectDraw ? 1 : 0);
         if (!info_.rayQuery || !info_.shaderInt64Atomics) {
-            nl::core::log::warn("feature report has unsupported items; S7/S8 需按此能力调整");
+            nl::core::log::warnCh("renderer", "feature report has unsupported items; S7/S8 需按此能力调整");
         }
     }
 

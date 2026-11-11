@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <sstream>
 #include <string>
@@ -81,5 +83,22 @@ std::string filterInstruction();
 
 // 单通道运行时调整（不动全局缺省；level 传 Fatal 之上无意义，off 请用 setFilter）。
 void setChannelLevel(const std::string& channel, Level lvl);
+
+// ---------------------------------------------------------------------------
+// M-LOG2 扩面（2026-11-11 四项拍板，docs/p8/P8-LOG-PLAN.md §9）：
+// 帧号注入（wrapper 全局）/ 文件滚动（大小上限一代）/ console 接线在 viewer。
+// ---------------------------------------------------------------------------
+
+// 渲染帧序号注入（拍板 ①）：viewer 每帧调用；>0 时日志行尾追加 " #<n>" 后缀
+// （stdout / 文件 / ODS 三路同格式），0 或未注入 = 无后缀（工具/测试输出稳定）。
+// 锚点不受影响：expectLog 断言只依赖行首 [nl:...] 前缀与消息子串。
+void setLogFrame(std::uint64_t frame);
+void clearLogFrame(); // 行尾不再带帧号
+
+// 文件滚动（拍板 ③）：单文件超上限滚动为 <name>.log.1（保留一代，旧的被覆盖），
+// 当前 <name>.log 始终有效；「每次启动新文件、旧文件不清理」拍板不变。
+// 默认 50 MiB；测试可注入小阈值（须在首条日志前调用——文件路懒建于首条 emit）。
+void setFileRollLimit(std::size_t bytes); // 最小 1 KiB（防呆）
+std::size_t fileRollLimit();
 
 } // namespace nl::core::log

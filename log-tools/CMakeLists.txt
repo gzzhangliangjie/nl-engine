@@ -19,3 +19,15 @@ set_tests_properties(log-m1-bad-filter PROPERTIES
     PASS_REGULAR_EXPRESSION "log selftest: PASS")
 add_test(NAME log-m0-negative COMMAND log-tools bogus-command)
 set_tests_properties(log-m0-negative PROPERTIES WILL_FAIL TRUE)
+# ---- M-LOG2：帧号注入 + 文件滚动（8 段全序含 7/8 段；selftest 全序跑）----
+add_test(NAME log-m2-selftest COMMAND log-tools selftest)
+set_tests_properties(log-m2-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "log selftest: PASS")
+# ---- M-LOG2：console log.* 四命令无头执行（registerLogCommands 单一事实源）----
+add_test(NAME log-m2-console COMMAND log-tools exec
+    "log.status" "log.filter nl:info,renderer=warn" "log.status"
+    "log.channel asset off" "log.status")
+set_tests_properties(log-m2-console PROPERTIES
+    PASS_REGULAR_EXPRESSION "nl:info,renderer=warn,asset=off")
+add_test(NAME log-m2-console-neg COMMAND log-tools exec "log.level bogus")
+set_tests_properties(log-m2-console-neg PROPERTIES WILL_FAIL TRUE)

@@ -94,3 +94,14 @@ M-LOG0 是本轨道最小闭环；M-LOG1/2 按需续开。
 **格式契约（M-LOG2 不得破坏）**：stdout 老入口 = `[nl:<level>] message`（回归 expectLog 依赖）；通道新入口 = `[nl:<level>|<channel>] message`；文件路 = `[<日期> <时间.毫秒>] ` 前缀 + 上述行。文件名碰撞消歧 `-2/-3` 后缀为拍板形态的组成部分。
 
 **M-LOG2 待拍板项（后续会话按开工闸先拍板再落码）**：① 帧号注入方式（wrapper 全局 vs logger 上下文）；② console `log.*` cvar 面；③ 文件滚动/清理策略（当前只增不删）；④ async 化是否重开；⑤ 现网 6 调用点文件是否迁移分类通道。
+
+
+---
+
+## 9. M-LOG2 收口纪要（2026-11-11，tag `log-m2`）
+
+**交付面**：§8 五项待拍板四项合并拍板（全取推荐项）→ ① 帧号注入 wrapper 全局（`setLogFrame`/`clearLogFrame`，行尾 ` #<帧号>`，sink 仍收原始 message）；② console `log.*` 四命令下沉 `nl::core::console::registerLogCommands` 单一事实源（viewer `--console-exec` 与 `log-tools exec` 共用，全走 `setFilter` 唯一解析面）；③ 文件滚动一代（`setFileRollLimit` 默认 50 MiB，`<name>.log`→`<name>.1`，旧文件不清理拍板不变）；④ async 不重开；⑤ 现网 6 文件 185 处调用点迁移分类通道（renderer/scene/viewer，老入口与 deviceError 不动）。验收数字与踩坑见 `docs/MILESTONES.md` M-LOG2 节；工具用法增量见 `LOG-TOOLS-GUIDE.md` §7。
+
+**格式契约增量（后续不得破坏）**：帧号后缀在行组装层追加、不进 sink message；通道行 `[nl:level|channel]` 的老锚点前缀子串关系是回归零漂的依赖，任何行格式改动必须先跑锚点抽查；`exec` 语义 = 每个 arg 一条完整命令行（与 viewer `--console-exec` 同构），cases.json 卡的 args 必须按此合并传参。
+
+**遗留待拍板（M-LOG3 候选，目前为空）**：格式契约内无未决项；日志轨道功能面按拍板清单已闭环，后续按需（如 viewer HUD log 面板接 console log_ 环形缓冲）再立项。

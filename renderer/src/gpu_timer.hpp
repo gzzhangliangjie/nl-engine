@@ -73,7 +73,7 @@ public:
             pollCursor_ = nextCursor(i);
             // M0.6 验收证据：首次真实 resolve 落一条日志（交互模式跑几秒即可核对）。
             if (!resolvedOnce_) {
-                nl::core::log::info("gpu timer resolved [", label_, "]: ", outMilliseconds,
+                nl::core::log::infoCh("renderer", "gpu timer resolved [", label_, "]: ", outMilliseconds,
                                     " ms (first successful NVRHI timestamp query)");
                 resolvedOnce_ = true;
             }

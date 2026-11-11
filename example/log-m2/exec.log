@@ -1,0 +1,4 @@
+log filter: nl:debug
+log filter -> nl:info,renderer=warn
+log filter -> nl:info,renderer=warn,asset=off
+log filter: nl:info,renderer=warn,asset=off

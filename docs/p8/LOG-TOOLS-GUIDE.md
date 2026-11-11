@@ -64,3 +64,23 @@ ctest：`log-m0-selftest` / `log-m1-bad-filter` / `log-m0-negative`（3 条 × �
 - 现网 6 调用点文件（core 3 + renderer 5 处文件中的 viewer/main.cpp、backend_dx12/vulkan、scene、hud、gpu_timer）暂未迁移分类通道（`*Ch` 零强制，按需渐进）；
 - M-LOG2 候选（帧号注入 / console `log.*` cvar / 文件滚动 / async 化重开）见 P8-LOG-PLAN §8 待拍板清单——**先拍板再落码**（AGENTS.md 开工闸）；
 - 全量渲染回归总闸不适用于本轨（A 类）；merge 回 master 待用户拍板。
+
+---
+
+## 7. M-LOG2 增量（2026-11-11，tag `log-m2`）
+
+**新工具面**：
+- `log-tools exec "<命令行>" [...]`：console 无头执行，每个 arg = 一条完整命令行（与 viewer `--console-exec` 同构、同一 `registerLogCommands` 事实源）；任一行失败 exit 1。
+- `log-tools selftest` 扩到 8 段：第 7 段帧号注入（sink 原始 message / 文件行 `#1234` 后缀 / `clearLogFrame` 后行尾无后缀）、第 8 段文件滚动（8 KiB 上限 → rotated `<name>.1` 内容级验证）。
+
+**新日志 API（nl::core::log）**：
+- `setLogFrame(uint64_t)` / `clearLogFrame()`：wrapper 全局帧号，行组装层行尾追加 ` #<帧号>`（stdout/文件同格式）；**sink 回调仍收原始 message**（不带后缀）——M0.1 保形口径不破。
+- `setFileRollLimit(size_t bytes)`：文件大小滚动一代（`<name>.log` → `<name>.1`，spdlog rotating_file_sink 原生语义），默认 50 MiB，防呆下限 1 KiB；懒建 sink 后调整会热重建文件路。
+
+**console 命令面（nl::core::console::registerLogCommands）**：
+- `log.level <level>` / `log.filter <指令>` / `log.channel <ch> <level|off>` / `log.status`。
+- 全部复用 `setFilter` 唯一解析面；`log.channel` = 现回读指令追加段再整面应用（同通道重复 = 后者覆盖，M-LOG1 口径）。
+
+**通道迁移（现网 6 文件 185 处）**：renderer/gpu_timer/hud → `renderer`，scene → `scene`，viewer main → `viewer`；老 6 级别入口与 `deviceError` 计数入口不动。`[nl:level]` 锚点是 `[nl:level|channel]` 前缀子串——回归 bytes 档零漂实测坐实（m0.9/nav-m0/s1-asset/log-m0 全绿）。
+
+**验收注意**：spdlog rotating 命名是 `<name>.1`（数字在扩展名前），且「先滚后写」——滚出文件可略小于上限，内容级验证比尺寸下限更准；`newestLogFile()` 按 mtime 选文件在同秒多进程下会撞（log-m0 卡并行竞态实锤），selftest 全部改用 PID 锚定自己的文件。

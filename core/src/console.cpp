@@ -2,6 +2,7 @@
 // 口径见 console.hpp 头注（UE 统一注册表 + Carrot 从零节奏）。
 
 #include "nl/core/console.hpp"
+#include "nl/core/log.hpp" // M-LOG2 registerLogCommands 复用 log 过滤面 API
 
 #include <cerrno>
 #include <algorithm>
@@ -310,6 +311,49 @@ ExecResult Console::exec(const std::string& line) {
     if (r.ok)
         return finish(ExecCode::Ok, r.text, Severity::Info);
     return finish(ExecCode::CommandFailed, r.text, Severity::Error);
+}
+
+// ---- M-LOG2 拍板 ②：log.* 四命令（单一事实源，viewer / log-tools 共用）----
+// 声明见 console.hpp。全部复用 nl::core::log 过滤面 API（setFilter 是唯一
+// 解析面——非法指令显式报错、失败原面不动），本函数不另造闸。
+
+void registerLogCommands(Console& console) {
+    console.registerCommand("log.level", "set global log level: trace|debug|info|warn|error|fatal",
+                            [](const std::vector<std::string>& args) {
+        if (args.size() != 1) return CommandResult{false, "usage: log.level <level>"};
+        std::string err;
+        if (!log::setFilter(args[0], &err))
+            return CommandResult{false, "log.level: " + err};
+        return CommandResult{true, "log filter -> " + log::filterInstruction()};
+    });
+    console.registerCommand("log.channel", "set one channel level: log.channel <channel> <level|off>",
+                            [](const std::vector<std::string>& args) {
+        if (args.size() != 2)
+            return CommandResult{false, "usage: log.channel <channel> <level|off>"};
+        // 追加段走 setFilter 复用解析面（同通道重复出现 = 后者覆盖前者，M-LOG1 口径；
+        // off 不走 setChannelLevel——该入口不支持 off）。
+        const std::string instr =
+            log::filterInstruction() + "," + args[0] + "=" + args[1];
+        std::string err;
+        if (!log::setFilter(instr, &err))
+            return CommandResult{false, "log.channel: " + err};
+        return CommandResult{true, "log filter -> " + log::filterInstruction()};
+    });
+    console.registerCommand("log.filter", "set whole filter instruction (bevy EnvFilter style), e.g. nl:info,renderer=warn",
+                            [](const std::vector<std::string>& args) {
+        if (args.empty())
+            return CommandResult{false, "usage: log.filter <instruction>"};
+        std::string instr;
+        for (std::size_t k = 0; k < args.size(); ++k) { if (k) instr += ' '; instr += args[k]; }
+        std::string err;
+        if (!log::setFilter(instr, &err))
+            return CommandResult{false, "log.filter: " + err};
+        return CommandResult{true, "log filter -> " + log::filterInstruction()};
+    });
+    console.registerCommand("log.status", "print current log filter instruction",
+                            [](const std::vector<std::string>&) {
+        return CommandResult{true, "log filter: " + log::filterInstruction()};
+    });
 }
 
 } // namespace console

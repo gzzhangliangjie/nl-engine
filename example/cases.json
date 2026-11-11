@@ -8635,6 +8635,80 @@
      "command": "log-tools demo --filter bogus"
     }
    ]
+  },
+  {
+   "id": "log-m2",
+   "label": "A类 M-LOG2",
+   "name": "日志系统二轮（帧号注入 + console log.* 四命令 + 文件滚动 + 现网调用点迁移分类通道）",
+   "tag": "log-m2",
+   "date": "2026-11-11",
+   "summary": "A 类并行轨道 feat/logging 第二里程碑（§8 五项待拍板四项合并拍板全取推荐项）。① 帧号注入 = wrapper 全局：setLogFrame(uint64_t)/clearLogFrame()，viewer 主循环 ++frame 处每帧覆写，行组装层行尾追加 \" #<帧号>\"（stdout/文件同格式），sink 仍收原始 message（不带后缀，语义与 M0.1 保形口径一致）；② console log.* 四命令（log.level / log.channel / log.filter / log.status）实现下沉 nl::core::console::registerLogCommands（core/console.cpp 单一事实源），viewer 与 log-tools exec 子命令共用，全部复用 setFilter 唯一解析面（非法指令显式报错、失败原面不动）；③ 文件滚动 = 大小滚动一代：setFileRollLimit(bytes)（默认 50 MiB，防呆下限 1 KiB），超限滚动 <name>.log → <name>.1（spdlog rotating_file_sink 原生），拍板「旧文件不清理」不变；④ async 不重开（M-LOG0 偏差留档理由仍成立）；⑤ 现网 6 文件 185 处调用点迁移分类通道：renderer 4 文件 + gpu_timer → \"renderer\"、scene.cpp → \"scene\"、viewer main → \"viewer\"，老入口/6 级别/deviceError 计数入口不动。工具版交代：log-tools 8 段 selftest（新增 7 段帧号 + 8 段滚动）/ exec 子命令 / run.bat 五段机器断言 + 证据图，不进 kStage、不进渲染回归总闸。",
+   "acceptance": [
+    "帧号注入：selftest 断言 sink 收原始 message 不带后缀 + 文件行 \"[nl:info] ... #1234\" / \"[nl:info|renderer] ... #1234\" + clearLogFrame 后行尾无后缀（整行尾匹配）；viewer 真渲染路径实测 [nl:info|viewer] ... #4",
+    "console 四命令：exec 链 log.status(初始 nl:debug) → log.filter nl:info,renderer=warn → log.channel asset off → log.status(回读 nl:info,renderer=warn,asset=off) 全通；log.level bogus 显式拒绝 exit 1",
+    "文件滚动：8 KiB 上限下 220x300B 行文触发滚动，rotated <name>.1 存在且含滚动前内容；setFileRollLimit 热重建文件路（懒建 sink 后调整生效）；默认 50 MiB 恢复",
+    "通道迁移：185 处调用迁移后 m0.9 4/4 + nav-m0 10/10 + s1-asset 6/6 + log-m0 8/8 回归全 bytes ALL GREEN（expectLog 锚点 [nl:level] 是 [nl:level|channel] 前缀子串，零漂实测坐实）",
+    "DX12+VULKAN 双后端 BUILD OK + viewer --selftest 16/16 x2；ctest log-* 6 条 x2（--repeat until-pass:3）；log-m0 卡并行竞态修复（mtime 选文件撞同秒多进程 → PID 锚定自己文件）3 轮连跑全绿",
+    "交代物：example/log-m2/（run.bat 五段 ALL GREEN + 5 份真实输出 log + 证据图 PNG 由真实输出生成）+ 本卡四用例 + LOG-TOOLS-GUIDE/PLAN/MILESTONES 固化"
+   ],
+   "exe": {
+    "dx12": "build/dx12/log-tools.exe",
+    "vulkan": "build/vulkan/log-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2，exec 已列）",
+     "kind": "tool",
+     "note": "M-LOG2 起新增 exec 子命令行；usage 无参数退出 2。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "log-tools exec",
+     "command": "log-tools"
+    },
+    {
+     "id": "exec-chain",
+     "name": "exec：console 四命令链（status/filter/channel/status）",
+     "kind": "tool",
+     "note": "nl::core::console::registerLogCommands 单一事实源（viewer 同源接线）。exec 语义：每个 arg = 一条完整命令行（与 viewer --console-exec 同构）。链尾 status 回读 nl:info,renderer=warn,asset=off。log-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [
+      "exec",
+      "log.status",
+      "log.filter nl:info,renderer=warn",
+      "log.channel asset off",
+      "log.status"
+     ],
+     "expectExit": 0,
+     "expectLog": "log filter: nl:info,renderer=warn,asset=off",
+     "command": "log-tools exec log.status \"log.filter nl:info,renderer=warn\" \"log.channel asset off\" \"log.status\"",
+     "preview": "example/log-m2/log-m2-evidence.png"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：8 段全序（兼容语义+文件落盘+过滤正负向+运行时通道+并发+帧号+滚动）",
+     "kind": "tool",
+     "note": "M0.1 六段保形 + M-LOG2 第 7 段（帧号：sink 原始 message / 文件行 #1234 / clearLogFrame）+ 第 8 段（滚动：8KiB 上限 rotated .1 内容级验证）。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "log selftest: PASS",
+     "command": "log-tools selftest"
+    },
+    {
+     "id": "negative",
+     "name": "负向：log.level bogus 经 console 解析面显式拒绝（exit 1）",
+     "kind": "tool",
+     "note": "拒绝文案 = M-LOG1 setFilter 唯一解析面原文（invalid filter segment 'bogus'），console 不另造闸。",
+     "args": [
+      "exec",
+      "log.level bogus"
+     ],
+     "expectExit": 1,
+     "expectLog": "invalid filter segment 'bogus'",
+     "command": "log-tools exec \"log.level bogus\""
+    }
+   ]
   }
  ]
 }

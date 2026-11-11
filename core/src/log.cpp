@@ -6,13 +6,14 @@
 // deviceErrorCount 计数口径（含「被级别闸滤掉也计数」）全部逐字保留。
 // spdlog 用法：直构 logger（不进全局 registry）、level=trace（闸全在 wrapper）、
 // stdout/ODS pattern "%v"（行文本 wrapper 拼好，锚点格式不漂）、文件路每条 flush。
-// 实现决策留档：M-LOG0 阶梯原文写「异步写」，落码取同步 basic_file_sink_mt +
-// 每条 flush——日志量小、正确性优先，避免 async 线程池退出期丢尾行破坏回归
-// 取证；async 化留 M-LOG2（console cvar 轮）随滚动策略一起议。
+// 实现决策留档：M-LOG0 阶梯原文写「异步写」，落码取同步 + 每条 flush——日志量小、
+// 正确性优先，避免 async 线程池退出期丢尾行破坏回归取证；M-LOG2 拍板 ④ 不重开
+// async（保持同步），文件路换 rotating_file_sink_mt（拍板 ③ 大小滚动一代）。
 
 #include <spdlog/logger.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/msvc_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
 #ifndef _WIN32
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -45,6 +47,10 @@ int        g_deviceErrors = 0;
 // ---- spdlog 广播层（懒建，首次 emit 初始化；文件路再懒一步） ----
 std::shared_ptr<spdlog::logger> g_logger;
 bool g_fileInit = false;
+
+// ---- M-LOG2：帧号上下文 + 文件滚动 ----
+std::uint64_t g_frame = 0;                 // 0 = 未注入，行尾无后缀
+std::size_t   g_rollLimit = 50u << 20;     // 拍板 ③：单文件 50 MiB 上限，滚动一代
 
 // ---- M-LOG1 过滤面 ----
 // off 通道静默；nullopt 表示「未覆盖，跟随全局」。
@@ -115,7 +121,12 @@ std::shared_ptr<spdlog::logger> buildLogger(bool withFile) {
             int n = 2;
             while (n <= 99 && std::filesystem::exists(name))
                 name = base + "-" + std::to_string(n++) + ".log";
-            auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(name, true);
+            // M-LOG2 拍板 ③：rotating_file_sink 运行中超 g_rollLimit 时把当前文件
+            // 滚为 <name>.1（保留一代，再滚覆盖旧的），当前 .log 始终有效。
+            // 文件名带时间戳每次启动唯一，sink 启动期的初始轮转不会误伤旧文件
+            // （Q-L2「旧文件不清理」拍板不变）。
+            auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                name, g_rollLimit, 1);
             fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] %v"); // 文件路带时间戳，锚点仍是子串
             sinks.push_back(fileSink);
         }
@@ -250,6 +261,7 @@ void emit(Level lvl, std::string message) {
     if (lvl < g_minLevel) return;
 
     std::string line = std::string("[nl:") + levelNameUnlocked(lvl) + "] " + message;
+    if (g_frame) line += " #" + std::to_string(g_frame); // M-LOG2 拍板 ①
     broadcast(line); // stdout + ODS（+ 文件路若已建）
     if (g_sink) g_sink(lvl, message);
 }
@@ -260,6 +272,7 @@ void emitCh(Level lvl, const char* channel, std::string message) {
     if (!channelOpen(channel, lvl)) return;
 
     std::string line = std::string("[nl:") + levelNameUnlocked(lvl) + "|" + channel + "] " + message;
+    if (g_frame) line += " #" + std::to_string(g_frame); // M-LOG2 拍板 ①
     broadcast(line);
     if (g_sink) g_sink(lvl, message);
 }
@@ -329,6 +342,31 @@ void setChannelLevel(const std::string& channel, Level lvl) {
     if (it != g_chLevels.end()) it->second = lvl;
     else g_chLevels.emplace_back(channel, lvl);
     rebuildFilterTextLocked();
+}
+
+// ---- M-LOG2 ----
+
+void setLogFrame(std::uint64_t frame) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_frame = frame;
+}
+
+void clearLogFrame() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_frame = 0;
+}
+
+void setFileRollLimit(std::size_t bytes) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_rollLimit = bytes < 1024 ? 1024 : bytes; // 防呆下限 1 KiB
+    // 文件 sink 的 max_size 在构造时固化：若文件路已建，热重建 logger 让新上限
+    // 立即生效（新文件按新时间戳另起，旧文件不清理——Q-L2 拍板不变）。
+    if (g_logger) g_logger = buildLogger(true);
+}
+
+std::size_t fileRollLimit() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_rollLimit;
 }
 
 } // namespace nl::core::log
