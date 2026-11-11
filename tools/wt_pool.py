@@ -147,6 +147,14 @@ TRACKS = {
                 "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
                 "state CLOSED by user instruction 2026-11-11 17:1x",
     },
+    "logging": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-logging",
+        "branch": "feat/logging", "state": "active",
+        "note": "A-class track opened 2026-11-11 by user instruction (Q-L1 develop start; "
+                "plan docs/p8/P8-LOG-PLAN.md; M-LOG0+M-LOG1 merged scope = vendored "
+                "spdlog v1.17.0 + compat layer + file sink + ODS + categories + filter; "
+                "M-LOG2 deferred)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
