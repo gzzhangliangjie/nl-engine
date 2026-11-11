@@ -98,6 +98,10 @@ struct FrameParams {
     // 进度分母；其它模式不读，缺省 0 = 无进度上报）。
     std::uint32_t refFrames = 0;
 
+    // M10.3（Q14-1）：reference 链分支开关——true = direct.csrefgi 渐进累积
+    // GI 参考图（直光真值 + 单弹射蒙特卡洛）；false = M9.2 直光参考，保形。
+    bool referenceGI = false;
+
     // M-P3：物理调试线框叠加层（默认关闭 → S7.0 渲染基线字节不变）。
     // debugLineData 指向调用方（viewer）打包好的线顶点流；每顶点 6 个 float：
     //   px, py, pz, r, g, b（位置 + 顶点色）。debugLineVertexCount 为顶点数，
@@ -128,6 +132,11 @@ struct FrameParams {
     bool  probeGather       = false; // M10.2：final gather 态（Q13-3：dotMode=2，
                                       // 全屏 gather 合成 + ambient 替换，无点叠加；
                                       // 与 probeVizIrradiance 互斥，gather 优先）
+    // ---- M10.3：probe 完整链路调参（Q14-3 拍板全调参面）+ --sky-bg（Q14-4）----
+    float probeLevels[3]    = {3.0f, 5.0f, 7.0f}; // Q13-1 线性深度分段阈值（sceneDepth
+                                      // 欧氏距离；HUD 滑条双向，viewer 持 local 回填）
+    bool  probeSkyBg        = false;  // --sky-bg：背景从 clearColor 换解析天穹
+                                      //（skyGradient 与探针 miss 同函数；默认关保形）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -241,6 +250,9 @@ struct HudFrame {
     bool  probeGatherMode     = false;  // M10.2：viz 三态切换（Q13-3：false=点色
                                         // 级别/辐照度采样，true=final gather 全屏
                                         // 合成；双向 checkbox，gather 优先）
+    // ---- M10.3：probe 调参（Q14-3 全调参面）+ --sky-bg（Q14-4；双向 checkbox）。
+    float probeLevels[3]      = {3.0f, 5.0f, 7.0f}; // cascade 阈值滑条 ×3（双向）
+    bool  probeSkyBg          = false;  // 天穹背景切换（双向 checkbox）
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
@@ -436,6 +448,12 @@ public:
     // scene_.loadParticlesNfx：解析 NFX1 JSON → 折进粒子模拟参数面。运行时
     // 零 Effekseer 依赖。失败返回 false（lastError() 带原因），legacy 喷泉不受影响。
     bool loadParticlesNfx(const char* path);
+
+    // M10.3：--compare <png> 参考图加载（Q14-2 拍板：画面左半 live 右半参考图同屏）。
+    // stb_image 解码 → NVRHI RGBA8 纹理；加载成功后每帧 renderFrame 在右半屏
+    // 贴参考图（present 层 quad，HUD 之下）。失败返回 false（lastError() 带原因），
+    // 画面保持全 live 不受影响。
+    bool loadCompareImage(const char* path);
 
 private:
     Renderer();

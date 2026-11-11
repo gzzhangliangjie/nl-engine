@@ -451,6 +451,13 @@ public:
                        const nvrhi::Viewport& viewport, const FrameParams& params);
     bool presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                           const nvrhi::Viewport& viewport, std::string& outError);
+    // M10.3：drawReference 内按 params.referenceGI 分支 GI 参考管线（同 set/尺寸闸/
+    // samplesDone_ 复用，只换 refGIPSO_ + RefConstants 32B 段；物理口径见
+    // direct.slang csReferenceGI 注释）。
+    // M10.3（Q14-2）：--compare <png> 右半屏参考图贴片（present 层 quad）。
+    bool loadCompareImage(const char* path, std::string& outError);
+    void drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& viewport);
     // HUD / 日志进度源（Scene::draw 不持 hud，由 backend 在 renderFrame 后取用写回）。
     bool               referenceActive() const { return reference_; }
     std::uint32_t      referenceSamplesDone() const { return samplesDone_; }
@@ -987,14 +994,34 @@ private:
     float                        refProgress_ = 0.0f;          // 进度 0..1（日志/HUD）
     std::uint32_t                refW_ = 0, refH_ = 0;        // 计算 set 尺寸版本
     nvrhi::ShaderHandle          csReference_;               // direct.csref（compute）
+    nvrhi::ShaderHandle          csReferenceGI_;             // direct.csrefgi（M10.3 GI 参考）
     nvrhi::ShaderHandle          psRefPresent_;              // rt.psrefpresent（fragment）
     nvrhi::ComputePipelineHandle refPSO_;
+    nvrhi::ComputePipelineHandle refGIPSO_;                  // M10.3 GI 参考 compute 管线
     nvrhi::GraphicsPipelineHandle refPresentPSO_;            // 随 framebuffer 信息建
     nvrhi::BindingLayoutHandle   refComputeLayout_;          // resolve + b3 + b4 + u0 + t13 TLAS
     nvrhi::BindingSetHandle      refComputeSet_;
     nvrhi::BindingLayoutHandle   refPresentLayout_;          // t1 SRV + b1 RefConstants
     nvrhi::BindingSetHandle      refPresentSet_;             // ensureRtTargets 建
-    nvrhi::BufferHandle          refConstants_;              // volatile CB 16B（b4/b1 累积参数）
+    nvrhi::BufferHandle          refConstants_;              // volatile CB 16B（b4/b1 累积参数；
+                                                             //  ⚠️ 跨 compute/graphics 绑定扩 32B
+                                                             //  device removed，M10.3 二分实锤）
+    nvrhi::BufferHandle          refGICB_;                   // volatile CB 16B（b5 compute-only，
+                                                             //  M10.3 GI 常量 albedo/ambient）
+
+    // ---- M10.3：--compare 右半参考图（Q14-2）----
+    nvrhi::TextureHandle         compareTex_;                // stb_image 解码 RGBA8
+    nvrhi::ShaderHandle          psCompare_;                 // rt.pscompare（fragment）
+    nvrhi::SamplerHandle         compareSampler_;            // 独立懒建（不依赖各 init 链）
+    nvrhi::GraphicsPipelineHandle comparePSO_;               // 随 framebuffer 信息建
+    nvrhi::BindingLayoutHandle   compareLayout_;             // t0 SRV + s0 sampler
+    nvrhi::BindingSetHandle      compareSet_;
+    bool                         compareFailed_ = false;     // 懒建失败只报一次
+    bool                         comparePendingUpload_ = false; // 建纹无 cmd list → 帧内
+                                                            //  writeTexture+setTextureState
+                                                            //  同列表（0x87d 第一坑同款纪律）
+    std::vector<std::uint8_t>    comparePixels_;             // CPU 侧像素（首帧上传后清）
+    std::uint32_t                compareW_ = 0, compareH_ = 0;
 
     // ---- M10.1：probe 探针追踪（Q12-1/Q12-2/Q12-3 拍板 UE 口径）----
     // 每探针每八面体 texel 1 条方向射线（8×8 core + 1 texel border = 10×10 存储

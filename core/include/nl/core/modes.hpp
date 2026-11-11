@@ -29,7 +29,11 @@ enum class ViewMode {
                      //  + 探针点可视化；S10-PLAN Q10-1/Q10-2 拍板 UE 口径）
     ProbeViz = 16,   // M10.1：探针辐照度可视化（管线同 ProbePlace + 探针追踪 compute，
                      //  点色 = 八面体图按视线方向采样；S10-PLAN Q12-1/2/3 拍板）
-    // S1 起依次追加：Probe, Cache, CacheViz, Filter, Final
+    Probe = 17,      // M10.3：--mode probe 完整链路（place+trace+gather compose 一等
+                     //  渲染模式：无点叠加恒 gather 态 + ImGui 全调参 + --sky-bg）
+    ReferenceGI = 18, // M10.3：--mode reference-gi（Q14-1 拍板：渐进累积 GI 参考图
+                      //  = 直光真值 + 单弹射蒙特卡洛，与 M10.1 探针物理逐项同口径）
+    // S1 起依次追加：Cache, CacheViz, Filter, Final
     Count
 };
 

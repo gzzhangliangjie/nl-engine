@@ -53,8 +53,14 @@
 
 ## M10.3 参考图对比验收（1~2 天）
 
-- [ ] `--mode probe` 完整链路 + ImGui 调 cascade 参数
-- [ ] **与 S10 自立的 GI 参考图并排对比**（读盘同屏显示）。**Q3 拍板勘误**：S9 参考图只算直光一跳，不含间接光，仅可作**直光分量**对照，不能当 GI 尺子
+> **M10.3 拍板记录（2026-11-11 用户四项全取方案 A；三处参考实读：bevy `bevy_solari/src/pathtracer/mod.rs`（PathtracingPlugin 注释原话 "Non-realtime pathtracing. This plugin is meant to generate reference screenshots to compare against"——GI 参考图 = 独立非实时模式 + 渐进累积纹理）+ UE `Renderer/Private/PathTracing.cpp`（`r.PathTracing.SamplesPerPixel` + 每帧累积样本递增达上限停止）+ Carrot 无对应物）**：
+> - **Q14-1 GI 参考图 = `--mode reference-gi`**：扩展 M9.2 渐进累积机制——每像素主射线（M8 TLAS）命中 → 间接光 = albedo × hit 处直光求值（含 1 条 shadow ray，M9.1 口径）+ miss → skyGradient 天穹；物理与 M10.1 探针定义**逐项同口径**（单跳 + 天穹 + 统一 albedo + 104-tri 粗代理），复用 rtTarget_ sum buffer / psRefPresent ÷samples 归一。CPU 离线参考（方案 B）与直光凑数（方案 C）已否。
+> - **Q14-2 并排对比 = viewer `--compare <png>` 同屏**：画面左半 live 右半参考图，读盘同屏严格落地；另以 python 工具出误差趋势数字（亮暗分布对，允许噪声差）作自检证据。离线-only（方案 B）已否。
+> - **Q14-3 `--mode probe` 调参面 = 全调参**：cascade 级阈值（g_gLevels）3 slider + 探针每级格距 + gather 开关复用 M10.2 HUD checkbox。
+> - **Q14-4 天穹背景 = `--sky-bg` 开关**：背景从 clearColor 换 skyGradient（探针 miss 同函数），默认关保形。
+
+- [x] `--mode probe` 完整链路 + ImGui 调 cascade 参数（Q14-3 全调参面）
+- [x] **与 S10 自立的 GI 参考图并排对比**（读盘同屏显示，Q14-1 reference-gi + Q14-2 --compare）。**Q3 拍板勘误**：S9 参考图只算直光一跳，不含间接光，仅可作**直光分量**对照，不能当 GI 尺子
 
 **自检（S10 验收）**：天光与一次弹射可见；与 **S10 自立 GI 参考图**误差趋势一致（亮暗分布对，允许噪声差）；探针辐照度方向合理。tag：`s10-done`，截图 `docs/screenshots/s10.png`（画面+参考图并排）。
 

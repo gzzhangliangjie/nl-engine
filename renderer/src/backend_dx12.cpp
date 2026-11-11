@@ -368,6 +368,10 @@ public:
     bool loadParticlesNfx(const char* path, std::string& outError) override {
         return scene_.loadParticlesNfx(path, outError);
     }
+    // M10.3：--compare 参考图加载（转发 scene_.loadCompareImage）。
+    bool loadCompareImage(const char* path, std::string& outError) override {
+        return scene_.loadCompareImage(path, outError);
+    }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud,
@@ -489,6 +493,11 @@ private:
         if (index < framebuffers_.size() && framebuffers_[index] && depth_) {
             scene_.drawParticles(cmd, framebuffers_[index],
                                  nvrhi::Viewport(float(extent_.width), float(extent_.height)), frame);
+        }
+        // M10.3：--compare 参考图右半贴片（Q14-2）。加载成功即画（HUD 之下）。
+        if (index < framebuffers_.size() && framebuffers_[index]) {
+            scene_.drawCompareImage(cmd, framebuffers_[index],
+                                    nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
         // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
         if (hud && index < framebuffers_.size() && framebuffers_[index]) {

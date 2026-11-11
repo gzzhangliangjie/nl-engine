@@ -337,3 +337,15 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | `material.slang` ambient 开关 | psMatResolve mode 0 分支：`amb = (g_options.z > 0.5) ? 0.03 : g_lightDir.w`（**probe-viz 场景渲染走 matResolve 材质管线，model.slang psMain 不参与**——首版改错文件 PNG 逐字节零差异实锤）；shadePbrGrad（mode 5）另有同款 0.03 底开关 | material.slang | — | gather 态 visbuf 路径写 `cb.options[2]=1`（**g_options.y 被 frustumCull clusterCount / params.options[0] pbr-naive 开关双重占用，禁复用**——首版误占 g_options.y 导致 pbr-direct/naive ambient 被误清零，全量回归 64125px maxDelta52 实锤）；**语义 = ambient 微底 0.03（2026-11-11 用户拍板）**：纯零替换探针 GI 撑不住暗面（单跳直光+天空、无弹射，M10.1 降级备案）→ 死黑 3.66%；0.03 底死黑 1.43%、双计费量级可忽略，S11 补弹射后收紧 |
 
 **M10.2 gather 权重口径（UE `LumenScreenProbeGather.usf` 实读锁定）**：cascade 级选择按**线性深度**分段（sceneDepth = length(wp−eye)，阈 3/5/7）——deviceZ 分段被冒烟实锤否掉（透视非线性全落 L3 权重全灭 → 全黑）。tile 映射 = `gridF = pix·res/viewport` 连续格坐标（**csPlace 探针屏幕格距 = viewport/res_l 非 2 的幂**；用 2 的幂 stride 会越界 8×8 atlas，Texture2D.Load 越界静默返 0）。权重 = 双线性 corner × `exp2(-10000·(planeDist/sceneDepth)²)` 主权重 + `exp2(-1000·x²)` Fallback 两级降级 × `MIN_PROBE_INTERPOLATION_WEIGHT=0.01` 门限；合成 = `pow(saturate(pow(enc,2.2)+gi), 1/2.2)`（enc 已 gamma 编码需先转线性再叠加）。间接光 = albedo × 八面体出射 radiance，采样方向 = 像素法线（probeDepth 3-tap，与 probe.slang 同口径）。
+#### M10.3 reference-gi / compare 槽位同步表（落码实读固化，2026-11-11，tag `s10-done`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `refGICB_` | 16B volatile：giAlbedo rgb 0.45/0.39/0.30 + a=lightDir.w | `initReference` | **b5（refComputeLayout_ 独立槽，compute-only）** | 每帧全量覆写（GI 参数与 RefConstants b1 分离，见下） |
+| `csReferenceGI_` | compute `direct.csrefgi`（8×8） | `initReference` | refComputeSet_（b0/b1/b4 + t2/t3/u0 + **b5**） | M9.2 渐进累积同款：rtTarget_ 线性 sum，present 归一 |
+| `compareTex_` | RGBA8_UNORM（stb_image 解码，CopyDest + keepInitialState） | `loadCompareImage`（CPU 侧一次性） | compareSet_ t0 SRV + s0 sampler（compareLayout_ All visibility） | **两段式上传（M-PT2 同款 0x87d 纪律）**：建纹无 cmd list → 首帧 beginTracking(CopyDest)→writeTexture→setTextureState(SRV) 同列表 |
+| `psCompare_` / `comparePSO_` | fragment `rt.pscompare`（复用 vsRtPresent_ strip） | `drawCompareImage` 懒建（probe 链也可用，device = probeDevice_ ? : rtDevice_） | compareLayout_ 单 set | **PSO 显式 disableDepthTest/Write/Stencil**；右半呈现 = viewport/scissor 裁剪（shader 无 discard，uv 直映参考图全幅） |
+
+### 2.20 ⚠️ 跨 compute/graphics 绑定的 volatile CB 尺寸铁律（2026-11-11，M10.3 实锤）
+
+**refConstants_（b4/b1，M9.2 跨 compute dispatch 与 graphics present 两 set 共用）从 16B 扩 32B → 双后端 device removed**（DX12 `Present failed (0x887a0005)`；Vulkan 每帧 12s 后 removed，deviceErrors=0 无任何 validation 消息，连未扩 CB 的 M9.2 旧 `--mode reference` 都稳定挂，3/3 复现）。二分定位：A 剥 RayQuery 无效、B 禁新 PSO 创建无效、**C 回 16B 绿**。修法 = RefConstants 保持 16B，GI 参数走**独立 16B compute-only CB 绑 b5**（同 DirectConstants 32B compute-only 一直安全的先例）。**推论：跨阶段（compute+graphics）共用的 volatile CB 不许扩尺寸；要加参数就开独立 CB 新槽位**。另一同族坑：`psCompare` 等 overlay 全屏 strip 的 PSO 必须显式 `depthStencilState.disableDepthTest()`——NVRHI `DepthStencilState` 默认 `depthTestEnable=true + depthFunc=Less`，swapchain framebuffer 的 depth_ 有场景残留深度时 quad 输出整体被吞（纯红实验 `red frac=0.0` 实锤「draw 提交但不可见」），blit/refpresent 前例同款纪律。

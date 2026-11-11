@@ -2773,6 +2773,20 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     csReference_ = device->createShader(desc, blob.data(), blob.size());
     if (!csReference_) { outError = "createShader failed for direct.csref"; return false; }
 
+    // M10.3（Q14-1）：direct.csrefgi —— GI 参考入口。同文件同槽位族，绑定面与
+    // csReference 完全一致（差异全在 RefConstants 32B 扩容段），管线同 layout。
+    {
+        const std::string giPath = std::string(NL_SHADER_DIR) + "/direct.csrefgi." + shaderSuffix;
+        std::vector<std::uint8_t> giBlob;
+        if (!readFileBytes(giPath.c_str(), giBlob)) {
+            outError = "failed to load direct.csrefgi (" + std::string(shaderSuffix) +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        csReferenceGI_ = device->createShader(desc, giBlob.data(), giBlob.size());
+        if (!csReferenceGI_) { outError = "createShader failed for direct.csrefgi"; return false; }
+    }
+
     // b3 DirectConstants（32B）：清屏色 + shadow 参数（与 drawShadow 同款，每帧覆写）。
     {
         nvrhi::BufferDesc dcDesc;
@@ -2786,6 +2800,10 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     }
 
     // b4 RefConstants（16B）：samplesPerFrame / samplesStart / samplesDone / pad。
+    // ⚠️ M10.3 实锤：这个 CB 跨 compute(b4)/graphics(b1) 两 set 绑定，扩到 32B
+    // 双后端 device removed（0x887a0005 / Vulkan 12s/帧后 removed，二分 C 实锤
+    // 回 16B 即绿）——GI 参考参数改走独立 16B b5（compute-only，同
+    // DirectConstants 32B compute-only 一直安全先例）。
     {
         nvrhi::BufferDesc rcDesc;
         rcDesc.byteSize = 16;
@@ -2796,12 +2814,24 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
         refConstants_ = device->createBuffer(rcDesc);
         if (!refConstants_) { outError = "createBuffer failed for ref constants"; return false; }
     }
+    // b5 GIConstants（16B，M10.3 Q14-1）：g_refGI = 像素侧 albedo（暖灰）+ ambient。
+    {
+        nvrhi::BufferDesc giDesc;
+        giDesc.byteSize = 16;
+        giDesc.isConstantBuffer = true;
+        giDesc.isVolatile = true;
+        giDesc.maxVersions = 16;
+        giDesc.debugName = "RefGIConstants";
+        refGICB_ = device->createBuffer(giDesc);
+        if (!refGICB_) { outError = "createBuffer failed for ref GI constants"; return false; }
+    }
 
     // §2.7 单一 BindingSet：resolve 槽位表 + b3 清屏色 + b4 累积参数 + u0 输出 + t13 TLAS。
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
          .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))   // M10.3 GI 常量
          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
          .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
     refComputeLayout_ = device->createBindingLayout(cDesc);
@@ -2814,6 +2844,12 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
         refPSO_ = device->createComputePipeline(cpDesc);
     }
     if (!refPSO_) { outError = "createComputePipeline failed for reference"; return false; }
+    {
+        nvrhi::ComputePipelineDesc giDesc;
+        giDesc.setComputeShader(csReferenceGI_).addBindingLayout(refComputeLayout_);
+        refGIPSO_ = device->createComputePipeline(giDesc);
+    }
+    if (!refGIPSO_) { outError = "createComputePipeline failed for reference-gi"; return false; }
 
     // psRefPresent（rt.psrefpresent）：÷samplesDone 再 gamma 的全屏呈现（复用 vsRtPresent_）。
     auto rtPath = [shaderSuffix](const char* artifact) {
@@ -2888,6 +2924,7 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
         addResolveSetItems(sd);
         sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
           .addItem(nvrhi::BindingSetItem::ConstantBuffer(4, refConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(5, refGICB_))
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
                                                       nvrhi::Format::RGBA32_FLOAT))
           .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
@@ -2909,13 +2946,19 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
     // RefConstants：本帧起点 = 已累积总数（保证每帧抖动不同）；结束 = 起点 + spp。
+    // M10.3 32B：[4] = GI 参考参数（Q14-1 拍板统一暖灰 + ambient，probe_gather
+    // gcb[24..26] / probe_trace tcb[8..10] 同源硬编码；csref 入口只读前 16B 不受影响）。
     const std::uint32_t start = samplesDone_;
     const std::uint32_t done  = start + samplesPerFrame_;
     const std::uint32_t rc[4] = {samplesPerFrame_, start, done, 0u};
     cmd->writeBuffer(refConstants_, rc, sizeof(rc));
+    // b5 GI 常量（M10.3 Q14-1）：像素侧 albedo（统一暖灰，probe_gather gcb[24..26] /
+    // probe_trace tcb[8..10] 同源硬编码）+ ambient（probe trace g_traceHitMat.a 同源）。
+    const float gi[4] = {0.45f, 0.39f, 0.30f, params.lightDir[3]};
+    cmd->writeBuffer(refGICB_, gi, sizeof(gi));
 
     nvrhi::ComputeState cstate;
-    cstate.setPipeline(refPSO_).addBindingSet(refComputeSet_);
+    cstate.setPipeline(params.referenceGI ? refGIPSO_ : refPSO_).addBindingSet(refComputeSet_);
     cmd->setComputeState(cstate);
     cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
 
@@ -2931,7 +2974,8 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     // 进度日志（截图模式 HUD 关，靠日志看累积进度；每 8 帧一次避免刷屏）。
     if (refFramesTarget_ > 0 && (samplesDone_ % (samplesPerFrame_ * 8) == 0 ||
                                  samplesDone_ >= totalTarget)) {
-        nl::core::log::info("reference: ", samplesDone_, " / ", static_cast<std::uint32_t>(totalTarget),
+        nl::core::log::info(params.referenceGI ? "reference-gi: " : "reference: ",
+                            samplesDone_, " / ", static_cast<std::uint32_t>(totalTarget),
                             " spp (", static_cast<int>(refProgress_ * 100.0f), "%)");
     }
 }
@@ -2969,6 +3013,165 @@ bool Scene::presentRefTarget(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
     vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
     cmd->draw(vargs);
     return true;
+}
+
+// ============================================================================
+// M10.3（Q14-2）：--compare <png> 右半参考图贴片。stb_image 解码 → RGBA8 纹理；
+// drawCompareImage 懒建 shader/PSO/set（vsRtPresent_ 不依赖 initRtPresent——
+// probe 链也可用），画在 presentTonemap / presentRefTarget 之后、HUD 之前。
+// 右半呈现 = viewport/scissor 裁剪（PSO 显式关深度/模板——NVRHI 默认开深度，
+// 不关会被 depth_ 残留深度吞掉 quad；shader 无 discard）。加载失败 / 未加载
+// = 全 live 不受影响。
+// ============================================================================
+bool Scene::loadCompareImage(const char* path, std::string& outError) {
+    if (!path || !*path) { outError = "compare: empty path"; return false; }
+    int w = 0, h = 0, comp = 0;
+    stbi_uc* pixels = stbi_load(path, &w, &h, &comp, 4);   // 强制 RGBA8
+    if (!pixels) {
+        outError = std::string("compare: stbi_load failed for ") + path;
+        return false;
+    }
+    nvrhi::IDevice* dev = probeDevice_ ? probeDevice_ : rtDevice_;
+    if (!dev) {
+        stbi_image_free(pixels);
+        outError = "compare: device not ready";
+        return false;
+    }
+    nvrhi::TextureDesc td;
+    td.width  = static_cast<std::uint32_t>(w);
+    td.height = static_cast<std::uint32_t>(h);
+    td.format = nvrhi::Format::RGBA8_UNORM;
+    // 建纹时无 cmd list → initialState=CopyDest，首帧 drawCompareImage 里
+    // writeTexture + setTextureState(SRV) 同列表转换（M-PT2 粒子贴图同款两段式，
+    // 0x87d 第一坑同源纪律：上传与状态转换不跨列表）。
+    td.initialState = nvrhi::ResourceStates::CopyDest;
+    td.keepInitialState = true;
+    td.debugName = "CompareRefImage";
+    compareTex_ = dev->createTexture(td);
+    if (!compareTex_) {
+        stbi_image_free(pixels);
+        outError = "compare: createTexture failed";
+        return false;
+    }
+    const std::size_t bytes = static_cast<std::size_t>(w) * h * 4u;
+    comparePixels_.assign(pixels, pixels + bytes);
+    stbi_image_free(pixels);
+    comparePendingUpload_ = true;
+    compareW_ = static_cast<std::uint32_t>(w);
+    compareH_ = static_cast<std::uint32_t>(h);
+    nl::core::log::info("compare: loaded ", path, " (", w, "x", h, ")");
+    return true;
+}
+
+void Scene::drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                             const nvrhi::Viewport& viewport) {
+    // probe 链只设 probeDevice_（rtDevice_ 是 rt/shadow/reference 链成员）——
+    // 两条链都要能画 compare 贴片。
+    nvrhi::IDevice* dev = probeDevice_ ? probeDevice_ : rtDevice_;
+    if (!compareTex_ || !dev || !framebuffer || compareFailed_) return;
+    // 首帧像素上传 + SRV 状态转换（同列表——M-PT2 同款纪律）。
+    if (comparePendingUpload_) {
+        cmd->beginTrackingTextureState(compareTex_, nvrhi::AllSubresources,
+                                       nvrhi::ResourceStates::CopyDest);
+        cmd->writeTexture(compareTex_, 0, 0, comparePixels_.data(), compareW_ * 4u);
+        cmd->setTextureState(compareTex_, nvrhi::AllSubresources,
+                             nvrhi::ResourceStates::ShaderResource);
+        comparePixels_.clear();
+        comparePixels_.shrink_to_fit();
+        comparePendingUpload_ = false;
+    }
+    // 懒建：shader + sampler + layout + set + PSO（一次性）。vsRtPresent_ 复用
+    //（probe 链未建时懒加载到同一成员——与 initRtPresent 同一产物 rt.vsrtpresent）。
+    if (!psCompare_ || !compareSet_) {
+        if (!psCompare_) {
+            std::vector<std::uint8_t> pb, vb;
+            const std::string psPath = std::string(NL_SHADER_DIR) + "/rt.pscompare." +
+                                       shaderSuffix_;
+            const std::string vsPath = std::string(NL_SHADER_DIR) + "/rt.vsrtpresent." +
+                                       shaderSuffix_;
+            if (!readFileBytes(psPath.c_str(), pb) || !readFileBytes(vsPath.c_str(), vb)) {
+                nl::core::log::deviceError("compare", "failed to load rt.pscompare/vsrtpresent");
+                compareFailed_ = true;
+                return;
+            }
+            nvrhi::ShaderDesc sdesc;
+            sdesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+            psCompare_ = dev->createShader(sdesc, pb.data(), pb.size());
+            sdesc.setShaderType(nvrhi::ShaderType::Vertex);
+            vsRtPresent_ = dev->createShader(sdesc, vb.data(), vb.size());
+            if (!psCompare_ || !vsRtPresent_) {
+                nl::core::log::deviceError("compare", "createShader failed");
+                compareFailed_ = true;
+                return;
+            }
+            nvrhi::SamplerDesc samDesc;
+            samDesc.setAllFilters(true)   // Linear min/mag/mip
+                   .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
+            compareSampler_ = dev->createSampler(samDesc);
+            if (!compareSampler_) {
+                nl::core::log::deviceError("compare", "createSampler failed");
+                compareFailed_ = true;
+                return;
+            }
+            nvrhi::BindingLayoutDesc cd;
+            cd.setVisibility(nvrhi::ShaderType::All)
+              .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+              .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+            compareLayout_ = dev->createBindingLayout(cd);
+            if (!compareLayout_) {
+                nl::core::log::deviceError("compare", "createBindingLayout failed");
+                compareFailed_ = true;
+                return;
+            }
+            nvrhi::BindingSetDesc csd;
+            csd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, compareTex_))
+               .addItem(nvrhi::BindingSetItem::Sampler(0, compareSampler_));
+            compareSet_ = dev->createBindingSet(csd, compareLayout_);
+            if (!compareSet_) {
+                nl::core::log::deviceError("compare", "createBindingSet failed");
+                compareFailed_ = true;
+                return;
+            }
+        }
+        if (!comparePSO_) {
+            const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+            nvrhi::GraphicsPipelineDesc pd;
+            pd.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+              .setVertexShader(vsRtPresent_)
+              .setFragmentShader(psCompare_)
+              .addBindingLayout(compareLayout_);
+            pd.renderState.rasterState
+                .setFrontCounterClockwise(true)
+                .setFillMode(nvrhi::RasterFillMode::Solid)
+                .setCullMode(nvrhi::RasterCullMode::None);
+            // 参考图是叠在最终画面上的 overlay——显式关深度/模板（NVRHI 默认
+            // depthTestEnable=true，与 blit/refpresent 前例同款纪律）。
+            pd.renderState.depthStencilState
+                .disableDepthTest()
+                .disableDepthWrite()
+                .disableStencil();
+            comparePSO_ = dev->createGraphicsPipeline(pd, info);
+            if (!comparePSO_) {
+                nl::core::log::deviceError("compare", "createGraphicsPipeline failed");
+                compareFailed_ = true;
+                return;
+            }
+        }
+    }
+    nvrhi::GraphicsState pstate;
+    pstate.setPipeline(comparePSO_)
+          .setFramebuffer(framebuffer)
+          .addBindingSet(compareSet_);
+    // viewport/scissor 裁到右半屏：quad 仍是全屏 strip，但只光栅化右半——
+    // shader 无 discard、uv 直接 [0,1] 映射参考图全幅（见 rt.slang psCompare）。
+    const float halfMinX = (viewport.minX + viewport.maxX) * 0.5f;
+    const nvrhi::Viewport halfViewport(halfMinX, viewport.maxX,
+                                       viewport.minY, viewport.maxY, 0.0f, 1.0f);
+    pstate.viewport.addViewportAndScissorRect(halfViewport);
+    cmd->setGraphicsState(pstate);
+    nvrhi::DrawArguments vargs;
+    vargs.setVertexCount(4);
+    cmd->draw(vargs);
 }
 
 // ============================================================================
@@ -3498,7 +3701,13 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         gcb[27] = 0.01f;                         // MIN_PROBE_INTERPOLATION_WEIGHT
         // Q13-1 线性深度分段阈值（欧氏）：L0<3 / L1<5 / L2<7 / else L3——
         // 缺省机位模型在 2~5 单位，三细级全覆盖（deviceZ 分段冒烟实锤不可用）。
-        gcb[28] = 3.0f; gcb[29] = 5.0f; gcb[30] = 7.0f;
+        // Q14-3 全调参面：阈值从 HUD 双向通道回填（FrameParams.probeLevels），
+        // 缺省 {3,5,7} 与 M10.2 拍板值一致——既有用例 bytes 保形。
+        // [31] = --sky-bg 开关（Q14-4：compose 背景像素写解析天穹）。
+        gcb[28] = params.probeLevels[0];
+        gcb[29] = params.probeLevels[1];
+        gcb[30] = params.probeLevels[2];
+        gcb[31] = params.probeSkyBg ? 1.0f : 0.0f;
         cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
     }
 
@@ -7124,6 +7333,16 @@ void Scene::shutdown() {
     refW_ = 0;
     refH_ = 0;
     csReference_ = nullptr;
+    // M10.3：reference-gi / compare 资源（同 device 存活期释放口径）。
+    csReferenceGI_ = nullptr;
+    refGICB_ = nullptr;
+    refGIPSO_ = nullptr;
+    psCompare_ = nullptr;
+    compareTex_ = nullptr;
+    compareSampler_ = nullptr;
+    comparePSO_ = nullptr;
+    compareLayout_ = nullptr;
+    compareSet_ = nullptr;
     psRefPresent_ = nullptr;
     refPSO_ = nullptr;
     refPresentPSO_ = nullptr;

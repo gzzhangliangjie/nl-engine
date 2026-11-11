@@ -115,6 +115,8 @@ struct Options {
     bool pbrNaive   = false;  // pbr-direct：--pbr-naive 对照开关（跳过 sRGB->linear，验收证据用）
     bool probeGather = false; // M10.2：--probe-gather（probe-viz gather 态，Q13-3；
                               // 默认关保 M10.1 probe-viz 点色行为与 s10-probe 基线保形）
+    std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
+    bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
@@ -196,6 +198,9 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
         else if (a == "--probe-gather") o.probeGather = true;   // M10.2：final gather 态
+        // M10.3：--compare 右半参考图 / --sky-bg 解析天穹背景（Q14-2/Q14-4 拍板）。
+        else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
+        else if (a == "--sky-bg") o.skyBg = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -1060,6 +1065,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         return 1;
     }
 
+    // M10.3（Q14-2）：--compare <png> 右半参考图。失败只告警不断言——画面保持全 live。
+    if (!o.comparePath.empty() && !renderer->loadCompareImage(o.comparePath.c_str())) {
+        nl::core::log::error("compare load failed: ", renderer->lastError());
+    }
+
     // M-PT1：--nfx <path> 加载 .nfx v1（成功后模拟走 nfx 参数面；失败退 legacy 喷泉）。
     // 机械锚点（run.bat 断言）：nfx loaded: <file>
     if (!o.nfxPath.empty()) {
@@ -1219,7 +1229,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     float probeDotSize = 3.0f;
     // M10.2：viz 三态（Q13-3）——默认关（M10.1 probe-viz 点色保形），--probe-gather
     // 或 HUD checkbox 开；probe-place 模式恒 false。
+    // M10.3：--mode probe = 完整链路一等模式，恒 gather 态（无点叠加）。
     bool probeGatherMode = (o.mode == nl::core::ViewMode::ProbeViz) && o.probeGather;
+    const bool isProbeFull = (o.mode == nl::core::ViewMode::Probe);
+    // M10.3（Q14-3 全调参面）：cascade 阈值 local（HUD 滑条写回后回填）。
+    float probeLevels[3] = {3.0f, 5.0f, 7.0f};
+    bool  probeSkyBgLocal = o.skyBg;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -1581,11 +1596,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeDotSize = probeDotSize;
         // M10.1：probe-viz 模式 = 点色改八面体辐照度采样（管线与 probe-place 全同，
         // 仅 viz 分支差异——trace pass 两模式都跑，布点+追踪一体）。
-        // M10.2（Q13-3）：gather 态 = 全屏 final gather + ambient 替换（与点色
+        // M10.2（Q13-3）：gather 态 = 全屏 final gather + ambient 微底替换（与点色
         // 互斥，gather 优先）；probe-place 模式恒 false 保形。
+        // M10.3：--mode probe 一等模式恒 gather 态。
         const bool isProbeViz = (o.mode == nl::core::ViewMode::ProbeViz);
-        fp.probeVizIrradiance = (isProbeViz && !probeGatherMode);
-        fp.probeGather = (isProbeViz && probeGatherMode);
+        const bool gatherActive = probeGatherMode || isProbeFull;
+        fp.probeVizIrradiance = (isProbeViz && !gatherActive);
+        fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull);
+        fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
+        std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
+        fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -1850,7 +1870,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.probeBaseRes = probeBaseRes;
                 hud.probeNormalOffset = probeNormalOffset;
                 hud.probeDotSize = probeDotSize;
-                hud.probeGatherMode = isProbeViz && probeGatherMode;   // M10.2 双向
+                // M10.2/M10.3 双向：probe-viz 三态 checkbox + 全调参面（Q14-3）。
+                hud.probeGatherMode = (isProbeViz && probeGatherMode) || isProbeFull;
+                std::memcpy(hud.probeLevels, probeLevels, sizeof(probeLevels));
+                hud.probeSkyBg = probeSkyBgLocal;
             }
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -1961,6 +1984,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 probeNormalOffset = hud.probeNormalOffset;
                 probeDotSize = hud.probeDotSize;
                 if (isProbeViz) probeGatherMode = hud.probeGatherMode;   // M10.2 写回
+                // M10.3（Q14-3）：调参写回（阈值/天穹背景；probe 模式 gather 恒开）。
+                std::memcpy(probeLevels, hud.probeLevels, sizeof(probeLevels));
+                probeSkyBgLocal = hud.probeSkyBg;
             }
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
             // 非簇场景唯一非法值是 4=cluster（无 CLUSTERCOLOR 属性）；5=pbr 合法
@@ -2021,7 +2047,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             else
                 jsonPath += ".json";
             nlohmann::json side;
-            side["mode"] = "reference";
+            side["mode"] = fp.referenceGI ? "reference-gi" : "reference";
             side["model"] = o.modelFile;
             side["size"] = {static_cast<int>(o.width), static_cast<int>(o.height)};
             side["yaw"] = camera.yawDegrees();
@@ -3099,6 +3125,18 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::Probe:      // M10.3：probe 完整链路一等模式（恒 gather 态）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::ReferenceGI: // M10.3：--mode reference-gi（Q14-1 GI 参考图）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");

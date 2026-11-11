@@ -37,6 +37,7 @@
 
 #include "octahedral.slangh"
 #include "gbuffer_common.slangh"
+#include "sky.slangh"
 
 cbuffer GatherConstants : register(b0)
 {
@@ -46,6 +47,9 @@ cbuffer GatherConstants : register(b0)
     float4   g_gMat;           // rgb = albedo（统一暖灰，traceCB 同源）/ a = MIN 权重(0.01)
     float4   g_gLevels;        // Q13-1 线性深度分段阈值（sceneDepth = length(wp-eye)，
                                //  欧氏单位）：x<t1→L0 / <t2→L1 / <t3→L2 / else L3。
+                               //  w = --sky-bg 开关（M10.3 Q14-4：compose 背景像素
+                               //  写 skyGradient(viewDir)，与探针 miss 天穹同函数；
+                               //  默认 0 = clearColor 保形）。
                                //  ⚠️ 不能用 deviceZ 分段——透视投影非线性，可见场景
                                //  deviceZ 全挤在 [0.9,1] → 全落 L3（2×2 网格），
                                //  M10.2 冒烟实锤（画面整体变暗 = ambient 白拿）。
@@ -204,10 +208,26 @@ void csGatherCompose(uint3 tid : SV_DispatchThreadID)
     const float viewH = g_gParams.z;
     if (tid.x >= uint(viewW) || tid.y >= uint(viewH)) return;
 
+    // M10.3（Q14-4）：--sky-bg 开——背景像素（deviceZ>=1 清值）不透 clearColor，
+    // 直接写解析天穹（skyGradient 与探针 miss 同函数；viewDir = 远平面反投影
+    // worldPos - eye 方向）。前景像素走正常 RMW 合成。
+    if (g_gLevels.w > 0.5f)
+    {
+        const float  bgZ = g_depth.Load(int3(int2(tid.xy), 0)).x;
+        if (bgZ >= 1.0f)
+        {
+            const float3 wpFar = gbReconstructWorldPos(tid.xy, 1.0f, float2(viewW, viewH),
+                                                       g_gInvViewProj);
+            const float3 vd = normalize(wpFar - g_gEye.xyz);
+            g_hdrUAV[tid.xy] = float4(skyGradient(vd), 1.0f);
+            return;
+        }
+    }
+
     // 直光画面已含 producer gamma（material.slang 输出端 pow 1/2.2）；
     // 间接光是线性域 → 去 gamma 相加后回 gamma。ambient 项已由 g_options.z=1
-    // 在直光管线置零（Q13-2 真替换，不叠加）。同纹理 SRV 读 + UAV 写，每线程
-    // 只 RMW 自己的 texel。
+    // 在直光管线压到 0.03 微底（Q13-2 拍板勘误，GI 为主）。同纹理 SRV 读 +
+    // UAV 写，每线程只 RMW 自己的 texel。
     const int2 spix = int2(tid.xy);
     const float4 enc = g_hdr.Load(int3(spix, 0));
     const float4 gi  = g_gatherOut.Load(int2(spix));   // RWTexture2D.Load = int2（SRV 才是 int3）

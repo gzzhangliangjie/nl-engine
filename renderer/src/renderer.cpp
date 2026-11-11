@@ -45,11 +45,14 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 78 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 94 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
-// rt 6（M8.2）+ direct.cs 4（M9.0/M9.2）+ velocity/probe/probe_viz 10（M10.0）+
-// probe_trace.cstrace 2（M10.1）+ probe_gather 4（M10.2）。
+// rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
+// particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
+// velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
+// probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）。
+// （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -116,6 +119,10 @@ static const Artifact kArtifacts[] = {
     // 拍板）× 双目标 = 4。
     {"probe_gather.csgather", true}, {"probe_gather.csgather", false},
     {"probe_gather.csgathercompose", true}, {"probe_gather.csgathercompose", false},
+    // M10.3：direct.csrefgi（Q14-1 GI 参考图 compute）× 双目标 = 2 +
+    // rt.pscompare（Q14-2 --compare 右半参考图贴片）× 双目标 = 2。
+    {"direct.csrefgi", true}, {"direct.csrefgi", false},
+    {"rt.pscompare", true}, {"rt.pscompare", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -301,6 +308,18 @@ bool Renderer::loadParticlesNfx(const char* path) {
         return false;
     }
     impl_->info = impl_->backend->info();
+    return true;
+}
+
+// M10.3：--compare 参考图加载端（Q14-2）。转发 backend 的 scene_.loadCompareImage；
+// 失败原因进 lastError()，画面保持全 live。
+bool Renderer::loadCompareImage(const char* path) {
+    if (!impl_->backend) return false;
+    std::string err;
+    if (!impl_->backend->loadCompareImage(path, err)) {
+        impl_->error = err;
+        return false;
+    }
     return true;
 }
 

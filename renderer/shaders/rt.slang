@@ -183,3 +183,15 @@ void psTonemap(VsOut i, out float4 outColor : SV_Target)
     int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
     outColor = g_hdrTex.Load(int3(pix, 0));
 }
+
+// psCompare（M10.3 Q14-2）：--compare <png> 右半屏参考图贴片。CPU 侧把 viewport/
+// scissor 裁到右半屏（drawCompareImage），quad 仍是 vsRtPresent_ 全屏 strip 但只
+// 光栅化右半——i.uv ∈ [0,1] 直接映射参考图全幅，无需 discard / uv 重映射。
+// s0 Linear clamp（非等尺寸源图平滑缩放）。
+Texture2D<float4> g_compareTex : register(t0);
+SamplerState g_compareSampler : register(s0);
+[shader("pixel")]
+void psCompare(VsOut i, out float4 outColor : SV_Target)
+{
+    outColor = g_compareTex.SampleLevel(g_compareSampler, i.uv, 0.0f);
+}

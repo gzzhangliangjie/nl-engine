@@ -8477,6 +8477,91 @@
      "script": "example/s10-gather/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s10-refgi",
+   "label": "S10.3",
+   "name": "GI 参考图 + --compare 并排验收（M10.3，S10 收官）",
+   "tag": "s10-done",
+   "date": "2026-11-11",
+   "summary": "M10.3（S10 收官步；2026-11-11 用户四问 Q14-1..4 全取方案 A）。① Q14-1 GI 参考图 = --mode reference-gi（扩展 M9.2 渐进累积：每像素 1024 spp = 16 帧 x 64，直光部分逐字同 csReference + GI 部分 = 余弦加权半球 1 弹射 Malley 采样（pdf=cos/pi 消积分因子），miss→skyGradient（Q12-3 天穹）、hit→giAlbedo x (lightCol·I·shadow(q)/pi + amb)，与探针物理逐项同口径：104-tri 粗代理 + 双 albedo（hit/pixel 两侧有意双乘）+ 无 NdotL 降级 + shadow ray 回退 bias；Q3 勘误落地：S9 参考图只算直光一跳不能当 GI 尺子，S10 自立参考图）；② Q14-2 并排对比 = viewer --compare <png> 右半贴片（stb_image 解码 RGBA8 纹理两段式上传 M-PT2 同款 0x87d 纪律 + psCompare Linear clamp 采样）；③ Q14-3 --mode probe 一等化（ViewMode::Probe=17 恒 gather 态 + HUD 全调参面：cascade 3 滑块 + sky-bg checkbox + gather checkbox）；④ Q14-4 --sky-bg = csGatherCompose 天穹背景分支（bgZ>=1.0 → skyGradient，默认关保形）。实锤踩坑：跨 compute/graphics 绑定的 volatile CB 扩 32B → 双后端 device removed（DX12 Present 0x887a0005 / Vulkan 12s 帧后 removed，二分 A 剥 RayQuery 无效 B 禁 PSO 无效 C 回 16B 绿）→ RefConstants 保持 16B + GI 参数走独立 16B b5 compute-only CB；compare 贴片 quad 画出但不可见（纯红实验 frac=0.0 实锤输出被丢）→ 根因 = NVRHI DepthStencilState 默认 depthTestEnable=true，quad 被 depth_ 残留深度吞掉 → PSO 显式 disableDepthTest/Write/Stencil + viewport/scissor 裁右半（顺带删 discard/uv 重映射，shader 纯采样）；probe 链 device 选择 = probeDevice_ ? : rtDevice_（probe 链不设 rtDevice_）。趋势门禁 tools/check-s10-refgi.py：gather 基线 vs GI 参考 tile-luma Pearson 0.960 / MAD 3.4（双后端一致）——探针滤波估计与 1024 spp 收敛真值亮暗趋势高度一致 = S10 全链物理正确性直接证据。验收图 docs/screenshots/s10.png（probe+HUD 调参面 | GI 参考图并排，一次弹射彩色泄漏可见）。kStage 仍 S8.2；Q4 冻结面 0 新增独立 GBuffer 资源。",
+   "acceptance": [
+    "run.bat verify 全绿：双后端 reference-gi 重拍 exit 0 + deviceErrors=0 + bytes 2/2 对冻结基线 + 日志锚 reference-gi: 1024/1024 spp (100%) + 趋势门禁（gather vs refgi pearson>=0.60/MAD<=30，实测 0.960/3.4）+ --compare 贴片冒烟（compare: loaded 锚 + 右半 trend pearson>=0.80）+ 负向 exit 非 0",
+    "Q3 勘误落地：GI 参考图物理口径与探针逐项同口径（单弹射+天穹+双 albedo+粗代理+无 NdotL 降级），趋势一致非逐像素裁判；验收判据「天光与一次弹射可见」= 参考图彩色弹射泄漏 + sky-bg 开关画面可见",
+    "双后端 viewer selftest 16/16 + Slang 产物 94/94（新增 direct.csrefgi 2 + rt.pscompare 2 已登记 kArtifacts 防假绿）",
+    "老路径保形：s9-reference/s9-shadow/s10-probe/s10-gather 基线 bytes 不变；kStage 仍 S8.2；tag s10-done"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "refgi",
+     "name": "GI 参考图渐进累积（1024 spp：直光 + 余弦加权半球 1 弹射 + 天穹）",
+     "kind": "pair",
+     "note": "M10.3 新增 --mode reference-gi：csReferenceGI 8x8 compute 每帧 64 jittered 样本累积进 rtTarget_ 线性 sum（M9.2 同款复用不落盘），present 时 g_refSamplesDone 归一再 gamma。GI 段 Malley 采样（disk 均匀→半球投影）1 条弹射射线打 M8 TLAS，miss→skyGradient、hit→giAlbedo x (直光 + amb)；直光段与 csReference 逐字同款（shadow ray 经 TLAS）。跨链参数走独立 16B b5 GIConstants（volatile CB 跨 compute/graphics 扩 32B 双后端 device removed 实锤）。基线取自 tag s10-done 构建产物（双后端）。json 侧车 mode=reference-gi。",
+     "baselines": {
+      "dx12": "example/s10-refgi/refgi-dx12.png",
+      "vulkan": "example/s10-refgi/refgi-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "reference-gi",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode reference-gi --model Suzanne-materials.nmesh --screenshot <out.png> --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "script": "example/s10-refgi/run.bat verify"
+    },
+    {
+     "id": "compare",
+     "name": "--compare 右半参考图贴片（viewport 裁剪 + PSO 关深度）",
+     "kind": "pair",
+     "note": "M10.3 Q14-2：viewer --compare <png> 把参考图贴到右半屏。stb_image RGBA8 解码 → CopyDest 纹理首帧同列表 writeTexture+SRV 转换（两段式上传）；drawCompareImage 懒建 psCompare/set/PSO（vsRtPresent_ 复用），画在 present 之后 HUD 之前。右半呈现 = viewport/scissor 裁剪（PSO 显式关深度——NVRHI 默认 depthTestEnable=true 会用 depth_ 残留深度吞掉全屏 strip quad，纯红实验实锤）+ shader 纯 SampleLevel 无 discard。probe/reference-gi 双链可用（device = probeDevice_ ? : rtDevice_）。基线取自 tag s10-done 构建产物（双后端；跨后端线性采样缩放噪声档约 80 bytes 量级像素差）。case 声明 cwd={root}（--compare 相对仓库根路径；viewer 默认 cwd=exe 目录，stbi_load 失败的 [nl:error] 会被 acceptance 计数器捕获 exit 1）。",
+     "baselines": {
+      "dx12": "example/s10-refgi/compare-dx12.png",
+      "vulkan": "example/s10-refgi/compare-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--compare",
+      "example/s10-refgi/refgi-dx12.png"
+     ],
+     "command": "viewer.exe --mode probe --model Suzanne-materials.nmesh --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --compare example/s10-refgi/refgi-dx12.png",
+     "script": "example/s10-refgi/run.bat verify",
+     "cwd": "{root}"
+    }
+   ]
   }
  ]
 }

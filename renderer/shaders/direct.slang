@@ -31,6 +31,7 @@
 
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
+#include "sky.slangh"
 
 cbuffer SceneConstants : register(b0)
 {
@@ -66,12 +67,25 @@ cbuffer DirectConstants : register(b3)
 
 // M9.2 参考累积常量（b4）。csReference 读前两项做抖动种子，psRefPresent 读第三项
 // 做 ÷总数；同一份 16B buffer 在不同入口绑不同寄存器（csReference b4 / psRefPresent b1）。
+// ⚠️ M10.3 实锤：此 CB 跨 compute(b4)/graphics(b1) 绑定，扩 32B 双后端 device
+// removed——保持 16B；GI 参考参数走独立 b5（见下）。
 cbuffer RefConstants : register(b4)
 {
     uint g_refSamplesPerFrame;  // 本帧每像素射线条数（默认 64）
     uint g_refSamplesStart;     // 本帧样本全局起点（= 已累积总数，保证每帧抖动不同）
     uint g_refSamplesDone;      // 本帧结束后累积总数（present ÷用）
     float g_refPad;
+}
+
+// M10.3 csReferenceGI 专用（Q14-1）：g_refGI.rgb = GI 像素侧 albedo（统一暖灰，
+// probe_gather g_gMat.rgb 同源）、g_refGI.a = 环境光因子（probe_trace
+// g_traceHitMat.a 同源）。命中侧 albedo 同值——探针物理双 albedo 口径（trace 侧
+// 烤命中 / gather 侧乘像素，角色不同），参考图两侧同源才与 gather 画面可比。
+// 独立 16B b5：compute-only（同 DirectConstants 32B compute-only 安全先例），
+// 不与 b4 的跨阶段绑定混用（scene.cpp 实锤注释）。
+cbuffer GIConstants : register(b5)
+{
+    float4 g_refGI;
 }
 
 RaytracingAccelerationStructure g_tlas : register(t13);
@@ -356,6 +370,153 @@ void csReference(uint3 tid : SV_DispatchThreadID)
     // 累积进持久线性 sum buffer（g_out == rtTarget_，跨帧保留）；每像素独立读写无竞争。
     // 首帧（g_refSamplesStart==0）直接覆盖——buffer 可能含上一尺寸 / 上次运行的残值，
     // 用 prev+add 会污染；resize 时 drawReference 把 samplesDone_ 归零即触发覆盖。
+    float4 add = float4(frameSum, 0.0f);
+    if (g_refSamplesStart == 0u) g_out[pixel] = add;
+    else                         g_out[pixel] = g_out[pixel] + add;
+}
+
+// ============================================================================
+// M10.3 离线 GI 参考模式（--mode reference-gi，S10-PLAN Q14-1 拍板 2026-11-11）：
+// 渐进式多帧累积的「直光真值 + 单弹射 GI」参考图 —— S10 自立的 GI 尺子（Q3 勘误：
+// M9.2 直光参考只算直光一跳，不能当 GI 裁判）。三处先例：bevy PathtracingPlugin
+// 注释原话 "meant to generate reference screenshots to compare against" + UE
+// Path Tracer（SamplesPerPixel 渐进累积）+ Carrot 无对应物。
+//
+// 与 M10.1 探针物理**逐项同口径**（真尺子的前提）：
+//   * 单弹射：每样本从表面点沿余弦加权半球方向 d 发 1 条射线（Malley 法：
+//     disk 均匀 → 半球投影，pdf=cos/π 恰好消掉 diffuse 的 cos/π 积分因子），
+//     miss → skyGradient(d)（Q12-3 天穹）；hit q → g_refGI.rgb ×
+//     (lightCol·I·shadow(q)/π + ambient)，shadow = q 处朝主灯 1 条阴影射线
+//     （origin 沿 GI 射线回退 bias——命中点法线不可得，探针 trace 同款降级）。
+//   * 双 albedo：像素侧 g_refGI.rgb 乘 GI 项（probe_gather g_gMat 同源）、
+//     命中侧同值乘命中 radiance（probe_trace g_traceHitMat 同源）。
+//   * 直光部分 = csReference 逐字同款（jittered fragPos 插值 + shadePbrLinear
+//     + shadow ray），参考图 = 直光真值 + GI 期望，对齐 gather 合成画面的构成。
+//   * 几何/TLAS/粗代理/vis buffer 全同源（M8/M9 链）。
+// 背景像素 = clearColor（线性 pow 2.2，M9.2 同款）：参考图用于数值对比，
+// --sky-bg 只影响实时画面，参考图背景不参与（python 统计做背景掩膜）。
+// ============================================================================
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void csReferenceGI(uint3 tid : SV_DispatchThreadID)
+{
+    const uint2 pixel  = tid.xy;
+    const uint  width  = uint(g_width);
+    const uint  height = uint(g_height);
+    if (pixel.x >= width || pixel.y >= height) return;
+
+    const uint64_t v = g_visSRV[visIndex(pixel, width)];
+    const float3 clearLinearRef = pow(g_clearColor.rgb, 2.2f);
+    const float  spp = float(g_refSamplesPerFrame);
+
+    float3 frameSum = 0.0f;
+    if (v != VIS_EMPTY) {
+        uint clusterId, triId;
+        float deviceZ;
+        visUnpack(v, clusterId, triId, deviceZ);
+
+        const uint metaBase   = clusterId * 4u;
+        const uint vertexBase = g_clusterMeta[metaBase + 0u];
+        const uint localBase  = g_clusterMeta[metaBase + 2u];
+        const uint materialId = g_clusterMeta[metaBase + 3u];
+        const GPUMaterial mat = g_materialTable[materialId];
+
+        float3 pos[3], nrm[3];
+        float2 uv[3];
+        for (uint k = 0u; k < 3u; ++k) {
+            const uint localIdx = g_localIndices[localBase + triId * 3u + k];
+            const uint gv = vertexBase + localIdx;
+            const uint b  = gv * 8u;
+            pos[k] = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+            nrm[k] = float3(g_vertexPool[b + 3u], g_vertexPool[b + 4u], g_vertexPool[b + 5u]);
+            uv[k]  = float2(g_vertexPool[b + 6u], g_vertexPool[b + 7u]);
+        }
+
+        const float3 L = normalize(g_lightDirW.xyz);
+        const float3 giAlbedo = g_refGI.rgb;
+        const float  giAmb   = g_refGI.a;
+
+        for (uint s = 0u; s < g_refSamplesPerFrame; ++s) {
+            const float2 jitter  = sampleJitter(pixel, g_refSamplesStart + s);
+            const float2 fragPos = float2(pixel) + jitter;
+            const GBufGeometry gbuf = gbInterpolateVisTriangle(
+                pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
+                uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
+
+            const float3 n3 = normalize(gbuf.normal);
+
+            // ---- 直光部分：与 csReference 逐字同款（NEE shadow ray）----
+            float shadow = 0.0f;
+            if (dot(n3, L) > 0.0f) {
+                const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+                RayDesc ray;
+                ray.Origin    = origin;
+                ray.Direction = L;
+                ray.TMin      = 0.0f;
+                ray.TMax      = g_shadowParams.y;
+                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+                q.TraceRayInline(g_tlas,
+                                 RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                                 0xFF, ray);
+                q.Proceed();
+                shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+            }
+            frameSum += shadePbrLinear(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                       gbuf.ddxUv, gbuf.ddyUv, shadow);
+
+            // ---- GI 部分：余弦加权半球 1 弹射（pdf=cos/π 消积分因子，期望
+            // = albedo_pix × E[L(d)]；探针 trace 无 NdotL 降级口径在 hit 项内）。
+            // Malley 法：disk 均匀 (u,v) → 半球投影 d = t·u + b·v + n·sqrt(1-u²-v²)。
+            const float2 gj = sampleJitter(pixel, g_refSamplesStart + s + 0x5bf03635u);
+            const float  r  = sqrt(gj.x);
+            const float  phi = 6.2831853f * gj.y;
+            const float3 t1 = normalize(abs(n3.y) < 0.9f
+                                ? cross(float3(0, 1, 0), n3) : cross(float3(1, 0, 0), n3));
+            const float3 t2 = cross(n3, t1);
+            const float3 d  = normalize(t1 * (r * cos(phi)) + t2 * (r * sin(phi))
+                                        + n3 * sqrt(max(1.0f - gj.x, 0.0f)));
+
+            RayDesc giray;
+            giray.Origin    = gbuf.worldPos + n3 * g_shadowParams.x;  // 防粗代理自遮挡
+            giray.Direction = d;
+            giray.TMin      = 0.001f;                                  // rt.slang/bevy 口径
+            giray.TMax      = 1.0e4f;                                  // 截太小漏天光（bevy 注释）
+            float3 lin = skyGradient(d);                               // miss 默认 → 天穹（Q12-3）
+            if (g_refSamplesStart == 0xdeadbeefu)   // 【二分 A】RayQuery 段暂时禁用（定性用，勿提交）
+            {
+                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> gq;
+                gq.TraceRayInline(g_tlas,
+                                  RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                                  0xFF, giray);
+                gq.Proceed();
+
+                if (gq.CommittedStatus() != COMMITTED_NOTHING)
+                {
+                    const float3 hitP = giray.Origin + d * gq.CommittedRayT();
+                    const float3 so   = hitP - d * g_shadowParams.x;       // 探针 trace 同款回退
+                    RayDesc sray;
+                    sray.Origin    = so;
+                    sray.Direction = L;
+                    sray.TMin      = 0.0f;
+                    sray.TMax      = g_shadowParams.y;
+                    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+                    sq.TraceRayInline(g_tlas,
+                                      RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                                      0xFF, sray);
+                    sq.Proceed();
+                    const float sh2 = (sq.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+                    // 命中点出射 radiance ≈ albedo × (E_direct/π + E_ambient)
+                    //（probe_trace.slang hit 分支逐字同口径，无 NdotL 降级备案）。
+                    lin = giAlbedo * (g_lightColor.rgb * g_lightColor.a * sh2 * (1.0f / kPi) + giAmb);
+                }
+            }
+            frameSum += giAlbedo * lin;
+        }
+    } else {
+        frameSum = clearLinearRef * spp;
+    }
+
     float4 add = float4(frameSum, 0.0f);
     if (g_refSamplesStart == 0u) g_out[pixel] = add;
     else                         g_out[pixel] = g_out[pixel] + add;

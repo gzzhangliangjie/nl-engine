@@ -354,6 +354,12 @@ void Hud::build(HudFrame& frame) {
         // M10.2（Q13-3）：viz 三态切换——false = 探针点（级别色/辐照度采样），
         // true = final gather 全屏合成（ambient 替换，无点叠加）。双向 checkbox。
         ImGui::Checkbox("final gather (replace ambient)", &frame.probeGatherMode);
+        // M10.3（Q14-3 全调参面）：cascade 线性深度阈值 ×3 + --sky-bg 背景切换。
+        // 阈值单位 = 世界欧氏距离（sceneDepth = length(wp-eye)）；双向回填。
+        ImGui::SliderFloat("cascade level L0/L1", &frame.probeLevels[0], 1.0f, 10.0f, "%.1f");
+        ImGui::SliderFloat("cascade level L1/L2", &frame.probeLevels[1], 2.0f, 15.0f, "%.1f");
+        ImGui::SliderFloat("cascade level L2/L3", &frame.probeLevels[2], 3.0f, 20.0f, "%.1f");
+        ImGui::Checkbox("sky background (--sky-bg)", &frame.probeSkyBg);
         const int b = frame.probeBaseRes;
         const int total = b * b + (b >> 1) * (b >> 1) + (b >> 2) * (b >> 2) + (b >> 3) * (b >> 3);
         char probeLine[96];

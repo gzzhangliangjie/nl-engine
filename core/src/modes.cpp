@@ -23,6 +23,8 @@ constexpr const char* kModeNames[] = {
     "reference", // M9.2：离线参考模式（--mode reference，多帧累积直光真值图）
     "probe-place", // M10.0：屏幕探针 cascade 布点（velocity prepass + 布点 + 点可视化）
     "probe-viz",   // M10.1：探针辐照度可视化（探针追踪 + 点色 = 八面体辐照度采样）
+    "probe",       // M10.3：probe 完整链路（place+trace+gather 一等渲染模式 + 调参）
+    "reference-gi", // M10.3：--mode reference-gi（渐进累积 GI 参考图，Q14-1 拍板）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==
