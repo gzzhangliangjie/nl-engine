@@ -2659,3 +2659,22 @@
 5. NMake 同秒 mtime 跳重链再踩（删 exe 强制重链规避）；`kInvPi` 是 probe_trace.slang 符号、direct.slang 只有 kPi（Slang E30015，`(1.0f/kPi)` 替代）；DX12 slangc 报错 grep 模式须匹配 `error[E...]`（旧 "error C" 模式漏检）。
 
 **下一步**：**S10 全收官**（Q4 冻结面 0 新增独立 GBuffer 资源；`kStage` 仍 S8.2）。下一站 S11 探针弹射（irradiance 二级传播）/ S12 历史帧；M9.2 直光参考图 + M10.3 GI 参考图双标准答案就位。
+
+## A类 M-LOG0+M-LOG1：日志系统升级（2026-11-11，tag `log-m0`，feat/logging）
+
+**动作**：A 类并行轨道首里程碑（Q-L1~L3 三项 2026-11-11 用户拍板，`docs/p8/P8-LOG-PLAN.md` §6）。① vendored **spdlog v1.17.0**（MIT，`thirdparty/spdlog/` include+src+LICENSE 113 文件，排除 tests/bench/example，`VENDOR.md` 溯源留档）；② `nl::core::log` 内核替换——兼容铁律全保：老入口签名行为零改动（现网调用面 grep 实核 6 文件）、stdout 锚点 `[nl:level]` 格式不漂（spdlog pattern `%v` + wrapper 自拼前缀）、`errorCount/deviceErrorCount` 口径逐字保留（含「被闸滤掉的 error 也计数」）、spdlog 类型不进 log.hpp（PIMPL）；③ 文件落盘（Q-L2）：`out/log/<exe>-<backend>-<yyyymmdd-hhmmss>.log` 首条日志懒建、旧文件不清理、行前缀 `[日期 时间.毫秒]`（锚点仍是子串）、backend 编译期宏 `NL_LOG_BACKEND_NAME` 注入 nl_core；④ ODS 转发：`msvc_sink_mt(false)` 无条件 OutputDebugStringA（喂 L3 调试链路）；⑤ 分类通道 + 过滤指令（M-LOG1，bevy EnvFilter 口径）：`writeCh/*Ch`（`[nl:level|channel]` 新格式，老入口不动）+ `setFilter("nl:info,renderer=warn")` / `renderer=off` / `setChannelLevel`，非法指令显式拒绝且原面不动；⑥ 工具 exe `log-tools`（selftest 六段 / demo / usage，退出码 0/1/2）。
+
+**提交版本**：feat/logging 本收口 commit（annotated tag `log-m0`）。
+
+**完成情况**：双后端 BUILD OK + viewer selftest 16/16×2；ctest `log-m0-*` 3/3×2（`--repeat until-pass:3`）；`log-tools selftest` 六段全绿（M0.1 兼容语义 / 文件落盘 / 过滤正向 / 过滤负向 8 类 / setChannelLevel / 4×200 并发零丢失）；`example/log-m0/run.bat` 七段机器断言 ALL GREEN exit 0；cases.json `log-m0` 卡 4 用例（usage/selftest/filter-demo/negative）`regression --only log-m0` **8/8 ALL GREEN**；`server.py --check` exit 0（kStage 仍 S8.2，本卡不在其覆盖面，双验走 run.bat + --only）；log 锚点回归抽查 `m0.9` 4/4 + `nav-m0` 10/10 + `s1-asset` 6/6 全 bytes ALL GREEN（expectLog 零漂）；证据图 `example/log-m0/log-m0-evidence.png` 由 run.bat 真实输出生成（PIL 渲染非手绘）；viewer 回归跑实测在 `out/log/` 落 `viewer-DX12/VULKAN-*.log`（Q-L2 人肉排查痛点直接受益）。
+
+**踩坑情况**
+1. **⚠️ 文件落盘同秒碰撞互吞（selftest 自抓）**：同秒启动多进程 → 同名时间戳文件 `basic_file_sink(truncate)` 后写吞先写（327 B 残文件实锤）。修 = 存在性探测加 `-2/-3` 后缀消歧（拍板形态不变）。**命名含时间戳 + 每次新建 = 必须配碰撞消歧，这是同一条铁律的两半。**
+2. **`ensureLogger(withFile)` 参数形同虚设**：broadcast 恒传 false → 文件路永不建立（首版 selftest FAIL 实抓）。修 = 进程内一次性建齐三路，删布尔参数。
+3. **ODS DBWIN 实测被会话沙箱拦截**：`dbwin_capture.py` 能收到沙箱自身 ODS 但收不到子进程（log-tools/viewer）的；python ctypes 直调 OutputDebugStringA 在沙箱下连进程都段错误。机制级留证（vendored msvc_sink 源码 + 构造路径 selftest 覆盖），**真取证留待带真调试器/非沙箱会话**——不阻塞 M-LOG0。
+4. **bash cwd 不跨命令再踩（落错树构建）**：`cmd //c scripts\build-m0.2.bat DX12` 没带 `cd <wt>` 前缀 → 以主树 cwd 解析出主树 build（编的是主树旧代码，产物字节同、零源码污染，但主树 exe mtime 被刷新）。§7.3「每条命令显式 cwd」必须逐条执行，不能靠上一条残留。
+5. **v1.17.0 src 无 common.cpp**（老版本记忆）；fmt bundled 强制 `/utf-8`（base.h 静态断言）；`log(level, string_view)` 非 format 重载才不解释 `{}`（日志行含 GLSL 花括号会炸 format 路径——已核 logger.h:126 签名）。
+
+**实现决策留档（计划偏差 1 处）**：M-LOG0 阶梯原文「异步写」，落码取**同步 basic_file_sink_mt + 每条 flush**——日志量小、取证正确性优先，避免 async 线程池退出期丢尾行破坏回归取证；async 化留 M-LOG2（console cvar 轮）随滚动策略一起议。已写回 `P8-LOG-PLAN.md`。
+
+**下一步**：M-LOG2（帧号注入 + viewer console `log.*` cvar + 文件滚动）后置待拍板；现网 6 文件调用点按需迁移 `*Ch` 分类通道（零强制）。merge 回 master 待用户拍板（pathfinding M-N6 同款先例）。

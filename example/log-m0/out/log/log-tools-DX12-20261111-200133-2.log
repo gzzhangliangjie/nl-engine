@@ -1,0 +1,8 @@
+[2026-11-11 20:01:33.375] [nl:info] [before] plain info line
+[2026-11-11 20:01:33.375] [nl:debug] [before] plain debug line
+[2026-11-11 20:01:33.375] [nl:info|renderer] [before] renderer info
+[2026-11-11 20:01:33.375] [nl:warn|renderer] [before] renderer warn
+[2026-11-11 20:01:33.375] [nl:info|asset] [before] asset info
+[2026-11-11 20:01:33.375] [nl:info] [after] plain info line
+[2026-11-11 20:01:33.375] [nl:warn|renderer] [after] renderer warn
+[2026-11-11 20:01:33.375] [nl:info|asset] [after] asset info
