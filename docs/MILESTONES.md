@@ -2456,3 +2456,17 @@
 5. **归档日志不许带 worktree 绝对路径**：`tools/make-drive-m3-evidence.py --sweep` 首行原打印 `OUT / "frames.tsv"` 的绝对路径，`example/drive-m3/sweep.log` 因此写入 `E:\UE_STUDY_2026\nl-engine-drive\...`；整轨 merge 回 master 后同一产物必然漂移到 `nl-engine\...`，任何新 clone / 新 worktree 跑 `run.bat` 都会产生伪 diff。改为固定相对路径 `example/drive-m3/frames.tsv`（证据图只读 `sweep.log` 最后 4 行，两张 PNG 基线零改动），连续两轮 `run.bat verify` ALL GREEN 复验。另：`.bat` 的 `echo >>` 在 Windows 写 CRLF，而 `.gitattributes *.log text eol=lf`，归档时统一转 LF，勿把工作树 CRLF 当内容变更提交。
 
 **下一步**：camera b 段（M-CAM1b / CAM2b / CAM3b）串行前置已解除，可从新 master 开轨，消费 M-D3 留的 `ChassisState` POD / 投影源切换钩子；`feat/drive` wt 是否拆除等用户拍板；主线下一站 M9.2 离线参考模式。
+## editor轨道 M-E5：插件 DLL 动态扫描加载 + 材质检查插件（feat/editor，2026-11-11，tag `e-m5-done`，commit `00084b5`）
+
+**动作**：wt_pool claim（track editor / M-E5）→ 沿用 editor 轨道先例（三源对照豁免：与渲染源码正交，见 EDITOR-PLAN §5 冻结面）落码：①插件 DLL 动态扫描加载——根 CMake 新增 `nl_imgui_dll`（SHARED + `WINDOWS_EXPORT_ALL_SYMBOLS ON`，宿主与插件 DLL 必须共享同一 ImGuiContext，插件静链 imgui = 双 context 必炸；`nl_imgui` STATIC 保留给 renderer/viewer 跨进程各持一份）+ `nl_editor_common`（STATIC 共享 RpcHost 实现）；`editor/plugin.hpp` `kPluginAbiVersion` + `discoverDlls`（FindFirstFile 扫 exe 同目录 `plugins/*.dll`，C ABI `nl_plugin_abi/_create/_destroy` 三符号 + 版本校验，坏 DLL 跳过不拖死宿主）+ 析构按 slot 逆序先 DLL 内 delete 再 FreeLibrary；`editor/plugin_export.hpp` `NL_PLUGIN_EXPORTS` 导出宏 + `editor/plugins/hello_plugin.cpp` 示例 DLL（落 `${CMAKE_BINARY_DIR}/plugins/`）；②材质检查插件——引擎侧 `viewer/main.cpp` `bindMaterials`：`scene.getMaterials`（scene 模式实例 tint/rough/metal；model 模式 `loadNMesh` 读 .nmesh NSUB 表 name/meshlets/submeshCount/submeshes，材质 id=子网格序号 M7.2 约定）+ `scene.setMaterial`（逐字段可选 tint/rough/metal、clamp 0..1、写回 sceneObjects 随 viewer 每帧原地刷新下一帧可见；model 模式 error 100）；编辑器侧 `MaterialInspectorPlugin`（实例表 + tint ColorEdit3 + rough/metal 滑条实时下发）；RPC-SPEC 补 M-E4/M-E5 实装方法表。
+
+**提交版本**：commit `00084b5`（feat/editor，12 files +890/-14），annotated tag `e-m5-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E5 段（editor 轨道权威台账）。
+
+**完成情况**：DX12 构建 BUILD OK + viewer selftest 16/16；`tools/m-e5-probe.py` 三段跨进程 **30 断言 0 fail**：段1 scene 模式（getMaterials 5 实例字段齐全；setMaterial rough=0.5/tint=[0.25,0.5,0.75] 写回 getMaterials 复读一致；rough=5 clamp 1；坏索引 [99]/[-1] error 100；scene.getState 回归不变）；段2 model 模式（--mode cluster --model Suzanne-materials.nmesh：nmesh.meshlets=711、submeshCount=3、materialId=0/1/2、clusterFirst=0、clusterCount=237×3 与资产实况一致；setMaterial → error 100）；段3 editor.exe 插件扫描（stdout `plugin dll loaded: editor_plugin_hello.dll (Hello (DLL))`；注入坏 DLL → `skipped: missing C ABI exports` 不拖死宿主）。目击证据 `out/m-e5-editor-ui.png`（PrintWindow 免焦点：Material Inspector 5 行材质表 + Hello (DLL) 面板 + Scene Outliner + 嵌入视口 5 Suzanne + Log 载入行）。
+
+**踩坑情况**
+1. **类内成员函数参数类型在声明点必须可见**（inline 函数体可后置）：`setMaterial(..., const Row&)` 写在 `struct Row` 定义前 → C4430/C2664，结构体须挪类体前部。
+2. **`RUNTIME_OUTPUT_DIRECTORY` 的 `CMAKE_CURRENT_BINARY_DIR` 在 editor 子目录上下文 = `build/DX12/editor`**，插件 DLL 落错层；要用 `${CMAKE_BINARY_DIR}/plugins`。
+3. **viewer 侧 `NL_MESHLET_DIR` 不能引用 `${NL_MESHLET_DIR}`**（根 CMake 里它是 renderer 的内联宏定义，非变量）→ 展开空串 loadNMesh 失败被包成 error map；修 `${CMAKE_SOURCE_DIR}/assets/meshlets`。
+4. **editor.exe 的 imgui.ini 按 CWD 解析**（Popen 不带 cwd 落在启动目录）——布局预置须把 cwd 设到 exe 目录。
+5. **python 探针 msgpack 解码需支持 str8(0xd9)**（引擎侧长错误串走 str8）；subprocess 管道用 `communicate(timeout)` 而非 `read(n)`（后者阻塞等 EOF）。
