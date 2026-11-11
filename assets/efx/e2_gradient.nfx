@@ -1,0 +1,89 @@
+{
+  "magic": "NFX1",
+  "source": "hand-authored (M-PT4 acceptance)",
+  "efkVersion": 1610,
+  "emitter": {
+    "rate": [
+      60.0,
+      60.0
+    ],
+    "life": [
+      1.6666667461395264,
+      1.6666667461395264
+    ],
+    "spawnPoint": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "velocityMin": [
+      -0.35,
+      0.35,
+      -0.35
+    ],
+    "velocityMax": [
+      0.35,
+      0.85,
+      0.35
+    ],
+    "accel": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "render": {
+    "blend": "alpha",
+    "colorStart": [
+      255,
+      0,
+      0,
+      255
+    ],
+    "colorEnd": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "size": [
+      0.9,
+      0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "texture": null,
+    "colorCurve": {
+      "colorKeys": [
+        [
+          0.0,
+          255.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.5,
+          0.0,
+          255.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0,
+          255.0
+        ]
+      ],
+      "alphaKeys": [
+        [
+          0.0,
+          120.0
+        ],
+        [
+          1.0,
+          255.0
+        ]
+      ]
+    }
+  }
+}

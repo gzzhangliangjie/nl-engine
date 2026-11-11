@@ -11,8 +11,10 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nl::renderer::detail {
 
@@ -148,7 +150,11 @@ private:
 
     // 模拟参数面（M-PT0 = 内置喷泉常数；M-PT1 起 .nfx 覆写 box 发射分支）。
     struct Params {
-        float rate = 300.0f;                       // 粒子/秒
+        float rate = 300.0f;                       // 粒子/秒（legacy 锚定；nfx 路径用 rateMin/rateSpan）
+        // M-PT4 E1：nfx rate 区间驱动。.nfx emit.rate 本是 [min,max] 二元组，
+        // M-PT1~PT3 在 loadNfx 折均值——本里程碑起按帧随机采样（rateSpan=0 =
+        // 定值，IEEE 恒等：rateMin + rnd*0 = rateMin，存量全定值基线零漂移）。
+        float rateMin = 300.0f, rateSpan = 0.0f;
         float lifeMin = 1.6f, lifeSpan = 0.7f;     // 寿命 [lifeMin, lifeMin+lifeSpan) s
         float spawn[3] = {0.0f, -0.55f, 0.0f};     // 发射点（legacy 锥形发射用）
         float speedMin = 2.0f, speedSpan = 1.0f;   // 锥形初速幅值（legacy）
@@ -158,9 +164,33 @@ private:
         float accel[3] = {0.0f, -9.8f, 0.0f};      // 常加速度（两路共用，legacy = 重力）
         float sizeMin = 0.05f, sizeSpan = 0.05f;   // 尺寸（nfx：sizeSpan=0 定值）
         float ratioY = 1.0f;                       // M-PT2：Y/X 尺寸比（nfx sizeYMin/sizeMin；
-                                                   // legacy/方形恒 1.0，CB g_params.z 下发）
+                                                   // legacy/方形恒 1.0。M-PT5 起 per-particle
+                                                   // sizeY 走 sizeYAbsMin/Span，本字段为
+                                                   // 定值路径（sizeYRange 缺省）的复制源）
+        // M-PT5 R1：per-particle 随机 sizeY（.nfx render.sizeYRange 可选字段，
+        // 绝对米区间）。enabled=false = 无 → spawn 端 ratioY 逐粒子复制 params_.ratioY
+        // （IEEE 恒等，VS 弃 CB 标量 g_params.z 改读实例流后 pt1 定值比例用例逐位同）。
+        bool  sizeYRangeEnabled = false;
+        float sizeYAbsMin = 0.0f, sizeYAbsSpan = 0.0f;
+        // M-PT5 E5：per-particle 旋转（.nfx emitter.ang/angVel 可选字段，弧度
+        // 口径 = vendored Effekseer runtime 直存弧度）。缺省 [0,0] = 无旋转 →
+        // angle 恒 0（VS cos=1/sin=0 IEEE 恒等）。PVA acceleration 子集外。
+        float angMin = 0.0f, angSpan = 0.0f;       // 初始角（弧度）
+        float angVelMin = 0.0f, angVelSpan = 0.0f; // 角速度（弧度/秒）
         float colorStart[4] = {1.0f, 0.85f, 0.35f, 1.0f}; // nfx 颜色 t=0
         float colorEnd[4]   = {1.0f, 0.30f, 0.08f, 1.0f}; // nfx 颜色 t=1
+        // M-PT4 E2：渐变颜色曲线（.nfx 可选 render.colorCurve；enabled=false =
+        // 无，走 colorStart/colorEnd 线性 lerp 原路径逐字保留）。采样全在 CPU
+        // （step 填实例流时），PS 零改动——零 shader 保形风险。键值归一化 0..1
+        // （.nfx 0..255 / 255），t ∈ [0,1] 非降序（loadNfx 从严校验），采样端点
+        // clamp（Effekseer GetColor 同构）。Easing 三次曲线由转换器烘焙成关键帧
+        // （17 样本 ≤ 8bit 输出量化误差），Gradient 直映射（intensity 折进色值，
+        // 仅全等 intensity 收子集）。
+        struct ColorCurve {
+            bool enabled = false;
+            std::vector<std::array<float, 4>> colorKeys; // {t, r, g, b}
+            std::vector<std::array<float, 2>> alphaKeys; // {t, a}
+        } colorCurve;
         float fadeIn = 0.0f, fadeOut = 0.0f;       // nfx alpha 淡入/淡出（秒）
         bool  additive = false;                    // nfx blend（false = alpha blend）
         // M-PT3：flipbook 序列帧（.nfx 可选字段；enabled=false = 无，UV 恒等 [0,1]）。
@@ -178,19 +208,23 @@ private:
         // M-PT2 贴图不走 Params：basename 进成员 textureBasename_（dirty 门控惰性建纹）
     };
 
-    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，48 B）。
-    // M-PT2：sizeY 不进实例流——单发射器子集所有粒子同 Y/X 比，走 CB 标量
-    // g_params.z（ratio=1.0 时 cy*1.0 逐位恒等，legacy/方形基线零漂移）。
+    // GPU 侧实例布局（与 particles.slang 的 ParticleGpu 逐字节对应，64 B）。
+    // M-PT2：sizeY 走 CB 标量 g_params.z（ratio=1.0 时 cy*1.0 逐位恒等）。
     // M-PT3：flipbook progress 每粒子不同 → 实例流扩 float4×3（48 B）。
+    // M-PT5：E5 per-particle 旋转 + R1 per-particle sizeY（拍板 Q3=b）→ 扩
+    // float4×4（64 B）：progressMisc.z = 角度（弧度）、progressMisc.w = 该粒子
+    // Y/X 比、misc2[4] = spare（E3/E4/E8 未来字段，免二次布局级重拍）。
     // 已有成员偏移不变（float4 对齐），world/颜色计算路径逐字保留——
-    // pt0/pt1 基线零漂移靠这一点 + PS 软圆盘分支逐字保留。
+    // angle=0（cos=1/sin=0）+ w=ratioY 时 VS 结果逐位恒等，存量基线零漂移。
     struct ParticleGpu {
-        float posSize[4];    // xyz = 世界位置，w = 尺寸 X（Y = X × g_params.z）
+        float posSize[4];    // xyz = 世界位置，w = 尺寸 X（Y = X × progressMisc.w）
         float colorAlpha[4]; // rgb = 颜色，a = alpha
-        float progressMisc[4]; // x = 生命周期进度 [0,1]（flipbook 帧选择；非
-                               // flipbook 恒 0），yzw 预留
+        float progressMisc[4]; // xy = flipbook 帧号（非 flipbook 恒 0），
+                               // z = 角度（弧度，无旋转恒 0），
+                               // w = 该粒子 Y/X 尺寸比（定值 = ratioY）
+        float misc2[4];      // M-PT5 spare（E3/E4/E8 未来字段）
     };
-    static_assert(sizeof(ParticleGpu) == 48, "ParticleGpu must be 48B");
+    static_assert(sizeof(ParticleGpu) == 64, "ParticleGpu must be 64B");
 
     // CPU 侧模拟状态（SoA 向量化不如确定性重要，AoS 简单直接）。
     struct Sim {
@@ -198,12 +232,19 @@ private:
         float vel[3];
         float life;     // 剩余寿命（秒）
         float maxLife;  // 总寿命（秒，alpha/size 曲线分母）
-        float size;     // 尺寸（米；Y = size × params_.ratioY）
+        float size;     // 尺寸（米）
+        // M-PT5：per-particle 旋转与 Y/X 比（spawn 端折算，step 端 angle 积分）。
+        // legacy 路径恒 (0, 0, 1.0)——VS 恒等链的 CPU 侧锚点。
+        float angle;    // 当前角（弧度；无旋转恒 0）
+        float angVel;   // 角速度（弧度/秒；无旋转恒 0）
+        float ratioY;   // 该粒子 Y/X 比（无 sizeYRange = params_.ratioY 精确复制）
     };
     std::vector<Sim>          pool_;       // 活粒子（spawn 序，swap-remove 摘死者）
     std::vector<ParticleGpu>  gpuData_;    // 每帧重填的绘制流（alive 顺序）
     float                     spawnAccum_ = 0.0f;  // 发射率积分残差（固定 dt 下确定性）
     std::uint32_t             spawnSeq_   = 0;     // RNG 流序号（pcg 输入）
+    std::uint32_t             rateSeq_    = 0;     // M-PT4 E1：rate 采样专用 pcg 序列（与
+                                                // spawnSeq_ 完全独立——新占位禁复用纪律）
     std::uint32_t             aliveCount_ = 0;
 
     Params                     params_;     // 模拟参数面（loadNfx 覆写）
@@ -212,7 +253,7 @@ private:
 
     nvrhi::ShaderHandle           vs_, ps_;
     nvrhi::BufferHandle           constants_;     // volatile CB 112 B（b0）
-    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×3（t0，48 B/实例）
+    nvrhi::BufferHandle           instanceData_;  // StructuredBuffer<float4>×4（t0，64 B/实例）
     nvrhi::BindingLayoutHandle    bindingLayout_;
     nvrhi::BindingSetHandle       bindingSet_;
     nvrhi::GraphicsPipelineHandle pipeline_;          // alpha blend（legacy + nfx 缺省）

@@ -6038,6 +6038,45 @@ float particleRand01(std::uint32_t v) {
     return static_cast<float>(v & 0xFFFFFFu) / 16777215.0f;
 }
 
+// M-PT4 E2：分段线性关键帧采样（端点 clamp；退化段 area==0 取左键——
+// 与 Effekseer Gradient::GetColorAndIntensity/GetAlpha 同构：lower_bound 找段
+// → 线性插值；keys 按 t 非降序，loadNfx 从严校验）。keys 每键 = {t, v...}。
+float particleSampleKey1(const std::vector<std::array<float, 2>>& keys, float t) {
+    if (t <= keys.front()[0]) return keys.front()[1];
+    if (t >= keys.back()[0])  return keys.back()[1];
+    std::size_t i = 1;
+    while (i < keys.size() && keys[i][0] < t) ++i;
+    if (i >= keys.size()) return keys.back()[1];
+    const float area = keys[i][0] - keys[i - 1][0];
+    if (area <= 0.0f) return keys[i - 1][1];
+    const float a = (t - keys[i - 1][0]) / area;
+    return keys[i][1] * a + keys[i - 1][1] * (1.0f - a);
+}
+void particleSampleKey3(const std::vector<std::array<float, 4>>& keys, float t, float out[3]) {
+    if (t <= keys.front()[0]) {
+        out[0] = keys.front()[1]; out[1] = keys.front()[2]; out[2] = keys.front()[3];
+        return;
+    }
+    if (t >= keys.back()[0]) {
+        out[0] = keys.back()[1]; out[1] = keys.back()[2]; out[2] = keys.back()[3];
+        return;
+    }
+    std::size_t i = 1;
+    while (i < keys.size() && keys[i][0] < t) ++i;
+    if (i >= keys.size()) {
+        out[0] = keys.back()[1]; out[1] = keys.back()[2]; out[2] = keys.back()[3];
+        return;
+    }
+    const float area = keys[i][0] - keys[i - 1][0];
+    if (area <= 0.0f) {
+        out[0] = keys[i - 1][1]; out[1] = keys[i - 1][2]; out[2] = keys[i - 1][3];
+        return;
+    }
+    const float a = (t - keys[i - 1][0]) / area;
+    for (int c = 0; c < 3; ++c)
+        out[c] = keys[i][c + 1] * a + keys[i - 1][c + 1] * (1.0f - a);
+}
+
 // 喷泉发射器常数：M-PT1 起参数面进 Particles::Params（scene.hpp），此处只留
 // legacy 锚点使用的发射点与固定步长（nfx 路径经 params_ 覆写）。
 constexpr float kParticleStepDt  = 1.0f / 60.0f;  // 固定逻辑步长（M-GL 物理同款纪律）
@@ -6100,8 +6139,8 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for particle constants"; return false; }
 
-    // 实例数据 SSBO：每实例 48 B（float4×3，M-PT3 扩 progressMisc 段；已有成员
-    // 偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
+    // 实例数据 SSBO：每实例 64 B（float4×4，M-PT5 扩 misc2 spare 段；v0~v2
+    // 成员偏移不变），structStride 必须与 shader 视角一致。每帧 CopyDest 起步
     // （writeBuffer）→ 帧内 SRV 动态晋升（visibleList 同款状态纪律，§2.15）。
     nvrhi::BufferDesc instDesc;
     instDesc.byteSize = kMaxParticles * sizeof(ParticleGpu);
@@ -6283,10 +6322,23 @@ void Particles::step(float dt) {
         p.pos[0] += p.vel[0] * dt;
         p.pos[1] += p.vel[1] * dt;
         p.pos[2] += p.vel[2] * dt;
+        // M-PT5 E5：角度积分（Effekseer rotation velocity 同口径，无旋转恒
+        // angVel=0 → angle += 0.0f*dt = angle IEEE 精确不变）。
+        p.angle += p.angVel * dt;
         ++i;
     }
     // 2. 发射：发射率积分 + floor 取整（固定 dt 下每步发射数确定）。
-    spawnAccum_ += params_.rate * dt;
+    //    M-PT4 E1：nfx 路径 rate 区间驱动——每帧从 rate 专用 pcg 序列（rateSeq_，
+    //    与粒子 spawnSeq_ 流完全独立，新占位禁复用纪律）抽 [rateMin, rateMin+rateSpan]。
+    //    rateSpan=0 时 rRate = rateMin + rnd*0 = rateMin（IEEE 精确恒等），存量
+    //    定值 .nfx 与旧均值口径逐位同 → pt1~pt3 基线零漂移。legacy 路径逐字保留。
+    float rateThisFrame = params_.rate;
+    if (nfxActive_) {
+        const float rRate = particleRand01(particleHash(rateSeq_ * 11u + 0x5EED1u));
+        rateThisFrame = params_.rateMin + rRate * params_.rateSpan;
+        ++rateSeq_;
+    }
+    spawnAccum_ += rateThisFrame * dt;
     std::uint32_t spawn = static_cast<std::uint32_t>(spawnAccum_);
     spawnAccum_ -= static_cast<float>(spawn);
     for (std::uint32_t k = 0; k < spawn && pool_.size() < kMaxParticles; ++k) {
@@ -6310,6 +6362,8 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin + rSize * params_.sizeSpan;
+            // M-PT5：legacy 恒无旋转/方形（VS 恒等链的 CPU 侧锚点）。
+            p.angle = 0.0f; p.angVel = 0.0f; p.ratioY = 1.0f;
         } else {
             // ---- M-PT1 .nfx：box 初速 min/max 逐轴 lerp + 定长寿命/尺寸 ----
             const float rv0 = particleRand01(particleHash(s * 5u + 0u));
@@ -6325,6 +6379,19 @@ void Particles::step(float dt) {
             p.maxLife = params_.lifeMin + rLife * params_.lifeSpan;
             p.life = p.maxLife;
             p.size = params_.sizeMin;
+            // M-PT5 E5/R1：新随机槽（s*7u+0x100u+{0,1,2}，输入空间与旧 5 槽
+            // s*5u+{0..4} 永不相交——2s=slot-256 无解——存量字段公式一字不动
+            // = 逐位零漂移）。span=0 时 min + rnd*0 = min（IEEE 恒等，与 M-PT4
+            // E1 rate span=0 论证同构）：无旋转资产 angle 恒 0、无 sizeYRange
+            // 资产 ratioY 逐粒子复制 params_.ratioY（与 CB 标量同值同位模式）。
+            const float rAng   = particleRand01(particleHash(s * 7u + 0x100u + 0u));
+            const float rAngV  = particleRand01(particleHash(s * 7u + 0x100u + 1u));
+            const float rSizeY = particleRand01(particleHash(s * 7u + 0x100u + 2u));
+            p.angle  = params_.angMin + rAng * params_.angSpan;
+            p.angVel = params_.angVelMin + rAngV * params_.angVelSpan;
+            p.ratioY = params_.sizeYRangeEnabled
+                     ? (params_.sizeYAbsMin + rSizeY * params_.sizeYAbsSpan) / params_.sizeMin
+                     : params_.ratioY;
         }
         pool_.push_back(p);
     }
@@ -6346,8 +6413,23 @@ void Particles::step(float dt) {
             const float aIn  = std::min(1.0f, t * 8.0f);
             const float aOut = std::min(1.0f, (1.0f - t) * 3.0f);
             g.colorAlpha[3] = aIn * aOut;
+        } else if (params_.colorCurve.enabled) {
+            // M-PT4 E2：colorCurve 关键帧采样（RGB 三键 + alpha 键；fadeIn/fadeOut
+            // 乘在曲线上，与线性路径同口径）。CPU 采样零 shader 改动。
+            float rgb[3];
+            particleSampleKey3(params_.colorCurve.colorKeys, t, rgb);
+            g.colorAlpha[0] = rgb[0];
+            g.colorAlpha[1] = rgb[1];
+            g.colorAlpha[2] = rgb[2];
+            float aIn = 1.0f, aOut = 1.0f;
+            if (params_.fadeIn > 0.0f)
+                aIn = std::min(1.0f, (1.0f - p.life / p.maxLife) * p.maxLife / params_.fadeIn);
+            if (params_.fadeOut > 0.0f)
+                aOut = std::min(1.0f, p.life / params_.fadeOut);
+            g.colorAlpha[3] = particleSampleKey1(params_.colorCurve.alphaKeys, t) * aIn * aOut;
         } else {
-            // nfx：colorStart→colorEnd 线性 lerp；fadeIn/fadeOut（秒）乘积曲线。
+            // nfx：colorStart→colorEnd 线性 lerp（M-PT1 原式逐字保留，基线字节复现前提）；
+            // fadeIn/fadeOut（秒）乘积曲线。
             g.colorAlpha[0] = params_.colorStart[0] + (params_.colorEnd[0] - params_.colorStart[0]) * t;
             g.colorAlpha[1] = params_.colorStart[1] + (params_.colorEnd[1] - params_.colorStart[1]) * t;
             g.colorAlpha[2] = params_.colorStart[2] + (params_.colorEnd[2] - params_.colorStart[2]) * t;
@@ -6382,7 +6464,12 @@ void Particles::step(float dt) {
         } else {
             g.progressMisc[0] = 0.0f; g.progressMisc[1] = 0.0f;
         }
-        g.progressMisc[2] = 0.0f; g.progressMisc[3] = 0.0f;
+        // M-PT5：z = 该粒子角度（弧度，无旋转恒 0 → VS cos/sin IEEE 恒等），
+        // w = 该粒子 Y/X 比（定值 = params_.ratioY 精确复制 → 与旧 CB 标量
+        // g_params.z 同值，VS cy*w 逐位同 cy*z）。misc2 = spare 恒 0。
+        g.progressMisc[2] = p.angle;
+        g.progressMisc[3] = p.ratioY;
+        g.misc2[0] = 0.0f; g.misc2[1] = 0.0f; g.misc2[2] = 0.0f; g.misc2[3] = 0.0f;
         gpuData_.push_back(g);
     }
     aliveCount_ = static_cast<std::uint32_t>(gpuData_.size());
@@ -6559,7 +6646,10 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     size[1] = r["size"][1].get<float>();
 
     Params p;             // 从 NFX1 缺省起折算（不复带 legacy 字段）
-    p.rate = 0.5f * (rate[0] + rate[1]);            // min/max 取均值（区间留档在 .nfx）
+    // M-PT4 E1：rate 区间驱动（原「0.5*(min+max) 取均值」降级移除）。span=0 =
+    // 定值，step 端 IEEE 恒等；负 span 钳 0（min>max 视作定值 min）。
+    p.rateMin = rate[0];
+    p.rateSpan = rate[1] > rate[0] ? (rate[1] - rate[0]) : 0.0f;
     p.lifeMin = life[0];
     p.lifeSpan = life[1] > life[0] ? (life[1] - life[0]) : 0.0f;
     p.spawn[0] = spawn[0]; p.spawn[1] = spawn[1]; p.spawn[2] = spawn[2];
@@ -6578,6 +6668,91 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     p.fadeOut = r.value("fadeOut", 0.0f);
     std::string blend = r.value("blend", "alpha");
     p.additive = (blend == "additive");
+
+    // M-PT5 E5：可选旋转（emitter.ang / emitter.angVel，弧度区间 = vendored
+    // Effekseer runtime 口径）。缺省/缺字段 = 无旋转（angSpan=angVelSpan=0 →
+    // spawn 端 angle 恒 0，VS cos=1/sin=0 IEEE 恒等）。校验从严——畸形即拒。
+    if (e.contains("ang") || e.contains("angVel")) {
+        if (!e.contains("ang") || !e.contains("angVel") ||
+            !e["ang"].is_array() || e["ang"].size() != 2 ||
+            !e["angVel"].is_array() || e["angVel"].size() != 2) {
+            outError = ".nfx malformed ang/angVel (want [min,max] radian pairs)";
+            return false;
+        }
+        const float aMin = e["ang"][0].get<float>();
+        const float aMax = e["ang"][1].get<float>();
+        const float aVelMin = e["angVel"][0].get<float>();
+        const float aVelMax = e["angVel"][1].get<float>();
+        p.angMin = aMin;
+        p.angSpan = aMax > aMin ? (aMax - aMin) : 0.0f;   // 负区间钳 0（同 rate 口径）
+        p.angVelMin = aVelMin;
+        p.angVelSpan = aVelMax > aVelMin ? (aVelMax - aVelMin) : 0.0f;
+    }
+
+    // M-PT5 R1：可选 per-particle sizeY（render.sizeYRange，绝对米区间；折算
+    // 成 Y/X 比进实例流，VS 弃 CB 标量 g_params.z）。缺省 = 无 → sizeYRange
+    // 不启用，spawn 端 ratioY 逐粒子复制 params_.ratioY（与旧 CB 同值恒等）。
+    if (r.contains("sizeYRange")) {
+        if (!r["sizeYRange"].is_array() || r["sizeYRange"].size() != 2) {
+            outError = ".nfx malformed sizeYRange (want [min,max] meter pair)";
+            return false;
+        }
+        const float syMin = r["sizeYRange"][0].get<float>();
+        const float syMax = r["sizeYRange"][1].get<float>();
+        if (!(syMin > 0.0f) || !(syMax > 0.0f)) {
+            outError = ".nfx sizeYRange values must be > 0";
+            return false;
+        }
+        p.sizeYRangeEnabled = true;
+        p.sizeYAbsMin = syMin;
+        p.sizeYAbsSpan = syMax > syMin ? (syMax - syMin) : 0.0f;
+    }
+
+    // M-PT4 E2：可选 colorCurve（缺省/缺字段 = 无 → 走 colorStart/colorEnd 线性
+    // lerp 原路径）。校验从严——畸形即拒（返回 false，加载端保持 legacy 参数）。
+    // 键值单位与 colorStart/colorEnd 一致为 0..255，此处在校验通过后归一化 0..1；
+    // t ∈ [0,1] 非降序（NaN 因比较恒 false 一并拒）。
+    if (r.contains("colorCurve")) {
+        const nlohmann::json& cc = r["colorCurve"];
+        if (!cc.is_object() || !cc.contains("colorKeys") || !cc.contains("alphaKeys") ||
+            !cc["colorKeys"].is_array() || !cc["alphaKeys"].is_array() ||
+            cc["colorKeys"].empty() || cc["alphaKeys"].empty()) {
+            outError = ".nfx malformed colorCurve object";
+            return false;
+        }
+        auto parseKeys = [](const nlohmann::json& arr, int nch,
+                            std::vector<std::array<float, 4>>& out4,   // colorKeys 落这里
+                            std::vector<std::array<float, 2>>& out2,   // alphaKeys 落这里
+                            bool isColor) -> bool {
+            float prevT = -1.0f;
+            for (const auto& k : arr) {
+                if (!k.is_array() || static_cast<int>(k.size()) != nch + 1) return false;
+                const float t = k[0].get<float>();
+                if (!(t >= 0.0f && t <= 1.0f) || t < prevT) return false;
+                if (isColor) {
+                    std::array<float, 4> v = {t, 0.0f, 0.0f, 0.0f};
+                    for (int c = 0; c < 3; ++c) {
+                        const float x = k[c + 1].get<float>();
+                        if (!(x >= 0.0f && x <= 255.0f)) return false;
+                        v[c + 1] = x / 255.0f;
+                    }
+                    out4.push_back(v);
+                } else {
+                    const float a = k[1].get<float>();
+                    if (!(a >= 0.0f && a <= 255.0f)) return false;
+                    out2.push_back({t, a / 255.0f});
+                }
+                prevT = t;
+            }
+            return true;
+        };
+        if (!parseKeys(cc["colorKeys"], 3, p.colorCurve.colorKeys, p.colorCurve.alphaKeys, true) ||
+            !parseKeys(cc["alphaKeys"], 1, p.colorCurve.colorKeys, p.colorCurve.alphaKeys, false)) {
+            outError = ".nfx colorCurve keys out of range (want [t,r,g,b]/[t,a], t 0..1 non-decreasing, values 0..255)";
+            return false;
+        }
+        p.colorCurve.enabled = true;
+    }
 
     // M-PT3：flipbook 可选字段（缺省/缺字段 = 无）。字段校验从严——畸形即拒
     // （exit 路径返回 false，加载端保持 legacy 参数不变）。
@@ -6633,6 +6808,7 @@ bool Particles::loadNfx(const char* path, std::string& outError) {
     aliveCount_ = 0;
     spawnAccum_ = 0.0f;
     spawnSeq_ = 0;
+    rateSeq_ = 0;   // M-PT4 E1：rate 采样序列随时间线归零
     return true;
 }
 
@@ -6667,6 +6843,7 @@ void Particles::shutdown() {
     aliveCount_ = 0;
     spawnAccum_ = 0.0f;
     spawnSeq_   = 0;
+    rateSeq_    = 0;   // M-PT4 E1：rate 采样序列同步归零
 }
 
 void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
