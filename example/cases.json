@@ -8278,6 +8278,57 @@
      "command": "nav-tools query example/nav-n1/hiz-a.nnav --start -1.8,0,-2.0 --end -1.0,0,-1.0 --max-nodes 1"
     }
    ]
+  },
+  {
+   "id": "s10-place",
+   "label": "S10.0",
+   "name": "屏幕探针 cascade 布点 + velocity prepass（M10.0）",
+   "tag": "s10-place",
+   "date": "2026-11-11",
+   "summary": "M10.0（S10 第一步，屏幕探针 GI 布点）：Q10-1 拍板 velocity 写入形态 = 独立 velocity prepass pass（vsVelocity/psVelocity，自建 probeDepth_ D32——共享 backend depth_ 是 keepInitialState 永驻态不能切 SRV，UE velocity pass 自带 depth 口径），velocity.xy = curUV-prevUV 写 RG16F；Q10-2 拍板探针 cascade 数据形态 = 每级一张 RGBA32F atlas（rgb=探针世界位置+a=deviceZ）×2 帧 ping-pong。csPlace 单 dispatch 复用细级线程兼粗级：屏幕格点→深度反投影世界位置→深度邻域 3-tap 重建法线（GBuffer 不落盘 Q4 冻结，纯 compute 无 ddx/ddy）→法线偏移（UE NormalBias 口径 worldPerPixel=2z/(projYScale·H)×stridePx）；level0 探针读 velocity 算 prevUV 增量写 prevDelta_（越界写 1e9）→viz 白点 = 时域链路机器可见证据。vsProbeDots/psProbeDots 探针点可视化：世界位置反投影回屏扩 quad，按级着色 L0 红/L1 绿/L2 蓝/L3 黄（近密远疏直接证据），无效探针（a=0 天空）NaN 剔除。静态相机首帧 prevViewProj=本帧 → velocity=0 → 白点 0 = 截图基线稳态。HUD probe 面板三滑条双向（baseRes 4..32 / normalOffset / dotSize）。踩坑实录：NVRHI ComparisonFunc 是 LessOrEqual 非 LessEqual；dispatch 是三参非 DispatchArguments；shader 产物命名 = 文件名.小写入口.后缀（velocity.vsvelocity 非 velocity.vs）；velocity_/probeDepth_ 创建态必须与帧首 beginTracking 声明对齐（SRV+keepInitialState，hdrSceneColor_ 同款），否则首帧 DX12 ECL 校验 fail。L3 黄点 2×2 网格在本机位纯几何巧合全落天空被剔除（dots 工具不硬断言 L3，dist=4 时红/绿/蓝三级全可见）。基线 dist=4 双后端 near 0 像素差异。kStage 仍 S8.2；Q4 冻结面 0 新增独立 GBuffer 资源。",
+   "acceptance": [
+    "run.bat verify 六段全绿：双后端 exit 0 + deviceErrors=0 + bytes 2/2 对基线 + 日志锚 probe: cascades=4 base=16 grid=16/8/4/2 probes=340 + near dx12/vulkan 0 像素差异 + dots 覆盖断言（red>green>blue 单调 = 近密远疏）+ 负向 exit 1",
+    "探针点可视化四级着色 + NaN 天空剔除正确；velocity prepass 与 csPlace 的 SRV/UAV 状态链 deviceErrors=0（双后端）",
+    "双后端 viewer selftest 16/16 + Slang 产物 84/84（新增 velocity 4 + probe 2 + probe_viz 4 共 10 个已登记 kArtifacts 防假绿）",
+    "Q4 冻结面 0 新增独立 GBuffer 资源（法线深度邻域重建）；kStage 仍 S8.2；tag s10-place"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "probe-place",
+     "name": "屏幕探针 cascade 布点 + 点可视化（velocity prepass 独立 pass）",
+     "kind": "pair",
+     "note": "M10.0 新增 --mode probe-place：velocity prepass（vsVelocity/psVelocity 写 RG16F）+ csPlace 4 级 cascade 布点（RGBA32F atlas ×2 帧 ping-pong）+ 探针点 viz（L0 红/L1 绿/L2 蓝/L3 黄；L3 2x2 网格本机位纯几何巧合全落天空不硬断言）。基线取自 tag s10-place 构建产物（双后端）。同名 .json 侧车记录相机/probe 参数。dist=4 使红/绿/蓝三级全可见（dist=9 时 L2 4x4 网格相位与模型轮廓擦边蓝点为 0，非 bug）。",
+     "baselines": {
+      "dx12": "example/s10-place/place-dx12.png",
+      "vulkan": "example/s10-place/place-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "probe-place",
+      "--model",
+      "Suzanne.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4"
+     ],
+     "command": "viewer.exe --mode probe-place --model Suzanne.nmesh --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4",
+     "script": "example/s10-place/run.bat verify"
+    }
+   ]
   }
  ]
 }

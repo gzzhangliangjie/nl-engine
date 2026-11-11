@@ -7,8 +7,13 @@
 
 ## M10.0 Cascade 布点（2 天）
 
+> **M10.0 拍板记录（2026-11-11 用户拍板「尽量按照 UE 的思路来」）**：
+> - **Q10-1 velocity 写入形态 = 独立 velocity prepass pass**（UE VelocityDepthStencil pass / bevy prepass 口径）：单独一条小 pass 画一遍几何，双帧矩阵 + `unjittered` 剥离 jitter 写 `velocity_`（RG16_FLOAT，T0 已建），天空像素补写 0；不碰 6 组按 hdrInfo 重建的 PSO/framebuffer；compute 主导模式（cull/dag/hiz viz）与探针布点均只对 raster 场景模式生效，viz 模式不开 velocity prepass。方案 B（主 pass 附加 MRT）否决。
+> - **Q10-2 探针 cascade 数据形态 = 每级一张 R32G32B32A32 atlas 小纹理 + 上一帧同规格 ping-pong**（UE 以 atlas 纹理存 probe 位置/深度的口径）：4 级（16×16→2×2）各存 `worldPos.xyz+depth`，共 8 张微纹理；**法线不落盘**，探针处法线用 `gbuffer_common.slangh` 即取即算（守 Q4 冻结面）。方案 B（StructuredBuffer）、C（不持久化，重投影落空）否决。
+> - **口径备注**：UE 屏幕探针实为单级均匀网格（DownsampleFactor=16）+ 自适应加密，屏幕空间无 cascade；4 级 cascade 是本项目自设计（自检目标「近密远疏」），GI-RESEARCH-NOTES §1 已确认，自适应加密列 S14 可选升级。
+
 - [ ] 4 级 cascade：逐级分辨率减半、间距加倍（16×16 起步，参数进 ImGui）
-- [ ] 探针位置：屏幕像素反投影 → 与深度求交 → 沿法线偏移；重投影上一帧探针（velocity 由 **T0 里程碑**落地，直接读 T0 的 `RG16_FLOAT` velocity 纹理，不再走 M12 简化版占位）
+- [ ] 探针位置：屏幕像素反投影 → 与深度求交 → 沿法线偏移；重投影上一帧探针（velocity 由 **T0 里程碑**落地，直接读 T0 的 `RG16_FLOAT` velocity 纹理，不再走 M12 简化版占位；写入形态按 Q10-1 独立 prepass 落地）
 - [ ] 探针参数表（级数/分辨率/间距）集中头文件
 
 **自检**：探针位置可视化（画小点）覆盖屏幕、近密远疏。tag：`s10-place`。

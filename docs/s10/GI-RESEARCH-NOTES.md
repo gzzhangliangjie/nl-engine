@@ -46,7 +46,7 @@
 - UE 探针级时域在 `LumenScreenProbeGatherTemporal.usf`（ScreenProbeTemporalReprojectionCS），是**探针重投影**（probe→probe），像素级滤波另有链路；我们 S12 的「空间联合双边 + 时间累积 + 历史拒绝」按 SVGF 思路自建，口径不变。
 - bevy 世界缓存的 luminance-delta 自适应混合（见上表）同样适用于像素级时间累积的历史长度控制——S12 的「历史长度 ImGui 可调」参数化时可直接参考 `alpha^(1/8)` 曲线。
 - Carrot 有现成 `svgf.slang` / `denoise-direct.slang` 可作 S12 结构参照（过一遍入口名即可，实现期再精读）。
-- motion vector：S10-PLAN 已注「复用 M12 的 motion vector，先做简化版（同屏位置直接挪）」——与 UE 探针重投影一致（UE 也是先重投影探针格，非逐像素），维持原案。
+- motion vector：~~S10-PLAN 已注「复用 M12 的 motion vector，先做简化版（同屏位置直接挪）」~~ **已勘误（2026-11-11 M10.0 开工拍板）**：旧案作废，改为 T0 已建好的 `velocity_`（RG16_FLOAT）逐像素真 motion vector；探针重投影走 probe→probe 查 velocity（UE 的 ScreenProbeTemporalReprojectionCS 同为先重投影探针格、非逐像素滤波）。
 
 ## 4. 历史约定核对（不新增偏离）
 

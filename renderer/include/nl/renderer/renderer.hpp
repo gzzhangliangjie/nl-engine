@@ -116,6 +116,13 @@ struct FrameParams {
     // 基线一像素不动）。开启时 renderer 每帧固定步长（1/60s）步进 CPU 模拟并
     // instanced billboard 绘制（主场景后、HUD 前，alpha blend 深度测试开写入关）。
     bool  particles   = false;
+
+    // ---- M10.0：--mode probe-place 探针布点参数（其它模式不读，缺省 = 默认值）。
+    // HUD 双向通道同 shading（viewer 持 local，滑条写回后回填）。baseRes 变化会
+    // 触发 atlas 纹理按参数 hash 重建（ensureProbeTargets 闸内）。
+    int   probeBaseRes      = 16;     // 0 级 cascade 分辨率（4..32；1~3 级逐级减半）
+    float probeNormalOffset = 0.10f;  // 法线偏移系数（× 探针世界间距，UE NormalBias 口径）
+    float probeDotSize      = 3.0f;   // viz 点半径（px）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -219,6 +226,14 @@ struct HudFrame {
     // ---- M-PT0：粒子证据行（仅 particles 模式显示，其它模式一像素不动）。
     bool  particlesEnabled    = false;
     int   particleAlive       = 0;
+
+    // ---- M10.0：探针 cascade 参数面板（仅 probe-place 模式且 HUD 开时画；
+    // 双向通道同 hizEnable：viewer 传当前值，滑条写回，viewer 回填 FrameParams）。
+    bool  probePanelShow      = false;
+    int   probeBaseRes        = 16;     // 双向（4..32）
+    float probeNormalOffset   = 0.10f;  // 双向（× 探针世界间距）
+    float probeDotSize        = 3.0f;   // 双向（px）
+
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
     bool  screenErrorValid = false;   // 球数据可用（dag-top 模式 + .nmesh 有球）
@@ -350,7 +365,11 @@ public:
                                             bool shadowMode = false,
                                             // M9.2：--mode reference（离线参考模式；
                                             // 走 initVisbuf(pulling) 资产链 + 共用 rtTarget_）。
-                                            bool referenceMode = false);
+                                            bool referenceMode = false,
+                                            // M10.0：--mode probe-place（屏幕探针 cascade
+                                            // 布点；走 initVisbuf(pulling) 资产链 +
+                                            // velocity prepass + 布点 compute + 点可视化）。
+                                            bool probeMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

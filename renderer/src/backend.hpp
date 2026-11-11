@@ -43,11 +43,14 @@ public:
     // 光栅而不是 S4 的常规着色路径。
     // rtMode（M8.2）走 initDag 资产链拿 BLAS/TLAS，渲染只做 RayQuery compute + 呈现。
     // shadowMode（M9.0）走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现。
+    // probeMode（M10.0）走 initVisbuf(pulling) 资产链 + velocity prepass + cascade
+    // 布点 compute + 探针点可视化。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-                     bool shadowMode, bool referenceMode, std::string& outError) = 0;
+                     bool shadowMode, bool referenceMode, bool probeMode,
+                     std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

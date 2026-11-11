@@ -683,7 +683,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool skinMode = false, bool hizMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
-              bool shadowMode = false, bool referenceMode = false) {
+              bool shadowMode = false, bool referenceMode = false,
+              bool probeMode = false) {
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
@@ -711,7 +712,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode, referenceMode);
+                                                   shadowMode, referenceMode, probeMode);
     if (!renderer->valid()) {
         nl::core::log::error("renderer init failed: ", renderer->lastError());
         return 1;
@@ -870,6 +871,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 显式 --shading 则听用户的。
     if (dagTop) shading = o.shadingSet ? o.shading : 1;
     bool wireframe = o.wireframe;
+    // M10.0：probe-place 探针参数（HUD 滑条双向；FrameParams 缺省值已在 renderer.hpp）。
+    int probeBaseRes = 16;
+    float probeNormalOffset = 0.10f;
+    float probeDotSize = 3.0f;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -1214,6 +1219,17 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             camera.eyePosition(rtEye);
             fp.eye[0] = rtEye[0]; fp.eye[1] = rtEye[1]; fp.eye[2] = rtEye[2];
         }
+        // M10.0：probe-place——eye/projYScale（探针法线偏移公式输入）独立填，
+        // 不借 dag/hiz 分支（viz 模式不开 velocity prepass 也一样要布点）。
+        if (probeMode) {
+            float prEye[3];
+            camera.eyePosition(prEye);
+            fp.eye[0] = prEye[0]; fp.eye[1] = prEye[1]; fp.eye[2] = prEye[2];
+            fp.projYScale = camera.projectionYScale();
+        }
+        fp.probeBaseRes = probeBaseRes;
+        fp.probeNormalOffset = probeNormalOffset;
+        fp.probeDotSize = probeDotSize;
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -1472,6 +1488,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.hizEnable = hizEnabled;
                 hud.hizOccluded = info.hizOccluded;
             }
+            // M10.0：探针参数面板（probe-place 模式专属；双向通道同 hizEnable）。
+            if (probeMode) {
+                hud.probePanelShow = true;
+                hud.probeBaseRes = probeBaseRes;
+                hud.probeNormalOffset = probeNormalOffset;
+                hud.probeDotSize = probeDotSize;
+            }
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
                 hud.fps = 60.0f;
@@ -1575,6 +1598,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             if (hud.resetCamera) camera.reset();
             cullBack = hud.cullBack;
             if (hizMode) hizEnabled = hud.hizEnable;   // M6.2：开关写回
+            // M10.0：探针滑条写回（clamp 同 ensureProbeTargets 闸口径 4..32）。
+            if (probeMode) {
+                probeBaseRes = std::clamp(hud.probeBaseRes, 4, 32);
+                probeNormalOffset = hud.probeNormalOffset;
+                probeDotSize = hud.probeDotSize;
+            }
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
             // 非簇场景唯一非法值是 4=cluster（无 CLUSTERCOLOR 属性）；5=pbr 合法
             //（psMain 的 pbr 分支，pbr-direct 起放开）。
@@ -2690,6 +2719,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/false, /*pullingMode=*/false,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/true);
+    case nl::core::ViewMode::ProbePlace: // M10.0：屏幕探针 cascade 布点 + 点可视化
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::error("mode has no implementation yet: ", name ? name : "<unknown>");
@@ -2801,7 +2836,7 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
          o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling ||
          o.mode == nl::core::ViewMode::Rt || o.mode == nl::core::ViewMode::Shadow ||
-         o.mode == nl::core::ViewMode::Reference)
+         o.mode == nl::core::ViewMode::Reference || o.mode == nl::core::ViewMode::ProbePlace)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

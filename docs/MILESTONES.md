@@ -2525,3 +2525,19 @@
 5. **overlay 深度遮蔽**：首版自建 t0Depth_ 使场景深度离开 backend depth_ → gl5/particles/drive-m3 三族 FAIL（overlay 对空深度测试，遮挡全失效）。修复 = 深度共享（方案见上）。教训：**「已知行为差异仅调试开关开启时有」的评估要拿回归卡核对，不能凭印象**（gl5/drive-m3 用例真开了 debugLines/particles）。
 
 **下一步**：S10 VSM / M10.0 消费 `velocity_`（T3 写入：velocity.slang + 双帧矩阵 + unjittered）；S12 M12.0 消费 history ping-pong（T4）。Q4「GBuffer 落盘形态」与 S10/S12 需求一起拍（维持推迟）。`kStage` 仍 S8.2。
+
+## M10.0：屏幕探针 cascade 布点 + velocity prepass（2026-11-11，tag `s10-place`）
+
+**动作**：M10.0（S10 第一步，屏幕探针 GI 布点；2026-11-11 用户「尽量按照 UE 的思路来」拍板 Q10-1/Q10-2）落地。① Q10-1 velocity 写入形态 = 独立 velocity prepass pass（`velocity.slang` vsVelocity/psVelocity：GPU pulling 同款间接几何换自己的 VS/PS 与 `velocityFb_` = `velocity_`+自建 `probeDepth_` D32；velocity.xy=curUV-prevUV 写 RG16F）——共享 backend `depth_` 是 keepInitialState 永驻态不能切 SRV，probe 模式自建深度（UE velocity pass 自带 depth 口径）；② Q10-2 探针 cascade 数据形态 = 每级一张 RGBA32F atlas ×2 帧 ping-pong（`probeAtlas_[2][4]`，rgb=探针世界位置+a=deviceZ，a=0=天空）；③ `probe.slang::csPlace` 单 dispatch 复用细级线程兼粗级：屏幕格点→深度反投影世界位置→深度邻域 3-tap 反投影 cross 重建法线（GBuffer 不落盘 Q4 冻结，纯 compute 无 ddx/ddy）→法线偏移（UE NormalBias 口径 `worldPerPixel=2z/(projYScale·H)×stridePx`）；level0 探针读 velocity 算 prevUV 增量写 `probePrevDelta_`（越界写 1e9）；④ `probe_viz.slang` vsProbeDots/psProbeDots 探针点可视化：atlas 世界位置反投影回屏扩 quad，按级着色 L0 红/L1 绿/L2 蓝/L3 黄（近密远疏直接证据），无效探针（a=0）NaN 剔除，prevDelta>1e-5 白点 = 时域链路机器可见证据；⑤ viewer/HUD 接线：`--mode probe-place` 五处注册 + probe 三滑条双向（baseRes 4..32 / normalOffset / dotSize）+ runMode case + 模式白名单 + 缺省 Suzanne.nmesh；⑥ 新 shader 入口 velocity.vsvelocity/psvelocity + probe.csplace + probe_viz.vsprobedots/psprobedots 三处登记（CMake `_ENTRIES_*` ×3 + selftest kArtifacts 10 个）；⑦ `tools/check-s10-place.py` dots 门禁（红/绿/蓝覆盖 + red>green>blue 单调）+ `example/s10-place/` 卡（双后端基线 + json 侧车 + run.bat verify 六段）+ cases.json s10-place 卡。UE 口径备注：UE LumenScreenProbeGather 是单级均匀网格 + 自适应加密，4 级 cascade 是本项目自设计（研究笔记确认），自适应加密列 S14 可选。
+
+**提交版本**：master 本收口 commit（annotated tag `s10-place`）。M10.0 非 S* 大版本收官 → 不建 milestone 分支、不 bump `kStage`（仍 S8.2）。
+
+**完成情况**：双后端 `build-m0.2.bat` + selftest **16/16 ×2**、Slang 产物 **84/84**（新增 velocity 4 + probe 2 + probe_viz 4 共 10 个）。`example/s10-place/run.bat verify` **ALL GREEN**（双后端 exit 0 + deviceErrors=0 + bytes 2/2 + 日志锚 `probe: cascades=4 base=16 grid=16/8/4/2 probes=340` + near dx12/vulkan **0 像素差异** + dots 覆盖 red=987/green=256/blue=54 单调 + 负向 exit 1）。保形 spot：s10-place 2/2 + s7.2/pulling 2/2 + s6.2/hiz-toggle-front 2/2 + s9-reference/reference 2/2 全 **bytes**。`server.py --check` exit 0（stage=S8.2 version=s8.2 cases=2 baselines=4）。Q4 冻结面 0 新增独立 GBuffer 资源（法线深度邻域重建）。
+
+**踩坑情况**
+1. **NVRHI API 三个想当然**：`ComparisonFunc::LessEqual` 实为 `LessOrEqual`；compute dispatch 是 `cmd->dispatch(x,y,z)` 三参（无 `DispatchArguments` 类型）；`RG32F` typed UAV store 是 DX12 可选特性（prevDelta 退 RGBA32F）。
+2. **shader 产物命名**：产物 = `文件名.小写入口.后缀`（`velocity.vsvelocity.spv`）——kArtifacts 写 `velocity.vs` 短名 → selftest BAD(-1B) 假失败；loadShader 同名错 → 运行时加载失败。**教训：产物名三处登记必须逐字同口径，直拉 slangc 编译成功 ≠ 登记名正确。**
+3. **创建态必须与帧首声明对齐（DX12 ECL 铁律）**：`velocity_`（T0 建时无 initialState=COMMON）/`probeDepth_`（首版 initialState=DepthWrite）与帧首 `beginTrackingTextureState(SRV)` 声明不符 → 首帧 DX12 ECL 校验 fail（barrier 起点 SRV ≠ 实际布局）。修复 = 创建态 `ShaderResource` + keepInitialState（hdrSceneColor_ 同款）；另 clear value 必须与创建期一致（perf 警告计 deviceErrors）。
+4. **粗级探针落天空是设计行为不是 bug**：dist=9 时 L2（4×4 网格）与模型轮廓相位擦边蓝点=0；dist=4 三级全可见（987/256/54）。**教训：探针全屏网格落在背景的探针按 a=0 剔除（UE 同款），基线机位要让模型占屏足够大才能给全级覆盖证据；dots 门禁不硬断言 L3（2×2 网格落模型概率纯几何）。**
+
+**下一步**：S10 M10.1（探针照明 gather：屏幕探针向 M9.2 直光真值 / VSM 取照明写 irradiance atlas）；`probePrevDelta_`/prevUV 链路 M10.1 时域复用；Q4 冻结面维持（0 新增独立 GBuffer 资源）；`kStage` 仍 S8.2。
