@@ -9,6 +9,7 @@
 #include <string>
 
 #include "nl/renderer/input_debug.hpp"   // P8 M-I2：HudFrame::inputDebug 的 POD 定义
+#include "nl/renderer/nav_panel.hpp"     // P8 M-N2：HudFrame::navPanelState 的 POD 定义
 
 namespace nl::renderer {
 
@@ -252,6 +253,10 @@ struct HudFrame {
     // ---- T1：材质图编辑器（viewer 创建并持有；null = 不画编辑器窗口，
     // 既有模式基线一像素不动。ImGui/node-editor 符号封在 renderer/src/editor.cpp）----
     class NodeEditor* editor = nullptr;
+    // ---- P8 M-N2：NavMesh 调参/五阶段面板（--nav-panel 时 viewer 挂入；
+    // null = 不画。POD 状态与画布见 nav_panel.hpp，ImGui 封在 nav_panel.cpp）----
+    class NavPanel* navPanel = nullptr;
+    NavPanel::State navPanelState;
     // ---- P8 M-I2：input-hud 调试面板（--mode input-hud 时 viewer 置 show；
     // false = 零布局，既有基线不动。POD 定义与绘制接口见 input_debug.hpp，
     // ImGui 符号封在 renderer/src/input_debug.cpp）----

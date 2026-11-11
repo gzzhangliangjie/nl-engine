@@ -1,0 +1,67 @@
+nav selftest:
+  ok synthetic bake succeeds
+  ok polys > 0
+  ok area > 0
+  ok area < full floor (obstacle eroded)
+  ok second bake succeeds
+  ok save a
+  ok save b
+  ok determinism: artifacts byte-identical
+  fnv64 a    : e7349583a994928d
+  ok roundtrip save 0
+  ok roundtrip load
+  ok roundtrip stats equal
+  ok roundtrip save 1
+  ok roundtrip: bytes identical
+  ok negative: empty geometry rejected
+  ok negative: vertical wall only rejected
+  ok negative: missing file rejected
+  ok negative: garbage magic rejected
+  ok query: diagonal reachable = OK
+  ok query: diagonal waypoints >= 2
+  ok query: last waypoint lands on end
+  ok query: around obstacle = OK
+  ok query: detour longer than straight line, >2 waypoints
+  ok query: detour avoids obstacle interior
+  ok query: disconnected island = UNREACHABLE
+  ok query: UNREACHABLE still returns best-effort prefix
+  ok query: tiny node budget = OUT_OF_NODES
+  ok query: deterministic (repeat query identical)
+  ok query: maxNodes=1 rejected (upstream crash guard)
+  ok query: uninitialized mesh rejected
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: stage name roundtrip
+  ok debug: unknown stage name rejected
+  ok debug: bake keepDebug=true
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: stage has prims
+  ok debug: stage groups/verts non-empty
+  ok debug: group vertex spans valid
+  ok debug: voxels verts >> navmesh verts (cell vs poly)
+  ok debug: deterministic prim stream (repeat bake)
+  ok debug: no-intermediates voxels rejected
+  ok debug: navmesh stage works without intermediates
+  ok debug: unloaded mesh navmesh stage rejected
+nav selftest: PASS

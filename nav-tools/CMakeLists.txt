@@ -54,3 +54,19 @@ add_test(NAME m-n1-nav-query-usage
          COMMAND nav-tools query ${CMAKE_CURRENT_BINARY_DIR}/nav-n1-hiz.nnav)
 set_tests_properties(m-n1-nav-query-usage PROPERTIES
     WILL_FAIL TRUE)
+
+# ---- P8 M-N2: five-stage debug visualization (keepDebug + DebugPrims) ----
+foreach(stage IN ITEMS voxels regions contours polymesh navmesh)
+    add_test(NAME m-n2-nav-debug-${stage}
+             COMMAND nav-tools debug-stage
+                     ${NL_ROOT}/assets/models/HizScene.glb
+                     ${CMAKE_CURRENT_BINARY_DIR}/nav-n2-${stage}.png
+                     --stage ${stage} --size 768
+                     --cell-size 0.1 --agent-radius 0.2)
+    set_tests_properties(m-n2-nav-debug-${stage} PROPERTIES
+        PASS_REGULAR_EXPRESSION "stage       : ${stage}")
+endforeach()
+add_test(NAME m-n2-nav-debug-usage
+         COMMAND nav-tools debug-stage ${NL_ROOT}/assets/models/HizScene.glb
+                 ${CMAKE_CURRENT_BINARY_DIR}/nav-n2-bad.png --stage bogus)
+set_tests_properties(m-n2-nav-debug-usage PROPERTIES WILL_FAIL TRUE)

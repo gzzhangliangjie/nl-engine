@@ -14,6 +14,14 @@
 #include "DetourNavMeshBuilder.h"
 #include "DetourNavMeshQuery.h"
 #include "Recast.h"
+// M-N2：五阶段可视化（上游 duDebugDraw 图元流；收集器实现在本 TU 匿名命名空间）。
+// 注意：DetourDebugDraw.h 的实现 TU 被剔除入库（1.6.0 头依赖 DetourTileCacheBuilder.h，
+// M-N0 CMake 留痕），NavMesh 阶段自绘（本文件 debugDrawStage NavMesh 分支）。
+#include "DebugDraw.h"
+#include "RecastDebugDraw.h"
+
+#include <algorithm>
+#include <utility>
 
 namespace nl::nav {
 
@@ -61,8 +69,18 @@ struct NavMesh::Impl {
     // M-N1：查询对象缓存（init 的 maxNodes 是节点预算，变了才重建）。
     dtNavMeshQuery* query = nullptr;
     int queryMaxNodes = 0;
+    // M-N2：bake(keepDebug=true) 保留的五阶段中间产物（上游 rc 对象，rcFree
+    // 归还；bake false 路径与 M-N0 逐字节一致——对象照旧当场释放）。
+    rcCompactHeightfield* dbgChf   = nullptr;  // Voxels/Regions/Distance
+    rcContourSet*         dbgCset  = nullptr;  // Contours/RawContours
+    rcPolyMesh*           dbgPmesh = nullptr;  // PolyMesh
+    rcPolyMeshDetail*     dbgDmesh = nullptr;  // （保留待 M-N3 detail 视图）
     ~Impl() {
         if (query) dtFreeNavMeshQuery(query);
+        if (dbgChf)   rcFreeCompactHeightfield(dbgChf);
+        if (dbgCset)  rcFreeContourSet(dbgCset);
+        if (dbgPmesh) rcFreePolyMesh(dbgPmesh);
+        if (dbgDmesh) rcFreePolyMeshDetail(dbgDmesh);
     }
 };
 
@@ -89,7 +107,7 @@ NavMesh& NavMesh::operator=(NavMesh&& o) noexcept {
 }
 
 bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
-                   std::string& outError) {
+                   std::string& outError, bool keepDebug) {
     outError.clear();
     m_stats = BuildStats{};
 
@@ -276,11 +294,23 @@ bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
         rcFreePolyMeshDetail(dmesh);
         return false;
     }
-    rcFreeCompactHeightfield(chf);
-    rcFreeContourSet(cset);
+    if (keepDebug) {
+        // M-N2：中间产物移交 Impl 常驻（五阶段 debugDrawStage 消费）。
+        // 旧残留先释放（重复 bake 时不泄漏）。
+        if (m_impl->dbgChf)   { rcFreeCompactHeightfield(m_impl->dbgChf);   m_impl->dbgChf   = nullptr; }
+        if (m_impl->dbgCset)  { rcFreeContourSet(m_impl->dbgCset);          m_impl->dbgCset  = nullptr; }
+        if (m_impl->dbgPmesh) { rcFreePolyMesh(m_impl->dbgPmesh);           m_impl->dbgPmesh = nullptr; }
+        if (m_impl->dbgDmesh) { rcFreePolyMeshDetail(m_impl->dbgDmesh);     m_impl->dbgDmesh = nullptr; }
+        m_impl->dbgChf   = chf;
+        m_impl->dbgCset  = cset;
+        m_impl->dbgPmesh = pmesh;
+        m_impl->dbgDmesh = dmesh;
+    } else {
+        rcFreeCompactHeightfield(chf);
+        rcFreeContourSet(cset);
+    }
     chf  = nullptr;
     cset = nullptr;
-
     // ---- dtCreateNavMeshData（参数填充照 Sample_SoloMesh.cpp 679-707 行）----
     if (pmesh->nverts > 0xFFFF) {
         outError = "polymesh vertex count exceeds Detour tile limit ("
@@ -322,8 +352,13 @@ bool NavMesh::bake(const Geometry& geo, const BuildParams& bp,
         rcFreePolyMeshDetail(dmesh);
         return false;
     }
-    rcFreePolyMesh(pmesh);
-    rcFreePolyMeshDetail(dmesh);
+    if (keepDebug) {
+        m_impl->dbgPmesh = pmesh;   // 上方 dbgChf/dbgCset 移交块同轮生效
+        m_impl->dbgDmesh = dmesh;
+    } else {
+        rcFreePolyMesh(pmesh);
+        rcFreePolyMeshDetail(dmesh);
+    }
     pmesh = nullptr;
     dmesh = nullptr;
 
@@ -661,6 +696,191 @@ std::vector<NavMesh::Edge> NavMesh::polyEdges() const {
         }
     }
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// M-N2：五阶段调试可视化
+
+namespace {
+
+// duDebugDraw 收集器：把上游 duDebugDraw* 系列的图元流原样收进 DebugPrims
+//（POD），消费端（nav-tools 软光栅 / viewer ImDrawList）自行投影绘制。
+// 上游颜色约定 duRGBA：r | g<<8 | b<<16 | a<<24，POD 直存不改序。
+class PrimCollector final : public duDebugDraw {
+public:
+    DebugPrims* out = nullptr;
+
+    void depthMask(bool) override {}
+    void texture(bool) override {}
+    void begin(duDebugDrawPrimitives prim, float size) override {
+        DebugPrims::Group g;
+        g.prim      = static_cast<int>(prim);
+        g.size      = size;
+        g.vertBegin = static_cast<int>(out->verts.size());
+        g.vertEnd   = g.vertBegin;
+        out->groups.push_back(g);
+    }
+    // 上游五个 vertex 重载最终全部落到 (x,y,z,color) 形态（带 uv 的在
+    // DetourDebugDraw 内部已换算成颜色），只实现这两条即可覆盖。
+    void vertex(const float x, const float y, const float z,
+                unsigned int color) override {
+        DebugPrims::Vtx v;
+        v.pos[0] = x; v.pos[1] = y; v.pos[2] = z;
+        v.col    = color;
+        out->verts.push_back(v);
+        if (!out->groups.empty()) ++out->groups.back().vertEnd;
+    }
+    void vertex(const float* pos, unsigned int color) override {
+        vertex(pos[0], pos[1], pos[2], color);
+    }
+    // 带 uv 的重载：本项目消费端不采样纹理，丢弃 uv 直取颜色（防静默丢顶点）。
+    void vertex(const float* pos, unsigned int color,
+                const float*) override {
+        vertex(pos[0], pos[1], pos[2], color);
+    }
+    void vertex(const float x, const float y, const float z, unsigned int color,
+                const float, const float) override {
+        vertex(x, y, z, color);
+    }
+    void end() override {}
+};
+
+} // namespace
+
+const char* debugStageName(DebugStage s) {
+    switch (s) {
+        case DebugStage::Voxels:      return "voxels";
+        case DebugStage::Regions:     return "regions";
+        case DebugStage::Distance:    return "distance";
+        case DebugStage::Contours:    return "contours";
+        case DebugStage::RawContours: return "raw-contours";
+        case DebugStage::PolyMesh:    return "polymesh";
+        case DebugStage::NavMesh:     return "navmesh";
+    }
+    return "?";
+}
+
+bool debugStageFromName(const char* name, DebugStage& out) {
+    const std::string n = name ? name : "";
+    static const std::pair<const char*, DebugStage> table[] = {
+        {"voxels",      DebugStage::Voxels},
+        {"regions",     DebugStage::Regions},
+        {"distance",    DebugStage::Distance},
+        {"contours",    DebugStage::Contours},
+        {"raw-contours",DebugStage::RawContours},
+        {"polymesh",    DebugStage::PolyMesh},
+        {"navmesh",     DebugStage::NavMesh},
+    };
+    for (const auto& e : table)
+        if (n == e.first) { out = e.second; return true; }
+    return false;
+}
+
+bool NavMesh::debugDrawStage(DebugStage stage, DebugPrims& out,
+                             std::string& outError) const {
+    out.groups.clear();
+    out.verts.clear();
+    if (!m_impl) { outError = "navmesh not initialized"; return false; }
+
+    PrimCollector col;
+    col.out = &out;
+
+    switch (stage) {
+        case DebugStage::Voxels:
+        case DebugStage::Regions:
+        case DebugStage::Distance:
+            if (!m_impl->dbgChf) {
+                outError = "stage requires bake(keepDebug=true) intermediates "
+                           "(compact heightfield missing)";
+                return false;
+            }
+            if (stage == DebugStage::Voxels)
+                duDebugDrawCompactHeightfieldSolid(&col, *m_impl->dbgChf);
+            else if (stage == DebugStage::Regions)
+                duDebugDrawCompactHeightfieldRegions(&col, *m_impl->dbgChf);
+            else
+                duDebugDrawCompactHeightfieldDistance(&col, *m_impl->dbgChf);
+            break;
+        case DebugStage::Contours:
+        case DebugStage::RawContours:
+            if (!m_impl->dbgCset) {
+                outError = "stage requires bake(keepDebug=true) intermediates "
+                           "(contour set missing)";
+                return false;
+            }
+            if (stage == DebugStage::Contours)
+                duDebugDrawContours(&col, *m_impl->dbgCset);
+            else
+                duDebugDrawRawContours(&col, *m_impl->dbgCset);
+            break;
+        case DebugStage::PolyMesh:
+            if (!m_impl->dbgPmesh) {
+                outError = "stage requires bake(keepDebug=true) intermediates "
+                           "(poly mesh missing)";
+                return false;
+            }
+            duDebugDrawPolyMesh(&col, *m_impl->dbgPmesh);
+            break;
+        case DebugStage::NavMesh: {
+            if (!m_impl->mesh) { outError = "navmesh not initialized"; return false; }
+            // 自绘（DetourDebugDraw TU 不入库，M-N0 CMake 留痕口径）：遍历
+            // dtMeshTile，poly 顶点 fan 成 TRIS + 边界 LINES，按 poly 序号着色
+            //（duIntToCol 同上游 DebugDraw.cpp 配色语义）。
+            for (int i = 0; i < m_impl->mesh->getMaxTiles(); ++i) {
+                const dtMeshTile* t = m_impl->constMesh()->getTile(i);
+                if (!t || !t->header) continue;
+                for (int p = 0; p < t->header->polyCount; ++p) {
+                    const dtPoly& poly = t->polys[p];
+                    const unsigned int col = duTransCol(
+                        duIntToCol(p, 200), 255);
+                    DebugPrims::Group g;
+                    g.prim      = DebugPrims::TRIS;
+                    g.size      = 1.f;
+                    g.vertBegin = static_cast<int>(out.verts.size());
+                    for (int j = 2; j < poly.vertCount; ++j) {
+                        const unsigned short idx[3] = {
+                            poly.verts[0], poly.verts[j - 1],
+                            poly.verts[j]};
+                        for (const unsigned short k : idx) {
+                            DebugPrims::Vtx v;
+                            v.pos[0] = t->verts[k * 3 + 0];
+                            v.pos[1] = t->verts[k * 3 + 1];
+                            v.pos[2] = t->verts[k * 3 + 2];
+                            v.col    = col;
+                            out.verts.push_back(v);
+                        }
+                    }
+                    g.vertEnd = static_cast<int>(out.verts.size());
+                    if (g.vertEnd > g.vertBegin) out.groups.push_back(g);
+                    DebugPrims::Group l;
+                    l.prim      = DebugPrims::LINES;
+                    l.size      = 1.f;
+                    l.vertBegin = g.vertEnd;
+                    for (int j = 0; j < poly.vertCount; ++j) {
+                        const unsigned short ia = poly.verts[j];
+                        const unsigned short ib =
+                            poly.verts[(j + 1) % poly.vertCount];
+                        const unsigned short pair[2] = {ia, ib};
+                        for (const unsigned short k : pair) {
+                            DebugPrims::Vtx v;
+                            v.pos[0] = t->verts[k * 3 + 0];
+                            v.pos[1] = t->verts[k * 3 + 1];
+                            v.pos[2] = t->verts[k * 3 + 2];
+                            v.col    = duRGBA(0, 48, 96, 255);
+                            out.verts.push_back(v);
+                        }
+                    }
+                    l.vertEnd = static_cast<int>(out.verts.size());
+                    if (l.vertEnd > l.vertBegin) out.groups.push_back(l);
+                }
+            }
+            break;
+        }
+        default:
+            outError = "unknown stage";
+            return false;
+    }
+    return !out.groups.empty();
 }
 
 } // namespace nl::nav

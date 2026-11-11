@@ -2067,6 +2067,24 @@
 
 **下一步**：M-N2 编辑器结合（烘焙参数 cvar + ImGui 面板 + DebugUtils 五阶段可视化 + 调参重烘焙闭环，2026-11-09 拍板核心；查询能力已就位，路径叠加可直接消费 `NavMesh::findPath`）；M-N3 E1 场景集成（DetourTileCache 届时连同 DetourDebugDraw 重评）。
 
+## M-N2：编辑器结合——五阶段可视化 + cvar 调参 + 重烘焙闭环（feat/pathfinding，2026-11-11，tag `nav-n2`）
+
+**动作**：用户拍板「先不外置，直接开工」（M-N2 维持 viewer `--editor` 内嵌 ImGui 面板口径，不挂 feat/editor 外置编辑器）→ wt_pool claim M-N2 → wt merge master（`s10-place` `5774a37`）→ 三处实读（上游 `DebugDraw.h` duDebugDraw 抽象接口 + `RecastDebugDraw.h` 五阶段绘制函数 + `DebugUtils` CMake 剔除留痕；Carrot `NavMeshBuilder.h` DebugDrawType 8 态 + BuildParams + debugDraw(renderContext,type)；UE `RecastNavMesh.h:555-711` config UPROPERTY + `RecastNavMeshGenerator.cpp:3710+` DrawHeightfield 分模式 duDebugDraw 渲染）→ nl/nav 五阶段调试层：`bake(..., keepDebug)` 保留 rc 中间产物（Impl 持 `rcCompactHeightfield`/`rcContourSet`/`rcPolyMesh`/`rcPolyMeshDetail`，false 路径与 M-N0 逐字节一致）+ `DebugPrims` POD 图元收集器（实现 `duDebugDraw`，uv 重载落 plain 防丢顶点）+ `debugDrawStage` 七阶段导出（RecastDebugDraw 直用；`DetourDebugDraw.cpp` 不入库沿用 M-N0 留痕 → NavMesh 阶段自绘 dtMeshTile poly fan TRIS + 边界 LINES）+ `loadGeometryFromGltf` 几何汇集抽 core 共享层（viewer 面板与 nav-tools 同源）→ nav-tools `debug-stage` 子命令（俯视软光栅：TRI 边函数填充 w>=-0.5 收共享边缝 + QUADS 拆两三角 + alpha 混合，绘制顺序=图元流顺序）+ ctest 6 条 → renderer `NavPanel`（`nav_panel.hpp` 全 POD State + `nav_panel.cpp` ImGui 封装，HudFrame 挂指针同 NodeEditor 先例；ImDrawList 画布 x→右 z→下与工具同投影口径）→ viewer `--nav-panel`（`nav.*` cvar 13 项 + `nav.stage` + `nav.bake` 命令；cvar 唯一真源，面板滑条/`cvar.set` 双向同源；Bake 按钮/命令同一条重烘路径，UE 显式 rebuild 口径）→ `example/nav-n2/`（run.bat：selftest + 五阶段出图 + `fc /b` 确定性 + bogus exit2 + usage）→ cases.json `nav-n2` 卡五用例（python json 规范写入）→ `NAV-TOOLS-GUIDE.md` §2/§7/§8 归档 → `P8-NAV-PLAN.md` M-N2 启动留痕 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/pathfinding 本收口 commit（tag `nav-n2`）。
+
+**完成情况**：DX12+VULKAN 双后端 BUILD OK + viewer selftest 16/16×2（DX12 树实跑 `shutdown ok deviceErrors=0`）；nav-tools selftest 新增 M-N2 锚点约 20 项全绿（七阶段名 roundtrip / 各阶段图元非空 / 顶点区间合法 / voxels verts >> navmesh / 重 bake 图元流逐字段一致 / 无中间产物 rc 阶段拒绝 / NavMesh 阶段无中间产物可用 / 未装载负向）；ctest `m-n[012]-nav` **15/15 双后端**（`--repeat until-pass:3`）；HizScene bake 输出与 M-N1 基线 **864 字节逐字节一致**（loadGeometry 抽共享层零回归实锤）；`regression` nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10 全 ALL GREEN；`server.py --check` exit 0（A 类轨道不 bump kStage）；run.bat 双后端 ALL GREEN（五阶段 PNG + `fc /b` 确定性 + bogus exit2）；viewer `--nav-panel` 闭环截图（`--console-exec "nav.bake" "nav.stage 6"` 驱动：stage 下拉 navmesh + 状态行 polys/area + 画布 poly，deviceErrors=0）；五阶段证据图肉眼核验（voxels 灰环=agent 腐蚀带/青=可走核心，底部条带在 polymesh 消失 = minRegionArea 过滤语义正确）。
+
+**踩坑情况**
+1. **⚠️ HudFrame POD 每帧重建 vs 面板写回（本轮最重坑）**：`HudFrame hud{}` 每帧值初始化 → 面板写入的 `st.stage` 下一帧归零，viewer「st.stage != navStage 即面板改动」的判定把归零当改动，反过来 `setInt(0)` 踩掉 cvar（实测：首帧 bake 成功 stage=6，第二帧 stage 回 0、cvar 被踩）；同时 status/baked/prims 也每帧清空。修复 = **双向通道全部边沿化**（`stageDirty`/`paramsChanged`/`bakeRequested`）+ 显示状态由 viewer 持久变量（navStatus/navPrimsValid/navStage）每帧无条件回填。教训：POD 每帧重建的结构上，「检测差异」语义必须区分「面板真实写回」与「POD 归零」。
+2. **`DetourDebugDraw.cpp` 不入库的下游影响**：M-N0 剔除留痕（1.6.0 头依赖 DetourTileCacheBuilder.h）→ `duDebugDrawNavMesh*` 不可用，M-N2 NavMesh 阶段自绘（poly fan + duIntToCol 配色），与留痕口径一致，没有为省事把 TileCache 链拉进来。
+3. **cmdDebugStage 参数回退错位**：参数循环 `--i` 回退把 `--size` 的值（768）当选项名喂 `parseBakeArgs` → "unknown option: 768"；修复 = 不回退，从当前位置直接交给解析器。
+4. **ImVec2 无 operator+ / toScreen 签名漂移**：本树 ImGui 未定义 IMGUI_DEFINE_MATH_OPERATORS（`min + ImVec2` 编译错）；toScreen 去 yUp 参后多处调用点（宽空格排版 + 双括号）漏改——正则统一修。
+5. **regression `--only` 单值语义再次确认**：一次传多个 `--only` 只生效最后一个（nav-n2 10/10 而非三卡 32 条）；零回归验证须逐卡分开跑。
+6. **`nl::core::Console` 在嵌套命名空间 `nl::core::console`**：viewer 全限定名写错 `nl::core::Console::get()` 连环报错；对齐 viewer 既有 `nl::core::console::` 用法。
+
+**下一步**：M-N3 E1 多物体场景集成（动态物体 `DetourTileCache` 届时连同 DetourDebugDraw 重评；E1 场景烘焙直接消费同一 bake 入口）；M-N1 查询能力 + M-N2 调参闭环均已就位，路径叠加 / 五阶段可视化可在面板内直接消费。
+
 ## P8 M-GL1：viewer 主循环接双帧 + game.* console + --fixed-dt（feat/gameloop，2026-11-10，tag `gl-m1`）
 
 - **动作**：M-GL0 的 `nl::core::GameClock` 接进 viewer——`runNormal` skin 模式非 `--anim-time` 路径改走 `GameClock::tick`（渲染帧喂 dtMs → 逻辑帧 60Hz accumulator 消费 → simTime 量化不插值）；`--anim-time` 兼容路径原样保留（绕过时钟，既有基线逐字节零风险）。控制台 `game.pause`（无参翻转；暂停=bevy 时钟停摆——simTime 冻结、HUD/相机照常）/ `game.timeScale`（[0,1024] 钳制，NaN/负→0）/ `game.status`（截图日志锚行）；CLI `--fixed-dt <ms>` 钉渲染帧 delta（对拍确定性，0=关）。命令注册先于 `--console-exec` 预执行。**用户拍板（本轮问询后确认方向）**：ECS scene tick / 物理叠加层 `physicsScene.step(1/60)` 统一迁入 GameClock 属 **M-GL2**（与 M-S3 合并收口），本站不动两处调用点；迁移路径已论证：受影响用例加 `--fixed-dt 16.7` 后总 tick 数不变（floor(240×16.7/16.667)=240）、终态轨迹一致、基线大概率零重拍。

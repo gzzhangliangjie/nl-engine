@@ -8329,6 +8329,110 @@
      "script": "example/s10-place/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "nav-n2",
+   "label": "P8 M-N2",
+   "name": "编辑器结合：五阶段可视化 + cvar 调参 + 重烘焙闭环",
+   "tag": "nav-n2",
+   "date": "2026-11-11",
+   "summary": "feat/pathfinding 第三里程碑（2026-11-09 拍板核心）。nl/nav 五阶段调试层：bake(keepDebug) 保留 rc 中间产物（紧凑高度场/轮廓/多边形网格）+ DebugPrims POD 图元收集器（上游 duDebugDraw 接口消费，RecastDebugDraw 直用；DetourDebugDraw TU 不入库沿用 M-N0 留痕，NavMesh 阶段自绘 poly fan）。消费端两处：nav-tools debug-stage 俯视软光栅 PNG（证据图取工具真实输出，三角边函数填充 + alpha 混合）+ viewer --nav-panel ImGui 面板（ImDrawList 画布，NodeEditor 同款封装纪律）。参数唯一真源 = nav.* cvar 13 项（面板滑条与 console cvar.set 双向同源），重烘焙 = 面板 Bake 按钮 / console nav.bake（UE 显式 rebuild 口径）。踩坑留痕：HudFrame POD 每帧重建，面板写回必须走边沿标志（stageDirty/paramsChanged），显示状态由 viewer 侧持久变量每帧回填，否则 cvar 被面板归零踩掉。",
+   "acceptance": [
+    "selftest 全绿：M-N0/M-N1 锚点 + M-N2 调试锚点（七阶段 roundtrip / 图元流非空 / 顶点区间合法 / voxels>>navmesh / 重 bake 图元流逐字段一致 / 无中间产物负向 / 未装载负向）",
+    "五阶段证据图 = nav-tools debug-stage 真实输出（768px 俯视正交：voxels 体素簇灰环+青核心 / regions / contours / polymesh / navmesh），同参数两次 PNG fc /b 逐字节一致（确定性硬判据）",
+    "ctest m-n[012]-nav-* 15/15（五阶段 + bogus 负向 WILL_FAIL）；HizScene bake 输出与 M-N1 基线 864 字节逐字节一致（loadGeometry 抽共享层零回归实锤）",
+    "viewer --nav-panel 闭环截图 nav-panel.png（--console-exec 'nav.bake' + 'nav.stage 6' 驱动：stage 下拉 navmesh + 状态行 polys/area + 画布 poly 图形，deviceErrors=0）",
+    "交代物：example/nav-n2/（run.bat ALL GREEN + 五阶段 PNG + nav-panel.png + 日志）+ 本卡五用例 + NAV-TOOLS-GUIDE.md 归档"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nav-tools.exe",
+    "vulkan": "build/vulkan/nav-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览含 debug-stage 行（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。nav-tools 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nav-tools - nl-engine P8 pathfinding tools",
+     "command": "nav-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：M-N0 bake + M-N1 查询 + M-N2 调试锚点",
+     "kind": "tool",
+     "note": "M-N2 新增：七阶段名 roundtrip / keepDebug 图元非空 / 顶点区间合法 / voxels verts >> navmesh（cell 级 vs poly 级）/ 重 bake 图元流逐字段一致 / 无中间产物 rc 阶段拒绝 / NavMesh 阶段无中间产物可用。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "nav selftest: PASS",
+     "command": "nav-tools selftest --verbose"
+    },
+    {
+     "id": "debug-voxels",
+     "name": "debug-stage voxels：高度场体素俯视图（真实工具输出）",
+     "kind": "tool",
+     "note": "bake keepDebug -> duDebugDrawCompactHeightfieldSolid 收集 -> 软光栅 PNG（TRI 边函数填充 + QUADS 拆两三角 + alpha 混合）。两次运行 PNG 逐字节一致（确定性硬判据）。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "voxels",
+      "--size",
+      "768",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "stage       : voxels",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage voxels --size 768 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "debug-navmesh",
+     "name": "debug-stage navmesh：最终 NavMesh 多边形俯视图",
+     "kind": "tool",
+     "note": "DetourDebugDraw TU 不入库（M-N0 留痕），NavMesh 阶段自绘：dtMeshTile poly fan TRIS（duIntToCol 按 poly 序号着色）+ 边界 LINES。无中间产物时亦可用（只消费 dtNavMesh）。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "navmesh",
+      "--size",
+      "768",
+      "--cell-size",
+      "0.1",
+      "--agent-radius",
+      "0.2"
+     ],
+     "expectExit": 0,
+     "expectLog": "stage       : navmesh",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage navmesh --size 768 --cell-size 0.1 --agent-radius 0.2"
+    },
+    {
+     "id": "debug-usage",
+     "name": "debug-stage 负向：未知阶段名（退出码 2）",
+     "kind": "tool",
+     "note": "debugStageFromName 拒绝未知名，usage 错误退出 2。",
+     "args": [
+      "debug-stage",
+      "{root}/assets/models/HizScene.glb",
+      "{out}",
+      "--stage",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown --stage",
+     "command": "nav-tools debug-stage assets/models/HizScene.glb <out> --stage bogus"
+    }
+   ]
   }
  ]
 }

@@ -61,6 +61,46 @@ struct BuildStats {
     float bmax[3] = {0.f, 0.f, 0.f};
 };
 
+// 几何汇集：.glb -> loadGltfScene 全 primitive 展平（世界变换已烘进顶点）。
+// viewer 与 nav-tools 共用（M-N2 抽出；.nmesh fallback 分支留在 nav-tools，
+// viewer 的 --nav-panel 面板烘焙只走 glb）。零第三方符号入头文件。
+bool loadGeometryFromGltf(const char* path, Geometry& out, std::string& outError);
+
+// ---- M-N2：五阶段调试可视化（上游 DebugUtils duDebugDraw 口径）----
+// 落地形态（P8-NAV-PLAN 拍板语义内）：nl/nav 只产出 POD 图元流，消费端两处——
+// nav-tools debug-stage 软光栅 PNG（证据图取工具真实输出）+ viewer NavPanel
+// ImDrawList 画布。本层零图形符号纪律不破。
+struct DebugPrims {
+    // 图元类型（duDebugDrawPrimitives 值域镜像，头文件不引入第三方符号）
+    enum Prim { POINTS = 0, LINES = 1, TRIS = 2, QUADS = 3 };
+    struct Group {
+        int  prim      = 0;   // Prim
+        float size     = 1.f; // 点径/线宽（俯视光栅消费）
+        int  vertBegin = 0;   // [vertBegin, vertEnd) 顶点区间
+        int  vertEnd   = 0;
+    };
+    struct Vtx {
+        float        pos[3];      // 世界空间
+        std::uint32_t col;        // duRGBA 布局：r | g<<8 | b<<16 | a<<24
+    };
+    std::vector<Group> groups;
+    std::vector<Vtx>   verts;
+};
+
+// 五阶段枚举（对应上游绘制函数；RecastDemo NavMeshSample 调参常看的五个 +
+// 距离场 / 原始轮廓两个诊断阶段）。名字即 cvar/CLI 值。
+enum class DebugStage {
+    Voxels      = 0,  // 高度场体素（滤波后紧凑高度场 solid 视图）
+    Regions     = 1,  // 区域划分（紧凑高度场 region 着色）
+    Distance    = 2,  // 距离场（到边界距离热图）
+    Contours    = 3,  // 简化轮廓（rcBuildContours 产物）
+    RawContours = 4,  // 原始轮廓（简化前）
+    PolyMesh    = 5,  // 多边形网格（contour -> convex polys）
+    NavMesh     = 6,  // 最终 dtNavMesh（Detour 多边形着色）
+};
+const char* debugStageName(DebugStage s);       // cvar/CLI 字符串
+bool debugStageFromName(const char* name, DebugStage& out);  // 解析（小写）
+
 // 序列化容器格式（nl-engine 自管，非上游格式）：
 //   "NLNV" magic | u16 version | u16 reserved0
 //   dtNavMeshParams 原样落盘：f32 orig[3], f32 tileWidth/tileHeight, i32 maxTiles/maxPolys
@@ -81,8 +121,11 @@ public:
 
     // 几何 -> Recast Solo Mesh -> dtNavMesh。失败返回 false 且 outError 带可读原因
     //（rc/dt 每步状态都检查，不吞错）。
+    // keepDebug（M-N2）：保留五阶段中间产物（rc 高度场/区域/轮廓/多边形网格），
+    // 供 debugDrawStage 消费；内存开销 = 中间对象常驻（小场景可接受）。默认 false
+    // 与 M-N0 行为逐字节一致。
     bool bake(const Geometry& geo, const BuildParams& params,
-              std::string& outError);
+              std::string& outError, bool keepDebug = false);
     bool save(const char* path, std::string& outError) const;
     bool load(const char* path, std::string& outError);
 
@@ -131,6 +174,15 @@ public:
     // waypoints 逐点一致（上游 A* 即确定性单线程）。
     QueryStatus findPath(const float start[3], const float end[3],
                          const QueryParams& params, QueryResult& out) const;
+
+    // ---- M-N2：五阶段图元导出 ----
+    // 从 bake(keepDebug=true) 保留的中间产物收集图元；Voxels/Regions/Distance/
+    // Contours/RawContours/PolyMesh 消费 rc 中间对象，NavMesh 消费 dtNavMesh
+    //（load 路径无中间产物，只有 NavMesh 阶段可用）。输出为 POD 图元流，
+    // 消费端自行投影/光栅/绘制。非本层语义失败（未保留中间产物 / 阶段不可用）
+    // 返回 false 且 outError 带可读原因。
+    bool debugDrawStage(DebugStage stage, DebugPrims& out,
+                        std::string& outError) const;
 
 private:
     struct Impl;

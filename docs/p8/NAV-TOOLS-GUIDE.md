@@ -19,9 +19,10 @@
 | `wire <in.nnav> <out.png> [--size N]` | 俯视正交多边形边界线框 PNG（证据图生成器） | 0/1/2 |
 | `query <in.nnav> --start x,y,z --end x,y,z [--max-nodes N] [--max-waypoints N] [--half-extents x,y,z] [--png out.png] [--size N]` | M-N1：`findNearestPoly` → `findPath`（走廊）→ `findStraightPath`（string-pulling 折线）；打印 status + reachedLimit + 逐点 waypoints，可叠画路径 PNG | 0=OK / 1=UNREACHABLE·OUT_OF_NODES·BUFFER_TOO_SMALL / 2=INVALID_PARAM·NOT_INITIALIZED·用法错 |
 | `resave <in.nnav> <out.nnav>` | load → save roundtrip（容器自检） | 0/1 |
-| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向断言 | 0/1/2 |
+| `debug-stage <in.glb\|.nmesh> <out.png> --stage <voxels\|regions\|distance\|contours\|raw-contours\|polymesh\|navmesh> [--size N] [bake params...]` | M-N2：五阶段叠加图——`bake(keepDebug=true)` 保留 rc 中间产物 → `duDebugDraw` 图元收集 → 俯视软光栅 PNG（TRI 边函数填充 + QUADS 拆两三角 + alpha 混合）；证据图取工具真实输出 | 0/1/2 |
+| `selftest [--verbose]` | 合成场景 bake / 确定性 / roundtrip / 负向 / M-N1 查询 / M-N2 调试锚点 | 0/1/2 |
 
-- 几何入口：`.glb`（`loadGltfScene` 全 primitive 拼接）或 `.nmesh`（v3 fallback 尾段；v1 base 无 fallback 会明确报错）。
+- 几何入口：`.glb`（`nl::nav::loadGeometryFromGltf`，M-N2 抽到 core 与 viewer 面板同源）或 `.nmesh`（v3 fallback 尾段；v1 base 无 fallback 会明确报错）。
 - 失败诊断链：bake 失败时打印 `walkableTris / grid WxH / rasterSpans / filteredSpans / compactSpans / regionCount`，逐级定位死点（M-N0 调参实测：HizScene 在 cs=0.3 下 erosion 半径吃光箱顶，cs=0.1 + radius 0.2 才有产物）。
 
 ## 3. M-N0 验收记录（2026-11-10）
@@ -69,5 +70,18 @@
 
 ## 6. 下一站
 
-- M-N2：烘焙参数 cvar + ImGui 面板 + 五阶段可视化 + 调参重烘焙闭环（本轮拍板核心）。查询能力（M-N1）已就位，编辑器路径叠加可直接消费 `NavMesh::findPath`。
-- M-N3：E1 多物体场景集成；动态物体走 `DetourTileCache`（届时连 `DetourDebugDraw` 一起重评）。
+- M-N3：E1 多物体场景集成；动态物体走 `DetourTileCache`（届时连 `DetourDebugDraw` 一起重评）。查询能力（M-N1）与调参闭环（M-N2）均已就位，E1 场景烘焙直接消费同一 `bake` 入口。
+
+## 7. M-N2 验收记录（2026-11-11）
+
+- **交付面**：nl/nav 五阶段调试层（`bake(..., keepDebug)` 保留 `rcCompactHeightfield` / `rcContourSet` / `rcPolyMesh` / `rcPolyMeshDetail` + `DebugPrims` POD 图元收集器实现 `duDebugDraw` + `debugDrawStage` 七阶段导出 + `loadGeometryFromGltf` 几何汇集共享层）；nav-tools `debug-stage` 子命令（俯视软光栅 PNG）；renderer `NavPanel`（ImGui 面板 + ImDrawList 画布，NodeEditor 同款封装纪律）；viewer `--nav-panel`（`nav.*` cvar 13 项 + `nav.bake` 命令 + 面板重烘焙闭环）。
+- **验收数据**：双后端 ctest `m-n[012]-nav` 15/15；selftest 新增 M-N2 锚点约 20 项全绿（七阶段 roundtrip / 图元流确定性逐字段一致 / 无中间产物负向 / 未装载负向）；HizScene bake 输出与 M-N1 基线 864 字节逐字节一致（几何汇集抽共享层零回归实锤）；regression nav-m0 10/10 + nav-n1 12/12 + nav-n2 10/10；`server.py --check` exit 0；example/nav-n2 run.bat 双后端 ALL GREEN（五阶段 PNG + `fc /b` 确定性 + bogus 负向）。
+- **证据图**：`example/nav-n2/stage-{voxels,regions,contours,polymesh,navmesh}.png`（nav-tools debug-stage 真实输出，768px 俯视正交：voxels 灰环=agent 半径腐蚀带、青=可走核心；polymesh/navmesh 彩色 poly + 深蓝边界）+ `nav-panel.png`（viewer 闭环截图：`--console-exec "nav.bake" "nav.stage 6"` 驱动，面板 stage 下拉 navmesh + 状态行 + 画布 poly）。
+- **呈现形态口径（开工时声明，用户可否决）**：viewer 面板 = ImDrawList 2D 俯视画布（与材质图编辑器画布同基建，零新 NVRHI 管线、零纹理上传改动）；PNG 证据 = 工具软光栅（P8-NAV-PLAN「证据图取工具真实输出」既定口径）。2026-11-11 用户拍板「不挂外置编辑器，viewer 内嵌面板口径」。
+
+## 8. M-N2 踩坑（写实）
+
+1. **HudFrame POD 每帧重建 vs 面板写回**：`HudFrame hud{}` 每帧值初始化，面板改的 `st.stage` 下一帧归零——viewer 侧「st.stage != navStage 就采纳面板」的判定把 POD 归零当成面板改动，反过来把 cvar `nav.stage` 踩回 0（实测首帧 bake 成功、第二帧阶段被重置）。**铁律：HudFrame 双向字段必须走边沿标志（`stageDirty`/`paramsChanged`/`bakeRequested`），显示状态（status/prims/bounds）由 viewer 持久变量每帧无条件回填**——与 cull/color 既有双向通道同款纪律，但「检测差异」不能建立在 POD 旧值上。
+2. **`DetourDebugDraw.cpp` 不入库的下游影响**：M-N0 因 1.6.0 头依赖 `DetourTileCacheBuilder.h` 剔除该 TU，`duDebugDrawNavMesh*` 不可用——M-N2 NavMesh 阶段自绘（`dtMeshTile` poly fan TRIS + 边界 LINES，`duIntToCol` 配色），与 M-N0 CMake 留痕口径一致。
+3. **cmdDebugStage 参数回退错位**：自定义参数循环里 `--i` 回退后把 `--size` 的值（768）当选项名喂给 `parseBakeArgs`。修复 = 不回退、直接让 `parseBakeArgs` 从当前位置吃。
+4. **regression `--only` 单值语义再次确认**：一次传多个 `--only` 只生效最后一个（nav-n2 10/10 而非三卡 32 条）——三卡零回归须分开跑（M-N1 已踩过逗号列表跑 0 条，本轮是变体）。

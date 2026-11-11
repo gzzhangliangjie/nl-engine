@@ -9,6 +9,8 @@
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
 #include "nl/renderer/editor.hpp"
+#include "nl/renderer/nav_panel.hpp"   // P8 M-N2：--nav-panel 面板（ImGui 在 renderer 内）
+#include "nl/nav/Nav.hpp"              // P8 M-N2：面板烘焙（nl/nav 纯 CPU 集成层）
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
 #include "camera_mode.hpp"                 // P8 M-CAM b-segment：ViewerCamera 调度封装（orbit/free/chase/track）
@@ -133,6 +135,7 @@ struct Options {
     // dt=1/60，截图确定性——parallel/serial 同帧数逐字节一致）。
     std::string tickMode = "off";
     std::string editorGraph;                // T1：--editor <file.mg> 挂材质图编辑器
+    bool navPanelOn = false;                // M-N2：--nav-panel 挂 NavMesh 调参面板
     std::string modeText = "normal";
     nl::core::ViewMode mode = nl::core::ViewMode::Normal;
     int  lod = 0;             // M2.3：--lod N，lod 模式的初始层（HUD 滑条可再切）
@@ -238,6 +241,10 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--editor" && i + 1 < argc) {
             // T1：材质图编辑器（material_graph v1 文本文件）。
             o.editorGraph = argv[++i];
+        }
+        else if (a == "--nav-panel") {
+            // M-N2：NavMesh 调参/五阶段面板（--model 几何为烘焙输入）。
+            o.navPanelOn = true;
         }
         else if (a == "--cull" && i + 1 < argc) {
             const std::string v = argv[++i];
@@ -745,6 +752,181 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         editorActive = true;
         nl::core::log::info("editor: ", o.editorGraph, " (", editor->graphPath(), ")");
     }
+    // P8 M-N2：--nav-panel 挂 NavMesh 调参/五阶段面板。nl/nav 是纯 CPU 集成层
+    //（viewer 只持值对象与 POD 状态），ImGui 全在 renderer/。cvar nav.* 是
+    // 参数唯一真源（console cvar.set 与面板控件双向同源）；重烘焙 = 面板
+    // Bake 按钮（UE 显式 rebuild 口径，不做拖滑条每帧全量重烘）。
+    std::unique_ptr<nl::renderer::NavPanel> navPanel;
+    bool navPanelActive = false;
+    nl::nav::NavMesh navMesh;      // 面板烘焙产物持有者（keepDebug 中间产物在内）
+    nl::nav::DebugPrims navPrims;  // 当前阶段图元流（POD；面板画布消费）
+    nl::nav::Geometry navGeo;      // --model 几何（首次 bake 装载后缓存）
+    bool navGeoLoaded   = false;
+    bool navBaked       = false;   // 已有成功 bake 产物（navMesh 持有）
+    bool navPrimsValid  = false;   // navPrims 与当前阶段一致（画布可消费）
+    int  navStage       = 0;       // 生效阶段（cvar nav.stage 镜像 + 面板边沿写回）
+    char navStatus[160] = {};      // 持久状态行（HudFrame POD 每帧重置，回填用）
+    bool navBakeCmd     = false;   // console nav.bake 命令置位（与面板按钮同路径）
+    if (o.navPanelOn) {
+        navPanel = nl::renderer::NavPanel::create();
+        navPanelActive = true;
+        auto& con = nl::core::console::Console::get();
+        // nav.* cvar 注册（缺省 = HizScene 调参口径：cs 0.1 / radius 0.2）
+        con.registerFloat("nav.cellSize", 0.10, "NavMesh bake cellSize (m)");
+        con.registerFloat("nav.cellHeight", 0.20, "NavMesh bake cellHeight (m)");
+        con.registerFloat("nav.slope", 45.0, "NavMesh bake walkableSlopeAngle (deg)");
+        con.registerFloat("nav.agentHeight", 2.0, "NavMesh bake agentHeight (m)");
+        con.registerFloat("nav.agentRadius", 0.20, "NavMesh bake agentRadius (m)");
+        con.registerFloat("nav.agentClimb", 0.40, "NavMesh bake agentMaxClimb (m)");
+        con.registerFloat("nav.regionMin", 2.0, "NavMesh bake regionMinSize (m)");
+        con.registerFloat("nav.regionMerge", 6.0, "NavMesh bake regionMergeSize (m)");
+        con.registerFloat("nav.edgeMaxLen", 12.0, "NavMesh bake edgeMaxLen (m)");
+        con.registerFloat("nav.edgeMaxError", 1.3, "NavMesh bake edgeMaxError (voxels)");
+        con.registerFloat("nav.detailDist", 6.0, "NavMesh bake detailSampleDist (m)");
+        con.registerFloat("nav.detailMaxError", 1.0, "NavMesh bake detailSampleMaxError (m)");
+        con.registerInt("nav.vertsPerPoly", 6, "NavMesh bake vertsPerPoly (3..6)");
+        con.registerInt("nav.stage", 0, "NavMesh debug stage (0 voxels..6 navmesh)");
+        // nav.bake：console 驱动的重烘焙（与面板 Bake 按钮同一条 bakeRequested
+        // 路径；截图/脚本用 --console-exec "nav.bake" 驱动闭环，不靠鼠标）。
+        con.registerCommand("nav.bake",
+                            "NavMesh panel: rebake with current nav.* params",
+                            [&](const std::vector<std::string>&) {
+                                navBakeCmd = true;
+                                return nl::core::console::CommandResult{true,
+                                    "nav.bake requested"};
+                            });
+        nl::core::log::info("nav-panel: bake input = assets/models/", o.modelFile);
+    }
+    // 每帧同步（主循环 hud{} 创建后调用；cvar <-> 面板状态 <-> 烘焙产物）。
+    // HudFrame POD 每帧重建：显示侧（status/baked/prims/bounds）由本函数
+    // 每帧从持久变量无条件回填；写回侧（stage/params/bake）全部走边沿标志。
+    auto navPanelSync = [&](nl::renderer::HudFrame& hud) {
+        if (!navPanel) return;
+        auto& con = nl::core::console::Console::get();
+        auto& st = hud.navPanelState;
+
+        // ① 面板参数编辑写回 cvar（onChanged 链触发；cvar 保持唯一真源）
+        if (st.paramsChanged) {
+            con.findCVar("nav.cellSize")->setFloat(st.cellSize);
+            con.findCVar("nav.cellHeight")->setFloat(st.cellHeight);
+            con.findCVar("nav.slope")->setFloat(st.slope);
+            con.findCVar("nav.agentHeight")->setFloat(st.agentHeight);
+            con.findCVar("nav.agentRadius")->setFloat(st.agentRadius);
+            con.findCVar("nav.agentClimb")->setFloat(st.agentClimb);
+            con.findCVar("nav.regionMin")->setFloat(st.regionMin);
+            con.findCVar("nav.regionMerge")->setFloat(st.regionMerge);
+            con.findCVar("nav.edgeMaxLen")->setFloat(st.edgeMaxLen);
+            con.findCVar("nav.edgeMaxError")->setFloat(st.edgeMaxError);
+            con.findCVar("nav.detailDist")->setFloat(st.detailDist);
+            con.findCVar("nav.detailMaxError")->setFloat(st.detailMaxError);
+            con.findCVar("nav.vertsPerPoly")->setInt(st.vertsPerPoly);
+            st.paramsChanged = false;
+        }
+
+        // ② cvar -> state（面板显示镜像；含 console cvar.set 驱动的阶段切换）
+        auto F = [&](const char* n) {
+            return static_cast<float>(con.findCVar(n)->value().f);
+        };
+        st.cellSize = F("nav.cellSize");
+        st.cellHeight = F("nav.cellHeight");
+        st.slope = F("nav.slope");
+        st.agentHeight = F("nav.agentHeight");
+        st.agentRadius = F("nav.agentRadius");
+        st.agentClimb = F("nav.agentClimb");
+        st.regionMin = F("nav.regionMin");
+        st.regionMerge = F("nav.regionMerge");
+        st.edgeMaxLen = F("nav.edgeMaxLen");
+        st.edgeMaxError = F("nav.edgeMaxError");
+        st.detailDist = F("nav.detailDist");
+        st.detailMaxError = F("nav.detailMaxError");
+        st.vertsPerPoly = static_cast<int>(con.findCVar("nav.vertsPerPoly")->value().i);
+        bool regen = false;
+        const int cvarStage = static_cast<int>(con.findCVar("nav.stage")->value().i);
+        if (st.stageDirty) {                // 面板下拉本帧真实改动（边沿）
+            navStage = st.stage;
+            con.findCVar("nav.stage")->setInt(navStage);
+            st.stageDirty = false;
+            regen = true;
+        } else if (cvarStage != navStage) { // console 侧驱动（cvar.set nav.stage N）
+            navStage = cvarStage;
+            st.stage = navStage;
+            regen = true;
+        } else {
+            st.stage = navStage;            // POD 归零回填（非面板改动）
+        }
+
+        // ③ Bake 请求（面板按钮 / console nav.bake；显式 rebuild，UE 口径）
+        if (st.bakeRequested || navBakeCmd) {
+            st.bakeRequested = false;
+            navBakeCmd = false;
+            if (!navGeoLoaded) {
+                const std::string p =
+                    std::string(NL_ASSET_DIR "/") + o.modelFile;
+                std::string gerr;
+                if (nl::nav::loadGeometryFromGltf(p.c_str(), navGeo, gerr)) {
+                    navGeoLoaded = true;
+                } else {
+                    std::snprintf(navStatus, sizeof(navStatus),
+                                  "geo load failed: %.110s", gerr.c_str());
+                }
+            }
+            if (navGeoLoaded) {
+                nl::nav::BuildParams bp;
+                bp.cellSize     = st.cellSize;
+                bp.cellHeight   = st.cellHeight;
+                bp.walkableSlopeAngle = st.slope;
+                bp.agentHeight  = st.agentHeight;
+                bp.agentRadius  = st.agentRadius;
+                bp.agentMaxClimb = st.agentClimb;
+                bp.regionMinSize = st.regionMin;
+                bp.regionMergeSize = st.regionMerge;
+                bp.edgeMaxLen   = st.edgeMaxLen;
+                bp.edgeMaxError = st.edgeMaxError;
+                bp.detailSampleDist = st.detailDist;
+                bp.detailSampleMaxError = st.detailMaxError;
+                bp.vertsPerPoly = st.vertsPerPoly;
+                std::string berr;
+                if (navMesh.bake(navGeo, bp, berr, /*keepDebug=*/true)) {
+                    navBaked = true;
+                    regen = true;
+                    const auto& s = navMesh.stats();
+                    std::snprintf(navStatus, sizeof(navStatus),
+                                  "polys=%d area=%.2fm2 v=%d dt=%d",
+                                  s.polyCount, s.walkableArea, s.vertCount,
+                                  s.detailTriCount);
+                } else {
+                    navBaked = false;
+                    std::snprintf(navStatus, sizeof(navStatus),
+                                  "bake failed: %.120s", berr.c_str());
+                }
+            }
+        }
+
+        // ④ 阶段变更重收集图元（bake 产物在手时）
+        if (regen && navBaked) {
+            std::string derr;
+            if (navMesh.debugDrawStage(
+                    static_cast<nl::nav::DebugStage>(st.stage), navPrims, derr)) {
+                navPrimsValid = true;
+            } else {
+                navPrimsValid = false;
+                std::snprintf(navStatus, sizeof(navStatus),
+                              "debug stage failed: %.120s", derr.c_str());
+            }
+        }
+
+        // ⑤ 显示侧持久回填（POD 每帧归零；状态行 / 画布数据无条件重写）
+        std::snprintf(st.status, sizeof(st.status), "%s", navStatus);
+        if (navPrimsValid) {
+            st.baked = true;
+            st.prims = &navPrims;
+            const auto& s = navMesh.stats();
+            for (int k = 0; k < 3; ++k) {
+                st.bmin[k] = s.bmin[k];
+                st.bmax[k] = s.bmax[k];
+            }
+        }
+    };
     // M-P3：物理调试场景（碰撞形状线框）。PIMPL 把 Jolt 头挡在 World.cpp 内，viewer
     // 只持值对象。仅 --physics-debug 时 build；build 失败直接退出 1（绝不静默回退到
     // 无叠加层——否则「以为在看物理」是假证据）。
@@ -769,7 +951,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
     // M-I2：input-hud 模式的面板就是本体，强制开（截图回归 --hud 同口径）。
-    const bool hudOn = o.hudEnabled || editorActive || inputHud;
+    const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive;
 
     // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
     // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
@@ -1304,6 +1486,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M-C2：hudEnabled=false 但控制台开着时也要跑 ImGui（面板藏、控制台在）。
         nl::renderer::HudFrame hud{};
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
+        // P8 M-N2：NavMesh 面板挂入 + 每帧同步（cvar <-> 面板 <-> 烘焙产物）。
+        // 同步在 hud 构建前完成，画布消费本帧图元（阶段切换 / bake 都落在
+        // 同帧 hud 数据里，截图确定性不受影响）。
+        if (navPanel) {
+            navPanelSync(hud);
+            hud.navPanel = navPanel.get();
+        }
         hud.panelShow = hudEnabled;   // M-C2：面板可见性独立于 ImGui 帧存续
         if (inputHud) hud.panelShow = true;   // M-I2：input-hud 模式常驻面板即本体
         // M-D3 (Q-D3-3 A): separate sibling window, default OFF. Only this
@@ -1332,7 +1521,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                           vehicleCVars.steerScale->value().f);
             hud.driveDebug.lineCount = n;
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) {
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
             if (inputHud) {
                 // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
@@ -1542,7 +1731,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) ? &hud : nullptr)) {
             nl::core::log::error("renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -1583,7 +1772,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive) {   // 帧跑了才消费控件写回
             // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
             if (inputHud) {
                 reqState[0] = hud.inputDebug.reqW;
@@ -2774,6 +2963,8 @@ void printUsage() {
               << "                                     --screenshot default off to keep M0.1~M0.4 baselines)\n"
               << "  viewer.exe --editor <file.mg>      material graph editor window (T1); forces HUD on,\n"
               << "                                     scene background = current --mode (default normal)\n"
+              << "  viewer.exe --nav-panel             M-N2 NavMesh tuning/five-stage debug panel;\n"
+              << "                                     bakes from current --model (.glb), cvars nav.*\n"
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"

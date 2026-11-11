@@ -1,0 +1,1 @@
+nav-tools debug-stage: unknown --stage 'bogus' (voxels|regions|distance|contours|raw-contours|polymesh|navmesh)

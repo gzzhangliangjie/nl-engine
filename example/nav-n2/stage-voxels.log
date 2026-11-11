@@ -1,0 +1,8 @@
+input       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n2\..\..\assets\models\HizScene.glb
+stage       : voxels
+groups      : 1
+prims       : 1 groups / 1068 verts
+polys       : 4 | compact spans: 56 | regions: 56
+view        : top-down orthographic (x right, z down)
+canvas      : 768x768
+saved       : E:\UE_STUDY_2026\nl-engine-pathfinding\example\nav-n2\stage-voxels.png
