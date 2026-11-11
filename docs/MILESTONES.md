@@ -2800,3 +2800,4 @@
 
 - **踩坑**：跨 worktree 的 `.workbuddy` 是 junction，轨道侧 `git status` 会显示主树写入的 memory 改动——共享目录的正常表现，不是落错树，别据此回滚；同理合并中出现的 `MEMORY.md` 33 行精简版属他会话未提交工作，不卷入 merge commit。
 
+- **验收（主树合并后实跑，2026-11-11）**：双后端全量 BUILD OK + viewer selftest 16/16×2；`ctest -R "m-n[0123456]-nav" --repeat until-pass:3` DX12/VULKAN **50/50 ×2**；`regression --only nav-n6` **26/26 ALL GREEN**（bytes 26 / near 0 / FAIL 0）、master 侧 `--only s10-refgi` **4/4**（near 1 = GPU 取整噪声 2 像素 maxDelta 1/255）、轨道侧老卡 `--only nav-n4` **22/22 bytes**；`example/nav-n6/run.bat` DX12/VULKAN **A~F ALL GREEN**（`.ntraj` 28924 B / fnv64 `5cbf9ce63eb1b273`，与 M-N4 基线逐字节相同）；`server.py --check` exit 0（stage=S8.2）；`check-bat-encoding` 96 文件 0 违规。按「全量总闸只在打 tag 收口跑一次」纪律，本次非 tag 收口，未起全量（M10.3 收官已跑 653/654）。
