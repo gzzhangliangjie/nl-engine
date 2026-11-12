@@ -9785,7 +9785,7 @@
      "id": "cacheviz",
      "name": "cache-viz 伪彩可视化（双后端 bytes 一致）",
      "kind": "pair",
-     "note": "三 Suzanne 实例 cell 伪彩全覆盖（同 cell 同色异 cell 异色，色块边界即 0.5m 网格），背景暗底 pow(1/2.2)。半分辨率 fill + R2 抖动 + 查询即插入，16 帧确定性管线。json 侧车 mode=cache-viz。",
+     "note": "三 Suzanne 实例 cell 伪彩全覆盖（同 cell 同色异 cell 异色，色块边界即 0.5m 网格），背景暗底 pow(1/2.2)。半分辨率 fill + R2 抖动 + 查询即插入，16 帧确定性管线。json 侧车 mode=cache-viz。（2026-11-13 基线重拍：M11.2 把 GPU key 改为只量化世界位置后原 M11.0 基线漂移，本轮按修正后确定性输出重拍，双后端现 byte-identical，使「双后端 bytes 一致」声称首次为真）",
      "baselines": {
       "dx12": "example/s11-hash/cacheviz-dx12.png",
       "vulkan": "example/s11-hash/cacheviz-vulkan.png"

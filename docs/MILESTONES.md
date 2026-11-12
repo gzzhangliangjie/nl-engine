@@ -3089,4 +3089,15 @@
 4. **开工闸注记与实码形态不一致，已勘误**：`SHADER-CONVENTIONS.md §2.19` 原写「`filterLayout_` 槽位表不作任何变更」，实际新增 t2 = 已有 `probeDepth_` SRV（零新增纹理但槽位表增一行）→ 按实读改为「t2 复用、零新增资源」，避免下轮照旧口径漏配 binding 导致 PSO 失败（M11.0 同类实锤）。
 5. **鬼影证据口径不许回填**：M12.0/M12.1 无 S12 鬼影数值（两个 run.bat 均无 `--orbit-speed`），本轮补的是**运动跟手性代理**（ON 相对同帧无历史基准的 MAE 更低），不是主观鬼影判据；本场景单凸体+纯天空、`probeDepth_` deviceZ 仅 184~186 三档、无真实几何边缘 → 主观鬼影与拒绝层保边收益留多物体场景复评（挂后续项）。对照三处口径已落 `UE-DIFFS.md D20`。
 
-**下一步**：S12 全阶段收官，待拍板架构项 0。**独立后续项（均需单独拍板）**：① `s11-hash/cacheviz` 基线漂移（M11.2 `wcMakeKey`）；② 多物体场景复验历史拒绝 / 法线·深度权重保边能力；③ Shader 性能检查（候选 A `-validate-uniformity` / B per-pass gpu_timer / C `-trace-coverage`）；④ `regression.py` 多进程分片 worker 隔离；⑤ `RUN_TIMEOUT` 60→90s 复核（本轮最慢用例仍 <60s，未触发）。
+**下一步**：S12 全阶段收官，待拍板架构项 0。**独立后续项（均需单独拍板）**：① `s11-hash/cacheviz` 基线漂移 **（2026-11-13 已重拍消除；同轮挖出 gi-tools makeKey 与 GPU 不一致，修法回退、留已知项，待「是否重标定 CPU 夹具」单独拍板，见下节）**；② 多物体场景复验历史拒绝 / 法线·深度权重保边能力；③ Shader 性能检查（候选 A `-validate-uniformity` / B per-pass gpu_timer / C `-trace-coverage`）；④ `regression.py` 多进程分片 worker 隔离；⑤ `RUN_TIMEOUT` 60→90s 复核（本轮最慢用例仍 <60s，未触发）。
+
+## s11-hash/cacheviz 基线重拍（2026-11-13）
+
+- **背景**：S12 全量总闸持续带 2 个 `s11-hash/cacheviz` FAIL（dx12/vulkan 各 71981 px / maxDelta 255）。根因 = M11.0 冻结基线（commit `5722c1c`）用的是「key 含法线分量」旧口径；M11.2 commit `c5d5be6` 把 GPU `wcMakeKey`/`ptMakeKey` 改成「只量化世界位置」（修正法线入 key 致查询恒 miss 的真 bug，M11.2 bounce 验收 hits 96/96 已证明正确），但基线图未跟着重拍 → 漂移。前几轮（M12.0/M12.1/M12.2）按用户「不动冻结基线、照常收口」拍板挂起，本轮在独立后续项 ① 单独拍板处理。
+- **额外发现（latent bug，未修，留已知项）**：同次 M11.2 提交里 `gi-tools/main.cpp makeKey` 改成把 `fabs(nrm)` 折进 pcg+iqint 两条哈希链，注释写「与 GPU 同构」实为**伪**——GPU 当时已丢弃法线，CPU 仿真器与 GPU 实际不一致。`s11-hash/cacheviz` 图是 GPU 产物不受影响，但 `gi-tools selftest/cachesim` 长期 silent 模拟一套与 GPU 不同的缓存布局。
+- **动作（用户拍板「重拍+修CPU」→ 部分执行、CPU 部分回退）**：
+  - ✅ 重拍 `example/s11-hash/cacheviz-dx12.png` / `cacheviz-vulkan.png`：用 M11.2 修正后确定性输出（`--mode cache-viz --model Suzanne-materials.nmesh --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7`）。重拍前先临时渲染确认当前输出 run-to-run byte-identical（同 md5 `c5c45f35…`）、且与冻结基线确有 71981px/maxDelta255 差异 → 重拍安全。重拍后 `regression --only s11-hash` 的 cacheviz 双后端 **bytes 一致 PASS**，① 的 cacheviz 漂移正式消除。
+  - ⚠️ `gi-tools makeKey` 修法**回退、未落地**：按拍板改「去法线折哈希 → 与 GPU 真·同构」后，CPU `selftest` 与 `cachesim` **双双转红**——`selftest` 的 `blend: sky-only sample lands (albedo*sky>0)` 断言 FAIL（新 key 下该 cell 的 find/blend 链路在小表碰撞链变化致 `after1=0`），`cachesim` 的 `cells : 740` 变成 716（regression `expectLog` 不匹配），`bounce` 期望值也漂移（early 0.31920→0.33364）。这些 CPU 断言是**按旧（含法线）key 标定的夹具**，改 key 撼动硬编码期望值；bounce 实测仍 `hits 96/96`、收敛正常，证明是夹具脆弱性而非算法 bug。修 CPU 实际等于**重标定整套 CPU 测试夹具**（test #10 断言 + cachesim expectLog 740→716 + bounce 期望值），属拍板时未预见的子决策 → **回退 makeKey、保持回归绿、留 CPU 不一致为已知项**，待单独拍板是否重标定。
+- **验收（当前）**：`python tools/regression.py --only s11-hash` 双后端全绿（selftest / cachesim / cacheviz 各 2）；cacheviz 重拍后双后端输出 byte-identical（md5 `c5c45f35…`，比冻结基线当年两后端还不同的状态更干净，使「双后端 bytes 一致」声称首次为真）。
+- **提交版本**：本矫治 commit（无新 milestone tag，沿用 `s11-hash`/`s11-done` 既有 tag）；主线 master 按 `AGENTS.md §1b` 不建 track / 不 claim。gi-tools/main.cpp 净改动为 0（回退），不入库。
+- **踩坑**：① 重拍前必须先用临时渲染确认当前输出确定性——否则会把非确定性噪声固化进基线（本轮两遍同 md5 已证实）；② 「修 CPU 同构」不是 drop-in：CPU selftest/cachesim 的期望值按旧 key 标定，改 key 即转红，需连带重标定夹具，属新子决策必须回头拍板，不可擅自改断言当过关；③ 位置量化 `floor(pos*2)` vs GPU `floor(wp/0.5)` 已核对均 0.5，故 CPU 不一致纯在法线分量、不在位置量化。

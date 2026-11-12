@@ -55,6 +55,8 @@
   - **验收铁证（双后端全绿，`example/s11-bounce/run.bat verify`）**：CPU `gi-tools selftest`（ctest `s11-gi-selftest`）双后端 `bounce: early 0.31920 late 0.35212 ctrl 0.31920 hits 96/96`（hits 从旧 hn=-d bug 的 0 → 96，late>ctrl 证明缓存收敛亮度上升）；GPU atlas-dump ON vs OFF：DX12 mean 0.456 / 变化像素 1.26% / 质心 (253,479)，VULKAN mean 0.502 / 变化像素 1.75% / 质心 (248,470)，均非逐字节相同 + 成片落在物体区。合成图 `--mode probe` 在本场景 ON≡OFF（盲通道，见上条 Q11-2d 勘误），故 GPU 验收以 atlas-dump 为准。
   - **下一步**：M11.3 稳定性验收（cell 生命周期 / 快速移动 / 名义债 Q11-2b）；S12 历史帧并轨。
 
+- ⚠️ **2026-11-13 后置勘误（M11.2 隐藏不一致，部分处理）**：M11.2 commit `c5d5be6` 把 `wcMakeKey`/`ptMakeKey` 改成「只量化世界位置（丢弃法线）」是对的（法线入 key 致 fill 深度法线 ≠ 查询射线 dir → 查询恒 miss）；但**同次提交里 `gi-tools/main.cpp makeKey` 改成了把 `fabs(nrm)` 折进哈希**，注释写「与 GPU 同构」实为**伪**——GPU 已丢法线、CPU 仍含，两端长期不一致。`s11-hash/cacheviz` 基线图是 M11.0 (`5722c1c`) 冻结的含法线旧口径，未随 M11.2 重拍 → S12 全量总闸持续 2 个 FAIL（71981 px / maxDelta 255）。本轮（独立后续项 ①）**重拍两张 cacheviz 基线**到修正后确定性输出（cacheviz 双后端现 byte-identical，`regression --only s11-hash` 复绿，漂移消除）；但**尝试修 `gi-tools makeKey` 去法线以恢复同构时，CPU `selftest`/`cachesim` 双双转红**（按旧含法线 key 标定的夹具：test #10 `blend: sky-only sample lands` 断言 FAIL、cachesim `cells 740→716`、bounce early 0.31920→0.33364；bounce 仍 `hits 96/96` 收敛正常，故是夹具脆弱性非算法 bug）——修 CPU 实际等于重标定整套 CPU 夹具，属拍板时未预见子决策，**故回退 makeKey、留 CPU 不一致为已知项**，待「是否重标定 CPU 夹具」单独拍板。详情见 `docs/MILESTONES.md` 对应节。
+
 ## M11.3 稳定性验收（1~2 天）
 
 - [x] cell 生命周期打磨：回收延迟、新 cell 置信度预热（避免新 cell 一帧全亮闪）→ **M11.3 收官实测（2026-11-12）：不补**。方案 A（无墓碑+立即重用+时域混合）稳态收敛实证：静态 6 档长帧数（64~512）末帧 atlas 相邻差 <0.026、static 64 帧序列逐帧差全 0（bytes 级）——无残影死 cell、无回收闪烁，无预热必要（Q11-0 拍板「超标才补」，实测无超标）。
