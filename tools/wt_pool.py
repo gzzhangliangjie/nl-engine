@@ -158,11 +158,15 @@ TRACKS = {
     },
     "profiling": {
         "wt": "E:/UE_STUDY_2026/nl-engine-profiling",
-        "branch": "feat/profiling", "state": "active",
+        "branch": "feat/profiling", "state": "closed",
         "note": "A-class track opened 2026-11-11 by user instruction (Q1~Q6 "
                 "confirmed; plan docs/p8/P8-TRACY-PLAN.md): Tracy v0.15.0 "
                 "(BSD-3-Clause) performance + memory profiling, RenderDoc "
-                "in-app capture as M-TR2; M-TR0~M-TR3, tags tracy-m0~tracy-m3",
+                "in-app capture as M-TR2; M-TR0~M-TR3, tags tracy-m0~tracy-m3; "
+                "merged back to master 9bf037c with post-merge dual-backend "
+                "build + s11-bounce regression ALL GREEN; wt removed 2026-11-12 "
+                "by user instruction, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED 2026-11-12",
     },
 }
 
