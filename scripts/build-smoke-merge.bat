@@ -21,7 +21,14 @@ echo === configure backend=%BACKEND% ===
 if errorlevel 1 exit /b 1
 
 echo === build viewer ===
+if "%~2"=="all" goto :all
 "%CMAKE_BIN%" --build "%BUILDDIR%" --target viewer
 if errorlevel 1 exit /b 1
+goto :done
 
+:all
+"%CMAKE_BIN%" --build "%BUILDDIR%"
+if errorlevel 1 exit /b 1
+
+:done
 echo SMOKE_BUILD_OK_%BACKEND%
