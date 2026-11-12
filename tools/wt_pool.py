@@ -168,6 +168,14 @@ TRACKS = {
                 "by user instruction, branch kept per PARALLEL-TRACKS 7.6; "
                 "state CLOSED 2026-11-12",
     },
+    "asset-ingest": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-asset-ingest",
+        "branch": "feat/asset-ingest", "state": "active",
+        "note": "A-class offline asset-ingest track opened 2026-11-12 (P9 V1 "
+                "warm-up): external OBJ/FBX -> glb -> nanite-tools "
+                "cluster/lod/dag -> .nmesh. No kStage / cases.json / renderer "
+                "/ .nmesh format changes.",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
