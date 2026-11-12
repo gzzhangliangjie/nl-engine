@@ -25,9 +25,11 @@ set_tests_properties(net-m0-version PROPERTIES
 # 负向：未知子命令显式拒绝（exit 2）
 add_test(NAME net-m0-usage-negative COMMAND net-tools bogus)
 set_tests_properties(net-m0-usage-negative PROPERTIES WILL_FAIL TRUE)
-# 负向：客户端连无监听端口（握手超时拒绝，exit 1）
+# 负向：客户端连无监听端口（握手超时拒绝，exit 1）。
+# 口径对齐 anim-tools 负向例：只有 WILL_FAIL（期望非零退出）；FAILED 锚由
+# example/net-m0/run.bat 负向段 findstr 兜底（WILL_FAIL + PASS_REGULAR_EXPRESSION
+# 组合语义是「正则不得命中」，实测反向，不留这个坑）。
 add_test(NAME net-m0-connect-refused
          COMMAND net-tools echo-client 127.0.0.1 29199 --packets 4 --timeout-ms 1500)
 set_tests_properties(net-m0-connect-refused PROPERTIES
-    PASS_REGULAR_EXPRESSION "connect     : FAILED"
     WILL_FAIL TRUE)

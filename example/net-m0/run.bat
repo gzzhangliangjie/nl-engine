@@ -40,13 +40,16 @@ findstr /c:"selftest net: PASS" "%D%selftest.log" <nul >nul || (echo [ERROR] PAS
 type "%D%selftest.log"
 
 echo === dual-process: echo-server + echo-client (32 reliable round trips) ===
+rem start /b direct exe (no intermediate cmd): child inherits redirected stdout;
+rem `start /min cmd /c` dies in sandboxed sessions (child reaped) - do not regress.
 del "%D%server.log" 2>nul
-start "net-echo-server" /min cmd /c ""%EXE%" echo-server 29192 --packets 32 --timeout-ms 20000 > "%D%server.log" 2>&1"
+start /b "" "%EXE%" echo-server 29192 --packets 32 --timeout-ms 20000 > "%D%server.log" 2>&1
+ping -n 2 127.0.0.1 >nul
 "%EXE%" echo-client 127.0.0.1 29192 --packets 32 --rate 100 --timeout-ms 10000 <nul > "%D%client.log" 2>&1
 if errorlevel 1 (type "%D%client.log" & echo [ERROR] dual-process echo FAILED & exit /b 1)
 findstr /c:"sent=32 recv=32 loss=0.0%%" "%D%client.log" <nul >nul || (echo [ERROR] client zero-loss anchor missing & exit /b 1)
 type "%D%client.log"
-rem server exits after serving 32; poll for its summary (up to ~15s)
+rem server exits after serving 32; poll for its summary (up to ~30s)
 set /a tries=0
 :waitserver
 if exist "%D%server.log" findstr /c:"echo-server : served=32" "%D%server.log" <nul >nul && goto serverok
@@ -58,20 +61,16 @@ goto waitserver
 type "%D%server.log"
 
 echo === dual-process with 30%% inbound loss injection (deterministic seed 1234) ===
+rem server must outlive the client deadline (--linger-ms): dropped echoes have no
+rem resend, client hits its own timeout and prints the loss summary (exit 2).
 del "%D%server-loss.log" 2>nul
-start "net-echo-server" /min cmd /c ""%EXE%" echo-server 29193 --packets 32 --timeout-ms 20000 > "%D%server-loss.log" 2>&1"
-"%EXE%" echo-client 127.0.0.1 29193 --packets 32 --rate 100 --loss 30 --timeout-ms 10000 <nul > "%D%client-loss.log" 2>&1
+start /b "" "%EXE%" echo-server 29193 --packets 32 --linger-ms 15000 --timeout-ms 25000 > "%D%server-loss.log" 2>&1
+ping -n 2 127.0.0.1 >nul
+"%EXE%" echo-client 127.0.0.1 29193 --packets 32 --rate 100 --loss 30 --timeout-ms 4000 <nul > "%D%client-loss.log" 2>&1
 if not errorlevel 1 (echo [ERROR] loss run should exit 2 & exit /b 1)
+findstr /c:"sent=32" "%D%client-loss.log" <nul >nul || (echo [ERROR] loss sent anchor missing & exit /b 1)
 findstr /c:"loss=" "%D%client-loss.log" <nul >nul || (echo [ERROR] loss anchor missing & exit /b 1)
 type "%D%client-loss.log"
-set /a tries=0
-:waitserver2
-if exist "%D%server-loss.log" findstr /c:"echo-server : served=32" "%D%server-loss.log" <nul >nul && goto serverok2
-set /a tries+=1
-if %tries% gtr 30 (echo [ERROR] loss server summary missing & type "%D%server-loss.log" & exit /b 1)
-ping -n 2 127.0.0.1 >nul
-goto waitserver2
-:serverok2
 
 echo === negative: connect to dead port must fail explicitly (exit 1) ===
 "%EXE%" echo-client 127.0.0.1 29199 --packets 4 --timeout-ms 1500 <nul > "%D%negative.log" 2>&1

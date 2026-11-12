@@ -169,19 +169,22 @@ int echoRun(const EchoArgs& a) {
     return 0;
 }
 
-// echo-server：双进程模式的服务端。服务满 packets 个回显后退出（run.bat 用）。
+// echo-server：双进程模式的服务端。服务满 packets 个回显后退出（run.bat 用）；
+// --linger-ms N：服务满后继续存活 N 毫秒再退出（丢包注入 demo 用——client 模拟
+// 入站丢包后，被丢的回显没有重发机会，server 必须撑到 client 先打出统计）。
 int cmdEchoServer(int argc, char** argv) {
     if (argc < 1) {
-        std::fprintf(stderr, "usage: net-tools echo-server <port> [--packets N] [--max-clients K] [--timeout-ms T]\n");
+        std::fprintf(stderr, "usage: net-tools echo-server <port> [--packets N] [--max-clients K] [--linger-ms N] [--timeout-ms T]\n");
         return 2;
     }
-    uint32_t port = 0, packets = 64, maxClients = 4, timeoutMs = 30000;
+    uint32_t port = 0, packets = 64, maxClients = 4, timeoutMs = 30000, lingerMs = 0;
     if (!parseU32(argv[0], &port) || port == 0 || port > 65535) {
         std::fprintf(stderr, "echo-server: bad <port>\n");
         return 2;
     }
     if (!findOptU32(argc, argv, "--packets", &packets) ||
         !findOptU32(argc, argv, "--max-clients", &maxClients) ||
+        !findOptU32(argc, argv, "--linger-ms", &lingerMs) ||
         !findOptU32(argc, argv, "--timeout-ms", &timeoutMs)) {
         std::fprintf(stderr, "echo-server: bad option value\n");
         return 2;
@@ -194,9 +197,12 @@ int cmdEchoServer(int argc, char** argv) {
         return 1;
     }
     const double deadline = nowSec() + timeoutMs * 0.001;
+    const double startedAt = nowSec();
+    // linger=0：服务满立即退出（>0：服务满后再存活 N 毫秒，供丢包 demo 收尾）
+    const double lingerEnd = lingerMs > 0 ? startedAt + lingerMs * 0.001 : startedAt;
     uint32_t served = 0;
     std::vector<nl::net::NetEvent> evs;
-    while (served < packets && nowSec() < deadline) {
+    while (nowSec() < deadline) {
         evs.clear();
         server.service(50, evs);
         for (const auto& e : evs) {
@@ -205,6 +211,7 @@ int cmdEchoServer(int argc, char** argv) {
                 ++served;
             }
         }
+        if (served >= packets && nowSec() >= lingerEnd) break;
     }
     std::printf("echo-server : served=%u port=%u\n", served, port);
     return served == packets ? 0 : 2;
