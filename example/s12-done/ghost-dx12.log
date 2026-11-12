@@ -1,0 +1,3 @@
+[s12-done] ghost frames=16 meanMAE(on,single)=3.456 meanMAE(off,single)=4.086 ratio=0.846 (limit 0.950)
+[s12-done] layer response meanDiff(on,off)=6000.4 meanDiff(rejectAll,off)=20012.4 (latter must be greater)
+[s12-done] OK: motion sequence tracks the no-history baseline, rejection layer responds to its threshold

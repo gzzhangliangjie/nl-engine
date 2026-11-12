@@ -155,5 +155,6 @@
 3. 待办 T4~T8 见任务书表；无阴影版实现路径按用户拍板 ②（新建 compute 8×8 直光 pass，逐字搬移 mode 5 BRDF，不碰 `material.slang`）。
 4. 落盘形态推迟 S10 与 S12 历史帧需求一起拍；本里程碑**不新增任何独立 GBuffer 纹理 / MRT / 落盘 UAV**（compute 输出复用 M8.2 `rtTarget_` 成员，见 T5）。
 5. **顺延项到期处理（2026-11-12，S12 M12.0 开工）**：用户拍板 Q12-B =「**M12.2 前按实测再拍**」→ Q4 方案 A 结论**不改写**、冻结面维持；M12.0/M12.1 零新增独立 GBuffer 资源，M12.2 开工前凭噪声/鬼影实测证据再拍是否补 previous 属性（补 = 对已拍结论的范围扩展，须全仓勘误）。权威落点 `docs/s12/S12-PLAN.md §0`。
+6. **顺延项结案（2026-11-13，S12 M12.2 开工闸）**：用户拍板 Q12-B 续拍 = **B1「维持不落盘」** → Q4 方案 A 结论**不改写**、冻结面维持到 S12 全阶段，零新增独立 GBuffer 资源；「法线差 > 阈值」按 `T0-PLAN.md §1` 退化口径（深度差 + 当前帧法线）落码。三处重读（Carrot `svgf.slang` / `temporal-denoise.compute.glsl`；bevy `taa.wesl` / `gbuffer_utils.wesl` / `bindings.wesl`；UE 只读 `LumenScreenProbeGatherTemporal.usf/.ush`）、证据缺口与代价矩阵见 `docs/s12/S12-PLAN.md §0.8`。
 
 **前置实读清单（本轮，符合 AGENTS.md 决策前置铁律）**：Carrot `lighting/direct-raytracing.slang` + `direct-base.slang`；bevy `meshlet/visibility_buffer_resolve.wesl` + `solari/realtime/gbuffer_utils.wesl` + `initial_path.wesl`；UE 5.8.4（对照总表 S9 行未点名，按功能就近读）`Lumen/LumenSceneDirectLighting.cpp` + `LumenSceneDirectLightingHardwareRayTracing.cpp`；开发历史 `MILESTONES.md`（`s8-done` 收官段）/ `carrot-history.md` / `bevy-history.md` / `.workbuddy/memory/MEMORY.md` / `2026-11-10.md` / 本计划 / `SHADER-CONVENTIONS.md` **§2.5 / §2.7 / §2.15 / §2.16**（Q4 决策材料 §2 实读；§2.18 待 T5 固化）/ `UE-DIFFS.md` 对齐确认节。

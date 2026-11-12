@@ -189,3 +189,59 @@ example\s12-spatial\run.bat verify
 **收口实测**：810/812（bytes 809 / near 1 / FAIL 2）。2 个 FAIL = `s11-hash/cacheviz` 双后端既有基线漂移（M11.2 删 `wcMakeKey` 法线分量，71981 px / maxDelta 255），M12.0 收口同款；M12.0 那 4 个 `m-sc0/m-sc1` dx12 环境间歇族本轮全绿 → 本轮零新增回归，按用户拍板不动冻结基线、照常收口。报告：`build/DX12/s12-spatial-full-regression.md` / `.json` / `.progress.jsonl`。
 
 ⚠️ **已知余量风险**：本轮最慢 `m-j5a-mg/compilepar` vulkan **61634 ms** 略超 60s 阈值但 verdict=bytes 通过、无 timeout marker → 阈值偏紧，后续建议调到 90s。另：**多进程分片 worker 隔离**（主进程可单独 kill 某个 worker 进程树、其余片继续）挂独立后续项单独拍板，它只缩小爆炸半径，不替代 60s 超时 + `[STALL]` + 增量 JSONL + 短检查点主动报进度这套发现机制。
+
+## 9. M12.2 历史拒绝 + D-B 时域参考（tag `s12-done`，Q12-B 续拍 B1 / Q12-D D-B）
+
+### 9.1 新增开关与工具
+
+| 开关 / 工具 | 作用 | 默认 |
+|---|---|---|
+| `--filter-reject` | 打开历史拒绝层（三层独立开关的第三层） | **关**（保形：M12.0/M12.1 数值逐字沿用） |
+| `--reject-threshold <f>` | 深度/切平面阈值，写入 `g_flags.w`（0 = 层关）；CPU clamp 0.0001..1 | 0.01 |
+| HUD filter 面板 | 时间 checkbox + `temporal alpha`（滤波强度）+ `history max frames`（历史长度）+ 空间/拒绝 checkbox + `reject threshold` | `filterPanelShow` 仍默认关，既有 `--hud` 卡零布局变化 |
+| `tools/check-s12-done.py` | 纯标准库（无 PIL）子命令 `avg` / `refcheck` / `ghost` / `selftest` | — |
+| `example/s12-done/run.bat verify` | 双后端一键：14 个 shot + 参考图 + 静态断言 + 负向控制 + 运动鬼影 + selftest | — |
+
+### 9.2 D-B 参考图形态与硬约束
+
+`--mode filter --temporal-off --filter-gi-dump --frames 32 --screenshot-seq <dir>` 出 32 帧**单帧 GI 直出**（抖动仍开，时间层关 → 每帧是独立噪声样本），`check-s12-done.py avg` 逐像素 RGB 平均 → **S12 自立、与被测对象同采样结构**（同 `csGather` 权重偏置）的收敛参考图。抖动帧号 `s12Frame_ % 64` → **N ≤ 64 封顶**，工具对 N>64 直接拒绝并在 selftest 里验证；本轮取 32（收敛质量与序列成本折中）。**运动序列绝不平均**（会糊），改以「同帧无历史单帧」逐帧序列作鬼影基准。`--screenshot-seq` 与 `--filter-gi-dump` 组合已先跑 3 帧冒烟（`f00001..f00003.png` 全落盘、exit 0）才纳入验收。
+
+⚠️ 序列命令**必须同时给 `--screenshot <dummy>`**：`o.screenshot` 控制「N 帧后退出 + 确定性回放 + 关 HUD」，只给 `--screenshot-seq` 窗口循环不会按 frames 退出。序列产物放 `%TEMP%\nl-s12-done`（避免上百张 PNG 入仓），只有双后端参考图 `ref-avg-*.png`、静态图与 log 落 `example/s12-done/`。
+
+### 9.3 拒绝层判据（B1 零落盘）
+
+`filter_temporal.slang` 内 `rejectHistory()` 五条：① 越界（M12.0 已有）；② 重投影 `deviceZ` 差 > thr；③ 当前帧法线的一阶代理 —— 右/下邻域 `deviceZ` 梯度外推 `prevUv` 处局部切平面深度，残差 > 2·thr（bevy `pixel_dissimilar` 的零 previous 属性退化版）；④ 3×3 **深度**邻域 min/max clamp（bevy TAA 邻域 clamp 的零资源版：读只读深度纹理，避开 M12.1 实锤的 RWTexture 原地读邻域跨线程 hazard）；⑤ 帧数置信度 —— 拒绝时 `len=0`，下一帧靠 `alpha=max(userAlpha,1/(len+1))` 自动短历史。
+
+**零新增 previous normal / previous_gbuffer / RT / CB / 纹理**：`filterLayout_` 仅增 t2 = 已有 `probeDepth_` SRV，`filterSpatialLayout_` 一字不动；`g_flags.w` 复用为「开关 + 阈值」→ FilterConstants 仍 **32B**（`dxc -dumpbin` 实锤 `Size: 32`、反射 `g_depth_0 → T2`），64B 过量分配不变（SSC §2.21 / M11.0 CB 越界铁律）。静态 `velocity=0` → `prevUv==uv`，②③④ 残差全 0 → 拒绝层**结构性不触发**，ON/OFF 逐值相同（与 §0.8.2「本场景无真实几何边缘、拒绝层测不出量化收益」一致）。
+
+### 9.4 验收断言与门限标定（2026-11-13 双后端实测，**不猜**）
+
+| 断言 | DX12 | VULKAN | 门限 |
+|---|---|---|---|
+| `refcheck` MAE(OFF,D-B) / MAE(ON,D-B) | 0.779 / **0.779** | 0.780 / **0.780** | `MAER=1.05`、`MAXMAE=1.00`（按 0.779 留 28% 余量） |
+| `refcheck` hf(OFF) / hf(ON) | 0.677 / 0.677 | 0.677 / 0.677 | `HFR=1.05` |
+| 静态 diffPixels(ON,OFF) | 0 | 0 | 打印不断言（静态不触发是预期） |
+| `ghost` meanMAE(ON,single) / meanMAE(OFF,single) | 3.456 / 4.086 | 3.456 / 4.086 | ratio **0.846** ≤ `GHOSTR=0.95` |
+| 层响应 meanDiff(ON,OFF) → meanDiff(REJALL,OFF) | 6000.4 → 20012.4 | 6000.4 → 20011.1 | 后者必须更大（阈值极小 = 拒绝更多历史） |
+| 负向控制：单帧噪声图冒充 ON | 被拒（MAE 3.175、hf 1.216，三条断言全触发） | 被拒 | 非零退出 |
+| 工具 `selftest` | OK | OK | avg / refcheck / ghost 正负路径全覆盖 |
+
+门限全部按实测标定（M12.1 先例：`MAER=1.05` 猜成 1.05 曾 FAIL，实测 1.121 后改 1.15）：`GHOSTR=0.95` 相对 0.846 留约 12% 余量容纳跨后端方差。`refcheck` 负向控制用参考序列的 `f00016.png`（与 16 帧静态图同抖动相位）冒充 ON，在标定门限下三条断言全部触发。
+
+### 9.5 ⚠️ 鬼影证据的口径（不许回填成「已有主观鬼影实测」）
+
+M12.0/M12.1 两个 `run.bat verify` 均无 `--orbit-speed`、台账与日志无 S12 鬼影数值；S11 的 1.5°/帧×64 帧是 cell 涌现感，不是时域鬼影。本轮补的是**运动跟手性代理指标**：`--orbit-speed 1.5` 16 帧序列里，`ON`（拒绝层开）相对「同帧无历史单帧」基准的 MAE 比 `OFF` 低（ratio 0.846），说明历史污染更少、拖影更轻；**这不是主观鬼影判据**。本场景单凸体+纯天空、`probeDepth_` 仅 184~186 三档、无真实几何边缘 → 主观鬼影与拒绝层保边能力仍需多物体场景复评（挂后续项）。双后端这组数值几乎相同（GI dump 与每帧 rebuild 的 AS 内部布局无关），但按 Q11-1 仍走统计不变量、禁 `bytes`。
+
+### 9.6 收口状态（2026-11-13 实际执行，逐项已过）
+
+| 纪律项 | 执行结果 |
+|---|---|
+| 删两棵 `viewer.exe` 再 `build-m0.2.bat` 强制重链 | 🟢 双后端 BUILD OK + selftest 16/16 + shader 108/108（无新增 shader 文件 → CMake 登记一字不动）；`dxc -dumpbin` 实锤 cbuffer `Size: 32`、`g_depth_0 → T2` |
+| `run.bat` ASCII + CRLF | 🟢 `python tools/check-bat-encoding.py --fix example/s12-done` → 0 violations；命令用 `cmd //c` 展开写避免 `%%B` 被 POSIX shell 破坏 |
+| `cases.json` 追加卡后跑新卡冒烟 | 🟢 python json 库 indent=1 无损 roundtrip（LF + 尾换行），107 张卡；`regression.py --only s12-done --jobs 1` → 2/2 bytes 全绿 |
+| 保形 | 🟢 `s12-temporal/run.bat verify` + `s12-spatial/run.bat verify` 数值逐项与冻结记录相同；3 条 `--only` 双后端 bytes（`s10-gather/gather` 逐字节相同）；`server.py --check` 退出 0（stage `S8.2` 未回归） |
+| 全量总闸（tag 收口唯一一次） | 🟢 **810/814**，299 s，零 `[STALL]` / 零超时。4 FAIL = 2 个 `m-sc0` dx12 环境间歇族（重跑 5/5 全绿）+ 2 个 `s11-hash/cacheviz` 既有基线漂移（M12.0/M12.1 同款）→ **零新增回归**。报告 `build/DX12/s12-done-full-regression.md` |
+| 证据图肉眼核验 | 🟢 `ref-avg-dx12.png`（32 帧平均，明显更平滑）、`static-on-dx12.png`（猴头轮廓与天空分离清楚），均无全黑/全白/糊平伪影 |
+| 文档固化 | 🟢 `S12-PLAN.md` / 本指南 §9 / `SHADER-CONVENTIONS.md §2.19`（t2 槽位勘误）/ `UE-DIFFS.md D20` / `ROADMAP.md` / `MILESTONES.md` 四栏 / `.workbuddy/memory/{MEMORY.md,2026-11-13.md}` |
+
+⚠️ 保留判据口径：本轮运动证据是**跟手性代理**，不是主观鬼影判据；多物体场景复评仍挂后续项（见 §9.5 / `UE-DIFFS.md D20` 触发条件）。

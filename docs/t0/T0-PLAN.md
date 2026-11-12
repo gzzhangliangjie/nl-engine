@@ -15,6 +15,8 @@
 | **Q-H3** | **TAA/TSR 在 tonemap 之前**（UE 口径） | `S16-PLAN.md` 已把「TSR 在 tonemap 之前」定为底线；省掉一张 tonemap 后离屏输出 |
 
 > **S12 到期状态（2026-11-12，M12.0 开工拍板 Q12-B）**：Q-H2「属性落盘第三次顺延至 **S12 实测噪声证据再定**」中的再定点 = **M12.2 开工前**，不是 M12.0 开工时。用户拍板「M12.2 前按实测再拍」→ 本 PLAN §0 / §1 / §5 的 Q-H2 结论与冻结面**维持不变**，M12.0/M12.1 按退化口径（重投影深度差 + 当前帧法线）落码、零新增独立 GBuffer 资源；M12.2 开工前凭噪声/鬼影实测证据再拍是否补 previous normal / previous_gbuffer。权威落点 `docs/s12/S12-PLAN.md §0`。
+>
+> **顺延项结案（2026-11-13，S12 M12.2 开工闸）**：Q12-B 续拍 = **B1「维持不落盘」** → Q-H2「属性落盘第三次顺延至 S12 实测证据再定」的再定点**已到期结案**，结论 = 不补 previous normal / previous_gbuffer，方案 A 与 §0/§1/§5 冻结面维持到 S12 全阶段；S12 全阶段零新增独立 GBuffer 资源。依据（三处重读 + ⚠️ 鬼影实测缺口）见 `docs/s12/S12-PLAN.md §0.8`、`docs/MILESTONES.md` M12.2 开工拍板节。
 
 > 诚实边界：本 PLAN 给的是**资源形态与排期**，不是「已验证可落地」结论。`R11G11B10_FLOAT` 作 color attachment + storage + sampled 三能力、`RG16_FLOAT` 作 MRT 附件、主路径重构后保形，都在落码里程碑双后端实测；本 PLAN 零代码、零 tag。
 >
@@ -28,7 +30,7 @@
 |---|---|
 | **新增 RT / UAV** | 4 张（+1 张可选，按 Q-H3=UE 口径不建）：① 离屏 HDR scene color `RGBA32_FLOAT`（**落码期勘误：原 R11G11B10_FLOAT 因保形硬验收改判 FP32**，~7.9 MiB @1080p）；② 独立 velocity `RG16_FLOAT`（~1.98 MiB，bevy 口径）；③ history ping-pong **2 张** `RGBA32_FLOAT`（同上勘误，~15.9 MiB）；④ tonemap 后离屏输出 **不建**（Q-H3=UE → 直接写 swapchain）；`D32 SceneDepth` **复用 backend `depth_`**（`setSharedDepth` 注入；首版自建 `t0Depth_` 全量闸实测 gl5/particles/drive-m3 三族 FAIL——overlay 深度测试读 backend depth_，场景深度必须留在原位） |
 | **写入 pass 形态** | 主帧从直出 swapchain 改为渲到离屏 HDR RT（**属 §2.16 主路径重构**）；velocity 走**独立几何/prepass 附加 MRT**（bevy/UE 口径，双帧矩阵 + `unjittered` 剥离 jitter，天空像素单独补写）；新增最小全屏 `present/tonemap` pass 做合成 + gamma（ACES 留 S16，T0 只做最小 tonemap + gamma）。全部并入现有帧命令列表（§2.8） |
-| **Q4 顺延项答复** | **不落盘**。`S10` 邻域 / `S12` disocclusion 靠 `gbuffer_common.slangh` 即取即算 + depth 反解；`S15` 维持只读 depth / vis。`S12` M12.2 的「法线差 > 阈值」判据退化为「深度差 + 当前帧法线」，或到时补一张 previous normal（属 S12 决策，不在此里程碑） |
+| **Q4 顺延项答复（2026-11-13 结案）** | **不落盘**。`S10` 邻域 / `S12` disocclusion 靠 `gbuffer_common.slangh` 即取即算 + depth 反解；`S15` 维持只读 depth / vis。`S12` M12.2 的「法线差 > 阈值」判据退化为「深度差 + 当前帧法线」；Q12-B 续拍已拍 **B1「维持不落盘」**，不补 previous normal / previous_gbuffer（`docs/s12/S12-PLAN.md §0.8`） |
 | **绑定布局 / 状态登记** | 每新 pass 各建**单一 BindingSet**（§2.7）；shift 沿用 §2.5（b 256 / t 0 / s 128 / u 384，set 0）；ping-pong 纹理不设 permanent，每帧逐张 `beginTrackingTextureState` 声明当前态（§2.15）；clear 在 `setGraphicsState` 前、帧内不另开 cmd list（§2.8）。**纪律固化见 `SHADER-CONVENTIONS.md` §2.19** |
 | **新增显存 @960×540** | ~7.9 MiB |
 | **下游扩展面** | `S10` M10.0 有真 velocity（删简化版占位）；`S12` M12.0 声明落地；`S16` M16.0/M16.1 基建被承载、M16.4 挂账句可删；SSR / bloom 有共享 post-chain 落点；`S15` 零影响 |
@@ -91,7 +93,7 @@
 | 冻结项 | 状态 |
 |---|---|
 | 新增任何离屏 RT / UAV / `register(u/t)` 槽位 / 纹理格式 / MRT 组合 | **冻结**，待落码里程碑 T1~T6 解 |
-| 改写已拍板的 Q4 结论（属性不落盘） | **冻结**，S12 实测证据前不得改 |
+| 改写已拍板的 Q4 结论（属性不落盘） | **冻结（结案）**：2026-11-13 Q12-B 续拍 = B1 维持不落盘，S12 实测证据到期后结论不改，不再有再定点 |
 | `renderer/shaders/gbuffer_common.slangh`（PURE MOVE / Resource-free，0 处资源声明） | **保留**，本里程碑不触碰 |
 | 主帧 present 路径、`kStage`、既有 `example/` 基线 | **冻结**，待 T2/T5 重构时按 §2.16 保形 |
 

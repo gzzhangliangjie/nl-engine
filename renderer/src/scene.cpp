@@ -3375,11 +3375,14 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // ---- S12 M12.0：csFilterTemporal 布局（b0 + t0 velocity + t1 history[read]
     // + u0 gatherLinear_ 读写 + u1 history[write]）。单一 BindingSet（§2.7）。
+    // M12.2：新增 t2 = probeDepth_ SRV（**已有纹理**，B1 不落盘 previous 属性，
+    // 零新增 RT / 纹理 / CB；M12.1 spatial set 同款复用先例）。
     nvrhi::BindingLayoutDesc fDesc;
     fDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
     filterLayout_ = device->createBindingLayout(fDesc);
@@ -3642,6 +3645,7 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
                   .addItem(nvrhi::BindingSetItem::Texture_SRV(0, velocity_))
                   .addItem(nvrhi::BindingSetItem::Texture_SRV(
                       1, parity == 0 ? history0_ : history1_))
+                  .addItem(nvrhi::BindingSetItem::Texture_SRV(2, probeDepth_))
                   .addItem(nvrhi::BindingSetItem::Texture_UAV(0, gatherLinear_))
                   .addItem(nvrhi::BindingSetItem::Texture_UAV(
                       1, parity == 0 ? history1_ : history0_));
@@ -4033,7 +4037,7 @@ bool Scene::drawGiDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport
 bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                                const FrameParams& params, std::string& outError) {
     if (!filterPSO_ || !filterCB_ || !filterSet_[t0Parity_] ||
-        !history0_ || !history1_ || !gatherLinear_ || !velocity_) {
+        !history0_ || !history1_ || !gatherLinear_ || !velocity_ || !probeDepth_) {
         outError = "filter temporal: set/pipeline/texture missing";
         return false;
     }
@@ -4070,7 +4074,12 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
     fcb[4] = temporalHistoryValid_ ? 1.0f : 0.0f;  // validHistory
     fcb[5] = params.temporalEnable ? 1.0f : 0.0f;  // 时间层（三层独立开关之一）
     fcb[6] = params.filterSpatial  ? 1.0f : 0.0f;  // 空间层（M12.1 实现）
-    fcb[7] = params.filterReject   ? 1.0f : 0.0f;  // 拒绝层（M12.2 实现）
+    // M12.2：g_flags.w 同时承载「拒绝层开关 + 阈值」（0 = 层关），零 CB 扩容
+    //（FilterConstants 仍 32B 声明 / 64B 分配，SSC §2.21 / M11.0 实锤）。
+    // 关时 shader 的整块拒绝分支不执行 → M12.0/M12.1 保形基线逐值不变。
+    const float rejThr = params.rejectThreshold < 0.0001f ? 0.0001f
+                       : (params.rejectThreshold > 1.0f ? 1.0f : params.rejectThreshold);
+    fcb[7] = params.filterReject ? rejThr : 0.0f;
     cmd->writeBuffer(filterCB_, fcb, sizeof(fcb));
 
     {

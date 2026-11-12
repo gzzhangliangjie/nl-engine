@@ -2,6 +2,7 @@
 
 > **状态：已拍板（2026-11-11 用户选 方案 A + Q-H3 UE 口径：temporal 最小集、属性不落盘、TSR/tonemap 前；Q4 顺延项随之定「不落盘」）。** 本文件是**决策证据与选项**，其结论已工程化落地于 `docs/t0/T0-PLAN.md`；本文件保持为决策证据，不再改动口径。
 > **S12 到期状态（2026-11-12）**：M12.0 开工拍板 Q12-B =「**M12.2 前按实测再拍**」→ Q4 顺延项**维持冻结**、Q-H2 结论不改写，M12.0/M12.1 零新增独立 GBuffer 资源；Q12-A = GI 分量独立（复用 `gatherLinear_` + `history0_/1_` ping-pong，零新增 RT）。权威落点 `docs/s12/S12-PLAN.md §0`（含三处实读、代价矩阵、T1~T8 任务书）。本文件口径未变，仅补状态指针。
+> **Q4 顺延项结案（2026-11-13，S12 M12.2 开工闸）**：Q12-B 续拍 = **B1「维持不落盘」** → Q4 三次顺延项关闭，**Q-H2 结论不改写、冻结面维持到 S12 全阶段**，零新增 previous normal / previous_gbuffer；「法线差 > 阈值」按本文件 §1/§5 与 `T0-PLAN.md §1` 退化口径（深度差 + 当前帧法线）。三处重读、代价矩阵、⚠️ 鬼影实测缺口见 `docs/s12/S12-PLAN.md §0.8`。下方方案 A/B/C 各节与风险③「若 S12 真要 previous_gbuffer 等于再建一轮」均为**拍板前决策证据**，保留原文，不再代表待定状态。
 > 归属：服务 `S10` / `S12` / `S15` / `S16` 四个阶段与 ROADMAP 穿插项 `post-chain`，不归属单一 `s*` 目录，故放 `docs/` 根。
 > 触发：`S9` 全收官（tag `s9-done`）后下一站就是 `S10`，但 `M10.0` 第一条 todo 就依赖一份**从未落地**的 motion vector；`Q4` 的 GBuffer 落盘形态被顺延到「S10 与 S12 历史帧需求一起拍」；「离屏 HDR RT + post-chain」自 `S7` 之后一直是穿插项表里的一行，没有任何里程碑承载。按 `AGENTS.md`「开工闸：计划内不得留待拍板架构判定」补功课。
 >
@@ -152,7 +153,7 @@
 | `S10` M10.2 final gather | 邻域探针权重需像素世界位置 / 法线 | 不落盘时靠 `gbuffer_common.slangh` 即取即算（重复 resolve ×N）；落盘时一次 `textureLoad` |
 | `S10` M10.3 | 与 **S10 自立 GI 参考图**并排（Q3 已勘误） | 与形态无关，但 post-chain 会改变画面输出路径，须保证并排读盘同机位 |
 | `S12` M12.0 | motion vector 回投 + 历史帧 α 混合 | 需 velocity + **history color**（至少 1 张跨帧） |
-| `S12` M12.2 历史拒绝 | 重投影深度差 > 阈值 **或法线差 > 阈值** → 丢历史 | 不落 previous normal 就得退化为「只用深度差 + 当前帧法线」，或补一张 previous 属性 |
+| `S12` M12.2 历史拒绝（2026-11-13 结案 B1） | 重投影深度差 > 阈值 → 丢历史；法线差不落码 | 维持退化口径「只用深度差 + 当前帧法线」，零新增 previous 属性（`docs/s12/S12-PLAN.md §0.8`） |
 | `S15` M15.1 页请求 | **只读**主视图 depth / vis buffer 即取即算属性（Q4 方案 A 勘误后） | 不改输出格式；页缓存是本项目第一次跨帧持久 GPU 资源，`createTargets()` slot 级同步表须前置遵守 |
 | `S16` M16.0 / M16.1 / M16.4 | jitter + 双帧矩阵 + 完整逐像素 velocity + history ping-pong + 「tonemap 前 slot」 | 本里程碑若承载，S16 头部「S7 之后先建」应改为「由 M-T0 承载」，M16.4 的挂账句可删 |
 | SSR / bloom 穿插项 | 离屏 HDR scene color + 合成 pass + 颜色 mip 链 | 共享同一份 post-chain；`SSR-RESEARCH-NOTES.md:44` 点名「场景颜色补 GenerateMips」 |

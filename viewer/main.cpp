@@ -220,6 +220,9 @@ struct Options {
     bool  filterGiDump       = false; // S12 验收：GI 分量直出（ON/OFF 自比的真正对象）
     // S12 M12.1：空间层默认关 → M12.0 的 105 张卡与 hf/MAE 尺子逐字沿用。
     bool  filterSpatial      = false;
+    // S12 M12.2：拒绝层默认关（B1 维持不落盘）；阈值写入 g_flags.w，0 = 层关。
+    bool  filterReject       = false;
+    float rejectThreshold    = 0.01f;
 };
 
 // ---- M-TR2：RenderDoc 进程内抓帧（单头 + 零链接，默认关） ----
@@ -283,6 +286,10 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--filter-gi-dump") o.filterGiDump = true;
         // S12 M12.1（Q12-C A）：显式开启空间层（默认关）。
         else if (a == "--spatial") o.filterSpatial = true;
+        // S12 M12.2（Q12-B 续拍 B1）：拒绝层 + 阈值（默认关 / 0.01）。
+        else if (a == "--filter-reject") o.filterReject = true;
+        else if (a == "--reject-threshold" && i + 1 < argc)
+            o.rejectThreshold = static_cast<float>(std::atof(argv[++i]));
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -1868,6 +1875,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     float temporalAlphaLocal = o.temporalAlpha;
     int   temporalHistoryMaxLocal = o.temporalHistoryMax;
     bool  temporalEnableLocal = o.temporalEnable;
+    // S12 M12.2：三层开关 + 拒绝阈值全部走 HUD 双向 local（面板默认关时值不变）。
+    bool  filterSpatialLocal = o.filterSpatial;
+    bool  filterRejectLocal = o.filterReject;
+    float rejectThresholdLocal = o.rejectThreshold;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -2270,8 +2281,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.temporalEnable      = temporalEnableLocal;
         fp.temporalAlpha       = std::clamp(temporalAlphaLocal, 0.01f, 1.0f);
         fp.temporalHistoryMax  = std::clamp(temporalHistoryMaxLocal, 1, 256);
-        fp.filterSpatial       = o.filterSpatial;
-        fp.filterReject        = false;
+        fp.filterSpatial       = filterSpatialLocal;
+        fp.filterReject        = filterRejectLocal;
+        fp.rejectThreshold     = std::clamp(rejectThresholdLocal, 0.0001f, 1.0f);
         fp.filterGiDump        = o.filterGiDump;
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
@@ -2580,6 +2592,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     hud.temporalEnable = temporalEnableLocal;
                     hud.temporalAlpha = temporalAlphaLocal;
                     hud.temporalHistoryMax = temporalHistoryMaxLocal;
+                    hud.filterSpatial = filterSpatialLocal;
+                    hud.filterReject = filterRejectLocal;
+                    hud.rejectThreshold = rejectThresholdLocal;
                 }
             }
             if (o.screenshot) {
@@ -2701,6 +2716,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     temporalEnableLocal = hud.temporalEnable;
                     temporalAlphaLocal = hud.temporalAlpha;
                     temporalHistoryMaxLocal = hud.temporalHistoryMax;
+                    filterSpatialLocal = hud.filterSpatial;
+                    filterRejectLocal = hud.filterReject;
+                    rejectThresholdLocal = hud.rejectThreshold;
                 }
             }
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
@@ -3931,6 +3949,8 @@ void printUsage() {
               << "  viewer.exe --temporal-history-max <n>  accumulated frame cap (1..256, default 32)\n"
               << "  viewer.exe --temporal-off           disable temporal layer (single-frame GI)\n"
               << "  viewer.exe --spatial                S12 M12.1: enable 5x5 joint bilateral spatial layer\n"
+              << "  viewer.exe --filter-reject          S12 M12.2: enable history rejection layer (B1, no prev GBuffer)\n"
+              << "  viewer.exe --reject-threshold <f>   reject depth/plane threshold (default 0.01)\n"
               << "  viewer.exe --filter-gi-dump         S12 acceptance: dump accumulated GI component\n"
               << "  viewer.exe --vis-viz cluster|triangle\n"
               << "                                     visbuf mode: decode vis buffer by clusterId\n"

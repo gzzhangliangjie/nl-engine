@@ -367,13 +367,15 @@ void Hud::build(HudFrame& frame) {
         ImGui::TextUnformatted(probeLine);
         ImGui::Separator();
     }
-    // S12 M12.0：filter 时域面板（默认 false → 既有 --hud 基线零布局变化）。
-    // 三层独立开关：时间层本阶段可调；空间 / 拒绝层只读标注，M12.1 / M12.2 接。
+    // S12 M12.0~M12.2：filter 参数面板定型（默认 false → 既有 --hud 基线零布局变化）。
+    // 三层独立开关 + 滤波强度 / 历史长度 / 拒绝阈值；面板只在 --mode filter 绘制。
     if (frame.filterPanelShow) {
         ImGui::Checkbox("temporal layer (GI accumulation)", &frame.temporalEnable);
         ImGui::SliderFloat("temporal alpha", &frame.temporalAlpha, 0.01f, 1.0f, "%.2f");
         ImGui::SliderInt("history max frames", &frame.temporalHistoryMax, 1, 128);
-        ImGui::TextUnformatted("spatial : pending M12.1 | reject : pending M12.2");
+        ImGui::Checkbox("spatial layer (5x5 bilateral)", &frame.filterSpatial);
+        ImGui::Checkbox("reject layer (history rejection)", &frame.filterReject);
+        ImGui::SliderFloat("reject threshold", &frame.rejectThreshold, 0.0005f, 0.10f, "%.4f");
         ImGui::Separator();
     }
     ImGui::Separator();

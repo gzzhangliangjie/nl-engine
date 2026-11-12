@@ -403,3 +403,18 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | ⚠️ 首轮 MAE 超门限的根因 | `ncValid=false` 时原来放行 `wN=1` → 物体/天空边界像素完全不保边；Carrot `depthDivisor` 按 `gradZ` 放大分母 → 边缘权重反而更宽松（REF-edge 误差 +24.6%） | `filter_spatial.slang` 文件头追因注释 | — | 加固为「`ncValid=false` 用 `deviceZ` 一致性代理 + 固定 `sigmaZ=0.002f`」；重编后数值几乎不变 → 临时深度可视化实锤 `probeDepth_` 的 `zc` 在 8-bit 下仅 **184~186 三档**（单凸体+纯天空无真实几何边缘，联合双边近似高斯），**不是绑定错误**。debug 分支已还原、双后端从最终源码重编并重链 |
 | 验收口径 | `tools/check-s12-spatial.py onoffref`（纯标准库 PNG 解码）：`ON != OFF` + `hf` ratio ≤ 0.90 + `MAE` ratio ≤ **1.15** + `edgeGradRatio ≥ 0.30`（硬断言） | `example/s12-spatial/run.bat verify` 双后端 + 负向控制 + selftest | — | 联合双边是**有偏估计**（方差↓换偏差↑），MAE 小幅上升属预期，门限按实测标定（M12.0 先例）而非预设猜测；`edgeGradRatio` 防「糊平画面骗降噪」。Q11-1：GPU 数值走统计不变量、禁 `bytes`。本场景无真实几何边缘 → 保边能力留 M12.2 / 多物体场景验证 |
 | ⚠️ exe 过期门禁 | 只改 `.slang` 时 `cmake --build` 仅重编字节码、**不重链** `viewer.exe` → exe mtime < shader mtime | `regression.py` freshness gate | — | 收口前删 `build/{DX12,VULKAN}/viewer.exe` 再 `build-m0.2.bat` 强制重链；实测门禁会直接拒绝出报告（M12.1 收口实锤） |
+
+#### S12 M12.2 历史拒绝层槽位同步表（落码实读固化，2026-11-13，tag `s12-done`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| `filter_temporal.slang` 拒绝层（Q12-B 续拍 = B1） | 单入口 `csFilterTemporal` 内 `rejectHistory()`：越界（M12.0 已有）+ 重投影 deviceZ 差 + 当前帧法线一阶切平面外推残差 + 3×3 深度邻域 clamp；拒绝时 `len=0`、`acc=cur.rgb`（重生噪声，帧数置信度） | 原 shader 文件内扩写，**零新增 shader / PSO / RT / CB / 纹理**；CMake 产物登记一字不动（108/108） | `filterLayout_` / `filterSet_[2]` **新增 t2 = `probeDepth_` SRV**（已有纹理，M12.1 spatial set 同款复用先例）；`filterSpatialLayout_` 一字不动。`dxc -dumpbin` 实锤反射 `g_depth_0 → T2` | **零新增 previous normal / previous_gbuffer**（Q4 冻结面结案）；只读当前帧深度，不读颜色邻域 → 避开 M12.1 实锤的「RWTexture 原地读邻域跨线程 hazard」；history ping-pong 状态机、UAV→SRV→UAV 转换闭合一律不变 |
+| `g_flags.w` 语义复用 | 0 = 拒绝层关；>0 = 开且该值即深度阈值（`--reject-threshold`，默认 0.01，CPU clamp 0.0001..1） | `drawFilterTemporal` 的 `fcb[7]`；`viewer/main.cpp` `--filter-reject` / `--reject-threshold` → `FrameParams::filterReject` / `rejectThreshold` | FilterConstants **仍 2×float4 = 32B**（`dxc -dumpbin` 实锤 `Size: 32`），64B 过量分配不变 → SSC §2.21 / M11.0 CB 越界铁律零风险；`filter_spatial.slang` 不读 `.w` | 关时整块拒绝分支不执行 → M12.0/M12.1 保形基线逐值不变；静态相机 `velocity=0` 时判据残差全 0，拒绝层**结构性不触发**（本场景 deviceZ 仅 184~186 三档） |
+| 参数面板定型 | `hud.cpp` filter 面板：时间 checkbox + `temporal alpha`（滤波强度）+ `history max`（历史长度）+ 空间 checkbox + 拒绝 checkbox + `reject threshold` | `HudFrame` 新增 3 个 POD 字段 + `viewer/main.cpp` local 双向同步 | — | `filterPanelShow` 仍默认 false、只在 `--mode filter` 绘制 → 既有 `--hud` 卡零布局变化；面板高 ≤560 |
+| 验收 / D-B 参考 | `tools/check-s12-done.py`（纯标准库 PNG 读写）子命令 `avg` / `refcheck` / `ghost` / `selftest`；`example/s12-done/run.bat verify` 双后端 | 参考序列 32 帧（`N ≤ 64`，`s12Frame_ % 64`）；运动序列 16 帧**不平均**，用同帧无历史单帧作鬼影基准 | — | Q11-1：GPU 数值走统计不变量、禁 `bytes`；门限按实测标定（M12.1 先例）：`MAER=1.05` / `MAXMAE=1.00` / `HFR=1.05` / `GHOSTR=0.95`；负向控制 = 单帧噪声图冒充 ON、阈值极小 REJALL 的层响应 |
+
+**开工闸决策注记（2026-11-13，保留；槽位表述按落码实读勘误）**：
+- Q12-B 续拍 = **B1 维持不落盘**：零新增 previous normal / previous_gbuffer **资源**；原注记「`filterLayout_` 槽位表不作任何变更」更正为「`filterLayout_` 仅新增 t2 复用已有 `probeDepth_` SRV，`filterSpatialLayout_` 不变」。判据 = 越界 + 重投影深度差 + 当前帧法线（`T0-PLAN.md §1` 退化口径）+ 零资源 3×3 深度邻域 clamp / 帧数置信度。
+- Q12-D = **D-B 关滤波 N 帧平均**：`--temporal-off --filter-gi-dump` + `--screenshot-seq` 逐像素平均出参考图；抖动帧号 `s12Frame_ % 64` → **N ≤ 64**（本轮取 32）。零 shader 改动，纯工具层。
+- ⚠️ M12.0/M12.1 **无 S12 鬼影实测**的缺口**已于 M12.2 落码期补**：`--orbit-speed 1.5` + `--screenshot-seq` 运动序列 + `check-s12-done.py ghost`（纯工具）；本场景无真实几何边缘，主观鬼影/多物体复评仍挂后续项。
+- 权威落点 `docs/s12/S12-PLAN.md §0.8`；开工闸时 `example/cases.json` 未动，落码期已补 `s12-done` 版本卡。

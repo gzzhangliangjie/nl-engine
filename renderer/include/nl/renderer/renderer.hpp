@@ -159,7 +159,8 @@ struct FrameParams {
     float temporalAlpha       = 0.1f;   // 当前帧 GI 权重下限（0.01..1，越小历史越重）
     int   temporalHistoryMax  = 32;     // 历史长度上限（1..256，自适应 α=1/(len+1)）
     bool  filterSpatial       = false;  // 空间层（M12.1 已实现，--spatial 开启）
-    bool  filterReject        = false;  // 拒绝层（M12.2 实现）
+    bool  filterReject        = false;  // 拒绝层（M12.2 已实现，--filter-reject 开启）
+    float rejectThreshold     = 0.01f; // M12.2：拒绝阈值（写入 g_flags.w，0 = 层关）
     bool  filterGiDump        = false;  // S12 验收：把累积后的 gatherLinear_ 直出（绕开 compose）
 };
 
@@ -295,6 +296,10 @@ struct HudFrame {
     bool  temporalEnable      = true;
     float temporalAlpha       = 0.1f;
     int   temporalHistoryMax  = 32;
+    // ---- S12 M12.2：三层独立开关 + 拒绝阈值，参数面板定型（默认全关 = 既有卡零漂）。
+    bool  filterSpatial       = false;
+    bool  filterReject        = false;
+    float rejectThreshold     = 0.01f;
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）

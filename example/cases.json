@@ -10211,6 +10211,61 @@
      "script": "example/s12-spatial/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s12-done",
+   "label": "M12.2",
+   "name": "S12 收官：历史拒绝层（Q12-B 续拍 B1 零落盘）+ D-B 时域参考（Q12-D 关滤波 N 帧平均）",
+   "tag": "s12-done",
+   "date": "2026-11-13",
+   "summary": "S12 M12.2 收官，开工闸两问已拍板：Q12-D = D-B「关滤波 N 帧平均」（S12 自立·与被测对象同构的时域参考）、Q12-B 续拍 = B1「维持不落盘」（Q4 三次顺延项结案）。拒绝层落进 M12.0 的 filter_temporal.slang，五条判据：越界（M12.0 已有）、重投影 deviceZ 差 > thr、当前帧法线一阶代理（右/下邻域深度梯度外推局部切平面残差，bevy pixel_dissimilar 的零属性退化版）、3x3 深度邻域 min/max clamp（bevy TAA 零资源版，只读深度避开 M12.1 实锤的 RWTexture 跨线程 hazard）、帧数置信度（拒绝即 len=0，靠 alpha=max(userAlpha,1/(len+1)) 自动短历史）。零新增 previous normal / previous_gbuffer / RT / CB / 纹理：filterLayout_ 仅增 t2 = 已有 probeDepth_ SRV，filterSpatialLayout_ 一字不动；开关与阈值复用 g_flags.w（0=层关）→ FilterConstants 仍 32B（dxc -dumpbin 实锤 Size 32、反射 g_depth_0 落 T2），64B 过量分配不变。--filter-reject 默认关以保形，--reject-threshold 默认 0.01（CPU clamp 0.0001..1），HUD filter 面板补齐空间/拒绝 checkbox 与阈值滑杆（filterPanelShow 仍默认关，--hud 卡零布局变化）。Q12-D 参考图 = --mode filter --temporal-off --filter-gi-dump + --screenshot-seq 的 N 帧单帧 GI 直出逐像素平均（tools/check-s12-done.py avg，纯标准库无 PIL），S12 自立且与被测对象同 csGather 权重/抖动分布；抖动帧号 s12Frame_ % 64 → N<=64 封顶（工具对 N>64 直接拒绝），本轮取 32。运动序列绝不平均，改以「同帧无历史单帧」逐帧序列作鬼影基准。零新增 shader 文件/CMake 登记，kStage 保持 S8.2。",
+   "acceptance": "双后端删 exe 强制重链后 BUILD OK + selftest 16/16 + shader 产物 108/108（无新增 shader 文件）；dxc -dumpbin 实锤 cbuffer Size 32 且 t2 = g_depth 进反射。example/s12-done/run.bat verify 双后端 ALL GREEN：每后端 7 类共 14 次 shot（32 帧 D-B 参考序列 / 静态 OFF·ON / 运动 ON·OFF·SINGLE·REJALL 各 16 帧），全部 exit 0 + deviceErrors=0；check-s12-done.py avg 产 ref-avg-*.png；refcheck 静态 MAE(OFF,D-B)=MAE(ON,D-B) = 0.779(DX12) / 0.780(VULKAN) <= MAER 1.05 且 <= MAXMAE 1.00、hf 0.677/0.677 <= HFR 1.05、diffPixels(ON,OFF)=0（静态 velocity=0 拒绝层结构性不触发，符合预期）；负向控制用参考序列 f00016.png 单帧噪声冒充 ON 必须被拒（实测 MAE 3.175、hf 1.216 三条断言全触发）；ghost 运动 meanMAE(ON,single)=3.456 vs meanMAE(OFF,single)=4.086 → ratio 0.846 <= GHOSTR 0.95（双后端同值），层响应 meanDiff(ON,OFF) 6000.4 → meanDiff(REJALL,OFF) 20012.4/20011.1 后者必须更大；工具 selftest OK（avg / refcheck / ghost 正负路径 + N>64 拒绝全覆盖）。门限按 2026-11-13 双后端实测标定（M12.1 先例，不猜）。保形：拒绝层默认关 → example/s12-temporal/run.bat verify 与 example/s12-spatial/run.bat verify 仍 ALL GREEN 且 hf 1.216→0.677→0.475、MAE 2.687/3.012、edgeGradRatio 0.493 逐项与冻结记录一致；--only 双后端 bytes spot 全绿。Q11-1 口径：GPU 数值断言走统计不变量、禁 bytes。⚠️ 鬼影证据口径：本轮补的是运动跟手性代理（ON 相对同帧无历史基准的 MAE 更低），不是主观鬼影判据；本场景单凸体+纯天空、probeDepth_ deviceZ 仅 184~186 三档、无真实几何边缘，主观鬼影与拒绝层保边收益留多物体场景复评（挂后续项）。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gpu-smoke",
+     "name": "M12.2 拒绝层 GPU 冒烟：--mode filter --filter-reject + --filter-gi-dump 双后端",
+     "kind": "tool",
+     "note": "只断言退出码与 deviceErrors=0（Q11-1 统计口径，禁 bytes）。必须用 --dist 4：--dist 7 下 gather 权重全灭使 gatherLinear_ 恒 0、GI 直出全黑。--filter-reject 显式开启历史拒绝层，默认关以保持 M12.0/M12.1 基线零重拍。证据图为 run.bat verify 同参数产出的 static-on-dx12.png（16 帧 GI 直出）。",
+     "args": [
+      "--mode",
+      "filter",
+      "--filter-reject",
+      "--filter-gi-dump",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode filter --filter-reject --filter-gi-dump --model Suzanne-materials.nmesh --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4 --screenshot {out}",
+     "preview": "example/s12-done/static-on-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "done-stats",
+     "name": "M12.2 收官统计验收：双后端 D-B 参考图 + 静态漂移 + 负向控制 + 运动鬼影代理 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify 双后端各跑 32 帧 D-B 参考序列 + 静态 OFF/ON + 运动 ON/OFF/SINGLE/REJALL 各 16 帧（序列产物落 %TEMP%\\nl-s12-done 避免上百张 PNG 入仓），python tools/check-s12-done.py 的 avg / refcheck / ghost / selftest 四子命令做统计断言；纯标准库 PNG 解码（本机 python 无 PIL）。负向控制：单帧噪声图冒充 ON 必须被拒；REJALL（--reject-threshold 0.0001）必须比 ON 拒绝更多历史，验证阈值确实生效。门限 MAER/MAXMAE/HFR/GHOSTR 全部按双后端实测标定。",
+     "args": [],
+     "command": "example/s12-done/run.bat verify",
+     "script": "example/s12-done/run.bat verify"
+    }
+   ]
   }
  ]
 }
