@@ -3114,7 +3114,7 @@
 - 🟢 ctest DX12 `net-m0` 5/5 全绿（`--repeat until-pass:3`）。
 - 🟢 `example/net-m0/run.bat` **ALL GREEN exit 0** 七段全过：双进程零丢失 `sent=32 recv=32 loss=0.0% rttAvg=0.2ms` + server `served=32`；30% 丢包注入实测 `sent=32 recv=22 loss=31.2%` exit 2（种子 1234 确定性）；死端口负向显式拒绝。
 - 🟢 手动后台 server + 前台 client 独立复证双进程链路（沙箱 start 回收问题与库逻辑解耦）。
-- ⏳ VULKAN 后端构建 + ctest 待本轮收尾补跑（PQBFQA 首轮 DX12 后并行推进）。
+- 🟢 VULKAN 后端：全量构建 + selftest 16/16 + `net-m0` ctest 5/5 全绿（`--repeat until-pass:3`）。
 
 **踩坑情况**
 1. **ENet 服务器只在 service 时处理握手包**：单进程回环 `connect()` 阻塞等 CONNECT 期间同线程 server 不泵 → 3000ms 必超时（直拉实锤）。修 = `beginConnect()` 非阻塞发起 + 回环主循环双 host 交替泵；阻塞 `connect()` 保留给双进程（对端自泵）。
