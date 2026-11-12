@@ -1,0 +1,11 @@
+loss  0%   : recv 32/32
+loss 10%   : recv 29/32
+loss 20%   : recv 24/32
+loss 30%   : recv 22/32
+loss 40%   : recv 19/32
+loss 50%   : recv 16/32
+loss 60%   : recv 14/32
+loss 70%   : recv 11/32
+loss 80%   : recv 7/32
+loss 90%   : recv 1/32
+sweep       : OK

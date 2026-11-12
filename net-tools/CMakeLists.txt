@@ -18,6 +18,10 @@ set_tests_properties(net-m0-echo PROPERTIES
 add_test(NAME net-m0-selftest COMMAND net-tools selftest)
 set_tests_properties(net-m0-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "selftest net: PASS")
+# 丢包注入扫（0..90% 逐级实测，种子 1234 确定性；证据图数据源）
+add_test(NAME net-m0-loss-sweep COMMAND net-tools loss-sweep)
+set_tests_properties(net-m0-loss-sweep PROPERTIES
+    PASS_REGULAR_EXPRESSION "sweep       : OK")
 # 版本锚（vendored 溯源复核）
 add_test(NAME net-m0-version COMMAND net-tools version)
 set_tests_properties(net-m0-version PROPERTIES

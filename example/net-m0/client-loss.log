@@ -1,0 +1,1 @@
+echo-client : sent=32 recv=22 loss=31.2% rttAvg=0.3ms n=22

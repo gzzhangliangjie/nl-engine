@@ -39,6 +39,12 @@ if errorlevel 1 (type "%D%selftest.log" & echo [ERROR] selftest FAILED & exit /b
 findstr /c:"selftest net: PASS" "%D%selftest.log" <nul >nul || (echo [ERROR] PASS anchor missing & exit /b 1)
 type "%D%selftest.log"
 
+echo === loss-sweep (per-level injection 0..90%%, evidence chart data source) ===
+"%EXE%" loss-sweep <nul > "%D%loss-sweep.log" 2>&1
+if errorlevel 1 (type "%D%loss-sweep.log" & echo [ERROR] loss-sweep FAILED & exit /b 1)
+findstr /c:"sweep       : OK" "%D%loss-sweep.log" <nul >nul || (echo [ERROR] sweep anchor missing & exit /b 1)
+type "%D%loss-sweep.log"
+
 echo === dual-process: echo-server + echo-client (32 reliable round trips) ===
 rem start /b direct exe (no intermediate cmd): child inherits redirected stdout;
 rem `start /min cmd /c` dies in sandboxed sessions (child reaped) - do not regress.

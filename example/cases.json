@@ -10361,6 +10361,19 @@
      "expectExit": 1,
      "expectLog": "connect     : FAILED",
      "command": "net-tools echo-client 127.0.0.1 29199"
+    },
+    {
+     "id": "loss-sweep",
+     "name": "loss-sweep：逐级丢包注入实测（0..90%，证据图数据源）",
+     "kind": "tool",
+     "note": "单进程回环每级 fresh server+client，可靠通道 32 包全量重传必达，client 模拟入站丢弃后打印逐级 recv。种子 1234 确定性；右侧 preview = tools/make-net-evidence.py 从本命令真实输出生成的柱状图（纯标准库渲染，无手绘）。",
+     "args": [
+      "loss-sweep"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep       : OK",
+     "command": "net-tools loss-sweep",
+     "preview": "example/net-m0/net-m0-evidence.png"
     }
    ]
   }

@@ -298,6 +298,85 @@ int cmdEchoClient(int argc, char** argv) {
     return recv == sent ? 0 : 2;
 }
 
+// loss-sweep：单进程回环逐级丢包实测（0..90% 步进 10，种子 1234 确定性）。
+// 每级 fresh server+client，可靠通道 32 包全量重传必达，client 侧模拟丢弃后
+// recv = 32 - 模拟丢包数。逐行打印真实测量值，供证据图渲染（纯工具侧，零游戏语义）。
+int cmdLossSweep(int argc, char** argv) {
+    uint32_t port = 29194, packets = 32, payload = 64, timeoutMs = 5000;
+    if (!findOptU32(argc, argv, "--port", &port) || port == 0 || port > 65535 ||
+        !findOptU32(argc, argv, "--packets", &packets) ||
+        !findOptU32(argc, argv, "--payload", &payload) ||
+        !findOptU32(argc, argv, "--timeout-ms", &timeoutMs)) {
+        std::fprintf(stderr, "loss-sweep: bad option value\n");
+        return 2;
+    }
+    NetGuard guard;
+    if (!guard.ok) return 1;
+    static const int kLevels[] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90};
+    std::vector<uint8_t> buf;
+    bool ok = true;
+    for (int loss : kLevels) {
+        nl::net::NetServer server;
+        if (!server.start(static_cast<uint16_t>(port), 4)) {
+            std::fprintf(stderr, "loss-sweep: server start failed port=%u\n", port);
+            return 1;
+        }
+        nl::net::NetClient client;
+        if (!client.beginConnect("127.0.0.1", static_cast<uint16_t>(port))) {
+            std::fprintf(stderr, "loss-sweep: beginConnect failed\n");
+            return 1;
+        }
+        std::mt19937 rng(1234); // 固定种子：序列确定性
+        std::uniform_int_distribution<int> drop(0, 99);
+        std::map<uint32_t, bool> seen; // seq -> 到达（丢弃模拟前）
+        const double deadline = nowSec() + timeoutMs * 0.001;
+        uint32_t sent = 0, recv = 0;
+        std::vector<nl::net::NetEvent> evs;
+        while (nowSec() < deadline && seen.size() < packets) {
+            std::vector<nl::net::NetEvent> sevs;
+            server.service(0, sevs);
+            for (const auto& e : sevs) {
+                if (e.type == nl::net::EventType::Data) {
+                    server.send(e.peerId, e.channel, e.data.data(), e.data.size());
+                }
+            }
+            evs.clear();
+            client.service(0, evs);
+            for (const auto& e : evs) {
+                if (e.type == nl::net::EventType::PeerDisconnected) {
+                    std::fprintf(stderr, "loss-sweep: disconnected at loss=%d%%\n", loss);
+                    return 1;
+                }
+                if (e.type != nl::net::EventType::Data || e.data.size() < 6) continue;
+                const uint32_t seq = uint32_t(e.data[4]) | (uint32_t(e.data[5]) << 8);
+                if (seen.count(seq)) continue;      // 可靠重传的同一包只算一次
+                seen[seq] = true;
+                if (drop(rng) >= loss) ++recv;      // 模拟入站丢包
+            }
+            if (!client.connected()) continue;      // 握手未完成，继续双泵
+            if (seen.size() < packets && sent < packets) {
+                const uint32_t seq = sent++;
+                buf.assign({uint8_t(kEchoMagic & 0xFF), uint8_t((kEchoMagic >> 8) & 0xFF),
+                            uint8_t((kEchoMagic >> 16) & 0xFF), uint8_t((kEchoMagic >> 24) & 0xFF)});
+                buf.push_back(uint8_t(seq & 0xFF));
+                buf.push_back(uint8_t((seq >> 8) & 0xFF));
+                buf.resize(6 + payload, 0xAB);
+                client.send(nl::net::Channel::Reliable, buf.data(), buf.size());
+            }
+        }
+        std::printf("loss %2d%%   : recv %u/%u\n", loss, recv, packets);
+        if (seen.size() < packets) ok = false;
+        client.disconnect();
+        server.stop();
+    }
+    if (!ok) {
+        std::fprintf(stderr, "sweep       : TIMEOUT\n");
+        return 2;
+    }
+    std::printf("sweep       : OK\n");
+    return 0;
+}
+
 int cmdSelftest() {
     EchoArgs a;
     a.reliable = 16;
@@ -324,6 +403,8 @@ void printUsage() {
         "                        run echo server until N packets served; exit 0/1/2\n"
         "  net-tools echo-client <host> <port> [--packets N] [--rate R] [--loss P] [--payload B] [--timeout-ms T]\n"
         "                        run echo client; exit 0=all echoed 1=connect fail 2=loss/timeout\n"
+        "  net-tools loss-sweep [--port P] [--packets N] [--timeout-ms T]\n"
+        "                        per-level loss injection 0..90%% (seed 1234); exit 0/2\n"
         "  net-tools selftest    deterministic loopback assertions; exit 0=PASS 1=FAIL\n"
         "  net-tools version     print vendored ENet version\n",
         nl::net::version());
@@ -351,6 +432,7 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(cmd, "echo-server") == 0) return cmdEchoServer(argc - 2, argv + 2);
     if (std::strcmp(cmd, "echo-client") == 0) return cmdEchoClient(argc - 2, argv + 2);
+    if (std::strcmp(cmd, "loss-sweep") == 0) return cmdLossSweep(argc - 2, argv + 2);
     if (std::strcmp(cmd, "selftest") == 0) return cmdSelftest();
     if (std::strcmp(cmd, "version") == 0) {
         std::printf("enet        : %s\n", nl::net::version());
