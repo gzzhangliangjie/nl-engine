@@ -10104,6 +10104,59 @@
      "script": "example/s11-bounce/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s12-temporal",
+   "label": "M12.0",
+   "name": "S12 历史帧并轨：GI 分量独立时域累积（Motion vector 重投影 + history ping-pong）",
+   "tag": "s12-temporal",
+   "date": "2026-11-12",
+   "summary": "S12 M12.0：Q12-A 拍板 GI 分量独立——复用 M10.2 的 gatherLinear_（GI-only 全屏 RGBA16F）与 T0 的 history0_/history1_（RGBA32F ping-pong），零新增 RT；新 filter_temporal.slang compute 8x8 插在 csGather 与 csGatherCompose 之间，velocity 回投 prevUV=curUV-vel、alpha=max(userAlpha,1/(len+1))、越界拒史，把累积 GI 原地写回 gatherLinear_，compose 默认分支一字不动（M11.1 冻结基线形态）。Q12-B 判定 M12.2 前凭实测再拍，M12.0 只用退化口径。落码期实测静态 ON/OFF/probe/32 帧四图 MD5 全同——M10.1 每探针 64 条固定八面体方向逐帧确定性，lerp(hist,cur,alpha) 恒等于 cur，且 M11.2 已记 csGather 只采外法线方向 texel（凸体+纯天空恒 miss）；用户追加拍板 Q12-E「仅 filter 态加帧间抖动」。抖动复用 traceCB_ g_traceBounce 保留分量 z/w（80B CB 尺寸不变，M11.0 越界实锤），非 filter 态 flag=0 整块不执行。微扰版无效：atlas dump 已变但合成图逐字节不变，因朝外方向微扰不改变 hit/miss；改为逐帧随机方向置换（每 texel 重采一个 core texel 方向）后 GI 才有真噪声。另一实锤：--dist 7（s10/s11 基线卡参数）下 csGather 权重 exp2(-10000*rel*rel) 全灭，gatherLinear_ 恒 0；验收改用 --dist 4 并新增 --filter-gi-dump（复用 M11.2 csIrradDump/irradDumpLayout_/irradDumpPSO_，零新增 shader/PSO/RT）把累积 GI 直出。三层独立开关只落时间层，kStage 保持 S8.2。踩坑：history 首版 keepInitialState=true 锁成 permanent SRV → DX12 ECL barrier 布局不符 deviceErrors=7，去掉后归零。",
+   "acceptance": "双后端构建 selftest 16/16 + shader 产物 106/106 登记；--mode filter 双后端 deviceErrors=0；保形 3 条 --only（s10-gather/gather、s11-bounce/gpu-smoke、s10-probe/probe-viz）双后端 bytes 全绿；example/s12-temporal/run.bat verify ALL GREEN：每后端重拍 REF/OFF/ON 三图，check-s12-temporal.py onoffref 断言 ON!=OFF（diffPixels 135409/135413）、hf ratio 0.556/0.557 <= 0.88、MAE ratio 0.688 <= 0.90，负向控制非零退出、工具 selftest PASS；静态收敛实测 hf OFF 1.216 -> ON16 0.677、MAE OFF 3.902 -> ON16 2.687，合成图 hf OFF 1.873 -> ON 1.493。Q11-1 口径：GPU 数值双后端非逐字节相同（MD5 不同），断言走统计不变量。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gpu-smoke",
+     "name": "M12.0 时域累积 GPU 冒烟：--mode filter + --filter-gi-dump 双后端",
+     "kind": "tool",
+     "note": "只断言退出码与 deviceErrors=0（Q11-1 统计口径，禁 bytes）。必须用 --dist 4：--dist 7 下 gather 权重全灭使 gatherLinear_ 恒 0，GI 直出全黑，ON/OFF 结构性相同。--filter-gi-dump 绕开 compose 直出累积 GI 分量。",
+     "args": [
+      "--mode",
+      "filter",
+      "--filter-gi-dump",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode filter --filter-gi-dump --model Suzanne-materials.nmesh --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4 --screenshot {out}",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "temporal-stats",
+     "name": "M12.0 收敛统计验收：双后端 ON/OFF/REF 自比 + 负向控制 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify 每后端重拍 REF（无抖动） / OFF（--temporal-off 单帧噪声） / ON（累积 16 帧）三张 GI 直出图，python tools/check-s12-temporal.py onoffref 做统计断言；纯标准库 PNG 解码（本机 python 无 PIL）。负向控制用 OFF 冒充 ON 必须被拒。冻结证据图 ref-*.png / temporal-on-*.png 只作展示，断言用同次重拍的 REF。",
+     "args": [],
+     "command": "example/s12-temporal/run.bat verify",
+     "script": "example/s12-temporal/run.bat verify"
+    }
+   ]
   }
  ]
 }

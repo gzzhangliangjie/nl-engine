@@ -26,6 +26,8 @@
 //        + t4 TLAS + t5 wcChecksums / t6 wcRadiance（M11.2 查缓存，只加 SRV
 //        不动 Q4 冻结面）+ u0..u3 irradiance atlas UAV（RGBA16F，每级一张）
 // （M10.1 无时间混合：单份不 ping-pong，降噪归 M10.3/S14。）
+// S12 Q12-E：本入口仅在 --mode filter 下加逐帧方向抖动（g_traceBounce.z/w），
+// 为 M12.0 时间累积提供 Monte Carlo 噪声源；非 filter 态保持 M10.1 原形态。
 
 #include "octahedral.slangh"
 #include "sky.slangh"
@@ -39,8 +41,13 @@ cbuffer TraceConstants : register(b0)
                               // y = shadow tMax / z = baseRes / w = oct core res(8)
     // M11.2（SSC §2.21：CPU 布局逐字段对齐，scene.cpp tcb[16..19]）
     float4 g_traceBounce;     // x = 查缓存有效开关（probeCacheBounce && cacheFrame>0
-                              //     ——首帧无「上一帧收敛值」，必须走兜底）,
-                              // y/z/w = 保留
+                              //     ——首帧无「上一帧收敛值」，必须走兜底）
+                              // y = DIAG 伪彩开关（CPU tcb[17]，本入口不消费）
+                              // z = S12 Q12-E 帧间抖动开关（仅 --mode filter 置 1）
+                              // w = S12 帧号（CPU 取模 64，确定性）
+    // ⚠️ CB 尺寸恒 80B（5×float4）：Q12-E 只复用上面已声明的保留分量，
+    // 不新增字段 —— CPU traceCB_ 分配 80B 不变（M11.0 实锤：分配小于
+    // dxc -dumpbin 声明 Size → shader 读越界得 0 → 全线程静默早退）。
 }
 
 Texture2D<float4> g_placeAtlas0 : register(t0);   // 布点 atlas（RGBA32F cur parity）
@@ -122,7 +129,32 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
     if (probe.w > 0.0f)
     {
         // 探针 texel 方向（border texel wrap 到对侧 core 方向，无缝口径）。
-        const float3 dir = octaTexelToDir(octT, octRes);
+        // ---- S12 M12.0（Q12-E 拍板）：filter 态逐帧方向重采样 ----
+        // M10.1 每探针 64 条固定八面体方向逐帧确定性 → 静态场景里
+        // lerp(hist, cur, alpha) 恒等于 cur（结构性 ON≡OFF，M11.2 同族坑）。
+        // ⚠️ 不能只做「方向微扰」：M11.2 在 probe_atlas_dump.slang 文件头实锤，
+        // csGather 每像素只采**外法线方向**那一个 texel，本凸体+纯天空场景中
+        // 该方向恒 miss → 天空渐变；朝外方向微扰 0.15 rad 不会变命中，合成图
+        // 仍逐字节相同（本轮实测：微扰版四图 MD5 全同，而 --probe-atlas-dump
+        // 已证明 atlas 本身确实变了）。故改为每帧把该存储 texel 的射线方向
+        // **随机置换到另一个 core texel**：gather 读到的 texel 逐帧在
+        // 天空/命中之间跳变，产生真实 Monte Carlo 噪声，时间累积才有收敛。
+        // ⚠️ 保形硬边界：非 filter 态 g_traceBounce.z=0 → 整块不执行、dir 仍是
+        // 原表达式；复用 M11.2 已验证的 flag 门控形态（s10-* 冻结基线零漂）。
+        // core texel 取 wrap 后坐标 → border 与对侧 core 抖动一致，跨 seam 无缝。
+        float3 dir = octaTexelToDir(octT, octRes);
+        if (g_traceBounce.z > 0.5f)
+        {
+            const int  n    = int(octRes);
+            const int2 core = ((octT % n) + n) % n;
+            const uint frame = uint(g_traceBounce.w);
+            uint h = ptPcg((uint(core.x) * 1973u) ^ (uint(core.y) * 9277u));
+            h = ptPcg(h ^ (probeT.x * 26699u) ^ (probeT.y * 31259u) ^ (frame * 66899u));
+            const uint mask = octRes - 1u;   // octRes 为 2 的幂（UE 口径 8）
+            const int2 jt = int2(int(ptPcg(h) & mask),
+                                 int(ptPcg(h ^ 0x9e3779b9u) & mask));
+            dir = octaTexelToDir(jt, octRes);
+        }
         RayDesc ray;
         ray.Origin    = probe.xyz;                      // 布点已带法线偏移
         ray.Direction = dir;

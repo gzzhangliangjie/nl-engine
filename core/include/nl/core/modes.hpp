@@ -35,7 +35,9 @@ enum class ViewMode {
                       //  = 直光真值 + 单弹射蒙特卡洛，与 M10.1 探针物理逐项同口径）
     CacheViz = 19,    // S11 M11.0：--mode cache-viz 世界缓存 flat hashmap 占用伪彩
                       //  （Q11-0 方案 A：无墓碑 + life 衰减清零立即重用 + 3 步探测）
-    // S1 起依次追加：Cache, Filter, Final
+    Filter = 20,      // S12 M12.0：--mode filter（Q12-A 拍板 GI 分量独立时域累积；
+                      //  复用 probe 链 velocity + T0 history0/1 ping-pong，零新增 RT）
+    // S1 起依次追加：Cache, Final
     Count
 };
 

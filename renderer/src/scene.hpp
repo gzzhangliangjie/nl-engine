@@ -485,6 +485,11 @@ public:
     // gather 态下调用方跳过 drawProbeDots（Q13-3：无点叠加）。
     bool drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                          const FrameParams& params, std::string& outError);
+    // S12 M12.0（Q12-A）：csFilterTemporal GI 分量时域累积。仅 filter 态在
+    // csGather 与 csGatherCompose 之间插入；非 filter 态 compose 的绑定与执行
+    // 顺序一字不动（M11.1 冻结基线代码形态实锤）。
+    bool drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                            const FrameParams& params, std::string& outError);
 
     // ---- S11 M11.0（S11）：--mode cache-viz 世界缓存 flat hashmap ----
     // initCache = 缓冲（checksums/life/geo ×kCacheCapacity）+ 三 compute 管线；
@@ -504,6 +509,11 @@ public:
     // 仅 --probe-atlas-dump 时调用，presentTonemap 之前。
     bool drawIrradDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                        const FrameParams& params, std::string& outError);
+    // drawGiDump（S12 验收）：复用 csIrradDump / irradDumpLayout_ / irradDumpPSO_，
+    // 只把 t0 源换成累积后的 gatherLinear_，全替换写 hdrSceneColor_（绕开 compose）。
+    // 合成图在本场景结构性读不到 GI 变化（M11.2 实锤）→ 验收对象必须是 GI 分量本身。
+    bool drawGiDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                    std::string& outError);
   private:
     // 懒建 cache sets（依赖 probeDepth_ / hdrSceneColor_，句柄变了就重建——
     // set 是不可变对象，纹理重建后必须换新 set）。
@@ -978,8 +988,8 @@ private:
     nvrhi::TextureHandle         hdrSceneColor_;   // R11G11B10_FLOAT 离屏 HDR 场景色
     nvrhi::FramebufferHandle     hdrColorFb_;      // 仅 hdrSceneColor_（blit 写点，无 depth）
     nvrhi::TextureHandle         velocity_;        // RG16_FLOAT 逐像素 motion vector
-    nvrhi::TextureHandle         history0_;        // R11G11B10_FLOAT ping-pong A
-    nvrhi::TextureHandle         history1_;        // R11G11B10_FLOAT ping-pong B
+    nvrhi::TextureHandle         history0_;        // RGBA32_FLOAT ping-pong A（S12 起消费：rgb 累积 GI + a 帧数）
+    nvrhi::TextureHandle         history1_;        // RGBA32_FLOAT ping-pong B（T0 建纹理后零消费，M12.0 解）
     std::uint32_t                t0W_ = 0, t0H_ = 0;
     std::uint32_t                t0Parity_ = 0;   // history ping-pong 帧奇偶（0/1 交换）
 
@@ -1086,6 +1096,17 @@ private:
     bool                         probeGatherFirst_ = true;   // gatherLinear_ 帧首声明分支
                                                              //（首帧=创建态 SRV/后续帧=UAV 末态）
 
+    // ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A，零新增 RT）----
+    // 复用 T0 history0_/1_ ping-pong（rgb 累积 GI / a 帧数）与 probe 链 velocity_；
+    // gatherLinear_ 原地替换为累积结果，compose 完全不感知。
+    nvrhi::ShaderHandle          csFilterTemporal_;          // filter_temporal.csfiltertemporal
+    nvrhi::BufferHandle          filterCB_;                  // volatile 64B（声明 32B，过量分配见 init）
+    nvrhi::BindingLayoutHandle   filterLayout_;              // b0 + t0..t1 SRV + u0..u1 UAV
+    nvrhi::BindingSetHandle      filterSet_[2];              // 每 t0Parity_ 一份（read/write 交换）
+    nvrhi::ComputePipelineHandle filterPSO_;
+    bool                         temporalHistoryValid_ = false; // 首帧历史未初始化 → shader 不读
+    bool                         filterLogged_ = false;         // 一次性日志锚
+
     // ---- M10.0：probe-place 资源（Q10-1/Q10-2 拍板 UE 口径）----
     // velocity prepass：独立小 pass（vsVelocity/psVelocity）自建 D32 深度
     //（probeDepth_，velocity 写入 + csPlace SRV 读——共享 backend depth_ 是
@@ -1145,7 +1166,10 @@ private:
     nvrhi::TextureHandle         cacheFillSetDepth_;     // set 依赖登记（probeDepth_ 重建则 set 重建）
     nvrhi::TextureHandle         cacheVizSetHdr_;        // set 依赖登记（hdrSceneColor_ 重建则 set 重建）
     nvrhi::TextureHandle         irradDumpSetHdr_;       // M11.2 验收 set 依赖登记
+    nvrhi::BindingSetHandle      giDumpSet_;             // S12 验收（复用 irradDumpLayout_/PSO_）
+    nvrhi::TextureHandle         giDumpSrc_, giDumpHdr_; // S12 验收 set 依赖登记
     std::uint32_t                cacheFrame_ = 0;        // 帧号（r2 抖动种子，确定性）
+    std::uint32_t                s12Frame_   = 0;        // S12 Q12-E：csTraceProbe 逐帧方向抖动种子（每帧 +1，取模 64 用）
     bool                         cacheFirstClear_ = true;// 首帧清零表（uninit 内存防假命中）
     bool                         cacheLogged_ = false;   // cache 日志锚只打一次
     bool                         cacheVizLogged_ = false;// viz compose 日志锚只打一次

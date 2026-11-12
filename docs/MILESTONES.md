@@ -2998,3 +2998,31 @@
 - 无（未落码）。预防性留痕：① M12.0 第一行代码会隐式定死 history 语义与滤波挂点，故顺延项到期必须先拍板（M9.0 教训）；② `csGatherCompose` 属 M10.2 冻结基线路径，M11.1 实锤「冻结基线的代码形态也是基线的一部分」→ T5 以 filter 态旁路实现，默认分支一字不动；③ `cases.json` 追加卡后必须跑 regression 冒烟（M11.2 卡漏 `id` 挡全量实锤）。
 
 **下一步**：按 `docs/s12/S12-PLAN.md §0.6` 任务书 T1~T8 落 M12.0（先 T1/T2 注册与 velocity 复用，再 T3/T4 时域累积 shader，T5 保形边界贯穿）→ 双后端构建 + `--only` 小子集 spot → 交代物 `example/s12-temporal/` + `S12-TOOLS-GUIDE.md` → tag `s12-temporal`。后续待拍板：Q12-C（M12.1 串联顺序）/ Q12-D（M12.2 时域参考形态）/ Q12-B 续拍（M12.2 开工前凭实测证据）。
+
+## S12 M12.0 收官（历史帧并轨 · GI 分量独立时域累积，2026-11-12）
+
+**动作**：按 `docs/s12/S12-PLAN.md §0.6` 任务书 T1~T8 串行落码（主线 master，按 `AGENTS.md` §1b 不 claim / 不建 track）。T1 注册 `ViewMode::Filter` + `--mode filter` + 五处落点 + 缺省 `Suzanne-materials.nmesh`；T2 复用 `drawProbePlace` 内 velocity prepass，不另建；T3 启用 T0 至今零消费的 `history0_/history1_` ping-pong + `t0Parity_`；T4 新增 `filter_temporal.slang` compute 8x8（velocity 回投 `prevUV = curUV - vel`、越界拒史、`alpha = max(userAlpha, 1/(len+1))`、时间/空间/拒绝三层独立 flag，M12.0 只落时间层）+ CMake `_ENTRIES_FILTER_TEMPORAL` / kArtifacts / loadShader 三处登记；T5 保形：pass 插在 `csGather` 与 `csGatherCompose` 之间、原地改写 `gatherLinear_`，非 filter 的 compose 绑定与顺序一字不动；T6 状态登记（history 不设 permanent、每帧 beginTracking、clear 并入帧内 + §2.19 S12 槽位表）；T7 交代物（`example/s12-temporal/` 冻结证据图 + `run.bat verify` + `cases.json` 新版本卡 105 版 + `tools/check-s12-temporal.py` + `docs/s12/S12-TOOLS-GUIDE.md`）；T8 双后端构建 / selftest / 保形 spot / 统计验收。
+
+**追加拍板 Q12-E（落码期）**：静态 ON / OFF / probe / 32 帧四图 MD5 全同（M10.1 每探针 64 条固定八面体方向逐帧确定性 → `lerp(hist,cur,α) ≡ cur`），用户在三方案中拍 **①「仅 filter 态加帧间抖动」**。写回 `S12-PLAN.md §0.3`（含追因链 / 保形硬边界 / 被否方案）+ §0.4 第 7 条 + T3/T8 + 状态行 + 自检行；`SHADER-CONVENTIONS.md` S12 槽位表同步。
+
+**提交版本**：本收口 commit（annotated tag `s12-temporal`）；主线 master 按 `AGENTS.md` §1b 不建 track / 不 claim / 不跑 `wt_pool close`；`kStage` 保持 `S8.2`、既有 104 张卡零重拍。
+
+**完成情况**
+- 🟢 双后端构建 `BUILD OK` + selftest 16/16 + shader 产物 106/106（新增 `filter_temporal.csfiltertemporal.spv/.dxil`）；`probe_trace.cstrace.spv` 重编译 12396B → 13068B。
+- 🟢 `example/s12-temporal/run.bat verify` **ALL GREEN**：双后端各重拍 REF/OFF/ON 三图，全部 `exit 0` / `deviceErrors=0`；`check-s12-temporal.py onoffref` 双后端过（DX12 `hf` 1.216→0.677 ratio 0.556、MAE 3.902→2.687 ratio 0.688、diffPixels 135409；VULKAN 1.215→0.677 / 3.902→2.686 / 135413）；负向控制（OFF 冒充 ON）正确拒绝；工具 selftest PASS。收敛序列 `hf` 1.240→0.910(4f)→0.677(16f)→0.691(32f)。合成图补充证据 `hf` 1.873→1.493。
+- 🟢 保形 3 条 `--only`（`s10-gather/gather`、`s11-bounce/gpu-smoke`、`s10-probe/probe-viz`）双后端 `bytes` ALL GREEN；新卡 `s12-temporal/gpu-smoke` 冒烟双后端 2/2 通过。
+- 🟢 口径分档（禁笼统「一致」）：GPU 数值图 DX12/VULKAN MD5 **不同**（Q11-1 拍板 A，AS 每帧重建 bit-exact 不保证），统计不变量一致（`hf` / `diffPixels` 同值、MAE 差 0.001）；非 filter 冻结基线是 **bytes** 级零漂。
+
+**踩坑情况**
+1. **history barrier**：首版给 `history0_/1_` 加 `keepInitialState=true` 锁成 permanent SRV → DX12 ECL 报 `UAV vs expected SRV`、`deviceErrors=7`；去掉 permanent、只留 `initialState` + 每帧 `beginTracking` 后归零。
+2. **Q12-E 首版「切平面微扰」无效**：`--probe-atlas-dump` 已证明 atlas 变了（filter 与 probe atlas 图 MD5 不同），但四张合成图仍逐字节相同 → `csGather` 只采外法线方向 texel（M11.2 `probe_atlas_dump.slang` 文件头实锤），凸体+纯天空下该方向恒 miss，朝外微扰不改变 hit/miss。改「逐帧随机方向置换」（每 texel 重采一个 core texel 方向）后 gather 输入才带真噪声。
+3. **`--dist 7` 下 GI 恒 0**：置换版合成图仍全同 → 追到 `csGather` 权重 `exp2(-10000·rel²)` / fallback 全灭、`sum < kMin` → `result=0`，GI 直出 960×540 全像素 0。s10/s11 基线卡全用 `--dist 7`，其 GI 项本就为 0（既有事实，非 S12 回归）。验收改 `--dist 4`（3/4/5 权重存活）+ 新增 `--filter-gi-dump`（复用 M11.2 `csIrradDump` / `irradDumpLayout_` / `irradDumpPSO_`，零新增 shader/PSO/RT）直出累积 GI。
+4. **CB 尺寸纪律**：Q12-E 复用 `traceCB_` 的 `g_traceBounce` 保留分量 z/w（enable / 帧号 `%64`），80B **零扩容**，绕开 M11.0「分配小于 dxc -dumpbin 声明 Size → 全线程静默早退」。
+5. **工程纪律**：`cases.json` 追加用 python json 库 `indent=1` + CRLF 尾换行（重写前验证 roundtrip identical，diff 仅 +53 行），追加后跑新卡冒烟；`run.bat` 用 `check-bat-encoding.py --fix` 机械修 CRLF；验证脚本纯标准库解 PNG（本机 `python` 无 PIL，不能照抄 `check-s9shadow.py` 的 PIL 依赖）。
+
+**全量总闸（tag 收口唯一一次，2026-11-12 19:45，`python tools/regression.py --jobs 4`）**：**804/810**（bytes 803 / near 1 / FAIL 6），报告 `build/DX12/s12-full-regression.md`。6 个 FAIL 逐项归因，**均与本轮 S12 改动无关**：
+- 4 个环境间歇族：`m-sc0/run-ok`、`m-sc0/run-throw`、`m-sc0/check`、`m-sc1/run-badtype` 全部 **dx12 单边**、同用例 vulkan 全过，`--only` 单跑全部双后端 `bytes` 绿；与 M11.1 收官全量（`build/full-gate-s11-update.md` 800/804 FAILED）里的 4 个 FAIL **完全同款**（ctest 丢 stdout / 0xC0000409 秒退族，重跑即绿）。
+- 2 个既有基线漂移：`s11-hash/cacheviz` 双后端同错（71981 像素 / maxDelta 255/255，物体区伪彩绿→品红、背景逐像素相同、均值 99.41→99.38）。**根因 = M11.2 commit `c5d5be6` 把 `world_cache.slang wcMakeKey` 的法线分量 `qn` 从 key/checksum 哈希中删除** → cell key 整体改变 → 伪彩配色全变；M11.1 收官全量（M11.2 之前）该卡 bytes PASS，M11.2/M11.3 收官只跑 `run.bat verify` + 少量保形抽查、**没跑全量总闸也没重拍这张基线**，故一直未暴露。S12 侧 A/B 实证排除：① 临时还原 HEAD 版 `probe_trace.slang` 重编（spv 13068B→10600B）出图仍为 `c5c45f…`；② 把 `traceCB_` 尾部 `tcb[18]/[19]` 还原成 0/0 重编出图仍为 `c5c45f…`；两者与当前 S12 版结果相同、均 ≠ 基线 `73c4fb…`，即 S12 路径零贡献。用户拍板「照常提交 + tag」：**不动 S11 冻结基线、本轮 104 张卡零重拍**，该漂移挂独立后续项待拍板（是否重拍 `s11-hash/cacheviz` 双后端基线 / 是否把 M11.2 `wcMakeKey` 语义确认为新真值）。
+- 提交前重建双后端恢复 A/B 实验产物（`probe_trace.cstrace.spv` 回到 13068B）、`example/s12-temporal/run.bat verify` 复跑 `[ALL GREEN]`、`s12-temporal/gpu-smoke` 冒烟 2/2 绿。
+
+**下一步**：M12.1 开工前拍板 **Q12-C**（先时间后空间 / 交替迭代）→ M12.2 开工前拍板 **Q12-D**（时域参考形态）与 **Q12-B 续拍**（凭 M12.0/M12.1 噪声与鬼影实测证据定是否补 previous 属性）；**独立后续项**：`s11-hash/cacheviz` 基线漂移单独拍板处理（兼作 M11.2/M11.3 收官未跑全量总闸的纪律补账）。

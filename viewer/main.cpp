@@ -212,6 +212,12 @@ struct Options {
     // 同一编辑器里跑多个 viewer 进程时，各带一个不同 --view-id，各自嵌入独立面板。
     std::string editorEndpoint = "tcp://127.0.0.1:29110";
     std::string viewId = "main";
+    // ---- S12 M12.0：GI 分量时域累积（Q12-A 方案 A，仅 --mode filter 消费）----
+    // 其它模式缺省值零副作用（T5 保形硬边界：非 filter 的 compose 路径一字不动）。
+    float temporalAlpha      = 0.1f;  // 当前帧 GI 权重下限（α 越小历史越重）
+    int   temporalHistoryMax = 32;    // 历史长度上限（自适应 α=1/(len+1) 的收敛上限）
+    bool  temporalEnable     = true;  // 时间层独立开关（关 = 单层当前帧 GI）
+    bool  filterGiDump       = false; // S12 验收：GI 分量直出（ON/OFF 自比的真正对象）
 };
 
 // ---- M-TR2：RenderDoc 进程内抓帧（单头 + 零链接，默认关） ----
@@ -263,6 +269,16 @@ Options parseArgs(int argc, char** argv) {
             o.probeLightScale = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
         else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
+        // S12 M12.0：时域累积参数（仅 --mode filter 消费；三层里时间层先落地，
+        // 空间 / 拒绝层留 M12.1 / M12.2 接口，不在此暴露未实现的开关）。
+        else if (a == "--temporal-alpha" && i + 1 < argc)
+            o.temporalAlpha = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--temporal-history-max" && i + 1 < argc)
+            o.temporalHistoryMax = static_cast<int>(std::atol(argv[++i]));
+        else if (a == "--temporal-off") o.temporalEnable = false;
+        // S12 验收：合成图在本场景结构性读不到 GI 变化 → 直出累积 GI 分量
+        //（M11.2 --probe-atlas-dump 同款方法论，默认关，非 filter 态零副作用）。
+        else if (a == "--filter-gi-dump") o.filterGiDump = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -1838,9 +1854,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // M10.3：--mode probe = 完整链路一等模式，恒 gather 态（无点叠加）。
     bool probeGatherMode = (o.mode == nl::core::ViewMode::ProbeViz) && o.probeGather;
     const bool isProbeFull = (o.mode == nl::core::ViewMode::Probe);
+    // S12 M12.0：filter 复用 probe 完整链路（velocity prepass + place + trace +
+    // gather），恒 gather 态；差异只在 drawProbeGather 内插入一次时域累积 pass。
+    const bool isFilter = (o.mode == nl::core::ViewMode::Filter);
     // M10.3（Q14-3 全调参面）：cascade 阈值 local（HUD 滑条写回后回填）。
     float probeLevels[3] = {3.0f, 5.0f, 7.0f};
     bool  probeSkyBgLocal = o.skyBg;
+    // S12 M12.0：时域参数 local（HUD 双向，同 probeSkyBgLocal 口径）。
+    float temporalAlphaLocal = o.temporalAlpha;
+    int   temporalHistoryMaxLocal = o.temporalHistoryMax;
+    bool  temporalEnableLocal = o.temporalEnable;
 
     const auto st = nl::renderer::status();
     const auto& info = renderer->info();
@@ -2223,9 +2246,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // 互斥，gather 优先）；probe-place 模式恒 false 保形。
         // M10.3：--mode probe 一等模式恒 gather 态。
         const bool isProbeViz = (o.mode == nl::core::ViewMode::ProbeViz);
-        const bool gatherActive = probeGatherMode || isProbeFull;
+        const bool gatherActive = probeGatherMode || isProbeFull || isFilter;
         fp.probeVizIrradiance = (isProbeViz && !gatherActive);
-        fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull);
+        fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull || isFilter);
         fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
         std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
@@ -2237,6 +2260,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeLightScale = o.probeLightScale;
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
+        // S12 M12.0（Q12-A）：GI 分量独立时域累积。仅 filter 模式开；
+        // 空间 / 拒绝两层留 M12.1 / M12.2 的可关 flag（本阶段恒 false，不消费）。
+        fp.filterTemporal      = isFilter;
+        fp.temporalEnable      = temporalEnableLocal;
+        fp.temporalAlpha       = std::clamp(temporalAlphaLocal, 0.01f, 1.0f);
+        fp.temporalHistoryMax  = std::clamp(temporalHistoryMaxLocal, 1, 256);
+        fp.filterSpatial       = false;
+        fp.filterReject        = false;
+        fp.filterGiDump        = o.filterGiDump;
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -2535,9 +2567,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.probeNormalOffset = probeNormalOffset;
                 hud.probeDotSize = probeDotSize;
                 // M10.2/M10.3 双向：probe-viz 三态 checkbox + 全调参面（Q14-3）。
-                hud.probeGatherMode = (isProbeViz && probeGatherMode) || isProbeFull;
+                hud.probeGatherMode = (isProbeViz && probeGatherMode) || isProbeFull || isFilter;
                 std::memcpy(hud.probeLevels, probeLevels, sizeof(probeLevels));
                 hud.probeSkyBg = probeSkyBgLocal;
+                // S12 M12.0：filter 专属时域面板（默认 false → 既有 --hud 基线零布局变化）。
+                hud.filterPanelShow = isFilter;
+                if (isFilter) {
+                    hud.temporalEnable = temporalEnableLocal;
+                    hud.temporalAlpha = temporalAlphaLocal;
+                    hud.temporalHistoryMax = temporalHistoryMaxLocal;
+                }
             }
             if (o.screenshot) {
                 // 确定性回放：固定样本 + 固定 dt，PNG 的 MD5 才能与基线逐字节对上。
@@ -2653,6 +2692,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 // M10.3（Q14-3）：调参写回（阈值/天穹背景；probe 模式 gather 恒开）。
                 std::memcpy(probeLevels, hud.probeLevels, sizeof(probeLevels));
                 probeSkyBgLocal = hud.probeSkyBg;
+                // S12 M12.0：时域参数 HUD 双向（面板没画时字段保持 POD 默认，不回读）。
+                if (isFilter && hud.filterPanelShow) {
+                    temporalEnableLocal = hud.temporalEnable;
+                    temporalAlphaLocal = hud.temporalAlpha;
+                    temporalHistoryMaxLocal = hud.temporalHistoryMax;
+                }
             }
             shading = std::clamp(hud.shading, 0, kShadingCount - 1);
             // 非簇场景唯一非法值是 4=cluster（无 CLUSTERCOLOR 属性）；5=pbr 合法
@@ -3839,6 +3884,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::Filter:    // S12 M12.0：GI 分量独立时域累积（probe 链复用）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");
@@ -3871,6 +3922,11 @@ void printUsage() {
               << "                                     off = identity visible list, M4.0 behavior)\n"
               << "  viewer.exe --hiz on|off            Hi-Z occlusion culling in hiz mode (default on;\n"
               << "                                     off = frustum/error traversal only, M6.2 toggle)\n"
+              << "  viewer.exe --mode filter            S12 M12.0: GI-only temporal accumulation\n"
+              << "  viewer.exe --temporal-alpha <f>     current-frame GI weight floor (0.01..1, default 0.10)\n"
+              << "  viewer.exe --temporal-history-max <n>  accumulated frame cap (1..256, default 32)\n"
+              << "  viewer.exe --temporal-off           disable temporal layer (single-frame GI)\n"
+              << "  viewer.exe --filter-gi-dump         S12 acceptance: dump accumulated GI component\n"
               << "  viewer.exe --vis-viz cluster|triangle\n"
               << "                                     visbuf mode: decode vis buffer by clusterId\n"
               << "                                     or by global triangle id (default cluster)\n"
@@ -3977,6 +4033,10 @@ int main(int argc, char** argv) {
     }
     // S11 M11.0：cache-viz 同口径（probe 链基建，TLAS 不就绪也只影响 trace 段）。
     if (o.mode == nl::core::ViewMode::CacheViz && !o.modelSet) {
+        o.modelFile = "Suzanne-materials.nmesh";
+    }
+    // S12 M12.0：filter 复用 probe 链（TLAS 需 NFLB fallback），同 probe-viz 口径。
+    if (o.mode == nl::core::ViewMode::Filter && !o.modelSet) {
         o.modelFile = "Suzanne-materials.nmesh";
     }
     // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。

@@ -133,6 +133,9 @@ static const Artifact kArtifacts[] = {
     // S11 M11.1：cell 更新（update 需 SM6.6 RayQuery；blend 纯 buffer）×2 = 4。
     {"world_cache.cscacheupdate", true}, {"world_cache.cscacheupdate", false},
     {"world_cache.cscacheblend", true}, {"world_cache.cscacheblend", false},
+    // S12 M12.0：filter_temporal.slang 单 compute 入口（Q12-A GI 分量独立时域累积）
+    // × 双目标 = 2。
+    {"filter_temporal.csfiltertemporal", true}, {"filter_temporal.csfiltertemporal", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

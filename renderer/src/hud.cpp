@@ -367,6 +367,15 @@ void Hud::build(HudFrame& frame) {
         ImGui::TextUnformatted(probeLine);
         ImGui::Separator();
     }
+    // S12 M12.0：filter 时域面板（默认 false → 既有 --hud 基线零布局变化）。
+    // 三层独立开关：时间层本阶段可调；空间 / 拒绝层只读标注，M12.1 / M12.2 接。
+    if (frame.filterPanelShow) {
+        ImGui::Checkbox("temporal layer (GI accumulation)", &frame.temporalEnable);
+        ImGui::SliderFloat("temporal alpha", &frame.temporalAlpha, 0.01f, 1.0f, "%.2f");
+        ImGui::SliderInt("history max frames", &frame.temporalHistoryMax, 1, 128);
+        ImGui::TextUnformatted("spatial : pending M12.1 | reject : pending M12.2");
+        ImGui::Separator();
+    }
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,

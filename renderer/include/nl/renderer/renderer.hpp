@@ -149,6 +149,18 @@ struct FrameParams {
     bool  probeCacheDiag    = false;   // M11.2 调试：命中查缓存结果按 RGB 伪彩（红=命中/绿=占未中/蓝=空）
                                        //（关灯余晖序列用；1.0 = 老路径基线）
     bool  probeAtlasDump     = false;   // M11.2 验收：把 irradAtlas_[0] 直出画面，绕开 gather 做开关开/关自比
+
+    // ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A）----
+    // 仅 --mode filter 消费；缺省全关 = 非 filter 路径零扰动（T5 保形硬边界：
+    // 非 filter 的 csGatherCompose 绑定与执行顺序一字不动）。
+    // 三层独立开关：时间层本阶段落地，空间 / 拒绝留 M12.1 / M12.2 接口（恒 false）。
+    bool  filterTemporal      = false;  // 是否插入 csFilterTemporal pass
+    bool  temporalEnable      = true;   // 时间层独立开关（关 = 单层当前帧 GI）
+    float temporalAlpha       = 0.1f;   // 当前帧 GI 权重下限（0.01..1，越小历史越重）
+    int   temporalHistoryMax  = 32;     // 历史长度上限（1..256，自适应 α=1/(len+1)）
+    bool  filterSpatial       = false;  // 空间层（M12.1 实现）
+    bool  filterReject        = false;  // 拒绝层（M12.2 实现）
+    bool  filterGiDump        = false;  // S12 验收：把累积后的 gatherLinear_ 直出（绕开 compose）
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -276,6 +288,13 @@ struct HudFrame {
     // ---- M10.3：probe 调参（Q14-3 全调参面）+ --sky-bg（Q14-4；双向 checkbox）。
     float probeLevels[3]      = {3.0f, 5.0f, 7.0f}; // cascade 阈值滑条 ×3（双向）
     bool  probeSkyBg          = false;  // 天穹背景切换（双向 checkbox）
+
+    // ---- S12 M12.0：filter 时域面板（默认 false = 既有 --hud 基线零布局变化）。
+    // 只在 --mode filter 时 show=true，其余模式一行都不画。
+    bool  filterPanelShow     = false;
+    bool  temporalEnable      = true;
+    float temporalAlpha       = 0.1f;
+    int   temporalHistoryMax  = 32;
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）

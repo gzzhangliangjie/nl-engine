@@ -26,6 +26,7 @@ constexpr const char* kModeNames[] = {
     "probe",       // M10.3：probe 完整链路（place+trace+gather 一等渲染模式 + 调参）
     "reference-gi", // M10.3：--mode reference-gi（渐进累积 GI 参考图，Q14-1 拍板）
     "cache-viz",    // S11 M11.0：世界缓存占用伪彩（flat hashmap + life 衰减，Q11-0）
+    "filter",       // S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A，三层独立开关）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

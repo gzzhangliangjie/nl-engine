@@ -2505,6 +2505,15 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         d.width = w; d.height = h;
         d.format = nvrhi::Format::RGBA32_FLOAT;   // history ping-pong（FP32 同款：S12 时间累积精度 + 字节保形）
         d.isRenderTarget = true;
+        // S12 M12.0：T0 至今零消费，本里程碑首次读写 → 补齐 UAV flag 与创建态
+        //（gatherLinear_ 同款：initialState=SRV + **不设 keepInitialState**，
+        // 逐帧 beginTrackingTextureState 如实声明上一帧末态（§2.15/§2.19））。
+        // ⚠️ keepInitialState=true 会把资源锁成 permanent SRV，UAV/SRV ping-pong
+        // 的跨帧 barrier 会被 DX12 ECL 判布局不符（M12.0 实跑实锤，勿顺手加回）。
+        // rgb = 累积 GI，a = 已累积帧数；两张都作为 SRV/UAV 交替使用，不设 permanent。
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 0.f));
         d.debugName = "History0";
         history0_ = device->createTexture(d);
         d.debugName = "History1";
@@ -3221,6 +3230,8 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         !loadShader("probe_trace.cstrace", nvrhi::ShaderType::Compute, csTrace_) ||
         !loadShader("probe_gather.csgather", nvrhi::ShaderType::Compute, csGather_) ||
         !loadShader("probe_gather.csgathercompose", nvrhi::ShaderType::Compute, csGatherCompose_) ||
+        // S12 M12.0：filter_temporal 单入口（仅 filter 态 dispatch；加载本身零画面影响）。
+        !loadShader("filter_temporal.csfiltertemporal", nvrhi::ShaderType::Compute, csFilterTemporal_) ||
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
@@ -3249,8 +3260,9 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // traceCB_（80B volatile，M10.1 64B → M11.2 80B）：probe_trace.slang 布局
     //（[0..3] 灯向 / [4..7] 灯色·强度 / [8..11] 命中 albedo·ambient /
-    //  [12..15] 参数 / [16..19] 查缓存开关+保留）。⚠️ SSC §2.21：扩 CB 前
-    // 以 dxc -dumpbin 反汇编的 cbuffer Size 为准。
+    //  [12..15] 参数 / [16..19] 查缓存开关 + DIAG + S12 Q12-E 抖动开关/帧号）。
+    //  S12 Q12-E 复用 [18]/[19] 保留分量，**CB 尺寸仍 80B 不变**。
+    //  ⚠️ SSC §2.21：扩 CB 前以 dxc -dumpbin 反汇编的 cbuffer Size 为准。
     nvrhi::BufferDesc tcbDesc;
     tcbDesc.byteSize = 80;
     tcbDesc.isConstantBuffer = true;
@@ -3270,6 +3282,18 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     gcbDesc.debugName = "GatherConstants";
     gatherCB_ = device->createBuffer(gcbDesc);
     if (!gatherCB_) { outError = "createBuffer failed for gather constants"; return false; }
+
+    // S12 M12.0：FilterConstants 声明 2×float4 = 32B。按 SSC §2.21（M11.0 实锤）
+    // 分配小于 shader 声明会让读越界得 0 → 全线程静默早退且不报错；这里**过量
+    // 分配 64B**并每帧全量覆写 16 float，避免依赖反汇编 Size 的脆弱耦合。
+    nvrhi::BufferDesc fcbDesc;
+    fcbDesc.byteSize = 64;
+    fcbDesc.isConstantBuffer = true;
+    fcbDesc.isVolatile = true;
+    fcbDesc.maxVersions = 16;
+    fcbDesc.debugName = "FilterConstants";
+    filterCB_ = device->createBuffer(fcbDesc);
+    if (!filterCB_) { outError = "createBuffer failed for filter constants"; return false; }
 
     // ---- velocity prepass 布局：b0 + t1..t4（pulling 几何池，visbuf.slang 同槽）。
     nvrhi::BindingLayoutDesc vDesc;
@@ -3347,6 +3371,18 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     gatherLayout_ = device->createBindingLayout(gDesc);
     if (!gatherLayout_) { outError = "createBindingLayout failed for probe gather"; return false; }
 
+    // ---- S12 M12.0：csFilterTemporal 布局（b0 + t0 velocity + t1 history[read]
+    // + u0 gatherLinear_ 读写 + u1 history[write]）。单一 BindingSet（§2.7）。
+    nvrhi::BindingLayoutDesc fDesc;
+    fDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
+    filterLayout_ = device->createBindingLayout(fDesc);
+    if (!filterLayout_) { outError = "createBindingLayout failed for filter temporal"; return false; }
+
     {
         nvrhi::ComputePipelineDesc cpDesc;
         cpDesc.setComputeShader(csPlace_).addBindingLayout(placeLayout_);
@@ -3373,6 +3409,13 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     if (!gatherPSO_ || !gatherComposePSO_)
         { outError = "createComputePipeline failed for probe gather"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csFilterTemporal_).addBindingLayout(filterLayout_);
+        filterPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!filterPSO_) { outError = "createComputePipeline failed for filter temporal"; return false; }
 
     nl::core::log::infoCh("scene", "probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
@@ -3564,6 +3607,23 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
             gatherSet_[parity] = device->createBindingSet(gsDesc, gatherLayout_);
             if (!gatherSet_[parity]) { outError = "createBindingSet failed for probe gather"; return false; }
         }
+        // S12 M12.0：filter set（Q12-A，零新增 RT）。与 gatherSet_ 同处懒建——
+        // history0_/1_ 由帧首 ensureRtTargets 先建好，本函数每次重建时重绑。
+        // parity 语义：read = history[parity]，write = history[1-parity]；
+        // t0Parity_ 每帧在 drawFilterTemporal 末尾翻转。
+        if (tlasReady_ && hdrSceneColor_ && history0_ && history1_ && velocity_ &&
+            filterLayout_ && filterCB_) {
+            nvrhi::BindingSetDesc fsDesc;
+            fsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, filterCB_))
+                  .addItem(nvrhi::BindingSetItem::Texture_SRV(0, velocity_))
+                  .addItem(nvrhi::BindingSetItem::Texture_SRV(
+                      1, parity == 0 ? history0_ : history1_))
+                  .addItem(nvrhi::BindingSetItem::Texture_UAV(0, gatherLinear_))
+                  .addItem(nvrhi::BindingSetItem::Texture_UAV(
+                      1, parity == 0 ? history1_ : history0_));
+            filterSet_[parity] = device->createBindingSet(fsDesc, filterLayout_);
+            if (!filterSet_[parity]) { outError = "createBindingSet failed for filter temporal"; return false; }
+        }
     }
 
     // velocity PSO（RG16F+D32 framebuffer 格式锁定，照 hiz prepassInfo 先例按
@@ -3688,6 +3748,9 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // M11.2：--probe-light-scale S 同乘主灯强度与 ambient（关灯序列 S=0）；
     // 查缓存有效开关 = 用户开关 && cacheFrame_>0（首帧无上帧收敛值必须走兜底，
     // 也避开 drawCacheFrame 首帧清零发生在 trace 之后的未初始化窗口）。
+    // S12 Q12-E：tcb[18]/[19] = 帧间抖动开关 / 帧号，复用 g_traceBounce 保留
+    // 分量 → CB 仍 80B（禁扩容，M11.0 实锤）。非 filter 态两者恒 0/0，
+    // csTraceProbe 抖动分支整块不执行，s10-*/s11-* 冻结基线 bytes 零漂。
     {
         const float ls = params.probeLightScale;
         const float tcb[20] = {
@@ -3698,9 +3761,17 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
             static_cast<float>(probeBaseRes_), 8.0f,
             (params.probeCacheBounce && cacheFrame_ > 0) ? 1.0f : 0.0f,
             params.probeCacheDiag ? 1.0f : 0.0f,   // y = DIAG 伪彩开关
-            0.0f, 0.0f,
+            params.filterTemporal ? 1.0f : 0.0f,   // z = Q12-E 抖动（仅 filter 态，与时间层开关解耦）
+            static_cast<float>(s12Frame_ % 64u),   // w = 确定性帧号
         };
         cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
+        ++s12Frame_;
+        static bool s12JitterLogged = false;
+        if (!s12JitterLogged && tcb[18] > 0.5f) {
+            nl::core::log::infoCh("scene", "s12: trace jitter enabled (frame seed=",
+                                  tcb[19], ", traceCB=80B unchanged)");
+            s12JitterLogged = true;
+        }
         // M11.2 一次性日志锚：实读 CB 开关与 cacheFrame_（诊断 + 验收锚）。
         static bool bounceGateLogged = false;
         if (!bounceGateLogged && cacheFrame_ > 0) {
@@ -3835,10 +3906,28 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
     }
 
+    // ---- (1.5) S12 M12.0（T5 保形硬边界）：仅 filter 态在 csGather 与
+    // csGatherCompose 之间插入时域累积——它把 gatherLinear_ 原地换成累积 GI，
+    // compose 的绑定 / 执行顺序 / shader 全部一字不动（M11.1 冻结基线实锤）。
+    // 时间层关闭时仍走同一 dispatch（shader 内退化成「纯当前帧」），保证
+    // history ping-pong 的状态机逐帧连续，不产生跨帧末态空窗。
+    if (params.filterTemporal) {
+        std::string fErr;
+        if (!drawFilterTemporal(cmd, viewport, params, fErr))
+            nl::core::log::deviceError("filter-temporal", fErr);
+    }
+
     // ---- (2) csGatherCompose：hdr RenderTarget（matResolve 刚写完）→ UAV RMW。
     // place atlas cur parity / irrad atlas 的 SRV 态来自 drawProbeFrame 帧首声明
     //（写完 UAV 后 require SRV 自动回插 barrier）。
     cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    // S12 M12.0 验收分支（默认关）：合成图结构性读不到 GI 变化 → 直出累积 GI。
+    // 非验收路径的 compose 块在 else 后一字不动（T5 保形硬边界）。
+    if (params.filterGiDump) {
+        std::string gdErr;
+        if (!drawGiDump(cmd, viewport, gdErr))
+            nl::core::log::deviceError("gi-dump", gdErr);
+    } else
     {
         nvrhi::ComputeState cstate;
         cstate.setPipeline(gatherComposePSO_).addBindingSet(gatherSet_[probeParity_]);
@@ -3850,6 +3939,113 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
                             "UE bilinear corner x plane-depth weights, ambient "
                             "replaced by gather)");
         probeGatherLogged_ = true;
+    }
+    return true;
+}
+
+// ---- S12 M12.0 验收：GI 分量直出（M11.2 方法论，复用 irrad dump 管线）----
+// 为什么需要：本凸体+纯天空场景中 csGather 只采外法线方向 texel（该方向恒
+// miss → 天空渐变），合成图结构性读不到 GI 帧间变化；M11.2 已用
+// --probe-atlas-dump 直出绕过同一问题。这里把「累积后的 gatherLinear_」
+// 直出，作为时间累积 ON/OFF 自比的真正对象。
+// 复用 csIrradDump（t0 SRV + u0 UAV，无 CB）+ irradDumpLayout_/irradDumpPSO_，
+// 零新增 shader / PSO / RT；只是 set 的 t0 从 irradAtlas_[0] 换成 gatherLinear_。
+bool Scene::drawGiDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                       std::string& outError) {
+    if (!irradDumpPSO_ || !gatherLinear_ || !hdrSceneColor_) {
+        outError = "gi dump: pipeline/texture missing"; return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    if (!giDumpSet_ || giDumpSrc_ != gatherLinear_ || giDumpHdr_ != hdrSceneColor_) {
+        nvrhi::BindingSetDesc d;
+        d.addItem(nvrhi::BindingSetItem::Texture_SRV(0, gatherLinear_));
+        d.addItem(nvrhi::BindingSetItem::Texture_UAV(0, hdrSceneColor_));
+        giDumpSet_ = probeDevice_->createBindingSet(d, irradDumpLayout_);
+        if (!giDumpSet_) { outError = "createBindingSet failed for gi dump"; return false; }
+        giDumpSrc_ = gatherLinear_;
+        giDumpHdr_ = hdrSceneColor_;
+    }
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    // csFilterTemporal 刚写完 gatherLinear_（UAV 末态）→ 转 SRV 读。
+    cmd->setTextureState(gatherLinear_, allSub, nvrhi::ResourceStates::ShaderResource);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(irradDumpPSO_).addBindingSet(giDumpSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    }
+    // 跨帧契约收尾：drawProbeGather 帧首声明的是「上一帧末态 UAV」，
+    // 必须转回 UAV，否则下一帧 DX12 ECL 校验 fail（history 同款纪律）。
+    cmd->setTextureState(gatherLinear_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    return true;
+}
+
+// ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A，零新增 RT）----
+// 状态机（§2.15 / §2.19）：history0/1 不设 permanent，每帧 beginTracking 如实
+// 声明上一帧末态——本帧 read 侧 = 上一帧 write（UAV 末态），本帧 write 侧 =
+// 上一帧 read（SRV 末态）；首帧两张都是创建态 SRV。帧末不额外转态：read 侧留
+// SRV、write 侧留 UAV，与下一帧声明正好闭合。clear 并入本帧命令列表（§2.8
+// 禁第二个 immediate cmd list）。
+bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                               const FrameParams& params, std::string& outError) {
+    if (!filterPSO_ || !filterCB_ || !filterSet_[t0Parity_] ||
+        !history0_ || !history1_ || !gatherLinear_ || !velocity_) {
+        outError = "filter temporal: set/pipeline/texture missing";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    nvrhi::TextureHandle hRead  = (t0Parity_ == 0) ? history0_ : history1_;
+    nvrhi::TextureHandle hWrite = (t0Parity_ == 0) ? history1_ : history0_;
+
+    // 帧首声明：上一帧末态（首帧 = 创建态 SRV）。
+    cmd->beginTrackingTextureState(hRead, allSub,
+        temporalHistoryValid_ ? nvrhi::ResourceStates::UnorderedAccess
+                              : nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(hWrite, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // 首帧清零：避免读未初始化历史；shader 侧 validHistory=0 也不读，双保险。
+    // velocity_ 的 clearTextureFloat 先例同款（帧首 SRV 态直接 clear）。
+    if (!temporalHistoryValid_) {
+        cmd->clearTextureFloat(history0_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+        cmd->clearTextureFloat(history1_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+    }
+
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    // FilterConstants（声明 32B / 分配 64B）：每帧全量覆写 volatile CB。
+    const float alpha = params.temporalAlpha < 0.01f ? 0.01f
+                      : (params.temporalAlpha > 1.0f ? 1.0f : params.temporalAlpha);
+    const int   hmax  = params.temporalHistoryMax < 1 ? 1
+                      : (params.temporalHistoryMax > 256 ? 256 : params.temporalHistoryMax);
+    float fcb[16] = {};
+    fcb[0] = vpW;
+    fcb[1] = vpH;
+    fcb[2] = alpha;
+    fcb[3] = static_cast<float>(hmax);
+    fcb[4] = temporalHistoryValid_ ? 1.0f : 0.0f;  // validHistory
+    fcb[5] = params.temporalEnable ? 1.0f : 0.0f;  // 时间层（三层独立开关之一）
+    fcb[6] = params.filterSpatial  ? 1.0f : 0.0f;  // 空间层（M12.1 实现）
+    fcb[7] = params.filterReject   ? 1.0f : 0.0f;  // 拒绝层（M12.2 实现）
+    cmd->writeBuffer(filterCB_, fcb, sizeof(fcb));
+
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(filterPSO_).addBindingSet(filterSet_[t0Parity_]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    }
+
+    // ping-pong 交换 + 历史有效标记（后续每帧声明按上面的 UAV/SRV 闭合）。
+    t0Parity_ ^= 1u;
+    temporalHistoryValid_ = true;
+    if (!filterLogged_) {
+        nl::core::log::infoCh("scene", "s12: temporal accumulation active (GI-only, "
+                            "history0/1 ping-pong, velocity reprojection, alpha=", alpha,
+                            ", historyMax=", hmax, ")");
+        filterLogged_ = true;
     }
     return true;
 }
@@ -7857,6 +8053,18 @@ void Scene::shutdown() {
     gatherPSO_ = nullptr;
     gatherComposePSO_ = nullptr;
     gatherLinear_ = nullptr;
+    // S12 M12.0：filter 链句柄同 T0 口径，必须随 device 存活期释放
+    //（拖到 Scene 析构会晚于 vkDestroyDevice → 退出段错误 139）。
+    csFilterTemporal_ = nullptr;
+    filterCB_ = nullptr;
+    filterLayout_ = nullptr;
+    filterSet_[0] = nullptr;
+    filterSet_[1] = nullptr;
+    filterPSO_ = nullptr;
+    temporalHistoryValid_ = false;
+    filterLogged_ = false;
+    s12Frame_ = 0;                 // S12 Q12-E：抖动序列重开，保证截图基线可复现
+    t0Parity_ = 0;
     dotsLayout_ = nullptr;
     dotsSet_[0] = nullptr;
     dotsSet_[1] = nullptr;
@@ -7894,6 +8102,9 @@ void Scene::shutdown() {
     cacheUpdateSet_ = nullptr;
     cacheBlendSet_ = nullptr;
     irradDumpSet_ = nullptr;
+    giDumpSet_ = nullptr;                 // S12 验收 set（随 gatherLinear_/hdr 重建）
+    giDumpSrc_ = nullptr;
+    giDumpHdr_ = nullptr;
     cacheFillSetDepth_ = nullptr;
     cacheVizSetHdr_ = nullptr;
     irradDumpSetHdr_ = nullptr;

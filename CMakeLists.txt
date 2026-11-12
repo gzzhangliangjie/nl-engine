@@ -469,6 +469,9 @@ set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscache
 # M11.2 验收：probe_atlas_dump.slang 单 compute 入口——irradAtlas_[0] 直出画面
 #（纯拷贝，无 RayQuery → 不入 _SM66 白名单，DXIL 用默认 profile）。
 set(_ENTRIES_PROBE_ATLAS_DUMP "csIrradDump|csirraddump|compute")
+# S12 M12.0：filter_temporal.slang 单 compute 入口——GI 分量独立时域累积
+#（Q12-A 方案 A；纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
+set(_ENTRIES_FILTER_TEMPORAL "csFilterTemporal|csfiltertemporal|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -503,6 +506,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_WORLD_CACHE}")
     elseif(_SRC_NAME STREQUAL "probe_atlas_dump")
         set(_ENTRIES "${_ENTRIES_PROBE_ATLAS_DUMP}")
+    elseif(_SRC_NAME STREQUAL "filter_temporal")
+        set(_ENTRIES "${_ENTRIES_FILTER_TEMPORAL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
