@@ -3101,3 +3101,27 @@
 - **验收（当前）**：`python tools/regression.py --only s11-hash` 双后端全绿（selftest / cachesim / cacheviz 各 2）；cacheviz 重拍后双后端输出 byte-identical（md5 `c5c45f35…`，比冻结基线当年两后端还不同的状态更干净，使「双后端 bytes 一致」声称首次为真）。
 - **提交版本**：本矫治 commit（无新 milestone tag，沿用 `s11-hash`/`s11-done` 既有 tag）；主线 master 按 `AGENTS.md §1b` 不建 track / 不 claim。gi-tools/main.cpp 净改动为 0（回退），不入库。
 - **踩坑**：① 重拍前必须先用临时渲染确认当前输出确定性——否则会把非确定性噪声固化进基线（本轮两遍同 md5 已证实）；② 「修 CPU 同构」不是 drop-in：CPU selftest/cachesim 的期望值按旧 key 标定，改 key 即转红，需连带重标定夹具，属新子决策必须回头拍板，不可擅自改断言当过关；③ 位置量化 `floor(pos*2)` vs GPU `floor(wp/0.5)` 已核对均 0.5，故 CPU 不一致纯在法线分量、不在位置量化。
+
+## NET M-NET0 — 传输层：ENet vendored + nl/net 薄封装 + echo tool（2026-11-13）
+
+**动作**：第 12 步网络栈第一里程碑（A 类并行轨道 `net`，wt `nl-engine-net` 起点 master `a85d53b`，claim M-NET0）。① vendored ENet **1.3.18** @ `5a9c537`（MIT，gh-proxy 浅克隆；`thirdparty/enet/VENDOR.md` 溯源 + LICENSE 入库；入库子集 = 9 头 + 8 TU（win32.c，unix.c 与上游脚手架剔除）+ 自写 CMakeLists 静态库 `nl_enet`（Windows 链 winmm/ws2_32，零新运行时 DLL）。② `nl/net` 传输层薄封装：`core/include/nl/net/Net.hpp` + `core/src/net/Net.cpp` **PIMPL**（enet_ 符号单 TU 隔离，对齐 nav/physics 先例）；`NetServer`/`NetClient` 事件泵 + `Channel::Reliable/Unreliable` 双通道（0/1）+ `beginConnect`（非阻塞发起，回环必需）/ `connect`（阻塞握手，双进程用）+ `--linger` 由任务书落为 `echo-server --linger-ms`。③ `net-tools`（新 exe，只链 nl_core 零图形 API）：`echo` 单进程回环 / `echo-server`+`echo-client` 双进程（`--loss` 确定性丢包注入，种子 1234）/ `selftest` / `version`；退出码 0/1/2 对齐 nav-tools。④ ctest 5 条双后端（echo / selftest / version / 负向 usage+connect 各 WILL_FAIL）。⑤ 展示台第 108 张版本卡 `net-m0`（6 用例 kind:tool）+ `example/net-m0/run.bat` 七段交代。⑥ 文档：`NETCODE-PLAN.md`（本节验收落点）、`NETCODE-TOOLS-GUIDE.md`（新建 §1）、本台账。拍板权威落点 `NETCODE-OPTIONS.md §6`（Q-N1~N6 全拍板）。
+
+**提交版本**：`feat/net` `f8eedc3`（主实现）+ `0f387fc`（回环握手死锁修复）+ `ad4bced`（loss demo 收尾口径）；annotated tag `net-m0`（验收通过后打）。`kStage` 保持 `S8.2`，既有 107 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 DX12 全量构建 + selftest 16/16；`nl_enet` 静态库编译链接零警告（C 8 TU）。
+- 🟢 直拉：`echo` 32/32 + 64/64 `echo OK` exit 0；`selftest net: PASS`；`version` `enet : 1.3.18`；死端口 `connect : FAILED` exit 1。
+- 🟢 ctest DX12 `net-m0` 5/5 全绿（`--repeat until-pass:3`）。
+- 🟢 `example/net-m0/run.bat` **ALL GREEN exit 0** 七段全过：双进程零丢失 `sent=32 recv=32 loss=0.0% rttAvg=0.2ms` + server `served=32`；30% 丢包注入实测 `sent=32 recv=22 loss=31.2%` exit 2（种子 1234 确定性）；死端口负向显式拒绝。
+- 🟢 手动后台 server + 前台 client 独立复证双进程链路（沙箱 start 回收问题与库逻辑解耦）。
+- ⏳ VULKAN 后端构建 + ctest 待本轮收尾补跑（PQBFQA 首轮 DX12 后并行推进）。
+
+**踩坑情况**
+1. **ENet 服务器只在 service 时处理握手包**：单进程回环 `connect()` 阻塞等 CONNECT 期间同线程 server 不泵 → 3000ms 必超时（直拉实锤）。修 = `beginConnect()` 非阻塞发起 + 回环主循环双 host 交替泵；阻塞 `connect()` 保留给双进程（对端自泵）。
+2. **1.3.18 无 `enet_linked_version_string`**：只有 ENET_VERSION 宏族 → `version()` 宏拼接（纯源码直编头即链接版本）。
+3. **ctest `WILL_FAIL TRUE` + `PASS_REGULAR_EXPRESSION` 组合语义 = 正则不得命中**（实测反向：`Required regular expression found` 即 FAIL）→ 负向例只留 WILL_FAIL，FAILED 文本锚由 run.bat findstr 兜底（对齐 anim-tools）。
+4. **沙箱回收 `start "title" /min` 派生子进程**（server.log 空文件实锤）→ run.bat 改 `start /b ""` 直起 exe，子进程继承重定向句柄沙箱实测存活。
+5. **run.bat 非 ASCII 破坏解析**：rem 注释 em dash 在 GBK 控制台把后续行拆碎（`'m' 不是内部或外部命令`）→ ASCII only 重申。
+6. **入站丢包无重发**：server 服务满即退会让模拟丢包的 client 被断链事件掐掉 → `--linger-ms` 让 server 撑过 client deadline。
+
+**下一步**：VULKAN ctest 补跑 → tag `net-m0` → M-NET1（bitsery vendored + 载具 transform 快照编解码 + 载荷实测）。

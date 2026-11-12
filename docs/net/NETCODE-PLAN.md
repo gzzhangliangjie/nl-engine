@@ -25,6 +25,8 @@
 
 ### M-NET0 — 传输层：ENet vendored + `nl/net/` 薄封装 + echo tool 卡
 
+> **状态：已落码（2026-11-13，`feat/net` f8eedc3 / 0f387fc / ad4bced）**。DX12 全链验收通过（构建+selftest 16/16、ctest 5/5、run.bat ALL GREEN、第 108 张版本卡 `net-m0`）；VULKAN ctest 收尾见 MILESTONES 节。踩坑 6 条留档 `NETCODE-TOOLS-GUIDE.md §1.4`。
+
 - **目标**：双进程可靠建链、双向回显，亲眼可见。
 - **任务**：
   1. `thirdparty/enet/`：vendored ENet（上游 lsalzman/enet，目标 v2.x 最新 tag；许可 MIT）、`VENDOR.md`、LICENSE；CMake 纯源码接入（Win32 winsock2 路径，零新外部依赖）。
