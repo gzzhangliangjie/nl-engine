@@ -153,12 +153,12 @@ struct FrameParams {
     // ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A）----
     // 仅 --mode filter 消费；缺省全关 = 非 filter 路径零扰动（T5 保形硬边界：
     // 非 filter 的 csGatherCompose 绑定与执行顺序一字不动）。
-    // 三层独立开关：时间层本阶段落地，空间 / 拒绝留 M12.1 / M12.2 接口（恒 false）。
+    // 三层独立开关：时间 / 空间层已落地（M12.0 / M12.1），拒绝层留 M12.2。
     bool  filterTemporal      = false;  // 是否插入 csFilterTemporal pass
     bool  temporalEnable      = true;   // 时间层独立开关（关 = 单层当前帧 GI）
     float temporalAlpha       = 0.1f;   // 当前帧 GI 权重下限（0.01..1，越小历史越重）
     int   temporalHistoryMax  = 32;     // 历史长度上限（1..256，自适应 α=1/(len+1)）
-    bool  filterSpatial       = false;  // 空间层（M12.1 实现）
+    bool  filterSpatial       = false;  // 空间层（M12.1 已实现，--spatial 开启）
     bool  filterReject        = false;  // 拒绝层（M12.2 实现）
     bool  filterGiDump        = false;  // S12 验收：把累积后的 gatherLinear_ 直出（绕开 compose）
 };

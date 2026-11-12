@@ -218,6 +218,8 @@ struct Options {
     int   temporalHistoryMax = 32;    // 历史长度上限（自适应 α=1/(len+1) 的收敛上限）
     bool  temporalEnable     = true;  // 时间层独立开关（关 = 单层当前帧 GI）
     bool  filterGiDump       = false; // S12 验收：GI 分量直出（ON/OFF 自比的真正对象）
+    // S12 M12.1：空间层默认关 → M12.0 的 105 张卡与 hf/MAE 尺子逐字沿用。
+    bool  filterSpatial      = false;
 };
 
 // ---- M-TR2：RenderDoc 进程内抓帧（单头 + 零链接，默认关） ----
@@ -269,8 +271,8 @@ Options parseArgs(int argc, char** argv) {
             o.probeLightScale = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
         else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
-        // S12 M12.0：时域累积参数（仅 --mode filter 消费；三层里时间层先落地，
-        // 空间 / 拒绝层留 M12.1 / M12.2 接口，不在此暴露未实现的开关）。
+        // S12 M12.0/M12.1：时域累积 + 空间联合双边参数（仅 --mode filter 消费；
+        // 拒绝层留 M12.2，空间层默认关以保持 M12.0 基线零重拍）。
         else if (a == "--temporal-alpha" && i + 1 < argc)
             o.temporalAlpha = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--temporal-history-max" && i + 1 < argc)
@@ -279,6 +281,8 @@ Options parseArgs(int argc, char** argv) {
         // S12 验收：合成图在本场景结构性读不到 GI 变化 → 直出累积 GI 分量
         //（M11.2 --probe-atlas-dump 同款方法论，默认关，非 filter 态零副作用）。
         else if (a == "--filter-gi-dump") o.filterGiDump = true;
+        // S12 M12.1（Q12-C A）：显式开启空间层（默认关）。
+        else if (a == "--spatial") o.filterSpatial = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2260,13 +2264,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeLightScale = o.probeLightScale;
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
-        // S12 M12.0（Q12-A）：GI 分量独立时域累积。仅 filter 模式开；
-        // 空间 / 拒绝两层留 M12.1 / M12.2 的可关 flag（本阶段恒 false，不消费）。
+        // S12 M12.0/M12.1（Q12-A + Q12-C A）：GI 分量独立时域累积 + 5x5
+        // 空间联合双边。仅 filter 模式开；拒绝层留 M12.2 的可关 flag。
         fp.filterTemporal      = isFilter;
         fp.temporalEnable      = temporalEnableLocal;
         fp.temporalAlpha       = std::clamp(temporalAlphaLocal, 0.01f, 1.0f);
         fp.temporalHistoryMax  = std::clamp(temporalHistoryMaxLocal, 1, 256);
-        fp.filterSpatial       = false;
+        fp.filterSpatial       = o.filterSpatial;
         fp.filterReject        = false;
         fp.filterGiDump        = o.filterGiDump;
         if (dagMode || hizMode) {
@@ -3926,6 +3930,7 @@ void printUsage() {
               << "  viewer.exe --temporal-alpha <f>     current-frame GI weight floor (0.01..1, default 0.10)\n"
               << "  viewer.exe --temporal-history-max <n>  accumulated frame cap (1..256, default 32)\n"
               << "  viewer.exe --temporal-off           disable temporal layer (single-frame GI)\n"
+              << "  viewer.exe --spatial                S12 M12.1: enable 5x5 joint bilateral spatial layer\n"
               << "  viewer.exe --filter-gi-dump         S12 acceptance: dump accumulated GI component\n"
               << "  viewer.exe --vis-viz cluster|triangle\n"
               << "                                     visbuf mode: decode vis buffer by clusterId\n"

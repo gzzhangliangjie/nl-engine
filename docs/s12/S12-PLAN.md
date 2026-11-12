@@ -2,7 +2,7 @@
 
 > 对应总路线 `docs/ROADMAP.md` 的 S12。预计 3 个里程碑、业余时间约 1 周。
 > S10/S11 的 GI 本质是稀疏采样（1 射线/探针/帧），画面必带噪声：空间联合双边滤波抹平 + 时间累积放大样本数 + 历史拒绝防止拖影。Carrot 有现成 SVGF 实现对照。
-> **状态：M12.0 T1~T8 已落码并验收全绿（2026-11-12），待提交 / tag。** 开工闸拍板 Q12-A / Q12-B（§0.3），落码期实测「静态结构性 ON≡OFF」后用户追加拍板 **Q12-E**（§0.3，含追因链）；双后端构建 selftest 16/16 + shader 106/106、`run.bat verify` ALL GREEN、新卡冒烟 + 3 条保形 `--only` 双后端 `bytes` 全绿。本文件为 S12 权威决策落点；`kStage` 保持 `S8.2`，工具见 `S12-TOOLS-GUIDE.md`。
+> **状态：M12.0 已收官（commit `f9b4a8f` + annotated tag `s12-temporal`）；M12.1 已收官（Q12-C 拍板 A + annotated tag `s12-spatial`）。** 开工闸拍板 Q12-A / Q12-B（§0.3），M12.0 落码期实测「静态结构性 ON≡OFF」后用户追加拍板 **Q12-E**（§0.3，含追因链）；M12.1 开工前拍板 **Q12-C = 方案 A「先时间后空间，单次串联」**（§0.3 / §0.4 第 8 条 / §0.7）。双后端 selftest 16/16 + shader 108/108、两个 `run.bat verify` 全 ALL GREEN、新卡冒烟 + 3 条保形 `--only` 双后端 `bytes` 全绿；tag 收口全量总闸 **810/812**（2 个 `s11-hash/cacheviz` 既有基线漂移，零新增回归；回归工具卡死修复见 `S12-TOOLS-GUIDE.md §8.7`）。本文件为 S12 权威决策落点；`kStage` 保持 `S8.2`，工具见 `S12-TOOLS-GUIDE.md`（M12.1 章节 §8）。
 
 ---
 
@@ -36,6 +36,7 @@
 | **Q12-A** | M12.0 history 累积对象与滤波挂点（现状：GI 已在 M10.2 compose 进 `hdrSceneColor_`，无独立 GI 缓冲） | **方案 A「GI 分量独立」** | 三处里 Carrot / UE 都只对 GI 分量做时域；整帧方案（bevy TAA）会把直光与天空一并平滑，污染 Q3 勘误后的对照链。关键实读：`gatherLinear_`（M10.2 全屏 `RGBA16F`）**本来就是 GI-only 中间缓冲**，`csGatherCompose` 才把它叠进 `hdrSceneColor_` → 方案 A 可零新增 RT 落地 |
 | **Q12-B** | 三次顺延的 Q4「GBuffer 属性落盘」判定 | **方案 A'「M12.2 前按实测再拍」** | 符合 `T0-PLAN.md` 原文「S12 实测噪声证据再定」；不提前替 M12.2 定死资源契约。M12.0/M12.1 按 T0 口径「重投影深度差 + 当前帧法线」落码，拿到噪声 / 鬼影实测证据后在 M12.2 开工前再拍板；**Q4 结论不改写、冻结面维持 0 新增独立 GBuffer 资源** |
 | **Q12-E**（落码期追加，2026-11-12） | 静态场景 `--mode filter` 的 ON / OFF / `--mode probe` / 32 帧四图 **MD5 全同** → M12.0 自检「静止噪声随时间明显收敛」不成立 | **方案 ①「仅 filter 态加帧间抖动」** | 实读 `probe_trace.slang`：`csTraceProbe` 每探针 64 条**固定**八面体方向，逐帧确定性无随机源 → `lerp(hist, cur, α)` 在静态场景数学上恒等于 `cur`（M11.2「结构性 ON≡OFF」同族坑）；运动场景 `--orbit-speed 5` 实测 ON≠OFF，证明 filter pass / 重投影 / ping-pong 本身正确。给 GI 引入逐帧采样抖动后，时间累积才有可观测的收敛。被否：② 如实记录 ON≡OFF 改走运动自比（验收口径退化，M12.1/M12.2 失去噪声尺子）、③ 人工噪声注入脚手架（不反映真实 GI 采样） |
+| **Q12-C**（M12.1 开工前拍板，2026-11-12） | 时间累积与 5×5 空间联合双边的串联顺序 | **方案 A「先时间后空间，单次串联」** | 三处重读口径不一致：Carrot = temporal → variance → wavelet 1~5 且第一波空间结果 copy 回 history（`LightingPasses.cpp:749/790/826/864-885/921-924`）；UE = 先空间（atlas 层 `FilterScreenProbes`）后时间（全屏 `ScreenProbeTemporalReprojection`），`LumenScreenProbeGather.cpp:2661/1960`；bevy = 3×3 方差 clip 与历史混合同帧融合（`taa.wesl:145-185`）。A 是唯一零新增 RT、唯一不碰 M12.0 已验收 `hf`/`MAE` 尺子、唯一「关空间层即完全等价 M12.0」的方案，保形边界最好。被否：B（空间结果回写历史，需 1 张中间 / copy pass、历史语义变）、C（交替迭代，**三处参考无对应实现**，Carrot 5 轮全是空间 à-trous）、D（先空间后时间，需 >=1 张 RT 且 OFF 不再是单帧噪声）。数据通路：`csFilterTemporal` 已双写 `history[write]` + `gatherLinear_`（M12.0 shader 零改动）→ 空间 pass 从 `history[write]` SRV 只读 5x5 邻域、写回 `gatherLinear_` 自身 texel → compose 一字不动 |
 
 **Q12-E 落码期追因链（实测，非推断）**：
 1. 首版「切平面微扰 0.30f」：`--probe-atlas-dump` 证明 atlas 已变（filter 与 probe 的 atlas 图 MD5 不同），但四张合成图仍逐字节相同 → 朝外方向微扰不改变 hit/miss，而 `csGather` 只采外法线方向 texel（M11.2 `probe_atlas_dump.slang` 文件头实锤）。
@@ -56,6 +57,7 @@
 5. M12.1 5×5 联合双边权重 = 空间距离 × 法线夹角 × 深度差（亮度差可选）。
 6. 时间 / 空间 / 拒绝三层可单独开关；`kStage` 保持 `S8.2`，既有 104 张版本卡与 HUD 基线零重拍。
 7. **Q12-E 帧间抖动**：仅 filter 态对 `csTraceProbe` 每条射线做 per-(coreTexel, probe, frame) **随机方向置换**（微扰版无效，见 §0.3 追因链）；抖动与「时间层开关」解耦（`--temporal-off` 时抖动仍开 → OFF 图 = 单帧噪声、ON 图 = 收敛后）；`traceCB_` 尺寸不变，帧号取模 64 保证确定性。验收对象 = `--filter-gi-dump` 直出的累积 GI（复用 M11.2 irrad-dump 管线），场景参数 **必须用 `--dist 4`**（`--dist 7` 下 gather 权重全灭、GI 恒 0）。
+8. **Q12-C = 方案 A「先时间后空间，单次串联」**：M12.1 空间层默认**关**（`filterSpatial` 默认 false，显式 `--spatial` 开启）→ M12.0 的 105 张卡与 `run.bat verify` 的 `hf`/`MAE` 尺子逐字沿用、零重拍；空间层读 `history[write]` 邻域、写 `gatherLinear_`，`probeDepth_` + `gatherNormalFromDepth()` 提供法线/深度 → **零新增 RT、零新增 GBuffer 资源**（Q4 冻结面不动）。「交替迭代」经三处实读澄清为**无参考佐证**：Carrot 的 5 轮是空间内部 à-trous，不是时间↔空间交替；多轮 à-trous 若要做得另拍板（属范围扩展）。
 
 ### 0.5 冻结面（拍板后仍冻结，落码时逐项解）
 
@@ -84,7 +86,7 @@
 
 ### 0.7 非阻塞待拍板（归后续里程碑，不阻塞 M12.0 落码）
 
-- **Q12-C**：M12.1「先时间后空间（**或交替迭代 1~2 次**）」括号内未定 → M12.1 开工前拍板，写回本文件。
+- **Q12-C：已拍板（2026-11-12，M12.1 开工前）= 方案 A「先时间后空间，单次串联」**。结论与代价矩阵见 §0.3 / §0.4 第 8 条；括号内「或交替迭代 1~2 次」经三处实读判定为无参考佐证，作废（不执行、不留待拍板）。
 - **Q12-D**：M12.2「与 **S12 自立的时域参考** 对比主观可接受」——参考图形态未定义（高采样离线参考 / 关滤波 N 帧平均 / 其它），M12.2 开工前拍板。Q3 勘误（S9 一跳图不含间接光，不是 GI 尺子）仍成立。
 - **Q12-B 续拍**：M12.2 开工前，凭 M12.0/M12.1 的噪声与鬼影实测证据，在「维持不落盘 / 补 previous normal / 补完整 previous_gbuffer」间拍板；拍板后按 `AGENTS.md`「拍板后全仓 grep 旧口径同步勘误」更新 S9-PLAN / T0-PLAN / SHARED-INFRA-OPTIONS / ROADMAP / SHADER-CONVENTIONS / MILESTONES / UE-DIFFS。
 
@@ -101,10 +103,10 @@
 
 ## M12.1 空间联合双边滤波（1~2 天）
 
-- [ ] 5×5 联合双边：权重 = 空间距离 × 法线夹角 × 深度差（亮度差可选）
-- [ ] 与时间累积串联：先时间后空间（或交替迭代 1~2 次 —— **Q12-C 待 M12.1 开工前拍板**）
+- [x] 5×5 联合双边：权重 = 空间距离 × 法线夹角 × 深度差（亮度差可选，留 M12.2）
+- [x] 与时间累积串联：**先时间后空间，单次串联（Q12-C 拍板 A，2026-11-12）**；空间层默认关、显式 `--spatial` 开启，零新增 RT / CB / GBuffer
 
-**自检**：单帧噪声显著下降；边缘不被糊穿（法线/深度权重生效的直接证据）。tag：`s12-spatial`。
+**自检（2026-11-12 实测，双后端）**：单帧噪声显著下降 —— `hf` OFF 0.677 → ON **0.475**（ratio 0.702 ≤ 0.90）；边缘不被糊穿 —— `edgeGradRatio` **0.493 ≥ 0.30**（硬断言，high-gradient 像素 5606/5597），`diffPixels` 20666/20656；MAE 与无抖动 REF 之比 1.121（门限 1.15，联合双边有偏估计按实测标定）。首轮追因：预置 `MAER=1.05` 断言失败 → 分区诊断排除亮度漂移 → shader 加固（`ncValid=false` 用 `deviceZ` 代理、弃 Carrot `depthDivisor` 改固定 `sigmaZ=0.002`）→ 临时深度可视化实锤本场景 `probeDepth_` 仅 184~186 三档、单凸体+纯天空**无真实几何边缘**，联合双边近似高斯，非绑定错误；故 MAE 门限按 M12.0 先例实测标定，并把 `edgeGradRatio` 升为硬断言。⚠️ 法线/深度权重的**真实保边能力仍需在 M12.2 / 多物体场景验证**（挂后续项，不作为本里程碑已验证结论）。保形：空间层默认关时 `example/s12-temporal/run.bat verify` 数值与冻结记录逐项相同。tag：`s12-spatial`；工具与踩坑详见 `S12-TOOLS-GUIDE.md §8`、`SHADER-CONVENTIONS.md §2.19` M12.1 表。
 
 ## M12.2 历史拒绝 + 验收（1~2 天）
 

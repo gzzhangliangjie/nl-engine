@@ -490,6 +490,10 @@ public:
     // 顺序一字不动（M11.1 冻结基线代码形态实锤）。
     bool drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                             const FrameParams& params, std::string& outError);
+    // S12 M12.1（Q12-C A）：5x5 联合双边，插在 temporal 与 compose 之间，
+    // 从 history[write] 只读邻域、写回 gatherLinear_（零新增 RT）。
+    bool drawFilterSpatial(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                           const FrameParams& params, std::string& outError);
 
     // ---- S11 M11.0（S11）：--mode cache-viz 世界缓存 flat hashmap ----
     // initCache = 缓冲（checksums/life/geo ×kCacheCapacity）+ 三 compute 管线；
@@ -1106,6 +1110,16 @@ private:
     nvrhi::ComputePipelineHandle filterPSO_;
     bool                         temporalHistoryValid_ = false; // 首帧历史未初始化 → shader 不读
     bool                         filterLogged_ = false;         // 一次性日志锚
+
+    // ---- S12 M12.1：空间联合双边（Q12-C A，零新增 RT / CB / GBuffer 资源）----
+    // b0 = filterCB_（复用）、b1 = gatherCB_（复用前 80B）、t0 = history[write]、
+    // t1 = probeDepth_、u0 = gatherLinear_。set 索引 = 本帧 temporal write 侧。
+    nvrhi::ShaderHandle          csFilterSpatial_;          // filter_spatial.csfilterspatial
+    nvrhi::BindingLayoutHandle   filterSpatialLayout_;
+    nvrhi::BindingSetHandle      filterSpatialSet_[2];
+    nvrhi::ComputePipelineHandle filterSpatialPSO_;
+    nvrhi::TextureHandle         filterHistoryCur_;         // 本帧 temporal write 侧
+    bool                         filterSpatialLogged_ = false;
 
     // ---- M10.0：probe-place 资源（Q10-1/Q10-2 拍板 UE 口径）----
     // velocity prepass：独立小 pass（vsVelocity/psVelocity）自建 D32 深度

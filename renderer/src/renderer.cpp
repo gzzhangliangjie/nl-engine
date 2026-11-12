@@ -136,6 +136,8 @@ static const Artifact kArtifacts[] = {
     // S12 M12.0：filter_temporal.slang 单 compute 入口（Q12-A GI 分量独立时域累积）
     // × 双目标 = 2。
     {"filter_temporal.csfiltertemporal", true}, {"filter_temporal.csfiltertemporal", false},
+    // S12 M12.1：filter_spatial.slang 单 compute 入口（Q12-C A）× 双目标 = 2。
+    {"filter_spatial.csfilterspatial", true}, {"filter_spatial.csfilterspatial", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

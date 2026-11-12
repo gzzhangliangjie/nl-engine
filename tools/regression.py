@@ -43,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,7 +71,11 @@ DEFAULT_REPORT_MD = ROOT / "build" / "regression" / "report.md"
 DEFAULT_REPORT_JSON = ROOT / "build" / "regression" / "report.json"
 
 BACKENDS = ("dx12", "vulkan")
-RUN_TIMEOUT = 120
+# 2026-11-13 S12 M12.1 收口实锤：120s 曾完全失效（见 run_viewer 注释），全量
+# 挂 25 分钟零输出、无子进程、报告未生成，且是用户先问才被发现。现改为
+# wait(timeout) 真生效 + 超时即告警。60s 的依据 = M12.0 全量 810 条实测
+# p50 141ms / p99 7573ms / max 15798ms / >30s 0 条，留约 4 倍余量。
+RUN_TIMEOUT = 60
 # Documented rounding-noise tier (see module docstring).
 NEAR_MAX_DELTA = 1
 NEAR_MAX_PIXELS = 2
@@ -147,25 +152,51 @@ def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
 
 
 def run_viewer(exe: Path, argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
-    try:
-        proc = subprocess.run(
-            [str(exe), *argv],
-            # 【2026-11-09】case 级 cwd 覆盖：默认 exe 所在目录；声明
-            # "cwd": "{root}" 时改用仓库根（audio-tools debug 的快照存
-            # 仓库根相对路径，必须仓库根 CWD 才能复开 clip）。
-            cwd=str(cwd if cwd is not None else exe.parent),
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=RUN_TIMEOUT,
-        )
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
-    except subprocess.TimeoutExpired as e:
-        log = (e.stdout or "") + (e.stderr or "")
-        if isinstance(log, bytes):
-            log = log.decode("utf-8", "replace")
-        return -1, log[-8000:] + f"\n[regression] timeout after {RUN_TIMEOUT}s"
-    except OSError as e:
-        return -1, f"[regression] cannot launch {exe.name}: {e}"
+    """Launch one case and return (exit code, combined stdout+stderr).
+
+    2026-11-13 S12 M12.1 收口实锤：**不能用 subprocess.run(capture_output=True)**。
+    material-graph-tools 的 check / compilepar 会派生 `cmd /c slangc.exe` 孙进程，
+    孙进程继承 stdout 管道写端；CPython 的 subprocess.run 超时后只 kill 直接子
+    进程，随后再调一次**没有 timeout** 的 communicate() 等 EOF → 孙进程不退出
+    就永久阻塞，RUN_TIMEOUT 形同虚设。实测全量挂 25 分钟、stdout 零新增、
+    进程无子进程、报告未生成，孤儿 cmd 直到终止回归才消失。
+
+    改为 Popen + 临时文件重定向：读日志不依赖管道 EOF，wait(timeout) 才真生效；
+    stdin=DEVNULL 顺带断掉 cmd 继承输入句柄导致的挂起。超时 60s 内必被 kill、
+    由 run_task 打 [STALL] 告警，不会再出现「静默挂死没人知道」。
+    """
+    with tempfile.TemporaryFile(mode="w+b") as logf:
+        try:
+            proc = subprocess.Popen(
+                [str(exe), *argv],
+                # 【2026-11-09】case 级 cwd 覆盖：默认 exe 所在目录；声明
+                # "cwd": "{root}" 时改用仓库根（audio-tools debug 的快照存
+                # 仓库根相对路径，必须仓库根 CWD 才能复开 clip）。
+                cwd=str(cwd if cwd is not None else exe.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError as e:
+            return -1, f"[regression] cannot launch {exe.name}: {e}"
+        timed_out = False
+        try:
+            code = proc.wait(timeout=RUN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            code = -1
+        logf.seek(0)
+        log = logf.read().decode("utf-8", "replace")
+        if timed_out:
+            # marker 文本必须保持精确：regression_case 的「超时+零输出」自动重试
+            # 判据是 log.strip() == f"[regression] timeout after {RUN_TIMEOUT}s"。
+            log = log[-8000:] + f"\n[regression] timeout after {RUN_TIMEOUT}s"
+        return code, log
 
 
 def check_device_errors(log: str) -> int | None:
@@ -346,6 +377,18 @@ def main() -> int:
             tasks.append((v, c))
 
     print_lock = threading.Lock()
+    records: list[dict] = []
+    t_all = time.time()
+    # 2026-11-13：可观测性三件套（起因 = 全量静默挂死 25 分钟没人发现）。
+    # ① 每条完成即 flush，stdout 始终有增量；② 增量落盘 JSONL，整体卡死也能
+    # 从尾部定位停在哪条；③ 每 50 条打进度 + 超时单独打 [STALL] 告警。
+    progress_path = Path(args.report).with_suffix(".progress.jsonl")
+    progress_path.write_text("", encoding="utf-8")
+    total = len(tasks) * len(backend_filter)
+    done = [0]
+    print(f"[regression] {len(tasks)} cases x {len(backend_filter)} backends "
+          f"= {total} runs; timeout={RUN_TIMEOUT}s; "
+          f"progress={progress_path.as_posix()}", flush=True)
 
     def run_task(v: dict, c: dict) -> list[dict]:
         recs: list[dict] = []
@@ -360,11 +403,19 @@ def main() -> int:
             extra = f" ({rec['ms']} ms)" if "ms" in rec else ""
             with print_lock:
                 print(f"[{mark}] {v['id']}/{c['id']} {b:<6} {rec['verdict']:<5} "
-                      f"{rec['detail']}{extra}")
+                      f"{rec['detail']}{extra}", flush=True)
+                if rec.get("exit") == -1:
+                    print(f"[STALL] {v['id']}/{c['id']} {b}: killed after "
+                          f"{RUN_TIMEOUT}s, gate continues (see progress log)",
+                          flush=True)
+                with progress_path.open("a", encoding="utf-8") as pf:
+                    pf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                done[0] += 1
+                if done[0] % 50 == 0 or done[0] == total:
+                    print(f"[regression][progress] {done[0]}/{total} "
+                          f"elapsed={time.time() - t_all:.0f}s", flush=True)
         return recs
 
-    records: list[dict] = []
-    t_all = time.time()
     jobs = max(1, args.jobs)
     if jobs == 1:
         for v, c in tasks:

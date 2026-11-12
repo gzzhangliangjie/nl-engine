@@ -10157,6 +10157,60 @@
      "script": "example/s12-temporal/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s12-spatial",
+   "label": "M12.1",
+   "name": "S12 时空滤波：5x5 空间联合双边（Q12-C A 先时间后空间，单次串联）",
+   "tag": "s12-spatial",
+   "date": "2026-11-12",
+   "summary": "S12 M12.1：Q12-C 拍板方案 A「先时间后空间，单次串联」。三处重读口径不一致（Carrot svgf temporal -> variance -> 5 轮 wavelet 且第一波空间结果 copy 回 history；UE 先 FilterScreenProbes 空间后 ScreenProbeTemporalReprojection 时域；bevy 3x3 方差 clip 与历史混合同帧融合），按开工闸摆代价矩阵由用户拍板。A 是唯一零新增 RT、唯一不碰 M12.0 已验收 hf/MAE 尺子、唯一「关空间层即完全等价 M12.0」的方案。新 filter_spatial.slang compute 8x8 插在 csFilterTemporal 与 csGatherCompose 之间：M12.0 已双写 history[write] + gatherLinear_（shader 零改动），空间 pass 从 history[write] SRV 只读 5x5 邻域、写回 gatherLinear_ 自身 texel，compose 一字不动。权重 = 空间距离 x 法线夹角 x 深度差（法线项用 UE ScenePlane 点面距口径，与 probe_gather.slang 同源；深度项用固定尺度 sigmaZ=0.002 的 deviceZ 差（首轮实测 Carrot depthDivisor 按 gradZ 放大分母会让边缘权重反而更宽松、边缘区 MAE +24.6%，已弃用）），法线/深度复用 probeDepth_ + gbuffer_common.slangh 公共反解头，Q4 冻结面「0 新增独立 GBuffer 资源」不动。b0 复用 filterCB_、b1 复用 gatherCB_ 前 80B，零新增 CB。空间层默认关、显式 --spatial 开启，保证 M12.0 的 105 张卡与 run.bat verify 逐字沿用、零重拍；关层时 pass 仍 dispatch 但 shader 内 g_flags.z 门控退化成 pass-through，ping-pong 状态机连续。验收仍须 --dist 4 + --filter-gi-dump（--dist 7 下 gather 权重全灭、GI 恒 0）。",
+   "acceptance": "双后端构建 selftest 16/16 + shader 产物 108/108 登记（新增 filter_spatial.csfilterspatial.spv/.dxil）；example/s12-spatial/run.bat verify ALL GREEN：每后端重拍 REF/OFF/ON 三图（OFF=时间层单独、ON=时间+5x5 空间），tools/check-s12-spatial.py onoffref 断言 ON!=OFF（diffPixels 约 2.07 万）、hf(ON) <= 0.90*hf(OFF)（实测 0.702）、MAE(ON,ref) <= 1.15*MAE(OFF,ref)（实测 1.121）、edgeGradRatio >= 0.30（实测 0.493，对应 S12-PLAN M12.1 自检「边缘不被糊穿」），负向控制非零退出、工具 selftest PASS；MAER/edgeMin 按实测标定（M12.0 先例）——联合双边是有偏估计，用邻域平均换方差下降，与无抖动 REF 的 MAE 小幅上升属预期，实测 OFF 2.687 -> ON 3.012。保形：冻结 REF 图与 M12.0 的 ref-*.png 逐字节相同、OFF 图与 M12.0 的 temporal-on-*.png 逐字节相同（双后端 4/4 MD5 一致）→ 空间层默认关是 bytes 级完全等价，不只是统计等价；example/s12-temporal/run.bat verify 仍 ALL GREEN 且数值与冻结记录逐项相同 + 3 条 --only 双后端 bytes 全绿；Q11-1 口径 GPU 数值走统计不变量、禁 bytes。单凸体+纯天空场景无真实几何边缘，法线/深度权重的保边能力在 M12.2 / 多物体场景再充分验证（挂后续项）。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gpu-smoke",
+     "name": "M12.1 空间双边 GPU 冒烟：--mode filter --spatial + --filter-gi-dump 双后端",
+     "kind": "tool",
+     "note": "只断言退出码与 deviceErrors=0（Q11-1 统计口径，禁 bytes）。必须用 --dist 4：--dist 7 下 gather 权重全灭使 gatherLinear_ 恒 0，GI 直出全黑。--spatial 显式开启空间层，默认关以保持 M12.0 基线零重拍。",
+     "args": [
+      "--mode",
+      "filter",
+      "--spatial",
+      "--filter-gi-dump",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode filter --spatial --filter-gi-dump --model Suzanne-materials.nmesh --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4 --screenshot {out}",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "spatial-stats",
+     "name": "M12.1 空间滤波统计验收：双后端 ON/OFF/REF 自比 + 负向控制 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify 每后端重拍 REF（无抖动） / OFF（时间层单独，等价 M12.0） / ON（时间+5x5 空间）三张 GI 直出图，python tools/check-s12-spatial.py onoffref 做统计断言；纯标准库 PNG 解码（本机 python 无 PIL）。负向控制用 OFF 冒充 ON 必须被拒。edgeGradRatio 是硬断言（>=0.30），对应 M12.1 自检的边缘保形；MAE 门限 1.15 按实测标定（联合双边固有偏差 1.121）。",
+     "args": [],
+     "command": "example/s12-spatial/run.bat verify",
+     "script": "example/s12-spatial/run.bat verify"
+    }
+   ]
   }
  ]
 }

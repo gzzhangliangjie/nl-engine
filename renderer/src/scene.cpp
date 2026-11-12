@@ -3232,6 +3232,8 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         !loadShader("probe_gather.csgathercompose", nvrhi::ShaderType::Compute, csGatherCompose_) ||
         // S12 M12.0：filter_temporal 单入口（仅 filter 态 dispatch；加载本身零画面影响）。
         !loadShader("filter_temporal.csfiltertemporal", nvrhi::ShaderType::Compute, csFilterTemporal_) ||
+        // S12 M12.1：filter_spatial 单 compute 入口（Q12-C A，仅 filter 态 dispatch）。
+        !loadShader("filter_spatial.csfilterspatial", nvrhi::ShaderType::Compute, csFilterSpatial_) ||
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
@@ -3383,6 +3385,20 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     filterLayout_ = device->createBindingLayout(fDesc);
     if (!filterLayout_) { outError = "createBindingLayout failed for filter temporal"; return false; }
 
+    // ---- S12 M12.1：csFilterSpatial 布局（b0 filterCB_ + b1 gatherCB_ 复用
+    // + t0 history[write] SRV + t1 probeDepth_ SRV + u0 gatherLinear_ UAV）。
+    // 零新增 CB / RT / GBuffer 资源（Q4 冻结面）。单一 BindingSet（§2.7）；
+    // layout 项多于 shader 实际消费无害（root sig 反射铁律：漏了才建不了 PSO）。
+    nvrhi::BindingLayoutDesc sDesc;
+    sDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+    filterSpatialLayout_ = device->createBindingLayout(sDesc);
+    if (!filterSpatialLayout_) { outError = "createBindingLayout failed for filter spatial"; return false; }
+
     {
         nvrhi::ComputePipelineDesc cpDesc;
         cpDesc.setComputeShader(csPlace_).addBindingLayout(placeLayout_);
@@ -3416,6 +3432,13 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         filterPSO_ = device->createComputePipeline(cpDesc);
     }
     if (!filterPSO_) { outError = "createComputePipeline failed for filter temporal"; return false; }
+
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csFilterSpatial_).addBindingLayout(filterSpatialLayout_);
+        filterSpatialPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!filterSpatialPSO_) { outError = "createComputePipeline failed for filter spatial"; return false; }
 
     nl::core::log::infoCh("scene", "probe scene ready (velocity prepass + 4-level cascade placement",
                         ", viz dots) | shader=", shaderSuffix);
@@ -3612,7 +3635,8 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         // parity 语义：read = history[parity]，write = history[1-parity]；
         // t0Parity_ 每帧在 drawFilterTemporal 末尾翻转。
         if (tlasReady_ && hdrSceneColor_ && history0_ && history1_ && velocity_ &&
-            filterLayout_ && filterCB_) {
+            probeDepth_ && filterLayout_ && filterCB_ && gatherCB_ &&
+            filterSpatialLayout_) {
             nvrhi::BindingSetDesc fsDesc;
             fsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, filterCB_))
                   .addItem(nvrhi::BindingSetItem::Texture_SRV(0, velocity_))
@@ -3623,6 +3647,19 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
                       1, parity == 0 ? history1_ : history0_));
             filterSet_[parity] = device->createBindingSet(fsDesc, filterLayout_);
             if (!filterSet_[parity]) { outError = "createBindingSet failed for filter temporal"; return false; }
+            // S12 M12.1：spatial set 的 t0 = 本帧 temporal 的 **write 侧**
+            // = history[1-parity]；索引 spatialW 与 drawFilterTemporal 翻转后的
+            // t0Parity_ 相同，故 drawFilterSpatial 直接取 filterSpatialSet_[t0Parity_]。
+            const std::uint32_t spatialW = 1u - parity;
+            nvrhi::BindingSetDesc ssDesc;
+            ssDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, filterCB_))
+                  .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, gatherCB_))
+                  .addItem(nvrhi::BindingSetItem::Texture_SRV(
+                      0, spatialW == 0u ? history0_ : history1_))
+                  .addItem(nvrhi::BindingSetItem::Texture_SRV(1, probeDepth_))
+                  .addItem(nvrhi::BindingSetItem::Texture_UAV(0, gatherLinear_));
+            filterSpatialSet_[spatialW] = device->createBindingSet(ssDesc, filterSpatialLayout_);
+            if (!filterSpatialSet_[spatialW]) { outError = "createBindingSet failed for filter spatial"; return false; }
         }
     }
 
@@ -3915,6 +3952,11 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         std::string fErr;
         if (!drawFilterTemporal(cmd, viewport, params, fErr))
             nl::core::log::deviceError("filter-temporal", fErr);
+        // ---- (1.6) S12 M12.1（Q12-C A）：时间层之后、compose 之前插空间层。
+        // 本 pass 始终 dispatch（shader 内 g_flags.z 门控）→ 空间层关时是
+        // pass-through，M12.0 的 gatherLinear_ 末态逐值不变、验收尺子沿用。
+        if (!drawFilterSpatial(cmd, viewport, params, fErr))
+            nl::core::log::deviceError("filter-spatial", fErr);
     }
 
     // ---- (2) csGatherCompose：hdr RenderTarget（matResolve 刚写完）→ UAV RMW。
@@ -4038,6 +4080,8 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
     }
 
+    // M12.1：记录本帧 temporal write 侧，供 drawFilterSpatial 当只读邻域源。
+    filterHistoryCur_ = hWrite;
     // ping-pong 交换 + 历史有效标记（后续每帧声明按上面的 UAV/SRV 闭合）。
     t0Parity_ ^= 1u;
     temporalHistoryValid_ = true;
@@ -4046,6 +4090,47 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
                             "history0/1 ping-pong, velocity reprojection, alpha=", alpha,
                             ", historyMax=", hmax, ")");
         filterLogged_ = true;
+    }
+    return true;
+}
+
+// ---- S12 M12.1：GI 分量 5x5 空间联合双边（Q12-C 方案 A：先时间后空间，单次串联）----
+// 数据来源：drawFilterTemporal 已双写 history[write] + gatherLinear_（M12.0
+// shader 零改动）。本 pass 从 history[write] SRV 只读 5x5 邻域、写回
+// gatherLinear_ 自身 texel → csGatherCompose 仍读 g_gatherOut.Load()，一字不动。
+// 零新增 RT；法线/深度复用 probeDepth_ + gbuffer_common.slangh 公共反解头
+// （Q4 冻结面：0 新增独立 GBuffer 资源）。状态机：history[write] 帧末末态
+// 必须与 M12.0 一致留 UAV，故本 pass 前后显式 SRV<->UAV 转换闭合。
+bool Scene::drawFilterSpatial(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                              const FrameParams& params, std::string& outError) {
+    (void)params;   // g_flags.z 由 drawFilterTemporal 写入 filterCB_，本 pass 不重写 CB
+    if (!filterSpatialPSO_ || !filterCB_ || !gatherCB_ ||
+        !filterSpatialSet_[0] || !filterSpatialSet_[1] ||
+        !gatherLinear_ || !probeDepth_ || !filterHistoryCur_) {
+        outError = "filter spatial: set/pipeline/texture missing";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // 本帧 temporal write 侧 = history[t0Parity_]（drawFilterTemporal 末尾已翻转
+    // parity）。它此刻是 UAV 末态；本 pass 要当 SRV 读 5x5 邻域 → 显式转态。
+    const std::uint32_t w = t0Parity_ & 1u;
+    cmd->setTextureState(filterHistoryCur_, allSub, nvrhi::ResourceStates::ShaderResource);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(filterSpatialPSO_).addBindingSet(filterSpatialSet_[w]);
+        cmd->setComputeState(cstate);
+        const float vpW = viewport.maxX - viewport.minX;
+        const float vpH = viewport.maxY - viewport.minY;
+        cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+    }
+    // 帧末末态必须还原成 UAV：下一帧 drawFilterTemporal 对 hRead 的
+    // beginTrackingTextureState(..., UnorderedAccess) 依赖它（M12.0 状态机不变）。
+    cmd->setTextureState(filterHistoryCur_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    if (!filterSpatialLogged_) {
+        nl::core::log::infoCh("scene", "s12: spatial bilateral active (5x5 joint "
+                            "weights, Q12-C A temporal->spatial, zero new RT)");
+        filterSpatialLogged_ = true;
     }
     return true;
 }
@@ -8061,6 +8146,14 @@ void Scene::shutdown() {
     filterSet_[0] = nullptr;
     filterSet_[1] = nullptr;
     filterPSO_ = nullptr;
+    // S12 M12.1：空间层句柄同批释放（同 M12.0「必须随 device 存活期释放」口径）
+    csFilterSpatial_ = nullptr;
+    filterSpatialLayout_ = nullptr;
+    filterSpatialPSO_ = nullptr;
+    filterSpatialSet_[0] = nullptr;
+    filterSpatialSet_[1] = nullptr;
+    filterHistoryCur_ = nullptr;
+    filterSpatialLogged_ = false;
     temporalHistoryValid_ = false;
     filterLogged_ = false;
     s12Frame_ = 0;                 // S12 Q12-E：抖动序列重开，保证截图基线可复现

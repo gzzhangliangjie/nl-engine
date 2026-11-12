@@ -379,7 +379,7 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | ⚠️ Q11-1 拍板 A | GPU radiance 图**非逐字节可复现**：每帧 rebuild 的 AS build 内部布局 D3D12/Vulkan 不保证 bit-exact，GI 查询把 hitP 量化进 cell key → 量化边界翻转（实测 3 次 3 md5、约 9% 像素差） | tools/check-s11-update.py | GPU 侧断言 = 统计口径（cover≥0.10 + 直光/背光 luma margin≥5.0）；CPU 侧（cachesim --update）保持 bytes 级确定断言 | 二值/伪彩类（不读 radiance 数值）不受影响，仍 bytes 断言 |
 | CPU 仿真扩展 | selftest 10 组 22 断言（+DI 增量收敛差分 / 二级弹射涌现 / blend 语义）+ `cachesim --update` 收敛门（early 0.014 → late 0.003） | gi-tools/main.cpp 与 shader 同构 | — | ctest `s11-gi-cachesim-update` 锚 `delta early`（新增用例后**双后端 re-configure**，M-N6） |
 
-#### S12 M12.0 时域累积槽位同步表（落码实读固化，2026-11-12，tag `s12-temporal` 待收口）
+#### S12 M12.0 时域累积槽位同步表（落码实读固化，2026-11-12，tag `s12-temporal`）
 
 | 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
 |---|---|---|---|---|
@@ -391,3 +391,15 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 | 项目既有帧抖动先例 | M11.0 `csCacheFill` R2 帧抖动 / M11.1 `csCacheUpdate` `pcg(cell^frame)` 软目标 | `world_cache.slang` | — | Q12-E 不是新概念，只是把帧抖动首次接到**探针追踪方向**上；序列取模 64 保证截图基线可复现 |
 | `--filter-gi-dump` / `giDumpSet_` | 复用 M11.2 `csIrradDump` + `irradDumpLayout_` + `irradDumpPSO_`（t0 SRV + u0 UAV，无 CB），只把 set 的 t0 从 `irradAtlas_[0]` 换成 `gatherLinear_`；**零新增 shader / PSO / RT** | `drawGiDump`（懒建 set，依赖 `gatherLinear_` / `hdrSceneColor_` 句柄，重建即换 set） | 只在 `params.filterGiDump` 时旁路 `csGatherCompose`，默认 compose 块一字不动；`gatherLinear_` 读前转 SRV、读完**必须转回 UAV**（帧首 `beginTracking` 声明的是上帧末态 UAV） | `hdrSceneColor_` 留 UAV 交给 `presentTonemap` 转回 SRV |
 | ⚠️ `--dist 7` GI 恒 0 | `csGather` 权重 `exp2(-10000·rel²)` + fallback `exp2(-1000·rel²)` 全灭 → `sum < kMin` → `result = 0`；GI 直出图 960×540 全像素 0 | `probe_gather.slang` `csGather` | — | s10/s11 基线卡全用 `--dist 7`，其 GI 项本就为 0，不是 S12 引入的回归；S12 验收必须 `--dist 4`（或 3/5） |
+
+#### S12 M12.1 空间联合双边槽位同步表（落码实读固化，2026-11-12，tag `s12-spatial`）
+
+| 资源 / 管线 | 格式 / 入口 | 创建点 | 绑定 set（§2.7 单一） | 状态登记（§2.15/§2.19） |
+|---|---|---|---|---|
+| 挂点 / 串联顺序 | `csGather → csFilterTemporal → **csFilterSpatial** → csGatherCompose`（Q12-C 拍板 A：先时间后空间，**单次串联**） | `drawProbeGather` 在 `drawFilterTemporal` 之后插入 `drawFilterSpatial`，compose 分支一字不动 | — | 「交替迭代 1~2 次」经三处实读（Carrot 5 轮是空间内部 à-trous、UE 是 atlas 空间→全屏时域、bevy 同帧融合）判定为无参考佐证，作废；多轮 à-trous 属范围扩展须另拍板 |
+| `filter_spatial.slang` | 单入口 `csFilterSpatial`（8×8）：读 `history[write]` 的 5×5 邻域 → `wS(高斯 σS=1.5) × wN(UE ScenePlane 点面距 σN=0.02·景深) × wD(deviceZ 固定尺度 σZ=0.002)` → 写回 `gatherLinear_` 自身 texel；天空早退、`sum<kMin` 保留中心值 | CMake `_ENTRIES_FILTER_SPATIAL` + `renderer.cpp` `kArtifacts`（spv/dxil 双目标）+ `scene.cpp` `loadShader("filter_spatial.csfilterspatial")` 三处登记 | `filterSpatialLayout_` / `filterSpatialSet_[2]`：b0 `filterCB_` + b1 `gatherCB_` 前 80B + t0 `history[write]` SRV + t1 `probeDepth_` SRV + u0 `gatherLinear_` UAV；shift 沿用 §2.5，**零新增 RT / CB / GBuffer**（Q4 冻结面不动） | 每线程只写自己 `tid.xy`、邻域读的是另一张纹理 → 无跨线程 hazard（M12.0 原地读写能成立是因为不读邻域，这里不成立，故必须分流）；`gatherCB_` b1 与 M10.2 `gatherNormalFromDepth()` 同源 `gbuffer_common.slangh` 反解 |
+| `filterHistoryCur_` | `drawFilterTemporal` 在 `t0Parity_` 翻转**之前**记录 `= hWrite`，供空间 pass 找到本帧写侧 | `drawFilterTemporal` | `filterSpatialSet_[parity]` 的 t0 | 空间 pass 前后 `UAV → SRV → UAV` 状态转换**闭合**（`setTextureState`），否则下一帧帧首 `beginTracking` 声明的末态 UAV 与实际不符；`history0_/1_` 仍不设 permanent（M12.0 踩坑不变） |
+| `--spatial` / `g_flags.z` | 三层独立开关的空间层，**默认关** | `viewer/main.cpp` → `FrameParams::filterSpatial` → `filterCB_` | b0 同一 CB，零扩容 | 关时 shader 内 `if (g_flags.z < 0.5f)` 退化为「history[write] 直抄」，但 **pass 仍 dispatch**（同 M12.0 时间层关时口径）保证 ping-pong 状态机逐帧连续；M12.0 的 105 张卡与 `run.bat verify` 数值逐字不变、零重拍 |
+| ⚠️ 首轮 MAE 超门限的根因 | `ncValid=false` 时原来放行 `wN=1` → 物体/天空边界像素完全不保边；Carrot `depthDivisor` 按 `gradZ` 放大分母 → 边缘权重反而更宽松（REF-edge 误差 +24.6%） | `filter_spatial.slang` 文件头追因注释 | — | 加固为「`ncValid=false` 用 `deviceZ` 一致性代理 + 固定 `sigmaZ=0.002f`」；重编后数值几乎不变 → 临时深度可视化实锤 `probeDepth_` 的 `zc` 在 8-bit 下仅 **184~186 三档**（单凸体+纯天空无真实几何边缘，联合双边近似高斯），**不是绑定错误**。debug 分支已还原、双后端从最终源码重编并重链 |
+| 验收口径 | `tools/check-s12-spatial.py onoffref`（纯标准库 PNG 解码）：`ON != OFF` + `hf` ratio ≤ 0.90 + `MAE` ratio ≤ **1.15** + `edgeGradRatio ≥ 0.30`（硬断言） | `example/s12-spatial/run.bat verify` 双后端 + 负向控制 + selftest | — | 联合双边是**有偏估计**（方差↓换偏差↑），MAE 小幅上升属预期，门限按实测标定（M12.0 先例）而非预设猜测；`edgeGradRatio` 防「糊平画面骗降噪」。Q11-1：GPU 数值走统计不变量、禁 `bytes`。本场景无真实几何边缘 → 保边能力留 M12.2 / 多物体场景验证 |
+| ⚠️ exe 过期门禁 | 只改 `.slang` 时 `cmake --build` 仅重编字节码、**不重链** `viewer.exe` → exe mtime < shader mtime | `regression.py` freshness gate | — | 收口前删 `build/{DX12,VULKAN}/viewer.exe` 再 `build-m0.2.bat` 强制重链；实测门禁会直接拒绝出报告（M12.1 收口实锤） |

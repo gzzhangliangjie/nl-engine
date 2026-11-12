@@ -472,6 +472,9 @@ set(_ENTRIES_PROBE_ATLAS_DUMP "csIrradDump|csirraddump|compute")
 # S12 M12.0：filter_temporal.slang 单 compute 入口——GI 分量独立时域累积
 #（Q12-A 方案 A；纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
 set(_ENTRIES_FILTER_TEMPORAL "csFilterTemporal|csfiltertemporal|compute")
+# S12 M12.1：filter_spatial.slang 单 compute 入口——5x5 联合双边（Q12-C A）
+#（纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
+set(_ENTRIES_FILTER_SPATIAL "csFilterSpatial|csfilterspatial|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -508,6 +511,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_ATLAS_DUMP}")
     elseif(_SRC_NAME STREQUAL "filter_temporal")
         set(_ENTRIES "${_ENTRIES_FILTER_TEMPORAL}")
+    elseif(_SRC_NAME STREQUAL "filter_spatial")
+        set(_ENTRIES "${_ENTRIES_FILTER_SPATIAL}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
