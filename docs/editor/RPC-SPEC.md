@@ -28,7 +28,7 @@
 | 线协议 | JSON-RPC 2.0，经 `simplerpc` 跑 TCP（`simplerpc` 为 Python-only、vendored 在 SDK 内） | **保留 JSON-RPC 2.0 语义结构**，但传输层换为 **msgpack + 4 字节长度前缀**；不引入 simplerpc |
 | 行为语义 | 插件方法注册 + Proxy + `OnPluginReady/OnPluginClose` + `Update()` 泵 + 心跳 | **完整复刻**到 C++ 侧 |
 
-> 偏离理由：① 编辑器宿主从 Python/PyQt5 改为 **C++ + Dear ImGui**——纯 C++（MIT，免费，零运行时依赖）与引擎共享类型，契合本项目 vendored 习惯；Sunshine 的插件体系/嵌入控件仅作架构思想借鉴，不复用其 Python 代码。② 线协议同理：`simplerpc` 是 Python 库无法在 C++ 侧复用；两侧统一用 **`msgpack-c`（header-only MIT，vendored 入库）**，序列化与引擎侧同源。JSON-RPC 2.0 的 `method/params/id/result/error` 结构对调试友好，保留语义、替换编码。
+> 偏离理由：① 编辑器宿主从 Python/PyQt5 改为 **C++ + Dear ImGui**——纯 C++（MIT，免费，零运行时依赖）与引擎共享类型，契合本项目 vendored 习惯；Sunshine 的插件体系/嵌入控件仅作架构思想借鉴，不复用其 Python 代码。② 线协议同理：`simplerpc` 是 Python 库无法在 C++ 侧复用；两侧统一用 **自研 `editor_bridge/msgpack_min.hpp`（header-only 零依赖，Value 树）**，序列化与引擎侧同源。（2026-11-13 勘误：本行原写「`msgpack-c`（header-only MIT，vendored 入库）」有误——msgpack-c 实为 **BSL-1.0** 非 MIT，且其 C++ 版默认依赖 boost 头文件，仓库从未 vendored 该库，实装始终为自研 min 版。）JSON-RPC 2.0 的 `method/params/id/result/error` 结构对调试友好，保留语义、替换编码。
 
 ---
 
@@ -246,7 +246,7 @@ public:
 } // namespace nl::editor
 ```
 
-- 依赖：`msgpack-c`（header-only，MIT，随 vendored 入库并附 `VENDOR.md`，符合选型硬闸）。
+- 依赖：自研 `editor_bridge/msgpack_min.hpp`（header-only，零依赖）。（2026-11-13 勘误：原文写「`msgpack-c`（header-only，MIT，随 vendored 入库并附 `VENDOR.md`）」有误——msgpack-c 为 BSL-1.0 且 C++ 版默认依赖 boost，未 vendored。）
 - `update()` 必须在引擎主循环每帧调用，否则入站调用与超时不会触发。
 
 ---
@@ -289,7 +289,7 @@ public:
 } // namespace nl::editor::host
 ```
 
-- 依赖：`msgpack-c`（header-only，MIT，与引擎侧同一份 vendored 副本，符合选型硬闸）。
+- 依赖：自研 `editor_bridge/msgpack_min.hpp`（header-only，零依赖，与引擎侧同一份）。（2026-11-13 勘误：原文写「`msgpack-c`（header-only，MIT）」有误——msgpack-c 为 BSL-1.0 且 C++ 版默认依赖 boost，未 vendored。）
 - 嵌入：`onEngineAnnounce` 收到 `hwnd` 后，调用 Win32 `SetParent((HWND)hwnd, viewportFrameHWND)` 并裁剪/随尺寸同步；借鉴 Sunshine `GameWidget.py` 的几何同步逻辑，但用 C++/Win32 重写。
 - 泵驱动：`RpcHost::update()` 由宿主窗口的消息循环（ImGui 主循环或独立 IO 线程）每帧调用，确保入站调用与超时及时触发。
 - 插件体系（不在本规范范围，但编辑器侧约定）：各工具插件经统一扩展点注册自己的 `registerHandler`/`registerNotify` 与 ImGui 面板绘制函数，彼此只经 RPC 与宿主服务交互，禁止插件间直接依赖——对应 Sunshine 的扩展点/服务隔离原则。

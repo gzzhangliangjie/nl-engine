@@ -24,7 +24,7 @@
 - **下一步**：S12 全阶段收官，待拍板架构项 0；独立后续项见下。`kStage` 仍 S8.2，本轮新增第 107 张版本卡 `s12-done`（旧 106 张零重拍）。
 - 独立后续项（均需单独拍板）：`s11-hash/cacheviz` 基线漂移、多物体场景复验保边、Shader 性能检查（候选 A `-validate-uniformity` / B per-pass gpu_timer / C `-trace-coverage`）、`regression.py` 多进程分片 worker 隔离、`RUN_TIMEOUT` 60→90s 复核。
 
-- **多人游戏方向（2026-11-13 用户拍板进路线）**：`GAME-DEV-ORDER.md` 11→12 步新增第 12 步「多人游戏 / 网络栈」，范围 = 传输 + 序列化 + **同步层**三层（用户追加「同步层也算上吧」）；`NON-RENDER-ROADMAP.md` 原 ★★ 慎入定档已作废并同步勘误。决策材料 `docs/net/NETCODE-OPTIONS.md`（Q-N1 已拍板；**Q-N2~Q-N6 待拍板** → 开工闸冻结落码、不建 PLAN/track）。既有事实：msgpack 已有自研 `editor_bridge/msgpack_min.hpp`（仅 RPC 用）；`RPC-SPEC.md §2` 把 msgpack-c 写成 MIT 有误（实为 BSL-1.0 + 默认依赖 boost）；KCP 纯 ARQ 两文件零 I/O；`P8-GAMELOOP-PLAN.md §4`「回滚 netcode 不在范围」仍有效，选回滚模型须单独解禁。
+- **多人游戏方向（2026-11-13 用户拍板进路线，Q-N1~Q-N6 全部拍板完毕，开工闸已解除）**：`GAME-DEV-ORDER.md` 11→12 步新增第 12 步「多人游戏 / 网络栈」（传输+序列化+同步层三层）；决策材料 `docs/net/NETCODE-OPTIONS.md`（六项拍板结论权威落点 §6）；落码计划 `docs/net/NETCODE-PLAN.md`（M-NET0 ENet+echo → M-NET1 bitsery+快照编解码 → M-NET2 服务器权威最小闭环 → M-NET3 收官，tag `net-m0`~`net-done`，轨道对齐 nav 先例注册 track `net`）。拍板结论：Q-N2 = 服务器权威+快照插值；Q-N3 = ENet vendored（MIT 纯 C，`nl/net/` 薄封装可插拔，KCP 留作替换项）；Q-N4 = 分层混用（`msgpack_min.hpp` 保留编辑器 RPC + bitsery vendored 同步层位打包，量化/delta 自研其上）；Q-N5 = 最小闭环（只同步载具 transform + 加入退出，专用服务器形态，不纳管 editor RPC）；Q-N6 = `RPC-SPEC.md` 三处 msgpack-c「MIT vendored」旧口径已勘误（实为 BSL-1.0 + 默认依赖 boost，实装自研 min 版）。关键事实：KCP 纯 ARQ 非传输库（无 socket/连接管理、仅可靠有序通道）；bitsery MIT header-only C++11 零依赖（v5.2.5）；`P8-GAMELOOP-PLAN.md §4` 回滚排除条款继续有效不解禁。开工闸已清，落码自 M-NET0 claim 后开工。
 
 ## 工程纪律（详 AGENTS.md）
 - 收口第一屏 = 四项自查 + 三要素表格；默认不跑全量回归（`--only` 挑 2~3），全量只在 tag 收口跑一次；双后端分档 bytes/near/FAIL，禁笼统「一致」；`--only` 是单个 `version[/case]`。
