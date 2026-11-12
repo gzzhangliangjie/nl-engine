@@ -467,7 +467,25 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     // M8.0：资产带 fallback 段（v3 lod0）时顺路预建 BLAS（S8-PLAN：S8 直接读
     // S3 的 fallback，不重新生成）。v1 base 资产在 initBlas 内跳过，零扰动。
-    if (!initBlas(device, nm, nmeshFile, outError)) return false;
+    // M-spike：多 lod 资产把 BLAS 放在 lod0 子文件、入口 nmesh 本身无 fallback
+    // 段（OcclScene1M/HizScene）；入口无 fallbackPresent 时回退加载 <stem>.lod0.nmesh
+    // 建 BLAS，与 initDag 同口径——否则 filter 模式在这类资产上取不到 BLAS → segfault。
+    if (nm.fallbackPresent) {
+        if (!initBlas(device, nm, nmeshFile, outError)) return false;
+    } else {
+        const std::string stem = std::string(nmeshFile).substr(
+            0, std::string(nmeshFile).rfind(".nmesh"));  // strip ".nmesh"
+        const std::string lod0Path = stem + ".lod0.nmesh";
+        const std::string lod0Full = std::string(NL_MESHLET_DIR "/") + lod0Path;
+        nl::core::NMeshData lod0nm;
+        std::string lod0err;
+        if (!nl::core::loadNMesh(lod0Full.c_str(), lod0nm, lod0err)) {
+            nl::core::log::infoCh("scene", "blas: no fallback section in ", nmeshFile,
+                                  " and no ", lod0Path, " — skipped (probe trace disabled)");
+        } else if (!initBlas(device, lod0nm, lod0Path.c_str(), outError)) {
+            return false;
+        }
+    }
 
     // ---- 3. 铺 SSBO ----
     // vertexPool：整份 nm.vertices 展平成 float（8 float/顶点，与 MeshVertex 布局一致）。
@@ -1624,18 +1642,17 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         std::vector<GPUMaterial> matTable(materialCount);
         for (std::size_t i = 0; i < materialCount; ++i) {
             const nl::core::PrimitiveMesh& prim = meshData.meshes[i];
-            if (!prim.hasBaseColor) {
-                outError = glb + std::string(" material ") + std::to_string(i) +
-                           " has no base color texture";
-                return false;
-            }
+            // M-spike：无基色贴图时 fallback 到 1x1 白纹理（与下方 MR dummy
+            // 同构），让无基色资产（遮挡/层级深度场景）的几何与光照管线（含
+            // filter GI dump）可用；base color 不参与 GI 计算，基色因子仍取自 glb。
+            const bool hasBC = prim.hasBaseColor;
             // 基色贴图（RGBA8_UNORM，无 SRGB 视图；srgbToLinear 在 shader 内）。
             {
                 const std::string texName =
                     glb + "BaseColor" + std::to_string(i);
                 nvrhi::TextureDesc texDesc;
-                texDesc.width = prim.texWidth;
-                texDesc.height = prim.texHeight;
+                texDesc.width = hasBC ? prim.texWidth : 1;
+                texDesc.height = hasBC ? prim.texHeight : 1;
                 texDesc.format = nvrhi::Format::RGBA8_UNORM;
                 texDesc.debugName = texName.c_str();
                 texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -1774,8 +1791,17 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->open();
         for (std::size_t i = 0; i < materialCount; ++i) {
             const nl::core::PrimitiveMesh& prim = meshData.meshes[i];
-            upload->writeTexture(matBaseColor_[i], 0, 0, prim.baseColorRGBA.data(),
-                                 static_cast<size_t>(prim.texWidth) * 4u);
+            // M-SPIKE-FIX：无基色贴图（遮挡/层级深度资产，如 OcclScene1M）的 baseColorRGBA
+            // 为空、texWidth=0，若仍按原路径 writeTexture(.., data(), texW*4) 会喂空指针 →
+            // SEGV。纹理本身已在上方建为 1x1 白占位，这里上传同尺寸白 dummy，占位语义一致。
+            // hasBC=true 的资产（Suzanne-materials 等 s12 基线）走原路径不变，保形字节级基线。
+            if (prim.hasBaseColor) {
+                upload->writeTexture(matBaseColor_[i], 0, 0, prim.baseColorRGBA.data(),
+                                     static_cast<size_t>(prim.texWidth) * 4u);
+            } else {
+                const std::uint8_t dummyBC[4] = {255u, 255u, 255u, 255u};   // 白基色
+                upload->writeTexture(matBaseColor_[i], 0, 0, dummyBC, 4u);
+            }
             if (prim.hasMR) {
                 upload->writeTexture(matMR_[i], 0, 0, prim.metallicRoughnessRGBA.data(),
                                      static_cast<size_t>(prim.mrWidth) * 4u);
