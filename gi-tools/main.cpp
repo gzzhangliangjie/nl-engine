@@ -78,14 +78,16 @@ struct WorldCacheSim {
 
     static std::uint32_t u(int v) { return static_cast<std::uint32_t>(v); }
 
-    // 与 shader 同构：量化 → pcg 链定槽 / iqint 链出校验和（0 保留为空槽）。
+    // CPU 仿真 keying（结构沿用 shader：量化 → pcg 链定槽 / iqint 链出校验和；0 保留为空槽）。
     void makeKey(const float pos[3], const float nrm[3],
                  std::uint32_t& key, std::uint32_t& checksum) const {
         const int px = static_cast<int>(std::floor(pos[0] * 2.0f));
         const int py = static_cast<int>(std::floor(pos[1] * 2.0f));
         const int pz = static_cast<int>(std::floor(pos[2] * 2.0f));
-        // M11.2 根因修复（续）：法线取分量绝对值，与 GPU wcMakeKey/ptMakeKey 同构。
-        // |nrm| 后填充(|真实法线|)与查询(|dir|=|外法线|) key 一致；曲面下不再符号相反。
+        // |nrm| 折入 key：填充(|真实法线|)与查询(|dir|=|外法线|) key 一致，曲面下不再符号相反。
+        // 注意：M11.2 后 GPU wcMakeKey/ptMakeKey 已改为 position-only（丢弃法线分量），故 CPU
+        // 此 key 与 GPU 不同构。gi-tools 是独立参考实现，其 key 不可直接对拍 GPU（已知项，见
+        // docs/MILESTONES.md §「s11-hash/cacheviz 基线重拍」）。
         const int nx = static_cast<int>(std::floor(std::fabs(nrm[0]) + 0.0001f));
         const int ny = static_cast<int>(std::floor(std::fabs(nrm[1]) + 0.0001f));
         const int nz = static_cast<int>(std::floor(std::fabs(nrm[2]) + 0.0001f));
