@@ -216,6 +216,11 @@ add_subdirectory(thirdparty/recastnavigation EXCLUDE_FROM_ALL)
 # vfx-tools/nfx-convert 链接——运行时零新依赖铁律不破。详见 thirdparty/effekseer/VENDOR.md。
 add_subdirectory(thirdparty/effekseer EXCLUDE_FROM_ALL)
 
+# ---- NET M-NET0：ENet 1.3.18 vendored（MIT，UDP 传输：可靠/不可靠通道 + 连接管理）----
+# 符号面隔离：enet_ 类型只允许出现在 core/src/net/Net.cpp（PIMPL）；
+# 版本锁 / 子集 / 风险核查见 thirdparty/enet/VENDOR.md。
+add_subdirectory(thirdparty/enet EXCLUDE_FROM_ALL)
+
 # ---- core：日志 / 断言 / 窗口 / 轨道相机 / 模式分发器 / glTF 读取 / 切簇。不依赖任何图形 API 头 ----
 add_library(nl_core STATIC
     core/src/log.cpp
@@ -277,6 +282,7 @@ add_library(nl_core STATIC
     core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
     core/src/tick_groups.cpp   # P8 M-GL5：命名 TickGroup 注册制（逻辑帧组序契约）
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
+    core/src/net/Net.cpp       # NET M-NET0：nl/net 传输层薄封装（PIMPL，core 内唯一 ENet 符号面）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
@@ -299,6 +305,8 @@ target_link_libraries(nl_core PUBLIC nl_profiler)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio Jolt nl_recast)
 # M-LOG0：spdlog 内核只进 log.cpp（PIMPL 纪律：log.hpp 不暴露 spdlog 类型，故 PRIVATE）。
 target_link_libraries(nl_core PRIVATE nl_spdlog)
+# NET M-NET0：ENet 只进 net/Net.cpp（PIMPL 纪律：net/Net.hpp 不暴露 enet_ 类型，故 PRIVATE）。
+target_link_libraries(nl_core PRIVATE nl_enet)
 # M-LOG0：文件落盘命名 `<exe>-<backend>-<时间戳>.log`（Q-L2 拍板）——backend 以编译期
 # 字符串宏注入 nl_core（与 viewer 的 NL_BACKEND_NAME 同源，core 不碰任何图形 API 头）。
 target_compile_definitions(nl_core PRIVATE NL_LOG_BACKEND_NAME="${NL_BACKEND_UPPER}")
@@ -602,6 +610,7 @@ add_subdirectory(nanite-scene)
 add_subdirectory(nl-script)
 add_subdirectory(nanite-console)
 add_subdirectory(audio-tools)
+add_subdirectory(net-tools)
 add_subdirectory(phys-tools)
 add_subdirectory(nav-tools)
 add_subdirectory(gl-tools)

@@ -10266,6 +10266,103 @@
      "script": "example/s12-done/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "net-m0",
+   "label": "M-NET0",
+   "name": "传输层：ENet vendored + nl/net 薄封装 + echo tool",
+   "tag": "net-m0",
+   "date": "2026-11-13",
+   "summary": "第 12 步「多人游戏 / 网络栈」第一里程碑（A 类并行轨道 net）。vendored ENet 1.3.18 @ 5a9c537（MIT，thirdparty/enet/VENDOR.md 溯源，unix.c 与上游脚手架剔除）；nl/net 传输层薄封装（PIMPL：NetServer/NetClient 事件泵 + 可靠/不可靠双通道，enet_ 符号只在 core/src/net/Net.cpp 单 TU）；net-tools 三命令面（echo 单进程回环 / echo-server+echo-client 双进程 / selftest 机械断言）。退出码 0=PASS / 1=错误 / 2=用法错误或超时。零游戏语义、零图形 API、kStage 不 bump；拍板权威落点 docs/net/NETCODE-OPTIONS.md §6。",
+   "acceptance": [
+    "单进程回环 echo：可靠 32/32 + 不可靠 64/64 全量回显，锚行 echo OK（ctest net-m0-echo / net-m0-selftest 正则锁死）",
+    "双进程 echo-server + echo-client：32 包零丢失 recv=32 loss=0.0%（example/net-m0/run.bat 真实双进程）",
+    "丢包注入：--loss 30 确定性伪随机（种子 1234）触发 exit 2，证据 = client-loss.log loss>0",
+    "负向显式拒绝：未知子命令 exit 2；死端口握手失败 exit 1（ctest WILL_FAIL 双例）",
+    "版本锚：net-tools version 输出 enet 1.3.18（vendored 溯源复核，ctest net-m0-version）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径：0=PASS / 1=错误 / 2=用法错误或超时）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "echo",
+     "name": "echo：单进程回环（可靠 32 + 不可靠 64 全量回显）",
+     "kind": "tool",
+     "note": "同进程起 server + client 两个 host，单线程交替泵，127.0.0.1 真实 UDP 栈；可靠/不可靠双通道全量回显后打印 RTT 统计。rtt 行是时变字段，验收锚只锁计数行与 OK 行。",
+     "args": [
+      "echo"
+     ],
+     "expectExit": 0,
+     "expectLog": "echo        : OK",
+     "command": "net-tools echo"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：机械断言（16 可靠 + 32 不可靠）",
+     "kind": "tool",
+     "note": "小参数回环 + PASS 锚；ctest net-m0-selftest 同一断言面。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest net: PASS",
+     "command": "net-tools selftest"
+    },
+    {
+     "id": "version",
+     "name": "version：vendored 版本锚",
+     "kind": "tool",
+     "note": "ENET_VERSION 1.3.18（VENDOR.md 锁定 master HEAD 5a9c537），防止库漂移。",
+     "args": [
+      "version"
+     ],
+     "expectExit": 0,
+     "expectLog": "enet        : 1.3.18",
+     "command": "net-tools version"
+    },
+    {
+     "id": "usage-negative",
+     "name": "负向：未知子命令显式拒绝",
+     "kind": "tool",
+     "note": "未知子命令不许静默假成功，exit 2（ctest net-m0-usage-negative WILL_FAIL 同口径）。",
+     "args": [
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools bogus"
+    },
+    {
+     "id": "connect-negative",
+     "name": "负向：死端口握手失败",
+     "kind": "tool",
+     "note": "连无监听端口须显式 FAILED + exit 1，不许静默假连接（ctest net-m0-connect-refused 同口径）。",
+     "args": [
+      "echo-client",
+      "127.0.0.1",
+      "29199",
+      "--packets",
+      "4",
+      "--timeout-ms",
+      "1500"
+     ],
+     "expectExit": 1,
+     "expectLog": "connect     : FAILED",
+     "command": "net-tools echo-client 127.0.0.1 29199"
+    }
+   ]
   }
  ]
 }
