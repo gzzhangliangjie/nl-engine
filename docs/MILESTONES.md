@@ -892,6 +892,74 @@
 2. **Edit 大段替换的连带破坏**：printClusterResult 拆分时 old_string 连带吞掉 clusterPrimitive + 旧函数残留重复定义；cmdLod 计时改造时误删 levels 打印行 + 残留旧 buildLodHierarchy 块成重名变量——均靠 Grep/Read 定位后一次性恢复。教训：大段 Edit 后必须 Grep 全部相关符号核对布局再编译。
 
 **下一步**：M-J4（可选，P9 V4 预留）不排期；P8 并发地基 M-J0~J3 收口，后续按 ROADMAP 接续（VSM 插 S9 后 / TSR 拆 S7 后两段；S5 组原子 cut 可直接消费 DAG 组边界）。
+## P8 M-TR0 Tracy vendored + CPU zone + HUD K1/K5（tag `tracy-m0`，2026-11-11，feat/profiling 轨道）
+
+**动作**：vendored `thirdparty/tracy/public/` 子集（包装头+client+common）+ `LICENSE` + `VENDOR.md`；GUI 解压落位 `.build-tools/tracy-gui/0.15.0/`；根 CMake 增 `nl_profiler` INTERFACE 目标 + 条件 `tracy_client` 静态库 + `option(NL_TRACY OFF)`；`core/include/nl/core/profiler.hpp` 薄封装 `NL_PROFILE_{FRAME,ZONE,THREAD}`（OFF 连第三方头都不 include）；viewer 主循环 `FrameMark`(present 完成处)/`ZoneScopedN`/`SetThreadName`、renderer 帧提交段、`jobs.cpp` worker 循环 + job 执行体埋点；`Scene::draw` 主路径 `noteDraw()` 计数 → 后端每帧清零/读入 `info_.drawCalls`；`--profiling-hud` 默认关的独立窗口 `ProfilingDebugUi`（draw calls / instances / triangles 三行）。
+
+**提交版本**：tracy-m0（feat/profiling 分支，commit fb396bb）
+
+**完成情况**
+- 构建验证（真实 exit code）：`build/DX12`(OFF)/`build/VULKAN`(OFF)/`build/DX12-TRACY`(`-DNL_TRACY=ON`) 三树编 viewer = 0，证明 TracyClient.cpp 编译链接、`TRACY_ENABLE` 经 `nl_profiler` 传播到 renderer/viewer、`FrameMark`/`ZoneScopedN`/`SetThreadName` 全部解析。
+- 无头端到端验证：DX12-TRACY 树 `tracy-capture -p 8086` 监听 + `nanite-tools selftest jobs`，落盘 `mtr0_capture.tracy`（16.3 MB / 2,759,437 zones），证明 ON 构建下 Tracy 客户端能初始化→连 server→真实广播 zone。OFF 构建三宏全空转、零成本。
+- viewer/renderer 侧 `viewer.frame`/`FrameMark`/Main 线程 zone + image 回归待裸机交互桌面补验（需 GLFW 窗口），与 M-TR0 代码正确性无关。
+
+**踩坑情况**
+1. `noteDraw()` 是 `Scene` 成员，批量插入误放进 `DebugLines::draw` 与粒子类（非 Scene 作用域）→ 编译找不到标识符；移除那两处，K1 只计 Scene 主路径。
+2. 初版只把 `nl_profiler` 链进 `nl_core`，漏了 `nl_renderer`/`viewer` → ON 构建下这两侧 TU 的 `NL_TRACY` 不定义、宏全空转；已显式补进两处 `target_link_libraries`。
+3. `| tail` 会吞 cmake 真实退出码（曾误报 0）→ 后续一律 `> log 2>&1; echo EXIT=$?`。
+
+**下一步**：M-TR1 Tracy 内存钩 + K2 进程内存 HUD。
+
+## P8 M-TR1 Tracy 内存钩 + K2 进程内存 HUD（tag `tracy-m1`，2026-11-12，feat/profiling 轨道）
+
+**动作**：新增 `core/include/nl/core/profiler_memory.hpp`（`nl::profiler::processWorkingSetBytes()`/`processPrivateBytes()`，PSAPI，始终可用、与 Tracy 开关无关）+ `core/src/profiler_memory.cpp`，分两部：① K2 进程内存（PSAPI `GetProcessMemoryInfo` → `PROCESS_MEMORY_COUNTERS_EX`，零图形依赖、双后端对称）；② Tracy 内存钩：全局 `operator new/delete`（含 nothrow / `[]` / C++17 对齐版）覆盖，内部 `malloc`/`free` + `TracyAllocS`/`TracyFreeS` 上报，仅 `NL_TRACY=ON` 编译；`/INCLUDE` 强制链接拉入整 obj。
+
+**提交版本**：tracy-m1（feat/profiling 分支，commit 907e75f）
+
+**完成情况**
+- 构建验证：`build/DX12-TRACY`(`-DNL_TRACY=ON`) 编 `nanite-tools` = 0（`/INCLUDE` 拉钩无 LNK2005）；`build/DX12`(OFF) 编 `nanite-tools` = 0（K2/PSAPI 路径编译链接）。
+- 无头端到端：DX12-TRACY 树 `tracy-capture -p 8086` + `nanite-tools selftest jobs` → `mtr1_capture.tracy`（89.37 MB，对比 M-TR0 同用例 16.3 MB 暴涨 ~73 MB），证明全局内存钩经 `/INCLUDE` 已链接并真实广播每 `new`/`malloc`。
+- GUI Memory 面板曲线 + 故意泄漏用例残留清单 + `--profiling-hud` K2 行待裸机补验（`NL_TRACY_MEM_DEPTH` 默认 0，归因到源码按 `-DNL_TRACY_MEM_DEPTH=16` 重编）。
+
+**踩坑情况**
+1. **`/INCLUDE` 强制链接**：全局 `operator new/delete` 定义在静态库 `nl_core` 中，若 exe 不显式引用该 .obj，链接器整块丢弃、钩子静默失效；在 `profiler.hpp` 的 `NL_TRACY` 分支加 `#pragma comment(linker,"/INCLUDE:...")` 四个修饰名强制拉入。
+2. Tracy 0.15 不自带全局 new/delete 钩（`TracyOverride.cpp` 仅剩 Linux `dlclose` 覆盖），原「编 TracyOverride.cpp」计划作废；伞形 `TracyClient.cpp` 已含该文件。
+
+**下一步**：M-TR2 RenderDoc 进程内抓帧。
+
+## P8 M-TR2 RenderDoc 进程内抓帧（tag `tracy-m2`，2026-11-12，feat/profiling 轨道）
+
+**动作**：vendored `thirdparty/renderdoc/renderdoc_app.h`（仅头，MIT，clone HEAD `86cadb8…`）；`viewer/main.cpp` 新增 `Options::captureFrame`（默认 0=关）+ `--capture-frame N` CLI（`<1` 报用法错误 exit 2）；`initRenderDocCapture()` 在 main 起调，经 `GetModuleHandleA("renderdoc.dll")` + `GetProcAddress("RENDERDOC_GetAPI")` 被动拾取 in-app API（回退 `LoadLibraryW`），未注入时全程 no-op；`maybeTriggerRenderDocCapture(frame+1, o.captureFrame)` 注入主循环两处（普通循环 ~2515 / ECS·脚本循环 ~3630），到达指定帧 `TriggerCapture()` 一次（fire-once 防重抓）；`viewer/CMakeLists.txt` 加 `target_include_directories(viewer PRIVATE .../thirdparty/renderdoc)`；`scripts/build_viewer_mtr2.bat` 重配+编验证。
+
+**提交版本**：tracy-m2（feat/profiling 分支，本轮）
+
+**完成情况**
+- 零链接 / 零图形符号：`renderdoc_app.h` 仅头文件，经 `target_include_directories` 引入；viewer/core 不出现任何 D3D12/Vulkan 符号，符合 §M0.1 纪律。
+- 构建验证（真实 exit code，两树全过）：`build/DX12`(OFF) 编 `viewer` = 0；`build/DX12-TRACY`(`-DNL_TRACY=ON`) 编 `viewer` = 0（`RENDERDOC_API_1_6_0`/`GetModuleHandleA`/`GetProcAddress`/`LoadLibraryW` 在 OFF/ON 两配置下均编译链接通过；既有 `/W4` 警告与本次无关）。
+- 未注入（无 renderdoc.dll）时全程 no-op，行为零差异；`.rdc` 落盘 + 非注入 `--only` 抽查待裸机补验（需 RenderDoc + GPU）。
+
+**踩坑情况**
+1. gh-proxy raw 抓取 `renderdoc_app.h` 全 404（实际路径 `renderdoc/api/app/`）→ 改浅克隆 + `git show HEAD:renderdoc/api/app/renderdoc_app.h` 提取。
+2. PowerShell 环境变量赋值被引号转义吞掉 → 改写 `.bat`（`vcvarsall.bat` + 手动 INCLUDE/LIB/PATH）+ `cmd //c` 绝对路径调。
+3. `reg.exe` 被沙箱 Program Blacklist 拦截（来自 vcvars/cmake 内部调用），无害，不影响编译结果。
+
+**下一步**：M-TR3 交代归档 + 轨道收口。
+
+## P8 M-TR3 交代归档 + 轨道收口（tag `tracy-m3`，2026-11-12，feat/profiling 轨道）
+
+**动作**：`docs/p8/TRACY-TOOLS-GUIDE.md` 归档（GUI 启动/连接/常见坑/与 RenderDoc 的互斥口径）；展示台 `kind:"tool"` 卡模板（Tracy 连机 / RenderDoc 抓帧 / 泄漏负向用例，case 级 `"exe"` 覆盖，明确仅装好工具+GPU 机器接入 cases.json、不进默认无头回归）；本计划 §0 拍板六问全部落地（M-TR0~M-TR3 / tag `tracy-m0`~`tracy-m3`）。
+
+**提交版本**：tracy-m3（feat/profiling 分支，本轮）
+
+**完成情况**
+- 工具卡 + TOOLS-GUIDE 归档完成；轨道闸 `wt_pool close` 生成 M-TR2/M-TR3 报告。
+- 裸机 GUI 连机截图 / `.tracy` / `.rdc` 证据待用户在本机交互桌面执行（沙箱无 GPU+GUI 跑不了，与代码正确性无关）。
+
+**踩坑情况**
+1. 工具卡不进默认无头回归：Tracy GUI 连机 + RenderDoc `.rdc` 抓帧都需 GPU+GUI，沙箱/默认无头回归跑不通必红，符合 M11.0「只跑能绿的卡」纪律 → 模板标注「仅在装好工具+GPU 机器接入 cases.json」。
+
+**下一步**：`wt_pool close` 收口 + 合并回 master（待 master 在途 s11/s10 工作落定后，避免与在途改动冲突）。
+
 ## P8 合并回 master + 回归门禁固化（exe 新鲜度闸 + 基线修正，2026-11-08）
 
 **动作**：主干先合入 feat 分支消化分歧（fd53670：解 CMakeLists/MILESTONES/cases.json 三处内容冲突 + PARALLEL-TRACKS/P8-JOB-PLAN 两处 add/add）→ feat/job-system 快进合回 master → 合并树双后端重编 + ctest 19/19 → 全量总闸揪出 4 对 vulkan HUD 基线为 M4.2 旧 exe 误拍（m0.9/gate-hud、s2.0/lod-hud、s4.1/cull-inside-hud、s4.2/dense-inside-hud）→ 逐对像素取证确认 actual 为正确产物（跨后端差异 895~907px = backend/debug 两行设备文本的既知口径）后重拍 → 按用户要求把「exe 版本」问题固化进门禁：`regression.py` 启动即查 `build/<backend>/*.exe` mtime 是否新于其依赖域全部源文件，过期整闸拒绝（exit 2）→ 增 `NL_REGRESSION_RUNS_DIR` 产物目录覆盖（新目录全程零删除，CI/沙箱友好）。

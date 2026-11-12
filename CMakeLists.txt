@@ -33,6 +33,29 @@ endif()
 message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no network)")
 
 set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
+# M-TR0：Tracy v0.15.0（BSD-3-Clause）性能/内存观测，**默认 OFF**。
+# 选型闸与 0.15 实测口径见 thirdparty/tracy/VENDOR.md；GUI 是进程外工具，不入库。
+# OFF 时只留一个 INTERFACE 头目标（nl/core/profiler.hpp 的宏为空转，连第三方头都不 include）；
+# ON 时编单个伞形翻译单元 TracyClient.cpp 并把 TRACY_ENABLE 传给所有消费者。
+option(NL_TRACY "Enable Tracy v0.15.0 profiling instrumentation" OFF)
+add_library(nl_profiler INTERFACE)
+if(NL_TRACY)
+    add_library(tracy_client STATIC ${THIRDPARTY}/tracy/public/TracyClient.cpp)
+    target_compile_features(tracy_client PUBLIC cxx_std_11)
+    target_include_directories(tracy_client SYSTEM PUBLIC ${THIRDPARTY}/tracy/public)
+    # PUBLIC 是硬要求：所有 include Tracy.hpp 的 TU 必须看到同一个 TRACY_ENABLE，
+    # 否则 client 库与业务侧宏面不一致（上游集成同样用 PUBLIC）。
+    target_compile_definitions(tracy_client PUBLIC TRACY_ENABLE)
+    # Windows 系统库由 TracyClient.cpp 内 #pragma comment(lib, ...) 自动链，不额外加。
+    if(MSVC)
+        target_compile_options(tracy_client PRIVATE /utf-8 /W0 /bigobj)
+    endif()
+    target_compile_definitions(nl_profiler INTERFACE NL_TRACY=1)
+    target_link_libraries(nl_profiler INTERFACE tracy_client)
+    message(STATUS "nl-engine profiling: Tracy v0.15.0 ENABLED (opt-in)")
+else()
+    message(STATUS "nl-engine profiling: Tracy DISABLED (default, zero cost)")
+endif()
 # 仓库根绝对路径：子目录 CMakeLists 里引用 assets/ 等根级路径统一用它
 # （2026-11-10 工具 target 拆分后，子目录的 CMAKE_CURRENT_SOURCE_DIR 不再是仓库根）
 set(NL_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
@@ -223,6 +246,7 @@ add_library(nl_core STATIC
     core/src/anim/skinning.cpp       # M-A5：CPU 蒙皮（调色板 model*IBM + LBS）
     core/src/anim/gltf_anim.cpp      # M-A4b：rigged glTF/GLB -> Skeleton + AnimClip（tinygltf 声明侧）
     core/src/jobs.cpp          # P8 M-J0：线程池 + parallel_for（A 类并行轨道，纯 CPU）
+    core/src/profiler_memory.cpp  # P8 M-TR1：Tracy 内存钩（operator new/delete -> TracyAllocS/FreeS）+ K2 PSAPI 进程内存
     core/src/jobgraph.cpp      # P8 M-J5a：显式依赖 DAG 薄封装（vendored Taskflow 只在此 TU 出现）
     core/src/scheduler.cpp     # P8 M-J5b：进程级常驻调度底座（组合 compute/io 两个 ThreadPool）
     core/src/jobsync.cpp       # P8 M-J5c-prep：动态依赖计数 job + Barrier（Jolt 合约同构，Jolt 无关）
@@ -270,6 +294,8 @@ endif()
 target_include_directories(nl_core PUBLIC ${THIRDPARTY}/tinygltf)
 # M-J5a：Taskflow 头文件需对全部 nl_core 消费者可见（header-only，INTERFACE 传播）。
 target_link_libraries(nl_core PUBLIC taskflow)
+# M-TR0：profiler 薄封装头（宏空转 / ON 时透传 Tracy）对 core/renderer/viewer 全部可见。
+target_link_libraries(nl_core PUBLIC nl_profiler)
 target_link_libraries(nl_core PRIVATE glfw nl_metis imm32 nl_miniaudio Jolt nl_recast)
 # M-LOG0：spdlog 内核只进 log.cpp（PIMPL 纪律：log.hpp 不暴露 spdlog 类型，故 PRIVATE）。
 target_link_libraries(nl_core PRIVATE nl_spdlog)
@@ -302,7 +328,9 @@ target_include_directories(nl_renderer
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/src
             ${THIRDPARTY}/stb
 )
-target_link_libraries(nl_renderer PUBLIC nl_core PRIVATE nl_imgui nl_imgui_node_editor glfw)
+# M-TR0：nl_profiler 必须进 renderer/viewer 的链接面，否则 ON 构建下这两侧 TU 的
+# NL_TRACY 不定义、NL_PROFILE_* 全空转（等于开了也不埋点）。core 侧已在其 CMake 链接。
+target_link_libraries(nl_renderer PUBLIC nl_core nl_profiler PRIVATE nl_imgui nl_imgui_node_editor glfw)
 # 注1：glfw 仅 console_ui.cpp 吃 GLFW 键值常量（M-C1 键盘映射），窗口库本身仍归 core/viewer。
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1

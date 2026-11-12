@@ -388,6 +388,7 @@ private:
                                             const char* screenshotPath, HudFrame* hud) {
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
+        scene_.resetDrawCalls();   // M-TR0 K1：帧开始清零，之后所有 scene draw 累加
         // M0.6：timer query 包住整帧 GPU 命令（clear + scene + hud）；
         // 找不到空闲 slot 时 begin 返回 false，本帧不计时、不报错。
         const bool gpuTiming = gpuTimer_.begin(cmd);
@@ -430,6 +431,7 @@ private:
             hud_.draw(cmd, framebuffers_[vulkanImageIndex_],
                       nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
+        info_.drawCalls = scene_.drawCalls();   // M-TR0 K1：本帧所有 scene draw 已记录
 
         nvrhi::StagingTextureHandle staging;
         if (screenshotPath) {

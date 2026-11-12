@@ -596,6 +596,11 @@ public:
     }
     bool particlesNfxActive() const { return particles_.nfxActive(); }
     const std::string& particlesNfxName() const { return particles_.nfxName(); }
+    // M-TR0：draw call 计数（K1）。只统计 Scene::draw 主路径里提交的图形 draw，
+    // 含 initCluster 单批兜底；不含 compute dispatch 与 ImGui UI。
+    void noteDraw() { ++drawCalls_; }
+    void resetDrawCalls() { drawCalls_ = 0; }
+    std::uint32_t drawCalls() const { return drawCalls_; }
 
     bool ready() const {
         if (sceneMode_)   // M-E1b.0：场景资源齐 + 四套 pipeline 已建
@@ -697,6 +702,7 @@ private:
     };
     std::vector<ModelPrimBatch> modelBatches_;
     std::uint32_t                 indexCount_ = 0;
+    std::uint32_t                 drawCalls_ = 0;   // M-TR0 K1：Scene::draw 每帧清零后累加
     std::string                   modelName_;
     std::uint32_t                 triangleCount_ = 0;
     int                           lodLevel_ = 0;      // M2.3：来自 .nmesh v2 lodMeta

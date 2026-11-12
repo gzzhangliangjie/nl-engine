@@ -48,10 +48,10 @@
 | 层 | 用什么 | 状态 |
 |---|---|---|
 | L0 画面证据 | `--screenshot` + example/ 基线 | ✅ 已就位，不动 |
-| L1 帧结构（单帧逐 draw） | **RenderDoc**（权威口径在 `docs/s0/S0-PLAN.md` L1 节，本计划只管归属） | ⬜ 本机未装、代码侧未写；外部启动零代码即用，进程内抓帧定 **M-TR2**（Q4 b） |
+| L1 帧结构（单帧逐 draw） | **RenderDoc**（权威口径在 `docs/s0/S0-PLAN.md` L1 节，本计划只管归属） | ✅ M-TR2 已写 `--capture-frame N` 进程内抓帧（零链接，默认关）；外部启动零代码即用 |
 | L2 GPU 耗时 | NVRHI timestamp query → HUD | ✅ M6.2 已跑通，**本计划不碰** |
-| **L3 CPU 时间线** | **Tracy zone + FrameMark**（本计划核心①） | ⬜ 本次接 |
-| **L3 内存占用/泄漏** | **Tracy memory profiler + 退出残留清单**（本计划核心②） | ⬜ 本次接 |
+| **L3 CPU 时间线** | **Tracy zone + FrameMark**（本计划核心①） | ✅ M-TR0 接入 |
+| **L3 内存占用/泄漏** | **Tracy memory profiler + 退出残留清单**（本计划核心②） | ✅ M-TR1 接入 |
 
 **RenderDoc 与 Tracy 分工（同一观测轨道，互不替代）**：
 - RenderDoc = 抓**单帧**：逐 draw call / pipeline / 资源状态 / 资源依赖——查「这一帧画错了什么、状态哪里不对」。
@@ -88,8 +88,8 @@
 
 | # | 数据 | 现状 | 定稿归属 |
 |---|---|---|---|
-| K1 | **drawCall 计数**（CPU 提交侧，draw 主路径计数器，含 initCluster 单批兜底） | 无 | **随 M-TR0**（惯例内机械执行，M4.1/M5.2 加字段先例；HUD 面板高≤560 内加行） |
-| K2 | **进程内存占用**（PSAPI `GetProcessMemoryInfo` working set / private bytes，零图形依赖、双后端对称） | 无 | **随 M-TR1**：与 Tracy memory 曲线互补（Tracy 离线归因，HUD 常驻速览） |
+| K1 | **drawCall 计数**（CPU 提交侧，scene.cpp 全部 `cmd->draw*` 调用点计数，含 initCluster 单批兜底；不含 compute dispatch / ImGui UI） | 无 | **随 M-TR0**：⚠️ **实施形态修正**——不往常驻 HUD 面板加行（那会让 70 张既有 `--hud` 基线全量重拍，与本轨道「不 bump kStage」冲突），改为 `--profiling-hud` 默认关的**独立窗口**（DriveDebugUi / InputDebugUi 同款 add-on 先例，show=false 零布局）。计数在 backend `recordFrame` 帧开始清零、HUD 绘制后写入 `DeviceInfo.drawCalls` |
+| K2 | **进程内存占用**（PSAPI `GetProcessMemoryInfo` working set / private bytes，零图形依赖、双后端对称） | 无 | ✅ **M-TR1 已完成**：`--profiling-hud` 第 4 行常驻（working set MB）+ Tracy memory 曲线互补（Tracy 离线归因） |
 | K3 | **GPU 显存占用** | 无 | **本轮不做**（Q5 c）：DX12 DXGI / Vulkan `VK_EXT_memory_budget` 不对称，留到真需要时单独拍板；K2 先顶 |
 | K4 | **per-pass GPU 拆分**（GI / shadow / present 前后各自成段；目前只有整帧 + cull 两段） | 部分 | **不进本轨道**——S12/S13 性能验收需要时按 L2 惯例扩 timer 段 |
 | K5 | instanceCount 常驻显示 | DeviceInfo 有、HUD 未常驻 | **随 M-TR0** 与 K1 同批 |
@@ -111,10 +111,33 @@
    - core job system worker 循环 + job 执行体 `ZoneScopedN`。
 4. **线程命名**：主线程 / job worker / 音频等用 `tracy::SetThreadName` 全部命名——不命名时间线上全是 Thread N，没法读（job worker 数量动态，worker 内命名随创建走）。
 5. Zone/线程命名全 ASCII（沿用 HUD 字符串约定）。
+6. **HUD K1/K5 展示**：`--profiling-hud` 默认关的独立窗口 `ProfilingDebugUi`（3 行：draw calls / instances / triangles），由 `DeviceInfo` 供数；`show=false` 时零布局，既有 `--hud` 基线逐字节不动。埋点薄封装 `core/include/nl/core/profiler.hpp`（`NL_PROFILE_*`，OFF 时连第三方头都不 include）。
 
 **验收判据（亲眼可见）**：
 - `NL_TRACY=ON` 构建 viewer 跑起来 → tracy-profiler GUI 连上，看到帧序列 + 各 zone 时间线 + **命名后的 job 线程分布**（截图留档）；首次运行 Windows 防火墙弹窗（client 监听 TCP 8086）属于预期，放行 localhost 即可；
 - `NL_TRACY=OFF`（默认）构建：行为零差异——`regression.py --only` 挑 2~3 条关键用例过；`grep TRACY_ENABLE` 确认 OFF 时未定义。
+- **闭环结论（2026-11-12）**：Tracy 客户端管线已无头端到端验证（见下方实施记录）；viewer/renderer 侧 `viewer.frame`/`FrameMark`/Main 线程 zone + image 回归待裸机交互桌面补验（要 GLFW 窗口），与 M-TR0 代码正确性无关。
+
+**实施记录（2026-11-11，commit 见 feat/profiling，tag `tracy-m0`）**：
+- 代码面全部落地：vendored `thirdparty/tracy/public/` 子集 + `LICENSE` + `VENDOR.md`；GUI 解压落位 `.build-tools/tracy-gui/0.15.0/`；根 CMake 增 `nl_profiler` INTERFACE 目标 + 条件 `tracy_client` 静态库 + `option(NL_TRACY OFF)`；`core/include/nl/core/profiler.hpp` 薄封装 `NL_PROFILE_{FRAME,ZONE,THREAD}`（OFF 连第三方头都不 include）；viewer 主循环 `FrameMark`(present 处)/`ZoneScopedN`/`SetThreadName`、renderer 帧提交段、`jobs.cpp` worker 循环 + job 执行体埋点；`Scene::draw` 主路径 `noteDraw()` 计数 → 后端每帧清零/读入 `info_.drawCalls`；`--profiling-hud` 默认关的独立窗口 `ProfilingDebugUi`（draw calls / instances / triangles 三行）。
+- **构建验证（真实 exit code，非 `| tail` 掩盖）**：
+  - `build/DX12`（OFF）：configure + build viewer = **0** ✓
+  - `build/VULKAN`（OFF）：configure + build viewer = **0** ✓（首跑因 kill 残留半截 `gltf_anim.cpp.obj` 报 `LNK1136`，删损坏 obj 后重编通过，非代码问题）
+  - `build/DX12-TRACY`（`-DNL_TRACY=ON`）：configure + build viewer = **0** ✓（证明 TracyClient.cpp 编译链接、`TRACY_ENABLE` 经 `nl_profiler` PUBLIC 传播到 renderer/viewer、`FrameMark`/`ZoneScopedN`/`SetThreadName` 全部解析）
+- **构建期两处 bug 已就地修复**：
+  1. `noteDraw()` 是 `Scene` 成员，Python 批量插入时误放进 `DebugLines::draw` 与粒子类（非 Scene 作用域）→ 编译 `找不到标识符`；移除那两处，K1 只计 Scene 主路径（debug 线框/粒子补充绘制不计入，M-TR2 可再细化）。
+  2. 初版只把 `nl_profiler` 链进 `nl_core`，漏了 `nl_renderer`/`viewer` → ON 构建下这两侧 TU 的 `NL_TRACY` 不定义、宏全空转（等于开了也不埋点）；已显式补进两处 `target_link_libraries`。
+- **运行时验收（无头沙箱可验部分已闭环，2026-11-12）**：`viewer.exe` 需建 GLFW 窗口/显示器，本无头沙箱起不了（DX12/Vulkan 两后端同在极早期 init 同点崩，与环境/GPU 沙箱限制有关，非代码问题）；但 **Tracy 客户端管线已用无头等价手段端到端验证**：在 `DX12-TRACY`（NL_TRACY=ON）树补编 `nanite-tools`，同 shell 内 `tracy-capture -p 8086` 监听 + 跑 `nanite-tools selftest jobs`（触发 `jobs.cpp` 的 `JobWorker` 线程命名 + `job.task` zone），捕获日志：
+  ```
+  Connecting to 127.0.0.1:8086...
+  Frames: 2
+  Time span: 5.28 s
+  Zones: 2,759,437
+  Saving trace... done!
+  Trace size 16.3 MB
+  ```
+  落盘 `build/DX12-TRACY/mtr0_capture.tracy`（16.3 MB，270 万条 zone）——证明 M-TR0 的 Tracy 客户端在 ON 构建下能初始化 → 连 server → 真实广播 zone 数据。OFF 构建下 `profiler.hpp` 三宏全空转、连 Tracy 头都不 include（源码已核），零成本。余下 viewer/renderer 侧 `viewer.frame`/`FrameMark`/Main 线程 zone + image 回归须在裸机交互桌面补验（要 GLFW 窗口），与 M-TR0 代码正确性无关。
+- 过程纪律：`| tail` 会吞掉 cmake 真实退出码（曾误报 0），后续一律 `> log 2>&1; echo EXIT=$?`；改 CMake 链接面后三棵树均重配（M-N6 实锤）。
 
 ### M-TR1 内存占用 + 泄漏检查
 
@@ -130,11 +153,24 @@
 - **故意泄漏用例**：临时开关下漏一个 64KB 分配，**走 ESC 干净退出**（⚠️ Tracy 数据在进程被杀时丢失，残留清单只在正常 shutdown 时完整），残留清单能报出该块及其调用栈（截图 + 步骤写进 TOOLS-GUIDE）；
 - OFF 构建零差异（同 M-TR0 口径）。
 
+**实施记录（2026-11-12，commit 见 feat/profiling，tag `tracy-m1`）**：
+- 代码面：新增 `core/include/nl/core/profiler_memory.hpp`（`nl::profiler::processWorkingSetBytes()`/`processPrivateBytes()`，PSAPI，始终可用、与 Tracy 开关无关）+ `core/src/profiler_memory.cpp`。后者分两部分：① **K2 进程内存**（PSAPI `GetProcessMemoryInfo` → `PROCESS_MEMORY_COUNTERS_EX.WorkingSetSize`/`PrivateUsage`，零图形依赖、双后端对称，经 `#pragma comment(lib,"psapi.lib")` 自动链）；② **Tracy 内存钩**：全局 `operator new/delete`（含 nothrow / `[]` / C++17 对齐版）覆盖，内部 `malloc`/`free` + `TracyAllocS(ptr,size,NL_TRACY_MEM_DEPTH)`/`TracyFreeS(ptr,NL_TRACY_MEM_DEPTH)` 上报，**仅 `NL_TRACY=ON` 编译**，OFF 退回 CRT 默认。
+- **`/INCLUDE` 强制链接（M-TR1 最大实现坑）**：全局 `operator new/delete` 定义在静态库 `nl_core` 中，若 exe 不显式引用该 .obj，链接器整块丢弃、钩子静默失效（Tracy 0.15 也正是因此移除内置全局钩）。在 `profiler.hpp` 的 `NL_TRACY` 分支加 MSVC `#pragma comment(linker,"/INCLUDE:??2@YAPEAX_K@Z")` 等四个修饰名，强制拉入整 obj（对齐版 new/delete 一并带上）。
+- **构建验证（真实 exit code）**：`build/DX12-TRACY`（`-DNL_TRACY=ON`）重配 + 编 `nanite-tools` = **0**（证明 TracyAllocS 编译链接、`/INCLUDE` 拉钩无 LNK2005）；`build/DX12`（OFF）重配 + 编 `nanite-tools` = **0**（K2/PSAPI 路径编译链接，无 Tracy 钩）。
+- **无头端到端验证（M-TR1 内存钩真广播）**：DX12-TRACY 树同 shell 内 `tracy-capture -p 8086` + `nanite-tools selftest jobs`，捕获日志 `Zones: 2,759,872`、**Trace size 89.37 MB**（对比 M-TR0 同用例 16.3 MB）——体积暴涨 ~73 MB 即每个 `new`/`malloc` 的分配事件被上报，证明全局内存钩经 `/INCLUDE` 已链接并真实广播。落盘 `build/DX12-TRACY/mtr1_capture.tracy`（89.37 MB）。
+- 待裸机补验：① GUI Memory 面板曲线 + 故意泄漏用例残留清单（需 viewer 连 GUI，要 GLFW 窗口）；② `--profiling-hud` 窗口 K2 进程内存行（已加第 4 行 `proc mem : X.X MB`、窗口高度调至 150，但窗口渲染须裸机看）。`NL_TRACY_MEM_DEPTH` 默认 0（不抓调用栈、最低开销），泄漏归因到源码时按 `-DNL_TRACY_MEM_DEPTH=16` 重编即可。
+
 ### M-TR2 RenderDoc 进程内抓帧（Q4 选项 b，独立小步）
 
 **做什么**：`--capture-frame N` + `renderdoc_app.h` 单头 + `LoadLibraryW(L"renderdoc.dll")` 的 in-app API（`StartFrameCapture`/`EndFrameCapture`），约 30 行、零链接依赖、默认关闭；device/window 句柄传空，viewer/core 零图形 API 符号。外部启动（零代码）不占里程碑，本机装好即用。
 
 **验收判据**：指定帧号跑一发，落出 `.rdc` 文件 + 工具输出证据；默认关闭时行为零差异（`--only` 抽查）。与 Tracy 不同时开（§2 互斥口径）。
+
+**实施记录（2026-11-12，commit 见 feat/profiling，tag `tracy-m2`）**：
+- 代码面：vendored `thirdparty/renderdoc/renderdoc_app.h`（仅头，MIT，clone HEAD `86cadb8…`，见 `thirdparty/renderdoc/VENDOR.md`）；`viewer/main.cpp` 新增 `Options::captureFrame`（默认 0=关）+ `--capture-frame N` CLI（`<1` 报用法错误 exit 2）；`initRenderDocCapture()` 在 main 起调，经 `GetModuleHandleA("renderdoc.dll")` + `GetProcAddress("RENDERDOC_GetAPI")` 被动拾取 in-app API（回退 `LoadLibraryW`），未注入时全程 no-op；`maybeTriggerRenderDocCapture(frame+1, o.captureFrame)` 注入主循环两处（普通循环 ~2515 与 ECS/脚本循环 ~3630），到达指定帧 `TriggerCapture()` 一次（fire-once 防重抓）；`--capture-frame N` 进 `printUsage` 帮助文本。
+- **零链接 / 零图形符号**：`renderdoc_app.h` 仅头文件，经 `viewer/CMakeLists.txt` 加 `target_include_directories(viewer PRIVATE .../thirdparty/renderdoc)`；viewer/core 不出现任何 D3D12/Vulkan 符号，符合 §M0.1 纪律。
+- **构建验证（真实 exit code，两棵树全过）**：`build/DX12`（OFF）重配 + 编 `viewer` = **0**；`build/DX12-TRACY`（`-DNL_TRACY=ON`）重配 + 编 `viewer` = **0**（日志 `Built target viewer`；`renderdoc_app.h` 的 `RENDERDOC_API_1_6_0`/`GetModuleHandleA`/`GetProcAddress`/`LoadLibraryW` 在 OFF/ON 两配置下均编译链接通过，无报错；既有 `/W4` 警告 C4244/C4458 与本次无关）。
+- 待裸机补验（要 RenderDoc + GPU，沙箱跑不了）：① RenderDoc Launch 拉起 `viewer --capture-frame N` 落 `.rdc`；② 非注入下启动行为零差异（`--only` 抽查）。
 
 ### M-TR3 交代归档
 
