@@ -2960,15 +2960,15 @@
 
 **动作**：立项调研（按 AGENTS.md 铁律实读三处参考 + 业界方案）。三处参考：① Carrot `engine/render/` 全目录 + `InstanceData.h` —— **零 world/terrain/streaming/city 模块**，实例仅为 transform+UUID 扁平结构，反向印证「流式是后期重活」；② bevy `examples/large_scenes/bevy_city/`（`spawn_city(seed,size,car_density,stats)`：规则网格 block 5.5×4.0、SmallRng::seed_from_u64 确定性、OpenSimplex 噪声分密度区、单 road asset 旋转拉伸、Road{start,end}/Car 车道语义、CityStats 计数锚；定位「extremely large scenes 压力测试」+ VisibilityRange LOD + simulate_cars）；③ UE5 `WorldPartition.h`/`WorldPartitionRuntimeHash.h`/`WorldPartitionRuntimeCell.h`/`Plugins/PCG/Public/PCGGraph.h` —— 工业终态把**生成**（PCG = Node/Pin/Settings 的 DAG）与**分区流式**（runtime cell + ObjectMapping→package/path/GUID）**解耦两层**，离线产资产是一等公民，5.8 官方新增 Mesh Terrain + 城市街道 PCG 图示例。业界方案分族：A 引擎内置（UE World Partition+PCG+HLOD / Unity DOTS SubScene / Godot 社区 chunk loader）、B DCC 规则建模（Houdini PDG / CityEngine CGA / Blender Geometry Nodes，只抄算法不入库）、C 开源 C++ city gen（demo 级，不建议 vendored）、D 数据驱动（OSM+OSMnx / CityDreamer，只借路网语义）。**定位**：离线工具产资产 + 元数据（`city-tools --seed N --size N → city.scene + 分块 .nmesh + roadnet.json`），与 UE「Asset 型 PCG 图」同构、与 bevy_city seed/size/统计锚同构；不碰 renderer / 不动 `kStage` / 不重拍冻结基线（A 类工具版交代）。**待拍板**：Q-B（资产来源=程序化，GAME-DEV-ORDER §4 已写建议待显式拍板）、Q-W1 产物形态（单 .nmesh / 分块集合 / World JSON 引用现有资产）、Q-W2 roadnet 与第 8 步 lane graph 契约、Q-W3 算法级 vendored 取舍、Q-C 流式时机。计划落 `docs/worldgen/W0-OPTIONS.md` 方案矩阵。
 
-**提交版本**：待开工（OPTIONS 矩阵经用户拍板后出 `docs/worldgen/W0-PLAN.md`，届时登记 track `worldgen` + branch `feat/worldgen` + tag 名字制 `w0-*`，不占 m0.* 编号）。
+**提交版本**：拍板完成（2026-11-12 用户拍板五问全按推荐项：Q-B=程序化生成 / Q-W1=W1-B 分块 .nmesh+city.scene / Q-W2=W2-A 自包含 roadnet.json+字段契约写死 / Q-W3=W3-A 全自研最小算法 / Q-C=显存内→V2→V4 后移）；执行计划 `docs/worldgen/W0-PLAN.md` 就绪（M-W0.0~W0.3 + roadnet 契约 + 冻结面）；track `worldgen` 已注册 wt_pool TRACKS（state=planned，wt 届时建）；落码待 claim + 建 wt，tag 名字制 `w0-*`。
 
 **完成情况**
-- 🟡 仅完成立项调研（三处实读 + 业界分族 + 定位 + 待拍板清单），**零落码、零台账改动**（除本立项节与 PARALLEL-TRACKS §7.1b / GAME-DEV-ORDER 第 6 步登记）。
+- 🟡 完成立项调研 + 拍板登记（2026-11-12 用户拍板五问全按推荐项，结论已写回 W0-OPTIONS §5 / GAME-DEV-ORDER 第 6 步 + §5 / PARALLEL-TRACKS worldgen 行 / wt_pool TRACKS），**零落码**（除登记件与 docs/worldgen/ 两份计划文档）。
 
 **踩坑情况**
 - 无（未落码）。
 
-**下一步**：出 `docs/worldgen/W0-OPTIONS.md` 方案矩阵（Q-W1~Q-W3 + Q-C 四问各列候选 + 推荐项 + 代价）→ 用户拍板 → 登记 track `worldgen` 开工 → 首里程碑 M-W0.x 落 `city-tools` 最小闭环（seed/size → 分块 .nmesh + roadnet.json → 城市俯视证据图）。
+**下一步**：按 `docs/worldgen/W0-PLAN.md` 推进 —— claim track `worldgen` + 建 wt（junction 纪律同 particles）→ M-W0.0 `city-tools` 骨架（CLI + 确定性 RNG + 规则网格 + 空白城俯视图 + seed 对称 selftest）。
 
 ## A类 天气变化立项（穿插项，2026-11-12）
 
@@ -2983,3 +2983,18 @@
 - 无（未落码）。
 
 **下一步**：M-WEA0 天气状态层开工（纯 CPU 时钟函数 + 工具 dump，零渲染改动、零基线影响）→ 验收同 seed 重放逐字节一致 → claim track `weather` → 后续 M-WEA1 改 `sky.slangh` 前先清 Q-WE5 重拍闸门。
+
+## S12 M12.0 开工拍板（历史帧并轨，2026-11-12）
+
+**动作**：按 `AGENTS.md` 开工闸完成决策前置——三处定向实读（Carrot `lighting/svgf.slang` 全文 + `temporal-denoise.compute.glsl` 全文；bevy `bevy_anti_alias/src/taa/taa.wesl` 全文 + `bevy_solari/realtime/{bindings,restir,gbuffer_utils}.wesl`；UE 只读 `Lumen/LumenScreenProbeGatherTemporal.usf/.ush`）+ 开发历史（`MILESTONES.md` T0/M10.x/M11 段、`SHARED-INFRA-OPTIONS.md`、`T0-PLAN.md`、`Q4-GBUFFER-OPTIONS.md`、`S9-PLAN.md`、`S12-PLAN.md`、`S16-PLAN.md` 预研 §4、`GI-RESEARCH-NOTES.md` §3、MEMORY.md、当日日志）→ 摆三处口径不一致证据 + 代价矩阵 → 用户拍板两问：**Q12-A = GI 分量独立**（复用 M10.2 的 `gatherLinear_` GI-only 中间缓冲 + T0 `history0_/1_` ping-pong，零新增 RT；默认 `csGatherCompose` 路径一字不动保既有 104 张卡 `bytes`）、**Q12-B = Q4 顺延项「M12.2 前按实测再拍」**（Q4 方案 A 不改写、冻结面维持 0 新增独立 GBuffer 资源；M12.0/M12.1 按退化口径「重投影深度差 + 当前帧法线」）→ 结论写回 `docs/s12/S12-PLAN.md §0`（三处实读表、拍板表、已拍板 6 条、冻结面 6 项、T1~T8 任务书、非阻塞待拍板 Q12-C/Q12-D/Q12-B 续拍）+ 同步 `SHARED-INFRA-OPTIONS.md` / `T0-PLAN.md` / `S9-PLAN.md` 状态指针。
+
+**提交版本**：待 M12.0 收口（本轮零落码、零 tag、零 `kStage` 改动；主线按 `AGENTS.md` §1b 不 claim / 不跑 `wt_pool close`）。
+
+**完成情况**
+- 🟡 开工闸已放行、拍板已写回；**零落码**。`git status --porcelain --untracked-files=no` 已跟踪文件干净；未跟踪文件均为 s10/s11 历史 verify 产物，本轮未碰。
+- 事实核查（落码起点）：`scene.cpp` 2509-2512 建 `history0_/1_`、7766-7767 释放、7772 复位 `t0Parity_` → **T4 至今零消费**；velocity prepass 在 `drawProbePlace`（3744-3761）内、probe 链专用；`gatherLinear_`（3477-3492，全屏 `RGBA16F`）= `csGather` 输出的 GI-only 中间结果，`csGatherCompose`（3838-3847）才叠进 `hdrSceneColor_` → 方案 A 可零新增 RT 落地；`kStage = "S8.2 ..."`；`modes.hpp:38` 注释仍列 `Filter` 未注册；cases.json 104 张卡无 s12/filter；`wt_pool.py status` active claims 0。
+
+**踩坑情况**
+- 无（未落码）。预防性留痕：① M12.0 第一行代码会隐式定死 history 语义与滤波挂点，故顺延项到期必须先拍板（M9.0 教训）；② `csGatherCompose` 属 M10.2 冻结基线路径，M11.1 实锤「冻结基线的代码形态也是基线的一部分」→ T5 以 filter 态旁路实现，默认分支一字不动；③ `cases.json` 追加卡后必须跑 regression 冒烟（M11.2 卡漏 `id` 挡全量实锤）。
+
+**下一步**：按 `docs/s12/S12-PLAN.md §0.6` 任务书 T1~T8 落 M12.0（先 T1/T2 注册与 velocity 复用，再 T3/T4 时域累积 shader，T5 保形边界贯穿）→ 双后端构建 + `--only` 小子集 spot → 交代物 `example/s12-temporal/` + `S12-TOOLS-GUIDE.md` → tag `s12-temporal`。后续待拍板：Q12-C（M12.1 串联顺序）/ Q12-D（M12.2 时域参考形态）/ Q12-B 续拍（M12.2 开工前凭实测证据）。

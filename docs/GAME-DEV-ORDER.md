@@ -29,7 +29,7 @@
 | **3** | 载具物理（Jolt VehicleConstraint 薄集成层） | phys-tools 式：直线加速/转向/手刹参数表 + console 实调 | 2（技术软前置：VehicleConstraint 走 raycast 轮不依赖事件） | **已立项**（合轨）：同上 M-D2/D3（2026-11-10；vendored Vehicle 模块全量实证在库）。**M-D2 已收官**（tag `drive-m2`，2026-11-10）：Jolt `VehicleConstraint` 无头集成（Q-D2-1 用户拍板方案 A fresh world、Jolt-free 公开头）+ 三段帧序号输入脚本 480 帧 + 轮接触边沿事件喂 M-D1 流；实测 top 9.298565 m/s / 转向半径 18.007170 m / 手刹 f402 停住（末速 0.001434 m/s），DX12/VULKAN TSV 逐字节一致、ctest 双后端各 10/10；**M-D3 已收官**（tag `drive-m3`，2026-11-10）：`DebugScene` scenario 2 训练场 + viewer 注入管线 / 窗口只读键态实时驱动 + 默认关独立 HUD 窗口 + `vehicle.*` cvar 实调（第 3 步「console 实调」验收落锚）；Q-D3-1~4 用户拍板，相机保持 OrbitCamera、只留 `ChassisState` POD 与投影源切换钩子（相机代码零改动）；`kStage` 保持 `S8.2`、`--only drive-m3` 12/12 bytes ALL GREEN、ctest 双后端各 12/12。**整轨 M-D0~D3 已全量 merge 回 master**（2026-11-10，merge commit `a2e3cff`；`cases.json` 语义并集 84 卡、双后端零回归全绿）；第 4 步 camera viewer 侧 b 段的串行前置**已解除**，M-D3 已留好复用钩子（`viewer/main.cpp` 同文件冲突面一次清） |
 | **4** | 玩法相机族：Chase 跟车 + 纯自由飞行 + 轨迹文件（CameraRig 基座；倒车/回头变体；候选池见计划 §4） | cam-tools 五锚 selftest + viewer 截图基线（自由/跟车/轨迹双后端） | 3（M-CAM0 无头不依赖；viewer 侧需 M-D3） | **已立项**：`docs/p8/P8-CAMERA-PLAN.md`（`track camera`，M-CAM0~CAM3，2026-11-10），**前置已解除**（M-D3 管线 / `ChassisState` POD / 投影源切换钩子现已在 master），待开 wt |
 | **5** | **游戏壳收拢**：独立 game target，GameClock 逻辑帧串起输入→载具→相机→World | 「能开一圈」截图 + 暂停语义回归 | 1+3+4 | 待开工（Q2 定 target 形态） |
-| **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 拍板 | 已立项 M-W0（2026-11-12；`docs/worldgen/W0-OPTIONS.md` 方案矩阵待出，Q-B 待显式拍板） |
+| **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 已拍板=程序化生成 | 已立项 M-W0（2026-11-12；五问已按推荐项拍板，`docs/worldgen/W0-PLAN.md` 就绪，待建 wt 落码） |
 | **7** | 小规模程序化城市 + 载具驾驶闭环 | **第一个 tag 门槛：最小可玩版**——能在生成的城市里开一圈、撞了有事件反馈 | 5+6 | 待开工 |
 | **8** | 交通系统 M-T0：lane graph 数据结构 + 路网寻路 + 直线跟车 | 纯逻辑 selftest 数值锚（确定性逐位）+ debug 可视化画车道线 | 6 的路网数据 | 待开工（Q-A 拍板自研立项） |
 | **9** | 调度器迭代：红绿灯相位、路口让行、避撞 | 同上 + 场景截图（车流不穿模、路口不堵死） | 8 | 待开工 |
@@ -81,3 +81,5 @@
   drive M-D3 之后串行（viewer/main.cpp 同文件冲突面一次清）。
 
 - 2026-11-12：第 6 步「程序化城市生成工具」**立项登记 M-W0**（A 类并行轨道 `feat/worldgen` 届时建）。三处参考实读（Carrot 无 world 模块 / bevy `bevy_city` `spawn_city` / UE `WorldPartition`+`PCGGraph`）+ 业界方案分族已完成调研；定位为离线 `city-tools` 产分块 `.nmesh` + `roadnet.json`，与 UE「Asset 型 PCG 图」同构、与 bevy_city seed/size/统计锚同构。状态由「待开工」升为「已立项 M-W0」；待出 `docs/worldgen/W0-OPTIONS.md` 方案矩阵（Q-W1~Q-W3 + Q-C）经用户拍板后开工；Q-B 资产来源（=程序化生成，§4 已建议）待显式拍板写回。
+
+- 2026-11-12（续）：M-W0 **五问拍板**——用户「按默认来」，五问全按推荐项：Q-B=程序化生成 / Q-W1=W1-B 分块 `.nmesh`+`city.scene` / Q-W2=W2-A 自包含 `roadnet.json`（字段契约随拍板写死进 W0-PLAN §1）/ Q-W3=W3-A 全自研最小算法 / Q-C=第一版显存内→V2 分块→V4 排第 10 步。执行计划 `docs/worldgen/W0-PLAN.md`（M-W0.0~W0.3）就绪；track `worldgen` 注册 wt_pool（state=planned）。第 6 步前置全部清空，待建 wt 落码。

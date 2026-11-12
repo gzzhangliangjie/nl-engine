@@ -176,6 +176,14 @@ TRACKS = {
                 "cluster/lod/dag -> .nmesh. No kStage / cases.json / renderer "
                 "/ .nmesh format changes.",
     },
+    "worldgen": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-worldgen",
+        "branch": "feat/worldgen", "state": "planned",
+        "note": "A-class offline citygen track opened 2026-11-12 (game-dev "
+                "step 6, M-W0; plan docs/worldgen/W0-PLAN.md, M-W0.0~W0.3; "
+                "five decisions Q-B/Q-W1~W3/Q-C confirmed by user 2026-11-12, "
+                "all per recommendation); wt not built yet",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
