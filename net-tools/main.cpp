@@ -84,8 +84,8 @@ int echoRun(const EchoArgs& a) {
         return 1;
     }
     nl::net::NetClient client;
-    if (!client.connect("127.0.0.1", a.port, 3000)) {
-        std::fprintf(stderr, "net-tools: connect failed (loopback)\n");
+    if (!client.beginConnect("127.0.0.1", a.port)) {
+        std::fprintf(stderr, "net-tools: beginConnect failed (loopback)\n");
         return 1;
     }
 
@@ -99,6 +99,36 @@ int echoRun(const EchoArgs& a) {
     bool ok = false;
 
     while (nowSec() < deadline) {
+        // 交替泵双 host：server 不泵就不处理握手/回显（ENet 事件模型）。
+        std::vector<nl::net::NetEvent> evs;
+        server.service(0, evs);
+        for (const auto& e : evs) {
+            if (e.type == nl::net::EventType::Data) {
+                server.send(e.peerId, e.channel, e.data.data(), e.data.size());
+            }
+        }
+        evs.clear();
+        client.service(0, evs);
+        for (const auto& e : evs) {
+            if (e.type == nl::net::EventType::PeerDisconnected) {
+                std::fprintf(stderr, "net-tools: handshake refused (loopback)\n");
+                return 1;
+            }
+            if (e.type != nl::net::EventType::Data || e.data.size() < 6) continue;
+            const uint32_t seq = uint32_t(e.data[4]) | (uint32_t(e.data[5]) << 8);
+            if (e.channel == nl::net::Channel::Reliable) {
+                const auto it = sendTime.find(seq);
+                if (it != sendTime.end()) {
+                    rtts.push_back((nowSec() - it->second) * 1000.0);
+                    sendTime.erase(it);
+                }
+                ++recvR;
+            } else {
+                ++recvU;
+            }
+        }
+        if (!client.connected()) continue; // 握手未完成，继续双泵
+
         if (sentR < a.reliable) {
             const uint32_t seq = sentR++;
             buf.assign({uint8_t(kEchoMagic & 0xFF), uint8_t((kEchoMagic >> 8) & 0xFF),
@@ -117,30 +147,6 @@ int echoRun(const EchoArgs& a) {
             buf.push_back(uint8_t((seq >> 8) & 0xFF));
             buf.resize(4 + 2 + a.payload, 0xCD);
             client.send(nl::net::Channel::Unreliable, buf.data(), buf.size());
-        }
-
-        std::vector<nl::net::NetEvent> evs;
-        server.service(0, evs);
-        for (const auto& e : evs) {
-            if (e.type == nl::net::EventType::Data) {
-                server.send(e.peerId, e.channel, e.data.data(), e.data.size());
-            }
-        }
-        evs.clear();
-        client.service(0, evs);
-        for (const auto& e : evs) {
-            if (e.type != nl::net::EventType::Data || e.data.size() < 6) continue;
-            const uint32_t seq = uint32_t(e.data[4]) | (uint32_t(e.data[5]) << 8);
-            if (e.channel == nl::net::Channel::Reliable) {
-                const auto it = sendTime.find(seq);
-                if (it != sendTime.end()) {
-                    rtts.push_back((nowSec() - it->second) * 1000.0);
-                    sendTime.erase(it);
-                }
-                ++recvR;
-            } else {
-                ++recvU;
-            }
         }
 
         if (recvR == a.reliable && recvU == a.unreliable) { ok = true; break; }

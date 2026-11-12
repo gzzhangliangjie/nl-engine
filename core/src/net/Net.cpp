@@ -7,6 +7,7 @@
 
 #include <enet/enet.h>
 
+#include <cstdio>
 #include <map>
 #include <utility>
 
@@ -36,7 +37,14 @@ void netShutdown() {
 }
 
 const char* version() {
-    return enet_linked_version_string();
+    // 1.3.18 无 enet_linked_version_string（上游只有 ENET_VERSION 宏族）；
+    // 纯源码直编，编译头即链接版本，宏拼接语义等价。
+    static char buf[16];
+    std::snprintf(buf, sizeof(buf), "%u.%u.%u",
+                  ENET_VERSION_GET_MAJOR(ENET_VERSION),
+                  ENET_VERSION_GET_MINOR(ENET_VERSION),
+                  ENET_VERSION_GET_PATCH(ENET_VERSION));
+    return buf;
 }
 
 // ---------------------------------------------------------------- NetServer
@@ -169,7 +177,7 @@ NetClient::~NetClient() {
     delete impl_;
 }
 
-bool NetClient::connect(const char* hostStr, uint16_t port, uint32_t timeoutMs) {
+bool NetClient::beginConnect(const char* hostStr, uint16_t port) {
     delete impl_;
     impl_ = new Impl;
     impl_->host = enet_host_create(nullptr, 1, kChannelCount, 0, 0);
@@ -185,6 +193,11 @@ bool NetClient::connect(const char* hostStr, uint16_t port, uint32_t timeoutMs) 
         impl_->destroy();
         return false;
     }
+    return true;
+}
+
+bool NetClient::connect(const char* hostStr, uint16_t port, uint32_t timeoutMs) {
+    if (!beginConnect(hostStr, port)) return false;
     // 阻塞握手：deadline 内等到 CONNECT 视为成功；DISCONNECT 视为拒绝。
     const enet_uint32 deadline = enet_time_get() + timeoutMs;
     for (;;) {

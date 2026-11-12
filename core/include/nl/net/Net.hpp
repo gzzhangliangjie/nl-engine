@@ -64,7 +64,12 @@ public:
     NetClient& operator=(const NetClient&) = delete;
 
     // 阻塞握手直到 CONNECT / DISCONNECT / 超时；失败返回 false（含连接被拒）。
+    // 仅适合对端已在泵事件的场景（双进程：server 在自己线程/进程 service）。
+    // 单进程回环（同线程双 host）必须用 beginConnect + service 轮询，
+    // 否则 server 无机会处理握手包，阻塞等待必然超时。
     bool connect(const char* host, uint16_t port, uint32_t timeoutMs);
+    // 非阻塞发起连接：只创建 host 与 peer，握手由 service() 泵出 PeerConnected。
+    bool beginConnect(const char* host, uint16_t port);
     void disconnect();
     bool connected() const;
 
