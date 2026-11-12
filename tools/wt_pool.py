@@ -78,6 +78,14 @@ TRACKS = {
                 "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
                 "state CLOSED by user instruction 2026-11-11",
     },
+    "net": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-net",
+        "branch": "feat/net", "state": "active",
+        "note": "multiplayer/netcode track opened 2026-11-13 by user instruction "
+                "(plan docs/net/NETCODE-PLAN.md, M-NET0~M-NET3; step 12 of "
+                "GAME-DEV-ORDER); transport=ENet, serialization=bitsery "
+                "(Q-N1~N6 decided, see docs/net/NETCODE-OPTIONS.md)",
+    },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
         "branch": "feat/physics", "state": "active",
