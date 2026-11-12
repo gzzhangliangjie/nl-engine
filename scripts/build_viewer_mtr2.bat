@@ -1,6 +1,6 @@
 @echo off
 setlocal
-REM M-TR2 ç¼–è¯‘éªŒè¯ä¸“ç”¨ï¼šé‡é… + ç¼– viewerï¼ˆä¸è¿› gitï¼Œè„šæœ¬ä»…æœ¬åœ°ç”¨ï¼‰
+REM M-TR2 ±àÒëÑéÖ¤×¨ÓÃ£ºÖØÅä + ±à viewer£¨²»½ø git£¬½Å±¾½ö±¾µØÓÃ£©
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
 set INCLUDE=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\winrt
 set LIB=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64
