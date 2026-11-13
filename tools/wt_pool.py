@@ -519,7 +519,7 @@ def cmd_close(args):
     # file in a wt warns instead of failing; --strict makes it fatal.
     ledger_doc = os.path.join(os.getcwd(), "docs", "流程禁手台账.md")
     ledger_ok = os.path.exists(ledger_doc)
-    if not ledger_ok and args.strict:
+    if not ledger_ok and getattr(args, "strict", False):  # close 子命令无 --strict 参数（仅 release 有），防 AttributeError
         errors.append("docs/流程禁手台账.md not found in this tree (升格流程 "
                       "要求收口批可见；--strict 模式下缺文件拒收口).")
     gate_blocks = 0
