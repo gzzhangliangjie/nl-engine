@@ -3172,3 +3172,25 @@
 8. **CTest 路径**：bash 不在 PATH，用完整路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`。
 
 **下一步**：tag `net-m2` → close + release --done → M-NET3（打磨收官：插值缓冲参数外置 CLI / 异常路径不崩 / GUIDE §4 归档 / tag `net-m3` + `net-done` + `milestone/net-done` 分支大版本收官纪律 5b；行驶段循环 demo 旗标一并）。
+
+## NET M-NET3 — 打磨收官：`net-done`（2026-11-13）
+
+**动作**：第 12 步网络栈第四里程碑（A 类并行轨道 `net`，claim M-NET3，网络栈大收官）。① `--interp-delay <ticks>` 插值回看深度外置 CLI（默认 2.0，范围 1.0..8.0 越界 exit 2；替换 `kInterpDelayTicks` 常量，eval 相位 / HUD delay 行同源消费；kCapacity=32 编译期环属实现细节不外置）。② server 优雅关服：`NetServer::Impl::destroy` 对每个活跃 peer `enet_peer_disconnect` + `enet_host_flush` 再 destroy——对端**立即**收断链事件，不再等 ENet 默认超时 ~30s。③ viewer client 断链边沿：`welcomed` true→false 边沿 = server 断链 → removeVehicle 回收全部远端幽灵 + 日志锚 `client: server disconnected, ghosts removed, continuing locally` + HUD 增 `disconnected` 态（welcomed 过但断链，区别于 connecting）；client 零本地模拟继续跑不崩。④ `session-loopback` 尾段扩被动断链段（独立新会话套不碰 M-NET2 断言：泵到 welcomed → server.stop 优雅关服 → client 循环 pump → 断言 welcomed/connected/localEntityId/entityCount 全复位），锚 `session      : passiveClose=clean` 纳入 PASS 断言。⑤ run.bat 双进程段加 M-NET3 断链软注记（退出顺序实时相关，viewer 层锚不强制；确定性锚 = loopback passiveClose）。⑥ 文档：`NETCODE-TOOLS-GUIDE.md` §4 归档、`NETCODE-PLAN.md` M-NET3 状态行、本台账。
+
+**提交版本**：`feat/net`（M-NET3 主实现 + 文档 commit）；annotated tag `net-m3`（本里程碑）+ `net-done`（网络栈大收官）+ `milestone/net-done` 分支（大版本收官纪律 5b）。`kStage` 保持 `S8.2`，既有 110 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 `--interp-delay` 越界双向实测：0.5 / 9 → exit 2 + 明确错误行。
+- 🟢 loopback 300 ticks 全 PASS：`passiveClose=clean`（优雅关服 → client 会话态全复位）。
+- 🟢 ctest net 族 12/12 双后端 `--repeat until-pass:3` 全绿。
+- 🟢 run.bat 六段 ALL GREEN exit 0（matched=213 viol=0 maxErr=0.0007 maxRatio=0.087），**软注记命中**：server 先退 → client.log 出现 `client: server disconnected`（优雅关服实时感知 + 幽灵回收），client 跑完全部帧 exit 0 = 断链后本地继续跑不崩实证。
+- 🟢 全量 regression 双后端一次（tag 收口口径）：**844 条 = 774 bytes + 1 near + 69 FAIL**；69 条逐条甄别**零行为回归**——① ~60 条 showcase 冻结 exe 缺失（m0.1~s1.0，本 wt 无冻结基线，环境性，M-NET2 收官同款定性）；② gl4 tick/pause 4 条 = `script/examples/orbit` dotnet 产物缺失（已补建 `dotnet build`，复跑 6/6 全绿）；③ m-sc0 3 条 + s3.0/dag 2 条 = **regression.py 并发竞争**（`--jobs 4` 下双后端同时写 s5 重编共享目录 / dag 导出共享 JSON；串行复跑 m-sc0 10/10、s3.0 8/8 全绿；工具既有问题，挂独立后续项「regression.py 多进程分片 worker 隔离」）。`tools/showcase/server.py --check` OK。
+- 🟢 near 1 条 = ecs-e1b scale VULKAN GPU 取整噪声（1 像素 maxDelta 1/255，既有分档内）。
+
+**踩坑情况**
+1. **`enet_host_destroy` 不通知 peer**：server 退出直拆 socket，client 端等默认超时 ~30s 才感知——「server 退出 client 不崩」缺的不是崩溃处理而是**感知时延**；优雅关服（逐 peer disconnect + flush 后 destroy）不落，client 断链边沿永远测不出即时语义。
+2. **被动断链验证不能依赖双进程时序**：server/client 帧数按无节流帧率折算都是秒级，退出顺序实时相关 → run.bat 只做软注记，确定性验证放 loopback 内独立会话套。
+3. **ENet client 收断链后 `connected()` 自动翻 false**（peer state = DISCONNECTED）——「welcomed 过但断开」的 `disconnected` 态需 viewer 侧自行跟踪边沿，Sync 层零新增状态位。
+4. **regression.py `--jobs 4` 并发写共享路径竞争**（本轮甄别实锤，非本轮引入）：m-sc0 s5 步骤拷贝工程重编写共享目录、s3.0/dag `--export` 写固定 JSON，双后端并发同跑即互踩（退出码 1）；手动单跑 + 串行 regression 全绿。甄别纪律：全量 FAIL 不能只看条数，必须逐条查 detail 分「exe 缺失 / 产物缺失 / 竞争 / 行为回归」四类定性。
+
+**下一步**：tag `net-m3` + `net-done` + `milestone/net-done` 分支 → close + release --done → 网络栈第 12 步收官。独立后续项（均需单独拍板）：`regression.py` 多进程分片 worker 隔离（并发写共享路径竞争本轮实锤）、行驶段循环 demo 旗标（双进程慢速蠕动段，Q-N5 最小闭环外扩展）、`example/net-m2/run.bat` VULKAN 口径（固定 dx12 exe，net 族 ctest 已双后端覆盖）、多物体场景复验保边（S12 遗留同款）。

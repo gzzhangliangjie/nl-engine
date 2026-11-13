@@ -60,6 +60,8 @@
 
 ### M-NET3 — 打磨与收官：`net-done`
 
+> **状态：已落码（2026-11-13，`feat/net`）**。① `--interp-delay <ticks>` 外置 CLI（默认 2.0，1.0..8.0 越界 exit 2）；② server 优雅关服（`NetServer::Impl::destroy` 逐 peer disconnect + flush——对端立即感知，不等 ENet 默认超时）；③ client 断链边沿（welcomed true→false → 回收全部幽灵 + 日志锚 + HUD `disconnected` 态，继续跑不崩）；④ `session-loopback` 扩被动断链段（`passiveClose=clean` 锚纳入 PASS）。验收：loopback 300 ticks 全 PASS、ctest net 族 12/12 双后端、run.bat 全段 ALL GREEN（含真实时序断链注记命中）、全量 regression 双后端（tag 收口口径）+ `server.py --check`、tag `net-m3` + `net-done` + `milestone/net-done` 分支（大版本收官纪律 5b）。归档 = `NETCODE-TOOLS-GUIDE.md` §4 + `MILESTONES.md` NET M-NET3 节。
+
 - **目标**：断线 / 重连 / 参数打磨 + 全量总闸收官。
 - **任务**：插值缓冲参数（缓冲长度）外置 CLI；异常路径（server 退出 / client 断线后本地继续跑不崩）；`docs/net/NETCODE-TOOLS-GUIDE.md` 归档；`MILESTONES.md` 四栏；tag `net-m3` + `net-done` + `milestone/net-done` 分支（大版本收官纪律 5b）。
 - **验收判据**：全量回归双后端一次（tag 收口口径）+ `server.py --check` + 收口第一屏四项自查 + 三要素表格。

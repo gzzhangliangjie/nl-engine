@@ -142,4 +142,36 @@ ctest（双后端 `--repeat until-pass:3`）：`net-m2-session`（PASS_REGULAR_E
 6. **双进程握手时序竞争**：server 帧数跑完时 client 才启动 → 必然 0 interp。ENet CONNECT 重试约 1s 节奏赢不了无节流帧率（~350fps 下 210 tick 行驶窗口仅 0.6s）→ run.bat `start /b` + `ping` 延后 2s；确定性验收不依赖双进程实时时序，走 loopback + selftest 工具锚。
 7. **disconnect 必须复位会话态**：只拆 host 不清 welcomed_/localEntityId_/bufs_ → 复用会话对象行为残留。
 
-## 4. M-NET3（打磨收官）— 未开工
+## 4. M-NET3（打磨收官，tag `net-m3` + `net-done`）— 已落码（2026-11-13）
+
+### 4.1 变更面
+
+| 项 | 语义 | 位置 |
+|---|---|---|
+| `--interp-delay <ticks>` | client 快照插值回看深度外置 CLI（默认 2.0，范围 1.0..8.0，越界 exit 2）；替换原 `kInterpDelayTicks` 常量，eval 相位 / HUD delay 行同源消费。缓冲容量 kCapacity=32 为编译期环，属实现细节不外置 | viewer `Options` / `parseArgs` / runNormal 前置校验 |
+| server 优雅关服 | `NetServer::Impl::destroy`（stop/析构路径）对每个活跃 peer `enet_peer_disconnect` + `enet_host_flush` 再 destroy——对端**立即**收到断链事件，不再依赖 ENet 默认超时（~30s） | `core/src/net/Net.cpp` |
+| client 断链边沿 | viewer client 每帧跟踪 `welcomed` true→false 边沿 = server 断链 → 回收全部远端幽灵（removeVehicle）+ 日志锚 `client: server disconnected, ghosts removed, continuing locally`；client 零本地模拟，继续跑不崩 | viewer main.cpp |
+| HUD disconnected 态 | `welcomed 过但链路已断` = `disconnected`（区别于从未连上的 `connecting`） | viewer main.cpp HUD Net Status |
+| `session-loopback` 扩被动断链段 | 独立新会话套：泵到 welcomed → `server.stop()`（优雅关服）→ client 循环 pump → 断言 `welcomed==false && connected==false && entityCount==0 && localEntityId==0`，输出锚 `session      : passiveClose=clean`，纳入 PASS 断言 | net-tools `cmdSessionLoopback` 尾段 |
+
+### 4.2 实测表（2026-11-13，DX12）
+
+| 项 | 实测值 | 判定 |
+|---|---|---|
+| loopback 被动断链段 | `passiveClose=clean`（300 ticks 全 PASS） | 优雅关服 → client 立即复位 ✓ |
+| `--interp-delay` 越界 | 0.5 / 9 → `exit 2` + 明确错误行 | 用法错误不静默降级 ✓ |
+| 双进程断链（真实时序） | server 先退 → client.log 出现 `client: server disconnected` 锚，client 跑完全部帧 exit 0 | 断链后本地继续跑不崩 ✓ |
+| run.bat 全段 | ALL GREEN exit 0（matched=213 viol=0 maxErr=0.0007 maxRatio=0.087） | ✓ |
+| ctest net 族 | 12/12 双后端 `--repeat until-pass:3` 全绿 | ✓ |
+
+### 4.3 收官纪律（tag `net-m3` + `net-done`）
+
+- 全量 regression 双后端各跑一次（tag 收口口径，非 `--only` 抽查）；`tools/showcase/server.py --check` 过。
+- annotated tag `net-m3`（本里程碑）+ `net-done`（第 12 步网络栈大收官）+ `milestone/net-done` 分支（大版本收官纪律 5b）。
+- 验收口径注意：**双进程退出顺序是实时相关的**，viewer 层断链锚（`client: server disconnected`）在 run.bat 里是软注记（命中才打印，不 FAIL）；确定性锚 = loopback `passiveClose=clean`（Sync 层全语义，ctest 锁定）。
+
+### 4.4 踩坑留档（M-NET3 实测）
+
+1. **`enet_host_destroy` 不通知 peer**：server 退出直拆 socket，client 端要等 ENet 默认超时（~30s）才感知断链——「server 退出 client 不崩」缺的不是崩溃处理而是**感知时延**。优雅关服（逐 peer disconnect + flush 后 destroy）一行不落，client 断链边沿永远测不出即时语义。
+2. **被动断链验证不能依赖双进程时序**：server/client 帧数都按无节流帧率折算成秒级，退出顺序实时相关 → run.bat 里只做软注记；确定性验证放在 loopback 内独立会话套（server.stop → client.pump 收断链）。
+3. **ENet client 收断链后 `connected()` 自动翻 false**（peer state = DISCONNECTED），HUD 三态不够用——「welcomed 过但断开」的 `disconnected` 态需要 viewer 侧自行跟踪边沿，Sync 层无需加状态位。
