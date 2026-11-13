@@ -61,10 +61,18 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 **自检**：单方向光阴影形状/软硬与 S9 参考图方向一致；关掉 VSM 退回 S9 路线时画面退化可见。tag：`s15-vsm`。
 
 ## M15.1 级联 clipmap + 页请求/分配/回收（3~4 天）
-- [ ] 多级 clipmap：按距相机距离分 N 级（对位 UE `VirtualShadowMapClipmap`），近处高分辨率、远处低分辨率。
-- [ ] 每帧页请求 → 分配物理页 → 渲染 → 未命中/失效页回收（对位 UE `VirtualShadowMapCacheManager`：缓存有效页跨帧复用）。
-- [ ] 页请求读主视图 depth / vis buffer（Q4 方案 A 下无屏幕 GBuffer 纹理；预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
-- [ ] HUD 显示物理页占用 / 各级分辨率。
+> **2026-11-13 用户拍板（方案 A：GPU 标页 + CPU 分配器）**：compute 标页照 UE `PageMarking` 对位（吃主视图 depth 反投影 → 请求位图）→ 复用 S4 `cullReadback_` 环形习语异步回读（1 帧延迟，UE 同吃延迟）→ CPU 维护空闲链表/跨帧缓存/失效回收 → CPU 写页表 → CPU 逐分配页下发 draw（每页一个 viewport，M15.2 再换 GPU indirect）。确定性保留（bytes 基线纪律不破）；HUD 零成本。页表载体**不迁** Texture2D（扩展 StructuredBuffer 编码加 level 高位；D21 迁移触发条件 M15.1 不满足）。多级参数：4 级、level radius 对位 UE `2^(level+1)` 口径、每级虚拟空间 2048²/页表 256 项。
+- [x] 多级 clipmap：按距相机距离分 N 级（对位 UE `VirtualShadowMapClipmap`），近处高分辨率、远处低分辨率。
+- [x] 每帧页请求 → 分配物理页 → 渲染 → 未命中/失效页回收（对位 UE `VirtualShadowMapCacheManager`：缓存有效页跨帧复用）。
+- [x] 页请求读主视图 depth / vis buffer（Q4 方案 A 下无屏幕 GBuffer 纹理；预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
+- [x] HUD 显示物理页占用 / 各级分辨率。
+
+**M15.1 收口（2026-11-13）**：tag `s15-clipmap`。实测参数（MVP dump 权威）：coarsestWindow = 4×场景最大边 = 31.495（AABB ext = 7.874×1.925×1.626），L0 half = 1.968 / texel = 0.001922，窗口中心严格居中（focus=原点时 floor snap 无偏移）。
+
+**M15.1 漏阴影定位与验收口径变更（2026-11-13，两次用户拍板）**：
+1. **活体最小探针（拍板 A）**：stdout 逐级 alloc 日志 + 服务级伪彩探针 + 页池/页表/MVP 全 dump。决定性实验 = **python 软件光栅化 vs GPU 页池逐 texel 对比**（复刻 shadowLookAt/shadowOrtho/窗口 remap，nmesh 52B record 权威布局）：130.9 万 texel 全对齐、深度差 ≤0.0035、漏画 0——**页池写入侧 100% 正确**。
+2. **根因（实锤修复）**：页缓存 key 负 wx 跨级碰撞——`key=(l<<62)|(uint32(wx)<<32)|uint32(wy)` 用 OR，wx<0 时 uint32 回转值最高两位是 11，OR 吞掉级位段 → 四级同 (wx,wy) 的 key 相同 → 跨级共池页 + dirty 只画一次。修复 = wx 掩 `0x3FFFFFFF` 再 `<<32`（分配器 + 页表重写两处；key 纪律注释落 scene.hpp）。
+3. **换基准（拍板 B）**：修复后 verify 的 vsm-vs-ray 门仍 5.28%（vs s9 冻结 PNG）。三图对比实锤：同 blob 射线兜底 vs VSM 真实近似差仅 0.42%（sum>30 口径）/ **0.47%（near 口径，0.01 亦过）**；而 s9 冻结 blob 与当前 csDirectVsm blob 共享代码数值漂移 6924px（~4.7%，拍板 B 冻结 csDirect 所致，M15.0 时同源无此漂移）。**门基准换为 `--vsm-rayref`**（新增 CLI flag，fp.options[3] 通道，csDirectVsm 入口 params.x=0 走射线兜底 = 同 blob 同本底）；s9-shadow 冻结 PNG 退役为 degraded guard 专用。剩余 0.47% 构成 = fallback 104-tri 粗代理假影（漏阴影 1072px）+ 细网格真影粗代理没有（假阴影 1131px）+ 页 texel 粒度——几何基准差异非实现 bug，与 M15.0 卡「深度 pass 全簇 vs 射线 104-tri 粗代理设计差异」同构。
 
 **自检**：大场景近处清晰、远处不糊不抖；相机前后移动时各级分辨率过渡平滑无突跳。tag：`s15-clipmap`。
 

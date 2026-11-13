@@ -530,6 +530,20 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::End();
     }
+    // M15.1 (S15): VSM clipmap page-pool occupancy panel — separate sibling
+    // window, default-off gate (--vsm-panel with --vsm; scene fills the ASCII
+    // lines via Scene::pollVsmHud). Fixed pos clears the resident HUD, the
+    // console and the drive panel; only the s15-clipmap card turns it on, so
+    // no existing baseline moves.
+    if (frame.vsmDebug.show) {
+        ImGui::SetNextWindowPos(ImVec2(620.0f, 150.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(316.0f, 170.0f), ImGuiCond_Always);
+        if (ImGui::Begin("VSM Debug (M15.1)", nullptr)) {
+            for (int i = 0; i < frame.vsmDebug.lineCount; ++i)
+                ImGui::TextUnformatted(frame.vsmDebug.lines[i]);
+        }
+        ImGui::End();
+    }
     // M-TR0 K1/K5 + M-TR1 K2: standalone profiling stats window (--profiling-hud,
     // DEFAULT OFF). Same additive-sibling placement as drive/input-debug windows:
     // bottom-left clear of the resident HUD; fixed pos+size keeps screenshot bytes

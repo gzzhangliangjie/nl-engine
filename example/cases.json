@@ -10980,7 +10980,7 @@
    "summary": "M15.0（S15 第一步，S15-PLAN 预研拍板 2026-11-09）：--mode shadow 上 --vsm 开关，阴影因子来源从 M9.1 TLAS 射线换成 VSM 页表查表 + 深度比较。物理页池 2048^2 R32F（128^2/页 x 16x16 页，M15.0 静态 1:1 分配，UE MaxPhysicalPages 上限池/页搬运留 M15.2）+ 页表 StructuredBuffer<uint> 256 项（entry=poolPageX|poolPageY<<8，0xFFFFFFFF 未分配判亮；UE Texture2D 页表差异登记 UE-DIFFS）+ vsm.slang 全簇 vertex pulling 深度 pass（不读 visibleList——相机视锥列表会漏相机外遮挡体；光源正交矩阵 shadowOrtho/shadowLookAt E1b.4 同款口径，全场 AABB 独立重读 nmesh 不碰基线路径）+ vsm_common.slangh 采样链（UE ProjectionCommon 对位：世界点→lightMvp→NDC→虚拟 texel→页表→物理页→深度比较）。踩坑两记入档：① csDirect blob 对 t14/t15/b6 是静态引用，directComputeLayout_ 必须无条件扩三槽（布局漏槽=PSO 失败），--vsm 关闭帧也要写零版 b6 + 声明页池/页表状态（volatile CB 未写即用/unknown prior state 双 NVRHI 报错）；② 采样 y 必须做屏幕翻转（gbuffer_common 同款 1-(ndc.y*0.5+0.5)，缺=阴影上下镜像实拍踩坑）。验收：--vsm 关闭帧与 s9-shadow 冻结基线逐字节相同（基线零扰动）；--vsm 开启与射线基线 99.51% 像素同（0.49% 差异 = 深度 pass 全簇几何 vs 射线 104-tri 粗代理的设计差异，brighter=3192/darker=4367 双向）；双后端 near（diff 10px maxDelta=1）；run.bat verify 六段全绿（bytes/日志锚/deviceErrors=0/退化守卫/near/负向）。kStage 不 bump；M15.2 上限池 + 页搬运 + clipmap 层级另收口。",
    "acceptance": [
     "--mode shadow 不带 --vsm 与冻结 s9-shadow 基线逐字节相同（射线基线零扰动）；带 --vsm 与 example/s15-vsm 冻结基线逐字节相同（确定性）",
-    "run.bat verify 全绿：双后端 exit 0 + bytes 2/2 + 日志锚 vsm: depth pass live + deviceErrors=0 + 退化守卫（无 --vsm = s9-shadow 基线逐字节）+ near dx12/vulkan + 负向",
+    "run.bat verify 全绿：双后端 exit 0 + bytes 2/2 + 日志锚 vsm clipmap live（M15.1 起锚升级，原 vsm: depth pass live 随采样链升级退役）+ deviceErrors=0 + 退化守卫（无 --vsm = s9-shadow 基线逐字节）+ near dx12/vulkan + 负向",
     "双后端 near 一致（0 diff px）；VSM vs 射线基线 99.5%+ 像素同，差异集中在阴影边界（全簇几何 vs 粗代理设计差异，双向亮度偏移都有）"
    ],
    "exe": {
@@ -10992,7 +10992,7 @@
      "id": "vsm",
      "name": "--vsm VSM 页表查表阴影（页池 2048^2 R32F + 256 项页表 + 全簇深度 pass）",
      "kind": "pair",
-     "note": "M15.0 新增 --vsm。与 s9-shadow（TLAS 射线）形状大体一致但几何源不同：深度 pass 渲全簇 11808 tri 几何，射线打 104 tri 粗代理——阴影边界差异是设计本意不是 bug。基线取自本卡首拍（dx12/vulkan 双后端）。",
+     "note": "M15.0 新增 --vsm。与 s9-shadow（TLAS 射线）形状大体一致但几何源不同：深度 pass 渲全簇 11808 tri 几何，射线打 104 tri 粗代理——阴影边界差异是设计本意不是 bug。基线取自本卡首拍（dx12/vulkan 双后端）。 M15.1 注记（2026-11-13）：采样链升级为 4 级 clipmap 查表（vsmSampleShadow4）后本卡基线重拍，输出合法变化；基线文件名不变，M15.0 首拍数值（99.51% 同射线基线）留档于 git 历史 tag s15-vsm。",
      "baselines": {
       "dx12": "example/s15-vsm/vsm-dx12.png",
       "vulkan": "example/s15-vsm/vsm-vulkan.png"
@@ -11021,6 +11021,59 @@
      ],
      "command": "viewer.exe --mode shadow --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9 --vsm",
      "script": "example/s15-vsm/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "s15-clipmap",
+   "label": "S15.1",
+   "name": "VSM 级联 clipmap（M15.1：GPU 标页 + CPU 分配器 + 4 级页表）",
+   "tag": "s15-clipmap",
+   "date": "2026-11-13",
+   "summary": "M15.1（方案 A 拍板：GPU 标页 + CPU 分配器，写回 S15-PLAN + UE-DIFFS D21）：页池扩为 4096^2 R32F（128^2/页 x 32x32 = 1024 页），页表扩 4 级 x 256 项（虚拟空间每级 2048^2，粗级窗口 = 4x 场景最大边逐级减半，窗口原点页对齐 floor snap，focus = 相机眼点，UE view-origin 口径）；新增 csMark compute pass 从 visBuffer deviceZ 反投影标请求页（每像素只请求最细命中级后 break，UE PageMarking 对位）→ 2 帧延迟 readback 环（cullReadback 同款，只回传 128B 位图，窗口原点走 CPU 槽位环）→ CPU 分配器（unordered_map 跨帧页缓存 + 空闲链表 + LRU 驱逐 + 灯向变更好全失效）→ CPU 全量重写页表 → 逐 dirty 页 clear quad（blend 关覆写 1.0）+ 全簇 pulling 几何（MIN 混合）；采样链 vsm_common.slangh 重写为 vsmSampleShadow4（最细级优先迭代，请求级=采样级）。踩坑四记：① copyBuffer 读 160B 越过 128B 位图 buffer 32B → device removed（GPU 页 fault 无 validation 报错，二分定位：只留 CB 写入干净 / 开位图拷贝必炸）；② 页表 permanent buffer 不能 setPermanentBufferState 钉 SRV——保持每帧 CopyDest↔SRV 动态轮转；③ mark binding set 依赖懒建 visBuffer，init 时为 null → 尺寸版本闸懒建；④ **页缓存 key 负 wx 跨级碰撞（M15.1 漏阴影根因）**——key=(l<<62)|(uint32(wx)<<32)|uint32(wy) 用 OR，wx<0 时 uint32 回转值最高两位是 11，OR 吞掉级位段 → 四级同 (wx,wy) 的 key 相同 → 跨级共池页 + dirty 只画一次 → 非首次分配级的页表槽指向错误尺度内容；修复 = wx 掩 0x3FFFFFFF 再 <<32（分配器 + 页表重写两处）。验收口径变更（2026-11-13 用户拍板 B：换基准）：vsm-vs-ray 门基准从 s9-shadow 冻结 PNG 换为 --vsm-rayref 同 blob 射线兜底渲染（新增 CLI flag，fp.options[3] 通道）——s9 冻结 blob 与当前 csDirectVsm blob 共享代码数值漂移实测 6924px（~4.7%），混入门内致 5.28% 假超差；换基准后真实近似差 0.47%（near 0.01 亦过）。定位方法论留档（活体最小探针拍板 A 轮）：python 软件光栅化（复刻 MVP/页表/窗口 remap，nmesh 52B record）与 GPU 页池逐 texel 对比 130.9 万 texel 全对齐、深度差 ≤0.0035——页池写入侧 100% 正确；判定级差异构成 = fallback 104-tri 粗代理假影（漏阴影 1072px）+ 细网格真影粗代理没有（假阴影 1131px）+ 页 texel 粒度，双方向均为几何基准差异非实现 bug。验收：s15-clipmap run.bat verify 全绿（bytes 2/2 重拍（key 修复合法变化）+ 双日志锚 vsm clipmap live/cpu allocator + deviceErrors=0 + 退化守卫逐字节 + dx12/vk near 0 diff + VSM vs rayref 基准 near 0.02（0.47%）+ 负向）；s15-vsm 旧卡基线随 key 修复重拍并注记。kStage 不 bump。",
+   "acceptance": [
+    "--mode shadow 不带 --vsm 与冻结 s9-shadow 基线逐字节相同（射线基线零扰动）；带 --vsm 与 example/s15-clipmap 冻结基线逐字节相同（确定性）",
+    "run.bat verify 全绿：双后端 exit 0 + bytes 2/2 + 日志锚 vsm clipmap live + cpu allocator + deviceErrors=0 + 退化守卫 + near dx12/vulkan 0.01 + VSM vs --vsm-rayref 射线兜底基准 near 0.02 + 负向",
+    "双后端 near 一致（0 diff px）；VSM vs rayref 基准 99.53% 像素同（>6 和差口径），差异 = fallback 104-tri 粗代理 vs 全簇 11808 tri 几何基准差 + 128^2 texel 页粒度（漏阴影/假阴影双向都有，定位留痕见 S15-PLAN M15.1 收口段）；GPU 标页请求链路无 device removed"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "clipmap",
+     "name": "--vsm 4 级 clipmap 阴影（页池 4096^2 R32F 1024 页 + csMark GPU 标页 + CPU 分配器）",
+     "kind": "pair",
+     "note": "M15.1 新增。csMark 只标最细命中级；CPU 分配器跨帧缓存页，2 帧延迟 readback 环；首帧表空全亮属预期（延迟窗口），frame 8 缓存已暖。基线取自本卡首拍（dx12/vulkan 双后端）。 M15.1 注记（2026-11-13，key 修复后）：页缓存 key 负 wx 跨级碰撞修复使页内容合法变化，本卡基线重拍（bytes 从碰撞污染内容换为修后内容）；基线文件名不变，碰撞污染版数值留档于 git 历史。 M15.1 注记 2（换基准拍板）：vsm-vs-ray 门基准换为 --vsm-rayref 同 blob 射线兜底（verify 内现渲染现比，不落冻结文件），s9-shadow 冻结 PNG 退役为 degraded guard 专用。",
+     "baselines": {
+      "dx12": "example/s15-clipmap/clipmap-dx12.png",
+      "vulkan": "example/s15-clipmap/clipmap-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "shadow",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9",
+      "--vsm"
+     ],
+     "command": "viewer.exe --mode shadow --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9 --vsm",
+     "script": "example/s15-clipmap/run.bat verify"
     }
    ]
   }

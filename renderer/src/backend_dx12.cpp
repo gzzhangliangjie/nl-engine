@@ -437,6 +437,9 @@ private:
             scene_.pollBlasTimer(device_, hud);
             // M8.1：TLAS 每帧 rebuild 耗时（每帧 begin/end，非确定性模式显示最近值）。
             scene_.pollTlasTimer(device_, hud);
+            // M15.1：VSM 页池占用面板填充（--vsm-panel 才 show，与 pollCullTimer
+            // 同位；show=false 时零开销，既有基线零触碰）。
+            scene_.pollVsmHud(hud);
             // CPU 侧：ImGui 面板 + draw data，控件值写回 HudFrame。
             hud_.build(*hud);
         }

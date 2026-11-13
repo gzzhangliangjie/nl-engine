@@ -205,6 +205,15 @@ struct NetStatusUi {
     int  lineCount = 0;
 };
 
+// M15.1（S15）：VSM clipmap 页池占用面板。同款 DEFAULT-OFF：仅 --vsm-panel 且
+// --vsm 时 show=true（Scene::pollVsmHud 在 show 时填充 ASCII 行），既有基线零触碰。
+struct VsmDebugUi {
+    bool show = false;
+    enum { kMaxLines = 8, kLineChars = 96 };
+    char lines[kMaxLines][kLineChars] = {};
+    int  lineCount = 0;
+};
+
 struct HudFrame {
     // ---- viewer -> HUD（显示数据）----
     float fps          = 0.0f;
@@ -355,6 +364,7 @@ struct HudFrame {
     DriveDebugUi driveDebug;
     ProfilingDebugUi profilingDebug;   // M-TR0：默认关的独立性能统计窗口
     NetStatusUi netStatus;             // NET M-NET2：默认关的独立网络状态窗口
+    VsmDebugUi vsmDebug;               // M15.1：默认关的 VSM 页池占用窗口（--vsm-panel）
 };
 
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。

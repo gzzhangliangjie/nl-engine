@@ -452,9 +452,17 @@ set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fr
 # visbuf_common.slangh，故也吃 _SHADER_EXTRA_DEPS（见下方 STREQUAL 条件）。
 # M7.2：NonUniformResourceIndex 选槽（材质 id 逐像素非一致）进白名单 sm_6_6。
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
+# M15.0/M15.1（S15）：vsm.slang 五入口——深度 pass vs/ps（M15.0）+ 清页 quad
+# vs/ps（M15.1，blend 关覆写 1.0）+ 页请求标页 compute（M15.1，UE PageMarking 对位）。
+set(_ENTRIES_VSM "vsMain|vs|vertex" "psMain|ps|fragment"
+                 "vsMainClear|vsclear|vertex" "psMainClear|psclear|fragment"
+                 "csMark|cs|compute")
 # M9.0（S9）：direct.slang 单 compute 入口（8x8 直光对照 pass）。BRDF 逐字搬移
 # material.slang mode 5，资源槽位与 material pass 同源（§2.7 单一 BindingSet）。
-set(_ENTRIES_DIRECT "csDirect|cs|compute" "csReference|csref|compute" "csReferenceGI|csrefgi|compute")
+# M15.1：+csDirectVsm（--vsm 直光 pass，b6/t14/t15）——拆双入口（拍板 B）：
+# 纯净 csDirect blob 回 s9 冻结基线 bytes，VSM 代码隔离进 csvsm 产物。
+set(_ENTRIES_DIRECT "csDirect|cs|compute" "csDirectVsm|csvsm|compute"
+                    "csReference|csref|compute" "csReferenceGI|csrefgi|compute")
 # 公共头用 .slangh 后缀避免被上面的 GLOB 当成独立 shader 源；它只被 #include。
 set(_VISBUF_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/visbuf_common.slangh")
 # M9.0 (S9): GBuffer 反解公共头（material.slang include；S9.1/S10/S12 复用）
@@ -471,6 +479,7 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "tlas_probe.cs"
                     "rt.cs"
                     "direct.cs"
+                    "direct.csvsm"
                     "direct.csref"
                     "direct.csrefgi"
                     "probe_trace.cstrace"
@@ -526,6 +535,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_VISBUF}")
     elseif(_SRC_NAME STREQUAL "material")
         set(_ENTRIES "${_ENTRIES_MATERIAL}")
+    elseif(_SRC_NAME STREQUAL "vsm")
+        set(_ENTRIES "${_ENTRIES_VSM}")
     elseif(_SRC_NAME STREQUAL "tlas_probe")
         set(_ENTRIES "${_ENTRIES_TLAS_PROBE}")
     elseif(_SRC_NAME STREQUAL "rt")

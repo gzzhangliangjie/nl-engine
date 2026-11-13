@@ -367,6 +367,9 @@ private:
             scene_.pollBlasTimer(nvrhiDevice_, hud);
             // M8.1：TLAS 每帧 rebuild 耗时（每帧 begin/end，非确定性模式显示最近值）。
             scene_.pollTlasTimer(nvrhiDevice_, hud);
+            // M15.1：VSM 页池占用面板填充（--vsm-panel 才 show，与 pollCullTimer
+            // 同位；show=false 时零开销，既有基线零触碰）。
+            scene_.pollVsmHud(hud);
             hud_.build(*hud);
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。

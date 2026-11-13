@@ -7,8 +7,10 @@ rem
 rem M15.0 adds --vsm on --mode shadow: shadow factor source switches from the
 rem M9.1 TLAS ray to a VSM page-table lookup + depth compare. What we assert:
 rem   - both backends render --mode shadow --vsm exit 0, deviceErrors=0
-rem   - re-shot --vsm == frozen M15.0 baseline (deterministic, no regression)
-rem   - log anchor: "vsm: depth pass live" present
+rem   - re-shot --vsm == frozen baseline (deterministic, no regression)
+rem     NOTE M15.1: baseline re-shot after the sampler chain moved to the
+rem     4-level clipmap lookup (legal output change, noted in MILESTONES)
+rem   - log anchor: "vsm clipmap live" present (M15.1 anchor)
 rem   - degraded guard: WITHOUT --vsm the exe must stay byte-identical to the frozen
 rem     s9-shadow baseline (ray path untouched, baseline zero disturbance)
 rem   - dx12 vs vulkan agree within tolerance -- tool check-s9shadow.py near
@@ -39,14 +41,14 @@ for %%B in (dx12 vulkan) do (
   )
 )
 
-echo [check] log anchor: vsm depth pass live
+echo [check] log anchor: vsm clipmap live
 "%ROOT%\build\dx12\viewer.exe" --mode shadow %ARGS% --vsm --screenshot "%OUT%verify-log-dx12.png" > "%OUT%verify-log.txt" 2>&1
-findstr /C:"vsm: depth pass live" "%OUT%verify-log.txt" >nul
+findstr /C:"vsm clipmap live" "%OUT%verify-log.txt" >nul
 if errorlevel 1 (
-  echo [FAIL] vsm depth pass log line missing
+  echo [FAIL] vsm clipmap log line missing
   set FAIL=1
 ) else (
-  echo [OK] vsm depth pass log line present
+  echo [OK] vsm clipmap log line present
 )
 findstr /C:"deviceErrors=0" "%OUT%verify-log.txt" >nul
 if errorlevel 1 (

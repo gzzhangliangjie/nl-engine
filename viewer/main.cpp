@@ -145,6 +145,9 @@ struct Options {
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
+    bool vsmPanel   = false;  // M15.1：--vsm-panel（VSM 页池占用面板，仅 --vsm 生效）
+    bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
+                              // 与 VSM 查表同 blob 同本底；vsm-vs-ray 门的对位渲染）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
@@ -315,6 +318,8 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
         else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
+        else if (a == "--vsm-panel") o.vsmPanel = true;   // M15.1：VSM 占用面板（需 --vsm）
+        else if (a == "--vsm-rayref") o.vsmRayRef = true; // M15.1：同 blob 射线基准（需 --vsm）
         else if (a == "--rt-debug" && i + 1 < argc) {   // M8.2：rt 模式调试可视化档
             const std::string v = argv[++i];
             if (v == "dist" || v == "0") o.rtDebugMode = 0;
@@ -2547,6 +2552,26 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.tlasSpin  = o.tlasSpin;              // M8.1：TLAS 实例 spin / 探针（BLAS 未就位时
         fp.tlasProbe = o.tlasProbe;             // renderer 内部直接返回，其它模式零扰动）
         fp.vsm       = o.vsm;                   // M15.0：VSM 深度 pass + csDirect 查表分支（仅 shadow 模式消费）
+        // M15.1：--vsm-rayref → fp.options[3]（csDirectVsm 入口走射线兜底分支 =
+        // 同 blob 射线基准渲染；vsm-vs-ray 门的对位口径，run.bat）。
+        if (o.vsmRayRef) fp.options[3] = 1.0f;
+        // M15.1：VSM clipmap 焦点 = 相机注视点（eye + 前向 × 距离；OrbitCamera
+        // pivot 恒为场景中心原点）。焦点必须是被观察区域中心：填眼点时眼点距
+        // 场景整个轨道距离（本场景 dist=9），细级窗口（L0 ~4 世界单位）完全套
+        // 不住场景，L0-L2 页请求恒空、只有粗级兜底（实拍踩坑）；outRig.lookAt
+        // 是 eye + 1 单位前向，同样不在场景中心，不能用。
+        if (shadowMode && o.vsm) {
+            float vsmEye[3];
+            camera.eyePosition(vsmEye);
+            // 前向 = 列主序 view 矩阵第三行取反（camera_mode.hpp::forwardFromView
+            // 同款数学，private 复用不了故内联三行）。
+            const nl::core::Matrix4 vsmVm = camera.view();
+            const float vsmFwd[3] = { -vsmVm.m[2], -vsmVm.m[6], -vsmVm.m[10] };
+            const float vsmDist = camera.distance();
+            fp.eye[0] = vsmEye[0] + vsmFwd[0] * vsmDist;
+            fp.eye[1] = vsmEye[1] + vsmFwd[1] * vsmDist;
+            fp.eye[2] = vsmEye[2] + vsmFwd[2] * vsmDist;
+        }
         fp.refFrames = static_cast<std::uint32_t>(o.frames);  // M9.2：reference 进度分母
         // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
         // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，
@@ -2692,6 +2717,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
         hud.panelShow = hudEnabled;   // M-C2：面板可见性独立于 ImGui 帧存续
         if (inputHud) hud.panelShow = true;   // M-I2：input-hud 模式常驻面板即本体
+        // M15.1：VSM 页池占用面板，default OFF——仅 shadow + --vsm + --vsm-panel
+        // 三闸齐才 show（Scene::pollVsmHud 在 show 时填充 ASCII 行），既有基线零触碰。
+        if (shadowMode && o.vsm && o.vsmPanel) hud.vsmDebug.show = true;
         // M-D3 (Q-D3-3 A): separate sibling window, default OFF. Only this
         // milestone's own cards turn it on, so 70 existing baseline PNGs stay put.
         if (driveEnabled && driveHudOn) {
