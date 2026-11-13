@@ -277,6 +277,7 @@ add_library(nl_core STATIC
     core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
     core/src/tick_groups.cpp   # P8 M-GL5：命名 TickGroup 注册制（逻辑帧组序契约）
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
+    core/src/crash.cpp         # M-CRASH0：进程级崩溃捕获（关联系统，薄封装，落本地）
 )
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
@@ -305,6 +306,16 @@ target_compile_definitions(nl_core PRIVATE NL_LOG_BACKEND_NAME="${NL_BACKEND_UPP
 # M-P3：启用 Jolt 调试渲染（碰撞形状线框提取）。Jolt 库本身已以 PUBLIC 带上该宏，
 # 这里显式复述，避免单配置 Release 下 generator-expression 传播的任何边界情况。
 target_compile_definitions(nl_core PRIVATE JPH_DEBUG_RENDERER)
+# M-CRASH0：注入 git sha 到崩溃 dump 元数据（configure 时取 HEAD，失败回退 unknown）
+execute_process(COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE NL_BUILD_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT NL_BUILD_GIT_SHA)
+    set(NL_BUILD_GIT_SHA "unknown")
+endif()
+target_compile_definitions(nl_core PRIVATE NL_BUILD_GIT_SHA="${NL_BUILD_GIT_SHA}")
 # imm32（M-C1）：ImmAssociateContext 解除中文 IME 对 ` 热键的拦截，nl_core window 消费。
 # 注：grouping.obj 引用 METIS 符号；viewer 不调用 groupClusters，链接器不会
 # 把 grouping.obj 拉进 viewer（MSVC 静态库按引用拉 obj），故 viewer 无 METIS 负担。

@@ -36,6 +36,7 @@
 #include "nl/script/Vm.hpp"         // M-GL4：--script 脚本宿主（OnTick 接逻辑帧）
 #include "nl/script/ScriptHost.hpp"
 #include "nl/script/Bindings.hpp"   // ecsSetWorld（宿主侧 World 绑定）
+#include "nl/core/crash.hpp"        // M-CRASH0：进程级崩溃捕获（main 第一行 install）
 
 #include <algorithm>
 #include <array>      // P8 M-N3 补充：NavPanel 障碍/折线 POD 数组的镜像
@@ -4023,6 +4024,10 @@ void printUsage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    nl::crash::install();   // M-CRASH0：进程级崩溃捕获（第一行，幂等）
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--crash-test") == 0) nl::crash::trigger_test_crash();
+    }
     Options o = parseArgs(argc, argv);
     initRenderDocCapture();   // M-TR2：拾取 RenderDoc in-app API（无 RenderDoc 时 no-op）
     if (o.selftest) return runSelfTest();

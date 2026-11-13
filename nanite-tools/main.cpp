@@ -35,6 +35,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "nl/core/crash.hpp"   // M-CRASH0：进程级崩溃捕获（main 第一行 install）
+
 namespace {
 
 double wallClockSeconds() {
@@ -3796,6 +3798,10 @@ int selftestSync() {
 } // namespace
 
 int main(int argc, char** argv) {
+    nl::crash::install();   // M-CRASH0：进程级崩溃捕获（第一行，幂等）
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--crash-test") == 0) nl::crash::trigger_test_crash();
+    }
     if (argc < 2) { printUsage(); return 1; }
     const std::string cmd = argv[1];
     if (cmd == "stat") return cmdStat(argc - 2, argv + 2);
