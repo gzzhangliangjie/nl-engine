@@ -19,3 +19,12 @@ reinterpret_cast<void*>(&nl_ecsAddTransform),  // Ecs.ecsAddTransform
 reinterpret_cast<void*>(&nl_ecsTransformGet),  // Ecs.ecsTransformGet
 reinterpret_cast<void*>(&nl_ecsTransformSet),  // Ecs.ecsTransformSet
 reinterpret_cast<void*>(&nl_ecsFindByName),  // Ecs.ecsFindByName
+reinterpret_cast<void*>(&nl_timeGetState),  // Time.timeGetState
+reinterpret_cast<void*>(&nl_timeSetState),  // Time.timeSetState
+reinterpret_cast<void*>(&nl_inputActionFind),  // Input.inputActionFind
+reinterpret_cast<void*>(&nl_inputActionBool),  // Input.inputActionBool
+reinterpret_cast<void*>(&nl_inputActionFloat),  // Input.inputActionFloat
+reinterpret_cast<void*>(&nl_inputActionVec2),  // Input.inputActionVec2
+reinterpret_cast<void*>(&nl_inputKeyIsDown),  // Input.inputKeyIsDown
+reinterpret_cast<void*>(&nl_logWrite),  // Log.logWrite
+reinterpret_cast<void*>(&nl_logSetFilter),  // Log.logSetFilter

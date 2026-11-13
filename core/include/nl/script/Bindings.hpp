@@ -41,6 +41,7 @@
 #include <vector>
 
 namespace nl::scene { class World; }
+namespace nl::core { class GameClock; class InputState; class ActionMap; }
 
 namespace nl::script {
 
@@ -53,6 +54,24 @@ inline constexpr int kEcsNoEntity = 2;
 inline constexpr int kEcsComponent = 3;
 inline constexpr int kEcsBadArg = 4;
 
+// Time 导出错误码（v3 M-SC5）：0=ok / 1=未绑 Clock（宿主忘 timeSetClock）/ 4=非法参数
+inline constexpr int kTimeOk = 0;
+inline constexpr int kTimeNoClock = 1;
+inline constexpr int kTimeBadArg = 4;
+
+// Input 导出错误码（v3 M-SC5）：0=ok / 1=未绑源（ActionMap/InputState，宿主忘
+// inputSetState/inputSetActionMap——不隐式建表拍板口径）/ 2=动作不存在或类型不符 /
+// 4=非法参数
+inline constexpr int kInputOk = 0;
+inline constexpr int kInputNoSource = 1;
+inline constexpr int kInputNoAction = 2;
+inline constexpr int kInputBadArg = 4;
+
+// Log 导出错误码（v3 M-SC5）：0=ok / 1=过滤指令非法 / 2=非法参数（level 越界等）
+inline constexpr int kLogOk = 0;
+inline constexpr int kLogBadFilter = 1;
+inline constexpr int kLogBadArg = 2;
+
 // ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
 // 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
 // v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
@@ -64,6 +83,15 @@ const ApiTable* consoleApiTable();
 // 宿主侧 World 绑定（M-SC2）：入口调用前设置，ECS 导出全部操作该实例；
 // nullptr = 解绑（此后 ECS 导出一律返回 kEcsNoWorld——M-SC3 热重载窗口的兜底）。
 void ecsSetWorld(scene::World* world);
+
+// 宿主侧活实例绑定（M-SC5，ecsSetWorld 模式推广；nullptr = 解绑，导出回 NoSource/NoClock）：
+//   - timeSetClock：Time 导出操作目标（viewer --script 场景模式接线 gameClock）；
+//   - inputSetState / inputSetActionMap：Input 导出操作目标。**不隐式建表**（拍板）——
+//     未绑一律 kInputNoSource；宿主不建 InputState 就没有键查询（viewer scene 模式
+//     现状：无注入管线，Input 保持未绑，脚本得 NoSource 即正确语义）。
+void timeSetClock(core::GameClock* clock);
+void inputSetState(core::InputState* state);
+void inputSetActionMap(core::ActionMap* map);
 
 // ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
 //

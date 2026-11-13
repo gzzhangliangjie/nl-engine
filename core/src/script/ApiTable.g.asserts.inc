@@ -20,3 +20,12 @@ static_assert(std::is_same_v<decltype(&nl_ecsAddTransform), int(*)(std::uint64_t
 static_assert(std::is_same_v<decltype(&nl_ecsTransformGet), int(*)(std::uint64_t, float*, float*, float*)>, "exports.api drift: Ecs.ecsTransformGet");
 static_assert(std::is_same_v<decltype(&nl_ecsTransformSet), int(*)(std::uint64_t, const float*, const float*, const float*)>, "exports.api drift: Ecs.ecsTransformSet");
 static_assert(std::is_same_v<decltype(&nl_ecsFindByName), int(*)(const char*, std::uint64_t*)>, "exports.api drift: Ecs.ecsFindByName");
+static_assert(std::is_same_v<decltype(&nl_timeGetState), int(*)(double*, double*, std::uint64_t*, int*)>, "exports.api drift: Time.timeGetState");
+static_assert(std::is_same_v<decltype(&nl_timeSetState), int(*)(int, double)>, "exports.api drift: Time.timeSetState");
+static_assert(std::is_same_v<decltype(&nl_inputActionFind), int(*)(const char*, std::uint32_t*)>, "exports.api drift: Input.inputActionFind");
+static_assert(std::is_same_v<decltype(&nl_inputActionBool), int(*)(std::uint32_t, int*, int*, int*)>, "exports.api drift: Input.inputActionBool");
+static_assert(std::is_same_v<decltype(&nl_inputActionFloat), int(*)(std::uint32_t, float*, float*)>, "exports.api drift: Input.inputActionFloat");
+static_assert(std::is_same_v<decltype(&nl_inputActionVec2), int(*)(std::uint32_t, float*, float*)>, "exports.api drift: Input.inputActionVec2");
+static_assert(std::is_same_v<decltype(&nl_inputKeyIsDown), int(*)(int, int*)>, "exports.api drift: Input.inputKeyIsDown");
+static_assert(std::is_same_v<decltype(&nl_logWrite), int(*)(int, const char*)>, "exports.api drift: Log.logWrite");
+static_assert(std::is_same_v<decltype(&nl_logSetFilter), int(*)(const char*, const char**)>, "exports.api drift: Log.logSetFilter");

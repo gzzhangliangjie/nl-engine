@@ -63,6 +63,24 @@ struct ApiTable
     void* ecsTransformSet;
     // Ecs.ecsFindByName — 按名查实体（findEntityByName 口径；未找到 id=0 且 rc=0）。rc：0=ok / 1=未绑 World / 4=非法参数
     void* ecsFindByName;
+    // Time.timeGetState — 时钟状态一次性读回（simTime 逻辑秒 / frameDt 本渲染帧缩放截断后 delta 秒 / tickCount 已执行逻辑帧 / paused 0|1）。rc：0=ok / 1=未绑 Clock / 4=非法参数
+    void* timeGetState;
+    // Time.timeSetState — 时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale：<0=不变，否则 setTimeScale 钳制口径（[0,1024]，NaN 不变——NaN>=0 恒假天然防呆）。rc：0=ok / 1=未绑 Clock
+    void* timeSetState;
+    // Input.inputActionFind — ActionMap::find（预声明口径）。rc：0=ok（id 有效）/ 1=未绑 ActionMap / 2=动作不存在（id=kInvalidAction=0xFFFFFFFF）
+    void* inputActionFind;
+    // Input.inputActionBool — Bool 动作冻结值三态读回（boolValue/boolJustPressed/boolJustReleased，update() 冻结口径）。rc：0=ok / 1=未绑 ActionMap / 2=非法 id 或动作类型非 Bool / 4=非法参数
+    void* inputActionBool;
+    // Input.inputActionFloat — Float 动作冻结值读回（floatValue/floatDelta）。rc 同 inputActionBool（2=非法 id 或类型非 Float）
+    void* inputActionFloat;
+    // Input.inputActionVec2 — Vec2 动作冻结值读回（vec2Value/vec2Delta，x,y 序）。rc 同 inputActionBool（2=非法 id 或类型非 Vec2）
+    void* inputActionVec2;
+    // Input.inputKeyIsDown — InputState::isDown（GLFW 键码；越界键码 = down 0，InputState 防御性口径）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+    void* inputKeyIsDown;
+    // Log.logWrite — 经 log::writeCh("script") 写日志。level 0..5 = Trace/Debug/Info/Warn/Error/Fatal。rc：0=ok / 2=非法参数（level 越界或 message 空）
+    void* logWrite;
+    // Log.logSetFilter — 设置过滤指令（setFilter 全局面替换口径："nl:info,renderer=warn"）。rc：0=ok / 1=指令非法（error=原因文本，静态缓冲账本）/ 4=非法参数
+    void* logSetFilter;
 };
 
 } // namespace nl::script

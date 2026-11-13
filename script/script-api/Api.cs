@@ -15,7 +15,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.4.0";   // M-SC4：接线层改生成物（exports.api 单源）
+        public const string Version = "0.5.0";   // M-SC5：Time/Input/Log 域绑定面（v3 9 导出）
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -309,5 +309,164 @@ namespace Nl.Script.Api
         public int AddTransform() => Ecs.AddTransform(Id);
         public int GetTransform(out TransformData t) => Ecs.TransformGet(Id, out t);
         public int SetTransform(in TransformData t) => Ecs.TransformSet(Id, t);
+    }
+
+    /// <summary>Time 导出错误码（与 nl/script/Bindings.hpp kTime* 一致）。</summary>
+    public static class TimeCode
+    {
+        public const int Ok = 0;
+        public const int NoClock = 1;      // 宿主未绑 GameClock
+        public const int BadArg = 4;       // 非法参数
+    }
+
+    /// <summary>
+    /// Time 绑定面（M-SC5）。操作目标 = 宿主侧 timeSetClock 绑定的 GameClock
+    /// （viewer --script 场景模式接线）。未绑 = TimeCode.NoClock，不抛异常不崩。
+    /// </summary>
+    public static unsafe class Time
+    {
+        /// <summary>时钟状态一次性读回。0=ok；simTime 逻辑秒 / frameDt 渲染帧 delta 秒 / tickCount 逻辑帧数 / paused。</summary>
+        public static int GetState(out double simTime, out double frameDt, out ulong tickCount, out bool paused)
+        {
+            simTime = 0; frameDt = 0; tickCount = 0; paused = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<TimeWiring.TimeGetStateFn>(TimeWiring._timeGetState);
+            int rc = fn(out simTime, out frameDt, out tickCount, out int p);
+            if (rc == TimeCode.Ok) paused = p != 0;
+            return rc;
+        }
+
+        /// <summary>时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale&lt;0=不变（NaN 不变）。</summary>
+        public static int SetState(int paused, double timeScale) =>
+            Marshal.GetDelegateForFunctionPointer<TimeWiring.TimeSetStateFn>(TimeWiring._timeSetState)(paused, timeScale);
+
+        /// <summary>逻辑时间（秒）；未绑返回 0 且 rc=NoClock。</summary>
+        public static int SimTime(out double t)
+        {
+            t = 0;
+            var rc = GetState(out t, out _, out _, out _);
+            return rc;
+        }
+
+        /// <summary>暂停（SetState(1, -1)）。</summary>
+        public static int Pause() => SetState(1, -1.0);
+
+        /// <summary>继续（SetState(0, -1)）。</summary>
+        public static int Unpause() => SetState(0, -1.0);
+
+        /// <summary>设时间倍率（[0,1024] 钳制在 GameClock 内做；&lt;0 不变）。</summary>
+        public static int SetTimeScale(double scale) => SetState(-1, scale);
+    }
+
+    /// <summary>Input 导出错误码（与 nl/script/Bindings.hpp kInput* 一致）。</summary>
+    public static class InputCode
+    {
+        public const int Ok = 0;
+        public const int NoSource = 1;     // 宿主未绑 ActionMap/InputState（不隐式建表口径）
+        public const int NoAction = 2;     // 动作不存在或类型不符
+        public const int BadArg = 4;       // 非法参数
+    }
+
+    /// <summary>
+    /// Input 绑定面（M-SC5）。操作目标 = 宿主侧 inputSetActionMap / inputSetState 绑定的实例。
+    /// 动作值 = ActionMap::update 冻结口径（宿主每帧 update，脚本读冻结值）。
+    /// 未绑 = InputCode.NoSource，不隐式建表（拍板）。
+    /// </summary>
+    public static unsafe class Input
+    {
+        /// <summary>按名查动作（预声明口径）。0=ok；2=不存在（id = InvalidAction 0xFFFFFFFF）。</summary>
+        public static int ActionFind(string name, out uint id)
+        {
+            id = 0xFFFFFFFFu;
+            IntPtr namePtr = NativeMarshal.Utf8Alloc(name);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputActionFindFn>(InputWiring._inputActionFind);
+                return fn(namePtr, out id);
+            }
+            finally { NativeMarshal.Utf8Free(namePtr); }
+        }
+
+        /// <summary>Bool 动作冻结值三态读回。0=ok / 2=非法 id 或类型非 Bool。</summary>
+        public static int ActionBool(uint id, out bool value, out bool justPressed, out bool justReleased)
+        {
+            value = false; justPressed = false; justReleased = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputActionBoolFn>(InputWiring._inputActionBool);
+            int rc = fn(id, out int v, out int p, out int r);
+            if (rc == InputCode.Ok) { value = v != 0; justPressed = p != 0; justReleased = r != 0; }
+            return rc;
+        }
+
+        /// <summary>Float 动作冻结值读回。0=ok / 2=非法 id 或类型非 Float。</summary>
+        public static int ActionFloat(uint id, out float value, out float delta)
+        {
+            value = 0; delta = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputActionFloatFn>(InputWiring._inputActionFloat);
+            return fn(id, out value, out delta);
+        }
+
+        /// <summary>Vec2 动作冻结值读回（x,y 序）。0=ok / 2=非法 id 或类型非 Vec2。</summary>
+        public static int ActionVec2(uint id, out float x, out float y, out float dx, out float dy)
+        {
+            x = y = dx = dy = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputActionVec2Fn>(InputWiring._inputActionVec2);
+            float* v = stackalloc float[2];
+            float* d = stackalloc float[2];
+            int rc = fn(id, v, d);
+            if (rc == InputCode.Ok) { x = v[0]; y = v[1]; dx = d[0]; dy = d[1]; }
+            return rc;
+        }
+
+        /// <summary>键持续态（GLFW 键码；越界键码 down=false——InputState 防御性口径）。0=ok。</summary>
+        public static int KeyIsDown(int key, out bool down)
+        {
+            down = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputKeyIsDownFn>(InputWiring._inputKeyIsDown);
+            int rc = fn(key, out int d);
+            if (rc == InputCode.Ok) down = d != 0;
+            return rc;
+        }
+    }
+
+    /// <summary>Log 导出错误码（与 nl/script/Bindings.hpp kLog* 一致）。</summary>
+    public static class LogCode
+    {
+        public const int Ok = 0;
+        public const int BadFilter = 1;    // 过滤指令非法（Error 带原因文本）
+        public const int BadArg = 2;       // level 越界（0..5）或 message 空
+    }
+
+    /// <summary>
+    /// Log 绑定面（M-SC5）。走 nl::core::log 全局面，通道固定 "script"
+    /// （输出行 [nl:&lt;level&gt;|script] message——expectLog 锚可断）。
+    /// </summary>
+    public static unsafe class Log
+    {
+        /// <summary>level：0..5 = Trace/Debug/Info/Warn/Error/Fatal。0=ok / 2=level 越界或 message 空。</summary>
+        public static int Write(int level, string message)
+        {
+            IntPtr msgPtr = NativeMarshal.Utf8Alloc(message);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<LogWiring.LogWriteFn>(LogWiring._logWrite);
+                return fn(level, msgPtr);
+            }
+            finally { NativeMarshal.Utf8Free(msgPtr); }
+        }
+
+        /// <summary>设置过滤指令（全局面替换："nl:info,renderer=warn"）。
+        /// 0=ok / 1=指令非法（error=原因文本）/ 2=非法参数。</summary>
+        public static int SetFilter(string instruction, out string? error)
+        {
+            error = null;
+            IntPtr instrPtr = NativeMarshal.Utf8Alloc(instruction);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<LogWiring.LogSetFilterFn>(LogWiring._logSetFilter);
+                int rc = fn(instrPtr, out IntPtr errPtr);
+                if (rc == LogCode.BadFilter) error = NativeMarshal.Utf8ReadOrEmpty(errPtr);
+                return rc;
+            }
+            finally { NativeMarshal.Utf8Free(instrPtr); }
+        }
     }
 }

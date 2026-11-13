@@ -154,17 +154,101 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Time 域接线（生成物；ApiTable 偏移 16..17 = exports.api 声明序）。</summary>
+    internal static unsafe class TimeWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _timeGetState, _timeSetState;
+
+        /// <summary>时钟状态一次性读回（simTime 逻辑秒 / frameDt 本渲染帧缩放截断后 delta 秒 / tickCount 已执行逻辑帧 / paused 0|1）。rc：0=ok / 1=未绑 Clock / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int TimeGetStateFn(out double simTime, out double frameDt, out ulong tickCount, out int paused);
+
+        /// <summary>时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale：&lt;0=不变，否则 setTimeScale 钳制口径（[0,1024]，NaN 不变——NaN&gt;=0 恒假天然防呆）。rc：0=ok / 1=未绑 Clock</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int TimeSetStateFn(int paused, double timeScale);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _timeGetState = Marshal.ReadIntPtr(table, 16 * sizeof(IntPtr));
+            _timeSetState = Marshal.ReadIntPtr(table, 17 * sizeof(IntPtr));
+        }
+    }
+
+    /// <summary>Input 域接线（生成物；ApiTable 偏移 18..22 = exports.api 声明序）。</summary>
+    internal static unsafe class InputWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _inputActionFind, _inputActionBool, _inputActionFloat, _inputActionVec2, _inputKeyIsDown;
+
+        /// <summary>ActionMap::find（预声明口径）。rc：0=ok（id 有效）/ 1=未绑 ActionMap / 2=动作不存在（id=kInvalidAction=0xFFFFFFFF）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputActionFindFn(IntPtr name, out uint id);
+
+        /// <summary>Bool 动作冻结值三态读回（boolValue/boolJustPressed/boolJustReleased，update() 冻结口径）。rc：0=ok / 1=未绑 ActionMap / 2=非法 id 或动作类型非 Bool / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputActionBoolFn(uint id, out int value, out int pressed, out int released);
+
+        /// <summary>Float 动作冻结值读回（floatValue/floatDelta）。rc 同 inputActionBool（2=非法 id 或类型非 Float）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputActionFloatFn(uint id, out float value, out float delta);
+
+        /// <summary>Vec2 动作冻结值读回（vec2Value/vec2Delta，x,y 序）。rc 同 inputActionBool（2=非法 id 或类型非 Vec2）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputActionVec2Fn(uint id, float* value, float* delta);
+
+        /// <summary>InputState::isDown（GLFW 键码；越界键码 = down 0，InputState 防御性口径）。rc：0=ok / 1=未绑 InputState / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputKeyIsDownFn(int key, out int down);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _inputActionFind = Marshal.ReadIntPtr(table, 18 * sizeof(IntPtr));
+            _inputActionBool = Marshal.ReadIntPtr(table, 19 * sizeof(IntPtr));
+            _inputActionFloat = Marshal.ReadIntPtr(table, 20 * sizeof(IntPtr));
+            _inputActionVec2 = Marshal.ReadIntPtr(table, 21 * sizeof(IntPtr));
+            _inputKeyIsDown = Marshal.ReadIntPtr(table, 22 * sizeof(IntPtr));
+        }
+    }
+
+    /// <summary>Log 域接线（生成物；ApiTable 偏移 23..24 = exports.api 声明序）。</summary>
+    internal static unsafe class LogWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _logWrite, _logSetFilter;
+
+        /// <summary>经 log::writeCh("script") 写日志。level 0..5 = Trace/Debug/Info/Warn/Error/Fatal。rc：0=ok / 2=非法参数（level 越界或 message 空）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int LogWriteFn(int level, IntPtr message);
+
+        /// <summary>设置过滤指令（setFilter 全局面替换口径："nl:info,renderer=warn"）。rc：0=ok / 1=指令非法（error=原因文本，静态缓冲账本）/ 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int LogSetFilterFn(IntPtr instruction, out IntPtr error);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _logWrite = Marshal.ReadIntPtr(table, 23 * sizeof(IntPtr));
+            _logSetFilter = Marshal.ReadIntPtr(table, 24 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter" };
 
         public static void InitAll(IntPtr table)
         {
             EngineWiring.Init(table);
             EcsWiring.Init(table);
+            TimeWiring.Init(table);
+            InputWiring.Init(table);
+            LogWiring.Init(table);
         }
     }
 } // namespace

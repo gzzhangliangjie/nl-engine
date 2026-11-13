@@ -3754,7 +3754,10 @@ int runScene(const Options& o) {
             ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
         // World 绑定必须先于 loadScript：Entry（装载期）就会 FindByName，
         // 未绑 World = EcsCode.NoWorld → Entry 返回非 0（M-GL4 实证教训）。
+        // M-SC5：Clock 同批绑定（Time 导出）；Input 不隐式建表（拍板口径）——
+        // scene 模式无注入管线，脚本调 Input.* 得 kInputNoSource 即正确语义。
         nl::script::ecsSetWorld(&world);
+        nl::script::timeSetClock(&gameClock);
         const auto lr2 = nl::script::ScriptHost::get().loadScript(
             fs::absolute(dll).string(), typeName);
         if (!lr2.ok) {

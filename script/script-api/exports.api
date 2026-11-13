@@ -10,8 +10,10 @@
 # 行格式：域 | 导出名 | 返回类型 | 参数表 | 文档
 #   参数表逗号分隔，每项「[in|out] 类型 名字」；类型词表（TYPEMAP 单源在 gen.py）：
 #     int   = C int / C# int；out = int*
+#     u32   = std::uint32_t / C# uint；out = u32*
 #     u64   = std::uint64_t / C# ulong；out = u64*
 #     f32   = float
+#     f64   = double
 #     str   = const char*（UTF-8，'\0' 结尾）；out str = const char**
 #             （C++ 静态缓冲，「下次同线程调用前有效」，C# 立即拷贝——生命周期账本）
 #     bufN  = 定长 float 数组指针（N 个元素）；in = const float*，out = float*
@@ -46,3 +48,18 @@ Ecs | ecsAddTransform | int | in u64 id | 挂 TransformComponent。rc：0=ok / 1
 Ecs | ecsTransformGet | int | in u64 id, out buf3 pos, out buf3 rot, out buf3 scale | 局部 TRS 读回（rot=quat x,y,z,w）。任一 out 指针可 NULL 跳过该组。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=组件缺失
 Ecs | ecsTransformSet | int | in u64 id, in buf3 pos, in buf3 rot, in buf3 scale | 局部 TRS 写入。任一 in 指针可 NULL 跳过该组。rc 同 ecsTransformGet
 Ecs | ecsFindByName | int | in str name, out u64 id | 按名查实体（findEntityByName 口径；未找到 id=0 且 rc=0）。rc：0=ok / 1=未绑 World / 4=非法参数
+
+# ---- v3 Time / Input / Log（M-SC5；ApiTable 偏移 16..24）----
+# Time 操作目标 = 宿主侧 timeSetClock 绑定的 GameClock；Input = inputSetState/
+# inputSetActionMap 绑定的实例（未绑 = NoSource，不隐式建表——拍板口径）；
+# Log 走 nl::core::log 全局面，通道 = "script"（writeCh 口径）。
+
+Time | timeGetState | int | out f64 simTime, out f64 frameDt, out u64 tickCount, out int paused | 时钟状态一次性读回（simTime 逻辑秒 / frameDt 本渲染帧缩放截断后 delta 秒 / tickCount 已执行逻辑帧 / paused 0|1）。rc：0=ok / 1=未绑 Clock / 4=非法参数
+Time | timeSetState | int | in int paused, in f64 timeScale | 时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale：<0=不变，否则 setTimeScale 钳制口径（[0,1024]，NaN 不变——NaN>=0 恒假天然防呆）。rc：0=ok / 1=未绑 Clock
+Input | inputActionFind | int | in str name, out u32 id | ActionMap::find（预声明口径）。rc：0=ok（id 有效）/ 1=未绑 ActionMap / 2=动作不存在（id=kInvalidAction=0xFFFFFFFF）
+Input | inputActionBool | int | in u32 id, out int value, out int pressed, out int released | Bool 动作冻结值三态读回（boolValue/boolJustPressed/boolJustReleased，update() 冻结口径）。rc：0=ok / 1=未绑 ActionMap / 2=非法 id 或动作类型非 Bool / 4=非法参数
+Input | inputActionFloat | int | in u32 id, out f32 value, out f32 delta | Float 动作冻结值读回（floatValue/floatDelta）。rc 同 inputActionBool（2=非法 id 或类型非 Float）
+Input | inputActionVec2 | int | in u32 id, out buf2 value, out buf2 delta | Vec2 动作冻结值读回（vec2Value/vec2Delta，x,y 序）。rc 同 inputActionBool（2=非法 id 或类型非 Vec2）
+Input | inputKeyIsDown | int | in int key, out int down | InputState::isDown（GLFW 键码；越界键码 = down 0，InputState 防御性口径）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+Log | logWrite | int | in int level, in str message | 经 log::writeCh("script") 写日志。level 0..5 = Trace/Debug/Info/Warn/Error/Fatal。rc：0=ok / 2=非法参数（level 越界或 message 空）
+Log | logSetFilter | int | in str instruction, out str error | 设置过滤指令（setFilter 全局面替换口径："nl:info,renderer=warn"）。rc：0=ok / 1=指令非法（error=原因文本，静态缓冲账本）/ 4=非法参数

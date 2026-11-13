@@ -37,12 +37,14 @@ AUTOGEN = "由 tools/scriptapi/gen.py 从 script/script-api/exports.api 生成�
 
 # ---- TYPEMAP（生命周期账本的类型侧单源；所有权规则见计划「生命周期账本」）----
 
-PRIM_CPP = {"int": "int", "u64": "std::uint64_t", "f32": "float"}
-PRIM_CS = {"int": "int", "u64": "ulong", "f32": "float"}
-PRIM_SIZE = {"int": 4, "u64": 8, "f32": 4}
+PRIM_CPP = {"int": "int", "u64": "std::uint64_t", "u32": "std::uint32_t",
+            "f32": "float", "f64": "double"}
+PRIM_CS = {"int": "int", "u64": "ulong", "u32": "uint",
+           "f32": "float", "f64": "double"}
+PRIM_SIZE = {"int": 4, "u64": 8, "u32": 4, "f32": 4, "f64": 8}
 BUF_RE = re.compile(r"^buf(\d+)$")
 # type 段字段只收纯 POD（Blittable 一档）；str/ptr 禁止（非 POD 需求显式拆参数）
-POD_FIELD_TYPES = {"int", "u64", "f32"}
+POD_FIELD_TYPES = {"int", "u64", "u32", "f32", "f64"}
 
 
 def pascal(s: str) -> str:
@@ -103,7 +105,7 @@ def parse_params(spec, lineno, pod_names):
             raise SystemExit(f"[scriptapi] exports.api:{lineno} 方向只能是 in/out：{item!r}")
         count = is_buf(ty)
         if count is None and ty not in PRIM_CPP and ty != "str" and ty != "ptr" and ty not in pod_names:
-            raise SystemExit(f"[scriptapi] exports.api:{lineno} 未知类型 {ty!r}（词表：int/u64/f32/str/bufN/ptr 或 type 段 POD 名）")
+            raise SystemExit(f"[scriptapi] exports.api:{lineno} 未知类型 {ty!r}（词表：int/u32/u64/f32/f64/str/bufN/ptr 或 type 段 POD 名）")
         params.append(Param(direction, ty, name, count))
     return params
 
@@ -149,8 +151,8 @@ def parse_decl(path):
             raise SystemExit(f"[scriptapi] exports.api:{lineno} 域名/导出名只许标识符：{domain}/{name}")
         if name in seen_names:
             raise SystemExit(f"[scriptapi] exports.api:{lineno} 导出名重复：{name}")
-        if ret not in ("int", "str", "u64", "f32"):
-            raise SystemExit(f"[scriptapi] exports.api:{lineno} 返回类型只支持 int/str/u64/f32：{ret!r}")
+        if ret not in ("int", "str", "u64", "u32", "f32", "f64"):
+            raise SystemExit(f"[scriptapi] exports.api:{lineno} 返回类型只支持 int/str/u32/u64/f32/f64：{ret!r}")
         seen_names.add(name)
         exports.append(Export(domain, name, ret, parse_params(param_spec, lineno, pod_types), doc))
     if not exports:

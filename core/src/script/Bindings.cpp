@@ -6,6 +6,10 @@
 #include "nl/script/Bindings.hpp"
 
 #include "nl/core/console.hpp"
+#include "nl/core/game_clock.hpp"
+#include "nl/core/input.hpp"
+#include "nl/core/action_map.hpp"
+#include "nl/core/log.hpp"
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 
@@ -256,6 +260,121 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
     return kEcsOk;
 }
 
+// ---- v3 Time 导出（M-SC5；操作目标 = timeSetClock 绑定的 GameClock）----
+
+core::GameClock* g_clock = nullptr;
+
+extern "C" int nl_timeGetState(double* outSimTime, double* outFrameDt,
+                               std::uint64_t* outTickCount, int* outPaused) {
+    if (!outSimTime || !outFrameDt || !outTickCount || !outPaused) return kTimeBadArg;
+    *outSimTime = 0.0;
+    *outFrameDt = 0.0;
+    *outTickCount = 0;
+    *outPaused = 0;
+    if (!g_clock) return kTimeNoClock;
+    *outSimTime = g_clock->simTime();
+    *outFrameDt = g_clock->frameDt();
+    *outTickCount = g_clock->tickCount();
+    *outPaused = g_clock->paused() ? 1 : 0;
+    return kTimeOk;
+}
+
+extern "C" int nl_timeSetState(int paused, double timeScale) {
+    if (!g_clock) return kTimeNoClock;
+    // paused：-1=不变（约定哨兵）；0/1 显式设；其它越界值宽容当作不变（防呆）
+    if (paused == 0) g_clock->setPaused(false);
+    else if (paused == 1) g_clock->setPaused(true);
+    // timeScale < 0 = 不变；NaN 恒 false 天然跳过（setTimeScale 内部还有钳制兜底）
+    if (timeScale >= 0.0) g_clock->setTimeScale(timeScale);
+    return kTimeOk;
+}
+
+// ---- v3 Input 导出（M-SC5；操作目标 = inputSetActionMap / inputSetState 绑定的实例）----
+
+core::InputState* g_inputState = nullptr;
+core::ActionMap* g_actionMap = nullptr;
+
+// 动作 id 有效性 + 类型校验（name() 非法 id = nullptr 是 ActionMap 文档口径）。
+bool actionValid(core::ActionMap* map, core::ActionMap::ActionId id, core::ActionMap::Type want) {
+    if (id == core::ActionMap::kInvalidAction) return false;
+    if (map->name(id) == nullptr) return false;
+    return map->type(id) == want;
+}
+
+extern "C" int nl_inputActionFind(const char* name, std::uint32_t* outId) {
+    if (!name || !outId) return kInputBadArg;
+    *outId = core::ActionMap::kInvalidAction;
+    if (!g_actionMap) return kInputNoSource;
+    const auto id = g_actionMap->find(name);
+    if (id == core::ActionMap::kInvalidAction) return kInputNoAction;
+    *outId = id;
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionBool(std::uint32_t id, int* outValue, int* outPressed, int* outReleased) {
+    if (!outValue || !outPressed || !outReleased) return kInputBadArg;
+    *outValue = 0; *outPressed = 0; *outReleased = 0;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Bool)) return kInputNoAction;
+    *outValue = g_actionMap->boolValue(id) ? 1 : 0;
+    *outPressed = g_actionMap->boolJustPressed(id) ? 1 : 0;
+    *outReleased = g_actionMap->boolJustReleased(id) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionFloat(std::uint32_t id, float* outValue, float* outDelta) {
+    if (!outValue || !outDelta) return kInputBadArg;
+    *outValue = 0.0f; *outDelta = 0.0f;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Float)) return kInputNoAction;
+    *outValue = g_actionMap->floatValue(id);
+    *outDelta = g_actionMap->floatDelta(id);
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionVec2(std::uint32_t id, float* outValue2, float* outDelta2) {
+    if (!outValue2 || !outDelta2) return kInputBadArg;
+    outValue2[0] = outValue2[1] = 0.0f;
+    outDelta2[0] = outDelta2[1] = 0.0f;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Vec2)) return kInputNoAction;
+    const auto v = g_actionMap->vec2Value(id);
+    const auto d = g_actionMap->vec2Delta(id);
+    outValue2[0] = v.x; outValue2[1] = v.y;
+    outDelta2[0] = d.x; outDelta2[1] = d.y;
+    return kInputOk;
+}
+
+extern "C" int nl_inputKeyIsDown(int key, int* outDown) {
+    if (!outDown) return kInputBadArg;
+    *outDown = 0;
+    if (!g_inputState) return kInputNoSource;
+    // 越界键码：InputState::isDown 防御性返回 false（文档口径），此处透传
+    *outDown = g_inputState->isDown(key) ? 1 : 0;
+    return kInputOk;
+}
+
+// ---- v3 Log 导出（M-SC5；nl::core::log 全局面，通道 "script"）----
+
+extern "C" int nl_logWrite(int level, const char* message) {
+    if (!message) return kLogBadArg;
+    if (level < 0 || level > 5) return kLogBadArg;   // 0..5 = Trace..Fatal
+    using core::log::Level;
+    const Level lv = static_cast<Level>(level);
+    core::log::writeCh(lv, "script", message);
+    return kLogOk;
+}
+
+extern "C" int nl_logSetFilter(const char* instruction, const char** outError) {
+    if (!instruction || !outError) return kLogBadArg;
+    *outError = nullptr;
+    std::string err;
+    if (core::log::setFilter(instruction, &err)) return kLogOk;
+    ownedBuffer() = std::move(err);   // 静态缓冲账本：下次调用前有效，C# 立即拷
+    *outError = ownedBuffer().c_str();
+    return kLogBadFilter;
+}
+
 } // namespace
 
 // ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
@@ -264,6 +383,20 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
 
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
+}
+
+// ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----
+
+void timeSetClock(core::GameClock* clock) {
+    g_clock = clock;
+}
+
+void inputSetState(core::InputState* state) {
+    g_inputState = state;
+}
+
+void inputSetActionMap(core::ActionMap* map) {
+    g_actionMap = map;
 }
 
 // ---- M-SC3 脚本命令登记表公开接口（存储 = 匿名 namespace 顶部的 scriptCommandTable）----

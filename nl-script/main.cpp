@@ -37,15 +37,26 @@
 //        s8f 连续 reload x3 无泄漏（GetProcessHandleCount 漂移阈值）/
 //        s8g unloadScript weakref 校验（完全卸载）/ s8h 卸载后命令 UnknownCommand
 //            + C++ 状态仍可用（ECS 导出/内建命令）
+//     s9 Time/Input/Log 绑定（M-SC5，需第 5 个参数给出 timeinput 示例工程目录）：
+//        s9a C# 读时钟锚（tick x3）+ SetState 控制读回 + 哨兵语义（-1 不变）/
+//        s9a ActionFind 三型冻结值（W/D 喂键 update 后 Bool/Float/Vec2）+
+//            NoAction 负向（不存在 / 类型不符）+ KeyIsDown（含越界键码防御）/
+//        s9a Log.Write 通道 "script" + level 越界 BadArg + SetFilter 生效与
+//            非法指令显式报错（error 带原因）/
+//        s9b 解绑路径：timeSetClock/inputSetState/inputSetActionMap(nullptr) ->
+//            NoClock/NoSource（不隐式建表拍板），Log 全局面不受影响
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap
+//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput
 //   nl-script run script/examples/hello --args ok
 //   nl-script run script/examples/console --api
 //   nl-script run script/examples/ecs --api
 //   nl-script check script/examples/hello
 
 #include "nl/core/log.hpp"
+#include "nl/core/game_clock.hpp"   // s9 Time 导出验收（M-SC5）
+#include "nl/core/input.hpp"        // s9 Input 导出验收（InputState 三态表）
+#include "nl/core/action_map.hpp"   // s9 ActionMap（注意：不在 input.hpp——动作映射独立头）
 #include "nl/core/console.hpp"
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
@@ -227,7 +238,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 // ---- selftest ----
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
-                const fs::path& bootstrapDir) {
+                const fs::path& bootstrapDir, const fs::path& timeDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -825,6 +836,89 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s9 Time / Input / Log 绑定（M-SC5；timeDir 为空 = 跳过，同 s6/s7/s8 口径）----
+    if (!timeDir.empty()) {
+        if (!dotnetBuild(timeDir.string(), {})) {
+            expectTrue(false, "s9-pre dotnet build timeinput example");
+            std::printf("nl-script selftest: FAIL (time/input/log binding build)\n");
+            return 1;
+        }
+        auto tso = locateOutput(timeDir, {});
+        expectTrue(tso.has_value(), "s9-pre locate TimeInputScript build output");
+        if (tso) {
+            const std::string tiType = "NlScript.Examples.TimeInputScript, " + tso->assemblyName;
+            nl::script::EntryPointFn boundEntry = nullptr, unboundEntry = nullptr;
+            result = vm->getEntryPoint(tso->assemblyDll.string(), tiType, "BoundProbe", &boundEntry);
+            result = vm->getEntryPoint(tso->assemblyDll.string(), tiType, "UnboundProbe", &unboundEntry);
+            expectTrue(result.ok && unboundEntry != nullptr, "s9-pre locate binding entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry9 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 宿主活实例（static：selftest 进程生命周期；生产宿主同款时序：
+                // 建实例 -> 喂状态 -> 绑定 -> 调脚本入口。ActionMap 未绑 = NoSource
+                // 的负向语义在 s9b 解绑路径验收——不隐式建表拍板口径）。
+                static nl::core::GameClock clock9;
+                static nl::core::InputState input9;
+                static nl::core::ActionMap map9;
+                // 动作面（键码 = M-I0 selftest 锚定数值：W=87 S=83 A=65 D=68）
+                const auto aBool9 = map9.define("s9bool", nl::core::ActionMap::Type::Bool);
+                map9.bindKey(aBool9, 87);
+                const auto aFloat9 = map9.define("s9float", nl::core::ActionMap::Type::Float);
+                map9.bindKey(aFloat9, 87, 1.0f);
+                map9.bindKey(aFloat9, 83, -1.0f);
+                const auto aVec9 = map9.define("s9vec2", nl::core::ActionMap::Type::Vec2);
+                map9.bindAxisKey(aVec9, 68, 0, 1.0f);
+                map9.bindAxisKey(aVec9, 65, 0, -1.0f);
+                input9.feedKey(87, true);
+                input9.feedKey(68, true);
+                map9.update(input9);   // 冻结（ActionMap 帧节奏口径；脚本读冻结值）
+                nl::script::timeSetClock(&clock9);
+                nl::script::inputSetState(&input9);
+                nl::script::inputSetActionMap(&map9);
+
+                // 时钟锚：tick(16.6667ms) x3 → tickCount=3 / simTime=0.05（double 确定性）
+                for (int i = 0; i < 3; ++i) clock9.tick(16.6667, [](double, std::uint64_t) {});
+
+                // s9a：绑定路径全断言（C# 读锚 + 控制 + NoAction/BadFilter 负向）
+                {
+                    auto [hit, ret] = callEntry9(boundEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s9a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s9a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // C++ 侧终态核（脚本 SetState(0,-1)：unpause + 倍率 -1 哨兵保持 2.5）
+                expectTrue(!clock9.paused(), "s9a2 clock unpaused after script SetState(0,-1)");
+                expectTrue(clock9.timeScale() == 2.5, "s9a2 timeScale kept 2.5 (-1 sentinel)");
+
+                // setFilter 全局生效核（C# SetFilter("nl:warn") → 全局缺省 Warn）+ 还原
+                expectTrue(nl::core::log::level() == nl::core::log::Level::Warn,
+                           "s9a3 C# SetFilter(\"nl:warn\") -> global default Warn");
+                expectTrue(nl::core::log::filterInstruction() == "nl:warn",
+                           "s9a3 filterInstruction readback norm form");
+                nl::core::log::setFilter("nl:info");   // 还原（进程卫生，s9b 前复位）
+
+                // s9b：解绑路径（nullptr = NoClock/NoSource；Log 全局面不受影响）
+                nl::script::timeSetClock(nullptr);
+                nl::script::inputSetState(nullptr);
+                nl::script::inputSetActionMap(nullptr);
+                {
+                    auto [hit, ret] = callEntry9(unboundEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s9b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -887,7 +981,8 @@ int main(int argc, char** argv) {
         const fs::path consoleDir = argc >= 4 ? fs::weakly_canonical(argv[3]) : fs::path();
         const fs::path ecsDir = argc >= 5 ? fs::weakly_canonical(argv[4]) : fs::path();
         const fs::path bootstrapDir = argc >= 6 ? fs::weakly_canonical(argv[5]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir);
+        const fs::path timeDir = argc >= 7 ? fs::weakly_canonical(argv[6]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir);
     }
     usage();
     return 2;
