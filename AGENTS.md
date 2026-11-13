@@ -107,7 +107,7 @@
    - **工具版本** = 展示台网页 `kind:"tool"` 用例（点运行实跑、输出展开；usage / 正向 / 负向三条起步，`expectExit` 约定 0/1/2）+ `docs/s*/...-TOOLS-GUIDE.md` 式归档。工具不产 GPU 截图时，也要有从工具真实输出生成的证据图（cases.json `preview` 静态图，不许手绘示意）。
 3. **每轮迭代必须更新 `example/`**：基线 PNG + `run.bat` 进 `example/<版本>/`；验收 / tag 前跑 `python tools/showcase/server.py --check` 退出 0 才放行（以 `renderer/src/renderer.cpp` 的 `kStage` 判定阶段）。**覆盖边界（2026-11-10 M9.0 实读澄清）**：`--check` 只校验 `kStage` 对应的那一张版本卡；若本里程碑按拍板**不 bump `kStage`**（如 M9.0 保持 `S8.2`），新版本卡不在其覆盖范围内 —— 此时新卡齐备必须由 `example/<版本>/run.bat verify` + `regression.py --only <版本>` 双重机械校验，`--check` 只用来证明旧阶段没回归，不得当成新卡已验收的证据。
 4. **回归按需跑，非必要不跑（2026-11-08 用户拍板，覆盖一切「顺手跑全量」的惯性）**：
-   - **默认不跑回归**。改了什么就只跑受影响的几条关键用例：`python tools/regression.py --only <版本>[/用例]`（可叠加 `--backend` 单后端）挑 2~3 条即可。
+   - **默认不跑回归**。改了什么就只跑受影响的几条关键用例：`python tools/regression.py --only <版本>[/用例]`（可叠加 `--backend` 单后端）挑 2~3 条即可。**`--backend` 大小写不敏感**（2026-11-14 拍板，M15.2 事故：`--backend VULKAN` 炸 usage 浪费一次执行）——工具内已归一小写，DX12/VULKAN/Vulkan 均合法，无需再手工转小写。
    - **全量总闸（双后端 × 全部历史用例）只在打 tag 收口放行时跑一次**（M0.9 起生效，用 `--jobs N` 默认 4 提速）。除此之外任何场景——包括「验证 regression 工具本身的改动」——**禁止起全量**，一律小子集验证。
    - 并行口径：用例间并行、同用例双后端串行（工具用例写共享路径，同用例并行会打架）。
 4b. **ctest 单测命令统一带 `--repeat until-pass:3`（2026-11-10 实锤固化）**：便携 cmake 3.31.6 的 ctest 对 0.07s 级快进程**随机丢全部 stdout**（竞态特征：`Required regular expression not found` + `<end of output>` + 时长正常），挂时**产物文件已写出**（进程实际跑完，纯 ctest 捕获竞态，python subprocess 直拉同命令 100/100 全过实锤）。凡 ctest 报 missing anchor / 空输出失败，先带 `--repeat until-pass:3` 重跑再定性——竞态重试即绿，**真回归稳定挂重试后仍挂，不会被此闸掩盖**。判别两族用 python 直拉对照：直拉也挂 = 真秒退（0xC0000409 族），直拉全过 = ctest 竞态。

@@ -337,7 +337,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="nl-engine M0.9 full regression gate")
     ap.add_argument("--only", default=None, metavar="VERSION[/CASE]",
                     help="limit to one version (m0.5) or case (m0.5/nohud)")
-    ap.add_argument("--backend", choices=BACKENDS, default=None)
+    # 2026-11-14 拍板：--backend 大小写不敏感（VULKAN/Vulkan/DX12 均可），
+    # 归一小写后再校验——整条命令因大小写炸 usage 属浪费一次执行。
+    ap.add_argument("--backend", type=str.lower, choices=BACKENDS, default=None)
     ap.add_argument("--jobs", type=int, default=4,
                     help="parallel cases (default 4; 1 = serial, 最保守)")
     ap.add_argument("--report", default=str(DEFAULT_REPORT_MD),
