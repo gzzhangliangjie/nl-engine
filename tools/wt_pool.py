@@ -121,12 +121,18 @@ TRACKS = {
     },
     "camera": {
         "wt": "E:/UE_STUDY_2026/nl-engine-camera",
-        "branch": "feat/camera", "state": "closed",
+        "branch": "feat/camera", "state": "active",
         "note": "A-class track (camera family, game-dev step 4; plan "
                 "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM4); a段(M-CAM0/CAM1a/CAM3a) "
                 "merged 7b0f24a (tags cam-m0/cam-1a/cam-3a) + b段(M-CAM1b/CAM2b/CAM3b + "
                 "M-CAM4) merged 745ff83 (tag cam-b); wt removed 2026-11-11, branch kept; "
-                "free/chase/track/smooth/shake 视觉卡待带显示会话补",
+                "REOPENED 2026-11-13 by user instruction to finish the pending visual "
+                "cards; M-CAM5 closed (tag cam-m5 @ b0a2515, close gate + release --done "
+                "passed, report .wt_pool_close/camera-M-CAM5.md): four visual cards "
+                "cam-1b/cam-2b/cam-3b/cam-mcam4 + example/cam-b/ baselines + two latent "
+                "b-segment bug fixes (forwardFromView row/col, lookDirection by-value); "
+                "merge to master pending (master MILESTONES.md occupied by perf session); "
+                "wt kept pending user teardown decision",
     },
     "input": {
         "wt": "E:/UE_STUDY_2026/nl-engine-input",
