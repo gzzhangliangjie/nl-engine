@@ -28,10 +28,30 @@ Subcommands:
 
 Exit codes: 0 pass, 3 refused, 4 track not found / not active.
 """
+import datetime
 import json
 import os
 import subprocess
 import sys
+
+
+def _log_block(main_root, gate, reason):
+    """Append one machine line to the shared gate-blocks ledger (2026-11-14,
+    流程禁手台账 机械拦截区 source file). Best-effort: logging never alters
+    the reject decision or its exit code. main_root is shared across all
+    worktrees (git-common-dir parent), so the ledger is project-central."""
+    if not main_root:
+        return
+    try:
+        d = os.path.join(main_root, ".workbuddy")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "gate-blocks.log"), "a",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("%s gate=%s cwd=%s reason=%s\n"
+                    % (datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                       gate, os.getcwd().replace("\\", "/"), reason))
+    except Exception:
+        pass
 
 
 def _norm(p):
@@ -84,10 +104,12 @@ def cmd_check_build(script_path):
     root = tree_root_of(os.path.dirname(os.path.abspath(script_path)))
     if not root:
         print("WT-GATE FAIL: script is not inside any git tree: %s" % script_path)
+        _log_block(None, "check-build", "no-git-tree")
         return 3
     main_root = main_root_of(root)
     if not main_root:
         print("WT-GATE FAIL: cannot resolve main tree for %s" % root)
+        _log_block(None, "check-build", "no-main-root")
         return 3
     if _norm(root) == _norm(main_root):
         if os.environ.get("NL_BUILD_MAINREPO") == "1":
@@ -101,6 +123,7 @@ def cmd_check_build(script_path):
         print("    scripts\\wt.bat <track> build DX12")
         print("  Mainline (master) builds are deliberate only:")
         print("    set NL_BUILD_MAINREPO=1")
+        _log_block(main_root, "check-build", "main-repo-build-no-override")
         return 3
     busy = _busy(main_root)
     for track, entry in sorted(busy.items()):
@@ -111,6 +134,7 @@ def cmd_check_build(script_path):
             if branch and entry.get("branch") and branch != entry["branch"]:
                 print("WT-GATE FAIL: branch mismatch in claimed wt.")
                 print("  registry: %s   actual: %s" % (entry["branch"], branch))
+                _log_block(main_root, "check-build", "branch-mismatch")
                 return 3
             print("[nl:wt-gate] root=%s track=%s branch=%s milestone=%s"
                   % (root, track, branch or "?", entry.get("milestone", "?")))
@@ -119,6 +143,7 @@ def cmd_check_build(script_path):
     print("  tree: %s" % root)
     print("  active tracks: %s" % (", ".join(sorted(
         t for t, e in busy.items() if e.get("state") == "active")) or "(none)"))
+    _log_block(main_root, "check-build", "not-active-wt")
     return 3
 
 
@@ -130,10 +155,12 @@ def cmd_check_cmd(expect_track=None):
     root = tree_root_of(os.getcwd())
     if not root:
         print("WT-GATE FAIL: cwd is not inside any git tree: %s" % os.getcwd())
+        _log_block(None, "check-cmd", "no-git-tree")
         return 3
     main_root = main_root_of(root)
     if not main_root:
         print("WT-GATE FAIL: cannot resolve main tree for %s" % root)
+        _log_block(None, "check-cmd", "no-main-root")
         return 3
     if _norm(root) == _norm(main_root):
         if os.environ.get("NL_CMD_MAINREPO") == "1":
@@ -148,6 +175,7 @@ def cmd_check_cmd(expect_track=None):
         print("    cd /e/UE_STUDY_2026/nl-engine-<track> && python ...")
         print("  Deliberate mainline ops:")
         print("    set NL_CMD_MAINREPO=1")
+        _log_block(main_root, "check-cmd", "main-repo-cmd-no-override")
         return 3
     busy = _busy(main_root)
     for track, entry in sorted(busy.items()):
@@ -158,11 +186,13 @@ def cmd_check_cmd(expect_track=None):
             if branch and entry.get("branch") and branch != entry["branch"]:
                 print("WT-GATE FAIL: branch mismatch in claimed wt.")
                 print("  registry: %s   actual: %s" % (entry["branch"], branch))
+                _log_block(main_root, "check-cmd", "branch-mismatch")
                 return 3
             if expect_track and expect_track != track:
                 print("WT-GATE FAIL: track mismatch.")
                 print("  expected: %s   cwd tree belongs to: %s"
                       % (expect_track, track))
+                _log_block(main_root, "check-cmd", "track-mismatch")
                 return 3
             print("[nl:wt-gate] root=%s track=%s branch=%s milestone=%s"
                   % (root, track, branch or "?", entry.get("milestone", "?")))
@@ -171,6 +201,7 @@ def cmd_check_cmd(expect_track=None):
     print("  tree: %s" % root)
     print("  active tracks: %s" % (", ".join(sorted(
         t for t, e in busy.items() if e.get("state") == "active")) or "(none)"))
+    _log_block(main_root, "check-cmd", "not-active-wt")
     return 3
 
 

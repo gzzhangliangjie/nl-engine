@@ -49,4 +49,7 @@ echo "  Commits belong in your claimed worktree (feat/* branch):"
 echo "    git -C <wt-path> add ... && git -C <wt-path> commit ..."
 echo "  Deliberate mainline commit (registry/doc syncs on master):"
 echo "    set NL_COMMIT_MAINREPO=1   (cmd)   or   NL_COMMIT_MAINREPO=1 git commit ... (sh)"
+# 2026-11-14: gate-block ledger (流程禁手台账 机械拦截区 source). Best-effort.
+echo "$(date '+%F %T') gate=pre-commit cwd=$(pwd | sed 's|\\\\|/|g') reason=master-commit-while-claims-active active=$active" \
+  >> "$main_root/.workbuddy/gate-blocks.log" 2>/dev/null || true
 exit 1

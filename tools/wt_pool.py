@@ -125,8 +125,12 @@ TRACKS = {
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "closed",
-        "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
+        "branch": "feat/script", "state": "active",
+        "note": "M-SC0~SC3 merged to master 1b49b5f (tags m-sc0~m-sc3); "
+                "REOPENED 2026-11-13 by user decision to extend the glue-layer "
+                "API surface (M-SC4+: Input/Time/Log, Camera, scene+model "
+                "creation, Physics vehicle, Audio; static-facade ApiTable "
+                "tail-append unchanged); wt rebuilt at master 08a67c0",
     },
     "particles": {
         "wt": "", "branch": "feat/particles", "state": "closed",
@@ -509,6 +513,33 @@ def cmd_close(args):
         errors.append("docs/MILESTONES.md not found under cwd (run close from "
                       "the tree that holds the milestone entry).")
 
+    # -- 3b. 流程禁手台账 presence + gate-block count (2026-11-14, ported from
+    # rea_potato's 流程禁手台账 mechanism). Soft check here: the ledger lands on
+    # master first and only reaches feat branches at merge time, so a missing
+    # file in a wt warns instead of failing; --strict makes it fatal.
+    ledger_doc = os.path.join(os.getcwd(), "docs", "流程禁手台账.md")
+    ledger_ok = os.path.exists(ledger_doc)
+    if not ledger_ok and args.strict:
+        errors.append("docs/流程禁手台账.md not found in this tree (升格流程 "
+                      "要求收口批可见；--strict 模式下缺文件拒收口).")
+    gate_blocks = 0
+    try:
+        _gbl = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        if not os.path.isabs(_gbl):
+            _gbl = os.path.join(os.getcwd(), _gbl)
+        _gbl_path = os.path.join(os.path.normpath(os.path.dirname(
+            os.path.abspath(_gbl))), ".workbuddy", "gate-blocks.log")
+        if os.path.exists(_gbl_path):
+            with open(_gbl_path, "r", encoding="utf-8", errors="ignore") as f:
+                gate_blocks = sum(1 for ln in f if ln.strip())
+    except Exception:
+        pass
+    if not ledger_ok:
+        warn("docs/流程禁手台账.md not found in this tree; ledger check "
+             "skipped (fatal only under --strict).")
+
     # -- 4. example deliverable: baselines + run.bat + showcase --check
     evidence = []
     if args.version:
@@ -571,6 +602,12 @@ def cmd_close(args):
                      "待填：展示台 tool 卡 + TOOLS-GUIDE 归档；没有也要写「无工具交代物」"))
     lines.append(row(True, "③ MILESTONES 四栏台账",
                      "docs/MILESTONES.md 含 tag `%s`" % tag))
+    lines.append(row(ledger_ok,
+                     "③b 流程禁手台账",
+                     ("docs/流程禁手台账.md 在案（收口批有案发/升格动作的，"
+                      "须已在台账登记）；闸拦截累计 %d 次（.workbuddy/gate-blocks.log）"
+                      % gate_blocks) if ledger_ok
+                     else "待填：docs/流程禁手台账.md 不在本树（master 已立，merge 后自动满足）"))
     lines.append(row(False, "④ 固化文档",
                      "待填：新约定/铁律写回的 canonical 文档清单"))
     if evidence:
