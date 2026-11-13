@@ -5814,7 +5814,6 @@ static void shadowMul(const float* a, const float* b, float out[16]) {
 bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
                              const char* shaderSuffix, std::string& outError) {
     if (vsmReady_) return true;
-    nl::core::log::infoCh("scene", "vsm: stage-0 enter");   // 临时定位（收口前删）
 
     // ---- 场景 AABB（独立重读 nmesh，不碰 initVisbuf 基线路径）----
     // 正交灯视锥口径与 E1b.4 完全同款（AABB 放大 10% + 0.25 margin，见 runVsmDepthPass）。
@@ -5871,11 +5870,12 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         vsmFb_ = device->createFramebuffer(fbDesc);
         if (!vsmFb_) { outError = "createFramebuffer failed for vsm page pool"; return false; }
     }
-    nl::core::log::infoCh("scene", "vsm: stage-1 pool+fb done");   // 临时定位（收口前删）
     // M15.2：页池初值必须 1.0（最远）——HZB 构建读整池（含未分配页），垃圾初值
     // 偏近会把簇误剔、缓存页又不重画 → 永久缺块。旧路径未分配区永不采样故无此
     // 要求；clear 一次终身有效（MIN 混合语义不变，分配页先清后画照旧）。
-    if (false) {   // 二分：VK createBuffer AV 归因中（收口前恢复/定案）
+    // （当初 if(false) 只为二分 VK AV；根因已实锤 = Scene::shutdown UAF，与此
+    // 无关，2026-11-14 恢复。）
+    {
         const nvrhi::TextureSubresourceSet all(
             0, nvrhi::TextureSubresourceSet::AllMipLevels,
             0, nvrhi::TextureSubresourceSet::AllArraySlices);
@@ -5888,7 +5888,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         upload->close();
         device->executeCommandList(upload);
     }
-    nl::core::log::infoCh("scene", "vsm: stage-1c pool clear done");   // 临时定位（收口前删）
 
     // ---- 页表：StructuredBuffer<uint> 1024 项 = 4 级 × 256，初始全未分配 ----
     // entry = poolPageX | poolPageY<<8（vsm_common.slangh 编码；poolPageX/Y ∈ [0,32)）。
@@ -5912,7 +5911,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         upload->close();
         device->executeCommandList(upload);
     }
-    nl::core::log::infoCh("scene", "vsm: stage-1d pagetable done");   // 临时定位（收口前删）
 
     // ---- M15.1：请求位图（RWStructured<uint> 32 word = 4 级 × 256 bit）----
     // 帧内 UAV（csMark InterlockedOr）→ CopySource（copyBuffer 进回读环）轮转，
@@ -5989,7 +5987,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         vsmMarkConstants_ = device->createBuffer(mcDesc);
         if (!vsmMarkConstants_) { outError = "createBuffer failed for vsm mark constants"; return false; }
     }
-    nl::core::log::infoCh("scene", "vsm: stage-1e markbits+consts done");   // 临时定位（收口前删）
 
     // ---- M15.1：CPU 分配器初始态 + texel_L（init 定死）----
     // texel 尺寸帧间不漂移（UE SmallestWorldUnitsPerTexel 口径——texel 漂移会整体
@@ -6011,21 +6008,18 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         }
     }
 
-    nl::core::log::infoCh("scene", "vsm: stage-1f allocator done");   // 临时定位（收口前删）
     // ---- M15.2：间接阴影剔除资源（拍板 B 2026-11-14，写回 S15-PLAN）----
     // 必须先于深度 BindingSet 建（vsmDepthSet_ 的 t8 引用 vsmCullBufs_，绑空
     // 句柄必被 NVRHI 拒——mark set 懒建踩坑同款）。
     {
         // 簇球 SSBO（float4 × clusterCount；独立于 cull 模式的 clusterSpheres_）。
         if (vsmClusterSpheres.empty()) { outError = "vsm: no cluster bounds for cull"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1g pre-spheres size=", vsmClusterSpheres.size());   // 临时定位（收口前删）
         nvrhi::BufferDesc spDesc;
         spDesc.byteSize = static_cast<std::uint32_t>(vsmClusterSpheres.size() * sizeof(float));
         spDesc.structStride = 16;
         spDesc.debugName = "VsmClusterSpheres";
         vsmClusterSpheres_ = device->createBuffer(spDesc);
         if (!vsmClusterSpheres_) { outError = "createBuffer failed for vsm cluster spheres"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1m0 spheres");   // 临时定位（收口前删）
 
         // HZB：2048² 起 12 级 min 链，单 StructuredBuffer 分段（kHzbOffsets 双持）。
         nvrhi::BufferDesc hzDesc;
@@ -6036,7 +6030,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         hzDesc.debugName = "VsmHzb";
         vsmHzbBuf_ = device->createBuffer(hzDesc);
         if (!vsmHzbBuf_) { outError = "createBuffer failed for vsm hzb"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1m1 hzb");   // 临时定位（收口前删）
 
         // cullBufs：count/base/cursor + list + 溢出旗标（头 3072 word 每帧清零）。
         nvrhi::BufferDesc cbDesc;
@@ -6060,7 +6053,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         arDesc.debugName = "VsmCullArgs";
         vsmCullArgs_ = device->createBuffer(arDesc);
         if (!vsmCullArgs_) { outError = "createBuffer failed for vsm cull args"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1m2 cullBufs+args");   // 临时定位（收口前删）
 
         // dirty 页列表（uint4 = level,px,py,pad；CPU writeBuffer 每帧覆盖前段）。
         nvrhi::BufferDesc dlDesc;
@@ -6079,7 +6071,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         ccDesc.debugName = "VsmCullConstants";
         vsmCullConstants_ = device->createBuffer(ccDesc);
         if (!vsmCullConstants_) { outError = "createBuffer failed for vsm cull constants"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1m all buffers created");   // 临时定位（收口前删）
 
         // 初始态上传：簇球（恒 SRV，钉 permanent）+ args/cullBufs 零初值
         //（不钉——每帧 CopyDest→UAV→SRV/IndirectArgument 动态轮转，indirectArgs_
@@ -6103,7 +6094,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         upload->close();
         device->executeCommandList(upload);
     }
-    nl::core::log::infoCh("scene", "vsm: stage-1a bufs+upload done");   // 临时定位（收口前删）
     {
         // 4 个 compute PSO + 两套 layout/set（hzb set：b1+t6 页池+u1 hzb；
         // 剔除 set：b1+t4/t5/t7+u2 cullBufs+u3 args；hzbBuf 跨 set SRV/UAV 分绑）。
@@ -6134,7 +6124,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
             .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1));
         vsmHzbLayout_ = device->createBindingLayout(hzLayout);
         if (!vsmHzbLayout_) { outError = "createBindingLayout failed for vsm hzb"; return false; }
-        nl::core::log::infoCh("scene", "vsm: stage-1b cs+hzbLayout done");   // 临时定位（收口前删）
         {
             nvrhi::BindingSetDesc sd;
             sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, vsmCullConstants_))
@@ -6164,7 +6153,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
             vsmCullSet_ = device->createBindingSet(sd, vsmCullLayout_);
             if (!vsmCullSet_) { outError = "createBindingSet failed for vsm cull"; return false; }
         }
-        nl::core::log::infoCh("scene", "vsm: stage-2 cull sets done");   // 临时定位（收口前删）
         for (int i = 0; i < 4; ++i) {
             nvrhi::ComputePipelineDesc cpDesc;
             cpDesc.setComputeShader(cullShaders[i]);
@@ -6221,7 +6209,6 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         vsmDepthSet_ = device->createBindingSet(vdSet, vsmDepthLayout_);
         if (!vsmDepthSet_) { outError = "createBindingSet failed for vsm depth"; return false; }
     }
-    nl::core::log::infoCh("scene", "vsm: stage-3 depth set done");   // 临时定位（收口前删）
 
     // 深度管线：E1b.4 pipelineShadow_ 同款光栅口径——无 depth attachment（显式
     // 关深度/模板）+ R32F MIN 混合（instance 顺序无关）。cull 保持 M15.0 的 None
