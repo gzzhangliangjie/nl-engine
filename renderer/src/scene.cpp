@@ -1826,6 +1826,56 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
     return true;
 }
 
+// ---- M14A1（S14-A）：软光栅对照模式（Q-A1 = A1-A 拍板：全软对照，M14A2 才加
+// SW/HW 分流）。initVisbuf 基础链 + csSoftRaster compute 管线；visBuffer_/viz 链
+// 全部复用，帧路径 softRaster_ 分支以 dispatch 替换硬件 raster draw（scene.cpp
+// visbuf 分支 (4) 段），viz/resolve 逐位同链。三处参考口径见 S14A-SOFTRAST-PLAN §1。
+bool Scene::initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
+                           const char* nmeshFile, std::string& outError) {
+    if (!initVisbuf(device, shaderSuffix, "vsCull", "psCull", nmeshFile, false, outError))
+        return false;
+    softRaster_ = true;
+
+    const std::string csPath =
+        std::string(NL_SHADER_DIR) + "/soft_raster.cs." + shaderSuffix;
+    std::vector<std::uint8_t> csBlob;
+    if (!readFileBytes(csPath.c_str(), csBlob)) {
+        outError = "failed to load soft_raster.cs (" + std::string(shaderSuffix) +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc csDesc;
+    // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName（§2.4 两阶段规则）。
+    csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+    csSoftRaster_ = device->createShader(csDesc, csBlob.data(), csBlob.size());
+    if (!csSoftRaster_) { outError = "createShader failed for soft_raster.cs"; return false; }
+
+    // 布局 = visRasterLayout_ 同槽位表的 compute 版：b0(SceneConstants) +
+    // b1(VisConstants) + t1..t4(顶点池/局部索引/簇表/可见列表) + u0(visBuffer_)。
+    // §2.7 每管线单一 BindingSet——软硬两路是两条管线，各自一个 set（set 内容
+    // 同源同槽，set 对象随 visBuffer_ 重建在 ensureVisbufTargets 分建）。
+    nvrhi::BindingLayoutDesc rDesc;
+    rDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
+    softRasterLayout_ = device->createBindingLayout(rDesc);
+    if (!softRasterLayout_) { outError = "createBindingLayout failed for soft raster"; return false; }
+
+    nvrhi::ComputePipelineDesc pDesc;
+    pDesc.setComputeShader(csSoftRaster_).addBindingLayout(softRasterLayout_);
+    softRasterPSO_ = device->createComputePipeline(pDesc);
+    if (!softRasterPSO_) { outError = "createComputePipeline failed for soft raster"; return false; }
+
+    nl::core::log::infoCh("scene", "soft raster ready: ", nmeshFile,
+                          " | clusters=", clusterCount_, " | shader=", shaderSuffix);
+    return true;
+}
+
 // ---- M8.0（S8.0）：BLAS 预建（S8-PLAN；NVRHI 签名见该文件预研 §1 速查表）----
 bool Scene::initBlas(nvrhi::IDevice* device, const nl::core::NMeshData& nm,
                      const char* assetName, std::string& outError) {
@@ -5153,6 +5203,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
     if (w == 0 || h == 0) { outError = "visbuf: zero viewport"; return false; }
     if (visBuffer_ && visW_ == w && visH_ == h && visRasterSet_ && visVizSet_
+        && (!softRaster_ || softRasterSet_)
         && (!pulling_ || matResolveSet_)) return true;
     visW_ = w;
     visH_ = h;
@@ -5191,6 +5242,21 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_));
     visVizSet_ = device->createBindingSet(vSet, visVizLayout_);
     if (!visVizSet_) { outError = "createBindingSet failed for vis viz"; return false; }
+
+    // M14A1（S14-A）：软光栅 compute set——与 visRasterSet_ 同槽位同源（§2.7
+    // 每管线一个 set：软硬两路管线分建两个 set 对象，内容同构）。
+    if (softRaster_) {
+        nvrhi::BindingSetDesc sSet;
+        sSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+            .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, visConstants_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
+        softRasterSet_ = device->createBindingSet(sSet, softRasterLayout_);
+        if (!softRasterSet_) { outError = "createBindingSet failed for soft raster"; return false; }
+    }
 
     // M7.1 / M9.0：材质反解与 compute 直光共用同一份槽位表。visBuffer_ 换对象
     // 时 directComputeSet_ 也必须重建（drawShadow 另有尺寸版本闸兜底）。
@@ -6592,6 +6658,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 }
             }
             if (!visbufFailed_ && visRasterPSO_ &&
+                (!softRaster_ || (softRasterPSO_ && softRasterSet_)) &&
                 (shadow_ ? (directPSO_ != nullptr)
                          : (pulling_ ? (matResolvePSO_ != nullptr)
                                      : (visVizPSO_ != nullptr)))) {
@@ -6623,7 +6690,20 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 cmd->clearBufferUInt(visBuffer_, 0xFFFFFFFFu);
 
                 // (4) 簇光栅：PS 对 u64 做 InterlockedMin，深度测试照旧。
+                // M14A1（S14-A）：softRaster_ 分支 = compute 软光栅整场景（Q-A1
+                // 全软对照，硬件 raster 一行不动）。1 簇 1 workgroup（128 线程，
+                // 每线程 1 三角），dispatch = 总簇数（frustum 恒关 → visibleList_
+                // = 恒等全簇，bevy cull_clusters 分流留 M14A2）。
                 // M-PERF1：visRaster pass 计时（--pass-timing 关 = begin 直返 false）。
+                if (softRaster_) {
+                    const bool ptSoft = passTimers_.begin(cmd, PassTimers::kPassSoftRaster);
+                    cmd->setBufferState(visBuffer_, nvrhi::ResourceStates::UnorderedAccess);
+                    nvrhi::ComputeState sstate;
+                    sstate.setPipeline(softRasterPSO_).addBindingSet(softRasterSet_);
+                    cmd->setComputeState(sstate);
+                    cmd->dispatch(clusterCount_, 1, 1);
+                    if (ptSoft) passTimers_.end(cmd, PassTimers::kPassSoftRaster);
+                } else {
                 const bool ptVisRaster = passTimers_.begin(cmd, PassTimers::kPassVisRaster);
                 nvrhi::GraphicsState rstate;
                 rstate.setPipeline(visRasterPSO_)
@@ -6638,6 +6718,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 noteDraw();  // M-TR0 K1: draw-call counter
                 cmd->drawIndexedIndirect(0, 1);
                 if (ptVisRaster) passTimers_.end(cmd, PassTimers::kPassVisRaster);
+                }
 
                 // (5) reference ? 离线参考 : shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
                 if (reference_) {
@@ -8477,6 +8558,11 @@ void Scene::shutdown() {
     for (auto& t : matBaseColor_) t = nullptr;
     for (auto& t : matMR_) t = nullptr;
     materialTable_ = nullptr;
+    // M14A1（S14-A）：软光栅资源同口径（句柄必须先于 device 析构释放）。
+    csSoftRaster_ = nullptr;
+    softRasterLayout_ = nullptr;
+    softRasterSet_ = nullptr;
+    softRasterPSO_ = nullptr;
     for (auto& b : modelBatches_) {
         b.set = nullptr;
         b.lightConstants = nullptr;

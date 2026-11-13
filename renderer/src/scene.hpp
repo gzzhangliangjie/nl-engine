@@ -335,6 +335,14 @@ public:
                     const char* vsEntry, const char* psEntry,
                     const char* nmeshFile, bool pulling, std::string& outError);
 
+    // M14A1（S14-A）：软光栅对照模式 = initVisbuf 基础链（Q-A1 = A1-A：全软
+    // 对照，M14A2 才加 SW/HW 分流）+ csSoftRaster compute 管线。visBuffer_ /
+    // viz 链 / clusterMeta 全部复用，硬件 raster 管线照建但帧路径不消费；
+    // 帧内三段式变为 clear → csSoftRaster dispatch（1 簇 1 workgroup，
+    // atomicMin 写同一块 u64 buffer）→ 全屏 viz（与 visbuf 模式逐位同链）。
+    bool initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
+                        const char* nmeshFile, std::string& outError);
+
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
     // 纹理暂不用，先看形变），VB 按 CopyDest + keepInitialState 建立供每帧
@@ -949,6 +957,13 @@ private:
     nvrhi::TextureHandle         matMR_[kMaxVisMaterials];         // 材质 i MR 贴图
     nvrhi::BufferHandle          materialTable_;   // GPUMaterial SSBO（t12，stride 32）
     bool                         visbufFailed_ = false;  // 懒建失败只报一次
+    // M14A1（S14-A）：软光栅对照——PSO/布局 init 时建，set 随 visBuffer_ 懒建。
+    bool                         softRaster_ = false;
+    bool                         softRasterFailed_ = false;  // 失败只报一次
+    nvrhi::ShaderHandle          csSoftRaster_;
+    nvrhi::BindingLayoutHandle   softRasterLayout_; // b0 + b1 + t1..t4 + u0（compute）
+    nvrhi::ComputePipelineHandle softRasterPSO_;
+    nvrhi::BindingSetHandle      softRasterSet_;
     bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                              std::string& outError);
 

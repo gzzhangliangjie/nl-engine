@@ -381,8 +381,8 @@ void Hud::build(HudFrame& frame) {
     // M-PERF1：per-pass GPU 计时面板（Q-P5；--pass-timing 才 show，默认关 =
     // 既有 --hud 基线零布局变化）。行名 = PassTimers::name(i)（ASCII），
     // 数值 = pollPassTimers 写回；本帧未跑/未 resolve 的 pass 显示 "--"。
-    static_assert(PassTimers::kPassCount == 13,
-                  "HudFrame.passTimingMs/Valid table size (13) mismatch");
+    static_assert(PassTimers::kPassCount == 14,
+                  "HudFrame.passTimingMs/Valid table size (14) mismatch");
     if (frame.passTimingShow) {
         ImGui::Separator();
         for (int i = 0; i < PassTimers::kPassCount; ++i) {

@@ -49,6 +49,7 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // 产物名共 100 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
+// soft_raster.cs 2（M14A1，S14-A 软光栅写 vis）+
 // rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
@@ -85,6 +86,8 @@ static const Artifact kArtifacts[] = {
     {"visbuf.psvisraster", true}, {"visbuf.psvisraster", false},
     {"visbuf.vsvisviz", true}, {"visbuf.vsvisviz", false},
     {"visbuf.psvisviz", true}, {"visbuf.psvisviz", false},
+    // M14A1（S14-A）：soft_raster.slang 单 compute 入口 × 双目标 = 2（软光栅写 vis）。
+    {"soft_raster.cs", true}, {"soft_raster.cs", false},
     // M7.1：material.slang 双入口 × 双目标 = 4（M8.1 补登——此前清单漏收，
     // selftest 只查列出项所以一直绿；kStage bump 纪律同理，新入口必须登记）。
     {"material.vsmatresolve", true}, {"material.vsmatresolve", false},
@@ -185,7 +188,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool dagMode, bool skinMode,
                                            bool hizMode, bool sceneMode, bool visbufMode,
                                            bool pullingMode, bool rtMode, bool shadowMode, bool referenceMode,
-                                           bool probeMode) {
+                                           bool probeMode, bool softRasterMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -194,7 +197,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     // M10.0：probe-place 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
-                         rtMode || shadowMode || referenceMode || probeMode;
+                         rtMode || shadowMode || referenceMode || probeMode || softRasterMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -227,7 +230,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
-                                 shadowMode, referenceMode, probeMode, r->impl_->error)) {
+                                 shadowMode, referenceMode, probeMode, softRasterMode,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

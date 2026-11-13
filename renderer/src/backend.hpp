@@ -45,11 +45,14 @@ public:
     // shadowMode（M9.0）走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现。
     // probeMode（M10.0）走 initVisbuf(pulling) 资产链 + velocity prepass + cascade
     // 布点 compute + 探针点可视化。
+    // softRasterMode（M14A1）走 initSoftRaster = initVisbuf 基础链 + csSoftRaster
+    // compute 管线；帧路径 visbuf 分支内以 dispatch 替换硬件 raster draw。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
                      bool shadowMode, bool referenceMode, bool probeMode,
+                     bool softRasterMode,
                      std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 

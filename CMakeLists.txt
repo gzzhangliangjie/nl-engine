@@ -472,7 +472,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "direct.csref"
                     "direct.csrefgi"
                     "probe_trace.cstrace"
-                    "world_cache.cscacheupdate")
+                    "world_cache.cscacheupdate"
+                    "soft_raster.cs")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -510,6 +511,9 @@ set(_ENTRIES_FILTER_TEMPORAL "csFilterTemporal|csfiltertemporal|compute")
 # S12 M12.1：filter_spatial.slang 单 compute 入口——5x5 联合双边（Q12-C A）
 #（纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
 set(_ENTRIES_FILTER_SPATIAL "csFilterSpatial|csfilterspatial|compute")
+# M14A1（S14-A）：soft_raster.slang 单 compute 入口——compute 软光栅写 vis buffer
+#（u64 atomicMin → 64 位原子 DXIL 必须入 _SM66 白名单，同 visbuf 口径）。
+set(_ENTRIES_SOFT_RASTER "csSoftRaster|cs|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -548,6 +552,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_FILTER_TEMPORAL}")
     elseif(_SRC_NAME STREQUAL "filter_spatial")
         set(_ENTRIES "${_ENTRIES_FILTER_SPATIAL}")
+    elseif(_SRC_NAME STREQUAL "soft_raster")
+        set(_ENTRIES "${_ENTRIES_SOFT_RASTER}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -565,6 +571,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
         if(_SRC_NAME STREQUAL "visbuf")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+        elseif(_SRC_NAME STREQUAL "soft_raster")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
         elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
                OR _SRC_NAME STREQUAL "probe")

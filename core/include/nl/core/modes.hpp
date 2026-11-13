@@ -37,6 +37,10 @@ enum class ViewMode {
                       //  （Q11-0 方案 A：无墓碑 + life 衰减清零立即重用 + 3 步探测）
     Filter = 20,      // S12 M12.0：--mode filter（Q12-A 拍板 GI 分量独立时域累积；
                       //  复用 probe 链 velocity + T0 history0/1 ping-pong，零新增 RT）
+    SoftRaster = 21,  // M14A1（S14-A）：--mode soft-raster 全软光栅对照——cull 后
+                      //  compute 软光栅整场景写同一块 u64 vis buffer（bevy 口径：
+                      //  1 簇 1 workgroup + 梯度增量式 + edge function；Q-A1 拍板
+                      //  先对照后分流），viz/resolve 复用 visbuf 链零改动
     // S1 起依次追加：Cache, Final
     Count
 };

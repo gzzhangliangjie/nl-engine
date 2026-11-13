@@ -1194,7 +1194,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
               bool shadowMode = false, bool referenceMode = false,
-              bool probeMode = false) {
+              bool probeMode = false, bool softRasterMode = false) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
@@ -1286,7 +1286,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode, referenceMode, probeMode);
+                                                   shadowMode, referenceMode, probeMode,
+                                                   softRasterMode);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -4260,6 +4261,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::SoftRaster: // M14A1（S14-A）：全软光栅对照（Q-A1=A1-A）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/false,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/false, /*softRasterMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");
@@ -4408,7 +4415,8 @@ int main(int argc, char** argv) {
          o.mode == nl::core::ViewMode::Dag || o.mode == nl::core::ViewMode::Hiz ||
          o.mode == nl::core::ViewMode::Visbuf || o.mode == nl::core::ViewMode::Pulling ||
          o.mode == nl::core::ViewMode::Rt || o.mode == nl::core::ViewMode::Shadow ||
-         o.mode == nl::core::ViewMode::Reference || o.mode == nl::core::ViewMode::ProbePlace)
+         o.mode == nl::core::ViewMode::Reference || o.mode == nl::core::ViewMode::ProbePlace ||
+         o.mode == nl::core::ViewMode::SoftRaster)
         && !o.modelSet) {
         o.modelFile = "Suzanne.nmesh";
     }

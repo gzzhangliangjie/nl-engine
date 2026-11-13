@@ -318,8 +318,8 @@ struct HudFrame {
     // 既有 --hud 基线零布局变化）。行名固定在 renderer 侧 PassTimers::name(i)
     //（gpu_timer.hpp，13 项），POD 只传数值；槽位序 = PassId 枚举序。
     bool  passTimingShow      = false;
-    float passTimingMs[13]    = {};
-    bool  passTimingValid[13] = {};
+    float passTimingMs[14]    = {};   // M14A1（S14-A）：+softRaster（14 槽）
+    bool  passTimingValid[14] = {};
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
@@ -465,7 +465,11 @@ public:
                                             // M10.0：--mode probe-place（屏幕探针 cascade
                                             // 布点；走 initVisbuf(pulling) 资产链 +
                                             // velocity prepass + 布点 compute + 点可视化）。
-                                            bool probeMode = false);
+                                            bool probeMode = false,
+                                            // M14A1（S14-A）：--mode soft-raster
+                                            //（compute 软光栅对照，走 initSoftRaster =
+                                            // initVisbuf 基础链 + csSoftRaster）。
+                                            bool softRasterMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
