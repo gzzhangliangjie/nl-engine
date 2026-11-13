@@ -414,6 +414,28 @@ def main():
                     if tgt:
                         slot.material = tgt
                         mat_remapped += 1
+    # 空材质槽压缩：FBX 常带无多边形的空槽（如轮子首槽 "06 - Default"），
+    # Blender glTF 导出器在这种网格上不重映射 polygon.material_index，导致
+    # 整个 prim 落到错误材质（实测：3 个轮子的轮毂面全导到空灰材质）。
+    # 注意：materials.clear() 会把所有 polygon.material_index 归零（实测），
+    # 所以必须先算好新索引、clear+append 完材质后再写回。
+    slots_compacted = 0
+    for ob in bpy.data.objects:
+        if ob.type != "MESH" or not ob.material_slots:
+            continue
+        used = sorted({p.material_index for p in ob.data.polygons})
+        if len(used) == len(ob.material_slots) and used == list(range(len(used))):
+            continue
+        remap = {old: new for new, old in enumerate(used)}
+        newidx = [remap[p.material_index] for p in ob.data.polygons]  # clear 前算
+        keep = [ob.material_slots[i].material for i in used]
+        ob.data.materials.clear()
+        for m in keep:
+            ob.data.materials.append(m)
+        for p, ni in zip(ob.data.polygons, newidx):                   # clear 后写
+            p.material_index = ni
+        slots_compacted += 1
+
     objects = [o for o in bpy.data.objects]
     meshes, tris = mesh_stats(objects)
     retarget = retarget_images(maps_dir)
@@ -443,6 +465,7 @@ def main():
         "prunedObjects": pruned,
         "lod0Pruned": lod0_pruned,
         "upFixRotated": up_fixed,
+        "emptySlotsCompacted": slots_compacted,
         "matRemapped": mat_remapped,
         "meshesReorderedTexturedFirst": reordered,
         "glbNodesTexturedFirst": {"arraysReordered": nodes_moved,
