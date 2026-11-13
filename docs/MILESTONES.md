@@ -3328,3 +3328,19 @@
 4. DX12 树构建早于 w0-density 用例追加 → configure 缺用例（5/6）→ 补一次构建对齐双树 6/6。
 
 **M-W0 整轨收官**：`w0-m0`~`w0-m3` 四 tag；city-tools 从空白城骨架走到密度分区完整城市（俯视 PNG + roadnet.json + 36 OBJ + city.scene + 72 断言 + 6 ctest + 4 展示台卡）；资产转换缺口（OBJ→glb→nmesh 链 merge 后补消费步 + viewer 白名单 + 街景证据图）登记 asset-ingest；`kStage`/renderer/viewer/.nmesh 全程零触碰。
+
+## W1 M-W1 立项 — 城市资产进引擎（feat/worldgen，2026-11-13）
+
+**动作**：M-W1 立项调研 + 拍板登记（A 类轨道 worldgen 接 M-W0，零落码）。范围经用户拍板 =「城市资产进引擎」（候选：城市资产进引擎 / 规模拉大+分块加载 / 交通 M-T0 起步）。实读：viewer/main.cpp runScene 白名单（扁平 ASCII .glb、禁路径分隔符，两处复制含 renderer/scene.cpp）、renderer/scene.cpp ECS scene 段（meshFile→loadGltfScene 顶点展开直渲，不经过 .nmesh）、nanite-tools --help（cluster→lod→dag 口径）、asset-ingest scripts/obj2glb.py（stdlib 零依赖、≤4 材质组硬闸、feat/asset-ingest 未 merge 4 commits）。三处资产格式对照复用 2026-11-12 留痕（Carrot glTF+CARROT_meshlets / bevy .meshlet_mesh / UE NaniteResources.h 只读）。
+
+**提交版本**：`feat/worldgen`（docs/worldgen/W1-OPTIONS.md 方案矩阵 + W1-PLAN.md 执行计划 + GAME-DEV-ORDER 第 6 步状态行 + PARALLEL-TRACKS worldgen 行）。零代码、零产物改动、未 claim（落码开工才 claim M-W1.0）、未打 tag、未跑回归。
+
+**完成情况**
+- 🟢 四项拍板（2026-11-13）：Q-W1A=**双轨**（city-tools 与 w0 产物一字不动，另产 city.scene.engine，w0-m2/m3 基线零重拍）；Q-W1B=**扁平命名**（assets/models/city_block_XX.glb，白名单零改动，避开 asset-ingest 分支 scene.cpp 冲突面）；Q-W1C=**等 merge**（obj2glb.py 等 feat/asset-ingest merge master 后复用，merge 前只做不依赖项）；Q-W1D=街景证据图用户终端补拍（M-CRASH0 L2 先例）。
+- 🟢 关键实读结论：登记缺口里的「viewer 白名单接入」实测可免——扁平 .glb 命名天然合规，viewer/renderer 零改动；scene 模式消费 glb 不经过 .nmesh，.nmesh 套件（W1-B 判据）由 nanite-tools 链产出作为资产层收口。
+
+**踩坑情况**
+1. M-W0 登记缺口时预设「白名单接入要改代码」，实读发现扁平命名即可零改动——登记缺口按当时假设写，立项实读后修正口径。
+2. 跨轨依赖（asset-ingest merge）为 M-W1.0 硬闸，已写进 W1-PLAN 开工闸，闸未开不落码。
+
+**下一步**：等 feat/asset-ingest merge master → `claim --track worldgen --milestone M-W1.0` → M-W1.0 引擎交付驱动步（OBJ→glb→nmesh→city.scene.engine + selftest 扩锚）。
