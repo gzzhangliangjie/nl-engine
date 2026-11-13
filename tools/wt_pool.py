@@ -244,6 +244,17 @@ TRACKS = {
                 "wt built 2026-11-13 from master 1892866, junction "
                 ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
     },
+    "weather": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-weather",
+        "branch": "feat/weather", "state": "active",
+        "note": "weather interleave track (plan docs/WEATHER-PLAN.md, "
+                "M-WEA0~WEA3, tags weather-w0~weather-w3; A-plan param layer "
+                "drives Lumen, Q-WE1~WE6 settled 2026-11-12, Q-WEA0-A/B "
+                "settled 2026-11-13: discrete states + smooth transition, "
+                "nl_core module); wt built 2026-11-13 from master 6a824b1, "
+                "junction .workbuddy + thirdparty/slang/dist + skip-worktree "
+                "(9 files)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"

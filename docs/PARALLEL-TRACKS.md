@@ -191,6 +191,7 @@
 | S13 簇级 BLAS 聚合 + 延迟一帧回读（B 类穿插，用户拍板开 wt） | `E:/UE_STUDY_2026/nl-engine-s13`（在册） | `feat/s13` + tags `s13-preblas`/`s13-merge`/`s13-done`（按 PLAN） | `docs/s13/S13-PLAN.md`（M13.0~M13.2）；2026-11-13 建于 master `e3a2ef4`；渲染版交代（example/kStage 纪律 merge 时生效） |
 | S14-A 软光栅亚像素三角形（B 类穿插，M14 轨道 A 段） | `E:/UE_STUDY_2026/nl-engine-s14-softrast`（在册） | `feat/s14-softrast` + tags `s14a-*`，收官 `s14-softrast` | `docs/s14/M14-PLAN.md`（总纲：A+B 并行 / C 接 B / D 砍 / kStage 冻结 S8.2）；M14A0~M14A3；2026-11-13 建于 master `1892866` |
 | S14-B ReSTIR GI（B 类穿插，M14 轨道 B 段；C 自适应探针 M14C1 接力本 wt） | `E:/UE_STUDY_2026/nl-engine-s14-restir`（在册） | `feat/s14-restir` + tags `s14b-*`，收官 `s14-restir`；C 段收官 `s14-adaptive` | `docs/s14/M14-PLAN.md`；M14B0~M14B2 + M14C1；2026-11-13 建于 master `1892866` |
+| 天气变化参数层（A 类穿插，2026-11-12 立项） | `E:/UE_STUDY_2026/nl-engine-weather`（在册） | `feat/weather` + tags `weather-w0`~`weather-w3` | `docs/WEATHER-PLAN.md`（M-WEA0~WEA3；方案 A 参数层驱动 Lumen，Q-WE1~WE6 已拍板 2026-11-12；M-WEA0 开工拍板 Q-WEA0-A/B = 离散天气态+平滑过渡 / nl_core 新模块，2026-11-13）；2026-11-13 建于 master `6a824b1`；A 类工具版交代，零渲染改动不 bump `kStage` |
 
 > 已建 worktree 均以 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。**在册 worktree 清单与各轨道 active/closed 状态一律以 `wt_pool.py status` 为准（2026-11-13 起），本节不再维护文字版快照。**
 
