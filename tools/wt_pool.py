@@ -226,7 +226,12 @@ TRACKS = {
                 "building-variant pool 4 primitives x per-tier pools, "
                 "fnv1a pure selection zero-RNG, selftest 88, run_checked "
                 "backoff hardening, w1_check hash-set fix, image-card "
-                "baselines registered; close+release --done passed)",
+                "baselines registered; close+release --done passed); "
+                "M-W3 whole track done 2026-11-14 (tags w3-m0/w3-m1: "
+                "street-asset channel tree-12/car-8/streetlight CC0 pools "
+                "vendored, fnv1a pure placement zero-RNG, scene 315 "
+                "entities, drive vendored assembly, embed_glb_textures "
+                "deformation, selftest 97; close+release --done passed)",
     },
     "s13": {
         "wt": "", "branch": "feat/s13", "state": "closed",
