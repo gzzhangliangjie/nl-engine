@@ -72,7 +72,7 @@
 
 - 不做：Roslyn 运行时编译（构建期 dotnet build）/ AOT / NativeHost 全自宿主（hostfxr 标准路径够）/ 多 ALC 版本共存（单 collectible ALC 轮换）/ 调试器协议（VS 调试脚本属远期）/ 沙箱权限分级 / OS 级文件 watcher（mtime 轮询够）/ Lua 与 TS（两轮作废留痕，不留复活尾巴）。
 - 「脚本调 C++」单向显式函数指针优先；C++ 调脚本只走 console 注册命令与（若做的）组件回调点，不做任意事件总线。
-- 互操作不做反射自动绑定（Carrot 的 ReflectionHelper 思路记档不抄）——绑定面手写，宁可啰嗦不可隐晦。
+- 互操作不做反射自动绑定（~~Carrot 的 ReflectionHelper 思路记档不抄~~——**2026-11-14 修订**：绑定接线改生成器产出（M-SC4），属性面板反射入 M-SC10；运行时面仍是显式函数指针，「显式优先于隐晦」内核不变）。
 
 ## 胶水层扩展（M-SC4 起，2026-11-13 拍板）
 
@@ -83,21 +83,26 @@
 > ① **域范围 = 五域全做**：Input+时间帧循环+Log、Camera、Physics 载具、Audio、模型场景创建；
 > ② **API 形态 = 沿用现状静态 facade**（ApiTable 尾部追加 + C# 按域加静态类，与 Engine/Ecs 同构，热更铁律 R1~R8 直接适用；仿 Carrot 按域拆绑定文件被否——本轮体量下偏过度设计）；
 > ③ **轨道 = 重开 feat/script**（§7.1b camera 先例，wt 重建于 master 08a67c0，claim M-SC4 起）。
-> 已定口径不变：手写显式函数指针、ApiTable 只许尾部追加、绑定面无跨帧状态、宿主侧显式 set 绑定活实例（`ecsSetWorld` 模式推广：`inputSetState/inputSetActionMap/cameraSetRig/physicsSetWorld/audioSetWorld`，未绑 = 专属错误码，热更窗口兜底）。
+> **拍板修订（2026-11-14，用户拍板覆盖旧表述）**：① **绑定导出自动化生成器本轮就上**——API 接线（typedef/注册行/C# delegate+facade）由单源 spec 生成，产出物仍是显式函数指针（显式性口径不破，变的是「谁写接线」）；② **属性面板要做**（C# `[Prop]` 特性 + .NET 反射枚举 + ImGui 通用面板，Carrot 特性集同构）入 M-SC 序列。
+> 其余口径不变：ApiTable 只许尾部追加、绑定面无跨帧状态、宿主侧显式 set 绑定活实例（`ecsSetWorld` 模式推广：`inputSetState/inputSetActionMap/cameraSetRig/physicsSetWorld/audioSetWorld`，未绑 = 专属错误码，热更窗口兜底）。
 
-### 里程碑（M-SC4~SC9）
+### 里程碑（M-SC4~SC11，2026-11-14 用户拍板重排）
+
+> **生成器口径（用户原话定死）**：「加个声明就导出，最多手写这个」——每个导出手写的只有**一行声明**（含签名/marshal 标注），C++ ApiTable 接线（typedef+注册行）与 C# delegate+facade 全部由工具生成；生成器扫描自家的严格单行格式（非通用 C++ 解析），具体声明语法落码期按 Bindings.cpp/Api.cs 现状定。
 
 | 里程碑 | 内容（C++ 导出 + C# 静态类） | 关键口径 | 依赖 |
 |---|---|---|---|
-| **M-SC4** 胶水层一期：Time + Input + Log | `timeQuery(simTime/frameDt/tickCount/paused)` + `timeSetState(paused,timeScale)`；`inputActionFind(name→id)` + `inputActionBool/Float/Vec2(id→值+边沿)` + `inputKeyIsDown(key)`；`logWrite(level,msg)` + `logSetFilter(instruction)`。C# = `Time`/`Input`/`Log` 静态类 | 绑 GameClock（ScriptHost 已持有）；InputState/ActionMap 宿主显式 set，viewer `--script` 模式接线（ActionMap 未建 = NoSource 错误码，不隐式建表）；log 走 `nl::core::log` 全局面（level 0..5=Trace..Fatal，越界 = BadArg）；Log 类别 = `script` 通道（writeCh 口径） | 无（均已 merge） |
-| **M-SC5** Camera | cameraGetPose/cameraSetPose（pos+yaw+pitch 口径随实码定）+ fov get/set；C# = `Camera` 静态类 | 绑 viewer 现役相机（rig/chase/free 装配落码期读 viewer/main.cpp 定；未绑 = NoCamera） | M-SC4 |
-| **M-SC6** 模型场景创建 | `ecsAttachModel(id, meshFile)` + `ecsDetachModel(id)`（+ 可选 ecsModelInfo）；C# = `Ecs` 尾部追加 | 实体挂 mesh → scene batch 装配复用 E1b 链（scene.cpp 白名单口径落码期实读定）；meshFile 校验走 viewer 既有白名单语义 | M-SC4 |
-| **M-SC7** Physics 载具 | `physicsAddVehicle/removeVehicle/setVehicleInput/vehicleFullPose/teleportVehicle`；C# = `Physics` 静态类 | 直接对齐 M-NET2 已落的 `physics::World` 载具 API 面（不新造）；未绑 = NoWorld 同构错误码；线程 = 逻辑帧约定（OnTick 内调用） | M-SC4 |
-| **M-SC8** Audio | `audioPlay(name,x,y,z)/audioStop(id)/audioSetListenerPose(...)`（导出集落码期读 AudioWorld 实码定）；C# = `Audio` 静态类 | 绑 M-GL2 交付的 `AudioWorld`；播放句柄失效安全拒绝沿用 SceneEntity 口径 | M-SC4 |
-| **M-SC9** 收口 | 跨域示例脚本（Time+Input+Ecs+Log+Camera 一脚本打通）+ GUIDE 扩章 + close 闸 + merge 回 master | — | M-SC4~SC8 |
+| **M-SC4** 绑定生成器 | 声明 → 产出 ① C++ ApiTable 接线块 ② C# delegate + 按域静态 facade。**回归基线 = 对现有 16 导出（console 6 + ECS 10）回放**：生成接线替换手写后编译过 + selftest 全绿 + `reload-script` 链路无损 | 声明是唯一手写项；实现体照写（语义不可生成）；尾追加纪律对声明序列生效；生成器入 `tools/scriptapi/` | 无 |
+| **M-SC5** Time + Input + Log | `timeQuery(simTime/frameDt/tickCount/paused)` + `timeSetState(paused,timeScale)`；`inputActionFind(name→id)` + `inputActionBool/Float/Vec2(id→值+边沿)` + `inputKeyIsDown(key)`；`logWrite(level,msg)` + `logSetFilter(instruction)`。C# = `Time`/`Input`/`Log` 静态类 | 绑 GameClock（ScriptHost 已持有）；InputState/ActionMap 宿主显式 set，viewer `--script` 模式接线（ActionMap 未建 = NoSource 错误码，不隐式建表）；log 走 `nl::core::log` 全局面（level 0..5=Trace..Fatal，越界 = BadArg）；**本域 = 生成器实战首用** | M-SC4 |
+| **M-SC6** Camera | cameraGetPose/cameraSetPose（pos+yaw+pitch 口径随实码定）+ fov get/set；C# = `Camera` 静态类 | 绑 viewer 现役相机（rig/chase/free 装配落码期读 viewer/main.cpp 定；未绑 = NoCamera） | M-SC5 |
+| **M-SC7** 模型场景创建 | `ecsAttachModel(id, meshFile)` + `ecsDetachModel(id)`（+ 可选 ecsModelInfo）；C# = `Ecs` 尾部追加 | 实体挂 mesh → scene batch 装配复用 E1b 链（scene.cpp 白名单口径落码期实读定）；meshFile 校验走 viewer 既有白名单语义 | M-SC5 |
+| **M-SC8** Physics 载具 | `physicsAddVehicle/removeVehicle/setVehicleInput/vehicleFullPose/teleportVehicle`；C# = `Physics` 静态类 | 直接对齐 M-NET2 已落的 `physics::World` 载具 API 面（不新造）；未绑 = NoWorld 同构错误码；线程 = 逻辑帧约定（OnTick 内调用） | M-SC5 |
+| **M-SC9** Audio | `audioPlay(name,x,y,z)/audioStop(id)/audioSetListenerPose(...)`（导出集落码期读 AudioWorld 实码定）；C# = `Audio` 静态类 | 绑 M-GL2 交付的 `AudioWorld`；播放句柄失效安全拒绝沿用 SceneEntity 口径 | M-SC5 |
+| **M-SC10** 属性面板 | C# 组件字段打 `[Prop]` 特性（DisplayName/Range/Default，Carrot 特性集同构）→ .NET 反射枚举 → C++ 取描述表 → ImGui 通用面板读写；热更 `reload-script` 后面板自动跟随 | 面板挂 imgui（vendored）= HUD 面板规范适用（高≤560/ASCII）；载体（ScriptComponent/M-SC2b 重议启用与否）落码期与用户确认；kStage 不动，渲染回归只进面板自身新卡 | M-SC7 |
+| **M-SC11** 收口 | 跨域示例脚本（Time+Input+Ecs+Log+Camera 一脚本打通）+ GUIDE 扩章 + close 闸 + merge 回 master | — | M-SC4~SC10 |
 
-- **验收口径（每域一致）**：nl-script selftest 新段（s9 起：C# 读写引擎状态 → C++ 逐位读回断言 + 未绑错误码负向）；展示台 tool 卡（usage/正向/负向三起步）；`reload-script` 后新域 API 重绑定无损；A 类铁律 = 零渲染符号、不进 kStage、不进渲染回归。
-- **有意不做（防范围失控）**：不做脚本侧物理步进 API（物理步进归引擎 tick）、不做音频流解码 API、不做反射属性暴露（Carrot ReflectionProperty 记档不抄）、不做任意事件总线（P8-SCRIPT-PLAN 既有否决维持）。
+- **验收口径（每域一致）**：nl-script selftest 新段（s9 起：C# 读写引擎状态 → C++ 逐位读回断言 + 未绑错误码负向）；展示台 tool 卡（usage/正向/负向三起步）；`reload-script` 后新域 API 重绑定无损；A 类铁律 = 零渲染符号、不进 kStage、不进渲染回归（**M-SC10 面板例外按其行口径**）。生成器验收 = M-SC4 行回归基线。
+- **有意不做（防范围失控）**：不做脚本侧物理步进 API（物理步进归引擎 tick）、不做音频流解码 API、不做任意事件总线（P8-SCRIPT-PLAN 既有否决维持）。~~不做反射属性暴露~~（2026-11-14 用户拍板翻转：属性面板入 M-SC10）。
 
 ## 注册表
 
