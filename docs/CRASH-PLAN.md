@@ -61,8 +61,9 @@ dmp 落盘只是第一现场留证，真正"分析"是把 minidump 符号化成�
 - 执行 `.ecxr;!analyze -v;k 30;lm`，把完整分析写入 `<dump>.analysis.txt` 并打印。
 - 用法：
   - `tools\analyze-crash.bat` → 分析 `build/**/crashdumps` 里最新的 `.dmp`
+  - `tools\analyze-crash.bat 2` → 分析第 2 新的 dump（`--list` 带序号，1 = 最新，按 dump mtime 新→旧）
   - `tools\analyze-crash.bat path\to\x.dmp` → 分析指定 dump
-  - `python tools/analyze-crash.py --list` → 列所有 dump
+  - `python tools/analyze-crash.py --list` → 列所有 dump（带序号）
   - `python tools/analyze-crash.py --json x.dmp` → 仅打印 L1 元数据（不需调试器）
 - 引擎未安装时脚本会明确提示去装哪个组件，装好后重跑即出栈。
 - 实测：L1（`--list` / `--json`）已对真实 dump 跑通（见 `nanite-tools_20261113_115312_C0000005`）；L2 符号化链路就绪，待用户终端首跑确认（沙箱禁拉 GUI 进程）。

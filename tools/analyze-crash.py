@@ -9,9 +9,10 @@
 把完整分析写入 <dump>.analysis.txt 并打印到终端。
 
 用法:
-  python tools/analyze-crash.py                 # 分析 build/**/crashdumps 里最新的 .dmp
+  python tools/analyze-crash.py                 # 分析最新的 .dmp
+  python tools/analyze-crash.py 2               # 分析第 2 新的 .dmp（序号见 --list，1 = 最新）
   python tools/analyze-crash.py path/to/x.dmp   # 分析指定 dump
-  python tools/analyze-crash.py --list          # 列出所有 dump
+  python tools/analyze-crash.py --list          # 列出所有 dump（带序号，新→旧）
   python tools/analyze-crash.py --json x.dmp    # 只打印元数据 .json（零工具）
 
 依赖: 需本机存在 cdb.exe 或 windbg.exe。
@@ -113,15 +114,24 @@ def main():
         if not dumps:
             print("未找到任何 .dmp (build/**/crashdumps)")
             return
-        for d in dumps:
+        for i, d in enumerate(dumps, 1):
             ts = datetime.fromtimestamp(os.path.getmtime(d)).strftime("%Y-%m-%d %H:%M:%S")
-            print(f"{ts}  {d}")
+            print(f"[{i}] {ts}  {d}")
         return
 
-    dump = find_dump(dump_arg)
+    if dump_arg and dump_arg.isdigit():
+        dumps = list_dumps()
+        n = int(dump_arg)
+        if not dumps or n < 1 or n > len(dumps):
+            print(f"[错误] 序号 {n} 超出范围（当前共 {len(dumps)} 个 dump；"
+                  f"先 --list 查看序号，1 = 最新）")
+            sys.exit(1)
+        dump = dumps[n - 1]
+    else:
+        dump = find_dump(dump_arg)
     if not dump or not os.path.isfile(dump):
         print(f"[错误] 未找到 dump: {dump}\n"
-              f"       用法: python tools/analyze-crash.py [path/to/x.dmp | --list | --json]")
+              f"       用法: python tools/analyze-crash.py [path/to/x.dmp | 序号 | --list | --json]")
         sys.exit(1)
 
     print(f"[dump] {dump}")
