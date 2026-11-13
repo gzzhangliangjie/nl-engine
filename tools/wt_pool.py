@@ -205,6 +205,15 @@ TRACKS = {
                 "52700f1, junction .workbuddy + thirdparty/slang/dist + "
                 "skip-worktree (9 files), M-W0.0 in progress",
     },
+    "vsm": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-vsm",
+        "branch": "feat/vsm", "state": "active",
+        "note": "S15 VSM track opened 2026-11-13 (M15.0 tag s15-vsm, M15.1 tag "
+                "s15-clipmap, M15.2 tag s15-done 2026-11-14; two-stage HZB cull "
+                "+ cluster indirect shadow); registry row added 2026-11-14 at "
+                "close time (claim existed in busy lock since 2026-11-13 but "
+                "row was missing -- orphan claim root cause)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
