@@ -39,19 +39,15 @@
 
 **C 轨接力预告**（M14C1，B 收官后）：探针自适应加密走 UE `Mark→Spawn` 口径（§1 UE 实读），预算切分对齐 `AdaptiveProbeAllocationFraction`；B 的 confidence 权重直接复用。细节届时补 `S14C-ADAPTIVE-NOTES.md`，不提前拍死。
 
-## 3. 待拍板清单（M14B0 开工闸，清零才落码）
+## 3. 拍板记录（2026-11-13 用户「全部按推荐」拍板，开工闸已清零）
 
-### Q-B1 ReSTIR 语义落点（本轨最重的架构判定）
-- **B1-A（推荐）**：**GI 域 per-pixel 射线候选**（RTXDI ReSTIR-GI 口径）：候选 = 余弦半球方向 + Ray Query 命中 + 命中点着色（直光/emissive + world_cache 间接）；reservoir 重用样本 = 「弹射方向 + 命中点」。真 ReSTIR（时空重用增益在 GI 噪声上），独立 mode 与 S12 干净对比；代价 = 每像素候选射线成本（M=1 起步 + 重用补偿）。
-- B1-B：探针域内重采样——保持 probe 链，gather 时对**探针辐照度样本**做 reservoir 重用。便宜但样本池是探针级稀疏的，时空重用语义变形，与 bevy/RTXDI 机制对不上，验收「误差明显下降」难成立。
-- B1-C：直光 ReSTIR-DI（bevy 同域，机制 1:1 移植）——最忠实 bevy，但 S14-PLAN 验收写的是 GI（vs S9/S12），直光已有 M9 真值链，属于换轨。
+### Q-B1 ReSTIR 语义落点 → **B1-A（拍板）**
+GI 域 per-pixel 射线候选（RTXDI ReSTIR-GI 口径）：候选 = 余弦半球方向 + Ray Query 命中 + 命中点着色（直光/emissive + world_cache 间接）；reservoir 重用样本 = 「弹射方向 + 命中点」。真 ReSTIR（时空重用增益在 GI 噪声上），独立 `--mode restir` 与 S12 干净对比；M=1 起步 + 重用补偿控帧时间。bevy restir.wesl = DI 定性成立，只移植机制不移植语义。
 
-### Q-B2 初始候选构型
-- **B2-A（推荐）**：M=1（每像素 1 初始候选），靠时域+空域重用凑池——bevy/RTXDI 起步口径，帧时间最可控；后续 M14B2 评估时才考虑 M=2/4。
-- B2-B：M=2~4 起步——首帧质量更好，但帧预算翻倍，与「同等帧时间对比」验收相抵。
+### Q-B2 初始候选构型 → **B2-A（拍板）**
+M=1（每像素 1 初始候选），靠时域+空域重用凑池（bevy/RTXDI 起步口径）；M14B2 评估时才考虑 M=2/4。
 
-### Q-B3 reservoir 存储布局
-- **B3-A（推荐）**：两条 `RWStructuredBuffer<Reservoir>` a/b ping-pong（bevy 同构）；`Reservoir = {float3 hitPos; uint packedNormal(八面体); float3 radiance; float3 dir; float confidence; float unbiasedW;}` ≈ 17 项对齐 72B，volatile CB 纪律不涉及（非 cbuffer）。
-- B3-B：塞进既有 atlas 纹理——省 buffer，但 RGBA16F 精度不够存 weight/confidence，与 S11 纹理语义混淆，否。
+### Q-B3 reservoir 存储布局 → **B3-A（拍板）**
+两条 `RWStructuredBuffer<Reservoir>` a/b ping-pong（bevy 同构）；`Reservoir = {float3 hitPos; uint packedNormal(八面体); float3 radiance; float3 dir; float confidence; float unbiasedW;}` ≈ 72B 对齐；非 cbuffer，volatile CB 纪律不涉及。
 
-**拍板前冻结面**：`restir.slang`、`ViewMode::Restir`、reservoir buffers、CMake 登记——一行不落；`probe.slang`/`probe_gather.slang`/`filter_temporal.slang` 冻结基线一行不碰；主树/master 一行不碰。
+**冻结面解除**：M14B1 允许落码 `restir.slang`、`ViewMode::Restir` 追加、reservoir buffers、renderer 接线、CMake 登记；`probe.slang`/`probe_gather.slang`/`filter_temporal.slang` 冻结基线一行不碰；主树/master 一行不碰。
