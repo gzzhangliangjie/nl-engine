@@ -94,6 +94,8 @@
 
 > **生命周期账本（2026-11-14 用户拍板补条：反射对象生命周期必须防泄露）**：每条 TYPEMAP 映射带显式所有权标注（谁分配/谁释放/何时失效），生成器按规则产配对代码。规则表：in str = C# AllocHGlobal + finally 必释放（生成物写死配对）；out str = C++ 静态缓冲「下次调用前有效」+ C# 立即拷贝（C# 侧零分配）；命令回调 outText = C# CoTaskMem 分配 + C++ 拷后 CoTaskMemFree（SEH 路径含）；delegate 参数 = ApiWiring 统一 _pinned 保活登记（按 reload 批次归组）+ unload 前 scriptUnregisterAll 全清；POD 复杂对象 = 值/栈传递不跨堆；宿主活实例 = 显式 set/unset + 未绑错误码兜底。**硬规则**：① C++ 侧永不跨 reload 缓存托管引用（M-SC10 反射描述符同款——描述符缓存放托管侧随 ALC 回收，C++ 只存 POD 描述表）；② selftest 泄露段 = 万次级串往返 + GC.Collect 后句柄漂移阈值断言（s8f 手法扩展），新域必带。
 
+> **复杂对象档位（2026-11-14，UnrealSharp Marshalling System 实读）**：其三档 = Blittable（布局一致 memcpy 直传，零开销快路径）/ Natively copyable（引擎拷贝构造 + NativeStructHandle 析构句柄）/ Mirror Struct（逐字段兜底）。我们 type 段 POD 双层镜像只做 **Blittable 一档**（正是其认定的快路径）；后两档依赖 UE 属性系统/拷贝构造，纯 C ABI 函数表不需要。**生成器校验规则：type 段只收纯 POD（数值字段 + 定长 buf，禁字符串/嵌套引用成员），gen.py 解析即拒，非 POD 需求显式拆 str/bufN 参数**。
+
 | 里程碑 | 内容（C++ 导出 + C# 静态类） | 关键口径 | 依赖 |
 |---|---|---|---|
 | **M-SC4** 绑定生成器 | 声明 → 产出 ① C++ ApiTable 接线块 ② C# delegate + 按域静态 facade。**回归基线 = 对现有 16 导出（console 6 + ECS 10）回放**：生成接线替换手写后编译过 + selftest 全绿 + `reload-script` 链路无损 | 声明是唯一手写项；实现体照写（语义不可生成）；尾追加纪律对声明序列生效；生成器入 `tools/scriptapi/` | 无 |
