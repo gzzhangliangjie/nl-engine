@@ -69,6 +69,12 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 **自检**：大场景近处清晰、远处不糊不抖；相机前后移动时各级分辨率过渡平滑无突跳。tag：`s15-clipmap`。
 
 ## M15.2 Nanite/簇 间接阴影 + 去闪烁（2~3 天）
+> **2026-11-14 拍板 B（用户）**：光源空间 HZB 遮挡剔除**本里程碑落地**（「bevy 和 UE 都做了，遮挡迟早要做」）。落地形态（页池增量渲染下的对应物，与 bevy 语义对齐并登记差异）：
+> - **HZB 载体** = 页池半分辨率 2048² min-downsample 链（StructuredBuffer 分段，12 级；页 128 池 texel = 64 HZB texel，页级 = mip6）；构建 CS 每帧从页池当前内容（上帧深度）重建——对应 bevy first cull 用上帧 HZB 的语义。
+> - **剔除 = 三 dispatch**（count → scan+args → fill）：簇球 × dirty 页光源投影判交（UE `CullPerPageDrawCommandsCs` 窄化对位）+ 足迹自适应级 HZB 遮挡判定（bevy `sample_hzb` 对位）→ per-page 段式簇列表 + `DrawIndirectArguments`。
+> - **bevy「first raster 产 HZB → second raster 覆盖」不做**：页池是 MIN 增量渲染非覆盖式，first raster 产物无法丢弃重画；HZB 素材直接来自页池上帧内容（静态场景 = 精确深度），bevy 两阶段的帧间自我修正语义由页缓存承载。MIN 混合下正确遮挡剔除深度无损（被挡簇深度 ≥ 已有深度，MIN 不变）→ bytes 基线预期逐字节同。
+> - per-page draw 的 `startInstanceLocation` 恒 0（D3D12 SV_InstanceID 与 Vulkan gl_InstanceIndex 对 first-instance 语义相反，必须避开）；簇段基址走 GPU 写 counters buffer + volatile b0 z 段传 slot。
+> - min-only HZB 判定的理论误剔洞（区域内近几何占比小时）登记 UE-DIFFS（bevy 同款近似）；页池 stale 内容误剔仅在动态场景，属既有页缓存语义不扩大战线。
 - [ ] 阴影深度渲染复用 S4 的 GPU-driven 间接绘制（簇级剔除/indirect），不另写一遍提交；构件参照 bevy `visibility_buffer_raster_node.rs` 的 ShadowView 变体（`R32Uint` 只写 depth + 两阶段 HZB 剔除），不引入 bevy 的每帧全量重绘语义（我们走页缓存）。
 - [ ] **簇几何必须进阴影路径**（Carrot 反例：虚拟几何不投影）；验收时与 S9 光追阴影并排核对投影覆盖。
 - [ ] temporal / rejection 去闪烁：阴影页跨帧稳定，边缘不闪（参考 UE `ShadingRejection` 思路，但本模块只做阴影页稳定性，不搬 TSR 整套路）。
