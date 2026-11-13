@@ -79,12 +79,11 @@ TRACKS = {
                 "state CLOSED by user instruction 2026-11-11",
     },
     "net": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-net",
-        "branch": "feat/net", "state": "active",
-        "note": "multiplayer/netcode track opened 2026-11-13 by user instruction "
-                "(plan docs/net/NETCODE-PLAN.md, M-NET0~M-NET3; step 12 of "
-                "GAME-DEV-ORDER); transport=ENet, serialization=bitsery "
-                "(Q-N1~N6 decided, see docs/net/NETCODE-OPTIONS.md)",
+        "wt": "", "branch": "feat/net", "state": "closed",
+        "note": "multiplayer/netcode track M-NET0~M-NET3 done (tags net-m0.."
+                "net-done + milestone/net-done); merged to master 9aa58df "
+                "2026-11-13; wt removed same day (user instruction), junctions "
+                "unlinked, branch kept; reopen via 7.1b",
     },
     "physics": {
         "wt": "E:/UE_STUDY_2026/nl-engine-physics",
