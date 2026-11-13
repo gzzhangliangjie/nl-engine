@@ -11,6 +11,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/modes.hpp"
 #include "nl/core/profiler.hpp"    // M-TR0：NL_PROFILE_* 薄封装（OFF 空转）
+#include "nl/core/weather.hpp"     // M-WEA1：天气链（evaluateWeather 纯函数消费）
 #include "nl/core/profiler_memory.hpp"  // M-TR1 K2：进程内存查询（始终可用）
 #include "renderdoc_app.h"              // M-TR2：RenderDoc 进程内抓帧（单头，零链接）
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
@@ -140,6 +141,11 @@ struct Options {
     bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
     bool probeCacheBounce = false; // M11.2：--probe-cache-bounce（命中查缓存，默认关保形）
     float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
+    // M-WEA1：天气链（Q-WE5 已拍板）。seed <0 = 关（缺省常量保形）；>=0 开启后
+    // WeatherState 覆写太阳方向/强度/色温与天穹两色（全链一致）。
+    int weatherSeed = -1;          // --weather-seed N
+    double weatherT = 0.0;         // --weather-t 秒（固定时刻 = 确定性截图源）
+    std::string weatherPreset;     // --weather-preset clear|partly|overcast|rain（可选锁态）
     bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
@@ -290,6 +296,13 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--probe-cache-bounce") o.probeCacheBounce = true;
         else if (a == "--probe-light-scale" && i + 1 < argc)
             o.probeLightScale = static_cast<float>(std::atof(argv[++i]));
+        // M-WEA1：天气链开关（seed>=0 开启；t 固定时刻；preset 可选锁态）。
+        else if (a == "--weather-seed" && i + 1 < argc)
+            o.weatherSeed = std::atoi(argv[++i]);
+        else if (a == "--weather-t" && i + 1 < argc)
+            o.weatherT = std::atof(argv[++i]);
+        else if (a == "--weather-preset" && i + 1 < argc)
+            o.weatherPreset = argv[++i];
         else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
         else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
         // S12 M12.0/M12.1：时域累积 + 空间联合双边参数（仅 --mode filter 消费；
@@ -2584,6 +2597,49 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M11.2（Q11-2a=A）：默认关 → 老 s10-* 卡零漂；S=1 → 老路径基线。
         fp.probeCacheBounce = o.probeCacheBounce;
         fp.probeLightScale = o.probeLightScale;
+        // M-WEA1：天气链（Q-WE5 已拍板）。seed>=0 → WeatherState 调制值覆写
+        // 太阳（方向/环境光/色温 RGB，走 FrameParams.lightDir 现有字段，全链
+        // 统一）与天穹两色；关 = 缺省常量，s10/s11/s12 bytes 保形。
+        // 色温→RGB 简化式（6500K≈白；低仰角偏暖由 WeatherState.sunColorTempK
+        // 驱动；observer=1 归一到 [0,1]，负值钳 0——viewer 侧唯一实现点）。
+        if (o.weatherSeed >= 0) {
+            nl::core::WeatherKind preset = nl::core::WeatherKind::kCount;
+            if (!o.weatherPreset.empty()) {
+                preset = nl::core::weatherKindFromName(o.weatherPreset.c_str());
+                if ((int)preset == (int)nl::core::WeatherKind::kCount) {
+                    nl::core::log::errorCh("viewer", "unknown --weather-preset '",
+                                           o.weatherPreset.c_str(), "'");
+                    return false;
+                }
+            }
+            nl::core::WeatherState ws = nl::core::evaluateWeather(
+                static_cast<std::uint64_t>(o.weatherSeed), o.weatherT, preset);
+            const double ce = std::cos(ws.sunElevation);
+            const double se = std::sin(ws.sunElevation);
+            fp.lightDir[0] = static_cast<float>(ce * std::sin(ws.sunAzimuth));
+            fp.lightDir[1] = static_cast<float>(se);
+            fp.lightDir[2] = static_cast<float>(ce * std::cos(ws.sunAzimuth));
+            fp.lightDir[3] = 0.28f * static_cast<float>(ws.sunIntensity); // ambient 随昼因子
+            fp.weatherSunIntensity = static_cast<float>(ws.sunIntensity); // 直光能量（×2.5 基准）
+            // 色温 K → RGB（Krystof 简化拟合，1000K~40000K 有效；钳 [0,1]）。
+            const double tk = ws.sunColorTempK / 100.0;
+            double r = tk <= 66.0 ? 1.0
+                       : 1.292936186062745 * std::pow(tk - 60.0, -0.1332047592);
+            double g = tk <= 66.0 ? 0.3900815787690196 * std::log(std::max(tk, 1e-9)) - 0.631841443788627
+                                  : 1.129890860895294 * std::pow(tk - 60.0, -0.0755148492);
+            double b = tk >= 66.0 ? 1.0
+                       : (tk <= 19.0 ? 0.0
+                                     : 0.5432067891102761 * std::log(tk - 10.0) - 1.19625408914);
+            fp.weatherSunCol[0] = static_cast<float>(std::clamp(r, 0.0, 1.0));
+            fp.weatherSunCol[1] = static_cast<float>(std::clamp(g, 0.0, 1.0));
+            fp.weatherSunCol[2] = static_cast<float>(std::clamp(b, 0.0, 1.0));
+            fp.weatherZenith[0] = static_cast<float>(ws.skyZenithR);
+            fp.weatherZenith[1] = static_cast<float>(ws.skyZenithG);
+            fp.weatherZenith[2] = static_cast<float>(ws.skyZenithB);
+            fp.weatherHorizon[0] = static_cast<float>(ws.skyHorizonR);
+            fp.weatherHorizon[1] = static_cast<float>(ws.skyHorizonG);
+            fp.weatherHorizon[2] = static_cast<float>(ws.skyHorizonB);
+        }
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
         // S12 M12.0/M12.1（Q12-A + Q12-C A）：GI 分量独立时域累积 + 5x5

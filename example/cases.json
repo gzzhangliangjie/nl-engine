@@ -11065,6 +11065,210 @@
      "command": "nanite-tools weather --preset bogus"
     }
    ]
+  },
+  {
+   "id": "weather-w1",
+   "label": "WEA M-WEA1",
+   "name": "参数化天穹+太阳（weather.slangh 单一事实源 CB 注入，Q-WE5 零漂移拍板）",
+   "tag": "weather-w1",
+   "date": "2026-11-14",
+   "summary": "WEA 轨道第二步（M-WEA1）：skyGradient 参数化（skyGradientParams，运算体逐字符同序）+ legacy 包装迁移完成——4 消费端（probe_trace miss / world_cache miss / direct.slang GI miss / probe_gather --sky-bg）全部走 CB 参数，legacy 常量版已删。CB 注入（Q-WE5 拍板扩容而非独立 CB）：traceCB_ 80→112B、gatherCB_ 128→160B、cacheCB_ 160→192B、GIConstants b5 16→48B（b4 跨 compute/graphics 禁扩 M10.3 实锤）。FrameParams 新增 weatherZenith/weatherHorizon/weatherSunCol/weatherSunIntensity（缺省 = M10.1 常量/白光/1.0 → 天气关时全链 bytes 保形，双后端 8 卡实证）。viewer CLI：--weather-seed/--weather-t/--weather-preset（seed>=0 开启 → evaluateWeather 每帧 sample 覆写太阳方向/环境光/色温 RGB/天穹两色）。M-WEA0 曲线三缺陷随拍修复（2026-11-14 拍板修+重拍）：昼因子 smoothstep（日落全程渐暗，去 8s 悬崖）、灰化顺序修正（夜压暗最后——夜空 0.25 死灰→近黑深蓝）、地平线余光 nightScaleH（黄昏 horizon 衰减慢于天顶 = 橙红晚霞锚）、warm 窗口 2.5/gain 0.85、B 通道 loss 0.45（晚霞去紫）。孪生 verify.py 同步。零基线重拍（Q-WE5 零漂移实证：s10/s11/s12 全程 bytes 逐字节一致）。",
+   "acceptance": [
+    "双后端缺省态保形：s10-refgi/s10-probe/s11-hash/s11-update/s11-bounce/s12-temporal/s12-spatial 全程 bytes 逐字节一致（CB 改读字段缺省值恒等）",
+    "weather-w0 交代物全套重拍 ALL GREEN：selftest 10 锚 PASS + TSV 重拍 + 孪生对拍（新公式）+ 证据图重生成 + ctest wea0-* 双后端 4/4",
+    "画面证据：正午蓝天（t=300 h=(0.61,0.70,0.82)）vs 黄昏橙红晚霞（t=450 h=(0.29,0.25,0.17) R>G>B + 地平线余光）vs 夜近黑（t>=460 余光渐熄）——晴→黄昏→夜连续变化成立",
+    "weather-w1 五用例双后端基线 bytes 对拍（dusk/noon/night sky-bg + probe-viz 探针辐照度同步 + reference-gi 参考链同口径）",
+    "确定性：同参数重跑 viewer 截图逐字节一致（noon 双跑同字节意外实证）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "dusk-sky",
+     "name": "黄昏晚霞：preset clear t=450 日落地平线余光（橙红带）",
+     "kind": "pair",
+     "note": "M-WEA1 曲线拍板画面锚：地平线橙红（R>G>B）+ 天顶近黑。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "450",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 450",
+     "baselines": {
+      "dx12": "example/weather-w1/dusk-sky-dx12.png",
+      "vulkan": "example/weather-w1/dusk-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "noon-sky",
+     "name": "正午蓝天：preset clear t=300（蓝序亮天穹）",
+     "kind": "pair",
+     "note": "与黄昏帧对比 = 晴→黄昏→夜叙事锚。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/noon-sky-dx12.png",
+      "vulkan": "example/weather-w1/noon-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "night-sky",
+     "name": "夜：preset clear t=580（天穹近黑余光熄灭）",
+     "kind": "pair",
+     "note": "夜空锚：nightScaleH 随 warm→0 熄灭，天穹 z=(0.00,0.01,0.01)。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "580",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 580",
+     "baselines": {
+      "dx12": "example/weather-w1/night-sky-dx12.png",
+      "vulkan": "example/weather-w1/night-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "pviz-noon",
+     "name": "探针辐照度 viz 同步：probe-viz t=300（点色吃天气天穹）",
+     "kind": "pair",
+     "note": "探针 miss 天穹走 traceCB_ 新字段——点色随天气变化（M-WEA1 验收行）。",
+     "args": [
+      "--mode",
+      "probe-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe-viz --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/pviz-noon-dx12.png",
+      "vulkan": "example/weather-w1/pviz-noon-vulkan.png"
+     }
+    },
+    {
+     "id": "refgi-noon",
+     "name": "参考链同口径：reference-gi t=300（GIConstants b5 天穹参数）",
+     "kind": "pair",
+     "note": "参考图链吃同一天气参数（b5 compute-only 扩容）——参考/画面同口径可比。",
+     "args": [
+      "--mode",
+      "reference-gi",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode reference-gi --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/refgi-noon-dx12.png",
+      "vulkan": "example/weather-w1/refgi-noon-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }

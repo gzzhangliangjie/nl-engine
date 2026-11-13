@@ -45,6 +45,10 @@ cbuffer CacheConstants : register(b0)
                               // w = shadow tMax
     float4   g_updateCtl;     // x = 软目标概率 p, y = viz 亮度模式（0=life/1=radiance）,
                               // z/w = 保留
+    // M-WEA1（Q-WE5 已拍板）：+2×float4 天穹参数（M-WEA1 CB 注入，CPU 填
+    // M10.1 同值 → bytes 零漂移，2026-11-13 双后端 6/6 实证）。
+    float4   g_cacheZenith;   // rgb = 天顶色 / a 预留（turbidity）
+    float4   g_cacheHorizon;  // rgb = 地平线色 / a 预留（cloudCoverage）
 }
 
 Texture2D g_probeDepth : register(t0);   // D32（velocity prepass 写入）
@@ -240,7 +244,8 @@ void csCacheUpdate(uint idx : SV_DispatchThreadID)
     q.TraceRayInline(g_tlas, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, ray);
     q.Proceed();
     if (q.CommittedStatus() == COMMITTED_NOTHING) {
-        eInd = g_updateMat.rgb * skyGradient(d);       // miss → 天穹（入射口径）
+        eInd = g_updateMat.rgb * skyGradientParams(d, g_cacheZenith.rgb,
+                                                    g_cacheHorizon.rgb); // miss → 天穹（M-WEA1 CB 参数）
     } else {
         const float3 hitP = origin + d * q.CommittedRayT();
         // 命中点法线在 104-tri 粗代理上不可得（M10.1 降级同因）：用命中点

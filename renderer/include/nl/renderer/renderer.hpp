@@ -47,6 +47,13 @@ struct FrameParams {
     float mvp[16]     = {};
     float model[16]   = {};
     float lightDir[4] = {0.45f, 0.80f, 0.50f, 0.28f};  // xyz 方向, w = 环境光
+    // M-WEA1（Q-WE5 已拍板）：天气链参数，缺省 = M10.1 sky.slangh 常量/白光
+    // → trace/cache/gather/refGI 各 CB 改读字段后，--weather 关时 bytes 保形；
+    // --weather-seed >=0 开启时 viewer 用 WeatherState 调制值覆写。
+    float weatherZenith[3]  = {0.16f, 0.30f, 0.58f};   // 天顶色（终值，CPU 已调制）
+    float weatherHorizon[3] = {0.62f, 0.71f, 0.84f};   // 地平线色（终值）
+    float weatherSunCol[3]  = {1.0f, 1.0f, 1.0f};      // 太阳 RGB（色温换算）
+    float weatherSunIntensity = 1.0f;                  // 0..1 直光能量（×2.5 基准强度）
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。

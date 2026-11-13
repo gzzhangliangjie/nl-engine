@@ -209,6 +209,16 @@
 | 升级路径 | 若多物体场景出现可量化的 disocclusion 鬼影 / 光斑残留，**单独拍板**补 previous normal（B2）或完整 previous_gbuffer（B3）；代价 = 新增纹理 + 写入 pass + 双缓冲、Q4 结论改写、全仓勘误 7 处（S9-PLAN / T0-PLAN / SHARED-INFRA-OPTIONS / ROADMAP / SHADER-CONVENTIONS / MILESTONES / 本文件），M12.2 冻结面不动。 |
 | 触发条件 | 多物体场景（真实几何边缘、`deviceZ` 多档）复评时若有量化收益再评估。本场景单凸体 + 纯天空、`probeDepth_` 的 `deviceZ` 在 8-bit 下仅 **184~186 三档**，静态 `velocity=0` 时拒绝层结构性不触发、测不出量化收益 —— **不得**据此宣称「历史拒绝已消除主观鬼影」；M12.2 的运动证据只是跟手性代理（`meanMAE(ON,同帧无历史)/meanMAE(OFF,同帧无历史)` = 0.846）。 |
 
+### D21 天气天穹/太阳：UE 全套大气物理（LUT+组件重建）vs 我们解析参数化 + CPU 状态层（WEA M-WEA1 建档，2026-11-14；计划内简化，WEATHER-PLAN Q-WE3/Q-WE5 拍板）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 只读对照 `Renderer/Private/SkyAtmosphereRendering.h`：`FAtmosphereUniformShaderParameters`（Rayleigh/Mie 散射+吸收、Absorption 双层密度、GroundAlbedo 全套物理参数 uniform，组件改→CPU 侧重建）+ transmittance/multiscattering LUT 组；天气=大气参数随状态重算 + 天空光 cubemap 按状态重烤。太阳光经 `directional_light_transmittance` LUT 采样。 |
+| 我们现状（M-WEA1） | 解析参数化天穹（`skyGradientParams`，M10.1 基色 + 夜/暖/浊/云 CPU 调制终值经 CB 下发）+ 太阳方向/强度/色温 RGB（`FrameParams.lightDir`/`weatherSunCol`，每帧由 `nl/core/weather` 状态层 sample）。零 LUT、零新增纹理、零 raymarch（Q-WE3/Q-WE4 拍板随方案 A）。bevy 口径参照：`bevy_solari realtime/atmosphere.wesl` import `bevy_pbr::atmosphere::directional_light_transmittance`（LUT 采样同 UE 族）；`scene/binder/lights.rs` 太阳 = directional light GPU 结构（direction_to_light/illuminance/sun_disk_angular_size），无专门天气层。Carrot Skybox = 静态 cubemap 三选一（反面教材维持原判）。 |
+| 定性 | **计划内简化（有意，非 bug）**：参数层先行（WEATHER-PLAN 方案 A），GI 响应靠天气参数挂 Lumen 输入项自动达成；大气 LUT 全套属方案 B 远期（`WEATHER-PHASE2-PLAN.md` 出站条件见 §6）。偏离点：太阳盘形状/大气散射弧/多散射不出（解析近似），天穹为两色渐变 + 调制而非物理积分。 |
+| 升级路径 | 方案 B（大气 LUT + froxel 体积雾 + 体积云）在参数层全收口且用户确认「视觉仍不够」才立项；届时 `weather.slangh` 单一事实源替换为 LUT 采样、CB 布局重拍（Q-WE5 闸门复用）。 |
+| 确定性口径 | 天气曲线（昼因子 smoothstep / 灰化顺序 / 地平线余光 / 晚霞暖序）已按 2026-11-14 拍板修订并入档 `SHADER-CONVENTIONS §2.22`；CPU（weather.cpp）与 python 孪生（verify.py）两实现同式同源。 |
+
 
 ## 计划内待办（非偏差，挂账防丢）
 

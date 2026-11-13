@@ -177,7 +177,9 @@ WeatherState WeatherTimeline::sample(double t) const {
     st.sunAzimuth = 2.0 * 3.14159265358979323846 * dayPhase;
     st.sunElevation = elev;
     double sinElev = std::sin(elev);
-    double daylight = clamp01(sinElev * 8.0); // 地平线上 ~7° 内升到全昼
+    // 昼因子 = smoothstep(sinElev)：日出/日落全程平滑渐暗（M-WEA1 曲线拍板
+    // 2026-11-14：旧 clamp01(sinElev*8) 渐变窗口仅 ~8s，黄昏无渐暗过程）。
+    double daylight = smoothstep(clamp01(sinElev));
 
     // ---- 纪元定位 + 过渡混合（与 wetness 折迭共用 blendedProfileAt）----
     std::int64_t e = static_cast<std::int64_t>(t / kEpochLength);
@@ -213,13 +215,22 @@ WeatherState WeatherTimeline::sample(double t) const {
 
     // ---- 太阳能量 / 色温 / 太阳盘 ----
     st.sunIntensity = daylight * st.cloudTransmittance;
-    st.sunColorTempK = 2200.0 + (6500.0 - 2200.0) * clamp01(sinElev * 2.5);
+    st.sunColorTempK = 2200.0 + (6500.0 - 2200.0) * clamp01(sinElev * 1.5); // 暖阳窗口放宽（M-WEA1 拍板）
     st.sunDiskIntensity = clamp01(daylight * st.cloudTransmittance * st.cloudTransmittance);
 
     // ---- 天穹（M10.1 skyGradient 常量同源基色）----
     // 基色：zenith(0.16,0.30,0.58) / horizon(0.62,0.71,0.84)。
+    // M-WEA1 曲线拍板（2026-11-14）：调制顺序 = warm → 灰化 → 夜压暗（最后）。
+    // 旧序把云灰拉向常数 0.35 发生在夜压暗之后 → 夜空被抬回 0.25 死灰；
+    // 新序夜空 = 基色×nightScale ≈ 深蓝近黑（蓝分量最高，自然夜色）。
     double nightScale = 0.02 + 0.98 * daylight;
-    double warm = clamp01(1.0 - std::fabs(sinElev) * 4.0); // 地平线附近=1
+    // 暖色窗口放宽到 sinElev<0.4（旧 0.25 峰值恰逢日落瞬间天已黑），
+    // 增益 0.40→0.85：晴态黄昏 horizon R 明显高于 B（晚霞可辨）。
+    double warm = clamp01(1.0 - std::fabs(sinElev) * 2.5); // 地平线附近=1
+    // 地平线余光（M-WEA1 曲线拍板 2026-11-14）：黄昏 warm 高时 horizon 衰减
+    // 慢于天顶（低层大气散射余光）——日落地平线橙红带 + 天顶近黑 = 黄昏锚；
+    // 深夜 warm→0 余光自然熄灭。
+    double nightScaleH = 0.02 + 0.98 * std::max(daylight, warm * 0.35);
     double grayMix = clamp01((st.turbidity - 2.0) / 4.0) * 0.5; // 浊度去饱和
     double cloudMix = st.cloudCoverage * 0.7;                   // 云遮灰化
     // 分通道处理（灰化目标 = 通道亮度近似，取 RGB 均值保持确定性简单式）。
@@ -229,23 +240,24 @@ WeatherState WeatherTimeline::sample(double t) const {
         return v + (gray - v) * m;
     };
     auto apply = [&](Chan& c, double warmGain, double warmLoss) {
+        // 顺序（M-WEA1 拍板）：暖染色 → 浊度/云灰化 → 夜压暗（最后）。
         c.h *= 1.0 + warm * warmGain;
         c.z *= 1.0 + warm * warmGain * 0.5;
         c.h *= 1.0 - warm * warmLoss;
         c.z *= 1.0 - warm * warmLoss * 0.5;
-        c.z *= nightScale;
-        c.h *= nightScale;
         double avg = (c.z + c.h) * 0.5;
         c.z = mixGray(c.z, avg * 0.9, grayMix);
         c.h = mixGray(c.h, avg * 0.9, grayMix);
         c.z = mixGray(c.z, 0.35, cloudMix);
         c.h = mixGray(c.h, 0.35, cloudMix);
+        c.z *= nightScale;
+        c.h *= nightScaleH;   // 地平线余光：衰减慢于天顶（黄昏锚）
         c.z = clamp01(c.z);
         c.h = clamp01(c.h);
     };
-    apply(cz, 0.40, 0.30);
+    apply(cz, 0.85, 0.30);
     apply(cg, 0.10, 0.10);
-    apply(cb, 0.00, 0.00);
+    apply(cb, 0.00, 0.45);   // B 随 warm 压暗（M-WEA1 拍板：晚霞去紫偏橙红）
     st.skyZenithR = cz.z; st.skyZenithG = cg.z; st.skyZenithB = cb.z;
     st.skyHorizonR = cz.h; st.skyHorizonG = cg.h; st.skyHorizonB = cb.h;
 

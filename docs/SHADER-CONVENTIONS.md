@@ -418,3 +418,20 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 - Q12-D = **D-B 关滤波 N 帧平均**：`--temporal-off --filter-gi-dump` + `--screenshot-seq` 逐像素平均出参考图；抖动帧号 `s12Frame_ % 64` → **N ≤ 64**（本轮取 32）。零 shader 改动，纯工具层。
 - ⚠️ M12.0/M12.1 **无 S12 鬼影实测**的缺口**已于 M12.2 落码期补**：`--orbit-speed 1.5` + `--screenshot-seq` 运动序列 + `check-s12-done.py ghost`（纯工具）；本场景无真实几何边缘，主观鬼影/多物体复评仍挂后续项。
 - 权威落点 `docs/s12/S12-PLAN.md §0.8`；开工闸时 `example/cases.json` 未动，落码期已补 `s12-done` 版本卡。
+
+### 2.22 M-WEA1 天气参数 CB 注入（2026-11-14，tag `weather-w1`；WEATHER-PLAN Q-WE5 拍板）
+
+**单一事实源**：`sky.slangh` 的 `skyGradientParams(dir, zenith, horizon)`（运算体与 M10.1 常量版逐字符同序，仅常量提升为参数）。4 消费端全部 CB 传参：`probe_trace` miss / `world_cache` miss / `direct.slang` GI miss（GIConstants b5）/ `probe_gather` `--sky-bg`。**legacy `skyGradient(dir)` 已删**——新增天穹消费端必须走 CB 参数，禁回退常量版。
+
+**CB 扩容对照表**（CPU 分配必须 ≥ dxc 声明 Size，§2.21 铁律不变；全部 volatile + 每帧全量覆写）：
+
+| CB | 旧 | 新 | 新增字段（float4） | CPU 填充（scene.cpp） |
+|---|---|---|---|---|
+| `TraceConstants` b0（probe_trace） | 80B | **112B** | `g_traceZenith` / `g_traceHorizon` | tcb[20..27] = `params.weatherZenith/Horizon` |
+| `GatherConstants` b0（probe_gather） | 128B | **160B** | `g_gZenith` / `g_gHorizon` | gcb[32..39] 同上 |
+| `CacheConstants` b0（world_cache） | 160B | **192B** | `g_cacheZenith` / `g_cacheHorizon` | cb[40..47] 同上 |
+| `GIConstants` b5（direct.slang csref） | 16B | **48B** | `g_giZenith` / `g_giHorizon` | gi[4..11] 同上；**b5 compute-only 扩容安全，b4 跨 compute/graphics 禁扩（§2.20 M10.3 实锤）** |
+
+**保形机制**：`FrameParams.weatherZenith/weatherHorizon` 缺省 = M10.1 常量（0.16/0.30/0.58 / 0.62/0.71/0.84）、`weatherSunCol` 缺省白、`weatherSunIntensity` 缺省 1.0——**天气关（`--weather-seed` 不给）时全链 bytes 与 M-WEA0 前逐字节一致**（双后端 8 卡实证）。太阳方向/强度/环境光复用 `FrameParams.lightDir` 现有字段（天气开时 viewer 侧覆写，全链统一）。
+
+**天气曲线（nl/core weather，M-WEA0 重拍版）**：昼因子 = `smoothstep(clamp01(sinElev))`（日出日落全程渐暗）；天穹调制顺序 = **暖染色 → 浊度/云灰化 → 夜压暗（最后）**——灰化目标 0.35 是常数，必须发生在 nightScale 之前，否则夜空被抬回死灰；地平线余光 `nightScaleH = 0.02 + 0.98·max(daylight, warm·0.35)`（horizon 衰减慢于 zenith = 黄昏橙红锚）；warm 窗口 `clamp01(1-|sinElev|·2.5)`、R gain 0.85 / B loss 0.45（晚霞去紫）。CPU 侧（weather.cpp）与 python 孪生（verify.py）两实现同式，改任一处必须同步。

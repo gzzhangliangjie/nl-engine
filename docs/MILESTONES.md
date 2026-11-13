@@ -3267,3 +3267,29 @@
 - `git add -A` 撞 wt 内 `example/s9-reference/nul`（Windows 保留名垃圾文件无法 index）→ 显式逐路径 add。
 
 **下一步**：M-WEA1 参数化天穹+太阳（`weather.slangh` 单一事实源接探针/cache/reference-gi/`--sky-bg`，`traceCB_` 注入；**开工闸 = Q-WE5 冻结基线重拍授权单独拍板 + SHADER-CONVENTIONS 天气参数节 + UE-DIFFS 追加**）；merge 回 master 待用户拍板（M-WEA0+M-WEA1 一并或按用户节奏）。
+
+---
+
+## WEA M-WEA1：参数化天穹+太阳——Q-WE5 零漂移拍板 + 曲线重拍（feat/weather 第二里程碑，2026-11-14，tag `weather-w1`）
+
+**动作**：M-WEA1 开工（用户指令「开工」）→ claim M-WEA1 → 三处证据重读本里程碑点名模块（bevy_solari `lights.rs`/`atmosphere.wesl`：太阳=directional light GPU 结构、miss→atmosphere transmittance LUT、无专门天气层；UE `SkyAtmosphereRendering.h`：`FAtmosphereUniformShaderParameters` 全套大气物理 uniform+LUT、组件改→CPU 重建；Carrot `Skybox.hpp`：静态 cubemap 反面教材维持原判）→ 本仓落点实读（`sky.slangh` 18 行常量版 + 4 消费端 + `traceCB_` 80B 占满）→ **Q-WE5 三项摆证据拍板**（授权改冻结基线 / 扩 traceCB_ +2×float4 / 重拍策略评估）。评估先实测：零漂移实验（参数化+探针 miss 接线，未 commit）双后端 6/6 卡 bytes 逐字节一致 → 用户拍板**授权全量接线**。接线后**曲线验收撞出 M-WEA0 三缺陷**（昼因子 8s 悬崖 / 黄昏无暖色 / 夜空 0.25 死灰）→ 用户拍板**修曲线+重拍 M-WEA0**。
+
+**提交版本**：`feat/weather` M-WEA1 提交（annotated tag `weather-w1`）。A 类穿插轨道，不 bump `kStage`（仍 S8.2）；`--weather` 缺省关 = 冻结基线 bytes 保形。
+
+**完成情况**：
+- **Q-WE5 零漂移拍板**（写回 WEATHER-PLAN Q-WE5 行）：skyGradient 参数化（`skyGradientParams`，运算体逐字符同序）+ 注入方式扩 traceCB_（非独立 CB）+ **受影响历史卡零重拍**（原预算 6~10 卡×双后端归零）。
+- **全量接线**：`probe_trace`/`world_cache`/`direct.slang`(GIConstants b5)/`probe_gather` 四 miss 全走 CB 参数，legacy 包装已删；CB 扩容 traceCB_ 112B / gatherCB_ 160B / cacheCB_ 192B / refGI b5 48B（b4 跨阶段禁扩 M10.3 实锤）；CPU 侧 `FrameParams.weatherZenith/Horizon/SunCol/SunIntensity`（缺省=M10.1 常量→保形）。
+- **天气数据源**：viewer `--weather-seed/--weather-t/--weather-preset` → `evaluateWeather` 每帧 sample → 覆写太阳方向/ambient/色温 RGB/天穹两色（全链统一）；`--weather-preset bogus` 负向拒绝。
+- **M-WEA0 曲线重拍**（拍板修复）：昼因子 `smoothstep(sinElev)`（日落全程渐暗）、灰化顺序修正（夜压暗最后，夜空 0.25 死灰→近黑）、地平线余光 `nightScaleH`（黄昏橙红晚霞锚）、warm 2.5/0.85 + B loss 0.45（去紫）；孪生 verify.py 同步；run.bat ALL GREEN + selftest 10 锚 PASS + ctest wea0-* 双后端 4/4 + 证据图重生成。
+- **验收全绿**：双后端缺省态保形（s10-probe/s10-refgi/s11-hash/s11-update/s11-bounce/s12-temporal/s12-spatial bytes 逐字节一致）；weather-w1 新卡 5 用例（dusk/noon/night sky-bg + probe-viz 辐照度同步 + reference-gi 同口径）双后端 **10/10 bytes ALL GREEN**；画面证据正午蓝天 vs 黄昏橙红 vs 夜近黑。
+- **文档固化**：SSC §2.22 天气参数节（CB 对照表+保形+曲线口径）；UE-DIFFS **D21**（解析近似 vs UE 大气 LUT）；WEATHER-PLAN Q-WE5/动作勾账。
+- `server.py --check` exit 0。
+
+**踩坑**：
+- **`nightScaleH` 用 `warm` 于声明前**（C2065）：曲线修订插入顺序错，rm 旧 exe 后连续三次构建失败叠加「Built target 日志残留」误判成沙箱吞产物——**根因就是编译错**，grep error C 一击定位。教训：构建失败先 grep error 再定性环境。
+- **日相位对称**：seed42 的 t=150/450 画面逐字节相同非 bug（elevation 对称 + 天气态同 + sunI 同 0）——验证天气变化必须选非对称时刻或对比多锚。
+- **灰化目标常数 0.35 × 顺序**：云灰化发生在夜压暗之后 → 夜空 0.25 死灰（M-WEA0 埋雷）；「调制顺序」也是曲线契约的一部分。
+- **Bash cwd 漂移第 4~5 次**（gate 已机械拦截 + 主树 gate 提示词立案）：本轨每条命令必须显式 `cd <wt> &&` 开头，忘写即被 gate 拒（三次被拦零损失——闸起效了）。
+- wt 树 viewer.exe/nanite-tools.exe 曾消失（M-WEA0 期间 cwd 漂移 rm 误删，主树 gate 提示词立案同源）。
+
+**下一步**：M-WEA2 云透射+雾（`cloudTransmittance` 进探针/直光衰减 + 高度雾近似——参数已备齐，需拍板接线面）；merge 回 master 待用户拍板（M-WEA0+WEA1 一并或按节奏）。

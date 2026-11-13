@@ -130,36 +130,40 @@ class Timeline:
         TWO_PI = 2.0 * math.pi
         elev = math.sin(TWO_PI * day_phase - 0.5 * math.pi) * (0.5 * math.pi)
         sin_elev = math.sin(elev)
-        daylight = clamp01(sin_elev * 8.0)
+        # M-WEA1 曲线拍板（2026-11-14）：昼因子 smoothstep（日出日落全程渐暗）。
+        daylight = smoothstep(clamp01(sin_elev))
 
         rain, cov, turb, fog, fh = blended_profile(self.kinds, self.epoch_count, t)
         trans = clamp01(1.0 - clamp01(cov) * 0.85)
         sun_i = daylight * trans
-        temp = 2200.0 + (6500.0 - 2200.0) * clamp01(sin_elev * 2.5)
+        temp = 2200.0 + (6500.0 - 2200.0) * clamp01(sin_elev * 1.5)
         disk = clamp01(daylight * trans * trans)
 
         night = 0.02 + 0.98 * daylight
-        warm = clamp01(1.0 - abs(sin_elev) * 4.0)
+        # 地平线余光：黄昏 warm 高时 horizon 衰减慢于天顶（黄昏锚）。
+        warm = clamp01(1.0 - abs(sin_elev) * 2.5)
+        night_h = 0.02 + 0.98 * max(daylight, warm * 0.35)
         gray = clamp01((turb - 2.0) / 4.0) * 0.5
         cloud_mix = clamp01(cov) * 0.7
 
         def apply(z, h, gain, loss):
+            # M-WEA1 拍板顺序：暖染色 → 灰化 → 夜压暗（最后）。
             h *= 1.0 + warm * gain
             z *= 1.0 + warm * gain * 0.5
             h *= 1.0 - warm * loss
             z *= 1.0 - warm * loss * 0.5
-            z *= night
-            h *= night
             avg = (z + h) * 0.5
             z = z + (avg * 0.9 - z) * gray
             h = h + (avg * 0.9 - h) * gray
             z = z + (0.35 - z) * cloud_mix
             h = h + (0.35 - h) * cloud_mix
+            z *= night
+            h *= night_h
             return clamp01(z), clamp01(h)
 
-        zr, hr = apply(0.16, 0.62, 0.40, 0.30)
+        zr, hr = apply(0.16, 0.62, 0.85, 0.30)
         zg, hg = apply(0.30, 0.71, 0.10, 0.10)
-        zb, hb = apply(0.58, 0.84, 0.00, 0.00)
+        zb, hb = apply(0.58, 0.84, 0.00, 0.45)  # B 随 warm 压暗（晚霞去紫，M-WEA1 拍板）
 
         wpos = t / WET_STEP
         wi = int(wpos)
