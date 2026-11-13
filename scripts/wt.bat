@@ -10,10 +10,16 @@ rem Usage:
 rem   scripts\wt.bat <track> build      [DX12|VULKAN]   (default DX12)
 rem   scripts\wt.bat <track> ctest      DX12|VULKAN [extra ctest args...]
 rem   scripts\wt.bat <track> regression [regression.py args...]
+rem   scripts\wt.bat <track> clean      [DX12|VULKAN|all] (default all)
+rem clean: delete build\^<backend^>\viewer.exe + nanite-tools.exe in the
+rem TARGET tree (mtime-trap staleness fix). NEVER bare-rm build products
+rem with a relative path from an untrusted cwd (2026-11-13: x2 main-tree
+rem artifact deletion). cwd never matters -- deletion lands in the wt.
 rem Examples:
 rem   scripts\wt.bat vsm build DX12
 rem   scripts\wt.bat vsm ctest DX12
 rem   scripts\wt.bat vsm regression --only perf-m1
+rem   scripts\wt.bat vsm clean
 rem
 rem Implementation note: NO labels/shift inside parenthesized blocks (cmd
 rem parse-time expansion trap). All loops/dispatch are flat goto flow.
@@ -55,7 +61,8 @@ if not exist "%WT%\" goto :nowt
 if /i "%OP%"=="build" goto :op_build
 if /i "%OP%"=="ctest" goto :op_ctest
 if /i "%OP%"=="regression" goto :op_regression
-echo WT.BAT FAIL: unknown op "%OP%" (build ^| ctest ^| regression).
+if /i "%OP%"=="clean" goto :op_clean
+echo WT.BAT FAIL: unknown op "%OP%" (build ^| ctest ^| regression ^| clean).
 exit /b 4
 
 :op_build
@@ -86,6 +93,36 @@ set "RC=%errorlevel%"
 popd
 exit /b %RC%
 
+:op_clean
+if "%A1%"=="" set "A1=all"
+if /i "%A1%"=="all" goto :clean_all
+if /i "%A1%"=="DX12" goto :clean_one
+if /i "%A1%"=="VULKAN" goto :clean_one
+echo WT.BAT FAIL: clean needs DX12^|VULKAN^|all (got "%A1%").
+exit /b 4
+:clean_all
+call :do_clean DX12
+call :do_clean VULKAN
+exit /b 0
+:clean_one
+call :do_clean %A1%
+exit /b %errorlevel%
+
+:do_clean
+if exist "%WT%\build\%~1\viewer.exe" (
+  del /f /q "%WT%\build\%~1\viewer.exe"
+  echo WT.BAT clean: removed %WT%\build\%~1\viewer.exe
+) else (
+  echo WT.BAT clean: none %WT%\build\%~1\viewer.exe
+)
+if exist "%WT%\build\%~1\nanite-tools.exe" (
+  del /f /q "%WT%\build\%~1\nanite-tools.exe"
+  echo WT.BAT clean: removed %WT%\build\%~1\nanite-tools.exe
+) else (
+  echo WT.BAT clean: none %WT%\build\%~1\nanite-tools.exe
+)
+goto :eof
+
 :notrack
 echo WT.BAT FAIL: no active worktree for track "%TRACK%" (details on stderr).
 exit /b 4
@@ -95,9 +132,10 @@ echo WT.BAT FAIL: worktree dir missing on disk: %WT%
 exit /b 4
 
 :usage
-echo Usage: scripts\wt.bat ^<track^> build^|ctest^|regression [args...]
+echo Usage: scripts\wt.bat ^<track^> build^|ctest^|regression^|clean [args...]
 echo   build      : wt.bat ^<track^> build [DX12^|VULKAN]
 echo   ctest      : wt.bat ^<track^> ctest DX12^|VULKAN [extra ctest args]
 echo   regression : wt.bat ^<track^> regression [regression.py args]
+echo   clean      : wt.bat ^<track^> clean [DX12^|VULKAN^|all]
 echo Active tracks: see .wt_pool_busy.json or: python tools\wt_gate.py locate ^<track^>
 exit /b 4

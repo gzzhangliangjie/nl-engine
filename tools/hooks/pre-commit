@@ -1,0 +1,52 @@
+#!/bin/sh
+# pre-commit: master-tree commit guard (2026-11-13 cwd-drift incidents).
+#
+# Refuses commits on master/main while any parallel-track claim is ACTIVE in
+# .wt_pool_busy.json, unless the operator opts in with NL_COMMIT_MAINREPO=1.
+# Incident this guards: MILESTONES.md was committed to master (a83b8c0) by a
+# session whose cwd drifted back to the main tree.
+#
+# Worktree commits (feat/*, milestone/*) pass through untouched -- the branch
+# check below exits early for anything that is not master/main.
+# Hook file lives in the SHARED .git/hooks (all worktrees), authoritative copy
+# tracked in repo at tools/hooks/pre-commit -- after editing, re-install:
+#   cp tools/hooks/pre-commit .git/hooks/pre-commit
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+case "$branch" in
+  master|main) ;;
+  *) exit 0 ;;
+esac
+
+common=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0
+main_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd)
+busy="$main_root/.wt_pool_busy.json"
+
+[ -f "$busy" ] || exit 0
+
+active=$(python - "$busy" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    print(0)
+    raise SystemExit
+print(sum(1 for e in d.values() if isinstance(e, dict) and e.get("state") == "active"))
+PYEOF
+) || exit 0
+
+[ "$active" -gt 0 ] || exit 0
+
+if [ "$NL_COMMIT_MAINREPO" = "1" ]; then
+  echo "WARN: master commit allowed via NL_COMMIT_MAINREPO=1 (deliberate mainline override)"
+  exit 0
+fi
+
+echo "PRE-COMMIT FAIL: refusing commit on '$branch' while $active parallel-track claim(s) are ACTIVE."
+echo "  2026-11-13 cwd-drift incident: MILESTONES was mis-committed to master this way."
+echo "  Commits belong in your claimed worktree (feat/* branch):"
+echo "    git -C <wt-path> add ... && git -C <wt-path> commit ..."
+echo "  Deliberate mainline commit (registry/doc syncs on master):"
+echo "    set NL_COMMIT_MAINREPO=1   (cmd)   or   NL_COMMIT_MAINREPO=1 git commit ... (sh)"
+exit 1

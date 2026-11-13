@@ -19,6 +19,11 @@ Output anchor on pass (repo HUD convention, ASCII only):
 
 Subcommands:
   check-build <script_path>   gate for .bat build scripts (call at bat entry)
+  check-cmd [--expect-track T]  gate for cwd-based dangerous ops (delete/write/
+                              append). Call at script entry: the tree of CWD
+                              must be a registered ACTIVE worktree; with
+                              --expect-track it must be that track's tree.
+                              Main-repo ops need NL_CMD_MAINREPO=1 (deliberate).
   locate <track>              print the active wt path of <track> (stdout only)
 
 Exit codes: 0 pass, 3 refused, 4 track not found / not active.
@@ -117,6 +122,58 @@ def cmd_check_build(script_path):
     return 3
 
 
+def cmd_check_cmd(expect_track=None):
+    """Gate for cwd-based dangerous ops (2026-11-13 cwd-drift incidents:
+    relative-path rm deleted MAIN-tree build artifacts x2, cases.json card
+    appended into the MAIN tree). The tree of CWD must be a registered
+    ACTIVE worktree; main repo needs the deliberate NL_CMD_MAINREPO=1."""
+    root = tree_root_of(os.getcwd())
+    if not root:
+        print("WT-GATE FAIL: cwd is not inside any git tree: %s" % os.getcwd())
+        return 3
+    main_root = main_root_of(root)
+    if not main_root:
+        print("WT-GATE FAIL: cannot resolve main tree for %s" % root)
+        return 3
+    if _norm(root) == _norm(main_root):
+        if os.environ.get("NL_CMD_MAINREPO") == "1":
+            print("WARN: main-repo op allowed via NL_CMD_MAINREPO=1 "
+                  "(deliberate mainline override)")
+            return 0
+        print("WT-GATE FAIL: refusing cwd-based dangerous op in the MAIN repo.")
+        print("  cwd tree: %s" % root)
+        print("  2026-11-13 cwd-drift incidents: relative rm deleted main-tree")
+        print("  build artifacts; cases.json card written into the main tree.")
+        print("  Fix: run every command with an explicit leading cd, e.g.")
+        print("    cd /e/UE_STUDY_2026/nl-engine-<track> && python ...")
+        print("  Deliberate mainline ops:")
+        print("    set NL_CMD_MAINREPO=1")
+        return 3
+    busy = _busy(main_root)
+    for track, entry in sorted(busy.items()):
+        if entry.get("state") != "active":
+            continue
+        if _norm(entry.get("wt", "")) == _norm(root):
+            branch = _branch_of(root)
+            if branch and entry.get("branch") and branch != entry["branch"]:
+                print("WT-GATE FAIL: branch mismatch in claimed wt.")
+                print("  registry: %s   actual: %s" % (entry["branch"], branch))
+                return 3
+            if expect_track and expect_track != track:
+                print("WT-GATE FAIL: track mismatch.")
+                print("  expected: %s   cwd tree belongs to: %s"
+                      % (expect_track, track))
+                return 3
+            print("[nl:wt-gate] root=%s track=%s branch=%s milestone=%s"
+                  % (root, track, branch or "?", entry.get("milestone", "?")))
+            return 0
+    print("WT-GATE FAIL: cwd tree is NOT a registered ACTIVE worktree.")
+    print("  tree: %s" % root)
+    print("  active tracks: %s" % (", ".join(sorted(
+        t for t, e in busy.items() if e.get("state") == "active")) or "(none)"))
+    return 3
+
+
 def cmd_locate(track):
     here = tree_root_of(os.path.dirname(os.path.abspath(__file__)))
     main_root = main_root_of(here) or here
@@ -142,6 +199,20 @@ def main():
             print("usage: wt_gate.py check-build <script_path>", file=sys.stderr)
             return 4
         return cmd_check_build(sys.argv[2])
+    if sys.argv[1] == "check-cmd":
+        expect = None
+        args = sys.argv[2:]
+        if args and args[0] == "--expect-track":
+            if len(args) != 2:
+                print("usage: wt_gate.py check-cmd [--expect-track <track>]",
+                      file=sys.stderr)
+                return 4
+            expect = args[1]
+        elif args:
+            print("usage: wt_gate.py check-cmd [--expect-track <track>]",
+                  file=sys.stderr)
+            return 4
+        return cmd_check_cmd(expect)
     if sys.argv[1] == "locate":
         if len(sys.argv) != 3:
             print("usage: wt_gate.py locate <track>", file=sys.stderr)
