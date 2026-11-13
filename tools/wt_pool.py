@@ -114,6 +114,15 @@ TRACKS = {
         "branch": "feat/pbr-direct", "state": "closed",
         "note": "merged to master e57173d (tag pbr-direct); wt removed 2026-11-09, branch kept",
     },
+    "vsm": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-vsm",
+        "branch": "feat/vsm", "state": "active",
+        "note": "S15 VSM B-class interleaved track (rasterized shadow route, plan "
+                "docs/s15/S15-PLAN.md, M15.0~M15.2); opened 2026-11-13 by user "
+                "instruction; wt built at master 5234412, junctions .workbuddy + "
+                "slang dist, skip-worktree set; M15.0 = physical page pool + single "
+                "clipmap level + projection sampling (tag s15-vsm)",
+    },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
         "branch": "feat/script", "state": "closed",
@@ -127,19 +136,20 @@ TRACKS = {
                 "state CLOSED by user instruction 2026-11-13",
     },
     "camera": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-camera",
-        "branch": "feat/camera", "state": "active",
+        "wt": "", "branch": "feat/camera", "state": "closed",
         "note": "A-class track (camera family, game-dev step 4; plan "
                 "docs/p8/P8-CAMERA-PLAN.md, M-CAM0~CAM4); a段(M-CAM0/CAM1a/CAM3a) "
                 "merged 7b0f24a (tags cam-m0/cam-1a/cam-3a) + b段(M-CAM1b/CAM2b/CAM3b + "
-                "M-CAM4) merged 745ff83 (tag cam-b); wt removed 2026-11-11, branch kept; "
-                "REOPENED 2026-11-13 by user instruction to finish the pending visual "
-                "cards; M-CAM5 closed (tag cam-m5 @ b0a2515, close gate + release --done "
-                "passed, report .wt_pool_close/camera-M-CAM5.md): four visual cards "
+                "M-CAM4) merged 745ff83 (tag cam-b); REOPENED 2026-11-13 by user "
+                "instruction to finish the pending visual cards; M-CAM5 closed "
+                "(tag cam-m5 @ b0a2515, close gate + release --done passed, report "
+                ".wt_pool_close/camera-M-CAM5.md): four visual cards "
                 "cam-1b/cam-2b/cam-3b/cam-mcam4 + example/cam-b/ baselines + two latent "
                 "b-segment bug fixes (forwardFromView row/col, lookDirection by-value); "
                 "merged to master 52700f1 (milestone/cam-m5 branch kept); "
-                "wt kept pending user teardown decision",
+                "wt torn down 2026-11-13 by user instruction (junctions removed, "
+                "dir deleted, worktree unregistered), branch + tags kept; track "
+                "fully done, reopen via §7.1b only",
     },
     "input": {
         "wt": "", "branch": "feat/input", "state": "closed",
