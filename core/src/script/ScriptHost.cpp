@@ -161,9 +161,15 @@ Result ScriptHost::reloadScript(std::string* outInfo) {
         return cr;
     }
 
-    // M-GL4：reload 后重取 OnTick（新 ALC 新指针；缺失 = 无 tick，旧脚本兼容）。
+    // M-GL4：reload 后重取 OnTick——同 loadScript 走 bootstrap BootTickPtr
+    //（collectible 正本）。**禁 getEntryPoint 直拉脚本 dll**：hostfxr 会把脚本
+    // 程序集再装一份进默认 ALC（静态字段独立一套，OnTick 读旧态 Engine.Init）。
+    // 旧实现此处误用 getEntryPoint = M-GL4 口径漏改（旧示例均无 OnTick 未被
+    // 测到），M-SC4 实读揪出修正。
     tickFn_ = nullptr;
-    if (vm_->getEntryPoint(scriptDll_, scriptType_, "OnTick", &tickFn_).ok && tickFn_) {
+    void* tfn = nullptr;
+    if (vm_->scriptTickFn(scriptType_, "OnTick", &tfn).ok && tfn) {
+        tickFn_ = reinterpret_cast<EntryPointFn>(tfn);
         tickEnabled_ = true;
     } else {
         tickFn_ = nullptr;

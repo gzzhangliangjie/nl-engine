@@ -32,6 +32,9 @@
 // CommandResult{false}→ExecCode::CommandFailed，进程存活（与 Vm/工具同口径）。
 
 #include "nl/script/Vm.hpp"
+#include "nl/script/ApiTable.g.hpp"   // M-SC4：ApiTable 结构 + POD 镜像 = 生成物
+                                      //（单源 script/script-api/exports.api；手改无效，
+                                      // 重跑 tools/scriptapi/gen.py；新鲜度闸 CMake 侧强制）
 
 #include <cstdint>
 #include <string>
@@ -50,67 +53,12 @@ inline constexpr int kEcsNoEntity = 2;
 inline constexpr int kEcsComponent = 3;
 inline constexpr int kEcsBadArg = 4;
 
-// C ABI api 表（随托管入口 args 传入；C# 侧按偏移 Marshal.ReadIntPtr 读）。
-// 字段顺序 = 表内偏移顺序（64 位指针，逐个 8 字节）。v1 console 6 导出 +
-// v2 ECS 9 导出（M-SC2，尾部追加——C# 按偏移读，旧脚本零波及）。
-struct ApiTable {
-    // int cvarGet(const char* name, const char** outValue)
-    //   返回类型码：0=未注册 / 1=bool / 2=int / 3=float / 4=string；*outValue=toString()
-    void* cvarGet;
-    // int cvarSet(const char* name, const char* value)
-    //   引擎路径文本赋值（setFromString 语义，onChanged 触发）：
-    //   0=ok / 1=未知 cvar / 2=类型不符或格式非法
-    void* cvarSet;
-    // const char* cvarList()
-    //   全量 CVar 视图（"name = value (type) help" 逐行），持有规则见文件头
-    void* cvarList;
-    // int consoleExec(const char* line, const char** outOutput)
-    //   ExecCode 0..3（Ok/UnknownCommand/BadRequest/CommandFailed），*outOutput=输出文本
-    void* consoleExec;
-    // int consoleRegister(const char* name, const char* help, void* fn)
-    //   0=ok / 1=名字已被 CVar 占用。fn 命令回调 ABI：
-    //   int fn(int argc, const char** argv, const char** outText)
-    //     返回 0=ok / 1=失败；*outText 可为 NULL（无输出文本）
-    void* consoleRegister;
-    // int consoleUnregister(const char* name)
-    //   0=ok / 1=未知命令（M-SC3 热重载解绑的落点）
-    void* consoleUnregister;
+// ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
+// 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
+// v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
 
-    // ---- v2 ECS（M-SC2；操作目标 = ecsSetWorld 绑定的 World；延迟语义沿 World 口径）----
-
-    // int ecsSpawn(const char* name, unsigned long long* outID)
-    //   newEntity（新建立即可见，Carrot 口径）；*outID=实体 ID（0=无效）
-    void* ecsSpawn;
-    // int ecsRemove(unsigned long long id)
-    //   延迟删除（排队，flush/tick 生效；父删递归删子）
-    void* ecsRemove;
-    // int ecsFlush()
-    //   flushEntityCreationAndRemoval（宿主 tick 边界动作；Carrot flush 口径）
-    void* ecsFlush;
-    // int ecsExists(unsigned long long id, int* outExists)
-    //   *outExists: 0=不存在 / 1=存在（新建即时真、删除 flush 后假——非对称 Carrot 口径）
-    void* ecsExists;
-    // int ecsSetParent(unsigned long long id, unsigned long long parentID)
-    //   parentID=0 解除父子；环防护 = World::setParent 口径（父不得是后代）
-    void* ecsSetParent;
-    // int ecsGetParent(unsigned long long id, unsigned long long* outParent)
-    //   *outParent=0 无父
-    void* ecsGetParent;
-    // int ecsAddTransform(unsigned long long id)
-    //   挂 TransformComponent（重复挂 = 3）
-    void* ecsAddTransform;
-    // int ecsTransformGet(unsigned long long id, float* outPos3, float* outRot4, float* outScale3)
-    //   局部 TRS 读回；rot = quat (x,y,z,w)
-    void* ecsTransformGet;
-    // int ecsTransformSet(unsigned long long id, const float* pos3, const float* rot4, const float* scale3)
-    //   局部 TRS 写入；任一指针可 NULL（跳过该组字段）
-    void* ecsTransformSet;
-    // int ecsFindByName(const char* name, unsigned long long* outID)
-    //   按名查实体（World::findEntityByName 口径）；未找到 *outID=0 返回 0
-    void* ecsFindByName;
-};
-
-// 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应）。
+// 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应，
+// 编译期由 ApiTable.g.asserts.inc 逐导出校验声明与实现签名一致）。
 const ApiTable* consoleApiTable();
 
 // 宿主侧 World 绑定（M-SC2）：入口调用前设置，ECS 导出全部操作该实例；

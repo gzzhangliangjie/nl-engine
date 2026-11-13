@@ -629,6 +629,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 # 后调用不会传播进子目录。
 enable_testing()
 
+# M-SC4：scriptapi 生成物新鲜度闸（每次构建都跑；纯 CMake 校验零 Python 依赖）。
+# exports.api 比任一生成物新 = 构建红，强制重跑 python tools/scriptapi/gen.py。
+add_custom_target(nl_scriptapi_freshness ALL
+    COMMAND "${CMAKE_COMMAND}"
+        -DSRC=${CMAKE_SOURCE_DIR}/script/script-api/exports.api
+        -DGEN1=${CMAKE_SOURCE_DIR}/core/include/nl/script/ApiTable.g.hpp
+        -DGEN2=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.inc
+        -DGEN3=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.asserts.inc
+        -DGEN4=${CMAKE_SOURCE_DIR}/script/script-api/Wiring.g.cs
+        -P ${CMAKE_SOURCE_DIR}/tools/scriptapi/check_freshness.cmake
+    COMMENT "scriptapi: exports.api vs generated freshness gate")
+
 add_subdirectory(viewer)
 add_subdirectory(nanite-tools)
 add_subdirectory(anim-tools)

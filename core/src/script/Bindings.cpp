@@ -258,6 +258,10 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
 
 } // namespace
 
+// ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
+//      签名不一致 = 编译失败。须在实现之后、namespace nl::script 内 include）----
+#include "ApiTable.g.asserts.inc"
+
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
 }
@@ -276,24 +280,10 @@ std::vector<std::string> scriptUnregisterAll() {
 }
 
 const ApiTable* consoleApiTable() {
+    // M-SC4：注册行 = 生成物（单源 exports.api；改绑定面 = 改声明 + 重跑 gen.py，
+    // 编译期 asserts.inc 防漂移、CMake nl_scriptapi_freshness 防过期）。
     static const ApiTable table{
-        reinterpret_cast<void*>(&nl_cvarGet),
-        reinterpret_cast<void*>(&nl_cvarSet),
-        reinterpret_cast<void*>(&nl_cvarList),
-        reinterpret_cast<void*>(&nl_consoleExec),
-        reinterpret_cast<void*>(&nl_consoleRegister),
-        reinterpret_cast<void*>(&nl_consoleUnregister),
-        // v2 ECS（M-SC2，尾部追加）
-        reinterpret_cast<void*>(&nl_ecsSpawn),
-        reinterpret_cast<void*>(&nl_ecsRemove),
-        reinterpret_cast<void*>(&nl_ecsFlush),
-        reinterpret_cast<void*>(&nl_ecsExists),
-        reinterpret_cast<void*>(&nl_ecsSetParent),
-        reinterpret_cast<void*>(&nl_ecsGetParent),
-        reinterpret_cast<void*>(&nl_ecsAddTransform),
-        reinterpret_cast<void*>(&nl_ecsTransformGet),
-        reinterpret_cast<void*>(&nl_ecsTransformSet),
-        reinterpret_cast<void*>(&nl_ecsFindByName),
+#include "ApiTable.g.inc"
     };
     return &table;
 }

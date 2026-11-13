@@ -1,0 +1,48 @@
+# nl-engine 脚本绑定面声明（M-SC4 单源；tools/scriptapi/gen.py 扫描本文件生成接线）。
+#
+# 生成物（入 git，勿手改；CMake nl_scriptapi_freshness 目标做新鲜度闸）：
+#   core/include/nl/script/ApiTable.g.hpp    POD 镜像 struct + ApiTable 结构
+#   core/src/script/ApiTable.g.inc           ApiTable 注册行
+#   core/src/script/ApiTable.g.asserts.inc   编译期签名防漂移 static_assert
+#   script/script-api/Wiring.g.cs            C# delegate/字段/Init/NativeMarshal/POD 封装
+# 声明变更后重跑：python tools/scriptapi/gen.py（自证：--check）
+#
+# 行格式：域 | 导出名 | 返回类型 | 参数表 | 文档
+#   参数表逗号分隔，每项「[in|out] 类型 名字」；类型词表（TYPEMAP 单源在 gen.py）：
+#     int   = C int / C# int；out = int*
+#     u64   = std::uint64_t / C# ulong；out = u64*
+#     f32   = float
+#     str   = const char*（UTF-8，'\0' 结尾）；out str = const char**
+#             （C++ 静态缓冲，「下次同线程调用前有效」，C# 立即拷贝——生命周期账本）
+#     bufN  = 定长 float 数组指针（N 个元素）；in = const float*，out = float*
+#     ptr   = void*（函数指针等不透明载荷）
+#   type 段（复杂对象）：只收纯 POD（int/u64/f32 标量字段），禁字符串/嵌套引用
+#     （Blittable 一档拍板）；C++ 镜像 struct + C# [StructLayout(Sequential)]
+#     partial struct 双层同构生成，C# 侧 hand 扩展走 partial。
+# 生命周期账本与容器协议：docs/p8/P8-SCRIPT-PLAN.md「胶水层扩展」节。
+#
+# ---- 复杂对象 ----
+
+type TransformData = f32 Px, f32 Py, f32 Pz, f32 Qx, f32 Qy, f32 Qz, f32 Qw, f32 Sx, f32 Sy, f32 Sz
+
+# ---- v1 console（M-SC1；ApiTable 偏移 0..5）----
+
+Engine | cvarGet | int | in str name, out str value | 读 cvar 现值（toString 口径）。rc 即类型码：0=未注册 / 1=bool / 2=int / 3=float / 4=string；value=现值文本
+Engine | cvarSet | int | in str name, in str value | 引擎路径文本赋值（setFromString 语义，onChanged 触发）。rc：0=ok / 1=未知 cvar / 2=类型不符或格式非法
+Engine | cvarList | str |  | 全量 CVar 视图（"name = value (type) help" 逐行）。返回串下次调用前有效，C# 立即拷贝
+Engine | consoleExec | int | in str line, out str output | 经绑定面执行控制台行。rc = ExecCode 0..3（Ok/UnknownCommand/BadRequest/CommandFailed）；output=输出文本
+Engine | consoleRegister | int | in str name, in str help, in ptr fn | 注册 C# 命令回调进 console 命令表。rc：0=ok / 1=名字已被 CVar 占用。fn ABI = int fn(int argc, const char** argv, const char** outText)（reverse P/Invoke；script-api 静态保活随 collectible ALC 整体回收；SEH 边界）
+Engine | consoleUnregister | int | in str name | 注销命令（M-SC3 热重载解绑落点；对称擦除 C++ 登记表）。rc：0=ok / 1=未知命令
+
+# ---- v2 ECS（M-SC2；ApiTable 偏移 6..15）----
+
+Ecs | ecsSpawn | int | in str name, out u64 id | 建实体（newEntity，新建立即可见，Carrot 口径）。rc：0=ok（id=实体 ID，0=无效）/ 1=未绑 World / 4=非法参数
+Ecs | ecsRemove | int | in u64 id | 延迟删除（排队，flush/tick 生效；父删递归删子）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsFlush | int |  | 统一落盘（flushEntityCreationAndRemoval，宿主 tick 边界动作）。rc：0=ok / 1=未绑 World
+Ecs | ecsExists | int | in u64 id, out int exists | 存在性查询。rc：0=ok（exists：0=不存在 / 1=存在——新建即时真、删除 flush 后假）/ 1=未绑 World
+Ecs | ecsSetParent | int | in u64 id, in u64 parent | 挂父（纯关系不动变换；parent=0 解除父子；环防护 = World::setParent 口径）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsGetParent | int | in u64 id, out u64 parent | 取父 ID（0=无父）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsAddTransform | int | in u64 id | 挂 TransformComponent。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=重复挂
+Ecs | ecsTransformGet | int | in u64 id, out buf3 pos, out buf3 rot, out buf3 scale | 局部 TRS 读回（rot=quat x,y,z,w）。任一 out 指针可 NULL 跳过该组。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=组件缺失
+Ecs | ecsTransformSet | int | in u64 id, in buf3 pos, in buf3 rot, in buf3 scale | 局部 TRS 写入。任一 in 指针可 NULL 跳过该组。rc 同 ecsTransformGet
+Ecs | ecsFindByName | int | in str name, out u64 id | 按名查实体（findEntityByName 口径；未找到 id=0 且 rc=0）。rc：0=ok / 1=未绑 World / 4=非法参数
