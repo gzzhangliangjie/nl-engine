@@ -214,11 +214,13 @@ TRACKS = {
                 "all per recommendation); wt built 2026-11-13 from master "
                 "52700f1, junction .workbuddy + thirdparty/slang/dist + "
                 "skip-worktree (9 files); M-W0 whole track done (tags "
-                "w0-m0~w0-m3, close gate passed); M-W1 kickoff 2026-11-13 "
-                "(city assets into engine, plan docs/worldgen/W1-PLAN.md, "
-                "decisions Q-W1A~W1D settled; code gate = asset-ingest "
-                "OBJ->GLB chain merged to master); master merged into "
-                "feat/worldgen 2026-11-13",
+                "w0-m0~w0-m3, close gate passed); M-W1.0 done 2026-11-13 "
+                "(tag w1-m0: scripts/city2engine.py 36 OBJ -> flat glb + "
+                "nanite suite + city.scene.engine; showcase exe_for gained "
+                "{python} token; city.scene buf[192] truncation bug fixed "
+                "per user decision, w0-m2/m3 scene re-shot, guide "
+                "docs/worldgen/CITY2ENGINE-GUIDE.md); M-W1.1 (viewer scene "
+                "consume + street evidence) pending",
     },
     "s13": {
         "wt": "", "branch": "feat/s13", "state": "closed",

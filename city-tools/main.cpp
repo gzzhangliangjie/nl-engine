@@ -585,8 +585,12 @@ std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
 // 实体 = 每 block 一个（行主序），Transform 位置 = block 世界中心，
 // Model.mesh 引用 blocks/block_XX.obj（OBJ 中间件，通道就绪后由转换步替换）。
 std::string serializeCityScene(const CityLayout& lay) {
+    // buf 必须容纳整段实体文本（~280B）：M-W1.0 实锤 buf[192] 在
+    // "position": [%.2f 处截断，产出的 city.scene 是非法 JSON（36 实体全伤，
+    // 截断确定性导致 fc 逐字节段与 findstr 锚全绿、无人发现——viewer M-W1.1
+    // 才成为第一个 JSON 解析消费者）。
     std::string s;
-    char buf[192];
+    char buf[512];
     const std::uint32_t n = static_cast<std::uint32_t>(lay.cells.size());
     s += "{\n";
     s += "  \"version\": 1,\n";
@@ -1250,6 +1254,28 @@ SelftestResult runSelftest(bool verbose) {
         }
         expect(entCount == 36u && meshCount == 36u,
                "scene: 36 entities with 36 mesh references (blocks=36)");
+        // JSON 结构有效性（M-W1.0 截断 bug 硬闸：buf 溢出确定性截断曾让
+        // city.scene 非法 JSON 而锚全绿）。每个实体必须带完整 Transform
+        // 尾段（rotation 收口），且全文花括号配平。
+        std::uint32_t rotCount = 0;
+        pos = 0;
+        while ((pos = scA.find("\"rotation\": [0.0, 0.0, 0.0, 1.0] }", pos)) !=
+               std::string::npos) {
+            ++rotCount;
+            pos += 10;
+        }
+        expect(rotCount == 36u,
+               "scene: 36 complete Transform tails (rotation closure; "
+               "no snprintf truncation)");
+        std::int64_t braces = 0;
+        bool negative = false;
+        for (char ch : scA) {
+            if (ch == '{') ++braces;
+            else if (ch == '}') --braces;
+            if (braces < 0) negative = true;
+        }
+        expect(!negative && braces == 0,
+               "scene: braces balanced (JSON structural sanity)");
         // 引用闭合：每个 mesh 引用都有对应 OBJ 产物（由同一次生成写出）。
         bool refClosureOk = true;
         for (std::uint32_t i = 0; i < lay.cells.size(); ++i) {

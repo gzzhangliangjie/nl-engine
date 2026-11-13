@@ -11566,6 +11566,96 @@
      }
     }
    ]
+  },
+  {
+   "id": "w1-m0",
+   "label": "W1 M-W1.0",
+   "name": "city2engine 引擎交付驱动步：36 OBJ -> 扁平 glb + nanite 套件 + city.scene.engine",
+   "tag": "w1-m0",
+   "date": "2026-11-13",
+   "summary": "M-W1.0：Python stdlib 驱动 scripts/city2engine.py（照 obj2glb.py 先例，in-process 复用 asset-ingest 转换器）把冻结的 city-tools 产物接进引擎——每 block 一份扁平 glb（city_block_<seed>_<size>_NN.glb，Q-W1B 白名单零改动）+ nanite-tools cluster->lod->dag 套件（assets/meshlets，W1-B 产物形态收口）+ city.scene.engine（E1 World JSON 纯文本重写，仅 meshFile 值换 glb 名，其余字节原样，Q-W1A 双轨）。确定性：nanite 调用统一 cwd=repo root + repo 相对路径（dag.json 内嵌 prefix 字段稳定），同路径双跑 146 文件聚合 sha256 一致（DX12/VULKAN 两棵工具树交叉验证）。附带修复：city-tools serializeCityScene buf[192] 截断 bug（单实体实需 ~280B，36 实体全伤、city.scene 非法 JSON；viewer M-W1.1 才是第一个 JSON 消费者所以锚全绿无人发现），selftest 72->74 补 JSON 结构硬闸。",
+   "acceptance": [
+    "selftest 21 断言全绿（命名/白名单镜像、mesh ref 解析、scene 重写其余字节保真、obj2glb 双跑逐字节、PNG 写出器确定性、size 敏感）",
+    "驱动链真实产物：36 glb（全部过扁平白名单）+ 36 nmesh/lod0/dag.json 套件 + city.scene.engine（36 引用闭合、E1 合法 JSON、Transform 完整）+ city_delivery.png 证据图（真实 glb 字节数驱动的 block 网格亮度图）",
+    "确定性：同路径双跑（DX12 vs VULKAN 工具树交叉）146 文件聚合 sha256 一致；dag.json prefix 字段经 cwd+相对路径约束稳定",
+    "city.scene 截断 bug 修复回归：w0-m2/m3 重拍仅 city.scene 变化（OBJ/PNG/roadnet 逐字节不动），--only w0-m2 --only w0-m3 8/8 bytes ALL GREEN，selftest 74 断言双树 PASS",
+    "交代物：example/w1-m0/（run.bat 七段 + w1_check.py 机检 + city.scene.engine + city_delivery.png）+ 本卡四用例（exe={python} token，showcase exe_for 2026-11-13 扩展）"
+   ],
+   "preview": "example/w1-m0/city_delivery.png",
+   "exe": {
+    "dx12": "{python}",
+    "vulkan": "{python}"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。drive 段说明 OBJ->glb->nmesh->engine 全链。",
+     "args": [
+      "{root}/scripts/city2engine.py"
+     ],
+     "expectExit": 2,
+     "expectLog": "city2engine - nl-engine worldgen tools",
+     "command": "city2engine.py (无参数)"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：命名/白名单/重写保真/obj2glb 确定性/PNG 写出器 21 条断言",
+     "kind": "tool",
+     "note": "--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "city2engine selftest: PASS",
+     "command": "city2engine.py selftest --verbose"
+    },
+    {
+     "id": "drive",
+     "name": "drive：36 OBJ -> 扁平 glb + nanite 套件 + city.scene.engine + 证据图",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> assets/models + assets/meshlets + example/w1-m0（真实产物落位，双跑确定性）；nanite 入口取 DX12 树（离线 CPU 工具与后端无关，VULKAN 树交叉验证过逐字节一致）。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "drive",
+      "--src",
+      "{root}/example/w0-m3",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--nanite",
+      "{root}/build/dx12/nanite-tools.exe"
+     ],
+     "expectExit": 0,
+     "expectLog": "city2engine drive OK: blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36",
+     "command": "city2engine.py drive --src --seed 12345 --size 6 --nanite"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何转换拒绝。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "drive",
+      "--src",
+      "{root}/example/w0-m3",
+      "--seed",
+      "12345",
+      "--size",
+      "0",
+      "--nanite",
+      "{root}/build/dx12/nanite-tools.exe"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city2engine.py drive --src --seed 12345 --size 0 --nanite"
+    }
+   ]
   }
  ]
 }

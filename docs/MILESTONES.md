@@ -3439,3 +3439,24 @@
 **踩坑情况**
 - bpy `data.images.new + pixels.foreach_set + save()` 在 Blender 5.2 内存读回有数据、落盘 PNG 全黑——非压缩/色彩空间问题，绕开 = numpy 直写 TGA（descriptor 0x20 top-down，BGRA）。
 - e1b 锚 0/8 的根因链闭环：MR 贴图（转换器丢弃 + 因子被引擎无视）→ 两层修复 + 基线重拍一次覆盖，无残留 FAIL。
+
+## W1 M-W1.0 引擎交付驱动步 — city2engine（feat/worldgen，2026-11-13，tag w1-m0）
+
+**动作**：`scripts/city2engine.py`（Python stdlib 零依赖，in-process 复用 asset-ingest 的 obj2glb.py）把冻结 city-tools 产物接进引擎：36 OBJ → 扁平 glb（`city_block_<seed>_<size>_NN.glb`，Q-W1B 白名单零改动）→ nanite-tools cluster→lod→dag 套件（assets/meshlets，W1-B 判据收口）→ `city.scene.engine`（纯文本重写仅 meshFile，其余字节保真，Q-W1A 双轨）→ city_delivery.png 证据图（stdlib PNG 写出器，真实 glb 字节数驱动）。showcase `exe_for` 新增 `{python}` token（Python 工具卡无 per-backend exe；bat 垫片 GBK/cwd 否决、.py 直跑 WinError 193 否决）。**附带修复**：city-tools `serializeCityScene` buf[192] 截断 bug（单实体实需 ~280B，36 实体全伤、city.scene 非法 JSON；截断确定性使 w0 锚全绿无人发现，viewer M-W1.1 才是第一个 JSON 消费者），用户拍板「现在修」走「bug 非基线语义」重开条款。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py + example/w1-m0/{run.bat 七段, w1_check.py, city.scene.engine, city_delivery.png} + assets/models/city_block_12345_6_00..35.glb + assets/meshlets/ 套件 108 文件 + cases.json 卡 125（w1-m0，exe={python}）+ city-tools/main.cpp buf 修复 + selftest 72→74 + W1-DELIVERY 归档 docs/worldgen/CITY2ENGINE-GUIDE.md + w0-m2/m3 city.scene 重拍）。
+
+**完成情况**
+- 🟢 selftest 21 断言（命名/白名单镜像/重写保真/obj2glb 双跑逐字节/PNG 确定性/size 敏感）+ city-tools 74 断言双树 PASS。
+- 🟢 确定性：同路径双跑 146 文件聚合 sha256 一致（DX12 vs VULKAN 工具树交叉）；dag.json prefix 经 cwd=repo root + 相对路径约束稳定。
+- 🟢 回归：`--only w1-m0` 8/8 bytes ALL GREEN（17s）；`--only w0-m2 --only w0-m3` 8/8 ALL GREEN（重拍后）；ctest 151/151 双树（--repeat until-pass:3）；server.py --check exit 0（kStage 保持 S8.2，新卡按 run.bat+regression 双机检口径）。
+- 🟢 run.bat 沙箱 cmd 通道被禁——七段全内容按段级等价复验（helper anchors/json 双模式 + usage/negative 退出码），整 bat 留用户终端首跑确认（M-CRASH0 L2 先例）。
+
+**踩坑情况**
+1. cases.json 首版 args 漏脚本路径 token：exe={python} 时 `python.exe selftest` 把 "selftest" 当脚本名 exit 2、usage 用例裸 REPL 超时——**exe 是解释器本体，每个用例 args 必须前置 `{root}/scripts/<tool>.py`**，回归 0/8 暴露、修正后 8/8。
+2. xargs 在本机 Git Bash 触发 `arg_max >= LINE_MAX` 断言崩溃（134）——大文件集哈希用 python hashlib，别用 `find|xargs sha256sum`。
+3. nanite dag.json 内嵌 prefix 字段：双跑落不同目录必然 diff——确定性口径定义为**同路径双跑**，跨目录对比需容差排除 prefix 行。
+4. render_delivery_map 首版按 mesh 引用解析 block id，engine 场景 mesh 已换 glb 名解析失败——实体 `name`（block_NN）才是稳定主键。
+5. 截断 bug 的元教训（CITY2ENGINE-GUIDE §5）：冻结产物从未被解析消费时，「确定性 + 锚全绿」会掩护结构损坏——结构化产物验收必须含真实解析。
+
+**下一步**：M-W1.1 引擎消费验收（viewer `--scene city.scene.engine` 渲染 + 街景/俯视证据图用户终端补拍 + 回归 + close/release --done 收官 M-W1）。
