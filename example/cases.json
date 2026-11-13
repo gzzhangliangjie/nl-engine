@@ -11701,7 +11701,11 @@
      ],
      "expectExit": 0,
      "expectLog": "screenshot written",
-     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -89 --dist 48"
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -89 --dist 48",
+     "baselines": {
+      "dx12": "example/w1-m1/city_top.png",
+      "vulkan": "example/w1-m1/city_top-VULKAN.png"
+     }
     },
     {
      "id": "city-street",
@@ -11727,7 +11731,11 @@
      ],
      "expectExit": 0,
      "expectLog": "screenshot written",
-     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -10 --dist 30"
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -10 --dist 30",
+     "baselines": {
+      "dx12": "example/w1-m1/city_street.png",
+      "vulkan": "example/w1-m1/city_street-VULKAN.png"
+     }
     }
    ]
   },
@@ -11808,6 +11816,87 @@
      "expectExit": 2,
      "expectLog": "invalid arguments: --size out of range (1..64)",
      "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w2-m1",
+   "label": "W2 M-W2.1",
+   "name": "变体楼型消费验收：drive 全城 + viewer --scene 变体天际线渲染（俯视 + 街景）",
+   "tag": "w2-m1",
+   "date": "2026-11-13",
+   "summary": "M-W2.1：M-W2.0 楼型池产物走全消费链——city2engine drive（36 OBJ -> 扁平 glb + nanite cluster/lod/dag + city.scene.engine，obj2glb/白名单/nanite 链零改动直接吃多段楼型几何）-> viewer --scene 顶点展开直渲。俯视可见 L 形/退台双段/裙楼加大塔 footprint；街景天际线剪影变体可辨（与 w1-m1 同机位构图，几何从纯盒阵变为混合楼型）。消费链对变体几何零适配成本是本轨验收核心判据。run_checked 加固：M-W1.1 的 retries=2+sleep 0.2s 在基线重拍实测不够（drive 108 连发下 transient 3 连挂、失败点漂移、死亡率 ~11/12，python 单项直拉 20/20 全过），加固为 retries=4 + 指数退避 0.5s->1s->2s->4s。w1_check.py hash 集合按文档口径修复（glb+meshlets+scene.engine+evidence png；旧 HERE.iterdir() 全量收录把 h1/h2 重定向文件卷进集合，时序使 run.bat seg5 确定性对拍永不通过——W1.0 潜伏 bug 基线重拍炸出）。w1-m1/w2-m1 image 卡补 baselines 登记（m0.2 老口径，W1 收官「回归 8/8」实为口径含糊，本轨勘误）。",
+   "acceptance": [
+    "drive 零闪断完成：blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36",
+    "双后端 viewer --scene 渲染 4 图（俯视 + 街景），screenshot written 锚齐，bytes 与登记基线逐字节相同",
+    "同路径双跑 delivery 集合 sha256 一致（修复后的 w1_check 口径）",
+    "回归 w2-m0 8/8 + w2-m1 4/4 + w1-m0 8/8 + w1-m1 4/4（补登记后首绿）+ w0-m2/m3 各 8/8"
+   ],
+   "preview": "example/w2-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：变体楼型 footprint（L形/退台双段/裙楼大塔）",
+     "kind": "image",
+     "note": "viewer --scene 直渲 city.scene.engine；楼顶形状四变体可辨（对比 w1-m1 纯矩形阵列）。",
+     "args": [
+      "--scene",
+      "{root}/example/w2-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w2-m1/city_top.png",
+      "vulkan": "example/w2-m1/city_top-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w2-m1/city.scene.engine (pitch -89)"
+    },
+    {
+     "id": "city-street",
+     "name": "街景：变体楼型天际线剪影（yaw 28 / pitch -10 / dist 30）",
+     "kind": "image",
+     "note": "街景机位看立面 + 天际线：退台阶梯剪影 / L 形转角 / 裙楼塔上窄下宽，三档贴图沿 W1.1 平铺。",
+     "args": [
+      "--scene",
+      "{root}/example/w2-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w2-m1/city_street.png",
+      "vulkan": "example/w2-m1/city_street-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w2-m1/city.scene.engine (street)"
     }
    ]
   }

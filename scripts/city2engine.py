@@ -104,15 +104,20 @@ def rel_to_repo(p: Path) -> str:
                            str(REPO_ROOT)).replace("\\", "/")
 
 
-def run_checked(argv, expect_log=None, what="", retries=2) -> str:
+def run_checked(argv, expect_log=None, what="", retries=4) -> str:
     """Run argv with cwd=REPO_ROOT, validating exit code + optional log anchor.
 
     【M-W1.1 2026-11-13】瞬时失败重试：沙箱环境下连续 spawn 子进程偶发
     returncode 0 但捕获输出为空（失败点漂移、单项复现 0/20 失败——非确定
-    性环境干扰，同 ctest 快进程随机丢 stdout 竞态口径）。重试 2 次即绿，
-    真失败（重试后仍挂）不会被此闸掩盖。"""
+    性环境干扰，同 ctest 快进程随机丢 stdout 竞态口径）。重试即绿，
+    真失败（重试后仍挂）不会被此闸掩盖。
+    【M-W2.0 2026-11-13】M-W1.1 的 retries=2 + sleep 0.2s 在基线重拍实测
+    不够（drive 108 连发下偶发空输出 3 连挂、失败点漂移，drive 死亡率
+    ~11/12；python 单项直拉同命令 20/20 全过）。加固为 retries=4 +
+    指数退避 0.5s→1s→2s→4s——确定性产物不受影响，只影响瞬时干扰恢复力。"""
     import time
     last_out = ""
+    delays = (0.5, 1.0, 2.0, 4.0)
     for attempt in range(1 + retries):
         proc = subprocess.run(argv, cwd=str(REPO_ROOT), capture_output=True,
                               text=True, encoding="utf-8", errors="replace")
@@ -121,7 +126,7 @@ def run_checked(argv, expect_log=None, what="", retries=2) -> str:
         if proc.returncode == 0 and (expect_log is None or expect_log in out):
             return out
         if attempt < retries:
-            time.sleep(0.2)
+            time.sleep(delays[min(attempt, len(delays) - 1)])
     if expect_log is None:
         sys.stderr.write("city2engine: %s failed (exit %d)\n%s\n"
                          % (what, proc.returncode, last_out[-2000:]))

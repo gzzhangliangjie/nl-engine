@@ -1,0 +1,217 @@
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=12     verts=25     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_00.glb (45460 bytes, BIN 41752 bytes): 4 submeshes, 84 triangles, 1 images
+  block 00 -> city_block_12345_6_00.glb (45460 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_01.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 01 -> city_block_12345_6_01.glb (57476 B, 6 clusters, dag OK)
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_02.glb (42240 bytes, BIN 38528 bytes): 4 submeshes, 84 triangles, 1 images
+  block 02 -> city_block_12345_6_02.glb (42240 B, 7 clusters, dag OK)
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_03.glb (42240 bytes, BIN 38528 bytes): 4 submeshes, 84 triangles, 1 images
+  block 03 -> city_block_12345_6_03.glb (42240 B, 7 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_04.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 04 -> city_block_12345_6_04.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_05.glb (58420 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 05 -> city_block_12345_6_05.glb (58420 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_06.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 06 -> city_block_12345_6_06.glb (57476 B, 6 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_07.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 07 -> city_block_12345_6_07.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_08.glb (58416 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 08 -> city_block_12345_6_08.glb (58416 B, 7 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_09.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 09 -> city_block_12345_6_09.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_10.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 10 -> city_block_12345_6_10.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_11.glb (59364 bytes, BIN 55656 bytes): 4 submeshes, 96 triangles, 1 images
+  block 11 -> city_block_12345_6_11.glb (59364 B, 8 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_12.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 12 -> city_block_12345_6_12.glb (57476 B, 6 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_13.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 13 -> city_block_12345_6_13.glb (57476 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_14.glb (59368 bytes, BIN 55656 bytes): 4 submeshes, 96 triangles, 1 images
+  block 14 -> city_block_12345_6_14.glb (59368 B, 8 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_15.glb (58420 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 15 -> city_block_12345_6_15.glb (58420 B, 7 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_16.glb (58424 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 16 -> city_block_12345_6_16.glb (58424 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_17.glb (58424 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 17 -> city_block_12345_6_17.glb (58424 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_18.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 18 -> city_block_12345_6_18.glb (57476 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_19.glb (58420 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 19 -> city_block_12345_6_19.glb (58420 B, 7 clusters, dag OK)
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=12     verts=25     tex=tier3.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_20.glb (45460 bytes, BIN 41752 bytes): 4 submeshes, 84 triangles, 1 images
+  block 20 -> city_block_12345_6_20.glb (45460 B, 7 clusters, dag OK)
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_21.glb (41292 bytes, BIN 37584 bytes): 4 submeshes, 72 triangles, 1 images
+  block 21 -> city_block_12345_6_21.glb (41292 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_22.glb (58428 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 22 -> city_block_12345_6_22.glb (58428 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_23.glb (58428 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 23 -> city_block_12345_6_23.glb (58428 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_24.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 24 -> city_block_12345_6_24.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_25.glb (58424 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 25 -> city_block_12345_6_25.glb (58424 B, 7 clusters, dag OK)
+  group tier3              tris=12     verts=25     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_26.glb (45460 bytes, BIN 41752 bytes): 4 submeshes, 84 triangles, 1 images
+  block 26 -> city_block_12345_6_26.glb (45460 B, 7 clusters, dag OK)
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_27.glb (41292 bytes, BIN 37584 bytes): 4 submeshes, 72 triangles, 1 images
+  block 27 -> city_block_12345_6_27.glb (41292 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_28.glb (58416 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 28 -> city_block_12345_6_28.glb (58416 B, 7 clusters, dag OK)
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_29.glb (42240 bytes, BIN 38528 bytes): 4 submeshes, 84 triangles, 1 images
+  block 29 -> city_block_12345_6_29.glb (42240 B, 7 clusters, dag OK)
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_30.glb (57480 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 30 -> city_block_12345_6_30.glb (57480 B, 6 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_31.glb (58424 bytes, BIN 54712 bytes): 4 submeshes, 84 triangles, 1 images
+  block 31 -> city_block_12345_6_31.glb (58424 B, 7 clusters, dag OK)
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+  group tier2              tris=24     verts=50     tex=tier2.jpg
+  group tier2              tris=12     verts=25     tex=tier2.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_32.glb (41292 bytes, BIN 37584 bytes): 4 submeshes, 72 triangles, 1 images
+  block 32 -> city_block_12345_6_32.glb (41292 B, 6 clusters, dag OK)
+  group tier3              tris=12     verts=25     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+  group tier3              tris=24     verts=50     tex=tier3.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_33.glb (45464 bytes, BIN 41752 bytes): 4 submeshes, 84 triangles, 1 images
+  block 33 -> city_block_12345_6_33.glb (45464 B, 7 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_34.glb (59364 bytes, BIN 55656 bytes): 4 submeshes, 96 triangles, 1 images
+  block 34 -> city_block_12345_6_34.glb (59364 B, 8 clusters, dag OK)
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+  group tier1              tris=24     verts=50     tex=tier1.jpg
+  group tier1              tris=12     verts=25     tex=tier1.jpg
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_35.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
+  block 35 -> city_block_12345_6_35.glb (57476 B, 6 clusters, dag OK)
+city2engine drive OK: blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36 scene=example/w2-m1/city.scene.engine

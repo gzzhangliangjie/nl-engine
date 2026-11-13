@@ -31,7 +31,16 @@ def glb(i):
 def delivery_files():
     out = list((ROOT / "assets" / "models").glob("city_block_%d_%d_*.glb" % (SEED, SIZE)))
     out += list((ROOT / "assets" / "meshlets").glob("city_block_%d_%d_*" % (SEED, SIZE)))
-    out += [p for p in HERE.iterdir() if p.is_file() and p.name != "w1_check.py"]
+    # M-W2.0 修复：hash 集合按文档口径（glb + meshlets + scene.engine +
+    # evidence png）。旧实现 HERE.iterdir() 全量收录把 logs / run.bat /
+    # h1.txt / h2.txt 也卷进集合——h1/h2 重定向文件自身时序（h1 计算时 0B、
+    # h2 计算时已有内容）使 seg5 双跑集合永不对称，确定性对拍永远 MISMATCH
+    # （W1.0 潜伏 bug，M-W2.0 基线重拍炸出；旧 146 文件口径从未被 run.bat
+    # 本体真正跑通过，M-W1 验收是复刻工具在集合外对拍的等效口径）。
+    for name in ("city.scene.engine", "city_delivery.png"):
+        p = HERE / name
+        if p.is_file():
+            out.append(p)
     return sorted(out)
 
 
