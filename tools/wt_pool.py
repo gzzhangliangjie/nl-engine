@@ -219,8 +219,14 @@ TRACKS = {
                 "nanite suite + city.scene.engine; showcase exe_for gained "
                 "{python} token; city.scene buf[192] truncation bug fixed "
                 "per user decision, w0-m2/m3 scene re-shot, guide "
-                "docs/worldgen/CITY2ENGINE-GUIDE.md); M-W1.1 (viewer scene "
-                "consume + street evidence) pending",
+                "docs/worldgen/CITY2ENGINE-GUIDE.md); M-W1 whole track done "
+                "2026-11-13 (tag w1-m1: ambientCG CC0 facades tier1-3, "
+                "obj2glb image dedupe 78MB->1.7MB, w0 re-shot); M-W2 whole "
+                "track done 2026-11-14 (tags w2-m0/w2-m1: procedural "
+                "building-variant pool 4 primitives x per-tier pools, "
+                "fnv1a pure selection zero-RNG, selftest 88, run_checked "
+                "backoff hardening, w1_check hash-set fix, image-card "
+                "baselines registered; close+release --done passed)",
     },
     "s13": {
         "wt": "", "branch": "feat/s13", "state": "closed",
