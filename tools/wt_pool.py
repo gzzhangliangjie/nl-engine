@@ -216,13 +216,13 @@ TRACKS = {
                 "skip-worktree (9 files), M-W0.0 in progress",
     },
     "s13": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-s13",
-        "branch": "feat/s13", "state": "active",
-        "note": "B-class rendering track opened 2026-11-13 (S13 cluster-BLAS "
-                "aggregation + one-frame-delayed readback; plan docs/s13/"
-                "S13-PLAN.md, M13.0~M13.2, tags s13-preblas/s13-merge/"
-                "s13-done); wt built 2026-11-13 from master e3a2ef4, junction "
-                ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
+        "wt": "", "branch": "feat/s13", "state": "closed",
+        "note": "S13 cluster-BLAS track M13.0~M13.2 done (tags s13-preblas/"
+                "s13-merge/s13-done + milestone/s13-done); merged to master "
+                "f07201c 2026-11-13 (+ s13-preblas baseline re-shoot 09a30d8: "
+                "M13.1 HUD row evolution); wt removed same day (user "
+                "instruction), junctions unlinked, branches kept; reopen via "
+                "7.1b",
     },
     "s14-softrast": {
         "wt": "E:/UE_STUDY_2026/nl-engine-s14-softrast",
