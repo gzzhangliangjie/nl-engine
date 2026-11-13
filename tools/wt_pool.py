@@ -215,6 +215,15 @@ TRACKS = {
                 "52700f1, junction .workbuddy + thirdparty/slang/dist + "
                 "skip-worktree (9 files), M-W0.0 in progress",
     },
+    "s13": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-s13",
+        "branch": "feat/s13", "state": "active",
+        "note": "B-class rendering track opened 2026-11-13 (S13 cluster-BLAS "
+                "aggregation + one-frame-delayed readback; plan docs/s13/"
+                "S13-PLAN.md, M13.0~M13.2, tags s13-preblas/s13-merge/"
+                "s13-done); wt built 2026-11-13 from master e3a2ef4, junction "
+                ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"

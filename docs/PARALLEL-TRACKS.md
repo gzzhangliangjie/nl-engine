@@ -188,6 +188,7 @@
 | 输入层扩展 | ~~`E:/UE_STUDY_2026/nl-engine-input`~~（已拆） | `feat/input` + tags `input-m0`~`input-m2` | `docs/p8/P8-INPUT-PLAN.md` + `INPUT-TOOLS-GUIDE.md`；merge `0df16a0`；明细 MILESTONES M-I0~I2 节 |
 | 玩法相机族 | ~~`E:/UE_STUDY_2026/nl-engine-camera`~~（已拆，2026-11-13 二次拆除） | `feat/camera` + `milestone/cam-m5` + tags `cam-m0`/`cam-1a`/`cam-3a`/`cam-b`/`cam-m5` | `docs/p8/P8-CAMERA-PLAN.md` + `CAM-TOOLS-GUIDE.md`；a 段 merge `7b0f24a`、b 段 merge `745ff83`、M-CAM5 merge `52700f1`（视觉卡 cam-1b/2b/3b/mcam4 + 双 bug 勘误）；明细 MILESTONES M-CAM5 四栏 |
 | 驾驶能力轴（碰撞桥 + 载具物理） | ~~`E:/UE_STUDY_2026/nl-engine-drive`~~（已拆） | `feat/drive` + tags `drive-m0`~`drive-m3` | `docs/p8/P8-DRIVE-PLAN.md` + `DRIVE-TOOLS-GUIDE.md`；merge `a2e3cff`；明细 MILESTONES M-D0~D3 节 |
+| S13 簇级 BLAS 聚合 + 延迟一帧回读（B 类穿插，用户拍板开 wt） | `E:/UE_STUDY_2026/nl-engine-s13`（在册） | `feat/s13` + tags `s13-preblas`/`s13-merge`/`s13-done`（按 PLAN） | `docs/s13/S13-PLAN.md`（M13.0~M13.2）；2026-11-13 建于 master `e3a2ef4`；渲染版交代（example/kStage 纪律 merge 时生效） |
 
 > 已建 worktree 均以 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。**在册 worktree 清单与各轨道 active/closed 状态一律以 `wt_pool.py status` 为准（2026-11-13 起），本节不再维护文字版快照。**
 
