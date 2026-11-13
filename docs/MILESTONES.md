@@ -3302,3 +3302,23 @@
 4. **cases.json 追加用 bash heredoc 内嵌 Python 时 `newline='\\n'` 转义成两字符** → open('w') 截断后 write 抛 ValueError → cases.json 清零（0 字节）；`git checkout --` 从 M13.1 提交版恢复（119 卡无损）。修 = 一次性脚本文件落盘执行（append_s13_done.py，用完即删）。教训：JSON 大块追加禁用 heredoc 内嵌，一律临时脚本文件。
 
 **S13 整轨收官汇总**（M13.0 `s13-preblas` + M13.1 `s13-merge` + M13.2 `s13-done`）：per-cluster BLAS 预建（324~43547 blas，est ~181MB 万级实测）→ 可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（拍板 A，RTXMG 同构）→ GI 链接缝验收 + LOD 切换压力。fallback 粗模光追时代终结：调试射线与 GI 永远命中精细簇几何。整轨 merge 回 master 按 PARALLEL-TRACKS §7.2/7.5 同步注册表（wt 拆除需用户拍板，照 net 轨道先例）。
+
+## A类 P9 V2 资产导入：Unity 权威材质链 + 引擎全 PBR（feat/asset-ingest，2026-11-13，tag `asset-pbr-done`，merge `ea42d73`）
+
+**动作**：① 转换器重写——vendored unityparser 4.0.0（Apache-2.0，本地 DupSeq 补丁兼容旧版重复键格式）+ PyYAML 6.0.2 纯 Python 子集（MIT）入 `scripts/vendor/`（VENDOR.md 溯源）；`scripts/unity_mat.py`（.mat 两代序列化格式解析 + UnityGLTF 口径映射链 + 内置 shader fileID 表）；`fbx2glb.py --unity` 权威链重写，删全部手工 flag（--mat-tint/正则解析）；`mat_audit.py` 全工程 77/77 清零（errors=0，warnings=资产包自身悬空 guid）。② 引擎全 PBR——mesh_io extractNormal/Occl/Emissive；实例布局 7 float4/实例（[5]=(roughness,metallic,normalScale,matFlags)、[6]=(emissive.rgb,occlStrength)，matFlags 位 1/2/4/8）；4 张共享中性兜底纹理；`model.slang` Mikkelsen 导数共切线 perturbNormal + psScene flags 分支（flags=0 路径与 P9 V1 逐表达式一致）。③ `example/p9v1-batch2/car-pbr-light.scene` 带灯验收场景。
+
+**提交版本**：feat/asset-ingest `15e9f48` → merge `ea42d73`（零冲突）→ tag `asset-pbr-done`。
+
+**完成情况**
+- ✅ 转换链 9/9 FBX 材质命中 .mat、6 guid 贴图绑定；mat_audit 77/77 errors=0。
+- ✅ merge 后主仓 DX12+VULKAN BUILD OK（selftest 16/16）；car-pbr-light 双后端 exit 0，互检仅 1 像素 1/255（near 级）；DX/VK 与 e1b 基线 diff 像素数互相一致（30883/30883 等）= 双后端逐位对齐。
+- ✅ PBR 生效证据：Suzanne.glb MR 贴图解码实锤（metallic=1/rough≈0.2）被 hasMR 分支正确消费（e1b 像素 diff = 特性）；TEMP-DBG 分支可视化实锤 hasNormal 分支实收 normalScale/matFlags 且采样真纹理。
+- ⚠️ e1b 锚 0/8 = 特性性 FAIL（旧基线 = 旧管线忽略 MR 贴图），**基线重拍待用户拍板**；车漆法线贴图 ±0.5% 扰动在 roughness=1 下被 8-bit 量化吃掉属资产特性。
+
+**踩坑情况**
+- **VK 退出段错误（139）**：Scene::shutdown() 释放清单漏 sceneNeutral* 四张纹理 → 拖到 Scene 析构（晚于 vkDestroyDevice）→ UAF。bisect 曾误判「跨 set 共享绑定」——VAR-B（仅创建不绑定不写入）也复现实锤。同机理陷阱 T0 离屏链注释里早有记载，属复发。**新 NVRHI 资源必须进 Scene::shutdown() 释放清单；DX12 不报不代表没病。**
+- **同秒 mtime 跳重编/重链假象（第二次踩）**：C++/slang 双侧 A/B 没删 exe，librarian/link 被跳过 → 改动静默不进 exe → 四轮 bisect 对拍全零差假象。**A/B 对拍一律先 rm exe；零差结论先怀疑构建新鲜度。**shaders 运行时从 NL_SHADER_DIR（绝对路径烘进 nl_renderer）读 .spv/.dxil，产物在 build/{DX12,VULKAN}/shaders/。
+- 主仓 DX12 构建 C1090 PDB API 错误 23（RPC 竞态）→ 删 build/dx12/*.pdb 重试即绿（已知坑复发）。
+- Bash heredoc 会改写 `\s`→`/s`（mangling 反斜杠）——带反斜杠正则一律 Write 脚本文件跑。
+
+**下一步**：待拍板 = ① e1b 基线重拍（新管线正确输出 vs 旧管线忽略 MR）；② asset-ingest wt 拆除（照 net §7.6 先例）；③ car05 Blender 导出口径（roughnessFactor=0/metallic 缺省 1）是否在转换器侧补映射——暂按 flags=0 标量路径不受影响。
