@@ -36,6 +36,9 @@ SDK_DEBUGGERS = r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64"
 WINDBGX_ALIAS_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""),
                                  "Microsoft", "WindowsApps",
                                  "Microsoft.WinDbg_8wekyb3d8bbwe")
+# cdb 无头分析超时：OS 符号（msdl）不可达时 symsrv 会长时间重试，
+# 超时后杀进程、保留已写入的部分报告（.ecxr + k 栈帧在日志前段，不受影响）
+ANALYZE_TIMEOUT_S = 240
 
 
 def list_dumps():
@@ -57,6 +60,7 @@ def find_dump(arg):
 
 
 def pdb_dirs(dump):
+    dump = os.path.normpath(dump)   # cdb -y 只认反斜杠路径，正斜杠会导致 PDB 挂不上（实测）
     dirs = set()
     d = os.path.dirname(dump)
     dirs.add(os.path.dirname(d))          # crashdumps -> build/<backend>
@@ -66,7 +70,7 @@ def pdb_dirs(dump):
             dirs.add(p)
     for p in glob.glob(os.path.join(BUILD_ROOT, "*", "*.pdb")):
         dirs.add(os.path.dirname(p))
-    return [d for d in dirs if os.path.isdir(d)]
+    return [os.path.normpath(d) for d in dirs if os.path.isdir(d)]
 
 
 def find_engine():
@@ -167,14 +171,21 @@ def main():
     print(f"[report] {report}\n")
 
     if ename == "cdb":
+        # k 先于 !analyze：OS 符号不可达时 !analyze 会长时间卡符号重试，
+        # 自己模块的调用栈（k）必须在它之前落进日志
         cmd = [engine, "-sins", "-y", sym, "-z", dump,
-               "-c", ".ecxr;!analyze -v;k 30;lm;q", "-logo", report]
+               "-c", ".ecxr;k 30;lm;!analyze -v;q", "-logo", report]
     else:  # windbg 经典 / windbgx(WinDbg Preview) 均支持 -z/-y/-c/-logo 无头模式
         cmd = [engine, "-y", sym, "-z", dump,
-               "-c", ".ecxr;!analyze -v;k 30;q", "-logo", report]
+               "-c", ".ecxr;k 30;lm;!analyze -v;q", "-logo", report]
 
+    timed_out = False
     try:
-        subprocess.run(cmd, check=False)
+        subprocess.run(cmd, check=False, timeout=ANALYZE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        print(f"[警告] 分析超过 {ANALYZE_TIMEOUT_S}s（多半是 OS 符号服务器不可达），"
+              f"已终止；部分报告仍保留：{report}")
     except Exception as e:
         print(f"[错误] 运行调试器失败: {e}")
         sys.exit(3)

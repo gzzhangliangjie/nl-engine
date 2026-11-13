@@ -16,6 +16,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ---- M-CRASH0：Release 也产 PDB（崩溃 dump 符号化的硬前提）----
+# 纯 Release 默认无 /Zi /DEBUG → exe 一直更新、PDB 停在旧配置（实锤：build/*/nanite-tools.pdb
+# 停在 11-09，而 exe 每轮重链）。/Zi 只进 obj 调试段、/DEBUG 只在链接期产 PDB，
+# **不改代码生成** → GPU 基线 / 输出零扰动。代价 = 本轮一次全量重编。
+if(MSVC)
+    string(APPEND CMAKE_C_FLAGS_RELEASE " /Zi")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " /Zi")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+endif()
+
 # ---- 后端选择：编译期配置，切换后端不需要装任何东西 ----
 set(NL_GRAPHICS_BACKEND "AUTO" CACHE STRING "Graphics backend: AUTO | DX12 | VULKAN")
 set_property(CACHE NL_GRAPHICS_BACKEND PROPERTY STRINGS AUTO DX12 VULKAN)

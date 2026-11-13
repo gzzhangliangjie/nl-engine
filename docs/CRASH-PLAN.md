@@ -43,7 +43,7 @@
 主线小里程碑，tag 建议 `crash-m0`（不占 S* 大版本，不新增 track、不 claim，主线收口口径）。收口 = 上述验收 + 四栏台账 + 全量总闸（仅 tag 时一次）。
 
 ## 7. 落盘后如何分析（符号化 + 自动出栈，不开 VS）
-dmp 落盘只是第一现场留证，真正"分析"是把 minidump 符号化成调用栈。本项目构建**本来就吐 PDB**（`build/<backend>/*.pdb`，与 exe 同目录），符号自动命中，无需符号服务器。
+dmp 落盘只是第一现场留证，真正"分析"是把 minidump 符号化成调用栈。**勘误（2026-11-13 实测）**：纯 Release 默认**不产 PDB**（旧 PDB 全停在 11-09 是旧配置遗留）→ 已在根 `CMakeLists.txt` 给 MSVC Release 加 `/Zi + /DEBUG`（只进 obj 调试段 / 链接期产 PDB，不改代码生成，回归 4/4 bytes 验证基线零扰动）。此后 `build/<backend>/*.pdb` 与 exe 同步产出，符号自动命中。
 
 ### 7.1 三层分析
 - **L1 元数据（零工具）**：读同名 `.json` → 直接分类崩溃（异常码 / git_sha / build_time / command_line / exception_address / thread_id）。常见码：`0xC0000005` 访问违例、`0xC0000374` 堆损坏、`0xC0000409` 快速失败、`0xC00000FD` 栈溢出、`0xC0000094` 除零。
@@ -68,7 +68,11 @@ dmp 落盘只是第一现场留证，真正"分析"是把 minidump 符号化成�
   - `python tools/analyze-crash.py --list` → 列所有 dump（带序号）
   - `python tools/analyze-crash.py --json x.dmp` → 仅打印 L1 元数据（不需调试器）
 - 引擎未安装时脚本会明确提示去装哪个组件，装好后重跑即出栈。
-- 实测：L1（`--list` / `--json`）已对真实 dump 跑通（见 `nanite-tools_20261113_115312_C0000005`）；L2 符号化链路就绪，待用户终端首跑确认（沙箱禁拉 GUI 进程）。
+- 实测（2026-11-13 全链路 ✓）：cdbX64 无头跑真实 dump（exe+PDB 同批产出）→ 报告落盘，栈帧完整符号化：
+  `nanite_tools!nl::crash::trigger_test_crash ← main+0x69 ← invoke_main+0x22 ← __scrt_common_main_seh+0x10c`，
+  故障指令 `mov dword ptr [0],0DEADh`（正是 crash-test 的故意空指针写）。
+- 已知限制：OS 符号（ntdll/ole32 等）走 msdl 下载，**沙箱内不可达** → `!analyze -v` 的自动归因会降级成 `WRONG_SYMBOLS` 桶（错怪 ntdll）；用户终端网络正常时自动归因正确。自研模块的栈帧符号化不受影响（PDB 本地命中）。
+- 稳健性：命令序 = `.ecxr;k 30;lm;!analyze -v;q`（**k 先于 !analyze**：OS 符号卡重试时自家栈帧已先落日志）；脚本带 240s 超时兜底，超时杀进程、部分报告保留。
 
 ### 7.4 边界
 - mini dump 足够事后调用栈分析；要"挖第一现场写坏点"（尤其 `0xC0000374` 堆损坏）可把 `crash.cpp` 的 dump 类型改为 `MiniDumpWithFullMemory`（一行，文件变大）。
