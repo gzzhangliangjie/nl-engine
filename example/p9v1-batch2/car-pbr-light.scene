@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "nextID": 3,
+  "ambient": 0.35,
+  "entities": [
+    {
+      "id": 1,
+      "name": "vehicle-car05",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "Car05.glb",
+          "tint": [1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "key-light",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Light": {
+          "direction": [0.35, -0.8, 0.5],
+          "color": [4.2, 3.99, 3.696],
+          "intensity": 2.2
+        }
+      }
+    }
+  ]
+}

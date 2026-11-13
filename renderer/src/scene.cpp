@@ -6134,19 +6134,34 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         }
         batchObjects[b].push_back(i);
     }
-    // M-E1b.5：固化分组映射，updateObjects 每帧按同一规则重打包（槽号一一对应）。
-    sceneBatchObjects_ = batchObjects;
     sceneObjectCount_ = objectCount;
 
-    // ---- 3. 每组读 GLB（首 primitive，照 Scene::init 第 2 步的校验与顶点展开）----
+    // ---- 3. 每组读 GLB（**全部 primitive 逐个成 batch**，照 Scene::init 第 2 步的
+    // 校验与顶点展开）。batch 键 = (meshFile, primitive 序号)：同一 meshFile 的
+    // 各 primitive 共享同一组实例变换（三处参考口径一致——Carrot Model.cpp 逐
+    // primitive 装进同一大 VB/IB + 每 prim 一个 drawCommand；bevy_gltf loader
+    // 逐 primitive 建 Mesh；UE Interchange 逐 primitive 设材质槽。现状只装
+    // prim[0] 是三处参考都没有的简化）----
     struct PreparedBatch {
         std::vector<SceneVertex> vertices;
         std::vector<std::uint32_t> indices;
         std::uint32_t texWidth = 0, texHeight = 0;
         std::vector<std::uint8_t> texRGBA;
         float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // 局部包围球 xyz=center w=radius
+        // P9 V2 全 PBR：贴图组（空 = 用共享中性兜底纹理）+ batch 级材质量。
+        bool hasMR = false, hasNormalTex = false, hasOcclTex = false, hasEmissiveTex = false;
+        std::uint32_t mrWidth = 0, mrHeight = 0;
+        std::uint32_t normalWidth = 0, normalHeight = 0;
+        std::uint32_t occlWidth = 0, occlHeight = 0;
+        std::uint32_t emissiveWidth = 0, emissiveHeight = 0;
+        std::vector<std::uint8_t> mrRGBA, normalRGBA, occlRGBA, emissiveRGBA;
+        std::uint32_t matFlags = 0;          // hasMR=1 | hasNormal=2 | hasOccl=4 | hasEmissive=8
+        float normalScale = 1.0f;
+        float emissiveFactor[3] = {0.f, 0.f, 0.f};
+        float occlStrength = 1.0f;
     };
-    std::vector<PreparedBatch> prepared(batchFiles.size());
+    std::vector<PreparedBatch> prepared;
+    std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
     for (std::size_t b = 0; b < batchFiles.size(); ++b) {
         const std::string modelPath = std::string(NL_ASSET_DIR "/") + batchFiles[b];
         nl::core::SceneMeshData meshData;
@@ -6158,43 +6173,82 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (meshData.meshes.empty()) {
             outError = batchFiles[b] + std::string(" has no mesh primitive"); return false;
         }
-        const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
-        if (!prim.hasBaseColor) {
-            outError = batchFiles[b] + std::string(" has no base color texture"); return false;
+        for (std::size_t p = 0; p < meshData.meshes.size(); ++p) {
+            const nl::core::PrimitiveMesh& prim = meshData.meshes[p];
+            PreparedBatch& pb = prepared.emplace_back();
+            batchPrimFile.push_back(static_cast<std::uint32_t>(b));
+            if (prim.hasBaseColor) {
+                pb.texWidth = prim.texWidth;
+                pb.texHeight = prim.texHeight;
+                pb.texRGBA = prim.baseColorRGBA;
+            } else {
+                // 无贴图 primitive 兜底：baseColorFactor 填 1×1 纯色纹理
+                //（Carrot getWhiteMaterial 同思路；本路径贴图是唯一颜色源，
+                // direct.slang 的 factor×texture 口径下 texel=factor 等价）。
+                pb.texWidth = pb.texHeight = 1;
+                const auto enc = [](float f) -> std::uint8_t {
+                    return static_cast<std::uint8_t>(
+                        std::lround(std::min(1.0f, std::max(0.0f, f)) * 255.0f));
+                };
+                pb.texRGBA = { enc(prim.baseColorFactor[0]), enc(prim.baseColorFactor[1]),
+                               enc(prim.baseColorFactor[2]), enc(prim.baseColorFactor[3]) };
+            }
+            if (prim.indices.empty()) {
+                outError = batchFiles[b] + std::string(" primitive #") +
+                           std::to_string(p) + " has no indices"; return false;
+            }
+            // P9 V2 全 PBR：贴图组 + batch 级材质量（mesh_io 已按 glTF spec
+            // 提取；空贴图 = 共享中性兜底纹理，shader 侧 matFlags 分支跳过）。
+            pb.mrRGBA = prim.metallicRoughnessRGBA;
+            pb.mrWidth = prim.mrWidth;  pb.mrHeight = prim.mrHeight;
+            pb.hasMR = prim.hasMR;
+            pb.normalRGBA = prim.normalRGBA;
+            pb.normalWidth = prim.normalWidth;  pb.normalHeight = prim.normalHeight;
+            pb.hasNormalTex = prim.hasNormalTex;
+            pb.occlRGBA = prim.occlRGBA;
+            pb.occlWidth = prim.occlWidth;  pb.occlHeight = prim.occlHeight;
+            pb.hasOcclTex = prim.hasOcclTex;
+            pb.emissiveRGBA = prim.emissiveRGBA;
+            pb.emissiveWidth = prim.emissiveWidth;  pb.emissiveHeight = prim.emissiveHeight;
+            pb.hasEmissiveTex = prim.hasEmissiveTex;
+            pb.normalScale = prim.normalScale;
+            pb.occlStrength = prim.occlStrength;
+            for (int k = 0; k < 3; ++k) pb.emissiveFactor[k] = prim.emissiveFactor[k];
+            pb.matFlags = (pb.hasMR ? 1u : 0u) | (pb.hasNormalTex ? 2u : 0u) |
+                          (pb.hasOcclTex ? 4u : 0u) | (pb.hasEmissiveTex ? 8u : 0u);
+            pb.vertices.resize(prim.vertices.size());
+            for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
+                const auto& mv = prim.vertices[i];
+                pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
+                                   mv.normal[0], mv.normal[1], mv.normal[2],
+                                   mv.uv[0], mv.uv[1] };
+            }
+            pb.indices = prim.indices;
+            // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
+            //（uploadClusterData 算式语义；世界联合球在第 7 步经实例矩阵变换）。
+            float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
+            float mx[3] = { mn[0], mn[1], mn[2] };
+            for (const SceneVertex& v : pb.vertices) {
+                mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
+                mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
+            }
+            pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
+            pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
+            pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
+            float radius = 0.0f;
+            for (const SceneVertex& v : pb.vertices) {
+                const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
+                radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            pb.sphere[3] = radius;
         }
-        if (prim.indices.empty()) {
-            outError = batchFiles[b] + std::string(" first primitive has no indices"); return false;
-        }
-        PreparedBatch& pb = prepared[b];
-        pb.vertices.resize(prim.vertices.size());
-        for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
-            const auto& mv = prim.vertices[i];
-            pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
-                               mv.normal[0], mv.normal[1], mv.normal[2],
-                               mv.uv[0], mv.uv[1] };
-        }
-        pb.indices = prim.indices;
-        pb.texWidth = prim.texWidth;
-        pb.texHeight = prim.texHeight;
-        pb.texRGBA = prim.baseColorRGBA;
-        // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
-        //（uploadClusterData 算式语义；世界联合球在第 6 步经实例矩阵变换）。
-        float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
-        float mx[3] = { mn[0], mn[1], mn[2] };
-        for (const SceneVertex& v : pb.vertices) {
-            mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
-            mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
-        }
-        pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
-        pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
-        pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
-        float radius = 0.0f;
-        for (const SceneVertex& v : pb.vertices) {
-            const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
-            radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
-        }
-        pb.sphere[3] = radius;
     }
+    // M-E1b.5 分组映射按 batch（文件 × primitive）固化：同一文件的各 primitive
+    // batch 共享该文件组的全部 objects（实例矩阵逐 batch 复制一份），槽号一一
+    // 对应，updateObjects 每帧按同一规则重打包。
+    sceneBatchObjects_.clear();
+    sceneBatchObjects_.reserve(prepared.size());
+    for (std::uint32_t f : batchPrimFile) sceneBatchObjects_.push_back(batchObjects[f]);
 
     // ---- 4. 建 GPU 资源：volatile CB + 每 batch VB/IB/贴图/采样/布局槽位 ----
     nvrhi::BufferDesc cbDesc;
@@ -6206,11 +6260,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
 
-    // 槽位与 model.slang 的 register(b0/t0/s0/t5/t6) 一致；t5/t6 经 slangc 的
+    // 槽位与 model.slang 的 register(b0/t0/t1..t4/s0/t5/t6) 一致；t5/t6 经 slangc 的
     // -fvk-t-shift 0 0 在 Vulkan 映射为 binding 5/6，DX12 为 SRV slot 5/6。
+    // P9 V2：t1 MR / t2 normal / t3 occl / t4 emissive（psScene 专属调用图，
+    // 与 visbuf/cull 图的 t2..t4 StructuredBuffer 各自编译互不见面——t1 先例）。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))   // b1 LightConstants（M-E1b.3：cameraPos）
@@ -6253,13 +6313,41 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     sceneInputLayout_ = device->createInputLayout(attrs, 3, vsScene_);
     if (!sceneInputLayout_) { outError = "createInputLayout failed for ecs scene"; return false; }
 
-    sceneBatches_.resize(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    // P9 V2：共享中性兜底纹理（1×1）。绑定恒非空、shader 在 matFlags 未置位时
+    // 不采样——normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、
+    // occl=(1,1,1,1)、emissive=黑。全场景一份，全 batch 复用。
+    // 注意：这里只 createTexture 不写入，写入统一并入下方主 upload 命令列表
+    // ——不能为每张纹理单开 executeCommandList（VK 实测退出段错误，
+    // 2026-11-13 bisect 定位；§2.8「禁开多余 cmd list」精神同样适用于 init 期）。
+    {
+        const auto mkNeutral = [&device](const char* name) -> nvrhi::TextureHandle {
+            nvrhi::TextureDesc nd;
+            nd.width = nd.height = 1;
+            nd.format = nvrhi::Format::RGBA8_UNORM;
+            nd.debugName = name;
+            nd.initialState = nvrhi::ResourceStates::ShaderResource;
+            nd.keepInitialState = true;
+            return device->createTexture(nd);
+        };
+        sceneNeutralNormal_ = mkNeutral("SceneNeutralNormal");
+        sceneNeutralMR_ = mkNeutral("SceneNeutralMR");
+        sceneNeutralOccl_ = mkNeutral("SceneNeutralOccl");
+        sceneNeutralEmissive_ = mkNeutral("SceneNeutralEmissive");
+        if (!sceneNeutralNormal_ || !sceneNeutralMR_ ||
+            !sceneNeutralOccl_ || !sceneNeutralEmissive_) {
+            outError = "createTexture failed for scene neutral PBR textures"; return false;
+        }
+    }
+
+    sceneBatches_.resize(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
-        const std::string vbName = batchFiles[b] + "VB";
-        const std::string ibName = batchFiles[b] + "IB";
-        const std::string texName = batchFiles[b] + "BaseColor";
+        const std::string fileTag = batchFiles[batchPrimFile[b]] +
+            "#" + std::to_string(b);
+        const std::string vbName = fileTag + "VB";
+        const std::string ibName = fileTag + "IB";
+        const std::string texName = fileTag + "BaseColor";
         nvrhi::BufferDesc vbDesc;
         vbDesc.byteSize = pb.vertices.size() * sizeof(SceneVertex);
         vbDesc.isVertexBuffer = true;
@@ -6276,14 +6364,47 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         batch.indexCount = static_cast<std::uint32_t>(pb.indices.size());
 
         nvrhi::TextureDesc texDesc;
-        texDesc.width = pb.texWidth;
-        texDesc.height = pb.texHeight;
         texDesc.format = nvrhi::Format::RGBA8_UNORM;
-        texDesc.debugName = texName.c_str();
         texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         texDesc.keepInitialState = true;
+
+        // P9 V2：batch 级材质量固化（updateObjects 重打包实例用）。
+        batch.matFlags = pb.matFlags;
+        batch.normalScale = pb.normalScale;
+        batch.occlStrength = pb.occlStrength;
+        for (int k = 0; k < 3; ++k) batch.emissiveFactor[k] = pb.emissiveFactor[k];
+
+        // t0 baseColor + t1 MR / t2 normal / t3 occl / t4 emissive：有真贴图建
+        // 独立纹理，无则绑共享中性兜底（shader 按 matFlags 分支，零采样零成本）。
+        texDesc.width = pb.texWidth;
+        texDesc.height = pb.texHeight;
+        texDesc.debugName = texName.c_str();
         batch.tex = device->createTexture(texDesc);
         if (!batch.tex) { outError = "createTexture failed for ecs scene base color"; return false; }
+
+        texDesc.width = (pb.hasMR && pb.mrWidth) ? pb.mrWidth : 1;
+        texDesc.height = (pb.hasMR && pb.mrHeight) ? pb.mrHeight : 1;
+        texDesc.debugName = (fileTag + "MR").c_str();
+        batch.texMR = pb.hasMR ? device->createTexture(texDesc) : sceneNeutralMR_;
+        if (!batch.texMR) { outError = "createTexture failed for ecs scene MR"; return false; }
+
+        texDesc.width = (pb.hasNormalTex && pb.normalWidth) ? pb.normalWidth : 1;
+        texDesc.height = (pb.hasNormalTex && pb.normalHeight) ? pb.normalHeight : 1;
+        texDesc.debugName = (fileTag + "Normal").c_str();
+        batch.texNormal = pb.hasNormalTex ? device->createTexture(texDesc) : sceneNeutralNormal_;
+        if (!batch.texNormal) { outError = "createTexture failed for ecs scene normal"; return false; }
+
+        texDesc.width = (pb.hasOcclTex && pb.occlWidth) ? pb.occlWidth : 1;
+        texDesc.height = (pb.hasOcclTex && pb.occlHeight) ? pb.occlHeight : 1;
+        texDesc.debugName = (fileTag + "Occl").c_str();
+        batch.texOccl = pb.hasOcclTex ? device->createTexture(texDesc) : sceneNeutralOccl_;
+        if (!batch.texOccl) { outError = "createTexture failed for ecs scene occlusion"; return false; }
+
+        texDesc.width = (pb.hasEmissiveTex && pb.emissiveWidth) ? pb.emissiveWidth : 1;
+        texDesc.height = (pb.hasEmissiveTex && pb.emissiveHeight) ? pb.emissiveHeight : 1;
+        texDesc.debugName = (fileTag + "Emissive").c_str();
+        batch.texEmissive = pb.hasEmissiveTex ? device->createTexture(texDesc) : sceneNeutralEmissive_;
+        if (!batch.texEmissive) { outError = "createTexture failed for ecs scene emissive"; return false; }
 
         batch.sampler = device->createSampler(samplerDesc);
         if (!batch.sampler) { outError = "createSampler failed for ecs scene"; return false; }
@@ -6303,14 +6424,14 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // Vulkan 侧若改用 SRV 子范围又会撞 minStorageBufferOffsetAlignment。故彻底
     // 不依赖 base 语义：单 batch 时与 M-E1b.0 逐字节同构，既有基线无需重拍。
     // batch 内保持 objects 原序（稳定确定）。
-    std::vector<std::vector<float>> batchInstanceData(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    std::vector<std::vector<float>> batchInstanceData(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
-        batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
+        batch.instanceCount = static_cast<std::uint32_t>(sceneBatchObjects_[b].size());
         std::vector<float>& data = batchInstanceData[b];
         data.assign(static_cast<std::size_t>(batch.instanceCount) * 7u * 4u, 0.0f);
         std::uint32_t slot = 0;
-        for (std::uint32_t i : batchObjects[b]) {
+        for (std::uint32_t i : sceneBatchObjects_[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
             float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
             for (int c = 0; c < 4; ++c)
@@ -6321,10 +6442,16 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
             // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
+            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissiveFactor.rgb,
+            // occlStrength)——batch 级材质量（GLB 权威），全实例同值。
             dst[20] = objects[i].roughness;
             dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         nvrhi::BufferDesc instDesc;
@@ -6392,9 +6519,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     if (shadowCount_ > 0) {
         float mn[3] = { 0.0f, 0.0f, 0.0f }, mx[3] = { 0.0f, 0.0f, 0.0f };
         bool first = true;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const PreparedBatch& pb = prepared[b];
-            for (std::uint32_t i : batchObjects[b]) {
+            for (std::uint32_t i : sceneBatchObjects_[b]) {
                 const float* w = objects[i].world;
                 float c[3], r3[3];
                 shadowTransformPoint(w, pb.sphere, c);
@@ -6567,10 +6694,16 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // ---- 5.5 每 batch 一个 BindingSet（§2.7 单 set 纪律）----
     // 必须在实例/灯缓冲创建之后：t5/t6 绑空句柄会被 NVRHI 校验直接拒绝。
     // 内容同 layout，t0 换各自贴图，t5/t6 实例/灯缓冲与 b0 常量全场景共享。
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
         nvrhi::BindingSetDesc setDesc;
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
+               // P9 V2 全 PBR：t1 MR / t2 normal / t3 occl / t4 emissive（真贴图
+               // 或共享中性兜底，BindingSet 恒非空）。
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(1, batch.texMR))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(2, batch.texNormal))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(3, batch.texOccl))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(4, batch.texEmissive))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))   // b1（M-E1b.3：cameraPos）
@@ -6595,7 +6728,18 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     //（只读 SRV，每帧不重写——与 clusterSpheres_ 同款静态路径）。
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    // P9 V2：中性兜底纹理写入——与 batch 贴图同一命令列表（禁单纹理单开列表，
+    // 见上方注释；VK 退出段错误 bisect 实锤）。
+    {
+        const std::uint8_t neutralNormal[4] = {128, 128, 255, 255};
+        const std::uint8_t neutralOpaque[4] = {255, 255, 255, 255};
+        const std::uint8_t neutralBlack[4]  = {0, 0, 0, 255};
+        upload->writeTexture(sceneNeutralNormal_, 0, 0, neutralNormal, 4);
+        upload->writeTexture(sceneNeutralMR_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralOccl_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralEmissive_, 0, 0, neutralBlack, 4);
+    }
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
         upload->beginTrackingBufferState(batch.vb, nvrhi::ResourceStates::CopyDest);
@@ -6606,6 +6750,19 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(batch.ib, nvrhi::ResourceStates::IndexBuffer);
         upload->writeTexture(batch.tex, 0, 0, pb.texRGBA.data(),
                              static_cast<size_t>(pb.texWidth) * 4u);
+        // P9 V2：真贴图上传（中性兜底纹理已在创建时写好，跳过）。
+        if (pb.hasMR)
+            upload->writeTexture(batch.texMR, 0, 0, pb.mrRGBA.data(),
+                                 static_cast<size_t>(pb.mrWidth) * 4u);
+        if (pb.hasNormalTex)
+            upload->writeTexture(batch.texNormal, 0, 0, pb.normalRGBA.data(),
+                                 static_cast<size_t>(pb.normalWidth) * 4u);
+        if (pb.hasOcclTex)
+            upload->writeTexture(batch.texOccl, 0, 0, pb.occlRGBA.data(),
+                                 static_cast<size_t>(pb.occlWidth) * 4u);
+        if (pb.hasEmissiveTex)
+            upload->writeTexture(batch.texEmissive, 0, 0, pb.emissiveRGBA.data(),
+                                 static_cast<size_t>(pb.emissiveWidth) * 4u);
         upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
                             batchInstanceData[b].size() * sizeof(float));
@@ -6626,9 +6783,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // 球心乘矩阵、半径乘三列最大尺度（非均匀 scale 近似，Carrot/UE 同病）。
     float gmn[3] = { 0.0f, 0.0f, 0.0f }, gmx[3] = { 0.0f, 0.0f, 0.0f };
     bool first = true;
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         const float* sph = prepared[b].sphere;
-        for (std::uint32_t oi : batchObjects[b]) {
+        for (std::uint32_t oi : sceneBatchObjects_[b]) {
             const float* w = objects[oi].world;
             // 世界球心 = M * center（列主序列向量变换）。
             const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
@@ -6656,9 +6813,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     assetSphere_[2] = (gmn[2] + gmx[2]) * 0.5f;
     {
         float radius = 0.0f;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const float* sph = prepared[b].sphere;
-            for (std::uint32_t oi : batchObjects[b]) {
+            for (std::uint32_t oi : sceneBatchObjects_[b]) {
                 const float* w = objects[oi].world;
                 const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
                 const float cy = w[1] * sph[0] + w[5] * sph[1] + w[9]  * sph[2] + w[13];
@@ -6730,10 +6887,16 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
+            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissive,occlStr)
+            // batch 级材质量（initScene 固化于 SceneMeshBatch，全实例同值）。
             dst[20] = objects[i].roughness;
             dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         // beginTrackingBufferState 参数 = **当前**状态（NVRHI 语义：informs the
@@ -8700,6 +8863,14 @@ void Scene::shutdown() {
     sceneLights_ = nullptr;
     sceneInputLayout_ = nullptr;
     sceneBindingLayout_ = nullptr;
+    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
+    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
+    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
+    // 仅创建不绑定不写入也复现，删创建即 clean）。
+    sceneNeutralNormal_ = nullptr;
+    sceneNeutralMR_ = nullptr;
+    sceneNeutralOccl_ = nullptr;
+    sceneNeutralEmissive_ = nullptr;
     sceneBatches_.clear();
     pipelineSceneBack_ = nullptr;
     pipelineSceneNone_ = nullptr;

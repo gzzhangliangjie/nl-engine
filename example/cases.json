@@ -3693,7 +3693,7 @@
     "DX12 vs VULKAN 画面逐字节一致（回归 pair 分档 bytes）",
     "nanite-scene selftest --all 四 suite 全绿（含 Model/Light roundtrip 字段级断言）",
     "既有路径无回归：kStage 一字未动，--only 抽查既有渲染用例分档不变",
-    "M-E1b.1 规模锚：双后端 50 objects / 8 lights / batches=4 / triangles=540352 / deviceErrors=0（shot-scale-*.log）",
+    "M-E1b.1 规模锚：双后端 50 objects / 8 lights / batches=7 / triangles=552160 / deviceErrors=0（shot-scale-*.log）",
     "example/ecs-e1b/run-scale.bat exit 0：双后端复拍 + 机器断言（对象数/灯数/批次数/零设备错误/PNG 存在）",
     "M-E1b.1 修复后 M-E1b.0 既有基线 MD5 逐字节不变（ce22b53226c7c5485f29e67efb602aef）",
     "M-E1b.2：双后端 7 objects / 4 lights (3 point) / deviceErrors=0（shot-point-*.log）",
@@ -3740,7 +3740,7 @@
      "id": "scale",
      "name": "50 物体 × 8 方向灯规模锚（4 个 mesh batch）",
      "kind": "pair",
-     "note": "M-E1b.1：P8-ECS-PLAN 的 50 物体 + 8 灯规模锚。10x5 网格 x 4 种 mesh（Suzanne / Suzanne-multi / TorusKnotDense / IcoSphereDense）= 4 个 batch（13/13/12/12），58 实体；每 batch 各自持有 t5 实例缓冲，SV_InstanceID 0-based。--dist 18 固定取景（联合包围球被高密度 mesh 撑大，自动取景拉太远）。",
+     "note": "M-E1b.1：P8-ECS-PLAN 的 50 物体 + 8 灯规模锚。10x5 网格 x 4 种 mesh（Suzanne / Suzanne-multi / TorusKnotDense / IcoSphereDense）= 7 个 batch（Suzanne-multi 4 primitive 各一 batch，13/13/12/12 实体分布不变），58 实体；每 batch 各自持有 t5 实例缓冲（M-P9V1：ECS 场景按 (meshFile, primitive) 成 batch，Suzanne-multi 全 4 prim 渲染；4 份几何完全重叠，像素与单 prim 版逐字节一致），SV_InstanceID 0-based。--dist 18 固定取景（联合包围球被高密度 mesh 撑大，自动取景拉太远）。",
      "baselines": {
       "dx12": "example/ecs-e1b/shot-scale-DX12.png",
       "vulkan": "example/ecs-e1b/shot-scale-VULKAN.png"
