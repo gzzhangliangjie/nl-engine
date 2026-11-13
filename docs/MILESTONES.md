@@ -3241,3 +3241,31 @@
 - **完成情况**：🟢 四卡 run.bat 五段式 ALL GREEN + regression `--only cam-1b/cam-2b/cam-3b/cam-mcam4` 4+2+2+2 全 bytes；🟢 旧卡连带回归 cam-m0 10/10、cam-1a 6/6、cam-3a 6/6、cam-b 2/2、drive-m3 12/12、s8.2 4/4 全 bytes ALL GREEN；🟢 ctest cam 双后端 2/2；🟢 确定性三重验证：同参重拍逐字节、双后端 `cam final` 日志锚逐字一致、smoothshake 与 plain free PNG 必须不同（效果可见闸）；🟢 `server.py --check` exit 0（kStage 保持 S8.2，70 张既有基线零波及）。
 - **踩坑**：① **`forwardFromView` 读错矩阵行/列**——列主序 view 矩阵的 backward 在第三**行**（`m[2]/m[6]/m[10]`），原实现读第三**列**（`m[8..10]` = right.z/up.z/backward.z），chase/track 渲染视线错 45° 级、主体不居中（track 水平分量碰巧不受影响才没当场露馅）；手算 `-(m8,m9,m10)` 与实测 outRig 偏移完全吻合实锤后修复，Orbit 路径自带视图矩阵不经此函数故 70 张既有基线零波及。② **`ChaseCamera::lookDirection` 按值传参**——out 参数写不回调用方，`seedFreeFromChase`/HUD/trace yaw 列全被污染恒 0；旧锚「free fly +Z」「eye_z 严格递增」把 bug 语义锁死，按「锚从实测反推」口径改为沿 seed 视线方向断言。③ **cam-tools stdout CRLF**——C 运行时文本模式把 `\n` 膨胀成 `\r\n`，与 `.gitattributes` 的 `*.tsv eol=lf` 永远对不上，旧卡 run.bat 的 TSV 字节比对在今天 checkout 后必挂（本轮前已潜伏）；`_setmode(_O_BINARY)` 根治后 cam-trace/free-trace/cine-trace 内容逐字节还原、cam-1a director-trace.tsv + acceptance.png 按新真实 yaw/pitch 重生成。④ chase 机位 eye 高度疑云实为收敛值自洽（pitch 被 seed 成 orbit 俯角 → `desired.y = 0.56+3.5-0.96`），非 bug。⑤ 双后端并行构建抢 PDB 致 C1090（0x6BA RPC）→ 清 mspdbsrv + 串行构建即过。
 - **提交版本**：feat/camera 本节 commit + annotated tag `cam-m5`；track camera 整轨（M-CAM0~CAM4 + 视觉卡）至此全部落地，merge 回 master 后轨道收官。冻结面：OrbitCamera 一字未动、kStage 不 bump、`resolveViewProjection`/渲染管线零改动、除 cam-b 外全部既有基线零重拍。
+
+## S14-A M14A0 — 软光栅亚像素三角形三处实读 + 细化计划（feat/s14-softrast，2026-11-13，commit `9d7d000`/`eb3fc83`）
+
+- **动作**：按 AGENTS.md 开工闸完成决策前置——三处定向实读（bevy `visibility_buffer_software_raster.wesl` 189 行全文：1 簇 1 workgroup 128 线程 + workgroup shared 投影顶点 + 梯度增量式 + `subgroupAny(宽>4)` 分 scanline/bbox 双路 + `textureAtomicMax` u64 深度位图（bevy max=最近 vs 本项目 atomicMin 语义直换）；bevy `cull_clusters.wesl` 分流判据实锤（簇投影 AABB ≤ 64x64px → 软光栅，软簇写表头段/硬簇 rightmost_slot 反向尾段共用一张表）；UE `NaniteRasterBinning.usf`（`bSoftware = RelativeClusterIndex < SWClusterCount`，分流在 binning/candidates 层、vis 编码统一、resolve 无感）；Carrot 据实无等价）+ 开发历史 → 细化计划 `docs/s14/S14A-SOFTRAST-PLAN.md` 落盘，Q-A1~A3 待拍板。
+- **完成情况**：🟢 计划落盘含三处实读表 + 拍板表 + 冻结面；拍板清零前零落码。
+- **提交版本**：feat/s14-softrast `eb3fc83`（拍板写回 `9d7d000`）
+- **踩坑**：bevy `textureAtomicMax`（far=最近）与本项目 visbuf `atomicMin`（近=最小 Z）语义相反，直换即可但 sentinel/比较方向必须成对改；WebGPU 原子限制方案不照搬（本机 DX12/Vulkan 有真 64 位 buffer atomic）。
+
+## S14-A M14A1 — 全软光栅对照模式（feat/s14-softrast，2026-11-13，commit `6e3d91b`）
+
+- **动作**：`soft_raster.slang`（1 簇 1 workgroup 128 线程 + workgroup shared 投影顶点 + 梯度增量式光栅，宽三角 scanline / 窄三角 bbox 双路）+ `atomicMin(u64)` 写 visbuf（`visPack=(deviceZ<<32)|(cluster24|tri8)`，VIS_EMPTY 全 1 sentinel）；`--mode soft-raster`（ViewMode::SoftRaster=21）整场景全软，viz resolve 链复用；modes/renderer/scene/backend_dx12/backend_vulkan/CMake/viewer/selftest 全接线；PassTimers +softRaster（14 槽）。
+- **完成情况**：🟢 双后端构建 + selftest；`--mode soft-raster` 与 `--mode visbuf` 双后端截图各自逐字节一致（md5 相同，确定性路径）；soft vs 硬件 2.754% 差异 = 同深度竞争像素（Q-A3 预期内）。
+- **提交版本**：feat/s14-softrast `6e3d91b`
+- **踩坑**：NVRHI BindingSet 类型逐槽（Texture_SRV/UAV vs StructuredBuffer_*，M14B1 同款教训）；example 卡欠账（A3 收官一并补，见 M14A3 条）。
+
+## S14-A M14A2 — SW/HW 分流（feat/s14-softrast，2026-11-13，commit `99b3271`）
+
+- **动作**：`classify.slang`（csClassify 64 线程分类：簇 2x 球投影半径方块 ≤ thresholdPx → 软列表，bevy cull_clusters 64px 口径 + csArgsPatch 1 线程回填 argsHard[1]=hardCount GPU 侧）；帧路径 classify → HW 硬簇（visRasterHardSet_ + argsHard_）→ SW 软簇（csSoftRaster split 分支），两路 atomicMin 合并同一 visBuffer_；`--sw-split`（默认关）+ `--sw-threshold <px>`（默认 64，clamp 8..256）+ HUD 滑条；clusterSpheres_ 去 frustum 门控恒创建；PassTimers +classify（15 槽）。
+- **完成情况**：🟢 th64 默认机位 split==A1 全软逐位 0%（0.000%）；th8 真混合（vs 全软 1.359% / vs 全硬 2.048%）；近机位全硬两档同侧（1.629%）；远景 dist18 vs 全硬件 0.513%（亚像素边缘规则差）；**闪烁证据** dist18 + 0.25 度/帧 x24 帧：HW 连续帧差异率 0.205% vs SW 0.128%（1.59x，SW 抖动低 37%）；VULKAN 分流模式 deviceErrors=0 同跑通。
+- **提交版本**：feat/s14-softrast `99b3271`
+- **踩坑**：counts.z（split 旗标）CPU 清零时必须随帧写入——原子只累加 x/y，旗标没人写 → SW 恒全画（首测 th8/th64 输出逐位相同根因）；`--screenshot-seq` 模式主循环不限帧数（1699 帧 SIGTERM 掐停），长序列后台 + 轮询够数即停。
+
+## S14-A M14A3 — profile 定默认阈值 + 帧时间对比 + 收官（feat/s14-softrast，2026-11-13，tag `s14-softrast`）
+
+- **动作**：profile 矩阵 11 配置（默认机位 7 + 远景 dist18 4，DX12 128 帧 --pass-timing + GPU 帧 avg）：全硬 0.117 / 全软 0.132 / split th8 0.118 / th32 0.127 / th64 0.125 / th128 0.140 / th256 0.145 ms；远景全硬 0.162 vs split th8 0.119 / th64 0.124 / 全软 0.120 ms（**分流域远景比全硬省 24~26%**）；classify 恒 0.005 ms。**结论 = 默认阈值 64 维持**（th≥128 逼近全软成本无质量增益；th8 丢 8~64px 簇防闪烁收益；64 = bevy 口径 + 1.59x 抖动收益 + 远景成本全绿），零代码改动。渲染版交代（A1/A2 欠账一并）：`example/s14a-raster/` + `example/s14a-split/` 双后端基线 + json 侧车 + run.bat verify（bytes 门 + split 卡 blend-visible 门：th8 必须异于 th64 基线 + 负向）+ cases.json 第 119/120 卡 + regression `--only` 两卡双后端各 2/2 bytes ALL GREEN；全数字落 `S14A-SOFTRAST-PLAN.md §5`。
+- **完成情况**：🟢 两卡 run.bat verify ALL GREEN（bytes 逐位 = 确定性路径实锤：u64 atomicMin 序无关 + 无 RNG）；🟢 regression 两卡 4/4 bytes；🟢 双后端 selftest；🟢 kStage 冻结 S8.2 不 bump；🟢 MILESTONES A0~A3 四条补账。
+- **提交版本**：feat/s14-softrast（本条 commit），tag `s14-softrast`
+- **踩坑**：确定性路径（软光栅）与随机路径（restir）验收门不同——前者 bytes 合法、后者必须统计门（S14-B 同日对照先例）；profile 首解锚是单样本（有噪声），帧级结论一律以 NVRHI GPU 帧 avg 为准、pass 首解锚只看量级趋势。

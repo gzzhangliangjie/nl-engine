@@ -1,0 +1,23 @@
+{
+ "mode": "soft-raster",
+ "model": "Suzanne-materials.nmesh",
+ "size": [
+  960,
+  540
+ ],
+ "yaw": 12.0,
+ "pitch": 9.0,
+ "dist": 7.0,
+ "frames": 128,
+ "lightDir": [
+  0.45,
+  0.8,
+  0.5
+ ],
+ "lightColor": [
+  1.0,
+  1.0,
+  1.0,
+  2.5
+ ]
+}

@@ -10970,6 +10970,117 @@
      "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
+  },
+  {
+   "id": "s14a-raster",
+   "label": "M14A1",
+   "name": "全软光栅对照：--mode soft-raster compute 写 vis buffer（A1 交付 + A3 收官交代）",
+   "tag": "s14-softrast",
+   "date": "2026-11-13",
+   "summary": "M14A1（S14-A）：soft_raster.slang 1 簇 1 workgroup 128 线程 + workgroup shared 投影顶点 + 梯度增量式光栅（宽三角 scanline / 窄三角 bbox 双路，bevy subgroupAny 换本机 128 线程常驻口径）+ atomicMin(u64) 最近深度写 visbuf（NVRHI 无 R64 纹理，线性 buffer + visPack=(deviceZ<<32)|(cluster24|tri8)，VIS_EMPTY 全 1 sentinel）；--mode soft-raster 整场景全软，viz 链复用既有 resolve。验收（A1）：DX12 双格式产物齐，soft-raster 与 visbuf 双后端截图各自逐字节一致（确定性路径：atomicMin 可交换序、无 RNG）；soft vs 硬件 2.754% 差异 = 同深度竞争像素（Q-A3 口径，bit-exact 期望仅同路径重拍）。本卡为 A3 收官交代（A1 时欠账的 example 卡一并补）。",
+   "acceptance": "run.bat verify ALL GREEN：双后端重拍 exit 0 + dx12 deviceErrors=0 + bytes 逐位对冻结基线（确定性实锤）+ 负向；regression --only 双后端全绿。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "soft",
+     "name": "全软光栅 GPU 出图（128 帧，双后端 bytes 基线）",
+     "kind": "pair",
+     "note": "vis buffer u64 atomicMin 写入序无关 → 同后端重拍逐字节确定；soft vs 硬件的 2.754% 差异属 Q-A3 同深度竞争口径，不做跨路径 bytes 期望。",
+     "baselines": {
+      "dx12": "example/s14a-raster/soft-dx12.png",
+      "vulkan": "example/s14a-raster/soft-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "soft-raster",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "128",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode soft-raster --model Suzanne-materials.nmesh --screenshot {out}.png --frames 128 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14a-raster/soft-dx12.png",
+     "script": "example/s14a-raster/run.bat verify"
+    },
+    {
+     "id": "soft-verify",
+     "name": "run.bat verify：双后端 bytes 门 + 负向",
+     "kind": "manual",
+     "args": [],
+     "command": "example/s14a-raster/run.bat verify",
+     "script": "example/s14a-raster/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "s14a-split",
+   "label": "M14A2/A3",
+   "name": "SW/HW 分流：classify 簇投影 AABB 阈值 + 默认 th64 profile 复核（A3 收官）",
+   "tag": "s14-softrast",
+   "date": "2026-11-13",
+   "summary": "M14A2/A3（S14-A）：classify.slang csClassify（簇 2x 球投影半径方块 <= thresholdPx → 软列表，bevy cull_clusters 64px 口径）+ csArgsPatch（argsHard[1]=hardCount GPU 回填）；帧路径 classify → HW 硬簇（visRasterHardSet_ + argsHard_）→ SW 软簇（csSoftRaster split 分支），两路 atomicMin 合并同一 visBuffer_；--sw-split（默认关）+ --sw-threshold <px>（默认 64，clamp 8..256）+ HUD 滑条；clusterSpheres_ 去 frustum 门控恒创建。A2 验收：th64 默认机位 split==A1 全软逐位 0%；th8 真混合（1.359%/2.048%）；远景 dist18 闪烁证据 0.25 度/帧 x24 帧 HW 0.205% vs SW 0.128%（1.59x 抖动降 37%）。**M14A3 profile 定默认阈值（本卡核心交付）**：默认机位 GPU 帧 avg 全硬 0.117 / 全软 0.132 / split th8 0.118 / th32 0.127 / th64 0.125 / th128 0.140 / th256 0.145 ms；远景 dist18 全硬 0.162 vs split th8 0.119 / th64 0.124 / 全软 0.120 ms（**分流域远景比全硬省 24~26%**）；classify 恒 0.005 ms 可忽略。结论 = **默认阈值 64 维持**（th>=128 逼近全软成本无质量增益证据；th=8 丢 8~64px 簇防闪烁收益；64 = bevy 口径 + 1.59x 抖动收益 + 远景成本全绿），不改代码。",
+   "acceptance": "run.bat verify ALL GREEN：双后端重拍 exit 0 + dx12 deviceErrors=0 + bytes 逐位对冻结基线（--sw-split 默认 th64）+ blend-visible 门（th8 重拍必须异于 th64 基线 = 分流真实生效）+ 负向；regression --only 双后端全绿；profile 矩阵数字入 S14A-SOFTRAST-PLAN.md §5。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "split",
+     "name": "SW/HW 分流 GPU 出图（--sw-split 默认 th64，双后端 bytes 基线）",
+     "kind": "pair",
+     "note": "默认机位全簇 <=64px → split 输出与全软逐位一致（A2 实测 0.000%），基线与 s14a-raster 相同属预期；分流差异化路径由 blend-visible 门（th8）在 run.bat 断言。",
+     "baselines": {
+      "dx12": "example/s14a-split/split-dx12.png",
+      "vulkan": "example/s14a-split/split-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "soft-raster",
+      "--sw-split",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "128",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode soft-raster --sw-split --model Suzanne-materials.nmesh --screenshot {out}.png --frames 128 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14a-split/split-dx12.png",
+     "script": "example/s14a-split/run.bat verify"
+    },
+    {
+     "id": "split-verify",
+     "name": "run.bat verify：双后端 bytes 门 + blend-visible 门 + 负向",
+     "kind": "manual",
+     "args": [],
+     "command": "example/s14a-split/run.bat verify",
+     "script": "example/s14a-split/run.bat verify"
+    }
+   ]
   }
  ]
 }

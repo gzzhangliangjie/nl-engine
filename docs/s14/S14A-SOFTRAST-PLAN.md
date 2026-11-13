@@ -77,3 +77,47 @@ SIGTERM 掐停），长序列用后台 + 轮询够数即停。
 
 **待办（M14A3 收官）**：example 卡（s14a-split）+ cases.json + tag `s14a-correct`/
 `s14-softrast` + profile 定默认阈值 + 帧时间对比。
+
+## 5. M14A3 验收记录（2026-11-13 收官，tag `s14-softrast`）
+
+### 5.1 profile 矩阵（DX12，128 帧，--pass-timing 首解锚 + NVRHI GPU 帧 avg）
+
+**默认机位**（960x540，yaw 12 / pitch 9 / dist 7）：
+
+| 配置 | visRaster | softRaster | classify | GPU 帧 avg ms |
+|---|---|---|---|---|
+| visbuf 全硬件 | 0.0174 | — | — | **0.117** |
+| soft-raster 全软 | — | 0.0297 | — | 0.132 |
+| split th=8 | 0.0010 | 0.0061 | 0.0051 | 0.118 |
+| split th=32 | 0.0010 | 0.0123 | 0.0051 | 0.127 |
+| **split th=64（默认）** | 0.0010 | 0.0123 | 0.0051 | **0.125** |
+| split th=128 | 0.0010 | 0.0276 | 0.0051 | 0.140 |
+| split th=256 | 0.0010 | 0.0276 | 0.0041 | 0.145 |
+
+**远景机位**（dist 18，A2 闪烁域抽查）：
+
+| 配置 | GPU 帧 avg ms |
+|---|---|
+| visbuf 全硬件 | 0.162 |
+| split th=8 | 0.119（**-26%** vs 全硬） |
+| **split th=64（默认）** | 0.124（**-24%** vs 全硬） |
+| soft-raster 全软 | 0.120 |
+
+### 5.2 默认阈值结论：**64 维持不变**（profile 复核通过，零代码改动）
+
+- th ≥ 128：帧成本逼近全软（0.140~0.145 vs 0.132），且无质量增益证据（>64px 簇三角形已足够大，SW 无闪烁优势）；
+- th = 8：丢掉 8~64px 簇的防闪烁收益（A2 实测 SW 域抖动低 37%）；
+- th = 64：默认机位成本 ≈ 全硬 +7%（0.125 vs 0.117）、远景**比全硬省 24%**（0.124 vs 0.162）、全簇防闪烁收益、bevy cull_clusters 同口径 —— 四项全绿；
+- classify pass 恒 0.005 ms 量级，分流开关零负担。
+
+### 5.3 渲染版交代（A1/A2 欠账一并补齐）
+
+- `example/s14a-raster/`：全软基线双后端 PNG + json 侧车 + run.bat verify（bytes 门 + 负向）；cases.json 第 119/120 卡之 s14a-raster（pair soft + manual soft-verify）。
+- `example/s14a-split/`：分流基线（--sw-split 默认 th64）双后端 PNG + json 侧车 + run.bat verify（bytes 门 + **blend-visible 门**（th8 重拍必须异于 th64 基线 = 分流真实生效）+ 负向）；cases.json s14a-split（pair split + manual split-verify）。
+- 确定性口径：vis buffer u64 `atomicMin` 写入序无关（min 可交换）+ 链路无 RNG → 同后端重拍逐字节确定，bytes 门合法（与 restir 的随机路径统计门形成对照）。
+- regression `--only s14a-raster` / `--only s14a-split` 双后端各 2/2 bytes ALL GREEN。kStage 冻结 S8.2 不 bump。
+
+### 5.4 收官账
+
+- tag `s14-softrast`（M14A0~A3 整轨）；MILESTONES A0/A1/A2/A3 四栏补账（A0~A2 欠账一并）。
+- 遗留（不阻塞收官）：同深度竞争像素无 bit-exact 期望（Q-A3 拍板口径，已留档）；subgroupAny 宽三角分路（bevy 有、本机换 128 线程常驻口径）如需再评估挂独立项。
