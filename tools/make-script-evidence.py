@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段
-+ M-SC3 脚本热更段）。
++ M-SC3 脚本热更段 + M-SC4 绑定生成器段 + M-SC5 Time/Input/Log 域段）。
 
 铁律：所有内容从工具**真实输出**渲染（example/<dir>/*.log，
-由 nl-script.exe 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
+由 nl-script.exe / gen.py 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
 复现：example/<dir>/run.bat（重跑用例 -> 重新生成本图 -> exit 0 校验）。
-用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3]   （缺省 m-sc0）
+用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3|m-sc4|m-sc5]   （缺省 m-sc0）
 """
 import os
 import sys
@@ -188,8 +188,62 @@ CASES_M_SC3 = [
      "FDD contract: runtimeconfig.json via GenerateRuntimeConfigurationFiles."),
 ]
 
+CASES_M_SC4 = [
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- golden self-verify (regenerate in-memory, byte-compare committed artifacts)",
+     "Single source of truth: script/script-api/exports.api (25 exports = console 6 + ECS 10 + "
+     "Time 2 / Input 5 / Log 2 + TransformData POD). --check exits 0 only when all four generated "
+     "artifacts byte-match the committed ones: ApiTable.g.hpp / ApiTable.g.inc / "
+     "ApiTable.g.asserts.inc / Wiring.g.cs."),
+    ("gen-build.log", "gen-build.png",
+     "gen.py -- regenerate artifacts from exports.api (TYPEMAP + lifetime ledger single source)",
+     "One export line in exports.api -> typedef + table slot (C++) + delegate + Init offset (C#) "
+     "+ static_assert signature guard. Manual surface: C++ implementation body + C# facade "
+     "semantics only. Prior art: Flax API_ macros / csbindgen artifacts-in-git / "
+     "UnrealSharp property translators."),
+    ("asserts.log", "asserts.png",
+     "ApiTable.g.asserts.inc -- compile-time drift gate (excerpt of real generated file)",
+     "Per-export static_assert(is_same_v<decltype(&nl_xxx), declared signature>): a TYPEMAP mistake "
+     "or hand-edited signature fails the build immediately (caught out u64->int* for ecsSpawn/"
+     "GetParent/FindByName on first run). Build freshness gate: cmake -P timestamp check "
+     "(exports.api newer than artifacts = build red)."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC4 acceptance: 16 legacy exports replayed through generated wiring",
+     "s0-s5 hosting + s6 console + s7 ECS + s8 hot reload all green on generated ApiTable "
+     "(zero hand-written table code left); reload-script path re-verified after the "
+     "reloadScript getEntryPoint fix (M-GL4: OnTick rebinding must use bootstrap scriptTickFn, "
+     "never getEntryPoint which loads the script into the default ALC)."),
+]
+
+CASES_M_SC5 = [
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC5 Time/Input/Log (s9a-s9b, on top of s0-s5 + s6 + s7 + s8)",
+     "s9a Time: host GameClock tick x3 -> simTime 0.05 / tickCount 3; timeSetState sentinel "
+     "(-1 = unchanged); unbound -> NoClock. s9b Input: ActionMap frozen values Bool/Float/Vec2 "
+     "(W/D feed), type mismatch -> NoAction, KeyIsDown out-of-range guard, "
+     "inputSetState/inputSetActionMap unbound -> NoSource; Log: [nl:info|script] channel, "
+     "logSetFilter effect + invalid instruction explicit error."),
+    ("s9.log", "s9.png",
+     "s9 section close-up (filtered from selftest.log)",
+     "New domain exports live-read the host instances: timeSetClock/inputSetState/"
+     "inputSetActionMap follow the ecsSetWorld pattern (host sets live instance before entry, "
+     "no implicit table creation). ApiTable grew 16 -> 25 via exports.api tail-append; "
+     "TYPEMAP added f64/u32 primitives (double simTime/frameDt, uint32 ActionId)."),
+    ("log-channel.log", "log-channel.png",
+     "log channel anchor: [nl:info|script] on stdout (filtered from selftest.log)",
+     "logWrite routes through nl::core::log writeCh with channel 'script' -- the stdout "
+     "[nl:level|channel] contract gives regression cards a stable expectLog anchor. "
+     "logSetFilter rejects invalid instructions with the parser reason surfaced."),
+    ("check.log", "check.png",
+     "nl-script check timeinput example -- compile only (exit 0)",
+     "dotnet build only; s9 probes (BoundProbe/UnboundProbe) verified in selftest; "
+     "nl-script links glfw PRIVATE because input.hpp pulls GLFW headers "
+     "(nl_core glfw link is PRIVATE, does not propagate includes)."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
-         "m-sc3": CASES_M_SC3}[DIR_NAME]
+         "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
+         "m-sc5": CASES_M_SC5}[DIR_NAME]
 
 
 def main():

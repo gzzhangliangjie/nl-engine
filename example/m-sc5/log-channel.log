@@ -1,0 +1,4 @@
+[nl:info|script] s9 log info anchor
+[nl:info|script] s9 unbound still ok
+  ok  s9a3 C# SetFilter("nl:warn") -> global default Warn
+  ok  s9a3 filterInstruction readback norm form

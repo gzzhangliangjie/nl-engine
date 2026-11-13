@@ -360,3 +360,72 @@ example\m-sc3\run.bat          # selftest + run --api + check bootstrap + 4 张�
    同 case 双后端并行时两进程互踩 → 间歇 exit 1。temp 名加 `_getpid()` 后缀
    根治。同族：**25ms 步长落 2×step=33.333ms 浮点刀锋**（舍入方向不定，
    孪生复推与实跑可能不一致），对拍用例选离边界远的钉值（30ms → [1,2,2]）。
+
+---
+
+# M-SC4：绑定导出生成器（exports.api 单源，2026-11-14）
+
+## 机制口径
+
+| 层 | 谁写 | 说明 |
+|---|---|---|
+| ① 声明 | 手写（唯一声明） | `script/script-api/exports.api`：`域 \| 名 \| 返回 \| 参数 \| 文档` 单行 + `type 名` POD 段 |
+| ② C++ 接线 | 生成 | `ApiTable.g.hpp`（结构+POD 镜像）/ `.g.inc`（注册行）/ `.g.asserts.inc`（防漂移） |
+| ③ C# 接线 | 生成 | `Wiring.g.cs`：delegate + 指针字段 + Init 偏移 + `NativeMarshal` 生命周期原语 |
+| ④ C# facade | 手写薄层 | 返回语义/错误码含义在场；marshal 禁私搭，一律用 `NativeMarshal` |
+| ⑤ C++ 实现体 | 手写 | 引擎语义本体（功能本身） |
+
+- **TYPEMAP + 生命周期账本机制单源**（gen.py）：in str = AllocHGlobal + finally 必释放；out str = C++ 静态缓冲「下次同线程调用前有效」+ C# 立即拷贝；命令回调 outText = CoTaskMem 配对（SEH 路径含）；delegate = `_pinned` 保活（script-api 装在 collectible ALC，随 Unload 整体回收——UnrealSharp per-ALC 归组同款，无需额外归组表）；POD = 值/栈传递不跨堆；宿主活实例 = 显式 set/unset + 未绑错误码兜底。
+- **硬规则**：C++ 侧永不跨 reload 缓存托管引用；type 段只收纯 POD（数值 + 定长 buf，禁字符串/嵌套引用——gen.py 解析即拒，非 POD 显式拆参数）；动态容器不过界走 count+ptr 协议（argv 先例），字典分解为单值导出/双列表/快照串。
+- **防漂移双闸**：`.g.asserts.inc` 每导出一条 `static_assert(is_same_v<decltype(&nl_xxx), 声明签名>)`（编译期红）；CMake -P `check_freshness.cmake` 时间戳闸（exports.api 新于生成物 = 构建红，零 Python）。
+- **gen.py --check**：内存重生成与入库四件套逐字节比对（golden 自证）。
+- 先例：Flax `API_` 宏 + Flax.Build 双端生成 / csbindgen 产物入 git / UnrealSharp property translator；cocos bindings-generator 的 libclang 路线不需要（绑定面是纯 C ABI 函数表，无类/继承/模板）。
+
+## 声明格式速查
+
+```
+#   参数表逗号分隔，每项「[in|out] 类型 名字」；类型词表（TYPEMAP 单源在 gen.py）：
+#     int/u64/f32/f64/u32 = 标量；out = 指针
+#     str = const char*（UTF-8）；out str = const char**（静态缓冲语义，见上）
+#     bufN = 定长 float 数组指针；ptr = void* 不透明载荷
+Time | timeGetState | int | out f64 simTime, out f64 frameDt, out u64 tickCount, out int paused | ...
+type TransformData
+    f32 px, py, pz      # position
+    ...
+```
+
+改声明 → `python tools/scriptapi/gen.py` → 提交生成物（构建不依赖 Python）。
+
+# M-SC5：Time / Input / Log 域面（ApiTable 16 -> 25，2026-11-14）
+
+## 绑定面口径（nl/script/Bindings v3）
+
+| 域 | 导出 | 关键口径 |
+|---|---|---|
+| Time | `timeGetState` / `timeSetState` | 绑宿主 `GameClock`（`timeSetClock`）；一次读回 simTime/frameDt/tickCount/paused；SetState 哨兵（-1=不变）；未绑 = `kTimeNoClock` |
+| Input | `inputActionFind` + `inputActionBool/Float/Vec2` + `inputKeyIsDown` | 绑 `InputState`+`ActionMap`（`inputSetState`/`inputSetActionMap`）；ActionId = u32，冻结值三型；类型不符 = `kInputNoAction`；KeyIsDown 越界 = BadArg；未绑 = `kInputNoSource`（**不隐式建表**） |
+| Log | `logWrite` / `logSetFilter` | `nl::core::log` 全局面，通道 `script`（stdout `[nl:level|script]` 契约）；level 0..5=Trace..Fatal 越界 BadArg；非法 filter 指令 = `kLogBadInstruction` 带原因 |
+
+宿主 set 绑定族（M-SC2 `ecsSetWorld` 模式推广）：`timeSetClock / inputSetState / inputSetActionMap`——入口调用前 set，未绑窗口 = 专属错误码（热更兜底，M-SC3 口径同构）。viewer scene 模式只绑 Clock（无注入管线，Input 有意保持未绑）。
+
+## selftest 判据（s9 组，s0~s5 + s6 + s7 + s8 不回归）
+
+- s9a Time：tick x3 → simTime 0.05 / tickCount 3；SetState(1,-1) 暂停 + timeScale 哨兵保持；解绑 → NoClock
+- s9a2 哨兵边界：paused=-1 不变、timeScale=-1 不变（显式 0/1 正常生效）
+- s9a3 Log：`[nl:info|script]` 通道锚；SetFilter("nl:warn") 生效 + readback；非法指令显式错带原因
+- s9b Input：ActionFind 三型冻结值（W/D 喂键 Bool/Float/Vec2）；类型不符 NoAction；KeyIsDown 越界 BadArg；解绑 → NoSource
+
+## 验收复现
+
+```
+scripts\build-m0.2.bat DX12
+example\m-sc5\run.bat          # selftest（5 示例目录）+ s9 特写 + log 通道锚 + check + 4 张证据图
+```
+
+## 踩坑存档（M-SC4/M-SC5 实测）
+
+1. **TYPEMAP 首跑即抓 `out u64` → `int*`**：ecsSpawn/GetParent/FindByName 三条映射错——防漂移断言闸当场编译红。闸的价值 = 把「selftest 兜底」升级成「编译失败」。
+2. **ActionMap 定义在 `action_map.hpp` 不在 `input.hpp`**：两个 TU（Bindings.cpp / nl-script main.cpp）各漏一次 include。
+3. **nl_core 对 glfw 是 PRIVATE link**：include 面不传播——nl-script main.cpp include `input.hpp` 拉 GLFW 头失败；nl-script CMake 显式 `PRIVATE glfw`（viewer 同款）。
+4. **reloadScript OnTick 重绑误用 `getEntryPoint`（M-GL4 口径漏改）**：热更路径会把脚本程序集再装一份进默认 ALC（两份副本静态字段独立）；loadScript 走 bootstrap `scriptTickFn`、reloadScript 漏改——M-GL4 踩坑 1 的同族复发，已修并随 M-SC4 selftest 验证。
+5. **bat 里 python -c 的坑三连**：`%` 格式化被 cmd 展开（`%d`→变量展开吞字符）；LF 行尾 bat 解析不可靠（统一 CRLF）；`echo`/参数里裸 `|` 被切管道（`^|` 转义或改 findstr）。

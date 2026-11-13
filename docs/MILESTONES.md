@@ -1870,6 +1870,31 @@
 
 **计划收官**：M-SC0~SC3 全部完成，脚本轨道（E4 C# .NET hosting 鸣潮方向）收官，merge 回 master。
 
+## M-SC4：绑定导出生成器（feat/script 轨道重开，2026-11-14，tag `m-sc4`）
+
+**动作**：轨道重开（camera §7.1b 先例：注册表 script closed→active + feat/script 重置到 master HEAD + wt 重建 + `--force` claim M-SC4；CLOSED 轨道 claim 须 --force 且主树注册表编辑要 cp 进 wt 副本）→ 拍板（用户原话定死「加个声明就导出，最多手写声明」+ 属性面板 M-SC10 排期 + 里程碑重排 M-SC4~SC11）→ 三处证据（Flax `API_` 宏 + Flax.Build 双端生成 / csbindgen 产物入 git / cocos bindings-generator libclang 路线否决——绑定面是纯 C ABI 函数表；UnrealSharp 互操作对照：per-ALC 保活归组我们架构天然达成（script-api 装 collectible ALC 随 Unload 整体回收），`[UnmanagedCallersOnly]`+GCHandle 形态记档不提前立；复杂对象三档分策——我们只做 Blittable 一档）→ `tools/scriptapi/gen.py`（exports.api 单源 → ApiTable.g.hpp/.inc/.asserts.inc + Wiring.g.cs 四件套；TYPEMAP 类型映射 + 生命周期账本机制单源；`--check` golden 自证）→ `tools/scriptapi/check_freshness.cmake` + CMake 新鲜度闸（纯 CMake 零 Python）→ Bindings.hpp/.cpp + Api.cs 重构走生成接线（marshal 原语禁私搭，收进 NativeMarshal）→ 16 旧导出全量回放 → 迭代修坑（见踩坑栏）→ 双后端全绿 → `example/m-sc4/run.bat` 四段（gen --check / 重生成 / asserts 摘录 / selftest 全量）ALL GREEN + 证据生成器 m-sc4 段 4 张真实输出图 → cases.json 尾插 `m-sc4` 卡 4 条（json 库 indent=1 + 尾换行 + LF，122 版本）→ server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script `59db85b`（M-SC4 落码）→ 收口 commit（tag `m-sc4`，即本条台账所在提交）。
+
+**完成情况**：双后端 BUILD OK + selftest s0~s8 全绿（16 旧导出走生成接线零回归，含 s8 热更链路 + M-GL4 修复验证）；gen.py --check 绿（25 exports / 1 POD types / 4 files 与声明一致——含 M-SC5 追加后口径）；防漂移断言 25 条全在库；构建新鲜度闸实跑生效（gen.py 重生成后 mtime 新于 exe → 过期闸拒绝跑回归，重编放行——闸不是摆设）；run.bat ALL GREEN；server.py --check exit 0；regression m-sc3 8/8 ALL GREEN。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染，证据以工具图形式过 close 闸）；②工具交代物——展示台 `m-sc4` 版本卡 4 条 tool 用例（gen-check/gen-build/asserts/selftest）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC4 节（机制口径/声明格式速查/踩坑）+ run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN 生成器口径全节（TYPEMAP 账本/POD 校验/容器协议/UnrealSharp 对照）+ 踩坑存档。
+
+**踩坑情况**
+1. **TYPEMAP 首跑即抓 `out u64` → `int*`**：ecsSpawn/GetParent/FindByName 三条映射错（u64 out 误映射 int*）——防漂移 static_assert 闸当场编译红。闸的价值实证：把「selftest 兜底」升级成「编译失败」。
+2. **reloadScript OnTick 重绑误用 `getEntryPoint`（M-GL4 口径漏改真 bug）**：loadScript 走 bootstrap `scriptTickFn`、reloadScript 漏改——热更路径会把脚本程序集再装一份进默认 ALC（两份副本静态字段独立）。旧示例无 OnTick 没被测到，M-SC4 落码时实读 ScriptHost 抓出，已修并随 selftest s8 验证。
+3. **`_pinned` 批次归组计划勘误**：原计划按 UnrealSharp per-ALC strong refs 拍了「_pinned 平铺列表改批次归组」——实读 Bootstrap 确认 script-api 本身装在 collectible ALC 里，`_pinned` 随 Unload 整体回收，归组架构上已天然达成，不改（按错误假设写的计划已勘误留痕）。
+
+**下一步**：M-SC5 Time/Input/Log 域面（生成器首批实战）。
+
+## M-SC5：Time / Input / Log 域绑定（feat/script，2026-11-14，tag `m-sc5`）
+
+**动作**：生成器首批实战——`exports.api` 尾部追加 9 导出（Time 2 / Input 5 / Log 2，ApiTable 16→25）+ TYPEMAP 扩 `f64`/`u32` 原语 → 宿主侧活实例绑定 `timeSetClock`/`inputSetState`/`inputSetActionMap`（ecsSetWorld 模式推广；不隐式建表，未绑 = NoClock/NoSource 热更窗口兜底）→ Bindings.cpp 9 个 extern "C" 实现 + 3 个 set 函数 → C# facade `Time`/`Input`/`Log` + TimeCode/InputCode/LogCode（Api.Version 0.5.0）→ viewer scene 模式接线 timeSetClock（Input 有意不绑——无注入管线）→ `script/examples/timeinput/` 示例（BoundProbe/UnboundProbe 探针，s9 专用）→ nl-script selftest s9a~s9b（5 示例目录参数）→ nl-script 显式 PRIVATE glfw → 双后端全绿 → `example/m-sc5/run.bat` 四段 ALL GREEN + 证据生成器 m-sc5 段 4 张真实输出图 → cases.json 尾插 `m-sc5` 卡 4 条 → server.py --check 0 → 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script `ad0d27c`（M-SC5 落码）→ 收口 commit（tag `m-sc5`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + selftest **103 断言全 PASS**（s0~s5 + s6 + s7 + s8 不回归 + s9a~s9b：时钟锚 tick x3 → simTime 0.05/tickCount 3、SetState 哨兵（-1=不变）、ActionFind 三型冻结值（W/D 喂键）、NoAction 类型拒、KeyIsDown 越界 BadArg、log 通道 `[nl:info|script]` 锚、SetFilter 生效 + 非法指令显式错、解绑 NoClock/NoSource）；gen.py --check 绿；check timeinput exit 0；run.bat ALL GREEN；server.py --check exit 0；regression m-sc3 8/8 ALL GREEN + 全量回归（tag 收口唯一一次，--jobs 4 双后端）全绿。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染）；②工具交代物——展示台 `m-sc5` 版本卡 4 条 tool 用例（selftest/s9 特写/log 通道锚/check）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC5 节（绑定面 v3 口径/s9 判据/踩坑）+ run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC5 行 + 踩坑 3 条存档（action_map.hpp 位置 / glfw PRIVATE link / bat python -c 三连坑）。
+
+**下一步**：M-SC6 Camera（cameraGetPose/cameraSetPose + fov；绑 viewer 现役相机 rig/chase/free，未绑 = NoCamera）。
+
 ## M7.1：vis buffer 材质反解 pass（master 主线 S7，2026-11-09，tag `s7-pulling`）
 
 **动作**：`material.slang`（vsMatResolve 全屏三角形 + psMatResolve：u64 解包 → clusterMeta 查表 → localIndices+vertexPool 拉 3 顶点 → The-Forge 解析式屏幕空间 barycentrics + 每像素导数 → 透视正确插值 worldPos/normal/uv → mode 0/1/2/5，SampleGrad 吃解析导数，空像素 discard）→ CMake `_ENTRIES_MATERIAL` + `_VISBUF_COMMON` 依赖链 → `ViewMode::Pulling`(10) + modes/viewer/renderer/backend 全链穿线（initVisbuf 增 `pulling` 参：同 Scene 复用 vis 资源 + 从 .nmesh 推导 .glb 加载 baseColor/MR 真贴图 + LightConstants(80B,b1) + MatResolveConstants(16B,b2)）→ §2.7 单 BindingSet（b0~b2 + t0~t5 + s0）→ 双后端构建 → **发现 master visbuf 家族堆损坏崩溃（c0000374）→ ASan + 自写 dbghelp 符号化脚本定位 → 修 2 个既有 bug**（见踩坑栏）→ kStage S7.1 + selftest stage 校验同步 → `example/s7-pulling/`（4 张基线 + run.bat + verify.py）+ cases.json s7.1 卡 3 条 → verify.py ALL GREEN + server.py --check 0 → spot 回归 m0.9/s7.0/pbr-direct 三条 ALL GREEN（HUD 用例基线按 kStage bump 纪律重拍 4 张）→ S7-PLAN M7.1 勾选 + UE-DIFFS D16 → 本四栏 → 提交打 tag。
