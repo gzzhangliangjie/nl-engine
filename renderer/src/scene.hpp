@@ -557,6 +557,10 @@ public:
     // 延迟到第一次 HUD 路径才建（--no-hud / hud==nullptr 完全不碰，纪律同 M0.6）；
     // deterministic（截图回归）下不写回真实计时，viewer 提供固定样本保基线 MD5。
     void pollCullTimer(nvrhi::IDevice* device, HudFrame* hud);
+    // M-PERF1：per-pass 计时轮询。backend beginFrame 每帧无条件调用（与 gpuTimer_
+    // poll 同款「移出 HUD 块」口径——--no-hud 也要出日志锚）；hud 可空。
+    // --pass-timing 关 = passTimingWanted_ false = 直返（零 query、零开销）。
+    void pollPassTimers(nvrhi::IDevice* device, HudFrame* hud);
 
     // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
     // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
@@ -837,6 +841,15 @@ private:
     // Scene::draw 里的 compute 剔除段。query 延迟到第一次 HUD 路径的 pollCullStats 才建，
     // --no-hud 截图与历史基线完全不碰（M0.6 同款纪律）。
     GpuTimer cullTimer_;   // setLabel("cull")：resolve 日志与整帧计时区分开
+
+    // ---- M-PERF1：per-pass GPU 计时（Q-P4/Q-P5，docs/perf/PERF-PLAN.md）----
+    // 13 个命名 pass 各一对 begin/end（PassTimers::PassId）。--pass-timing 关 =
+    // passTimingWanted_ 恒 false = ensure 从未调 = 一个 query 都不建 = 渲染路径
+    // 零变化。ensure 走 pollPassTimers（backend beginFrame 每帧无条件调用，
+    // hud 可空——--no-hud 也要出日志锚）；query 创建晚一帧，可接受。
+    PassTimers passTimers_;
+    bool passTimingWanted_ = false;    // draw() 从 FrameParams.passTiming 单向锁存
+    bool passTimingLogged_[PassTimers::kPassCount] = {};   // 每 pass 首次 resolve 日志锚
 
     // ---- M5.0（S5.0）：屏幕误差投影球数据 ----
     float assetSphere_[4]    = {0.0f, 0.0f, 0.0f, 0.0f};

@@ -352,6 +352,9 @@ private:
                 hud->gpuTimingAvailable = true;
             }
         }
+        // M-PERF1：per-pass 计时轮询（移出 HUD 块——--no-hud 也要出日志锚；
+        // hud 可空，写回必须落在 hud_.build() 之前）。
+        scene_.pollPassTimers(nvrhiDevice_, hud);
         if (hud && hud->displayWidth > 0.0f) {
             if (!framebuffers_.empty() && framebuffers_[0]) {
                 std::string err;

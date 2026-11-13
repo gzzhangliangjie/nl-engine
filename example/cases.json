@@ -10400,6 +10400,110 @@
      }
     }
    ]
+  },
+  {
+   "id": "perf-m1",
+   "label": "M-PERF1",
+   "name": "per-pass GPU 计时（--pass-timing 默认关，Q-P4 pass 清单 / Q-P5 输出形态）",
+   "tag": "perf-m1",
+   "date": "2026-11-13",
+   "summary": "M-PERF1（PERF B 档，Q-P1 拍板 A+B 的 B 档）：gpu_timer.hpp 新增 PassTimers——13 个命名 pass 各一对 begin/end，每 pass 4-slot query 环（懒建 / poll 不阻塞 / 无空闲槽本帧跳过，与既有 GpuTimer 同语义；Carrot RenderGraph per-pass timestamp pool 同构）。Q-P4 清单按实码对位落 13 行：csCull（与 M4.2 cullTimer_ 合并口径拆开）、visRaster、matResolve、hizBuild、csDirect、csRefGI、csPlace、csTraceProbe、csGather、csFilterTemporal、csFilterSpatial、csGatherCompose、mainDraw（非 visbuf 主绘制）。Q-P5 输出形态：viewer --pass-timing 默认关；开关走 FrameParams.passTiming 单向锁存 + pollPassTimers 懒建（backend beginFrame 无条件轮询、移出 HUD 块，--no-hud 也出锚）；HUD 逐 pass 面板 default-off（13 行 ASCII，未跑 pass 显示 --，deterministic 不写真实值保截图 MD5）；每 pass 首次 resolve 落 [nl:info|pass-timing] 日志锚（ms 机器相关不进锚匹配段）。冻结面：cullTimer_/blasTimer_/tlasTimer_ 既有计时语义一字不动；--pass-timing 关 = 零 query 零开销（OFF shot 0 行实锤）。csRefGI 由 --mode reference 卡实证 1.61ms（DX12）；--filter-gi-dump 验收分支替换 compose 不计时（PERF-PLAN Q-P4 表回写注明）。",
+   "acceptance": "example/perf-m1/run.bat verify 双后端 8 段 ALL GREEN（checker selftest 5/5 + hiz/filter/shadow ON 锚全中 + hiz OFF 静默 0 行，全部 deviceErrors=0）；实测各 pass ms 合理（DX12 hiz: csCull 0.302 / hizBuild 0.052 / mainDraw 0.015，filter 8 pass 0.005~0.062，shadow csDirect 0.040，ref csRefGI 1.612；VULKAN 同构）；HUD 面板 13 行实测可见；--only 保形抽查双后端 bytes 全绿；全量总闸一次 + tag perf-m1。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "hiz-anchors",
+     "name": "hiz 模式 per-pass 锚：csCull/hizBuild/mainDraw 双后端",
+     "kind": "tool",
+     "note": "expectLog 从实测 log 复制固定前缀（ms 机器相关不进匹配段）。开关走 FrameParams.passTiming 单向锁存。",
+     "args": [
+      "--mode",
+      "hiz",
+      "--pass-timing",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "640x720",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "pass-timing] csCull first resolve"
+    },
+    {
+     "id": "filter-anchors",
+     "name": "filter 模式 per-pass 锚：8 pass 全链（含 csGatherCompose）",
+     "kind": "tool",
+     "note": "不带 --filter-gi-dump（该验收分支替换 compose、不计时）。锚取链尾最强证据。",
+     "args": [
+      "--mode",
+      "filter",
+      "--pass-timing",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "pass-timing] csGatherCompose first resolve"
+    },
+    {
+     "id": "hud-panel",
+     "name": "HUD 逐 pass 面板（--hud --pass-timing）",
+     "kind": "tool",
+     "note": "default-off 面板 13 行 ASCII；deterministic 模式 ms 固定（截图 MD5 稳定）。deviceErrors=0 锚。",
+     "args": [
+      "--mode",
+      "hiz",
+      "--pass-timing",
+      "--hud",
+      "--frames",
+      "8",
+      "--size",
+      "640x720",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "verify",
+     "name": "run.bat verify：checker selftest + 双后端 hiz/filter/shadow ON + OFF 静默",
+     "kind": "manual",
+     "note": "tools/check-perf-m1.py（纯标准库）anchors/off 子命令逐段断言；OFF shot 0 pass-timing 行 = Q-P5 默认关零扰动实锤。",
+     "args": [],
+     "script": "example/perf-m1/run.bat verify",
+     "command": "example/perf-m1/run.bat verify"
+    }
+   ]
   }
  ]
 }

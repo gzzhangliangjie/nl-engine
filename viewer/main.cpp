@@ -224,6 +224,8 @@ struct Options {
     // S12 M12.2：拒绝层默认关（B1 维持不落盘）；阈值写入 g_flags.w，0 = 层关。
     bool  filterReject       = false;
     float rejectThreshold    = 0.01f;
+    // M-PERF1：per-pass GPU 计时（Q-P5，默认关 = 渲染路径零变化）。
+    bool  passTiming         = false;
 };
 
 // ---- M-TR2：RenderDoc 进程内抓帧（单头 + 零链接，默认关） ----
@@ -291,6 +293,8 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--filter-reject") o.filterReject = true;
         else if (a == "--reject-threshold" && i + 1 < argc)
             o.rejectThreshold = static_cast<float>(std::atof(argv[++i]));
+        // M-PERF1（Q-P5）：per-pass GPU 计时 HUD + 日志锚（默认关）。
+        else if (a == "--pass-timing") o.passTiming = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2286,6 +2290,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.filterReject        = filterRejectLocal;
         fp.rejectThreshold     = std::clamp(rejectThresholdLocal, 0.0001f, 1.0f);
         fp.filterGiDump        = o.filterGiDump;
+        // M-PERF1（Q-P5）：per-pass GPU 计时开关透传（Scene 侧单向锁存）。
+        fp.passTiming          = o.passTiming;
         if (dagMode || hizMode) {
             // M5.1/M6.0：遍历参数（bevy/zeux 投影公式的全部输入 + cut 阈值）。
             float eye[3];
@@ -2576,6 +2582,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.hizEnable = hizEnabled;
                 hud.hizOccluded = info.hizOccluded;
             }
+            // M-PERF1（Q-P5）：per-pass 计时面板（--pass-timing 才 show）。
+            // 模式无关填充（hiz/filter/probe 各模式都可能开）。
+            hud.passTimingShow = o.passTiming;
             // M10.0：探针参数面板（probe-place 系模式专属；双向通道同 hizEnable）。
             // S11 M11.0：cache-viz 复用 probe 链但探针调参无意义——面板不画。
             if (probeMode && o.mode != nl::core::ViewMode::CacheViz) {
@@ -3953,6 +3962,8 @@ void printUsage() {
               << "  viewer.exe --filter-reject          S12 M12.2: enable history rejection layer (B1, no prev GBuffer)\n"
               << "  viewer.exe --reject-threshold <f>   reject depth/plane threshold (default 0.01)\n"
               << "  viewer.exe --filter-gi-dump         S12 acceptance: dump accumulated GI component\n"
+              << "  viewer.exe --pass-timing           PERF M-PERF1: per-pass GPU timing HUD rows\n"
+              << "                                     + first-resolve log anchors (default off)\n"
               << "  viewer.exe --vis-viz cluster|triangle\n"
               << "                                     visbuf mode: decode vis buffer by clusterId\n"
               << "                                     or by global triangle id (default cluster)\n"

@@ -162,6 +162,9 @@ struct FrameParams {
     bool  filterReject        = false;  // 拒绝层（M12.2 已实现，--filter-reject 开启）
     float rejectThreshold     = 0.01f; // M12.2：拒绝阈值（写入 g_flags.w，0 = 层关）
     bool  filterGiDump        = false;  // S12 验收：把累积后的 gatherLinear_ 直出（绕开 compose）
+    // ---- M-PERF1：per-pass GPU 计时（Q-P5，--pass-timing 开启；默认关 = 渲染
+    // 路径零变化，冻结基线 bytes 不动）。Scene 侧单向锁存（开了不关），query 懒建。
+    bool  passTiming          = false;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -300,6 +303,13 @@ struct HudFrame {
     bool  filterSpatial       = false;
     bool  filterReject        = false;
     float rejectThreshold     = 0.01f;
+
+    // ---- M-PERF1：per-pass GPU 计时面板（Q-P5；--pass-timing 才 show，默认关 =
+    // 既有 --hud 基线零布局变化）。行名固定在 renderer 侧 PassTimers::name(i)
+    //（gpu_timer.hpp，13 项），POD 只传数值；槽位序 = PassId 枚举序。
+    bool  passTimingShow      = false;
+    float passTimingMs[13]    = {};
+    bool  passTimingValid[13] = {};
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）

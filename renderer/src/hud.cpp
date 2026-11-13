@@ -378,6 +378,25 @@ void Hud::build(HudFrame& frame) {
         ImGui::SliderFloat("reject threshold", &frame.rejectThreshold, 0.0005f, 0.10f, "%.4f");
         ImGui::Separator();
     }
+    // M-PERF1：per-pass GPU 计时面板（Q-P5；--pass-timing 才 show，默认关 =
+    // 既有 --hud 基线零布局变化）。行名 = PassTimers::name(i)（ASCII），
+    // 数值 = pollPassTimers 写回；本帧未跑/未 resolve 的 pass 显示 "--"。
+    static_assert(PassTimers::kPassCount == 13,
+                  "HudFrame.passTimingMs/Valid table size (13) mismatch");
+    if (frame.passTimingShow) {
+        ImGui::Separator();
+        for (int i = 0; i < PassTimers::kPassCount; ++i) {
+            char ptLine[64];
+            if (frame.passTimingValid[i]) {
+                std::snprintf(ptLine, sizeof(ptLine), "%-16s %8.3f ms",
+                              PassTimers::name(i), frame.passTimingMs[i]);
+            } else {
+                std::snprintf(ptLine, sizeof(ptLine), "%-16s %8s",
+                              PassTimers::name(i), "--");
+            }
+            ImGui::TextUnformatted(ptLine);
+        }
+    }
     ImGui::Separator();
     ImGui::Text("FPS %.1f   frame %.2f ms", frame.fps, frame.frameMs);
     ImGui::PlotLines("frame ms", frame.frameMsHistory, frame.frameMsCount,

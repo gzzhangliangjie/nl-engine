@@ -132,4 +132,135 @@ private:
     bool resolvedOnce_ = false;
 };
 
+// M-PERF1：per-pass GPU 计时（Q-P4/Q-P5 拍板，docs/perf/PERF-PLAN.md）。
+// 与 GpuTimer 同语义的多实例版：每个命名 pass 一对 begin/end，各自 4-slot 环
+// （懒建 / poll 不阻塞 / 无空闲槽本帧跳过）。ensure 由 Scene::pollPassTimers 在
+// --pass-timing 打开后首次轮询时才调 —— 开关关 = 一个 query 都不建 = 渲染路径
+// 零变化（Q-P5 零基线扰动）。
+// pass 清单（Q-P4，按实码对位；id 即 HudFrame.passTimingMs 槽位）：
+//   csCull          视锥剔除 compute（scene.cpp frustumCull_ 段，与 hizBuild 拆开）
+//   visRaster       vis buffer 簇光栅（visbuf 三段式 (4)）
+//   matResolve      material 反解（visbuf pulling 全屏三角形）
+//   hizBuild        Hi-Z 深度预通道 + 金字塔 + top（scene.cpp hiz_ 段）
+//   csDirect        直光 compute（shadow 模式 dispatch）
+//   csRefGI         参考图累积 compute（reference 模式 dispatch）
+//   csPlace         探针 cascade 布点（drawProbeFrame (2)）
+//   csTraceProbe    探针追踪（drawProbeFrame (3)）
+//   csGather        final gather（drawProbeGather (1)）
+//   csFilterTemporal  时域累积（S12 M12.0）
+//   csFilterSpatial   空间联合双边（S12 M12.1）
+//   csGatherCompose   全屏合成（drawProbeGather (2)；--filter-gi-dump 分支不计时）
+//   mainDraw        主绘制 drawIndexedIndirect（非 visbuf cull/dag/hiz 路径）
+class PassTimers {
+public:
+    static constexpr int kMaxPasses = 16;
+    static constexpr int kSlots = 4;   // 同 GpuTimer：比 frame-in-flight=2 多留两个
+
+    enum PassId {
+        kPassCull = 0, kPassVisRaster, kPassMaterial, kPassHizBuild,
+        kPassDirect, kPassRefGI, kPassPlace, kPassTrace, kPassGather,
+        kPassFilterTemporal, kPassFilterSpatial, kPassGatherCompose, kPassMainDraw,
+        kPassCount
+    };
+    static_assert(kPassCount <= kMaxPasses, "pass count exceeds HudFrame table");
+
+    // ASCII 名：HUD 逐 pass 行 + resolve 日志锚共用（SHADER-CONVENTIONS 字符串纪律）。
+    static const char* name(int id) {
+        static const char* kNames[kPassCount] = {
+            "csCull", "visRaster", "matResolve", "hizBuild",
+            "csDirect", "csRefGI", "csPlace", "csTraceProbe", "csGather",
+            "csFilterTemporal", "csFilterSpatial", "csGatherCompose", "mainDraw"};
+        return kNames[id];
+    }
+
+    bool ensure(nvrhi::IDevice* device) {
+        if (ready_) return true;
+        if (!device) return false;
+        for (int p = 0; p < kPassCount; ++p) {
+            for (int s = 0; s < kSlots; ++s) {
+                nvrhi::TimerQueryHandle q = device->createTimerQuery();
+                if (!q) return false;
+                slots_[p][s] = Slot{q, false};
+            }
+            active_[p] = -1;
+            writeCursor_[p] = 0;
+            pollCursor_[p] = 0;
+        }
+        device_ = device;
+        ready_ = true;
+        return true;
+    }
+
+    // device 必须还活着时调用（shutdown 早期）。
+    void shutdown() {
+        for (int p = 0; p < kPassCount; ++p) {
+            for (int s = 0; s < kSlots; ++s) slots_[p][s] = Slot{};
+            active_[p] = -1;
+            writeCursor_[p] = 0;
+            pollCursor_[p] = 0;
+        }
+        device_ = nullptr;
+        ready_ = false;
+    }
+
+    bool available() const { return ready_; }
+
+    // cmd->open() 之后调用。未 resolve 的 query 不能复用（NVRHI 规定）；
+    // 找不到空闲 slot 时本帧不计时，不报错、不阻塞（与 GpuTimer 同款静默降级）。
+    bool begin(nvrhi::ICommandList* cmd, int pass) {
+        if (!ready_ || pass < 0 || pass >= kPassCount || active_[pass] >= 0) return false;
+        for (int n = 0; n < kSlots; ++n) {
+            const int i = (writeCursor_[pass] + n) % kSlots;
+            if (slots_[pass][i].pending) continue;
+            cmd->beginTimerQuery(slots_[pass][i].query);
+            active_[pass] = i;
+            writeCursor_[pass] = (i + 1) % kSlots;
+            return true;
+        }
+        return false;
+    }
+
+    void end(nvrhi::ICommandList* cmd, int pass) {
+        if (!ready_ || pass < 0 || pass >= kPassCount || active_[pass] < 0) return;
+        cmd->endTimerQuery(slots_[pass][active_[pass]].query);
+        slots_[pass][active_[pass]].pending = true;
+        active_[pass] = -1;
+    }
+
+    // 帧首轮询全部 pass：只取已 resolve 的结果，绝不阻塞。outMs/outValid 为
+    // kPassCount 长度数组；本轮有任一新 resolve 返回 true（调用方据此刷日志锚）。
+    bool poll(float* outMs, bool* outValid) {
+        bool any = false;
+        for (int p = 0; p < kPassCount; ++p) {
+            for (int n = 0; n < kSlots; ++n) {
+                const int i = (pollCursor_[p] + n) % kSlots;
+                Slot& s = slots_[p][i];
+                if (!s.pending) continue;
+                if (!device_->pollTimerQuery(s.query)) continue;
+                outMs[p] = GpuTimer::toMilliseconds(device_->getTimerQueryTime(s.query));
+                device_->resetTimerQuery(s.query);
+                s.pending = false;
+                pollCursor_[p] = (i + 1) % kSlots;
+                outValid[p] = true;
+                any = true;
+                break;   // 每 pass 每轮只消费一个最新结果
+            }
+        }
+        return any;
+    }
+
+private:
+    struct Slot {
+        nvrhi::TimerQueryHandle query;
+        bool pending = false;
+    };
+
+    nvrhi::IDevice* device_ = nullptr;
+    Slot   slots_[kPassCount][kSlots] = {};
+    int    active_[kPassCount] = {};
+    int    writeCursor_[kPassCount] = {};
+    int    pollCursor_[kPassCount] = {};
+    bool   ready_ = false;
+};
+
 } // namespace nl::renderer::detail

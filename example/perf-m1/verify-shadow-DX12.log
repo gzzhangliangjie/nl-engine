@@ -1,0 +1,22 @@
+[nl:info] window created 640x720 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|scene] blas built: Suzanne.lod0.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info|scene] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info|scene] cull (vertex pulling) scene ready: Suzanne.nmesh | meshlets=237 | triangles=3936 | stride=63 | frustum=off | shader=dxil
+[nl:info|scene] visbuf material resolve ready: Suzanne.glb | materials=1 | baseColor 1024x1024 | shader=dxil
+[nl:info|scene] shadow scene ready (compute direct lighting, 1 shadow ray/pixel via TLAS) | shader=dxil
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 640x720
+[nl:info|viewer] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] debug layer: D3D12 Debug Layer (Windows SDK) + NVRHI validation | active=yes
+[nl:info|viewer] mode: shadow | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info|viewer] screenshot mode: 16 frames -> E:\UE_STUDY_2026\nl-engine\example\perf-m1\shadow-DX12.png | cull=back | hud=off
+[nl:info|scene] tlas: per-frame rebuild active | instances=1 #1
+[nl:info|renderer] gpu timer resolved [frame]: 0.218112 ms (first successful NVRHI timestamp query) #2
+[nl:info|pass-timing] visRaster first resolve: 0.017408 ms #3
+[nl:info|pass-timing] csDirect first resolve: 0.04096 ms #3
+[nl:info|viewer] screenshot written: E:\UE_STUDY_2026\nl-engine\example\perf-m1\shadow-DX12.png #16
+[nl:info|viewer] shutdown ok (frames=16 screenshots=1 deviceErrors=0) #16
+[nl:info|viewer] frame timing: avg 2.07517 ms  max 24.0475 ms  over 16 frames (unthrottled) #16
+[nl:info|viewer] gpu timing: avg 0.166161 ms over 15 resolved frames (NVRHI timer) #16
+[nl:info] window destroyed #16

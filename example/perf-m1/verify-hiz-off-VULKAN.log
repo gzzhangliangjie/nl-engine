@@ -1,0 +1,35 @@
+[nl:info] window created 640x720 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] rt extensions enabled: acceleration_structure+ray_query+buffer_device_address
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|scene] blas built: Suzanne.lod0.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info|scene] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info|scene] dag (traversal) scene ready: Suzanne.lod0..lod6 | levels=7 | clusters=324 | groups=56 | roots=3 | triangles(finest)=3936 | stride=303 | shader=spv
+[nl:info|scene] hiz scene ready (dag traversal + depth pre-pass + max pyramid) | shader=spv
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 640x720
+[nl:info|viewer] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] debug layer: NVRHI validation (Vulkan, no VVL, zero vendor SDK) | active=yes
+[nl:info|viewer] mode: hiz | HUD: off | shading: cluster | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info|viewer] screenshot mode: 16 frames -> E:\UE_STUDY_2026\nl-engine\example\perf-m1\hiz-off-VULKAN.png | cull=back | hud=off
+[nl:info|scene] tlas: per-frame rebuild active | instances=1 #1
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path) #1
+[nl:info|renderer] gpu timer resolved [frame]: 0.334848 ms (first successful NVRHI timestamp query) #2
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 237 / 324 clusters, occluded 0 of 237 visited, mips 11) #3
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #4
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #5
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #6
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #7
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #8
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #9
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #10
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #11
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #12
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #13
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #14
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #15
+[nl:info|viewer] screenshot written: E:\UE_STUDY_2026\nl-engine\example\perf-m1\hiz-off-VULKAN.png #16
+[nl:info|viewer] hiz stats: pyramid top far background-dominates (visible 233 / 324 clusters, occluded 5 of 238 visited, mips 11) #16
+[nl:info|viewer] shutdown ok (frames=16 screenshots=1 deviceErrors=0) #16
+[nl:info|viewer] frame timing: avg 6.74744 ms  max 58.4055 ms  over 16 frames (unthrottled) #16
+[nl:info|viewer] gpu timing: avg 0.445852 ms over 15 resolved frames (NVRHI timer) #16
+[nl:info] window destroyed #16

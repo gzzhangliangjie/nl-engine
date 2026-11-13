@@ -23,7 +23,7 @@
 | Q-P1 范围 | **A + B**；C（trace-coverage）挂后续单独拍板 |
 | Q-P2 编号归属 | **M-PERF0（A）→ M-PERF1（B）**，主线 master 直接做、不建 track / 不 claim，tag `perf-m0` / `perf-m1` |
 | Q-P3（A）门禁强度 | uniformity 警告出现 → **FAIL（exit 1）**（现状零警告基线干净，防退化）；非 uniformity 警告（E30081 隐式转换等）→ informational 只报告不挡 |
-| Q-P4（B）pass 清单 | 12 个命名 pass：`csCull`（视锥剔除）/ visbuf 簇光栅 / material 反解 / hiz build / `csDirect` / `csReferenceGI` / `csPlace` / `csTraceProbe` / `csGather` / `csFilterTemporal` / `csFilterSpatial` / `csGatherCompose` / 主绘制（若落码时发现清单与实际调度有出入，按实码修正并回写本表） |
+| Q-P4（B）pass 清单 | 13 个命名 pass：`csCull`（视锥剔除）/ visRaster（visbuf 簇光栅）/ matResolve（material 反解）/ hizBuild / `csDirect` / `csRefGI` / `csPlace` / `csTraceProbe` / `csGather` / `csFilterTemporal` / `csFilterSpatial` / `csGatherCompose` / mainDraw（非 visbuf 主绘制）。**落码后按实码回写（2026-11-13）**：`--filter-gi-dump` 验收分支替换 compose 不计时；visbuf pulling 无独立 mainDraw（matResolve 即主绘制）；M4.2 `cullTimer_`「剔除+回读」合并口径不动，csCull/hizBuild 为并行的独立细分计时 |
 | Q-P5（B）输出形态 | `--pass-timing` CLI 开关（**默认关**）+ HUD 面板逐 pass 行 + log 可断言锚；零基线扰动（开关关 = 渲染路径零变化，冻结基线 bytes 不动） |
 
 **C 挂后续理由**：`-trace-coverage` 需宿主侧分配/绑定 `__slang_coverage` buffer + 读回 + manifest JSON 映射回源码行，集成最重；插桩字节码与冻结基线不同源，必须隔离成独立模式/产物目录。价值场景真实（死代码/未覆盖分支定位）但不阻塞主线，待单独拍板。
@@ -45,3 +45,4 @@
 ## 3. 变更记录
 
 - 2026-11-13：立项 + Q-P1~P5 拍板落档（用户「按建议来」）。
+- 2026-11-13：M-PERF1 收官——PassTimers 13 pass 落码、`--pass-timing` 默认关、HUD 逐 pass 面板、`[nl:info|pass-timing]` 日志锚、`tools/check-perf-m1.py` + `example/perf-m1/run.bat verify`（双后端 8 段 ALL GREEN）；Q-P4 表按实码回写（13 项全数落地 + 三处调度差异注明）。tag `perf-m1`。

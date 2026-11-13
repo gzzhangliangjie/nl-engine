@@ -2772,10 +2772,13 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
                          0.01f, 50.0f, 0.0f, 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
+    // M-PERF1：csDirect pass 计时（直光 compute dispatch 段）。
+    const bool ptDirect = passTimers_.begin(cmd, PassTimers::kPassDirect);
     nvrhi::ComputeState cstate;
     cstate.setPipeline(directPSO_).addBindingSet(directComputeSet_);
     cmd->setComputeState(cstate);
     cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
+    if (ptDirect) passTimers_.end(cmd, PassTimers::kPassDirect);
 
     if (!presentRtTarget(cmd, framebuffer, viewport, err)) {
         nl::core::log::deviceError("shadow", err);
@@ -2994,10 +2997,13 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     const float gi[4] = {0.45f, 0.39f, 0.30f, params.lightDir[3]};
     cmd->writeBuffer(refGICB_, gi, sizeof(gi));
 
+    // M-PERF1：csRefGI pass 计时（reference / reference-gi 累积 dispatch 段）。
+    const bool ptRef = passTimers_.begin(cmd, PassTimers::kPassRefGI);
     nvrhi::ComputeState cstate;
     cstate.setPipeline(params.referenceGI ? refGIPSO_ : refPSO_).addBindingSet(refComputeSet_);
     cmd->setComputeState(cstate);
     cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
+    if (ptRef) passTimers_.end(cmd, PassTimers::kPassRefGI);
 
     if (!presentRefTarget(cmd, framebuffer, viewport, err)) {
         nl::core::log::deviceError("reference", err);
@@ -3900,11 +3906,14 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
 
     // ---- (2) csPlace cascade 布点 dispatch（depth/velocity/prevDelta/atlas 的
     // SRV↔UAV 转换由绑定 require 自动插 barrier）。
+    // M-PERF1：csPlace pass 计时。
     {
+        const bool ptPlace = passTimers_.begin(cmd, PassTimers::kPassPlace);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 1u);
+        if (ptPlace) passTimers_.end(cmd, PassTimers::kPassPlace);
     }
 
     // ---- (3) csTrace 探针追踪 dispatch（M10.1）：place atlas cur parity SRV ←
@@ -3913,11 +3922,14 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // 的布点/点可视化不受影响，M10.0 行为保形；shadow 模式同口径降级）。
     if (tlasReady_) {
         const std::uint32_t store = 10u;
+        // M-PERF1：csTraceProbe pass 计时。
+        const bool ptTrace = passTimers_.begin(cmd, PassTimers::kPassTrace);
         nvrhi::ComputeState tstate;
         tstate.setPipeline(tracePSO_).addBindingSet(traceSet_[probeParity_]);
         cmd->setComputeState(tstate);
         cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
                       ((probeBaseRes_ * store) + 7u) / 8u, 4u);
+        if (ptTrace) passTimers_.end(cmd, PassTimers::kPassTrace);
     } else if (!probeTraceLogged_) {
         nl::core::log::infoCh("scene", "probe: TLAS not ready (no RT support or no fallback "
                             "geometry) -- probe tracing disabled");
@@ -3967,10 +3979,13 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
                                                      : nvrhi::ResourceStates::UnorderedAccess);
     probeGatherFirst_ = false;
     {
+        // M-PERF1：csGather pass 计时。
+        const bool ptGather = passTimers_.begin(cmd, PassTimers::kPassGather);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(gatherPSO_).addBindingSet(gatherSet_[probeParity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+        if (ptGather) passTimers_.end(cmd, PassTimers::kPassGather);
     }
 
     // ---- (1.5) S12 M12.0（T5 保形硬边界）：仅 filter 态在 csGather 与
@@ -4001,10 +4016,13 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
             nl::core::log::deviceError("gi-dump", gdErr);
     } else
     {
+        // M-PERF1：csGatherCompose pass 计时（--filter-gi-dump 验收分支不计时）。
+        const bool ptCompose = passTimers_.begin(cmd, PassTimers::kPassGatherCompose);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(gatherComposePSO_).addBindingSet(gatherSet_[probeParity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+        if (ptCompose) passTimers_.end(cmd, PassTimers::kPassGatherCompose);
     }
     if (!probeGatherLogged_) {
         nl::core::log::infoCh("scene", "probe: gather active (depth-banded cascade levels, "
@@ -4108,11 +4126,14 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
     fcb[7] = params.filterReject ? rejThr : 0.0f;
     cmd->writeBuffer(filterCB_, fcb, sizeof(fcb));
 
+    // M-PERF1：csFilterTemporal pass 计时。
     {
+        const bool ptFT = passTimers_.begin(cmd, PassTimers::kPassFilterTemporal);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(filterPSO_).addBindingSet(filterSet_[t0Parity_]);
         cmd->setComputeState(cstate);
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+        if (ptFT) passTimers_.end(cmd, PassTimers::kPassFilterTemporal);
     }
 
     // M12.1：记录本帧 temporal write 侧，供 drawFilterSpatial 当只读邻域源。
@@ -4152,12 +4173,15 @@ bool Scene::drawFilterSpatial(nvrhi::ICommandList* cmd, const nvrhi::Viewport& v
     const std::uint32_t w = t0Parity_ & 1u;
     cmd->setTextureState(filterHistoryCur_, allSub, nvrhi::ResourceStates::ShaderResource);
     {
+        // M-PERF1：csFilterSpatial pass 计时。
+        const bool ptFS = passTimers_.begin(cmd, PassTimers::kPassFilterSpatial);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(filterSpatialPSO_).addBindingSet(filterSpatialSet_[w]);
         cmd->setComputeState(cstate);
         const float vpW = viewport.maxX - viewport.minX;
         const float vpH = viewport.maxY - viewport.minY;
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+        if (ptFS) passTimers_.end(cmd, PassTimers::kPassFilterSpatial);
     }
     // 帧末末态必须还原成 UAV：下一帧 drawFilterTemporal 对 hRead 的
     // beginTrackingTextureState(..., UnorderedAccess) 依赖它（M12.0 状态机不变）。
@@ -4624,6 +4648,33 @@ void Scene::pollCullTimer(nvrhi::IDevice* device, HudFrame* hud) {
         float cullMs = 0.0f;
         if (!hud->deterministic && cullTimer_.poll(cullMs)) hud->cullMs = cullMs;
         hud->cullTimingAvailable = true;
+    }
+}
+
+// M-PERF1：per-pass 计时轮询 + 每 pass 首次 resolve 日志锚。backend beginFrame
+// 每帧无条件调用（gpuTimer_ poll 同款「移出 HUD 块」口径——--no-hud 截图回归
+// 也要能出可断言锚），hud 可空。--pass-timing 关 = passTimingWanted_ 恒 false
+// = 直返，query 一个都没建（Q-P5 零基线扰动）。deterministic 模式 valid 照置
+// （面板有行）但 ms 不写真实值（cullMs 固定样本同款纪律，保截图 MD5 稳定）。
+void Scene::pollPassTimers(nvrhi::IDevice* device, HudFrame* hud) {
+    if (!passTimingWanted_) return;
+    if (!passTimers_.available() && !passTimers_.ensure(device)) return;
+    float ms[PassTimers::kPassCount] = {};
+    bool  valid[PassTimers::kPassCount] = {};
+    if (!passTimers_.poll(ms, valid)) return;
+    for (int p = 0; p < PassTimers::kPassCount; ++p) {
+        if (!valid[p]) continue;
+        if (!passTimingLogged_[p]) {
+            passTimingLogged_[p] = true;
+            // 日志锚：通道 pass-timing + pass 名固定前缀，验收用例按前缀断言
+            //（ms 值逐机不同，不进锚文本匹配段）。
+            nl::core::log::infoCh("pass-timing", PassTimers::name(p),
+                                  " first resolve: ", ms[p], " ms");
+        }
+        if (hud) {
+            if (!hud->deterministic) hud->passTimingMs[p] = ms[p];
+            hud->passTimingValid[p] = true;
+        }
     }
 }
 void Scene::pollCullStats(nvrhi::IDevice* device) {
@@ -6360,6 +6411,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
     // M-TR0 K1: reset happens in backend recordFrame (frame start).
+    // M-PERF1：--pass-timing 单向锁存（开了不关；query 由 pollPassTimers 懒建，
+    // 晚一帧可接受）。开关关 = 一行都不执行 = 渲染路径零变化（Q-P5 零基线扰动）。
+    if (params.passTiming) passTimingWanted_ = true;
 
     // M8.2：rt 模式——不走光栅化路径，compute RayQuery 调试射线 + 全屏呈现
     //（buildTlasFrame 已在 recordFrame 里先记录，同列表顺序保证射线打本帧 TLAS）。
@@ -6569,6 +6623,8 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 cmd->clearBufferUInt(visBuffer_, 0xFFFFFFFFu);
 
                 // (4) 簇光栅：PS 对 u64 做 InterlockedMin，深度测试照旧。
+                // M-PERF1：visRaster pass 计时（--pass-timing 关 = begin 直返 false）。
+                const bool ptVisRaster = passTimers_.begin(cmd, PassTimers::kPassVisRaster);
                 nvrhi::GraphicsState rstate;
                 rstate.setPipeline(visRasterPSO_)
                       .setFramebuffer(framebuffer)
@@ -6581,6 +6637,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 cmd->setGraphicsState(rstate);
                 noteDraw();  // M-TR0 K1: draw-call counter
                 cmd->drawIndexedIndirect(0, 1);
+                if (ptVisRaster) passTimers_.end(cmd, PassTimers::kPassVisRaster);
 
                 // (5) reference ? 离线参考 : shadow ? compute 直光 : pulling ? 材质反解 : 全屏 viz。
                 if (reference_) {
@@ -6594,6 +6651,8 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     writeResolveConstants(cmd, params);
 
                     // 全屏三角形覆盖整屏：每像素反解 vis → 顶点拉取 → 材质着色。
+                    // M-PERF1：matResolve pass 计时。
+                    const bool ptMat = passTimers_.begin(cmd, PassTimers::kPassMaterial);
                     nvrhi::GraphicsState mstate;
                     mstate.setPipeline(matResolvePSO_)
                           .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
@@ -6604,6 +6663,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     margs.setVertexCount(3);   // 覆盖屏的大三角形
                     noteDraw();  // M-TR0 K1: draw-call counter
                     cmd->draw(margs);
+                    if (ptMat) passTimers_.end(cmd, PassTimers::kPassMaterial);
                     // M10.0：probe-place 的 velocity prepass + cascade 布点
                     //（matResolve 之后——布点读的是本帧几何已经画完的状态；
                     // tonemap 之前——布点与本帧 HDR 输出同帧）。
@@ -6706,6 +6766,10 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         // 时 begin 返回 false，本帧不计时、不报错（与整帧计时同款静默降级）。
         if (frustumCull_) {
             const bool cullTiming = cullTimer_.begin(cmd);
+            // M-PERF1：csCull pass 计时（与 cullTimer_ 独立——cullTimer_ 保持
+            // M4.2「剔除+回读」既有覆盖不变；本计时只包剔除 dispatch + 回读拷贝，
+            // hizBuild 单独一槽，把 M4.2 的合并口径拆开成逐 pass 细分）。
+            const bool ptCull = passTimers_.begin(cmd, PassTimers::kPassCull);
             cmd->writeBuffer(indirectArgs_, &cullArgsReset_, sizeof(cullArgsReset_));
             // M5.2：三角计数器每帧清零（GPU atomicAdd 从 0 累加，与 args[1] 同款）。
             // M6.2：dag 模式两个槽（tris + occluded）一起清；cull 模式 buffer 仍
@@ -6778,6 +6842,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                                 2 * sizeof(std::uint32_t), triCounter_,
                                 sizeof(std::uint32_t), sizeof(std::uint32_t));
             }
+            if (ptCull) passTimers_.end(cmd, PassTimers::kPassCull);
 
             // ---- M6.0：Hi-Z 深度预通道 + 金字塔（hiz 模式）----
             // 顺序：遍历 compute（上面，消费**上一帧**金字塔做遮挡测试）→ 深度
@@ -6785,6 +6850,9 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             // 口径）→ 最高 mip 落 4B 计数器。全部发生在主绘制之前；本段产出的
             // 金字塔供下一帧遍历使用（一帧延迟，S6-PLAN 明文接受）。
             if (hiz_ && !hizFailed_) {
+                // M-PERF1：hizBuild pass 计时（深度预通道 + 金字塔逐级 + top 整段；
+                // M4.2 的 cullTimer_ 合并口径不动，本行把 hiz 段单独拆出来）。
+                const bool ptHiz = passTimers_.begin(cmd, PassTimers::kPassHizBuild);
                 std::string hizErr;
                 if (!ensureHizTargets(hizDevice_, viewport.maxX - viewport.minX,
                                       viewport.maxY - viewport.minY, hizErr)) {
@@ -6880,11 +6948,14 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                                     3 * sizeof(std::uint32_t), hizTop_, 0,
                                     sizeof(std::uint32_t));
                 }
+                if (ptHiz) passTimers_.end(cmd, PassTimers::kPassHizBuild);
             }
             if (cullTiming) cullTimer_.end(cmd);
             ++cullSubmitted_;
         }
 
+        // M-PERF1：mainDraw pass 计时（非 visbuf 路径的主绘制 indirect draw）。
+        const bool ptMain = passTimers_.begin(cmd, PassTimers::kPassMainDraw);
         nvrhi::GraphicsState state;
         state.setPipeline(pipeline)
              .setFramebuffer(sceneFb)   // T0 T2：场景渲到离屏 HDR（t0Active=false 回落 swapchain）
@@ -6896,6 +6967,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         cmd->setGraphicsState(state);
         noteDraw();  // M-TR0 K1: draw-call counter
         cmd->drawIndexedIndirect(0, 1);
+        if (ptMain) passTimers_.end(cmd, PassTimers::kPassMainDraw);
 
         // M6.0：右下角 160x160 层级可视化覆盖层（只读金字塔，近亮远暗）。
         // 画在主绘制之后、HUD 之前——截图基线里可见 = 层级可视化的验收证据。
@@ -8355,6 +8427,7 @@ void Scene::shutdown() {
     cullVisibleCount_ = -1;
     visibleTriangles_ = -1;
     cullTimer_.shutdown();   // M4.2：device 仍存活时释放 cull 计时 query
+    passTimers_.shutdown();  // M-PERF1：device 仍存活时释放 per-pass 计时 query
     dbgLines_.shutdown();    // M-P3：释放调试线框管线 / 缓冲
     clusterCount_ = 0;
     frustumCull_ = false;
