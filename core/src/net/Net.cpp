@@ -56,6 +56,15 @@ struct NetServer::Impl {
 
     void destroy() {
         if (host) {
+            // M-NET3 优雅关服：逐 peer 发 disconnect 并 flush，对端立即感知断链
+            //（enet_host_destroy 直拆 socket 不通知 peer，client 只能等默认超时）。
+            for (const auto& kv : peerIds) {
+                if (kv.first &&
+                    kv.first->state != ENET_PEER_STATE_DISCONNECTED &&
+                    kv.first->state != ENET_PEER_STATE_ZOMBIE) {
+                    enet_peer_disconnect(kv.first, 0);
+                }
+            }
             enet_host_flush(host);
             enet_host_destroy(host);
             host = nullptr;

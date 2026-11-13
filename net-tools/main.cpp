@@ -782,14 +782,45 @@ int cmdSessionLoopback(int argc, char** argv) {
         }
     }
     const bool welcomedOk = client.localEntityId() == 0;   // disconnect 后归零
+    // M-NET3 异常路径：server 优雅关服（stop 内部逐 peer disconnect + flush）->
+    // client pump 立即收断链事件 -> 会话态复位（welcomed=false / 实体桶清空），
+    // 对端消失不再依赖默认超时（~30s）。独立新会话套，不碰上面 M-NET2 断言。
+    bool passiveCloseOk = false;
+    {
+        const uint16_t p2 = static_cast<uint16_t>(port < 65535 ? port + 1 : port - 1);
+        nl::net::ServerSession srv2;
+        if (srv2.start(p2, 4)) {
+            const uint16_t ent2 = srv2.claimLocalEntity();
+            nl::net::ClientSession cli2;
+            if (cli2.beginConnect("127.0.0.1", p2)) {
+                const double dl2 = nowSec() + 3.0;
+                while (nowSec() < dl2 && !cli2.welcomed()) {
+                    cli2.pump();
+                    std::vector<uint16_t> j2, l2;
+                    srv2.pump(1, j2, l2);
+                    srv2.broadcastSnapshot(fakeSnapshot(1, ent2, 0.0f, 0.0f));
+                    cli2.pump();
+                }
+                if (cli2.welcomed()) {
+                    srv2.stop();   // 优雅关服（M-NET3）：对端立即感知，不等超时
+                    const double dl3 = nowSec() + 3.0;
+                    while (nowSec() < dl3 && cli2.connected()) cli2.pump();
+                    passiveCloseOk = !cli2.welcomed() && !cli2.connected() &&
+                                     cli2.entityCount() == 0 && cli2.localEntityId() == 0;
+                }
+            }
+        }
+    }
     const bool ok = joinSeen && clientEnt == localEnt + 1 && inputOk &&
-                    interpOk && samples >= ticks / 4 && leaveSeen && welcomedOk;
+                    interpOk && samples >= ticks / 4 && leaveSeen && welcomedOk &&
+                    passiveCloseOk;
     std::printf("session      : joined=%u welcomed entityId=%u input=%s\n",
                 joinSeen ? 1u : 0u, clientEnt, inputOk ? "ok" : "BAD");
     std::printf("session      : interp samples=%zu maxErr=%.4f maxBound=%.4f\n",
                 samples, maxErr, maxBound);
     std::printf("session      : leave=%d reconnectState=%s\n",
                 leaveSeen ? 1 : 0, welcomedOk ? "clean" : "STALE");
+    std::printf("session      : passiveClose=%s\n", passiveCloseOk ? "clean" : "STALE");
     if (ok) {
         std::printf("session-loopback : PASS\n");
         return 0;

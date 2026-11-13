@@ -72,6 +72,11 @@ ping -n 2 127.0.0.1 >nul
 goto waitserver
 :serverok
 findstr /c:"entity 2 left" "%D%server.log" <nul >nul && echo note: client left before server end (entity recycled)
+rem M-NET3: server graceful close (per-peer disconnect + flush) makes the client
+rem detect link loss immediately when the server exits first. Exit order is
+rem real-time dependent, so this is a soft note, not a hard anchor. The
+rem deterministic anchor is session-loopback passiveClose (Sync layer, ctest).
+findstr /c:"client: server disconnected" "%D%client.log" <nul >nul && echo note: client saw server disconnect (graceful close, ghosts removed)
 echo server: shutdown ok
 
 echo.
