@@ -3241,3 +3241,24 @@
 - **完成情况**：🟢 四卡 run.bat 五段式 ALL GREEN + regression `--only cam-1b/cam-2b/cam-3b/cam-mcam4` 4+2+2+2 全 bytes；🟢 旧卡连带回归 cam-m0 10/10、cam-1a 6/6、cam-3a 6/6、cam-b 2/2、drive-m3 12/12、s8.2 4/4 全 bytes ALL GREEN；🟢 ctest cam 双后端 2/2；🟢 确定性三重验证：同参重拍逐字节、双后端 `cam final` 日志锚逐字一致、smoothshake 与 plain free PNG 必须不同（效果可见闸）；🟢 `server.py --check` exit 0（kStage 保持 S8.2，70 张既有基线零波及）。
 - **踩坑**：① **`forwardFromView` 读错矩阵行/列**——列主序 view 矩阵的 backward 在第三**行**（`m[2]/m[6]/m[10]`），原实现读第三**列**（`m[8..10]` = right.z/up.z/backward.z），chase/track 渲染视线错 45° 级、主体不居中（track 水平分量碰巧不受影响才没当场露馅）；手算 `-(m8,m9,m10)` 与实测 outRig 偏移完全吻合实锤后修复，Orbit 路径自带视图矩阵不经此函数故 70 张既有基线零波及。② **`ChaseCamera::lookDirection` 按值传参**——out 参数写不回调用方，`seedFreeFromChase`/HUD/trace yaw 列全被污染恒 0；旧锚「free fly +Z」「eye_z 严格递增」把 bug 语义锁死，按「锚从实测反推」口径改为沿 seed 视线方向断言。③ **cam-tools stdout CRLF**——C 运行时文本模式把 `\n` 膨胀成 `\r\n`，与 `.gitattributes` 的 `*.tsv eol=lf` 永远对不上，旧卡 run.bat 的 TSV 字节比对在今天 checkout 后必挂（本轮前已潜伏）；`_setmode(_O_BINARY)` 根治后 cam-trace/free-trace/cine-trace 内容逐字节还原、cam-1a director-trace.tsv + acceptance.png 按新真实 yaw/pitch 重生成。④ chase 机位 eye 高度疑云实为收敛值自洽（pitch 被 seed 成 orbit 俯角 → `desired.y = 0.56+3.5-0.96`），非 bug。⑤ 双后端并行构建抢 PDB 致 C1090（0x6BA RPC）→ 清 mspdbsrv + 串行构建即过。
 - **提交版本**：feat/camera 本节 commit + annotated tag `cam-m5`；track camera 整轨（M-CAM0~CAM4 + 视觉卡）至此全部落地，merge 回 master 后轨道收官。冻结面：OrbitCamera 一字未动、kStage 不 bump、`resolveViewProjection`/渲染管线零改动、除 cam-b 外全部既有基线零重拍。
+
+## W0 M-W0.0 — citygen 工具骨架 + 确定性地基（feat/worldgen，2026-11-13，tag `w0-m0`）
+
+**动作**：第 6 步「程序化城市生成工具」首里程碑（A 类并行轨道 `worldgen`，claim M-W0.0，wt 建于 master `52700f1`）。① 新目标 `city-tools`（main.cpp 单文件，纯 CPU 零图形零引擎依赖，仅 vendored stb_image_write.h 出 PNG，`${THIRDPARTY}/stb` 既有 include 路径），根 CMakeLists `add_subdirectory(city-tools)` 一行挂载。② 自研 pcg32 确定性 RNG（O'Neill 规范算法，public domain 口径抄算法不抄文件；`seed()` = srandom(initstate=seed, 流常量 0x14057B7EF767814F)），已知答案锁实现：seed 12345 前三输出 `1321476956/17539747/3348728241`（Python 参考实现独立复算回填，非工具自证）。③ 规则网格 block 布局（5.5×4.0m = roadnet.json 契约 `blocks` 同源；size 居中 lo=−size/2；内区 4.5×3.0m = bevy ground tile 尺寸），**显式偏离留档**：路网画全跨度 (size+1)+(size+1) 条 1.0m 线（bevy 是逐 cell 线段+交点补丁、+x/+z 开边），理由 = 无开边无死路、M-W0.1 roadnet 节点直取 (size+1)² 交点。④ 纯 CPU 俯视光栅化（32px/m + 1.5m 留白，size 6 → 1152×864 PNG；stb zlib 确定性 → 双编码逐字节一致）。⑤ CityStats 计数锚骨架（blocks/groundTiles/roadSegments/crossroads 实数，buildings/trees/cars/fences/paths 为 M-W0.2/0.3 挂零锚）。⑥ **RNG 消费序跨里程碑契约**：单流、cell 行主序、每 cell 一次 below(16) 地面灰度档——这是判据①「异 seed 必不同」在空白城（无楼无车无随机内容）下的最小种子敏感元，M-W0.3 OpenSimplex 密度分区接管视觉分区后流前缀序保留；M-W0.1/M-W0.2 的消费一律追加在流尾不许重排。
+
+**提交版本**：`feat/worldgen`（city-tools + example/w0-m0 + cases.json w0-m0 卡 + 文档）；annotated tag `w0-m0`。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 格式零触碰，cases.json 仅追加 `kind:"tool"` 版本卡（第 118 张）。
+
+**完成情况**
+- 🟢 seed 对称确定性 selftest 23 断言全绿（同 seed 双跑 FNV-1a 逐字节 + PNG 双编码逐字节；异 seed 布局与 PNG 双验证必异；pcg32 已知答案 3 条；36/72/49 计数锚 + 5.5/4.0/4.5×3.0 契约锚 + extent 33×24m + shade 界 + PNG 签名）。
+- 🟢 DX12/VULKAN 双树 BUILD OK（viewer selftest 16/16 ×2 连带绿）；ctest `w0-city-selftest/generate/negative` 双树各 3/3（`--repeat until-pass:3`）。
+- 🟢 `--only w0-m0` 回归 8/8 ALL GREEN（4 用例 × 2 后端，expectExit/expectLog 全锚定）；`server.py --check` exit 0（旧阶段零回归证明）。
+- 🟢 `example/w0-m0/run.bat` 六段 ALL GREEN exit 0（selftest / generate+stats 锚 / 同 seed 双跑 `fc /b` 逐字节 / usage exit 2 / negative exit 2）；证据图 `city_top.png` 为工具真实输出（非手绘）。
+- 🟢 展示台 `w0-m0` 卡四用例（usage / selftest --verbose / generate --stats / negative）；`docs/worldgen/CITY-TOOLS-GUIDE.md` §1 归档。
+
+**踩坑情况**
+1. **stb 只 include 不 define**：`STB_IMAGE_WRITE_IMPLEMENTATION` 漏定义 → LNK2019 `stbi_write_png_to_func` 无法解析；单 TU 顶部 define 解决（png_writer.cpp 先例同款）。
+2. **`%~dp0` 尾反斜杠吃引号**：run.bat `--out "%D%"` 的 `%D%` 以 `\` 结尾，`\"` 被 C 运行时当字面引号 → 整个参数串并成一个 arg（out 目录收到 `...w0-m0" --stats `）；phys-p0 未踩是因其只传文件路径不传目录。口径修复：`--out "%D%."`。
+3. **bat 编码门禁**：Write 工具落盘 LF 行尾被 regression 前置门禁拦（`bat 统一 CRLF` 规范）→ 机械转 CRLF 后过闸。
+4. **渲染内区口径 bug（自查逮住）**：首版 fillRect 用 `kRoadWidth`(1.0m) 内缩而路带实占半宽 0.5m，每 block 四周多出 0.5m 底色环、内区缩成 3.5×2.0m——与文档写死的 4.5×3.0m 冲突；证据图目检发现后按口径修复（halfRoad 内缩），并重拍证据图。教训：工具证据图必须与声明的几何口径互证，不能只看「像不像城市」。
+
+**下一步**：M-W0.1 路网生成 → `roadnet.json`（§1 字段契约是 citygen ↔ 第 8 步交通的接口铁律）；M-W0.2 建筑挤出走 nanite-tools / asset-ingest 通道不自写 meshing；M-W0.3 OpenSimplex 密度分区 + 统计锚收口（close 闸硬生效）。

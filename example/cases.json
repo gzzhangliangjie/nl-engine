@@ -10970,6 +10970,85 @@
      "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
+  },
+  {
+   "id": "w0-m0",
+   "label": "W0 M-W0.0",
+   "name": "大世界生成工具骨架（citygen 确定性地基 + 空白城俯视）",
+   "tag": "w0-m0",
+   "date": "2026-11-13",
+   "summary": "A 类并行轨道 feat/worldgen 首个里程碑：city-tools 离线 CLI（纯 CPU 零图形零引擎依赖，仅 vendored stb_image_write 出 PNG）+ 自研 pcg32 确定性 RNG（已知答案锁实现）+ 规则网格 block 布局（5.5x4.0m，bevy_city 同构）+ 空白城俯视 PNG + CityStats 计数锚骨架。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "seed 对称确定性：同 seed 双跑布局规范序列化 FNV-1a 逐字节一致、PNG 双编码逐字节一致；异 seed 必异（布局与 PNG 双验证）",
+    "pcg32 已知答案：seed 12345 前三输出 1321476956/17539747/3348728241（Python 参考实现独立复算回填）",
+    "布局锚：size 6 -> 36 cells / 36 groundTiles / 72 roadSegments / 49 crossroads；extent 33x24m；block 5.5x4.0m 契约与 roadnet.json blocks 同源",
+    "citygen selftest 23 断言全绿；ctest w0-city-* 双树各 3/3（--repeat until-pass:3）；双后端构建 OK",
+    "交代物：example/w0-m0/（run.bat 六段 ALL GREEN + city_top.png 真实工具输出证据图 + 四份日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §1"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。city-tools 纯 CPU，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 23 条断言",
+     "kind": "tool",
+     "note": "seed 对称双跑逐字节 + pcg32 已知答案 + 布局/契约/PNG 锚；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：空白城俯视 PNG + CityStats 计数",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> example/w0-m0/city_top.png（1152x864，32px/m）；stats 锚 blocks=36 groundTiles=36 roadSegments=72 crossroads=49。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
   }
  ]
 }

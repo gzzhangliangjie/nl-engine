@@ -640,6 +640,7 @@ add_subdirectory(audio-tools)
 add_subdirectory(net-tools)
 add_subdirectory(phys-tools)
 add_subdirectory(nav-tools)
+add_subdirectory(city-tools)      # W0 M-W0.0：大世界生成工具（A 类轨道 feat/worldgen，纯 CPU 零图形）
 add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
 add_subdirectory(vfx-tools)
