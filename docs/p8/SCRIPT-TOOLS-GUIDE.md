@@ -378,7 +378,7 @@ example\m-sc3\run.bat          # selftest + run --api + check bootstrap + 4 张�
 - **TYPEMAP + 生命周期账本机制单源**（gen.py）：in str = AllocHGlobal + finally 必释放；out str = C++ 静态缓冲「下次同线程调用前有效」+ C# 立即拷贝；命令回调 outText = CoTaskMem 配对（SEH 路径含）；delegate = `_pinned` 保活（script-api 装在 collectible ALC，随 Unload 整体回收——UnrealSharp per-ALC 归组同款，无需额外归组表）；POD = 值/栈传递不跨堆；宿主活实例 = 显式 set/unset + 未绑错误码兜底。
 - **硬规则**：C++ 侧永不跨 reload 缓存托管引用；type 段只收纯 POD（数值 + 定长 buf，禁字符串/嵌套引用——gen.py 解析即拒，非 POD 显式拆参数）；动态容器不过界走 count+ptr 协议（argv 先例），字典分解为单值导出/双列表/快照串。
 - **防漂移双闸**：`.g.asserts.inc` 每导出一条 `static_assert(is_same_v<decltype(&nl_xxx), 声明签名>)`（编译期红）；CMake -P `check_freshness.cmake` 时间戳闸（exports.api 新于生成物 = 构建红，零 Python）。
-- **gen.py --check**：内存重生成与入库四件套逐字节比对（golden 自证）。
+- **gen.py --check**：内存重生成与入库产物逐字节比对（golden 自证；M-SC6 起 5 份——C++ 三件 + Wiring.g.cs + docs/script-api/API.md，单源第三消费端 = API 文档，Flax 先例）。
 - 先例：Flax `API_` 宏 + Flax.Build 双端生成 / csbindgen 产物入 git / UnrealSharp property translator；cocos bindings-generator 的 libclang 路线不需要（绑定面是纯 C ABI 函数表，无类/继承/模板）。
 
 ## 声明格式速查
@@ -394,7 +394,7 @@ type TransformData
     ...
 ```
 
-改声明 → `python tools/scriptapi/gen.py` → 提交生成物（构建不依赖 Python）。
+改声明 → `python tools/scriptapi/gen.py` → 提交生成物（构建不依赖 Python；API.md 同批刷新——文档禁手改，签名/生命周期列由声明与 TYPEMAP 账本单源渲染）。
 
 # M-SC5：Time / Input / Log 域面（ApiTable 16 -> 25，2026-11-14）
 

@@ -638,6 +638,7 @@ add_custom_target(nl_scriptapi_freshness ALL
         -DGEN2=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.inc
         -DGEN3=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.asserts.inc
         -DGEN4=${CMAKE_SOURCE_DIR}/script/script-api/Wiring.g.cs
+        -DGEN5=${CMAKE_SOURCE_DIR}/docs/script-api/API.md
         -P ${CMAKE_SOURCE_DIR}/tools/scriptapi/check_freshness.cmake
     COMMENT "scriptapi: exports.api vs generated freshness gate")
 
