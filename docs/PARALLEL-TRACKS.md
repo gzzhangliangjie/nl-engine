@@ -230,7 +230,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
-| C# 脚本 | ~~`E:/UE_STUDY_2026/nl-engine-script`~~（已拆） | `feat/script` + tags `m-sc0`~`m-sc3` | `docs/p8/P8-SCRIPT-PLAN.md` + `SCRIPT-TOOLS-GUIDE.md`；merge `1b49b5f`；明细 MILESTONES M-SC0~SC3 节 |
+| C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（2026-11-13 重开重建） | `feat/script` + tags `m-sc0`~`m-sc3` | `docs/p8/P8-SCRIPT-PLAN.md` + `SCRIPT-TOOLS-GUIDE.md`；M-SC0~SC3 merge `1b49b5f`；**2026-11-13 拍板重开扩胶水层 API 面（M-SC4~SC9：Time/Input/Log、Camera、模型场景、Physics 载具、Audio），wt 重建于 master 08a67c0，注册表已转 active** |
 
 ### 7.2 固化文档闸
 

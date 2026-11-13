@@ -125,8 +125,12 @@ TRACKS = {
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "closed",
-        "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
+        "branch": "feat/script", "state": "active",
+        "note": "M-SC0~SC3 merged to master 1b49b5f (tags m-sc0~m-sc3); "
+                "REOPENED 2026-11-13 by user decision to extend the glue-layer "
+                "API surface (M-SC4+: Input/Time/Log, Camera, scene+model "
+                "creation, Physics vehicle, Audio; static-facade ApiTable "
+                "tail-append unchanged); wt rebuilt at master 08a67c0",
     },
     "particles": {
         "wt": "", "branch": "feat/particles", "state": "closed",
