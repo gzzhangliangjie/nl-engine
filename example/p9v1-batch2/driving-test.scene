@@ -1,0 +1,211 @@
+{
+ "version": 1,
+ "nextID": 7,
+ "ambient": 0.9,
+ "entities": [
+  {
+   "id": 1,
+   "name": "course-ground",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "StreetRoads.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 2,
+   "name": "course-parking-area",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.15,
+      0.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "StreetParking.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 3,
+   "name": "course-roadmarks",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.15,
+      0.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "StreetRoadMarks.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 4,
+   "name": "course-lampposts",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "StreetLampPosts.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 5,
+   "name": "course-drivingtest-lot",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.25,
+      0.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "ParkingLot.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 6,
+   "name": "vehicle-car05",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      0.0,
+      0.05,
+      20.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "Car05.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  }
+ ]
+}

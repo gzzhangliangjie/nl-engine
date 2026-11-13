@@ -5423,11 +5423,14 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         }
         batchObjects[b].push_back(i);
     }
-    // M-E1b.5：固化分组映射，updateObjects 每帧按同一规则重打包（槽号一一对应）。
-    sceneBatchObjects_ = batchObjects;
     sceneObjectCount_ = objectCount;
 
-    // ---- 3. 每组读 GLB（首 primitive，照 Scene::init 第 2 步的校验与顶点展开）----
+    // ---- 3. 每组读 GLB（**全部 primitive 逐个成 batch**，照 Scene::init 第 2 步的
+    // 校验与顶点展开）。batch 键 = (meshFile, primitive 序号)：同一 meshFile 的
+    // 各 primitive 共享同一组实例变换（三处参考口径一致——Carrot Model.cpp 逐
+    // primitive 装进同一大 VB/IB + 每 prim 一个 drawCommand；bevy_gltf loader
+    // 逐 primitive 建 Mesh；UE Interchange 逐 primitive 设材质槽。现状只装
+    // prim[0] 是三处参考都没有的简化）----
     struct PreparedBatch {
         std::vector<SceneVertex> vertices;
         std::vector<std::uint32_t> indices;
@@ -5435,7 +5438,8 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         std::vector<std::uint8_t> texRGBA;
         float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // 局部包围球 xyz=center w=radius
     };
-    std::vector<PreparedBatch> prepared(batchFiles.size());
+    std::vector<PreparedBatch> prepared;
+    std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
     for (std::size_t b = 0; b < batchFiles.size(); ++b) {
         const std::string modelPath = std::string(NL_ASSET_DIR "/") + batchFiles[b];
         nl::core::SceneMeshData meshData;
@@ -5447,43 +5451,63 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (meshData.meshes.empty()) {
             outError = batchFiles[b] + std::string(" has no mesh primitive"); return false;
         }
-        const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
-        if (!prim.hasBaseColor) {
-            outError = batchFiles[b] + std::string(" has no base color texture"); return false;
+        for (std::size_t p = 0; p < meshData.meshes.size(); ++p) {
+            const nl::core::PrimitiveMesh& prim = meshData.meshes[p];
+            PreparedBatch& pb = prepared.emplace_back();
+            batchPrimFile.push_back(static_cast<std::uint32_t>(b));
+            if (prim.hasBaseColor) {
+                pb.texWidth = prim.texWidth;
+                pb.texHeight = prim.texHeight;
+                pb.texRGBA = prim.baseColorRGBA;
+            } else {
+                // 无贴图 primitive 兜底：baseColorFactor 填 1×1 纯色纹理
+                //（Carrot getWhiteMaterial 同思路；本路径贴图是唯一颜色源，
+                // direct.slang 的 factor×texture 口径下 texel=factor 等价）。
+                pb.texWidth = pb.texHeight = 1;
+                const auto enc = [](float f) -> std::uint8_t {
+                    return static_cast<std::uint8_t>(
+                        std::lround(std::min(1.0f, std::max(0.0f, f)) * 255.0f));
+                };
+                pb.texRGBA = { enc(prim.baseColorFactor[0]), enc(prim.baseColorFactor[1]),
+                               enc(prim.baseColorFactor[2]), enc(prim.baseColorFactor[3]) };
+            }
+            if (prim.indices.empty()) {
+                outError = batchFiles[b] + std::string(" primitive #") +
+                           std::to_string(p) + " has no indices"; return false;
+            }
+            pb.vertices.resize(prim.vertices.size());
+            for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
+                const auto& mv = prim.vertices[i];
+                pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
+                                   mv.normal[0], mv.normal[1], mv.normal[2],
+                                   mv.uv[0], mv.uv[1] };
+            }
+            pb.indices = prim.indices;
+            // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
+            //（uploadClusterData 算式语义；世界联合球在第 7 步经实例矩阵变换）。
+            float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
+            float mx[3] = { mn[0], mn[1], mn[2] };
+            for (const SceneVertex& v : pb.vertices) {
+                mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
+                mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
+            }
+            pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
+            pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
+            pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
+            float radius = 0.0f;
+            for (const SceneVertex& v : pb.vertices) {
+                const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
+                radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            pb.sphere[3] = radius;
         }
-        if (prim.indices.empty()) {
-            outError = batchFiles[b] + std::string(" first primitive has no indices"); return false;
-        }
-        PreparedBatch& pb = prepared[b];
-        pb.vertices.resize(prim.vertices.size());
-        for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
-            const auto& mv = prim.vertices[i];
-            pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
-                               mv.normal[0], mv.normal[1], mv.normal[2],
-                               mv.uv[0], mv.uv[1] };
-        }
-        pb.indices = prim.indices;
-        pb.texWidth = prim.texWidth;
-        pb.texHeight = prim.texHeight;
-        pb.texRGBA = prim.baseColorRGBA;
-        // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
-        //（uploadClusterData 算式语义；世界联合球在第 6 步经实例矩阵变换）。
-        float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
-        float mx[3] = { mn[0], mn[1], mn[2] };
-        for (const SceneVertex& v : pb.vertices) {
-            mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
-            mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
-        }
-        pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
-        pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
-        pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
-        float radius = 0.0f;
-        for (const SceneVertex& v : pb.vertices) {
-            const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
-            radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
-        }
-        pb.sphere[3] = radius;
     }
+    // M-E1b.5 分组映射按 batch（文件 × primitive）固化：同一文件的各 primitive
+    // batch 共享该文件组的全部 objects（实例矩阵逐 batch 复制一份），槽号一一
+    // 对应，updateObjects 每帧按同一规则重打包。
+    sceneBatchObjects_.clear();
+    sceneBatchObjects_.reserve(prepared.size());
+    for (std::uint32_t f : batchPrimFile) sceneBatchObjects_.push_back(batchObjects[f]);
 
     // ---- 4. 建 GPU 资源：volatile CB + 每 batch VB/IB/贴图/采样/布局槽位 ----
     nvrhi::BufferDesc cbDesc;
@@ -5542,13 +5566,15 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     sceneInputLayout_ = device->createInputLayout(attrs, 3, vsScene_);
     if (!sceneInputLayout_) { outError = "createInputLayout failed for ecs scene"; return false; }
 
-    sceneBatches_.resize(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    sceneBatches_.resize(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
-        const std::string vbName = batchFiles[b] + "VB";
-        const std::string ibName = batchFiles[b] + "IB";
-        const std::string texName = batchFiles[b] + "BaseColor";
+        const std::string fileTag = batchFiles[batchPrimFile[b]] +
+            "#" + std::to_string(b);
+        const std::string vbName = fileTag + "VB";
+        const std::string ibName = fileTag + "IB";
+        const std::string texName = fileTag + "BaseColor";
         nvrhi::BufferDesc vbDesc;
         vbDesc.byteSize = pb.vertices.size() * sizeof(SceneVertex);
         vbDesc.isVertexBuffer = true;
@@ -5592,14 +5618,14 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // Vulkan 侧若改用 SRV 子范围又会撞 minStorageBufferOffsetAlignment。故彻底
     // 不依赖 base 语义：单 batch 时与 M-E1b.0 逐字节同构，既有基线无需重拍。
     // batch 内保持 objects 原序（稳定确定）。
-    std::vector<std::vector<float>> batchInstanceData(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    std::vector<std::vector<float>> batchInstanceData(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
-        batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
+        batch.instanceCount = static_cast<std::uint32_t>(sceneBatchObjects_[b].size());
         std::vector<float>& data = batchInstanceData[b];
         data.assign(static_cast<std::size_t>(batch.instanceCount) * 7u * 4u, 0.0f);
         std::uint32_t slot = 0;
-        for (std::uint32_t i : batchObjects[b]) {
+        for (std::uint32_t i : sceneBatchObjects_[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
             float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
             for (int c = 0; c < 4; ++c)
@@ -5681,9 +5707,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     if (shadowCount_ > 0) {
         float mn[3] = { 0.0f, 0.0f, 0.0f }, mx[3] = { 0.0f, 0.0f, 0.0f };
         bool first = true;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const PreparedBatch& pb = prepared[b];
-            for (std::uint32_t i : batchObjects[b]) {
+            for (std::uint32_t i : sceneBatchObjects_[b]) {
                 const float* w = objects[i].world;
                 float c[3], r3[3];
                 shadowTransformPoint(w, pb.sphere, c);
@@ -5856,7 +5882,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // ---- 5.5 每 batch 一个 BindingSet（§2.7 单 set 纪律）----
     // 必须在实例/灯缓冲创建之后：t5/t6 绑空句柄会被 NVRHI 校验直接拒绝。
     // 内容同 layout，t0 换各自贴图，t5/t6 实例/灯缓冲与 b0 常量全场景共享。
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
         nvrhi::BindingSetDesc setDesc;
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
@@ -5884,7 +5910,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     //（只读 SRV，每帧不重写——与 clusterSpheres_ 同款静态路径）。
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
         upload->beginTrackingBufferState(batch.vb, nvrhi::ResourceStates::CopyDest);
@@ -5915,9 +5941,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // 球心乘矩阵、半径乘三列最大尺度（非均匀 scale 近似，Carrot/UE 同病）。
     float gmn[3] = { 0.0f, 0.0f, 0.0f }, gmx[3] = { 0.0f, 0.0f, 0.0f };
     bool first = true;
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         const float* sph = prepared[b].sphere;
-        for (std::uint32_t oi : batchObjects[b]) {
+        for (std::uint32_t oi : sceneBatchObjects_[b]) {
             const float* w = objects[oi].world;
             // 世界球心 = M * center（列主序列向量变换）。
             const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
@@ -5945,9 +5971,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     assetSphere_[2] = (gmn[2] + gmx[2]) * 0.5f;
     {
         float radius = 0.0f;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const float* sph = prepared[b].sphere;
-            for (std::uint32_t oi : batchObjects[b]) {
+            for (std::uint32_t oi : sceneBatchObjects_[b]) {
                 const float* w = objects[oi].world;
                 const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
                 const float cy = w[1] * sph[0] + w[5] * sph[1] + w[9]  * sph[2] + w[13];
