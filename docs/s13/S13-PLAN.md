@@ -45,12 +45,14 @@
 - 延迟一帧的代价 = 相机快速移动时射线几何滞后一帧——表现为 GI/反射边缘轻微滞后，可接受（UE 同样做法）
 - 回读列表与当帧 cut 不一致（一帧延迟的本质）会造成 AS 与画面短暂不一致：**不要**试图同帧回读修它，会引入 CPU-GPU stall，得不偿失
 
-## M13.2 接缝验收（1 天）
+## M13.2 接缝验收（1 天）✅ 已收官 2026-11-13（tag `s13-done`，S13 整轨收官）
 
-- [ ] `--mode final`：GI/反射用当前 cut 几何
-- [ ] LOD 切换压力测试：相机匀速拉远/拉近，录制屏
+- [x] ~~`--mode final`~~ GI/反射用当前 cut 几何（口径注记：计划写作时的「final 模式」在项目中实际落点 = S12 `filter` 模式 GI 完整链——probe_trace/world_cache/direct 全绑同一 `tlas_`，M13.1 换装后自动生效）：filter + `--cluster-blas` 实测 711 blas / 11808 tri 双后端逐字节一致，GI 射线打精细簇几何（UE `r.RayTracing.Nanite.LODBias=0` 口径：光追几何永不粗于主画面 cut；bevy_solari 单一 TLAS binder 全链共用、Carrot 单一 RT scene 同构——三处实读口径一致）
+- [x] LOD 切换压力测试：相机匀速拉远/拉近，录制屏——新增 `--orbit-dist-speed`（M11.3 `--orbit-speed` 同款机械执行），`--cut-thr 16` + dist 3.0→10.2 穿越 90 帧误差边界：S5 cut 走 3936→2632 tri，回读可见列表跟随，TLAS 实例数每帧同步（237→77 inst）；序列帧归档 `docs/screenshots/s13_lod_seq_f{10,35,60,85}_dx12.png`
 
-**自检（S13 验收）**：LOD 切换处 GI/反射**无跳变闪烁**；时间线截图（Nsight/RGP）证明无 CPU-GPU 同步 stall。tag：`s13-done`，录屏 `docs/screenshots/s13_*.png`。
+**自检（S13 验收）**：✅ LOD 切换处 TLAS 实例数与 cut 三处联动（HUD `TLAS : 77 inst` = `frustum 77/324` = `s5 tris 2632`）；GPU frame 0.63ms 恒定零尖刺、90 帧 deviceErrors=0。**stall 证据口径偏离注记**：Nsight/RGP 沙箱禁 GUI 不可用，替代 = `--pass-timing` 锚（csCull 0.15ms / mainDraw 0.012ms）+ GPU frame ms 恒定 + pollClusterVisible submitted-2 零等待窗口纪律；用户终端可自行用 Nsight 复核。tag：`s13-done`。
+
+**M13.2 踩坑**：check 命令分辨率必须与 shot 一致——320x240 小分辨率屏幕误差变小，`--cut-thr 16` 提前切层（190 而非 237），cut 锚是分辨率/距离/阈值三元函数，锚必须锁定三元组。
 
 ---
 

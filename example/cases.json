@@ -11159,6 +11159,97 @@
      }
     }
    ]
+  },
+  {
+   "id": "s13-done",
+   "label": "S13.2",
+   "name": "S13 接缝验收：GI 链走簇 TLAS + LOD 切换压力测试（M13.2，整轨收官）",
+   "date": "2026-11-13",
+   "summary": "M13.2（S13 最后一步，接缝验收）：① GI/反射用当前 cut 几何——probe_trace/world_cache/direct 全绑同一 tlas_（M13.1 换装后自动生效），filter 链（S12 GI 完整链）+ --cluster-blas 实测 711 blas / 11808 tri 双后端逐字节一致，GI 射线打精细簇几何（UE r.RayTracing.Nanite.LODBias=0 口径：光追几何永不粗于主画面 cut）；② LOD 切换压力——新增 --orbit-dist-speed（M11.3 --orbit-speed 同款机械执行：每帧 dist 线性增量，camera clamp 0.45..500 钳住），--cut-thr 16 + dist 3.0→10.2 穿越 90 帧误差边界，S5 cut 走 3936→2632 tri、回读可见列表跟随、TLAS 实例数每帧同步（237→77），GPU frame 0.63ms 恒定零尖刺、deviceErrors=0；序列帧归档 docs/screenshots/s13_lod_seq_f*_dx12.png（f10 主层/f35 中/f60 粗/f85 最粗）。stall 证据：Nsight/RGP 沙箱禁 GUI 不可用，替代 = --pass-timing 锚（csCull 0.15ms / mainDraw 0.012ms）+ GPU frame ms 恒定 + pollClusterVisible submitted-2 零等待窗口纪律（绝不同帧回读底线）。验收自检：LOD 切换处 TLAS 实例数与 cut 实时对应（HUD TLAS 行 = frustum 行 = s5 tris 行三处联动）、无 DEVICE、无 stall 尖刺。发现并绕开的坑：check 命令分辨率必须与 shot 一致——320x240 小分辨率屏幕误差变小，cut-thr 16 提前切层（190 而非 237），锚是分辨率/距离/阈值三元函数。",
+   "acceptance": [
+    "GI 链簇几何：filter + --cluster-blas 日志锚 'cluster-tlas: per-frame rebuild active | instances=711'（Suzanne-materials 711 blas / 11808 tri 双后端逐字节一致）+ GI 基线图（材质光照正常）",
+    "LOD 切换压力：90 帧 dist 动画穿越 cut 边界，日志锚 'cluster-tlas: 237 instances (source=readback visible list frame 0)'（960x540 双后端一致）+ 末帧 HUD 图 TLAS : 77 inst / frustum 77/324 (23.8%) / s5 tris 2632（cut 全程 3936→2632）",
+    "序列帧归档 docs/screenshots/s13_lod_seq_f{10,35,60,85}_dx12.png：主层→最粗层四帧时间线（frustum 237→77 对应）",
+    "稳定性：90 帧 deviceErrors=0、GPU frame 0.63ms 恒定（无 stall 尖刺）、pass-timing csCull 0.15ms/mainDraw 0.012ms",
+    "保形：--orbit-dist-speed 不传零扰动（viewer 相机分支互斥）；既有 119 张卡零重拍（kStage 仍 S8.2）",
+    "example/s13-done 归位（4 基线 PNG + run.bat verify 全绿）+ cases.json s13-done 卡"
+   ],
+   "tag": "s13-done",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gi-cluster",
+     "name": "GI 链走簇 TLAS（filter 模式，GI 射线打精细簇几何）",
+     "kind": "pair",
+     "note": "S12 GI 完整链（probe trace/gather + 世界缓存 + 拒绝层）在 --cluster-blas 换装后的 TLAS 上跑：GI/反射几何 = 精细簇（UE LODBias=0 口径）。expectLog 的 711 = Suzanne-materials 链全簇数（filter/probe 系链 frustum 恒关 → cut 语义 = 全簇全画）。GI 基线图与 fallback 基线视觉一致（S12 卡口径），差异在射线命中几何（日志锚证实簇 TLAS 激活）。",
+     "args": [
+      "--mode",
+      "filter",
+      "--filter-gi-dump",
+      "--cluster-blas",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4"
+     ],
+     "expectLog": "cluster-tlas: per-frame rebuild active | instances=711",
+     "command": "viewer.exe --mode filter --filter-gi-dump --cluster-blas --model Suzanne-materials.nmesh --screenshot <out.png> --frames 16 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 4",
+     "script": "example/s13-done/run.bat verify",
+     "baselines": {
+      "dx12": "example/s13-done/gi-cluster-dx12.png",
+      "vulkan": "example/s13-done/gi-cluster-vulkan.png"
+     }
+    },
+    {
+     "id": "lod-pressure",
+     "name": "LOD 切换压力：90 帧 dist 动画穿越 cut 边界（TLAS 实例数实时跟随）",
+     "kind": "pair",
+     "note": "--orbit-dist-speed 0.08（M13.2 新旗标）+ --cut-thr 16：dist 3.0→10.2 穿越 S5 误差边界，cut 走 3936→2632 tri，回读列表 → TLAS 实例数每帧同步（237→77 inst）。末帧 HUD 图 = 最粗层证据（TLAS : 77 inst / frustum 77/324 (23.8%) / s5 tris 2632）。GPU frame 0.63ms 恒定零尖刺、deviceErrors=0。序列帧归档 docs/screenshots/s13_lod_seq_f*_dx12.png。",
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--cluster-blas",
+      "--cut-thr",
+      "16",
+      "--orbit-dist-speed",
+      "0.08",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "90",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "3.0",
+      "--size",
+      "960x540"
+     ],
+     "expectLog": "cluster-tlas: 237 instances (source=readback visible list frame 0)",
+     "command": "viewer.exe --mode dag --hud --cluster-blas --cut-thr 16 --orbit-dist-speed 0.08 --screenshot <out.png> --frames 90 --yaw 12 --pitch 9 --dist 3.0 --size 960x540",
+     "script": "example/s13-done/run.bat verify",
+     "baselines": {
+      "dx12": "example/s13-done/lod-pressure-dx12.png",
+      "vulkan": "example/s13-done/lod-pressure-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }

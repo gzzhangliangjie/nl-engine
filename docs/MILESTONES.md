@@ -3282,3 +3282,23 @@
 4. **回读窗口 = submitted-2（两帧）而非 plan 原文「一帧」**：复用 pollCullStats 既有零等待窗口纪律（mapBuffer 内部等 lastUseFence）；多一帧几何滞后，代价性质相同，PLAN 已注记。
 
 **下一步**：M13.2 接缝验收（`--mode final` GI/反射用当前 cut 几何 + LOD 切换压力测试录制屏，tag `s13-done`）——按 S13-PLAN 原计划执行，无待拍板项。
+
+## S13 M13.2 — 接缝验收：GI 链走簇 TLAS + LOD 切换压力（feat/s13，2026-11-13，tag `s13-done`，整轨收官）
+
+**动作**：S13 最后一步（验收里程碑，无新架构决策）。① 三处实读确认「GI 与主画面同源 AS」口径：UE `r.RayTracing.Nanite.LODBias` 默认 0 = 光追全细节 + BLAS 延迟按需更新（NaniteRayTracing.cpp:58 `GNaniteRayTracingUpdate`）；bevy_solari 单一 TLAS binder（tlas_build.rs wgpu_hal 直建）全链共用；Carrot 单一 RT scene 惰性缓存——三处一致 = GI/反射与主画面共享同一 AS，不存在「GI 用另一份粗模」；项目侧 probe_trace(t4)/world_cache(t7)/direct(t13) 全绑同一 `tlas_`，M13.1 换装后自动满足。② 口径注记：计划原文「`--mode final`」在项目中实际落点 = S12 `filter` 模式 GI 完整链（项目无 final 模式，modes.cpp 21 项清单实证），PLAN 已注记映射。③ 新增 `--orbit-dist-speed`（viewer/main.cpp 三处，M11.3 `--orbit-speed` 同款机械执行：每帧 dist 线性增量，camera clamp 0.45..500 钳住）——「已定计划内机械执行」（计划原文「相机匀速拉远/拉近」的直接实现）。④ 交付 = `example/s13-done/run.bat verify`（gi-cluster/lod-pressure 双后端基线 + 711/237 双锚）+ cases.json 第 120 张卡 `s13-done`（2 case）+ 录屏序列归档 `docs/screenshots/s13_lod_seq_f{10,35,60,85}_dx12.png`。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-done`（S13 整轨收官 tag）。`kStage` 保持 `S8.2`（B 类穿插轨道），既有 119 张卡零重拍。
+
+**完成情况**
+- 🟢 GI 链簇几何：filter + `--cluster-blas` = 711 blas / 11808 tri 双后端逐字节一致（`cluster-tlas: per-frame rebuild active | instances=711`），GI 基线图材质光照正常。
+- 🟢 LOD 切换压力：90 帧 dist 动画（`--cut-thr 16` + `--orbit-dist-speed 0.08`，dist 3.0→10.2）穿越 cut 边界——S5 cut 3936→3162→2669→2632 tri 连续切层，TLAS 实例数 237→174→111→77 每帧同步（HUD `TLAS : 77 inst` = `frustum 77/324 (23.8%)` = `s5 tris 2632` 三处联动）；GPU frame 0.63ms 恒定零尖刺、90 帧 deviceErrors=0。
+- 🟢 stall 证据（Nsight/RGP 沙箱禁 GUI 的替代口径，PLAN/收口报告如实注记）：`--pass-timing` 锚 csCull 0.149ms / mainDraw 0.012ms + GPU frame ms 恒定 + pollClusterVisible submitted-2 零等待窗口纪律。
+- 🟢 `--only s13-done` 4/4 bytes ALL GREEN；保形 `--only s8.0/s12-done` 2/2 bytes；`server.py --check` exit 0；bat 编码门禁 120 文件 0 violations。
+
+**踩坑情况**
+1. **cut 锚是分辨率/距离/阈值三元函数**：run.bat check 命令用 320x240 小分辨率 → 屏幕误差变小 → `--cut-thr 16` 提前切层（回读锚 190 而非 237）→ findstr 静默 FAIL；修 = check 与 shot 锁定同一分辨率（960x540）。教训：涉及 cut 的 expectLog 锚必须锁定「分辨率+距离+阈值」三元组，缺一即漂。
+2. **`--screenshot-seq` 不自带退出**（M11.3 设计：与 `--screenshot` 同传提供退出帧）：单传 seq 跑满默认 2150 帧才停（第一次误用实锤）。
+3. **dag 模式默认 cut-thr 1.0 下 Suzanne 链拉远到 dist 40 也不切层**（s5 tris 恒 3936）——S5 既有行为非 S13 回归；LOD 压力测试需 `--cut-thr 16` 把边界推到 dist 3~10 窗口内。
+4. **cases.json 追加用 bash heredoc 内嵌 Python 时 `newline='\\n'` 转义成两字符** → open('w') 截断后 write 抛 ValueError → cases.json 清零（0 字节）；`git checkout --` 从 M13.1 提交版恢复（119 卡无损）。修 = 一次性脚本文件落盘执行（append_s13_done.py，用完即删）。教训：JSON 大块追加禁用 heredoc 内嵌，一律临时脚本文件。
+
+**S13 整轨收官汇总**（M13.0 `s13-preblas` + M13.1 `s13-merge` + M13.2 `s13-done`）：per-cluster BLAS 预建（324~43547 blas，est ~181MB 万级实测）→ 可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（拍板 A，RTXMG 同构）→ GI 链接缝验收 + LOD 切换压力。fallback 粗模光追时代终结：调试射线与 GI 永远命中精细簇几何。整轨 merge 回 master 按 PARALLEL-TRACKS §7.2/7.5 同步注册表（wt 拆除需用户拍板，照 net 轨道先例）。
