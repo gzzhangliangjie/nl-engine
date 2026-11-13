@@ -173,7 +173,7 @@
 
 | 轨道 | worktree | 分支 + tag | 计划 / 收官锚 |
 |---|---|---|---|
-| 真实资产接入练手（M-P9V1→P9 V2） | `E:/UE_STUDY_2026/nl-engine-asset-ingest`（在册） | `feat/asset-ingest` + tag `asset-pbr-done` | P9 V1 外部 OBJ→nmesh 练手 → P9 V2 Unity 权威材质链 + 引擎全 PBR（拍板「找成熟代码抄 / 全 PBR 不许只吃 baseColor」）；merge `ea42d73`（零冲突）；merge 后主仓双后端 BUILD OK + 带灯车双后端 exit 0（互检 1px/255）；**e1b 锚 FAIL = 特性性差异（Suzanne MR 贴图 metallic=1/rough0.2 现被正确消费），基线重拍待拍板**；明细 MILESTONES 资产轨节 |
+| 真实资产接入练手（M-P9V1→P9 V2） | ~~`E:/UE_STUDY_2026/nl-engine-asset-ingest`~~（已拆，2026-11-13） | `feat/asset-ingest` + tags `asset-pbr-done`/`asset-mr-fix` + 分支 `milestone/asset-pbr-done`/`milestone/asset-mr-fix` | P9 V1 外部 OBJ→nmesh 练手 → P9 V2 Unity 权威材质链 + 引擎全 PBR（拍板「找成熟代码抄 / 全 PBR 不许只吃 baseColor」）→ MR 贴图接线 + 引擎 GLB 因子缺省 + e1b 基线重拍 8/8 ALL GREEN；merge `ea42d73` + `8641fbe`；明细 MILESTONES 资产轨两节 |
 | 多人游戏 / 网络栈 | ~~`E:/UE_STUDY_2026/nl-engine-net`~~（已拆） | `feat/net` + tags `net-m0`~`net-done` + 分支 `milestone/net-done` | `docs/net/NETCODE-PLAN.md`（拍板 `NETCODE-OPTIONS.md` §6 / 归档 `NETCODE-TOOLS-GUIDE.md`）；merge `9aa58df`；明细 MILESTONES NET 节 |
 | 性能与内存观测 | ~~`E:/UE_STUDY_2026/nl-engine-profiling`~~（已拆） | `feat/profiling` + tags `tracy-m0`~`tracy-m3` | `docs/p8/P8-TRACY-PLAN.md` + `docs/p8/TRACY-TOOLS-GUIDE.md`；merge `9bf037c`；明细 MILESTONES M-TR0~TR3 节 |
 | 引擎日志系统升级 | ~~`E:/UE_STUDY_2026/nl-engine-logging`~~（已拆） | `feat/logging` + tags `log-m0`/`log-m2` | `docs/p8/P8-LOG-PLAN.md` + `docs/p8/LOG-TOOLS-GUIDE.md`；merge `aaf43b8`；明细 MILESTONES M-LOG0/M-LOG2 节 |

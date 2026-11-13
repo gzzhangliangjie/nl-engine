@@ -198,12 +198,15 @@ TRACKS = {
                 "state CLOSED 2026-11-12",
     },
     "asset-ingest": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-asset-ingest",
-        "branch": "feat/asset-ingest", "state": "active",
+        "wt": "", "branch": "feat/asset-ingest", "state": "closed",
         "note": "A-class offline asset-ingest track opened 2026-11-12 (P9 V1 "
                 "warm-up): external OBJ/FBX -> glb -> nanite-tools "
                 "cluster/lod/dag -> .nmesh. No kStage / cases.json / renderer "
-                "/ .nmesh format changes.",
+                "/ .nmesh format changes. P9 V1 -> V2 merged to master "
+                "(ea42d73 = V2 mainline; 8641fbe = MR wiring follow-up; tags "
+                "asset-pbr-done/asset-mr-fix); wt removed 2026-11-13, branch "
+                "kept per PARALLEL-TRACKS 7.6; state CLOSED by user "
+                "instruction 2026-11-13.",
     },
     "worldgen": {
         "wt": "E:/UE_STUDY_2026/nl-engine-worldgen",
