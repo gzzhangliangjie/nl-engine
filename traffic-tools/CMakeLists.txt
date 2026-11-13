@@ -33,3 +33,17 @@ set_tests_properties(m-t0-traffic-build PROPERTIES
 add_test(NAME m-t0-traffic-negative COMMAND traffic-tools build
          ${CMAKE_CURRENT_BINARY_DIR}/t0-missing-roadnet.json)
 set_tests_properties(m-t0-traffic-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-T0.1：A* 寻路正向（方格夹具 e0->e3 唯一路径 4 hops / 40m）----
+add_test(NAME m-t0-traffic-path COMMAND traffic-tools path
+         ${CMAKE_CURRENT_BINARY_DIR}/t0-fixture-roadnet.json --from 0 --to 3)
+set_tests_properties(m-t0-traffic-path PROPERTIES
+    DEPENDS m-t0-traffic-fixture
+    PASS_REGULAR_EXPRESSION "hops        : 4")
+
+# ---- M-T0.1：寻路负向（不存在的 edgeId 显式退出 1）----
+add_test(NAME m-t0-traffic-path-negative COMMAND traffic-tools path
+         ${CMAKE_CURRENT_BINARY_DIR}/t0-fixture-roadnet.json --from 0 --to 99)
+set_tests_properties(m-t0-traffic-path-negative PROPERTIES
+    DEPENDS m-t0-traffic-fixture
+    WILL_FAIL TRUE)

@@ -8,9 +8,11 @@
 //   help                                               用法
 
 #include "nl/traffic/LaneGraph.hpp"
+#include "nl/traffic/LanePath.hpp"
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -196,6 +198,60 @@ int selftest(const std::string& emitFixture) {
     T0_CHECK(!t::buildLaneGraphFromRoadnetJson("not json", 8, &g2, &err));
     T0_CHECK(!err.empty());
 
+    // --- ⑦ M-T0.1 A* 寻路：唯一路径逐位锚 + 同 lane / 不可达 / 越界负向 ---
+    {
+        const int32_t l0 = laneByEdge(g, 0);
+        const int32_t l4 = laneByEdge(g, 4);
+        const int32_t l3 = laneByEdge(g, 3);
+        const int32_t l6 = laneByEdge(g, 6);
+        // 直达：edge0(0->1) -> edge4(1->3) = [e0, e4]
+        std::vector<int32_t> path;
+        std::string perr;
+        T0_CHECK(nl::traffic::findPathOnLanes(g, l0, l4, &path, &perr) ==
+                 nl::traffic::PathStatus::Ok);
+        T0_CHECK(path.size() == 2 && path[0] == l0 && path[1] == l4);
+        // 多跳唯一路径：e0 -> e3 经 e4(1->3) e7(3->2)（方格图每节点 2 路，路唯一）
+        T0_CHECK(nl::traffic::findPathOnLanes(g, l0, l3, &path, &perr) ==
+                 nl::traffic::PathStatus::Ok);
+        T0_CHECK(path.size() == 4);
+        T0_CHECK(path[0] == l0 && path[1] == laneByEdge(g, 4) &&
+                 path[2] == laneByEdge(g, 7) && path[3] == l3);
+        // 弧长合计锚：4 条 10m 边 = 40
+        T0_CHECK(nl::traffic::pathLength(g, path) == 40.0f);
+        // 同 lane：单元素路径（独立变量，不覆盖 path——末尾确定性对比要用）
+        std::vector<int32_t> pathOne;
+        std::vector<int32_t> pathNeg; // 负向共用（Unreachable/BadLane 都会 clear out）
+        T0_CHECK(nl::traffic::findPathOnLanes(g, l0, l0, &pathOne, &perr) ==
+                 nl::traffic::PathStatus::Ok);
+        T0_CHECK(pathOne.size() == 1 && pathOne[0] == l0);
+        // 不可达：删掉 e4/e5（1<->3 整对）后 e0(0->1) 出边为空成孤端，
+        // e6(2->3) 与 e0 连通域断开 -> Unreachable（合法 lane，非参数错误）
+        std::string cutGraph = fixture;
+        const std::string e4line = "    { \"id\": 4, \"from\": 1, \"to\": 3, \"lanes_per_dir\": 1, \"speed_limit\": 13.9, \"width\": 1.0 },\n";
+        const std::string e5line = "    { \"id\": 5, \"from\": 3, \"to\": 1, \"lanes_per_dir\": 1, \"speed_limit\": 13.9, \"width\": 1.0 },\n";
+        T0_CHECK(cutGraph.find(e4line) != std::string::npos);
+        cutGraph.erase(cutGraph.find(e4line), e4line.size());
+        T0_CHECK(cutGraph.find(e5line) != std::string::npos);
+        cutGraph.erase(cutGraph.find(e5line), e5line.size());
+        nl::traffic::LaneGraph gc;
+        T0_CHECK(nl::traffic::buildLaneGraphFromRoadnetJson(cutGraph.data(), cutGraph.size(), &gc, &err));
+        T0_CHECK(gc.laneCount() == 6);
+        T0_CHECK(nl::traffic::findPathOnLanes(gc, laneByEdge(gc, 0), laneByEdge(gc, 6), &pathNeg, &perr) ==
+                 nl::traffic::PathStatus::Unreachable);
+        T0_CHECK(!perr.empty());
+        (void)l6;
+        // 越界：BadLane 显式
+        T0_CHECK(nl::traffic::findPathOnLanes(g, -1, l0, &pathNeg, &perr) ==
+                 nl::traffic::PathStatus::BadLane);
+        T0_CHECK(nl::traffic::findPathOnLanes(g, l0, 999, &pathNeg, &perr) ==
+                 nl::traffic::PathStatus::BadLane);
+        // 确定性：同输入双跑路径逐位一致
+        std::vector<int32_t> pathB;
+        T0_CHECK(nl::traffic::findPathOnLanes(g, l0, l3, &pathB, &perr) ==
+                 nl::traffic::PathStatus::Ok);
+        T0_CHECK(pathB == path);
+    }
+
     // --- 夹具落盘（ctest build 正向用例数据源，DEPENDS 链） ---
     if (!emitFixture.empty()) {
         if (!writeFile(emitFixture, fixture)) {
@@ -214,6 +270,7 @@ int usage() {
     std::fprintf(stderr,
                  "usage:\n"
                  "  traffic-tools build <roadnet.json> [--dump out.json] [--stats]\n"
+                 "  traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>\n"
                  "  traffic-tools selftest [--emit-fixture path]\n"
                  "  traffic-tools help\n");
     return 2;
@@ -285,6 +342,66 @@ int main(int argc, char** argv) {
             }
             std::printf("wrote %s\n", dumpPath.c_str());
         }
+        return 0;
+    }
+
+    if (cmd == "path") {
+        if (argc < 3) return usage();
+        const std::string roadnetPath = argv[2];
+        long fromEdge = -1, toEdge = -1;
+        bool hasFrom = false, hasTo = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--from") == 0 && i + 1 < argc) {
+                fromEdge = std::atol(argv[++i]);
+                hasFrom = true;
+            } else if (std::strcmp(argv[i], "--to") == 0 && i + 1 < argc) {
+                toEdge = std::atol(argv[++i]);
+                hasTo = true;
+            } else {
+                return usage();
+            }
+        }
+        if (!hasFrom || !hasTo) return usage();
+        std::string body, err;
+        if (!readFile(roadnetPath, &body, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        nl::traffic::LaneGraph g;
+        if (!nl::traffic::buildLaneGraphFromRoadnetJson(body.data(), body.size(), &g, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        // CLI 用 edgeId 语义（citygen 侧溯源键，CityCar.edgeId 同源）
+        auto laneOfEdge = [&](long edgeId) -> int32_t {
+            for (const nl::traffic::Lane& l : g.lanes)
+                if (l.edgeId == static_cast<int32_t>(edgeId)) return l.id;
+            return -1;
+        };
+        const int32_t from = laneOfEdge(fromEdge);
+        const int32_t to = laneOfEdge(toEdge);
+        if (from < 0 || to < 0) {
+            std::fprintf(stderr, "traffic-tools: edge id %ld/%ld has no lane\n",
+                         fromEdge, toEdge);
+            return 1;
+        }
+        std::vector<int32_t> path;
+        if (nl::traffic::findPathOnLanes(g, from, to, &path, &err) !=
+            nl::traffic::PathStatus::Ok) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        std::string seq;
+        for (size_t i = 0; i < path.size(); ++i) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%d", path[i]);
+            if (i) seq += " -> ";
+            seq += buf;
+        }
+        std::printf("hops        : %d\n", static_cast<int>(path.size()));
+        std::printf("lanes       : %s\n", seq.c_str());
+        std::printf("length sum  : %.1f m\n",
+                    nl::traffic::pathLength(g, path));
         return 0;
     }
 
