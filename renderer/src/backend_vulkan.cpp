@@ -70,7 +70,10 @@ public:
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-              bool shadowMode, bool referenceMode, bool probeMode, std::string& outError) override {
+              bool shadowMode, bool referenceMode, bool probeMode, bool clusterBlas,
+              std::string& outError) override {
+        // M13.0：--cluster-blas 传入 Scene（initDag 链消费；缺省关零扰动）。
+        scene_.setClusterBlas(clusterBlas);
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;

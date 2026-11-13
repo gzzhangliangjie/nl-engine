@@ -5,12 +5,21 @@
 
 ---
 
-## M13.0 per-cluster BLAS 预建 + 内存池（2 天）
+## M13.0 per-cluster BLAS 预建 + 内存池（2 天）✅ 已收官 2026-11-13（tag `s13-preblas`）
 
-- [ ] 离线/启动时：每个簇用**自身几何**预建一个小 BLAS，全部常驻；建索引映射 clusterId → BLAS
-- [ ] BLAS 池化：聚合 BLAS 的实例缓冲/缓冲区复用，杜绝每帧分配
+- [x] 离线/启动时：每个簇用**自身几何**预建一个小 BLAS，全部常驻；建索引映射 clusterId → BLAS
+  - 落点：`Scene::initClusterBlas`（initDag 拼接循环完成后调用，`--cluster-blas` 默认关）。全部簇共享两块 build-input slab（position-only 12B/顶点 VB + u8 局部索引→u32 展开 IB——簇顶点在 .nmesh 已去重，「重展开」即索引格式转换，无需顶点重排）；每簇 geometry 用 `GeometryTriangles.vertexOffset/indexOffset` 引用窗口；`clusterBlas_` 下标 = 全局簇 id（层间连续拼接，与 clusterMeta 同序）
+  - 构建分块提交（2048 build/列表 + 块间 waitForIdle）：单列表 43k 次 build 超 DX12 TDR 2s → `0x887a0005 DEVICE_REMOVED` 间歇杀进程（实锤后分块修复，三连跑零复发）；permanent 态必须首块落定（非永久 setBufferState 只活在本列表 → 后续块 Unknown prior state → GPU hazard，第二轮实锤）
+- [x] 内存记账双口径（NVRHI `IAccelStruct` 无尺寸查询，真实值拿不到）：`inputBytes`（slab 实际字节，确定值）+ `estBytes`（上界估算 tri×64B + 512B/BLAS）；日志锚 + HUD 两行（`CLAS : N blas N tri` / `CLAS mem: input X MB est ~Y MB`）。实例/缓冲复用池化随 M13.1 聚合形态一并落（本里程碑先把 slab 共享做掉 = 对象数可控的关键）
+- 实测：Suzanne 链 324 blas / 26ms；OcclScene1M **43547 blas / 2.6M tri / est ~181MB**（万级规模坑注记实测值在案：est 而非爆显存，裁粗层优化暂不需要）
 
-**自检**：全部簇 BLAS 构建成功；内存占用记录在案（HUD）。tag：`s13-preblas`。
+**自检**：全部簇 BLAS 构建成功；内存占用记录在案（HUD）。tag：`s13-preblas`。✅（run.bat verify 全绿 + regression `--only s13-preblas` 4/4 bytes + 保形 `--only s8.0/s8.1` 10/10 bytes + `server.py --check` 0）
+
+**三处实读结论（2026-11-13）**：Carrot = per-group 惰性 BLAS 缓存 + readback 下帧 CPU 消费（对象粒度粗一层，簇几何自身建 BLAS/常驻/按 id 索引同构）；bevy_solari = per-mesh 常驻 + compaction 队列；UE Nanite RT = per-resource BLAS + `r.RayTracing.Nanite.LODBias` 选层 + AuxiliaryData 命中回簇 + 64MB BLAS 缓存池。**无一家做 per-cluster 万级 BLAS**；S13-PLAN 拍板的每簇预建照落（est ~181MB 实测可承受），聚合形态见 M13.1 拍板项。
+
+## M13.1 回读 + 聚合 + TLAS 重建（2~3 天，灵魂里程碑）⚠️ 开工闸：聚合形态待拍板
+
+> **待拍板（2026-11-13 M13.0 实读发现）**：计划原文「拷贝/引用进当帧聚合 BLAS（NVRHI AS clone/compact）」在 NVRHI 抽象下**不可行**——`rt::GeometryDesc` 只有 Triangles/AABBs 两型（nvrhi.h:1568），无 Instances 型；BLAS 内引用子 BLAS 是 Vulkan 原生扩展语义，DX12 无此路径，NVRHI 不暴露。候选方案：**A = TLAS 直挂可见簇 BLAS 多实例**（回读列表 → 当帧 TLAS 每实例一簇，hit shader 用 instanceID=全局簇 id 反查几何；RTXMG 同构，每帧 TLAS rebuild 已是 M8.1 UE 口径，实例数 = 可见簇数千级）vs **B = 回退 fallback+簇混合**（可见簇区域用预建 BLAS，其余打 fallback BLAS，TLAS 实例数恒 2）。代价矩阵开工时补齐交用户拍板，拍板前冻结 M13.1 落码。
 
 ⚠️ 常见坑：
 - 簇几何是**去重的局部索引**，BLAS 输入需要重展开成完整三角形——格式转换工具函数放 nanite-tools 或共享库

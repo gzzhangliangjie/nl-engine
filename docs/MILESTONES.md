@@ -3241,3 +3241,24 @@
 - **完成情况**：🟢 四卡 run.bat 五段式 ALL GREEN + regression `--only cam-1b/cam-2b/cam-3b/cam-mcam4` 4+2+2+2 全 bytes；🟢 旧卡连带回归 cam-m0 10/10、cam-1a 6/6、cam-3a 6/6、cam-b 2/2、drive-m3 12/12、s8.2 4/4 全 bytes ALL GREEN；🟢 ctest cam 双后端 2/2；🟢 确定性三重验证：同参重拍逐字节、双后端 `cam final` 日志锚逐字一致、smoothshake 与 plain free PNG 必须不同（效果可见闸）；🟢 `server.py --check` exit 0（kStage 保持 S8.2，70 张既有基线零波及）。
 - **踩坑**：① **`forwardFromView` 读错矩阵行/列**——列主序 view 矩阵的 backward 在第三**行**（`m[2]/m[6]/m[10]`），原实现读第三**列**（`m[8..10]` = right.z/up.z/backward.z），chase/track 渲染视线错 45° 级、主体不居中（track 水平分量碰巧不受影响才没当场露馅）；手算 `-(m8,m9,m10)` 与实测 outRig 偏移完全吻合实锤后修复，Orbit 路径自带视图矩阵不经此函数故 70 张既有基线零波及。② **`ChaseCamera::lookDirection` 按值传参**——out 参数写不回调用方，`seedFreeFromChase`/HUD/trace yaw 列全被污染恒 0；旧锚「free fly +Z」「eye_z 严格递增」把 bug 语义锁死，按「锚从实测反推」口径改为沿 seed 视线方向断言。③ **cam-tools stdout CRLF**——C 运行时文本模式把 `\n` 膨胀成 `\r\n`，与 `.gitattributes` 的 `*.tsv eol=lf` 永远对不上，旧卡 run.bat 的 TSV 字节比对在今天 checkout 后必挂（本轮前已潜伏）；`_setmode(_O_BINARY)` 根治后 cam-trace/free-trace/cine-trace 内容逐字节还原、cam-1a director-trace.tsv + acceptance.png 按新真实 yaw/pitch 重生成。④ chase 机位 eye 高度疑云实为收敛值自洽（pitch 被 seed 成 orbit 俯角 → `desired.y = 0.56+3.5-0.96`），非 bug。⑤ 双后端并行构建抢 PDB 致 C1090（0x6BA RPC）→ 清 mspdbsrv + 串行构建即过。
 - **提交版本**：feat/camera 本节 commit + annotated tag `cam-m5`；track camera 整轨（M-CAM0~CAM4 + 视觉卡）至此全部落地，merge 回 master 后轨道收官。冻结面：OrbitCamera 一字未动、kStage 不 bump、`resolveViewProjection`/渲染管线零改动、除 cam-b 外全部既有基线零重拍。
+
+## S13 M13.0 — per-cluster BLAS 预建 + 内存双口径记账（feat/s13，2026-11-13，tag `s13-preblas`）
+
+**动作**：S13 轨道 wt 建立（`nl-engine-s13` @ master `e3a2ef4`，junction `.workbuddy`/`slang dist` + skip-worktree 9 文件，TRACKS 注册 s13 active + claim M13.0）后落码：① `Scene::initClusterBlas`（`--cluster-blas` 默认关，initDag 拼接循环完成后调用）——逐层逐簇预建 BLAS 全常驻，全部簇共享两块 build-input slab（position-only 12B VB + u8 局部索引→u32 展开 IB；簇顶点 .nmesh 已去重，「重展开」即索引格式转换），每簇 geometry 用 `GeometryTriangles.vertexOffset/indexOffset` 引用窗口，`clusterBlas_` 下标 = 全局簇 id（与 clusterMeta 同序）；② 构建分块提交（2048 build/列表 + 块间 waitForIdle + permanent 态首块落定）；③ 内存双口径记账 `inputBytes`（slab 实际字节）/`estBytes`（tri×64B+512B 上界估算，NVRHI 无 AS 尺寸查询）→ 日志锚 + HUD `CLAS`/`CLAS mem` 两行（仅开启时显示）；④ 交付 = `example/s13-preblas/run.bat verify`（clusterblas-hud/occl 双后端基线 + built/timer/scale 三类日志锚）+ cases.json 第 118 张卡 `s13-preblas`（2 case，expectLog 逐字节锚）。三处实读：Carrot ClusterManager/RaytracingScene（per-group 惰性 BLAS + readback 五步）、bevy_solari blas.rs（per-mesh 常驻 + compaction 队列）、UE NaniteRayTracing.cpp（per-resource + LODBias + 64MB BLAS 缓存池）——无一家做 per-cluster 万级 BLAS；plan 拍板照落，est 实测 ~181MB 可承受。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-preblas`。`kStage` 保持 `S8.2`（B 类穿插轨道，M9.0 澄清口径：新卡由 run.bat verify + regression 双重机械校验），既有 117 张卡零重拍。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`--cluster-blas` 下 Suzanne 链 324 blas / 7906 tri / inputBytes=277764 / estBytes=671872 双后端逐字节一致，deviceErrors=0。
+- 🟢 万级压测 OcclScene1M：43547 blas / 2.6M tri / est ~181MB 构建成功，分块修复后三连跑零 DEVICE_REMOVED；`--only s13-preblas` 4/4 bytes ALL GREEN（occl dx12 53s/vulkan 25s，RUN_TIMEOUT 90s 内）。
+- 🟢 保形：`--only s8.0` 6/6 + `--only s8.1` 4/4 全 bytes（`--cluster-blas` 不传零扰动）；hud.cpp 空面板自检断言补 M13.0 通道缺省全零；`server.py --check` exit 0；bat 编码门禁 118 文件 0 violations（新 run.bat LF→CRLF 机械修复一次）。
+- 🟢 GPU 计时锚 `gpu timer resolved [clusterblas]`（Suzanne 324 blas ≈ 26ms 一次性 resolve）。
+
+**踩坑情况**
+1. **单列表 43k 次 build 超 DX12 TDR（2s）→ `0x887a0005 DEVICE_REMOVED` 间歇杀进程**：verify 首轮 timer 检查无输出 + 次轮 shot 崩都是它；修 = 2048 build/块分块提交 + 块间 waitForIdle（init 期一次性开销不变）。教训：AS build 大批量绝不能塞单命令列表，与 M8.0 单 BLAS 语义不冲突（上传+转换+build 同列表纪律按块保持）。
+2. **permanent 态必须首块落定**：非永久 `setBufferState` 只活在本命令列表，chunk 2+ 新列表对缓冲先验状态不可知 → NVRHI 校验 Unknown prior state → build 无 barrier → GPU hazard（第二轮实锤）；修 = 上传列表内 `setPermanentBufferState`（与 M8.0 0x87d 教训同兼容：上传+转换+首批 build 同列表）。
+3. **GpuTimer 忘 `setLabel` → resolve 锚撞 "frame"**（blasTimer_ 同款坑重踩，MEMORY 有记录仍踩）——`[frame]` 双 resolve 假象定位 10 分钟；修 = `clusterBlasTimer_.setLabel("clusterblas")`。
+4. **NVRHI `IAccelStruct` 无内存尺寸查询** → 内存口径只能双记账（inputBytes 确定 + estBytes 估算公式注明），HUD/日志诚实标注估算属性。
+5. **本机 PortableGit xargs arg_max 断言 abort** → `xargs git update-index` 静默不执行（wt 建坑复踩），while read 循环替代。
+
+**下一步**：M13.1（回读 + 聚合 + TLAS）**开工闸挂起**——计划原文「聚合 BLAS（NVRHI AS clone/compact）」实读确认 NVRHI `rt::GeometryDesc` 无 Instances 型（nvrhi.h:1568），BLAS 内引用子 BLAS 不可行；候选 A = TLAS 直挂可见簇 BLAS 多实例（RTXMG 同构）/ B = 可见簇+fallback 混合双实例，代价矩阵开工时摆给用户拍板，拍板写回 S13-PLAN 后才落码（已登记 S13-PLAN M13.1 节）。

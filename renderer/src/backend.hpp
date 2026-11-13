@@ -45,12 +45,14 @@ public:
     // shadowMode（M9.0）走 initVisbuf(pulling) 资产链 + 共用 rtTarget_ 呈现。
     // probeMode（M10.0）走 initVisbuf(pulling) 资产链 + velocity prepass + cascade
     // 布点 compute + 探针点可视化。
+    // clusterBlas（M13.0）= --cluster-blas：initDag 链上逐簇预建 BLAS（S13-PLAN
+    // M13.0）；缺省关，仅 dag/hiz/rt 模式消费，其余模式零扰动。
     virtual bool init(void* nativeWindow, Extent extent, bool enableDebugLayer,
                       const char* modelFile, bool clusterMode, bool cullMode,
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
                      bool shadowMode, bool referenceMode, bool probeMode,
-                     std::string& outError) = 0;
+                     bool clusterBlas, std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
     // M2.3：切 LOD 层（仅 cluster 场景）。读 <stem>.lod<level>.nmesh 重建 VB/IB，

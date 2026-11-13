@@ -144,6 +144,7 @@ struct Options {
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
+    bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
@@ -313,6 +314,7 @@ Options parseArgs(int argc, char** argv) {
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
+        else if (a == "--cluster-blas") o.clusterBlas = true;
         else if (a == "--rt-debug" && i + 1 < argc) {   // M8.2：rt 模式调试可视化档
             const std::string v = argv[++i];
             if (v == "dist" || v == "0") o.rtDebugMode = 0;
@@ -1286,7 +1288,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode, referenceMode, probeMode);
+                                                   shadowMode, referenceMode, probeMode,
+                                                   o.clusterBlas);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;

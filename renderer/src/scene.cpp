@@ -1001,6 +1001,12 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     const std::uint32_t stride = maxTriCount * 3;   // identity 索引缓冲长度
     const std::uint32_t groupTotal = ggBase;
 
+    // M13.0（S13）：--cluster-blas 时逐簇预建 BLAS（S13-PLAN M13.0）。levels 仍在
+    // 作用域，专用 slab 从 CPU 侧数据展开；用户显式开启的路径失败按硬错误拦路。
+    if (clusterBlasRequested_) {
+        if (!initClusterBlas(device, levels, outError)) return false;
+    }
+
     // ---- 3. 建 GPU 资源：图形侧与 initCull 同构（M4.0 样板），DAG 侧另加 ----
     nvrhi::BufferDesc cbDesc;
     cbDesc.byteSize = sizeof(SceneConstants);
@@ -1944,6 +1950,178 @@ void Scene::pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
     }
     hud->blasTriangleCount = blasTriangleCount_;
     hud->blasTimingAvailable = blasTimer_.available();
+
+    // M13.0：per-cluster BLAS 证据字段（仅 --cluster-blas 成功后非零，其余模式
+    // 一像素不动）。inputMB 是 slab 实际字节（几何决定量，deterministic 也照写）；
+    // estMB 是 AS 上界估算（NVRHI 不暴露真实尺寸）；ms 与 BLAS 行同口径只在
+    // 非确定性 HUD 显示。
+    if (clusterBlasReady_) {
+        if (clusterBlasTimer_.ensure(device)) {
+            float ms = 0.0f;
+            if (clusterBlasTimer_.poll(ms)) clusterBlasBuildMs_ = ms;
+            if (!hud->deterministic) hud->clusterBlasMs = clusterBlasBuildMs_;
+            hud->clusterBlasTimingAvailable = true;
+        }
+        hud->clusterBlasCount = clusterBlasCount();
+        hud->clusterBlasTriangles = clusterBlasTriangleCount_;
+        hud->clusterBlasInputMB = static_cast<double>(clusterBlasInputBytes_) / (1024.0 * 1024.0);
+        hud->clusterBlasEstMB = static_cast<double>(clusterBlasEstBytes_) / (1024.0 * 1024.0);
+    }
+}
+
+// ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0；viewer --cluster-blas）----
+// 三处口径（2026-11-13 定向实读）：
+//   Carrot ClusterManager/RaytracingScene：可见组 readback 下一帧 CPU 消费 →
+//     per-group 惰性建 BLAS 缓存常驻（ClusterCompressed 几何）——对象粒度粗一
+//     层，但「簇几何自身建 BLAS、按 id 索引、常驻」与本里程碑同构；
+//   bevy_solari blas.rs：BLAS per mesh asset 常驻 HashMap + compaction 队列；
+//   UE NaniteRayTracing.cpp：per-resource BLAS（r.RayTracing.Nanite.LODBias 选
+//     层）+ AuxiliaryData 命中回簇 + 64MB BLAS 缓存池。
+// 本里程碑按 S13-PLAN 拍板走「每簇预建、全部常驻」（plan 坑注记：万级内存超限
+// 先裁粗层，M13.1 聚合阶段按实测再拍）。全部簇共享两块 build-input slab，每簇
+// geometry 用 vertexOffset/indexOffset 引用窗口（NVRHI GeometryTriangles 支持，
+// nvrhi.h:1590-1593）——万级簇只有 2 个 device buffer，AccelStruct 对象数 =
+// 簇数。内存口径双记账：inputBytes = slab 实际字节（确定值）；estBytes = AS 上
+// 界估算（公式 tri×64B 叶上界 + 512B 头/实例开销；NVRHI IAccelStruct 无尺寸
+// 查询接口，真实值拿不到，估算只作量级参考、deterministic 也恒定）。
+bool Scene::initClusterBlas(nvrhi::IDevice* device,
+                            const std::vector<nl::core::NMeshData>& levels,
+                            std::string& outError) {
+    if (clusterBlasReady_) return true;
+    if (levels.empty()) { outError = "cluster-blas: no levels"; return false; }
+
+    // 1. 展开专用 build-input slab（CPU 侧）：
+    //    VB：逐层把 nm.vertices 的 pos（头 12B）原样拷贝——簇顶点在 .nmesh 里已
+    //        去重，meshlet.vertexOffset/vertexCount 即该簇专用窗口；
+    //    IB：每簇 3×triangleCount 个 u32（u8 局部索引 0..63 原值展开——plan 里
+    //        「重展开成完整三角形」在此即 u8→u32 格式转换，无需顶点重排）。
+    std::vector<float> vb;    // pos-only 3 float/顶点
+    std::vector<std::uint32_t> ib;
+    std::vector<std::uint32_t> clusterVertexBase, clusterVertexCount,
+                               clusterIndexBase, clusterIndexCount;
+    std::uint32_t triTotal = 0;
+    for (const auto& nm : levels) {
+        const std::uint32_t vbBase = static_cast<std::uint32_t>(vb.size() / 3);
+        for (const auto& mv : nm.vertices)
+            vb.insert(vb.end(), {mv.pos[0], mv.pos[1], mv.pos[2]});
+        for (const auto& m : nm.meshlets) {
+            clusterVertexBase.push_back(vbBase + m.vertexOffset);
+            clusterVertexCount.push_back(m.vertexCount);
+            clusterIndexBase.push_back(static_cast<std::uint32_t>(ib.size()));
+            const std::size_t base = m.triangleOffset;
+            for (std::uint32_t t = 0; t < m.triangleCount; ++t)
+                for (int k = 0; k < 3; ++k)
+                    ib.push_back(nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            clusterIndexCount.push_back(m.triangleCount * 3);
+            triTotal += m.triangleCount;
+        }
+    }
+    const std::size_t blasCount = clusterIndexBase.size();
+    if (blasCount == 0 || vb.empty() || ib.empty()) {
+        outError = "cluster-blas: no cluster geometry in asset chain";
+        return false;
+    }
+    const std::uint64_t vbBytes = vb.size() * sizeof(float);
+    const std::uint64_t ibBytes = ib.size() * sizeof(std::uint32_t);
+
+    // 2. GPU 资源：两块共享 build-input 缓冲 + 逐簇 AccelStruct（尺寸 NVRHI
+    //    自算，S8-PLAN 预研 §1：无用户侧 scratch 容量查询）。
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = vbBytes;
+    vbDesc.setIsAccelStructBuildInput(true);
+    vbDesc.debugName = "ClusterBlasVB";
+    clusterBlasVB_ = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = ibBytes;
+    ibDesc.setIsAccelStructBuildInput(true);
+    ibDesc.debugName = "ClusterBlasIB";
+    clusterBlasIB_ = device->createBuffer(ibDesc);
+    if (!clusterBlasVB_ || !clusterBlasIB_) {
+        outError = "createBuffer failed for cluster BLAS slabs";
+        return false;
+    }
+
+    std::vector<nvrhi::rt::GeometryDesc> geometries(blasCount);
+    clusterBlas_.resize(blasCount);
+    for (std::size_t c = 0; c < blasCount; ++c) {
+        geometries[c].geometryData.triangles
+            .setVertexBuffer(clusterBlasVB_)
+            .setVertexFormat(nvrhi::Format::RGB32_FLOAT)
+            .setVertexStride(12)
+            .setVertexOffset(clusterVertexBase[c] * 12ull)
+            .setVertexCount(clusterVertexCount[c])
+            .setIndexBuffer(clusterBlasIB_)
+            .setIndexFormat(nvrhi::Format::R32_UINT)
+            .setIndexOffset(clusterIndexBase[c] * sizeof(std::uint32_t))
+            .setIndexCount(clusterIndexCount[c]);
+        nvrhi::rt::AccelStructDesc asDesc;
+        asDesc.addBottomLevelGeometry(geometries[c]);
+        asDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        asDesc.setDebugName("ClusterBlas");
+        clusterBlas_[c] = device->createAccelStruct(asDesc);
+        if (!clusterBlas_[c]) {
+            // 首个即失败 = 设备不支持 RT：与 blas_ skip 同口径，不拦路不置 ready。
+            nl::core::log::warnCh("scene", "cluster-blas: createAccelStruct failed at cluster ",
+                                c, " — ray tracing unsupported? cluster BLAS skipped");
+            clusterBlas_.clear();
+            return true;
+        }
+    }
+
+    // 3. 上传 + 逐簇 build 分块提交（M8.0 同款纪律：上传/setBufferState/build/
+    //    setPermanentBufferState 同列表；块间 waitForIdle 防 scratch chunk 随列表
+    //    析构与飞行 ECL 重叠——M8.1 0x87d 第二坑同款）。⚠️ 必须分块：单列表塞
+    //    43k 次 build（OcclScene1M 实测）GPU 耗时超 DX12 TDR 2s 阈值 →
+    //    0x887a0005 DEVICE_REMOVED 间歇性杀进程（verify 首轮 timer 检查无输出
+    //    即此因）；2048/块 ≈ 160ms 远离阈值，init 期一次性开销不变。
+    constexpr std::size_t kBuildChunk = 2048;
+    for (std::size_t chunkStart = 0; chunkStart < blasCount; chunkStart += kBuildChunk) {
+        const std::size_t chunkEnd = std::min(chunkStart + kBuildChunk, blasCount);
+        const bool firstChunk = chunkStart == 0;
+        const bool lastChunk = chunkEnd == blasCount;
+        nvrhi::CommandListHandle cmd = device->createCommandList();
+        clusterBlasTimer_.setLabel("clusterblas");   // 默认 label 会撞 "frame"（blasTimer_ 同款坑）
+        cmd->open();
+        if (firstChunk) {
+            cmd->beginTrackingBufferState(clusterBlasVB_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(clusterBlasVB_, vb.data(), vbBytes);
+            cmd->setBufferState(clusterBlasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            cmd->beginTrackingBufferState(clusterBlasIB_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(clusterBlasIB_, ib.data(), ibBytes);
+            cmd->setBufferState(clusterBlasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            // M13.0 分块修正：permanent 态必须在首块（上传列表内）落定——非永久
+            // setBufferState 只活在本列表，chunk 2+ 的新列表对缓冲先验状态不可知
+            // （NVRHI 校验层 Unknown prior state → 后续 build 无 barrier → GPU
+            // hazard 实测 Device Removed）。permanent 态跨列表感知，物理状态此后
+            // 恒为 build-input，与 M8.0 单列表纪律不冲突（上传+转换+首批 build 同
+            // 列表，0x87d 教训原样满足）。
+            cmd->setPermanentBufferState(clusterBlasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            cmd->setPermanentBufferState(clusterBlasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            if (clusterBlasTimer_.ensure(device)) clusterBlasTimer_.begin(cmd);
+        }
+        for (std::size_t c = chunkStart; c < chunkEnd; ++c) {
+            cmd->buildBottomLevelAccelStruct(clusterBlas_[c], &geometries[c], 1,
+                                             nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        }
+        if (lastChunk) {
+            clusterBlasTimer_.end(cmd);
+        }
+        cmd->close();
+        device->executeCommandList(cmd);
+        device->waitForIdle();
+    }
+
+    clusterBlasReady_ = true;
+    clusterBlasTriangleCount_ = static_cast<int>(triTotal);
+    clusterBlasInputBytes_ = vbBytes + ibBytes;
+    // AS 上界估算：tri×64B（DX12 叶节点压缩前上界口径）+ 512B/BLAS 头与实例段。
+    clusterBlasEstBytes_ = triTotal * 64ull + blasCount * 512ull;
+    nl::core::log::infoCh("scene", "cluster-blas: built ", blasCount,
+                        " blas | tri=", triTotal,
+                        " | inputBytes=", clusterBlasInputBytes_,
+                        " | estBytes=", clusterBlasEstBytes_,
+                        " (build ms via GPU timer)");
+    return true;
 }
 
 // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（S8-PLAN M8.1；D-S8-1 拍板 = UE 口径）----
@@ -8328,6 +8506,16 @@ void Scene::shutdown() {
     blas_ = nullptr;
     blasVB_ = nullptr;
     blasIB_ = nullptr;
+    // M13.0：per-cluster BLAS 资源（句柄 RefCountPtr 随 clear 释放，slab 缓冲同）。
+    clusterBlasReady_ = false;
+    clusterBlasTriangleCount_ = 0;
+    clusterBlasBuildMs_ = 0.0f;
+    clusterBlasInputBytes_ = 0;
+    clusterBlasEstBytes_ = 0;
+    clusterBlasTimer_.shutdown();
+    clusterBlas_.clear();
+    clusterBlasVB_ = nullptr;
+    clusterBlasIB_ = nullptr;
     // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
     sceneMode_ = false;
     vsScene_ = nullptr;

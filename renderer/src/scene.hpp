@@ -386,6 +386,24 @@ public:
     bool blasReady() const { return blasReady_; }
     int  blasTriangleCount() const { return blasTriangleCount_; }
 
+    // ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0）----
+    // setClusterBlas：viewer --cluster-blas 传入（backend create 阶段、Scene init
+    // 之前；initDag 内部消费）。initClusterBlas 在 initDag 拼接循环完成后调用：
+    // 逐层逐簇从 CPU 侧 levels 数据展开专用 slab（顶点 position-only 12B、索引
+    // u8 局部 → u32 顺序铺）+ 每簇 createAccelStruct + 同列表逐簇 build（M8.0
+    // 同款 0x87d 纪律：上传/setBufferState/build/setPermanentBufferState 同列表
+    // + waitForIdle）。内存占用 = inputBytes（实际 slab 字节）+ estBytes（AS 上
+    // 界估算，NVRHI 不暴露真实尺寸）双口径，日志锚 + HUD 行记录在案。
+    void setClusterBlas(bool on) { clusterBlasRequested_ = on; }
+    bool initClusterBlas(nvrhi::IDevice* device,
+                         const std::vector<nl::core::NMeshData>& levels,
+                         std::string& outError);
+    bool clusterBlasReady() const { return clusterBlasReady_; }
+    int  clusterBlasCount() const { return static_cast<int>(clusterBlas_.size()); }
+    int  clusterBlasTriangleCount() const { return clusterBlasTriangleCount_; }
+    std::uint64_t clusterBlasInputBytes() const { return clusterBlasInputBytes_; }
+    std::uint64_t clusterBlasEstBytes() const { return clusterBlasEstBytes_; }
+
     // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
     // initTlas：BLAS 成功后建 TLAS（setTopLevelMaxInstances 预留容量；TLAS 尺寸
     // NVRHI 自算，prebuild 查询可选不用）。设备不支持 RT 或 BLAS 未建时跳过不拦路。
@@ -959,6 +977,23 @@ private:
     GpuTimer                     blasTimer_;              // setLabel("blas")：init 一次性构建计时
     float                        blasBuildMs_ = 0.0f;     // 最近一次 resolve 的构建耗时（恒定值）
     int                          blasTriangleCount_ = 0;  // HUD 显示用（= fallback 三角数）
+
+    // ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0；--cluster-blas）----
+    // 每个簇用自身几何预建一个小 BLAS、全部常驻；所有簇 BLAS 共享两块
+    // build-input slab（position-only 12B/顶点 VB + 重展开 u32 索引 IB），geometry
+    // 用 vertexOffset/indexOffset 引用各簇窗口（NVRHI GeometryTriangles 支持）。
+    // clusterBlas_ 下标 = initDag 拼接后的全局簇 id（层间连续拼接，与 clusterMeta
+    // 同序），M13.1 回读可见簇列表直接按 id 查。默认关（viewer --cluster-blas
+    // 开启）：万级 createAccelStruct + build 是启动期一次性开销，不碰既有路径。
+    bool                         clusterBlasRequested_ = false;  // --cluster-blas 开关
+    bool                         clusterBlasReady_ = false;      // initClusterBlas 成功后置位
+    std::vector<nvrhi::rt::AccelStructHandle> clusterBlas_;      // [全局簇 id] → BLAS
+    nvrhi::BufferHandle          clusterBlasVB_, clusterBlasIB_; // 共享 build-input slab
+    GpuTimer                     clusterBlasTimer_;              // setLabel("clusterblas")
+    float                        clusterBlasBuildMs_ = 0.0f;     // resolve 后恒定
+    int                          clusterBlasTriangleCount_ = 0;  // 全部簇三角合计
+    std::uint64_t                clusterBlasInputBytes_ = 0;     // slab 实际字节（确定值）
+    std::uint64_t                clusterBlasEstBytes_ = 0;       // AS 上界估算（NVRHI 不暴露真实尺寸）
 
     // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
     bool                         tlasReady_ = false;      // initTlas 成功后置位

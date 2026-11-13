@@ -299,6 +299,21 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::TextUnformatted(tlasLine);
     }
+    // M13.0（S13）：per-cluster BLAS 预建证据行（仅 --cluster-blas 成功后显示，
+    // 其它模式 clusterBlasCount==0 一像素不动）。inputMB 是 slab 实际字节（确定
+    // 值，deterministic 也显示）；estMB 是 AS 上界估算（NVRHI 不暴露真实尺寸）；
+    // 构建耗时与 BLAS/TLAS 行同口径看日志「gpu timer resolved [clusterblas]」。
+    if (frame.clusterBlasCount > 0) {
+        char cblasLine[128];
+        std::snprintf(cblasLine, sizeof(cblasLine),
+                      "CLAS     : %d blas  %d tri",
+                      frame.clusterBlasCount, frame.clusterBlasTriangles);
+        ImGui::TextUnformatted(cblasLine);
+        std::snprintf(cblasLine, sizeof(cblasLine),
+                      "CLAS  mem: input %.1fMB  est ~%.1fMB",
+                      frame.clusterBlasInputMB, frame.clusterBlasEstMB);
+        ImGui::TextUnformatted(cblasLine);
+    }
     // M-PT0：粒子证据行（仅 --particles 模式显示——particlesEnabled 由 viewer 喂，
     // 其它模式一像素不动；粒子数 = scene_ 当帧活粒子，稳态区间由 run.bat 断言）。
     if (frame.particlesEnabled) {
@@ -702,6 +717,10 @@ bool hudSelfTest() {
     if (f.blasTriangleCount != 0 || f.blasMs != 0.0f || f.blasTimingAvailable) return false;
     // M8.1：TLAS 通道缺省全零（同上）。
     if (f.tlasInstanceCount != 0 || f.tlasMs != 0.0f || f.tlasTimingAvailable) return false;
+    // M13.0：per-cluster BLAS 通道缺省全零（--cluster-blas 关 = 布局一像素不动）。
+    if (f.clusterBlasCount != 0 || f.clusterBlasTriangles != 0 ||
+        f.clusterBlasInputMB != 0.0 || f.clusterBlasEstMB != 0.0 ||
+        f.clusterBlasMs != 0.0f || f.clusterBlasTimingAvailable) return false;
     // M-PT0：粒子通道缺省全关（非 --particles 模式 HUD 布局一像素不动的保证）。
     if (f.particlesEnabled || f.particleAlive != 0) return false;
     if (f.shading != 0 || f.wireframe) return false;   // M0.8：调试着色 / 线框缺省 = M0.7 行为
