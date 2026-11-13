@@ -77,6 +77,16 @@ struct ShadowConstantsCB {
 };
 static_assert(sizeof(ShadowConstantsCB) == 320, "cbuffer layout must match shader");
 
+// M15.0：与 vsm.slang 的 VsmDepthConstants（b0）/ direct.slang 的 VsmConstants
+//（b6）逐字节对应（同一块 80B volatile CB 跨管线双寄存器）。
+// params = enabled / depthBias / virtualSize / poolSize（M15.0 后两者同为 2048）。
+struct VsmConstantsCB {
+    float lightMvp[16];        // float4x4（列主序，mul(M, v)）
+    float params[4];
+};
+static_assert(sizeof(VsmConstantsCB) == 80, "cbuffer layout must match shader");
+inline constexpr std::uint32_t kVsmVirtualSize = 2048;   // 虚拟空间 texel（16×16 页 × 128）
+
 // M-P3：物理调试线框叠加管线（LINE_LIST）。与 model.slang 同款单源/双目标约定：
 // 一份 debug_line.slang 出 spv/dxil；这里只负责收线顶点、画彩色线段叠加层。
 // depth test 开、depth write 关——尊重已有深度（被实体挡住的线段不显示），
@@ -1039,6 +1049,31 @@ private:
     nvrhi::BindingSetHandle      directComputeSet_;
     nvrhi::BufferHandle          directConstants_;      // volatile CB 32B（b3：清屏色 + shadow 参数）
     std::uint32_t                directW_ = 0, directH_ = 0;  // set 绑定的尺寸版本
+
+    // ---- M15.0（S15）：VSM 虚拟阴影贴图（--mode shadow 上 --vsm 开关）----
+    // 物理页池 2048² R32F（128²/页 × 16×16 页；M15.0 静态 1:1 分配——UE 的
+    // MaxPhysicalPages 上限池 + 页搬运留 M15.2）+ 256 项页表 StructuredBuffer<uint>
+    //（entry = poolPageX | poolPageY<<8，0xFFFFFFFF 未分配）+ 80B volatile CB
+    //（depth pass b0 / csDirect b6 跨管线共用，RefConstants b4/b1 先例同款）。
+    // 资源随 initShadow 恒建（pool 16MB 与 shadowMap_ 同量级）：csDirect blob 对
+    // t14/t15/b6 是静态引用，directComputeLayout_/directComputeSet_ 必须无条件扩
+    // 三槽（布局漏 shader 实际用的槽 = PSO 失败）——故 --vsm 关闭时也占内存不跑
+    // 深度 pass（g_vsmParams.x=0 → csDirect 射线分支照走，基线零扰动）。
+    bool                         vsmReady_ = false;     // 懒建成功标记
+    bool                         vsmFailed_ = false;    // 懒建失败只报一次
+    bool                         vsmLogged_ = false;    // 就绪日志一次性
+    nvrhi::TextureHandle         vsmPagePool_;          // 2048² R32F（16×16 物理页）
+    nvrhi::BufferHandle          vsmPageTable_;         // StructuredBuffer<uint> 256 项
+    nvrhi::FramebufferHandle     vsmFb_;                // 色 attachment = 页池
+    nvrhi::BufferHandle          vsmConstants_;         // volatile CB 80B
+    nvrhi::GraphicsPipelineHandle pipelineVsm_;         // vsm.vs/ps（全簇 pulling 深度）
+    nvrhi::BindingLayoutHandle   vsmDepthLayout_;       // b0 + t1/t2/t3
+    nvrhi::BindingSetHandle      vsmDepthSet_;
+    float                        vsmAabbMin_[3] = {0.f, 0.f, 0.f};   // 场景 AABB（init 时算一次）
+    float                        vsmAabbMax_[3] = {0.f, 0.f, 0.f};
+    bool ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
+                          const char* shaderSuffix, std::string& outError);   // initShadow 尾部调用
+    void runVsmDepthPass(nvrhi::ICommandList* cmd, const FrameParams& params);
 
     // ---- M9.2：reference 模式（离线参考，渐进式多帧累积直光真值）----
     // 与 shadow 互斥（一个 Scene 只跑一种）。复用面：输出 = rtTarget_ /

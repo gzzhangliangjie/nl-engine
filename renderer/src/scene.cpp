@@ -2349,11 +2349,17 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     // §2.7 单一 BindingSet：共用 resolve 槽位表 + b3 清屏色 + u0 输出 + t13 TLAS。
     // t13 = RayTracingAccelStruct（M9.1 阴影射线，照 rtComputeLayout_ 写法；t0..t12
     // 已被 resolve 槽位表占用，TLAS 落 t13 不冲突）。
+    // M15.0：+b6/t14/t15 三槽——csDirect blob 对 VSM 资源是静态引用（--vsm 关闭也
+    // 在 blob 里），布局漏槽 = PSO 失败（§2.7 实锤口径）；开关走 g_vsmParams.x。
+    if (!ensureVsmTargets(device, nmeshFile, shaderSuffix, outError)) return false;
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
-         .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
+         .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6))
+         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(15));
     directComputeLayout_ = device->createBindingLayout(cDesc);
     if (!directComputeLayout_) {
         outError = "createBindingLayout failed for direct compute"; return false;
@@ -2752,7 +2758,11 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
                                                       nvrhi::Format::RGBA32_FLOAT))
-          .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
+          .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_))
+          // M15.0：VSM 三槽（layout 已无条件声明；资源由 ensureVsmTargets 恒建）。
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, vsmConstants_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, vsmPageTable_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(15, vsmPagePool_));
         directComputeSet_ = rtDevice_->createBindingSet(sd, directComputeLayout_);
         if (!directComputeSet_) {
             nl::core::log::deviceError("shadow", "createBindingSet failed for direct compute set");
@@ -2771,6 +2781,29 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
                          params.clearColor[2], params.clearColor[3],
                          0.01f, 50.0f, 0.0f, 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
+
+    // M15.0（S15）：--vsm 时先跑深度 pass（页池/页表须在 csDirect dispatch 前进
+    // SRV 态）+ 写 b6 常量。关闭时写零版 b6（volatile CB 未写即用 = NVRHI 报错，
+    // E1b.4 零版 b2 同款纪律；enabled=0 → shader 射线分支照走，基线零扰动）。
+    if (params.vsm && vsmReady_) {
+        runVsmDepthPass(cmd, params);
+        if (!vsmLogged_) {
+            nl::core::log::infoCh("scene",
+                "vsm: depth pass live (pool ", kVsmVirtualSize, "x", kVsmVirtualSize,
+                " R32F, 16x16 pages of 128, static 1:1 alloc)");
+            vsmLogged_ = true;
+        }
+    } else {
+        // VSM 资源被 directComputeSet 恒绑（t14/t15）——本列表首用前必须声明当前态
+        //（NVRHI 校验：unknown prior state = device removed）。跑深度 pass 时由
+        // runVsmDepthPass 自行声明（pool 转 RT 再回 SRV）；关闭帧在此声明 SRV。
+        const nvrhi::TextureSubresourceSet allSubV(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                                   0, nvrhi::TextureSubresourceSet::AllArraySlices);
+        cmd->beginTrackingTextureState(vsmPagePool_, allSubV, nvrhi::ResourceStates::ShaderResource);
+        cmd->beginTrackingBufferState(vsmPageTable_, nvrhi::ResourceStates::ShaderResource);
+        VsmConstantsCB vcZero{};
+        cmd->writeBuffer(vsmConstants_, &vcZero, sizeof(vcZero));
+    }
 
     // M-PERF1：csDirect pass 计时（直光 compute dispatch 段）。
     const bool ptDirect = passTimers_.begin(cmd, PassTimers::kPassDirect);
@@ -5737,6 +5770,235 @@ static void shadowMul(const float* a, const float* b, float out[16]) {
         }
 }
 
+// ============================================================================
+// M15.0（S15）：VSM 资源建 + 深度 pass。页空间口径（页池 2048²/页表 256 项/entry
+// 编码）见 vsm_common.slangh 头注释（唯一权威），此处对位实现。
+// ============================================================================
+bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
+                             const char* shaderSuffix, std::string& outError) {
+    if (vsmReady_) return true;
+
+    // ---- 场景 AABB（独立重读 nmesh，不碰 initVisbuf 基线路径）----
+    // 正交灯视锥口径与 E1b.4 完全同款（AABB 放大 10% + 0.25 margin，见 runVsmDepthPass）。
+    {
+        // nmeshFile 是 assets/meshlets/ 下的裸文件名（viewer 白名单校验同口径），
+        // 与 initVisbuf/lod0 回退一致补前缀；独立重读不碰基线路径。
+        const std::string fullPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+        nl::core::NMeshData nm;
+        std::string err;
+        if (!nl::core::loadNMesh(fullPath.c_str(), nm, err)) {
+            outError = std::string("vsm: failed to reload nmesh for AABB: ") + err;
+            return false;
+        }
+        bool first = true;
+        for (const auto& mv : nm.vertices) {
+            for (int a = 0; a < 3; ++a) {
+                if (first) { vsmAabbMin_[a] = mv.pos[a]; vsmAabbMax_[a] = mv.pos[a]; }
+                else {
+                    vsmAabbMin_[a] = std::min(vsmAabbMin_[a], mv.pos[a]);
+                    vsmAabbMax_[a] = std::max(vsmAabbMax_[a], mv.pos[a]);
+                }
+            }
+            first = false;
+        }
+    }
+
+    // ---- 物理页池：2048² R32F（16×16 页 × 128²），每帧 clear=1.0（最远）----
+    nvrhi::TextureDesc poolDesc;
+    poolDesc.width = kVsmVirtualSize;
+    poolDesc.height = kVsmVirtualSize;
+    poolDesc.format = nvrhi::Format::R32_FLOAT;
+    poolDesc.dimension = nvrhi::TextureDimension::Texture2D;
+    poolDesc.isRenderTarget = true;
+    poolDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    poolDesc.setClearValue(nvrhi::Color(1.0f));   // DX12 要求资源带 clear value
+    poolDesc.debugName = "VsmPagePool";
+    vsmPagePool_ = device->createTexture(poolDesc);
+    if (!vsmPagePool_) { outError = "createTexture failed for vsm page pool"; return false; }
+    {
+        nvrhi::FramebufferDesc fbDesc;
+        fbDesc.addColorAttachment(vsmPagePool_);
+        vsmFb_ = device->createFramebuffer(fbDesc);
+        if (!vsmFb_) { outError = "createFramebuffer failed for vsm page pool"; return false; }
+    }
+
+    // ---- 页表：StructuredBuffer<uint> 256 项，静态 1:1 分配（写一次）----
+    // entry = poolPageX | poolPageY<<8（vsm_common.slangh 编码；M15.0 poolPage =
+    // virtualPage，M15.2 上限池 + 页搬运才分离）。
+    {
+        nvrhi::BufferDesc ptDesc;
+        ptDesc.byteSize = 256 * sizeof(std::uint32_t);
+        ptDesc.structStride = 4;
+        ptDesc.debugName = "VsmPageTable";
+        vsmPageTable_ = device->createBuffer(ptDesc);
+        if (!vsmPageTable_) { outError = "createBuffer failed for vsm page table"; return false; }
+        std::vector<std::uint32_t> table(256);
+        for (std::uint32_t py = 0; py < 16u; ++py)
+            for (std::uint32_t px = 0; px < 16u; ++px)
+                table[py * 16u + px] = px | (py << 8u);
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->beginTrackingBufferState(vsmPageTable_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(vsmPageTable_, table.data(), table.size() * sizeof(std::uint32_t));
+        upload->setPermanentBufferState(vsmPageTable_, nvrhi::ResourceStates::ShaderResource);
+        upload->close();
+        device->executeCommandList(upload);
+    }
+
+    // ---- b6/b0 共用 80B volatile CB ----
+    {
+        nvrhi::BufferDesc vcDesc;
+        vcDesc.byteSize = sizeof(VsmConstantsCB);
+        vcDesc.isConstantBuffer = true;
+        vcDesc.isVolatile = true;
+        vcDesc.maxVersions = 16;
+        vcDesc.debugName = "VsmConstants";
+        vsmConstants_ = device->createBuffer(vcDesc);
+        if (!vsmConstants_) { outError = "createBuffer failed for vsm constants"; return false; }
+    }
+
+    // ---- 深度 pass shader（vsm.vs/ps；_ENTRIES_DEFAULT 双目标产物）----
+    const std::string vsPath = std::string(NL_SHADER_DIR) + "/vsm.vs." + shaderSuffix;
+    const std::string psPath = std::string(NL_SHADER_DIR) + "/vsm.ps." + shaderSuffix;
+    std::vector<std::uint8_t> vsmVsBlob, vsmPsBlob;
+    if (!readFileBytes(vsPath.c_str(), vsmVsBlob) ||
+        !readFileBytes(psPath.c_str(), vsmPsBlob)) {
+        outError = std::string("failed to load vsm shaders (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+    nvrhi::ShaderHandle vsVsm = device->createShader(vsDesc, vsmVsBlob.data(), vsmVsBlob.size());
+    nvrhi::ShaderHandle psVsm = device->createShader(psDesc, vsmPsBlob.data(), vsmPsBlob.size());
+    if (!vsVsm || !psVsm) { outError = "createShader failed for vsm depth pass"; return false; }
+
+    // 深度 pass 单一 BindingSet：b0（lightMvp）+ t1/t2/t3（vertexPool/indices/meta，
+    // 与 vsVisRaster 同源；不读 t4 visibleList——相机视锥剔除列表会漏相机外遮挡体）。
+    nvrhi::BindingLayoutDesc vdLayout;
+    vdLayout.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3));
+    vsmDepthLayout_ = device->createBindingLayout(vdLayout);
+    if (!vsmDepthLayout_) { outError = "createBindingLayout failed for vsm depth"; return false; }
+    {
+        nvrhi::BindingSetDesc vdSet;
+        vdSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, vsmConstants_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_));
+        vsmDepthSet_ = device->createBindingSet(vdSet, vsmDepthLayout_);
+        if (!vsmDepthSet_) { outError = "createBindingSet failed for vsm depth"; return false; }
+    }
+
+    // 深度管线：E1b.4 pipelineShadow_ 同款光栅口径——双面投影（cull=None）+ 无
+    // depth attachment（显式关深度/模板）+ R32F MIN 混合（instance 顺序无关）。
+    // 无顶点输入（SV_VertexID/InstanceID pulling），不 setInputLayout。
+    {
+        nvrhi::GraphicsPipelineDesc vpDesc;
+        vpDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+              .setVertexShader(vsVsm)
+              .setFragmentShader(psVsm)
+              .addBindingLayout(vsmDepthLayout_);
+        vpDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        vpDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        vpDesc.renderState.blendState.setRenderTarget(0,
+            nvrhi::BlendState::RenderTarget()
+                .setBlendEnable(true)
+                .setSrcBlend(nvrhi::BlendFactor::One)
+                .setDestBlend(nvrhi::BlendFactor::One)
+                .setBlendOp(nvrhi::BlendOp::Min)
+                .setSrcBlendAlpha(nvrhi::BlendFactor::One)
+                .setDestBlendAlpha(nvrhi::BlendFactor::One)
+                .setBlendOpAlpha(nvrhi::BlendOp::Min));
+        pipelineVsm_ = device->createGraphicsPipeline(vpDesc, vsmFb_->getFramebufferInfo());
+        if (!pipelineVsm_) { outError = "createGraphicsPipeline failed for vsm depth pass"; return false; }
+    }
+
+    vsmReady_ = true;
+    return true;
+}
+
+// M15.0：VSM 深度 pass（--vsm 且 vsmReady_ 时每帧先于 csDirect dispatch 调用）。
+// 光源正交矩阵口径与 E1b.4 完全同款（全场 AABB → half=radius*1.1+0.25 →
+// dist=radius*2.5+2.0）；方向灯取 params.lightDir（指向光源，csDirect 的 L 同源），
+// eye = center + L*dist，lookAt 回看中心（shadowOrtho/shadowLookAt D3D LH 口径）。
+void Scene::runVsmDepthPass(nvrhi::ICommandList* cmd, const FrameParams& params) {
+    const float center[3] = { (vsmAabbMin_[0] + vsmAabbMax_[0]) * 0.5f,
+                              (vsmAabbMin_[1] + vsmAabbMax_[1]) * 0.5f,
+                              (vsmAabbMin_[2] + vsmAabbMax_[2]) * 0.5f };
+    const float diag = std::sqrt((vsmAabbMax_[0] - vsmAabbMin_[0]) * (vsmAabbMax_[0] - vsmAabbMin_[0]) +
+                                 (vsmAabbMax_[1] - vsmAabbMin_[1]) * (vsmAabbMax_[1] - vsmAabbMin_[1]) +
+                                 (vsmAabbMax_[2] - vsmAabbMin_[2]) * (vsmAabbMax_[2] - vsmAabbMin_[2]));
+    const float radius = 0.5f * diag;
+    const float half = radius * 1.1f + 0.25f;
+    const float dist = radius * 2.5f + 2.0f;
+    const float nearZ = std::max(0.05f, dist - radius - 0.5f);
+    const float farZ = dist + radius + 0.5f;
+
+    // L = 指向光源（归一化）；灯方向接近竖直时换轴防 lookAt 退化（E1b.4 同款）。
+    float L[3] = { params.lightDir[0], params.lightDir[1], params.lightDir[2] };
+    const float lLen = std::sqrt(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+    if (lLen > 1e-6f) { L[0] /= lLen; L[1] /= lLen; L[2] /= lLen; }
+    const float eye[3] = { center[0] + L[0] * dist,
+                           center[1] + L[1] * dist,
+                           center[2] + L[2] * dist };
+    float up[3] = { 0.0f, 1.0f, 0.0f };
+    if (std::abs(L[1]) > 0.99f) { up[1] = 0.0f; up[2] = 1.0f; }
+    float view[16], ortho[16];
+    shadowLookAt(eye, center, up, view);
+    shadowOrtho(-half, half, -half, half, nearZ, farZ, ortho);
+    float lightMvp[16];
+    shadowMul(ortho, view, lightMvp);
+
+    // b6/b0 共用 CB：每帧全量覆写（volatile 纪律）。bias = 0.003（E1b.4 同款，
+    // 深度域；同源自遮挡由 csDirect 侧法线偏移 + 此 bias 双保险）。
+    VsmConstantsCB vc{};
+    std::memcpy(vc.lightMvp, lightMvp, sizeof(vc.lightMvp));
+    vc.params[0] = 1.0f;                       // enabled
+    vc.params[1] = 0.003f;                     // depthBias
+    vc.params[2] = static_cast<float>(kVsmVirtualSize);
+    vc.params[3] = static_cast<float>(kVsmVirtualSize);
+    cmd->writeBuffer(vsmConstants_, &vc, sizeof(vc));
+
+    // 深度 pass：页池整池 clear=1.0 → RT → 全簇绘制（viewport = 虚拟空间 2048²，
+    // 落在页池左上 16×16 页区）→ SRV。状态登记照 shadowMap_ 口径（每列表首绑前
+    // 声明当前态；identityIndex_/SSBO 态由同列表 vis 光栅段已声明，无需重复）。
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    cmd->beginTrackingTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->clearTextureFloat(vsmPagePool_, allSub, nvrhi::Color(1.0f));
+    cmd->setTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::RenderTarget);
+    cmd->beginTrackingBufferState(vsmPageTable_, nvrhi::ResourceStates::ShaderResource);
+
+    nvrhi::GraphicsState state;
+    state.setPipeline(pipelineVsm_)
+         .setFramebuffer(vsmFb_)
+         .addBindingSet(vsmDepthSet_)
+         .setIndexBuffer(nvrhi::IndexBufferBinding()
+             .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+    state.viewport.addViewportAndScissorRect(nvrhi::Viewport(
+        static_cast<float>(kVsmVirtualSize), static_cast<float>(kVsmVirtualSize)));
+    cmd->setGraphicsState(state);
+    nvrhi::DrawArguments args;
+    args.setVertexCount(maxTriPerCluster_ * 3u)     // 每簇 identity 索引上限（越界 NaN 裁剪）
+        .setInstanceCount(clusterCount_);           // 全簇直绘（不读 visibleList）
+    noteDraw();  // M-TR0 K1: draw-call counter
+    cmd->drawIndexed(args);
+
+    cmd->setTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::ShaderResource);
+}
+
 bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                       const char* vsEntry, const char* psEntry,
                       const SceneObjectDesc* objects, std::uint32_t objectCount,
@@ -8348,6 +8610,16 @@ void Scene::shutdown() {
     shadowLightCB_ = nullptr;
     shadowConstants_ = nullptr;
     shadowMap_ = nullptr;
+    // M15.0：VSM 资源随场景一并清空。
+    vsmPagePool_ = nullptr;
+    vsmPageTable_ = nullptr;
+    vsmFb_ = nullptr;
+    vsmConstants_ = nullptr;
+    pipelineVsm_ = nullptr;
+    vsmDepthLayout_ = nullptr;
+    vsmDepthSet_ = nullptr;
+    vsmReady_ = false;
+    vsmLogged_ = false;
     for (auto& fb : shadowFb_) fb = nullptr;
     pipelineShadow_ = nullptr;
     shadowCount_ = 0;

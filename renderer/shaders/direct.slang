@@ -25,6 +25,9 @@
 //   t0 vis SRV / t1..t3 vertexPool / localIndices / clusterMeta
 //   t4..t7 baseColor / t8..t11 mrTex / t12 材质间接表 / s0 sampler
 //   t13 TLAS（M9.1 阴影射线；RayTracingAccelStruct，DXIL t 空间 / SPIR-V 同 t-shift）
+//   b6 VsmConstants (80B) + t14 页表 + t15 页池（M15.0：--vsm 时 shadow 因子来源
+//      换成 VSM 页表查表 + 深度比较；开关走 b6 g_vsmParams.x 运行时分支，关闭时
+//      射线路径逐像素同序——s9-shadow 基线逐字节不变，验收以 --only s9-shadow 实测）
 //   u0 输出 RGBA32_FLOAT（复用 rtTarget_，不新建资源）
 // SPIR-V 绑定平移与 material.slang 同：b→256, t→0, s→128, u→384。
 // DXIL 需要 SM6.6（NonUniformResourceIndex 选槽 + RayQuery 内联射线，同 rt.slang）。
@@ -32,6 +35,7 @@
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
 #include "sky.slangh"
+#include "vsm_common.slangh"   // M15.0：vsmSampleShadow（--vsm 分支用）
 
 cbuffer SceneConstants : register(b0)
 {
@@ -87,6 +91,19 @@ cbuffer GIConstants : register(b5)
 {
     float4 g_refGI;
 }
+
+// M15.0（S15）：VSM 常量（b6，80B）。与 vsm.slang 的 b0（VsmDepthConstants）共用
+// 同一块 80B volatile CB（跨管线不同寄存器——RefConstants b4/b1 跨绑先例同款）。
+// params：x = vsm 开关（>0.5 进查表分支）/ y = 深度域 bias / z = 虚拟空间 texel 数
+//（2048）/ w = 物理页池 texel 数（2048，M15.0 与虚拟同尺寸；M15.2 上限池才分离）。
+cbuffer VsmConstants : register(b6)
+{
+    float4x4 g_vsmLightMvp;   // lightViewProj（CPU shadowOrtho/shadowLookAt 预算）
+    float4   g_vsmParams;
+}
+
+Texture2D<float>        g_vsmPagePool  : register(t15);
+StructuredBuffer<uint>  g_vsmPageTable : register(t14);
 
 RaytracingAccelerationStructure g_tlas : register(t13);
 
@@ -219,18 +236,32 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     const float3 L  = normalize(g_lightDirW.xyz);
     float shadow = 0.0f;
     if (dot(n3, L) > 0.0f) {
-        const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
-        RayDesc ray;
-        ray.Origin    = origin;
-        ray.Direction = L;
-        ray.TMin      = 0.0f;
-        ray.TMax      = g_shadowParams.y;
-        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-        q.TraceRayInline(g_tlas,
-                         RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                         0xFF, ray);
-        q.Proceed();
-        shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+        if (g_vsmParams.x > 0.5f) {
+            // M15.0（S15）：--vsm —— shadow 因子来源 = VSM 页表查表 + 深度比较
+            //（vsm_common.slangh::vsmSampleShadow，UE ProjectionCommon 采样链对位）。
+            // 接收点沿法线偏移与射线 origin 同款（g_shadowParams.x，防同源自遮挡）；
+            // 深度域 bias 走 g_vsmParams.y（scene.cpp 0.003，E1b.4 同量级）。
+            const float4 vclip = mul(g_vsmLightMvp, float4(gbuf.worldPos, 1.0f));
+            shadow = vsmSampleShadow(g_vsmPagePool, g_vsmPageTable, g_vsmLightMvp,
+                                     gbuf.worldPos + n3 * g_shadowParams.x,
+                                     vclip.z / vclip.w,
+                                     g_vsmParams.y, g_vsmParams.z);
+        } else {
+            // M9.1 原路径（冻结基线）：朝光源 1 条 RayQuery 打 M8 TLAS。命中=被挡
+            // → shadow 0；未命中=1。背向光的面（NdotL<=0）本就无直射，ray 无意义。
+            const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+            RayDesc ray;
+            ray.Origin    = origin;
+            ray.Direction = L;
+            ray.TMin      = 0.0f;
+            ray.TMax      = g_shadowParams.y;
+            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+            q.TraceRayInline(g_tlas,
+                             RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                             0xFF, ray);
+            q.Proceed();
+            shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+        }
     }
 
     g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,

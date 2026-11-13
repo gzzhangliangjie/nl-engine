@@ -82,6 +82,11 @@ struct FrameParams {
     bool  tlasSpin    = false;
     bool  tlasProbe   = false;
 
+    // M15.0（S15）：VSM 虚拟阴影贴图开关（--vsm）。仅 --mode shadow 的 drawShadow
+    // 消费：开 = 深度 pass（页池/页表）+ csDirect 阴影因子走 VSM 采样；关 = 射线
+    // 路径逐字节不变（s9-shadow 基线零扰动）。其他模式不读，缺省无副作用。
+    bool  vsm         = false;
+
     // M8.2：rt 模式消费——viewProj 矩阵（列主序，camera.viewProjection() 原样
     // 传入；renderer 侧 inverseMat4 求逆做射线生成）与调试可视化档
     // （0 = 命中距离灰度 / 1 = instanceId+triangleId 伪彩）。其它模式不读，

@@ -144,6 +144,7 @@ struct Options {
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
+    bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
@@ -313,6 +314,7 @@ Options parseArgs(int argc, char** argv) {
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
+        else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
         else if (a == "--rt-debug" && i + 1 < argc) {   // M8.2：rt 模式调试可视化档
             const std::string v = argv[++i];
             if (v == "dist" || v == "0") o.rtDebugMode = 0;
@@ -2544,6 +2546,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (o.pbrNaive) fp.options[0] = 1.0f;   // pbr-direct：g_mrF.z 对照开关
         fp.tlasSpin  = o.tlasSpin;              // M8.1：TLAS 实例 spin / 探针（BLAS 未就位时
         fp.tlasProbe = o.tlasProbe;             // renderer 内部直接返回，其它模式零扰动）
+        fp.vsm       = o.vsm;                   // M15.0：VSM 深度 pass + csDirect 查表分支（仅 shadow 模式消费）
         fp.refFrames = static_cast<std::uint32_t>(o.frames);  // M9.2：reference 进度分母
         // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
         // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，

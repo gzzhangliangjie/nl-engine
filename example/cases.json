@@ -10970,6 +10970,59 @@
      "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
+  },
+  {
+   "id": "s15-vsm",
+   "label": "S15.0",
+   "name": "VSM 虚拟阴影贴图最小闭环（M15.0：页池 + 页表 + 投影采样）",
+   "tag": "s15-vsm",
+   "date": "2026-11-13",
+   "summary": "M15.0（S15 第一步，S15-PLAN 预研拍板 2026-11-09）：--mode shadow 上 --vsm 开关，阴影因子来源从 M9.1 TLAS 射线换成 VSM 页表查表 + 深度比较。物理页池 2048^2 R32F（128^2/页 x 16x16 页，M15.0 静态 1:1 分配，UE MaxPhysicalPages 上限池/页搬运留 M15.2）+ 页表 StructuredBuffer<uint> 256 项（entry=poolPageX|poolPageY<<8，0xFFFFFFFF 未分配判亮；UE Texture2D 页表差异登记 UE-DIFFS）+ vsm.slang 全簇 vertex pulling 深度 pass（不读 visibleList——相机视锥列表会漏相机外遮挡体；光源正交矩阵 shadowOrtho/shadowLookAt E1b.4 同款口径，全场 AABB 独立重读 nmesh 不碰基线路径）+ vsm_common.slangh 采样链（UE ProjectionCommon 对位：世界点→lightMvp→NDC→虚拟 texel→页表→物理页→深度比较）。踩坑两记入档：① csDirect blob 对 t14/t15/b6 是静态引用，directComputeLayout_ 必须无条件扩三槽（布局漏槽=PSO 失败），--vsm 关闭帧也要写零版 b6 + 声明页池/页表状态（volatile CB 未写即用/unknown prior state 双 NVRHI 报错）；② 采样 y 必须做屏幕翻转（gbuffer_common 同款 1-(ndc.y*0.5+0.5)，缺=阴影上下镜像实拍踩坑）。验收：--vsm 关闭帧与 s9-shadow 冻结基线逐字节相同（基线零扰动）；--vsm 开启与射线基线 99.51% 像素同（0.49% 差异 = 深度 pass 全簇几何 vs 射线 104-tri 粗代理的设计差异，brighter=3192/darker=4367 双向）；双后端 near（diff 10px maxDelta=1）；run.bat verify 六段全绿（bytes/日志锚/deviceErrors=0/退化守卫/near/负向）。kStage 不 bump；M15.2 上限池 + 页搬运 + clipmap 层级另收口。",
+   "acceptance": [
+    "--mode shadow 不带 --vsm 与冻结 s9-shadow 基线逐字节相同（射线基线零扰动）；带 --vsm 与 example/s15-vsm 冻结基线逐字节相同（确定性）",
+    "run.bat verify 全绿：双后端 exit 0 + bytes 2/2 + 日志锚 vsm: depth pass live + deviceErrors=0 + 退化守卫（无 --vsm = s9-shadow 基线逐字节）+ near dx12/vulkan + 负向",
+    "双后端 near 一致（0 diff px）；VSM vs 射线基线 99.5%+ 像素同，差异集中在阴影边界（全簇几何 vs 粗代理设计差异，双向亮度偏移都有）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "vsm",
+     "name": "--vsm VSM 页表查表阴影（页池 2048^2 R32F + 256 项页表 + 全簇深度 pass）",
+     "kind": "pair",
+     "note": "M15.0 新增 --vsm。与 s9-shadow（TLAS 射线）形状大体一致但几何源不同：深度 pass 渲全簇 11808 tri 几何，射线打 104 tri 粗代理——阴影边界差异是设计本意不是 bug。基线取自本卡首拍（dx12/vulkan 双后端）。",
+     "baselines": {
+      "dx12": "example/s15-vsm/vsm-dx12.png",
+      "vulkan": "example/s15-vsm/vsm-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "shadow",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "9",
+      "--vsm"
+     ],
+     "command": "viewer.exe --mode shadow --model Suzanne-materials.nmesh --shading 5 --screenshot <out.png> --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 9 --vsm",
+     "script": "example/s15-vsm/run.bat verify"
+    }
+   ]
   }
  ]
 }

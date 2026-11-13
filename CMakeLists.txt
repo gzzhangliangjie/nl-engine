@@ -462,6 +462,8 @@ set(_GBUFFER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/gbuffer_common
 # M10.1：八面体映射 / 解析天穹公共头（probe_trace/probe_viz include；S12 复用）
 set(_OCTAHEDRAL_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/octahedral.slangh")
 set(_SKY_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/sky.slangh")
+# M15.0（S15）：VSM 投影采样公共头（direct.slang include；vsm.slang 不 include）
+set(_VSM_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/vsm_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
 set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "visbuf.vsvisviz" "visbuf.psvisviz"
@@ -568,7 +570,7 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
         elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
                OR _SRC_NAME STREQUAL "probe")
-            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_VSM_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")

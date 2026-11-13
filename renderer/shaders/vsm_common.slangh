@@ -1,0 +1,54 @@
+// M15.0 (S15): VSM 投影采样公共头 —— 页表查表 + 深度比较。
+// UE 对位：VirtualShadowMapProjectionCommon.ush 的「世界→虚拟 texel→页表→物理页→
+// 深度」采样链，收窄成单光源单级的 M15.0 最小版。
+//
+// 页空间口径（M15.0 冻结，与 scene.cpp ensureVsmTargets 逐值对称）：
+//   PageSize   = 128（UE VirtualShadowMapDefinitions.h 同值，log2=7）
+//   虚拟空间   = 2048² texel（16×16 页，单光源 clipmap 一级整页分配）
+//   物理页池   = 2048² R32F Texture2D（16×16 物理页；M15.0 静态 1:1 分配——
+//                UE 的 MaxPhysicalPages 上限池 + 页搬运留 M15.2）
+//   页表       = StructuredBuffer<uint> 256 项（UE 是 Texture2D 页表 + 硬件采样；
+//                M15.0 只做 Load 查表故用 buffer 形态，差异登记 UE-DIFFS）
+//   entry 编码 = bits[7:0]=poolPageX, bits[15:8]=poolPageY（UE 32-bit 编码
+//                physX[0:9]/physY[10:19] 的窄化对位，留 M15.2 扩位余量）；
+//                0xFFFFFFFF = 未分配 → 判亮。
+// 采样链（每步对应 UE 源码位置见 S15-PLAN §M15.0）：
+//   worldPos → g_vsmLightMvp → NDC.xy*0.5+0.5 → 虚拟 texel → 页号 → 页表查物理页
+//   → 物理页内 texel → Load 深度 → 与接收者 NDC.z 比较（stored < z-bias → 遮挡）。
+// 坐标系：CPU 侧 shadowOrtho/shadowLookAt 是 D3D LH 口径（E1b.4 同款），深度域
+// z ∈ [0,1]；Vulkan 侧同一矩阵 + 0..1 深度范围，双后端数值同源。
+
+// M15.0：虚拟→物理页采样（接收者世界点 + 深度域 bias）。out-of-bound / 未分配页
+// 一律判亮（1.0），与 UE VSM 的 fallback 口径一致。
+float vsmSampleShadow(
+    Texture2D<float>        pagePool,    // t15：2048² R32F 物理页池
+    StructuredBuffer<uint>  pageTable,   // t14：256 项页表
+    float4x4                lightMvp,    // CPU 预算的光源正交 lightViewProj（列主序）
+    float3                  worldPos,    // 接收者世界点（调用侧已做法线偏移防自遮挡）
+    float                   receiverZ,   // 接收者 NDC z（clip.z/clip.w，D3D [0,1]）
+    float                   depthBias,   // 深度域 bias（g_vsmParams.y，E1b.4 的 0.003 同量级）
+    float                   virtualSize) // 虚拟空间 texel 数（g_vsmParams.z = 2048）
+{
+    const float4 clip = mul(lightMvp, float4(worldPos, 1.0f));
+    const float2 uv01 = (clip.xy / clip.w) * 0.5f + 0.5f;
+    // 屏幕 y 翻转：光栅器（D3D/Vulkan 视口同口径）把 NDC y=+1 放在视口顶行，
+    // 与 gbuffer_common.slangh 的 s[i].y = (1 - (ndc.y*0.5+0.5)) * height 逐字同款。
+    // 缺这行翻转 = 采样行与深度 pass 光栅行上下镜像（M15.0 实拍踩坑：绿头鼻/嘴
+    // 阴影出现在头顶）。
+    const float2 vtexel = float2(uv01.x, 1.0f - uv01.y) * virtualSize;
+    // 视锥外（页未覆盖）→ 判亮：M15.0 页空间 = 全场 AABB 正交视锥，正常应全覆盖，
+    // 此分支仅防御（如光方向突变导致矩阵滞后一帧的边界像素）。
+    if (vtexel.x < 0.0f || vtexel.y < 0.0f ||
+        vtexel.x >= virtualSize || vtexel.y >= virtualSize)
+        return 1.0f;
+
+    const uint2 vtexelU = uint2(vtexel);
+    const uint2 page = vtexelU >> 7u;                 // PageSize=128，log2=7
+    const uint entry = pageTable[page.y * 16u + page.x];
+    if (entry == 0xFFFFFFFFu) return 1.0f;            // 未分配 → 判亮
+
+    const uint2 poolPage = uint2(entry & 0xFFu, (entry >> 8u) & 0xFFu);
+    const uint2 ptexel = (poolPage << 7u) | (vtexelU & 127u);
+    const float stored = pagePool.Load(int3(int2(ptexel), 0));
+    return (stored < receiverZ - depthBias) ? 0.0f : 1.0f;
+}
