@@ -21,6 +21,7 @@
 
 #include "nl/traffic/LaneGraph.hpp"
 #include "nl/traffic/LanePath.hpp"
+#include "nl/traffic/TrafficControl.hpp"
 
 #include <cstdint>
 #include <string>
@@ -46,12 +47,17 @@ struct TrafficCar {
     std::vector<int32_t> route; // lane 序列（findPathOnLanes 产物，车主权）
     int32_t routeIdx = 0;       // 当前在 route 的下标
     TrafficCarState state;
+    int32_t haltFrames = 0;     // 停滞帧计数（速度 0 且未完成 route；C1 拥堵统计）
 };
 
 struct TrafficSim {
     const LaneGraph* graph = nullptr;
     TrafficSimParams params;
     std::vector<TrafficCar> cars;
+    // M-T1.1：路口控制面（信号相位 + 占用锁）可选挂接；nullptr = M-T0 原行为
+    //（锚不重拍：既有 ⑧ 全部无 control 跑）。sim 持可变引用（advanceFrame/
+    // acquire/releaseCleared 是控制面运行时状态机），dt 由 control 自带。
+    TrafficControl* control = nullptr;
 
     // route = 车主权路径（至少 1 条 lane）；startS = 首 lane 内初始弧长（跟车锚用）；
     // 追加到车序尾部（下标序 = 更新序）

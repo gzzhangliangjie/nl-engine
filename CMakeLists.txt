@@ -287,6 +287,7 @@ add_library(nl_core STATIC
     core/src/nav/Arena.cpp              # P8 M-N6：viewer --nav-crowd 合成 arena 几何
     core/src/traffic/LaneGraph.cpp # P8 M-T0.0：roadnet.json -> 车道级展开图（A 类轨道 feat/worldgen，零图形 API）
     core/src/traffic/LanePath.cpp  # P8 M-T0.1：车道图 A* 寻路（确定性线性扫 open 表，零图形 API）
+    core/src/traffic/TrafficControl.cpp # P8 M-T1.0：红绿灯相位 + 路口占用锁（A 类轨道 feat/worldgen，零图形 API）
     core/src/traffic/TrafficSim.cpp # P8 M-T0.2：直线跟车仿真（C1 恒速+安全间距，固定 dt 车序逐位可复现）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
