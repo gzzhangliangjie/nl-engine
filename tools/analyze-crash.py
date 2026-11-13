@@ -32,6 +32,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_ROOT = os.path.join(REPO, "build")
 MS_SYMSRV = "srv*https://msdl.microsoft.com/download/symbols"
 SDK_DEBUGGERS = r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64"
+# WinDbgX 商店包自带的 cdb 别名（包族目录名跨版本稳定，零安装）
+WINDBGX_ALIAS_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                                 "Microsoft", "WindowsApps",
+                                 "Microsoft.WinDbg_8wekyb3d8bbwe")
 
 
 def list_dumps():
@@ -66,17 +70,23 @@ def pdb_dirs(dump):
 
 
 def find_engine():
-    """返回 (exe 路径, 类型)。类型: cdb / windbg(经典) / windbgx(WinDbg Preview)。
-    WinDbg Preview 1.2611.4001.0 已装（2026-11-13），别名 WinDbgX.exe 支持
-    -z / -y / -c / -logo 无头分析。"""
-    for name, kind in (("cdb.exe", "cdb"), ("windbg.exe", "windbg")):
-        p = shutil.which(name)
-        if p:
-            return p, kind
-    for name, kind in (("cdb.exe", "cdb"), ("windbg.exe", "windbg")):
-        p = os.path.join(SDK_DEBUGGERS, name)
-        if os.path.isfile(p):
-            return p, kind
+    """返回 (exe 路径, 类型)。类型: cdb(纯控制台) / windbg(经典 GUI) / windbgx(WinDbg Preview GUI)。
+    优先纯控制台引擎（零窗口闪烁，适合无人值守/CI）：
+      1. cdb.exe    经典 Debugging Tools（VS 组件，可选）
+      2. cdbX64.exe WinDbgX 商店包自带（零安装，已实测可用）
+      3. windbg.exe 经典 GUI / WinDbgX.exe Preview GUI（-c "...;q" 自动退出）"""
+    # ① cdb 家族（控制台，同 CLI：-sins -y -z -c -logo）
+    for p in (shutil.which("cdb.exe"),
+              os.path.join(SDK_DEBUGGERS, "cdb.exe"),
+              os.path.join(WINDBGX_ALIAS_DIR, "cdbX64.exe")):
+        if p and os.path.isfile(p):
+            return p, "cdb"
+    # ② 经典 windbg GUI
+    for p in (shutil.which("windbg.exe"),
+              os.path.join(SDK_DEBUGGERS, "windbg.exe")):
+        if p and os.path.isfile(p):
+            return p, "windbg"
+    # ③ WinDbg Preview GUI（支持 -z / -y / -c / -logo 无头模式）
     p = os.path.join(os.environ.get("LOCALAPPDATA", ""),
                      "Microsoft", "WindowsApps", "WinDbgX.exe")
     if os.path.isfile(p):

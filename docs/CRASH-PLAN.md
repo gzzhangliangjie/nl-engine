@@ -50,10 +50,12 @@ dmp 落盘只是第一现场留证，真正"分析"是把 minidump 符号化成�
 - **L2 符号化调用栈**：调试器引擎读取 `.dmp` + 同版本 `.pdb` → `.ecxr;!analyze -v;k` 出崩溃栈帧 + root cause。
 - **L3 锁定二进制**：`.json` 的 `git_sha` 钉死提交；若无当时 PDB，`git checkout <sha>` 重建即得逐字节一致 PDB（本项目构建确定性强）。
 
-### 7.2 调试器引擎（2026-11-13 已装）
-- **WinDbg Preview 1.2611.4001.0 已安装**（winget `Microsoft.WinDbg` / Store，用户级）。别名：`%LOCALAPPDATA%\Microsoft\WindowsApps\WinDbgX.exe`，支持 `-z / -y / -c / -logo` 无头命令行 → `analyze-crash.py` 已纳入探测（优先级 cdb > windbg 经典 > WinDbgX）。
-- 可选补装经典 cdb（纯控制台、无 GUI 闪窗，无头更稳）：VS 安装器 → 修改 → 单个组件 → 勾选 **Windows Debugging Tools** → `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe`。
-- 沙箱会话拦截 GUI 子进程启动（安全策略），故 L2 全链路由用户在正常终端跑 `tools\analyze-crash.bat` 完成。
+### 7.2 调试器引擎（2026-11-13 就绪，零额外安装）
+- **首选 = `cdbX64.exe`（WinDbgX 商店包自带，零安装）**：`%LOCALAPPDATA%\Microsoft\WindowsApps\Microsoft.WinDbg_8wekyb3d8bbwe\cdbX64.exe`。纯控制台、零窗口闪烁、同经典 cdb CLI（`-sins -y -z -c -logo`），无人值守/CI 首选。本机 spike 实测（2026-11-13）：第一 chance AV 自动抓栈、符号化到源码行、`-logo` 证据落盘全过。
+- WinDbg Preview 1.2611.4001.0 同包已装（GUI 别名 `WinDbgX.exe`，支持 `-z/-y/-c/-logo` 无头命令、`q` 自动退出，可能闪窗——作兜底）。
+- 可选：经典 cdb（VS 安装器 → 修改 → 单个组件 → **Windows Debugging Tools**）装上后探测自动优先。
+- 探测优先级：`cdb.exe`（经典）> `cdbX64.exe`（商店包）> `windbg.exe`（经典 GUI）> `WinDbgX.exe`（Preview GUI）。
+- 沙箱会话拦截子进程拉起调试器（安全策略，GUI 与别名 exe 均拦），L2 全链路首跑由用户终端 `tools\analyze-crash.bat` 完成。
 
 ### 7.3 自动分析脚本（已就绪，无需开 VS）
 `tools/analyze-crash.py`（纯标准库）+ `tools/analyze-crash.bat` 封装：
