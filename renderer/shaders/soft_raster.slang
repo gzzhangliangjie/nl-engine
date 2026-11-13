@@ -47,6 +47,11 @@ StructuredBuffer<float> g_vertexPool   : register(t1);
 StructuredBuffer<uint>  g_localIndices : register(t2);
 StructuredBuffer<uint>  g_clusterMeta  : register(t3);
 StructuredBuffer<uint>  g_visibleList  : register(t4);
+// M14A2（Q-A2 = A2-A 拍板）：分流后软簇 compact 列表 + 分类计数。
+// counts = {softCount, hardCount, split, 0}（classify.slang csClassify 写；
+// split=0 = A1 全软对照原行为，counts 建时 CPU 清零 → 老路径零扰动）。
+StructuredBuffer<uint>  g_softList     : register(t5);
+StructuredBuffer<uint4> g_classCounts  : register(t6);
 
 RWStructuredBuffer<uint64_t> g_visUAV : register(u0);
 
@@ -98,7 +103,15 @@ RasterVert pullVertex(uint clusterId, uint localIdx)
 [numthreads(128, 1, 1)]
 void csSoftRaster(uint3 groupId : SV_GroupID, uint gtid : SV_GroupIndex)
 {
-    const uint clusterId = g_visibleList[groupId.x];
+    // M14A2：split=1 时本 workgroup 只处理软簇表（空 workgroup 早退——dispatch
+    // 恒 = 总簇数，软簇数 GPU 侧自减；硬簇由 visbuf.slang 硬件 raster 吃）。
+    uint clusterId;
+    if (g_classCounts[0].z != 0u) {
+        if (groupId.x >= g_classCounts[0].x) return;
+        clusterId = g_softList[groupId.x];
+    } else {
+        clusterId = g_visibleList[groupId.x];   // A1 全软对照原行为
+    }
     const uint metaBase  = clusterId * 4u;
     const uint triCount  = g_clusterMeta[metaBase + 1u];
 

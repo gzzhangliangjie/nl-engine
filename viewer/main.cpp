@@ -144,6 +144,8 @@ struct Options {
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
+    bool swSplit = false;      // M14A2：--sw-split（soft-raster 模式 SW/HW 分流开关）
+    float swThreshold = 64.0f; // M14A2：--sw-threshold <px>（簇 AABB 阈值，bevy 64 口径）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
@@ -502,6 +504,10 @@ Options parseArgs(int argc, char** argv) {
             o.orbitSpeed = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--screenshot-seq" && i + 1 < argc) {
             o.screenshotSeqDir = argv[++i];
+        } else if (a == "--sw-split") {           // M14A2：soft-raster SW/HW 分流
+            o.swSplit = true;
+        } else if (a == "--sw-threshold" && i + 1 < argc) {  // M14A2：阈值 px
+            o.swThreshold = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--dist" && i + 1 < argc) {
             o.distance = static_cast<float>(std::atof(argv[++i]));
             o.distSet = true;
@@ -1194,7 +1200,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
               bool shadowMode = false, bool referenceMode = false,
-              bool probeMode = false, bool softRasterMode = false) {
+              bool probeMode = false, bool softRasterMode = false,
+              bool swSplit = false) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
@@ -1247,6 +1254,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             "--interp-delay: ticks must be 1.0..8.0, got ", o.interpDelay);
         return 2;
     }
+    if (o.swSplit && o.mode != nl::core::ViewMode::SoftRaster) {
+        nl::core::log::errorCh("viewer", "--sw-split requires --mode soft-raster");
+        return 2;
+    }
     NetGuard netGuard;
     if (netServerMode || netClientMode) {
         netGuard.active = nl::net::netInit();
@@ -1287,7 +1298,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
                                                    shadowMode, referenceMode, probeMode,
-                                                   softRasterMode);
+                                                   softRasterMode, swSplit);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -2052,6 +2063,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     float probeLevels[3] = {3.0f, 5.0f, 7.0f};
     bool  probeSkyBgLocal = o.skyBg;
     // S12 M12.0：时域参数 local（HUD 双向，同 probeSkyBgLocal 口径）。
+    // M14A2：分流阈值 HUD 双向 local（面板只在 soft-raster + --sw-split 绘制）。
+    float swThresholdLocal = o.swThreshold;
     float temporalAlphaLocal = o.temporalAlpha;
     int   temporalHistoryMaxLocal = o.temporalHistoryMax;
     bool  temporalEnableLocal = o.temporalEnable;
@@ -2564,6 +2577,17 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.eye[0] = prEye[0]; fp.eye[1] = prEye[1]; fp.eye[2] = prEye[2];
             fp.projYScale = camera.projectionYScale();
         }
+        // M14A2：soft-raster 分流分类输入（eye/projYScale/viewportHeight 同 probe
+        // 填法；threshold 走 HUD 双向 local）。非 swSplit 模式缺省值无副作用。
+        if (softRasterMode) {
+            float srEye[3];
+            camera.eyePosition(srEye);
+            fp.eye[0] = srEye[0]; fp.eye[1] = srEye[1]; fp.eye[2] = srEye[2];
+            fp.projYScale = camera.projectionYScale();
+            const auto srExt = renderer->extent();
+            fp.viewportHeight = static_cast<float>(srExt.height);
+            fp.swThresholdPx = std::clamp(swThresholdLocal, 8.0f, 256.0f);
+        }
         fp.probeBaseRes = probeBaseRes;
         fp.probeNormalOffset = probeNormalOffset;
         fp.probeDotSize = probeDotSize;
@@ -2937,6 +2961,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 hud.probeSkyBg = probeSkyBgLocal;
                 // S12 M12.0：filter 专属时域面板（默认 false → 既有 --hud 基线零布局变化）。
                 hud.filterPanelShow = isFilter;
+                // M14A2：软光栅分流阈值面板（soft-raster + --sw-split 才 show）。
+                hud.swRasterPanelShow = (softRasterMode && swSplit);
+                if (hud.swRasterPanelShow)
+                    hud.swThreshold = swThresholdLocal;
                 if (isFilter) {
                     hud.temporalEnable = temporalEnableLocal;
                     hud.temporalAlpha = temporalAlphaLocal;
@@ -3060,6 +3088,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 // M10.3（Q14-3）：调参写回（阈值/天穹背景；probe 模式 gather 恒开）。
                 std::memcpy(probeLevels, hud.probeLevels, sizeof(probeLevels));
                 probeSkyBgLocal = hud.probeSkyBg;
+                // M14A2：分流阈值 HUD 双向（面板没画时字段保持 POD 默认，不回读）。
+                if (softRasterMode && swSplit && hud.swRasterPanelShow)
+                    swThresholdLocal = hud.swThreshold;
                 // S12 M12.0：时域参数 HUD 双向（面板没画时字段保持 POD 默认，不回读）。
                 if (isFilter && hud.filterPanelShow) {
                     temporalEnableLocal = hud.temporalEnable;
@@ -4262,11 +4293,13 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
     case nl::core::ViewMode::SoftRaster: // M14A1（S14-A）：全软光栅对照（Q-A1=A1-A）
+                                         // M14A2：--sw-split 开分流（Q-A2=A2-A）
         return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
                          /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/false,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
-                         /*referenceMode=*/false, /*probeMode=*/false, /*softRasterMode=*/true);
+                         /*referenceMode=*/false, /*probeMode=*/false, /*softRasterMode=*/true,
+                         o.swSplit);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");

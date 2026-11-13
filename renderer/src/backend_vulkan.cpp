@@ -71,7 +71,7 @@ public:
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               bool shadowMode, bool referenceMode, bool probeMode, bool softRasterMode,
-              std::string& outError) override {
+              bool swSplit, std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -126,7 +126,7 @@ public:
         // M14A1（S14-A）：软光栅对照走 initSoftRaster（initVisbuf 基础链 +
         // csSoftRaster compute），排 visbufMode 之前——同一条链多一层 compute。
         else if (softRasterMode)
-            sceneOk = scene_.initSoftRaster(nvrhiDevice_, "spv", modelFile, outError);
+            sceneOk = scene_.initSoftRaster(nvrhiDevice_, "spv", modelFile, swSplit, outError);
         else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
             sceneOk = scene_.initVisbuf(nvrhiDevice_, "spv", "main", "main", modelFile,
                                         pullingMode, outError);

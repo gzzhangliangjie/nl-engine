@@ -161,6 +161,7 @@ public:
         kPassDirect, kPassRefGI, kPassPlace, kPassTrace, kPassGather,
         kPassFilterTemporal, kPassFilterSpatial, kPassGatherCompose, kPassMainDraw,
         kPassSoftRaster,   // M14A1（S14-A）：compute 软光栅（尾部追加不动既有索引）
+        kPassClassify,     // M14A2：SW/HW 分流分类 compute（尾部追加）
         kPassCount
     };
     static_assert(kPassCount <= kMaxPasses, "pass count exceeds HudFrame table");
@@ -171,7 +172,7 @@ public:
             "csCull", "visRaster", "matResolve", "hizBuild",
             "csDirect", "csRefGI", "csPlace", "csTraceProbe", "csGather",
             "csFilterTemporal", "csFilterSpatial", "csGatherCompose", "mainDraw",
-            "softRaster"};
+            "softRaster", "classify"};
         return kNames[id];
     }
 

@@ -544,16 +544,14 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                              : 1u;
 
     // M4.1：簇包围球（世界空间 center.xyz + radius.w，M1.0 Ritter 近似产物）。
-    // 剔除开启时才需要；nm.bounds 与 nm.meshlets 一一对应。
+    // M14A2 起恒计算（classify 消费）；nm.bounds 与 nm.meshlets 一一对应。
     std::vector<float> clusterSpheres;
-    if (frustumCull_) {
-        clusterSpheres.reserve(clusterCount * 4);
-        for (const auto& b : nm.bounds) {
-            clusterSpheres.push_back(b.sphere[0]);
-            clusterSpheres.push_back(b.sphere[1]);
-            clusterSpheres.push_back(b.sphere[2]);
-            clusterSpheres.push_back(b.sphere[3]);
-        }
+    clusterSpheres.reserve(clusterCount * 4);
+    for (const auto& b : nm.bounds) {
+        clusterSpheres.push_back(b.sphere[0]);
+        clusterSpheres.push_back(b.sphere[1]);
+        clusterSpheres.push_back(b.sphere[2]);
+        clusterSpheres.push_back(b.sphere[3]);
     }
 
     // ---- 4. 建 GPU 资源：constants_ + 1x1 白占位 + sampler + 三张 SSBO +
@@ -599,15 +597,10 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                   static_cast<std::uint32_t>(clusterMeta.size() * sizeof(std::uint32_t)), clusterMeta_))
         { outError = "createBuffer failed for cull cluster meta"; return false; }
 
-    // M4.1：剔除路径的簇包围球 SSBO + 可见列表 SSBO。
-    // visibleList 同时被 compute 写（UAV）和 VS 读（SRV），创建时必须声明
-    // canHaveUAVs（NVRHI validation 实测抓出），permanent 态给 UnorderedAccess，
-    // 帧内由 NVRHI 状态跟踪在 UAV/SRV 间插转换。
-    if (frustumCull_) {
-        if (!makeSsbo("CullClusterSpheres",
-                      static_cast<std::uint32_t>(clusterSpheres.size() * sizeof(float)), clusterSpheres_))
-            { outError = "createBuffer failed for cull cluster spheres"; return false; }
-    }
+    // M5.1：簇包围球 SSBO。M14A2 起恒创建（classify 消费；此前仅 frustum on）。
+    if (!makeSsbo("CullClusterSpheres",
+                  static_cast<std::uint32_t>(clusterSpheres.size() * sizeof(float)), clusterSpheres_))
+        { outError = "createBuffer failed for cull cluster spheres"; return false; }
     // M5.1 修潜伏 bug：visibleList 恒创建恒绑定。M4.1 起布局无条件声明 t4，但 set
     // 只在 frustum on 时绑 → --frustum off 一直 init 失败（viewer 默认 on，从未被
     // 用例踩到）。frustum off 时列表内容 = 恒等映射，VS 寻址与 M4.0 直通等价。
@@ -773,7 +766,8 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // M4.1：包围球（只读 SRV）+ 可见列表（初始恒等映射；permanent 态 UnorderedAccess，
     // 帧内 compute 写 UAV、VS 读 SRV，NVRHI 状态跟踪负责插转换）。
-    if (frustumCull_) {
+    // M14A2：包围球恒上传恒钉 SRV（classify 消费；此前仅 frustum on）。
+    {
         upload->beginTrackingBufferState(clusterSpheres_, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(clusterSpheres_, clusterSpheres.data(),
                             clusterSpheres.size() * sizeof(float));
@@ -1830,8 +1824,11 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
 // SW/HW 分流）。initVisbuf 基础链 + csSoftRaster compute 管线；visBuffer_/viz 链
 // 全部复用，帧路径 softRaster_ 分支以 dispatch 替换硬件 raster draw（scene.cpp
 // visbuf 分支 (4) 段），viz/resolve 逐位同链。三处参考口径见 S14A-SOFTRAST-PLAN §1。
+// M14A2（Q-A2 = A2-A 拍板）：swSplit=true 追加 classify compute 基建——
+// 软/硬 compact 列表 + counts + argsHard（[1]=hardCount GPU 回填），帧路径
+// classify → HW 硬簇 draw（visRasterHardSet_）→ SW 软簇 dispatch。
 bool Scene::initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
-                           const char* nmeshFile, std::string& outError) {
+                           const char* nmeshFile, bool swSplit, std::string& outError) {
     if (!initVisbuf(device, shaderSuffix, "vsCull", "psCull", nmeshFile, false, outError))
         return false;
     softRaster_ = true;
@@ -1851,9 +1848,10 @@ bool Scene::initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!csSoftRaster_) { outError = "createShader failed for soft_raster.cs"; return false; }
 
     // 布局 = visRasterLayout_ 同槽位表的 compute 版：b0(SceneConstants) +
-    // b1(VisConstants) + t1..t4(顶点池/局部索引/簇表/可见列表) + u0(visBuffer_)。
-    // §2.7 每管线单一 BindingSet——软硬两路是两条管线，各自一个 set（set 内容
-    // 同源同槽，set 对象随 visBuffer_ 重建在 ensureVisbufTargets 分建）。
+    // b1(VisConstants) + t1..t6(顶点池/局部索引/簇表/可见列表/软列表/分类计数)
+    // + u0(visBuffer_)。§2.7 每管线单一 BindingSet——软硬两路是两条管线，各自
+    // 一个 set（set 内容同源同槽，set 对象随 visBuffer_ 重建在
+    // ensureVisbufTargets 分建）。
     nvrhi::BindingLayoutDesc rDesc;
     rDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
@@ -1862,6 +1860,8 @@ bool Scene::initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
     softRasterLayout_ = device->createBindingLayout(rDesc);
     if (!softRasterLayout_) { outError = "createBindingLayout failed for soft raster"; return false; }
@@ -1871,8 +1871,129 @@ bool Scene::initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
     softRasterPSO_ = device->createComputePipeline(pDesc);
     if (!softRasterPSO_) { outError = "createComputePipeline failed for soft raster"; return false; }
 
+    // M14A2：swSplit 追加 classify 基建（Q-A2 = A2-A）。split=0（A1 对照）时
+    // softList_/classCounts_ 仍创建（shader t5/t6 布局恒声明），内容恒零 →
+    // csSoftRaster split 分支不触发，老路径零扰动。
+    {
+        nvrhi::BufferDesc lDesc;
+        lDesc.byteSize = clusterCount_ * sizeof(std::uint32_t);
+        lDesc.structStride = 4;
+        lDesc.canHaveUAVs = true;
+        lDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        lDesc.keepInitialState = true;
+        lDesc.debugName = "SoftClusterList";
+        softList_ = device->createBuffer(lDesc);
+        lDesc.debugName = "HardClusterList";
+        hardList_ = device->createBuffer(lDesc);
+        nvrhi::BufferDesc cDesc;
+        cDesc.byteSize = 16;
+        cDesc.structStride = 4;
+        cDesc.canHaveUAVs = true;
+        cDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        cDesc.keepInitialState = true;
+        cDesc.debugName = "ClassifyCounts";
+        classCounts_ = device->createBuffer(cDesc);
+        // argsHard：[0]=indexCount 恒定（identity 索引全长）、[1]=hardCount GPU
+        // 回填、[2..4]=0。与 indirectArgs_ 同款 isDrawIndirectArgs + structStride 4
+        // + canHaveUAVs（compute UAV 写 [1] → draw IndirectArgument 同帧轮转）。
+        nvrhi::BufferDesc aDesc;
+        aDesc.byteSize = sizeof(nvrhi::DrawIndexedIndirectArguments);
+        aDesc.isDrawIndirectArgs = true;
+        aDesc.structStride = 4;
+        aDesc.canHaveUAVs = true;
+        aDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        aDesc.keepInitialState = true;
+        aDesc.debugName = "HardIndirectArgs";
+        argsHard_ = device->createBuffer(aDesc);
+        if (!softList_ || !hardList_ || !classCounts_ || !argsHard_) {
+            outError = "createBuffer failed for classify buffers"; return false;
+        }
+
+        // CPU 一次性写：counts 清零 + argsHard 模板。命令列表同 init 既有 upload 模式。
+        auto upload = device->createCommandList();
+        upload->open();
+        const std::uint32_t zeros[4] = {0, 0, 0, 0};
+        upload->beginTrackingBufferState(classCounts_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(classCounts_, zeros, sizeof(zeros));
+        const std::uint32_t argsTpl[5] = {
+            identityIndex_->getDesc().byteSize / sizeof(std::uint32_t), 0u, 0u, 0u, 0u};
+        upload->beginTrackingBufferState(argsHard_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(argsHard_, argsTpl, sizeof(argsTpl));
+        upload->close();
+        device->executeCommandList(upload);
+    }
+    swSplit_ = swSplit;
+    if (swSplit) {
+        // classifyCB_（volatile 32B）：[0] = (scale, near, threshold, clusterCount)
+        // [1] = (eye, 0)。threshold 每帧自 FrameParams.swThresholdPx 覆写。
+        nvrhi::BufferDesc cbDesc;
+        cbDesc.byteSize = 32;
+        cbDesc.isConstantBuffer = true;
+        cbDesc.isVolatile = true;
+        cbDesc.maxVersions = 16;
+        cbDesc.debugName = "ClassifyConstants";
+        classifyCB_ = device->createBuffer(cbDesc);
+        if (!classifyCB_) { outError = "createBuffer failed for classify CB"; return false; }
+
+        const auto loadClsShader = [&](const char* artifact,
+                                       nvrhi::ShaderHandle& out) -> bool {
+            std::vector<std::uint8_t> blob;
+            const std::string path = std::string(NL_SHADER_DIR) + "/classify." +
+                                     artifact + "." + shaderSuffix;
+            if (!readFileBytes(path.c_str(), blob)) {
+                outError = "failed to load " + std::string(artifact) + " (" +
+                           std::string(shaderSuffix) + ") from " NL_SHADER_DIR;
+                return false;
+            }
+            nvrhi::ShaderDesc sd;
+            sd.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+            out = device->createShader(sd, blob.data(), blob.size());
+            return out != nullptr;
+        };
+        if (!loadClsShader("csclassify", csClassify_) ||
+            !loadClsShader("csargspatch", csArgsPatch_)) return false;
+
+        // 布局：b0 + t0,t1 SRV + u0..u3 UAV（类型逐槽，M14B1 Vulkan 教训照单）。
+        nvrhi::BindingLayoutDesc cDesc;
+        cDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3));
+        classifyLayout_ = device->createBindingLayout(cDesc);
+        if (!classifyLayout_) { outError = "createBindingLayout failed for classify"; return false; }
+
+        { nvrhi::ComputePipelineDesc cp;
+          cp.setComputeShader(csClassify_).addBindingLayout(classifyLayout_);
+          classifyPSO_ = device->createComputePipeline(cp); }
+        { nvrhi::ComputePipelineDesc cp;
+          cp.setComputeShader(csArgsPatch_).addBindingLayout(classifyLayout_);
+          argsPatchPSO_ = device->createComputePipeline(cp); }
+        if (!classifyPSO_ || !argsPatchPSO_) {
+            outError = "createComputePipeline failed for classify"; return false;
+        }
+
+        nvrhi::BindingSetDesc csDesc;
+        csDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, classifyCB_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visibleList_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, clusterSpheres_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, softList_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, hardList_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, classCounts_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, argsHard_));
+        classifySet_ = device->createBindingSet(csDesc, classifyLayout_);
+        if (!classifySet_) { outError = "createBindingSet failed for classify"; return false; }
+        // visRasterHardSet_（t4 = hardList_，含 visBuffer_ 依赖槽）在
+        // ensureVisbufTargets 随 visRasterSet_ 同批分建（visBuffer_ 懒建）。
+    }
+
     nl::core::log::infoCh("scene", "soft raster ready: ", nmeshFile,
-                          " | clusters=", clusterCount_, " | shader=", shaderSuffix);
+                          " | clusters=", clusterCount_, " | shader=", shaderSuffix,
+                          swSplit_ ? " | split=soft<=thresholdPx (M14A2)"
+                                   : " | full-soft (M14A1)");
     return true;
 }
 
@@ -5204,6 +5325,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     if (w == 0 || h == 0) { outError = "visbuf: zero viewport"; return false; }
     if (visBuffer_ && visW_ == w && visH_ == h && visRasterSet_ && visVizSet_
         && (!softRaster_ || softRasterSet_)
+        && (!swSplit_ || visRasterHardSet_)
         && (!pulling_ || matResolveSet_)) return true;
     visW_ = w;
     visH_ = h;
@@ -5235,6 +5357,23 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     visRasterSet_ = device->createBindingSet(rSet, visRasterLayout_);
     if (!visRasterSet_) { outError = "createBindingSet failed for vis raster"; return false; }
 
+    // M14A2：HW 硬簇 raster set——与 visRasterSet_ 同布局同构（§2.7 分建），
+    // t4 换 hardList_（classify 产出的硬簇 compact 表）。
+    if (swSplit_) {
+        nvrhi::BindingSetDesc hSet;
+        hSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
+            .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, visConstants_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, hardList_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
+        visRasterHardSet_ = device->createBindingSet(hSet, visRasterLayout_);
+        if (!visRasterHardSet_) {
+            outError = "createBindingSet failed for vis raster hard"; return false;
+        }
+    }
+
     // viz set 把同一块 buffer 绑成 SRV(t0)：与 raster 的 UAV(u0) 只是两个视图，
     // 不涉及拷贝。§2.7 单 BindingSet 指每条管线一个 set，不是全场只能有一个。
     nvrhi::BindingSetDesc vSet;
@@ -5253,6 +5392,9 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_))
+            // M14A2：t5/t6 = 软列表 + 分类计数（split=0 时内容恒零，老路径零扰动）。
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, softList_))
+            .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, classCounts_))
             .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
         softRasterSet_ = device->createBindingSet(sSet, softRasterLayout_);
         if (!softRasterSet_) { outError = "createBindingSet failed for soft raster"; return false; }
@@ -6695,7 +6837,63 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                 // 每线程 1 三角），dispatch = 总簇数（frustum 恒关 → visibleList_
                 // = 恒等全簇，bevy cull_clusters 分流留 M14A2）。
                 // M-PERF1：visRaster pass 计时（--pass-timing 关 = begin 直返 false）。
+                // M14A2（Q-A2 = A2-A）：swSplit_ 先 classify（软/硬列表 + counts +
+                // argsHard[1]=hardCount 回填），再 HW 硬簇 draw（visRasterHardSet_ +
+                // argsHard_）+ SW 软簇 dispatch——两路写同一块 visBuffer_（u64
+                // atomicMin 合并，顺序无关，UE「vis 编码统一 resolve 无感」口径）。
+                if (swSplit_) {
+                    const bool ptCls = passTimers_.begin(cmd, PassTimers::kPassClassify);
+                    // classifyCB_ 每帧全量覆写（volatile 8 float）：
+                    // [0] = (scale, near, thresholdPx, clusterCount)，[1] = (eye, 0)。
+                    // scale/near/eye 由 viewer 在 soft-raster 模式填 FrameParams
+                    //（dag/hiz/probe 同款填法）。
+                    const float ccb[8] = {
+                        params.projYScale * 0.5f * params.viewportHeight,
+                        params.nearPlane, params.swThresholdPx,
+                        static_cast<float>(clusterCount_),
+                        params.eye[0], params.eye[1], params.eye[2], 0.0f};
+                    cmd->writeBuffer(classifyCB_, ccb, sizeof(ccb));
+                    // counts 每帧清零（writeBuffer = CopyDest 初态 → UAV atomicAdd，
+                    // indirectArgs_ 同款轮转；不清 = 跨帧累加爆表）。z = split 旗标
+                    //（csSoftRaster 分流分支的开关；M14A2 首测教训：原子只累加
+                    // x/y，旗标必须由 CPU 每帧随清零写入，否则 SW 恒全画）。
+                    const std::uint32_t cZeros[4] = {0, 0, swSplit_ ? 1u : 0u, 0};
+                    cmd->writeBuffer(classCounts_, cZeros, sizeof(cZeros));
+                    cmd->setBufferState(softList_, nvrhi::ResourceStates::UnorderedAccess);
+                    cmd->setBufferState(hardList_, nvrhi::ResourceStates::UnorderedAccess);
+                    cmd->setBufferState(classCounts_, nvrhi::ResourceStates::UnorderedAccess);
+                    cmd->setBufferState(argsHard_, nvrhi::ResourceStates::UnorderedAccess);
+                    {
+                        nvrhi::ComputeState cstate;
+                        cstate.setPipeline(classifyPSO_).addBindingSet(classifySet_);
+                        cmd->setComputeState(cstate);
+                        cmd->dispatch((clusterCount_ + 63u) / 64u, 1, 1);
+                        cstate.setPipeline(argsPatchPSO_);
+                        cmd->setComputeState(cstate);
+                        cmd->dispatch(1, 1, 1);
+                    }
+                    if (ptCls) passTimers_.end(cmd, PassTimers::kPassClassify);
+                }
                 if (softRaster_) {
+                    if (swSplit_) {
+                        // HW 硬簇先画（argsHard_[1] = hardCount，classify 回填）。
+                        const bool ptVisHard = passTimers_.begin(cmd, PassTimers::kPassVisRaster);
+                        cmd->setBufferState(visBuffer_, nvrhi::ResourceStates::UnorderedAccess);
+                        cmd->setBufferState(argsHard_, nvrhi::ResourceStates::IndirectArgument);
+                        nvrhi::GraphicsState rstate;
+                        rstate.setPipeline(visRasterPSO_)
+                              .setFramebuffer(framebuffer)
+                              .addBindingSet(visRasterHardSet_)
+                              .setIndexBuffer(nvrhi::IndexBufferBinding()
+                                  .setBuffer(identityIndex_).setFormat(nvrhi::Format::R32_UINT)
+                                  .setOffset(0));
+                        rstate.viewport.addViewportAndScissorRect(viewport);
+                        rstate.setIndirectParams(argsHard_);
+                        cmd->setGraphicsState(rstate);
+                        noteDraw();  // M-TR0 K1: draw-call counter
+                        cmd->drawIndexedIndirect(0, 1);
+                        if (ptVisHard) passTimers_.end(cmd, PassTimers::kPassVisRaster);
+                    }
                     const bool ptSoft = passTimers_.begin(cmd, PassTimers::kPassSoftRaster);
                     cmd->setBufferState(visBuffer_, nvrhi::ResourceStates::UnorderedAccess);
                     nvrhi::ComputeState sstate;
@@ -8563,6 +8761,19 @@ void Scene::shutdown() {
     softRasterLayout_ = nullptr;
     softRasterSet_ = nullptr;
     softRasterPSO_ = nullptr;
+    // M14A2：classify 基建同批释放（M7.1「句柄活到 device 析构之后 = UAF」教训）。
+    csClassify_ = nullptr;
+    csArgsPatch_ = nullptr;
+    classifyCB_ = nullptr;
+    softList_ = nullptr;
+    hardList_ = nullptr;
+    classCounts_ = nullptr;
+    argsHard_ = nullptr;
+    classifyLayout_ = nullptr;
+    classifyPSO_ = nullptr;
+    argsPatchPSO_ = nullptr;
+    classifySet_ = nullptr;
+    visRasterHardSet_ = nullptr;
     for (auto& b : modelBatches_) {
         b.set = nullptr;
         b.lightConstants = nullptr;

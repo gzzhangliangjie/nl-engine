@@ -49,3 +49,31 @@ M14A1 全软光栅对照 → M14A2 才加分流。理由：先拿正确性基线
 M14A1/M14A2 验收对比脚本**排除同深度像素**（硬件光栅同深度像素胜者也不确定，无 bit-exact 期望），单独输出「同深度像素率」统计留档。
 
 **冻结面解除**：M14A1 允许落码 `soft_raster.slang`、`ViewMode::SoftRaster` 追加、renderer 接线、CMake 登记；主树/master 仍一行不碰。
+
+## 4. M14A2 验收记录（2026-11-13，SW/HW 分流）
+
+**实现**：`classify.slang`（csClassify 64 线程分类 + csArgsPatch 1 线程回填
+argsHard[1]=hardCount）；判据 = 2×球投影半径方块 ≤ thresholdPx（bevy cull_clusters
+64px 口径，球投影 AABB 近似，偏差已注明）；帧路径 = classify → HW 硬簇
+（visRasterHardSet_ + argsHard_）→ SW 软簇（csSoftRaster split 分支）——两路写
+同一块 visBuffer_（u64 atomicMin 合并，UE「vis 编码统一」口径）。阈值
+`--sw-threshold <px>`（默认 64，clamp 8..256）+ HUD 滑条（soft-raster + --sw-split
+才 show，既有 --hud 基线零布局变化）。clusterSpheres_ 去 frustum 门控恒创建。
+
+**验收数值（DX12 实测，VULKAN 分流模式 deviceErrors=0 同跑通）**：
+
+| 场景 | 对比 | 差异率 | 结论 |
+|---|---|---|---|
+| 默认机位 th=64 | split vs A1 全软 | **0.000%** | 全簇 ≤64px → 全软，与 A1 逐位一致 |
+| 默认机位 th=8 | split vs A1 全软 / vs 全硬件 | 1.359% / 2.048% | 真混合（部分簇 >8px 走硬路） |
+| 近机位 dist1.2 th=8/64 | split vs 全硬件 | 1.629% | 全硬（近处簇全 >64px，两档同侧）；差异 = 簇边界同深度竞争像素（Q-A3 口径，atomic 顺序敏感） |
+| 远机位 dist18 th=64 | split vs 全硬件 | **0.513%** | 亚像素域 SW/HW 边缘规则差（Q-A3 口径） |
+| dist18 + 0.25°/帧 ×24 帧 | HW 连续帧差异率 vs SW | **0.205% vs 0.128%（1.59x）** | **远景闪烁证据**：同机位同转速下 SW 分流域帧间抖动低 37% |
+
+**踩坑**：① counts.z（split 旗标）CPU 清零时必须随帧写入——原子只累加 x/y，旗标
+没人写 → SW 恒全画（首测 th8/th64 输出逐位相同的根因）；② NVRHI BindingSet
+类型逐槽（M14B1 教训复用）；③ --screenshot-seq 模式主循环不限帧数（1699 帧
+SIGTERM 掐停），长序列用后台 + 轮询够数即停。
+
+**待办（M14A3 收官）**：example 卡（s14a-split）+ cases.json + tag `s14a-correct`/
+`s14-softrast` + profile 定默认阈值 + 帧时间对比。

@@ -378,10 +378,16 @@ void Hud::build(HudFrame& frame) {
         ImGui::SliderFloat("reject threshold", &frame.rejectThreshold, 0.0005f, 0.10f, "%.4f");
         ImGui::Separator();
     }
+    // M14A2（S14-A）：软光栅分流阈值面板（soft-raster + --sw-split 才 show，
+    // 默认 false = 既有 --hud 基线零布局变化）。
+    if (frame.swRasterPanelShow) {
+        ImGui::SliderFloat("sw split threshold px", &frame.swThreshold, 8.0f, 256.0f, "%.0f");
+        ImGui::Separator();
+    }
     // M-PERF1：per-pass GPU 计时面板（Q-P5；--pass-timing 才 show，默认关 =
     // 既有 --hud 基线零布局变化）。行名 = PassTimers::name(i)（ASCII），
     // 数值 = pollPassTimers 写回；本帧未跑/未 resolve 的 pass 显示 "--"。
-    static_assert(PassTimers::kPassCount == 14,
+    static_assert(PassTimers::kPassCount == 15,
                   "HudFrame.passTimingMs/Valid table size (14) mismatch");
     if (frame.passTimingShow) {
         ImGui::Separator();

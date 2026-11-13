@@ -341,7 +341,7 @@ public:
     // 帧内三段式变为 clear → csSoftRaster dispatch（1 簇 1 workgroup，
     // atomicMin 写同一块 u64 buffer）→ 全屏 viz（与 visbuf 模式逐位同链）。
     bool initSoftRaster(nvrhi::IDevice* device, const char* shaderSuffix,
-                        const char* nmeshFile, std::string& outError);
+                        const char* nmeshFile, bool swSplit, std::string& outError);
 
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
@@ -961,9 +961,26 @@ private:
     bool                         softRaster_ = false;
     bool                         softRasterFailed_ = false;  // 失败只报一次
     nvrhi::ShaderHandle          csSoftRaster_;
-    nvrhi::BindingLayoutHandle   softRasterLayout_; // b0 + b1 + t1..t4 + u0（compute）
+    nvrhi::BindingLayoutHandle   softRasterLayout_; // b0 + b1 + t1..t6 + u0（compute）
     nvrhi::ComputePipelineHandle softRasterPSO_;
     nvrhi::BindingSetHandle      softRasterSet_;
+    // M14A2（S14-A）：SW/HW 分流（Q-A2 = A2-A 拍板）——cull 后 classify compute
+    // 产出软/硬 compact 列表；HW indirect 吃硬列表（argsHard GPU 回填
+    // instanceCount），SW dispatch 恒总簇数、shader 内按 counts.x 早退。
+    bool                         swSplit_ = false;
+    bool                         swSplitFailed_ = false;  // 失败只报一次
+    nvrhi::ShaderHandle          csClassify_;
+    nvrhi::ShaderHandle          csArgsPatch_;
+    nvrhi::BufferHandle          classifyCB_;      // volatile 32B（投影参数+阈值）
+    nvrhi::BufferHandle          softList_;        // 软簇 compact（clusterCount*4B）
+    nvrhi::BufferHandle          hardList_;        // 硬簇 compact
+    nvrhi::BufferHandle          classCounts_;     // uint4 {soft,hard,split,0}
+    nvrhi::BufferHandle          argsHard_;        // DrawIndexedIndirectArgs，[1] GPU 回填
+    nvrhi::BindingLayoutHandle   classifyLayout_;  // b0 + t0..t2 + u0..u3
+    nvrhi::ComputePipelineHandle classifyPSO_;
+    nvrhi::ComputePipelineHandle argsPatchPSO_;
+    nvrhi::BindingSetHandle      classifySet_;
+    nvrhi::BindingSetHandle      visRasterHardSet_;// = visRasterSet_ 同构，t4 = hardList_
     bool ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                              std::string& outError);
 

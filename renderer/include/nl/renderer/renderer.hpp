@@ -165,6 +165,11 @@ struct FrameParams {
     // ---- M-PERF1：per-pass GPU 计时（Q-P5，--pass-timing 开启；默认关 = 渲染
     // 路径零变化，冻结基线 bytes 不动）。Scene 侧单向锁存（开了不关），query 懒建。
     bool  passTiming          = false;
+
+    // ---- M14A2（S14-A）：SW/HW 分流阈值（soft-raster + --sw-split 消费）。
+    // 簇投影 AABB（2×球投影半径方块）≤ 阈值 → 软簇（compute 光栅），反之为硬。
+    // bevy cull_clusters 64px 口径；HUD 滑条可调（8..256），默认 64。
+    float swThresholdPx       = 64.0f;
 };
 
 // M0.5 HUD：viewer -> HUD 的显示数据 + HUD -> viewer 的控件值，双向 POD。
@@ -318,8 +323,12 @@ struct HudFrame {
     // 既有 --hud 基线零布局变化）。行名固定在 renderer 侧 PassTimers::name(i)
     //（gpu_timer.hpp，13 项），POD 只传数值；槽位序 = PassId 枚举序。
     bool  passTimingShow      = false;
-    float passTimingMs[14]    = {};   // M14A1（S14-A）：+softRaster（14 槽）
-    bool  passTimingValid[14] = {};
+    float passTimingMs[15]    = {};   // M14A1（S14-A）：+softRaster/classify（15 槽）
+    bool  passTimingValid[15] = {};
+
+    // ---- M14A2（S14-A）：软光栅分流阈值面板（soft-raster 模式才 show）。
+    bool  swRasterPanelShow   = false;
+    float swThreshold         = 64.0f;
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
@@ -469,7 +478,8 @@ public:
                                             // M14A1（S14-A）：--mode soft-raster
                                             //（compute 软光栅对照，走 initSoftRaster =
                                             // initVisbuf 基础链 + csSoftRaster）。
-                                            bool softRasterMode = false);
+                                            bool softRasterMode = false,
+                                            bool swSplit = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
