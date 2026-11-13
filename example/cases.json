@@ -9765,7 +9765,7 @@
      "id": "cachesim",
      "name": "cachesim：确定性仿真 + 俯视热图落盘",
      "kind": "tool",
-     "note": "确定性仿真：16 帧 740 cells / peak probes 1；热图 active cells XY 投影按 cell 尺寸填充，hash 伪彩 x life 亮度。",
+     "note": "确定性仿真：16 帧 716 cells / peak probes 1；热图 active cells XY 投影按 cell 尺寸填充，hash 伪彩 x life 亮度。cells 740→716 = makeKey position-only 同构重标定（2026-11-13，GPU wcMakeKey/ptMakeKey M11.2 已丢弃法线分量）。",
      "args": [
       "cachesim",
       "--frames",
@@ -9774,7 +9774,7 @@
       "{out}"
      ],
      "expectExit": 0,
-     "expectLog": "cells        : 740",
+     "expectLog": "cells        : 716",
      "command": "gi-tools cachesim --frames 16 --png {out}",
      "exe": {
       "dx12": "build/DX12/gi-tools.exe",

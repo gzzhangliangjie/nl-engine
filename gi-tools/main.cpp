@@ -79,31 +79,24 @@ struct WorldCacheSim {
     static std::uint32_t u(int v) { return static_cast<std::uint32_t>(v); }
 
     // CPU 仿真 keying（结构沿用 shader：量化 → pcg 链定槽 / iqint 链出校验和；0 保留为空槽）。
+    // 与 GPU wcMakeKey/ptMakeKey 同构：只量化世界位置（cellSize=0.5m → floor(pos*2)）。
+    // M11.2 根因修复——GPU 当时已丢弃法线分量（法线入 key 致查询恒 miss），CPU 仿真侧此前仍
+    // 折入 |nrm|、与 GPU 不同构（silent 跑着一套不同的缓存布局，见 docs/MILESTONES.md
+    // §「s11-hash/cacheviz 基线重拍」）。本轮修正使 CPU 与 GPU 真同构。nrm 参数保留以维持调用
+    // 点接口不变，但不再参与 keying（法线仍用于 cell 光照计算，只是不进 key）。
     void makeKey(const float pos[3], const float nrm[3],
                  std::uint32_t& key, std::uint32_t& checksum) const {
+        (void)nrm;   // position-only keying：法线不再折入 key（与 GPU 同构）
         const int px = static_cast<int>(std::floor(pos[0] * 2.0f));
         const int py = static_cast<int>(std::floor(pos[1] * 2.0f));
         const int pz = static_cast<int>(std::floor(pos[2] * 2.0f));
-        // |nrm| 折入 key：填充(|真实法线|)与查询(|dir|=|外法线|) key 一致，曲面下不再符号相反。
-        // 注意：M11.2 后 GPU wcMakeKey/ptMakeKey 已改为 position-only（丢弃法线分量），故 CPU
-        // 此 key 与 GPU 不同构。gi-tools 是独立参考实现，其 key 不可直接对拍 GPU（已知项，见
-        // docs/MILESTONES.md §「s11-hash/cacheviz 基线重拍」）。
-        const int nx = static_cast<int>(std::floor(std::fabs(nrm[0]) + 0.0001f));
-        const int ny = static_cast<int>(std::floor(std::fabs(nrm[1]) + 0.0001f));
-        const int nz = static_cast<int>(std::floor(std::fabs(nrm[2]) + 0.0001f));
         std::uint32_t k = hashes::pcg(u(px));
         k = hashes::pcg(k + u(py));
         k = hashes::pcg(k + u(pz));
-        k = hashes::pcg(k + u(nx));
-        k = hashes::pcg(k + u(ny));
-        k = hashes::pcg(k + u(nz));
         key = k & mask;
         std::uint32_t c = hashes::iqint(u(px));
         c = hashes::iqint(c + u(py));
         c = hashes::iqint(c + u(pz));
-        c = hashes::iqint(c + u(nx));
-        c = hashes::iqint(c + u(ny));
-        c = hashes::iqint(c + u(nz));
         checksum = std::max(c, 1u);   // 0 保留为空槽
     }
 
@@ -811,14 +804,21 @@ static bool selftestCachesim() {
         simCacheUpdate(sim, 0u, lt);
         simCacheBlend(sim);
         const std::uint32_t slot = sim.find(p, n);
-        const float after1 = sim.table[slot].rad[0] + sim.table[slot].rad[1] + sim.table[slot].rad[2];
-        CHECK(after1 > 0.f, "blend: sky-only sample lands (albedo*sky > 0)");
+        CHECK(slot != sim.capacity, "blend: touched cell resolvable after update");
         CHECK(sim.table[slot].samples == 1.f, "blend: sample count increments");
-        // cap 64 后样本数不再增长
+        // 「天空样本落进 cell」不能按首帧断言：GI 射线方向 seed = pcg(slot)^frame
+        // 与槽号相关，keying 改变槽号后首帧方向可能命中邻接箱 B 侧面——命中点
+        // 与本 cell 同 voxel（find 命中自身但 rad=0）或异 voxel（miss→0），两者
+        // 都是 M11.1 正确语义（cache miss → 0 多帧收敛填充），不是 blend bug。
+        // 故改为收敛窗口断言：80 帧中至少一轮 GI 射线到达开放天空，rad 非零。
         for (int f = 1; f < 80; ++f) {
             simCacheUpdate(sim, static_cast<std::uint32_t>(f), lt);
             simCacheBlend(sim);
         }
+        const float radSum = sim.table[slot].rad[0] + sim.table[slot].rad[1]
+                           + sim.table[slot].rad[2];
+        CHECK(radSum > 0.f, "blend: sky sample lands within convergence window (albedo*sky > 0)");
+        // cap 64 后样本数不再增长
         CHECK(sim.table[slot].samples == 64.f, "blend: sample count capped at 64");
         // 后期收敛步长 = 1/64：相邻两帧变化不超过步长 x 解析上界
         const float before = sim.table[slot].rad[0];
