@@ -11049,6 +11049,116 @@
     }
    ],
    "tag": "s13-preblas"
+  },
+  {
+   "id": "s13-merge",
+   "label": "S13.1",
+   "name": "可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（M13.1，拍板 A）",
+   "date": "2026-11-13",
+   "summary": "M13.1（S13 灵魂里程碑，用户拍板 A = TLAS 直挂可见簇 BLAS 多实例，RTXMG 同构）：① 可见簇列表回读环形——2 槽 host-visible（每槽全簇 id 列表 + 尾部 4B 可见数），cull/dag dispatch 后整表拷入（visibleList_ UAV→CopySource 由 NVRHI 跟踪插转换），pollClusterVisible 延迟两帧消费（pollCullStats 同窗口纪律，mapBuffer 内部等 lastUseFence 零等待）；② TLAS 直挂——buildClusterTlasFrame 每帧全量 rebuild，实例源两级：回读列表就绪用动态 cut（instanceID=全局簇 id，24-bit）否则全簇恒等列表（rt 链 frustum 恒关无 dispatch =「全簇全画」cut 语义）；③ TLAS 容量随簇规模换装（initClusterBlas 尾部重建，Suzanne 324/Occl 43547；无 fallback 资产在 --cluster-blas 下不再跳过 TLAS）；④ --tlas-probe 探针/--tlas-spin（全实例共用变换）/HUD TLAS 行全部复用。实测：dag 回读 237/324 与 frustum 行精确对应、双后端逐字节一致；rt 伪彩 = 数百簇级 hue（fallback 单实例 = 单 hue，M13.1 自检「命中的是精细簇」视觉实锤）；Occl 43547 实例/帧 rebuild 零 DEVICE（31s 含加载）。原计划「聚合 BLAS（clone/compact）」NVRHI 无 Instances 型不可行（nvrhi.h:1568），拍板 A 落地；B（fallback 混合）否决。",
+   "acceptance": [
+    "dag 模式回读通路：--cluster-blas 帧首全簇 324 → 帧 3 起 'cluster-tlas: 237 instances (source=readback visible list frame 0)'（固定相机双后端逐字节一致，与 HUD frustum 237/324 行对应）",
+    "rt 模式：'cluster-tlas: per-frame rebuild active | instances=324 (full cluster list — readback not ready)' + --rt-debug id 伪彩每簇一 hue（fallback 基线单 hue），命中精细簇视觉实锤",
+    "万级规模：OcclScene1M 43547 TLAS 实例每帧 rebuild，deviceErrors=0 零 TDR",
+    "保形：不传 --cluster-blas 时 rt/dag 既有路径零扰动（s8.0/s8.2 抽查 bytes 全绿）",
+    "example/s13-merge 归位（4 基线 PNG + run.bat verify 全绿）+ cases.json s13-merge 卡"
+   ],
+   "tag": "s13-merge",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "clustertlas-rt-id",
+     "name": "rt 伪彩：TLAS 直挂全簇 BLAS（每簇一 hue，命中精细簇）",
+     "kind": "pair",
+     "note": "rt 链 frustum 恒关 → 回读恒未就绪 → TLAS = 全簇恒等列表（全簇全画 cut 语义）。伪彩 hue 按 instance index = 簇 id，数百色块 = 精细几何；fallback 单实例基线 = 单 hue。rt 模式缺省资产 Suzanne.nmesh（无 fallback 段，M13.1 起 --cluster-blas 下 TLAS 不再跳过）。",
+     "args": [
+      "--mode",
+      "rt",
+      "--cluster-blas",
+      "--rt-debug",
+      "id",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "cluster-tlas: per-frame rebuild active | instances=324 (full cluster list — readback not ready)",
+     "command": "viewer.exe --mode rt --cluster-blas --rt-debug id --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s13-merge/run.bat verify",
+     "baselines": {
+      "dx12": "example/s13-merge/clustertlas-rt-id-dx12.png",
+      "vulkan": "example/s13-merge/clustertlas-rt-id-vulkan.png"
+     }
+    },
+    {
+     "id": "clustertlas-dag-hud",
+     "name": "dag 回读通路：TLAS 实例数 = S5 可见簇数（HUD 证据行）",
+     "kind": "pair",
+     "note": "S5 遍历每帧 dispatch → 可见簇列表整表拷入 2 槽回读环形 → 延迟两帧消费 → TLAS 每帧 rebuild（instanceID=全局簇 id）。帧 1 全簇 324（窗口未填满），帧 3 起回读列表。HUD 'TLAS : 237 inst' 与 'frustum : 237 / 324 clusters' 精确对应。",
+     "args": [
+      "--mode",
+      "dag",
+      "--hud",
+      "--cluster-blas",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "12",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "4.2",
+      "--size",
+      "640x720"
+     ],
+     "expectLog": "cluster-tlas: 237 instances (source=readback visible list frame 0)",
+     "command": "viewer.exe --mode dag --hud --cluster-blas --screenshot <out.png> --frames 12 --yaw 12 --pitch 9 --dist 4.2 --size 640x720",
+     "script": "example/s13-merge/run.bat verify",
+     "baselines": {
+      "dx12": "example/s13-merge/clustertlas-dag-hud-dx12.png",
+      "vulkan": "example/s13-merge/clustertlas-dag-hud-vulkan.png"
+     }
+    },
+    {
+     "id": "clustertlas-occl",
+     "name": "万级规模：OcclScene1M 43547 TLAS 实例每帧 rebuild（pair 小图）",
+     "kind": "pair",
+     "note": "拍板 A 的万级实例压力实测：43547 实例/帧全量 rebuild，零 TDR 零 DEVICE（8 帧 ~31s 含加载与 BLAS 预建）。运行 ~31s/后端，RUN_TIMEOUT 90s 内。",
+     "args": [
+      "--mode",
+      "rt",
+      "--model",
+      "OcclScene1M.nmesh",
+      "--cluster-blas",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "320x240"
+     ],
+     "expectLog": "cluster-tlas: per-frame rebuild active | instances=43547",
+     "command": "viewer.exe --mode rt --model OcclScene1M.nmesh --cluster-blas --screenshot <out.png> --frames 8 --size 320x240",
+     "script": "example/s13-merge/run.bat verify",
+     "baselines": {
+      "dx12": "example/s13-merge/clustertlas-occl-dx12.png",
+      "vulkan": "example/s13-merge/clustertlas-occl-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }

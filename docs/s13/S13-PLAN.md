@@ -17,9 +17,17 @@
 
 **三处实读结论（2026-11-13）**：Carrot = per-group 惰性 BLAS 缓存 + readback 下帧 CPU 消费（对象粒度粗一层，簇几何自身建 BLAS/常驻/按 id 索引同构）；bevy_solari = per-mesh 常驻 + compaction 队列；UE Nanite RT = per-resource BLAS + `r.RayTracing.Nanite.LODBias` 选层 + AuxiliaryData 命中回簇 + 64MB BLAS 缓存池。**无一家做 per-cluster 万级 BLAS**；S13-PLAN 拍板的每簇预建照落（est ~181MB 实测可承受），聚合形态见 M13.1 拍板项。
 
-## M13.1 回读 + 聚合 + TLAS 重建（2~3 天，灵魂里程碑）⚠️ 开工闸：聚合形态待拍板
+## M13.1 回读 + 聚合 + TLAS 重建（2~3 天，灵魂里程碑）✅ 已收官 2026-11-13（拍板 A，tag `s13-merge`）
 
-> **待拍板（2026-11-13 M13.0 实读发现）**：计划原文「拷贝/引用进当帧聚合 BLAS（NVRHI AS clone/compact）」在 NVRHI 抽象下**不可行**——`rt::GeometryDesc` 只有 Triangles/AABBs 两型（nvrhi.h:1568），无 Instances 型；BLAS 内引用子 BLAS 是 Vulkan 原生扩展语义，DX12 无此路径，NVRHI 不暴露。候选方案：**A = TLAS 直挂可见簇 BLAS 多实例**（回读列表 → 当帧 TLAS 每实例一簇，hit shader 用 instanceID=全局簇 id 反查几何；RTXMG 同构，每帧 TLAS rebuild 已是 M8.1 UE 口径，实例数 = 可见簇数千级）vs **B = 回退 fallback+簇混合**（可见簇区域用预建 BLAS，其余打 fallback BLAS，TLAS 实例数恒 2）。代价矩阵开工时补齐交用户拍板，拍板前冻结 M13.1 落码。
+> **已拍板 A = TLAS 直挂可见簇 BLAS 多实例**（2026-11-13 用户拍板）：回读列表 → 当帧 TLAS 每实例一簇，`instanceID = 全局簇 id`，hit shader 按 id 反查几何；RTXMG 同构，每帧 TLAS rebuild 已是 M8.1 UE 口径，实例数 = 可见簇数千级。B（fallback 混合双实例）否决：接缝精度降，且 fallback 粗模正是 S13 要消灭的对象。原计划「拷贝/引用进当帧聚合 BLAS」在 NVRHI 抽象下不可行（`rt::GeometryDesc` 只有 Triangles/AABBs，无 Instances 型，nvrhi.h:1568）。
+
+- [x] S5 遍历的可见簇列表**延迟回读**（2 槽 host-visible 环形，每槽 = 全簇 id 列表 + 尾部 4B 可见数；cull/dag dispatch 后整表拷入，`pollClusterVisible` 延迟两帧消费——pollCullStats 同窗口纪律，mapBuffer 内部等 lastUseFence 零等待，绝不同帧等待底线保持）
+- [x] 每帧按回读列表把对应预建 BLAS **引用**进当帧 TLAS（`buildClusterTlasFrame`：全量 rebuild + instanceID=全局簇 id；实例源两级——回读就绪用动态 cut，未就绪（rt 链 frustum 恒关无 dispatch / 前 2 帧窗口）退全簇恒等列表 = 「全簇全画」cut 语义；TLAS 容量随簇规模换装，initClusterBlas 尾部重建，无 fallback 资产不再跳过 TLAS）
+- [x] S8 的 `--mode rt` 切到簇 BLAS 上验证：`--rt-debug id` 伪彩每簇一 hue（fallback 单实例基线 = 单 hue）——近看命中的是精细簇视觉实锤；HUD `TLAS : 237 inst` 与 `frustum : 237 / 324 clusters` 精确对应；OcclScene1M 43547 实例/帧 rebuild 零 TDR
+
+**自检**：✅（run.bat verify 全绿 + regression `--only s13-merge` 6/6 bytes + 保形 `--only s8.0/s8.2` 4/4 bytes + `server.py --check` 0 + dag 回读 237 双后端逐字节一致 + deviceErrors=0）。tag：`s13-merge`。
+
+**实现注记（拍板 A 落地细节）**：instanceID 24-bit（16M 上限，43k 远在内）；`--tlas-spin` 全实例共用同一变换（M8.1 证据链复用）；`--tlas-probe` 探针原样可用（trace 的是簇 BLAS）；rt.slang 零改动（CommittedInstanceIndex 上色，全簇恒等序 index==id 与 fallback 单实例同 hue 基线，保形 bytes 全绿实证）。回读窗口 = submitted-2（两帧）：比 plan 原文「延迟一帧」多一帧的几何滞后，代价性质相同（GI/反射边缘轻微滞后），换来 mapBuffer 零等待窗口的既有纪律复用。
 
 ⚠️ 常见坑：
 - 簇几何是**去重的局部索引**，BLAS 输入需要重展开成完整三角形——格式转换工具函数放 nanite-tools 或共享库
@@ -27,9 +35,9 @@
 
 ## M13.1 回读 + 聚合 + TLAS 重建（2~3 天，灵魂里程碑）
 
-- [ ] S5 遍历的可见簇列表**延迟一帧回读**（readback buffer 双缓冲，绝不同帧等待）
-- [ ] 每帧按回读列表：把对应预建 BLAS **拷贝/引用**进当帧聚合 BLAS（NVRHI AS clone/compact 相关 API）→ 建 TLAS
-- [ ] S8 的 `--mode rt` 切到聚合 BLAS 上验证：光追几何 = 当前 cut 几何
+- [x] S5 遍历的可见簇列表**延迟回读**（readback buffer 双缓冲，绝不同帧等待）
+- [x] 每帧按回读列表：把对应预建 BLAS **引用**进当帧 TLAS（原「聚合 BLAS + clone/compact」NVRHI 无 Instances 型不可行 → 拍板 A 改 TLAS 直挂多实例，见上节）
+- [x] S8 的 `--mode rt` 切到簇 BLAS 上验证：光追几何 = 当前 cut 几何（rt 链 cut 语义 = 全簇全画；dag 链 = S5 动态 cut）
 
 **自检**：近看模型，调试射线命中的是精细簇（不再是 fallback 粗模）；帧时间无尖刺。tag：`s13-merge`。
 

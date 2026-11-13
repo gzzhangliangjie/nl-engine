@@ -445,6 +445,8 @@ private:
         }
         // M4.1：开命令列表前消费两帧前的剔除计数回读（mapBuffer 零等待窗口）。
         scene_.pollCullStats(device_);
+        // M13.1：可见簇列表回读（--cluster-blas 才有数据；同窗口纪律）。
+        scene_.pollClusterVisible(device_);
         // M8.1：TLAS 探针 readback（--tlas-probe 才有数据；同样开列表前消费）。
         scene_.pollTlasProbe(device_);
         info_.visibleClusters = scene_.visibleClusters();

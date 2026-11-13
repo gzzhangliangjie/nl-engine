@@ -3262,3 +3262,23 @@
 5. **本机 PortableGit xargs arg_max 断言 abort** → `xargs git update-index` 静默不执行（wt 建坑复踩），while read 循环替代。
 
 **下一步**：M13.1（回读 + 聚合 + TLAS）**开工闸挂起**——计划原文「聚合 BLAS（NVRHI AS clone/compact）」实读确认 NVRHI `rt::GeometryDesc` 无 Instances 型（nvrhi.h:1568），BLAS 内引用子 BLAS 不可行；候选 A = TLAS 直挂可见簇 BLAS 多实例（RTXMG 同构）/ B = 可见簇+fallback 混合双实例，代价矩阵开工时摆给用户拍板，拍板写回 S13-PLAN 后才落码（已登记 S13-PLAN M13.1 节）。
+
+## S13 M13.1 — 可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（feat/s13，2026-11-13，tag `s13-merge`）
+
+**动作**：M13.0 收口时发现计划原文「聚合 BLAS（NVRHI AS clone/compact）」不可行（`rt::GeometryDesc` 仅 Triangles/AABBs，nvrhi.h:1568，无 Instances 型），候选 A/B 摆给用户 → **拍板 A = TLAS 直挂可见簇 BLAS 多实例**（RTXMG 同构；B = fallback 混合被否：接缝精度降）。落码四件：① **回读环形**——2 槽 host-visible（每槽全簇 id 列表 + 尾部 4B 可见数），cull/dag dispatch 后 `visibleList_` 整表 + `indirectArgs_[1]` 拷入当帧槽（UAV→CopySource 由 NVRHI 跟踪插转换，与 args 同款三态轮转），`pollClusterVisible` 延迟两帧消费（pollCullStats 同窗口纪律，mapBuffer 内部等 lastUseFence 零等待——「绝不同帧回读」底线保持）；② **buildClusterTlasFrame**——每帧全量 rebuild，instanceID = 全局簇 id（24-bit），实例源两级：回读就绪用动态 cut / 未就绪（rt 链 frustum 恒关无 dispatch、前 2 帧窗口）退全簇恒等列表（rt 模式「全簇全画」cut 语义，首帧即精细几何无粗模窗口）；③ **TLAS 容量换装**——initClusterBlas 尾部重建 TLAS（capacity = 簇数），initTlas skip 条件放宽（无 fallback 资产 + cluster BLAS 就绪不再跳过）；④ **复用面**——`--tlas-probe` 探针 / `--tlas-spin`（全实例共用变换）/ HUD TLAS 行 / rt.slang（CommittedInstanceIndex 上色，全簇恒等序 index==id，零 shader 改动）。交付 = `example/s13-merge/run.bat verify`（rt-id/dag-hud 双后端基线 + rt 全簇/dag 回读/Occl 规模三锚）+ cases.json 第 119 张卡 `s13-merge`（3 case）。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-merge`。`kStage` 保持 `S8.2`（B 类穿插轨道），既有 118 张卡零重拍。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；dag 回读通路：帧 1 全簇 324 → 帧 3 起 `cluster-tlas: 237 instances (source=readback visible list frame 0)`（固定相机双后端逐字节一致），HUD `TLAS : 237 inst` 与 `frustum : 237 / 324 clusters (73.1%)` 精确对应。
+- 🟢 M13.1 自检视觉实锤：`--mode rt --rt-debug id` 伪彩每簇一 hue（数百色块；fallback 单实例基线 = 单 hue）——调试射线命中的是精细簇。
+- 🟢 万级规模：OcclScene1M 43547 TLAS 实例**每帧** rebuild，8 帧 deviceErrors=0 零 TDR（~31s 含加载与 BLAS 预建）；`--only s13-merge` 6/6 bytes ALL GREEN。
+- 🟢 保形：`--only s8.0/s8.2` 4/4 bytes（不传 `--cluster-blas` 时 buildTlasFrame 头部新分支不激活，rt/dag 既有路径零扰动）；`server.py --check` exit 0；bat 编码门禁复检 0 violations（新 run.bat LF→CRLF 机械修复一次）。
+
+**踩坑情况**
+1. **initTlas 时序坑**：TLAS 在 initBlas 早段创建（两链都在 clusterCount_ 赋值之前）→ 容量拿不到簇数；修 = initClusterBlas 尾部换装重建（init 期 TLAS 无帧引用，重建安全）+ initTlas skip 条件放宽（`(!blasReady_) && !clusterBlasReady_` 才跳过——Suzanne.nmesh 无 fallback 段，旧条件直接跳 TLAS，cluster 模式下永远死路）。
+2. **initClusterBlas 签名改指针+计数**：initCull 链单层 `&nm` 直传，避免临时拷贝整份 NMeshData（Occl 1.3M tri）。
+3. **rt 链没有剔除 dispatch**（frustum 恒关 → cull 段不跑 → 回读恒未就绪）：设计把「全簇恒等列表」定为 rt 模式的 cut 语义（全簇全画 = 当前 cut），两级实例源统一进 buildClusterTlasFrame，无需特判分支。
+4. **回读窗口 = submitted-2（两帧）而非 plan 原文「一帧」**：复用 pollCullStats 既有零等待窗口纪律（mapBuffer 内部等 lastUseFence）；多一帧几何滞后，代价性质相同，PLAN 已注记。
+
+**下一步**：M13.2 接缝验收（`--mode final` GI/反射用当前 cut 几何 + LOD 切换压力测试录制屏，tag `s13-done`）——按 S13-PLAN 原计划执行，无待拍板项。
