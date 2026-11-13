@@ -11128,6 +11128,85 @@
      "command": "city-tools generate --size 0"
     }
    ]
+  },
+  {
+   "id": "w0-m2",
+   "label": "W0 M-W0.2",
+   "name": "OBB 地块递归细分 + 程序化楼体 -> OBJ 中间件 + city.scene（E1 World JSON）",
+   "tag": "w0-m2",
+   "date": "2026-11-13",
+   "summary": "M-W0.2：内区 4.5x3.0 递归细分（先 x 后 z 阈值分割 -> 4 叶）+ 每叶一栋程序化楼（RNG 分档高度 {3,8,14}m x 占地两档内缩 {0.30,0.15}m，消费追加流尾，36 shade 前缀逐字节不动）-> 每 block 一份 OBJ 中间件（8 顶点 12 三角外向绕序盒，block 局部坐标）+ city.scene（E1 World JSON，M-E2 World::serialise 形态：每 block 一实体，Transform=block 世界中心，Model.mesh 引用 OBJ）。.nmesh 化走 nanite-tools/asset-ingest 通道不自写 meshing——实测通道未就绪（viewer scene 白名单只认 .glb / nanite-tools 无 OBJ 导入），缺口登记给 asset-ingest 轨道。RNG 消费序：36 shade 前缀不变，楼体 288 次消费排流尾。",
+   "acceptance": [
+    "selftest 38 -> 53 断言全绿（新增 15：RNG 前缀契约、4 栋/块、高度恰三档、占地两档内缩、足迹在内区且两两不重叠、高度混合种子敏感、OBJ 32v/48f/4o 双跑逐字节异 seed 必异、scene E1 形态锚 version/nextID37/systems、36 实体 36 mesh 引用闭合、scene seed 无关性= E1 无 seed 键）",
+    "证据图：city_top.png 楼体占地三档灰度俯视（工具真实输出 1152x864）+ city.scene 契约锚（36 实体 / 36 OBJ 引用闭合 / 36 份 OBJ 文件）由 run.bat findstr/find/dir 逐项核过",
+    "确定性：同 seed 双跑 city.scene + block_07.obj + city_top.png 三产物 fc /b 逐字节一致；异 seed OBJ+PNG 必异、scene seed 无关（E1 schema 无 seed 键）",
+    "ctest w0-city-selftest/generate/negative/w0-roadnet/w0-cityscene 双树各 5/5（--repeat until-pass:3）；双后端构建 OK 零新警告",
+    "交代物：example/w0-m2/（run.bat 七段 ALL GREEN exit 0 + 日志 + blocks/ 36 份 OBJ）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §3"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--out 说明已含 blocks/*.obj + city.scene。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet 契约 / 楼体+OBJ+scene 53 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 23 条 + M-W0.1 15 条 + M-W0.2 15 条；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：楼体 OBJ 中间件 + city.scene + 俯视 PNG（楼体占地叠加）+ roadnet",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> city_top.png + roadnet.json + blocks/block_00..35.obj（每份 4 栋）+ city.scene（entities=36 meshes=36）；stats 锚 buildings=144。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m2",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m2 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m2-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
   }
  ]
 }

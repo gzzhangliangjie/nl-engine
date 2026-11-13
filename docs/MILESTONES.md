@@ -3284,3 +3284,25 @@
 5. C4456 变量遮蔽警告（selftest 块内 a/b 与 pcg32 段重名）→ 改名 na/nb 清零。
 
 **下一步**：M-W0.2 建筑挤出 → OBJ 中间件（`.nmesh` 化走 nanite-tools / asset-ingest 通道，不自写 meshing——W0-PLAN 写死）；缺口若通道未就绪登记给 asset-ingest 轨道。
+
+## W0 M-W0.2 — OBB 地块递归细分 + 程序化楼体 → OBJ 中间件 + city.scene（feat/worldgen，2026-11-13，tag `w0-m2`）
+
+**动作**：M-W0 第三里程碑（A 类轨道 worldgen，claim M-W0.2）。① 楼体生成：内区 4.5×3.0 递归细分（先 x 后 z 阈值 2.3/1.6 对半分，4.5×3.0 恒产 4 叶 2.25×1.5，左/前半先入列）+ 每叶一栋——below(3) 高度档 {3,8,14}m、below(2) 占地内缩 {0.30,0.15}m（bevy_city 低密度 4 栋/块同构；RNG 消费排流尾，36 shade 前缀逐字节不动，selftest 重建流逐个比对锁前缀）；size 6 → 144 栋。② `serializeBlockObj`：每 block 一份 OBJ 中间件（楼 = 8 顶点 12 三角外向绕序盒，手工推导六面绕序并逐面叉积验证，block 局部坐标原点 = cell 中心，%.3f 固定文本序）。③ `serializeCityScene`：E1 World JSON（M-E2 `World::serialise` 形态——version/nextID/entities[{id,name,flags,parent,components{Model{mesh,tint},Transform{position,scale,rotation}}}]/systems:[]；语义同构、手写固定序，非 ECS roundtrip dump）；每 block 一实体，Transform = block 世界中心，Model.mesh 引用 `blocks/block_XX.obj`。④ `generate` 增产 blocks/*.obj + city.scene；俯视图楼体占地三档灰度（208/168/128）。⑤ CityStats.buildings 实数化（144）。⑥ `.gitignore` 反白 `!example/*/blocks/*.obj`——全局 `*.obj` 编译中间产物兜底规则会静默挡掉楼体 OBJ 交付物（git status 双向自查时逮住）。⑦ 注册表 wt 侧同步：wt_pool.py worldgen 条目 + PARALLEL-TRACKS worldgen 行（已建/三 tag）与 asset-ingest 行接收缺口栏——此前两轮只改主树工作区，本轮起 feat/worldgen 分支携带注册表正本。
+
+**提交版本**：`feat/worldgen`（city-tools main.cpp + CMakeLists w0-cityscene + .gitignore 反白 + example/w0-m2 + cases.json w0-m2 卡第 120 张 + GUIDE §3 + W0-PLAN 纪要 + PARALLEL-TRACKS 两行 + wt_pool.py 条目 + w0-m0/w0-m1 证据随渲染刷新）；annotated tag `w0-m2`。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 格式零触碰。
+
+**完成情况**
+- 🟢 selftest 38 → 53 断言全绿（新增 15：RNG 前缀契约 / 4 栋每块 / 高度恰三档 / 占地两档 / 足迹界与两两不重叠 / 高度混合种子敏感 / OBJ 32v-48f-4o 双跑逐字节异 seed 必异 / scene E1 锚 version-nextID37-systems / 36 实体 36 mesh 引用闭合 / scene seed 无关性）；M-W0.0/0.1 断言全保持。
+- 🟢 DX12/VULKAN 双树 BUILD OK 零新警告；ctest `w0-city-*`×3 + `w0-roadnet` + `w0-cityscene` 双树各 5/5（`--repeat until-pass:3`）。
+- 🟢 `--only w0-m0` / `w0-m1` / `w0-m2` 各 8/8 ALL GREEN；`server.py --check` exit 0。
+- 🟢 `example/w0-m2/run.bat` 七段 ALL GREEN exit 0（selftest / generate 双产物+stats 锚 buildings=144 / scene 契约锚 36 实体 36 mesh 引用 36 OBJ 文件闭合 / 同 seed 三产物 fc /b 逐字节 / 异 seed OBJ+PNG 必异 + scene seed 无关 / usage exit2 / negative exit2）；证据图 `city_top.png` 楼体占地三档灰度为工具真实输出。
+- 🟢 展示台 `w0-m2` 卡四用例；GUIDE §3 归档；W0-PLAN M-W0.2 落地纪要；缺口登记 asset-ingest（PARALLEL-TRACKS 接收栏）。
+
+**踩坑情况**
+1. **city.scene「异 seed 必异」断言设计错**：E1 schema 无 seed 键、冻结面禁扩字段——scene 是 seed 无关索引，首版断言异 seed 必异直接 FAIL；改为明文锚定 seed 无关性（同 size 异 seed 产物逐字节相同），种子差异只存在于 OBJ 楼体与 PNG（run.bat 异 seed 段同步改三向判据：OBJ+PNG 必异、scene 必同）。
+2. **全局 `*.obj` ignore 静默挡交付物**：楼体 OBJ 进不了 git（untracked 都不显示）——`.gitignore` 教训段（commit 94bbb66 同款问题第二次出现）加根锚定反白规则。
+3. **run.bat find /c 计行数语义**：`find /c "block_"` 数出 72（每实体 name 行 + mesh 行各含一次）——换每实体恰一次出现的 `"name"`/`"mesh"` 锚。
+4. **主树/分支注册表双正本**：M-W0.0/0.1 的 wt_pool.py / PARALLEL-TRACKS 更新只落在主树工作区（等另一会话收官一并提交），feat/worldgen 分支携带的是 master 旧文——本轮起注册表正本随分支走（wt 侧编辑 + selftest 21/21），merge 后主树未提交副本自然对齐。
+5. C4456 遮蔽 ×2（selftest 楼体块 `b` 撞 pcg32 段、scene 块 `closureOk` 撞 roadnet 段）→ 改名 bd/refClosureOk 清零。
+
+**下一步**：M-W0.3 OpenSimplex 噪声密度分区 + CityStats 统计锚收口（close 闸硬生效：annotated tag + MILESTONES 四栏 + `wt_pool.py close --track worldgen` 报告 + `release --done`）。

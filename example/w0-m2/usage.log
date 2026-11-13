@@ -1,0 +1,11 @@
+city-tools - nl-engine worldgen tools (M-W0 citygen, offline CPU only)
+usage:
+  city-tools selftest [--verbose]
+  city-tools generate --seed N --size N --out DIR [--stats]
+options:
+  --seed N   city seed, any u64 (default 12345)
+  --size N   grid blocks per side, 1..64 (default 6)
+  --out DIR  output directory, receives city_top.png + roadnet.json
+             + blocks/block_NN.obj (M-W0.2) + city.scene
+  --stats    print CityStats counter block
+exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage

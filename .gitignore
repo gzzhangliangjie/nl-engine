@@ -86,3 +86,8 @@ Desktop.ini
 
 # 注意：*.log / *.tsv 绝不 ignore——example/ 下 113 份 log 与 40 份 tsv
 # 是逐字节验收的证据与基线，故意入库（行尾口径见 .gitattributes）。
+
+# city-tools 楼体 OBJ 交付物（M-W0.2）：example/*/blocks/*.obj 是工具真实
+# 产物（消费通道：OBJ -> .nmesh/.glb 转换，asset-ingest 轨道），不是编译
+# 中间产物——上面的 *.obj 兜底规则会静默挡掉它们，此处根锚定反白。
+!example/*/blocks/*.obj

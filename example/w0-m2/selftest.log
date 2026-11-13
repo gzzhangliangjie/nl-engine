@@ -1,0 +1,54 @@
+ok 1 - pcg32: same seed -> identical 64-output stream
+ok 2 - pcg32: known-answer first output (seed 12345)
+ok 3 - pcg32: known-answer second output
+ok 4 - pcg32: known-answer third output
+ok 5 - pcg32: different seed -> different first output
+ok 6 - layout: same seed double-run byte-identical (FNV-1a)
+ok 7 - layout: different seed -> different bytes
+ok 8 - layout: different size -> different bytes
+ok 9 - layout: size 6 -> 36 cells
+ok 10 - stats: blocks == groundTiles == 36
+ok 11 - stats: roadSegments == 72
+ok 12 - stats: crossroads == (size+1)^2 == 49
+ok 13 - stats: buildings == 4 per block * 36 == 144 (M-W0.2)
+ok 14 - stats: M-W0.3 skeleton counters still zero
+ok 15 - contract: block dims match roadnet.json blocks {5.5, 4.0}
+ok 16 - contract: block interior 4.5 x 3.0 (bevy ground tile dims)
+ok 17 - layout: size 6 extent x=33m z=24m
+ok 18 - layout: size 6 centered grid lo == -3
+ok 19 - rng: all cell shades in [0,16)
+ok 20 - render: three top views encoded
+ok 21 - png: same seed double-encode byte-identical
+ok 22 - png: different seed -> different pixels
+ok 23 - render: size 6 canvas 1152x864 px (32 px/m, 1.5m margin)
+ok 24 - png: valid signature bytes
+ok 25 - roadnet: size 6 -> (size+1)^2 == 49 nodes
+ok 26 - roadnet: size 6 -> directed edges 4*size*(size+1) == 168
+ok 27 - stats: roadnetNodes=49 roadnetEdges=168 (directed)
+ok 28 - roadnet: from/to/id references closed (indices in range)
+ok 29 - roadnet: bidirectional symmetry (every edge has reverse)
+ok 30 - roadnet: edge geometry spans exactly one block pitch
+ok 31 - roadnet: 84 horizontal + 84 vertical directed edges
+ok 32 - roadnet: node 0 at grid lo corner (-16.5, -12.0)
+ok 33 - roadnet: node 48 at grid hi corner (16.5, 12.0)
+ok 34 - roadnet: lanes/speed/width uniform (1 / 13.9 / 1.0)
+ok 35 - roadnet: same seed double-build JSON byte-identical
+ok 36 - roadnet: contract header fields (version/units/phases)
+ok 37 - roadnet: JSON anchors 49 intersections / 168 directed edges
+ok 38 - roadnet: different seed -> different JSON (seed field)
+ok 39 - roadnet: size 1 -> 4 nodes / 8 directed edges (formula edge)
+ok 40 - rng: cell shade stream is an untouched prefix (M-W0.2 appends)
+ok 41 - buildings: 4 per block (subdivision leaves, bevy low-density)
+ok 42 - buildings: heights exactly on the 3 RNG tiers {3,8,14}
+ok 43 - buildings: footprint inset on 2 tiers, inside interior
+ok 44 - buildings: footprints pairwise disjoint per block
+ok 45 - buildings: height tiers mixed across city (seed-sensitive)
+ok 46 - obj: same seed double-build byte-identical
+ok 47 - obj: 4 buildings -> 32 verts / 48 tris / 4 objects
+ok 48 - obj: different seed -> different bytes (tier draws)
+ok 49 - scene: same seed double-build byte-identical
+ok 50 - scene: E1 World JSON anchors (version/nextID/systems)
+ok 51 - scene: 36 entities with 36 mesh references (blocks=36)
+ok 52 - scene: every mesh reference closed to an emitted OBJ
+ok 53 - scene: seed-agnostic index (E1 schema has no seed key; seed lives in mesh contents, not in the scene)
+citygen selftest: PASS (53 assertions)

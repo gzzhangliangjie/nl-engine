@@ -32,3 +32,9 @@ add_test(NAME w0-roadnet COMMAND city-tools generate --seed 12345 --size 6
          --out ${CMAKE_CURRENT_BINARY_DIR}/w0-roadnet --stats)
 set_tests_properties(w0-roadnet PROPERTIES
     PASS_REGULAR_EXPRESSION "wrote .*w0-roadnet.roadnet\\.json \\(nodes=49 edges=168 directed\\)")
+
+# ---- M-W0.2：city.scene 索引产物（E1 World JSON，实体/引用闭合锚）----
+add_test(NAME w0-cityscene COMMAND city-tools generate --seed 12345 --size 6
+         --out ${CMAKE_CURRENT_BINARY_DIR}/w0-cityscene --stats)
+set_tests_properties(w0-cityscene PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*w0-cityscene.city\\.scene \\(entities=36 meshes=36\\)")

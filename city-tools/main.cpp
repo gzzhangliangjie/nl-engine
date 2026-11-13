@@ -3,6 +3,11 @@
 //         （纯 CPU 光栅化）+ CityStats 计数锚骨架 + seed 对称确定性 selftest。
 // M-W0.1：grid 路网拓扑 + 车道语义 → roadnet.json（W0-PLAN §1 字段契约，
 //         Q-W2 拍板的 citygen ↔ 第 8 步交通接口铁律）+ 俯视图路网叠加。
+// M-W0.2：OBB 地块递归细分 + 程序化楼体（RNG 分档高度/占地）→ 每 block 一份
+//         OBJ 中间件 + city.scene（E1 World JSON，M-E2 World::serialise 形态）
+//         索引全部分块与元数据。.nmesh 化走 nanite-tools / asset-ingest 通道
+//         （不自写 meshing/DAG）；实测通道未就绪（nanite-tools 无 OBJ 导入，
+//         asset-ingest 在 FBX→GLB），缺口登记给 asset-ingest 轨道，本轨不自修。
 //
 // 依据 docs/worldgen/W0-PLAN.md（2026-11-12 五问全拍板）：
 //   Q-W3 = W3-A 全自研最小算法（确定性 RNG，零新依赖，C++17，与 bevy_city 同构）。
@@ -91,6 +96,16 @@ struct Pcg32 {
 constexpr float kBlockX = 5.5f;     // roadnet.json 契约 blocks.x
 constexpr float kBlockZ = 4.0f;     // roadnet.json 契约 blocks.z
 constexpr float kRoadWidth = 1.0f;  // M-W0.0 路带总宽（俯视图示意口径）
+
+// M-W0.2 楼体口径（W3-A 全自研最小算法；bevy_city 低密度每 block 4 栋同构）：
+//   内区 4.5x3.0 递归细分（先 x 后 z 阈值分割）→ 4 叶，每叶一栋；
+//   高度三档 / 占地两档（RNG 分档，消费序见文件头 RNG 纪律——排流尾）。
+constexpr float kSplitXMax = 2.3f;  // 内区宽超过此值 → 对半分 x
+constexpr float kSplitZMax = 1.6f;  // 内区深超过此值 → 对半分 z
+constexpr float kInsetSmall = 0.15f; // 占地档 1：叶内缩（楼间隙小）
+constexpr float kInsetLarge = 0.30f; // 占地档 0：叶内缩（楼间隙大）
+constexpr float kHeightTiers[3] = {3.0f, 8.0f, 14.0f}; // RNG 分档高度（米）
+
 constexpr std::uint32_t kMinSize = 1;
 constexpr std::uint32_t kMaxSize = 64; // 64*5.5*32px = 11264px 画布上限内的机动余量
 
@@ -118,10 +133,20 @@ struct CityStats {
     std::uint32_t paths = 0;
 };
 
+// M-W0.2 楼体（block 局部坐标，y-up，米；center = cell 世界中心）。
+struct CityBuilding {
+    float cx = 0.f;   // 楼底面中心 x（block 局部）
+    float cz = 0.f;   // 楼底面中心 z（block 局部）
+    float hx = 0.f;   // 半宽 x
+    float hz = 0.f;   // 半深 z
+    float height = 0.f;
+};
+
 struct CityCell {
     std::int32_t gx = 0;   // 网格索引
     std::int32_t gz = 0;
     std::uint32_t shade = 0; // 地面灰度档位 0..15（M-W0.0 种子敏感元，见文件头 RNG 纪律）
+    std::vector<CityBuilding> buildings; // M-W0.2（block 局部坐标）
 };
 
 struct CityLayout {
@@ -132,7 +157,32 @@ struct CityLayout {
     float minX = 0.f, maxX = 0.f, minZ = 0.f, maxZ = 0.f; // 城市外延（米）
 };
 
-// 生成确定性布局：RNG 消费序 = cell 行主序（文件头纪律），布局本身无其他随机源。
+// 递归细分内区矩形（block 局部坐标）：先 x 后 z 阈值对半分，叶 = 楼地块。
+// 4.5x3.0 内区 → 4 叶 2.25x1.5（确定性：子矩形左/前半先入列）。
+struct PlotRect { float x0, x1, z0, z1; };
+void subdividePlot(float x0, float x1, float z0, float z1,
+                   std::vector<PlotRect>* out) {
+    const float w = x1 - x0;
+    const float d = z1 - z0;
+    if (w > kSplitXMax) {
+        const float m = (x0 + x1) * 0.5f;
+        subdividePlot(x0, m, z0, z1, out);
+        subdividePlot(m, x1, z0, z1, out);
+        return;
+    }
+    if (d > kSplitZMax) {
+        const float m = (z0 + z1) * 0.5f;
+        subdividePlot(x0, x1, z0, m, out);
+        subdividePlot(x0, x1, m, z1, out);
+        return;
+    }
+    PlotRect r{x0, x1, z0, z1};
+    out->push_back(r);
+}
+
+// 生成确定性布局：RNG 消费序 = 文件头纪律。第一遍 cell 行主序消费 shade
+// （M-W0.0 前缀，逐字节不动）；第二遍 cell 行主序消费楼体档位（M-W0.2 追加
+// 流尾：每叶先 below(3) 高度档后 below(2) 占地档，叶序 = 细分序）。
 CityLayout generateCity(const CityParams& params) {
     CityLayout lay;
     lay.params = params;
@@ -151,6 +201,29 @@ CityLayout generateCity(const CityParams& params) {
         }
     }
 
+    // M-W0.2 第二遍：楼体（消费排在全部 shade 之后 = 前缀契约保持）。
+    // 内区 = block 局部 [-kBlockX/2+kRoadWidth/2, +...] x 同 z（路带边缘起算）。
+    const float ix0 = -kBlockX * 0.5f + kRoadWidth * 0.5f;
+    const float ix1 = kBlockX * 0.5f - kRoadWidth * 0.5f;
+    const float iz0 = -kBlockZ * 0.5f + kRoadWidth * 0.5f;
+    const float iz1 = kBlockZ * 0.5f - kRoadWidth * 0.5f;
+    for (CityCell& cell : lay.cells) {
+        std::vector<PlotRect> plots;
+        subdividePlot(ix0, ix1, iz0, iz1, &plots);
+        for (const PlotRect& p : plots) {
+            CityBuilding b;
+            const std::uint32_t heightTier = rng.below(3u); // 高度三档
+            const std::uint32_t insetTier = rng.below(2u);  // 占地两档
+            const float inset = insetTier == 0 ? kInsetLarge : kInsetSmall;
+            b.cx = (p.x0 + p.x1) * 0.5f;
+            b.cz = (p.z0 + p.z1) * 0.5f;
+            b.hx = (p.x1 - p.x0) * 0.5f - inset;
+            b.hz = (p.z1 - p.z0) * 0.5f - inset;
+            b.height = kHeightTiers[heightTier];
+            cell.buildings.push_back(b);
+        }
+    }
+
     lay.stats.blocks = params.size * params.size;
     lay.stats.groundTiles = lay.stats.blocks;
     lay.stats.roadSegments = 2u * lay.stats.blocks; // 每 cell 一横一竖
@@ -159,7 +232,11 @@ CityLayout generateCity(const CityParams& params) {
     // 无向路段 = 横 size*(size+1) + 竖 size*(size+1)。
     lay.stats.roadnetNodes = (params.size + 1u) * (params.size + 1u);
     lay.stats.roadnetEdges = 4u * params.size * (params.size + 1u);
-    // buildings/trees/cars/fences/paths 保持 0：M-W0.2 / M-W0.3 消费。
+    // M-W0.2：楼体计数（每 cell = 细分叶数，4.5x3.0 内区恒 4）。
+    for (const CityCell& cell : lay.cells) {
+        lay.stats.buildings += static_cast<std::uint32_t>(cell.buildings.size());
+    }
+    // trees/cars/fences/paths 保持 0：M-W0.3 消费。
 
     lay.minX = static_cast<float>(lay.lo) * kBlockX;
     lay.maxX = static_cast<float>(hi) * kBlockX;
@@ -312,6 +389,96 @@ std::string serializeRoadnet(const Roadnet& net) {
 }
 
 // ---------------------------------------------------------------------------
+// M-W0.2 产物：OBJ 中间件（每 block 一份）+ city.scene（E1 World JSON）。
+// .nmesh 化走 nanite-tools / asset-ingest 通道（不自写 meshing/DAG）；
+// 实测通道未就绪（viewer scene 模式白名单只认 .glb、nanite-tools 无 OBJ 导入），
+// 缺口登记给 asset-ingest 轨道——city.scene 先引用 OBJ 中间件路径。
+// ---------------------------------------------------------------------------
+
+// 每 block 一份 OBJ：楼体 = 轴对齐盒（8 顶点 12 三角，外向绕序，y-up，
+// block 局部坐标原点 = cell 中心）。确定性文本（%.3f，C locale，固定序）。
+std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
+                              std::uint64_t seed) {
+    std::string s;
+    char buf[128];
+    std::snprintf(buf, sizeof buf,
+                  "# city-tools M-W0.2 block mesh (block-local, y-up, meters)\n"
+                  "# seed %llu block %u gx %d gz %d buildings %u\n",
+                  static_cast<unsigned long long>(seed), blockIndex, cell.gx,
+                  cell.gz, static_cast<unsigned>(cell.buildings.size()));
+    s += buf;
+    std::uint32_t base = 1; // OBJ 顶点索引从 1 起
+    for (std::size_t bi = 0; bi < cell.buildings.size(); ++bi) {
+        const CityBuilding& b = cell.buildings[bi];
+        const float hx = b.hx, hz = b.hz, h = b.height;
+        std::snprintf(buf, sizeof buf, "o b%u\n", static_cast<unsigned>(bi));
+        s += buf;
+        const float vx[8] = {b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx,
+                             b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx};
+        const float vy[8] = {0.f, 0.f, 0.f, 0.f, h, h, h, h};
+        const float vz[8] = {b.cz - hz, b.cz - hz, b.cz + hz, b.cz + hz,
+                             b.cz - hz, b.cz - hz, b.cz + hz, b.cz + hz};
+        for (int i = 0; i < 8; ++i) {
+            std::snprintf(buf, sizeof buf, "v %.3f %.3f %.3f\n", vx[i], vy[i],
+                          vz[i]);
+            s += buf;
+        }
+        static const std::uint32_t kTris[12][3] = {
+            {1, 3, 4}, {1, 2, 3},   // 底面 (-y)
+            {5, 8, 7}, {5, 7, 6},   // 顶面 (+y)
+            {1, 6, 2}, {1, 5, 6},   // z- 面
+            {3, 8, 4}, {3, 7, 8},   // z+ 面
+            {2, 7, 3}, {2, 6, 7},   // x+ 面
+            {1, 8, 5}, {1, 4, 8},   // x- 面
+        };
+        for (const auto& t : kTris) {
+            std::snprintf(buf, sizeof buf, "f %u %u %u\n", base + t[0] - 1,
+                          base + t[1] - 1, base + t[2] - 1);
+            s += buf;
+        }
+        base += 8;
+    }
+    return s;
+}
+
+// city.scene（E1 World JSON，M-E2 World::serialise 形态；语义同构、手写固定
+// 序确定性文本——citygen 产物，非 ECS roundtrip dump，键序不锁字母序）。
+// 实体 = 每 block 一个（行主序），Transform 位置 = block 世界中心，
+// Model.mesh 引用 blocks/block_XX.obj（OBJ 中间件，通道就绪后由转换步替换）。
+std::string serializeCityScene(const CityLayout& lay) {
+    std::string s;
+    char buf[192];
+    const std::uint32_t n = static_cast<std::uint32_t>(lay.cells.size());
+    s += "{\n";
+    s += "  \"version\": 1,\n";
+    std::snprintf(buf, sizeof buf, "  \"nextID\": %u,\n", n + 1u);
+    s += buf;
+    s += "  \"entities\": [\n";
+    for (std::uint32_t i = 0; i < n; ++i) {
+        const CityCell& c = lay.cells[i];
+        const float cx =
+            (static_cast<float>(c.gx) + 0.5f) * kBlockX; // block 世界中心
+        const float cz = (static_cast<float>(c.gz) + 0.5f) * kBlockZ;
+        std::snprintf(buf, sizeof buf,
+                      "    { \"id\": %u, \"name\": \"block_%02u\", \"flags\": 0, "
+                      "\"parent\": 0, \"components\": {\n"
+                      "      \"Model\": { \"mesh\": \"blocks/block_%02u.obj\", "
+                      "\"tint\": [0.8, 0.8, 0.8] },\n"
+                      "      \"Transform\": { \"position\": [%.2f, 0.0, %.2f], "
+                      "\"scale\": [1.0, 1.0, 1.0], "
+                      "\"rotation\": [0.0, 0.0, 0.0, 1.0] }\n"
+                      "    } }%s\n",
+                      i + 1u, i, i, cx, cz,
+                      i + 1 == n ? "" : ",");
+        s += buf;
+    }
+    s += "  ],\n";
+    s += "  \"systems\": []\n";
+    s += "}\n";
+    return s;
+}
+
+// ---------------------------------------------------------------------------
 // 规范序列化 + FNV-1a 64（确定性 selftest 的逐字节比对基底）
 // ---------------------------------------------------------------------------
 void appendU32(std::vector<std::uint8_t>& b, std::uint32_t v) {
@@ -349,6 +516,16 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
         appendI32(b, c.gx);
         appendI32(b, c.gz);
         b.push_back(static_cast<std::uint8_t>(c.shade));
+        // M-W0.2：楼体数据进规范序列化（float 按 IEEE 位原样写入，确定性）。
+        appendU32(b, static_cast<std::uint32_t>(c.buildings.size()));
+        for (const CityBuilding& bd : c.buildings) {
+            float fields[5] = {bd.cx, bd.cz, bd.hx, bd.hz, bd.height};
+            for (float f : fields) {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &f, 4);
+                appendU32(b, bits);
+            }
+        }
     }
     return b;
 }
@@ -437,6 +614,21 @@ bool renderTopView(const CityLayout& lay, const RasterConfig& cfg,
                  toPx(cz + kBlockZ - halfRoad, lay.minZ),
                  static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(v),
                  static_cast<std::uint8_t>(v));
+    }
+
+    // M-W0.2 楼体占地俯视（高度分档灰度：3m=208 / 8m=168 / 14m=128，越矮越浅）。
+    for (const CityCell& c : lay.cells) {
+        const float ccx = (static_cast<float>(c.gx) + 0.5f) * kBlockX;
+        const float ccz = (static_cast<float>(c.gz) + 0.5f) * kBlockZ;
+        for (const CityBuilding& b : c.buildings) {
+            const std::uint8_t v = b.height == kHeightTiers[0]   ? 208
+                                   : b.height == kHeightTiers[1] ? 168
+                                                                 : 128;
+            fillRect(img, w, h, toPx(ccx + b.cx - b.hx, lay.minX),
+                     toPx(ccz + b.cz - b.hz, lay.minZ),
+                     toPx(ccx + b.cx + b.hx, lay.minX),
+                     toPx(ccz + b.cz + b.hz, lay.minZ), v, v, v);
+        }
     }
 
     // 路网：全跨度横线 size+1 条（z = j*4.0），竖线 size+1 条（x = i*5.5），1.0m 宽。
@@ -547,10 +739,11 @@ SelftestResult runSelftest(bool verbose) {
            "stats: blocks == groundTiles == 36");
     expect(lay.stats.roadSegments == 72u, "stats: roadSegments == 72");
     expect(lay.stats.crossroads == 49u, "stats: crossroads == (size+1)^2 == 49");
-    expect(lay.stats.buildings == 0u && lay.stats.trees == 0u &&
-               lay.stats.cars == 0u && lay.stats.fences == 0u &&
-               lay.stats.paths == 0u,
-           "stats: M-W0.2/0.3 skeleton counters all zero (blank city)");
+    expect(lay.stats.buildings == 144u,
+           "stats: buildings == 4 per block * 36 == 144 (M-W0.2)");
+    expect(lay.stats.trees == 0u && lay.stats.cars == 0u &&
+               lay.stats.fences == 0u && lay.stats.paths == 0u,
+           "stats: M-W0.3 skeleton counters still zero");
 
     // --- 契约锚：block 尺寸与 roadnet.json blocks 同源；内区 4.5x3.0 ---
     expect(kBlockX == 5.5f && kBlockZ == 4.0f,
@@ -688,6 +881,114 @@ SelftestResult runSelftest(bool verbose) {
     expect(netS.nodes.size() == 4u && netS.edges.size() == 8u,
            "roadnet: size 1 -> 4 nodes / 8 directed edges (formula edge)");
 
+    // --- M-W0.2 楼体 + OBJ + city.scene（验收判据：细分/RNG 档位/引用闭合）---
+    // RNG 前缀契约：36 个 shade 仍是前缀（重建流逐个比对）。
+    {
+        Pcg32 pr;
+        pr.seed(p0.seed);
+        bool prefixOk = true;
+        for (const CityCell& cl : lay.cells) {
+            prefixOk = prefixOk && pr.below(16u) == cl.shade;
+        }
+        expect(prefixOk,
+               "rng: cell shade stream is an untouched prefix (M-W0.2 appends)");
+    }
+
+    // 楼体口径：4 栋/块、高度恰为三档之一、占地两档之一、足迹在叶内不越内区、
+    // 同块足迹两两不重叠。
+    bool bldOk = true, tierOk = true, boundsOk = true, disjointOk = true;
+    std::uint32_t tallCount = 0;
+    for (const CityCell& cl : lay.cells) {
+        if (cl.buildings.size() != 4u) bldOk = false;
+        for (const CityBuilding& bd : cl.buildings) {
+            const bool hOk = bd.height == kHeightTiers[0] ||
+                             bd.height == kHeightTiers[1] ||
+                             bd.height == kHeightTiers[2];
+            tierOk = tierOk && hOk;
+            if (bd.height == kHeightTiers[2]) ++tallCount;
+            const float inset = 1.125f - bd.hx; // 叶半宽 1.125 - 内缩
+            boundsOk = boundsOk &&
+                       ((inset > kInsetSmall - 0.001f &&
+                         inset < kInsetSmall + 0.001f) ||
+                        (inset > kInsetLarge - 0.001f &&
+                         inset < kInsetLarge + 0.001f));
+            boundsOk = boundsOk && bd.hx > 0.f && bd.hz > 0.f &&
+                       bd.cx - bd.hx >= -2.25f && bd.cx + bd.hx <= 2.25f &&
+                       bd.cz - bd.hz >= -1.5f && bd.cz + bd.hz <= 1.5f;
+            for (const CityBuilding& o : cl.buildings) {
+                if (&o == &bd) continue;
+                const bool sepX = bd.cx + bd.hx <= o.cx - o.hx + 1e-4f ||
+                                  o.cx + o.hx <= bd.cx - bd.hx + 1e-4f;
+                const bool sepZ = bd.cz + bd.hz <= o.cz - o.hz + 1e-4f ||
+                                  o.cz + o.hz <= bd.cz - bd.hz + 1e-4f;
+                disjointOk = disjointOk && (sepX || sepZ);
+            }
+        }
+    }
+    expect(bldOk, "buildings: 4 per block (subdivision leaves, bevy low-density)");
+    expect(tierOk, "buildings: heights exactly on the 3 RNG tiers {3,8,14}");
+    expect(boundsOk, "buildings: footprint inset on 2 tiers, inside interior");
+    expect(disjointOk, "buildings: footprints pairwise disjoint per block");
+    expect(tallCount > 0u && tallCount < 144u,
+           "buildings: height tiers mixed across city (seed-sensitive)");
+
+    // OBJ：每块 4 objects / 32 v / 48 f，双跑逐字节、异 seed 必异。
+    {
+        const std::string objA = serializeBlockObj(lay.cells[0], 0, p0.seed);
+        const std::string objB =
+            serializeBlockObj(generateCity(p0).cells[0], 0, p0.seed);
+        expect(objA == objB, "obj: same seed double-build byte-identical");
+        std::uint32_t vCount = 0, fCount = 0, oCount = 0;
+        for (std::size_t pos = objA.find("\nv "); // 行首统计（首行是注释）
+             pos != std::string::npos; pos = objA.find("\nv ", pos + 1)) ++vCount;
+        for (std::size_t pos = objA.find("\nf ");
+             pos != std::string::npos; pos = objA.find("\nf ", pos + 1)) ++fCount;
+        for (std::size_t pos = objA.find("\no ");
+             pos != std::string::npos; pos = objA.find("\no ", pos + 1)) ++oCount;
+        expect(vCount == 32u && fCount == 48u && oCount == 4u,
+               "obj: 4 buildings -> 32 verts / 48 tris / 4 objects");
+        expect(serializeBlockObj(generateCity(p1).cells[0], 0, p1.seed) != objA,
+               "obj: different seed -> different bytes (tier draws)");
+    }
+
+    // city.scene：E1 形态锚 + 引用闭合 + 确定性。
+    {
+        const std::string scA = serializeCityScene(lay);
+        expect(scA == serializeCityScene(generateCity(p0)),
+               "scene: same seed double-build byte-identical");
+        expect(scA.find("\"version\": 1") != std::string::npos &&
+                   scA.find("\"nextID\": 37") != std::string::npos &&
+                   scA.find("\"systems\": []") != std::string::npos,
+               "scene: E1 World JSON anchors (version/nextID/systems)");
+        std::uint32_t entCount = 0, meshCount = 0;
+        std::size_t pos = 0;
+        while ((pos = scA.find("\"name\": \"block_", pos)) != std::string::npos) {
+            ++entCount;
+            pos += 15;
+        }
+        pos = 0;
+        while ((pos = scA.find("\"mesh\": \"blocks/block_", pos)) != std::string::npos) {
+            ++meshCount;
+            pos += 21;
+        }
+        expect(entCount == 36u && meshCount == 36u,
+               "scene: 36 entities with 36 mesh references (blocks=36)");
+        // 引用闭合：每个 mesh 引用都有对应 OBJ 产物（由同一次生成写出）。
+        bool refClosureOk = true;
+        for (std::uint32_t i = 0; i < lay.cells.size(); ++i) {
+            char name[32];
+            std::snprintf(name, sizeof name, "blocks/block_%02u.obj", i);
+            refClosureOk = refClosureOk &&
+                           scA.find(std::string("\"mesh\": \"") + name + "\"") !=
+                               std::string::npos;
+        }
+        expect(refClosureOk,
+               "scene: every mesh reference closed to an emitted OBJ");
+        expect(serializeCityScene(generateCity(p1)) == scA,
+               "scene: seed-agnostic index (E1 schema has no seed key; seed "
+               "lives in mesh contents, not in the scene)");
+    }
+
     res.assertions = n;
     res.pass = allOk;
     return res;
@@ -706,6 +1007,7 @@ void printUsage() {
         "  --seed N   city seed, any u64 (default 12345)\n"
         "  --size N   grid blocks per side, 1..64 (default 6)\n"
         "  --out DIR  output directory, receives city_top.png + roadnet.json\n"
+        "             + blocks/block_NN.obj (M-W0.2) + city.scene\n"
         "  --stats    print CityStats counter block\n"
         "exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage\n");
 }
@@ -818,7 +1120,60 @@ int runGenerate(const GenerateConfig& cfg) {
         }
     }
 
-    std::printf("nl-citygen M-W0.1 city top view + roadnet\n");
+    // M-W0.2：每 block 一份 OBJ 中间件 + city.scene（E1 World JSON 索引）。
+    // .nmesh 化走 nanite-tools / asset-ingest 通道（缺口已登记，本轨不自修）。
+    const std::string blocksDir =
+        (std::filesystem::path(cfg.outDir) / "blocks").string();
+    std::filesystem::create_directories(blocksDir, ec);
+    if (ec) {
+        std::printf("[nl:error] cannot create blocks dir %s\n",
+                    blocksDir.c_str());
+        return 1;
+    }
+    for (std::uint32_t i = 0; i < lay.cells.size(); ++i) {
+        char name[32];
+        std::snprintf(name, sizeof name, "block_%02u.obj", i);
+        const std::string objPath =
+            (std::filesystem::path(blocksDir) / name).string();
+        const std::string obj =
+            serializeBlockObj(lay.cells[i], i, cfg.city.seed);
+        FILE* f = std::fopen(objPath.c_str(), "wb");
+        if (f == nullptr) {
+            std::printf("[nl:error] cannot open %s for write\n",
+                        objPath.c_str());
+            return 1;
+        }
+        const std::size_t wrote = std::fwrite(obj.data(), 1, obj.size(), f);
+        std::fclose(f);
+        if (wrote != obj.size()) {
+            std::printf("[nl:error] short write on %s\n", objPath.c_str());
+            return 1;
+        }
+        std::printf("wrote %s (%u buildings)\n", objPath.c_str(),
+                    static_cast<unsigned>(lay.cells[i].buildings.size()));
+    }
+    const std::string scene = serializeCityScene(lay);
+    const std::string scenePath =
+        (std::filesystem::path(cfg.outDir) / "city.scene").string();
+    {
+        FILE* f = std::fopen(scenePath.c_str(), "wb");
+        if (f == nullptr) {
+            std::printf("[nl:error] cannot open %s for write\n",
+                        scenePath.c_str());
+            return 1;
+        }
+        const std::size_t wrote = std::fwrite(scene.data(), 1, scene.size(), f);
+        std::fclose(f);
+        if (wrote != scene.size()) {
+            std::printf("[nl:error] short write on %s\n", scenePath.c_str());
+            return 1;
+        }
+    }
+    std::printf("wrote %s (entities=%u meshes=%u)\n", scenePath.c_str(),
+                static_cast<unsigned>(lay.cells.size()),
+                static_cast<unsigned>(lay.cells.size()));
+
+    std::printf("nl-citygen M-W0.2 city top view + roadnet + blocks + scene\n");
     std::printf("seed=%llu size=%u blocks=%u\n",
                 static_cast<unsigned long long>(cfg.city.seed), cfg.city.size,
                 lay.stats.blocks);

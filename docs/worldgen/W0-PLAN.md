@@ -57,10 +57,11 @@ citygen 只产「路网几何 + 拓扑 + 车道语义」；第 8 步交通系统
 - **验收判据**：① 路网俯视证据图（路网叠加布局）；② roadnet 契约 selftest——字段齐备、`from`/`to` 引用闭合、边数 = 预期网格公式；③ 展示台卡扩充 roadnet 用例。
 - **落地纪要（2026-11-13）**：`buildRoadnet`（节点 (size+1)² 行主序 id、有向边 4·size·(size+1) 先横后竖 ±向序、lanes_per_dir=1 / speed_limit=13.9m/s / width=1.0m 与路带几何同源——契约示例 3.0 是示意值留档）+ `serializeRoadnet` 手写确定性序列化（2 空格缩进固定字段序，不引 JSON 库）；`generate` 增产 `roadnet.json`，俯视图叠加 roadnet 边中心线 + 节点标记（JSON 与几何同源证明）。两种路段计数口径并存留档（`roadSegments`=72 bevy 逐 cell / `roadnetEdges`=168 全跨度有向，详 GUIDE §2.3）。M-W0.1 零 RNG 消费，前缀契约不受影响。selftest 38 断言全绿；ctest 新增 `w0-roadnet` 双树 3/3；`--only w0-m0`/`--only w0-m1` 各 8/8 ALL GREEN；`server.py --check` exit 0；`example/w0-m1/run.bat` 七段 ALL GREEN exit 0。踩坑：run.bat `for /f` 反引号内 `\"` 被 cmd 吃掉（find 模式去引号 + pushd 相对路径绕盘符冒号分列）+ find /c 前导横线占 token1（计数在 token3）；Bash 沙箱对 `cmd //c run.bat` 形态 fail-closed，改 PowerShell 通道执行。
 
-### M-W0.2 — 建筑挤出 → 分块 `.nmesh`（W1-B）
+### M-W0.2 — 建筑挤出 → 分块 `.nmesh`（W1-B）（**OBJ 中间件段已收官 2026-11-13，tag `w0-m2`**）
 - **任务**：OBB 地块递归细分 + 程序化楼体（RNG 分档高度/占地）→ 每 block 一份几何 + `city.scene`（E1 World JSON schema）索引全部分块与元数据。
 - **产出通道（写死）**：city-tools 只产 OBJ 中间件 + 元数据；`.nmesh` 化**走 nanite-tools / asset-ingest 通道，不自写 meshing/DAG**——依据：`.nmesh` 格式已冻结（M0.7/S3），nanite-tools 是唯一合法入口，asset-ingest 轨道（2026-11-12 开）正在打通 OBJ→glb→nmesh；若该通道届时未就绪，缺口登记给 asset-ingest 轨道，本轨不自修。
 - **验收判据**：① 分块 `.nmesh` 数量 = block 数、`city.scene` 引用闭合（`server.py --check` / `run.bat verify` 口径外，由工具 selftest 校验）；② 街景/俯视证据图（viewer `--scene` 渲染，**依赖可运行 viewer 的带显示环境**，M-TR0 实锤无头沙箱跑不了）。
+- **落地纪要（2026-11-13，OBJ 中间件 + city.scene 段）**：递归细分（先 x 后 z 阈值 2.3/1.6 → 4.5×3.0 恒 4 叶）+ 每叶一栋（below(3) 高度档 {3,8,14}m + below(2) 占地内缩 {0.30,0.15}m，消费排流尾、36 shade 前缀逐字节不动，selftest 锁前缀）→ 每 block 一份 OBJ（8 顶点 12 三角外向绕序盒，block 局部坐标）+ `city.scene`（E1 World JSON：每 block 一实体，Transform=block 世界中心，Model.mesh 引用 OBJ，seed 无关索引——E1 schema 无 seed 键冻结面禁扩字段）。selftest 38→53 全绿；ctest 新增 `w0-cityscene` 双树 5/5；三卡回归各 8/8 + `--check` exit 0 + run.bat 七段 ALL GREEN。**缺口登记 asset-ingest**（PARALLEL-TRACKS 接收栏）：OBJ→glb 链在 feat/asset-ingest 已跑通未 merge，merge 后补转换消费步 + 白名单接入，街景证据图（viewer `--scene`）等通道 + 显示环境补拍，俯视证据图已交付；`.gitignore` 反白 `!example/*/blocks/*.obj`（楼体 OBJ 是交付物非编译中间产物）。`.nmesh` 数量判据①随转换步 merge 后由 selftest 扩锚收口，本段以 OBJ 数量 = block 数 + 引用闭合等价校验。
 
 ### M-W0.3 — 噪声分区密度 + 统计锚收口
 - **任务**：OpenSimplex 噪声分密度区（抄 bevy_city 思路不抄代码）+ `CityStats` 同构统计锚（楼数/路长/block 数写进产物与 `--stats` 输出）+ 全链 selftest 收口。

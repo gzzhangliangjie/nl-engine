@@ -191,11 +191,14 @@ TRACKS = {
     },
     "worldgen": {
         "wt": "E:/UE_STUDY_2026/nl-engine-worldgen",
-        "branch": "feat/worldgen", "state": "planned",
+        "branch": "feat/worldgen", "state": "active",
         "note": "A-class offline citygen track opened 2026-11-12 (game-dev "
                 "step 6, M-W0; plan docs/worldgen/W0-PLAN.md, M-W0.0~W0.3; "
                 "five decisions Q-B/Q-W1~W3/Q-C confirmed by user 2026-11-12, "
-                "all per recommendation); wt not built yet",
+                "all per recommendation); wt built 2026-11-13 (master 52700f1, "
+                "junction + skip-worktree); M-W0.0 tag w0-m0, M-W0.1 tag "
+                "w0-m1, M-W0.2 tag w0-m2; M-W0.3 (OpenSimplex density + stats "
+                "close gate) pending",
     },
 }
 

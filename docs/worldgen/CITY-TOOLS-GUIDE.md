@@ -121,3 +121,54 @@ city-tools generate --seed N --size N --out DIR [--stats]
   展示台 `w0-m1` 卡四用例 + 本 §2。
 - RNG：M-W0.1 零消费（空白城车道语义全同质），消费序前缀契约不受影响；
   M-W0.2 楼体分档消费排流尾。
+
+## 3. M-W0.2 — OBB 地块递归细分 + 程序化楼体 → OBJ 中间件 + city.scene（2026-11-13，tag `w0-m2`）
+
+### 3.1 楼体口径（W3-A 全自研；bevy_city 低密度同构）
+
+- 内区 4.5x3.0（block 局部 [-2.25,2.25]x[-1.5,1.5]）递归细分：宽 > 2.3 对半分 x，
+  否则深 > 1.6 对半分 z，叶 = 楼地块（4.5x3.0 恒产 4 叶 2.25x1.5；左/前半先入列）。
+- 每叶一栋：RNG 消费序 = 先 below(3) 高度档 {3, 8, 14}m，后 below(2) 占地档
+  （内缩 0.30 / 0.15）。**消费排流尾**：36 个 shade（M-W0.0 前缀）先全部消费完，
+  第二遍 cell 行主序消费楼体档位——selftest 逐个比对锁前缀不变。
+- 每 block 4 栋（size 6 → 144 栋）；footprint = 叶矩形内缩，块内两两不重叠
+  （selftest 全块校验）。
+
+### 3.2 产物通道（W0-PLAN 写死，本轨不自修 meshing）
+
+- `generate` 产出：`city_top.png` + `roadnet.json` + `blocks/block_NN.obj`
+  （每 block 一份 OBJ 中间件：楼 = 8 顶点 12 三角外向绕序盒，block 局部坐标，
+  原点 = cell 中心，y-up 米）+ `city.scene`。
+- `city.scene` = **E1 World JSON**（M-E2 `World::serialise` 形态）：
+  `version:1 / nextID:N+1 / entities[{id,name:"block_XX",flags:0,parent:0,
+  components{Model{mesh:"blocks/block_XX.obj",tint},Transform{position=block
+  世界中心,scale,rotation}}}] / systems:[]`。手写固定序确定性文本（语义同构，
+  非 ECS roundtrip dump，键序不锁字母序）。
+- **seed 无关性**：E1 schema 无 seed 键、冻结面禁扩字段——city.scene 是
+  seed 无关的索引（同 size 异 seed 产物逐字节相同），种子差异只存在于 OBJ
+  楼体档位与 PNG 灰度（selftest 明文锚定此性质）。
+
+### 3.3 资产转换缺口（登记给 asset-ingest 轨道，2026-11-13）
+
+- 实测 master：nanite-tools 无 OBJ 导入、viewer scene 模式资产白名单只认
+  `.glb`——city.scene 引用 `.obj` 中间件今天还不能被 viewer 渲染。
+- asset-ingest wt（feat/asset-ingest，M-P9V1）已跑通外部 OBJ→glb→
+  nanite-tools→`.nmesh` 链（未 merge 进 master）。
+- **缺口**：等 OBJ→glb 链 merge 后，补「city-tools 产物→glb/nmesh 转换消费步
+  + viewer scene 资产白名单接入」，再补拍 street-view 街景证据图（viewer
+  `--scene` 渲染，需带显示环境）；俯视证据图已由纯 CPU 光栅化交付。
+- `.gitignore` 加根锚定反白 `!example/*/blocks/*.obj`（楼体 OBJ 是工具交付物，
+  不是编译中间产物——全局 `*.obj` 兜底规则会静默挡掉它们）。
+
+### 3.4 M-W0.2 验收纪要
+
+- selftest 38 → 53 断言全绿（新增 15：RNG 前缀契约 / 4 栋每块 / 高度恰三档 /
+  占地两档 / 足迹界与两两不重叠 / 高度混合种子敏感 / OBJ 32v-48f-4o 双跑逐字节
+  异 seed 必异 / scene E1 锚 version-nextID37-systems / 36 实体 36 mesh 引用闭合
+  / scene seed 无关性）。
+- ctest 新增 `w0-cityscene`，共 5 条 x 双后端各 3/3（`--repeat until-pass:3`）。
+- 回归 `--only w0-m0` / `w0-m1` / `w0-m2` 各 8/8 ALL GREEN；`server.py --check`
+  exit 0；`example/w0-m2/run.bat` 七段 ALL GREEN exit 0（含 36 OBJ 文件计数与
+  引用闭合锚）。
+- RNG：M-W0.0 前缀 36 shade 逐字节不动；M-W0.2 消费 288 次（36 块 x 4 楼 x 2 档）
+  全部排流尾。
