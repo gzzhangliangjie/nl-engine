@@ -48,8 +48,8 @@ findstr /c:"\"version\": 1" "%D%city.scene" >nul || (
     echo [ERROR] city.scene missing version field
     exit /b 1
 )
-findstr /c:"\"nextID\": 37" "%D%city.scene" >nul || (
-    echo [ERROR] city.scene missing nextID 37
+findstr /c:"\"nextID\": 316" "%D%city.scene" >nul || (
+    echo [ERROR] city.scene missing nextID 316
     exit /b 1
 )
 findstr /c:"\"systems\": []" "%D%city.scene" >nul || (

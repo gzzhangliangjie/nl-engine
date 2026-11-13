@@ -3515,3 +3515,37 @@
 3. 街景近景机位 dist=16 钻楼底（相机在几何内部看背面），回退 w1-m1 验证过的 yaw28/pitch-10/dist30——**教训：新机位必须先小图验证构图再入交付物。**
 
 **下一步**：M-W2 整轨收官（close + release --done）；后续方向：树/车资产通道、交通 M-T0、楼型池扩展（每档 >3 种）。
+
+## W3 M-W3.0 — 树/车/路灯资产通道：摆放数据 canonical 化（feat/worldgen，2026-11-14，tag `w3-m0`）
+
+**动作**：M-W3 立项（用户拍板「多找点可用的模板」方向；W3-PLAN 资产侦察 = kenney nature kit 61 树 / car kit 25 车 / poly.pizza 路灯全 CC0 实测入库；消费链书面验证引擎零改动）。用户拍板「推荐」= Q-W3A=A1 drive 层装配 / Q-W3B=B1 city-tools 产摆放数据 / Q-W3C=C1 树+车+路灯试点 / Q-W3D=D1 路面纹理不做。city-tools：`CityTree.variant`（fnv1a64(seed‖'tree'‖idx)%12）+ `CityCar`（沿有向边 hash%4 命率停靠，t∈[0.2,0.8]，垂边 0.3m，hash%8 车型，edgeId 预埋 M-T0）+ `CityProp`（每路口 1 盏 hash%4 四角）+ `generateStreetAssets`（generateCity 尾部零 RNG）+ serializeCityScene 315 实体（nextID 316）+ serializeLayout 树 variant/cars/props 段 + `street:` 分布行 + 名字表 kTreeVariantNames/kCarVariantNames/kPropKindNames。selftest 88→97。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + thirdparty/{kenney-nature-kit,kenney-car-kit,poly-streetlight}/ + VENDOR.md ×3 + docs/worldgen/W3-PLAN.md + CITY-TOOLS-GUIDE §8 + MILESTONES 本栏 + example/w3-m0 七段 + w0-m2/m3/w2-m0 基线重拍 + cases.json 卡 129）。
+
+**完成情况**
+- 🟢 selftest 97×2 / ctest 151/151×2；street 锚 seed12345 = cars42/lights49/树 12 种 14~18 棵、seed12346 = cars42/树全均匀 14（42 = p=1/4 二项众数，两 seed 同值非异常，selftest 车 seed 敏感断言用首车位置）。
+- 🟢 w3-m0 run.bat 七段 ALL GREEN；回归 w3-m0 8/8 + w0-m2/m3、w2-m0 各 8/8；w0-m2 nextID 锚 37→316 机械更新。
+- 🟢 资产全 CC0：nature kit 经 ClanCode 镜像（gh-proxy sparse clone）+ License.txt 原文；car kit 经 cinevva CDN 直链；路灯 poly.pizza 直链。样张先解剖后入库（kenney 前科教训执行）。
+
+**踩坑情况**
+1. car kit 样张解剖漏查 image.uri——cinevva 单文件 glb 的贴图是外部 uri 残留（Textures/colormap.png），tinygltf 不加载外部文件，渲染时才炸「not 8-bit decoded RGBA-capable data」。教训：**样张解剖必须查 image.uri 有无，「images: 1」不等于嵌入**。（修复见 M-W3.1 变形一）
+
+**下一步**：M-W3.1 消费验收（drive vendored 装配 + viewer 315 实体渲染）。
+
+## W3 M-W3.1 — drive vendored 装配 + 资产端两变形（feat/worldgen，2026-11-14，tag `w3-m1`，M-W3 整轨收官）
+
+**动作**：city2engine `copy_vendored_assets`（引用解析→三目录查找→assets/models 同字节去重拷贝，21 件全池被引用）+ GLB_NAME_RE 扩连字符 + w1_check hash 集合按引用闭合扩 vendored glb + city2engine selftest 21→32（vendored 通道 9 断言）+ viewer 渲染 objects=315/batches=215 零引擎改动 + `tools/embed_glb_textures.py`（colormap.png 嵌入变形，8 车）+ w1-m1/w2-m1/w3-m1 十二图重拍（正确后端→文件名映射）。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py + example/w1-m0/w1_check.py + tools/embed_glb_textures.py + example/{w1-m1,w2-m1,w3-m1}/ + cases.json 卡 130 + w2-m0 卡 selftest 锚 88→97 + CITY-TOOLS-GUIDE §9 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 drive vendored=21 零闪断；同路径双跑 delivery sha256 一致（w1_check 修复口径 + vendored 扩集）。
+- 🟢 回归七卡全绿：w3-m0 8/8 + w3-m1 4/4 + w2-m0 8/8（锚更新）+ w2-m1 4/4 + w1-m1 4/4 + w1-m0 8/8 + w0-m2/m3 8/8。
+- 🟢 viewer street 图：彩色车（嵌入 colormap）+ 路灯弯杆清晰可见；top 图 315 实体装配（树冠被楼体遮挡属构图固有，objects/batches 锚闭合）。
+
+**踩坑情况**
+1. **多后端批量拍图文件名覆盖事故**：for 循环复刻拍图把两后端输出写同一文件名——VULKAN 覆盖 DX12 主图、-VULKAN 后缀图从未落盘，w2-m1/w1-m1 基线混用 M-W2 旧图与 M-W3 新图 → 回归 vk 大面积 FAIL（79725 像素差）而 dx12 top 逐字节 PASS。排查链：vk 自对拍确定 → scene 跨例子 cmp 确定 → glb 跨 drive hash 确定 → 最后 mtime 对照抓出（vk PNG 是 23:58 旧图）。教训：**多后端批量拍图输出路径必须逐后端显式写死，循环变量不许进输出路径；基线混代问题先查 mtime 再怀疑渲染确定性。**
+2. 特写机位 dist 21/26 两次实测钻楼底（orbit 相机 dist < 城市对角半径 ≈33m 必进几何内部）——M-W2.1 教训量化入 GUIDE §9：证据机位必须 ≥ 城市对角半径。
+3. drive 首跑 vendored 误把重写后的 city_block_*.glb 当外部资产（engine_text 传入 vs scene_text）——跳过条件补 city_block_ 前缀。教训：**同一引用字段有两种形态（中间名/装配名）时，识别分支必须同时枚举两类。**
+
+**下一步**：M-W3 整轨收官（close + release --done）；后续方向：M-T0 交通（消费 roadnet.json + car edgeId 溯源字段已预埋）、街具扩展（红绿灯等，CC0 源待寻）、楼型池/树池扩容。

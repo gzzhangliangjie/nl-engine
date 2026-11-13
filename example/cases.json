@@ -11771,15 +11771,15 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：确定性/已知答案/布局锚/噪声/楼体+OBJ+scene 88 条断言",
+     "name": "selftest：97 断言（M-W3.0 街道资产组加入，82→88→97）",
      "kind": "tool",
-     "note": "M-W2.0 新增 6 组变体断言（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含）；--verbose 逐条 ok 行是证据日志数据源。",
+     "note": "M-W2.0 新增 6 组变体断言（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含）；--verbose 逐条 ok 行是证据日志数据源。（M-W3.0 锚更新：97）",
      "args": [
       "selftest",
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "citygen selftest: PASS (88 assertions)",
+     "expectLog": "citygen selftest: PASS (97 assertions)",
      "command": "city-tools selftest --verbose"
     },
     {
@@ -11897,6 +11897,166 @@
       "vulkan": "example/w2-m1/city_street-VULKAN.png"
      },
      "command": "viewer.exe --scene w2-m1/city.scene.engine (street)"
+    }
+   ]
+  },
+  {
+   "id": "w3-m0",
+   "label": "W3 M-W3.0",
+   "name": "树/车/路灯资产通道：city-tools 摆放数据 + vendored 名字表（12 树池/8 车池/路灯）",
+   "tag": "w3-m0",
+   "date": "2026-11-14",
+   "summary": "M-W3.0：W3-PLAN 拍板 A1+B1+C1+D1 落码——city-tools 摆放数据 canonical 化（树沿用 M-W0.3 RNG 位置零新增消费，树型 fnv1a64(seed,'tree',idx)%12 纯函数选型；车新增 CityCar 沿路网有向边停靠 hash(seed,'car',edge)%4 命率、t∈[0.2,0.8] 避路口、垂边 0.3m 偏移、车型 hash%8、edgeId 溯源预埋 M-T0；路灯 CityProp 每路口 1 盏 hash 四角选位）。名字表 kTreeVariantNames/kCarVariantNames 与 thirdparty/{kenney-nature-kit,kenney-car-kit,poly-streetlight} 一一对应（selftest 锁白名单形态），city-tools 零资产依赖（A1：glb 本体由 drive 装配）。serializeCityScene 实体 36->315（nextID 316 锚），serializeLayout 加树 variant/cars/props 段，generate --stats 增 street: 分布行。selftest 88->97（名字表守恒/树池界+覆盖/车数界+seed 敏感/路灯恒 crossroads/scene 实体形态/nextID 恒等式）。分布锚 seed12345=42 车/49 灯/树 12 种均匀（14~18），seed12346=42 车/168 棵全均匀 14。",
+   "acceptance": [
+    "selftest 97 断言双后端 PASS（9 组 M-W3.0 断言：名字表白名单形态/树池界覆盖>=8/车数界[24,64]+seed 敏感/路灯恒 49/scene 315 实体+nextID 恒等式）",
+    "generate --stats street 锚：cars=42 lights=49 treeVariants=14,13,16,18,17,16,14,13,16,18,17,16（FNV-1a 确定性）",
+    "w3-m0 run.bat 七段 ALL GREEN（同 seed 字节确定性/异 seed street 锚/nextID 316）",
+    "w0-m2/m3 + w2-m0 基线重拍 ALL GREEN；ctest 151/151×2；city2engine selftest 32（vendored 通道 9 断言）"
+   ],
+   "preview": "example/w3-m0/city_top.png",
+   "exe": {
+    "dx12": "build/DX12/city-tools.exe",
+    "vulkan": "build/VULKAN/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "city-tools 纯 CPU，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：97 断言（含 M-W3.0 街道资产 9 组）",
+     "kind": "tool",
+     "note": "M-W3.0 新增：名字表守恒/树池界覆盖/车数界+seed 敏感/路灯恒 crossroads/scene 实体形态+nextID 恒等式；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (97 assertions)",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：树/车/路灯摆放 + street 分布行 + 315 实体 scene",
+     "kind": "tool",
+     "note": "seed 12345 -> cars=42（168 边 1/4 命率）lights=49（每路口 1 盏）树 12 池均匀；city.scene nextID=316；variants 锚沿用 M-W2.0。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w3-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "street: cars=42 lights=49",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w3-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w3-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w3-m1",
+   "label": "W3 M-W3.1",
+   "name": "街景资产消费验收：drive vendored 装配（21 glb）+ viewer 315 实体渲染",
+   "tag": "w3-m1",
+   "date": "2026-11-14",
+   "summary": "M-W3.1：A1 拍板 drive 层装配落地——city2engine copy_vendored_assets（scene mesh 引用解析 -> thirdparty 三目录查找 -> assets/models 同字节去重拷贝，21 件 = 12 树 + 8 车 + 路灯全池被引用）；GLB_NAME_RE 扩连字符（sedan-sports.glb，viewer 白名单允许可打印 ASCII，drive 侧保持安全子集）。viewer --scene 渲染 objects=315（36 楼块+188 树+42 车+49 路灯）batches=215，车/路灯/树 glb 全链零引擎改动直渲。**资产端变形一处**：cinevva 车包 glb 的 image 是外部 uri（Textures/colormap.png 分离残留），tinygltf 不加载外部文件 -> 渲染报错实锤 -> tools/embed_glb_textures.py 把官方 CC0 colormap.png（sz-games 镜像获取，512x512 RGBA）追加进 BIN chunk 转嵌入式 bufferView（8 车全处理，VENDOR.md 留档）。特写机位两次探针实测钻楼底（dist 21/26 < 城市半径，M-W2.1 教训复现），证据机位沿用 top/street 验证位。",
+   "acceptance": [
+    "drive vendored=21（12 树+8 车+路灯全池）+ 同路径双跑 delivery 集合 sha256 一致（w1_check 扩 vendored glb 进 hash 口径）",
+    "viewer objects=315 batches=215 双后端 4 图（top+street），车/路灯贴图渲染正常（street 图可视）",
+    "w3-m1 run.bat ALL GREEN（drive vendored=21 锚 + objects=315 锚 + screenshot written ×4）",
+    "回归 w3-m0 8/8 + w2-m0/w2-m1/w1-m0/w1-m1 + w0-m2/m3 全绿"
+   ],
+   "preview": "example/w3-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：315 实体城市（树/车/路灯 footprint 分布）",
+     "kind": "image",
+     "note": "viewer --scene 直渲；objects=315 锁全部街道资产装载；树冠/车顶在楼间可辨。",
+     "args": [
+      "--scene",
+      "{root}/example/w3-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w3-m1/city_top.png",
+      "vulkan": "example/w3-m1/city_top-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w3-m1/city.scene.engine (pitch -89)"
+    },
+    {
+     "id": "city-street",
+     "name": "街景：车/路灯/树（yaw 28 / pitch -10 / dist 30）",
+     "kind": "image",
+     "note": "街景机位：彩色车（嵌入 colormap）+ 路灯弯杆清晰可见；树冠在楼间草地点缀。",
+     "args": [
+      "--scene",
+      "{root}/example/w3-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w3-m1/city_street.png",
+      "vulkan": "example/w3-m1/city_street-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w3-m1/city.scene.engine (street)"
     }
    ]
   }

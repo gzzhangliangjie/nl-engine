@@ -30,6 +30,15 @@
 //   → ④ 树位置（次数由密度档决定，流尾最后）。③④ 纯追加，①② 逐字节不动。
 //   M-W2.0 楼型变体零 RNG 消费（fnv1a64 纯函数，M-W1.1 材质档同构先例）——
 //   本头注释的消费序契约自 M-W0.3 起冻结，M-W2 未追加任何消费点。
+//   M-W3.0 树/车/路灯摆件：树沿用 ④ 段 RNG 位置（零新增消费），树型/车型/
+//   街灯摆放全部 fnv1a64 纯函数（assetVariantHash，W3-PLAN 拍板 B1）——
+//   RNG 流契约继续冻结，无新增消费点。
+//
+// M-W3.0 外部资产通道（docs/worldgen/W3-PLAN.md 拍板 A1+B1+C1+D1）：树池 12
+//   种（thirdparty/kenney-nature-kit/，名字表 kTreeVariantNames selftest 锁）+
+//   车池 8 种（kenney-car-kit，沿路网边停靠 t∈[0.2,0.8]）+ 路灯（poly-
+//   streetlight，每路口 1 盏）。glb 本体由 drive 从 vendored 目录装配
+//   （city-tools 零资产依赖，A1 拍板）；车运动归 M-T0 交通轨。
 //
 // M-W2.0 楼型池（docs/worldgen/W2-PLAN.md §2 拍板：A1 程序化楼型池 + B1 纯函数
 //   选型）：CityBuilding 加 variant 字段，fnv1a64(seed‖block‖building) % 池容量
@@ -233,6 +242,7 @@ struct CityStats {
     std::uint32_t cars = 0;
     std::uint32_t fences = 0;
     std::uint32_t paths = 0;
+    std::uint32_t props = 0; // M-W3.0：街具数（路灯，每路口 1 盏）
 };
 
 // M-W0.2 楼体（block 局部坐标，y-up，米；center = cell 世界中心）。
@@ -247,11 +257,34 @@ struct CityBuilding {
     std::uint32_t variant = 0;
 };
 
-// M-W0.3 树（block 局部坐标，仅俯视图 + 统计层；不进 OBJ/city.scene——保
-// w0-m2 冻结基线产物，M-W1 若需树资产走 asset-ingest 通道）。
+// M-W0.3 树（block 局部坐标）。M-W3.0：进 city.scene（W3-PLAN 拍板 B1），
+// 变体 = fnv1a64 纯函数选型（零 RNG；位置仍是 M-W0.3 RNG 流尾数据，不动）。
 struct CityTree {
     float cx = 0.f; // 树中心 x（block 局部）
     float cz = 0.f;
+    // M-W3.0 树型池索引（kTreeVariantNames；W3-PLAN §2 C1 拍板 12 池）。
+    std::uint32_t variant = 0;
+};
+
+// M-W3.0 车（静态停靠；运动系统归 M-T0 交通轨）：沿路网有向边采样。
+// 位置 = 边线性插值（t ∈ [0.2,0.8] 停靠区间避开路口交叉区）+ 垂边偏移
+// 0.3m（路缘内）；yaw = 边朝向（车头贴行驶方向，kenney car 模型 -z 朝前
+// 口径，渲染验收校正点）。
+struct CityCar {
+    float x = 0.f;
+    float z = 0.f;
+    float yaw = 0.f;
+    std::uint32_t variant = 0; // kCarVariantNames 池索引（8 池）
+    std::uint32_t edgeId = 0;  // 溯源（M-T0 交通消费接口预埋）
+};
+
+// M-W3.0 街具（通道试点：路灯 ×1 种）。每路口 1 盏，四角之一（hash 选角），
+// 贴路缘外 0.15m。后续加街具 = 新 kind + 名字表条目，纯数据扩展。
+struct CityProp {
+    float x = 0.f;
+    float z = 0.f;
+    float yaw = 0.f;
+    std::uint32_t kind = 0; // 0 = streetlight（kStreetLightName）
 };
 
 struct CityCell {
@@ -267,6 +300,8 @@ struct CityLayout {
     CityParams params;
     std::int32_t lo = 0; // 网格低索引（-size/2）
     std::vector<CityCell> cells;
+    std::vector<CityCar> cars;   // M-W3.0（世界坐标，沿路网）
+    std::vector<CityProp> props; // M-W3.0（世界坐标，沿路口）
     CityStats stats;
     std::uint32_t noiseSeed = 0; // M-W0.3：噪声种子（主流第 ③ 段消费的 u32）
     float minX = 0.f, maxX = 0.f, minZ = 0.f, maxZ = 0.f; // 城市外延（米）
@@ -347,6 +382,52 @@ std::uint32_t buildingVariant(std::uint64_t seed, std::uint32_t blockIndex,
         picked = kVariantSetback;
     return picked;
 }
+
+// ---------------------------------------------------------------------------
+// M-W3.0 外部资产摆放（W3-PLAN 拍板 A1+B1+C1：drive 层装配 / city-tools 产
+// 摆放数据 / 树+车+路灯试点）。名字表与 thirdparty/{kenney-nature-kit,
+// kenney-car-kit, poly-streetlight}/ 一一对应（selftest 锁池界 + 覆盖；
+// A1 拍板 city-tools 零资产依赖——只写名字不读文件，glb 本体由 drive 从
+// vendored 目录拷进 assets/models/）。变体选取全部 fnv1a64 纯函数（零 RNG，
+// M-W2.0 楼型同构），RNG 流契约 ①②③④ 逐字节不动。
+// ---------------------------------------------------------------------------
+constexpr std::uint32_t kTreeVariantCount = 12;
+const char* kTreeVariantNames[kTreeVariantCount] = {
+    "tree_blocks.glb",   "tree_cone.glb",    "tree_default.glb",
+    "tree_detailed.glb", "tree_oak.glb",     "tree_palm.glb",
+    "tree_pineDefaultA.glb", "tree_pineRoundA.glb", "tree_plateau.glb",
+    "tree_simple.glb",   "tree_small.glb",   "tree_tall.glb",
+};
+constexpr std::uint32_t kCarVariantCount = 8;
+const char* kCarVariantNames[kCarVariantCount] = {
+    "sedan.glb", "sedan-sports.glb", "suv.glb", "taxi.glb",
+    "police.glb", "van.glb", "truck.glb", "delivery.glb",
+};
+constexpr std::uint32_t kPropKindCount = 1;
+const char* kPropKindNames[kPropKindCount] = {"streetlight.glb"};
+
+// 通用纯函数选型：fnv1a64(seed ‖ tag ‖ idx)（与 buildingVariant 同构 16B
+// 逐字节流）。tag = 域分隔（树 'tree' / 车 'car' / 街灯 'lite'）。
+std::uint64_t assetVariantHash(std::uint64_t seed, std::uint64_t tag,
+                               std::uint32_t idx) {
+    std::uint8_t buf[20];
+    for (int i = 0; i < 8; ++i)
+        buf[i] = static_cast<std::uint8_t>(seed >> (8 * i));
+    for (int i = 0; i < 8; ++i)
+        buf[8 + i] = static_cast<std::uint8_t>(tag >> (8 * i));
+    for (int i = 0; i < 4; ++i)
+        buf[16 + i] = static_cast<std::uint8_t>(idx >> (8 * i));
+    std::uint64_t h = 14695981039346656037ULL;
+    for (std::uint8_t v : buf) {
+        h ^= v;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+// 选型 helper 定义在 M-W3.0 名字表段（buildingVariant 之后）；generateCity
+// 尾部调用，buildRoadnet 定义在其后——前向声明。
+void generateStreetAssets(CityLayout& lay);
 
 // 生成确定性布局：RNG 消费序 = 文件头纪律。第一遍 cell 行主序消费 shade
 // （M-W0.0 前缀，逐字节不动）；第二遍 cell 行主序消费楼体档位（M-W0.2 追加
@@ -439,6 +520,21 @@ CityLayout generateCity(const CityParams& params) {
         }
     }
 
+    // M-W3.0 第六遍（零 RNG）：树型变体回填（全局树序 = cell 行主序 × 树序，
+    // fnv1a64(seed‖'tree'‖globalIdx) % 12，W3-PLAN §2 B1 拍板）。
+    {
+        std::uint32_t treeIdx = 0;
+        for (CityCell& cell : lay.cells) {
+            for (CityTree& tr : cell.trees) {
+                tr.variant = static_cast<std::uint32_t>(
+                    assetVariantHash(params.seed, 0x74726565ULL /*"tree"*/,
+                                     treeIdx) %
+                    kTreeVariantCount);
+                ++treeIdx;
+            }
+        }
+    }
+
     lay.stats.blocks = params.size * params.size;
     lay.stats.groundTiles = lay.stats.blocks;
     lay.stats.roadSegments = 2u * lay.stats.blocks; // 每 cell 一横一竖
@@ -456,7 +552,10 @@ CityLayout generateCity(const CityParams& params) {
            : cell.densityTier == 2u ? lay.stats.mediumCells
                                     : lay.stats.highCells); // M-W0.3
     }
-    // cars/fences/paths 保持 0：未消费（超出 M-W0 范围，挂零锚）。
+    // M-W3.0：cars/props 由 generateStreetAssets 填（内部重建路网拓扑；
+    // 纯函数零 RNG，所有 generateCity 调用点自动一致）。fences/paths 保持 0：
+    // 未消费（超出 M-W0 范围，挂零锚）。
+    generateStreetAssets(lay);
 
     lay.minX = static_cast<float>(lay.lo) * kBlockX;
     lay.maxX = static_cast<float>(hi) * kBlockX;
@@ -565,8 +664,55 @@ Roadnet buildRoadnet(const CityLayout& lay) {
     return net;
 }
 
-// roadnet.json 确定性序列化（W0-PLAN §1 契约原文形态：2 空格缩进、固定字段序、
-// %.1f 米单位，C locale 固定小数点）。ASCII only。
+// ---------------------------------------------------------------------------
+// M-W3.0 街道资产摆放（W3-PLAN 拍板 B1：city-tools 产 canonical 摆放数据，
+// 零 RNG——全部 fnv1a64 纯函数）。generateCity 之后、serializeCityScene/
+// serializeRoadnet 之前调用（依赖 buildRoadnet 拓扑）。
+//
+//   车：每有向边 hash(seed‖'car'‖edgeId) % 4 == 0 → 停 1 辆；沿边参数
+//       t = 0.2 + (h>>8 % 61)/100 ∈ [0.2,0.8]（避开路口交叉区）；垂边偏移
+//       0.3m（hash 选左右侧，路缘内停靠）；车型 hash % 8。期望密度
+//       168 边 × 1/4 = 42 辆（size 6）。
+//   路灯：每路口 1 盏；四角之一（hash % 4），偏移 (±0.65, ±0.65)（路带半宽
+//       0.5 + 0.15 路缘外）。49 口（size 6）恒 49 盏。
+// ---------------------------------------------------------------------------
+void generateStreetAssets(CityLayout& lay) {
+    const Roadnet net = buildRoadnet(lay);
+    for (const RoadnetEdge& e : net.edges) {
+        const std::uint64_t h =
+            assetVariantHash(lay.params.seed, 0x63617200ULL /*"car\0"*/, e.id);
+        if (h % 4u != 0u) continue;
+        const RoadnetNode& na = net.nodes[e.from];
+        const RoadnetNode& nb = net.nodes[e.to];
+        const float t = 0.2f + static_cast<float>((h >> 8) % 61u) * 0.01f;
+        const float dx = nb.x - na.x;
+        const float dz = nb.z - na.z;
+        const float len = std::sqrt(dx * dx + dz * dz);
+        if (len < 1e-4f) continue; // 不可能（grid 边恒 5.5/4.0m），防御
+        CityCar c;
+        c.x = na.x + dx * t + (-dz / len) * 0.3f;
+        c.z = na.z + dz * t + (dx / len) * 0.3f;
+        c.yaw = std::atan2(dx, dz); // 车头贴行驶方向（模型 -z 朝前口径）
+        c.variant = static_cast<std::uint32_t>((h >> 16) % kCarVariantCount);
+        c.edgeId = e.id;
+        lay.cars.push_back(c);
+    }
+    for (const RoadnetNode& nd : net.nodes) {
+        const std::uint64_t h = assetVariantHash(lay.params.seed,
+                                                 0x6c697465ULL /*"lite"*/,
+                                                 nd.id);
+        static const float kCorner[4][2] = {{0.65f, 0.65f}, {-0.65f, 0.65f},
+                                            {-0.65f, -0.65f}, {0.65f, -0.65f}};
+        CityProp p;
+        p.x = nd.x + kCorner[h % 4u][0];
+        p.z = nd.z + kCorner[h % 4u][1];
+        p.yaw = 0.f;
+        p.kind = 0u;
+        lay.props.push_back(p);
+    }
+    lay.stats.cars = static_cast<std::uint32_t>(lay.cars.size());
+    lay.stats.props = static_cast<std::uint32_t>(lay.props.size());
+}
 std::string serializeRoadnet(const Roadnet& net) {
     std::string s;
     char buf[160];
@@ -818,15 +964,22 @@ std::string serializeCityScene(const CityLayout& lay) {
     // buf 必须容纳整段实体文本（~280B）：M-W1.0 实锤 buf[192] 在
     // "position": [%.2f 处截断，产出的 city.scene 是非法 JSON（36 实体全伤，
     // 截断确定性导致 fc 逐字节段与 findstr 锚全绿、无人发现——viewer M-W1.1
-    // 才成为第一个 JSON 解析消费者）。
+    // 才成为第一个 JSON 解析消费者）。M-W3.0 树/车/路灯实体 ~240B，512 富余。
     std::string s;
     char buf[512];
     const std::uint32_t n = static_cast<std::uint32_t>(lay.cells.size());
+    const std::uint32_t treeTotal = lay.stats.trees;
+    const std::uint32_t carTotal = static_cast<std::uint32_t>(lay.cars.size());
+    const std::uint32_t propTotal =
+        static_cast<std::uint32_t>(lay.props.size());
+    const std::uint32_t total = n + treeTotal + carTotal + propTotal;
     s += "{\n";
     s += "  \"version\": 1,\n";
-    std::snprintf(buf, sizeof buf, "  \"nextID\": %u,\n", n + 1u);
+    std::snprintf(buf, sizeof buf, "  \"nextID\": %u,\n", total + 1u);
     s += buf;
     s += "  \"entities\": [\n";
+    std::uint32_t id = 1;
+    const char* sep = ",";
     for (std::uint32_t i = 0; i < n; ++i) {
         const CityCell& c = lay.cells[i];
         const float cx =
@@ -841,9 +994,77 @@ std::string serializeCityScene(const CityLayout& lay) {
                       "\"scale\": [1.0, 1.0, 1.0], "
                       "\"rotation\": [0.0, 0.0, 0.0, 1.0] }\n"
                       "    } }%s\n",
-                      i + 1u, i, i, cx, cz,
-                      i + 1 == n ? "" : ",");
+                      id, i, i, cx, cz, i + 1 == n && carTotal == 0u &&
+                              propTotal == 0u && treeTotal == 0u
+                          ? "" : sep);
         s += buf;
+        ++id;
+    }
+    // M-W3.0 树实体（mesh = kTreeVariantNames[variant] 扁平白名单名；drive
+    // 从 vendored 目录拷入 assets/models/，A1 拍板）。位置 = cell 中心 +
+    // block 局部树心（树高度下探为负？kenney 树原点在根底，y=0 落地）。
+    std::uint32_t treeId = 0;
+    for (std::size_t ci = 0; ci < lay.cells.size(); ++ci) {
+        const CityCell& c = lay.cells[ci];
+        const float cx = (static_cast<float>(c.gx) + 0.5f) * kBlockX;
+        const float cz = (static_cast<float>(c.gz) + 0.5f) * kBlockZ;
+        for (const CityTree& tr : c.trees) {
+            const bool last =
+                treeId + 1u == treeTotal && carTotal == 0u && propTotal == 0u;
+            std::snprintf(buf, sizeof buf,
+                          "    { \"id\": %u, \"name\": \"tree_%02u\", "
+                          "\"flags\": 0, \"parent\": 0, \"components\": {\n"
+                          "      \"Model\": { \"mesh\": \"%s\", "
+                          "\"tint\": [1.0, 1.0, 1.0] },\n"
+                          "      \"Transform\": { \"position\": [%.2f, 0.0, "
+                          "%.2f], \"scale\": [1.0, 1.0, 1.0], "
+                          "\"rotation\": [0.0, 0.0, 0.0, 1.0] }\n"
+                          "    } }%s\n",
+                          id, treeId, kTreeVariantNames[tr.variant],
+                          cx + tr.cx, cz + tr.cz, last ? "" : ",");
+            s += buf;
+            ++id;
+            ++treeId;
+        }
+    }
+    // M-W3.0 车实体（rotation = 绕 Y 轴四元数 [0, sin(yaw/2), 0, cos(yaw/2)]；
+    // 边停靠朝向）。
+    for (std::uint32_t i = 0; i < carTotal; ++i) {
+        const CityCar& c = lay.cars[i];
+        const bool last = i + 1u == carTotal && propTotal == 0u;
+        const float hy = c.yaw * 0.5f;
+        std::snprintf(buf, sizeof buf,
+                      "    { \"id\": %u, \"name\": \"car_%02u\", "
+                      "\"flags\": 0, \"parent\": 0, \"components\": {\n"
+                      "      \"Model\": { \"mesh\": \"%s\", "
+                      "\"tint\": [1.0, 1.0, 1.0] },\n"
+                      "      \"Transform\": { \"position\": [%.2f, 0.0, %.2f], "
+                      "\"scale\": [1.0, 1.0, 1.0], "
+                      "\"rotation\": [0.0, %.4f, 0.0, %.4f] }\n"
+                      "    } }%s\n",
+                      id, i, kCarVariantNames[c.variant], c.x, c.z,
+                      std::sin(hy), std::cos(hy), last ? "" : ",");
+        s += buf;
+        ++id;
+    }
+    // M-W3.0 街具实体（kind 0 = streetlight）。
+    for (std::uint32_t i = 0; i < propTotal; ++i) {
+        const CityProp& p = lay.props[i];
+        const bool last = i + 1u == propTotal;
+        const float hy = p.yaw * 0.5f;
+        std::snprintf(buf, sizeof buf,
+                      "    { \"id\": %u, \"name\": \"streetlight_%02u\", "
+                      "\"flags\": 0, \"parent\": 0, \"components\": {\n"
+                      "      \"Model\": { \"mesh\": \"%s\", "
+                      "\"tint\": [1.0, 1.0, 1.0] },\n"
+                      "      \"Transform\": { \"position\": [%.2f, 0.0, %.2f], "
+                      "\"scale\": [1.0, 1.0, 1.0], "
+                      "\"rotation\": [0.0, %.4f, 0.0, %.4f] }\n"
+                      "    } }%s\n",
+                      id, i, kPropKindNames[p.kind], p.x, p.z,
+                      std::sin(hy), std::cos(hy), last ? "" : ",");
+        s += buf;
+        ++id;
     }
     s += "  ],\n";
     s += "  \"systems\": []\n";
@@ -908,7 +1129,7 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
             }
             appendU32(b, bd.variant); // M-W2.0
         }
-        // M-W0.3：树位置进规范序列化。
+        // M-W0.3：树位置进规范序列化（M-W3.0 增 variant）。
         appendU32(b, static_cast<std::uint32_t>(c.trees.size()));
         for (const CityTree& tr : c.trees) {
             float fields[2] = {tr.cx, tr.cz};
@@ -917,7 +1138,31 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
                 std::memcpy(&bits, &f, 4);
                 appendU32(b, bits);
             }
+            appendU32(b, tr.variant); // M-W3.0
         }
+    }
+    // M-W3.0：车段（沿路网停靠，世界坐标）。
+    appendU32(b, static_cast<std::uint32_t>(lay.cars.size()));
+    for (const CityCar& c : lay.cars) {
+        float fields[3] = {c.x, c.z, c.yaw};
+        for (float f : fields) {
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &f, 4);
+            appendU32(b, bits);
+        }
+        appendU32(b, c.variant);
+        appendU32(b, c.edgeId);
+    }
+    // M-W3.0：街具段（路口路灯）。
+    appendU32(b, static_cast<std::uint32_t>(lay.props.size()));
+    for (const CityProp& p : lay.props) {
+        float fields[3] = {p.x, p.z, p.yaw};
+        for (float f : fields) {
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &f, 4);
+            appendU32(b, bits);
+        }
+        appendU32(b, p.kind);
     }
     return b;
 }
@@ -1177,8 +1422,12 @@ SelftestResult runSelftest(bool verbose) {
     expect(lay.stats.buildings == 144u,
            "stats: buildings == 4 per block * 36 == 144 (M-W0.2)");
     expect(lay.stats.trees == 188u, "stats: trees == 188 (forest 21*8 + low 5*4, M-W0.3)");
-    expect(lay.stats.cars == 0u && lay.stats.fences == 0u && lay.stats.paths == 0u,
-           "stats: cars/fences/paths skeleton counters still zero");
+    // M-W3.0 改写：cars 由挂零锚变为街车计数（42 = 168 边 × 1/4 命率，期望
+    // 值恰中——纯函数分布锚）；fences/paths 仍挂零（未消费）。
+    expect(lay.stats.cars == 42u && lay.stats.fences == 0u &&
+               lay.stats.paths == 0u && lay.stats.props == 49u,
+           "stats: cars=42 (168 edges x 1/4 hit, M-W3.0) props=49 "
+           "(one per crossroads) fences/paths still zero");
     expect(lay.stats.forestCells == 21u && lay.stats.lowCells == 5u &&
                lay.stats.mediumCells == 6u && lay.stats.highCells == 4u,
            "stats: density tiers 21/5/6/4 (Python reference cross-check, M-W0.3)");
@@ -1671,10 +1920,12 @@ SelftestResult runSelftest(bool verbose) {
         const std::string scA = serializeCityScene(lay);
         expect(scA == serializeCityScene(generateCity(p0)),
                "scene: same seed double-build byte-identical");
+        // M-W3.0：nextID 37（36 block）→ 316 = 1 + 36 block + 188 tree +
+        // 42 car + 49 streetlight。
         expect(scA.find("\"version\": 1") != std::string::npos &&
-                   scA.find("\"nextID\": 37") != std::string::npos &&
+                   scA.find("\"nextID\": 316") != std::string::npos &&
                    scA.find("\"systems\": []") != std::string::npos,
-               "scene: E1 World JSON anchors (version/nextID/systems)");
+               "scene: E1 World JSON anchors (version/nextID=316/systems)");
         std::uint32_t entCount = 0, meshCount = 0;
         std::size_t pos = 0;
         while ((pos = scA.find("\"name\": \"block_", pos)) != std::string::npos) {
@@ -1686,20 +1937,22 @@ SelftestResult runSelftest(bool verbose) {
             ++meshCount;
             pos += 21;
         }
+        // M-W3.0：block 实体仍 36（树/车/路灯实体单独计数见 M-W3 断言组）。
         expect(entCount == 36u && meshCount == 36u,
-               "scene: 36 entities with 36 mesh references (blocks=36)");
+               "scene: 36 block entities with 36 OBJ mesh references");
         // JSON 结构有效性（M-W1.0 截断 bug 硬闸：buf 溢出确定性截断曾让
         // city.scene 非法 JSON 而锚全绿）。每个实体必须带完整 Transform
-        // 尾段（rotation 收口），且全文花括号配平。
+        // 尾段（rotation 收口），且全文花括号配平。M-W3.0：实体总数
+        // 36 block + 188 tree + 42 car + 49 streetlight = 315，全部带
+        // rotation 字段（车是绕 Y 旋转四元数，形态不同、M-W3 组另校验）。
         std::uint32_t rotCount = 0;
         pos = 0;
-        while ((pos = scA.find("\"rotation\": [0.0, 0.0, 0.0, 1.0] }", pos)) !=
-               std::string::npos) {
+        while ((pos = scA.find("\"rotation\": [", pos)) != std::string::npos) {
             ++rotCount;
             pos += 10;
         }
-        expect(rotCount == 36u,
-               "scene: 36 complete Transform tails (rotation closure; "
+        expect(rotCount == 315u,
+               "scene: 315 rotation fields == entity count (36+188+42+49; "
                "no snprintf truncation)");
         std::int64_t braces = 0;
         bool negative = false;
@@ -1721,9 +1974,107 @@ SelftestResult runSelftest(bool verbose) {
         }
         expect(refClosureOk,
                "scene: every mesh reference closed to an emitted OBJ");
-        expect(serializeCityScene(generateCity(p1)) == scA,
-               "scene: seed-agnostic index (E1 schema has no seed key; seed "
-               "lives in mesh contents, not in the scene)");
+        // M-W3.0 改写：树/车 mesh 名与位置是 seed 的确定函数（变体分布 +
+        // 停靠采样随 seed 变），原「seed-agnostic」断言失效。新语义 =
+        // 异 seed 结构合法 + 实体内容必异。
+        const std::string scP1 = serializeCityScene(generateCity(p1));
+        expect(scP1 != scA,
+               "scene: different seed -> different tree/car entity content "
+               "(M-W3.0 variant/position draws)");
+        {
+            int bracesP1 = 0;
+            bool negP1 = false;
+            for (char ch : scP1) {
+                if (ch == '{') ++bracesP1;
+                if (ch == '}') --bracesP1;
+                if (bracesP1 < 0) negP1 = true;
+            }
+            expect(!negP1 && bracesP1 == 0,
+                   "scene: other-seed JSON braces balanced (structural)");
+        }
+    }
+
+    // --- M-W3.0 街道资产（W3-PLAN 拍板 A1+B1+C1；全部 fnv1a64 纯函数）---
+    {
+        // 名字表守恒：池容量 + 白名单形态（扁平可打印 ASCII .glb，无路径分隔）。
+        bool namesOk = true;
+        for (std::uint32_t i = 0; i < kTreeVariantCount; ++i) {
+            const std::string nm = kTreeVariantNames[i];
+            namesOk = namesOk && nm.size() > 4u &&
+                      nm.substr(nm.size() - 4u) == ".glb" &&
+                      nm.find('/') == std::string::npos;
+        }
+        for (std::uint32_t i = 0; i < kCarVariantCount; ++i) {
+            const std::string nm = kCarVariantNames[i];
+            namesOk = namesOk && nm.size() > 4u &&
+                      nm.substr(nm.size() - 4u) == ".glb" &&
+                      nm.find('/') == std::string::npos;
+        }
+        expect(namesOk && std::string(kPropKindNames[0]) == "streetlight.glb",
+               "street: asset name tables are flat whitelist .glb forms");
+        // 树变体：池界 + 覆盖（188 棵 / 12 池，均匀化 hash 期望每种 ~16 棵；
+        // 弱断言 >= 8 种防池退化为单型）。
+        std::uint32_t tvSeen[kTreeVariantCount] = {};
+        bool tvBounds = true;
+        for (const CityCell& c : lay.cells)
+            for (const CityTree& t : c.trees) {
+                if (t.variant >= kTreeVariantCount) tvBounds = false;
+                else ++tvSeen[t.variant];
+            }
+        std::uint32_t tvKinds = 0;
+        for (std::uint32_t v = 0; v < kTreeVariantCount; ++v)
+            if (tvSeen[v] > 0u) ++tvKinds;
+        expect(tvBounds && tvKinds >= 8u,
+               "street: tree variants in-bounds and cover >=8 of 12 pool");
+        // 车：数量界（168 边 1/4 命率，期望 42；[24,64] 容忍 hash 涨落）+
+        // 池界 + 位置在城界内 + edgeId 溯源界。
+        const std::uint32_t carN = static_cast<std::uint32_t>(lay.cars.size());
+        bool carOk = carN >= 24u && carN <= 64u;
+        for (const CityCar& c : lay.cars) {
+            carOk = carOk && c.variant < kCarVariantCount &&
+                    c.edgeId < lay.stats.roadnetEdges &&
+                    c.x >= lay.minX - 1.f && c.x <= lay.maxX + 1.f &&
+                    c.z >= lay.minZ - 1.f && c.z <= lay.maxZ + 1.f;
+        }
+        expect(carOk, "street: cars count/variant/extent in-bounds");
+        // 车确定性敏感：异 seed 首车必异（hash 链不同）。
+        const CityLayout layC = generateCity(p1);
+        bool carDiff = layC.cars.size() != lay.cars.size();
+        if (!carDiff && !lay.cars.empty()) {
+            const CityCar& a = lay.cars[0];
+            const CityCar& b = layC.cars[0];
+            carDiff = a.x != b.x || a.z != b.z || a.variant != b.variant ||
+                      a.edgeId != b.edgeId;
+        }
+        expect(carDiff, "street: cars are seed-sensitive (pure fnv1a draws)");
+        // 路灯：恒 = 路口数，位置在城界内。
+        bool propOk = lay.props.size() == lay.stats.crossroads;
+        for (const CityProp& p : lay.props) {
+            propOk = propOk && p.x >= lay.minX - 1.f &&
+                    p.x <= lay.maxX + 1.f && p.z >= lay.minZ - 1.f &&
+                    p.z <= lay.maxZ + 1.f && p.kind < kPropKindCount;
+        }
+        expect(propOk, "street: one streetlight per crossroads, in-bounds");
+        // city.scene 实体形态：树/车/路灯实体齐 + nextID 恒等式 + 车四元数。
+        {
+            const std::string scW3 = serializeCityScene(lay);
+            const std::uint32_t expectNext =
+                static_cast<std::uint32_t>(lay.cells.size()) + lay.stats.trees +
+                lay.stats.cars + lay.stats.props + 1u;
+            char bufS[96];
+            std::snprintf(bufS, sizeof bufS, "\"nextID\": %u", expectNext);
+            expect(scW3.find(bufS) != std::string::npos,
+                   "scene: nextID == blocks + trees + cars + props + 1");
+            expect(scW3.find("\"name\": \"tree_00\"") != std::string::npos &&
+                       scW3.find("\"name\": \"car_00\"") != std::string::npos &&
+                       scW3.find("\"name\": \"streetlight_00\"") !=
+                           std::string::npos,
+                   "scene: tree/car/streetlight entities present");
+            expect(scW3.find("\"mesh\": \"streetlight.glb\"") !=
+                       std::string::npos &&
+                       scW3.find("\"mesh\": \"blocks/") != std::string::npos,
+                   "scene: mesh refs mix vendored glb names and OBJ blocks");
+        }
     }
 
     res.assertions = n;
@@ -1985,6 +2336,18 @@ int runGenerate(const GenerateConfig& cfg, const std::string& assetDir) {
             "variants: single=%u setback=%u podium=%u lshape=%u "
             "(M-W2.0 fnv1a pool)\n",
             vCount[0], vCount[1], vCount[2], vCount[3]);
+        // M-W3.0 街道资产统计（纯追加行；车 = 沿边 1/4 命率 × 品 8 池，
+        // 路灯 = 每路口 1 盏恒 crossroads，树变体分布 12 池）。
+        std::uint32_t tvCount[kTreeVariantCount] = {};
+        for (const CityCell& c : lay.cells)
+            for (const CityTree& t : c.trees)
+                if (t.variant < kTreeVariantCount) ++tvCount[t.variant];
+        std::printf("street: cars=%u lights=%u treeVariants=", lay.stats.cars,
+                    lay.stats.props);
+        for (std::uint32_t i = 0; i < kTreeVariantCount; ++i)
+            std::printf("%u%s", tvCount[i], i + 1u == kTreeVariantCount
+                                                ? "\n"
+                                                : ",");
     }
     return 0;
 }

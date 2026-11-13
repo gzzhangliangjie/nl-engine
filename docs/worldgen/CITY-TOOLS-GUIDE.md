@@ -269,3 +269,49 @@ selftest 以「重建流 next() == noiseSeed」锁定 ③ 段位置；①② 段
 - **w1-m1/w2-m1 image 卡补 baselines 登记**（m0.2 老口径：per-case
   `baselines:{dx12,vulkan}` 指向产物 PNG）——旧卡无 baselines，回归
   judge_image 基线缺失必 FAIL（W1 收官「回归 8/8」实为口径含糊，本轨勘误）。
+
+## 8. M-W3.0 — 树/车/路灯资产通道：摆放数据 canonical 化（2026-11-14，tag `w3-m0`）
+
+- 拍板（W3-PLAN §4）：**A1** drive 层装配（city-tools 零资产依赖，只写
+  vendored 扁平名）+ **B1** city-tools 产摆放数据（树沿用 M-W0.3 RNG 位置，
+  树型/车型/街灯全部 fnv1a64 纯函数）+ **C1** 树+车+路灯试点（红绿灯等
+  CC-BY 件不进，poly.pizza 探针三件均 CC-BY）+ **D1** 路面纹理不做。
+- 池：`kTreeVariantNames` 12 种（kenney nature kit 61 树中选形状代表）×
+  `kCarVariantNames` 8 种（kenney car kit）× 路灯 1 种（Quaternius，
+  poly.pizza CC0）。名字表 ↔ `thirdparty/{kenney-nature-kit,kenney-car-kit,
+  poly-streetlight}/` 一一对应（selftest 白名单形态闸）。
+- 生成逻辑（`generateStreetAssets`，generateCity 尾部调用、内部重建 roadnet）：
+  车 = 每有向边 `hash(seed‖'car'‖edgeId) % 4 == 0` 停 1 辆（168 边期望 42），
+  t ∈ [0.2,0.8] 避路口 + 垂边 0.3m 路缘停靠 + `hash%8` 车型 + edgeId 溯源
+  （M-T0 交通消费接口预埋）；路灯 = 每路口 1 盏 `hash%4` 四角选位。
+- scene 实体 36→315（36 楼块 + 188 树 + 42 车 + 49 路灯，nextID=316 锚）；
+  车 rotation = 绕 Y 四元数 `[0, sin(yaw/2), 0, cos(yaw/2)]`；`--stats` 增
+  `street:` 分布行（seed12345 = 42 车/49 灯/树 12 种 14~18 棵；seed12346 =
+  42 车/168 棵全均匀 14——**42 恰是 p=1/4 二项分布众数，两 seed 同值非异常**）。
+- selftest 88→97；W0 挂零锚 `cars=0` 改写为 `cars=42 props=49`（W0「骨架
+  计数挂零」语义已由本轨兑现，fences/paths 仍挂零）。
+- 基线波及：w0-m2（nextID 37→316 锚）、w0-m3、w2-m0 全重拍；OBJ/PNG 产物
+  字节不变（树不进 OBJ、俯视图不画车/灯）。
+
+## 9. M-W3.1 — drive vendored 装配 + 两处资产端变形（2026-11-14，tag `w3-m1`）
+
+- `copy_vendored_assets`：scene mesh 引用解析 → thirdparty 三目录查找 →
+  `assets/models/` 同字节去重拷贝（21 件 = 12 树 + 8 车 + 路灯全池被引用）；
+  blocks/block_NN.obj 与 city_block_*.glb 两类中间引用跳过。GLB_NAME_RE 扩
+  连字符（`sedan-sports.glb`；viewer `validAssetFileName` 允许全部可打印
+  ASCII，drive 侧保持安全子集）。w1_check hash 集合按「引用闭合」扩入
+  vendored glb。
+- viewer 渲染 objects=315 / batches=215，车/路灯/树全链零引擎改动直渲。
+- **变形一（车贴图外部 uri）**：cinevva 车包 glb 的 image 是外部 uri 引用
+  （`Textures/colormap.png` 分离残留），tinygltf 不加载外部文件 → 渲染报
+  「not 8-bit decoded RGBA-capable data」。`tools/embed_glb_textures.py`
+  把官方 CC0 colormap.png（sz-games 镜像获取，512x512 RGBA）追加进 BIN
+  chunk 转嵌入式 bufferView（8 车全处理）。教训：**单文件 glb 获取渠道可能
+  携带外部 uri 残留，样张解剖必须查 image.uri 有无**。
+- **变形二（截图脚本文件名）**：for 循环复刻拍图时两后端写同一输出文件名
+  → VULKAN 覆盖 DX12 主图且 -VULKAN 后缀图从未落盘 → 回归基线混用两代产物
+  大面积 FAIL。教训：**多后端批量拍图必须逐后端显式输出文件名，循环变量
+  只许进后端段不许进输出路径**。
+- 特写机位两次探针实测 dist 21/26 < 城市半径（6 块 × 5.5m ≈ 33m）必钻楼内
+  （M-W2.1 教训复现+量化：**orbit 相机 dist 必须 ≥ 城市对角半径**），证据
+  机位沿用 top/street 验证位。

@@ -1,0 +1,11 @@
+# city-tools M-W1.1 building material library (ambientCG CC0 facades,
+# see thirdparty/ambientcg-facades/VENDOR.md for provenance)
+newmtl tier1
+Kd 1.000 1.000 1.000
+map_Kd tier1.jpg
+newmtl tier2
+Kd 1.000 1.000 1.000
+map_Kd tier2.jpg
+newmtl tier3
+Kd 1.000 1.000 1.000
+map_Kd tier3.jpg

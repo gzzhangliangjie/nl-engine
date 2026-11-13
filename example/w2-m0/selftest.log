@@ -16,7 +16,7 @@ ok 15 - stats: roadSegments == 72
 ok 16 - stats: crossroads == (size+1)^2 == 49
 ok 17 - stats: buildings == 4 per block * 36 == 144 (M-W0.2)
 ok 18 - stats: trees == 188 (forest 21*8 + low 5*4, M-W0.3)
-ok 19 - stats: cars/fences/paths skeleton counters still zero
+ok 19 - stats: cars=42 (168 edges x 1/4 hit, M-W3.0) props=49 (one per crossroads) fences/paths still zero
 ok 20 - stats: density tiers 21/5/6/4 (Python reference cross-check, M-W0.3)
 ok 21 - stats: density tier counts sum to blocks (36)
 ok 22 - noise: noiseSeed(12345,6) == 2109909543 (Python reference, stream segment 3)
@@ -80,10 +80,19 @@ ok 79 - tex: 3 jpg copied from asset dir to output dir
 ok 80 - tex: copy is byte-faithful and size-stable
 ok 81 - tex: copied files carry JPEG SOI marker
 ok 82 - scene: same seed double-build byte-identical
-ok 83 - scene: E1 World JSON anchors (version/nextID/systems)
-ok 84 - scene: 36 entities with 36 mesh references (blocks=36)
-ok 85 - scene: 36 complete Transform tails (rotation closure; no snprintf truncation)
+ok 83 - scene: E1 World JSON anchors (version/nextID=316/systems)
+ok 84 - scene: 36 block entities with 36 OBJ mesh references
+ok 85 - scene: 315 rotation fields == entity count (36+188+42+49; no snprintf truncation)
 ok 86 - scene: braces balanced (JSON structural sanity)
 ok 87 - scene: every mesh reference closed to an emitted OBJ
-ok 88 - scene: seed-agnostic index (E1 schema has no seed key; seed lives in mesh contents, not in the scene)
-citygen selftest: PASS (88 assertions)
+ok 88 - scene: different seed -> different tree/car entity content (M-W3.0 variant/position draws)
+ok 89 - scene: other-seed JSON braces balanced (structural)
+ok 90 - street: asset name tables are flat whitelist .glb forms
+ok 91 - street: tree variants in-bounds and cover >=8 of 12 pool
+ok 92 - street: cars count/variant/extent in-bounds
+ok 93 - street: cars are seed-sensitive (pure fnv1a draws)
+ok 94 - street: one streetlight per crossroads, in-bounds
+ok 95 - scene: nextID == blocks + trees + cars + props + 1
+ok 96 - scene: tree/car/streetlight entities present
+ok 97 - scene: mesh refs mix vendored glb names and OBJ blocks
+citygen selftest: PASS (97 assertions)

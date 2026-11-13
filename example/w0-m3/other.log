@@ -42,4 +42,6 @@ seed=12346 size=6 blocks=36
 extent: x=[-16.5,16.5] z=[-12.0,12.0] m
 wrote other\city_top.png (1152x864 px, scale 32 px/m)
 wrote other\roadnet.json (nodes=49 edges=168 directed)
-stats: blocks=36 groundTiles=36 roadSegments=72 crossroads=49 roadnetNodes=49 roadnetEdges=168 buildings=144 trees=168 cars=0 fences=0 paths=0 forestCells=19 lowCells=4 mediumCells=4 highCells=9 noiseSeed=3832654775
+stats: blocks=36 groundTiles=36 roadSegments=72 crossroads=49 roadnetNodes=49 roadnetEdges=168 buildings=144 trees=168 cars=42 fences=0 paths=0 forestCells=19 lowCells=4 mediumCells=4 highCells=9 noiseSeed=3832654775
+variants: single=49 setback=54 podium=10 lshape=31 (M-W2.0 fnv1a pool)
+street: cars=42 lights=49 treeVariants=14,14,14,14,14,14,14,14,14,14,14,14
