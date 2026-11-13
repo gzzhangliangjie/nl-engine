@@ -3569,3 +3569,22 @@
 4. ctest `--repeat until-pass:3` wt.bat 已内置，外传重复报 `At most one '--repeat'`；局部 `len` 遮蔽函数参数 C4457；stb_image_write 缺 `STB_IMAGE_WRITE_IMPLEMENTATION` 单 TU 定义 LNK2019。
 
 **下一步**：GAME-DEV-ORDER 第 9 步调度器迭代（红绿灯相位 `phases`/`signal` 契约扩展、路口让行、避撞）需单独立项拍板；循环 demo 旗标、CityCar 实体接入、GameClock/ECS System 化为独立后续项。
+
+## T0 M-T1.0~T1.2 — 调度器迭代：红绿灯相位 + 路口占用锁 + 避撞（feat/worldgen，2026-11-14，tag `traffic-m1`，M-T1 整轨收官）
+
+**动作**：GAME-DEV-ORDER 第 9 步消费（Q-T5 续 worldgen 轨，用户拍板「A2 B1 C1」）。core `nl/traffic/TrafficControl.hpp/.cpp`（A2 固定周期两相含黄灯信号：绿→黄→全红清空→对向，黄灯不放行新进入、持锁穿完；整数帧×dt 相位时钟；主轴分组 x 组 0 / z 组 1；`phases` 契约只加不减可选覆盖 8/2/1 缺省 + B1 路口占用锁 FIFO 授予/越圈释放）+ TrafficSim 可选 control 挂接（nullptr = M-T0 原行为锚不重拍：停车线刹车曲线 + 硬钳 backstop + route 末停靠帽 + haltFrames 统计）+ traffic-tools sim 扩展（signals/arrived/min gap/locked end/max halt 五行统计 + 跨路段互斥扫描退出 1 + LOCK 死锁诊断 + 信号相位着色 PNG）；`example/t1-traffic/`（信号化夹具 + 双证据图 + run.bat 五段）+ 展示台卡 `t1-traffic`（5 用例，卡 132）+ TRAFFIC-PLAN §6~§9 / GUIDE §7 / 本栏。
+
+**提交版本**：`feat/worldgen` `5b05525`（M-T1.0+T1.1：TrafficControl + sim 集成 + 三重死锁根修）+ 收口提交（M-T1.2：交付包 + 文档 + 卡，tag `traffic-m1`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**（selftest 4657 断言，⑨ 调度器段：时钟帧锚 / FIFO 锁链 / 红灯 7.5m 逐位钳停 / 冲突串行 / 跨路段互斥 / 控制全开双跑 memcmp）。
+- 🟢 城市冒烟（49 lock-only 节点、32 车 30s）：`locked end 0`（根修前实测 **20 锁泄漏**）、min gap 1.35m ≥ 1.0、到达 7/32 / 475.5m；信号化夹具 6 车 3/6 到达锁 0。
+- 🟢 `example/t1-traffic/run.bat` 五段 ALL GREEN（findstr 锚：signals 行 + locked-end 行）；regression `--only t1-traffic` 全绿 + `t0-traffic` 保形 spot。
+
+**踩坑情况**
+1. **三重死锁根修（本轮核心教训，城市冒烟实测驱动）**：① 初版「匹配前车速度已废、FIFO 锁」在城市场景终态 20 锁未放——先误诊为环路 gridlock 加防溢出闸无效，**LOCK 诊断行（持锁车 lane/s/位置 dump）实证破案**：W0 城 ~4m lane 上固定常数（停车线 2.5m/释放圈 3m，按 10m 夹具标定）几何不相容，排队车永远压在已穿节点圈内持锁。根修 = 无前车前瞻闸 + 出口防溢出闸 + 自适应几何（`stopS=length−min(entryStop,0.6·length)` / 节点 `clearEff=min(3,0.3·最小邻接边长)`）。教训：**控制常数必须随路网密度自适应，夹具标定值不能直接上真实数据；死锁定性先 dump 持锁者状态再下结论。**
+2. **对向会车假碰撞**：同路段对向 lane 横距 0.5m（offset ±0.25）被首版「跨 lane 互斥」扫描误报——互斥口径修正为跨路段（无序节点对）。
+3. 夹具锚两处手误（e4/e6 轴向背反、node3 行 needle 双空格）——几何断言先画节点图再写锚。
+4. `const TrafficControl*` 调不了 advanceFrame/acquire（C2662）→ sim 持可变指针；`serr` 块局部声明遗漏（C2065）。
+
+**下一步**：需求感应信号 / 冲突型路口（对向直行并行提吞吐）/ CityCar 实体接入 viewer / GameClock-ECS System 化 / 循环路线旗标 = 独立拍板项；citygen 侧 signal 位与 phases 填充策略归 W 轨道。

@@ -47,3 +47,31 @@ traffic-tools selftest [--emit-fixture path] [--verbose]         # 3693 断言�
 - 行人 NPC 走 `nl/nav`（Recast），车辆走 `nl/traffic`（车道图）——互不替代（GAME-DEV-ORDER §3 定档）。
 - `phases`/`signal` 信号相位、红绿灯、路口让行、避撞 = GAME-DEV-ORDER 第 9 步（调度器迭代），本轨只留了 roadnet 契约扩展位。
 - route 走完停车；循环 demo 旗标、`CityCar` 实体接入、GameClock/ECS System 化 = 后续独立拍板项。
+
+---
+
+## 7. M-T1 调度器（traffic-m1，2026-11-14）
+
+### 7.1 机制（TRAFFIC-PLAN §6 拍板 A2/B1/C1 + §7 固化）
+
+- **TrafficControl**（`nl/traffic/TrafficControl.hpp/.cpp`）：受控节点 = 进入边 ≥2；进入边按行进主轴分组（x 轴向组 0 / z 轴向组 1，对角 tie 归组 0，edge id 升序）。信号时钟 = 整数帧 ×dt，周期 `2*(g+y+c)`，组 0 活跃前半、组 1 后半，`tt<g` 绿 / `<g+y` 黄 / 否则全红；黄灯不放行新进入、持锁穿完。`phases` 契约只加不减：可选 `{"node":<id>,"green_s":..,"yellow_s":..,"clear_s":..}` 覆盖，缺省 8/2/1。无信号节点 = lock-only（信号恒绿）。
+- **占用锁**：FIFO（队首优先授予），持锁越 `clearEff` 圈释放。**三重死锁根修**（城市冒烟实测 20 锁泄漏驱动）：① 同 lane 有前车不允许前瞻申请（锁只归「当前能流动的车」）；② 出口 lane 起步区被占（`s < minGap + clearEff`）不申请（don't-block-the-box，等在停车线不持锁）；③ 自适应几何 `stopS = length − min(entryStop, 0.6·length)`、`clearEff = min(clearRadius, 0.3·最小邻接边长)`——固定常数按 10m 夹具标定，在 ~4m 城市路网上停车线+排队间距吃满 lane，排队车永远压在上游节点圈内。
+- **互斥扫描**：只查不同路段（无序节点对不同）车对——同路段对向会车（横距 ≈0.5m）是正常交通；下界 1.0m，违反退出 1；`locked end != 0`（死锁）退出 1 并 dump LOCK 诊断行。
+
+### 7.2 sim 输出契约（M-T1 扩展，既有四行不动）
+
+```
+signals     : <受控节点数> (lock-only <L> / signal <S>)
+arrived     : <到达停靠帽车数> / <总车数>
+min gap     : <跨路段全程最小中心距> m (cross-road)
+locked end  : <终态持锁节点数>（0 = 无死锁）
+max halt    : <最大停滞时长> s
+```
+
+PNG：信号节点 5px 方块按终帧相位着色（绿/黄/红，lock-only 灰）；车点 3px 行驶红 / 滞留琥珀。
+
+### 7.3 验收记录
+
+- selftest **4657 断言**全绿（⑨ 调度器段：时钟帧锚 0/30/42/48/78/96、FIFO 锁单元链、红灯 7.5m 逐位钳停、冲突串行过锁、跨路段互斥、控制全开双跑 memcmp）；ctest `m-t0-traffic-*` 9/9 ×2 双后端。
+- 城市 32 车（49 lock-only 节点）：`locked end 0`（根修前 20）、min gap 1.35m、475.5m / 30s；信号化夹具 6 车：3/6 到达、锁 0。
+- `example/t1-traffic/run.bat` 五段 ALL GREEN（含 signals 行与 locked-end 行的 findstr 锚）。

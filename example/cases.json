@@ -12093,7 +12093,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车 3693 断言",
+     "name": "selftest：车道图/寻路/跟车 4657 断言",
      "kind": "tool",
      "note": "确定性逐位 + 几何精确浮点锚 + 连接闭合 + A* 路径锚 + 跟车平衡间距/限速帽 + 负向显式报错；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12101,7 +12101,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (3693 asserts)",
+     "expectLog": "traffic selftest: PASS (4657 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12172,6 +12172,107 @@
      "expectExit": 1,
      "expectLog": "has no lane",
      "command": "traffic-tools path example/t0-traffic/roadnet.json --from 0 --to 99"
+    }
+   ]
+  },
+  {
+   "id": "t1-traffic",
+   "label": "T0 M-T1.0~T1.2",
+   "name": "交通调度器（红绿灯相位 + 路口占用锁 + 避撞，traffic-tools）",
+   "tag": "traffic-m1",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 9 步调度器迭代（A 类轨道 feat/worldgen，M-T0 lane graph 消费）：TrafficControl = A2 拍板固定周期两相含黄灯信号（绿→黄→全红清空→对向，黄灯不放行新进入、持锁穿完，整数帧×dt 相位时钟逐位确定，phases 契约只加不减可选覆盖）+ B1 拍板路口占用锁（FIFO 授予、越圈释放、无前车才前瞻申请 + 出口防溢出闸 + 自适应控制几何三重死锁根修）+ C1 拍板跨路段互斥数值锚（同路段对向会车豁免，下界 1.0m 违反退出 1）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "信号时钟锚：g=0.5/y=0.2/c=0.1 帧序 0/30/42/48/78/96 绿黄红交替逐位 + 周期回卷；phases 覆盖生效 + 未知节点负向",
+    "占用锁锚：FIFO 授予序（队首优先）+ 持锁互斥 + 圈内不释放/越圈释放 + 冲突双车串行过锁（先到零停滞/后到等锁）",
+    "红灯刹停：长红窗口内停车线 7.5m 逐位钳停 + 停滞计数",
+    "控制全开双跑：TrafficCarState memcmp 逐位一致 + haltFrames 一致；跨路段最小间距全程 >= 1.0m",
+    "城市冒烟（49 lock-only 节点）：终态锁全释放（locked end 0，根修前实测 20 锁泄漏）+ min gap 1.35m + 到达>0",
+    "交代物：example/t1-traffic/（run.bat 五段 ALL GREEN + signal-sim/city-sim 信号状态着色终帧证据图 + 信号化夹具路网）+ 本卡五用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 4657 断言含 ⑨ 调度器段）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t1-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools sim <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车/调度器 4657 断言",
+     "kind": "tool",
+     "note": "⑨ 调度器段：信号时钟帧锚 + FIFO 锁单元链 + 红灯 7.5m 逐位钳停 + 冲突串行过锁 + 跨路段互斥 + 控制全开双跑 memcmp；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (4657 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "sim-signal",
+     "name": "sim：信号化夹具 6 车 30s（4 信号节点默认 8/2/1 相位）",
+     "kind": "tool",
+     "note": "全部 4 节点 signal=true；终帧 PNG 含绿/黄/红相位方块；locked end 0 = 无锁泄漏；黄灯不放行新进入。",
+     "args": [
+      "sim",
+      "{root}/example/t1-traffic/signal-roadnet.json",
+      "--cars",
+      "6",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t1-traffic/signal-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "signals     : 4 (lock-only 0 / signal 4)",
+     "command": "traffic-tools sim example/t1-traffic/signal-roadnet.json --cars 6 --frames 1800 --png example/t1-traffic/signal-sim.png"
+    },
+    {
+     "id": "sim-city",
+     "name": "sim：真实城市 32 车（49 lock-only 节点）+ 跨路段互斥扫描",
+     "kind": "tool",
+     "note": "城市 signal 位全 false = lock-only 占用锁；min gap 1.35m >= 1.0 下界；locked end 0 = 不堵死（自适应控制几何根修后）；citygen signal 恒 false，信号路径由夹具卡演示。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t1-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "locked end  : 0",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t1-traffic/city-sim.png"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道显式退出 1（expectExit 约定 0/1/2）；碰撞/死锁违例同为退出 1（sim 内建）。",
+     "args": [
+      "path",
+      "{root}/example/t1-traffic/signal-roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t1-traffic/signal-roadnet.json --from 0 --to 99"
     }
    ]
   }

@@ -238,6 +238,15 @@ TRACKS = {
                 "sqrt(brake*(gap-minGap)), traffic-tools "
                 "build/path/lanes/sim/selftest 3693 asserts, "
                 "9 ctests dual-backend, card t0-traffic; "
+                "M-T1 traffic scheduler done 2026-11-14 (tag "
+                "traffic-m1: A2 two-phase yellow signal clock "
+                "+ B1 FIFO reservation locks + C1 cross-road "
+                "mutex scan; deadlock root-fix triple: "
+                "no-early-acquire-with-leader / spillback "
+                "don't-block-the-box / adaptive geometry "
+                "stopS & clearEff scaling (city 4m lanes vs "
+                "fixture-calibrated constants), locked end "
+                "20->0; selftest 4657 asserts, card t1-traffic; "
                 "close+release --done passed)",
     },
     "s13": {
