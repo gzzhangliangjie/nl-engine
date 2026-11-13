@@ -62,6 +62,20 @@ sys.path.insert(0, str(HERE))
 import tree_gate as _tree_gate  # noqa: E402
 _tree_gate.gate(__file__)
 
+# Active-claim gate (2026-11-14): regression writes report.md/report.json and
+# run artifacts, so it is NOT a read-only tool — the 2026-11-13 cwd-drift
+# incident ran `python tools/regression.py` with the MAIN repo cwd (background
+# task inherited it, relative path resolved to the main tree's copy, and both
+# tree_gate checks agreed on the wrong tree). check-cmd requires cwd to be a
+# registered ACTIVE worktree; deliberate mainline runs set NL_CMD_MAINREPO=1.
+# Complements tree_gate: that one fails when script-tree != cwd-tree (absolute
+# path misuse); this one fails when cwd-tree is not an active claim at all
+# (relative-path cwd drift).
+import wt_gate as _wt_gate  # noqa: E402
+_wt_rc = _wt_gate.cmd_check_cmd()
+if _wt_rc != 0:
+    sys.exit(_wt_rc)
+
 import server as show  # noqa: E402  (module-level side effects: loads cases.json)
 
 # 产物目录可用环境变量覆盖（CI/沙箱场景：指向全新目录则全程零删除——
