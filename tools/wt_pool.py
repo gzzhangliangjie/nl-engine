@@ -115,13 +115,13 @@ TRACKS = {
         "note": "merged to master e57173d (tag pbr-direct); wt removed 2026-11-09, branch kept",
     },
     "vsm": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-vsm",
-        "branch": "feat/vsm", "state": "active",
-        "note": "S15 VSM B-class interleaved track (rasterized shadow route, plan "
-                "docs/s15/S15-PLAN.md, M15.0~M15.2); opened 2026-11-13 by user "
-                "instruction; wt built at master 5234412, junctions .workbuddy + "
-                "slang dist, skip-worktree set; M15.0 = physical page pool + single "
-                "clipmap level + projection sampling (tag s15-vsm)",
+        "wt": "", "branch": "feat/vsm", "state": "closed",
+        "note": "S15 VSM track M15.0~M15.2 done (tags s15-vsm/s15-clipmap/"
+                "s15-done + milestone/s15-done); merged to master 165216d "
+                "2026-11-14 (two-stage HZB cull + cluster indirect shadow; "
+                "spot check s15 x2 + perf-m1 x2 backends ALL GREEN); wt "
+                "removed same day (user instruction), junctions unlinked, "
+                "branches kept per PARALLEL-TRACKS 7.6; reopen via 7.1b",
     },
     "script": {
         "wt": "E:/UE_STUDY_2026/nl-engine-script",
