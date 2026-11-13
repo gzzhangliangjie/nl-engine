@@ -3,15 +3,15 @@
 [nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
 [nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
 [nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
-[nl:info|viewer] ecs scene: 36 objects | 0 lights (0 point) | ambient 0.28
-[nl:info|scene] ecs scene ready: city.scene.engine | objects=36 lights=0 ambient=0.28 shadowLights=0 | batches=144 | triangles=2880 | shader=spv
+[nl:info|viewer] ecs scene: 315 objects | 0 lights (0 point) | ambient 0.28
+[nl:info|scene] ecs scene ready: city.scene.engine | objects=315 lights=0 ambient=0.28 shadowLights=0 | batches=215 | triangles=22923 | shader=spv
 [nl:info|viewer] tick groups: PrePhysics->PostPhysics->PostUpdateWork (registered=3)
 [nl:info|viewer] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
-[nl:info|viewer] mode: scene | objects=36 triangles=2880 model=city.scene.engine | HUD: off | case: ESC=quit, F12=PNG
+[nl:info|viewer] mode: scene | objects=315 triangles=22923 model=city.scene.engine | HUD: off | case: ESC=quit, F12=PNG
 [nl:info|viewer] screenshot mode: 8 frames -> E:\UE_STUDY_2026\nl-engine-worldgen\example\w1-m1\city_street-VULKAN.png
 [nl:info|scene] t0: offscreen HDR scene targets ready (raster path)
-[nl:info|renderer] gpu timer resolved [frame]: 1.18202 ms (first successful NVRHI timestamp query)
+[nl:info|renderer] gpu timer resolved [frame]: 2.03357 ms (first successful NVRHI timestamp query)
 [nl:info|viewer] screenshot written: example/w1-m1/city_street-VULKAN.png
 [nl:info|viewer] shutdown ok (frames=8 screenshots=1 deviceErrors=0)
-[nl:info|viewer] frame timing: avg 51.132 ms  max 386.957 ms  over 8 frames (unthrottled)
+[nl:info|viewer] frame timing: avg 15.4236 ms  max 107.523 ms  over 8 frames (unthrottled)
 [nl:info] window destroyed

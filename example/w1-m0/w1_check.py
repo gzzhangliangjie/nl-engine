@@ -20,7 +20,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 SEED, SIZE, BLOCKS = 12345, 6, 36
 
-GLB_RE = re.compile(r"^[A-Za-z0-9_]+\.glb$")
+GLB_RE = re.compile(r"^[A-Za-z0-9_-]+\.glb$")  # M-W3.0: '-' joined (sedan-sports)
+
+# M-W3.0 street-asset anchors: tree/car/streetlight counts from the seeded
+# layout (see city-tools `generate --stats` street line; seed 12345 fixed).
+TREES, CARS, PROPS = 188, 42, 49
 NAME = "city_block_%d_%d_%02d.glb" % (SEED, SIZE, 0)
 
 
@@ -41,6 +45,18 @@ def delivery_files():
         p = HERE / name
         if p.is_file():
             out.append(p)
+    # M-W3.0：vendored 装配产物（A1 拍板 drive 拷入 models 的树/车/路灯
+    # glb）是 delivery 的一部分——从 scene 引用解析，保持「引用闭合即集合」。
+    engine = HERE / "city.scene.engine"
+    if engine.is_file():
+        refs = re.findall(r'"mesh": "([^"]+)"',
+                          engine.read_text(encoding="utf-8", newline=""))
+        vendored = sorted(set(r for r in refs
+                              if not r.startswith("city_block_")))
+        for name in vendored:
+            p = ROOT / "assets" / "models" / name
+            if p.is_file():
+                out.append(p)
     return sorted(out)
 
 
@@ -71,15 +87,24 @@ def mode_anchors():
         fail("city.scene.engine missing")
     text = engine.read_text(encoding="utf-8", newline="")
     refs = re.findall(r'"mesh": "([^"]+)"', text)
-    if len(refs) != BLOCKS:
-        fail("engine mesh refs %d != %d" % (len(refs), BLOCKS))
-    for i, r in enumerate(refs):
+    # M-W3.0: refs = 36 block glb + vendored tree/car/streetlight refs
+    # (deduped by name; street entity count = TREES + CARS + PROPS).
+    block_refs = [r for r in refs if r.startswith("city_block_")]
+    if len(block_refs) != BLOCKS:
+        fail("engine block refs %d != %d" % (len(block_refs), BLOCKS))
+    street_ref_count = len(refs) - len(block_refs)
+    if street_ref_count != TREES + CARS + PROPS:
+        fail("engine street refs %d != %d (trees+cars+props)"
+             % (street_ref_count, TREES + CARS + PROPS))
+    for i, r in enumerate(block_refs):
         if r != glb(i):
             fail("engine ref %d != %s" % (i, glb(i)))
+    for r in set(refs):
         if not (models / r).is_file():
             fail("engine ref not closed: %s" % r)
     print("anchors OK: 36 glb (whitelist) / 36 nmesh / 36 lod / 36 dag / "
-          "36 engine refs closed")
+          "36 block refs + %d street refs closed (M-W3.0)"
+          % street_ref_count)
 
 
 def mode_json():
@@ -89,17 +114,19 @@ def mode_json():
     except ValueError as e:
         fail("city.scene.engine is not valid JSON: %s" % e)
     ents = scene.get("entities", [])
-    if len(ents) != BLOCKS or scene.get("nextID") != BLOCKS + 1:
-        fail("engine E1 shape wrong (entities=%d nextID=%r)"
-             % (len(ents), scene.get("nextID")))
+    # M-W3.0: entities = 36 block + 188 tree + 42 car + 49 streetlight = 315
+    total = BLOCKS + TREES + CARS + PROPS
+    if len(ents) != total or scene.get("nextID") != total + 1:
+        fail("engine E1 shape wrong (entities=%d nextID=%r; want %d/%d)"
+             % (len(ents), scene.get("nextID"), total, total + 1))
     for e in ents:
         tr = e["components"]["Transform"]
         if "rotation" not in tr or "scale" not in tr:
             fail("entity %s Transform truncated" % e.get("name"))
         if not GLB_RE.match(e["components"]["Model"]["mesh"]):
             fail("entity %s mesh not whitelist-flat" % e.get("name"))
-    print("json OK: E1 World JSON valid / 36 entities / transforms complete / "
-          "mesh refs flat glb")
+    print("json OK: E1 World JSON valid / %d entities / transforms complete / "
+          "mesh refs flat glb" % len(ents))
 
 
 def mode_hash():

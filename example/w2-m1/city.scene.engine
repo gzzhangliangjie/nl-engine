@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "nextID": 37,
+  "nextID": 316,
   "entities": [
     { "id": 1, "name": "block_00", "flags": 0, "parent": 0, "components": {
       "Model": { "mesh": "city_block_12345_6_00.glb", "tint": [1.0, 1.0, 1.0] },
@@ -145,6 +145,1122 @@
     { "id": 36, "name": "block_35", "flags": 0, "parent": 0, "components": {
       "Model": { "mesh": "city_block_12345_6_35.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 37, "name": "tree_00", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.65, 0.0, -5.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 38, "name": "tree_01", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.65, 0.0, -5.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 39, "name": "tree_02", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-14.55, 0.0, -6.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 40, "name": "tree_03", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-14.15, 0.0, -6.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 41, "name": "tree_04", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-12.35, 0.0, -5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 42, "name": "tree_05", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.55, 0.0, -5.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 43, "name": "tree_06", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.35, 0.0, -5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 44, "name": "tree_07", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-12.35, 0.0, -6.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 45, "name": "tree_08", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-12.35, 0.0, 7.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 46, "name": "tree_09", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.35, 0.0, 6.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 47, "name": "tree_10", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.35, 0.0, 6.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 48, "name": "tree_11", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-14.45, 0.0, 5.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 49, "name": "tree_12", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.15, 0.0, 4.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 50, "name": "tree_13", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-14.35, 0.0, 7.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 51, "name": "tree_14", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.15, 0.0, 5.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 52, "name": "tree_15", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-14.55, 0.0, 4.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 53, "name": "tree_16", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.45, 0.0, 10.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 54, "name": "tree_17", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.25, 0.0, 11.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 55, "name": "tree_18", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.95, 0.0, 10.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 56, "name": "tree_19", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.15, 0.0, 10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 57, "name": "tree_20", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.85, 0.0, 9.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 58, "name": "tree_21", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.65, 0.0, 11.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 59, "name": "tree_22", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-12.35, 0.0, 10.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 60, "name": "tree_23", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-13.65, 0.0, 10.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 61, "name": "tree_24", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.55, 0.0, -10.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 62, "name": "tree_25", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.95, 0.0, -9.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 63, "name": "tree_26", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.65, 0.0, -8.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 64, "name": "tree_27", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.95, 0.0, -9.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 65, "name": "tree_28", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.35, 0.0, -4.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 66, "name": "tree_29", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.35, 0.0, -6.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 67, "name": "tree_30", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.35, 0.0, -7.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 68, "name": "tree_31", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.35, 0.0, -5.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 69, "name": "tree_32", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.95, 0.0, -6.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 70, "name": "tree_33", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.75, 0.0, -6.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 71, "name": "tree_34", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.05, 0.0, -6.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 72, "name": "tree_35", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.25, 0.0, -6.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 73, "name": "tree_36", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.05, 0.0, -3.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 74, "name": "tree_37", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.85, 0.0, -3.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 75, "name": "tree_38", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.45, 0.0, -0.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 76, "name": "tree_39", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.35, 0.0, -1.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 77, "name": "tree_40", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.45, 0.0, -3.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 78, "name": "tree_41", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.15, 0.0, -1.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 79, "name": "tree_42", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.35, 0.0, -2.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 80, "name": "tree_43", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.85, 0.0, -3.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 81, "name": "tree_44", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.35, 0.0, 2.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 82, "name": "tree_45", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.65, 0.0, 2.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 83, "name": "tree_46", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.05, 0.0, 1.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 84, "name": "tree_47", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.85, 0.0, 1.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 85, "name": "tree_48", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.75, 0.0, 0.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 86, "name": "tree_49", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.95, 0.0, 2.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 87, "name": "tree_50", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.05, 0.0, 1.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 88, "name": "tree_51", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.95, 0.0, 1.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 89, "name": "tree_52", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.75, 0.0, 7.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 90, "name": "tree_53", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.05, 0.0, 6.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 91, "name": "tree_54", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.65, 0.0, 5.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 92, "name": "tree_55", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.65, 0.0, 4.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 93, "name": "tree_56", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.75, 0.0, 5.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 94, "name": "tree_57", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.05, 0.0, 5.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 95, "name": "tree_58", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.55, 0.0, 4.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 96, "name": "tree_59", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.75, 0.0, 7.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 97, "name": "tree_60", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.55, 0.0, 8.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 98, "name": "tree_61", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.65, 0.0, 9.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 99, "name": "tree_62", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.35, 0.0, 11.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 100, "name": "tree_63", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.25, 0.0, 10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 101, "name": "tree_64", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.05, 0.0, -9.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 102, "name": "tree_65", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.75, 0.0, -9.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 103, "name": "tree_66", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.95, 0.0, -9.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 104, "name": "tree_67", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.45, 0.0, -11.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 105, "name": "tree_68", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.55, 0.0, -10.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 106, "name": "tree_69", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.55, 0.0, -9.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 107, "name": "tree_70", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.75, 0.0, -9.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 108, "name": "tree_71", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.25, 0.0, -10.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 109, "name": "tree_72", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.65, 0.0, -7.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 110, "name": "tree_73", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.35, 0.0, -6.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 111, "name": "tree_74", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.95, 0.0, -6.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 112, "name": "tree_75", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.45, 0.0, -7.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 113, "name": "tree_76", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.35, 0.0, -4.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 114, "name": "tree_77", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.85, 0.0, -5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 115, "name": "tree_78", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.35, 0.0, -4.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 116, "name": "tree_79", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.35, 0.0, -6.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 117, "name": "tree_80", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.65, 0.0, -2.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 118, "name": "tree_81", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, -2.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 119, "name": "tree_82", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.15, 0.0, -1.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 120, "name": "tree_83", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.15, 0.0, -0.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 121, "name": "tree_84", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.65, 0.0, -2.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 122, "name": "tree_85", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.25, 0.0, -2.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 123, "name": "tree_86", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.85, 0.0, -3.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 124, "name": "tree_87", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.85, 0.0, -3.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 125, "name": "tree_88", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.75, 0.0, 0.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 126, "name": "tree_89", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.75, 0.0, 3.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 127, "name": "tree_90", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.95, 0.0, 1.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 128, "name": "tree_91", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.35, 0.0, 1.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 129, "name": "tree_92", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.25, 0.0, 2.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 130, "name": "tree_93", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.55, 0.0, 2.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 131, "name": "tree_94", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.45, 0.0, 1.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 132, "name": "tree_95", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1.85, 0.0, 2.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 133, "name": "tree_96", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.55, 0.0, 5.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 134, "name": "tree_97", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.95, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 135, "name": "tree_98", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.55, 0.0, 6.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 136, "name": "tree_99", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.05, 0.0, 5.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 137, "name": "tree_100", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, 4.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 138, "name": "tree_101", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.55, 0.0, 5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 139, "name": "tree_102", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.65, 0.0, 5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 140, "name": "tree_103", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.35, 0.0, 5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 141, "name": "tree_104", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.85, 0.0, 8.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 142, "name": "tree_105", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.35, 0.0, 11.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 143, "name": "tree_106", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.75, 0.0, 10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 144, "name": "tree_107", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.25, 0.0, 9.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 145, "name": "tree_108", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.85, 0.0, 10.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 146, "name": "tree_109", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-3.55, 0.0, 10.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 147, "name": "tree_110", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.25, 0.0, 9.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 148, "name": "tree_111", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-2.95, 0.0, 10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 149, "name": "tree_112", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.75, 0.0, -9.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 150, "name": "tree_113", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.95, 0.0, -10.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 151, "name": "tree_114", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.25, 0.0, -10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 152, "name": "tree_115", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.75, 0.0, -10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 153, "name": "tree_116", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.85, 0.0, -10.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 154, "name": "tree_117", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.05, 0.0, -9.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 155, "name": "tree_118", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.15, 0.0, -9.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 156, "name": "tree_119", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.15, 0.0, -11.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 157, "name": "tree_120", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.95, 0.0, -7.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 158, "name": "tree_121", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.45, 0.0, -4.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 159, "name": "tree_122", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.85, 0.0, -6.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 160, "name": "tree_123", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.95, 0.0, -4.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 161, "name": "tree_124", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.25, 0.0, 7.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 162, "name": "tree_125", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.45, 0.0, 7.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 163, "name": "tree_126", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.45, 0.0, 6.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 164, "name": "tree_127", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.55, 0.0, 6.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 165, "name": "tree_128", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.65, 0.0, 10.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 166, "name": "tree_129", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.85, 0.0, 9.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 167, "name": "tree_130", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.15, 0.0, 10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 168, "name": "tree_131", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.95, 0.0, 9.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 169, "name": "tree_132", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.05, 0.0, 8.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 170, "name": "tree_133", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.35, 0.0, 9.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 171, "name": "tree_134", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.85, 0.0, 9.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 172, "name": "tree_135", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.85, 0.0, 8.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 173, "name": "tree_136", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.65, 0.0, -10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 174, "name": "tree_137", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, -10.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 175, "name": "tree_138", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, -10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 176, "name": "tree_139", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [9.05, 0.0, -8.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 177, "name": "tree_140", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.95, 0.0, -10.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 178, "name": "tree_141", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.35, 0.0, -8.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 179, "name": "tree_142", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [8.85, 0.0, -9.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 180, "name": "tree_143", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.55, 0.0, -9.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 181, "name": "tree_144", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [8.35, 0.0, -7.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 182, "name": "tree_145", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, -6.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 183, "name": "tree_146", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [9.15, 0.0, -4.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 184, "name": "tree_147", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [8.05, 0.0, -6.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 185, "name": "tree_148", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [7.95, 0.0, 6.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 186, "name": "tree_149", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.05, 0.0, 5.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 187, "name": "tree_150", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.35, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 188, "name": "tree_151", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.25, 0.0, 6.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 189, "name": "tree_152", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [7.55, 0.0, 6.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 190, "name": "tree_153", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [7.95, 0.0, 5.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 191, "name": "tree_154", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [9.25, 0.0, 6.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 192, "name": "tree_155", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.25, 0.0, 5.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 193, "name": "tree_156", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.75, 0.0, -10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 194, "name": "tree_157", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.45, 0.0, -9.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 195, "name": "tree_158", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.15, 0.0, -10.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 196, "name": "tree_159", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.55, 0.0, -11.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 197, "name": "tree_160", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.85, 0.0, -9.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 198, "name": "tree_161", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.25, 0.0, -10.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 199, "name": "tree_162", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, -10.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 200, "name": "tree_163", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.15, 0.0, -10.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 201, "name": "tree_164", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.95, 0.0, -6.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 202, "name": "tree_165", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_simple.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [14.55, 0.0, -4.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 203, "name": "tree_166", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.15, 0.0, -5.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 204, "name": "tree_167", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_detailed.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.65, 0.0, -4.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 205, "name": "tree_168", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [14.25, 0.0, -5.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 206, "name": "tree_169", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [14.55, 0.0, -5.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 207, "name": "tree_170", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.55, 0.0, -6.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 208, "name": "tree_171", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.95, 0.0, -5.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 209, "name": "tree_172", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.75, 0.0, 5.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 210, "name": "tree_173", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.65, 0.0, 7.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 211, "name": "tree_174", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.95, 0.0, 5.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 212, "name": "tree_175", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.65, 0.0, 6.40], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 213, "name": "tree_176", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_blocks.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.95, 0.0, 5.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 214, "name": "tree_177", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.75, 0.0, 5.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 215, "name": "tree_178", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineDefaultA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.15, 0.0, 7.50], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 216, "name": "tree_179", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.45, 0.0, 5.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 217, "name": "tree_180", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_oak.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.15, 0.0, 10.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 218, "name": "tree_181", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_palm.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.35, 0.0, 10.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 219, "name": "tree_182", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_small.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, 9.60], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 220, "name": "tree_183", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_tall.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.25, 0.0, 9.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 221, "name": "tree_184", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_plateau.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.65, 0.0, 9.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 222, "name": "tree_185", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_cone.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.65, 0.0, 11.10], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 223, "name": "tree_186", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_default.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.95, 0.0, 10.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 224, "name": "tree_187", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "tree_pineRoundA.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [14.05, 0.0, 8.90], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 225, "name": "car_00", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.52, 0.0, -11.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 226, "name": "car_01", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan-sports.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [2.37, 0.0, -11.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 227, "name": "car_02", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.20, 0.0, -11.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 228, "name": "car_03", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-7.97, 0.0, -7.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 229, "name": "car_04", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.46, 0.0, -7.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 230, "name": "car_05", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.34, 0.0, -7.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 231, "name": "car_06", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "truck.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.82, 0.0, -3.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 232, "name": "car_07", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "delivery.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.65, 0.0, -3.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 233, "name": "car_08", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan-sports.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.23, 0.0, -3.70], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 234, "name": "car_09", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "suv.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-9.24, 0.0, 0.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 235, "name": "car_10", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.59, 0.0, 0.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 236, "name": "car_11", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.42, 0.0, 0.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 237, "name": "car_12", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-8.14, 0.0, 4.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 238, "name": "car_13", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "truck.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.74, 0.0, 4.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 239, "name": "car_14", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "delivery.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [14.57, 0.0, 4.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 240, "name": "car_15", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.60, 0.0, 8.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 241, "name": "car_16", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan-sports.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [3.63, 0.0, 8.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 242, "name": "car_17", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "suv.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [12.15, 0.0, 8.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 243, "name": "car_18", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.71, 0.0, 12.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 244, "name": "car_19", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1.81, 0.0, 12.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 245, "name": "car_20", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [13.26, 0.0, 12.30], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.7071, 0.0, 0.7071] }
+    } },
+    { "id": 246, "name": "car_21", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "truck.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.30, 0.0, -9.72], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 247, "name": "car_22", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "delivery.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.30, 0.0, -9.88], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 248, "name": "car_23", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.70, 0.0, -9.24], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 249, "name": "car_24", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "suv.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-16.80, 0.0, -5.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 250, "name": "car_25", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-5.80, 0.0, -5.16], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 251, "name": "car_26", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [5.20, 0.0, -5.32], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 252, "name": "car_27", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [16.20, 0.0, -7.12], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 253, "name": "car_28", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.30, 0.0, -2.80], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 254, "name": "car_29", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "delivery.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.30, 0.0, -2.16], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 255, "name": "car_30", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.70, 0.0, -2.32], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 256, "name": "car_31", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan-sports.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-16.80, 0.0, 2.32], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 257, "name": "car_32", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "suv.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-5.80, 0.0, 1.76], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 258, "name": "car_33", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [5.20, 0.0, 2.36], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 259, "name": "car_34", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [16.20, 0.0, 2.24], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 260, "name": "car_35", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.30, 0.0, 6.88], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 261, "name": "car_36", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "truck.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.30, 0.0, 7.20], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 262, "name": "car_37", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "delivery.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.70, 0.0, 5.36], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 263, "name": "car_38", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-16.80, 0.0, 9.24], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 264, "name": "car_39", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "sedan-sports.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-5.80, 0.0, 9.88], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 265, "name": "car_40", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [5.20, 0.0, 9.32], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 266, "name": "car_41", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [16.20, 0.0, 9.92], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 267, "name": "streetlight_00", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.85, 0.0, -11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 268, "name": "streetlight_01", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.65, 0.0, -11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 269, "name": "streetlight_02", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.15, 0.0, -12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 270, "name": "streetlight_03", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.65, 0.0, -12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 271, "name": "streetlight_04", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, -11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 272, "name": "streetlight_05", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.35, 0.0, -11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 273, "name": "streetlight_06", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, -12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 274, "name": "streetlight_07", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.85, 0.0, -8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 275, "name": "streetlight_08", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.35, 0.0, -7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 276, "name": "streetlight_09", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.15, 0.0, -7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 277, "name": "streetlight_10", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, -8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 278, "name": "streetlight_11", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, -8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 279, "name": "streetlight_12", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.65, 0.0, -7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 280, "name": "streetlight_13", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, -7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 281, "name": "streetlight_14", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-17.15, 0.0, -4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 282, "name": "streetlight_15", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.35, 0.0, -4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 283, "name": "streetlight_16", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.85, 0.0, -3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 284, "name": "streetlight_17", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, -3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 285, "name": "streetlight_18", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [4.85, 0.0, -4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 286, "name": "streetlight_19", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.65, 0.0, -4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 287, "name": "streetlight_20", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [17.15, 0.0, -3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 288, "name": "streetlight_21", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-17.15, 0.0, 0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 289, "name": "streetlight_22", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.65, 0.0, -0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 290, "name": "streetlight_23", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.85, 0.0, -0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 291, "name": "streetlight_24", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.65, 0.0, 0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 292, "name": "streetlight_25", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [4.85, 0.0, 0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 293, "name": "streetlight_26", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.35, 0.0, -0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 294, "name": "streetlight_27", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [17.15, 0.0, -0.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 295, "name": "streetlight_28", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.85, 0.0, 4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 296, "name": "streetlight_29", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-11.65, 0.0, 4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 297, "name": "streetlight_30", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.15, 0.0, 3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 298, "name": "streetlight_31", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [0.65, 0.0, 3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 299, "name": "streetlight_32", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, 4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 300, "name": "streetlight_33", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [10.35, 0.0, 4.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 301, "name": "streetlight_34", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, 3.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 302, "name": "streetlight_35", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-15.85, 0.0, 7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 303, "name": "streetlight_36", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.35, 0.0, 8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 304, "name": "streetlight_37", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-6.15, 0.0, 8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 305, "name": "streetlight_38", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, 7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 306, "name": "streetlight_39", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [6.15, 0.0, 7.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 307, "name": "streetlight_40", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.65, 0.0, 8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 308, "name": "streetlight_41", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [15.85, 0.0, 8.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 309, "name": "streetlight_42", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-17.15, 0.0, 11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 310, "name": "streetlight_43", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-10.35, 0.0, 11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 311, "name": "streetlight_44", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-4.85, 0.0, 12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 312, "name": "streetlight_45", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-0.65, 0.0, 12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 313, "name": "streetlight_46", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [4.85, 0.0, 11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 314, "name": "streetlight_47", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [11.65, 0.0, 11.35], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
+    } },
+    { "id": 315, "name": "streetlight_48", "flags": 0, "parent": 0, "components": {
+      "Model": { "mesh": "streetlight.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [17.15, 0.0, 12.65], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0000, 0.0, 1.0000] }
     } }
   ],
   "systems": []

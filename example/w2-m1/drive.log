@@ -214,4 +214,4 @@ wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_34.gl
   group tier1              tris=12     verts=25     tex=tier1.jpg
 wrote E:\UE_STUDY_2026\nl-engine-worldgen\assets\models\city_block_12345_6_35.glb (57476 bytes, BIN 53768 bytes): 4 submeshes, 72 triangles, 1 images
   block 35 -> city_block_12345_6_35.glb (57476 B, 6 clusters, dag OK)
-city2engine drive OK: blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36 scene=example/w2-m1/city.scene.engine
+city2engine drive OK: blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36 vendored=21 scene=example/w2-m1/city.scene.engine

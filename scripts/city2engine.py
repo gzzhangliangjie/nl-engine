@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -60,10 +61,18 @@ exit codes: 0 ok / 1 runtime failure / 2 usage or invalid arguments
 
 # flat whitelist re-implementation of viewer/renderer scene gate (Q-W1B: the
 # gate accepts bare ASCII .glb file names only; no separators, no traversal)
-GLB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+\.glb$")
+# M-W3.0: '-' joined (sedan-sports.glb) — viewer validAssetFileName accepts
+# all printable ASCII; the drive-side set stays a safe subset of it.
+GLB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+\.glb$")
 MESH_REF_RE = re.compile(r"blocks/block_(\d+)\.obj$")
 MESH_JSON_RE = re.compile(r'"mesh": "blocks/block_(\d+)\.obj"')
+ALL_MESH_JSON_RE = re.compile(r'"mesh": "([^"]+)"')
 ENTITY_NAME_RE = re.compile(r"^block_(\d+)$")
+# M-W3.0 vendored glb references in city.scene: any "mesh" value that is not
+# a blocks/block_NN.obj intermediate ref is a flat vendored asset name
+# (tree_*.glb / car-*.glb / streetlight.glb written by city-tools M-W3.0).
+VENDORED_DIRS = ("thirdparty/kenney-nature-kit", "thirdparty/kenney-car-kit",
+                 "thirdparty/poly-streetlight")
 
 
 def glb_name(seed: int, size: int, block_id: int) -> str:
@@ -78,6 +87,41 @@ def whitelist_ok(name: str) -> bool:
 def parse_mesh_ref(mesh: str):
     m = MESH_REF_RE.match(mesh)
     return int(m.group(1)) if m else None
+
+
+def vendored_path(name: str):
+    """M-W3.0: resolve a flat vendored glb name across the vendored dirs.
+    Returns the Path or None."""
+    for d in VENDORED_DIRS:
+        p = REPO_ROOT / d / name
+        if p.is_file():
+            return p
+    return None
+
+
+def copy_vendored_assets(scene_text: str, models_out: Path):
+    """M-W3.0 (Q-W3A 拍板 A1): copy every vendored glb referenced by the
+    scene into models_out (byte-faithful, deduped). Returns list of names."""
+    copied = set()
+    for name in ALL_MESH_JSON_RE.findall(scene_text):
+        # intermediate refs, handled by the obj2glb pipeline: the frozen
+        # scene's blocks/block_NN.obj and the rewritten city_block_*.glb
+        if MESH_REF_RE.match(name) or name.startswith("city_block_"):
+            continue
+        if not whitelist_ok(name):
+            sys.stderr.write("city2engine: vendored name fails whitelist: %s\n"
+                             % name)
+            raise SystemExit(1)
+        src = vendored_path(name)
+        if src is None:
+            sys.stderr.write("city2engine: vendored asset missing: %s (searched %s)\n"
+                             % (name, ", ".join(VENDORED_DIRS)))
+            raise SystemExit(1)
+        dst = models_out / name
+        if not dst.is_file() or dst.read_bytes() != src.read_bytes():
+            dst.write_bytes(src.read_bytes())
+        copied.add(name)
+    return sorted(copied)
 
 
 def rewrite_scene(scene_text: str, seed: int, size: int):
@@ -326,6 +370,38 @@ def selftest(verbose: bool) -> int:
         render_delivery_map(scene, {0: 100, 1: 300, 2: 250}, p3)
         assert_("png size-sensitive", p1.read_bytes() != p3.read_bytes())
 
+    # --- M-W3.0 vendored asset channel (Q-W3A A1) ---
+    assert_("whitelist hyphen joined", whitelist_ok("sedan-sports.glb"))
+    assert_("whitelist uppercase ok", whitelist_ok("tree_pineDefaultA.glb"))
+    assert_("whitelist rejects path sep", not whitelist_ok("a/b.glb"))
+    assert_("whitelist rejects dotdot", not whitelist_ok("a..glb"))
+    assert_("vendored streetlight resolves",
+            vendored_path("streetlight.glb") is not None)
+    assert_("vendored tree resolves",
+            vendored_path("tree_default.glb") is not None)
+    assert_("vendored car resolves",
+            vendored_path("sedan.glb") is not None)
+    assert_("vendored missing returns None",
+            vendored_path("no_such_asset.glb") is None)
+    # byte-faithful copy + dedup into a temp models dir
+    tdp2 = Path(tempfile.mkdtemp(prefix="city2eng_w3_"))
+    try:
+        scene_w3 = ('{"entities": ['
+                    '{"name": "tree_00", "components": {"Model": {"mesh": "tree_cone.glb"}}},'
+                    '{"name": "tree_01", "components": {"Model": {"mesh": "tree_cone.glb"}}},'
+                    '{"name": "car_00", "components": {"Model": {"mesh": "sedan.glb"}}},'
+                    '{"name": "block_00", "components": {"Model": {"mesh": "blocks/block_00.obj"}}}]}')
+        copied = copy_vendored_assets(scene_w3, tdp2)
+        assert_("vendored copy dedup names",
+                copied == ["sedan.glb", "tree_cone.glb"])
+        assert_("vendored copy byte-faithful",
+                (tdp2 / "tree_cone.glb").read_bytes()
+                == vendored_path("tree_cone.glb").read_bytes())
+        assert_("vendored copy skips obj refs",
+                not (tdp2 / "block_00.obj").exists())
+    finally:
+        shutil.rmtree(tdp2, ignore_errors=True)
+
     if fails:
         print("city2engine selftest: FAIL (%d/%d)" % (len(fails), n[0]))
         for f in fails:
@@ -417,14 +493,18 @@ def cmd_drive(args) -> int:
 
     scene_out.write_text(engine_text, encoding="utf-8", newline="")
 
+    # M-W3.0 (Q-W3A 拍板 A1): vendored tree/car/prop glb -> assets/models/
+    # byte-faithful, deduped by name; scene refs already flat whitelist names.
+    vendored = copy_vendored_assets(engine_text, models_out)
+
     if not args.no_evidence:
         scene = json.loads(engine_text)
         render_delivery_map(scene, sizes, scene_out.parent / "city_delivery.png")
 
     print("city2engine drive OK: blocks=%d glb=%d nmesh_suites=%d dag=%d "
-          "scene_refs=%d scene=%s"
+          "scene_refs=%d vendored=%d scene=%s"
           % (len(block_ids), len(sizes), len(sizes), len(sizes), ref_count,
-             rel_to_repo(scene_out)))
+             len(vendored), rel_to_repo(scene_out)))
     return 0
 
 
