@@ -18,6 +18,22 @@ set_tests_properties(net-m0-echo PROPERTIES
 add_test(NAME net-m0-selftest COMMAND net-tools selftest)
 set_tests_properties(net-m0-selftest PROPERTIES
     PASS_REGULAR_EXPRESSION "selftest net: PASS")
+
+# ---- NET M-NET1：快照编解码（bitsery 位打包）----
+# 往返 bytes 级一致 + 量化误差 ≤ 声明精度 + 截断/脏残位负向
+add_test(NAME net-m1-selftest COMMAND net-tools snapshot-selftest)
+set_tests_properties(net-m1-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "snapshot selftest: PASS")
+
+# 确定性载荷实测（seed 1234，anchor = OK + 字节数）
+add_test(NAME net-m1-bench COMMAND net-tools snapshot-bench --count 20000)
+set_tests_properties(net-m1-bench PROPERTIES
+    PASS_REGULAR_EXPRESSION "snapshot-bench : OK")
+
+# 负向：短流显式拒绝（WILL_FAIL 口径见 M-NET0 踩坑 3：正则组合反向，只用 WILL_FAIL）
+add_test(NAME net-m1-decode-negative
+         COMMAND net-tools snapshot-decode 01020304)
+set_tests_properties(net-m1-decode-negative PROPERTIES WILL_FAIL TRUE)
 # 丢包注入扫（0..90% 逐级实测，种子 1234 确定性；证据图数据源）
 add_test(NAME net-m0-loss-sweep COMMAND net-tools loss-sweep)
 set_tests_properties(net-m0-loss-sweep PROPERTIES

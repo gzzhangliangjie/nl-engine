@@ -283,7 +283,11 @@ add_library(nl_core STATIC
     core/src/tick_groups.cpp   # P8 M-GL5：命名 TickGroup 注册制（逻辑帧组序契约）
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
     core/src/net/Net.cpp       # NET M-NET0：nl/net 传输层薄封装（PIMPL，core 内唯一 ENet 符号面）
+    core/src/net/SnapshotCodec.cpp # NET M-NET1：快照位打包编解码（PIMPL，core 内唯一 bitsery 符号面）
 )
+# NET M-NET1：bitsery header-only 只进 SnapshotCodec.cpp 单 TU（PIMPL 纪律：
+# net/Snapshot.hpp 不暴露 bitsery 类型，故 PRIVATE）。
+target_include_directories(nl_core PRIVATE ${THIRDPARTY}/bitsery/include)
 target_include_directories(nl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 # dotnet-hosting 三头件（hostfxr.h/nethost.h/coreclr_delegates.h，SDK 8.0.19 pack 自带
 # vendored）只允许 core/src/script/Vm.cpp 出现（PIMPL 纪律，Vm.hpp 不暴露），故 PRIVATE。
