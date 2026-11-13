@@ -37,6 +37,8 @@ enum class ViewMode {
                       //  （Q11-0 方案 A：无墓碑 + life 衰减清零立即重用 + 3 步探测）
     Filter = 20,      // S12 M12.0：--mode filter（Q12-A 拍板 GI 分量独立时域累积；
                       //  复用 probe 链 velocity + T0 history0/1 ping-pong，零新增 RT）
+    Restir = 21,      // M14B1（S14-B）：--mode restir（ReSTIR GI 两 pass，Q-B1~B3
+                      //  拍板；复用 probe 链资产 + reservoir a/b ping-pong）
     // S1 起依次追加：Cache, Final
     Count
 };

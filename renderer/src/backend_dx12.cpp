@@ -72,7 +72,8 @@ public:
               const char* modelFile, bool clusterMode, bool cullMode,
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
-              bool shadowMode, bool referenceMode, bool probeMode, std::string& outError) override {
+              bool shadowMode, bool referenceMode, bool probeMode, bool restirMode,
+              std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -170,6 +171,13 @@ public:
                                            outError);
         // M10.0：probe-place 走 initVisbuf(pulling) 资产链 + velocity prepass +
         // cascade 布点，排在 visbufMode 之前（同一条链，多建 probe 管线）。
+        // M14B1：restir 走同一条 initProbe 链，随后置 restirMode_（place/trace
+        // 短路，gather 槽换 ReSTIR 两 pass）。
+        else if (restirMode) {
+            sceneOk = scene_.initProbe(device_, "dxil", "vsCull", "psCull", modelFile,
+                                       outError);
+            if (sceneOk) scene_.setRestirMode(true);
+        }
         else if (probeMode)
             sceneOk = scene_.initProbe(device_, "dxil", "vsCull", "psCull", modelFile,
                                        outError);

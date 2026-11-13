@@ -53,7 +53,8 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
 // probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
-// world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）。
+// world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）+
+// restir 4（M14B1 ReSTIR GI 双入口）。
 // （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
@@ -138,6 +139,9 @@ static const Artifact kArtifacts[] = {
     {"filter_temporal.csfiltertemporal", true}, {"filter_temporal.csfiltertemporal", false},
     // S12 M12.1：filter_spatial.slang 单 compute 入口（Q12-C A）× 双目标 = 2。
     {"filter_spatial.csfilterspatial", true}, {"filter_spatial.csfilterspatial", false},
+    // M14B1（S14-B）：restir.slang 双 compute 入口（Q-B1~B3 ReSTIR GI）× 双目标 = 4。
+    {"restir.cstemporal", true}, {"restir.cstemporal", false},
+    {"restir.csspatial", true}, {"restir.csspatial", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -185,7 +189,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool dagMode, bool skinMode,
                                            bool hizMode, bool sceneMode, bool visbufMode,
                                            bool pullingMode, bool rtMode, bool shadowMode, bool referenceMode,
-                                           bool probeMode) {
+                                           bool probeMode, bool restirMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -194,7 +198,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     // M10.0：probe-place 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
-                         rtMode || shadowMode || referenceMode || probeMode;
+                         rtMode || shadowMode || referenceMode || probeMode || restirMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -227,7 +231,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     if (!r->impl_->backend->init(nativeWindow, extent, enableDebugLayer, modelFile,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
-                                 shadowMode, referenceMode, probeMode, r->impl_->error)) {
+                                 shadowMode, referenceMode, probeMode, restirMode,
+                                 r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
         return r;

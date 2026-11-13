@@ -160,6 +160,7 @@ public:
         kPassCull = 0, kPassVisRaster, kPassMaterial, kPassHizBuild,
         kPassDirect, kPassRefGI, kPassPlace, kPassTrace, kPassGather,
         kPassFilterTemporal, kPassFilterSpatial, kPassGatherCompose, kPassMainDraw,
+        kPassRestirTemporal, kPassRestirSpatial,   // M14B1（S14-B）尾部追加
         kPassCount
     };
     static_assert(kPassCount <= kMaxPasses, "pass count exceeds HudFrame table");
@@ -169,7 +170,8 @@ public:
         static const char* kNames[kPassCount] = {
             "csCull", "visRaster", "matResolve", "hizBuild",
             "csDirect", "csRefGI", "csPlace", "csTraceProbe", "csGather",
-            "csFilterTemporal", "csFilterSpatial", "csGatherCompose", "mainDraw"};
+            "csFilterTemporal", "csFilterSpatial", "csGatherCompose", "mainDraw",
+            "restirTemp", "restirSpatial"};
         return kNames[id];
     }
 

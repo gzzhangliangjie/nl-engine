@@ -1194,7 +1194,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
               bool shadowMode = false, bool referenceMode = false,
-              bool probeMode = false) {
+              bool probeMode = false, bool restirMode = false) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
@@ -1286,7 +1286,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode, referenceMode, probeMode);
+                                                   shadowMode, referenceMode, probeMode,
+                                                   restirMode);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -4260,6 +4261,12 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true);
+    case nl::core::ViewMode::Restir:    // M14B1（S14-B）：ReSTIR GI 两 pass（probe 链复用）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true, /*restirMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");
@@ -4423,6 +4430,10 @@ int main(int argc, char** argv) {
     }
     // S12 M12.0：filter 复用 probe 链（TLAS 需 NFLB fallback），同 probe-viz 口径。
     if (o.mode == nl::core::ViewMode::Filter && !o.modelSet) {
+        o.modelFile = "Suzanne-materials.nmesh";
+    }
+    // M14B1：restir 复用 probe 链（TLAS 需 NFLB fallback），同 filter 口径。
+    if (o.mode == nl::core::ViewMode::Restir && !o.modelSet) {
         o.modelFile = "Suzanne-materials.nmesh";
     }
     // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。

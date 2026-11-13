@@ -3907,7 +3907,9 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // ---- (2) csPlace cascade 布点 dispatch（depth/velocity/prevDelta/atlas 的
     // SRV↔UAV 转换由绑定 require 自动插 barrier）。
     // M-PERF1：csPlace pass 计时。
-    {
+    // M14B1：restir 模式不布点不探针追踪（per-pixel 候选，探针 atlas 全程不
+    // 参与），velocity prepass 与 CB 覆写保留（restir 读 probeDepth_/velocity_）。
+    if (!restirMode_) {
         const bool ptPlace = passTimers_.begin(cmd, PassTimers::kPassPlace);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
@@ -3920,7 +3922,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // 刚写完 → irradiance atlas UAV 写；SRV↔UAV 转换由 trace set require 自动插。
     // TLAS 未就绪（无 RT / 无 fallback 几何）→ 一次性日志后跳过（probe-place
     // 的布点/点可视化不受影响，M10.0 行为保形；shadow 模式同口径降级）。
-    if (tlasReady_) {
+    if (tlasReady_ && !restirMode_) {
         const std::uint32_t store = 10u;
         // M-PERF1：csTraceProbe pass 计时。
         const bool ptTrace = passTimers_.begin(cmd, PassTimers::kPassTrace);
@@ -4029,6 +4031,190 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
                             "UE bilinear corner x plane-depth weights, ambient "
                             "replaced by gather)");
         probeGatherLogged_ = true;
+    }
+    return true;
+}
+
+// ---- M14B1（S14-B）：ReSTIR GI 两 pass（restir.slang，Q-B1~B3 拍板）----
+// 调用点 = matResolve 之后、presentTonemap 之前（gather 同槽）；复用 probe 链
+// probeDepth_ / velocity_ / TLAS / 世界缓存。reservoirA/B 固定角色跨帧 ping-pong
+// （pass1 读 A 写 B，pass2 读 B 写 A），keepInitialState UAV 口径（indirectArgs_
+// 同款：NVRHI 状态跟踪跨列表不持久）。
+bool Scene::drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                            const FrameParams& params, std::string& outError) {
+    if (!probe_ || probeFailed_ || !tlasReady_ || !hdrSceneColor_) {
+        if (!restirLogged_ && probe_ && !tlasReady_)
+            nl::core::log::infoCh("scene", "restir: disabled (TLAS not ready, pure "
+                                "direct light this frame)");
+        restirLogged_ = true;
+        return true;
+    }
+    if (restirFailed_) return true;
+
+    nvrhi::IDevice* device = cmd->getDevice();
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    const std::uint32_t rw = std::uint32_t(vpW);
+    const std::uint32_t rh = std::uint32_t(vpH);
+
+    // ---- 懒建（视口变化重建 reservoir，probe atlas 懒建同款口径）。
+    if (!restirReady_ || restirResW_ != rw || restirResH_ != rh) {
+        auto restirPath = [this](const char* artifact) {
+            return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix_;
+        };
+        auto loadRestirShader = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+            std::vector<std::uint8_t> blob;
+            if (!readFileBytes(restirPath(artifact).c_str(), blob)) {
+                outError = std::string("failed to load shader ") + artifact;
+                return false;
+            }
+            nvrhi::ShaderDesc desc;
+            desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");  // §2.4
+            out = device->createShader(desc, blob.data(), blob.size());
+            return out != nullptr;
+        };
+        if (!loadRestirShader("restir.cstemporal", csRestirTemporal_) ||
+            !loadRestirShader("restir.csspatial", csRestirSpatial_)) {
+            nl::core::log::deviceError("restir", outError);
+            restirFailed_ = true;
+            return true;
+        }
+
+        // restirCB_（volatile 160B；shader 声明 9×float4 = 144B，过量分配防
+        // dxc Size 耦合——filterCB_ 同款纪律）。
+        nvrhi::BufferDesc rcbDesc;
+        rcbDesc.byteSize = 160;
+        rcbDesc.isConstantBuffer = true;
+        rcbDesc.isVolatile = true;
+        rcbDesc.maxVersions = 16;
+        rcbDesc.debugName = "RestirConstants";
+        restirCB_ = device->createBuffer(rcbDesc);
+
+        // reservoir 双缓冲（64B/项 × w×h）：跨帧复用 → keepInitialState UAV。
+        nvrhi::BufferDesc resDesc;
+        resDesc.byteSize = 64 * rw * rh;
+        resDesc.structStride = 64;
+        resDesc.canHaveUAVs = true;
+        resDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        resDesc.keepInitialState = true;
+        resDesc.debugName = "RestirReservoirA";
+        reservoirA_ = device->createBuffer(resDesc);
+        resDesc.debugName = "RestirReservoirB";
+        reservoirB_ = device->createBuffer(resDesc);
+
+        // 布局：b0 + t0..t5（t2=TLAS / t3,t4=SSBO）+ u0..u2（u0,u1=SSBO）。
+        // 类型逐槽照 traceLayout_ 口径：AS 走 RayTracingAccelStruct、结构化缓冲走
+        // StructuredBuffer_*——Texture_* 类型错配在 DX12 恰好容错、Vulkan 直接
+        // device lost（M14B1 实测教训）。
+        nvrhi::BindingLayoutDesc rlDesc;
+        rlDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(2))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
+        restirLayout_ = device->createBindingLayout(rlDesc);
+
+        nvrhi::BindingSetDesc rsDesc;
+        rsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, restirCB_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, velocity_));
+        rsDesc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(2, tlas_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, wcChecksums_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, wcRadiance_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(5, hdrSceneColor_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, reservoirA_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, reservoirB_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, hdrSceneColor_));
+        restirSet_ = device->createBindingSet(rsDesc, restirLayout_);
+
+        { nvrhi::ComputePipelineDesc p; p.setComputeShader(csRestirTemporal_)
+            .addBindingLayout(restirLayout_);
+          restirPSOTemporal_ = device->createComputePipeline(p); }
+        { nvrhi::ComputePipelineDesc p; p.setComputeShader(csRestirSpatial_)
+            .addBindingLayout(restirLayout_);
+          restirPSOSpatial_ = device->createComputePipeline(p); }
+
+        if (!restirCB_ || !reservoirA_ || !reservoirB_ || !restirSet_
+            || !restirPSOTemporal_ || !restirPSOSpatial_) {
+            outError = "restir: resource creation failed";
+            nl::core::log::deviceError("restir", outError);
+            restirFailed_ = true;
+            return true;
+        }
+        restirResW_ = rw;
+        restirResH_ = rh;
+        restirReady_ = true;
+        nl::core::log::infoCh("scene", "restir: ready (reservoir 64B x ", rw, "x", rh,
+                            " x2, Q-B3 ping-pong; M=1 + temporal/spatial reuse)");
+    }
+
+    // ---- restirCB_ 每帧全量覆写（40 float）：[0..15] invViewProj /
+    // [16..19] 灯向 / [20..23] 灯色·强度 / [24..27] albedo·ambient /
+    // [28..31] bias·tMax·W·H / [32..35] cacheOn·radius·cap·frame /
+    // [36..38] eye。灯参数与 traceCB_/gatherCB_ 同源（2.5×ls，--probe-light-scale）。
+    {
+        nl::math::Mat4 vp{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
+        float rcb[40] = {};
+        std::memcpy(rcb, invVP.m, sizeof(invVP.m));
+        const float ls = params.probeLightScale;
+        rcb[16] = params.lightDir[0];
+        rcb[17] = params.lightDir[1];
+        rcb[18] = params.lightDir[2];
+        rcb[20] = 1.0f; rcb[21] = 1.0f; rcb[22] = 1.0f;
+        rcb[23] = 2.5f * ls;
+        rcb[24] = 0.45f; rcb[25] = 0.39f; rcb[26] = 0.30f;   // albedo 暖灰（同 traceCB）
+        rcb[27] = 0.01f;                                     // ambient（同 traceCB .a）
+        rcb[28] = 0.01f;                                     // shadowBias（M9.1 同值）
+        rcb[29] = 50.0f;                                     // shadowTMax（M9.1 同值）
+        rcb[30] = vpW;
+        rcb[31] = vpH;
+        rcb[32] = (params.probeCacheBounce || cacheFrame_ > 0) ? 1.0f : 0.0f;
+        rcb[33] = 30.0f;                                     // spatial radius px（bevy 口径）
+        rcb[34] = 20.0f;                                     // confidence cap（B2 调参面）
+        rcb[35] = static_cast<float>(cacheFrame_ % 64u);     // 确定性帧号
+        rcb[36] = params.eye[0];
+        rcb[37] = params.eye[1];
+        rcb[38] = params.eye[2];
+        cmd->writeBuffer(restirCB_, rcb, sizeof(rcb));
+    }
+
+    // ---- pass1 csRestirTemporal（读 A 上帧末态 → 写 B）：reservoir 帧初态 =
+    // 上一帧末态 UAV（keepInitialState，首帧即创建态，无 SRV 分支问题）。
+    {
+        const bool ptRestir = passTimers_.begin(cmd, PassTimers::kPassRestirTemporal);
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(restirPSOTemporal_).addBindingSet(restirSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((rw + 7u) / 8u, (rh + 7u) / 8u, 1u);
+        if (ptRestir) passTimers_.end(cmd, PassTimers::kPassRestirTemporal);
+    }
+
+    // ---- pass2 csRestirSpatial（读 B → 写 A + hdr RMW）：hdr 当前态 =
+    // RenderTarget（matResolve 刚写完）→ 显式转 UAV（drawProbeGather 4010 行
+    // 同款口径）；presentTonemap 自己转回 SRV。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        const bool ptRestir = passTimers_.begin(cmd, PassTimers::kPassRestirSpatial);
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(restirPSOSpatial_).addBindingSet(restirSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((rw + 7u) / 8u, (rh + 7u) / 8u, 1u);
+        if (ptRestir) passTimers_.end(cmd, PassTimers::kPassRestirSpatial);
+    }
+    if (!restirLogged_) {
+        nl::core::log::infoCh("scene", "restir: active (M=1 cosine candidate + temporal "
+                            "+ spatial reuse, cache bounce direct + fallback)");
+        restirLogged_ = true;
     }
     return true;
 }
@@ -6673,7 +6859,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // trace 之后填表供下一帧命中。前移填表会破坏 csCacheFill 依赖本帧
                     // probeDepth_ 的契约（probeDepth_ 在 drawProbeFrame 的 velocity
                     // prepass 才写好），故缓存填表必须落在 drawProbeFrame 之后。
-                    if (probe_ && (params.cacheViz || params.probeCacheBounce))
+                    if (probe_ && (params.cacheViz || params.probeCacheBounce || restirMode_))
                         drawCacheFrame(cmd, viewport, params);
                     // M11.2 验收（--probe-atlas-dump）：跳过 gather，把 irradAtlas_[0]
                     // 直出到画面做开关开/关自比（合成图在该场景读不到 M11.2 增量）。
@@ -6682,10 +6868,18 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         if (!drawIrradDump(cmd, viewport, params, adErr))
                             nl::core::log::deviceError("irrad-dump", adErr);
                     }
+                    // M14B1（S14-B）：restir 模式在 gather 同槽跑 ReSTIR GI 两 pass
+                    //（reservoir 时空重用 + RMW 合成；Q-B1~B3 拍板）。
+                    if (probe_ && restirMode_ && tlasReady_) {
+                        std::string rErr;
+                        if (!drawRestirFrame(cmd, viewport, params, rErr))
+                            nl::core::log::deviceError("restir", rErr);
+                    }
                     // M10.2（Q13-3）：gather 态 = 全屏探针插值 + 直光合成（hdr 同
                     // 纹理 RMW，ambient 已置零）；无点叠加。非 gather 态保持
                     // M10.0/M10.1 点可视化保形。
-                    if (probe_ && params.probeGather && !params.probeAtlasDump && tlasReady_) {
+                    if (probe_ && params.probeGather && !params.probeAtlasDump
+                        && !restirMode_ && tlasReady_) {
                         std::string gErr;
                         if (!drawProbeGather(cmd, viewport, params, gErr))
                             nl::core::log::deviceError("probe-gather", gErr);
@@ -6708,7 +6902,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // 深度关——全探针可见，布点覆盖性证据优先于遮挡正确性）。
                     // M10.2：gather 态跳过（Q13-3 无点叠加）。
                     // S11 M11.0：cache-viz 无点叠加（伪彩即最终画面）。
-                    if (probe_ && !params.cacheViz &&
+                    if (probe_ && !params.cacheViz && !restirMode_ &&
                         !(params.probeGather && tlasReady_) && !params.probeAtlasDump)
                         drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
@@ -8257,6 +8451,17 @@ void Scene::shutdown() {
     csFilterSpatial_ = nullptr;
     filterSpatialLayout_ = nullptr;
     filterSpatialPSO_ = nullptr;
+    // M14B1（S14-B）：restir 链句柄同批释放（同上口径）。
+    csRestirTemporal_ = nullptr;
+    csRestirSpatial_ = nullptr;
+    restirCB_ = nullptr;
+    restirLayout_ = nullptr;
+    restirSet_ = nullptr;
+    restirPSOTemporal_ = nullptr;
+    restirPSOSpatial_ = nullptr;
+    reservoirA_ = nullptr;
+    reservoirB_ = nullptr;
+    restirReady_ = false;
     filterSpatialSet_[0] = nullptr;
     filterSpatialSet_[1] = nullptr;
     filterHistoryCur_ = nullptr;

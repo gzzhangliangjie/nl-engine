@@ -472,6 +472,7 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "direct.csref"
                     "direct.csrefgi"
                     "probe_trace.cstrace"
+                    "restir.cstemporal" "restir.csspatial"
                     "world_cache.cscacheupdate")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
@@ -498,6 +499,9 @@ set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
 # M10.2（S10）：probe_gather.slang 双 compute 入口——final gather（每像素探针
 # 插值 Q13-1 深度选级 + UE 权重）与直光合成（Q13-2 ambient 替换）。
 set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgathercompose|compute")
+# M14B1（S14-B）：restir.slang 双 compute 入口——ReSTIR GI 两 pass（Q-B1~B3
+# 拍板；RayQuery inline → DXIL 需 SM6.5+，进 _SM66_ARTIFACTS）。
+set(_ENTRIES_RESTIR "csRestirTemporal|cstemporal|compute" "csRestirSpatial|csspatial|compute")
 # S11 M11.0：world_cache.slang 三 compute 入口——世界缓存 flat hashmap（Q11-0 方案 A：
 # 无墓碑 + life 衰减清零立即重用 + 3 步探测）。半分辨率填充 / 全表衰减 / cache-viz 伪彩。
 set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute" "csCacheUpdate|cscacheupdate|compute" "csCacheBlend|cscacheblend|compute")
@@ -540,6 +544,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_TRACE}")
     elseif(_SRC_NAME STREQUAL "probe_gather")
         set(_ENTRIES "${_ENTRIES_PROBE_GATHER}")
+    elseif(_SRC_NAME STREQUAL "restir")
+        set(_ENTRIES "${_ENTRIES_RESTIR}")
     elseif(_SRC_NAME STREQUAL "world_cache")
         set(_ENTRIES "${_ENTRIES_WORLD_CACHE}")
     elseif(_SRC_NAME STREQUAL "probe_atlas_dump")
@@ -572,6 +578,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")
+            set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
+        elseif(_SRC_NAME STREQUAL "restir")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "world_cache")
             set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")

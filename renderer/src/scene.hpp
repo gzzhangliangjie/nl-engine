@@ -485,6 +485,13 @@ public:
     // gather 态下调用方跳过 drawProbeDots（Q13-3：无点叠加）。
     bool drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                          const FrameParams& params, std::string& outError);
+    // M14B1（S14-B）：ReSTIR GI 两 pass（restir.slang，Q-B1~B3 拍板）。复用
+    // probe 链资产（initProbe 的 pulling 链 + probeDepth_/velocity_/TLAS/世界
+    // 缓存），替换 place/trace/gather 为 per-pixel reservoir 重采样。restirMode_
+    // 由后端 init 置位（setRestirMode）。
+    void setRestirMode(bool on) { restirMode_ = on; }
+    bool drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                         const FrameParams& params, std::string& outError);
     // S12 M12.0（Q12-A）：csFilterTemporal GI 分量时域累积。仅 filter 态在
     // csGather 与 csGatherCompose 之间插入；非 filter 态 compose 的绑定与执行
     // 顺序一字不动（M11.1 冻结基线代码形态实锤）。
@@ -1142,6 +1149,22 @@ private:
     // cascade atlas：每级一张 RGBA32_FLOAT（rgb=探针世界位置+a=deviceZ）× 2 帧
     // ping-pong（[parity][level]），上一帧探针 = parity 翻转后的另一份（Q10-2）。
     bool                         probe_ = false;
+    // ---- M14B1（S14-B）：ReSTIR GI 资源（restir.slang 双管线单 BindingSet）----
+    bool                         restirMode_ = false;
+    bool                         restirReady_ = false;
+    bool                         restirFailed_ = false;
+    bool                         restirLogged_ = false;
+    nvrhi::ShaderHandle          csRestirTemporal_;      // restir.cstemporal（pass1）
+    nvrhi::ShaderHandle          csRestirSpatial_;       // restir.csspatial（pass2）
+    nvrhi::BufferHandle          restirCB_;              // volatile 160B（声明 144B，过量分配）
+    nvrhi::BindingLayoutHandle   restirLayout_;          // b0 + t0..t5 SRV + u0..u2 UAV
+    nvrhi::BindingSetHandle      restirSet_;
+    nvrhi::ComputePipelineHandle restirPSOTemporal_;
+    nvrhi::ComputePipelineHandle restirPSOSpatial_;
+    nvrhi::BufferHandle          reservoirA_;            // 64B/项 RWStructuredBuffer（Q-B3）
+    nvrhi::BufferHandle          reservoirB_;
+    std::uint32_t                restirResW_ = 0;        // reservoir 视口尺寸（变了重建）
+    std::uint32_t                restirResH_ = 0;
     bool                         probeLogged_ = false;   // 布点日志锚只打一次
     nvrhi::IDevice*              probeDevice_ = nullptr;
     nvrhi::ShaderHandle          vsVelocity_, psVelocity_;
