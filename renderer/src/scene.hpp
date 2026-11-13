@@ -768,14 +768,32 @@ private:
     // 子范围的 minStorageBufferOffsetAlignment 约束（批次起点按 80B 递增）。
     struct SceneMeshBatch {
         nvrhi::BufferHandle vb, ib;
-        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，5/实例
-        nvrhi::TextureHandle tex;
+        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，7/实例
+        nvrhi::TextureHandle tex;        // t0 baseColor（RGBA8_UNORM，单 mip）
+        // P9 V2 全 PBR：t1 metallicRoughness / t2 normal / t3 occlusion / t4
+        // emissive。无对应贴图的 primitive 绑共享中性兜底纹理（见
+        // sceneNeutral* 成员），shader 按 matFlags 分支，兜底路径零采样。
+        nvrhi::TextureHandle texMR, texNormal, texOccl, texEmissive;
         nvrhi::SamplerHandle sampler;
         nvrhi::BindingSetHandle set;
         nvrhi::BindingSetHandle shadowSet;   // M-E1b.4：shadow pass 用（b0=lightViewProj + t5 实例）
         std::uint32_t indexCount = 0;
         std::uint32_t instanceCount = 0;
+        // P9 V2：batch 级材质量（全部实例共享同一 GLB primitive 材质）。
+        // updateObjects 重打包实例 [5].z/.w 与 [6] 时从这里取。
+        std::uint32_t matFlags = 0;          // hasMR=1 | hasNormal=2 | hasOccl=4 | hasEmissive=8
+        float normalScale = 1.0f;            // glTF normalTexture.scale
+        float emissiveFactor[3] = {0.f, 0.f, 0.f};
+        float occlStrength = 1.0f;           // glTF occlusionTexture.strength
     };
+    // P9 V2：共享中性兜底纹理（1×1，绑定恒非空、shader 在 matFlags 未置位时
+    // 不采样）—— normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、
+    // occl=(1,1,1,1)、emissive=黑。全场景一份，全 batch 复用。
+    // 注意声明位置必须在 sceneBatches_ **之前**：NVRHI 不持有 BindingSet 对
+    // 绑定资源的引用（用户侧保活），成员按声明逆序析构——放后面会让中性
+    // 纹理先于各 batch 的 set 释放 → Vulkan 退出段错误（DX12 容忍、VK 不容忍，
+    // 2026-11-13 实测）。
+    nvrhi::TextureHandle sceneNeutralNormal_, sceneNeutralMR_, sceneNeutralOccl_, sceneNeutralEmissive_;
     std::vector<SceneMeshBatch> sceneBatches_;
     // M-E1b.5：updateObjects 复用的 batch 分组映射（initScene 时固化——
     // meshFile 首现序 + batch 内 objects 原序，重打包规则与 initScene 一致）。

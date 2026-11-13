@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""FBX -> self-contained GLB via headless Blender (P9 V1 asset-ingest warm-up).
+"""FBX -> self-contained GLB via headless Blender (P9 V1 asset-ingest).
 
 Run by Blender itself (NOT plain python):
 
-  blender --background --python scripts/fbx2glb.py -- <in.fbx> <out.glb> [--report out.json]
+  blender --background --python scripts/fbx2glb.py -- <in.fbx> <out.glb>
+          [--report out.json] [--unity <AssetRoot>] [--up-fix]
+          [--prune Name1,Name2] [--split-materials <dir>]
 
-Why Blender
------------
-The mesh entry point of nl-engine is glTF 2.0 only (tinygltf). Source FBX files
-are binary Kaydara; Blender 5.2 is already installed locally and its FBX
-importer + glTF exporter handle binary FBX, Principled PBR maps and texture
-embedding with zero new repository dependencies. This script is tooling only --
-nothing here is vendored or linked into the engine.
+Material authority
+------------------
+Unity 资产包是材质权威：FBX 里贴图引用是作者机器死路径、_Color 是导出残值。
+--unity 给定资产根后：
 
-What it does
-------------
-* fresh empty scene, imports one FBX
-* reports object / triangle / material counts and which image files each
-  material references (the measured constraint for the kMaxVisMaterials=4
-  budget is per-asset; composition goes through ECS scene JSON placement)
-* exports one GLB with textures embedded (export_image_format='AUTO')
+* .mat 解析走 vendored unityparser（scripts/vendor/，Apache-2.0），不手写；
+* 属性 -> glTF PBR 映射照抄 KhronosGroup/UnityGLTF ExporterMaterials.cs
+  （本地副本 vendor-ref/ExporterMaterials.cs），实现见 scripts/unity_mat.py；
+* 贴图经 .meta guid 还原为真实文件路径；
+* .mat 匹配 FBX 材质名按 Unity ModelImporter materialSearch=1 口径
+  （工程内按名搜索）：精确名 -> X_Albedo -> XAlbedo。
 
 Exit code 0 on success; the JSON report on stdout's last line is the contract
 consumed by the batch evidence script.
@@ -27,10 +25,18 @@ consumed by the batch evidence script.
 
 import json
 import os
+import re
 import struct
 import sys
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _v in ("vendor", _HERE):
+    if _v not in sys.path:
+        sys.path.insert(0, _v)
+
 import bpy
+
+import unity_mat
 
 
 def clean_scene():
@@ -101,14 +107,14 @@ PREF_EXTS = (".png", ".jpg", ".jpeg", ".tga")
 
 
 def retarget_images(maps_dir):
-    """FBX materials usually reference dead absolute paths (.psd on the
-    author's machine). Re-point every image at a shipped file under
-    ``maps_dir`` matched by basename stem (exact, then prefix), preferring
-    embeddable formats (png/jpg/tga). Returns a list of retarget notes."""
+    """兜底：FBX 材质自带贴图引用（.mat 未覆盖的槽位）常是死路径，按 stem
+    在 maps_dir 内重定向。.mat guid 绑定走 unity_mat，这里只处理剩余项。"""
     if not maps_dir:
         return []
     files = []
     for root, _dirs, names in os.walk(maps_dir):
+        if "Library" in root:
+            continue
         for n in names:
             ext = os.path.splitext(n)[1].lower()
             if ext in PREF_EXTS:
@@ -222,10 +228,42 @@ def reorder_glb_nodes_textured_first(path):
     return moved, len(textured_meshes)
 
 
+def patch_glb_basecolor_factors(path, factors):
+    """Blender glTF 导出器在 Base Color 连贴图时不写 baseColorFactor（按其
+    实现默认白色）。glTF spec 里 factor 与 texture 是相乘关系，.mat 的
+    _Color 是权威乘色 -> 导出后 JSON 回写。仅对有 baseColorTexture 的材质
+    写入，按材质名精确匹配。"""
+    if not factors:
+        return 0
+    with open(path, "rb") as fh:
+        data = fh.read()
+    magic, version, _length = struct.unpack("<III", data[:12])
+    jlen, jtype = struct.unpack("<II", data[12:20])
+    j = json.loads(data[20:20 + jlen])
+    blen, btype = struct.unpack("<II", data[20 + jlen:28 + jlen])
+    binchunk = data[28 + jlen:28 + jlen + blen]
+
+    written = []
+    for mat in j.get("materials", []):
+        pbr = mat.setdefault("pbrMetallicRoughness", {})
+        if pbr.get("baseColorTexture") is not None and mat.get("name") in factors:
+            pbr["baseColorFactor"] = factors[mat["name"]]
+            written.append(mat["name"])
+
+    outj = json.dumps(j, separators=(",", ":")).encode()
+    outj += b" " * ((4 - len(outj) % 4) % 4)
+    total = 12 + 8 + len(outj) + 8 + len(binchunk)
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<III", magic, version, total))
+        fh.write(struct.pack("<I", len(outj)) + struct.pack("<I", 0x4E4F534A))
+        fh.write(outj)
+        fh.write(struct.pack("<I", blen) + struct.pack("<I", btype) + binchunk)
+    return len(written)
+
+
 def prune_objects(name_keys, report):
     """Delete objects whose name starts with one of ``name_keys``
-    (case-insensitive; e.g. collision proxies '..._Col', duplicate 'LOD1'
-    subtrees). Recurses into children of removed empties."""
+    (case-insensitive; e.g. collision proxies, driver 'Civil01')."""
     keys = [k.lower() for k in name_keys]
     if not keys:
         return 0
@@ -249,13 +287,88 @@ def prune_objects(name_keys, report):
     return count
 
 
-def split_by_material(src, outdir, stem, maps_dir, prune_keys, results):
-    """ECS scene mode loads only primitive 0 of each glb (M-E1b.0), so scene
-    composition needs ONE primitive per glb. Re-import the FBX once per
-    material, keep only meshes using it, clear+bake transforms, join into a
-    single mesh object, export <stem>_<material>.glb."""
-    import mathutils
+def _set_blend_mode(mat, alpha_mode):
+    """Blender 5.x：blend_method 已迁往 surface_render_method；两个都按存在
+    性尝试，glTF 导出器据此写 alphaMode。引擎现阶段不消费 alphaMode，
+    记录为 spec 正确性，不算行为变更。"""
+    try:
+        if alpha_mode == "BLEND":
+            mat.blend_method = "BLEND"
+            mat.surface_render_method = "DITHERED"
+        elif alpha_mode == "MASK":
+            mat.blend_method = "CLIP"
+    except AttributeError:
+        pass
 
+
+def apply_unity_material(mat, g, factors):
+    """unity_mat.umat_to_gltf 的产物落到 Blender Principled 节点。
+    factors：连贴图且乘色非白 -> 导出后 patch_glb_basecolor_factors 回写。"""
+    if not mat.use_nodes:
+        mat.use_nodes = True
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    pbr = g["pbr"]
+    note = {"color": False, "tex": False, "pbr": False, "normal": False,
+            "emission": False, "glbFactor": False}
+
+    tex_path = pbr.get("baseColorTexture")
+    if tex_path and os.path.isfile(tex_path):
+        img = bpy.data.images.load(tex_path, check_existing=True)
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = img
+        nt.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+        note["tex"] = True
+    f = pbr.get("baseColorFactor")
+    if f:
+        r, g_, b, a = f
+        if note["tex"]:
+            if any(abs(v - 1.0) > 0.01 for v in (r, g_, b)):
+                factors[mat.name] = [r, g_, b, a]
+                note["glbFactor"] = True
+        else:
+            bsdf.inputs["Base Color"].default_value = (r, g_, b, 1.0)
+            note["color"] = True
+
+    if "metallicFactor" in pbr and not bsdf.inputs["Metallic"].is_linked:
+        bsdf.inputs["Metallic"].default_value = pbr["metallicFactor"]
+        note["pbr"] = True
+    if "roughnessFactor" in pbr and not bsdf.inputs["Roughness"].is_linked:
+        bsdf.inputs["Roughness"].default_value = pbr["roughnessFactor"]
+        note["pbr"] = True
+
+    nrm = g.get("normalTexture")
+    if nrm and os.path.isfile(nrm["path"]):
+        img = bpy.data.images.load(nrm["path"], check_existing=True)
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = img
+        nmap = nt.nodes.new("ShaderNodeNormalMap")
+        nmap.inputs["Strength"].default_value = nrm.get("scale", 1.0)
+        nt.links.new(node.outputs["Color"], nmap.inputs["Color"])
+        nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+        note["normal"] = True
+
+    emf = g.get("emissiveFactor")
+    if emf:
+        bsdf.inputs["Emission Color"].default_value = (emf[0], emf[1], emf[2], 1.0)
+        bsdf.inputs["Emission Strength"].default_value = 1.0
+        note["emission"] = True
+    if g.get("emissiveTexture") and os.path.isfile(g["emissiveTexture"]):
+        img = bpy.data.images.load(g["emissiveTexture"], check_existing=True)
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = img
+        if not bsdf.inputs["Emission Color"].is_linked:
+            nt.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
+        note["emission"] = True
+
+    _set_blend_mode(mat, g.get("alphaMode", "OPAQUE"))
+    return note
+
+
+def split_by_material(src, outdir, stem, unity_dir, prune_keys, results):
+    """Legacy path: one glb per material (--split-materials). Re-import the FBX
+    once per material, keep only meshes using it, clear+bake transforms, join
+    into a single mesh object, export <stem>_<material>.glb."""
     # one pass to enumerate materials
     clean_scene()
     import_fbx(src)
@@ -274,7 +387,6 @@ def split_by_material(src, outdir, stem, maps_dir, prune_keys, results):
         import_fbx(src)
         pruned = []
         prune_objects(prune_keys, pruned)
-        retarget_images(maps_dir)
 
         keep = []
         for ob in list(bpy.data.objects):
@@ -333,44 +445,30 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if len(argv) < 2:
         print("usage: blender --background --python scripts/fbx2glb.py -- "
-              "<in.fbx> <out.glb> [--report out.json]")
+              "<in.fbx> <out.glb> [--report out.json] [--unity <AssetRoot>] "
+              "[--up-fix] [--prune N1,N2] [--split-materials <dir>]")
         sys.exit(2)
     src, dst = argv[0], argv[1]
     report_path = None
-    maps_dir = None
     if "--report" in argv:
         report_path = argv[argv.index("--report") + 1]
-    if "--maps" in argv:
-        maps_dir = argv[argv.index("--maps") + 1]
-    prune_keys = []
+    # --unity <dir>：Unity 工程资产根（材质权威）。.mat 解析 + guid 贴图绑定
+    # + materialSearch=1 按名匹配；FBX 只是残缺几何容器。
+    unity_dir = None
+    if "--unity" in argv:
+        unity_dir = argv[argv.index("--unity") + 1]
+    prune_keys = []                        # --prune：点名剪除（司机模型等）
     if "--prune" in argv:
         prune_keys = argv[argv.index("--prune") + 1].split(",")
     split_dir = None
     if "--split-materials" in argv:
         split_dir = argv[argv.index("--split-materials") + 1]
-    lod0_only = "--lod0" in argv        # 只留 LOD0 / 无 LOD 后缀件（Y-up 习惯车模）
     up_fix = "--up-fix" in argv         # Blender 空间绕 X +90°：Y-up 数据落回 Z-up
-    mat_remap = {}
-    if "--mat-remap" in argv:
-        for pair in argv[argv.index("--mat-remap") + 1].split(","):
-            frm, _, to = pair.partition("=")
-            if frm and to:
-                mat_remap[frm] = to
-    # 材质颜色覆写："Name=r,g,b[,a]"（0~1）。FBX 只带作者机器的原始材质色，
-    # Unity .mat 里的 _Color 覆写带不出来（如 Windows 应为黑 0,0,0，FBX 是灰
-    # 0.561），按 Unity 权威色在此补写。
-    mat_tint = {}
-    if "--mat-tint" in argv:
-        for pair in argv[argv.index("--mat-tint") + 1].split(","):
-            name, _, vals = pair.partition("=")
-            v = [float(x) for x in vals.split(":")]
-            if name and len(v) >= 3:
-                mat_tint[name] = v + [1.0] * (4 - len(v))
 
     if split_dir:
         results = []
         split_by_material(src, split_dir, os.path.splitext(os.path.basename(dst))[0],
-                          maps_dir, prune_keys, results)
+                          unity_dir, prune_keys, results)
         line = json.dumps({"src": src, "splitDir": split_dir,
                            "parts": results}, ensure_ascii=True)
         if report_path:
@@ -383,27 +481,21 @@ def main():
     objects = import_fbx(src)
     pruned = []
     prune_objects(prune_keys, pruned)
-    # --lod0：源文件每部件带 LOD0/LOD2/LOD3 三层同位重叠网格（如 CivilianVehicle05，
-    # 无 LOD1），全部导出会三角数翻倍 + 自遮挡。子串匹配以兼容 Blender 的 .001 后缀。
-    lod0_pruned = 0
-    if lod0_only:
-        doomed = [ob for ob in bpy.data.objects
-                  if any(s in ob.name for s in ("LOD1", "LOD2", "LOD3"))]
-        lod0_pruned = len(doomed)
-        for ob in doomed:
-            bpy.data.objects.remove(ob, do_unlink=True)
+    # 自动剪除（Unity 导出惯例）：
+    #   *_Col / *Collision      碰撞代理（引擎不需要）
+    #   *_LOD[1-9]*             LOD>0 层（每部件 2~4 层同位重叠网格）
+    doomed = [ob for ob in bpy.data.objects
+              if ob.type == "MESH" and re.search(r"(_Col$|_Collision$|_LOD[1-9])", ob.name)]
+    auto_pruned = len(doomed)
+    for ob in doomed:
+        bpy.data.objects.remove(ob, do_unlink=True)
     up_fixed = 0
     if up_fix:
         # 源 FBX 按 Y-up 习惯存（Y=车高、Z=车长），Blender 导入不做轴向转换、
-        # glTF 导出再做 Z-up→Y-up，结果车长落到 glTF Y（竖立）。绕 X +90° 后
-        # Blender 空间恢复「Z=高、Y=长」，导出后 glTF Y=高、Z=长，车平放。
-        # 转对象 world matrix（含 empty 父）而非 mesh data：轮子等部件靠
-        # object transform 摆位、data 在原点，只转 data 会漏掉它们的位移。
-        # 转对象 matrix_world 会踩 FBX 导入的 unit-scale/父子分解坑（实测 ±90 尺度
-        # 爆炸）。改走烘平：先把每块 mesh data 烘到 Blender 世界坐标、清空变换，
-        # 再对烘平后的 data 绕 X +90°——全程无矩阵分解，轮子等 object 摆位件
-        # 与车体一起走同一旋转。
-        from mathutils import Matrix, Vector
+        # glTF 导出再做 Z-up→Y-up，结果车长落到 glTF Y（竖立）。走烘平：先把
+        # 每块 mesh data 烘到 Blender 世界坐标、清空变换，再对烘平后的 data
+        # 绕 X +90°——全程无矩阵分解，轮子等 object 摆位件与车体同转。
+        from mathutils import Matrix
         rot = Matrix.Rotation(__import__("math").radians(90.0), 4, (1.0, 0.0, 0.0))
         ident = Matrix.Identity(4)
         for ob in list(bpy.data.objects):
@@ -414,16 +506,36 @@ def main():
             ob.parent = None
             ob.matrix_world = ident
             up_fixed += 1
-    mat_remapped = 0
-    if mat_remap:
-        # 源 FBX 部件丢材质槽（如 4 个轮子 3 个落到 "06 - Default"），按名重指。
-        for ob in bpy.data.objects:
-            for slot in ob.material_slots:
-                if slot.material and slot.material.name in mat_remap:
-                    tgt = bpy.data.materials.get(mat_remap[slot.material.name])
-                    if tgt:
-                        slot.material = tgt
-                        mat_remapped += 1
+
+    # ---- Unity 权威材质（unityparser + UnityGLTF ExporterMaterials 映射链）----
+    unity_stats = {"applied": 0, "matched": 0, "unmatchedFBX": [],
+                   "matErrors": [], "unlit": [], "notes": {}}
+    glb_factors = {}
+    if unity_dir:
+        guid_db = unity_mat.build_guid_db(unity_dir)
+        all_mats = unity_mat.load_all_mats(unity_dir, guid_db)
+        for name, um in all_mats.items():
+            if name.startswith("!error:"):
+                unity_stats["matErrors"].append(
+                    {"file": name[7:], "error": um.get("error")})
+        for mat in bpy.data.materials:
+            if not mat.use_nodes:
+                mat.use_nodes = True
+            key = unity_mat.find_mat_for(mat.name, all_mats)
+            if key is None:
+                unity_stats["unmatchedFBX"].append(mat.name)
+                continue
+            g = unity_mat.umat_to_gltf(all_mats[key], guid_db)
+            if g is None:
+                continue
+            unity_stats["matched"] += 1
+            if g.get("unlit"):
+                unity_stats["unlit"].append(mat.name)
+            note = apply_unity_material(mat, g, glb_factors)
+            if any(note.values()):
+                unity_stats["applied"] += 1
+                unity_stats["notes"][mat.name] = {"mat": key, **note}
+
     # 空材质槽压缩：FBX 常带无多边形的空槽（如轮子首槽 "06 - Default"），
     # Blender glTF 导出器在这种网格上不重映射 polygon.material_index，导致
     # 整个 prim 落到错误材质（实测：3 个轮子的轮毂面全导到空灰材质）。
@@ -446,22 +558,9 @@ def main():
             p.material_index = ni
         slots_compacted += 1
 
-    mat_tinted = 0
-    if mat_tint:
-        # 只覆写未连贴图的 Base Color 直连值；连贴图的材质 tint 属于乘色，
-        # 语义不同，不允许在这里覆盖。
-        for mat in bpy.data.materials:
-            if mat.name not in mat_tint or not mat.use_nodes:
-                continue
-            bsdf = [n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"]
-            if not bsdf or bsdf[0].inputs["Base Color"].is_linked:
-                continue
-            bsdf[0].inputs["Base Color"].default_value = mat_tint[mat.name]
-            mat_tinted += 1
-
     objects = [o for o in bpy.data.objects]
     meshes, tris = mesh_stats(objects)
-    retarget = retarget_images(maps_dir)
+    retarget = retarget_images(unity_dir)
     reordered = order_materials_textured_first(meshes)
     mats = material_report(meshes)
     bounds = bbox(objects)
@@ -475,6 +574,7 @@ def main():
         export_apply=True,            # apply modifiers / triangulate
     )
     nodes_moved, textured_count = reorder_glb_nodes_textured_first(dst)
+    factors_written = patch_glb_basecolor_factors(dst, glb_factors)
 
     result = {
         "src": src,
@@ -486,11 +586,12 @@ def main():
         "materialDetail": mats,
         "retargetedTextures": retarget,
         "prunedObjects": pruned,
-        "lod0Pruned": lod0_pruned,
+        "autoPruned": auto_pruned,
         "upFixRotated": up_fixed,
         "emptySlotsCompacted": slots_compacted,
-        "matRemapped": mat_remapped,
-        "matTinted": mat_tinted,
+        "unityMaterial": unity_stats,
+        "glbBaseColorFactors": {"requested": sorted(glb_factors.keys()),
+                                "written": factors_written},
         "meshesReorderedTexturedFirst": reordered,
         "glbNodesTexturedFirst": {"arraysReordered": nodes_moved,
                                   "texturedMeshes": textured_count},

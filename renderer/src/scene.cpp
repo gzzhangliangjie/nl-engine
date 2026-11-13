@@ -5437,6 +5437,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         std::uint32_t texWidth = 0, texHeight = 0;
         std::vector<std::uint8_t> texRGBA;
         float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // 局部包围球 xyz=center w=radius
+        // P9 V2 全 PBR：贴图组（空 = 用共享中性兜底纹理）+ batch 级材质量。
+        bool hasMR = false, hasNormalTex = false, hasOcclTex = false, hasEmissiveTex = false;
+        std::uint32_t mrWidth = 0, mrHeight = 0;
+        std::uint32_t normalWidth = 0, normalHeight = 0;
+        std::uint32_t occlWidth = 0, occlHeight = 0;
+        std::uint32_t emissiveWidth = 0, emissiveHeight = 0;
+        std::vector<std::uint8_t> mrRGBA, normalRGBA, occlRGBA, emissiveRGBA;
+        std::uint32_t matFlags = 0;          // hasMR=1 | hasNormal=2 | hasOccl=4 | hasEmissive=8
+        float normalScale = 1.0f;
+        float emissiveFactor[3] = {0.f, 0.f, 0.f};
+        float occlStrength = 1.0f;
     };
     std::vector<PreparedBatch> prepared;
     std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
@@ -5475,6 +5486,25 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                 outError = batchFiles[b] + std::string(" primitive #") +
                            std::to_string(p) + " has no indices"; return false;
             }
+            // P9 V2 全 PBR：贴图组 + batch 级材质量（mesh_io 已按 glTF spec
+            // 提取；空贴图 = 共享中性兜底纹理，shader 侧 matFlags 分支跳过）。
+            pb.mrRGBA = prim.metallicRoughnessRGBA;
+            pb.mrWidth = prim.mrWidth;  pb.mrHeight = prim.mrHeight;
+            pb.hasMR = prim.hasMR;
+            pb.normalRGBA = prim.normalRGBA;
+            pb.normalWidth = prim.normalWidth;  pb.normalHeight = prim.normalHeight;
+            pb.hasNormalTex = prim.hasNormalTex;
+            pb.occlRGBA = prim.occlRGBA;
+            pb.occlWidth = prim.occlWidth;  pb.occlHeight = prim.occlHeight;
+            pb.hasOcclTex = prim.hasOcclTex;
+            pb.emissiveRGBA = prim.emissiveRGBA;
+            pb.emissiveWidth = prim.emissiveWidth;  pb.emissiveHeight = prim.emissiveHeight;
+            pb.hasEmissiveTex = prim.hasEmissiveTex;
+            pb.normalScale = prim.normalScale;
+            pb.occlStrength = prim.occlStrength;
+            for (int k = 0; k < 3; ++k) pb.emissiveFactor[k] = prim.emissiveFactor[k];
+            pb.matFlags = (pb.hasMR ? 1u : 0u) | (pb.hasNormalTex ? 2u : 0u) |
+                          (pb.hasOcclTex ? 4u : 0u) | (pb.hasEmissiveTex ? 8u : 0u);
             pb.vertices.resize(prim.vertices.size());
             for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
                 const auto& mv = prim.vertices[i];
@@ -5519,11 +5549,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
 
-    // 槽位与 model.slang 的 register(b0/t0/s0/t5/t6) 一致；t5/t6 经 slangc 的
+    // 槽位与 model.slang 的 register(b0/t0/t1..t4/s0/t5/t6) 一致；t5/t6 经 slangc 的
     // -fvk-t-shift 0 0 在 Vulkan 映射为 binding 5/6，DX12 为 SRV slot 5/6。
+    // P9 V2：t1 MR / t2 normal / t3 occl / t4 emissive（psScene 专属调用图，
+    // 与 visbuf/cull 图的 t2..t4 StructuredBuffer 各自编译互不见面——t1 先例）。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))   // b1 LightConstants（M-E1b.3：cameraPos）
@@ -5566,6 +5602,32 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     sceneInputLayout_ = device->createInputLayout(attrs, 3, vsScene_);
     if (!sceneInputLayout_) { outError = "createInputLayout failed for ecs scene"; return false; }
 
+    // P9 V2：共享中性兜底纹理（1×1）。绑定恒非空、shader 在 matFlags 未置位时
+    // 不采样——normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、
+    // occl=(1,1,1,1)、emissive=黑。全场景一份，全 batch 复用。
+    // 注意：这里只 createTexture 不写入，写入统一并入下方主 upload 命令列表
+    // ——不能为每张纹理单开 executeCommandList（VK 实测退出段错误，
+    // 2026-11-13 bisect 定位；§2.8「禁开多余 cmd list」精神同样适用于 init 期）。
+    {
+        const auto mkNeutral = [&device](const char* name) -> nvrhi::TextureHandle {
+            nvrhi::TextureDesc nd;
+            nd.width = nd.height = 1;
+            nd.format = nvrhi::Format::RGBA8_UNORM;
+            nd.debugName = name;
+            nd.initialState = nvrhi::ResourceStates::ShaderResource;
+            nd.keepInitialState = true;
+            return device->createTexture(nd);
+        };
+        sceneNeutralNormal_ = mkNeutral("SceneNeutralNormal");
+        sceneNeutralMR_ = mkNeutral("SceneNeutralMR");
+        sceneNeutralOccl_ = mkNeutral("SceneNeutralOccl");
+        sceneNeutralEmissive_ = mkNeutral("SceneNeutralEmissive");
+        if (!sceneNeutralNormal_ || !sceneNeutralMR_ ||
+            !sceneNeutralOccl_ || !sceneNeutralEmissive_) {
+            outError = "createTexture failed for scene neutral PBR textures"; return false;
+        }
+    }
+
     sceneBatches_.resize(prepared.size());
     for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
@@ -5591,14 +5653,47 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         batch.indexCount = static_cast<std::uint32_t>(pb.indices.size());
 
         nvrhi::TextureDesc texDesc;
-        texDesc.width = pb.texWidth;
-        texDesc.height = pb.texHeight;
         texDesc.format = nvrhi::Format::RGBA8_UNORM;
-        texDesc.debugName = texName.c_str();
         texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         texDesc.keepInitialState = true;
+
+        // P9 V2：batch 级材质量固化（updateObjects 重打包实例用）。
+        batch.matFlags = pb.matFlags;
+        batch.normalScale = pb.normalScale;
+        batch.occlStrength = pb.occlStrength;
+        for (int k = 0; k < 3; ++k) batch.emissiveFactor[k] = pb.emissiveFactor[k];
+
+        // t0 baseColor + t1 MR / t2 normal / t3 occl / t4 emissive：有真贴图建
+        // 独立纹理，无则绑共享中性兜底（shader 按 matFlags 分支，零采样零成本）。
+        texDesc.width = pb.texWidth;
+        texDesc.height = pb.texHeight;
+        texDesc.debugName = texName.c_str();
         batch.tex = device->createTexture(texDesc);
         if (!batch.tex) { outError = "createTexture failed for ecs scene base color"; return false; }
+
+        texDesc.width = (pb.hasMR && pb.mrWidth) ? pb.mrWidth : 1;
+        texDesc.height = (pb.hasMR && pb.mrHeight) ? pb.mrHeight : 1;
+        texDesc.debugName = (fileTag + "MR").c_str();
+        batch.texMR = pb.hasMR ? device->createTexture(texDesc) : sceneNeutralMR_;
+        if (!batch.texMR) { outError = "createTexture failed for ecs scene MR"; return false; }
+
+        texDesc.width = (pb.hasNormalTex && pb.normalWidth) ? pb.normalWidth : 1;
+        texDesc.height = (pb.hasNormalTex && pb.normalHeight) ? pb.normalHeight : 1;
+        texDesc.debugName = (fileTag + "Normal").c_str();
+        batch.texNormal = pb.hasNormalTex ? device->createTexture(texDesc) : sceneNeutralNormal_;
+        if (!batch.texNormal) { outError = "createTexture failed for ecs scene normal"; return false; }
+
+        texDesc.width = (pb.hasOcclTex && pb.occlWidth) ? pb.occlWidth : 1;
+        texDesc.height = (pb.hasOcclTex && pb.occlHeight) ? pb.occlHeight : 1;
+        texDesc.debugName = (fileTag + "Occl").c_str();
+        batch.texOccl = pb.hasOcclTex ? device->createTexture(texDesc) : sceneNeutralOccl_;
+        if (!batch.texOccl) { outError = "createTexture failed for ecs scene occlusion"; return false; }
+
+        texDesc.width = (pb.hasEmissiveTex && pb.emissiveWidth) ? pb.emissiveWidth : 1;
+        texDesc.height = (pb.hasEmissiveTex && pb.emissiveHeight) ? pb.emissiveHeight : 1;
+        texDesc.debugName = (fileTag + "Emissive").c_str();
+        batch.texEmissive = pb.hasEmissiveTex ? device->createTexture(texDesc) : sceneNeutralEmissive_;
+        if (!batch.texEmissive) { outError = "createTexture failed for ecs scene emissive"; return false; }
 
         batch.sampler = device->createSampler(samplerDesc);
         if (!batch.sampler) { outError = "createSampler failed for ecs scene"; return false; }
@@ -5636,10 +5731,16 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
             // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
+            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissiveFactor.rgb,
+            // occlStrength)——batch 级材质量（GLB 权威），全实例同值。
             dst[20] = objects[i].roughness;
             dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         nvrhi::BufferDesc instDesc;
@@ -5886,6 +5987,12 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         SceneMeshBatch& batch = sceneBatches_[b];
         nvrhi::BindingSetDesc setDesc;
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
+               // P9 V2 全 PBR：t1 MR / t2 normal / t3 occl / t4 emissive（真贴图
+               // 或共享中性兜底，BindingSet 恒非空）。
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(1, batch.texMR))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(2, batch.texNormal))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(3, batch.texOccl))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(4, batch.texEmissive))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))   // b1（M-E1b.3：cameraPos）
@@ -5910,6 +6017,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     //（只读 SRV，每帧不重写——与 clusterSpheres_ 同款静态路径）。
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
+    // P9 V2：中性兜底纹理写入——与 batch 贴图同一命令列表（禁单纹理单开列表，
+    // 见上方注释；VK 退出段错误 bisect 实锤）。
+    {
+        const std::uint8_t neutralNormal[4] = {128, 128, 255, 255};
+        const std::uint8_t neutralOpaque[4] = {255, 255, 255, 255};
+        const std::uint8_t neutralBlack[4]  = {0, 0, 0, 255};
+        upload->writeTexture(sceneNeutralNormal_, 0, 0, neutralNormal, 4);
+        upload->writeTexture(sceneNeutralMR_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralOccl_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralEmissive_, 0, 0, neutralBlack, 4);
+    }
     for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
@@ -5921,6 +6039,19 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(batch.ib, nvrhi::ResourceStates::IndexBuffer);
         upload->writeTexture(batch.tex, 0, 0, pb.texRGBA.data(),
                              static_cast<size_t>(pb.texWidth) * 4u);
+        // P9 V2：真贴图上传（中性兜底纹理已在创建时写好，跳过）。
+        if (pb.hasMR)
+            upload->writeTexture(batch.texMR, 0, 0, pb.mrRGBA.data(),
+                                 static_cast<size_t>(pb.mrWidth) * 4u);
+        if (pb.hasNormalTex)
+            upload->writeTexture(batch.texNormal, 0, 0, pb.normalRGBA.data(),
+                                 static_cast<size_t>(pb.normalWidth) * 4u);
+        if (pb.hasOcclTex)
+            upload->writeTexture(batch.texOccl, 0, 0, pb.occlRGBA.data(),
+                                 static_cast<size_t>(pb.occlWidth) * 4u);
+        if (pb.hasEmissiveTex)
+            upload->writeTexture(batch.texEmissive, 0, 0, pb.emissiveRGBA.data(),
+                                 static_cast<size_t>(pb.emissiveWidth) * 4u);
         upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
                             batchInstanceData[b].size() * sizeof(float));
@@ -6045,10 +6176,16 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
+            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissive,occlStr)
+            // batch 级材质量（initScene 固化于 SceneMeshBatch，全实例同值）。
             dst[20] = objects[i].roughness;
             dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         // beginTrackingBufferState 参数 = **当前**状态（NVRHI 语义：informs the
@@ -7950,6 +8087,14 @@ void Scene::shutdown() {
     sceneLights_ = nullptr;
     sceneInputLayout_ = nullptr;
     sceneBindingLayout_ = nullptr;
+    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
+    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
+    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
+    // 仅创建不绑定不写入也复现，删创建即 clean）。
+    sceneNeutralNormal_ = nullptr;
+    sceneNeutralMR_ = nullptr;
+    sceneNeutralOccl_ = nullptr;
+    sceneNeutralEmissive_ = nullptr;
     sceneBatches_.clear();
     pipelineSceneBack_ = nullptr;
     pipelineSceneNone_ = nullptr;
