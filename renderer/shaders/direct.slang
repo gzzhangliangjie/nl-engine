@@ -91,6 +91,10 @@ cbuffer RefConstants : register(b4)
 cbuffer GIConstants : register(b5)
 {
     float4 g_refGI;
+    // M-WEA1（Q-WE5 已拍板）：+2×float4 天穹参数（compute-only b5 扩容；
+    // b4 跨 compute/graphics 有 device removed 前科禁扩——M10.3 实锤）。
+    float4 g_giZenith;        // rgb = 天顶色 / a 预留（turbidity）
+    float4 g_giHorizon;       // rgb = 地平线色 / a 预留（cloudCoverage）
 }
 
 // M15.0/M15.1（S15）：VSM 常量（b6，272B）。M15.0 与深度 pass b0 共用同一块
@@ -590,7 +594,7 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
             giray.Direction = d;
             giray.TMin      = 0.001f;                                  // rt.slang/bevy 口径
             giray.TMax      = 1.0e4f;                                  // 截太小漏天光（bevy 注释）
-            float3 lin = skyGradient(d);                               // miss 默认 → 天穹（Q12-3）
+            float3 lin = skyGradientParams(d, g_giZenith.rgb, g_giHorizon.rgb); // miss → 天穹（M-WEA1 CB 参数）
             // Q11-2b 重开（2026-11-12 用户拍板）：命中面 GI 段原被
             // `g_refSamplesStart == 0xdeadbeefu` 守卫恒 false 跳过（s10-refgi
             // 冻结基线实为纯天穹）。现改 `if (true)` 无条件执行 = 真·单弹射

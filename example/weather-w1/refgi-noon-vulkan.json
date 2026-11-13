@@ -1,0 +1,25 @@
+{
+  "dist": 7.0,
+  "frames": 8,
+  "lightColor": [
+    1.0,
+    1.0,
+    1.0,
+    2.5
+  ],
+  "lightDir": [
+    7.498798786105971e-33,
+    1.0,
+    -6.123234262925839e-17
+  ],
+  "mode": "reference-gi",
+  "model": "Suzanne-materials.nmesh",
+  "pitch": 9.0,
+  "size": [
+    960,
+    540
+  ],
+  "spp": 512,
+  "sppPerFrame": 64,
+  "yaw": 12.0
+}

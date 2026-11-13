@@ -128,11 +128,11 @@ Bruneton 式 transmittance/multi-scattering LUT（按状态变化重算，UE Sta
 | **Q-WE2** | 阶段归属 | **参数层排穿插项（track `weather`）**；高级（方案 B）列入远期（S13 后） |
 | **Q-WE3** | 天空函数形态 | 随 A = 解析参数化，零新增纹理（无需另拍板） |
 | **Q-WE4** | 云/雾是否进 TLAS / raymarch | 随 A = 不进 TLAS / 不 raymarch，仅解析透射 + 高度雾近似（无需另拍板） |
-| **Q-WE5** | 冻结基线重拍授权 | **保留为 M-WEA1 开工闸门**：改 `sky.slangh`/探针 miss/参考图前必须单独拍板 + 重拍预算 |
+| **Q-WE5** | 冻结基线重拍授权 | **已拍板（2026-11-13，M-WEA1 开工闸门清账）**：授权改 `sky.slangh`/探针 miss/参考图。先零漂移实验实证——skyGradient 参数化（`skyGradientParams`，运算体逐字符同序）+ probe_trace `traceCB_` 80→112B（+2×float4 zenith/horizon，CPU 填 M10.1 同值），**双后端 6/6 卡 bytes 逐字节一致**（s10-refgi 2/2 + s11-hash 3/3 + s12-temporal 1/1，DXIL/SPIR-V 两编译器独立验证）→ **受影响历史卡无需重拍**（重拍预算归零；全量接线后复跑同批卡确认 + 新增 weather-w1 卡即可）。注入方式拍板：扩 `traceCB_` 而非新建独立 WeatherCB；`RefConstants` b4 有跨 compute/graphics 扩容 → device removed 前科（M10.3 实锤），reference-gi 参数走 GIConstants b5（compute-only，DirectConstants 32B 安全先例）扩容。 |
 | **Q-WE6** | 是否引入第三方库 | 随 A = **零 vendored**，天气算法自研例外（无需另拍板） |
 
 **拍板后动作（已执行）**：① 结论写回 `ROADMAP.md` 穿插项表（参数层 + 高级远期两行）、新建本计划书、草案降级为调研附录；② `MILESTONES.md` 补天气立项台账；③ `GAME-DEV-ORDER.md` 第 11 步打磨波标注天气渲染穿插项可在此消费。
-**拍板后动作（M-WEA1 开工时补）**：④ `SHADER-CONVENTIONS.md` 新增天气参数节（CB 尺寸实测、单一 BindingSet §2.7、纹理状态 §2.15，紧贴 M10.1 天穹头）；⑤ `s5/UE-DIFFS.md` 追加偏离台账（采纳解析近似而非 UE 全套 LUT）；⑥ 全仓 grep 旧「无天气条目」口径同步（S14-PLAN/GAME-DEV-ORDER/MILESTONES）。
+**拍板后动作（M-WEA1 开工时补，已执行 2026-11-14）**：④ `SHADER-CONVENTIONS.md` §2.22 天气参数节（CB 扩容对照表 + 保形机制 + 曲线口径）✅；⑤ `s5/UE-DIFFS.md` **D21** 偏离台账（解析近似而非 UE 全套大气 LUT，bevy/Carrot 对照）✅；⑥ 全仓 grep 旧「无天气条目」口径——GAME-DEV-ORDER 第 11 步 / ROADMAP 穿插项行已含天气条目，无残留需勘误 ✅。
 
 ## 9b. M-WEA0 开工拍板（2026-11-13）
 

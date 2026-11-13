@@ -53,6 +53,9 @@ cbuffer GatherConstants : register(b0)
                                //  ⚠️ 不能用 deviceZ 分段——透视投影非线性，可见场景
                                //  deviceZ 全挤在 [0.9,1] → 全落 L3（2×2 网格），
                                //  M10.2 冒烟实锤（画面整体变暗 = ambient 白拿）。
+    // M-WEA1（Q-WE5 已拍板）：+2×float4 天穹参数（--sky-bg 背景像素消费）。
+    float4   g_gZenith;        // rgb = 天顶色 / a 预留（turbidity）
+    float4   g_gHorizon;       // rgb = 地平线色 / a 预留（cloudCoverage）
 }
 
 Texture2D<float4> g_place0  : register(t0);   // 布点 atlas（RGBA32F worldPos+deviceZ）
@@ -219,7 +222,8 @@ void csGatherCompose(uint3 tid : SV_DispatchThreadID)
             const float3 wpFar = gbReconstructWorldPos(tid.xy, 1.0f, float2(viewW, viewH),
                                                        g_gInvViewProj);
             const float3 vd = normalize(wpFar - g_gEye.xyz);
-            g_hdrUAV[tid.xy] = float4(skyGradient(vd), 1.0f);
+            g_hdrUAV[tid.xy] = float4(skyGradientParams(vd, g_gZenith.rgb,
+                                                        g_gHorizon.rgb), 1.0f);
             return;
         }
     }

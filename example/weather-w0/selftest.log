@@ -1,0 +1,11 @@
+  PASS same seed rebuilds byte-identical timeline
+  PASS stateless evaluate matches timeline sample
+  PASS preset rain locks kind + intensity
+  PASS preset rain saturates wetness
+  PASS preset clear keeps wetness 0
+  PASS all params within contract ranges
+  PASS no parameter jumps at 0.25s sampling
+  PASS kindFromName rejects invalid/null
+  PASS non-positive duration clamps to 1s
+  PASS out-of-range t clamps to [0,duration]
+weather selftest: PASS (6 cases)

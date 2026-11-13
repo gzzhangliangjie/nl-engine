@@ -4,12 +4,11 @@
 // 颜色由本函数确定性输出）；渲染背景暂不替换（仍 clearColor，M10.3 可选切换）。
 // S10/S12 复用。
 
-float3 skyGradient(float3 dir)
+// 参数化（M-WEA1 Q-WE5 实验版）：运算体与 M10.1 逐字符同运算序，仅常量
+// 提升为参数。legacy skyGradient(dir) = 编译期常量内联包装（M10.1 常量），
+// 未接线的消费端（world_cache/direct/probe_gather）代码路径零变化。
+float3 skyGradientParams(float3 dir, float3 zenith, float3 horizon)
 {
-    // 常量与 M9.x 清屏色族（kColors[0] 深蓝 0.05/0.08/0.15）区分开：
-    // 天穹整体更亮更蓝，探针辐照度的「朝天亮」趋势才可见。
-    const float3 zenith  = float3(0.16f, 0.30f, 0.58f);
-    const float3 horizon = float3(0.62f, 0.71f, 0.84f);
     const float t = saturate(dir.y);
     float3 c = lerp(horizon, zenith, pow(t, 0.6f));
     // 地平线以下（dir.y<0）压暗到 35%：八面体下半球 miss 有可辨识的暗地面色。

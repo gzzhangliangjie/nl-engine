@@ -90,3 +90,19 @@ add_test(NAME s3-fallback-suzanne
 set_tests_properties(s3-fallback-suzanne PROPERTIES
     PASS_REGULAR_EXPRESSION "fallback    : "
     DEPENDS s1-nmesh-suzanne)
+
+# ---- WEA M-WEA0：天气状态层（确定性 / preset / 范围 / 连续性 / 负向） ----
+add_test(NAME wea0-selftest COMMAND nanite-tools selftest weather)
+set_tests_properties(wea0-selftest PROPERTIES
+    PASS_REGULAR_EXPRESSION "weather selftest: PASS")
+# verify：同 seed 双建 + 无状态 evaluate 三方对拍逐字节一致
+add_test(NAME wea0-verify COMMAND nanite-tools weather --seed 42 --duration 1800 --verify)
+set_tests_properties(wea0-verify PROPERTIES
+    PASS_REGULAR_EXPRESSION "weather verify: PASS")
+# TSV dump 冒烟（stdout 表头锚 + 行数合理）
+add_test(NAME wea0-dump COMMAND nanite-tools weather --seed 7 --duration 600 --step 2)
+set_tests_properties(wea0-dump PROPERTIES
+    PASS_REGULAR_EXPRESSION "t\tkind\tblend")
+# 负向：非法 preset 拒绝（exit 2）
+add_test(NAME wea0-negative COMMAND nanite-tools weather --preset bogus)
+set_tests_properties(wea0-negative PROPERTIES WILL_FAIL TRUE)

@@ -11356,6 +11356,305 @@
      "script": "example/s15-clipmap/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "weather-w0",
+   "label": "WEA M-WEA0",
+   "name": "天气状态层（离散态+平滑过渡，纯 CPU 确定性，参数层方案 A 第一步）",
+   "tag": "weather-w0",
+   "date": "2026-11-13",
+   "summary": "WEA 天气轨道第一步（计划 WEATHER-PLAN，M-WEA0~WEA3，方案 A 参数层驱动 Lumen）：nl/core weather 纯 CPU 零图形符号——(seed, 时间)→WeatherState 纯函数，离散天气态（clear/partly/overcast/rain）+ 跨边界 20s smoothstep 单调过渡（2026-11-13 用户拍板 Q-WEA0-A/B：离散态+平滑过渡 / nl_core 新模块）+ preset 锁定手调语义 + groundWetness 固定步长 ODE 积分（雨后仍湿的记忆状态，bevy_weather 口径）。确定性纪律：splitmix64 + 纯 double，同 seed+同时间轴逐字节重现（CPU 侧 bytes，Q11-1 口径）。nanite-tools weather：TSV dump（21 列全参数）+ C++ --verify 同 seed 双建+无状态 evaluate 三方对拍 + 独立 python 孪生实现逐行对拍（901 行，最大偏差 4.65e-04 = libm 噪声，防假绿）+ usage/负向退出码契约（0/1/2）。零渲染改动、零基线影响、不 bump kStage。",
+   "acceptance": [
+    "selftest weather 10 锚点全 PASS：同 seed 双建逐字节一致、stateless evaluate==timeline 采样、preset rain 锁定+湿度饱和、preset clear 恒干、多 seed 长时轴参数范围扫描、0.25s 步长平滑连续性、非法 preset/null 拒绝、duration<=0 钳制、越界 t 钳制",
+    "dump TSV：seed42 自动时间轴 901 行 / seed7 preset rain 151 行，21 列全参数（太阳/天穹/云透射/高度雾/湿度/雨强）",
+    "C++ --verify：同 seed 双建时间轴 + evaluateWeather 三方逐字段对拍全等（901/601 行）；verify.py 独立 python 孪生重算两条 TSV 全行对拍 PASS（最大偏差 4.65e-04，仅 libm ulp 噪声）——跨实现防假绿",
+    "ctest wea0-selftest/wea0-verify/wea0-dump/wea0-negative DX12+VULKAN 双后端 4/4；双后端构建 OK + viewer selftest 16/16",
+    "交代物：example/weather-w0/（run.bat ALL GREEN exit 0 + acceptance.png 真实 TSV 曲线证据图 + 12 份日志/TSV）+ 本卡五用例 + WEATHER-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nanite-tools.exe",
+    "vulkan": "build/VULKAN/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：weather 无参数（退出码 2，打印用法）",
+     "kind": "tool",
+     "note": "weather 子命令无参走 usage 路径，退出码契约 0=PASS 1=FAIL 2=usage error。",
+     "args": [
+      "weather"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit: 0=PASS 1=FAIL 2=usage error",
+     "command": "nanite-tools weather"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest weather：10 锚点（确定性/preset/范围/连续性/负向）",
+     "kind": "tool",
+     "note": "M-WEA0 验收核心：同 seed 重放逐字节、preset 湿度动力学、参数范围契约、0.25s 步长平滑、边界钳制。",
+     "args": [
+      "selftest",
+      "weather"
+     ],
+     "expectExit": 0,
+     "expectLog": "weather selftest: PASS",
+     "command": "nanite-tools selftest weather"
+    },
+    {
+     "id": "dump",
+     "name": "dump：seed42 自动时间轴 1800s TSV（21 列全参数）",
+     "kind": "tool",
+     "note": "天气曲线数据源：太阳/天穹/云透射/高度雾/湿度/雨强逐时间点落盘。",
+     "args": [
+      "weather",
+      "--seed",
+      "42",
+      "--duration",
+      "1800",
+      "--step",
+      "2"
+     ],
+     "expectExit": 0,
+     "expectLog": "sunAzimuth",
+     "command": "nanite-tools weather --seed 42 --duration 1800 --step 2"
+    },
+    {
+     "id": "verify",
+     "name": "verify：同 seed 双建+stateless evaluate 三方对拍（901 行逐字节）",
+     "kind": "tool",
+     "note": "确定性契约机械验证：任何重建路径必须逐字段一致。",
+     "args": [
+      "weather",
+      "--seed",
+      "42",
+      "--duration",
+      "1800",
+      "--verify"
+     ],
+     "expectExit": 0,
+     "expectLog": "weather verify: PASS",
+     "command": "nanite-tools weather --seed 42 --duration 1800 --verify"
+    },
+    {
+     "id": "negative",
+     "name": "negative：--preset bogus（退出码 2）",
+     "kind": "tool",
+     "note": "非法 preset 名走 usage error 路径。",
+     "args": [
+      "weather",
+      "--preset",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown preset",
+     "command": "nanite-tools weather --preset bogus"
+    }
+   ]
+  },
+  {
+   "id": "weather-w1",
+   "label": "WEA M-WEA1",
+   "name": "参数化天穹+太阳（weather.slangh 单一事实源 CB 注入，Q-WE5 零漂移拍板）",
+   "tag": "weather-w1",
+   "date": "2026-11-14",
+   "summary": "WEA 轨道第二步（M-WEA1）：skyGradient 参数化（skyGradientParams，运算体逐字符同序）+ legacy 包装迁移完成——4 消费端（probe_trace miss / world_cache miss / direct.slang GI miss / probe_gather --sky-bg）全部走 CB 参数，legacy 常量版已删。CB 注入（Q-WE5 拍板扩容而非独立 CB）：traceCB_ 80→112B、gatherCB_ 128→160B、cacheCB_ 160→192B、GIConstants b5 16→48B（b4 跨 compute/graphics 禁扩 M10.3 实锤）。FrameParams 新增 weatherZenith/weatherHorizon/weatherSunCol/weatherSunIntensity（缺省 = M10.1 常量/白光/1.0 → 天气关时全链 bytes 保形，双后端 8 卡实证）。viewer CLI：--weather-seed/--weather-t/--weather-preset（seed>=0 开启 → evaluateWeather 每帧 sample 覆写太阳方向/环境光/色温 RGB/天穹两色）。M-WEA0 曲线三缺陷随拍修复（2026-11-14 拍板修+重拍）：昼因子 smoothstep（日落全程渐暗，去 8s 悬崖）、灰化顺序修正（夜压暗最后——夜空 0.25 死灰→近黑深蓝）、地平线余光 nightScaleH（黄昏 horizon 衰减慢于天顶 = 橙红晚霞锚）、warm 窗口 2.5/gain 0.85、B 通道 loss 0.45（晚霞去紫）。孪生 verify.py 同步。零基线重拍（Q-WE5 零漂移实证：s10/s11/s12 全程 bytes 逐字节一致）。",
+   "acceptance": [
+    "双后端缺省态保形：s10-refgi/s10-probe/s11-hash/s11-update/s11-bounce/s12-temporal/s12-spatial 全程 bytes 逐字节一致（CB 改读字段缺省值恒等）",
+    "weather-w0 交代物全套重拍 ALL GREEN：selftest 10 锚 PASS + TSV 重拍 + 孪生对拍（新公式）+ 证据图重生成 + ctest wea0-* 双后端 4/4",
+    "画面证据：正午蓝天（t=300 h=(0.61,0.70,0.82)）vs 黄昏橙红晚霞（t=450 h=(0.29,0.25,0.17) R>G>B + 地平线余光）vs 夜近黑（t>=460 余光渐熄）——晴→黄昏→夜连续变化成立",
+    "weather-w1 五用例双后端基线 bytes 对拍（dusk/noon/night sky-bg + probe-viz 探针辐照度同步 + reference-gi 参考链同口径）",
+    "确定性：同参数重跑 viewer 截图逐字节一致（noon 双跑同字节意外实证）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "dusk-sky",
+     "name": "黄昏晚霞：preset clear t=450 日落地平线余光（橙红带）",
+     "kind": "pair",
+     "note": "M-WEA1 曲线拍板画面锚：地平线橙红（R>G>B）+ 天顶近黑。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "450",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 450",
+     "baselines": {
+      "dx12": "example/weather-w1/dusk-sky-dx12.png",
+      "vulkan": "example/weather-w1/dusk-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "noon-sky",
+     "name": "正午蓝天：preset clear t=300（蓝序亮天穹）",
+     "kind": "pair",
+     "note": "与黄昏帧对比 = 晴→黄昏→夜叙事锚。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/noon-sky-dx12.png",
+      "vulkan": "example/weather-w1/noon-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "night-sky",
+     "name": "夜：preset clear t=580（天穹近黑余光熄灭）",
+     "kind": "pair",
+     "note": "夜空锚：nightScaleH 随 warm→0 熄灭，天穹 z=(0.00,0.01,0.01)。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "580",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --sky-bg --weather-seed 7 --weather-preset clear --weather-t 580",
+     "baselines": {
+      "dx12": "example/weather-w1/night-sky-dx12.png",
+      "vulkan": "example/weather-w1/night-sky-vulkan.png"
+     }
+    },
+    {
+     "id": "pviz-noon",
+     "name": "探针辐照度 viz 同步：probe-viz t=300（点色吃天气天穹）",
+     "kind": "pair",
+     "note": "探针 miss 天穹走 traceCB_ 新字段——点色随天气变化（M-WEA1 验收行）。",
+     "args": [
+      "--mode",
+      "probe-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe-viz --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/pviz-noon-dx12.png",
+      "vulkan": "example/weather-w1/pviz-noon-vulkan.png"
+     }
+    },
+    {
+     "id": "refgi-noon",
+     "name": "参考链同口径：reference-gi t=300（GIConstants b5 天穹参数）",
+     "kind": "pair",
+     "note": "参考图链吃同一天气参数（b5 compute-only 扩容）——参考/画面同口径可比。",
+     "args": [
+      "--mode",
+      "reference-gi",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode reference-gi --weather-seed 7 --weather-preset clear --weather-t 300",
+     "baselines": {
+      "dx12": "example/weather-w1/refgi-noon-dx12.png",
+      "vulkan": "example/weather-w1/refgi-noon-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }

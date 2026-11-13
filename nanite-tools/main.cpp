@@ -14,6 +14,7 @@
 #include "nl/core/jobgraph.hpp"  // P8 M-J5a：显式依赖 DAG（vendored Taskflow 薄封装）
 #include "nl/core/scheduler.hpp" // P8 M-J5b：进程级常驻调度底座（compute/io 分池）
 #include "nl/core/jobsync.hpp"   // P8 M-J5c-prep：动态依赖计数 job + Barrier（Jolt 合约同构）
+#include "nl/core/weather.hpp"   // WEA M-WEA0：天气状态层（离散态 + 平滑过渡）
 
 #include <meshoptimizer.h>   // M2.1：仅 simplify 的对照 oracle（正式 QEM 在 core/simplify）
 
@@ -64,7 +65,10 @@ void printUsage() {
         "  nanite-tools selftest jobs               P8 M-J0 pool/parallel_for deterministic tests\n"
         "  nanite-tools selftest jobgraph           P8 M-J5a dependency DAG / cycle / determinism\n"
         "  nanite-tools selftest scheduler           P8 M-J5b resident Scheduler / compute+io pools / compat\n"
-        "  nanite-tools selftest jobsync             P8 M-J5c-prep dynamic dependency counter / barrier / helping wait\n");
+        "  nanite-tools selftest jobsync             P8 M-J5c-prep dynamic dependency counter / barrier / helping wait\n"
+        "  nanite-tools weather --seed N [--duration SEC] [--step SEC]\n"
+        "                        [--preset clear|partly|overcast|rain] [--tsv FILE] [--verify]\n"
+        "                        WEA M-WEA0 weather state layer TSV dump / verify / preset lock\n");
 }
 
 // stat 与 cluster 共用的簇统计（定义在后，前向声明供 cmdStat 用）
@@ -3795,6 +3799,283 @@ int selftestSync() {
     return 1;
 }
 
+// ---- WEA M-WEA0：天气状态层工具（TSV dump + verify + preset 手调）----
+
+// TSV 表头（列序 = WeatherState 字段序，证据图脚本 tools/make-weather-evidence.py 同源）。
+void weatherTsvHeader(std::FILE* out) {
+    std::fprintf(out,
+        "t\tkind\tblend\tsunAzimuth\tsunElevation\tsunIntensity\tsunColorTempK\t"
+        "zenithR\tzenithG\tzenithB\thorizonR\thorizonG\thorizonB\t"
+        "turbidity\tsunDisk\tcloudCoverage\tcloudTransmittance\t"
+        "fogDensity\tfogHeight\tgroundWetness\trainIntensity\n");
+}
+
+void weatherTsvRow(std::FILE* out, const nl::core::WeatherState& s) {
+    std::fprintf(out,
+        "%.3f\t%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.3f\t"
+        "%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t"
+        "%.4f\t%.6f\t%.6f\t%.6f\t"
+        "%.6f\t%.2f\t%.6f\t%.6f\n",
+        s.t, nl::core::weatherKindName(s.kind), s.blend,
+        s.sunAzimuth, s.sunElevation, s.sunIntensity, s.sunColorTempK,
+        s.skyZenithR, s.skyZenithG, s.skyZenithB,
+        s.skyHorizonR, s.skyHorizonG, s.skyHorizonB,
+        s.turbidity, s.sunDiskIntensity, s.cloudCoverage, s.cloudTransmittance,
+        s.fogDensity, s.fogHeight, s.groundWetness, s.rainIntensity);
+}
+
+// 字段级比较（禁 memcmp：struct 有对齐 padding，payload 相等不保证 padding 清零）。
+bool weatherStateEqual(const nl::core::WeatherState& a, const nl::core::WeatherState& b) {
+    return a.t == b.t && a.kind == b.kind && a.blend == b.blend
+        && a.sunAzimuth == b.sunAzimuth && a.sunElevation == b.sunElevation
+        && a.sunIntensity == b.sunIntensity && a.sunColorTempK == b.sunColorTempK
+        && a.skyZenithR == b.skyZenithR && a.skyZenithG == b.skyZenithG && a.skyZenithB == b.skyZenithB
+        && a.skyHorizonR == b.skyHorizonR && a.skyHorizonG == b.skyHorizonG && a.skyHorizonB == b.skyHorizonB
+        && a.turbidity == b.turbidity && a.sunDiskIntensity == b.sunDiskIntensity
+        && a.cloudCoverage == b.cloudCoverage && a.cloudTransmittance == b.cloudTransmittance
+        && a.fogDensity == b.fogDensity && a.fogHeight == b.fogHeight
+        && a.groundWetness == b.groundWetness && a.rainIntensity == b.rainIntensity;
+}
+
+int cmdWeather(int argc, char** argv) {
+    std::uint64_t seed = 1;
+    double duration = 1200.0;
+    double step = 2.0;
+    nl::core::WeatherKind preset = nl::core::WeatherKind::kCount;
+    const char* tsvPath = nullptr;
+    bool verify = false;
+    bool haveArgs = false;
+
+    for (int i = 0; i < argc; ++i) {
+        const std::string a = argv[i];
+        haveArgs = true;
+        auto need = [&](const char* opt) -> const char* {
+            if (i + 1 >= argc) { std::fprintf(stderr, "weather: %s missing value\n", opt); return nullptr; }
+            return argv[++i];
+        };
+        if (a == "--seed") {
+            const char* v = need("--seed"); if (!v) return 2;
+            seed = std::strtoull(v, nullptr, 10);
+        } else if (a == "--duration") {
+            const char* v = need("--duration"); if (!v) return 2;
+            duration = std::atof(v);
+            if (!(duration > 0.0)) { std::fprintf(stderr, "weather: --duration must be > 0\n"); return 2; }
+        } else if (a == "--step") {
+            const char* v = need("--step"); if (!v) return 2;
+            step = std::atof(v);
+            if (!(step > 0.0)) { std::fprintf(stderr, "weather: --step must be > 0\n"); return 2; }
+        } else if (a == "--preset") {
+            const char* v = need("--preset"); if (!v) return 2;
+            preset = nl::core::weatherKindFromName(v);
+            if (preset == nl::core::WeatherKind::kCount) {
+                std::fprintf(stderr, "weather: unknown preset '%s' (clear|partly|overcast|rain)\n", v);
+                return 2;
+            }
+        } else if (a == "--tsv") {
+            const char* v = need("--tsv"); if (!v) return 2;
+            tsvPath = v;
+        } else if (a == "--verify") {
+            verify = true;
+        } else {
+            std::fprintf(stderr, "weather: unknown option '%s'\n", a.c_str());
+            return 2;
+        }
+    }
+    if (!haveArgs) {
+        std::fprintf(stderr,
+            "usage: nanite-tools weather --seed N [--duration SEC] [--step SEC]\n"
+            "                            [--preset clear|partly|overcast|rain]\n"
+            "                            [--tsv FILE] [--verify]\n"
+            "  exit: 0=PASS 1=FAIL 2=usage error\n");
+        return 2;
+    }
+
+    // --verify：同 seed 双建时间轴 + 无状态 evaluate 对拍，全部逐字段相等。
+    if (verify) {
+        nl::core::WeatherTimeline a(seed, duration, preset);
+        nl::core::WeatherTimeline b(seed, duration, preset);
+        int rows = 0, bad = 0;
+        double firstBadT = -1.0;
+        const char* firstBadField = "";
+        auto cmpField = [&](double va, double vb, const char* name) {
+            if (va != vb && firstBadT < 0.0) { firstBadT = rows * step; firstBadField = name; }
+            return va == vb;
+        };
+        for (double t = 0.0; t <= duration + 1e-9; t += step) {
+            nl::core::WeatherState sa = a.sample(t);
+            nl::core::WeatherState sb = b.sample(t);
+            nl::core::WeatherState se = nl::core::evaluateWeather(seed, t, preset);
+            bool ok = weatherStateEqual(sa, sb) && weatherStateEqual(sa, se);
+            if (!ok && firstBadT < 0.0) {
+                // 首个分歧点：定位分歧字段（a vs evaluate）。
+                cmpField(double(sa.kind), double(se.kind), "kind");
+                #define WEA_CMP(f) cmpField(sa.f, se.f, #f)
+                WEA_CMP(blend); WEA_CMP(sunAzimuth); WEA_CMP(sunElevation);
+                WEA_CMP(sunIntensity); WEA_CMP(sunColorTempK);
+                WEA_CMP(skyZenithR); WEA_CMP(skyZenithG); WEA_CMP(skyZenithB);
+                WEA_CMP(skyHorizonR); WEA_CMP(skyHorizonG); WEA_CMP(skyHorizonB);
+                WEA_CMP(turbidity); WEA_CMP(sunDiskIntensity);
+                WEA_CMP(cloudCoverage); WEA_CMP(cloudTransmittance);
+                WEA_CMP(fogDensity); WEA_CMP(fogHeight);
+                WEA_CMP(groundWetness); WEA_CMP(rainIntensity);
+                #undef WEA_CMP
+            }
+            if (!ok) ++bad;
+            ++rows;
+        }
+        if (bad == 0) {
+            std::printf("weather verify: PASS (%d rows byte-identical, seed=%llu)\n",
+                        rows, (unsigned long long)seed);
+            return 0;
+        }
+        std::printf("weather verify: FAIL (%d/%d rows differ, seed=%llu", bad, rows,
+                    (unsigned long long)seed);
+        if (firstBadT >= 0.0)
+            std::printf("; first at t=%.3f field=%s", firstBadT, firstBadField);
+        std::printf(")\n");
+        return 1;
+    }
+
+    // 常规路径：折迭一次，逐步 dump TSV（stdout 或 --tsv 落盘）。
+    nl::core::WeatherTimeline tl(seed, duration, preset);
+    std::FILE* out = stdout;
+    if (tsvPath) {
+        out = std::fopen(tsvPath, "wb");
+        if (!out) { std::fprintf(stderr, "weather: cannot open '%s'\n", tsvPath); return 1; }
+    }
+    weatherTsvHeader(out);
+    int rows = 0;
+    for (double t = 0.0; t <= duration + 1e-9; t += step) {
+        weatherTsvRow(out, tl.sample(t));
+        ++rows;
+    }
+    if (tsvPath) std::fclose(out);
+    if (!tsvPath) {
+        std::fprintf(stderr, "weather dump: %d rows (seed=%llu, duration=%.0fs, step=%.2fs%s%s)\n",
+                     rows, (unsigned long long)seed, duration, step,
+                     preset == nl::core::WeatherKind::kCount ? "" : ", preset=",
+                     preset == nl::core::WeatherKind::kCount ? "" : nl::core::weatherKindName(preset));
+    }
+    return 0;
+}
+
+// selftest weather：M-WEA0 验收锚点（确定性 / preset 锁定 / 参数范围 /
+// 平滑连续性 / wetness 动力学 / 命名解析负向）。
+int selftestWeather() {
+    int failures = 0;
+    auto check = [&](bool ok, const char* name, const std::string& detail = {}) {
+        if (ok) std::printf("  PASS %s\n", name);
+        else { std::printf("  FAIL %s%s%s\n", name, detail.empty() ? "" : ": ", detail.c_str()); ++failures; }
+    };
+
+    // 1) 确定性：同 seed 双建 → kinds/wetness/采样全同。
+    {
+        nl::core::WeatherTimeline a(42, 1800.0);
+        nl::core::WeatherTimeline b(42, 1800.0);
+        bool same = true;
+        for (double t = 0.0; t <= 1800.0; t += 1.0)
+            if (!weatherStateEqual(a.sample(t), b.sample(t))) { same = false; break; }
+        check(same, "same seed rebuilds byte-identical timeline");
+    }
+
+    // 2) 无状态 evaluate == timeline 采样（同 seed 同 t 逐字段相等）。
+    {
+        nl::core::WeatherTimeline tl(7, 600.0);
+        bool same = true;
+        for (double t = 0.0; t <= 600.0; t += 37.0)
+            if (!weatherStateEqual(tl.sample(t), nl::core::evaluateWeather(7, t))) { same = false; break; }
+        check(same, "stateless evaluate matches timeline sample");
+    }
+
+    // 3) preset 锁定：rain → 恒雨、wetness 快速饱和；clear → 恒干。
+    {
+        nl::core::WeatherTimeline rain(9, 120.0, nl::core::WeatherKind::Rain);
+        bool allRain = true;
+        for (double t = 0.0; t <= 120.0; t += 1.0) {
+            nl::core::WeatherState s = rain.sample(t);
+            if (s.kind != nl::core::WeatherKind::Rain || s.rainIntensity != 1.0) { allRain = false; break; }
+        }
+        check(allRain, "preset rain locks kind + intensity");
+        check(rain.sample(120.0).groundWetness > 0.9, "preset rain saturates wetness",
+              std::to_string(rain.sample(120.0).groundWetness));
+        nl::core::WeatherTimeline dry(9, 120.0, nl::core::WeatherKind::Clear);
+        bool allDry = true;
+        for (double t = 0.0; t <= 120.0; t += 1.0)
+            if (dry.sample(t).groundWetness != 0.0) { allDry = false; break; }
+        check(allDry, "preset clear keeps wetness 0");
+    }
+
+    // 4) 参数范围：多 seed 长时间轴全量越界扫描。
+    {
+        bool inRange = true;
+        std::string where;
+        for (std::uint64_t seed : {1ull, 42ull, 0xDEADBEEFull}) {
+            nl::core::WeatherTimeline tl(seed, 1800.0);
+            for (double t = 0.0; t <= 1800.0; t += 0.5) {
+                nl::core::WeatherState s = tl.sample(t);
+                auto ok01 = [](double v) { return v >= 0.0 && v <= 1.0; };
+                if (!ok01(s.cloudCoverage) || !ok01(s.cloudTransmittance)
+                    || !ok01(s.groundWetness) || !ok01(s.rainIntensity)
+                    || !ok01(s.sunIntensity) || !ok01(s.sunDiskIntensity)
+                    || !ok01(s.skyZenithR) || !ok01(s.skyZenithG) || !ok01(s.skyZenithB)
+                    || !ok01(s.skyHorizonR) || !ok01(s.skyHorizonG) || !ok01(s.skyHorizonB)
+                    || s.turbidity < 2.0 || s.turbidity > 6.0
+                    || s.sunColorTempK < 2200.0 || s.sunColorTempK > 6500.0
+                    || s.fogDensity < 0.0 || s.fogHeight < 0.0) {
+                    inRange = false;
+                    where = "seed=" + std::to_string(seed) + " t=" + std::to_string(t);
+                    break;
+                }
+            }
+            if (!inRange) break;
+        }
+        check(inRange, "all params within contract ranges", where);
+    }
+
+    // 5) 平滑连续性：0.25s 步长相邻采样最大增量低于阈值（smoothstep 无跳变）。
+    {
+        struct Lim { double cloud, turb, fog, wet, sun; };
+        Lim lim{0.03, 0.15, 0.0002, 0.03, 0.06};
+        bool smooth = true;
+        std::string where;
+        nl::core::WeatherTimeline tl(1234, 1200.0);
+        nl::core::WeatherState prev = tl.sample(0.0);
+        for (double t = 0.25; t <= 1200.0; t += 0.25) {
+            nl::core::WeatherState s = tl.sample(t);
+            if (std::fabs(s.cloudCoverage - prev.cloudCoverage) > lim.cloud
+                || std::fabs(s.turbidity - prev.turbidity) > lim.turb
+                || std::fabs(s.fogDensity - prev.fogDensity) > lim.fog
+                || std::fabs(s.groundWetness - prev.groundWetness) > lim.wet
+                || std::fabs(s.sunIntensity - prev.sunIntensity) > lim.sun) {
+                smooth = false;
+                where = "t=" + std::to_string(t);
+                break;
+            }
+            prev = s;
+        }
+        check(smooth, "no parameter jumps at 0.25s sampling", where);
+    }
+
+    // 6) 负向 / 边界：非法 preset 名拒绝；duration<=0 钳制；越界 t 钳制。
+    {
+        check(nl::core::weatherKindFromName("bogus") == nl::core::WeatherKind::kCount
+              && nl::core::weatherKindFromName(nullptr) == nl::core::WeatherKind::kCount,
+              "kindFromName rejects invalid/null");
+        nl::core::WeatherTimeline tl(1, -5.0); // 防御：钳为 1s
+        check(tl.duration() == 1.0, "non-positive duration clamps to 1s");
+        nl::core::WeatherState s = tl.sample(-100.0);
+        nl::core::WeatherState s2 = tl.sample(1e12);
+        check(s.t == 0.0 && s2.t == 1.0, "out-of-range t clamps to [0,duration]");
+    }
+
+    if (failures == 0) {
+        std::printf("weather selftest: PASS (6 cases)\n");
+        return 0;
+    }
+    std::printf("weather selftest: FAIL (%d case(s))\n", failures);
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3818,13 +4099,15 @@ int main(int argc, char** argv) {
         if (argc >= 3 && std::string(argv[2]) == "jobgraph") return selftestJobGraph();
         if (argc >= 3 && std::string(argv[2]) == "scheduler") return selftestScheduler();
         if (argc >= 3 && std::string(argv[2]) == "jobsync") return selftestSync();
-        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler, jobsync)\n");
+        if (argc >= 3 && std::string(argv[2]) == "weather") return selftestWeather();
+        std::fprintf(stderr, "selftest: unknown suite (available: cluster, nmesh, group, qem, loop, dag, fallback, jobs, jobgraph, scheduler, jobsync, weather)\n");
         return 1;
     }
     if (cmd == "simplify") return cmdSimplify(argc - 2, argv + 2);
     if (cmd == "check-orient") return cmdCheckOrient(argc - 2, argv + 2);
     if (cmd == "lod") return cmdLod(argc - 2, argv + 2);
     if (cmd == "dag") return cmdDag(argc - 2, argv + 2);
+    if (cmd == "weather") return cmdWeather(argc - 2, argv + 2);
     std::fprintf(stderr, "unknown subcommand: %s\n", cmd.c_str());
     printUsage();
     return 1;
