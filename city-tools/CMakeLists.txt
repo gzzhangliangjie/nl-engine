@@ -26,3 +26,9 @@ set_tests_properties(w0-city-generate PROPERTIES
 add_test(NAME w0-city-negative COMMAND city-tools generate --size 0
          --out ${CMAKE_CURRENT_BINARY_DIR}/w0-city-bad)
 set_tests_properties(w0-city-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-W0.1：roadnet.json 契约产物（节点/有向边网格公式锚）----
+add_test(NAME w0-roadnet COMMAND city-tools generate --seed 12345 --size 6
+         --out ${CMAKE_CURRENT_BINARY_DIR}/w0-roadnet --stats)
+set_tests_properties(w0-roadnet PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*w0-roadnet.roadnet\\.json \\(nodes=49 edges=168 directed\\)")

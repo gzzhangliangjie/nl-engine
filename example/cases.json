@@ -11049,6 +11049,85 @@
      "command": "city-tools generate --size 0"
     }
    ]
+  },
+  {
+   "id": "w0-m1",
+   "label": "W0 M-W0.1",
+   "name": "路网拓扑 + 车道语义（roadnet.json 契约产物 + 俯视图叠加）",
+   "tag": "w0-m1",
+   "date": "2026-11-13",
+   "summary": "M-W0.1：grid 路网拓扑（(size+1)^2 交点 / 全跨度 2*size*(size+1) 路段 / 有向边 x2）+ 车道语义（lanes_per_dir=1 / speed_limit=13.9m/s / width=1.0m 与路带几何同源）→ 按 W0-PLAN §1 字段契约写 roadnet.json（citygen 与第 8 步交通的接口铁律）；俯视图叠加 roadnet 边中心线与节点标记证明 JSON 与几何同源。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "roadnet 契约 selftest：selftest 38 断言全绿（新增 15：节点/边公式锚 49/168、from/to/id 闭包、双向对称、几何恰跨一个 block 间距、横竖 84+84、角点坐标、车道属性齐同、JSON 双跑逐字节、契约头字段、文本锚、异 seed 异 JSON、size1 边界 4 节点 8 边）",
+    "证据图：city_top.png 为工具真实输出（路网叠加版，1152x864）；roadnet.json 契约锚（version/units/blocks/phases + 49 交点 + 168 有向边）由 run.bat findstr/find 逐项核过",
+    "确定性：同 seed 双跑 city_top.png + roadnet.json 双产物 fc /b 逐字节一致；异 seed roadnet.json 必异",
+    "ctest w0-city-selftest/generate/negative + w0-roadnet 双树各 3/3（--repeat until-pass:3）；双后端构建 OK 零警告",
+    "交代物：example/w0-m1/（run.bat 七段 ALL GREEN exit 0 + 4 份日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §2"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--out 说明已更新为 city_top.png + roadnet.json。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet 契约 38 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 的 23 条 + M-W0.1 roadnet 契约 15 条；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：俯视 PNG（路网叠加）+ roadnet.json + CityStats",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> example/w0-m1/city_top.png（1152x864）+ roadnet.json（nodes=49 edges=168 directed）；stats 锚含 roadnetNodes=49 roadnetEdges=168。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m1",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m1 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m1-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
   }
  ]
 }

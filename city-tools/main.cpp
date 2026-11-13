@@ -1,6 +1,8 @@
 // city-tools —— nl-engine 大世界生成工具（M-W0 citygen，A 类并行轨道 feat/worldgen）
 // M-W0.0：CLI 骨架 + 自研确定性 RNG（pcg32）+ 规则网格 block 布局 + 空白城俯视 PNG
 //         （纯 CPU 光栅化）+ CityStats 计数锚骨架 + seed 对称确定性 selftest。
+// M-W0.1：grid 路网拓扑 + 车道语义 → roadnet.json（W0-PLAN §1 字段契约，
+//         Q-W2 拍板的 citygen ↔ 第 8 步交通接口铁律）+ 俯视图路网叠加。
 //
 // 依据 docs/worldgen/W0-PLAN.md（2026-11-12 五问全拍板）：
 //   Q-W3 = W3-A 全自研最小算法（确定性 RNG，零新依赖，C++17，与 bevy_city 同构）。
@@ -26,6 +28,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -98,11 +101,16 @@ struct CityParams {
 
 // CityStats —— bevy_city generate_city.rs CityStats 同构计数锚骨架。
 // M-W0.0 只有布局计数；buildings/trees/cars/fences/paths 是 M-W0.2/0.3 的挂零锚。
+// roadSegments（72@size6）是 bevy 逐 cell 口径（每 cell 一横一竖）；
+// roadnetNodes/roadnetEdges（M-W0.1）是全跨度路网口径（见 buildRoadnet），
+// 两种口径并存各有对应物：前者对齐 bevy CityStats.roads，后者对齐 roadnet.json。
 struct CityStats {
     std::uint32_t blocks = 0;
     std::uint32_t groundTiles = 0;
     std::uint32_t roadSegments = 0;
     std::uint32_t crossroads = 0;
+    std::uint32_t roadnetNodes = 0; // M-W0.1：(size+1)^2 交点
+    std::uint32_t roadnetEdges = 0; // M-W0.1：有向边 4*size*(size+1)
     std::uint32_t buildings = 0;
     std::uint32_t trees = 0;
     std::uint32_t cars = 0;
@@ -147,6 +155,10 @@ CityLayout generateCity(const CityParams& params) {
     lay.stats.groundTiles = lay.stats.blocks;
     lay.stats.roadSegments = 2u * lay.stats.blocks; // 每 cell 一横一竖
     lay.stats.crossroads = (params.size + 1u) * (params.size + 1u); // 网格线交点
+    // M-W0.1 全跨度路网口径：节点 = (size+1)^2 交点；有向边 = 2 * 无向路段数，
+    // 无向路段 = 横 size*(size+1) + 竖 size*(size+1)。
+    lay.stats.roadnetNodes = (params.size + 1u) * (params.size + 1u);
+    lay.stats.roadnetEdges = 4u * params.size * (params.size + 1u);
     // buildings/trees/cars/fences/paths 保持 0：M-W0.2 / M-W0.3 消费。
 
     lay.minX = static_cast<float>(lay.lo) * kBlockX;
@@ -154,6 +166,149 @@ CityLayout generateCity(const CityParams& params) {
     lay.minZ = static_cast<float>(lay.lo) * kBlockZ;
     lay.maxZ = static_cast<float>(hi) * kBlockZ;
     return lay;
+}
+
+// ---------------------------------------------------------------------------
+// Roadnet —— M-W0.1：grid 路网拓扑 + 车道语义（W0-PLAN §1 字段契约，
+// Q-W2 拍板：自包含 roadnet.json，citygen ↔ 第 8 步交通的接口铁律）。
+//
+//   节点 = (size+1)^2 个网格线交点，id = row*(size+1)+col（行主序），
+//          坐标 x=(lo+col)*kBlockX / z=(lo+row)*kBlockZ；
+//   无向路段 = 2*size*(size+1)（横、竖各 size*(size+1) 条，全跨度）；
+//   有向边 = 无向 ×2（契约：edges 有向，双向路产两条 from→to / to→from）。
+//   确定性序：先横后竖、行主序，每路段先 +向 后 −向，id 连续递增。
+//   M-W0.1 无 RNG 消费（空白城车道语义全同质），文件头消费序契约不受影响。
+//
+//   与 bevy_city 的对应（2026-11-13 重读留档）：Road{start,end} 是每方向
+//   1 车道直线段 → lanes_per_dir=1；bevy 车 Car{offset,dir} 沿路行驶的
+//   车道语义由第 8 步交通系统在 edges 之上构建，citygen 只供几何 + 拓扑。
+// ---------------------------------------------------------------------------
+constexpr std::uint32_t kLanesPerDir = 1; // bevy_city Road 同构：每方向 1 车道
+constexpr float kSpeedLimit = 13.9f;      // m/s（契约示例同源，约 50 km/h）
+
+struct RoadnetNode {
+    std::uint32_t id = 0;
+    float x = 0.f;
+    float z = 0.f;
+    // kind 恒 "intersection"、signal 恒 false（W0-PLAN §1：M-W0 首版口径，
+    // 全部节点度 >= 2，无 dead_end；signal 由第 8 步消费，citygen 恒 false）。
+};
+
+struct RoadnetEdge {
+    std::uint32_t id = 0;
+    std::uint32_t from = 0;
+    std::uint32_t to = 0;
+    std::uint32_t lanesPerDir = kLanesPerDir;
+    float speedLimit = kSpeedLimit;
+    float width = kRoadWidth; // 车行道总宽 = 路带几何同源（1.0m）；
+                              // 契约示例 3.0 是示意值，此处以实际布局为准
+};
+
+struct Roadnet {
+    std::vector<RoadnetNode> nodes;
+    std::vector<RoadnetEdge> edges; // 有向
+    std::uint64_t seed = 0;
+    std::uint32_t size = 0;
+};
+
+Roadnet buildRoadnet(const CityLayout& lay) {
+    Roadnet net;
+    net.seed = lay.params.seed;
+    net.size = lay.params.size;
+    const std::uint32_t stride = net.size + 1u;
+
+    net.nodes.resize(stride * stride);
+    for (std::uint32_t row = 0; row < stride; ++row) {
+        for (std::uint32_t col = 0; col < stride; ++col) {
+            RoadnetNode& n = net.nodes[row * stride + col];
+            n.id = row * stride + col;
+            n.x = static_cast<float>(lay.lo + static_cast<std::int32_t>(col)) *
+                  kBlockX;
+            n.z = static_cast<float>(lay.lo + static_cast<std::int32_t>(row)) *
+                  kBlockZ;
+        }
+    }
+
+    net.edges.reserve(4u * net.size * stride);
+    std::uint32_t id = 0;
+    // 横向路段（沿 +x，长 kBlockX）：row 0..size，col 0..size-1。
+    for (std::uint32_t row = 0; row < stride; ++row) {
+        for (std::uint32_t col = 0; col + 1u < stride; ++col) {
+            const std::uint32_t a = row * stride + col;
+            const std::uint32_t b = row * stride + col + 1u;
+            RoadnetEdge f;
+            f.id = id++;
+            f.from = a;
+            f.to = b;
+            RoadnetEdge r = f;
+            r.id = id++;
+            r.from = b;
+            r.to = a;
+            net.edges.push_back(f);
+            net.edges.push_back(r);
+        }
+    }
+    // 纵向路段（沿 +z，长 kBlockZ）：row 0..size-1，col 0..size。
+    for (std::uint32_t row = 0; row + 1u < stride; ++row) {
+        for (std::uint32_t col = 0; col < stride; ++col) {
+            const std::uint32_t a = row * stride + col;
+            const std::uint32_t b = (row + 1u) * stride + col;
+            RoadnetEdge f;
+            f.id = id++;
+            f.from = a;
+            f.to = b;
+            RoadnetEdge r = f;
+            r.id = id++;
+            r.from = b;
+            r.to = a;
+            net.edges.push_back(f);
+            net.edges.push_back(r);
+        }
+    }
+    return net;
+}
+
+// roadnet.json 确定性序列化（W0-PLAN §1 契约原文形态：2 空格缩进、固定字段序、
+// %.1f 米单位，C locale 固定小数点）。ASCII only。
+std::string serializeRoadnet(const Roadnet& net) {
+    std::string s;
+    char buf[160];
+    s += "{\n";
+    s += "  \"version\": 1,\n";
+    std::snprintf(buf, sizeof buf, "  \"seed\": %llu,\n",
+                  static_cast<unsigned long long>(net.seed));
+    s += buf;
+    s += "  \"units\": \"meters\",\n";
+    std::snprintf(buf, sizeof buf,
+                  "  \"blocks\": { \"x\": %.1f, \"z\": %.1f },\n", kBlockX,
+                  kBlockZ);
+    s += buf;
+    s += "  \"nodes\": [\n";
+    for (std::size_t i = 0; i < net.nodes.size(); ++i) {
+        const RoadnetNode& n = net.nodes[i];
+        std::snprintf(buf, sizeof buf,
+                      "    { \"id\": %u, \"x\": %.1f, \"z\": %.1f, "
+                      "\"kind\": \"intersection\", \"signal\": false }%s\n",
+                      n.id, n.x, n.z,
+                      i + 1 == net.nodes.size() ? "" : ",");
+        s += buf;
+    }
+    s += "  ],\n";
+    s += "  \"edges\": [\n";
+    for (std::size_t i = 0; i < net.edges.size(); ++i) {
+        const RoadnetEdge& e = net.edges[i];
+        std::snprintf(buf, sizeof buf,
+                      "    { \"id\": %u, \"from\": %u, \"to\": %u, "
+                      "\"lanes_per_dir\": %u, \"speed_limit\": %.1f, "
+                      "\"width\": %.1f }%s\n",
+                      e.id, e.from, e.to, e.lanesPerDir, e.speedLimit, e.width,
+                      i + 1 == net.edges.size() ? "" : ",");
+        s += buf;
+    }
+    s += "  ],\n";
+    s += "  \"phases\": []\n";
+    s += "}\n";
+    return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +338,8 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
     appendU32(b, lay.stats.groundTiles);
     appendU32(b, lay.stats.roadSegments);
     appendU32(b, lay.stats.crossroads);
+    appendU32(b, lay.stats.roadnetNodes);
+    appendU32(b, lay.stats.roadnetEdges);
     appendU32(b, lay.stats.buildings);
     appendU32(b, lay.stats.trees);
     appendU32(b, lay.stats.cars);
@@ -297,6 +454,26 @@ bool renderTopView(const CityLayout& lay, const RasterConfig& cfg,
                  toPx(x + halfRoad, lay.minX), h, rr, gg, bb);
     }
 
+    // M-W0.1 路网叠加（验收判据①）：从 roadnet 数据结构反画有向边中心线与
+    // 节点标记——证明 roadnet.json 与俯视几何同源，而非布局代码直接画。
+    const Roadnet net = buildRoadnet(lay);
+    const std::uint8_t er = 150, eg = 40, eb = 40; // 边中心线：暗红
+    for (const RoadnetEdge& e : net.edges) {
+        const RoadnetNode& a = net.nodes[e.from];
+        const RoadnetNode& b = net.nodes[e.to];
+        const int ax = toPx(a.x, lay.minX);
+        const int az = toPx(a.z, lay.minZ);
+        const int bx = toPx(b.x, lay.minX);
+        const int bz = toPx(b.z, lay.minZ);
+        fillRect(img, w, h, std::min(ax, bx), std::min(az, bz),
+                 std::max(ax, bx) + 1, std::max(az, bz) + 1, er, eg, eb);
+    }
+    for (const RoadnetNode& n : net.nodes) {
+        const int px = toPx(n.x, lay.minX);
+        const int pz = toPx(n.z, lay.minZ);
+        fillRect(img, w, h, px - 1, pz - 1, px + 2, pz + 2, 120, 30, 30); // 3x3 节点
+    }
+
     outW = w;
     outH = h;
     return encodePng(img, w, h, outPng);
@@ -405,6 +582,112 @@ SelftestResult runSelftest(bool verbose) {
                      std::memcmp(pngA.data(), "\x89PNG\r\n\x1a\n", 8) == 0;
     expect(sig, "png: valid signature bytes");
 
+    // --- M-W0.1 roadnet 契约（W0-PLAN §1 接口铁律，验收判据②）---
+    const Roadnet net = buildRoadnet(lay);
+    expect(net.nodes.size() == 49u,
+           "roadnet: size 6 -> (size+1)^2 == 49 nodes");
+    expect(net.edges.size() == 168u,
+           "roadnet: size 6 -> directed edges 4*size*(size+1) == 168");
+    expect(lay.stats.roadnetNodes == 49u && lay.stats.roadnetEdges == 168u,
+           "stats: roadnetNodes=49 roadnetEdges=168 (directed)");
+
+    bool closureOk = true;
+    for (const RoadnetEdge& e : net.edges) {
+        closureOk = closureOk && e.from < net.nodes.size() &&
+                    e.to < net.nodes.size() && e.id < net.edges.size();
+    }
+    expect(closureOk,
+           "roadnet: from/to/id references closed (indices in range)");
+
+    // 双向对称：每条有向边必有反向边（契约：双向路产两条）。
+    {
+        const auto pairKey = [](std::uint32_t a, std::uint32_t b) {
+            return (static_cast<std::uint64_t>(a) << 32) | b;
+        };
+        std::vector<std::uint64_t> keys;
+        keys.reserve(net.edges.size());
+        for (const RoadnetEdge& e : net.edges) {
+            keys.push_back(pairKey(e.from, e.to));
+        }
+        bool symOk = true;
+        for (std::uint64_t k : keys) {
+            const std::uint64_t rev = pairKey(
+                static_cast<std::uint32_t>(k & 0xFFFFFFFFu),
+                static_cast<std::uint32_t>(k >> 32));
+            symOk = symOk &&
+                    std::find(keys.begin(), keys.end(), rev) != keys.end();
+        }
+        expect(symOk, "roadnet: bidirectional symmetry (every edge has reverse)");
+    }
+
+    // 几何：每条有向边恰好跨一个 block 间距（横 5.5 / 竖 4.0）。
+    {
+        bool geomOk = true;
+        std::uint32_t horiz = 0, vert = 0;
+        for (const RoadnetEdge& e : net.edges) {
+            const RoadnetNode& na = net.nodes[e.from];
+            const RoadnetNode& nb = net.nodes[e.to];
+            const float dx = nb.x - na.x;
+            const float dz = nb.z - na.z;
+            if (dz == 0.f && (dx == kBlockX || dx == -kBlockX)) {
+                ++horiz;
+            } else if (dx == 0.f && (dz == kBlockZ || dz == -kBlockZ)) {
+                ++vert;
+            } else {
+                geomOk = false;
+            }
+        }
+        expect(geomOk, "roadnet: edge geometry spans exactly one block pitch");
+        expect(horiz == 84u && vert == 84u,
+               "roadnet: 84 horizontal + 84 vertical directed edges");
+    }
+
+    expect(net.nodes[0].x == -16.5f && net.nodes[0].z == -12.0f,
+           "roadnet: node 0 at grid lo corner (-16.5, -12.0)");
+    expect(net.nodes[48].x == 16.5f && net.nodes[48].z == 12.0f,
+           "roadnet: node 48 at grid hi corner (16.5, 12.0)");
+
+    bool attrsOk = true;
+    for (const RoadnetEdge& e : net.edges) {
+        attrsOk = attrsOk && e.lanesPerDir == kLanesPerDir &&
+                  e.speedLimit == kSpeedLimit && e.width == kRoadWidth;
+    }
+    expect(attrsOk, "roadnet: lanes/speed/width uniform (1 / 13.9 / 1.0)");
+
+    // JSON 文本锚 + 确定性。
+    const std::string jsonA = serializeRoadnet(net);
+    expect(jsonA == serializeRoadnet(buildRoadnet(generateCity(p0))),
+           "roadnet: same seed double-build JSON byte-identical");
+    expect(jsonA.find("\"version\": 1") != std::string::npos &&
+               jsonA.find("\"units\": \"meters\"") != std::string::npos &&
+               jsonA.find("\"phases\": []") != std::string::npos,
+           "roadnet: contract header fields (version/units/phases)");
+    {
+        std::uint32_t kindCount = 0, laneCount = 0;
+        std::size_t pos = 0;
+        const std::string k1 = "\"kind\": \"intersection\"";
+        while ((pos = jsonA.find(k1, pos)) != std::string::npos) {
+            ++kindCount;
+            pos += k1.size();
+        }
+        pos = 0;
+        const std::string k2 = "\"lanes_per_dir\": 1";
+        while ((pos = jsonA.find(k2, pos)) != std::string::npos) {
+            ++laneCount;
+            pos += k2.size();
+        }
+        expect(kindCount == 49u && laneCount == 168u,
+               "roadnet: JSON anchors 49 intersections / 168 directed edges");
+    }
+    expect(serializeRoadnet(buildRoadnet(generateCity(p1))) != jsonA,
+           "roadnet: different seed -> different JSON (seed field)");
+
+    CityParams ps = p0;
+    ps.size = 1;
+    const Roadnet netS = buildRoadnet(generateCity(ps));
+    expect(netS.nodes.size() == 4u && netS.edges.size() == 8u,
+           "roadnet: size 1 -> 4 nodes / 8 directed edges (formula edge)");
+
     res.assertions = n;
     res.pass = allOk;
     return res;
@@ -422,7 +705,7 @@ void printUsage() {
         "options:\n"
         "  --seed N   city seed, any u64 (default 12345)\n"
         "  --size N   grid blocks per side, 1..64 (default 6)\n"
-        "  --out DIR  output directory, receives city_top.png\n"
+        "  --out DIR  output directory, receives city_top.png + roadnet.json\n"
         "  --stats    print CityStats counter block\n"
         "exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage\n");
 }
@@ -515,7 +798,27 @@ int runGenerate(const GenerateConfig& cfg) {
         }
     }
 
-    std::printf("nl-citygen M-W0.0 blank city top view\n");
+    // M-W0.1：roadnet.json（W0-PLAN §1 契约产物，第 8 步交通的接口）。
+    const Roadnet net = buildRoadnet(lay);
+    const std::string json = serializeRoadnet(net);
+    const std::string jsonPath =
+        (std::filesystem::path(cfg.outDir) / "roadnet.json").string();
+    {
+        FILE* f = std::fopen(jsonPath.c_str(), "wb");
+        if (f == nullptr) {
+            std::printf("[nl:error] cannot open %s for write\n",
+                        jsonPath.c_str());
+            return 1;
+        }
+        const std::size_t wrote = std::fwrite(json.data(), 1, json.size(), f);
+        std::fclose(f);
+        if (wrote != json.size()) {
+            std::printf("[nl:error] short write on %s\n", jsonPath.c_str());
+            return 1;
+        }
+    }
+
+    std::printf("nl-citygen M-W0.1 city top view + roadnet\n");
     std::printf("seed=%llu size=%u blocks=%u\n",
                 static_cast<unsigned long long>(cfg.city.seed), cfg.city.size,
                 lay.stats.blocks);
@@ -523,12 +826,17 @@ int runGenerate(const GenerateConfig& cfg) {
                 lay.minZ, lay.maxZ);
     std::printf("wrote %s (%dx%d px, scale %.0f px/m)\n", pngPath.c_str(), w, h,
                 raster.pxPerMeter);
+    std::printf("wrote %s (nodes=%u edges=%u directed)\n", jsonPath.c_str(),
+                static_cast<unsigned>(net.nodes.size()),
+                static_cast<unsigned>(net.edges.size()));
     if (cfg.stats) {
         std::printf(
             "stats: blocks=%u groundTiles=%u roadSegments=%u crossroads=%u "
-            "buildings=%u trees=%u cars=%u fences=%u paths=%u\n",
+            "roadnetNodes=%u roadnetEdges=%u buildings=%u trees=%u cars=%u "
+            "fences=%u paths=%u\n",
             lay.stats.blocks, lay.stats.groundTiles, lay.stats.roadSegments,
-            lay.stats.crossroads, lay.stats.buildings, lay.stats.trees,
+            lay.stats.crossroads, lay.stats.roadnetNodes,
+            lay.stats.roadnetEdges, lay.stats.buildings, lay.stats.trees,
             lay.stats.cars, lay.stats.fences, lay.stats.paths);
     }
     return 0;

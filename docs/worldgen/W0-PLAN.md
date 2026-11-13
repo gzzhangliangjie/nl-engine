@@ -52,9 +52,10 @@ citygen 只产「路网几何 + 拓扑 + 车道语义」；第 8 步交通系统
 - **验收判据**：① seed 对称 selftest——同 seed 双跑产物逐字节一致、不同 seed 必不同（照 nav 先例确定性铁律）；② 展示台 `citygen` 卡（usage / 正向 / 负向）+ 空白城俯视证据图；③ DX12/VULKAN 双树 CMake 编译通过（工具本身不依赖图形后端）。
 - **落地纪要（2026-11-13）**：`city-tools/`（main.cpp 单文件 + CMakeLists，纯 CPU 零引擎依赖，stb_image_write 出 PNG）；pcg32 已知答案锁实现（Python 参考实现独立复算）；布局口径与一处显式偏离（全跨度路网 vs bevy 开边）+ M-W0.0 种子敏感元（cell 灰度 16 档抖动，为使判据①「异 seed 必异」成立的最小实现，M-W0.3 密度分区接管）详 `CITY-TOOLS-GUIDE.md` §1.2/§1.3。selftest 23 断言全绿；ctest `w0-city-*` 双树 3/3（--repeat until-pass:3）；`--only w0-m0` 回归 8/8 ALL GREEN；`server.py --check` exit 0；`example/w0-m0/run.bat` 六段 ALL GREEN。踩坑：`%~dp0` 尾反斜杠 + 引号被 C 运行时吃掉（`--out "%D%"` 参数串并）→ `"%D%."` 口径；stb 只 include 不 define 实现宏 → LNK2019。
 
-### M-W0.1 — 路网生成 → `roadnet.json`
+### M-W0.1 — 路网生成 → `roadnet.json`（**已收官 2026-11-13，tag `w0-m1`**）
 - **任务**：grid 路网拓扑（`Road{start,end}` 同构 bevy_city）+ 车道语义 → 按 §1 契约写 `roadnet.json`。
 - **验收判据**：① 路网俯视证据图（路网叠加布局）；② roadnet 契约 selftest——字段齐备、`from`/`to` 引用闭合、边数 = 预期网格公式；③ 展示台卡扩充 roadnet 用例。
+- **落地纪要（2026-11-13）**：`buildRoadnet`（节点 (size+1)² 行主序 id、有向边 4·size·(size+1) 先横后竖 ±向序、lanes_per_dir=1 / speed_limit=13.9m/s / width=1.0m 与路带几何同源——契约示例 3.0 是示意值留档）+ `serializeRoadnet` 手写确定性序列化（2 空格缩进固定字段序，不引 JSON 库）；`generate` 增产 `roadnet.json`，俯视图叠加 roadnet 边中心线 + 节点标记（JSON 与几何同源证明）。两种路段计数口径并存留档（`roadSegments`=72 bevy 逐 cell / `roadnetEdges`=168 全跨度有向，详 GUIDE §2.3）。M-W0.1 零 RNG 消费，前缀契约不受影响。selftest 38 断言全绿；ctest 新增 `w0-roadnet` 双树 3/3；`--only w0-m0`/`--only w0-m1` 各 8/8 ALL GREEN；`server.py --check` exit 0；`example/w0-m1/run.bat` 七段 ALL GREEN exit 0。踩坑：run.bat `for /f` 反引号内 `\"` 被 cmd 吃掉（find 模式去引号 + pushd 相对路径绕盘符冒号分列）+ find /c 前导横线占 token1（计数在 token3）；Bash 沙箱对 `cmd //c run.bat` 形态 fail-closed，改 PowerShell 通道执行。
 
 ### M-W0.2 — 建筑挤出 → 分块 `.nmesh`（W1-B）
 - **任务**：OBB 地块递归细分 + 程序化楼体（RNG 分档高度/占地）→ 每 block 一份几何 + `city.scene`（E1 World JSON schema）索引全部分块与元数据。

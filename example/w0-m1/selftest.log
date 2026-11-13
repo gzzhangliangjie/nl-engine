@@ -1,0 +1,39 @@
+ok 1 - pcg32: same seed -> identical 64-output stream
+ok 2 - pcg32: known-answer first output (seed 12345)
+ok 3 - pcg32: known-answer second output
+ok 4 - pcg32: known-answer third output
+ok 5 - pcg32: different seed -> different first output
+ok 6 - layout: same seed double-run byte-identical (FNV-1a)
+ok 7 - layout: different seed -> different bytes
+ok 8 - layout: different size -> different bytes
+ok 9 - layout: size 6 -> 36 cells
+ok 10 - stats: blocks == groundTiles == 36
+ok 11 - stats: roadSegments == 72
+ok 12 - stats: crossroads == (size+1)^2 == 49
+ok 13 - stats: M-W0.2/0.3 skeleton counters all zero (blank city)
+ok 14 - contract: block dims match roadnet.json blocks {5.5, 4.0}
+ok 15 - contract: block interior 4.5 x 3.0 (bevy ground tile dims)
+ok 16 - layout: size 6 extent x=33m z=24m
+ok 17 - layout: size 6 centered grid lo == -3
+ok 18 - rng: all cell shades in [0,16)
+ok 19 - render: three top views encoded
+ok 20 - png: same seed double-encode byte-identical
+ok 21 - png: different seed -> different pixels
+ok 22 - render: size 6 canvas 1152x864 px (32 px/m, 1.5m margin)
+ok 23 - png: valid signature bytes
+ok 24 - roadnet: size 6 -> (size+1)^2 == 49 nodes
+ok 25 - roadnet: size 6 -> directed edges 4*size*(size+1) == 168
+ok 26 - stats: roadnetNodes=49 roadnetEdges=168 (directed)
+ok 27 - roadnet: from/to/id references closed (indices in range)
+ok 28 - roadnet: bidirectional symmetry (every edge has reverse)
+ok 29 - roadnet: edge geometry spans exactly one block pitch
+ok 30 - roadnet: 84 horizontal + 84 vertical directed edges
+ok 31 - roadnet: node 0 at grid lo corner (-16.5, -12.0)
+ok 32 - roadnet: node 48 at grid hi corner (16.5, 12.0)
+ok 33 - roadnet: lanes/speed/width uniform (1 / 13.9 / 1.0)
+ok 34 - roadnet: same seed double-build JSON byte-identical
+ok 35 - roadnet: contract header fields (version/units/phases)
+ok 36 - roadnet: JSON anchors 49 intersections / 168 directed edges
+ok 37 - roadnet: different seed -> different JSON (seed field)
+ok 38 - roadnet: size 1 -> 4 nodes / 8 directed edges (formula edge)
+citygen selftest: PASS (38 assertions)

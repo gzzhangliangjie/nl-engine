@@ -66,3 +66,58 @@ city-tools generate --seed N --size N --out DIR [--stats]
 
 - （M-W0.0 无新增；RNG 已知答案常量由 Python 侧 pcg32 参考实现独立复算后回填，
   非工具自身输出自证。）
+
+## 2. M-W0.1 — 路网拓扑 + 车道语义 → roadnet.json（2026-11-13，tag `w0-m1`）
+
+### 2.1 契约落点（W0-PLAN §1，Q-W2 接口铁律）
+
+- `generate` 在 `city_top.png` 之外新增 `roadnet.json`，字段与形态完全照
+  W0-PLAN §1 原文：`version:1` / `seed` / `units:"meters"` /
+  `blocks:{x:5.5,z:4.0}` / `nodes[]`（id/x/z/kind/signal）/
+  `edges[]`（id/from/to/lanes_per_dir/speed_limit/width）/
+  `phases:[]`（预留，citygen 恒不填，由第 8 步扩展）。
+- 序列化手写确定性（2 空格缩进、固定字段序、`%.1f` 米、C locale）——
+  不引 JSON 库（M-W0.0 零依赖口径延续），selftest 以 in-memory 闭包校验 +
+  文本锚 + 双跑逐字节覆盖正确性。
+
+### 2.2 拓扑口径
+
+- 节点 = 全跨度网格线交点，`(size+1)^2` 个，`id = row*(size+1)+col`（行主序），
+  坐标 `x=(lo+col)*5.5` / `z=(lo+row)*4.0`；kind 恒 `intersection`
+  （所有节点度 >= 2，无 dead_end；signal 恒 false，第 8 步消费）。
+- 无向路段 = `2*size*(size+1)`（横、竖各 `size*(size+1)`）；有向边 ×2 =
+  `4*size*(size+1)`（size 6 → 168），每条有向边必有同属性反向边。
+- 边序：先横后竖、行主序，每路段先 `+向` 后 `-向`，id 连续递增——
+  消费方不要依赖此序做语义（只依赖 id 唯一与 from/to 闭合）。
+- 车道语义与 bevy_city 对应：`Road{start,end}` 每方向 1 车道 →
+  `lanes_per_dir=1`；`speed_limit=13.9` m/s（契约示例同源，约 50 km/h）；
+  `width` = 路带几何同源 1.0m（契约示例 3.0 是示意值，以实际布局为准）。
+  lane graph、信号相位由第 8 步交通系统在 edges 之上构建，citygen 只供
+  几何 + 拓扑 + 车道语义。
+
+### 2.3 两种路段计数口径（并存，各有对应物）
+
+| 字段 | size 6 值 | 口径 | 对应物 |
+|---|---|---|---|
+| `roadSegments` | 72 | bevy 逐 cell（每 cell 一横一竖） | bevy `CityStats.roads` / M-W0.0 冻结锚 |
+| `roadnetEdges` | 168 | 全跨度有向边（契约 edges 数组长） | `roadnet.json` edges |
+| `roadnetNodes` | 49 | 全跨度交点 = `(size+1)^2` | nodes 数组 = crossroads |
+
+### 2.4 俯视图叠加（验收判据①）
+
+`renderTopView` 在路网带之上从 `buildRoadnet` 结果反画：每条有向边 1px 暗红
+中心线（150,40,40）+ 每节点 3×3 深红标记（120,30,30）——证明 roadnet.json
+与俯视几何同源（同数据源两种消费），非布局代码直接画。
+
+### 2.5 M-W0.1 验收纪要
+
+- selftest 23 → 38 条断言全绿（新增 15：节点/边数公式锚、from/to/id 闭包、
+  双向对称、几何恰跨一个 block 间距、横竖 84+84、角点坐标、车道属性齐同、
+  JSON 双跑逐字节、契约头字段、49 交点/168 边文本锚、异 seed 异 JSON、
+  size 1 边界 4 节点 8 边、stats 锚）。
+- ctest：新增 `w0-roadnet`（`wrote ...roadnet.json (nodes=49 edges=168 directed)`
+  锚），共 4 条 × 双后端。
+- 交代物：`example/w0-m1/`（run.bat 七段 ALL GREEN + 证据图 + 4 份日志）+
+  展示台 `w0-m1` 卡四用例 + 本 §2。
+- RNG：M-W0.1 零消费（空白城车道语义全同质），消费序前缀契约不受影响；
+  M-W0.2 楼体分档消费排流尾。
