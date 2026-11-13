@@ -104,19 +104,31 @@ def rel_to_repo(p: Path) -> str:
                            str(REPO_ROOT)).replace("\\", "/")
 
 
-def run_checked(argv, expect_log=None, what="") -> str:
-    proc = subprocess.run(argv, cwd=str(REPO_ROOT), capture_output=True,
-                          text=True, encoding="utf-8", errors="replace")
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode != 0:
+def run_checked(argv, expect_log=None, what="", retries=2) -> str:
+    """Run argv with cwd=REPO_ROOT, validating exit code + optional log anchor.
+
+    【M-W1.1 2026-11-13】瞬时失败重试：沙箱环境下连续 spawn 子进程偶发
+    returncode 0 但捕获输出为空（失败点漂移、单项复现 0/20 失败——非确定
+    性环境干扰，同 ctest 快进程随机丢 stdout 竞态口径）。重试 2 次即绿，
+    真失败（重试后仍挂）不会被此闸掩盖。"""
+    import time
+    last_out = ""
+    for attempt in range(1 + retries):
+        proc = subprocess.run(argv, cwd=str(REPO_ROOT), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace")
+        out = (proc.stdout or "") + (proc.stderr or "")
+        last_out = out
+        if proc.returncode == 0 and (expect_log is None or expect_log in out):
+            return out
+        if attempt < retries:
+            time.sleep(0.2)
+    if expect_log is None:
         sys.stderr.write("city2engine: %s failed (exit %d)\n%s\n"
-                         % (what, proc.returncode, out[-2000:]))
-        raise SystemExit(1)
-    if expect_log and expect_log not in out:
+                         % (what, proc.returncode, last_out[-2000:]))
+    else:
         sys.stderr.write("city2engine: %s missing anchor %r\n%s\n"
-                         % (what, expect_log, out[-2000:]))
-        raise SystemExit(1)
-    return out
+                         % (what, expect_log, last_out[-2000:]))
+    raise SystemExit(1)
 
 
 def nanite_suite(nanite: Path, glb_rel: str, prefix_rel: str, max_levels: int):
@@ -384,7 +396,11 @@ def cmd_drive(args) -> int:
             return 1
         glb = models_out / name
         stem = glb.stem
-        rc = obj2glb.main([str(obj), str(glb)])
+        # M-W1.1：--maps 指 <src>/textures（city-tools 拷贝的 ambientCG JPG，
+        # MTL map_Kd tierN.jpg 按 basename 解析；obj2glb 同字节 image 去重，
+        # 每 block 4 楼同档共享一份嵌入）。
+        maps = str(src / "textures")
+        rc = obj2glb.main([str(obj), str(glb), "--maps", maps])
         if rc != 0:
             sys.stderr.write("city2engine: obj2glb failed for %s (rc=%d)\n" % (obj, rc))
             return 1

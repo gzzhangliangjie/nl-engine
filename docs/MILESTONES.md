@@ -3460,3 +3460,22 @@
 5. 截断 bug 的元教训（CITY2ENGINE-GUIDE §5）：冻结产物从未被解析消费时，「确定性 + 锚全绿」会掩护结构损坏——结构化产物验收必须含真实解析。
 
 **下一步**：M-W1.1 引擎消费验收（viewer `--scene city.scene.engine` 渲染 + 街景/俯视证据图用户终端补拍 + 回归 + close/release --done 收官 M-W1）。
+
+## W1 M-W1.1 引擎消费验收 — 贴图化楼体进 viewer（feat/worldgen，2026-11-13，tag w1-m1）
+
+**动作**：city-tools 本体扩展（用户拍板「city-tools 要改 不要敷衍」+「参考成熟工具」+「ambientCG 照片级」三轮拍板）——serializeBlockObj 加 6 面 quad UV（立面按档平铺 {12,8,10} 米/tile，顶/底面墙色微区域）+ `usemtl tierN` 密度档分组 + mtllib；generate 增产 city.mtl + textures/（ambientCG CC0 立面 JPG 逐字节拷贝，CMake POST_BUILD 分发，VENDOR.md + CC0 LICENSE 溯源）；RNG 流契约零消费。obj2glb.py 同字节 image 去重（78MB→1.7MB）。city2engine drive 传 --maps + run_checked 瞬时重试闸。viewer `--scene` 双后端消费渲染（俯视/街景）。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + CMakeLists POST_BUILD + thirdparty/ambientcg-facades/{tier1..3.jpg, VENDOR.md, LICENSE} + scripts/obj2glb.py 去重 + scripts/city2engine.py --maps/重试 + example/w1-m1/{run.bat, 4 PNG, 4 log} + example/w0-m2、w0-m3 重拍产物 + cases.json 卡 126（w1-m1 双 image 用例）+ CITY2ENGINE-GUIDE §6 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 双后端渲染：city_top 俯视 36 规则盒楼体（异常几何清零）+ city_street 立面窗格清晰（砖墙窗/幕墙/亮窗三档可辨）。
+- 🟢 机检：36 glb 全检 4 submeshes + 1 image；city-tools selftest 82 断言双树 PASS；ctest 151/151×2；`--only w1-m1 --only w1-m0` 8/8 + `--only w0-m2 --only w0-m3` 8/8 bytes ALL GREEN；server.py --check exit 0。
+- 🟢 run.bat 锚兼容新产物（stats 数值不变，fc 自比对段照常逐字节）。
+
+**踩坑情况**
+1. **assets/models 残留旧产物混入渲染**：drive 中途死（见 3）导致 _28~35 是 M-W1.0 无纹理旧 glb，全城渲染尾部炸撕裂灰白异常——头/尾子场景隔离实验 + glb accessor 解剖（1 submesh 0 images）+ mtime 对照三步定位。**教训：增量覆盖型驱动必须全量校验产物世代（数量+结构），避免新旧混装。**
+2. obj2glb 贴图嵌入无去重 → 36 块 78MB 膨胀——同字节 image 去重后 1.7MB；顺手把 1K 入库纹理重采样 512（48/32/35KB），楼体尺度无损。
+3. **drive 随机死（失败点漂移 3/7/11，nanite exit 0 捕获输出空）**：单项复现 0/20 失败、nanite_suite 12 连全过——沙箱连续 spawn 子进程的 transient 环境干扰；修 run_checked 重试 ×2（ctest --repeat 同口径），重试后 36/36 全过。另：bash 管道 `| tail` 吞 drive 退出码导致首轮误判成功——退出码必须 PIPESTATUS 直读。
+4. kenney city-kit 实测为色板图集（窗户靠几何建模）——「成熟工具」资产先拉一张看内容再定案。
+
+**下一步**：M-W1 整轨收官（close + release --done）；后续方向：楼体几何变体（bevy 每档 5 种楼型池）、树/车资产通道、交通 M-T0。

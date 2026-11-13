@@ -3,147 +3,147 @@
   "nextID": 37,
   "entities": [
     { "id": 1, "name": "block_00", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_00.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_00.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 2, "name": "block_01", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_01.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_01.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 3, "name": "block_02", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_02.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_02.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 4, "name": "block_03", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_03.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_03.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 5, "name": "block_04", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_04.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_04.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 6, "name": "block_05", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_05.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_05.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-13.75, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 7, "name": "block_06", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_06.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_06.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 8, "name": "block_07", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_07.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_07.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 9, "name": "block_08", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_08.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_08.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 10, "name": "block_09", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_09.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_09.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 11, "name": "block_10", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_10.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_10.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 12, "name": "block_11", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_11.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_11.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-8.25, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 13, "name": "block_12", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_12.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_12.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 14, "name": "block_13", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_13.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_13.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 15, "name": "block_14", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_14.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_14.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 16, "name": "block_15", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_15.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_15.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 17, "name": "block_16", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_16.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_16.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 18, "name": "block_17", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_17.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_17.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [-2.75, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 19, "name": "block_18", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_18.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_18.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 20, "name": "block_19", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_19.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_19.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 21, "name": "block_20", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_20.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_20.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 22, "name": "block_21", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_21.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_21.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 23, "name": "block_22", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_22.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_22.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 24, "name": "block_23", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_23.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_23.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [2.75, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 25, "name": "block_24", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_24.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_24.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 26, "name": "block_25", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_25.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_25.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 27, "name": "block_26", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_26.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_26.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 28, "name": "block_27", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_27.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_27.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 29, "name": "block_28", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_28.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_28.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 30, "name": "block_29", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_29.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_29.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [8.25, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 31, "name": "block_30", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_30.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_30.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, -10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 32, "name": "block_31", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_31.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_31.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, -6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 33, "name": "block_32", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_32.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_32.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, -2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 34, "name": "block_33", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_33.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_33.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, 2.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 35, "name": "block_34", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_34.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_34.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, 6.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } },
     { "id": 36, "name": "block_35", "flags": 0, "parent": 0, "components": {
-      "Model": { "mesh": "city_block_12345_6_35.glb", "tint": [0.8, 0.8, 0.8] },
+      "Model": { "mesh": "city_block_12345_6_35.glb", "tint": [1.0, 1.0, 1.0] },
       "Transform": { "position": [13.75, 0.0, 10.00], "scale": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0] }
     } }
   ],

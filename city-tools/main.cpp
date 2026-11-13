@@ -52,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -536,21 +537,89 @@ std::string serializeRoadnet(const Roadnet& net) {
 
 // 每 block 一份 OBJ：楼体 = 轴对齐盒（8 顶点 12 三角，外向绕序，y-up，
 // block 局部坐标原点 = cell 中心）。确定性文本（%.3f，C locale，固定序）。
+// ---------------------------------------------------------------------------
+// M-W1.1 建筑贴图 —— ambientCG CC0 照片级立面纹理（用户拍板：kenney 实测为
+// 色板图集无窗户图案后改道）。资产溯源 thirdparty/ambientcg-facades/VENDOR.md：
+// tier1=Facade018A 砖墙白窗（低层住宅）/ tier2=Facade001 蓝灰幕墙窗格（中层
+// 办公）/ tier3=Facade002 深灰幕墙暖黄亮窗（高层塔楼）。city-tools 零像素生
+// 成：generate 把 exe 旁 textures/ 的入库 JPG 逐字节拷贝为产物贴图（构建期
+// CMake POST_BUILD 拷贝到 $<TARGET_FILE_DIR>/textures/），材质分配 = 密度档
+// 确定函数（forest 归 tier1），零 RNG 消费（M-W0 RNG 流契约不动）。
+// ---------------------------------------------------------------------------
+constexpr int kTexTierCount = 3; // tier1 low / tier2 medium / tier3 high
+
+// 每档立面 UV 平铺单位（米/tile）：Facade 纹理一周期覆盖的世界尺寸，按图内
+// 窗排数校准（tier1 砖墙约 4 层窗/tile ≈ 12m；tier2 幕墙细格 ≈ 8m；tier3
+// 大格亮窗 ≈ 10m）。renderer 采样 Wrap 寻址，非整数跨度的半格窗被女儿墙
+// 位置裁切属预期观感。
+const float kWindowUnit[kTexTierCount] = {12.0f, 8.0f, 10.0f};
+
+const char* kTexTierNames[kTexTierCount] = {"tier1", "tier2", "tier3"};
+
+// 材质分配（确定性，不消费 RNG）：tier 复用密度档（forest 归 tier1）。
+int buildingTier(int densityTier) {
+    return densityTier == 0 ? 1 : densityTier;
+}
+
+// 产物贴图写出：从 srcDir（exe 旁 textures/，CMake 拷贝的入库资产）逐字节
+// 拷贝 tier1/2/3.jpg 到 outDir（<out>/textures/）。JPG 不改字节（CC0 资产
+// 原样再分发）。任一缺失/拷贝失败 = false。
+bool writeCityTextures(const std::string& srcDir, const std::string& outDir) {
+    std::error_code ec;
+    std::filesystem::create_directories(outDir, ec);
+    if (ec) return false;
+    for (int tier = 1; tier <= kTexTierCount; ++tier) {
+        char name[32];
+        std::snprintf(name, sizeof name, "tier%d.jpg", tier);
+        const std::filesystem::path src =
+            std::filesystem::path(srcDir) / name;
+        const std::filesystem::path dst =
+            std::filesystem::path(outDir) / name;
+        std::ifstream in(src, std::ios::binary);
+        if (!in) return false;
+        std::ofstream out(dst, std::ios::binary);
+        if (!out) return false;
+        out << in.rdbuf();
+        if (!out.good()) return false;
+    }
+    return true;
+}
+
+// city.mtl：3 个 newmtl（Kd 白，本色由贴图承载；map_Kd basename tierN.jpg ——
+// obj2glb find_texture 按 basename 在 --maps 目录解析）。
+std::string serializeCityMtl() {
+    std::string s;
+    s += "# city-tools M-W1.1 building material library (ambientCG CC0 facades,\n";
+    s += "# see thirdparty/ambientcg-facades/VENDOR.md for provenance)\n";
+    for (int tier = 1; tier <= kTexTierCount; ++tier) {
+        char buf[96];
+        std::snprintf(buf, sizeof buf,
+                      "newmtl tier%d\nKd 1.000 1.000 1.000\nmap_Kd tier%d.jpg\n",
+                      tier, tier);
+        s += buf;
+    }
+    return s;
+}
+
 std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
                               std::uint64_t seed) {
     std::string s;
     char buf[128];
     std::snprintf(buf, sizeof buf,
-                  "# city-tools M-W0.2 block mesh (block-local, y-up, meters)\n"
-                  "# seed %llu block %u gx %d gz %d buildings %u\n",
+                  "# city-tools M-W1.1 block mesh (block-local, y-up, meters)\n"
+                  "# seed %llu block %u gx %d gz %d buildings %u\n"
+                  "mtllib city.mtl\n",
                   static_cast<unsigned long long>(seed), blockIndex, cell.gx,
                   cell.gz, static_cast<unsigned>(cell.buildings.size()));
     s += buf;
     std::uint32_t base = 1; // OBJ 顶点索引从 1 起
+    std::uint32_t vtBase = 1; // vt 索引同从 1 起
     for (std::size_t bi = 0; bi < cell.buildings.size(); ++bi) {
         const CityBuilding& b = cell.buildings[bi];
         const float hx = b.hx, hz = b.hz, h = b.height;
-        std::snprintf(buf, sizeof buf, "o b%u\n", static_cast<unsigned>(bi));
+        const int matTier = buildingTier(static_cast<int>(cell.densityTier));
+        std::snprintf(buf, sizeof buf, "o b%u\nusemtl tier%d\n",
+                      static_cast<unsigned>(bi), matTier);
         s += buf;
         const float vx[8] = {b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx,
                              b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx};
@@ -562,6 +631,41 @@ std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
                           vz[i]);
             s += buf;
         }
+        // 每 quad 4 vt：(u0,v0)(u1,v0)(u1,v1)(u0,v1)。立面按本档世界尺寸
+        // 平铺（kWindowUnit[matTier-1] 米/tile）；顶/底面收缩到纹理左下角
+        // 微区域（0.01~0.02，采样恒定像素色，不占立面图案区域）。
+        const float unit = kWindowUnit[matTier - 1];
+        const float eu = 2.f * hx / unit; // z 面 u 跨度
+        const float ez = 2.f * hz / unit; // x 面 u 跨度
+        const float ev = h / unit;        // 立面 v 跨度
+        struct FaceQuad { int quad[4]; float u0, v0, u1, v1; };
+        const FaceQuad faces[6] = {
+            {{0, 1, 2, 3}, 0.01f, 0.01f, 0.02f, 0.02f},  // 底 -y
+            {{4, 5, 6, 7}, 0.01f, 0.01f, 0.02f, 0.02f},  // 顶 +y
+            {{0, 1, 5, 4}, 0.f,   0.f,   eu,   ev  },    // z-
+            {{2, 3, 7, 6}, 0.f,   0.f,   eu,   ev  },    // z+
+            {{1, 2, 6, 5}, 0.f,   0.f,   ez,   ev  },    // x+
+            {{0, 3, 7, 4}, 0.f,   0.f,   ez,   ev  },    // x-
+        };
+        for (const FaceQuad& fq : faces) {
+            for (int qi = 0; qi < 4; ++qi) {
+                const float u = qi == 0 || qi == 3 ? fq.u0 : fq.u1;
+                const float v = qi == 0 || qi == 1 ? fq.v0 : fq.v1;
+                std::snprintf(buf, sizeof buf, "vt %.3f %.3f\n", u, v);
+                s += buf;
+            }
+        }
+        // 两三角/面，顶点 local idx -> quad 内 vt 位移（保持 M-W0.2 外向绕序，
+        // vt 与顶点一一对应）。
+        static const int kTriVt[12][3] = {
+            {0, 2, 3}, {0, 1, 2},   // 底：quad 0,1,2,3
+            {0, 2, 1}, {0, 3, 2},   // 顶：quad 4,5,6,7
+            {0, 2, 1}, {0, 3, 2},   // z-：quad 0,1,5,4
+            {0, 2, 1}, {0, 3, 2},   // z+：quad 2,3,7,6
+            {0, 2, 1}, {0, 3, 2},   // x+：quad 1,2,6,5
+            {0, 2, 1}, {0, 1, 2},   // x-：quad 0,3,7,4
+        };
+        // 每面 quad vt 基 = vtBase + face*4；三角 kTriVt[f] 给出 quad 内位移。
         static const std::uint32_t kTris[12][3] = {
             {1, 3, 4}, {1, 2, 3},   // 底面 (-y)
             {5, 8, 7}, {5, 7, 6},   // 顶面 (+y)
@@ -570,12 +674,19 @@ std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
             {2, 7, 3}, {2, 6, 7},   // x+ 面
             {1, 8, 5}, {1, 4, 8},   // x- 面
         };
-        for (const auto& t : kTris) {
-            std::snprintf(buf, sizeof buf, "f %u %u %u\n", base + t[0] - 1,
-                          base + t[1] - 1, base + t[2] - 1);
+        for (int fi = 0; fi < 12; ++fi) {
+            const std::uint32_t vb = vtBase + static_cast<std::uint32_t>(fi / 2) * 4u;
+            std::snprintf(buf, sizeof buf, "f %u/%u %u/%u %u/%u\n",
+                          base + kTris[fi][0] - 1,
+                          vb + static_cast<std::uint32_t>(kTriVt[fi][0]),
+                          base + kTris[fi][1] - 1,
+                          vb + static_cast<std::uint32_t>(kTriVt[fi][1]),
+                          base + kTris[fi][2] - 1,
+                          vb + static_cast<std::uint32_t>(kTriVt[fi][2]));
             s += buf;
         }
         base += 8;
+        vtBase += 24;
     }
     return s;
 }
@@ -606,7 +717,7 @@ std::string serializeCityScene(const CityLayout& lay) {
                       "    { \"id\": %u, \"name\": \"block_%02u\", \"flags\": 0, "
                       "\"parent\": 0, \"components\": {\n"
                       "      \"Model\": { \"mesh\": \"blocks/block_%02u.obj\", "
-                      "\"tint\": [0.8, 0.8, 0.8] },\n"
+                      "\"tint\": [1.0, 1.0, 1.0] },\n"
                       "      \"Transform\": { \"position\": [%.2f, 0.0, %.2f], "
                       "\"scale\": [1.0, 1.0, 1.0], "
                       "\"rotation\": [0.0, 0.0, 0.0, 1.0] }\n"
@@ -1230,6 +1341,101 @@ SelftestResult runSelftest(bool verbose) {
                "obj: 4 buildings -> 32 verts / 48 tris / 4 objects");
         expect(serializeBlockObj(generateCity(p1).cells[0], 0, p1.seed) != objA,
                "obj: different seed -> different bytes (tier draws)");
+        // M-W1.1 纹理化锚：vt 每 building 24（6 面 x 4 角）、usemtl 每
+        // building 1 且全部命中合法材质名、f 行必须带 vt 索引。
+        std::uint32_t vtCount = 0, usemtlCount = 0, fWithVt = 0;
+        for (std::size_t pos = objA.find("\nvt ");
+             pos != std::string::npos; pos = objA.find("\nvt ", pos + 1)) ++vtCount;
+        for (std::size_t pos = objA.find("\nusemtl ");
+             pos != std::string::npos; pos = objA.find("\nusemtl ", pos + 1)) ++usemtlCount;
+        for (std::size_t pos = objA.find("\nf ");
+             pos != std::string::npos; pos = objA.find("\nf ", pos + 1)) {
+            if (objA.compare(pos + 2, 2, "f ") == 0) {} // unreachable guard
+            // f 行形态 "f v/vt v/vt v/vt"：数 '/' 出现 3 次即带 vt。
+            std::size_t e = objA.find('\n', pos + 1);
+            const std::string line = objA.substr(pos + 1, e - pos - 1);
+            int slashes = 0;
+            for (char ch : line) {
+                if (ch == '/') ++slashes;
+            }
+            if (slashes == 3) ++fWithVt;
+        }
+        expect(vtCount == 96u && usemtlCount == 4u && fWithVt == 48u,
+               "obj: 96 vt / 4 usemtl / 48 f-with-vt (4 buildings, "
+               "6-face quad UVs)");
+        expect(objA.find("mtllib city.mtl") != std::string::npos,
+               "obj: mtllib city.mtl present");
+        bool matNamesOk = true;
+        for (std::size_t pos = objA.find("\nusemtl ");
+             pos != std::string::npos && matNamesOk;
+             pos = objA.find("\nusemtl ", pos + 1)) {
+            const std::size_t e = objA.find('\n', pos + 1);
+            const std::string mat = objA.substr(pos + 8, e - pos - 8);
+            matNamesOk = mat == "tier1" || mat == "tier2" || mat == "tier3";
+        }
+        expect(matNamesOk, "obj: every usemtl resolves to tier1/2/3");
+    }
+
+    // MTL：3 newmtl + 3 map_Kd（basename tierN.jpg）。
+    {
+        const std::string mtl = serializeCityMtl();
+        std::uint32_t mCount = 0, mapCount = 0;
+        for (std::size_t pos = mtl.find("newmtl ");
+             pos != std::string::npos; pos = mtl.find("newmtl ", pos + 1)) ++mCount;
+        for (std::size_t pos = mtl.find("map_Kd ");
+             pos != std::string::npos; pos = mtl.find("map_Kd ", pos + 1)) ++mapCount;
+        expect(mCount == 3u && mapCount == 3u,
+               "mtl: 3 materials with 3 map_Kd entries");
+        expect(mtl.find("map_Kd tier1.jpg") != std::string::npos &&
+                   mtl.find("map_Kd tier3.jpg") != std::string::npos,
+               "mtl: map_Kd basenames follow tier<1..3>.jpg naming");
+    }
+
+    // 贴图拷贝：入库 JPG 存在 + JPEG SOI 头 + 双跑逐字节一致（不改字节）。
+    {
+        std::error_code ec;
+        std::filesystem::path src = std::filesystem::temp_directory_path(ec) /
+                                    "city-tools-tex-selftest-src";
+        std::filesystem::path dst = std::filesystem::temp_directory_path(ec) /
+                                    "city-tools-tex-selftest-dst";
+        std::filesystem::create_directories(src / "textures", ec);
+        std::filesystem::remove_all(dst, ec);
+        // 伪造源（selftest 不依赖仓库资产布局）：最小 JPEG 头字节。
+        const std::uint8_t jpegProbe[4] = {0xFF, 0xD8, 0xFF, 0xE0};
+        for (int tier = 1; tier <= kTexTierCount; ++tier) {
+            char name[32];
+            std::snprintf(name, sizeof name, "tier%d.jpg", tier);
+            FILE* f = std::fopen((src / "textures" / name).string().c_str(), "wb");
+            if (f != nullptr) {
+                std::fwrite(jpegProbe, 1, 4, f);
+                std::fclose(f);
+            }
+        }
+        expect(writeCityTextures((src / "textures").string(), dst.string()),
+               "tex: 3 jpg copied from asset dir to output dir");
+        bool bytesOk = true, soiOk = true;
+        for (int tier = 1; tier <= kTexTierCount && bytesOk; ++tier) {
+            char name[32];
+            std::snprintf(name, sizeof name, "tier%d.jpg", tier);
+            const std::filesystem::path p = dst / name;
+            const auto sz1 = std::filesystem::file_size(p, ec);
+            writeCityTextures((src / "textures").string(), dst.string());
+            const auto sz2 = std::filesystem::file_size(p, ec);
+            if (ec || sz1 != 4u || sz2 != sz1) bytesOk = false;
+            std::uint8_t head[2] = {};
+            FILE* f = std::fopen(p.string().c_str(), "rb");
+            if (f != nullptr) {
+                const std::size_t r = std::fread(head, 1, 2, f);
+                std::fclose(f);
+                if (r != 2 || head[0] != 0xFF || head[1] != 0xD8) soiOk = false;
+            } else {
+                soiOk = false;
+            }
+        }
+        expect(bytesOk, "tex: copy is byte-faithful and size-stable");
+        expect(soiOk, "tex: copied files carry JPEG SOI marker");
+        std::filesystem::remove_all(src, ec);
+        std::filesystem::remove_all(dst, ec);
     }
 
     // city.scene：E1 形态锚 + 引用闭合 + 确定性。
@@ -1310,7 +1516,8 @@ void printUsage() {
         "  --seed N   city seed, any u64 (default 12345)\n"
         "  --size N   grid blocks per side, 1..64 (default 6)\n"
         "  --out DIR  output directory, receives city_top.png + roadnet.json\n"
-        "             + blocks/block_NN.obj (M-W0.2) + city.scene\n"
+        "             + blocks/block_NN.obj + blocks/city.mtl + textures/tierN.jpg\n"
+        "             (M-W1.1 textured buildings) + city.scene\n"
         "  --stats    print CityStats counter block (incl. density tiers, M-W0.3)\n"
         "exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage\n");
 }
@@ -1371,7 +1578,17 @@ int parseGenerate(const std::vector<std::string>& args, GenerateConfig* cfg,
     return 0;
 }
 
-int runGenerate(const GenerateConfig& cfg) {
+// exe 所在目录（argv[0] 的 parent）：M-W1.1 贴图资产随 exe 分发
+// （CMake POST_BUILD 拷贝 tier*.jpg 到 $<TARGET_FILE_DIR>/textures/）。
+std::string exeAssetDir(const char* argv0) {
+    if (argv0 == nullptr || *argv0 == '\0') return ".";
+    return std::filesystem::path(argv0).parent_path().string();
+}
+
+int runGenerate(const GenerateConfig& cfg, const std::string& assetDir) {
+    // exe 旁 textures/（CMake POST_BUILD 拷贝的 ambientCG 入库资产）。
+    const std::string texSrcDir =
+        (std::filesystem::path(assetDir) / "textures").string();
     const CityLayout lay = generateCity(cfg.city);
     RasterConfig raster;
     std::vector<std::uint8_t> png;
@@ -1455,6 +1672,33 @@ int runGenerate(const GenerateConfig& cfg) {
         std::printf("wrote %s (%u buildings)\n", objPath.c_str(),
                     static_cast<unsigned>(lay.cells[i].buildings.size()));
     }
+    // M-W1.1：材质库 city.mtl（与 OBJ 同目录，mtllib 引用）。
+    const std::string mtl = serializeCityMtl();
+    const std::string mtlPath =
+        (std::filesystem::path(blocksDir) / "city.mtl").string();
+    {
+        FILE* f = std::fopen(mtlPath.c_str(), "wb");
+        if (f == nullptr) {
+            std::printf("[nl:error] cannot open %s for write\n", mtlPath.c_str());
+            return 1;
+        }
+        const std::size_t wrote = std::fwrite(mtl.data(), 1, mtl.size(), f);
+        std::fclose(f);
+        if (wrote != mtl.size()) {
+            std::printf("[nl:error] short write on %s\n", mtlPath.c_str());
+            return 1;
+        }
+    }
+    // M-W1.1：纹理集 textures/（ambientCG CC0 入库 JPG 逐字节拷贝；
+    // obj2glb --maps 指这里）。
+    const std::string texturesDir =
+        (std::filesystem::path(cfg.outDir) / "textures").string();
+    if (!writeCityTextures(texSrcDir, texturesDir)) {
+        std::printf("[nl:error] texture copy failed: %s -> %s\n",
+                    texSrcDir.c_str(), texturesDir.c_str());
+        return 1;
+    }
+
     const std::string scene = serializeCityScene(lay);
     const std::string scenePath =
         (std::filesystem::path(cfg.outDir) / "city.scene").string();
@@ -1475,6 +1719,10 @@ int runGenerate(const GenerateConfig& cfg) {
     std::printf("wrote %s (entities=%u meshes=%u)\n", scenePath.c_str(),
                 static_cast<unsigned>(lay.cells.size()),
                 static_cast<unsigned>(lay.cells.size()));
+    std::printf("wrote %s (materials=%d)\n", mtlPath.c_str(),
+                kTexTierCount);
+    std::printf("wrote %s (jpg=%d, source ambientCG CC0 facades)\n",
+                texturesDir.c_str(), kTexTierCount);
 
     std::printf("nl-citygen M-W0.3 city top view + roadnet + blocks + scene + density\n");
     std::printf("seed=%llu size=%u blocks=%u\n",
@@ -1549,7 +1797,7 @@ int main(int argc, char** argv) {
             std::printf("%s\n", err.c_str());
             return rc;
         }
-        return runGenerate(cfg);
+        return runGenerate(cfg, exeAssetDir(argv[0]));
     }
     if (cmd == "help" || cmd == "--help") {
         printUsage();

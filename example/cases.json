@@ -11656,6 +11656,80 @@
      "command": "city2engine.py drive --src --seed 12345 --size 0 --nanite"
     }
    ]
+  },
+  {
+   "id": "w1-m1",
+   "label": "W1 M-W1.1",
+   "name": "城市资产进引擎消费验收：贴图化楼体 viewer --scene 渲染（俯视 + 街景）",
+   "tag": "w1-m1",
+   "date": "2026-11-13",
+   "summary": "M-W1.1：36 block 带贴图 glb（ambientCG CC0 立面纹理 3 档：Facade018A 砖墙住宅 / Facade001 幕墙办公 / Facade002 亮窗塔楼，512x512 JPG 内嵌，同字节 image 去重后每块 ~40-55KB）经 city.scene.engine 进 viewer --scene 顶点展开直渲。city-tools 本体扩展（用户拍板「city-tools 要改」）：serializeBlockObj 加 vt 立面平铺 UV（每档 kWindowUnit 米/tile）+ usemtl 密度档分组 + mtllib city.mtl；generate 增产 city.mtl + textures/（入库 JPG 逐字节拷贝）；RNG 流契约零消费零破坏；selftest 74->82。obj2glb.py 同字节 image 去重（每 block 4 楼同档共享 1 嵌入）。w0-m2/m3 产物重拍（OBJ+mtl+textures+scene tint 1.0），回归 8/8 bytes ALL GREEN。drive 修 transient 失败重试闸（沙箱连续 spawn 子进程偶发 exit 0 空输出，失败点漂移；重试 2 次即绿，ctest --repeat 同口径）。",
+   "acceptance": [
+    "双后端 --scene 渲染：city_top.png 俯视 36 规则盒楼体 + city_street.png 街景立面窗格清晰（砖墙窗/幕墙/亮窗三档可辨）",
+    "异常几何修复闭环：首轮渲染尾部 block 撕裂灰白异常 -> 定位 assets/models 残留 M-W1.0 无纹理旧 glb（drive 中途死）-> 根因 run_checked 无重试遇 transient 空输出 -> 重试闸后 36/36 全过",
+    "贴图链机检：36 glb 全检 4 submeshes + 1 image；city-tools selftest 82 断言双树 PASS（vt/usemtl/mtllib/拷贝字节保真/JPEG SOI）",
+    "w0 基线重拍回归：--only w0-m2 --only w0-m3 8/8 bytes ALL GREEN；run.bat 锚兼容（stats 数值不变）",
+    "交代物：example/w1-m1/（run.bat 七段 + 双后端 4 PNG + 4 log）+ 本卡双 image 用例 + w0-m2/m3 重拍产物"
+   ],
+   "preview": "example/w1-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：36 block 三档贴图楼体（pitch -89）",
+     "kind": "image",
+     "note": "viewer --scene 直渲 city.scene.engine；楼体全规则盒、三档纹理（顶面采样墙色微区域）。",
+     "args": [
+      "--scene",
+      "{root}/example/w1-m0/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -89 --dist 48"
+    },
+    {
+     "id": "city-street",
+     "name": "街景：立面窗格贴图（pitch -10）",
+     "kind": "image",
+     "note": "街景机位看立面：砖墙白窗（tier1）/ 蓝灰幕墙窗格（tier2）/ 深灰亮窗塔楼（tier3）。",
+     "args": [
+      "--scene",
+      "{root}/example/w1-m0/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -10 --dist 30"
+    }
+   ]
   }
  ]
 }

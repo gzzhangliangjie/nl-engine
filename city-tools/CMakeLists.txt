@@ -6,6 +6,16 @@
 add_executable(city-tools main.cpp)
 target_include_directories(city-tools PRIVATE ${THIRDPARTY}/stb)
 
+# ---- M-W1.1：ambientCG CC0 立面贴图随 exe 分发（运行时逐字节拷贝为产物，
+# 溯源 thirdparty/ambientcg-facades/VENDOR.md）----
+add_custom_command(TARGET city-tools POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:city-tools>/textures
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/thirdparty/ambientcg-facades/tier1.jpg
+            ${CMAKE_SOURCE_DIR}/thirdparty/ambientcg-facades/tier2.jpg
+            ${CMAKE_SOURCE_DIR}/thirdparty/ambientcg-facades/tier3.jpg
+            $<TARGET_FILE_DIR:city-tools>/textures/)
+
 if(MSVC)
     target_compile_options(city-tools PRIVATE /W4 /permissive- /utf-8 /bigobj)
     target_compile_definitions(city-tools PRIVATE _CRT_SECURE_NO_WARNINGS)
