@@ -30,6 +30,7 @@
 #include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
+#include "nl/net/Sync.hpp"        // NET M-NET2：同步层会话（服务器权威最小闭环）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
 #include "nl/scene/World.hpp"
@@ -54,6 +55,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>   // NET M-NET2：client interp 日志 tick 去重
 
 // ---- M-E2：编辑器嵌入（可选启动）。bridge 头不含 winsock/windows，无包含序风险。
 #include "rpc_bridge.hpp"
@@ -68,6 +70,13 @@ void check(bool ok, const char* name) {
     std::cout << (ok ? "  [PASS] " : "  [FAIL] ") << name << '\n';
     if (ok) ++g_passed; else ++g_failed;
 }
+
+// NET M-NET2：进程级 ENet 生命周期（netInit/netShutdown 一比一，runNormal 作用域
+// RAII——多 return 路径不漏配对；非 net 模式 active=false 零开销）。
+struct NetGuard {
+    bool active = false;
+    ~NetGuard() { if (active) nl::net::netShutdown(); }
+};
 
 const nl::renderer::ClearColor kColors[] = {
     {0.05f, 0.08f, 0.15f, 1.0f},  // 深蓝
@@ -138,6 +147,11 @@ struct Options {
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
+    bool netServer  = false;  // NET M-NET2：--net-server <port>（服务器权威形态）
+    int  netPort    = 0;      //   端口（1..65535；非法值由 runNormal 拒绝 exit 2）
+    bool netClient  = false;  // NET M-NET2：--net-client <host:port>[,name]
+    std::string netAddress;   //   原样保留，runNormal 解析 host/port/name
+    float interpDelay = 2.0f; // NET M-NET3：--interp-delay <ticks>（client 插值回看深度，1.0..8.0）
     bool profilingHud = false; // M-TR0：--profiling-hud（默认关的独立性能统计窗口 K1/K5）
     int  captureFrame = 0;     // M-TR2：--capture-frame N（0=关）；RenderDoc 进程内抓第 N 帧，默认关
     std::string cameraMode = "orbit";   // P8 M-CAM b-segment：初始相机模式 orbit|free|chase|track
@@ -529,6 +543,14 @@ Options parseArgs(int argc, char** argv) {
             o.driveDemo = true;
         } else if (a == "--drive-hud") {
             o.driveHud = true;
+        } else if (a == "--net-server" && i + 1 < argc) {   // NET M-NET2
+            o.netServer = true;
+            o.netPort = std::atoi(argv[++i]);
+        } else if (a == "--net-client" && i + 1 < argc) {   // NET M-NET2
+            o.netClient = true;
+            o.netAddress = argv[++i];
+        } else if (a == "--interp-delay" && i + 1 < argc) { // NET M-NET3
+            o.interpDelay = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--profiling-hud") {
             o.profilingHud = true;   // M-TR0：独立性能统计窗口，默认关
         } else if (a == "--capture-frame" && i + 1 < argc) {  // M-TR2
@@ -1175,6 +1197,62 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
     const bool inputHud = inputHudMode;
 
+    // ---- NET M-NET2：网络模式前置校验（用法错误 = exit 2，不静默降级）----
+    const bool netServerMode = o.netServer;
+    const bool netClientMode = o.netClient;
+    std::string netHost;
+    int netPort = 0;
+    std::string netName;
+    if (netServerMode && netClientMode) {
+        nl::core::log::errorCh("viewer", "--net-server and --net-client are mutually exclusive");
+        return 2;
+    }
+    if (netServerMode && (o.netPort <= 0 || o.netPort > 65535)) {
+        nl::core::log::errorCh("viewer", "--net-server: port must be 1..65535, got ", o.netPort);
+        return 2;
+    }
+    if (netClientMode) {
+        // "<host>:<port>[,<name>]"（name 预留 M-NET3，现仅记录）
+        std::string addr = o.netAddress;
+        const std::size_t comma = addr.find(',');
+        if (comma != std::string::npos) {
+            netName = addr.substr(comma + 1);
+            addr = addr.substr(0, comma);
+        }
+        const std::size_t colon = addr.rfind(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= addr.size()) {
+            nl::core::log::errorCh("viewer", "--net-client: expected <host:port>[,name], got '",
+                                   o.netAddress, "'");
+            return 2;
+        }
+        netHost = addr.substr(0, colon);
+        netPort = std::atoi(addr.c_str() + colon + 1);
+        if (netHost.empty() || netPort <= 0 || netPort > 65535) {
+            nl::core::log::errorCh("viewer", "--net-client: bad host/port in '", o.netAddress, "'");
+            return 2;
+        }
+    }
+    if ((netServerMode || netClientMode) &&
+        (!o.physicsDebug || o.physicsScenario != 2)) {
+        nl::core::log::errorCh("viewer",
+            "--net-server/--net-client requires --physics-debug --physics-scenario 2 "
+            "(M-NET2 minimal loop drives the scenario-2 training ground)");
+        return 2;
+    }
+    if (netClientMode && (o.interpDelay < 1.0f || o.interpDelay > 8.0f)) {
+        nl::core::log::errorCh("viewer",
+            "--interp-delay: ticks must be 1.0..8.0, got ", o.interpDelay);
+        return 2;
+    }
+    NetGuard netGuard;
+    if (netServerMode || netClientMode) {
+        netGuard.active = nl::net::netInit();
+        if (!netGuard.active) {
+            nl::core::log::errorCh("viewer", "netInit failed");
+            return 1;
+        }
+    }
+
     nl::core::WindowDesc desc;
     desc.width  = o.width;
     desc.height = o.height;
@@ -1757,6 +1835,94 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                " bodies (floor + dynamic box/sphere/capsule)");
     }
 
+    // ---- NET M-NET2：会话对象（capture 进 Physics 组回调；本层零游戏语义，
+    // 实体增删 / 输入采样 / 快照广播都由下方 netServerLogicTick 串起来）----
+    nl::net::ServerSession netServerSess;
+    nl::net::ClientSession netClientSess;
+    std::vector<std::pair<uint16_t, int>> netEntSlots;   // entityId -> DebugScene slot
+    uint16_t netLocalEntity = 0;   // server = 本地权威车实体号；client = 自己的实体号
+    bool netClientWasWelcomed = false;  // M-NET3：server 断链边沿检测（welcomed true->false）
+    std::unordered_map<uint16_t, uint32_t> netLastLoggedTick; // client interp 日志去重
+    // 帧间相位跟踪：最新快照到达时刻（实钟）-> 经过时间折算 tick 分数
+    std::unordered_map<uint16_t, double> netArrivalMs;
+    std::unordered_map<uint16_t, uint32_t> netLatestSeen;
+    constexpr double kNetTickMs = 1000.0 / 60.0;
+    const float interpDelayTicks = o.interpDelay;  // NET M-NET3：CLI 外置（默认 2.0，1.0..8.0）
+    if (netServerMode) {
+        if (!netServerSess.start(static_cast<uint16_t>(o.netPort), 8)) {
+            nl::core::log::errorCh("viewer", "net server start failed port=", o.netPort);
+            return 1;
+        }
+        netLocalEntity = netServerSess.claimLocalEntity();   // 恒 1（首个占号）
+        netEntSlots.push_back({netLocalEntity, 0});          // slot 0 = 既有单车
+        nl::core::log::infoCh("viewer", "net server: listening port=", o.netPort,
+                            " localEntity=", netLocalEntity);
+    }
+    if (netClientMode) {
+        if (!netClientSess.beginConnect(netHost.c_str(), static_cast<uint16_t>(netPort))) {
+            nl::core::log::errorCh("viewer", "net client beginConnect failed ", netHost,
+                                   ":", netPort);
+            return 1;
+        }
+        nl::core::log::infoCh("viewer", "net client: connecting ", netHost, ":", netPort,
+                            netName.empty() ? "" : " name=", netName);
+    }
+    // 服务器逻辑帧：泵会话（加入/退出 -> 载具槽位增删）+ 采样广播 + auth 证据行。
+    auto netServerLogicTick = [&](std::uint64_t tick) {
+        std::vector<uint16_t> joined, left;
+        netServerSess.pump(static_cast<uint32_t>(tick), joined, left);
+        for (const uint16_t ent : joined) {
+            const float sx = 4.0f + 4.0f * static_cast<float>(netEntSlots.size());
+            const int slot = physicsScene.addVehicle(sx, 0.0f);
+            if (slot < 0) {
+                nl::core::log::errorCh("net", "server: addVehicle failed for entity ", ent);
+                continue;
+            }
+            netEntSlots.push_back({ent, slot});
+            nl::core::log::infoCh("net", "server: entity ", ent, " joined slot=", slot);
+        }
+        for (const uint16_t ent : left) {
+            for (std::size_t k = 0; k < netEntSlots.size(); ++k) {
+                if (netEntSlots[k].first == ent) {
+                    physicsScene.removeVehicle(netEntSlots[k].second);
+                    netEntSlots.erase(netEntSlots.begin() + static_cast<long>(k));
+                    netServerSess.notifyEntityGone(ent);   // 其余 client 删幽灵位
+                    nl::core::log::infoCh("net", "server: entity ", ent, " left");
+                    break;
+                }
+            }
+        }
+        for (const auto& kv : netEntSlots) {
+            const uint16_t ent = kv.first;
+            const int slot = kv.second;
+            if (ent != netLocalEntity) {
+                const nl::net::InputState in = netServerSess.inputOf(ent);
+                nl::physics::DriveInputState di;
+                di.forward = in.forward;
+                di.right = in.right;
+                di.brake = in.brake;
+                di.handBrake = in.handBrake;
+                physicsScene.setVehicleInput(slot, di);
+            }
+            float pos[3], q[4], vel[3];
+            if (!physicsScene.vehicleFullPose(slot, pos, q, vel)) continue;
+            nl::net::VehicleSnapshot s;
+            s.serverTick = static_cast<uint32_t>(tick);
+            s.entityId = ent;
+            s.px = pos[0]; s.py = pos[1]; s.pz = pos[2];
+            s.qx = q[0]; s.qy = q[1]; s.qz = q[2]; s.qw = q[3];
+            s.vx = vel[0]; s.vy = vel[1]; s.vz = vel[2];
+            netServerSess.broadcastSnapshot(s);
+            char line[192];
+            std::snprintf(line, sizeof(line),
+                          "auth tick=%u ent=%u px=%.4f py=%.4f pz=%.4f"
+                          " qx=%.5f qy=%.5f qz=%.5f qw=%.5f",
+                          s.serverTick, ent, pos[0], pos[1], pos[2],
+                          q[0], q[1], q[2], q[3]);
+            nl::core::log::infoCh("net", line);
+        }
+    };
+
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
     // M-I2：input-hud 模式的面板就是本体，强制开（截图回归 --hud 同口径）。
     const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive;
@@ -1929,8 +2095,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
     if (o.physicsDebug) {
         gameClock.scheduler().set(nl::core::TickGroup::Physics,
-                                  [&physicsScene](double, std::uint64_t) {
-            physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
+                                  [&](double, std::uint64_t tick) {
+            // NET M-NET2：client 不 step 物理（幽灵位走快照插值，场景全静态）；
+            // 非 net 路径与 server 路径行为与既有逐位一致。
+            if (!netClientMode) {
+                physicsScene.step(1.0 / 60.0);   // M-P3：Jolt 固定步长
+            }
+            if (netServerMode) {
+                netServerLogicTick(tick);   // 快照广播 + auth 日志（step 之后同 tick）
+            }
         });
     }
     const auto syncCameraToCVar = registerViewerConsole(&camera, &hudEnabled);
@@ -2000,6 +2173,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     bool prevReq[7] = {};      // 上一帧实际按下的态（边沿转换用）
     // demo 脚本已按下的键（脚本只 press 不 release；W/D/Space/Esc 持续到退出）
     bool demoHeld[4] = {};
+    // NET M-NET2：本帧合成驾驶输入（drive 注入块写入；client 每帧上送服务器）。
+    nl::physics::DriveInputState netDriveInput;
 
     while (!window.shouldClose()) {
         NL_PROFILE_ZONE("viewer.frame");   // M-TR0：整帧 zone
@@ -2175,6 +2350,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             di.right     = str;
             di.handBrake = drivingMap.boolValue(dActs.handbrake) ? 1.0f : 0.0f;
             physicsScene.setDriveInput(di);
+            netDriveInput = di;   // NET M-NET2：client 侧同源输入上送快照用
             inputState.endFrame();
             // Q-D3-4 hook evidence: the Jolt-free POD really reaches the
             // camera-side ChassisState shape (no camera glue is installed).
@@ -2194,6 +2370,98 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cs.valid = dcs.valid;
                 nl::core::log::infoCh("viewer", "drive hook: chassis valid=", cs.valid ? 1 : 0,
                                     " posZ=", cs.pos[2], " yawDeg=", cs.yawDegrees);
+            }
+        }
+
+        // ---- NET M-NET2 client：输入上送 + 快照消费 + 幽灵位插值 -------------
+        // 客户端零本地模拟：幽灵 slot 只被 teleportVehicle 摆位（场景不 step），
+        // 相机仍走 orbit（两实例同视口），插值锚 = 最新 tick - interpDelayTicks（--interp-delay）。
+        if (netClientMode) {
+            netClientSess.pump();
+            // M-NET3 异常路径：welcomed true->false 边沿 = server 断链（优雅关服或
+            // 超时）-> 回收全部远端幽灵 + 日志锚；client 零本地模拟，继续跑不崩。
+            if (netClientWasWelcomed && !netClientSess.welcomed()) {
+                for (const auto& kv : netEntSlots) {
+                    physicsScene.removeVehicle(kv.second);
+                }
+                netEntSlots.clear();
+                nl::core::log::infoCh("net",
+                    "client: server disconnected, ghosts removed, continuing locally");
+            }
+            netClientWasWelcomed = netClientSess.welcomed();
+            nl::net::InputState nin;
+            nin.forward   = netDriveInput.forward;
+            nin.right     = netDriveInput.right;
+            nin.brake     = netDriveInput.brake;
+            nin.handBrake = netDriveInput.handBrake;
+            netClientSess.sendInput(nin);
+            // 新实体 -> 幽灵位（快照首包即建位；断链实体由 pump 内 forgetEntity 清桶，
+            // 槽位 tombstone 不复用——最小闭环实体数 ≤ 会话上限，无泄漏面）。
+            for (std::size_t k = 0; k < netClientSess.entityCount(); ++k) {
+                const uint16_t ent = netClientSess.entityAt(k);
+                bool known = false;
+                for (const auto& p : netEntSlots) known = known || (p.first == ent);
+                if (known) continue;
+                const float sx = 4.0f + 4.0f * static_cast<float>(netEntSlots.size());
+                const int slot = physicsScene.addVehicle(sx, 0.0f);
+                if (slot < 0) {
+                    nl::core::log::errorCh("net", "client: addVehicle failed for entity ", ent);
+                    continue;
+                }
+                netEntSlots.push_back({ent, slot});
+                nl::core::log::infoCh("net", "client: entity ", ent,
+                                    " ghost slot=", slot,
+                                    ent == netClientSess.localEntityId() ? " (self)" : "");
+            }
+            // EntityGone -> 幽灵槽位回收（tombstone，不压缩既有槽位编号）。
+            for (std::size_t k = 0; k < netEntSlots.size();) {
+                if (netClientSess.welcomed() && !netClientSess.hasEntity(netEntSlots[k].first)) {
+                    physicsScene.removeVehicle(netEntSlots[k].second);
+                    nl::core::log::infoCh("net", "client: entity ", netEntSlots[k].first, " gone");
+                    netEntSlots.erase(netEntSlots.begin() + static_cast<long>(k));
+                } else {
+                    ++k;
+                }
+            }
+            // 插值回看 + 幽灵摆位 + interp 证据行（floor tick 变更才记一行）。
+            // 帧间相位 = 最新快照到达后经过的实时间 / tick 时长（上限 0.95 tick，
+            // 不外推越过最新快照）——真正走 alpha 帧间插值，而非整点阶梯跳变。
+            const double nowMs = std::chrono::duration<double, std::milli>(
+                clock::now().time_since_epoch()).count();
+            for (std::size_t k = 0; k < netClientSess.entityCount(); ++k) {
+                const uint16_t ent = netClientSess.entityAt(k);
+                const nl::net::InterpBuffer* lb = netClientSess.bufferOf(ent);
+                if (!lb) continue;
+                const uint32_t lt = lb->latestTick();
+                uint32_t& seen = netLatestSeen[ent];
+                if (seen != lt) {
+                    seen = lt;
+                    netArrivalMs[ent] = nowMs;
+                }
+            }
+            for (const auto& kv : netEntSlots) {
+                const nl::net::InterpBuffer* buf = netClientSess.bufferOf(kv.first);
+                if (!buf) continue;
+                const auto ar = netArrivalMs.find(kv.first);
+                const float extra = ar != netArrivalMs.end()
+                    ? static_cast<float>(std::min((nowMs - ar->second) / kNetTickMs, 0.95))
+                    : 0.0f;
+                nl::net::VehicleSnapshot out;
+                float evalTick = 0.f;
+                if (!buf->eval(interpDelayTicks, out, evalTick, extra)) continue;
+                const float gp[3] = { out.px, out.py, out.pz };
+                const float gq[4] = { out.qx, out.qy, out.qz, out.qw };
+                physicsScene.teleportVehicle(kv.second, gp, gq);
+                const uint32_t ft = static_cast<uint32_t>(std::floor(evalTick));
+                const auto it = netLastLoggedTick.find(kv.first);
+                if (it == netLastLoggedTick.end() || it->second != ft) {
+                    netLastLoggedTick[kv.first] = ft;
+                    char line[160];
+                    std::snprintf(line, sizeof(line),
+                                  "interp tick=%u ent=%u px=%.4f py=%.4f pz=%.4f",
+                                  ft, kv.first, out.px, out.py, out.pz);
+                    nl::core::log::infoCh("net", line);
+                }
             }
         }
 
@@ -2408,6 +2676,38 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                           vehicleCVars.throttleScale->value().f,
                           vehicleCVars.steerScale->value().f);
             hud.driveDebug.lineCount = n;
+        }
+        // NET M-NET2：网络状态独立窗口（plan 任务 3：连接态 / RTT / 快照 tick 差）。
+        // 仅 net 模式置 show=true（default-off 兄弟窗口纪律，既有基线零触碰）。
+        if (netServerMode || netClientMode) {
+            hud.netStatus.show = true;
+            int n = 0;
+            if (netServerMode) {
+                std::snprintf(hud.netStatus.lines[n++], nl::renderer::NetStatusUi::kLineChars,
+                              "NET    role=SERVER port=%d peers=%u ents=%d",
+                              o.netPort, netServerSess.peerCount(),
+                              physicsScene.activeVehicleCount());
+                std::snprintf(hud.netStatus.lines[n++], nl::renderer::NetStatusUi::kLineChars,
+                              "TICK   tick=%llu mode=authoritative",
+                              static_cast<unsigned long long>(gameClock.tickCount()));
+            } else {
+                // M-NET3：welcomed 过但链路已断 = disconnected（区别于从未连上的 connecting）。
+                const bool netDisc = netClientWasWelcomed && !netClientSess.connected();
+                std::snprintf(hud.netStatus.lines[n++], nl::renderer::NetStatusUi::kLineChars,
+                              "NET    role=CLIENT %s rtt=%ums",
+                              netClientSess.welcomed() ? "welcomed"
+                                  : (netDisc ? "disconnected"
+                                      : (netClientSess.connected() ? "connected" : "connecting")),
+                              netClientSess.rttMs());
+                std::snprintf(hud.netStatus.lines[n++], nl::renderer::NetStatusUi::kLineChars,
+                              "SNAP   ents=%zu latest=%u delay=%.1f",
+                              netClientSess.entityCount(),
+                              netClientSess.entityCount()
+                                  ? netClientSess.bufferOf(netClientSess.entityAt(0))->latestTick()
+                                  : 0u,
+                              interpDelayTicks);
+            }
+            hud.netStatus.lineCount = n;
         }
         if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
@@ -4002,6 +4302,11 @@ void printUsage() {
               << "                                     M-D3 drive training ground; --drive-demo =\n"
               << "                                     deterministic frame-indexed input script\n"
               << "  viewer.exe --drive-hud             M-D3 separate drive debug window (default off)\n"
+              << "  viewer.exe --net-server <port>     M-NET2 authoritative server mode (scenario 2)\n"
+              << "  viewer.exe --net-client <h:p>[,nm] M-NET2 client mode: upload input, render remote\n"
+              << "                                     vehicles from interpolated snapshots\n"
+              << "  viewer.exe --interp-delay <ticks>  M-NET3 client snapshot look-back depth in ticks\n"
+              << "                                     (default 2.0, range 1.0..8.0)\n"
               << "  viewer.exe --profiling-hud         M-TR0 separate perf stats window (default off)\n"
               << "                                     CVars: vehicle.throttleScale / steerScale / debug\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"

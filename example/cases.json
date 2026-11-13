@@ -10504,6 +10504,259 @@
      "command": "example/perf-m1/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "net-m0",
+   "label": "M-NET0",
+   "name": "传输层：ENet vendored + nl/net 薄封装 + echo tool",
+   "tag": "net-m0",
+   "date": "2026-11-13",
+   "summary": "第 12 步「多人游戏 / 网络栈」第一里程碑（A 类并行轨道 net）。vendored ENet 1.3.18 @ 5a9c537（MIT，thirdparty/enet/VENDOR.md 溯源，unix.c 与上游脚手架剔除）；nl/net 传输层薄封装（PIMPL：NetServer/NetClient 事件泵 + 可靠/不可靠双通道，enet_ 符号只在 core/src/net/Net.cpp 单 TU）；net-tools 三命令面（echo 单进程回环 / echo-server+echo-client 双进程 / selftest 机械断言）。退出码 0=PASS / 1=错误 / 2=用法错误或超时。零游戏语义、零图形 API、kStage 不 bump；拍板权威落点 docs/net/NETCODE-OPTIONS.md §6。",
+   "acceptance": [
+    "单进程回环 echo：可靠 32/32 + 不可靠 64/64 全量回显，锚行 echo OK（ctest net-m0-echo / net-m0-selftest 正则锁死）",
+    "双进程 echo-server + echo-client：32 包零丢失 recv=32 loss=0.0%（example/net-m0/run.bat 真实双进程）",
+    "丢包注入：--loss 30 确定性伪随机（种子 1234）触发 exit 2，证据 = client-loss.log loss>0",
+    "负向显式拒绝：未知子命令 exit 2；死端口握手失败 exit 1（ctest WILL_FAIL 双例）",
+    "版本锚：net-tools version 输出 enet 1.3.18（vendored 溯源复核，ctest net-m0-version）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径：0=PASS / 1=错误 / 2=用法错误或超时）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "echo",
+     "name": "echo：单进程回环（可靠 32 + 不可靠 64 全量回显）",
+     "kind": "tool",
+     "note": "同进程起 server + client 两个 host，单线程交替泵，127.0.0.1 真实 UDP 栈；可靠/不可靠双通道全量回显后打印 RTT 统计。rtt 行是时变字段，验收锚只锁计数行与 OK 行。",
+     "args": [
+      "echo"
+     ],
+     "expectExit": 0,
+     "expectLog": "echo        : OK",
+     "command": "net-tools echo"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：机械断言（16 可靠 + 32 不可靠）",
+     "kind": "tool",
+     "note": "小参数回环 + PASS 锚；ctest net-m0-selftest 同一断言面。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest net: PASS",
+     "command": "net-tools selftest"
+    },
+    {
+     "id": "version",
+     "name": "version：vendored 版本锚",
+     "kind": "tool",
+     "note": "ENET_VERSION 1.3.18（VENDOR.md 锁定 master HEAD 5a9c537），防止库漂移。",
+     "args": [
+      "version"
+     ],
+     "expectExit": 0,
+     "expectLog": "enet        : 1.3.18",
+     "command": "net-tools version"
+    },
+    {
+     "id": "usage-negative",
+     "name": "负向：未知子命令显式拒绝",
+     "kind": "tool",
+     "note": "未知子命令不许静默假成功，exit 2（ctest net-m0-usage-negative WILL_FAIL 同口径）。",
+     "args": [
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools bogus"
+    },
+    {
+     "id": "connect-negative",
+     "name": "负向：死端口握手失败",
+     "kind": "tool",
+     "note": "连无监听端口须显式 FAILED + exit 1，不许静默假连接（ctest net-m0-connect-refused 同口径）。",
+     "args": [
+      "echo-client",
+      "127.0.0.1",
+      "29199",
+      "--packets",
+      "4",
+      "--timeout-ms",
+      "1500"
+     ],
+     "expectExit": 1,
+     "expectLog": "connect     : FAILED",
+     "command": "net-tools echo-client 127.0.0.1 29199"
+    },
+    {
+     "id": "loss-sweep",
+     "name": "loss-sweep：逐级丢包注入实测（0..90%，证据图数据源）",
+     "kind": "tool",
+     "note": "单进程回环每级 fresh server+client，可靠通道 32 包全量重传必达，client 模拟入站丢弃后打印逐级 recv。种子 1234 确定性；右侧 preview = tools/make-net-evidence.py 从本命令真实输出生成的柱状图（纯标准库渲染，无手绘）。",
+     "args": [
+      "loss-sweep"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep       : OK",
+     "command": "net-tools loss-sweep",
+     "preview": "example/net-m0/net-m0-evidence.png"
+    }
+   ]
+  },
+  {
+   "id": "net-m1",
+   "label": "M-NET1",
+   "name": "序列化层：bitsery vendored + 载具 transform 快照编解码",
+   "tag": "net-m1",
+   "date": "2026-11-13",
+   "summary": "第 12 步网络栈第二里程碑（A 类并行轨道 net）。vendored bitsery v5.2.5 @ 9bebfd4（MIT header-only 62 头，thirdparty/bitsery/VENDOR.md，include 仅 PRIVATE 进 SnapshotCodec.cpp 单 TU）；线格式 243 bits = tick32 + entityId16 + 位置 3x32（mm 定点饱和钳制）+ 朝向 smallest-three 51（2b 索引 + 1b 符号 + 3x16b）+ 速度 3x16（cm/s）→ 31 bytes（naive float 46 B 省 32.6%）；严格解码（截断流/尾部垃圾/对齐残位脏数据全拒）。net-tools 增 snapshot-selftest（256 样本往返 bytes 级 + 量化精度断言 + 3 类负向）/ snapshot-bench（seed 1234 确定性实测：enc ~350ns dec ~200ns，量化误差 pos 0.00061m / quat 0.069deg / vel 0.005m/s，逐分量探针核对过）/ snapshot-decode（hex 解码，负向显式 FAILED）。右侧 preview = tools/make-net-m1-evidence.py 从真实 bench 输出生成的逐字段位宽对比图（纯标准库渲染）。拍板权威落点 docs/net/NETCODE-OPTIONS.md §6（Q-N4 = msgpack_min 保留 + bitsery 同步层）。",
+   "acceptance": [
+    "往返 bytes 级一致：encode→decode→encode 逐字节相同（256 样本 + 恒等/负 largest/饱和边界，ctest net-m1-selftest 锚死）",
+    "量化误差 ≤ 声明精度（Snapshot.hpp 表）：pos 1mm / quat 0.1 度 / vel 1cm/s，数值断言",
+    "严格解码：截断流 / 尾部垃圾 / 脏残位三类负向全拒（selftest 内置 + ctest WILL_FAIL + run.bat findstr 三重）",
+    "载荷实测落档：31 B 线格式 vs 46 B naive（-32.6%），enc/dec 耗时与误差写进 NETCODE-TOOLS-GUIDE §2",
+    "证据图 preview：make-net-m1-evidence.py 从真实 bench 输出渲染，无手绘"
+   ],
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径 0/1/2）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "snapshot-selftest",
+     "name": "snapshot-selftest：往返 bytes 级 + 精度断言（256 样本 + 3 类负向）",
+     "kind": "tool",
+     "note": "确定性 LCG seed 1234；断言 = 31 字节定长 / 往返逐字节一致 / 量化误差 ≤ 声明精度 / 截断-尾部垃圾-脏残位全拒。",
+     "args": [
+      "snapshot-selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "snapshot selftest: PASS",
+     "command": "net-tools snapshot-selftest"
+    },
+    {
+     "id": "snapshot-bench",
+     "name": "snapshot-bench：载荷实测（2 万样本，证据图数据源）",
+     "kind": "tool",
+     "note": "输出 avgBytes / enc/dec ns/op / 量化最大误差 / 逐字段位宽表 / naive 对照；preview 图从此命令真实输出生成。",
+     "args": [
+      "snapshot-bench",
+      "--count",
+      "20000"
+     ],
+     "expectExit": 0,
+     "expectLog": "snapshot-bench : OK",
+     "command": "net-tools snapshot-bench --count 20000",
+     "preview": "example/net-m1/net-m1-evidence.png"
+    },
+    {
+     "id": "snapshot-decode-negative",
+     "name": "负向：截断流（4 字节）显式拒绝",
+     "kind": "tool",
+     "note": "不完整线流必须 FAILED + exit 1，不许静默假解码（ctest net-m1-decode-negative WILL_FAIL 同口径）。",
+     "args": [
+      "snapshot-decode",
+      "01020304"
+     ],
+     "expectExit": 1,
+     "expectLog": "decode       : FAILED",
+     "command": "net-tools snapshot-decode 01020304"
+    }
+   ]
+  },
+  {
+   "id": "net-m2",
+   "label": "M-NET2",
+   "name": "服务器权威最小闭环：viewer --net-server/--net-client + 快照插值 + 数值锚（M-NET2）",
+   "tag": "net-m2",
+   "date": "2026-11-13",
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "summary": "第 12 步网络栈第三里程碑（A 类并行轨道 net）。nl/net Sync 层（core/src/net/Sync.cpp）：控制消息 pack(1) POD（统一 magic+proto+type 三重头校验，短流/坏魔数/坏协议号/NaN 全拒）+ InterpBuffer（tick 单调丢旧保新、delayTicks+extraTicks 相位回看、lerp+nlerp 短弧）+ ServerSession（peer↔entity 分配回收、输入缓存、快照广播、EntityGone 通知）/ClientSession（hello/welcome、输入上送、快照分桶）。DebugScene 多载具槽位（slot0 逐位保形 + addVehicle/removeVehicle tombstone/teleportVehicle/vehicleFullPose）。viewer 运行模式 --net-server <port> / --net-client <host:port>[,name]：server 每逻辑 tick 广播 31B 快照 + auth 轨迹日志行，client 零本地模拟（幽灵位 teleportVehicle 按 alpha 帧间插值摆位 + interp 日志行），HUD Net Status 独立窗口（default-off 兄弟窗口纪律）。net-tools session-loopback（回环会话全链路确定性断言）+ verify-m2（数值锚：client 插值位置 vs server 权威轨迹同 tick 偏差 ≤ 一个快照间隔，阈值 = auth 相邻位移自标定 + 0.005 量化余量）。example/net-m2/run.bat 双进程验收 ALL GREEN（matched=1458 viol=0 maxRatio=0.140），双实例截图各含两台车。",
+   "acceptance": [
+    "回环会话全链路：握手 entityId=2 / 输入上送一致 / 插值误差 ≤ 一个快照间隔 / 断链回收干净（net-tools session-loopback，ctest net-m2-session 锚定 session-loopback : PASS）",
+    "数值锚：run.bat 双进程真实日志 verify-m2 matched=1458 missing=0 viol=0 maxRatio=0.140 PASS（阈值 = auth 相邻位移自标定，轴对齐口径见 NETCODE-TOOLS-GUIDE §3）",
+    "检查器灵敏度：精确 lerp 必过 + 注入 0.5m 偏移必炸（verify-m2 --selftest，ctest net-m2-verify 锚定）",
+    "负向：auth/interp 缺失/错配显式 FAILED exit 1（ctest net-m2-verify-negative WILL_FAIL + run.bat findstr 三重）",
+    "双实例同场景截图：server.png / client.png 各含两台黄色线框车体 + Net Status 窗口（evidence-only 不做 MD5 基线：包到达时序实时相关）"
+   ],
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径 0/1/2）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "session-loopback",
+     "name": "session-loopback：回环会话全链路（握手/输入/快照插值界/回收）",
+     "kind": "tool",
+     "note": "单进程 ServerSession+ClientSession 127.0.0.1 交替泵，假载具轨迹 f(tick) 解析确定性；断言 = 加入/Welcome entityId=2/输入上送一致/插值误差 ≤ 相邻 auth 位移 + 量化余量/断链 left+会话态复位。端口 29197。",
+     "args": [
+      "session-loopback"
+     ],
+     "expectExit": 0,
+     "expectLog": "session-loopback : PASS",
+     "command": "net-tools session-loopback"
+    },
+    {
+     "id": "verify-selftest",
+     "name": "verify-m2 --selftest：数值锚检查器灵敏度",
+     "kind": "tool",
+     "note": "合成日志（auth = 解析轨迹、interp = τ=0.3 精确 lerp）必 PASS（ratio≈0.29），注入 +0.5m 偏移样本必 FAIL——证明检查器抓得住真违约，不是恒过。",
+     "args": [
+      "verify-m2",
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "verify-m2 selftest: PASS",
+     "command": "net-tools verify-m2 --selftest"
+    },
+    {
+     "id": "verify-negative",
+     "name": "负向：auth/interp 文件缺失显式拒绝",
+     "kind": "tool",
+     "note": "日志打不开必须 FAILED + exit 1，不许静默假 PASS（ctest net-m2-verify-negative WILL_FAIL 同口径）。",
+     "args": [
+      "verify-m2",
+      "--auth",
+      "missing-auth.log",
+      "--interp",
+      "missing-interp.log"
+     ],
+     "expectExit": 1,
+     "expectLog": "verify-m2 : FAILED",
+     "command": "net-tools verify-m2 --auth missing-auth.log --interp missing-interp.log"
+    }
+   ]
   }
  ]
 }

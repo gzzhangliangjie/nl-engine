@@ -25,6 +25,8 @@
 
 ### M-NET0 — 传输层：ENet vendored + `nl/net/` 薄封装 + echo tool 卡
 
+> **状态：已落码（2026-11-13，`feat/net` f8eedc3 / 0f387fc / ad4bced）**。DX12 全链验收通过（构建+selftest 16/16、ctest 5/5、run.bat ALL GREEN、第 108 张版本卡 `net-m0`）；VULKAN ctest 收尾见 MILESTONES 节。踩坑 6 条留档 `NETCODE-TOOLS-GUIDE.md §1.4`。
+
 - **目标**：双进程可靠建链、双向回显，亲眼可见。
 - **任务**：
   1. `thirdparty/enet/`：vendored ENet（上游 lsalzman/enet，目标 v2.x 最新 tag；许可 MIT）、`VENDOR.md`、LICENSE；CMake 纯源码接入（Win32 winsock2 路径，零新外部依赖）。
@@ -35,6 +37,8 @@
 
 ### M-NET1 — 序列化层：bitsery vendored + 载具 transform 快照编解码
 
+> **状态：已落码（2026-11-13，`feat/net` `7c01a6e` 起）**。线格式 243 bits → 31 bytes 定死（契约 = `Snapshot.hpp` 头注释 + `NETCODE-TOOLS-GUIDE.md` §2.1）；往返 bytes 级 ctest + 量化精度断言全绿；载荷实测 31 B vs 46 B（-32.6%）、enc ~350ns / dec ~200ns 落档 §2.3；证据图 preview 挂第 109 张卡 `net-m1`。VULKAN 收尾见 MILESTONES 节。
+
 - **目标**：transform 快照位打包编码 / 解码逐字节稳定，载荷实测落档。
 - **任务**：
   1. `thirdparty/bitsery/`：vendored（上游 fraillt/bitsery v5.2.5，MIT，header-only）、`VENDOR.md`、LICENSE。
@@ -43,6 +47,8 @@
 - **验收判据**：encode→decode 往返 bytes 级一致（ctest）+ 量化误差 ≤ 声明精度（数值断言）+ tool 卡（usage / 正向 / 负向：截断流报错）+ 实测表归档。
 
 ### M-NET2 — 服务器权威最小闭环：两实例同场景位置一致
+
+> **状态：已落码（2026-11-13，`feat/net`）**。Sync 层（控制消息统一头 magic+proto+type + static_assert 锁尺寸 / InterpBuffer kCapacity=32 + extraTicks 帧间相位 / ServerSession 16 槽位 / ClientSession）+ DebugScene 多载具槽位（tombstone 保槽位号，slot0 保形）+ viewer `--net-server`/`--net-client`（互斥前置校验 exit 2，NetGuard RAII）+ HUD Net Status（default-off）+ `net-tools` `session-loopback`/`verify-m2`（阈值自标定）+ 第 110 张卡 `net-m2`。验收：ctest net 族 12/12 双后端、regression net-m2 4/4、run.bat 六段 ALL GREEN（matched=1458 viol=0 maxErr=0.0008 maxRatio=0.140）、双实例截图两台车。归档 = `NETCODE-TOOLS-GUIDE.md` §3 + `MILESTONES.md` NET M-NET2 节。已知边界：双进程行驶段仅慢速蠕动（ENet CONNECT ~1s 赢不了无节流帧率时序），运动插值由 selftest 分数相位 τ=0.3 + loopback 运动轨迹覆盖；行驶段循环 demo 旗标挂 M-NET3。
 
 - **目标**：一台 server + 至少一台 client 连入同场景，client 看到彼此载具位置插值跟随，亲眼可见截图。
 - **任务**：
@@ -53,6 +59,8 @@
 - **验收判据**：数值锚 = client 侧远端载具插值位置与 server 权威轨迹同 tick 偏差 ≤ 插值缓冲一个快照间隔（工具输出断言）；截图 = 双实例同场景可见一致画面；`regression.py --only net-m2` 双后端过 + 既有 107 张卡抽 2~3 条无回归。
 
 ### M-NET3 — 打磨与收官：`net-done`
+
+> **状态：已落码（2026-11-13，`feat/net`）**。① `--interp-delay <ticks>` 外置 CLI（默认 2.0，1.0..8.0 越界 exit 2）；② server 优雅关服（`NetServer::Impl::destroy` 逐 peer disconnect + flush——对端立即感知，不等 ENet 默认超时）；③ client 断链边沿（welcomed true→false → 回收全部幽灵 + 日志锚 + HUD `disconnected` 态，继续跑不崩）；④ `session-loopback` 扩被动断链段（`passiveClose=clean` 锚纳入 PASS）。验收：loopback 300 ticks 全 PASS、ctest net 族 12/12 双后端、run.bat 全段 ALL GREEN（含真实时序断链注记命中）、全量 regression 双后端（tag 收口口径）+ `server.py --check`、tag `net-m3` + `net-done` + `milestone/net-done` 分支（大版本收官纪律 5b）。归档 = `NETCODE-TOOLS-GUIDE.md` §4 + `MILESTONES.md` NET M-NET3 节。
 
 - **目标**：断线 / 重连 / 参数打磨 + 全量总闸收官。
 - **任务**：插值缓冲参数（缓冲长度）外置 CLI；异常路径（server 退出 / client 断线后本地继续跑不崩）；`docs/net/NETCODE-TOOLS-GUIDE.md` 归档；`MILESTONES.md` 四栏；tag `net-m3` + `net-done` + `milestone/net-done` 分支（大版本收官纪律 5b）。

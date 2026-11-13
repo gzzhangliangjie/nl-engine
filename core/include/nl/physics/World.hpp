@@ -324,6 +324,23 @@ public:
     DriveViewState driveState() const;
     DriveChassisState chassisState() const;      // Q-D3-4: camera b-segment hook
 
+    // ---- M-NET2: scenario 2 多载具（服务器权威每 client 一台 / 客户端幽灵位）----
+    // 槽位号从 0 起（slot 0 = build(2) 时的既有单车，行为逐位保形）。
+    // addVehicle 失败返回 -1（lastError 置因）；removeVehicle 为 tombstone——
+    // 其余槽位号不变，仅回收约束与刚体。
+    int  addVehicle(float spawnX, float spawnZ);
+    bool removeVehicle(int slot);
+    void setVehicleInput(int slot, const DriveInputState& input);
+    // 单槽 POD 回读（不合法 slot / 未用槽 = valid=false）。
+    DriveChassisState vehicleChassisState(int slot) const;
+    // 幽灵位专用：直接按米位置 + 单位四元数摆位（DontActivate；客户端不 step，
+    // 刚体保持到下一次 teleport）。quat = (x,y,z,w)。
+    void teleportVehicle(int slot, const float pos[3], const float quat[4]);
+    // 单槽完整位姿回读（快照编码源：位置米 + 四元数 xyzw + 线速度 m/s）；
+    // 未用槽返回 false。
+    bool vehicleFullPose(int slot, float pos[3], float quat[4], float vel[3]) const;
+    int  activeVehicleCount() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

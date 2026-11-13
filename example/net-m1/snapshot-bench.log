@@ -1,0 +1,6 @@
+snapshot-bench : count=20000 avgBytes=31.00 wireBits=243
+snapshot-bench : encode=372 ns/op decode=217 ns/op
+snapshot-bench : maxPosErr=0.000610 m maxQuatErr=0.068528 deg maxVelErr=0.005001 m/s
+field-bits     : tick=32 id=16 pos=96 quat=51 vel=48
+baseline       : naive=46 B encoded=31 B saving=32.6%
+snapshot-bench : OK

@@ -1,0 +1,12 @@
+net-tools - nl-engine transport acceptance tool (NET M-NET0, vendored ENet 1.3.18)
+usage:
+  net-tools echo [--port P] [--reliable N] [--unreliable N] [--payload B] [--timeout-ms T]
+                        single-process loopback echo (127.0.0.1, one-thread pump); exit 0=ok 2=timeout
+  net-tools echo-server <port> [--packets N] [--max-clients K] [--timeout-ms T]
+                        run echo server until N packets served; exit 0/1/2
+  net-tools echo-client <host> <port> [--packets N] [--rate R] [--loss P] [--payload B] [--timeout-ms T]
+                        run echo client; exit 0=all echoed 1=connect fail 2=loss/timeout
+  net-tools loss-sweep [--port P] [--packets N] [--timeout-ms T]
+                        per-level loss injection 0..90% (seed 1234); exit 0/2
+  net-tools selftest    deterministic loopback assertions; exit 0=PASS 1=FAIL
+  net-tools version     print vendored ENet version

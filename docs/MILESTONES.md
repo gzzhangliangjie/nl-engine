@@ -3141,3 +3141,95 @@
 - **完成情况**：🟢 resume 三路验证：全沿用 0 重跑（--only perf-m1 二次跑 0s）/ exe touch 后按后端精确重跑 3 条（vulkan 沿用）/ 常规全跑不受影响（6/6 ALL GREEN）；🟢 bat 门禁全量 114 文件 0 违规 + analyze-crash.bat 实测可执行。
 - **踩坑**：门禁「0 违规」不等于覆盖全——扫描范围本身有洞；resume 的沿用资格必须绑 exe mtime，否则中断期间重编过的 exe 会让旧通过结果假绿。
 - **提交版本**：本节收口 commit；无 GPU 渲染路径改动，不 bump kStage、不新拍基线。
+## NET M-NET0 — 传输层：ENet vendored + nl/net 薄封装 + echo tool（2026-11-13）
+
+**动作**：第 12 步网络栈第一里程碑（A 类并行轨道 `net`，wt `nl-engine-net` 起点 master `a85d53b`，claim M-NET0）。① vendored ENet **1.3.18** @ `5a9c537`（MIT，gh-proxy 浅克隆；`thirdparty/enet/VENDOR.md` 溯源 + LICENSE 入库；入库子集 = 9 头 + 8 TU（win32.c，unix.c 与上游脚手架剔除）+ 自写 CMakeLists 静态库 `nl_enet`（Windows 链 winmm/ws2_32，零新运行时 DLL）。② `nl/net` 传输层薄封装：`core/include/nl/net/Net.hpp` + `core/src/net/Net.cpp` **PIMPL**（enet_ 符号单 TU 隔离，对齐 nav/physics 先例）；`NetServer`/`NetClient` 事件泵 + `Channel::Reliable/Unreliable` 双通道（0/1）+ `beginConnect`（非阻塞发起，回环必需）/ `connect`（阻塞握手，双进程用）+ `--linger` 由任务书落为 `echo-server --linger-ms`。③ `net-tools`（新 exe，只链 nl_core 零图形 API）：`echo` 单进程回环 / `echo-server`+`echo-client` 双进程（`--loss` 确定性丢包注入，种子 1234）/ `selftest` / `version`；退出码 0/1/2 对齐 nav-tools。④ ctest 5 条双后端（echo / selftest / version / 负向 usage+connect 各 WILL_FAIL）。⑤ 展示台第 108 张版本卡 `net-m0`（6 用例 kind:tool）+ `example/net-m0/run.bat` 七段交代。⑥ 文档：`NETCODE-PLAN.md`（本节验收落点）、`NETCODE-TOOLS-GUIDE.md`（新建 §1）、本台账。拍板权威落点 `NETCODE-OPTIONS.md §6`（Q-N1~N6 全拍板）。
+
+**提交版本**：`feat/net` `f8eedc3`（主实现）+ `0f387fc`（回环握手死锁修复）+ `ad4bced`（loss demo 收尾口径）；annotated tag `net-m0`（验收通过后打）。`kStage` 保持 `S8.2`，既有 107 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 DX12 全量构建 + selftest 16/16；`nl_enet` 静态库编译链接零警告（C 8 TU）。
+- 🟢 直拉：`echo` 32/32 + 64/64 `echo OK` exit 0；`selftest net: PASS`；`version` `enet : 1.3.18`；死端口 `connect : FAILED` exit 1。
+- 🟢 ctest DX12 `net-m0` 5/5 全绿（`--repeat until-pass:3`）。
+- 🟢 `example/net-m0/run.bat` **ALL GREEN exit 0** 七段全过：双进程零丢失 `sent=32 recv=32 loss=0.0% rttAvg=0.2ms` + server `served=32`；30% 丢包注入实测 `sent=32 recv=22 loss=31.2%` exit 2（种子 1234 确定性）；死端口负向显式拒绝。
+- 🟢 手动后台 server + 前台 client 独立复证双进程链路（沙箱 start 回收问题与库逻辑解耦）。
+- 🟢 VULKAN 后端：全量构建 + selftest 16/16 + `net-m0` ctest 5/5 全绿（`--repeat until-pass:3`）。
+
+**踩坑情况**
+1. **ENet 服务器只在 service 时处理握手包**：单进程回环 `connect()` 阻塞等 CONNECT 期间同线程 server 不泵 → 3000ms 必超时（直拉实锤）。修 = `beginConnect()` 非阻塞发起 + 回环主循环双 host 交替泵；阻塞 `connect()` 保留给双进程（对端自泵）。
+2. **1.3.18 无 `enet_linked_version_string`**：只有 ENET_VERSION 宏族 → `version()` 宏拼接（纯源码直编头即链接版本）。
+3. **ctest `WILL_FAIL TRUE` + `PASS_REGULAR_EXPRESSION` 组合语义 = 正则不得命中**（实测反向：`Required regular expression found` 即 FAIL）→ 负向例只留 WILL_FAIL，FAILED 文本锚由 run.bat findstr 兜底（对齐 anim-tools）。
+4. **沙箱回收 `start "title" /min` 派生子进程**（server.log 空文件实锤）→ run.bat 改 `start /b ""` 直起 exe，子进程继承重定向句柄沙箱实测存活。
+5. **run.bat 非 ASCII 破坏解析**：rem 注释 em dash 在 GBK 控制台把后续行拆碎（`'m' 不是内部或外部命令`）→ ASCII only 重申。
+6. **入站丢包无重发**：server 服务满即退会让模拟丢包的 client 被断链事件掐掉 → `--linger-ms` 让 server 撑过 client deadline。
+
+**下一步**：VULKAN ctest 补跑 → tag `net-m0` → M-NET1（bitsery vendored + 载具 transform 快照编解码 + 载荷实测）。
+
+## NET M-NET1 — 序列化层：bitsery vendored + 载具 transform 快照编解码（2026-11-13）
+
+**动作**：第 12 步网络栈第二里程碑（A 类并行轨道 `net`，claim M-NET1）。① vendored bitsery **v5.2.5** @ `9bebfd4`（MIT header-only 62 头全量，`thirdparty/bitsery/VENDOR.md` 溯源 + LICENSE 入库；include 仅 PRIVATE 进 `SnapshotCodec.cpp` 单 TU，`Snapshot.hpp` 零 bitsery 类型）。② 线格式 243 bits = tick32 + entityId16 + 位置 3×32（mm 定点饱和钳制）+ 朝向 smallest-three 51（2b 索引 + 1b 符号 + 3×16b 线性映射 [-1/√2,1/√2]）+ 速度 3×16（cm/s）→ **31 bytes**（naive float 46 B 省 32.6%）；严格解码（截断流/尾部垃圾/对齐残位脏数据全拒）。③ `net-tools` 增 `snapshot-selftest`（256 样本往返 bytes 级 + 精度断言 + 边界 + 3 类负向）/ `snapshot-bench`（seed 1234 确定性实测）/ `snapshot-decode`（hex 负向卡）；ctest 增 3 例（双后端）。④ 展示台第 109 张版本卡 `net-m1`（4 用例 kind:tool，preview = `tools/make-net-m1-evidence.py` 从真实 bench 输出渲染的逐字段位宽对比图，纯标准库 PNG）+ `example/net-m1/run.bat` 五段。⑤ 文档：`NETCODE-TOOLS-GUIDE.md` §2（线格式契约 / 实测表 / 踩坑 5 条）、`NETCODE-PLAN.md` 状态、本台账。
+
+**提交版本**：`feat/net` `7c01a6e`（主实现）+ 后续文档/证据 commit；annotated tag `net-m1`（验收通过后打）。`kStage` 保持 `S8.2`，既有 108 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 DX12 构建 + `snapshot-selftest` PASS（256 样本，31 bytes，pos≤0.000610m / quat≤0.055953deg / vel≤0.004997ms）。
+- 🟢 `snapshot-bench` 2 万样本：avgBytes=31.00、enc ~350ns dec ~200ns、naive 46 B 省 32.6%、`OK` 锚。
+- 🟢 负向三重：截断流 / 尾部垃圾 / 脏残位全拒；`snapshot-decode 01020304` 显式 FAILED exit 1。
+- 🟢 证据图 `net-m1-evidence.png`（真实 bench 输出渲染，视觉核验：quat/vel 行压缩直观可见）。
+- 🟢 零回归抽查：`regression.py --only` s8.2 2/2 bytes + log-m0 4/4 bytes，ALL GREEN。
+- 🟢 VULKAN：全量构建 + `net-m` ctest 9/9 全绿 + `run.bat` ALL GREEN（双后端对称）。
+
+**踩坑情况**
+1. **bitsery 可增长 buffer 的 `vector::size()` 不可信**：`OutputBufferAdapter` 增长策略会把 size 撑到超过实际写入 → 首版 encode 返回 0（`writtenBytesCount()` 才是真实字节数），直拉 `snapshot-selftest` 实锤。
+2. **量化断言阈值必须 = 声明精度而非半步**：0.5mm 半步阈值被 float 存储噪声击穿（实测 0.00061 m）；探针逐分量核对定位 quat 端到端 0.069 度的真实来源 = 输入 float 归一化范数亏差经 smallest-three 单位范数重建 + `2·acos` sqrt 放大（线格式量化本身仅 ~0.002 度，与 UE FQuat 压缩同级）——盲调阈值被探针纠偏。
+3. **函数参数 `float q[4]` 退化为指针**：range-for 报 C2672，索引循环替代。
+4. **`InputBufferAdapter<const uint8_t*>`**：raw pointer 有官方 `BufferAdapterTraits<const T*>` 特化（`traits/core/traits.h`），const 缓冲零拷贝解码可行。
+
+**下一步**：VULKAN 收尾 → tag `net-m1` → M-NET2（服务器权威最小闭环：`--net-server/--net-client` + GameClock 驱动 Jolt + 快照不可靠通道 + alpha 插值渲染）。
+
+## NET M-NET2 — 服务器权威最小闭环：两实例同场景（2026-11-13）
+
+**动作**：第 12 步网络栈第三里程碑（A 类并行轨道 `net`，claim M-NET2）。① `nl/net/Sync.hpp/.cpp` 同步层（零第三方类型）：控制消息 pack(1) POD **统一线格式头 magic(4)+proto(4)+type(1) 恒在 offset 0..8**（`kSessionMagic=0x4E4C534E`/"NLSN"、`kSessionProto=1`，`ctrlHeadOk` 单点校验 + static_assert 锁尺寸：Hello 25 / Welcome 16 / Input 28 / EntityGone 14 / Leave 9 B）；`InterpBuffer` kCapacity=32 环（tick 单调 push 丢旧保新，`eval(delayTicks, out, evalTickOut, extraTicks=0)` lerp/nlerp 短弧，未预热返 false）；`ServerSession`（kMaxEntities=16 槽位：Hello→分配实体+建输入槽+回 Welcome / Input 缓存 / Leave+PeerDisconnected→回收+广播 EntityGone）；`ClientSession`（disconnect 复位全部会话态）。② physics `World` 多载具槽位：`VehicleSlot{constraint,controller,chassis,chassisId,input,used}` vector + tombstone（removeVehicle 摘 listener+constraint+body 后保槽位号稳定，slot0 逐位保形）；新 API addVehicle/removeVehicle/setVehicleInput/vehicleChassisState/teleportVehicle/vehicleFullPose/activeVehicleCount。③ viewer 双模式 `--net-server <port>` / `--net-client <host:port>[,name]`（互斥+端口+必须 scenario 2 前置校验 exit 2，NetGuard RAII）：server = 60Hz GameClock 驱动 Jolt 权威模拟 + `vehicleFullPose`→快照不可靠通道按 tick 广播 + auth 行日志；client = 输入上送 + 快照入插值缓冲（`kInterpDelayTicks=2.0`，相位 `extra=min((nowMs−arrival)/kNetTickMs, 0.95)`）→ `teleportVehicle` 渲染 + interp 行日志 + EntityGone 槽位回收；HUD `Net Status` 面板（NetStatusUi POD default-off，画零东西零基线触碰）。④ `net-tools` 增 `session-loopback`（单进程全闭环 300 ticks 逐样本误差断言 + disconnect 核对）/ `verify-m2`（--selftest：精确 lerp 必过 + 注入 +0.5m 必炸；--auth/--interp 按 tick 配对，阈值 = auth 相邻位移自标定 + 0.005，minSamples 防假 PASS）；ctest 增 3 例双后端。⑤ 第 110 张版本卡 `net-m2`（4 用例 kind:tool，`exe` 字典）+ `example/net-m2/run.bat` 六段 + 双实例截图证据（PNG evidence-only 不做 MD5 基线，双进程含实时时序不可复现字节级）。⑥ 文档：`NETCODE-TOOLS-GUIDE.md` §3 归档、`NETCODE-PLAN.md` 状态、本台账。
+
+**提交版本**：`feat/net`（M-NET2 主实现 + 文档 commit）；annotated tag `net-m2`（验收通过后打）。`kStage` 保持 `S8.2`，既有 109 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 ctest net 族 12/12 双后端 `--repeat until-pass:3` 全绿（m0 5 + m1 3 + m2 3 各双后端）。
+- 🟢 `regression.py --only net-m2` 双后端 4/4 ALL GREEN；抽查 drive-m3 6/6、drive-m2 5/5 保形（m0.5 5 FAIL = showcase 冻结 exe 未在本 wt 构建，环境性非回归；`viewer --selftest` 直跑 16/16 PASS 佐证）。
+- 🟢 run.bat 六段 ALL GREEN exit 0：loopback（300 ticks maxErr≈0 maxBound=0.1853）→ verify selftest → 双进程（锚 listening/joined/ghost/interp tick 全中）→ `verify-m2` **matched=1458 viol=0 maxErr=0.0008 maxRatio=0.140**（≤ 一个快照间隔）→ 负向错配 FAIL exit 1 → `shutdown ok` + `entity 2 left`。
+- 🟢 双实例截图 `server.png`/`client.png` 各含两台黄色线框车体（791/812 场景区黄色像素）；client 行驶段 interp tick 225→443 px −5.98→−6.87 有位移。
+- 🟢 断链回收实证：client 退出后 server 广播 EntityGone + removeVehicle（tombstone），双实例像素 diff 仅差 client 载具区域。
+
+**踩坑情况**
+1. **控制消息线格式头错位**：首版 CtrlInput/CtrlEntityGone 漏 proto 字段（type 落 offset 4），`ctrlHeadOk` 校验 d[8] → 所有 Input 包静默拒收；loopback `input=BAD` 探针定位后统一全部消息为 magic+proto+type 头 + static_assert 锁尺寸。
+2. **Hello 建实体必须同步建输入槽**：只填 peers_[slot] → hasInput=0 拿不到 client 输入；补 `inputs_[slot] = {ent, InputState{}}`。
+3. **验收探针禁一次性锁存**：`inputOk` 首次比较发生在 welcome 前的输入丢弃期 → 改每迭代持续检查。
+4. **插值整数 tick 采样无真 alpha**：target 恒整数 → `eval` 加 `extraTicks` 相位参数（viewer 实钟折算上限 0.95，单测传 0）。
+5. **双进程握手时序竞争**：无节流 ~350fps 下 210 tick 行驶窗口仅 0.6s，ENet CONNECT ~1s 重试赢不了 → run.bat `start /b` + ping 延后 2s；确定性验收走 loopback/selftest 工具锚不依赖双进程时序。
+6. **verify-m2 阈值自标定**：取 auth 轨迹相邻位移 + 0.005（免速度模型假设、抗偶发丢包），minSamples 防证据不足假 PASS。
+7. **regression 卡 `exe` 字段形状**：字符串会炸 regression.py（`'str' object has no attribute .get`）→ 必须双后端字典。
+8. **CTest 路径**：bash 不在 PATH，用完整路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`。
+
+**下一步**：tag `net-m2` → close + release --done → M-NET3（打磨收官：插值缓冲参数外置 CLI / 异常路径不崩 / GUIDE §4 归档 / tag `net-m3` + `net-done` + `milestone/net-done` 分支大版本收官纪律 5b；行驶段循环 demo 旗标一并）。
+
+## NET M-NET3 — 打磨收官：`net-done`（2026-11-13）
+
+**动作**：第 12 步网络栈第四里程碑（A 类并行轨道 `net`，claim M-NET3，网络栈大收官）。① `--interp-delay <ticks>` 插值回看深度外置 CLI（默认 2.0，范围 1.0..8.0 越界 exit 2；替换 `kInterpDelayTicks` 常量，eval 相位 / HUD delay 行同源消费；kCapacity=32 编译期环属实现细节不外置）。② server 优雅关服：`NetServer::Impl::destroy` 对每个活跃 peer `enet_peer_disconnect` + `enet_host_flush` 再 destroy——对端**立即**收断链事件，不再等 ENet 默认超时 ~30s。③ viewer client 断链边沿：`welcomed` true→false 边沿 = server 断链 → removeVehicle 回收全部远端幽灵 + 日志锚 `client: server disconnected, ghosts removed, continuing locally` + HUD 增 `disconnected` 态（welcomed 过但断链，区别于 connecting）；client 零本地模拟继续跑不崩。④ `session-loopback` 尾段扩被动断链段（独立新会话套不碰 M-NET2 断言：泵到 welcomed → server.stop 优雅关服 → client 循环 pump → 断言 welcomed/connected/localEntityId/entityCount 全复位），锚 `session      : passiveClose=clean` 纳入 PASS 断言。⑤ run.bat 双进程段加 M-NET3 断链软注记（退出顺序实时相关，viewer 层锚不强制；确定性锚 = loopback passiveClose）。⑥ 文档：`NETCODE-TOOLS-GUIDE.md` §4 归档、`NETCODE-PLAN.md` M-NET3 状态行、本台账。
+
+**提交版本**：`feat/net`（M-NET3 主实现 + 文档 commit）；annotated tag `net-m3`（本里程碑）+ `net-done`（网络栈大收官）+ `milestone/net-done` 分支（大版本收官纪律 5b）。`kStage` 保持 `S8.2`，既有 110 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 `--interp-delay` 越界双向实测：0.5 / 9 → exit 2 + 明确错误行。
+- 🟢 loopback 300 ticks 全 PASS：`passiveClose=clean`（优雅关服 → client 会话态全复位）。
+- 🟢 ctest net 族 12/12 双后端 `--repeat until-pass:3` 全绿。
+- 🟢 run.bat 六段 ALL GREEN exit 0（matched=213 viol=0 maxErr=0.0007 maxRatio=0.087），**软注记命中**：server 先退 → client.log 出现 `client: server disconnected`（优雅关服实时感知 + 幽灵回收），client 跑完全部帧 exit 0 = 断链后本地继续跑不崩实证。
+- 🟢 全量 regression 双后端一次（tag 收口口径）：**844 条 = 774 bytes + 1 near + 69 FAIL**；69 条逐条甄别**零行为回归**——① ~60 条 showcase 冻结 exe 缺失（m0.1~s1.0，本 wt 无冻结基线，环境性，M-NET2 收官同款定性）；② gl4 tick/pause 4 条 = `script/examples/orbit` dotnet 产物缺失（已补建 `dotnet build`，复跑 6/6 全绿）；③ m-sc0 3 条 + s3.0/dag 2 条 = **regression.py 并发竞争**（`--jobs 4` 下双后端同时写 s5 重编共享目录 / dag 导出共享 JSON；串行复跑 m-sc0 10/10、s3.0 8/8 全绿；工具既有问题，挂独立后续项「regression.py 多进程分片 worker 隔离」）。`tools/showcase/server.py --check` OK。
+- 🟢 near 1 条 = ecs-e1b scale VULKAN GPU 取整噪声（1 像素 maxDelta 1/255，既有分档内）。
+
+**踩坑情况**
+1. **`enet_host_destroy` 不通知 peer**：server 退出直拆 socket，client 端等默认超时 ~30s 才感知——「server 退出 client 不崩」缺的不是崩溃处理而是**感知时延**；优雅关服（逐 peer disconnect + flush 后 destroy）不落，client 断链边沿永远测不出即时语义。
+2. **被动断链验证不能依赖双进程时序**：server/client 帧数按无节流帧率折算都是秒级，退出顺序实时相关 → run.bat 只做软注记，确定性验证放 loopback 内独立会话套。
+3. **ENet client 收断链后 `connected()` 自动翻 false**（peer state = DISCONNECTED）——「welcomed 过但断开」的 `disconnected` 态需 viewer 侧自行跟踪边沿，Sync 层零新增状态位。
+4. **regression.py `--jobs 4` 并发写共享路径竞争**（本轮甄别实锤，非本轮引入）：m-sc0 s5 步骤拷贝工程重编写共享目录、s3.0/dag `--export` 写固定 JSON，双后端并发同跑即互踩（退出码 1）；手动单跑 + 串行 regression 全绿。甄别纪律：全量 FAIL 不能只看条数，必须逐条查 detail 分「exe 缺失 / 产物缺失 / 竞争 / 行为回归」四类定性。
+
+**下一步**：tag `net-m3` + `net-done` + `milestone/net-done` 分支 → close + release --done → 网络栈第 12 步收官。独立后续项（均需单独拍板）：`regression.py` 多进程分片 worker 隔离（并发写共享路径竞争本轮实锤）、行驶段循环 demo 旗标（双进程慢速蠕动段，Q-N5 最小闭环外扩展）、`example/net-m2/run.bat` VULKAN 口径（固定 dx12 exe，net 族 ctest 已双后端覆盖）、多物体场景复验保边（S12 遗留同款）。
