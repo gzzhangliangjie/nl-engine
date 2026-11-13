@@ -81,6 +81,14 @@ struct ApiTable
     void* logWrite;
     // Log.logSetFilter — 设置过滤指令（setFilter 全局面替换口径："nl:info,renderer=warn"）。rc：0=ok / 1=指令非法（error=原因文本，静态缓冲账本）/ 4=非法参数
     void* logSetFilter;
+    // Camera.cameraGetPose — 现役相机位姿一次读回（eye 世界坐标 / yaw+pitch 度 / fovY 度 / mode 码）。任一 out 指针可 NULL 跳过该字段。rc：0=ok / 1=未绑 CameraSource / 4=非法参数
+    void* cameraGetPose;
+    // Camera.cameraSetPose — 现役相机位姿写入（模式感知落点：orbit=yaw/pitch/dist=|eye| setOrbit + 种子；free=setPose 直接落；chase=snapEyeTo+setPitch，yaw 由车体航向驱动忽略入参；track=轨迹数据主权，回 kCamModeUnsupported）。eye 指针 NULL = kCamBadArg。rc：0=ok / 1=未绑 CameraSource / 2=非法参数 / 3=该模式不支持脚本写位姿
+    void* cameraSetPose;
+    // Camera.cameraGetFov — 现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死）
+    void* cameraGetFov;
+    // Camera.cameraSetFov — 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource
+    void* cameraSetFov;
 };
 
 } // namespace nl::script

@@ -45,9 +45,17 @@
 //            非法指令显式报错（error 带原因）/
 //        s9b 解绑路径：timeSetClock/inputSetState/inputSetActionMap(nullptr) ->
 //            NoClock/NoSource（不隐式建表拍板），Log 全局面不受影响
+//     s10 Camera 绑定（M-SC6，需第 6 个参数给出 camera 示例工程目录）：
+//        s10a 假适配源罐头读回锚（GetPose eye/yaw/pitch/fov/mode）+ SetPose rc
+//            与 C++ 捕获核 {4,5,6,45,15} + BadArg（eye null）+ fov 写/clamp 读回
+//            （500 -> 120，clamp [20,120] 与 viewer 适配源同构）/
+//        s10b track 模式（mode=3）：GetPose 照常 + SetPose ModeUnsupported（轨迹
+//            数据主权）+ fov 照常写（模式统一生效）/
+//        s10c 解绑路径：cameraSetSource(nullptr) -> NoSource / GetFov NaN
+//            （f32 返回无 rc 通道账本特例）
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput
+//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput script/examples/camera
 //   nl-script run script/examples/hello --args ok
 //   nl-script run script/examples/console --api
 //   nl-script run script/examples/ecs --api
@@ -238,7 +246,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 // ---- selftest ----
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
-                const fs::path& bootstrapDir, const fs::path& timeDir) {
+                const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -919,6 +927,103 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s10 Camera 绑定（M-SC6；camDir 为空 = 跳过，同 s6~s9 口径）----
+    if (!camDir.empty()) {
+        if (!dotnetBuild(camDir.string(), {})) {
+            expectTrue(false, "s10-pre dotnet build camera example");
+            std::printf("nl-script selftest: FAIL (camera binding build)\n");
+            return 1;
+        }
+        auto cso = locateOutput(camDir, {});
+        expectTrue(cso.has_value(), "s10-pre locate CameraScript build output");
+        if (cso) {
+            const std::string camType = "NlScript.Examples.CameraScript, " + cso->assemblyName;
+            nl::script::EntryPointFn camBound = nullptr, camTrack = nullptr, camUnbound = nullptr;
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "BoundProbe", &camBound);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "TrackProbe", &camTrack);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "UnboundProbe", &camUnbound);
+            expectTrue(result.ok && camUnbound != nullptr, "s10-pre locate camera entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry10 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 假适配源（语义与 viewer 适配源同构：fov clamp [20,120] / track 拒写 /
+                // 罐头读回）+ 捕获槽（C++ 侧终态核：脚本写进适配源的值逐位核回）。
+                static struct FakeCamSource {
+                    float eye[3] = {1.5f, 2.5f, 3.5f};
+                    float yaw = 30.0f, pitch = -10.0f, fov = 60.0f;
+                    int mode = 0;
+                    float lastSetEye[3] = {0.0f, 0.0f, 0.0f};
+                    float lastYaw = 0.0f, lastPitch = 0.0f;
+                    static void GetPose(void* ctx, float outEye[3], float* oy, float* op,
+                                        float* of, int* om) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        outEye[0] = s.eye[0]; outEye[1] = s.eye[1]; outEye[2] = s.eye[2];
+                        if (oy) *oy = s.yaw;
+                        if (op) *op = s.pitch;
+                        if (of) *of = s.fov;
+                        if (om) *om = s.mode;
+                    }
+                    static int SetPose(void* ctx, const float e[3], float y, float p) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        if (s.mode == 3) return nl::script::kCamModeUnsupported;
+                        s.lastSetEye[0] = e[0]; s.lastSetEye[1] = e[1]; s.lastSetEye[2] = e[2];
+                        s.lastYaw = y; s.lastPitch = p;
+                        return nl::script::kCamOk;
+                    }
+                    static float GetFov(void* ctx) { return static_cast<FakeCamSource*>(ctx)->fov; }
+                    static void SetFov(void* ctx, float f) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        s.fov = f < 20.0f ? 20.0f : (f > 120.0f ? 120.0f : f);
+                    }
+                } fakeCam;
+                nl::script::CameraSource camSrc{&fakeCam, &FakeCamSource::GetPose,
+                                                &FakeCamSource::SetPose, &FakeCamSource::GetFov,
+                                                &FakeCamSource::SetFov};
+                nl::script::cameraSetSource(&camSrc);
+
+                // s10a：绑定路径全断言（罐头读回 + 写路径 rc + fov clamp 读回链）
+                {
+                    auto [hit, ret] = callEntry10(camBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s10a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // C++ 侧终态核：脚本 SetPose({4,5,6},45,15) 逐位落进适配源捕获槽
+                expectTrue(fakeCam.lastSetEye[0] == 4.0f && fakeCam.lastSetEye[1] == 5.0f &&
+                               fakeCam.lastSetEye[2] == 6.0f,
+                           "s10a C++ capture: script SetPose eye {4,5,6}");
+                expectTrue(fakeCam.lastYaw == 45.0f && fakeCam.lastPitch == 15.0f,
+                           "s10a C++ capture: yaw 45 / pitch 15");
+                expectTrue(fakeCam.fov == 120.0f, "s10a C++ capture: SetFov(500) clamped -> 120");
+
+                // s10b：track 模式（mode=3）——读照常 / 写位姿 ModeUnsupported / fov 照常
+                fakeCam.mode = 3;
+                {
+                    auto [hit, ret] = callEntry10(camTrack);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10b C# TrackProbe -> 0");
+                }
+                expectTrue(fakeCam.fov == 60.0f, "s10b C++ capture: SetFov(60) ok in track (mode-uniform)");
+
+                // s10c：解绑路径（nullptr = NoSource / GetFov NaN）
+                fakeCam.mode = 0;
+                nl::script::cameraSetSource(nullptr);
+                {
+                    auto [hit, ret] = callEntry10(camUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10c C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -932,7 +1037,7 @@ void usage() {
         "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
-        "                                                     full machine-checked acceptance\n"
+        "                    [timeinputProjectDir] [cameraProjectDir]              full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -982,7 +1087,8 @@ int main(int argc, char** argv) {
         const fs::path ecsDir = argc >= 5 ? fs::weakly_canonical(argv[4]) : fs::path();
         const fs::path bootstrapDir = argc >= 6 ? fs::weakly_canonical(argv[5]) : fs::path();
         const fs::path timeDir = argc >= 7 ? fs::weakly_canonical(argv[6]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir);
+        const fs::path camDir = argc >= 8 ? fs::weakly_canonical(argv[7]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir);
     }
     usage();
     return 2;

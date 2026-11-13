@@ -72,6 +72,13 @@ inline constexpr int kLogOk = 0;
 inline constexpr int kLogBadFilter = 1;
 inline constexpr int kLogBadArg = 2;
 
+// Camera 导出错误码（v4 M-SC6）：0=ok / 1=未绑 CameraSource（宿主忘 cameraSetSource）/
+// 2=非法参数（eye 指针 NULL 等）/ 3=该模式不支持脚本写位姿（track = 轨迹数据主权）
+inline constexpr int kCamOk = 0;
+inline constexpr int kCamNoSource = 1;
+inline constexpr int kCamBadArg = 2;
+inline constexpr int kCamModeUnsupported = 3;
+
 // ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
 // 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
 // v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
@@ -92,6 +99,28 @@ void ecsSetWorld(scene::World* world);
 void timeSetClock(core::GameClock* clock);
 void inputSetState(core::InputState* state);
 void inputSetActionMap(core::ActionMap* map);
+
+// 宿主侧相机绑定源（v4 M-SC6）：现役相机经 4 个函数指针适配进 core——
+// Bindings.cpp 在 nl_core，**不能反向 include viewer**（依赖方向不变），
+// 且裸绑 CameraRig 会丢 fov 持久化与 orbit 模式控制，故落适配源形态
+// （计划「cameraSetRig」为落码前占名，实码定名 cameraSetSource，口径不变：
+// 宿主显式 set + 未绑专属错误码 + 热更窗口兜底）。
+//
+// mode 码 = viewer::CameraMode 枚举序（0=orbit/1=free/2=chase/3=track）；
+// setPose 模式感知落点（注册方实现决定）：orbit=setOrbit(yaw,pitch,|eye|)+种子 /
+// free=setPose 直接落 / chase=snapEyeTo+setPitch（yaw 由车体航向驱动，入参忽略）/
+// track=返回 kCamModeUnsupported（轨迹数据主权在轨迹文件，脚本不可写）。
+// setFov 注册方负责 clamp [20,120]（与 OrbitCamera::setFovYDegrees 同口径）后透传。
+struct CameraSource {
+    void* ctx;   // 注册方上下文（如 &ViewerCamera）
+    void (*getPose)(void* ctx, float outEye[3], float* outYawDeg, float* outPitchDeg,
+                    float* outFovY, int* outMode);
+    int (*setPose)(void* ctx, const float eye[3], float yawDeg, float pitchDeg);
+    float (*getFov)(void* ctx);
+    void (*setFov)(void* ctx, float fovYDeg);
+};
+// nullptr = 解绑（此后 Camera 导出一律 kCamNoSource——热更窗口兜底，同族口径）。
+void cameraSetSource(const CameraSource* source);
 
 // ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
 //

@@ -29,3 +29,7 @@ static_assert(std::is_same_v<decltype(&nl_inputActionVec2), int(*)(std::uint32_t
 static_assert(std::is_same_v<decltype(&nl_inputKeyIsDown), int(*)(int, int*)>, "exports.api drift: Input.inputKeyIsDown");
 static_assert(std::is_same_v<decltype(&nl_logWrite), int(*)(int, const char*)>, "exports.api drift: Log.logWrite");
 static_assert(std::is_same_v<decltype(&nl_logSetFilter), int(*)(const char*, const char**)>, "exports.api drift: Log.logSetFilter");
+static_assert(std::is_same_v<decltype(&nl_cameraGetPose), int(*)(float*, float*, float*, float*, int*)>, "exports.api drift: Camera.cameraGetPose");
+static_assert(std::is_same_v<decltype(&nl_cameraSetPose), int(*)(const float*, float, float)>, "exports.api drift: Camera.cameraSetPose");
+static_assert(std::is_same_v<decltype(&nl_cameraGetFov), float(*)(void)>, "exports.api drift: Camera.cameraGetFov");
+static_assert(std::is_same_v<decltype(&nl_cameraSetFov), int(*)(float)>, "exports.api drift: Camera.cameraSetFov");

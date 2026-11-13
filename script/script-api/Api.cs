@@ -15,7 +15,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.5.0";   // M-SC5：Time/Input/Log 域绑定面（v3 9 导出）
+        public const string Version = "0.6.0";   // M-SC6：Camera 域绑定面（v4 4 导出，ApiTable 29）
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -467,6 +467,71 @@ namespace Nl.Script.Api
                 return rc;
             }
             finally { NativeMarshal.Utf8Free(instrPtr); }
+        }
+    }
+
+    /// <summary>Camera 导出错误码（M-SC6）：ModeUnsupported = track 模式轨迹数据主权，脚本不可写位姿。</summary>
+    public static class CameraCode
+    {
+        public const int Ok = 0;
+        public const int NoSource = 1;         // 未绑 CameraSource（宿主忘 cameraSetSource）
+        public const int BadArg = 2;           // eye 指针 NULL 等
+        public const int ModeUnsupported = 3;  // track 模式：位姿主权在轨迹文件
+    }
+
+    /// <summary>现役相机位姿快照（GetPose 打包 / SetPose 解包；mode 码 0=orbit/1=free/2=chase/3=track）。</summary>
+    public readonly struct CameraPose
+    {
+        public readonly float[] Eye;   // 世界坐标 [3]
+        public readonly float Yaw;     // 度
+        public readonly float Pitch;   // 度
+        public readonly float Fov;     // fovY 度
+        public readonly int Mode;
+        public CameraPose(float[] eye, float yaw, float pitch, float fov, int mode)
+        { Eye = eye; Yaw = yaw; Pitch = pitch; Fov = fov; Mode = mode; }
+    }
+
+    /// <summary>
+    /// Camera 绑定面（M-SC6）。操作目标 = 宿主侧 cameraSetSource 绑定的现役相机适配源
+    /// （viewer 现役相机 orbit/free/chase/track 模式感知；未绑 = NoSource）。
+    /// SetPose 模式感知落点：orbit=yaw/pitch/dist=|eye| / free=setPose / chase=snapEyeTo+pitch
+    /// （yaw 由车体驱动忽略） / track=ModeUnsupported。SetFov 注册方 clamp [20,120]。
+    /// </summary>
+    public static unsafe class Camera
+    {
+        /// <summary>位姿一次读回。rc：0=ok / 1=NoSource / 4=非法参数。</summary>
+        public static int GetPose(out CameraPose pose)
+        {
+            pose = default;
+            var fn = Marshal.GetDelegateForFunctionPointer<CameraWiring.CameraGetPoseFn>(CameraWiring._cameraGetPose);
+            float* eye = stackalloc float[3];
+            int rc = fn(eye, out float yaw, out float pitch, out float fov, out int mode);
+            if (rc == CameraCode.Ok)
+                pose = new CameraPose(new[] { eye[0], eye[1], eye[2] }, yaw, pitch, fov, mode);
+            return rc;
+        }
+
+        /// <summary>位姿写入（模式感知落点见类注释）。rc：0=ok / 1=NoSource / 2=BadArg / 3=ModeUnsupported。</summary>
+        public static int SetPose(in CameraPose pose)
+        {
+            if (pose.Eye == null || pose.Eye.Length != 3) return CameraCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<CameraWiring.CameraSetPoseFn>(CameraWiring._cameraSetPose);
+            fixed (float* eye = pose.Eye)
+                return fn(eye, pose.Yaw, pose.Pitch);
+        }
+
+        /// <summary>fovY 度读回。未绑 = NaN（f32 返回无 rc 通道——生命周期账本特例，float.IsNaN 判未绑）。</summary>
+        public static float GetFov()
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<CameraWiring.CameraGetFovFn>(CameraWiring._cameraGetFov);
+            return fn();
+        }
+
+        /// <summary>fovY 度写入（clamp [20,120] 后模式统一生效）。rc：0=ok / 1=NoSource。</summary>
+        public static int SetFov(float fovY)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<CameraWiring.CameraSetFovFn>(CameraWiring._cameraSetFov);
+            return fn(fovY);
         }
     }
 }

@@ -3338,6 +3338,56 @@ static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
 // 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
 // SceneObjectDesc / SceneLightDesc，sceneMode=true 的 Renderer + loadEcsScene。
 // ---------------------------------------------------------------------------
+
+// ---- M-SC6：相机适配源（nl::script::CameraSource 函数指针实现；ctx = &ViewerCamera）----
+// 模式感知落点（Bindings.hpp 口径）：orbit = yaw/pitch + dist=|eye|（pivot 原点球坐标
+// 口径）经 ViewerCamera::setOrbit（自带 seedFromOrbit，切姿不跳变）；free = setPose
+// 直接落；chase = snapEyeTo + setPitch（yaw 由车体航向驱动，脚本 yaw 入参忽略——
+// Chase 跟车语义）；track = 轨迹数据主权，脚本不可写 → kCamModeUnsupported。
+// setFov clamp [20,120]（OrbitCamera::setFovYDegrees 同口径）后透传（模式统一生效）。
+static void camSourceGetPose(void* ctx, float outEye[3], float* outYawDeg, float* outPitchDeg,
+                             float* outFovY, int* outMode) {
+    auto& c = *static_cast<nl::viewer::ViewerCamera*>(ctx);
+    c.eyePosition(outEye);
+    if (outYawDeg) *outYawDeg = c.yawDegrees();
+    if (outPitchDeg) *outPitchDeg = c.pitchDegrees();
+    if (outFovY) *outFovY = c.fovYDegrees();
+    if (outMode) *outMode = static_cast<int>(c.modeOf());
+}
+static int camSourceSetPose(void* ctx, const float eye[3], float yawDeg, float pitchDeg) {
+    using namespace nl::script;
+    auto& c = *static_cast<nl::viewer::ViewerCamera*>(ctx);
+    switch (c.modeOf()) {
+        case nl::viewer::CameraMode::Orbit: {
+            const float dist = std::sqrt(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]);
+            c.setOrbit(yawDeg, pitchDeg, dist);
+            return kCamOk;
+        }
+        case nl::viewer::CameraMode::Free:
+            c.director.free().setPose(eye, yawDeg, pitchDeg);
+            return kCamOk;
+        case nl::viewer::CameraMode::Chase:
+            c.director.chase().snapEyeTo(eye);
+            c.director.chase().setPitchDegrees(pitchDeg);
+            return kCamOk;
+        case nl::viewer::CameraMode::Track:
+        default:
+            return kCamModeUnsupported;
+    }
+}
+static float camSourceGetFov(void* ctx) {
+    return static_cast<nl::viewer::ViewerCamera*>(ctx)->fovYDegrees();
+}
+static void camSourceSetFov(void* ctx, float fovYDeg) {
+    constexpr float kLo = 20.0f, kHi = 120.0f;
+    static_cast<nl::viewer::ViewerCamera*>(ctx)->setFovYDegrees(
+        fovYDeg < kLo ? kLo : (fovYDeg > kHi ? kHi : fovYDeg));
+}
+// file-static：脚本 OnTick 在 runScene 主循环内逐帧调用，CameraSource 指针必须
+// 活过整个循环——ctx 在脚本装载点填（runScene 的 camera 实例活过循环）。
+static nl::script::CameraSource g_viewerCamSource{
+    nullptr, &camSourceGetPose, &camSourceSetPose, &camSourceGetFov, &camSourceSetFov};
+
 int runScene(const Options& o) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     // ---- 1. 读场景文件 + World 反序列化 ----
@@ -3758,6 +3808,10 @@ int runScene(const Options& o) {
         // scene 模式无注入管线，脚本调 Input.* 得 kInputNoSource 即正确语义。
         nl::script::ecsSetWorld(&world);
         nl::script::timeSetClock(&gameClock);
+        // M-SC6：现役相机适配源（ctx = runScene 的 ViewerCamera；orbit/free/chase
+        // 模式感知落点 + fov clamp，见 camSourceSetPose 注释；未绑 = kCamNoSource）。
+        g_viewerCamSource.ctx = &camera;
+        nl::script::cameraSetSource(&g_viewerCamSource);
         const auto lr2 = nl::script::ScriptHost::get().loadScript(
             fs::absolute(dll).string(), typeName);
         if (!lr2.ok) {

@@ -235,12 +235,44 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Camera 域接线（生成物；ApiTable 偏移 25..28 = exports.api 声明序）。</summary>
+    internal static unsafe class CameraWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _cameraGetPose, _cameraSetPose, _cameraGetFov, _cameraSetFov;
+
+        /// <summary>现役相机位姿一次读回（eye 世界坐标 / yaw+pitch 度 / fovY 度 / mode 码）。任一 out 指针可 NULL 跳过该字段。rc：0=ok / 1=未绑 CameraSource / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int CameraGetPoseFn(float* eye, out float yawDeg, out float pitchDeg, out float fovY, out int mode);
+
+        /// <summary>现役相机位姿写入（模式感知落点：orbit=yaw/pitch/dist=|eye| setOrbit + 种子；free=setPose 直接落；chase=snapEyeTo+setPitch，yaw 由车体航向驱动忽略入参；track=轨迹数据主权，回 kCamModeUnsupported）。eye 指针 NULL = kCamBadArg。rc：0=ok / 1=未绑 CameraSource / 2=非法参数 / 3=该模式不支持脚本写位姿</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int CameraSetPoseFn(float* eye, float yawDeg, float pitchDeg);
+
+        /// <summary>现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate float CameraGetFovFn();
+
+        /// <summary>现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int CameraSetFovFn(float fovY);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _cameraGetPose = Marshal.ReadIntPtr(table, 25 * sizeof(IntPtr));
+            _cameraSetPose = Marshal.ReadIntPtr(table, 26 * sizeof(IntPtr));
+            _cameraGetFov = Marshal.ReadIntPtr(table, 27 * sizeof(IntPtr));
+            _cameraSetFov = Marshal.ReadIntPtr(table, 28 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov" };
 
         public static void InitAll(IntPtr table)
         {
@@ -249,6 +281,7 @@ namespace Nl.Script.Api
             TimeWiring.Init(table);
             InputWiring.Init(table);
             LogWiring.Init(table);
+            CameraWiring.Init(table);
         }
     }
 } // namespace

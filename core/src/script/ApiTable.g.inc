@@ -28,3 +28,7 @@ reinterpret_cast<void*>(&nl_inputActionVec2),  // Input.inputActionVec2
 reinterpret_cast<void*>(&nl_inputKeyIsDown),  // Input.inputKeyIsDown
 reinterpret_cast<void*>(&nl_logWrite),  // Log.logWrite
 reinterpret_cast<void*>(&nl_logSetFilter),  // Log.logSetFilter
+reinterpret_cast<void*>(&nl_cameraGetPose),  // Camera.cameraGetPose
+reinterpret_cast<void*>(&nl_cameraSetPose),  // Camera.cameraSetPose
+reinterpret_cast<void*>(&nl_cameraGetFov),  // Camera.cameraGetFov
+reinterpret_cast<void*>(&nl_cameraSetFov),  // Camera.cameraSetFov

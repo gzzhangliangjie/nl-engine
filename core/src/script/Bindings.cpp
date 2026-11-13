@@ -14,6 +14,7 @@
 #include "nl/scene/World.hpp"
 
 #include <objbase.h>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -375,6 +376,44 @@ extern "C" int nl_logSetFilter(const char* instruction, const char** outError) {
     return kLogBadFilter;
 }
 
+// ---- v4 Camera 导出（M-SC6；操作目标 = cameraSetSource 绑定的适配源）----
+// core 不反向依赖 viewer：适配源由注册方（viewer / selftest 假源）实现 4 个函数
+// 指针；导出体只做指针校验 + 未绑兜底 + 透传，模式感知语义在适配源内（Bindings.hpp）。
+
+const CameraSource* g_camSource = nullptr;
+
+extern "C" int nl_cameraGetPose(float* outEye, float* outYawDeg, float* outPitchDeg,
+                                float* outFovY, int* outMode) {
+    if (!g_camSource) return kCamNoSource;
+    // 任一 out 可 NULL 跳过该字段：适配源契约 = 逐字段判空（值字段经栈暂存透传）
+    float eyeTmp[3] = {0.0f, 0.0f, 0.0f};
+    float yawTmp = 0.0f, pitchTmp = 0.0f, fovTmp = 0.0f;
+    int modeTmp = 0;
+    g_camSource->getPose(g_camSource->ctx, outEye ? outEye : eyeTmp,
+                         outYawDeg ? outYawDeg : &yawTmp,
+                         outPitchDeg ? outPitchDeg : &pitchTmp,
+                         outFovY ? outFovY : &fovTmp, outMode ? outMode : &modeTmp);
+    return kCamOk;
+}
+
+extern "C" int nl_cameraSetPose(const float* eye, float yawDeg, float pitchDeg) {
+    if (!eye) return kCamBadArg;
+    if (!g_camSource) return kCamNoSource;
+    return g_camSource->setPose(g_camSource->ctx, eye, yawDeg, pitchDeg);
+}
+
+extern "C" float nl_cameraGetFov() {
+    // f32 返回无 rc 通道：未绑 = NaN（C# 侧 float.IsNaN 判未绑——exports.api 写死）
+    if (!g_camSource) return std::numeric_limits<float>::quiet_NaN();
+    return g_camSource->getFov(g_camSource->ctx);
+}
+
+extern "C" int nl_cameraSetFov(float fovY) {
+    if (!g_camSource) return kCamNoSource;
+    g_camSource->setFov(g_camSource->ctx, fovY);
+    return kCamOk;
+}
+
 } // namespace
 
 // ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
@@ -397,6 +436,12 @@ void inputSetState(core::InputState* state) {
 
 void inputSetActionMap(core::ActionMap* map) {
     g_actionMap = map;
+}
+
+// ---- M-SC6 宿主侧相机适配源绑定（nullptr = 解绑，导出回 kCamNoSource）----
+
+void cameraSetSource(const CameraSource* source) {
+    g_camSource = source;
 }
 
 // ---- M-SC3 脚本命令登记表公开接口（存储 = 匿名 namespace 顶部的 scriptCommandTable）----
