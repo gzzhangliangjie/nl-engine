@@ -144,6 +144,7 @@ struct Options {
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
+    bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
@@ -173,6 +174,7 @@ struct Options {
     float distance  = 4.2f;
     std::string screenshotPath;
     float orbitSpeed = 0.0f;               // M11.3：每帧 yaw 增量（度/帧），快速移动压力测试
+    float orbitDistSpeed = 0.0f;           // M13.2：每帧 dist 增量（正拉远/负拉近，camera clamp 钳住后恒定），LOD 切换压力测试
     std::string screenshotSeqDir;          // M11.3：逐帧序列截图目录（非空时每帧落 PNG）
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
@@ -313,6 +315,7 @@ Options parseArgs(int argc, char** argv) {
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
+        else if (a == "--cluster-blas") o.clusterBlas = true;
         else if (a == "--rt-debug" && i + 1 < argc) {   // M8.2：rt 模式调试可视化档
             const std::string v = argv[++i];
             if (v == "dist" || v == "0") o.rtDebugMode = 0;
@@ -500,6 +503,8 @@ Options parseArgs(int argc, char** argv) {
             o.pitchDeg = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--orbit-speed" && i + 1 < argc) {
             o.orbitSpeed = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--orbit-dist-speed" && i + 1 < argc) {
+            o.orbitDistSpeed = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--screenshot-seq" && i + 1 < argc) {
             o.screenshotSeqDir = argv[++i];
         } else if (a == "--dist" && i + 1 < argc) {
@@ -1286,7 +1291,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    o.frustumOn, dagMode, skinMode, hizMode,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
-                                                   shadowMode, referenceMode, probeMode);
+                                                   shadowMode, referenceMode, probeMode,
+                                                   o.clusterBlas);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -2245,6 +2251,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // M11.3：快速移动压力测试——每帧自动 yaw 旋转（--orbit-speed 度/帧），
         // 与 --screenshot-seq 组合产出移动中的 atlas 时域序列（无窗口输入依赖）。
         if (o.orbitSpeed != 0.0f) camera.orbit(o.orbitSpeed, 0.0f);
+        // M13.2（S13）：LOD 切换压力测试——每帧 dist 线性增量（正拉远/负拉近），
+        // camera clamp（0.45..500）钳住后恒定；与 --screenshot-seq 组合产出
+        // 拉远/拉近全程的 cut 切换序列（S5 屏幕误差随距离穿越 → DAG 层切换）。
+        if (o.orbitDistSpeed != 0.0f) camera.setDistance(camera.distance() + o.orbitDistSpeed);
         // P8 M-CAM b-segment：喂玩法相机输入（orbit 模式 orbit() 已吃 dx/dy，lookPx 在其下被忽略；
         // 控制台/面板占输入时清空，避免打字或拖 HUD 时相机乱动）。
         {
