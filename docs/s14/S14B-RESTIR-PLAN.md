@@ -51,3 +51,58 @@ M=1（每像素 1 初始候选），靠时域+空域重用凑池（bevy/RTXDI �
 两条 `RWStructuredBuffer<Reservoir>` a/b ping-pong（bevy 同构）；`Reservoir = {float3 hitPos; uint packedNormal(八面体); float3 radiance; float3 dir; float confidence; float unbiasedW;}` ≈ 72B 对齐；非 cbuffer，volatile CB 纪律不涉及。
 
 **冻结面解除**：M14B1 允许落码 `restir.slang`、`ViewMode::Restir` 追加、reservoir buffers、renderer 接线、CMake 登记；`probe.slang`/`probe_gather.slang`/`filter_temporal.slang` 冻结基线一行不碰；主树/master 一行不碰。
+
+
+## 4. M14B2 验收记录（2026-11-13 收官，tag `s14-restir`）
+
+### 4.1 裁判链重定义（用户拍板 option A）
+M14B0 计划预设 `--mode reference-gi` 作 MSE 裁判，实测它是 Q14-1 口径的 **104-tri 粗代理**（不同几何 + 不同 albedo + 探针级联语义），restir vs reference-gi MSE 0.1187 无意义。经用户拍板改为**自收敛累积裁判**：
+
+- restir 长跑 2048 帧 / filter 长跑各当自收敛真值；
+- 短跑比「逼近自收敛态程度」+ 帧成本记账；
+- reference-gi 判据缺陷如实入档（本节）。
+
+### 4.2 自收敛评估数字（DX12，960x540，yaw 12 / pitch 9 / dist 7）
+
+| 对比 | 结果 | 定性 |
+|---|---|---|
+| restir f128 vs f2048 真值 | MSE = 0.0194 | 已在噪声底（8-bit tonemap 域） |
+| restir f256 vs f2048 | MSE = 0.0061 | 同上 |
+| restir f512 vs f2048 | MSE = 0.0143 | 同上（reservoir 链微抖，非单调收敛） |
+| filter f4/f16/f64/f128 vs f1024 | MSE = 0（MD5 逐位相同） | filter 输出确定性、无收敛维度，帧数裁判不适用 |
+| restir vs filter 互差 | MSE ≈ 116 | GI 语义域不同（per-pixel 单弹射 vs 探针级联插值），非质量裁判 |
+
+**M14B0 原验收「MSE 明显下降（同等帧时间）」在 option A 口径下的结论**：restir 128 帧短跑已达自收敛噪声底（≤0.02 MSE），但 filter 无收敛维度、两者语义域互差不构成质量排序 → 原判据在本场景不可判，按 option A 改记「短跑逼近自收敛态 + 帧成本」。两轨真实差异 = 帧成本 3.0x 换 per-pixel 单弹射语义。
+
+### 4.3 MIS 开/关自比（defensive MIS，misLambda cap = 0.5）
+
+| 对比 | MSE |
+|---|---|
+| MIS-off f128 vs MIS-off f2048 | 0.0177 |
+| MIS-on f2048 vs MIS-off f2048（收敛态互差） | 0.0107 |
+| MIS-on f128 vs MIS-off f128（短跑互差） | 0.0272 |
+
+结论：defensive MIS 在收敛态贡献 ≤0.011 MSE（噪声底量级），短跑差异 0.027 略高于噪声底 —— 与置信度加权方向一致（低置信期无偏化），本场景增益可见但有限。
+
+### 4.4 帧成本记账（--pass-timing，128 帧，首解锚 + 稳态 GPU 计时）
+
+| 通道 | ms |
+|---|---|
+| restir 稳态 GPU 全帧（NVRHI timer avg，unthrottled） | 0.656 |
+| filter 稳态 GPU 全帧 | 0.219（3.0x 差距） |
+| restirTemp / restirSpatial（首解） | 0.121 / 0.837 |
+| filter GI 链六 pass 合计（首解） | ≈ 0.097 |
+| MIS-off 稳态 GPU 全帧 | 0.614（defensive MIS 增量 ≈ 0.04 ms） |
+
+### 4.5 非确定性根因（重要踩坑 + 待拍板）
+
+restir 模式**同 exe 新进程双跑 MD5 不同**（825~1491 像素 / 0.16% / max 23~55）。二分定位：
+
+- 诊断禁用 restir 模式下的 `drawCacheFrame`（cache 衰减/填表/更新/混合四 pass）→ 双跑**逐字节一致**；
+- world_cache 链各 pass 的 rng 种子（cell_index + frame_index）均确定性；唯一竞态面 = S11 hashmap 插槽 `InterlockedCompareExchange`（world_cache.slang:153）的 warp 调度序 → 存活 cell 集合 run-to-run 漂移 → restir 命中查缓存（cache bounce direct + fallback，Q-B1 语义）吃到漂移的 radiance；
+- 该链在 S11 自己的模式（probe/filter 卡）下 bytes 级稳定（历史回归全绿），只在 restir 模式暴露 —— restir 帧路径少了 probe trace 的表内容约束。
+
+**处置**：验收门走统计档（B1「随机采样路径预期」先例）：re-shot diff-pixel ≤ 1.0%（实测 dx12 0.127% / vulkan 0.260%）+ meanDiff ≤ 0.5/255（实测 0.002/0.004），`tools/check-s14b-restir.py stability/present/selftest` 纯标准库。根因修复挂**待拍板**（触碰 S11 冻结基线或 Q-B1 world_cache 间接语义）。
+
+### 4.6 渲染版交代
+`example/s14b-restir/`：双后端基线 PNG + json 侧车（mode=restir）+ run.bat verify（shot/锚/统计门/present 门/负向五段）+ cases.json 第 118 张卡（tool `restir-gpu` + manual `restir-verify`）；regression `--only s14b-restir` 双后端 2/2 ALL GREEN。kStage 冻结 S8.2 不 bump。

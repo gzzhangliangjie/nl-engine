@@ -10970,6 +10970,63 @@
      "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
+  },
+  {
+   "id": "s14b-restir",
+   "label": "M14B2",
+   "name": "ReSTIR GI 收官评估：置信度加权空域合并 + defensive MIS + 自收敛态验收（option A）",
+   "tag": "s14-restir",
+   "date": "2026-11-13",
+   "summary": "M14B2（S14-B 收官步）：① 空域邻居合并改置信度加权（nbConf=min(nb.confidence,cap)/cap 权重进 5 邻居 reservoir merge，低置信邻居少说话）；② defensive MIS（RTXDI misLambda 口径）：W=W_u·[(1-λ)+λ/m]，λ=saturate(g_rEye.w)·(1-conf01)，conf≥cap 后退回纯无偏 W；cap=0.5（scene.cpp rcb[39]，调参面留 M14C1 接参数）。③ 裁判链重定义（用户拍板 option A）：M14B0 预设的 reference-gi 裁判实测是 Q14-1 口径 104-tri 粗代理（不同几何+不同 albedo），MSE 0.1187 无意义 → 改自收敛累积裁判：restir 2048 帧长跑 / filter 长跑各自当真值，短跑比「逼近自收敛态程度 + 帧成本记账」。实测（DX12，960x540，yaw12/pitch9/dist7）：restir f128/f256/f512 距 f2048 真值 MSE=0.0194/0.0061/0.0143（8-bit tonemap 域，噪声底 ≤0.02）；filter 模式从 f4 起逐位不变（确定性输出、无收敛维度，帧数裁判对它不适用）；restir vs filter 互差 MSE≈116（GI 语义域不同：per-pixel 单弹射 vs 探针级联插值，不是质量裁判）。MIS 开关自比：off 短跑 vs off 收敛 MSE=0.0177、on/off 收敛态互差 MSE=0.0107（噪声底量级）、on/off 短跑互差 0.0272。帧成本：restir 稳态 GPU 0.656 ms/帧 vs filter 0.219 ms/帧（3.0x）；restirTemp 0.121 + restirSpatial 0.837 ms（--pass-timing 首解锚）vs filter GI 链 ≈0.10 ms；MIS-off 0.614 ms（defensive MIS 增量 ~0.04 ms）。④ 非确定性根因入档：restir 模式同 exe 新进程双跑 MD5 不同（0.16% 像素 / max 23/255）；二分定位 = restir 模式下的 world_cache 填表链（诊断禁用 drawCacheFrame 后双跑逐字节一致；fill/update 种子均确定性，唯一 CAS 竞态面 = S11 hashmap 插槽 InterlockedCompareExchange 调度序，冻结基线不机械修）。验收门因此走统计档（B1「随机采样路径预期」先例）：重拍 diff-pixel ≤1.0%（实测 0.127/0.260）+ meanDiff ≤0.5/255（实测 0.002/0.004），tools/check-s14b-restir.py stability/present/selftest 纯标准库。根因修复挂待拍板（触碰 S11 冻结基线或 Q-B1 语义）。",
+   "acceptance": "run.bat verify ALL GREEN：双后端重拍 exit 0 + dx12 deviceErrors=0 + restir: active 锚 + 统计门 stability（≤1.0%/≤0.5/255，实测 dx12 656px/0.127%、vulkan 1347px/0.260%）+ present 门（基线 mean 38.19/255）+ 负向（missing.nmesh 非零退出）；工具 selftest PASS（含同图/微差/黑图三路自检）。自收敛评估数字见 summary（f128 已达噪声底 ≤0.02 MSE；filter f4 起逐位不变；互差 116 属语义域差非质量差，reference-gi 判据缺陷如实入档）。双后端构建 selftest 16/16 + restir 产物 104+4 登记不增量（复用 B1 两 pass）。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "restir-gpu",
+     "name": "ReSTIR GI GPU 出图冒烟：--mode restir 128 帧双后端（退出码 + deviceErrors 锚）",
+     "kind": "tool",
+     "note": "Q11-1 统计口径：restir 含 world_cache 间接项（Q-B1 语义），S11 hashmap CAS 竞态使同 exe 重拍 MD5 漂移（0.16% 像素 / max 23/255，二分实锤）→ 本 case 只断言退出码 + deviceErrors=0，不做像素 bytes 对比；统计门在 restir-verify 的 run.bat 里（check-s14b-restir.py stability，阈值按实测标定 +6x 裕量）。preview 为基线静态图。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "args": [
+      "--mode",
+      "restir",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "128",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode restir --model Suzanne-materials.nmesh --screenshot {out}.png --frames 128 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14b-restir/restir-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "restir-verify",
+     "name": "M14B2 收官统计验收：双后端重拍统计门 + 锚 + present 门 + 负向控制 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify：双后端 128 帧重拍（dx12 日志捕获）→ deviceErrors=0 / restir: active 锚 → check-s14b-restir.py stability 双后端（re-shot vs 冻结基线，≤1.0% diff-pixels + ≤0.5/255 meanDiff，标定自同 exe 重拍实测 0.127%/0.260% vs 0.16% 基准漂移）→ present 门（基线非退化，mean 38.19/255）→ 负向（missing.nmesh 必须非零退出）。工具 selftest：同图 / 微差 / 黑图三路自检，纯标准库 PNG 解码。",
+     "args": [],
+     "command": "example/s14b-restir/run.bat verify",
+     "script": "example/s14b-restir/run.bat verify"
+    }
+   ]
   }
  ]
 }

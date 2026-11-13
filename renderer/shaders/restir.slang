@@ -54,7 +54,8 @@ cbuffer RestirConstants : register(b0)
     float4   g_rHitMat;        // rgb = 像素侧 albedo（统一暖灰），a = ambient
     float4   g_rParams;        // x = shadowBias, y = shadowTMax, z = viewW, w = viewH
     float4   g_rExtra;         // x = cacheOn, y = spatialRadius(px), z = confCap, w = frame
-    float4   g_rEye;           // xyz = eye（法线朝向翻转）
+    float4   g_rEye;           // xyz = eye（法线朝向翻转），
+                               // w = misLambda cap（B2 defensive MIS，scene 写 0.5）
 }
 
 Texture2D<float4> g_rDepth : register(t0);        // probeDepth_（velocity prepass 深度）
@@ -373,9 +374,12 @@ void csRestirSpatial(uint3 tid : SV_DispatchThreadID)
         if (J < 0.125f || J > 8.0f) continue;
 
         // 整池合并：w_j = p̂_r · nb.m（漫反射同 albedo 换算比 ≈ 1，M14B0 §1）。
+        // B2 置信度加权：邻居贡献 × conf/cap（低置信邻居降权——RTXDI light
+        // confidence 同思路；cap 归一到 [0,1]，confidence cap 照旧 min）。
+        const float nbConf = min(nb.confidence, g_rExtra.z) / max(g_rExtra.z, 1e-3f);
         const float pJ = rsTarget(nb.radiance, dirR, n);
         rsReservoirMerge(r, nb.hitPos, nbN, nb.radiance, nb.dir,
-                         pJ * nb.m, nb.m, min(nb.confidence, g_rExtra.z), seed);
+                         pJ * nb.m * nbConf, nb.m, min(nb.confidence, g_rExtra.z), seed);
     }
     r.m = min(r.m, 30.0f);                       // 池计数 cap（防邻居爆炸）
 
@@ -383,6 +387,13 @@ void csRestirSpatial(uint3 tid : SV_DispatchThreadID)
     const float3 dirSel = normalize(r.hitPos - wp);
     const float pSel = rsTarget(r.radiance, dirSel, n);
     r.unbiasedW = clamp(r.weightSum / (r.m * max(pSel, 1e-6f)), 0.0f, 8.0f);
+
+    // B2 defensive MIS（RTXDI misLambda 口径）：W = W_u·[(1-λ)+λ/m]。
+    // λ = cap·(1-conf01)：池置信度越低越防守（用 1/m 均匀降方差换无偏性；
+    // conf≥cap 后 λ=0 退回纯无偏 W）。cap = g_rEye.w（scene 恒写 0.5）。
+    const float conf01 = saturate(r.confidence / max(g_rExtra.z, 1e-3f));
+    const float lam = saturate(g_rEye.w) * (1.0f - conf01);
+    r.unbiasedW *= (1.0f - lam) + lam / max(r.m, 1.0f);
     g_rResA[idx] = r;
 
     // ---- shade + compose（csGatherCompose 同式）：GI = f = albedo·Li·cosθ_r/π

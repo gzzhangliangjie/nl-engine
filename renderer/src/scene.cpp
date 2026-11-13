@@ -4185,6 +4185,7 @@ bool Scene::drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         rcb[36] = params.eye[0];
         rcb[37] = params.eye[1];
         rcb[38] = params.eye[2];
+        rcb[39] = 0.5f;   // B2 misLambda cap（M14B2；调参面留 M14C1 拍板再接参数）
         cmd->writeBuffer(restirCB_, rcb, sizeof(rcb));
     }
 
