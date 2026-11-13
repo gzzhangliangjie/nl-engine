@@ -210,6 +210,9 @@ public:
     Vec3 tint{1.0f, 1.0f, 1.0f};   // 实体级着色（N 物体画面区分用；Carrot color 字段口径）。
     float roughness = 1.0f;        // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）。
     float metallic  = 0.0f;        // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）。
+    // P9 V2：场景 JSON 显式写了 roughness/metallic = true（覆盖优先，运行时
+    // 标志不参与序列化——serialise 不写这两键的 roundtrip byte-identical 铁律不变）。
+    bool hasPbrOverride = false;
 
     nlohmann::json serialise() const override;
     void deserialise(const nlohmann::json& j) override;

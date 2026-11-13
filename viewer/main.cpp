@@ -3476,6 +3476,7 @@ int runScene(const Options& o) {
         d.tint[2] = model->tint.z;
         d.roughness = model->roughness;   // M-E1b.3：逐实例 PBR 材质（缺省 1/0）
         d.metallic  = model->metallic;
+        d.hasPbrOverride = model->hasPbrOverride;   // P9 V2：GLB 因子做缺省的优先级依据
         d.meshFile = meshFiles[k].c_str();
         objects.push_back(d);
     }

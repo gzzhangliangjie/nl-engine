@@ -6,8 +6,8 @@
 - VS2022 MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版 `E:\UE_STUDY_2026\.build-tools\`。NMake 构建 `scripts/build-m0.2.bat DX12|VULKAN`；同秒 mtime 跳重链 → 删 exe 强制重链；**改 `.slang` 后必须删两棵 `build/{DX12,VULKAN}/viewer.exe` 再重链**，否则 regression exe 过期门禁拒绝出报告。裸 Git Bash configure 报 nmake not found = 环境三件套没 export，照抄 build bat 头部。
 - ctest 快进程随机丢 stdout（非回归）→ 统一 `--repeat until-pass:3`；0xC0000409 = ArmouryCrate 生态。missing anchor 先重跑再定性。
 - Bash cwd 不跨命令 → 一律 `git -C <wt>` / 绝对路径。GitHub 直连断；nl-engine 无 remote，tag/分支只落本地。
-- **构建/ctest/回归统一入口 `scripts/wt.bat <track> build|ctest|regression`（2026-11-13 拍板 C）**：track 名显式定树，cwd 无关；`build-m0.2.bat` 内接 `tools/wt_gate.py`（非注册活跃 wt 拒跑 exit 3；主仓构建须显式 `set NL_BUILD_MAINREPO=1`）。cmd bat 三坑入档：① `shift` 会顶掉 `%0` → `%~dp0` 必须 bat 开头先固化进变量；② `for /f` 反引号体内参数展开不可靠 → 一律先用 `%VAR%`；③ 参数别拼进引号路径串（`python "x.py --help"` 整串当文件名）。
-
+- **构建/ctest/回归统一入口 `scripts/wt.bat <track> build|ctest|regression|clean`（2026-11-13 拍板 C+B）**：track 名显式定树，cwd 无关；`clean [DX12|VULKAN|all]` 删目标树 `build/<backend>/viewer.exe+nanite-tools.exe`——**删构建产物禁止裸 rm 相对路径**；`build-m0.2.bat` 内接 `tools/wt_gate.py`（非注册活跃 wt 拒跑 exit 3；主仓构建须显式 `set NL_BUILD_MAINREPO=1`）。cmd bat 三坑入档：① `shift` 会顶掉 `%0` → `%~dp0` 必须 bat 开头先固化进变量；② `for /f` 反引号体内参数展开不可靠 → 一律先用 `%VAR%`；③ 参数别拼进引号路径串（`python "x.py --help"` 整串当文件名）。
+- **cwd 漂移双闸 B+C（2026-11-13 拍板，master `936557f`+`80fd690`；当天三事故 = 主树产物误删×2 / cases.json 卡误写主树 / MILESTONES 误提交 master a83b8c0）**：① `wt_gate.py check-cmd [--expect-track <track>]` = cwd 敏感删/写/追加类脚本入口第一行，cwd 树非注册活跃 wt → exit 3；主仓操作 `NL_CMD_MAINREPO=1` 放行。② `.git/hooks/pre-commit`（正本 `tools/hooks/pre-commit`，改后须 cp 回 + `.gitattributes` 已锁 eol=lf；hooks 全 wt 共享）：master/main 且有 active claim → 拒提交，`NL_COMMIT_MAINREPO=1` 显式放行；feat/* 直通。每条 Bash 命令开头 `cd <wt>` 仍是纪律底线，但防线以这两闸为准。
 ## 架构不变量
 - NVRHI+Slang 通用管线；构建链禁厂商图形 SDK；OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关；图形符号只在 renderer/；一份 .slang 双后端 = 验收核心。
 - SPIR-V 绑定 shift 256/0/128；禁 `[[vk::binding]]`；volatile CB `setMaxVersions(16)` 每帧全量覆写；SceneConstants 160B 禁整块 memcpy；HUD 面板高≤560、字符串 ASCII（详 `SHADER-CONVENTIONS.md` §2.7~2.19）。

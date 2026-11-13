@@ -6159,6 +6159,8 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         float normalScale = 1.0f;
         float emissiveFactor[3] = {0.f, 0.f, 0.f};
         float occlStrength = 1.0f;
+        float metallicFactor = 1.0f;         // glTF spec 缺省（mesh_io 已解析）
+        float roughnessFactor = 1.0f;
     };
     std::vector<PreparedBatch> prepared;
     std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
@@ -6213,6 +6215,8 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             pb.hasEmissiveTex = prim.hasEmissiveTex;
             pb.normalScale = prim.normalScale;
             pb.occlStrength = prim.occlStrength;
+            pb.metallicFactor = prim.metallicFactor;
+            pb.roughnessFactor = prim.roughnessFactor;
             for (int k = 0; k < 3; ++k) pb.emissiveFactor[k] = prim.emissiveFactor[k];
             pb.matFlags = (pb.hasMR ? 1u : 0u) | (pb.hasNormalTex ? 2u : 0u) |
                           (pb.hasOcclTex ? 4u : 0u) | (pb.hasEmissiveTex ? 8u : 0u);
@@ -6372,6 +6376,8 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         batch.matFlags = pb.matFlags;
         batch.normalScale = pb.normalScale;
         batch.occlStrength = pb.occlStrength;
+        batch.metallicFactor = pb.metallicFactor;
+        batch.roughnessFactor = pb.roughnessFactor;
         for (int k = 0; k < 3; ++k) batch.emissiveFactor[k] = pb.emissiveFactor[k];
 
         // t0 baseColor + t1 MR / t2 normal / t3 occl / t4 emissive：有真贴图建
@@ -6441,11 +6447,11 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
-            // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
-            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissiveFactor.rgb,
-            // occlStrength)——batch 级材质量（GLB 权威），全实例同值。
-            dst[20] = objects[i].roughness;
-            dst[21] = objects[i].metallic;
+            // M-E1b.3：逐实例 PBR 材质。P9 V2：场景 JSON 显式写键（hasPbrOverride）
+            // 覆盖优先，否则用 batch 级 GLB 因子做缺省——与 [22..27] 的 GLB 权威
+            // 口径对齐（此前固定 1/0 缺省，无 MR 贴图材质的 GLB 因子到不了 shader）。
+            dst[20] = objects[i].hasPbrOverride ? objects[i].roughness : batch.roughnessFactor;
+            dst[21] = objects[i].hasPbrOverride ? objects[i].metallic : batch.metallicFactor;
             dst[22] = batch.normalScale;
             dst[23] = static_cast<float>(batch.matFlags);
             dst[24] = batch.emissiveFactor[0];
@@ -6889,8 +6895,9 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
             dst[19] = 0.0f;
             // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissive,occlStr)
             // batch 级材质量（initScene 固化于 SceneMeshBatch，全实例同值）。
-            dst[20] = objects[i].roughness;
-            dst[21] = objects[i].metallic;
+            // [20]/[21] 同 [22..27] 口径：JSON 显式覆盖优先，否则 batch GLB 因子。
+            dst[20] = objects[i].hasPbrOverride ? objects[i].roughness : batch.roughnessFactor;
+            dst[21] = objects[i].hasPbrOverride ? objects[i].metallic : batch.metallicFactor;
             dst[22] = batch.normalScale;
             dst[23] = static_cast<float>(batch.matFlags);
             dst[24] = batch.emissiveFactor[0];

@@ -28,6 +28,7 @@ import os
 import re
 import struct
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _v in ("vendor", _HERE):
@@ -329,6 +330,51 @@ def apply_unity_material(mat, g, factors):
         else:
             bsdf.inputs["Base Color"].default_value = (r, g_, b, 1.0)
             note["color"] = True
+
+    # --- metallicRoughness（Unity MG 贴图 → glTF 通道重排接线，先于因子块，
+    # 因子块的 not-linked 守卫就不会覆盖纹理链接）。
+    # Unity MG 通道：R = metallic、A = smoothness；glTF MR：G = roughness、
+    # B = metallic。必须 swizzle：G = 1 - A*_GlossMapScale、B = R，不能直连。
+    # 落到 Blender 标准节点形（贴图 → Separate Color，G→Roughness、B→Metallic），
+    # 导出器按此形自动合成 glTF metallicRoughnessTexture。
+    mrtex = pbr.get("metallicRoughnessTexture")
+    if mrtex and os.path.isfile(mrtex):
+        import numpy as np
+        src = bpy.data.images.load(mrtex, check_existing=True)
+        w, h = src.size
+        px = np.empty(w * h * 4, dtype=np.float32)
+        src.pixels.foreach_get(px)
+        px = px.reshape(-1, 4)
+        scale = g.get("mgSmoothScale", 1.0)
+        sw = np.empty_like(px)
+        sw[:, 0] = 0.0                     # glTF MR 的 R 无语义
+        sw[:, 1] = 1.0 - px[:, 3] * scale  # G = roughness = 1 - smoothness*scale
+        sw[:, 2] = px[:, 0]                # B = metallic = Unity R
+        sw[:, 3] = 1.0
+        # 落盘走 32 位未压缩 TGA（numpy 直写）：bpy.data.images.new + save() 在
+        # Blender 5.2 实测把 buffer 写成全黑 PNG（内存读回有数据、落盘为零），
+        # 而 load 真实文件的路径（baseColor/normal 同款）导出可靠。
+        cache = os.path.join(tempfile.gettempdir(), "nl-mrsw")
+        os.makedirs(cache, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(mrtex))[0]
+        cpath = os.path.join(cache, "mrsw_%s.tga" % stem)
+        b = (np.clip(sw, 0.0, 1.0) * 255.0).round().astype(np.uint8)
+        bgra = b[:, [2, 1, 0, 3]].reshape(h, w, 4)          # RGBA -> BGRA
+        hdr = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0,
+                          0, 0, w, h, 32, 0x20)             # 0x20 = top-down
+        with open(cpath, "wb") as fo:
+            fo.write(hdr)
+            fo.write(bgra.tobytes())
+        out_img = bpy.data.images.load(cpath, check_existing=False)
+        out_img.colorspace_settings.name = "Non-Color"      # MR 是线性数据
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = out_img
+        node.name = "MR_" + stem
+        sep = nt.nodes.new("ShaderNodeSeparateColor")
+        nt.links.new(node.outputs["Color"], sep.inputs["Color"])
+        nt.links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+        nt.links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
+        note["pbr"] = True
 
     if "metallicFactor" in pbr and not bsdf.inputs["Metallic"].is_linked:
         bsdf.inputs["Metallic"].default_value = pbr["metallicFactor"]

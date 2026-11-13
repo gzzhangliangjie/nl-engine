@@ -369,6 +369,9 @@ struct SceneObjectDesc {
     float tint[3];          // ModelComponent::tint
     float roughness = 1.0f; // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）
     float metallic  = 0.0f; // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）
+    // P9 V2：场景 JSON 显式写了 roughness/metallic = true（覆盖优先）；否则
+    // 实例打包用 batch 级 GLB 因子做缺省（与 [22..27] 的 GLB 权威口径对齐）。
+    bool hasPbrOverride = false;
     const char* meshFile;   // assets/ 下的 .glb 文件名（viewer 侧已过白名单校验）
 };
 struct SceneLightDesc {

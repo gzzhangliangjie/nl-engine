@@ -829,6 +829,9 @@ private:
         float normalScale = 1.0f;            // glTF normalTexture.scale
         float emissiveFactor[3] = {0.f, 0.f, 0.f};
         float occlStrength = 1.0f;           // glTF occlusionTexture.strength
+        // P9 V2：GLB 标量因子（hasMR=0 且实例未显式覆盖时进实例 [5].xy）。
+        float metallicFactor = 1.0f;         // glTF spec 缺省 1
+        float roughnessFactor = 1.0f;        // glTF spec 缺省 1
     };
     // P9 V2：共享中性兜底纹理（1×1，绑定恒非空、shader 在 matFlags 未置位时
     // 不采样）—— normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、

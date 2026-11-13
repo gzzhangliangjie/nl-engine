@@ -148,6 +148,8 @@ void ModelComponent::deserialise(const nlohmann::json& j) {
     // M-E1b.3：逐实例 PBR 材质缺键按默认（roughness=1 / metallic=0），
     // 与 LightComponent type=0 不写新键同套向后兼容铁律；序列化不写这两键，
     // 保住 M-E2 roundtrip byte-identical 硬判据（见 ecs-e1a/run.bat）。
+    // P9 V2：显式写键 → hasPbrOverride（实例打包时覆盖优先于 batch GLB 因子）。
+    hasPbrOverride = j.contains("roughness") || j.contains("metallic");
     roughness = j.value("roughness", 1.0f);
     metallic  = j.value("metallic", 0.0f);
 }

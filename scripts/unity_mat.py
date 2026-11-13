@@ -339,9 +339,14 @@ def umat_to_gltf(um, guid_db):
     has_mg_map = bool(um.get("metallicGlossMap") and um["metallicGlossMap"].get("path"))
     if has_mg_map and "_METALLICGLOSSMAP" in kw:
         pbr["metallicRoughnessTexture"] = um["metallicGlossMap"]["path"]
+        # UnityGLTF 口径：MG 贴图在场 → 因子恒 1（纹理即权威）。注意 glTF 因子
+        # 与纹理是相乘关系——旧写法 roughnessFactor=1-_GlossMapScale 在 scale=1
+        # 时会把整张贴图的 roughness 乘成 0。_GlossMapScale（smoothness 缩放）
+        # 烘进 swizzle（G = 1 - A*scale，见 fbx2glb.apply_unity_material）。
         pbr["metallicFactor"] = 1.0
+        pbr["roughnessFactor"] = 1.0
         smooth = um.get("glossMapScale", um.get("glossiness"))
-        pbr["roughnessFactor"] = 1.0 - smooth if smooth is not None else 1.0
+        out["mgSmoothScale"] = smooth if smooth is not None else 1.0
     else:
         if um.get("metallic") is not None:
             pbr["metallicFactor"] = um["metallic"]
