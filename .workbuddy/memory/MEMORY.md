@@ -6,6 +6,7 @@
 - VS2022 MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版 `E:\UE_STUDY_2026\.build-tools\`。NMake 构建 `scripts/build-m0.2.bat DX12|VULKAN`；同秒 mtime 跳重链 → 删 exe 强制重链；**改 `.slang` 后必须删两棵 `build/{DX12,VULKAN}/viewer.exe` 再重链**，否则 regression exe 过期门禁拒绝出报告。裸 Git Bash configure 报 nmake not found = 环境三件套没 export，照抄 build bat 头部。
 - ctest 快进程随机丢 stdout（非回归）→ 统一 `--repeat until-pass:3`；0xC0000409 = ArmouryCrate 生态。missing anchor 先重跑再定性。
 - Bash cwd 不跨命令 → 一律 `git -C <wt>` / 绝对路径。GitHub 直连断；nl-engine 无 remote，tag/分支只落本地。
+- **构建/ctest/回归统一入口 `scripts/wt.bat <track> build|ctest|regression`（2026-11-13 拍板 C）**：track 名显式定树，cwd 无关；`build-m0.2.bat` 内接 `tools/wt_gate.py`（非注册活跃 wt 拒跑 exit 3；主仓构建须显式 `set NL_BUILD_MAINREPO=1`）。cmd bat 三坑入档：① `shift` 会顶掉 `%0` → `%~dp0` 必须 bat 开头先固化进变量；② `for /f` 反引号体内参数展开不可靠 → 一律先用 `%VAR%`；③ 参数别拼进引号路径串（`python "x.py --help"` 整串当文件名）。
 
 ## 架构不变量
 - NVRHI+Slang 通用管线；构建链禁厂商图形 SDK；OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关；图形符号只在 renderer/；一份 .slang 双后端 = 验收核心。
@@ -17,7 +18,7 @@
 
 ## 当前进度（2026-11-13）
 - S0~S12 全收官（S12 收官 tag `s12` @ 4c386a6）；S9 Q4 = GBuffer 属性不落盘；M-LOG0~2 日志轨道收官（spdlog，stdout `[nl:level]` 契约）。`kStage` 仍 S8.2。十余条功能分支已 merge 回 master。
-- **网络栈第 12 步整轨完成**：M-NET0~M-NET3 收官（tag `net-m3` + `net-done` + `milestone/net-done` 分支 c43dbe0）。ENet+bitsery vendored、服务器权威+快照插值、viewer `--net-server/--net-client`、`--interp-delay`、server 优雅关服 + client 断链边沿。踩坑：控制消息漏 proto 字段 → Input 全静默拒收；Hello 建实体必须同步建输入槽；双进程 run.bat 须 start /b + ping 延后；regression 卡 `exe` 必须双后端字典。权威落点 `docs/net/NETCODE-PLAN.md` / `NETCODE-OPTIONS.md` §6。
+- **网络栈第 12 步整轨完成并已 merge 回 master**：M-NET0~M-NET3 收官（tag `net-m0`~`net-m3` + `net-done` + `milestone/net-done` 分支）；merge commit `9aa58df`（3 冲突解：CMakeLists crash+net 并存 / MILESTONES 两侧并序 / regression.py resume 裁剪 × version 分组融合），合并后双后端 BUILD OK + 抽查 net-m2 8/8、perf-m1 6/6 全绿；PARALLEL-TRACKS net 行已更新。ENet+bitsery vendored、服务器权威+快照插值、viewer `--net-server/--net-client`、`--interp-delay`、server 优雅关服 + client 断链边沿。踩坑：控制消息漏 proto 字段 → Input 全静默拒收；Hello 建实体必须同步建输入槽；双进程 run.bat 须 start /b + ping 延后；regression 卡 `exe` 必须双后端字典。**net wt 已拆（2026-11-13 用户指令，§7.6：junction 摘除 + robocopy /MIR 清目录 + prune；feat/net + milestone/net-done 分支与全部 tag 保留，TRACKS closed）**。权威落点 `docs/net/NETCODE-PLAN.md` / `NETCODE-OPTIONS.md` §6。
 - **M-CRASH0 收官**（tag `crash-m0`）：SEH+dbghelp dmp+json 入 nl_core；`tools/analyze-crash.py` 符号化；L2 待用户终端首跑 bat 确认（沙箱禁 GUI）。
 - **M-PERF0 收官**（tag `perf-m0`）：`tools/check-shader-uniformity.py` 59 artifacts×2 门禁零违规；**M-PERF1 已收官**（tag `perf-m1`：`PassTimers` 13 pass × 4-slot 环、`--pass-timing` 默认关零扰动、HUD 逐 pass 面板 + `[nl:info|pass-timing]` 日志锚、`tools/check-perf-m1.py` + run.bat verify 双后端 8 段 ALL GREEN；Q-P4 表已按实码回写）权威落点 `docs/perf/PERF-PLAN.md`。
 - 独立后续项（需单独拍板）：shader trace-coverage（PERF C 档）；`tools/analyze-crash.bat` UTF-8 中文 rem 潜伏违规（待拍板顺手修）；多物体场景复验保边；行驶段循环 demo 旗标。
