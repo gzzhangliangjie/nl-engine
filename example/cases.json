@@ -11730,6 +11730,86 @@
      "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -10 --dist 30"
     }
    ]
+  },
+  {
+   "id": "w2-m0",
+   "label": "W2 M-W2.0",
+   "name": "楼体几何变体：程序化楼型池（单盒/退台/裙楼塔/L形，FNV-1a 纯函数选型零 RNG）",
+   "tag": "w2-m0",
+   "date": "2026-11-13",
+   "summary": "M-W2.0：city-tools 楼体从单一盒体扩成程序化楼型池（用户拍板 A1 全自研 + B1 纯函数，W2-PLAN §2）。4 种形状原语：V0 单盒 / V1 退台（0.55h 处 0.62 缩放）/ V2 裙楼塔（0.30h 裙楼 + 0.55 缩放塔楼，h<6m 纯函数降级退台）/ V3 L 形（翼 x0 内缩 0.06m 消共面 z-fighting）；分档池 tier1={单盒,退台,L形} tier2/3={单盒,退台,裙楼}。变体选取 = fnv1a64(seed‖block‖building) % 3 零 RNG 消费（M-W1.1 材质档同构），RNG 流契约 ①②③④ 逐字节不动；serializeLayout 每楼追加 variant u32；serializeBlockObj 按 buildingParts 展开（每 part 8 顶点 12 三角，UV 沿 W1.1 立面平铺）；generate --stats 增 variants 分布行（纯追加锚）。selftest 82->88（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含 6 组）。bevy_city 楼型池 = kenney glb 外部资产 + rng.random_range 消费选型（assets.rs Buildings::get_random_building），本轨几何自研不走外部资产（kenney 色板图集前科 + A2 否决）。分布锚 seed12345=48/54/8/34、seed12346=49/54/10/31。w0-m2/m3 + w1-m0/m1 基线全量重拍。",
+   "acceptance": [
+    "selftest 88 断言双后端 PASS（含 6 组 M-W2.0 变体断言：池界/四形状同城出现/异 seed 分配必异/裙楼 h<6m 降级/全城 36 block OBJ v/vt/f 行数守恒/part 落原 footprint）",
+    "generate --stats 变体分布锚：variants: single=48 setback=54 podium=8 lshape=34（FNV-1a 确定性）",
+    "w2-m0 run.bat 七段 ALL GREEN：selftest/generate+variants 锚/36 OBJ+city.mtl+textures/同 seed 字节确定性/异 seed 变体分布必异/usage exit 2/negative exit 2",
+    "w0-m2/m3 + w1-m0/m1 基线重拍 ALL GREEN（OBJ/scene/PNG 锚全兼容）；ctest 151/151 双后端",
+    "viewer 消费验收见 w2-m1（俯视/街景双机位变体剪影可辨）"
+   ],
+   "preview": "example/w2-m0/city_top.png",
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2（city-tools 纯 CPU，两构建树产物等价）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性/已知答案/布局锚/噪声/楼体+OBJ+scene 88 条断言",
+     "kind": "tool",
+     "note": "M-W2.0 新增 6 组变体断言（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含）；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (88 assertions)",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：变体楼型 OBJ + city.scene + 俯视 PNG + 变体分布统计",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> 144 栋按分档池展开楼型（48/54/8/34）；variants 锚行是 M-W2.0 分布证据；产物 OBJ 含退台/裙楼/L形多段几何。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w2-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "variants: single=48 setback=54 podium=8 lshape=34",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w2-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w2-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
   }
  ]
 }

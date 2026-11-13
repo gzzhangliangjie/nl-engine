@@ -6,6 +6,7 @@ options:
   --seed N   city seed, any u64 (default 12345)
   --size N   grid blocks per side, 1..64 (default 6)
   --out DIR  output directory, receives city_top.png + roadnet.json
-             + blocks/block_NN.obj (M-W0.2) + city.scene
-  --stats    print CityStats counter block
+             + blocks/block_NN.obj + blocks/city.mtl + textures/tierN.jpg
+             (M-W1.1 textured buildings) + city.scene
+  --stats    print CityStats counter block (incl. density tiers, M-W0.3)
 exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage

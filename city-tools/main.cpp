@@ -28,6 +28,16 @@
 //   M-W0.1 roadnet 车道语义、M-W0.2 楼体分档的消费一律排在此流之后（追加不改前缀）。
 //   M-W0.3 最终形态：① 36 shade → ② 288 楼体档位 → ③ noiseSeed u32（1 次 next）
 //   → ④ 树位置（次数由密度档决定，流尾最后）。③④ 纯追加，①② 逐字节不动。
+//   M-W2.0 楼型变体零 RNG 消费（fnv1a64 纯函数，M-W1.1 材质档同构先例）——
+//   本头注释的消费序契约自 M-W0.3 起冻结，M-W2 未追加任何消费点。
+//
+// M-W2.0 楼型池（docs/worldgen/W2-PLAN.md §2 拍板：A1 程序化楼型池 + B1 纯函数
+//   选型）：CityBuilding 加 variant 字段，fnv1a64(seed‖block‖building) % 池容量
+//   按材质档映射 {tier1:{单盒,退台,L形}, tier2/3:{单盒,退台,裙楼塔}}；裙楼在
+//   h<6m 纯函数降级为退台。serializeBlockObj 按 buildingParts 展开（每 part
+//   8 顶点 12 三角，UV 沿 W1.1 立面平铺规则）。bevy_city 楼型池 = 外部 glb
+//   资产池（kenney building-type-N.glb），本轨几何自研不走外部资产（kenney
+//   色板图集前科 + W2-PLAN §2 A2 否决记录）。
 //
 // M-W0.3 噪声口径（2026-11-13 三处实读留档，docs/worldgen/CITY-TOOLS-GUIDE.md §4）：
 //   simplex 梯度噪声（OpenSimplex 结构同构：F2=(√3-1)/2、G2=(3-√3)/6 数学推导常数，
@@ -232,6 +242,9 @@ struct CityBuilding {
     float hx = 0.f;   // 半宽 x
     float hz = 0.f;   // 半深 z
     float height = 0.f;
+    // M-W2.0 楼型变体（W2-PLAN §2.1）：0=单盒 1=退台 2=裙楼塔 3=L 形。
+    // 选取 = fnv1a64 纯函数（零 RNG 消费），生成期一次定死并进规范序列化。
+    std::uint32_t variant = 0;
 };
 
 // M-W0.3 树（block 局部坐标，仅俯视图 + 统计层；不进 OBJ/city.scene——保
@@ -280,6 +293,59 @@ void subdividePlot(float x0, float x1, float z0, float z1,
     }
     PlotRect r{x0, x1, z0, z1};
     out->push_back(r);
+}
+
+// 材质分配（确定性，不消费 RNG）：tier 复用密度档（forest 归 tier1）。
+int buildingTier(int densityTier) {
+    return densityTier == 0 ? 1 : densityTier;
+}
+
+// ---------------------------------------------------------------------------
+// M-W2.0 楼型池（W2-PLAN §2 拍板：A1 程序化楼型池 + B1 纯函数选型）。
+// 变体原语：0=单盒（现状） 1=退台（下段全 footprint，上段 0.62 缩放居中）
+//           2=裙楼塔（裙楼 0..0.30h 全 footprint，塔楼 0.55 缩放居中）
+//           3=L 形（主体全宽×0.62 深；翼 0.55 宽×全深，x0 内缩 0.06m 消共面）
+// 分档池（材质档 1..3 → 池，容量均 3）：tier1 低层住宅 {单盒,退台,L形}，
+// tier2/3 {单盒,退台,裙楼塔}。选取 = fnv1a64(seed‖block‖building) % 3 纯函数
+// （零 RNG 消费，M-W1.1 材质档同构）；裙楼在 h<6m 纯函数降级为退台（3m 楼配
+// 0.9m 裙楼观感崩，降级判定与 RNG 无关）。
+// bevy_city 对应（2026-11-13 实读留档）：其池 = 每密度档 Buildings{meshes,
+// materials} + kenney building-type-N.glb 外部资产 + rng.random_range 选型；
+// 本轨几何自研不走外部资产（kenney 色板图集前科 + W2-PLAN §2 A2 否决）。
+// ---------------------------------------------------------------------------
+constexpr std::uint32_t kVariantSingle = 0;
+constexpr std::uint32_t kVariantSetback = 1;
+constexpr std::uint32_t kVariantPodium = 2;
+constexpr std::uint32_t kVariantLShape = 3;
+
+// 池容量恒 3；kVariantPool[tier-1] = {V0, V1, V2 或 V3}。
+constexpr std::uint32_t kVariantPool[3][3] = {
+    {kVariantSingle, kVariantSetback, kVariantLShape}, // tier1
+    {kVariantSingle, kVariantSetback, kVariantPodium}, // tier2
+    {kVariantSingle, kVariantSetback, kVariantPodium}, // tier3
+};
+
+std::uint32_t buildingVariant(std::uint64_t seed, std::uint32_t blockIndex,
+                              std::uint32_t buildingIndex, int matTier,
+                              float height) {
+    std::uint8_t buf[16];
+    for (int i = 0; i < 8; ++i)
+        buf[i] = static_cast<std::uint8_t>(seed >> (8 * i));
+    for (int i = 0; i < 4; ++i) {
+        buf[8 + i] = static_cast<std::uint8_t>(blockIndex >> (8 * i));
+        buf[12 + i] = static_cast<std::uint8_t>(buildingIndex >> (8 * i));
+    }
+    std::uint64_t h = 14695981039346656037ULL;
+    for (std::uint8_t v : buf) {
+        h ^= v;
+        h *= 1099511628211ULL;
+    }
+    const int tierIdx = matTier < 1 ? 0 : (matTier > 3 ? 2 : matTier - 1);
+    std::uint32_t picked = kVariantPool[tierIdx][h % 3u];
+    // 裙楼降级：h < 6m 时塔楼段只剩 <4.2m，观感崩 → 纯函数改退台。
+    if (picked == kVariantPodium && height < 6.0f)
+        picked = kVariantSetback;
+    return picked;
 }
 
 // 生成确定性布局：RNG 消费序 = 文件头纪律。第一遍 cell 行主序消费 shade
@@ -356,6 +422,20 @@ CityLayout generateCity(const CityParams& params) {
             tr.cx = (static_cast<float>(rng.below(45u)) - 22.f) * 0.1f; // [-2.2, 2.2]
             tr.cz = (static_cast<float>(rng.below(31u)) - 15.f) * 0.1f; // [-1.5, 1.5]
             cell.trees.push_back(tr);
+        }
+    }
+
+    // M-W2.0 第五遍（零 RNG）：楼型变体回填。排在密度分区之后——变体选型读
+    // 材质档（= 密度档）定池、读 height 做裙楼降级；fnv1a64 纯函数不碰 rng，
+    // 位置放流尾之后对消费序契约无影响。
+    for (std::size_t i = 0; i < lay.cells.size(); ++i) {
+        CityCell& cell = lay.cells[i];
+        const int matTier = buildingTier(static_cast<int>(cell.densityTier));
+        for (std::uint32_t k = 0; k < cell.buildings.size(); ++k) {
+            CityBuilding& bd = cell.buildings[k];
+            bd.variant = buildingVariant(params.seed,
+                                         static_cast<std::uint32_t>(i), k,
+                                         matTier, bd.height);
         }
     }
 
@@ -556,10 +636,7 @@ const float kWindowUnit[kTexTierCount] = {12.0f, 8.0f, 10.0f};
 
 const char* kTexTierNames[kTexTierCount] = {"tier1", "tier2", "tier3"};
 
-// 材质分配（确定性，不消费 RNG）：tier 复用密度档（forest 归 tier1）。
-int buildingTier(int densityTier) {
-    return densityTier == 0 ? 1 : densityTier;
-}
+// 材质分配 buildingTier 定义在 generateCity 之前（M-W2.0 变体回填也消费它）。
 
 // 产物贴图写出：从 srcDir（exe 旁 textures/，CMake 拷贝的入库资产）逐字节
 // 拷贝 tier1/2/3.jpg 到 outDir（<out>/textures/）。JPG 不改字节（CC0 资产
@@ -601,92 +678,134 @@ std::string serializeCityMtl() {
     return s;
 }
 
+// M-W2.0 楼型几何展开（纯函数，楼型唯一真相源）：variant → 盒体段列表。
+// 每段 = 一个 8 顶点盒（y0..y1）；所有段都落在原 footprint [cx±hx, cz±hz] 内
+// （保 M-W0.2「块内两两不重叠」不变量）。L 形翼的 x0 内缩 0.06m 让翼的 -x 面
+// 落进主体体积内（隐藏）而非与主体 -x 面共面（z-fighting）。
+struct BoxPart { float cx, cz, hx, hz, y0, y1; };
+
+int buildingParts(const CityBuilding& b, BoxPart* out) {
+    int n = 0;
+    if (b.variant == kVariantSetback) {
+        const float ySplit = b.height * 0.55f;
+        out[n++] = {b.cx, b.cz, b.hx, b.hz, 0.f, ySplit};
+        out[n++] = {b.cx, b.cz, b.hx * 0.62f, b.hz * 0.62f, ySplit, b.height};
+    } else if (b.variant == kVariantPodium) {
+        const float yPod = b.height * 0.30f;
+        out[n++] = {b.cx, b.cz, b.hx, b.hz, 0.f, yPod};
+        out[n++] = {b.cx, b.cz, b.hx * 0.55f, b.hz * 0.55f, yPod, b.height};
+    } else if (b.variant == kVariantLShape) {
+        const float x0 = b.cx - b.hx;
+        const float w = 2.f * b.hx;
+        const float d = 2.f * b.hz;
+        const float z0 = b.cz - b.hz;
+        // 主体：全宽 × 0.62 深（z0 起步）。
+        out[n++] = {b.cx, z0 + d * 0.31f, b.hx, d * 0.31f, 0.f, b.height};
+        // 翼：0.55 宽 × 全深，x0 内缩 0.06m。
+        const float wx0 = x0 + 0.06f;
+        const float wx1 = x0 + w * 0.55f;
+        out[n++] = {(wx0 + wx1) * 0.5f, b.cz, (wx1 - wx0) * 0.5f, b.hz,
+                    0.f, b.height};
+    } else { // kVariantSingle 与未知值兜底（单盒）
+        out[n++] = {b.cx, b.cz, b.hx, b.hz, 0.f, b.height};
+    }
+    return n;
+}
+
 std::string serializeBlockObj(const CityCell& cell, std::uint32_t blockIndex,
                               std::uint64_t seed) {
     std::string s;
     char buf[128];
     std::snprintf(buf, sizeof buf,
-                  "# city-tools M-W1.1 block mesh (block-local, y-up, meters)\n"
+                  "# city-tools M-W2.0 block mesh (block-local, y-up, meters)\n"
                   "# seed %llu block %u gx %d gz %d buildings %u\n"
                   "mtllib city.mtl\n",
                   static_cast<unsigned long long>(seed), blockIndex, cell.gx,
                   cell.gz, static_cast<unsigned>(cell.buildings.size()));
     s += buf;
-    std::uint32_t base = 1; // OBJ 顶点索引从 1 起
+    std::uint32_t base = 1;  // OBJ 顶点索引从 1 起
     std::uint32_t vtBase = 1; // vt 索引同从 1 起
     for (std::size_t bi = 0; bi < cell.buildings.size(); ++bi) {
         const CityBuilding& b = cell.buildings[bi];
-        const float hx = b.hx, hz = b.hz, h = b.height;
         const int matTier = buildingTier(static_cast<int>(cell.densityTier));
         std::snprintf(buf, sizeof buf, "o b%u\nusemtl tier%d\n",
                       static_cast<unsigned>(bi), matTier);
         s += buf;
-        const float vx[8] = {b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx,
-                             b.cx - hx, b.cx + hx, b.cx + hx, b.cx - hx};
-        const float vy[8] = {0.f, 0.f, 0.f, 0.f, h, h, h, h};
-        const float vz[8] = {b.cz - hz, b.cz - hz, b.cz + hz, b.cz + hz,
-                             b.cz - hz, b.cz - hz, b.cz + hz, b.cz + hz};
-        for (int i = 0; i < 8; ++i) {
-            std::snprintf(buf, sizeof buf, "v %.3f %.3f %.3f\n", vx[i], vy[i],
-                          vz[i]);
-            s += buf;
-        }
-        // 每 quad 4 vt：(u0,v0)(u1,v0)(u1,v1)(u0,v1)。立面按本档世界尺寸
-        // 平铺（kWindowUnit[matTier-1] 米/tile）；顶/底面收缩到纹理左下角
-        // 微区域（0.01~0.02，采样恒定像素色，不占立面图案区域）。
+        BoxPart parts[4];
+        const int np = buildingParts(b, parts);
         const float unit = kWindowUnit[matTier - 1];
-        const float eu = 2.f * hx / unit; // z 面 u 跨度
-        const float ez = 2.f * hz / unit; // x 面 u 跨度
-        const float ev = h / unit;        // 立面 v 跨度
-        struct FaceQuad { int quad[4]; float u0, v0, u1, v1; };
-        const FaceQuad faces[6] = {
-            {{0, 1, 2, 3}, 0.01f, 0.01f, 0.02f, 0.02f},  // 底 -y
-            {{4, 5, 6, 7}, 0.01f, 0.01f, 0.02f, 0.02f},  // 顶 +y
-            {{0, 1, 5, 4}, 0.f,   0.f,   eu,   ev  },    // z-
-            {{2, 3, 7, 6}, 0.f,   0.f,   eu,   ev  },    // z+
-            {{1, 2, 6, 5}, 0.f,   0.f,   ez,   ev  },    // x+
-            {{0, 3, 7, 4}, 0.f,   0.f,   ez,   ev  },    // x-
-        };
-        for (const FaceQuad& fq : faces) {
-            for (int qi = 0; qi < 4; ++qi) {
-                const float u = qi == 0 || qi == 3 ? fq.u0 : fq.u1;
-                const float v = qi == 0 || qi == 1 ? fq.v0 : fq.v1;
-                std::snprintf(buf, sizeof buf, "vt %.3f %.3f\n", u, v);
+        for (int pi = 0; pi < np; ++pi) {
+            const BoxPart& p = parts[pi];
+            const float hx = p.hx, hz = p.hz;
+            const float vx[8] = {p.cx - hx, p.cx + hx, p.cx + hx, p.cx - hx,
+                                 p.cx - hx, p.cx + hx, p.cx + hx, p.cx - hx};
+            const float vy[8] = {p.y0, p.y0, p.y0, p.y0,
+                                 p.y1, p.y1, p.y1, p.y1};
+            const float vz[8] = {p.cz - hz, p.cz - hz, p.cz + hz, p.cz + hz,
+                                 p.cz - hz, p.cz - hz, p.cz + hz, p.cz + hz};
+            for (int i = 0; i < 8; ++i) {
+                std::snprintf(buf, sizeof buf, "v %.3f %.3f %.3f\n", vx[i], vy[i],
+                              vz[i]);
                 s += buf;
             }
+            // 每 quad 4 vt：(u0,v0)(u1,v0)(u1,v1)(u0,v1)。立面按本档世界尺寸
+            // 平铺（kWindowUnit[matTier-1] 米/tile）；顶/底面收缩到纹理左下角
+            // 微区域（0.01~0.02，采样恒定像素色，不占立面图案区域）。段立面
+            // v 跨度 = 段净高/unit（退台/裙楼各段独立计高）。
+            const float eu = 2.f * hx / unit; // z 面 u 跨度
+            const float ez = 2.f * hz / unit; // x 面 u 跨度
+            const float ev = (p.y1 - p.y0) / unit; // 立面 v 跨度
+            struct FaceQuad { int quad[4]; float u0, v0, u1, v1; };
+            const FaceQuad faces[6] = {
+                {{0, 1, 2, 3}, 0.01f, 0.01f, 0.02f, 0.02f},  // 底 -y
+                {{4, 5, 6, 7}, 0.01f, 0.01f, 0.02f, 0.02f},  // 顶 +y
+                {{0, 1, 5, 4}, 0.f,   0.f,   eu,   ev  },    // z-
+                {{2, 3, 7, 6}, 0.f,   0.f,   eu,   ev  },    // z+
+                {{1, 2, 6, 5}, 0.f,   0.f,   ez,   ev  },    // x+
+                {{0, 3, 7, 4}, 0.f,   0.f,   ez,   ev  },    // x-
+            };
+            for (const FaceQuad& fq : faces) {
+                for (int qi = 0; qi < 4; ++qi) {
+                    const float u = qi == 0 || qi == 3 ? fq.u0 : fq.u1;
+                    const float v = qi == 0 || qi == 1 ? fq.v0 : fq.v1;
+                    std::snprintf(buf, sizeof buf, "vt %.3f %.3f\n", u, v);
+                    s += buf;
+                }
+            }
+            // 两三角/面，顶点 local idx -> quad 内 vt 位移（保持 M-W0.2 外向
+            // 绕序，vt 与顶点一一对应）。
+            static const int kTriVt[12][3] = {
+                {0, 2, 3}, {0, 1, 2},   // 底：quad 0,1,2,3
+                {0, 2, 1}, {0, 3, 2},   // 顶：quad 4,5,6,7
+                {0, 2, 1}, {0, 3, 2},   // z-：quad 0,1,5,4
+                {0, 2, 1}, {0, 3, 2},   // z+：quad 2,3,7,6
+                {0, 2, 1}, {0, 3, 2},   // x+：quad 1,2,6,5
+                {0, 2, 1}, {0, 1, 2},   // x-：quad 0,3,7,4
+            };
+            // 每面 quad vt 基 = vtBase + face*4；三角 kTriVt[f] 给出 quad 内位移。
+            static const std::uint32_t kTris[12][3] = {
+                {1, 3, 4}, {1, 2, 3},   // 底面 (-y)
+                {5, 8, 7}, {5, 7, 6},   // 顶面 (+y)
+                {1, 6, 2}, {1, 5, 6},   // z- 面
+                {3, 8, 4}, {3, 7, 8},   // z+ 面
+                {2, 7, 3}, {2, 6, 7},   // x+ 面
+                {1, 8, 5}, {1, 4, 8},   // x- 面
+            };
+            for (int fi = 0; fi < 12; ++fi) {
+                const std::uint32_t vb =
+                    vtBase + static_cast<std::uint32_t>(fi / 2) * 4u;
+                std::snprintf(buf, sizeof buf, "f %u/%u %u/%u %u/%u\n",
+                              base + kTris[fi][0] - 1,
+                              vb + static_cast<std::uint32_t>(kTriVt[fi][0]),
+                              base + kTris[fi][1] - 1,
+                              vb + static_cast<std::uint32_t>(kTriVt[fi][1]),
+                              base + kTris[fi][2] - 1,
+                              vb + static_cast<std::uint32_t>(kTriVt[fi][2]));
+                s += buf;
+            }
+            base += 8;
+            vtBase += 24;
         }
-        // 两三角/面，顶点 local idx -> quad 内 vt 位移（保持 M-W0.2 外向绕序，
-        // vt 与顶点一一对应）。
-        static const int kTriVt[12][3] = {
-            {0, 2, 3}, {0, 1, 2},   // 底：quad 0,1,2,3
-            {0, 2, 1}, {0, 3, 2},   // 顶：quad 4,5,6,7
-            {0, 2, 1}, {0, 3, 2},   // z-：quad 0,1,5,4
-            {0, 2, 1}, {0, 3, 2},   // z+：quad 2,3,7,6
-            {0, 2, 1}, {0, 3, 2},   // x+：quad 1,2,6,5
-            {0, 2, 1}, {0, 1, 2},   // x-：quad 0,3,7,4
-        };
-        // 每面 quad vt 基 = vtBase + face*4；三角 kTriVt[f] 给出 quad 内位移。
-        static const std::uint32_t kTris[12][3] = {
-            {1, 3, 4}, {1, 2, 3},   // 底面 (-y)
-            {5, 8, 7}, {5, 7, 6},   // 顶面 (+y)
-            {1, 6, 2}, {1, 5, 6},   // z- 面
-            {3, 8, 4}, {3, 7, 8},   // z+ 面
-            {2, 7, 3}, {2, 6, 7},   // x+ 面
-            {1, 8, 5}, {1, 4, 8},   // x- 面
-        };
-        for (int fi = 0; fi < 12; ++fi) {
-            const std::uint32_t vb = vtBase + static_cast<std::uint32_t>(fi / 2) * 4u;
-            std::snprintf(buf, sizeof buf, "f %u/%u %u/%u %u/%u\n",
-                          base + kTris[fi][0] - 1,
-                          vb + static_cast<std::uint32_t>(kTriVt[fi][0]),
-                          base + kTris[fi][1] - 1,
-                          vb + static_cast<std::uint32_t>(kTriVt[fi][1]),
-                          base + kTris[fi][2] - 1,
-                          vb + static_cast<std::uint32_t>(kTriVt[fi][2]));
-            s += buf;
-        }
-        base += 8;
-        vtBase += 24;
     }
     return s;
 }
@@ -777,6 +896,8 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
         b.push_back(static_cast<std::uint8_t>(c.shade));
         b.push_back(static_cast<std::uint8_t>(c.densityTier)); // M-W0.3
         // M-W0.2：楼体数据进规范序列化（float 按 IEEE 位原样写入，确定性）。
+        // M-W2.0：variant 追加在 5 个 float 之后（规范字节格式变更，确定性锚
+        // 全部动态比对，无硬编码 hash 波及）。
         appendU32(b, static_cast<std::uint32_t>(c.buildings.size()));
         for (const CityBuilding& bd : c.buildings) {
             float fields[5] = {bd.cx, bd.cz, bd.hx, bd.hz, bd.height};
@@ -785,6 +906,7 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
                 std::memcpy(&bits, &f, 4);
                 appendU32(b, bits);
             }
+            appendU32(b, bd.variant); // M-W2.0
         }
         // M-W0.3：树位置进规范序列化。
         appendU32(b, static_cast<std::uint32_t>(c.trees.size()));
@@ -1136,6 +1258,105 @@ SelftestResult runSelftest(bool verbose) {
     for (const CityCell& cl : lay.cells) shadeIn = shadeIn && cl.shade < 16u;
     expect(shadeIn, "rng: all cell shades in [0,16)");
 
+    // --- M-W2.0 楼型变体（W2-PLAN §2：FNV-1a 纯函数选型，零 RNG 消费）---
+    {
+        // ① 池界 + 分档约束：variant ∈ 该材质档池（tier1 不产裙楼、tier2/3 不产 L 形）。
+        bool poolOk = true;
+        for (const CityCell& cl : lay.cells) {
+            const int mt = buildingTier(static_cast<int>(cl.densityTier));
+            for (const CityBuilding& bd : cl.buildings) {
+                const std::uint32_t v = bd.variant;
+                const bool ok = mt == 1 ? (v == kVariantSingle ||
+                                           v == kVariantSetback ||
+                                           v == kVariantLShape)
+                                        : (v == kVariantSingle ||
+                                           v == kVariantSetback ||
+                                           v == kVariantPodium);
+                poolOk = poolOk && ok;
+            }
+        }
+        expect(poolOk, "variant: all buildings inside their tier pool (M-W2.0)");
+
+        // ② 覆盖度：四种变体同城至少各一次（144 楼期望分布 单盒≈48/退台≈48/裙楼≈9/L≈34）。
+        bool seen[4] = {false, false, false, false};
+        for (const CityCell& cl : lay.cells)
+            for (const CityBuilding& bd : cl.buildings)
+                seen[bd.variant < 4u ? bd.variant : 0u] = true;
+        expect(seen[0] && seen[1] && seen[2] && seen[3],
+               "variant: all four shapes occur in the seed-12345 city (M-W2.0)");
+
+        // ③ seed 敏感：异 seed 变体分配必异（serializeLayout 已含 variant，此处直查）。
+        const CityLayout layV = generateCity(p1);
+        bool variantDiff = false;
+        for (std::size_t i = 0; i < lay.cells.size() && !variantDiff; ++i) {
+            for (std::size_t k = 0; k < lay.cells[i].buildings.size(); ++k) {
+                if (lay.cells[i].buildings[k].variant !=
+                    layV.cells[i].buildings[k].variant) {
+                    variantDiff = true;
+                    break;
+                }
+            }
+        }
+        expect(variantDiff,
+               "variant: different seed -> different assignment (M-W2.0)");
+
+        // ④ 裙楼降级：h < 6m 无裙楼（纯函数降级，非 RNG）。
+        bool podiumGuard = true;
+        for (const CityCell& cl : lay.cells)
+            for (const CityBuilding& bd : cl.buildings)
+                if (bd.variant == kVariantPodium && bd.height < 6.f)
+                    podiumGuard = false;
+        expect(podiumGuard,
+               "variant: podium never picked below 6m height (pure downgrade)");
+
+        // ⑤ OBJ part 展开守恒：v 行 = Σparts*8，vt 行 = Σparts*24，f 行 = Σparts*12
+        // （全城 36 block 逐份核对）。
+        bool objOk = true;
+        for (std::size_t i = 0; i < lay.cells.size(); ++i) {
+            const std::string obj = serializeBlockObj(
+                lay.cells[i], static_cast<std::uint32_t>(i), p0.seed);
+            std::int64_t nv = 0, nvt = 0, nf = 0;
+            for (const char* p = obj.c_str(); *p != '\0';) {
+                if (p[0] == 'v' && p[1] == ' ') ++nv;
+                else if (p[0] == 'v' && p[1] == 't' && p[2] == ' ') ++nvt;
+                else if (p[0] == 'f' && p[1] == ' ') ++nf;
+                while (*p != '\0' && *p != '\n') ++p;
+                if (*p == '\n') ++p;
+            }
+            std::int64_t expV = 0, expVt = 0, expF = 0;
+            for (const CityBuilding& bd : lay.cells[i].buildings) {
+                BoxPart parts[4];
+                const int np = buildingParts(bd, parts);
+                expV += static_cast<std::int64_t>(np) * 8;
+                expVt += static_cast<std::int64_t>(np) * 24;
+                expF += static_cast<std::int64_t>(np) * 12;
+            }
+            objOk = objOk && nv == expV && nvt == expVt && nf == expF;
+        }
+        expect(objOk,
+               "variant: OBJ part expansion v/vt/f conservation over 36 blocks (M-W2.0)");
+
+        // ⑥ part 落原 footprint 内（保 M-W0.2「块内两两不重叠」不变量）。
+        bool containOk = true;
+        for (const CityCell& cl : lay.cells) {
+            for (const CityBuilding& bd : cl.buildings) {
+                BoxPart parts[4];
+                const int np = buildingParts(bd, parts);
+                for (int pi = 0; pi < np; ++pi) {
+                    const BoxPart& q = parts[pi];
+                    const bool in = q.cx - q.hx >= bd.cx - bd.hx - 1e-4f &&
+                                    q.cx + q.hx <= bd.cx + bd.hx + 1e-4f &&
+                                    q.cz - q.hz >= bd.cz - bd.hz - 1e-4f &&
+                                    q.cz + q.hz <= bd.cz + bd.hz + 1e-4f &&
+                                    q.y0 >= -1e-4f && q.y1 <= bd.height + 1e-4f;
+                    containOk = containOk && in;
+                }
+            }
+        }
+        expect(containOk,
+               "variant: all parts within original footprint (non-overlap invariant)");
+    }
+
     // --- PNG 确定性 + 签名 ---
     RasterConfig cfg;
     std::vector<std::uint8_t> pngA, pngB, pngC;
@@ -1324,7 +1545,8 @@ SelftestResult runSelftest(bool verbose) {
     expect(tallCount > 0u && tallCount < 144u,
            "buildings: height tiers mixed across city (seed-sensitive)");
 
-    // OBJ：每块 4 objects / 32 v / 48 f，双跑逐字节、异 seed 必异。
+    // OBJ：每块 4 objects，v/f/vt 行数 = buildingParts 动态求和（M-W2.0 变体
+    // 楼型 part 数不再恒 1）；双跑逐字节、异 seed 必异。
     {
         const std::string objA = serializeBlockObj(lay.cells[0], 0, p0.seed);
         const std::string objB =
@@ -1337,12 +1559,19 @@ SelftestResult runSelftest(bool verbose) {
              pos != std::string::npos; pos = objA.find("\nf ", pos + 1)) ++fCount;
         for (std::size_t pos = objA.find("\no ");
              pos != std::string::npos; pos = objA.find("\no ", pos + 1)) ++oCount;
-        expect(vCount == 32u && fCount == 48u && oCount == 4u,
-               "obj: 4 buildings -> 32 verts / 48 tris / 4 objects");
+        std::uint64_t expV = 0, expF = 0;
+        for (const CityBuilding& bd : lay.cells[0].buildings) {
+            BoxPart parts[4];
+            const int np = buildingParts(bd, parts);
+            expV += static_cast<std::uint64_t>(np) * 8;
+            expF += static_cast<std::uint64_t>(np) * 12;
+        }
+        expect(vCount == expV && fCount == expF && oCount == 4u,
+               "obj: 4 buildings -> parts-expanded verts/tris / 4 objects (M-W2.0)");
         expect(serializeBlockObj(generateCity(p1).cells[0], 0, p1.seed) != objA,
                "obj: different seed -> different bytes (tier draws)");
-        // M-W1.1 纹理化锚：vt 每 building 24（6 面 x 4 角）、usemtl 每
-        // building 1 且全部命中合法材质名、f 行必须带 vt 索引。
+        // M-W1.1 纹理化锚（M-W2.0 行数按 part 展开）：vt 每 part 24（6 面 x
+        // 4 角）、usemtl 每 building 1 且全部命中合法材质名、f 行必须带 vt 索引。
         std::uint32_t vtCount = 0, usemtlCount = 0, fWithVt = 0;
         for (std::size_t pos = objA.find("\nvt ");
              pos != std::string::npos; pos = objA.find("\nvt ", pos + 1)) ++vtCount;
@@ -1360,9 +1589,8 @@ SelftestResult runSelftest(bool verbose) {
             }
             if (slashes == 3) ++fWithVt;
         }
-        expect(vtCount == 96u && usemtlCount == 4u && fWithVt == 48u,
-               "obj: 96 vt / 4 usemtl / 48 f-with-vt (4 buildings, "
-               "6-face quad UVs)");
+        expect(vtCount == expV * 3 && usemtlCount == 4u && fWithVt == expF,
+               "obj: parts-expanded vt / 4 usemtl / f-with-vt (M-W2.0)");
         expect(objA.find("mtllib city.mtl") != std::string::npos,
                "obj: mtllib city.mtl present");
         bool matNamesOk = true;
@@ -1747,6 +1975,16 @@ int runGenerate(const GenerateConfig& cfg, const std::string& assetDir) {
             lay.stats.cars, lay.stats.fences, lay.stats.paths,
             lay.stats.forestCells, lay.stats.lowCells, lay.stats.mediumCells,
             lay.stats.highCells, lay.noiseSeed);
+        // M-W2.0 楼型变体分布（纯追加行，不破既有 findstr 锚；FNV-1a 选型
+        // 确定性 → 分布是 seed 的确定函数）。
+        std::uint32_t vCount[4] = {0, 0, 0, 0};
+        for (const CityCell& c : lay.cells)
+            for (const CityBuilding& b : c.buildings)
+                if (b.variant < 4u) ++vCount[b.variant];
+        std::printf(
+            "variants: single=%u setback=%u podium=%u lshape=%u "
+            "(M-W2.0 fnv1a pool)\n",
+            vCount[0], vCount[1], vCount[2], vCount[3]);
     }
     return 0;
 }

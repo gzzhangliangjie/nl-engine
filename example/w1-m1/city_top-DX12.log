@@ -1,0 +1,32 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info|viewer] ecs scene: 36 objects | 0 lights (0 point) | ambient 0.28
+[nl:info|scene] ecs scene ready: city.scene.engine | objects=36 lights=0 ambient=0.28 shadowLights=0 | batches=144 | triangles=2880 | shader=dxil
+[nl:info|viewer] tick groups: PrePhysics->PostPhysics->PostUpdateWork (registered=3)
+[nl:info|viewer] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] mode: scene | objects=36 triangles=2880 model=city.scene.engine | HUD: off | case: ESC=quit, F12=PNG
+[nl:info|viewer] screenshot mode: 8 frames -> E:\UE_STUDY_2026\nl-engine-worldgen\example\w1-m1\city_top.png
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path)
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:info|renderer] gpu timer resolved [frame]: 0.062464 ms (first successful NVRHI timestamp query)
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug|renderer] D3D12 info queue messages: 1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:info|viewer] screenshot written: example/w1-m1/city_top.png
+[nl:info|viewer] shutdown ok (frames=8 screenshots=1 deviceErrors=0)
+[nl:info|viewer] frame timing: avg 80.8376 ms  max 499.577 ms  over 8 frames (unthrottled)
+[nl:info] window destroyed

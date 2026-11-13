@@ -3479,3 +3479,39 @@
 4. kenney city-kit 实测为色板图集（窗户靠几何建模）——「成熟工具」资产先拉一张看内容再定案。
 
 **下一步**：M-W1 整轨收官（close + release --done）；后续方向：楼体几何变体（bevy 每档 5 种楼型池）、树/车资产通道、交通 M-T0。
+
+## W2 M-W2.0 — 程序化楼型池：4 形状原语 × 分档池（feat/worldgen，2026-11-13，tag `w2-m0`）
+
+**动作**：M-W2 立项（用户拍板「楼体几何变体」方向 + Q-W2A=A1 全自研程序化楼型池 / Q-W2B=B1 FNV-1a 纯函数选型 / Q-W2C 形状集本轮定死，W2-PLAN §2）。city-tools：`CityBuilding.variant` 字段（fnv1a64(seed‖block‖building) % 3 零 RNG 消费，M-W1.1 材质档同构）+ 4 形状原语（V0 单盒 / V1 退台 0.55h 处 0.62 缩放 / V2 裙楼塔 0.30h + 0.55 缩放、h<6m 纯函数降级退台 / V3 L 形翼 x0 内缩 0.06m 消共面）+ 分档池 tier1={V0,V1,V3} tier2/3={V0,V1,V2}（容量均 3）+ `buildingParts` 楼型几何唯一真相源（part 全落原 footprint，保「块内两两不重叠」不变量）+ `serializeBlockObj` 按 part 展开（每 part 8 顶点 12 三角，UV 立面 v 跨度 = 段净高/unit）+ `serializeLayout` 每楼追加 variant u32 + `generate --stats` 增 `variants:` 分布行（纯追加锚）。selftest 82→88。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + docs/worldgen/W2-PLAN.md + example/w2-m0/{run.bat, selftest.log, generate.log, usage.log, negative.log, city_top.png, city.scene, roadnet.json, blocks/, textures/} + w0-m2/m3/w1-m0/w1-m1 基线重拍 + cases.json 卡 127 + CITY-TOOLS-GUIDE §6 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 selftest 88 断言双树 PASS（新增 6 组：池界 / 四形状同城出现 / 异 seed 分配必异 / 裙楼降级 / 全城 OBJ v/vt/f 行数守恒 / part footprint 包含）；ctest 151/151×2。
+- 🟢 变体分布锚：seed12345 = single48/setback54/podium8/lshape34（合计 144），seed12346 = 49/54/10/31——FNV-1a 纯函数确定性。
+- 🟢 w2-m0 run.bat 七段 ALL GREEN；回归 --only w2-m0 8/8 + w0-m2/m3、w1-m0 各 8/8 bytes ALL GREEN；server.py --check exit 0。
+- 🟢 RNG 流契约零破坏：变体选取零消费，文件头消费序 ①②③④ 逐字节不动（selftest 动态锚锁定）。
+
+**踩坑情况**
+1. 变体回填首版写在楼体生成第二遍内——`densityTier` 要到第三遍噪声才填，材质档恒读 0 → 立刻重排为独立第五遍（零 RNG，流尾之后任意位置无影响）。**教训：跨遍依赖的字段回填必须排在依赖链末端。**
+2. L 形两盒拼接的翼 -x 面与主体 -x 面共面 → z-fighting 风险，翼 x0 内缩 0.06m 让翼面落进主体体积内（隐藏）；叠段（退台/裙楼）上下段共面为反向面（上段底面下向 + 下段顶面上向），backface culling 下无冲突，沿 W1 街景实证无条纹。
+
+**下一步**：M-W2.1 消费验收（drive + viewer 双机位变体证据图 + 回归 + close/release 收官 M-W2）。
+
+## W2 M-W2.1 — 变体消费验收 + 两处基建加固（feat/worldgen，2026-11-13，tag `w2-m1`，M-W2 整轨收官）
+
+**动作**：city2engine drive `--scene-out example/w2-m1/` 全城落位（36 OBJ 多段楼型 → glb + nanite 套件，消费链零适配）+ viewer `--scene` 双后端双机位渲染（俯视 footprint 四变体可辨 / 街景天际线剪影）。**基建加固两处**：① run_checked 重试参数（retries 2→4 + sleep 0.2s→指数退避 0.5/1/2/4s）——M-W1.1 参数在基线重拍实测死亡率 ~11/12（transient 3 连挂、失败点漂移；python 单项直拉同命令 20/20 全过）；② w1_check.py hash 集合按文档口径修复（W1.0 潜伏 bug：HERE.iterdir() 全量收录把 h1/h2 重定向文件卷进集合，时序使 seg5 对拍永不通过）+ w1-m1/w2-m1 image 卡补 baselines 登记（m0.2 老口径，W1 收官「回归 8/8」实为口径含糊，本轨勘误）。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py 加固 + example/w1-m0/w1_check.py hash 修复 + example/w2-m1/{run.bat, drive.log, city.scene.engine, city_delivery.png, 4 PNG, 4 log} + cases.json 卡 128 + w1-m1 卡 baselines 补登记 + CITY-TOOLS-GUIDE §7 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 drive 零闪断（加固后）：blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36；同路径双跑 delivery 集合 sha256 一致（修复口径）。
+- 🟢 双后端渲染 4 图 + screenshot written 锚齐；变体剪影与 w1-m1 同机位构图对比几何差异清晰。
+- 🟢 回归：w2-m1 4/4 + w1-m1 4/4（补 baselines 后首绿）+ w1-m0 8/8 + w0-m2/m3 各 8/8 + w2-m0 8/8；server.py --check exit 0。
+
+**踩坑情况**
+1. **w1_check.py hash 集合自吞重定向文件（W1.0 潜伏 bug）**：h1 计算时 h1.txt=0B 在集合、h2 计算时 h1.txt=内容 + h2.txt=0B，集合永不对称 → run.bat seg5 按原写法**永远不通过**；M-W1 验收通过实为复刻工具在集合外对拍的等效口径。修复 = hash 集合收敛到文档口径（glb + meshlets + scene.engine + evidence png）。**教训：确定性对拍不得把对拍工具自身的 I/O 文件卷进集合；验收 run.bat 首跑即验真，不能只靠等效复刻。**
+2. run_checked 旧参数实测不够：重试 3 次全挂 ≠ 永久失败——失败窗口有时间聚集性，sleep 0.2s 太短；指数退避后零闪断。**教训：重试闸的参数要按「最恶劣批跑」（108 连发 spawn）标定，不是按单项复现标定。**
+3. 街景近景机位 dist=16 钻楼底（相机在几何内部看背面），回退 w1-m1 验证过的 yaw28/pitch-10/dist30——**教训：新机位必须先小图验证构图再入交付物。**
+
+**下一步**：M-W2 整轨收官（close + release --done）；后续方向：树/车资产通道、交通 M-T0、楼型池扩展（每档 >3 种）。

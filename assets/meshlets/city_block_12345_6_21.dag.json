@@ -1,11 +1,13 @@
 {
   "prefix": "assets/meshlets/city_block_12345_6_21",
   "levels": [
-    {"level": 0, "clusters": 4, "triangles": 48, "groups": [
+    {"level": 0, "clusters": 6, "triangles": 72, "groups": [
       {"id": 0, "error": 3.42381, "simplifyError": 0, "sphere": [-1.95, 0, -1.2, 3.54013], "children": [0], "parents": []},
-      {"id": 1, "error": 8.23423, "simplifyError": 0, "sphere": [-2.1, 0, 0.15, 8.32121], "children": [1], "parents": []},
-      {"id": 2, "error": 14.0969, "simplifyError": 0, "sphere": [0.3, 0, -1.2, 14.1256], "children": [2], "parents": []},
-      {"id": 3, "error": 14.0969, "simplifyError": 0, "sphere": [0.3, 0, 0.3, 14.1256], "children": [3], "parents": []}
+      {"id": 1, "error": 3.09233, "simplifyError": 0, "sphere": [-2.1, 0, 0.15, 3.317], "children": [1], "parents": []},
+      {"id": 2, "error": 5.70168, "simplifyError": 0, "sphere": [-0.589, 8, 0.42, 5.73975], "children": [2], "parents": []},
+      {"id": 3, "error": 14.0969, "simplifyError": 0, "sphere": [0.3, 0, -1.2, 14.1256], "children": [3], "parents": []},
+      {"id": 4, "error": 7.8748, "simplifyError": 0, "sphere": [0.3, 0, 0.3, 7.92606], "children": [4], "parents": []},
+      {"id": 5, "error": 6.38268, "simplifyError": 0, "sphere": [0.613, 7.7, 0.471, 6.40702], "children": [5], "parents": []}
     ]}
   ]
 }

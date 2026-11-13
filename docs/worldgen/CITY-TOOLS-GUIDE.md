@@ -221,3 +221,51 @@ selftest 以「重建流 next() == noiseSeed」锁定 ③ 段位置；①② 段
   `example/w0-m3/run.bat` 七段 ALL GREEN exit 0（stats 密度档 + noiseSeed 锚、
   异 seed 密度分布必异段）。
 - RNG：①② 段逐字节不动（重建流断言）；③④ 段纯追加。
+
+## 5. M-W1.1 — 建筑贴图化：ambientCG CC0 立面（2026-11-13，tag `w1-m1`）
+
+- 贴图三档（`thirdparty/ambientcg-facades/`，VENDOR.md 溯源）：tier1=Facade018A
+  砖墙住宅 / tier2=Facade001 幕墙办公 / tier3=Facade002 亮窗塔楼（512px JPG）。
+  `generate` 增产 `city.mtl`（3 newmtl，map_Kd basename）+ `textures/`（入库
+  JPG 逐字节拷贝）；OBJ 加 6 面 quad vt（立面 kWindowUnit[12,8,10] 米/tile
+  平铺、顶/底面收缩到纹理角点微区）+ usemtl 档分组。
+- 材质分配 = 密度档确定函数（forest 归 tier1），**零 RNG 消费**——M-W0 流
+  契约 ①②③④ 逐字节不动。
+
+## 6. M-W2.0 — 程序化楼型池：4 形状原语 × 分档池（2026-11-13，tag `w2-m0`）
+
+- 拍板（W2-PLAN §2）：A1 全自研程序化楼型池（A2 外部 CC0 glb 池否决——kenney
+  色板图集前科）+ B1 FNV-1a 纯函数选型（M-W1.1 材质档同构）。
+- 形状原语：V0 单盒 / V1 退台（0.55h 分段、上段 0.62 缩放）/ V2 裙楼塔
+  （0.30h 裙楼 + 0.55 缩放塔楼，**h<6m 纯函数降级退台**）/ V3 L 形（主体
+  全宽×0.62 深 + 翼 0.55 宽×全深，**翼 x0 内缩 0.06m 消共面 z-fighting**）。
+- 分档池（容量均 3）：tier1={V0,V1,V3} tier2/3={V0,V1,V2}；选取 =
+  `fnv1a64(seed‖block‖building) % 3`，**零 RNG 消费**（流契约头注释冻结）。
+- 实现切面：`CityBuilding.variant`（进规范序列化）；`buildingParts` = 楼型
+  几何唯一真相源（part = 8 顶点盒 y0..y1，全部落在原 footprint 内——保
+  「块内两两不重叠」不变量）；`serializeBlockObj` 按 part 展开（UV 立面 v
+  跨度 = 段净高/unit）；`generate --stats` 增 `variants:` 分布行（纯追加锚）。
+- 分布锚：seed12345 = single48/setback54/podium8/lshape34；
+  seed12346 = 49/54/10/31（裙楼降级把 3m 楼层裙楼挪进退台 → setback > 单盒）。
+- selftest 82→88：池界 / 四形状同城出现 / 异 seed 分配必异 / 裙楼降级 /
+  全城 36 block OBJ v/vt/f 行数守恒 / part footprint 包含。
+- bevy_city 对应（实读留档）：其池 = 每密度档 `Buildings{meshes,materials}` +
+  kenney `building-type-N.glb` 外部资产 + `rng.random_range` 消费选型
+  （examples/large_scenes/bevy_city/src/assets.rs）；本轨几何自研。
+
+## 7. M-W2.1 — 变体消费验收 + 两处基建加固（2026-11-13，tag `w2-m1`）
+
+- 消费链零适配：city2engine drive / obj2glb / nanite 套件 / viewer 白名单
+  直接吃多段楼型几何——「消费链对变体几何零适配成本」是本轨核心判据。
+- **run_checked 加固**（city2engine.py）：M-W1.1 的 retries=2 + sleep 0.2s
+  实测不够（drive 108 连发下 transient 空输出 3 连挂、失败点漂移、死亡率
+  ~11/12；python 单项直拉同命令 20/20 全过）→ retries=4 + 指数退避
+  0.5s→1s→2s→4s。确定性产物不受影响，只影响瞬时干扰恢复力。
+- **w1_check.py hash 集合修复**（W1.0 潜伏 bug 基线重拍炸出）：文档口径 =
+  glb + meshlets + scene.engine + evidence png；旧 `HERE.iterdir()` 全量
+  收录把 h1/h2 重定向文件卷进集合——h1 计算时 0B、h2 计算时已有内容，集合
+  永不对称 → run.bat seg5 确定性对拍**按原写法永远不通过**（M-W1 验收是
+  复刻工具在集合外对拍的等效口径）。修复后 seg5 真跑 MATCH。
+- **w1-m1/w2-m1 image 卡补 baselines 登记**（m0.2 老口径：per-case
+  `baselines:{dx12,vulkan}` 指向产物 PNG）——旧卡无 baselines，回归
+  judge_image 基线缺失必 FAIL（W1 收官「回归 8/8」实为口径含糊，本轨勘误）。
