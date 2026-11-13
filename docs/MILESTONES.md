@@ -3344,3 +3344,98 @@
 2. 跨轨依赖（asset-ingest merge）为 M-W1.0 硬闸，已写进 W1-PLAN 开工闸，闸未开不落码。
 
 **下一步**：等 feat/asset-ingest merge master → `claim --track worldgen --milestone M-W1.0` → M-W1.0 引擎交付驱动步（OBJ→glb→nmesh→city.scene.engine + selftest 扩锚）。
+## S13 M13.0 — per-cluster BLAS 预建 + 内存双口径记账（feat/s13，2026-11-13，tag `s13-preblas`）
+
+**动作**：S13 轨道 wt 建立（`nl-engine-s13` @ master `e3a2ef4`，junction `.workbuddy`/`slang dist` + skip-worktree 9 文件，TRACKS 注册 s13 active + claim M13.0）后落码：① `Scene::initClusterBlas`（`--cluster-blas` 默认关，initDag 拼接循环完成后调用）——逐层逐簇预建 BLAS 全常驻，全部簇共享两块 build-input slab（position-only 12B VB + u8 局部索引→u32 展开 IB；簇顶点 .nmesh 已去重，「重展开」即索引格式转换），每簇 geometry 用 `GeometryTriangles.vertexOffset/indexOffset` 引用窗口，`clusterBlas_` 下标 = 全局簇 id（与 clusterMeta 同序）；② 构建分块提交（2048 build/列表 + 块间 waitForIdle + permanent 态首块落定）；③ 内存双口径记账 `inputBytes`（slab 实际字节）/`estBytes`（tri×64B+512B 上界估算，NVRHI 无 AS 尺寸查询）→ 日志锚 + HUD `CLAS`/`CLAS mem` 两行（仅开启时显示）；④ 交付 = `example/s13-preblas/run.bat verify`（clusterblas-hud/occl 双后端基线 + built/timer/scale 三类日志锚）+ cases.json 第 118 张卡 `s13-preblas`（2 case，expectLog 逐字节锚）。三处实读：Carrot ClusterManager/RaytracingScene（per-group 惰性 BLAS + readback 五步）、bevy_solari blas.rs（per-mesh 常驻 + compaction 队列）、UE NaniteRayTracing.cpp（per-resource + LODBias + 64MB BLAS 缓存池）——无一家做 per-cluster 万级 BLAS；plan 拍板照落，est 实测 ~181MB 可承受。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-preblas`。`kStage` 保持 `S8.2`（B 类穿插轨道，M9.0 澄清口径：新卡由 run.bat verify + regression 双重机械校验），既有 117 张卡零重拍。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`--cluster-blas` 下 Suzanne 链 324 blas / 7906 tri / inputBytes=277764 / estBytes=671872 双后端逐字节一致，deviceErrors=0。
+- 🟢 万级压测 OcclScene1M：43547 blas / 2.6M tri / est ~181MB 构建成功，分块修复后三连跑零 DEVICE_REMOVED；`--only s13-preblas` 4/4 bytes ALL GREEN（occl dx12 53s/vulkan 25s，RUN_TIMEOUT 90s 内）。
+- 🟢 保形：`--only s8.0` 6/6 + `--only s8.1` 4/4 全 bytes（`--cluster-blas` 不传零扰动）；hud.cpp 空面板自检断言补 M13.0 通道缺省全零；`server.py --check` exit 0；bat 编码门禁 118 文件 0 violations（新 run.bat LF→CRLF 机械修复一次）。
+- 🟢 GPU 计时锚 `gpu timer resolved [clusterblas]`（Suzanne 324 blas ≈ 26ms 一次性 resolve）。
+
+**踩坑情况**
+1. **单列表 43k 次 build 超 DX12 TDR（2s）→ `0x887a0005 DEVICE_REMOVED` 间歇杀进程**：verify 首轮 timer 检查无输出 + 次轮 shot 崩都是它；修 = 2048 build/块分块提交 + 块间 waitForIdle（init 期一次性开销不变）。教训：AS build 大批量绝不能塞单命令列表，与 M8.0 单 BLAS 语义不冲突（上传+转换+build 同列表纪律按块保持）。
+2. **permanent 态必须首块落定**：非永久 `setBufferState` 只活在本命令列表，chunk 2+ 新列表对缓冲先验状态不可知 → NVRHI 校验 Unknown prior state → build 无 barrier → GPU hazard（第二轮实锤）；修 = 上传列表内 `setPermanentBufferState`（与 M8.0 0x87d 教训同兼容：上传+转换+首批 build 同列表）。
+3. **GpuTimer 忘 `setLabel` → resolve 锚撞 "frame"**（blasTimer_ 同款坑重踩，MEMORY 有记录仍踩）——`[frame]` 双 resolve 假象定位 10 分钟；修 = `clusterBlasTimer_.setLabel("clusterblas")`。
+4. **NVRHI `IAccelStruct` 无内存尺寸查询** → 内存口径只能双记账（inputBytes 确定 + estBytes 估算公式注明），HUD/日志诚实标注估算属性。
+5. **本机 PortableGit xargs arg_max 断言 abort** → `xargs git update-index` 静默不执行（wt 建坑复踩），while read 循环替代。
+
+**下一步**：M13.1（回读 + 聚合 + TLAS）**开工闸挂起**——计划原文「聚合 BLAS（NVRHI AS clone/compact）」实读确认 NVRHI `rt::GeometryDesc` 无 Instances 型（nvrhi.h:1568），BLAS 内引用子 BLAS 不可行；候选 A = TLAS 直挂可见簇 BLAS 多实例（RTXMG 同构）/ B = 可见簇+fallback 混合双实例，代价矩阵开工时摆给用户拍板，拍板写回 S13-PLAN 后才落码（已登记 S13-PLAN M13.1 节）。
+
+## S13 M13.1 — 可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（feat/s13，2026-11-13，tag `s13-merge`）
+
+**动作**：M13.0 收口时发现计划原文「聚合 BLAS（NVRHI AS clone/compact）」不可行（`rt::GeometryDesc` 仅 Triangles/AABBs，nvrhi.h:1568，无 Instances 型），候选 A/B 摆给用户 → **拍板 A = TLAS 直挂可见簇 BLAS 多实例**（RTXMG 同构；B = fallback 混合被否：接缝精度降）。落码四件：① **回读环形**——2 槽 host-visible（每槽全簇 id 列表 + 尾部 4B 可见数），cull/dag dispatch 后 `visibleList_` 整表 + `indirectArgs_[1]` 拷入当帧槽（UAV→CopySource 由 NVRHI 跟踪插转换，与 args 同款三态轮转），`pollClusterVisible` 延迟两帧消费（pollCullStats 同窗口纪律，mapBuffer 内部等 lastUseFence 零等待——「绝不同帧回读」底线保持）；② **buildClusterTlasFrame**——每帧全量 rebuild，instanceID = 全局簇 id（24-bit），实例源两级：回读就绪用动态 cut / 未就绪（rt 链 frustum 恒关无 dispatch、前 2 帧窗口）退全簇恒等列表（rt 模式「全簇全画」cut 语义，首帧即精细几何无粗模窗口）；③ **TLAS 容量换装**——initClusterBlas 尾部重建 TLAS（capacity = 簇数），initTlas skip 条件放宽（无 fallback 资产 + cluster BLAS 就绪不再跳过）；④ **复用面**——`--tlas-probe` 探针 / `--tlas-spin`（全实例共用变换）/ HUD TLAS 行 / rt.slang（CommittedInstanceIndex 上色，全簇恒等序 index==id，零 shader 改动）。交付 = `example/s13-merge/run.bat verify`（rt-id/dag-hud 双后端基线 + rt 全簇/dag 回读/Occl 规模三锚）+ cases.json 第 119 张卡 `s13-merge`（3 case）。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-merge`。`kStage` 保持 `S8.2`（B 类穿插轨道），既有 118 张卡零重拍。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；dag 回读通路：帧 1 全簇 324 → 帧 3 起 `cluster-tlas: 237 instances (source=readback visible list frame 0)`（固定相机双后端逐字节一致），HUD `TLAS : 237 inst` 与 `frustum : 237 / 324 clusters (73.1%)` 精确对应。
+- 🟢 M13.1 自检视觉实锤：`--mode rt --rt-debug id` 伪彩每簇一 hue（数百色块；fallback 单实例基线 = 单 hue）——调试射线命中的是精细簇。
+- 🟢 万级规模：OcclScene1M 43547 TLAS 实例**每帧** rebuild，8 帧 deviceErrors=0 零 TDR（~31s 含加载与 BLAS 预建）；`--only s13-merge` 6/6 bytes ALL GREEN。
+- 🟢 保形：`--only s8.0/s8.2` 4/4 bytes（不传 `--cluster-blas` 时 buildTlasFrame 头部新分支不激活，rt/dag 既有路径零扰动）；`server.py --check` exit 0；bat 编码门禁复检 0 violations（新 run.bat LF→CRLF 机械修复一次）。
+
+**踩坑情况**
+1. **initTlas 时序坑**：TLAS 在 initBlas 早段创建（两链都在 clusterCount_ 赋值之前）→ 容量拿不到簇数；修 = initClusterBlas 尾部换装重建（init 期 TLAS 无帧引用，重建安全）+ initTlas skip 条件放宽（`(!blasReady_) && !clusterBlasReady_` 才跳过——Suzanne.nmesh 无 fallback 段，旧条件直接跳 TLAS，cluster 模式下永远死路）。
+2. **initClusterBlas 签名改指针+计数**：initCull 链单层 `&nm` 直传，避免临时拷贝整份 NMeshData（Occl 1.3M tri）。
+3. **rt 链没有剔除 dispatch**（frustum 恒关 → cull 段不跑 → 回读恒未就绪）：设计把「全簇恒等列表」定为 rt 模式的 cut 语义（全簇全画 = 当前 cut），两级实例源统一进 buildClusterTlasFrame，无需特判分支。
+4. **回读窗口 = submitted-2（两帧）而非 plan 原文「一帧」**：复用 pollCullStats 既有零等待窗口纪律（mapBuffer 内部等 lastUseFence）；多一帧几何滞后，代价性质相同，PLAN 已注记。
+
+**下一步**：M13.2 接缝验收（`--mode final` GI/反射用当前 cut 几何 + LOD 切换压力测试录制屏，tag `s13-done`）——按 S13-PLAN 原计划执行，无待拍板项。
+
+## S13 M13.2 — 接缝验收：GI 链走簇 TLAS + LOD 切换压力（feat/s13，2026-11-13，tag `s13-done`，整轨收官）
+
+**动作**：S13 最后一步（验收里程碑，无新架构决策）。① 三处实读确认「GI 与主画面同源 AS」口径：UE `r.RayTracing.Nanite.LODBias` 默认 0 = 光追全细节 + BLAS 延迟按需更新（NaniteRayTracing.cpp:58 `GNaniteRayTracingUpdate`）；bevy_solari 单一 TLAS binder（tlas_build.rs wgpu_hal 直建）全链共用；Carrot 单一 RT scene 惰性缓存——三处一致 = GI/反射与主画面共享同一 AS，不存在「GI 用另一份粗模」；项目侧 probe_trace(t4)/world_cache(t7)/direct(t13) 全绑同一 `tlas_`，M13.1 换装后自动满足。② 口径注记：计划原文「`--mode final`」在项目中实际落点 = S12 `filter` 模式 GI 完整链（项目无 final 模式，modes.cpp 21 项清单实证），PLAN 已注记映射。③ 新增 `--orbit-dist-speed`（viewer/main.cpp 三处，M11.3 `--orbit-speed` 同款机械执行：每帧 dist 线性增量，camera clamp 0.45..500 钳住）——「已定计划内机械执行」（计划原文「相机匀速拉远/拉近」的直接实现）。④ 交付 = `example/s13-done/run.bat verify`（gi-cluster/lod-pressure 双后端基线 + 711/237 双锚）+ cases.json 第 120 张卡 `s13-done`（2 case）+ 录屏序列归档 `docs/screenshots/s13_lod_seq_f{10,35,60,85}_dx12.png`。
+
+**提交版本**：`feat/s13`（本节 commit）；annotated tag `s13-done`（S13 整轨收官 tag）。`kStage` 保持 `S8.2`（B 类穿插轨道），既有 119 张卡零重拍。
+
+**完成情况**
+- 🟢 GI 链簇几何：filter + `--cluster-blas` = 711 blas / 11808 tri 双后端逐字节一致（`cluster-tlas: per-frame rebuild active | instances=711`），GI 基线图材质光照正常。
+- 🟢 LOD 切换压力：90 帧 dist 动画（`--cut-thr 16` + `--orbit-dist-speed 0.08`，dist 3.0→10.2）穿越 cut 边界——S5 cut 3936→3162→2669→2632 tri 连续切层，TLAS 实例数 237→174→111→77 每帧同步（HUD `TLAS : 77 inst` = `frustum 77/324 (23.8%)` = `s5 tris 2632` 三处联动）；GPU frame 0.63ms 恒定零尖刺、90 帧 deviceErrors=0。
+- 🟢 stall 证据（Nsight/RGP 沙箱禁 GUI 的替代口径，PLAN/收口报告如实注记）：`--pass-timing` 锚 csCull 0.149ms / mainDraw 0.012ms + GPU frame ms 恒定 + pollClusterVisible submitted-2 零等待窗口纪律。
+- 🟢 `--only s13-done` 4/4 bytes ALL GREEN；保形 `--only s8.0/s12-done` 2/2 bytes；`server.py --check` exit 0；bat 编码门禁 120 文件 0 violations。
+
+**踩坑情况**
+1. **cut 锚是分辨率/距离/阈值三元函数**：run.bat check 命令用 320x240 小分辨率 → 屏幕误差变小 → `--cut-thr 16` 提前切层（回读锚 190 而非 237）→ findstr 静默 FAIL；修 = check 与 shot 锁定同一分辨率（960x540）。教训：涉及 cut 的 expectLog 锚必须锁定「分辨率+距离+阈值」三元组，缺一即漂。
+2. **`--screenshot-seq` 不自带退出**（M11.3 设计：与 `--screenshot` 同传提供退出帧）：单传 seq 跑满默认 2150 帧才停（第一次误用实锤）。
+3. **dag 模式默认 cut-thr 1.0 下 Suzanne 链拉远到 dist 40 也不切层**（s5 tris 恒 3936）——S5 既有行为非 S13 回归；LOD 压力测试需 `--cut-thr 16` 把边界推到 dist 3~10 窗口内。
+4. **cases.json 追加用 bash heredoc 内嵌 Python 时 `newline='\\n'` 转义成两字符** → open('w') 截断后 write 抛 ValueError → cases.json 清零（0 字节）；`git checkout --` 从 M13.1 提交版恢复（119 卡无损）。修 = 一次性脚本文件落盘执行（append_s13_done.py，用完即删）。教训：JSON 大块追加禁用 heredoc 内嵌，一律临时脚本文件。
+
+**S13 整轨收官汇总**（M13.0 `s13-preblas` + M13.1 `s13-merge` + M13.2 `s13-done`）：per-cluster BLAS 预建（324~43547 blas，est ~181MB 万级实测）→ 可见簇列表延迟回读 + TLAS 直挂每可见簇一实例（拍板 A，RTXMG 同构）→ GI 链接缝验收 + LOD 切换压力。fallback 粗模光追时代终结：调试射线与 GI 永远命中精细簇几何。整轨 merge 回 master 按 PARALLEL-TRACKS §7.2/7.5 同步注册表（wt 拆除需用户拍板，照 net 轨道先例）。
+
+## A类 P9 V2 资产导入：Unity 权威材质链 + 引擎全 PBR（feat/asset-ingest，2026-11-13，tag `asset-pbr-done`，merge `ea42d73`）
+
+**动作**：① 转换器重写——vendored unityparser 4.0.0（Apache-2.0，本地 DupSeq 补丁兼容旧版重复键格式）+ PyYAML 6.0.2 纯 Python 子集（MIT）入 `scripts/vendor/`（VENDOR.md 溯源）；`scripts/unity_mat.py`（.mat 两代序列化格式解析 + UnityGLTF 口径映射链 + 内置 shader fileID 表）；`fbx2glb.py --unity` 权威链重写，删全部手工 flag（--mat-tint/正则解析）；`mat_audit.py` 全工程 77/77 清零（errors=0，warnings=资产包自身悬空 guid）。② 引擎全 PBR——mesh_io extractNormal/Occl/Emissive；实例布局 7 float4/实例（[5]=(roughness,metallic,normalScale,matFlags)、[6]=(emissive.rgb,occlStrength)，matFlags 位 1/2/4/8）；4 张共享中性兜底纹理；`model.slang` Mikkelsen 导数共切线 perturbNormal + psScene flags 分支（flags=0 路径与 P9 V1 逐表达式一致）。③ `example/p9v1-batch2/car-pbr-light.scene` 带灯验收场景。
+
+**提交版本**：feat/asset-ingest `15e9f48` → merge `ea42d73`（零冲突）→ tag `asset-pbr-done`。
+
+**完成情况**
+- ✅ 转换链 9/9 FBX 材质命中 .mat、6 guid 贴图绑定；mat_audit 77/77 errors=0。
+- ✅ merge 后主仓 DX12+VULKAN BUILD OK（selftest 16/16）；car-pbr-light 双后端 exit 0，互检仅 1 像素 1/255（near 级）；DX/VK 与 e1b 基线 diff 像素数互相一致（30883/30883 等）= 双后端逐位对齐。
+- ✅ PBR 生效证据：Suzanne.glb MR 贴图解码实锤（metallic=1/rough≈0.2）被 hasMR 分支正确消费（e1b 像素 diff = 特性）；TEMP-DBG 分支可视化实锤 hasNormal 分支实收 normalScale/matFlags 且采样真纹理。
+- ⚠️ e1b 锚 0/8 = 特性性 FAIL（旧基线 = 旧管线忽略 MR 贴图），**基线重拍待用户拍板**；车漆法线贴图 ±0.5% 扰动在 roughness=1 下被 8-bit 量化吃掉属资产特性。
+
+**踩坑情况**
+- **VK 退出段错误（139）**：Scene::shutdown() 释放清单漏 sceneNeutral* 四张纹理 → 拖到 Scene 析构（晚于 vkDestroyDevice）→ UAF。bisect 曾误判「跨 set 共享绑定」——VAR-B（仅创建不绑定不写入）也复现实锤。同机理陷阱 T0 离屏链注释里早有记载，属复发。**新 NVRHI 资源必须进 Scene::shutdown() 释放清单；DX12 不报不代表没病。**
+- **同秒 mtime 跳重编/重链假象（第二次踩）**：C++/slang 双侧 A/B 没删 exe，librarian/link 被跳过 → 改动静默不进 exe → 四轮 bisect 对拍全零差假象。**A/B 对拍一律先 rm exe；零差结论先怀疑构建新鲜度。**shaders 运行时从 NL_SHADER_DIR（绝对路径烘进 nl_renderer）读 .spv/.dxil，产物在 build/{DX12,VULKAN}/shaders/。
+- 主仓 DX12 构建 C1090 PDB API 错误 23（RPC 竞态）→ 删 build/dx12/*.pdb 重试即绿（已知坑复发）。
+- Bash heredoc 会改写 `\s`→`/s`（mangling 反斜杠）——带反斜杠正则一律 Write 脚本文件跑。
+
+**下一步**：待拍板 = ① e1b 基线重拍（新管线正确输出 vs 旧管线忽略 MR）；② asset-ingest wt 拆除（照 net §7.6 先例）；③ car05 Blender 导出口径（roughnessFactor=0/metallic 缺省 1）是否在转换器侧补映射——暂按 flags=0 标量路径不受影响。
+
+## A类 P9 V2 后续：car05 MR 贴图接线 + 引擎 GLB 因子缺省 + e1b 基线重拍（master，2026-11-13，tag `asset-mr-fix`，commit `8641fbe`）
+
+**动作**：① 转换器两处修复——`unity_mat.py` MG-map 分支 `roughnessFactor` 改恒 1.0（glTF 因子与纹理相乘，旧 `1-_GlossMapScale` 把贴图 roughness 乘成 0；scale 烘进 swizzle，新增 `mgSmoothScale` 传递）；`fbx2glb.py` 补 metallicRoughnessTexture 接线（Unity MG R=metallic/A=smooth → glTF G=1−A×scale/B=R numpy swizzle；bpy `images.new+save` 落盘 PNG 全黑（Blender 5.2 实锤，两探针）→ 绕开为 numpy 直写 32 位未压缩 TGA + `images.load` Non-Color；Separate Color G→Roughness/B→Metallic 标准节点形）。② 引擎因子缺省对齐——ModelComponent/SceneObjectDesc 加 `hasPbrOverride`（JSON 显式键才置位，serialise 不写键，roundtrip byte-identical 不变）；PreparedBatch/SceneMeshBatch 补 GLB metallic/roughness 因子；实例 [20]/[21] 改「JSON 覆盖优先否则 batch GLB 因子」，与 [22..27] 权威口径对齐。③ 重转 Car05.glb + e1b 基线重拍（4 用例 × 2 后端 8 张）。
+
+**提交版本**：master `8641fbe` → tag `asset-mr-fix`。
+
+**完成情况**
+- ✅ Car05.glb 8/9 材质带 MR 贴图（Misc 无 MG-map 走因子路径正确）；Body G mean=42.5 与原 TGA (1−A) 逐位吻合。
+- ✅ 双后端删 exe 重建 16/16 selftest；car-pbr-light 双后端 exit 0、互检 1px/255；与修复前 diff 12293px 集中前车身区（车漆光泽 = 预期特性）。
+- ✅ e1b 重拍后回归门 `--only ecs-e1b` **8/8 ALL GREEN（bytes 8 / near 0 / FAIL 0）**；DX/VK 成对最大 8px/6（scale 用例）。
+
+**踩坑情况**
+- bpy `data.images.new + pixels.foreach_set + save()` 在 Blender 5.2 内存读回有数据、落盘 PNG 全黑——非压缩/色彩空间问题，绕开 = numpy 直写 TGA（descriptor 0x20 top-down，BGRA）。
+- e1b 锚 0/8 的根因链闭环：MR 贴图（转换器丢弃 + 因子被引擎无视）→ 两层修复 + 基线重拍一次覆盖，无残留 FAIL。

@@ -216,6 +216,7 @@ nl-engine/
 - 软光栅亚像素三角形 / ReSTIR GI / 探针置信度与自适应分辨率 / 简单场景编辑器
 - **验收**：软光栅：远景闪烁消失（对比录屏）；ReSTIR：同等帧时间下参考图误差明显下降
 - **翻哪**：01 章 / 06 章；Scthe 软光栅博文；`bevy_solari restir.wesl vs no_restir.wesl` 对照
+- **执行（2026-11-13 立项 M14 轨道）**：A 软光栅 + B ReSTIR 两 wt 并行、C 自适应探针接力 B 串行、D 编辑器砍掉（已被 feat/editor 覆盖）；里程碑与 tag 见 `docs/s14/M14-PLAN.md`
 
 ---
 

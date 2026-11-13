@@ -11,6 +11,14 @@ rem vars are set explicitly from the paths verified in M0.0.
 
 set "BACKEND=%~1"
 if "%BACKEND%"=="" set "BACKEND=DX12"
+
+rem wt-gate (2026-11-13): this bat builds the tree the SCRIPT LIVES IN
+rem (%~dp0..), not cwd -- the #1 silent wrong-tree failure mode. Refuse to
+rem run outside a registered ACTIVE worktree; mainline override is explicit:
+rem   set NL_BUILD_MAINREPO=1   (or use scripts\wt.bat <track> build ...)
+python "%~dp0..\tools\wt_gate.py" check-build "%~f0"
+if errorlevel 1 exit /b 1
+
 set "ROOT=%~dp0.."
 set "MSVC=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130"
 set "SDK=C:\Program Files (x86)\Windows Kits\10"

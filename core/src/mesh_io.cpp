@@ -271,6 +271,67 @@ bool extractMetallicRoughness(const Model& model, int materialIndex,
     return true;
 }
 
+// ---- P9 V2 全 PBR：normal / occlusion / emissive 提取，模式与上面一致 ----
+// （无材质 / 无贴图 / 索引越界一律不算错，has* 保持 false，渲染侧走中性
+// 兜底纹理；贴图存在但解码失败才是真错误。）
+
+template <typename TexInfo>
+bool extractTextureRGBA(const Model& model, const TexInfo& texInfo,
+                        std::vector<std::uint8_t>& outRGBA,
+                        std::uint32_t& outW, std::uint32_t& outH,
+                        std::string& outError) {
+    const int texIndex = texInfo.index;
+    if (texIndex < 0 || texIndex >= static_cast<int>(model.textures.size()))
+        return true;
+    const int imageIndex = model.textures[texIndex].source;
+    if (imageIndex < 0 || imageIndex >= static_cast<int>(model.images.size()))
+        return true;
+    if (!toRGBA8(model.images[imageIndex], outRGBA, outError)) return false;
+    outW = static_cast<std::uint32_t>(model.images[imageIndex].width);
+    outH = static_cast<std::uint32_t>(model.images[imageIndex].height);
+    return true;
+}
+
+bool extractNormal(const Model& model, int materialIndex,
+                   PrimitiveMesh& prim, std::string& outError) {
+    if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
+        return true;
+    const auto& nt = model.materials[materialIndex].normalTexture;
+    prim.normalScale = static_cast<float>(nt.scale == 0.0 ? 1.0 : nt.scale);
+    if (!extractTextureRGBA(model, nt, prim.normalRGBA,
+                            prim.normalWidth, prim.normalHeight, outError))
+        return false;
+    prim.hasNormalTex = !prim.normalRGBA.empty();
+    return true;
+}
+
+bool extractOcclusion(const Model& model, int materialIndex,
+                      PrimitiveMesh& prim, std::string& outError) {
+    if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
+        return true;
+    const auto& ot = model.materials[materialIndex].occlusionTexture;
+    prim.occlStrength = static_cast<float>(ot.strength == 0.0 ? 1.0 : ot.strength);
+    if (!extractTextureRGBA(model, ot, prim.occlRGBA,
+                            prim.occlWidth, prim.occlHeight, outError))
+        return false;
+    prim.hasOcclTex = !prim.occlRGBA.empty();
+    return true;
+}
+
+bool extractEmissive(const Model& model, int materialIndex,
+                     PrimitiveMesh& prim, std::string& outError) {
+    if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
+        return true;
+    const auto& mat = model.materials[materialIndex];
+    for (int i = 0; i < 3 && i < static_cast<int>(mat.emissiveFactor.size()); ++i)
+        prim.emissiveFactor[i] = static_cast<float>(mat.emissiveFactor[i]);
+    if (!extractTextureRGBA(model, mat.emissiveTexture, prim.emissiveRGBA,
+                            prim.emissiveWidth, prim.emissiveHeight, outError))
+        return false;
+    prim.hasEmissiveTex = !prim.emissiveRGBA.empty();
+    return true;
+}
+
 // ---- 场景图遍历：把世界变换烘进每个 primitive 的顶点 ----
 
 bool visitNode(const Model& model, int nodeIndex, const Mat4& parentWorld,
@@ -337,6 +398,9 @@ bool visitNode(const Model& model, int nodeIndex, const Mat4& parentWorld,
             if (!readIndices(model, primGltf.indices, prim.indices, outError)) return false;
             if (!extractBaseColor(model, primGltf.material, prim, outError)) return false;
             if (!extractMetallicRoughness(model, primGltf.material, prim, outError)) return false;
+            if (!extractNormal(model, primGltf.material, prim, outError)) return false;
+            if (!extractOcclusion(model, primGltf.material, prim, outError)) return false;
+            if (!extractEmissive(model, primGltf.material, prim, outError)) return false;
             out.meshes.push_back(std::move(prim));
         }
     }

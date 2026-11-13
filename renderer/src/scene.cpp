@@ -516,6 +516,12 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         }
     }
     clusterCount_ = clusterCount;
+    // M13.1（S13，拍板 A）：--cluster-blas 在 cull 链（rt/visbuf/probe 族）同样
+    // 逐簇预建，供 TLAS 直挂。单层资产 = 1 层 levels 指针直传，与 initDag 同实现；
+    // 用户显式开启的路径失败按硬错误拦路（M13.0 同口径）。
+    if (clusterBlasRequested_) {
+        if (!initClusterBlas(device, &nm, 1, outError)) return false;
+    }
     std::uint32_t maxTriCount = 0;
     std::vector<std::uint32_t> localIndices;
     std::vector<std::uint32_t> clusterMeta;
@@ -753,6 +759,20 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
             rb = device->createBuffer(rDesc);
             if (!rb) { outError = "createBuffer failed for cull readback"; return false; }
         }
+        // M13.1：可见簇列表回读环形（2 槽，每槽 = 全簇 id 列表 + 尾部 4B 可见数；
+        // 拍板 A 的延迟消费源）。cull 链在 rt 模式下无剔除 dispatch（frustum 恒关）
+        // → 恒无数据，TLAS 走全簇恒等列表；数据通路只在该链真正跑剔除时激活。
+        if (clusterBlasRequested_) {
+            vlListBytes_ = static_cast<std::uint64_t>(clusterCount_) * sizeof(std::uint32_t);
+            for (auto& rb : vlReadback_) {
+                nvrhi::BufferDesc rDesc;
+                rDesc.byteSize = vlListBytes_ + sizeof(std::uint32_t);
+                rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+                rDesc.debugName = "ClusterVlReadback";
+                rb = device->createBuffer(rDesc);
+                if (!rb) { outError = "createBuffer failed for cluster vl readback"; return false; }
+            }
+        }
     }
 
     // ---- 5. 一次性上传：白占位贴图 + 三张 SSBO + indirect args + identity 索引 ----
@@ -807,6 +827,13 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         for (auto& rb : cullReadback_) {
             upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
             upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+        }
+        // M13.1：可见列表回读槽 permanent CopyDest（同 cullReadback_ 口径）。
+        for (auto& rb : vlReadback_) {
+            if (rb) {
+                upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
+                upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+            }
         }
         // M5.2：三角计数器初始清零（动态跟踪，与 args 同款轮转）。
         const std::uint32_t triZero = 0;
@@ -1000,6 +1027,12 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     const std::uint32_t totalClusters = gcBase;
     const std::uint32_t stride = maxTriCount * 3;   // identity 索引缓冲长度
     const std::uint32_t groupTotal = ggBase;
+
+    // M13.0（S13）：--cluster-blas 时逐簇预建 BLAS（S13-PLAN M13.0）。levels 仍在
+    // 作用域，专用 slab 从 CPU 侧数据展开；用户显式开启的路径失败按硬错误拦路。
+    if (clusterBlasRequested_) {
+        if (!initClusterBlas(device, levels.data(), levels.size(), outError)) return false;
+    }
 
     // ---- 3. 建 GPU 资源：图形侧与 initCull 同构（M4.0 样板），DAG 侧另加 ----
     nvrhi::BufferDesc cbDesc;
@@ -1236,6 +1269,21 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!rb) { outError = "createBuffer failed for dag readback"; return false; }
     }
 
+    // M13.1：可见簇列表回读环形（2 槽，每槽 = 全簇 id 列表 + 尾部 4B 可见数；
+    // 拍板 A 的延迟消费源——S5 遍历的动态 cut 列表整表拷入，pollClusterVisible
+    // 延迟两帧消费）。
+    if (clusterBlasRequested_) {
+        vlListBytes_ = static_cast<std::uint64_t>(clusterCount_) * sizeof(std::uint32_t);
+        for (auto& rb : vlReadback_) {
+            nvrhi::BufferDesc rDesc;
+            rDesc.byteSize = vlListBytes_ + sizeof(std::uint32_t);
+            rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+            rDesc.debugName = "ClusterVlReadback";
+            rb = device->createBuffer(rDesc);
+            if (!rb) { outError = "createBuffer failed for dag vl readback"; return false; }
+        }
+    }
+
     // ---- 4. 一次性上传（M4.0 同款状态纪律）----
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
@@ -1293,6 +1341,13 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     for (auto& rb : cullReadback_) {
         upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
         upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+    }
+    // M13.1：可见列表回读槽 permanent CopyDest（同 cullReadback_ 口径）。
+    for (auto& rb : vlReadback_) {
+        if (rb) {
+            upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
+            upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+        }
     }
     // M5.2：三角计数器初始清零（动态跟踪，writeBuffer/UAV/CopySource 轮转）。
     // M6.2：两个槽（tris + occluded）一起清。
@@ -1944,6 +1999,188 @@ void Scene::pollBlasTimer(nvrhi::IDevice* device, HudFrame* hud) {
     }
     hud->blasTriangleCount = blasTriangleCount_;
     hud->blasTimingAvailable = blasTimer_.available();
+
+    // M13.0：per-cluster BLAS 证据字段（仅 --cluster-blas 成功后非零，其余模式
+    // 一像素不动）。inputMB 是 slab 实际字节（几何决定量，deterministic 也照写）；
+    // estMB 是 AS 上界估算（NVRHI 不暴露真实尺寸）；ms 与 BLAS 行同口径只在
+    // 非确定性 HUD 显示。
+    if (clusterBlasReady_) {
+        if (clusterBlasTimer_.ensure(device)) {
+            float ms = 0.0f;
+            if (clusterBlasTimer_.poll(ms)) clusterBlasBuildMs_ = ms;
+            if (!hud->deterministic) hud->clusterBlasMs = clusterBlasBuildMs_;
+            hud->clusterBlasTimingAvailable = true;
+        }
+        hud->clusterBlasCount = clusterBlasCount();
+        hud->clusterBlasTriangles = clusterBlasTriangleCount_;
+        hud->clusterBlasInputMB = static_cast<double>(clusterBlasInputBytes_) / (1024.0 * 1024.0);
+        hud->clusterBlasEstMB = static_cast<double>(clusterBlasEstBytes_) / (1024.0 * 1024.0);
+    }
+}
+
+// ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0；viewer --cluster-blas）----
+// 三处口径（2026-11-13 定向实读）：
+//   Carrot ClusterManager/RaytracingScene：可见组 readback 下一帧 CPU 消费 →
+//     per-group 惰性建 BLAS 缓存常驻（ClusterCompressed 几何）——对象粒度粗一
+//     层，但「簇几何自身建 BLAS、按 id 索引、常驻」与本里程碑同构；
+//   bevy_solari blas.rs：BLAS per mesh asset 常驻 HashMap + compaction 队列；
+//   UE NaniteRayTracing.cpp：per-resource BLAS（r.RayTracing.Nanite.LODBias 选
+//     层）+ AuxiliaryData 命中回簇 + 64MB BLAS 缓存池。
+// 本里程碑按 S13-PLAN 拍板走「每簇预建、全部常驻」（plan 坑注记：万级内存超限
+// 先裁粗层，M13.1 聚合阶段按实测再拍）。全部簇共享两块 build-input slab，每簇
+// geometry 用 vertexOffset/indexOffset 引用窗口（NVRHI GeometryTriangles 支持，
+// nvrhi.h:1590-1593）——万级簇只有 2 个 device buffer，AccelStruct 对象数 =
+// 簇数。内存口径双记账：inputBytes = slab 实际字节（确定值）；estBytes = AS 上
+// 界估算（公式 tri×64B 叶上界 + 512B 头/实例开销；NVRHI IAccelStruct 无尺寸
+// 查询接口，真实值拿不到，估算只作量级参考、deterministic 也恒定）。
+bool Scene::initClusterBlas(nvrhi::IDevice* device,
+                            const nl::core::NMeshData* levels, std::size_t levelCount,
+                            std::string& outError) {
+    if (clusterBlasReady_) return true;
+    if (!levels || levelCount == 0) { outError = "cluster-blas: no levels"; return false; }
+
+    // 1. 展开专用 build-input slab（CPU 侧）：
+    //    VB：逐层把 nm.vertices 的 pos（头 12B）原样拷贝——簇顶点在 .nmesh 里已
+    //        去重，meshlet.vertexOffset/vertexCount 即该簇专用窗口；
+    //    IB：每簇 3×triangleCount 个 u32（u8 局部索引 0..63 原值展开——plan 里
+    //        「重展开成完整三角形」在此即 u8→u32 格式转换，无需顶点重排）。
+    std::vector<float> vb;    // pos-only 3 float/顶点
+    std::vector<std::uint32_t> ib;
+    std::vector<std::uint32_t> clusterVertexBase, clusterVertexCount,
+                               clusterIndexBase, clusterIndexCount;
+    std::uint32_t triTotal = 0;
+    for (std::size_t li = 0; li < levelCount; ++li) {
+        const nl::core::NMeshData& nm = levels[li];
+        const std::uint32_t vbBase = static_cast<std::uint32_t>(vb.size() / 3);
+        for (const auto& mv : nm.vertices)
+            vb.insert(vb.end(), {mv.pos[0], mv.pos[1], mv.pos[2]});
+        for (const auto& m : nm.meshlets) {
+            clusterVertexBase.push_back(vbBase + m.vertexOffset);
+            clusterVertexCount.push_back(m.vertexCount);
+            clusterIndexBase.push_back(static_cast<std::uint32_t>(ib.size()));
+            const std::size_t base = m.triangleOffset;
+            for (std::uint32_t t = 0; t < m.triangleCount; ++t)
+                for (int k = 0; k < 3; ++k)
+                    ib.push_back(nm.triangles[base + t * 3 + static_cast<std::uint32_t>(k)]);
+            clusterIndexCount.push_back(m.triangleCount * 3);
+            triTotal += m.triangleCount;
+        }
+    }
+    const std::size_t blasCount = clusterIndexBase.size();
+    if (blasCount == 0 || vb.empty() || ib.empty()) {
+        outError = "cluster-blas: no cluster geometry in asset chain";
+        return false;
+    }
+    const std::uint64_t vbBytes = vb.size() * sizeof(float);
+    const std::uint64_t ibBytes = ib.size() * sizeof(std::uint32_t);
+
+    // 2. GPU 资源：两块共享 build-input 缓冲 + 逐簇 AccelStruct（尺寸 NVRHI
+    //    自算，S8-PLAN 预研 §1：无用户侧 scratch 容量查询）。
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.byteSize = vbBytes;
+    vbDesc.setIsAccelStructBuildInput(true);
+    vbDesc.debugName = "ClusterBlasVB";
+    clusterBlasVB_ = device->createBuffer(vbDesc);
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.byteSize = ibBytes;
+    ibDesc.setIsAccelStructBuildInput(true);
+    ibDesc.debugName = "ClusterBlasIB";
+    clusterBlasIB_ = device->createBuffer(ibDesc);
+    if (!clusterBlasVB_ || !clusterBlasIB_) {
+        outError = "createBuffer failed for cluster BLAS slabs";
+        return false;
+    }
+
+    std::vector<nvrhi::rt::GeometryDesc> geometries(blasCount);
+    clusterBlas_.resize(blasCount);
+    for (std::size_t c = 0; c < blasCount; ++c) {
+        geometries[c].geometryData.triangles
+            .setVertexBuffer(clusterBlasVB_)
+            .setVertexFormat(nvrhi::Format::RGB32_FLOAT)
+            .setVertexStride(12)
+            .setVertexOffset(clusterVertexBase[c] * 12ull)
+            .setVertexCount(clusterVertexCount[c])
+            .setIndexBuffer(clusterBlasIB_)
+            .setIndexFormat(nvrhi::Format::R32_UINT)
+            .setIndexOffset(clusterIndexBase[c] * sizeof(std::uint32_t))
+            .setIndexCount(clusterIndexCount[c]);
+        nvrhi::rt::AccelStructDesc asDesc;
+        asDesc.addBottomLevelGeometry(geometries[c]);
+        asDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        asDesc.setDebugName("ClusterBlas");
+        clusterBlas_[c] = device->createAccelStruct(asDesc);
+        if (!clusterBlas_[c]) {
+            // 首个即失败 = 设备不支持 RT：与 blas_ skip 同口径，不拦路不置 ready。
+            nl::core::log::warnCh("scene", "cluster-blas: createAccelStruct failed at cluster ",
+                                c, " — ray tracing unsupported? cluster BLAS skipped");
+            clusterBlas_.clear();
+            return true;
+        }
+    }
+
+    // 3. 上传 + 逐簇 build 分块提交（M8.0 同款纪律：上传/setBufferState/build/
+    //    setPermanentBufferState 同列表；块间 waitForIdle 防 scratch chunk 随列表
+    //    析构与飞行 ECL 重叠——M8.1 0x87d 第二坑同款）。⚠️ 必须分块：单列表塞
+    //    43k 次 build（OcclScene1M 实测）GPU 耗时超 DX12 TDR 2s 阈值 →
+    //    0x887a0005 DEVICE_REMOVED 间歇性杀进程（verify 首轮 timer 检查无输出
+    //    即此因）；2048/块 ≈ 160ms 远离阈值，init 期一次性开销不变。
+    constexpr std::size_t kBuildChunk = 2048;
+    for (std::size_t chunkStart = 0; chunkStart < blasCount; chunkStart += kBuildChunk) {
+        const std::size_t chunkEnd = std::min(chunkStart + kBuildChunk, blasCount);
+        const bool firstChunk = chunkStart == 0;
+        const bool lastChunk = chunkEnd == blasCount;
+        nvrhi::CommandListHandle cmd = device->createCommandList();
+        clusterBlasTimer_.setLabel("clusterblas");   // 默认 label 会撞 "frame"（blasTimer_ 同款坑）
+        cmd->open();
+        if (firstChunk) {
+            cmd->beginTrackingBufferState(clusterBlasVB_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(clusterBlasVB_, vb.data(), vbBytes);
+            cmd->setBufferState(clusterBlasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            cmd->beginTrackingBufferState(clusterBlasIB_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(clusterBlasIB_, ib.data(), ibBytes);
+            cmd->setBufferState(clusterBlasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            // M13.0 分块修正：permanent 态必须在首块（上传列表内）落定——非永久
+            // setBufferState 只活在本列表，chunk 2+ 的新列表对缓冲先验状态不可知
+            // （NVRHI 校验层 Unknown prior state → 后续 build 无 barrier → GPU
+            // hazard 实测 Device Removed）。permanent 态跨列表感知，物理状态此后
+            // 恒为 build-input，与 M8.0 单列表纪律不冲突（上传+转换+首批 build 同
+            // 列表，0x87d 教训原样满足）。
+            cmd->setPermanentBufferState(clusterBlasVB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            cmd->setPermanentBufferState(clusterBlasIB_, nvrhi::ResourceStates::AccelStructBuildInput);
+            if (clusterBlasTimer_.ensure(device)) clusterBlasTimer_.begin(cmd);
+        }
+        for (std::size_t c = chunkStart; c < chunkEnd; ++c) {
+            cmd->buildBottomLevelAccelStruct(clusterBlas_[c], &geometries[c], 1,
+                                             nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        }
+        if (lastChunk) {
+            clusterBlasTimer_.end(cmd);
+        }
+        cmd->close();
+        device->executeCommandList(cmd);
+        device->waitForIdle();
+    }
+
+    clusterBlasReady_ = true;
+    clusterBlasTriangleCount_ = static_cast<int>(triTotal);
+    clusterBlasInputBytes_ = vbBytes + ibBytes;
+    // AS 上界估算：tri×64B（DX12 叶节点压缩前上界口径）+ 512B/BLAS 头与实例段。
+    clusterBlasEstBytes_ = triTotal * 64ull + blasCount * 512ull;
+    nl::core::log::infoCh("scene", "cluster-blas: built ", blasCount,
+                        " blas | tri=", triTotal,
+                        " | inputBytes=", clusterBlasInputBytes_,
+                        " | estBytes=", clusterBlasEstBytes_,
+                        " (build ms via GPU timer)");
+
+    // M13.1（拍板 A）：TLAS 直挂每可见簇一实例——容量随簇规模换装。initBlas
+    // 早段可能已建 16 实例 TLAS（fallback 资产）或压根没建（无 fallback 资产，
+    // 如 Suzanne.nmesh）；此刻仍在 init 期、TLAS 尚无任何帧引用，重建安全。
+    // 失败不拦路（initTlas skip 同口径：无 RT 设备渲染照常）。
+    tlas_ = nullptr;
+    tlasReady_ = false;
+    std::string tlasErr;
+    initTlas(device, tlasErr);
+    return true;
 }
 
 // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（S8-PLAN M8.1；D-S8-1 拍板 = UE 口径）----
@@ -1956,14 +2193,18 @@ bool Scene::initTlas(nvrhi::IDevice* device, std::string& outError) {
     // TLAS 容量超限类几何错误），参数保留签名对称性。
     (void)outError;
     if (tlasReady_) return true;
-    if (!blasReady_ || !blas_) {
+    // M13.1（拍板 A）：cluster BLAS 也能当 TLAS 引用目标——无 fallback 资产
+    // （Suzanne.nmesh）在 --cluster-blas 下不再跳过；容量 = 簇数（每可见簇一实例）。
+    if ((!blasReady_ || !blas_) && !clusterBlasReady_) {
         // BLAS 未建（无 fallback 资产 / 无 RT 设备）：TLAS 无引用目标，跳过不拦路。
         nl::core::log::infoCh("scene", "tlas: no BLAS available — skipped (S8 TLAS needs a BLAS)");
         return true;
     }
     tlasTimer_.setLabel("tlas");
+    const int tlasMaxInstances = clusterBlasReady_
+        ? static_cast<int>(clusterBlas_.size()) : kMaxTlasInstances;
     nvrhi::rt::AccelStructDesc tlasDesc;
-    tlasDesc.setTopLevelMaxInstances(kMaxTlasInstances);   // isTopLevel = true 随置位
+    tlasDesc.setTopLevelMaxInstances(tlasMaxInstances);   // isTopLevel = true 随置位
     // 每帧全量 rebuild（UE 口径）→ 不带 AllowUpdate/PerformUpdate；PreferFastTrace
     // 与 BLAS 同口径（实例数个位数，rebuild 开销可忽略——M8.1 实测见 HUD/日志）。
     tlasDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
@@ -1974,13 +2215,20 @@ bool Scene::initTlas(nvrhi::IDevice* device, std::string& outError) {
         return true;
     }
     tlasReady_ = true;
-    nl::core::log::infoCh("scene", "tlas created: maxInstances=", kMaxTlasInstances,
+    nl::core::log::infoCh("scene", "tlas created: maxInstances=", tlasMaxInstances,
                         " | per-frame full rebuild (UE D-S8-1)");
     return true;
 }
 
 void Scene::buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame) {
-    if (!tlasReady_ || !blasReady_) return;
+    if (!tlasReady_) return;
+    // M13.1（拍板 A）：--cluster-blas 时 TLAS 直挂可见簇 BLAS 多实例；未开启
+    // 走 fallback 单实例路径（M8.1 原样，零扰动）。
+    if (clusterBlasRequested_ && clusterBlasReady_) {
+        buildClusterTlasFrame(cmd, frame);
+        return;
+    }
+    if (!blasReady_) return;
 
     // CPU 组装实例（当前单 mesh 场景 = 1 实例）。--tlas-spin 时绕 Y 每帧转
     // 2.5°：只改 TLAS 实例 transform，光栅化路径照常（画面基线零扰动）；固定
@@ -2018,6 +2266,80 @@ void Scene::buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame) {
         if (probeReady_) {
             // probeOut_：UAV 写 → CopySource 拷回 → 下帧 UAV（NVRHI 状态跟踪插转换；
             // 首帧 beginTracking 钉起点，之后靠跟踪动态晋升，visibleList_ 同口径）。
+            cmd->setBufferState(probeOut_, nvrhi::ResourceStates::UnorderedAccess);
+            nvrhi::ComputeState cstate;
+            cstate.setPipeline(probePSO_).addBindingSet(probeSet_);
+            cmd->setComputeState(cstate);
+            cmd->dispatch(1, 1, 1);
+            cmd->setBufferState(probeOut_, nvrhi::ResourceStates::CopySource);
+            const std::uint32_t slot = probeSubmitted_ & 1u;
+            cmd->copyBuffer(probeReadback_[slot], 0, probeOut_, 0, sizeof(std::uint32_t));
+            probeSubmitted_++;
+        }
+    }
+}
+
+// M13.1（S13，拍板 A）：TLAS 直挂可见簇 BLAS 多实例（RTXMG 同构——每帧 TLAS
+// 全量 rebuild 已是 M8.1 UE 口径，实例数 = 可见簇数）。实例源两级：
+// ① 回读可见列表就绪（cull/dag 链剔除 dispatch 已跑 ≥2 帧）→ 动态 cut 列表，
+//    instanceID = 全局簇 id（24-bit 上限 16M，Occl 43547 远在内）；
+// ② 未就绪（rt 链 frustum 恒关无剔除 dispatch / 前 2 帧窗口）→ 全簇恒等列表 =
+//    rt 模式「全簇全画」的 cut 语义（首帧即精细几何，无粗模窗口）。
+// rt.slang 伪彩按 CommittedInstanceIndex 上色：全簇恒等序 index==id，与 fallback
+// 单实例（index 0）同 hue 基线；动态列表顺序不确定但 dag/hiz 链无 rt 伪彩消费。
+void Scene::buildClusterTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame) {
+    const bool haveReadback = clusterVlFrame_ >= 0 && !clusterVlIds_.empty();
+    const std::size_t count = haveReadback ? clusterVlIds_.size() : clusterBlas_.size();
+
+    // spin 变换（M8.1 同款固定帧序号驱动，截图天然确定）全实例共用——cluster
+    // 模式下同样可验证每帧实例 transform 传播（伪彩 hue 随帧转动）。
+    nvrhi::rt::InstanceDesc proto;
+    if (frame.tlasSpin) {
+        const float angleRad = static_cast<float>(tlasFrameIndex_) * 2.5f * 3.14159265f / 180.0f;
+        const float c = std::cos(angleRad), s = std::sin(angleRad);
+        const float tf[12] = { c, 0.f, s, 0.f,
+                               0.f, 1.f, 0.f, 0.f,
+                              -s, 0.f, c, 0.f };
+        proto.setTransform(tf);
+    } // else：保持 InstanceDesc ctor 的 identity transform（静态场景语义）
+    proto.setInstanceMask(0xFF);
+    proto.setInstanceContributionToHitGroupIndex(0);
+
+    clusterTlasInstances_.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::uint32_t id = haveReadback
+            ? clusterVlIds_[i] : static_cast<std::uint32_t>(i);
+        nvrhi::rt::InstanceDesc& inst = clusterTlasInstances_[i];
+        inst = proto;
+        inst.setInstanceID(id);
+        inst.setBLAS(clusterBlas_[id]);
+    }
+
+    // 每帧全量 rebuild + 计时（帧命令列表 = §2.8；cluster BLAS build-input 在
+    // init 列表已置永久态 AccelStructBuildInput，TLAS build 只读其 device address）。
+    if (tlasTimer_.ensure(cmd->getDevice())) tlasTimer_.begin(cmd);
+    cmd->buildTopLevelAccelStruct(tlas_, clusterTlasInstances_.data(),
+                                  static_cast<std::uint32_t>(count),
+                                  nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    tlasTimer_.end(cmd);
+    tlasInstanceCount_ = static_cast<int>(count);
+    if (tlasFrameIndex_ == 0)
+        nl::core::log::infoCh("scene", "cluster-tlas: per-frame rebuild active | instances=",
+                            static_cast<int>(count),
+                            haveReadback ? " (readback list)"
+                                         : " (full cluster list — readback not ready)");
+    if (haveReadback && !clusterTlasReadbackLogged_) {
+        clusterTlasReadbackLogged_ = true;
+        nl::core::log::infoCh("scene", "cluster-tlas: ", static_cast<int>(count),
+                            " instances (source=readback visible list frame ",
+                            clusterVlFrame_, ")");
+    }
+    tlasFrameIndex_++;
+
+    // 探针（--tlas-probe）：与 fallback 路径同款，TLAS build 之后 dispatch。
+    if (frame.tlasProbe) {
+        if (!probeReady_ && !probeFailed_) ensureTlasProbe(cmd);
+        if (probeReady_) {
             cmd->setBufferState(probeOut_, nvrhi::ResourceStates::UnorderedAccess);
             nvrhi::ComputeState cstate;
             cstate.setPipeline(probePSO_).addBindingSet(probeSet_);
@@ -4715,6 +5037,28 @@ void Scene::pollCullStats(nvrhi::IDevice* device) {
     cullPolledSlot_ = static_cast<int>(ready);
 }
 
+// M13.1（S13，拍板 A）：可见簇列表回读消费。窗口与 pollCullStats 完全同款
+// （ready = submitted-2，2 槽环形；mapBuffer 内部等 lastUseFence，两帧延迟下
+// 正常零等待）。每槽 = 全簇 id 列表（vlListBytes_）+ 尾部 4B 可见数（拷自
+// indirectArgs_[1]）。rt 链（frustum 恒关）无剔除 dispatch → cullSubmitted_
+// 不增长 → 本函数恒无数据，buildClusterTlasFrame 走全簇恒等列表。
+void Scene::pollClusterVisible(nvrhi::IDevice* device) {
+    if (!clusterBlasRequested_ || !vlReadback_[0]) return;
+    if (cullSubmitted_ < 2) return;                       // 窗口未填满，尚无数据
+    const std::uint32_t ready = cullSubmitted_ - 2;
+    if (clusterVlFrame_ >= 0 && static_cast<std::uint32_t>(clusterVlFrame_) >= ready) return;
+    const std::uint32_t slot = ready & 1u;
+    void* p = device->mapBuffer(vlReadback_[slot], nvrhi::CpuAccessMode::Read);
+    if (!p) return;                                       // map 失败沿用上一份数据
+    const auto* base = static_cast<const std::uint32_t*>(p);
+    std::uint32_t count = base[vlListBytes_ / sizeof(std::uint32_t)];
+    // 防御钳位：可见数由 GPU atomicAdd 累加，理论上不越界（每簇至多 emit 一次）。
+    if (count > clusterBlas_.size()) count = static_cast<std::uint32_t>(clusterBlas_.size());
+    clusterVlIds_.assign(base, base + count);
+    clusterVlFrame_ = static_cast<int>(ready);
+    device->unmapBuffer(vlReadback_[slot]);
+}
+
 // M2.3/M3.2 共用：把一份 .nmesh 展开成 ClusterVertex/索引。include 非空时只
 // 展开掩码为 1 的簇（dag cut 用）；簇色按**本层内**的簇号烘（两后端同一 CPU
 // hash，逐字节一致）。三角形展开用 triangleOffset+t*3 —— 它是字节偏移不是
@@ -5790,19 +6134,36 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         }
         batchObjects[b].push_back(i);
     }
-    // M-E1b.5：固化分组映射，updateObjects 每帧按同一规则重打包（槽号一一对应）。
-    sceneBatchObjects_ = batchObjects;
     sceneObjectCount_ = objectCount;
 
-    // ---- 3. 每组读 GLB（首 primitive，照 Scene::init 第 2 步的校验与顶点展开）----
+    // ---- 3. 每组读 GLB（**全部 primitive 逐个成 batch**，照 Scene::init 第 2 步的
+    // 校验与顶点展开）。batch 键 = (meshFile, primitive 序号)：同一 meshFile 的
+    // 各 primitive 共享同一组实例变换（三处参考口径一致——Carrot Model.cpp 逐
+    // primitive 装进同一大 VB/IB + 每 prim 一个 drawCommand；bevy_gltf loader
+    // 逐 primitive 建 Mesh；UE Interchange 逐 primitive 设材质槽。现状只装
+    // prim[0] 是三处参考都没有的简化）----
     struct PreparedBatch {
         std::vector<SceneVertex> vertices;
         std::vector<std::uint32_t> indices;
         std::uint32_t texWidth = 0, texHeight = 0;
         std::vector<std::uint8_t> texRGBA;
         float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // 局部包围球 xyz=center w=radius
+        // P9 V2 全 PBR：贴图组（空 = 用共享中性兜底纹理）+ batch 级材质量。
+        bool hasMR = false, hasNormalTex = false, hasOcclTex = false, hasEmissiveTex = false;
+        std::uint32_t mrWidth = 0, mrHeight = 0;
+        std::uint32_t normalWidth = 0, normalHeight = 0;
+        std::uint32_t occlWidth = 0, occlHeight = 0;
+        std::uint32_t emissiveWidth = 0, emissiveHeight = 0;
+        std::vector<std::uint8_t> mrRGBA, normalRGBA, occlRGBA, emissiveRGBA;
+        std::uint32_t matFlags = 0;          // hasMR=1 | hasNormal=2 | hasOccl=4 | hasEmissive=8
+        float normalScale = 1.0f;
+        float emissiveFactor[3] = {0.f, 0.f, 0.f};
+        float occlStrength = 1.0f;
+        float metallicFactor = 1.0f;         // glTF spec 缺省（mesh_io 已解析）
+        float roughnessFactor = 1.0f;
     };
-    std::vector<PreparedBatch> prepared(batchFiles.size());
+    std::vector<PreparedBatch> prepared;
+    std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
     for (std::size_t b = 0; b < batchFiles.size(); ++b) {
         const std::string modelPath = std::string(NL_ASSET_DIR "/") + batchFiles[b];
         nl::core::SceneMeshData meshData;
@@ -5814,43 +6175,84 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (meshData.meshes.empty()) {
             outError = batchFiles[b] + std::string(" has no mesh primitive"); return false;
         }
-        const nl::core::PrimitiveMesh& prim = meshData.meshes[0];
-        if (!prim.hasBaseColor) {
-            outError = batchFiles[b] + std::string(" has no base color texture"); return false;
+        for (std::size_t p = 0; p < meshData.meshes.size(); ++p) {
+            const nl::core::PrimitiveMesh& prim = meshData.meshes[p];
+            PreparedBatch& pb = prepared.emplace_back();
+            batchPrimFile.push_back(static_cast<std::uint32_t>(b));
+            if (prim.hasBaseColor) {
+                pb.texWidth = prim.texWidth;
+                pb.texHeight = prim.texHeight;
+                pb.texRGBA = prim.baseColorRGBA;
+            } else {
+                // 无贴图 primitive 兜底：baseColorFactor 填 1×1 纯色纹理
+                //（Carrot getWhiteMaterial 同思路；本路径贴图是唯一颜色源，
+                // direct.slang 的 factor×texture 口径下 texel=factor 等价）。
+                pb.texWidth = pb.texHeight = 1;
+                const auto enc = [](float f) -> std::uint8_t {
+                    return static_cast<std::uint8_t>(
+                        std::lround(std::min(1.0f, std::max(0.0f, f)) * 255.0f));
+                };
+                pb.texRGBA = { enc(prim.baseColorFactor[0]), enc(prim.baseColorFactor[1]),
+                               enc(prim.baseColorFactor[2]), enc(prim.baseColorFactor[3]) };
+            }
+            if (prim.indices.empty()) {
+                outError = batchFiles[b] + std::string(" primitive #") +
+                           std::to_string(p) + " has no indices"; return false;
+            }
+            // P9 V2 全 PBR：贴图组 + batch 级材质量（mesh_io 已按 glTF spec
+            // 提取；空贴图 = 共享中性兜底纹理，shader 侧 matFlags 分支跳过）。
+            pb.mrRGBA = prim.metallicRoughnessRGBA;
+            pb.mrWidth = prim.mrWidth;  pb.mrHeight = prim.mrHeight;
+            pb.hasMR = prim.hasMR;
+            pb.normalRGBA = prim.normalRGBA;
+            pb.normalWidth = prim.normalWidth;  pb.normalHeight = prim.normalHeight;
+            pb.hasNormalTex = prim.hasNormalTex;
+            pb.occlRGBA = prim.occlRGBA;
+            pb.occlWidth = prim.occlWidth;  pb.occlHeight = prim.occlHeight;
+            pb.hasOcclTex = prim.hasOcclTex;
+            pb.emissiveRGBA = prim.emissiveRGBA;
+            pb.emissiveWidth = prim.emissiveWidth;  pb.emissiveHeight = prim.emissiveHeight;
+            pb.hasEmissiveTex = prim.hasEmissiveTex;
+            pb.normalScale = prim.normalScale;
+            pb.occlStrength = prim.occlStrength;
+            pb.metallicFactor = prim.metallicFactor;
+            pb.roughnessFactor = prim.roughnessFactor;
+            for (int k = 0; k < 3; ++k) pb.emissiveFactor[k] = prim.emissiveFactor[k];
+            pb.matFlags = (pb.hasMR ? 1u : 0u) | (pb.hasNormalTex ? 2u : 0u) |
+                          (pb.hasOcclTex ? 4u : 0u) | (pb.hasEmissiveTex ? 8u : 0u);
+            pb.vertices.resize(prim.vertices.size());
+            for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
+                const auto& mv = prim.vertices[i];
+                pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
+                                   mv.normal[0], mv.normal[1], mv.normal[2],
+                                   mv.uv[0], mv.uv[1] };
+            }
+            pb.indices = prim.indices;
+            // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
+            //（uploadClusterData 算式语义；世界联合球在第 7 步经实例矩阵变换）。
+            float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
+            float mx[3] = { mn[0], mn[1], mn[2] };
+            for (const SceneVertex& v : pb.vertices) {
+                mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
+                mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
+            }
+            pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
+            pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
+            pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
+            float radius = 0.0f;
+            for (const SceneVertex& v : pb.vertices) {
+                const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
+                radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            pb.sphere[3] = radius;
         }
-        if (prim.indices.empty()) {
-            outError = batchFiles[b] + std::string(" first primitive has no indices"); return false;
-        }
-        PreparedBatch& pb = prepared[b];
-        pb.vertices.resize(prim.vertices.size());
-        for (std::size_t i = 0; i < prim.vertices.size(); ++i) {
-            const auto& mv = prim.vertices[i];
-            pb.vertices[i] = { mv.pos[0], mv.pos[1], mv.pos[2],
-                               mv.normal[0], mv.normal[1], mv.normal[2],
-                               mv.uv[0], mv.uv[1] };
-        }
-        pb.indices = prim.indices;
-        pb.texWidth = prim.texWidth;
-        pb.texHeight = prim.texHeight;
-        pb.texRGBA = prim.baseColorRGBA;
-        // 局部包围球：中心 = 包围盒中心，半径 = 最远顶点到中心距离
-        //（uploadClusterData 算式语义；世界联合球在第 6 步经实例矩阵变换）。
-        float mn[3] = { pb.vertices.front().px, pb.vertices.front().py, pb.vertices.front().pz };
-        float mx[3] = { mn[0], mn[1], mn[2] };
-        for (const SceneVertex& v : pb.vertices) {
-            mn[0] = std::min(mn[0], v.px); mn[1] = std::min(mn[1], v.py); mn[2] = std::min(mn[2], v.pz);
-            mx[0] = std::max(mx[0], v.px); mx[1] = std::max(mx[1], v.py); mx[2] = std::max(mx[2], v.pz);
-        }
-        pb.sphere[0] = (mn[0] + mx[0]) * 0.5f;
-        pb.sphere[1] = (mn[1] + mx[1]) * 0.5f;
-        pb.sphere[2] = (mn[2] + mx[2]) * 0.5f;
-        float radius = 0.0f;
-        for (const SceneVertex& v : pb.vertices) {
-            const float dx = v.px - pb.sphere[0], dy = v.py - pb.sphere[1], dz = v.pz - pb.sphere[2];
-            radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
-        }
-        pb.sphere[3] = radius;
     }
+    // M-E1b.5 分组映射按 batch（文件 × primitive）固化：同一文件的各 primitive
+    // batch 共享该文件组的全部 objects（实例矩阵逐 batch 复制一份），槽号一一
+    // 对应，updateObjects 每帧按同一规则重打包。
+    sceneBatchObjects_.clear();
+    sceneBatchObjects_.reserve(prepared.size());
+    for (std::uint32_t f : batchPrimFile) sceneBatchObjects_.push_back(batchObjects[f]);
 
     // ---- 4. 建 GPU 资源：volatile CB + 每 batch VB/IB/贴图/采样/布局槽位 ----
     nvrhi::BufferDesc cbDesc;
@@ -5862,11 +6264,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     constants_ = device->createBuffer(cbDesc);
     if (!constants_) { outError = "createBuffer failed for volatile constant buffer"; return false; }
 
-    // 槽位与 model.slang 的 register(b0/t0/s0/t5/t6) 一致；t5/t6 经 slangc 的
+    // 槽位与 model.slang 的 register(b0/t0/t1..t4/s0/t5/t6) 一致；t5/t6 经 slangc 的
     // -fvk-t-shift 0 0 在 Vulkan 映射为 binding 5/6，DX12 为 SRV slot 5/6。
+    // P9 V2：t1 MR / t2 normal / t3 occl / t4 emissive（psScene 专属调用图，
+    // 与 visbuf/cull 图的 t2..t4 StructuredBuffer 各自编译互不见面——t1 先例）。
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))   // b1 LightConstants（M-E1b.3：cameraPos）
@@ -5909,13 +6317,41 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     sceneInputLayout_ = device->createInputLayout(attrs, 3, vsScene_);
     if (!sceneInputLayout_) { outError = "createInputLayout failed for ecs scene"; return false; }
 
-    sceneBatches_.resize(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    // P9 V2：共享中性兜底纹理（1×1）。绑定恒非空、shader 在 matFlags 未置位时
+    // 不采样——normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、
+    // occl=(1,1,1,1)、emissive=黑。全场景一份，全 batch 复用。
+    // 注意：这里只 createTexture 不写入，写入统一并入下方主 upload 命令列表
+    // ——不能为每张纹理单开 executeCommandList（VK 实测退出段错误，
+    // 2026-11-13 bisect 定位；§2.8「禁开多余 cmd list」精神同样适用于 init 期）。
+    {
+        const auto mkNeutral = [&device](const char* name) -> nvrhi::TextureHandle {
+            nvrhi::TextureDesc nd;
+            nd.width = nd.height = 1;
+            nd.format = nvrhi::Format::RGBA8_UNORM;
+            nd.debugName = name;
+            nd.initialState = nvrhi::ResourceStates::ShaderResource;
+            nd.keepInitialState = true;
+            return device->createTexture(nd);
+        };
+        sceneNeutralNormal_ = mkNeutral("SceneNeutralNormal");
+        sceneNeutralMR_ = mkNeutral("SceneNeutralMR");
+        sceneNeutralOccl_ = mkNeutral("SceneNeutralOccl");
+        sceneNeutralEmissive_ = mkNeutral("SceneNeutralEmissive");
+        if (!sceneNeutralNormal_ || !sceneNeutralMR_ ||
+            !sceneNeutralOccl_ || !sceneNeutralEmissive_) {
+            outError = "createTexture failed for scene neutral PBR textures"; return false;
+        }
+    }
+
+    sceneBatches_.resize(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
-        const std::string vbName = batchFiles[b] + "VB";
-        const std::string ibName = batchFiles[b] + "IB";
-        const std::string texName = batchFiles[b] + "BaseColor";
+        const std::string fileTag = batchFiles[batchPrimFile[b]] +
+            "#" + std::to_string(b);
+        const std::string vbName = fileTag + "VB";
+        const std::string ibName = fileTag + "IB";
+        const std::string texName = fileTag + "BaseColor";
         nvrhi::BufferDesc vbDesc;
         vbDesc.byteSize = pb.vertices.size() * sizeof(SceneVertex);
         vbDesc.isVertexBuffer = true;
@@ -5932,14 +6368,49 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         batch.indexCount = static_cast<std::uint32_t>(pb.indices.size());
 
         nvrhi::TextureDesc texDesc;
-        texDesc.width = pb.texWidth;
-        texDesc.height = pb.texHeight;
         texDesc.format = nvrhi::Format::RGBA8_UNORM;
-        texDesc.debugName = texName.c_str();
         texDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         texDesc.keepInitialState = true;
+
+        // P9 V2：batch 级材质量固化（updateObjects 重打包实例用）。
+        batch.matFlags = pb.matFlags;
+        batch.normalScale = pb.normalScale;
+        batch.occlStrength = pb.occlStrength;
+        batch.metallicFactor = pb.metallicFactor;
+        batch.roughnessFactor = pb.roughnessFactor;
+        for (int k = 0; k < 3; ++k) batch.emissiveFactor[k] = pb.emissiveFactor[k];
+
+        // t0 baseColor + t1 MR / t2 normal / t3 occl / t4 emissive：有真贴图建
+        // 独立纹理，无则绑共享中性兜底（shader 按 matFlags 分支，零采样零成本）。
+        texDesc.width = pb.texWidth;
+        texDesc.height = pb.texHeight;
+        texDesc.debugName = texName.c_str();
         batch.tex = device->createTexture(texDesc);
         if (!batch.tex) { outError = "createTexture failed for ecs scene base color"; return false; }
+
+        texDesc.width = (pb.hasMR && pb.mrWidth) ? pb.mrWidth : 1;
+        texDesc.height = (pb.hasMR && pb.mrHeight) ? pb.mrHeight : 1;
+        texDesc.debugName = (fileTag + "MR").c_str();
+        batch.texMR = pb.hasMR ? device->createTexture(texDesc) : sceneNeutralMR_;
+        if (!batch.texMR) { outError = "createTexture failed for ecs scene MR"; return false; }
+
+        texDesc.width = (pb.hasNormalTex && pb.normalWidth) ? pb.normalWidth : 1;
+        texDesc.height = (pb.hasNormalTex && pb.normalHeight) ? pb.normalHeight : 1;
+        texDesc.debugName = (fileTag + "Normal").c_str();
+        batch.texNormal = pb.hasNormalTex ? device->createTexture(texDesc) : sceneNeutralNormal_;
+        if (!batch.texNormal) { outError = "createTexture failed for ecs scene normal"; return false; }
+
+        texDesc.width = (pb.hasOcclTex && pb.occlWidth) ? pb.occlWidth : 1;
+        texDesc.height = (pb.hasOcclTex && pb.occlHeight) ? pb.occlHeight : 1;
+        texDesc.debugName = (fileTag + "Occl").c_str();
+        batch.texOccl = pb.hasOcclTex ? device->createTexture(texDesc) : sceneNeutralOccl_;
+        if (!batch.texOccl) { outError = "createTexture failed for ecs scene occlusion"; return false; }
+
+        texDesc.width = (pb.hasEmissiveTex && pb.emissiveWidth) ? pb.emissiveWidth : 1;
+        texDesc.height = (pb.hasEmissiveTex && pb.emissiveHeight) ? pb.emissiveHeight : 1;
+        texDesc.debugName = (fileTag + "Emissive").c_str();
+        batch.texEmissive = pb.hasEmissiveTex ? device->createTexture(texDesc) : sceneNeutralEmissive_;
+        if (!batch.texEmissive) { outError = "createTexture failed for ecs scene emissive"; return false; }
 
         batch.sampler = device->createSampler(samplerDesc);
         if (!batch.sampler) { outError = "createSampler failed for ecs scene"; return false; }
@@ -5959,14 +6430,14 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // Vulkan 侧若改用 SRV 子范围又会撞 minStorageBufferOffsetAlignment。故彻底
     // 不依赖 base 语义：单 batch 时与 M-E1b.0 逐字节同构，既有基线无需重拍。
     // batch 内保持 objects 原序（稳定确定）。
-    std::vector<std::vector<float>> batchInstanceData(batchFiles.size());
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    std::vector<std::vector<float>> batchInstanceData(prepared.size());
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
-        batch.instanceCount = static_cast<std::uint32_t>(batchObjects[b].size());
+        batch.instanceCount = static_cast<std::uint32_t>(sceneBatchObjects_[b].size());
         std::vector<float>& data = batchInstanceData[b];
         data.assign(static_cast<std::size_t>(batch.instanceCount) * 7u * 4u, 0.0f);
         std::uint32_t slot = 0;
-        for (std::uint32_t i : batchObjects[b]) {
+        for (std::uint32_t i : sceneBatchObjects_[b]) {
             const float* w = objects[i].world;   // 列主序 m[col*4+row]
             float* dst = data.data() + static_cast<std::size_t>(slot) * 7 * 4;
             for (int c = 0; c < 4; ++c)
@@ -5976,11 +6447,17 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
-            // M-E1b.3：逐实例 PBR 材质（缺省 roughness=1 / metallic=0）。
-            dst[20] = objects[i].roughness;
-            dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            // M-E1b.3：逐实例 PBR 材质。P9 V2：场景 JSON 显式写键（hasPbrOverride）
+            // 覆盖优先，否则用 batch 级 GLB 因子做缺省——与 [22..27] 的 GLB 权威
+            // 口径对齐（此前固定 1/0 缺省，无 MR 贴图材质的 GLB 因子到不了 shader）。
+            dst[20] = objects[i].hasPbrOverride ? objects[i].roughness : batch.roughnessFactor;
+            dst[21] = objects[i].hasPbrOverride ? objects[i].metallic : batch.metallicFactor;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         nvrhi::BufferDesc instDesc;
@@ -6048,9 +6525,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     if (shadowCount_ > 0) {
         float mn[3] = { 0.0f, 0.0f, 0.0f }, mx[3] = { 0.0f, 0.0f, 0.0f };
         bool first = true;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const PreparedBatch& pb = prepared[b];
-            for (std::uint32_t i : batchObjects[b]) {
+            for (std::uint32_t i : sceneBatchObjects_[b]) {
                 const float* w = objects[i].world;
                 float c[3], r3[3];
                 shadowTransformPoint(w, pb.sphere, c);
@@ -6223,10 +6700,16 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // ---- 5.5 每 batch 一个 BindingSet（§2.7 单 set 纪律）----
     // 必须在实例/灯缓冲创建之后：t5/t6 绑空句柄会被 NVRHI 校验直接拒绝。
     // 内容同 layout，t0 换各自贴图，t5/t6 实例/灯缓冲与 b0 常量全场景共享。
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         SceneMeshBatch& batch = sceneBatches_[b];
         nvrhi::BindingSetDesc setDesc;
         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, batch.tex))
+               // P9 V2 全 PBR：t1 MR / t2 normal / t3 occl / t4 emissive（真贴图
+               // 或共享中性兜底，BindingSet 恒非空）。
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(1, batch.texMR))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(2, batch.texNormal))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(3, batch.texOccl))
+               .addItem(nvrhi::BindingSetItem::Texture_SRV(4, batch.texEmissive))
                .addItem(nvrhi::BindingSetItem::Sampler(0, batch.sampler))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, constants_))
                .addItem(nvrhi::BindingSetItem::ConstantBuffer(1, lightConstants_))   // b1（M-E1b.3：cameraPos）
@@ -6251,7 +6734,18 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     //（只读 SRV，每帧不重写——与 clusterSpheres_ 同款静态路径）。
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    // P9 V2：中性兜底纹理写入——与 batch 贴图同一命令列表（禁单纹理单开列表，
+    // 见上方注释；VK 退出段错误 bisect 实锤）。
+    {
+        const std::uint8_t neutralNormal[4] = {128, 128, 255, 255};
+        const std::uint8_t neutralOpaque[4] = {255, 255, 255, 255};
+        const std::uint8_t neutralBlack[4]  = {0, 0, 0, 255};
+        upload->writeTexture(sceneNeutralNormal_, 0, 0, neutralNormal, 4);
+        upload->writeTexture(sceneNeutralMR_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralOccl_, 0, 0, neutralOpaque, 4);
+        upload->writeTexture(sceneNeutralEmissive_, 0, 0, neutralBlack, 4);
+    }
+    for (std::size_t b = 0; b < prepared.size(); ++b) {
         const PreparedBatch& pb = prepared[b];
         SceneMeshBatch& batch = sceneBatches_[b];
         upload->beginTrackingBufferState(batch.vb, nvrhi::ResourceStates::CopyDest);
@@ -6262,6 +6756,19 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(batch.ib, nvrhi::ResourceStates::IndexBuffer);
         upload->writeTexture(batch.tex, 0, 0, pb.texRGBA.data(),
                              static_cast<size_t>(pb.texWidth) * 4u);
+        // P9 V2：真贴图上传（中性兜底纹理已在创建时写好，跳过）。
+        if (pb.hasMR)
+            upload->writeTexture(batch.texMR, 0, 0, pb.mrRGBA.data(),
+                                 static_cast<size_t>(pb.mrWidth) * 4u);
+        if (pb.hasNormalTex)
+            upload->writeTexture(batch.texNormal, 0, 0, pb.normalRGBA.data(),
+                                 static_cast<size_t>(pb.normalWidth) * 4u);
+        if (pb.hasOcclTex)
+            upload->writeTexture(batch.texOccl, 0, 0, pb.occlRGBA.data(),
+                                 static_cast<size_t>(pb.occlWidth) * 4u);
+        if (pb.hasEmissiveTex)
+            upload->writeTexture(batch.texEmissive, 0, 0, pb.emissiveRGBA.data(),
+                                 static_cast<size_t>(pb.emissiveWidth) * 4u);
         upload->beginTrackingBufferState(batch.instances, nvrhi::ResourceStates::CopyDest);
         upload->writeBuffer(batch.instances, batchInstanceData[b].data(),
                             batchInstanceData[b].size() * sizeof(float));
@@ -6282,9 +6789,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // 球心乘矩阵、半径乘三列最大尺度（非均匀 scale 近似，Carrot/UE 同病）。
     float gmn[3] = { 0.0f, 0.0f, 0.0f }, gmx[3] = { 0.0f, 0.0f, 0.0f };
     bool first = true;
-    for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+    for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
         const float* sph = prepared[b].sphere;
-        for (std::uint32_t oi : batchObjects[b]) {
+        for (std::uint32_t oi : sceneBatchObjects_[b]) {
             const float* w = objects[oi].world;
             // 世界球心 = M * center（列主序列向量变换）。
             const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
@@ -6312,9 +6819,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     assetSphere_[2] = (gmn[2] + gmx[2]) * 0.5f;
     {
         float radius = 0.0f;
-        for (std::size_t b = 0; b < batchFiles.size(); ++b) {
+        for (std::size_t b = 0; b < sceneBatches_.size(); ++b) {
             const float* sph = prepared[b].sphere;
-            for (std::uint32_t oi : batchObjects[b]) {
+            for (std::uint32_t oi : sceneBatchObjects_[b]) {
                 const float* w = objects[oi].world;
                 const float cx = w[0] * sph[0] + w[4] * sph[1] + w[8]  * sph[2] + w[12];
                 const float cy = w[1] * sph[0] + w[5] * sph[1] + w[9]  * sph[2] + w[13];
@@ -6386,10 +6893,17 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
             dst[17] = objects[i].tint[1];
             dst[18] = objects[i].tint[2];
             dst[19] = 0.0f;
-            dst[20] = objects[i].roughness;
-            dst[21] = objects[i].metallic;
-            dst[22] = 0.0f;
-            dst[23] = 0.0f;
+            // P9 V2：[5].z=normalScale、[5].w=matFlags、[6]=(emissive,occlStr)
+            // batch 级材质量（initScene 固化于 SceneMeshBatch，全实例同值）。
+            // [20]/[21] 同 [22..27] 口径：JSON 显式覆盖优先，否则 batch GLB 因子。
+            dst[20] = objects[i].hasPbrOverride ? objects[i].roughness : batch.roughnessFactor;
+            dst[21] = objects[i].hasPbrOverride ? objects[i].metallic : batch.metallicFactor;
+            dst[22] = batch.normalScale;
+            dst[23] = static_cast<float>(batch.matFlags);
+            dst[24] = batch.emissiveFactor[0];
+            dst[25] = batch.emissiveFactor[1];
+            dst[26] = batch.emissiveFactor[2];
+            dst[27] = batch.occlStrength;
             ++slot;
         }
         // beginTrackingBufferState 参数 = **当前**状态（NVRHI 语义：informs the
@@ -6840,6 +7354,17 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             if (dag_) {
                 cmd->copyBuffer(cullReadback_[cullSubmitted_ & 1u],
                                 2 * sizeof(std::uint32_t), triCounter_,
+                                sizeof(std::uint32_t), sizeof(std::uint32_t));
+            }
+            // M13.1（拍板 A）：可见簇列表整表拷入回读环形（尾部 4B = args[1] 可见
+            // 数）。pollClusterVisible 延迟两帧消费（pollCullStats 同窗口纪律）。
+            // visibleList_ compute 末态 UAV → CopySource 由 NVRHI 跟踪插转换（与
+            // indirectArgs_ 同款）；后续 VS 读 SRV 再插回，同帧三态轮转既有口径。
+            if (clusterBlasRequested_ && vlReadback_[0]) {
+                cmd->copyBuffer(vlReadback_[cullSubmitted_ & 1u], 0,
+                                visibleList_, 0, vlListBytes_);
+                cmd->copyBuffer(vlReadback_[cullSubmitted_ & 1u],
+                                vlListBytes_, indirectArgs_,
                                 sizeof(std::uint32_t), sizeof(std::uint32_t));
             }
             if (ptCull) passTimers_.end(cmd, PassTimers::kPassCull);
@@ -8328,6 +8853,16 @@ void Scene::shutdown() {
     blas_ = nullptr;
     blasVB_ = nullptr;
     blasIB_ = nullptr;
+    // M13.0：per-cluster BLAS 资源（句柄 RefCountPtr 随 clear 释放，slab 缓冲同）。
+    clusterBlasReady_ = false;
+    clusterBlasTriangleCount_ = 0;
+    clusterBlasBuildMs_ = 0.0f;
+    clusterBlasInputBytes_ = 0;
+    clusterBlasEstBytes_ = 0;
+    clusterBlasTimer_.shutdown();
+    clusterBlas_.clear();
+    clusterBlasVB_ = nullptr;
+    clusterBlasIB_ = nullptr;
     // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
     sceneMode_ = false;
     vsScene_ = nullptr;
@@ -8335,6 +8870,14 @@ void Scene::shutdown() {
     sceneLights_ = nullptr;
     sceneInputLayout_ = nullptr;
     sceneBindingLayout_ = nullptr;
+    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
+    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
+    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
+    // 仅创建不绑定不写入也复现，删创建即 clean）。
+    sceneNeutralNormal_ = nullptr;
+    sceneNeutralMR_ = nullptr;
+    sceneNeutralOccl_ = nullptr;
+    sceneNeutralEmissive_ = nullptr;
     sceneBatches_.clear();
     pipelineSceneBack_ = nullptr;
     pipelineSceneNone_ = nullptr;
@@ -8389,6 +8932,13 @@ void Scene::shutdown() {
     visibleList_ = nullptr;
     clusterSpheres_ = nullptr;
     for (auto& rb : cullReadback_) rb = nullptr;
+    // M13.1：可见簇列表回读环形 + CPU 消费态。
+    for (auto& rb : vlReadback_) rb = nullptr;
+    vlListBytes_ = 0;
+    clusterVlIds_.clear();
+    clusterVlFrame_ = -1;
+    clusterTlasInstances_.clear();
+    clusterTlasReadbackLogged_ = false;
     triCounter_ = nullptr;   // M5.2：GPU 原子三角计数器
     // M6.0：Hi-Z 金字塔资源。
     hiz_ = false;

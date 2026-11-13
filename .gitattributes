@@ -43,3 +43,6 @@ example/cases.json text eol=lf
 
 # ---- cases.json 语义合并驱动（2026-11-10）：并行轨道向 versions 尾部追加不再撞冲突 ----
 example/cases.json merge=nlcases
+
+# ---- git hooks 正本：CRLF 会弄坏 sh hook（2026-11-13），锁 LF ----
+tools/hooks/* text eol=lf

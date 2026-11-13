@@ -386,6 +386,26 @@ public:
     bool blasReady() const { return blasReady_; }
     int  blasTriangleCount() const { return blasTriangleCount_; }
 
+    // ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0）----
+    // setClusterBlas：viewer --cluster-blas 传入（backend create 阶段、Scene init
+    // 之前；initDag 内部消费）。initClusterBlas 在 initDag 拼接循环完成后调用：
+    // 逐层逐簇从 CPU 侧 levels 数据展开专用 slab（顶点 position-only 12B、索引
+    // u8 局部 → u32 顺序铺）+ 每簇 createAccelStruct + 同列表逐簇 build（M8.0
+    // 同款 0x87d 纪律：上传/setBufferState/build/setPermanentBufferState 同列表
+    // + waitForIdle）。内存占用 = inputBytes（实际 slab 字节）+ estBytes（AS 上
+    // 界估算，NVRHI 不暴露真实尺寸）双口径，日志锚 + HUD 行记录在案。
+    void setClusterBlas(bool on) { clusterBlasRequested_ = on; }
+    // M13.1：levels 改指针+计数（initCull 链单层 &nm 直传，避免临时拷贝整份
+    // NMeshData；语义不变）。
+    bool initClusterBlas(nvrhi::IDevice* device,
+                         const nl::core::NMeshData* levels, std::size_t levelCount,
+                         std::string& outError);
+    bool clusterBlasReady() const { return clusterBlasReady_; }
+    int  clusterBlasCount() const { return static_cast<int>(clusterBlas_.size()); }
+    int  clusterBlasTriangleCount() const { return clusterBlasTriangleCount_; }
+    std::uint64_t clusterBlasInputBytes() const { return clusterBlasInputBytes_; }
+    std::uint64_t clusterBlasEstBytes() const { return clusterBlasEstBytes_; }
+
     // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
     // initTlas：BLAS 成功后建 TLAS（setTopLevelMaxInstances 预留容量；TLAS 尺寸
     // NVRHI 自算，prebuild 查询可选不用）。设备不支持 RT 或 BLAS 未建时跳过不拦路。
@@ -396,10 +416,16 @@ public:
     // AllowUpdate）。frame.tlasSpin 时实例绕 Y 旋转（只改 TLAS，不碰光栅化）；
     // frame.tlasProbe 时再记录 1 线程 RayQuery 探针 dispatch（hit t 读回日志）。
     void buildTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame);
+    // M13.1（拍板 A）：TLAS 直挂可见簇 BLAS 多实例（RTXMG 同构）。实例源两级：
+    // 回读可见列表（cull/dag 链动态 cut）→ 未就绪退全簇恒等列表（rt 链语义）。
+    void buildClusterTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& frame);
     // TLAS rebuild 耗时轮询（每帧 begin/end，HUD 非确定性模式显示最近值）。
     void pollTlasTimer(nvrhi::IDevice* device, HudFrame* hud);
     // 探针 readback 轮询（两帧延迟窗口，同 pollCullStats 纪律；--tlas-probe 才有数据）。
     void pollTlasProbe(nvrhi::IDevice* device);
+    // M13.1：可见簇列表回读消费（两帧延迟窗口，同 pollCullStats 纪律；
+    // --cluster-blas 才有数据；rt 链无剔除 dispatch 时恒无数据 → TLAS 走全簇）。
+    void pollClusterVisible(nvrhi::IDevice* device);
     bool tlasReady() const { return tlasReady_; }
     int  tlasInstanceCount() const { return tlasInstanceCount_; }
 
@@ -786,14 +812,35 @@ private:
     // 子范围的 minStorageBufferOffsetAlignment 约束（批次起点按 80B 递增）。
     struct SceneMeshBatch {
         nvrhi::BufferHandle vb, ib;
-        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，5/实例
-        nvrhi::TextureHandle tex;
+        nvrhi::BufferHandle instances;   // 本 batch 的 StructuredBuffer<float4>，7/实例
+        nvrhi::TextureHandle tex;        // t0 baseColor（RGBA8_UNORM，单 mip）
+        // P9 V2 全 PBR：t1 metallicRoughness / t2 normal / t3 occlusion / t4
+        // emissive。无对应贴图的 primitive 绑共享中性兜底纹理（见
+        // sceneNeutral* 成员），shader 按 matFlags 分支，兜底路径零采样。
+        nvrhi::TextureHandle texMR, texNormal, texOccl, texEmissive;
         nvrhi::SamplerHandle sampler;
         nvrhi::BindingSetHandle set;
         nvrhi::BindingSetHandle shadowSet;   // M-E1b.4：shadow pass 用（b0=lightViewProj + t5 实例）
         std::uint32_t indexCount = 0;
         std::uint32_t instanceCount = 0;
+        // P9 V2：batch 级材质量（全部实例共享同一 GLB primitive 材质）。
+        // updateObjects 重打包实例 [5].z/.w 与 [6] 时从这里取。
+        std::uint32_t matFlags = 0;          // hasMR=1 | hasNormal=2 | hasOccl=4 | hasEmissive=8
+        float normalScale = 1.0f;            // glTF normalTexture.scale
+        float emissiveFactor[3] = {0.f, 0.f, 0.f};
+        float occlStrength = 1.0f;           // glTF occlusionTexture.strength
+        // P9 V2：GLB 标量因子（hasMR=0 且实例未显式覆盖时进实例 [5].xy）。
+        float metallicFactor = 1.0f;         // glTF spec 缺省 1
+        float roughnessFactor = 1.0f;        // glTF spec 缺省 1
     };
+    // P9 V2：共享中性兜底纹理（1×1，绑定恒非空、shader 在 matFlags 未置位时
+    // 不采样）—— normal=(0.5,0.5,1,1)（切线空间零偏移）、MR=(1,1,1,1)、
+    // occl=(1,1,1,1)、emissive=黑。全场景一份，全 batch 复用。
+    // 注意声明位置必须在 sceneBatches_ **之前**：NVRHI 不持有 BindingSet 对
+    // 绑定资源的引用（用户侧保活），成员按声明逆序析构——放后面会让中性
+    // 纹理先于各 batch 的 set 释放 → Vulkan 退出段错误（DX12 容忍、VK 不容忍，
+    // 2026-11-13 实测）。
+    nvrhi::TextureHandle sceneNeutralNormal_, sceneNeutralMR_, sceneNeutralOccl_, sceneNeutralEmissive_;
     std::vector<SceneMeshBatch> sceneBatches_;
     // M-E1b.5：updateObjects 复用的 batch 分组映射（initScene 时固化——
     // meshFile 首现序 + batch 内 objects 原序，重打包规则与 initScene 一致）。
@@ -960,6 +1007,33 @@ private:
     float                        blasBuildMs_ = 0.0f;     // 最近一次 resolve 的构建耗时（恒定值）
     int                          blasTriangleCount_ = 0;  // HUD 显示用（= fallback 三角数）
 
+    // ---- M13.0（S13）：per-cluster BLAS 预建（S13-PLAN M13.0；--cluster-blas）----
+    // 每个簇用自身几何预建一个小 BLAS、全部常驻；所有簇 BLAS 共享两块
+    // build-input slab（position-only 12B/顶点 VB + 重展开 u32 索引 IB），geometry
+    // 用 vertexOffset/indexOffset 引用各簇窗口（NVRHI GeometryTriangles 支持）。
+    // clusterBlas_ 下标 = initDag 拼接后的全局簇 id（层间连续拼接，与 clusterMeta
+    // 同序），M13.1 回读可见簇列表直接按 id 查。默认关（viewer --cluster-blas
+    // 开启）：万级 createAccelStruct + build 是启动期一次性开销，不碰既有路径。
+    bool                         clusterBlasRequested_ = false;  // --cluster-blas 开关
+    bool                         clusterBlasReady_ = false;      // initClusterBlas 成功后置位
+    std::vector<nvrhi::rt::AccelStructHandle> clusterBlas_;      // [全局簇 id] → BLAS
+    nvrhi::BufferHandle          clusterBlasVB_, clusterBlasIB_; // 共享 build-input slab
+    GpuTimer                     clusterBlasTimer_;              // setLabel("clusterblas")
+    float                        clusterBlasBuildMs_ = 0.0f;     // resolve 后恒定
+    int                          clusterBlasTriangleCount_ = 0;  // 全部簇三角合计
+    std::uint64_t                clusterBlasInputBytes_ = 0;     // slab 实际字节（确定值）
+    std::uint64_t                clusterBlasEstBytes_ = 0;       // AS 上界估算（NVRHI 不暴露真实尺寸）
+
+    // ---- M13.1（S13，拍板 A）：可见簇列表回读环形 + TLAS 直挂每可见簇一实例 ----
+    // 2 槽 host-visible 环：每槽 = 全簇 id 列表（clusterCount_*4B）+ 尾部 4B 可见数
+    // （拷自 indirectArgs_[1]）。cull/dag dispatch 后整表拷入，pollClusterVisible
+    // 延迟两帧消费（pollCullStats 同窗口纪律，mapBuffer 内部等 lastUseFence 零等待）。
+    nvrhi::BufferHandle          vlReadback_[2];
+    std::uint64_t                vlListBytes_ = 0;               // 单槽列表字节数（count 存尾部）
+    std::vector<std::uint32_t>   clusterVlIds_;                  // 最近一次回读的可见簇 id
+    int                          clusterVlFrame_ = -1;           // 数据所属帧序（-1 = 未就绪）
+    std::vector<nvrhi::rt::InstanceDesc> clusterTlasInstances_;  // CPU 组装缓冲（避免每帧 realloc）
+
     // ---- M8.1（S8.1）：TLAS 每帧全量 rebuild（UE 口径，D-S8-1 拍板）----
     bool                         tlasReady_ = false;      // initTlas 成功后置位
     nvrhi::rt::AccelStructHandle tlas_;                   // top-level，容量 kMaxTlasInstances
@@ -968,6 +1042,7 @@ private:
     float                        tlasBuildMs_ = 0.0f;     // 最近一次 resolve 的 rebuild 耗时
     int                          tlasInstanceCount_ = 0;  // 当前帧实例数（单 mesh 场景 = 1）
     std::uint32_t                tlasFrameIndex_ = 0;     // buildTlasFrame 自增（spin 角度相位）
+    bool                         clusterTlasReadbackLogged_ = false;  // M13.1：readback 首帧日志锚
     // 探针管线（--tlas-probe 懒建，§2.7：每管线单一 BindingSet）
     bool                         probeReady_ = false;
     bool                         probeFailed_ = false;    // 懒建失败只报一次

@@ -286,6 +286,16 @@ struct HudFrame {
     int   tlasInstanceCount   = 0;
     float tlasMs              = 0.0f;
     bool  tlasTimingAvailable = false;
+    // ---- M13.0（S13）：per-cluster BLAS 预建证据（--cluster-blas 才非零，其它
+    // 模式一像素不动）。inputMB = build-input slab 实际字节（几何决定量，确定值）；
+    // estMB = AS 上界估算（NVRHI 不暴露真实尺寸，量级参考）；ms 与 BLAS 行同口径
+    // deterministic 不写真实值。
+    int   clusterBlasCount    = 0;
+    int   clusterBlasTriangles = 0;
+    double clusterBlasInputMB = 0.0;
+    double clusterBlasEstMB   = 0.0;
+    float clusterBlasMs       = 0.0f;
+    bool  clusterBlasTimingAvailable = false;
     // ---- M-PT0：粒子证据行（仅 particles 模式显示，其它模式一像素不动）。
     bool  particlesEnabled    = false;
     int   particleAlive       = 0;
@@ -359,6 +369,9 @@ struct SceneObjectDesc {
     float tint[3];          // ModelComponent::tint
     float roughness = 1.0f; // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）
     float metallic  = 0.0f; // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）
+    // P9 V2：场景 JSON 显式写了 roughness/metallic = true（覆盖优先）；否则
+    // 实例打包用 batch 级 GLB 因子做缺省（与 [22..27] 的 GLB 权威口径对齐）。
+    bool hasPbrOverride = false;
     const char* meshFile;   // assets/ 下的 .glb 文件名（viewer 侧已过白名单校验）
 };
 struct SceneLightDesc {
@@ -465,7 +478,11 @@ public:
                                             // M10.0：--mode probe-place（屏幕探针 cascade
                                             // 布点；走 initVisbuf(pulling) 资产链 +
                                             // velocity prepass + 布点 compute + 点可视化）。
-                                            bool probeMode = false);
+                                            bool probeMode = false,
+                                            // M13.0：--cluster-blas（per-cluster BLAS
+                                            // 预建；S13-PLAN M13.0，缺省关 = 既有
+                                            // 模式零扰动）。
+                                            bool clusterBlas = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

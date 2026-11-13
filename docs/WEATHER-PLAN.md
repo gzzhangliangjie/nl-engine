@@ -134,6 +134,20 @@ Bruneton 式 transmittance/multi-scattering LUT（按状态变化重算，UE Sta
 **拍板后动作（已执行）**：① 结论写回 `ROADMAP.md` 穿插项表（参数层 + 高级远期两行）、新建本计划书、草案降级为调研附录；② `MILESTONES.md` 补天气立项台账；③ `GAME-DEV-ORDER.md` 第 11 步打磨波标注天气渲染穿插项可在此消费。
 **拍板后动作（M-WEA1 开工时补）**：④ `SHADER-CONVENTIONS.md` 新增天气参数节（CB 尺寸实测、单一 BindingSet §2.7、纹理状态 §2.15，紧贴 M10.1 天穹头）；⑤ `s5/UE-DIFFS.md` 追加偏离台账（采纳解析近似而非 UE 全套 LUT）；⑥ 全仓 grep 旧「无天气条目」口径同步（S14-PLAN/GAME-DEV-ORDER/MILESTONES）。
 
+## 9b. M-WEA0 开工拍板（2026-11-13）
+
+| 编号 | 问题 | 结论 |
+|---|---|---|
+| **Q-WEA0-A** | 天气时间线形态：离散天气态 + 平滑过渡 vs 纯连续参数曲线 | **离散天气态 + 平滑过渡**（bevy_weather `forecast()` 口径：seed 驱动晴/多云/雨等离散态状态机，态间平滑插值；cvar 手调「强制下雨」语义自然，M-WEA2 GI 响应证据好对齐「晴→阴→雨」叙事） |
+| **Q-WEA0-B** | WeatherState 状态层代码落点 | **nl_core 新模块**（`core/include/nl/core/weather.hpp` + `core/src/weather.cpp`，纯 CPU 零图形符号，与 game_clock 同级同纪律；M-WEA1 viewer 直接 include 消费；附 core selftest） |
+
+M-WEA0 任务书（按上述拍板细化）：
+1. `core/weather.hpp/.cpp`：`WeatherState` 结构（sunDir/sunIntensity/sunColorTemp、skyZenith/skyHorizon/turbidity/sunDisk、cloudCoverage/cloudTransmittance、高度雾 density/height、groundWetness）+ `evaluate(seed, 时间)` 纯函数；离散态状态机 + 态间平滑过渡；wetness = 历史雨强的确定性积分（无隐藏状态，纯 double）。
+2. `nanite-tools` 新子命令 `weather`：TSV 逐时间点 dump 全参数 + `--verify` 同 seed 重放逐字节对比 + preset 锁定手调（cvar/CLI）。
+3. `tools/make-weather-evidence.py`：从真实 TSV 输出生成天气曲线证据图；展示台 tool 卡（usage/正向/负向）+ `docs/weather/WEATHER-TOOLS-GUIDE.md`。
+4. 确定性：同 seed + 同帧号重放逐字节一致进 selftest 锚；CPU 侧保持 bytes（Q11-1 口径）。
+5. 零渲染改动、零基线影响、不 bump `kStage`；冻结面照 §10。
+
 ---
 
 ## 10. 边界与证据清单

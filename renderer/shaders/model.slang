@@ -67,6 +67,14 @@ Texture2DArray<float> g_shadowMap : register(t7);
 Texture2D<float4> g_baseColor : register(t0);
 Texture2D<float4> g_metallicRoughness : register(t1);
 SamplerState      g_sampler   : register(s0);
+// P9 V2 全 PBR：psScene 专属贴图组。per-entry 纪律（t1 先例）：t2/t3/t4 在
+// visbuf/cull 调用图里是 StructuredBuffer（g_localIndices/g_clusterMeta/
+// g_visibleList），与 psScene 各自单独编译、bindings 互不见面，不构成冲突。
+// 无对应贴图的 primitive 绑共享中性兜底纹理（normal=(0.5,0.5,1,1) 等），
+// shader 按 matFlags 分支，兜底路径零采样。
+Texture2D<float4> g_normalTex    : register(t2);
+Texture2D<float4> g_occlusionTex : register(t3);
+Texture2D<float4> g_emissiveTex  : register(t4);
 // M1.3 entry points (two pairs, one source file):
 //   vsMain / psMain        - 3-attribute signature (normal scene). D3D12's debug
 //                            layer treats "VS input not provided by the input
@@ -419,6 +427,9 @@ struct VSOutputScene
     float3 worldPos : WORLDPOS;   // M-E1b.2：点光衰减需要世界空间片元位置
     float  roughness : ROUGH;     // M-E1b.3：逐实例 PBR 粗糙度（t5[base+5].x）
     float  metallic  : METAL;     // M-E1b.3：逐实例 PBR 金属度（t5[base+5].y）
+    float  normalScale : NORMALSCALE;   // P9 V2：t5[base+5].z（glTF normalTexture.scale）
+    nointerpolation uint matFlags : MATFLAGS;   // P9 V2：t5[base+5].w（材质位掩码）
+    float4 emissiveOcc : EMISSIVEOCC;   // P9 V2：t5[base+6]（emissiveFactor.rgb, occlStrength）
 };
 
 VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
@@ -440,6 +451,9 @@ VSOutputScene vsScene(VSInputScene input, uint instanceId : SV_InstanceID)
     output.worldPos = worldPos;
     output.roughness = g_instanceData[base + 5u].x;   // M-E1b.3：逐实例 PBR 材质
     output.metallic  = g_instanceData[base + 5u].y;
+    output.normalScale = g_instanceData[base + 5u].z;   // P9 V2
+    output.matFlags  = (uint)(g_instanceData[base + 5u].w + 0.5f);   // P9 V2
+    output.emissiveOcc = g_instanceData[base + 6u];   // P9 V2
     return output;
 }
 
@@ -480,7 +494,38 @@ struct PSInputScene
     float3 worldPos : WORLDPOS;
     float  roughness : ROUGH;     // M-E1b.3：逐实例 PBR 粗糙度（VS 透传）
     float  metallic  : METAL;     // M-E1b.3：逐实例 PBR 金属度
+    float  normalScale : NORMALSCALE;   // P9 V2
+    nointerpolation uint matFlags : MATFLAGS;   // P9 V2
+    float4 emissiveOcc : EMISSIVEOCC;   // P9 V2
 };
+
+// P9 V2：Mikkelsen 导数共切线框架（Mikkelsen 2011 "PerturbNormal"）。
+// 世界坐标与 UV 的 ddx/ddy 就地构 TBN——不扩顶点格式、不要求 glTF TANGENT
+// 属性（对拍：Filament material_parameter / bevy generate_tangents 均支持
+// 此路径）。glTF 口径：UV V 轴向下、法线贴图 +Y 对齐 +V，导数框架天然一致
+// 不翻转。退化（UV 无梯度 / 三角面退化）时保持几何法线。
+float3 perturbNormal(float3 geomN, float3 tsN, float2 uv, float3 posW)
+{
+    const float3 dp1 = ddx(posW);
+    const float3 dp2 = ddy(posW);
+    const float2 duv1 = ddx(uv);
+    const float2 duv2 = ddy(uv);
+    const float3 dp2perp = cross(dp2, geomN);
+    const float3 dp1perp = cross(geomN, dp1);
+    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    const float t2 = dot(T, T);
+    const float b2 = dot(B, B);
+    float3 n = geomN;
+    if (t2 > 1e-12f || b2 > 1e-12f)
+    {
+        const float invmax = rsqrt(max(t2, b2));
+        T *= invmax;
+        B *= invmax;
+        n = normalize(T * tsN.x + B * tsN.y + geomN * tsN.z);
+    }
+    return n;
+}
 
 float4 psScene(PSInputScene input) : SV_Target
 {
@@ -490,13 +535,37 @@ float4 psScene(PSInputScene input) : SV_Target
     // 保住各灯色温差异（归一化只做乘法、倒数 CPU 预算 → 双后端 bytes 逐位一致）。
     float4 base = g_baseColor.Sample(g_sampler, input.uv);
     float3 albedo = srgbToLinear(base.rgb) * input.tint;   // 贴图 sRGB→线性（t0 保持 UNORM 直读）；tint 线性乘子
-    float3 n = normalize(input.normal);
-    float3 v = normalize(g_cameraPos.xyz - input.worldPos); // 视向量 V（b1 cameraPos）
+
+    // P9 V2 全 PBR：matFlags 位掩码（batch 级常量，draw 内全实例同值 →
+    // uniform 分支）。flags=0 路径与 P9 V1 逐表达式一致（bytes 兼容基线）。
+    const uint matFlags = input.matFlags;
+    const bool hasMR       = (matFlags & 1u) != 0u;
+    const bool hasNormal   = (matFlags & 2u) != 0u;
+    const bool hasOccl     = (matFlags & 4u) != 0u;
+    const bool hasEmissive = (matFlags & 8u) != 0u;
 
     // 逐实例材质（t5[base+5]）：缺省 roughness=1 / metallic=0（matte dielectric）。
     // 下限防 D 尖峰（k != 0），见 shadePbr 同款 clamp 理由。
+    // hasMR：glTF metallicRoughness 贴图 G=roughness B=metallic（spec §3.9.3.1）
+    // 覆盖逐实例标量（与 shadePbr :228-233 同口径）。
     float roughness = clamp(input.roughness, 0.045f, 1.0f);
     float metallic  = saturate(input.metallic);
+    if (hasMR)
+    {
+        const float4 mr = g_metallicRoughness.Sample(g_sampler, input.uv);
+        roughness = clamp(mr.g, 0.045f, 1.0f);
+        metallic  = saturate(mr.b);
+    }
+
+    // hasNormal：切线空间法线贴图扰动（导数共切线框架，Mikkelsen）。
+    float3 n = normalize(input.normal);
+    if (hasNormal)
+    {
+        const float3 ts = g_normalTex.Sample(g_sampler, input.uv).xyz * 2.0f - 1.0f;
+        n = perturbNormal(n, float3(ts.xy * input.normalScale, ts.z),
+                          input.uv, input.worldPos);
+    }
+    float3 v = normalize(g_cameraPos.xyz - input.worldPos); // 视向量 V（b1 cameraPos）
     float3 F0    = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
     float3 cDiff = albedo * (1.0f - metallic);              // metallic 下 baseColor 不进 diffuse
 
@@ -606,7 +675,18 @@ float4 psScene(PSInputScene input) : SV_Target
     // 亮度锚定：Cook-Torrance 的 1/π 能量守恒 + 方向灯 1/ΣI 双重压缩，比 E1b.2
     // Lambert 整体暗 ~3×；shader 口径不动（与 shadePbr 同式），由场景布光补偿
     // （ambient 0.55 / 灯 color ×2.8，见 ecs-e1b*.scene）。
-    float3 Lo = ambient * cDiff + Lo_dir * invSumIntensity + Lo_point;
+    // P9 V2：AO 只作用于环境光项（glTF spec：occlusion 只调 ambient/IBL，
+    // 不动直接光）；emissive = factor × 贴图 sRGB→线性（t0 同口径），无贴图
+    // 时 = factor 原值（glTF spec 允许只有 emissiveFactor 无贴图）。
+    // flags=0 时 ao=1、emissive=0：×1.0f 与 +0.0f 在 IEEE 下精确 → bytes 兼容。
+    float ao = 1.0f;
+    if (hasOccl)
+        ao = lerp(1.0f, g_occlusionTex.Sample(g_sampler, input.uv).r,
+                  input.emissiveOcc.w);
+    float3 emissive = input.emissiveOcc.xyz;
+    if (hasEmissive)
+        emissive *= srgbToLinear(g_emissiveTex.Sample(g_sampler, input.uv).rgb);
+    float3 Lo = ambient * cDiff * ao + Lo_dir * invSumIntensity + Lo_point + emissive;
     float3 encoded = pow(saturate(Lo), 1.0f / 2.2f);        // 交换链 UNORM 直写 → gamma 编码
     return float4(encoded, 1.0f);
 }
