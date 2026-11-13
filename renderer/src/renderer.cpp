@@ -148,6 +148,11 @@ static const Artifact kArtifacts[] = {
     {"vsm.vsclear", true}, {"vsm.vsclear", false},
     {"vsm.psclear", true}, {"vsm.psclear", false},
     {"vsm.cs", true}, {"vsm.cs", false},
+    // S15 M15.2：vsm.slang 剔除 4 compute 入口 × 双目标 = 8（HZB 构建 + 剔除三 dispatch）。
+    {"vsm.cshzb", true}, {"vsm.cshzb", false},
+    {"vsm.cscullcount", true}, {"vsm.cscullcount", false},
+    {"vsm.cscullscan", true}, {"vsm.cscullscan", false},
+    {"vsm.cscullfill", true}, {"vsm.cscullfill", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

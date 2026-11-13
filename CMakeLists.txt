@@ -454,9 +454,12 @@ set(_ENTRIES_VISBUF "vsVisRaster|vsvisraster|vertex" "psVisRaster|psvisraster|fr
 set(_ENTRIES_MATERIAL "vsMatResolve|vsmatresolve|vertex" "psMatResolve|psmatresolve|fragment")
 # M15.0/M15.1（S15）：vsm.slang 五入口——深度 pass vs/ps（M15.0）+ 清页 quad
 # vs/ps（M15.1，blend 关覆写 1.0）+ 页请求标页 compute（M15.1，UE PageMarking 对位）。
+# M15.2：+剔除 4 compute（csHzb 12 级 min 链 + count/scan/fill 三段剔除，拍板 B）。
 set(_ENTRIES_VSM "vsMain|vs|vertex" "psMain|ps|fragment"
                  "vsMainClear|vsclear|vertex" "psMainClear|psclear|fragment"
-                 "csMark|cs|compute")
+                 "csMark|cs|compute"
+                 "csHzb|cshzb|compute" "csCullCount|cscullcount|compute"
+                 "csCullScan|cscullscan|compute" "csCullFill|cscullfill|compute")
 # M9.0（S9）：direct.slang 单 compute 入口（8x8 直光对照 pass）。BRDF 逐字搬移
 # material.slang mode 5，资源槽位与 material pass 同源（§2.7 单一 BindingSet）。
 # M15.1：+csDirectVsm（--vsm 直光 pass，b6/t14/t15）——拆双入口（拍板 B）：

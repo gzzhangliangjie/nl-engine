@@ -109,11 +109,31 @@ struct VsmMarkConstantsCB {
 };
 static_assert(sizeof(VsmMarkConstantsCB) == 336, "cbuffer layout must match shader");
 
+// M15.2：剔除/HZB 常量（288B）——b1 剔除专用 set，与 vsm.slang VsmCullConstants
+// 逐字节对应。levelMvp[4] 同源同帧；cullParams = {clusterCount, dirtyCount,
+// virtualSize, vertsPerCluster}；hzbParams = {srcMip(-1=页池直采), dstMip,
+// dstDim, poolDim}（csHzb 每级一版 volatile 覆写）。
+struct VsmCullConstantsCB {
+    float levelMvp[4][16];
+    float cullParams[4];
+    float hzbParams[4];
+};
+static_assert(sizeof(VsmCullConstantsCB) == 288, "cbuffer layout must match shader");
+
 inline constexpr std::uint32_t kVsmLevels = 4;                          // clipmap 级数
 inline constexpr std::uint32_t kVsmPagesPerLevel = 256;                 // 每级 16×16 页
 inline constexpr std::uint32_t kVsmPageTableEntries = kVsmLevels * kVsmPagesPerLevel;
 inline constexpr std::uint32_t kVsmPoolTexels = 4096;                   // 页池边长 texel
 inline constexpr std::uint32_t kVsmPoolPages = 1024;                    // 池 32×32 物理页（64MB R32F）
+
+// M15.2 剔除/HZB 布局常量（与 vsm.slang kHzbOffsets/kCullListCap 双持对齐）：
+// HZB = 2048² 起 12 级 min 链（mip0 = 页池 2×2 min；页 128 池 texel = 64 hzb
+// texel，页级 = mip6）；cullBufs = count[0,1024) / base[1024,2048) /
+// cursor[2048,3072) / list[3072, 3072+cap) / 尾 1 word 溢出旗标。
+inline constexpr std::uint32_t kVsmHzbMips = 12;
+inline constexpr std::uint32_t kVsmHzbWords = 6553600;                  // Σ (2048>>k)²
+inline constexpr std::uint32_t kVsmCullListCap = 262144;
+inline constexpr std::uint32_t kVsmCullBufWords = 3072 + kVsmCullListCap + 1;
 
 // M15.1 HUD 数据（pollVsmHud 填充，Scene 自持统计；ASCII 纪律 §2.19）。
 struct VsmDebugState {
@@ -1137,6 +1157,29 @@ private:
     // CPU 环形（GPU 只回传 128B 位图；若把 160B 一起 copy 会越过 128B 位图
     // buffer 越界读 → GPU page fault 实拍踩坑）。
     int                          vsmSlotOrigin_[2][kVsmLevels][2] = {};
+    // ---- M15.2 间接阴影剔除（拍板 B 2026-11-14：两阶段 HZB 本里程碑落地）----
+    // 簇球 × dirty 页光源投影判交（UE CullPerPageDrawCommands 窄化）+ 足迹自适应
+    // HZB 遮挡（bevy sample_hzb 对位，min-only 近似洞登记 UE-DIFFS）→ 每页段式簇
+    // 列表 + DrawIndirectArguments（startInstanceLocation 恒 0，双后端语义规避）。
+    // HZB = 页池半分辨率 min 链 StructuredBuffer（上帧深度语义，bevy first-cull
+    // 对位；MIN 混合下正确遮挡剔除深度无损）。vsMain 改实例列表取簇号（b0 z 段
+    // 传 slot）。
+    nvrhi::BufferHandle          vsmClusterSpheres_;    // StructuredBuffer<float4>（独立于 cull 模式）
+    nvrhi::BufferHandle          vsmHzbBuf_;            // RWStructured<uint> 6553600 word（≈25MB）
+    nvrhi::BufferHandle          vsmCullBufs_;          // RWStructured<uint> 68609 word
+    nvrhi::BufferHandle          vsmCullArgs_;          // isDrawIndirectArgs 1024×16B
+    nvrhi::BufferHandle          vsmDirtyList_;         // StructuredBuffer<uint4> 1024
+    nvrhi::BufferHandle          vsmCullConstants_;     // volatile CB 288B（b1）
+    nvrhi::ComputePipelineHandle vsmHzbPSO_;
+    nvrhi::ComputePipelineHandle vsmCullCountPSO_;
+    nvrhi::ComputePipelineHandle vsmCullScanPSO_;
+    nvrhi::ComputePipelineHandle vsmCullFillPSO_;
+    nvrhi::BindingLayoutHandle   vsmHzbLayout_;         // b1 + t6 页池 + u1 hzb
+    nvrhi::BindingSetHandle      vsmHzbSet_;
+    nvrhi::BindingLayoutHandle   vsmCullLayout_;        // b1 + t4/t5/t7 + u2/u3
+    nvrhi::BindingSetHandle      vsmCullSet_;
+    bool                         vsmCullLogged_ = false;  // 就绪日志一次性
+
     // ---- M15.1 CPU 分配器状态（跨帧页缓存；方案 A 核心）----
     struct VsmPageCacheEntry { std::uint32_t poolPage; std::uint32_t lastUsed; };
     // key = level<<62 | (uint32(wpx)&0x3FFFFFFF)<<32 | uint32(wpy)。wx 必须掩掉
