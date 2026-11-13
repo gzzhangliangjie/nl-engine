@@ -285,6 +285,7 @@ add_library(nl_core STATIC
     core/src/nav/NavAgentComponent.cpp  # P8 M-N6：E1 ECS NavAgent 组件序列化
     core/src/nav/NavAgentSystem.cpp     # P8 M-N6：固定步长 ECS 系统驱动 Crowd 增量链路
     core/src/nav/Arena.cpp              # P8 M-N6：viewer --nav-crowd 合成 arena 几何
+    core/src/traffic/LaneGraph.cpp # P8 M-T0.0：roadnet.json -> 车道级展开图（A 类轨道 feat/worldgen，零图形 API）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
@@ -641,6 +642,7 @@ add_subdirectory(net-tools)
 add_subdirectory(phys-tools)
 add_subdirectory(nav-tools)
 add_subdirectory(city-tools)      # W0 M-W0.0：大世界生成工具（A 类轨道 feat/worldgen，纯 CPU 零图形）
+add_subdirectory(traffic-tools)   # P8 M-T0.0：交通 lane graph 工具（A 类轨道 feat/worldgen，只链 nl_core 零图形）
 add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
 add_subdirectory(vfx-tools)
