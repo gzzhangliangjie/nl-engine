@@ -224,6 +224,26 @@ TRACKS = {
                 "s13-done); wt built 2026-11-13 from master e3a2ef4, junction "
                 ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
     },
+    "s14-softrast": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-s14-softrast",
+        "branch": "feat/s14-softrast", "state": "active",
+        "note": "M14 S14-enhancement track A (software raster sub-pixel "
+                "triangles, --mode soft-raster); plan docs/s14/M14-PLAN.md "
+                "(A+B parallel, C follows B, D cut, kStage frozen S8.2), "
+                "M14A0~M14A3, closing tag s14-softrast; wt built 2026-11-13 "
+                "from master 1892866, junction .workbuddy + "
+                "thirdparty/slang/dist + skip-worktree (9 files)",
+    },
+    "s14-restir": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-s14-restir",
+        "branch": "feat/s14-restir", "state": "active",
+        "note": "M14 S14-enhancement track B (ReSTIR GI final gather, "
+                "--mode restir); plan docs/s14/M14-PLAN.md, M14B0~M14B2, "
+                "closing tag s14-restir; track C (adaptive probes, M14C1, "
+                "tag s14-adaptive) will reuse this wt after B closes; "
+                "wt built 2026-11-13 from master 1892866, junction "
+                ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"

@@ -189,6 +189,8 @@
 | 玩法相机族 | ~~`E:/UE_STUDY_2026/nl-engine-camera`~~（已拆，2026-11-13 二次拆除） | `feat/camera` + `milestone/cam-m5` + tags `cam-m0`/`cam-1a`/`cam-3a`/`cam-b`/`cam-m5` | `docs/p8/P8-CAMERA-PLAN.md` + `CAM-TOOLS-GUIDE.md`；a 段 merge `7b0f24a`、b 段 merge `745ff83`、M-CAM5 merge `52700f1`（视觉卡 cam-1b/2b/3b/mcam4 + 双 bug 勘误）；明细 MILESTONES M-CAM5 四栏 |
 | 驾驶能力轴（碰撞桥 + 载具物理） | ~~`E:/UE_STUDY_2026/nl-engine-drive`~~（已拆） | `feat/drive` + tags `drive-m0`~`drive-m3` | `docs/p8/P8-DRIVE-PLAN.md` + `DRIVE-TOOLS-GUIDE.md`；merge `a2e3cff`；明细 MILESTONES M-D0~D3 节 |
 | S13 簇级 BLAS 聚合 + 延迟一帧回读（B 类穿插，用户拍板开 wt） | `E:/UE_STUDY_2026/nl-engine-s13`（在册） | `feat/s13` + tags `s13-preblas`/`s13-merge`/`s13-done`（按 PLAN） | `docs/s13/S13-PLAN.md`（M13.0~M13.2）；2026-11-13 建于 master `e3a2ef4`；渲染版交代（example/kStage 纪律 merge 时生效） |
+| S14-A 软光栅亚像素三角形（B 类穿插，M14 轨道 A 段） | `E:/UE_STUDY_2026/nl-engine-s14-softrast`（在册） | `feat/s14-softrast` + tags `s14a-*`，收官 `s14-softrast` | `docs/s14/M14-PLAN.md`（总纲：A+B 并行 / C 接 B / D 砍 / kStage 冻结 S8.2）；M14A0~M14A3；2026-11-13 建于 master `1892866` |
+| S14-B ReSTIR GI（B 类穿插，M14 轨道 B 段；C 自适应探针 M14C1 接力本 wt） | `E:/UE_STUDY_2026/nl-engine-s14-restir`（在册） | `feat/s14-restir` + tags `s14b-*`，收官 `s14-restir`；C 段收官 `s14-adaptive` | `docs/s14/M14-PLAN.md`；M14B0~M14B2 + M14C1；2026-11-13 建于 master `1892866` |
 
 > 已建 worktree 均以 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。**在册 worktree 清单与各轨道 active/closed 状态一律以 `wt_pool.py status` 为准（2026-11-13 起），本节不再维护文字版快照。**
 
