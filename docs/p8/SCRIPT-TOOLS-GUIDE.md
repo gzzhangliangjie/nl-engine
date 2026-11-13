@@ -429,3 +429,32 @@ example\m-sc5\run.bat          # selftest（5 示例目录）+ s9 特写 + log �
 3. **nl_core 对 glfw 是 PRIVATE link**：include 面不传播——nl-script main.cpp include `input.hpp` 拉 GLFW 头失败；nl-script CMake 显式 `PRIVATE glfw`（viewer 同款）。
 4. **reloadScript OnTick 重绑误用 `getEntryPoint`（M-GL4 口径漏改）**：热更路径会把脚本程序集再装一份进默认 ALC（两份副本静态字段独立）；loadScript 走 bootstrap `scriptTickFn`、reloadScript 漏改——M-GL4 踩坑 1 的同族复发，已修并随 M-SC4 selftest 验证。
 5. **bat 里 python -c 的坑三连**：`%` 格式化被 cmd 展开（`%d`→变量展开吞字符）；LF 行尾 bat 解析不可靠（统一 CRLF）；`echo`/参数里裸 `|` 被切管道（`^|` 转义或改 findstr）。
+
+# M-SC6：Camera 域面（ApiTable 25 -> 29，2026-11-14）
+
+## 绑定面口径（nl/script/Bindings v4）
+
+| 域 | 导出 | 关键口径 |
+|---|---|---|
+| Camera | `cameraGetPose` / `cameraSetPose` / `cameraGetFov` / `cameraSetFov` | 绑宿主相机适配源（`cameraSetSource(CameraSource*)`，4 函数指针 + ctx）；`CameraPose` POD（eye[3]+yaw+pitch+fov+mode）；未绑 = `kCamNoSource`；GetFov 未绑 = **NaN**（f32 返回无 rc 通道，生命周期账本特例，exports.api 行内文档化）；SetFov clamp [20,120]（同 OrbitCamera，脚本不得与宿主 fov 持久化打架） |
+
+**为什么是 CameraSource 适配源而不是裸 CameraRig**：nl_core 不能反向依赖 viewer（依赖方向），裸 rig 会丢 fov 持久化 + orbit 控制；plan 里 `cameraSetRig` 是落码前占位名，定稿 `cameraSetSource`（同契约：宿主显式 set，ecsSetWorld 模式推广，不隐式建表）。**模式感知 SetPose 语义在 viewer 适配源实现**（不在绑定层）：orbit = `setOrbit(yaw,pitch,|eye|)`+seed / free = `setPose` / chase = `snapEyeTo`+pitch（yaw 由底盘驱动）/ track = `ModeUnsupported`（轨迹数据主权——读路径无模式限制，写路径拒）。
+
+## selftest 判据（s10 组，s0~s5 + s6 + s7 + s8 + s9 不回归）
+
+- s10a 绑定路径：罐头位姿读回锚（eye 1.5/2.5/3.5、yaw 30、pitch -10、fov 60、mode=orbit）+ SetPose rc Ok（C++ 捕获 {4,5,6,45,15}）+ null eye → BadArg + fov 往返 60→75→clamp 500→120（假源存 clamp 后值）
+- s10b track（mode=3）：GetPose 照常（读无模式限制）、SetPose → ModeUnsupported、SetFov(60) Ok（fov 模式统一生效）
+- s10c 解绑路径：cameraSetSource(nullptr) → GetPose/SetPose/SetFov = NoSource、GetFov = NaN，不抛异常不崩
+
+## 验收复现
+
+```
+scripts\build-m0.2.bat DX12
+example\m-sc6\run.bat          # gen --check（29 导出）+ selftest（6 示例目录）+ s10 特写 + check camera + 4 张证据图
+```
+
+## 踩坑存档（M-SC6 实测）
+
+1. **`out f32`（cameraGetFov）没有 rc 通道**：POD/引用参数靠 rc 传错误码，f32 直接返回值——未绑语义只能用 NaN 表达，账本特例写进 exports.api 文档列而非 TYPEMAP 例外。
+2. **gen.py 重生成顶掉 exe mtime → 回归过期门禁拦**：内容字节一致也会被拦（闸按 mtime）——重编放行，闸不是摆设（M-SC4 已实证过一次，本条为第二次）。
+3. **python subprocess 调 build bat 两坑**：`text=True` 用 UTF-8 解码 nmake 的 GBK 输出崩 reader 线程（改 bytes + gbk/errors='replace'）；`'scripts\build-...'` 单反斜杠被 Python 吃成 `\b` 退格（`'scriptsuild'`）——用 r-string。

@@ -1,0 +1,11 @@
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+  ok  s10-pre locate CameraScript build output
+  ok  s10-pre locate camera entries (UnmanagedCallersOnly)
+  ok  s10a C# BoundProbe -> 0 (got 0)
+  ok  s10a C++ capture: script SetPose eye {4,5,6}
+  ok  s10a C++ capture: yaw 45 / pitch 15
+  ok  s10a C++ capture: SetFov(500) clamped -> 120
+  ok  s10b C# TrackProbe -> 0 (got 0)
+  ok  s10b C++ capture: SetFov(60) ok in track (mode-uniform)
+  ok  s10c C# UnboundProbe -> 0 (got 0)
+nl-script selftest: PASS (0 failures)

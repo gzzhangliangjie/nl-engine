@@ -1895,7 +1895,22 @@
 
 **下一步**：M-SC6 Camera（cameraGetPose/cameraSetPose + fov；绑 viewer 现役相机 rig/chase/free，未绑 = NoCamera）。
 
-## M7.1：vis buffer 材质反解 pass（master 主线 S7，2026-11-09，tag `s7-pulling`）
+## M-SC6：Camera 域绑定 + API 文档生成（feat/script，2026-11-14，tag `m-sc6`）
+
+**动作**：Camera 域落码（`exports.api` 尾部追加 4 导出 cameraGetPose/SetPose/GetFov/SetFov，ApiTable 25→29，Api.Version 0.6.0）→ 宿主侧 **CameraSource 适配源**拍板落码（`cameraSetSource`，4 函数指针 + ctx；nl_core 不反向依赖 viewer，裸 CameraRig 丢 fov 持久化 + orbit 控制——plan 落码前占位名 cameraSetRig 定稿 cameraSetSource，同契约：宿主显式 set，未绑 = NoSource，ecsSetWorld 模式推广）→ viewer 适配源实现模式感知 SetPose（orbit=setOrbit(yaw,pitch,|eye|)+seed / free=setPose / chase=snapEyeTo+pitch / track=ModeUnsupported 轨迹主权）+ SetFov clamp [20,120] 同 OrbitCamera → GetFov 未绑 = NaN（f32 返回无 rc 通道账本特例，exports.api 行内文档化）→ C# facade `Camera`/`CameraCode`/`CameraPose` → `script/examples/camera/` 示例（BoundProbe/TrackProbe/UnboundProbe 三探针）→ nl-script selftest s10a~s10c（6 示例目录参数，112 断言）→ **API 接口文档自动生成（本里程碑用户拍板追加）**：gen.py `gen_md` 产 `docs/script-api/API.md`（第 5 生成物，单源第三消费端——Flax 一份声明喂绑定+文档先例；按域表：偏移/ABI 签名/语义/逐参数生命周期标注由 TYPEMAP 账本单源渲染，禁手改；`--check` + CMake GEN5 新鲜度闸同批覆盖）→ 双后端全绿 → `example/m-sc6/run.bat` 四段（gen --check 29 导出 / selftest / s10 特写 / check camera）ALL GREEN + 证据生成器 m-sc6 段 4 张真实输出图 → cases.json 尾插 `m-sc6` 卡 4 条（123 版本）→ 本四栏 → 提交打 tag。
+
+**提交版本**：feat/script `23d2ace`（M-SC6 落码）→ `63d557e`（API.md 文档生成）→ 收口 commit（tag `m-sc6`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + selftest **112 断言全 PASS**（s0~s5 + s6 + s7 + s8 + s9 不回归 + s10a~s10c：罐头位姿读回锚（eye 1.5/2.5/3.5、yaw 30、fov 60、orbit）+ SetPose rc Ok（C++ 捕获 {4,5,6,45,15}）+ null eye BadArg + fov 往返 60→75→clamp 500→120、track mode=3 写拒 ModeUnsupported + fov 模式统一生效、解绑 NoSource/NaN 不崩）；gen.py --check 绿（29 exports / 1 POD / 5 files 含 API.md）；check camera exit 0；run.bat ALL GREEN；server.py --check exit 0（kStage 仍 S8.2，A 类不 bump）；regression m-sc6 8/8 ALL GREEN。收口四项自查：①渲染交代物——**无**（A 类纯逻辑零渲染；viewer 适配源语义属宿主接线，视觉验证留 M-SC11 跨域示例脚本）；②工具交代物——展示台 `m-sc6` 版本卡 4 条 tool 用例（selftest/s10 特写/gen-check/check）+ 4 张真实输出证据图（亲眼核验）+ SCRIPT-TOOLS-GUIDE M-SC6 节（绑定面 v4 口径/CameraSource 拍板依据/s10 判据/踩坑）+ run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC6 行 + API.md 禁手改口径入生成器节。
+
+**踩坑情况**
+1. **`out f32`（cameraGetFov）没有 rc 通道**：POD/引用参数靠 rc 传错误码，f32 直接返回值——未绑语义只能用 NaN 表达；账本特例写进 exports.api 文档列而非 TYPEMAP 例外。
+2. **VK 并行编译 C1090 PDB RPC 抖动**：mssc6 收口期一次构建红，串行重跑绿（非回归，M-SC4 已建档同款）。
+3. **gen.py 重生成顶掉 exe mtime → 回归过期门禁拦**：内容字节一致也拦（闸按 mtime），重编放行——闸第二次实证有效。
+4. **python subprocess 调 build bat 两坑**：text=True 用 UTF-8 解码 nmake GBK 输出崩 reader 线程（改 bytes + gbk）；`'scripts\build-...'` 单反斜杠被 Python 吃成 `\b` 退格——r-string。
+5. **run.bat LF 行尾被 regression bat 编码门禁拦**：Write 工具产 LF，`check-bat-encoding.py --fix example scripts tools` 机械修复（单文件路径形态不生效，须目录形态）。
+
+**下一步**：M-SC7 模型场景创建（ecsAttachModel/ecsDetachModel，scene batch 装配复用 E1b 链）。
 
 **动作**：`material.slang`（vsMatResolve 全屏三角形 + psMatResolve：u64 解包 → clusterMeta 查表 → localIndices+vertexPool 拉 3 顶点 → The-Forge 解析式屏幕空间 barycentrics + 每像素导数 → 透视正确插值 worldPos/normal/uv → mode 0/1/2/5，SampleGrad 吃解析导数，空像素 discard）→ CMake `_ENTRIES_MATERIAL` + `_VISBUF_COMMON` 依赖链 → `ViewMode::Pulling`(10) + modes/viewer/renderer/backend 全链穿线（initVisbuf 增 `pulling` 参：同 Scene 复用 vis 资源 + 从 .nmesh 推导 .glb 加载 baseColor/MR 真贴图 + LightConstants(80B,b1) + MatResolveConstants(16B,b2)）→ §2.7 单 BindingSet（b0~b2 + t0~t5 + s0）→ 双后端构建 → **发现 master visbuf 家族堆损坏崩溃（c0000374）→ ASan + 自写 dbghelp 符号化脚本定位 → 修 2 个既有 bug**（见踩坑栏）→ kStage S7.1 + selftest stage 校验同步 → `example/s7-pulling/`（4 张基线 + run.bat + verify.py）+ cases.json s7.1 卡 3 条 → verify.py ALL GREEN + server.py --check 0 → spot 回归 m0.9/s7.0/pbr-direct 三条 ALL GREEN（HUD 用例基线按 kStage bump 纪律重拍 4 张）→ S7-PLAN M7.1 勾选 + UE-DIFFS D16 → 本四栏 → 提交打 tag。
 

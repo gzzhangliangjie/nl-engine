@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段
-+ M-SC3 脚本热更段 + M-SC4 绑定生成器段 + M-SC5 Time/Input/Log 域段）。
++ M-SC3 脚本热更段 + M-SC4 绑定生成器段 + M-SC5 Time/Input/Log 域段 + M-SC6 Camera 域段）。
 
 铁律：所有内容从工具**真实输出**渲染（example/<dir>/*.log，
 由 nl-script.exe / gen.py 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
 复现：example/<dir>/run.bat（重跑用例 -> 重新生成本图 -> exit 0 校验）。
-用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3|m-sc4|m-sc5]   （缺省 m-sc0）
+用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3|m-sc4|m-sc5|m-sc6]   （缺省 m-sc0）
 """
 import os
 import sys
@@ -241,9 +241,39 @@ CASES_M_SC5 = [
      "(nl_core glfw link is PRIVATE, does not propagate includes)."),
 ]
 
+CASES_M_SC6 = [
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- golden self-verify (v4: 29 exports = 25 + camera 4)",
+     "Camera domain appended to exports.api (cameraGetPose/cameraSetPose/cameraGetFov/"
+     "cameraSetFov, tail-append like every previous milestone) -> generated artifacts stay "
+     "byte-identical after regenerate; declarations remain the only hand-written surface. "
+     "GetFov unbound = NaN is the f32-no-rc-channel ledger exception, documented in "
+     "exports.api itself."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC6 Camera (s10a-s10c, on top of s0-s5 + s6 + s7 + s8 + s9)",
+     "s10a bound: canned pose readback (eye 1.5/2.5/3.5, yaw 30, pitch -10, fov 60, orbit) + "
+     "SetPose rc Ok + BadArg on null eye + fov roundtrip 60->75->clamp 500->120 (C++ captures "
+     "{4,5,6,45,15}). s10b track (mode=3): GetPose reads fine, SetPose -> ModeUnsupported "
+     "(track data sovereignty), SetFov still ok (mode-uniform). s10c unbound: NoSource / "
+     "GetFov NaN, no crash. CameraSource = 4 fn ptrs + ctx host adapter (nl_core must not "
+     "depend on viewer; bare CameraRig would lose fov persistence + orbit control)."),
+    ("s10.log", "s10.png",
+     "s10 section close-up (filtered from selftest.log)",
+     "cameraSetSource follows the ecsSetWorld pattern (explicit host set before entry, no "
+     "implicit table creation); mode-aware SetPose semantics live in the viewer adapter "
+     "(orbit=setOrbit(yaw,pitch,|eye|) / free=setPose / chase=snapEyeTo+pitch / "
+     "track=ModeUnsupported). ApiTable grew 25 -> 29 via exports.api tail-append; "
+     "Api.Version 0.6.0."),
+    ("check.log", "check.png",
+     "nl-script check camera example -- compile only (exit 0)",
+     "dotnet build only; s10 probes (BoundProbe/TrackProbe/UnboundProbe) verified in "
+     "selftest against the canned CameraSource; SetFov clamp [20,120] mirrors OrbitCamera "
+     "so a script cannot fight the host's fov persistence."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
          "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
-         "m-sc5": CASES_M_SC5}[DIR_NAME]
+         "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6}[DIR_NAME]
 
 
 def main():

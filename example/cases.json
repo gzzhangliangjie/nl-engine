@@ -11391,6 +11391,94 @@
      "preview": "example/m-sc5/check.png"
     }
    ]
+  },
+  {
+   "id": "m-sc6",
+   "label": "P8 M-SC6",
+   "name": "Camera 域绑定：CameraSource 适配源 + 生成器 v4（ApiTable 25->29，A 类轨道）",
+   "tag": "m-sc6",
+   "date": "2026-11-14",
+   "summary": "Camera 域绑定（exports.api 尾部追加 4 导出 cameraGetPose/SetPose/GetFov/SetFov，ApiTable 25->29，Api.Version 0.6.0）。宿主侧绑定 = cameraSetSource(CameraSource*)：4 函数指针 + ctx 适配源，nl_core 不能反向依赖 viewer（依赖方向），裸 CameraRig 会丢 fov 持久化 + orbit 控制——plan 里 cameraSetRig 是落码前占位名，定稿 cameraSetSource（同契约：宿主显式 set，未绑 = NoSource，ecsSetWorld 模式推广）。模式感知 SetPose 语义在 viewer 适配源实现：orbit=setOrbit(yaw,pitch,|eye|)+seed / free=setPose / chase=snapEyeTo+pitch（yaw 由底盘驱动）/ track=ModeUnsupported（轨迹数据主权）；SetFov clamp [20,120] 同 OrbitCamera；GetFov 未绑 = NaN（f32 返回无 rc 通道，生命周期账本特例，exports.api 内文档化）。C# facade Camera/CameraCode/CameraPose。selftest s10a（绑定罐头读回 eye 1.5/2.5/3.5、yaw 30、fov 60 + SetPose rc + null eye BadArg + fov 往返 60->75->clamp 500->120，C++ 捕获 {4,5,6,45,15}）/ s10b（track mode=3：读照常、SetPose ModeUnsupported、SetFov 模式统一生效）/ s10c（解绑 NoSource/NaN 不崩）。生成器第 5 生成物 API.md（docs/script-api/API.md，禁手改）同批收官。",
+   "acceptance": [
+    "selftest s10a~s10c 全绿（s0~s5 + s6 + s7 + s8 + s9 不回归，PASS 0 failures，112 断言）：罐头位姿读回、SetPose rc/BadArg、fov clamp 读回链、track 写拒、解绑 NoSource/NaN",
+    "gen.py --check 绿（29 导出声明与 5 生成物一致，含 API.md）；check camera 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s10a~s10c：Camera 域导出（M-SC0~SC5 不回归，112 断言）",
+     "kind": "tool",
+     "note": "s10a 绑定路径：罐头位姿读回锚（eye 1.5/2.5/3.5、yaw 30、pitch -10、fov 60、orbit）+ SetPose rc Ok（C++ 捕获 {4,5,6,45,15}）+ null eye BadArg + fov 往返 60->75->clamp 500->120；s10b track（mode=3）：GetPose 照常、SetPose ModeUnsupported、SetFov 模式统一生效；s10c 解绑：NoSource / GetFov NaN，不抛异常不崩。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput script/examples/camera",
+     "preview": "example/m-sc6/selftest.png"
+    },
+    {
+     "id": "s10",
+     "name": "s10 段特写：三探针 rc + C++ 捕获锚（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "cameraSetSource 沿 ecsSetWorld 模式（宿主入口前显式 set，不隐式建表）；模式感知 SetPose 在 viewer 适配源（orbit/free/chase/track 各自语义，track=ModeUnsupported 轨迹主权）；ApiTable 25->29 经 exports.api 尾部追加。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "s10a C# BoundProbe -> 0",
+     "command": "nl-script selftest ...（s10 段过滤展示）",
+     "preview": "example/m-sc6/s10.png"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节级自证（v4，29 导出，exit 0）",
+     "kind": "tool",
+     "note": "Camera 4 导出进 exports.api 后重生成与入库五件套逐字节比对（ApiTable.g.hpp/.inc/.asserts.inc + Wiring.g.cs + docs/script-api/API.md）；GetFov 未绑 = NaN 是 f32 无 rc 通道账本特例，声明行内文档化（perf-m0 bat 卡先例：声明变更未重跑生成器 = 此卡红）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "preview": "example/m-sc6/gen-check.png",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check",
+     "name": "check camera：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；s10 三探针（BoundProbe/TrackProbe/UnboundProbe）在 selftest 对罐头 CameraSource 验证；SetFov clamp [20,120] 同 OrbitCamera（脚本不得与宿主 fov 持久化打架）。",
+     "args": [
+      "check",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/camera",
+     "preview": "example/m-sc6/check.png"
+    }
+   ]
   }
  ]
 }
