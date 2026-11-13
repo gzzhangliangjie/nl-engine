@@ -29,11 +29,25 @@ every assertion is a statistical invariant, never bytes):
              i.e. rejection makes motion frames track the no-history
              baseline more closely (ghosting proxy); plus layer-response
              negative control diff(REJALL,OFF) > diff(ON,OFF)
+  disocc   : the DISOCCLUSION-LIMITED edge-preservation gate. Derives a
+             disocclusion mask per pixel from |OFF - SINGLE| > disTol
+             (history disagreed with the current no-history truth = a
+             newly revealed / occluded region). Within that mask it asserts
+             ON tracks SINGLE better than OFF (ratio <= ratioLimit), OFF
+             actually ghosts there (meanMAE(off,single) > minGhost), and
+             the mask is non-trivial (maskFrac > minFrac). This is the gate
+             the single convex + pure-sky s12-done scene COULD NOT exercise
+             (S12-PLAN 0.8.x): real geometric edges / disocclusion under
+             motion. The over-strict-threshold layer-response negative
+             control is covered by the `ghost` gate (pixel-count invariant,
+             proven there) and is intentionally not duplicated here.
 
 Subcommands:
   avg      <out.png> <seqDir> [n=32]
   refcheck <ref.png> <off.png> <on.png> [maeRatio] [maxMae] [hfRatio]
   ghost    <onDir> <offDir> <singleDir> <rejectAllDir> [n=16] [ratioLimit]
+  disocc   <onDir> <offDir> <singleDir> <rejectAllDir> [n=16] [ratioLimit]
+           [disTol=8.0] [minFrac=0.0005] [minGhost=6.0]
   selftest
 
 Exit 0 = pass, 1 = fail, 2 = usage.
@@ -305,6 +319,75 @@ def cmd_ghost(dirs, n, ratio_limit):
     return 0 if ghost_gate(rows, ratio_limit) else 1
 
 
+# ----------------------------------------------------- disocclusion-limited gate
+def disocc_gate(agg, ratio_limit, min_frac, min_ghost, quiet=False):
+    """agg = {maskCount, nPix, sumOn, sumOff} pooled across frames.
+
+    mask(p) = |off(p) - single(p)| > disTol  (history disagreed with the
+    current no-history truth = disocclusion / occluded-boundary region).
+    sumOn   = sum |on(p) - single(p)|     over masked pixels
+    sumOff  = sum |off(p) - single(p)|    over masked pixels  (= ghost)
+    """
+    frac = agg["maskCount"] / max(agg["nPix"], 1)
+    mOn = agg["sumOn"] / max(agg["maskCount"], 1)
+    mOff = agg["sumOff"] / max(agg["maskCount"], 1)
+    ratio = mOn / max(mOff, 1e-6)
+    if not quiet:
+        print("[s12-multiscene] disocc masked frac=%.4f (%d/%d px)"
+              % (frac, agg["maskCount"], agg["nPix"]))
+        print("[s12-multiscene] masked meanMAE(on,single)=%.3f "
+              "meanMAE(off,single)=%.3f ratio=%.3f (limit %.3f)"
+              % (mOn, mOff, ratio, ratio_limit))
+    ok = True
+    if frac < min_frac:
+        if not quiet:
+            print("[s12-multiscene] FAIL: disocclusion mask too small "
+                  "(%.4f < %.4f) - scene/motion did not expose disocclusion"
+                  % (frac, min_frac))
+        ok = False
+    if mOff < min_ghost:
+        if not quiet:
+            print("[s12-multiscene] FAIL: OFF does not ghost in the mask "
+                  "(%.3f < %.3f) - mask is not a real ghost region"
+                  % (mOff, min_ghost))
+        ok = False
+    if ratio > ratio_limit + 1e-6:
+        if not quiet:
+            print("[s12-multiscene] FAIL: ON did not track the no-history "
+                  "baseline better than OFF in disocclusion regions")
+        ok = False
+    if ok and not quiet:
+        print("[s12-multiscene] OK: rejection layer preserves edges in "
+              "disocclusion regions (ON tracks no-history baseline)")
+    return ok
+
+
+def cmd_disocc(dirs, n, ratio_limit, dis_tol, min_frac, min_ghost):
+    on_d, off_d, single_d, rejall_d = dirs
+    agg = {"maskCount": 0, "nPix": 0, "sumOn": 0.0, "sumOff": 0.0}
+    for k in range(1, n + 1):
+        name = "f%05d.png" % k
+        # rejall is accepted for interface symmetry but unused by the gate.
+        paths = [os.path.join(dirs[0], name), os.path.join(dirs[1], name),
+                 os.path.join(dirs[2], name), os.path.join(dirs[3], name)]
+        if not (os.path.isfile(paths[0]) and os.path.isfile(paths[1])
+                and os.path.isfile(paths[2]) and os.path.isfile(paths[3])):
+            print("[s12-multiscene] FAIL: missing frame %s" % name)
+            return 1
+        on = lum(read_png(paths[0]))
+        off = lum(read_png(paths[1]))
+        single = lum(read_png(paths[2]))
+        w = len(on)
+        for i in range(w):
+            d_os = abs(off[i] - single[i])
+            if d_os > dis_tol:
+                agg["maskCount"] += 1
+                agg["sumOn"] += abs(on[i] - single[i])
+                agg["sumOff"] += d_os
+        agg["nPix"] += w
+    return 0 if disocc_gate(agg, ratio_limit, min_frac, min_ghost) else 1
+
+
 # ---------------------------------------------------------------- selftest
 def selftest():
     ok = True
@@ -346,6 +429,27 @@ def selftest():
     print("[s12-done] selftest ghost positive=%s negative-ratio=%s "
           "negative-layer=%s" % (g1, not g2, not g3))
     ok = ok and g1 and not g2 and not g3
+    # (4) disocc: positive / ratio negative / mask-too-small negative.
+    N = 64
+    single_v = [100.0] * N
+    off_v = [200.0 if i < 32 else 100.0 for i in range(N)]   # ghosts region
+    on_v = [120.0 if i < 32 else 100.0 for i in range(N)]    # closer to truth
+    def masked_sums(vec):
+        return sum(abs(vec[i] - single_v[i])
+                   for i in range(N) if abs(off_v[i] - single_v[i]) > 8.0)
+    pos_agg = {"maskCount": 32, "nPix": N,
+               "sumOn": masked_sums(on_v), "sumOff": masked_sums(off_v)}
+    d1 = disocc_gate(pos_agg, 0.95, 0.001, 6.0, quiet=True)
+    on_bad = [200.0 if i < 32 else 100.0 for i in range(N)]   # == off -> ratio 1
+    neg_agg = {"maskCount": 32, "nPix": N,
+               "sumOn": masked_sums(on_bad), "sumOff": pos_agg["sumOff"]}
+    d2 = disocc_gate(neg_agg, 0.95, 0.001, 6.0, quiet=True)
+    tiny_agg = {"maskCount": 0, "nPix": N * 100,
+                "sumOn": 0.0, "sumOff": 0.0}
+    d3 = disocc_gate(tiny_agg, 0.95, 0.001, 6.0, quiet=True)
+    print("[s12-done] selftest disocc positive=%s negative-ratio=%s "
+          "negative-mask=%s" % (d1, not d2, not d3))
+    ok = ok and d1 and not d2 and not d3
     print("[s12-done] selftest %s" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1
 
@@ -370,6 +474,13 @@ def main(argv):
         n = int(argv[6]) if len(argv) > 6 else 16
         rl = float(argv[7]) if len(argv) > 7 else 0.98
         return cmd_ghost(argv[2:6], n, rl)
+    if cmd == "disocc" and len(argv) >= 6:
+        n = int(argv[6]) if len(argv) > 6 else 16
+        rl = float(argv[7]) if len(argv) > 7 else 0.95
+        tol = float(argv[8]) if len(argv) > 8 else 8.0
+        mf = float(argv[9]) if len(argv) > 9 else 0.0005
+        mg = float(argv[10]) if len(argv) > 10 else 6.0
+        return cmd_disocc(argv[2:6], n, rl, tol, mf, mg)
     print(__doc__)
     return 2
 

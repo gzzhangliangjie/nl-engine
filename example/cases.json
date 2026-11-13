@@ -10266,6 +10266,61 @@
      "script": "example/s12-done/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s12-multiscene",
+   "label": "M12.2 多物体",
+   "name": "S12 挂起项收口：多物体场景复验拒绝层保边（disocclusion 限定度量）",
+   "tag": "s12-multiscene",
+   "date": "2026-11-13",
+   "summary": "S12 M12.2 收官后挂起项收口：filter 模式对多 lod 资产（OcclScene1M / HizScene）崩溃已修（commit 20edfeb —— initVisbuf pulling 分支上传循环对无基色贴图 primitive 调 writeTexture 空指针 SEGV）。借 OcclScene1M（1.3M-tri 球 + 前挡板，--yaw 0 --pitch 0 --dist 3.2）在 --orbit-speed 1.5 下产生真实 disocclusion（挡板随 yaw 旋转露出/遮住球，遮挡边界随运动移动），补 disocclusion 限定度量（tools/check-s12-done.py 新增 disocc 子命令）验证拒绝层在 disocclusion 区域确实保边。度量口径：逐像素以 |OFF - SINGLE| > 8 抠出 disocclusion 掩膜，在掩膜内断言 ON 相对同帧无历史基准 SINGLE 的 MAE 低于 OFF（ratio <= DIS_RATIO）。零新增 shader / RT / CB / 纹理，冻结面（rejectHistory 着色器 + Suzanne 基线）零改动；kStage 仍 S8.2。",
+   "acceptance": "双后端删 exe 强制重链后 BUILD OK + selftest 16/16 + shader 产物全绿（无新增 shader 文件）。example/s12-multiscene/run.bat verify 双后端 ALL GREEN：每后端 5 类共 10 次 shot（静态 ON 8 帧 + 运动 ON / OFF / SINGLE / REJALL 各 16 帧），全部 exit 0 + deviceErrors=0；ghost 运动 meanMAE(ON,single)/meanMAE(OFF,single) = 0.810 <= GHOSTR 0.95（双后端同值）；disocc masked frac = 0.0851（8.5% px 暴露 disocclusion）、masked meanMAE(ON,single)/meanMAE(off,single) = 0.741 <= DIS_RATIO 0.95、masked meanMAE(off,single) = 20.65 > DIS_MINGHOST 6.0（OFF 确实在掩膜内鬼影）、掩膜非平凡 > DIS_MINFRAC 0.005；工具 selftest OK（avg / refcheck / ghost / disocc 正负路径 + N>64 拒绝全覆盖）。门限按 2026-11-13 双后端实测标定（M12.1 先例，不猜）。⚠️ 单凸体场景（Suzanne + 纯天空）测不出的拒绝层保边收益，本轮在多物体场景补实：ON 在 disocclusion 区域对无历史基准的跟手性优于 OFF（ratio 0.741），证明拒绝层在真实几何边缘 / 遮挡边界生效，不再是纯运动跟手性代理。回归安全：example/s12-done / s12-temporal / s12-spatial run.bat verify 仍 ALL GREEN，冻结面零重拍。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gpu-smoke-occl",
+     "name": "M12.2 多物体 GPU 冒烟：--mode filter --filter-reject 跑 OcclScene1M（崩溃修复后）",
+     "kind": "tool",
+     "note": "只断言退出码与 deviceErrors=0（Q11-1 统计口径，禁 bytes）。OcclScene1M 是多 lod 资产，曾是 filter 崩溃点（commit 20edfeb 修）；本卡证明静态 filter 渲染已通。相机 --yaw 0 --pitch 0 --dist 3.2（s6 hiz 已知好）。证据图 = run.bat verify 产出的 static-on-dx12.png。",
+     "args": [
+      "--mode",
+      "filter",
+      "--filter-reject",
+      "--filter-gi-dump",
+      "--model",
+      "OcclScene1M.nmesh",
+      "--frames",
+      "16",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "0",
+      "--dist",
+      "3.2",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode filter --filter-reject --filter-gi-dump --model OcclScene1M.nmesh --frames 16 --no-hud --size 960x540 --yaw 0 --pitch 0 --dist 3.2 --screenshot {out}",
+     "preview": "example/s12-multiscene/static-on-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "multiscene-stats",
+     "name": "M12.2 多物体统计验收：双后端 ghost 全局代理 + disocc disocclusion 限定保边 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify 双后端各跑静态 ON（8 帧）+ 运动 ON/OFF/SINGLE/REJALL 各 16 帧（序列产物落 %TEMP%\\nl-s12-multiscene 避免上百张 PNG 入仓），python tools/check-s12-done.py 的 ghost / disocc / selftest 三子命令做统计断言；纯标准库 PNG 解码（本机 python 无 PIL）。disocc 子命令为本次新增：逐像素 |OFF-SINGLE|>8 抠 disocclusion 掩膜，在掩膜内断言 ON 相对 SINGLE 的 MAE 低于 OFF（保边），并要求掩膜非平凡、OFF 在掩膜内确实鬼影。门限 GHOSTR/DIS_RATIO/DIS_MINFRAC/DIS_MINGHOST 全部按双后端实测标定。",
+     "args": [],
+     "command": "example/s12-multiscene/run.bat verify",
+     "script": "example/s12-multiscene/run.bat verify"
+    }
+   ]
   }
  ]
 }
