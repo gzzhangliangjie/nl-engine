@@ -356,6 +356,16 @@ def main():
             frm, _, to = pair.partition("=")
             if frm and to:
                 mat_remap[frm] = to
+    # 材质颜色覆写："Name=r,g,b[,a]"（0~1）。FBX 只带作者机器的原始材质色，
+    # Unity .mat 里的 _Color 覆写带不出来（如 Windows 应为黑 0,0,0，FBX 是灰
+    # 0.561），按 Unity 权威色在此补写。
+    mat_tint = {}
+    if "--mat-tint" in argv:
+        for pair in argv[argv.index("--mat-tint") + 1].split(","):
+            name, _, vals = pair.partition("=")
+            v = [float(x) for x in vals.split(":")]
+            if name and len(v) >= 3:
+                mat_tint[name] = v + [1.0] * (4 - len(v))
 
     if split_dir:
         results = []
@@ -436,6 +446,19 @@ def main():
             p.material_index = ni
         slots_compacted += 1
 
+    mat_tinted = 0
+    if mat_tint:
+        # 只覆写未连贴图的 Base Color 直连值；连贴图的材质 tint 属于乘色，
+        # 语义不同，不允许在这里覆盖。
+        for mat in bpy.data.materials:
+            if mat.name not in mat_tint or not mat.use_nodes:
+                continue
+            bsdf = [n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"]
+            if not bsdf or bsdf[0].inputs["Base Color"].is_linked:
+                continue
+            bsdf[0].inputs["Base Color"].default_value = mat_tint[mat.name]
+            mat_tinted += 1
+
     objects = [o for o in bpy.data.objects]
     meshes, tris = mesh_stats(objects)
     retarget = retarget_images(maps_dir)
@@ -467,6 +490,7 @@ def main():
         "upFixRotated": up_fixed,
         "emptySlotsCompacted": slots_compacted,
         "matRemapped": mat_remapped,
+        "matTinted": mat_tinted,
         "meshesReorderedTexturedFirst": reordered,
         "glbNodesTexturedFirst": {"arraysReordered": nodes_moved,
                                   "texturedMeshes": textured_count},
