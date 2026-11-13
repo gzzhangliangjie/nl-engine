@@ -25,6 +25,10 @@
 //   t0 vis SRV / t1..t3 vertexPool / localIndices / clusterMeta
 //   t4..t7 baseColor / t8..t11 mrTex / t12 材质间接表 / s0 sampler
 //   t13 TLAS（M9.1 阴影射线；RayTracingAccelStruct，DXIL t 空间 / SPIR-V 同 t-shift）
+//   b6 VsmConstants (272B，M15.1 起 4 级 MVP) + t14 页表(1024 项) + t15 页池
+//      ——仅 csDirectVsm（direct.csvsm）引用。M15.1 拆双入口（拍板 B）：纯净
+//      csDirect blob 与 s9-shadow 冻结基线 bytes 一致（degraded guard 实测），
+//      --vsm 时渲染端改选 csDirectVsm（VSM 查表 + 运行时开关双保险）。
 //   u0 输出 RGBA32_FLOAT（复用 rtTarget_，不新建资源）
 // SPIR-V 绑定平移与 material.slang 同：b→256, t→0, s→128, u→384。
 // DXIL 需要 SM6.6（NonUniformResourceIndex 选槽 + RayQuery 内联射线，同 rt.slang）。
@@ -32,6 +36,7 @@
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
 #include "sky.slangh"
+#include "vsm_common.slangh"   // M15.0/M15.1：vsmSampleShadow4（--vsm 分支用）
 
 cbuffer SceneConstants : register(b0)
 {
@@ -87,6 +92,20 @@ cbuffer GIConstants : register(b5)
 {
     float4 g_refGI;
 }
+
+// M15.0/M15.1（S15）：VSM 常量（b6，272B）。M15.0 与深度 pass b0 共用同一块
+// 80B volatile CB；M15.1 起采样侧需要 4 级 MVP，拆成独立 272B CB（scene.cpp
+// vsmSampleConstants_），深度 pass b0 仍为 80B 单级版（逐页绘制按级写）。
+// params：x = vsm 开关（>0.5 进查表分支）/ y = 深度域 bias / z = 每级虚拟空间
+// texel 数（2048）/ w = 物理页池 texel 数（2048）。
+cbuffer VsmConstants : register(b6)
+{
+    float4x4 g_vsmLevelMvp[4];  // M15.1：每级光源正交 lightViewProj（level 0 最细）
+    float4   g_vsmParams;
+}
+
+Texture2D<float>        g_vsmPagePool  : register(t15);
+StructuredBuffer<uint>  g_vsmPageTable : register(t14);
 
 RaytracingAccelerationStructure g_tlas : register(t13);
 
@@ -231,6 +250,95 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
                          0xFF, ray);
         q.Proceed();
         shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+    }
+
+    g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                gbuf.ddxUv, gbuf.ddyUv, shadow);
+}
+
+// M15.1（S15）：VSM 版直光 pass（--vsm 时渲染端选本入口的 blob/csDirect.csvsm）。
+// 与 csDirect 同源同序；差异仅 shadow 因子来源 = VSM 多级页表查表（b6/t14/t15）。
+// 拆双入口（2026-11-13 用户拍板 B）：M15.1 把 b6 扩 272B（4 级 MVP）+ 采样函数
+// 重写后，csDirect blob 重编译的 dxil 优化重排在共享代码路径产生 ±ULP（暗区
+// 3 像素差 1-2 级，degraded guard bytes 实锤）——纯净 csDirect 恢复 s9 时代
+// blob，冻结基线 bytes 零扰动；VSM 代码全部收进本入口。运行时开关分支保留
+//（g_vsmParams.x > 0.5 查表，else 射线兜底——渲染端选 blob 已隐含开关，分支
+// 作双保险）。
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void csDirectVsm(uint3 tid : SV_DispatchThreadID)
+{
+    const uint2 pixel  = tid.xy;
+    const uint  width  = uint(g_width);
+    const uint  height = uint(g_height);
+    if (pixel.x >= width || pixel.y >= height) return;
+
+    const uint64_t v = g_visSRV[visIndex(pixel, width)];
+    // 空像素：对齐 psMatResolve 的 discard —— present 全屏覆盖，清屏色必须由
+    // UAV 自己提供（见文件头口径 2）。
+    if (v == VIS_EMPTY) {
+        g_out[pixel] = g_clearColor;
+        return;
+    }
+
+    uint clusterId, triId;
+    float deviceZ;
+    visUnpack(v, clusterId, triId, deviceZ);
+
+    // 簇元数据：[vertexBase, triCount, localBase, materialId]。槽 3 = 子网格序号。
+    const uint metaBase   = clusterId * 4u;
+    const uint vertexBase = g_clusterMeta[metaBase + 0u];
+    const uint localBase  = g_clusterMeta[metaBase + 2u];
+    const uint materialId = g_clusterMeta[metaBase + 3u];
+    const GPUMaterial mat = g_materialTable[materialId];
+
+    // vertex pulling：拉三顶点（8 float/顶点：pos/normal/uv）。
+    float3 pos[3], nrm[3];
+    float2 uv[3];
+    for (uint k = 0u; k < 3u; ++k) {
+        const uint localIdx = g_localIndices[localBase + triId * 3u + k];
+        const uint gv = vertexBase + localIdx;
+        const uint b  = gv * 8u;
+        pos[k] = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+        nrm[k] = float3(g_vertexPool[b + 3u], g_vertexPool[b + 4u], g_vertexPool[b + 5u]);
+        uv[k]  = float2(g_vertexPool[b + 6u], g_vertexPool[b + 7u]);
+    }
+
+    // SV_Position.xy → 像素中心；其余表达式与 psMatResolve 逐字一致。
+    const float2 fragPos = float2(pixel) + 0.5f;
+    const GBufGeometry gbuf = gbInterpolateVisTriangle(
+        pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
+        uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
+
+    const float3 n3 = normalize(gbuf.normal);
+    const float3 L  = normalize(g_lightDirW.xyz);
+    float shadow = 0.0f;
+    if (dot(n3, L) > 0.0f) {
+        if (g_vsmParams.x > 0.5f) {
+            // M15.0/M15.1（S15）：--vsm —— shadow 因子来源 = VSM 多级页表查表 +
+            // 深度比较（vsm_common.slangh::vsmSampleShadow4，UE ProjectionCommon
+            // 采样链对位；M15.1 起最细级优先迭代 4 级，命中级深度域内部自算）。
+            // 接收点沿法线偏移与射线 origin 同款（g_shadowParams.x，防同源自遮挡）；
+            // 深度域 bias 走 g_vsmParams.y（scene.cpp 0.003，E1b.4 同量级）。
+            // g_vsmParams.x = 0（--vsm-rayref）→ else 分支射线兜底：同 blob 射线
+            // 基准渲染（vsm-vs-ray 门的对位渲染，run.bat 口径）。
+            shadow = vsmSampleShadow4(g_vsmPagePool, g_vsmPageTable, g_vsmLevelMvp,
+                                      gbuf.worldPos + n3 * g_shadowParams.x,
+                                      g_vsmParams.y, g_vsmParams.z);
+        } else {
+            const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+            RayDesc ray;
+            ray.Origin    = origin;
+            ray.Direction = L;
+            ray.TMin      = 0.0f;
+            ray.TMax      = g_shadowParams.y;
+            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+            q.TraceRayInline(g_tlas,
+                             RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                             0xFF, ray);
+            q.Proceed();
+            shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
+        }
     }
 
     g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,

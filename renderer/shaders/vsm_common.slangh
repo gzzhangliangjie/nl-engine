@@ -1,0 +1,61 @@
+// M15.0/M15.1 (S15): VSM 投影采样公共头 —— 多级页表查表 + 深度比较。
+// UE 对位：VirtualShadowMapProjectionCommon.ush 的「世界→虚拟 texel→页表→物理页→
+// 深度」采样链，收窄成单光源 4 级 clipmap（M15.1）。
+//
+// 页空间口径（M15.0 冻结 + M15.1 扩展，与 scene.cpp ensureVsmTargets 逐值对称）：
+//   PageSize   = 128（UE VirtualShadowMapDefinitions.h 同值，log2=7）
+//   每级虚拟空间 = 2048² texel（16×16 页）；4 级（M15.1，texel 世界尺寸逐级 ×2，
+//                level 0 最细；texel_L 由 CPU 在 init 时按场景 AABB 定死——
+//                UE SmallestWorldUnitsPerTexel 固定口径，帧间不漂移）
+//   物理页池   = 2048² R32F Texture2D（16×16 物理页；M15.1 起 CPU 分配器按需
+//                分配（方案 A 拍板 2026-11-13），跨帧缓存——非 M15.0 的静态 1:1）
+//   页表       = StructuredBuffer<uint> 1024 项 = 4 级 × 256（UE 是 Texture2D
+//                页表 + 硬件采样；我们只做 Load 查表故用 buffer 形态，差异登记
+//                UE-DIFFS D21——迁移触发条件（页量>4096/需硬件 SampleLevel）
+//                M15.1 不满足，载体维持 buffer）
+//   entry 编码 = bits[7:0]=poolPageX, bits[15:8]=poolPageY（UE 32-bit 编码
+//                physX[0:9]/physY[10:19] 的窄化对位，留扩位余量）；
+//                0xFFFFFFFF = 未分配 → 判亮。
+//   级选择     = 最细级优先、首个命中即采样（UE 按投影足迹/距离选级；我们迭代
+//                4 级确定性等价，差异登记 UE-DIFFS D21 注记）。
+// 坐标系：CPU 侧 shadowOrtho/shadowLookAt 是 D3D LH 口径（E1b.4 同款），深度域
+// z ∈ [0,1]；Vulkan 侧同一矩阵 + 0..1 深度范围，双后端数值同源。
+
+// M15.1：多级虚拟→物理页采样（接收者世界点 + 深度域 bias）。某级视锥外/未分配页
+// → 跳到更粗级；全 miss 判亮（1.0），与 UE VSM 的 fallback 口径一致。
+// 接收者 NDC.z 用命中级的 clip.z/clip.w（各级 near/far 不同，z 不可跨级复用）。
+float vsmSampleShadow4(
+    Texture2D<float>        pagePool,    // t15：2048² R32F 物理页池
+    StructuredBuffer<uint>  pageTable,   // t14：1024 项 = 4 级 × 256
+    float4x4                levelMvp[4], // 每级光源正交 lightViewProj（列主序）
+    float3                  worldPos,    // 接收者世界点（调用侧已做法线偏移防自遮挡）
+    float                   depthBias,   // 深度域 bias（g_vsmParams.y，E1b.4 的 0.003 同量级）
+    float                   virtualSize) // 每级虚拟空间 texel 数（g_vsmParams.z = 2048）
+{
+    [unroll]
+    for (uint L = 0u; L < 4u; ++L) {          // 最细级优先（level 0 最细）
+        const float4 clip = mul(levelMvp[L], float4(worldPos, 1.0f));
+        const float2 uv01 = (clip.xy / clip.w) * 0.5f + 0.5f;
+        // 视锥外 → 下一级（窗口逐级 ×2 覆盖，细级 miss 粗级兜底）。
+        if (uv01.x < 0.0f || uv01.x >= 1.0f || uv01.y < 0.0f || uv01.y >= 1.0f)
+            continue;
+
+        // 屏幕 y 翻转：光栅器（D3D/Vulkan 视口同口径）把 NDC y=+1 放在视口顶行，
+        // 与 gbuffer_common.slangh 的 s[i].y = (1 - (ndc.y*0.5+0.5)) * height 逐字
+        // 同款。缺这行翻转 = 采样行与深度 pass 光栅行上下镜像（M15.0 实拍踩坑：
+        // 绿头鼻/嘴阴影出现在头顶）。
+        const float2 vtexel = float2(uv01.x, 1.0f - uv01.y) * virtualSize;
+        const uint2 vtexelU = uint2(vtexel);
+        const uint2 page = vtexelU >> 7u;                 // PageSize=128，log2=7
+
+        const uint entry = pageTable[L * 256u + page.y * 16u + page.x];
+        if (entry == 0xFFFFFFFFu) continue;               // 未分配 → 更粗级兜底
+
+        const uint2 poolPage = uint2(entry & 0xFFu, (entry >> 8u) & 0xFFu);
+        const uint2 ptexel = (poolPage << 7u) | (vtexelU & 127u);
+        const float stored = pagePool.Load(int3(int2(ptexel), 0));
+        const float receiverZ = clip.z / clip.w;          // 命中级的深度域
+        return (stored < receiverZ - depthBias) ? 0.0f : 1.0f;
+    }
+    return 1.0f;
+}

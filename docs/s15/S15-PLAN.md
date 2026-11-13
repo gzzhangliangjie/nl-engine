@@ -61,26 +61,30 @@ GPUScene 持久索引 + 跨帧 GPU 资源池 + 稳定 id 重映射 + depth/veloc
 **自检**：单方向光阴影形状/软硬与 S9 参考图方向一致；关掉 VSM 退回 S9 路线时画面退化可见。tag：`s15-vsm`。
 
 ## M15.1 级联 clipmap + 页请求/分配/回收（3~4 天）
-- [ ] 多级 clipmap：按距相机距离分 N 级（对位 UE `VirtualShadowMapClipmap`），近处高分辨率、远处低分辨率。
-- [ ] 每帧页请求 → 分配物理页 → 渲染 → 未命中/失效页回收（对位 UE `VirtualShadowMapCacheManager`：缓存有效页跨帧复用）。
-- [ ] 页请求读主视图 depth / vis buffer（Q4 方案 A 下无屏幕 GBuffer 纹理；预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
-- [ ] HUD 显示物理页占用 / 各级分辨率。
+> **2026-11-13 用户拍板（方案 A：GPU 标页 + CPU 分配器）**：compute 标页照 UE `PageMarking` 对位（吃主视图 depth 反投影 → 请求位图）→ 复用 S4 `cullReadback_` 环形习语异步回读（1 帧延迟，UE 同吃延迟）→ CPU 维护空闲链表/跨帧缓存/失效回收 → CPU 写页表 → CPU 逐分配页下发 draw（每页一个 viewport，M15.2 再换 GPU indirect）。确定性保留（bytes 基线纪律不破）；HUD 零成本。页表载体**不迁** Texture2D（扩展 StructuredBuffer 编码加 level 高位；D21 迁移触发条件 M15.1 不满足）。多级参数：4 级、level radius 对位 UE `2^(level+1)` 口径、每级虚拟空间 2048²/页表 256 项。
+- [x] 多级 clipmap：按距相机距离分 N 级（对位 UE `VirtualShadowMapClipmap`），近处高分辨率、远处低分辨率。
+- [x] 每帧页请求 → 分配物理页 → 渲染 → 未命中/失效页回收（对位 UE `VirtualShadowMapCacheManager`：缓存有效页跨帧复用）。
+- [x] 页请求读主视图 depth / vis buffer（Q4 方案 A 下无屏幕 GBuffer 纹理；预研 §3，只读不改格式）；跨帧页缓存资源按 `createTargets()` slot 级同步表初始化。
+- [x] HUD 显示物理页占用 / 各级分辨率。
+
+**M15.1 收口（2026-11-13）**：tag `s15-clipmap`。实测参数（MVP dump 权威）：coarsestWindow = 4×场景最大边 = 31.495（AABB ext = 7.874×1.925×1.626），L0 half = 1.968 / texel = 0.001922，窗口中心严格居中（focus=原点时 floor snap 无偏移）。
+
+**M15.1 漏阴影定位与验收口径变更（2026-11-13，两次用户拍板）**：
+1. **活体最小探针（拍板 A）**：stdout 逐级 alloc 日志 + 服务级伪彩探针 + 页池/页表/MVP 全 dump。决定性实验 = **python 软件光栅化 vs GPU 页池逐 texel 对比**（复刻 shadowLookAt/shadowOrtho/窗口 remap，nmesh 52B record 权威布局）：130.9 万 texel 全对齐、深度差 ≤0.0035、漏画 0——**页池写入侧 100% 正确**。
+2. **根因（实锤修复）**：页缓存 key 负 wx 跨级碰撞——`key=(l<<62)|(uint32(wx)<<32)|uint32(wy)` 用 OR，wx<0 时 uint32 回转值最高两位是 11，OR 吞掉级位段 → 四级同 (wx,wy) 的 key 相同 → 跨级共池页 + dirty 只画一次。修复 = wx 掩 `0x3FFFFFFF` 再 `<<32`（分配器 + 页表重写两处；key 纪律注释落 scene.hpp）。
+3. **换基准（拍板 B）**：修复后 verify 的 vsm-vs-ray 门仍 5.28%（vs s9 冻结 PNG）。三图对比实锤：同 blob 射线兜底 vs VSM 真实近似差仅 0.42%（sum>30 口径）/ **0.47%（near 口径，0.01 亦过）**；而 s9 冻结 blob 与当前 csDirectVsm blob 共享代码数值漂移 6924px（~4.7%，拍板 B 冻结 csDirect 所致，M15.0 时同源无此漂移）。**门基准换为 `--vsm-rayref`**（新增 CLI flag，fp.options[3] 通道，csDirectVsm 入口 params.x=0 走射线兜底 = 同 blob 同本底）；s9-shadow 冻结 PNG 退役为 degraded guard 专用。剩余 0.47% 构成 = fallback 104-tri 粗代理假影（漏阴影 1072px）+ 细网格真影粗代理没有（假阴影 1131px）+ 页 texel 粒度——几何基准差异非实现 bug，与 M15.0 卡「深度 pass 全簇 vs 射线 104-tri 粗代理设计差异」同构。
 
 **自检**：大场景近处清晰、远处不糊不抖；相机前后移动时各级分辨率过渡平滑无突跳。tag：`s15-clipmap`。
 
 ## M15.2 Nanite/簇 间接阴影 + 去闪烁（2~3 天）
-> **2026-11-14 拍板 B（用户）**：光源空间 HZB 遮挡剔除**本里程碑落地**（「bevy 和 UE 都做了，遮挡迟早要做」）。落地形态（页池增量渲染下的对应物，与 bevy 语义对齐并登记差异）：
-> - **HZB 载体** = 页池半分辨率 2048² min-downsample 链（StructuredBuffer 分段，12 级；页 128 池 texel = 64 HZB texel，页级 = mip6）；构建 CS 每帧从页池当前内容（上帧深度）重建——对应 bevy first cull 用上帧 HZB 的语义。
-> - **剔除 = 三 dispatch**（count → scan+args → fill）：簇球 × dirty 页光源投影判交（UE `CullPerPageDrawCommandsCs` 窄化对位）+ 足迹自适应级 HZB 遮挡判定（bevy `sample_hzb` 对位）→ per-page 段式簇列表 + `DrawIndirectArguments`。
-> - **bevy「first raster 产 HZB → second raster 覆盖」不做**：页池是 MIN 增量渲染非覆盖式，first raster 产物无法丢弃重画；HZB 素材直接来自页池上帧内容（静态场景 = 精确深度），bevy 两阶段的帧间自我修正语义由页缓存承载。MIN 混合下正确遮挡剔除深度无损（被挡簇深度 ≥ 已有深度，MIN 不变）→ bytes 基线预期逐字节同。
-> - per-page draw 的 `startInstanceLocation` 恒 0（D3D12 SV_InstanceID 与 Vulkan gl_InstanceIndex 对 first-instance 语义相反，必须避开）；簇段基址走 GPU 写 counters buffer + volatile b0 z 段传 slot。
-> - min-only HZB 判定的理论误剔洞（区域内近几何占比小时）登记 UE-DIFFS（bevy 同款近似）；页池 stale 内容误剔仅在动态场景，属既有页缓存语义不扩大战线。
-- [ ] 阴影深度渲染复用 S4 的 GPU-driven 间接绘制（簇级剔除/indirect），不另写一遍提交；构件参照 bevy `visibility_buffer_raster_node.rs` 的 ShadowView 变体（`R32Uint` 只写 depth + 两阶段 HZB 剔除），不引入 bevy 的每帧全量重绘语义（我们走页缓存）。
-- [ ] **簇几何必须进阴影路径**（Carrot 反例：虚拟几何不投影）；验收时与 S9 光追阴影并排核对投影覆盖。
-- [ ] temporal / rejection 去闪烁：阴影页跨帧稳定，边缘不闪（参考 UE `ShadingRejection` 思路，但本模块只做阴影页稳定性，不搬 TSR 整套路）。
-- [ ] 双后端：DX12 / Vulkan 同图，分档 bytes/near。
+- [x] 阴影深度渲染复用 S4 的 GPU-driven 间接绘制（簇级剔除/indirect），不另写一遍提交；构件参照 bevy `visibility_buffer_raster_node.rs` 的 ShadowView 变体（`R32Uint` 只写 depth + 两阶段 HZB 剔除），不引入 bevy 的每帧全量重绘语义（我们走页缓存）。**已落地**：csCullCount/csCullScan/csCullFill（1024 线程单 group scan）GPU 产 per-page `DrawIndirectArguments`，vsMain 走 `g_vsCullBufs[3072+listBase+instanceIndex]`；上帧 HZB first-cull 语义（bevy 对位）。
+- [x] **簇几何必须进阴影路径**（Carrot 反例：虚拟几何不投影）；验收时与 S9 光追阴影并排核对投影覆盖。**已落地**：vsmClusterSpheres_ 簇球 × dirty 页光源投影判交（一阶段）+ 页池 HZB min 链遮挡（二阶段，12 mip）；s15 双用例输出与 M15.1 基线逐像素 0 差（MIN 无损实锤，前提 = 页池 1.0 初始化）。
+- [x] temporal / rejection 去闪烁：阴影页跨帧稳定，边缘不闪（参考 UE `ShadingRejection` 思路，但本模块只做阴影页稳定性，不搬 TSR 整套路）。**证据**：同参数双跑 MD5 一致（21577b8e…，2026-11-14）；页缓存跨帧 + 上帧 HZB，无 TSR。
+- [x] 双后端：DX12 / Vulkan 同图，分档 bytes/near。**证据**：s15-clipmap/s15-vsm × dx12/vulkan 四卡全 bytes（对 M15.1 原基线 0px 差）；两后端互差仅 6px/Δ2（GPU 取整噪声档）。
 
 **自检**：阴影边缘静止稳定、移动无 ghosting；与 S9 的直光分量参考图并排（Q3：一跳图不含间接光，GI 验收另立 S15 自立参考）；`regression.py` 全绿；kStage bump 后重拍 m0.9/s2.0 HUD 基线（M3.2 固化④）。tag：`s15-done`。
+
+> **2026-11-14 收口**：全量闸 874 卡 = 872 绿 + 2 卡（m-sc0/log-m2 selftest dx12）并行抖动假红、单跑复绿；全量 shader uniformity 门禁零违规。kStage 维持 S8.2 未 bump（HUD 基线无波及）。事故入档：① Scene::shutdown 漏放 M15.2 剔除资源 → ~Scene 时 VK device 已死 UAF（0xC0000005，dump 实锤；DX12 析构序不同侥幸不崩）——**新增 GPU 资源必须同步进 Scene::shutdown 清单**；② 页池未初始化 → HZB 误剔（已恢复 1.0 clear，教训：资源初值语义与消费方全集绑定）。
 
 ---
 

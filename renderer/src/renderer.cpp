@@ -46,15 +46,17 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 100 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 118 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
 // rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
 // probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
-// world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）。
-// （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误。）
+// world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）+
+// vsm 10（S15 M15.0 vs/ps 4 + M15.1 vsclear/psclear 4 + cs 2；M15.1 补登，
+// M15.0 漏登是 M7.1/M8.1 同款教训第三犯）。
+// （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误；总数随 S12/S15 增至 118。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -138,6 +140,19 @@ static const Artifact kArtifacts[] = {
     {"filter_temporal.csfiltertemporal", true}, {"filter_temporal.csfiltertemporal", false},
     // S12 M12.1：filter_spatial.slang 单 compute 入口（Q12-C A）× 双目标 = 2。
     {"filter_spatial.csfilterspatial", true}, {"filter_spatial.csfilterspatial", false},
+    // S15 M15.0：vsm.slang 深度 pass 双入口 × 双目标 = 4（M15.1 补登——M15.0 落码
+    // 时漏登记，selftest 只查列出项所以一直绿；M8.1/M7.1 同款教训两犯，补上）。
+    {"vsm.vs", true}, {"vsm.vs", false},
+    {"vsm.ps", true}, {"vsm.ps", false},
+    // S15 M15.1：vsm.slang 清页 quad 双入口 × 双目标 = 4 + 标页 compute × 双目标 = 2。
+    {"vsm.vsclear", true}, {"vsm.vsclear", false},
+    {"vsm.psclear", true}, {"vsm.psclear", false},
+    {"vsm.cs", true}, {"vsm.cs", false},
+    // S15 M15.2：vsm.slang 剔除 4 compute 入口 × 双目标 = 8（HZB 构建 + 剔除三 dispatch）。
+    {"vsm.cshzb", true}, {"vsm.cshzb", false},
+    {"vsm.cscullcount", true}, {"vsm.cscullcount", false},
+    {"vsm.cscullscan", true}, {"vsm.cscullscan", false},
+    {"vsm.cscullfill", true}, {"vsm.cscullfill", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));

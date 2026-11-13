@@ -20,6 +20,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -2657,6 +2658,19 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     csDirect_ = device->createShader(desc, blob.data(), blob.size());
     if (!csDirect_) { outError = "createShader failed for direct.cs"; return false; }
 
+    // M15.1：csDirectVsm（direct.csvsm）——--vsm 直光 pass 专用 blob。拆双入口
+    // （2026-11-13 用户拍板 B）：纯净 csDirect blob 与 s9 冻结基线 bytes 一致，
+    // VSM 查表代码（b6/t14/t15）隔离进 csvsm，重编译扰动不再波及关闭帧。
+    const std::string csvsmPath = std::string(NL_SHADER_DIR) + "/direct.csvsm." + shaderSuffix;
+    std::vector<std::uint8_t> csvsmBlob;
+    if (!readFileBytes(csvsmPath.c_str(), csvsmBlob)) {
+        outError = "failed to load direct.csvsm (" + std::string(shaderSuffix) +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    csDirectVsm_ = device->createShader(desc, csvsmBlob.data(), csvsmBlob.size());
+    if (!csDirectVsm_) { outError = "createShader failed for direct.csvsm"; return false; }
+
     // b3 DirectConstants（32B）：g_clearColor（16B）+ g_shadowParams（16B：bias/tMax），
     // 每帧全量覆写（volatile CB 纪律）。
     nvrhi::BufferDesc dcDesc;
@@ -2671,6 +2685,9 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     // §2.7 单一 BindingSet：共用 resolve 槽位表 + b3 清屏色 + u0 输出 + t13 TLAS。
     // t13 = RayTracingAccelStruct（M9.1 阴影射线，照 rtComputeLayout_ 写法；t0..t12
     // 已被 resolve 槽位表占用，TLAS 落 t13 不冲突）。
+    // M15.1 拆双入口（拍板 B）：纯净 csDirect 的 layout 恢复 s9 时代（不含
+    // b6/t14/t15）；VSM 三槽归 directVsmLayout_（csDirectVsm 专用）。
+    if (!ensureVsmTargets(device, nmeshFile, shaderSuffix, outError)) return false;
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
@@ -2680,12 +2697,30 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!directComputeLayout_) {
         outError = "createBindingLayout failed for direct compute"; return false;
     }
+    nvrhi::BindingLayoutDesc cvDesc;
+    addResolveLayoutItems(cvDesc);
+    cvDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+          .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13))
+          .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6))
+          .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14))
+          .addItem(nvrhi::BindingLayoutItem::Texture_SRV(15));
+    directVsmLayout_ = device->createBindingLayout(cvDesc);
+    if (!directVsmLayout_) {
+        outError = "createBindingLayout failed for direct vsm compute"; return false;
+    }
     {
         nvrhi::ComputePipelineDesc cpDesc;
         cpDesc.setComputeShader(csDirect_).addBindingLayout(directComputeLayout_);
         directPSO_ = device->createComputePipeline(cpDesc);
     }
     if (!directPSO_) { outError = "createComputePipeline failed for direct"; return false; }
+    {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csDirectVsm_).addBindingLayout(directVsmLayout_);
+        directVsmPSO_ = device->createComputePipeline(cpDesc);
+    }
+    if (!directVsmPSO_) { outError = "createComputePipeline failed for direct vsm"; return false; }
 
     // M9.1：TLAS 在 init 链 initTlas 已建（log 顺序 blas→tlas→本行可证），故此处
     // tlasReady_ 已定；如实反映射线是否接通，避免 review 误读为 M9.0 无射线口径。
@@ -3068,6 +3103,8 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     }
 
     // 尺寸版本闸：resize 时 rtTarget_ / visBuffer_ 都换对象，set 必须重建。
+    // M15.1 拆双入口（拍板 B）：纯净 set（csDirect，s9 槽位）恒建；VSM set
+    //（csDirectVsm，+b6/t14/t15）只在 --vsm 帧建/用。
     if (!directComputeSet_ || directW_ != rtW_ || directH_ != rtH_) {
         nvrhi::BindingSetDesc sd;
         addResolveSetItems(sd);
@@ -3084,6 +3121,28 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         directW_ = rtW_;
         directH_ = rtH_;
     }
+    if (params.vsm && vsmReady_ &&
+        (!directVsmSet_ || directVsmW_ != rtW_ || directVsmH_ != rtH_)) {
+        nvrhi::BindingSetDesc sd;
+        addResolveSetItems(sd);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
+                                                      nvrhi::Format::RGBA32_FLOAT))
+          .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_))
+          // VSM 三槽（csDirectVsm blob 静态引用，布局漏槽 = PSO 失败 §2.7 口径）。
+          // M15.1 b6 = 272B 采样常量（4 级 MVP）。
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, vsmSampleConstants_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, vsmPageTable_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(15, vsmPagePool_));
+        directVsmSet_ = rtDevice_->createBindingSet(sd, directVsmLayout_);
+        if (!directVsmSet_) {
+            nl::core::log::deviceError("shadow", "createBindingSet failed for direct vsm set");
+            shadowFailed_ = true;
+            return;
+        }
+        directVsmW_ = rtW_;
+        directVsmH_ = rtH_;
+    }
 
     // b1/b2 与 pulling 分支共用写入；b3 = [当帧清屏色(16B) | shadow 参数(16B)]。
     // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
@@ -3094,10 +3153,20 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
                          0.01f, 50.0f, 0.0f, 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
+    // M15.1（拍板 B）：--vsm 时先跑深度 pass（页池/页表须在 dispatch 前进 SRV 态）
+    // + 写 272B b6（runVsmDepthPass 段 (7)），dispatch 选 directVsmPSO_。
+    // 关闭帧：纯净 csDirect（s9 槽位，不绑 VSM 资源），无需零版 b6/状态声明
+    //（M15.0 的「关闭帧零版 b6 + beginTracking」随共享 blob 拍板作废）。
+    const bool useVsm = params.vsm && vsmReady_;
+    if (useVsm) {
+        runVsmDepthPass(cmd, params);
+    }
+
     // M-PERF1：csDirect pass 计时（直光 compute dispatch 段）。
     const bool ptDirect = passTimers_.begin(cmd, PassTimers::kPassDirect);
     nvrhi::ComputeState cstate;
-    cstate.setPipeline(directPSO_).addBindingSet(directComputeSet_);
+    if (useVsm) cstate.setPipeline(directVsmPSO_).addBindingSet(directVsmSet_);
+    else        cstate.setPipeline(directPSO_).addBindingSet(directComputeSet_);
     cmd->setComputeState(cstate);
     cmd->dispatch((rtW_ + 7) / 8, (rtH_ + 7) / 8, 1);
     if (ptDirect) passTimers_.end(cmd, PassTimers::kPassDirect);
@@ -5539,6 +5608,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     // M7.1 / M9.0：材质反解与 compute 直光共用同一份槽位表。visBuffer_ 换对象
     // 时 directComputeSet_ 也必须重建（drawShadow 另有尺寸版本闸兜底）。
     directComputeSet_ = nullptr;
+    directVsmSet_ = nullptr;   // M15.1：csDirectVsm set 同款兜底
     if (pulling_) {
         nvrhi::BindingSetDesc mSet;
         addResolveSetItems(mSet);
@@ -6079,6 +6149,990 @@ static void shadowMul(const float* a, const float* b, float out[16]) {
                 s += a[k * 4 + r] * b[c * 4 + k];
             out[c * 4 + r] = s;
         }
+}
+
+// ============================================================================
+// M15.0（S15）：VSM 资源建 + 深度 pass。页空间口径（页池 2048²/页表 256 项/entry
+// 编码）见 vsm_common.slangh 头注释（唯一权威），此处对位实现。
+// ============================================================================
+bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
+                             const char* shaderSuffix, std::string& outError) {
+    if (vsmReady_) return true;
+
+    // ---- 场景 AABB（独立重读 nmesh，不碰 initVisbuf 基线路径）----
+    // 正交灯视锥口径与 E1b.4 完全同款（AABB 放大 10% + 0.25 margin，见 runVsmDepthPass）。
+    std::vector<float> vsmClusterSpheres;   // M15.2：簇球顺带收集（与 nm.bounds 一一对应）
+    {
+        // nmeshFile 是 assets/meshlets/ 下的裸文件名（viewer 白名单校验同口径），
+        // 与 initVisbuf/lod0 回退一致补前缀；独立重读不碰基线路径。
+        const std::string fullPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+        nl::core::NMeshData nm;
+        std::string err;
+        if (!nl::core::loadNMesh(fullPath.c_str(), nm, err)) {
+            outError = std::string("vsm: failed to reload nmesh for AABB: ") + err;
+            return false;
+        }
+        bool first = true;
+        for (const auto& mv : nm.vertices) {
+            for (int a = 0; a < 3; ++a) {
+                if (first) { vsmAabbMin_[a] = mv.pos[a]; vsmAabbMax_[a] = mv.pos[a]; }
+                else {
+                    vsmAabbMin_[a] = std::min(vsmAabbMin_[a], mv.pos[a]);
+                    vsmAabbMax_[a] = std::max(vsmAabbMax_[a], mv.pos[a]);
+                }
+            }
+            first = false;
+        }
+        // M15.2：簇包围球（Ritter 近似产物，M4.1 同源数据；cull 模式的
+        // frustumCull_ 路径可能未建，VSM 独立 SSBO 自持）。
+        vsmClusterSpheres.reserve(nm.bounds.size() * 4u);
+        for (const auto& b : nm.bounds) {
+            vsmClusterSpheres.push_back(b.sphere[0]);
+            vsmClusterSpheres.push_back(b.sphere[1]);
+            vsmClusterSpheres.push_back(b.sphere[2]);
+            vsmClusterSpheres.push_back(b.sphere[3]);
+        }
+    }
+
+    // ---- 物理页池：4096² R32F（32×32 页 × 128²，1024 页 = 64MB）----
+    // M15.1：4 级 clipmap 按需分配（方案 A），池页 = 分配单元；不再整池逐帧
+    // clear（缓存页深度跨帧有效，新分配页由清页 quad 覆写 1.0）。
+    nvrhi::TextureDesc poolDesc;
+    poolDesc.width = kVsmPoolTexels;
+    poolDesc.height = kVsmPoolTexels;
+    poolDesc.format = nvrhi::Format::R32_FLOAT;
+    poolDesc.dimension = nvrhi::TextureDimension::Texture2D;
+    poolDesc.isRenderTarget = true;
+    poolDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+    poolDesc.setClearValue(nvrhi::Color(1.0f));   // DX12 要求资源带 clear value
+    poolDesc.debugName = "VsmPagePool";
+    vsmPagePool_ = device->createTexture(poolDesc);
+    if (!vsmPagePool_) { outError = "createTexture failed for vsm page pool"; return false; }
+    {
+        nvrhi::FramebufferDesc fbDesc;
+        fbDesc.addColorAttachment(vsmPagePool_);
+        vsmFb_ = device->createFramebuffer(fbDesc);
+        if (!vsmFb_) { outError = "createFramebuffer failed for vsm page pool"; return false; }
+    }
+    // M15.2：页池初值必须 1.0（最远）——HZB 构建读整池（含未分配页），垃圾初值
+    // 偏近会把簇误剔、缓存页又不重画 → 永久缺块。旧路径未分配区永不采样故无此
+    // 要求；clear 一次终身有效（MIN 混合语义不变，分配页先清后画照旧）。
+    // （当初 if(false) 只为二分 VK AV；根因已实锤 = Scene::shutdown UAF，与此
+    // 无关，2026-11-14 恢复。）
+    {
+        const nvrhi::TextureSubresourceSet all(
+            0, nvrhi::TextureSubresourceSet::AllMipLevels,
+            0, nvrhi::TextureSubresourceSet::AllArraySlices);
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->beginTrackingTextureState(vsmPagePool_, all, nvrhi::ResourceStates::ShaderResource);
+        upload->setTextureState(vsmPagePool_, all, nvrhi::ResourceStates::RenderTarget);
+        upload->clearTextureFloat(vsmPagePool_, all, nvrhi::Color(1.0f));
+        upload->setTextureState(vsmPagePool_, all, nvrhi::ResourceStates::ShaderResource);
+        upload->close();
+        device->executeCommandList(upload);
+    }
+
+    // ---- 页表：StructuredBuffer<uint> 1024 项 = 4 级 × 256，初始全未分配 ----
+    // entry = poolPageX | poolPageY<<8（vsm_common.slangh 编码；poolPageX/Y ∈ [0,32)）。
+    // M15.1 起内容归 CPU 分配器逐帧全量重写（writeBuffer，CopyDest↔SRV 动态跟踪，
+    // indirectArgs_ 同款），初始全 0xFFFFFFFF = 判亮。
+    {
+        nvrhi::BufferDesc ptDesc;
+        ptDesc.byteSize = kVsmPageTableEntries * sizeof(std::uint32_t);
+        ptDesc.structStride = 4;
+        ptDesc.debugName = "VsmPageTable";
+        vsmPageTable_ = device->createBuffer(ptDesc);
+        if (!vsmPageTable_) { outError = "createBuffer failed for vsm page table"; return false; }
+        std::vector<std::uint32_t> table(kVsmPageTableEntries, 0xFFFFFFFFu);
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->beginTrackingBufferState(vsmPageTable_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(vsmPageTable_, table.data(), table.size() * sizeof(std::uint32_t));
+        // 不钉 permanent——M15.1 分配器每帧 writeBuffer 重写（CopyDest↔SRV 动态
+        // 轮转，indirectArgs_ 同款）；钉死 SRV 会报 "doesn't have the right state
+        // bits"（实拍踩坑）。
+        upload->close();
+        device->executeCommandList(upload);
+    }
+
+    // ---- M15.1：请求位图（RWStructured<uint> 32 word = 4 级 × 256 bit）----
+    // 帧内 UAV（csMark InterlockedOr）→ CopySource（copyBuffer 进回读环）轮转，
+    // triCounter_ 同款动态跟踪；初始全 0。
+    {
+        nvrhi::BufferDesc mbDesc;
+        mbDesc.byteSize = kVsmLevels * (kVsmPagesPerLevel / 32) * sizeof(std::uint32_t);
+        mbDesc.structStride = 4;
+        mbDesc.canHaveUAVs = true;
+        mbDesc.debugName = "VsmMarkBits";
+        vsmMarkBits_ = device->createBuffer(mbDesc);
+        if (!vsmMarkBits_) { outError = "createBuffer failed for vsm mark bits"; return false; }
+        static const std::uint32_t zero[32] = {};
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->beginTrackingBufferState(vsmMarkBits_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(vsmMarkBits_, zero, sizeof(zero));
+        upload->close();
+        device->executeCommandList(upload);
+    }
+
+    // ---- M15.1：回读环形（2 槽 × 128B = 32 word 位图，cullReadback_ 同款）----
+    // 槽位配对的窗口原点走 CPU 环（vsmSlotOrigin_）——GPU 只回传位图本身。
+    for (auto& rb : vsmReadback_) {
+        nvrhi::BufferDesc rDesc;
+        rDesc.byteSize = 32 * sizeof(std::uint32_t);
+        rDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        rDesc.debugName = "VsmMarkReadback";
+        rb = device->createBuffer(rDesc);
+        if (!rb) { outError = "createBuffer failed for vsm readback"; return false; }
+    }
+    {
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        for (auto& rb : vsmReadback_) {
+            upload->beginTrackingBufferState(rb, nvrhi::ResourceStates::CopyDest);
+            upload->setPermanentBufferState(rb, nvrhi::ResourceStates::CopyDest);
+        }
+        upload->close();
+        device->executeCommandList(upload);
+    }
+
+    // ---- M15.1：深度 pass b0 CB（80B，per-dirty-page 覆写）+ 采样常量 CB
+    //      （272B，csDirect b6）+ 标页常量 CB（336B，csMark b6）----
+    {
+        nvrhi::BufferDesc vcDesc;
+        vcDesc.byteSize = sizeof(VsmConstantsCB);
+        vcDesc.isConstantBuffer = true;
+        vcDesc.isVolatile = true;
+        // per-dirty-page 覆写：单帧 dirty 页上限 = 4 级 × 256 页窗 = 1024，
+        // × frame-in-flight 2 → maxVersions 2048 富余（每页一版，80B × 2k ≈ 160KB）。
+        vcDesc.maxVersions = 2048;
+        vcDesc.debugName = "VsmConstants";
+        vsmConstants_ = device->createBuffer(vcDesc);
+        if (!vsmConstants_) { outError = "createBuffer failed for vsm constants"; return false; }
+    }
+    {
+        nvrhi::BufferDesc vcDesc;
+        vcDesc.byteSize = sizeof(VsmSampleConstantsCB);
+        vcDesc.isConstantBuffer = true;
+        vcDesc.isVolatile = true;
+        vcDesc.maxVersions = 16;
+        vcDesc.debugName = "VsmSampleConstants";
+        vsmSampleConstants_ = device->createBuffer(vcDesc);
+        if (!vsmSampleConstants_) { outError = "createBuffer failed for vsm sample constants"; return false; }
+    }
+    {
+        nvrhi::BufferDesc mcDesc;
+        mcDesc.byteSize = sizeof(VsmMarkConstantsCB);
+        mcDesc.isConstantBuffer = true;
+        mcDesc.isVolatile = true;
+        mcDesc.maxVersions = 16;
+        mcDesc.debugName = "VsmMarkConstants";
+        vsmMarkConstants_ = device->createBuffer(mcDesc);
+        if (!vsmMarkConstants_) { outError = "createBuffer failed for vsm mark constants"; return false; }
+    }
+
+    // ---- M15.1：CPU 分配器初始态 + texel_L（init 定死）----
+    // texel 尺寸帧间不漂移（UE SmallestWorldUnitsPerTexel 口径——texel 漂移会整体
+    // 作废世界页键缓存）：粗级（L3）窗口 = 4 × 场景最大边（覆盖 orbit 相机 +
+    // 场景余量），每细一级窗口/texel 减半（UE level radius 2^(level+1) 反向展开）。
+    vsmFreePages_.resize(kVsmPoolPages);
+    for (std::uint32_t i = 0; i < kVsmPoolPages; ++i) vsmFreePages_[i] = kVsmPoolPages - 1 - i;
+    vsmPageCache_.clear();
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l) vsmDirtyPages_[l].clear();
+    {
+        const float ext[3] = { vsmAabbMax_[0] - vsmAabbMin_[0],
+                               vsmAabbMax_[1] - vsmAabbMin_[1],
+                               vsmAabbMax_[2] - vsmAabbMin_[2] };
+        const float maxDim = std::max(std::max(ext[0], ext[1]), ext[2]);
+        const float coarsestWindow = 4.0f * std::max(maxDim, 1.0f);
+        for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+            const float windowL = coarsestWindow / float(1u << (kVsmLevels - 1u - l));
+            vsmTexel_[l] = windowL / float(kVsmVirtualSize);
+        }
+    }
+
+    // ---- M15.2：间接阴影剔除资源（拍板 B 2026-11-14，写回 S15-PLAN）----
+    // 必须先于深度 BindingSet 建（vsmDepthSet_ 的 t8 引用 vsmCullBufs_，绑空
+    // 句柄必被 NVRHI 拒——mark set 懒建踩坑同款）。
+    {
+        // 簇球 SSBO（float4 × clusterCount；独立于 cull 模式的 clusterSpheres_）。
+        if (vsmClusterSpheres.empty()) { outError = "vsm: no cluster bounds for cull"; return false; }
+        nvrhi::BufferDesc spDesc;
+        spDesc.byteSize = static_cast<std::uint32_t>(vsmClusterSpheres.size() * sizeof(float));
+        spDesc.structStride = 16;
+        spDesc.debugName = "VsmClusterSpheres";
+        vsmClusterSpheres_ = device->createBuffer(spDesc);
+        if (!vsmClusterSpheres_) { outError = "createBuffer failed for vsm cluster spheres"; return false; }
+
+        // HZB：2048² 起 12 级 min 链，单 StructuredBuffer 分段（kHzbOffsets 双持）。
+        nvrhi::BufferDesc hzDesc;
+        hzDesc.byteSize = kVsmHzbWords * sizeof(std::uint32_t);
+        hzDesc.structStride = 4;
+        hzDesc.canHaveUAVs = true;
+        hzDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        hzDesc.debugName = "VsmHzb";
+        vsmHzbBuf_ = device->createBuffer(hzDesc);
+        if (!vsmHzbBuf_) { outError = "createBuffer failed for vsm hzb"; return false; }
+
+        // cullBufs：count/base/cursor + list + 溢出旗标（头 3072 word 每帧清零）。
+        nvrhi::BufferDesc cbDesc;
+        cbDesc.byteSize = kVsmCullBufWords * sizeof(std::uint32_t);
+        cbDesc.structStride = 4;
+        cbDesc.canHaveUAVs = true;
+        cbDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        cbDesc.debugName = "VsmCullBufs";
+        vsmCullBufs_ = device->createBuffer(cbDesc);
+        if (!vsmCullBufs_) { outError = "createBuffer failed for vsm cull bufs"; return false; }
+
+        // per-page DrawIndirectArguments（isDrawIndirectArgs；scan CS 写 instanceCount）。
+        // structStride 必须 = 4：shader 侧 g_cullArgs 是 RWStructuredBuffer<uint>，
+        // 绑定 view 步长取自这里（写 16 时 shader 索引错位 4 倍，args 全歪）。
+        nvrhi::BufferDesc arDesc;
+        arDesc.byteSize = kVsmPagesPerLevel * kVsmLevels * sizeof(nvrhi::DrawIndirectArguments);
+        arDesc.structStride = 4;
+        arDesc.canHaveUAVs = true;
+        arDesc.isDrawIndirectArgs = true;
+        arDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        arDesc.debugName = "VsmCullArgs";
+        vsmCullArgs_ = device->createBuffer(arDesc);
+        if (!vsmCullArgs_) { outError = "createBuffer failed for vsm cull args"; return false; }
+
+        // dirty 页列表（uint4 = level,px,py,pad；CPU writeBuffer 每帧覆盖前段）。
+        nvrhi::BufferDesc dlDesc;
+        dlDesc.byteSize = kVsmPageTableEntries * 4u * sizeof(std::uint32_t);
+        dlDesc.structStride = 16;
+        dlDesc.debugName = "VsmDirtyList";
+        vsmDirtyList_ = device->createBuffer(dlDesc);
+        if (!vsmDirtyList_) { outError = "createBuffer failed for vsm dirty list"; return false; }
+
+        // 剔除 CB（288B volatile；csHzb 12 版/帧 + 剔除 1 版）。
+        nvrhi::BufferDesc ccDesc;
+        ccDesc.byteSize = sizeof(VsmCullConstantsCB);
+        ccDesc.isConstantBuffer = true;
+        ccDesc.isVolatile = true;
+        ccDesc.maxVersions = 64;
+        ccDesc.debugName = "VsmCullConstants";
+        vsmCullConstants_ = device->createBuffer(ccDesc);
+        if (!vsmCullConstants_) { outError = "createBuffer failed for vsm cull constants"; return false; }
+
+        // 初始态上传：簇球（恒 SRV，钉 permanent）+ args/cullBufs 零初值
+        //（不钉——每帧 CopyDest→UAV→SRV/IndirectArgument 动态轮转，indirectArgs_
+        // 同款；钉死会在首次 setBufferState 报错）。
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->beginTrackingBufferState(vsmClusterSpheres_, nvrhi::ResourceStates::CopyDest);
+        upload->writeBuffer(vsmClusterSpheres_, vsmClusterSpheres.data(),
+                            vsmClusterSpheres.size() * sizeof(float));
+        upload->setPermanentBufferState(vsmClusterSpheres_, nvrhi::ResourceStates::ShaderResource);
+        upload->beginTrackingBufferState(vsmCullArgs_, nvrhi::ResourceStates::CopyDest);
+        {
+            std::vector<std::uint32_t> azero(arDesc.byteSize / 4u, 0);
+            upload->writeBuffer(vsmCullArgs_, azero.data(), arDesc.byteSize);
+        }
+        upload->beginTrackingBufferState(vsmCullBufs_, nvrhi::ResourceStates::CopyDest);
+        {
+            std::vector<std::uint32_t> zero(kVsmCullBufWords, 0);
+            upload->writeBuffer(vsmCullBufs_, zero.data(), zero.size() * sizeof(std::uint32_t));
+        }
+        upload->close();
+        device->executeCommandList(upload);
+    }
+    {
+        // 4 个 compute PSO + 两套 layout/set（hzb set：b1+t6 页池+u1 hzb；
+        // 剔除 set：b1+t4/t5/t7+u2 cullBufs+u3 args；hzbBuf 跨 set SRV/UAV 分绑）。
+        struct CullEntry { const char* file; nvrhi::ComputePipelineHandle* pso; };
+        const std::string entryPaths[4] = {
+            std::string(NL_SHADER_DIR) + "/vsm.cshzb." + shaderSuffix,
+            std::string(NL_SHADER_DIR) + "/vsm.cscullcount." + shaderSuffix,
+            std::string(NL_SHADER_DIR) + "/vsm.cscullscan." + shaderSuffix,
+            std::string(NL_SHADER_DIR) + "/vsm.cscullfill." + shaderSuffix,
+        };
+        nvrhi::ShaderHandle cullShaders[4];
+        for (int i = 0; i < 4; ++i) {
+            std::vector<std::uint8_t> blob;
+            if (!readFileBytes(entryPaths[i].c_str(), blob)) {
+                outError = "failed to load " + entryPaths[i];
+                return false;
+            }
+            nvrhi::ShaderDesc csDesc;
+            csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+            cullShaders[i] = device->createShader(csDesc, blob.data(), blob.size());
+            if (!cullShaders[i]) { outError = "createShader failed for vsm cull entry"; return false; }
+        }
+
+        nvrhi::BindingLayoutDesc hzLayout;
+        hzLayout.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(6))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1));
+        vsmHzbLayout_ = device->createBindingLayout(hzLayout);
+        if (!vsmHzbLayout_) { outError = "createBindingLayout failed for vsm hzb"; return false; }
+        {
+            nvrhi::BindingSetDesc sd;
+            sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, vsmCullConstants_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(6, vsmPagePool_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, vsmHzbBuf_));
+            vsmHzbSet_ = device->createBindingSet(sd, vsmHzbLayout_);
+            if (!vsmHzbSet_) { outError = "createBindingSet failed for vsm hzb"; return false; }
+        }
+        nvrhi::BindingLayoutDesc cuLayout;
+        cuLayout.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(1))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3));
+        vsmCullLayout_ = device->createBindingLayout(cuLayout);
+        if (!vsmCullLayout_) { outError = "createBindingLayout failed for vsm cull"; return false; }
+        {
+            nvrhi::BindingSetDesc sd;
+            sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(1, vsmCullConstants_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, vsmClusterSpheres_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, vsmDirtyList_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(7, vsmHzbBuf_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, vsmCullBufs_))
+              .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, vsmCullArgs_));
+            vsmCullSet_ = device->createBindingSet(sd, vsmCullLayout_);
+            if (!vsmCullSet_) { outError = "createBindingSet failed for vsm cull"; return false; }
+        }
+        for (int i = 0; i < 4; ++i) {
+            nvrhi::ComputePipelineDesc cpDesc;
+            cpDesc.setComputeShader(cullShaders[i]);
+            cpDesc.addBindingLayout(i == 0 ? vsmHzbLayout_ : vsmCullLayout_);
+            nvrhi::ComputePipelineHandle pso = device->createComputePipeline(cpDesc);
+            if (!pso) { outError = "createComputePipeline failed for vsm cull entry"; return false; }
+            switch (i) {
+                case 0: vsmHzbPSO_ = pso; break;
+                case 1: vsmCullCountPSO_ = pso; break;
+                case 2: vsmCullScanPSO_ = pso; break;
+                case 3: vsmCullFillPSO_ = pso; break;
+            }
+        }
+    }
+
+    // ---- 深度 pass shader（vsm.vs/ps；_ENTRIES_DEFAULT 双目标产物）----
+    const std::string vsPath = std::string(NL_SHADER_DIR) + "/vsm.vs." + shaderSuffix;
+    const std::string psPath = std::string(NL_SHADER_DIR) + "/vsm.ps." + shaderSuffix;
+    std::vector<std::uint8_t> vsmVsBlob, vsmPsBlob;
+    if (!readFileBytes(vsPath.c_str(), vsmVsBlob) ||
+        !readFileBytes(psPath.c_str(), vsmPsBlob)) {
+        outError = std::string("failed to load vsm shaders (") + shaderSuffix +
+                   ") from " NL_SHADER_DIR;
+        return false;
+    }
+    nvrhi::ShaderDesc vsDesc;
+    vsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+    nvrhi::ShaderDesc psDesc;
+    psDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+    nvrhi::ShaderHandle vsVsm = device->createShader(vsDesc, vsmVsBlob.data(), vsmVsBlob.size());
+    nvrhi::ShaderHandle psVsm = device->createShader(psDesc, vsmPsBlob.data(), vsmPsBlob.size());
+    if (!vsVsm || !psVsm) { outError = "createShader failed for vsm depth pass"; return false; }
+
+    // 深度 pass 单一 BindingSet：b0（lightMvp + 页参数 packed + slot，per-dirty-page
+    // 覆写）+ t1/t2/t3（vertexPool/indices/meta，与 vsVisRaster 同源；不读 t4
+    // visibleList——相机视锥剔除列表会漏相机外遮挡体）+ t8（M15.2 cullBufs：
+    // per-page 簇段 base + 簇列表，GPU 剔除产物）。
+    nvrhi::BindingLayoutDesc vdLayout;
+    vdLayout.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(8));
+    vsmDepthLayout_ = device->createBindingLayout(vdLayout);
+    if (!vsmDepthLayout_) { outError = "createBindingLayout failed for vsm depth"; return false; }
+    {
+        nvrhi::BindingSetDesc vdSet;
+        vdSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, vsmConstants_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, vertexPool_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, localIndices_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
+             .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(8, vsmCullBufs_));
+        vsmDepthSet_ = device->createBindingSet(vdSet, vsmDepthLayout_);
+        if (!vsmDepthSet_) { outError = "createBindingSet failed for vsm depth"; return false; }
+    }
+
+    // 深度管线：E1b.4 pipelineShadow_ 同款光栅口径——无 depth attachment（显式
+    // 关深度/模板）+ R32F MIN 混合（instance 顺序无关）。cull 保持 M15.0 的 None
+    //（M15.1 调试期间试过 Front/Back 探针：winding 混乱裁不到关键面，两态像素
+    // 零差异，弃用还原 None）。
+    // 无顶点输入（SV_VertexID/InstanceID pulling），不 setInputLayout。
+    {
+        nvrhi::GraphicsPipelineDesc vpDesc;
+        vpDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+              .setVertexShader(vsVsm)
+              .setFragmentShader(psVsm)
+              .addBindingLayout(vsmDepthLayout_);
+        vpDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        vpDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        vpDesc.renderState.blendState.setRenderTarget(0,
+            nvrhi::BlendState::RenderTarget()
+                .setBlendEnable(true)
+                .setSrcBlend(nvrhi::BlendFactor::One)
+                .setDestBlend(nvrhi::BlendFactor::One)
+                .setBlendOp(nvrhi::BlendOp::Min)
+                .setSrcBlendAlpha(nvrhi::BlendFactor::One)
+                .setDestBlendAlpha(nvrhi::BlendFactor::One)
+                .setBlendOpAlpha(nvrhi::BlendOp::Min));
+        pipelineVsm_ = device->createGraphicsPipeline(vpDesc, vsmFb_->getFramebufferInfo());
+        if (!pipelineVsm_) { outError = "createGraphicsPipeline failed for vsm depth pass"; return false; }
+    }
+
+    // ---- M15.1：清页 quad 管线（vsm.vsclear/psclear）----
+    // 同一 vsmDepthSet_（b0 + t1..t3），唯一差异 = blend 关（覆写 1.0）+ 无索引
+    // 全屏三角形。新分配页先清后画——MIN 混合（min(1, stale)=stale）无法重置旧
+    // 占用者深度，清页必须走覆写。
+    {
+        const std::string vclrPath = std::string(NL_SHADER_DIR) + "/vsm.vsclear." + shaderSuffix;
+        const std::string pclrPath = std::string(NL_SHADER_DIR) + "/vsm.psclear." + shaderSuffix;
+        std::vector<std::uint8_t> vclrBlob, pclrBlob;
+        if (!readFileBytes(vclrPath.c_str(), vclrBlob) ||
+            !readFileBytes(pclrPath.c_str(), pclrBlob)) {
+            outError = std::string("failed to load vsm clear shaders (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc vsCDesc;
+        vsCDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+        nvrhi::ShaderDesc psCDesc;
+        psCDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+        nvrhi::ShaderHandle vsClr = device->createShader(vsCDesc, vclrBlob.data(), vclrBlob.size());
+        nvrhi::ShaderHandle psClr = device->createShader(psCDesc, pclrBlob.data(), pclrBlob.size());
+        if (!vsClr || !psClr) { outError = "createShader failed for vsm clear quad"; return false; }
+        nvrhi::GraphicsPipelineDesc vcDesc;
+        vcDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+              .setVertexShader(vsClr)
+              .setFragmentShader(psClr)
+              .addBindingLayout(vsmDepthLayout_);
+        vcDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        vcDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        // blend 默认关（不 setBlendEnable）= 覆写 dest。
+        pipelineVsmClear_ = device->createGraphicsPipeline(vcDesc, vsmFb_->getFramebufferInfo());
+        if (!pipelineVsmClear_) { outError = "createGraphicsPipeline failed for vsm clear quad"; return false; }
+    }
+
+    // ---- M15.1：标页管线（csMark）----
+    // 单一 BindingSet：t0 visBuffer_（deviceZ 高位，u64/px）+ u0 位图 + b6 常量。
+    {
+        const std::string markPath = std::string(NL_SHADER_DIR) + "/vsm.cs." + shaderSuffix;
+        std::vector<std::uint8_t> markBlob;
+        if (!readFileBytes(markPath.c_str(), markBlob)) {
+            outError = std::string("failed to load vsm.cs (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc csDesc;
+        csDesc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        nvrhi::ShaderHandle csMark = device->createShader(csDesc, markBlob.data(), markBlob.size());
+        if (!csMark) { outError = "createShader failed for vsm csMark"; return false; }
+
+        nvrhi::BindingLayoutDesc mkLayout;
+        mkLayout.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6));
+        vsmMarkLayout_ = device->createBindingLayout(mkLayout);
+        if (!vsmMarkLayout_) { outError = "createBindingLayout failed for vsm mark"; return false; }
+        // set 不在此建——visBuffer_ 是首帧懒建资源（ensureVisbufTargets 在 draw
+        // 路径才建），init 时绑空句柄必被 NVRHI 拒（实拍踩坑）；set 由
+        // runVsmDepthPass 的尺寸版本闸首帧创建（vsmMarkW_/H_ = 0 → 必重建）。
+
+        nvrhi::ComputePipelineDesc mkPipe;
+        mkPipe.setComputeShader(csMark).addBindingLayout(vsmMarkLayout_);
+        vsmMarkPSO_ = device->createComputePipeline(mkPipe);
+        if (!vsmMarkPSO_) { outError = "createComputePipeline failed for vsm mark"; return false; }
+    }
+
+    vsmReady_ = true;
+    return true;
+}
+
+// M15.1：VSM 每帧整段（--vsm 且 vsmReady_ 时先于 csDirect dispatch 调用）。
+// 方案 A（2026-11-13 用户拍板，写回 S15-PLAN）：GPU 标页 + CPU 分配器。
+//   (1) 灯向变更检测 → 全缓存失效（缓存深度跨帧有效的唯一前提是光/几何不变）
+//   (2) 逐级预算窗口原点（focus=params.eye 页对齐 snap）+ 光源正交 MVP
+//   (3) 回读环消费 2 帧前的请求位图（cullReadback_ 同款 2 帧延迟 map）→
+//       CPU 分配器（跨帧页缓存 / 空闲链表 / LRU 驱逐）→ 全量重写 1024 项页表
+//   (4) csMark 标页 dispatch（吃 visBuffer_ deviceZ 反投影，本帧 MVP）
+//   (5) 位图 copyBuffer 进回读环槽位（下下帧消费）
+//   (6) dirty 页渲染：每页写 80B b0（页参数位型打包）→ clear quad（覆写 1.0）
+//       + 全簇 pulling 几何（MIN 混合）；缓存页深度跨帧有效不重渲
+//   (7) 写 272B b6 采样常量（csDirect 查表用）
+// 确定性：静态相机/静态灯下 MVP、请求、分配序列逐帧可复现（bytes 基线纪律）。
+void Scene::runVsmDepthPass(nvrhi::ICommandList* cmd, const FrameParams& params) {
+    ++vsmFrame_;
+
+    // ---- (1) 灯向变更 → 全缓存失效 ----
+    {
+        const float ld[3] = { params.lightDir[0], params.lightDir[1], params.lightDir[2] };
+        if (!vsmLightInit_ ||
+            std::memcmp(ld, vsmLastLightDir_, sizeof(ld)) != 0) {
+            if (vsmLightInit_) {
+                vsmPageCache_.clear();
+                vsmFreePages_.resize(kVsmPoolPages);
+                for (std::uint32_t i = 0; i < kVsmPoolPages; ++i)
+                    vsmFreePages_[i] = kVsmPoolPages - 1 - i;
+                for (auto& d : vsmDirtyPages_) d.clear();
+                nl::core::log::infoCh("scene", "vsm: light dir changed, page cache invalidated");
+            }
+            std::memcpy(vsmLastLightDir_, ld, sizeof(ld));
+            vsmLightInit_ = true;
+        }
+    }
+
+    // ---- (2) 逐级窗口原点（页对齐 snap）+ 光源正交 MVP ----
+    // focus = 相机 eye（UE view-origin 口径）；窗口原点按该级页世界尺寸 floor
+    // snap（防相机微动引起采样抖动，UE page-snapped origin 同款）。
+    // 正交半宽 = 窗口半宽（精确映射，uv01 ↔ 虚拟 texel ↔ 窗口的等式不许有余量）；
+    // z 域按场景半径放宽（全簇直绘无逐页几何剔除，遮挡体在光轴 z 上可超窗口）。
+    // clipmap 焦点 = 观察中心（viewer 填 lookAt；UE view-origin 口径的场景化落点：
+    // 焦点必须是被观察区域中心，填相机眼点会让细级窗口整个偏离场景）。
+    const float focus[3] = { params.eye[0], params.eye[1], params.eye[2] };
+    float Ldir[3] = { params.lightDir[0], params.lightDir[1], params.lightDir[2] };
+    {
+        const float len = std::sqrt(Ldir[0] * Ldir[0] + Ldir[1] * Ldir[1] + Ldir[2] * Ldir[2]);
+        if (len > 1e-6f) { Ldir[0] /= len; Ldir[1] /= len; Ldir[2] /= len; }
+    }
+    float diag = 0.0f;
+    for (int a = 0; a < 3; ++a) {
+        const float e = vsmAabbMax_[a] - vsmAabbMin_[a];
+        diag += e * e;
+    }
+    const float sceneRadius = 0.5f * std::sqrt(diag);
+
+    int wpxBase[kVsmLevels] = {}, wpyBase[kVsmLevels] = {};
+    // 半窗页数：虚拟空间 2048 texel / 128 texel 页 = 16 页单边 → half = 8 页。
+    const int kHalfWinPages = static_cast<int>(kVsmVirtualSize / 128u / 2u);
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+        const float texel = vsmTexel_[l];
+        const float pageWorld = 128.0f * texel;                    // 页世界尺寸
+        const float half = 0.5f * float(kVsmVirtualSize) * texel;  // 窗口半宽 = 1024 texel
+        // 页对齐窗口原点（floor snap 后回退半窗页数 → focus 落窗口中心）。
+        // 踩坑：原实现原点=floor(focus/pageWorld)，center=origin+half → focus 卡
+        // 窗口边缘，场景中心 uv01.y 全级出窗（L0 1.15 / L3 1.01 实拍），深度 pass
+        // 与标页全画窗外，req=0 阴影失效。
+        wpxBase[l] = static_cast<int>(std::floor(focus[0] / pageWorld)) - kHalfWinPages;
+        wpyBase[l] = static_cast<int>(std::floor(focus[2] / pageWorld)) - kHalfWinPages;
+        const float originX = static_cast<float>(wpxBase[l]) * pageWorld;
+        const float originZ = static_cast<float>(wpyBase[l]) * pageWorld;
+        // 光源 view 取窗口中心（原点 + 半宽）。clipmap 窗口是光源 view 平面 XY
+        // 网格（UE Clipmap 口径：地面网格 + view 高度跟随相机）。
+        const float centerX = originX + half;
+        const float centerZ = originZ + half;
+        const float centerY = focus[1];
+        const float dist = half * 2.5f + 2.0f;
+        const float nearZ = std::max(0.05f, dist - (half + sceneRadius) * 1.2f);
+        const float farZ = dist + (half + sceneRadius) * 1.2f;
+        const float eye[3] = { centerX + Ldir[0] * dist,
+                               centerY + Ldir[1] * dist,
+                               centerZ + Ldir[2] * dist };
+        float up[3] = { 0.0f, 1.0f, 0.0f };
+        if (std::abs(Ldir[1]) > 0.99f) { up[1] = 0.0f; up[2] = 1.0f; }
+        const float target[3] = { centerX, centerY, centerZ };
+        float view[16], ortho[16];
+        shadowLookAt(eye, target, up, view);
+        shadowOrtho(-half, half, -half, half, nearZ, farZ, ortho);
+        shadowMul(ortho, view, vsmLevelMvp_[l]);
+    }
+
+    // ---- (3) 回读环消费 2 帧前位图 → CPU 分配器 ----
+    std::uint32_t reqPages = 0;
+    if (vsmSubmitted_ >= 2) {
+        const std::uint32_t slot = (vsmSubmitted_ - 2) & 1u;
+        void* p = rtDevice_->mapBuffer(vsmReadback_[slot], nvrhi::CpuAccessMode::Read);
+        if (p) {
+            const auto* vals = static_cast<const std::uint32_t*>(p);
+            // 位图计数（MSVC 无 __builtin_popcount，nibble 查表）。
+            static const int kPop[16] = {0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4};
+            for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+                for (std::uint32_t w = 0; w < 8u; ++w) {
+                    const std::uint32_t bits = vals[l * 8u + w];
+                    reqPages += std::uint32_t(kPop[bits & 15u] + kPop[(bits >> 4u) & 15u] +
+                                              kPop[(bits >> 8u) & 15u] + kPop[(bits >> 12u) & 15u] +
+                                              kPop[(bits >> 16u) & 15u] + kPop[(bits >> 20u) & 15u] +
+                                              kPop[(bits >> 24u) & 15u] + kPop[(bits >> 28u) & 15u]);
+                }
+            // ---- 分配：请求页 = 缓存命中续期；未命中取空闲页（空则 LRU 驱逐）----
+            for (auto& d : vsmDirtyPages_) d.clear();
+            for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+                // 槽位配对的窗口原点（标页帧的世界页坐标）来自 CPU 环——把窗口
+                // 相对页号换算回世界页号，窗口在两帧间移动时缓存键仍稳定。
+                const int bx = vsmSlotOrigin_[slot][l][0];
+                const int by = vsmSlotOrigin_[slot][l][1];
+                for (std::uint32_t idx = 0; idx < kVsmPagesPerLevel; ++idx) {
+                    const std::uint32_t word = vals[l * 8u + (idx >> 5u)];
+                    if (!((word >> (idx & 31u)) & 1u)) continue;
+                    const std::uint32_t px = idx & 15u, py = idx >> 4u;
+                    // key 掩码纪律见 vsmPageCache_ 注释（scene.hpp）：uint32 回转的
+                    // 负 wx 最高两位是 11，不掩会吞掉级位段造成跨级 key 碰撞
+                    //（M15.1 漏阴影根因：四级同 (wx,wy) 共池页，dirty 只画一次）。
+                    const std::uint64_t key =
+                        (std::uint64_t(l) << 62u) |
+                        (std::uint64_t(static_cast<std::uint32_t>(bx + static_cast<int>(px)) & 0x3FFFFFFFu) << 32u) |
+                        std::uint64_t(static_cast<std::uint32_t>(by + static_cast<int>(py)));
+                    auto it = vsmPageCache_.find(key);
+                    if (it != vsmPageCache_.end()) {
+                        it->second.lastUsed = vsmFrame_;
+                        continue;
+                    }
+                    std::uint32_t poolPage;
+                    if (!vsmFreePages_.empty()) {
+                        poolPage = vsmFreePages_.back();
+                        vsmFreePages_.pop_back();
+                    } else {
+                        // LRU 驱逐：扫描全缓存取 lastUsed 最小项（≤1024 项，O(n) 可接受）。
+                        auto victim = vsmPageCache_.end();
+                        std::uint32_t oldest = 0xFFFFFFFFu;
+                        for (auto e = vsmPageCache_.begin(); e != vsmPageCache_.end(); ++e) {
+                            if (e->second.lastUsed < oldest) {
+                                oldest = e->second.lastUsed;
+                                victim = e;
+                            }
+                        }
+                        if (victim == vsmPageCache_.end()) continue;   // 全在本帧请求，放弃
+                        poolPage = victim->second.poolPage;
+                        vsmPageCache_.erase(victim);
+                        ++vsmEvictions_;
+                    }
+                    vsmPageCache_.emplace(key, VsmPageCacheEntry{poolPage, vsmFrame_});
+                    vsmDirtyPages_[l].push_back(VsmDirtyPage{poolPage, px, py});
+                }
+            }
+            rtDevice_->unmapBuffer(vsmReadback_[slot]);
+        }
+    }
+
+    // ---- 页表全量重写（当前帧窗口相对页号 → 世界页键 → 缓存 → 池页编码）----
+    {
+        std::vector<std::uint32_t> table(kVsmPageTableEntries, 0xFFFFFFFFu);
+        for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+            // 窗口原点页必须与本帧标页/分配端（wpxBase/wpyBase）同值——原独立
+            // 重算漏掉半窗回退会造成 key 漂移（页表永远 miss 分配缓存）。
+            const int bx = wpxBase[l];
+            const int by = wpyBase[l];
+            for (std::uint32_t idx = 0; idx < kVsmPagesPerLevel; ++idx) {
+                const std::uint32_t px = idx & 15u, py = idx >> 4u;
+                // key 掩码纪律同分配器（见 vsmPageCache_ 注释）：负 wx 的 uint32
+                // 回转值必须掩掉最高 2 位，否则跨级 key 碰撞。
+                const std::uint64_t key =
+                    (std::uint64_t(l) << 62u) |
+                    (std::uint64_t(static_cast<std::uint32_t>(bx + static_cast<int>(px)) & 0x3FFFFFFFu) << 32u) |
+                    std::uint64_t(static_cast<std::uint32_t>(by + static_cast<int>(py)));
+                auto it = vsmPageCache_.find(key);
+                if (it == vsmPageCache_.end()) continue;
+                const std::uint32_t poolPage = it->second.poolPage;
+                table[l * kVsmPagesPerLevel + idx] =
+                    (poolPage & 31u) | ((poolPage >> 5u) << 8u);
+            }
+        }
+        cmd->beginTrackingBufferState(vsmPageTable_, nvrhi::ResourceStates::ShaderResource);
+        cmd->setBufferState(vsmPageTable_, nvrhi::ResourceStates::CopyDest);
+        cmd->writeBuffer(vsmPageTable_, table.data(), table.size() * sizeof(std::uint32_t));
+        cmd->setBufferState(vsmPageTable_, nvrhi::ResourceStates::ShaderResource);
+    }
+
+    // ---- (4) csMark 标页 dispatch ----
+    {
+        VsmMarkConstantsCB mc{};
+        {
+            nl::math::Mat4 vp{}, invVP{};
+            std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+            invVP = nl::math::inverseMat4(vp);
+            std::memcpy(mc.invViewProj, invVP.m, sizeof(invVP.m));
+        }
+        for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+            std::memcpy(mc.levelMvp[l], vsmLevelMvp_[l], sizeof(vsmLevelMvp_[l]));
+        mc.depthSize[0] = static_cast<float>(visW_);
+        mc.depthSize[1] = static_cast<float>(visH_);
+        mc.depthSize[2] = static_cast<float>(kVsmVirtualSize);
+        cmd->writeBuffer(vsmMarkConstants_, &mc, sizeof(mc));
+
+        // visBuffer_ 重建（resize）后 set 里是死句柄——尺寸版本闸重建（
+        // directComputeSet_ 同款口径）。
+        if (!vsmMarkSet_ || vsmMarkW_ != visW_ || vsmMarkH_ != visH_) {
+            nvrhi::BindingSetDesc mkSet;
+            mkSet.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_))
+                 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, vsmMarkBits_))
+                 .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, vsmMarkConstants_));
+            vsmMarkSet_ = rtDevice_->createBindingSet(mkSet, vsmMarkLayout_);
+            if (!vsmMarkSet_) {
+                nl::core::log::deviceError("scene", "vsm: createBindingSet failed for mark set");
+                return;
+            }
+            vsmMarkW_ = visW_;
+            vsmMarkH_ = visH_;
+        }
+
+        cmd->beginTrackingBufferState(vsmMarkBits_, nvrhi::ResourceStates::CopyDest);
+        nvrhi::ComputeState mstate;
+        mstate.setPipeline(vsmMarkPSO_).addBindingSet(vsmMarkSet_);
+        cmd->setComputeState(mstate);
+        cmd->dispatch((visW_ + 7) / 8, (visH_ + 7) / 8, 1);
+    }
+
+    // ---- (5) 位图 → 回读环槽位（UAV→CopySource 轮转，triCounter_ 同款）----
+    // 只 copy 位图本身（32 word = 128B，= buffer 全长）；窗口原点是 CPU 值，
+    // 同帧登记进 CPU 槽位环（vsmSlotOrigin_），越界读 160B 会 page fault 实拍踩坑。
+    {
+        const std::uint32_t slot = vsmSubmitted_ & 1u;
+        for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+            vsmSlotOrigin_[slot][l][0] = wpxBase[l];
+            vsmSlotOrigin_[slot][l][1] = wpyBase[l];
+        }
+        cmd->setBufferState(vsmMarkBits_, nvrhi::ResourceStates::CopySource);
+        cmd->copyBuffer(vsmReadback_[slot], 0, vsmMarkBits_, 0,
+                        32 * sizeof(std::uint32_t));
+        ++vsmSubmitted_;
+    }
+
+    // ---- (6) dirty 页渲染（per-dirty-page draw：viewport 恒页矩形 128²，
+    // shader 把窗口子区 [ax, ax+sx] 映射进页内 NDC [-1,1]）----
+    // 页池状态登记：本列表首用前声明当前态（前一帧末态 SRV；--vsm 关闭帧由
+    // drawShadow 的 else 分支声明，同 M15.0 口径）。
+    // 旧「放大 viewport 2048² + scissor 页矩形」方案在 VK 后端产生确定性页丢失
+    // /页内 texel 丢失（DX12 正确；超界 viewport 的 guard band/光栅化行为双后
+    // 端差异，页池读回 + 页映射 dump 实锤）。改为 shader remap：几何数学上子区
+    // 外落到 clip space 规范盒外被裁——无 viewport 放大，双后端确定性可证。
+    // 页参数（winX/winY/vertsPerCluster）走 b0 g_pageInfo 位型复用（80B 不变），
+    // 每页一次 volatile 覆写（maxVersions 2048，见创建段）——替代 SM6 不支持的
+    // SV_StartInstanceLocation 方案。
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    cmd->beginTrackingTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (6) dirty 页渲染（M15.2 间接化：簇级剔除 + HZB 遮挡 + per-page
+    // drawIndirect；拍板 B 2026-11-14，UE BuildPerPageDrawCommands 窄化对位）----
+    // 流：dirty 列表上传 → cullBufs 头段清零 → csHzb 12 级（页池上帧内容 = bevy
+    // first-cull 上帧 HZB 语义）→ csCullCount/csCullScan/csCullFill 三 dispatch →
+    // 逐 dirty 页 clear quad + volatile b0（含 slot）+ drawIndirect(args[slot])。
+    // MIN 混合下正确遮挡剔除深度无损（被挡簇深度 ≥ 已有深度，MIN 不变）→ bytes
+    // 预期与全簇路径逐字节同。startInstanceLocation 恒 0（D3D12 SV_InstanceID 与
+    // Vulkan gl_InstanceIndex 对 first-instance 语义相反，规避）；簇段寻址走
+    // cullBufs base + t8（vsMain）。
+    std::uint32_t vsmDirtyCount = 0;
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+        vsmDirtyCount += static_cast<std::uint32_t>(vsmDirtyPages_[l].size());
+    if (vsmDirtyCount > 0) {
+        const std::uint32_t vertsPerCluster = maxTriPerCluster_ * 3u;
+
+        // ---- (6a) dirty 页列表上传（uint4 = level,px,py,pad；序 = slot 序）----
+        {
+            std::vector<std::uint32_t> dl(vsmDirtyCount * 4u);
+            std::uint32_t s = 0;
+            for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+                for (const VsmDirtyPage& d : vsmDirtyPages_[l]) {
+                    dl[s * 4u + 0u] = l;
+                    dl[s * 4u + 1u] = d.px;
+                    dl[s * 4u + 2u] = d.py;
+                    dl[s * 4u + 3u] = 0u;
+                    ++s;
+                }
+            cmd->beginTrackingBufferState(vsmDirtyList_, nvrhi::ResourceStates::CopyDest);
+            cmd->setBufferState(vsmDirtyList_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(vsmDirtyList_, dl.data(), dl.size() * sizeof(std::uint32_t));
+            cmd->setBufferState(vsmDirtyList_, nvrhi::ResourceStates::ShaderResource);
+        }
+        // ---- (6b) cullBufs 头 3072 word 清零（count/base/cursor 段）----
+        {
+            std::vector<std::uint32_t> zero(3072u, 0);
+            cmd->beginTrackingBufferState(vsmCullBufs_, nvrhi::ResourceStates::CopyDest);
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::CopyDest);
+            cmd->writeBuffer(vsmCullBufs_, zero.data(), zero.size() * sizeof(std::uint32_t));
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::UnorderedAccess);
+        }
+        // ---- (6c) HZB 构建：12 dispatch（mip0 = 页池 2×2 min，mip1+ 递推）----
+        {
+            VsmCullConstantsCB cb{};
+            for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+                std::memcpy(cb.levelMvp[l], vsmLevelMvp_[l], sizeof(vsmLevelMvp_[l]));
+            cb.cullParams[0] = static_cast<float>(clusterCount_);
+            cb.cullParams[2] = static_cast<float>(kVsmVirtualSize);
+            cb.cullParams[3] = static_cast<float>(vertsPerCluster);
+            cmd->beginTrackingBufferState(vsmHzbBuf_, nvrhi::ResourceStates::UnorderedAccess);
+            cmd->setBufferState(vsmHzbBuf_, nvrhi::ResourceStates::UnorderedAccess);
+            nvrhi::ComputeState cs;
+            cs.setPipeline(vsmHzbPSO_).addBindingSet(vsmHzbSet_);
+            for (std::uint32_t mip = 0; mip < kVsmHzbMips; ++mip) {
+                const std::uint32_t dim = kVsmVirtualSize >> mip;
+                const float srcMip = (mip == 0) ? -1.0f : static_cast<float>(mip - 1u);
+                cb.hzbParams[0] = srcMip;
+                cb.hzbParams[1] = static_cast<float>(mip);
+                cb.hzbParams[2] = static_cast<float>(dim);
+                cb.hzbParams[3] = static_cast<float>(kVsmPoolTexels);
+                cmd->writeBuffer(vsmCullConstants_, &cb, sizeof(cb));
+                cmd->setComputeState(cs);
+                cmd->dispatch((dim + 7u) / 8u, (dim + 7u) / 8u, 1);
+                // 下一 mip 读本 mip 产物（同 buffer UAV RAW）：乒乓强制可见。
+                cmd->setBufferState(vsmHzbBuf_, nvrhi::ResourceStates::ShaderResource);
+                cmd->setBufferState(vsmHzbBuf_, nvrhi::ResourceStates::UnorderedAccess);
+            }
+            cmd->setBufferState(vsmHzbBuf_, nvrhi::ResourceStates::ShaderResource);
+        }
+        // ---- (6d) 剔除三 dispatch（count → scan → fill）----
+        {
+            VsmCullConstantsCB cb{};
+            for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+                std::memcpy(cb.levelMvp[l], vsmLevelMvp_[l], sizeof(vsmLevelMvp_[l]));
+            cb.cullParams[0] = static_cast<float>(clusterCount_);
+            cb.cullParams[1] = static_cast<float>(vsmDirtyCount);
+            cb.cullParams[2] = static_cast<float>(kVsmVirtualSize);
+            cb.cullParams[3] = static_cast<float>(vertsPerCluster);
+            cb.hzbParams[3] = 1.0f;   // HZB 遮挡判定启用（w>0 门）
+            cmd->writeBuffer(vsmCullConstants_, &cb, sizeof(cb));
+
+            // cullArgs 状态链起手声明（scan CS 写 UAV → IndirectArgument）；
+            // 缺 beginTracking 会报 Unknown prior state（NVRHI 每资源每次跨
+            // 命令列表的状态变更都要显式声明，实拍 #3 帧 device removed）。
+            cmd->beginTrackingBufferState(vsmCullArgs_, nvrhi::ResourceStates::UnorderedAccess);
+            cmd->setBufferState(vsmCullArgs_, nvrhi::ResourceStates::UnorderedAccess);
+            nvrhi::ComputeState ccs;
+            ccs.setPipeline(vsmCullCountPSO_).addBindingSet(vsmCullSet_);
+            cmd->setComputeState(ccs);
+            cmd->dispatch((clusterCount_ + 63u) / 64u, vsmDirtyCount, 1);
+            // UAV 读后写强制可见：同状态连续 dispatch 的 RAW 依赖不能赌 NVRHI
+            // 自动 barrier（scan 读 count 计数 / fill 读 scan base，实拍 fill 读
+            // 到陈旧 base=0 把页段写飞）。UAV→SRV→UAV 是真实状态转移，必插 barrier。
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::ShaderResource);
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::UnorderedAccess);
+            ccs.setPipeline(vsmCullScanPSO_);
+            cmd->setComputeState(ccs);
+            cmd->dispatch(1u, 1u, 1u);
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::ShaderResource);
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::UnorderedAccess);
+            ccs.setPipeline(vsmCullFillPSO_);
+            cmd->setComputeState(ccs);
+            cmd->dispatch((clusterCount_ + 63u) / 64u, vsmDirtyCount, 1);
+            cmd->setBufferState(vsmCullBufs_, nvrhi::ResourceStates::ShaderResource);
+            cmd->setBufferState(vsmCullArgs_, nvrhi::ResourceStates::IndirectArgument);
+        }
+        // ---- (6e) 逐 dirty 页：clear quad（覆写 1.0）+ drawIndirect ----
+        // 旧「放大 viewport 2048² + scissor 页矩形」方案在 VK 后端产生确定性页丢失
+        // /页内 texel 丢失（DX12 正确；超界 viewport 的 guard band/光栅化行为双后
+        // 端差异，页池读回 + 页映射 dump 实锤）。改为 shader remap：几何数学上子区
+        // 外落到 clip space 规范盒外被裁——无 viewport 放大，双后端确定性可证。
+        // 页参数（winX/winY/vertsPerCluster/slot）走 b0 g_pageInfo 位型复用（80B
+        // 不变），每页一次 volatile 覆写（maxVersions 2048）。簇号由 GPU 剔除列表
+        // 提供（vsMain t8 寻址），instanceCount = 该页可见簇数（args GPU 写）。
+        cmd->setTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::RenderTarget);
+        std::uint32_t slot = 0;
+        for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+            for (const VsmDirtyPage& d : vsmDirtyPages_[l]) {
+                const float x0 = static_cast<float>((d.poolPage & 31u) * 128u);
+                const float y0 = static_cast<float>((d.poolPage >> 5u) * 128u);
+                VsmConstantsCB vc{};
+                std::memcpy(vc.lightMvp, vsmLevelMvp_[l], sizeof(vc.lightMvp));
+                const std::uint32_t packed =
+                    (d.px & 15u) | ((d.py & 15u) << 4u);
+                std::memcpy(&vc.params[0], &packed, sizeof(packed));
+                const std::uint32_t vpc = vertsPerCluster;
+                std::memcpy(&vc.params[1], &vpc, sizeof(vpc));
+                std::memcpy(&vc.params[2], &slot, sizeof(slot));
+                cmd->writeBuffer(vsmConstants_, &vc, sizeof(vc));
+
+                nvrhi::GraphicsState state;
+                // 清页：blend 关的覆写管线，全屏三角形铺满页矩形 viewport。
+                state.setPipeline(pipelineVsmClear_)
+                     .setFramebuffer(vsmFb_)
+                     .addBindingSet(vsmDepthSet_);
+                state.viewport.addViewportAndScissorRect(
+                    nvrhi::Viewport(x0, x0 + 128.0f, y0, y0 + 128.0f, 0.0f, 1.0f));
+                cmd->setGraphicsState(state);
+                nvrhi::DrawArguments clearArgs;
+                clearArgs.setVertexCount(3);
+                cmd->draw(clearArgs);
+                // 几何：间接簇列表 pulling（剔除 CS 产物），MIN 混合。viewport 恒
+                // 页矩形（NDC [-1,1] = 页内），shader remap 同 M15.1。
+                state.bindings = {};     // 复用 state 需清空（bindings 是数组追加）
+                state.setPipeline(pipelineVsm_)
+                     .addBindingSet(vsmDepthSet_)
+                     .setIndirectParams(vsmCullArgs_);
+                cmd->setGraphicsState(state);
+                cmd->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments), 1u);
+                noteDraw();  // M-TR0 K1: draw-call counter
+                ++slot;
+            }
+        }
+        cmd->setTextureState(vsmPagePool_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+        if (!vsmCullLogged_) {
+            nl::core::log::infoCh("scene",
+                "vsm: indirect cull live (hzb ", kVsmVirtualSize, " x", kVsmHzbMips,
+                " min chain, list cap ", kVsmCullListCap, ", hzb occlusion on)");
+            vsmCullLogged_ = true;
+        }
+    }
+
+    // ---- (7) 272B b6 采样常量（csDirect 查表用，每帧全量覆写）----
+    VsmSampleConstantsCB sc{};
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+        std::memcpy(sc.levelMvp[l], vsmLevelMvp_[l], sizeof(vsmLevelMvp_[l]));
+    // fp.options[3] = --vsm-rayref：params.x=0 → csDirectVsm 走射线兜底分支（同
+    // blob 射线基准，vsm-vs-ray 门的对位渲染；见 example/s15-clipmap/run.bat）。
+    sc.params[0] = (params.options[3] > 0.5f) ? 0.0f : 1.0f;
+    sc.params[1] = 0.003f;
+    sc.params[2] = static_cast<float>(kVsmVirtualSize);
+    sc.params[3] = static_cast<float>(kVsmPoolTexels);
+    cmd->writeBuffer(vsmSampleConstants_, &sc, sizeof(sc));
+
+    // ---- 统计 + 一次性日志 ----
+    vsmDebug_.frame = vsmFrame_;
+    vsmDebug_.poolUsed = static_cast<std::uint32_t>(vsmPageCache_.size());
+    vsmDebug_.poolTotal = kVsmPoolPages;
+    vsmDebug_.reqPages = reqPages;
+    vsmDebug_.dirtyPages = 0;
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l) {
+        vsmDebug_.dirtyPages += static_cast<std::uint32_t>(vsmDirtyPages_[l].size());
+        std::uint32_t cnt = 0;
+        for (const auto& e : vsmPageCache_)
+            if ((e.first >> 62u) == std::uint64_t(l)) ++cnt;
+        vsmDebug_.levelAlloc[l] = cnt;
+        vsmDebug_.texelSize[l] = vsmTexel_[l];
+    }
+    vsmDebug_.evictions = vsmEvictions_;
+
+    if (!vsmLogged_) {
+        nl::core::log::infoCh("scene",
+            "vsm clipmap live (pool ", kVsmPoolTexels, "x", kVsmPoolTexels,
+            " R32F ", kVsmPoolPages, " pages, ", kVsmLevels, " levels, cpu allocator)");
+        vsmLogged_ = true;
+    }
+}
+
+// M15.1：HUD 统计填充（--vsm-panel 才 show；pollVsmHud 由两后端 beginFrame 段
+// 调用，与 pollCullTimer 同位）。ASCII 纪律 §2.19。
+void Scene::pollVsmHud(HudFrame* hud) const {
+    if (!hud || !hud->vsmDebug.show) return;
+    char (*lines)[96] = hud->vsmDebug.lines;
+    int n = 0;
+    std::snprintf(lines[n++], 96, "VSM clipmap  frame %u",
+                  static_cast<unsigned>(vsmDebug_.frame));
+    std::snprintf(lines[n++], 96, "pool %u / %u pages  evict %u",
+                  static_cast<unsigned>(vsmDebug_.poolUsed),
+                  static_cast<unsigned>(vsmDebug_.poolTotal),
+                  static_cast<unsigned>(vsmDebug_.evictions));
+    std::snprintf(lines[n++], 96, "req %u  dirty %u",
+                  static_cast<unsigned>(vsmDebug_.reqPages),
+                  static_cast<unsigned>(vsmDebug_.dirtyPages));
+    for (std::uint32_t l = 0; l < kVsmLevels; ++l)
+        std::snprintf(lines[n++], 96, "L%u alloc %3u  texel %.4f",
+                      static_cast<unsigned>(l),
+                      static_cast<unsigned>(vsmDebug_.levelAlloc[l]),
+                      static_cast<double>(vsmDebug_.texelSize[l]));
+    hud->vsmDebug.lineCount = n;
 }
 
 bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
@@ -8702,6 +9756,13 @@ void Scene::shutdown() {
     directConstants_ = nullptr;
     directW_ = 0;
     directH_ = 0;
+    // M15.1：csDirectVsm 双入口链句柄。
+    csDirectVsm_ = nullptr;
+    directVsmPSO_ = nullptr;
+    directVsmLayout_ = nullptr;
+    directVsmSet_ = nullptr;
+    directVsmW_ = 0;
+    directVsmH_ = 0;
     // M9.2：reference 链句柄（rtTarget_ / present 共用对象已在上面统一释放）。
     reference_ = false;
     refFailed_ = false;
@@ -8891,6 +9952,52 @@ void Scene::shutdown() {
     shadowLightCB_ = nullptr;
     shadowConstants_ = nullptr;
     shadowMap_ = nullptr;
+    // M15.0：VSM 资源随场景一并清空。
+    vsmPagePool_ = nullptr;
+    vsmPageTable_ = nullptr;
+    vsmFb_ = nullptr;
+    vsmConstants_ = nullptr;
+    vsmSampleConstants_ = nullptr;
+    vsmMarkConstants_ = nullptr;
+    vsmMarkBits_ = nullptr;
+    for (auto& rb : vsmReadback_) rb = nullptr;
+    pipelineVsm_ = nullptr;
+    pipelineVsmClear_ = nullptr;
+    vsmMarkPSO_ = nullptr;
+    vsmMarkLayout_ = nullptr;
+    vsmMarkSet_ = nullptr;
+    vsmMarkW_ = 0;
+    vsmMarkH_ = 0;
+    vsmDepthLayout_ = nullptr;
+    vsmDepthSet_ = nullptr;
+    // M15.2：剔除/HZB 资源必须随 shutdown 释放——Scene 按值成员析构时 device
+    // 已死，漏放的 BindingSet 拖到 ~Scene 释放 = destroyDescriptorPool UAF
+    //（VK 0xC0000005 根因，2026-11-14 dump 实锤；DX12 析构序不同而侥幸不崩）。
+    vsmHzbSet_ = nullptr;
+    vsmCullSet_ = nullptr;
+    vsmHzbLayout_ = nullptr;
+    vsmCullLayout_ = nullptr;
+    vsmHzbPSO_ = nullptr;
+    vsmCullCountPSO_ = nullptr;
+    vsmCullScanPSO_ = nullptr;
+    vsmCullFillPSO_ = nullptr;
+    vsmHzbBuf_ = nullptr;
+    vsmCullBufs_ = nullptr;
+    vsmCullArgs_ = nullptr;
+    vsmClusterSpheres_ = nullptr;
+    vsmDirtyList_ = nullptr;
+    vsmCullConstants_ = nullptr;
+    vsmCullLogged_ = false;
+    // M15.1：CPU 分配器状态一并清空（跨帧缓存不可跨 shutdown 存活）。
+    vsmPageCache_.clear();
+    vsmFreePages_.clear();
+    for (auto& d : vsmDirtyPages_) d.clear();
+    vsmSubmitted_ = 0;
+    vsmFrame_ = 0;
+    vsmEvictions_ = 0;
+    vsmLightInit_ = false;
+    vsmReady_ = false;
+    vsmLogged_ = false;
     for (auto& fb : shadowFb_) fb = nullptr;
     pipelineShadow_ = nullptr;
     shadowCount_ = 0;

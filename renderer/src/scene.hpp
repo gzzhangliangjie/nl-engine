@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace nl::renderer::detail {
@@ -76,6 +77,75 @@ struct ShadowConstantsCB {
     float params[4][4];        // x=enabled, y=depthBias, z=mapSize, w 未用
 };
 static_assert(sizeof(ShadowConstantsCB) == 320, "cbuffer layout must match shader");
+
+// M15.0：与 vsm.slang 的 VsmDepthConstants（b0）/ direct.slang 的 VsmConstants
+//（b6）逐字节对应（同一块 80B volatile CB 跨管线双寄存器）。
+// M15.1 深度 pass：params 位型复用（asuint 解包）——x = packed winX(4b)|winY<<4，
+// y = asuint(vertsPerCluster)；per-dirty-page 覆写（maxVersions 2048）。
+// 采样侧（csDirect b6 的 272B VsmSampleConstantsCB）：params = enabled /
+// depthBias / virtualSize / poolSize（M15.0 后两者同为 2048）。
+struct VsmConstantsCB {
+    float lightMvp[16];        // float4x4（列主序，mul(M, v)）
+    float params[4];
+};
+static_assert(sizeof(VsmConstantsCB) == 80, "cbuffer layout must match shader");
+inline constexpr std::uint32_t kVsmVirtualSize = 2048;   // 每级虚拟空间 texel（16×16 页 × 128）
+
+// M15.1（S15）：csDirect b6 采样常量（272B）——4 级 clipmap MVP + 参数。
+// 与 vsm.slang csDirect 侧 cbuffer VsmConstants(b6) 逐字节对应（M15.0 的 80B
+// 跨管线共用 CB 拆成两块：深度 pass b0 仍 80B 单级版，采样 b6 独立 272B）。
+struct VsmSampleConstantsCB {
+    float levelMvp[4][16];     // 每级光源正交 lightViewProj（列主序；level 0 最细）
+    float params[4];           // x=vsm 开关 / y=depthBias / z=虚拟 texel 数 / w=池 texel 数
+};
+static_assert(sizeof(VsmSampleConstantsCB) == 272, "cbuffer layout must match shader");
+
+// M15.1：标页常量（336B）——csMark 专用（b6 同槽不同 set，与 csDirect b6 无冲突）。
+// 与 vsm.slang cbuffer VsmMarkConstants(b6) 逐字节对应。
+struct VsmMarkConstantsCB {
+    float invViewProj[16];     // inverseMat4(params.viewProj)（probe 同款，nl/math）
+    float levelMvp[4][16];     // 每级光源正交（与深度 pass / 采样侧同源同帧）
+    float depthSize[4];        // x=visW, y=visH, z=virtualSize, w 未用
+};
+static_assert(sizeof(VsmMarkConstantsCB) == 336, "cbuffer layout must match shader");
+
+// M15.2：剔除/HZB 常量（288B）——b1 剔除专用 set，与 vsm.slang VsmCullConstants
+// 逐字节对应。levelMvp[4] 同源同帧；cullParams = {clusterCount, dirtyCount,
+// virtualSize, vertsPerCluster}；hzbParams = {srcMip(-1=页池直采), dstMip,
+// dstDim, poolDim}（csHzb 每级一版 volatile 覆写）。
+struct VsmCullConstantsCB {
+    float levelMvp[4][16];
+    float cullParams[4];
+    float hzbParams[4];
+};
+static_assert(sizeof(VsmCullConstantsCB) == 288, "cbuffer layout must match shader");
+
+inline constexpr std::uint32_t kVsmLevels = 4;                          // clipmap 级数
+inline constexpr std::uint32_t kVsmPagesPerLevel = 256;                 // 每级 16×16 页
+inline constexpr std::uint32_t kVsmPageTableEntries = kVsmLevels * kVsmPagesPerLevel;
+inline constexpr std::uint32_t kVsmPoolTexels = 4096;                   // 页池边长 texel
+inline constexpr std::uint32_t kVsmPoolPages = 1024;                    // 池 32×32 物理页（64MB R32F）
+
+// M15.2 剔除/HZB 布局常量（与 vsm.slang kHzbOffsets/kCullListCap 双持对齐）：
+// HZB = 2048² 起 12 级 min 链（mip0 = 页池 2×2 min；页 128 池 texel = 64 hzb
+// texel，页级 = mip6）；cullBufs = count[0,1024) / base[1024,2048) /
+// cursor[2048,3072) / list[3072, 3072+cap) / 尾 1 word 溢出旗标。
+inline constexpr std::uint32_t kVsmHzbMips = 12;
+inline constexpr std::uint32_t kVsmHzbWords = 6553600;                  // Σ (2048>>k)²
+inline constexpr std::uint32_t kVsmCullListCap = 262144;
+inline constexpr std::uint32_t kVsmCullBufWords = 3072 + kVsmCullListCap + 1;
+
+// M15.1 HUD 数据（pollVsmHud 填充，Scene 自持统计；ASCII 纪律 §2.19）。
+struct VsmDebugState {
+    std::uint32_t frame = 0;                    // 分配器帧号
+    std::uint32_t poolUsed = 0;                 // 池内已分配物理页
+    std::uint32_t poolTotal = kVsmPoolPages;
+    std::uint32_t reqPages = 0;                 // 本帧请求页数（两级延迟位图）
+    std::uint32_t dirtyPages = 0;               // 本帧需重渲页数（新分配+失效）
+    std::uint32_t evictions = 0;                // 累计 LRU 驱逐
+    std::uint32_t levelAlloc[kVsmLevels] = {};  // 每级缓存页数
+    float texelSize[kVsmLevels] = {};           // 每级 texel 世界尺寸
+};
 
 // M-P3：物理调试线框叠加管线（LINE_LIST）。与 model.slang 同款单源/双目标约定：
 // 一份 debug_line.slang 出 spv/dxil；这里只负责收线顶点、画彩色线段叠加层。
@@ -587,6 +657,9 @@ public:
     // poll 同款「移出 HUD 块」口径——--no-hud 也要出日志锚）；hud 可空。
     // --pass-timing 关 = passTimingWanted_ false = 直返（零 query、零开销）。
     void pollPassTimers(nvrhi::IDevice* device, HudFrame* hud);
+    // M15.1：VSM 页池占用面板填充（--vsm-panel 才 show）。backend beginFrame 段
+    // 调用（与 pollCullTimer 同位）；show=false 零开销。
+    void pollVsmHud(HudFrame* hud) const;
 
     // M2.3：切到另一份 .nmesh（<stem>.lodN.nmesh）。只重建 VB/IB，shader / pipeline /
     // binding set 全部复用；读盘或展开失败时保持原层不变（先成功后替换）。
@@ -1114,6 +1187,102 @@ private:
     nvrhi::BindingSetHandle      directComputeSet_;
     nvrhi::BufferHandle          directConstants_;      // volatile CB 32B（b3：清屏色 + shadow 参数）
     std::uint32_t                directW_ = 0, directH_ = 0;  // set 绑定的尺寸版本
+    // M15.1 拆双入口（拍板 B）：csDirectVsm（direct.csvsm，+b6/t14/t15）--vsm 专用；
+    // 纯净 csDirect blob 与 s9 冻结基线 bytes 一致，VSM 查表隔离进本入口。
+    nvrhi::ShaderHandle          csDirectVsm_;
+    nvrhi::ComputePipelineHandle directVsmPSO_;
+    nvrhi::BindingLayoutHandle   directVsmLayout_;      // 同上 + b6 + t14 + t15
+    nvrhi::BindingSetHandle      directVsmSet_;
+    std::uint32_t                directVsmW_ = 0, directVsmH_ = 0;  // vsm set 尺寸版本
+
+    // ---- M15.0/M15.1（S15）：VSM 虚拟阴影贴图（--mode shadow 上 --vsm 开关）----
+    // 物理页池 2048² R32F（128²/页 × 16×16 页）+ 1024 项页表（4 级 × 256，
+    // StructuredBuffer<uint>，entry = poolPageX | poolPageY<<8，0xFFFFFFFF 未分配）
+    // + 80B volatile CB（深度 pass b0，per-dirty-page 覆写 maxVersions 2048）
+    // + 272B volatile CB（csDirectVsm b6 采样）+ 336B volatile CB（csMark b6 标页）。
+    // M15.1（方案 A 拍板 2026-11-13，写回 S15-PLAN）：GPU compute 标页（吃
+    // visBuffer_ deviceZ，UE PageMarking 对位）→ cullReadback_ 同款 2 帧延迟
+    // readback 环 → CPU 分配器（空闲链表 + 跨帧页缓存 + LRU 驱逐 + 灯向变更好
+    // 全失效）→ CPU 逐级写页表 + 逐 dirty 页下发 draw（clear quad 覆写 1.0 +
+    // 全簇 pulling 几何，MIN 混合）。确定性保留（静态相机下帧序可复现，bytes
+    // 基线纪律不破）。csDirect blob 对 t14/t15/b6 是静态引用 → layout/set 无条件
+    // 扩槽；--vsm 关闭帧也写零版 272B b6 + 声明 pool/table 态（基线零扰动）。
+    bool                         vsmReady_ = false;     // 懒建成功标记
+    bool                         vsmFailed_ = false;    // 懒建失败只报一次
+    bool                         vsmLogged_ = false;    // 就绪日志一次性
+    nvrhi::TextureHandle         vsmPagePool_;          // 2048² R32F（16×16 物理页）
+    nvrhi::BufferHandle          vsmPageTable_;         // StructuredBuffer<uint> 1024 项
+    nvrhi::FramebufferHandle     vsmFb_;                // 色 attachment = 页池
+    nvrhi::BufferHandle          vsmConstants_;         // volatile CB 80B（深度 pass b0）
+    nvrhi::BufferHandle          vsmSampleConstants_;   // volatile CB 272B（csDirect b6）
+    nvrhi::GraphicsPipelineHandle pipelineVsm_;         // vsm.vs/ps（全簇 pulling 深度）
+    nvrhi::GraphicsPipelineHandle pipelineVsmClear_;     // vsm.vsclear/psclear（清页 quad，blend 关）
+    nvrhi::BindingLayoutHandle   vsmDepthLayout_;       // b0 + t1/t2/t3
+    nvrhi::BindingSetHandle      vsmDepthSet_;
+    // ---- M15.1 标页（csMark）----
+    nvrhi::ComputePipelineHandle vsmMarkPSO_;
+    nvrhi::BindingLayoutHandle   vsmMarkLayout_;        // t0 visBuffer_ + u0 位图 + b6
+    nvrhi::BindingSetHandle      vsmMarkSet_;
+    std::uint32_t                vsmMarkW_ = 0, vsmMarkH_ = 0;   // set 的 visBuffer_ 尺寸版本
+    nvrhi::BufferHandle          vsmMarkConstants_;     // volatile CB 336B（csMark b6）
+    nvrhi::BufferHandle          vsmMarkBits_;          // RWStructured<uint> 32 word（4 级位图）
+    nvrhi::BufferHandle          vsmReadback_[2];       // 128B 回读环形（cullReadback_ 同款）
+    std::uint32_t                vsmSubmitted_ = 0;     // 已提交标页帧数
+    // 槽位配对的窗口原点（世界页坐标）——纯 CPU 值，随 copyBuffer 同帧登记到
+    // CPU 环形（GPU 只回传 128B 位图；若把 160B 一起 copy 会越过 128B 位图
+    // buffer 越界读 → GPU page fault 实拍踩坑）。
+    int                          vsmSlotOrigin_[2][kVsmLevels][2] = {};
+    // ---- M15.2 间接阴影剔除（拍板 B 2026-11-14：两阶段 HZB 本里程碑落地）----
+    // 簇球 × dirty 页光源投影判交（UE CullPerPageDrawCommands 窄化）+ 足迹自适应
+    // HZB 遮挡（bevy sample_hzb 对位，min-only 近似洞登记 UE-DIFFS）→ 每页段式簇
+    // 列表 + DrawIndirectArguments（startInstanceLocation 恒 0，双后端语义规避）。
+    // HZB = 页池半分辨率 min 链 StructuredBuffer（上帧深度语义，bevy first-cull
+    // 对位；MIN 混合下正确遮挡剔除深度无损）。vsMain 改实例列表取簇号（b0 z 段
+    // 传 slot）。
+    nvrhi::BufferHandle          vsmClusterSpheres_;    // StructuredBuffer<float4>（独立于 cull 模式）
+    nvrhi::BufferHandle          vsmHzbBuf_;            // RWStructured<uint> 6553600 word（≈25MB）
+    nvrhi::BufferHandle          vsmCullBufs_;          // RWStructured<uint> 68609 word
+    nvrhi::BufferHandle          vsmCullArgs_;          // isDrawIndirectArgs 1024×16B
+    nvrhi::BufferHandle          vsmDirtyList_;         // StructuredBuffer<uint4> 1024
+    nvrhi::BufferHandle          vsmCullConstants_;     // volatile CB 288B（b1）
+    nvrhi::ComputePipelineHandle vsmHzbPSO_;
+    nvrhi::ComputePipelineHandle vsmCullCountPSO_;
+    nvrhi::ComputePipelineHandle vsmCullScanPSO_;
+    nvrhi::ComputePipelineHandle vsmCullFillPSO_;
+    nvrhi::BindingLayoutHandle   vsmHzbLayout_;         // b1 + t6 页池 + u1 hzb
+    nvrhi::BindingSetHandle      vsmHzbSet_;
+    nvrhi::BindingLayoutHandle   vsmCullLayout_;        // b1 + t4/t5/t7 + u2/u3
+    nvrhi::BindingSetHandle      vsmCullSet_;
+    bool                         vsmCullLogged_ = false;  // 就绪日志一次性
+
+    // ---- M15.1 CPU 分配器状态（跨帧页缓存；方案 A 核心）----
+    struct VsmPageCacheEntry { std::uint32_t poolPage; std::uint32_t lastUsed; };
+    // key = level<<62 | (uint32(wpx)&0x3FFFFFFF)<<32 | uint32(wpy)。wx 必须掩掉
+    // 最高 2 位：uint32 回转的负 wx（0xFFFFFFxx）最高两位是 11，不掩会 OR 进
+    // 级位段把 l<<62 完全吞掉——四级同 (wx,wy) 的 key 相同 → 跨级共池页 +
+    // dirty 只画一次 → 页表多级槽指向错误尺度内容（M15.1 漏阴影根因实拍）。
+    // wy 在低 32 位不接触级位段，无需掩码。
+    std::unordered_map<std::uint64_t, VsmPageCacheEntry> vsmPageCache_;
+    std::vector<std::uint32_t>   vsmFreePages_;          // 空闲物理页线性号 0..255
+    // dirty 页 = 池线性号 + 窗口相对页号 (px,py)——per-dirty-page draw 需要本页
+    // 覆盖窗口 NDC 的哪个子区，把窗口子区映射进 128² 页（shader remap；放大
+    // viewport 方案在 VK 后端产生确定性页丢失，已废弃；见 M15.1 踩坑）。
+    struct VsmDirtyPage { std::uint32_t poolPage; std::uint32_t px; std::uint32_t py; };
+    std::vector<VsmDirtyPage>    vsmDirtyPages_[kVsmLevels];  // 本帧需渲染页
+    float                        vsmTexel_[kVsmLevels] = {};    // 每级 texel 世界尺寸（init 定死）
+    float                        vsmLevelMvp_[kVsmLevels][16];  // 每帧预算（HUD/表同步用）
+    float                        vsmLastLightDir_[3] = {0.f, 0.f, 0.f};
+    bool                         vsmLightInit_ = false;
+    std::uint32_t                vsmFrame_ = 0;
+    std::uint32_t                vsmEvictions_ = 0;
+    VsmDebugState                vsmDebug_;
+    float                        vsmAabbMin_[3] = {0.f, 0.f, 0.f};   // 场景 AABB（init 时算一次）
+    float                        vsmAabbMax_[3] = {0.f, 0.f, 0.f};
+    bool ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
+                          const char* shaderSuffix, std::string& outError);   // initShadow 尾部调用
+    void runVsmDepthPass(nvrhi::ICommandList* cmd, const FrameParams& params);   // M15.1 整段（含 CPU 分配器）
+
+
 
     // ---- M9.2：reference 模式（离线参考，渐进式多帧累积直光真值）----
     // 与 shadow 互斥（一个 Scene 只跑一种）。复用面：输出 = rtTarget_ /
