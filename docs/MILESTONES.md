@@ -3322,3 +3322,18 @@
 - Bash heredoc 会改写 `\s`→`/s`（mangling 反斜杠）——带反斜杠正则一律 Write 脚本文件跑。
 
 **下一步**：待拍板 = ① e1b 基线重拍（新管线正确输出 vs 旧管线忽略 MR）；② asset-ingest wt 拆除（照 net §7.6 先例）；③ car05 Blender 导出口径（roughnessFactor=0/metallic 缺省 1）是否在转换器侧补映射——暂按 flags=0 标量路径不受影响。
+
+## A类 P9 V2 后续：car05 MR 贴图接线 + 引擎 GLB 因子缺省 + e1b 基线重拍（master，2026-11-13，tag `asset-mr-fix`，commit `8641fbe`）
+
+**动作**：① 转换器两处修复——`unity_mat.py` MG-map 分支 `roughnessFactor` 改恒 1.0（glTF 因子与纹理相乘，旧 `1-_GlossMapScale` 把贴图 roughness 乘成 0；scale 烘进 swizzle，新增 `mgSmoothScale` 传递）；`fbx2glb.py` 补 metallicRoughnessTexture 接线（Unity MG R=metallic/A=smooth → glTF G=1−A×scale/B=R numpy swizzle；bpy `images.new+save` 落盘 PNG 全黑（Blender 5.2 实锤，两探针）→ 绕开为 numpy 直写 32 位未压缩 TGA + `images.load` Non-Color；Separate Color G→Roughness/B→Metallic 标准节点形）。② 引擎因子缺省对齐——ModelComponent/SceneObjectDesc 加 `hasPbrOverride`（JSON 显式键才置位，serialise 不写键，roundtrip byte-identical 不变）；PreparedBatch/SceneMeshBatch 补 GLB metallic/roughness 因子；实例 [20]/[21] 改「JSON 覆盖优先否则 batch GLB 因子」，与 [22..27] 权威口径对齐。③ 重转 Car05.glb + e1b 基线重拍（4 用例 × 2 后端 8 张）。
+
+**提交版本**：master `8641fbe` → tag `asset-mr-fix`。
+
+**完成情况**
+- ✅ Car05.glb 8/9 材质带 MR 贴图（Misc 无 MG-map 走因子路径正确）；Body G mean=42.5 与原 TGA (1−A) 逐位吻合。
+- ✅ 双后端删 exe 重建 16/16 selftest；car-pbr-light 双后端 exit 0、互检 1px/255；与修复前 diff 12293px 集中前车身区（车漆光泽 = 预期特性）。
+- ✅ e1b 重拍后回归门 `--only ecs-e1b` **8/8 ALL GREEN（bytes 8 / near 0 / FAIL 0）**；DX/VK 成对最大 8px/6（scale 用例）。
+
+**踩坑情况**
+- bpy `data.images.new + pixels.foreach_set + save()` 在 Blender 5.2 内存读回有数据、落盘 PNG 全黑——非压缩/色彩空间问题，绕开 = numpy 直写 TGA（descriptor 0x20 top-down，BGRA）。
+- e1b 锚 0/8 的根因链闭环：MR 贴图（转换器丢弃 + 因子被引擎无视）→ 两层修复 + 基线重拍一次覆盖，无残留 FAIL。
