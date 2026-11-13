@@ -10970,6 +10970,101 @@
      "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
+  },
+  {
+   "id": "weather-w0",
+   "label": "WEA M-WEA0",
+   "name": "天气状态层（离散态+平滑过渡，纯 CPU 确定性，参数层方案 A 第一步）",
+   "tag": "weather-w0",
+   "date": "2026-11-13",
+   "summary": "WEA 天气轨道第一步（计划 WEATHER-PLAN，M-WEA0~WEA3，方案 A 参数层驱动 Lumen）：nl/core weather 纯 CPU 零图形符号——(seed, 时间)→WeatherState 纯函数，离散天气态（clear/partly/overcast/rain）+ 跨边界 20s smoothstep 单调过渡（2026-11-13 用户拍板 Q-WEA0-A/B：离散态+平滑过渡 / nl_core 新模块）+ preset 锁定手调语义 + groundWetness 固定步长 ODE 积分（雨后仍湿的记忆状态，bevy_weather 口径）。确定性纪律：splitmix64 + 纯 double，同 seed+同时间轴逐字节重现（CPU 侧 bytes，Q11-1 口径）。nanite-tools weather：TSV dump（21 列全参数）+ C++ --verify 同 seed 双建+无状态 evaluate 三方对拍 + 独立 python 孪生实现逐行对拍（901 行，最大偏差 4.65e-04 = libm 噪声，防假绿）+ usage/负向退出码契约（0/1/2）。零渲染改动、零基线影响、不 bump kStage。",
+   "acceptance": [
+    "selftest weather 10 锚点全 PASS：同 seed 双建逐字节一致、stateless evaluate==timeline 采样、preset rain 锁定+湿度饱和、preset clear 恒干、多 seed 长时轴参数范围扫描、0.25s 步长平滑连续性、非法 preset/null 拒绝、duration<=0 钳制、越界 t 钳制",
+    "dump TSV：seed42 自动时间轴 901 行 / seed7 preset rain 151 行，21 列全参数（太阳/天穹/云透射/高度雾/湿度/雨强）",
+    "C++ --verify：同 seed 双建时间轴 + evaluateWeather 三方逐字段对拍全等（901/601 行）；verify.py 独立 python 孪生重算两条 TSV 全行对拍 PASS（最大偏差 4.65e-04，仅 libm ulp 噪声）——跨实现防假绿",
+    "ctest wea0-selftest/wea0-verify/wea0-dump/wea0-negative DX12+VULKAN 双后端 4/4；双后端构建 OK + viewer selftest 16/16",
+    "交代物：example/weather-w0/（run.bat ALL GREEN exit 0 + acceptance.png 真实 TSV 曲线证据图 + 12 份日志/TSV）+ 本卡五用例 + WEATHER-TOOLS-GUIDE.md"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nanite-tools.exe",
+    "vulkan": "build/VULKAN/nanite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：weather 无参数（退出码 2，打印用法）",
+     "kind": "tool",
+     "note": "weather 子命令无参走 usage 路径，退出码契约 0=PASS 1=FAIL 2=usage error。",
+     "args": [
+      "weather"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit: 0=PASS 1=FAIL 2=usage error",
+     "command": "nanite-tools weather"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest weather：10 锚点（确定性/preset/范围/连续性/负向）",
+     "kind": "tool",
+     "note": "M-WEA0 验收核心：同 seed 重放逐字节、preset 湿度动力学、参数范围契约、0.25s 步长平滑、边界钳制。",
+     "args": [
+      "selftest",
+      "weather"
+     ],
+     "expectExit": 0,
+     "expectLog": "weather selftest: PASS",
+     "command": "nanite-tools selftest weather"
+    },
+    {
+     "id": "dump",
+     "name": "dump：seed42 自动时间轴 1800s TSV（21 列全参数）",
+     "kind": "tool",
+     "note": "天气曲线数据源：太阳/天穹/云透射/高度雾/湿度/雨强逐时间点落盘。",
+     "args": [
+      "weather",
+      "--seed",
+      "42",
+      "--duration",
+      "1800",
+      "--step",
+      "2"
+     ],
+     "expectExit": 0,
+     "expectLog": "sunAzimuth",
+     "command": "nanite-tools weather --seed 42 --duration 1800 --step 2"
+    },
+    {
+     "id": "verify",
+     "name": "verify：同 seed 双建+stateless evaluate 三方对拍（901 行逐字节）",
+     "kind": "tool",
+     "note": "确定性契约机械验证：任何重建路径必须逐字段一致。",
+     "args": [
+      "weather",
+      "--seed",
+      "42",
+      "--duration",
+      "1800",
+      "--verify"
+     ],
+     "expectExit": 0,
+     "expectLog": "weather verify: PASS",
+     "command": "nanite-tools weather --seed 42 --duration 1800 --verify"
+    },
+    {
+     "id": "negative",
+     "name": "negative：--preset bogus（退出码 2）",
+     "kind": "tool",
+     "note": "非法 preset 名走 usage error 路径。",
+     "args": [
+      "weather",
+      "--preset",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "unknown preset",
+     "command": "nanite-tools weather --preset bogus"
+    }
+   ]
   }
  ]
 }

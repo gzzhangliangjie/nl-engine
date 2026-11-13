@@ -3241,3 +3241,29 @@
 - **完成情况**：🟢 四卡 run.bat 五段式 ALL GREEN + regression `--only cam-1b/cam-2b/cam-3b/cam-mcam4` 4+2+2+2 全 bytes；🟢 旧卡连带回归 cam-m0 10/10、cam-1a 6/6、cam-3a 6/6、cam-b 2/2、drive-m3 12/12、s8.2 4/4 全 bytes ALL GREEN；🟢 ctest cam 双后端 2/2；🟢 确定性三重验证：同参重拍逐字节、双后端 `cam final` 日志锚逐字一致、smoothshake 与 plain free PNG 必须不同（效果可见闸）；🟢 `server.py --check` exit 0（kStage 保持 S8.2，70 张既有基线零波及）。
 - **踩坑**：① **`forwardFromView` 读错矩阵行/列**——列主序 view 矩阵的 backward 在第三**行**（`m[2]/m[6]/m[10]`），原实现读第三**列**（`m[8..10]` = right.z/up.z/backward.z），chase/track 渲染视线错 45° 级、主体不居中（track 水平分量碰巧不受影响才没当场露馅）；手算 `-(m8,m9,m10)` 与实测 outRig 偏移完全吻合实锤后修复，Orbit 路径自带视图矩阵不经此函数故 70 张既有基线零波及。② **`ChaseCamera::lookDirection` 按值传参**——out 参数写不回调用方，`seedFreeFromChase`/HUD/trace yaw 列全被污染恒 0；旧锚「free fly +Z」「eye_z 严格递增」把 bug 语义锁死，按「锚从实测反推」口径改为沿 seed 视线方向断言。③ **cam-tools stdout CRLF**——C 运行时文本模式把 `\n` 膨胀成 `\r\n`，与 `.gitattributes` 的 `*.tsv eol=lf` 永远对不上，旧卡 run.bat 的 TSV 字节比对在今天 checkout 后必挂（本轮前已潜伏）；`_setmode(_O_BINARY)` 根治后 cam-trace/free-trace/cine-trace 内容逐字节还原、cam-1a director-trace.tsv + acceptance.png 按新真实 yaw/pitch 重生成。④ chase 机位 eye 高度疑云实为收敛值自洽（pitch 被 seed 成 orbit 俯角 → `desired.y = 0.56+3.5-0.96`），非 bug。⑤ 双后端并行构建抢 PDB 致 C1090（0x6BA RPC）→ 清 mspdbsrv + 串行构建即过。
 - **提交版本**：feat/camera 本节 commit + annotated tag `cam-m5`；track camera 整轨（M-CAM0~CAM4 + 视觉卡）至此全部落地，merge 回 master 后轨道收官。冻结面：OrbitCamera 一字未动、kStage 不 bump、`resolveViewProjection`/渲染管线零改动、除 cam-b 外全部既有基线零重拍。
+
+---
+
+## WEA M-WEA0：天气状态层——离散态+平滑过渡纯 CPU 确定性（feat/weather 轨道首个里程碑，2026-11-13，tag `weather-w0`）
+
+**动作**：WEA 轨道开工（用户指令「WEA天气系统 wt开工」）→ 开发计划确认（用户指令「先确定开发计划」）：正式任务书 `docs/WEATHER-PLAN.md`（2026-11-12 立项拍板 Q-WE1~WE6：方案 A 参数层驱动 Lumen / 参数层穿插项 / 解析天空 / 不进 TLAS / Q-WE5 冻结基线重拍保留为 M-WEA1 闸门 / 零 vendored），本轮补 M-WEA0 两项拍板并写回计划书 §9b——**Q-WEA0-A 时间线形态 = 离散天气态+平滑过渡**（bevy_weather `forecast()` 口径，cvar「强制下雨」语义自然、GI 证据好对齐晴→阴→雨叙事）、**Q-WEA0-B 落点 = nl_core 新模块**（M-WEA1 viewer 直接 include）。三处证据（M-WEA0 模块对应）：bevy_weather 0.2.0（联网实读，本地 bevy 仓无此社区 crate；时钟+seed 纯函数、wetness 记忆状态）/ Wicked Engine `WeatherComponent` 参数全集（范围标尺）/ Carrot 无时变参数（反面教材）+ UE 天气层是 Lumen 一等输入（M-WEA0 只备参数不碰渲染）。本仓实读：`game_clock.hpp`（确定性纪律同源）、`nanite-tools/main.cpp`（子命令分发）、`gl0` 卡与 `run.bat`（A 类工具版交代模板）。track 注册：wt_pool TRACKS + PARALLEL-TRACKS §7.1 天气行 + `wt_pool claim --track weather --milestone M-WEA0`；wt `nl-engine-weather` 建于 master `6a824b1`（junction `.workbuddy` + `thirdparty/slang/dist` + skip-worktree 9 文件）。
+
+**提交版本**：`feat/weather` M-WEA0 提交（annotated tag `weather-w0`）。A 类穿插轨道，**不 bump `kStage`（仍 S8.2）、零渲染改动零基线影响**（`renderer/` 与全部 `.slang/.slangh`/`example/` 既有基线一行未碰）。
+
+**完成情况**：
+- `core/include/nl/core/weather.hpp` + `core/src/weather.cpp`：`WeatherState`（21 字段：太阳方位/仰角/强度/色温、天穹 zenith/horizon RGB（M10.1 `skyGradient` 常量同源基色经夜/暖/浊/云调制）、turbidity/sunDisk、云覆盖/透射、高度雾、groundWetness/rainIntensity）+ `WeatherTimeline`（折迭一次 sample 只读）+ `evaluateWeather` 无状态入口 + preset 锁定（kCount=自动状态机）。模型：4 离散态（clear/partly/overcast/rain）× 参数轮廓表，纪元 120s，seed 驱动 splitmix64 状态机（持续性 0.55），跨边界 20s smoothstep 单调过渡（尾半 0→0.5 + 头半 0.5→1 拼接），wetness 固定 1s 步长 ODE（雨 12.5s 饱和、雨停一阶干燥）+ 步内线性插值采样。日长 600s。
+- `nanite-tools weather` 子命令：TSV 21 列 dump（stdout/`--tsv`）、`--verify`（同 seed 双建 + stateless 三方逐字段对拍）、preset 锁定、usage/负向退出码 0/1/2 契约；`selftest weather` 10 锚点（确定性双跑、evaluate==timeline、preset rain 饱和/clear 恒干、多 seed 范围扫描、0.25s 平滑连续性、非法 preset/null/duration/越界 t 钳制）。
+- ctest `wea0-selftest`/`wea0-verify`/`wea0-dump`/`wea0-negative` DX12+VULKAN 双后端 4/4 PASS；双后端构建 OK + viewer selftest 16/16。
+- 防假绿：`example/weather-w0/verify.py` 独立 python 孪生（不引 C++ 代码，splitmix64+状态机+过渡+ODE+天穹全量重实现）逐行对拍两条真实 TSV（901+151 行）PASS，最大偏差 4.65e-04（libm sin ulp 噪声，容差=printf 舍入量级）。
+- 交代物：`example/weather-w0/` run.bat ALL GREEN exit 0（selftest/双 dump/双 verify/孪生/usage/negative/证据图）+ `acceptance.png`（4 曲线带全部源自真实 TSV：日周期/云与湿度/太阳仰角弧/preset rain 饱和 + 4 日志锚）+ cases.json `weather-w0` 卡 5 用例（regression 冒烟 10/10 bytes ALL GREEN）+ `docs/weather/WEATHER-TOOLS-GUIDE.md`（模型契约/确定性契约/验收记录/坑位）。
+- `server.py --check` exit 0（stage S8.2 旧卡无回归；新卡不在其覆盖范围，按 M9.0 澄清口径以 run.bat + regression 双机械校验为准）。
+
+**踩坑**：
+- **分段+窗口混合的端点表示唯一性**：`sample(duration)`（端点 clamp）与 `evaluateWeather`（内部定位）在纪元边界/时间轴末端分歧（blend 1.0 vs 0.0）→ 修正 = 边界瞬时归一（u==0 且 e>0 → 上一纪元 u=1）+ kinds 多折一纪元供尾过渡（57/901 行分歧实锤后定位）。
+- **双窗过渡跳回**：纪元尾/纪元头各混一次同一条过渡 → 边界处参数跳回上一态 → 头尾拼一条单调 smoothstep + 抽 `blendedProfileAt` 共享函数（fold 与 sample 唯一事实源）。
+- **wetness 1s 网格阶梯**：0.25s 采样每逢整秒跳一格（0.033>阈值 0.03）→ 采样侧步内线性插值（仍确定性）。
+- **nmake 同秒 mtime 跳重链（第三次踩）**：改源码后 `Built target` 仍是旧 exe → 删 exe（必要时连 `nl_core.lib`）强制重链。
+- **Bash cwd 漂移（本轨反复踩）**：跨命令 cwd 重置回主树 → 相对路径 `rm build/...` 两次误删**主树**产物、cases.json 卡误写主树、MILESTONES 台账误提交主树 master（a83b8c0，已 soft reset 还原）——一律同命令内显式 `cd <wt> &&` 或 `git -C <tree>`；主树误删产物以主树重跑构建恢复。
+- `git add -A` 撞 wt 内 `example/s9-reference/nul`（Windows 保留名垃圾文件无法 index）→ 显式逐路径 add。
+
+**下一步**：M-WEA1 参数化天穹+太阳（`weather.slangh` 单一事实源接探针/cache/reference-gi/`--sky-bg`，`traceCB_` 注入；**开工闸 = Q-WE5 冻结基线重拍授权单独拍板 + SHADER-CONVENTIONS 天气参数节 + UE-DIFFS 追加**）；merge 回 master 待用户拍板（M-WEA0+M-WEA1 一并或按用户节奏）。

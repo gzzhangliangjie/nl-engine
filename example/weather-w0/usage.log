@@ -1,0 +1,4 @@
+usage: nanite-tools weather --seed N [--duration SEC] [--step SEC]
+                            [--preset clear|partly|overcast|rain]
+                            [--tsv FILE] [--verify]
+  exit: 0=PASS 1=FAIL 2=usage error

@@ -293,6 +293,7 @@ add_library(nl_core STATIC
     core/src/audio/audio_cvars.cpp      # P8 M-S2：audio.* CVar + audio.dump 命令注册
     core/src/tick_groups.cpp   # P8 M-GL5：命名 TickGroup 注册制（逻辑帧组序契约）
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
+    core/src/weather.cpp       # WEA M-WEA0：天气状态层（离散态+平滑过渡，纯 CPU 零图形符号）
     core/src/crash.cpp         # M-CRASH0：进程级崩溃捕获（关联系统，薄封装，落本地）
     core/src/net/Net.cpp       # NET M-NET0：nl/net 传输层薄封装（PIMPL，core 内唯一 ENet 符号面）
     core/src/net/SnapshotCodec.cpp # NET M-NET1：快照位打包编解码（PIMPL，core 内唯一 bitsery 符号面）
