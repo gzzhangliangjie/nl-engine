@@ -169,6 +169,7 @@ struct Options {
     int  resizeHeight = 0;
     int  color      = 0;
     int  frames     = 8;
+    bool framesExplicit = false;              // 显式传了 --frames（无头验证意图：到帧数即退，不依赖 --screenshot）
     float yawDeg    = 12.0f;  // 与 OrbitCamera 默认一致，默认正脸、截图可复现
     float pitchDeg  = 9.2f;
     bool distSet = false;                     // 用户显式给了 --dist（skin 模式缺省距离不同）
@@ -540,6 +541,7 @@ Options parseArgs(int argc, char** argv) {
             o.color = std::atoi(argv[++i]) % kColorCount;
         } else if (a == "--frames" && i + 1 < argc) {
             o.frames = std::max(1, std::atoi(argv[++i]));
+            o.framesExplicit = true;
         } else if (a == "--input-demo") {
             // P8 M-I2：注入脚本开关；可选起始迭代号（1-based，缺省 5；仅 input-hud
             // 模式消费）。无值形式兼容 flag 直跟其它 --arg 的用法。
@@ -3250,8 +3252,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             window.setTitle(title.str());
         }
 
-        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
-        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        // 退出闸（2026-11-14 根修，M15.2 无头验证挂死事故）：--screenshot / 显式 --frames
+        // 任一存在即按帧数退出；纯交互开窗（两者都没有）不受影响，保持常驻。
+        if ((o.screenshot || o.framesExplicit) && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!o.screenshot && !o.framesExplicit) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     if (o.navCrowdOn && navCrowdSystem) {
@@ -4165,8 +4169,10 @@ int runScene(const Options& o) {
                                 " | triangles ", info.triangleCount,
                                 " | lights ", lights.size());
         }
-        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
-        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        // 退出闸（2026-11-14 根修，M15.2 无头验证挂死事故）：--screenshot / 显式 --frames
+        // 任一存在即按帧数退出；纯交互开窗（两者都没有）不受影响，保持常驻。
+        if ((o.screenshot || o.framesExplicit) && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!o.screenshot && !o.framesExplicit) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     // M-E1b.5 机器出口（run.bat findstr 断言）：tick 模式 + 帧数 + 物体数。
@@ -4322,7 +4328,7 @@ void printUsage() {
               << "  viewer.exe --editor-endpoint <ep>  M-E6: tcp://127.0.0.1:29110 (default) or pipe://name\n"
               << "  viewer.exe --view-id <id>          M-E6: viewport key for multi-view editors (default main)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
-              << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
+              << "  viewer.exe --frames N              frames before screenshot (default 8); explicit --frames exits after N frames even without --screenshot\n"
               << "  viewer.exe --capture-frame N       M-TR2: launched under RenderDoc, capture frame N to .rdc\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
