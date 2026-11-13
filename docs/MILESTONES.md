@@ -3410,4 +3410,4 @@
 - **Bash cwd 漂移第 4~5 次**（gate 已机械拦截 + 主树 gate 提示词立案）：本轨每条命令必须显式 `cd <wt> &&` 开头，忘写即被 gate 拒（三次被拦零损失——闸起效了）。
 - wt 树 viewer.exe/nanite-tools.exe 曾消失（M-WEA0 期间 cwd 漂移 rm 误删，主树 gate 提示词立案同源）。
 
-**下一步**：M-WEA2 云透射+雾（`cloudTransmittance` 进探针/直光衰减 + 高度雾近似——参数已备齐，需拍板接线面）；merge 回 master 待用户拍板（M-WEA0+WEA1 一并或按节奏）。
+**下一步**：M-WEA2 云透射+雾（`cloudTransmittance` 进探针/直光衰减 + 高度雾近似——参数已备齐，需拍板接线面）。（**本行为当时口径留痕；2026-11-14 05:4x 已 merge 回 master（`4090d94`，用户拍板 M-WEA0+WEA1 一并）：冲突仅 MILESTONES 两侧并序，其余 7 个交集文件自动合并 + 语义抽查两侧共存；merge 后双后端 BUILD OK（DX12 首跑 C1090 PDB 并发瞬时挂，串行重试过）+ 抽查 weather-w0 10/10 / weather-w1 10/10 / s15-clipmap 2/2 全 bytes ALL GREEN。wt nl-engine-weather 保留、M-WEA2 续用**）
