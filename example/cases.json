@@ -2488,7 +2488,7 @@
      "id": "cull-inside-hud",
      "name": "真剔除：相机进模型内部，HUD frustum 行 30/237",
      "kind": "image",
-     "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。",
+     "note": "dist0.45 相机在 Suzanne 内部，近平面砍掉外围簇；640x720 竖构图水平视锥更窄，可见数 30（640x360 下是 64——宽高比改变视锥，对照离线工具须带同尺寸）。HUD frustum 行数字来自 indirectArgs.instanceCount 的 2 帧延迟回读，frames>=4 才出数。基线即本图（确定性已验：同机位两跑逐字节相同）；expectLog 同时锁日志数字。 基线 2026-11-13 随崩溃修复 20edfeb（BLAS lod0 回退）连带重拍：HUD 新增 BLAS/TLAS 两行致面板变高（旧图备份 example/_backup-pre-blas-fallback/s4-cull/）。",
      "baselines": {
       "dx12": "example/s4-cull/cull-inside-hud-dx12.png",
       "vulkan": "example/s4-cull/cull-inside-hud-vulkan.png"
@@ -5894,7 +5894,7 @@
      "id": "blas-skip-v2",
      "name": "负向：v1 base 资产无 NFLB 段 → BLAS 跳过不拦路",
      "kind": "pair",
-     "note": "Suzanne.nmesh 是 v1 base（无 fallback 段），initCull hook 的 initBlas 打 skip info 后照常渲染——S8 BLAS 是加法，不拦任何既有路径。HizScene/OcclScene1M 链实测均为 v3 带 fallback（skip 分支的现成资产不存在），负向只能用 v1 base。pair 小图 + expectLog 双断言；expectLog 从实测 log 复制（禁手写纪律：手写的 skip 前提已被实测推翻一次）。",
+     "note": "Suzanne.nmesh 是 v1 base（无 fallback 段），initCull hook 的 initBlas 自崩溃修复 20edfeb 起回退 Suzanne.lod0.nmesh 建 BLAS（104 tri）后照常渲染——S8 BLAS 是加法，不拦任何既有路径。HizScene/OcclScene1M 仍走 fallback 段主路径。基线 2026-11-13 随 20edfeb 连带重拍（旧图备份 example/_backup-pre-blas-fallback/s8-blas/）。",
      "args": [
       "--mode",
       "cull",
@@ -5914,7 +5914,7 @@
       "--size",
       "320x240"
      ],
-     "expectLog": "no fallback section in Suzanne.nmesh",
+     "expectLog": "blas built: Suzanne.lod0.nmesh",
      "command": "viewer.exe --mode cull --model Suzanne.nmesh --hud --screenshot <out.png> --frames 8 --yaw 12 --pitch 9 --dist 4.2 --size 320x240",
      "script": "example/s8-blas/run.bat verify",
      "baselines": {
@@ -10319,6 +10319,85 @@
      "args": [],
      "command": "example/s12-multiscene/run.bat verify",
      "script": "example/s12-multiscene/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "perf-m0",
+   "label": "M-PERF0",
+   "name": "shader 静态 uniformity 门禁（slangc -validate-uniformity，Q-P3 FAIL 闸）",
+   "tag": "perf-m0",
+   "date": "2026-11-13",
+   "summary": "M-PERF0：全量 shader 静态 uniformity 门禁（Q-P1 拍板 A+B 的 A 档）。tools/check-shader-uniformity.py 解析 CMakeLists.txt 的 _ENTRIES_*/文件映射链/_SM66_ARTIFACTS（59 artifacts），逐 artifact × dxil/spirv 双 target 以与 CMake 构建命令严格同源的参数跑 slangc -validate-uniformity（--jobs 4，实测 12.6s）。门禁口径 Q-P3：编译 error 或 warning 行含 uniform -> FAIL(1)；E30081/E39001 等已知非 uniformity 警告 informational。干净基线实锤：59×2 全量零 uniformity 违规零编译错误（304 条 informational）。bat 薄包装 tools/check-shader-uniformity.bat 供卡以 exe 形态执行；selftest 覆盖分类器+解析器。Q-P2 拍板主线 master 不建 track；C 档（-trace-coverage 宿主集成）挂后续单独拍板（见 docs/perf/PERF-PLAN.md §1）。",
+   "acceptance": "run.bat verify 四段 ALL GREEN（selftest / 全量 59 artifacts×2 targets PASS uniformity=0 compileErrors=0 / 负向 --only bogus exit 2 / usage --target bogus exit 2）；工具 --jobs 4 全量 12.6s；selftest 6 断言全过；bat 编码门禁 CRLF+ASCII 达标；GPU 侧零改动零重拍。",
+   "exe": {
+    "dx12": "tools/check-shader-uniformity.bat",
+    "vulkan": "tools/check-shader-uniformity.bat"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：分类器 + CMake 解析器自测",
+     "kind": "tool",
+     "note": "纯标准库自测：uniformity 关键词分类 / E30081 informational / error->违规 / note 忽略 / 文件映射链解析 / _SM66_ARTIFACTS 提取，6 断言。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "check-shader-uniformity selftest: PASS",
+     "command": "check-shader-uniformity.bat selftest",
+     "exe": {
+      "dx12": "tools/check-shader-uniformity.bat",
+      "vulkan": "tools/check-shader-uniformity.bat"
+     }
+    },
+    {
+     "id": "gate",
+     "name": "全量门禁：59 artifacts × dxil+spirv 零 uniformity 违规",
+     "kind": "tool",
+     "note": "解析 CMakeLists（唯一数据源，禁手写清单），逐 artifact 以 CMake 同源参数跑 slangc -validate-uniformity；PASS = uniformity=0 compileErrors=0（Q-P3 闸）。",
+     "args": [],
+     "expectExit": 0,
+     "expectLog": "check-shader-uniformity: PASS",
+     "command": "check-shader-uniformity.bat",
+     "exe": {
+      "dx12": "tools/check-shader-uniformity.bat",
+      "vulkan": "tools/check-shader-uniformity.bat"
+     }
+    },
+    {
+     "id": "negative",
+     "name": "负向：--only 未知名（exit 2 + 锚）",
+     "kind": "tool",
+     "note": "expectLog 从实测 log 复制：'[perf-m0] no artifact matches'。",
+     "args": [
+      "--only",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "no artifact matches",
+     "command": "check-shader-uniformity.bat --only bogus",
+     "exe": {
+      "dx12": "tools/check-shader-uniformity.bat",
+      "vulkan": "tools/check-shader-uniformity.bat"
+     }
+    },
+    {
+     "id": "usage",
+     "name": "usage：--target 未知名（exit 2 + 文档头锚）",
+     "kind": "tool",
+     "note": "expectLog 从实测 log 复制。",
+     "args": [
+      "--target",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "全量 shader 静态 uniformity 门禁",
+     "command": "check-shader-uniformity.bat --target bogus",
+     "exe": {
+      "dx12": "tools/check-shader-uniformity.bat",
+      "vulkan": "tools/check-shader-uniformity.bat"
+     }
     }
    ]
   }
