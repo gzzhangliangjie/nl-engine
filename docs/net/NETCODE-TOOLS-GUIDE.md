@@ -40,7 +40,51 @@
 4. **run.bat ASCII only 重申**：rem 注释里的 em dash（—）在 GBK 控制台被 UTF-8 双字节拆碎，后续行解析错位（`'m' 不是内部或外部命令`），非 ASCII 一律用 ASCII 连字符。
 5. **入站丢包无重发**：模拟丢包丢弃的回显没有第二次机会，server 必须撑到 client 先到 deadline 打出统计（`--linger-ms` 的由来）。
 
-## 2. M-NET1（序列化层，bitsery）— 未开工
+## 2. M-NET1（序列化层，bitsery）— 已落码（2026-11-13）
+
+### 2.1 线格式（`core/include/nl/net/Snapshot.hpp` 头注释为契约，改动须重拍）
+
+| 字段 | 量化 | 位宽 | 声明精度 / 范围 |
+|---|---|---|---|
+| serverTick | uint32 原值 | 32 | 1 tick |
+| entityId | uint16 原值 | 16 | 最小闭环 ≤65535 实体 |
+| position | int32 毫米逐轴，饱和钳制 | 3×32=96 | 1 mm；±2147483.647 m |
+| orientation | 四元数 smallest-three（2b 索引 + 1b 符号 + 3×16b） | 51 | 分量 ≤1.08e-5；**端到端角误差 ≤0.1 度** |
+| velocity | int16 cm/s 逐轴，饱和钳制 | 3×16=48 | 1 cm/s；±327.67 m/s |
+
+合计 **243 bits → 31 bytes**（naive float 全量 46 B，**省 32.6%**）。位序 = bitsery 位打包（LSB-first，双端一致）。
+
+### 2.2 子命令（`net-tools`，M-NET1 新增三条）
+
+| 子命令 | 语义 | 退出码 |
+|---|---|---|
+| `snapshot-selftest` | 256 样本（seed 1234）往返 bytes 级一致 + 精度断言 + 恒等/负 largest/饱和边界 + 截断/尾部垃圾/脏残位三类负向 | 0=PASS / 1=FAIL |
+| `snapshot-bench [--count N]` | 确定性载荷实测：avgBytes / enc+dec ns/op / 量化最大误差 / 逐字段位宽表 / naive 对照 | 0 / 1 / 2 |
+| `snapshot-decode <hex>` | hex 线流解码（负向工具卡：短流显式 FAILED） | 0 / 1 / 2 |
+
+ctest（双后端 `--repeat until-pass:3`）：`net-m1-selftest` / `net-m1-bench` / `net-m1-decode-negative`（WILL_FAIL）。
+
+### 2.3 实测表（2026-11-13，DX12，seed 1234 count=20000）
+
+| 项 | 实测值 | 判定 |
+|---|---|---|
+| 线格式字节数 | 31.00 B（243 bits 对齐） | 契约值 31 ✓ |
+| naive float 对照 | 46 B → **省 32.6%** | PLAN 验收判据 ✓ |
+| encode | ~250–400 ns/op | 远小于 60Hz 帧预算 16.6ms ✓ |
+| decode | ~150–230 ns/op | 同上 ✓ |
+| 位置最大误差 | 0.000610 m | ≤ 声明 1 mm ✓（半步 0.5mm + float 存储噪声） |
+| 朝向最大角误差 | 0.0685 度 | ≤ 声明 0.1 度 ✓（见下注） |
+| 速度最大误差 | 0.005001 m/s | ≤ 声明 1 cm/s ✓（半步 0.5cm/s + float 噪声） |
+
+> **朝向误差注**：线格式分量量化贡献仅 ~0.002 度（2·√3·(1/√2)/65535，探针逐分量核对：最坏样本 qx 6.2e-6 / qz 9.4e-6 / largest 4.7e-7，全部 ≤1.08e-5）；端到端 ~0.07 度由**输入四元数 float 归一化范数亏差（~2e-7）被 smallest-three 重建强制单位范数后经 2·acos 的 sqrt 放大**造成——与 UE FQuat 网络压缩角误差（~0.1 度量级）同级。M-NET2 服务器权威侧输入同源（Jolt float 四元数），口径一致。
+
+### 2.4 踩坑留档（M-NET1 实测）
+
+1. **bitsery `OutputBufferAdapter` 的 `vector::size()` 不可信**：可增长 buffer 会被增长策略撑到超过实际写入字节数；编码字节数必须取 `writtenBytesCount()`（首版 encode size=0 即此根因，直拉实锤）。
+2. **`writeBits`/`readBits` 仅收无符号整型**（static_assert + assert）：有符号值须按二补码位型 cast 后写（pos mm / vel cm/s 都是这么做的）。
+3. **对齐残位是校验面**：bitsery `align()` 在 `CheckDataErrors` 开启时对非零残位报 `InvalidData`——解码侧显式利用（脏残位 = 拒收），selftest 负向 3 锚死该行为。
+4. **函数参数 `float q[4]` 退化为指针**：range-for 不成立（C2672），用索引循环。
+5. **阈值 = 声明精度而非半步**：半步断言（0.5mm/0.5cm/s）会被 float 存储噪声击穿（实测 0.00061 m / 0.005001 m/s）；诚实口径 = 网格步长（1mm/1cm/s）+ 误差来源拆解写进注释。
 
 ## 3. M-NET2（服务器权威最小闭环）— 未开工
 

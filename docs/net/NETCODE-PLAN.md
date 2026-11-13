@@ -37,6 +37,8 @@
 
 ### M-NET1 — 序列化层：bitsery vendored + 载具 transform 快照编解码
 
+> **状态：已落码（2026-11-13，`feat/net` `7c01a6e` 起）**。线格式 243 bits → 31 bytes 定死（契约 = `Snapshot.hpp` 头注释 + `NETCODE-TOOLS-GUIDE.md` §2.1）；往返 bytes 级 ctest + 量化精度断言全绿；载荷实测 31 B vs 46 B（-32.6%）、enc ~350ns / dec ~200ns 落档 §2.3；证据图 preview 挂第 109 张卡 `net-m1`。VULKAN 收尾见 MILESTONES 节。
+
 - **目标**：transform 快照位打包编码 / 解码逐字节稳定，载荷实测落档。
 - **任务**：
   1. `thirdparty/bitsery/`：vendored（上游 fraillt/bitsery v5.2.5，MIT，header-only）、`VENDOR.md`、LICENSE。

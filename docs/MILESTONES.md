@@ -3125,3 +3125,25 @@
 6. **入站丢包无重发**：server 服务满即退会让模拟丢包的 client 被断链事件掐掉 → `--linger-ms` 让 server 撑过 client deadline。
 
 **下一步**：VULKAN ctest 补跑 → tag `net-m0` → M-NET1（bitsery vendored + 载具 transform 快照编解码 + 载荷实测）。
+
+## NET M-NET1 — 序列化层：bitsery vendored + 载具 transform 快照编解码（2026-11-13）
+
+**动作**：第 12 步网络栈第二里程碑（A 类并行轨道 `net`，claim M-NET1）。① vendored bitsery **v5.2.5** @ `9bebfd4`（MIT header-only 62 头全量，`thirdparty/bitsery/VENDOR.md` 溯源 + LICENSE 入库；include 仅 PRIVATE 进 `SnapshotCodec.cpp` 单 TU，`Snapshot.hpp` 零 bitsery 类型）。② 线格式 243 bits = tick32 + entityId16 + 位置 3×32（mm 定点饱和钳制）+ 朝向 smallest-three 51（2b 索引 + 1b 符号 + 3×16b 线性映射 [-1/√2,1/√2]）+ 速度 3×16（cm/s）→ **31 bytes**（naive float 46 B 省 32.6%）；严格解码（截断流/尾部垃圾/对齐残位脏数据全拒）。③ `net-tools` 增 `snapshot-selftest`（256 样本往返 bytes 级 + 精度断言 + 边界 + 3 类负向）/ `snapshot-bench`（seed 1234 确定性实测）/ `snapshot-decode`（hex 负向卡）；ctest 增 3 例（双后端）。④ 展示台第 109 张版本卡 `net-m1`（4 用例 kind:tool，preview = `tools/make-net-m1-evidence.py` 从真实 bench 输出渲染的逐字段位宽对比图，纯标准库 PNG）+ `example/net-m1/run.bat` 五段。⑤ 文档：`NETCODE-TOOLS-GUIDE.md` §2（线格式契约 / 实测表 / 踩坑 5 条）、`NETCODE-PLAN.md` 状态、本台账。
+
+**提交版本**：`feat/net` `7c01a6e`（主实现）+ 后续文档/证据 commit；annotated tag `net-m1`（验收通过后打）。`kStage` 保持 `S8.2`，既有 108 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 DX12 构建 + `snapshot-selftest` PASS（256 样本，31 bytes，pos≤0.000610m / quat≤0.055953deg / vel≤0.004997ms）。
+- 🟢 `snapshot-bench` 2 万样本：avgBytes=31.00、enc ~350ns dec ~200ns、naive 46 B 省 32.6%、`OK` 锚。
+- 🟢 负向三重：截断流 / 尾部垃圾 / 脏残位全拒；`snapshot-decode 01020304` 显式 FAILED exit 1。
+- 🟢 证据图 `net-m1-evidence.png`（真实 bench 输出渲染，视觉核验：quat/vel 行压缩直观可见）。
+- 🟢 零回归抽查：`regression.py --only` s8.2 2/2 bytes + log-m0 4/4 bytes，ALL GREEN。
+- 🟢 VULKAN：全量构建 + `net-m` ctest 9/9 全绿 + `run.bat` ALL GREEN（双后端对称）。
+
+**踩坑情况**
+1. **bitsery 可增长 buffer 的 `vector::size()` 不可信**：`OutputBufferAdapter` 增长策略会把 size 撑到超过实际写入 → 首版 encode 返回 0（`writtenBytesCount()` 才是真实字节数），直拉 `snapshot-selftest` 实锤。
+2. **量化断言阈值必须 = 声明精度而非半步**：0.5mm 半步阈值被 float 存储噪声击穿（实测 0.00061 m）；探针逐分量核对定位 quat 端到端 0.069 度的真实来源 = 输入 float 归一化范数亏差经 smallest-three 单位范数重建 + `2·acos` sqrt 放大（线格式量化本身仅 ~0.002 度，与 UE FQuat 压缩同级）——盲调阈值被探针纠偏。
+3. **函数参数 `float q[4]` 退化为指针**：range-for 报 C2672，索引循环替代。
+4. **`InputBufferAdapter<const uint8_t*>`**：raw pointer 有官方 `BufferAdapterTraits<const T*>` 特化（`traits/core/traits.h`），const 缓冲零拷贝解码可行。
+
+**下一步**：VULKAN 收尾 → tag `net-m1` → M-NET2（服务器权威最小闭环：`--net-server/--net-client` + GameClock 驱动 Jolt + 快照不可靠通道 + alpha 插值渲染）。

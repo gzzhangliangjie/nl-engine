@@ -10376,6 +10376,77 @@
      "preview": "example/net-m0/net-m0-evidence.png"
     }
    ]
+  },
+  {
+   "id": "net-m1",
+   "label": "M-NET1",
+   "name": "序列化层：bitsery vendored + 载具 transform 快照编解码",
+   "tag": "net-m1",
+   "date": "2026-11-13",
+   "summary": "第 12 步网络栈第二里程碑（A 类并行轨道 net）。vendored bitsery v5.2.5 @ 9bebfd4（MIT header-only 62 头，thirdparty/bitsery/VENDOR.md，include 仅 PRIVATE 进 SnapshotCodec.cpp 单 TU）；线格式 243 bits = tick32 + entityId16 + 位置 3x32（mm 定点饱和钳制）+ 朝向 smallest-three 51（2b 索引 + 1b 符号 + 3x16b）+ 速度 3x16（cm/s）→ 31 bytes（naive float 46 B 省 32.6%）；严格解码（截断流/尾部垃圾/对齐残位脏数据全拒）。net-tools 增 snapshot-selftest（256 样本往返 bytes 级 + 量化精度断言 + 3 类负向）/ snapshot-bench（seed 1234 确定性实测：enc ~350ns dec ~200ns，量化误差 pos 0.00061m / quat 0.069deg / vel 0.005m/s，逐分量探针核对过）/ snapshot-decode（hex 解码，负向显式 FAILED）。右侧 preview = tools/make-net-m1-evidence.py 从真实 bench 输出生成的逐字段位宽对比图（纯标准库渲染）。拍板权威落点 docs/net/NETCODE-OPTIONS.md §6（Q-N4 = msgpack_min 保留 + bitsery 同步层）。",
+   "acceptance": [
+    "往返 bytes 级一致：encode→decode→encode 逐字节相同（256 样本 + 恒等/负 largest/饱和边界，ctest net-m1-selftest 锚死）",
+    "量化误差 ≤ 声明精度（Snapshot.hpp 表）：pos 1mm / quat 0.1 度 / vel 1cm/s，数值断言",
+    "严格解码：截断流 / 尾部垃圾 / 脏残位三类负向全拒（selftest 内置 + ctest WILL_FAIL + run.bat findstr 三重）",
+    "载荷实测落档：31 B 线格式 vs 46 B naive（-32.6%），enc/dec 耗时与误差写进 NETCODE-TOOLS-GUIDE §2",
+    "证据图 preview：make-net-m1-evidence.py 从真实 bench 输出渲染，无手绘"
+   ],
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径 0/1/2）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "snapshot-selftest",
+     "name": "snapshot-selftest：往返 bytes 级 + 精度断言（256 样本 + 3 类负向）",
+     "kind": "tool",
+     "note": "确定性 LCG seed 1234；断言 = 31 字节定长 / 往返逐字节一致 / 量化误差 ≤ 声明精度 / 截断-尾部垃圾-脏残位全拒。",
+     "args": [
+      "snapshot-selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "snapshot selftest: PASS",
+     "command": "net-tools snapshot-selftest"
+    },
+    {
+     "id": "snapshot-bench",
+     "name": "snapshot-bench：载荷实测（2 万样本，证据图数据源）",
+     "kind": "tool",
+     "note": "输出 avgBytes / enc/dec ns/op / 量化最大误差 / 逐字段位宽表 / naive 对照；preview 图从此命令真实输出生成。",
+     "args": [
+      "snapshot-bench",
+      "--count",
+      "20000"
+     ],
+     "expectExit": 0,
+     "expectLog": "snapshot-bench : OK",
+     "command": "net-tools snapshot-bench --count 20000",
+     "preview": "example/net-m1/net-m1-evidence.png"
+    },
+    {
+     "id": "snapshot-decode-negative",
+     "name": "负向：截断流（4 字节）显式拒绝",
+     "kind": "tool",
+     "note": "不完整线流必须 FAILED + exit 1，不许静默假解码（ctest net-m1-decode-negative WILL_FAIL 同口径）。",
+     "args": [
+      "snapshot-decode",
+      "01020304"
+     ],
+     "expectExit": 1,
+     "expectLog": "decode       : FAILED",
+     "command": "net-tools snapshot-decode 01020304"
+    }
+   ]
   }
  ]
 }
