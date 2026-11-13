@@ -1,5 +1,7 @@
 # TRAFFIC-PLAN — 交通系统 M-T0（A 类并行轨道 worldgen，2026-11-14 立项）
 
+> **状态：M-T0.0~T0.2 整轨收官（2026-11-14，tag `traffic-m0`）**：双后端 BUILD OK + ctest `m-t0-traffic-*` 9/9 ×2 + `example/t0-traffic/run.bat` 七段 ALL GREEN + 展示台卡 `t0-traffic`；工具归档 `docs/worldgen/TRAFFIC-TOOLS-GUIDE.md`；明细 `docs/MILESTONES.md` T0 节。
+
 > 对应 `docs/GAME-DEV-ORDER.md` 第 8 步「交通系统 M-T0：lane graph 数据结构 + 路网寻路 + 直线跟车」。
 > 轨道归属：worldgen（M-W0~W3 已整轨收官，M-W3.0 `CityCar.edgeId` 溯源已为 M-T0 预埋）。
 > Q-A（自研立项）已拍（GAME-DEV-ORDER §5）：开源参照 CARLA TrafficManager（BSD，看思路不抄代码）；无成熟 vendored C++ 库对口 → 「无成熟方案自研例外」。

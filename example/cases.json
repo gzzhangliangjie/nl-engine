@@ -12059,6 +12059,121 @@
      "command": "viewer.exe --scene w3-m1/city.scene.engine (street)"
     }
    ]
+  },
+  {
+   "id": "t0-traffic",
+   "label": "T0 M-T0.0~T0.2",
+   "name": "交通系统 lane graph（车道级展开图 + A* 寻路 + 直线跟车，traffic-tools）",
+   "tag": "traffic-m0",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 8 步交通系统整轨（A 类轨道 feat/worldgen，M-W3 edgeId 预埋消费）：core nl/traffic 车道级展开图（UE ZoneGraph 口径，roadnet.json -> 每有向边 lanes_per_dir 车道 + 折线预计算 + lane->lane 连接表禁掉头，右行几何 right=(fz,-fx)）+ A* 寻路（线性扫 open 表逐位确定，Ok/Unreachable/BadLane 显式语义）+ 直线跟车仿真（C1 拍板：恒速巡航 + 跟车律 sqrt(brake*(gap-minGap)) + route 末端停车曲线，固定 dt=1/60 车序逐位可复现）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "lane graph 确定性：同输入双跑 dump 逐字节一致、异输入必异；车道数网格公式锚（方格 8 边 -> 8 lanes）；偏移几何精确浮点锚（width 1.0 -> ±0.25，2 车道 -> 0.75/0.25）",
+    "连接闭合：outgoing/incoming 双向反查一致 + 禁掉头全图扫描 + 方格每 lane 恰 1 出链",
+    "A* 锚：方格唯一多跳路径 [e0,e4,e7,e3] 逐位一致 + 弧长 40m；剪边孤端 Unreachable 显式；越界 BadLane 显式",
+    "跟车锚：3 车混合路径 300 帧双跑 TrafficCarState memcmp 逐位一致；停车跟随平衡间距 [1.0,2.5]m 永不穿透；全帧限速帽",
+    "真实数据冒烟：seed 12345 城市路网 49 节点/168 边 -> 168 lanes / 428 links / 798m；跨城寻路 e0->e60 8 hops 36.5m；32 车 30s 行驶 967.4m",
+    "交代物：example/t0-traffic/（run.bat 七段 ALL GREEN + city-lanes/city-sim 真实工具输出证据图 + 车道图 dump）+ 本卡七用例 + TRAFFIC-TOOLS-GUIDE.md；ctest m-t0-traffic-* 9 用例双后端全绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t0-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。traffic-tools 只链 nl_core，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools build <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车 3693 断言",
+     "kind": "tool",
+     "note": "确定性逐位 + 几何精确浮点锚 + 连接闭合 + A* 路径锚 + 跟车平衡间距/限速帽 + 负向显式报错；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (3693 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "build",
+     "name": "build：夹具路网 -> lane graph + 确定性 dump",
+     "kind": "tool",
+     "note": "方格夹具 8 lanes / 8 links / 80m + stats（offset max 0.250）；dump 产物 = 字节级对拍锚。",
+     "args": [
+      "build",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--dump",
+      "{root}/example/t0-traffic/t0-lane-graph.json",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "lanes       : 8",
+     "command": "traffic-tools build example/t0-traffic/roadnet.json --dump example/t0-traffic/t0-lane-graph.json --stats"
+    },
+    {
+     "id": "path",
+     "name": "path：A* 唯一路径（e0 -> e3 四跳 40m）",
+     "kind": "tool",
+     "note": "方格图每节点 2 路路径唯一：e0 -> e4 -> e7 -> e3，弧长合计 40m；确定性线性扫 open 表。",
+     "args": [
+      "path",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "3"
+     ],
+     "expectExit": 0,
+     "expectLog": "hops        : 4",
+     "command": "traffic-tools path example/t0-traffic/roadnet.json --from 0 --to 3"
+    },
+    {
+     "id": "sim",
+     "name": "sim：真实城市 32 车跟车 30s + 车流终帧 PNG",
+     "kind": "tool",
+     "note": "seed 12345 城市 168 lanes，确定性派车（每边首车道出发 A* 到对侧，不可达回落单车道），固定 dt=1/60；city-sim.png = 灰车道线 + 红点车流终帧（工具真实输出）。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t0-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "cars        : 32",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t0-traffic/city-sim.png"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道，显式报错退出 1（expectExit 约定 0/1/2）。",
+     "args": [
+      "path",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t0-traffic/roadnet.json --from 0 --to 99"
+    }
+   ]
   }
  ]
 }

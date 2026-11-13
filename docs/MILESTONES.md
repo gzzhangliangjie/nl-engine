@@ -3549,3 +3549,23 @@
 3. drive 首跑 vendored 误把重写后的 city_block_*.glb 当外部资产（engine_text 传入 vs scene_text）——跳过条件补 city_block_ 前缀。教训：**同一引用字段有两种形态（中间名/装配名）时，识别分支必须同时枚举两类。**
 
 **下一步**：M-W3 整轨收官（close + release --done）；后续方向：M-T0 交通（消费 roadnet.json + car edgeId 溯源字段已预埋）、街具扩展（红绿灯等，CC0 源待寻）、楼型池/树池扩容。
+
+## T0 M-T0.0~T0.2 — 交通系统整轨：lane graph + A* 寻路 + 直线跟车（feat/worldgen，2026-11-14，tag `traffic-m0`，M-T0 整轨收官）
+
+**动作**：GAME-DEV-ORDER 第 8 步（Q-A 自研立项消费）。core `nl/traffic/` 三模块：`LaneGraph`（roadnet.json -> 车道级展开图，UE ZoneGraph 口径只读对照，右行几何 `right=(fz,−fx)`、`off=halfW−(i+0.5)laneW`、折线预计算、lane→lane 连接表禁掉头、edges 文件序×laneIndex 升序 = 确定性遍历序）+ `LanePath`（A*，代价 = lane 弧长、可采纳启发 = 末点欧氏、open 表线性扫最小禁 priority_queue，Ok/Unreachable/BadLane 显式语义）+ `TrafficSim`（C1 拍板跟车律 `sqrt(brake·max(0,gap−minGap))` + route 末端停车曲线 `sqrt(2·brake·remain)`，固定 dt=1/60 车序逐位可复现）；`traffic-tools`（build/path/lanes/sim/selftest，退出码 0/1/2，纯 CPU PNG 光栅化 stb 先例）；ctest 9 用例；展示台卡 `t0-traffic`（7 用例 + preview）+ `example/t0-traffic/`（run.bat 七段 + 真实城证据图）；TRAFFIC-PLAN / TRAFFIC-TOOLS-GUIDE / 本栏。
+
+**提交版本**：`feat/worldgen` `a2a7fa9`（M-T0.0 lane graph）+ `cc367be`（M-T0.1 A*）+ 收口提交（M-T0.2 TrafficSim + traffic-tools sim/lanes + 交付包 + 文档，tag `traffic-m0`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**（selftest 3693 断言 / fixture / build / 负向 / path / path 负向 / sim / lanes / sim 负向）。
+- 🟢 确定性锚：lane graph dump 双跑逐字节一致；A* 路径双跑逐位一致；仿真 3 车 300 帧双跑 `TrafficCarState` memcmp 逐位一致。
+- 🟢 真实城市冒烟（seed 12345 / 49 nodes / 168 edges）：168 lanes / 428 links / 798m；e0→e60 跨城 8 hops 36.5m；32 车 30s 行驶 967.4m；`city-sim.png`/`city-lanes.png` 工具真实输出。
+- 🟢 `example/t0-traffic/run.bat` 七段 ALL GREEN；regression `--only t0-traffic` 7/7 + `w0-m0` 保形 spot 绿。
+
+**踩坑情况**
+1. **跟车律两版翻车**：① 纯 minGap 触发（贴前车速度）——高速离散 bang-bang 每帧 v*dt 穿透；② 触发距离 `minGap+v²/brake` + 匹配速度——前车停车曲线刹车时后车在自由段再加速，形成 limit cycle 间距棘轮下滑（selftest 停车间距锚连挂两轮）。终版 = 标准跟车律 `sqrt(brake·max(0,gap−minGap))`（以 brake 减速度恰好停在跟随点，天然连续无振荡）。教训：**离散 bang-bang 仿真锚先手推连续极限情形（临界刹车距离）再定断言，物理不公平的断言（瞬钳停车 leader）必挂。**
+2. selftest 三处测试代码 bug（非实现 bug）：输出向量复用被 Unreachable/BadLane 的 `clear()` 清空、memcmp 含 vector 指针的 struct、夹具字符串 replace 手写长度越界——**负向调用一律独立输出变量、memcmp 只比 POD 面、replace 一律 needle.size()**。
+3. `selftest --verbose` 忘实现（w0 证据日志口径）run.bat 首跑即抓——ctset 与 run.bat 双通道互证有效。
+4. ctest `--repeat until-pass:3` wt.bat 已内置，外传重复报 `At most one '--repeat'`；局部 `len` 遮蔽函数参数 C4457；stb_image_write 缺 `STB_IMAGE_WRITE_IMPLEMENTATION` 单 TU 定义 LNK2019。
+
+**下一步**：GAME-DEV-ORDER 第 9 步调度器迭代（红绿灯相位 `phases`/`signal` 契约扩展、路口让行、避撞）需单独立项拍板；循环 demo 旗标、CityCar 实体接入、GameClock/ECS System 化为独立后续项。

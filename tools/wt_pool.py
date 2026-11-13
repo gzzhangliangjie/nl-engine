@@ -231,7 +231,14 @@ TRACKS = {
                 "street-asset channel tree-12/car-8/streetlight CC0 pools "
                 "vendored, fnv1a pure placement zero-RNG, scene 315 "
                 "entities, drive vendored assembly, embed_glb_textures "
-                "deformation, selftest 97; close+release --done passed)",
+                "deformation, selftest 97; close+release --done passed); "
+                "M-T0 traffic whole track done 2026-11-14 (tag "
+                "traffic-m0: core nl/traffic lane-level graph "
+                "(UE ZoneGraph caliber) + A* + C1 car-following "
+                "sqrt(brake*(gap-minGap)), traffic-tools "
+                "build/path/lanes/sim/selftest 3693 asserts, "
+                "9 ctests dual-backend, card t0-traffic; "
+                "close+release --done passed)",
     },
     "s13": {
         "wt": "", "branch": "feat/s13", "state": "closed",

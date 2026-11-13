@@ -9,6 +9,10 @@
 
 #include "nl/traffic/LaneGraph.hpp"
 #include "nl/traffic/LanePath.hpp"
+#include "nl/traffic/TrafficSim.hpp"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION // 单 TU 实现（city-tools 先例）
+#include <stb_image_write.h>
 
 #include <cmath>
 #include <cstdio>
@@ -22,6 +26,7 @@
 namespace {
 
 int g_asserts = 0;
+bool g_verbose = false;
 
 #define T0_CHECK(cond)                                                       \
     do {                                                                     \
@@ -30,6 +35,8 @@ int g_asserts = 0;
                          __FILE__, __LINE__, #cond);                         \
             return 1;                                                        \
         }                                                                    \
+        if (g_verbose)                                                       \
+            std::printf("ok %04d %s:%d\n", g_asserts + 1, __FILE__, __LINE__);\
         ++g_asserts;                                                         \
     } while (0)
 
@@ -87,6 +94,69 @@ int laneByEdge(const nl::traffic::LaneGraph& g, int32_t edgeId) {
     for (const nl::traffic::Lane& l : g.lanes)
         if (l.edgeId == edgeId) return l.id;
     return -1;
+}
+
+// ---------------------------------------------------------------------------
+// 纯 CPU 光栅化（证据图 = 工具真实输出；city-tools stb_image_write 先例）
+struct Raster {
+    int w = 0, h = 0;
+    std::vector<unsigned char> rgb;
+};
+
+void drawLine(Raster& r, float x0, float y0, float x1, float y1,
+              unsigned char rr, unsigned char gg, unsigned char bb) {
+    // DDA 步进（证据图够用；整数化防越界）
+    const int steps = static_cast<int>(std::fmax(std::fabs(x1 - x0), std::fabs(y1 - y0))) + 1;
+    for (int i = 0; i <= steps; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(steps);
+        const int px = static_cast<int>(x0 + (x1 - x0) * t);
+        const int py = static_cast<int>(y0 + (y1 - y0) * t);
+        if (px < 0 || py < 0 || px >= r.w || py >= r.h) continue;
+        const size_t off = (static_cast<size_t>(py) * r.w + px) * 3;
+        r.rgb[off] = rr;
+        r.rgb[off + 1] = gg;
+        r.rgb[off + 2] = bb;
+    }
+}
+
+// 世界(XZ) -> 像素映射：等比缩放进 WxH 留边 16px，z 轴向上（行号翻转）
+struct WorldMap {
+    float scale = 1.0f;
+    float minX = 0.0f, minZ = 0.0f;
+    int w = 0, h = 0;
+    float px(float x) const { return 16.0f + (x - minX) * scale; }
+    float py(float z) const { return static_cast<float>(h - 1) - (16.0f + (z - minZ) * scale); }
+};
+
+WorldMap worldMapFor(const nl::traffic::LaneGraph& g, int w, int h) {
+    float minX = 1e30f, maxX = -1e30f, minZ = 1e30f, maxZ = -1e30f;
+    for (const nl::traffic::Lane& l : g.lanes)
+        for (const nl::traffic::LanePoint& p : l.points) {
+            minX = std::fmin(minX, p.x);
+            maxX = std::fmax(maxX, p.x);
+            minZ = std::fmin(minZ, p.z);
+            maxZ = std::fmax(maxZ, p.z);
+        }
+    WorldMap m;
+    m.w = w;
+    m.h = h;
+    m.minX = minX;
+    m.minZ = minZ;
+    const float dx = (maxX - minX) > 1e-6f ? (maxX - minX) : 1.0f;
+    const float dz = (maxZ - minZ) > 1e-6f ? (maxZ - minZ) : 1.0f;
+    m.scale = std::fmin(static_cast<float>(w - 32) / dx, static_cast<float>(h - 32) / dz);
+    return m;
+}
+
+void rasterLanes(Raster& r, const nl::traffic::LaneGraph& g, const WorldMap& m) {
+    for (const nl::traffic::Lane& l : g.lanes)
+        for (size_t i = 0; i + 1 < l.points.size(); ++i)
+            drawLine(r, m.px(l.points[i].x), m.py(l.points[i].z),
+                     m.px(l.points[i + 1].x), m.py(l.points[i + 1].z), 120, 120, 120);
+}
+
+bool writePng(const std::string& path, const Raster& r) {
+    return stbi_write_png(path.c_str(), r.w, r.h, 3, r.rgb.data(), r.w * 3) != 0;
 }
 
 int selftest(const std::string& emitFixture) {
@@ -252,6 +322,64 @@ int selftest(const std::string& emitFixture) {
         T0_CHECK(pathB == path);
     }
 
+    // --- ⑧ M-T0.2 直线跟车（C1）：确定性逐位 + 恒距巡航 + 停车不穿透 ---
+    {
+        // ① 确定性：3 车混合路径 300 帧双跑逐位一致（memcmp 口径，phys/audio 先例）
+        nl::traffic::TrafficSimParams p; // 默认 dt=1/60 accel=2 brake=4 minGap=2
+        nl::traffic::TrafficSim sa;
+        sa.graph = &g;
+        sa.params = p;
+        std::string serr;
+        T0_CHECK(sa.addCar({laneByEdge(g, 0), laneByEdge(g, 4)}, 0.0f, &serr));
+        T0_CHECK(sa.addCar({laneByEdge(g, 2), laneByEdge(g, 6)}, 0.0f, &serr));
+        T0_CHECK(sa.addCar({laneByEdge(g, 0), laneByEdge(g, 4), laneByEdge(g, 7), laneByEdge(g, 3)}, 0.0f, &serr));
+        for (int f = 0; f < 300; ++f) sa.step();
+        // 真正的双跑：从零重建同输入（状态数组逐位比；TrafficCar 内含 route
+        // vector，指针不可 memcmp，只比 TrafficCarState POD 面）
+        nl::traffic::TrafficSim sc;
+        sc.graph = &g;
+        sc.params = p;
+        T0_CHECK(sc.addCar({laneByEdge(g, 0), laneByEdge(g, 4)}, 0.0f, &serr));
+        T0_CHECK(sc.addCar({laneByEdge(g, 2), laneByEdge(g, 6)}, 0.0f, &serr));
+        T0_CHECK(sc.addCar({laneByEdge(g, 0), laneByEdge(g, 4), laneByEdge(g, 7), laneByEdge(g, 3)}, 0.0f, &serr));
+        for (int f = 0; f < 300; ++f) sc.step();
+        T0_CHECK(sa.cars.size() == sc.cars.size());
+        std::vector<nl::traffic::TrafficCarState> statesA, statesC;
+        for (const nl::traffic::TrafficCar& c : sa.cars) statesA.push_back(c.state);
+        for (const nl::traffic::TrafficCar& c : sc.cars) statesC.push_back(c.state);
+        T0_CHECK(std::memcmp(statesA.data(), statesC.data(),
+                             statesA.size() * sizeof(nl::traffic::TrafficCarState)) == 0);
+        // ② 停车跟随：leader route [e0]（停车曲线刹在末端），follower 长路径；
+        //    跟车律平衡间距 = minGap（+离散余量），40s 后双停、永不穿透、
+        //    末间距落在 [1.0, 2.5]（minGap=2 + 离散 v*dt 滞后上界）
+        nl::traffic::TrafficSim ss;
+        ss.graph = &g;
+        ss.params = p;
+        T0_CHECK(ss.addCar({laneByEdge(g, 0)}, 0.0f, &serr));
+        T0_CHECK(ss.addCar({laneByEdge(g, 0), laneByEdge(g, 4), laneByEdge(g, 7), laneByEdge(g, 3)}, 0.0f, &serr));
+        for (int f = 0; f < 2400; ++f) {
+            ss.step();
+            T0_CHECK(ss.cars[1].state.lane != ss.cars[0].state.lane ||
+                     ss.cars[1].state.s <= ss.cars[0].state.s); // 永不穿透
+        }
+        T0_CHECK(ss.cars[0].state.speed == 0.0f && ss.cars[0].state.s == 10.0f);
+        T0_CHECK(ss.cars[1].state.speed == 0.0f);
+        const float endGap = ss.cars[0].state.s - ss.cars[1].state.s;
+        T0_CHECK(endGap >= 1.0f && endGap <= 2.5f);
+        // ④ 限速帽：全部车全部帧 speed <= lane 限速（+1e-4 浮点容差）
+        nl::traffic::TrafficSim sp;
+        sp.graph = &g;
+        sp.params = p;
+        T0_CHECK(sp.addCar({laneByEdge(g, 1), laneByEdge(g, 5)}, 0.0f, &serr));
+        T0_CHECK(sp.addCar({laneByEdge(g, 3), laneByEdge(g, 2)}, 0.0f, &serr));
+        for (int f = 0; f < 600; ++f) {
+            sp.step();
+            for (const nl::traffic::TrafficCar& c : sp.cars)
+                T0_CHECK(c.state.speed <=
+                         g.lanes[static_cast<size_t>(c.state.lane)].speedLimit + 1e-4f);
+        }
+    }
+
     // --- 夹具落盘（ctest build 正向用例数据源，DEPENDS 链） ---
     if (!emitFixture.empty()) {
         if (!writeFile(emitFixture, fixture)) {
@@ -271,6 +399,8 @@ int usage() {
                  "usage:\n"
                  "  traffic-tools build <roadnet.json> [--dump out.json] [--stats]\n"
                  "  traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>\n"
+                 "  traffic-tools lanes <roadnet.json> --png out.png [--size WxH]\n"
+                 "  traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]\n"
                  "  traffic-tools selftest [--emit-fixture path]\n"
                  "  traffic-tools help\n");
     return 2;
@@ -289,6 +419,8 @@ int main(int argc, char** argv) {
         for (int i = 2; i < argc; ++i) {
             if (std::strcmp(argv[i], "--emit-fixture") == 0 && i + 1 < argc) {
                 emitFixture = argv[++i];
+            } else if (std::strcmp(argv[i], "--verbose") == 0) {
+                g_verbose = true; // 逐断言 ok 行（w0 证据日志口径）
             } else {
                 return usage();
             }
@@ -402,6 +534,134 @@ int main(int argc, char** argv) {
         std::printf("lanes       : %s\n", seq.c_str());
         std::printf("length sum  : %.1f m\n",
                     nl::traffic::pathLength(g, path));
+        return 0;
+    }
+
+    if (cmd == "lanes") {
+        if (argc < 3) return usage();
+        const std::string roadnetPath = argv[2];
+        std::string pngPath;
+        int w = 640, h = 480;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) {
+                pngPath = argv[++i];
+            } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+                if (std::sscanf(argv[++i], "%dx%d", &w, &h) != 2 || w < 32 || h < 32)
+                    return usage();
+            } else {
+                return usage();
+            }
+        }
+        std::string body, err;
+        if (!readFile(roadnetPath, &body, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        nl::traffic::LaneGraph g;
+        if (!nl::traffic::buildLaneGraphFromRoadnetJson(body.data(), body.size(), &g, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        if (pngPath.empty()) return usage();
+        Raster r;
+        r.w = w;
+        r.h = h;
+        r.rgb.assign(static_cast<size_t>(w) * h * 3, 255);
+        rasterLanes(r, g, worldMapFor(g, w, h));
+        if (!writePng(pngPath, r)) {
+            std::fprintf(stderr, "traffic-tools: cannot write %s\n", pngPath.c_str());
+            return 1;
+        }
+        std::printf("lanes drawn : %d\n", g.laneCount());
+        std::printf("wrote %s\n", pngPath.c_str());
+        return 0;
+    }
+
+    if (cmd == "sim") {
+        if (argc < 3) return usage();
+        const std::string roadnetPath = argv[2];
+        int nCars = 4, frames = 600;
+        std::string pngPath;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--cars") == 0 && i + 1 < argc) {
+                nCars = std::atol(argv[++i]);
+            } else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+                frames = std::atol(argv[++i]);
+            } else if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) {
+                pngPath = argv[++i];
+            } else {
+                return usage();
+            }
+        }
+        if (nCars < 1 || frames < 1) return usage();
+        std::string body, err;
+        if (!readFile(roadnetPath, &body, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        nl::traffic::LaneGraph g;
+        if (!nl::traffic::buildLaneGraphFromRoadnetJson(body.data(), body.size(), &g, &err)) {
+            std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+            return 1;
+        }
+        // 确定性派车：第 i 辆 = 第 i 条边首车道出发，goal = 第 (i+n/2)%n 条边
+        // 首车道（A* 路径；不可达回落单车道 route）。零 RNG，同输入同布车。
+        const int nEdges = g.laneCount(); // 1 lane/edge 的契约内默认网格成立
+        if (nCars > nEdges) {
+            std::fprintf(stderr, "traffic-tools: --cars %d exceeds %d spawn lanes\n",
+                         nCars, nEdges);
+            return 1;
+        }
+        nl::traffic::TrafficSim sim;
+        sim.graph = &g;
+        for (int i = 0; i < nCars; ++i) {
+            const int32_t start = laneByEdge(g, static_cast<int32_t>(i));
+            const int32_t goal =
+                laneByEdge(g, static_cast<int32_t>((i + nEdges / 2) % nEdges));
+            std::vector<int32_t> route;
+            if (nl::traffic::findPathOnLanes(g, start, goal, &route, &err) !=
+                nl::traffic::PathStatus::Ok) {
+                route.assign(1, start); // 不可达回落：原地单车道行驶
+            }
+            if (!sim.addCar(route, 0.0f, &err)) {
+                std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
+                return 1;
+            }
+        }
+        for (int f = 0; f < frames; ++f) sim.step();
+        int moving = 0;
+        double distSum = 0.0;
+        for (const nl::traffic::TrafficCar& c : sim.cars) {
+            if (c.state.speed > 0.0f) ++moving;
+            distSum += c.state.odometer;
+        }
+        std::printf("cars        : %d\n", static_cast<int>(sim.cars.size()));
+        std::printf("frames      : %d (dt=%.4f)\n", frames, sim.params.dt);
+        std::printf("moving end  : %d\n", moving);
+        std::printf("distance    : %.1f m\n", distSum);
+        if (!pngPath.empty()) {
+            Raster r;
+            r.w = 640;
+            r.h = 480;
+            r.rgb.assign(static_cast<size_t>(r.w) * r.h * 3, 255);
+            const WorldMap m = worldMapFor(g, r.w, r.h);
+            rasterLanes(r, g, m);
+            for (const nl::traffic::TrafficCar& c : sim.cars) {
+                nl::traffic::LanePoint p;
+                if (!sim.carPosition(static_cast<size_t>(&c - sim.cars.data()), &p))
+                    continue;
+                // 3x3 红点（车流位置，终帧）
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        drawLine(r, m.px(p.x) + dx, m.py(p.z) + dy,
+                                 m.px(p.x) + dx, m.py(p.z) + dy, 220, 30, 30);
+            }
+            if (!writePng(pngPath, r)) {
+                std::fprintf(stderr, "traffic-tools: cannot write %s\n", pngPath.c_str());
+                return 1;
+            }
+            std::printf("wrote %s\n", pngPath.c_str());
+        }
         return 0;
     }
 
