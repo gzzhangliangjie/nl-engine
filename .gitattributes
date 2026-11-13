@@ -1,12 +1,14 @@
 # ============================================================
-# 行尾钉死：数据产物与验收文件（2026-11-10 根修，commit cbde0c9）
-# 本机 core.autocrlf=true 会在 checkout 时把 LF blob 翻成 CRLF，导致：
-#   1) check-phys-regression.py 跨目录 md5 对比假 FAIL
-#   2) audio provenance FNV hash 假 FAIL
-# 工具生成的数据产物一律按 LF 检出，与 blob 原始字节一致
-# （全仓库 0 个 CRLF blob）。
-# 注意：勿加全局 `* text=auto eol=lf`——.bat 必须 CRLF（cmd 的 goto/label 依赖）。
+# 行尾根修 v2（2026-11-14 用户拍板方案 A，覆盖 2026-11-10 的白名单式根修）
+# 本机 core.autocrlf=true 会在 checkout 时把 LF blob 翻成 CRLF；2026-11-10 的
+# 按文件名/扩展名白名单钉法漏网了任意命名的工具产物（audio-s2/debug.txt
+# "M 但 diff 空" 复发），故改为全局默认 + 例外反转：
+#   * text=auto eol=lf 放最前，后面的显式规则覆盖它（git 后匹配优先）。
+# .bat 必须 CRLF（cmd 的 goto/label 依赖）——由下方 *.bat text eol=crlf 显式
+# 钉住，与全局规则不冲突（旧注释「勿加全局」的理由已失效）。
+# blob 侧全仓仍全 LF（除 CRLF 白名单），renormalize 零内容变化。
 # ============================================================
+*                text=auto eol=lf
 *.tsv            text eol=lf
 *.log            text eol=lf
 provenance.txt   text eol=lf
