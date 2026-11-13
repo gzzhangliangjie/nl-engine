@@ -96,6 +96,8 @@
 
 > **复杂对象档位（2026-11-14，UnrealSharp Marshalling System 实读）**：其三档 = Blittable（布局一致 memcpy 直传，零开销快路径）/ Natively copyable（引擎拷贝构造 + NativeStructHandle 析构句柄）/ Mirror Struct（逐字段兜底）。我们 type 段 POD 双层镜像只做 **Blittable 一档**（正是其认定的快路径）；后两档依赖 UE 属性系统/拷贝构造，纯 C ABI 函数表不需要。**生成器校验规则：type 段只收纯 POD（数值字段 + 定长 buf，禁字符串/嵌套引用成员），gen.py 解析即拒，非 POD 需求显式拆 str/bufN 参数**。
 
+> **容器规则（2026-11-14 用户追问补条；UnrealSharp/Flax 实读：容器 = 包装对象模式，FastAccess 禁用的慢路径）**：容器不进 type 段、不过 blittable 边界，按协议拆：① 动态数组 = count+指针协议（C#→C++：`count + const T* data` 调用期存活；C++→C#：`out count + const T** data` 静态缓冲「下次调用前有效」+ C# 立即拷，argv/consoleRegister 即此形态先例）；② 字典不过界——按 key 查走单值导出（ecsFindByName 形态），全量视图走双列表 count+ptr 或序列化快照串（cvarList 文本协议先例）；③ 嵌套（字符串数组）= count + 二级指针，逐元素仍走 str 账本规则。现 16 导出零容器缺口，M-SC5+ 各域按需落协议。
+
 | 里程碑 | 内容（C++ 导出 + C# 静态类） | 关键口径 | 依赖 |
 |---|---|---|---|
 | **M-SC4** 绑定生成器 | 声明 → 产出 ① C++ ApiTable 接线块 ② C# delegate + 按域静态 facade。**回归基线 = 对现有 16 导出（console 6 + ECS 10）回放**：生成接线替换手写后编译过 + selftest 全绿 + `reload-script` 链路无损 | 声明是唯一手写项；实现体照写（语义不可生成）；尾追加纪律对声明序列生效；生成器入 `tools/scriptapi/` | 无 |
