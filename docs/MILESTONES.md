@@ -3588,3 +3588,22 @@
 4. `const TrafficControl*` 调不了 advanceFrame/acquire（C2662）→ sim 持可变指针；`serr` 块局部声明遗漏（C2065）。
 
 **下一步**：需求感应信号 / 冲突型路口（对向直行并行提吞吐）/ CityCar 实体接入 viewer / GameClock-ECS System 化 / 循环路线旗标 = 独立拍板项；citygen 侧 signal 位与 phases 填充策略归 W 轨道。
+
+## T0 M-T2.0~T2.2 — 调度器增强：组共享锁 + gap-out 感应 + 循环路线（feat/worldgen，2026-11-14，tag `traffic-m2`，M-T2 整轨收官）
+
+**动作**：M-T1 后续项整批立项（用户拍板「开后续项 全给做了吧」；CityCar 接 viewer / ECS System 化单列 M-T3 待摆证据）。core `nl/traffic`：TrafficControl 锁模型升级（组共享 + 转弯独占 + axisPure 守卫 + FIFO 队序防饿死）+ gap-out 感应切相（整数帧跳变 + reportWaiting 需求上报 + 最短绿时防抖，phases 契约 `gap_out_s` 只加不减）+ TrafficSim `params.loop` 环闭合回绕；traffic-tools `sim --loop/--actuated` + 对向共线豁免几何判据 + 停滞死锁守卫 + closest-pair 实证诊断；selftest ⑩（4685 断言）；`example/t2-traffic/`（gap_out_s 契约夹具 + 双证据图 + run.bat 六段）+ 卡 `t2-traffic`（133）+ TRAFFIC-PLAN §10 / GUIDE §8 / 本栏。
+
+**提交版本**：`feat/worldgen` M-T2.0~T2.2 收口提交（tag `traffic-m2`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**；selftest **4685 断言**。
+- 🟢 城市组锁吞吐 **17/32 / 646.9m**（M-T1 基线 7/32 / 475.5m，**+143%**）；min gap 1.35m；gap-out 夹具 locked 0；loop 4/4 闭合环 odometer 508m。
+- 🟢 `example/t2-traffic/run.bat` 六段 ALL GREEN；t1 卡/run.bat 锚随 locked-end 语义演进重拍后保形全绿。
+
+**踩坑情况**
+1. **「同组=不冲突」假设的边界（axisPure 守卫）**：组共享首版城市冒烟 min gap 0.557m——实为误报（共线相邻路段对向车道 0.5m 设计横距），但倒逼两处根修：① 互斥扫描对向豁免升级为「精确反向 + 共线 0.75m」几何判据（sameRoad 只认同一对节点不覆盖共用路口的相邻路段）；② axisPure 守卫防斜边节点真交叉（保守退化单持有者）。教训：**并行度放开前先审「组内不相交」的几何前提，豁免口径必须从「拓扑关系」升级到「几何关系」**。
+2. **死锁判定被 loop 车流打穿**：环上车流不消散，终帧持锁穿越车（speed>0）被首版「locked end != 0 = 死锁」误判——根修为「停滞在圈内（speed==0 且距节点 ≤ clearEff）」才算死锁；t1 卡锚随语义重拍。
+3. FIFODrainQueue 组授予条件两版错误（hasTurnWaiting 挡先到的组申请 / axisPure 外层条件饿死非纯轴节点）——组锁单元锚（③ 段重写）先行暴露，逻辑推演「队列序 = 防饿死的充分条件」后一次定稿。
+4. groupHolders 类型少一层嵌套（vector<int32_t>[2] vs vector<vector<int32_t>>[2]）编译期抓住；sigFixture/serr 跨块作用域 C2065 ×2；replace 手写长度坑再现（70≠79，needle.size() 纪律）。
+
+**下一步**：M-T3（CityCar 实体接入 viewer + GameClock-ECS System 化）需实读渲染/场景/ECS 后摆证据拍板；需求感应进 citygen 侧 signal 填充策略归 W 轨道。

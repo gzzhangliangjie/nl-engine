@@ -247,6 +247,14 @@ TRACKS = {
                 "stopS & clearEff scaling (city 4m lanes vs "
                 "fixture-calibrated constants), locked end "
                 "20->0; selftest 4657 asserts, card t1-traffic; "
+                "close+release --done passed); "
+                "M-T2 scheduler enhancements done 2026-11-14 (tag "
+                "traffic-m2: group-shared locks + turn exclusion "
+                "(city throughput 17/32 646.9m vs M-T1 7/32 "
+                "475.5m = +143%), axisPure guard, gap-out actuated "
+                "signals (phases contract gap_out_s), loop routes; "
+                "opposite-collinear-lane exemption + stalled-holder "
+                "deadlock guard; selftest 4685 asserts, card t2-traffic; "
                 "close+release --done passed)",
     },
     "s13": {

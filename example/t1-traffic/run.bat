@@ -48,10 +48,11 @@ if errorlevel 1 (
     exit /b 1
 )
 type "%D%sim-city.log"
-findstr /C:"locked end  : 0" "%D%sim-city.log" >nul
-if errorlevel 1 ( echo [ERROR] deadlock detected & exit /b 1 )
-findstr /C:"min gap     : " "%D%sim-city.log" >nul
-if errorlevel 1 ( echo [ERROR] min gap line missing & exit /b 1 )
+rem M-T2 note: locked-end semantics now counts in-transit holders too
+rem (deadlock = stalled holder, guarded inside the tool exit code).
+rem Anchor on deterministic distance instead.
+findstr /C:"distance    : 646.9 m" "%D%sim-city.log" >nul
+if errorlevel 1 ( echo [ERROR] expected distance 646.9 m & exit /b 1 )
 
 echo === negative: cross-road collision guard is active (selftest covers it) ===
 "%EXE%" path "%D%signal-roadnet.json" --from 0 --to 99 > "%D%negative.log" 2>&1

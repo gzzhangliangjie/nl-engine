@@ -34,6 +34,8 @@ struct TrafficSimParams {
     float accel = 2.0f;       // 巡航加速 m/s^2
     float brake = 4.0f;       // 减速限幅 m/s^2
     float minGap = 2.0f;      // 同 lane 最小车距 m（中心距近似）
+    bool loop = false;        // M-T2.2：route 走完且环闭合（末 lane toNode ==
+                              // 首 lane fromNode）时回绕续行；false = 停靠（M-T0 行为）
 };
 
 struct TrafficCarState {

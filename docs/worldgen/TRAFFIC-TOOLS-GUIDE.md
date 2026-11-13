@@ -75,3 +75,27 @@ PNG：信号节点 5px 方块按终帧相位着色（绿/黄/红，lock-only 灰
 - selftest **4657 断言**全绿（⑨ 调度器段：时钟帧锚 0/30/42/48/78/96、FIFO 锁单元链、红灯 7.5m 逐位钳停、冲突串行过锁、跨路段互斥、控制全开双跑 memcmp）；ctest `m-t0-traffic-*` 9/9 ×2 双后端。
 - 城市 32 车（49 lock-only 节点）：`locked end 0`（根修前 20）、min gap 1.35m、475.5m / 30s；信号化夹具 6 车：3/6 到达、锁 0。
 - `example/t1-traffic/run.bat` 五段 ALL GREEN（含 signals 行与 locked-end 行的 findstr 锚）。
+
+---
+
+## 8. M-T2 调度器增强（traffic-m2，2026-11-14）
+
+### 8.1 机制（TRAFFIC-PLAN §10 拍板 Q-T9/Q-T10/Q-T11）
+
+- **锁模型（Q-T9）**：节点锁从单持有者升级为「组共享 + 转弯独占」——直行车申请所属组（组 0 x 轴 / 组 1 z 轴）共享通行权（同组多车并行：对向/同向直行右行车道分离不冲突）；转弯车（当前 lane × next lane 方向 cos < 0.7071，偏转 ≥45°）申请节点独占（1 车道路网左转穿对向直行）。授予 = 队首裁决：组空即授（M-T1 单持有语义兼容）、组非空仅 axisPure 节点共享；跨组互斥（交叉冲突）；FIFO 队序天然防转弯饿死（turn 前的组授完、turn 排到队首后其后的组全停）。**axisPure 守卫**：进入边含斜边（dx/dz 皆非 0）的节点组锁退化单持有者——「同组=不冲突」假设只在严格正交网格成立。
+- **gap-out（Q-T10）**：绿相活跃组本帧零在线等待车持续 `gap_out_s` → frame 跳到本相黄灯起点（stateForEdge 纯函数自动跟进，整数帧确定）；最短绿时防抖 `min(greenS, 2s)` 窗口内不触发；demand 由 sim 逐帧对在线等待车 `reportWaiting` 上报（advanceFrame 用上帧 demand 判定）。**缺省 0 = 关（M-T1 固定周期逐位行为冻结）**；开启位 = phases 契约条目 `"gap_out_s"` 或 tool `--actuated`（全信号节点 2s）。
+- **loop（Q-T11）**：`TrafficParams.loop` + 环闭合判定（末 lane toNode == 首 lane fromNode）→ routeIdx 回绕续行；tool `--loop` 构造环 route（start→goal ⊕ goal→start 回程 path 去首尾衔接），不可环回落单程。
+
+### 8.2 死锁判定口径修正（M-T2 落码期实测）
+
+`locked end` 行 = **终态持锁节点数**（含穿越中）；死锁退出条件 = 持锁车**停滞在圈内**（speed==0 且距节点 ≤ clearEff）——loop 环上车流不消散，终帧持锁穿越车是正常交通。诊断行（LOCK dump）保留，触发条件同步改为停滞。**t1 卡 city 段锚随此语义重拍**（locked end 0 → distance 646.9m 确定性值）。
+
+### 8.3 对向豁免口径升级（城市实测 min gap 0.557m 误报驱动）
+
+sameRoad（无序节点对相同）不覆盖**共线相邻路段**：同一条水平街 e4(+X)/e7(-X) 在共用路口节点两侧，对向车道横距 0.5m = lane offset 设计值。升级为几何判据：方向精确相反（dot ≤ -0.999）且共线（|叉积|/|a| < 0.75m = offset 和 0.5 + 余量；最小平行街距 4.0m 不受影响）。修正后城市 min gap 回 1.35m 基线。
+
+### 8.4 验收记录
+
+- selftest **4685 断言**全绿（⑩ 段：gap-out 帧跳变 481 / 需求反锚 / 防抖 / loop 环 odometer>50m+双跑 memcmp+单程对照 / 转弯独占串行+heldNodeCount 0+双跑）；ctest `m-t0-traffic-*` 9/9 ×2 双后端。
+- 城市 32 车（49 lock-only 节点）：**arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m，组锁并行 +143%）**、min gap 1.35m、rc 0；gap-out 夹具 6 车 locked 0；loop 4/4 闭合环。
+- `example/t2-traffic/run.bat` 六段 ALL GREEN；regression `--only t2-traffic` + `t1-traffic`/`t0-traffic` 保形。

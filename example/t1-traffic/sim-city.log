@@ -1,10 +1,10 @@
 cars        : 32
 frames      : 1800 (dt=0.0167)
 signals     : 49 (lock-only 49 / signal 0)
-moving end  : 3
-arrived     : 7 / 32
-distance    : 475.5 m
+moving end  : 2
+arrived     : 17 / 32
+distance    : 646.9 m
 min gap     : 1.35 m (cross-road)
-locked end  : 0
-max halt    : 26.1 s
+locked end  : 1
+max halt    : 26.5 s
 wrote E:\UE_STUDY_2026\nl-engine-worldgen\example\t1-traffic\city-sim.png

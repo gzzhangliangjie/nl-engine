@@ -5,6 +5,18 @@
 
 namespace nl::traffic {
 
+namespace {
+
+// M-T2.2：loop 有效 = 开关开 + route 成环（末 lane toNode == 首 lane fromNode）
+bool loopActive(const TrafficSim& sim, const TrafficCar& car) {
+    if (!sim.params.loop || car.route.size() < 2) return false;
+    const LaneGraph& g = *sim.graph;
+    return g.lanes[static_cast<size_t>(car.route.back())].toNode ==
+           g.lanes[static_cast<size_t>(car.route.front())].fromNode;
+}
+
+} // namespace
+
 bool TrafficSim::addCar(const std::vector<int32_t>& route, float startS, std::string* err) {
     if (err) err->clear();
     if (!graph || route.empty()) {
@@ -49,8 +61,11 @@ void TrafficSim::step() {
         // 否则终点车泊在节点圆心与穿行车穿模）。停车线自适应：length -
         // min(entryStop, 0.6*length)——密集路网（W0 城 4m lane）上固定 2.5m
         // 停车线吃满 lane，排队车永远压在上游节点释放圈内持锁不放（M-T1 根修）。
+        // M-T2.2：loop 环上无「route 末」，永不停靠。
+        const bool looping = loopActive(*this, car);
         float parkCap = lane.length;
-        const bool atRouteEnd = car.routeIdx + 1 == car.route.size();
+        const bool atRouteEnd =
+            car.routeIdx + 1 == car.route.size() && !looping;
         if (control && atRouteEnd) {
             const int32_t nIdx = control->findNode(lane.toNode);
             if (nIdx >= 0)
@@ -98,7 +113,7 @@ void TrafficSim::step() {
             if (nIdx >= 0) {
                 stopS = lane.length -
                         std::fmin(control->entryStop, 0.6f * lane.length);
-                if (!control->isHolder(static_cast<size_t>(nIdx), ci)) {
+                if (!control->hasAccess(static_cast<size_t>(nIdx), ci)) {
                     mayCross = false;
                     const float remain = stopS - st.s;
                     const float brakeDist =
@@ -109,13 +124,10 @@ void TrafficSim::step() {
                     // 有前车的车到线再申请；前车停车在帽位时它物理到不了线，
                     // 永不入队不持锁（等而不堵路口）。
                     const bool earlyOk = leaderS < 0.0f && remain <= brakeDist;
-                    // 死锁闸 2（防溢出 don't-block-the-box）：出口 lane 起步区
-                    // 被占（有车 s < minGap + 该节点 clearEff）不申请——持锁车
-                    // 被下游拥堵堵在释放圈内不释放 = gridlock 根因；等在停车线
-                    // 不持锁。阈值含 minGap：保证获准进入后最坏停在
-                    // (出口最近车 - minGap) >= clearEff，即必然能驶出释放圈。
-                    const int32_t nextLaneId =
-                        car.route[static_cast<size_t>(car.routeIdx + 1)];
+                    // M-T2.2：next lane（loop 环上回绕取模）
+                    const size_t nextPos = static_cast<size_t>(car.routeIdx + 1) %
+                                           car.route.size();
+                    const int32_t nextLaneId = car.route[nextPos];
                     const float keepClear =
                         params.minGap + control->nodes[static_cast<size_t>(nIdx)].clearEff;
                     bool exitBlocked = false;
@@ -127,12 +139,32 @@ void TrafficSim::step() {
                             break;
                         }
                     }
+                    // M-T2.0 转弯判定：当前 lane vs next lane 行进方向夹角
+                    // cos < 0.7071（偏转 >= 45°）= 转弯 -> 节点独占
+                    //（1 车道路网左转穿对向直行；掉头被 M-T0.0 构造禁掉）
+                    const Lane& nextLane =
+                        graph->lanes[static_cast<size_t>(nextLaneId)];
+                    const float fdx = lane.points.back().x - lane.points.front().x;
+                    const float fdz = lane.points.back().z - lane.points.front().z;
+                    const float ndx = nextLane.points.back().x - nextLane.points.front().x;
+                    const float ndz = nextLane.points.back().z - nextLane.points.front().z;
+                    const float flen = std::sqrt(fdx * fdx + fdz * fdz);
+                    const float nlen = std::sqrt(ndx * ndx + ndz * ndz);
+                    const bool isTurn =
+                        flen > 0.0f && nlen > 0.0f &&
+                        (fdx * ndx + fdz * ndz) / (flen * nlen) < 0.7071f;
+                    const int group = control->groupOfEdge(
+                        static_cast<size_t>(nIdx), lane.edgeId);
                     if ((atLine || earlyOk) && !exitBlocked &&
                         control->stateForEdge(static_cast<size_t>(nIdx), lane.edgeId) ==
                             SignalState::Green) {
-                        mayCross = control->acquire(static_cast<size_t>(nIdx), ci);
+                        mayCross = control->acquire(static_cast<size_t>(nIdx), ci,
+                                                    group, isTurn);
                     }
                     if (!mayCross) {
+                        if (atLine) // M-T2.1：在线等待 = gap-out 需求数据源
+                            control->reportWaiting(static_cast<size_t>(nIdx),
+                                                   lane.edgeId);
                         // 未获准：向停车线收敛（刹车曲线）+ 硬钳 backstop
                         const float lineV = std::sqrt(
                             2.0f * params.brake * (remain > 0.0f ? remain : 0.0f));
@@ -159,10 +191,13 @@ void TrafficSim::step() {
             st.speed = 0.0f;
         }
 
-        // lane 推进：route 内前进；route 走完 = 停车钳位（循环旗标独立后续项）
-        while (st.s > lane.length && car.routeIdx + 1 < car.route.size()) {
+        // lane 推进：route 内前进；route 走完 = 停车钳位。
+        // M-T2.2：loop 环闭合时 routeIdx 回绕续行（车流永不落停）。
+        while (st.s > lane.length &&
+               (car.routeIdx + 1 < car.route.size() || looping)) {
             st.s -= lane.length;
-            ++car.routeIdx;
+            car.routeIdx = static_cast<int32_t>(
+                (static_cast<size_t>(car.routeIdx) + 1) % car.route.size());
             st.lane = car.route[static_cast<size_t>(car.routeIdx)];
         }
         const Lane& cur = graph->lanes[static_cast<size_t>(st.lane)];

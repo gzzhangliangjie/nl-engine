@@ -12093,7 +12093,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车 4657 断言",
+     "name": "selftest：车道图/寻路/跟车 4685 断言",
      "kind": "tool",
      "note": "确定性逐位 + 几何精确浮点锚 + 连接闭合 + A* 路径锚 + 跟车平衡间距/限速帽 + 负向显式报错；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12101,7 +12101,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (4657 asserts)",
+     "expectLog": "traffic selftest: PASS (4685 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12187,7 +12187,7 @@
     "占用锁锚：FIFO 授予序（队首优先）+ 持锁互斥 + 圈内不释放/越圈释放 + 冲突双车串行过锁（先到零停滞/后到等锁）",
     "红灯刹停：长红窗口内停车线 7.5m 逐位钳停 + 停滞计数",
     "控制全开双跑：TrafficCarState memcmp 逐位一致 + haltFrames 一致；跨路段最小间距全程 >= 1.0m",
-    "城市冒烟（49 lock-only 节点）：终态锁全释放（locked end 0，根修前实测 20 锁泄漏）+ min gap 1.35m + 到达>0",
+    "城市冒烟（49 lock-only 节点）：无死锁（停滞持锁退出 1；locked end 行为终态持锁节点数，M-T2 组锁后穿越持锁合法）+ min gap 1.35m + 到达>0+ min gap 1.35m + 到达>0",
     "交代物：example/t1-traffic/（run.bat 五段 ALL GREEN + signal-sim/city-sim 信号状态着色终帧证据图 + 信号化夹具路网）+ 本卡五用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 4657 断言含 ⑨ 调度器段）"
    ],
    "exe": {
@@ -12208,7 +12208,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车/调度器 4657 断言",
+     "name": "selftest：车道图/寻路/跟车/调度器 4685 断言",
      "kind": "tool",
      "note": "⑨ 调度器段：信号时钟帧锚 + FIFO 锁单元链 + 红灯 7.5m 逐位钳停 + 冲突串行过锁 + 跨路段互斥 + 控制全开双跑 memcmp；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12216,7 +12216,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (4657 asserts)",
+     "expectLog": "traffic selftest: PASS (4685 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12242,7 +12242,7 @@
      "id": "sim-city",
      "name": "sim：真实城市 32 车（49 lock-only 节点）+ 跨路段互斥扫描",
      "kind": "tool",
-     "note": "城市 signal 位全 false = lock-only 占用锁；min gap 1.35m >= 1.0 下界；locked end 0 = 不堵死（自适应控制几何根修后）；citygen signal 恒 false，信号路径由夹具卡演示。",
+     "note": "城市 signal 位全 false = lock-only 占用锁 + M-T2 组共享并行（吞吐 17/32 / 646.9m，M-T1 基线 7/32 / 475.5m）；死锁守卫内建于退出码（停滞持锁 = 退出 1）；citygen signal 恒 false，信号路径由夹具卡演示。",
      "args": [
       "sim",
       "{root}/example/w0-m0/roadnet.json",
@@ -12254,7 +12254,7 @@
       "{root}/example/t1-traffic/city-sim.png"
      ],
      "expectExit": 0,
-     "expectLog": "locked end  : 0",
+     "expectLog": "distance    : 646.9 m",
      "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t1-traffic/city-sim.png"
     },
     {
@@ -12273,6 +12273,125 @@
      "expectExit": 1,
      "expectLog": "has no lane",
      "command": "traffic-tools path example/t1-traffic/signal-roadnet.json --from 0 --to 99"
+    }
+   ]
+  },
+  {
+   "id": "t2-traffic",
+   "label": "T0 M-T2.0~T2.2",
+   "name": "调度器增强（组共享锁 + 转弯独占 + gap-out 感应信号 + 循环路线，traffic-tools）",
+   "tag": "traffic-m2",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 9 步后续迭代（A 类轨道 feat/worldgen，M-T1 机制延伸，用户拍板「开后续项 全给做了吧」）：Q-T9 锁模型升级（组共享 + 转弯独占——直行车同组并行穿路口（对向右行车道分离），转弯车独占全节点（1 车道路网左转穿对向），FIFO 队序天然防转弯饿死，非纯轴节点组锁退化单持有者保正确）+ Q-T10 gap-out 感应信号（绿相零需求持续 gap_out_s 提前切黄，整数帧跳变确定，phases 契约可选扩展 gap_out_s 缺省 0=关）+ Q-T11 循环路线（TrafficParams.loop 环闭合回绕续行，tool --loop 构造环 route）。城市组锁吞吐 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m，+143%）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "锁单元锚：同组第二车直接共享授予；跨组互斥（g0 非空时 g1 入队）；转弯独占授予/独占期组申请入队/释放链全部按序",
+    "gap-out 时钟锚：绿相零需求 gap_out 0.5s 于 frame 481 提前切黄（固定周期应为 150）；需求反锚（持续上报不触发，frame 700 自然周期）；最短绿时防抖（minGreen 窗口内零跳帧）",
+    "loop 锚：方格环 [e0,e4,e7,e3] 30s odometer > 50m（环长 40m）速度恒正（永不停）+ 双跑 memcmp 逐位 + loop=false 对照单程停靠",
+    "转弯独占仿真锚：转弯车与跨组车串行过锁 + heldNodeCount 0 + 控制全开双跑 memcmp",
+    "城市冒烟（49 lock-only 节点 32 车）：组锁吞吐 17/32 / 646.9m（M-T1 7/32 / 475.5m）+ min gap 1.35m（对向共线豁免口径修正后回基线）+ 停滞持锁 0（死锁守卫内建退出码）",
+    "交代物：example/t2-traffic/（run.bat 六段 ALL GREEN + gapout-sim/city-sim 证据图 + gap_out_s 契约夹具）+ 本卡七用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 4685 断言含 ⑩ M-T2 段）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t2-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；sim 段含 --loop / --actuated 新旗标。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools sim <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车/调度器/调度增强 4685 断言",
+     "kind": "tool",
+     "note": "⑩ M-T2 段：gap-out 帧跳变 481 锚 + 需求反锚 + 最短绿时防抖 + loop 环 odometer/双跑/对照 + 转弯独占串行/无泄漏/双跑；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (4685 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "sim-gapout",
+     "name": "sim：gap-out 感应信号夹具 6 车（phases 契约 gap_out_s=1.0）",
+     "kind": "tool",
+     "note": "4 信号节点全 gap-out 1s：绿相无等待车 1s 即提前切黄（对向有车等待时）；终帧 PNG 含相位方块；locked end 0。",
+     "args": [
+      "sim",
+      "{root}/example/t2-traffic/gapout-roadnet.json",
+      "--cars",
+      "6",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t2-traffic/gapout-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "signals     : 4 (lock-only 0 / signal 4)",
+     "command": "traffic-tools sim example/t2-traffic/gapout-roadnet.json --cars 6 --frames 1800 --png example/t2-traffic/gapout-sim.png"
+    },
+    {
+     "id": "sim-city",
+     "name": "sim：真实城市 32 车（组共享锁并行吞吐 +143%）",
+     "kind": "tool",
+     "note": "49 lock-only 节点组锁：arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m）；对向共线车道豁免口径（精确反向 + 共线 0.75m）修正后 min gap 1.35m；停滞持锁死锁守卫内建退出码。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t2-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived     : 17 / 32",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t2-traffic/city-sim.png"
+    },
+    {
+     "id": "sim-loop",
+     "name": "sim：循环路线 4 车（闭环 route 永不停）",
+     "kind": "tool",
+     "note": "--loop 构造闭环 route（A->goal ⊕ goal->A 回环去尾），环上锁申请/释放循环无泄漏；终态持锁穿越车（speed>0）不算死锁。",
+     "args": [
+      "sim",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--cars",
+      "4",
+      "--frames",
+      "1800",
+      "--loop"
+     ],
+     "expectExit": 0,
+     "expectLog": "loop routes : 4 / 4 (closed rings)",
+     "command": "traffic-tools sim example/t0-traffic/roadnet.json --cars 4 --frames 1800 --loop"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道显式退出 1（expectExit 约定 0/1/2）；碰撞/停滞死锁违例同为退出 1（sim 内建）。",
+     "args": [
+      "path",
+      "{root}/example/t2-traffic/gapout-roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t2-traffic/gapout-roadnet.json --from 0 --to 99"
     }
    ]
   }

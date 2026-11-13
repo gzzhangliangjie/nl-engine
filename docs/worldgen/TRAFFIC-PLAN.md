@@ -98,3 +98,39 @@
 - `LaneGraph` / `LanePath` / M-T0 TrafficSim 既有语义与锚**不改不重拍**（control 为可选挂接，nullptr = 原行为）。
 - `dumpLaneGraphJson` 字节契约不动（控制面不进 lane graph dump）。
 
+
+## 10. M-T2 立项（2026-11-14，用户拍板「开后续项 全给做了吧」）
+
+M-T1 收官后续候选项中**调度器增强三项**合入 M-T2（worldgen 轨，tag 前缀沿用 `traffic-*`，tag `traffic-m2`）；CityCar 接入 viewer / GameClock-ECS System 化涉渲染与 ECS 架构，单列 M-T3 于 M-T2 收口后摆证据拍板。
+
+### 10.1 Q-T9 冲突并行（锁模型升级：组共享 + 转弯独占）
+
+| | 方案 | 代价 |
+|---|---|---|
+| C-A（采纳） | 锁资源 = {组0 共享集, 组1 共享集, 转弯独占}：直行车同组并行穿路口（对向直行安全 = 右行车道分离），转弯车独占全节点（1 车道路网左转穿对向直行），FIFO 队列防转弯饿死（有转弯等待者则暂停新组授予） | 锁数据结构重写；M-T1 串行语义锚随机制升级同步改写（行为锚语义保持） |
+| C-B | 精确冲突矩阵（按 lane→lane 轨迹相交预计算） | 转向集合枚举 + 矩阵构建复杂，本步收益低 |
+
+- **转弯判定**：当前 lane 方向 × next lane 方向，`cos < 0.7071`（偏转 ≥45°）= 转弯；掉头被 M-T0.0 构造禁掉，不出现。
+- **信号节点**：直行车仍须绿相才受理，获准后同组共享并行；转弯车绿相获准 = 独占。
+- **lock-only 节点**：同规则，信号恒绿——吞吐来源 = 同组并行。
+- **保留不变**：死锁闸三件套（无前车前瞻闸 / 出口防溢出闸 / 自适应几何）、越圈释放（releaseCleared 改从所属资源移除）、车序确定性。
+
+### 10.2 Q-T10 感应信号（gap-out）
+
+| | 方案 | 代价 |
+|---|---|---|
+| A-A（采纳） | 绿相活跃组本帧零等待车持续 `gap_out_s` → 提前切黄（跳 frame 到黄灯起点，整数帧确定性）；最短绿时防抖 `min(greenS, 2s)`；`gap_out_s` 默认 0 = 关（M-T1 固定周期行为与全部锚冻结），phases 契约可选条目 `"gap_out_s"` 开启 | demand 上报接口 + 切相计算 |
+| A-B | 全检测器矩阵（每进入边埋线圈分类计数） | 超出本步验收 |
+
+- **需求上报**：TrafficSim 每帧对「在线等待（atLine 且未获准）」的车调 `reportWaiting(nodeIdx, edgeId)`；advanceFrame 用上一帧 demand 判 gap-out。
+- **演示位**：M-T2 新夹具 roadnet phases 写 `gap_out_s`；t1-traffic 旧夹具不带 = 行为冻结。
+
+### 10.3 Q-T11 循环路线
+
+- `TrafficParams.loop`（默认 false）：route 走完且**环闭合**（末 lane toNode == 首 lane fromNode）时 routeIdx 回绕续行；不闭合/关闭 = 现停靠行为。tool `sim --loop` 构造环 route（start→goal ⊕ goal→start 回程 path 去尾），不可达回落单程并显式报告行。
+- **锚**：loop 车 odometer 超环长（≥2 圈）+ 双跑 memcmp + 沿途锁全释放。
+
+### 10.4 阶梯与冻结面
+
+M-T2.0 三机制落码 + selftest ⑩ → M-T2.1 tool 旗标 + 城市/夹具冒烟 + 证据 → M-T2.2 卡 + GUIDE + 台账 + close（tag `traffic-m2`）。冻结面：M-T0/M-T1 全部交付物语义冻结（gap_out_s=0 时信号时钟逐位同 M-T1；组锁在「同组第二辆车」出现前的行为 = 单持有者语义等价——直行车先到先得不变）；t0/t1 卡与夹具不动。
+

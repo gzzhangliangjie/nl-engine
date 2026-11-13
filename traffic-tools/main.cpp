@@ -447,28 +447,33 @@ int selftest(const std::string& emitFixture) {
         T0_CHECK(!cp.buildFromRoadnetJson(phBad.data(), phBad.size(), &g, &err));
         T0_CHECK(!err.empty());
 
-        // ③ 锁单元锚（B1 FIFO）：授予 / 入队 / 队首优先 / 越圈释放 / 未越圈不释放
+        // ③ 锁单元锚（B1 FIFO，M-T2 组锁接口；同组申请序 = 旧单持有器语义）：
+        // 授予 / 入队 / 队首优先 / 越圈释放 / 未越圈不释放
         nl::traffic::TrafficControl cl;
         T0_CHECK(cl.buildFromRoadnetJson(fixture.data(), fixture.size(), &g, &err));
         const size_t nl3 = static_cast<size_t>(cl.findNode(3));
-        T0_CHECK(cl.acquire(nl3, 5)); // 空闲 -> 授予
-        T0_CHECK(cl.isHolder(nl3, 5));
-        T0_CHECK(!cl.acquire(nl3, 6)); // 被占 -> 入队
-        T0_CHECK(cl.acquire(nl3, 5)); // 持锁重复申请 = true
-        T0_CHECK(!cl.acquire(nl3, 7)); // 排队尾（6 之后）
-        cl.releaseCleared(5, 100.0f, 100.0f); // 远离 -> 释放
-        T0_CHECK(cl.acquire(nl3, 6)); // 队首授予
-        T0_CHECK(!cl.acquire(nl3, 7)); // 6 持锁，7 仍排队
+        T0_CHECK(cl.acquire(nl3, 5, 0, false)); // 空闲 -> 授予（组 0 共享集）
+        T0_CHECK(cl.hasAccess(nl3, 5));
+        T0_CHECK(cl.acquire(nl3, 6, 0, false)); // 同组第二车 = 直接共享授予（M-T2 并行）
+        T0_CHECK(cl.hasAccess(nl3, 6));
+        T0_CHECK(cl.acquire(nl3, 5, 0, false)); // 已持有重复申请 = true
+        T0_CHECK(!cl.acquire(nl3, 7, 1, false)); // 跨组：g0 非空 -> 入队
+        T0_CHECK(!cl.acquire(nl3, 8, 0, true)); // 转弯：组非空 -> 入队
+        T0_CHECK(!cl.hasAccess(nl3, 7) && !cl.hasAccess(nl3, 8));
+        cl.releaseCleared(5, 100.0f, 100.0f); // 远离 -> 释放车 5
+        T0_CHECK(!cl.hasAccess(nl3, 5));
+        T0_CHECK(cl.hasAccess(nl3, 6)); // 6 仍在共享集
+        T0_CHECK(!cl.hasAccess(nl3, 7)); // 跨组仍互斥（6 未清）
         cl.releaseCleared(6, 100.0f, 100.0f);
-        T0_CHECK(cl.acquire(nl3, 7)); // 队空 -> 授予
-        T0_CHECK(!cl.acquire(nl3, 8)); // 8 入队
-        cl.releaseCleared(7, cl.nodes[nl3].x + cl.nodes[nl3].clearEff * 0.5f,
-                          cl.nodes[nl3].z);
-        T0_CHECK(cl.isHolder(nl3, 7)); // 圈内不释放
-        cl.releaseCleared(7, cl.nodes[nl3].x + cl.nodes[nl3].clearEff + 0.5f,
-                          cl.nodes[nl3].z);
-        T0_CHECK(!cl.isHolder(nl3, 7)); // 越圈释放
-        T0_CHECK(cl.acquire(nl3, 8)); // 队首 8 授予
+        T0_CHECK(cl.hasAccess(nl3, 7)); // g0 清空 -> 队首 7（组 1）授予
+        T0_CHECK(!cl.hasAccess(nl3, 8)); // turn 等待者存在（8 在 7 之前入队? 否——
+        // 8 在 7 之后入队；FIFO 队首已到 7，7 授予后队首 = 8，组授予暂停逻辑
+        // 只影响新组申请；此处 8 尚未轮到）
+        cl.releaseCleared(7, 100.0f, 100.0f);
+        T0_CHECK(cl.hasAccess(nl3, 8)); // 全清 -> 队首 8 转弯独占授予
+        T0_CHECK(!cl.acquire(nl3, 9, 0, false)); // 独占期组申请入队
+        cl.releaseCleared(8, 100.0f, 100.0f);
+        T0_CHECK(cl.hasAccess(nl3, 9)); // turn 清空 -> 9 授予
 
         // ④ 仿真锚：红灯刹停（大 clear 窗口锁死长红），停车线 10-2.5=7.5 逐位
         {
@@ -530,6 +535,99 @@ int selftest(const std::string& emitFixture) {
         }
     }
 
+    // --- ⑩ M-T2 调度器增强（Q-T9 组锁 / Q-T10 gap-out / Q-T11 loop）：锚 ---
+    {
+        std::string terr;
+        std::string serr;
+        // 信号化夹具（同 ② 口径：node3 signal=true；replace 长度一律 needle.size()）
+        std::string sigFixture = fixture;
+        const std::string sigNeedle =
+            "\"id\": 3, \"x\": 10.0, \"z\": 10.0, \"kind\": \"intersection\", \"signal\": false";
+        sigFixture.replace(sigFixture.find(sigNeedle), sigNeedle.size(),
+                           "\"id\": 3, \"x\": 10.0, \"z\": 10.0, \"kind\": "
+                           "\"intersection\", \"signal\": true");
+        // a) gap-out 纯控制锚：绿相零需求持续 gapOutS -> 提前切黄（整数帧确定）
+        //    sigFixture node3：e6 组 0 / e4 组 1；greenS=8s(480帧) minGreen=2s(120帧)
+        //    gapOutS=0.5s(30帧)：inPhase 120..149 累计 idle 1..30，frame=149 时触发
+        //    跳帧 delta = 480-149 = 331 -> frame=480（黄起点）-> ++frame = 481
+        nl::traffic::TrafficControl cg;
+        T0_CHECK(cg.buildFromRoadnetJson(sigFixture.data(), sigFixture.size(), &g, &terr));
+        const size_t g3 = static_cast<size_t>(cg.findNode(3));
+        cg.nodes[g3].greenS = 8.0f;
+        cg.nodes[g3].yellowS = 2.0f;
+        cg.nodes[g3].clearS = 1.0f;
+        cg.nodes[g3].gapOutS = 0.5f;
+        for (int f = 0; f < 150; ++f) cg.advanceFrame();
+        T0_CHECK(cg.frame == 481); // 固定周期应为 150；感应提前到黄
+        T0_CHECK(cg.stateForEdge(g3, 6) == nl::traffic::SignalState::Yellow);
+        // 需求反锚：绿相每帧上报等待 -> 不触发 gap-out，自然周期切换
+        nl::traffic::TrafficControl cd;
+        T0_CHECK(cd.buildFromRoadnetJson(sigFixture.data(), sigFixture.size(), &g, &terr));
+        const size_t d3 = static_cast<size_t>(cd.findNode(3));
+        cd.nodes[d3].gapOutS = 0.5f;
+        for (int f = 0; f < 700; ++f) {
+            cd.reportWaiting(d3, 6); // 组 0 持续有车在线等
+            cd.advanceFrame();
+        }
+        T0_CHECK(cd.frame == 700); // 无跳帧
+        T0_CHECK(cd.stateForEdge(d3, 4) == nl::traffic::SignalState::Green); // 组 1 正常接续
+        // 最短绿时防抖：绿相前 120 帧内不触发（window [minGreen, gf) 语义）
+        nl::traffic::TrafficControl cm;
+        T0_CHECK(cm.buildFromRoadnetJson(sigFixture.data(), sigFixture.size(), &g, &terr));
+        const size_t m3c = static_cast<size_t>(cm.findNode(3));
+        cm.nodes[m3c].gapOutS = 0.01f; // 1 帧即触发阈值
+        for (int f = 0; f < 119; ++f) cm.advanceFrame();
+        T0_CHECK(cm.frame == 119); // minGreen 窗口前零跳帧
+
+        // b) loop 环路线锚：方格夹具环 [e0,e4,e7,e3]（0->1->3->2->0 闭合）
+        //    30s odometer > 50m（环长 40m = 至少 1.25 圈）+ 双跑 memcmp 逐位
+        nl::traffic::TrafficSim sl;
+        sl.graph = &g;
+        sl.params.loop = true;
+        const std::vector<int32_t> ring = {laneByEdge(g, 0), laneByEdge(g, 4),
+                                           laneByEdge(g, 7), laneByEdge(g, 3)};
+        T0_CHECK(sl.addCar(ring, 0.0f, &serr));
+        for (int f = 0; f < 1800; ++f) sl.step();
+        T0_CHECK(sl.cars[0].state.odometer > 50.0f);
+        T0_CHECK(sl.cars[0].state.speed > 0.0f); // 环上永不停（lock-only 全过）
+        nl::traffic::TrafficSim sl2;
+        sl2.graph = &g;
+        sl2.params.loop = true;
+        T0_CHECK(sl2.addCar(ring, 0.0f, &serr));
+        for (int f = 0; f < 1800; ++f) sl2.step();
+        T0_CHECK(std::memcmp(&sl.cars[0].state, &sl2.cars[0].state,
+                             sizeof(nl::traffic::TrafficCarState)) == 0);
+        // loop=false 对照：同 route 单程停靠（odometer < 环长）
+        nl::traffic::TrafficSim sn;
+        sn.graph = &g;
+        T0_CHECK(sn.addCar(ring, 0.0f, &serr));
+        for (int f = 0; f < 1800; ++f) sn.step();
+        T0_CHECK(sn.cars[0].state.speed == 0.0f);
+        T0_CHECK(sl.cars[0].state.odometer > sn.cars[0].state.odometer);
+
+        // c) 转弯独占仿真锚：e0(0->1 x) -> e4(1->3 z) = 90° 转弯 -> 节点独占；
+        //    跨组直行车与转弯车串行过锁（不并行不穿模）+ 双跑一致
+        nl::traffic::TrafficControl ct;
+        T0_CHECK(ct.buildFromRoadnetJson(fixture.data(), fixture.size(), &g, &terr));
+        nl::traffic::TrafficSim s7;
+        s7.graph = &g;
+        s7.control = &ct;
+        T0_CHECK(s7.addCar({laneByEdge(g, 0), laneByEdge(g, 4)}, 0.0f, &serr)); // 转弯
+        T0_CHECK(s7.addCar({laneByEdge(g, 2), laneByEdge(g, 6)}, 0.0f, &serr)); // e2->e6 转弯
+        for (int f = 0; f < 900; ++f) s7.step();
+        T0_CHECK(ct.heldNodeCount() == 0); // 无锁泄漏（独占与共享释放对称）
+        nl::traffic::TrafficSim s8;
+        s8.graph = &g;
+        s8.control = &ct;
+        T0_CHECK(s8.addCar({laneByEdge(g, 0), laneByEdge(g, 4)}, 0.0f, &serr));
+        T0_CHECK(s8.addCar({laneByEdge(g, 2), laneByEdge(g, 6)}, 0.0f, &serr));
+        for (int f = 0; f < 900; ++f) s8.step();
+        T0_CHECK(std::memcmp(&s7.cars[0].state, &s8.cars[0].state,
+                             sizeof(nl::traffic::TrafficCarState)) == 0);
+        T0_CHECK(std::memcmp(&s7.cars[1].state, &s8.cars[1].state,
+                             sizeof(nl::traffic::TrafficCarState)) == 0);
+    }
+
     // --- 夹具落盘（ctest build 正向用例数据源，DEPENDS 链） ---
     if (!emitFixture.empty()) {
         if (!writeFile(emitFixture, fixture)) {
@@ -551,6 +649,7 @@ int usage() {
                  "  traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>\n"
                  "  traffic-tools lanes <roadnet.json> --png out.png [--size WxH]\n"
                  "  traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]\n"
+                 "                                    [--loop] [--actuated]\n"
                  "  traffic-tools selftest [--emit-fixture path]\n"
                  "  traffic-tools help\n");
     return 2;
@@ -731,6 +830,7 @@ int main(int argc, char** argv) {
         if (argc < 3) return usage();
         const std::string roadnetPath = argv[2];
         int nCars = 4, frames = 600;
+        bool loopMode = false, actuated = false;
         std::string pngPath;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--cars") == 0 && i + 1 < argc) {
@@ -739,6 +839,10 @@ int main(int argc, char** argv) {
                 frames = std::atol(argv[++i]);
             } else if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) {
                 pngPath = argv[++i];
+            } else if (std::strcmp(argv[i], "--loop") == 0) { // M-T2.2 环路线
+                loopMode = true;
+            } else if (std::strcmp(argv[i], "--actuated") == 0) { // M-T2.1 gap-out 2s
+                actuated = true;
             } else {
                 return usage();
             }
@@ -767,9 +871,14 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
             return 1;
         }
+        if (actuated) // M-T2.1：全信号节点开 gap-out 2s（phases 契约的 CLI 等价位）
+            for (nl::traffic::NodeControl& n : ctrl.nodes)
+                if (n.signal) n.gapOutS = 2.0f;
         nl::traffic::TrafficSim sim;
         sim.graph = &g;
         sim.control = &ctrl; // M-T1：路口控制面（信号相位 + 占用锁）默认挂接
+        sim.params.loop = loopMode; // M-T2.2：环路线（环闭合才回绕）
+        int looped = 0;
         for (int i = 0; i < nCars; ++i) {
             const int32_t start = laneByEdge(g, static_cast<int32_t>(i));
             const int32_t goal =
@@ -778,6 +887,23 @@ int main(int argc, char** argv) {
             if (nl::traffic::findPathOnLanes(g, start, goal, &route, &err) !=
                 nl::traffic::PathStatus::Ok) {
                 route.assign(1, start); // 不可达回落：原地单车道行驶
+            }
+            // M-T2.2 环路线：goal -> start 回程 path 去尾拼接（闭合判定在
+            // sim::loopActive；单车道回落不可环）。不可环回落单程并显式报告。
+            if (loopMode && route.size() >= 2) {
+                std::vector<int32_t> back;
+                if (nl::traffic::findPathOnLanes(g, route.back(), start, &back,
+                                                 &err) ==
+                    nl::traffic::PathStatus::Ok) {
+                    // back 首元 = route.back（衔接去重）、末元 = start；
+                    // 去掉末元 start 后闭合（末前驱 toNode == start.fromNode
+                    // 由 A* 相邻性保证）
+                    if (back.size() >= 2) {
+                        for (size_t k = 1; k + 1 < back.size(); ++k)
+                            route.push_back(back[k]);
+                        ++looped;
+                    }
+                }
             }
             // 出生点外移：s=0 = 节点圆心区（clearRadius 内）无锁占位会与穿行车
             // 假碰撞——出生在区外（>=4m 或停车线内 1m 取小）
@@ -800,7 +926,32 @@ int main(int argc, char** argv) {
             const int32_t b1 = b.fromNode < b.toNode ? b.toNode : b.fromNode;
             return a0 == b0 && a1 == b1;
         };
+        // M-T2.1 对向豁免升级：sameRoad 只认同一对节点——同一条街相邻路段
+        //（共用路口节点）的对向车道不覆盖（城市实测：共线街 e4(+X)/e7(-X) 在
+        // node3 两侧 0.557m = lane offset 设计值误报碰撞）。几何判据：
+        // 方向精确相反（dot <= -0.999）且共线（|叉积|/|a| < 0.75m = offset 和
+        // 0.5 + 余量；最小平行街距 4m 不受影响）= 同一条街的对向车道 -> 豁免。
+        auto oppositeLane = [](const nl::traffic::Lane& a, const nl::traffic::Lane& b,
+                               const nl::traffic::LanePoint& pa,
+                               const nl::traffic::LanePoint& pb) {
+            const float dx1 = a.points.back().x - a.points.front().x;
+            const float dz1 = a.points.back().z - a.points.front().z;
+            const float dx2 = b.points.back().x - b.points.front().x;
+            const float dz2 = b.points.back().z - b.points.front().z;
+            const float l1 = std::sqrt(dx1 * dx1 + dz1 * dz1);
+            const float l2 = std::sqrt(dx2 * dx2 + dz2 * dz2);
+            if (l1 <= 0.0f || l2 <= 0.0f) return false;
+            if ((dx1 * dx2 + dz1 * dz2) / (l1 * l2) > -0.999f) return false;
+            const float cross =
+                dx1 * (pb.z - a.points.front().z) - dz1 * (pb.x - a.points.front().x);
+            return std::fabs(cross) / l1 < 0.75f;
+        };
         float minPair2 = 1e30f;
+        int minPairFrame = -1;
+        struct PairInfo {
+            int lane, edge, fn, tn;
+            float x, z, spd;
+        } minPairA{}, minPairB{};
         for (int f = 0; f < frames; ++f) {
             sim.step();
             for (size_t a = 0; a < sim.cars.size(); ++a)
@@ -809,12 +960,22 @@ int main(int argc, char** argv) {
                         g.lanes[static_cast<size_t>(sim.cars[a].state.lane)];
                     const nl::traffic::Lane& lb =
                         g.lanes[static_cast<size_t>(sim.cars[b].state.lane)];
-                    if (la.id == lb.id || sameRoad(la, lb)) continue;
+                    if (la.id == lb.id) continue;
                     nl::traffic::LanePoint pa, pb;
                     if (!sim.carPosition(a, &pa) || !sim.carPosition(b, &pb)) continue;
+                    if (sameRoad(la, lb) || oppositeLane(la, lb, pa, pb)) continue;
                     const float dx = pa.x - pb.x;
                     const float dz = pa.z - pb.z;
-                    minPair2 = std::fmin(minPair2, dx * dx + dz * dz);
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 < minPair2) {
+                        minPair2 = d2;
+                        // 实证诊断：记录最小对几何（帧 / 两车 lane 与位置）
+                        minPairFrame = f;
+                        minPairA = {la.id, la.edgeId, la.fromNode, la.toNode, pa.x, pa.z,
+                                    sim.cars[a].state.speed};
+                        minPairB = {lb.id, lb.edgeId, lb.fromNode, lb.toNode, pb.x, pb.z,
+                                    sim.cars[b].state.speed};
+                    }
                 }
         }
         int moving = 0;
@@ -840,13 +1001,13 @@ int main(int argc, char** argv) {
         std::printf("signals     : %d (lock-only %d / signal %d)\n",
                     static_cast<int>(ctrl.nodes.size()),
                     static_cast<int>(ctrl.nodes.size()) - signalNodes, signalNodes);
+        if (loopMode)
+            std::printf("loop routes : %d / %d (closed rings)\n", looped, nCars);
         std::printf("moving end  : %d\n", moving);
         std::printf("arrived     : %d / %d\n", arrived,
                     static_cast<int>(sim.cars.size()));
         std::printf("distance    : %.1f m\n", distSum);
-        int lockedEnd = 0;
-        for (const int32_t h : ctrl.holder)
-            if (h >= 0) ++lockedEnd;
+        int lockedEnd = ctrl.heldNodeCount();
         std::printf("min gap     : %.2f m (cross-road)\n",
                      minPair2 < 1e29f ? std::sqrt(minPair2) : -1.0f);
         std::printf("locked end  : %d\n", lockedEnd);
@@ -856,31 +1017,81 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "traffic-tools: cross-road collision (%.3f m < 1.0 m)\n",
                          std::sqrt(minPair2));
+            std::fprintf(stderr,
+                         "  closest pair @frame %d:\n"
+                         "    A lane %d (e%d %d->%d) pos=(%.2f,%.2f) v=%.2f\n"
+                         "    B lane %d (e%d %d->%d) pos=(%.2f,%.2f) v=%.2f\n"
+                         "    sameRoad=%d\n",
+                         minPairFrame, minPairA.lane, minPairA.edge, minPairA.fn,
+                         minPairA.tn, minPairA.x, minPairA.z, minPairA.spd,
+                         minPairB.lane, minPairB.edge, minPairB.fn, minPairB.tn,
+                         minPairB.x, minPairB.z, minPairB.spd,
+                         static_cast<int>(minPairA.fn == minPairB.fn &&
+                                          minPairA.tn == minPairB.tn) ||
+                             static_cast<int>(minPairA.fn == minPairB.tn &&
+                                              minPairA.tn == minPairB.fn));
             return 1;
         }
-        if (lockedEnd != 0) {
-            for (size_t i = 0; i < ctrl.holder.size(); ++i) {
-                const int32_t h = ctrl.holder[i];
-                if (h < 0) continue;
+        // 死锁判定（M-T2 修正）：持锁车「停滞在圈内」（speed==0 且距节点
+        // <= clearEff）才算死锁；loop 环上车流不消散，终帧持锁穿越车
+        // （speed>0）是正常交通不是死锁。
+        int stalledHeld = 0;
+        for (size_t i = 0; i < ctrl.nodes.size(); ++i) {
+            const nl::traffic::NodeControl& nn = ctrl.nodes[i];
+            auto stalled = [&](int32_t h) {
+                if (h < 0 || static_cast<size_t>(h) >= sim.cars.size()) return false;
                 const nl::traffic::TrafficCar& c = sim.cars[static_cast<size_t>(h)];
-                const nl::traffic::Lane& cl = g.lanes[static_cast<size_t>(c.state.lane)];
-                const nl::traffic::NodeControl& nn = ctrl.nodes[i];
+                if (c.state.speed != 0.0f) return false;
                 nl::traffic::LanePoint pp;
-                sim.carPosition(static_cast<size_t>(h), &pp);
-                std::printf("LOCK node %d (in e%d/e%d) held by car %d: lane %d"
-                            "(e%d %d->%d) s=%.2f speed=%.2f route %d/%d"
-                            " pos=(%.1f,%.1f) distToNode=%.2f\n",
-                            nn.nodeId,
-                            nn.groups[0].empty() ? -1 : nn.groups[0].front(),
-                            nn.groups[1].empty() ? -1 : nn.groups[1].front(),
-                            h, cl.id, cl.edgeId, cl.fromNode, cl.toNode,
-                            c.state.s, c.state.speed, c.routeIdx,
-                            static_cast<int>(c.route.size()), pp.x, pp.z,
-                            std::sqrt((pp.x - nn.x) * (pp.x - nn.x) +
-                                      (pp.z - nn.z) * (pp.z - nn.z)));
+                if (!sim.carPosition(static_cast<size_t>(h), &pp)) return false;
+                const float d2 = (pp.x - nn.x) * (pp.x - nn.x) +
+                                 (pp.z - nn.z) * (pp.z - nn.z);
+                return d2 <= nn.clearEff * nn.clearEff;
+            };
+            if (stalled(ctrl.turnHolder[i])) ++stalledHeld;
+            for (const int32_t h : ctrl.groupHolders[0][i])
+                if (stalled(h)) ++stalledHeld;
+            for (const int32_t h : ctrl.groupHolders[1][i])
+                if (stalled(h)) ++stalledHeld;
+        }
+        if (stalledHeld != 0) {
+            for (size_t i = 0; i < ctrl.nodes.size(); ++i) {
+                bool held = ctrl.turnHolder[i] >= 0 ||
+                            !ctrl.groupHolders[0][i].empty() ||
+                            !ctrl.groupHolders[1][i].empty();
+                if (!held) continue;
+                const nl::traffic::NodeControl& nn = ctrl.nodes[i];
+                // 诊断行：逐持有车 dump 状态（组共享可能多车）
+                auto dumpCar = [&](int32_t h) {
+                    if (h < 0 ||
+                        static_cast<size_t>(h) >= sim.cars.size())
+                        return;
+                    const nl::traffic::TrafficCar& c =
+                        sim.cars[static_cast<size_t>(h)];
+                    const nl::traffic::Lane& cl =
+                        g.lanes[static_cast<size_t>(c.state.lane)];
+                    nl::traffic::LanePoint pp;
+                    sim.carPosition(static_cast<size_t>(h), &pp);
+                    std::printf(
+                        "LOCK node %d (in e%d/e%d) held by car %d: lane %d"
+                        "(e%d %d->%d) s=%.2f speed=%.2f route %d/%d"
+                        " pos=(%.1f,%.1f) distToNode=%.2f\n",
+                        nn.nodeId,
+                        nn.groups[0].empty() ? -1 : nn.groups[0].front(),
+                        nn.groups[1].empty() ? -1 : nn.groups[1].front(),
+                        h, cl.id, cl.edgeId, cl.fromNode, cl.toNode,
+                        c.state.s, c.state.speed, c.routeIdx,
+                        static_cast<int>(c.route.size()), pp.x, pp.z,
+                        std::sqrt((pp.x - nn.x) * (pp.x - nn.x) +
+                                  (pp.z - nn.z) * (pp.z - nn.z)));
+                };
+                dumpCar(ctrl.turnHolder[i]);
+                for (const int32_t h : ctrl.groupHolders[0][i]) dumpCar(h);
+                for (const int32_t h : ctrl.groupHolders[1][i]) dumpCar(h);
             }
-            std::fprintf(stderr, "traffic-tools: %d node lock(s) held at end (deadlock)\n",
-                         lockedEnd);
+            std::fprintf(stderr,
+                         "traffic-tools: %d stalled car(s) holding node lock(s) at end (deadlock)\n",
+                         stalledHeld);
             return 1;
         }
         if (!pngPath.empty()) {
