@@ -97,7 +97,11 @@ void ChaseCamera::snapEyeTo(const float eye[3]) {
     rig_.eye[0] = eye[0]; rig_.eye[1] = eye[1]; rig_.eye[2] = eye[2];
 }
 
-void ChaseCamera::lookDirection(float outYawDegrees, float outPitchDegrees) const {
+void ChaseCamera::lookAtPoint(float out[3]) const {
+    out[0] = rig_.lookAt[0]; out[1] = rig_.lookAt[1]; out[2] = rig_.lookAt[2];
+}
+
+void ChaseCamera::lookDirection(float& outYawDegrees, float& outPitchDegrees) const {
     const float dx = rig_.lookAt[0] - rig_.eye[0];
     const float dy = rig_.lookAt[1] - rig_.eye[1];
     const float dz = rig_.lookAt[2] - rig_.eye[2];

@@ -146,6 +146,7 @@ struct Options {
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
+    bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
     bool netServer  = false;  // NET M-NET2：--net-server <port>（服务器权威形态）
     int  netPort    = 0;      //   端口（1..65535；非法值由 runNormal 拒绝 exit 2）
@@ -541,6 +542,8 @@ Options parseArgs(int argc, char** argv) {
                 o.inputDemoStart = std::max(1, std::atoi(argv[++i]));
         } else if (a == "--drive-demo") {
             o.driveDemo = true;
+        } else if (a == "--free-demo") {
+            o.freeDemo = true;   // M-CAM5：自由相机确定性飞行脚本（仅 runNormal 消费）
         } else if (a == "--drive-hud") {
             o.driveHud = true;
         } else if (a == "--net-server" && i + 1 < argc) {   // NET M-NET2
@@ -2006,6 +2009,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (!o.cameraTrack.empty()) {
         if (!camera.loadTrack(o.cameraTrack.c_str()))
             nl::core::log::warnCh("viewer", "camera track load failed: ", o.cameraTrack);
+        else
+            // M-CAM5：加载成功日志锚（cam-3b 卡 expectLog 事实源）。
+            nl::core::log::infoCh("viewer", "camera track loaded: ",
+                                camera.cine.keyframeCount(), " keyframes, duration=",
+                                camera.cine.duration(), "s");
     }
     {
         nl::viewer::CameraMode m = nl::viewer::CameraMode::Orbit;
@@ -2241,7 +2249,24 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // 控制台/面板占输入时清空，避免打字或拖 HUD 时相机乱动）。
         {
             const bool camBlocked = hudWantsMouse || hudWantsKeyboard || consoleOpen;
-            if (camBlocked) {
+            if (o.freeDemo) {
+                // M-CAM5：帧序号确定性自由飞行脚本（同 --drive-demo / --input-demo
+                // 注入管线先例：同一输入消费面，帧序号驱动无窗口依赖）。
+                // Free look 增量走 FreeDrive.lookPx（弧度换算单点
+                // CameraDirector::kLookRadiansPerPixel = 0.005 rad/px）。
+                // 前飞 f2..11（约 1.5 单位贴近主体）→ 右扫视 f15..35（8px/帧 ≈ 46°）
+                // → 左扫回 f40..60 → 抬头 f65..80（-4px/帧 ≈ 17°）→ 低头回 f85..100。
+                // 对称往返：末帧朝向 ≈ 初始朝向（主体在景内），扫视过程留在逐帧确定性里。
+                nl::core::FreeDrive fd{};
+                fd.move[2]    = (frame >= 2 && frame < 11) ? 1.0f : 0.0f;   // W 前飞
+                fd.lookPx[0]  = (frame >= 15 && frame < 35) ? 8.0f : 0.0f;  // 右扫
+                fd.lookPx[0] += (frame >= 40 && frame < 60) ? -8.0f : 0.0f; // 左扫回
+                fd.lookPx[1]  = (frame >= 65 && frame < 80) ? -4.0f : 0.0f; // 抬头
+                fd.lookPx[1] += (frame >= 85 && frame < 100) ? 4.0f : 0.0f; // 低头回
+                camera.freeInput = fd;
+                camera.lookPx[0] = 0.0f; camera.lookPx[1] = 0.0f;
+                camera.camToggleEdge = false;
+            } else if (camBlocked) {
                 camera.lookPx[0] = 0.0f; camera.lookPx[1] = 0.0f;
                 camera.freeInput = nl::core::FreeDrive{};
             } else {
@@ -2487,6 +2512,19 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             camera.chassis = chassisState.valid ? &chassisState : nullptr;
             const float camDt = static_cast<float>(dtMs) * 0.001f;
             camera.update(camDt);
+            // M-CAM5：末帧相机终态日志锚（free/chase/track 卡 expectLog 事实源，
+            // 与 drive scene/drive hook 日志同族：真实终态反推，禁手写）。
+            if (o.screenshot && frame == static_cast<std::uint64_t>(o.frames)) {
+                float ce[3]; camera.eyePosition(ce);
+                nl::core::log::infoCh("viewer", "cam final: mode=", camera.modeName(),
+                                    " eye=", ce[0], "/", ce[1], "/", ce[2],
+                                    " yaw=", camera.yawDegrees(),
+                                    " pitch=", camera.pitchDegrees(),
+                                    " lookAt=", camera.outRig.lookAt[0], "/",
+                                    camera.outRig.lookAt[1], "/", camera.outRig.lookAt[2],
+                                    " chaseYawDeg=", camera.chassis ? camera.chassis->yawDegrees : -1.0f,
+                                    " chasePosZ=", camera.chassis ? camera.chassis->pos[2] : -1.0f);
+            }
         }
         const auto vp = resolveViewProjection(camera, physicsScene);
         const auto model = camera.model();
@@ -4307,6 +4345,8 @@ void printUsage() {
               << "                                     vehicles from interpolated snapshots\n"
               << "  viewer.exe --interp-delay <ticks>  M-NET3 client snapshot look-back depth in ticks\n"
               << "                                     (default 2.0, range 1.0..8.0)\n"
+              << "  viewer.exe --free-demo             M-CAM5 deterministic free-camera flight script\n"
+              << "                                     (use with --camera free; --fixed-dt recommended)\n"
               << "  viewer.exe --profiling-hud         M-TR0 separate perf stats window (default off)\n"
               << "                                     CVars: vehicle.throttleScale / steerScale / debug\n"
               << "  viewer.exe --fixed-dt <ms>         M-GL1: pin per-frame delta fed to the game clock\n"

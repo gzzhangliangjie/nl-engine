@@ -228,8 +228,13 @@ struct ViewerCamera {
 
 private:
     static void forwardFromView(const nl::core::Matrix4& v, float fwd[3]) {
-        // 列主序 view 矩阵：第三列 = zaxis = -forward（backward），故 forward = -(m8,m9,m10)
-        fwd[0] = -v.m[8]; fwd[1] = -v.m[9]; fwd[2] = -v.m[10];
+        // 列主序 view 矩阵：camera backward（zaxis = -forward）在第三**行**，
+        // 列主序存储下是 m[2] / m[6] / m[10]。
+        // M-CAM5 勘误：原实现读 m[8..10]（那是第三**列** = (right.z, up.z,
+        // backward.z)，不是 backward），导致 chase/track 的渲染视线错 45° 级——
+        // lookAt 由 eye + 错误 forward 反推，画面主体偏离画面中心（Orbit 路径
+        // 自带视图矩阵不经此函数，故 70 张既有基线零波及）。
+        fwd[0] = -v.m[2]; fwd[1] = -v.m[6]; fwd[2] = -v.m[10];
     }
     static float yawOf(const float l[3], const float e[3]) {
         return std::atan2(l[0] - e[0], l[2] - e[2]) * kRad2Deg;

@@ -173,3 +173,25 @@
     smoothstep 插值 + 播放控制，全无头）——均可不等 M-D3 随时开工。
   - **b 段收敛面**：CAM1b/CAM2b/CAM3b viewer 胶水收敛为「glfw 轮询 → InputState →
     readFreeInputs → director.update → 投影矩阵替换」几行调用 + HUD/cvar/截图基线。
+
+## 8. M-CAM5 留痕（2026-11-13，视觉卡欠账补齐，tag `cam-m5`）
+
+- 用户指令重开 track camera 补 cam-b 挂账的 free/chase/track/smooth/shake 视觉卡。实读澄清：
+  viewer `--screenshot` 本就无头确定性（input-m2 `--input-demo` / drive-m3 `--drive-demo` 先例），
+  欠账纯因当时没找到无头驱动面，**不需要真显示器**。
+- 新增 `--free-demo` 帧序号注入脚本（同 drive-demo/input-demo 注入管线先例；Free look 走
+  `FreeDrive.lookPx` 通道）+ 末帧 `cam final:` 日志锚 + `camera track loaded:` 加载锚 +
+  `example/cam-b/cam-track.tsv`（6 关键帧/5s/整圈/wrap 连续）+ 四张视觉卡
+  `cam-1b/cam-2b/cam-3b/cam-mcam4`（cases.json 110~113）+ `example/cam-b/` 八张双后端基线。
+- **勘误两处 b 段潜伏 bug**（补视觉卡时实证暴露）：
+  1. `ViewerCamera::forwardFromView` 读错矩阵行/列：列主序 view 矩阵 backward 在第三**行**
+     （`m[2]/m[6]/m[10]`），原读第三**列**（right.z/up.z/backward.z）→ chase/track 渲染视线错
+     45° 级、主体不居中。Orbit 路径不经此函数，既有基线零波及。
+  2. `ChaseCamera::lookDirection` 按值传参：out 参数写不回调用方，`seedFreeFromChase`/HUD/trace
+     yaw 列恒 0；cam-tools F4 与 director-check 各一处旧锚按新真实语义重标定（锚从实测反推口径）。
+- 连带根治：cam-tools stdout `_setmode(_O_BINARY)`——文本模式 `\r\n` 与 `*.tsv eol=lf` 冲突，
+  旧卡 run.bat TSV 字节比对在 LF checkout 下必挂（本轮前已潜伏）。cam-trace/free-trace/cine-trace
+  内容逐字节还原；cam-1a director-trace.tsv + acceptance.png 按真实 yaw/pitch 重生成。
+- 验收：四卡 + 旧三卡 + drive-m3 + s8.2 regression 全 bytes ALL GREEN；ctest cam 双后端 2/2；
+  `server.py --check` exit 0；同参重拍逐字节、双后端日志锚逐字一致、smoothshake 与 free 差异闸。
+  四栏台账见 `docs/MILESTONES.md` M-CAM5 节。

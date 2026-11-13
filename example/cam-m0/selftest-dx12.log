@@ -50,4 +50,56 @@
   ok E: pitch clamped at -83 deg (no flip-through)
   ok E: after yaw 90 deg forward = +X
   ok E: dt<=0 freezes update
-selftest PASS (6 sections)
+  ok F: adapter move axes (D=right, W=forward)
+  ok F: adapter boost (LeftShift)
+  ok F: adapter look = driving set mouse delta (shared action)
+  ok F: spectator set gating zeroes axes
+  ok F: starts in Chase mode
+  ok F: camToggle edge -> Free
+  ok F: Chase->Free switch frame pose bit-exact (seed = chase eye)
+  ok F: free fly forward via director moves along seeded look
+  ok F: camToggle edge -> Chase
+  ok F: Free->Chase switch frame pose bit-exact (snap seed)
+  ok F: chase damped follow resumes after reseed
+  ok F: invalid chassis freezes chase pose
+  ok F: cinematic loadTrack missing file fails explicitly
+  ok F: cinematic sample without track no-op
+  ok F: play state machine
+  ok F: sample advances progress while playing
+  ok F: pause state machine
+  ok F: stop resets progress
+  ok G: null frames rejected
+  ok G: zero count rejected
+  ok G: equal times rejected
+  ok G: NaN field rejected
+  ok G: valid track loads
+  ok G: keyframe count 3 + duration 4
+  ok G: temp tsv writable
+  ok G: loadTrack from TSV file
+  ok G: TSV roundtrip matches memory load
+  ok G: sample(dt=0) returns k0 pose
+  ok G: t=0 pose bit-exact = first keyframe
+  ok G: crossing end writes end pose once
+  ok G: end pose bit-exact = last keyframe
+  ok G: non-loop end auto-stops
+  ok G: stopped sample no-op
+  ok G: sample t=1
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: fov linear midpoint bit-exact
+  ok G: sample t=0.5 smooth
+  ok G: smoothstep u=0.25 bit-exact (s=0.15625)
+  ok G: smoothstep lags linear at u=0.25 (eases in)
+  ok G: smoothstep midpoint = linear midpoint (s(0.5)=0.5)
+  ok G: loop sample t=2
+  ok G: t=2 lands on k1 bit-exact
+  ok G: loop sample crosses end -> wraps
+  ok G: wrap progress exactly 0 (fmod integral laps)
+  ok G: wrap pose returns exactly to t0 (bit-exact)
+  ok G: paused sample no-op
+  ok G: pause freezes progress
+  ok G: setSpeed(0) rejected
+  ok G: speed 2x doubles advance (bit-exact accumulate)
+  ok G: stop resets progress
+selftest PASS (8 sections)
