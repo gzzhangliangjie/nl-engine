@@ -38,3 +38,9 @@ add_test(NAME w0-cityscene COMMAND city-tools generate --seed 12345 --size 6
          --out ${CMAKE_CURRENT_BINARY_DIR}/w0-cityscene --stats)
 set_tests_properties(w0-cityscene PROPERTIES
     PASS_REGULAR_EXPRESSION "wrote .*w0-cityscene.city\\.scene \\(entities=36 meshes=36\\)")
+
+# ---- M-W0.3：密度分区统计锚（四档计数 + noiseSeed，Python 参考互锁）----
+add_test(NAME w0-density COMMAND city-tools generate --seed 12345 --size 6
+         --out ${CMAKE_CURRENT_BINARY_DIR}/w0-density --stats)
+set_tests_properties(w0-density PROPERTIES
+    PASS_REGULAR_EXPRESSION "forestCells=21 lowCells=5 mediumCells=6 highCells=4 noiseSeed=2109909543")

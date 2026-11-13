@@ -63,9 +63,11 @@ citygen 只产「路网几何 + 拓扑 + 车道语义」；第 8 步交通系统
 - **验收判据**：① 分块 `.nmesh` 数量 = block 数、`city.scene` 引用闭合（`server.py --check` / `run.bat verify` 口径外，由工具 selftest 校验）；② 街景/俯视证据图（viewer `--scene` 渲染，**依赖可运行 viewer 的带显示环境**，M-TR0 实锤无头沙箱跑不了）。
 - **落地纪要（2026-11-13，OBJ 中间件 + city.scene 段）**：递归细分（先 x 后 z 阈值 2.3/1.6 → 4.5×3.0 恒 4 叶）+ 每叶一栋（below(3) 高度档 {3,8,14}m + below(2) 占地内缩 {0.30,0.15}m，消费排流尾、36 shade 前缀逐字节不动，selftest 锁前缀）→ 每 block 一份 OBJ（8 顶点 12 三角外向绕序盒，block 局部坐标）+ `city.scene`（E1 World JSON：每 block 一实体，Transform=block 世界中心，Model.mesh 引用 OBJ，seed 无关索引——E1 schema 无 seed 键冻结面禁扩字段）。selftest 38→53 全绿；ctest 新增 `w0-cityscene` 双树 5/5；三卡回归各 8/8 + `--check` exit 0 + run.bat 七段 ALL GREEN。**缺口登记 asset-ingest**（PARALLEL-TRACKS 接收栏）：OBJ→glb 链在 feat/asset-ingest 已跑通未 merge，merge 后补转换消费步 + 白名单接入，街景证据图（viewer `--scene`）等通道 + 显示环境补拍，俯视证据图已交付；`.gitignore` 反白 `!example/*/blocks/*.obj`（楼体 OBJ 是交付物非编译中间产物）。`.nmesh` 数量判据①随转换步 merge 后由 selftest 扩锚收口，本段以 OBJ 数量 = block 数 + 引用闭合等价校验。
 
-### M-W0.3 — 噪声分区密度 + 统计锚收口
+### M-W0.3 — 噪声分区密度 + 统计锚收口（**已收官 2026-11-13，tag `w0-m3`，M-W0 整轨收官**）
 - **任务**：OpenSimplex 噪声分密度区（抄 bevy_city 思路不抄代码）+ `CityStats` 同构统计锚（楼数/路长/block 数写进产物与 `--stats` 输出）+ 全链 selftest 收口。
 - **验收判据**：① 城市俯视最终证据图（密度分区可见）；② 展示台 `citygen` 全卡齐备；③ 收口走 A 类工具版交代：annotated tag（名字制 `w0-*`）+ MILESTONES 四栏 + `close` 闸（track worldgen 已注册，硬闸生效）。
+- **落地纪要（2026-11-13）**：自研 simplex 梯度噪声（OpenSimplex 结构同构，F2/G2 数学推导 + 8 方向梯度表 + t⁴ 核，perm 独立 Pcg32(noiseSeed) Fisher-Yates；Python 参考实现独立复算 eval/perm 已知答案防自证，kNoiseNorm=40 经验归一化）密度分区（阈值 bevy 同源 0.45/0.6/0.7；noise_scale 0.025→0.06 显式偏离留档——size6 分区可见性）+ 树（forest 8/low 4 棵每块，仅俯视+统计层保 w0-m2 冻结基线）+ CityStats 密度档计数（21/5/6/4）。RNG 流最终形态四段（①36 shade → ②288 楼体 → ③noiseSeed → ④树位置），前两段逐字节不动重建流锁定。selftest 53→72 全绿；ctest 新增 `w0-density` 双树 6/6；四卡回归各 8/8 + `--check` exit 0 + run.bat 七段 ALL GREEN。踩坑：Python 参考 `lo=-size//2` floor 除法与 C++ 截断口径分歧（size1 偏差，C++ 为权威）、树位置浮点表示差（33·0.1f ≠ 2.1f 字面，断言改 fp 容忍度）。判据③ close 闸本段执行（`w0-m3` tag + MILESTONES 四栏 + close 报告）。
+- **M-W0 整轨收官备注**：M-W0.0~W0.3 四 tag（`w0-m0`~`w0-m3`）；资产转换缺口（OBJ→glb→nmesh 链 merge 后补消费步 + viewer 白名单 + 街景证据图）已登记 asset-ingest 轨道；`kStage`/renderer/viewer/.nmesh 全程零触碰。
 
 ---
 

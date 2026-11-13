@@ -3306,3 +3306,25 @@
 5. C4456 遮蔽 ×2（selftest 楼体块 `b` 撞 pcg32 段、scene 块 `closureOk` 撞 roadnet 段）→ 改名 bd/refClosureOk 清零。
 
 **下一步**：M-W0.3 OpenSimplex 噪声密度分区 + CityStats 统计锚收口（close 闸硬生效：annotated tag + MILESTONES 四栏 + `wt_pool.py close --track worldgen` 报告 + `release --done`）。
+
+## W0 M-W0.3 — simplex 噪声密度分区 + 树 + 统计锚收口（feat/worldgen，2026-11-13，tag `w0-m3`，M-W0 整轨收官）
+
+**动作**：M-W0 收官段（A 类轨道 worldgen，claim M-W0.3，wt `feat/worldgen`）。① 自研 simplex 梯度噪声（OpenSimplex 结构同构：F2=(√3−1)/2、G2=(3−√3)/6 数学推导常数，8 方向梯度表 (±1,±2)/(±2,±1)，径向核 t⁴·dot，内部纯 double；perm 256 项由独立 Pcg32(noiseSeed) Fisher-Yates 洗牌复制 512 回绕，梯度索引双重查表）——W3-A 全自研拍板范围，Python 参考实现独立复算 eval 四点 + perm 头已知答案防自证；kNoiseNorm=40 经验归一化（129² 采样实测 max|raw|=0.0218 → 归一 max≈0.87，|v|≤1 余量 13%）。② 密度分区：阈值 bevy 同源 0.45/0.6/0.7 四档；**noise_scale 0.025→0.06 显式偏离留档**（bevy 值在 33m 跨度 size6 下噪声域仅 0.83 周期、36 块全落同一波峰全 low 档实测，判据①「密度分区可见」不成立；0.06 → 约 2 周期四档全可见）。③ 树：forest 每块 8 棵 / low 每块 4 棵（每棵 below(45)/below(31) 各一次），俯视 3×3 深绿块；**仅俯视 + 统计层不进 OBJ/city.scene**——保 w0-m2 冻结基线（楼数/顶点/引用闭合锚不破），M-W1 树资产走 asset-ingest 通道。④ 俯视基调四档（forest 绿/low 浅/medium 中/high 深）+ shade 微抖保留；CityStats 扩 forestCells/lowCells/mediumCells/highCells（和恒 = blocks）+ trees 实数；serializeLayout 扩 noiseSeed + 4 计数 + cell tier + 树位。⑤ RNG 流最终形态四段收官：①36 shade（M-W0.0 前缀逐字节不动）→ ②288 楼体档位（M-W0.2 值不动）→ ③noiseSeed 1 次 next → ④树位置（流尾最后）；selftest 以「重建流 next() == noiseSeed」锁定 ③ 段位置。
+
+**提交版本**：`feat/worldgen`（city-tools main.cpp + CMakeLists w0-density 用例 + example/w0-m3 + cases.json w0-m3 卡第 121 张 + GUIDE §4 + W0-PLAN 纪要）；annotated tag `w0-m3` + close 闸报告。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 零触碰。
+
+**完成情况**
+- selftest 53 → 72 断言全绿（新增 19：密度档 21/5/6/4、噪声统计锚值域/均值、eval 四点 + perm 头已知答案、noiseSeed 流段位置、树数公式 forest·8+low·4 + 首树位置 fp 容忍度、异 seed 分布必异 19/4/4/9 + trees 168 + noiseSeed 3832654775、size1 边界含 lo 截断口径锚）。
+- DX12/VULKAN 双树 BUILD OK 零新警告；ctest `w0-city-*`×3 + `w0-roadnet` + `w0-cityscene` + `w0-density` 双树各 6/6（`--repeat until-pass:3`）。
+- `--only w0-m0`~`w0-m3` 四卡回归各 8/8 ALL GREEN；`server.py --check` exit 0。
+- `example/w0-m3/run.bat` 七段 ALL GREEN exit 0（selftest / generate 双锚段含密度档 21-5-6-4 + noiseSeed=2109909543 / 36 OBJ + 49 nodes / 同 seed 四产物 fc /b 逐字节 / 异 seed PNG+OBJ 必异 + 密度分布必异 + scene seed 无关 / usage exit2 / negative exit2）。
+- 证据图 `city_top.png`：密度分区可见（forest 绿 21 块 + 深绿树点 188 棵 / low 浅灰 / medium 中灰 / high 深灰）+ 楼体三档灰阶 + 路网叠加完好，工具真实输出。
+- close 闸：`wt_pool.py close --track worldgen --milestone M-W0.3 --tag w0-m3` 机械校验通过 + `release --done`（详见 .wt_pool_close/ 报告）。
+
+**踩坑情况**
+1. **Python 参考 `lo=-size//2` floor 除法 vs C++ 截断口径分歧**：size 1 时 Python lo=-1、C++ lo=0 → cell 错位 → 密度档断言锚错（medium vs forest）；size 6 偶数无影响故 M-W0.0 起未暴露。C++ 截断为权威口径，Python 复算脚本已勘误，selftest 补 `size 1 truncating lo == 0` 锚。
+2. **树位置浮点表示差**：`(below(45)-22)*0.1f` 的 33·0.1f ≠ 字面 2.1f（float 舍入）→ 位置断言改 fp 容忍度（<0.001）；此前 M-W0.2 楼体 inset 断言用精确 == 是因其值恰好可表示，同类断言今后一律容忍度。
+3. **bevy noise_scale 0.025 在小城市不可见**：实测 36 块全 low 档（噪声域 0.83 周期）→ 0.06 显式偏离留档（GUIDE §4.1）；教训：同构常数照抄前先验「在本项目参数域内是否满足验收判据」。
+4. DX12 树构建早于 w0-density 用例追加 → configure 缺用例（5/6）→ 补一次构建对齐双树 6/6。
+
+**M-W0 整轨收官**：`w0-m0`~`w0-m3` 四 tag；city-tools 从空白城骨架走到密度分区完整城市（俯视 PNG + roadnet.json + 36 OBJ + city.scene + 72 断言 + 6 ctest + 4 展示台卡）；资产转换缺口（OBJ→glb→nmesh 链 merge 后补消费步 + viewer 白名单 + 街景证据图）登记 asset-ingest；`kStage`/renderer/viewer/.nmesh 全程零触碰。

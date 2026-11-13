@@ -26,6 +26,19 @@
 //   below(16) 作地面灰度档位（0..15）——这是 M-W0.0 使「不同 seed 必不同」成立
 //   的最小种子敏感元；M-W0.3 OpenSimplex 密度分区接管视觉分区后保留此流前缀序。
 //   M-W0.1 roadnet 车道语义、M-W0.2 楼体分档的消费一律排在此流之后（追加不改前缀）。
+//   M-W0.3 最终形态：① 36 shade → ② 288 楼体档位 → ③ noiseSeed u32（1 次 next）
+//   → ④ 树位置（次数由密度档决定，流尾最后）。③④ 纯追加，①② 逐字节不动。
+//
+// M-W0.3 噪声口径（2026-11-13 三处实读留档，docs/worldgen/CITY-TOOLS-GUIDE.md §4）：
+//   simplex 梯度噪声（OpenSimplex 结构同构：F2=(√3-1)/2、G2=(3-√3)/6 数学推导常数，
+//   梯度表 8 方向 (±1,±2)/(±2,±1)，径向核 t=t²·t²，t⁴·dot），perm 表由独立
+//   Pcg32(noiseSeed) Fisher-Yates 洗牌——W3-A 全自研拍板范围，Python 参考实现
+//   独立复算已知答案（eval 锚 + perm 头锚）防自证。kNoiseNorm=40 经验归一化
+//   （129² 采样实测 max|raw|=0.0218 → 归一后 max≈0.87，|v|≤1 断言余量 13%）。
+//   密度阈值 bevy_city 同源：density<0.45 forest / <0.6 low / <0.7 medium / else
+//   high（noise_scale 0.025→0.06 显式偏离：bevy 值在 33m 跨度 size6 下噪声域
+//   仅 0.83 周期、四档不可见，判据①要求可见）。树 = forest 每块 8 棵 / low 4 棵，
+//   仅俯视图 + 统计层，不进 OBJ/city.scene（保 w0-m2 冻结基线产物）。
 //
 // 输出 ASCII only；PNG 编码走 vendored stb_image_write.h（public domain，
 // renderer/src/png_writer.cpp 同源先例），stb zlib 压缩确定性 → 同参数逐字节一致。
@@ -97,6 +110,80 @@ constexpr float kBlockX = 5.5f;     // roadnet.json 契约 blocks.x
 constexpr float kBlockZ = 4.0f;     // roadnet.json 契约 blocks.z
 constexpr float kRoadWidth = 1.0f;  // M-W0.0 路带总宽（俯视图示意口径）
 
+// M-W0.3 噪声 / 密度常数（bevy_city 同构 + 两处显式偏离，见文件头口径段）。
+constexpr double kNoiseScale = 0.06;  // bevy 0.025 → 0.06（size6 分区可见性，留档）
+constexpr double kNoiseNorm = 40.0;   // 经验归一化（实测 raw max 0.0218 → 0.87）
+constexpr float kDensityForest = 0.45f;  // bevy 同源阈值
+constexpr float kDensityLow = 0.6f;
+constexpr float kDensityMedium = 0.7f;
+constexpr std::uint32_t kTreesForest = 8; // forest 每块 8 棵
+constexpr std::uint32_t kTreesLow = 4;    // low 每块 4 棵
+
+// SimplexNoise —— 自研 simplex 梯度噪声（OpenSimplex 结构同构，W3-A 拍板零依赖；
+// 算法公共领域口径，常数/梯度表/perm 初始化均由本文件自定，Python 参考实现
+// 独立复算已知答案防自证）。内部纯 double 计算（Python 复算路径一致），输出 float。
+struct SimplexNoise {
+    std::uint8_t perm[512]; // 256 洗牌 + 复制一倍（索引回绕）
+
+    static constexpr double kF2 = 0.3660254037844386;  // (√3-1)/2（数学推导）
+    static constexpr double kG2 = 0.21132486540518713; // (3-√3)/6
+    // 8 方向梯度（(±1,±2)/(±2,±1)，非归一化；方向集自定，Python 复算一致）
+    static constexpr double kGrad[8][2] = {
+        {1, 2}, {2, 1}, {-1, 2}, {-2, 1},
+        {1, -2}, {2, -1}, {-1, -2}, {-2, -1},
+    };
+
+    void seed(std::uint32_t noiseSeed) {
+        Pcg32 rng;
+        rng.seed(noiseSeed);
+        std::uint8_t base[256];
+        for (std::uint32_t i = 0; i < 256; ++i) base[i] = static_cast<std::uint8_t>(i);
+        for (std::uint32_t i = 255; i >= 1; --i) { // Fisher-Yates（below 拒绝采样）
+            const std::uint32_t j = rng.below(i + 1u);
+            const std::uint8_t t = base[i];
+            base[i] = base[j];
+            base[j] = t;
+        }
+        for (std::uint32_t i = 0; i < 512; ++i) perm[i] = base[i & 255u];
+    }
+
+    static int fastFloor(double v) {
+        const int fi = static_cast<int>(v);
+        return (v < static_cast<double>(fi)) ? fi - 1 : fi;
+    }
+
+    static double contrib(int gi, double dx, double dy) {
+        double t = 0.5 - dx * dx - dy * dy;
+        if (t <= 0.0) return 0.0;
+        t *= t; // t^2 再平方 = t^4 径向核（Perlin simplex 风格）
+        return t * t * (kGrad[gi & 7][0] * dx + kGrad[gi & 7][1] * dy);
+    }
+
+    float evaluate(double x, double y) const {
+        const double s = (x + y) * kF2; // skew 到 simplex 格
+        const int i = fastFloor(x + s);
+        const int j = fastFloor(y + s);
+        const double t = static_cast<double>(i + j) * kG2;
+        const double x0 = x - (static_cast<double>(i) - t);
+        const double y0 = y - (static_cast<double>(j) - t);
+        const int i1 = (x0 > y0) ? 1 : 0; // 上下三角分支
+        const int j1 = (x0 > y0) ? 0 : 1;
+        const double x1 = x0 - static_cast<double>(i1) + kG2;
+        const double y1 = y0 - static_cast<double>(j1) + kG2;
+        const double x2 = x0 - 1.0 + 2.0 * kG2;
+        const double y2 = y0 - 1.0 + 2.0 * kG2;
+        const int ii = i & 255;
+        const int jj = j & 255;
+        const int gi0 = perm[perm[ii] + jj] & 7;          // 双重查表（Python 参考同口径）
+        const int gi1 = perm[perm[ii + i1] + jj + j1] & 7;
+        const int gi2 = perm[perm[ii + 1] + jj + 1] & 7;
+        const double raw = contrib(gi0, x0, y0) +
+                           contrib(gi1, x1, y1) +
+                           contrib(gi2, x2, y2);
+        return static_cast<float>(raw * kNoiseNorm);
+    }
+};
+
 // M-W0.2 楼体口径（W3-A 全自研最小算法；bevy_city 低密度每 block 4 栋同构）：
 //   内区 4.5x3.0 递归细分（先 x 后 z 阈值分割）→ 4 叶，每叶一栋；
 //   高度三档 / 占地两档（RNG 分档，消费序见文件头 RNG 纪律——排流尾）。
@@ -127,7 +214,11 @@ struct CityStats {
     std::uint32_t roadnetNodes = 0; // M-W0.1：(size+1)^2 交点
     std::uint32_t roadnetEdges = 0; // M-W0.1：有向边 4*size*(size+1)
     std::uint32_t buildings = 0;
-    std::uint32_t trees = 0;
+    std::uint32_t trees = 0;        // M-W0.3：树总数（forest 8/块 + low 4/块）
+    std::uint32_t forestCells = 0;  // M-W0.3：密度分档 cell 计数（和恒 = blocks）
+    std::uint32_t lowCells = 0;
+    std::uint32_t mediumCells = 0;
+    std::uint32_t highCells = 0;
     std::uint32_t cars = 0;
     std::uint32_t fences = 0;
     std::uint32_t paths = 0;
@@ -142,11 +233,20 @@ struct CityBuilding {
     float height = 0.f;
 };
 
+// M-W0.3 树（block 局部坐标，仅俯视图 + 统计层；不进 OBJ/city.scene——保
+// w0-m2 冻结基线产物，M-W1 若需树资产走 asset-ingest 通道）。
+struct CityTree {
+    float cx = 0.f; // 树中心 x（block 局部）
+    float cz = 0.f;
+};
+
 struct CityCell {
     std::int32_t gx = 0;   // 网格索引
     std::int32_t gz = 0;
     std::uint32_t shade = 0; // 地面灰度档位 0..15（M-W0.0 种子敏感元，见文件头 RNG 纪律）
+    std::uint32_t densityTier = 0; // M-W0.3：0=forest 1=low 2=medium 3=high
     std::vector<CityBuilding> buildings; // M-W0.2（block 局部坐标）
+    std::vector<CityTree> trees;         // M-W0.3（block 局部坐标）
 };
 
 struct CityLayout {
@@ -154,6 +254,7 @@ struct CityLayout {
     std::int32_t lo = 0; // 网格低索引（-size/2）
     std::vector<CityCell> cells;
     CityStats stats;
+    std::uint32_t noiseSeed = 0; // M-W0.3：噪声种子（主流第 ③ 段消费的 u32）
     float minX = 0.f, maxX = 0.f, minZ = 0.f, maxZ = 0.f; // 城市外延（米）
 };
 
@@ -224,6 +325,39 @@ CityLayout generateCity(const CityParams& params) {
         }
     }
 
+    // M-W0.3 第三遍：noiseSeed（1 次 next，纯追加在楼体消费之后——② 段逐字节
+    // 不动）+ 密度分区（噪声场，无 RNG 消费）。
+    const std::uint32_t noiseSeed = rng.next();
+    lay.noiseSeed = noiseSeed;
+    SimplexNoise noise;
+    noise.seed(noiseSeed);
+    for (CityCell& cell : lay.cells) {
+        const double d =
+            noise.evaluate((static_cast<double>(cell.gx) + 0.5) * kBlockX * kNoiseScale,
+                           (static_cast<double>(cell.gz) + 0.5) * kBlockZ * kNoiseScale) *
+                0.5 +
+            0.5;
+        cell.densityTier = d < kDensityForest  ? 0u
+                           : d < kDensityLow   ? 1u
+                           : d < kDensityMedium ? 2u
+                                                : 3u;
+    }
+
+    // M-W0.3 第四遍（流尾最后）：树。forest 每块 8 棵 / low 每块 4 棵，每棵消费
+    // 2 次 below（先 dx 后 dz）；位置叶域内抖动（次数由密度决定——依赖噪声而
+    // 噪声不依赖本段，无循环依赖）。
+    for (CityCell& cell : lay.cells) {
+        const std::uint32_t nt = cell.densityTier == 0u ? kTreesForest
+                                 : cell.densityTier == 1u ? kTreesLow
+                                                          : 0u;
+        for (std::uint32_t k = 0; k < nt; ++k) {
+            CityTree tr;
+            tr.cx = (static_cast<float>(rng.below(45u)) - 22.f) * 0.1f; // [-2.2, 2.2]
+            tr.cz = (static_cast<float>(rng.below(31u)) - 15.f) * 0.1f; // [-1.5, 1.5]
+            cell.trees.push_back(tr);
+        }
+    }
+
     lay.stats.blocks = params.size * params.size;
     lay.stats.groundTiles = lay.stats.blocks;
     lay.stats.roadSegments = 2u * lay.stats.blocks; // 每 cell 一横一竖
@@ -235,8 +369,13 @@ CityLayout generateCity(const CityParams& params) {
     // M-W0.2：楼体计数（每 cell = 细分叶数，4.5x3.0 内区恒 4）。
     for (const CityCell& cell : lay.cells) {
         lay.stats.buildings += static_cast<std::uint32_t>(cell.buildings.size());
+        lay.stats.trees += static_cast<std::uint32_t>(cell.trees.size()); // M-W0.3
+        ++(cell.densityTier == 0u   ? lay.stats.forestCells
+           : cell.densityTier == 1u ? lay.stats.lowCells
+           : cell.densityTier == 2u ? lay.stats.mediumCells
+                                    : lay.stats.highCells); // M-W0.3
     }
-    // trees/cars/fences/paths 保持 0：M-W0.3 消费。
+    // cars/fences/paths 保持 0：未消费（超出 M-W0 范围，挂零锚）。
 
     lay.minX = static_cast<float>(lay.lo) * kBlockX;
     lay.maxX = static_cast<float>(hi) * kBlockX;
@@ -509,17 +648,33 @@ std::vector<std::uint8_t> serializeLayout(const CityLayout& lay) {
     appendU32(b, lay.stats.roadnetEdges);
     appendU32(b, lay.stats.buildings);
     appendU32(b, lay.stats.trees);
+    appendU32(b, lay.stats.forestCells); // M-W0.3
+    appendU32(b, lay.stats.lowCells);
+    appendU32(b, lay.stats.mediumCells);
+    appendU32(b, lay.stats.highCells);
     appendU32(b, lay.stats.cars);
     appendU32(b, lay.stats.fences);
     appendU32(b, lay.stats.paths);
+    appendU32(b, lay.noiseSeed); // M-W0.3
     for (const CityCell& c : lay.cells) {
         appendI32(b, c.gx);
         appendI32(b, c.gz);
         b.push_back(static_cast<std::uint8_t>(c.shade));
+        b.push_back(static_cast<std::uint8_t>(c.densityTier)); // M-W0.3
         // M-W0.2：楼体数据进规范序列化（float 按 IEEE 位原样写入，确定性）。
         appendU32(b, static_cast<std::uint32_t>(c.buildings.size()));
         for (const CityBuilding& bd : c.buildings) {
             float fields[5] = {bd.cx, bd.cz, bd.hx, bd.hz, bd.height};
+            for (float f : fields) {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &f, 4);
+                appendU32(b, bits);
+            }
+        }
+        // M-W0.3：树位置进规范序列化。
+        appendU32(b, static_cast<std::uint32_t>(c.trees.size()));
+        for (const CityTree& tr : c.trees) {
+            float fields[2] = {tr.cx, tr.cz};
             for (float f : fields) {
                 std::uint32_t bits = 0;
                 std::memcpy(&bits, &f, 4);
@@ -601,19 +756,38 @@ bool renderTopView(const CityLayout& lay, const RasterConfig& cfg,
         return static_cast<int>((world - minWorld + cfg.marginM) * cfg.pxPerMeter);
     };
 
-    // block 内区（cell 减路带：4.5m x 3.0m），灰度 = 233 - 2*shade（233..203）。
+    // block 内区（cell 减路带：4.5m x 3.0m）。
+    // M-W0.3 密度基调四档（bevy 地面材质分档同构：forest 绿 / low 浅 / medium 中
+    // / high 深）+ shade 微抖（每通道 -=shade，M-W0.0 种子敏感元视觉作用保留）。
     // 路带以网格线为中心占半宽（kRoadWidth*0.5），内区从路带边缘起算。
     for (const CityCell& c : lay.cells) {
         const float cx = static_cast<float>(c.gx) * kBlockX;
         const float cz = static_cast<float>(c.gz) * kBlockZ;
-        const std::uint32_t v = 233u - 2u * c.shade;
+        std::uint8_t br, bg, bb2;
+        if (c.densityTier == 0u) { br = 150; bg = 184; bb2 = 150; }      // forest
+        else if (c.densityTier == 1u) { br = 222; bg = 226; bb2 = 214; } // low
+        else if (c.densityTier == 2u) { br = 202; bg = 208; bb2 = 200; } // medium
+        else { br = 182; bg = 188; bb2 = 184; }                          // high
+        const std::uint8_t vr = static_cast<std::uint8_t>(br - c.shade);
+        const std::uint8_t vg = static_cast<std::uint8_t>(bg - c.shade);
+        const std::uint8_t vb = static_cast<std::uint8_t>(bb2 - c.shade);
         const float halfRoad = kRoadWidth * 0.5f;
         fillRect(img, w, h,
                  toPx(cx + halfRoad, lay.minX), toPx(cz + halfRoad, lay.minZ),
                  toPx(cx + kBlockX - halfRoad, lay.minX),
-                 toPx(cz + kBlockZ - halfRoad, lay.minZ),
-                 static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(v),
-                 static_cast<std::uint8_t>(v));
+                 toPx(cz + kBlockZ - halfRoad, lay.minZ), vr, vg, vb);
+    }
+
+    // M-W0.3 树（俯视标记层）：3x3 深绿块，画在楼之下（楼是主体）。
+    for (const CityCell& c : lay.cells) {
+        const float ccx = (static_cast<float>(c.gx) + 0.5f) * kBlockX;
+        const float ccz = (static_cast<float>(c.gz) + 0.5f) * kBlockZ;
+        for (const CityTree& tr : c.trees) {
+            fillRect(img, w, h, toPx(ccx + tr.cx - 0.15f, lay.minX),
+                     toPx(ccz + tr.cz - 0.15f, lay.minZ),
+                     toPx(ccx + tr.cx + 0.15f, lay.minX),
+                     toPx(ccz + tr.cz + 0.15f, lay.minZ), 60, 110, 60);
+        }
     }
 
     // M-W0.2 楼体占地俯视（高度分档灰度：3m=208 / 8m=168 / 14m=128，越矮越浅）。
@@ -727,6 +901,30 @@ SelftestResult runSelftest(bool verbose) {
     const std::uint64_t h3 = fnv1a64(serializeLayout(generateCity(p1)));
     expect(h1 != h3, "layout: different seed -> different bytes");
 
+    // M-W0.3：异 seed 密度分布必异（seed 12346 = 19/4/4/9，Python 复算回填）。
+    {
+        const CityLayout layD = generateCity(p1);
+        expect(layD.noiseSeed == 3832654775u,
+               "noise: noiseSeed(12346,6) == 3832654775 (Python reference)");
+        expect(layD.stats.forestCells == 19u && layD.stats.lowCells == 4u &&
+                   layD.stats.mediumCells == 4u && layD.stats.highCells == 9u &&
+                   layD.stats.trees == 168u,
+               "noise: density distribution differs across seeds (19/4/4/9, 168 trees)");
+    }
+    // M-W0.3：size 1 边界（lo = -(1/2) = 0 截断口径 → cell(0,0) 中心 d=0.3125
+    // → forest 档 8 树；Python 参考复算曾因 floor 除法 lo=-1 错位，已勘误回填）。
+    {
+        CityParams psz = p0;
+        psz.size = 1;
+        const CityLayout laySz = generateCity(psz);
+        expect(laySz.lo == 0,
+               "layout: size 1 truncating lo == 0 (not floor division)");
+        expect(laySz.stats.forestCells == 1u && laySz.stats.lowCells == 0u &&
+                   laySz.stats.mediumCells == 0u && laySz.stats.highCells == 0u &&
+                   laySz.stats.trees == 8u && laySz.noiseSeed == 1603148953u,
+               "noise: size 1 boundary (forest tier, 8 trees, noiseSeed anchor)");
+    }
+
     CityParams p2 = p0;
     p2.size = 8;
     const std::uint64_t h4 = fnv1a64(serializeLayout(generateCity(p2)));
@@ -741,9 +939,73 @@ SelftestResult runSelftest(bool verbose) {
     expect(lay.stats.crossroads == 49u, "stats: crossroads == (size+1)^2 == 49");
     expect(lay.stats.buildings == 144u,
            "stats: buildings == 4 per block * 36 == 144 (M-W0.2)");
-    expect(lay.stats.trees == 0u && lay.stats.cars == 0u &&
-               lay.stats.fences == 0u && lay.stats.paths == 0u,
-           "stats: M-W0.3 skeleton counters still zero");
+    expect(lay.stats.trees == 188u, "stats: trees == 188 (forest 21*8 + low 5*4, M-W0.3)");
+    expect(lay.stats.cars == 0u && lay.stats.fences == 0u && lay.stats.paths == 0u,
+           "stats: cars/fences/paths skeleton counters still zero");
+    expect(lay.stats.forestCells == 21u && lay.stats.lowCells == 5u &&
+               lay.stats.mediumCells == 6u && lay.stats.highCells == 4u,
+           "stats: density tiers 21/5/6/4 (Python reference cross-check, M-W0.3)");
+    expect(lay.stats.forestCells + lay.stats.lowCells +
+                   lay.stats.mediumCells + lay.stats.highCells ==
+               lay.stats.blocks,
+           "stats: density tier counts sum to blocks (36)");
+    expect(lay.noiseSeed == 2109909543u,
+           "noise: noiseSeed(12345,6) == 2109909543 (Python reference, stream segment 3)");
+
+    // --- M-W0.3 噪声统计不变量（Q11-1 拍板 A 口径：统计锚 + 已知答案）---
+    {
+        SimplexNoise nz;
+        nz.seed(lay.noiseSeed);
+        double sum = 0.0;
+        double mx = 0.0;
+        int cnt = 0;
+        for (int i = -64; i <= 64; ++i) {
+            for (int j = -64; j <= 64; ++j) {
+                const float v = nz.evaluate(i * 0.05, j * 0.05);
+                sum += v;
+                mx = std::max(mx, static_cast<double>(std::fabs(v)));
+                ++cnt;
+            }
+        }
+        expect(mx <= 1.0, "noise: |v| <= 1.0 over 129x129 grid (norm margin 13%)");
+        expect(std::fabs(sum / cnt) < 0.35,
+               "noise: mean near zero over grid (simplex balance)");
+        // 已知答案（Python 参考实现独立复算回填，noiseSeed 2109909543）
+        const float e1 = nz.evaluate(0.3, 0.7);
+        const float e2 = nz.evaluate(3.125, -1.75);
+        const float e3 = nz.evaluate(2.05, -0.85);
+        expect(e1 > 0.4539f && e1 < 0.4541f,
+               "noise: eval(0.3,0.7) == 0.454030110 (known answer)");
+        expect(e2 > 0.0091f && e2 < 0.0092f,
+               "noise: eval(3.125,-1.75) == 0.009114384 (known answer)");
+        expect(e3 > -0.5214f && e3 < -0.5212f,
+               "noise: eval(2.05,-0.85) == -0.521328681 (known answer)");
+        expect(nz.evaluate(0.0, 0.0) == 0.0f, "noise: eval(0,0) == 0 (symmetry origin)");
+        // perm 头锚（Python make_perm 独立复算）
+        expect(nz.perm[0] == 182 && nz.perm[1] == 218 && nz.perm[2] == 150 &&
+                   nz.perm[3] == 255,
+               "noise: perm head (182,218,150,255) for noiseSeed (known answer)");
+    }
+
+    // --- M-W0.3 树锚（位置 = 流尾第 ④ 段消费）---
+    {
+        // 首块（gx=-3,gz=-2，forest 档）首棵树 (2.1, 0.5)（Python 复算回填）。
+        const CityCell& first = lay.cells[1]; // 行主序 [0]=(−3,−3) high 档，[1]=(−3,−2) forest
+        const bool firstForest = first.densityTier == 0u;
+        expect(firstForest && first.gx == -3 && first.gz == -2 && first.trees.size() == 8u,
+               "trees: cell(−3,−2) is forest with 8 trees (M-W0.3)");
+        if (firstForest && first.trees.size() == 8u) {
+            const auto near1 = [](float a, float b) {
+                return std::fabs(a - b) < 0.001f;
+            };
+            expect(near1(first.trees[0].cx, 2.1f) && near1(first.trees[0].cz, 0.5f),
+                   "trees: first tree position (2.1, 0.5) (Python reference, fp tolerance)");
+        }
+        // 树数公式：trees == forestCells*8 + lowCells*4
+        expect(lay.stats.trees ==
+                   lay.stats.forestCells * 8u + lay.stats.lowCells * 4u,
+               "trees: count formula forest*8 + low*4 == trees");
+    }
 
     // --- 契约锚：block 尺寸与 roadnet.json blocks 同源；内区 4.5x3.0 ---
     expect(kBlockX == 5.5f && kBlockZ == 4.0f,
@@ -892,6 +1154,21 @@ SelftestResult runSelftest(bool verbose) {
         }
         expect(prefixOk,
                "rng: cell shade stream is an untouched prefix (M-W0.2 appends)");
+        // M-W0.3：完整重建 ①② 段（36 shade + 288 楼体档位）后紧接的 next()
+        // 即 noiseSeed —— ③ 段位置锁定，①② 消费值逐字节不动。
+        const CityLayout layFull = generateCity(p0);
+        Pcg32 pr3;
+        pr3.seed(p0.seed);
+        for (std::uint32_t i = 0; i < p0.size * p0.size; ++i) pr3.below(16u);
+        for (const CityCell& cl : layFull.cells) {
+            for (const CityBuilding& bd : cl.buildings) {
+                (void)bd; // 消费序与档位值无关：每楼固定 below(3)+below(2)
+                pr3.below(3u);
+                pr3.below(2u);
+            }
+        }
+        expect(pr3.next() == layFull.noiseSeed,
+               "rng: noiseSeed is segment 3 (rebuilt stream next() matches)");
     }
 
     // 楼体口径：4 栋/块、高度恰为三档之一、占地两档之一、足迹在叶内不越内区、
@@ -1008,7 +1285,7 @@ void printUsage() {
         "  --size N   grid blocks per side, 1..64 (default 6)\n"
         "  --out DIR  output directory, receives city_top.png + roadnet.json\n"
         "             + blocks/block_NN.obj (M-W0.2) + city.scene\n"
-        "  --stats    print CityStats counter block\n"
+        "  --stats    print CityStats counter block (incl. density tiers, M-W0.3)\n"
         "exit codes: 0 = PASS / 1 = selftest assertion failed / 2 = invalid usage\n");
 }
 
@@ -1173,7 +1450,7 @@ int runGenerate(const GenerateConfig& cfg) {
                 static_cast<unsigned>(lay.cells.size()),
                 static_cast<unsigned>(lay.cells.size()));
 
-    std::printf("nl-citygen M-W0.2 city top view + roadnet + blocks + scene\n");
+    std::printf("nl-citygen M-W0.3 city top view + roadnet + blocks + scene + density\n");
     std::printf("seed=%llu size=%u blocks=%u\n",
                 static_cast<unsigned long long>(cfg.city.seed), cfg.city.size,
                 lay.stats.blocks);
@@ -1188,11 +1465,14 @@ int runGenerate(const GenerateConfig& cfg) {
         std::printf(
             "stats: blocks=%u groundTiles=%u roadSegments=%u crossroads=%u "
             "roadnetNodes=%u roadnetEdges=%u buildings=%u trees=%u cars=%u "
-            "fences=%u paths=%u\n",
+            "fences=%u paths=%u forestCells=%u lowCells=%u mediumCells=%u "
+            "highCells=%u noiseSeed=%u\n",
             lay.stats.blocks, lay.stats.groundTiles, lay.stats.roadSegments,
             lay.stats.crossroads, lay.stats.roadnetNodes,
             lay.stats.roadnetEdges, lay.stats.buildings, lay.stats.trees,
-            lay.stats.cars, lay.stats.fences, lay.stats.paths);
+            lay.stats.cars, lay.stats.fences, lay.stats.paths,
+            lay.stats.forestCells, lay.stats.lowCells, lay.stats.mediumCells,
+            lay.stats.highCells, lay.noiseSeed);
     }
     return 0;
 }

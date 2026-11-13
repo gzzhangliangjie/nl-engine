@@ -11207,6 +11207,85 @@
      "command": "city-tools generate --size 0"
     }
    ]
+  },
+  {
+   "id": "w0-m3",
+   "label": "W0 M-W0.3",
+   "name": "simplex 噪声密度分区 + 树 + 统计锚收口（M-W0 收官）",
+   "tag": "w0-m3",
+   "date": "2026-11-13",
+   "summary": "M-W0.3 收官：自研 simplex 梯度噪声（OpenSimplex 结构同构，F2/G2 数学推导常数 + 8 方向梯度表 + t^4 径向核，perm 由独立 Pcg32(noiseSeed) Fisher-Yates；Python 参考实现独立复算 eval/perm 已知答案防自证）密度分区（bevy 阈值同源 0.45/0.6/0.7 四档；noise_scale 0.025->0.06 显式偏离留档：size6 分区可见性）+ 树（forest 8 棵/块、low 4 棵/块，仅俯视+统计层，保 w0-m2 冻结基线）+ CityStats 密度档计数。RNG 流最终形态：36 shade -> 288 楼体 -> noiseSeed -> 树位置，前两段逐字节不动（重建流断言锁定）。",
+   "acceptance": [
+    "selftest 53 -> 72 断言全绿（新增 19：密度档 21/5/6/4、噪声值域/均值统计锚、eval 四点 + perm 头已知答案、noiseSeed 流段位置、树数公式与首树位置、异 seed 分布必异 19/4/4/9、size1 边界含 lo 截断口径锚）",
+    "证据图：city_top.png 密度分区可见（forest 绿 21 块 + 深绿树点 / low 浅灰 / medium 中灰 / high 深灰）+ 楼体三档灰阶 + 路网叠加完好；工具真实输出",
+    "确定性：同 seed 双跑 PNG+roadnet+scene+OBJ 四产物 fc /b 逐字节一致；异 seed PNG/OBJ 必异、密度档分布必异、scene seed 无关",
+    "ctest w0-city-selftest/generate/negative/w0-roadnet/w0-cityscene/w0-density 双树各 6/6（--repeat until-pass:3）；双后端构建 OK 零新警告",
+    "交代物：example/w0-m3/（run.bat 七段 ALL GREEN exit 0 + 日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §4 + MILESTONES 四栏 + close 闸报告"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--stats 说明含密度档。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet / 楼体+scene / 噪声+密度+树 72 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 23 + M-W0.1 15 + M-W0.2 15 + M-W0.3 19；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：密度分区俯视 PNG + roadnet + OBJ + city.scene + 密度统计",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> city_top.png（密度四档 21/5/6/4 + 188 树）+ roadnet.json + blocks/*.obj + city.scene；stats 锚 noiseSeed=2109909543。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m3",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m3 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m3-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
   }
  ]
 }

@@ -172,3 +172,52 @@ city-tools generate --seed N --size N --out DIR [--stats]
   引用闭合锚）。
 - RNG：M-W0.0 前缀 36 shade 逐字节不动；M-W0.2 消费 288 次（36 块 x 4 楼 x 2 档）
   全部排流尾。
+
+## 4. M-W0.3 — simplex 噪声密度分区 + 树 + 统计锚收口（2026-11-13，tag `w0-m3`，M-W0 收官）
+
+### 4.1 噪声口径（W3-A 全自研；OpenSimplex 结构同构）
+
+- 自研 simplex 梯度噪声：F2=(√3−1)/2、G2=(3−√3)/6（数学推导），梯度表 8 方向
+  (±1,±2)/(±2,±1)（非归一化），径向核 t=0.5−d²、贡献 t⁴·dot；内部纯 double。
+- perm 表 256 项由独立 Pcg32(noiseSeed) Fisher-Yates 洗牌（below 拒绝采样），
+  复制一倍到 512 回绕；梯度索引双重查表 `perm[perm[ii]+jj]&7`。
+- **kNoiseNorm=40 经验归一化**：129² 采样实测 max|raw|=0.0218 → 归一后 max≈0.87，
+  |v|≤1 断言余量 13%。Q11-1 拍板 A 口径：噪声进断言 = 统计不变量（值域/均值）
+  + 已知答案（eval 四点 + perm 头，Python 参考实现独立复算回填防自证）。
+- **noise_scale 0.025 → 0.06 显式偏离**：bevy 值在 33m 跨度 size6 下噪声域仅
+  0.83 周期、36 块全落同一波峰（实测全 low 档），判据①「密度分区可见」不成立；
+  0.06 → 约 2 周期，四档全可见。密度阈值 0.45/0.6/0.7 与 bevy 同源不变。
+
+### 4.2 RNG 流最终形态（跨里程碑契约收官）
+
+| 段 | 消费 | 归属 |
+|---|---|---|
+| ① | 36 × below(16) shade（行主序） | M-W0.0 前缀，逐字节不动 |
+| ② | 288 × (below(3)+below(2)) 楼体档位 | M-W0.2，值不动 |
+| ③ | 1 × next() u32 = noiseSeed | M-W0.3 |
+| ④ | 树位置（次数由密度档决定，流尾最后） | M-W0.3 |
+
+selftest 以「重建流 next() == noiseSeed」锁定 ③ 段位置；①② 段由既有断言保持。
+
+### 4.3 密度消费与树
+
+- 密度档：density = noise(cell 中心 × scale)·0.5+0.5 → forest(<0.45)/low(<0.6)/
+  medium(<0.7)/high。俯视基调四档（forest 绿 150,184,150 / low 222,226,214 /
+  medium 202,208,200 / high 182,188,184）+ shade 微抖保留。
+- 树：forest 每块 8 棵 / low 每块 4 棵，每棵消费 below(45)/below(31) 各一次
+  （dx∈[−2.2,2.2]、dz∈[−1.5,1.5] 米）；俯视 3×3 深绿块。**仅俯视 + 统计层，
+  不进 OBJ/city.scene**——保 w0-m2 冻结基线产物（楼数/顶点/引用闭合锚不破）；
+  M-W1 若需树资产走 asset-ingest 通道。
+- CityStats 扩：forestCells/lowCells/mediumCells/highCells（和恒 = blocks）+
+  trees 实数；serializeLayout 同步扩展（noiseSeed + 4 计数 + cell tier + 树位）。
+
+### 4.4 M-W0.3 验收纪要
+
+- selftest 53 → 72 断言全绿（新增 19：密度档 21/5/6/4、噪声统计锚、eval 四点 +
+  perm 头已知答案、noiseSeed 流段位置、树数公式 + 首树位置、异 seed 分布必异
+  19/4/4/9 + trees 168、size1 边界含 lo 截断口径锚）。
+- ctest 新增 `w0-density`，共 6 条 × 双树各 3/3（`--repeat until-pass:3`）。
+- 回归 `--only w0-m0`~`w0-m3` 各 8/8 ALL GREEN；`server.py --check` exit 0；
+  `example/w0-m3/run.bat` 七段 ALL GREEN exit 0（stats 密度档 + noiseSeed 锚、
+  异 seed 密度分布必异段）。
+- RNG：①② 段逐字节不动（重建流断言）；③④ 段纯追加。
