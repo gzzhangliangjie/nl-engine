@@ -32,3 +32,6 @@ reinterpret_cast<void*>(&nl_cameraGetPose),  // Camera.cameraGetPose
 reinterpret_cast<void*>(&nl_cameraSetPose),  // Camera.cameraSetPose
 reinterpret_cast<void*>(&nl_cameraGetFov),  // Camera.cameraGetFov
 reinterpret_cast<void*>(&nl_cameraSetFov),  // Camera.cameraSetFov
+reinterpret_cast<void*>(&nl_ecsAttachModel),  // Ecs.ecsAttachModel
+reinterpret_cast<void*>(&nl_ecsDetachModel),  // Ecs.ecsDetachModel
+reinterpret_cast<void*>(&nl_ecsModelInfo),  // Ecs.ecsModelInfo

@@ -6,6 +6,7 @@
 
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
+#include "nl/scene/AssetName.hpp"   // M-SC7：白名单单源（本文件 validMeshName 原为语义复制点）
 #include "json.hpp"
 
 #include <cstdint>
@@ -16,24 +17,9 @@
 
 namespace nl::nav {
 
-// meshFile 白名单（与 viewer --scene validGlbAssetName 同款：basename + .glb，
-// 拒路径分隔符与 ".."）。场景文件来自用户，防路径穿越。
-static bool validMeshName(const std::string& s) {
-    if (s.empty()) return false;
-    if (s.find('/') != std::string::npos ||
-        s.find('\\') != std::string::npos) return false;
-    if (s.find("..") != std::string::npos) return false;
-    const std::string ext = ".glb";
-    if (s.size() < ext.size() + 1 ||
-        s.compare(s.size() - ext.size(), ext.size(), ext) != 0) return false;
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (!(u >= 'a' && u <= 'z') && !(u >= 'A' && u <= 'Z') &&
-            !(u >= '0' && u <= '9') && c != '_' && c != '-' && c != '.')
-            return false;
-    }
-    return true;
-}
+// meshFile 白名单：M-SC7 起实现单源 = nl::scene::validGlbAssetName
+//（本函数历史语义复制点，收编后删除；放行字符集由 alnum 收窄为可打印 ASCII，
+// 路径穿越防护语义不变——AssetName.hpp 头注）。
 
 int geometryEntityCount(const char* scenePath, std::string& outError) {
     outError.clear();
@@ -107,7 +93,7 @@ bool loadGeometryFromScene(const char* scenePath, const char* meshDir,
                        " has Model without Transform";
             return false;
         }
-        if (!validMeshName(model->meshFile)) {
+        if (!nl::scene::validGlbAssetName(model->meshFile.c_str())) {
             outError = "entity " + std::to_string(id) + " meshFile '" +
                        model->meshFile + "' rejected by whitelist (.glb basename)";
             return false;

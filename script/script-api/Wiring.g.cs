@@ -92,11 +92,11 @@ namespace Nl.Script.Api
         }
     }
 
-    /// <summary>Ecs 域接线（生成物；ApiTable 偏移 6..15 = exports.api 声明序）。</summary>
+    /// <summary>Ecs 域接线（生成物；ApiTable 偏移 6..15,29..31 = exports.api 声明序）。</summary>
     internal static unsafe class EcsWiring
     {
         // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
-        public static IntPtr _ecsSpawn, _ecsRemove, _ecsFlush, _ecsExists, _ecsSetParent, _ecsGetParent, _ecsAddTransform, _ecsTransformGet, _ecsTransformSet, _ecsFindByName;
+        public static IntPtr _ecsSpawn, _ecsRemove, _ecsFlush, _ecsExists, _ecsSetParent, _ecsGetParent, _ecsAddTransform, _ecsTransformGet, _ecsTransformSet, _ecsFindByName, _ecsAttachModel, _ecsDetachModel, _ecsModelInfo;
 
         /// <summary>建实体（newEntity，新建立即可见，Carrot 口径）。rc：0=ok（id=实体 ID，0=无效）/ 1=未绑 World / 4=非法参数</summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -138,6 +138,18 @@ namespace Nl.Script.Api
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int EcsFindByNameFn(IntPtr name, out ulong id);
 
+        /// <summary>挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int EcsAttachModelFn(ulong id, IntPtr meshFile);
+
+        /// <summary>摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int EcsDetachModelFn(ulong id);
+
+        /// <summary>ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int EcsModelInfoFn(ulong id, out IntPtr meshFile, float* tint, out float roughness, out float metallic);
+
         /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
         public static void Init(IntPtr table)
         {
@@ -151,6 +163,9 @@ namespace Nl.Script.Api
             _ecsTransformGet = Marshal.ReadIntPtr(table, 13 * sizeof(IntPtr));
             _ecsTransformSet = Marshal.ReadIntPtr(table, 14 * sizeof(IntPtr));
             _ecsFindByName = Marshal.ReadIntPtr(table, 15 * sizeof(IntPtr));
+            _ecsAttachModel = Marshal.ReadIntPtr(table, 29 * sizeof(IntPtr));
+            _ecsDetachModel = Marshal.ReadIntPtr(table, 30 * sizeof(IntPtr));
+            _ecsModelInfo = Marshal.ReadIntPtr(table, 31 * sizeof(IntPtr));
         }
     }
 
@@ -272,7 +287,7 @@ namespace Nl.Script.Api
     public static class ApiWiring
     {
         public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo" };
 
         public static void InitAll(IntPtr table)
         {

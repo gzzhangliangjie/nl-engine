@@ -11479,6 +11479,96 @@
      "preview": "example/m-sc6/check.png"
     }
    ]
+  },
+  {
+   "id": "m-sc7",
+   "label": "P8 M-SC7",
+   "name": "ECS 模型挂载：帧边界重建（方案 A）+ 白名单单源 + 生成器偏移修复（ApiTable 29->32，A 类轨道）",
+   "tag": "m-sc7",
+   "date": "2026-11-14",
+   "summary": "ECS 模型挂载面三导出（ecsAttachModel/ecsDetachModel/ecsModelInfo，exports.api 尾部追加，ApiTable 29->32，Api.Version 0.7.0）。拍板方案 A：binding 只做组件增删 + 白名单校验，viewer 帧边界比对 Model 集合签名（实体 ID + meshFile），变了重跑收集 + loadEcsScene（initScene 经新增 shutdownEcsScene() 可重入化——原实现二次调用整份泄漏 GPU 资源）；实例矩阵走既有 M-GL3 插值链不动；机器出口锚 ecs scene rebuilt: N objects。三防崩语义（拍板）：无 Transform = kEcsNoTransform=5 不隐式建表 / 重复挂 = kEcsComponent=3 先挡 World::addComponent assert / 白名单拒 = kEcsBadAsset=6 坏名不落 World。白名单升单源 nl::scene::validAssetFileName（AssetName.hpp，收编 renderer.cpp/scene.cpp/viewer lambda/SceneGeo 四份复制，统一原版可打印 ASCII 口径；SceneGeo 放行字符集变宽已写明取舍）。**gen.py 真 bug 修复**：C# Init 偏移原按域首现序跑连续计数器，往非末尾域（Ecs）尾部追加时 Time/Input/Log/Camera 各域槽位整体错位（M-SC5/SC6 恰在末尾域追加未暴露；表本体一直声明序所以 struct 没坏）——改每导出声明序全局下标。C# facade Ecs.AttachModel/DetachModel/ModelInfo（System.Numerics.Vector3 tint）。selftest s11a（挂载+读回+留态 C++ 终态核 probeModel meshFile=cube.glb）/ s11b（错误码逐一：NoEntity/BadArg/BadAsset 三形态白名单拒且坏名不落 World/NoTransform/重复挂拒绝不改状态）/ s11c（解绑 NoWorld 三导出不崩）/ s11d（摘除 Model 净 Transform 留守 + 再摘 Component）。",
+   "acceptance": [
+    "selftest s11a~s11d 全绿（s0~s5 + s6 + s7 + s8 + s9 + s10 不回归，PASS 0 failures）：挂载读回链、错误码逐一、解绑不崩、摘除终态 C++ 核",
+    "gen.py --check 绿（32 导出声明与 5 生成物一致，含 API.md；Init 偏移修复后 golden 更新）；check model 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s11a~s11d：ECS 模型挂载导出（M-SC0~SC6 不回归）",
+     "kind": "tool",
+     "note": "s11a 绑定路径：Spawn+AddTransform+AttachModel(cube.glb) + ModelInfo 全字段读回（meshFile/tint 缺省 (1,1,1)/roughness 1/metallic 0）+ C++ 终态核（ModelComponent 落进罐头 World）；s11b 错误码逐一（NoEntity=2 三导出 / BadArg=4 空名 / BadAsset=6：../secret.glb、model.gltf、dir/model.glb 且坏名不落 World / NoTransform=5 / 重复挂=3 拒绝不改状态）；s11c 解绑：NoWorld x3 不崩；s11d 摘除：Model 摘净 Transform 留守 + 再摘 Component。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/model（7 目录全量）",
+     "preview": "example/m-sc7/selftest.png"
+    },
+    {
+     "id": "s11",
+     "name": "s11 段特写：四探针 rc + C++ 终态核锚（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "拍板方案 A：binding 只动组件，viewer 帧边界比对 Model 集合签名重建（initScene 可重入化前提 = shutdownEcsScene 子集释放）；白名单单源 nl::scene::validAssetFileName 收编四处复制；ApiTable 29->32 经 exports.api 尾部追加 + gen.py Init 偏移声明序修复。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "s11a C# BoundProbe -> 0",
+     "command": "nl-script selftest ...（s11 段过滤展示）",
+     "preview": "example/m-sc7/s11.png"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节级自证（v5，32 导出，exit 0）",
+     "kind": "tool",
+     "note": "Ecs 3 导出追加后重生成与入库五件套逐字节比对；含本轮 gen.py Init 偏移 bugfix（域首现序计数器 → 每导出声明序全局下标，Ecs 域注释偏移段 = 6..15,29..31）。声明变更未重跑生成器 = 此卡红（perf-m0 bat 卡先例）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "preview": "example/m-sc7/gen-check.png",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check",
+     "name": "check model：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；s11 四探针（BoundProbe/ErrorProbe/UnboundProbe/DetachProbe）在 selftest 对罐头 World 验证；viewer 帧边界重建的视觉验证随 M-SC11 跨域示例（机器出口锚已落码）。",
+     "args": [
+      "check",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/model",
+     "preview": "example/m-sc7/check.png"
+    }
+   ]
   }
  ]
 }

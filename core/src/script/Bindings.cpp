@@ -10,6 +10,7 @@
 #include "nl/core/input.hpp"
 #include "nl/core/action_map.hpp"
 #include "nl/core/log.hpp"
+#include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 
@@ -258,6 +259,58 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
     *outID = 0;
     if (!g_ecsWorld) return kEcsNoWorld;
     if (const auto e = g_ecsWorld->findEntityByName(name)) *outID = e->getID();
+    return kEcsOk;
+}
+
+// ---- v5 ECS 模型挂载（M-SC7；拍板方案 A：binding 只做组件增删 + 白名单校验，
+// viewer 帧边界比对 Model 集合签名重建 scene batch——本层不感知渲染）。----
+// 防崩语义（拍板）：无 Transform = kEcsNoTransform 拒绝（不隐式建表，E1b 口径）；
+// 已有 Model 再挂 = kEcsComponent 拒绝（World::addComponent 同类型重复是 assert，
+// binding 必须先挡——直接调 = 崩进程）。meshFile 白名单拒绝 = kEcsBadAsset
+//（坏名不落 World，防路径穿越——nl::scene::validGlbAssetName 单源）。
+
+extern "C" int nl_ecsAttachModel(std::uint64_t id, const char* meshFile) {
+    if (!meshFile || !*meshFile) return kEcsBadArg;
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    if (!scene::validGlbAssetName(meshFile)) return kEcsBadAsset;
+    if (!g_ecsWorld->getComponent(id, scene::componentTypeID<scene::TransformComponent>()))
+        return kEcsNoTransform;
+    if (g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()))
+        return kEcsComponent;
+    auto mc = std::make_unique<scene::ModelComponent>(g_ecsWorld->wrap(id));
+    mc->meshFile = meshFile;
+    g_ecsWorld->addComponent(id, std::move(mc));
+    return kEcsOk;
+}
+
+extern "C" int nl_ecsDetachModel(std::uint64_t id) {
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    if (!g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()))
+        return kEcsComponent;
+    g_ecsWorld->removeComponent(id, scene::componentTypeID<scene::ModelComponent>());
+    return kEcsOk;
+}
+
+// ModelComponent 字段读回。meshFile = 静态缓冲账本（out str 语义：「下次同线程
+// 调用前有效」，C# 立即拷贝——ownedBuffer 复用 M-SC5 logSetFilter 落点）。
+// tint/roughness/metallic 指针可 NULL 跳过；meshFile 指针必填（kEcsBadArg）。
+extern "C" int nl_ecsModelInfo(std::uint64_t id, const char** outMeshFile,
+                               float* outTint3, float* outRoughness, float* outMetallic) {
+    if (!outMeshFile) return kEcsBadArg;
+    *outMeshFile = nullptr;
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    const auto* mc = static_cast<const scene::ModelComponent*>(
+        g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()));
+    if (!mc) return kEcsComponent;
+    *outMeshFile = (ownedBuffer() = mc->meshFile).c_str();
+    if (outTint3) {
+        outTint3[0] = mc->tint.x; outTint3[1] = mc->tint.y; outTint3[2] = mc->tint.z;
+    }
+    if (outRoughness) *outRoughness = mc->roughness;
+    if (outMetallic)  *outMetallic  = mc->metallic;
     return kEcsOk;
 }
 

@@ -74,3 +74,14 @@ Camera | cameraGetPose | int | out buf3 eye, out f32 yawDeg, out f32 pitchDeg, o
 Camera | cameraSetPose | int | in buf3 eye, in f32 yawDeg, in f32 pitchDeg | 现役相机位姿写入（模式感知落点：orbit=yaw/pitch/dist=|eye| setOrbit + 种子；free=setPose 直接落；chase=snapEyeTo+setPitch，yaw 由车体航向驱动忽略入参；track=轨迹数据主权，回 kCamModeUnsupported）。eye 指针 NULL = kCamBadArg。rc：0=ok / 1=未绑 CameraSource / 2=非法参数 / 3=该模式不支持脚本写位姿
 Camera | cameraGetFov | f32 | | 现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死）
 Camera | cameraSetFov | int | in f32 fovY | 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource
+
+# ---- v5 ECS 模型挂载（M-SC7；ApiTable 偏移 29..31，尾部追加）----
+# 操作目标 = ecsSetWorld 绑定的 World（与 v2 ECS 同族）。挂载语义（2026-11-14
+# 拍板方案 A）：binding 只做组件增删 + 白名单校验，viewer 帧边界比对 Model 集合
+# 签名，变了重跑收集 + loadEcsScene（实例矩阵每帧更新走既有插值链不动）。
+# 防崩语义：无 Transform 拒绝（kEcsNoTransform=5，不隐式建表）；重复挂拒绝
+#（kEcsComponent=3——World::addComponent 同类型重复是 assert，binding 必须先挡）。
+
+Ecs | ecsAttachModel | int | in u64 id, in str meshFile | 挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝
+Ecs | ecsDetachModel | int | in u64 id | 摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘
+Ecs | ecsModelInfo | int | in u64 id, out str meshFile, out buf3 tint, out f32 roughness, out f32 metallic | ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数

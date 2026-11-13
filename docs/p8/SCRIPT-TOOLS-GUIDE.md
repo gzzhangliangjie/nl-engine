@@ -458,3 +458,47 @@ example\m-sc6\run.bat          # gen --check（29 导出）+ selftest（6 示例
 1. **`out f32`（cameraGetFov）没有 rc 通道**：POD/引用参数靠 rc 传错误码，f32 直接返回值——未绑语义只能用 NaN 表达，账本特例写进 exports.api 文档列而非 TYPEMAP 例外。
 2. **gen.py 重生成顶掉 exe mtime → 回归过期门禁拦**：内容字节一致也会被拦（闸按 mtime）——重编放行，闸不是摆设（M-SC4 已实证过一次，本条为第二次）。
 3. **python subprocess 调 build bat 两坑**：`text=True` 用 UTF-8 解码 nmake 的 GBK 输出崩 reader 线程（改 bytes + gbk/errors='replace'）；`'scripts\build-...'` 单反斜杠被 Python 吃成 `\b` 退格（`'scriptsuild'`）——用 r-string。
+
+---
+
+# M-SC7：ECS 模型挂载（v5）——拍板方案 A + 白名单单源 + initScene 可重入
+
+## 绑定面口径（nl/script/Bindings v5）
+
+| 导出 | 签名 | 语义 |
+|---|---|---|
+| `ecsAttachModel` | int (u64 id, str meshFile) | 挂 ModelComponent；白名单 + Transform 前置 + 重复挂拒绝。rc：0=ok / 1=NoWorld / 2=NoEntity / 3=重复挂（Component）/ 4=BadArg（空名）/ 5=NoTransform / 6=BadAsset（白名单拒） |
+| `ecsDetachModel` | int (u64 id) | 摘 ModelComponent。rc：0=ok / 1 / 2 / 3=无 Model 可摘 |
+| `ecsModelInfo` | int (u64 id, out str meshFile, out buf3 tint, out f32 roughness, out f32 metallic) | 字段读回；meshFile = 静态缓冲账本（下次同线程调用前有效，C# 立即拷贝）；tint/roughness/metallic 可 NULL 跳过，meshFile 指针必填 |
+
+拍板方案 A（2026-11-14，用户拍板）：**binding 只做组件增删 + 校验，渲染侧帧边界整场景重建**——viewer 每帧 tick 后比对 Model 集合签名（实体 ID + meshFile，`world.getEntityIDs()` 出现序稳定），变了重跑收集 + `loadEcsScene`。实例矩阵每帧更新走既有 M-GL3 插值链不动。Carrot/bevy/UE 三处参考都是「组件增删自动传播」，但其架构（每帧收集/每组件 proxy）与本项目 E1b 静态 batch 不同——方案 A 是 E1b 架构内的最小传播实现，机器出口锚 = `ecs scene rebuilt: N objects (frame-boundary, script attach/detach)`。
+
+防崩语义三件（拍板）：无 Transform = `kEcsNoTransform=5` 拒绝（E1b「Model without Transform = 拒」同口径，不隐式建表）；重复挂 = `kEcsComponent=3` 拒绝（**World::addComponent 同类型重复是 assert，binding 不挡就崩进程**）；白名单拒 = `kEcsBadAsset=6`（坏名不落 World）。运行期重建时白名单/Transform 不合格实体 = 逐实体跳过 + 显式日志（与初始 `--scene` 硬失败退出 2 口径不同——帧边界不致命）。
+
+## 白名单单源（M-SC7 收编）
+
+`nl::scene::validAssetFileName(name, ext)` / `validGlbAssetName(name)`——`core/src/scene/AssetName.cpp`。历史四处复制（renderer.cpp 原版 / scene.cpp 兜底 / viewer lambda / SceneGeo validMeshName）全部收编；统一语义 = 原版（可打印 ASCII 0x21..0x7E 无空格 + 无路径分隔符 + 无 ".." + 指定后缀）。**SceneGeo 放行字符集变宽**（原 alnum+_-\.），路径穿越防护不变，取舍已写 AssetName.hpp 头注。新增消费面一律走 helper，禁再复制。
+
+## initScene 可重入（重建的防泄漏前提）
+
+`Scene::initScene` 原来不可重入（成员句柄直接重建不释放 → 二次调用整份泄漏）。新增 `Scene::shutdownEcsScene()`：initScene 建立的全部 GPU 句柄（场景管线/sceneBatches_/灯缓冲/中性 PBR 兜底纹理/阴影链）子集释放，initScene 开头调用 + shutdown() 复用同一清单（原 M-E1b.0 块原位收编，语义逐位不变）。**新场景资源进 initScene 时必须同步进 shutdownEcsScene 清单**——与「Scene 新增资源必须进 shutdown 清单」同级纪律。
+
+## selftest 判据（s11 组，s0~s5 + s6 + s7 + s8 + s9 + s10 不回归）
+
+- s11a：Spawn+AddTransform+AttachModel(cube.glb) → ModelInfo 全字段读回（meshFile/tint 缺省/roughness/metallic）→ C++ 终态核：ModelComponent 落进罐头 World 且 meshFile=cube.glb。
+- s11b：错误码逐一对齐——NoEntity=2（attach/detach/info 三导出）、BadArg=4（空名）、BadAsset=6（../secret.glb / model.gltf / dir/model.glb，且**坏名不落 World**：ModelInfo 回 Component）、NoTransform=5、重复挂=3（且拒绝不改状态：meshFile 仍是首挂值）、无模型摘=3。
+- s11c：ecsSetWorld(nullptr) 后三导出全 NoWorld 不崩，重绑恢复。
+- s11d：DetachModel 后 ModelInfo=Component、C++ 核 Model 摘净 + Transform 留守、再摘=Component。
+
+## 验收复现
+
+`example/m-sc7/run.bat`：gen --check（32 exports）→ selftest 全量（含 s11）→ s11 特写过滤 → check model → 证据图重生成 → ALL GREEN。`python tools/regression.py --only m-sc7` 8 卡双后端。
+
+## 踩坑存档（M-SC7 实测）
+
+1. **gen.py C# Init 偏移 bug（本轮最有价值发现）**：偏移按域首现序跑连续计数器，往非末尾域尾部追加导出时后继各域整体错位（表本体一直是声明序所以 struct 没坏、M-SC5/SC6 都在末尾域追加所以从未暴露）。修复 = 每导出声明序全局下标；域注释偏移段合并显示（Ecs = "6..15,29..31"）。**生成器隐性假设（「域组连续」）要写进不变量或断言，不能靠运气**。
+2. **getComponent 返回基类指针**：`World::getComponent(id, typeID)` 返回 `Component*`，取字段必须 `static_cast<const ModelComponent*>`——templated 重载 `getComponent<T>(id)` 才内建 cast。漏 cast = C2039（编译闸抓，收口前红一次）。
+3. **Api.cs 手写 facade 用 Vector3**：`System.Numerics` 不在 ImplicitUsings 自动集（工程显式 disable），要显式 using。
+4. **newEntity 延迟落表**：实体进 `entitiesToAdd_` 队列，`findEntityByName`/C# `FindByName` 只扫 `entities_`——罐头 World 不 tick 就不 flush，按名查找族全空（组件按 id 键控的 hasComponent/getComponent 不受影响，所以出现「attach 全过、按名核全红」错位假象）。宿主终态核前显式 `flushEntityCreationAndRemoval()`。
+5. **out buf 传 null = 「跳过该字段」不是「填零」**：ModelInfo 全字段重载首版把 null 传 tint 指针，C# 侧读回恒 (0,0,0)——facade 要读就传实缓冲（stackalloc）。
+6. cwd 漂移读错树：开工实读阶段三条 grep 落主仓得出「s9/s10 不存在」假象——pwd 必看。

@@ -433,12 +433,28 @@ def gen_cs(pods, exports):
         "    }",
         "",
     ]
-    offset = 0
+    # M-SC7 修复：Init 偏移 = 每导出在 exports.api 声明序里的**全局下标**。
+    # 旧实现按域首现序跑连续计数器——域组不相邻时（往非末尾域尾部追加导出，
+    # 如 M-SC7 给 Ecs 段尾部加 3 导出而 Time/Input/Log/Camera 在其后）偏移整体
+    # 错位：C# 读错函数指针槽位。表本体（ApiTable.g.hpp 字段序/.g.inc 注册序）
+    # 一直是声明序，未受影响。
+    global_idx = {id(e): i for i, e in enumerate(exports)}
     for domain in domains:
         dex = [e for e in exports if e.domain == domain]
-        lo, hi = offset, offset + len(dex) - 1
+        offs = [global_idx[id(e)] for e in dex]
+        # 偏移段标注：连续下标合并显示（如 Ecs = "6..15,29..31"——尾部追加后域非连续）。
+        spans = []
+        run_start = run_end = offs[0]
+        for o in offs[1:]:
+            if o == run_end + 1:
+                run_end = o
+            else:
+                spans.append(f"{run_start}..{run_end}")
+                run_start = run_end = o
+        spans.append(f"{run_start}..{run_end}")
+        span_txt = ",".join(spans)
         L += [
-            f"    /// <summary>{domain} 域接线（生成物；ApiTable 偏移 {lo}..{hi} = exports.api 声明序）。</summary>",
+            f"    /// <summary>{domain} 域接线（生成物；ApiTable 偏移 {span_txt} = exports.api 声明序）。</summary>",
             f"    internal static unsafe class {pascal(domain)}Wiring",
             "    {",
             "        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----",
@@ -455,9 +471,8 @@ def gen_cs(pods, exports):
         L += ["        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>",
               "        public static void Init(IntPtr table)",
               "        {"]
-        for e in dex:
-            L.append(f"            _{e.name} = Marshal.ReadIntPtr(table, {offset} * sizeof(IntPtr));")
-            offset += 1
+        for e, o in zip(dex, offs):
+            L.append(f"            _{e.name} = Marshal.ReadIntPtr(table, {o} * sizeof(IntPtr));")
         L += ["        }", "    }", ""]
     L += [
         "    /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/",

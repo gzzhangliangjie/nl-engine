@@ -54,6 +54,13 @@ inline constexpr int kEcsNoEntity = 2;
 inline constexpr int kEcsComponent = 3;
 inline constexpr int kEcsBadArg = 4;
 
+// ECS 模型挂载扩展码（v5 M-SC7，尾部追加不与既有码冲突）：
+//   5=挂模型但实体无 TransformComponent（E1b「Model without Transform = 拒」
+//     同口径——不隐式建表，宿主先 ecsAddTransform）/ 6=meshFile 白名单拒绝
+//     （nl::scene::validGlbAssetName：防路径穿越，坏名不落 World）。
+inline constexpr int kEcsNoTransform = 5;
+inline constexpr int kEcsBadAsset = 6;
+
 // Time 导出错误码（v3 M-SC5）：0=ok / 1=未绑 Clock（宿主忘 timeSetClock）/ 4=非法参数
 inline constexpr int kTimeOk = 0;
 inline constexpr int kTimeNoClock = 1;

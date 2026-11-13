@@ -89,6 +89,12 @@ struct ApiTable
     void* cameraGetFov;
     // Camera.cameraSetFov — 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource
     void* cameraSetFov;
+    // Ecs.ecsAttachModel — 挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝
+    void* ecsAttachModel;
+    // Ecs.ecsDetachModel — 摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘
+    void* ecsDetachModel;
+    // Ecs.ecsModelInfo — ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数
+    void* ecsModelInfo;
 };
 
 } // namespace nl::script

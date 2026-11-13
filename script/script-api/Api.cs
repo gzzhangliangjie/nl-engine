@@ -8,6 +8,7 @@
 // 热更安全约定（P8-SCRIPT-PLAN.md）：绑定面 API 无跨帧状态；状态全在 C++ 侧。
 using System;
 using System.Collections.Generic;
+using System.Numerics;               // M-SC7：ModelInfo tint（Vector3，net8.0 基类库）
 using System.Runtime.InteropServices;
 
 namespace Nl.Script.Api
@@ -15,7 +16,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.6.0";   // M-SC6：Camera 域绑定面（v4 4 导出，ApiTable 29）
+        public const string Version = "0.7.0";   // M-SC7：ECS 模型挂载面（v5 3 导出，ApiTable 32）
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -177,6 +178,8 @@ namespace Nl.Script.Api
         public const int NoEntity = 2;     // 实体不存在（失效安全拒绝）
         public const int Component = 3;    // 组件缺失或重复挂
         public const int BadArg = 4;       // 非法参数
+        public const int NoTransform = 5;  // M-SC7：挂模型但实体无 Transform（先 AddTransform，不隐式建表）
+        public const int BadAsset = 6;     // M-SC7：meshFile 白名单拒绝（防路径穿越名）
     }
 
     /// <summary>局部 TRS（POD 本体 = 生成物 Wiring.g.cs；本 partial 只落 hand 扩展）。
@@ -284,6 +287,61 @@ namespace Nl.Script.Api
                 return fn(namePtr, out id);
             }
             finally { NativeMarshal.Utf8Free(namePtr); }
+        }
+
+        /// <summary>挂 ModelComponent（M-SC7；meshFile = assets/ 下 .glb 文件名，白名单
+        /// 拒绝路径穿越名）。viewer 帧边界比对 Model 集合签名重建 scene batch。
+        /// rc：Ok / NoWorld / NoEntity / Component(重复挂) / BadArg(空名) /
+        /// NoTransform(先 AddTransform) / BadAsset(白名单拒绝)。</summary>
+        public static int AttachModel(ulong id, string meshFile)
+        {
+            IntPtr filePtr = NativeMarshal.Utf8Alloc(meshFile);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<EcsWiring.EcsAttachModelFn>(EcsWiring._ecsAttachModel);
+                return fn(id, filePtr);
+            }
+            finally { NativeMarshal.Utf8Free(filePtr); }
+        }
+
+        /// <summary>摘 ModelComponent（M-SC7；viewer 帧边界重建）。
+        /// rc：Ok / NoWorld / NoEntity / Component(无 Model 可摘)。</summary>
+        public static int DetachModel(ulong id) =>
+            Marshal.GetDelegateForFunctionPointer<EcsWiring.EcsDetachModelFn>(EcsWiring._ecsDetachModel)(id);
+
+        /// <summary>ModelComponent 字段读回（M-SC7）。meshFile = out str 静态缓冲账本
+        /// （「下次同线程调用前有效」，本方法立即拷成托管串）；tint/roughness/metallic
+        /// 可传 null 跳过（C# 侧用重载固定全读形态）。rc：Ok / NoWorld / NoEntity /
+        /// Component(无 Model) / BadArg。</summary>
+        public static int ModelInfo(ulong id, out string meshFile, out Vector3 tint,
+                                    out float roughness, out float metallic)
+        {
+            meshFile = "";
+            tint = default;
+            roughness = 0f;
+            metallic = 0f;
+            var fn = Marshal.GetDelegateForFunctionPointer<EcsWiring.EcsModelInfoFn>(EcsWiring._ecsModelInfo);
+            unsafe
+            {
+                float* t = stackalloc float[3];
+                int rc = fn(id, out IntPtr filePtr, t, out roughness, out metallic);
+                if (rc == EcsCode.Ok)
+                {
+                    meshFile = NativeMarshal.Utf8ReadOrEmpty(filePtr);
+                    tint = new Vector3(t[0], t[1], t[2]);
+                }
+                return rc;
+            }
+        }
+
+        /// <summary>ModelInfo 全字段读回形态（tint 可空指针版的便捷封装）。</summary>
+        public static int ModelInfo(ulong id, out string meshFile)
+        {
+            meshFile = "";
+            var fn = Marshal.GetDelegateForFunctionPointer<EcsWiring.EcsModelInfoFn>(EcsWiring._ecsModelInfo);
+            int rc = fn(id, out IntPtr filePtr, null, out _, out _);
+            if (rc == EcsCode.Ok) meshFile = NativeMarshal.Utf8ReadOrEmpty(filePtr);
+            return rc;
         }
     }
 

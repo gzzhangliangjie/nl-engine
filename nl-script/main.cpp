@@ -73,6 +73,7 @@
 #include "nl/script/ScriptHost.hpp"
 
 #include <chrono>
+#include <cmath>       // s11 std::fabs（M-SC7 终态核容差）
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -246,7 +247,8 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 // ---- selftest ----
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
-                const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir) {
+                const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
+                const fs::path& modelDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -1024,6 +1026,97 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s11 模型挂载（M-SC7；modelDir 为空 = 跳过，同 s6~s10 口径）----
+    if (!modelDir.empty()) {
+        if (!dotnetBuild(modelDir.string(), {})) {
+            expectTrue(false, "s11-pre dotnet build model example");
+            std::printf("nl-script selftest: FAIL (model binding build)\n");
+            return 1;
+        }
+        auto mso = locateOutput(modelDir, {});
+        expectTrue(mso.has_value(), "s11-pre locate ModelScript build output");
+        if (mso) {
+            const std::string modelType = "NlScript.Examples.ModelScript, " + mso->assemblyName;
+            nl::script::EntryPointFn mBound = nullptr, mError = nullptr,
+                                     mUnbound = nullptr, mDetach = nullptr;
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "BoundProbe", &mBound);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "ErrorProbe", &mError);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "UnboundProbe", &mUnbound);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "DetachProbe", &mDetach);
+            expectTrue(result.ok && mDetach != nullptr, "s11-pre locate model entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry11 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 罐头 World（绑定脚本生命周期；与 s8 world8 独立——本段实体名空间自洽）
+                static nl::scene::World world11;
+                nl::script::ecsSetWorld(&world11);
+
+                // s11a：挂载 + 读回 + 留态（C++ 终态核：ModelComponent 落进罐头 World）
+                {
+                    auto [hit, ret] = callEntry11(mBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s11a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // newEntity 延迟落表（entitiesToAdd_ 队列，tick/flush 才进 entities_）
+                // ——罐头 World 没 tick，C++ findEntityByName / C# FindByName 都扫
+                // entities_，不 flush 就永远看不到。宿主显式 flush（ecsFlush 语义）。
+                world11.flushEntityCreationAndRemoval();
+                const nl::scene::ModelComponent* probeModel = nullptr;
+                if (const auto e = world11.findEntityByName("probeModel"))
+                    probeModel = world11.getComponent<nl::scene::ModelComponent>(e->getID());
+                expectTrue(probeModel != nullptr && probeModel->meshFile == "cube.glb",
+                           "s11a C++ capture: probeModel ModelComponent meshFile=cube.glb");
+                expectTrue(probeModel != nullptr &&
+                           std::fabs(probeModel->tint.x - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->tint.y - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->tint.z - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->roughness - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->metallic - 0.0f) < 1e-5f,
+                           "s11a C++ capture: default tint(1,1,1)/roughness 1/metallic 0");
+
+                // s11b：错误码逐一对齐（NoEntity=2 / BadArg=4 / BadAsset=6 /
+                // NoTransform=5 / Component=3——重复挂拒绝不改状态）
+                {
+                    auto [hit, ret] = callEntry11(mError);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11b C# ErrorProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s11b detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s11c：解绑路径（nullptr = NoWorld 三导出对齐，不崩）→ 重绑
+                nl::script::ecsSetWorld(nullptr);
+                {
+                    auto [hit, ret] = callEntry11(mUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11c C# UnboundProbe -> 0");
+                }
+                nl::script::ecsSetWorld(&world11);
+
+                // s11d：摘除路径 + C++ 终态核（Model 摘净、Transform 留守）
+                {
+                    auto [hit, ret] = callEntry11(mDetach);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11d C# DetachProbe -> 0");
+                }
+                bool modelGone = true, transformKept = false;
+                if (const auto e = world11.findEntityByName("probeModel")) {
+                    modelGone = world11.getComponent<nl::scene::ModelComponent>(e->getID()) == nullptr;
+                    transformKept = world11.getComponent<nl::scene::TransformComponent>(e->getID()) != nullptr;
+                }
+                expectTrue(modelGone, "s11d C++ capture: probeModel ModelComponent removed");
+                expectTrue(transformKept, "s11d C++ capture: TransformComponent kept after detach");
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -1037,7 +1130,8 @@ void usage() {
         "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
-        "                    [timeinputProjectDir] [cameraProjectDir]              full machine-checked acceptance\n"
+        "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
+        "                                                                         full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -1088,7 +1182,8 @@ int main(int argc, char** argv) {
         const fs::path bootstrapDir = argc >= 6 ? fs::weakly_canonical(argv[5]) : fs::path();
         const fs::path timeDir = argc >= 7 ? fs::weakly_canonical(argv[6]) : fs::path();
         const fs::path camDir = argc >= 8 ? fs::weakly_canonical(argv[7]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir);
+        const fs::path modelDir = argc >= 9 ? fs::weakly_canonical(argv[8]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir);
     }
     usage();
     return 2;

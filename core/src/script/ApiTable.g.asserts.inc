@@ -33,3 +33,6 @@ static_assert(std::is_same_v<decltype(&nl_cameraGetPose), int(*)(float*, float*,
 static_assert(std::is_same_v<decltype(&nl_cameraSetPose), int(*)(const float*, float, float)>, "exports.api drift: Camera.cameraSetPose");
 static_assert(std::is_same_v<decltype(&nl_cameraGetFov), float(*)(void)>, "exports.api drift: Camera.cameraGetFov");
 static_assert(std::is_same_v<decltype(&nl_cameraSetFov), int(*)(float)>, "exports.api drift: Camera.cameraSetFov");
+static_assert(std::is_same_v<decltype(&nl_ecsAttachModel), int(*)(std::uint64_t, const char*)>, "exports.api drift: Ecs.ecsAttachModel");
+static_assert(std::is_same_v<decltype(&nl_ecsDetachModel), int(*)(std::uint64_t)>, "exports.api drift: Ecs.ecsDetachModel");
+static_assert(std::is_same_v<decltype(&nl_ecsModelInfo), int(*)(std::uint64_t, const char**, float*, float*, float*)>, "exports.api drift: Ecs.ecsModelInfo");

@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **29 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **32 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -45,7 +45,7 @@
 | `consoleRegister`（偏移 4） | `int nl_consoleRegister(const char*, const char*, void*)` | 注册 C# 命令回调进 console 命令表。rc：0=ok / 1=名字已被 CVar 占用。fn ABI = int fn(int argc, const char** argv, const char** outText)（reverse P/Invoke；script-api 静态保活随 collectible ALC 整体回收；SEH 边界） | `in str name`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in str help`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in ptr fn`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收 |
 | `consoleUnregister`（偏移 5） | `int nl_consoleUnregister(const char*)` | 注销命令（M-SC3 热重载解绑落点；对称擦除 C++ 登记表）。rc：0=ok / 1=未知命令 | `in str name`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free） |
 
-## Ecs 域（ApiTable 偏移 6..15）
+## Ecs 域（ApiTable 偏移 6..31）
 
 | 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
 |---|---|---|---|
@@ -59,6 +59,9 @@
 | `ecsTransformGet`（偏移 13） | `int nl_ecsTransformGet(std::uint64_t, float*, float*, float*)` | 局部 TRS 读回（rot=quat x,y,z,w）。任一 out 指针可 NULL 跳过该组。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=组件缺失 | `in u64 id`：值传递；`out buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`out buf3 rot`：定长 float[3] 直传（Blittable，不跨堆）；`out buf3 scale`：定长 float[3] 直传（Blittable，不跨堆） |
 | `ecsTransformSet`（偏移 14） | `int nl_ecsTransformSet(std::uint64_t, const float*, const float*, const float*)` | 局部 TRS 写入。任一 in 指针可 NULL 跳过该组。rc 同 ecsTransformGet | `in u64 id`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf3 rot`：定长 float[3] 直传（Blittable，不跨堆）；`in buf3 scale`：定长 float[3] 直传（Blittable，不跨堆） |
 | `ecsFindByName`（偏移 15） | `int nl_ecsFindByName(const char*, std::uint64_t*)` | 按名查实体（findEntityByName 口径；未找到 id=0 且 rc=0）。rc：0=ok / 1=未绑 World / 4=非法参数 | `in str name`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`out u64 id`：指针出参（调用期存活） |
+| `ecsAttachModel`（偏移 29） | `int nl_ecsAttachModel(std::uint64_t, const char*)` | 挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝 | `in u64 id`：值传递；`in str meshFile`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free） |
+| `ecsDetachModel`（偏移 30） | `int nl_ecsDetachModel(std::uint64_t)` | 摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘 | `in u64 id`：值传递 |
+| `ecsModelInfo`（偏移 31） | `int nl_ecsModelInfo(std::uint64_t, const char**, float*, float*, float*)` | ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数 | `in u64 id`：值传递；`out str meshFile`：C++ 静态缓冲「下次同线程调用前有效」→ C# 立即拷贝（Utf8Read，零分配）；`out buf3 tint`：定长 float[3] 直传（Blittable，不跨堆）；`out f32 roughness`：指针出参（调用期存活）；`out f32 metallic`：指针出参（调用期存活） |
 
 ## Time 域（ApiTable 偏移 16..17）
 

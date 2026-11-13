@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """P8-Script 工具版证据图生成器（M-SC0 收口段 + M-SC1 console 绑定段 + M-SC2 ECS 数据面段
-+ M-SC3 脚本热更段 + M-SC4 绑定生成器段 + M-SC5 Time/Input/Log 域段 + M-SC6 Camera 域段）。
++ M-SC3 脚本热更段 + M-SC4 绑定生成器段 + M-SC5 Time/Input/Log 域段 + M-SC6 Camera 域段
++ M-SC7 模型挂载段）。
 
 铁律：所有内容从工具**真实输出**渲染（example/<dir>/*.log，
 由 nl-script.exe / gen.py 实跑重定向落盘），不许手绘示意。产物进 example/<dir>/。
 复现：example/<dir>/run.bat（重跑用例 -> 重新生成本图 -> exit 0 校验）。
-用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3|m-sc4|m-sc5|m-sc6]   （缺省 m-sc0）
+用法：python make-script-evidence.py [m-sc0|m-sc1|m-sc2|m-sc3|m-sc4|m-sc5|m-sc6|m-sc7]   （缺省 m-sc0）
 """
 import os
 import sys
@@ -271,9 +272,46 @@ CASES_M_SC6 = [
      "so a script cannot fight the host's fov persistence."),
 ]
 
+CASES_M_SC7 = [
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- golden self-verify (v5: 32 exports = 29 + ecs model 3; Init-offset bugfix)",
+     "Ecs domain tail-append (ecsAttachModel/ecsDetachModel/ecsModelInfo) -> 32 exports. "
+     "Also fixed a real generator bug found by this milestone: C# Init offsets were "
+     "assigned per first-appearance domain order with a running counter, so appending to a "
+     "non-tail domain (Ecs) while Time/Input/Log/Camera follow silently misaligned every "
+     "later domain's slot; offsets are now per-export global declaration indices (Ecs = "
+     "6..15,29..31). Table struct/registration were always declaration-ordered and never "
+     "affected."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC7 model attach (s11a-s11d, on top of s0-s5 + s6 + s7 + s8 + s9 + s10)",
+     "s11a bound: spawn + AddTransform + AttachModel(cube.glb) -> ModelInfo readback "
+     "(meshFile / default tint 1,1,1 / roughness 1 / metallic 0) + C++ capture: "
+     "ModelComponent landed in canned world with meshFile=cube.glb. s11b error codes "
+     "1-by-1: NoEntity=2 (attach/detach/info), BadArg=4 empty name, BadAsset=6 "
+     "(../secret.glb / model.gltf / dir/model.glb rejected BEFORE touching the world), "
+     "NoTransform=5 (no implicit table), Component=3 duplicate attach rejected without "
+     "state change (World::addComponent duplicate = assert, binding must block first). "
+     "s11c unbound: NoWorld x3, no crash. s11d detach: Model gone, Transform kept "
+     "(C++-verified), re-detach = Component."),
+    ("s11.log", "s11.png",
+     "s11 section close-up (filtered from selftest.log)",
+     "Attach semantics (2026-11-14 approved plan A): binding only mutates components + "
+     "validates whitelist; the viewer compares the Model-set signature (entity id + "
+     "meshFile) at frame boundary after tick and re-runs collection + loadEcsScene "
+     "(initScene now re-entrant via shutdownEcsScene — second call used to leak the "
+     "whole GPU resource set). Instance matrices keep flowing through the existing "
+     "M-GL3 interpolation chain. ApiTable 29 -> 32; Api.Version 0.7.0."),
+    ("check.log", "check.png",
+     "nl-script check model example -- compile only (exit 0)",
+     "dotnet build only; s11 probes (BoundProbe/ErrorProbe/UnboundProbe/DetachProbe) "
+     "verified in selftest against the canned world; whitelist single-sourced into "
+     "nl::scene::validAssetFileName (AssetName.hpp) replacing four drifting copies "
+     "(renderer.cpp original + scene.cpp + viewer lambda + SceneGeo stricter variant)."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
          "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
-         "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6}[DIR_NAME]
+         "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6, "m-sc7": CASES_M_SC7}[DIR_NAME]
 
 
 def main():

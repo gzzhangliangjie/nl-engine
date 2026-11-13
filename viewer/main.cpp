@@ -16,6 +16,7 @@
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
+#include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本 lambda 原为语义复制点）
 #include "nl/core/meshlet_io.hpp"  // M-E5：scene.getMaterials 读 .nmesh NSUB 子网格/材质表
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/nav_panel.hpp"   // P8 M-N2：--nav-panel 面板（ImGui 在 renderer 内）
@@ -3440,21 +3441,9 @@ int runScene(const Options& o) {
     }
 
     // ---- 2. O(N) 遍历实体收集渲染描述 ----
-    // meshFile 白名单校验（与 renderer.cpp validAssetFileName 同一套逻辑，
-    // scene.cpp 兜底同款复制；非法 = 显式报错退出 2，不静默跳过）。
-    auto validGlbAssetName = [](const std::string& s) {
-        if (s.empty()) return false;
-        if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
-        if (s.find("..") != std::string::npos) return false;
-        const std::string ext = ".glb";
-        if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
-            return false;
-        for (const char c : s) {
-            const auto u = static_cast<unsigned char>(c);
-            if (u < 0x21 || u > 0x7E) return false;
-        }
-        return true;
-    };
+    // meshFile 白名单校验：M-SC7 起实现单源 = nl::scene::validGlbAssetName
+    //（本 lambda 历史上与 renderer.cpp/scene.cpp 互为复制，收编后删除）；
+    // 非法 = 显式报错退出 2，不静默跳过。
     std::vector<nl::renderer::SceneLightDesc> lights;
     std::vector<std::string> meshFiles;
     std::vector<nl::scene::EntityID> modelIds;
@@ -3504,7 +3493,7 @@ int runScene(const Options& o) {
                 nl::core::log::errorCh("viewer", "--scene: entity ", id, " has Model without Transform");
                 return 2;
             }
-            if (!validGlbAssetName(model->meshFile)) {
+            if (!nl::scene::validGlbAssetName(model->meshFile.c_str())) {
                 nl::core::log::errorCh("viewer", "--scene: entity ", id, " meshFile '",
                                      model->meshFile, "' rejected by asset whitelist (.glb)");
                 return 2;
@@ -3590,6 +3579,85 @@ int runScene(const Options& o) {
         nl::core::log::errorCh("viewer", "ecs scene load failed: ", renderer->lastError());
         return 1;
     }
+
+    // ---- M-SC7：Model 集合签名 + 帧边界整场景重建（拍板方案 A）----
+    // 脚本运行期 ecsAttachModel/ecsDetachModel 只动 World 组件（binding 层已做
+    // 白名单/Transform/重复挂校验）；渲染侧每帧 tick 后比对签名（实体 ID +
+    // meshFile，按 world.getEntityIDs() 出现序稳定），变了 = 重跑收集 +
+    // loadEcsScene（initScene 已可重入：开头 shutdownEcsScene 释放上一份）。
+    // 实例矩阵每帧更新走既有 M-GL3 插值链不动。灯光集本里程碑脚本不可动
+    //（无灯导出），签名只含 Model。无脚本/无增删时每帧 O(N) 只读扫描，零重建。
+    std::vector<std::pair<unsigned long long, std::string>> modelSig;
+    auto computeModelSig = [&world]() {
+        std::vector<std::pair<unsigned long long, std::string>> sig;
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            if (const auto* m = world.getComponent<nl::scene::ModelComponent>(id))
+                sig.emplace_back(id, m->meshFile);
+        }
+        return sig;
+    };
+    modelSig = computeModelSig();
+    auto rebuildSceneObjects = [&]() -> bool {
+        meshFiles.clear();
+        modelIds.clear();
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
+            if (!model) continue;
+            // 运行期防崩（不 return 2——初始 --scene 硬失败口径不适用于帧边界）：
+            // 无 Transform / 白名单拒绝 = 逐实体跳过 + 显式日志（不静默画半套）。
+            if (!world.getComponent<nl::scene::TransformComponent>(id)) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " has Model without Transform (skipped)");
+                continue;
+            }
+            if (!nl::scene::validGlbAssetName(model->meshFile.c_str())) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " meshFile '", model->meshFile,
+                                     "' rejected by asset whitelist (skipped)");
+                continue;
+            }
+            meshFiles.push_back(model->meshFile);   // 指针先落到稳定存储再填 POD
+            modelIds.push_back(id);
+        }
+        objects.clear();
+        objects.reserve(modelIds.size());
+        for (std::size_t k = 0; k < modelIds.size(); ++k) {
+            const auto* model = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+            nl::renderer::SceneObjectDesc d{};
+            const auto wm = t->getWorldMatrix();
+            std::memcpy(d.world, wm.m, sizeof(d.world));
+            d.tint[0] = model->tint.x;
+            d.tint[1] = model->tint.y;
+            d.tint[2] = model->tint.z;
+            d.roughness = model->roughness;
+            d.metallic  = model->metallic;
+            d.hasPbrOverride = model->hasPbrOverride;
+            d.meshFile = meshFiles[k].c_str();
+            objects.push_back(d);
+        }
+        // M-GL3 插值样本重置：新集合没有上一 tick 样本，prev=curr=当前 TRS
+        //（从当前态起步，无历史可插——重建帧不引入毛刺，下帧起恢复正常采样）。
+        interpPrev.assign(modelIds.size(), WorldSample{});
+        interpCurr.assign(modelIds.size(), WorldSample{});
+        for (std::size_t k = 0; k < modelIds.size(); ++k) {
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+            interpPrev[k] = interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
+        }
+        if (!renderer->loadEcsScene(objects.data(),
+                                    static_cast<std::uint32_t>(objects.size()),
+                                    lights.empty() ? nullptr : lights.data(),
+                                    static_cast<std::uint32_t>(lights.size()),
+                                    ambient, sceneName.c_str())) {
+            nl::core::log::errorCh("viewer", "ecs scene rebuild failed: ", renderer->lastError());
+            return false;
+        }
+        modelSig = computeModelSig();
+        // 机器出口（run.bat findstr 断言）：重建帧对象数一行。
+        nl::core::log::infoCh("viewer", "ecs scene rebuilt: ", objects.size(),
+                            " objects (frame-boundary, script attach/detach)");
+        return true;
+    };
 
     // ---- M-E1b.5 渲染用例：--tick serial|parallel（帧循环逐帧 tick + 刷实例）----
     // SpinSystem（Write<TransformComponent>）绕 Y 轴旋转，角速度按实体序号差异化
@@ -3985,6 +4053,15 @@ int runScene(const Options& o) {
             // PostUpdateWork 三组），这里只喂时钟——组序 = 枚举序 = 旧 lambda 顺序。
             gameClock.tick(clockDtMs);
             if (failed) break;
+            // M-SC7：帧边界 Model 集合签名比对——脚本 attach/detach（PrePhysics
+            // scriptTick）+ remove flush（PostPhysics tick 开头）都已落定，此处
+            // 集合稳定，重建一次供本帧渲染（实例写/render 全用新 objects/modelIds）。
+            if (auto sig = computeModelSig(); sig != modelSig) {
+                if (!rebuildSceneObjects()) {
+                    failed = true;
+                    break;
+                }
+            }
             // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
             if (audioWorld) {
                 float eye3[3];

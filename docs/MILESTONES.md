@@ -1912,6 +1912,25 @@
 
 **下一步**：M-SC7 模型场景创建（ecsAttachModel/ecsDetachModel，scene batch 装配复用 E1b 链）。
 
+## M-SC7：ECS 模型挂载 + 白名单单源 + 生成器偏移修复（feat/script，2026-11-14，tag `m-sc7`）
+
+**动作**：ECS 模型挂载面三导出（ecsAttachModel/ecsDetachModel/ecsModelInfo，ApiTable 29→32，v5，Api.Version 0.7.0）。2026-11-14 用户拍板方案 A：binding 只做组件增删 + 白名单校验，viewer 帧边界比对 Model 集合签名（实体 ID + meshFile），变了重跑收集 + `loadEcsScene`；三防崩语义（无 Transform = kEcsNoTransform=5 不隐式建表 / 重复挂 = kEcsComponent=3 先挡 World::addComponent assert / 白名单拒 = kEcsBadAsset=6 坏名不落 World）。白名单升单源 `nl::scene::validAssetFileName`（AssetName.hpp，收编 renderer.cpp/scene.cpp/viewer lambda/SceneGeo 四份复制，统一为原版可打印 ASCII 口径）。`Scene::initScene` 可重入化（新增 `shutdownEcsScene()` 子集释放，initScene 开头调用；shutdown 复用同一清单）。C# facade Ecs.AttachModel/DetachModel/ModelInfo + ModelScript 示例四探针 + selftest s11a~s11d。
+
+**提交版本**：feat/script 落码 commit（tag `m-sc7`，即本条台账所在提交）。
+
+**完成情况**：DX12/VULKAN 双后端构建过 + selftest **122 断言全 PASS**（s0~s10 不回归 + s11a~s11d：挂载+读回+留态 C++ 终态核（probeModel meshFile=cube.glb/缺省 tint/roughness/metallic）、错误码逐一（NoEntity/BadArg/BadAsset 三形态白名单拒/NoTransform/重复挂拒绝不改状态）、解绑 NoWorld 三导出不崩、摘除后 Model 净 Transform 留守 + 再摘 Component）；gen.py --check 绿（32 exports / 1 POD / 5 files）；check model exit 0；run.bat ALL GREEN；server.py --check exit 0（kStage 仍 S8.2，A 类不 bump）；regression m-sc7 8/8 ALL GREEN（bytes 8 / FAIL 0，81s）。收口四项自查：①渲染交代物——**无**（A 类纯逻辑；viewer 帧边界重建的视觉验证随 M-SC11 跨域示例，机器出口锚 `ecs scene rebuilt: N objects` 已落码）；②工具交代物——展示台 `m-sc7` 版本卡 4 条 tool 用例 + 4 张真实输出证据图 + SCRIPT-TOOLS-GUIDE M-SC7 节 + run.bat 复现；③MILESTONES 四栏（本节）；④固化——P8-SCRIPT-PLAN M-SC7 行（拍板 A 写回）+ 白名单单源纪律 + gen.py 偏移规则修正。
+
+**踩坑情况**
+1. **【gen.py 真 bug，本轮最有价值发现】C# Init 偏移按域首现序跑连续计数器**：往**非末尾域**（Ecs）尾部追加导出时，Time/Input/Log/Camera 各域 Init 偏移整体错位——表本体（ApiTable.g.hpp 字段序/.g.inc 注册序）一直是声明序所以 struct 没坏，但 C# 会读错槽位（ecsAttachModel 读到 timeGetState 槽）。M-SC5/SC6 恰好都在末尾域追加所以从未暴露。修复 = Init 改用每导出声明序全局下标 + 域注释偏移段合并显示（Ecs = "6..15,29..31"）。教训：**生成器不变量（「域组连续」）没有写进 --check，是隐性假设**——尾部追加规则只保护表 ABI，不保护域分组计数器。
+2. **Scene::initScene 不可重入**：成员句柄直接重建不释放（vsScene_/sceneBatches_/shadow 链…）→ 运行期重建会整份泄漏 GPU 资源。修复 = 抽 `shutdownEcsScene()`（initScene 与 shutdown 共用清单，P9 V2 中性纹理 UAF 口径随块收编）。
+3. **newEntity 延迟落表 × 罐头 World 无 tick**：`newEntity` 进 `entitiesToAdd_` 队列，`findEntityByName`/`C# FindByName` 只扫 `entities_`——罐头 World 不 tick 就永远不 flush，selftest 首跑 s11b/s11d FindByName 全空（s11a 断言 1~6 全过、终态核全红的错位假象）。修复 = s11a 后宿主显式 `flushEntityCreationAndRemoval()`。**「新建立即可见」口径只在 hasComponent 族成立（组件按 id 键控），按名查找族必须先 flush**。
+4. **facade 全字段读回漏传缓冲**：ModelInfo 全字段重载把 `null` 传 tint 指针（想省栈分配）→ C# 侧 tint 恒 (0,0,0)——out buf 指针可 NULL 是 C++ 侧「跳过该字段」语义，C# facade 要读就必须传实缓冲（stackalloc）。
+5. **白名单四处漂移实录**：renderer.cpp（原版可打印 ASCII）/ scene.cpp / viewer lambda / SceneGeo.cpp（更严 alnum+_-\.）——四处注释互指「不许漂移」但本体已漂。收编单源时 SceneGeo 放行字符集变宽（路径穿越防护不变），已在 AssetName.hpp 头注写明语义取舍。
+6. **编译闸三连抓（收口前 4 次构建红全被闸当场暴露，无一带病进验收）**：`World::getComponent(id, typeID)` 返回基类 `Component*` 取字段须 static_cast（templated `getComponent<T>` 才内建 cast）；scene.cpp 第二调用点漏限定 `nl::scene::`；`EntityID` 是 `uint64_t` 别名没有 `getID()`（Entity 壳才有）——另 `findEntityByName` 返回 `optional<Entity>` 不是 `optional<EntityID>`，取 `e->getID()`。
+7. **Api.cs 用 Vector3 漏 using**：System.Numerics 非 ImplicitUsings 自动集，编译期即抓；cwd 漂移读错树（开工实读三条 grep 落主仓得出「s9/s10 不存在」假象）——pwd 必看。
+
+**下一步**：M-SC8 Physics 载具域（Jolt 载具经 CameraSource 式适配源进绑定面；拍板待开工闸）。
+
 **动作**：`material.slang`（vsMatResolve 全屏三角形 + psMatResolve：u64 解包 → clusterMeta 查表 → localIndices+vertexPool 拉 3 顶点 → The-Forge 解析式屏幕空间 barycentrics + 每像素导数 → 透视正确插值 worldPos/normal/uv → mode 0/1/2/5，SampleGrad 吃解析导数，空像素 discard）→ CMake `_ENTRIES_MATERIAL` + `_VISBUF_COMMON` 依赖链 → `ViewMode::Pulling`(10) + modes/viewer/renderer/backend 全链穿线（initVisbuf 增 `pulling` 参：同 Scene 复用 vis 资源 + 从 .nmesh 推导 .glb 加载 baseColor/MR 真贴图 + LightConstants(80B,b1) + MatResolveConstants(16B,b2)）→ §2.7 单 BindingSet（b0~b2 + t0~t5 + s0）→ 双后端构建 → **发现 master visbuf 家族堆损坏崩溃（c0000374）→ ASan + 自写 dbghelp 符号化脚本定位 → 修 2 个既有 bug**（见踩坑栏）→ kStage S7.1 + selftest stage 校验同步 → `example/s7-pulling/`（4 张基线 + run.bat + verify.py）+ cases.json s7.1 卡 3 条 → verify.py ALL GREEN + server.py --check 0 → spot 回归 m0.9/s7.0/pbr-direct 三条 ALL GREEN（HUD 用例基线按 kStage bump 纪律重拍 4 张）→ S7-PLAN M7.1 勾选 + UE-DIFFS D16 → 本四栏 → 提交打 tag。
 
 **提交版本**：master 本收口 commit（tag `s7-pulling`，即本条台账所在提交）。

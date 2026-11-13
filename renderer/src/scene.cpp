@@ -5,6 +5,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
+#include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本文件原为语义复制点）
 #include "json.hpp"                // M-PT1：.nfx v1 解析（vendored nlohmann，与 core 同源）
 
 // M-PT2：粒子贴图解码用 stb_image 声明头。实现（STB_IMAGE_IMPLEMENTATION）只在
@@ -5990,23 +5991,9 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
 // 文件头 M-E1b.0 段（资源布局；多灯 = 方向灯数组，Carrot ModelRenderSystem 蓝本）。
 // ---------------------------------------------------------------------------
 
-// .glb 白名单：与 renderer.cpp 的 validAssetFileName 同一套逻辑（实现锁在那边
-// 的匿名 namespace 里，这里复制语义，两处注释互相指向不许漂移）。viewer 侧
-// 收集 SceneObjectDesc 时已按同规则校验，这里兜底拒绝脏数据（不静默）。
-static bool validGlbAssetName(const char* name) {
-    if (!name || !*name) return false;
-    const std::string s(name);
-    if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
-    if (s.find("..") != std::string::npos) return false;
-    const std::string ext = ".glb";
-    if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
-        return false;
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (u < 0x21 || u > 0x7E) return false;   // 可打印 ASCII，不含空格
-    }
-    return true;
-}
+// .glb 白名单：M-SC7 起实现单源 = nl::scene::validGlbAssetName（AssetName.hpp；
+// 本函数为历史语义复制点，收编后删除——viewer 侧收集 SceneObjectDesc 时已按
+// 同一 helper 校验，这里兜底拒绝脏数据（不静默）的口径不变）。
 
 // ---- M-E1b.4：阴影 CPU 数学辅助（全部纯 CPU、列主序、D3D 深度 z∈[0,1] 约定，
 // 与 nl::core::Matrix4 的口径一致；core 层相机只做轨道透视，这里独立实现
@@ -6086,6 +6073,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                       const SceneObjectDesc* objects, std::uint32_t objectCount,
                       const SceneLightDesc* lights, std::uint32_t lightCount,
                       float ambient, const char* sceneName, std::string& outError) {
+    // M-SC7：可重入闸（拍板方案 A）。首次调用 = 释放空集（no-op）；脚本运行期
+    // attach/detach 后 viewer 帧边界重跑本函数，先释放上一份 GPU 资源再重建
+    //（此前 initScene 不可重入，二次调用会整份泄漏——本行就是防泄漏落点）。
+    shutdownEcsScene();
     shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     sceneMode_ = true;
     sceneAmbient_ = ambient;
@@ -6119,7 +6110,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     std::vector<std::string> batchFiles;
     std::vector<std::vector<std::uint32_t>> batchObjects;
     for (std::uint32_t i = 0; i < objectCount; ++i) {
-        if (!validGlbAssetName(objects[i].meshFile)) {
+        if (!nl::scene::validGlbAssetName(objects[i].meshFile)) {
             outError = std::string("invalid meshFile '") +
                        (objects[i].meshFile ? objects[i].meshFile : "<null>") +
                        "' (expected an ASCII *.glb file name in assets/models/)";
@@ -8634,6 +8625,48 @@ void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     particles_.draw(cmd, framebuffer, viewport, params, shaderSuffix_.c_str());
 }
 
+// M-SC7：ECS 场景资源子集释放（shutdownEcsScene）。清单 = initScene 建立的
+// 全部句柄（场景管线/batch/灯缓冲/中性兜底纹理/阴影链 + 计数归零）。两个消费点：
+//   1. Scene::shutdown()（原 M-E1b.0 块原位收编，语义逐位不变）；
+//   2. Scene::initScene() 开头（可重入：运行期脚本 attach/detach 后 viewer 帧边界
+//      整场景重建，拍板方案 A——initScene 曾不可重入，重复调用会泄漏 GPU 资源）。
+// device 存活期调用纪律不变（P9 V2 中性纹理 UAF 口径，见块内注释）。
+void Scene::shutdownEcsScene() {
+    sceneMode_ = false;
+    vsScene_ = nullptr;
+    psScene_ = nullptr;
+    sceneLights_ = nullptr;
+    sceneInputLayout_ = nullptr;
+    sceneBindingLayout_ = nullptr;
+    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
+    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
+    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
+    // 仅创建不绑定不写入也复现，删创建即 clean）。
+    sceneNeutralNormal_ = nullptr;
+    sceneNeutralMR_ = nullptr;
+    sceneNeutralOccl_ = nullptr;
+    sceneNeutralEmissive_ = nullptr;
+    sceneBatches_.clear();
+    pipelineSceneBack_ = nullptr;
+    pipelineSceneNone_ = nullptr;
+    pipelineSceneWireBack_ = nullptr;
+    pipelineSceneWireNone_ = nullptr;
+    // M-E1b.4：阴影资源随场景一并清空（数组句柄置空 + 计数/矩阵归零）。
+    vsShadow_ = nullptr;
+    psShadow_ = nullptr;
+    shadowInputLayout_ = nullptr;
+    shadowBindingLayout_ = nullptr;
+    shadowLightCB_ = nullptr;
+    shadowConstants_ = nullptr;
+    shadowMap_ = nullptr;
+    for (auto& fb : shadowFb_) fb = nullptr;
+    pipelineShadow_ = nullptr;
+    shadowCount_ = 0;
+    sceneAmbient_ = 0.28f;
+    sceneLightCount_ = 0;
+    sceneInstanceCount_ = 0;
+}
+
 void Scene::shutdown() {
     // M8.1：TLAS 资源（AS 句柄 + 探针管线，device 存活期释放）。
     tlasReady_ = false;
@@ -8863,40 +8896,9 @@ void Scene::shutdown() {
     clusterBlas_.clear();
     clusterBlasVB_ = nullptr;
     clusterBlasIB_ = nullptr;
-    // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
-    sceneMode_ = false;
-    vsScene_ = nullptr;
-    psScene_ = nullptr;
-    sceneLights_ = nullptr;
-    sceneInputLayout_ = nullptr;
-    sceneBindingLayout_ = nullptr;
-    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
-    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
-    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
-    // 仅创建不绑定不写入也复现，删创建即 clean）。
-    sceneNeutralNormal_ = nullptr;
-    sceneNeutralMR_ = nullptr;
-    sceneNeutralOccl_ = nullptr;
-    sceneNeutralEmissive_ = nullptr;
-    sceneBatches_.clear();
-    pipelineSceneBack_ = nullptr;
-    pipelineSceneNone_ = nullptr;
-    pipelineSceneWireBack_ = nullptr;
-    pipelineSceneWireNone_ = nullptr;
-    // M-E1b.4：阴影资源随场景一并清空（数组句柄置空 + 计数/矩阵归零）。
-    vsShadow_ = nullptr;
-    psShadow_ = nullptr;
-    shadowInputLayout_ = nullptr;
-    shadowBindingLayout_ = nullptr;
-    shadowLightCB_ = nullptr;
-    shadowConstants_ = nullptr;
-    shadowMap_ = nullptr;
-    for (auto& fb : shadowFb_) fb = nullptr;
-    pipelineShadow_ = nullptr;
-    shadowCount_ = 0;
-    sceneAmbient_ = 0.28f;
-    sceneLightCount_ = 0;
-    sceneInstanceCount_ = 0;
+    // M-SC7：ECS 场景资源子集释放（清单单源在 shutdownEcsScene，initScene
+    // 可重入与 shutdown 共用同一份——见该方法注释）。
+    shutdownEcsScene();
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
