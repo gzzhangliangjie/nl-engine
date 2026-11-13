@@ -1,0 +1,23 @@
+[2026-11-13 16:25:02.614] [nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[2026-11-13 16:25:03.038] [nl:info|renderer] rt extensions enabled: acceleration_structure+ray_query+buffer_device_address
+[2026-11-13 16:25:03.038] [nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[2026-11-13 16:25:03.323] [nl:info|scene] model ready: Suzanne.glb | vertices=11808 triangles=3936 indices=11808 | prims=1 | baseColor 1024x1024 | shader=spv
+[2026-11-13 16:25:03.327] [nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
+[2026-11-13 16:25:03.327] [nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
+[2026-11-13 16:25:03.328] [nl:info|viewer] M-D3 drive scene: 20 bodies (ground + lane markers + wall + VehicleConstraint chassis)
+[2026-11-13 16:25:03.329] [nl:info|viewer] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
+[2026-11-13 16:25:03.329] [nl:info|viewer] debug layer: NVRHI validation (Vulkan, no VVL, zero vendor SDK) | active=yes
+[2026-11-13 16:25:03.329] [nl:info|viewer] mode: normal | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[2026-11-13 16:25:03.334] [nl:info|viewer] screenshot mode: 300 frames -> E:\UE_STUDY_2026\nl-engine-camera\build\cam-b-accept\chase-vulkan.png | cull=back | hud=off
+[2026-11-13 16:25:03.334] [nl:info|viewer] console exec [0] cam.chase.height 3.5 -> cam.chase.height = 3.5
+[2026-11-13 16:25:03.346] [nl:info|scene] t0: offscreen HDR scene targets ready (raster path) #1
+[2026-11-13 16:25:03.397] [nl:info|renderer] gpu timer resolved [frame]: 0.05472 ms (first successful NVRHI timestamp query) #2
+[2026-11-13 16:25:04.627] [nl:info|viewer] drive scene: speed=0.0115737 grounded=4 wallHits=1 contacts=1/8/1 fwd=0 hb=1 #300
+[2026-11-13 16:25:04.627] [nl:info|viewer] drive hook: chassis valid=1 posZ=15.2419 yawDeg=-20.2322 #300
+[2026-11-13 16:25:04.627] [nl:info|viewer] cam final: mode=chase eye=-4.75809/3.40497/9.68038 yaw=-20.3198 pitch=-23.1887 lookAt=-5.0773/3.01121/10.5424 chaseYawDeg=-20.2322 chasePosZ=15.2419 #300
+[2026-11-13 16:25:04.627] [nl:info|viewer] phys-debug settled: vertices=1440 lineY[-1, 4] #300
+[2026-11-13 16:25:04.677] [nl:info|viewer] screenshot written: E:\UE_STUDY_2026\nl-engine-camera\example\cam-b\..\..\build\cam-b-accept\chase-vulkan.png #300
+[2026-11-13 16:25:04.677] [nl:info|viewer] shutdown ok (frames=300 screenshots=1 deviceErrors=0) #300
+[2026-11-13 16:25:04.677] [nl:info|viewer] frame timing: avg 16.6667 ms  max 16.6667 ms  over 300 frames (unthrottled) #300
+[2026-11-13 16:25:04.678] [nl:info|viewer] gpu timing: avg 0.0380529 ms over 299 resolved frames (NVRHI timer) #300
+[2026-11-13 16:25:04.803] [nl:info] window destroyed #300

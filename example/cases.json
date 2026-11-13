@@ -8137,10 +8137,10 @@
    "name": "三相机 viewer 接线 + M-CAM4 平滑/抖动（b 段收口）",
    "tag": "cam-b",
    "date": "2026-11-10",
-   "summary": "b 段三相机 viewer 胶水（ViewerCamera 同方法名包装层，双循环仅替换 OrbitCamera 实例；Key::T Chase↔Free 切换、--camera/--camera-track CLI、cam.* cvar、HUD 模式名）+ M-CAM4（CameraSmoother 二阶临界阻尼弹簧位置/朝向双通道 + CameraTrauma trauma² 确定性抖动）。OrbitCamera 一字未动零回归；free/chase/track/smooth/shake 的交互与截图基线待带显示会话补（example/cam-b/ + cam-1b/cam-2b/cam-3b/cam-mcam4 卡）。",
+   "summary": "b 段三相机 viewer 胶水（ViewerCamera 同方法名包装层，双循环仅替换 OrbitCamera 实例；Key::T Chase↔Free 切换、--camera/--camera-track CLI、cam.* cvar、HUD 模式名）+ M-CAM4（CameraSmoother 二阶临界阻尼弹簧位置/朝向双通道 + CameraTrauma trauma² 确定性抖动）。OrbitCamera 一字未动零回归。free/chase/track/smooth/shake 视觉卡欠账已由 M-CAM5 补齐（cam-1b/cam-2b/cam-3b/cam-mcam4 四卡 + example/cam-b/ 双后端基线，2026-11-13）；补卡过程修复两处 b 段潜伏 bug（forwardFromView 读错矩阵行/列、ChaseCamera::lookDirection 按值传参）。",
    "acceptance": [
     "DX12/VULKAN 双后端构建过 + viewer --selftest 16/16（OrbitCamera 委托路径逐位零回归）",
-    "viewer 集成后仍可起、selftest 退出 0（自动化下限；视觉/交互卡待补）"
+    "视觉卡欠账已补：cam-1b/cam-2b/cam-3b/cam-mcam4 四卡 + example/cam-b/ 八张双后端基线（M-CAM5，2026-11-13）"
    ],
    "exe": {
     "dx12": "build/DX12/viewer.exe",
@@ -8151,7 +8151,7 @@
      "id": "selftest",
      "name": "viewer 集成后自检 16/16（OrbitCamera 零回归）",
      "kind": "selftest",
-     "note": "b 段接线后 viewer 仍可构建并起无头自检；Orbit 路径矩阵/缩放/复位逐位不变。free/chase/track/smooth/shake 的窗口交互与截图基线待带显示会话补。",
+     "note": "b 段接线后 viewer 仍可构建并起无头自检；Orbit 路径矩阵/缩放/复位逐位不变。视觉卡见 cam-1b/cam-2b/cam-3b/cam-mcam4 四卡。",
      "args": [
       "--selftest"
      ],
@@ -10398,6 +10398,219 @@
       "dx12": "tools/check-shader-uniformity.bat",
       "vulkan": "tools/check-shader-uniformity.bat"
      }
+    }
+   ]
+  },
+  {
+   "id": "cam-1b",
+   "label": "M-CAM1b",
+   "name": "自由相机 viewer 接线视觉卡：--free-demo 帧序号确定性飞行（M-CAM1b/M-CAM5）",
+   "tag": "cam-m5",
+   "date": "2026-11-13",
+   "summary": "b 段欠账视觉卡 1/4（M-CAM5 补齐，track camera 重开）。--free-demo 帧序号注入脚本（同 --drive-demo/--input-demo 注入管线先例：前飞 f2..11 ≈1.5 单位 → 右扫视 f15..35 8px/帧 → 左扫回 f40..60 → 抬头 f65..80 → 低头回 f85..100，对称往返保证末帧主体在景内），Free look 增量走 FreeDrive.lookPx（kLookRadiansPerPixel=0.005 单点）。--fixed-dt 16.6667 钉 dt 后双后端截图逐字节、同参重拍逐字节。补卡过程修复 b 段潜伏 bug：ViewerCamera::forwardFromView 读错 view 矩阵行/列（第三列 m[8..10] 是 right.z/up.z/backward.z，不是 backward；应为第三行 m[2]/m[6]/m[10]）——修复前 chase/track 渲染视线错 45° 级、主体不居中；Orbit 路径自带视图矩阵不经此函数，70 张既有基线零波及。",
+   "acceptance": [
+    "双后端 --free-demo 120 帧截图对本后端基线逐字节（cam-free-dx12/vulkan.png）",
+    "同参重拍逐字节（run.bat [2/5] rerun gate）",
+    "expectLog「cam final: mode=free」真实终态反推；deviceErrors=0",
+    "viewer selftest 16/16（OrbitCamera 零回归）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "viewer 集成自检 16/16（OrbitCamera 零回归底座）",
+     "kind": "selftest",
+     "note": "viewer --selftest 无头自检；Orbit 路径逐位不变。",
+     "args": [
+      "--selftest"
+     ],
+     "expectLog": "SELFTEST PASS",
+     "command": "viewer.exe --selftest"
+    },
+    {
+     "id": "free-demo",
+     "name": "自由相机确定性飞行双后端截图基线（Suzanne 特写构图）",
+     "kind": "pair",
+     "note": "--free-demo 帧序号脚本驱动真实 FreeCamera；look 增量走 FreeDrive.lookPx 通道。末帧 eye=(0.554139/0.431679/2.60702) yaw=-168 pitch=-9.2（真实 log 反推）。",
+     "cwd": "{root}",
+     "args": [
+      "--camera",
+      "free",
+      "--free-demo",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "120",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "cam final: mode=free",
+     "baselines": {
+      "dx12": "example/cam-b/cam-free-dx12.png",
+      "vulkan": "example/cam-b/cam-free-vulkan.png"
+     },
+     "command": "viewer.exe --camera free --free-demo --fixed-dt 16.6667 --frames 120 --size 960x540 --screenshot <out>",
+     "script": "example/cam-b/run.bat",
+     "preview": "example/cam-b/cam-free-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "cam-2b",
+   "label": "M-CAM2b",
+   "name": "Chase 跟车 viewer 接线视觉卡：drive 训练场确定性追焦（M-CAM2b/M-CAM5）",
+   "tag": "cam-m5",
+   "date": "2026-11-13",
+   "summary": "b 段欠账视觉卡 2/4（M-CAM5 补齐）。--physics-scenario 2 --drive-demo 帧序号驾驶脚本为 Chase 提供确定性车体回读（ChassisState 每帧 feed），300 帧加速→转向→撞墙全程追焦，末帧黄车线框质心 (478,311) 水平居中（480,270）；cam.chase.height 3.5 经 --console-exec 确定性注入（console exec 日志锚 = 截图证据）。同参重拍逐字节；双后端日志锚逐字一致。",
+   "acceptance": [
+    "双后端 chase 300 帧截图对本后端基线逐字节（cam-chase-dx12/vulkan.png）",
+    "expectLog「cam final: mode=chase」+「drive hook: chassis valid=1」真实终态反推；deviceErrors=0",
+    "黄车线框水平居中（forwardFromView 行/列勘误后的正确视线）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "chase-demo",
+     "name": "Chase 确定性追焦双后端截图基线（车体居中 + 红墙 + 车道标记）",
+     "kind": "pair",
+     "note": "车体物理与 drive-m3 基线完全同源（speed=0.0115737 / posZ=15.2419 / yawDeg=-20.2322），相机侧仅追焦路径不同。",
+     "cwd": "{root}",
+     "args": [
+      "--physics-debug",
+      "--physics-scenario",
+      "2",
+      "--drive-demo",
+      "--camera",
+      "chase",
+      "--console-exec",
+      "cam.chase.height 3.5",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "cam final: mode=chase",
+     "baselines": {
+      "dx12": "example/cam-b/cam-chase-dx12.png",
+      "vulkan": "example/cam-b/cam-chase-vulkan.png"
+     },
+     "command": "viewer.exe --physics-debug --physics-scenario 2 --drive-demo --camera chase --console-exec \"cam.chase.height 3.5\" --fixed-dt 16.6667 --frames 300 --size 960x540 --screenshot <out>",
+     "script": "example/cam-b/run.bat",
+     "preview": "example/cam-b/cam-chase-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "cam-3b",
+   "label": "M-CAM3b",
+   "name": "轨迹相机 viewer 接线视觉卡：TSV 轨迹整圈播放 + wrap 收尾（M-CAM3b/M-CAM5）",
+   "tag": "cam-m5",
+   "date": "2026-11-13",
+   "summary": "b 段欠账视觉卡 3/4（M-CAM5 补齐）。--camera track + --camera-track 消费 cam-track.tsv（6 关键帧、5s、绕缺省 Suzanne 场景整圈 72°/帧距，首尾关键帧重合保证 wrap 连续），--fixed-dt 16.6667 下 300 帧整圈播放，末帧 eye=(0/0.8/4.2) 逐位回到首关键帧位姿（加载归一时间轴 + 端点精确分支）。加载成功日志锚「camera track loaded: 6 keyframes, duration=5s」。",
+   "acceptance": [
+    "双后端 track 300 帧截图对本后端基线逐字节（cam-track-dx12/vulkan.png）",
+    "expectLog「camera track loaded: 6 keyframes, duration=5s」+「cam final: mode=track」",
+    "末帧位姿 = 首关键帧逐位（wrap 收尾实证，cam final eye=0/0.8/4.2）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "track-demo",
+     "name": "轨迹相机整圈播放双后端截图基线（末帧 = 首关键帧）",
+     "kind": "pair",
+     "note": "轨迹文件 example/cam-b/cam-track.tsv 与基线同仓交付；fixed-dt 钉 dt 后逐帧确定。",
+     "cwd": "{root}",
+     "args": [
+      "--camera",
+      "track",
+      "--camera-track",
+      "{root}/example/cam-b/cam-track.tsv",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "300",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "camera track loaded: 6 keyframes, duration=5s",
+     "baselines": {
+      "dx12": "example/cam-b/cam-track-dx12.png",
+      "vulkan": "example/cam-b/cam-track-vulkan.png"
+     },
+     "command": "viewer.exe --camera track --camera-track example/cam-b/cam-track.tsv --fixed-dt 16.6667 --frames 300 --size 960x540 --screenshot <out>",
+     "script": "example/cam-b/run.bat",
+     "preview": "example/cam-b/cam-track-dx12.png"
+    }
+   ]
+  },
+  {
+   "id": "cam-mcam4",
+   "label": "M-CAM4",
+   "name": "M-CAM4 平滑/抖动视觉卡：CameraSmoother + CameraTrauma 确定性效果（M-CAM5）",
+   "tag": "cam-m5",
+   "date": "2026-11-13",
+   "summary": "b 段欠账视觉卡 4/4（M-CAM5 补齐，M-CAM4 效果的画面实证）。--camera free --free-demo 同款确定性飞行动画叠加：--console-exec 三连（cam.smooth.on 1 / cam.shake.decay 0.2 / cam.shake.add 0.8），trauma 注入日志锚「trauma -> 0.800000」；f120 时 trauma=0.4（线性衰减 0.2/s），trauma² 抖动偏移与二阶平滑共同作用，末帧 lookAt 与 plain free 卡可区分。run.bat [5/5] 门禁断言 smoothshake PNG 与 plain free PNG 必须不同（效果可见闸）+ 对基线逐字节。",
+   "acceptance": [
+    "双后端 smoothshake 120 帧截图对本后端基线逐字节（cam-smoothshake-dx12/vulkan.png）",
+    "与 plain free 卡 PNG 必须不同（平滑+抖动效果可见闸）",
+    "expectLog「console exec cam.shake.add 0.8 -> trauma -> 0.800000」真实日志反推",
+    "trauma 固定 seed + 帧序相位（无 wall-clock），--fixed-dt 下双后端逐字节"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "smoothshake-demo",
+     "name": "平滑+抖动双后端截图基线（与 plain free 差异闸）",
+     "kind": "pair",
+     "note": "同 --free-demo 脚本 + cvar 三连；效果可见性由 run.bat [5/5] 的 fc 反向断言把关。",
+     "cwd": "{root}",
+     "args": [
+      "--camera",
+      "free",
+      "--free-demo",
+      "--console-exec",
+      "cam.smooth.on 1",
+      "--console-exec",
+      "cam.shake.decay 0.2",
+      "--console-exec",
+      "cam.shake.add 0.8",
+      "--fixed-dt",
+      "16.6667",
+      "--frames",
+      "120",
+      "--size",
+      "960x540",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectLog": "trauma -> 0.800000",
+     "baselines": {
+      "dx12": "example/cam-b/cam-smoothshake-dx12.png",
+      "vulkan": "example/cam-b/cam-smoothshake-vulkan.png"
+     },
+     "command": "viewer.exe --camera free --free-demo --console-exec \"cam.smooth.on 1\" --console-exec \"cam.shake.decay 0.2\" --console-exec \"cam.shake.add 0.8\" --fixed-dt 16.6667 --frames 120 --size 960x540 --screenshot <out>",
+     "script": "example/cam-b/run.bat",
+     "preview": "example/cam-b/cam-smoothshake-dx12.png"
     }
    ]
   }

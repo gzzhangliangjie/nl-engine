@@ -57,7 +57,7 @@
   ok F: starts in Chase mode
   ok F: camToggle edge -> Free
   ok F: Chase->Free switch frame pose bit-exact (seed = chase eye)
-  ok F: free fly forward via director moves +Z
+  ok F: free fly forward via director moves along seeded look
   ok F: camToggle edge -> Chase
   ok F: Free->Chase switch frame pose bit-exact (snap seed)
   ok F: chase damped follow resumes after reseed

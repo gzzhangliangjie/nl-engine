@@ -42,6 +42,9 @@
 #include <string>
 #include <vector>
 
+#include <fcntl.h>
+#include <io.h>
+
 namespace {
 
 int  g_failures = 0;
@@ -532,7 +535,15 @@ void selftestDirector() {
     check(std::memcmp(eyePre, eyePost, sizeof(eyePre)) == 0,
           "F: Chase->Free switch frame pose bit-exact (seed = chase eye)");
 
-    // F4: 适配器 → FreeCamera 端到端（director 内走 readFreeInputs 同款轴口径）
+    // F4: 适配器 → FreeCamera 端到端（director 内走 readFreeInputs 同款轴口径）。
+    // M-CAM5 勘误：切换 seed 原被 ChaseCamera::lookDirection 按值传参 bug 污染
+    // （yaw/pitch 恒 0，自由飞碰巧恒 +Z）；修复后 seed = chase 真实视线，
+    // 前飞位移必须与 seed 朝向同向（F3 场景车 yaw 90° → 沿 +x 飞）。
+    const float seedYaw   = dir.free().yawDegrees() * kDeg2Rad;
+    const float seedPitch = dir.free().pitchDegrees() * kDeg2Rad;
+    const float seedF[3]  = { std::sin(seedYaw) * std::cos(seedPitch),
+                              std::sin(seedPitch),
+                              std::cos(seedYaw) * std::cos(seedPitch) };
     for (int f = 0; f < 30; ++f) {
         DirectorInputs fly{};
         fly.free.move[2] = 1.0f;
@@ -540,7 +551,10 @@ void selftestDirector() {
     }
     float eyeFlew[3];
     dir.eyePosition(eyeFlew);
-    check(eyeFlew[2] > eyePost[2] + 1.0f, "F: free fly forward via director moves +Z");
+    const float along = (eyeFlew[0] - eyePost[0]) * seedF[0]
+                      + (eyeFlew[1] - eyePost[1]) * seedF[1]
+                      + (eyeFlew[2] - eyePost[2]) * seedF[2];
+    check(along > 1.0f, "F: free fly forward via director moves along seeded look");
 
     // F5: 切回 Chase——切换帧位姿逐位连续（snap 种子），车体回读恢复阻尼跟随
     dir.update(1.0f / 60.0f, tog);
@@ -951,10 +965,22 @@ int runDirectorCheck(int argc, char** argv) {
     check(at(30)->mode == 1, "director-check: f30 toggled to Free");
     check(eyeDist(*at(29), *at(30)) < 1e-5,
           "director-check: Chase->Free switch frame eye continuous");
-    // Free 段沿视线前飞：eye_z 严格递增。
+    // Free 段沿视线前飞（M-CAM5 勘误：切换 seed 原被 lookDirection 按值传参 bug
+    // 污染恒 0，旧锚「eye_z 严格递增」锁死了错误语义；现改为逐帧位移与 TSV 实测
+    // 视线方向同向单调推进）。
     bool fwd = true;
-    for (int f = 31; f <= 59; ++f) if (at(f)->ez <= at(f - 1)->ez) fwd = false;
-    check(fwd, "director-check: free segment eye_z strictly increasing");
+    for (int f = 31; f <= 59; ++f) {
+        const DirRow& a = *at(f - 1);
+        const DirRow& b = *at(f);
+        const float yr = static_cast<float>(a.yaw) * kDeg2Rad;
+        const float pr = static_cast<float>(a.pitch) * kDeg2Rad;
+        const double fx = std::sin(yr) * std::cos(pr);
+        const double fy = std::sin(pr);
+        const double fz = std::cos(yr) * std::cos(pr);
+        const double ddx = b.ex - a.ex, ddy = b.ey - a.ey, ddz = b.ez - a.ez;
+        if (ddx * fx + ddy * fy + ddz * fz <= 0.0) fwd = false;
+    }
+    check(fwd, "director-check: free segment flies along seeded look direction");
     // f59 Free -> f60 Chase：切换帧位姿连续。
     check(at(59)->mode == 1, "director-check: f59 still Free");
     check(at(60)->mode == 0, "director-check: f60 toggled back to Chase");
@@ -1108,6 +1134,11 @@ int runCineCheck(int argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // M-CAM5：stdout 钉二进制模式——C 运行时文本模式会把 \n 膨胀成 \r\n，
+    // cmd 重定向的 trace TSV 与 .gitattributes 的 `*.tsv eol=lf` 永远对不上，
+    // run.bat 的 fc /b 字节比对必挂（今天 checkout 后实锤）。二进制模式下
+    // printf("\n") 原样落盘 = LF，与 git 归一化后的提交版逐字节一致。
+    _setmode(_fileno(stdout), _O_BINARY);
     if (argc < 2) {
         std::printf(
             "cam-tools — P8 M-CAM0 camera acceptance tool (chase/free headless)\n"

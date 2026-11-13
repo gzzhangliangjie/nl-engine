@@ -71,7 +71,9 @@ public:
     // 位姿逐位连续；下一帧 update 起从该 eye 恢复阻尼）。
     void snapEyeTo(const float eye[3]);
     // M-CAM1a：当前视线方向（rig lookAt-eye 导出，度；director 种子 / HUD 用）。
-    void lookDirection(float outYawDegrees, float outPitchDegrees) const;
+    // M-CAM5 修复：形参原为按值传递，out 参数写不回调用方（director 种子/trace
+    // yaw/pitch 列恒 0）——改引用，语义按本注释原意兑现。
+    void lookDirection(float& outYawDegrees, float& outPitchDegrees) const;
 
     // ---- 帧更新（确定性核心）----
     // targetPos：目标世界坐标；targetYawDegrees：目标朝向；targetVel：目标速度
@@ -83,6 +85,7 @@ public:
     Matrix4 viewProjection() const { return rig_.viewProjection(); }
     Matrix4 view() const           { return rig_.view(); }
     void eyePosition(float out[3]) const { rig_.eyePosition(out); }
+    void lookAtPoint(float out[3]) const;   // M-CAM5：诊断/测试口——rig lookAt 直出
 
     static constexpr float kMaxPitch = 1.45f;      // ±83°（OrbitCamera 同款口径）
     static constexpr float kMaxBoomYaw = 3.14159f; // boomYawOffset clamp ±180°

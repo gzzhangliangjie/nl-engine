@@ -2,7 +2,7 @@
   ok director-check: f29 in Chase mode
   ok director-check: f30 toggled to Free
   ok director-check: Chase->Free switch frame eye continuous
-  ok director-check: free segment eye_z strictly increasing
+  ok director-check: free segment flies along seeded look direction
   ok director-check: f59 still Free
   ok director-check: f60 toggled back to Chase
   ok director-check: Free->Chase switch frame eye continuous

@@ -7,5 +7,7 @@ usage:
   cam-tools free-check <tsv>     re-verify a dumped free-trace
   cam-tools director-trace       dump the 90-frame mode-switch scenario as TSV
   cam-tools director-check <tsv> re-verify a dumped director-trace
-sections: init chase-a chase-b chase-c chase-d free-e director-f
+  cam-tools cine-trace           dump the 90-frame cinematic playback as TSV
+  cam-tools cine-check <tsv>     re-verify a dumped cine-trace
+sections: init chase-a chase-b chase-c chase-d free-e director-f cine-g
 exit codes: 0=PASS 1=failure 2=usage error

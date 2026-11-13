@@ -1,0 +1,105 @@
+[init]
+  ok rig: perspective default
+  ok rig: perspective matrix finite
+  ok rig: perspective ZO signature
+  ok rig: ortho matrix finite
+  ok rig: ortho ZO signature (m[15]=1, m[10]<0)
+  ok rig: ortho/perspective matrices differ
+  ok rig: orthoHeight raw field passthrough
+  ok chase: distance clamp hi (50)
+  ok chase: distance clamp lo (1)
+  ok chase: height clamp lo (0)
+  ok chase: stiffness clamp lo (0.1)
+  ok chase: leadTime clamp hi (1)
+  ok chase: pitch clamp (~83 deg)
+  ok chase: boomYawOffset clamp (+180 deg)
+  ok chase: boomYawOffset clamp (-180 deg)
+  ok free: speed clamp hi (500)
+  ok free: speed clamp lo (0.1)
+  ok free: boost constant 4x
+  ok chase: perspective default
+  ok free: perspective default
+  ok chase: viewProjection finite
+  ok chase: ortho viewProjection finite
+  ok free: viewProjection finite
+[chase-a]
+  ok A: f10 look kick registered (30px -> 12 deg)
+  ok A: steady-state position lag in [0.9, 1.6] (damping model anchor)
+  ok A: steady-state height error < 1e-3 (no vertical motion)
+  ok A: look kick auto-returned (< 1.5 deg residual after ~2.3 s)
+  ok A: look-ahead = pos + vel*leadTime (no clamp at 6 u/s)
+  ok A: eye behind (+X-facing) and above target
+[chase-b]
+  ok B: turn frame residual spikes (> 2x previous)
+  ok B: residual monotonically decays after turn (f92..f139)
+  ok B: residual decayed to < 40% within 1 s
+[chase-c]
+  ok C: mode switch pose bit-identical (eye)
+  ok C: mode is Orbit
+  ok C: orbit mode keeps boomYawOffset (no auto-return)
+  ok C: chase mode resumes auto-return (offset decaying)
+  ok C: reverse flips eye to opposite side (steady state)
+  ok C: reverse+peek XOR -> back to normal side (steady state)
+[chase-d]
+  ok D [逐位档]: same-dt replay bit-identical (150 frames x eye)
+  ok D [收敛档]: dt=1/60 vs dt=1/30 final eye within 0.2 (2.5 s straight)
+[free-e]
+  ok E: free-flight script replays bit-identical (60 frames)
+  ok E: forward flight moves along +Z at yaw=0
+  ok E: boost displacement exactly 4x per frame
+  ok E: pitch clamped at -83 deg (no flip-through)
+  ok E: after yaw 90 deg forward = +X
+  ok E: dt<=0 freezes update
+  ok F: adapter move axes (D=right, W=forward)
+  ok F: adapter boost (LeftShift)
+  ok F: adapter look = driving set mouse delta (shared action)
+  ok F: spectator set gating zeroes axes
+  ok F: starts in Chase mode
+  ok F: camToggle edge -> Free
+  ok F: Chase->Free switch frame pose bit-exact (seed = chase eye)
+  ok F: free fly forward via director moves along seeded look
+  ok F: camToggle edge -> Chase
+  ok F: Free->Chase switch frame pose bit-exact (snap seed)
+  ok F: chase damped follow resumes after reseed
+  ok F: invalid chassis freezes chase pose
+  ok F: cinematic loadTrack missing file fails explicitly
+  ok F: cinematic sample without track no-op
+  ok F: play state machine
+  ok F: sample advances progress while playing
+  ok F: pause state machine
+  ok F: stop resets progress
+  ok G: null frames rejected
+  ok G: zero count rejected
+  ok G: equal times rejected
+  ok G: NaN field rejected
+  ok G: valid track loads
+  ok G: keyframe count 3 + duration 4
+  ok G: temp tsv writable
+  ok G: loadTrack from TSV file
+  ok G: TSV roundtrip matches memory load
+  ok G: sample(dt=0) returns k0 pose
+  ok G: t=0 pose bit-exact = first keyframe
+  ok G: crossing end writes end pose once
+  ok G: end pose bit-exact = last keyframe
+  ok G: non-loop end auto-stops
+  ok G: stopped sample no-op
+  ok G: sample t=1
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: linear midpoint bit-exact (same-expression recompute)
+  ok G: fov linear midpoint bit-exact
+  ok G: sample t=0.5 smooth
+  ok G: smoothstep u=0.25 bit-exact (s=0.15625)
+  ok G: smoothstep lags linear at u=0.25 (eases in)
+  ok G: smoothstep midpoint = linear midpoint (s(0.5)=0.5)
+  ok G: loop sample t=2
+  ok G: t=2 lands on k1 bit-exact
+  ok G: loop sample crosses end -> wraps
+  ok G: wrap progress exactly 0 (fmod integral laps)
+  ok G: wrap pose returns exactly to t0 (bit-exact)
+  ok G: paused sample no-op
+  ok G: pause freezes progress
+  ok G: setSpeed(0) rejected
+  ok G: speed 2x doubles advance (bit-exact accumulate)
+  ok G: stop resets progress
+selftest PASS (8 sections)
