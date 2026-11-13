@@ -75,7 +75,10 @@ BACKENDS = ("dx12", "vulkan")
 # 挂 25 分钟零输出、无子进程、报告未生成，且是用户先问才被发现。现改为
 # wait(timeout) 真生效 + 超时即告警。60s 的依据 = M12.0 全量 810 条实测
 # p50 141ms / p99 7573ms / max 15798ms / >30s 0 条，留约 4 倍余量。
-RUN_TIMEOUT = 60
+# 【2026-11-13 M-NET3 后续 60→90s】m-sc0/selftest 连跑偶发 60s 超时被 kill
+#（单跑实测 5s，超时 = MSBuild 残留 node 进程叠加的环境抖动，非用例变慢）；
+# 90s 给 dotnet build 族留足余量， Stall 告警仍会及时出（真挂死不用等满）。
+RUN_TIMEOUT = 90
 # Documented rounding-noise tier (see module docstring).
 NEAR_MAX_DELTA = 1
 NEAR_MAX_PIXELS = 2
@@ -247,11 +250,13 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
     # 一次；仍失败才按原逻辑判 FAIL。
     if code == 0 and case.get("expectLog") and not log:
         code, log = run_viewer(exe, argv, run_cwd)
-    # 同族抖动签名 2：超时（exit -1）且 marker 前零输出——selftest/文本用例启动
-    # 即打印，120s 内一个字都没吐出来只可能是进程被并发环境卡死（M6.0 收口
-    # 全量闸实测 s5.0/s5-selftest vulkan：单独复验 24ms 即 PASS）。同样重试一次。
-    _timeout_marker = f"[regression] timeout after {RUN_TIMEOUT}s"
-    if code == -1 and log.strip() == _timeout_marker:
+    # 同族抖动签名 2：超时（exit -1）——selftest/文本用例单跑秒级（m-sc0
+    # selftest 实测 5s），超时只可能是进程被并发环境卡死（M6.0 收口全量闸
+    # 实测 s5.0/s5-selftest vulkan：单独复验 24ms 即 PASS）。【2026-11-13
+    # 放宽】旧判据只覆盖「marker 前零输出」，漏掉「有部分输出后卡死」；
+    # 现对预期 exit 0 的用例一律重试一次（重试仍超时照 FAIL，闸门不放松；
+    # 预期非零用例不重试——那些有真失败可能）。
+    if code == -1 and case.get("expectExit", 0) == 0:
         code, log = run_viewer(exe, argv, run_cwd)
     # 同族抖动签名 3（2026-11-10，M7.2 收口全量闸实测）：文本用例 fail-fast 崩溃码
     # —— 3221226505 (0xC0000409) / 3221225477 (0xC0000005)，进程秒崩（<350ms）。
@@ -359,9 +364,14 @@ def main() -> int:
                   file=sys.stderr)
             return 2
 
-    # ---- 任务表：以 (version, case) 为并行单元；同用例双后端串行 ----
-    # 工具用例（kind:tool）写固定共享路径（如 build/qem/showcase-*，路径不含
-    # 后端名），同用例并行会互相覆盖 → 用例间并行、用例内串行。
+    # ---- 任务表：以 version 为并行单元；同 version 内 case 串行 ----
+    # 【2026-11-13 M-NET3 后续，全量 844 条甄别实锤】工具用例共享工程目录：
+    # m-sc0 各 case 并发 dotnet build 同一 script/examples/hello（obj/ 写锁
+    # 竞争 → 偶发 exit 1）、gl4 tick/pause 共享 script/examples/orbit 与
+    # bootstrap 工程。旧口径（(version, case) 级并行 + 同用例双后端串行）只
+    # 防了「同 case 双后端写同一 PNG / 同一路径」，防不住「同 version 不同
+    # case 并发写同一工程目录」。version 是 cases.json 的产物自治单位，同
+    # version 串行 = 天然资源隔离边界；全量 111 个 version，并行度仍充足。
     tasks: list[tuple[dict, dict]] = []
     for v in versions:
         missing = [b for b in BACKENDS if b in backend_filter
@@ -417,12 +427,25 @@ def main() -> int:
         return recs
 
     jobs = max(1, args.jobs)
+    # 按 version 分组提交：同 version 内 case 串行（见上方任务表注释），
+    # 不同 version 之间并行。--only 单 version 时退化为全串行（等价 jobs=1）。
+    by_version: dict[int, list[tuple[dict, dict]]] = {}
+    for v, c in tasks:
+        by_version.setdefault(id(v), []).append((v, c))
+    groups = list(by_version.values())
+
+    def run_group(group: list[tuple[dict, dict]]) -> list[dict]:
+        recs: list[dict] = []
+        for v, c in group:
+            recs.extend(run_task(v, c))
+        return recs
+
     if jobs == 1:
-        for v, c in tasks:
-            records.extend(run_task(v, c))
+        for group in groups:
+            records.extend(run_group(group))
     else:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futs = [pool.submit(run_task, v, c) for v, c in tasks]
+            futs = [pool.submit(run_group, g) for g in groups]
             for fut in as_completed(futs):
                 records.extend(fut.result())
 
