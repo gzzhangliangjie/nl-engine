@@ -53,10 +53,10 @@ TRACKS = {
         "branch": "feat/material-graph", "state": "closed",
     },
     "job-system": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-job-system",
-        "branch": "feat/job-system", "state": "active",
-        "note": "M-J5a reopened 2026-11-09 by user instruction (reuse expansion); "
-                "wt rebuilt from master 6a718fb per PARALLEL-TRACKS 7.1b",
+        "wt": "", "branch": "feat/job-system", "state": "closed",
+        "note": "M-J5a/J5b/J5c-prep merged to master fb2b4f4 (tags m-j5a/m-j5b/"
+                "m-j5c-prep) 2026-11-09; wt removed 2026-11-09, branch kept per "
+                "PARALLEL-TRACKS 7.6; state CLOSED by user instruction 2026-11-13",
     },
     "action-system": {
         "wt": "E:/UE_STUDY_2026/nl-engine-action-system",
@@ -67,8 +67,11 @@ TRACKS = {
         "branch": "feat/console", "state": "closed",
     },
     "ecs": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-ecs",
-        "branch": "feat/ecs", "state": "active",
+        "wt": "", "branch": "feat/ecs", "state": "closed",
+        "note": "E1a+E1b chain merged to master (E1a 2d4ad49; E1b e2ac82c + "
+                "close-gate 6560b2c; tags ecs-e0~ecs-e1b.5) 2026-11-09; wt removed "
+                "2026-11-09, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED by user instruction 2026-11-13",
     },
     "pathfinding": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pathfinding",
@@ -86,20 +89,25 @@ TRACKS = {
                 "unlinked, branch kept; reopen via 7.1b",
     },
     "physics": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-physics",
-        "branch": "feat/physics", "state": "active",
-        "note": "M-P0 opened 2026-11-09 by user instruction (schedule gate lifted); "
-                "M-P5 still gated on P8 E3",
+        "wt": "", "branch": "feat/physics", "state": "closed",
+        "note": "M-P0~M-P4 + M-J5c merged to master 7d844ef (tags phys-p0~phys-j5c) "
+                "2026-11-10; wt removed 2026-11-10, branch kept per PARALLEL-TRACKS "
+                "7.6; state CLOSED by user instruction 2026-11-13",
     },
     "audio": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-audio",
-        "branch": "feat/audio", "state": "planned",
+        "wt": "", "branch": "feat/audio", "state": "closed",
+        "note": "M-S0/M-S1/M-S2 merged to master 1aac3d2 2026-11-09; M-S3 scene "
+                "audio delivered inside M-GL2 (tag gl-m2, 2026-11-10: AudioWorld "
+                "in viewer + audio.play console + per-tick source sync + pause "
+                "freezes playback); wt removed 2026-11-09, branch kept; "
+                "state CLOSED by user instruction 2026-11-13",
     },
     "gameloop": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-gameloop",
-        "branch": "feat/gameloop", "state": "active",
-        "note": "M-GL0 opened 2026-11-10 by user instruction (plan "
-                "docs/p8/P8-GAMELOOP-PLAN.md); M-GL2 merges with M-S3",
+        "wt": "", "branch": "feat/gameloop", "state": "closed",
+        "note": "M-GL0~M-GL5 merged to master 54221e2 (tags gl-m0~gl-m5) "
+                "2026-11-10; M-GL2 also delivered audio M-S3; wt removed "
+                "2026-11-10, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED by user instruction 2026-11-13",
     },
     "pbr-direct": {
         "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
@@ -112,12 +120,11 @@ TRACKS = {
         "note": "merged to master 1b49b5f (tags m-sc0~m-sc3); wt removed 2026-11-09, branch kept",
     },
     "particles": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-particles",
-        "branch": "feat/particles", "state": "active",
-        "note": "B-class rendering track opened 2026-11-10 (M-PT0 starter: CPU emitter "
-                "+ GPU instanced billboard; wt built at 50574e3, junctions "
-                ".workbuddy + slang dist, skip-worktree set); E-prefix rejected "
-                "to avoid ECS M-E0~E3 collision",
+        "wt": "", "branch": "feat/particles", "state": "closed",
+        "note": "M-PT0~PT5 merged to master (204a84e = PT0~PT3 2026-11-10; "
+                "96892a4 = PT4/PT5 2026-11-11; tags particles-pt0~pt5); "
+                "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
+                "state CLOSED by user instruction 2026-11-13",
     },
     "camera": {
         "wt": "E:/UE_STUDY_2026/nl-engine-camera",
@@ -131,15 +138,14 @@ TRACKS = {
                 "passed, report .wt_pool_close/camera-M-CAM5.md): four visual cards "
                 "cam-1b/cam-2b/cam-3b/cam-mcam4 + example/cam-b/ baselines + two latent "
                 "b-segment bug fixes (forwardFromView row/col, lookDirection by-value); "
-                "merge to master pending (master MILESTONES.md occupied by perf session); "
+                "merged to master 52700f1 (milestone/cam-m5 branch kept); "
                 "wt kept pending user teardown decision",
     },
     "input": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-input",
-        "branch": "feat/input", "state": "active",
-        "note": "A-class track opened 2026-11-10 by user instruction (city-driving game "
-                "direction; plan docs/p8/P8-INPUT-PLAN.md; M-I0 core/input state layer "
-                "first; viewer wiring deferred to merge after M8.1 TLAS closes)",
+        "wt": "", "branch": "feat/input", "state": "closed",
+        "note": "M-I0~M-I2 merged to master 0df16a0 (tags input-m0~input-m2) "
+                "2026-11-10; wt removed 2026-11-10, branch kept per "
+                "PARALLEL-TRACKS 7.6; state CLOSED by user instruction 2026-11-13",
     },
     "drive": {
         "wt": "E:/UE_STUDY_2026/nl-engine-drive",
@@ -191,11 +197,13 @@ TRACKS = {
     },
     "worldgen": {
         "wt": "E:/UE_STUDY_2026/nl-engine-worldgen",
-        "branch": "feat/worldgen", "state": "planned",
+        "branch": "feat/worldgen", "state": "active",
         "note": "A-class offline citygen track opened 2026-11-12 (game-dev "
                 "step 6, M-W0; plan docs/worldgen/W0-PLAN.md, M-W0.0~W0.3; "
                 "five decisions Q-B/Q-W1~W3/Q-C confirmed by user 2026-11-12, "
-                "all per recommendation); wt not built yet",
+                "all per recommendation); wt built 2026-11-13 from master "
+                "52700f1, junction .workbuddy + thirdparty/slang/dist + "
+                "skip-worktree (9 files), M-W0.0 in progress",
     },
 }
 
