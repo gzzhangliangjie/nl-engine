@@ -6,6 +6,7 @@
     python tools/regression.py --backend dx12     # limit to one backend
     python tools/regression.py --jobs 4           # parallel across cases (default 4; 1 = serial)
     python tools/regression.py --report PATH.md   # where the markdown report goes
+    python tools/regression.py --resume           # reuse last report's passes, rerun FAIL/missing
 
 Usage discipline (2026-11-08): --only is the everyday loop ("current stage
 only"); the full run is the commit/tag gate. Cases run in parallel across
@@ -209,6 +210,10 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
     rec: dict = {"version": version["id"], "case": case["id"], "backend": backend,
                  "kind": case.get("kind")}
     exe = show.exe_for(version, backend, case)
+    if exe.is_file():
+        # --resume 依据：exe 路径 + mtime 变过（重编）则该条沿用资格作废
+        rec["exe"] = str(exe)
+        rec["exeMtime"] = exe.stat().st_mtime
     if not exe.is_file():
         rec["verdict"] = "FAIL"
         rec["detail"] = (f"exe 缺失：{exe.relative_to(ROOT).as_posix()}"
@@ -318,6 +323,9 @@ def main() -> int:
                     help="parallel cases (default 4; 1 = serial, 最保守)")
     ap.add_argument("--report", default=str(DEFAULT_REPORT_MD),
                     help="markdown report path (a .json sits next to it)")
+    ap.add_argument("--resume", action="store_true",
+                    help="沿用上次 report.json 里通过的 (version, case, backend)，"
+                         "只重跑 FAIL / 缺失 / exe 变过的项（中断续跑）")
     args = ap.parse_args()
 
     backend_filter = (args.backend,) if args.backend else BACKENDS
@@ -379,20 +387,67 @@ def main() -> int:
     print_lock = threading.Lock()
     records: list[dict] = []
     t_all = time.time()
+
+    # ---- --resume（2026-11-13 用户拍板）：全量闸中断后不再从头跑。读上次
+    # report.json，verdict 为 bytes/near 且 exe 未变的 (version, case, backend)
+    # 直接沿用；FAIL / 中断缺失 / exe 重编过（mtime 变）的重跑。--only 照常过滤。
+    prev: dict[tuple[str, str, str], dict] = {}
+    if args.resume:
+        prev_json = Path(args.report).with_suffix(".json")
+        if prev_json.is_file():
+            try:
+                prev_recs = json.loads(prev_json.read_text(encoding="utf-8")).get("records", [])
+                prev = {(r["version"], r["case"], r["backend"]): r for r in prev_recs}
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+                print(f"[regression] --resume: 上次报告 {prev_json.name} 无法解析，全部重跑",
+                      file=sys.stderr)
+        else:
+            print(f"[regression] --resume: 无上次报告 {prev_json}，全部重跑", file=sys.stderr)
+
+    def reusable(v: dict, c: dict, b: str) -> dict | None:
+        r = prev.get((v["id"], c["id"], b))
+        if not r or r.get("verdict") not in ("bytes", "near"):
+            return None
+        exe = show.exe_for(v, b, c)
+        if not exe.is_file() or r.get("exe") != str(exe):
+            return None
+        if abs(r.get("exeMtime", -1.0) - exe.stat().st_mtime) > 1e-6:
+            return None  # exe 重编过：旧通过不再可信
+        return r
+
+    reused_recs: list[dict] = []
+    plan: list[tuple[dict, dict, list[str]]] = []
+    for v, c in tasks:
+        backends_run: list[str] = []
+        for b in backend_filter:
+            r = reusable(v, c, b)
+            if r is not None:
+                reused_recs.append(r)
+            else:
+                backends_run.append(b)
+        plan.append((v, c, backends_run))
+    n_reused = len(reused_recs)
+    total = sum(len(bs) for _, _, bs in plan)
+    if args.resume and prev:
+        print(f"[regression] --resume: 沿用上次通过 {n_reused} 条，重跑 {total} 条",
+              flush=True)
+    if args.resume and n_reused:
+        for r in reused_recs:
+            print(f"[REUSE] {r['version']}/{r['case']} {r['backend']:<6} "
+                  f"{r['verdict']:<5} {r.get('detail', '')}", flush=True)
+
     # 2026-11-13：可观测性三件套（起因 = 全量静默挂死 25 分钟没人发现）。
     # ① 每条完成即 flush，stdout 始终有增量；② 增量落盘 JSONL，整体卡死也能
     # 从尾部定位停在哪条；③ 每 50 条打进度 + 超时单独打 [STALL] 告警。
     progress_path = Path(args.report).with_suffix(".progress.jsonl")
     progress_path.write_text("", encoding="utf-8")
-    total = len(tasks) * len(backend_filter)
     done = [0]
-    print(f"[regression] {len(tasks)} cases x {len(backend_filter)} backends "
-          f"= {total} runs; timeout={RUN_TIMEOUT}s; "
-          f"progress={progress_path.as_posix()}", flush=True)
+    print(f"[regression] {total} runs "
+          f"(timeout={RUN_TIMEOUT}s; progress={progress_path.as_posix()})", flush=True)
 
-    def run_task(v: dict, c: dict) -> list[dict]:
+    def run_task(v: dict, c: dict, backends_run: list[str]) -> list[dict]:
         recs: list[dict] = []
-        for b in backend_filter:
+        for b in backends_run:
             out = RUNS_DIR / f"{v['id']}-{c['id']}-{b}.png"
             for stale in (out, out.with_name(out.name + ".before.png")):
                 if stale.exists():
@@ -418,13 +473,15 @@ def main() -> int:
 
     jobs = max(1, args.jobs)
     if jobs == 1:
-        for v, c in tasks:
-            records.extend(run_task(v, c))
+        for v, c, bs in plan:
+            if bs:
+                records.extend(run_task(v, c, bs))
     else:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futs = [pool.submit(run_task, v, c) for v, c in tasks]
+            futs = [pool.submit(run_task, v, c, bs) for v, c, bs in plan if bs]
             for fut in as_completed(futs):
                 records.extend(fut.result())
+    records.extend(reused_recs)
 
     # 报告顺序与用例表一致（并行完成顺序不定，排序保证确定性）
     ver_order = {v["id"]: i for i, v in enumerate(show.DATA["versions"])}
@@ -461,7 +518,8 @@ def main() -> int:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines = [
         "# nl-engine 全量回归报告（M0.9 总闸）", "",
-        f"- 时间：{now}　用时 {int(time.time() - t_all)} s",
+        f"- 时间：{now}　用时 {int(time.time() - t_all)} s"
+        + (f"（--resume：沿用上次通过 {n_reused} 条）" if n_reused else ""),
         f"- 结果：**{'ALL GREEN' if ok else 'FAILED'}** — "
         f"{len(passed)}/{len(records)} 通过"
         f"（bytes {tiers['bytes']} / near {tiers['near']} / FAIL {tiers['FAIL']}）",

@@ -3133,3 +3133,11 @@
 - **完成情况**：🟢 双后端构建 selftest 16/16；🟢 run.bat verify 双后端 8 段 ALL GREEN（hiz/filter/shadow ON 锚全中 + OFF 静默 0 行，deviceErrors=0）；🟢 实测 ms 合理（csCull 0.302 / hizBuild 0.052 / mainDraw 0.015 / filter 链 0.005~0.062 / csDirect 0.040 / csRefGI 1.612，双后端同构）；🟢 regression `--only perf-m1` 6/6；🟢 保形 `--only s6.0`（含 --hud bytes）+ `--only s12-spatial` 双后端全绿；🟢 HUD 面板截图实测 13 行可见。
 - **踩坑**：① `hud.passTimingShow` 初版误放进 viewer 的 `if (probeMode && ...)` 块内——hiz 模式不填、面板 13 行全灭（截图实证抓出后挪到模式无关填充区）；锚不受影响（scene 侧走 FrameParams）暴露不了这类 bug，**面板类交付必须 --hud 实拍验证，不能只看 log**；② csGatherCompose 在 `--filter-gi-dump` 下被验收分支替换、不计时（设计如此，PERF-PLAN 表注明）；③ exe 过期门禁再次拦 VULKAN（改 viewer/main.cpp 后忘了重编）——build 后必须重跑 regression。
 - **提交版本**：本节收口 commit + annotated tag `perf-m1`；冻结面 = cullTimer_/blasTimer_/tlasTimer_ 既有计时语义 + 全部 GPU 渲染路径（--pass-timing 关零 query 零开销）；全量总闸见收口节。
+
+## 工具修复：regression --resume + bat 门禁补 tools/（2026-11-13）
+
+- **背景**：① M-PERF1 收口时全量总闸被会话中断、只能从头跑 830 条，用户点名「跑一半不能记下来么」→ 拍板加 `--resume`；② `tools/analyze-crash.bat` UTF-8 中文 rem 潜伏违规（遗留待拍板项，用户点名一起落）。
+- **动作**：① `regression.py` 加 `--resume`：读上次 `report.json`，verdict bytes/near 且 exe 路径+mtime 未变的 (version,case,backend) 直接沿用（REUSE 行），FAIL / 中断缺失 / exe 重编过的重跑；`regression_case` 记录 `exe/exeMtime`；报告头注明沿用条数。② `analyze-crash.bat` UTF-8 → GBK 存储；`check-bat-encoding.py` 缺省扫描目录补 `tools/`（此前只扫 example/ scripts/，tools/ 全程漏检——实锤 110→114 文件，修前 tools/ 单独扫出 1 违规）。
+- **完成情况**：🟢 resume 三路验证：全沿用 0 重跑（--only perf-m1 二次跑 0s）/ exe touch 后按后端精确重跑 3 条（vulkan 沿用）/ 常规全跑不受影响（6/6 ALL GREEN）；🟢 bat 门禁全量 114 文件 0 违规 + analyze-crash.bat 实测可执行。
+- **踩坑**：门禁「0 违规」不等于覆盖全——扫描范围本身有洞；resume 的沿用资格必须绑 exe mtime，否则中断期间重编过的 exe 会让旧通过结果假绿。
+- **提交版本**：本节收口 commit；无 GPU 渲染路径改动，不 bump kStage、不新拍基线。

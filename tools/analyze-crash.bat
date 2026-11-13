@@ -1,3 +1,3 @@
 @echo off
-rem è‡ªåŠ¨åˆ†æå´©æºƒ dumpï¼ˆæ— éœ€æ‰“å¼€ VSï¼‰ã€‚ç”¨æ³•è§ tools/analyze-crash.py å¤´éƒ¨ã€‚
+rem ×Ô¶¯·ÖÎö±ÀÀ£ dump£¨ÎŞĞè´ò¿ª VS£©¡£ÓÃ·¨¼û tools/analyze-crash.py Í·²¿¡£
 python "%~dp0analyze-crash.py" %*

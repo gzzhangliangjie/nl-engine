@@ -18,7 +18,7 @@
   3. 含非 ASCII：必须是 GBK 可解码，且**不得**是有效 UTF-8（防 UTF-8 中文
      伪装——utf-8 strict 可解码且含中文 = 存错了，转 GBK）。
 
-用法：python tools/check-bat-encoding.py [目录...]     # 缺省扫 example/ scripts/
+用法：python tools/check-bat-encoding.py [目录...]     # 缺省扫 example/ scripts/ tools/
       python tools/check-bat-encoding.py --fix [目录...]  # LF-only 文件自动重 smudge 为 CRLF
 退出码：0 = 全绿；1 = 有违规（逐文件列原因）。regression.py preflight 每次调用。
 
@@ -80,7 +80,10 @@ def fix_lf_only(paths):
 
 def main(argv):
     do_fix = "--fix" in argv
-    roots = [Path(a) for a in argv[1:] if a != "--fix"] or [Path("example"), Path("scripts")]
+    # 2026-11-13：缺省目录补 tools/——analyze-crash.bat UTF-8 中文潜伏违规实锤
+    # （tools/ 一直不在默认扫描范围，门禁显示 0 违规实则漏检）。
+    roots = ([Path(a) for a in argv[1:] if a != "--fix"]
+             or [Path("example"), Path("scripts"), Path("tools")])
     bad = 0
     checked = 0
     lf_files = []
