@@ -10447,6 +10447,78 @@
      "command": "net-tools snapshot-decode 01020304"
     }
    ]
+  },
+  {
+   "id": "net-m2",
+   "label": "M-NET2",
+   "name": "服务器权威最小闭环：viewer --net-server/--net-client + 快照插值 + 数值锚（M-NET2）",
+   "tag": "net-m2",
+   "date": "2026-11-13",
+   "exe": {
+    "dx12": "build/dx12/net-tools.exe",
+    "vulkan": "build/vulkan/net-tools.exe"
+   },
+   "summary": "第 12 步网络栈第三里程碑（A 类并行轨道 net）。nl/net Sync 层（core/src/net/Sync.cpp）：控制消息 pack(1) POD（统一 magic+proto+type 三重头校验，短流/坏魔数/坏协议号/NaN 全拒）+ InterpBuffer（tick 单调丢旧保新、delayTicks+extraTicks 相位回看、lerp+nlerp 短弧）+ ServerSession（peer↔entity 分配回收、输入缓存、快照广播、EntityGone 通知）/ClientSession（hello/welcome、输入上送、快照分桶）。DebugScene 多载具槽位（slot0 逐位保形 + addVehicle/removeVehicle tombstone/teleportVehicle/vehicleFullPose）。viewer 运行模式 --net-server <port> / --net-client <host:port>[,name]：server 每逻辑 tick 广播 31B 快照 + auth 轨迹日志行，client 零本地模拟（幽灵位 teleportVehicle 按 alpha 帧间插值摆位 + interp 日志行），HUD Net Status 独立窗口（default-off 兄弟窗口纪律）。net-tools session-loopback（回环会话全链路确定性断言）+ verify-m2（数值锚：client 插值位置 vs server 权威轨迹同 tick 偏差 ≤ 一个快照间隔，阈值 = auth 相邻位移自标定 + 0.005 量化余量）。example/net-m2/run.bat 双进程验收 ALL GREEN（matched=1458 viol=0 maxRatio=0.140），双实例截图各含两台车。",
+   "acceptance": [
+    "回环会话全链路：握手 entityId=2 / 输入上送一致 / 插值误差 ≤ 一个快照间隔 / 断链回收干净（net-tools session-loopback，ctest net-m2-session 锚定 session-loopback : PASS）",
+    "数值锚：run.bat 双进程真实日志 verify-m2 matched=1458 missing=0 viol=0 maxRatio=0.140 PASS（阈值 = auth 相邻位移自标定，轴对齐口径见 NETCODE-TOOLS-GUIDE §3）",
+    "检查器灵敏度：精确 lerp 必过 + 注入 0.5m 偏移必炸（verify-m2 --selftest，ctest net-m2-verify 锚定）",
+    "负向：auth/interp 缺失/错配显式 FAILED exit 1（ctest net-m2-verify-negative WILL_FAIL + run.bat findstr 三重）",
+    "双实例同场景截图：server.png / client.png 各含两台黄色线框车体 + Net Status 窗口（evidence-only 不做 MD5 基线：包到达时序实时相关）"
+   ],
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2（nav-tools 口径 0/1/2）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "net-tools - nl-engine transport acceptance tool",
+     "command": "net-tools"
+    },
+    {
+     "id": "session-loopback",
+     "name": "session-loopback：回环会话全链路（握手/输入/快照插值界/回收）",
+     "kind": "tool",
+     "note": "单进程 ServerSession+ClientSession 127.0.0.1 交替泵，假载具轨迹 f(tick) 解析确定性；断言 = 加入/Welcome entityId=2/输入上送一致/插值误差 ≤ 相邻 auth 位移 + 量化余量/断链 left+会话态复位。端口 29197。",
+     "args": [
+      "session-loopback"
+     ],
+     "expectExit": 0,
+     "expectLog": "session-loopback : PASS",
+     "command": "net-tools session-loopback"
+    },
+    {
+     "id": "verify-selftest",
+     "name": "verify-m2 --selftest：数值锚检查器灵敏度",
+     "kind": "tool",
+     "note": "合成日志（auth = 解析轨迹、interp = τ=0.3 精确 lerp）必 PASS（ratio≈0.29），注入 +0.5m 偏移样本必 FAIL——证明检查器抓得住真违约，不是恒过。",
+     "args": [
+      "verify-m2",
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "verify-m2 selftest: PASS",
+     "command": "net-tools verify-m2 --selftest"
+    },
+    {
+     "id": "verify-negative",
+     "name": "负向：auth/interp 文件缺失显式拒绝",
+     "kind": "tool",
+     "note": "日志打不开必须 FAILED + exit 1，不许静默假 PASS（ctest net-m2-verify-negative WILL_FAIL 同口径）。",
+     "args": [
+      "verify-m2",
+      "--auth",
+      "missing-auth.log",
+      "--interp",
+      "missing-interp.log"
+     ],
+     "expectExit": 1,
+     "expectLog": "verify-m2 : FAILED",
+     "command": "net-tools verify-m2 --auth missing-auth.log --interp missing-interp.log"
+    }
+   ]
   }
  ]
 }

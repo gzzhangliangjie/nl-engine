@@ -284,6 +284,7 @@ add_library(nl_core STATIC
     core/src/game_clock.cpp    # P8 M-GL0：双帧模型 GameClock（A 类并行轨道，纯逻辑零依赖）
     core/src/net/Net.cpp       # NET M-NET0：nl/net 传输层薄封装（PIMPL，core 内唯一 ENet 符号面）
     core/src/net/SnapshotCodec.cpp # NET M-NET1：快照位打包编解码（PIMPL，core 内唯一 bitsery 符号面）
+    core/src/net/Sync.cpp      # NET M-NET2：同步层（控制消息严格解码 + 插值缓冲 + 会话）
 )
 # NET M-NET1：bitsery header-only 只进 SnapshotCodec.cpp 单 TU（PIMPL 纪律：
 # net/Snapshot.hpp 不暴露 bitsery 类型，故 PRIVATE）。

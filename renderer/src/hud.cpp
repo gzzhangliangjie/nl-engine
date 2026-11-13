@@ -524,6 +524,19 @@ void Hud::build(HudFrame& frame) {
         }
         ImGui::End();
     }
+    // NET M-NET2: net session status window (--net-server / --net-client only,
+    // DEFAULT OFF). Additive sibling between the profiling and drive windows;
+    // fixed pos+size keeps screenshot bytes stable. With the gate off it draws
+    // nothing, so no existing baseline moves.
+    if (frame.netStatus.show) {
+        ImGui::SetNextWindowPos(ImVec2(356.0f, 330.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(250.0f, 120.0f), ImGuiCond_Always);
+        if (ImGui::Begin("Net Status (M-NET2)", nullptr)) {
+            for (int i = 0; i < frame.netStatus.lineCount; ++i)
+                ImGui::TextUnformatted(frame.netStatus.lines[i]);
+        }
+        ImGui::End();
+    }
     ImGui::Render();
 
     frame.wantCaptureMouse = frame.wantCaptureMouse || io.WantCaptureMouse;

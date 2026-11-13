@@ -6,11 +6,14 @@
 
 #include "nl/net/Net.hpp"
 #include "nl/net/Snapshot.hpp"
+#include "nl/net/Sync.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <string>
 #include <random>
@@ -629,6 +632,327 @@ int cmdSnapshotDecode(int argc, char** argv) {
     return 0;
 }
 
+// ---- M-NET2 同步层验收（nl/net/Sync.hpp）----
+
+// 确定性假载具轨迹（解析函数，auth(t) 任意 tick 可复算）：
+//   pos = (0.15*t, 0.5, 0.10*t)，yaw = 0.02*t（绕 Y 四元数），vel = 解析导数。
+void fakeVehicleState(uint32_t tick, float posX, float posZOff,
+                      float* pos, float* quat, float* vel) {
+    const float t = static_cast<float>(tick);
+    pos[0] = 0.15f * t + posX;
+    pos[1] = 0.5f;
+    pos[2] = 0.10f * t + posZOff;
+    const float yaw = 0.02f * t;
+    quat[0] = 0.0f;
+    quat[1] = std::sin(yaw * 0.5f);
+    quat[2] = 0.0f;
+    quat[3] = std::cos(yaw * 0.5f);
+    vel[0] = 0.15f;
+    vel[1] = 0.0f;
+    vel[2] = 0.10f;
+}
+
+VehicleSnapshot fakeSnapshot(uint32_t tick, uint16_t ent, float posX, float posZOff) {
+    VehicleSnapshot s;
+    s.serverTick = tick;
+    s.entityId = ent;
+    float pos[3], q[4], vel[3];
+    fakeVehicleState(tick, posX, posZOff, pos, q, vel);
+    s.px = pos[0]; s.py = pos[1]; s.pz = pos[2];
+    s.qx = q[0]; s.qy = q[1]; s.qz = q[2]; s.qw = q[3];
+    s.vx = vel[0]; s.vy = vel[1]; s.vz = vel[2];
+    return s;
+}
+
+// session-loopback：单进程 server+client 会话全链路（握手 -> 输入上送 -> 快照 ->
+// 插值回看误差断言 -> 断链回收）。泵序每迭代固定：client 泵 -> client 发输入 ->
+// server 泵（加入/输入生效）-> server 采样广播 -> client 泵收快照 -> client 回看。
+// 回环 UDP 无丢包、服务序确定 -> 数值断言确定性。
+int cmdSessionLoopback(int argc, char** argv) {
+    uint32_t port = 29197, ticks = 300, timeoutMs = 10000;
+    if (!findOptU32(argc, argv, "--port", &port) || port == 0 || port > 65535 ||
+        !findOptU32(argc, argv, "--ticks", &ticks) || ticks < 60 ||
+        !findOptU32(argc, argv, "--timeout-ms", &timeoutMs)) {
+        std::fprintf(stderr, "session-loopback: bad option value\n");
+        return 2;
+    }
+    NetGuard guard;
+    if (!guard.ok) return 1;
+
+    nl::net::ServerSession server;
+    if (!server.start(static_cast<uint16_t>(port), 4)) {
+        std::fprintf(stderr, "session-loopback: server start failed port=%u\n", port);
+        return 1;
+    }
+    const uint16_t localEnt = server.claimLocalEntity();
+    nl::net::ClientSession client;
+    if (!client.beginConnect("127.0.0.1", static_cast<uint16_t>(port))) {
+        std::fprintf(stderr, "session-loopback: beginConnect failed\n");
+        return 1;
+    }
+
+    constexpr float kDelayTicks = 2.0f;
+    const float kQuatSlack = 0.005f;   // 线格式量化 1mm/轴 + 日志舍入余量
+    // server 权威轨迹留档（clientEnt 的输入是缓存值，不解析复算，直接留档）
+    std::map<uint32_t, std::map<uint16_t, std::array<float, 3>>> authLog;
+    bool joinSeen = false, leaveSeen = false;
+    uint16_t clientEnt = 0;
+    bool inputOk = false;
+    size_t samples = 0;
+    float maxErr = 0.f, maxBound = 0.f;
+    bool interpOk = true;
+    const double deadline = nowSec() + timeoutMs * 0.001;
+
+    for (uint32_t t = 1; t <= ticks && nowSec() < deadline; ++t) {
+        std::vector<uint16_t> joined, left;
+        client.pump();
+        // 输入上送：确定性脚本（forward 0..1 三角波，right 常值转向）
+        nl::net::InputState in;
+        in.forward = 0.5f + 0.5f * std::sin(static_cast<float>(t) * 0.05f);
+        in.right = 0.25f;
+        client.sendInput(in);
+        server.pump(t, joined, left);
+        for (const uint16_t ent : joined) {
+            clientEnt = ent;
+            joinSeen = true;
+        }
+        for (const uint16_t ent : left) {
+            if (ent == clientEnt) leaveSeen = true;
+        }
+        // 输入上送核对（不锁存：welcome 前丢弃属预期，welcome 后下一迭代必达）
+        if (!inputOk && clientEnt != 0) {
+            const nl::net::InputState si = server.inputOf(clientEnt);
+            inputOk = std::fabs(si.forward - in.forward) < 1e-4f &&
+                      std::fabs(si.right - in.right) < 1e-4f;
+        }
+        // server 逻辑帧：采样广播（本地权威车 + client 车，x 错开避免同点碰撞）
+        {
+            const nl::net::VehicleSnapshot s1 = fakeSnapshot(t, localEnt, 0.0f, 0.0f);
+            server.broadcastSnapshot(s1);
+            authLog[t][localEnt] = {s1.px, s1.py, s1.pz};
+            if (clientEnt != 0) {
+                const nl::net::VehicleSnapshot s2 = fakeSnapshot(t, clientEnt, 2.0f, 0.0f);
+                server.broadcastSnapshot(s2);
+                authLog[t][clientEnt] = {s2.px, s2.py, s2.pz};
+            }
+        }
+        client.pump();
+        // client 插值回看 + 逐样本误差断言（界 = 相邻 auth 位移 + 量化余量）
+        for (uint16_t ent = 1; ent <= 16 && interpOk; ++ent) {
+            const nl::net::InterpBuffer* buf = client.bufferOf(ent);
+            if (!buf) continue;
+            nl::net::VehicleSnapshot out;
+            float evalTick = 0.f;
+            if (!buf->eval(kDelayTicks, out, evalTick)) continue;
+            const uint32_t t0 = static_cast<uint32_t>(std::floor(evalTick));
+            const auto itA = authLog.find(t0);
+            const auto itB = authLog.find(t0 + 1);
+            if (itA == authLog.end() || itB == authLog.end() ||
+                itA->second.find(ent) == itA->second.end() ||
+                itB->second.find(ent) == itB->second.end()) {
+                std::fprintf(stderr, "session-loopback: auth missing tick=%u ent=%u\n", t0, ent);
+                interpOk = false;
+                break;
+            }
+            const auto& a = itA->second.at(ent);
+            const auto& b = itB->second.at(ent);
+            const float dx = out.px - a[0], dy = out.py - a[1], dz = out.pz - a[2];
+            const float err = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float gx = b[0] - a[0], gy = b[1] - a[1], gz = b[2] - a[2];
+            const float bound = std::sqrt(gx * gx + gy * gy + gz * gz) + kQuatSlack;
+            if (err > maxErr) maxErr = err;
+            if (bound > maxBound) maxBound = bound;
+            if (err > bound) {
+                std::fprintf(stderr,
+                             "session-loopback: interp error tick=%u ent=%u err=%.4f > bound=%.4f\n",
+                             t0, ent, err, bound);
+                interpOk = false;
+                break;
+            }
+            ++samples;
+        }
+    }
+    if (clientEnt != 0) {
+        // 断链回收：disconnect 直拆 -> server pump 报 left；client 会话态复位。
+        client.disconnect();
+        std::vector<uint16_t> joined, left;
+        server.pump(ticks + 1, joined, left);
+        for (const uint16_t ent : left) {
+            if (ent == clientEnt) leaveSeen = true;
+        }
+    }
+    const bool welcomedOk = client.localEntityId() == 0;   // disconnect 后归零
+    const bool ok = joinSeen && clientEnt == localEnt + 1 && inputOk &&
+                    interpOk && samples >= ticks / 4 && leaveSeen && welcomedOk;
+    std::printf("session      : joined=%u welcomed entityId=%u input=%s\n",
+                joinSeen ? 1u : 0u, clientEnt, inputOk ? "ok" : "BAD");
+    std::printf("session      : interp samples=%zu maxErr=%.4f maxBound=%.4f\n",
+                samples, maxErr, maxBound);
+    std::printf("session      : leave=%d reconnectState=%s\n",
+                leaveSeen ? 1 : 0, welcomedOk ? "clean" : "STALE");
+    if (ok) {
+        std::printf("session-loopback : PASS\n");
+        return 0;
+    }
+    std::fprintf(stderr, "session-loopback : FAIL\n");
+    return 1;
+}
+
+// ---- verify-m2：client interp 轨迹 vs server auth 轨迹（数值锚） ----
+// 界的推导：client 插值在 [t0, t0+1] 段 lerp，|interp(t) - auth(t0)| <=
+// |auth(t0+1) - auth(t0)|（段内路径长度界）+ 线格式量化余量 0.005。
+// 阈值从 auth 日志逐样本自标定，不依赖场景速度假设。
+
+bool parseNetPoseLine(const std::string& line, const char* tag,
+                      uint32_t* tick, uint16_t* ent, float p[3]) {
+    const std::size_t at = line.find(tag);
+    if (at == std::string::npos) return false;
+    // "auth tick=12 ent=1 px=0.1500 py=0.5000 pz=0.1000"
+    return std::sscanf(line.c_str() + at, "%*[^=]=%u %*[^=]=%hu %*[^=]=%f %*[^=]=%f %*[^=]=%f",
+                       tick, ent, &p[0], &p[1], &p[2]) == 5;
+}
+
+struct VerifyStats {
+    size_t matched = 0;
+    size_t missing = 0;
+    size_t violations = 0;
+    float maxErr = 0.f;
+    float maxRatio = 0.f;   // err / bound 最大值（>1 即违约）
+};
+
+// 返回 0 = 全部样本在界内且证据量充足；1 = 违约 / 证据不足。
+int runNetVerify(const std::vector<std::string>& authLines,
+                 const std::vector<std::string>& interpLines,
+                 size_t minSamples, VerifyStats& st) {
+    std::map<uint16_t, std::map<uint32_t, std::array<float, 3>>> auth;
+    for (const std::string& l : authLines) {
+        uint32_t tick = 0; uint16_t ent = 0; float p[3] = {};
+        if (parseNetPoseLine(l, "auth tick=", &tick, &ent, p)) auth[ent][tick] = {p[0], p[1], p[2]};
+    }
+    for (const std::string& l : interpLines) {
+        uint32_t tick = 0; uint16_t ent = 0; float p[3] = {};
+        if (!parseNetPoseLine(l, "interp tick=", &tick, &ent, p)) continue;
+        const auto itE = auth.find(ent);
+        if (itE == auth.end()) { ++st.missing; ++st.violations; continue; }
+        const auto itA = itE->second.find(tick);
+        const auto itB = itE->second.find(tick + 1);
+        if (itA == itE->second.end() || itB == itE->second.end()) { ++st.missing; ++st.violations; continue; }
+        const float dx = p[0] - itA->second[0];
+        const float dy = p[1] - itA->second[1];
+        const float dz = p[2] - itA->second[2];
+        const float err = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float gx = itB->second[0] - itA->second[0];
+        const float gy = itB->second[1] - itA->second[1];
+        const float gz = itB->second[2] - itA->second[2];
+        const float span = std::sqrt(gx * gx + gy * gy + gz * gz) + 0.005f;
+        if (err > st.maxErr) st.maxErr = err;
+        const float ratio = span > 0.f ? err / span : 0.f;
+        if (ratio > st.maxRatio) st.maxRatio = ratio;
+        if (err > span) ++st.violations;
+        ++st.matched;
+    }
+    if (st.matched < minSamples) ++st.violations;
+    return st.violations == 0 ? 0 : 1;
+}
+
+int cmdNetVerifyM2(int argc, char** argv) {
+    bool selftest = false;
+    const char* authPath = nullptr;
+    const char* interpPath = nullptr;
+    uint32_t minSamples = 100;
+    for (int i = 0; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--selftest") selftest = true;
+        else if (a == "--auth" && i + 1 < argc) authPath = argv[++i];
+        else if (a == "--interp" && i + 1 < argc) interpPath = argv[++i];
+        else if (a == "--min-samples" && i + 1 < argc) {
+            if (!parseU32(argv[++i], &minSamples)) {
+                std::fprintf(stderr, "verify-m2: bad --min-samples\n");
+                return 2;
+            }
+        } else {
+            std::fprintf(stderr, "verify-m2: unknown option '%s'\n", a.c_str());
+            return 2;
+        }
+    }
+    if (selftest) {
+        // 合成日志：auth = 解析轨迹；interp = 段内精确 lerp（τ=t+0.3）→ 必 PASS；
+        // 再注入一条 +0.5m 偏移样本 → 必须 FAIL（验证检查器灵敏度）。
+        std::vector<std::string> authLines, interpLines;
+        char buf[192];
+        for (uint32_t t = 0; t <= 120; ++t) {
+            const nl::net::VehicleSnapshot s = fakeSnapshot(t, 1, 0.0f, 0.0f);
+            std::snprintf(buf, sizeof(buf),
+                          "[nl:info|net] auth tick=%u ent=1 px=%.4f py=%.4f pz=%.4f #1",
+                          t, s.px, s.py, s.pz);
+            authLines.push_back(buf);
+        }
+        for (uint32_t t = 0; t < 118; ++t) {
+            const nl::net::VehicleSnapshot a = fakeSnapshot(t, 1, 0.0f, 0.0f);
+            const nl::net::VehicleSnapshot b = fakeSnapshot(t + 1, 1, 0.0f, 0.0f);
+            const float tau = 0.3f;
+            std::snprintf(buf, sizeof(buf),
+                          "[nl:info|net] interp tick=%u ent=1 px=%.4f py=%.4f pz=%.4f #1",
+                          t,
+                          a.px + (b.px - a.px) * tau,
+                          a.py + (b.py - a.py) * tau,
+                          a.pz + (b.pz - a.pz) * tau);
+            interpLines.push_back(buf);
+        }
+        VerifyStats good;
+        if (runNetVerify(authLines, interpLines, 100, good) != 0) {
+            std::fprintf(stderr, "verify-m2 selftest: exact-lerp case unexpectedly FAIL "
+                                 "(matched=%zu viol=%zu)\n", good.matched, good.violations);
+            return 1;
+        }
+        std::vector<std::string> bad = interpLines;
+        // 破坏第 50 条：px 抬高 0.5m（远超相邻位移 ~0.023m）
+        {
+            uint32_t tick = 0; uint16_t ent = 0; float p[3] = {};
+            parseNetPoseLine(bad[50], "interp tick=", &tick, &ent, p);
+            std::snprintf(buf, sizeof(buf),
+                          "[nl:info|net] interp tick=%u ent=%u px=%.4f py=%.4f pz=%.4f #1",
+                          tick, ent, p[0] + 0.5f, p[1], p[2]);
+            bad[50] = buf;
+        }
+        VerifyStats broken;
+        if (runNetVerify(authLines, bad, 100, broken) == 0) {
+            std::fprintf(stderr, "verify-m2 selftest: corrupted case unexpectedly PASS\n");
+            return 1;
+        }
+        std::printf("verify-m2 selftest: PASS (exact maxErr=%.4f ratio=%.3f; "
+                    "corrupted viol=%zu)\n", good.maxErr, good.maxRatio, broken.violations);
+        return 0;
+    }
+    if (!authPath || !interpPath) {
+        std::fprintf(stderr, "usage: net-tools verify-m2 --auth <log> --interp <log> "
+                             "[--min-samples N] | --selftest\n");
+        return 2;
+    }
+    std::ifstream af(authPath);
+    std::ifstream cf(interpPath);
+    if (!af || !cf) {
+        std::fprintf(stderr, "verify-m2 : FAILED (cannot open %s / %s)\n",
+                     authPath, interpPath);
+        return 1;
+    }
+    std::vector<std::string> authLines, interpLines;
+    std::string line;
+    while (std::getline(af, line)) authLines.push_back(line);
+    while (std::getline(cf, line)) interpLines.push_back(line);
+    VerifyStats st;
+    const int rc = runNetVerify(authLines, interpLines, minSamples, st);
+    std::printf("verify-m2    : matched=%zu missing=%zu viol=%zu maxErr=%.4f maxRatio=%.3f\n",
+                st.matched, st.missing, st.violations, st.maxErr, st.maxRatio);
+    if (rc == 0) {
+        std::printf("verify-m2    : PASS (interp within one-snapshot-interval of auth)\n");
+        return 0;
+    }
+    std::fprintf(stderr, "verify-m2    : FAIL (matched=%zu missing=%zu viol=%zu)\n",
+                 st.matched, st.missing, st.violations);
+    return 1;
+}
+
 void printUsage() {
     std::printf(
         "net-tools - nl-engine transport acceptance tool (NET M-NET0, vendored ENet %s)\n"
@@ -648,6 +972,12 @@ void printUsage() {
         "                        deterministic payload benchmark (seed 1234); exit 0/1/2\n"
         "  net-tools snapshot-decode <hex-bytes>\n"
         "                        decode hex wire bytes; exit 0=ok 1=FAILED 2=usage\n"
+        "  net-tools session-loopback [--port P] [--ticks N] [--timeout-ms T]\n"
+        "                        M-NET2 server-authoritative loopback: handshake + input + snapshot\n"
+        "                        interp error <= one snapshot interval; exit 0=PASS 1=FAIL 2=timeout\n"
+        "  net-tools verify-m2 --selftest | --auth <log> --interp <log>\n"
+        "                        M-NET2 numeric anchor: client interp vs server auth trajectory;\n"
+        "                        threshold = adjacent auth displacement + quant slack; exit 0=PASS 1=FAIL 2=usage\n"
         "  net-tools version     print vendored ENet + bitsery version\n",
         nl::net::version());
 }
@@ -677,6 +1007,8 @@ int main(int argc, char** argv) {
     if (std::strcmp(cmd, "loss-sweep") == 0) return cmdLossSweep(argc - 2, argv + 2);
     if (std::strcmp(cmd, "selftest") == 0) return cmdSelftest();
     if (std::strcmp(cmd, "snapshot-selftest") == 0) return cmdSnapshotSelftest();
+    if (std::strcmp(cmd, "session-loopback") == 0) return cmdSessionLoopback(argc - 2, argv + 2);
+    if (std::strcmp(cmd, "verify-m2") == 0) return cmdNetVerifyM2(argc - 2, argv + 2);
     if (std::strcmp(cmd, "snapshot-bench") == 0) return cmdSnapshotBench(argc - 2, argv + 2);
     if (std::strcmp(cmd, "snapshot-decode") == 0) return cmdSnapshotDecode(argc - 2, argv + 2);
     if (std::strcmp(cmd, "version") == 0) {

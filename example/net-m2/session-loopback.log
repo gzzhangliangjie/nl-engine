@@ -1,0 +1,4 @@
+session      : joined=1 welcomed entityId=2 input=ok
+session      : interp samples=594 maxErr=0.0000 maxBound=0.1853
+session      : leave=1 reconnectState=clean
+session-loopback : PASS

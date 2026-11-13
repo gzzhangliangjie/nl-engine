@@ -187,6 +187,16 @@ struct ProfilingDebugUi {
     int  lineCount = 0;
 };
 
+// NET M-NET2: net session status window. SAME DEFAULT-OFF discipline: only
+// --net-server / --net-client runs set show=true, so no existing baseline moves.
+// ASCII-only POD lines (connection state / RTT / snapshot tick delta per plan).
+struct NetStatusUi {
+    bool show = false;
+    enum { kMaxLines = 6, kLineChars = 96 };
+    char lines[kMaxLines][kLineChars] = {};
+    int  lineCount = 0;
+};
+
 struct HudFrame {
     // ---- viewer -> HUD（显示数据）----
     float fps          = 0.0f;
@@ -329,6 +339,7 @@ struct HudFrame {
     InputDebugUi inputDebug;
     DriveDebugUi driveDebug;
     ProfilingDebugUi profilingDebug;   // M-TR0：默认关的独立性能统计窗口
+    NetStatusUi netStatus;             // NET M-NET2：默认关的独立网络状态窗口
 };
 
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。

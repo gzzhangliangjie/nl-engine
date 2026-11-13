@@ -1302,14 +1302,22 @@ struct DebugScene::Impl {
 
     // M-D3 scenario=2：长生命周期载具（声明在 physicsSystem 之后 → 析构体先跑
     // detach，再轮到成员析构；与 M-D2 的 RemoveStepListener 纪律一致）。
-    JPH::Ref<JPH::VehicleConstraint> vehicleConstraint;
-    JPH::WheeledVehicleController* vehicleController = nullptr;
-    JPH::Body* vehicleChassis = nullptr;
-    JPH::BodyID vehicleChassisId;
+    // M-NET2：扩为多槽位——slot 0 恒为既有单车路径（既有基线逐位保形），slot 1+
+    // 由 addVehicle() 按需追加（服务器权威：每 client 一台；客户端幽灵位： teleport）。
+    // 槽位号稳定 = tombstone（used=false 保留槽位，不压缩 vector）。
+    struct VehicleSlot {
+        JPH::Ref<JPH::VehicleConstraint> constraint;
+        JPH::WheeledVehicleController* controller = nullptr;
+        JPH::Body* chassis = nullptr;
+        JPH::BodyID chassisId;
+        DriveInputState input;
+        bool used = false;
+    };
+    std::vector<VehicleSlot> vehicles;
     JPH::BodyID vehicleFloorId;
     JPH::BodyID wallId;
     std::vector<JPH::BodyID> courseIds;
-    DriveInputState driveInput;
+    DriveInputState driveInput;   // slot 0 的输入镜像（setDriveInput 既有语义）
     std::unique_ptr<SceneContactCounter> contactCounter;
 
     Impl()
@@ -1317,11 +1325,35 @@ struct DebugScene::Impl {
         , objectLayerPairFilter(matrix)
     {}
     ~Impl() {
-        if (vehicleConstraint) {
-            physicsSystem.RemoveStepListener(vehicleConstraint.GetPtr());
-            physicsSystem.RemoveConstraint(vehicleConstraint.GetPtr());
+        for (VehicleSlot& s : vehicles) {
+            if (s.constraint) {
+                physicsSystem.RemoveStepListener(s.constraint.GetPtr());
+                physicsSystem.RemoveConstraint(s.constraint.GetPtr());
+            }
         }
         if (contactCounter) physicsSystem.SetContactListener(nullptr);
+    }
+
+    // M-NET2：在 (spawnX, spawnZ) 处装一台同规格载具（共享 M-D2 装配序列），
+    // 追加进 vehicles 并返回槽位号；失败返回 -1（error 置因）。
+    int addSlot(float spawnX, float spawnZ) {
+        VehicleTuning tuning;
+        detail::VehicleAssembly va;
+        if (!detail::buildVehicle(physicsSystem, tuning,
+                                  JPH::RVec3(JPH::Real(spawnX), JPH::Real(tuning.startY),
+                                             JPH::Real(spawnZ)),
+                                  &va, &error)) {
+            return -1;
+        }
+        VehicleSlot s;
+        s.constraint = va.constraint;
+        s.controller = va.controller;
+        s.chassis = va.chassis;
+        s.chassisId = va.chassisId;
+        s.used = true;
+        vehicles.push_back(s);
+        totalBodies = physicsSystem.GetNumBodies();
+        return static_cast<int>(vehicles.size()) - 1;
     }
 };
 
@@ -1429,18 +1461,12 @@ bool DebugScene::build(int scenario, std::uint32_t seed, std::string* err) {
         I.physicsSystem.SetContactListener(I.contactCounter.get());
 
         // Shared M-D2 assembly: same chassis / wheels / constraint / tester.
-        VehicleTuning tuning;
-        detail::VehicleAssembly va;
-        if (!detail::buildVehicle(I.physicsSystem, tuning,
-                                  JPH::RVec3(0.0_r, JPH::Real(tuning.startY), 0.0_r),
-                                  &va, &I.error)) {
+        // M-NET2：slot 0 = 既有单车（spawn 0,0 与基线逐位一致）；slot 1+ 走
+        // addVehicle() 公开 API（server 每 client 一台 / client 幽灵位）。
+        if (I.addSlot(0.0f, 0.0f) < 0) {
             if (err) *err = I.error.c_str();
             return false;
         }
-        I.vehicleConstraint = va.constraint;
-        I.vehicleController = va.controller;
-        I.vehicleChassis = va.chassis;
-        I.vehicleChassisId = va.chassisId;
         I.vehicleFloorId = I.floorId;
         I.physicsSystem.OptimizeBroadPhase();
         I.totalBodies = I.physicsSystem.GetNumBodies();
@@ -1502,9 +1528,15 @@ void DebugScene::step(double dt) {
         I.charH->advance(static_cast<float>(dt));
         return;
     }
-    if (I.vehicleController) {
-        I.vehicleController->SetDriverInput(I.driveInput.forward, I.driveInput.right,
-                                            I.driveInput.brake, I.driveInput.handBrake);
+    // M-NET2：slot 0 吃 setDriveInput 镜像（既有语义），slot 1+ 吃各自网络输入。
+    if (!I.vehicles.empty() && I.vehicles[0].used) {
+        I.vehicles[0].input = I.driveInput;
+    }
+    for (const Impl::VehicleSlot& s : I.vehicles) {
+        if (s.used && s.controller) {
+            s.controller->SetDriverInput(s.input.forward, s.input.right,
+                                         s.input.brake, s.input.handBrake);
+        }
     }
     I.physicsSystem.Update(static_cast<float>(dt), 1, &I.tempAllocator, &I.jobSystem);
 }
@@ -1555,11 +1587,14 @@ DebugLines DebugScene::extractLines() {
     // M-D3 scenario 2: ground blue, lane markers green, wall red, chassis
     // yellow. Wheels are raycast queries (no JPH::Body), so there is nothing
     // for DebugRenderer to draw: only the chassis box is a real rigid body.
+    // M-NET2：多槽位逐台画（同黄色；幽灵位经 teleportVehicle 摆位）。
     if (I.scenario == 2) {
         drawBody(I.floorId, JPH::Color(60, 120, 255));
         for (JPH::BodyID id : I.courseIds) drawBody(id, JPH::Color(80, 220, 80));
         drawBody(I.wallId, JPH::Color(255, 80, 80));
-        drawBody(I.vehicleChassisId, JPH::Color(255, 230, 60));
+        for (const Impl::VehicleSlot& s : I.vehicles) {
+            if (s.used) drawBody(s.chassisId, JPH::Color(255, 230, 60));
+        }
         I.lineBuffer.swap(I.renderer->lines);
         out.data = I.lineBuffer.data();
         out.vertexCount = static_cast<std::uint32_t>(I.lineBuffer.size() / 6u);
@@ -1598,16 +1633,22 @@ std::uint32_t DebugScene::bodyCount() const {
 // ---- M-D3: Jolt-free drive POD interface (scenario 2 only) ----
 void DebugScene::setDriveInput(const DriveInputState& input) {
     if (!impl_ || !impl_->valid || impl_->scenario != 2) return;
-    impl_->driveInput = input;
+    impl_->driveInput = input;   // slot 0 输入镜像（既有语义）
 }
 
 DriveViewState DebugScene::driveState() const {
     DriveViewState out;
-    if (!impl_ || !impl_->valid || impl_->scenario != 2 || !impl_->vehicleChassis) return out;
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return out;
+    // M-NET2：slot 0 = 既有单车语义（valid/grounded/contacts 均以本地权威车为准）。
+    const Impl::VehicleSlot* s0 = nullptr;
+    for (const Impl::VehicleSlot& s : impl_->vehicles) {
+        if (s.used) { s0 = &s; break; }
+    }
+    if (!s0 || !s0->chassis) return out;
     const auto& I = *impl_;
-    const JPH::RVec3 p = I.vehicleChassis->GetPosition();
-    const JPH::Vec3 v = I.vehicleChassis->GetLinearVelocity();
-    const JPH::Vec3 fwd = I.vehicleChassis->GetRotation() * JPH::Vec3(0.0f, 0.0f, 1.0f);
+    const JPH::RVec3 p = s0->chassis->GetPosition();
+    const JPH::Vec3 v = s0->chassis->GetLinearVelocity();
+    const JPH::Vec3 fwd = s0->chassis->GetRotation() * JPH::Vec3(0.0f, 0.0f, 1.0f);
     out.pos[0] = static_cast<float>(p.GetX());
     out.pos[1] = static_cast<float>(p.GetY());
     out.pos[2] = static_cast<float>(p.GetZ());
@@ -1616,7 +1657,7 @@ DriveViewState DebugScene::driveState() const {
     out.vel[2] = v.GetZ();
     out.yaw = std::atan2(fwd.GetX(), fwd.GetZ());
     out.speed = std::sqrt(v.GetX() * v.GetX() + v.GetZ() * v.GetZ());
-    for (const JPH::Wheel* w : I.vehicleConstraint->GetWheels()) {
+    for (const JPH::Wheel* w : s0->constraint->GetWheels()) {
         if (w->HasContact()) ++out.grounded;
     }
     if (I.contactCounter) {
@@ -1644,6 +1685,92 @@ DriveChassisState DebugScene::chassisState() const {
     out.vel[2] = d.vel[2];
     out.valid = true;
     return out;
+}
+
+// ---- M-NET2: scenario 2 multi-vehicle (server authoritative / client ghost) ----
+int DebugScene::addVehicle(float spawnX, float spawnZ) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return -1;
+    return impl_->addSlot(spawnX, spawnZ);
+}
+
+bool DebugScene::removeVehicle(int slot) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return false;
+    if (slot < 0 || slot >= static_cast<int>(impl_->vehicles.size())) return false;
+    Impl::VehicleSlot& s = impl_->vehicles[static_cast<size_t>(slot)];
+    if (!s.used) return false;
+    // tombstone：槽位号稳定（其余 slot 索引不动），约束/步监听摘除、刚体销毁。
+    impl_->physicsSystem.RemoveStepListener(s.constraint.GetPtr());
+    impl_->physicsSystem.RemoveConstraint(s.constraint.GetPtr());
+    impl_->physicsSystem.GetBodyInterface().RemoveBody(s.chassisId);
+    impl_->physicsSystem.GetBodyInterface().DestroyBody(s.chassisId);
+    s = Impl::VehicleSlot{};   // used=false + 句柄清空
+    impl_->totalBodies = impl_->physicsSystem.GetNumBodies();
+    return true;
+}
+
+void DebugScene::setVehicleInput(int slot, const DriveInputState& input) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return;
+    if (slot < 0 || slot >= static_cast<int>(impl_->vehicles.size())) return;
+    impl_->vehicles[static_cast<size_t>(slot)].input = input;
+}
+
+DriveChassisState DebugScene::vehicleChassisState(int slot) const {
+    DriveChassisState out;
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return out;
+    if (slot < 0 || slot >= static_cast<int>(impl_->vehicles.size())) return out;
+    const Impl::VehicleSlot& s = impl_->vehicles[static_cast<size_t>(slot)];
+    if (!s.used || !s.chassis) return out;
+    const JPH::RVec3 p = s.chassis->GetPosition();
+    const JPH::Vec3 v = s.chassis->GetLinearVelocity();
+    const JPH::Vec3 fwd = s.chassis->GetRotation() * JPH::Vec3(0.0f, 0.0f, 1.0f);
+    out.pos[0] = static_cast<float>(p.GetX());
+    out.pos[1] = static_cast<float>(p.GetY());
+    out.pos[2] = static_cast<float>(p.GetZ());
+    out.vel[0] = v.GetX();
+    out.vel[1] = v.GetY();
+    out.vel[2] = v.GetZ();
+    const float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    out.yawDegrees = yaw * 180.0f / 3.14159265358979323846f;
+    out.valid = true;
+    return out;
+}
+
+// 朝向直接吃四元数（快照线格式即四元数）；位置米。客户端幽灵位专用：
+// 客户端不 step 物理，刚体摆放后保持不动，直到下一次 teleport。
+void DebugScene::teleportVehicle(int slot, const float pos[3], const float quat[4]) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return;
+    if (slot < 0 || slot >= static_cast<int>(impl_->vehicles.size())) return;
+    Impl::VehicleSlot& s = impl_->vehicles[static_cast<size_t>(slot)];
+    if (!s.used || !s.chassis) return;
+    const JPH::Quat q(quat[0], quat[1], quat[2], quat[3]);
+    const JPH::RVec3 p(pos[0], pos[1], pos[2]);
+    impl_->physicsSystem.GetBodyInterface().SetPositionAndRotation(
+        s.chassisId, p, q, JPH::EActivation::DontActivate);
+}
+
+bool DebugScene::vehicleFullPose(int slot, float pos[3], float quat[4], float vel[3]) const {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return false;
+    if (slot < 0 || slot >= static_cast<int>(impl_->vehicles.size())) return false;
+    const Impl::VehicleSlot& s = impl_->vehicles[static_cast<size_t>(slot)];
+    if (!s.used || !s.chassis) return false;
+    const JPH::RVec3 p = s.chassis->GetPosition();
+    const JPH::Quat q = s.chassis->GetRotation();
+    const JPH::Vec3 v = s.chassis->GetLinearVelocity();
+    pos[0] = static_cast<float>(p.GetX());
+    pos[1] = static_cast<float>(p.GetY());
+    pos[2] = static_cast<float>(p.GetZ());
+    quat[0] = q.GetX(); quat[1] = q.GetY(); quat[2] = q.GetZ(); quat[3] = q.GetW();
+    vel[0] = v.GetX(); vel[1] = v.GetY(); vel[2] = v.GetZ();
+    return true;
+}
+
+int DebugScene::activeVehicleCount() const {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return 0;
+    int n = 0;
+    for (const Impl::VehicleSlot& s : impl_->vehicles) {
+        if (s.used) ++n;
+    }
+    return n;
 }
 
 } // namespace nl::physics

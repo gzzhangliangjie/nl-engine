@@ -1,0 +1,2 @@
+verify-m2    : matched=1458 missing=0 viol=0 maxErr=0.0008 maxRatio=0.140
+verify-m2    : PASS (interp within one-snapshot-interval of auth)

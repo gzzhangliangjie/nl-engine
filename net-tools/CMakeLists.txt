@@ -53,3 +53,17 @@ add_test(NAME net-m0-connect-refused
          COMMAND net-tools echo-client 127.0.0.1 29199 --packets 4 --timeout-ms 1500)
 set_tests_properties(net-m0-connect-refused PROPERTIES
     WILL_FAIL TRUE)
+
+# ---- NET M-NET2：同步层（服务器权威最小闭环）----
+# 单进程回环会话全链路：握手/输入上送/快照/插值界断言/断链回收（确定性）
+add_test(NAME net-m2-session COMMAND net-tools session-loopback)
+set_tests_properties(net-m2-session PROPERTIES
+    PASS_REGULAR_EXPRESSION "session-loopback : PASS")
+# 数值锚检查器自检（精确 lerp 必过 + 注入 0.5m 偏移必炸，验证灵敏度）
+add_test(NAME net-m2-verify COMMAND net-tools verify-m2 --selftest)
+set_tests_properties(net-m2-verify PROPERTIES
+    PASS_REGULAR_EXPRESSION "verify-m2 selftest: PASS")
+# 负向：auth/interp 文件缺失显式 FAILED（exit 1）
+add_test(NAME net-m2-verify-negative
+         COMMAND net-tools verify-m2 --auth missing-auth.log --interp missing-interp.log)
+set_tests_properties(net-m2-verify-negative PROPERTIES WILL_FAIL TRUE)
