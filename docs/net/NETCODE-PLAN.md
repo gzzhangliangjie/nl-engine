@@ -48,6 +48,8 @@
 
 ### M-NET2 — 服务器权威最小闭环：两实例同场景位置一致
 
+> **状态：已落码（2026-11-13，`feat/net`）**。Sync 层（控制消息统一头 magic+proto+type + static_assert 锁尺寸 / InterpBuffer kCapacity=32 + extraTicks 帧间相位 / ServerSession 16 槽位 / ClientSession）+ DebugScene 多载具槽位（tombstone 保槽位号，slot0 保形）+ viewer `--net-server`/`--net-client`（互斥前置校验 exit 2，NetGuard RAII）+ HUD Net Status（default-off）+ `net-tools` `session-loopback`/`verify-m2`（阈值自标定）+ 第 110 张卡 `net-m2`。验收：ctest net 族 12/12 双后端、regression net-m2 4/4、run.bat 六段 ALL GREEN（matched=1458 viol=0 maxErr=0.0008 maxRatio=0.140）、双实例截图两台车。归档 = `NETCODE-TOOLS-GUIDE.md` §3 + `MILESTONES.md` NET M-NET2 节。已知边界：双进程行驶段仅慢速蠕动（ENet CONNECT ~1s 赢不了无节流帧率时序），运动插值由 selftest 分数相位 τ=0.3 + loopback 运动轨迹覆盖；行驶段循环 demo 旗标挂 M-NET3。
+
 - **目标**：一台 server + 至少一台 client 连入同场景，client 看到彼此载具位置插值跟随，亲眼可见截图。
 - **任务**：
   1. viewer 进程新增运行模式 `--net-server <port>` / `--net-client <host:port>[,name]`：server = 60Hz GameClock 驱动 Jolt 载具权威模拟，快照流按 tick 发不可靠通道；client = 本地载具输入上送 + 远端载具快照收包入插值缓冲，`alpha` 帧间插值渲染（复用 M-GL3 机制）。

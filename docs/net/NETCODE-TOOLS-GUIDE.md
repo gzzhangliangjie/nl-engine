@@ -86,6 +86,60 @@ ctest（双后端 `--repeat until-pass:3`）：`net-m1-selftest` / `net-m1-bench
 4. **函数参数 `float q[4]` 退化为指针**：range-for 不成立（C2672），用索引循环。
 5. **阈值 = 声明精度而非半步**：半步断言（0.5mm/0.5cm/s）会被 float 存储噪声击穿（实测 0.00061 m / 0.005001 m/s）；诚实口径 = 网格步长（1mm/1cm/s）+ 误差来源拆解写进注释。
 
-## 3. M-NET2（服务器权威最小闭环）— 未开工
+## 3. M-NET2（服务器权威最小闭环）— 已落码（2026-11-13）
+
+### 3.1 控制消息线格式（`core/include/nl/net/Sync.hpp` 头注释为契约，改动须重拍）
+
+控制消息全部 pack(1) POD，**统一线格式头恒在 offset 0..8**：`magic(4) + proto(4) + type(1)`，单点校验 `ctrlHeadOk`（n≥9、magic/proto 匹配、d[8] = 期望 type）。`kSessionMagic = 0x4E4C534E`（"NLSN"）、`kSessionProto = 1`；每组消息配 `static_assert(sizeof) == 字节数` 锁尺寸。
+
+| 消息 | type | 字节数 | 方向 | 载荷 | 通道 |
+|---|---|---|---|---|---|
+| CtrlHello | 1 | 25 | C→S | name(16，ASCII 截断收尾) | 可靠 |
+| CtrlWelcome | 2 | 16 | S→C | serverTick(4) + entityId(2) + 分配信息 | 可靠 |
+| CtrlInput | 3 | 28 | C→S | forward/right/brake/handBrake（4×float）；解码含 `std::isfinite` NaN 拒绝 | 可靠 |
+| CtrlEntityGone | 4 | 14 | S→C | entityId(2) | 可靠 |
+| CtrlLeave | 5 | 9 | C→S | （仅头） | 可靠 |
+
+快照流（`VehicleSnapshot`，M-NET1 线格式 31 B）走不可靠通道丢旧保新，与控制消息通道分离。
+
+### 3.2 同步层与插值（`Sync.cpp`，零第三方类型）
+
+- **InterpBuffer**（kCapacity=32 环）：tick 单调 push（丢旧保新）；`eval(delayTicks, out, evalTickOut, extraTicks=0)` 在相邻快照对间 lerp / nlerp（dot<0 取反短弧，退化取端点 a）；target < oldest 返回 false（未预热）。`extraTicks` 为帧间相位分数（viewer 用最新快照到达后实钟经过折算，上限 0.95），确定性单测传 0。
+- **ServerSession**（kMaxEntities=16 槽位）：`claimLocalEntity` / `pump(joined,left)`（Hello→分配实体+**建输入槽**+回 Welcome；Input→缓存；Leave / PeerDisconnected→回收+广播 EntityGone）/ `inputOf` / `broadcastSnapshot` / `notifyEntityGone`。
+- **ClientSession**：`beginConnect` / `pump` / `sendInput` / `bufferOf` / `entityAt` / `forgetEntity` / `welcomed` / `rttMs`；`disconnect` 拆链并**复位会话态**（welcomed_ / localEntityId_ / bufs_）。
+- viewer 口径：`--net-server <port>` = 60Hz GameClock 驱动 Jolt 权威模拟，快照按 tick 发不可靠通道；`--net-client <host:port>[,name]` = 输入上送 + 快照入插值缓冲，`kInterpDelayTicks=2.0`，相位 `extra=min((nowMs−arrival)/kNetTickMs, 0.95)`；互斥与参数校验前置（exit 2），NetGuard RAII 一比一。
+
+### 3.3 子命令（`net-tools`，M-NET2 新增两条）
+
+| 子命令 | 语义 | 退出码 |
+|---|---|---|
+| `session-loopback [--port P] [--ticks N]` | 单进程全闭环：client beginConnect→泵→sendInput→server.pump（Welcome/实体分配）→广播快照→client.pump→eval 逐样本误差断言→disconnect 核对 left + 会话态复位。PASS 锚 `session-loopback : PASS` | 0=PASS / 1=FAIL / 2=超时 |
+| `verify-m2 --auth FILE --interp FILE [--min-samples N]` | server log 的 `auth tick=.. px=..` 行与 client log 的 `interp tick=.. px=..` 行按 tick 配对；阈值 = **自标定** `|a(t+1)−a(t)| + 0.005`（一个快照间隔位移 + 量化余量），matched<minSamples 记违约。`--selftest` = 精确 lerp 必过 + 注入 +0.5m 偏移样本必炸 | 0=PASS / 1=FAIL / 2=用法 |
+
+ctest（双后端 `--repeat until-pass:3`）：`net-m2-session`（PASS_REGULAR_EXPRESSION `session-loopback : PASS`）/ `net-m2-verify` / `net-m2-verify-negative`（WILL_FAIL）。展示台第 110 张版本卡 `net-m2`（4 用例 kind:tool，`exe` 为 `{"dx12":..., "vulkan":...}` 字典）。
+
+### 3.4 run.bat 六段（`example/net-m2/run.bat`，ALL GREEN 基线 2026-11-13）
+
+1. `session-loopback`（300 ticks）→ 2. `verify-m2 --selftest` → 3. **双进程**：server `start /b ""` 先行 + `ping` 延后 2s 起 client（防时序竞争），server 800 帧 / client 900 帧，`--yaw 0 --pitch 35 --dist 26 --hud`，findstr 锚 `listening` / `joined` / ghost slot / `interp tick` → 4. `verify-m2 --auth server.log --interp client.log --min-samples 200` → 5. 负向：interp 错喂 server.log 必 FAIL exit 1 → 6. 轮询 server `shutdown ok` + 注记 `entity 2 left`（断链实体回收）→ ALL GREEN。双实例截图 `server.png` / `client.png` 各含两台黄色线框车体——**PNG evidence-only 不做 MD5 基线**（双进程包到达含实时时序，不可复现字节级）。
+
+### 3.5 实测表（2026-11-13，DX12）
+
+| 项 | 实测值 | 判定 |
+|---|---|---|
+| session-loopback 300 ticks | 逐样本 maxErr≈0（整点采样）maxBound=0.1853 | 插值不越界 ✓ |
+| verify-m2 双进程 | matched=1458 viol=0 maxErr=0.0008 maxRatio=0.140 | ≤ 一个快照间隔 ✓ |
+| client 行驶段位移 | interp tick 225→443 px −5.98→−6.87 | 有位移非冻结 ✓ |
+| 断链回收 | client 退出后 server 广播 EntityGone + removeVehicle（tombstone 保槽位号） | `entity 2 left` ✓ |
+| 零回归 | ctest net 族 12/12 双后端全绿；regression net-m2 4/4 + 抽查 drive-m3 6/6 / drive-m2 5/5 保形 | ✓ |
+
+### 3.6 踩坑留档（M-NET2 实测）
+
+1. **控制消息线格式头错位**：首版 CtrlInput/CtrlEntityGone 漏 proto 字段（type 落 offset 4），而 `ctrlHeadOk` 校验 d[8] → **所有 Input 包被静默拒收**（loopback `input=BAD` 探针定位）。统一全部消息为 magic+proto+type 头 + static_assert 锁尺寸后闭环。
+2. **Hello 建实体必须同步建输入槽**：只填 peers_[slot] 不填 inputs_ 槽 → hasInput=0，server 拿不到 client 输入。Hello 处理补 `inputs_[slot] = {ent, InputState{}}`。
+3. **验收探针禁止一次性锁存**：`inputOk` 首次比较发生在 welcome 前（输入丢弃期）→ 改为每迭代持续检查直到通过。同理 `inputOk 错误锁存` 是 loopback 断言设计纪律。
+4. **插值需要真 alpha 相位**：target = latest − 2.0 恒整数 tick，eval 只在整点采样 → `eval` 加 `extraTicks` 相位参数；viewer 按最新快照到达后实钟经过折算（上限 0.95 防越过最新样本）。
+5. **数值锚阈值自标定**：不从速度假设推导，取 auth 轨迹相邻位移 `|a(t+1)−a(t)| + 0.005`——免速度模型、抗偶发丢包拉长段；`minSamples` 防证据不足假 PASS。
+6. **双进程握手时序竞争**：server 帧数跑完时 client 才启动 → 必然 0 interp。ENet CONNECT 重试约 1s 节奏赢不了无节流帧率（~350fps 下 210 tick 行驶窗口仅 0.6s）→ run.bat `start /b` + `ping` 延后 2s；确定性验收不依赖双进程实时时序，走 loopback + selftest 工具锚。
+7. **disconnect 必须复位会话态**：只拆 host 不清 welcomed_/localEntityId_/bufs_ → 复用会话对象行为残留。
 
 ## 4. M-NET3（打磨收官）— 未开工

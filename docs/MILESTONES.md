@@ -3147,3 +3147,28 @@
 4. **`InputBufferAdapter<const uint8_t*>`**：raw pointer 有官方 `BufferAdapterTraits<const T*>` 特化（`traits/core/traits.h`），const 缓冲零拷贝解码可行。
 
 **下一步**：VULKAN 收尾 → tag `net-m1` → M-NET2（服务器权威最小闭环：`--net-server/--net-client` + GameClock 驱动 Jolt + 快照不可靠通道 + alpha 插值渲染）。
+
+## NET M-NET2 — 服务器权威最小闭环：两实例同场景（2026-11-13）
+
+**动作**：第 12 步网络栈第三里程碑（A 类并行轨道 `net`，claim M-NET2）。① `nl/net/Sync.hpp/.cpp` 同步层（零第三方类型）：控制消息 pack(1) POD **统一线格式头 magic(4)+proto(4)+type(1) 恒在 offset 0..8**（`kSessionMagic=0x4E4C534E`/"NLSN"、`kSessionProto=1`，`ctrlHeadOk` 单点校验 + static_assert 锁尺寸：Hello 25 / Welcome 16 / Input 28 / EntityGone 14 / Leave 9 B）；`InterpBuffer` kCapacity=32 环（tick 单调 push 丢旧保新，`eval(delayTicks, out, evalTickOut, extraTicks=0)` lerp/nlerp 短弧，未预热返 false）；`ServerSession`（kMaxEntities=16 槽位：Hello→分配实体+建输入槽+回 Welcome / Input 缓存 / Leave+PeerDisconnected→回收+广播 EntityGone）；`ClientSession`（disconnect 复位全部会话态）。② physics `World` 多载具槽位：`VehicleSlot{constraint,controller,chassis,chassisId,input,used}` vector + tombstone（removeVehicle 摘 listener+constraint+body 后保槽位号稳定，slot0 逐位保形）；新 API addVehicle/removeVehicle/setVehicleInput/vehicleChassisState/teleportVehicle/vehicleFullPose/activeVehicleCount。③ viewer 双模式 `--net-server <port>` / `--net-client <host:port>[,name]`（互斥+端口+必须 scenario 2 前置校验 exit 2，NetGuard RAII）：server = 60Hz GameClock 驱动 Jolt 权威模拟 + `vehicleFullPose`→快照不可靠通道按 tick 广播 + auth 行日志；client = 输入上送 + 快照入插值缓冲（`kInterpDelayTicks=2.0`，相位 `extra=min((nowMs−arrival)/kNetTickMs, 0.95)`）→ `teleportVehicle` 渲染 + interp 行日志 + EntityGone 槽位回收；HUD `Net Status` 面板（NetStatusUi POD default-off，画零东西零基线触碰）。④ `net-tools` 增 `session-loopback`（单进程全闭环 300 ticks 逐样本误差断言 + disconnect 核对）/ `verify-m2`（--selftest：精确 lerp 必过 + 注入 +0.5m 必炸；--auth/--interp 按 tick 配对，阈值 = auth 相邻位移自标定 + 0.005，minSamples 防假 PASS）；ctest 增 3 例双后端。⑤ 第 110 张版本卡 `net-m2`（4 用例 kind:tool，`exe` 字典）+ `example/net-m2/run.bat` 六段 + 双实例截图证据（PNG evidence-only 不做 MD5 基线，双进程含实时时序不可复现字节级）。⑥ 文档：`NETCODE-TOOLS-GUIDE.md` §3 归档、`NETCODE-PLAN.md` 状态、本台账。
+
+**提交版本**：`feat/net`（M-NET2 主实现 + 文档 commit）；annotated tag `net-m2`（验收通过后打）。`kStage` 保持 `S8.2`，既有 109 张卡零重拍、零波及。
+
+**完成情况**
+- 🟢 ctest net 族 12/12 双后端 `--repeat until-pass:3` 全绿（m0 5 + m1 3 + m2 3 各双后端）。
+- 🟢 `regression.py --only net-m2` 双后端 4/4 ALL GREEN；抽查 drive-m3 6/6、drive-m2 5/5 保形（m0.5 5 FAIL = showcase 冻结 exe 未在本 wt 构建，环境性非回归；`viewer --selftest` 直跑 16/16 PASS 佐证）。
+- 🟢 run.bat 六段 ALL GREEN exit 0：loopback（300 ticks maxErr≈0 maxBound=0.1853）→ verify selftest → 双进程（锚 listening/joined/ghost/interp tick 全中）→ `verify-m2` **matched=1458 viol=0 maxErr=0.0008 maxRatio=0.140**（≤ 一个快照间隔）→ 负向错配 FAIL exit 1 → `shutdown ok` + `entity 2 left`。
+- 🟢 双实例截图 `server.png`/`client.png` 各含两台黄色线框车体（791/812 场景区黄色像素）；client 行驶段 interp tick 225→443 px −5.98→−6.87 有位移。
+- 🟢 断链回收实证：client 退出后 server 广播 EntityGone + removeVehicle（tombstone），双实例像素 diff 仅差 client 载具区域。
+
+**踩坑情况**
+1. **控制消息线格式头错位**：首版 CtrlInput/CtrlEntityGone 漏 proto 字段（type 落 offset 4），`ctrlHeadOk` 校验 d[8] → 所有 Input 包静默拒收；loopback `input=BAD` 探针定位后统一全部消息为 magic+proto+type 头 + static_assert 锁尺寸。
+2. **Hello 建实体必须同步建输入槽**：只填 peers_[slot] → hasInput=0 拿不到 client 输入；补 `inputs_[slot] = {ent, InputState{}}`。
+3. **验收探针禁一次性锁存**：`inputOk` 首次比较发生在 welcome 前的输入丢弃期 → 改每迭代持续检查。
+4. **插值整数 tick 采样无真 alpha**：target 恒整数 → `eval` 加 `extraTicks` 相位参数（viewer 实钟折算上限 0.95，单测传 0）。
+5. **双进程握手时序竞争**：无节流 ~350fps 下 210 tick 行驶窗口仅 0.6s，ENet CONNECT ~1s 重试赢不了 → run.bat `start /b` + ping 延后 2s；确定性验收走 loopback/selftest 工具锚不依赖双进程时序。
+6. **verify-m2 阈值自标定**：取 auth 轨迹相邻位移 + 0.005（免速度模型假设、抗偶发丢包），minSamples 防证据不足假 PASS。
+7. **regression 卡 `exe` 字段形状**：字符串会炸 regression.py（`'str' object has no attribute .get`）→ 必须双后端字典。
+8. **CTest 路径**：bash 不在 PATH，用完整路径 `E:/UE_STUDY_2026/.build-tools/cmake-3.31.6-windows-x86_64/bin/ctest.exe`。
+
+**下一步**：tag `net-m2` → close + release --done → M-NET3（打磨收官：插值缓冲参数外置 CLI / 异常路径不崩 / GUIDE §4 归档 / tag `net-m3` + `net-done` + `milestone/net-done` 分支大版本收官纪律 5b；行驶段循环 demo 旗标一并）。
