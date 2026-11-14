@@ -134,3 +134,25 @@ M-T1 收官后续候选项中**调度器增强三项**合入 M-T2（worldgen 轨
 
 M-T2.0 三机制落码 + selftest ⑩ → M-T2.1 tool 旗标 + 城市/夹具冒烟 + 证据 → M-T2.2 卡 + GUIDE + 台账 + close（tag `traffic-m2`）。冻结面：M-T0/M-T1 全部交付物语义冻结（gap_out_s=0 时信号时钟逐位同 M-T1；组锁在「同组第二辆车」出现前的行为 = 单持有者语义等价——直行车先到先得不变）；t0/t1 卡与夹具不动。
 
+
+## 11. M-T3 立项（2026-11-14，用户拍板「A A 最小集」）
+
+CityCar 接入 viewer + GameClock-ECS System 化。三处证据（2026-11-14 实读）：
+UE ZoneGraph 本体只有图数据+查询（`CalculateLocationAlongLane` ≈ `TrafficSim::carPosition` 同构 API），移动由独立消费方驱动——印证 M-T0 分层；bevy FixedMain / Carrot World::tick 口径已在 `tick_groups.hpp`/`System.hpp` 留痕复核；项目内 `NavAgentSystem`（M-N6）= ECS 固定步长系统完整同构先例。城市资产闭环 = city-tools 产 roadnet.json（W0-PLAN §1 Q-W2「citygen ↔ 第 8 步交通接口铁律」兑现）+ w3-m1 链路 `city.scene.engine`（42 辆 car_* 实体，8 种 kenney 车 glb）。
+
+### 11.1 Q-T12 sim 挂接形态 —— A（采纳）
+
+新 ECS 系统 `TrafficCarSystem`：`TrafficCarComponent`（scene 层 POD，route/s/speed/variant/enabled，零 nl/traffic 依赖，NavAgentComponent 同款口径）+ `SignedSystem<TrafficCar, Transform>`（系统内持 LaneGraph+TrafficSim+固定步长累加器），位置/yaw 写回 `TransformComponent`。渲染零改动（runScene 每帧现读 Transform 填实例表）。B（TickGroup lambda 直持 sim）否——绕开读写集/序列化契约。
+
+### 11.2 Q-T13 viewer 接入 —— A（采纳）
+
+`--traffic-city <DIR>`（DIR 含 city.scene.engine + roadnet.json）+ `--traffic-steps <N>`（每渲染帧强制 N 个 sim tick，截图确定性口径，nav-crowd-steps 同款；0 = 时钟自然驱动）。runScene 反序列化后分支：注册组件/系统库 → `car_` 前缀实体挂 TrafficCarComponent → system init（roadnet.json + fnv1a64 纯函数确定性 route，终点取与起点 lane 共端点的闭合回路 lane → loop=true 永续）。init 失败显式报错退出 2。
+**纠偏留痕**：摆方案时「runScene 一行不动」表述有误——nav-crowd 先例实为 run 函数内模式分支；实际形态 = runScene 内新增纯可选分支，`--traffic-city` 不给时逐位走原路径，kStage 不 bump，既有截图零重拍。
+
+### 11.3 Q-T14 验收与范围 —— 最小集（采纳）
+
+viewer 截图（双后端双机位，车位移可见）+ 日志锚（traffic-city: N cars / 定期 odometer 行）+ cases.json 卡 `t3-traffic-city`；TrafficCarSystem 单测 = traffic-tools selftest 新段（World 挂实体 + 位置写回 + yaw + 确定性 memcmp + serialise roundtrip）。**不做**：TrafficControl 信号可视化（红绿灯摆件另立项）、HUD 面板、traffic-tools sim 语义改动。
+
+### 11.4 冻结面
+
+M-T0/T1/T2 全部交付物语义冻结（TrafficSim 仅纯新增 `carPose`；既有 selftest 锚不变，断言总数锚随新段更新）；renderer/kStage/既有版本卡零触碰；t0/t1/t2 卡与夹具不动。

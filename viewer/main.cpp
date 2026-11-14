@@ -33,6 +33,8 @@
 #include "nl/net/Sync.hpp"        // NET M-NET2：同步层会话（服务器权威最小闭环）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
+#include "nl/scene/TrafficCarComponent.hpp"  // P8 M-T3：--traffic-city 交通车组件
+#include "nl/traffic/TrafficCarSystem.hpp"   // P8 M-T3：ECS 交通车系统
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"         // M-GL4：--script 脚本宿主（OnTick 接逻辑帧）
 #include "nl/script/ScriptHost.hpp"
@@ -179,6 +181,15 @@ struct Options {
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
+    // P8 M-T3：--traffic-city <DIR>（DIR 含 city.scene.engine + roadnet.json，
+    // city-tools/city2engine 产物）。scenePath 自动推导为 <DIR>/city.scene.engine；
+    // runScene 反序列化后给 car_* 实体挂 TrafficCarComponent + 注册
+    // TrafficCarSystem（TRAFFIC-PLAN §11.2；不指定时逐位走原路径）。
+    std::string trafficCityDir;
+    int trafficSteps = 0;                   // --traffic-steps <N>：每渲染帧强制 N 个
+                                            // 逻辑 tick（截图确定性口径，nav-crowd-steps
+                                            // 同款；0 = GameClock 自然节奏）
+    std::uint64_t trafficSeed = 12345;      // --traffic-seed <N>：route 生成的 fnv1a64 种子
     // M-E1b.5 渲染用例：--tick off|serial|parallel。off（缺省）= 静态场景（既有
     // 基线零风险）；serial/parallel = 帧循环注册 spin+read 系统并逐帧 tick（固定
     // dt=1/60，截图确定性——parallel/serial 同帧数逐字节一致）。
@@ -372,6 +383,42 @@ Options parseArgs(int argc, char** argv) {
             //（不是 assets 白名单资产）；ASCII + 存在性校验在 runScene 落地，
             // 失败走用法错误码 2。
             o.scenePath = argv[++i];
+        }
+        else if (a == "--traffic-city" && i + 1 < argc) {
+            // P8 M-T3：城市交通模式（TRAFFIC-PLAN §11.2）。DIR 须含
+            // city.scene.engine + roadnet.json；scenePath 推导为
+            // <DIR>/city.scene.engine，主路径校验照常生效。DIR 的 ASCII +
+            // 存在性在这里显式校验（runScene 只见推导后的 scene 路径）。
+            o.trafficCityDir = argv[++i];
+            for (const char c : o.trafficCityDir) {
+                const auto u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u > 0x7E) {
+                    std::cerr << "invalid --traffic-city: path must be printable ASCII\n";
+                    std::exit(1);
+                }
+            }
+            std::error_code ec;
+            if (!std::filesystem::is_directory(
+                    std::filesystem::path(o.trafficCityDir), ec) || ec) {
+                std::cerr << "invalid --traffic-city: not a directory: "
+                          << o.trafficCityDir << "\n";
+                std::exit(1);
+            }
+            o.scenePath =
+                (std::filesystem::path(o.trafficCityDir) /
+                 "city.scene.engine").string();
+            o.tickMode = "serial";   // 交通模式隐含逐帧 tick（§11.2）
+        }
+        else if (a == "--traffic-steps" && i + 1 < argc) {
+            const int n = std::atoi(argv[++i]);
+            if (n < 0 || n > 600) {
+                std::cerr << "invalid --traffic-steps (expected 0..600)\n";
+                std::exit(1);
+            }
+            o.trafficSteps = n;
+        }
+        else if (a == "--traffic-seed" && i + 1 < argc) {
+            o.trafficSeed = std::strtoull(argv[++i], nullptr, 10);
         }
         else if (a == "--editor" && i + 1 < argc) {
             // T1：材质图编辑器（material_graph v1 文本文件）。
@@ -3590,12 +3637,72 @@ int runScene(const Options& o) {
         int count = 0;
     };
     const bool ticking = (o.tickMode != "off");
-    if (ticking) {
+    const bool trafficCity = !o.trafficCityDir.empty();   // P8 M-T3
+    if (ticking && !trafficCity) {
         world.registerSystem(std::make_unique<SpinSystem>(world));
         world.registerSystem(std::make_unique<ReadCountSystem>(world));
         nl::core::log::infoCh("viewer", "ecs tick: ", o.tickMode,
                             " | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>)",
                             " | fixed dt=1/60");
+    }
+
+    // ---- P8 M-T3：--traffic-city 城市交通激活（TRAFFIC-PLAN §11.2）----
+    // ticking 已由 args 解析处隐含 serial；Spin/ReadCount 不注册（Write<Transform>
+    // 与交通系统冲突，车位姿由 sim 独占）。car_* 实体挂 TrafficCarComponent +
+    // 注册 TrafficCarSystem；roadnet.json 缺失/init 失败 = 显式报错退出 2。
+    nl::traffic::TrafficCarSystem* trafficSystem = nullptr;
+    if (trafficCity) {
+        world.getComponentLibrary().registerComponent<nl::scene::TrafficCarComponent>();
+        // 给 car_* 前缀实体挂组件（city2engine 产物命名契约 car_%02u）。
+        int carsTagged = 0;
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            if (world.getName(id).rfind("car_", 0) != 0) continue;
+            world.addComponent(
+                id, std::make_unique<nl::scene::TrafficCarComponent>(
+                        nl::scene::Entity{id, &world}));
+            ++carsTagged;
+        }
+        if (carsTagged == 0) {
+            nl::core::log::errorCh("viewer", "traffic-city: no car_* entities in ",
+                                 o.scenePath);
+            return 2;
+        }
+        // World flush（新建实体落表时序前提；组件增删即时，见 World.hpp 头注）。
+        world.flushEntityCreationAndRemoval();
+        world.registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(world));
+        trafficSystem = static_cast<nl::traffic::TrafficCarSystem*>(
+            world.findSystem(nl::traffic::TrafficCarSystem::kName));
+        // roadnet.json 读取（与 city.scene.engine 同目录，citygen 接口铁律产物）。
+        const std::string roadnetPath =
+            (std::filesystem::path(o.trafficCityDir) / "roadnet.json").string();
+        std::ifstream rf(roadnetPath, std::ios::binary);
+        if (!rf) {
+            nl::core::log::errorCh("viewer", "traffic-city: cannot open ",
+                                 roadnetPath);
+            return 2;
+        }
+        std::string jsonBytes((std::istreambuf_iterator<char>(rf)),
+                              std::istreambuf_iterator<char>());
+        nl::traffic::LaneGraph laneGraph;
+        std::string gerr;
+        if (!nl::traffic::buildLaneGraphFromRoadnetJson(
+                jsonBytes.data(), jsonBytes.size(), &laneGraph, &gerr)) {
+            nl::core::log::errorCh("viewer", "traffic-city: lane graph failed: ",
+                                 gerr);
+            return 2;
+        }
+        nl::traffic::TrafficSimParams simParams{};   // 默认 dt/accel/brake/minGap
+        simParams.loop = true;                       // §11.2：闭合 route 永续行驶
+        std::string ierr;
+        if (!trafficSystem->init(laneGraph, simParams, o.trafficSeed, ierr)) {
+            nl::core::log::errorCh("viewer", "traffic-city: system init failed: ",
+                                 ierr);
+            return 2;
+        }
+        nl::core::log::infoCh("viewer", "traffic-city: ", carsTagged,
+                            " cars registered | lanes=", laneGraph.laneCount(),
+                            " | seed=", o.trafficSeed,
+                            " | steps/frame=", o.trafficSteps);
     }
 
     const bool hudOn = o.hudEnabled || o.profilingHud;   // M-TR0：独立性能窗口
@@ -3926,7 +4033,29 @@ int runScene(const Options& o) {
             // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
             // P8 M-GL5：回调体迁移为 TickGroup 组注册（上方 PrePhysics/PostPhysics/
             // PostUpdateWork 三组），这里只喂时钟——组序 = 枚举序 = 旧 lambda 顺序。
-            gameClock.tick(clockDtMs);
+            // P8 M-T3：--traffic-steps N>0 = 每渲染帧强制 N 个逻辑 tick（截图
+            // 确定性口径，nav-crowd-steps 同款；0 = 时钟自然节奏，行为不变）。
+            // 每次调用钉 kStep 毫秒 = 恰出 1 逻辑步（真实 dt 抖动会让 N 次调用
+            // 产出不定步数，双跑 PNG 无法逐字节对拍）。
+            if (o.trafficSteps > 0) {
+                const double kStepMs = nl::core::GameClock::kStep * 1000.0;
+                for (int ts = 0; ts < o.trafficSteps; ++ts)
+                    gameClock.tick(kStepMs);
+            } else {
+                gameClock.tick(clockDtMs);
+            }
+            // P8 M-T3：交通 sim 日志锚（逐帧 odometer/arrived —— run.bat
+            // findstr 证据源；位移可核：odometer 随帧单调增）。
+            if (trafficSystem) {
+                char tbuf[128];
+                std::snprintf(tbuf, sizeof tbuf,
+                              "traffic-city: frame=%llu ticks=%llu odometer=%.2f m arrived=%d",
+                              static_cast<unsigned long long>(frame),
+                              static_cast<unsigned long long>(trafficSystem->stepCount()),
+                              trafficSystem->totalOdometer(),
+                              trafficSystem->arrivedCount());
+                nl::core::log::infoCh("viewer", tbuf);
+            }
             if (failed) break;
             // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
             if (audioWorld) {
@@ -4344,6 +4473,10 @@ void printUsage() {
               << "                                     on the NavMesh debug canvas (standalone mode)\n"
               << "  viewer.exe --nav-crowd-agents N    M-N6: agent count 1..8 (default 4)\n"
               << "  viewer.exe --nav-crowd-steps N     M-N6: fixed steps per rendered frame 1..600\n"
+              << "  viewer.exe --traffic-city DIR      M-T3: city traffic (DIR has city.scene.engine\n"
+              << "                                     + roadnet.json); implies --tick serial\n"
+              << "  viewer.exe --traffic-steps N       M-T3: logic ticks per rendered frame 0..600\n"
+              << "  viewer.exe --traffic-seed N        M-T3: fnv1a64 route seed (default 12345)\n"
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"

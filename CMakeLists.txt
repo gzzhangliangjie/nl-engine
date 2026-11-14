@@ -273,6 +273,7 @@ add_library(nl_core STATIC
     core/src/scene/World.cpp   # M-E0：ECS-lite World/Entity 核心（A 类并行轨道，零图形 API）
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
+    core/src/scene/TrafficCarComponent.cpp # P8 M-T3：ECS 交通车组件序列化
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
     core/src/physics/ContactEventStream.cpp # P8 M-D1：双缓冲 ContactEventStream（bevy 两帧保活，Jolt-free）
     core/src/physics/ContactEventSystem.cpp # P8 M-D1：scene::System 消费者（owner->Entity 过滤，自足系统）
@@ -289,6 +290,7 @@ add_library(nl_core STATIC
     core/src/traffic/LanePath.cpp  # P8 M-T0.1：车道图 A* 寻路（确定性线性扫 open 表，零图形 API）
     core/src/traffic/TrafficControl.cpp # P8 M-T1.0：红绿灯相位 + 路口占用锁（A 类轨道 feat/worldgen，零图形 API）
     core/src/traffic/TrafficSim.cpp # P8 M-T0.2：直线跟车仿真（C1 恒速+安全间距，固定 dt 车序逐位可复现）
+    core/src/traffic/TrafficCarSystem.cpp # P8 M-T3：ECS 交通车系统（固定步长 sim + Transform 写回，零图形 API）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）

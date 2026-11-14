@@ -247,4 +247,39 @@ bool TrafficSim::carPosition(size_t carIdx, LanePoint* out) const {
     return true;
 }
 
+// M-T3 纯新增：carPosition 的插值逻辑 + 所在段行进方向。与 carPosition 逐位
+// 同源（同一段循环），只在命中段多算 yaw；失败语义一致。
+bool TrafficSim::carPose(size_t carIdx, LanePoint* outPos, float* outYaw) const {
+    if (carIdx >= cars.size()) return false;
+    const TrafficCarState& st = cars[carIdx].state;
+    const Lane& lane = graph->lanes[static_cast<size_t>(st.lane)];
+    if (lane.points.size() < 2) return false;
+    float remain = st.s;
+    for (size_t i = 0; i + 1 < lane.points.size(); ++i) {
+        const LanePoint& a = lane.points[i];
+        const LanePoint& b = lane.points[i + 1];
+        const float dx = b.x - a.x;
+        const float dz = b.z - a.z;
+        const float seg = std::sqrt(dx * dx + dz * dz);
+        if (seg <= 0.0f) continue;
+        if (remain <= seg || i + 2 == lane.points.size()) {
+            const float t = (remain > seg ? 1.0f : remain / seg);
+            if (outPos) {
+                outPos->x = a.x + dx * t;
+                outPos->z = a.z + dz * t;
+            }
+            if (outYaw) *outYaw = std::atan2(dx, dz);
+            return true;
+        }
+        remain -= seg;
+    }
+    if (outPos) *outPos = lane.points.back();
+    if (outYaw) {
+        const LanePoint& a = lane.points[lane.points.size() - 2];
+        const LanePoint& b = lane.points.back();
+        *outYaw = std::atan2(b.x - a.x, b.z - a.z);
+    }
+    return true;
+}
+
 } // namespace nl::traffic

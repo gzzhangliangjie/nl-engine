@@ -10,6 +10,8 @@
 #include "nl/traffic/LaneGraph.hpp"
 #include "nl/traffic/LanePath.hpp"
 #include "nl/traffic/TrafficSim.hpp"
+#include "nl/traffic/TrafficCarSystem.hpp"  // P8 M-T3：ECS 交通车系统 selftest ⑪
+#include "nl/scene/TrafficCarComponent.hpp" // P8 M-T3：组件序列化 roundtrip
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION // 单 TU 实现（city-tools 先例）
 #include <stb_image_write.h>
@@ -626,6 +628,125 @@ int selftest(const std::string& emitFixture) {
                              sizeof(nl::traffic::TrafficCarState)) == 0);
         T0_CHECK(std::memcmp(&s7.cars[1].state, &s8.cars[1].state,
                              sizeof(nl::traffic::TrafficCarState)) == 0);
+    }
+
+    // --- ⑪ M-T3 TrafficCarSystem（TRAFFIC-PLAN §11）：ECS 写回 + 确定性 + 序列化 ---
+    {
+        // a) init + tick 写回：3 实体挂 TrafficCar+Transform，N tick 后位置落在
+        //    lane 几何上（≈折线插值）、yaw 四元数单位长度、stepCount 累加。
+        const int kCars = 3;
+        const int kTicks = 120;   // 2s 逻辑步
+        auto buildWorld = [&](nl::scene::World* w) {
+            auto& clib = w->getComponentLibrary();
+            clib.registerComponent<nl::scene::TransformComponent>();
+            clib.registerComponent<nl::scene::TrafficCarComponent>();
+            for (int k = 0; k < kCars; ++k) {
+                auto e = w->newEntity("car_0" + std::to_string(k));
+                e.addComponent(std::make_unique<nl::scene::TransformComponent>(e));
+                e.addComponent(std::make_unique<nl::scene::TrafficCarComponent>(e));
+            }
+            w->flushEntityCreationAndRemoval();
+            w->registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(*w));
+        };
+        nl::scene::World w1;
+        buildWorld(&w1);
+        auto* sys1 = static_cast<nl::traffic::TrafficCarSystem*>(
+            w1.findSystem(nl::traffic::TrafficCarSystem::kName));
+        T0_CHECK(sys1 != nullptr);
+        nl::traffic::TrafficSimParams sp{};   // 默认参数，loop 由 init 覆写
+        std::string ierr;
+        T0_CHECK(sys1->init(g, sp, 12345, ierr));
+        T0_CHECK(sys1->ready());
+        T0_CHECK(sys1->carCount() == kCars);
+        T0_CHECK(sys1->stepCount() == 0);
+        for (int f = 0; f < kTicks; ++f) w1.tick(1.0 / 60.0);
+        T0_CHECK(sys1->stepCount() == static_cast<std::uint64_t>(kTicks));
+        for (int k = 0; k < kCars; ++k) {
+            auto eo = w1.findEntityByName("car_0" + std::to_string(k));
+            T0_CHECK(eo.has_value());
+            const auto e = *eo;
+            const auto* tc = w1.getComponent<nl::scene::TrafficCarComponent>(e.getID());
+            T0_CHECK(tc != nullptr);
+            T0_CHECK(tc->route.size() >= 1u);           // route 落表
+            T0_CHECK(tc->speed > 0.0f);                 // 2s 后已起步（lock-only 夹具）
+            const auto* t = w1.getComponent<nl::scene::TransformComponent>(e.getID());
+            T0_CHECK(t != nullptr);
+            // 位置在夹具路网包围盒内（夹具 nodes x,z ∈ [0,10]）
+            T0_CHECK(t->local.position.x >= -1.0f && t->local.position.x <= 11.0f);
+            T0_CHECK(t->local.position.z >= -1.0f && t->local.position.z <= 11.0f);
+            // yaw 四元数单位长度（normalizeQuat 语义：|q| ≈ 1）
+            const auto& q = t->local.rotation;
+            const float qlen = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+            T0_CHECK(std::fabs(qlen - 1.0f) < 1e-4f);
+        }
+
+        // b) 确定性：同 seed 重建 + 同 tick 数 -> Transform/组件逐位一致
+        nl::scene::World w2;
+        buildWorld(&w2);
+        auto* sys2 = static_cast<nl::traffic::TrafficCarSystem*>(
+            w2.findSystem(nl::traffic::TrafficCarSystem::kName));
+        std::string ierr2;
+        T0_CHECK(sys2->init(g, sp, 12345, ierr2));
+        for (int f = 0; f < kTicks; ++f) w2.tick(1.0 / 60.0);
+        for (int k = 0; k < kCars; ++k) {
+            auto e1 = w1.findEntityByName("car_0" + std::to_string(k));
+            auto e2 = w2.findEntityByName("car_0" + std::to_string(k));
+            T0_CHECK(e1.has_value() && e2.has_value());
+            const auto* t1 = w1.getComponent<nl::scene::TransformComponent>(e1->getID());
+            const auto* t2 = w2.getComponent<nl::scene::TransformComponent>(e2->getID());
+            T0_CHECK(std::memcmp(&t1->local, &t2->local, sizeof(t1->local)) == 0);
+            const auto* c1 = w1.getComponent<nl::scene::TrafficCarComponent>(e1->getID());
+            const auto* c2 = w2.getComponent<nl::scene::TrafficCarComponent>(e2->getID());
+            T0_CHECK(c1->route == c2->route);
+            T0_CHECK(std::memcmp(&c1->s, &c2->s, sizeof(float)) == 0);
+            T0_CHECK(std::memcmp(&c1->speed, &c2->speed, sizeof(float)) == 0);
+        }
+
+        // c) 组件序列化 roundtrip（M-E2 纪律：float->json->float 无损）
+        {
+            auto e1 = w1.findEntityByName("car_00");
+            T0_CHECK(e1.has_value());
+            const auto* c1 = w1.getComponent<nl::scene::TrafficCarComponent>(e1->getID());
+            const auto j = c1->serialise();
+            const std::string jdump = j.dump();
+            nl::scene::TrafficCarComponent c2(nl::scene::Entity{e1->getID(), &w1});
+            c2.deserialise(nlohmann::json::parse(jdump));
+            T0_CHECK(c2.route == c1->route);
+            T0_CHECK(std::memcmp(&c2.s, &c1->s, sizeof(float)) == 0);
+            T0_CHECK(std::memcmp(&c2.speed, &c1->speed, sizeof(float)) == 0);
+            T0_CHECK(c2.variant == c1->variant && c2.enabled == c1->enabled);
+        }
+
+        // d) 卡顿帧防爆：单次 tick(10/60) 最多补 kMaxStepsPerTick 步
+        nl::scene::World w3;
+        buildWorld(&w3);
+        auto* sys3 = static_cast<nl::traffic::TrafficCarSystem*>(
+            w3.findSystem(nl::traffic::TrafficCarSystem::kName));
+        std::string ierr3;
+        T0_CHECK(sys3->init(g, sp, 777, ierr3));
+        w3.tick(10.0 / 60.0);
+        T0_CHECK(sys3->stepCount() ==
+                 static_cast<std::uint64_t>(nl::traffic::TrafficCarSystem::kMaxStepsPerTick));
+
+        // e) 负向：无 enabled 实体 = init 显式失败（不静默）
+        {
+            nl::scene::World w4;
+            auto& clib = w4.getComponentLibrary();
+            clib.registerComponent<nl::scene::TransformComponent>();
+            clib.registerComponent<nl::scene::TrafficCarComponent>();
+            auto e = w4.newEntity("car_00");
+            e.addComponent(std::make_unique<nl::scene::TransformComponent>(e));
+            auto comp = std::make_unique<nl::scene::TrafficCarComponent>(e);
+            comp->enabled = false;
+            e.addComponent(std::move(comp));
+            w4.flushEntityCreationAndRemoval();
+            w4.registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(w4));
+            auto* sys4 = static_cast<nl::traffic::TrafficCarSystem*>(
+                w4.findSystem(nl::traffic::TrafficCarSystem::kName));
+            std::string ierr4;
+            T0_CHECK(!sys4->init(g, sp, 12345, ierr4));
+            T0_CHECK(ierr4.find("no enabled TrafficCar entities") != std::string::npos);
+        }
     }
 
     // --- 夹具落盘（ctest build 正向用例数据源，DEPENDS 链） ---

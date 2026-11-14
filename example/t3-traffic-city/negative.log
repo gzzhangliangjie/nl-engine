@@ -1,0 +1,8 @@
+[nl:info] window created 1280x720 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 1280x720
+[nl:info|viewer] ecs scene: 315 objects | 0 lights (0 point) | ambient 0.28
+[nl:info|scene] ecs scene ready: city.scene.engine | objects=315 lights=0 ambient=0.28 shadowLights=0 | batches=215 | triangles=22923 | shader=dxil
+[nl:error|viewer] traffic-city: cannot open E:\UE_STUDY_2026\nl-engine-worldgen\example\t3-traffic-city\empty-dir\roadnet.json
+[nl:info] window destroyed

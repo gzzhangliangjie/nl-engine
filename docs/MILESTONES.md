@@ -3607,3 +3607,21 @@
 4. groupHolders 类型少一层嵌套（vector<int32_t>[2] vs vector<vector<int32_t>>[2]）编译期抓住；sigFixture/serr 跨块作用域 C2065 ×2；replace 手写长度坑再现（70≠79，needle.size() 纪律）。
 
 **下一步**：M-T3（CityCar 实体接入 viewer + GameClock-ECS System 化）需实读渲染/场景/ECS 后摆证据拍板；需求感应进 citygen 侧 signal 填充策略归 W 轨道。
+
+## T0 M-T3 — CityCar 接入 viewer：TrafficCarSystem ECS + GameClock 逻辑帧（feat/worldgen，2026-11-14，tag `traffic-m3`）
+
+**动作**：GAME-DEV-ORDER 第 9 步收口（用户拍板「A A 最小集」，TRAFFIC-PLAN §11）。Q-T12=A 新 ECS 系统 `TrafficCarSystem`（`SignedSystem<TrafficCar, Transform>`，NavAgentSystem 同构：系统内持 LaneGraph 值拷 + TrafficSim + 固定步长累加器，位置/yaw 写回 TransformComponent，渲染实例表零改动消费）+ `TrafficCarComponent`（scene 层 POD，零 nl/traffic 依赖）+ `TrafficSim::carPose`（纯新增）。Q-T13=A viewer `--traffic-city <DIR>` + `--traffic-steps <N>` + `--traffic-seed <N>`（runScene 纯可选分支，不指定逐位原路径，kStage 不 bump；car_* 实体挂组件；fnv1a64 纯函数 route——闭合回路选终点 loop=true 永续，与 city-tools assetVariantHash 同常数同字节序）。Q-T14=最小集（截图+日志锚+cases 卡；信号可视化不做）。
+
+**提交版本**：`feat/worldgen` M-T3 收口提交（tag `traffic-m3`）。
+
+**完成情况**：core 三件套（TrafficCarComponent.hpp/.cpp + TrafficCarSystem.hpp/.cpp）+ TrafficSim.carPose + viewer 三旗标 + traffic-tools selftest ⑪ 段（4740 断言 = 4685+55，ECS 写回/双 World memcmp 确定性/serialise roundtrip/卡顿帧防爆/负向显式失败）+ example/t3-traffic-city（city.scene.engine + roadnet.json 接口铁律兑现 + run.bat 六段 ALL GREEN + 双后端 4 图）+ cases.json 卡 134；回归 t3 4/4 + t2 12/12 + t0 12/12 全 bytes；ctest 双后端全绿。42 车城市永续车流，600 逻辑 tick odometer 3437m 单调，车流位移街景可辨（与 w3-m1 静态基线对照确认无渲染回归）。
+
+**踩坑情况**
+1. **`--traffic-steps` 首版用真实 dt**：`gameClock.tick(clockDtMs)` N 次调用产出的逻辑步数随 dt 抖动（首冒烟 frame2 已 369 ticks ≠ 预期 150），双跑 PNG 必不一致——修为每次调用钉 `GameClock::kStep*1000` ms（恰 1 步/调用，8 帧×75=600 逐帧精确）。教训：**「调 N 次 tick」≠「N 步」，步数确定性必须钉步长**。
+2. **run.bat 漏定义 `%OUT%`**：沿用 w3-m0 风格时 set 的是 CITY，`%OUT%` 展开为空串 → 全部产物按相对路径落到仓库根（16 个文件）；根修 = `set "OUT=%~dp0"` + 逐个点名清理。教训：**复制 run.bat 模板时先核对 set 变量与引用一一对应**。
+3. **viewer 没有裸 usage 模式**：seg6 首版 `"%EXE%" > usage.log` 让 viewer 无参起窗口渲染不退出（7.7MB 日志 + 2 僵尸进程烧 GPU 10 分钟）——对照 M15.2 退出闸事故的同族坑：`--frames` 缺省时 viewer 进交互循环。修 = usage 段改用 traffic-tools（exit 2 实测）。
+4. **run.bat for 循环 VULKAN 覆盖 DX12 基线**：同输出文件名让基线 PNG 变 VULKAN 内容，回归 dx12 比对差 116px（首版 `%SUF%` 还会踩 for 解析期展开坑）——seg2/3 改显式双行，VULKAN 输出带 `-VULKAN` 后缀。教训：**双后端截图必须分文件，基线命名 = DX12 无后缀 / VULKAN 带 -VULKAN**。
+5. bat echo 行内 `-> exit 2` 的 ` 2>` 被当重定向吞显示（命令照跑）——措辞改 `(expect exit 2)`。
+6. 纠偏留痕：摆方案时「runScene 一行不动」表述有误——nav-crowd 先例实为 run 函数内模式分支，实际形态 = runScene 内纯可选分支（已写入 TRAFFIC-PLAN §11.2 纠偏段）。
+
+**下一步**：T0 轨道四里程碑（T0~T3）整轨 merge 回 master 待用户指令（S13 教训：merge 后须重跑该轨全部历史版本卡）；需求感应信号进 citygen signal 填充策略归 W 轨道；TrafficControl 信号可视化（红绿灯摆件）另立项。

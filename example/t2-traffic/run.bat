@@ -29,7 +29,7 @@ if errorlevel 2 (
 )
 type "%D%usage.log"
 
-echo === selftest --verbose (4685 asserts, section 10 M-T2 anchors) ===
+echo === selftest --verbose (4740 asserts, section 10+11 M-T2/M-T3 anchors) ===
 "%EXE%" selftest --verbose > "%D%selftest.log" 2>&1
 if errorlevel 1 (
     type "%D%selftest.log"

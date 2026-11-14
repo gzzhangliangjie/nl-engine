@@ -99,3 +99,36 @@ sameRoad（无序节点对相同）不覆盖**共线相邻路段**：同一条�
 - selftest **4685 断言**全绿（⑩ 段：gap-out 帧跳变 481 / 需求反锚 / 防抖 / loop 环 odometer>50m+双跑 memcmp+单程对照 / 转弯独占串行+heldNodeCount 0+双跑）；ctest `m-t0-traffic-*` 9/9 ×2 双后端。
 - 城市 32 车（49 lock-only 节点）：**arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m，组锁并行 +143%）**、min gap 1.35m、rc 0；gap-out 夹具 6 车 locked 0；loop 4/4 闭合环。
 - `example/t2-traffic/run.bat` 六段 ALL GREEN；regression `--only t2-traffic` + `t1-traffic`/`t0-traffic` 保形。
+
+## 9. M-T3 CityCar 接入 viewer（traffic-m3，2026-11-14）
+
+拍板与证据链见 `TRAFFIC-PLAN.md` §11（Q-T12=A ECS 系统 / Q-T13=A `--traffic-city` / Q-T14=最小集）。三处参考：UE ZoneGraph 本体只有「图数据+查询」（`CalculateLocationAlongLane` ≈ `TrafficSim::carPosition` 同构 API），移动由独立消费方驱动；bevy FixedMain / Carrot World::tick 口径已在 `tick_groups.hpp`/`System.hpp` 留痕复核；`NavAgentSystem`（M-N6）= ECS 固定步长系统同构先例。
+
+### 9.1 新增交付物（core）
+
+| 文件 | 内容 |
+|---|---|
+| `nl/scene/TrafficCarComponent.hpp` + `core/src/scene/TrafficCarComponent.cpp` | POD 组件（route/s/speed/variant/enabled），**零 nl/traffic 依赖**（scene→traffic 反向依赖禁令，NavAgent 同款）；serialise roundtrip |
+| `nl/traffic/TrafficCarSystem.hpp` + `core/src/traffic/TrafficCarSystem.cpp` | `SignedSystem<TrafficCar, Transform>`；内持 LaneGraph 值拷 + TrafficSim + 固定步长累加器（dt=1/60、卡顿帧防爆 `kMaxStepsPerTick=8`）；`carPose` 写回位置 {x,0,z} + yaw 四元数 |
+| `TrafficSim::carPose`（纯新增） | carPosition 插值逻辑 + 所在段行进方向 `atan2(dx,dz)`；既有函数/锚零触碰 |
+
+### 9.2 viewer 旗标（runScene 可选分支，不指定时逐位走原路径）
+
+- `--traffic-city <DIR>`：DIR 含 `city.scene.engine` + `roadnet.json`（citygen 接口铁律产物，t3 资产 = w3-m1 场景 + w0-m3 roadnet，同 seed 12345 size 6 几何同源）。隐含 `--tick serial`；Spin/ReadCount 不注册（Write<Transform> 冲突，车位姿由 sim 独占）。`car_*` 前缀实体挂 TrafficCarComponent；roadnet 缺失/init 失败 = exit 2。
+- `--traffic-steps <N>`：每渲染帧强制 N 个逻辑 tick（nav-crowd-steps 同款；0 = GameClock 自然节奏）。截图口径 8 帧×75 = 600 tick ≈ 10s 车流。
+- `--traffic-seed <N>`：route 生成的 fnv1a64 种子（默认 12345；与 city-tools `assetVariantHash` 同常数同字节序）。
+
+### 9.3 route 生成（零 RNG）
+
+起点 lane = `fnv1a64(seed,"rout",carIdx) % laneN`；终点 = 闭合候选集（`toNode == L0.fromNode` 且 `fromNode != L0.toNode`，排除直接掉头回环）中 hash 选取，`findPathOnLanes` 连路 → 环闭合 + `loop=true` 永续行驶；闭合集空回落单程。起步弧长 hash 散布 `[0.1,0.5]·len`（42 车不同点叠置）。车序 = EntityID 升序。
+
+### 9.4 selftest ⑪（traffic-tools）
+
+ECS 写回（init 车数/route 落表/N tick Transform 落 lane 几何 + yaw 单位四元数）／确定性（同 seed 双 World memcmp 逐位）／serialise roundtrip 无损／卡顿帧防爆（tick 10/60 恰补 8 步）／负向（无 enabled 实体 init 显式失败）。ctest `m-t0-traffic-*` 既有用例覆盖（selftest 单命令全段执行）。
+
+### 9.5 验收记录
+
+- selftest **4740 断言**全绿（⑪ 段 55 断言：ECS 写回 init/route 落表/Transform 落 lane 几何+yaw 单位四元数；同 seed 双 World memcmp 逐位；serialise roundtrip 无损；卡顿帧防爆 tick(10/60) 恰补 8 步；无 enabled 实体 init 显式失败）；ctest `m-t0-traffic-*` 双后端全绿。
+- `example/t3-traffic-city/run.bat` 六段 ALL GREEN（selftest / top+street 双后端 4 图 + register/odometer 锚 / det 双跑 PNG fc 逐字节 / negative exit 2 / usage exit 2）。
+- 回归 `--only t3-traffic-city` 4/4 + `t2-traffic` 12/12 + `t0-traffic` 12/12 全 bytes；cases.json 卡 134（selftest 断言数锚 4685→4740 七处同步，t2 run.bat 锚同步）。
+- 车流证据：600 逻辑 tick odometer 3437.15m 单调；街景机位车流位移/朝向可辨（w3-m1 静态基线同机位对照无渲染回归）。

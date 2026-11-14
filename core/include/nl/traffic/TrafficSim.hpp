@@ -70,6 +70,11 @@ struct TrafficSim {
 
     // 车辆世界坐标（lane 折线按 s 线性插值；XZ 面）
     bool carPosition(size_t carIdx, LanePoint* out) const;
+
+    // M-T3 纯新增（不改 carPosition 语义与既有锚）：坐标 + 行进方向 yaw
+    // （弧度，atan2(dx,dz) 口径 = 车头贴行进方向；城市网格直线 lane 恒定，
+    // 多段折线取 s 所在段方向）。任一输出指针可为 nullptr。
+    bool carPose(size_t carIdx, LanePoint* outPos, float* outYaw) const;
 };
 
 } // namespace nl::traffic
