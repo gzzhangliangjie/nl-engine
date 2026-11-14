@@ -2944,7 +2944,7 @@
 5. **跨进程 DX12 视口取证三连败留账**：PrintWindow(viewer 子窗) 全黑（swapchain 不响应 WM_PRINT，M-E6 根因坐实）；BitBlt 屏幕 + TOPMOST 双置顶仍被用户桌面另一 TOPMOST 会话窗压住（Z 序竞争）→ 遮挡自检 FAIL 闸（diff-rate≈1.0 显式失败不落假图）；可靠取证 = 引擎侧帧 dump（`--editor-shot` 挂待拍板）。
 6. **SendInput 点击链被遮挡窗抢走**：editor 被盖后全局鼠标注入全打到遮挡窗（坐标本身无误——PIL 实测树行高 17px）→ M-E13 GUI 证据走 `--selftest-outliner` 确定性路径（M-E9 口径延续）。
 
-**下一步**：editor 轨道 M-E0~M-E13 全部收官；候选后续 = 引擎侧 `--editor-shot` 帧 dump（视口可靠取证）/ outliner 框选 overlay 交互化 / 整轨 merge 回 master（待用户指令，merge 后重跑该轨全部历史版本卡）。
+**下一步**：editor 轨道 M-E0~M-E13 全部收官；候选后续 = 引擎侧 `--editor-shot` 帧 dump（视口可靠取证）/ outliner 框选 overlay 交互化。（**2026-11-14 23:2x 已整轨 merge 回 master（`77bb1c7` no-ff + 冲突修复 `4930104`，用户拍板「合并到主干」）：M-E7~E13 十提交全量并入 master（分叉点 eb55cb2 之后 master 已并 script/water/nl-done/M-NL2-C 19 提交）；冲突 2 处——scene.cpp sceneLights_ 状态模型取 M-NL2-C tracking（supersedes M-E7 permanent SRV|CopyDest：permanent 不插 barrier 与天气链冲突，editor 运行时改灯 require(CopyDest) 由 tracking 初值覆盖）、viewer runScene M-E7 light cvar 链与 M-NL2-C weather/sky 填充正交串联。merge 后按 S13 教训重跑该轨 10 卡：机械闸拦下 1 处真回归——Scene::updateLights（M-E7 运行时改灯直刷）原靠 initScene permanent 免声明写 buffer，tracking 模型接管后变 Unknown prior state → Device Removed（m-e7 探针 NVRHI error 实锤）→ 直刷列表补 beginTrackingBufferState(CopyDest) 根修（`4930104`）；顺手修 m-e13-gui-probe 两坑（窗口中途缩没 158x26 假图 → grab 前 ensure_front；wt 轮坐标判据主树布局失效 → 全图蓝底占比自适应 baseline 771 vs multi 3114）。终闸：m-e3~e6 0 fail + m-e7/e8/e9/e10/e12 全过 + m-e13 ALL PASS + rpc_self_test PASS + 双后端 BUILD OK（VULKAN 两次 C1090 mspdbsrv 瞬态重跑过）；tag `editor-done` + 分支 `milestone/editor-done`。**）
 
 ## editor轨道 M-E7：模型预览 + cvar 反射通道（feat/editor，2026-11-14，tag `e-m7-done`）
 
