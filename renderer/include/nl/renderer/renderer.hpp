@@ -452,10 +452,30 @@ struct HudFrame {
     VsmDebugUi vsmDebug;               // M15.1：默认关的 VSM 页池占用窗口（--vsm-panel）
 };
 
+// M-UI0：RmlUi demo 输入/开关通道（POD，viewer -> renderer 单向喂）。缺省全零 =
+// 非 --rmlui-demo 路径零扰动（backend 不建 context、不碰管线，历史基线一像素不动）。
+// 键盘/文本通道与 HudFrame::ConsoleKeyEvent 同形（GLFW 键码原值 + 修饰键），
+// viewer 直接复制同一段缓冲喂两路。
+struct RmlUiFrame {
+    bool  enabled = false;               // viewer --rmlui-demo（仅此为 true 时全链生效）
+    float displayWidth = 0.0f, displayHeight = 0.0f;
+    float deltaSeconds = 1.0f / 60.0f;
+    float mouseX = 0.0f, mouseY = 0.0f, mouseWheel = 0.0f;
+    bool  mouseLeftDown = false, mouseRightDown = false;
+    struct KeyEvent {
+        int  key = 0;                    // GLFW key code 原值
+        bool down = false;               // PRESS/REPEAT = true，RELEASE = false
+        bool ctrl = false, shift = false, alt = false;
+    };
+    KeyEvent keyEvents[16] = {};         // 本帧键盘事件（溢出丢弃最旧，同 HudFrame 口径）
+    int  keyEventCount  = 0;
+    unsigned int textChars[32] = {};     // 本帧文本字符（codepoint）
+    int  textCharCount  = 0;
+};
+
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。
 // 公开头只放 POD；meshFile 指向调用方稳定存储（viewer 侧字符串数组）。
-struct SceneObjectDesc {
-    float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
+struct SceneObjectDesc {    float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
     float tint[3];          // ModelComponent::tint
     float roughness = 1.0f; // M-E1b.3：逐实例 PBR 粗糙度（缺省 1=完全粗糙）
     float metallic  = 0.0f; // M-E1b.3：逐实例 PBR 金属度（缺省 0=介电质）
@@ -585,7 +605,11 @@ public:
                                             // M14C1（S14-C）：--mode probe-adaptive
                                             //（探针自适应加密；走 initProbe 资产链，
                                             // Mark/Spawn 两 pass + atlas 预留区）。
-                                            bool probeAdaptiveMode = false);
+                                            bool probeAdaptiveMode = false,
+                                            // M-UI0：--rmlui-demo（RmlUi UI 层；
+                                            // 缺省 false = 不建 context 不碰管线，
+                                            // 既有基线零扰动）。
+                                            bool rmluiMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -604,7 +628,8 @@ public:
     // + 可选同帧回读写 PNG + present。hud 为空时完全不碰 ImGui，历史版本的截图基线保持不变。
     // screenshotPath 非空时用 NVRHI staging texture 真回读 GPU 像素，不是 CPU 画个假图。
     bool renderFrame(ClearColor color, const FrameParams& frame,
-                     const char* screenshotPath = nullptr, HudFrame* hud = nullptr);
+                     const char* screenshotPath = nullptr, HudFrame* hud = nullptr,
+                     RmlUiFrame* rml = nullptr);
 
     // 把当前后端调试层里积累的消息转成日志并返回新增的设备错误数（验收要求为 0）。
     int drainMessages();
@@ -659,6 +684,16 @@ public:
     // 贴参考图（present 层 quad，HUD 之下）。失败返回 false（lastError() 带原因），
     // 画面保持全 live 不受影响。
     bool loadCompareImage(const char* path);
+
+    // M-UI0：UiSink 落点转发（viewer 实现 nl::script::UiSink 时调这五个方法转发到
+    // RmlUiBackend；backend 未启用时恒失败码，Bindings 侧返回 rc）。handle 由
+    // loadDocument 发放（>0），脚本侧不透明。elementGetText 的 outText 指向
+    // backend 静态缓冲（「下次同线程调用前有效」账本，C# 侧立即拷贝）。
+    int  rmlLoadDocument(const char* path);
+    bool rmlCloseDocument(int handle);
+    bool rmlShowDocument(int handle, bool show);
+    bool rmlElementSetText(int handle, const char* elId, const char* text);
+    bool rmlElementGetText(int handle, const char* elId, const char** outText);
 
 private:
     Renderer();

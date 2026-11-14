@@ -55,6 +55,8 @@ public:
                      bool shadowMode, bool referenceMode, bool probeMode,
                      bool clusterBlas, bool waterEnable,
                      bool restirMode, bool probeAdaptiveMode,
+                     // M-UI0：--rmlui-demo（缺省关 = 不建 context 不碰管线）。
+                     bool rmluiMode,
                      std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 
@@ -91,11 +93,20 @@ public:
     // M10.3：--compare <png> 参考图加载（转发 scene_.loadCompareImage）。
     virtual bool loadCompareImage(const char* path, std::string& outError) = 0;
 
-    // 一帧：clear → 模型绘制（MVP / cull）→（可选）ImGui HUD 叠加
-    // →（可选）回读 GPU 像素写 PNG → present。hud 为空时不碰 ImGui（历史基线不变）。
+    // 一帧：clear → 模型绘制（MVP / cull）→（可选）RmlUi 叠加（M-UI0，rml 非空
+    // 且 enabled 时生效）→（可选）ImGui HUD 叠加 →（可选）回读 GPU 像素写 PNG →
+    // present。hud 为空时不碰 ImGui，rml 为空/未启用时不碰 RmlUi（历史基线不变）。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,
-                             const char* screenshotPath, HudFrame* hud,
+                             const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml,
                              std::string& outError) = 0;
+
+    // M-UI0：UiSink 落点转发（backend 未启用时恒失败码——rmlLoadDocument 回 0，
+    // 其余回 false）。两后端实现 = 委派给共享的 rmlui_ 成员（与 hud_ 同构）。
+    virtual int  rmlLoadDocument(const char* path) = 0;
+    virtual bool rmlCloseDocument(int handle) = 0;
+    virtual bool rmlShowDocument(int handle, bool show) = 0;
+    virtual bool rmlElementSetText(int handle, const char* elId, const char* text) = 0;
+    virtual bool rmlElementGetText(int handle, const char* elId, const char** outText) = 0;
 
     // 调试层消息转日志；返回新增设备错误数
     virtual int  drainMessages() = 0;

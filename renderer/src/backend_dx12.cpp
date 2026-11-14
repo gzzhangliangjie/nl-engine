@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "scene.hpp"
 #include "hud.hpp"
+#include "rmlui_backend.hpp"
 #include "gpu_timer.hpp"
 
 #if defined(NL_BACKEND_DX12)
@@ -75,6 +76,7 @@ public:
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               bool shadowMode, bool referenceMode, bool probeMode, bool clusterBlas,
               bool waterEnable, bool restirMode, bool probeAdaptiveMode,
+              bool rmluiMode,
               std::string& outError) override {
         // M13.0：--cluster-blas 传入 Scene（initDag 链消费；缺省关零扰动）。
         scene_.setClusterBlas(clusterBlas);
@@ -224,6 +226,10 @@ public:
             sceneOk = scene_.init(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         if (!sceneOk) return false;
         if (!hud_.init(device_, "dxil", "vsMain", "psMain", outError)) return false;
+        // M-UI0：RmlUi 层（--rmlui-demo 才建 context / 字体 / demo 文档；缺省关 =
+        // 零开销零扰动，rmlLoadDocument 走空实现回失败码）。
+        if (rmluiMode && !rmlui_.init(device_, "dxil", "vsMain", "psMain", outError))
+            return false;
         info_.modelName = scene_.modelName();
         info_.skinRadius = scene_.skinRadius();
         info_.triangleCount = scene_.triangleCount();
@@ -404,7 +410,7 @@ public:
     }
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
-                     const char* screenshotPath, HudFrame* hud,
+                     const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml,
                      std::string& outError) override {
         if (!swapchain_ || !device_) { outError = "renderer not initialized"; return false; }
         const UINT index = swapchain_->GetCurrentBackBufferIndex();
@@ -418,10 +424,25 @@ public:
         // 唯一落点）/ endFrame（fence signal + 截图回读 + present）。纯搬移零逻辑
         // 变化；逻辑 tick / 插值 alpha 消费留在 viewer game loop（renderFrame 调用
         // 之前），beginFrame 不吞逻辑 tick（M-GL3 口径）。
-        beginFrame(index, hud);
+        beginFrame(index, hud, rml);
         nvrhi::StagingTextureHandle staging =
-            recordFrame(index, color, frame, screenshotPath, hud);
+            recordFrame(index, color, frame, screenshotPath, hud, rml);
         return endFrame(index, staging, screenshotPath, outError);
+    }
+
+    // ---- M-UI0：UiSink 落点转发（backend 未启用时恒失败码——rmlLoadDocument 回 0）----
+    int  rmlLoadDocument(const char* path) override {
+        return rmlui_.loadDocument(path);
+    }
+    bool rmlCloseDocument(int handle) override { return rmlui_.closeDocument(handle); }
+    bool rmlShowDocument(int handle, bool show) override {
+        return rmlui_.showDocument(handle, show);
+    }
+    bool rmlElementSetText(int handle, const char* elId, const char* text) override {
+        return rmlui_.elementSetText(handle, elId, text);
+    }
+    bool rmlElementGetText(int handle, const char* elId, const char** outText) override {
+        return rmlui_.elementGetText(handle, elId, outText);
     }
 
 private:
@@ -429,7 +450,7 @@ private:
     // slot fence 等待、pipeline ensure、全部 timer poll/回读消费（GPU 整帧、cull
     // stats、BLAS/TLAS 耗时、TLAS 探针）、hud build（console/audio/inputDebug 三
     // 窗口，M-I2）、info_ 写回。「开列表前消费」从注释升级为结构防线。
-    void beginFrame(UINT index, HudFrame* hud) {
+    void beginFrame(UINT index, HudFrame* hud, RmlUiFrame* rml) {
         // ---- frame in flight = 2 同步安全网 ----
         // 先等 GPU 用完这个 swapchain slot 上一帧的内容，再往里记录新一帧。
         // 删掉这段 = CPU 在 GPU 仍持有该 backbuffer 时又 clear/draw → 同步报错（S0-PLAN 校验点）。
@@ -488,6 +509,9 @@ private:
         info_.lastGpuMs = gpuLastMs_;                         // M6.2：真实整帧 GPU 时间（机器出口）
         info_.instanceCount = scene_.instanceCount();         // M-E1b.0：ECS 场景实例数
         info_.particleAlive = scene_.particlesAlive();        // M-PT0：活粒子数（关闭恒 0）
+        // M-UI0：RmlUi CPU 侧（输入喂数 + 热重载 + Update/Render 收集 draw items）。
+        // 开列表前消费纪律同 hud build——几何上传列表在 recordFrame 之前执行完。
+        if (rml && rml->enabled) rmlui_.build(*rml);
     }
 
     // ---- M8.2 t0 段二：recordFrame = 帧列表生命周期唯一落点 ----
@@ -497,7 +521,7 @@ private:
     nvrhi::StagingTextureHandle recordFrame(UINT index, ClearColor color,
                                             const FrameParams& frame,
                                             const char* screenshotPath,
-                                            HudFrame* hud) {
+                                            HudFrame* hud, RmlUiFrame* rml) {
         // M8.1：帧列表常驻复用（frameCmd_ 成员；每帧列表句柄析构会连带销毁 DXR
         // scratch manager 的 chunk——AS build ECL 在飞行中就被 final-release，
         // debug layer CORRUPTION #921 → 后续帧 fail-fast 0x87D，见成员声明注释）。
@@ -538,6 +562,17 @@ private:
         if (index < framebuffers_.size() && framebuffers_[index]) {
             scene_.drawCompareImage(cmd, framebuffers_[index],
                                     nvrhi::Viewport(float(extent_.width), float(extent_.height)));
+        }
+        // M-UI0：RmlUi 叠加（画在 compare 之后、ImGui HUD 之前——ImGui 调试面板
+        // 永远压顶；仅 rml 非空且 enabled 时生效，缺省零开销）。
+        if (rml && rml->enabled && index < framebuffers_.size() && framebuffers_[index]) {
+            std::string rmlErr;
+            if (rmlui_.ensurePipeline(device_, framebuffers_[index]->getFramebufferInfo(), rmlErr)) {
+                rmlui_.draw(cmd, framebuffers_[index],
+                            nvrhi::Viewport(float(extent_.width), float(extent_.height)));
+            } else {
+                nl::core::log::errorCh("renderer", "RmlUi pipeline: ", rmlErr);
+            }
         }
         // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
         if (hud && index < framebuffers_.size() && framebuffers_[index]) {
@@ -779,6 +814,7 @@ private:
         // 场景 / HUD 资源（含 binding set / pipeline）必须在 device 仍存活时释放。
         scene_.shutdown();
         hud_.shutdown();
+        rmlui_.shutdown();   // M-UI0：RmlUi context / 几何 / 纹理（device 存活期释放）
         gpuTimer_.shutdown();   // M0.6：device 仍存活时释放 timer query
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
@@ -833,6 +869,7 @@ private:
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;
     Hud                                   hud_;
+    RmlUiBackend                          rmlui_;   // M-UI0：--rmlui-demo 才初始化
     GpuTimer                              gpuTimer_;
     float                                 gpuLastMs_ = 0.0f;  // M6.2：最近一次 resolve 的整帧 GPU 时间
     nvrhi::TextureHandle                  depth_;
