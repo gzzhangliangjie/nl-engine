@@ -8,7 +8,7 @@
         <div id="title">UiScript document</div>
         <div id="status">loaded</div>
         <div id="tick">tick -</div>
-        <div class="btn" onclick="ping">Ping (script doc)</div>
+        <div class="btn" id="btnScript" onclick="ping">Ping (script doc)</div>
     </div>
 </body>
 </rml>

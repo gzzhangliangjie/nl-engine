@@ -14,7 +14,7 @@ body {
 }
 
 .demo     { left: 24dp; top: 24dp; }
-.scriptdoc { right: 24dp; top: 24dp; background-color: #16281fb8; }
+.scriptdoc { left: 24dp; top: 170dp; background-color: #16281fb8; }
 
 #title {
     font-size: 18dp;
