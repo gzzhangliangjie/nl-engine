@@ -46,10 +46,24 @@ namespace NlScript.Examples
         // ApiTable*——把 dt 位型当表指针解引用 = AV，tour 首版实测教训）。
         public static unsafe int OnTick(IntPtr args, int size)
         {
-            if (size < sizeof(double) || args == IntPtr.Zero) return 1;
-            if (Time.GetState(out _, out _, out ulong tick, out _) != TimeCode.Ok) return 0;
+            if (size < sizeof(double) || args == IntPtr.Zero)
+            {
+                Log.Write(1, "ui-script: ontick bad args");
+                return 1;
+            }
+            if (Time.GetState(out _, out _, out ulong tick, out _) != TimeCode.Ok)
+            {
+                Log.Write(1, "ui-script: ontick Time.GetState failed");
+                return 0;
+            }
+            if (tick <= 3)
+                Log.Write(2, $"ui-script: ontick alive, tick={tick}");
             if (tick % 60 == 0 && _docHandle > 0)
-                Ui.ElementSetText(_docHandle, "tick", $"alive, tick {tick} (C# OnTick)");
+            {
+                int rc = Ui.ElementSetText(_docHandle, "tick", $"alive, tick {tick} (C# OnTick)");
+                if (rc != 0 && tick <= 120)
+                    Log.Write(2, $"ui-script: ontick settext rc={rc}");
+            }
             return 0;
         }
     }
