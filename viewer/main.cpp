@@ -3572,6 +3572,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     ViewerRmlUiSink rmlUiSink;
     rmlUiSink.renderer = renderer.get();
     nl::script::uiSetSink(o.rmluiDemo ? &rmlUiSink : nullptr);   // M-UI0：未开 = 解绑
+    // ---- M-SC8：脚本宿主装载（--script，normal 模式 physics 训练场）----
     // 复制精简自 runScene 的 M-GL4 块（scene 模式脚本链是已验收冻结面，不改一行）。
     // 绑定链差异（拍板 Q-SC8-1 A' + Q-SC8-2 A）：
     //   - driveSetScene(&physicsScene)：载具域目标 = 本模式训练场（仅 scenario 2
@@ -5801,7 +5802,8 @@ int runScene(const Options& o) {
     // M-UI0：UiSink 装配提前到脚本装载之前（runNormal 同修——Entry 装载期就调 Ui.*）。
     ViewerRmlUiSink rmlUiSink;
     rmlUiSink.renderer = renderer.get();
-    nl::script::uiSetSink(o.rmluiDemo ? &rmlUiSink : nullptr);   // M-UI0：未开 = 解绑    nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
+    nl::script::uiSetSink(o.rmluiDemo ? &rmlUiSink : nullptr);   // M-UI0：未开 = 解绑
+    nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
     registerGameConsole(&gameClock);          // game.pause/timeScale/status
     nl::audio::registerAudioConsole(sceneConsole);
     // P8 M-CAM b-segment：相机 cvars（cam.mode/cam.smooth.*/cam.shake.*/cam.chase.*/cam.free.*）
