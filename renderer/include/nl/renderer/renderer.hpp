@@ -199,6 +199,10 @@ struct FrameParams {
     bool  probeCacheDiag    = false;   // M11.2 调试：命中查缓存结果按 RGB 伪彩（红=命中/绿=占未中/蓝=空）
                                        //（关灯余晖序列用；1.0 = 老路径基线）
     bool  probeAtlasDump     = false;   // M11.2 验收：把 irradAtlas_[0] 直出画面，绕开 gather 做开关开/关自比
+    // M14C1 诊断（213.8 归因）：place atlas level0 全精度回读落盘（RGBA32_FLOAT
+    // staging，两帧延迟环形同 pollTlasProbe 纪律）。非空 = 每次成功 map 覆写该
+    // 文件（头 2×uint32 w/h + w*h*4 float RGBA）。诊断工具，非验收口径。
+    std::string probePlaceReadback;
 
     // ---- M-WAT0（water 轨）：SSR 屏幕空间反射开关（--ssr，缺省关零扰动）----
     // 仅 pulling（matResolve→hdrSceneColor_）分支消费：march + 合成插在
@@ -217,6 +221,20 @@ struct FrameParams {
     bool  filterReject        = false;  // 拒绝层（M12.2 已实现，--filter-reject 开启）
     float rejectThreshold     = 0.01f; // M12.2：拒绝阈值（写入 g_flags.w，0 = 层关）
     bool  filterGiDump        = false;  // S12 验收：把累积后的 gatherLinear_ 直出（绕开 compose）
+    // ---- M14C1（S14-C）：--mode probe-adaptive 探针自适应加密（Q-C1A/C2A/C3B
+    // 拍板：均匀网格减半 + 每格位至多 1 个自适应探针写 atlas 预留区）。仅该模式
+    // 消费；缺省 false = probe/filter/restir 路径零扰动（s10-*/s12-*/s14b-* 保形）。
+    bool  probeAdaptive       = false;
+    // M14C2（拍板 A）：spawn 池总开关（--probe-adaptive-nospawn 置 true = g_gAdaptive.z
+    // 置 0 跳过 spawn 池）。验收仪表：禁 spawn adaptive ≡ probe base 8 逐位一致 =
+    // 冻结路径保形门；缺省 false = spawn 池照常（spacing 门降级生效）。
+    bool  probeAdaptiveNoSpawn = false;
+
+    // M14C3（PLAN §11 拍板 A）：spawn 探针级天空质量门反向关旗标（
+    // --probe-sky-fixup-off 置 true）。缺省 false = fixup 开（M14C2 miss texel
+    // 污染修复生效）；nospawn 模式 spawn 池本身关闭，fixup 自动跳过。
+    bool  probeSkyFixupOff = false;
+
     // ---- M-PERF1：per-pass GPU 计时（Q-P5，--pass-timing 开启；默认关 = 渲染
     // 路径零变化，冻结基线 bytes 不动）。Scene 侧单向锁存（开了不关），query 懒建。
     bool  passTiming          = false;
@@ -390,10 +408,10 @@ struct HudFrame {
 
     // ---- M-PERF1：per-pass GPU 计时面板（Q-P5；--pass-timing 才 show，默认关 =
     // 既有 --hud 基线零布局变化）。行名固定在 renderer 侧 PassTimers::name(i)
-    //（gpu_timer.hpp，13 项），POD 只传数值；槽位序 = PassId 枚举序。
+    //（gpu_timer.hpp，15 项），POD 只传数值；槽位序 = PassId 枚举序。
     bool  passTimingShow      = false;
-    float passTimingMs[13]    = {};
-    bool  passTimingValid[13] = {};
+    float passTimingMs[18]    = {};   // M14C3：17→18 槽（kPassAdaptiveSkyFixup）
+    bool  passTimingValid[18] = {};   // M14C3：同步扩
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）
@@ -558,7 +576,15 @@ public:
                                             // 仅 pulling 链生效（initVisbuf 追加
                                             // 水面伪 cluster + 四管线条件加绑
                                             // WaterConstants）；缺省 false 零扰动。
-                                            bool waterEnable = false);
+                                            bool waterEnable = false,
+                                            // M14B1（S14-B）：--mode restir（ReSTIR GI
+                                            // 两 pass；走 initProbe 资产链 + reservoir
+                                            // 时空重用，替换 place/trace/gather）。
+                                            bool restirMode = false,
+                                            // M14C1（S14-C）：--mode probe-adaptive
+                                            //（探针自适应加密；走 initProbe 资产链，
+                                            // Mark/Spawn 两 pass + atlas 预留区）。
+                                            bool probeAdaptiveMode = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

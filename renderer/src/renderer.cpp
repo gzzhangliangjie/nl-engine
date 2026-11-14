@@ -46,13 +46,16 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
 // particles 4（M-PT0）+ direct.cs/csref 4（M9.0/M9.2）+
 // velocity/probe/probe_viz 10（M10.0）+ probe_trace.cstrace 2（M10.1）+
+// probe adaptive Mark/Spawn 4（M14C1）+
 // probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
 // world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）+
 // vsm 10（S15 M15.0 vs/ps 4 + M15.1 vsclear/psclear 4 + cs 2；M15.1 补登，
 // M15.0 漏登是 M7.1/M8.1 同款教训第三犯）+ ssr 10（M-WAT0 五 compute）。
 // （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误；总数随 S12/S15 增至 118，
 // M-WAT0 ssr 五入口 ×2 → 128，M-NL0 bloom 三入口 ×2 → 134，M-NL1 godrays 五入口
-// ×2 → 144，M-NL2-C sky_bg 双入口 ×2 增至 148。）
+// ×2 → 144，M-NL2-C sky_bg 双入口 ×2 增至 148，M14B1 restir 双入口 ×2 → 152，
+// M14C1 adaptive Mark/Spawn 双入口 ×2 → 156，M14C3 csAdaptiveSkyFixup 单入口
+// ×2 增至 158（merge 补登——M14C3 漏登，M8.1 教训第四犯）。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -171,6 +174,16 @@ static const Artifact kArtifacts[] = {
     {"ssr.csssrmip", true}, {"ssr.csssrmip", false},
     {"ssr.csssr", true}, {"ssr.csssr", false},
     {"ssr.csssrcompose", true}, {"ssr.csssrcompose", false},
+    // M14B1（S14-B）：restir.slang 双 compute 入口（Q-B1~B3 ReSTIR GI）× 双目标 = 4。
+    {"restir.cstemporal", true}, {"restir.cstemporal", false},
+    {"restir.csspatial", true}, {"restir.csspatial", false},
+    // M14C1（S14-C）：probe.slang 自适应 Mark/Spawn 双 compute 入口（纯反投影
+    // 无 RayQuery → 不入 _SM66 白名单，默认 profile）× 双目标 = 4。
+    {"probe.csadaptivemark", true}, {"probe.csadaptivemark", false},
+    {"probe.csadaptivespawn", true}, {"probe.csadaptivespawn", false},
+    // M14C3（S14-C）：probe.slang csAdaptiveSkyFixup 单 compute 入口（spawn 探针级
+    // 天空质量门）× 双目标 = 2（merge 补登——M14C3 漏登，M8.1 教训第四犯）。
+    {"probe.csadaptiveskyfixup", true}, {"probe.csadaptiveskyfixup", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -223,7 +236,10 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            // 预建；dag/hiz/rt 链消费，缺省关）。
                                            bool clusterBlas,
                                            // M-WAT1：--water（仅 pulling 链消费）。
-                                           bool waterEnable) {
+                                           bool waterEnable,
+                                           // M14B1：--mode restir / M14C1：
+                                           // --mode probe-adaptive（S14 轨）。
+                                           bool restirMode, bool probeAdaptiveMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -232,7 +248,8 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
     // M9.0：shadow 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     // M10.0：probe-place 同样吃 .nmesh（复用 initVisbuf(pulling) 资产链）。
     const bool isNMesh = clusterMode || cullMode || dagMode || hizMode || visbufMode ||
-                         rtMode || shadowMode || referenceMode || probeMode;
+                         rtMode || shadowMode || referenceMode || probeMode || restirMode ||
+                         probeAdaptiveMode;
     // M-E1b.0：sceneMode 不加载任何白名单资产（modelFile 可为 null）——几何与
     // 灯数据全部来自 loadEcsScene 的场景描述，白名单在 viewer 侧按 meshFile 校验。
     bool nameOk = false;
@@ -266,7 +283,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
                                  shadowMode, referenceMode, probeMode, clusterBlas,
-                                 waterEnable,
+                                 waterEnable, restirMode, probeAdaptiveMode,
                                  r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";

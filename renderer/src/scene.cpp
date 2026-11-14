@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <fstream>
 #include <vector>
 
 namespace nl::renderer::detail {
@@ -2654,6 +2655,137 @@ void Scene::pollTlasProbe(nvrhi::IDevice* device) {
         nl::core::log::infoCh("scene", "tlas probe: seq=", ready, " t=", t);
 }
 
+// M14C1 诊断：place atlas 全 4 级 staging 回读轮询（--probe-place-readback）。
+// 同 pollTlasProbe 两帧延迟窗口；slot = parity（copy 帧 N parity p → 轮询帧
+// N+2 parity p 读回帧 N 数据）。每次成功 map 覆写落盘：uint32 levels(4) 头 +
+// 每级 [w h + h 行 RGBA32_FLOAT（rowPitch 对齐行）]。仅供离线对拍脚本消费。
+void Scene::pollPlaceReadback(nvrhi::IDevice* device) {
+    if (placeReadbackPath_.empty() || !placeReadbackStaging_[0][0] ||
+        placeReadbackSubmitted_ < 2 || !probeAtlas_[0][0])
+        return;
+    const std::uint32_t ready = placeReadbackSubmitted_ - 2;
+    const std::uint32_t slot = ready & 1u;
+    // 逐帧落盘（不覆写）：文件名带帧号，供跨 run 同帧对照与分叉帧序列分析。
+    const std::string frameTag = ".f" + std::to_string(ready);
+    std::ofstream f(placeReadbackPath_ + frameTag, std::ios::binary);
+    if (!f) return;
+    const std::uint32_t nLevels = 4;
+    f.write(reinterpret_cast<const char*>(&nLevels), sizeof(nLevels));
+    for (std::uint32_t level = 0; level < 4; ++level) {
+        size_t rowPitch = 0;
+        void* p = device->mapStagingTexture(placeReadbackStaging_[slot][level],
+                                            nvrhi::TextureSlice(),
+                                            nvrhi::CpuAccessMode::Read, &rowPitch);
+        if (!p) return;
+        const nvrhi::TextureDesc ad = probeAtlas_[0][level]->getDesc();
+        f.write(reinterpret_cast<const char*>(&ad.width), sizeof(ad.width));
+        f.write(reinterpret_cast<const char*>(&ad.height), sizeof(ad.height));
+        for (std::uint32_t y = 0; y < ad.height; ++y) {
+            const auto* row = reinterpret_cast<const std::uint8_t*>(p) + y * rowPitch;
+            f.write(reinterpret_cast<const char*>(row),
+                    static_cast<std::streamsize>(ad.width) * 16);
+        }
+        device->unmapStagingTexture(placeReadbackStaging_[slot][level]);
+    }
+    // gatherLinear_ 段：RGBA16F 全屏，落 <path>.gather（uint32 w/h + w*h×4 half）。
+    if (gatherReadbackStaging_[0] && gatherReadbackSubmitted_ >= 2) {
+        const std::uint32_t gReady = gatherReadbackSubmitted_ - 2;
+        const std::uint32_t gSlot = gReady & 1u;
+        size_t gPitch = 0;
+        void* gp = device->mapStagingTexture(gatherReadbackStaging_[gSlot],
+                                             nvrhi::TextureSlice(),
+                                             nvrhi::CpuAccessMode::Read, &gPitch);
+        if (gp) {
+            const nvrhi::TextureDesc gd = gatherLinear_->getDesc();
+            std::ofstream gf(placeReadbackPath_ + frameTag + ".gather", std::ios::binary);
+            if (gf) {
+                const std::uint32_t dims[2] = { gd.width, gd.height };
+                gf.write(reinterpret_cast<const char*>(dims), sizeof(dims));
+                for (std::uint32_t y = 0; y < gd.height; ++y) {
+                    const auto* row = reinterpret_cast<const std::uint8_t*>(gp) + y * gPitch;
+                    gf.write(reinterpret_cast<const char*>(row),
+                             static_cast<std::streamsize>(gd.width) * 8);
+                }
+            }
+            device->unmapStagingTexture(gatherReadbackStaging_[gSlot]);
+        }
+    }
+    // hdrSceneColor_ 段：RGBA16F 全屏，落 <path>.hdr。
+    if (hdrReadbackStaging_[0] && hdrReadbackSubmitted_ >= 2) {
+        const std::uint32_t hReady = hdrReadbackSubmitted_ - 2;
+        const std::uint32_t hSlot = hReady & 1u;
+        size_t hPitch = 0;
+        void* hp = device->mapStagingTexture(hdrReadbackStaging_[hSlot],
+                                             nvrhi::TextureSlice(),
+                                             nvrhi::CpuAccessMode::Read, &hPitch);
+        if (hp) {
+            const nvrhi::TextureDesc hd = hdrSceneColor_->getDesc();
+            std::ofstream hf(placeReadbackPath_ + frameTag + ".hdr", std::ios::binary);
+            if (hf) {
+                const std::uint32_t dims[2] = { hd.width, hd.height };
+                hf.write(reinterpret_cast<const char*>(dims), sizeof(dims));
+                for (std::uint32_t y = 0; y < hd.height; ++y) {
+                    const auto* row = reinterpret_cast<const std::uint8_t*>(hp) + y * hPitch;
+                    hf.write(reinterpret_cast<const char*>(row),
+                             static_cast<std::streamsize>(hd.width) * 8);
+                }
+            }
+            device->unmapStagingTexture(hdrReadbackStaging_[hSlot]);
+        }
+    }
+    // irradAtlas_ 段：RGBA16F × 4 级，落 <path>.f{n}.irrad（levels 头同 place 格式）。
+    if (irradReadbackStaging_[0][0] && irradReadbackSubmitted_ >= 2) {
+        const std::uint32_t iReady = irradReadbackSubmitted_ - 2;
+        const std::uint32_t iSlot = iReady & 1u;
+        const std::string iTag = ".f" + std::to_string(iReady) + ".irrad";
+        std::ofstream inf(placeReadbackPath_ + iTag, std::ios::binary);
+        if (inf) {
+            const std::uint32_t nLevels = 4;
+            inf.write(reinterpret_cast<const char*>(&nLevels), sizeof(nLevels));
+            for (std::uint32_t level = 0; level < 4; ++level) {
+                size_t iP = 0;
+                void* ip = device->mapStagingTexture(irradReadbackStaging_[iSlot][level],
+                                                     nvrhi::TextureSlice(),
+                                                     nvrhi::CpuAccessMode::Read, &iP);
+                if (!ip) return;
+                const nvrhi::TextureDesc ad = irradAtlas_[level]->getDesc();
+                inf.write(reinterpret_cast<const char*>(&ad.width), sizeof(ad.width));
+                inf.write(reinterpret_cast<const char*>(&ad.height), sizeof(ad.height));
+                for (std::uint32_t y = 0; y < ad.height; ++y) {
+                    const auto* row = reinterpret_cast<const std::uint8_t*>(ip) + y * iP;
+                    inf.write(reinterpret_cast<const char*>(row),
+                              static_cast<std::streamsize>(ad.width) * 8);
+                }
+                device->unmapStagingTexture(irradReadbackStaging_[iSlot][level]);
+            }
+        }
+    }
+    // probeDepth_ 段：D32 单通道 float，落 <path>.f{n}.depth（uint32 w/h + w*h float）。
+    if (depthReadbackStaging_[0] && depthReadbackSubmitted_ >= 2) {
+        const std::uint32_t dReady = depthReadbackSubmitted_ - 2;
+        const std::uint32_t dSlot = dReady & 1u;
+        size_t dP = 0;
+        void* dp = device->mapStagingTexture(depthReadbackStaging_[dSlot],
+                                             nvrhi::TextureSlice(),
+                                             nvrhi::CpuAccessMode::Read, &dP);
+        if (dp) {
+            const nvrhi::TextureDesc dd = probeDepth_->getDesc();
+            std::ofstream df(placeReadbackPath_ + ".f" + std::to_string(dReady) + ".depth",
+                             std::ios::binary);
+            if (df) {
+                const std::uint32_t dims[2] = { dd.width, dd.height };
+                df.write(reinterpret_cast<const char*>(dims), sizeof(dims));
+                for (std::uint32_t y = 0; y < dd.height; ++y) {
+                    const auto* row = reinterpret_cast<const std::uint8_t*>(dp) + y * dP;
+                    df.write(reinterpret_cast<const char*>(row),
+                             static_cast<std::streamsize>(dd.width) * 4);
+                }
+            }
+            device->unmapStagingTexture(depthReadbackStaging_[dSlot]);
+        }
+    }
+}
+
 // ============================================================================
 // M8.2（S8.2）：Ray Query 调试射线闭环（S8-PLAN M8.2 t1~t3）
 // compute 每像素从相机发 1 条射线打 TLAS（bevy_solari trace_ray 口径：TMin
@@ -4427,6 +4559,16 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         !loadShader("probe_viz.vsprobedots", nvrhi::ShaderType::Vertex, vsProbeDots_) ||
         !loadShader("probe_viz.psprobedots", nvrhi::ShaderType::Pixel, psProbeDots_))
         return false;
+    // M14C1（S14-C）：自适应 Mark/Spawn 两入口（Q-C1A/C2A 拍板）——只在
+    // probe-adaptive 模式加载。2026-11-14 Vulkan teardown 崩溃根修（5/5
+    // C0000005，dmp = ComputePipeline destroy → nvoglv64 INVALID_POINTER_READ；
+    // vsm 同源 exe 无 M14C1 干净退出实锤 M14C1 新资源为根因）：非 adaptive
+    // 模式（probe/filter/restir）不再创建任何 Mark/Spawn 资源。
+    if (probeAdaptiveMode_ &&
+        (!loadShader("probe.csadaptivemark", nvrhi::ShaderType::Compute, csAdaptiveMark_) ||
+         !loadShader("probe.csadaptivespawn", nvrhi::ShaderType::Compute, csAdaptiveSpawn_) ||
+         !loadShader("probe.csadaptiveskyfixup", nvrhi::ShaderType::Compute, csAdaptiveSkyFixup_)))
+        return false;
 
     // probeCB_（192B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
     // 批内差异字段必须进写入面——§2.15 纪律）。M10.1 扩 176→192B（g_vizExtra）。
@@ -4470,7 +4612,7 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     // gatherCB_（144B volatile，M10.2 112B → M-WEA1 +2×float4 天穹）：probe_gather.slang 布局
     //（[0..15] invViewProj float4x4 / [16..19] eye / [20..23] params / [24..27] mat·MIN）。
     nvrhi::BufferDesc gcbDesc;
-    gcbDesc.byteSize = 176;   // M10.2：112→128B（+g_gLevels）；M-WEA1：128→160B（+天穹 2×float4）；M-WEA2：160→176B（+雾 1×float4）
+    gcbDesc.byteSize = 192;   // M10.2：112→128B（+g_gLevels）；M-WEA1：128→160B（+天穹 2×float4）；M-WEA2：160→176B（+雾 1×float4）；M14C1 merge 后：176→192B（+g_gAdaptive 1×float4，槽位 [44..47]，天气 [32..43] 在前）
     gcbDesc.isConstantBuffer = true;
     gcbDesc.isVolatile = true;
     gcbDesc.maxVersions = 16;
@@ -4514,6 +4656,66 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(4));
     placeLayout_ = device->createBindingLayout(pDesc);
     if (!placeLayout_) { outError = "createBindingLayout failed for probe place"; return false; }
+
+    // ---- M14C1：csAdaptiveMark/csAdaptiveSpawn 布局（拆两套，见 scene.hpp
+    // 成员段注释：同一 mask buffer 双状态同 set = nvrhi 状态固化 → Mark UAV
+    // 写丢失）。Mark：b0 + t0 probeDepth + t2..t5 place atlas SRV（读候选
+    // corner）+ u5 mask UAV。Spawn：b0 + t0 + t6 mask SRV + u0..u3 atlas UAV。
+    // layout 项多于各 PSO 反射无害（root sig 反射铁律：漏了才建不了 PSO）。
+    // 只在 probe-adaptive 模式创建（2026-11-14 teardown 根修，见 shader 加载处）。
+    if (probeAdaptiveMode_) {
+    nvrhi::BindingLayoutDesc amDesc;
+    amDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(4))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5));
+    adaptiveMarkLayout_ = device->createBindingLayout(amDesc);
+    if (!adaptiveMarkLayout_) { outError = "createBindingLayout failed for probe adaptive mark"; return false; }
+    nvrhi::BindingLayoutDesc asLDesc;
+    asLDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+    adaptiveSpawnLayout_ = device->createBindingLayout(asLDesc);
+    if (!adaptiveSpawnLayout_) { outError = "createBindingLayout failed for probe adaptive spawn"; return false; }
+
+    // ---- M14C3：csAdaptiveSkyFixup 布局。b0（probeCB_ 复用）+ t7..t10 irrad
+    // SRV + u0..u3 place atlas UAV（写 spawn 槽 probe.w）。槽位号与 probe.slang
+    // register 声明一一对应（t7..t10 只被 fixup 入口引用，其余入口 slang 消除）。
+    nvrhi::BindingLayoutDesc sfLDesc;
+    sfLDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    for (std::uint32_t s = 7; s < 11; ++s)
+        sfLDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(s));
+    for (std::uint32_t s = 0; s < 4; ++s)
+        sfLDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(s));
+    adaptiveSkyFixupLayout_ = device->createBindingLayout(sfLDesc);
+    if (!adaptiveSkyFixupLayout_) { outError = "createBindingLayout failed for probe adaptive sky fixup"; return false; }
+
+    // ---- M14C1：自适应 mask buffer（512 uint 过量分配：res_eff ≤ 16 时
+    // Σ res_l² = 256+64+16+4 = 340 ≤ 512）。CopyDest 起点与 keepInitialState =
+    // wc 表同款纪律：每帧 writeBuffer 清零（Mark 是 InterlockedMin 最小 idx 收敛语义），
+    // Mark require UAV 自动晋升、Spawn require SRV 自动转换、下帧回到 CopyDest。
+    {
+        nvrhi::BufferDesc mDesc;
+        mDesc.byteSize = 512 * 4;
+        mDesc.structStride = 4;
+        mDesc.canHaveUAVs = true;
+        mDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        mDesc.keepInitialState = true;
+        mDesc.debugName = "ProbeAdaptiveMask";
+        adaptiveMask_ = device->createBuffer(mDesc);
+        if (!adaptiveMask_) { outError = "createBuffer failed for probe adaptive mask"; return false; }
+    }
+    } // probeAdaptiveMode_ guard（layout+mask buffer）
 
     // ---- dots 布局：b0 + t0..t4 SRV + t5..t8 irradiance SRV（M10.1）。
     nvrhi::BindingLayoutDesc dDesc;
@@ -4602,6 +4804,24 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     if (!placePSO_) { outError = "createComputePipeline failed for probe place"; return false; }
 
+    // ---- M14C1：自适应 Mark/Spawn PSO（各自 layout，见 scene.hpp 成员段）----
+    // 只在 probe-adaptive 模式创建（2026-11-14 Vulkan teardown 根修：非 adaptive
+    // 模式零新增资源；根因本体 = shutdown 清单漏登，本守卫是第二道防线）。
+    if (probeAdaptiveMode_) {
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(csAdaptiveMark_).addBindingLayout(adaptiveMarkLayout_);
+        adaptiveMarkPSO_ = device->createComputePipeline(cpDesc);
+        nvrhi::ComputePipelineDesc cpDesc2;
+        cpDesc2.setComputeShader(csAdaptiveSpawn_).addBindingLayout(adaptiveSpawnLayout_);
+        adaptiveSpawnPSO_ = device->createComputePipeline(cpDesc2);
+        // M14C3：fixup PSO（spawn 探针级天空质量门，PLAN §11 拍板 A）。
+        nvrhi::ComputePipelineDesc cpDesc3;
+        cpDesc3.setComputeShader(csAdaptiveSkyFixup_).addBindingLayout(adaptiveSkyFixupLayout_);
+        adaptiveSkyFixupPSO_ = device->createComputePipeline(cpDesc3);
+        if (!adaptiveMarkPSO_ || !adaptiveSpawnPSO_ || !adaptiveSkyFixupPSO_)
+            { outError = "createComputePipeline failed for probe adaptive"; return false; }
+    }
+
     {
         nvrhi::ComputePipelineDesc cpDesc;
         cpDesc.setComputeShader(csTrace_).addBindingLayout(traceLayout_);
@@ -4650,14 +4870,21 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
                                std::uint32_t baseRes, std::string& outError) {
     const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
     const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
-    const std::uint32_t res = baseRes < 4u ? 4u : (baseRes > 32u ? 32u : baseRes);
+    const std::uint32_t rawRes = baseRes < 4u ? 4u : (baseRes > 32u ? 32u : baseRes);
+    // M14C1（Q-C3B 拍板）：adaptive 模式均匀网格减半——res_eff = baseRes/2，
+    // atlas 高度 ×2（预留区），trace dispatch 线程数与 probe 模式恒等
+    //（(res_eff·10) × (2·res_eff·10) = (baseRes·10)²）。probe/filter/restir
+    // 模式 res = baseRes（保形：atlas 尺寸/绑定/dispatch 全不变）。
+    const std::uint32_t res = probeAdaptiveMode_ ? (rawRes >> 1u) : rawRes;
+    const std::uint32_t adaptiveId = probeAdaptiveMode_ ? 1u : 0u;
     if (w == 0 || h == 0) { outError = "probe: zero viewport"; return false; }
     if (probeDepth_ && velocityFb_ && probeW_ == w && probeH_ == h &&
-        probeBaseRes_ == res)
+        probeBaseRes_ == res && probeAdaptiveId_ == adaptiveId)
         return true;
     probeW_ = w;
     probeH_ = h;
     probeBaseRes_ = res;
+    probeAdaptiveId_ = adaptiveId;
 
     // probeDepth_（D32）：velocity prepass 的深度附件（写）+ csPlace 的 SRV（读）。
     // 不设 permanent——逐帧 DepthWrite↔SRV tracking（§2.15/§2.19；共享 backend
@@ -4693,7 +4920,10 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
             const std::uint32_t res_l = res >> level;
             nvrhi::TextureDesc aDesc;
             aDesc.width = res_l;
-            aDesc.height = res_l;
+            // M14C1（Q-C2A）：adaptive 模式高度 ×2——[0,res) 均匀区 +
+            // [res,2res) 预留区（Spawn 写自适应探针，槽位 (x, res+y) 与均匀
+            // 格位一一对应）。probe 模式高度 = res（保形）。
+            aDesc.height = probeAdaptiveMode_ ? (res_l * 2u) : res_l;
             aDesc.format = nvrhi::Format::RGBA32_FLOAT;   // typed UAV store 双后端安全（rtTarget_ 先例）
             aDesc.isUAV = true;
             aDesc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -4724,7 +4954,8 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         const std::uint32_t res_l = (res >> level) * 10u;
         nvrhi::TextureDesc iDesc;
         iDesc.width = res_l;
-        iDesc.height = res_l;
+        // M14C1：adaptive 模式高度 ×2（每探针 10×10 八面体图，预留区行同映射）。
+        iDesc.height = probeAdaptiveMode_ ? (res_l * 2u) : res_l;
         iDesc.format = nvrhi::Format::RGBA16_FLOAT;    // HDR 颜色 16F 足够（位置才用 32F）
         iDesc.isUAV = true;
         iDesc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -4776,6 +5007,55 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
         psDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(4, probePrevDelta_));
         placeSet_[parity] = device->createBindingSet(psDesc, placeLayout_);
         if (!placeSet_[parity]) { outError = "createBindingSet failed for probe place"; return false; }
+
+        // M14C1：adaptive Mark/Spawn 拆两套 set（scene.hpp 成员段注释：同一
+        // buffer 双状态同 set = nvrhi 状态固化 → Mark UAV 写丢失）。Mark set：
+        // t0 probeDepth + t2..t5 atlas SRV + u5 mask UAV；Spawn set：t0 +
+        // t6 mask SRV + u0..u3 atlas UAV。mask buffer 恒绑定（512 项，
+        // initProbe 已建）；Mark/Spawn 只在 adaptive 模式 dispatch，probe
+        // 模式此 set 不消费（保形）。set 也只在 adaptive 模式创建
+        //（2026-11-14 teardown 根修：引用 adaptiveMask_，非 adaptive 模式
+        // 该 buffer 不存在，创建会拿空句柄）。
+        if (probeAdaptiveMode_) {
+        {
+            nvrhi::BindingSetDesc amSetDesc;
+            amSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_))
+                     .addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                amSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(2 + level,
+                                                                    probeAtlas_[parity][level]));
+            amSetDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(5, adaptiveMask_));
+            adaptiveMarkSet_[parity] = device->createBindingSet(amSetDesc, adaptiveMarkLayout_);
+            if (!adaptiveMarkSet_[parity])
+                { outError = "createBindingSet failed for probe adaptive mark"; return false; }
+        }
+        {
+            nvrhi::BindingSetDesc asSetDesc;
+            asSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_))
+                     .addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_))
+                     .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, adaptiveMask_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                asSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level,
+                                                                   probeAtlas_[parity][level]));
+            adaptiveSpawnSet_[parity] = device->createBindingSet(asSetDesc, adaptiveSpawnLayout_);
+            if (!adaptiveSpawnSet_[parity])
+                { outError = "createBindingSet failed for probe adaptive spawn"; return false; }
+        }
+        // M14C3：fixup set。t7..t10 irrad atlas（非 parity 级，trace 输出 4 张共
+        // 享）+ u0..u3 place atlas（parity 级，写 spawn 槽 probe.w）。
+        {
+            nvrhi::BindingSetDesc sfSetDesc;
+            sfSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                sfSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(7 + level, irradAtlas_[level]));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                sfSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level,
+                                                                    probeAtlas_[parity][level]));
+            adaptiveSkyFixupSet_[parity] = device->createBindingSet(sfSetDesc, adaptiveSkyFixupLayout_);
+            if (!adaptiveSkyFixupSet_[parity])
+                { outError = "createBindingSet failed for probe adaptive sky fixup"; return false; }
+        }
+        } // probeAdaptiveMode_ guard（adaptive mark/spawn sets）
 
         nvrhi::BindingSetDesc dsDesc;
         dsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_));
@@ -5030,7 +5310,11 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         nl::math::Mat4 vp{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
         const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
-        float gcb[44] = {};
+        float gcb[48] = {};   // M14C1 收口实锤：gcb 数组长度 = CB byteSize/4（SSC §2.7
+                              // 「volatile CB 每帧全量覆写」铁律——旧 float gcb[32] +
+                              // sizeof(gcb)=128B 只覆写前段，尾部字段读到上传堆残留
+                              // 垃圾）。merge 后 192B = 48 floats（天气 [32..43] +
+                              // g_gAdaptive [44..47]）。
         std::memcpy(gcb, invVP.m, sizeof(invVP.m));   // [0..15] invViewProj
         gcb[16] = params.eye[0];
         gcb[17] = params.eye[1];
@@ -5055,6 +5339,15 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         gcb[36] = params.weatherHorizon[0]; gcb[37] = params.weatherHorizon[1]; gcb[38] = params.weatherHorizon[2]; gcb[39] = 0.0f;
         // M-WEA2：[40..43] 高度雾（density/height/zw 预留；缺省 0 保形）
         gcb[40] = params.weatherFogDensity; gcb[41] = params.weatherFogHeight; gcb[42] = 0.0f; gcb[43] = 0.0f;
+        // M14C1：[44..47] g_gAdaptive——x = 自适应探针插值池 4→8 开关（非 adaptive
+        // 恒 0，csGather 走原 4 池逐值一致——冻结基线零漂）。
+        gcb[44] = probeAdaptiveMode_ ? 1.0f : 0.0f;
+        // M14C2（拍板 A）：y = 2tan(fovY/2)（spacing 门降级的深度×角尺寸估算因子，
+        // FrameParams.projYScale = 1/tan(fovY/2) 同源）；z = spawn 池总开关
+        //（--probe-adaptive-nospawn 置 0，禁 spawn adaptive ≡ u8 逐位一致 = 冻结
+        // 路径保形验收仪表）；w = 预留。
+        gcb[45] = 2.0f / params.projYScale;
+        gcb[46] = params.probeAdaptiveNoSpawn ? 0.0f : 1.0f;
         cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
     }
 
@@ -5077,10 +5370,44 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         std::memcpy(probePrevViewProj_, params.viewProj, sizeof(probePrevViewProj_));
     }
 
+    // ---- (1.1) M14C1 诊断：probeDepth_（velocity prepass D32）回读 copy
+    //（--probe-place-readback 复用 flag；slot = parity 环形防覆盖）。
+    // M14C2 实测：VULKAN 上 staging 环形第 3 周期段错误（先 depth 通道 map 崩，
+    // depth 限界后整体仍在 f5 dump 后崩——slot0/slot1 第 3 次 map 前后，RGBA16F
+    // 同崩；DX12 同代码全程正常）。定性 = NVRHI vk 侧 staging 复用内部问题，
+    // 诊断基建限界 DX12-only（五通道 DX12 验证稳定；vk 旗标打 notice 跳过）。
+    const bool readbackOk = placeReadbackPath_.empty()
+        || probeDevice_->getGraphicsAPI() != nvrhi::GraphicsAPI::VULKAN;
+    if (!placeReadbackPath_.empty() && probeDepth_ && readbackOk) {
+        if (!depthReadbackStaging_[0]) {
+            const nvrhi::TextureDesc dd = probeDepth_->getDesc();
+            for (auto& st : depthReadbackStaging_) {
+                auto sDesc = nvrhi::TextureDesc()
+                    .setWidth(dd.width).setHeight(dd.height)
+                    .setFormat(dd.format).setDebugName("ProbeDepthReadback");
+                sDesc.mipLevels = 1;
+                sDesc.arraySize = 1;
+                sDesc.sampleCount = 1;
+                st = probeDevice_->createStagingTexture(sDesc, nvrhi::CpuAccessMode::Read);
+            }
+        }
+        if (depthReadbackStaging_[probeParity_]) {
+            cmd->setTextureState(probeDepth_, nvrhi::TextureSubresourceSet(0, 1, 0, 1),
+                                 nvrhi::ResourceStates::CopySource);
+            cmd->copyTexture(depthReadbackStaging_[probeParity_], nvrhi::TextureSlice(),
+                             probeDepth_, nvrhi::TextureSlice());
+            cmd->setTextureState(probeDepth_, nvrhi::TextureSubresourceSet(0, 1, 0, 1),
+                                 nvrhi::ResourceStates::DepthWrite);
+            ++depthReadbackSubmitted_;
+        }
+    }
+
     // ---- (2) csPlace cascade 布点 dispatch（depth/velocity/prevDelta/atlas 的
     // SRV↔UAV 转换由绑定 require 自动插 barrier）。
     // M-PERF1：csPlace pass 计时。
-    {
+    // M14B1：restir 模式不布点不探针追踪（per-pixel 候选，探针 atlas 全程不
+    // 参与），velocity prepass 与 CB 覆写保留（restir 读 probeDepth_/velocity_）。
+    if (!restirMode_) {
         const bool ptPlace = passTimers_.begin(cmd, PassTimers::kPassPlace);
         nvrhi::ComputeState cstate;
         cstate.setPipeline(placePSO_).addBindingSet(placeSet_[probeParity_]);
@@ -5089,24 +5416,174 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         if (ptPlace) passTimers_.end(cmd, PassTimers::kPassPlace);
     }
 
+    // ---- (2.5) M14C1：自适应 Mark → Spawn（仅 probe-adaptive 模式）----
+    // Mark：每格位 16 个固定 Hammersley 采样点判「插值覆盖不足」（UE 判据，
+    // 权重函数与 csGather 同口径）→ InterlockedMin mask（帧首 writeBuffer 清零，
+    // CopyDest 起点纪律同 wc 表）。Spawn：mask 置位格位选最低置位采样点反投影
+    // 写 atlas 预留区槽位 (x, res+y)，空槽 a=0（trace probe.w>0 判据黑写早退）。
+    // trace.slang / traceLayout / traceSet 零改动（Q-C2A 结构保证）。
+    if (probeAdaptiveMode_ && !restirMode_) {
+        // mask 状态跟踪建立（一次性，wc 表 M11.2 同款纪律）：beginTracking
+        // 缺失时 nvrhi 对该 buffer 无跟踪信息 → set require 的 CopyDest→UAV→SRV
+        // 转换从未插 → Mark 的 InterlockedMin 写丢（spawn=0 收口根因 #3，实锤
+        // DIAG-C5：Spawn 写通 + 读 mask 恒 0）。参数 = 当前态（首帧 = initialState
+        // CopyDest）；跟踪建立后帧首 writeBuffer / Mark UAV / Spawn SRV 全自动。
+        if (!probeAdaptiveMaskTracked_) {
+            cmd->beginTrackingBufferState(adaptiveMask_, nvrhi::ResourceStates::CopyDest);
+            probeAdaptiveMaskTracked_ = true;
+        }
+        // mask 帧首复位为「无失效」哨兵 0xffffffff（Mark 上一帧的 InterlockedMin
+        // 残留必须复位）。⚠️ 不能清 0：Mark 用 InterlockedMin 收敛最小失效 idx，
+        // min(0, x) = 0 恒成立 → 起始值 0 会把原子收敛永久压死在 0（收口根因
+        // #4，DIAG-C6/C7 实锤：普通 store 可达 + atomic 恒 0 + DXIL emission
+        // 正确）。UE 原型同口径（Mark 前置 MAXUINT 初始化）。
+        {
+            const std::vector<std::uint32_t> ffs(512, 0xffffffffu);
+            cmd->writeBuffer(adaptiveMask_, ffs.data(), ffs.size() * 4);
+        }
+        {
+            const bool ptMark = passTimers_.begin(cmd, PassTimers::kPassAdaptiveMark);
+            nvrhi::ComputeState mstate;
+            mstate.setPipeline(adaptiveMarkPSO_).addBindingSet(adaptiveMarkSet_[probeParity_]);
+            cmd->setComputeState(mstate);
+            cmd->dispatch(probeBaseRes_, probeBaseRes_, 4u);   // 16x16 组 = 每组 1 格位
+            if (ptMark) passTimers_.end(cmd, PassTimers::kPassAdaptiveMark);
+        }
+        {
+            const bool ptSpawn = passTimers_.begin(cmd, PassTimers::kPassAdaptiveSpawn);
+            nvrhi::ComputeState sstate;
+            sstate.setPipeline(adaptiveSpawnPSO_).addBindingSet(adaptiveSpawnSet_[probeParity_]);
+            cmd->setComputeState(sstate);
+            cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 4u);
+            if (ptSpawn) passTimers_.end(cmd, PassTimers::kPassAdaptiveSpawn);
+        }
+        if (!probeAdaptiveLogged_) {
+            nl::core::log::infoCh("scene", "probe-adaptive: active (res_eff=", probeBaseRes_,
+                                  ", spawn budget=1 per tile, Hammersley16 mark, UE MIN 0.01)");
+            probeAdaptiveLogged_ = true;
+        }
+    }
+
+    // ---- (2.6) M14C1 诊断：place atlas level0 全精度回读 copy（--probe-place-readback）。
+    // place/spawn 写完 → copy 进 staging（slot = parity），pollPlaceReadback 两帧后
+    // map 落盘。UAV→CopySource 显式转换，copy 完转回 UAV——后续 trace set require
+    // SRV 自动插 barrier 的基线行为不变（诊断代码零语义扰动）。
+    if (!params.probePlaceReadback.empty() && probeAtlas_[probeParity_][0]) {
+        // M14C2：vk staging 复用第 3 周期段错误（见 (1.1) 段注释）——readback
+        // 基建限界 DX12-only，vk 清空路径 + notice，全部 copy/poll 块自动失效。
+        if (probeDevice_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN) {
+            if (!probeReadbackVkNotice_) {
+                nl::core::log::infoCh("scene",
+                    "--probe-place-readback: DX12-only (vk staging reuse segfault, see scene.cpp (1.1)); flag ignored");
+                probeReadbackVkNotice_ = true;
+            }
+        } else {
+        placeReadbackPath_ = params.probePlaceReadback;
+        if (!placeReadbackStaging_[0][0]) {
+            for (std::uint32_t level = 0; level < 4; ++level) {
+                const nvrhi::TextureDesc ad = probeAtlas_[probeParity_][level]->getDesc();
+                for (auto& st : placeReadbackStaging_) {
+                    auto sDesc = nvrhi::TextureDesc()
+                        .setWidth(ad.width).setHeight(ad.height)
+                        .setFormat(ad.format).setDebugName("PlaceAtlasReadback");
+                    sDesc.mipLevels = 1;
+                    sDesc.arraySize = 1;
+                    sDesc.sampleCount = 1;
+                    st[level] = probeDevice_->createStagingTexture(sDesc, nvrhi::CpuAccessMode::Read);
+                }
+            }
+        }
+        bool allOk = true;
+        for (std::uint32_t level = 0; level < 4; ++level)
+            allOk = allOk && placeReadbackStaging_[probeParity_][level] != nullptr;
+        if (allOk) {
+            for (std::uint32_t level = 0; level < 4; ++level) {
+                const nvrhi::TextureSubresourceSet mipSub(0, 1, 0, 1);
+                cmd->setTextureState(probeAtlas_[probeParity_][level], mipSub,
+                                     nvrhi::ResourceStates::CopySource);
+                // 4 级是独立纹理（probeAtlas_[parity][level] 各 1 mip），不是单纹理
+                // 的 mip 链——slice 全默认（mip 0），level 只当选纹理下标。
+                cmd->copyTexture(placeReadbackStaging_[probeParity_][level],
+                                 nvrhi::TextureSlice(),
+                                 probeAtlas_[probeParity_][level], nvrhi::TextureSlice());
+                cmd->setTextureState(probeAtlas_[probeParity_][level], mipSub,
+                                     nvrhi::ResourceStates::UnorderedAccess);
+            }
+            ++placeReadbackSubmitted_;
+        }
+        }
+    }
+
     // ---- (3) csTrace 探针追踪 dispatch（M10.1）：place atlas cur parity SRV ←
     // 刚写完 → irradiance atlas UAV 写；SRV↔UAV 转换由 trace set require 自动插。
     // TLAS 未就绪（无 RT / 无 fallback 几何）→ 一次性日志后跳过（probe-place
     // 的布点/点可视化不受影响，M10.0 行为保形；shadow 模式同口径降级）。
-    if (tlasReady_) {
+    // M14C1：adaptive 模式 dispatch 高度 ×2（预留区段 = 自适应探针；空槽
+    // probe.w>0 判据黑写早退）——线程总数与 probe 模式恒等（Q-C3B 守恒面）。
+    if (tlasReady_ && !restirMode_) {
         const std::uint32_t store = 10u;
+        const std::uint32_t resRows = probeAdaptiveMode_ ? (probeBaseRes_ * 2u) : probeBaseRes_;
         // M-PERF1：csTraceProbe pass 计时。
         const bool ptTrace = passTimers_.begin(cmd, PassTimers::kPassTrace);
         nvrhi::ComputeState tstate;
         tstate.setPipeline(tracePSO_).addBindingSet(traceSet_[probeParity_]);
         cmd->setComputeState(tstate);
         cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
-                      ((probeBaseRes_ * store) + 7u) / 8u, 4u);
+                      ((resRows * store) + 7u) / 8u, 4u);
         if (ptTrace) passTimers_.end(cmd, PassTimers::kPassTrace);
+
+        // ---- (3.2) M14C3：spawn 探针级天空质量门（PLAN §11 拍板 A）----
+        // trace 写完 spawn texel 的 miss 标记（a=0）→ fixup 统计每 spawn 探针
+        // 100 texel 有效占比，< 0.4 → 清 place atlas spawn 槽 probe.w=0 →
+        // gather 既有「probe.w<=0 权重 0」语义自动剔除（gather 零改动）。
+        // 条件：adaptive + spawn 池开着 + fixup 旗标没关。nospawn 模式 spawn
+        // 池本身关闭，fixup 无服务对象 → 跳过（保形门不受扰动）。probe/filter/
+        // restir 模式 fixup 资源（adaptive guard 内）未创建 → 也必须跳过。
+        if (probeAdaptiveMode_ && !params.probeAdaptiveNoSpawn
+            && !params.probeSkyFixupOff) {
+            const bool ptFixup = passTimers_.begin(cmd, PassTimers::kPassAdaptiveSkyFixup);
+            nvrhi::ComputeState fstate;
+            fstate.setPipeline(adaptiveSkyFixupPSO_).addBindingSet(adaptiveSkyFixupSet_[probeParity_]);
+            cmd->setComputeState(fstate);
+            cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 4u);
+            if (ptFixup) passTimers_.end(cmd, PassTimers::kPassAdaptiveSkyFixup);
+        }
     } else if (!probeTraceLogged_) {
         nl::core::log::infoCh("scene", "probe: TLAS not ready (no RT support or no fallback "
                             "geometry) -- probe tracing disabled");
         probeTraceLogged_ = true;
+    }
+
+    // ---- (3.1) M14C1 诊断：irradAtlas_[0..3] trace 输出回读 copy
+    //（--probe-place-readback 复用 flag；slot = parity 环形防覆盖）。
+    if (!placeReadbackPath_.empty() && irradAtlas_[0]) {
+        if (!irradReadbackStaging_[0][0]) {
+            for (std::uint32_t level = 0; level < 4; ++level) {
+                const nvrhi::TextureDesc ad = irradAtlas_[level]->getDesc();
+                for (auto& st : irradReadbackStaging_) {
+                    auto sDesc = nvrhi::TextureDesc()
+                        .setWidth(ad.width).setHeight(ad.height)
+                        .setFormat(ad.format).setDebugName("IrradReadback");
+                    sDesc.mipLevels = 1;
+                    sDesc.arraySize = 1;
+                    sDesc.sampleCount = 1;
+                    st[level] = probeDevice_->createStagingTexture(sDesc, nvrhi::CpuAccessMode::Read);
+                }
+            }
+        }
+        bool irradOk = true;
+        for (std::uint32_t level = 0; level < 4; ++level)
+            irradOk = irradOk && irradReadbackStaging_[probeParity_][level] != nullptr;
+        if (irradOk) {
+            const nvrhi::TextureSubresourceSet oneMip(0, 1, 0, 1);
+            for (std::uint32_t level = 0; level < 4; ++level) {
+                cmd->setTextureState(irradAtlas_[level], oneMip, nvrhi::ResourceStates::CopySource);
+                cmd->copyTexture(irradReadbackStaging_[probeParity_][level],
+                                 nvrhi::TextureSlice(), irradAtlas_[level], nvrhi::TextureSlice());
+                cmd->setTextureState(irradAtlas_[level], oneMip, nvrhi::ResourceStates::UnorderedAccess);
+            }
+            ++irradReadbackSubmitted_;
+        }
     }
 }
 
@@ -5161,6 +5638,32 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         if (ptGather) passTimers_.end(cmd, PassTimers::kPassGather);
     }
 
+    // ---- (1.4b) M14C1 诊断：gatherLinear_（csGather 原始输出，RGBA16F）回读
+    // copy——compose/tonemap 链非线性变换会污染 diag PNG 测量，全精度对拍必须
+    // 读本纹理。UAV→CopySource→copy→UAV，slot = parity 同 place readback。
+    if (!placeReadbackPath_.empty() && gatherLinear_) {
+        if (!gatherReadbackStaging_[0]) {
+            const nvrhi::TextureDesc gd = gatherLinear_->getDesc();
+            for (auto& st : gatherReadbackStaging_) {
+                auto sDesc = nvrhi::TextureDesc()
+                    .setWidth(gd.width).setHeight(gd.height)
+                    .setFormat(gd.format).setDebugName("GatherLinearReadback");
+                sDesc.mipLevels = 1;
+                sDesc.arraySize = 1;
+                sDesc.sampleCount = 1;
+                st = probeDevice_->createStagingTexture(sDesc, nvrhi::CpuAccessMode::Read);
+            }
+        }
+        if (gatherReadbackStaging_[probeParity_]) {
+            const nvrhi::TextureSubresourceSet gSub(0, 1, 0, 1);
+            cmd->setTextureState(gatherLinear_, gSub, nvrhi::ResourceStates::CopySource);
+            cmd->copyTexture(gatherReadbackStaging_[probeParity_], nvrhi::TextureSlice(),
+                             gatherLinear_, nvrhi::TextureSlice());
+            cmd->setTextureState(gatherLinear_, gSub, nvrhi::ResourceStates::UnorderedAccess);
+            ++gatherReadbackSubmitted_;
+        }
+    }
+
     // ---- (1.5) S12 M12.0（T5 保形硬边界）：仅 filter 态在 csGather 与
     // csGatherCompose 之间插入时域累积——它把 gatherLinear_ 原地换成累积 GI，
     // compose 的绑定 / 执行顺序 / shader 全部一字不动（M11.1 冻结基线实锤）。
@@ -5197,11 +5700,220 @@ bool Scene::drawProbeGather(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
         cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
         if (ptCompose) passTimers_.end(cmd, PassTimers::kPassGatherCompose);
     }
+    // ---- (2.1) M14C1 诊断：hdrSceneColor_（compose 末态 = 直光 enc + gather）
+    // 回读 copy，落 <path>.hdr——PNG 层测量被 compose/tonemap 非线性链污染，
+    // 直光 enc 是否模式相关只能在此层判定。
+    if (!placeReadbackPath_.empty() && hdrSceneColor_) {
+        if (!hdrReadbackStaging_[0]) {
+            const nvrhi::TextureDesc hd = hdrSceneColor_->getDesc();
+            for (auto& st : hdrReadbackStaging_) {
+                auto sDesc = nvrhi::TextureDesc()
+                    .setWidth(hd.width).setHeight(hd.height)
+                    .setFormat(hd.format).setDebugName("HdrReadback");
+                sDesc.mipLevels = 1;
+                sDesc.arraySize = 1;
+                sDesc.sampleCount = 1;
+                st = probeDevice_->createStagingTexture(sDesc, nvrhi::CpuAccessMode::Read);
+            }
+        }
+        if (hdrReadbackStaging_[probeParity_]) {
+            cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::CopySource);
+            cmd->copyTexture(hdrReadbackStaging_[probeParity_], nvrhi::TextureSlice(),
+                             hdrSceneColor_, nvrhi::TextureSlice());
+            cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+            ++hdrReadbackSubmitted_;
+        }
+    }
     if (!probeGatherLogged_) {
         nl::core::log::infoCh("scene", "probe: gather active (depth-banded cascade levels, "
                             "UE bilinear corner x plane-depth weights, ambient "
                             "replaced by gather)");
         probeGatherLogged_ = true;
+    }
+    return true;
+}
+
+// ---- M14B1（S14-B）：ReSTIR GI 两 pass（restir.slang，Q-B1~B3 拍板）----
+// 调用点 = matResolve 之后、presentTonemap 之前（gather 同槽）；复用 probe 链
+// probeDepth_ / velocity_ / TLAS / 世界缓存。reservoirA/B 固定角色跨帧 ping-pong
+// （pass1 读 A 写 B，pass2 读 B 写 A），keepInitialState UAV 口径（indirectArgs_
+// 同款：NVRHI 状态跟踪跨列表不持久）。
+bool Scene::drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                            const FrameParams& params, std::string& outError) {
+    if (!probe_ || probeFailed_ || !tlasReady_ || !hdrSceneColor_) {
+        if (!restirLogged_ && probe_ && !tlasReady_)
+            nl::core::log::infoCh("scene", "restir: disabled (TLAS not ready, pure "
+                                "direct light this frame)");
+        restirLogged_ = true;
+        return true;
+    }
+    if (restirFailed_) return true;
+
+    nvrhi::IDevice* device = cmd->getDevice();
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    const std::uint32_t rw = std::uint32_t(vpW);
+    const std::uint32_t rh = std::uint32_t(vpH);
+
+    // ---- 懒建（视口变化重建 reservoir，probe atlas 懒建同款口径）。
+    if (!restirReady_ || restirResW_ != rw || restirResH_ != rh) {
+        auto restirPath = [this](const char* artifact) {
+            return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix_;
+        };
+        auto loadRestirShader = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+            std::vector<std::uint8_t> blob;
+            if (!readFileBytes(restirPath(artifact).c_str(), blob)) {
+                outError = std::string("failed to load shader ") + artifact;
+                return false;
+            }
+            nvrhi::ShaderDesc desc;
+            desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");  // §2.4
+            out = device->createShader(desc, blob.data(), blob.size());
+            return out != nullptr;
+        };
+        if (!loadRestirShader("restir.cstemporal", csRestirTemporal_) ||
+            !loadRestirShader("restir.csspatial", csRestirSpatial_)) {
+            nl::core::log::deviceError("restir", outError);
+            restirFailed_ = true;
+            return true;
+        }
+
+        // restirCB_（volatile 160B；shader 声明 9×float4 = 144B，过量分配防
+        // dxc Size 耦合——filterCB_ 同款纪律）。
+        nvrhi::BufferDesc rcbDesc;
+        rcbDesc.byteSize = 160;
+        rcbDesc.isConstantBuffer = true;
+        rcbDesc.isVolatile = true;
+        rcbDesc.maxVersions = 16;
+        rcbDesc.debugName = "RestirConstants";
+        restirCB_ = device->createBuffer(rcbDesc);
+
+        // reservoir 双缓冲（64B/项 × w×h）：跨帧复用 → keepInitialState UAV。
+        nvrhi::BufferDesc resDesc;
+        resDesc.byteSize = 64 * rw * rh;
+        resDesc.structStride = 64;
+        resDesc.canHaveUAVs = true;
+        resDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        resDesc.keepInitialState = true;
+        resDesc.debugName = "RestirReservoirA";
+        reservoirA_ = device->createBuffer(resDesc);
+        resDesc.debugName = "RestirReservoirB";
+        reservoirB_ = device->createBuffer(resDesc);
+
+        // 布局：b0 + t0..t5（t2=TLAS / t3,t4=SSBO）+ u0..u2（u0,u1=SSBO）。
+        // 类型逐槽照 traceLayout_ 口径：AS 走 RayTracingAccelStruct、结构化缓冲走
+        // StructuredBuffer_*——Texture_* 类型错配在 DX12 恰好容错、Vulkan 直接
+        // device lost（M14B1 实测教训）。
+        nvrhi::BindingLayoutDesc rlDesc;
+        rlDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(2))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(5))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
+        restirLayout_ = device->createBindingLayout(rlDesc);
+
+        nvrhi::BindingSetDesc rsDesc;
+        rsDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, restirCB_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, velocity_));
+        rsDesc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(2, tlas_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, wcChecksums_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, wcRadiance_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(5, hdrSceneColor_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, reservoirA_));
+        rsDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(1, reservoirB_));
+        rsDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, hdrSceneColor_));
+        restirSet_ = device->createBindingSet(rsDesc, restirLayout_);
+
+        { nvrhi::ComputePipelineDesc p; p.setComputeShader(csRestirTemporal_)
+            .addBindingLayout(restirLayout_);
+          restirPSOTemporal_ = device->createComputePipeline(p); }
+        { nvrhi::ComputePipelineDesc p; p.setComputeShader(csRestirSpatial_)
+            .addBindingLayout(restirLayout_);
+          restirPSOSpatial_ = device->createComputePipeline(p); }
+
+        if (!restirCB_ || !reservoirA_ || !reservoirB_ || !restirSet_
+            || !restirPSOTemporal_ || !restirPSOSpatial_) {
+            outError = "restir: resource creation failed";
+            nl::core::log::deviceError("restir", outError);
+            restirFailed_ = true;
+            return true;
+        }
+        restirResW_ = rw;
+        restirResH_ = rh;
+        restirReady_ = true;
+        nl::core::log::infoCh("scene", "restir: ready (reservoir 64B x ", rw, "x", rh,
+                            " x2, Q-B3 ping-pong; M=1 + temporal/spatial reuse)");
+    }
+
+    // ---- restirCB_ 每帧全量覆写（40 float）：[0..15] invViewProj /
+    // [16..19] 灯向 / [20..23] 灯色·强度 / [24..27] albedo·ambient /
+    // [28..31] bias·tMax·W·H / [32..35] cacheOn·radius·cap·frame /
+    // [36..38] eye。灯参数与 traceCB_/gatherCB_ 同源（2.5×ls，--probe-light-scale）。
+    {
+        nl::math::Mat4 vp{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
+        float rcb[40] = {};
+        std::memcpy(rcb, invVP.m, sizeof(invVP.m));
+        const float ls = params.probeLightScale;
+        rcb[16] = params.lightDir[0];
+        rcb[17] = params.lightDir[1];
+        rcb[18] = params.lightDir[2];
+        rcb[20] = 1.0f; rcb[21] = 1.0f; rcb[22] = 1.0f;
+        rcb[23] = 2.5f * ls;
+        rcb[24] = 0.45f; rcb[25] = 0.39f; rcb[26] = 0.30f;   // albedo 暖灰（同 traceCB）
+        rcb[27] = 0.01f;                                     // ambient（同 traceCB .a）
+        rcb[28] = 0.01f;                                     // shadowBias（M9.1 同值）
+        rcb[29] = 50.0f;                                     // shadowTMax（M9.1 同值）
+        rcb[30] = vpW;
+        rcb[31] = vpH;
+        rcb[32] = (params.probeCacheBounce || cacheFrame_ > 0) ? 1.0f : 0.0f;
+        rcb[33] = 30.0f;                                     // spatial radius px（bevy 口径）
+        rcb[34] = 20.0f;                                     // confidence cap（B2 调参面）
+        rcb[35] = static_cast<float>(cacheFrame_ % 64u);     // 确定性帧号
+        rcb[36] = params.eye[0];
+        rcb[37] = params.eye[1];
+        rcb[38] = params.eye[2];
+        rcb[39] = 0.5f;   // B2 misLambda cap（M14B2；调参面留 M14C1 拍板再接参数）
+        cmd->writeBuffer(restirCB_, rcb, sizeof(rcb));
+    }
+
+    // ---- pass1 csRestirTemporal（读 A 上帧末态 → 写 B）：reservoir 帧初态 =
+    // 上一帧末态 UAV（keepInitialState，首帧即创建态，无 SRV 分支问题）。
+    {
+        const bool ptRestir = passTimers_.begin(cmd, PassTimers::kPassRestirTemporal);
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(restirPSOTemporal_).addBindingSet(restirSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((rw + 7u) / 8u, (rh + 7u) / 8u, 1u);
+        if (ptRestir) passTimers_.end(cmd, PassTimers::kPassRestirTemporal);
+    }
+
+    // ---- pass2 csRestirSpatial（读 B → 写 A + hdr RMW）：hdr 当前态 =
+    // RenderTarget（matResolve 刚写完）→ 显式转 UAV（drawProbeGather 4010 行
+    // 同款口径）；presentTonemap 自己转回 SRV。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        const bool ptRestir = passTimers_.begin(cmd, PassTimers::kPassRestirSpatial);
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(restirPSOSpatial_).addBindingSet(restirSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((rw + 7u) / 8u, (rh + 7u) / 8u, 1u);
+        if (ptRestir) passTimers_.end(cmd, PassTimers::kPassRestirSpatial);
+    }
+    if (!restirLogged_) {
+        nl::core::log::infoCh("scene", "restir: active (M=1 cosine candidate + temporal "
+                            "+ spatial reuse, cache bounce direct + fallback)");
+        restirLogged_ = true;
     }
     return true;
 }
@@ -6346,10 +7058,13 @@ void Scene::drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
          .addBindingSet(dotsSet_[probeParity_]);
     state.viewport.addViewportAndScissorRect(viewport);
     cmd->setGraphicsState(state);
-    const std::uint32_t total = probeBaseRes_ * probeBaseRes_ +
-                                (probeBaseRes_ >> 1) * (probeBaseRes_ >> 1) +
-                                (probeBaseRes_ >> 2) * (probeBaseRes_ >> 2) +
-                                (probeBaseRes_ >> 3) * (probeBaseRes_ >> 3);
+    // M14C1：adaptive 模式实例数 ×2（预留区段；非 adaptive CPU 只发均匀区
+    // 实例，vsProbeDots 的 ×2 映射后半段永不命中 → 品红分支不可达，保形）。
+    const std::uint32_t perLevel = probeBaseRes_ * probeBaseRes_ +
+                                   (probeBaseRes_ >> 1) * (probeBaseRes_ >> 1) +
+                                   (probeBaseRes_ >> 2) * (probeBaseRes_ >> 2) +
+                                   (probeBaseRes_ >> 3) * (probeBaseRes_ >> 3);
+    const std::uint32_t total = probeAdaptiveMode_ ? (perLevel * 2u) : perLevel;
     nvrhi::DrawArguments args;
     args.setVertexCount(4)          // triangle-strip quad
         .setInstanceCount(total);
@@ -9923,7 +10638,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // trace 之后填表供下一帧命中。前移填表会破坏 csCacheFill 依赖本帧
                     // probeDepth_ 的契约（probeDepth_ 在 drawProbeFrame 的 velocity
                     // prepass 才写好），故缓存填表必须落在 drawProbeFrame 之后。
-                    if (probe_ && (params.cacheViz || params.probeCacheBounce))
+                    if (probe_ && (params.cacheViz || params.probeCacheBounce || restirMode_))
                         drawCacheFrame(cmd, viewport, params);
                     // M11.2 验收（--probe-atlas-dump）：跳过 gather，把 irradAtlas_[0]
                     // 直出到画面做开关开/关自比（合成图在该场景读不到 M11.2 增量）。
@@ -9932,10 +10647,18 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         if (!drawIrradDump(cmd, viewport, params, adErr))
                             nl::core::log::deviceError("irrad-dump", adErr);
                     }
+                    // M14B1（S14-B）：restir 模式在 gather 同槽跑 ReSTIR GI 两 pass
+                    //（reservoir 时空重用 + RMW 合成；Q-B1~B3 拍板）。
+                    if (probe_ && restirMode_ && tlasReady_) {
+                        std::string rErr;
+                        if (!drawRestirFrame(cmd, viewport, params, rErr))
+                            nl::core::log::deviceError("restir", rErr);
+                    }
                     // M10.2（Q13-3）：gather 态 = 全屏探针插值 + 直光合成（hdr 同
                     // 纹理 RMW，ambient 已置零）；无点叠加。非 gather 态保持
                     // M10.0/M10.1 点可视化保形。
-                    if (probe_ && params.probeGather && !params.probeAtlasDump && tlasReady_) {
+                    if (probe_ && params.probeGather && !params.probeAtlasDump
+                        && !restirMode_ && tlasReady_) {
                         std::string gErr;
                         if (!drawProbeGather(cmd, viewport, params, gErr))
                             nl::core::log::deviceError("probe-gather", gErr);
@@ -9966,7 +10689,7 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     // 深度关——全探针可见，布点覆盖性证据优先于遮挡正确性）。
                     // M10.2：gather 态跳过（Q13-3 无点叠加）。
                     // S11 M11.0：cache-viz 无点叠加（伪彩即最终画面）。
-                    if (probe_ && !params.cacheViz &&
+                    if (probe_ && !params.cacheViz && !restirMode_ &&
                         !(params.probeGather && tlasReady_) && !params.probeAtlasDump)
                         drawProbeDots(cmd, framebuffer, viewport, params);
                 } else {
@@ -11622,6 +12345,40 @@ void Scene::shutdown() {
     csFilterSpatial_ = nullptr;
     filterSpatialLayout_ = nullptr;
     filterSpatialPSO_ = nullptr;
+    // M14B1（S14-B）：restir 链句柄同批释放（同上口径）。
+    csRestirTemporal_ = nullptr;
+    csRestirSpatial_ = nullptr;
+    restirCB_ = nullptr;
+    restirLayout_ = nullptr;
+    restirSet_ = nullptr;
+    restirPSOTemporal_ = nullptr;
+    restirPSOSpatial_ = nullptr;
+    reservoirA_ = nullptr;
+    reservoirB_ = nullptr;
+    restirReady_ = false;
+    // M14C1（S14-C）：自适应探针链句柄同批释放（同上口径）。2026-11-14 实锤：
+    // 初版漏登 9 句柄 → adaptive 模式退出段错误 139（~Scene 析构晚于
+    // vkDestroyDevice → nvoglv64 INVALID_POINTER_READ，dmp 符号化
+    // ComputePipeline::{dtor} → vkDestroyPipeline）；probe/restir 模式因
+    // 创建守卫句柄为空侥幸不崩——S15 教训「Scene 新增资源必须同步进
+    // shutdown 清单」原样复发，本次入台账。
+    csAdaptiveMark_ = nullptr;
+    csAdaptiveSpawn_ = nullptr;
+    // M14C3：fixup 链句柄同批释放（M14C1 shutdown 教训同款纪律）。
+    csAdaptiveSkyFixup_ = nullptr;
+    adaptiveSkyFixupLayout_ = nullptr;
+    adaptiveSkyFixupSet_[0] = nullptr;
+    adaptiveSkyFixupSet_[1] = nullptr;
+    adaptiveSkyFixupPSO_ = nullptr;
+    adaptiveMask_ = nullptr;
+    adaptiveMarkLayout_ = nullptr;
+    adaptiveSpawnLayout_ = nullptr;
+    adaptiveMarkSet_[0] = nullptr;
+    adaptiveMarkSet_[1] = nullptr;
+    adaptiveSpawnSet_[0] = nullptr;
+    adaptiveSpawnSet_[1] = nullptr;
+    adaptiveMarkPSO_ = nullptr;
+    adaptiveSpawnPSO_ = nullptr;
     filterSpatialSet_[0] = nullptr;
     filterSpatialSet_[1] = nullptr;
     filterHistoryCur_ = nullptr;

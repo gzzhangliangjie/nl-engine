@@ -77,7 +77,8 @@ VSDotsOutput vsProbeDots(uint instanceId : SV_InstanceID,
     output.misc       = float4(0.0f, 0.0f, 0.0f, 0.0f);
     output.irradiance = float3(0.0f, 0.0f, 0.0f);
 
-    // instanceId → (level, gridTexel)：细级在前，计数 = res_k²。
+    // instanceId → (level, gridTexel)：细级在前，计数 = res_k²（M14C1：adaptive
+    // 模式 CPU 发 ×2 实例，texel.y ≥ res 的 = 预留区自适应探针 → 品红）。
     const uint baseRes = uint(g_vizParams.w);
     uint level = 0u;
     uint2 texel = uint2(0u, 0u);
@@ -86,7 +87,8 @@ VSDotsOutput vsProbeDots(uint instanceId : SV_InstanceID,
     for (uint l = 0u; l < 4u; ++l)
     {
         const uint res = baseRes >> l;
-        const uint count = res * res;
+        const uint count = res * res * 2u;   // 均匀区 + 预留区（非 adaptive 模式
+                                             // CPU 只发均匀区实例，后半段永不命中）
         if (remaining < count)
         {
             level = l;
@@ -97,7 +99,11 @@ VSDotsOutput vsProbeDots(uint instanceId : SV_InstanceID,
     }
 
     const float4 probe = loadProbeAtlas(level, texel);
-    if (probe.w <= 0.0f) return output;   // 天空探针：NaN 裁剪（默认值已置）
+    if (probe.w <= 0.0f) return output;   // 天空探针/空槽：NaN 裁剪（默认值已置）
+
+    // M14C1：预留区探针标记（misc.z）——psProbeDots 据此画品红。uniform 区
+    // （texel.y < res）恒 0 → 非 adaptive 模式品红分支不可达（保形）。
+    const bool adaptiveProbe = (texel.y >= (baseRes >> level));
 
     const float2 size = max(g_vizParams.yz, float2(1.0f, 1.0f));
     const float4 clip = mul(g_vizViewProj, float4(probe.xyz, 1.0f));
@@ -115,8 +121,10 @@ VSDotsOutput vsProbeDots(uint instanceId : SV_InstanceID,
     output.position  = float4(dotNdc, clip.z / clip.w, 1.0f);
     output.quadLocal = corner;
     output.misc.x = float(level);
-    // level0 探针带 prevUV 增量（velocity 消费证据）；粗级恒 0。
-    output.misc.y = (level == 0u)
+    output.misc.z = adaptiveProbe ? 1.0f : 0.0f;   // M14C1：自适应探针标记
+    // level0 探针带 prevUV 增量（velocity 消费证据）；粗级恒 0。自适应探针
+    // 不写 prevDelta（Spawn 不产出速度），且 texel.y ≥ res 越界 Load 返 0。
+    output.misc.y = (level == 0u && texel.y < (baseRes >> 0u))
         ? length(g_prevDeltaSRV.Load(int3(texel, 0)).xy) : 0.0f;
 
     // M10.1：dotMode=1 → 点色 = 探针八面体辐照度按**探针法线方向**采样
@@ -180,5 +188,7 @@ void psProbeDots(VSDotsOutput input, out float4 color : SV_Target)
     }
     // prevUV 增量非零（相机移动 / 越界）：点亮为白——时域链路可视化。
     if (input.misc.y > 1e-5f) c = float3(1.0f, 1.0f, 1.0f);
+    // M14C1：自适应探针品红点（布点显示：加密集中在插值覆盖不足的细节区）。
+    if (input.misc.z > 0.5f) c = float3(1.0f, 0.20f, 0.60f);
     color = float4(c, 1.0f);
 }

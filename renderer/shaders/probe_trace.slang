@@ -126,13 +126,28 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
     const uint res    = uint(g_traceParams.z) >> level;
     const uint octRes = uint(g_traceParams.w);
     const uint store  = octRes + 2u;                    // 10（core + 1 texel border）
-    if (tid.x >= res * store || tid.y >= res * store) return;
+    // M14C1：行数用 irrad atlas runtime 高度判（GetDimensions）——probe-adaptive
+    // 模式 atlas 高 ×2（预留区段 = 自适应探针），probe 模式高度 = res×store
+    // 与旧判据 tid.y >= res*store 逐值一致（s10-*/s11-*/s12-* 冻结基线零漂）。
+    // 旧判据在 adaptive 模式会把预留区段整段早退（M14C1 收口实锤：spawn 探针
+    // 全部未被追踪，irrad 预留区恒黑）。
+    float2 irradDim;
+    g_irrad0.GetDimensions(irradDim.x, irradDim.y);
+    if (tid.x >= res * store || tid.y >= uint(irradDim.y)) return;
 
     const uint2 probeT = uint2(tid.x / store, tid.y / store);
     const int2  octT   = int2(tid.x % store, tid.y % store) - 1;   // [-1, res]
 
+    // M14C3：spawn 探针 texel 级 miss 标记（atlas 预留区 probeT.y >= res；非
+    // adaptive 模式 irrad 高 = res*store，probeT.y < res 恒成立 → 本判据恒 false
+    // 保形）。a 通道此前恒 1 且无任何消费端（gather/viz/dump 全只读 xyz，已核实）；
+    // spawn 探针的 miss texel 写 a=0 供 csAdaptiveSkyFixup 统计天空占比做探针级
+    // 剔除（PLAN §11 拍板 A）。uniform 探针 a 恒 1 逐位不变（u8 冻结基线零漂）。
+    const bool isSpawn = probeT.y >= res;
+
     float3 radiance = float3(0.0f, 0.0f, 0.0f);         // 天空探针 = 黑（a=0 标记）
     const float4 probe = loadPlaceAtlas(level, probeT);
+    bool texelMiss = false;                              // M14C3：spawn 探针 miss 标记
     if (probe.w > 0.0f)
     {
         // 探针 texel 方向（border texel wrap 到对侧 core 方向，无缝口径）。
@@ -182,6 +197,7 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
             radiance = applyHeightFog(radiance, probe.xyz.y, dir, 1.0e4f,
                                       g_traceFog.x, g_traceFog.y,
                                       g_traceHorizon.rgb, 500.0f);
+            texelMiss = true;                           // M14C3：spawn 区段 a 通道 miss 标记
         }
         else
         {
@@ -251,7 +267,10 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
         }
     }
 
-    const float4 outData = float4(radiance, 1.0f);      // a=1 = texel 有效（含天空）
+    // M14C3：a = texel 有效标记。uniform 探针恒 1（逐位保形）；spawn 探针
+    // miss texel = 0（命中仍 1）——xyz（radiance）一字节不变，只改 a。
+    const float aMark = (isSpawn && texelMiss) ? 0.0f : 1.0f;
+    const float4 outData = float4(radiance, aMark);
     switch (level)
     {
     case 0u: g_irrad0[tid.xy] = outData; break;

@@ -14866,6 +14866,120 @@
      "command": "viewer.exe --scene ecs-e1b --tick parallel --script tour (130 frames screenshot)"
     }
    ]
+  },
+  {
+   "id": "s14b-restir",
+   "label": "M14B2",
+   "name": "ReSTIR GI 收官评估：置信度加权空域合并 + defensive MIS + 自收敛态验收（option A）",
+   "tag": "s14-restir",
+   "date": "2026-11-13",
+   "summary": "M14B2（S14-B 收官步）：① 空域邻居合并改置信度加权（nbConf=min(nb.confidence,cap)/cap 权重进 5 邻居 reservoir merge，低置信邻居少说话）；② defensive MIS（RTXDI misLambda 口径）：W=W_u·[(1-λ)+λ/m]，λ=saturate(g_rEye.w)·(1-conf01)，conf≥cap 后退回纯无偏 W；cap=0.5（scene.cpp rcb[39]，调参面留 M14C1 接参数）。③ 裁判链重定义（用户拍板 option A）：M14B0 预设的 reference-gi 裁判实测是 Q14-1 口径 104-tri 粗代理（不同几何+不同 albedo），MSE 0.1187 无意义 → 改自收敛累积裁判：restir 2048 帧长跑 / filter 长跑各自当真值，短跑比「逼近自收敛态程度 + 帧成本记账」。实测（DX12，960x540，yaw12/pitch9/dist7）：restir f128/f256/f512 距 f2048 真值 MSE=0.0194/0.0061/0.0143（8-bit tonemap 域，噪声底 ≤0.02）；filter 模式从 f4 起逐位不变（确定性输出、无收敛维度，帧数裁判对它不适用）；restir vs filter 互差 MSE≈116（GI 语义域不同：per-pixel 单弹射 vs 探针级联插值，不是质量裁判）。MIS 开关自比：off 短跑 vs off 收敛 MSE=0.0177、on/off 收敛态互差 MSE=0.0107（噪声底量级）、on/off 短跑互差 0.0272。帧成本：restir 稳态 GPU 0.656 ms/帧 vs filter 0.219 ms/帧（3.0x）；restirTemp 0.121 + restirSpatial 0.837 ms（--pass-timing 首解锚）vs filter GI 链 ≈0.10 ms；MIS-off 0.614 ms（defensive MIS 增量 ~0.04 ms）。④ 非确定性根因入档：restir 模式同 exe 新进程双跑 MD5 不同（0.16% 像素 / max 23/255）；二分定位 = restir 模式下的 world_cache 填表链（诊断禁用 drawCacheFrame 后双跑逐字节一致；fill/update 种子均确定性，唯一 CAS 竞态面 = S11 hashmap 插槽 InterlockedCompareExchange 调度序，冻结基线不机械修）。验收门因此走统计档（B1「随机采样路径预期」先例）：重拍 diff-pixel ≤1.0%（实测 0.127/0.260）+ meanDiff ≤0.5/255（实测 0.002/0.004），tools/check-s14b-restir.py stability/present/selftest 纯标准库。根因修复挂待拍板（触碰 S11 冻结基线或 Q-B1 语义）。",
+   "acceptance": "run.bat verify ALL GREEN：双后端重拍 exit 0 + dx12 deviceErrors=0 + restir: active 锚 + 统计门 stability（≤1.0%/≤0.5/255，实测 dx12 656px/0.127%、vulkan 1347px/0.260%）+ present 门（基线 mean 38.19/255）+ 负向（missing.nmesh 非零退出）；工具 selftest PASS（含同图/微差/黑图三路自检）。自收敛评估数字见 summary（f128 已达噪声底 ≤0.02 MSE；filter f4 起逐位不变；互差 116 属语义域差非质量差，reference-gi 判据缺陷如实入档）。双后端构建 selftest 16/16 + restir 产物 104+4 登记不增量（复用 B1 两 pass）。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "restir-gpu",
+     "name": "ReSTIR GI GPU 出图冒烟：--mode restir 128 帧双后端（退出码 + deviceErrors 锚）",
+     "kind": "tool",
+     "note": "Q11-1 统计口径：restir 含 world_cache 间接项（Q-B1 语义），S11 hashmap CAS 竞态使同 exe 重拍 MD5 漂移（0.16% 像素 / max 23/255，二分实锤）→ 本 case 只断言退出码 + deviceErrors=0，不做像素 bytes 对比；统计门在 restir-verify 的 run.bat 里（check-s14b-restir.py stability，阈值按实测标定 +6x 裕量）。preview 为基线静态图。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "args": [
+      "--mode",
+      "restir",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "128",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode restir --model Suzanne-materials.nmesh --screenshot {out}.png --frames 128 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14b-restir/restir-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "restir-verify",
+     "name": "M14B2 收官统计验收：双后端重拍统计门 + 锚 + present 门 + 负向控制 + 工具 selftest",
+     "kind": "manual",
+     "note": "run.bat verify：双后端 128 帧重拍（dx12 日志捕获）→ deviceErrors=0 / restir: active 锚 → check-s14b-restir.py stability 双后端（re-shot vs 冻结基线，≤1.0% diff-pixels + ≤0.5/255 meanDiff，标定自同 exe 重拍实测 0.127%/0.260% vs 0.16% 基准漂移）→ present 门（基线非退化，mean 38.19/255）→ 负向（missing.nmesh 必须非零退出）。工具 selftest：同图 / 微差 / 黑图三路自检，纯标准库 PNG 解码。",
+     "args": [],
+     "command": "example/s14b-restir/run.bat verify",
+     "script": "example/s14b-restir/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "s14c-adaptive",
+   "label": "M14C1",
+   "name": "自适应探针收官：UE 插值覆盖 Mark + 预留区 spawn + 213.8 根因实锤根修（guard 转正）+ 逐位一致验收门",
+   "tag": "s14-restir",
+   "date": "2026-11-14",
+   "summary": "M14C1（S14-C 收官步，Q-C1A+C2A+C3B 组合）：自适应探针整链落地——csAdaptiveMark（16x16 Hammersley 256 采样点复用 gather upsample 权重函数，UE MIN 0.01 插值覆盖判据）→ csAdaptiveSpawn（per-tile 至多 1 spawn 写 atlas 预留区，结构守恒：res_eff=baseRes/2，trace dispatch 与 probe 模式同线程数）→ gather 8 池 + spawn 探针真实位置距离衰减权（拍板 A，spacing 自标定零新 CB 常量）→ viz 品红点。排查收官（用户拍板续挖 213.8）：diag19/20 全精度 readback 证据链实锤 213.8 唯一根因 = L3 级 res=1 时 (res,res)-2 uint 下溢使 tile 钳位失效，uniform corner01 ct=(0,1) 落预留区槽位读到 spawn 探针（门槛翻转 7942px 与 sum 差 14263px 全部包含于 L3 26701px 集合，0 例外）；根修 = csGather uniform corner 越界守卫（拍板转正，commit cc69c7d），guard 后 adp<->u8 全帧逐位一致。552 分解定案：u8<->u32 结构差 338（均匀网格减半固有逼近差）+ 213.8（本 bug，已归零）。验收口径定稿（PLAN §9）：adaptive（缺省 base 16，res_eff=8）↔ probe --probe-base-res 8 同网格逐位一致为验收门（双后端 fc /b bytes 级），替代已废 MSE/u32 参照门；spawn GI 贡献本场景实测 0（机制保留）；spawn 增益验收场景（探针格稀疏/大尺度）挂账独立后续项。附 --probe-place-readback 五通道全精度回读诊断基建 + tools/cmp-place-readback.py（M11.2 冻结诊断工具触碰已获放行）。 【M14C2 追记（2026-11-14 晚，用户拍板 A）】spacing 门降级落码（spacingN==0 时 sceneDepth×2tan(fovY)/res_l 估算 + 50% 限幅 uniSum>0 才生效 + --probe-adaptive-nospawn 总开关）：spawn 池激活实锤（20474px 单向增亮）；增益分块混合（改善 top −61%，恶化块全单向过亮 = 天空 miss texel 污染，修复挂账单独立项）；验收口径重定——旧「adaptive↔u8 逐位一致」门被按设计打破，新门 = bytes（spawn-on vs 冻结基线）+ 保形门（nospawn≡u8 逐位双后端）+ 激活门（spawn-on≠nospawn）+ timing/viz/present/负向，run.bat verify ALL GREEN；readback 基建限界 DX12-only（vk staging 复用第 3 周期段错误，M14C1 预存在缺陷修正）。 【M14C3 追记（2026-11-15 凌晨，用户拍板 A=探针级质量门）】spawn 天空 miss texel 污染修复落码：trace 里 spawn 区段 texel（probeT.y>=res）irrad a 通道写 miss 标记（miss=0/命中=1；uniform 区恒 1 保形，a 通道此前无任何消费端——gather/viz/dump 全只读 xyz）→ 新 pass csAdaptiveSkyFixup（每 spawn 探针 1 线程统计 100 texel a 均值，有效占比<0.4 → 清 place atlas spawn 槽 probe.w=0 → gather 既有 probe.w<=0 权重 0 剔除语义自动接管，gather 零改动）。--probe-sky-fixup-off 旗标（反向关）。验收口径 M14C3 重定（PLAN §11 挂账修复兑现）：bytes（spawn-on vs 冻结基线）+ NOFIX-FREEZE（fixup-off ≡ M14C2 基线 adaptive-m14c2-*.png 逐位双后端）+ FIXUP-EFFECT（fixup-on ≠ fixup-off 双后端）+ 保形门 + 激活门 + timing/viz/present/负向，run.bat verify 19 门 ALL GREEN。附真 bug 修复：csAdaptiveSkyFixup dispatch 条件漏 probeAdaptiveMode_ → probe/filter/restir 模式 setComputeState(null set) deviceErrors=8（ref-u8 门 FAIL），补条件后 probe 模式 deviceErrors=0。【事故复盘：混合 obj 布局】落码后 M14C3 代码「确定性 0xC0000005」（M14C2 基线同参数 rc=0）：γ 系列实验（α kPassCount 回退仍崩→β env gate fixup 全关仍崩→γ1 shader 层回退仍崩→γ4d 快照单 8B 写 0x100000000→cdb 数据断点 ba w8 首写即命中→γ6 initProbe 入口已坏→γ7 干净全量重建 rc=0）实锤根因 = 多轮 stash/checkout 后改布局类头文件（scene.hpp 5 成员/renderer.hpp 数组/gpu_timer.hpp）的增量构建产生新旧布局混链：M14C2 布局 obj 构造 scene_ 按旧偏移写 probeFirstFrame_=true @0x16AC → M14C3 布局下该偏移 = probeAtlas_[1][2] 槽高 4 字节 → uint64 值恰 0x100000000 → ensure 首写 operator= Release 崩。崩点随每次增量构建的 obj 新旧组合漂移（GpuTimer::end/ensureProbeTargets/更早），混合基线拍的 PNG 不可信（bytes 门基线已用干净重建输出重定版）。教训：改布局类头文件必须删全部 obj 全量重编，增量构建不可信；dump 单点崩栈不能定性踩踏者，哨兵时序 + cdb 数据断点组合拳。",
+   "acceptance": "run.bat verify ALL GREEN（实测 DX12+VULKAN）：双后端重拍 exit 0 + dx12 deviceErrors=0 + probe-adaptive: active (res_eff=8) 锚 + shutdown ok 锚 + bytes 门（重拍 vs 冻结基线双后端 identical）+ 保形门（adaptive --probe-adaptive-nospawn vs uniform-8 双后端 fc /b identical，M14C2 口径）+ 激活门（spawn-on vs nospawn 必须不同双后端，M14C2 口径；旧 adaptive↔u8 逐位一致门被 spacing 门降级按设计打破）+ timing 守恒门（csTraceProbe probe=0.00717ms adaptive=0.00717ms ratio=1.00，gate <=1.5）+ viz 门（品红 spawn 点 1030px 双后端，gate >=100）+ present 门（mean 35.37/255 max 255）+ 负向（missing.nmesh 非零退出）；工具 selftest PASS。双后端构建 selftest 16/16。kStage 冻结 S8.2 不 bump（M9.0 澄清口径：server.py --check 只证旧阶段无回归，新卡走 run.bat verify + regression --only 双闸）。 【M14C2 verify 实测】12 门 ALL GREEN：bytes 双后端 identical + 保形双后端 identical + 激活双后端 differ + timing ratio 0.71 + viz 品红 1030 双后端 + present mean 37.19/255 + 负向非零退出。 【M14C3 verify 实测】19 门 ALL GREEN（DX12+VULKAN，干净全量重建后）：bytes 双后端 identical（基线adaptive-*.png=干净重建输出定版）+ NOFIX-FREEZE 双后端 bit-identical（vs adaptive-m14c2-*.png）+ FIXUP-EFFECT 双后端differ + 保形门双后端 identical + 激活门双后端 differ + timing ratio 1.00 + viz 品红 1030 双后端 + present mean 36.71/255 + 负向非零退出 + ref-u8（probe 模式 dispatch 条件修复后 deviceErrors=0）。双后端构建 selftest 16/16。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "adaptive-gpu",
+     "name": "自适应探针 GPU 出图冒烟：--mode probe-adaptive 8 帧双后端（退出码 + deviceErrors 锚）",
+     "kind": "tool",
+     "note": "确定性路径（Q-B1 非确定性仅 restir 模式）：probe-adaptive 8 帧重拍逐位可复现，bytes 对比在 adaptive-verify 的 run.bat 里（冻结基线 fc /b + 逐位一致门）。preview 为基线静态图。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "args": [
+      "--mode",
+      "probe-adaptive",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode probe-adaptive --model Suzanne-materials.nmesh --screenshot {out}.png --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14c-adaptive/adaptive-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "adaptive-verify",
+     "name": "M14C1 收官验收：双后端重拍 bytes/逐位一致门 + timing 守恒 + viz 品红 + present 门 + 负向控制",
+     "kind": "manual",
+     "note": "run.bat verify：双后端 adaptive 重拍（dx12 --pass-timing 日志捕获）→ 锚三连（deviceErrors=0 / probe-adaptive: active / shutdown ok）→ uniform-8 参照重拍（dx12 doubles as timing-probe 捕获）→ bytes 门（重拍 vs 冻结基线）→ 逐位一致门（adaptive vs uniform-8，fc /b，PLAN §9 定稿口径）→ timing 门（ratio<=1.5）→ viz 门（品红>=100）→ present 门 → 负向。全部门在同一 verify 内 fresh capture。",
+     "args": [],
+     "command": "example/s14c-adaptive/run.bat verify",
+     "script": "example/s14c-adaptive/run.bat verify"
+    }
+   ]
   }
  ]
 }

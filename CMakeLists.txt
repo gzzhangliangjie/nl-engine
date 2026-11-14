@@ -500,7 +500,8 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "probe_trace.cstrace"
                     "world_cache.cscacheupdate"
                     "ssr.csssr"
-                    "ssr.csssrdepth")
+                    "ssr.csssrdepth"
+                    "restir.cstemporal" "restir.csspatial")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -522,7 +523,10 @@ set(_ENTRIES_SKY_BG "vsSkyBg|vsskybg|vertex" "psSkyBg|psskybg|fragment")
 # 单独一条小 pass 重画几何写 velocity_，不碰 T2 场景 PSO）。
 set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|fragment")
 # M10.0（S10）：probe.slang 单 compute 入口——cascade 探针布点（反投影+法线偏移）。
-set(_ENTRIES_PROBE "csPlace|csplace|compute")
+set(_ENTRIES_PROBE "csPlace|csplace|compute"
+                    "csAdaptiveMark|csadaptivemark|compute"
+                    "csAdaptiveSpawn|csadaptivespawn|compute"      # M14C1（S14-C）
+                    "csAdaptiveSkyFixup|csadaptiveskyfixup|compute") # M14C3（S14-C）
 # M10.0（S10）：probe_viz.slang 双入口——探针点可视化（每探针一实例 quad + 按级着色）。
 set(_ENTRIES_PROBE_VIZ "vsProbeDots|vsprobedots|vertex" "psProbeDots|psprobedots|fragment")
 # M10.1（S10）：probe_trace.slang 单 compute 入口——探针追踪（每探针每 texel 1 条
@@ -532,6 +536,9 @@ set(_ENTRIES_PROBE_TRACE "csTraceProbe|cstrace|compute")
 # M10.2（S10）：probe_gather.slang 双 compute 入口——final gather（每像素探针
 # 插值 Q13-1 深度选级 + UE 权重）与直光合成（Q13-2 ambient 替换）。
 set(_ENTRIES_PROBE_GATHER "csGather|csgather|compute" "csGatherCompose|csgathercompose|compute")
+# M14B1（S14-B）：restir.slang 双 compute 入口——ReSTIR GI 两 pass（Q-B1~B3
+# 拍板；RayQuery inline → DXIL 需 SM6.5+，进 _SM66_ARTIFACTS）。
+set(_ENTRIES_RESTIR "csRestirTemporal|cstemporal|compute" "csRestirSpatial|csspatial|compute")
 # S11 M11.0：world_cache.slang 三 compute 入口——世界缓存 flat hashmap（Q11-0 方案 A：
 # 无墓碑 + life 衰减清零立即重用 + 3 步探测）。半分辨率填充 / 全表衰减 / cache-viz 伪彩。
 set(_ENTRIES_WORLD_CACHE "csCacheFill|cscachefill|compute" "csCacheDecay|cscachedecay|compute" "csCacheViz|cscacheviz|compute" "csCacheUpdate|cscacheupdate|compute" "csCacheBlend|cscacheblend|compute")
@@ -590,6 +597,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_PROBE_TRACE}")
     elseif(_SRC_NAME STREQUAL "probe_gather")
         set(_ENTRIES "${_ENTRIES_PROBE_GATHER}")
+    elseif(_SRC_NAME STREQUAL "restir")
+        set(_ENTRIES "${_ENTRIES_RESTIR}")
     elseif(_SRC_NAME STREQUAL "world_cache")
         set(_ENTRIES "${_ENTRIES_WORLD_CACHE}")
     elseif(_SRC_NAME STREQUAL "probe_atlas_dump")
@@ -624,6 +633,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")
+            set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
+        elseif(_SRC_NAME STREQUAL "restir")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "world_cache")
             set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")
