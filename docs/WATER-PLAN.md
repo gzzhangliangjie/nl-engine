@@ -143,3 +143,42 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 **接线（拍板 A）**：水网格 = initCull 内 CPU 程序化 grid（64x64 quad 覆盖 [-20,20]²，y=0 未位移平面）切 ≤128 tri 伪 cluster 追加进 vertexPool_/localIndices_/clusterMeta_/clusterSpheres_（radius 含 maxAmp 防位移出锥误剔），materialId = `kWaterMaterialId`（0xFFFFu 保留标记，GPUMaterial 表不占位）；`waterEnable` 布尔沿 init 参数链 viewer→backend→initVisbuf→initCull，缺省关 = 网格不追加、visIndex 段位空置。位移与法线 = `renderer/shaders/water_common.slangh`（新头，单源）：visbuf.slang `vsVisRaster` 位移（深度真实位移→SSR 命中面正确）+ direct.slang `csDirect`/`csDirectVsm` 水体分支（per-pixel 重算位移+解析法线+水体直光）+ ssr.slang 起点法线水体分支（M-WAT0 反解链零改动）。波形 CB = `WaterConstants`（新 volatile CB，8 波 × [D.xy,A,k / ω,Q] + time，160B），visbuf b2 / direct/ssr b7。时间 = `--water` 开时 viewer 固定步进（frameIdx × `GameClock::kStep`），FrameParams.waterTime 缺省 0。水体直光（M-WAT1 域）：深水基色 + N·L 漫反射 + 太阳 Blinn-Phong 高光（iago water_lighting_simple 口径，sky 反射/折射/泡沫留给 M-WAT2）。
 
 **M-WAT1 文件清单**：`renderer/shaders/water_common.slangh`（新）+ `visbuf.slang`（VS 位移）+ `direct.slang`（水体分支 ×2 入口）+ `ssr.slang`（起点法线分支）+ `scene.{hpp,cpp}`（网格追加 + WaterConstants + 绑定）+ `renderer.hpp`（init 参数 + FrameParams.waterTime）+ `backend_dx12/vulkan.cpp`（参数透传）+ `viewer/main.cpp`（`--water`）+ `CMakeLists.txt`（water_common DEPS）+ `example/water-t1/`（卡 + run.bat + 基线）+ `example/cases.json`。SM66 白名单不动（无 NonUniformResourceIndex 新增）。
+
+---
+
+## 9c. M-WAT2 开工实读与任务书（2026-11-14，claim 后三处重读）
+
+> claim：`wt_pool.py claim --track water --milestone M-WAT2`（2026-11-14 17:42）；wt `nl-engine-water` 复用（feat/water HEAD `113a766` = M-WAT1 台账收官）。
+
+**本轮实读（模块 = 折射/吸收/泡沫，一一对应）**：
+- UE（权威）：
+  - `SingleLayerWaterRefractionCulling.usf` **全文**：`RefractionMaskPS` 按距离/Fresnel/深度差三段 smoothstep 渐隐折射（性能闸，首版不做 mask 渐隐，记升级路径）。
+  - `SingleLayerWaterShading.ush` §60~250：折射主链——`IorWater = DielectricF0ToIor(Specular)`；扭曲 UV = `ComputeBufferUVDistortion`（法线+IOR）→ **折射量按水厚衰减** `BufferUVDistortion *= saturate((BehindDepth - WaterDepth) / 30)`；`WaterVolumeDepth = max(0, BehindDepth − WaterDepth)`（bilateral 从非水邻域估计）；**Beer-Lambert**：`Transmittance = exp(−ExtinctionCoeff × WaterVolumeDepth)`、in-scatter `SafeScatteringAmount = saturate(Scattering × (1−Transmittance) / ExtinctionSafe)`、最终 `Luminance = Scattered + Transmittance × BehindLuminance`（吸收与背景色分离合成）。
+  - `SingleLayerWaterComposite.usf`：**水色合成在独立 composite pass**——`Reflection = SSR.rgb + ReflectionCaptures × (1−SSR.a)`（SSR 与环境反射混合先例），全 pass 对水像素整体替换。
+  - `SingleLayerWaterRendering.cpp`：`SceneWithoutWater` = **copy 主 scene color/depth**（水不写主 scene color 的前提下零成本）；`RefractionMask` = R8 独立 RT。
+- bevy：`crates/bevy_pbr/src/transmission.wesl` **全文重读**：`refracted_ray()` Snell（`eta = 1/IOR`，k 判全内反射）→ 出射点 `world + T × thickness` → clip → 屏幕 UV；**深度拒绝** = 采样点 prepass depth 与 frag z 比较，拒绝则 `a=0` 回退；roughness spiral blur（多 tap）首版不做。
+- Carrot：无水体（§2 已实证留痕，本轮不重读）。
+- 本仓（现状接线核实）：`material.slang` mode 5 水分支（218/256~273：waterGerstner + waterShadeDirect 直光色直接 return）+ `direct.slang` csDirect/csDirectVsm 水分支 + `water_common.slangh`（WaterConstants 288B：wcA/wcB[8] 波参 + wcC time/baseColor + wcD ambient/specPow/specGain/maxAmp）+ `ssr.slang`（csSSRCompose 写回 hdrSceneColor_ 先例）。
+
+**核心发现（形态判定根因）**：折射需要「水像素背后的场景色」。UE 能 copy 主 scene color 当无水体场景，是因为**水色延迟到独立 composite pass 才写**；本项目 M-WAT1 已把直光水色写进 hdrSceneColor_（psMatResolve mode 5 / csDirect 分支）→ 水像素位置背景 miss，折射无处采样。**这是 M-WAT2 接线形态的架构判定，落码前必须拍板（Q-WA7）**。
+
+### Q-WA7（待拍板）：折射合成形态
+
+| 方案 | 做法 | 代价 / 影响面 | 结论 |
+|---|---|---|---|
+| **A · UE 同构合成后移**（建议） | psMatResolve/csDirect 水分支改**黑占位**（不再写直光水色）；SSR compose 后 copy 一份 `sceneWithoutWater_`（水像素黑=天然无水体场景，同 UE copy 口径）；新增 `csWaterComposite`（SSR 后 tonemap 前）反解 vis buffer 判水像素：扭曲 UV 采背景 + 深度拒绝（bevy 口径）+ Beer-Lambert 吸收（厚度 = bilateral 非水邻域估计）+ Fresnel 混合 ssrColor_ 反射 + 直光 specular + Gerstner 波峰泡沫，整体替换水像素写回 | 改动 M-WAT1 收官两处水分支（直光逻辑迁移进 composite）；**water-t1 基线必变须重拍**；新增 1 RT + 1 copy pass + 1 compute pass；CS 绑定面与 csSSR 同构 | 唯一与 UE pass 链同构；折射背景保真；水色单一出口（pass 链完整合成 = 计划书 M-WAT2 验收原文） |
+| B · psMatResolve 内嵌折射 | 保持 M-WAT1 形态，折射在 mode 5 水分支内做 | **不可行**：水像素场景色已是水色，背景色无源可采；MRT 第二目标也拿不到背景（反解到水伪簇） | 否 |
+| C · 真重渲无水体场景 | 单独 raster+resolve 跳过水体渲背景 RT | 整条 vis buffer 链 ×2，UE 都用 copy 不重渲 | 否（成本无理由） |
+
+**方案 A 落码口径**（拍板后细化，先记骨架）：
+1. 占位对称改动：`material.slang` mode 5 水分支 + `direct.slang` csDirect/csDirectVsm 水分支 → 输出黑（保留 Gerstner 计算移进 composite）。
+2. `water_common.slangh` 新增单源：`waterRefractDir`（Snell，bevy 口径）/ `waterAbsorb`（Beer-Lambert，UE 公式）/ `waterFresnel`（Schlick）/ 泡沫判据（Gerstner 偏度/陡度，iago 口径）。
+3. WaterConstants 扩展（吸收系数 RGB / IOR / 折射强度 / 泡沫阈值）→ wcE 起新槽；**CB 尺寸以 `dxc -dumpbin` 反汇编为准**（M11.0 纪律），CPU 数组长度 = 字节/4。
+4. `csWaterComposite` 绑定：vis buffer 全家桶 + clusterMeta/vertexPool/localIndices（几何反解拿未位移 worldPos → per-pixel Gerstner）+ WaterConstants + 主 depth + sceneWithoutWater_ + ssrColor_；新 binding layout（每 PSO 独立 desc，M-WAT0 先例），不动 refComputeLayout_ 六槽。
+5. 确定性：全 float 同源（GameClock::kStep 时间），双后端 bytes 目标；bilateral 深度估计为固定 3×3 邻域确定性行走（无动态分支）。
+6. 零漂移闸：`--water` 关 = 冻结基线 bytes 不变；water-t2 新卡 = `run.bat verify` + `regression.py --only water-t2`；**water-t1 基线重拍**（方案 A 画面必变，cases.json 基线 PNG 更新 + 台账记录重拍原因）。
+7. 泡沫：首版 Gerstner 陡度判据（Q·A·k 峰值邻域白化），Jacobian 全量判据列进阶。
+
+**M-WAT2 文件清单**：`material.slang` + `direct.slang` + `water_common.slangh` + `ssr.slang` 或新 `water_composite.slang` + `scene.hpp/cpp`（sceneWithoutWater_ RT + copy/composite 调度）+ `CMakeLists.txt` + `example/water-t2/` + `water-t1` 基线重拍 + `cases.json` + 台账。
+
+> 拍板 Q-WA7 后本节补「拍板结论」段并删方案矩阵中的「待拍板」标记，方可落码。
