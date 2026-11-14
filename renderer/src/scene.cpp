@@ -10113,6 +10113,7 @@ void Scene::shutdown() {
     bloomBlurHPSO_ = nullptr;
     bloomBlurVPSO_ = nullptr;
     bloomLayout_ = nullptr;
+    bloomExtractLayout_ = nullptr;
     bloomSetA_ = nullptr;
     bloomSetB_ = nullptr;
     bloomSetHdr_ = nullptr;

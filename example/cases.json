@@ -12051,6 +12051,182 @@
      "expectExit": 0
     }
    ]
+  },
+  {
+   "id": "nl0-bloom",
+   "label": "NL M-NL0",
+   "name": "bloom（T0 post-chain 4 pass：半分辨率亮部提取+分离高斯+tonemap 复合，--bloom 缺省关保 bytes）",
+   "tag": "nl0-bloom",
+   "date": "2026-11-14",
+   "summary": "夜景轨道第一步（M-NL0）：T0 post-chain 落 bloom。rt.slang 新增 BloomConstants(b2)/g_bloomTex(t2)/g_bloomSampler(s0) + psBloomExtract（亮度软阈值，display 色空间直接提取）+ psBloomBlurH/V（5-tap 线性等效 9-tap 高斯）+ psTonemap 复合（weight=0 时 IEEE 恒等）。scene：半分辨率 RGBA16F ping-pong（keepInitialState=SRV 与帧首 beginTracking 对齐）、三 PSO 懒建、volatile CB 16B（旗标关也每帧写——tonemap set 无条件绑 b2，volatile 未写先绑 = NVRHI validation error）、presentTonemap 内一处插链（raster 6 处 + rt/shadow 全模式生效）、shutdown 清单 +15。布局严格对齐 shader 静态引用（M15.0 漏槽教训复现后根修）：extract={t0,b2} / blur={t2,b2,s0} / tonemap={t0,t2,b2,s0}。viewer CLI：--bloom / --bloom-threshold(0.7) / --bloom-weight(0.5)。selftest 清单 +6（118->124）。",
+   "acceptance": [
+    "双后端 selftest 16/16 + 132/132 shader（bloom 三入口 spv+dxil 6 件）",
+    "关 bloom 缺省态：双后端 deviceErrors=0，DX12 vs VULKAN 像素 near（34 px +-1 LSB 光栅化边缘惯例差）",
+    "开 bloom 默认参数（threshold 0.7 / weight 0.5）：5.1% 亮部通道变化（max 70）——只动亮部方向正确",
+    "开 bloom 极限参数（threshold 0 / weight 1.5）：约 77% 通道变化（avg 5.19）全屏辉光——效果显性锚",
+    "四态截图（双后端 关/夜默认/极限/昼）deviceErrors 全 0"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "bloom-off",
+     "name": "缺省态（无 --bloom）：bytes 保形锚（夜 t=470）",
+     "kind": "pair",
+     "note": "旗标关 = applyBloom 整体跳过 + CB weight=0 复合恒等；与 weather-w1 同参数夜景（t=470）基线互证。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe（夜 t=470 无 --bloom）",
+     "baselines": {
+      "dx12": "example/nl0-bloom/bloom-off-dx12.png",
+      "vulkan": "example/nl0-bloom/bloom-off-vulkan.png"
+     }
+    },
+    {
+     "id": "bloom-night",
+     "name": "夜态 bloom 默认参数：t=470 + --bloom（threshold 0.7 / weight 0.5）",
+     "kind": "pair",
+     "note": "M-NL0 主画面锚：自发光黄眼 + 亮部辉光；与 bloom-off 对比 = 默认参数只动亮部。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--bloom",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --bloom（夜 t=470 默认参数）",
+     "baselines": {
+      "dx12": "example/nl0-bloom/bloom-night-dx12.png",
+      "vulkan": "example/nl0-bloom/bloom-night-vulkan.png"
+     }
+    },
+    {
+     "id": "bloom-max",
+     "name": "极限参数：threshold 0 / weight 1.5（效果显性锚）",
+     "kind": "pair",
+     "note": "阈值 0 = 全画面进 bloom、weight 1.5 = 辉光放大——链路显性验证（约 77% 通道变化）。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--bloom",
+      "--bloom-threshold",
+      "0.0",
+      "--bloom-weight",
+      "1.5",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --bloom --bloom-threshold 0.0 --bloom-weight 1.5（夜 t=470）",
+     "baselines": {
+      "dx12": "example/nl0-bloom/bloom-max-dx12.png",
+      "vulkan": "example/nl0-bloom/bloom-max-vulkan.png"
+     }
+    },
+    {
+     "id": "bloom-day",
+     "name": "昼态 bloom：t=300（天光亮部辉光叙事锚）",
+     "kind": "pair",
+     "note": "昼天空亮部进 bloom——与 bloom-night 对比 = 昼/夜两态辉光表现。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--bloom",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --bloom（昼 t=300 默认参数）",
+     "baselines": {
+      "dx12": "example/nl0-bloom/bloom-day-dx12.png",
+      "vulkan": "example/nl0-bloom/bloom-day-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }
