@@ -149,6 +149,8 @@ struct Options {
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
     bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
     bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
+    bool ssr = false;              // M-WAT0（water 轨）：--ssr（pulling 模式 SSR 反射，
+                                   //  缺省关 = 冻结基线 bytes）
     bool probeCacheBounce = false; // M11.2：--probe-cache-bounce（命中查缓存，默认关保形）
     float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
     // M-WEA1：天气链（Q-WE5 已拍板）。seed <0 = 关（缺省常量保形）；>=0 开启后
@@ -326,6 +328,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
         else if (a == "--cache-viz-radiance") o.cacheVizRadiance = true;  // M11.1
+        else if (a == "--ssr") o.ssr = true;   // M-WAT0（water 轨）：SSR 反射开关
         // M11.2：探针命中查缓存（默认关）+ 灯强度缩放（关灯余晖取证）。
         else if (a == "--probe-cache-bounce") o.probeCacheBounce = true;
         else if (a == "--probe-light-scale" && i + 1 < argc)
@@ -2675,6 +2678,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         // 缺省零副作用。
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
+        // M-WAT0（water 轨）：SSR 开关透传（仅 pulling 分支消费，缺省关零扰动）。
+        fp.ssr = o.ssr;
         if (rtMode) {
             float rtEye[3];
             camera.eyePosition(rtEye);

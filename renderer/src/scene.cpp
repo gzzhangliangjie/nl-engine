@@ -5042,6 +5042,420 @@ bool Scene::drawIrradDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewp
 }
 
 
+// ============================================================================
+// M-WAT0（water 轨）：SSR 屏幕空间反射本体。口径详见 ssr.slang 文件头与
+// docs/WATER-PLAN.md §9b。结构：
+//   ensureSsrTargets   —— 金字塔/场景色链/ssrColor_（POT 化，随视口懒建重建）
+//   ensureSsrPipelines —— 五 compute 的 shader/PSO/布局/CB（尺寸无关）
+//   drawSSR            —— 深度 → min 链 → 均值链 → march → 合成（tonemap 前）
+// ============================================================================
+
+// 懒建 SSR 目标。金字塔 POT 化口径照抄 ensureHizTargets（M6.0 教训：非 POT
+// 视口的 ceil 对半链超 mip 上限——DX12 debug layer 报错 / Vulkan 静默建坏）。
+bool Scene::ensureSsrTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                             std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    if (w == 0 || h == 0) { outError = "ssr: zero viewport"; return false; }
+    if (ssrDistPyramid_ && ssrW_ == w && ssrH_ == h) return true;   // 懒建判据按视口尺寸
+
+    // 金字塔 POT 化（hiz 同款）。
+    std::uint32_t pw = 1, ph = 1;
+    while (pw < w) pw <<= 1;
+    while (ph < h) ph <<= 1;
+    ssrW_ = w;
+    ssrH_ = h;
+    std::uint32_t m = std::max(pw, ph);
+    ssrPyrMips_ = 1;
+    while (m > 1) { m = (m + 1) / 2; ++ssrPyrMips_; }
+
+    // 径向距离 **min** 金字塔：R32F 全 mip，UAV 可写（逐级 compute 写）。
+    // 语义/算子与 S6 hizPyramid_ 相反（max=遮挡 vs min=跳步），见 ssr.slang 头。
+    {
+        nvrhi::TextureDesc d;
+        d.width = pw; d.height = ph;
+        d.format = nvrhi::Format::R32_FLOAT;
+        d.mipLevels = ssrPyrMips_;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        // 非渲染目标（纯 UAV/SRV 链）禁 setClearValue——D3D12 明确要求
+        // pOptimizedClearValue 仅 RT/DS 可带（CreateCommittedResource3 实锤
+        // 0x80070057）。mip0 未写区域由 csSSRDepth 的 1e9 写入兜底。
+        d.debugName = "SsrDistPyramid";
+        ssrDistPyramid_ = device->createTexture(d);
+        if (!ssrDistPyramid_) { outError = "createTexture failed for ssr dist pyramid"; return false; }
+    }
+    // 场景色均值链：RGBA32F 视口尺寸 ×7 mip（mip0 不用，mip1..6 = 半→1/64；
+    // 均值链从 mip1 起建——mip0 若做拷贝需另一入口，march colorMip 直接映射
+    // mipStart+1，见 ssr.slang §4）。
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;
+        d.mipLevels = kSsrChainMips + 1;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = "SsrSceneMip";
+        ssrSceneMip_ = device->createTexture(d);
+        if (!ssrSceneMip_) { outError = "createTexture failed for ssr scene mip"; return false; }
+    }
+    // march 输出：RGBA32F 单 mip（rgb = 反射辐射，a = 权重；RGBA32 口径同
+    // rtTarget_——FP32 中间格式才字节精确，16F 在半步边界翻转有前科）。
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = "SsrColor";
+        ssrColor_ = device->createTexture(d);
+        if (!ssrColor_) { outError = "createTexture failed for ssr color"; return false; }
+    }
+
+    // 逐级绑定集（纹理重建即重建；[0] 未用占位）。
+    ssrDownSets_.assign(ssrPyrMips_, nullptr);
+    for (std::uint32_t L = 1; L < ssrPyrMips_; ++L) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrDownCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(16, ssrDistPyramid_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(L - 1, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(1, ssrDistPyramid_,
+                      nvrhi::Format::R32_FLOAT,
+                      nvrhi::TextureSubresourceSet(L, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrDownSets_[L] = device->createBindingSet(sd, ssrDownLayout_);
+        if (!ssrDownSets_[L]) { outError = "createBindingSet failed for ssr down level"; return false; }
+    }
+    ssrMipSets_.assign(kSsrChainMips + 1, nullptr);
+    // L=1：源 = hdrSceneColor_ mip0（视口尺寸），目标 = 链 mip1。
+    // L≥2：源 = 链 mip(L-1)，目标 = 链 mip L。
+    for (std::uint32_t L = 1; L <= kSsrChainMips; ++L) {
+        nvrhi::BindingSetDesc sd;
+        const nvrhi::TextureHandle src = (L == 1) ? hdrSceneColor_ : ssrSceneMip_;
+        const std::uint32_t srcLevel = (L == 1) ? 0u : (L - 1u);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrDownCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(17, src,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(srcLevel, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(2, ssrSceneMip_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(L, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrMipSets_[L] = device->createBindingSet(sd, ssrMipLayout_);
+        if (!ssrMipSets_[L]) { outError = "createBindingSet failed for ssr mip level"; return false; }
+    }
+    // 纹理句柄已换新：绑定集全部失效重置（set 是不可变对象，drawSSR 懒建重建）。
+    ssrDepthSet_ = nullptr;
+    ssrSet_ = nullptr;
+    ssrComposeSet_ = nullptr;
+    return true;
+}
+
+// 懒建 SSR 管线（shader ×5 / PSO ×5 / 布局 ×5 / CB ×4；尺寸无关不随视口重建）。
+bool Scene::ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                               std::string& outError) {
+    if (ssrPSO_) return true;   // 已建判据（全组一起建/一起败）
+    auto ssrPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/ssr." + artifact + "." + shaderSuffix;
+    };
+    auto loadSsr = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(ssrPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load ssr shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for ssr ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadSsr("csssrdepth", csSsrDepth_) ||
+        !loadSsr("csssrdown", csSsrDown_) ||
+        !loadSsr("csssrmip", csSsrMip_) ||
+        !loadSsr("csssr", csSsr_) ||
+        !loadSsr("csssrcompose", csSsrCompose_))
+        return false;
+
+    // CB（volatile，逐帧/逐级全量覆写；版本数 ≥ 每帧写次数，M11.2 cache 同款）。
+    {
+        nvrhi::BufferDesc d;
+        d.byteSize = 96; d.isConstantBuffer = true; d.isVolatile = true; d.maxVersions = 16;
+        d.debugName = "SsrDepthConstants";
+        ssrDepthCB_ = device->createBuffer(d);
+        d.byteSize = 16; d.maxVersions = 32; d.debugName = "SsrDownConstants";
+        ssrDownCB_ = device->createBuffer(d);
+        d.byteSize = 208; d.maxVersions = 16; d.debugName = "SsrConstants";
+        ssrConstantsCB_ = device->createBuffer(d);
+        d.byteSize = 16; d.maxVersions = 16; d.debugName = "SsrComposeConstants";
+        ssrComposeCB_ = device->createBuffer(d);
+        if (!ssrDepthCB_ || !ssrDownCB_ || !ssrConstantsCB_ || !ssrComposeCB_) {
+            outError = "createBuffer failed for ssr constants"; return false;
+        }
+    }
+
+    // 布局：槽位分配见 ssr.slang 文件头（避开 resolve 表 t0..t12/s0、b0..b2；
+    // march 布局复用 addResolveLayoutItems + b3/t13/t14/u0）。
+    {
+        nvrhi::BindingLayoutDesc d;
+        d.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        ssrDepthLayout_ = device->createBindingLayout(d);
+    }
+    {
+        nvrhi::BindingLayoutDesc d;
+        d.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(16))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
+        ssrDownLayout_ = device->createBindingLayout(d);
+        // mip / compose 布局形制相同，仅槽位不同，各建一份。
+        nvrhi::BindingLayoutDesc m;
+        m.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(17))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
+        ssrMipLayout_ = device->createBindingLayout(m);
+        nvrhi::BindingLayoutDesc c;
+        c.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(18))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+        ssrComposeLayout_ = device->createBindingLayout(c);
+    }
+    {
+        nvrhi::BindingLayoutDesc d;
+        addResolveLayoutItems(d);
+        d.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(13))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(14))
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        ssrLayout_ = device->createBindingLayout(d);
+    }
+    if (!ssrDepthLayout_ || !ssrDownLayout_ || !ssrMipLayout_ ||
+        !ssrComposeLayout_ || !ssrLayout_) {
+        outError = "createBindingLayout failed for ssr"; return false;
+    }
+
+    {
+        // 五个 PSO 各自独立 desc——addBindingLayout 是**追加**语义，复用同一
+        // desc 会把前面的 layout 全带上（NVRHI 实锤：down/mip/compose 同占 b5
+        // → "Same bindings defined by more than one layout"，pipeline 建败）。
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrDepth_).addBindingLayout(ssrDepthLayout_);
+        ssrDepthPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrDown_).addBindingLayout(ssrDownLayout_);
+        ssrDownPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrMip_).addBindingLayout(ssrMipLayout_);
+        ssrMipPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsr_).addBindingLayout(ssrLayout_);
+        ssrPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrCompose_).addBindingLayout(ssrComposeLayout_);
+        ssrComposePSO_ = device->createComputePipeline(p);
+    }
+    if (!ssrDepthPSO_ || !ssrDownPSO_ || !ssrMipPSO_ || !ssrPSO_ || !ssrComposePSO_) {
+        outError = "createComputePipeline failed for ssr"; return false;
+    }
+    return true;
+}
+
+// SSR 全链（pulling 分支、params.ssr 开时调用；cache-viz 之后 tonemap 之前）。
+// 状态流：金字塔 UAV(UAV→SRV) / hdr RT→SRV(链读)→UAV(合成) / ssrColor_ UAV→SRV。
+// presentTonemap 自己把 hdr 转回 SRV（cache-viz 同款收尾口径）。
+bool Scene::drawSSR(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                    const FrameParams& params, std::string& outError) {
+    if (ssrFailed_) return true;   // 失败过：静默跳过（日志锚只打一次）
+    if (!t0Device_) { outError = "ssr: device not captured"; return false; }
+
+    // 懒建（管线一次；目标随视口）。
+    if (!ssrPSO_) {
+        if (!ensureSsrPipelines(t0Device_, shaderSuffix_.c_str(), outError)) {
+            ssrFailed_ = true;
+            nl::core::log::deviceError("ssr", outError);
+            return false;
+        }
+    }
+    {
+        std::string tErr;
+        if (!ensureSsrTargets(t0Device_, viewport.maxX - viewport.minX,
+                              viewport.maxY - viewport.minY, tErr)) {
+            ssrFailed_ = true;
+            nl::core::log::deviceError("ssr", tErr);
+            return false;
+        }
+    }
+
+    const std::uint32_t w = ssrW_, h = ssrH_;
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+
+    // ---- 常量写入（每帧全量覆写；volatile 纪律禁整块 memcpy 之外的字段重排）。
+    nl::math::Mat4 mvp{}, invMvp{}, vp{};
+    std::memcpy(mvp.m, params.mvp, sizeof(mvp.m));
+    invMvp = nl::math::inverseMat4(mvp);
+    std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+
+    {
+        float dc[24];
+        std::memcpy(dc, invMvp.m, sizeof(invMvp.m));               // [0..15]
+        dc[16] = params.eye[0]; dc[17] = params.eye[1]; dc[18] = params.eye[2];
+        dc[19] = 0.0f;
+        dc[20] = static_cast<float>(w); dc[21] = static_cast<float>(h);
+        dc[22] = 0.0f; dc[23] = 0.0f;
+        cmd->writeBuffer(ssrDepthCB_, dc, sizeof(dc));
+    }
+    {
+        float mc[52];
+        std::memcpy(mc, vp.m, sizeof(vp.m));                       // [0..15] fwdViewProj
+        std::memcpy(mc + 16, invMvp.m, sizeof(invMvp.m));          // [16..31] invMvpM
+        mc[32] = params.eye[0]; mc[33] = params.eye[1]; mc[34] = params.eye[2];
+        mc[35] = 24.0f;                                            // w = maxDist（米，演示场景量级）
+        mc[36] = 16.0f;                                            // x = 步数（8/12/16 档取 16）
+        mc[37] = 0.25f;                                            // y = 容差带 band（米）
+        mc[38] = 4.0f;                                             // z = mipScale（roughness×4 → 起始 mip）
+        mc[39] = static_cast<float>(ssrPyrMips_);                  // w = 金字塔 mip 数
+        mc[40] = static_cast<float>(kSsrChainMips + 1);            // x = 场景色链总 mip 数
+        mc[41] = 0.0f; mc[42] = 0.0f; mc[43] = 0.0f;
+        mc[44] = params.weatherZenith[0]; mc[45] = params.weatherZenith[1];
+        mc[46] = params.weatherZenith[2]; mc[47] = 0.0f;
+        mc[48] = params.weatherHorizon[0]; mc[49] = params.weatherHorizon[1];
+        mc[50] = params.weatherHorizon[2]; mc[51] = 0.0f;
+        cmd->writeBuffer(ssrConstantsCB_, mc, sizeof(mc));
+    }
+    const float cc[4] = {static_cast<float>(w), static_cast<float>(h), 0.0f, 0.0f};
+    cmd->writeBuffer(ssrComposeCB_, cc, sizeof(cc));
+
+    // ---- (1) 深度 → mip0（vis SRV 读；matResolve 已把 vis 置 SRV 态）。
+    if (!ssrDepthSet_ ) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(4, ssrDepthCB_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, ssrDistPyramid_,
+                      nvrhi::Format::R32_FLOAT,
+                      nvrhi::TextureSubresourceSet(0, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrDepthSet_ = t0Device_->createBindingSet(sd, ssrDepthLayout_);
+        if (!ssrDepthSet_) { outError = "createBindingSet failed for ssr depth"; return false; }
+    }
+    cmd->setTextureState(ssrDistPyramid_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrDepthPSO_).addBindingSet(ssrDepthSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+    // ---- (2) 金字塔 min 链（逐级 dispatch；b5 常量逐级覆写；ComputeState
+    // 循环内新建——addBindingSet 追加语义同 PSO desc 坑）。
+    std::uint32_t pw = 1, ph = 1;
+    while (pw < w) pw <<= 1;
+    while (ph < h) ph <<= 1;
+    for (std::uint32_t L = 1; L < ssrPyrMips_; ++L) {
+        const float dc2[4] = {
+            static_cast<float>(pw >> (L - 1)), static_cast<float>(ph >> (L - 1)),
+            static_cast<float>(pw >> L),       static_cast<float>(ph >> L)};
+        cmd->writeBuffer(ssrDownCB_, dc2, sizeof(dc2));
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrDownPSO_).addBindingSet(ssrDownSets_[L]);
+        cmd->setComputeState(cstate);
+        const std::uint32_t tw = pw >> L, th = ph >> L;
+        if (tw == 0 || th == 0) break;
+        cmd->dispatch((tw + 7u) / 8u, (th + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrDistPyramid_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (3) 场景色均值链（hdr 当前态 = RenderTarget（matResolve 刚写完）
+    // → SRV 读 mip0 → 写链 mip1..N；NVRHI set require 自动补 UAV barrier）。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(ssrSceneMip_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    for (std::uint32_t L = 1; L <= kSsrChainMips; ++L) {
+        const std::uint32_t srcW = (L == 1) ? w : (w >> (L - 1));
+        const std::uint32_t srcH = (L == 1) ? h : (h >> (L - 1));
+        const std::uint32_t tw = w >> L, th = h >> L;
+        if (tw == 0 || th == 0) break;
+        const float dc2[4] = {static_cast<float>(srcW), static_cast<float>(srcH),
+                              static_cast<float>(tw), static_cast<float>(th)};
+        cmd->writeBuffer(ssrDownCB_, dc2, sizeof(dc2));
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrMipPSO_).addBindingSet(ssrMipSets_[L]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((tw + 7u) / 8u, (th + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrSceneMip_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (4) march（set 懒建：纹理句柄可能因 resize 重建）。
+    if (!ssrSet_) {
+        nvrhi::BindingSetDesc sd;
+        addResolveSetItems(sd);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, ssrConstantsCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(13, ssrDistPyramid_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(14, ssrSceneMip_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, ssrColor_));
+        ssrSet_ = t0Device_->createBindingSet(sd, ssrLayout_);
+        if (!ssrSet_) { outError = "createBindingSet failed for ssr march"; return false; }
+    }
+    cmd->setTextureState(ssrColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrPSO_).addBindingSet(ssrSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (5) 合成叠加回 hdrSceneColor_（UAV 全替换先例；hdr 留 UAV 态，
+    // presentTonemap 自己转回 SRV）。
+    if (!ssrComposeSet_ || ssrComposeSetHdr_ != hdrSceneColor_) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrComposeCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(18, ssrColor_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(3, hdrSceneColor_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(0, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrComposeSet_ = t0Device_->createBindingSet(sd, ssrComposeLayout_);
+        if (!ssrComposeSet_) { outError = "createBindingSet failed for ssr compose"; return false; }
+        ssrComposeSetHdr_ = hdrSceneColor_;
+    }
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrComposePSO_).addBindingSet(ssrComposeSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+
+    if (!ssrLogged_) {
+        nl::core::log::infoCh("scene", "ssr: march chain ready ", w, "x", h,
+                            " pyrMips=", ssrPyrMips_,
+                            " chainMips=", kSsrChainMips + 1u,
+                            " steps=16 band=0.25m");
+        ssrLogged_ = true;
+    }
+    return true;
+}
+
+
 // M10.0：探针点可视化（tonemap 之后、swapchain 上）。PSO 对 swapchain 格式懒建
 //（blitPSO_ 同款）；atlas/prevDelta 的 UAV→SRV 转换由 dots set require 自动插。
 void Scene::drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
@@ -8335,6 +8749,14 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         if (!drawCacheViz(cmd, viewport, params, cvErr))
                             nl::core::log::deviceError("cache-viz", cvErr);
                     }
+                    // M-WAT0（water 轨）：SSR 反射全链——合成叠加写回
+                    // hdrSceneColor_（UAV 全替换），presentTonemap 转回 SRV。
+                    // 关（缺省）= 一行不执行 = 冻结基线 bytes。
+                    if (params.ssr) {
+                        std::string sErr;
+                        if (!drawSSR(cmd, viewport, params, sErr))
+                            nl::core::log::deviceError("ssr", sErr);
+                    }
                     // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
                     // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
                     if (t0Active) {
@@ -10205,6 +10627,41 @@ void Scene::shutdown() {
     for (auto& t : matBaseColor_) t = nullptr;
     for (auto& t : matMR_) t = nullptr;
     materialTable_ = nullptr;
+    // M-WAT0（water 轨）：SSR 资源 shutdown 清单同步（铁律：Scene 新增 GPU
+    // 资源必须进 shutdown——S15 UAF 教训，~Scene 时 device 已死）。
+    ssrDistPyramid_ = nullptr;
+    ssrSceneMip_ = nullptr;
+    ssrColor_ = nullptr;
+    ssrDownSets_.clear();
+    ssrMipSets_.clear();
+    csSsrDepth_ = nullptr;
+    csSsrDown_ = nullptr;
+    csSsrMip_ = nullptr;
+    csSsr_ = nullptr;
+    csSsrCompose_ = nullptr;
+    ssrDepthLayout_ = nullptr;
+    ssrDownLayout_ = nullptr;
+    ssrMipLayout_ = nullptr;
+    ssrComposeLayout_ = nullptr;
+    ssrLayout_ = nullptr;
+    ssrDepthPSO_ = nullptr;
+    ssrDownPSO_ = nullptr;
+    ssrMipPSO_ = nullptr;
+    ssrPSO_ = nullptr;
+    ssrComposePSO_ = nullptr;
+    ssrDepthSet_ = nullptr;
+    ssrSet_ = nullptr;
+    ssrComposeSet_ = nullptr;
+    ssrComposeSetHdr_ = nullptr;
+    ssrDepthCB_ = nullptr;
+    ssrDownCB_ = nullptr;
+    ssrConstantsCB_ = nullptr;
+    ssrComposeCB_ = nullptr;
+    ssrW_ = 0;
+    ssrH_ = 0;
+    ssrPyrMips_ = 0;
+    ssrFailed_ = false;
+    ssrLogged_ = false;
     for (auto& b : modelBatches_) {
         b.set = nullptr;
         b.lightConstants = nullptr;

@@ -614,6 +614,12 @@ public:
     // 合成图在本场景结构性读不到 GI 变化（M11.2 实锤）→ 验收对象必须是 GI 分量本身。
     bool drawGiDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                     std::string& outError);
+    // drawSSR（M-WAT0，water 轨）：SSR 屏幕空间反射全链——径向距离 min 金字塔
+    //（vis deviceZ 反投影）+ 场景色均值链 + march（UE SSRT 口径）+ 合成叠加
+    // 写回 hdrSceneColor_。仅 pulling 分支、params.ssr 开时调用（cache-viz 之后、
+    // presentTonemap 之前）；关 = 一行不执行 = 冻结基线 bytes。
+    bool drawSSR(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                 const FrameParams& params, std::string& outError);
   private:
     // 懒建 cache sets（依赖 probeDepth_ / hdrSceneColor_，句柄变了就重建——
     // set 是不可变对象，纹理重建后必须换新 set）。
@@ -621,6 +627,12 @@ public:
     // 懒建 cache 管线（shader/PSO/缓冲/CB；尺寸固定不随视口重建）。
     bool ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffix,
                               std::string& outError);
+    // 懒建 SSR 目标（金字塔/场景色链/ssrColor_，随视口尺寸 POT 化懒建重建）。
+    bool ensureSsrTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                          std::string& outError);
+    // 懒建 SSR 管线（shader/PSO/CB/布局；尺寸无关不随视口重建）。
+    bool ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                            std::string& outError);
   public:
     // 懒建 probe 资源（D32 自建深度 / velocityFb_ / atlas×2 parity / prevDelta /
     // sets / PSO）。baseRes 变化（ImGui）→ 参数入闸 → 纹理与 set 整组重建。
@@ -1445,6 +1457,32 @@ private:
     bool                         cacheFirstClear_ = true;// 首帧清零表（uninit 内存防假命中）
     bool                         cacheLogged_ = false;   // cache 日志锚只打一次
     bool                         cacheVizLogged_ = false;// viz compose 日志锚只打一次
+
+    // ---- M-WAT0（water 轨）：SSR 本体资源（懒建，详见 scene.cpp ensureSsr*）----
+    // ssrDistPyramid_ = 径向距离 **min** 金字塔（R32F POT 全 mip；度量同 S6 hiz
+    // 线性径向距离，算子与 S6 max 相反——SSR 跳步要「区域最近表面」，见
+    // ssr.slang 文件头 §2）。ssrSceneMip_ = 场景色均值链（RGBA32F POT）。
+    // ssrColor_ = march 输出（rgba：反射辐射 + 权重）。
+    nvrhi::TextureHandle         ssrDistPyramid_;
+    nvrhi::TextureHandle         ssrSceneMip_;
+    nvrhi::TextureHandle         ssrColor_;
+    std::uint32_t                ssrW_ = 0, ssrH_ = 0;   // 懒建判据（视口尺寸）
+    std::uint32_t                ssrPyrMips_ = 0;        // 金字塔 mip 数（POT 链长）
+    static constexpr std::uint32_t kSsrChainMips = 6;    // 场景色链 mip 数（POT/32）
+    nvrhi::ShaderHandle          csSsrDepth_, csSsrDown_, csSsrMip_, csSsr_, csSsrCompose_;
+    nvrhi::BindingLayoutHandle   ssrDepthLayout_, ssrDownLayout_, ssrMipLayout_,
+                                 ssrLayout_, ssrComposeLayout_;
+    nvrhi::ComputePipelineHandle ssrDepthPSO_, ssrDownPSO_, ssrMipPSO_, ssrPSO_, ssrComposePSO_;
+    nvrhi::BindingSetHandle      ssrDepthSet_, ssrSet_, ssrComposeSet_;
+    nvrhi::TextureHandle         ssrComposeSetHdr_;      // compose set 依赖登记（hdr 重建则 set 重建）
+    std::vector<nvrhi::BindingSetHandle> ssrDownSets_;   // [L≥1] 金字塔逐级 set
+    std::vector<nvrhi::BindingSetHandle> ssrMipSets_;    // [L≥1] 场景色链逐级 set
+    nvrhi::BufferHandle          ssrDepthCB_;            // volatile 96B（SsrDepthConstants b4）
+    nvrhi::BufferHandle          ssrDownCB_;             // volatile 16B（SsrDownConstants b5，逐级覆写）
+    nvrhi::BufferHandle          ssrConstantsCB_;        // volatile 208B（SsrConstants b3）
+    nvrhi::BufferHandle          ssrComposeCB_;          // volatile 16B（compose dims b5）
+    bool                         ssrFailed_ = false;     // 懒建失败只报一次，后续帧跳过
+    bool                         ssrLogged_ = false;     // SSR 首跑日志锚
 };
 
 } // namespace nl::renderer::detail

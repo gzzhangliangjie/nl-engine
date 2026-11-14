@@ -171,6 +171,11 @@ struct FrameParams {
                                        //（关灯余晖序列用；1.0 = 老路径基线）
     bool  probeAtlasDump     = false;   // M11.2 验收：把 irradAtlas_[0] 直出画面，绕开 gather 做开关开/关自比
 
+    // ---- M-WAT0（water 轨）：SSR 屏幕空间反射开关（--ssr，缺省关零扰动）----
+    // 仅 pulling（matResolve→hdrSceneColor_）分支消费：march + 合成插在
+    // cache-viz 之后、tonemap 之前；关 = 全链 bytes 保形（冻结基线口径）。
+    bool  ssr               = false;
+
     // ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A）----
     // 仅 --mode filter 消费；缺省全关 = 非 filter 路径零扰动（T5 保形硬边界：
     // 非 filter 的 csGatherCompose 绑定与执行顺序一字不动）。

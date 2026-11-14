@@ -13283,6 +13283,63 @@
      "command": "viewer.exe --traffic-city t3-traffic-city (street, steps 75)"
     }
    ]
+  },
+  {
+   "id": "water-t0",
+   "label": "WAT M-WAT0",
+   "name": "SSR 屏幕空间反射本体（water 轨首里程碑，--ssr）",
+   "tag": "water-t0",
+   "date": "2026-11-14",
+   "summary": "M-WAT0（A 类独立轨 feat/water，方案 B 第一步：反射基建先于水体水面 pass）。SSR 本体 = UE SSRT 口径确定性演示版：① 径向距离 **min** 金字塔（度量复用 S6 hiz 线性径向距离，算子与 S6 max 相反——SSR Hi-Z 跳步要「区域最近表面」，rayZ<区域 min 整格跳 / rayZ≥ 降 mip 细化；vis deviceZ 反投影世界坐标求距离，POT 化照抄 ensureHizTargets M6.0 教训）；② 法线/粗糙度 vis buffer 即取即算（gbuffer_common.slangh + 材质间接表，与 direct.slang 同构绑定，Q4 冻结零新属性纹理，NonUniformResourceIndex → csssr/csssrdepth 进 SM6.6 白名单）；③ 场景色均值链 RGBA32F 自写 2x2 mean down（NVRHI 无双后端统一 generateMips，手写兼得确定性；mip1..6 半→1/64，mip0 不建免拷贝）；④ march = UVz 线性插值 + 容差带 0.25m + bUncertain 权重减半 + roughness×4 起始 mip + 步数 16 档 + miss 走 sky.slangh 解析天穹（Q-WA5 预案不触发）；⑤ 合成 csSSRCompose 加法叠加写回 hdrSceneColor_（UAV 全替换先例 cache viz；RMW 同纹理先例 csGatherCompose），插点 cache-viz 之后 tonemap 之前。--ssr 缺省关 = 全链 bytes 保形。工程坑两枚：ComputePipelineDesc/ComputeState 的 addBindingLayout/addBindingSet 均为**追加**语义（复用同一 desc 累积前序 layout → NVRHI「Same bindings defined by more than one layout」建败，五 PSO 各自独立 desc 修复）；非 RT 纹理禁 setClearValue（D3D12 CreateCommittedResource3 0x80070057 实锤）。验收：DX12/VULKAN 双后端 ssr-on 截图**逐字节一致**（float march 双后端确定性达成，near diff=0）；A/B 开关对照 13.88% 像素变化集中猴头表面、背景零变化；确定性双跑逐字节一致；零 deviceErrors。",
+   "acceptance": [
+    "water-t0 run.bat verify ALL GREEN exit 0：双后端 re-shot bytes vs 冻结基线 + ssr-off 零漂移基线 bytes + A/B on/off 必须不同 + 确定性双跑 + log 锚 ssr: march chain ready + deviceErrors=0 + 负向坏 mode exit 1",
+    "双后端 bytes 档：ssr-on 与 ssr-off 图 DX12 vs VULKAN 逐像素 diff=0（check-ssr.py near，float march 跨后端确定性）",
+    "A/B 分档：ssr 开关 13.88% 像素变化（阈值 0.5%），max 通道和差 221，变化集中在模型表面、背景（VIS_EMPTY 零权重）不动",
+    "产物登记：ssr 五 compute 入口 × spv/dxil = 10（renderer.cpp kArtifacts 118→128，M15.0 漏登教训预登记）+ selftest 16/16 双后端",
+    "回归抽查：s7.1/pulling + s10-probe/probe-viz + pbr-direct/pbr 三卡 bytes 全绿（--ssr 缺省关零扰动）"
+   ],
+   "preview": "example/water-t0/ssr-on-dx12.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "water-t0-ssr",
+     "name": "SSR 反射开启（Suzanne 三猴头，glossy 表面映相邻物体）",
+     "kind": "image",
+     "note": "viewer --mode pulling --ssr 直渲；反射能量 = 场景色链粗糙度档采样 × (1-roughness)，miss 走解析天穹；与 ssr-off 冻结基线 A/B 可比。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "ssr: march chain ready",
+     "baselines": {
+      "dx12": "example/water-t0/ssr-on-dx12.png",
+      "vulkan": "example/water-t0/ssr-on-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr (Suzanne-materials, dist 7)"
+    }
+   ]
   }
  ]
 }

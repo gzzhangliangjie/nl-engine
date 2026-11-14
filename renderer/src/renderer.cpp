@@ -46,7 +46,7 @@ Status status() {
 }
 
 bool shaderArtifactsSelfTest(std::string& report) {
-// 产物名共 118 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
+// 产物名共 128 个（每项 = 1 个文件，spv/dxil 由 bool 选）：model 16（8 入口）+
 // cull.cs/dag.cs 4 + hiz 12 + hud 4（M0.5）+ debug_line 4（M-P3 单管线 vs/ps）+
 // visbuf 8（M7.0）+ material 4（M7.1，此前漏登）+ tlas_probe.cs 2（M8.1）+
 // rt.cs/vsrtpresent/psrtpresent 6（M8.2）+ psrefpresent/blit/tonemap 8 +
@@ -55,8 +55,8 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // probe_gather 4（M10.2）+ direct.csrefgi + rt.pscompare 4（M10.3）+
 // world_cache 6（S11 M11.0）+ world_cache 4（M11.1 update/blend）+
 // vsm 10（S15 M15.0 vs/ps 4 + M15.1 vsclear/psclear 4 + cs 2；M15.1 补登，
-// M15.0 漏登是 M7.1/M8.1 同款教训第三犯）。
-// （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误；总数随 S12/S15 增至 118。）
+// M15.0 漏登是 M7.1/M8.1 同款教训第三犯）+ ssr 10（M-WAT0 五 compute）。
+// （M10.2 收口注释误写 78，实测 90——2026-11-11 数表勘误；总数随 S12/S15/M-WAT0 增至 128。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -153,6 +153,14 @@ static const Artifact kArtifacts[] = {
     {"vsm.cscullcount", true}, {"vsm.cscullcount", false},
     {"vsm.cscullscan", true}, {"vsm.cscullscan", false},
     {"vsm.cscullfill", true}, {"vsm.cscullfill", false},
+    // M-WAT0（water 轨）：ssr.slang 五 compute 入口 × 双目标 = 10（SSR 本体：
+    // 深度/金字塔 min 链/场景色均值链/march/合成——M15.0 教训预登记，新入口
+    // 必须同步登记否则产物丢失时 selftest 仍绿）。
+    {"ssr.csssrdepth", true}, {"ssr.csssrdepth", false},
+    {"ssr.csssrdown", true}, {"ssr.csssrdown", false},
+    {"ssr.csssrmip", true}, {"ssr.csssrmip", false},
+    {"ssr.csssr", true}, {"ssr.csssr", false},
+    {"ssr.csssrcompose", true}, {"ssr.csssrcompose", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
