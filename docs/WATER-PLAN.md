@@ -162,7 +162,7 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 
 **核心发现（形态判定根因）**：折射需要「水像素背后的场景色」。UE 能 copy 主 scene color 当无水体场景，是因为**水色延迟到独立 composite pass 才写**；本项目 M-WAT1 已把直光水色写进 hdrSceneColor_（psMatResolve mode 5 / csDirect 分支）→ 水像素位置背景 miss，折射无处采样。**这是 M-WAT2 接线形态的架构判定，落码前必须拍板（Q-WA7）**。
 
-### Q-WA7（待拍板）：折射合成形态
+### Q-WA7（已拍板 2026-11-14）：折射合成形态 = **A · UE 同构合成后移**（用户拍板，方案矩阵留痕）
 
 | 方案 | 做法 | 代价 / 影响面 | 结论 |
 |---|---|---|---|
@@ -181,4 +181,4 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 
 **M-WAT2 文件清单**：`material.slang` + `direct.slang` + `water_common.slangh` + `ssr.slang` 或新 `water_composite.slang` + `scene.hpp/cpp`（sceneWithoutWater_ RT + copy/composite 调度）+ `CMakeLists.txt` + `example/water-t2/` + `water-t1` 基线重拍 + `cases.json` + 台账。
 
-> 拍板 Q-WA7 后本节补「拍板结论」段并删方案矩阵中的「待拍板」标记，方可落码。
+**拍板结论（2026-11-14 用户拍板 Q-WA7 = A）**：折射合成走 UE 同构后移——水像素黑占位 + `sceneWithoutWater_` copy + `csWaterComposite` 统一合成；water-t1 基线重拍授权随拍板生效（台账记录重拍原因）。B（背景无源不可行）/ C（成本无理由）否决留痕。落码开始。
