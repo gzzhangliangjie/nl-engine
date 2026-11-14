@@ -98,6 +98,19 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 
 ## 8. 进度台账
 
+### 2026-11-14 — M-E8 场景树层级 + 变更推送落地（feat/editor worktree）
+
+**落码五件套**（5 文件改 + 2 新增，682 行）：
+1. `scene.getTree` RPC（viewer bindScene 增强：签入 World + modelIds）——World 全集实体（含无 Model 的灯/空实体，kind=model/light/empty）+ parent 链 + 组件参数快照；idx = sceneObjects 下标（仅 kind=model 可 focus/setMaterial，-1 = 无实例行）；roots 编辑器侧按 parent==0 归组、悬空父按根处理；
+2. `editor.sceneChanged` 指纹推送——每渲染帧对 World 全集算 FNV1a（id/name/parent + Model tint/rough/metal/mesh + Light type/intensity/color/direction），变化帧 notify 一次；**指纹块在 ticking 块外**（preview/scene 缺省 tickMode=off 也生效——首版误放 ticking 内三段全静默）；RPC-SPEC §10 补 M-E8 实装表；
+3. 编辑器侧：`registerNotify("editor.sceneChanged")` → `g_sceneTreeDirty`（plugin.hpp extern atomic，定义须在 main.cpp 匿名 namespace 外——落内 = 内部链接双实体 C2872）；SceneOutlinerPlugin 树形化（TreeNodeEx 按 entity id 做 ID seed + Leaf 旗标 + kind 徽标 [model]/[light]/[empty] + 点击 focus 联动）+ auto 缺省开（dirty 消费 200ms 防抖，防抖期吞掉的通知还回去）；
+4. **`scene.setMaterial` 行为变更（覆盖 M-E5 口径）**：tint/rough/metal 写回 World `ModelComponent`（源头单写）——M-E5 原实现只改渲染收集表 sceneObjects，tick 开启时下一帧即被 World 旧值冲掉（隐藏缺陷）、树/指纹无感；M-E8 起写回 World，帧循环自然传导 + 指纹捕获 + getTree 同步。tint 分支曾漏置 `touched`（声明在 tint 之后）→ 第一次改 tint 无写回无推送（探针「tint FAIL / rough PASS」稳定复现实锤）；
+5. `tools/m-e8-probe.py` 三段 19 断言（getTree 结构 / sceneChanged 推送正负向 + getTree 读回 / model 空树）+ `tools/m-e8-gui-shot.py`（PrintWindow 免焦点 + DPI-aware + 预置 imgui.ini 布局——editor 缺省把全部插件面板叠在 (60,60) 互相遮挡）。
+
+**验收（editor 轨道惯例 = 探针 + selftest，不进 cases.json）**：双后端 **BUILD OK** + selftest **16/16 ×2**（VULKAN 需 mspdbsrv 重启——C1090 PDB 0x6BA 三连挂后 Stop-Process 强杀重置即过，与 script wt 会话并行编译竞态）；`m-e8-probe.py` **19/19 全绿**；`m-e7-probe.py` 复验 **0 fail**（setMaterial 行为变更后既有面保形）；回归受影响卡双后端 **26/26 bytes 全绿**；GUI 目击证据 `out/m-e8-outliner.png`（层级树 preview-model [model] Suzanne.glb / preview-ground [model] ParkingLot.glb 两节点 + auto ✓ + entities:2 + PreviewPlugin 六视角按钮 + Connection SetParent ok；嵌入视口黑 = PrintWindow 抓不到外进程 DX12 子窗口，M-E6 需实时 BitBlt 合成，非 M-E8 验收项）。探针踩坑：req() 响应匹配循环会把路过的 notify 吞掉——等待 notify 的保活用一次性 notify（engine.ping）不能用 req；心跳静默断链用短 socket 超时轮询解。
+
+**遗留**：M-SC10 `[Prop]` 描述表落码后接对象级参数泛化面（现对象参数 = setMaterial 三字段，引擎级 = engine.cvar.*）；场景树编辑操作（reparent/改名/增删实体 RPC）未含（M-E8 范围 = 只读树 + 参数读写）；嵌入视口截图基建（BitBlt 合成）待需求时再建。
+
 ### 2026-11-14 — M-E7 模型预览 + cvar 反射通道落地（feat/editor worktree）
 
 **落码六件套**（9 文件改 + 2 新增，461 行）：
