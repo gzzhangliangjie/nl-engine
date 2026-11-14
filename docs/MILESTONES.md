@@ -3764,3 +3764,24 @@
 4. 并发构建撞车：旧码 VULKAN 构建后台未完成时又派发新码构建 → 同一 build 树 nmake 抢 obj（Permission denied C1083）。修 = 查杀残留 nmake/cl 后单跑（后台任务纪律：同树构建禁止并发派发）。
 
 **下一步**：M-WAT1 = Gerstner 波形 + 解析法线（固定步进保 bytes）；水体水面 pass 落地前 SSR 半边基建已就位（普通材质先行受益，一步两用）。
+
+## WAT M-WAT1 — Gerstner 波形 + 解析法线（feat/water 第二里程碑，2026-11-14，tag `water-t1`）
+
+**动作**：M-WAT0 收口后「下一步」开工。开工闸：任务书 M-WAT1 段核对零待拍板 → **补一轮拍板**（水体接线形态：进 vis buffer vs 独立 forward pass——用户拍板 **A 进 vis buffer**，UE 同构，SSR 水面 march 链一步到位）→ 写回 WATER-PLAN + SHADER-CONVENTIONS §2.23 水体新节（落码前硬闸）。三处实读：UE Water 插件 `WaterVertexFactory` + `SingleLayerWater*.ush`（SLW 是着色合成= M-WAT2 域，位移在 vertex factory/WPO 上游）、osgw `gerstner.glsl`（gh-proxy 浅克隆，显式数组结构）+ iago `ocean_shader.{vert,frag}`（解析法线求和定义在未位移网格坐标 + pixel-footprint 抗锯齿）、本仓 initCull/initVisbuf/cull.slang/direct.slang/visbuf.slang/material.slang 全链。落码：`water_common.slangh` 单源（Gerstner 位移 + 解析法线 + 水体直光）→ 水伪 cluster 网格（initCull 内程序化 64×64 quad / 64 簇 / materialId=0xFFFF 保留标记）→ `visbuf.slang` VS 位移（深度真实位移）→ `material.slang` psMatResolve / `direct.slang` csDirect+csDirectVsm per-pixel 重算 + 水体直光 → `ssr.slang` 起点解析法线 + 固定 0.10 粗糙度 → WaterConstants 288B volatile（8 波显式数组，ω=√(g·k)）→ viewer `--water`（时间 = 帧号 × GameClock::kStep）。
+
+**提交版本**：`feat/water` M-WAT1 收口提交（tag `water-t1`，@ `0354f8d`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`example/water-t1/run.bat verify` **ALL GREEN exit 0**（bytes 闸 + A/B + 波运动 f4≠f12 + 确定性双跑 + log 锚 `water: gerstner grid ready` + deviceErrors=0 + 负向）。
+- 🟢 **零漂移闸**：`--water` 关 re-shot 与 water-t0 ssr-on 冻结基线**逐字节一致**（DX12+VULKAN 双过——恒建恒绑恒写方案保形实证）。
+- 🟢 跨后端 near 档：water-on / water-off 双图 `check-ssr.py near` 通过；波运动 A/B f4 vs f12 必不同。
+- 🟢 回归抽查：`s7.1/pulling` + `pbr-direct/pbr` 双后端 bytes 逐字节全绿；kStage 保持 S8.2 未 bump；cases.json 142 张。
+
+**踩坑**
+1. **DX12 root signature 漏槽 = PSO 建败整屏清屏色**：shader 无条件声明的 cbuffer（WaterConstants）在 layout 缺位时，VK 宽容（未绑默认 0）DX12 `CreateGraphicsPipelineState` 直接失败（"Shader CBV descriptor range not fully bound"）且 deviceErrors 只在关闭帧浮现。修复 = **恒建恒绑恒写**（CB 内容无消费方时 bytes 保形）。
+2. **visibleList/instanceCount 用局部 `clusterCount` 漏掉伪簇**：initCull 里 `clusterCount_ = clusterCount + waterClusterCount` 后，恒等列表与 indirect args 仍读局部变量 → 水簇不画（首拍全背景实锤）。修 = 统一读成员 `clusterCount_`。
+3. **volatile CB 6 槽上限**：refComputeLayout_ 已 6 槽（b0..b5），水体 b7 加不进 → GI 入口（csRef/csRefGi）不接水体分支（GI 参考图水体像素 = 未位移平面，M-WAT2 域）；directVsmLayout_ 恰好 6 槽收口。
+4. **volatile CB 写入时机**：写晚于首次绑定消费 = NVRHI「before it was written」错误（visbuf 帧序列 raster 在 writeResolveConstants 之前）→ 抽 `writeWaterConstants` 提到 raster 前 + drawShadow/drawReference 各补一处。
+5. mspdbsrv PDB API RPC 挂（C1090 错误码 23）三犯——杀进程重编即绿，非代码问题。
+
+**下一步**：M-WAT2 = 折射（SceneWithoutWater + 扭曲 UV + Beer-Lambert 吸收）+ Fresnel 混合 + 波峰泡沫收口（UE SLW 结构域）；整轨 merge 回 master 待用户指令。
