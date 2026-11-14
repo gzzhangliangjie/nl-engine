@@ -220,7 +220,49 @@ TRACKS = {
                 "five decisions Q-B/Q-W1~W3/Q-C confirmed by user 2026-11-12, "
                 "all per recommendation); wt built 2026-11-13 from master "
                 "52700f1, junction .workbuddy + thirdparty/slang/dist + "
-                "skip-worktree (9 files), M-W0.0 in progress",
+                "skip-worktree (9 files); M-W0 whole track done (tags "
+                "w0-m0~w0-m3, close gate passed); M-W1.0 done 2026-11-13 "
+                "(tag w1-m0: scripts/city2engine.py 36 OBJ -> flat glb + "
+                "nanite suite + city.scene.engine; showcase exe_for gained "
+                "{python} token; city.scene buf[192] truncation bug fixed "
+                "per user decision, w0-m2/m3 scene re-shot, guide "
+                "docs/worldgen/CITY2ENGINE-GUIDE.md); M-W1 whole track done "
+                "2026-11-13 (tag w1-m1: ambientCG CC0 facades tier1-3, "
+                "obj2glb image dedupe 78MB->1.7MB, w0 re-shot); M-W2 whole "
+                "track done 2026-11-14 (tags w2-m0/w2-m1: procedural "
+                "building-variant pool 4 primitives x per-tier pools, "
+                "fnv1a pure selection zero-RNG, selftest 88, run_checked "
+                "backoff hardening, w1_check hash-set fix, image-card "
+                "baselines registered; close+release --done passed); "
+                "M-W3 whole track done 2026-11-14 (tags w3-m0/w3-m1: "
+                "street-asset channel tree-12/car-8/streetlight CC0 pools "
+                "vendored, fnv1a pure placement zero-RNG, scene 315 "
+                "entities, drive vendored assembly, embed_glb_textures "
+                "deformation, selftest 97; close+release --done passed); "
+                "M-T0 traffic whole track done 2026-11-14 (tag "
+                "traffic-m0: core nl/traffic lane-level graph "
+                "(UE ZoneGraph caliber) + A* + C1 car-following "
+                "sqrt(brake*(gap-minGap)), traffic-tools "
+                "build/path/lanes/sim/selftest 3693 asserts, "
+                "9 ctests dual-backend, card t0-traffic; "
+                "M-T1 traffic scheduler done 2026-11-14 (tag "
+                "traffic-m1: A2 two-phase yellow signal clock "
+                "+ B1 FIFO reservation locks + C1 cross-road "
+                "mutex scan; deadlock root-fix triple: "
+                "no-early-acquire-with-leader / spillback "
+                "don't-block-the-box / adaptive geometry "
+                "stopS & clearEff scaling (city 4m lanes vs "
+                "fixture-calibrated constants), locked end "
+                "20->0; selftest 4657 asserts, card t1-traffic; "
+                "close+release --done passed); "
+                "M-T2 scheduler enhancements done 2026-11-14 (tag "
+                "traffic-m2: group-shared locks + turn exclusion "
+                "(city throughput 17/32 646.9m vs M-T1 7/32 "
+                "475.5m = +143%), axisPure guard, gap-out actuated "
+                "signals (phases contract gap_out_s), loop routes; "
+                "opposite-collinear-lane exemption + stalled-holder "
+                "deadlock guard; selftest 4685 asserts, card t2-traffic; "
+                "close+release --done passed)",
     },
     "s13": {
         "wt": "", "branch": "feat/s13", "state": "closed",
@@ -261,6 +303,17 @@ TRACKS = {
                 "nl_core module); wt built 2026-11-13 from master 6a824b1, "
                 "junction .workbuddy + thirdparty/slang/dist + skip-worktree "
                 "(9 files)",
+    },
+    "nightlighting": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
+        "branch": "feat/nightlighting", "state": "active",
+        "note": "night-lighting interleave track (plan docs/nl/NL-PLAN.md, "
+                "M-NL0 bloom / M-NL1 screen-space god rays / M-NL2 night "
+                "demo, tags nl0-bloom/nl1-godrays/nl-done; Q-NL1~NL6 "
+                "settled 2026-11-14: A-plan post-chain, flags default-off, "
+                "no sky.slangh touch, zero vendored); wt built 2026-11-14 "
+                "from master b150fd9, junction .workbuddy + "
+                "thirdparty/slang/dist + skip-worktree",
     },
 }
 
