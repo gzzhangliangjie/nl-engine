@@ -1,33 +1,37 @@
 @echo off
 setlocal
-rem M14C1+M14C2 (S14-C) adaptive-probe baseline + deterministic re-shot acceptance.
+rem M14C1+M14C2+M14C3 (S14-C) adaptive-probe baseline + deterministic re-shot acceptance.
 rem ASCII only; CRLF; no parentheses inside echo text in blocks.
 rem Usage: run.bat verify   exit 0 = all checks green.
 rem
 rem probe chain is deterministic (Q-B1 nondeterminism is restir-only; the
 rem adaptive Mark uses a fixed 16x16 Hammersley grid + InterlockedMin, Spawn
-rem writes per-tile slots deterministically) so re-shot gates are bytes
-rem (fc /b), same as s10-probe.
+rem writes per-tile slots deterministically, sky fixup threshold is a fixed
+rem constant) so re-shot gates are bytes (fc /b), same as s10-probe.
 rem
-rem Acceptance gates (PLAN section 9, M14C2 re-scope 2026-11-14):
+rem Acceptance gates (PLAN section 9 M14C2 re-scope + section 11 M14C3 2026-11-14):
 rem   - adaptive re-shot on both backends exits 0; dx12 deviceErrors=0
 rem   - log anchors: probe-adaptive: active (res_eff=8 ...) + shutdown ok
-rem   - bytes gate: spawn-on re-shot vs frozen baseline (both backends)
-rem   - CONSERVATION gate (replaces the M14C1 adaptive-vs-u8 bit-exact gate,
-rem     which the M14C2 spacing-gate fallback breaks BY DESIGN when the spawn
-rem     pool activates at L2/L3): adaptive --probe-adaptive-nospawn vs uniform
+rem   - bytes gate: spawn-on re-shot (sky fixup ON, new default) vs M14C3
+rem     frozen baseline (both backends)
+rem   - NOFIX-FREEZE gate (M14C3): adaptive --probe-sky-fixup-off re-shot vs
+rem     archived M14C2 baseline adaptive-m14c2-*.png, fc /b identical on both
+rem     backends. Proves the fixup pass + trace a-mark changes are fully
+rem     gated off: with the flag on, bytes match the M14C2 behavior exactly
+rem     (irrad alpha channel is write-only for consumers, so the a-mark edit
+rem     alone must not move any pixel).
+rem   - FIXUP-EFFECT gate (M14C3): fixup-on re-shot vs fixup-off re-shot MUST
+rem     differ (fc /b not identical, both backends) - mechanical proof that
+rem     the sky quality gate actually culls silhouette spawn probes.
+rem   - CONSERVATION gate (M14C2): adaptive --probe-adaptive-nospawn vs uniform
 rem     probe --probe-base-res 8, same effective grid, fc /b identical on both
-rem     backends. Proves the uniform interpolation path + 213.8 guard stay
-rem     bit-frozen with the spawn pool switched off.
-rem   - ACTIVATION gate: adaptive spawn-on vs adaptive nospawn MUST differ
-rem     (fc /b not identical, both backends) - mechanical proof that the
-rem     M14C2 spacing fallback actually feeds the spawn pool. Gain is MIXED
-rem     in this scene (detail-region MSE vs u32 improves up to 61%, silhouette
-rem     blocks worsen from sky-miss texel contamination); numbers recorded in
-rem     PLAN section 9, quality fix filed as follow-up.
+rem     backends (fixup does not dispatch with the spawn pool off).
+rem   - ACTIVATION gate (M14C2): adaptive spawn-on vs adaptive nospawn MUST
+rem     differ (both backends) - spawn pool feeds the gather.
 rem   - timing gate: csTraceProbe adaptive vs uniform-8 probe, fresh capture
-rem     in this run, ratio <= 1.5 (structural conservation + noise headroom)
-rem   - viz gate: magenta spawn dots present (both backends)
+rem     in this run, ratio <= 1.5
+rem   - viz gate: magenta spawn dots present (both backends; count drops vs
+rem     M14C2 because culled silhouette probes no longer draw - expected)
 rem   - present gate: baselines not degenerate
 rem   - negative: missing model exits nonzero
 
@@ -36,7 +40,7 @@ set "OUT=%~dp0"
 set "ARGS=--model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7"
 set FAIL=0
 
-echo [shot] re-shoot adaptive spawn-on on both backends (dx12 log captured to verify-log.txt, doubles as adaptive timing capture)
+echo [shot] re-shoot adaptive spawn-on sky-fixup-on on both backends (dx12 log captured to verify-log.txt, doubles as adaptive timing capture)
 for %%B in (dx12 vulkan) do (
   if "%%B"=="dx12" (
     "%ROOT%\build\%%B\viewer.exe" --mode probe-adaptive --pass-timing %ARGS% --screenshot "%OUT%verify-adaptive-%%B.png" > "%OUT%verify-log.txt" 2>&1
@@ -79,6 +83,15 @@ for %%B in (dx12 vulkan) do (
   )
 )
 
+echo [shot] re-shoot adaptive sky-fixup-off on both backends (nofix-freeze-gate input)
+for %%B in (dx12 vulkan) do (
+  "%ROOT%\build\%%B\viewer.exe" --mode probe-adaptive --probe-sky-fixup-off %ARGS% --screenshot "%OUT%verify-adaptive-nofix-%%B.png" >nul 2>&1
+  if errorlevel 1 (
+    echo [FAIL] adaptive-nofix-%%B viewer exited nonzero
+    set FAIL=1
+  )
+)
+
 echo [shot] re-shoot uniform-8 ref on both backends (dx12 log captured to timing-probe.log, doubles as probe timing capture)
 for %%B in (dx12 vulkan) do (
   if "%%B"=="dx12" (
@@ -92,7 +105,7 @@ for %%B in (dx12 vulkan) do (
   )
 )
 
-echo [check] bytes: spawn-on re-shot vs frozen baseline
+echo [check] bytes: spawn-on re-shot vs M14C3 frozen baseline
 for %%B in (dx12 vulkan) do (
   fc /b "%OUT%adaptive-%%B.png" "%OUT%verify-adaptive-%%B.png" >nul
   if errorlevel 1 (
@@ -100,6 +113,28 @@ for %%B in (dx12 vulkan) do (
     set FAIL=1
   ) else (
     echo [OK] adaptive-%%B bytes identical
+  )
+)
+
+echo [check] nofix-freeze: sky-fixup-off re-shot vs archived M14C2 baseline, bit-identical
+for %%B in (dx12 vulkan) do (
+  fc /b "%OUT%adaptive-m14c2-%%B.png" "%OUT%verify-adaptive-nofix-%%B.png" >nul
+  if errorlevel 1 (
+    echo [FAIL] adaptive-nofix-%%B not bit-identical to M14C2 baseline
+    set FAIL=1
+  ) else (
+    echo [OK] adaptive-nofix-%%B bit-identical to M14C2 baseline
+  )
+)
+
+echo [check] fixup-effect: fixup-on re-shot MUST differ from fixup-off re-shot
+for %%B in (dx12 vulkan) do (
+  fc /b "%OUT%verify-adaptive-%%B.png" "%OUT%verify-adaptive-nofix-%%B.png" >nul 2>&1
+  if errorlevel 1 (
+    echo [OK] adaptive-%%B sky fixup active, output differs from fixup-off
+  ) else (
+    echo [FAIL] adaptive-%%B sky fixup had no effect
+    set FAIL=1
   )
 )
 

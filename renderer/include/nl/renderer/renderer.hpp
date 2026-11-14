@@ -175,6 +175,11 @@ struct FrameParams {
     // 冻结路径保形门；缺省 false = spawn 池照常（spacing 门降级生效）。
     bool  probeAdaptiveNoSpawn = false;
 
+    // M14C3（PLAN §11 拍板 A）：spawn 探针级天空质量门反向关旗标（
+    // --probe-sky-fixup-off 置 true）。缺省 false = fixup 开（M14C2 miss texel
+    // 污染修复生效）；nospawn 模式 spawn 池本身关闭，fixup 自动跳过。
+    bool  probeSkyFixupOff = false;
+
     // ---- M-PERF1：per-pass GPU 计时（Q-P5，--pass-timing 开启；默认关 = 渲染
     // 路径零变化，冻结基线 bytes 不动）。Scene 侧单向锁存（开了不关），query 懒建。
     bool  passTiming          = false;
@@ -331,8 +336,8 @@ struct HudFrame {
     // 既有 --hud 基线零布局变化）。行名固定在 renderer 侧 PassTimers::name(i)
     //（gpu_timer.hpp，15 项），POD 只传数值；槽位序 = PassId 枚举序。
     bool  passTimingShow      = false;
-    float passTimingMs[17]    = {};   // M14C1：15→17（adaptiveMark/adaptiveSpawn）
-    bool  passTimingValid[17] = {};   // M14C1：15→17
+    float passTimingMs[18]    = {};   // M14C3：17→18 槽（kPassAdaptiveSkyFixup）
+    bool  passTimingValid[18] = {};   // M14C3：同步扩
 
     // ---- M5.0（S5.0）：屏幕误差投影数据（世界空间；model 恒为单位阵）----
     float screenErrorPx    = 0.0f;    // viewer 算好的屏幕像素误差（只读显示）

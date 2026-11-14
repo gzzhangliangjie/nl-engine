@@ -153,7 +153,7 @@ private:
 //   mainDraw        主绘制 drawIndexedIndirect（非 visbuf cull/dag/hiz 路径）
 class PassTimers {
 public:
-    static constexpr int kMaxPasses = 18;   // M14C1：15→17 槽（Mark/Spawn），上限同扩
+    static constexpr int kMaxPasses = 20;   // M14C3：18→20 槽（SkyFixup），上限同扩
     static constexpr int kSlots = 4;   // 同 GpuTimer：比 frame-in-flight=2 多留两个
 
     enum PassId {
@@ -162,6 +162,7 @@ public:
         kPassFilterTemporal, kPassFilterSpatial, kPassGatherCompose, kPassMainDraw,
         kPassRestirTemporal, kPassRestirSpatial,   // M14B1（S14-B）尾部追加
         kPassAdaptiveMark, kPassAdaptiveSpawn,     // M14C1（S14-C）尾部追加
+        kPassAdaptiveSkyFixup,                     // M14C3（S14-C）：spawn 探针级天空质量门
         kPassCount
     };
     static_assert(kPassCount <= kMaxPasses, "pass count exceeds HudFrame table");
@@ -172,7 +173,8 @@ public:
             "csCull", "visRaster", "matResolve", "hizBuild",
             "csDirect", "csRefGI", "csPlace", "csTraceProbe", "csGather",
             "csFilterTemporal", "csFilterSpatial", "csGatherCompose", "mainDraw",
-            "restirTemp", "restirSpatial", "adaptiveMark", "adaptiveSpawn"};
+            "restirTemp", "restirSpatial", "adaptiveMark", "adaptiveSpawn",
+            "adaptiveSkyFix"};
         return kNames[id];
     }
 

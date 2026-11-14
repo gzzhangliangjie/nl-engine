@@ -1209,6 +1209,14 @@ private:
     nvrhi::BindingSetHandle      adaptiveSpawnSet_[2];
     nvrhi::ComputePipelineHandle adaptiveMarkPSO_;
     nvrhi::ComputePipelineHandle adaptiveSpawnPSO_;
+    // M14C3（S14-C）：spawn 探针级天空质量门（PLAN §11 拍板 A）。fixup pass =
+    // b0（复用 probeCB_）+ t7..t10 irrad SRV + u0..u3 place atlas UAV；trace 后
+    // dispatch，sky texel 占比 > 0.6 的剪影 spawn 探针清 probe.w=0（gather 既有
+    // 剔除语义接管，gather/shader gather 侧零改动）。
+    nvrhi::ShaderHandle          csAdaptiveSkyFixup_;    // probe.csadaptiveskyfixup
+    nvrhi::BindingLayoutHandle   adaptiveSkyFixupLayout_;
+    nvrhi::BindingSetHandle      adaptiveSkyFixupSet_[2];
+    nvrhi::ComputePipelineHandle adaptiveSkyFixupPSO_;
     bool                         probeAdaptiveMaskTracked_ = false; // mask 状态跟踪一次性建立闸（wc 表同款）
     bool                         probeLogged_ = false;   // 布点日志锚只打一次
     nvrhi::IDevice*              probeDevice_ = nullptr;

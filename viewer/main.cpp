@@ -137,6 +137,8 @@ struct Options {
                                     // 关 gather 画布点，品红 = 自适应探针布点显示）
     bool probeAdaptiveNoSpawn = false; // M14C2：--probe-adaptive-nospawn（g_gAdaptive.z
                                        // 置 0 跳过 spawn 池；禁 spawn ≡ u8 逐位一致验收仪表）
+    bool probeSkyFixupOff = false;     // M14C3：--probe-sky-fixup-off（spawn 探针级
+                                       // 天空质量门反向关；缺省开 = miss texel 污染修复生效）
     int  probeBaseRes = 16;   // M14C1：--probe-base-res N（4..32；probe(8) 同网格
                               // 验收对照用；HUD probeBaseRes 初值同步此值）
     bool probeGather = false; // M10.2：--probe-gather（probe-viz gather 态，Q13-3；
@@ -292,6 +294,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--probe-gather") o.probeGather = true;   // M10.2：final gather 态
         else if (a == "--probe-adaptive-dots") o.probeAdaptiveDots = true;  // M14C1：布点显示
         else if (a == "--probe-adaptive-nospawn") o.probeAdaptiveNoSpawn = true;  // M14C2：spawn 池总开关（验收仪表）
+        else if (a == "--probe-sky-fixup-off") o.probeSkyFixupOff = true;  // M14C3：天空质量门反向关
         else if (a == "--probe-base-res" && i + 1 < argc)   // M14C1：0 级 cascade 分辨率（4..32），probe(8) 同网格验收对照用
             o.probeBaseRes = std::clamp(std::atoi(argv[++i]), 4, 32);
         // M10.3：--compare 右半参考图 / --sky-bg 解析天穹背景（Q14-2/Q14-4 拍板）。
@@ -2612,6 +2615,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probePlaceReadback = o.probePlaceReadback;   // M14C1 诊断
         fp.probeAdaptiveNoSpawn = o.probeAdaptiveNoSpawn;   // M14C2 spawn 池总开关
+        fp.probeSkyFixupOff = o.probeSkyFixupOff;           // M14C3 天空质量门反向关
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
         // S12 M12.0/M12.1（Q12-A + Q12-C A）：GI 分量独立时域累积 + 5x5
         // 空间联合双边。仅 filter 模式开；拒绝层留 M12.2 的可关 flag。

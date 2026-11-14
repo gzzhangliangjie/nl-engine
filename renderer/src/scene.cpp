@@ -3408,7 +3408,8 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     // 模式（probe/filter/restir）不再创建任何 Mark/Spawn 资源。
     if (probeAdaptiveMode_ &&
         (!loadShader("probe.csadaptivemark", nvrhi::ShaderType::Compute, csAdaptiveMark_) ||
-         !loadShader("probe.csadaptivespawn", nvrhi::ShaderType::Compute, csAdaptiveSpawn_)))
+         !loadShader("probe.csadaptivespawn", nvrhi::ShaderType::Compute, csAdaptiveSpawn_) ||
+         !loadShader("probe.csadaptiveskyfixup", nvrhi::ShaderType::Compute, csAdaptiveSkyFixup_)))
         return false;
 
     // probeCB_（192B volatile）：布点 + viz 两管线共用一份 CB（全字段每帧覆写，
@@ -3525,6 +3526,19 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     adaptiveSpawnLayout_ = device->createBindingLayout(asLDesc);
     if (!adaptiveSpawnLayout_) { outError = "createBindingLayout failed for probe adaptive spawn"; return false; }
 
+    // ---- M14C3：csAdaptiveSkyFixup 布局。b0（probeCB_ 复用）+ t7..t10 irrad
+    // SRV + u0..u3 place atlas UAV（写 spawn 槽 probe.w）。槽位号与 probe.slang
+    // register 声明一一对应（t7..t10 只被 fixup 入口引用，其余入口 slang 消除）。
+    nvrhi::BindingLayoutDesc sfLDesc;
+    sfLDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+    for (std::uint32_t s = 7; s < 11; ++s)
+        sfLDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(s));
+    for (std::uint32_t s = 0; s < 4; ++s)
+        sfLDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(s));
+    adaptiveSkyFixupLayout_ = device->createBindingLayout(sfLDesc);
+    if (!adaptiveSkyFixupLayout_) { outError = "createBindingLayout failed for probe adaptive sky fixup"; return false; }
+
     // ---- M14C1：自适应 mask buffer（512 uint 过量分配：res_eff ≤ 16 时
     // Σ res_l² = 256+64+16+4 = 340 ≤ 512）。CopyDest 起点与 keepInitialState =
     // wc 表同款纪律：每帧 writeBuffer 清零（Mark 是 InterlockedMin 最小 idx 收敛语义），
@@ -3639,7 +3653,11 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
         nvrhi::ComputePipelineDesc cpDesc2;
         cpDesc2.setComputeShader(csAdaptiveSpawn_).addBindingLayout(adaptiveSpawnLayout_);
         adaptiveSpawnPSO_ = device->createComputePipeline(cpDesc2);
-        if (!adaptiveMarkPSO_ || !adaptiveSpawnPSO_)
+        // M14C3：fixup PSO（spawn 探针级天空质量门，PLAN §11 拍板 A）。
+        nvrhi::ComputePipelineDesc cpDesc3;
+        cpDesc3.setComputeShader(csAdaptiveSkyFixup_).addBindingLayout(adaptiveSkyFixupLayout_);
+        adaptiveSkyFixupPSO_ = device->createComputePipeline(cpDesc3);
+        if (!adaptiveMarkPSO_ || !adaptiveSpawnPSO_ || !adaptiveSkyFixupPSO_)
             { outError = "createComputePipeline failed for probe adaptive"; return false; }
     }
 
@@ -3861,6 +3879,20 @@ bool Scene::ensureProbeTargets(nvrhi::IDevice* device, float viewportW, float vi
             adaptiveSpawnSet_[parity] = device->createBindingSet(asSetDesc, adaptiveSpawnLayout_);
             if (!adaptiveSpawnSet_[parity])
                 { outError = "createBindingSet failed for probe adaptive spawn"; return false; }
+        }
+        // M14C3：fixup set。t7..t10 irrad atlas（非 parity 级，trace 输出 4 张共
+        // 享）+ u0..u3 place atlas（parity 级，写 spawn 槽 probe.w）。
+        {
+            nvrhi::BindingSetDesc sfSetDesc;
+            sfSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                sfSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(7 + level, irradAtlas_[level]));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                sfSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(level,
+                                                                    probeAtlas_[parity][level]));
+            adaptiveSkyFixupSet_[parity] = device->createBindingSet(sfSetDesc, adaptiveSkyFixupLayout_);
+            if (!adaptiveSkyFixupSet_[parity])
+                { outError = "createBindingSet failed for probe adaptive sky fixup"; return false; }
         }
         } // probeAdaptiveMode_ guard（adaptive mark/spawn sets）
 
@@ -4325,6 +4357,23 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         cmd->dispatch(((probeBaseRes_ * store) + 7u) / 8u,
                       ((resRows * store) + 7u) / 8u, 4u);
         if (ptTrace) passTimers_.end(cmd, PassTimers::kPassTrace);
+
+        // ---- (3.2) M14C3：spawn 探针级天空质量门（PLAN §11 拍板 A）----
+        // trace 写完 spawn texel 的 miss 标记（a=0）→ fixup 统计每 spawn 探针
+        // 100 texel 有效占比，< 0.4 → 清 place atlas spawn 槽 probe.w=0 →
+        // gather 既有「probe.w<=0 权重 0」语义自动剔除（gather 零改动）。
+        // 条件：adaptive + spawn 池开着 + fixup 旗标没关。nospawn 模式 spawn
+        // 池本身关闭，fixup 无服务对象 → 跳过（保形门不受扰动）。probe/filter/
+        // restir 模式 fixup 资源（adaptive guard 内）未创建 → 也必须跳过。
+        if (probeAdaptiveMode_ && !params.probeAdaptiveNoSpawn
+            && !params.probeSkyFixupOff) {
+            const bool ptFixup = passTimers_.begin(cmd, PassTimers::kPassAdaptiveSkyFixup);
+            nvrhi::ComputeState fstate;
+            fstate.setPipeline(adaptiveSkyFixupPSO_).addBindingSet(adaptiveSkyFixupSet_[probeParity_]);
+            cmd->setComputeState(fstate);
+            cmd->dispatch((probeBaseRes_ + 7u) / 8u, (probeBaseRes_ + 7u) / 8u, 4u);
+            if (ptFixup) passTimers_.end(cmd, PassTimers::kPassAdaptiveSkyFixup);
+        }
     } else if (!probeTraceLogged_) {
         nl::core::log::infoCh("scene", "probe: TLAS not ready (no RT support or no fallback "
                             "geometry) -- probe tracing disabled");
@@ -8949,6 +8998,12 @@ void Scene::shutdown() {
     // shutdown 清单」原样复发，本次入台账。
     csAdaptiveMark_ = nullptr;
     csAdaptiveSpawn_ = nullptr;
+    // M14C3：fixup 链句柄同批释放（M14C1 shutdown 教训同款纪律）。
+    csAdaptiveSkyFixup_ = nullptr;
+    adaptiveSkyFixupLayout_ = nullptr;
+    adaptiveSkyFixupSet_[0] = nullptr;
+    adaptiveSkyFixupSet_[1] = nullptr;
+    adaptiveSkyFixupPSO_ = nullptr;
     adaptiveMask_ = nullptr;
     adaptiveMarkLayout_ = nullptr;
     adaptiveSpawnLayout_ = nullptr;

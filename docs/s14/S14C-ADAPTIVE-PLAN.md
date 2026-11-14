@@ -132,3 +132,18 @@
 **验收口径 M14C2 重定（拍板 A 内含授权）**：M14C1 的「adaptive↔u8 逐位一致」门被降级**按设计打破**（spawn 激活即有差），替代门组 = ① bytes 门（spawn-on 重拍 vs 冻结基线，双后端）；② **保形门**：`--probe-adaptive-nospawn` ≡ uniform-8 逐位一致（双后端，冻结路径保形证明）；③ **激活门**：spawn-on ≠ nospawn（fc /b 必须不同，spawn 池生效的机械证明）；④ timing/viz/present/负向沿用。run.bat verify ALL GREEN（12 门实测）。
 
 **readback 基建限界 DX12-only（M14C1 交付项修正）**：M14C1 的 `--probe-place-readback` 在 VULKAN 上**预存在段错误**——staging 环形第 3 周期崩（先 depth 通道 map 崩，depth 限界后整体仍在 f5 dump 后崩；RGBA16F 同崩；slot0 三次全活；DX12 同代码全程正常）。定性 = NVRHI vk 侧 staging 复用内部问题（本仓不可修），M14C2 限界：vk 清空 readback 路径 + 一次性 notice，全部 copy/poll 块自动失效；M14C1 档案中「两后端」表述以此为准修正（当时只在 DX12 冒烟过）。
+
+## 11. M14C3（2026-11-15 凌晨，用户拍板 A=探针级质量门）：spawn 天空 miss texel 污染修复收官
+
+**§10 挂账修复兑现**。落码（probe_trace.slang + probe.slang + scene.cpp/hpp + gpu_timer.hpp + hud.cpp + renderer.hpp + main.cpp + run.bat）：
+
+- **trace 侧 miss 标记**：`csTraceProbe` 里 spawn 区段 texel（`probeT.y >= res`，uniform 区恒 false 保形）irrad **a 通道写 miss 标记**（miss=0 / 命中=1；a 通道此前无任何消费端——gather/viz/dump 全只读 xyz，已核实）。
+- **csAdaptiveSkyFixup pass**（probe.slang 新入口）：每 spawn 探针 1 线程统计 100 texel 的 a 均值，有效占比 < 0.4（`kFixupValidMin` 结构判定写死，非外观调参）→ 清 place atlas spawn 槽 `probe.w=0` → **gather 既有「probe.w<=0 权重 0」剔除语义自动接管，gather 零改动**。t7..t10 SRV（irrad）+ u0..u3 UAV（place atlas）独立 layout/set/PSO（probeAdaptiveMode_ guard 内创建）。
+- **旗标**：`--probe-sky-fixup-off`（反向关，验收仪表）。
+- **真 bug 修复（验收门抓出）**：csAdaptiveSkyFixup dispatch 条件漏 `probeAdaptiveMode_` → probe/filter/restir 模式 `setComputeState(null set)` 每帧 1 错（ref-u8 门 FAIL，deviceErrors=8）；补条件后 probe 模式 deviceErrors=0。**slang 消除实证**：dxc -dumpbin csplace/cstrace 绑定表无 t7..t10（全局声明 per-entry 消除成立，PSO 反射零漂实锤）。
+
+**验收口径 M14C3（run.bat verify 19 门 ALL GREEN，DX12+VULKAN）**：bytes（spawn-on 重拍 vs 冻结基线 adaptive-*.png，双后端 identical）+ **NOFIX-FREEZE 门**（fixup-off ≡ M14C2 基线 adaptive-m14c2-*.png 逐位，双后端）+ **FIXUP-EFFECT 门**（fixup-on ≠ fixup-off 双后端）+ 保形门 + 激活门 + timing（ratio 1.00）+ viz（品红 1030px 双后端）+ present（mean 36.71/255）+ 负向。M14C3 基线定版 = 干净全量重建输出（adaptive-{dx12,vulkan}.png）。
+
+**事故复盘：混合 obj 布局（本轮最大坑）**：落码后 M14C3 代码「确定性 0xC0000005」（M14C2 基线同参数 rc=0，崩点随增量构建漂移：GpuTimer::end←initBlas → probe cascade 创建段 → ensureProbeTargets+0x48c）。γ 系列实验定位链：α（kPassCount 回 17）仍崩 → β（env gate fixup 资源创建全关）仍崩 → γ1（shader 层回退 M14C2）仍崩 → γ4d 快照实锤单 8B 写 0x100000000 @ probeAtlas_[1][2]、邻居完好 → cdb 数据断点（bp ensureProbeTargets + `ba w8 @rcx+0x16a8`）实证「首写即触发」= 踩踏早于断点 → γ6（initProbe 入口哨兵）「已坏」→ **γ7 干净全量重建 rc=0 根因定案**：多轮 stash/checkout 后改布局类头文件（scene.hpp 5 成员 / renderer.hpp 数组 / gpu_timer.hpp kMaxPasses）的**增量构建产生新旧布局混链**——M14C2 布局 obj 构造 scene_ 按旧偏移写 `probeFirstFrame_=true` @0x16AC，M14C3 布局下该偏移 = probeAtlas_[1][2] 槽高 4 字节 → uint64 恰 0x100000000 → ensure 首写 operator= Release 崩。混合基线拍的 PNG 不可信（bytes 门基线重定版）。
+
+**教训（工程纪律新增）**：① 改布局类头文件后**必须删全部 obj 全量重编**，增量构建不可信；② dump 单点崩栈不能定性踩踏者（崩点是「读被踩对象」非写入点），**哨兵时序 + cdb 数据断点**组合拳才能收敛；③ cdb 符号断点动态设数据断点（`bp 函数 "ba w8 @rcx+offset; g"`）是无 gflags 机器上抓堆踩踏的可行路径。

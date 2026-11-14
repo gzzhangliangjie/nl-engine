@@ -50,6 +50,14 @@ Texture2D<float4>  g_markAtlas1 : register(t3);
 Texture2D<float4>  g_markAtlas2 : register(t4);
 Texture2D<float4>  g_markAtlas3 : register(t5);
 StructuredBuffer<uint> g_maskSRV : register(t6);
+// M14C3：csAdaptiveSkyFixup 读 irrad atlas cur parity SRV（统计 spawn 探针
+// 100 texel 的 miss 标记 a 均值；trace.slang 已把 spawn texel 的 miss 写 a=0）。
+// t7..t10 顺延现有声明（mark/spawn/place/viz 入口不引用 → slang 消除未用绑定，
+// 各 PSO 反射零漂）。
+Texture2D<float4>  g_fixIrrad0 : register(t7);
+Texture2D<float4>  g_fixIrrad1 : register(t8);
+Texture2D<float4>  g_fixIrrad2 : register(t9);
+Texture2D<float4>  g_fixIrrad3 : register(t10);
 // M14C1：RWStructuredBuffer 与 nvrhi StructuredBuffer_UAV 绑定项类型一一对应
 //（g_wcChecksums 同款先例）。收口诊断定论：spawn=0 的真根因是帧首清零 0 与
 // InterlockedMin 起始值语义冲突（min(0,x)=0 压死收敛），非 descriptor 类型——
@@ -327,5 +335,78 @@ void csAdaptiveSpawn(uint3 tid : SV_DispatchThreadID)
     case 1u: g_atlasU1[uint2(tile.x, res + tile.y)] = slot; break;
     case 2u: g_atlasU2[uint2(tile.x, res + tile.y)] = slot; break;
     case 3u: g_atlasU3[uint2(tile.x, res + tile.y)] = slot; break;
+    }
+}
+
+// ---- M14C3（S14-C）：spawn 探针级天空质量门（PLAN §11 拍板 A）----
+// 根因：Mark 在剪影格位放 spawn 探针 → 探针外向 texel 射线 miss = 亮天空值
+//（skyGradient）→ gather spawn 分支读「消费像素法线方向」单 texel（M11.2 形态）
+// → 面部像素被混入天空亮值（M14C2 实锤：恶化块全单向过亮）。
+// 修复：trace 已把 spawn texel 的 miss 写 a=0（uniform 恒 1）；本入口每探针
+// 1 线程统计 100 texel 的 a 均值，有效占比 < 0.4（= 天空 texel > 60%）→ 判
+// 「剪影/天空探针」，清 place atlas spawn 槽 probe.w=0 → gather 既有
+// 「probe.w<=0 权重 0」语义自动剔除（与 uniform 天空探针同构），gather 零改动。
+// 三处证据：UE miss→skylight 照写（SkyVisibility 默认 0 = sky 烘进探针是默认
+// 形态），UE 防污染靠探针级 selection（非 texel 级）；bevy world cache miss 照写
+// π×env；Carrot 无 screen probe GI（负证据）。
+// 线程组织：z = 4 级，x/y = spawn 槽位格坐标（csAdaptiveSpawn 同款 dispatch 尺寸）。
+// 绑定：b0（复用 ProbeConstants，读 g_placeParams.z = baseRes）+ t7..t10 irrad
+// SRV（trace 刚 UAV 写完 → require SRV 自动插 barrier）+ u0..u3 place atlas UAV
+//（trace 刚 SRV 读 → require UAV 自动插；gather 随后 require SRV 自动插回）。
+// place 探针位读 RWTexture2D 下标读（同纹理 UAV load；vk = imageLoad，RGBA32F
+// storage read，双后端冒烟覆盖）。
+// 阈值 kFixupValidMin 写死常量（结构判定非外观调参；调参需求出现时再进 CB/CVar）。
+// 开关：CPU 侧 --probe-sky-fixup-off 时不 dispatch（反向关旗标，缺省开）。
+static const float kFixupValidMin = 0.4f;   // 有效 texel 占比门（100 texel a 均值）
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void csAdaptiveSkyFixup(uint3 tid : SV_DispatchThreadID)
+{
+    const uint level = tid.z;
+    const uint res   = uint(g_placeParams.z) >> level;
+    if (tid.x >= res || tid.y >= res) return;
+
+    const uint2 slot = uint2(tid.x, res + tid.y);   // 预留区槽位（spawn 同款索引）
+    float4 probe;
+    switch (level)
+    {
+    case 0u: probe = g_atlasU0[slot]; break;
+    case 1u: probe = g_atlasU1[slot]; break;
+    case 2u: probe = g_atlasU2[slot]; break;
+    default: probe = g_atlasU3[slot]; break;
+    }
+    if (probe.w <= 0.0f) return;                    // 空槽/未 spawn：不动
+
+    // 100 texel 的 a 均值（trace 写的 miss 标记：1=命中 0=miss）。
+    const uint  store = 10u;                        // oct core 8 + 1 texel border
+    float acc = 0.0f;
+    [loop]
+    for (uint y = 0u; y < store; ++y)
+    [loop]
+    for (uint x = 0u; x < store; ++x)
+    {
+        const uint2 t = slot * store + uint2(x, y);
+        float4 texel;
+        switch (level)
+        {
+        case 0u: texel = g_fixIrrad0.Load(int3(t, 0)); break;
+        case 1u: texel = g_fixIrrad1.Load(int3(t, 0)); break;
+        case 2u: texel = g_fixIrrad2.Load(int3(t, 0)); break;
+        default: texel = g_fixIrrad3.Load(int3(t, 0)); break;
+        }
+        acc += texel.a;
+    }
+
+    if (acc < kFixupValidMin * float(store * store))
+    {
+        // 剪影/天空探针：xyz 保留（viz/dump 语义不变），w 清 0 = 剔除。
+        switch (level)
+        {
+        case 0u: g_atlasU0[slot] = float4(probe.xyz, 0.0f); break;
+        case 1u: g_atlasU1[slot] = float4(probe.xyz, 0.0f); break;
+        case 2u: g_atlasU2[slot] = float4(probe.xyz, 0.0f); break;
+        default: g_atlasU3[slot] = float4(probe.xyz, 0.0f); break;
+        }
     }
 }

@@ -131,8 +131,16 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
     const uint2 probeT = uint2(tid.x / store, tid.y / store);
     const int2  octT   = int2(tid.x % store, tid.y % store) - 1;   // [-1, res]
 
+    // M14C3：spawn 探针 texel 级 miss 标记（atlas 预留区 probeT.y >= res；非
+    // adaptive 模式 irrad 高 = res*store，probeT.y < res 恒成立 → 本判据恒 false
+    // 保形）。a 通道此前恒 1 且无任何消费端（gather/viz/dump 全只读 xyz，已核实）；
+    // spawn 探针的 miss texel 写 a=0 供 csAdaptiveSkyFixup 统计天空占比做探针级
+    // 剔除（PLAN §11 拍板 A）。uniform 探针 a 恒 1 逐位不变（u8 冻结基线零漂）。
+    const bool isSpawn = probeT.y >= res;
+
     float3 radiance = float3(0.0f, 0.0f, 0.0f);         // 天空探针 = 黑（a=0 标记）
     const float4 probe = loadPlaceAtlas(level, probeT);
+    bool texelMiss = false;                              // M14C3：spawn 探针 miss 标记
     if (probe.w > 0.0f)
     {
         // 探针 texel 方向（border texel wrap 到对侧 core 方向，无缝口径）。
@@ -176,6 +184,7 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
         if (q.CommittedStatus() == COMMITTED_NOTHING)
         {
             radiance = skyGradient(dir);                // miss → 解析天穹（Q12-3）
+            texelMiss = true;
         }
         else
         {
@@ -245,7 +254,10 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
         }
     }
 
-    const float4 outData = float4(radiance, 1.0f);      // a=1 = texel 有效（含天空）
+    // M14C3：a = texel 有效标记。uniform 探针恒 1（逐位保形）；spawn 探针
+    // miss texel = 0（命中仍 1）——xyz（radiance）一字节不变，只改 a。
+    const float aMark = (isSpawn && texelMiss) ? 0.0f : 1.0f;
+    const float4 outData = float4(radiance, aMark);
     switch (level)
     {
     case 0u: g_irrad0[tid.xy] = outData; break;
