@@ -63,6 +63,10 @@ struct FrameParams {
     // validHistory 单帧清零，防渐变天气 GI 亮度滞后；缺省 false 保形）。
     float weatherWetness     = 0.0f;                   // 0..1（0 = 干）
     bool  weatherHistoryReject = false;                // filter 态单帧历史拒绝
+    // M-NL1（Q-NL3 A 方案）：屏幕空间 God Rays——单光源 = 场景最强点光源
+    //（CPU 投影进 CB），缺省关 = applyGodRays 整体跳过 + 复合权重 0 保 bytes。
+    bool  godraysEnable      = false;
+    float godraysWeight      = 0.4f;                   // 复合权重（tonemap 端）
     // M-NL0：bloom post-chain 辉光（docs/nl/NL-PLAN.md）。缺省关 → psTonemap
     // 复合 +bloom*0 IEEE 恒等 → 历史用例 bytes 保形（M-WEA0 旗标缺省关先例）。
     bool  bloomEnable    = false;

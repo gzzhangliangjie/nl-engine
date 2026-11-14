@@ -167,6 +167,9 @@ struct Options {
     bool bloomEnable = false;      // --bloom
     double bloomThreshold = 0.7;   // --bloom-threshold X（亮部软阈值，亮度空间）
     double bloomWeight = 0.5;      // --bloom-weight X（复合加法权重）
+    // M-NL1：godrays 体积光柱（--godrays，缺省关；单光源 = 场景最强点光源）。
+    bool godraysEnable = false;    // --godrays
+    double godraysWeight = 0.4;    // --godrays-weight X（复合加法权重）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
@@ -364,6 +367,10 @@ Options parseArgs(int argc, char** argv) {
             o.bloomThreshold = std::atof(argv[++i]);
         else if (a == "--bloom-weight" && i + 1 < argc)
             o.bloomWeight = std::atof(argv[++i]);
+        // M-NL1：godrays 体积光柱（缺省关；GPU Gems 3 屏幕空间口径）。
+        else if (a == "--godrays") o.godraysEnable = true;
+        else if (a == "--godrays-weight" && i + 1 < argc)
+            o.godraysWeight = std::atof(argv[++i]);
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2603,6 +2610,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.bloomEnable = o.bloomEnable;
         fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
         fp.bloomWeight = static_cast<float>(o.bloomWeight);
+        // M-NL1：godrays（--godrays 缺省关；与 ecs 主链填充点同步）
+        fp.godraysEnable = o.godraysEnable;
+        fp.godraysWeight = static_cast<float>(o.godraysWeight);
         fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         fp.particles = o.particles;         // M-PT0：粒子叠加层开关（其它模式不读）
         // M-PT0：billboard 相机基向量取 view 矩阵（dag/hiz 分支已填；其它模式只有
@@ -4248,6 +4258,9 @@ int runScene(const Options& o) {
         fp.bloomEnable = o.bloomEnable;
         fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
         fp.bloomWeight = static_cast<float>(o.bloomWeight);
+        // M-NL1：godrays（--godrays 缺省关；与 ecs 主链填充点同步）
+        fp.godraysEnable = o.godraysEnable;
+        fp.godraysWeight = static_cast<float>(o.godraysWeight);
         // M-E1b.3：视向量 V 来源——真实相机世界坐标（psScene 从 b1 cameraPos 读）。
         float eye3[3];
         camera.eyePosition(eye3);

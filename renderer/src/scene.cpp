@@ -2524,6 +2524,7 @@ bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
     tmLayoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
         .addItem(nvrhi::BindingLayoutItem::Sampler(0));
     tonemapLayout_ = device->createBindingLayout(tmLayoutDesc);
@@ -2595,17 +2596,33 @@ bool Scene::presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
     cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    // M-NL0/M-NL1：tonemap set 无条件绑 BloomConstants（b2）——volatile CB 必须
+    // 在绑定前每帧全量写（未写先绑 = NVRHI validation error，M-NL0 教训）。
+    // 32B = {threshold, bloomWeight, 1/halfW, 1/halfH} + {godraysWeight, 0,0,0}；
+    // 旗标关 = 权重 0 → psTonemap 复合 IEEE 恒等（bytes 保形）。
+    {
+        const float halfW = (t0W_ > 0) ? 1.0f / static_cast<float>((t0W_ + 1u) / 2u) : 0.0f;
+        const float halfH = (t0H_ > 0) ? 1.0f / static_cast<float>((t0H_ + 1u) / 2u) : 0.0f;
+        const float bc[8] = {
+            bloomThreshold_, bloomEnable_ ? bloomWeight_ : 0.0f,
+            bloomEnable_ ? halfW : 0.0f, bloomEnable_ ? halfH : 0.0f,
+            (godraysEnable_ && godLightVisible_) ? godraysWeight_ : 0.0f,
+            0.0f, 0.0f, 0.0f};
+        cmd->writeBuffer(bloomConstants_, bc, sizeof(bc));
+    }
     // M-NL0：bloom 链（extract→blurH→blurV ping-pong），旗标关 = 整体跳过
     //（hdr 已是 SRV 态，直通路径与改动前逐指令一致）。失败不拦路：回落无 bloom。
     if (bloomEnable_) {
         std::string bloomErr;
         if (!applyBloom(cmd, viewport, bloomErr))
             nl::core::log::deviceError("bloom", bloomErr);
-    } else {
-        // 旗标关也要每帧写 CB：tonemap set 无条件绑 BloomConstants（b2），
-        // volatile CB 未写先绑 = NVRHI validation error（缺省态 bytes 保形闸）。
-        const float bcOff[4] = {bloomThreshold_, 0.0f, 0.0f, 0.0f};
-        cmd->writeBuffer(bloomConstants_, bcOff, sizeof(bcOff));
+    }
+    // M-NL1：godrays 链（遮挡预渲 → radial blur），旗标开 + 当帧光源可见才进；
+    // 失败不拦路（log 后回落；accum 残帧 × 权重，1 帧陈旧可接受）。
+    if (godraysEnable_ && godLightVisible_) {
+        std::string grErr;
+        if (!applyGodRays(cmd, grErr))
+            nl::core::log::deviceError("godrays", grErr);
     }
     if (!tonemapPSO_) {
         const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
@@ -2661,11 +2678,8 @@ bool Scene::applyBloom(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport
     halfVp.maxX = static_cast<float>(halfW);
     halfVp.maxY = static_cast<float>(halfH);
     halfVp.minZ = 0.f; halfVp.maxZ = 1.f;
-    // volatile CB（refConstants_ 同款直写先例）：{threshold, weight, 1/halfW, 1/halfH}。
-    const float bc[4] = {bloomThreshold_, bloomWeight_,
-                         1.0f / static_cast<float>(halfW),
-                         1.0f / static_cast<float>(halfH)};
-    cmd->writeBuffer(bloomConstants_, bc, sizeof(bc));
+    // volatile CB（b2 g_bloom）改由 presentTonemap 统一全量写（32B 含 g_gr）——
+    // 本函数只画（M-NL1：单一写点防 volatile 多版本半写）。
 
     cmd->beginTrackingTextureState(bloomA_, allSub, nvrhi::ResourceStates::ShaderResource);
     cmd->beginTrackingTextureState(bloomB_, allSub, nvrhi::ResourceStates::ShaderResource);
@@ -2752,6 +2766,169 @@ bool Scene::applyBloom(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport
     }
     // 收尾：A → SRV（tonemap t2 复合读 + 下帧 beginTracking 声明对齐）；B 保持 SRV。
     cmd->setTextureState(bloomA_, allSub, nvrhi::ResourceStates::ShaderResource);
+    return true;
+}
+
+// M-NL1：godrays 三段链（--godrays + 当帧最强点光源可见才被调用）。前提：
+// hdrSceneColor_ 已 SRV（presentTonemap 开头）；occl/quad 写 godMask_+godDepth_，
+// radial 写 godAccum_（tonemap t3 复合读）。状态序（§2.15/§2.19，不设 permanent，
+// 帧首 beginTracking 声明上帧末态；创建态 SRV/DepthWrite+keepInitialState 对齐）：
+//   mask:  SRV → RT(quad 白 + occl 黑) → SRV(radial 读，收尾)
+//   depth: DepthRead → DepthWrite(clear + quad/occl) → DepthRead(收尾)
+//   accum: SRV → RT(radial 写) → SRV(tonemap 复合读，收尾)
+// 半分辨率 viewport 与 fb 匹配（applyBloom 同款）。几何 pass 复用 shadowLightCB_
+//（b0 = 当帧相机 mvp——阴影 pass 已写完，重写安全；volatile 每写一版，版本数
+// = shadowCount_+2 ≤ 16）与 batch.shadowSet（t5 实例）——零新 batch set。
+bool Scene::applyGodRays(nvrhi::ICommandList* cmd, std::string& outError) {
+    if (!godMask_ || !godAccum_ || !godDepth_ || !godMaskFb_ || !godAccumFb_ ||
+        !godCB_ || !godQuadSet_ || !godRadialSet_ || !godQuadLayout_ || !godRadialLayout_ ||
+        !vsShadow_ || !shadowInputLayout_ || !shadowBindingLayout_ || !shadowLightCB_ ||
+        !psGodraysBlack_ || !vsGodraysQuad_ || !psGodraysQuad_ ||
+        !vsGodraysFull_ || !psGodraysRadial_) {
+        outError = "applyGodRays: resources not ready";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const std::uint32_t halfW = (t0W_ + 1u) / 2u;
+    const std::uint32_t halfH = (t0H_ + 1u) / 2u;
+    nvrhi::Viewport halfVp;
+    halfVp.minX = 0.f; halfVp.minY = 0.f;
+    halfVp.maxX = static_cast<float>(halfW);
+    halfVp.maxY = static_cast<float>(halfH);
+    halfVp.minZ = 0.f; halfVp.maxZ = 1.f;
+
+    // volatile CB（GodraysConstants 64B，godrays.slang b0）：
+    //   A = {weight(记账，复合端生效), density 0.9, decay 0.96, exposure 0.1}
+    //   B = {lightUv.xy, radNdcX, radNdcY}
+    //   C = {color.rgb, lightNdcX}   D = {lightNdcY, lightNdcZ, 0, 0}
+    //（density 是采样路径长度系数：<1 时 32 步穿不到发射体 → 无光束
+    //（侧视实测教训）；0.9 = 采样覆盖 90% 路径成束。exposure 三轮收敛。）
+    const float gr[16] = {
+        godraysWeight_, 0.9f, 0.96f, 0.1f,
+        godLightUv_[0], godLightUv_[1], godLightRadNdc_[0], godLightRadNdc_[1],
+        godLightColor_[0], godLightColor_[1], godLightColor_[2], godLightNdc_[0],
+        godLightNdc_[1], godLightNdc_[2], 0.0f, 0.0f};
+    cmd->writeBuffer(godCB_, gr, sizeof(gr));
+
+    // ---- 三 PSO 懒建（布局与 shader 静态引用严格对齐——M15.0 铁律）：
+    //   godQuadPSO_   = vsGodraysQuad/psGodraysQuad，{b0}，深度 Always+写深
+    //   godOcclPSO_   = vsShadow_/psGodraysBlack_，{b0,t5}，深度 LessOrEqual+不写深
+    //   godRadialPSO_ = vsGodraysFull/psGodraysRadial，{b0,t0,s0}，关深度
+    if (!godQuadPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsGodraysQuad_)
+             .setFragmentShader(psGodraysQuad_)
+             .addBindingLayout(godQuadLayout_);   // 无 input layout（SV_VertexID 生成，blit 同款）
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .enableDepthTest()
+            .enableDepthWrite()
+            .setDepthFunc(nvrhi::ComparisonFunc::Always)
+            .disableStencil();
+        godQuadPSO_ = t0Device_->createGraphicsPipeline(pDesc, godMaskFb_->getFramebufferInfo());
+        if (!godQuadPSO_) { outError = "createGraphicsPipeline failed for godrays quad"; return false; }
+    }
+    if (!godOcclPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+             .setInputLayout(shadowInputLayout_)
+             .setVertexShader(vsShadow_)
+             .setFragmentShader(psGodraysBlack_)
+             .addBindingLayout(shadowBindingLayout_);
+        pDesc.renderState.rasterState
+            .setFrontCounterClockwise(true)
+            .setFillMode(nvrhi::RasterFillMode::Solid)
+            .setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .enableDepthTest()
+            .disableDepthWrite()
+            .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual)
+            .disableStencil();
+        godOcclPSO_ = t0Device_->createGraphicsPipeline(pDesc, godMaskFb_->getFramebufferInfo());
+        if (!godOcclPSO_) { outError = "createGraphicsPipeline failed for godrays occl"; return false; }
+    }
+    if (!godRadialPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsGodraysFull_)
+             .setFragmentShader(psGodraysRadial_)
+             .addBindingLayout(godRadialLayout_);
+        pDesc.renderState.rasterState.setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        godRadialPSO_ = t0Device_->createGraphicsPipeline(pDesc, godAccumFb_->getFramebufferInfo());
+        if (!godRadialPSO_) { outError = "createGraphicsPipeline failed for godrays radial"; return false; }
+    }
+
+    // ---- pass 1：遮挡预渲（mask 清黑 → 光源 quad 渲白 → 几何渲染黑）。
+    cmd->beginTrackingTextureState(godMask_, allSub, nvrhi::ResourceStates::ShaderResource);
+    // godDepth_：keepInitialState=DepthWrite 永驻态（t0Depth_ 同款——声明恒为
+    // DepthWrite、末态不改；每帧本 pass 先行 clear 1.0）。
+    cmd->beginTrackingTextureState(godDepth_, allSub, nvrhi::ResourceStates::DepthWrite);
+    cmd->clearTextureFloat(godMask_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+    cmd->clearDepthStencilTexture(godDepth_, allSub, true, 1.0f, false, 0);
+    cmd->setTextureState(godMask_, allSub, nvrhi::ResourceStates::RenderTarget);
+    cmd->setTextureState(godDepth_, allSub, nvrhi::ResourceStates::DepthWrite);
+    // 光源 quad（白，深度 = 光源 NDC z，Always + 写深——后续几何用 LESS 区分前后）。
+    {
+        nvrhi::GraphicsState pstate;
+        pstate.setPipeline(godQuadPSO_).setFramebuffer(godMaskFb_)
+              .addBindingSet(godQuadSet_);
+        pstate.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(pstate);
+        nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+        noteDraw();
+        cmd->draw(vargs);
+    }
+    // 场景几何渲染黑（vsShadow + 黑 PS；深度测试 LessOrEqual——光源前的遮挡体
+    // 覆盖白 quad，光源后的几何测试失败不遮——GPU Gems 3 正确性关键）。
+    // b0 = 当帧相机 mvp（shadowLightCB_ 重写；阴影 pass 本帧已写完）。
+    {
+        SceneConstants ocb{};
+        std::memcpy(ocb.mvp, godViewProj_, sizeof(ocb.mvp));
+        cmd->writeBuffer(shadowLightCB_, &ocb, sizeof(ocb));
+    }
+    for (const SceneMeshBatch& b : sceneBatches_) {
+        nvrhi::GraphicsState state;
+        state.setPipeline(godOcclPSO_)
+             .setFramebuffer(godMaskFb_)
+             .addBindingSet(b.shadowSet)
+             .addVertexBuffer(nvrhi::VertexBufferBinding()
+                 .setBuffer(b.vb).setSlot(0).setOffset(0))
+             .setIndexBuffer(nvrhi::IndexBufferBinding()
+                 .setBuffer(b.ib).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+        state.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(state);
+        nvrhi::DrawArguments args;
+        args.setVertexCount(b.indexCount)
+            .setInstanceCount(b.instanceCount);
+        noteDraw();
+        cmd->drawIndexed(args);
+    }
+    // ---- pass 2：radial blur（mask SRV → accum RT）。
+    cmd->setTextureState(godMask_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(godAccum_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(godAccum_, allSub, nvrhi::ResourceStates::RenderTarget);
+    {
+        nvrhi::GraphicsState pstate;
+        pstate.setPipeline(godRadialPSO_).setFramebuffer(godAccumFb_)
+              .addBindingSet(godRadialSet_);
+        pstate.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(pstate);
+        nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+        noteDraw();
+        cmd->draw(vargs);
+    }
+    // 收尾：mask/accum → SRV（radial 读 + tonemap t3 复合读 + 下帧声明对齐）；
+    // depth 保持 DepthWrite 永驻态（下帧声明对齐，t0Depth_ 同款）。
+    cmd->setTextureState(godMask_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(godAccum_, allSub, nvrhi::ResourceStates::ShaderResource);
     return true;
 }
 
@@ -2974,6 +3151,17 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     rtW_ = w;
     rtH_ = h;
 
+    // M-NL1：sampler_ 懒建兜底——tonemap set 无条件绑 s0（bloom/godrays 复合采样），
+    // scene 光栅路径此前不建 sampler（probe/rt 各 init 自建），首帧建 set 时为 null
+    // → NVRHI「Null resource bindings are not allowed for samplers」。各 init 已建
+    // 时守卫跳过（同型复用先例）。
+    if (!sampler_) {
+        nvrhi::SamplerDesc sDesc;
+        sDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+        sampler_ = device->createSampler(sDesc);
+        if (!sampler_) { outError = "createSampler failed for post-chain"; return false; }
+    }
+
     // 调试目标：RGBA32_FLOAT 全尺寸单 mip（DX12 typed UAV store / Vulkan mandatory
     // storage image 双后端安全）。initialState=UnorderedAccess + keepInitialState：
     // 每帧命令列表开头自动回到 UAV 态，呈现 SRV 转换由状态跟踪插 barrier
@@ -3101,12 +3289,55 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         if (!bloomFbA_ || !bloomFbB_) { outError = "createFramebuffer failed for bloom"; return false; }
     }
 
+    // M-NL1：godrays 纹理（无条件建——tonemap set 无条件绑 godAccum_ t3，
+    // 旗标关也要资源在位；旗标关 = 全帧零状态变化 + 复合权重 0，保形同 bloom）。
+    // mask = R8_UNORM（0/1 二值遮挡）；accum = RGBA16F（radial 累积 >1）；深度 =
+    // D32 半分辨率（quad 写光源 NDC z，几何 LESS 区分前后）。
+    {
+        const std::uint32_t gw = (w + 1u) / 2u;
+        const std::uint32_t gh = (h + 1u) / 2u;
+        nvrhi::TextureDesc md;
+        md.width = gw; md.height = gh;
+        md.isRenderTarget = true;
+        md.initialState = nvrhi::ResourceStates::ShaderResource;
+        md.keepInitialState = true;
+        md.format = nvrhi::Format::R8_UNORM;
+        md.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+        md.debugName = "GodraysMask";
+        godMask_ = device->createTexture(md);
+        md.format = nvrhi::Format::RGBA16_FLOAT;
+        md.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 1.f));
+        md.debugName = "GodraysAccum";
+        godAccum_ = device->createTexture(md);
+        nvrhi::TextureDesc gd;
+        gd.width = gw; gd.height = gh;
+        gd.format = nvrhi::Format::D32;
+        gd.isRenderTarget = true;
+        gd.initialState = nvrhi::ResourceStates::DepthWrite;
+        gd.keepInitialState = true;
+        gd.debugName = "GodraysDepth";
+        godDepth_ = device->createTexture(gd);
+        if (!godMask_ || !godAccum_ || !godDepth_) {
+            outError = "createTexture failed for godrays";
+            return false;
+        }
+        nvrhi::FramebufferDesc gf;
+        gf.addColorAttachment(godMask_);
+        gf.setDepthAttachment(godDepth_);
+        godMaskFb_ = device->createFramebuffer(gf);
+        nvrhi::FramebufferDesc ga;
+        ga.addColorAttachment(godAccum_);
+        godAccumFb_ = device->createFramebuffer(ga);
+        if (!godMaskFb_ || !godAccumFb_) { outError = "createFramebuffer failed for godrays"; return false; }
+    }
+
     // T0：raster 主路径不经 initRtPresent（那是 rt/shadow 的 init）——blit/tonemap
     // 的 shader 与 layout 在此懒建（rt/shadow 已建时 null 守卫跳过；SPIR-V 恒 main、
     // DX12 忽略 entryName，§2.4/§2.5）。raster 只用 tonemap（场景直渲 hdrSceneColor_），
     // blit 系一并备好供 rt/shadow 复用。
     if (!vsRtPresent_ || !psBlitToHdr_ || !psTonemap_ ||
-        !psBloomExtract_ || !psBloomBlurH_ || !psBloomBlurV_) {
+        !psBloomExtract_ || !psBloomBlurH_ || !psBloomBlurV_ ||
+        !psGodraysBlack_ || !vsGodraysQuad_ || !psGodraysQuad_ || !vsGodraysFull_ || !psGodraysRadial_) {
         nvrhi::ShaderDesc t0sdesc;
         auto loadT0Shader = [&](const char* artifact, nvrhi::ShaderType type,
                                 nvrhi::ShaderHandle& out) -> bool {
@@ -3128,6 +3359,27 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
             outError = "failed to load T0 blit/tonemap/bloom shaders";
             return false;
         }
+        // M-NL1：godrays 五入口（独立文件 godrays.slang；黑 PS 与 model.slang
+        // vsShadow 在 PSO 层配对，签名仅 SV_Position）。
+        auto loadGodShader = [&](const char* artifact, nvrhi::ShaderType type,
+                                 nvrhi::ShaderHandle& out) -> bool {
+            const std::string path = std::string(NL_SHADER_DIR) + "/godrays." +
+                                     artifact + "." + shaderSuffix_;
+            std::vector<std::uint8_t> blob;
+            if (!readFileBytes(path.c_str(), blob)) return false;
+            nvrhi::ShaderDesc gsdesc;
+            gsdesc.setShaderType(type).setEntryName("main");
+            out = device->createShader(gsdesc, blob.data(), blob.size());
+            return out != nullptr;
+        };
+        if (!loadGodShader("psgodraysblack", nvrhi::ShaderType::Pixel, psGodraysBlack_) ||
+            !loadGodShader("vsgodraysquad", nvrhi::ShaderType::Vertex, vsGodraysQuad_) ||
+            !loadGodShader("psgodraysquad", nvrhi::ShaderType::Pixel, psGodraysQuad_) ||
+            !loadGodShader("vsgodraysfull", nvrhi::ShaderType::Vertex, vsGodraysFull_) ||
+            !loadGodShader("psgodraysradial", nvrhi::ShaderType::Pixel, psGodraysRadial_)) {
+            outError = "failed to load godrays shaders";
+            return false;
+        }
     }
     if (!blitLayout_ || !tonemapLayout_) {
         nvrhi::BindingLayoutDesc t0LayoutDesc;
@@ -3140,6 +3392,7 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         tmLayoutDesc.setVisibility(nvrhi::ShaderType::All)
             .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
             .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
             .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
             .addItem(nvrhi::BindingLayoutItem::Sampler(0));
         tonemapLayout_ = device->createBindingLayout(tmLayoutDesc);
@@ -3170,13 +3423,45 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     }
     if (!bloomConstants_) {
         nvrhi::BufferDesc bcDesc;
-        bcDesc.byteSize = 16;
+        // M-NL1：16→32B（g_bloom + g_gr 两 float4；CPU 每帧全量写 32B，铁律
+        // 「分配 ≥ 声明」——dxc 反汇编 cbuffer Size = 32 对齐）。
+        bcDesc.byteSize = 32;
         bcDesc.isConstantBuffer = true;
         bcDesc.isVolatile = true;
         bcDesc.maxVersions = 16;
         bcDesc.debugName = "BloomConstants";
         bloomConstants_ = device->createBuffer(bcDesc);
         if (!bloomConstants_) { outError = "createBuffer failed for bloom constants"; return false; }
+    }
+
+    // M-NL1：godrays 布局 + volatile CB（64B = 4×float4）。quad 引 b0；radial 引
+    // b0/t0/s0——布局与 shader 静态引用严格对齐（M15.0 漏槽铁律）；occl 几何
+    // pass 复用 shadowBindingLayout_（b0/t5）与 batch.shadowSet，不另建。
+    if (!godQuadLayout_ || !godRadialLayout_) {
+        nvrhi::BindingLayoutDesc gqLayoutDesc;
+        gqLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        godQuadLayout_ = device->createBindingLayout(gqLayoutDesc);
+        nvrhi::BindingLayoutDesc grLayoutDesc;
+        grLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+        godRadialLayout_ = device->createBindingLayout(grLayoutDesc);
+        if (!godQuadLayout_ || !godRadialLayout_) {
+            outError = "createBindingLayout failed for godrays";
+            return false;
+        }
+    }
+    if (!godCB_) {
+        nvrhi::BufferDesc gcDesc;
+        gcDesc.byteSize = 64;
+        gcDesc.isConstantBuffer = true;
+        gcDesc.isVolatile = true;
+        gcDesc.maxVersions = 16;
+        gcDesc.debugName = "GodraysConstants";
+        godCB_ = device->createBuffer(gcDesc);
+        if (!godCB_) { outError = "createBuffer failed for godrays constants"; return false; }
     }
 
     // M9.0 T5：compute set 依赖 tlas_（M8.1 每帧 rebuild 的同一对象），只有 rt
@@ -3204,14 +3489,31 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     {
         // M-NL0：tonemap set 扩 t2 = bloomA_（复合源）+ b2 = BloomConstants
         //（M15.0 无条件扩槽先例；旗标关时权重 0，采样结果 ×0 不改像素）。
+        // M-NL1：+t3 = godAccum_（godrays 复合源，同款无条件绑定 + 权重 0 保形）。
         nvrhi::BindingSetDesc td;
         td.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdrSceneColor_))
            .addItem(nvrhi::BindingSetItem::Texture_SRV(2, bloomA_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(3, godAccum_))
            .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, bloomConstants_))
            .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
         tonemapSet_ = device->createBindingSet(td, tonemapLayout_);
     }
     if (!tonemapSet_) { outError = "createBindingSet failed for T0 tonemap"; return false; }
+    // M-NL1：godrays set 两件——quad（b0 = godCB_）+ radial（b0/t0/s0）。
+    {
+        nvrhi::BindingSetDesc gq;
+        gq.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, godCB_));
+        godQuadSet_ = device->createBindingSet(gq, godQuadLayout_);
+        nvrhi::BindingSetDesc gr;
+        gr.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, godCB_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(0, godMask_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+        godRadialSet_ = device->createBindingSet(gr, godRadialLayout_);
+    }
+    if (!godQuadSet_ || !godRadialSet_) {
+        outError = "createBindingSet failed for godrays";
+        return false;
+    }
     // M-NL0：bloom set 三件——extract（t0 = hdrSceneColor_，bloomExtractLayout_）
     // + blur 源 A/B（t2，bloomLayout_）。
     {
@@ -7449,6 +7751,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     sceneMode_ = true;
     sceneAmbient_ = ambient;
     sceneLightCount_ = lightCount;
+    // M-NL1：CPU 持久副本（POD 拷贝）——Scene::draw 每帧选「最强点光源」投影用
+    //（initScene 后 lights 指针由调用方管理，不可跨帧依赖）。
+    if (lightCount > 0 && lights)
+        sceneLightDescs_.assign(lights, lights + lightCount);
     // 入参兜底校验（viewer 侧已过滤；这里显式拒绝，绝不静默画空场景）。
     if (!objects || objectCount == 0 || (lightCount > 0 && !lights)) {
         outError = "initScene: objects must be non-empty (lights null iff lightCount==0)";
@@ -8288,6 +8594,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     bloomEnable_ = params.bloomEnable;
     bloomThreshold_ = params.bloomThreshold;
     bloomWeight_ = params.bloomWeight;
+    // M-NL1：godrays 帧参数成员化；光源可见性每帧重算（rt/shadow 链不进
+    // sceneMode_ 分支 → 恒 false → 复合权重 0，呈现路径零扰动）。
+    godraysEnable_ = params.godraysEnable;
+    godraysWeight_ = params.godraysWeight;
+    godLightVisible_ = false;
     // M-TR0 K1: reset happens in backend recordFrame (frame start).
     // M-PERF1：--pass-timing 单向锁存（开了不关；query 由 pollPassTimers 懒建，
     // 晚一帧可接受）。开关关 = 一行都不执行 = 渲染路径零变化（Q-P5 零基线扰动）。
@@ -8335,6 +8646,60 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
     // 旧实现多 batch 时所有批次都读实例槽 0（详见第 5 步与 MILESTONES 踩坑）。
     if (sceneMode_) {
+        // ---- M-NL1：最强点光源屏幕投影（单光源首版，草案 §M-NL1 拍板口径）。
+        // 得分 = intensity × 亮度权重（Rec.709）；clip = mvp·p（列主序，
+        // vsScene 的 mul(g_mvp, float4(world,1)) 同式）。视锥外/相机后 → 当帧
+        // 不可见 = 复合权重 0（radial 结果不作数）。
+        if (godraysEnable_ && !sceneLightDescs_.empty()) {
+            const SceneLightDesc* best = nullptr;
+            float bestScore = -1.0f;
+            for (const SceneLightDesc& l : sceneLightDescs_) {
+                if (l.type != 1) continue;
+                const float lum = 0.2126f * l.color[0] + 0.7152f * l.color[1]
+                                + 0.0722f * l.color[2];
+                const float score = l.intensity * lum;
+                if (score > bestScore) { bestScore = score; best = &l; }
+            }
+            if (best) {
+                const float* m = params.mvp;   // 列主序 m[col*4+row]
+                const float x = best->position[0], y = best->position[1], z = best->position[2];
+                const float cx = m[0]*x + m[4]*y + m[8]*z + m[12];
+                const float cy = m[1]*x + m[5]*y + m[9]*z + m[13];
+                const float cz = m[2]*x + m[6]*y + m[10]*z + m[14];
+                const float cw = m[3]*x + m[7]*y + m[11]*z + m[15];
+                if (cw > 1e-6f) {
+                    const float nx = cx / cw, ny = cy / cw, nz = cz / cw;
+                    // NDC z ∈ (0,1)（0=近 1=远，D3D 口径）；xy 留 0.3 出屏余量
+                    //（光源略出屏仍有光束贡献）。
+                    if (nz > 0.0f && nz < 1.0f &&
+                        std::fabs(nx) < 1.3f && std::fabs(ny) < 1.3f) {
+                        godLightNdc_[0] = nx; godLightNdc_[1] = ny; godLightNdc_[2] = nz;
+                        godLightUv_[0] = nx * 0.5f + 0.5f;
+                        godLightUv_[1] = 0.5f - ny * 0.5f;
+                        const float dx = x - params.eye[0], dy = y - params.eye[1],
+                                    dz = z - params.eye[2];
+                        const float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                        // 角半径：光源发射体是小灯珠（range 是衰减半径不是发光
+                        // 面尺寸）——按 range/dist 的 1/6 缩放并 clamp 到小带
+                        //（0.06 上限实测仍过大：方形核心淹没模型，二次收敛）；
+                        // x 轴按视口纵横比换算保屏幕圆。
+                        float radY = (dist > 1e-4f)
+                            ? best->range * params.projYScale / dist * 0.1667f : 0.02f;
+                        radY = std::min(std::max(radY, 0.008f), 0.03f);
+                        const float vpW = viewport.maxX - viewport.minX;
+                        const float vpH = viewport.maxY - viewport.minY;
+                        const float radX = (vpW > 1e-4f) ? radY * (vpH / vpW) : radY;
+                        godLightRadNdc_[0] = radX; godLightRadNdc_[1] = radY;
+                        godLightColor_[0] = best->color[0];
+                        godLightColor_[1] = best->color[1];
+                        godLightColor_[2] = best->color[2];
+                        // 当帧相机 mvp 快照（occl 几何 pass 的 b0；applyGodRays 消费）
+                        std::memcpy(godViewProj_, params.mvp, sizeof(godViewProj_));
+                        godLightVisible_ = true;
+                    }
+                }
+            }
+        }
         // ---- M-E1b.5：instances 状态如实登记（不设 permanent，见 initScene 注释）。
         // 跟踪态不跨命令列表（NVRHI commandListSubmitted 清空），每个新列表必须在
         // 首次绑定前声明当前态；SRV 绑定的 require 由 tracker 插 barrier，列表
@@ -10118,6 +10483,29 @@ void Scene::shutdown() {
     bloomSetB_ = nullptr;
     bloomSetHdr_ = nullptr;
     bloomConstants_ = nullptr;
+    // M-NL1：godrays 资源 19 项逐一对照成员名单（S15 UAF 铁律：漏一项 = VULKAN
+    // 退出崩；M-NL0 bloomExtractLayout_ 漏登先例）。GPU 句柄 17 + CPU 副本 1 +
+    // 无遗漏核对：mask/accum/depth/fb×2/CB/ps×5/pso×3/layout×2/set×2 = 17 ✓。
+    godMask_ = nullptr;
+    godAccum_ = nullptr;
+    godDepth_ = nullptr;
+    godMaskFb_ = nullptr;
+    godAccumFb_ = nullptr;
+    godCB_ = nullptr;
+    psGodraysBlack_ = nullptr;
+    vsGodraysQuad_ = nullptr;
+    psGodraysQuad_ = nullptr;
+    vsGodraysFull_ = nullptr;
+    psGodraysRadial_ = nullptr;
+    godOcclPSO_ = nullptr;
+    godQuadPSO_ = nullptr;
+    godRadialPSO_ = nullptr;
+    godQuadLayout_ = nullptr;
+    godRadialLayout_ = nullptr;
+    godQuadSet_ = nullptr;
+    godRadialSet_ = nullptr;
+    sceneLightDescs_.clear();
+    sceneLightDescs_.shrink_to_fit();
     // M10.0：probe-place 资源（velocity/probe/dots 三管线 + 自建深度 + atlas
     // ping-pong，device 存活期释放——T0 教训：漏登记 = 析构晚于 vkDestroyDevice UAF）。
     probe_ = false;

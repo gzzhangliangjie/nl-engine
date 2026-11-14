@@ -184,8 +184,10 @@ void psTonemap(VsOut i, out float4 outColor : SV_Target)
     float4 hdr = g_hdrTex.Load(int3(pix, 0));
     // M-NL0 bloom 复合：--bloom 关时 CPU 侧 g_bloom.y=0 → rgb + bloom*0 = rgb
     //（IEEE 精确，model.slang flags=0 同款论证）→ 像素与直通逐字节一致；a 原样。
+    // M-NL1 godrays 复合：--godrays 关 / 光源不可见时 CPU 侧 g_gr.x=0 → 同款恒等。
     float3 bloom = g_bloomTex.SampleLevel(g_bloomSampler, i.uv, 0.0f).rgb;
-    outColor = float4(hdr.rgb + bloom * g_bloom.y, hdr.a);
+    float3 gr = g_grTex.SampleLevel(g_bloomSampler, i.uv, 0.0f).rgb;
+    outColor = float4(hdr.rgb + bloom * g_bloom.y + gr * g_gr.x, hdr.a);
 }
 
 // ---- M-NL0 bloom（--bloom，缺省关）：半分辨率 extract + 分离高斯 ping-pong ----
@@ -193,12 +195,16 @@ void psTonemap(VsOut i, out float4 outColor : SV_Target)
 // → psBloomBlurV（B→A）→ psTonemap 复合（t2 = A）。半分辨率 RT 逐帧状态跟踪
 //（§2.15/§2.19：不设 permanent，帧首 beginTracking 声明上帧末态 SRV）。
 // 槽位：b2/t2 全新（rt.slang 已占 b0/b1/t0/t1/u0；s0 同型复用 t0×4 先例）。
+// M-NL1：+t3（godraysAccum_ 复合源）；CB 扩 g_gr = {godraysWeight, 0, 0, 0}
+//（radial 本体的 density/decay/exposure 在 godrays.slang 独立 CB，互不越界）。
 // 参数：g_bloom = {threshold, weight, 1/halfW, 1/halfH}（CPU 每帧 writeBuffer）。
 cbuffer BloomConstants : register(b2)
 {
     float4 g_bloom;
+    float4 g_gr;
 }
 Texture2D<float4> g_bloomTex : register(t2);     // blur 源 / tonemap 复合源
+Texture2D<float4> g_grTex : register(t3);        // godraysAccum_（tonemap 复合源）
 SamplerState g_bloomSampler : register(s0);      // 线性 clamp（模糊/半分辨率上采样）
 
 // 亮部提取：亮度软阈值（lum≤threshold → 0；threshold→1 线性爬升），k 加权抑制
