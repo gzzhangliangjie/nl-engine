@@ -515,6 +515,7 @@ void Hud::build(HudFrame& frame) {
     // P8 M-N2：NavMesh 调参/五阶段面板（--nav-panel 时 viewer 挂入；同款
     // additive 独立窗口，null = 不画，既有基线一像素不动）。
     if (frame.navPanel) frame.navPanel->drawWindow(frame.navPanelState);
+    if (frame.propPanel) frame.propPanel->drawWindow(frame.propPanelState);   // P8 M-SC10
     // P8 M-C1：开发者控制台（` 呼出的独立窗口）。含 GLFW->ImGuiKey 输入映射与
     // wantCaptureKeyboard 回写；consoleOpen=false 时仍同步按键状态但零布局。
     drawConsoleWindow(frame);

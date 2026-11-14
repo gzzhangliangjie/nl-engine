@@ -742,6 +742,12 @@ public:
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
 
+    // M-SC7：ECS 场景资源子集释放（initScene 建立的全部句柄：场景管线/batch/
+    // 灯缓冲/中性兜底纹理/阴影链）。initScene 开头调用一次 = 可重入（运行期
+    // 脚本 attach/detach 后帧边界整场景重建，拍板方案 A）；shutdown() 复用
+    // 同一清单（不再各写一份）。仅当 device 存活期调用——T0/UAF 口径不变。
+    void shutdownEcsScene();
+
     // 用 framebuffer 的格式信息建四套 pipeline：(solid/wireframe) × (开/关背面剔除)，
     // C 键切剔除、V 键/HUD 复选框切线框；着色模式只是 cbuffer 值，与 pipeline 正交。
     bool ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& info,

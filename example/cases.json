@@ -13604,6 +13604,692 @@
      "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 30 pitch 8, f4)"
     }
    ]
+  },
+  {
+   "id": "m-sc4",
+   "label": "P8 M-SC4",
+   "name": "绑定导出生成器：exports.api 单源 -> C++/C# 双端胶水（机制里程碑，A 类轨道）",
+   "tag": "m-sc4",
+   "date": "2026-11-14",
+   "summary": "绑定导出自动化定稿（用户拍板「加个声明就导出，最多手写声明」）：tools/scriptapi/gen.py 从 exports.api 单源声明生成 C++（ApiTable.g.hpp 结构+POD 镜像 / .g.inc 注册行 / .g.asserts.inc 编译期防漂移）与 C#（Wiring.g.cs delegate+Init 偏移+NativeMarshal 生命周期原语）四件套；TYPEMAP 类型映射与生命周期账本机制单源（in str AllocHGlobal+finally 释放 / out str 静态缓冲立即拷 / delegate _pinned / POD 值传不跨堆）；type 段只收纯 POD（Blittable 一档，UnrealSharp 快路径同款），容器不过界走 count+ptr 协议；生成物入 git（csbindgen 先例）+ CMake -P 构建期新鲜度闸（零 Python）+ gen.py --check golden 自证。防漂移闸首跑即抓出 TYPEMAP out u64->int* 三条错误。16 旧导出经生成接线全量回放（s0~s8 全绿）作回归基线；顺手修 reloadScript OnTick 重绑误用 getEntryPoint（M-GL4 口径漏改，改回 bootstrap scriptTickFn）。",
+   "acceptance": [
+    "gen.py --check：25 exports / 1 POD types / 4 files 与声明一致（golden 字节级比对）",
+    "gen.py 重生成 4 件套真实输出；ApiTable.g.asserts.inc 每导出一条 static_assert 签名防漂移（编译期红）",
+    "selftest s0~s8 全绿（16 旧导出走生成接线零回归；含 s8 热更 reload 后 M-GL4 修复链路）",
+    "DX12/VULKAN 双后端 BUILD OK；regression m-sc3 8/8 ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节级自证（exit 0）",
+     "kind": "tool",
+     "note": "声明单源 exports.api（25 导出 + TransformData POD）重生成后与入库四件套逐字节比对；声明变更未重跑生成器 = 此卡红（perf-m0 bat 卡先例）。gen-build/asserts 两图保留在 example/m-sc4/ 由 run.bat 复现，不进回归卡（gen.py 无参会重写生成物触发新鲜度闸）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "preview": "example/m-sc4/gen-check.png",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "selftest",
+     "name": "selftest s0~s8：16 旧导出经生成接线全量回放（机制回归基线）",
+     "kind": "tool",
+     "note": "hosting s0~s5 + console s6 + ECS s7 + 热更 s8 全绿——手写表代码清零后零回归；reloadScript OnTick 重绑已改回 scriptTickFn（M-GL4 修复随卡验证）。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap",
+     "preview": "example/m-sc4/selftest.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc5",
+   "label": "P8 M-SC5",
+   "name": "Time/Input/Log 域绑定：生成器首批新导出（ApiTable 16->25，A 类轨道）",
+   "tag": "m-sc5",
+   "date": "2026-11-14",
+   "summary": "生成器机制首批实战：exports.api 尾部追加 9 导出（Time 2 / Input 5 / Log 2）；TYPEMAP 扩 f64/u32 原语。宿主侧活实例绑定 = timeSetClock/inputSetState/inputSetActionMap（ecsSetWorld 模式推广；不隐式建表，未绑 = NoClock/NoSource 热更窗口兜底）。C# facade Time/Input/Log + TimeCode/InputCode/LogCode（Api.Version 0.5.0）。viewer scene 模式只绑 Clock（无注入管线，Input 保持未绑=正确语义）。语义锚：GameClock tick x3 -> simTime 0.05；timeSetState 哨兵（-1=不变）；ActionMap 冻结值三型（Bool/Float/Vec2，W/D 喂键）；类型不符 = NoAction；KeyIsDown 越界防御；logWrite 走 nl::core::log writeCh 通道 script（stdout [nl:info|script] 契约 = 回归卡锚）；logSetFilter 生效 + 非法指令显式报错带原因。nl-script 显式 PRIVATE glfw（input.hpp 拉 GLFW 头，nl_core PRIVATE link 不传播）。selftest s9a~s9b 叠加 s0~s8 不回归。",
+   "acceptance": [
+    "selftest s9a~s9b 全绿（s0~s5 + s6 + s7 + s8 不回归，PASS 0 failures）：时钟锚 tick x3 -> simTime 0.05/tickCount 3、SetState 哨兵、ActionFind 三型冻结值、NoAction 类型拒、KeyIsDown 越界、log 通道 [nl:info|script]、SetFilter 生效 + 非法指令显式错、解绑 NoClock/NoSource",
+    "gen.py --check 绿（25 导出声明与生成物一致）；check timeinput 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + selftest 103 断言 PASS；regression m-sc3 8/8 ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s9a~s9b：Time/Input/Log 域导出（M-SC0~SC4 不回归）",
+     "kind": "tool",
+     "note": "s9a Time：GameClock 锚（tick x3 -> simTime 0.05）+ SetState 哨兵（-1 不变）+ 解绑 NoClock；s9b Input：ActionMap 冻结值 Bool/Float/Vec2（W/D 喂键）+ NoAction 类型拒 + KeyIsDown 越界 + 解绑 NoSource；Log：[nl:info|script] 通道 + SetFilter 生效 + 非法指令显式错。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput",
+     "preview": "example/m-sc5/selftest.png"
+    },
+    {
+     "id": "s9",
+     "name": "s9 段特写：时钟锚 / 动作冻结值 / 探针往返（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "宿主活实例绑定语义：timeSetClock/inputSetState/inputSetActionMap（ecsSetWorld 模式）；BoundProbe/UnboundProbe 探针 C# 直读宿主实例返回 0。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput"
+     ],
+     "expectExit": 0,
+     "expectLog": "s9a C# BoundProbe -> 0",
+     "command": "nl-script selftest ...（s9 段过滤展示）",
+     "preview": "example/m-sc5/s9.png"
+    },
+    {
+     "id": "log-channel",
+     "name": "log 通道锚特写：[nl:info|script] stdout（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "logWrite 经 nl::core::log writeCh 通道 script——[nl:level|channel] stdout 契约给回归卡稳定 expectLog 锚；s9a3 SetFilter(nl:warn) 生效 + readback。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput"
+     ],
+     "expectExit": 0,
+     "expectLog": "[nl:info|script] s9 log info anchor",
+     "command": "nl-script selftest ...（log 通道行过滤展示）",
+     "preview": "example/m-sc5/log-channel.png"
+    },
+    {
+     "id": "check",
+     "name": "check timeinput：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；s9 探针（BoundProbe/UnboundProbe）在 selftest 验证；nl-script 显式 PRIVATE glfw（input.hpp 拉 GLFW 头，nl_core PRIVATE link 不传播 include 面）。",
+     "args": [
+      "check",
+      "{root}/script/examples/timeinput"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/timeinput",
+     "preview": "example/m-sc5/check.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc6",
+   "label": "P8 M-SC6",
+   "name": "Camera 域绑定：CameraSource 适配源 + 生成器 v4（ApiTable 25->29，A 类轨道）",
+   "tag": "m-sc6",
+   "date": "2026-11-14",
+   "summary": "Camera 域绑定（exports.api 尾部追加 4 导出 cameraGetPose/SetPose/GetFov/SetFov，ApiTable 25->29，Api.Version 0.6.0）。宿主侧绑定 = cameraSetSource(CameraSource*)：4 函数指针 + ctx 适配源，nl_core 不能反向依赖 viewer（依赖方向），裸 CameraRig 会丢 fov 持久化 + orbit 控制——plan 里 cameraSetRig 是落码前占位名，定稿 cameraSetSource（同契约：宿主显式 set，未绑 = NoSource，ecsSetWorld 模式推广）。模式感知 SetPose 语义在 viewer 适配源实现：orbit=setOrbit(yaw,pitch,|eye|)+seed / free=setPose / chase=snapEyeTo+pitch（yaw 由底盘驱动）/ track=ModeUnsupported（轨迹数据主权）；SetFov clamp [20,120] 同 OrbitCamera；GetFov 未绑 = NaN（f32 返回无 rc 通道，生命周期账本特例，exports.api 内文档化）。C# facade Camera/CameraCode/CameraPose。selftest s10a（绑定罐头读回 eye 1.5/2.5/3.5、yaw 30、fov 60 + SetPose rc + null eye BadArg + fov 往返 60->75->clamp 500->120，C++ 捕获 {4,5,6,45,15}）/ s10b（track mode=3：读照常、SetPose ModeUnsupported、SetFov 模式统一生效）/ s10c（解绑 NoSource/NaN 不崩）。生成器第 5 生成物 API.md（docs/script-api/API.md，禁手改）同批收官。",
+   "acceptance": [
+    "selftest s10a~s10c 全绿（s0~s5 + s6 + s7 + s8 + s9 不回归，PASS 0 failures，112 断言）：罐头位姿读回、SetPose rc/BadArg、fov clamp 读回链、track 写拒、解绑 NoSource/NaN",
+    "gen.py --check 绿（29 导出声明与 5 生成物一致，含 API.md）；check camera 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s10a~s10c：Camera 域导出（M-SC0~SC5 不回归，112 断言）",
+     "kind": "tool",
+     "note": "s10a 绑定路径：罐头位姿读回锚（eye 1.5/2.5/3.5、yaw 30、pitch -10、fov 60、orbit）+ SetPose rc Ok（C++ 捕获 {4,5,6,45,15}）+ null eye BadArg + fov 往返 60->75->clamp 500->120；s10b track（mode=3）：GetPose 照常、SetPose ModeUnsupported、SetFov 模式统一生效；s10c 解绑：NoSource / GetFov NaN，不抛异常不崩。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput script/examples/camera",
+     "preview": "example/m-sc6/selftest.png"
+    },
+    {
+     "id": "s10",
+     "name": "s10 段特写：三探针 rc + C++ 捕获锚（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "cameraSetSource 沿 ecsSetWorld 模式（宿主入口前显式 set，不隐式建表）；模式感知 SetPose 在 viewer 适配源（orbit/free/chase/track 各自语义，track=ModeUnsupported 轨迹主权）；ApiTable 25->29 经 exports.api 尾部追加。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "s10a C# BoundProbe -> 0",
+     "command": "nl-script selftest ...（s10 段过滤展示）",
+     "preview": "example/m-sc6/s10.png"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节级自证（v4，29 导出，exit 0）",
+     "kind": "tool",
+     "note": "Camera 4 导出进 exports.api 后重生成与入库五件套逐字节比对（ApiTable.g.hpp/.inc/.asserts.inc + Wiring.g.cs + docs/script-api/API.md）；GetFov 未绑 = NaN 是 f32 无 rc 通道账本特例，声明行内文档化（perf-m0 bat 卡先例：声明变更未重跑生成器 = 此卡红）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "preview": "example/m-sc6/gen-check.png",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check",
+     "name": "check camera：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；s10 三探针（BoundProbe/TrackProbe/UnboundProbe）在 selftest 对罐头 CameraSource 验证；SetFov clamp [20,120] 同 OrbitCamera（脚本不得与宿主 fov 持久化打架）。",
+     "args": [
+      "check",
+      "{root}/script/examples/camera"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/camera",
+     "preview": "example/m-sc6/check.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc7",
+   "label": "P8 M-SC7",
+   "name": "ECS 模型挂载：帧边界重建（方案 A）+ 白名单单源 + 生成器偏移修复（ApiTable 29->32，A 类轨道）",
+   "tag": "m-sc7",
+   "date": "2026-11-14",
+   "summary": "ECS 模型挂载面三导出（ecsAttachModel/ecsDetachModel/ecsModelInfo，exports.api 尾部追加，ApiTable 29->32，Api.Version 0.7.0）。拍板方案 A：binding 只做组件增删 + 白名单校验，viewer 帧边界比对 Model 集合签名（实体 ID + meshFile），变了重跑收集 + loadEcsScene（initScene 经新增 shutdownEcsScene() 可重入化——原实现二次调用整份泄漏 GPU 资源）；实例矩阵走既有 M-GL3 插值链不动；机器出口锚 ecs scene rebuilt: N objects。三防崩语义（拍板）：无 Transform = kEcsNoTransform=5 不隐式建表 / 重复挂 = kEcsComponent=3 先挡 World::addComponent assert / 白名单拒 = kEcsBadAsset=6 坏名不落 World。白名单升单源 nl::scene::validAssetFileName（AssetName.hpp，收编 renderer.cpp/scene.cpp/viewer lambda/SceneGeo 四份复制，统一原版可打印 ASCII 口径；SceneGeo 放行字符集变宽已写明取舍）。**gen.py 真 bug 修复**：C# Init 偏移原按域首现序跑连续计数器，往非末尾域（Ecs）尾部追加时 Time/Input/Log/Camera 各域槽位整体错位（M-SC5/SC6 恰在末尾域追加未暴露；表本体一直声明序所以 struct 没坏）——改每导出声明序全局下标。C# facade Ecs.AttachModel/DetachModel/ModelInfo（System.Numerics.Vector3 tint）。selftest s11a（挂载+读回+留态 C++ 终态核 probeModel meshFile=cube.glb）/ s11b（错误码逐一：NoEntity/BadArg/BadAsset 三形态白名单拒且坏名不落 World/NoTransform/重复挂拒绝不改状态）/ s11c（解绑 NoWorld 三导出不崩）/ s11d（摘除 Model 净 Transform 留守 + 再摘 Component）。",
+   "acceptance": [
+    "selftest s11a~s11d 全绿（s0~s5 + s6 + s7 + s8 + s9 + s10 不回归，PASS 0 failures）：挂载读回链、错误码逐一、解绑不崩、摘除终态 C++ 核",
+    "gen.py --check 绿（32 导出声明与 5 生成物一致，含 API.md；Init 偏移修复后 golden 更新）；check model 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + selftest 均 PASS；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s11a~s11d：ECS 模型挂载导出（M-SC0~SC6 不回归）",
+     "kind": "tool",
+     "note": "s11a 绑定路径：Spawn+AddTransform+AttachModel(cube.glb) + ModelInfo 全字段读回（meshFile/tint 缺省 (1,1,1)/roughness 1/metallic 0）+ C++ 终态核（ModelComponent 落进罐头 World）；s11b 错误码逐一（NoEntity=2 三导出 / BadArg=4 空名 / BadAsset=6：../secret.glb、model.gltf、dir/model.glb 且坏名不落 World / NoTransform=5 / 重复挂=3 拒绝不改状态）；s11c 解绑：NoWorld x3 不崩；s11d 摘除：Model 摘净 Transform 留守 + 再摘 Component。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/model（7 目录全量）",
+     "preview": "example/m-sc7/selftest.png"
+    },
+    {
+     "id": "s11",
+     "name": "s11 段特写：四探针 rc + C++ 终态核锚（过滤自 selftest.log）",
+     "kind": "tool",
+     "note": "拍板方案 A：binding 只动组件，viewer 帧边界比对 Model 集合签名重建（initScene 可重入化前提 = shutdownEcsScene 子集释放）；白名单单源 nl::scene::validAssetFileName 收编四处复制；ApiTable 29->32 经 exports.api 尾部追加 + gen.py Init 偏移声明序修复。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "s11a C# BoundProbe -> 0",
+     "command": "nl-script selftest ...（s11 段过滤展示）",
+     "preview": "example/m-sc7/s11.png"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节级自证（v5，32 导出，exit 0）",
+     "kind": "tool",
+     "note": "Ecs 3 导出追加后重生成与入库五件套逐字节比对；含本轮 gen.py Init 偏移 bugfix（域首现序计数器 → 每导出声明序全局下标，Ecs 域注释偏移段 = 6..15,29..31）。声明变更未重跑生成器 = 此卡红（perf-m0 bat 卡先例）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "preview": "example/m-sc7/gen-check.png",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check",
+     "name": "check model：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build only；s11 四探针（BoundProbe/ErrorProbe/UnboundProbe/DetachProbe）在 selftest 对罐头 World 验证；viewer 帧边界重建的视觉验证随 M-SC11 跨域示例（机器出口锚已落码）。",
+     "args": [
+      "check",
+      "{root}/script/examples/model"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/model",
+     "preview": "example/m-sc7/check.png"
+    }
+   ]
+  },
+  {
+   "id": "m-sc8",
+   "label": "P8 M-SC8",
+   "name": "Physics 载具域：driveSetScene 直持 DebugScene（拍板 A'，M-NET2 面逐字对齐不新造，ApiTable 32->37，A 类轨道）",
+   "tag": "m-sc8",
+   "date": "2026-11-14",
+   "summary": "Physics 载具域五导出（physicsAddVehicle/physicsRemoveVehicle/physicsSetVehicleInput/vehicleFullPose/teleportVehicle，exports.api 尾部追加，ApiTable 32->37，Api.Version 0.8.0）。拍板 Q-SC8-1~4：A' 直持 nl::physics::DebugScene*（driveSetScene 注册，ecsSetWorld 模式推广——P8-SCRIPT-PLAN L107 既定口径「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt 公开头零新类型；CameraSource 函数指针表是四模式相机专属形态此处过度设计）/ A 注册方 step（脚本 OnTick 在 Physics tick 组 step 之前写输入，当帧消费——runScene 组序同语义）/ A 复用 ActionMap + setInput（Input 域读键与载具写输入两层解耦）/ A 交代物全要。buf4（quat xyzw）= TYPEMAP 首个 4-float buffer（BUF_RE 泛型正则天然覆盖）。viewer runNormal 接线：--script 在 physics 训练场模式也可用（runScene M-GL4 块复制精简，scene 模式脚本链零改动；ecsSetWorld/cameraSetSource 不绑 = NoWorld/NoSource 正确语义不隐式建表）；Physics tick 组 lambda 内 scriptTick 先行 → physicsScene.step 当帧消费。槽位有效性探针 = vehicleChassisState(slot).valid（used && chassis 同条件，M-NET2 内部静默忽略 → 绑定面显式回 kPhyNoSlot）。selftest s12a（真训练场 BoundProbe：加车 slot1/四输入/FullPose 含 out-NULL 跳过/teleport 逐位读回/tombstone 后三导出 NoSlot 且 slot0 不波及 + C++ 终态核）/ s12b（driveSetScene(nullptr) 五导出全 NoScene 不崩）。踩坑：C# stackalloc 三元表达式推成 Span 不能转裸指针——先分配再条件选用。",
+   "acceptance": [
+    "selftest s12a~s12b 全绿（s0~s5 + s6~s11 不回归，PASS 0 failures）：正向全链（真 DebugScene build(2) 训练场 + C++ 终态核 slot0 valid / 脚本车 tombstoned）+ 未绑五导出 NoScene 不崩",
+    "gen.py --check 绿（37 导出声明与 5 生成物一致，含 API.md；Api.Version 0.8.0）；check drive 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16（runNormal --script 接线零渲染回归）；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s12a~s12b：Physics 载具域导出（M-SC0~SC7 不回归）",
+     "kind": "tool",
+     "note": "s12a 绑定路径（真训练场 DebugScene build(2) + driveSetScene 直持）：AddVehicle slot=1（slot0 既有单车）+ 四输入写（Jolt 手刹 float 0..1）+ FullPose 含 out-NULL 跳过 + Teleport 逐位读回（DontActivate）+ RemoveVehicle tombstone 后 FullPose/SetInput/Teleport 全 NoSlot、slot0 不波及 + C++ 终态核（slot0 valid / 脚本车 invalid）；s12b 未绑：NoScene x5 不崩。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/drive"
+    },
+    {
+     "id": "s12",
+     "name": "s12 段特写（selftest.log 过滤 s12 锚行）",
+     "kind": "tool",
+     "note": "run.bat seg3 过滤产物 s12.log 的机械锚：s12-pre 定位 + DebugScene build(2) + s12a 正向链 + s12b 未绑全绿。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "s12-pre DebugScene build(2)",
+     "command": "nl-script selftest ... (s12 filter by run.bat)"
+    },
+    {
+     "id": "check-drive",
+     "name": "check drive 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "编译闸：DriveScript.csproj 引 script-api（0.8.0 Physics facade）；s12 探针（BoundProbe/UnboundProbe）语义在 selftest 全量段核。",
+     "args": [
+      "check",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/drive"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节对比（37 导出 + API.md）",
+     "kind": "tool",
+     "note": "生成器自证：exports.api 单源与 5 生成物逐字节一致（37 exports / 1 POD / buf4 新宽度）；新鲜度闸在 CMake 侧。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    }
+   ]
+  },
+  {
+   "id": "m-sc10",
+   "label": "P8 M-SC10",
+   "name": "属性面板域：[Prop] 静态字段反射 + POD 描述表 + ImGui 面板（拍板 A/A/A/A，ApiTable 37->39，A 类轨道）",
+   "tag": "m-sc10",
+   "date": "2026-11-14",
+   "summary": "属性面板域两导出（propsPushBegin/propsDescAdd，exports.api 尾部追加，ApiTable 37->39，Api.Version 0.9.0）。拍板 Q-SC10-1~4：A 静态字段载体（入口脚本类 [Prop] 静态字段反射，M-SC2b ScriptComponent 维持默认不做）/ A 四基本类型（float/int/bool/string，kind 0..3）/ A --prop-panel additive（runScene/runNormal 通用，SignalPanel 同款纪律 State 整份拷入 HudFrame + 帧后拷回编辑）/ A 交代物全要。描述表通道 = C# PropsPush.PushStatic 反射（MetadataToken 序声明稳定化，FieldInfo 缓存留 script-api 程序集随 ALC 回收——生命周期硬规则①）→ propsPushBegin（gen+1 = 面板重建信号）/propsDescAdd 推 POD；值通道 = BootTickPtr 协议复用（PropGet/PropSet 可选契约同 OnTick：缺失 = 惰性、reload 重取、unload 前置空，bootstrap 零改动）；值 ABI buf[0..3]=idx、标量 [4..7]、string [4..259] UTF8 尾 0。默认值 = 推送时字段现值快照（无独立 Default 声明防双源漂移）。viewer --prop-panel：描述表 gen 变化重建行（初值 propGet 拉）+ dirty 行 propSet 清边沿 + 编辑帧后拷回；热更 reload → 新 ALC 重推表 + 契约重取 = 面板自动跟随。selftest s13a（表/通道/值往返 + ReadField 经 BootCall C# 真源核）/ s13b（idx 越界 rc 8 + 坏缓冲 rc 2）/ s13c（热重编加字段 reload 表 4->5）/ s13d（10k string 往返 + GC.Collect 探针句柄漂移 <32——s8f 手法扩展，生命周期硬规则②）/ s13e（unload 通道前置空 + POD 表 C++ 留存）。",
+   "acceptance": [
+    "selftest s13a~s13e 全绿（s0~s12 零回归，PASS 0 failures）：描述表 4 行 kind/Range/default 逐位 + 值通道四类型往返 + C# 真源核 + 负向（rc 8/2）+ 热更跟随（4->5）+ 万次泄露段漂移 <32 + 卸载铁律",
+    "gen.py --check 绿（39 导出声明与 5 生成物一致，含 API.md；Api.Version 0.9.0）；check props 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16（--prop-panel 接线零渲染回归）；props-panel 证据图（ecs-e1b 场景 + --script props + --prop-panel）双后端 bytes",
+    "四张证据图全部由工具真实输出渲染，run.bat 五段 ALL GREEN"
+   ],
+   "preview": "example/m-sc10/props-panel-DX12.png",
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s13a~s13e：属性面板域（M-SC0~SC8 不回归）",
+     "kind": "tool",
+     "note": "s13a 描述表 4 行逐位 + 通道接通 + 四类型值往返（C# 真源核 ReadField 经 BootCall）；s13b idx 越界 rc 8 / 坏缓冲 rc 2；s13c 热重编加 [Prop(\"Extra\",0,50)] reload 表 4->5 + 契约重取；s13d 10k string 往返 + GC.Collect 句柄漂移 <32；s13e unload 通道前置空 + POD 表留存。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/props"
+    },
+    {
+     "id": "s13",
+     "name": "s13 段特写（selftest.log 过滤 s13 锚行）",
+     "kind": "tool",
+     "note": "run.bat seg3 过滤产物 s13.log 的机械锚：s13-pre 定位 + s13a 表/通道 + s13a2 值往返 + s13b 负向 + s13c 热更跟随 + s13d 泄露段 + s13e 卸载。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "s13a descriptor table has 4 rows",
+     "command": "nl-script selftest ... (s13 filter by run.bat)"
+    },
+    {
+     "id": "check-props",
+     "name": "check props 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "编译闸：PropsScript.csproj 引 script-api（0.9.0 Props facade + PropAttribute）；s13 探针（ReadField/GCCollect）语义在 selftest 全量段核。",
+     "args": [
+      "check",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/props"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节对比（39 导出 + API.md）",
+     "kind": "tool",
+     "note": "生成器自证：exports.api 单源与 5 生成物逐字节一致（39 exports / 1 POD / props 2 导出）；新鲜度闸在 CMake 侧。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "props-panel",
+     "name": "ecs-e1b 场景 + --script props + --prop-panel：属性面板 additive 同屏",
+     "kind": "image",
+     "note": "script props 窗口（gen/props/channel 状态行 + Speed 3.5 滑条 / Count 7 / Enabled / Label 初值经 propGet 拉取）+ ecs-e1b 场景渲染。--prop-panel additive 默认关：--hud 基线零耦合。 --script-bootstrap 显式 {root} 绝对化（默认仓库根相对路径在 regression cwd 下拼错——实测坑）。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--script",
+      "{root}/script/examples/props",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/m-sc10/props-panel-DX12.png",
+      "vulkan": "example/m-sc10/props-panel-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --script props --prop-panel (screenshot)"
+    }
+   ]
+  },
+  {
+   "id": "m-sc11",
+   "label": "P8 M-SC11",
+   "name": "整轨收口：跨域示例脚本 TourScript（Time+Input+Ecs+Log+Camera+Props 六域一脚本打通，拍板 A/A/A：五域+Props / merge 不入本轮 / GUIDE 新节+终检）",
+   "tag": "m-sc11",
+   "date": "2026-11-14",
+   "summary": "M-SC11 收口卡。script/examples/tour：Entry 装载期六域锚定（PropsPush 描述表 + Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + Log 固定锚 + Input NoSource 负向锚（viewer 双模式不绑 ActionMap = 既定语义）+ Time 读通 + Camera 读通），OnTick 逻辑帧相机环绕（args=double* dt 契约，**不调 Engine.Init**——dt 位型当表指针 = AV 实测坑）+ sweep 锚（固定文本）。viewer 帧边界 Model 签名比对重建 5->6 objects（M-SC7 方案 A 视觉兑现）。ApiTable 39 不变（零新导出，纯示例+文档收口）。",
+   "acceptance": "gen --check 39 exports；selftest s0~s13 全量不回归；check tour 编译闸；双后端 tour-panel（8 帧）/tour-sweep（130 帧）bytes 基线 + sweep log 锚（tick 0/120 两次）。",
+   "preview": {
+    "png": "example/m-sc11/tour-DX12.png"
+   },
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest 全量（s0~s13 不回归——整轨收官证据）",
+     "kind": "tool",
+     "note": "M-SC11 零新导出零新 selftest 段；全量重放 = M-SC0~SC10 各域验收不回归（跨域示例语义全部由既有段覆盖）。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest (s0-s13 full replay)"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：39 导出不变自证（M-SC11 零 API 面）",
+     "kind": "tool",
+     "note": "收口自证：exports.api 尾部无追加，golden 逐字节一致（39 exports / 1 POD）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check-tour",
+     "name": "check tour 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "跨域示例编译闸：TourScript.csproj 引 script-api；六域语义锚在 viewer 实跑（tour-panel/tour-sweep 卡）。",
+     "args": [
+      "check",
+      "{root}/script/examples/tour"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/tour"
+    },
+    {
+     "id": "tour-panel",
+     "name": "ecs-e1b 场景 + --script tour + --prop-panel：六域同屏",
+     "kind": "image",
+     "note": "script props 窗口（gen 1 / 4 props：SpinSpeed 15/SweepEvery 120/SpinEnabled/TourLabel tour）+ 脚本 attach 的 TorusKnotDense.glb（Px=5,Py=2.8 独立入镜）+ ecs-e1b 猴头群。--tick parallel + --fixed-dt 16.7 = 8 渲染帧 8 逻辑 tick（**默认 --tick off 不 tick——首版实测漏 --tick 则 ticks=0 零重建**）。tick 0 即 sweep（0%120==0）→ expectLog 锚 sweep ok。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--script",
+      "{root}/script/examples/tour",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep ok",
+     "baselines": {
+      "dx12": "example/m-sc11/tour-DX12.png",
+      "vulkan": "example/m-sc11/tour-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --tick parallel --script tour --prop-panel (screenshot)"
+    },
+    {
+     "id": "tour-sweep",
+     "name": "130 帧 sweep：OnTick 相机环绕 + 双 sweep 锚（tick 0/120）",
+     "kind": "image",
+     "note": "130 逻辑 tick：OnTick 每 tick Camera.SetPose（yaw += SpinSpeed*dt，fixed-dt 确定性）+ tick 0/120 两条 sweep 锚（FindByName+Exists 复核 → log 固定文本）。相机转 ~32°，bytes 基线双后端分文件。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--script",
+      "{root}/script/examples/tour",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "130",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep ok",
+     "baselines": {
+      "dx12": "example/m-sc11/tour-sweep-DX12.png",
+      "vulkan": "example/m-sc11/tour-sweep-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --tick parallel --script tour (130 frames screenshot)"
+    }
+   ]
   }
  ]
 }

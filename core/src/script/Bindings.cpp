@@ -6,10 +6,17 @@
 #include "nl/script/Bindings.hpp"
 
 #include "nl/core/console.hpp"
+#include "nl/core/game_clock.hpp"
+#include "nl/core/input.hpp"
+#include "nl/core/action_map.hpp"
+#include "nl/core/log.hpp"
+#include "nl/physics/World.hpp"     // M-SC8：DebugScene 载具训练场（PIMPL，Jolt 挡在 World.cpp）
+#include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 
 #include <objbase.h>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -256,10 +263,329 @@ extern "C" int nl_ecsFindByName(const char* name, std::uint64_t* outID) {
     return kEcsOk;
 }
 
+// ---- v5 ECS 模型挂载（M-SC7；拍板方案 A：binding 只做组件增删 + 白名单校验，
+// viewer 帧边界比对 Model 集合签名重建 scene batch——本层不感知渲染）。----
+// 防崩语义（拍板）：无 Transform = kEcsNoTransform 拒绝（不隐式建表，E1b 口径）；
+// 已有 Model 再挂 = kEcsComponent 拒绝（World::addComponent 同类型重复是 assert，
+// binding 必须先挡——直接调 = 崩进程）。meshFile 白名单拒绝 = kEcsBadAsset
+//（坏名不落 World，防路径穿越——nl::scene::validGlbAssetName 单源）。
+
+extern "C" int nl_ecsAttachModel(std::uint64_t id, const char* meshFile) {
+    if (!meshFile || !*meshFile) return kEcsBadArg;
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    if (!scene::validGlbAssetName(meshFile)) return kEcsBadAsset;
+    if (!g_ecsWorld->getComponent(id, scene::componentTypeID<scene::TransformComponent>()))
+        return kEcsNoTransform;
+    if (g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()))
+        return kEcsComponent;
+    auto mc = std::make_unique<scene::ModelComponent>(g_ecsWorld->wrap(id));
+    mc->meshFile = meshFile;
+    g_ecsWorld->addComponent(id, std::move(mc));
+    return kEcsOk;
+}
+
+extern "C" int nl_ecsDetachModel(std::uint64_t id) {
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    if (!g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()))
+        return kEcsComponent;
+    g_ecsWorld->removeComponent(id, scene::componentTypeID<scene::ModelComponent>());
+    return kEcsOk;
+}
+
+// ModelComponent 字段读回。meshFile = 静态缓冲账本（out str 语义：「下次同线程
+// 调用前有效」，C# 立即拷贝——ownedBuffer 复用 M-SC5 logSetFilter 落点）。
+// tint/roughness/metallic 指针可 NULL 跳过；meshFile 指针必填（kEcsBadArg）。
+extern "C" int nl_ecsModelInfo(std::uint64_t id, const char** outMeshFile,
+                               float* outTint3, float* outRoughness, float* outMetallic) {
+    if (!outMeshFile) return kEcsBadArg;
+    *outMeshFile = nullptr;
+    if (!g_ecsWorld) return kEcsNoWorld;
+    if (!g_ecsWorld->exists(id)) return kEcsNoEntity;
+    const auto* mc = static_cast<const scene::ModelComponent*>(
+        g_ecsWorld->getComponent(id, scene::componentTypeID<scene::ModelComponent>()));
+    if (!mc) return kEcsComponent;
+    *outMeshFile = (ownedBuffer() = mc->meshFile).c_str();
+    if (outTint3) {
+        outTint3[0] = mc->tint.x; outTint3[1] = mc->tint.y; outTint3[2] = mc->tint.z;
+    }
+    if (outRoughness) *outRoughness = mc->roughness;
+    if (outMetallic)  *outMetallic  = mc->metallic;
+    return kEcsOk;
+}
+
+// ---- v3 Time 导出（M-SC5；操作目标 = timeSetClock 绑定的 GameClock）----
+
+core::GameClock* g_clock = nullptr;
+
+extern "C" int nl_timeGetState(double* outSimTime, double* outFrameDt,
+                               std::uint64_t* outTickCount, int* outPaused) {
+    if (!outSimTime || !outFrameDt || !outTickCount || !outPaused) return kTimeBadArg;
+    *outSimTime = 0.0;
+    *outFrameDt = 0.0;
+    *outTickCount = 0;
+    *outPaused = 0;
+    if (!g_clock) return kTimeNoClock;
+    *outSimTime = g_clock->simTime();
+    *outFrameDt = g_clock->frameDt();
+    *outTickCount = g_clock->tickCount();
+    *outPaused = g_clock->paused() ? 1 : 0;
+    return kTimeOk;
+}
+
+extern "C" int nl_timeSetState(int paused, double timeScale) {
+    if (!g_clock) return kTimeNoClock;
+    // paused：-1=不变（约定哨兵）；0/1 显式设；其它越界值宽容当作不变（防呆）
+    if (paused == 0) g_clock->setPaused(false);
+    else if (paused == 1) g_clock->setPaused(true);
+    // timeScale < 0 = 不变；NaN 恒 false 天然跳过（setTimeScale 内部还有钳制兜底）
+    if (timeScale >= 0.0) g_clock->setTimeScale(timeScale);
+    return kTimeOk;
+}
+
+// ---- v3 Input 导出（M-SC5；操作目标 = inputSetActionMap / inputSetState 绑定的实例）----
+
+core::InputState* g_inputState = nullptr;
+core::ActionMap* g_actionMap = nullptr;
+
+// 动作 id 有效性 + 类型校验（name() 非法 id = nullptr 是 ActionMap 文档口径）。
+bool actionValid(core::ActionMap* map, core::ActionMap::ActionId id, core::ActionMap::Type want) {
+    if (id == core::ActionMap::kInvalidAction) return false;
+    if (map->name(id) == nullptr) return false;
+    return map->type(id) == want;
+}
+
+extern "C" int nl_inputActionFind(const char* name, std::uint32_t* outId) {
+    if (!name || !outId) return kInputBadArg;
+    *outId = core::ActionMap::kInvalidAction;
+    if (!g_actionMap) return kInputNoSource;
+    const auto id = g_actionMap->find(name);
+    if (id == core::ActionMap::kInvalidAction) return kInputNoAction;
+    *outId = id;
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionBool(std::uint32_t id, int* outValue, int* outPressed, int* outReleased) {
+    if (!outValue || !outPressed || !outReleased) return kInputBadArg;
+    *outValue = 0; *outPressed = 0; *outReleased = 0;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Bool)) return kInputNoAction;
+    *outValue = g_actionMap->boolValue(id) ? 1 : 0;
+    *outPressed = g_actionMap->boolJustPressed(id) ? 1 : 0;
+    *outReleased = g_actionMap->boolJustReleased(id) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionFloat(std::uint32_t id, float* outValue, float* outDelta) {
+    if (!outValue || !outDelta) return kInputBadArg;
+    *outValue = 0.0f; *outDelta = 0.0f;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Float)) return kInputNoAction;
+    *outValue = g_actionMap->floatValue(id);
+    *outDelta = g_actionMap->floatDelta(id);
+    return kInputOk;
+}
+
+extern "C" int nl_inputActionVec2(std::uint32_t id, float* outValue2, float* outDelta2) {
+    if (!outValue2 || !outDelta2) return kInputBadArg;
+    outValue2[0] = outValue2[1] = 0.0f;
+    outDelta2[0] = outDelta2[1] = 0.0f;
+    if (!g_actionMap) return kInputNoSource;
+    if (!actionValid(g_actionMap, id, core::ActionMap::Type::Vec2)) return kInputNoAction;
+    const auto v = g_actionMap->vec2Value(id);
+    const auto d = g_actionMap->vec2Delta(id);
+    outValue2[0] = v.x; outValue2[1] = v.y;
+    outDelta2[0] = d.x; outDelta2[1] = d.y;
+    return kInputOk;
+}
+
+extern "C" int nl_inputKeyIsDown(int key, int* outDown) {
+    if (!outDown) return kInputBadArg;
+    *outDown = 0;
+    if (!g_inputState) return kInputNoSource;
+    // 越界键码：InputState::isDown 防御性返回 false（文档口径），此处透传
+    *outDown = g_inputState->isDown(key) ? 1 : 0;
+    return kInputOk;
+}
+
+// ---- v3 Log 导出（M-SC5；nl::core::log 全局面，通道 "script"）----
+
+extern "C" int nl_logWrite(int level, const char* message) {
+    if (!message) return kLogBadArg;
+    if (level < 0 || level > 5) return kLogBadArg;   // 0..5 = Trace..Fatal
+    using core::log::Level;
+    const Level lv = static_cast<Level>(level);
+    core::log::writeCh(lv, "script", message);
+    return kLogOk;
+}
+
+extern "C" int nl_logSetFilter(const char* instruction, const char** outError) {
+    if (!instruction || !outError) return kLogBadArg;
+    *outError = nullptr;
+    std::string err;
+    if (core::log::setFilter(instruction, &err)) return kLogOk;
+    ownedBuffer() = std::move(err);   // 静态缓冲账本：下次调用前有效，C# 立即拷
+    *outError = ownedBuffer().c_str();
+    return kLogBadFilter;
+}
+
+// ---- v4 Camera 导出（M-SC6；操作目标 = cameraSetSource 绑定的适配源）----
+// core 不反向依赖 viewer：适配源由注册方（viewer / selftest 假源）实现 4 个函数
+// 指针；导出体只做指针校验 + 未绑兜底 + 透传，模式感知语义在适配源内（Bindings.hpp）。
+
+const CameraSource* g_camSource = nullptr;
+
+extern "C" int nl_cameraGetPose(float* outEye, float* outYawDeg, float* outPitchDeg,
+                                float* outFovY, int* outMode) {
+    if (!g_camSource) return kCamNoSource;
+    // 任一 out 可 NULL 跳过该字段：适配源契约 = 逐字段判空（值字段经栈暂存透传）
+    float eyeTmp[3] = {0.0f, 0.0f, 0.0f};
+    float yawTmp = 0.0f, pitchTmp = 0.0f, fovTmp = 0.0f;
+    int modeTmp = 0;
+    g_camSource->getPose(g_camSource->ctx, outEye ? outEye : eyeTmp,
+                         outYawDeg ? outYawDeg : &yawTmp,
+                         outPitchDeg ? outPitchDeg : &pitchTmp,
+                         outFovY ? outFovY : &fovTmp, outMode ? outMode : &modeTmp);
+    return kCamOk;
+}
+
+extern "C" int nl_cameraSetPose(const float* eye, float yawDeg, float pitchDeg) {
+    if (!eye) return kCamBadArg;
+    if (!g_camSource) return kCamNoSource;
+    return g_camSource->setPose(g_camSource->ctx, eye, yawDeg, pitchDeg);
+}
+
+extern "C" float nl_cameraGetFov() {
+    // f32 返回无 rc 通道：未绑 = NaN（C# 侧 float.IsNaN 判未绑——exports.api 写死）
+    if (!g_camSource) return std::numeric_limits<float>::quiet_NaN();
+    return g_camSource->getFov(g_camSource->ctx);
+}
+
+extern "C" int nl_cameraSetFov(float fovY) {
+    if (!g_camSource) return kCamNoSource;
+    g_camSource->setFov(g_camSource->ctx, fovY);
+    return kCamOk;
+}
+
+// ---- v6 Physics 载具导出（M-SC8；操作目标 = driveSetScene 绑定的训练场）----
+// 直持 nl::physics::DebugScene*（拍板 Q-SC8-1 A'）：M-NET2 多载具面逐字透传，
+// 绑定面零 Jolt。线程口径 = OnTick 逻辑帧约定（Q-SC8-2 A：输入在下一次注册方
+// step 消费——DebugScene::step 由 viewer 循环调，脚本只在 tick 边界写输入）。
+// 槽位有效性探针 = vehicleChassisState(slot).valid（used && chassis 同条件，
+// tombstone 后即 false——M-NET2 内部静默忽略，绑定面显式回 kPhyNoSlot）。
+physics::DebugScene* g_driveScene = nullptr;
+
+extern "C" int nl_physicsAddVehicle(float spawnX, float spawnZ, int* outSlot) {
+    if (!outSlot) return kPhyBadArg;
+    *outSlot = -1;
+    if (!g_driveScene) return kPhyNoScene;
+    const int slot = g_driveScene->addVehicle(spawnX, spawnZ);
+    if (slot < 0) return kPhyAddFailed;   // lastError 已置因（DebugScene 契约）
+    *outSlot = slot;
+    return kPhyOk;
+}
+
+extern "C" int nl_physicsRemoveVehicle(int slot) {
+    if (!g_driveScene) return kPhyNoScene;
+    return g_driveScene->removeVehicle(slot) ? kPhyOk : kPhyNoSlot;
+}
+
+extern "C" int nl_physicsSetVehicleInput(int slot, float forward, float right,
+                                         float brake, float handBrake) {
+    if (!g_driveScene) return kPhyNoScene;
+    if (!g_driveScene->vehicleChassisState(slot).valid) return kPhyNoSlot;
+    g_driveScene->setVehicleInput(slot, {forward, right, brake, handBrake});
+    return kPhyOk;
+}
+
+extern "C" int nl_vehicleFullPose(int slot, float* outPos, float* outQuat,
+                                  float* outVel) {
+    if (!g_driveScene) return kPhyNoScene;
+    // 任一 out 可 NULL 跳过该字段：逐字段判空，值字段经栈暂存透传（Camera 同款）
+    float pTmp[3] = {0.0f, 0.0f, 0.0f}, qTmp[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    float vTmp[3] = {0.0f, 0.0f, 0.0f};
+    const bool ok = g_driveScene->vehicleFullPose(
+        slot, outPos ? outPos : pTmp, outQuat ? outQuat : qTmp,
+        outVel ? outVel : vTmp);
+    return ok ? kPhyOk : kPhyNoSlot;
+}
+
+extern "C" int nl_teleportVehicle(int slot, const float* pos, const float* quat) {
+    if (!pos || !quat) return kPhyBadArg;
+    if (!g_driveScene) return kPhyNoScene;
+    if (!g_driveScene->vehicleChassisState(slot).valid) return kPhyNoSlot;
+    g_driveScene->teleportVehicle(slot, pos, quat);
+    return kPhyOk;
+}
+
 } // namespace
 
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
+}
+
+void driveSetScene(physics::DebugScene* scene) {
+    g_driveScene = scene;
+}
+
+// ---- M-SC10 属性面板域（描述表 POD；生命周期硬规则①：C++ 只存 POD，
+//      托管反射缓存留脚本程序集随 ALC 回收——Bindings.hpp 口径）----
+
+namespace {
+
+std::vector<PropDesc> g_props;
+std::uint32_t g_propsGen = 0;
+
+} // namespace
+
+const std::vector<PropDesc>& scriptProps() {
+    return g_props;
+}
+
+std::uint32_t scriptPropsGen() {
+    return g_propsGen;
+}
+
+extern "C" int nl_propsPushBegin() {
+    g_props.clear();
+    ++g_propsGen;   // 重建信号（面板/宿主按代数比对换表）
+    return kPropsOk;
+}
+
+extern "C" int nl_propsDescAdd(int kind, const char* name, float min, float max, float def) {
+    if (kind < kPropKindFloat || kind > kPropKindString || name == nullptr || name[0] == '\0')
+        return kPropsBadArg;
+    if (g_props.size() >= kMaxProps)
+        return kPropsBadArg;
+    PropDesc d{};
+    d.kind = kind;
+    std::snprintf(d.name, sizeof d.name, "%.*s", kPropNameCap, name);
+    d.min = min;
+    d.max = max;
+    d.def = def;
+    g_props.push_back(d);
+    return kPropsOk;
+}
+
+// ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----
+
+void timeSetClock(core::GameClock* clock) {
+    g_clock = clock;
+}
+
+void inputSetState(core::InputState* state) {
+    g_inputState = state;
+}
+
+void inputSetActionMap(core::ActionMap* map) {
+    g_actionMap = map;
+}
+
+// ---- M-SC6 宿主侧相机适配源绑定（nullptr = 解绑，导出回 kCamNoSource）----
+
+void cameraSetSource(const CameraSource* source) {
+    g_camSource = source;
 }
 
 // ---- M-SC3 脚本命令登记表公开接口（存储 = 匿名 namespace 顶部的 scriptCommandTable）----
@@ -276,26 +602,17 @@ std::vector<std::string> scriptUnregisterAll() {
 }
 
 const ApiTable* consoleApiTable() {
+    // M-SC4：注册行 = 生成物（单源 exports.api；改绑定面 = 改声明 + 重跑 gen.py，
+    // 编译期 asserts.inc 防漂移、CMake nl_scriptapi_freshness 防过期）。
     static const ApiTable table{
-        reinterpret_cast<void*>(&nl_cvarGet),
-        reinterpret_cast<void*>(&nl_cvarSet),
-        reinterpret_cast<void*>(&nl_cvarList),
-        reinterpret_cast<void*>(&nl_consoleExec),
-        reinterpret_cast<void*>(&nl_consoleRegister),
-        reinterpret_cast<void*>(&nl_consoleUnregister),
-        // v2 ECS（M-SC2，尾部追加）
-        reinterpret_cast<void*>(&nl_ecsSpawn),
-        reinterpret_cast<void*>(&nl_ecsRemove),
-        reinterpret_cast<void*>(&nl_ecsFlush),
-        reinterpret_cast<void*>(&nl_ecsExists),
-        reinterpret_cast<void*>(&nl_ecsSetParent),
-        reinterpret_cast<void*>(&nl_ecsGetParent),
-        reinterpret_cast<void*>(&nl_ecsAddTransform),
-        reinterpret_cast<void*>(&nl_ecsTransformGet),
-        reinterpret_cast<void*>(&nl_ecsTransformSet),
-        reinterpret_cast<void*>(&nl_ecsFindByName),
+#include "ApiTable.g.inc"
     };
     return &table;
 }
+
+// ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
+//      签名不一致 = 编译失败。须在实现之后、namespace nl::script 内 include——
+//      M-SC10 教训：props 段实现落在了 include 之后会被 decltype 判未声明）----
+#include "ApiTable.g.asserts.inc"
 
 } // namespace nl::script

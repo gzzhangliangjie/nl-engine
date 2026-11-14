@@ -1,4 +1,6 @@
 #include "nl/renderer/renderer.hpp"
+
+#include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本文件委托实现）
 #include "backend.hpp"
 #include "nl/core/profiler.hpp"   // M-TR0：renderer 帧提交 zone（OFF 空转）
 
@@ -17,20 +19,12 @@ constexpr const char* kBackend = "dx12";
 constexpr const char* kStage =
     "S8.2 ray query debug closure (per-pixel camera rays)";
 
-// M0.7：--model 白名单校验。只放行 assets/ 下安全引用的 ASCII 文件名：
-// 无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
+// M0.7：--model 白名单校验。M-SC7 起实现单源 = nl::scene::validAssetFileName
+//（core/src/scene/AssetName.cpp；本文件为原版语义出处，收编后留薄委托——
+// validModelFileName/validNMeshFileName 调用点零改动）。语义：assets/ 下安全
+// 引用的 ASCII 文件名：无路径分隔符（防目录穿越）、无 ".."、可打印字符、指定后缀。
 bool validAssetFileName(const char* name, const char* ext) {
-    if (!name || !*name) return false;
-    const std::string s(name);
-    if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
-    if (s.find("..") != std::string::npos) return false;
-    const size_t extLen = std::strlen(ext);
-    if (s.size() < extLen + 1 || s.compare(s.size() - extLen, extLen, ext) != 0) return false;
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (u < 0x21 || u > 0x7E) return false;   // 可打印 ASCII，不含空格
-    }
-    return true;
+    return nl::scene::validAssetFileName(name, ext);
 }
 bool validModelFileName(const char* name) {
     return validAssetFileName(name, ".glb");
