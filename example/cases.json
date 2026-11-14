@@ -12227,6 +12227,173 @@
      }
     }
    ]
+  },
+  {
+   "id": "nl1-godrays",
+   "label": "NL M-NL1",
+   "name": "godrays（屏幕空间 God Rays：遮挡预渲+radial blur，--godrays 缺省关保 bytes）",
+   "tag": "nl1-godrays",
+   "date": "2026-11-14",
+   "summary": "夜景轨道第二步（M-NL1，Q-NL3 A 方案）：GPU Gems 3 屏幕空间 God Rays。godrays.slang 五入口（黑 PS 配 vsShadow / NDC 圆盘灯珠 quad / 32 步 radial blur）+ 三段链：遮挡预渲（mask R8 清黑→quad 渲白→场景几何 vsShadow 渲黑，深度 LESS 区分光源前后，非深度派生）→ radial blur（godAccum_ RGBA16F）→ psTonemap 复合（+t3，权重 0 IEEE 恒等）。单光源 = 场景最强点光源（Rec.709 亮度×强度得分，CPU mvp 投影；视锥外/相机后 = 当帧权重 0）。occl 几何 pass 复用 shadowLightCB_（b0=相机 mvp）与 batch.shadowSet（t5）零新 batch set。参数实测定稿：density 0.9（<1 穿不到发射体=无光束）/ decay 0.96 / exposure 0.1（四轮收敛）/ 灯珠半径 range/dist×projYScale×1/6 clamp[0.008,0.03] / R8 采样读 .r（.rgb 恒 (v,0,0) 红晕教训）。",
+   "acceptance": [
+    "双后端 selftest 16/16 + 142/142 shader（godrays 五入口 10 件产物）",
+    "关 godrays 缺省态：双后端 rc=0 零 deviceError，复合权重 0 = IEEE 恒等",
+    "开 godrays 正面（yaw 12）：猴头剪影遮挡光源，辉光绕剪影漏出（遮挡逻辑证据）",
+    "开 godrays 侧视（yaw 90）：圆形亮核 + 径向光束（GPU Gems 3 形态证据）",
+    "开 godrays 极限权重（1.5）：辉光显著增强（效果显性锚）",
+    "DX12 vs VULKAN 侧视开态像素级一致（编译期确定性）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "gr-off",
+     "name": "缺省态（无 --godrays）：bytes 保形锚（夜 t=470 yaw 12）",
+     "kind": "pair",
+     "note": "旗标关 = applyGodRays 整体跳过 + 复合权重 0；与 gr-on 对比 = godrays 全链增量。",
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b-point.scene",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "6",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe（夜 t=470 无 --godrays）",
+     "baselines": {
+      "dx12": "example/nl1-godrays/gr-off-dx12.png",
+      "vulkan": "example/nl1-godrays/gr-off-vulkan.png"
+     }
+    },
+    {
+     "id": "gr-on",
+     "name": "夜态 godrays 正面：猴头剪影遮挡光源（yaw 12）",
+     "kind": "pair",
+     "note": "红绿蓝三点光取最强（绿，Rec.709 亮度×强度最高）；灯在猴后 → 剪影遮挡 + 绕边辉光。",
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b-point.scene",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "6",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--godrays",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --godrays（夜 t=470 yaw 12）",
+     "baselines": {
+      "dx12": "example/nl1-godrays/gr-on-dx12.png",
+      "vulkan": "example/nl1-godrays/gr-on-vulkan.png"
+     }
+    },
+    {
+     "id": "gr-side",
+     "name": "夜态 godrays 侧视：圆形亮核 + 径向光束（yaw 90）",
+     "kind": "pair",
+     "note": "光源无遮挡裸露 → GPU Gems 3 经典形态：小圆核 + 32 步径向光束。",
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b-point.scene",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "90",
+      "--pitch",
+      "6",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--godrays",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --godrays（夜 t=470 yaw 90）",
+     "baselines": {
+      "dx12": "example/nl1-godrays/gr-side-dx12.png",
+      "vulkan": "example/nl1-godrays/gr-side-vulkan.png"
+     }
+    },
+    {
+     "id": "gr-max",
+     "name": "极限权重：--godrays-weight 1.5（效果显性锚）",
+     "kind": "pair",
+     "note": "复合权重 0.4→1.5 = 辉光放大——链路显性验证。",
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b-point.scene",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "90",
+      "--pitch",
+      "6",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "470",
+      "--godrays",
+      "--godrays-weight",
+      "1.5",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --godrays --godrays-weight 1.5（夜 t=470 yaw 90）",
+     "baselines": {
+      "dx12": "example/nl1-godrays/gr-max-dx12.png",
+      "vulkan": "example/nl1-godrays/gr-max-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }
