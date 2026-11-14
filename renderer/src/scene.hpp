@@ -527,6 +527,13 @@ public:
     bool beginHdrSceneTarget(nvrhi::ICommandList* cmd, const float clearColor[4],
                              std::string& outError);
 
+    // ---- M-NL0：bloom（--bloom，缺省关，docs/nl/NL-PLAN.md）----
+    // 半分辨率 extract + 分离高斯 ping-pong（A→B→A）+ psTonemap 复合（t2=A）。
+    // 插在 presentTonemap 内部：raster 6 处 + rt/shadow presentRtTarget 全链一处生效。
+    // 旗标关 = applyBloom 整体跳过 + g_bloom.y=0 复合 IEEE 恒等（bytes 保形）。
+    bool applyBloom(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                    std::string& outError);
+
     // ---- M9.0（S9）：--mode shadow 的 compute 直光对照路径（Q4 方案 A）----
     // initShadow = initVisbuf(pulling=true) 全套 vis/材质资源 + initRtPresent 共用
     // 呈现骨架 + direct.cs compute 管线；不碰 BLAS/TLAS/rays。
@@ -1174,6 +1181,30 @@ private:
     nvrhi::GraphicsPipelineHandle tonemapPSO_;    // 随 swapchain framebuffer 信息建
     nvrhi::BindingLayoutHandle   tonemapLayout_;
     nvrhi::BindingSetHandle      tonemapSet_;     // t0 = hdrSceneColor_ SRV
+
+    // M-NL0 bloom（--bloom，缺省关）：半分辨率 extract/blur ping-pong + 复合。
+    // A/B 逐帧状态跟踪（§2.15/§2.19）：创建态 SRV + keepInitialState（hdr 同款），
+    // 帧序 SRV→(extract 写 A)→SRV→(blurH 读 A 写 B)→SRV→(blurV 读 B 写 A)→SRV 复合。
+    // 旗标关 = 零状态变化 + g_bloom.y=0 复合恒等（bytes 保形）；纹理随视口整组重建。
+    nvrhi::TextureHandle         bloomA_;          // 半分辨率 RGBA16_FLOAT（extract/blurV 写点 + 复合源）
+    nvrhi::TextureHandle         bloomB_;          // 半分辨率 RGBA16_FLOAT（blurH 写点）
+    nvrhi::FramebufferHandle     bloomFbA_;        // 仅 bloomA_（extract/blurV 写点，无 depth）
+    nvrhi::FramebufferHandle     bloomFbB_;        // 仅 bloomB_（blurH 写点，无 depth）
+    nvrhi::ShaderHandle          psBloomExtract_;
+    nvrhi::ShaderHandle          psBloomBlurH_;
+    nvrhi::ShaderHandle          psBloomBlurV_;
+    nvrhi::GraphicsPipelineHandle bloomExtractPSO_;
+    nvrhi::GraphicsPipelineHandle bloomBlurHPSO_;
+    nvrhi::GraphicsPipelineHandle bloomBlurVPSO_;
+    nvrhi::BindingLayoutHandle   bloomLayout_;     // t2 SRV + b2 CB + s0（blur：shader 引 t2/b2/s0）
+    nvrhi::BindingLayoutHandle   bloomExtractLayout_; // t0 SRV + b2 CB（extract：shader 引 t0/b2）
+    nvrhi::BindingSetHandle      bloomSetHdr_;     // t0 = hdrSceneColor_（extract 读）
+    nvrhi::BindingSetHandle      bloomSetA_;       // t2 = bloomA_（blurH 源）
+    nvrhi::BindingSetHandle      bloomSetB_;       // t2 = bloomB_（blurV 源）
+    nvrhi::BufferHandle          bloomConstants_;  // volatile 16B（b2：threshold/weight/1/halfW/1/halfH）
+    bool                         bloomEnable_ = false;    // 帧参数成员（Scene::draw 从 FrameParams 存）
+    float                        bloomThreshold_ = 0.7f;
+    float                        bloomWeight_ = 0.5f;
 
     // ---- M9.0：shadow 模式（compute 直光对照）----
     // 与其它 mode 互斥（一个 Scene 实例只跑一种）。复用面：输出 = rtTarget_ /

@@ -163,6 +163,10 @@ struct Options {
                                        // <0 = 跟随 ODE 记忆态。同相位湿度对比用）
     bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
+    // M-NL0：bloom post-chain 辉光（--bloom，缺省关 → tonemap 复合恒等 bytes 保形）。
+    bool bloomEnable = false;      // --bloom
+    double bloomThreshold = 0.7;   // --bloom-threshold X（亮部软阈值，亮度空间）
+    double bloomWeight = 0.5;      // --bloom-weight X（复合加法权重）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
@@ -354,6 +358,12 @@ Options parseArgs(int argc, char** argv) {
             o.rejectThreshold = static_cast<float>(std::atof(argv[++i]));
         // M-PERF1（Q-P5）：per-pass GPU 计时 HUD + 日志锚（默认关）。
         else if (a == "--pass-timing") o.passTiming = true;
+        // M-NL0：bloom post-chain 辉光（缺省关；参数 cvar/CLI 手调语义）。
+        else if (a == "--bloom") o.bloomEnable = true;
+        else if (a == "--bloom-threshold" && i + 1 < argc)
+            o.bloomThreshold = std::atof(argv[++i]);
+        else if (a == "--bloom-weight" && i + 1 < argc)
+            o.bloomWeight = std::atof(argv[++i]);
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2589,6 +2599,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        // M-NL0：bloom（--bloom 缺省关；两处 fp 填充点同步——ecs 主链同享 post-chain）
+        fp.bloomEnable = o.bloomEnable;
+        fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
+        fp.bloomWeight = static_cast<float>(o.bloomWeight);
         fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         fp.particles = o.particles;         // M-PT0：粒子叠加层开关（其它模式不读）
         // M-PT0：billboard 相机基向量取 view 矩阵（dag/hiz 分支已填；其它模式只有
@@ -4230,6 +4244,10 @@ int runScene(const Options& o) {
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;
+        // M-NL0：bloom（--bloom 缺省关；与 ecs 主链填充点同步）
+        fp.bloomEnable = o.bloomEnable;
+        fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
+        fp.bloomWeight = static_cast<float>(o.bloomWeight);
         // M-E1b.3：视向量 V 来源——真实相机世界坐标（psScene 从 b1 cameraPos 读）。
         float eye3[3];
         camera.eyePosition(eye3);

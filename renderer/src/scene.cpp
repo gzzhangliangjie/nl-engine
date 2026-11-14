@@ -2514,11 +2514,19 @@ bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // T0：blit / tonemap 布局（每 pass 单一 BindingSet，§2.7；shift 沿用 §2.5 set 0）。
     // t0 = 只读 SRV（blit 绑 rtTarget_、tonemap 绑 hdrSceneColor_）。
+    // M-NL0：tonemap 扩 t2（bloomA_ 复合 SRV）+ b2（BloomConstants）——M15.0 先例：
+    // layout/set 无条件扩槽，旗标关 = 权重 0 复合恒等，缺省态 bytes 保形。
     nvrhi::BindingLayoutDesc t0LayoutDesc;
     t0LayoutDesc.setVisibility(nvrhi::ShaderType::All)
         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
     blitLayout_ = device->createBindingLayout(t0LayoutDesc);
-    tonemapLayout_ = device->createBindingLayout(t0LayoutDesc);
+    nvrhi::BindingLayoutDesc tmLayoutDesc;
+    tmLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+        .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+        .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
+        .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+    tonemapLayout_ = device->createBindingLayout(tmLayoutDesc);
     if (!blitLayout_ || !tonemapLayout_) {
         outError = "createBindingLayout failed for T0 blit/tonemap";
         return false;
@@ -2587,6 +2595,18 @@ bool Scene::presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
     cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    // M-NL0：bloom 链（extract→blurH→blurV ping-pong），旗标关 = 整体跳过
+    //（hdr 已是 SRV 态，直通路径与改动前逐指令一致）。失败不拦路：回落无 bloom。
+    if (bloomEnable_) {
+        std::string bloomErr;
+        if (!applyBloom(cmd, viewport, bloomErr))
+            nl::core::log::deviceError("bloom", bloomErr);
+    } else {
+        // 旗标关也要每帧写 CB：tonemap set 无条件绑 BloomConstants（b2），
+        // volatile CB 未写先绑 = NVRHI validation error（缺省态 bytes 保形闸）。
+        const float bcOff[4] = {bloomThreshold_, 0.0f, 0.0f, 0.0f};
+        cmd->writeBuffer(bloomConstants_, bcOff, sizeof(bcOff));
+    }
     if (!tonemapPSO_) {
         const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
         nvrhi::GraphicsPipelineDesc pDesc;
@@ -2615,6 +2635,123 @@ bool Scene::presentTonemap(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* frameb
     nvrhi::DrawArguments vargs; vargs.setVertexCount(4);   // triangle-strip 覆盖四边形
     noteDraw();  // M-TR0 K1: draw-call counter
     cmd->draw(vargs);
+    return true;
+}
+
+// M-NL0：bloom 链（--bloom）。前提：hdrSceneColor_ 已处于 SRV（presentTonemap
+// 开头已转）；旗标关时本函数整体不进（零状态变化 + 复合恒等，bytes 保形）。
+// 状态序（§2.15/§2.19，A/B 不设 permanent，每帧 beginTracking 声明上帧末态 SRV，
+// 创建态 SRV+keepInitialState 与之对齐避首帧 ECL 错位——hdr 同款纪律）：
+//   A: SRV → RT(extract 写) → SRV(blurH 读) → RT(blurV 写) → SRV(复合读，收尾)
+//   B: SRV → RT(blurH 写) → SRV(blurV 读)
+// 半分辨率 pass 的 viewport = 半尺寸（fb 匹配，否则光栅化错位）；uv 仍 [0,1] 归一。
+bool Scene::applyBloom(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                       std::string& outError) {
+    if (!bloomA_ || !bloomB_ || !bloomFbA_ || !bloomFbB_ || !bloomConstants_ ||
+        !bloomSetHdr_ || !bloomSetA_ || !bloomSetB_ || !bloomLayout_) {
+        outError = "applyBloom: resources not ready";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                             0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const std::uint32_t halfW = (t0W_ + 1u) / 2u;
+    const std::uint32_t halfH = (t0H_ + 1u) / 2u;
+    nvrhi::Viewport halfVp;
+    halfVp.minX = 0.f; halfVp.minY = 0.f;
+    halfVp.maxX = static_cast<float>(halfW);
+    halfVp.maxY = static_cast<float>(halfH);
+    halfVp.minZ = 0.f; halfVp.maxZ = 1.f;
+    // volatile CB（refConstants_ 同款直写先例）：{threshold, weight, 1/halfW, 1/halfH}。
+    const float bc[4] = {bloomThreshold_, bloomWeight_,
+                         1.0f / static_cast<float>(halfW),
+                         1.0f / static_cast<float>(halfH)};
+    cmd->writeBuffer(bloomConstants_, bc, sizeof(bc));
+
+    cmd->beginTrackingTextureState(bloomA_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(bloomB_, allSub, nvrhi::ResourceStates::ShaderResource);
+    // 三 PSO 懒建（t0Device_，blit 同款全屏拷贝 renderState：关深度/模板 + None cull）。
+    if (!bloomExtractPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psBloomExtract_)
+             .addBindingLayout(bloomExtractLayout_);
+        pDesc.renderState.rasterState.setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        bloomExtractPSO_ = t0Device_->createGraphicsPipeline(pDesc, bloomFbA_->getFramebufferInfo());
+        if (!bloomExtractPSO_) { outError = "createGraphicsPipeline failed for bloom extract"; return false; }
+    }
+    if (!bloomBlurHPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psBloomBlurH_)
+             .addBindingLayout(bloomLayout_);
+        pDesc.renderState.rasterState.setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        bloomBlurHPSO_ = t0Device_->createGraphicsPipeline(pDesc, bloomFbB_->getFramebufferInfo());
+        if (!bloomBlurHPSO_) { outError = "createGraphicsPipeline failed for bloom blurH"; return false; }
+    }
+    if (!bloomBlurVPSO_) {
+        nvrhi::GraphicsPipelineDesc pDesc;
+        pDesc.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+             .setVertexShader(vsRtPresent_)
+             .setFragmentShader(psBloomBlurV_)
+             .addBindingLayout(bloomLayout_);
+        pDesc.renderState.rasterState.setCullMode(nvrhi::RasterCullMode::None);
+        pDesc.renderState.depthStencilState
+            .disableDepthTest()
+            .disableDepthWrite()
+            .disableStencil();
+        bloomBlurVPSO_ = t0Device_->createGraphicsPipeline(pDesc, bloomFbA_->getFramebufferInfo());
+        if (!bloomBlurVPSO_) { outError = "createGraphicsPipeline failed for bloom blurV"; return false; }
+    }
+    // extract：hdr(t0 SRV) → A(RT)
+    cmd->setTextureState(bloomA_, allSub, nvrhi::ResourceStates::RenderTarget);
+    {
+        nvrhi::GraphicsState pstate;
+        pstate.setPipeline(bloomExtractPSO_).setFramebuffer(bloomFbA_)
+              .addBindingSet(bloomSetHdr_);
+        pstate.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(pstate);
+        nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+        noteDraw();
+        cmd->draw(vargs);
+    }
+    // blurH：A(SRV) → B(RT)
+    cmd->setTextureState(bloomA_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(bloomB_, allSub, nvrhi::ResourceStates::RenderTarget);
+    {
+        nvrhi::GraphicsState pstate;
+        pstate.setPipeline(bloomBlurHPSO_).setFramebuffer(bloomFbB_)
+              .addBindingSet(bloomSetA_);
+        pstate.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(pstate);
+        nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+        noteDraw();
+        cmd->draw(vargs);
+    }
+    // blurV：B(SRV) → A(RT)
+    cmd->setTextureState(bloomB_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(bloomA_, allSub, nvrhi::ResourceStates::RenderTarget);
+    {
+        nvrhi::GraphicsState pstate;
+        pstate.setPipeline(bloomBlurVPSO_).setFramebuffer(bloomFbA_)
+              .addBindingSet(bloomSetB_);
+        pstate.viewport.addViewportAndScissorRect(halfVp);
+        cmd->setGraphicsState(pstate);
+        nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+        noteDraw();
+        cmd->draw(vargs);
+    }
+    // 收尾：A → SRV（tonemap t2 复合读 + 下帧 beginTracking 声明对齐）；B 保持 SRV。
+    cmd->setTextureState(bloomA_, allSub, nvrhi::ResourceStates::ShaderResource);
     return true;
 }
 
@@ -2936,11 +3073,40 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         if (!hdrSceneFb_) { outError = "createFramebuffer failed for hdrSceneFb"; return false; }
     }
 
+    // M-NL0：bloom 半分辨率 ping-pong（RGBA16_FLOAT——模糊中间值，无 FP32 往返
+    // 保形需求；不进 bytes 基线往返链）。创建态 SRV + keepInitialState（hdr 同款，
+    // 与帧首 beginTracking 声明的上帧末态对齐，否则首帧 DX12 ECL 布局错位）。
+    // 旗标关 = 全帧零绑定零状态变化（常驻 SRV），渲染路径零扰动。
+    {
+        const std::uint32_t bw = (w + 1u) / 2u;
+        const std::uint32_t bh = (h + 1u) / 2u;
+        nvrhi::TextureDesc bd;
+        bd.width = bw; bd.height = bh;
+        bd.format = nvrhi::Format::RGBA16_FLOAT;
+        bd.isRenderTarget = true;
+        bd.initialState = nvrhi::ResourceStates::ShaderResource;
+        bd.keepInitialState = true;
+        bd.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 1.f));
+        bd.debugName = "BloomA";
+        bloomA_ = device->createTexture(bd);
+        bd.debugName = "BloomB";
+        bloomB_ = device->createTexture(bd);
+        if (!bloomA_ || !bloomB_) { outError = "createTexture failed for bloom"; return false; }
+        nvrhi::FramebufferDesc fa;
+        fa.addColorAttachment(bloomA_);
+        bloomFbA_ = device->createFramebuffer(fa);
+        nvrhi::FramebufferDesc fbB;
+        fbB.addColorAttachment(bloomB_);
+        bloomFbB_ = device->createFramebuffer(fbB);
+        if (!bloomFbA_ || !bloomFbB_) { outError = "createFramebuffer failed for bloom"; return false; }
+    }
+
     // T0：raster 主路径不经 initRtPresent（那是 rt/shadow 的 init）——blit/tonemap
     // 的 shader 与 layout 在此懒建（rt/shadow 已建时 null 守卫跳过；SPIR-V 恒 main、
     // DX12 忽略 entryName，§2.4/§2.5）。raster 只用 tonemap（场景直渲 hdrSceneColor_），
     // blit 系一并备好供 rt/shadow 复用。
-    if (!vsRtPresent_ || !psBlitToHdr_ || !psTonemap_) {
+    if (!vsRtPresent_ || !psBlitToHdr_ || !psTonemap_ ||
+        !psBloomExtract_ || !psBloomBlurH_ || !psBloomBlurV_) {
         nvrhi::ShaderDesc t0sdesc;
         auto loadT0Shader = [&](const char* artifact, nvrhi::ShaderType type,
                                 nvrhi::ShaderHandle& out) -> bool {
@@ -2954,8 +3120,12 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         };
         if (!loadT0Shader("vsrtpresent", nvrhi::ShaderType::Vertex, vsRtPresent_) ||
             !loadT0Shader("psblittohdr", nvrhi::ShaderType::Pixel, psBlitToHdr_) ||
-            !loadT0Shader("pstonemap", nvrhi::ShaderType::Pixel, psTonemap_)) {
-            outError = "failed to load T0 blit/tonemap shaders";
+            !loadT0Shader("pstonemap", nvrhi::ShaderType::Pixel, psTonemap_) ||
+            // M-NL0：bloom 三入口（artifact 名 = rt.psbloomextract/psbloomblurh/psbloomblurv）
+            !loadT0Shader("psbloomextract", nvrhi::ShaderType::Pixel, psBloomExtract_) ||
+            !loadT0Shader("psbloomblurh", nvrhi::ShaderType::Pixel, psBloomBlurH_) ||
+            !loadT0Shader("psbloomblurv", nvrhi::ShaderType::Pixel, psBloomBlurV_)) {
+            outError = "failed to load T0 blit/tonemap/bloom shaders";
             return false;
         }
     }
@@ -2964,11 +3134,49 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         t0LayoutDesc.setVisibility(nvrhi::ShaderType::All)
             .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
         blitLayout_ = device->createBindingLayout(t0LayoutDesc);
-        tonemapLayout_ = device->createBindingLayout(t0LayoutDesc);
+        // M-NL0：tonemap 扩 t2（bloomA_ 复合）+ b2（BloomConstants）+ s0（复合采样），
+        // M15.0 扩槽先例；布局与 psTonemap 静态引用（t0/t2/b2/s0）严格对齐。
+        nvrhi::BindingLayoutDesc tmLayoutDesc;
+        tmLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
+            .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+        tonemapLayout_ = device->createBindingLayout(tmLayoutDesc);
         if (!blitLayout_ || !tonemapLayout_) {
             outError = "createBindingLayout failed for T0 blit/tonemap";
             return false;
         }
+    }
+    // M-NL0：bloom 布局 + volatile CB（refConstants_ 同款 16B）。
+    // 布局与 shader 静态引用严格对齐（DX12 root sig 全绑定校验，漏槽 = PSO 失败
+    //——M15.0 实锤；extract 引 t0/b2、blur 引 t2/b2/s0、tonemap 引 t0/t2/b2/s0）。
+    if (!bloomLayout_ || !bloomExtractLayout_) {
+        nvrhi::BindingLayoutDesc beLayoutDesc;
+        beLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2));
+        bloomExtractLayout_ = device->createBindingLayout(beLayoutDesc);
+        nvrhi::BindingLayoutDesc bLayoutDesc;
+        bLayoutDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2))
+            .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+        bloomLayout_ = device->createBindingLayout(bLayoutDesc);
+        if (!bloomLayout_ || !bloomExtractLayout_) {
+            outError = "createBindingLayout failed for bloom";
+            return false;
+        }
+    }
+    if (!bloomConstants_) {
+        nvrhi::BufferDesc bcDesc;
+        bcDesc.byteSize = 16;
+        bcDesc.isConstantBuffer = true;
+        bcDesc.isVolatile = true;
+        bcDesc.maxVersions = 16;
+        bcDesc.debugName = "BloomConstants";
+        bloomConstants_ = device->createBuffer(bcDesc);
+        if (!bloomConstants_) { outError = "createBuffer failed for bloom constants"; return false; }
     }
 
     // M9.0 T5：compute set 依赖 tlas_（M8.1 每帧 rebuild 的同一对象），只有 rt
@@ -2994,11 +3202,38 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
     }
     if (!blitSet_) { outError = "createBindingSet failed for T0 blit"; return false; }
     {
+        // M-NL0：tonemap set 扩 t2 = bloomA_（复合源）+ b2 = BloomConstants
+        //（M15.0 无条件扩槽先例；旗标关时权重 0，采样结果 ×0 不改像素）。
         nvrhi::BindingSetDesc td;
-        td.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdrSceneColor_));
+        td.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdrSceneColor_))
+           .addItem(nvrhi::BindingSetItem::Texture_SRV(2, bloomA_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, bloomConstants_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
         tonemapSet_ = device->createBindingSet(td, tonemapLayout_);
     }
     if (!tonemapSet_) { outError = "createBindingSet failed for T0 tonemap"; return false; }
+    // M-NL0：bloom set 三件——extract（t0 = hdrSceneColor_，bloomExtractLayout_）
+    // + blur 源 A/B（t2，bloomLayout_）。
+    {
+        nvrhi::BindingSetDesc eh;
+        eh.addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdrSceneColor_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, bloomConstants_));
+        bloomSetHdr_ = device->createBindingSet(eh, bloomExtractLayout_);
+        nvrhi::BindingSetDesc sa;
+        sa.addItem(nvrhi::BindingSetItem::Texture_SRV(2, bloomA_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, bloomConstants_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+        bloomSetA_ = device->createBindingSet(sa, bloomLayout_);
+        nvrhi::BindingSetDesc sb;
+        sb.addItem(nvrhi::BindingSetItem::Texture_SRV(2, bloomB_))
+           .addItem(nvrhi::BindingSetItem::ConstantBuffer(2, bloomConstants_))
+           .addItem(nvrhi::BindingSetItem::Sampler(0, sampler_));
+        bloomSetB_ = device->createBindingSet(sb, bloomLayout_);
+    }
+    if (!bloomSetHdr_ || !bloomSetA_ || !bloomSetB_) {
+        outError = "createBindingSet failed for bloom";
+        return false;
+    }
 
     // M9.2：reference 呈现 set（t1 SRV + b1 RefConstants），随 rtTarget_ 同步重建。
     if (reference_) {
@@ -8048,6 +8283,11 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
 void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                  const nvrhi::Viewport& viewport, const FrameParams& params) {
     if (!ready() || !framebuffer) return;
+    // M-NL0：bloom 帧参数成员化——presentTonemap 7 处调用点零签名改动，
+    // raster/rt/shadow 全链共用（applyBloom 在 presentTonemap 内部一处生效）。
+    bloomEnable_ = params.bloomEnable;
+    bloomThreshold_ = params.bloomThreshold;
+    bloomWeight_ = params.bloomWeight;
     // M-TR0 K1: reset happens in backend recordFrame (frame start).
     // M-PERF1：--pass-timing 单向锁存（开了不关；query 由 pollPassTimers 懒建，
     // 晚一帧可接受）。开关关 = 一行都不执行 = 渲染路径零变化（Q-P5 零基线扰动）。
@@ -9861,6 +10101,22 @@ void Scene::shutdown() {
     refPresentLayout_ = nullptr;
     refPresentSet_ = nullptr;
     refConstants_ = nullptr;
+    // M-NL0：bloom 资源（同 device 存活期释放口径；漏登记 = 析构晚于 vkDestroyDevice UAF）。
+    bloomA_ = nullptr;
+    bloomB_ = nullptr;
+    bloomFbA_ = nullptr;
+    bloomFbB_ = nullptr;
+    psBloomExtract_ = nullptr;
+    psBloomBlurH_ = nullptr;
+    psBloomBlurV_ = nullptr;
+    bloomExtractPSO_ = nullptr;
+    bloomBlurHPSO_ = nullptr;
+    bloomBlurVPSO_ = nullptr;
+    bloomLayout_ = nullptr;
+    bloomSetA_ = nullptr;
+    bloomSetB_ = nullptr;
+    bloomSetHdr_ = nullptr;
+    bloomConstants_ = nullptr;
     // M10.0：probe-place 资源（velocity/probe/dots 三管线 + 自建深度 + atlas
     // ping-pong，device 存活期释放——T0 教训：漏登记 = 析构晚于 vkDestroyDevice UAF）。
     probe_ = false;

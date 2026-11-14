@@ -498,7 +498,7 @@ set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
 # 视觉调试射线留 M8.2）。Inline ray query DXIL 要 SM6.5+（进 _SM66_ARTIFACTS）。
 set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 # M8.2：rt.slang 三入口——RayQuery 每像素相机射线 compute + 调试图全屏呈现 vs/ps。
-set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment")
+set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment" "psBloomExtract|psbloomextract|fragment" "psBloomBlurH|psbloomblurh|fragment" "psBloomBlurV|psbloomblurv|fragment")
 # M10.0（S10）：velocity.slang 双入口——独立 velocity prepass（Q10-1 拍板 UE 口径：
 # 单独一条小 pass 重画几何写 velocity_，不碰 T2 场景 PSO）。
 set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|fragment")

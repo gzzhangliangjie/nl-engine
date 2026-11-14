@@ -63,6 +63,11 @@ struct FrameParams {
     // validHistory 单帧清零，防渐变天气 GI 亮度滞后；缺省 false 保形）。
     float weatherWetness     = 0.0f;                   // 0..1（0 = 干）
     bool  weatherHistoryReject = false;                // filter 态单帧历史拒绝
+    // M-NL0：bloom post-chain 辉光（docs/nl/NL-PLAN.md）。缺省关 → psTonemap
+    // 复合 +bloom*0 IEEE 恒等 → 历史用例 bytes 保形（M-WEA0 旗标缺省关先例）。
+    bool  bloomEnable    = false;
+    float bloomThreshold = 0.7f;                       // 亮部软阈值（亮度空间）
+    float bloomWeight    = 0.5f;                       // 复合加法权重
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
