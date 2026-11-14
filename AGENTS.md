@@ -220,12 +220,13 @@
 8. **树边界闸（2026-11-10 用户拍板，防占坑会话越界污染）**：占坑会话伸手改主树 / 别的 wt（跑错树的 regression、重拍错树的 example 基线）是错乱主因，两道机械闸：①**cwd 自查**：claim 后第一步、以及任何切换目录之后跑 `python tools/wt_pool.py scope [--milestone <编号>]`——在自己 wt 内 = exit 0；在主树且锁里有活跃 claim = exit 2 警告（主线会话核实后可忽略）；在别的 track 的 wt 内 = exit 1 拒绝。②**脚本树闸**：共享入口工具（`tools/regression.py`、`tools/showcase/server.py`、`tools/reshot-hud-s71.py`，后续同类入口照接）开头已接 `tools/tree_gate.py`——**脚本所在树 ≠ cwd 所在树 → exit 2 拒绝**，跑工具一律用自己的树的副本；刻意例外（CI 沙箱 cwd 无关等）设 `NL_TREE_GATE_ALLOW=1` 放行（输出 WARN）。③`wt_pool.py` 本身不受树闸限制（它就是跨树占坑工具，锁在共享 .git）。
 9. **会话级 PreToolUse 硬闸 = dev-expert hooks 框架（2026-11-14 用户拍板固化；+57 事故：cases.json 追加命令无 cd 前缀、cwd 重置回主树误落 +57 行，仓库级三闸拦不到裸 python 命令）**：会话级工具调用拦截用 **dev-expert 技能自带 hooks 框架**——`C:\Users\zlj10\.workbuddy\skills\dev-expert\hooks.json`（模板，`{{PYTHON_BIN}}`/`{{HOOKS_DIR}}` 占位符）+ `hooks\` 脚本目录。机制：PreToolUse/PostToolUse matcher 正则匹配工具名（Bash 族 = `Bash|execute_command|run_command|run_in_terminal|terminal`，写族 = `Write|Edit|write_to_file|replace_in_file`），命中即调脚本，stdin 收事件 JSON（`tool_input.command` / `tool_input.file_path`，多字段容错），**`exit 2` = 阻断**，打印文本回给 Agent 自纠。已挂 `hooks/wt_tree_gate.py`：命令/写路径含 `cases.json` 且无 nl-engine 树锚点（nl-engine 绝对路径或 `cd <nl-engine树>` 开头）→ exit 2 阻断并打印改法；逃生口 `NL_HOOK_ALLOW=1`。**维护铁律（2026-11-14 实测）**：①WorkBuddy 运行时真正加载的入口是 **`~/.workbuddy/settings.json` 的 `hooks` 字段**（或项目级 `.codebuddy/settings.json`），dev-expert 的 `hooks.json`/`hooks.installed.json` 是 CodeBuddy CN 侧入口——两处都要维护（脚本正本 `~/.workbuddy/hooks/`，dev-expert 侧用 `install_hooks.py` 同步；改完不用重启，下一次工具调用即生效）；②skill 内嵌 hook 默认不生效需手动信任，正本放中性目录 `~/.workbuddy/hooks/`；③Windows 管道下 Python 输出默认 GBK，hook 脚本必须 `sys.stdout.reconfigure(encoding='utf-8')` 否则拦截信息乱码；④新增硬闸流程：`~/.workbuddy/hooks/` 加脚本 → settings.json 登记 matcher → 用样例命令实测（阻断 exit 2 + 放行 0 + 中文信息无乱码）→ dev-expert 侧同步。已挂 `wt_tree_gate.py` 并实测生效（探针被拦 + cd 锚点/绝对路径/逃生口三路放行）。
 
-10. **A 档纪律闸 = nl_ops_gate.py（2026-11-14 用户拍板「A档全做」，口头规范升级硬闸省钱）**：同一 hooks 框架（`~/.workbuddy/hooks/nl_ops_gate.py`，settings.json Bash matcher），四条：
+10. **A 档纪律闸 = nl_ops_gate.py（2026-11-14 用户拍板「A档全做」，口头规范升级硬闸省钱）**：同一 hooks 框架（`~/.workbuddy/hooks/nl_ops_gate.py`，settings.json Bash matcher），五条：
   ①**R1 回归禁全量**：命令含 regression.py 无 `--only` → 拦（AGENTS §4.4；逃生口 `NL_REG_FULL=1`）；
   ②**R2 ctest 必带 repeat**：裸 ctest 无 `until-pass:3` → 拦；`wt.bat <track> ctest` 入口放行（内部已注入）；逃生口 `NL_CTEST_ALLOW=1`；
   ③**R3 后台必写锚**：`run_in_background=true` 且命令无 `bg-last.log` → 拦（§9b；逃生口 `NL_HOOK_ALLOW=1`）；
   ④**R4 递归 rm 须锚点**：`rm -r/-rf` 无树锚 → 拦并引导走 `wt.bat clean`；非递归 `rm -f`（index.lock 例行）放行。
-  12 场景离线实测 + 真实探针生效。新增硬闸照第 9 条维护铁律四步流程；逃生口一览：`NL_REG_FULL` / `NL_CTEST_ALLOW` / `NL_HOOK_ALLOW`。
+  ⑤**R5 长命令禁前台（2026-11-14 晚拍板，起因：另一会话前台跑回归烧 120+）**：构建/ctest/regression 类（`wt.bat <track> build|ctest|regression|clean`、`cmake --build`、`tools/regression.py`、裸 ctest）在 `run_in_background=false` 下执行 → 拦并提示改后台 + 写锚；`git commit` 命令整体豁免（message 字样误伤）；逃生口 `NL_FG_ALLOW=1`。
+  探针离线实测生效（R1~R5 各正反例 + 豁免）。新增硬闸照第 9 条维护铁律四步流程；逃生口一览：`NL_REG_FULL` / `NL_CTEST_ALLOW` / `NL_HOOK_ALLOW` / `NL_FG_ALLOW`。
 > 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
 
 ---
