@@ -1,6 +1,6 @@
 <rml>
 <head>
-    <link rel="stylesheet" type="text/rcss" href="ui/demo.rcss" />
+    <link rel="stylesheet" type="text/rcss" href="demo.rcss" />
     <title>NL-Engine UiScript Document</title>
 </head>
 <body>

@@ -10,7 +10,7 @@ body {
     padding: 16dp;
     background-color: #1a1f2bcc;
     border-radius: 8dp;
-    border: 1dp solid #3d4557cc;
+    border: 1dp #3d4557cc;   /* RmlUi 简写不支持 border-style 关键字（恒实线） */
 }
 
 .demo     { left: 24dp; top: 24dp; }
