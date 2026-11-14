@@ -13500,6 +13500,107 @@
      "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 30 pitch 8, f4)"
     }
    ]
+  },
+  {
+   "id": "water-t3",
+   "label": "WAT M-WAT3",
+   "name": "岸线软化 + 岸线泡沫（bilateral 邻域 diff 复用，--water-noshore）",
+   "tag": "water-t3",
+   "date": "2026-11-14",
+   "summary": "M-WAT3（拍板 A+B：岸线软化 + 岸线泡沫；bevy 无水体岸线口径，纯 UE 同构）。csWaterComposite 新增 B3 段：fade = saturate(diffNear/fadeDist)（UE DistanceToNearestSurface 同构）——diffNear = 原位 3×3 bilateral 非水邻域平均径向差（ok0）或 B2 扭曲 tap 加权差，深水（无非水邻域）= fade 1 不动；输出 color = lerp(bg0, 水色, fade)——bg0 = 邻域真实岸边/物体像素色，猴头-水面交界深色硬边柔化消失。岸线泡沫 = diff 窄带（shoreBand² 锐化，随 N·L 明暗，UE WaterBody 岸线泡沫同构）。零新 pass/零新资源（复用 bilateral diff）。WaterConstants 336→352B（wcH = fadeDist 2.2m / shoreFoamDist 2.5m / shoreFoamGain 1.0 / noShore 旗标）。--water-noshore 旗标下输出与 M-WAT2 逐字节一致（保形实证 hash 758c0d57）。--water 缺省关 = 零漂移不变。",
+   "acceptance": [
+    "water-t3 run.bat verify ALL GREEN exit 0：full/noshore/water-off/late/det/anchor 五组 shot + bytes/A/B 检查 + log 锚（gerstner + composite）+ deviceErrors=0 + 负向",
+    "零漂移闸：--water 关（仅 --ssr）re-shot 与 water-t0 ssr-on 冻结基线逐字节一致（双后端）",
+    "岸线 A/B：full vs --water-noshore 必不同（双后端）；且 noshore 输出与 M-WAT2 full 基线逐字节一致（保形实证）",
+    "交界带柔化：猴头-水面交界深色硬边消除（并排对比图存档 /tmp 证据 + 台账记录）",
+    "波运动 f4≠f12 + 确定性双跑 + 跨后端 near 档 + water-t1/t2 基线重拍（拍板授权，composite 岸边窄带输出必变）"
+   ],
+   "preview": "example/water-t3/water-full-dx12.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "water-t3-shoreline",
+     "name": "岸线软化 + 岸线泡沫（主机位：猴头-水面交界渐变）",
+     "kind": "image",
+     "note": "viewer --mode pulling --ssr --water；B3 = lerp(bg0, 水色, fade)，交界带渐变 + 窄带白沫；noshore 旗标 A/B 见 run.bat verify。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--water",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "water: composite ready",
+     "baselines": {
+      "dx12": "example/water-t3/water-full-dx12.png",
+      "vulkan": "example/water-t3/water-full-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 7, f4)"
+    },
+    {
+     "id": "water-t3-shore-edge",
+     "name": "池外机位岸线证据（pitch8/dist30：水-band 交界渐变过渡）",
+     "kind": "image",
+     "note": "池外视角水-band 交界：fade 过渡带 + 岸线泡沫窄带可见。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--water",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "--yaw",
+      "12",
+      "--pitch",
+      "8",
+      "--dist",
+      "30",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "water: composite ready",
+     "baselines": {
+      "dx12": "example/water-t3/shore-edge-dx12.png",
+      "vulkan": "example/water-t3/shore-edge-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 30 pitch 8, f4)"
+    }
+   ]
   }
  ]
 }

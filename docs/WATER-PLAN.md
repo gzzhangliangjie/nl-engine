@@ -189,3 +189,20 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 - **盲区补全（零新 pass/零新资源）**：池底是已知平面 → composite 内 B1 解析 ray-plane（y=wcG.y，命中 [-floorHalf,floorHalf]² → 命中点 xz×0.25 wrap 双线性采材质 0 贴图，thick = 真实光路程 → Beer-Lambert 深浅梯度天然成立）；B1 未命中（掠射出池）走 B2 屏幕空间扭曲 4-tap 兜底（原方案机制保留）。平面参数走 wcG.y/z（单源 kWaterFloorY/Half）。
 - **折射 A/B 硬闸旗标**：`--water-norefract`（wcG.w）——折射路径整体关闭（bg 归零、厚 fallback），refract = in-scatter only；run.bat 加 full vs norefract DIFF 检查（与 §6.1 noreflect 对称）。
 - **验收机位**：t2 主 case 维持 t1/t0 相机（pitch9/dist7，零漂移闸直接比 t0 基线 bytes）；池外机位（pitch8/dist30）另拍折射/环带证据图（池底贴图穿透水面可见）。
+
+## 9d. M-WAT3 开工实读与任务书（2026-11-14，claim 后实读）
+
+**三处实读**：
+- **UE SLW（官方文档 4.26/4.27 + 论坛 5.5 实测）**：SLW = 均匀参与介质体积（Schlick 相函数）+ 表面 BSDF/BRDF 由 Opacity 混合；岸线软化官方路数 = **`Distance To Nearest Surface` 节点接 Opacity lerp**（近水面物体自然淡入），另一路 = Absorption 系数按深度调节；`Color Scale Behind Water` = 水后色度第 4 输入；折射读取前可选 downsample（waterBg copy 已同构）。
+- **bevy**：SSR example 水体 = 4 张法线图叠加波纹 + deferred SSR（`water_material.wgsl`），SSR `edge_fadeout` 是屏幕边缘淡出与水体无关——**bevy 无水体岸线软化口径**，M-WAT3 纯 UE 口径。
+- **本仓现状（M-WAT2 实测）**：csWaterComposite 整体替换水像素 → 水岸交界（池底环带/猴头穿出水面）为硬边；原位 3×3 bilateral 已算非水邻域径向差 diff（岸边邻域 diff 小），**复用即可得 fade，零新 pass/零新资源**。
+
+**M-WAT3 方案骨架（待拍板范围）**：
+1. **岸线软化 soft fade（核心）**：`fade = saturate(diff / kWaterFadeDist)`；diff = bilateral 邻域平均径向差（ok0）或扭曲 tap 加权差（B2 命中），ok0=false 且 B2 未命中 = 深水 fade=1。输出 `color = lerp(bg0, waterColor, fade)`（bg0 = bilateral 原位邻域色；ok0=false 直接 waterColor）。水岸硬边 → 按「距岸距离」渐变过渡，UE DistanceToNearestSurface 同构。
+2. **岸线泡沫（可选）**：diff 窄带（如 < 0.8m）加白沫（复用 waterFoam，阈值换成 diff 判据），UE WaterBody 岸线泡沫同构。
+3. **Color Scale Behind Water（可选）**：refract 的 bg 乘 wcH 色度系数（UE 第 4 输入同构，调水后色偏）。
+4. **CB 扩展**：wcG 已满 → 新增 wcH float4（fadeDist / shoreFoam 参数 / behindWaterScale.rgb），336→352B（22×float4），CPU 数组 = 字节/4。
+
+**验收口径（草案）**：水岸交界渐变可见（硬边消除）为软闸（截图对比）；bytes 零漂移 + 双旗标 A/B + verify 全套沿 M-WAT2 口径；跨后端 near 档。
+
+**拍板结论（2026-11-14 用户拍板）**：**A+B**——岸线软化（fade = saturate(diffNear/fadeDist)，复用 bilateral 邻域 diff）+ 岸线泡沫（diff 窄带 shoreBand² 白沫）；C（Color Scale Behind Water）不做。**water-t1/t2 基线重拍授权随拍板生效**（composite 输出必变：岸边窄带像素 fade lerp）。参数 wcH = (fadeDist=1.2m, shoreFoamDist=0.6m, shoreFoamGain=0.7, noShore 旗标)；CB 336→352B（22×float4）。落码开始。

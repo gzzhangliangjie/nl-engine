@@ -72,6 +72,9 @@ struct FrameParams {
     // M-WAT2：--water-norefract 验收旗标（折射路径整体关闭，refract = in-scatter
     // only；WATER-PLAN §6.2 折射 A/B 硬闸用；缺省 false）。
     bool  waterNoRefract     = false;
+    // M-WAT3：--water-noshore 验收旗标（岸线软化关闭，fade 归 1；WATER-PLAN
+    // §9d 岸线 A/B 硬闸用；缺省 false）。
+    bool  waterNoShore       = false;
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。

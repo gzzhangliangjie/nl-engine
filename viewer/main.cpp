@@ -174,6 +174,7 @@ struct Options {
     bool water = false;       // M-WAT1：--water（pulling 链水体；缺省关零扰动）
     bool waterNoReflect = false; // M-WAT2：--water-noreflect（composite 反射项归零，验收 A/B 对比）
     bool waterNoRefract = false; // M-WAT2：--water-norefract（折射路径关闭，验收 A/B 对比）
+    bool waterNoShore = false;   // M-WAT3：--water-noshore（岸线软化关闭，验收 A/B 对比）
     bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
     bool vsmPanel   = false;  // M15.1：--vsm-panel（VSM 页池占用面板，仅 --vsm 生效）
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
@@ -379,6 +380,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--water") o.water = true;        // M-WAT1
         else if (a == "--water-noreflect") o.waterNoReflect = true;  // M-WAT2 验收 A/B
         else if (a == "--water-norefract") o.waterNoRefract = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-noshore") o.waterNoShore = true;      // M-WAT3 验收 A/B
         else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
         else if (a == "--vsm-panel") o.vsmPanel = true;   // M15.1：VSM 占用面板（需 --vsm）
         else if (a == "--vsm-rayref") o.vsmRayRef = true; // M15.1：同 blob 射线基准（需 --vsm）
@@ -2694,6 +2696,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.ssr = o.ssr || o.water;
         fp.waterNoReflect = o.waterNoReflect;
         fp.waterNoRefract = o.waterNoRefract;
+        fp.waterNoShore = o.waterNoShore;
         if (rtMode) {
             float rtEye[3];
             camera.eyePosition(rtEye);

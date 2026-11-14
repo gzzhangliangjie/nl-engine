@@ -3,7 +3,7 @@
 // 声明，寄存器号随管线不同：visbuf=b2 / direct=b7 / ssr=b6，字段名与布局必须
 // 与下方「WaterConstants 规范布局」逐字一致）。
 //
-// WaterConstants 规范布局（336B，volatile；M-WAT2 扩展 288→336）：
+// WaterConstants 规范布局（352B，volatile；M-WAT3 扩展 336→352）：
 //   wcA[0..7]  = float4(D.x, D.y, A, k)      波向 xy（单位向量）/ 振幅 / 波数 k=2π/λ
 //   wcB[0..7]  = float4(omega, Q, 0, 0)      角频率 ω / 陡度 Q（osgw 逐波口径）
 //   wcC        = float4(time, baseColor.r, baseColor.g, baseColor.b)

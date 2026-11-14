@@ -38,7 +38,7 @@
 //                  全 mip + t14 场景色链全 mip + u0 ssrColor_
 //   csSSRCompose : b5 SsrDownConstants(16B) / t18 ssrColor_ / u3 hdrSceneColor_
 //   csWaterCopy  : b5 SsrDownConstants(16B) / t20 hdrSceneColor_ / u4 waterBg_（M-WAT2）
-//   csWaterComposite : resolve 表全槽 + b3 + b6 WaterConstants(336B) + t13/t14 +
+//   csWaterComposite : resolve 表全槽 + b3 + b6 WaterConstants(352B) + t13/t14 +
 //                  t18 ssrColor_ + t19 waterBg_ / u3 hdrSceneColor_（M-WAT2）
 // SPIR-V 绑定平移与 direct.slang 同：b→256, t→0, s→128, u→384。
 // DXIL SM6.6：仅 csSSR（NonUniformResourceIndex 选 mrTex 槽，同 direct.slang）。
@@ -48,7 +48,7 @@
 #include "sky.slangh"
 #include "water_common.slangh"  // M-WAT1：水体解析法线 + WaterConstants 布局规范
 
-// M-WAT1（拍板 A）：水体常量（b6，336B；ssr 侧 b1 空置、b2=b0 别名防碰不用，
+// M-WAT1（拍板 A）：水体常量（b6，352B；ssr 侧 b1 空置、b2=b0 别名防碰不用，
 // 取 b6）。--water 关时渲染端不建不绑本 CB。
 cbuffer WaterConstants : register(b6)
 {
@@ -59,6 +59,7 @@ cbuffer WaterConstants : register(b6)
     float4 g_wcE;      // M-WAT2 (ior, refractStrength, foamThreshold, foamGain)
     float4 g_wcF;      // M-WAT2 (absorb.rgb, thickMeters)
     float4 g_wcG;      // M-WAT2 (noReflect, floorY, floorHalf, noRefract)
+    float4 g_wcH;      // M-WAT3 (fadeDist, shoreFoamDist, shoreFoamGain, noShore)
 };
 
 // ============================================================================
@@ -429,7 +430,7 @@ void csWaterCopy(uint3 tid : SV_DispatchThreadID)
 //         bilinear 4-tap 采背景（tap = 水面 / 水前 → 权重 0 拒绝）；
 //      C. Beer-Lambert 吸收（UE 公式）+ in-scatter；
 //      D. Fresnel 混合 SSR 反射（--water-noreflect 旗标 = wcG.x 归零）；
-//      E. 太阳高光 + 波峰泡沫 → 整体替换水像素写回。
+//      E. 太阳高光 + 波峰泡沫；B3 岸线软化+岸线泡沫（M-WAT3，wcH）；
 //    全 float 同源（GameClock::kStep 时间），bilateral/tap 固定行走无动态分支。
 // ============================================================================
 cbuffer LightConstants : register(b1)
@@ -550,6 +551,10 @@ void csWaterComposite(uint3 tid : SV_DispatchThreadID)
     bool   ok0   = wsum0 > 0.0f;
     float  thick = ok0 ? (thick0 / wsum0) : g_wcF.w;
     float3 bg    = ok0 ? (col0 / wsum0) : float3(0.0f, 0.0f, 0.0f);
+    // M-WAT3 岸线数据：bg0 = 原位邻域色（岸边 = 真实岸边像素色）；diffNear =
+    // 邻域平均径向差（<0 = 无非水邻域 = 深水）。零新资源，复用 bilateral。
+    const float3 bg0       = ok0 ? (col0 / wsum0) : float3(0.0f, 0.0f, 0.0f);
+    float        diffNear  = ok0 ? (thick0 / wsum0) : -1.0f;
 
     // ---- B. Snell 折射方向（bevy 口径，TIR 兜底）。
     float3 Tdir;
@@ -618,8 +623,27 @@ void csWaterComposite(uint3 tid : SV_DispatchThreadID)
         if (tapW > 1.0e-6f)
         {
             bg = bgR / tapW;
-            if (!ok0) thick = tapThick / tapW;   // 原位无邻居（水面中心）时采扭曲位厚
+            if (!ok0)
+            {
+                thick = tapThick / tapW;         // 原位无邻居（水面中心）时采扭曲位厚
+                diffNear = tapThick / tapW;      // M-WAT3：扭曲位径向差补岸线判定
+            }
         }
+    }
+
+    // ---- B3. 岸线软化 + 岸线泡沫（M-WAT3 拍板 A+B，UE DistanceToNearestSurface
+    //      / WaterBody 岸线泡沫同构）：fade = saturate(diffNear/fadeDist)——
+    //      岸边邻域径向差小 → 水色淡出回 bg0（真实岸边像素色）→ 硬边变渐变；
+    //      diffNear<0（深水无岸）= fade 1 不动。岸线泡沫 = diff 窄带白沫
+    //      （shoreBand² 锐化窄带，随 N·L 明暗）。noShore 旗标（wcH.w）= 全关。
+    float  shoreFade = 1.0f;
+    float3 shoreFoam = float3(0.0f, 0.0f, 0.0f);
+    if (g_wcH.w < 0.5f && diffNear >= 0.0f)
+    {
+        shoreFade = saturate(diffNear / max(g_wcH.x, 1.0e-4f));
+        const float shoreBand = saturate(1.0f - diffNear / max(g_wcH.y, 1.0e-4f));
+        shoreFoam = float3(1.0f, 1.0f, 1.0f)
+                  * (g_wcH.z * shoreBand * shoreBand * (g_wcD.x + 0.8f * ndl));
     }
 
     // ---- C. Beer-Lambert 吸收 + in-scatter（UE 公式简化：Incoming = 基色环境）。
@@ -639,7 +663,10 @@ void csWaterComposite(uint3 tid : SV_DispatchThreadID)
     const float3 spec = waterSpecular(N, V, g_lightDirW.xyz, 1.0f, g_wcD);
     const float3 foam = waterFoam(disp.y, g_wcD.w, g_wcE.z, g_wcE.w, ndl, g_wcD.x);
 
-    // ---- F. 整体替换水像素写回（UE composite 同构：水色单一出口）。
-    const float3 color = lerp(refract, refl, F) + spec + foam;
+    // ---- F. 整体替换水像素写回（UE composite 同构：水色单一出口）；M-WAT3
+    //      岸线软化 = lerp(bg0, 水色, fade)——ok0=false 时 bg0 黑 × fade 1 =
+    //      深水不变；noshore 旗标 = fade 1 / 泡沫 0 = M-WAT2 输出保形。
+    const float3 waterColor = lerp(refract, refl, F) + spec + foam + shoreFoam;
+    const float3 color = lerp(bg0, waterColor, shoreFade);
     g_hdrCompose[pixel] = float4(color, 1.0f);
 }

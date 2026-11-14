@@ -76,7 +76,7 @@ inline constexpr std::uint32_t kMaxVisMaterials = 4;
 inline constexpr std::uint32_t kWaterMaterialId = 0xFFFFu;
 
 // M-WAT1：Gerstner 波形参数 CPU 侧结构（osgw 式显式数组；shader 侧布局规范 =
-// water_common.slangh 头注 WaterConstants，336B volatile CB；M-WAT2 扩 288→336）。
+// water_common.slangh 头注 WaterConstants，352B volatile CB；M-WAT3 扩 336→352）。
 struct WaterWaveParams {
     float dir[2];    // 波向 xy（单位向量）
     float amp;       // 振幅 A（米）
@@ -102,7 +102,11 @@ struct WaterConstantsCB {
     float floorY;                // 池底平面高度（composite 解析折射 ray-plane）
     float floorHalf;             // 池底半边长（命中判定 [-floorHalf, floorHalf]²）
     float noRefract;             // --water-norefract 验收旗标（1 = 折射路径关闭）
-    // 布局对齐 336B = 21×float4（WC 侧 wcA[8]+wcB[8]+wcC+wcD+wcE+wcF+wcG）；
+    float shoreFadeDist;         // 岸线软化淡出距离（米，M-WAT3）
+    float shoreFoamDist;         // 岸线泡沫窄带宽度（米，M-WAT3）
+    float shoreFoamGain;         // 岸线泡沫增益（M-WAT3）
+    float noShore;               // --water-noshore 验收旗标（1 = fade 归 1 关闭）
+    // 布局对齐 352B = 22×float4（WC 侧 wcA[8]+wcB[8]+wcC+wcD+wcE+wcF+wcG+wcH）；
     // CPU 结构体不直接 memcpy 上传——draw() 逐字段写 float4 数组（字节级同序）。
 };
 

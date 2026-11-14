@@ -460,6 +460,12 @@ static constexpr float kWaterThickMeters = 4.0f;   // M-WAT2：深水 fallback �
 // 光线做 ray-plane 解析求交直接采池底贴图（WATER-PLAN §9c 实现注记）。
 static constexpr float kWaterFloorY = -1.5f;
 static constexpr float kWaterFloorHalf = 26.0f;
+// M-WAT3（拍板 A+B）：岸线软化 + 岸线泡沫。fadeDist = 径向差淡出距离（UE
+// DistanceToNearestSurface 同构）；shoreFoam = diff 窄带白沫（UE WaterBody
+// 岸线泡沫同构）。复用 bilateral 邻域 diff，零新 pass/零新资源。
+static constexpr float kWaterFadeDist = 2.2f;     // 平坦池底 diff~1.5m → fade~0.7 交界可见过渡
+static constexpr float kWaterShoreFoamDist = 2.5f; // 需 > 池深视线差 1.5m，窄带才打开
+static constexpr float kWaterShoreFoamGain = 1.0f;
 
 bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
@@ -1798,7 +1804,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
     // 分支不进 + CB 内容不消费（writeWaterConstants 照写），全链 bytes 保形。
     {
         nvrhi::BufferDesc wcDesc;
-        wcDesc.byteSize = 336;   // M-WAT2：288 → 336（wcE/wcF/wcG，dxc -dumpbin 待校验）
+        wcDesc.byteSize = 352;   // M-WAT3：336 → 352（wcH 岸线软化/泡沫参数）
         wcDesc.isConstantBuffer = true;
         wcDesc.isVolatile = true;
         wcDesc.maxVersions = 16;
@@ -6328,8 +6334,8 @@ void Scene::addResolveSetItems(nvrhi::BindingSetDesc& desc) const {
 void Scene::writeWaterConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
     // 恒写：DX12 下绑定了 volatile CB 不写 = 「before it was written」错误；
     // --water 关时内容无消费方（无水簇），time 走 params.waterTime 缺省 0。
-    // M-WAT2：18 → 21 × float4（wcE 折射/泡沫参数 + wcF 吸收/厚度 + wcG 旗标）。
-    float wc[84];   // 21 × float4
+    // M-WAT3：21 → 22 × float4（wcH 岸线软化/泡沫参数；wcE/wcF/wcG 承 M-WAT2）。
+    float wc[88];   // 22 × float4
     for (int i = 0; i < 8; ++i) {
         const auto& w = kWaterWaves[i];
         const float k = 6.2831853f / w.lambda;
@@ -6357,6 +6363,12 @@ void Scene::writeWaterConstants(nvrhi::ICommandList* cmd, const FrameParams& par
     wc[80] = params.waterNoReflect ? 1.0f : 0.0f;
     wc[81] = kWaterFloorY; wc[82] = kWaterFloorHalf;
     wc[83] = params.waterNoRefract ? 1.0f : 0.0f;
+    // wcH = (fadeDist, shoreFoamDist, shoreFoamGain, noShore)——M-WAT3 岸线
+    // 软化/泡沫参数；noShore = --water-noshore 验收旗标（fade 归 1 = 关闭）。
+    wc[84] = kWaterFadeDist;
+    wc[85] = kWaterShoreFoamDist;
+    wc[86] = kWaterShoreFoamGain;
+    wc[87] = params.waterNoShore ? 1.0f : 0.0f;
     cmd->writeBuffer(waterConstants_, wc, sizeof(wc));
 }
 
