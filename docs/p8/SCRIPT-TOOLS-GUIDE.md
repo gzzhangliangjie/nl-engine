@@ -502,3 +502,59 @@ example\m-sc6\run.bat          # gen --check（29 导出）+ selftest（6 示例
 4. **newEntity 延迟落表**：实体进 `entitiesToAdd_` 队列，`findEntityByName`/C# `FindByName` 只扫 `entities_`——罐头 World 不 tick 就不 flush，按名查找族全空（组件按 id 键控的 hasComponent/getComponent 不受影响，所以出现「attach 全过、按名核全红」错位假象）。宿主终态核前显式 `flushEntityCreationAndRemoval()`。
 5. **out buf 传 null = 「跳过该字段」不是「填零」**：ModelInfo 全字段重载首版把 null 传 tint 指针，C# 侧读回恒 (0,0,0)——facade 要读就传实缓冲（stackalloc）。
 6. cwd 漂移读错树：开工实读阶段三条 grep 落主仓得出「s9/s10 不存在」假象——pwd 必看。
+
+## M-SC8 Physics 载具域（v6，ApiTable 32->37，2026-11-14）
+
+### 绑定形态（拍板 Q-SC8-1 A'：直持 DebugScene*）
+
+`driveSetScene(nl::physics::DebugScene*)`（Bindings.hpp，ecsSetWorld 模式推广）：
+绑定面**直持** M-NET2 已落的 `physics::DebugScene` PIMPL 公开类，五导出逐字透传
+`addVehicle/removeVehicle/setVehicleInput/vehicleFullPose/teleportVehicle`——
+P8-SCRIPT-PLAN L107 既定口径「直接对齐不新造」。**CameraSource 函数指针表是四模式
+相机专属形态（ViewerCamera 私有头 + orbit/free/chase/track 模式感知），DebugScene
+是单形态具体类，再包一层适配源属过度设计**——开工摆方案时曾按 M-SC7 台账「CameraSource
+式适配源」锚拍过一版函数指针表，披露计划口径冲突后重拍 A'（教训：M-SC7 下一步句
+是方向性指针不是既定拍板，与计划文档正文冲突时以计划正文为准并披露）。
+
+| 域 | 导出 | rc |
+|---|---|---|
+| Physics | physicsAddVehicle(spawnX, spawnZ) -> slot | 0=ok / 1=NoScene / 3=AddFailed（lastError 置因）|
+| Physics | physicsRemoveVehicle(slot) | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | physicsSetVehicleInput(slot, fwd, right, brake, handBrake) | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | vehicleFullPose(slot) -> pos+quat+vel | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | teleportVehicle(slot, pos, quat) | 0=ok / 1=NoScene / 2=NoSlot / 4=BadArg |
+
+- 错误码族 `kPhyOk=0 / kPhyNoScene=1 / kPhyNoSlot=2 / kPhyAddFailed=3 / kPhyBadArg=4`；
+  槽位有效性探针 = `vehicleChassisState(slot).valid`（used && chassis 同条件，
+  tombstone 后即 false——M-NET2 内部静默忽略非法槽，绑定面显式回 NoSlot）。
+- `buf4`（quat xyzw）= TYPEMAP 首个 4-float buffer；`BUF_RE` 泛型正则天然覆盖任意宽度。
+- 线程口径 = OnTick 逻辑帧约定（Q-SC8-2 A：**注册方 step**——脚本 OnTick 写四输入，
+  当帧 `physicsScene.step` 消费；runScene 组序 PrePhysics scriptTick → Physics step
+  同语义）。输入与读键解耦（Q-SC8-3 A）：Input 域读键 + `Physics.SetVehicleInput`
+  写值，映射脚本侧自由。
+
+### viewer runNormal 接线（--script 在物理训练场模式可用）
+
+runScene 的 M-GL4 装载块**复制精简**（scene 模式脚本链是已验收冻结面，零改动）：
+产物定位 / Vm::create / init / loadScript / typeName 推导同款。绑定链差异：
+`timeSetClock(&gameClock)` + scenario 2 才 `driveSetScene(&physicsScene)`；
+**ecsSetWorld / cameraSetSource 不绑**（runNormal 无 ECS World 与 ViewerCamera，
+脚本调 Ecs.*/Camera.* 得 NoWorld/NoSource = 不隐式建表拍板同构的正确语义）。
+收尾次序铁律同 runScene：解绑场景/时钟 → unloadScript → 析构 Vm。
+
+### selftest s12（drive 示例探针，真训练场）
+
+`s12a`（BoundProbe，DebugScene build(2) 真训练场 + C++ 终态核同实例）：AddVehicle
+slot=1（slot0 = 既有单车）→ 四输入写（重复写覆盖语义）→ FullPose 含 out-NULL 跳过
+路径 → Teleport 逐位读回（DontActivate）→ RemoveVehicle tombstone 后三导出全
+NoSlot 且 slot0 不波及；C++ 核 slot0 valid / 脚本车 invalid。`s12b`：driveSetScene
+(nullptr) 后五导出全 NoScene 不崩。
+
+### 踩坑存档（M-SC8 实测）
+
+1. **C# stackalloc 三元表达式**：`cond ? stackalloc float[3] : null` 推成
+   `Span<float>` 不能隐式转裸指针（CS0029）——先 stackalloc 到局部再条件赋值指针。
+2. **M-SC7 台账「下一步」句与计划正文口径冲突**：M-SC7 写「CameraSource 式适配源」，
+   P8-SCRIPT-PLAN L107 写「直接对齐 M-NET2 面不新造」——开工摆方案时先按前者拍了
+   一版，摆完才发现后者；**披露冲突重拍**（结论：计划正文赢，台账「下一步」只是
+   方向性指针）。里程碑台账的「下一步」句禁止当既定拍板引用。

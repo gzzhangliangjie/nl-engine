@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **32 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **37 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -95,6 +95,16 @@
 | `cameraSetPose`（偏移 26） | `int nl_cameraSetPose(const float*, float, float)` | 现役相机位姿写入（模式感知落点：orbit=yaw/pitch/dist=\|eye\| setOrbit + 种子；free=setPose 直接落；chase=snapEyeTo+setPitch，yaw 由车体航向驱动忽略入参；track=轨迹数据主权，回 kCamModeUnsupported）。eye 指针 NULL = kCamBadArg。rc：0=ok / 1=未绑 CameraSource / 2=非法参数 / 3=该模式不支持脚本写位姿 | `in buf3 eye`：定长 float[3] 直传（Blittable，不跨堆）；`in f32 yawDeg`：值传递；`in f32 pitchDeg`：值传递 |
 | `cameraGetFov`（偏移 27） | `float nl_cameraGetFov(void)` | 现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死） | — |
 | `cameraSetFov`（偏移 28） | `int nl_cameraSetFov(float)` | 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource | `in f32 fovY`：值传递 |
+
+## Physics 域（ApiTable 偏移 32..36）
+
+| 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
+|---|---|---|---|
+| `physicsAddVehicle`（偏移 32） | `int nl_physicsAddVehicle(float, float, int*)` | 训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1） | `in f32 spawnX`：值传递；`in f32 spawnZ`：值传递；`out int slot`：指针出参（调用期存活） |
+| `physicsRemoveVehicle`（偏移 33） | `int nl_physicsRemoveVehicle(int)` | tombstone 移除（约束与刚体回收，其余槽位号不变）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递 |
+| `physicsSetVehicleInput`（偏移 34） | `int nl_physicsSetVehicleInput(int, float, float, float, float)` | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in f32 forward`：值传递；`in f32 right`：值传递；`in f32 brake`：值传递；`in f32 handBrake`：值传递 |
+| `vehicleFullPose`（偏移 35） | `int nl_vehicleFullPose(int, float*, float*, float*)` | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽 | `in int slot`：值传递；`out buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`out buf4 quat`：定长 float[4] 直传（Blittable，不跨堆）；`out buf3 vel`：定长 float[3] 直传（Blittable，不跨堆） |
+| `teleportVehicle`（偏移 36） | `int nl_teleportVehicle(int, const float*, const float*)` | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf4 quat`：定长 float[4] 直传（Blittable，不跨堆） |
 
 ---
 

@@ -36,3 +36,8 @@ static_assert(std::is_same_v<decltype(&nl_cameraSetFov), int(*)(float)>, "export
 static_assert(std::is_same_v<decltype(&nl_ecsAttachModel), int(*)(std::uint64_t, const char*)>, "exports.api drift: Ecs.ecsAttachModel");
 static_assert(std::is_same_v<decltype(&nl_ecsDetachModel), int(*)(std::uint64_t)>, "exports.api drift: Ecs.ecsDetachModel");
 static_assert(std::is_same_v<decltype(&nl_ecsModelInfo), int(*)(std::uint64_t, const char**, float*, float*, float*)>, "exports.api drift: Ecs.ecsModelInfo");
+static_assert(std::is_same_v<decltype(&nl_physicsAddVehicle), int(*)(float, float, int*)>, "exports.api drift: Physics.physicsAddVehicle");
+static_assert(std::is_same_v<decltype(&nl_physicsRemoveVehicle), int(*)(int)>, "exports.api drift: Physics.physicsRemoveVehicle");
+static_assert(std::is_same_v<decltype(&nl_physicsSetVehicleInput), int(*)(int, float, float, float, float)>, "exports.api drift: Physics.physicsSetVehicleInput");
+static_assert(std::is_same_v<decltype(&nl_vehicleFullPose), int(*)(int, float*, float*, float*)>, "exports.api drift: Physics.vehicleFullPose");
+static_assert(std::is_same_v<decltype(&nl_teleportVehicle), int(*)(int, const float*, const float*)>, "exports.api drift: Physics.teleportVehicle");

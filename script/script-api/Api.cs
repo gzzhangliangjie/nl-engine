@@ -16,7 +16,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.7.0";   // M-SC7：ECS 模型挂载面（v5 3 导出，ApiTable 32）
+        public const string Version = "0.8.0";   // M-SC8：Physics 载具域（v6 5 导出，ApiTable 37）
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -590,6 +590,93 @@ namespace Nl.Script.Api
         {
             var fn = Marshal.GetDelegateForFunctionPointer<CameraWiring.CameraSetFovFn>(CameraWiring._cameraSetFov);
             return fn(fovY);
+        }
+    }
+
+    public static class PhysicsCode
+    {
+        public const int Ok = 0;
+        public const int NoScene = 1;      // 未绑 DebugScene（宿主忘 driveSetScene / 非 scenario 2）
+        public const int NoSlot = 2;       // 槽位不存在或未用槽（tombstone 后同）
+        public const int AddFailed = 3;    // addVehicle 返回 -1（DebugScene::lastError 置因）
+        public const int BadArg = 4;       // out/in 指针 NULL
+    }
+
+    /// <summary>单槽完整位姿快照（FullPose 打包；位置米 + quat x,y,z,w + 线速度 m/s）。</summary>
+    public readonly struct VehiclePose
+    {
+        public readonly float[] Pos;   // [3] 世界坐标（米）
+        public readonly float[] Quat;  // [4] x,y,z,w
+        public readonly float[] Vel;   // [3] 线速度（m/s）
+        public VehiclePose(float[] pos, float[] quat, float[] vel)
+        { Pos = pos; Quat = quat; Vel = vel; }
+    }
+
+    /// <summary>
+    /// Physics 载具绑定面（M-SC8）。操作目标 = 宿主侧 driveSetScene 绑定的
+    /// physics::DebugScene 训练场（M-NET2 多载具面直通；未绑 = NoScene）。
+    /// 线程口径 = OnTick 内调用（输入在下一次注册方 step 消费；Jolt 手刹是
+    /// float 0..1 非 bool）。四输入映射由脚本侧自由组合（配合 Input 域读键）。
+    /// </summary>
+    public static unsafe class Physics
+    {
+        /// <summary>训练场加车（slot 从 0 起，slot0 = build(2) 既有单车）。
+        /// rc：0=ok / 1=NoScene / 3=AddFailed（slot=-1）。</summary>
+        public static int AddVehicle(float spawnX, float spawnZ, out int slot)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.PhysicsAddVehicleFn>(PhysicsWiring._physicsAddVehicle);
+            return fn(spawnX, spawnZ, out slot);
+        }
+
+        /// <summary>tombstone 移除（其余槽位号不变）。rc：0=ok / 1=NoScene / 2=NoSlot。</summary>
+        public static int RemoveVehicle(int slot)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.PhysicsRemoveVehicleFn>(PhysicsWiring._physicsRemoveVehicle);
+            return fn(slot);
+        }
+
+        /// <summary>四输入写（forward/right ∈ 脚本侧自定，brake/handBrake 0..1）。
+        /// rc：0=ok / 1=NoScene / 2=NoSlot。</summary>
+        public static int SetVehicleInput(int slot, float forward, float right,
+                                          float brake, float handBrake)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.PhysicsSetVehicleInputFn>(PhysicsWiring._physicsSetVehicleInput);
+            return fn(slot, forward, right, brake, handBrake);
+        }
+
+        /// <summary>完整位姿回读。任一字段可不要（传 false 跳过）。
+        /// rc：0=ok / 1=NoScene / 2=NoSlot。</summary>
+        public static int FullPose(int slot, out VehiclePose pose,
+                                   bool wantPos = true, bool wantQuat = true,
+                                   bool wantVel = true)
+        {
+            pose = default;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.VehicleFullPoseFn>(PhysicsWiring._vehicleFullPose);
+            // stackalloc 不能进三元（推成 Span 无法转裸指针）——先分配再条件选用
+            float* pBuf = stackalloc float[3];
+            float* qBuf = stackalloc float[4];
+            float* vBuf = stackalloc float[3];
+            float* pos = wantPos ? pBuf : null;
+            float* quat = wantQuat ? qBuf : null;
+            float* vel = wantVel ? vBuf : null;
+            int rc = fn(slot, pos, quat, vel);
+            if (rc == PhysicsCode.Ok)
+                pose = new VehiclePose(
+                    wantPos ? new[] { pos[0], pos[1], pos[2] } : null,
+                    wantQuat ? new[] { quat[0], quat[1], quat[2], quat[3] } : null,
+                    wantVel ? new[] { vel[0], vel[1], vel[2] } : null);
+            return rc;
+        }
+
+        /// <summary>幽灵位摆位（DontActivate；刚体保持到下一次 teleport）。
+        /// rc：0=ok / 1=NoScene / 2=NoSlot / 4=BadArg。</summary>
+        public static int TeleportVehicle(int slot, float[] pos, float[] quat)
+        {
+            if (pos == null || pos.Length != 3 || quat == null || quat.Length != 4)
+                return PhysicsCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.TeleportVehicleFn>(PhysicsWiring._teleportVehicle);
+            fixed (float* p = pos, q = quat)
+                return fn(slot, p, q);
         }
     }
 }

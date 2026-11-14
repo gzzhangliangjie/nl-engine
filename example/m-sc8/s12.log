@@ -1,0 +1,9 @@
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+  ok  s12-pre locate DriveScript build output
+  ok  s12-pre locate drive entries (UnmanagedCallersOnly)
+  ok  s12-pre DebugScene build(2)
+  ok  s12a C# BoundProbe -> 0 (got 0)
+  ok  s12a C++ capture: slot0 (built-in car) still valid
+  ok  s12a C++ capture: script car tombstoned (slot1 invalid)
+  ok  s12b C# UnboundProbe -> 0 (got 0)
+nl-script selftest: PASS (0 failures)

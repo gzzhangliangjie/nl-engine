@@ -1,6 +1,12 @@
 #pragma once
 // M-SC1：console 绑定面（P8-SCRIPT-PLAN.md，C++↔C# 单向显式函数指针）。
 //
+// 载具域宿主绑定目标（M-SC8 前置声明；PIMPL 公开类，Jolt 符号面挡在
+// core/src/physics/World.cpp——绑定头零 Jolt 包含）。
+namespace nl::physics {
+class DebugScene;
+}
+//
 // 口径来源（三处对照，2026-11-09 留痕）：
 //   - Carrot engine/engine/scripting/CSharpBindings.cpp + script-api/Carrot/（抄思路
 //     不抄代码）：绑定面 = Mono mono_add_internal_call 按名字注册内部调用；Mono 底座
@@ -86,6 +92,16 @@ inline constexpr int kCamNoSource = 1;
 inline constexpr int kCamBadArg = 2;
 inline constexpr int kCamModeUnsupported = 3;
 
+// Physics/载具导出错误码（v6 M-SC8）：0=ok / 1=未绑 DebugScene（宿主忘
+// driveSetScene——kEcsNoWorld/kCamNoSource 同构口径）/ 2=槽位不存在或未用槽
+//（tombstone 后同）/ 3=加车失败（DebugScene::addVehicle 返回 -1，lastError 置因）/
+// 4=非法参数（out 指针 NULL / in 指针 NULL——kEcsBadArg 同款）
+inline constexpr int kPhyOk = 0;
+inline constexpr int kPhyNoScene = 1;
+inline constexpr int kPhyNoSlot = 2;
+inline constexpr int kPhyAddFailed = 3;
+inline constexpr int kPhyBadArg = 4;
+
 // ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
 // 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
 // v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
@@ -128,6 +144,13 @@ struct CameraSource {
 };
 // nullptr = 解绑（此后 Camera 导出一律 kCamNoSource——热更窗口兜底，同族口径）。
 void cameraSetSource(const CameraSource* source);
+
+// 宿主侧载具训练场绑定（v6 M-SC8，ecsSetWorld 模式推广）：直持
+// nl::physics::DebugScene*（拍板 Q-SC8-1 A'——P8-SCRIPT-PLAN L107 既定口径
+// 「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt，公开头
+// 零新类型。CameraSource 函数指针表是四模式相机专属形态，此处属过度设计）。
+// nullptr = 解绑（热更窗口兜底，此后 Physics 导出一律 kPhyNoScene）。
+void driveSetScene(physics::DebugScene* scene);
 
 // ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
 //

@@ -11569,6 +11569,94 @@
      "preview": "example/m-sc7/check.png"
     }
    ]
+  },
+  {
+   "id": "m-sc8",
+   "label": "P8 M-SC8",
+   "name": "Physics 载具域：driveSetScene 直持 DebugScene（拍板 A'，M-NET2 面逐字对齐不新造，ApiTable 32->37，A 类轨道）",
+   "tag": "m-sc8",
+   "date": "2026-11-14",
+   "summary": "Physics 载具域五导出（physicsAddVehicle/physicsRemoveVehicle/physicsSetVehicleInput/vehicleFullPose/teleportVehicle，exports.api 尾部追加，ApiTable 32->37，Api.Version 0.8.0）。拍板 Q-SC8-1~4：A' 直持 nl::physics::DebugScene*（driveSetScene 注册，ecsSetWorld 模式推广——P8-SCRIPT-PLAN L107 既定口径「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt 公开头零新类型；CameraSource 函数指针表是四模式相机专属形态此处过度设计）/ A 注册方 step（脚本 OnTick 在 Physics tick 组 step 之前写输入，当帧消费——runScene 组序同语义）/ A 复用 ActionMap + setInput（Input 域读键与载具写输入两层解耦）/ A 交代物全要。buf4（quat xyzw）= TYPEMAP 首个 4-float buffer（BUF_RE 泛型正则天然覆盖）。viewer runNormal 接线：--script 在 physics 训练场模式也可用（runScene M-GL4 块复制精简，scene 模式脚本链零改动；ecsSetWorld/cameraSetSource 不绑 = NoWorld/NoSource 正确语义不隐式建表）；Physics tick 组 lambda 内 scriptTick 先行 → physicsScene.step 当帧消费。槽位有效性探针 = vehicleChassisState(slot).valid（used && chassis 同条件，M-NET2 内部静默忽略 → 绑定面显式回 kPhyNoSlot）。selftest s12a（真训练场 BoundProbe：加车 slot1/四输入/FullPose 含 out-NULL 跳过/teleport 逐位读回/tombstone 后三导出 NoSlot 且 slot0 不波及 + C++ 终态核）/ s12b（driveSetScene(nullptr) 五导出全 NoScene 不崩）。踩坑：C# stackalloc 三元表达式推成 Span 不能转裸指针——先分配再条件选用。",
+   "acceptance": [
+    "selftest s12a~s12b 全绿（s0~s5 + s6~s11 不回归，PASS 0 failures）：正向全链（真 DebugScene build(2) 训练场 + C++ 终态核 slot0 valid / 脚本车 tombstoned）+ 未绑五导出 NoScene 不崩",
+    "gen.py --check 绿（37 导出声明与 5 生成物一致，含 API.md；Api.Version 0.8.0）；check drive 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16（runNormal --script 接线零渲染回归）；四张证据图全部由工具真实输出渲染，run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s12a~s12b：Physics 载具域导出（M-SC0~SC7 不回归）",
+     "kind": "tool",
+     "note": "s12a 绑定路径（真训练场 DebugScene build(2) + driveSetScene 直持）：AddVehicle slot=1（slot0 既有单车）+ 四输入写（Jolt 手刹 float 0..1）+ FullPose 含 out-NULL 跳过 + Teleport 逐位读回（DontActivate）+ RemoveVehicle tombstone 后 FullPose/SetInput/Teleport 全 NoSlot、slot0 不波及 + C++ 终态核（slot0 valid / 脚本车 invalid）；s12b 未绑：NoScene x5 不崩。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/drive"
+    },
+    {
+     "id": "s12",
+     "name": "s12 段特写（selftest.log 过滤 s12 锚行）",
+     "kind": "tool",
+     "note": "run.bat seg3 过滤产物 s12.log 的机械锚：s12-pre 定位 + DebugScene build(2) + s12a 正向链 + s12b 未绑全绿。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "s12-pre DebugScene build(2)",
+     "command": "nl-script selftest ... (s12 filter by run.bat)"
+    },
+    {
+     "id": "check-drive",
+     "name": "check drive 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "编译闸：DriveScript.csproj 引 script-api（0.8.0 Physics facade）；s12 探针（BoundProbe/UnboundProbe）语义在 selftest 全量段核。",
+     "args": [
+      "check",
+      "{root}/script/examples/drive"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/drive"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节对比（37 导出 + API.md）",
+     "kind": "tool",
+     "note": "生成器自证：exports.api 单源与 5 生成物逐字节一致（37 exports / 1 POD / buf4 新宽度）；新鲜度闸在 CMake 侧。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    }
+   ]
   }
  ]
 }

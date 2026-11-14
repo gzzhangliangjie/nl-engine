@@ -85,3 +85,13 @@ Camera | cameraSetFov | int | in f32 fovY | 现役相机 fovY 度写入（注册
 Ecs | ecsAttachModel | int | in u64 id, in str meshFile | 挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝
 Ecs | ecsDetachModel | int | in u64 id | 摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘
 Ecs | ecsModelInfo | int | in u64 id, out str meshFile, out buf3 tint, out f32 roughness, out f32 metallic | ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数
+# ---- M-SC8 Physics 载具域（2026-11-14 拍板 Q-SC8-1~4：A'直持 DebugScene* / 注册方 step / 复用 ActionMap+setInput / 交代物全要）----
+# 绑定面直持 nl::physics::DebugScene*（Jolt-free PIMPL 公开类，M-NET2 多载具面逐字对齐不新造——
+# P8-SCRIPT-PLAN L107 既定口径；CameraSource 函数指针表在此为过度设计，DebugScene 无四模式/私有头问题）。
+# 注册入口 = driveSetScene（Bindings.hpp，viewer 挂 --physics-scenario 2 训练场；nullptr 解绑 = 热更窗口兜底）。
+# 线程口径 = OnTick 内调用（输入在下一次注册方 step 消费；Input 域冻结值同构）。
+Physics | physicsAddVehicle | int | in f32 spawnX, in f32 spawnZ, out int slot | 训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1）
+Physics | physicsRemoveVehicle | int | in int slot | tombstone 移除（约束与刚体回收，其余槽位号不变）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+Physics | physicsSetVehicleInput | int | in int slot, in f32 forward, in f32 right, in f32 brake, in f32 handBrake | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+Physics | vehicleFullPose | int | in int slot, out buf3 pos, out buf4 quat, out buf3 vel | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽
+Physics | teleportVehicle | int | in int slot, in buf3 pos, in buf4 quat | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在

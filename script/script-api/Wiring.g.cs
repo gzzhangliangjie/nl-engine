@@ -282,12 +282,49 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Physics 域接线（生成物；ApiTable 偏移 32..36 = exports.api 声明序）。</summary>
+    internal static unsafe class PhysicsWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _physicsAddVehicle, _physicsRemoveVehicle, _physicsSetVehicleInput, _vehicleFullPose, _teleportVehicle;
+
+        /// <summary>训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PhysicsAddVehicleFn(float spawnX, float spawnZ, out int slot);
+
+        /// <summary>tombstone 移除（约束与刚体回收，其余槽位号不变）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PhysicsRemoveVehicleFn(int slot);
+
+        /// <summary>四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PhysicsSetVehicleInputFn(int slot, float forward, float right, float brake, float handBrake);
+
+        /// <summary>单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int VehicleFullPoseFn(int slot, float* pos, float* quat, float* vel);
+
+        /// <summary>幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int TeleportVehicleFn(int slot, float* pos, float* quat);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _physicsAddVehicle = Marshal.ReadIntPtr(table, 32 * sizeof(IntPtr));
+            _physicsRemoveVehicle = Marshal.ReadIntPtr(table, 33 * sizeof(IntPtr));
+            _physicsSetVehicleInput = Marshal.ReadIntPtr(table, 34 * sizeof(IntPtr));
+            _vehicleFullPose = Marshal.ReadIntPtr(table, 35 * sizeof(IntPtr));
+            _teleportVehicle = Marshal.ReadIntPtr(table, 36 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle" };
 
         public static void InitAll(IntPtr table)
         {
@@ -297,6 +334,7 @@ namespace Nl.Script.Api
             InputWiring.Init(table);
             LogWiring.Init(table);
             CameraWiring.Init(table);
+            PhysicsWiring.Init(table);
         }
     }
 } // namespace

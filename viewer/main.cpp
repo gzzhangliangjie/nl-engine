@@ -2105,12 +2105,88 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
     // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
     nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
+    // ---- M-SC8：脚本宿主装载（--script，normal 模式 physics 训练场）----
+    // 复制精简自 runScene 的 M-GL4 块（scene 模式脚本链是已验收冻结面，不改一行）。
+    // 绑定链差异（拍板 Q-SC8-1 A' + Q-SC8-2 A）：
+    //   - driveSetScene(&physicsScene)：载具域目标 = 本模式训练场（仅 scenario 2
+    //     绑；其它 scenario 脚本调 Physics.* 得 kPhyNoScene 即正确语义）；
+    //   - timeSetClock(&gameClock)：Time 导出同 scene 模式；
+    //   - ecsSetWorld / cameraSetSource **不绑**（runNormal 无 ECS World 与
+    //     ViewerCamera；脚本调 Ecs.*/Camera.* 得 NoWorld/NoSource = 不隐式建表
+    //     拍板同构的正确语义）。
+    // OnTick 驱动 = 下方 Physics tick 组 lambda 内 step 之前（与 runScene 组序
+    // PrePhysics scriptTick → Physics step 同语义：OnTick 写输入，当帧 step 消费）。
+    std::unique_ptr<nl::script::Vm> scriptVmNormal;
+    bool scriptLoaded = false;
+    if (!o.scriptProject.empty()) {
+        namespace fs = std::filesystem;
+        const fs::path proj = o.scriptProject;
+        const fs::path buildDir = proj / "bin" / "Debug" / "net8.0";
+        // 产物定位（nl-script 工具同款 glob 口径，runScene 同源）：runtimeconfig
+        // 唯一，dll 名按 AssemblyName（= runtimeconfig 名）。
+        fs::path rtc, dll;
+        if (fs::is_directory(buildDir)) {
+            for (const auto& e : fs::directory_iterator(buildDir)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() >= 19 && n.rfind(".runtimeconfig.json") == n.size() - 19)
+                    rtc = e.path();
+            }
+            if (!rtc.empty()) {
+                const std::string n = rtc.filename().string();
+                dll = buildDir / (n.substr(0, n.size() - 19) + ".dll");
+            }
+        }
+        if (rtc.empty() || !fs::is_regular_file(dll)) {
+            nl::core::log::errorCh("viewer", "script: build outputs missing under ", buildDir.string(),
+                                 " (*.runtimeconfig.json + *.dll) — run: dotnet build ", proj.string());
+            return 1;
+        }
+        nl::script::Result vr;
+        scriptVmNormal = nl::script::Vm::create(fs::absolute(rtc).string(), &vr);
+        if (!scriptVmNormal) {
+            nl::core::log::errorCh("viewer", "script: Vm::create failed: ", vr.message);
+            return 1;
+        }
+        const auto ir = nl::script::ScriptHost::get().init(
+            scriptVmNormal.get(), fs::absolute(o.scriptBootstrap).string());
+        if (!ir.ok) {
+            nl::core::log::errorCh("viewer", "script: ScriptHost init failed: ", ir.message);
+            return 1;
+        }
+        // typeName 缺省推导（runScene 同款双锚约定）：类名 = 工程目录名首字母
+        // 大写 + "Script"；程序集名 = rtc 文件名去 ".runtimeconfig.json"（19 字符）。
+        std::string dirStem = proj.filename().string();
+        if (!dirStem.empty())
+            dirStem[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(dirStem[0])));
+        const std::string asmName = rtc.filename().string().substr(0, rtc.filename().string().size() - 19);
+        const std::string typeName = o.scriptType.empty()
+            ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
+        nl::script::timeSetClock(&gameClock);
+        if (o.physicsDebug && o.physicsScenario == 2)
+            nl::script::driveSetScene(&physicsScene);
+        const auto lr2 = nl::script::ScriptHost::get().loadScript(
+            fs::absolute(dll).string(), typeName);
+        if (!lr2.ok) {
+            nl::core::log::errorCh("viewer", "script: loadScript failed: ", lr2.message);
+            return 1;
+        }
+        scriptLoaded = true;
+        nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
+                            " (normal-mode OnTick in Physics tick group)");
+    }
     // P8 M-GL5：物理调试 step 挂 Physics 组（TickGroup 注册制，组序契约见
     // tick_groups.hpp）。M-GL2 之前是 tick lambda 内联判断，现迁移为按组注册——
     // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
     if (o.physicsDebug) {
         gameClock.scheduler().set(nl::core::TickGroup::Physics,
-                                  [&](double, std::uint64_t tick) {
+                                  [&](double dt, std::uint64_t tick) {
+            // M-SC8：scriptTick 先行（OnTick 写四输入）→ 注册方 step 当帧消费
+            //（Q-SC8-2 A；runScene 组序 PrePhysics scriptTick → Physics step 同语义）。
+            if (scriptLoaded) {
+                const auto sr = nl::script::ScriptHost::get().scriptTick(dt);
+                if (!sr.ok)
+                    nl::core::log::errorCh("viewer", "script: ", sr.message);
+            }
             // NET M-NET2：client 不 step 物理（幽灵位走快照插值，场景全静态）；
             // 非 net 路径与 server 路径行为与既有逐位一致。
             if (!netClientMode) {
@@ -3264,6 +3340,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (nl::core::log::deviceErrorCount() != 0 || nl::core::log::errorCount() != 0) {
         nl::core::log::errorCh("viewer", "acceptance failed: device/error counters must be zero");
         failed = true;
+    }
+    // M-SC8 收尾（次序铁律同 runScene M-GL4 块）：先解绑场景/时钟（热重载窗口
+    // 兜底口径）→ 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm。
+    if (scriptLoaded) {
+        nl::script::driveSetScene(nullptr);
+        nl::script::timeSetClock(nullptr);
+        const auto ur = nl::script::ScriptHost::get().unloadScript();
+        if (!ur.ok)
+            nl::core::log::errorCh("viewer", "script: unloadScript failed: ", ur.message);
+        scriptVmNormal.reset();
     }
     return failed ? 1 : 0;
 }

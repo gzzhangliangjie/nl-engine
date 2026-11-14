@@ -1946,6 +1946,15 @@
 
 **下一步**：M7.2 多材质 + 对照验收（materialId 间接表走 bindless、≥3 材质模型、传统 GBuffer 对照模式保留；S7 收口 tag `s7-done`）。
 
+## M-SC8：Physics 载具域（直持 DebugScene，M-NET2 面逐字对齐；feat/script，2026-11-14，tag `m-sc8`）
+
+**动作**：Physics 载具域五导出（physicsAddVehicle/physicsRemoveVehicle/physicsSetVehicleInput/vehicleFullPose/teleportVehicle，exports.api 尾部追加，ApiTable 32->37，Api.Version 0.8.0）。开工摆四问（用户拍板 A'/A/A/A）：**Q-SC8-1 接入 = A' 直持 nl::physics::DebugScene\***（driveSetScene 注册，ecsSetWorld 模式推广——P8-SCRIPT-PLAN L107 既定口径「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt 公开头零新类型；首版按 M-SC7 台账「CameraSource 式适配源」锚拍了函数指针表，披露与计划正文冲突后重拍——CameraSource 函数指针表是四模式相机专属形态，单形态具体类再包一层属过度设计）；**Q-SC8-2 step = A 注册方**（脚本 OnTick 在 Physics tick 组 lambda 内 step 之前写四输入，当帧 physicsScene.step 消费——runScene 组序 PrePhysics scriptTick → Physics step 同语义）；**Q-SC8-3 输入 = A 复用 ActionMap + setInput**（Input 域读键与载具写值两层解耦，映射脚本侧自由）；**Q-SC8-4 交代物 = A 全要**（DriveScript C# 示例 + selftest s12 + GUIDE M-SC8 节 + cases.json 卡）。buf4（quat xyzw）= TYPEMAP 首个 4-float buffer（BUF_RE 泛型正则天然覆盖任意宽度）。错误码族 kPhyOk/NoScene/NoSlot/AddFailed/BadArg；槽位有效性探针 = vehicleChassisState(slot).valid（M-NET2 内部静默忽略非法槽 → 绑定面显式回 NoSlot）。viewer runNormal 接线：--script 在物理训练场模式也可用（runScene M-GL4 装载块复制精简，scene 模式冻结面零改动；ecsSetWorld/cameraSetSource 不绑 = NoWorld/NoSource 正确语义不隐式建表）；Physics tick 组 lambda 内 scriptTick 先行。selftest s12a（真训练场 BoundProbe 全链 + C++ 终态核 slot0 valid/脚本车 tombstoned）/ s12b（driveSetScene(nullptr) 五导出 NoScene 不崩）。
+**完成情况**：🟢 nl-script selftest **PASS 0 failures**（s0~s5 + s6~s11 零回归 + s12 全绿）；🟢 gen.py --check 绿（37 导出 / 1 POD / buf4 新宽度，含 API.md）；🟢 DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16（runNormal --script 接线零渲染回归）；🟢 m-sc8 run.bat 四段 ALL GREEN（gen-check / selftest 全量 / s12 特写 / check drive）+ 4 张证据图全部由工具真实输出渲染；cases.json 尾插 m-sc8 卡 4 条（json 库 indent=1 + 尾换行 + LF，125 版本）。
+**踩坑情况**
+- **C# stackalloc 三元表达式**：`cond ? stackalloc float[3] : null` 推成 Span<float> 不能隐式转裸指针（CS0029）——先 stackalloc 到局部再条件选用指针。
+- **M-SC7 台账「下一步」句与计划正文冲突**：M-SC7 节写「CameraSource 式适配源」、P8-SCRIPT-PLAN L107 写「直接对齐 M-NET2 面不新造」——开工按前者拍了函数指针表，摆完才核到后者，披露冲突后重拍 A'。**里程碑台账的「下一步」句是方向性指针，禁止当既定拍板引用；与计划文档正文冲突时以正文为准并显式披露重拍。**
+**提交版本**：feat/script 本节 commit + annotated tag `m-sc8`。冻结面：scene 模式脚本链（runScene M-GL4 块）零改动；M-NET2 多载具契约/网络路径零改动；Time/Input/Log/Camera/Ecs 域零改动。下一步：M-SC10 属性面板（C# [Prop] 特性 + 反射枚举 + ImGui 通用面板）；M-SC11 收口。
+
 ## P8 M-S0：vendored miniaudio + nl/audio 封装 + 离线确定性 PCM（feat/audio 轨道，2026-11-09，tag `audio-s0`）
 
 **动作**：用户「开工 M-S0 建 feat/audio」= 提前解禁音频轨道 M-S0~S2 排期闸（M-S3 场景集成仍 gate 在 P8 E1/E1b 之后，照物理 §7.1e 先例）。基于 master 建 `feat/audio` worktree（`E:/UE_STUDY_2026/nl-engine-audio`，两处 junction 共享 + skip-worktree）。三处参考实读：Carrot `engine/audio/` 对象模型（Manager→SFX/Music→Sound→SoundSource→SoundListener，AudioThread 不抄）/ bevy `bevy_audio` `audio_output.rs`（无设备 `stream: None` 优雅降级）+ `audio.rs`（无 HRTF 只左右声像）/ UE `AudioDebug.cpp`（M-S2 调试字段口径，只读不抄）；ROADMAP 对照总表无音频行（A 类轨道），按铁律就近读三处音频同类模块。

@@ -35,3 +35,8 @@ reinterpret_cast<void*>(&nl_cameraSetFov),  // Camera.cameraSetFov
 reinterpret_cast<void*>(&nl_ecsAttachModel),  // Ecs.ecsAttachModel
 reinterpret_cast<void*>(&nl_ecsDetachModel),  // Ecs.ecsDetachModel
 reinterpret_cast<void*>(&nl_ecsModelInfo),  // Ecs.ecsModelInfo
+reinterpret_cast<void*>(&nl_physicsAddVehicle),  // Physics.physicsAddVehicle
+reinterpret_cast<void*>(&nl_physicsRemoveVehicle),  // Physics.physicsRemoveVehicle
+reinterpret_cast<void*>(&nl_physicsSetVehicleInput),  // Physics.physicsSetVehicleInput
+reinterpret_cast<void*>(&nl_vehicleFullPose),  // Physics.vehicleFullPose
+reinterpret_cast<void*>(&nl_teleportVehicle),  // Physics.teleportVehicle

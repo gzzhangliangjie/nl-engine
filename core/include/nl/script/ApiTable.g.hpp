@@ -95,6 +95,16 @@ struct ApiTable
     void* ecsDetachModel;
     // Ecs.ecsModelInfo — ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数
     void* ecsModelInfo;
+    // Physics.physicsAddVehicle — 训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1）
+    void* physicsAddVehicle;
+    // Physics.physicsRemoveVehicle — tombstone 移除（约束与刚体回收，其余槽位号不变）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+    void* physicsRemoveVehicle;
+    // Physics.physicsSetVehicleInput — 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+    void* physicsSetVehicleInput;
+    // Physics.vehicleFullPose — 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽
+    void* vehicleFullPose;
+    // Physics.teleportVehicle — 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+    void* teleportVehicle;
 };
 
 } // namespace nl::script

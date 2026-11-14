@@ -10,6 +10,7 @@
 #include "nl/core/input.hpp"
 #include "nl/core/action_map.hpp"
 #include "nl/core/log.hpp"
+#include "nl/physics/World.hpp"     // M-SC8：DebugScene 载具训练场（PIMPL，Jolt 挡在 World.cpp）
 #include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
@@ -467,6 +468,57 @@ extern "C" int nl_cameraSetFov(float fovY) {
     return kCamOk;
 }
 
+// ---- v6 Physics 载具导出（M-SC8；操作目标 = driveSetScene 绑定的训练场）----
+// 直持 nl::physics::DebugScene*（拍板 Q-SC8-1 A'）：M-NET2 多载具面逐字透传，
+// 绑定面零 Jolt。线程口径 = OnTick 逻辑帧约定（Q-SC8-2 A：输入在下一次注册方
+// step 消费——DebugScene::step 由 viewer 循环调，脚本只在 tick 边界写输入）。
+// 槽位有效性探针 = vehicleChassisState(slot).valid（used && chassis 同条件，
+// tombstone 后即 false——M-NET2 内部静默忽略，绑定面显式回 kPhyNoSlot）。
+physics::DebugScene* g_driveScene = nullptr;
+
+extern "C" int nl_physicsAddVehicle(float spawnX, float spawnZ, int* outSlot) {
+    if (!outSlot) return kPhyBadArg;
+    *outSlot = -1;
+    if (!g_driveScene) return kPhyNoScene;
+    const int slot = g_driveScene->addVehicle(spawnX, spawnZ);
+    if (slot < 0) return kPhyAddFailed;   // lastError 已置因（DebugScene 契约）
+    *outSlot = slot;
+    return kPhyOk;
+}
+
+extern "C" int nl_physicsRemoveVehicle(int slot) {
+    if (!g_driveScene) return kPhyNoScene;
+    return g_driveScene->removeVehicle(slot) ? kPhyOk : kPhyNoSlot;
+}
+
+extern "C" int nl_physicsSetVehicleInput(int slot, float forward, float right,
+                                         float brake, float handBrake) {
+    if (!g_driveScene) return kPhyNoScene;
+    if (!g_driveScene->vehicleChassisState(slot).valid) return kPhyNoSlot;
+    g_driveScene->setVehicleInput(slot, {forward, right, brake, handBrake});
+    return kPhyOk;
+}
+
+extern "C" int nl_vehicleFullPose(int slot, float* outPos, float* outQuat,
+                                  float* outVel) {
+    if (!g_driveScene) return kPhyNoScene;
+    // 任一 out 可 NULL 跳过该字段：逐字段判空，值字段经栈暂存透传（Camera 同款）
+    float pTmp[3] = {0.0f, 0.0f, 0.0f}, qTmp[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    float vTmp[3] = {0.0f, 0.0f, 0.0f};
+    const bool ok = g_driveScene->vehicleFullPose(
+        slot, outPos ? outPos : pTmp, outQuat ? outQuat : qTmp,
+        outVel ? outVel : vTmp);
+    return ok ? kPhyOk : kPhyNoSlot;
+}
+
+extern "C" int nl_teleportVehicle(int slot, const float* pos, const float* quat) {
+    if (!pos || !quat) return kPhyBadArg;
+    if (!g_driveScene) return kPhyNoScene;
+    if (!g_driveScene->vehicleChassisState(slot).valid) return kPhyNoSlot;
+    g_driveScene->teleportVehicle(slot, pos, quat);
+    return kPhyOk;
+}
+
 } // namespace
 
 // ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
@@ -475,6 +527,10 @@ extern "C" int nl_cameraSetFov(float fovY) {
 
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
+}
+
+void driveSetScene(physics::DebugScene* scene) {
+    g_driveScene = scene;
 }
 
 // ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----

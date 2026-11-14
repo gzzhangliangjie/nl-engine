@@ -66,6 +66,7 @@
 #include "nl/core/input.hpp"        // s9 Input 导出验收（InputState 三态表）
 #include "nl/core/action_map.hpp"   // s9 ActionMap（注意：不在 input.hpp——动作映射独立头）
 #include "nl/core/console.hpp"
+#include "nl/physics/World.hpp"     // s12 载具域验收（M-SC8：DebugScene 训练场）
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"
@@ -248,7 +249,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
                 const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
-                const fs::path& modelDir) {
+                const fs::path& modelDir, const fs::path& driveDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -1117,6 +1118,68 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s12 载具域（M-SC8；driveDir 为空 = 跳过，同 s6~s11 口径）----
+    // 操作目标 = 真训练场：nl::physics::DebugScene build(2)（Jolt 已链 nl_core），
+    // driveSetScene 直持指针（拍板 Q-SC8-1 A'）；C++ 终态核与脚本共用同一实例。
+    if (!driveDir.empty()) {
+        if (!dotnetBuild(driveDir.string(), {})) {
+            expectTrue(false, "s12-pre dotnet build drive example");
+            std::printf("nl-script selftest: FAIL (drive binding build)\n");
+            return 1;
+        }
+        auto dso = locateOutput(driveDir, {});
+        expectTrue(dso.has_value(), "s12-pre locate DriveScript build output");
+        if (dso) {
+            const std::string driveType = "NlScript.Examples.DriveScript, " + dso->assemblyName;
+            nl::script::EntryPointFn dBound = nullptr, dUnbound = nullptr;
+            result = vm->getEntryPoint(dso->assemblyDll.string(), driveType, "BoundProbe", &dBound);
+            result = vm->getEntryPoint(dso->assemblyDll.string(), driveType, "UnboundProbe", &dUnbound);
+            expectTrue(result.ok && dUnbound != nullptr,
+                       "s12-pre locate drive entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry12 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 真训练场（scenario 2：slot0 = 既有单车）；C++ 终态核同实例。
+                nl::physics::DebugScene scene12;
+                std::string err12;
+                expectTrue(scene12.build(2, 12345, &err12), "s12-pre DebugScene build(2)");
+                nl::script::driveSetScene(&scene12);
+
+                // s12a：正向全链（加车 slot1 / 四输入 / FullPose 含 out-NULL 路径 /
+                // teleport 逐位读回 / tombstone 移除后三导出 NoSlot——脚本内断言）
+                {
+                    auto [hit, ret] = callEntry12(dBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s12a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s12a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // C++ 终态核：slot0 既有单车健在（tombstone 不波及）；脚本车已移除
+                expectTrue(scene12.vehicleChassisState(0).valid,
+                           "s12a C++ capture: slot0 (built-in car) still valid");
+                expectTrue(!scene12.vehicleChassisState(1).valid,
+                           "s12a C++ capture: script car tombstoned (slot1 invalid)");
+
+                // s12b：未绑路径（driveSetScene(nullptr) → 五导出全 NoScene）
+                nl::script::driveSetScene(nullptr);
+                {
+                    auto [hit, ret] = callEntry12(dUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s12b C# UnboundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s12b detail: hit=%d ret=%d\n", hit, ret);
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -1131,7 +1194,7 @@ void usage() {
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
         "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
-        "                                                                         full machine-checked acceptance\n"
+        "                    [driveProjectDir]                                 full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -1183,7 +1246,8 @@ int main(int argc, char** argv) {
         const fs::path timeDir = argc >= 7 ? fs::weakly_canonical(argv[6]) : fs::path();
         const fs::path camDir = argc >= 8 ? fs::weakly_canonical(argv[7]) : fs::path();
         const fs::path modelDir = argc >= 9 ? fs::weakly_canonical(argv[8]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir);
+        const fs::path driveDir = argc >= 10 ? fs::weakly_canonical(argv[9]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir);
     }
     usage();
     return 2;

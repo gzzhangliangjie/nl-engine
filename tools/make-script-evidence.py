@@ -309,9 +309,42 @@ CASES_M_SC7 = [
      "(renderer.cpp original + scene.cpp + viewer lambda + SceneGeo stricter variant)."),
 ]
 
+CASES_M_SC8 = [
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- golden self-verify (v6: 37 exports = 32 + physics vehicle 5)",
+     "Physics domain tail-append (physicsAddVehicle/physicsRemoveVehicle/"
+     "physicsSetVehicleInput/vehicleFullPose/teleportVehicle) -> 37 exports, "
+     "Api.Version 0.8.0. buf4 (quaternion xyzw) is the first 4-float buffer type "
+     "in the TYPEMAP (generic BUF_RE regex covers any width). Plan L107 wording "
+     "kept: direct M-NET2 DebugScene surface, zero new adapter types."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC8 vehicle domain (s12a-s12b, on top of s0-s5 + s6 + s7 + s8 + s9 + s10 + s11)",
+     "s12a bound (real DebugScene build(2), driveSetScene direct pointer per "
+     "Q-SC8-1 A'): AddVehicle slot=1 (slot0 = built-in car) + 4-input write "
+     "(Jolt handbrake float 0..1) + FullPose incl. out-NULL skip path + Teleport "
+     "bit-exact readback (DontActivate) + RemoveVehicle tombstone -> FullPose/"
+     "SetInput/Teleport all NoSlot, slot0 untouched. C++ capture: slot0 valid, "
+     "script car tombstoned. s12b unbound: NoScene x5, no crash."),
+    ("s12.log", "s12.png",
+     "s12 section close-up (filtered from selftest.log)",
+     "DriveScript probes (BoundProbe/UnboundProbe) verified against a real "
+     "training ground: physics::DebugScene build(2) in nl-script selftest process, "
+     "driveSetScene registers it (ecsSetWorld mode generalization). Viewer "
+     "runNormal wiring: --script now also loads the script host in physics "
+     "debug mode (scenario 2), script OnTick runs in the Physics tick group "
+     "BEFORE the Jolt step (Q-SC8-2 A: registered-party steps)."),
+    ("check.log", "check.png",
+     "nl-script check drive example -- compile only (exit 0)",
+     "dotnet build only; s12 probes (BoundProbe/UnboundProbe) verified in "
+     "selftest against the canned DebugScene; C# facade Physics.* static class "
+     "(AddVehicle/RemoveVehicle/SetVehicleInput/FullPose/TeleportVehicle), "
+     "stackalloc triple-expression fix (Span cannot coerce to float*)."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
          "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
-         "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6, "m-sc7": CASES_M_SC7}[DIR_NAME]
+         "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6, "m-sc7": CASES_M_SC7,
+         "m-sc8": CASES_M_SC8}[DIR_NAME]
 
 
 def main():
