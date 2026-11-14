@@ -3742,3 +3742,25 @@
 7. CMakeLists/traffic-tools patch 三遇 CRLF 坑（\n vs \r\n 匹配失败）——python patch 一律先探文件行尾。
 
 **下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。
+
+## WAT M-WAT0 — SSR 屏幕空间反射本体（feat/water 首里程碑，2026-11-14，tag `water-t0`）
+
+**动作**：用户指令「水体功能开工」→「先出方案」→ 拍板 Q-WA1~WA6（独立轨 feat/water / 方案 B Gerstner+SSR / 折射首版做 / 零 vendored）→「开通」落码。SSR 本体 = UE SSRT 口径确定性演示版，任务书 `docs/WATER-PLAN.md` §9b（三处实读零新拍板）。①径向距离 **min** 金字塔 `ssr.slang csSSRDepth/csSSRDown`（度量复用 S6 hiz 线性径向距离、算子与 S6 max 相反——SSR Hi-Z 跳步要「区域最近表面」：rayZ<区域 min 整格跳 / ≥ 降 mip 细化；深度源 = vis deviceZ 反投影（gbReconstructWorldPos + inverseMat4(mvp)），POT 化照抄 ensureHizTargets M6.0 教训）；②法线/粗糙度 vis buffer 即取即算（S16-PLAN §58 口径，Q4 冻结零新属性纹理，march 与 direct.slang 同构绑定 t0..t12/s0 + b3 SsrConstants 208B；NonUniformResourceIndex → csssr/csssrdepth 进 SM6.6 白名单）；③场景色均值链 `csSSRMip`（RGBA32F 自写 2x2 mean down，NVRHI 无双后端统一 generateMips；mip1..6 半→1/64，mip0 不建免拷贝，colorMip=mipStart+1）；④march `csSSR`（UVz 线性插值 Stachowiak + 容差带 0.25m + bUncertain 权重减半 + roughness×4 起始 mip + 步数 16 + 法线偏移 0.02 防自命中 + miss 走 sky.slangh 解析天穹——sky.slangh 一行未碰，Q-WA5 预案不触发）；⑤合成 `csSSRCompose` 加法叠加写回 hdrSceneColor_（UAV 全替换先例 cache viz / RMW 同纹理先例 csGatherCompose），插点 pulling 分支 cache-viz 后 tonemap 前。`--ssr` 缺省关 = 一行不执行。CMake `_ENTRIES_SSR` 五入口 + `_SM66` 两项；renderer.cpp kArtifacts 118→128；viewer `--ssr` 透传 FrameParams.ssr。
+
+**提交版本**：`feat/water` M-WAT0 收口提交（tag `water-t0`，wt nl-engine-water @ 3004cb1 基线）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；产物 128/128 魔数（ssr 五入口 × spv/dxil = 10 预登记）。
+- 🟢 `example/water-t0/run.bat verify` **ALL GREEN exit 0**：双后端 re-shot bytes vs 冻结基线 + ssr-off 零漂移基线 + A/B on/off 必不同 + 确定性双跑逐字节一致 + log 锚 `ssr: march chain ready` + deviceErrors=0 + 负向坏 mode exit 1。
+- 🟢 双后端 bytes 档：**ssr-on 与 ssr-off 图 DX12 vs VULKAN 逐像素 diff=0**（check-ssr.py near，float march 跨后端确定性达成）。
+- 🟢 A/B 分档：开关 13.88% 像素变化（阈值 0.5%，max 通道和差 221），变化集中模型表面、背景（VIS_EMPTY 零权重）不动。
+- 🟢 回归抽查三卡全绿：`s7.1/pulling` + `s10-probe/probe-viz` + `pbr-direct/pbr` 双后端 bytes 逐字节相同（--ssr 缺省关零扰动）；kStage 保持 S8.2 未 bump（M9.0 先例：新卡由 run.bat verify + regression --only 双重机械校验）。
+- 🟢 cases.json 141 张（python json indent=1 + 尾换行追加 water-t0 卡）。
+
+**踩坑**
+1. **NVRHI `addBindingLayout`/`addBindingSet` 是追加语义**：ComputePipelineDesc 复用同一 desc 给五个 PSO 会把前序 layout 全带上（down/mip/compose 同占 b5 → 「Same bindings defined by more than one layout」建败）；ComputeState 循环复用同理逐级累积 set。修复 = 每 PSO/每 dispatch 独立 desc/state（direct.slang 建管线的花括号分段先例其实是防这个）。
+2. **非 RT 纹理禁 setClearValue**：D3D12 `CreateCommittedResource3` 要求 pOptimizedClearValue 仅 RT/DS 资源可带，否则 0x80070057 建败（hiz 金字塔能带是因为 mip0 兼任 RT；SSR 金字塔纯 UAV/SRV 链不带，mip0 未写区域由 csSSRDepth 的 1e9 写入兜底）。
+3. **SSR 跳步金字塔算子方向**：S6 max（遮挡语义）不能直接复用——min（最近表面）才支持「rayZ<区域 min → 整格安全跳过」；复用的是径向距离度量口径而非同一张纹理（scene 模式本就不建 S6 金字塔）。SSR-RESEARCH-NOTES §3 的「同像素视线单调」论证同时覆盖两种算子，注释留痕防后人混淆。
+4. 并发构建撞车：旧码 VULKAN 构建后台未完成时又派发新码构建 → 同一 build 树 nmake 抢 obj（Permission denied C1083）。修 = 查杀残留 nmake/cl 后单跑（后台任务纪律：同树构建禁止并发派发）。
+
+**下一步**：M-WAT1 = Gerstner 波形 + 解析法线（固定步进保 bytes）；水体水面 pass 落地前 SSR 半边基建已就位（普通材质先行受益，一步两用）。
