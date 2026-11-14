@@ -36,6 +36,17 @@
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
 #include "sky.slangh"      // M-WEA2：applyHeightFog（raster 直光雾与 compute 同源）
+#include "water_common.slangh"  // M-WAT1：水体 Gerstner + 解析法线（单源）
+
+// M-WAT1（拍板 A）：水体常量（b5，288B；布局规范见 water_common.slangh 头注）。
+// --water 关时渲染端不建不绑本 CB，水体分支不进（bytes 保形）。
+cbuffer WaterConstants : register(b5)
+{
+    float4 g_wcA[8];   // (D.x, D.y, A, k) × 8 波
+    float4 g_wcB[8];   // (omega, Q, 0, 0) × 8 波
+    float4 g_wcC;      // (time, baseColor.rgb)
+    float4 g_wcD;      // (ambient, specPow, specGain, maxAmp)
+};
 
 cbuffer SceneConstants : register(b0)
 {
@@ -202,7 +213,10 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
     const uint vertexBase = g_clusterMeta[metaBase + 0u];
     const uint localBase  = g_clusterMeta[metaBase + 2u];
     const uint materialId = g_clusterMeta[metaBase + 3u];
-    const GPUMaterial mat = g_materialTable[materialId];
+    // M-WAT1：水体伪 cluster 用保留标记（NL_WATER_MATERIAL_ID），不占
+    // GPUMaterial 表——标记命中时读槽 0 占位（值不被水体分支消费），禁越界读。
+    const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+    const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
     // vertex pulling：拉三顶点（8 float/顶点：pos/normal/uv）。
     float3 pos[3], nrm[3];
@@ -235,6 +249,27 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
         return float4(uvF, 0.0f, 1.0f);
     }
     if (mode == 5u) {                       // PBR 直光（复刻 model.slang::shadePbr）
+        // M-WAT1（拍板 A）：水体分支——per-pixel 重算 Gerstner 位移 + 解析法线
+        //（求和定义在未位移网格坐标，iago 口径；VS 侧已位移深度，光照面追位移）。
+        float3 shadePos = worldPos;
+        float3 shadeN   = normalize(normal);
+        if (isWater) {
+            float3 waterDisp;
+            shadeN = waterGerstner(worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
+            shadePos = worldPos + waterDisp;
+        }
+        if (isWater) {
+            // 水体直光（waterShadeDirect：深水基色 + N·L + 太阳高光）+ 高度雾
+            //（与材质直光同口径雾化；alpha 恒 1 不透明）。
+            const float3 Vw = normalize(g_cameraPos.xyz - shadePos);
+            const float3 litW = waterShadeDirect(shadeN, Vw, 1.0f, g_lightDirW.xyz,
+                                                 g_wcC, g_wcD);
+            const float3 toPw = shadePos - g_cameraPos.xyz;
+            const float  Lw   = length(toPw);
+            const float3 colW = applyHeightFog(litW, g_cameraPos.y, toPw / max(Lw, 1.0e-4f), Lw,
+                                               g_rFogA.x, g_rFogA.y, g_rFogB.rgb, 1.0e4f);
+            return float4(colW, 1.0f);
+        }
         const float4 lit = shadePbrGrad(mat, normal, worldPos, uvF, duv_dx, duv_dy);
         // M-WEA2：raster 直光逐像素高度雾（与 csDirect 同口径；alpha 透传）
         const float3 toP = worldPos - g_cameraPos.xyz;

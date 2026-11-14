@@ -120,6 +120,18 @@ cbuffer VsmConstants : register(b6)
 Texture2D<float>        g_vsmPagePool  : register(t15);
 StructuredBuffer<uint>  g_vsmPageTable : register(t14);
 
+// M-WAT1（拍板 A）：水体常量（b7，288B；布局规范见 water_common.slangh 头注）。
+// --water 关时渲染端不建不绑本 CB，水体分支不进（bytes 保形）。
+cbuffer WaterConstants : register(b7)
+{
+    float4 g_wcA[8];   // (D.x, D.y, A, k) × 8 波
+    float4 g_wcB[8];   // (omega, Q, 0, 0) × 8 波
+    float4 g_wcC;      // (time, baseColor.rgb)
+    float4 g_wcD;      // (ambient, specPow, specGain, maxAmp)
+};
+
+#include "water_common.slangh"
+
 RaytracingAccelerationStructure g_tlas : register(t13);
 
 StructuredBuffer<uint64_t> g_visSRV          : register(t0);
@@ -230,7 +242,11 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     const uint vertexBase = g_clusterMeta[metaBase + 0u];
     const uint localBase  = g_clusterMeta[metaBase + 2u];
     const uint materialId = g_clusterMeta[metaBase + 3u];
-    const GPUMaterial mat = g_materialTable[materialId];
+    // M-WAT1：水体伪 cluster 用保留标记（NL_WATER_MATERIAL_ID），不占
+    // GPUMaterial 表——标记命中时读槽 0 占位（值不被水体分支消费），
+    // 禁越界读。水体着色分支在 gbuf 计算后。
+    const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+    const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
     // vertex pulling：拉三顶点（8 float/顶点：pos/normal/uv）。
     float3 pos[3], nrm[3];
@@ -254,11 +270,19 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     // initial_path.wesl 同款 ray_origin = worldPos + normal*RAY_T_MIN）发向光源，
     // 打 M8 的 TLAS（粗代理几何）。命中=被挡→shadow 0（直光乘 0）；未命中=1。
     // 背向光的面（NdotL<=0）本就无直射，ray 无意义，直接判 0。
-    const float3 n3 = normalize(gbuf.normal);
+    // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    float3 shadePos = gbuf.worldPos;
+    float3 n3 = normalize(gbuf.normal);
+    if (isWater) {
+        float3 waterDisp;
+        n3 = waterGerstner(gbuf.worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
+        shadePos = gbuf.worldPos + waterDisp;
+    }
     const float3 L  = normalize(g_lightDirW.xyz);
     float shadow = 0.0f;
     if (dot(n3, L) > 0.0f) {
-        const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+        const float3 origin = shadePos + n3 * g_shadowParams.x;
         RayDesc ray;
         ray.Origin    = origin;
         ray.Direction = L;
@@ -276,9 +300,14 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     // 合成后按视线到表面深度应用一次）；fogColor = 天穹地平线色（CPU 同源）。
     // alpha 语义保持（材质 alpha 透传，material.slang shadePbrGrad 返回值）。
     {
-        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
-        const float3 toP = gbuf.worldPos - g_cameraPos.xyz;
+        // M-WAT1：水体走 waterShadeDirect（解析法线直光 + 太阳高光）；普通材质
+        // 照旧 shadePbrGrad。alpha：水体不透明恒 1。
+        const float4 lit = isWater
+            ? float4(waterShadeDirect(n3, normalize(g_cameraPos.xyz - shadePos),
+                                      shadow, g_lightDirW.xyz, g_wcC, g_wcD), 1.0f)
+            : shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                           gbuf.ddxUv, gbuf.ddyUv, shadow);
+        const float3 toP = shadePos - g_cameraPos.xyz;
         const float  L   = length(toP);
         const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
                                           g_directFogA.x, g_directFogA.y,
@@ -321,7 +350,11 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
     const uint vertexBase = g_clusterMeta[metaBase + 0u];
     const uint localBase  = g_clusterMeta[metaBase + 2u];
     const uint materialId = g_clusterMeta[metaBase + 3u];
-    const GPUMaterial mat = g_materialTable[materialId];
+    // M-WAT1：水体伪 cluster 用保留标记（NL_WATER_MATERIAL_ID），不占
+    // GPUMaterial 表——标记命中时读槽 0 占位（值不被水体分支消费），
+    // 禁越界读。水体着色分支在 gbuf 计算后。
+    const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+    const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
     // vertex pulling：拉三顶点（8 float/顶点：pos/normal/uv）。
     float3 pos[3], nrm[3];
@@ -341,7 +374,15 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
         pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
         uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
-    const float3 n3 = normalize(gbuf.normal);
+    // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    float3 shadePos = gbuf.worldPos;
+    float3 n3 = normalize(gbuf.normal);
+    if (isWater) {
+        float3 waterDisp;
+        n3 = waterGerstner(gbuf.worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
+        shadePos = gbuf.worldPos + waterDisp;
+    }
     const float3 L  = normalize(g_lightDirW.xyz);
     float shadow = 0.0f;
     if (dot(n3, L) > 0.0f) {
@@ -357,7 +398,7 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
                                       gbuf.worldPos + n3 * g_shadowParams.x,
                                       g_vsmParams.y, g_vsmParams.z);
         } else {
-            const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+            const float3 origin = shadePos + n3 * g_shadowParams.x;
             RayDesc ray;
             ray.Origin    = origin;
             ray.Direction = L;
@@ -374,9 +415,14 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
 
     // M-WEA2：与 csDirect 同源同序逐像素高度雾（差异仅 shadow 来源 = VSM 查表）
     {
-        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
-        const float3 toP = gbuf.worldPos - g_cameraPos.xyz;
+        // M-WAT1：水体走 waterShadeDirect（解析法线直光 + 太阳高光）；普通材质
+        // 照旧 shadePbrGrad。alpha：水体不透明恒 1。
+        const float4 lit = isWater
+            ? float4(waterShadeDirect(n3, normalize(g_cameraPos.xyz - shadePos),
+                                      shadow, g_lightDirW.xyz, g_wcC, g_wcD), 1.0f)
+            : shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                           gbuf.ddxUv, gbuf.ddyUv, shadow);
+        const float3 toP = shadePos - g_cameraPos.xyz;
         const float  L   = length(toP);
         const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
                                           g_directFogA.x, g_directFogA.y,
@@ -478,7 +524,9 @@ void csReference(uint3 tid : SV_DispatchThreadID)
         const uint vertexBase = g_clusterMeta[metaBase + 0u];
         const uint localBase  = g_clusterMeta[metaBase + 2u];
         const uint materialId = g_clusterMeta[metaBase + 3u];
-        const GPUMaterial mat = g_materialTable[materialId];
+        // M-WAT1：水体标记守卫（越界禁读；GI 入口水体着色 = M-WAT2 域）。
+        const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+        const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
         float3 pos[3], nrm[3];
         float2 uv[3];
@@ -499,10 +547,16 @@ void csReference(uint3 tid : SV_DispatchThreadID)
                 pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
                 uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
-            const float3 n3 = normalize(gbuf.normal);
+            // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    // GI 入口（csRef/csRefGi）不接水体分支：refComputeLayout_ 已 6 volatile CB
+    // 槽（M-WEA2 实测上限），b7 加不进——GI 参考图水体像素 = 未位移平面 +
+    // 插值法线（M-WAT2 域；水面着色差异不影响 GI 趋势门用途）。
+    float3 shadePos = gbuf.worldPos;
+    float3 n3 = normalize(gbuf.normal);
             float shadow = 0.0f;
             if (dot(n3, L) > 0.0f) {
-                const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+                const float3 origin = shadePos + n3 * g_shadowParams.x;
                 RayDesc ray;
                 ray.Origin    = origin;
                 ray.Direction = L;
@@ -575,7 +629,9 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
         const uint vertexBase = g_clusterMeta[metaBase + 0u];
         const uint localBase  = g_clusterMeta[metaBase + 2u];
         const uint materialId = g_clusterMeta[metaBase + 3u];
-        const GPUMaterial mat = g_materialTable[materialId];
+        // M-WAT1：水体标记守卫（越界禁读；GI 入口水体着色 = M-WAT2 域）。
+        const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+        const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
         float3 pos[3], nrm[3];
         float2 uv[3];
@@ -599,12 +655,16 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
                 pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
                 uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
-            const float3 n3 = normalize(gbuf.normal);
+            // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    // GI 入口不接水体分支（同上：volatile CB 6 槽上限，M-WAT2 域）。
+    float3 shadePos = gbuf.worldPos;
+    float3 n3 = normalize(gbuf.normal);
 
             // ---- 直光部分：与 csReference 逐字同款（NEE shadow ray）----
             float shadow = 0.0f;
             if (dot(n3, L) > 0.0f) {
-                const float3 origin = gbuf.worldPos + n3 * g_shadowParams.x;
+                const float3 origin = shadePos + n3 * g_shadowParams.x;
                 RayDesc ray;
                 ray.Origin    = origin;
                 ray.Direction = L;

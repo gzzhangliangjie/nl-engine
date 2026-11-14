@@ -211,7 +211,9 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool probeMode,
                                            // M13.0：--cluster-blas（per-cluster BLAS
                                            // 预建；dag/hiz/rt 链消费，缺省关）。
-                                           bool clusterBlas) {
+                                           bool clusterBlas,
+                                           // M-WAT1：--water（仅 pulling 链消费）。
+                                           bool waterEnable) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -254,6 +256,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
                                  shadowMode, referenceMode, probeMode, clusterBlas,
+                                 waterEnable,
                                  r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";

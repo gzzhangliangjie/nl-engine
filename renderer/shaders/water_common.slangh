@@ -1,0 +1,82 @@
+// M-WAT1（water 轨）：Gerstner 波形 + 解析法线 — SINGLE SOURCE OF TRUTH。
+// 本头只放**函数**（与 visbuf_common.slangh 同款约定：cbuffer 由各 shader 自行
+// 声明，寄存器号随管线不同：visbuf=b2 / direct=b7 / ssr=b6，字段名与布局必须
+// 与下方「WaterConstants 规范布局」逐字一致）。
+//
+// WaterConstants 规范布局（288B，volatile）：
+//   wcA[0..7]  = float4(D.x, D.y, A, k)      波向 xy（单位向量）/ 振幅 / 波数 k=2π/λ
+//   wcB[0..7]  = float4(omega, Q, 0, 0)      角频率 ω / 陡度 Q（osgw 逐波口径）
+//   wcC        = float4(time, baseColor.r, baseColor.g, baseColor.b)
+//   wcD        = float4(ambient, specPow, specGain, maxAmp)
+// CPU 侧同构结构见 scene.hpp WaterWaveParams（拍板 A / WATER-PLAN §9b）。
+//
+// 数学口径（osgw gerstner.glsl 显式数组结构 + iago ocean_shader 解析法线，只读算法参照）：
+//   位移  ΔP = Σ [ D.xz·(Q·A·cosφ) ; A·sinφ ]，φ = k·dot(D, XZ) + ω·t
+//   法线  N  = normalize( -Σ D.x·A·k·cosφ , 1 - Σ Q·A·k·sinφ , -Σ D.y·A·k·cosφ )
+//   —— 求和定义在**未位移网格坐标**上（iago 口径；法线 per-pixel 在消费端重算，
+//      顶点存的是未位移平面，vis buffer 64-bit 记录形态不变）。
+// 确定性：时间 = viewer 固定步进（GameClock::kStep 锚），禁 wall-clock；
+// 波数固定 8（CPU 侧零填 unused 波 = A=0，循环恒定次数无动态分支）。
+#ifndef NL_WATER_COMMON_SLANGH
+#define NL_WATER_COMMON_SLANGH
+
+static const uint NL_WATER_WAVES      = 8u;
+static const uint NL_WATER_MATERIAL_ID = 0xFFFFu;  // clusterMeta 槽 3 保留标记（scene.hpp kWaterMaterialId 同值）
+
+// 位移 + 解析法线一次求出（消费端 per-pixel 调用；xz = 未位移世界坐标）。
+// 返回法线；out displacement = 三维位移向量（加到未位移 worldPos 上）。
+float3 waterGerstner(float2 xz, float time,
+                     float4 wcA[8], float4 wcB[8],
+                     out float3 displacement)
+{
+    float3 sumDx = float3(0.f, 0.f, 0.f);   // 水平位移和（xz）
+    float  sumY  = 0.f;                     // 垂直位移和
+    float  nx = 0.f, ny = 0.f, nz = 0.f;    // 法线累加（iago sum_x/sum_y/sum_z）
+    displacement = float3(0.f, 0.f, 0.f);
+
+    [unroll]
+    for (uint i = 0u; i < NL_WATER_WAVES; ++i)
+    {
+        const float2 D = wcA[i].xy;
+        const float  A = wcA[i].z;
+        const float  k = wcA[i].w;
+        const float  w = wcB[i].x;
+        const float  Q = wcB[i].y;
+        // A=0 波（CPU 零填）贡献恒零，数学上精确恒等（勿加 early-break：
+        // 保 [unroll] 常定循环 = 双后端确定性）。
+        const float phi = k * dot(D, xz) + w * time;
+        const float C = cos(phi);
+        const float S = sin(phi);
+
+        const float QA = Q * A;
+        const float Ak = A * k;
+
+        sumDx.x += D.x * QA * C;
+        sumDx.z += D.y * QA * C;
+        sumY    += A * S;
+        nx      += D.x * Ak * C;
+        ny      += QA * k * S;
+        nz      += D.y * Ak * C;
+    }
+    displacement = float3(sumDx.x, sumY, sumDx.z);
+    return normalize(float3(-nx, 1.f - ny, -nz));
+}
+
+// M-WAT1 水体直光（iago water_lighting_simple 口径简化：深水基色漫反射 +
+// 太阳 Blinn-Phong 高光；sky 反射/折射/泡沫 = M-WAT2 域）。
+// ambient/specPow/specGain 来自 wcC/wcD（CPU 常量），shadow = 直光阴影因子。
+// lightDir 由消费端传入（头文件不引用外部 cbuffer，保持 include 无副作用）。
+float3 waterShadeDirect(float3 N, float3 V, float shadow, float3 lightDir,
+                        float4 wcC, float4 wcD)
+{
+    const float3 base   = wcC.yzw;
+    const float3 L      = normalize(lightDir);
+    const float  ndl    = saturate(dot(N, L)) * shadow;
+    const float3 diff   = base * ndl;
+    const float3 H      = normalize(L + V);
+    const float  spec   = pow(saturate(dot(N, H)), wcD.y) * wcD.z;
+    const float3 ambient = base * wcD.x;
+    return diff + float3(spec, spec, spec) + ambient;
+}
+
+#endif // NL_WATER_COMMON_SLANGH

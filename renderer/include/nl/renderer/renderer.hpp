@@ -63,6 +63,9 @@ struct FrameParams {
     // validHistory 单帧清零，防渐变天气 GI 亮度滞后；缺省 false 保形）。
     float weatherWetness     = 0.0f;                   // 0..1（0 = 干）
     bool  weatherHistoryReject = false;                // filter 态单帧历史拒绝
+    // M-WAT1（water 轨，拍板 A）：水体时间（viewer 固定步进累积 = frameIdx ×
+    // GameClock::kStep，禁 wall-clock；缺省 0 = 静止水面，确定性重放逐字节）。
+    float waterTime          = 0.0f;
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
@@ -518,7 +521,12 @@ public:
                                             // M13.0：--cluster-blas（per-cluster BLAS
                                             // 预建；S13-PLAN M13.0，缺省关 = 既有
                                             // 模式零扰动）。
-                                            bool clusterBlas = false);
+                                            bool clusterBlas = false,
+                                            // M-WAT1（water 轨，拍板 A）：--water
+                                            // 仅 pulling 链生效（initVisbuf 追加
+                                            // 水面伪 cluster + 四管线条件加绑
+                                            // WaterConstants）；缺省 false 零扰动。
+                                            bool waterEnable = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;

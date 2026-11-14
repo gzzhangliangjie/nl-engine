@@ -43,6 +43,17 @@
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
 #include "sky.slangh"
+#include "water_common.slangh"  // M-WAT1：水体解析法线 + WaterConstants 布局规范
+
+// M-WAT1（拍板 A）：水体常量（b6，288B；ssr 侧 b1 空置、b2=b0 别名防碰不用，
+// 取 b6）。--water 关时渲染端不建不绑本 CB。
+cbuffer WaterConstants : register(b6)
+{
+    float4 g_wcA[8];   // (D.x, D.y, A, k) × 8 波
+    float4 g_wcB[8];   // (omega, Q, 0, 0) × 8 波
+    float4 g_wcC;      // (time, baseColor.rgb)
+    float4 g_wcD;      // (ambient, specPow, specGain, maxAmp)
+};
 
 // ============================================================================
 // 常量块
@@ -224,7 +235,10 @@ void csSSR(uint3 tid : SV_DispatchThreadID)
         const uint vertexBase = g_clusterMeta[metaBase + 0u];
         const uint localBase  = g_clusterMeta[metaBase + 2u];
         const uint materialId = g_clusterMeta[metaBase + 3u];
-        const GPUMaterial mat = g_materialTable[materialId];
+        // M-WAT1：水体标记守卫（越界禁读；MR 采样照常走槽 0 占位但水体分支
+        // 不消费 roughness——解析法线口径下用固定低粗糙度档）。
+        const bool isWater = (materialId == NL_WATER_MATERIAL_ID);
+        const GPUMaterial mat = isWater ? g_materialTable[0] : g_materialTable[materialId];
 
         // vertex pulling 三顶点（8 float/顶点）+ vis 反解（S16-PLAN §58 口径）。
         float3 pos[3], nrm[3];
@@ -244,17 +258,29 @@ void csSSR(uint3 tid : SV_DispatchThreadID)
             uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
         // 粗糙度：材质 MR 纹理 g 通道 × 因子（direct.slang 同式；槽号非一致
-        // → NonUniformResourceIndex，SM6.6）。
-        const float4 mrTex = g_mrTex[NonUniformResourceIndex(mat.mrSlot)]
-            .SampleGrad(g_sampler, gbuf.uv, gbuf.ddxUv, gbuf.ddyUv);
-        const float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
+        // → NonUniformResourceIndex，SM6.6）。水体 = 固定低粗糙度（0.10，
+        // 波面 glossy；M-WAT2 折射后随 Jacobian 调制）。
+        float roughness = 0.10f;
+        if (!isWater) {
+            const float4 mrTex = g_mrTex[NonUniformResourceIndex(mat.mrSlot)]
+                .SampleGrad(g_sampler, gbuf.uv, gbuf.ddxUv, gbuf.ddyUv);
+            roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
+        }
 
-        const float3 n = normalize(gbuf.normal);
-        const float3 V = normalize(g_eyePos.xyz - gbuf.worldPos);
+        // M-WAT1：水体起点 = 位移后表面 + 解析法线（与 direct.slang 同一
+        // waterGerstner；deviceZ 已是 VS 位移后的真实深度，反解无需修正）。
+        float3 surfPos = gbuf.worldPos;
+        float3 n = normalize(gbuf.normal);
+        if (isWater) {
+            float3 waterDisp;
+            n = waterGerstner(gbuf.worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
+            surfPos = gbuf.worldPos + waterDisp;
+        }
+        const float3 V = normalize(g_eyePos.xyz - surfPos);
         const float3 R = reflect(-V, n);
 
         // march 端点：起点 = 表面点沿法线小偏移（防自命中），终点 = R·maxDist。
-        const float3 p0   = gbuf.worldPos + n * 0.02f;
+        const float3 p0   = surfPos + n * 0.02f;
         const float3 pEnd = p0 + R * g_eyePos.w;
         const float  z0   = distance(p0, g_eyePos.xyz);
         const float  z1   = distance(pEnd, g_eyePos.xyz);

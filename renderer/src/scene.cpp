@@ -430,9 +430,27 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
 // 可见列表 SSBO + compute pipeline，每线程 1 簇 5 平面球测试（bevy 蓝本），通过者
 // append 簇号 + atomicAdd 写 args.instanceCount；VS 经可见列表取簇号。false 时
 // 可见列表恒等映射、不建 compute 资源，行为与 M4.0 一致。
+// M-WAT1：默认波形表（osgw 式显式数组；ω = √(g·k) 深水色散，确定性常量，
+// 任务书 §9b 口径：波向/振幅/波长/陡度 CPU 侧单源）。unused 波 amp=0 恒零贡献。
+static const WaterWaveParams kWaterWaves[8] = {
+    {{ 1.000f,  0.000f}, 0.140f, 9.0f, 0.28f},
+    {{ 0.454f,  0.891f}, 0.090f, 5.2f, 0.30f},
+    {{ 0.755f, -0.656f}, 0.060f, 3.1f, 0.32f},
+    {{-0.342f,  0.940f}, 0.035f, 1.9f, 0.30f},
+    {{ 0.906f,  0.423f}, 0.020f, 1.2f, 0.26f},
+    {{-0.866f,  0.500f}, 0.012f, 0.8f, 0.20f},
+    {{ 0.174f,  0.985f}, 0.008f, 0.55f, 0.15f},
+    {{ 0.966f, -0.259f}, 0.005f, 0.40f, 0.10f},
+};
+static const float kWaterBaseColor[3] = {0.05f, 0.23f, 0.30f};  // 深水基色（线性）
+static constexpr float kWaterAmbient = 0.35f;
+static constexpr float kWaterSpecPow = 180.0f;
+static constexpr float kWaterSpecGain = 0.9f;
+
 bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
-                     const char* nmeshFile, bool frustumCull, std::string& outError) {
+                     const char* nmeshFile, bool frustumCull, std::string& outError,
+                     bool waterEnable) {
     shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     frustumCull_ = frustumCull;
     cullTimer_.setLabel("cull");   // M4.2：resolve 日志标明这是 cull pass 实例
@@ -544,6 +562,64 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         clusterMeta.push_back(localBase);               // localIndexBase
         clusterMeta.push_back(clusterMaterialId[m]);   // materialId（M7.2；老文件恒 0）
     }
+
+    // ---- M-WAT1（拍板 A）：水体伪 cluster 网格追加（waterEnable 时）----
+    // 程序化网格：64×64 quad 覆盖 [-20,20]²（y=0 未位移平面，quad 0.625m），
+    // 每 64 quad = 128 tri 一簇（triId 8 位上限内）；materialId = kWaterMaterialId
+    // 保留标记（不占 GPUMaterial 表）。顶点邻簇重复存放：同 (xz,time) 位移一致
+    // → 波面无裂缝；VS 侧 Gerstner 位移（visbuf.slang），光照侧 per-pixel 重算
+    //（material.slang / direct.slang / ssr.slang 同一 waterGerstner）。
+    // 缺省关 = 本块不执行，clusterCount_/各缓冲尺寸与既有模式逐字节同源。
+    std::uint32_t waterClusterCount = 0;
+    float waterMaxAmp = 0.0f;
+    const float waterSphereR = 32.0f * (40.0f / 64.0f) * 1.5f;  // 64-quad 块半对角保守上界
+    if (waterEnable) {
+        constexpr float kHalf = 20.0f;                  // 覆盖 [-kHalf, kHalf]²
+        constexpr std::uint32_t kTrisPerCluster = 128;  // = 64 quad / 簇
+        const float step = (2.0f * kHalf) / 64.0f;      // 每边 64 quad，quad 0.625m
+        const std::uint32_t quadsTotal = 64u * 64u;
+        const std::uint32_t quadsPerCluster = kTrisPerCluster / 2;
+        for (const auto& w : kWaterWaves) waterMaxAmp += w.amp;
+
+        for (std::uint32_t q0 = 0; q0 < quadsTotal; q0 += quadsPerCluster) {
+            const std::uint32_t vertexBase =
+                static_cast<std::uint32_t>(vertexPool.size() / 8u);
+            const std::uint32_t localBase =
+                static_cast<std::uint32_t>(localIndices.size());
+            for (std::uint32_t q = 0; q < quadsPerCluster; ++q) {
+                const std::uint32_t quad = q0 + q;
+                const std::uint32_t gx = quad % 64u;
+                const std::uint32_t gz = quad / 64u;
+                const float x0 = -kHalf + static_cast<float>(gx) * step;
+                const float z0 = -kHalf + static_cast<float>(gz) * step;
+                const float xs[2] = {x0, x0 + step};
+                const float zs[2] = {z0, z0 + step};
+                for (int j = 0; j < 2; ++j)
+                    for (int i2 = 0; i2 < 2; ++i2) {
+                        vertexPool.push_back(xs[i2]);   // pos（未位移，y=0）
+                        vertexPool.push_back(0.0f);
+                        vertexPool.push_back(zs[j]);
+                        vertexPool.push_back(0.0f);     // normal (0,1,0)（水体分支不消费）
+                        vertexPool.push_back(1.0f);
+                        vertexPool.push_back(0.0f);
+                        vertexPool.push_back(0.0f);     // uv（水体分支不消费）
+                        vertexPool.push_back(0.0f);
+                    }
+                const std::uint32_t v = q * 4u;         // 簇内局部号
+                // 两三角（CCW 于 +y 视角）；光栅 depth-test + atomicMin 兜序。
+                localIndices.push_back(v + 0u); localIndices.push_back(v + 2u); localIndices.push_back(v + 3u);
+                localIndices.push_back(v + 0u); localIndices.push_back(v + 3u); localIndices.push_back(v + 1u);
+            }
+            clusterMeta.push_back(vertexBase);
+            clusterMeta.push_back(kTrisPerCluster);
+            clusterMeta.push_back(localBase);
+            clusterMeta.push_back(kWaterMaterialId);
+            ++waterClusterCount;
+        }
+        if (maxTriCount < kTrisPerCluster) maxTriCount = kTrisPerCluster;
+        clusterCount_ = clusterCount + waterClusterCount;
+    }
+
     const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
     maxTriPerCluster_ = maxTriCount;                    // M7.0：visbuf triId 8 位断言
     nmeshSubmeshCount_ = nm.submeshesPresent             // M7.2：visbuf 材质数对账
@@ -560,6 +636,18 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
             clusterSpheres.push_back(b.sphere[1]);
             clusterSpheres.push_back(b.sphere[2]);
             clusterSpheres.push_back(b.sphere[3]);
+        }
+        // M-WAT1：水体簇球（半径含 maxAmp 膨胀——位移出锥防误剔）。仅
+        // frustumCull 路径消费（pulling 链 frustumCull=false 不建 spheres）。
+        for (std::uint32_t w = 0; w < waterClusterCount; ++w) {
+            const std::uint32_t q0 = w * 64u;           // 簇首 quad
+            const float stepW = 40.0f / 64.0f;
+            const float cx = -20.0f + (static_cast<float>((q0 % 4096u) % 64u) + 32.0f) * stepW;
+            const float cz = -20.0f + (static_cast<float>((q0 % 4096u) / 64u) + 1.0f) * stepW;
+            clusterSpheres.push_back(cx);
+            clusterSpheres.push_back(waterMaxAmp * 0.5f);
+            clusterSpheres.push_back(cz);
+            clusterSpheres.push_back(waterSphereR + waterMaxAmp);
         }
     }
 
@@ -620,7 +708,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     // 用例踩到）。frustum off 时列表内容 = 恒等映射，VS 寻址与 M4.0 直通等价。
     {
         nvrhi::BufferDesc vlDesc;
-        vlDesc.byteSize = clusterCount * sizeof(std::uint32_t);
+        vlDesc.byteSize = clusterCount_ * sizeof(std::uint32_t);   // M-WAT1：含水体伪簇
         vlDesc.structStride = 4;
         vlDesc.canHaveUAVs = true;
         // keepInitialState：动态状态跟踪不跨命令列表，每条列表从 CopyDest 重新出发，
@@ -801,9 +889,11 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(clusterSpheres_, nvrhi::ResourceStates::ShaderResource);
     }
     // M5.1：恒等列表恒上传——frustum off 时 VS 经它直通（M4.0 语义）。
+    // M-WAT1：用成员 clusterCount_（= 网格簇 + 水体伪簇）——局部 clusterCount
+    // 只有网格簇，水簇会被截掉不画（首拍实锤）。
     {
-        std::vector<std::uint32_t> identityClusters(clusterCount);
-        for (std::uint32_t i = 0; i < clusterCount; ++i) identityClusters[i] = i;
+        std::vector<std::uint32_t> identityClusters(clusterCount_);
+        for (std::uint32_t i = 0; i < clusterCount_; ++i) identityClusters[i] = i;
         // M4.1：可见列表不钉 permanent 态——同一帧内 compute 写 UAV、VS 读 SRV、
         // 由状态跟踪动态晋升（permanent 态会报 "doesn't have the right state bits"）。
         upload->beginTrackingBufferState(visibleList_, nvrhi::ResourceStates::CopyDest);
@@ -813,7 +903,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
 
     nvrhi::DrawIndexedIndirectArguments args;
     args.setIndexCount(stride)
-        .setInstanceCount(frustumCull_ ? 0u : clusterCount)
+        .setInstanceCount(frustumCull_ ? 0u : clusterCount_)
         .setStartIndexLocation(0)
         .setBaseVertexLocation(0)
         .setStartInstanceLocation(0);
@@ -1574,8 +1664,11 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
 // ============================================================================
 bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
                        const char* vsEntry, const char* psEntry,
-                       const char* nmeshFile, bool pulling, std::string& outError) {
-    if (!initCull(device, shaderSuffix, vsEntry, psEntry, nmeshFile, false, outError))
+                       const char* nmeshFile, bool pulling, std::string& outError,
+                       bool waterEnable) {
+    waterEnable_ = waterEnable;
+    if (!initCull(device, shaderSuffix, vsEntry, psEntry, nmeshFile, false, outError,
+                  waterEnable))
         return false;
     visbuf_ = true;
     visbufDevice_ = device;
@@ -1627,6 +1720,23 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
     visConstants_ = device->createBuffer(vcDesc);
     if (!visConstants_) { outError = "createBuffer failed for vis constants"; return false; }
 
+    // M-WAT1：WaterConstants（288B volatile，见 water_common.slangh 头注布局规范）。
+    // 恒建恒绑恒写：DX12 root signature 要求 shader 声明的 CB 槽位在 layout 全绑定
+    //（漏槽 = CreateGraphicsPipelineState 失败，首拍实锤）；--water 关 = 无水簇
+    // 分支不进 + CB 内容不消费（writeWaterConstants 照写），全链 bytes 保形。
+    {
+        nvrhi::BufferDesc wcDesc;
+        wcDesc.byteSize = 288;
+        wcDesc.isConstantBuffer = true;
+        wcDesc.isVolatile = true;
+        wcDesc.maxVersions = 16;
+        wcDesc.debugName = "WaterConstants";
+        waterConstants_ = device->createBuffer(wcDesc);
+        if (!waterConstants_) { outError = "createBuffer failed for water constants"; return false; }
+        if (waterEnable_)
+            nl::core::log::infoCh("scene", "water: gerstner grid ready (8 waves, 64x64 quads, 64 clusters)");
+    }
+
     // §2.7：每条管线必须单一 BindingSet。raster = b0+b1+t1..t4+u0，
     // viz = b1+t0（同一块 u64 buffer 的 SRV 视角），各自一个 set。
     // Vulkan 下 b→256、t→0、u→384 的 shift 由 CMake 编译参数保证。
@@ -1639,6 +1749,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
+    rDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2));   // M-WAT1：水体 CB 恒绑（DX12 漏槽 = PSO 建败）
     visRasterLayout_ = device->createBindingLayout(rDesc);
     if (!visRasterLayout_) { outError = "createBindingLayout failed for vis raster"; return false; }
 
@@ -1853,6 +1964,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         // M-WEA2：matResolve 专属 b4 RasterFog（共享槽位表不加——volatile CB
         // 上限 6 约束，2026-11-14 实测；纯 graphics 无 M10.3 跨阶段前科面）。
         mDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4));
+        mDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));   // M-WAT1：水体 CB 恒绑（5 槽 ≤ 6 上限）
         matResolveLayout_ = device->createBindingLayout(mDesc);
         if (!matResolveLayout_) { outError = "createBindingLayout failed for mat resolve"; return false; }
 
@@ -2706,6 +2818,7 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(7))   // M-WAT1：水体 CB 恒绑（DX12 漏槽 = PSO 建败）
          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
          .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
     directComputeLayout_ = device->createBindingLayout(cDesc);
@@ -2715,6 +2828,7 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc cvDesc;
     addResolveLayoutItems(cvDesc);
     cvDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+          .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(7))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
           .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13))
           .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6))
@@ -3124,6 +3238,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         nvrhi::BindingSetDesc sd;
         addResolveSetItems(sd);
         sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(7, waterConstants_))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
                                                       nvrhi::Format::RGBA32_FLOAT))
           .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
@@ -3147,6 +3262,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
           // VSM 三槽（csDirectVsm blob 静态引用，布局漏槽 = PSO 失败 §2.7 口径）。
           // M15.1 b6 = 272B 采样常量（4 级 MVP）。
           .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, vsmSampleConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(7, waterConstants_))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, vsmPageTable_))
           .addItem(nvrhi::BindingSetItem::Texture_SRV(15, vsmPagePool_));
         directVsmSet_ = rtDevice_->createBindingSet(sd, directVsmLayout_);
@@ -3163,6 +3279,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
     //（阴影射线有限最大距离，保精度；场景半径 ~1，50 足以覆盖全部遮挡物）。
     writeResolveConstants(cmd, params);
+    writeWaterConstants(cmd, params);   // M-WAT1：b7 恒写（volatile CB 写前用禁）
     // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
     // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
     // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
@@ -3393,6 +3510,7 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     }
 
     writeResolveConstants(cmd, params);
+    writeWaterConstants(cmd, params);   // M-WAT1：b7 恒写（volatile CB 写前用禁）
     // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
     // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
     // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
@@ -5239,6 +5357,7 @@ bool Scene::ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
          .addItem(nvrhi::BindingLayoutItem::Texture_SRV(13))
          .addItem(nvrhi::BindingLayoutItem::Texture_SRV(14))
          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        d.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6));   // M-WAT1：水体 CB 恒绑
         ssrLayout_ = device->createBindingLayout(d);
     }
     if (!ssrDepthLayout_ || !ssrDownLayout_ || !ssrMipLayout_ ||
@@ -5411,6 +5530,7 @@ bool Scene::drawSSR(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
           .addItem(nvrhi::BindingSetItem::Texture_SRV(13, ssrDistPyramid_))
           .addItem(nvrhi::BindingSetItem::Texture_SRV(14, ssrSceneMip_))
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, ssrColor_));
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(6, waterConstants_));   // M-WAT1 恒绑
         ssrSet_ = t0Device_->createBindingSet(sd, ssrLayout_);
         if (!ssrSet_) { outError = "createBindingSet failed for ssr march"; return false; }
     }
@@ -6009,6 +6129,33 @@ void Scene::addResolveSetItems(nvrhi::BindingSetDesc& desc) const {
     desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(12, materialTable_));
 }
 
+// M-WAT1：WaterConstants（288B）每帧全量覆写（volatile CB 铁律）。波形参数 =
+// kWaterWaves 静态表（确定性常量）；time = params.waterTime（viewer 固定步进
+// 累积，GameClock::kStep 锚）。ω = √(g·k) 深水色散。--water 关不建不写本 CB。
+// 调用点 = visbuf 帧序列 raster 之前（VS 位移消费必须先于首次绑定使用）。
+void Scene::writeWaterConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
+    // 恒写：DX12 下绑定了 volatile CB 不写 = 「before it was written」错误；
+    // --water 关时内容无消费方（无水簇），time 走 params.waterTime 缺省 0。
+    float wc[72];   // 18 × float4
+    for (int i = 0; i < 8; ++i) {
+        const auto& w = kWaterWaves[i];
+        const float k = 6.2831853f / w.lambda;
+        const float omega = 3.1321f * sqrtf(k);   // √9.81 ≈ 3.1321（√(g·k)）
+        wc[i * 8 + 0] = w.dir[0]; wc[i * 8 + 1] = w.dir[1];
+        wc[i * 8 + 2] = w.amp;    wc[i * 8 + 3] = k;
+        wc[i * 8 + 4] = omega;    wc[i * 8 + 5] = w.steep;
+        wc[i * 8 + 6] = 0.0f;     wc[i * 8 + 7] = 0.0f;
+    }
+    wc[64] = params.waterTime;
+    wc[65] = kWaterBaseColor[0]; wc[66] = kWaterBaseColor[1]; wc[67] = kWaterBaseColor[2];
+    wc[68] = kWaterAmbient; wc[69] = kWaterSpecPow;
+    wc[70] = kWaterSpecGain;
+    float maxAmp = 0.0f;
+    for (const auto& w : kWaterWaves) maxAmp += w.amp;
+    wc[71] = maxAmp;
+    cmd->writeBuffer(waterConstants_, wc, sizeof(wc));
+}
+
 void Scene::writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
     // 写 b1 光照常量 + b2 尺寸常量（每帧；原 pulling 分支逐字搬移，两链共享）。
     LightConstants lc{};
@@ -6077,6 +6224,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_))
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
+    rSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(2, waterConstants_));   // M-WAT1 恒绑
     visRasterSet_ = device->createBindingSet(rSet, visRasterLayout_);
     if (!visRasterSet_) { outError = "createBindingSet failed for vis raster"; return false; }
 
@@ -6096,6 +6244,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
         nvrhi::BindingSetDesc mSet;
         addResolveSetItems(mSet);
         mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(4, rasterFogCB_));   // M-WEA2 raster 直光雾
+        mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, waterConstants_));   // M-WAT1 恒绑
         matResolveSet_ = device->createBindingSet(mSet, matResolveLayout_);
         if (!matResolveSet_) { outError = "createBindingSet failed for mat resolve"; return false; }
     }
@@ -8668,6 +8817,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                                      static_cast<float>(params.visVizMode), 0.f};
                 cmd->writeBuffer(visConstants_, vc, sizeof(vc));
 
+                // M-WAT1：水体 CB（288B）——必须在 raster 之前写（vsVisRaster
+                // 的 Gerstner 位移是该 CB 的首次绑定消费；写晚了 NVRHI 报
+                // 「volatile constant buffer before it was written」实锤）。
+                writeWaterConstants(cmd, params);
+
                 // (3) clear = max。clearBufferUInt 把整块 buffer 的每个 u32 写成
                 // 0xFFFFFFFF → 每个 u64 = 0xFFFFFFFFFFFFFFFF = VIS_EMPTY；
                 // 任意真实写入的打包值都小于它，故不需要 UE 的 cluster+1 空哨兵。
@@ -10606,6 +10760,7 @@ void Scene::shutdown() {
     visVizLayout_ = nullptr;
     visBuffer_ = nullptr;
     visConstants_ = nullptr;
+    waterConstants_ = nullptr;   // M-WAT1（Scene 新增 GPU 资源必须同步 shutdown 清单）
     vsVisRaster_ = nullptr;
     psVisRaster_ = nullptr;
     vsVisViz_ = nullptr;

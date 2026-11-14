@@ -13340,6 +13340,64 @@
      "command": "viewer.exe --mode pulling --ssr (Suzanne-materials, dist 7)"
     }
    ]
+  },
+  {
+   "id": "water-t1",
+   "label": "WAT M-WAT1",
+   "name": "Gerstner 波形 + 解析法线（水伪 cluster 进 vis buffer，--water）",
+   "tag": "water-t1",
+   "date": "2026-11-14",
+   "summary": "M-WAT1（拍板 A：水体进 vis buffer，UE 同构）。水伪 cluster 网格 = initCull 程序化 64×64 quad（覆盖 [-20,20]²，y=0 未位移平面，0.625m/quad）切 128 tri/簇共 64 簇，materialId = kWaterMaterialId（0xFFFF 保留标记，GPUMaterial 表不占位），顶点邻簇重复存放同 (xz,time) 位移一致无裂缝。单源 water_common.slangh（osgw 显式数组结构 + iago 解析法线口径）：visbuf.slang vsVisRaster 顶点位移（深度真实位移 → SSR 命中面正确）+ material.slang psMatResolve / direct.slang csDirect/csDirectVsm per-pixel 重算位移+解析法线+水体直光（深水基色 + N·L + 太阳 Blinn-Phong）+ ssr.slang 起点解析法线 + 固定 0.10 粗糙度。波形 = 8 波 osgw 式显式数组（波向/振幅/波长/陡度 CPU 单源，ω=√(g·k) 深水色散），WaterConstants 288B volatile CB 每帧全量覆写；时间 = viewer 帧号 × GameClock::kStep 固定步进。--water 缺省关 = 网格不追加、分支不进。工程坑三枚：①DX12 root signature 要求 shader 声明 CB 槽位在 layout 全绑定（漏槽 = CreateGraphicsPipelineState 失败整屏清屏色，VK 宽容 DX12 不宽容实锤）→ WaterConstants 恒建恒绑恒写；②visibleList/instanceCount 用局部 clusterCount 漏掉水伪簇 → 改成员 clusterCount_；③volatile CB 6 槽上限 → GI 入口（csRef/csRefGi）不接水体分支（refComputeLayout_ 已 6 槽）。验收：双后端 bytes 全绿。",
+   "acceptance": [
+    "water-t1 run.bat verify ALL GREEN exit 0：双后端 re-shot bytes vs 冻结基线 + A/B on/off 必不同 + 波运动 f4≠f12 + 确定性双跑 + log 锚 water: gerstner grid ready + deviceErrors=0 + 负向坏 mode exit 1",
+    "零漂移闸：--water 关（仅 --ssr）re-shot 与 water-t0 ssr-on 冻结基线逐字节一致（DX12+VULKAN 双过）",
+    "跨后端档：water-on 与 water-off 图 DX12 vs VULKAN near 档通过（check-ssr.py）",
+    "A/B：--water 开关画面必不同；波运动 f4 vs f12（waterTime 0.05s vs 0.183s）必不同",
+    "回归抽查：s7.1/pulling + pbr-direct/pbr 双后端 bytes 全绿（--water 缺省关零扰动）"
+   ],
+   "preview": "example/water-t1/water-on-dx12.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "water-t1-waves",
+     "name": "Gerstner 水面开启（Suzanne 三猴头 + 64x64 波面网格，SSR 反射波面）",
+     "kind": "image",
+     "note": "viewer --mode pulling --ssr --water；波形 = 8 波叠加 + 解析法线，固定步进时间锚；与 water-off（=water-t0 基线）A/B 可比。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--water",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "water: gerstner grid ready",
+     "baselines": {
+      "dx12": "example/water-t1/water-on-dx12.png",
+      "vulkan": "example/water-t1/water-on-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 7, f4)"
+    }
+   ]
   }
  ]
 }
