@@ -5,6 +5,7 @@
 #include "nl/core/log.hpp"
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
+#include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本文件原为语义复制点）
 #include "json.hpp"                // M-PT1：.nfx v1 解析（vendored nlohmann，与 core 同源）
 
 // M-PT2：粒子贴图解码用 stb_image 声明头。实现（STB_IMAGE_IMPLEMENTATION）只在
@@ -430,9 +431,47 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
 // 可见列表 SSBO + compute pipeline，每线程 1 簇 5 平面球测试（bevy 蓝本），通过者
 // append 簇号 + atomicAdd 写 args.instanceCount；VS 经可见列表取簇号。false 时
 // 可见列表恒等映射、不建 compute 资源，行为与 M4.0 一致。
+// M-WAT1：默认波形表（osgw 式显式数组；ω = √(g·k) 深水色散，确定性常量，
+// 任务书 §9b 口径：波向/振幅/波长/陡度 CPU 侧单源）。unused 波 amp=0 恒零贡献。
+static const WaterWaveParams kWaterWaves[8] = {
+    {{ 1.000f,  0.000f}, 0.140f, 9.0f, 0.28f},
+    {{ 0.454f,  0.891f}, 0.090f, 5.2f, 0.30f},
+    {{ 0.755f, -0.656f}, 0.060f, 3.1f, 0.32f},
+    {{-0.342f,  0.940f}, 0.035f, 1.9f, 0.30f},
+    {{ 0.906f,  0.423f}, 0.020f, 1.2f, 0.26f},
+    {{-0.866f,  0.500f}, 0.012f, 0.8f, 0.20f},
+    {{ 0.174f,  0.985f}, 0.008f, 0.55f, 0.15f},
+    {{ 0.966f, -0.259f}, 0.005f, 0.40f, 0.10f},
+};
+static const float kWaterBaseColor[3] = {0.05f, 0.23f, 0.30f};  // 深水基色（线性）
+static constexpr float kWaterAmbient = 0.35f;
+static constexpr float kWaterSpecPow = 180.0f;
+static constexpr float kWaterSpecGain = 0.9f;
+// M-WAT2（拍板 Q-WA7=A）：折射/吸收/泡沫参数。吸收口径：红光衰减最快
+//（0.45/m）→ 厚处偏蓝绿（Beer-Lambert 单调渐变，WATER-PLAN §6.2 验收）；
+// 缺省厚度 = bilateral 无邻居（水面中心）fallback。
+static constexpr float kWaterIor = 1.333f;
+static constexpr float kWaterRefractStrength = 0.45f;
+static constexpr float kWaterFoamThreshold = 0.62f;
+static constexpr float kWaterFoamGain = 0.85f;
+static const float kWaterAbsorb[3] = {0.45f, 0.16f, 0.08f};
+static constexpr float kWaterThickMeters = 4.0f;   // M-WAT2：深水 fallback 厚度（bilateral 无邻居时）
+// M-WAT2 池底平面参数（解析折射消费；与 initCull 池底网格生成共用口径）。
+// 池底在 vis 中被水面深度遮挡 → 方案 A copy 无水后内容 → composite 内对折射
+// 光线做 ray-plane 解析求交直接采池底贴图（WATER-PLAN §9c 实现注记）。
+static constexpr float kWaterFloorY = -1.5f;
+static constexpr float kWaterFloorHalf = 26.0f;
+// M-WAT3（拍板 A+B）：岸线软化 + 岸线泡沫。fadeDist = 径向差淡出距离（UE
+// DistanceToNearestSurface 同构）；shoreFoam = diff 窄带白沫（UE WaterBody
+// 岸线泡沫同构）。复用 bilateral 邻域 diff，零新 pass/零新资源。
+static constexpr float kWaterFadeDist = 2.2f;     // 平坦池底 diff~1.5m → fade~0.7 交界可见过渡
+static constexpr float kWaterShoreFoamDist = 2.5f; // 需 > 池深视线差 1.5m，窄带才打开
+static constexpr float kWaterShoreFoamGain = 1.0f;
+
 bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                      const char* vsEntry, const char* psEntry,
-                     const char* nmeshFile, bool frustumCull, std::string& outError) {
+                     const char* nmeshFile, bool frustumCull, std::string& outError,
+                     bool waterEnable) {
     shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     frustumCull_ = frustumCull;
     cullTimer_.setLabel("cull");   // M4.2：resolve 日志标明这是 cull pass 实例
@@ -544,6 +583,110 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         clusterMeta.push_back(localBase);               // localIndexBase
         clusterMeta.push_back(clusterMaterialId[m]);   // materialId（M7.2；老文件恒 0）
     }
+
+    // ---- M-WAT1（拍板 A）：水体伪 cluster 网格追加（waterEnable 时）----
+    // 程序化网格：64×64 quad 覆盖 [-20,20]²（y=0 未位移平面，quad 0.625m），
+    // 每 64 quad = 128 tri 一簇（triId 8 位上限内）；materialId = kWaterMaterialId
+    // 保留标记（不占 GPUMaterial 表）。顶点邻簇重复存放：同 (xz,time) 位移一致
+    // → 波面无裂缝；VS 侧 Gerstner 位移（visbuf.slang），光照侧 per-pixel 重算
+    //（material.slang / direct.slang / ssr.slang 同一 waterGerstner）。
+    // 缺省关 = 本块不执行，clusterCount_/各缓冲尺寸与既有模式逐字节同源。
+    std::uint32_t waterClusterCount = 0;
+    float waterMaxAmp = 0.0f;
+    const float waterSphereR = 32.0f * (40.0f / 64.0f) * 1.5f;  // 64-quad 块半对角保守上界
+    if (waterEnable) {
+        constexpr float kHalf = 20.0f;                  // 覆盖 [-kHalf, kHalf]²
+        constexpr std::uint32_t kTrisPerCluster = 128;  // = 64 quad / 簇
+        const float step = (2.0f * kHalf) / 64.0f;      // 每边 64 quad，quad 0.625m
+        const std::uint32_t quadsTotal = 64u * 64u;
+        const std::uint32_t quadsPerCluster = kTrisPerCluster / 2;
+        for (const auto& w : kWaterWaves) waterMaxAmp += w.amp;
+
+        for (std::uint32_t q0 = 0; q0 < quadsTotal; q0 += quadsPerCluster) {
+            const std::uint32_t vertexBase =
+                static_cast<std::uint32_t>(vertexPool.size() / 8u);
+            const std::uint32_t localBase =
+                static_cast<std::uint32_t>(localIndices.size());
+            for (std::uint32_t q = 0; q < quadsPerCluster; ++q) {
+                const std::uint32_t quad = q0 + q;
+                const std::uint32_t gx = quad % 64u;
+                const std::uint32_t gz = quad / 64u;
+                const float x0 = -kHalf + static_cast<float>(gx) * step;
+                const float z0 = -kHalf + static_cast<float>(gz) * step;
+                const float xs[2] = {x0, x0 + step};
+                const float zs[2] = {z0, z0 + step};
+                for (int j = 0; j < 2; ++j)
+                    for (int i2 = 0; i2 < 2; ++i2) {
+                        vertexPool.push_back(xs[i2]);   // pos（未位移，y=0）
+                        vertexPool.push_back(0.0f);
+                        vertexPool.push_back(zs[j]);
+                        vertexPool.push_back(0.0f);     // normal (0,1,0)（水体分支不消费）
+                        vertexPool.push_back(1.0f);
+                        vertexPool.push_back(0.0f);
+                        vertexPool.push_back(0.0f);     // uv（水体分支不消费）
+                        vertexPool.push_back(0.0f);
+                    }
+                const std::uint32_t v = q * 4u;         // 簇内局部号
+                // 两三角（CCW 于 +y 视角）；光栅 depth-test + atomicMin 兜序。
+                localIndices.push_back(v + 0u); localIndices.push_back(v + 2u); localIndices.push_back(v + 3u);
+                localIndices.push_back(v + 0u); localIndices.push_back(v + 3u); localIndices.push_back(v + 1u);
+            }
+            clusterMeta.push_back(vertexBase);
+            clusterMeta.push_back(kTrisPerCluster);
+            clusterMeta.push_back(localBase);
+            clusterMeta.push_back(kWaterMaterialId);
+            ++waterClusterCount;
+        }
+        // ---- M-WAT2：水下池底（验收 §6.2「水下物体折射扭曲可见」的参照物）。
+        // y=-1.5 大平面 [-26,26]²（比水面 [-20,20]² 大 6m 环带——水面完全遮挡
+        // 与其重叠的部分：vis 只记最近表面，环带才是 vis/bilateral 可达的池底
+        // 像素 = UE 水塘边缘同构）。40×40 quad（3200 tri / 128 per cluster = 25
+        // 簇），materialId = 0（Suzanne 材质 0 贴图 = 折射扭曲天然参照）。
+        // waterEnable 时追加；关 = 零漂移。
+        {
+            constexpr std::uint32_t kFloorQuads = 40u;   // 平面参数用 kWaterFloorY/Half（单源）
+            const float fstep = (2.0f * kWaterFloorHalf) / static_cast<float>(kFloorQuads);
+            const std::uint32_t quadsPerClusterFloor = kTrisPerCluster / 2;
+            for (std::uint32_t q0 = 0; q0 < kFloorQuads * kFloorQuads;
+                 q0 += quadsPerClusterFloor) {
+                const std::uint32_t vertexBase =
+                    static_cast<std::uint32_t>(vertexPool.size() / 8u);
+                const std::uint32_t localBase =
+                    static_cast<std::uint32_t>(localIndices.size());
+                for (std::uint32_t q = 0; q < quadsPerClusterFloor; ++q) {
+                    const std::uint32_t quad = q0 + q;
+                    const std::uint32_t gx = quad % kFloorQuads;
+                    const std::uint32_t gz = quad / kFloorQuads;
+                    const float x0 = -kWaterFloorHalf + static_cast<float>(gx) * fstep;
+                    const float z0 = -kWaterFloorHalf + static_cast<float>(gz) * fstep;
+                    const float xs[2] = {x0, x0 + fstep};
+                    const float zs[2] = {z0, z0 + fstep};
+                    for (int j = 0; j < 2; ++j)
+                        for (int i2 = 0; i2 < 2; ++i2) {
+                            vertexPool.push_back(xs[i2]);
+                            vertexPool.push_back(kWaterFloorY);
+                            vertexPool.push_back(zs[j]);
+                            vertexPool.push_back(0.0f);      // normal (0,1,0)
+                            vertexPool.push_back(1.0f);
+                            vertexPool.push_back(0.0f);
+                            vertexPool.push_back(xs[i2] * 0.25f);   // uv 世界缩放（贴图重复）
+                            vertexPool.push_back(zs[j] * 0.25f);
+                        }
+                    const std::uint32_t v = q * 4u;
+                    localIndices.push_back(v + 0u); localIndices.push_back(v + 2u); localIndices.push_back(v + 3u);
+                    localIndices.push_back(v + 0u); localIndices.push_back(v + 3u); localIndices.push_back(v + 1u);
+                }
+                clusterMeta.push_back(vertexBase);
+                clusterMeta.push_back(kTrisPerCluster);
+                clusterMeta.push_back(localBase);
+                clusterMeta.push_back(0u);                   // 材质槽 0
+                ++waterClusterCount;
+            }
+        }
+        if (maxTriCount < kTrisPerCluster) maxTriCount = kTrisPerCluster;
+        clusterCount_ = clusterCount + waterClusterCount;
+    }
+
     const std::uint32_t stride = maxTriCount * 3;       // identity 索引缓冲长度
     maxTriPerCluster_ = maxTriCount;                    // M7.0：visbuf triId 8 位断言
     nmeshSubmeshCount_ = nm.submeshesPresent             // M7.2：visbuf 材质数对账
@@ -560,6 +703,30 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
             clusterSpheres.push_back(b.sphere[1]);
             clusterSpheres.push_back(b.sphere[2]);
             clusterSpheres.push_back(b.sphere[3]);
+        }
+        // M-WAT1：水体簇球（半径含 maxAmp 膨胀——位移出锥防误剔）。仅
+        // frustumCull 路径消费（pulling 链 frustumCull=false 不建 spheres）。
+        // M-WAT2：[0,64) = 水面簇（y≈0 波面）；[64, waterClusterCount) =
+        // 池底簇（y=-1.5，32×32 quad / 8×8 per cluster = 4×4 布局）。
+        for (std::uint32_t w = 0; w < waterClusterCount; ++w) {
+            if (w < 64u) {
+                const std::uint32_t q0 = w * 64u;           // 簇首 quad
+                const float stepW = 40.0f / 64.0f;
+                const float cx = -20.0f + (static_cast<float>((q0 % 4096u) % 64u) + 32.0f) * stepW;
+                const float cz = -20.0f + (static_cast<float>((q0 % 4096u) / 64u) + 1.0f) * stepW;
+                clusterSpheres.push_back(cx);
+                clusterSpheres.push_back(waterMaxAmp * 0.5f);
+                clusterSpheres.push_back(cz);
+                clusterSpheres.push_back(waterSphereR + waterMaxAmp);
+            } else {
+                const std::uint32_t f = w - 64u;            // 池底簇 5×5 布局
+                const float fcx = -26.0f + (static_cast<float>(f % 5u) * 8.0f + 4.0f) * 1.3f;
+                const float fcz = -26.0f + (static_cast<float>(f / 5u) * 8.0f + 4.0f) * 1.3f;
+                clusterSpheres.push_back(fcx);
+                clusterSpheres.push_back(-1.5f);
+                clusterSpheres.push_back(fcz);
+                clusterSpheres.push_back(waterSphereR);
+            }
         }
     }
 
@@ -620,7 +787,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     // 用例踩到）。frustum off 时列表内容 = 恒等映射，VS 寻址与 M4.0 直通等价。
     {
         nvrhi::BufferDesc vlDesc;
-        vlDesc.byteSize = clusterCount * sizeof(std::uint32_t);
+        vlDesc.byteSize = clusterCount_ * sizeof(std::uint32_t);   // M-WAT1：含水体伪簇
         vlDesc.structStride = 4;
         vlDesc.canHaveUAVs = true;
         // keepInitialState：动态状态跟踪不跨命令列表，每条列表从 CopyDest 重新出发，
@@ -801,9 +968,11 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         upload->setPermanentBufferState(clusterSpheres_, nvrhi::ResourceStates::ShaderResource);
     }
     // M5.1：恒等列表恒上传——frustum off 时 VS 经它直通（M4.0 语义）。
+    // M-WAT1：用成员 clusterCount_（= 网格簇 + 水体伪簇）——局部 clusterCount
+    // 只有网格簇，水簇会被截掉不画（首拍实锤）。
     {
-        std::vector<std::uint32_t> identityClusters(clusterCount);
-        for (std::uint32_t i = 0; i < clusterCount; ++i) identityClusters[i] = i;
+        std::vector<std::uint32_t> identityClusters(clusterCount_);
+        for (std::uint32_t i = 0; i < clusterCount_; ++i) identityClusters[i] = i;
         // M4.1：可见列表不钉 permanent 态——同一帧内 compute 写 UAV、VS 读 SRV、
         // 由状态跟踪动态晋升（permanent 态会报 "doesn't have the right state bits"）。
         upload->beginTrackingBufferState(visibleList_, nvrhi::ResourceStates::CopyDest);
@@ -813,7 +982,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
 
     nvrhi::DrawIndexedIndirectArguments args;
     args.setIndexCount(stride)
-        .setInstanceCount(frustumCull_ ? 0u : clusterCount)
+        .setInstanceCount(frustumCull_ ? 0u : clusterCount_)
         .setStartIndexLocation(0)
         .setBaseVertexLocation(0)
         .setStartInstanceLocation(0);
@@ -1574,8 +1743,11 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
 // ============================================================================
 bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
                        const char* vsEntry, const char* psEntry,
-                       const char* nmeshFile, bool pulling, std::string& outError) {
-    if (!initCull(device, shaderSuffix, vsEntry, psEntry, nmeshFile, false, outError))
+                       const char* nmeshFile, bool pulling, std::string& outError,
+                       bool waterEnable) {
+    waterEnable_ = waterEnable;
+    if (!initCull(device, shaderSuffix, vsEntry, psEntry, nmeshFile, false, outError,
+                  waterEnable))
         return false;
     visbuf_ = true;
     visbufDevice_ = device;
@@ -1627,6 +1799,23 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
     visConstants_ = device->createBuffer(vcDesc);
     if (!visConstants_) { outError = "createBuffer failed for vis constants"; return false; }
 
+    // M-WAT1：WaterConstants（288B volatile，见 water_common.slangh 头注布局规范）。
+    // 恒建恒绑恒写：DX12 root signature 要求 shader 声明的 CB 槽位在 layout 全绑定
+    //（漏槽 = CreateGraphicsPipelineState 失败，首拍实锤）；--water 关 = 无水簇
+    // 分支不进 + CB 内容不消费（writeWaterConstants 照写），全链 bytes 保形。
+    {
+        nvrhi::BufferDesc wcDesc;
+        wcDesc.byteSize = 352;   // M-WAT3：336 → 352（wcH 岸线软化/泡沫参数）
+        wcDesc.isConstantBuffer = true;
+        wcDesc.isVolatile = true;
+        wcDesc.maxVersions = 16;
+        wcDesc.debugName = "WaterConstants";
+        waterConstants_ = device->createBuffer(wcDesc);
+        if (!waterConstants_) { outError = "createBuffer failed for water constants"; return false; }
+        if (waterEnable_)
+            nl::core::log::infoCh("scene", "water: gerstner grid ready (8 waves, 64x64 quads, 64 clusters)");
+    }
+
     // §2.7：每条管线必须单一 BindingSet。raster = b0+b1+t1..t4+u0，
     // viz = b1+t0（同一块 u64 buffer 的 SRV 视角），各自一个 set。
     // Vulkan 下 b→256、t→0、u→384 的 shift 由 CMake 编译参数保证。
@@ -1639,6 +1828,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4))
         .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0));
+    rDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(2));   // M-WAT1：水体 CB 恒绑（DX12 漏槽 = PSO 建败）
     visRasterLayout_ = device->createBindingLayout(rDesc);
     if (!visRasterLayout_) { outError = "createBindingLayout failed for vis raster"; return false; }
 
@@ -1853,6 +2043,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         // M-WEA2：matResolve 专属 b4 RasterFog（共享槽位表不加——volatile CB
         // 上限 6 约束，2026-11-14 实测；纯 graphics 无 M10.3 跨阶段前科面）。
         mDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4));
+        mDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));   // M-WAT1：水体 CB 恒绑（5 槽 ≤ 6 上限）
         matResolveLayout_ = device->createBindingLayout(mDesc);
         if (!matResolveLayout_) { outError = "createBindingLayout failed for mat resolve"; return false; }
 
@@ -2706,6 +2897,7 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc cDesc;
     addResolveLayoutItems(cDesc);
     cDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(7))   // M-WAT1：水体 CB 恒绑（DX12 漏槽 = PSO 建败）
          .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
          .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13));
     directComputeLayout_ = device->createBindingLayout(cDesc);
@@ -2715,6 +2907,7 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     nvrhi::BindingLayoutDesc cvDesc;
     addResolveLayoutItems(cvDesc);
     cvDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+          .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(7))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
           .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(13))
           .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6))
@@ -3124,6 +3317,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
         nvrhi::BindingSetDesc sd;
         addResolveSetItems(sd);
         sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, directConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(7, waterConstants_))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingSetItem::Texture_UAV(0, rtTarget_,
                                                       nvrhi::Format::RGBA32_FLOAT))
           .addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(13, tlas_));
@@ -3147,6 +3341,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
           // VSM 三槽（csDirectVsm blob 静态引用，布局漏槽 = PSO 失败 §2.7 口径）。
           // M15.1 b6 = 272B 采样常量（4 级 MVP）。
           .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, vsmSampleConstants_))
+          .addItem(nvrhi::BindingSetItem::ConstantBuffer(7, waterConstants_))   // M-WAT1 恒绑
           .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, vsmPageTable_))
           .addItem(nvrhi::BindingSetItem::Texture_SRV(15, vsmPagePool_));
         directVsmSet_ = rtDevice_->createBindingSet(sd, directVsmLayout_);
@@ -3163,6 +3358,7 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
     //（阴影射线有限最大距离，保精度；场景半径 ~1，50 足以覆盖全部遮挡物）。
     writeResolveConstants(cmd, params);
+    writeWaterConstants(cmd, params);   // M-WAT1：b7 恒写（volatile CB 写前用禁）
     // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
     // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
     // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
@@ -3393,6 +3589,7 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     }
 
     writeResolveConstants(cmd, params);
+    writeWaterConstants(cmd, params);   // M-WAT1：b7 恒写（volatile CB 写前用禁）
     // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
     // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
     // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
@@ -5042,6 +5239,542 @@ bool Scene::drawIrradDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewp
 }
 
 
+// ============================================================================
+// M-WAT0（water 轨）：SSR 屏幕空间反射本体。口径详见 ssr.slang 文件头与
+// docs/WATER-PLAN.md §9b。结构：
+//   ensureSsrTargets   —— 金字塔/场景色链/ssrColor_（POT 化，随视口懒建重建）
+//   ensureSsrPipelines —— 五 compute 的 shader/PSO/布局/CB（尺寸无关）
+//   drawSSR            —— 深度 → min 链 → 均值链 → march → 合成（tonemap 前）
+// ============================================================================
+
+// 懒建 SSR 目标。金字塔 POT 化口径照抄 ensureHizTargets（M6.0 教训：非 POT
+// 视口的 ceil 对半链超 mip 上限——DX12 debug layer 报错 / Vulkan 静默建坏）。
+bool Scene::ensureSsrTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                             std::string& outError) {
+    const std::uint32_t w = static_cast<std::uint32_t>(viewportW + 0.5f);
+    const std::uint32_t h = static_cast<std::uint32_t>(viewportH + 0.5f);
+    if (w == 0 || h == 0) { outError = "ssr: zero viewport"; return false; }
+    if (ssrDistPyramid_ && ssrW_ == w && ssrH_ == h) return true;   // 懒建判据按视口尺寸
+
+    // 金字塔 POT 化（hiz 同款）。
+    std::uint32_t pw = 1, ph = 1;
+    while (pw < w) pw <<= 1;
+    while (ph < h) ph <<= 1;
+    ssrW_ = w;
+    ssrH_ = h;
+    std::uint32_t m = std::max(pw, ph);
+    ssrPyrMips_ = 1;
+    while (m > 1) { m = (m + 1) / 2; ++ssrPyrMips_; }
+
+    // 径向距离 **min** 金字塔：R32F 全 mip，UAV 可写（逐级 compute 写）。
+    // 语义/算子与 S6 hizPyramid_ 相反（max=遮挡 vs min=跳步），见 ssr.slang 头。
+    {
+        nvrhi::TextureDesc d;
+        d.width = pw; d.height = ph;
+        d.format = nvrhi::Format::R32_FLOAT;
+        d.mipLevels = ssrPyrMips_;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        // 非渲染目标（纯 UAV/SRV 链）禁 setClearValue——D3D12 明确要求
+        // pOptimizedClearValue 仅 RT/DS 可带（CreateCommittedResource3 实锤
+        // 0x80070057）。mip0 未写区域由 csSSRDepth 的 1e9 写入兜底。
+        d.debugName = "SsrDistPyramid";
+        ssrDistPyramid_ = device->createTexture(d);
+        if (!ssrDistPyramid_) { outError = "createTexture failed for ssr dist pyramid"; return false; }
+    }
+    // 场景色均值链：RGBA32F 视口尺寸 ×7 mip（mip0 不用，mip1..6 = 半→1/64；
+    // 均值链从 mip1 起建——mip0 若做拷贝需另一入口，march colorMip 直接映射
+    // mipStart+1，见 ssr.slang §4）。
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;
+        d.mipLevels = kSsrChainMips + 1;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = "SsrSceneMip";
+        ssrSceneMip_ = device->createTexture(d);
+        if (!ssrSceneMip_) { outError = "createTexture failed for ssr scene mip"; return false; }
+    }
+    // march 输出：RGBA32F 单 mip（rgb = 反射辐射，a = 权重；RGBA32 口径同
+    // rtTarget_——FP32 中间格式才字节精确，16F 在半步边界翻转有前科）。
+    {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = "SsrColor";
+        ssrColor_ = device->createTexture(d);
+        if (!ssrColor_) { outError = "createTexture failed for ssr color"; return false; }
+    }
+    // M-WAT2（拍板 Q-WA7=A）：折射背景副本（hdrSceneColor_ 同格式同尺寸；水像素
+    // 黑占位 = 天然「无水体场景」，UE SceneWithoutWater copy 同构）。仅 waterEnable_
+    // 时被 copy/composite 消费；--water 关 = 不建不绑（SSR 链 alone 零漂移）。
+    if (waterEnable_) {
+        nvrhi::TextureDesc d;
+        d.width = w; d.height = h;
+        d.format = nvrhi::Format::RGBA32_FLOAT;
+        d.isUAV = true;
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = "WaterSceneWithoutWater";
+        waterBg_ = device->createTexture(d);
+        if (!waterBg_) { outError = "createTexture failed for water background copy"; return false; }
+    }
+
+    // 逐级绑定集（纹理重建即重建；[0] 未用占位）。
+    ssrDownSets_.assign(ssrPyrMips_, nullptr);
+    for (std::uint32_t L = 1; L < ssrPyrMips_; ++L) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrDownCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(16, ssrDistPyramid_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(L - 1, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(1, ssrDistPyramid_,
+                      nvrhi::Format::R32_FLOAT,
+                      nvrhi::TextureSubresourceSet(L, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrDownSets_[L] = device->createBindingSet(sd, ssrDownLayout_);
+        if (!ssrDownSets_[L]) { outError = "createBindingSet failed for ssr down level"; return false; }
+    }
+    ssrMipSets_.assign(kSsrChainMips + 1, nullptr);
+    // L=1：源 = hdrSceneColor_ mip0（视口尺寸），目标 = 链 mip1。
+    // L≥2：源 = 链 mip(L-1)，目标 = 链 mip L。
+    for (std::uint32_t L = 1; L <= kSsrChainMips; ++L) {
+        nvrhi::BindingSetDesc sd;
+        const nvrhi::TextureHandle src = (L == 1) ? hdrSceneColor_ : ssrSceneMip_;
+        const std::uint32_t srcLevel = (L == 1) ? 0u : (L - 1u);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrDownCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(17, src,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(srcLevel, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(2, ssrSceneMip_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(L, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrMipSets_[L] = device->createBindingSet(sd, ssrMipLayout_);
+        if (!ssrMipSets_[L]) { outError = "createBindingSet failed for ssr mip level"; return false; }
+    }
+    // 纹理句柄已换新：绑定集全部失效重置（set 是不可变对象，drawSSR 懒建重建）。
+    ssrDepthSet_ = nullptr;
+    ssrSet_ = nullptr;
+    ssrComposeSet_ = nullptr;
+    waterCompositeSet_ = nullptr;   // M-WAT2：waterBg_/hdr 句柄换新 → set 重建
+    return true;
+}
+
+// 懒建 SSR 管线（shader ×5 / PSO ×5 / 布局 ×5 / CB ×4；尺寸无关不随视口重建）。
+bool Scene::ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                               std::string& outError) {
+    if (ssrPSO_) return true;   // 已建判据（全组一起建/一起败）
+    auto ssrPath = [shaderSuffix](const char* artifact) {
+        return std::string(NL_SHADER_DIR) + "/ssr." + artifact + "." + shaderSuffix;
+    };
+    auto loadSsr = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(ssrPath(artifact).c_str(), blob)) {
+            outError = std::string("failed to load ssr shader ") + artifact +
+                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("createShader failed for ssr ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadSsr("csssrdepth", csSsrDepth_) ||
+        !loadSsr("csssrdown", csSsrDown_) ||
+        !loadSsr("csssrmip", csSsrMip_) ||
+        !loadSsr("csssr", csSsr_) ||
+        !loadSsr("csssrcompose", csSsrCompose_))
+        return false;
+    // M-WAT2：折射背景 copy + 水体全链合成（waterEnable_ 时才消费；
+    // blob 恒加载——water 关时 PSO 建了不用，调度一行不进 = 零漂移）。
+    if (waterEnable_ &&
+        (!loadSsr("cswatercopy", csWaterCopy_) ||
+         !loadSsr("cswatercomposite", csWaterComposite_)))
+        return false;
+
+    // CB（volatile，逐帧/逐级全量覆写；版本数 ≥ 每帧写次数，M11.2 cache 同款）。
+    {
+        nvrhi::BufferDesc d;
+        d.byteSize = 96; d.isConstantBuffer = true; d.isVolatile = true; d.maxVersions = 16;
+        d.debugName = "SsrDepthConstants";
+        ssrDepthCB_ = device->createBuffer(d);
+        d.byteSize = 16; d.maxVersions = 32; d.debugName = "SsrDownConstants";
+        ssrDownCB_ = device->createBuffer(d);
+        d.byteSize = 208; d.maxVersions = 16; d.debugName = "SsrConstants";
+        ssrConstantsCB_ = device->createBuffer(d);
+        d.byteSize = 16; d.maxVersions = 16; d.debugName = "SsrComposeConstants";
+        ssrComposeCB_ = device->createBuffer(d);
+        if (!ssrDepthCB_ || !ssrDownCB_ || !ssrConstantsCB_ || !ssrComposeCB_) {
+            outError = "createBuffer failed for ssr constants"; return false;
+        }
+    }
+
+    // 布局：槽位分配见 ssr.slang 文件头（避开 resolve 表 t0..t12/s0、b0..b2；
+    // march 布局复用 addResolveLayoutItems + b3/t13/t14/u0）。
+    {
+        nvrhi::BindingLayoutDesc d;
+        d.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        ssrDepthLayout_ = device->createBindingLayout(d);
+    }
+    {
+        nvrhi::BindingLayoutDesc d;
+        d.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(16))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
+        ssrDownLayout_ = device->createBindingLayout(d);
+        // mip / compose 布局形制相同，仅槽位不同，各建一份。
+        nvrhi::BindingLayoutDesc m;
+        m.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(17))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
+        ssrMipLayout_ = device->createBindingLayout(m);
+        nvrhi::BindingLayoutDesc c;
+        c.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(18))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+        ssrComposeLayout_ = device->createBindingLayout(c);
+    }
+    {
+        nvrhi::BindingLayoutDesc d;
+        addResolveLayoutItems(d);
+        d.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(13))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(14))
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        d.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6));   // M-WAT1：水体 CB 恒绑
+        ssrLayout_ = device->createBindingLayout(d);
+    }
+    // M-WAT2：composite 布局 = resolve 表 + b3 + b6 + t13/t14/t18/t19 + u3
+    //（t18 = ssrColor_ 反射源 / t19 = waterBg_ 折射背景 / u3 = hdrSceneColor_）。
+    if (waterEnable_) {
+        nvrhi::BindingLayoutDesc d;
+        addResolveLayoutItems(d);
+        d.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3))
+         .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(6))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(13))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(14))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(18))
+         .addItem(nvrhi::BindingLayoutItem::Texture_SRV(19))
+         .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+        waterCompositeLayout_ = device->createBindingLayout(d);
+    }
+    if (!ssrDepthLayout_ || !ssrDownLayout_ || !ssrMipLayout_ ||
+        !ssrComposeLayout_ || !ssrLayout_) {
+        outError = "createBindingLayout failed for ssr"; return false;
+    }
+
+    {
+        // 五个 PSO 各自独立 desc——addBindingLayout 是**追加**语义，复用同一
+        // desc 会把前面的 layout 全带上（NVRHI 实锤：down/mip/compose 同占 b5
+        // → "Same bindings defined by more than one layout"，pipeline 建败）。
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrDepth_).addBindingLayout(ssrDepthLayout_);
+        ssrDepthPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrDown_).addBindingLayout(ssrDownLayout_);
+        ssrDownPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrMip_).addBindingLayout(ssrMipLayout_);
+        ssrMipPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsr_).addBindingLayout(ssrLayout_);
+        ssrPSO_ = device->createComputePipeline(p);
+    }
+    {
+        nvrhi::ComputePipelineDesc p;
+        p.setComputeShader(csSsrCompose_).addBindingLayout(ssrComposeLayout_);
+        ssrComposePSO_ = device->createComputePipeline(p);
+    }
+    // M-WAT2：copy PSO（布局形制 = ssrComposeLayout_ 换 t20/u4，独立 desc 防
+    // addBindingLayout 追加坑）+ composite PSO。
+    if (waterEnable_) {
+        {
+            nvrhi::BindingLayoutDesc d;
+            d.setVisibility(nvrhi::ShaderType::All)
+                .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5))
+                .addItem(nvrhi::BindingLayoutItem::Texture_SRV(20))
+                .addItem(nvrhi::BindingLayoutItem::Texture_UAV(4));
+            waterCopyLayout_ = device->createBindingLayout(d);
+        }
+        {
+            nvrhi::ComputePipelineDesc p;
+            p.setComputeShader(csWaterCopy_).addBindingLayout(waterCopyLayout_);
+            waterCopyPSO_ = device->createComputePipeline(p);
+        }
+        {
+            nvrhi::ComputePipelineDesc p;
+            p.setComputeShader(csWaterComposite_).addBindingLayout(waterCompositeLayout_);
+            waterCompositePSO_ = device->createComputePipeline(p);
+        }
+        if (!waterCopyLayout_ || !waterCompositeLayout_ ||
+            !waterCopyPSO_ || !waterCompositePSO_) {
+            outError = "createBindingLayout/Pipeline failed for water composite"; return false;
+        }
+    }
+    if (!ssrDepthPSO_ || !ssrDownPSO_ || !ssrMipPSO_ || !ssrPSO_ || !ssrComposePSO_) {
+        outError = "createComputePipeline failed for ssr"; return false;
+    }
+    return true;
+}
+
+// SSR 全链（pulling 分支、params.ssr 开时调用；cache-viz 之后 tonemap 之前）。
+// 状态流：金字塔 UAV(UAV→SRV) / hdr RT→SRV(链读)→UAV(合成) / ssrColor_ UAV→SRV。
+// presentTonemap 自己把 hdr 转回 SRV（cache-viz 同款收尾口径）。
+bool Scene::drawSSR(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                    const FrameParams& params, std::string& outError) {
+    if (ssrFailed_) return true;   // 失败过：静默跳过（日志锚只打一次）
+    if (!t0Device_) { outError = "ssr: device not captured"; return false; }
+
+    // 懒建（管线一次；目标随视口）。
+    if (!ssrPSO_) {
+        if (!ensureSsrPipelines(t0Device_, shaderSuffix_.c_str(), outError)) {
+            ssrFailed_ = true;
+            nl::core::log::deviceError("ssr", outError);
+            return false;
+        }
+    }
+    {
+        std::string tErr;
+        if (!ensureSsrTargets(t0Device_, viewport.maxX - viewport.minX,
+                              viewport.maxY - viewport.minY, tErr)) {
+            ssrFailed_ = true;
+            nl::core::log::deviceError("ssr", tErr);
+            return false;
+        }
+    }
+
+    const std::uint32_t w = ssrW_, h = ssrH_;
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+
+    // ---- 常量写入（每帧全量覆写；volatile 纪律禁整块 memcpy 之外的字段重排）。
+    nl::math::Mat4 mvp{}, invMvp{}, vp{};
+    std::memcpy(mvp.m, params.mvp, sizeof(mvp.m));
+    invMvp = nl::math::inverseMat4(mvp);
+    std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+
+    {
+        float dc[24];
+        std::memcpy(dc, invMvp.m, sizeof(invMvp.m));               // [0..15]
+        dc[16] = params.eye[0]; dc[17] = params.eye[1]; dc[18] = params.eye[2];
+        dc[19] = 0.0f;
+        dc[20] = static_cast<float>(w); dc[21] = static_cast<float>(h);
+        dc[22] = 0.0f; dc[23] = 0.0f;
+        cmd->writeBuffer(ssrDepthCB_, dc, sizeof(dc));
+    }
+    {
+        float mc[52];
+        std::memcpy(mc, vp.m, sizeof(vp.m));                       // [0..15] fwdViewProj
+        std::memcpy(mc + 16, invMvp.m, sizeof(invMvp.m));          // [16..31] invMvpM
+        mc[32] = params.eye[0]; mc[33] = params.eye[1]; mc[34] = params.eye[2];
+        mc[35] = 24.0f;                                            // w = maxDist（米，演示场景量级）
+        mc[36] = 16.0f;                                            // x = 步数（8/12/16 档取 16）
+        mc[37] = 0.25f;                                            // y = 容差带 band（米）
+        mc[38] = 4.0f;                                             // z = mipScale（roughness×4 → 起始 mip）
+        mc[39] = static_cast<float>(ssrPyrMips_);                  // w = 金字塔 mip 数
+        mc[40] = static_cast<float>(kSsrChainMips + 1);            // x = 场景色链总 mip 数
+        mc[41] = 0.0f; mc[42] = 0.0f; mc[43] = 0.0f;
+        mc[44] = params.weatherZenith[0]; mc[45] = params.weatherZenith[1];
+        mc[46] = params.weatherZenith[2]; mc[47] = 0.0f;
+        mc[48] = params.weatherHorizon[0]; mc[49] = params.weatherHorizon[1];
+        mc[50] = params.weatherHorizon[2]; mc[51] = 0.0f;
+        cmd->writeBuffer(ssrConstantsCB_, mc, sizeof(mc));
+    }
+    const float cc[4] = {static_cast<float>(w), static_cast<float>(h), 0.0f, 0.0f};
+    cmd->writeBuffer(ssrComposeCB_, cc, sizeof(cc));
+
+    // ---- (1) 深度 → mip0（vis SRV 读；matResolve 已把 vis 置 SRV 态）。
+    if (!ssrDepthSet_ ) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(4, ssrDepthCB_))
+          .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, visBuffer_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, ssrDistPyramid_,
+                      nvrhi::Format::R32_FLOAT,
+                      nvrhi::TextureSubresourceSet(0, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrDepthSet_ = t0Device_->createBindingSet(sd, ssrDepthLayout_);
+        if (!ssrDepthSet_) { outError = "createBindingSet failed for ssr depth"; return false; }
+    }
+    cmd->setTextureState(ssrDistPyramid_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrDepthPSO_).addBindingSet(ssrDepthSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+    // ---- (2) 金字塔 min 链（逐级 dispatch；b5 常量逐级覆写；ComputeState
+    // 循环内新建——addBindingSet 追加语义同 PSO desc 坑）。
+    std::uint32_t pw = 1, ph = 1;
+    while (pw < w) pw <<= 1;
+    while (ph < h) ph <<= 1;
+    for (std::uint32_t L = 1; L < ssrPyrMips_; ++L) {
+        const float dc2[4] = {
+            static_cast<float>(pw >> (L - 1)), static_cast<float>(ph >> (L - 1)),
+            static_cast<float>(pw >> L),       static_cast<float>(ph >> L)};
+        cmd->writeBuffer(ssrDownCB_, dc2, sizeof(dc2));
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrDownPSO_).addBindingSet(ssrDownSets_[L]);
+        cmd->setComputeState(cstate);
+        const std::uint32_t tw = pw >> L, th = ph >> L;
+        if (tw == 0 || th == 0) break;
+        cmd->dispatch((tw + 7u) / 8u, (th + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrDistPyramid_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (3) 场景色均值链（hdr 当前态 = RenderTarget（matResolve 刚写完）
+    // → SRV 读 mip0 → 写链 mip1..N；NVRHI set require 自动补 UAV barrier）。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->setTextureState(ssrSceneMip_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    for (std::uint32_t L = 1; L <= kSsrChainMips; ++L) {
+        const std::uint32_t srcW = (L == 1) ? w : (w >> (L - 1));
+        const std::uint32_t srcH = (L == 1) ? h : (h >> (L - 1));
+        const std::uint32_t tw = w >> L, th = h >> L;
+        if (tw == 0 || th == 0) break;
+        const float dc2[4] = {static_cast<float>(srcW), static_cast<float>(srcH),
+                              static_cast<float>(tw), static_cast<float>(th)};
+        cmd->writeBuffer(ssrDownCB_, dc2, sizeof(dc2));
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrMipPSO_).addBindingSet(ssrMipSets_[L]);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((tw + 7u) / 8u, (th + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrSceneMip_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (4) march（set 懒建：纹理句柄可能因 resize 重建）。
+    if (!ssrSet_) {
+        nvrhi::BindingSetDesc sd;
+        addResolveSetItems(sd);
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, ssrConstantsCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(13, ssrDistPyramid_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(14, ssrSceneMip_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(0, ssrColor_));
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(6, waterConstants_));   // M-WAT1 恒绑
+        ssrSet_ = t0Device_->createBindingSet(sd, ssrLayout_);
+        if (!ssrSet_) { outError = "createBindingSet failed for ssr march"; return false; }
+    }
+    cmd->setTextureState(ssrColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrPSO_).addBindingSet(ssrSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+    cmd->setTextureState(ssrColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (5) 合成叠加回 hdrSceneColor_（UAV 全替换先例；hdr 留 UAV 态，
+    // presentTonemap 自己转回 SRV）。
+    if (!ssrComposeSet_ || ssrComposeSetHdr_ != hdrSceneColor_) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrComposeCB_))
+          .addItem(nvrhi::BindingSetItem::Texture_SRV(18, ssrColor_))
+          .addItem(nvrhi::BindingSetItem::Texture_UAV(3, hdrSceneColor_,
+                      nvrhi::Format::UNKNOWN,
+                      nvrhi::TextureSubresourceSet(0, 1, 0,
+                          nvrhi::TextureSubresourceSet::AllArraySlices)));
+        ssrComposeSet_ = t0Device_->createBindingSet(sd, ssrComposeLayout_);
+        if (!ssrComposeSet_) { outError = "createBindingSet failed for ssr compose"; return false; }
+        ssrComposeSetHdr_ = hdrSceneColor_;
+    }
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    {
+        nvrhi::ComputeState cstate;
+        cstate.setPipeline(ssrComposePSO_).addBindingSet(ssrComposeSet_);
+        cmd->setComputeState(cstate);
+        cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+    }
+
+    // ---- (6)+(7) M-WAT2（拍板 Q-WA7=A）：折射背景 copy + 水体全链合成。
+    // 仅 waterEnable_ 进（--ssr alone 到此为止 = M-WAT0 bytes 零漂移）；此时
+    // hdrSceneColor_ 水像素 = 黑占位（psMatResolve/csDirect 拍板 A 改写）。
+    if (waterEnable_) {
+        // (6) hdr → waterBg_：hdr 当前 UAV 态 → SRV 读；waterBg_ UAV 写。
+        // compose 之后 hdr 已含普通材质 SSR 反射叠加（合成插点口径不变）。
+        if (!waterCopySet_ || waterCopySetHdr_ != hdrSceneColor_) {
+            nvrhi::BindingSetDesc sd;
+            sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, ssrComposeCB_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(20, hdrSceneColor_))
+              .addItem(nvrhi::BindingSetItem::Texture_UAV(4, waterBg_));
+            waterCopySet_ = t0Device_->createBindingSet(sd, waterCopyLayout_);
+            if (!waterCopySet_) { outError = "createBindingSet failed for water copy"; return false; }
+            waterCopySetHdr_ = hdrSceneColor_;
+        }
+        cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::ShaderResource);
+        cmd->setTextureState(waterBg_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+        {
+            nvrhi::ComputeState cstate;
+            cstate.setPipeline(waterCopyPSO_).addBindingSet(waterCopySet_);
+            cmd->setComputeState(cstate);
+            cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+        }
+        cmd->setTextureState(waterBg_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+        // (7) csWaterComposite：反解 vis buffer 判水像素 → 折射/吸收/Fresnel/
+        // SSR 反射/泡沫 → 整体替换写回 hdrSceneColor_（UAV）。
+        if (!waterCompositeSet_ || waterCompositeSetBg_ != waterBg_) {
+            nvrhi::BindingSetDesc sd;
+            addResolveSetItems(sd);
+            sd.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, ssrConstantsCB_))
+              .addItem(nvrhi::BindingSetItem::ConstantBuffer(6, waterConstants_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(13, ssrDistPyramid_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(14, ssrSceneMip_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(18, ssrColor_))
+              .addItem(nvrhi::BindingSetItem::Texture_SRV(19, waterBg_))
+              .addItem(nvrhi::BindingSetItem::Texture_UAV(3, hdrSceneColor_,
+                          nvrhi::Format::UNKNOWN,
+                          nvrhi::TextureSubresourceSet(0, 1, 0,
+                              nvrhi::TextureSubresourceSet::AllArraySlices)));
+            waterCompositeSet_ = t0Device_->createBindingSet(sd, waterCompositeLayout_);
+            if (!waterCompositeSet_) { outError = "createBindingSet failed for water composite"; return false; }
+            waterCompositeSetBg_ = waterBg_;
+        }
+        cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+        {
+            nvrhi::ComputeState cstate;
+            cstate.setPipeline(waterCompositePSO_).addBindingSet(waterCompositeSet_);
+            cmd->setComputeState(cstate);
+            cmd->dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1u);
+        }
+        // hdr 留 UAV 态（presentTonemap 自己转回 SRV，compose 同款收尾口径）。
+
+        if (!waterCompositeLogged_) {
+            nl::core::log::infoCh("scene", "water: composite ready (refract+absorb+fresnel+ssr+foam)");
+            waterCompositeLogged_ = true;
+        }
+    }
+
+    if (!ssrLogged_) {
+        nl::core::log::infoCh("scene", "ssr: march chain ready ", w, "x", h,
+                            " pyrMips=", ssrPyrMips_,
+                            " chainMips=", kSsrChainMips + 1u,
+                            " steps=16 band=0.25m");
+        ssrLogged_ = true;
+    }
+    return true;
+}
+
+
 // M10.0：探针点可视化（tonemap 之后、swapchain 上）。PSO 对 swapchain 格式懒建
 //（blitPSO_ 同款）；atlas/prevDelta 的 UAV→SRV 转换由 dots set require 自动插。
 void Scene::drawProbeDots(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
@@ -5595,6 +6328,51 @@ void Scene::addResolveSetItems(nvrhi::BindingSetDesc& desc) const {
     desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(12, materialTable_));
 }
 
+// M-WAT1：WaterConstants（288B）每帧全量覆写（volatile CB 铁律）。波形参数 =
+// kWaterWaves 静态表（确定性常量）；time = params.waterTime（viewer 固定步进
+// 累积，GameClock::kStep 锚）。ω = √(g·k) 深水色散。--water 关不建不写本 CB。
+// 调用点 = visbuf 帧序列 raster 之前（VS 位移消费必须先于首次绑定使用）。
+void Scene::writeWaterConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
+    // 恒写：DX12 下绑定了 volatile CB 不写 = 「before it was written」错误；
+    // --water 关时内容无消费方（无水簇），time 走 params.waterTime 缺省 0。
+    // M-WAT3：21 → 22 × float4（wcH 岸线软化/泡沫参数；wcE/wcF/wcG 承 M-WAT2）。
+    float wc[88];   // 22 × float4
+    for (int i = 0; i < 8; ++i) {
+        const auto& w = kWaterWaves[i];
+        const float k = 6.2831853f / w.lambda;
+        const float omega = 3.1321f * sqrtf(k);   // √9.81 ≈ 3.1321（√(g·k)）
+        wc[i * 8 + 0] = w.dir[0]; wc[i * 8 + 1] = w.dir[1];
+        wc[i * 8 + 2] = w.amp;    wc[i * 8 + 3] = k;
+        wc[i * 8 + 4] = omega;    wc[i * 8 + 5] = w.steep;
+        wc[i * 8 + 6] = 0.0f;     wc[i * 8 + 7] = 0.0f;
+    }
+    wc[64] = params.waterTime;
+    wc[65] = kWaterBaseColor[0]; wc[66] = kWaterBaseColor[1]; wc[67] = kWaterBaseColor[2];
+    wc[68] = kWaterAmbient; wc[69] = kWaterSpecPow;
+    wc[70] = kWaterSpecGain;
+    float maxAmp = 0.0f;
+    for (const auto& w : kWaterWaves) maxAmp += w.amp;
+    wc[71] = maxAmp;
+    // M-WAT2：wcE = (ior, refractStrength, foamThreshold, foamGain)
+    wc[72] = kWaterIor;             wc[73] = kWaterRefractStrength;
+    wc[74] = kWaterFoamThreshold;   wc[75] = kWaterFoamGain;
+    // wcF = (absorb.rgb, thickMeters)
+    wc[76] = kWaterAbsorb[0]; wc[77] = kWaterAbsorb[1]; wc[78] = kWaterAbsorb[2];
+    wc[79] = kWaterThickMeters;
+    // wcG = (noReflect, floorY, floorHalf, 0)——noReflect = --water-noreflect
+    // 验收旗标（反射项归零）；floorY/Half = composite 池底解析折射平面参数。
+    wc[80] = params.waterNoReflect ? 1.0f : 0.0f;
+    wc[81] = kWaterFloorY; wc[82] = kWaterFloorHalf;
+    wc[83] = params.waterNoRefract ? 1.0f : 0.0f;
+    // wcH = (fadeDist, shoreFoamDist, shoreFoamGain, noShore)——M-WAT3 岸线
+    // 软化/泡沫参数；noShore = --water-noshore 验收旗标（fade 归 1 = 关闭）。
+    wc[84] = kWaterFadeDist;
+    wc[85] = kWaterShoreFoamDist;
+    wc[86] = kWaterShoreFoamGain;
+    wc[87] = params.waterNoShore ? 1.0f : 0.0f;
+    cmd->writeBuffer(waterConstants_, wc, sizeof(wc));
+}
+
 void Scene::writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& params) {
     // 写 b1 光照常量 + b2 尺寸常量（每帧；原 pulling 分支逐字搬移，两链共享）。
     LightConstants lc{};
@@ -5663,6 +6441,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, clusterMeta_))
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(4, visibleList_))
         .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visBuffer_));
+    rSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(2, waterConstants_));   // M-WAT1 恒绑
     visRasterSet_ = device->createBindingSet(rSet, visRasterLayout_);
     if (!visRasterSet_) { outError = "createBindingSet failed for vis raster"; return false; }
 
@@ -5682,6 +6461,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
         nvrhi::BindingSetDesc mSet;
         addResolveSetItems(mSet);
         mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(4, rasterFogCB_));   // M-WEA2 raster 直光雾
+        mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(5, waterConstants_));   // M-WAT1 恒绑
         matResolveSet_ = device->createBindingSet(mSet, matResolveLayout_);
         if (!matResolveSet_) { outError = "createBindingSet failed for mat resolve"; return false; }
     }
@@ -6130,23 +6910,9 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
 // 文件头 M-E1b.0 段（资源布局；多灯 = 方向灯数组，Carrot ModelRenderSystem 蓝本）。
 // ---------------------------------------------------------------------------
 
-// .glb 白名单：与 renderer.cpp 的 validAssetFileName 同一套逻辑（实现锁在那边
-// 的匿名 namespace 里，这里复制语义，两处注释互相指向不许漂移）。viewer 侧
-// 收集 SceneObjectDesc 时已按同规则校验，这里兜底拒绝脏数据（不静默）。
-static bool validGlbAssetName(const char* name) {
-    if (!name || !*name) return false;
-    const std::string s(name);
-    if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
-    if (s.find("..") != std::string::npos) return false;
-    const std::string ext = ".glb";
-    if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
-        return false;
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (u < 0x21 || u > 0x7E) return false;   // 可打印 ASCII，不含空格
-    }
-    return true;
-}
+// .glb 白名单：M-SC7 起实现单源 = nl::scene::validGlbAssetName（AssetName.hpp；
+// 本函数为历史语义复制点，收编后删除——viewer 侧收集 SceneObjectDesc 时已按
+// 同一 helper 校验，这里兜底拒绝脏数据（不静默）的口径不变）。
 
 // ---- M-E1b.4：阴影 CPU 数学辅助（全部纯 CPU、列主序、D3D 深度 z∈[0,1] 约定，
 // 与 nl::core::Matrix4 的口径一致；core 层相机只做轨道透视，这里独立实现
@@ -7210,6 +7976,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
                       const SceneObjectDesc* objects, std::uint32_t objectCount,
                       const SceneLightDesc* lights, std::uint32_t lightCount,
                       float ambient, const char* sceneName, std::string& outError) {
+    // M-SC7：可重入闸（拍板方案 A）。首次调用 = 释放空集（no-op）；脚本运行期
+    // attach/detach 后 viewer 帧边界重跑本函数，先释放上一份 GPU 资源再重建
+    //（此前 initScene 不可重入，二次调用会整份泄漏——本行就是防泄漏落点）。
+    shutdownEcsScene();
     shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     sceneMode_ = true;
     sceneAmbient_ = ambient;
@@ -7243,7 +8013,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     std::vector<std::string> batchFiles;
     std::vector<std::vector<std::uint32_t>> batchObjects;
     for (std::uint32_t i = 0; i < objectCount; ++i) {
-        if (!validGlbAssetName(objects[i].meshFile)) {
+        if (!nl::scene::validGlbAssetName(objects[i].meshFile)) {
             outError = std::string("invalid meshFile '") +
                        (objects[i].meshFile ? objects[i].meshFile : "<null>") +
                        "' (expected an ASCII *.glb file name in assets/models/)";
@@ -8328,6 +9098,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                                      static_cast<float>(params.visVizMode), 0.f};
                 cmd->writeBuffer(visConstants_, vc, sizeof(vc));
 
+                // M-WAT1：水体 CB（288B）——必须在 raster 之前写（vsVisRaster
+                // 的 Gerstner 位移是该 CB 的首次绑定消费；写晚了 NVRHI 报
+                // 「volatile constant buffer before it was written」实锤）。
+                writeWaterConstants(cmd, params);
+
                 // (3) clear = max。clearBufferUInt 把整块 buffer 的每个 u32 写成
                 // 0xFFFFFFFF → 每个 u64 = 0xFFFFFFFFFFFFFFFF = VIS_EMPTY；
                 // 任意真实写入的打包值都小于它，故不需要 UE 的 cluster+1 空哨兵。
@@ -8408,6 +9183,14 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         std::string cvErr;
                         if (!drawCacheViz(cmd, viewport, params, cvErr))
                             nl::core::log::deviceError("cache-viz", cvErr);
+                    }
+                    // M-WAT0（water 轨）：SSR 反射全链——合成叠加写回
+                    // hdrSceneColor_（UAV 全替换），presentTonemap 转回 SRV。
+                    // 关（缺省）= 一行不执行 = 冻结基线 bytes。
+                    if (params.ssr) {
+                        std::string sErr;
+                        if (!drawSSR(cmd, viewport, params, sErr))
+                            nl::core::log::deviceError("ssr", sErr);
                     }
                     // T0 T2：HDR → swapchain 直通合成（reference/shadow 走自己的
                     // 呈现路径，tonemap 只挂在本分支，避免双重呈现）。
@@ -9832,6 +10615,48 @@ void Scene::drawParticles(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     particles_.draw(cmd, framebuffer, viewport, params, shaderSuffix_.c_str());
 }
 
+// M-SC7：ECS 场景资源子集释放（shutdownEcsScene）。清单 = initScene 建立的
+// 全部句柄（场景管线/batch/灯缓冲/中性兜底纹理/阴影链 + 计数归零）。两个消费点：
+//   1. Scene::shutdown()（原 M-E1b.0 块原位收编，语义逐位不变）；
+//   2. Scene::initScene() 开头（可重入：运行期脚本 attach/detach 后 viewer 帧边界
+//      整场景重建，拍板方案 A——initScene 曾不可重入，重复调用会泄漏 GPU 资源）。
+// device 存活期调用纪律不变（P9 V2 中性纹理 UAF 口径，见块内注释）。
+void Scene::shutdownEcsScene() {
+    sceneMode_ = false;
+    vsScene_ = nullptr;
+    psScene_ = nullptr;
+    sceneLights_ = nullptr;
+    sceneInputLayout_ = nullptr;
+    sceneBindingLayout_ = nullptr;
+    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
+    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
+    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
+    // 仅创建不绑定不写入也复现，删创建即 clean）。
+    sceneNeutralNormal_ = nullptr;
+    sceneNeutralMR_ = nullptr;
+    sceneNeutralOccl_ = nullptr;
+    sceneNeutralEmissive_ = nullptr;
+    sceneBatches_.clear();
+    pipelineSceneBack_ = nullptr;
+    pipelineSceneNone_ = nullptr;
+    pipelineSceneWireBack_ = nullptr;
+    pipelineSceneWireNone_ = nullptr;
+    // M-E1b.4：阴影资源随场景一并清空（数组句柄置空 + 计数/矩阵归零）。
+    vsShadow_ = nullptr;
+    psShadow_ = nullptr;
+    shadowInputLayout_ = nullptr;
+    shadowBindingLayout_ = nullptr;
+    shadowLightCB_ = nullptr;
+    shadowConstants_ = nullptr;
+    shadowMap_ = nullptr;
+    for (auto& fb : shadowFb_) fb = nullptr;
+    pipelineShadow_ = nullptr;
+    shadowCount_ = 0;
+    sceneAmbient_ = 0.28f;
+    sceneLightCount_ = 0;
+    sceneInstanceCount_ = 0;
+}
+
 void Scene::shutdown() {
     // M8.1：TLAS 资源（AS 句柄 + 探针管线，device 存活期释放）。
     tlasReady_ = false;
@@ -10068,34 +10893,11 @@ void Scene::shutdown() {
     clusterBlas_.clear();
     clusterBlasVB_ = nullptr;
     clusterBlasIB_ = nullptr;
-    // M-E1b.0：ECS 场景资源（先于既有路径清空；任何模式下都安全）。
-    sceneMode_ = false;
-    vsScene_ = nullptr;
-    psScene_ = nullptr;
-    sceneLights_ = nullptr;
-    sceneInputLayout_ = nullptr;
-    sceneBindingLayout_ = nullptr;
-    // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
-    // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
-    // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：
-    // 仅创建不绑定不写入也复现，删创建即 clean）。
-    sceneNeutralNormal_ = nullptr;
-    sceneNeutralMR_ = nullptr;
-    sceneNeutralOccl_ = nullptr;
-    sceneNeutralEmissive_ = nullptr;
-    sceneBatches_.clear();
-    pipelineSceneBack_ = nullptr;
-    pipelineSceneNone_ = nullptr;
-    pipelineSceneWireBack_ = nullptr;
-    pipelineSceneWireNone_ = nullptr;
-    // M-E1b.4：阴影资源随场景一并清空（数组句柄置空 + 计数/矩阵归零）。
-    vsShadow_ = nullptr;
-    psShadow_ = nullptr;
-    shadowInputLayout_ = nullptr;
-    shadowBindingLayout_ = nullptr;
-    shadowLightCB_ = nullptr;
-    shadowConstants_ = nullptr;
-    shadowMap_ = nullptr;
+    // M-SC7：ECS 场景资源子集释放（清单单源在 shutdownEcsScene，initScene
+    // 可重入与 shutdown 共用同一份——见该方法注释）。M-E1b.0/E1b.4/P9 V2
+    // 中性纹理与阴影组已收编其内（merge 冲突解）；master 侧 S15 VSM/HZB/分配器
+    // 组不在其内，就地保留。
+    shutdownEcsScene();
     // M15.0：VSM 资源随场景一并清空。
     vsmPagePool_ = nullptr;
     vsmPageTable_ = nullptr;
@@ -10142,12 +10944,6 @@ void Scene::shutdown() {
     vsmLightInit_ = false;
     vsmReady_ = false;
     vsmLogged_ = false;
-    for (auto& fb : shadowFb_) fb = nullptr;
-    pipelineShadow_ = nullptr;
-    shadowCount_ = 0;
-    sceneAmbient_ = 0.28f;
-    sceneLightCount_ = 0;
-    sceneInstanceCount_ = 0;
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
@@ -10258,6 +11054,7 @@ void Scene::shutdown() {
     visVizLayout_ = nullptr;
     visBuffer_ = nullptr;
     visConstants_ = nullptr;
+    waterConstants_ = nullptr;   // M-WAT1（Scene 新增 GPU 资源必须同步 shutdown 清单）
     vsVisRaster_ = nullptr;
     psVisRaster_ = nullptr;
     vsVisViz_ = nullptr;
@@ -10279,6 +11076,54 @@ void Scene::shutdown() {
     for (auto& t : matBaseColor_) t = nullptr;
     for (auto& t : matMR_) t = nullptr;
     materialTable_ = nullptr;
+    // M-WAT0（water 轨）：SSR 资源 shutdown 清单同步（铁律：Scene 新增 GPU
+    // 资源必须进 shutdown——S15 UAF 教训，~Scene 时 device 已死）。
+    ssrDistPyramid_ = nullptr;
+    ssrSceneMip_ = nullptr;
+    ssrColor_ = nullptr;
+    // M-WAT2：折射背景 copy + composite 资源同步进 shutdown 清单（S15 UAF 教训：
+    // Scene 新增 GPU 资源必须在此释放——~Scene 时 VK device 已死）。
+    waterBg_ = nullptr;
+    waterCompositeSet_ = nullptr;
+    waterCopySet_ = nullptr;
+    waterCompositeSetBg_ = nullptr;
+    waterCopySetHdr_ = nullptr;
+    ssrDownSets_.clear();
+    ssrMipSets_.clear();
+    csSsrDepth_ = nullptr;
+    csSsrDown_ = nullptr;
+    csSsrMip_ = nullptr;
+    csSsr_ = nullptr;
+    csSsrCompose_ = nullptr;
+    csWaterCopy_ = nullptr;          // M-WAT2 shutdown 清单
+    csWaterComposite_ = nullptr;
+    ssrDepthLayout_ = nullptr;
+    ssrDownLayout_ = nullptr;
+    ssrMipLayout_ = nullptr;
+    ssrComposeLayout_ = nullptr;
+    ssrLayout_ = nullptr;
+    waterCopyLayout_ = nullptr;      // M-WAT2 shutdown 清单
+    waterCompositeLayout_ = nullptr;
+    ssrDepthPSO_ = nullptr;
+    ssrDownPSO_ = nullptr;
+    ssrMipPSO_ = nullptr;
+    ssrPSO_ = nullptr;
+    ssrComposePSO_ = nullptr;
+    waterCopyPSO_ = nullptr;         // M-WAT2 shutdown 清单
+    waterCompositePSO_ = nullptr;
+    ssrDepthSet_ = nullptr;
+    ssrSet_ = nullptr;
+    ssrComposeSet_ = nullptr;
+    ssrComposeSetHdr_ = nullptr;
+    ssrDepthCB_ = nullptr;
+    ssrDownCB_ = nullptr;
+    ssrConstantsCB_ = nullptr;
+    ssrComposeCB_ = nullptr;
+    ssrW_ = 0;
+    ssrH_ = 0;
+    ssrPyrMips_ = 0;
+    ssrFailed_ = false;
+    ssrLogged_ = false;
     for (auto& b : modelBatches_) {
         b.set = nullptr;
         b.lightConstants = nullptr;

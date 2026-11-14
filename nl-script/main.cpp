@@ -37,16 +37,36 @@
 //        s8f 连续 reload x3 无泄漏（GetProcessHandleCount 漂移阈值）/
 //        s8g unloadScript weakref 校验（完全卸载）/ s8h 卸载后命令 UnknownCommand
 //            + C++ 状态仍可用（ECS 导出/内建命令）
+//     s9 Time/Input/Log 绑定（M-SC5，需第 5 个参数给出 timeinput 示例工程目录）：
+//        s9a C# 读时钟锚（tick x3）+ SetState 控制读回 + 哨兵语义（-1 不变）/
+//        s9a ActionFind 三型冻结值（W/D 喂键 update 后 Bool/Float/Vec2）+
+//            NoAction 负向（不存在 / 类型不符）+ KeyIsDown（含越界键码防御）/
+//        s9a Log.Write 通道 "script" + level 越界 BadArg + SetFilter 生效与
+//            非法指令显式报错（error 带原因）/
+//        s9b 解绑路径：timeSetClock/inputSetState/inputSetActionMap(nullptr) ->
+//            NoClock/NoSource（不隐式建表拍板），Log 全局面不受影响
+//     s10 Camera 绑定（M-SC6，需第 6 个参数给出 camera 示例工程目录）：
+//        s10a 假适配源罐头读回锚（GetPose eye/yaw/pitch/fov/mode）+ SetPose rc
+//            与 C++ 捕获核 {4,5,6,45,15} + BadArg（eye null）+ fov 写/clamp 读回
+//            （500 -> 120，clamp [20,120] 与 viewer 适配源同构）/
+//        s10b track 模式（mode=3）：GetPose 照常 + SetPose ModeUnsupported（轨迹
+//            数据主权）+ fov 照常写（模式统一生效）/
+//        s10c 解绑路径：cameraSetSource(nullptr) -> NoSource / GetFov NaN
+//            （f32 返回无 rc 通道账本特例）
 //
 // 用法示例：
-//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap
+//   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput script/examples/camera
 //   nl-script run script/examples/hello --args ok
 //   nl-script run script/examples/console --api
 //   nl-script run script/examples/ecs --api
 //   nl-script check script/examples/hello
 
 #include "nl/core/log.hpp"
+#include "nl/core/game_clock.hpp"   // s9 Time 导出验收（M-SC5）
+#include "nl/core/input.hpp"        // s9 Input 导出验收（InputState 三态表）
+#include "nl/core/action_map.hpp"   // s9 ActionMap（注意：不在 input.hpp——动作映射独立头）
 #include "nl/core/console.hpp"
+#include "nl/physics/World.hpp"     // s12 载具域验收（M-SC8：DebugScene 训练场）
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"
@@ -54,6 +74,7 @@
 #include "nl/script/ScriptHost.hpp"
 
 #include <chrono>
+#include <cmath>       // s11 std::fabs（M-SC7 终态核容差）
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -227,7 +248,8 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 // ---- selftest ----
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
-                const fs::path& bootstrapDir) {
+                const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
+                const fs::path& modelDir, const fs::path& driveDir, const fs::path& propsDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -825,6 +847,577 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s9 Time / Input / Log 绑定（M-SC5；timeDir 为空 = 跳过，同 s6/s7/s8 口径）----
+    if (!timeDir.empty()) {
+        if (!dotnetBuild(timeDir.string(), {})) {
+            expectTrue(false, "s9-pre dotnet build timeinput example");
+            std::printf("nl-script selftest: FAIL (time/input/log binding build)\n");
+            return 1;
+        }
+        auto tso = locateOutput(timeDir, {});
+        expectTrue(tso.has_value(), "s9-pre locate TimeInputScript build output");
+        if (tso) {
+            const std::string tiType = "NlScript.Examples.TimeInputScript, " + tso->assemblyName;
+            nl::script::EntryPointFn boundEntry = nullptr, unboundEntry = nullptr;
+            result = vm->getEntryPoint(tso->assemblyDll.string(), tiType, "BoundProbe", &boundEntry);
+            result = vm->getEntryPoint(tso->assemblyDll.string(), tiType, "UnboundProbe", &unboundEntry);
+            expectTrue(result.ok && unboundEntry != nullptr, "s9-pre locate binding entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry9 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 宿主活实例（static：selftest 进程生命周期；生产宿主同款时序：
+                // 建实例 -> 喂状态 -> 绑定 -> 调脚本入口。ActionMap 未绑 = NoSource
+                // 的负向语义在 s9b 解绑路径验收——不隐式建表拍板口径）。
+                static nl::core::GameClock clock9;
+                static nl::core::InputState input9;
+                static nl::core::ActionMap map9;
+                // 动作面（键码 = M-I0 selftest 锚定数值：W=87 S=83 A=65 D=68）
+                const auto aBool9 = map9.define("s9bool", nl::core::ActionMap::Type::Bool);
+                map9.bindKey(aBool9, 87);
+                const auto aFloat9 = map9.define("s9float", nl::core::ActionMap::Type::Float);
+                map9.bindKey(aFloat9, 87, 1.0f);
+                map9.bindKey(aFloat9, 83, -1.0f);
+                const auto aVec9 = map9.define("s9vec2", nl::core::ActionMap::Type::Vec2);
+                map9.bindAxisKey(aVec9, 68, 0, 1.0f);
+                map9.bindAxisKey(aVec9, 65, 0, -1.0f);
+                input9.feedKey(87, true);
+                input9.feedKey(68, true);
+                map9.update(input9);   // 冻结（ActionMap 帧节奏口径；脚本读冻结值）
+                nl::script::timeSetClock(&clock9);
+                nl::script::inputSetState(&input9);
+                nl::script::inputSetActionMap(&map9);
+
+                // 时钟锚：tick(16.6667ms) x3 → tickCount=3 / simTime=0.05（double 确定性）
+                for (int i = 0; i < 3; ++i) clock9.tick(16.6667, [](double, std::uint64_t) {});
+
+                // s9a：绑定路径全断言（C# 读锚 + 控制 + NoAction/BadFilter 负向）
+                {
+                    auto [hit, ret] = callEntry9(boundEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s9a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s9a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // C++ 侧终态核（脚本 SetState(0,-1)：unpause + 倍率 -1 哨兵保持 2.5）
+                expectTrue(!clock9.paused(), "s9a2 clock unpaused after script SetState(0,-1)");
+                expectTrue(clock9.timeScale() == 2.5, "s9a2 timeScale kept 2.5 (-1 sentinel)");
+
+                // setFilter 全局生效核（C# SetFilter("nl:warn") → 全局缺省 Warn）+ 还原
+                expectTrue(nl::core::log::level() == nl::core::log::Level::Warn,
+                           "s9a3 C# SetFilter(\"nl:warn\") -> global default Warn");
+                expectTrue(nl::core::log::filterInstruction() == "nl:warn",
+                           "s9a3 filterInstruction readback norm form");
+                nl::core::log::setFilter("nl:info");   // 还原（进程卫生，s9b 前复位）
+
+                // s9b：解绑路径（nullptr = NoClock/NoSource；Log 全局面不受影响）
+                nl::script::timeSetClock(nullptr);
+                nl::script::inputSetState(nullptr);
+                nl::script::inputSetActionMap(nullptr);
+                {
+                    auto [hit, ret] = callEntry9(unboundEntry);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s9b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
+    // ---- s10 Camera 绑定（M-SC6；camDir 为空 = 跳过，同 s6~s9 口径）----
+    if (!camDir.empty()) {
+        if (!dotnetBuild(camDir.string(), {})) {
+            expectTrue(false, "s10-pre dotnet build camera example");
+            std::printf("nl-script selftest: FAIL (camera binding build)\n");
+            return 1;
+        }
+        auto cso = locateOutput(camDir, {});
+        expectTrue(cso.has_value(), "s10-pre locate CameraScript build output");
+        if (cso) {
+            const std::string camType = "NlScript.Examples.CameraScript, " + cso->assemblyName;
+            nl::script::EntryPointFn camBound = nullptr, camTrack = nullptr, camUnbound = nullptr;
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "BoundProbe", &camBound);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "TrackProbe", &camTrack);
+            result = vm->getEntryPoint(cso->assemblyDll.string(), camType, "UnboundProbe", &camUnbound);
+            expectTrue(result.ok && camUnbound != nullptr, "s10-pre locate camera entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry10 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 假适配源（语义与 viewer 适配源同构：fov clamp [20,120] / track 拒写 /
+                // 罐头读回）+ 捕获槽（C++ 侧终态核：脚本写进适配源的值逐位核回）。
+                static struct FakeCamSource {
+                    float eye[3] = {1.5f, 2.5f, 3.5f};
+                    float yaw = 30.0f, pitch = -10.0f, fov = 60.0f;
+                    int mode = 0;
+                    float lastSetEye[3] = {0.0f, 0.0f, 0.0f};
+                    float lastYaw = 0.0f, lastPitch = 0.0f;
+                    static void GetPose(void* ctx, float outEye[3], float* oy, float* op,
+                                        float* of, int* om) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        outEye[0] = s.eye[0]; outEye[1] = s.eye[1]; outEye[2] = s.eye[2];
+                        if (oy) *oy = s.yaw;
+                        if (op) *op = s.pitch;
+                        if (of) *of = s.fov;
+                        if (om) *om = s.mode;
+                    }
+                    static int SetPose(void* ctx, const float e[3], float y, float p) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        if (s.mode == 3) return nl::script::kCamModeUnsupported;
+                        s.lastSetEye[0] = e[0]; s.lastSetEye[1] = e[1]; s.lastSetEye[2] = e[2];
+                        s.lastYaw = y; s.lastPitch = p;
+                        return nl::script::kCamOk;
+                    }
+                    static float GetFov(void* ctx) { return static_cast<FakeCamSource*>(ctx)->fov; }
+                    static void SetFov(void* ctx, float f) {
+                        auto& s = *static_cast<FakeCamSource*>(ctx);
+                        s.fov = f < 20.0f ? 20.0f : (f > 120.0f ? 120.0f : f);
+                    }
+                } fakeCam;
+                nl::script::CameraSource camSrc{&fakeCam, &FakeCamSource::GetPose,
+                                                &FakeCamSource::SetPose, &FakeCamSource::GetFov,
+                                                &FakeCamSource::SetFov};
+                nl::script::cameraSetSource(&camSrc);
+
+                // s10a：绑定路径全断言（罐头读回 + 写路径 rc + fov clamp 读回链）
+                {
+                    auto [hit, ret] = callEntry10(camBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s10a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // C++ 侧终态核：脚本 SetPose({4,5,6},45,15) 逐位落进适配源捕获槽
+                expectTrue(fakeCam.lastSetEye[0] == 4.0f && fakeCam.lastSetEye[1] == 5.0f &&
+                               fakeCam.lastSetEye[2] == 6.0f,
+                           "s10a C++ capture: script SetPose eye {4,5,6}");
+                expectTrue(fakeCam.lastYaw == 45.0f && fakeCam.lastPitch == 15.0f,
+                           "s10a C++ capture: yaw 45 / pitch 15");
+                expectTrue(fakeCam.fov == 120.0f, "s10a C++ capture: SetFov(500) clamped -> 120");
+
+                // s10b：track 模式（mode=3）——读照常 / 写位姿 ModeUnsupported / fov 照常
+                fakeCam.mode = 3;
+                {
+                    auto [hit, ret] = callEntry10(camTrack);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10b C# TrackProbe -> 0");
+                }
+                expectTrue(fakeCam.fov == 60.0f, "s10b C++ capture: SetFov(60) ok in track (mode-uniform)");
+
+                // s10c：解绑路径（nullptr = NoSource / GetFov NaN）
+                fakeCam.mode = 0;
+                nl::script::cameraSetSource(nullptr);
+                {
+                    auto [hit, ret] = callEntry10(camUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s10c C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
+    // ---- s11 模型挂载（M-SC7；modelDir 为空 = 跳过，同 s6~s10 口径）----
+    if (!modelDir.empty()) {
+        if (!dotnetBuild(modelDir.string(), {})) {
+            expectTrue(false, "s11-pre dotnet build model example");
+            std::printf("nl-script selftest: FAIL (model binding build)\n");
+            return 1;
+        }
+        auto mso = locateOutput(modelDir, {});
+        expectTrue(mso.has_value(), "s11-pre locate ModelScript build output");
+        if (mso) {
+            const std::string modelType = "NlScript.Examples.ModelScript, " + mso->assemblyName;
+            nl::script::EntryPointFn mBound = nullptr, mError = nullptr,
+                                     mUnbound = nullptr, mDetach = nullptr;
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "BoundProbe", &mBound);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "ErrorProbe", &mError);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "UnboundProbe", &mUnbound);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), modelType, "DetachProbe", &mDetach);
+            expectTrue(result.ok && mDetach != nullptr, "s11-pre locate model entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry11 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 罐头 World（绑定脚本生命周期；与 s8 world8 独立——本段实体名空间自洽）
+                static nl::scene::World world11;
+                nl::script::ecsSetWorld(&world11);
+
+                // s11a：挂载 + 读回 + 留态（C++ 终态核：ModelComponent 落进罐头 World）
+                {
+                    auto [hit, ret] = callEntry11(mBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s11a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // newEntity 延迟落表（entitiesToAdd_ 队列，tick/flush 才进 entities_）
+                // ——罐头 World 没 tick，C++ findEntityByName / C# FindByName 都扫
+                // entities_，不 flush 就永远看不到。宿主显式 flush（ecsFlush 语义）。
+                world11.flushEntityCreationAndRemoval();
+                const nl::scene::ModelComponent* probeModel = nullptr;
+                if (const auto e = world11.findEntityByName("probeModel"))
+                    probeModel = world11.getComponent<nl::scene::ModelComponent>(e->getID());
+                expectTrue(probeModel != nullptr && probeModel->meshFile == "cube.glb",
+                           "s11a C++ capture: probeModel ModelComponent meshFile=cube.glb");
+                expectTrue(probeModel != nullptr &&
+                           std::fabs(probeModel->tint.x - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->tint.y - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->tint.z - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->roughness - 1.0f) < 1e-5f &&
+                           std::fabs(probeModel->metallic - 0.0f) < 1e-5f,
+                           "s11a C++ capture: default tint(1,1,1)/roughness 1/metallic 0");
+
+                // s11b：错误码逐一对齐（NoEntity=2 / BadArg=4 / BadAsset=6 /
+                // NoTransform=5 / Component=3——重复挂拒绝不改状态）
+                {
+                    auto [hit, ret] = callEntry11(mError);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11b C# ErrorProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s11b detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s11c：解绑路径（nullptr = NoWorld 三导出对齐，不崩）→ 重绑
+                nl::script::ecsSetWorld(nullptr);
+                {
+                    auto [hit, ret] = callEntry11(mUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11c C# UnboundProbe -> 0");
+                }
+                nl::script::ecsSetWorld(&world11);
+
+                // s11d：摘除路径 + C++ 终态核（Model 摘净、Transform 留守）
+                {
+                    auto [hit, ret] = callEntry11(mDetach);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s11d C# DetachProbe -> 0");
+                }
+                bool modelGone = true, transformKept = false;
+                if (const auto e = world11.findEntityByName("probeModel")) {
+                    modelGone = world11.getComponent<nl::scene::ModelComponent>(e->getID()) == nullptr;
+                    transformKept = world11.getComponent<nl::scene::TransformComponent>(e->getID()) != nullptr;
+                }
+                expectTrue(modelGone, "s11d C++ capture: probeModel ModelComponent removed");
+                expectTrue(transformKept, "s11d C++ capture: TransformComponent kept after detach");
+            }
+        }
+    }
+
+    // ---- s12 载具域（M-SC8；driveDir 为空 = 跳过，同 s6~s11 口径）----
+    // 操作目标 = 真训练场：nl::physics::DebugScene build(2)（Jolt 已链 nl_core），
+    // driveSetScene 直持指针（拍板 Q-SC8-1 A'）；C++ 终态核与脚本共用同一实例。
+    if (!driveDir.empty()) {
+        if (!dotnetBuild(driveDir.string(), {})) {
+            expectTrue(false, "s12-pre dotnet build drive example");
+            std::printf("nl-script selftest: FAIL (drive binding build)\n");
+            return 1;
+        }
+        auto dso = locateOutput(driveDir, {});
+        expectTrue(dso.has_value(), "s12-pre locate DriveScript build output");
+        if (dso) {
+            const std::string driveType = "NlScript.Examples.DriveScript, " + dso->assemblyName;
+            nl::script::EntryPointFn dBound = nullptr, dUnbound = nullptr;
+            result = vm->getEntryPoint(dso->assemblyDll.string(), driveType, "BoundProbe", &dBound);
+            result = vm->getEntryPoint(dso->assemblyDll.string(), driveType, "UnboundProbe", &dUnbound);
+            expectTrue(result.ok && dUnbound != nullptr,
+                       "s12-pre locate drive entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry12 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 真训练场（scenario 2：slot0 = 既有单车）；C++ 终态核同实例。
+                nl::physics::DebugScene scene12;
+                std::string err12;
+                expectTrue(scene12.build(2, 12345, &err12), "s12-pre DebugScene build(2)");
+                nl::script::driveSetScene(&scene12);
+
+                // s12a：正向全链（加车 slot1 / 四输入 / FullPose 含 out-NULL 路径 /
+                // teleport 逐位读回 / tombstone 移除后三导出 NoSlot——脚本内断言）
+                {
+                    auto [hit, ret] = callEntry12(dBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s12a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s12a detail: hit=%d ret=%d\n", hit, ret);
+                }
+                // C++ 终态核：slot0 既有单车健在（tombstone 不波及）；脚本车已移除
+                expectTrue(scene12.vehicleChassisState(0).valid,
+                           "s12a C++ capture: slot0 (built-in car) still valid");
+                expectTrue(!scene12.vehicleChassisState(1).valid,
+                           "s12a C++ capture: script car tombstoned (slot1 invalid)");
+
+                // s12b：未绑路径（driveSetScene(nullptr) → 五导出全 NoScene）
+                nl::script::driveSetScene(nullptr);
+                {
+                    auto [hit, ret] = callEntry12(dUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s12b C# UnboundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s12b detail: hit=%d ret=%d\n", hit, ret);
+                }
+            }
+        }
+    }
+
+    // ---- s13 属性面板（M-SC10；propsDir 为空 = 跳过，同 s6~s12 口径）----
+    // 载体 = 入口脚本类 [Prop] 静态字段（拍板 Q-SC10-1 A）；描述表 = C# 反射推
+    // POD（propsPushBegin/propsDescAdd，gen 计数）；值通道 = BootTickPtr 协议
+    // 复用（PropGet/PropSet 可选契约，ScriptHost 生命周期纪律同 tickFn_）。
+    if (!propsDir.empty()) {
+        if (!dotnetBuild(propsDir.string(), {})) {
+            expectTrue(false, "s13-pre dotnet build props example");
+            std::printf("nl-script selftest: FAIL (props binding build)\n");
+            return 1;
+        }
+        auto pso = locateOutput(propsDir, {});
+        expectTrue(pso.has_value(), "s13-pre locate PropsScript build output");
+        if (pso) {
+            auto& host13 = nl::script::ScriptHost::get();
+
+            // s13-pre：装载前表态（进程内无 props 推送）
+            expectTrue(nl::script::scriptProps().empty(),
+                       "s13-pre descriptor table empty before load");
+            expectTrue(!host13.hasProps(),
+                       "s13-pre props channel not attached before load");
+
+            // 热更段热拷贝工程（s8b 同款：只拷源文件 + csproj 引用绝对化）
+            std::error_code ec;
+            const fs::path hotPropsRoot = fs::temp_directory_path(ec) /
+                ("nl-script-selftest-props-" + std::to_string(_getpid()));
+            fs::remove_all(hotPropsRoot, ec);
+            fs::create_directories(hotPropsRoot / "props", ec);
+            for (const auto& entry : fs::directory_iterator(propsDir, ec)) {
+                if (!entry.is_regular_file(ec)) continue;
+                fs::copy(entry.path(), hotPropsRoot / "props" / entry.path().filename(), ec);
+            }
+            expectTrue(!ec, "s13-pre copy props project to temp (sources only)");
+            const fs::path apiCsproj13 = propsDir / "../../script-api/NlScriptApi.csproj";
+            const fs::path hotPropsCsproj = hotPropsRoot / "props" / "PropsScript.csproj";
+            {
+                std::ifstream cin13(hotPropsCsproj, std::ios::binary);
+                std::string csproj13((std::istreambuf_iterator<char>(cin13)),
+                                     std::istreambuf_iterator<char>());
+                cin13.close();
+                const std::size_t refPos13 =
+                    csproj13.find("../../script-api/NlScriptApi.csproj");
+                expectTrue(refPos13 != std::string::npos,
+                           "s13-pre locate ProjectReference in copied csproj");
+                if (refPos13 != std::string::npos) {
+                    csproj13.replace(refPos13, strlen("../../script-api/NlScriptApi.csproj"),
+                                     apiCsproj13.lexically_normal().string());
+                    std::ofstream cout13(hotPropsCsproj, std::ios::binary | std::ios::trunc);
+                    cout13 << csproj13;
+                    cout13.close();
+                }
+            }
+            const fs::path hotProps = hotPropsRoot / "props";
+            expectTrue(dotnetBuild(hotProps.string(), {}), "s13-pre dotnet build hot props (v1)");
+            auto hotPso = locateOutput(hotProps, {});
+            expectTrue(hotPso.has_value(), "s13-pre locate hot PropsScript v1 output");
+
+            if (hotPso) {
+                const std::string propsType =
+                    "NlScript.Examples.PropsScript, " + hotPso->assemblyName;
+
+                // s13a：装载（Entry 推表）→ 描述表 POD 断言 + 通道接通
+                expectTrue(host13.loadScript(hotPso->assemblyDll.string(), propsType).ok,
+                           "s13a loadScript (Entry pushes [Prop] descriptor table)");
+                const auto& tbl13 = nl::script::scriptProps();
+                expectTrue(tbl13.size() == 4,
+                           "s13a descriptor table has 4 rows ([Prop] static fields)");
+                expectTrue(nl::script::scriptPropsGen() >= 1,
+                           "s13a descriptor gen bumped by pushBegin");
+                expectTrue(host13.hasProps(),
+                           "s13a props channel attached (PropGet/PropSet resolved)");
+                if (tbl13.size() == 4) {
+                    const auto& d0 = tbl13[0];
+                    expectTrue(d0.kind == nl::script::kPropKindFloat &&
+                                   std::string(d0.name) == "Speed" &&
+                                   d0.min == 0.f && d0.max == 10.f && d0.def == 3.5f,
+                               "s13a row0 Speed kind/Range/default bits");
+                    const auto& d1 = tbl13[1];
+                    expectTrue(d1.kind == nl::script::kPropKindInt &&
+                                   std::string(d1.name) == "Count" &&
+                                   d1.min == 0.f && d1.max == 100.f && d1.def == 7.f,
+                               "s13a row1 Count kind/Range/default bits");
+                    const auto& d2 = tbl13[2];
+                    expectTrue(d2.kind == nl::script::kPropKindBool &&
+                                   std::string(d2.name) == "Enabled" && d2.def == 1.f,
+                               "s13a row2 Enabled kind/default bits");
+                    const auto& d3 = tbl13[3];
+                    expectTrue(d3.kind == nl::script::kPropKindString &&
+                                   std::string(d3.name) == "Label",
+                               "s13a row3 Label kind bits");
+                }
+
+                // s13a2：值通道往返（float/int/bool/string；C# 静态字段为真源）
+                {
+                    std::uint8_t buf8[8] = {};
+                    float fv = 0.f;
+                    expectTrue(host13.propGet(0, buf8, sizeof buf8).ok, "s13a2 propGet float ok");
+                    std::memcpy(&fv, buf8 + 4, 4);
+                    expectTrue(fv == 3.5f, "s13a2 Speed initial value 3.5 via channel");
+
+                    fv = 7.25f;
+                    std::memcpy(buf8 + 4, &fv, 4);
+                    expectTrue(host13.propSet(0, buf8, sizeof buf8).ok, "s13a2 propSet float ok");
+                    std::memset(buf8, 0, sizeof buf8);
+                    expectTrue(host13.propGet(0, buf8, sizeof buf8).ok, "s13a2 propGet float after set");
+                    std::memcpy(&fv, buf8 + 4, 4);
+                    expectTrue(fv == 7.25f, "s13a2 Speed roundtrip 7.25");
+
+                    int iv = 42;
+                    std::memcpy(buf8 + 4, &iv, 4);
+                    expectTrue(host13.propSet(1, buf8, sizeof buf8).ok, "s13a2 propSet int ok");
+                    // C# 真源核：ReadField 探针经 bootstrap BootCall 读静态字段
+                    //（collectible 正本——禁 getEntryPoint 直拉脚本 dll，M-GL4 口径）。
+                    std::int32_t fieldVal = 0;
+                    {
+                        struct ReadArgs { std::int32_t idx; std::int32_t pad; void* outRaw; }
+                        ra{1, 0, &fieldVal};   // ABI：idx@0 / outRaw@8（PropsScript.cs 同文锚）
+                        std::int32_t retR = 0;
+                        expectTrue(vm->scriptCall(propsType, "ReadField",
+                                                  &ra, sizeof ra, &retR).ok &&
+                                   retR == 0 && fieldVal == 42,
+                                   "s13a2 C# Count static field == 42 (cross-source via ReadField)");
+                    }
+                    std::memcpy(buf8 + 4, &(iv = 0), 4);
+                    expectTrue(host13.propSet(2, buf8, sizeof buf8).ok, "s13a2 propSet bool 0 ok");
+                    expectTrue(host13.propGet(2, buf8, sizeof buf8).ok, "s13a2 propGet bool ok");
+                    int rawInt13 = 0;
+                    std::memcpy(&rawInt13, buf8 + 4, 4);
+                    expectTrue(rawInt13 == 0, "s13a2 Enabled roundtrip false");
+
+                    char sbuf[260] = {};
+                    std::memcpy(sbuf + 4, "hola props", 11);
+                    expectTrue(host13.propSet(3, sbuf, sizeof sbuf).ok, "s13a2 propSet string ok");
+                    std::memset(sbuf, 0, sizeof sbuf);
+                    expectTrue(host13.propGet(3, sbuf, sizeof sbuf).ok, "s13a2 propGet string ok");
+                    expectTrue(std::string(sbuf + 4) == "hola props",
+                               "s13a2 Label roundtrip UTF8 bytes");
+                }
+
+                // s13b：负向（idx 越界 → 脚本侧 2 → rc 8；坏缓冲 → C++ 侧 BadArg 2）
+                {
+                    std::uint8_t buf8[8] = {};
+                    const auto rOob = host13.propGet(99, buf8, sizeof buf8);
+                    expectTrue(!rOob.ok && rOob.code == 8,
+                               "s13b propGet idx out of range -> rc 8 (script-side 2)");
+                    const auto rBad = host13.propSet(0, buf8, 4);
+                    expectTrue(!rBad.ok && rBad.code == 2,
+                               "s13b propSet bad buffer size -> rc 2 (C++-side BadArg)");
+                }
+
+                // s13c：热更跟随（改源加一行 [Prop] 字段 → 重编同名覆盖 → reload）
+                {
+                    const fs::path cs13 = hotProps / "PropsScript.cs";
+                    std::ifstream in13(cs13, std::ios::binary);
+                    std::string src13((std::istreambuf_iterator<char>(in13)),
+                                      std::istreambuf_iterator<char>());
+                    in13.close();
+                    const std::string anchor13 = "[Prop(\"Label\")] public static string Label";
+                    const std::size_t pos13 = src13.find(anchor13);
+                    expectTrue(pos13 != std::string::npos,
+                               "s13c locate Label anchor in copied source");
+                    if (pos13 != std::string::npos) {
+                        src13.insert(pos13,
+                                     "[Prop(\"Extra\", 0, 50)] public static int Extra = 5;\n        ");
+                        std::ofstream out13(cs13, std::ios::binary | std::ios::trunc);
+                        out13 << src13;
+                        out13.close();
+                        expectTrue(dotnetBuild(hotProps.string(), {}),
+                                   "s13c dotnet build overwrite (Extra field added)");
+                        std::string info13;
+                        expectTrue(host13.reloadScript(&info13).ok,
+                                   "s13c reloadScript (table + channel re-resolved)");
+                        if (!host13.hasProps())
+                            std::printf("  s13c detail: %s\n", info13.c_str());
+                        expectTrue(nl::script::scriptProps().size() == 5,
+                                   "s13c descriptor table follows reload (4 -> 5)");
+                        bool extraFound = false;
+                        for (const auto& d : nl::script::scriptProps())
+                            extraFound |= std::string(d.name) == "Extra" &&
+                                          d.kind == nl::script::kPropKindInt &&
+                                          d.max == 50.f;
+                        expectTrue(extraFound, "s13c Extra row present (kind int, max 50)");
+                        expectTrue(host13.hasProps(),
+                                   "s13c channel re-attached after reload");
+                    }
+                }
+
+                // s13d：泄露段（万次级 string 串往返 + GC.Collect 后句柄漂移阈值；
+                // s8f 手法扩展——生命周期账本硬规则②新域必带）
+                {
+                    // 泄露段必须打在 **string 行** 上——reload 后行序随 MetadataToken
+                    // 变化（s13c 把 Extra 插在 Label 声明前 → row3=Extra(int)），
+                    // 硬编码 idx 会把 4 字节 string 比特写进 int 字段（实测坑）。
+                    int labelIdx13 = -1;
+                    const auto& tblL = nl::script::scriptProps();
+                    for (int r = 0; r < static_cast<int>(tblL.size()); ++r)
+                        if (tblL[r].kind == nl::script::kPropKindString) labelIdx13 = r;
+                    expectTrue(labelIdx13 >= 0, "s13d string row present in reloaded table");
+                    DWORD h013 = 0, h113 = 0;
+                    GetProcessHandleCount(GetCurrentProcess(), &h013);
+                    bool loopOk = labelIdx13 >= 0;
+                    char sbuf13[260] = {};
+                    for (int i = 0; i < 10000 && loopOk; ++i) {
+                        std::snprintf(sbuf13 + 4, sizeof sbuf13 - 4, "leak-%d", i);
+                        loopOk = host13.propSet(labelIdx13, sbuf13, sizeof sbuf13).ok;
+                        if (!loopOk) break;
+                        std::memset(sbuf13, 0, sizeof sbuf13);
+                        loopOk = host13.propGet(labelIdx13, sbuf13, sizeof sbuf13).ok &&
+                                 std::memcmp(sbuf13 + 4, "leak-", 5) == 0;
+                    }
+                    expectTrue(loopOk, "s13d 10k string propGet/propSet roundtrips all ok");
+                    std::int32_t retGc = 0;
+                    expectTrue(vm->scriptCall(propsType, "GCCollect", nullptr, 0, &retGc).ok &&
+                               retGc == 0,
+                               "s13d managed GC.Collect via probe");
+                    GetProcessHandleCount(GetCurrentProcess(), &h113);
+                    const long long drift13 =
+                        static_cast<long long>(h113) - static_cast<long long>(h013);
+                    expectTrue(drift13 < 32,
+                               "s13d handle drift < 32 after 10k string roundtrips + GC");
+                    if (drift13 >= 32)
+                        std::printf("  s13d drift=%lld\n", drift13);
+                }
+
+                // s13e：卸载（通道前置空 = 铁律；描述表 POD 留存 C++ 侧）
+                {
+                    bool fully13 = false;
+                    expectTrue(host13.unloadScript(&fully13).ok && fully13,
+                               "s13e unloadScript (weakref fully unloaded)");
+                    expectTrue(!host13.hasProps(),
+                               "s13e props channel nulled before unload (lifecycle rule)");
+                    expectTrue(nl::script::scriptPropsGen() >= 2,
+                               "s13e descriptor table POD persists (C++-owned)");
+                }
+            }
+            fs::remove_all(hotPropsRoot, ec);
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -838,7 +1431,8 @@ void usage() {
         "  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]\n"
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
-        "                                                     full machine-checked acceptance\n"
+        "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
+        "                    [driveProjectDir] [propsProjectDir]               full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -887,7 +1481,12 @@ int main(int argc, char** argv) {
         const fs::path consoleDir = argc >= 4 ? fs::weakly_canonical(argv[3]) : fs::path();
         const fs::path ecsDir = argc >= 5 ? fs::weakly_canonical(argv[4]) : fs::path();
         const fs::path bootstrapDir = argc >= 6 ? fs::weakly_canonical(argv[5]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir);
+        const fs::path timeDir = argc >= 7 ? fs::weakly_canonical(argv[6]) : fs::path();
+        const fs::path camDir = argc >= 8 ? fs::weakly_canonical(argv[7]) : fs::path();
+        const fs::path modelDir = argc >= 9 ? fs::weakly_canonical(argv[8]) : fs::path();
+        const fs::path driveDir = argc >= 10 ? fs::weakly_canonical(argv[9]) : fs::path();
+        const fs::path propsDir = argc >= 11 ? fs::weakly_canonical(argv[10]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir);
     }
     usage();
     return 2;

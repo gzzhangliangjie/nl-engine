@@ -1,6 +1,12 @@
 #pragma once
 // M-SC1：console 绑定面（P8-SCRIPT-PLAN.md，C++↔C# 单向显式函数指针）。
 //
+// 载具域宿主绑定目标（M-SC8 前置声明；PIMPL 公开类，Jolt 符号面挡在
+// core/src/physics/World.cpp——绑定头零 Jolt 包含）。
+namespace nl::physics {
+class DebugScene;
+}
+//
 // 口径来源（三处对照，2026-11-09 留痕）：
 //   - Carrot engine/engine/scripting/CSharpBindings.cpp + script-api/Carrot/（抄思路
 //     不抄代码）：绑定面 = Mono mono_add_internal_call 按名字注册内部调用；Mono 底座
@@ -32,12 +38,16 @@
 // CommandResult{false}→ExecCode::CommandFailed，进程存活（与 Vm/工具同口径）。
 
 #include "nl/script/Vm.hpp"
+#include "nl/script/ApiTable.g.hpp"   // M-SC4：ApiTable 结构 + POD 镜像 = 生成物
+                                      //（单源 script/script-api/exports.api；手改无效，
+                                      // 重跑 tools/scriptapi/gen.py；新鲜度闸 CMake 侧强制）
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace nl::scene { class World; }
+namespace nl::core { class GameClock; class InputState; class ActionMap; }
 
 namespace nl::script {
 
@@ -50,72 +60,128 @@ inline constexpr int kEcsNoEntity = 2;
 inline constexpr int kEcsComponent = 3;
 inline constexpr int kEcsBadArg = 4;
 
-// C ABI api 表（随托管入口 args 传入；C# 侧按偏移 Marshal.ReadIntPtr 读）。
-// 字段顺序 = 表内偏移顺序（64 位指针，逐个 8 字节）。v1 console 6 导出 +
-// v2 ECS 9 导出（M-SC2，尾部追加——C# 按偏移读，旧脚本零波及）。
-struct ApiTable {
-    // int cvarGet(const char* name, const char** outValue)
-    //   返回类型码：0=未注册 / 1=bool / 2=int / 3=float / 4=string；*outValue=toString()
-    void* cvarGet;
-    // int cvarSet(const char* name, const char* value)
-    //   引擎路径文本赋值（setFromString 语义，onChanged 触发）：
-    //   0=ok / 1=未知 cvar / 2=类型不符或格式非法
-    void* cvarSet;
-    // const char* cvarList()
-    //   全量 CVar 视图（"name = value (type) help" 逐行），持有规则见文件头
-    void* cvarList;
-    // int consoleExec(const char* line, const char** outOutput)
-    //   ExecCode 0..3（Ok/UnknownCommand/BadRequest/CommandFailed），*outOutput=输出文本
-    void* consoleExec;
-    // int consoleRegister(const char* name, const char* help, void* fn)
-    //   0=ok / 1=名字已被 CVar 占用。fn 命令回调 ABI：
-    //   int fn(int argc, const char** argv, const char** outText)
-    //     返回 0=ok / 1=失败；*outText 可为 NULL（无输出文本）
-    void* consoleRegister;
-    // int consoleUnregister(const char* name)
-    //   0=ok / 1=未知命令（M-SC3 热重载解绑的落点）
-    void* consoleUnregister;
+// ECS 模型挂载扩展码（v5 M-SC7，尾部追加不与既有码冲突）：
+//   5=挂模型但实体无 TransformComponent（E1b「Model without Transform = 拒」
+//     同口径——不隐式建表，宿主先 ecsAddTransform）/ 6=meshFile 白名单拒绝
+//     （nl::scene::validGlbAssetName：防路径穿越，坏名不落 World）。
+inline constexpr int kEcsNoTransform = 5;
+inline constexpr int kEcsBadAsset = 6;
 
-    // ---- v2 ECS（M-SC2；操作目标 = ecsSetWorld 绑定的 World；延迟语义沿 World 口径）----
+// Time 导出错误码（v3 M-SC5）：0=ok / 1=未绑 Clock（宿主忘 timeSetClock）/ 4=非法参数
+inline constexpr int kTimeOk = 0;
+inline constexpr int kTimeNoClock = 1;
+inline constexpr int kTimeBadArg = 4;
 
-    // int ecsSpawn(const char* name, unsigned long long* outID)
-    //   newEntity（新建立即可见，Carrot 口径）；*outID=实体 ID（0=无效）
-    void* ecsSpawn;
-    // int ecsRemove(unsigned long long id)
-    //   延迟删除（排队，flush/tick 生效；父删递归删子）
-    void* ecsRemove;
-    // int ecsFlush()
-    //   flushEntityCreationAndRemoval（宿主 tick 边界动作；Carrot flush 口径）
-    void* ecsFlush;
-    // int ecsExists(unsigned long long id, int* outExists)
-    //   *outExists: 0=不存在 / 1=存在（新建即时真、删除 flush 后假——非对称 Carrot 口径）
-    void* ecsExists;
-    // int ecsSetParent(unsigned long long id, unsigned long long parentID)
-    //   parentID=0 解除父子；环防护 = World::setParent 口径（父不得是后代）
-    void* ecsSetParent;
-    // int ecsGetParent(unsigned long long id, unsigned long long* outParent)
-    //   *outParent=0 无父
-    void* ecsGetParent;
-    // int ecsAddTransform(unsigned long long id)
-    //   挂 TransformComponent（重复挂 = 3）
-    void* ecsAddTransform;
-    // int ecsTransformGet(unsigned long long id, float* outPos3, float* outRot4, float* outScale3)
-    //   局部 TRS 读回；rot = quat (x,y,z,w)
-    void* ecsTransformGet;
-    // int ecsTransformSet(unsigned long long id, const float* pos3, const float* rot4, const float* scale3)
-    //   局部 TRS 写入；任一指针可 NULL（跳过该组字段）
-    void* ecsTransformSet;
-    // int ecsFindByName(const char* name, unsigned long long* outID)
-    //   按名查实体（World::findEntityByName 口径）；未找到 *outID=0 返回 0
-    void* ecsFindByName;
-};
+// Input 导出错误码（v3 M-SC5）：0=ok / 1=未绑源（ActionMap/InputState，宿主忘
+// inputSetState/inputSetActionMap——不隐式建表拍板口径）/ 2=动作不存在或类型不符 /
+// 4=非法参数
+inline constexpr int kInputOk = 0;
+inline constexpr int kInputNoSource = 1;
+inline constexpr int kInputNoAction = 2;
+inline constexpr int kInputBadArg = 4;
 
-// 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应）。
+// Log 导出错误码（v3 M-SC5）：0=ok / 1=过滤指令非法 / 2=非法参数（level 越界等）
+inline constexpr int kLogOk = 0;
+inline constexpr int kLogBadFilter = 1;
+inline constexpr int kLogBadArg = 2;
+
+// Camera 导出错误码（v4 M-SC6）：0=ok / 1=未绑 CameraSource（宿主忘 cameraSetSource）/
+// 2=非法参数（eye 指针 NULL 等）/ 3=该模式不支持脚本写位姿（track = 轨迹数据主权）
+inline constexpr int kCamOk = 0;
+inline constexpr int kCamNoSource = 1;
+inline constexpr int kCamBadArg = 2;
+inline constexpr int kCamModeUnsupported = 3;
+
+// Physics/载具导出错误码（v6 M-SC8）：0=ok / 1=未绑 DebugScene（宿主忘
+// driveSetScene——kEcsNoWorld/kCamNoSource 同构口径）/ 2=槽位不存在或未用槽
+//（tombstone 后同）/ 3=加车失败（DebugScene::addVehicle 返回 -1，lastError 置因）/
+// 4=非法参数（out 指针 NULL / in 指针 NULL——kEcsBadArg 同款）
+inline constexpr int kPhyOk = 0;
+inline constexpr int kPhyNoScene = 1;
+inline constexpr int kPhyNoSlot = 2;
+inline constexpr int kPhyAddFailed = 3;
+inline constexpr int kPhyBadArg = 4;
+
+// ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
+// 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
+// v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
+
+// 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应，
+// 编译期由 ApiTable.g.asserts.inc 逐导出校验声明与实现签名一致）。
 const ApiTable* consoleApiTable();
 
 // 宿主侧 World 绑定（M-SC2）：入口调用前设置，ECS 导出全部操作该实例；
 // nullptr = 解绑（此后 ECS 导出一律返回 kEcsNoWorld——M-SC3 热重载窗口的兜底）。
 void ecsSetWorld(scene::World* world);
+
+// 宿主侧活实例绑定（M-SC5，ecsSetWorld 模式推广；nullptr = 解绑，导出回 NoSource/NoClock）：
+//   - timeSetClock：Time 导出操作目标（viewer --script 场景模式接线 gameClock）；
+//   - inputSetState / inputSetActionMap：Input 导出操作目标。**不隐式建表**（拍板）——
+//     未绑一律 kInputNoSource；宿主不建 InputState 就没有键查询（viewer scene 模式
+//     现状：无注入管线，Input 保持未绑，脚本得 NoSource 即正确语义）。
+void timeSetClock(core::GameClock* clock);
+void inputSetState(core::InputState* state);
+void inputSetActionMap(core::ActionMap* map);
+
+// 宿主侧相机绑定源（v4 M-SC6）：现役相机经 4 个函数指针适配进 core——
+// Bindings.cpp 在 nl_core，**不能反向 include viewer**（依赖方向不变），
+// 且裸绑 CameraRig 会丢 fov 持久化与 orbit 模式控制，故落适配源形态
+// （计划「cameraSetRig」为落码前占名，实码定名 cameraSetSource，口径不变：
+// 宿主显式 set + 未绑专属错误码 + 热更窗口兜底）。
+//
+// mode 码 = viewer::CameraMode 枚举序（0=orbit/1=free/2=chase/3=track）；
+// setPose 模式感知落点（注册方实现决定）：orbit=setOrbit(yaw,pitch,|eye|)+种子 /
+// free=setPose 直接落 / chase=snapEyeTo+setPitch（yaw 由车体航向驱动，入参忽略）/
+// track=返回 kCamModeUnsupported（轨迹数据主权在轨迹文件，脚本不可写）。
+// setFov 注册方负责 clamp [20,120]（与 OrbitCamera::setFovYDegrees 同口径）后透传。
+struct CameraSource {
+    void* ctx;   // 注册方上下文（如 &ViewerCamera）
+    void (*getPose)(void* ctx, float outEye[3], float* outYawDeg, float* outPitchDeg,
+                    float* outFovY, int* outMode);
+    int (*setPose)(void* ctx, const float eye[3], float yawDeg, float pitchDeg);
+    float (*getFov)(void* ctx);
+    void (*setFov)(void* ctx, float fovYDeg);
+};
+// nullptr = 解绑（此后 Camera 导出一律 kCamNoSource——热更窗口兜底，同族口径）。
+void cameraSetSource(const CameraSource* source);
+
+// 宿主侧载具训练场绑定（v6 M-SC8，ecsSetWorld 模式推广）：直持
+// nl::physics::DebugScene*（拍板 Q-SC8-1 A'——P8-SCRIPT-PLAN L107 既定口径
+// 「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt，公开头
+// 零新类型。CameraSource 函数指针表是四模式相机专属形态，此处属过度设计）。
+// nullptr = 解绑（热更窗口兜底，此后 Physics 导出一律 kPhyNoScene）。
+void driveSetScene(physics::DebugScene* scene);
+
+// ---- M-SC10 属性面板域（v7）：描述表 POD + gen 计数 ----
+//
+// 通道分工（生命周期硬规则①「C++ 侧永不跨 reload 缓存托管引用」的落地）：
+//   - 描述表（本文件，C# 推）：C# 侧 Props.PushStatic 反射枚举 [Prop] 静态字段
+//     → propsPushBegin/propsDescAdd 推 POD 表。C++ 只存 POD（FieldInfo 等
+//     托管反射缓存全部留在脚本程序集内随 ALC 回收）；pushBegin 时 gen+1 =
+//     面板/宿主重建信号；重复 push = 覆盖（reload 幂等）。
+//   - 值读写（ScriptHost，C++ 拉）：BootTickPtr 协议复用——按名解析可选契约
+//     PropGet/PropSet（同 OnTick：缺失 = 通道惰性；reload 重取；unload 前置空）。
+//
+// 值 ABI（script-api PropsPush.PropGet/PropSet 同文锚）：buf[0..3]=int32 idx
+//（C++ 包装填）；标量 buf[4..7]=f32/i32/b(0/1)；string buf[4..259]=UTF8 尾 0
+//（get 截断 255，set 读到首个 0 上限 255）。
+inline constexpr int kPropsOk = 0;
+inline constexpr int kPropsBadArg = 2;   // kind 越界 / name 空 / 表满（kEcsBadArg 同码位）
+inline constexpr int kPropKindFloat = 0;
+inline constexpr int kPropKindInt = 1;
+inline constexpr int kPropKindBool = 2;
+inline constexpr int kPropKindString = 3;
+inline constexpr int kMaxProps = 256;
+inline constexpr int kPropNameCap = 63;      // name 截断（含尾 0 的缓冲 64）
+inline constexpr int kPropStringCap = 255;   // string 值区上限（含尾 0 的缓冲 256）
+struct PropDesc {
+    int kind;                 // kPropKind*
+    char name[kPropNameCap + 1];
+    float min, max;           // min==max = 无 Range（面板退直输控件）
+    float def;                // 推送时字段现值快照（string 恒 0，初值经通道 propGet）
+};
+const std::vector<PropDesc>& scriptProps();          // 现役描述表（只读）
+std::uint32_t scriptPropsGen();                      // 描述表代数（pushBegin +1）
 
 // ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
 //

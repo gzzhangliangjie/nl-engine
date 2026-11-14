@@ -320,14 +320,13 @@ TRACKS = {
                 "thirdparty/slang/dist + skip-worktree",
     },
     "water": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-water",
-        "branch": "feat/water", "state": "active",
-        "note": "water interleave track (plan docs/WATER-PLAN.md, "
-                "M-WAT0~WAT2, tags water-t0~water-t2 + water-done; "
-                "plan-B Gerstner + SSR reflection + refraction absorption, "
-                "Q-WA1~WA6 settled 2026-11-14: SSR body hosted by M-WAT0, "
-                "zero vendored); wt built 2026-11-14 from master b150fd9, "
-                "junction .workbuddy + thirdparty/slang/dist + skip-worktree",
+        "wt": "", "branch": "feat/water", "state": "closed",
+        "note": "water track M-WAT0~WAT3 done (tags water-t0~water-t3; "
+                "plan-B Gerstner + SSR + refraction/absorption/Fresnel/"
+                "foam/shoreline); merged to master 92a0863 2026-11-14 "
+                "(re-run 12/12 historical cards bytes-green after merge); "
+                "wt removed same day (user instruction), junctions "
+                "unlinked, branches kept; reopen via 7.1b",
     },
 }
 

@@ -1,0 +1,105 @@
+# nl-engine 脚本绑定面声明（M-SC4 单源；tools/scriptapi/gen.py 扫描本文件生成接线）。
+#
+# 生成物（入 git，勿手改；CMake nl_scriptapi_freshness 目标做新鲜度闸）：
+#   core/include/nl/script/ApiTable.g.hpp    POD 镜像 struct + ApiTable 结构
+#   core/src/script/ApiTable.g.inc           ApiTable 注册行
+#   core/src/script/ApiTable.g.asserts.inc   编译期签名防漂移 static_assert
+#   script/script-api/Wiring.g.cs            C# delegate/字段/Init/NativeMarshal/POD 封装
+# 声明变更后重跑：python tools/scriptapi/gen.py（自证：--check）
+#
+# 行格式：域 | 导出名 | 返回类型 | 参数表 | 文档
+#   参数表逗号分隔，每项「[in|out] 类型 名字」；类型词表（TYPEMAP 单源在 gen.py）：
+#     int   = C int / C# int；out = int*
+#     u32   = std::uint32_t / C# uint；out = u32*
+#     u64   = std::uint64_t / C# ulong；out = u64*
+#     f32   = float
+#     f64   = double
+#     str   = const char*（UTF-8，'\0' 结尾）；out str = const char**
+#             （C++ 静态缓冲，「下次同线程调用前有效」，C# 立即拷贝——生命周期账本）
+#     bufN  = 定长 float 数组指针（N 个元素）；in = const float*，out = float*
+#     ptr   = void*（函数指针等不透明载荷）
+#   type 段（复杂对象）：只收纯 POD（int/u64/f32 标量字段），禁字符串/嵌套引用
+#     （Blittable 一档拍板）；C++ 镜像 struct + C# [StructLayout(Sequential)]
+#     partial struct 双层同构生成，C# 侧 hand 扩展走 partial。
+# 生命周期账本与容器协议：docs/p8/P8-SCRIPT-PLAN.md「胶水层扩展」节。
+#
+# ---- 复杂对象 ----
+
+type TransformData = f32 Px, f32 Py, f32 Pz, f32 Qx, f32 Qy, f32 Qz, f32 Qw, f32 Sx, f32 Sy, f32 Sz
+
+# ---- v1 console（M-SC1；ApiTable 偏移 0..5）----
+
+Engine | cvarGet | int | in str name, out str value | 读 cvar 现值（toString 口径）。rc 即类型码：0=未注册 / 1=bool / 2=int / 3=float / 4=string；value=现值文本
+Engine | cvarSet | int | in str name, in str value | 引擎路径文本赋值（setFromString 语义，onChanged 触发）。rc：0=ok / 1=未知 cvar / 2=类型不符或格式非法
+Engine | cvarList | str |  | 全量 CVar 视图（"name = value (type) help" 逐行）。返回串下次调用前有效，C# 立即拷贝
+Engine | consoleExec | int | in str line, out str output | 经绑定面执行控制台行。rc = ExecCode 0..3（Ok/UnknownCommand/BadRequest/CommandFailed）；output=输出文本
+Engine | consoleRegister | int | in str name, in str help, in ptr fn | 注册 C# 命令回调进 console 命令表。rc：0=ok / 1=名字已被 CVar 占用。fn ABI = int fn(int argc, const char** argv, const char** outText)（reverse P/Invoke；script-api 静态保活随 collectible ALC 整体回收；SEH 边界）
+Engine | consoleUnregister | int | in str name | 注销命令（M-SC3 热重载解绑落点；对称擦除 C++ 登记表）。rc：0=ok / 1=未知命令
+
+# ---- v2 ECS（M-SC2；ApiTable 偏移 6..15）----
+
+Ecs | ecsSpawn | int | in str name, out u64 id | 建实体（newEntity，新建立即可见，Carrot 口径）。rc：0=ok（id=实体 ID，0=无效）/ 1=未绑 World / 4=非法参数
+Ecs | ecsRemove | int | in u64 id | 延迟删除（排队，flush/tick 生效；父删递归删子）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsFlush | int |  | 统一落盘（flushEntityCreationAndRemoval，宿主 tick 边界动作）。rc：0=ok / 1=未绑 World
+Ecs | ecsExists | int | in u64 id, out int exists | 存在性查询。rc：0=ok（exists：0=不存在 / 1=存在——新建即时真、删除 flush 后假）/ 1=未绑 World
+Ecs | ecsSetParent | int | in u64 id, in u64 parent | 挂父（纯关系不动变换；parent=0 解除父子；环防护 = World::setParent 口径）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsGetParent | int | in u64 id, out u64 parent | 取父 ID（0=无父）。rc：0=ok / 1=未绑 World / 2=实体不存在
+Ecs | ecsAddTransform | int | in u64 id | 挂 TransformComponent。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=重复挂
+Ecs | ecsTransformGet | int | in u64 id, out buf3 pos, out buf3 rot, out buf3 scale | 局部 TRS 读回（rot=quat x,y,z,w）。任一 out 指针可 NULL 跳过该组。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=组件缺失
+Ecs | ecsTransformSet | int | in u64 id, in buf3 pos, in buf3 rot, in buf3 scale | 局部 TRS 写入。任一 in 指针可 NULL 跳过该组。rc 同 ecsTransformGet
+Ecs | ecsFindByName | int | in str name, out u64 id | 按名查实体（findEntityByName 口径；未找到 id=0 且 rc=0）。rc：0=ok / 1=未绑 World / 4=非法参数
+
+# ---- v3 Time / Input / Log（M-SC5；ApiTable 偏移 16..24）----
+# Time 操作目标 = 宿主侧 timeSetClock 绑定的 GameClock；Input = inputSetState/
+# inputSetActionMap 绑定的实例（未绑 = NoSource，不隐式建表——拍板口径）；
+# Log 走 nl::core::log 全局面，通道 = "script"（writeCh 口径）。
+
+Time | timeGetState | int | out f64 simTime, out f64 frameDt, out u64 tickCount, out int paused | 时钟状态一次性读回（simTime 逻辑秒 / frameDt 本渲染帧缩放截断后 delta 秒 / tickCount 已执行逻辑帧 / paused 0|1）。rc：0=ok / 1=未绑 Clock / 4=非法参数
+Time | timeSetState | int | in int paused, in f64 timeScale | 时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale：<0=不变，否则 setTimeScale 钳制口径（[0,1024]，NaN 不变——NaN>=0 恒假天然防呆）。rc：0=ok / 1=未绑 Clock
+Input | inputActionFind | int | in str name, out u32 id | ActionMap::find（预声明口径）。rc：0=ok（id 有效）/ 1=未绑 ActionMap / 2=动作不存在（id=kInvalidAction=0xFFFFFFFF）
+Input | inputActionBool | int | in u32 id, out int value, out int pressed, out int released | Bool 动作冻结值三态读回（boolValue/boolJustPressed/boolJustReleased，update() 冻结口径）。rc：0=ok / 1=未绑 ActionMap / 2=非法 id 或动作类型非 Bool / 4=非法参数
+Input | inputActionFloat | int | in u32 id, out f32 value, out f32 delta | Float 动作冻结值读回（floatValue/floatDelta）。rc 同 inputActionBool（2=非法 id 或类型非 Float）
+Input | inputActionVec2 | int | in u32 id, out buf2 value, out buf2 delta | Vec2 动作冻结值读回（vec2Value/vec2Delta，x,y 序）。rc 同 inputActionBool（2=非法 id 或类型非 Vec2）
+Input | inputKeyIsDown | int | in int key, out int down | InputState::isDown（GLFW 键码；越界键码 = down 0，InputState 防御性口径）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+Log | logWrite | int | in int level, in str message | 经 log::writeCh("script") 写日志。level 0..5 = Trace/Debug/Info/Warn/Error/Fatal。rc：0=ok / 2=非法参数（level 越界或 message 空）
+Log | logSetFilter | int | in str instruction, out str error | 设置过滤指令（setFilter 全局面替换口径："nl:info,renderer=warn"）。rc：0=ok / 1=指令非法（error=原因文本，静态缓冲账本）/ 4=非法参数
+
+# ---- v4 Camera（M-SC6；ApiTable 偏移 25..28）----
+# 操作目标 = 宿主侧 cameraSetSource 绑定的现役相机适配源（viewer 现役相机经
+# CameraSource 函数指针适配进 core——nl_core 不反向依赖 viewer，依赖方向不变；
+# 未绑 = kCamNoSource，不隐式建相机）。mode 码 = viewer::CameraMode 枚举序：
+# 0=orbit / 1=free / 2=chase / 3=track。
+
+Camera | cameraGetPose | int | out buf3 eye, out f32 yawDeg, out f32 pitchDeg, out f32 fovY, out int mode | 现役相机位姿一次读回（eye 世界坐标 / yaw+pitch 度 / fovY 度 / mode 码）。任一 out 指针可 NULL 跳过该字段。rc：0=ok / 1=未绑 CameraSource / 4=非法参数
+Camera | cameraSetPose | int | in buf3 eye, in f32 yawDeg, in f32 pitchDeg | 现役相机位姿写入（模式感知落点：orbit=yaw/pitch/dist=|eye| setOrbit + 种子；free=setPose 直接落；chase=snapEyeTo+setPitch，yaw 由车体航向驱动忽略入参；track=轨迹数据主权，回 kCamModeUnsupported）。eye 指针 NULL = kCamBadArg。rc：0=ok / 1=未绑 CameraSource / 2=非法参数 / 3=该模式不支持脚本写位姿
+Camera | cameraGetFov | f32 | | 现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死）
+Camera | cameraSetFov | int | in f32 fovY | 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource
+
+# ---- v5 ECS 模型挂载（M-SC7；ApiTable 偏移 29..31，尾部追加）----
+# 操作目标 = ecsSetWorld 绑定的 World（与 v2 ECS 同族）。挂载语义（2026-11-14
+# 拍板方案 A）：binding 只做组件增删 + 白名单校验，viewer 帧边界比对 Model 集合
+# 签名，变了重跑收集 + loadEcsScene（实例矩阵每帧更新走既有插值链不动）。
+# 防崩语义：无 Transform 拒绝（kEcsNoTransform=5，不隐式建表）；重复挂拒绝
+#（kEcsComponent=3——World::addComponent 同类型重复是 assert，binding 必须先挡）。
+
+Ecs | ecsAttachModel | int | in u64 id, in str meshFile | 挂 ModelComponent（meshFile = assets/ 下 .glb 文件名，白名单校验拒绝路径穿越名）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=已有 Model（重复挂拒绝）/ 4=非法参数（meshFile 空）/ 5=实体无 Transform（先 ecsAddTransform）/ 6=meshFile 白名单拒绝
+Ecs | ecsDetachModel | int | in u64 id | 摘 ModelComponent（viewer 帧边界重建场景 batch）。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 可摘
+Ecs | ecsModelInfo | int | in u64 id, out str meshFile, out buf3 tint, out f32 roughness, out f32 metallic | ModelComponent 字段读回（meshFile=静态缓冲「下次同线程调用前有效」账本，C# 立即拷贝；tint=Vec3 xyz；roughness/metallic=PBR 材质，未显式覆盖时 = 场景缺省 1/0）。tint/roughness/metallic 任一指针可 NULL 跳过；meshFile 指针必填。rc：0=ok / 1=未绑 World / 2=实体不存在 / 3=无 Model 组件 / 4=非法参数
+# ---- M-SC8 Physics 载具域（2026-11-14 拍板 Q-SC8-1~4：A'直持 DebugScene* / 注册方 step / 复用 ActionMap+setInput / 交代物全要）----
+# 绑定面直持 nl::physics::DebugScene*（Jolt-free PIMPL 公开类，M-NET2 多载具面逐字对齐不新造——
+# P8-SCRIPT-PLAN L107 既定口径；CameraSource 函数指针表在此为过度设计，DebugScene 无四模式/私有头问题）。
+# 注册入口 = driveSetScene（Bindings.hpp，viewer 挂 --physics-scenario 2 训练场；nullptr 解绑 = 热更窗口兜底）。
+# 线程口径 = OnTick 内调用（输入在下一次注册方 step 消费；Input 域冻结值同构）。
+Physics | physicsAddVehicle | int | in f32 spawnX, in f32 spawnZ, out int slot | 训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1）
+Physics | physicsRemoveVehicle | int | in int slot | tombstone 移除（约束与刚体回收，其余槽位号不变）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+Physics | physicsSetVehicleInput | int | in int slot, in f32 forward, in f32 right, in f32 brake, in f32 handBrake | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+Physics | vehicleFullPose | int | in int slot, out buf3 pos, out buf4 quat, out buf3 vel | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽
+Physics | teleportVehicle | int | in int slot, in buf3 pos, in buf4 quat | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+# ---- M-SC10 属性面板域（2026-11-14 拍板 Q-SC10-1~4 = A/A/A/A：静态字段载体 / 四基本类型 / --prop-panel additive / 交代物全要）----
+# 载体 = 入口脚本类 [Prop] 静态字段（M-SC2b ScriptComponent 维持默认不做）；C# 侧 Props.PushStatic(typeof(T))
+# 反射枚举 → 经本域两导出推 POD 描述表（生命周期硬规则①：FieldInfo 缓存留托管侧随 ALC 回收，C++ 只存 POD）。
+# 描述表 gen 计数器在 pushBegin 时 +1（面板/宿主重建信号）；重复 push = 覆盖（reload 幂等）。
+# 值读写通道不经 ApiTable：BootTickPtr 协议按名解析可选契约 PropGet/PropSet（同 OnTick：缺失 = 通道惰性、
+# reload 重取、unload 前置空）。值 ABI：buf[0..3]=int32 idx；标量 buf[4..7]=f32/i32/b(0/1)；string buf[4..259]=UTF8 尾 0（get 截断 255）。
+Props | propsPushBegin | int |  | 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok
+Props | propsDescAdd | int | in int kind, in str name, in f32 min, in f32 max, in f32 def | 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）

@@ -22,6 +22,7 @@
 // + shaderBufferInt64Atomics（backend_vulkan.cpp::createDevice）。
 
 #include "visbuf_common.slangh"
+#include "water_common.slangh"
 
 cbuffer SceneConstants : register(b0)
 {
@@ -34,6 +35,16 @@ cbuffer SceneConstants : register(b0)
 cbuffer VisConstants : register(b1)
 {
     float4 g_visParams;   // (width, height, vizMode, unused)
+};
+
+// M-WAT1（拍板 A）：水体 VS 位移——布局规范见 water_common.slangh 头注；
+// 仅 vsVisRaster 读（viz pass 不绑不读）。--water 关时渲染端不建不绑本 CB。
+cbuffer WaterConstants : register(b2)
+{
+    float4 g_wcA[8];   // (D.x, D.y, A, k) × 8 波
+    float4 g_wcB[8];   // (omega, Q, 0, 0) × 8 波
+    float4 g_wcC;      // (time, baseColor.rgb)
+    float4 g_wcD;      // (ambient, specPow, specGain, maxAmp)
 };
 
 StructuredBuffer<float> g_vertexPool   : register(t1);
@@ -78,7 +89,17 @@ VSVisOutput vsVisRaster(uint instanceIndex : SV_InstanceID,
     const uint localIdx = g_localIndices[localBase + vertexIndex];
     const uint gv = vertexBase + localIdx;
     const uint b  = gv * 8u;                     // 8 float / 顶点
-    const float3 pos = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+    float3 pos = float3(g_vertexPool[b + 0u], g_vertexPool[b + 1u], g_vertexPool[b + 2u]);
+
+    // M-WAT1（拍板 A）：水体伪 cluster → Gerstner 顶点位移（深度真实位移 =
+    // SSR march 命中面正确；csDirect/csSSR 侧用同一 waterGerstner per-pixel
+    // 重算法线，未位移网格坐标口径）。--water 关时无水体 cluster，分支不进。
+    if (g_clusterMeta[metaBase + 3u] == NL_WATER_MATERIAL_ID)
+    {
+        float3 disp;
+        waterGerstner(pos.xz, g_wcC.x, g_wcA, g_wcB, disp);
+        pos += disp;
+    }
 
     output.position     = mul(g_mvp, float4(pos, 1.0f));
     output.clusterId    = clusterId;

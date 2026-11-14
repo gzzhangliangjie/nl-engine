@@ -1,0 +1,45 @@
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+  ok  s13-pre locate PropsScript build output
+  ok  s13-pre descriptor table empty before load
+  ok  s13-pre props channel not attached before load
+  ok  s13-pre copy props project to temp (sources only)
+  ok  s13-pre locate ProjectReference in copied csproj
+  ok  s13-pre dotnet build hot props (v1)
+  ok  s13-pre locate hot PropsScript v1 output
+  ok  s13a loadScript (Entry pushes [Prop] descriptor table)
+  ok  s13a descriptor table has 4 rows ([Prop] static fields)
+  ok  s13a descriptor gen bumped by pushBegin
+  ok  s13a props channel attached (PropGet/PropSet resolved)
+  ok  s13a row0 Speed kind/Range/default bits
+  ok  s13a row1 Count kind/Range/default bits
+  ok  s13a row2 Enabled kind/default bits
+  ok  s13a row3 Label kind bits
+  ok  s13a2 propGet float ok
+  ok  s13a2 Speed initial value 3.5 via channel
+  ok  s13a2 propSet float ok
+  ok  s13a2 propGet float after set
+  ok  s13a2 Speed roundtrip 7.25
+  ok  s13a2 propSet int ok
+  ok  s13a2 C# Count static field == 42 (cross-source via ReadField)
+  ok  s13a2 propSet bool 0 ok
+  ok  s13a2 propGet bool ok
+  ok  s13a2 Enabled roundtrip false
+  ok  s13a2 propSet string ok
+  ok  s13a2 propGet string ok
+  ok  s13a2 Label roundtrip UTF8 bytes
+  ok  s13b propGet idx out of range -> rc 8 (script-side 2)
+  ok  s13b propSet bad buffer size -> rc 2 (C++-side BadArg)
+  ok  s13c locate Label anchor in copied source
+  ok  s13c dotnet build overwrite (Extra field added)
+  ok  s13c reloadScript (table + channel re-resolved)
+  ok  s13c descriptor table follows reload (4 -> 5)
+  ok  s13c Extra row present (kind int, max 50)
+  ok  s13c channel re-attached after reload
+  ok  s13d string row present in reloaded table
+  ok  s13d 10k string propGet/propSet roundtrips all ok
+  ok  s13d managed GC.Collect via probe
+  ok  s13d handle drift < 32 after 10k string roundtrips + GC
+  ok  s13e unloadScript (weakref fully unloaded)
+  ok  s13e props channel nulled before unload (lifecycle rule)
+  ok  s13e descriptor table POD persists (C++-owned)
+nl-script selftest: PASS (0 failures)

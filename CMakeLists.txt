@@ -275,6 +275,7 @@ add_library(nl_core STATIC
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
     core/src/scene/TrafficCarComponent.cpp # P8 M-T3：ECS 交通车组件序列化
     core/src/scene/SignalLampComponent.cpp  # P8 M-T4：红绿灯摆件组件序列化
+    core/src/scene/AssetName.cpp # M-SC7：资产文件名白名单单源（收编 renderer/scene/viewer/SceneGeo 四份复制）
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
     core/src/physics/ContactEventStream.cpp # P8 M-D1：双缓冲 ContactEventStream（bevy 两帧保活，Jolt-free）
     core/src/physics/ContactEventSystem.cpp # P8 M-D1：scene::System 消费者（owner->Entity 过滤，自足系统）
@@ -360,6 +361,7 @@ add_library(nl_renderer STATIC
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/nav_panel.cpp     # P8 M-N2：NavMesh 调参/五阶段面板（ImDrawList 画布）
+    renderer/src/prop_panel.cpp    # P8 M-SC10：脚本属性面板（[Prop] 静态字段读写）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
     renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）
@@ -481,6 +483,8 @@ set(_GBUFFER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/gbuffer_common
 # M10.1：八面体映射 / 解析天穹公共头（probe_trace/probe_viz include；S12 复用）
 set(_OCTAHEDRAL_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/octahedral.slangh")
 set(_SKY_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/sky.slangh")
+# M-WAT1：水体公共头（Gerstner + 解析法线单源；visbuf/direct/material/ssr 四处 DEPS）。
+set(_WATER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/water_common.slangh")
 # M15.0（S15）：VSM 投影采样公共头（direct.slang include；vsm.slang 不 include）
 set(_VSM_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/vsm_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
@@ -494,7 +498,9 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "direct.csref"
                     "direct.csrefgi"
                     "probe_trace.cstrace"
-                    "world_cache.cscacheupdate")
+                    "world_cache.cscacheupdate"
+                    "ssr.csssr"
+                    "ssr.csssrdepth")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -532,6 +538,16 @@ set(_ENTRIES_FILTER_TEMPORAL "csFilterTemporal|csfiltertemporal|compute")
 # S12 M12.1：filter_spatial.slang 单 compute 入口——5x5 联合双边（Q12-C A）
 #（纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
 set(_ENTRIES_FILTER_SPATIAL "csFilterSpatial|csfilterspatial|compute")
+# M-WAT0（water 轨）：ssr.slang 五 compute 入口——SSR 本体（march + 深度/金字塔/
+# 场景色链/合成，详见 ssr.slang 文件头）。csSSR 用 NonUniformResourceIndex 选
+# MR 纹理槽（direct.slang 同款）→ 进 _SM66 白名单；其余纯纹理读默认 profile。
+# M-WAT2：+2 入口——csWaterCopy（折射背景 copy）/ csWaterComposite（水体全链
+# 合成；tap 里 NonUniformResourceIndex 未用，默认 profile）。
+set(_ENTRIES_SSR "csSSRDepth|csssrdepth|compute" "csSSRDown|csssrdown|compute"
+                 "csSSRMip|csssrmip|compute" "csSSR|csssr|compute"
+                 "csSSRCompose|csssrcompose|compute"
+                 "csWaterCopy|cswatercopy|compute"
+                 "csWaterComposite|cswatercomposite|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -572,6 +588,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_FILTER_TEMPORAL}")
     elseif(_SRC_NAME STREQUAL "filter_spatial")
         set(_ENTRIES "${_ENTRIES_FILTER_SPATIAL}")
+    elseif(_SRC_NAME STREQUAL "ssr")
+        set(_ENTRIES "${_ENTRIES_SSR}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -589,10 +607,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
         if(_SRC_NAME STREQUAL "visbuf")
-            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_WATER_COMMON}")
         elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
                OR _SRC_NAME STREQUAL "probe")
-            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_VSM_COMMON}")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_VSM_COMMON}" "${_WATER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")
@@ -601,6 +619,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_viz")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
+        elseif(_SRC_NAME STREQUAL "ssr")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_WATER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
         endif()
@@ -652,6 +672,19 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 # enable_testing 必须先于 add_subdirectory：目录属性在 add_subdirectory 时拷贝，
 # 后调用不会传播进子目录。
 enable_testing()
+
+# M-SC4：scriptapi 生成物新鲜度闸（每次构建都跑；纯 CMake 校验零 Python 依赖）。
+# exports.api 比任一生成物新 = 构建红，强制重跑 python tools/scriptapi/gen.py。
+add_custom_target(nl_scriptapi_freshness ALL
+    COMMAND "${CMAKE_COMMAND}"
+        -DSRC=${CMAKE_SOURCE_DIR}/script/script-api/exports.api
+        -DGEN1=${CMAKE_SOURCE_DIR}/core/include/nl/script/ApiTable.g.hpp
+        -DGEN2=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.inc
+        -DGEN3=${CMAKE_SOURCE_DIR}/core/src/script/ApiTable.g.asserts.inc
+        -DGEN4=${CMAKE_SOURCE_DIR}/script/script-api/Wiring.g.cs
+        -DGEN5=${CMAKE_SOURCE_DIR}/docs/script-api/API.md
+        -P ${CMAKE_SOURCE_DIR}/tools/scriptapi/check_freshness.cmake
+    COMMENT "scriptapi: exports.api vs generated freshness gate")
 
 add_subdirectory(viewer)
 add_subdirectory(nanite-tools)

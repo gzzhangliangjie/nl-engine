@@ -94,6 +94,18 @@ public:
     bool tickEnabled() const { return tickEnabled_; }
     unsigned long long tickCount() const { return tickCount_; }
 
+    // ---- M-SC10：props 可选契约通道（PropGet/PropSet）----
+    //
+    // BootTickPtr 协议复用（按名解析 public static int(IntPtr,int)，collectible
+    // 正本 + thunk 保活同 OnTick）；生命周期纪律逐位同 tickFn_：缺失 = 通道惰性
+    //（面板空转，旧脚本零波及）；load/reload Entry 成功后重取；unload 前置空。
+    // 值 ABI（script-api PropsPush 同文锚）：buf[0..3]=int32 idx（本包装填），
+    // buf[4..] 值区——标量 size=8；string size=260（UTF8 尾 0，get 截断 255）。
+    // rc：ok / 7=init 未调 / 8=通道未接或脚本侧返回非 0 / 6=SEH / 2=BadArg。
+    bool hasProps() const { return propsGetFn_ != nullptr && propsSetFn_ != nullptr; }
+    Result propGet(std::int32_t idx, void* buf, std::int32_t size);
+    Result propSet(std::int32_t idx, const void* buf, std::int32_t size);
+
 private:
     ScriptHost() = default;
 
@@ -103,6 +115,9 @@ private:
     std::string scriptDll_;
     std::string scriptType_;
     EntryPointFn tickFn_ = nullptr;    // 脚本 OnTick（bootstrap BootTickPtr 带出；unload 前置空）
+    EntryPointFn propsGetFn_ = nullptr;  // M-SC10：PropGet/PropSet（BootTickPtr 协议复用，同纪律）
+    EntryPointFn propsSetFn_ = nullptr;
+    void refreshPropsFn_(const std::string& typeName);  // Entry 成功后重取（缺失 = 静默置空）
     bool tickEnabled_ = false;         // 脚本失败停用闸
     unsigned long long tickCount_ = 0; // 宿主侧 tick 计数（机器证据 / game.script）
 };

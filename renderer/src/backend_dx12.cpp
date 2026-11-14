@@ -73,9 +73,11 @@ public:
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               bool shadowMode, bool referenceMode, bool probeMode, bool clusterBlas,
+              bool waterEnable,
               std::string& outError) override {
         // M13.0：--cluster-blas 传入 Scene（initDag 链消费；缺省关零扰动）。
         scene_.setClusterBlas(clusterBlas);
+        scene_.setWaterEnable(waterEnable);   // M-WAT1：--water（仅 pulling 链消费）
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
             return false;
@@ -183,7 +185,8 @@ public:
                                         outError);
         else if (visbufMode)      // M7.0：优先级最高，走独立 vis buffer 三段式
             sceneOk = scene_.initVisbuf(device_, "dxil", "vsCull", "psCull", modelFile,
-                                         pullingMode, outError);
+                                         pullingMode, outError,
+                                         pullingMode && waterEnable);   // M-WAT1
         else if (skinMode)
             sceneOk = scene_.initSkin(device_, "dxil", "vsMain", "psMain", modelFile, outError);
         else if (hizMode)
