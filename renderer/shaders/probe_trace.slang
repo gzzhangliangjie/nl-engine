@@ -51,7 +51,10 @@ cbuffer TraceConstants : register(b0)
     // M-WEA1（Q-WE5 实验版）：+2×float4 天穹参数（CPU 侧填 M10.1 同值）。
     float4 g_traceZenith;     // rgb = 天顶色 / a 预留（turbidity）
     float4 g_traceHorizon;    // rgb = 地平线色 / a 预留（cloudCoverage）
-    // ⚠️ CB 尺寸 112B（7×float4）：CPU 分配 112B（M11.0 铁律照旧）。
+    // M-WEA2（Q-W2-2=C1）：+1×float4 高度雾（x = fogDensity 1/m / y = fogHeight m /
+    // zw 预留）。雾色不另发（D22 ②修正：取 g_traceHorizon.rgb 同源）。
+    float4 g_traceFog;
+    // ⚠️ CB 尺寸 128B（8×float4）：CPU 分配 128B（M11.0 铁律照旧）。
 }
 
 Texture2D<float4> g_placeAtlas0 : register(t0);   // 布点 atlas（RGBA32F cur parity）
@@ -174,6 +177,11 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
         {
             radiance = skyGradientParams(dir, g_traceZenith.rgb,
                                          g_traceHorizon.rgb);  // miss → 解析天穹（M-WEA1 CB 参数）
+            // M-WEA2：miss 射线沿程高度雾（UE SampleHeightFogOnGI 对位；雾层以下
+            // 射线被 maxDist 500m clamp，下半球浓雾有界不发散）
+            radiance = applyHeightFog(radiance, probe.xyz.y, dir, 1.0e4f,
+                                      g_traceFog.x, g_traceFog.y,
+                                      g_traceHorizon.rgb, 500.0f);
         }
         else
         {

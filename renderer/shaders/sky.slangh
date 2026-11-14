@@ -15,3 +15,52 @@ float3 skyGradientParams(float3 dir, float3 zenith, float3 horizon)
     c *= lerp(0.35f, 1.0f, saturate(dir.y * 4.0f + 1.0f));
     return c;
 }
+
+// ----------------------------------------------------------------------------
+// M-WEA2（Q-W2-1=B2 拍板）：单层指数高度雾——解析线积分，UE
+// HeightFogCommon.ush CalculateLineIntegralShared 口径简化（偏离项记
+// UE-DIFFS D22：① 密度在雾标高以下 clamp 恒定（UE 地面以下继续指数增，
+// 防爆防 NaN）；② 无方向性 inscattering（雾色 = 天穹地平线色，全局标量
+// 口径——C1 拍板修正：CB 1×float4 装不下 5 标量，雾色不另发，直接取
+// 已有 g_*Horizon.rgb，单一事实源同源）；③ 无 StartDistance/cubemap）。
+//
+// 局部密度 ρ(h) = fogDensity · exp(-kFogFalloff · max(0, h - fogHeight))
+// 视线 [0,L] 光学厚度 τ = ∫ρ(h0 + t·dirY) dt：
+//   a = kFogFalloff·dirY ≠ 0:  τ = ρ0 · (1 - exp(-a·L)) / a   （exp 参数 clamp
+//                              到 ±20 防溢出——a<0 穿入雾层底部指数增厚，
+//                              T 有界趋 0，与 UE「地下雾无限厚」同口径）
+//   a ≈ 0（水平射线）:        τ = ρ0 · L                     （Taylor 极限）
+// fogDensity ≤ 0（天气关缺省）→ τ ≡ 0 → T ≡ 1 → 全链 bytes 保形（Q-WE5 闸门）。
+// ----------------------------------------------------------------------------
+
+// 单层高度雾高度衰减率（1/m）：单层近似常数（WeatherState 不带该字段，
+// M-WEA2 落码口径；fogDensity/fogHeight 来自天气模型 profile 表）。
+static const float kFogFalloff = 0.05f;
+
+float heightFogTransmittance(
+    float originY, float3 dir, float dist,
+    float fogDensity, float fogHeight, float maxDist)
+{
+    const float L = min(dist, maxDist);
+    if (fogDensity <= 0.0f || L <= 0.0f)
+        return 1.0f;                              // 雾关：恒等透射（bytes 保形闸）
+    const float rho0 = fogDensity * exp(-kFogFalloff * max(0.0f, originY - fogHeight));
+    const float a = kFogFalloff * dir.y;
+    float tau;
+    if (abs(a) > 1.0e-4f)
+        tau = rho0 * (1.0f - exp(-min(a * L, 20.0f))) / a;
+    else
+        tau = rho0 * L;
+    return exp(-tau);
+}
+
+// 应用雾到一条视线上的辐射：radiance·T + fogColor·(1-T)。
+// fogColor 由调用点传（= 同 CB 的天穹地平线色，见 D22 ②）。
+float3 applyHeightFog(
+    float3 radiance, float originY, float3 dir, float dist,
+    float fogDensity, float fogHeight, float3 fogColor, float maxDist)
+{
+    const float t = heightFogTransmittance(originY, dir, dist, fogDensity, fogHeight, maxDist);
+    return radiance * t + fogColor * (1.0f - t);
+}
+

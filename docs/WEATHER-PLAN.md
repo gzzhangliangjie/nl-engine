@@ -132,7 +132,7 @@ Bruneton 式 transmittance/multi-scattering LUT（按状态变化重算，UE Sta
 | **Q-WE6** | 是否引入第三方库 | 随 A = **零 vendored**，天气算法自研例外（无需另拍板） |
 
 **拍板后动作（已执行）**：① 结论写回 `ROADMAP.md` 穿插项表（参数层 + 高级远期两行）、新建本计划书、草案降级为调研附录；② `MILESTONES.md` 补天气立项台账；③ `GAME-DEV-ORDER.md` 第 11 步打磨波标注天气渲染穿插项可在此消费。
-**拍板后动作（M-WEA1 开工时补，已执行 2026-11-14）**：④ `SHADER-CONVENTIONS.md` §2.22 天气参数节（CB 扩容对照表 + 保形机制 + 曲线口径）✅；⑤ `s5/UE-DIFFS.md` **D21** 偏离台账（解析近似而非 UE 全套大气 LUT，bevy/Carrot 对照）✅；⑥ 全仓 grep 旧「无天气条目」口径——GAME-DEV-ORDER 第 11 步 / ROADMAP 穿插项行已含天气条目，无残留需勘误 ✅。
+**拍板后动作（M-WEA1 开工时补，已执行 2026-11-14）**：④ `SHADER-CONVENTIONS.md` §2.22 天气参数节（CB 扩容对照表 + 保形机制 + 曲线口径）✅；⑤ `s5/UE-DIFFS.md` **D22** 偏离台账（解析近似而非 UE 全套大气 LUT，bevy/Carrot 对照；原编 D21 与 S15 VSM 页表条目撞号，2026-11-14 重编号）✅；⑥ 全仓 grep 旧「无天气条目」口径——GAME-DEV-ORDER 第 11 步 / ROADMAP 穿插项行已含天气条目，无残留需勘误 ✅。
 
 ## 9b. M-WEA0 开工拍板（2026-11-13）
 
@@ -147,6 +147,38 @@ M-WEA0 任务书（按上述拍板细化）：
 3. `tools/make-weather-evidence.py`：从真实 TSV 输出生成天气曲线证据图；展示台 tool 卡（usage/正向/负向）+ `docs/weather/WEATHER-TOOLS-GUIDE.md`。
 4. 确定性：同 seed + 同帧号重放逐字节一致进 selftest 锚；CPU 侧保持 bytes（Q11-1 口径）。
 5. 零渲染改动、零基线影响、不 bump `kStage`；冻结面照 §10。
+
+---
+
+## 9d. M-WEA3 开工拍板（2026-11-14，三处实读后）
+
+| 编号 | 问题 | 结论 |
+|---|---|---|
+| **Q-W3-1** | 湿材质公式与作用面（wetness 渲染侧零消费，UE 无引擎级对位） | **A2 全材质 + N·up 加权**：权重 = `lerp(0.35, 1, saturate(N·up)) × wetness`（雨从上往下淋，天花板基础湿 35%）；公式 `roughness=lerp(r, r*0.35, w)`、`albedo*=lerp(1, 0.65, w)`；raster/compute 双处 shadePbrGrad 同步落（运算体逐字符同序）。A1 统一无方向加权（物理感弱）、A3 朝向二值（过渡生硬）均否。CB 复用 fogA.z 预留分量零扩容 |
+| **Q-W3-2** | 时域稳定性（csFilterTemporal alpha 0.1 亮度滞后数学存在） | **B1 CPU 帧间差 reject**：viewer 逐帧比较天气关键参数 max abs diff > 0.01 → `weatherHistoryReject` → filter 态 validHistory 单帧清零（复用 g_flags.x 通道零 shader 改动）；渐变 20s 每帧 ~1e-3 不触发正常累积。B2 只补证据（快变鬼影实存验收打折）、B3 shader 端 alpha 调制（全局标量无逐像素局部性，过度工程）均否 |
+
+**M-WEA3 任务书（按拍板细化）**：
+1. CPU：FrameParams `weatherWetness`/`weatherHistoryReject`（缺省保形）；viewer 湿度直通 + 帧间差检测（上帧快照 static，主循环单线程）；scene.cpp b3 cc[10]/b4 rf[2] 填 wetness + drawFilterTemporal fcb[4] 与 reject 相与。
+2. Shader：双处 shadePbrGrad 湿化三行（material.slang b4 / direct.slang b3，fogA.z 复用）；filter_temporal 零改动。
+3. 台账：SSC §2.22b + UE-DIFFS D24（引擎级湿化超集简化）。
+4. 零漂移闸：天气关全链 bytes（s10-refgi/s11-hash/s8.2 + s12-temporal filter 态——reject 缺省 false）；weather-w1/w2 基线合法重拍（clear 微雾 wetness 恒 0？——**wetness 只在 rain/雨后 >0**，clear 轮廓 rainIntensity=0 → wetness=0 恒等，w1/w2 基线**预期零重拍**，若 bytes 差即回归）。
+5. 新卡 weather-w3：雨中湿透（roughness 0.35 视觉锚）/ 雨停缓干（ODE 记忆态两端对比）/ filter 态天气快变无鬼影（reject 生效）。
+
+---
+
+## 9c. M-WEA2 开工拍板（2026-11-14，三处实读后）
+
+三处实读（本轮模块 = 高度雾透射接线）：Carrot `merge-lighting.slang`（纯屏幕 lerp 雾，反面教材实锤）；bevy `fog.wesl`（逐像素解析雾 + 雾色吃直光 inscattering，froxel 体积雾属方案 B 不做）；UE `HeightFogCommon.ush`（解析指数高度雾**线积分** `CalculateLineIntegralShared`，输出 inscatter+transmittance）+ `LumenTracingCommon.ush`（逐射线应用于 Lumen miss，override origin + `SampleHeightFogOnGI` 开关）。
+
+**开工闸现场盘点**：① 云透射进直光**已在 M-WEA0 链路内**（`weather.cpp:217` `sunIntensity = daylight × cloudTransmittance`，M-WEA1 已接全链 CB）——M-WEA2 直光侧只剩证据；② 高度雾是真正增量（fogDensity/fogHeight 在 WeatherState 已产出、当前零消费）；③ 4 消费端 CB 已预留 `horizon.a = cloudCoverage` 槽（未消费，本轮继续预留）。
+
+| 编号 | 问题 | 结论 |
+|---|---|---|
+| **Q-W2-1** | 高度雾接线面：fogDensity/fogHeight 接进哪几个消费面 | **B2 三点接线**：direct 逐像素解析雾（UE/bevy 主口径，沿视线到表面深度的 exp 高度雾线积分）+ 探针 miss 沿射线雾（UE `SampleHeightFogOnGI` 对位，miss 长度 clamp）+ sky-bg 地平线雾；world cache miss 天空项同口径跟随。**B1（只 GI 链）画面割裂、B3（+cache 显式衰减）过度设计均否**；probe_gather 不加雾（探针值是表面处光照，雾是相机→表面路径介质效应，在最终合成处应用一次——物理口径，SSC 注明） |
+| **Q-W2-2** | 雾参数 CB 注入形态 | **C1 新增雾 float4 包**：`x=fogDensity / y=fogHeight / zw=雾色 rgb`；雾色 CPU 单一事实源在 scene.cpp 填 CB 处推（天穹地平线色 + 太阳前向散射近似，bevy inscattering 口径；不放 WeatherState/TSV，weather-w0 工具卡零波及）。traceCB 112→128B + GIConstants b5 48→64B + cacheCB 同步扩；分配尺寸按 `dxc -dumpbin` 反汇编校验（M11.0 铁律）；沿用 Q-WE5「扩 traceCB_ 不建独立 WeatherCB」拍板 |
+| **Q-W2-3** | 直光云透射处置 | **D1 不动，只补证据**：透射已乘进 sunIntensity（CPU 乘与 shader 乘数学等价，透射是全局标量），零代码改动；M-WEA2 补 GI 响应证据 = 阴天/晴天对比卡 + 探针辐照度均值锚 + world cache C 值跟随锚。D2 拆独立字段（HUD 分离显示）无视觉收益，否 |
+
+**零漂移闸（M-WEA1 先例照走）**：雾缺省 = density 0 → T≡1、inscatter≡0 → 天气关时全链 bytes（老卡 s10/s11/s12 零重拍）；天气开时 clear 也有微雾（profile 0.0005/m）→ **weather-w1 基线卡预期重拍**（M-WEA2 合法改动面，非漂移）。全量接线前先做最小雾接线实验（仅探针 miss）双后端 bytes 实证再铺开。
 
 ---
 

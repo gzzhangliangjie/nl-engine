@@ -49,6 +49,9 @@ cbuffer CacheConstants : register(b0)
     // M10.1 同值 → bytes 零漂移，2026-11-13 双后端 6/6 实证）。
     float4   g_cacheZenith;   // rgb = 天顶色 / a 预留（turbidity）
     float4   g_cacheHorizon;  // rgb = 地平线色 / a 预留（cloudCoverage）
+    // M-WEA2（Q-W2-2=C1）：+1×float4 高度雾（x = fogDensity / y = fogHeight /
+    // zw 预留）。miss 天空项与探针同口径雾化（SSC §2.22）。
+    float4   g_cacheFog;
 }
 
 Texture2D g_probeDepth : register(t0);   // D32（velocity prepass 写入）
@@ -244,8 +247,14 @@ void csCacheUpdate(uint idx : SV_DispatchThreadID)
     q.TraceRayInline(g_tlas, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, ray);
     q.Proceed();
     if (q.CommittedStatus() == COMMITTED_NOTHING) {
-        eInd = g_updateMat.rgb * skyGradientParams(d, g_cacheZenith.rgb,
-                                                    g_cacheHorizon.rgb); // miss → 天穹（M-WEA1 CB 参数）
+        // miss → 天穹（M-WEA1 CB 参数）；M-WEA2：天空项先过沿程高度雾
+        // （与探针 miss 同口径，SSC §2.22——缓存烤到的天光含雾，间接光
+        // 随阴雾天平滑变暗 = 任务书「GI 侧响应」判据的 cache 侧）
+        const float3 foggedSky = applyHeightFog(
+            skyGradientParams(d, g_cacheZenith.rgb, g_cacheHorizon.rgb),
+            origin.y, d, 1.0e4f, g_cacheFog.x, g_cacheFog.y,
+            g_cacheHorizon.rgb, 500.0f);
+        eInd = g_updateMat.rgb * foggedSky;
     } else {
         const float3 hitP = origin + d * q.CommittedRayT();
         // 命中点法线在 104-tri 粗代理上不可得（M10.1 降级同因）：用命中点

@@ -209,7 +209,7 @@
 | 升级路径 | 若多物体场景出现可量化的 disocclusion 鬼影 / 光斑残留，**单独拍板**补 previous normal（B2）或完整 previous_gbuffer（B3）；代价 = 新增纹理 + 写入 pass + 双缓冲、Q4 结论改写、全仓勘误 7 处（S9-PLAN / T0-PLAN / SHARED-INFRA-OPTIONS / ROADMAP / SHADER-CONVENTIONS / MILESTONES / 本文件），M12.2 冻结面不动。 |
 | 触发条件 | 多物体场景（真实几何边缘、`deviceZ` 多档）复评时若有量化收益再评估。本场景单凸体 + 纯天空、`probeDepth_` 的 `deviceZ` 在 8-bit 下仅 **184~186 三档**，静态 `velocity=0` 时拒绝层结构性不触发、测不出量化收益 —— **不得**据此宣称「历史拒绝已消除主观鬼影」；M12.2 的运动证据只是跟手性代理（`meanMAE(ON,同帧无历史)/meanMAE(OFF,同帧无历史)` = 0.846）。 |
 
-### D21 天气天穹/太阳：UE 全套大气物理（LUT+组件重建）vs 我们解析参数化 + CPU 状态层（WEA M-WEA1 建档，2026-11-14；计划内简化，WEATHER-PLAN Q-WE3/Q-WE5 拍板）
+### D22 天气天穹/太阳：UE 全套大气物理（LUT+组件重建）vs 我们解析参数化 + CPU 状态层（WEA M-WEA1 建档，2026-11-14；计划内简化，WEATHER-PLAN Q-WE3/Q-WE5 拍板）
 
 | | 内容 |
 |---|---|
@@ -218,6 +218,26 @@
 | 定性 | **计划内简化（有意，非 bug）**：参数层先行（WEATHER-PLAN 方案 A），GI 响应靠天气参数挂 Lumen 输入项自动达成；大气 LUT 全套属方案 B 远期（`WEATHER-PHASE2-PLAN.md` 出站条件见 §6）。偏离点：太阳盘形状/大气散射弧/多散射不出（解析近似），天穹为两色渐变 + 调制而非物理积分。 |
 | 升级路径 | 方案 B（大气 LUT + froxel 体积雾 + 体积云）在参数层全收口且用户确认「视觉仍不够」才立项；届时 `weather.slangh` 单一事实源替换为 LUT 采样、CB 布局重拍（Q-WE5 闸门复用）。 |
 | 确定性口径 | 天气曲线（昼因子 smoothstep / 灰化顺序 / 地平线余光 / 晚霞暖序）已按 2026-11-14 拍板修订并入档 `SHADER-CONVENTIONS §2.22`；CPU（weather.cpp）与 python 孪生（verify.py）两实现同式同源。 |
+
+
+### D23 高度雾：UE HeightFog 全集（双指数密度/方向 inscattering/StartDistance/cubemap/Lumen 逐射线开关）vs 我们单层解析近似（WEA M-WEA2 建档，2026-11-14；计划内简化，WEATHER-PLAN §9c Q-W2-1/Q-W2-2 拍板）
+
+| | 内容 |
+|---|---|
+| UE 做法 | `Shaders/Private/HeightFogCommon.ush`：解析指数高度雾**线积分** `CalculateLineIntegralShared`（exp2 形式 + Taylor 展开，双指数双密度参数组）；输出 (inscattering rgb, transmittance a)；inscattering 含方向项（`ComputeInscatteringColor` 太阳方向渐变）+ 可选 cubemap；`OverrideOrigin` 版本供任意射线起点（Lumen 逐射线用，`LumenTracingCommon.ush` + cvar `SampleHeightFogOnGI` 开关）；VolumetricFog 为独立 froxel 体积系统。 |
+| 我们现状（M-WEA2） | 单层指数高度雾（`sky.slangh heightFogTransmittance`）：局部密度 ρ(h)=fogDensity·exp(-0.05·max(0,h−fogHeight))（**雾标高以下 clamp 恒定**——UE 地面以下继续指数增，我们防爆防 NaN）；线积分 exp 形式 + Taylor（|a|<1e-4）+ exp 参数 clamp ±20；应用 = UE 口径（直光合成后逐像素 + 探针/cache/refGI miss 逐射线 + sky-bg）。雾色 = 天穹地平线色（C1 落地修正：1×float4 装不下 5 标量）。bevy 口径：`fog.wesl` 四式解析雾 + 雾色吃直光 inscattering（我们雾色取 horizon 已隐含该效果；方向项不做）。Carrot = 屏幕 lerp 雾（反面教材，不采）。 |
+| 定性 | **计划内简化（有意，非 bug）**：单层近似覆盖「阴雾天远场变灰白、GI 随之平滑变暗」的任务书验收叙事；无方向性光柱/雾层内渐变（方案 B froxel 远期）。探针 miss 下半球（dirY<0）穿入雾层底部指数增厚，exp 参数 clamp ±20 → T 有界趋 0（与 UE「地下雾无限厚」同口径，视觉 = 雾白）。 |
+| 升级路径 | froxel 体积雾 raymarch 属方案 B（WEATHER-PHASE2 出站条件见 WEATHER-PLAN §6）；像素 GI 贡献的相机路径透射（gather 段 ×T）留 M-WEA3+ 单独拍板。 |
+
+
+### D24 湿材质：UE 材质层 WetnessMask 手工节点 vs 本仓引擎级统一湿化（WEA M-WEA3 建档，2026-11-14；超集简化，WEATHER-PLAN §9d Q-W3-1 拍板）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 引擎零湿化逻辑（`Shaders/Private` grep Wetness 零命中）——湿表面是材质作者在材质图用 WetnessMask/顶点色手工调 roughness/albedo 的节点级组合；Landscape 物理材质按层混合。无全局湿度标量。 |
+| 我们现状（M-WEA3） | 引擎级统一湿化：全局 wetness 标量（WeatherState ODE 记忆态，M-WEA0）→ 双处 shadePbrGrad 内 `wetW = wetness × lerp(0.35,1,saturate(N·up))`，roughness 压到 35% + albedo ×0.65（N·up 加权 = 雨从上往下淋近似）。本仓所有 PBR 材质统一生效，无逐材质 mask。 |
+| 定性 | **超集简化（有意）**：本仓场景无逐材质湿度 mask 需求（Suzanne 统一湿化即视觉证据）；UE 口径自由度高但需要资产端配合，引擎统一版零资产成本。GI 弹射面反射率不随湿度变化（探针 hit 走统一模型色非 PBR，天然不波及）。 |
+| 升级路径 | 逐材质湿化 mask（材质属性加 wetnessScale）留后续拍板；froxel 雨幕粒子属方案 B 远期。 |
 
 
 ## 计划内待办（非偏差，挂账防丢）

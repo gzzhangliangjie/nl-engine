@@ -86,3 +86,4 @@ Desktop.ini
 
 # 注意：*.log / *.tsv 绝不 ignore——example/ 下 113 份 log 与 40 份 tsv
 # 是逐字节验收的证据与基线，故意入库（行尾口径见 .gitattributes）。
+example/*/verify-*

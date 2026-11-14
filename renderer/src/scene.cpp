@@ -1835,10 +1835,24 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         matResolveConstants_ = device->createBuffer(mrcDesc);
         if (!matResolveConstants_) { outError = "createBuffer failed for mat resolve constants"; return false; }
 
+        // M-WEA2：b4 RasterFog（32B volatile）——raster matResolve 直光雾专用
+        // 新 buffer（纯 graphics 绑定，无跨阶段；fogA/fogB 与 compute b3 雾同源）。
+        nvrhi::BufferDesc rfcDesc;
+        rfcDesc.byteSize = 32;
+        rfcDesc.isConstantBuffer = true;
+        rfcDesc.isVolatile = true;
+        rfcDesc.maxVersions = 16;
+        rfcDesc.debugName = "RasterFogConstants";
+        rasterFogCB_ = device->createBuffer(rfcDesc);
+        if (!rasterFogCB_) { outError = "createBuffer failed for raster fog constants"; return false; }
+
         // 材质 pass 布局（§2.7 单一 BindingSet）：槽位表抽进 addResolveLayoutItems，
         // 与 M9.0 direct.slang 的 compute 管线共用同一份定义（§2.18）。
         nvrhi::BindingLayoutDesc mDesc;
         addResolveLayoutItems(mDesc);
+        // M-WEA2：matResolve 专属 b4 RasterFog（共享槽位表不加——volatile CB
+        // 上限 6 约束，2026-11-14 实测；纯 graphics 无 M10.3 跨阶段前科面）。
+        mDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(4));
         matResolveLayout_ = device->createBindingLayout(mDesc);
         if (!matResolveLayout_) { outError = "createBindingLayout failed for mat resolve"; return false; }
 
@@ -2671,10 +2685,11 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     csDirectVsm_ = device->createShader(desc, csvsmBlob.data(), csvsmBlob.size());
     if (!csDirectVsm_) { outError = "createShader failed for direct.csvsm"; return false; }
 
-    // b3 DirectConstants（32B）：g_clearColor（16B）+ g_shadowParams（16B：bias/tMax），
+    // b3 DirectConstants（64B）：g_clearColor（16B）+ g_shadowParams（16B：bias/tMax）
+    // + M-WEA2 雾 2×float4（fogA: density/height，fogB: rgb 雾色），
     // 每帧全量覆写（volatile CB 纪律）。
     nvrhi::BufferDesc dcDesc;
-    dcDesc.byteSize = 32;
+    dcDesc.byteSize = 64;
     dcDesc.isConstantBuffer = true;
     dcDesc.isVolatile = true;
     dcDesc.maxVersions = 16;
@@ -3148,9 +3163,15 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
     //（阴影射线有限最大距离，保精度；场景半径 ~1，50 足以覆盖全部遮挡物）。
     writeResolveConstants(cmd, params);
-    const float cc[8] = {params.clearColor[0], params.clearColor[1],
-                         params.clearColor[2], params.clearColor[3],
-                         0.01f, 50.0f, 0.0f, 0.0f};
+    // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
+    // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
+    const float cc[16] = {params.clearColor[0], params.clearColor[1],
+                          params.clearColor[2], params.clearColor[3],
+                          0.01f, 50.0f, 0.0f, 0.0f,
+                          params.weatherFogDensity, params.weatherFogHeight,
+                          params.weatherWetness, 0.0f,
+                          params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
     // M15.1（拍板 B）：--vsm 时先跑深度 pass（页池/页表须在 dispatch 前进 SRV 态）
@@ -3218,10 +3239,10 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!csReferenceGI_) { outError = "createShader failed for direct.csrefgi"; return false; }
     }
 
-    // b3 DirectConstants（32B）：清屏色 + shadow 参数（与 drawShadow 同款，每帧覆写）。
+    // b3 DirectConstants（64B）：清屏色 + shadow 参数 + M-WEA2 雾 2×float4（每帧覆写）。
     {
         nvrhi::BufferDesc dcDesc;
-        dcDesc.byteSize = 32;
+        dcDesc.byteSize = 64;
         dcDesc.isConstantBuffer = true;
         dcDesc.isVolatile = true;
         dcDesc.maxVersions = 16;
@@ -3249,7 +3270,7 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     //（Q-WE5 已拍板：b5 compute-only 扩容安全；b4 跨阶段禁扩 M10.3 实锤）。
     {
         nvrhi::BufferDesc giDesc;
-        giDesc.byteSize = 48;
+        giDesc.byteSize = 64;   // M-WEA2：48→64B（+1×float4 高度雾，Q-W2-2）
         giDesc.isConstantBuffer = true;
         giDesc.isVolatile = true;
         giDesc.maxVersions = 16;
@@ -3372,9 +3393,15 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     }
 
     writeResolveConstants(cmd, params);
-    const float cc[8] = {params.clearColor[0], params.clearColor[1],
-                         params.clearColor[2], params.clearColor[3],
-                         0.01f, 50.0f, 0.0f, 0.0f};
+    // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
+    // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
+    const float cc[16] = {params.clearColor[0], params.clearColor[1],
+                          params.clearColor[2], params.clearColor[3],
+                          0.01f, 50.0f, 0.0f, 0.0f,
+                          params.weatherFogDensity, params.weatherFogHeight,
+                          params.weatherWetness, 0.0f,
+                          params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
     // RefConstants：本帧起点 = 已累积总数（保证每帧抖动不同）；结束 = 起点 + spp。
@@ -3387,9 +3414,10 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     // b5 GI 常量（M10.3 Q14-1）：像素侧 albedo（统一暖灰，probe_gather gcb[24..26] /
     // probe_trace tcb[8..10] 同源硬编码）+ ambient（probe trace g_traceHitMat.a 同源）。
     // M-WEA1：[4..11] 天穹 zenith/horizon（FrameParams 字段读，缺省 M10.1 保形）。
-    const float gi[12] = {0.45f, 0.39f, 0.30f, params.lightDir[3],
+    const float gi[16] = {0.45f, 0.39f, 0.30f, params.lightDir[3],
                           params.weatherZenith[0], params.weatherZenith[1], params.weatherZenith[2], 0.0f,
-                          params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
+                          params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f,
+                          params.weatherFogDensity, params.weatherFogHeight, 0.0f, 0.0f};
     cmd->writeBuffer(refGICB_, gi, sizeof(gi));
 
     // M-PERF1：csRefGI pass 计时（reference / reference-gi 累积 dispatch 段）。
@@ -3694,8 +3722,9 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     //  ⚠️ SSC §2.21：扩 CB 前以 dxc -dumpbin 反汇编的 cbuffer Size 为准。
     //  M-WEA1（Q-WE5 实验版）：80B → 112B（+2×float4 天穹 zenith/horizon，
     //  CPU 填 M10.1 同值；改 .slang 后删两棵 exe 强制重链）。
+    //  M-WEA2（Q-W2-2=C1）：112B → 128B（+1×float4 高度雾：density/height/zw 预留）。
     nvrhi::BufferDesc tcbDesc;
-    tcbDesc.byteSize = 112;
+    tcbDesc.byteSize = 128;
     tcbDesc.isConstantBuffer = true;
     tcbDesc.isVolatile = true;
     tcbDesc.maxVersions = 16;
@@ -3706,7 +3735,7 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     // gatherCB_（144B volatile，M10.2 112B → M-WEA1 +2×float4 天穹）：probe_gather.slang 布局
     //（[0..15] invViewProj float4x4 / [16..19] eye / [20..23] params / [24..27] mat·MIN）。
     nvrhi::BufferDesc gcbDesc;
-    gcbDesc.byteSize = 160;   // M10.2：112→128B（+g_gLevels）；M-WEA1：128→160B（+天穹 2×float4）
+    gcbDesc.byteSize = 176;   // M10.2：112→128B（+g_gLevels）；M-WEA1：128→160B（+天穹 2×float4）；M-WEA2：160→176B（+雾 1×float4）
     gcbDesc.isConstantBuffer = true;
     gcbDesc.isVolatile = true;
     gcbDesc.maxVersions = 16;
@@ -4223,7 +4252,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // csTraceProbe 抖动分支整块不执行，s10-*/s11-* 冻结基线 bytes 零漂。
     {
         const float ls = params.probeLightScale;
-        const float tcb[28] = {
+        const float tcb[32] = {
             params.lightDir[0], params.lightDir[1], params.lightDir[2], 0.0f,
             params.weatherSunCol[0], params.weatherSunCol[1], params.weatherSunCol[2],
             2.5f * ls * params.weatherSunIntensity,
@@ -4238,6 +4267,8 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
             // M10.1 常量 bytes 保形；--weather 开启时 viewer 覆写为调制值）。
             params.weatherZenith[0], params.weatherZenith[1], params.weatherZenith[2], 0.0f,
             params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f,
+            // M-WEA2：[28..31] 高度雾（density/height/zw 预留；缺省 0 保形）
+            params.weatherFogDensity, params.weatherFogHeight, 0.0f, 0.0f,
         };
         cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
         ++s12Frame_;
@@ -4264,7 +4295,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         nl::math::Mat4 vp{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
         const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
-        float gcb[40] = {};
+        float gcb[44] = {};
         std::memcpy(gcb, invVP.m, sizeof(invVP.m));   // [0..15] invViewProj
         gcb[16] = params.eye[0];
         gcb[17] = params.eye[1];
@@ -4287,6 +4318,8 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         // M-WEA1：[32..39] 天穹 zenith/horizon（FrameParams 字段读，缺省保形）。
         gcb[32] = params.weatherZenith[0]; gcb[33] = params.weatherZenith[1]; gcb[34] = params.weatherZenith[2]; gcb[35] = 0.0f;
         gcb[36] = params.weatherHorizon[0]; gcb[37] = params.weatherHorizon[1]; gcb[38] = params.weatherHorizon[2]; gcb[39] = 0.0f;
+        // M-WEA2：[40..43] 高度雾（density/height/zw 预留；缺省 0 保形）
+        gcb[40] = params.weatherFogDensity; gcb[41] = params.weatherFogHeight; gcb[42] = 0.0f; gcb[43] = 0.0f;
         cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
     }
 
@@ -4520,7 +4553,10 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
     fcb[1] = vpH;
     fcb[2] = alpha;
     fcb[3] = static_cast<float>(hmax);
-    fcb[4] = temporalHistoryValid_ ? 1.0f : 0.0f;  // validHistory
+    // M-WEA3（Q-W3-2=B1）：帧间天气差超阈值 → 本帧历史无效（单帧清零，
+    // 下一帧由 alpha=max(userAlpha,1/(len+1)) 重新收敛）。天气关缺省
+    // weatherHistoryReject=false → 与 S12 原语义逐字节保形。
+    fcb[4] = (temporalHistoryValid_ && !params.weatherHistoryReject) ? 1.0f : 0.0f;  // validHistory
     fcb[5] = params.temporalEnable ? 1.0f : 0.0f;  // 时间层（三层独立开关之一）
     fcb[6] = params.filterSpatial  ? 1.0f : 0.0f;  // 空间层（M12.1 实现）
     // M12.2：g_flags.w 同时承载「拒绝层开关 + 阈值」（0 = 层关），零 CB 扩容
@@ -4636,10 +4672,10 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
     // cacheCB_（192B volatile）：[0..15] invViewProj / [16..19] eye+cellSize /
     // [20..23] vpW/vpH/lifetime/frameIndex / M11.1 [24..27] 灯向+强度 /
     // [28..31] 灯色+bias / [32..35] albedo+tMax / [36..39] 软目标 p + vizMode /
-    // M-WEA1 [40..47] 天穹 zenith/horizon。
+    // M-WEA1 [40..47] 天穹 zenith/horizon / M-WEA2 [48..51] 高度雾。
     // ⚠️ slang 端 cbuffer 实测布局为准（SSC §2.21）；全 compute 消费不触 §2.20。
     nvrhi::BufferDesc cbDesc;
-    cbDesc.byteSize = 192;
+    cbDesc.byteSize = 208;
     cbDesc.isConstantBuffer = true;
     cbDesc.isVolatile = true;
     cbDesc.maxVersions = 16;
@@ -4840,7 +4876,7 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         nl::math::Mat4 vp{}, invVP{};
         std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
         invVP = nl::math::inverseMat4(vp);
-        float cb[48] = {};
+        float cb[52] = {};
         std::memcpy(cb, invVP.m, sizeof(invVP.m));
         cb[16] = params.eye[0]; cb[17] = params.eye[1]; cb[18] = params.eye[2];
         cb[19] = 0.5f;                       // cellSize（与 slang kCellSize 同口径）
@@ -4860,7 +4896,9 @@ void Scene::drawCacheFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         // M-WEA1：[40..47] 天穹 zenith/horizon（FrameParams 字段读，缺省保形）。
         cb[40] = params.weatherZenith[0]; cb[41] = params.weatherZenith[1]; cb[42] = params.weatherZenith[2]; cb[43] = 0.0f;
         cb[44] = params.weatherHorizon[0]; cb[45] = params.weatherHorizon[1]; cb[46] = params.weatherHorizon[2]; cb[47] = 0.0f;
-        cmd->writeBuffer(cacheCB_, cb, sizeof(cb));   // 192B 全量覆写
+        // M-WEA2：[48..51] 高度雾（density/height/zw 预留；缺省 0 保形）
+        cb[48] = params.weatherFogDensity; cb[49] = params.weatherFogHeight; cb[50] = 0.0f; cb[51] = 0.0f;
+        cmd->writeBuffer(cacheCB_, cb, sizeof(cb));   // 208B 全量覆写
     }
 
     // (1) 全表衰减（fill 之前——衰减后 fill 续命，同帧新样本不被衰减误伤）。
@@ -5579,6 +5617,16 @@ void Scene::writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& p
     const float mc[4] = {static_cast<float>(visW_), static_cast<float>(visH_),
                          0.f, 0.f};
     cmd->writeBuffer(matResolveConstants_, mc, sizeof(mc));
+
+    // M-WEA2：b4 RasterFog（raster matResolve 直光雾）32B 全量覆写——与 compute
+    // 直光路径 cc[16] 的雾两包同源同值；fogDensity=0（天气关）→ T≡1 保形。
+    // ⚠️ 不复用 b3 DirectConstants：共享槽位表加 b3 撞 NVRHI volatile CB 上限
+    //（6 个）+ compute layout b3 重复声明（2026-11-14 实测双错误）。
+    // M-WEA3（Q-W3-1=A2）：rf[2] = 地面湿度（fogA.z 语义与 compute b3 同）。
+    const float rf[8] = {params.weatherFogDensity, params.weatherFogHeight,
+                         params.weatherWetness, 0.0f,
+                         params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
+    cmd->writeBuffer(rasterFogCB_, rf, sizeof(rf));
 }
 
 bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
@@ -5633,6 +5681,7 @@ bool Scene::ensureVisbufTargets(nvrhi::IDevice* device, float viewportW, float v
     if (pulling_) {
         nvrhi::BindingSetDesc mSet;
         addResolveSetItems(mSet);
+        mSet.addItem(nvrhi::BindingSetItem::ConstantBuffer(4, rasterFogCB_));   // M-WEA2 raster 直光雾
         matResolveSet_ = device->createBindingSet(mSet, matResolveLayout_);
         if (!matResolveSet_) { outError = "createBindingSet failed for mat resolve"; return false; }
     }
@@ -10149,6 +10198,7 @@ void Scene::shutdown() {
     psMatResolve_ = nullptr;
     matResolveConstants_ = nullptr;
     matResolveLayout_ = nullptr;
+    rasterFogCB_ = nullptr;   // M-WEA2：shutdown 清单同步（铁律）
     matResolveSet_ = nullptr;
     matResolvePSO_ = nullptr;
     // M7.2：多材质资源（句柄活到 device 析构之后 = use-after-free，M7.1 教训）。

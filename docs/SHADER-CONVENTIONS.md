@@ -435,3 +435,40 @@ build/<backend>/viewer.exe --screenshot inner.png --dist 0.6 --cull none
 **保形机制**：`FrameParams.weatherZenith/weatherHorizon` 缺省 = M10.1 常量（0.16/0.30/0.58 / 0.62/0.71/0.84）、`weatherSunCol` 缺省白、`weatherSunIntensity` 缺省 1.0——**天气关（`--weather-seed` 不给）时全链 bytes 与 M-WEA0 前逐字节一致**（双后端 8 卡实证）。太阳方向/强度/环境光复用 `FrameParams.lightDir` 现有字段（天气开时 viewer 侧覆写，全链统一）。
 
 **天气曲线（nl/core weather，M-WEA0 重拍版）**：昼因子 = `smoothstep(clamp01(sinElev))`（日出日落全程渐暗）；天穹调制顺序 = **暖染色 → 浊度/云灰化 → 夜压暗（最后）**——灰化目标 0.35 是常数，必须发生在 nightScale 之前，否则夜空被抬回死灰；地平线余光 `nightScaleH = 0.02 + 0.98·max(daylight, warm·0.35)`（horizon 衰减慢于 zenith = 黄昏橙红锚）；warm 窗口 `clamp01(1-|sinElev|·2.5)`、R gain 0.85 / B loss 0.45（晚霞去紫）。CPU 侧（weather.cpp）与 python 孪生（verify.py）两实现同式，改任一处必须同步。
+
+### 2.22a M-WEA2 高度雾接线（2026-11-14；WEATHER-PLAN §9c Q-W2-1=B2 / Q-W2-2=C1 拍板）
+
+**共享函数**：`sky.slangh` 的 `heightFogTransmittance(originY, dir, dist, fogDensity, fogHeight, maxDist)` + `applyHeightFog(radiance, ...)`（解析指数高度雾线积分，UE `HeightFogCommon.ush CalculateLineIntegralShared` 口径简化）。`kFogFalloff = 0.05`（1/m 高度衰减率，单层近似常数，不入 WeatherState）。**雾关闸**：fogDensity ≤ 0 → T≡1 → 全消费端 bytes（Q-WE5 闸门复用）。
+
+**接线面（5 处）**：
+
+| 消费端 | CB（M-WEA2 扩容） | 雾参数（float4） | 应用点 |
+|---|---|---|---|
+| probe_trace miss | TraceConstants **112→128B** | tcb[28..31] = (density, height, 0, 0) | miss 天穹色·T + 雾色·(1−T)，maxDist 500m |
+| world_cache miss | CacheConstants **192→208B** | cb[48..51] 同上 | 天空项先雾化再 × albedo（缓存烤到含雾天光） |
+| direct csrefGI miss | GIConstants b5 **48→64B** | gi[12..15] 同上 | 与探针 miss 同口径（Q14-1 参考尺同源） |
+| probe_gather `--sky-bg` | GatherConstants **160→176B** | gcb[40..43] 同上 | 相机射线天空像素（g_gEye.y 起点） |
+| csDirect / csDirectVsm | DirectConstants b3 **32→64B** | fogA=(density,height,0,0) + fogB=(rgb,0) | **直光合成后逐像素**（UE 口径：雾在光照合成后按视线深度应用一次；alpha 透传） |
+
+**雾色口径（C1 落地修正）**：拍板原文「zw=雾色 rgb」装不下（1×float4 只有 4 分量，density+height+rgb=5 标量）→ 落地为**雾色 = 天穹地平线色 `g_*Horizon.rgb` 现场取**（单一事实源同源；雾天时天气模型已把 horizon 调成雾白，视觉成立）。b3 的 fogB.rgb 由 CPU 填 `params.weatherHorizon` 同值。该修正已记 UE-DIFFS D23。
+
+**已知简化（后续拍板项）**：① probe_gather 前景 GI 贡献不乘相机路径透射（雾只作用直光合成 + 介质内烤制值——UE 把雾应用在完整光照合成后，我们的 GI 在 gather 独立加，两段架构不同；留 M-WEA3+ 拍板）；② csReferenceGI 的直光项（shadePblLinear sample）不带雾，参考图 = GI 趋势尺而非最终画面（趋势门不受影响）；③ 无方向性 inscattering、无 StartDistance/cubemap（UE HeightFog 全集，D23 偏离表）。
+
+**FrameParams**：`weatherFogDensity`（缺省 0）/ `weatherFogHeight`（缺省 0）——天气关缺省 = 雾关 → 全链 bytes；天气开时 clear profile 也有微雾（0.0005/m）→ **weather-w1 基线卡随 M-WEA2 合法重拍**。
+
+### 2.22b M-WEA3 湿材质 + 时域 reject（2026-11-14；WEATHER-PLAN §9d Q-W3-1=A2 / Q-W3-2=B1 拍板）
+
+**湿材质（引擎级统一湿化）**：UE 无引擎级对位（材质层 WetnessMask 手工节点），bevy 无——本仓做引擎统一版（D24 台账）。公式（双处 shadePbrGrad 同式，**运算体逐字符同序**）：
+
+```slang
+const float wetW = g_*FogA.z * lerp(0.35f, 1.0f, saturate(n.y));
+roughness  = lerp(roughness, roughness * 0.35f, wetW);
+baseColor *= lerp(1.0f, 0.65f, wetW);
+```
+
+- 插入点 = roughness clamp 之后、F0/cDiff 之前（baseColor 暗化在派生之前生效，F0/cDiff 自动跟随）。
+- 权重 N·up 加权（A2）：天花板基础湿 35%、朝上面全湿——雨从上往下淋。
+- **消费面**：`fogA.z = wetness`（b3 DirectConstants cc[10] / b4 RasterFog rf[2] 复用预留分量，**CB 尺寸零变更**）；wetness 源 = WeatherState.groundWetness ODE 记忆态（雨停后仍湿的 CPU 侧，M-WEA0 已备）。
+- **保形闸**：wetness=0 → wetW=0 → lerp/乘法精确恒等 → raster/compute 直光 bytes；探针 hit 侧走统一模型色非 PBR，天然零波及（湿化只影响直光 BRDF，SSC 简化项：GI 弹射面反射率不随湿度变化）。
+
+**时域 reject（渐变天气无 GI 亮度滞后）**：`g_flags.x=validHistory` 通道复用——viewer 逐帧比较天气关键参数（zenith/horizon/sunIntensity/fogDensity/wetness）max abs diff > **0.01**（`kWeatherRejectDiff`）→ `FrameParams.weatherHistoryReject=true` → drawFilterTemporal 该帧 `fcb[4]=0`（历史无效单帧清零，下一帧 alpha=max(userAlpha,1/(len+1)) 重新收敛）。渐变 20s smoothstep 每帧变化 ~1e-3 远低于阈值不触发；`--weather-t` 大步进重放触发。全局标量变化 → 全局拒绝语义正确（无逐像素局部性）。天气关缺省 false → S12 基线 bytes 保形。

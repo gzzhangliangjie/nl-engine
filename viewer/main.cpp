@@ -63,6 +63,13 @@
 #include "embed_window.hpp"
 
 namespace {
+// M-WEA3（Q-W3-2=B1）：帧间天气差 reject 的上帧快照（主循环单线程写读）。
+static bool  wPrevValid_ = false;
+static float wPrevZenith_[3]  = {0.f, 0.f, 0.f};
+static float wPrevHorizon_[3] = {0.f, 0.f, 0.f};
+static float wPrevSunInt_ = 0.f;
+static float wPrevFogD_   = 0.f;
+static float wPrevWet_    = 0.f;
 
 int g_passed = 0;
 int g_failed = 0;
@@ -145,7 +152,15 @@ struct Options {
     // WeatherState 覆写太阳方向/强度/色温与天穹两色（全链一致）。
     int weatherSeed = -1;          // --weather-seed N
     double weatherT = 0.0;         // --weather-t 秒（固定时刻 = 确定性截图源）
+    double weatherTStep = 0.0;     // --weather-t-step 秒/帧（M-WEA3：帧号驱动 t = T + step*frame，
+                                   //  大步进跨过渡窗触发帧间差 reject；默认 0 = 固定时刻）
     std::string weatherPreset;     // --weather-preset clear|partly|overcast|rain（可选锁态）
+    // M-WEA2（Q-W2-2）：雾参数 CLI 手调（cvar/CLI 手调语义，--probe-light-scale 先例）。
+    // <0 = 不覆写（跟随天气模型 profile）；>=0 = 锁定（证据卡放大雾效用）。
+    double weatherFogDensity = -1.0;   // --weather-fog-density X（1/m）
+    double weatherFogHeight  = -1.0;   // --weather-fog-height Y（m）
+    double weatherWetness = -1.0;      // --weather-wetness W（M-WEA3：0..1 锁定；
+                                       // <0 = 跟随 ODE 记忆态。同相位湿度对比用）
     bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
@@ -310,6 +325,15 @@ Options parseArgs(int argc, char** argv) {
             o.weatherT = std::atof(argv[++i]);
         else if (a == "--weather-preset" && i + 1 < argc)
             o.weatherPreset = argv[++i];
+        // M-WEA2：雾参数手调（仅 --weather-seed 开启时生效）
+        else if (a == "--weather-fog-density" && i + 1 < argc)
+            o.weatherFogDensity = std::atof(argv[++i]);
+        else if (a == "--weather-fog-height" && i + 1 < argc)
+            o.weatherFogHeight = std::atof(argv[++i]);
+        else if (a == "--weather-t-step" && i + 1 < argc)
+            o.weatherTStep = std::atof(argv[++i]);
+        else if (a == "--weather-wetness" && i + 1 < argc)
+            o.weatherWetness = std::atof(argv[++i]);
         else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
         else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
         // S12 M12.0/M12.1：时域累积 + 空间联合双边参数（仅 --mode filter 消费；
@@ -2652,8 +2676,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                     return false;
                 }
             }
+            // M-WEA3：t = base + step*frame（帧号驱动确定性重放；step=0 = 固定时刻）
             nl::core::WeatherState ws = nl::core::evaluateWeather(
-                static_cast<std::uint64_t>(o.weatherSeed), o.weatherT, preset);
+                static_cast<std::uint64_t>(o.weatherSeed),
+                o.weatherT + o.weatherTStep * static_cast<double>(frame), preset);
             const double ce = std::cos(ws.sunElevation);
             const double se = std::sin(ws.sunElevation);
             fp.lightDir[0] = static_cast<float>(ce * std::sin(ws.sunAzimuth));
@@ -2679,6 +2705,49 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.weatherHorizon[0] = static_cast<float>(ws.skyHorizonR);
             fp.weatherHorizon[1] = static_cast<float>(ws.skyHorizonG);
             fp.weatherHorizon[2] = static_cast<float>(ws.skyHorizonB);
+            // M-WEA2（Q-W2-2=C1）：高度雾参数（雾色消费端取 weatherHorizon 同源；
+            // CLI 手调 >=0 锁定，<0 跟随天气模型 profile）
+            fp.weatherFogDensity = static_cast<float>(
+                o.weatherFogDensity >= 0.0 ? o.weatherFogDensity : ws.fogDensity);
+            fp.weatherFogHeight  = static_cast<float>(
+                o.weatherFogHeight >= 0.0 ? o.weatherFogHeight : ws.fogHeight);
+            // M-WEA3（Q-W3-1=A2）：地面湿度（CLI >=0 锁定，<0 跟随 ODE 记忆态）
+            fp.weatherWetness = static_cast<float>(
+                o.weatherWetness >= 0.0 ? o.weatherWetness : ws.groundWetness);
+            // M-WEA3（Q-W3-2=B1）：帧间天气差 reject——关键参数（zenith/horizon/
+            // sunIntensity/fogDensity/wetness）max abs diff > kWeatherRejectDiff
+            // → 本帧 filter 历史无效（全局变化全局拒绝；渐变 20s 每帧变化
+            // ~1e-3 远低于阈值不触发，--weather-t 大步进重放时触发）。
+            constexpr float kWeatherRejectDiff = 0.01f;
+            const float wz[3] = {static_cast<float>(ws.skyZenithR),
+                                 static_cast<float>(ws.skyZenithG),
+                                 static_cast<float>(ws.skyZenithB)};
+            const float wh[3] = {static_cast<float>(ws.skyHorizonR),
+                                 static_cast<float>(ws.skyHorizonG),
+                                 static_cast<float>(ws.skyHorizonB)};
+            float wDiff = 0.0f;
+            if (wPrevValid_) {
+                for (int k = 0; k < 3; ++k) {
+                    wDiff = std::max(wDiff, std::fabs(wz[k] - wPrevZenith_[k]));
+                    wDiff = std::max(wDiff, std::fabs(wh[k] - wPrevHorizon_[k]));
+                }
+                wDiff = std::max(wDiff, std::fabs(fp.weatherSunIntensity - wPrevSunInt_));
+                wDiff = std::max(wDiff, std::fabs(fp.weatherFogDensity - wPrevFogD_));
+                wDiff = std::max(wDiff, std::fabs(fp.weatherWetness - wPrevWet_));
+            }
+            fp.weatherHistoryReject = wPrevValid_ && wDiff > kWeatherRejectDiff;
+            static bool wRejectLogged = false;
+            if (fp.weatherHistoryReject && !wRejectLogged) {
+                nl::core::log::infoCh("weather", "history reject (diff=", wDiff,
+                                      " > ", kWeatherRejectDiff, ")");
+                wRejectLogged = true;
+            }
+            std::memcpy(wPrevZenith_, wz, sizeof(wz));
+            std::memcpy(wPrevHorizon_, wh, sizeof(wh));
+            wPrevSunInt_ = fp.weatherSunIntensity;
+            wPrevFogD_   = fp.weatherFogDensity;
+            wPrevWet_    = fp.weatherWetness;
+            wPrevValid_  = true;
         }
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
