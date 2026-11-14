@@ -185,7 +185,10 @@ float3 rsShadeCandidate(float3 wp, float3 dir, bool cacheOn,
     q.Proceed();
 
     if (q.CommittedStatus() == COMMITTED_NOTHING) {
-        return skyGradient(dir);
+        // M-WEA1 merge 适配：legacy skyGradient(dir) 已删（M10.1 常量内联于此，
+        // 与 s14 分支验证输出逐值一致；restir miss 天气接线挂账另立项）。
+        return skyGradientParams(dir, float3(0.16f, 0.30f, 0.58f),
+                                 float3(0.62f, 0.71f, 0.84f));
     }
 
     outMiss = false;
