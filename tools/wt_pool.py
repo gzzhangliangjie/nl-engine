@@ -315,6 +315,16 @@ TRACKS = {
                 "from master b150fd9, junction .workbuddy + "
                 "thirdparty/slang/dist + skip-worktree",
     },
+    "water": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-water",
+        "branch": "feat/water", "state": "active",
+        "note": "water interleave track (plan docs/WATER-PLAN.md, "
+                "M-WAT0~WAT2, tags water-t0~water-t2 + water-done; "
+                "plan-B Gerstner + SSR reflection + refraction absorption, "
+                "Q-WA1~WA6 settled 2026-11-14: SSR body hosted by M-WAT0, "
+                "zero vendored); wt built 2026-11-14 from master b150fd9, "
+                "junction .workbuddy + thirdparty/slang/dist + skip-worktree",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
