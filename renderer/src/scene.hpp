@@ -390,7 +390,8 @@ public:
     // shaderSuffix = "dxil" / "spv"；vsEntry/psEntry 按后端传（SPIR-V 恒为 main）。
     // modelFile = assets/models/ 下的 .glb 文件名（M0.7 起由 --model 传入，
     // 上层已做白名单校验）；默认仍是 Suzanne.glb，历史基线不受影响。
-    // 资产路径用 CMake 注入的 NL_ASSET_DIR / NL_SHADER_DIR，不依赖当前工作目录。
+    // 资产/字节码路径经 nl::core::paths 双层解析（exe 相对优先 / 编译期绝对路径兜底，
+    // B1 拍板 2026-11-15），不依赖当前工作目录。
     bool init(nvrhi::IDevice* device, const char* shaderSuffix,
               const char* vsEntry, const char* psEntry,
               const char* modelFile, std::string& outError);

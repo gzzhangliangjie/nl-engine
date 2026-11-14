@@ -3,6 +3,7 @@
 #include "nl/math/math.hpp" // M8.2：inverseMat4（viewProj 求逆做射线生成）
 
 #include "nl/core/log.hpp"
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 #include "nl/core/mesh_io.hpp"     // M1.0：glTF 解析抽到 core，与 nanite-tools 共用
 #include "nl/core/meshlet_io.hpp"  // M1.3：cluster 场景吃 .nmesh 资产
 #include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本文件原为语义复制点）
@@ -47,13 +48,13 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     shaderSuffix_ = shaderSuffix;   // M-P3：供 dbgLines_.ensure 定位 debug_line 字节码
     // ---- 1. 加载 Slang 双目标字节码（同一份 model.slang 出的 spv / dxil）----
     auto shaderPath = [shaderSuffix](const char* stage) {
-        return std::string(NL_SHADER_DIR) + "/model." + stage + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + stage + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vs").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("ps").c_str(), psBlob)) {
         outError = std::string("failed to load model shader (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -67,7 +68,7 @@ bool Scene::init(nvrhi::IDevice* device, const char* shaderSuffix,
     // ---- 2. 解析 GLB（core::mesh_io：场景图遍历 + 节点变换烘进顶点）----
     // M0.7：模型文件名由 --model 传入（上层 Renderer::create 已做白名单校验：
     // 仅 assets/models/ 下的 ASCII .glb 文件名，无路径分隔符）。缺省 Suzanne.glb。
-    const std::string modelPath = std::string(NL_ASSET_DIR "/") + modelFile;
+    const std::string modelPath = std::string(nl::core::paths::assetDir() + "/") + modelFile;
     nl::core::SceneMeshData meshData;
     std::string loadWarning;
     if (!nl::core::loadGltfScene(modelPath.c_str(), meshData, loadWarning)) {
@@ -330,13 +331,13 @@ bool Scene::initCluster(nvrhi::IDevice* device, const char* shaderSuffix,
     // vsEntry/psEntry 由后端传，SPIR-V 恒为 main——cluster 字节码是独立编译产物，
     // 入口在 slangc 时已定为 main；此处参数仅 DXIL 用）----
     auto shaderPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + artifact + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vscluster").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("pscluster").c_str(), psBlob)) {
         outError = std::string("failed to load cluster shaders (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -479,13 +480,13 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     cullTimer_.setLabel("cull");   // M4.2：resolve 日志标明这是 cull pass 实例
     // ---- 1. shader 对（cull 专用入口 vsCull/psCull）。DX12 入口名被忽略，Vulkan 恒 main ----
     auto shaderPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + artifact + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vscull").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("pscull").c_str(), psBlob)) {
         outError = std::string("failed to load cull shaders (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -497,7 +498,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!vsCull_ || !psCull_) { outError = "createShader failed for cull shaders"; return false; }
 
     // ---- 2. 读 .nmesh 资产 ----
-    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+    const std::string assetPath = std::string(nl::core::paths::meshletDir() + "/") + nmeshFile;
     nl::core::NMeshData nm;
     std::string loadError;
     if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
@@ -518,7 +519,7 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         const std::string stem = std::string(nmeshFile).substr(
             0, std::string(nmeshFile).rfind(".nmesh"));  // strip ".nmesh"
         const std::string lod0Path = stem + ".lod0.nmesh";
-        const std::string lod0Full = std::string(NL_MESHLET_DIR "/") + lod0Path;
+        const std::string lod0Full = std::string(nl::core::paths::meshletDir() + "/") + lod0Path;
         nl::core::NMeshData lod0nm;
         std::string lod0err;
         if (!nl::core::loadNMesh(lod0Full.c_str(), lod0nm, lod0err)) {
@@ -877,12 +878,12 @@ bool Scene::initCull(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!triCounter_) { outError = "createBuffer failed for tri counter"; return false; }
 
         auto cullShaderPath = [shaderSuffix](const char* artifact) {
-            return std::string(NL_SHADER_DIR) + "/cull." + artifact + "." + shaderSuffix;
+            return nl::core::paths::shaderDir() + "/cull." + artifact + "." + shaderSuffix;
         };
         std::vector<std::uint8_t> csBlob;
         if (!readFileBytes(cullShaderPath("cs").c_str(), csBlob)) {
             outError = std::string("failed to load cull compute shader (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc csDesc;
@@ -1054,13 +1055,13 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // ---- 1. shader：vsCull/psCull 与 M4 同一份；compute 读 dag.cs.<suffix> ----
     auto shaderPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + artifact + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vscull").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("pscull").c_str(), psBlob)) {
         outError = std::string("failed to load cull shaders (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -1084,7 +1085,7 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
     constexpr int kMaxLevels = 16;
     std::vector<nl::core::NMeshData> levels;
     for (int L = 0; L < kMaxLevels; ++L) {
-        const std::string path = std::string(NL_MESHLET_DIR "/") + stem + ".lod" +
+        const std::string path = std::string(nl::core::paths::meshletDir() + "/") + stem + ".lod" +
                                  std::to_string(L) + ".nmesh";
         nl::core::NMeshData nm;
         std::string err;
@@ -1093,7 +1094,7 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
         levels.push_back(std::move(nm));
     }
     if (levels.size() < 2) {
-        outError = "dag scene needs >= 2 consecutive <stem>.lodN.nmesh levels under " NL_MESHLET_DIR;
+        outError = "dag scene needs >= 2 consecutive <stem>.lodN.nmesh levels under " + nl::core::paths::meshletDir();
         return false;
     }
     for (std::size_t L = 0; L < levels.size(); ++L) {
@@ -1410,12 +1411,12 @@ bool Scene::initDag(nvrhi::IDevice* device, const char* shaderSuffix,
 
     {
         auto dagShaderPath = [shaderSuffix](const char* artifact) {
-            return std::string(NL_SHADER_DIR) + "/dag." + artifact + "." + shaderSuffix;
+            return nl::core::paths::shaderDir() + "/dag." + artifact + "." + shaderSuffix;
         };
         std::vector<std::uint8_t> csBlob;
         if (!readFileBytes(dagShaderPath("cs").c_str(), csBlob)) {
             outError = std::string("failed to load dag compute shader (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc csDesc;
@@ -1589,14 +1590,14 @@ bool Scene::initHiz(nvrhi::IDevice* device, const char* shaderSuffix,
     cullTimer_.setLabel("hiz");   // 计时段 = 遍历 + 深度预通道 + 金字塔（resolve 日志区分）
 
     auto hizPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/hiz." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/hiz." + artifact + "." + shaderSuffix;
     };
     auto loadShader = [&](const char* artifact, nvrhi::ShaderType type,
                           nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(hizPath(artifact).c_str(), blob)) {
             outError = std::string("failed to load hiz shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -1767,14 +1768,14 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
     }
 
     auto visPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/visbuf." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/visbuf." + artifact + "." + shaderSuffix;
     };
     auto loadVisShader = [&](const char* artifact, nvrhi::ShaderType type,
                              nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(visPath(artifact).c_str(), blob)) {
             outError = std::string("failed to load visbuf shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -1856,7 +1857,7 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
             glb.replace(glb.size() - kNm.size(), kNm.size(), ".glb");
         else
             glb += ".glb";
-        const std::string glbPath = std::string(NL_ASSET_DIR "/") + glb;
+        const std::string glbPath = std::string(nl::core::paths::assetDir() + "/") + glb;
 
         nl::core::SceneMeshData meshData;
         std::string loadWarning;
@@ -1997,14 +1998,14 @@ bool Scene::initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
         }
 
         auto matPath = [shaderSuffix](const char* artifact) {
-            return std::string(NL_SHADER_DIR) + "/material." + artifact + "." + shaderSuffix;
+            return nl::core::paths::shaderDir() + "/material." + artifact + "." + shaderSuffix;
         };
         auto loadMatShader = [&](const char* artifact, nvrhi::ShaderType type,
                                  nvrhi::ShaderHandle& out) -> bool {
             std::vector<std::uint8_t> blob;
             if (!readFileBytes(matPath(artifact).c_str(), blob)) {
                 outError = std::string("failed to load material shader ") + artifact +
-                           " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                           " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
                 return false;
             }
             nvrhi::ShaderDesc desc;
@@ -2567,7 +2568,7 @@ bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
     nvrhi::IDevice* device = cmd->getDevice();
     if (probeReady_ || probeFailed_) return probeReady_;
     std::vector<std::uint8_t> csBlob;
-    const std::string path = std::string(NL_SHADER_DIR) + "/tlas_probe.cs." + shaderSuffix_;
+    const std::string path = nl::core::paths::shaderDir() + "/tlas_probe.cs." + shaderSuffix_;
     if (!readFileBytes(path.c_str(), csBlob)) {
         nl::core::log::warnCh("scene", "tlas probe: failed to load shader from ", path, " — probe disabled");
         probeFailed_ = true;
@@ -2805,14 +2806,14 @@ bool Scene::initRtPresent(nvrhi::IDevice* device, const char* shaderSuffix,
                           std::string& outError) {
     rtDevice_ = device;
     auto rtPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/rt." + artifact + "." + shaderSuffix;
     };
     auto loadPresent = [&](const char* artifact, nvrhi::ShaderType type,
                            nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(rtPath(artifact).c_str(), blob)) {
             outError = std::string("failed to load rt shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -3298,11 +3299,11 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     // 不碰 BLAS / TLAS / rtComputeSet_。
     if (!initRtPresent(device, shaderSuffix, outError)) return false;
 
-    const std::string csPath = std::string(NL_SHADER_DIR) + "/direct.cs." + shaderSuffix;
+    const std::string csPath = nl::core::paths::shaderDir() + "/direct.cs." + shaderSuffix;
     std::vector<std::uint8_t> blob;
     if (!readFileBytes(csPath.c_str(), blob)) {
         outError = "failed to load direct.cs (" + std::string(shaderSuffix) +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc desc;
@@ -3313,11 +3314,11 @@ bool Scene::initShadow(nvrhi::IDevice* device, const char* shaderSuffix,
     // M15.1：csDirectVsm（direct.csvsm）——--vsm 直光 pass 专用 blob。拆双入口
     // （2026-11-13 用户拍板 B）：纯净 csDirect blob 与 s9 冻结基线 bytes 一致，
     // VSM 查表代码（b6/t14/t15）隔离进 csvsm，重编译扰动不再波及关闭帧。
-    const std::string csvsmPath = std::string(NL_SHADER_DIR) + "/direct.csvsm." + shaderSuffix;
+    const std::string csvsmPath = nl::core::paths::shaderDir() + "/direct.csvsm." + shaderSuffix;
     std::vector<std::uint8_t> csvsmBlob;
     if (!readFileBytes(csvsmPath.c_str(), csvsmBlob)) {
         outError = "failed to load direct.csvsm (" + std::string(shaderSuffix) +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     csDirectVsm_ = device->createShader(desc, csvsmBlob.data(), csvsmBlob.size());
@@ -3402,14 +3403,14 @@ bool Scene::initRt(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // ---- compute shader（hiz 模式 loadShader lambda 同款）----
     auto rtPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/rt." + artifact + "." + shaderSuffix;
     };
     auto loadRtShader = [&](const char* artifact, nvrhi::ShaderType type,
                             nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(rtPath(artifact).c_str(), blob)) {
             outError = std::string("failed to load rt shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -3667,7 +3668,7 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         nvrhi::ShaderDesc t0sdesc;
         auto loadT0Shader = [&](const char* artifact, nvrhi::ShaderType type,
                                 nvrhi::ShaderHandle& out) -> bool {
-            const std::string path = std::string(NL_SHADER_DIR) + "/rt." +
+            const std::string path = nl::core::paths::shaderDir() + "/rt." +
                                      artifact + "." + shaderSuffix_;
             std::vector<std::uint8_t> blob;
             if (!readFileBytes(path.c_str(), blob)) return false;
@@ -3689,7 +3690,7 @@ bool Scene::ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewp
         // vsShadow 在 PSO 层配对，签名仅 SV_Position）。
         auto loadGodShader = [&](const char* artifact, nvrhi::ShaderType type,
                                  nvrhi::ShaderHandle& out) -> bool {
-            const std::string path = std::string(NL_SHADER_DIR) + "/godrays." +
+            const std::string path = nl::core::paths::shaderDir() + "/godrays." +
                                      artifact + "." + shaderSuffix_;
             std::vector<std::uint8_t> blob;
             if (!readFileBytes(path.c_str(), blob)) return false;
@@ -4079,11 +4080,11 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!initRtPresent(device, shaderSuffix, outError)) return false;
 
     // csReference（direct.csref）：与 csDirect 同文件、同资源槽位族，仅入口不同。
-    const std::string csPath = std::string(NL_SHADER_DIR) + "/direct.csref." + shaderSuffix;
+    const std::string csPath = nl::core::paths::shaderDir() + "/direct.csref." + shaderSuffix;
     std::vector<std::uint8_t> blob;
     if (!readFileBytes(csPath.c_str(), blob)) {
         outError = "failed to load direct.csref (" + std::string(shaderSuffix) +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc desc;
@@ -4094,11 +4095,11 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
     // M10.3（Q14-1）：direct.csrefgi —— GI 参考入口。同文件同槽位族，绑定面与
     // csReference 完全一致（差异全在 RefConstants 32B 扩容段），管线同 layout。
     {
-        const std::string giPath = std::string(NL_SHADER_DIR) + "/direct.csrefgi." + shaderSuffix;
+        const std::string giPath = nl::core::paths::shaderDir() + "/direct.csrefgi." + shaderSuffix;
         std::vector<std::uint8_t> giBlob;
         if (!readFileBytes(giPath.c_str(), giBlob)) {
             outError = "failed to load direct.csrefgi (" + std::string(shaderSuffix) +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         csReferenceGI_ = device->createShader(desc, giBlob.data(), giBlob.size());
@@ -4172,14 +4173,14 @@ bool Scene::initReference(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // psRefPresent（rt.psrefpresent）：÷samplesDone 再 gamma 的全屏呈现（复用 vsRtPresent_）。
     auto rtPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/rt." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/rt." + artifact + "." + shaderSuffix;
     };
     auto loadRefPresent = [&](const char* artifact, nvrhi::ShaderType type,
                               nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> pb;
         if (!readFileBytes(rtPath(artifact).c_str(), pb)) {
             outError = std::string("failed to load rt shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc pdesc;
@@ -4419,9 +4420,9 @@ void Scene::drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
     if (!psCompare_ || !compareSet_) {
         if (!psCompare_) {
             std::vector<std::uint8_t> pb, vb;
-            const std::string psPath = std::string(NL_SHADER_DIR) + "/rt.pscompare." +
+            const std::string psPath = nl::core::paths::shaderDir() + "/rt.pscompare." +
                                        shaderSuffix_;
-            const std::string vsPath = std::string(NL_SHADER_DIR) + "/rt.vsrtpresent." +
+            const std::string vsPath = nl::core::paths::shaderDir() + "/rt.vsrtpresent." +
                                        shaderSuffix_;
             if (!readFileBytes(psPath.c_str(), pb) || !readFileBytes(vsPath.c_str(), vb)) {
                 nl::core::log::deviceError("compare", "failed to load rt.pscompare/vsrtpresent");
@@ -4529,14 +4530,14 @@ bool Scene::initProbe(nvrhi::IDevice* device, const char* shaderSuffix,
     shaderSuffix_ = shaderSuffix;   // M-P3：dbgLines_.ensure 定位字节码（同 initRt）
 
     auto probePath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/" + artifact + "." + shaderSuffix;
     };
     auto loadShader = [&](const char* artifact, nvrhi::ShaderType type,
                           nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(probePath(artifact).c_str(), blob)) {
             outError = std::string("failed to load shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -6091,13 +6092,13 @@ bool Scene::ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffi
                                  std::string& outError) {
     if (cacheFillPSO_) return true;
     auto cachePath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/" + artifact + "." + shaderSuffix;
     };
     auto loadCacheShader = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(cachePath(artifact).c_str(), blob)) {
             outError = std::string("failed to load shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -6624,13 +6625,13 @@ bool Scene::ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
                                std::string& outError) {
     if (ssrPSO_) return true;   // 已建判据（全组一起建/一起败）
     auto ssrPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/ssr." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/ssr." + artifact + "." + shaderSuffix;
     };
     auto loadSsr = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
         std::vector<std::uint8_t> blob;
         if (!readFileBytes(ssrPath(artifact).c_str(), blob)) {
             outError = std::string("failed to load ssr shader ") + artifact +
-                       " (" + shaderSuffix + ") from " NL_SHADER_DIR;
+                       " (" + shaderSuffix + ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc desc;
@@ -7214,7 +7215,7 @@ void expandClusterData(const nl::core::NMeshData& nm, const std::vector<char>* i
 bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
                               std::string& outError) {
     // ---- 1. 读 .nmesh 资产（M1.2 的 loadNMesh 已校验 magic/版本/截断/窗口越界）----
-    const std::string assetPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+    const std::string assetPath = std::string(nl::core::paths::meshletDir() + "/") + nmeshFile;
     nl::core::NMeshData nm;
     std::string loadError;
     if (!nl::core::loadNMesh(assetPath.c_str(), nm, loadError)) {
@@ -7254,7 +7255,7 @@ bool Scene::uploadClusterMesh(nvrhi::IDevice* device, const char* nmeshFile,
 bool Scene::setDagCut(nvrhi::IDevice* device, const char* topFile, const char* childFile,
                       int drillGroup, std::string& outError) {
     const auto load = [&outError](const char* file, nl::core::NMeshData& out) -> bool {
-        const std::string path = std::string(NL_MESHLET_DIR "/") + file;
+        const std::string path = std::string(nl::core::paths::meshletDir() + "/") + file;
         std::string err;
         if (!nl::core::loadNMesh(path.c_str(), out, err)) {
             outError = std::string(file) + ": " + err;
@@ -7989,13 +7990,13 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     // ---- 1. 同一份 model.slang 字节码：CPU 蒙皮后的顶点就是普通 POS/NORM/UV 流，
     //         管线/常量布局与 init 完全共用，不新增 shader（一份 .slang 单源纪律）----
     auto shaderPath = [shaderSuffix](const char* stage) {
-        return std::string(NL_SHADER_DIR) + "/model." + stage + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + stage + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vs").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("ps").c_str(), psBlob)) {
         outError = std::string("failed to load model shader (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -8007,7 +8008,7 @@ bool Scene::initSkin(nvrhi::IDevice* device, const char* shaderSuffix,
     if (!vs_ || !ps_) { outError = "createShader failed for model shaders"; return false; }
 
     // ---- 2. rigged GLB：骨架 + clips + 绑定 + bind 空间网格（nl::anim 纯逻辑层）----
-    const std::string modelPath = std::string(NL_ASSET_DIR "/") + modelFile;
+    const std::string modelPath = std::string(nl::core::paths::assetDir() + "/") + modelFile;
     nl::anim::SkinnedMeshData meshData;
     std::string err;
     if (!nl::anim::loadGltfSkinnedModel(modelPath, skinSkeleton_, skinClips_,
@@ -8277,7 +8278,7 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
     {
         // nmeshFile 是 assets/meshlets/ 下的裸文件名（viewer 白名单校验同口径），
         // 与 initVisbuf/lod0 回退一致补前缀；独立重读不碰基线路径。
-        const std::string fullPath = std::string(NL_MESHLET_DIR "/") + nmeshFile;
+        const std::string fullPath = std::string(nl::core::paths::meshletDir() + "/") + nmeshFile;
         nl::core::NMeshData nm;
         std::string err;
         if (!nl::core::loadNMesh(fullPath.c_str(), nm, err)) {
@@ -8555,10 +8556,10 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
         // 剔除 set：b1+t4/t5/t7+u2 cullBufs+u3 args；hzbBuf 跨 set SRV/UAV 分绑）。
         struct CullEntry { const char* file; nvrhi::ComputePipelineHandle* pso; };
         const std::string entryPaths[4] = {
-            std::string(NL_SHADER_DIR) + "/vsm.cshzb." + shaderSuffix,
-            std::string(NL_SHADER_DIR) + "/vsm.cscullcount." + shaderSuffix,
-            std::string(NL_SHADER_DIR) + "/vsm.cscullscan." + shaderSuffix,
-            std::string(NL_SHADER_DIR) + "/vsm.cscullfill." + shaderSuffix,
+            nl::core::paths::shaderDir() + "/vsm.cshzb." + shaderSuffix,
+            nl::core::paths::shaderDir() + "/vsm.cscullcount." + shaderSuffix,
+            nl::core::paths::shaderDir() + "/vsm.cscullscan." + shaderSuffix,
+            nl::core::paths::shaderDir() + "/vsm.cscullfill." + shaderSuffix,
         };
         nvrhi::ShaderHandle cullShaders[4];
         for (int i = 0; i < 4; ++i) {
@@ -8625,13 +8626,13 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
     }
 
     // ---- 深度 pass shader（vsm.vs/ps；_ENTRIES_DEFAULT 双目标产物）----
-    const std::string vsPath = std::string(NL_SHADER_DIR) + "/vsm.vs." + shaderSuffix;
-    const std::string psPath = std::string(NL_SHADER_DIR) + "/vsm.ps." + shaderSuffix;
+    const std::string vsPath = nl::core::paths::shaderDir() + "/vsm.vs." + shaderSuffix;
+    const std::string psPath = nl::core::paths::shaderDir() + "/vsm.ps." + shaderSuffix;
     std::vector<std::uint8_t> vsmVsBlob, vsmPsBlob;
     if (!readFileBytes(vsPath.c_str(), vsmVsBlob) ||
         !readFileBytes(psPath.c_str(), vsmPsBlob)) {
         outError = std::string("failed to load vsm shaders (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -8703,13 +8704,13 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
     // 全屏三角形。新分配页先清后画——MIN 混合（min(1, stale)=stale）无法重置旧
     // 占用者深度，清页必须走覆写。
     {
-        const std::string vclrPath = std::string(NL_SHADER_DIR) + "/vsm.vsclear." + shaderSuffix;
-        const std::string pclrPath = std::string(NL_SHADER_DIR) + "/vsm.psclear." + shaderSuffix;
+        const std::string vclrPath = nl::core::paths::shaderDir() + "/vsm.vsclear." + shaderSuffix;
+        const std::string pclrPath = nl::core::paths::shaderDir() + "/vsm.psclear." + shaderSuffix;
         std::vector<std::uint8_t> vclrBlob, pclrBlob;
         if (!readFileBytes(vclrPath.c_str(), vclrBlob) ||
             !readFileBytes(pclrPath.c_str(), pclrBlob)) {
             outError = std::string("failed to load vsm clear shaders (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc vsCDesc;
@@ -8740,11 +8741,11 @@ bool Scene::ensureVsmTargets(nvrhi::IDevice* device, const char* nmeshFile,
     // ---- M15.1：标页管线（csMark）----
     // 单一 BindingSet：t0 visBuffer_（deviceZ 高位，u64/px）+ u0 位图 + b6 常量。
     {
-        const std::string markPath = std::string(NL_SHADER_DIR) + "/vsm.cs." + shaderSuffix;
+        const std::string markPath = nl::core::paths::shaderDir() + "/vsm.cs." + shaderSuffix;
         std::vector<std::uint8_t> markBlob;
         if (!readFileBytes(markPath.c_str(), markBlob)) {
             outError = std::string("failed to load vsm.cs (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         nvrhi::ShaderDesc csDesc;
@@ -9272,13 +9273,13 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
 
     // ---- 1. model.vsscene/pscene 双目标字节码（照 Scene::init 第 1 步）----
     auto shaderPath = [shaderSuffix](const char* artifact) {
-        return std::string(NL_SHADER_DIR) + "/model." + artifact + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/model." + artifact + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vsscene").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("pscene").c_str(), psBlob)) {
         outError = std::string("failed to load ecs scene shaders (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;
@@ -9294,13 +9295,13 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // 理由）。CB 144B volatile 每帧全量覆写；单一 BindingSet（b0，§2.7）。
     {
         const auto skyPath = [shaderSuffix](const char* artifact) {
-            return std::string(NL_SHADER_DIR) + "/sky_bg." + artifact + "." + shaderSuffix;
+            return nl::core::paths::shaderDir() + "/sky_bg." + artifact + "." + shaderSuffix;
         };
         std::vector<std::uint8_t> skyVsBlob, skyPsBlob;
         if (!readFileBytes(skyPath("vsskybg").c_str(), skyVsBlob) ||
             !readFileBytes(skyPath("psskybg").c_str(), skyPsBlob)) {
             outError = std::string("failed to load sky_bg shaders (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         // 入口名传 "main"：SPIR-V 恒 main（§721 口径）。VK makeShaderStageCreateInfo
@@ -9385,7 +9386,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     std::vector<PreparedBatch> prepared;
     std::vector<std::uint32_t> batchPrimFile;    // batch b ← 文件组号
     for (std::size_t b = 0; b < batchFiles.size(); ++b) {
-        const std::string modelPath = std::string(NL_ASSET_DIR "/") + batchFiles[b];
+        const std::string modelPath = std::string(nl::core::paths::assetDir() + "/") + batchFiles[b];
         nl::core::SceneMeshData meshData;
         std::string loadWarning;
         if (!nl::core::loadGltfScene(modelPath.c_str(), meshData, loadWarning)) {
@@ -9848,7 +9849,7 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         if (!readFileBytes(shaderPath("vsshadow").c_str(), shVsBlob) ||
             !readFileBytes(shaderPath("psshadow").c_str(), shPsBlob)) {
             outError = std::string("failed to load shadow shaders (") + shaderSuffix +
-                       ") from " NL_SHADER_DIR;
+                       ") from " + nl::core::paths::shaderDir();
             return false;
         }
         // 入口名 "main"：SPIR-V 恒 main；DX12 忽略 setEntryName、直接用 blob 唯一
@@ -11143,7 +11144,7 @@ bool DebugLines::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& in
 
     // 加载 debug_line 双目标字节码（同一份 .slang 出 spv/dxil）。
     auto path = [shaderSuffix](const char* stage) {
-        return std::string(NL_SHADER_DIR) + "/debug_line." + stage + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/debug_line." + stage + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(path("vs").c_str(), vsBlob) ||
@@ -11359,7 +11360,7 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
 
     // 加载 particles 双目标字节码（同一份 .slang 出 spv/dxil）。
     auto path = [shaderSuffix](const char* stage) {
-        return std::string(NL_SHADER_DIR) + "/particles." + stage + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/particles." + stage + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(path("vs").c_str(), vsBlob) ||
@@ -11473,10 +11474,10 @@ bool Particles::ensure(nvrhi::IDevice* device, const nvrhi::FramebufferInfo& inf
 // （强制 4 通道 RGBA8）→ 建空 RGBA8_UNORM 纹理 + 像素暂存（draw 里 writeTexture
 // 上传——建纹时无 cmd list 可用）。颜色口径：原样采样不做 sRGB 转换，与引擎粒子
 // 颜色线性直接算的既有口径一致（M-PT0 起全链无 gamma）。
-// 注意 NL_ASSET_DIR 注入的是 assets/models（M0.7 model 白名单口径），粒子资产
+// 注意 nl::core::paths::assetDir() 注入的是 assets/models（M0.7 model 白名单口径），粒子资产
 // 在 assets/efx——取其父目录拼 efx/textures。
 bool Particles::ensureTexture(nvrhi::IDevice* device, std::string& outError) {
-    const std::string path = std::string(NL_ASSET_DIR "/../efx/textures/") + textureBasename_;
+    const std::string path = std::string(nl::core::paths::assetDir() + "/../efx/textures/") + textureBasename_;
     std::vector<std::uint8_t> buf;
     if (!readFileBytes(path.c_str(), buf)) {
         outError = "nfx texture not found: " + path;

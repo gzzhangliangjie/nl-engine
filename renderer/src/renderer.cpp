@@ -3,6 +3,7 @@
 #include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本文件委托实现）
 #include "backend.hpp"
 #include "nl/core/profiler.hpp"   // M-TR0：renderer 帧提交 zone（OFF 空转）
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 
 #include <cstdint>
 #include <cstring>
@@ -194,7 +195,7 @@ static const Artifact kArtifacts[] = {
     for (const Artifact& a : kArtifacts) {
         const char* target = a.spv ? "spv" : "dxil";
         std::string name = std::string(a.name) + "." + target;
-        const std::string path = std::string(NL_SHADER_DIR) + "/" + name;
+        const std::string path = nl::core::paths::shaderDir() + "/" + name;
         std::ifstream f(path, std::ios::binary | std::ios::ate);
         std::int64_t size = -1;
         if (f) size = static_cast<std::int64_t>(f.tellg());

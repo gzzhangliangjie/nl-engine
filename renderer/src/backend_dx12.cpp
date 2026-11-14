@@ -7,6 +7,7 @@
 
 #include "nl/core/log.hpp"
 #include "nl/core/meshlet_io.hpp"   // M3.2：探测第二粗层 dagGroups 组数
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/d3d12.h>
@@ -248,7 +249,7 @@ public:
                 const std::string childFile = detail::lodMeshFileName(lodStem_, lodLevelCount_ - 2);
                 nl::core::NMeshData probe;
                 std::string probeError;
-                if (nl::core::loadNMesh((std::string(NL_MESHLET_DIR "/") + childFile).c_str(),
+                if (nl::core::loadNMesh((std::string(nl::core::paths::meshletDir() + "/") + childFile).c_str(),
                                         probe, probeError) &&
                     probe.lodMeta.dagPresent) {
                     dagGroupCount_ = static_cast<int>(probe.lodMeta.dagGroups.size());

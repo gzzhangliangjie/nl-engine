@@ -6,6 +6,7 @@
 #include "nl/renderer/editor.hpp"  // T1：材质图编辑器窗口（--editor 时由 HudFrame.editor 挂入）
 
 #include "nl/core/log.hpp"
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 
 #include <imgui.h>
 
@@ -53,13 +54,13 @@ bool Hud::init(nvrhi::IDevice* device, const char* shaderSuffix,
     device_ = device;
 
     auto shaderPath = [shaderSuffix](const char* stage) {
-        return std::string(NL_SHADER_DIR) + "/hud." + stage + "." + shaderSuffix;
+        return nl::core::paths::shaderDir() + "/hud." + stage + "." + shaderSuffix;
     };
     std::vector<std::uint8_t> vsBlob, psBlob;
     if (!readFileBytes(shaderPath("vs").c_str(), vsBlob) ||
         !readFileBytes(shaderPath("ps").c_str(), psBlob)) {
         outError = std::string("failed to load hud shader (") + shaderSuffix +
-                   ") from " NL_SHADER_DIR;
+                   ") from " + nl::core::paths::shaderDir();
         return false;
     }
     nvrhi::ShaderDesc vsDesc;

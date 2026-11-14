@@ -9,6 +9,7 @@
 #include "nl/core/game_clock.hpp"  // P8 M-GL1：双帧模型（逻辑帧 60Hz accumulator）
 #include "nl/core/lod_error.hpp"
 #include "nl/core/log.hpp"
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 #include "nl/core/modes.hpp"
 #include "nl/core/profiler.hpp"    // M-TR0：NL_PROFILE_* 薄封装（OFF 空转）
 #include "nl/core/weather.hpp"     // M-WEA1：天气链（evaluateWeather 纯函数消费）
@@ -1483,11 +1484,7 @@ struct EditorEmbed {
     nl::editor::RpcValue nmeshInfo(const std::string& file) {
         if (file.size() < 6 || file.compare(file.size() - 6, 6, ".nmesh") != 0)
             return nl::editor::RpcValue();   // nil = 非 .nmesh 资产
-#ifdef NL_MESHLET_DIR
-        const std::string path = std::string(NL_MESHLET_DIR "/") + file;
-#else
-        const std::string path = "assets/meshlets/" + file;
-#endif
+        const std::string path = std::string(nl::core::paths::meshletDir() + "/") + file;
         nl::core::NMeshData nm;
         std::string err;
         if (!nl::core::loadNMesh(path.c_str(), nm, err)) {
@@ -1674,7 +1671,7 @@ struct EditorEmbed {
     // M-E9：meshFile 存在性校验（白名单只管文件名格式；不存在的资产会在帧边界
     // rebuild → loadEcsScene 失败 → 渲染循环退出——必须在建实体前拒绝）。
     static bool editGlbAssetExists(const std::string& name) {
-        const std::string path = std::string(NL_ASSET_DIR "/") + name;
+        const std::string path = std::string(nl::core::paths::assetDir() + "/") + name;
         std::error_code ec;
         return std::filesystem::is_regular_file(path, ec);
     }
@@ -2214,7 +2211,7 @@ struct EditorEmbed {
                                                     "' rejected by asset whitelist"};
                 if (!editGlbAssetExists(mesh))
                     return nl::editor::RpcError{101, "scene.addEntity: asset '" + mesh +
-                                                    "' not found under " + NL_ASSET_DIR};
+                                                    "' not found under " + nl::core::paths::assetDir()};
             }
             double lightType = 0.0, intensity = 1.0;
             if (kind == "light") {
@@ -2436,7 +2433,7 @@ struct EditorEmbed {
                                                         itV->second.asStr() + "' rejected by asset whitelist"};
                     if (!editGlbAssetExists(itV->second.asStr()))
                         return nl::editor::RpcError{101, std::string(what) + ": asset '" +
-                                                        itV->second.asStr() + "' not found under " + NL_ASSET_DIR};
+                                                        itV->second.asStr() + "' not found under " + nl::core::paths::assetDir()};
                     mc->meshFile = itV->second.asStr();   // 集合签名变化 → 帧边界重建
                 } else if (name == "tint") {
                     if (!editGetVecN(p, "value", v, 3))
@@ -3061,7 +3058,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             navBakeCmd = false;
             if (!navGeoLoaded) {
                 const std::string p =
-                    std::string(NL_ASSET_DIR "/") + o.navModelFile;
+                    std::string(nl::core::paths::assetDir() + "/") + o.navModelFile;
                 std::string gerr;
                 if (nl::nav::loadGeometryFromGltf(p.c_str(), navGeo, gerr)) {
                     navGeoLoaded = true;

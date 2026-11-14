@@ -10,7 +10,6 @@ target_link_libraries(viewer PRIVATE nl_core nl_renderer nl_profiler glfw nl_edi
 # 与 renderer 的同口径——根 CMake 的 NL_MESHLET_DIR 是 renderer 内联宏，不是变量）
 target_compile_definitions(viewer PRIVATE
     NL_BACKEND_NAME="${NL_BACKEND_UPPER}"
-    NL_MESHLET_DIR="${CMAKE_SOURCE_DIR}/assets/meshlets"
 )
 # shader 字节码先于 viewer 生成（viewer 运行时要读 NL_SHADER_DIR 下的 .spv/.dxil）
 add_dependencies(viewer nl_shaders)
@@ -19,7 +18,6 @@ if(MSVC)
     target_compile_options(viewer PRIVATE /W4 /permissive- /utf-8 /bigobj)
     target_compile_definitions(viewer PRIVATE
         _CRT_SECURE_NO_WARNINGS
-        NL_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/models"   # P8 M-N2：--nav-panel 面板烘焙取 --model 几何
     )
 endif()
 

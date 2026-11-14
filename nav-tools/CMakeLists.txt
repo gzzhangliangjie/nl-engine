@@ -9,9 +9,8 @@ if(MSVC)
     target_compile_options(nav-tools PRIVATE /W4 /permissive- /utf-8 /bigobj)
     target_compile_definitions(nav-tools PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
-# M-N3：E1 场景 .scene 里的 meshFile 是 basename，需拼 assets/models 绝对路径。
-target_compile_definitions(nav-tools PRIVATE
-    NL_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/models")
+# M-N3：E1 场景 .scene 里的 meshFile 是 basename，模型目录经 nl::core::paths::assetDir()
+# 双层解析（B1 拍板 2026-11-15），不再编译期注入 NL_ASSET_DIR。
 
 # ---- P8 M-N0: nav-tools (Recast/Detour bake/dump, A-class track) ----
 add_test(NAME m-n0-nav-selftest COMMAND nav-tools selftest)

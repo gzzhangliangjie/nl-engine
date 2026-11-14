@@ -44,6 +44,7 @@
 
 #include "nl/core/mesh_io.hpp"
 #include "nl/core/meshlet_io.hpp"
+#include "nl/core/paths.hpp"  // 发版打包：路径双层解析（B1 拍板 2026-11-15）
 #include "nl/nav/Nav.hpp"
 #include "nl/nav/Crowd.hpp"
 #include "nl/nav/NavAgentSystem.hpp"        // M-N6：E1 ECS 固定步长系统
@@ -945,7 +946,7 @@ int cmdTileBake(int argc, char** argv) {
             std::printf("nav-tools tilebake: %s\n", err.c_str());
             return 1;
         }
-        if (!nl::nav::loadGeometryFromScene(inPath, NL_ASSET_DIR, geo, err)) {
+        if (!nl::nav::loadGeometryFromScene(inPath, nl::core::paths::assetDir().c_str(), geo, err)) {
             std::printf("nav-tools tilebake: %s\n", err.c_str());
             return 1;
         }
@@ -2163,16 +2164,16 @@ int cmdSelftest(int argc, char** argv) {
                    "scene: geometryEntityCount counts Model entities");
         nl::nav::Geometry gA, gB;
         const bool okA = nl::nav::loadGeometryFromScene(
-            "nav-selftest-scene-a.scene", NL_ASSET_DIR, gA, tErr);
+            "nav-selftest-scene-a.scene", nl::core::paths::assetDir().c_str(), gA, tErr);
         const bool okB = nl::nav::loadGeometryFromScene(
-            "nav-selftest-scene-b.scene", NL_ASSET_DIR, gB, tErr);
+            "nav-selftest-scene-b.scene", nl::core::paths::assetDir().c_str(), gB, tErr);
         expectTrue(okA && okB && gA.verts.size() == gB.verts.size(),
                    "scene: World JSON -> nav Geometry (both fixtures)");
         expectTrue(okA && okB && minX(gB) > minX(gA) + 7.f,
                    "scene: parent world matrix composes into child geometry");
         expectTrue(writeScene("nav-selftest-scene-bad.scene", "0", "../evil.glb") &&
                    !nl::nav::loadGeometryFromScene(
-                       "nav-selftest-scene-bad.scene", NL_ASSET_DIR, gA, tErr),
+                       "nav-selftest-scene-bad.scene", nl::core::paths::assetDir().c_str(), gA, tErr),
                    "scene: meshFile path traversal rejected by whitelist");
 
         std::remove("nav-selftest-scene-a.scene");

@@ -25,7 +25,8 @@ Status status();
 // M0.5 HUD 的无 GPU 自检（顶点布局 / 投影矩阵 / POD 尺寸），供 --selftest 调用。
 bool hudSelfTest();
 
-// S0 第三条硬指标的机械证据：核对 NL_SHADER_DIR 下每份 .slang 都同时产出了
+// S0 第三条硬指标的机械证据：核对字节码目录（nl::core::paths::shaderDir()）下
+// 每份 .slang 都同时产出了
 // SPIR-V（魔数 0x07230203）与 DXIL（魔数 'DXBC'）的 vs/ps 四个文件，共 8 个产物。
 // report 里逐项列出文件名与字节数，--selftest 会打印出来。
 bool shaderArtifactsSelfTest(std::string& report);

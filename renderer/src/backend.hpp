@@ -2,6 +2,7 @@
 
 // renderer 内部接口：两个后端各实现一份，renderer.cpp 只认这个抽象。
 #include "nl/renderer/renderer.hpp"
+#include "nl/core/paths.hpp"  // 发版打包：meshlet 目录双层解析（B1 拍板 2026-11-15）
 
 #include <cstdint>
 #include <cstdio>
@@ -132,7 +133,7 @@ inline int probeLodLevelCount(const std::string& stem) {
     int count = 0;
     while (count < 64) {
         std::error_code ec;
-        const auto path = std::filesystem::path(NL_MESHLET_DIR) / lodMeshFileName(stem, count);
+        const auto path = std::filesystem::path(nl::core::paths::meshletDir()) / lodMeshFileName(stem, count);
         if (!std::filesystem::is_regular_file(path, ec) || ec) break;
         ++count;
     }

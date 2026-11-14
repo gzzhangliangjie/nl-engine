@@ -306,6 +306,7 @@ add_library(nl_core STATIC
     core/src/net/Net.cpp       # NET M-NET0：nl/net 传输层薄封装（PIMPL，core 内唯一 ENet 符号面）
     core/src/net/SnapshotCodec.cpp # NET M-NET1：快照位打包编解码（PIMPL，core 内唯一 bitsery 符号面）
     core/src/net/Sync.cpp      # NET M-NET2：同步层（控制消息严格解码 + 插值缓冲 + 会话）
+    core/src/paths.cpp         # 发版打包：shader/asset/meshlet 目录双层解析（B1 拍板 2026-11-15）
 )
 # NET M-NET1：bitsery header-only 只进 SnapshotCodec.cpp 单 TU（PIMPL 纪律：
 # net/Snapshot.hpp 不暴露 bitsery 类型，故 PRIVATE）。
@@ -379,8 +380,6 @@ target_link_libraries(nl_renderer PUBLIC nl_core nl_profiler PRIVATE nl_imgui nl
 # 注1：glfw 仅 console_ui.cpp 吃 GLFW 键值常量（M-C1 键盘映射），窗口库本身仍归 core/viewer。
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1
-    NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
-    NL_MESHLET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/meshlets"   # M1.3：.nmesh 资产
     _CRT_SECURE_NO_WARNINGS
     NOMINMAX
 )
@@ -672,8 +671,15 @@ endforeach()
 
 # 改 shader 自动重编字节码；ALL 保证每次 build 都检查过期
 add_custom_target(nl_shaders ALL DEPENDS ${_SHADER_ARTIFACTS})
-# renderer 按编译期注入的 NL_SHADER_DIR 绝对路径读取字节码，不依赖 CWD
-target_compile_definitions(nl_renderer PRIVATE NL_SHADER_DIR="${_SHADER_OUT}")
+# renderer 经 nl/core/paths.hpp 双层解析读字节码（exe 相对优先 / 编译期绝对路径兜底）。
+# 发版打包（B1 拍板 2026-11-15）：包内布局 bin/<后端>/exe → ../shaders/<后端>、
+# ../assets/{models,meshlets} 可重定位；开发树 exe 布局对不上包内布局 → 走兜底，
+# 兜底值与 nl_renderer 旧注入同源（_SHADER_OUT / assets 子目录）。
+target_compile_definitions(nl_core PRIVATE
+    NL_BACKEND_NAME="${NL_BACKEND_UPPER}"
+    NL_SHADER_DIR="${_SHADER_OUT}"
+    NL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
+    NL_MESHLET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/meshlets")
 
 # ---- viewer 与全部工具：target 定义拆到各自目录的 CMakeLists.txt（2026-11-10）----
 # 目的：并行轨道加工具 / 加 ctest 用例不再改根文件（追加冲突源根治）。
