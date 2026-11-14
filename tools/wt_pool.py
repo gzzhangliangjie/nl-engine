@@ -294,15 +294,17 @@ TRACKS = {
                 ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
     },
     "weather": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-weather",
-        "branch": "feat/weather", "state": "active",
+        "wt": "", "branch": "feat/weather", "state": "closed",
         "note": "weather interleave track (plan docs/WEATHER-PLAN.md, "
                 "M-WEA0~WEA3, tags weather-w0~weather-w3; A-plan param layer "
                 "drives Lumen, Q-WE1~WE6 settled 2026-11-12, Q-WEA0-A/B "
                 "settled 2026-11-13: discrete states + smooth transition, "
-                "nl_core module); wt built 2026-11-13 from master 6a824b1, "
-                "junction .workbuddy + thirdparty/slang/dist + skip-worktree "
-                "(9 files)",
+                "nl_core module); wt built 2026-11-13 from master 6a824b1; "
+                "M-WEA0+1 merged 4090d94, M-WEA2+3 merged ebf5f50 "
+                "(2026-11-14, 46 runs all bytes); "
+                "state CLOSED by user instruction 2026-11-14, wt removed "
+                "(2 junctions detached + robocopy /MIR + prune), branch "
+                "and tags kept; rebuild via PARALLEL-TRACKS 7.6",
     },
     "nightlighting": {
         "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",

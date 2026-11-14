@@ -20,7 +20,7 @@
 - **viewer 无裸 usage 模式**：无参 = 起窗口渲染不退出（M-T3 事故同 M15.2 族）；工具 usage 段用各 tools exe（exit 2）。`--traffic-steps` 类「调 N 次 tick」必须钉 `GameClock::kStep*1000` ms（真实 dt 抖动 → 步数不定 → PNG 无法对拍）。
 
 ## 当前进度（2026-11-14）
-- **kStage 仍 S8.2**。**已 merge 回 master**：S0~S13、S15（`165216d`）、网络栈 net-m0~3（`9aa58df`）、寻路 nav-m0~6（`5356c80`）、天气 M-WEA0~3 整轨（`4090d94`+`ebf5f50`，2026-11-14 收官）；相关 wt 已拆（天气 wt 保留续用），分支与 tag 保留。
+- **kStage 仍 S8.2**。**已 merge 回 master**：S0~S13、S15（`165216d`）、网络栈 net-m0~3（`9aa58df`）、寻路 nav-m0~6（`5356c80`）、天气 M-WEA0~3 整轨（`4090d94`+`ebf5f50`，2026-11-14 收官）；相关 wt 已拆，分支与 tag 保留。
 - **未 merge 回 master（wt 在册，整轨 merge 待用户指令；S13 教训：merge 后必须重跑该轨全部历史版本卡）**：
   - **script 轨道**（feat/script）：M-SC4~SC7 收官（tag `m-sc4`~`m-sc7`）——绑定生成器（exports.api 单源 → gen.py 五件套 + 防漂移 static_assert + CMake 新鲜度闸）→ Time/Input/Log → Camera → ECS 模型挂载（拍板 A：binding 只动组件 + Model 集合签名比对重建）。下一步 M-SC8 Physics 载具 → M-SC10 属性面板 → M-SC11 收口。**教训：没落码的计划条目不是「既定决策」**。
   - **交通轨道 T0**（worldgen wt）：**M-T0~T3 全收官**（tag `traffic-m0`~`traffic-m3` @ `4652a16`）。M-T0 车道级展开图 + A* + C1 跟车律；M-T1 信号+占用锁；M-T2 组共享锁+gap-out+loop（城市吞吐 17/32/646.9m，+143%）；M-T3 CityCar 接 viewer（TrafficCarSystem ECS + `--traffic-city`，42 车永续车流，cases 卡 134）。**核心教训（自适应控制几何）**：固定常数按 10m 夹具标定在 ~4m 路网系统性持锁泄漏 → `stopS=length−min(entryStop,0.6·length)`、`clearEff=min(3,0.3·最小邻接边长)` 根修；死锁定性先 LOCK dump 实证再改。**T1 教训：并行度放开前先审「组内不相交」几何前提，豁免口径从拓扑升级到几何**。后续项：需求感应进 citygen signal 填充（W 轨）、红绿灯摆件可视化（另立项）、冲突型路口。
