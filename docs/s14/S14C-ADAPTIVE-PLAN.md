@@ -99,3 +99,11 @@
 - 均匀 4 角段数学逐值不变（非 adaptive 路径 bytes 保形）；50% 限幅与两级降级链不动。
 
 验收判据（同口径重测）：spawn 区 adaptive↔u32 MSE 应回落至 ≤ u8↔u32 起点（338），且均匀模式回归卡 bytes 零漂。
+
+## 9. 拍板记录（2026-11-14 下午）：213.8 根因实锤 + guard 转正 + 验收口径定稿
+
+- **213.8 根因实锤**（diag19/20 全精度 RB 证据链，详见当日日志与 commit `cc69c7d`）：adaptive atlas 高 ×2（下半 spawn 预留区），L3 级 res=1 时 `(res,res)-2` **uint 下溢**使 tile 钳位失效，uniform corner01 ct=(0,1) 落预留区槽位——spawn 探针被当 uniform corner 双线性插值且与 k=4..7 spawn 路径同 texel 重复计权；u8 冻结路径 = OOB Load 返 0。L0-2 级 ct.y ≤ res-1 恒在均匀区，唯一受影响 L3。闭环：门槛翻转 7942px 与 sum 差 14263px 全部 ⊆ L3 26701px（0 例外）。
+- **根修（拍板转正，commit `cc69c7d`）**：csGather uniform corner 循环加 `ct.x>=res||ct.y>=res` 越界守卫。guard 后 adp↔u8 gather RGBA16F 与 PNG 全帧**逐位一致**（MSE 213.8→0.00），u8 路径与基线逐位不变，spawn-on/off 两形态复验通过。
+- **552 分解定案**：u8↔u32 结构差 338（均匀网格减半的固有逼近差，不受影响）+ 213.8（本 bug，已归零）。§8 的「回落至 ≤338」判据被本条取代。
+- **验收口径定稿（拍板）**：① adaptive↔u8 同 res（adaptive 缺省 base 16 ↔ probe `--probe-base-res 8`，res_eff=8 同网格）**逐位一致**为验收门（run.bat `fc /b` bytes 级，双后端），替代已废 MSE/u32 参照门；② spawn GI 贡献本场景实测 0（机制保留，spawn-on 复测 bit-exact）；③ viz 品红门 + timing 守恒门 + present 门 + 负向沿用。
+- **挂账（独立后续项，需单独拍板立项）**：spawn 增益验收场景——探针格稀疏/大尺度场景（均匀格欠采样时 spawn 才有正贡献）；现有 Suzanne 场景密度下增益恒 0，强行造景属于为验收而验收，不扩大本里程碑范围。

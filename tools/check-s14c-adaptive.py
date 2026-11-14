@@ -7,10 +7,9 @@ run.bat via fc /b; this tool carries the M14C1-specific gates:
 
 Modes:
   mse <adaptive.png> <ref.png> <x> <y> <w> <h> <maxMSE>
-      Detail-region GI quality: mean squared error (0..255 8-bit domain)
-      inside the crop window between probe-adaptive output and the uniform
-      doubled-resolution reference (probe --probe-base-res 32).
-      Exit 0 if MSE <= maxMSE. Else exit 1.
+      [废案保留诊断] Detail-region GI quality vs uniform doubled ref
+      (u8<->u32). Superseded by the bit-exact adaptive<->u8 gate (run.bat
+      fc /b) after the 213.8 root fix (PLAN §9); kept for diagnostics only.
   magenta <a.png> <minCount>
       Viz gate: adaptive spawn dots are magenta (level-color scheme adds
       magenta for reserved-region spawned probes). Counts pixels whose

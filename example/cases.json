@@ -11027,6 +11027,63 @@
      "script": "example/s14b-restir/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "s14c-adaptive",
+   "label": "M14C1",
+   "name": "自适应探针收官：UE 插值覆盖 Mark + 预留区 spawn + 213.8 根因实锤根修（guard 转正）+ 逐位一致验收门",
+   "tag": "s14-restir",
+   "date": "2026-11-14",
+   "summary": "M14C1（S14-C 收官步，Q-C1A+C2A+C3B 组合）：自适应探针整链落地——csAdaptiveMark（16x16 Hammersley 256 采样点复用 gather upsample 权重函数，UE MIN 0.01 插值覆盖判据）→ csAdaptiveSpawn（per-tile 至多 1 spawn 写 atlas 预留区，结构守恒：res_eff=baseRes/2，trace dispatch 与 probe 模式同线程数）→ gather 8 池 + spawn 探针真实位置距离衰减权（拍板 A，spacing 自标定零新 CB 常量）→ viz 品红点。排查收官（用户拍板续挖 213.8）：diag19/20 全精度 readback 证据链实锤 213.8 唯一根因 = L3 级 res=1 时 (res,res)-2 uint 下溢使 tile 钳位失效，uniform corner01 ct=(0,1) 落预留区槽位读到 spawn 探针（门槛翻转 7942px 与 sum 差 14263px 全部包含于 L3 26701px 集合，0 例外）；根修 = csGather uniform corner 越界守卫（拍板转正，commit cc69c7d），guard 后 adp<->u8 全帧逐位一致。552 分解定案：u8<->u32 结构差 338（均匀网格减半固有逼近差）+ 213.8（本 bug，已归零）。验收口径定稿（PLAN §9）：adaptive（缺省 base 16，res_eff=8）↔ probe --probe-base-res 8 同网格逐位一致为验收门（双后端 fc /b bytes 级），替代已废 MSE/u32 参照门；spawn GI 贡献本场景实测 0（机制保留）；spawn 增益验收场景（探针格稀疏/大尺度）挂账独立后续项。附 --probe-place-readback 五通道全精度回读诊断基建 + tools/cmp-place-readback.py（M11.2 冻结诊断工具触碰已获放行）。",
+   "acceptance": "run.bat verify ALL GREEN（实测 DX12+VULKAN）：双后端重拍 exit 0 + dx12 deviceErrors=0 + probe-adaptive: active (res_eff=8) 锚 + shutdown ok 锚 + bytes 门（重拍 vs 冻结基线双后端 identical）+ 逐位一致门（adaptive vs uniform-8 双后端 fc /b identical，213.8 根修后口径）+ timing 守恒门（csTraceProbe probe=0.00717ms adaptive=0.00717ms ratio=1.00，gate <=1.5）+ viz 门（品红 spawn 点 1030px 双后端，gate >=100）+ present 门（mean 35.37/255 max 255）+ 负向（missing.nmesh 非零退出）；工具 selftest PASS。双后端构建 selftest 16/16。kStage 冻结 S8.2 不 bump（M9.0 澄清口径：server.py --check 只证旧阶段无回归，新卡走 run.bat verify + regression --only 双闸）。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "adaptive-gpu",
+     "name": "自适应探针 GPU 出图冒烟：--mode probe-adaptive 8 帧双后端（退出码 + deviceErrors 锚）",
+     "kind": "tool",
+     "note": "确定性路径（Q-B1 非确定性仅 restir 模式）：probe-adaptive 8 帧重拍逐位可复现，bytes 对比在 adaptive-verify 的 run.bat 里（冻结基线 fc /b + 逐位一致门）。preview 为基线静态图。",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "args": [
+      "--mode",
+      "probe-adaptive",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7"
+     ],
+     "command": "viewer.exe --mode probe-adaptive --model Suzanne-materials.nmesh --screenshot {out}.png --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7",
+     "preview": "example/s14c-adaptive/adaptive-dx12.png",
+     "expectExit": 0,
+     "expectLog": "deviceErrors=0"
+    },
+    {
+     "id": "adaptive-verify",
+     "name": "M14C1 收官验收：双后端重拍 bytes/逐位一致门 + timing 守恒 + viz 品红 + present 门 + 负向控制",
+     "kind": "manual",
+     "note": "run.bat verify：双后端 adaptive 重拍（dx12 --pass-timing 日志捕获）→ 锚三连（deviceErrors=0 / probe-adaptive: active / shutdown ok）→ uniform-8 参照重拍（dx12 doubles as timing-probe 捕获）→ bytes 门（重拍 vs 冻结基线）→ 逐位一致门（adaptive vs uniform-8，fc /b，PLAN §9 定稿口径）→ timing 门（ratio<=1.5）→ viz 门（品红>=100）→ present 门 → 负向。全部门在同一 verify 内 fresh capture。",
+     "args": [],
+     "command": "example/s14c-adaptive/run.bat verify",
+     "script": "example/s14c-adaptive/run.bat verify"
+    }
+   ]
   }
  ]
 }
