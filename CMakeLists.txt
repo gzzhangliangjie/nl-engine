@@ -435,6 +435,7 @@ add_library(nl_renderer STATIC
     renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
+    renderer/src/rmlui_backend.cpp  # M-UI0.1：RmlUi RenderInterface/SystemInterface/FileInterface + NVRHI 管线（--rmlui-demo）
 )
 target_include_directories(nl_renderer
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
