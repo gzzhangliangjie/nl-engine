@@ -1,0 +1,5 @@
+[scriptapi] wrote core\include\nl\script\ApiTable.g.hpp
+[scriptapi] wrote core\src\script\ApiTable.g.inc
+[scriptapi] wrote core\src\script\ApiTable.g.asserts.inc
+[scriptapi] wrote script\script-api\Wiring.g.cs
+[scriptapi] ok：25 exports / 1 POD types

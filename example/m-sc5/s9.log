@@ -1,0 +1,12 @@
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+[nl:info|script] s9 log info anchor
+  ok  s9-pre locate TimeInputScript build output
+  ok  s9-pre locate binding entries (UnmanagedCallersOnly)
+[nl:info|script] s9 unbound still ok
+  ok  s9a C# BoundProbe -> 0 (got 0)
+  ok  s9a2 clock unpaused after script SetState(0,-1)
+  ok  s9a2 timeScale kept 2.5 (-1 sentinel)
+  ok  s9a3 C# SetFilter("nl:warn") -> global default Warn
+  ok  s9a3 filterInstruction readback norm form
+  ok  s9b C# UnboundProbe -> 0 (got 0)
+nl-script selftest: PASS (0 failures)

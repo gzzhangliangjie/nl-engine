@@ -1,0 +1,56 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info] blas built: Suzanne-materials.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info] cull (vertex pulling) scene ready: Suzanne-materials.nmesh | meshlets=711 | triangles=11808 | stride=63 | frustum=off | shader=dxil
+[nl:info] visbuf material resolve ready: Suzanne-materials.glb | materials=3 | baseColor 1024x1024 | shader=dxil
+[nl:info] probe scene ready (velocity prepass + 4-level cascade placement, viz dots) | shader=dxil
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] debug layer: D3D12 Debug Layer (Windows SDK) + NVRHI validation | active=yes
+[nl:info] mode: cache-viz | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info] screenshot mode: 16 frames -> E:\UE_STUDY_2026\nl-engine\example\s11-hash\cacheviz-dx12.png | cull=back | hud=off
+[nl:info] tlas: per-frame rebuild active | instances=1
+[nl:info] t0: offscreen HDR scene targets ready (raster path)
+[nl:info] probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64
+[nl:info] cache: flat hashmap active (262144 slots, lifetime 10, cell 0.5m, probe steps 3 -- Q11-0 plan A)
+[nl:info] cache: viz compose dispatch 960x540 hdr=ok set=ok
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:info] gpu timer resolved [frame]: 0.905216 ms (first successful NVRHI timestamp query)
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:debug] D3D12 info queue messages: 1
+[nl:debug] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value.
+[nl:info] screenshot written: example/s11-hash/cacheviz-dx12.png
+[nl:info] shutdown ok (frames=16 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 5.85166 ms  max 69.3813 ms  over 16 frames (unthrottled)
+[nl:info] gpu timing: avg 0.256137 ms over 15 resolved frames (NVRHI timer)
+[nl:info] window destroyed

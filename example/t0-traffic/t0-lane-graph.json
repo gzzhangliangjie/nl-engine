@@ -1,0 +1,214 @@
+{
+  "laneCount": 8,
+  "lanes": [
+    {
+      "edgeId": 0,
+      "fromNode": 0,
+      "id": 0,
+      "incoming": [
+        3
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        4
+      ],
+      "points": [
+        {
+          "x": 0.0,
+          "z": -0.25
+        },
+        {
+          "x": 10.0,
+          "z": -0.25
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 1
+    },
+    {
+      "edgeId": 1,
+      "fromNode": 1,
+      "id": 1,
+      "incoming": [
+        5
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        2
+      ],
+      "points": [
+        {
+          "x": 10.0,
+          "z": 0.25
+        },
+        {
+          "x": 0.0,
+          "z": 0.25
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 0
+    },
+    {
+      "edgeId": 2,
+      "fromNode": 0,
+      "id": 2,
+      "incoming": [
+        1
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        6
+      ],
+      "points": [
+        {
+          "x": 0.25,
+          "z": 0.0
+        },
+        {
+          "x": 0.25,
+          "z": 10.0
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 2
+    },
+    {
+      "edgeId": 3,
+      "fromNode": 2,
+      "id": 3,
+      "incoming": [
+        7
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        0
+      ],
+      "points": [
+        {
+          "x": -0.25,
+          "z": 10.0
+        },
+        {
+          "x": -0.25,
+          "z": 0.0
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 0
+    },
+    {
+      "edgeId": 4,
+      "fromNode": 1,
+      "id": 4,
+      "incoming": [
+        0
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        7
+      ],
+      "points": [
+        {
+          "x": 10.25,
+          "z": 0.0
+        },
+        {
+          "x": 10.25,
+          "z": 10.0
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 3
+    },
+    {
+      "edgeId": 5,
+      "fromNode": 3,
+      "id": 5,
+      "incoming": [
+        6
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        1
+      ],
+      "points": [
+        {
+          "x": 9.75,
+          "z": 10.0
+        },
+        {
+          "x": 9.75,
+          "z": 0.0
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 1
+    },
+    {
+      "edgeId": 6,
+      "fromNode": 2,
+      "id": 6,
+      "incoming": [
+        2
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        5
+      ],
+      "points": [
+        {
+          "x": 0.0,
+          "z": 9.75
+        },
+        {
+          "x": 10.0,
+          "z": 9.75
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 3
+    },
+    {
+      "edgeId": 7,
+      "fromNode": 3,
+      "id": 7,
+      "incoming": [
+        4
+      ],
+      "laneIndex": 0,
+      "length": 10.0,
+      "offset": 0.25,
+      "outgoing": [
+        3
+      ],
+      "points": [
+        {
+          "x": 10.0,
+          "z": 10.25
+        },
+        {
+          "x": 0.0,
+          "z": 10.25
+        }
+      ],
+      "speedLimit": 13.899999618530273,
+      "toNode": 2
+    }
+  ],
+  "version": 1
+}

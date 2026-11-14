@@ -1,0 +1,3 @@
+hops        : 4
+lanes       : 0 -> 4 -> 7 -> 3
+length sum  : 40.0 m

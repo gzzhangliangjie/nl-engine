@@ -360,3 +360,331 @@ example\m-sc3\run.bat          # selftest + run --api + check bootstrap + 4 张�
    同 case 双后端并行时两进程互踩 → 间歇 exit 1。temp 名加 `_getpid()` 后缀
    根治。同族：**25ms 步长落 2×step=33.333ms 浮点刀锋**（舍入方向不定，
    孪生复推与实跑可能不一致），对拍用例选离边界远的钉值（30ms → [1,2,2]）。
+
+---
+
+# M-SC4：绑定导出生成器（exports.api 单源，2026-11-14）
+
+## 机制口径
+
+| 层 | 谁写 | 说明 |
+|---|---|---|
+| ① 声明 | 手写（唯一声明） | `script/script-api/exports.api`：`域 \| 名 \| 返回 \| 参数 \| 文档` 单行 + `type 名` POD 段 |
+| ② C++ 接线 | 生成 | `ApiTable.g.hpp`（结构+POD 镜像）/ `.g.inc`（注册行）/ `.g.asserts.inc`（防漂移） |
+| ③ C# 接线 | 生成 | `Wiring.g.cs`：delegate + 指针字段 + Init 偏移 + `NativeMarshal` 生命周期原语 |
+| ④ C# facade | 手写薄层 | 返回语义/错误码含义在场；marshal 禁私搭，一律用 `NativeMarshal` |
+| ⑤ C++ 实现体 | 手写 | 引擎语义本体（功能本身） |
+
+- **TYPEMAP + 生命周期账本机制单源**（gen.py）：in str = AllocHGlobal + finally 必释放；out str = C++ 静态缓冲「下次同线程调用前有效」+ C# 立即拷贝；命令回调 outText = CoTaskMem 配对（SEH 路径含）；delegate = `_pinned` 保活（script-api 装在 collectible ALC，随 Unload 整体回收——UnrealSharp per-ALC 归组同款，无需额外归组表）；POD = 值/栈传递不跨堆；宿主活实例 = 显式 set/unset + 未绑错误码兜底。
+- **硬规则**：C++ 侧永不跨 reload 缓存托管引用；type 段只收纯 POD（数值 + 定长 buf，禁字符串/嵌套引用——gen.py 解析即拒，非 POD 显式拆参数）；动态容器不过界走 count+ptr 协议（argv 先例），字典分解为单值导出/双列表/快照串。
+- **防漂移双闸**：`.g.asserts.inc` 每导出一条 `static_assert(is_same_v<decltype(&nl_xxx), 声明签名>)`（编译期红）；CMake -P `check_freshness.cmake` 时间戳闸（exports.api 新于生成物 = 构建红，零 Python）。
+- **gen.py --check**：内存重生成与入库产物逐字节比对（golden 自证；M-SC6 起 5 份——C++ 三件 + Wiring.g.cs + docs/script-api/API.md，单源第三消费端 = API 文档，Flax 先例）。
+- 先例：Flax `API_` 宏 + Flax.Build 双端生成 / csbindgen 产物入 git / UnrealSharp property translator；cocos bindings-generator 的 libclang 路线不需要（绑定面是纯 C ABI 函数表，无类/继承/模板）。
+
+## 声明格式速查
+
+```
+#   参数表逗号分隔，每项「[in|out] 类型 名字」；类型词表（TYPEMAP 单源在 gen.py）：
+#     int/u64/f32/f64/u32 = 标量；out = 指针
+#     str = const char*（UTF-8）；out str = const char**（静态缓冲语义，见上）
+#     bufN = 定长 float 数组指针；ptr = void* 不透明载荷
+Time | timeGetState | int | out f64 simTime, out f64 frameDt, out u64 tickCount, out int paused | ...
+type TransformData
+    f32 px, py, pz      # position
+    ...
+```
+
+改声明 → `python tools/scriptapi/gen.py` → 提交生成物（构建不依赖 Python；API.md 同批刷新——文档禁手改，签名/生命周期列由声明与 TYPEMAP 账本单源渲染）。
+
+# M-SC5：Time / Input / Log 域面（ApiTable 16 -> 25，2026-11-14）
+
+## 绑定面口径（nl/script/Bindings v3）
+
+| 域 | 导出 | 关键口径 |
+|---|---|---|
+| Time | `timeGetState` / `timeSetState` | 绑宿主 `GameClock`（`timeSetClock`）；一次读回 simTime/frameDt/tickCount/paused；SetState 哨兵（-1=不变）；未绑 = `kTimeNoClock` |
+| Input | `inputActionFind` + `inputActionBool/Float/Vec2` + `inputKeyIsDown` | 绑 `InputState`+`ActionMap`（`inputSetState`/`inputSetActionMap`）；ActionId = u32，冻结值三型；类型不符 = `kInputNoAction`；KeyIsDown 越界 = BadArg；未绑 = `kInputNoSource`（**不隐式建表**） |
+| Log | `logWrite` / `logSetFilter` | `nl::core::log` 全局面，通道 `script`（stdout `[nl:level|script]` 契约）；level 0..5=Trace..Fatal 越界 BadArg；非法 filter 指令 = `kLogBadInstruction` 带原因 |
+
+宿主 set 绑定族（M-SC2 `ecsSetWorld` 模式推广）：`timeSetClock / inputSetState / inputSetActionMap`——入口调用前 set，未绑窗口 = 专属错误码（热更兜底，M-SC3 口径同构）。viewer scene 模式只绑 Clock（无注入管线，Input 有意保持未绑）。
+
+## selftest 判据（s9 组，s0~s5 + s6 + s7 + s8 不回归）
+
+- s9a Time：tick x3 → simTime 0.05 / tickCount 3；SetState(1,-1) 暂停 + timeScale 哨兵保持；解绑 → NoClock
+- s9a2 哨兵边界：paused=-1 不变、timeScale=-1 不变（显式 0/1 正常生效）
+- s9a3 Log：`[nl:info|script]` 通道锚；SetFilter("nl:warn") 生效 + readback；非法指令显式错带原因
+- s9b Input：ActionFind 三型冻结值（W/D 喂键 Bool/Float/Vec2）；类型不符 NoAction；KeyIsDown 越界 BadArg；解绑 → NoSource
+
+## 验收复现
+
+```
+scripts\build-m0.2.bat DX12
+example\m-sc5\run.bat          # selftest（5 示例目录）+ s9 特写 + log 通道锚 + check + 4 张证据图
+```
+
+## 踩坑存档（M-SC4/M-SC5 实测）
+
+1. **TYPEMAP 首跑即抓 `out u64` → `int*`**：ecsSpawn/GetParent/FindByName 三条映射错——防漂移断言闸当场编译红。闸的价值 = 把「selftest 兜底」升级成「编译失败」。
+2. **ActionMap 定义在 `action_map.hpp` 不在 `input.hpp`**：两个 TU（Bindings.cpp / nl-script main.cpp）各漏一次 include。
+3. **nl_core 对 glfw 是 PRIVATE link**：include 面不传播——nl-script main.cpp include `input.hpp` 拉 GLFW 头失败；nl-script CMake 显式 `PRIVATE glfw`（viewer 同款）。
+4. **reloadScript OnTick 重绑误用 `getEntryPoint`（M-GL4 口径漏改）**：热更路径会把脚本程序集再装一份进默认 ALC（两份副本静态字段独立）；loadScript 走 bootstrap `scriptTickFn`、reloadScript 漏改——M-GL4 踩坑 1 的同族复发，已修并随 M-SC4 selftest 验证。
+5. **bat 里 python -c 的坑三连**：`%` 格式化被 cmd 展开（`%d`→变量展开吞字符）；LF 行尾 bat 解析不可靠（统一 CRLF）；`echo`/参数里裸 `|` 被切管道（`^|` 转义或改 findstr）。
+
+# M-SC6：Camera 域面（ApiTable 25 -> 29，2026-11-14）
+
+## 绑定面口径（nl/script/Bindings v4）
+
+| 域 | 导出 | 关键口径 |
+|---|---|---|
+| Camera | `cameraGetPose` / `cameraSetPose` / `cameraGetFov` / `cameraSetFov` | 绑宿主相机适配源（`cameraSetSource(CameraSource*)`，4 函数指针 + ctx）；`CameraPose` POD（eye[3]+yaw+pitch+fov+mode）；未绑 = `kCamNoSource`；GetFov 未绑 = **NaN**（f32 返回无 rc 通道，生命周期账本特例，exports.api 行内文档化）；SetFov clamp [20,120]（同 OrbitCamera，脚本不得与宿主 fov 持久化打架） |
+
+**为什么是 CameraSource 适配源而不是裸 CameraRig**：nl_core 不能反向依赖 viewer（依赖方向），裸 rig 会丢 fov 持久化 + orbit 控制；plan 里 `cameraSetRig` 是落码前占位名，定稿 `cameraSetSource`（同契约：宿主显式 set，ecsSetWorld 模式推广，不隐式建表）。**模式感知 SetPose 语义在 viewer 适配源实现**（不在绑定层）：orbit = `setOrbit(yaw,pitch,|eye|)`+seed / free = `setPose` / chase = `snapEyeTo`+pitch（yaw 由底盘驱动）/ track = `ModeUnsupported`（轨迹数据主权——读路径无模式限制，写路径拒）。
+
+## selftest 判据（s10 组，s0~s5 + s6 + s7 + s8 + s9 不回归）
+
+- s10a 绑定路径：罐头位姿读回锚（eye 1.5/2.5/3.5、yaw 30、pitch -10、fov 60、mode=orbit）+ SetPose rc Ok（C++ 捕获 {4,5,6,45,15}）+ null eye → BadArg + fov 往返 60→75→clamp 500→120（假源存 clamp 后值）
+- s10b track（mode=3）：GetPose 照常（读无模式限制）、SetPose → ModeUnsupported、SetFov(60) Ok（fov 模式统一生效）
+- s10c 解绑路径：cameraSetSource(nullptr) → GetPose/SetPose/SetFov = NoSource、GetFov = NaN，不抛异常不崩
+
+## 验收复现
+
+```
+scripts\build-m0.2.bat DX12
+example\m-sc6\run.bat          # gen --check（29 导出）+ selftest（6 示例目录）+ s10 特写 + check camera + 4 张证据图
+```
+
+## 踩坑存档（M-SC6 实测）
+
+1. **`out f32`（cameraGetFov）没有 rc 通道**：POD/引用参数靠 rc 传错误码，f32 直接返回值——未绑语义只能用 NaN 表达，账本特例写进 exports.api 文档列而非 TYPEMAP 例外。
+2. **gen.py 重生成顶掉 exe mtime → 回归过期门禁拦**：内容字节一致也会被拦（闸按 mtime）——重编放行，闸不是摆设（M-SC4 已实证过一次，本条为第二次）。
+3. **python subprocess 调 build bat 两坑**：`text=True` 用 UTF-8 解码 nmake 的 GBK 输出崩 reader 线程（改 bytes + gbk/errors='replace'）；`'scripts\build-...'` 单反斜杠被 Python 吃成 `\b` 退格（`'scriptsuild'`）——用 r-string。
+
+---
+
+# M-SC7：ECS 模型挂载（v5）——拍板方案 A + 白名单单源 + initScene 可重入
+
+## 绑定面口径（nl/script/Bindings v5）
+
+| 导出 | 签名 | 语义 |
+|---|---|---|
+| `ecsAttachModel` | int (u64 id, str meshFile) | 挂 ModelComponent；白名单 + Transform 前置 + 重复挂拒绝。rc：0=ok / 1=NoWorld / 2=NoEntity / 3=重复挂（Component）/ 4=BadArg（空名）/ 5=NoTransform / 6=BadAsset（白名单拒） |
+| `ecsDetachModel` | int (u64 id) | 摘 ModelComponent。rc：0=ok / 1 / 2 / 3=无 Model 可摘 |
+| `ecsModelInfo` | int (u64 id, out str meshFile, out buf3 tint, out f32 roughness, out f32 metallic) | 字段读回；meshFile = 静态缓冲账本（下次同线程调用前有效，C# 立即拷贝）；tint/roughness/metallic 可 NULL 跳过，meshFile 指针必填 |
+
+拍板方案 A（2026-11-14，用户拍板）：**binding 只做组件增删 + 校验，渲染侧帧边界整场景重建**——viewer 每帧 tick 后比对 Model 集合签名（实体 ID + meshFile，`world.getEntityIDs()` 出现序稳定），变了重跑收集 + `loadEcsScene`。实例矩阵每帧更新走既有 M-GL3 插值链不动。Carrot/bevy/UE 三处参考都是「组件增删自动传播」，但其架构（每帧收集/每组件 proxy）与本项目 E1b 静态 batch 不同——方案 A 是 E1b 架构内的最小传播实现，机器出口锚 = `ecs scene rebuilt: N objects (frame-boundary, script attach/detach)`。
+
+防崩语义三件（拍板）：无 Transform = `kEcsNoTransform=5` 拒绝（E1b「Model without Transform = 拒」同口径，不隐式建表）；重复挂 = `kEcsComponent=3` 拒绝（**World::addComponent 同类型重复是 assert，binding 不挡就崩进程**）；白名单拒 = `kEcsBadAsset=6`（坏名不落 World）。运行期重建时白名单/Transform 不合格实体 = 逐实体跳过 + 显式日志（与初始 `--scene` 硬失败退出 2 口径不同——帧边界不致命）。
+
+## 白名单单源（M-SC7 收编）
+
+`nl::scene::validAssetFileName(name, ext)` / `validGlbAssetName(name)`——`core/src/scene/AssetName.cpp`。历史四处复制（renderer.cpp 原版 / scene.cpp 兜底 / viewer lambda / SceneGeo validMeshName）全部收编；统一语义 = 原版（可打印 ASCII 0x21..0x7E 无空格 + 无路径分隔符 + 无 ".." + 指定后缀）。**SceneGeo 放行字符集变宽**（原 alnum+_-\.），路径穿越防护不变，取舍已写 AssetName.hpp 头注。新增消费面一律走 helper，禁再复制。
+
+## initScene 可重入（重建的防泄漏前提）
+
+`Scene::initScene` 原来不可重入（成员句柄直接重建不释放 → 二次调用整份泄漏）。新增 `Scene::shutdownEcsScene()`：initScene 建立的全部 GPU 句柄（场景管线/sceneBatches_/灯缓冲/中性 PBR 兜底纹理/阴影链）子集释放，initScene 开头调用 + shutdown() 复用同一清单（原 M-E1b.0 块原位收编，语义逐位不变）。**新场景资源进 initScene 时必须同步进 shutdownEcsScene 清单**——与「Scene 新增资源必须进 shutdown 清单」同级纪律。
+
+## selftest 判据（s11 组，s0~s5 + s6 + s7 + s8 + s9 + s10 不回归）
+
+- s11a：Spawn+AddTransform+AttachModel(cube.glb) → ModelInfo 全字段读回（meshFile/tint 缺省/roughness/metallic）→ C++ 终态核：ModelComponent 落进罐头 World 且 meshFile=cube.glb。
+- s11b：错误码逐一对齐——NoEntity=2（attach/detach/info 三导出）、BadArg=4（空名）、BadAsset=6（../secret.glb / model.gltf / dir/model.glb，且**坏名不落 World**：ModelInfo 回 Component）、NoTransform=5、重复挂=3（且拒绝不改状态：meshFile 仍是首挂值）、无模型摘=3。
+- s11c：ecsSetWorld(nullptr) 后三导出全 NoWorld 不崩，重绑恢复。
+- s11d：DetachModel 后 ModelInfo=Component、C++ 核 Model 摘净 + Transform 留守、再摘=Component。
+
+## 验收复现
+
+`example/m-sc7/run.bat`：gen --check（32 exports）→ selftest 全量（含 s11）→ s11 特写过滤 → check model → 证据图重生成 → ALL GREEN。`python tools/regression.py --only m-sc7` 8 卡双后端。
+
+## 踩坑存档（M-SC7 实测）
+
+1. **gen.py C# Init 偏移 bug（本轮最有价值发现）**：偏移按域首现序跑连续计数器，往非末尾域尾部追加导出时后继各域整体错位（表本体一直是声明序所以 struct 没坏、M-SC5/SC6 都在末尾域追加所以从未暴露）。修复 = 每导出声明序全局下标；域注释偏移段合并显示（Ecs = "6..15,29..31"）。**生成器隐性假设（「域组连续」）要写进不变量或断言，不能靠运气**。
+2. **getComponent 返回基类指针**：`World::getComponent(id, typeID)` 返回 `Component*`，取字段必须 `static_cast<const ModelComponent*>`——templated 重载 `getComponent<T>(id)` 才内建 cast。漏 cast = C2039（编译闸抓，收口前红一次）。
+3. **Api.cs 手写 facade 用 Vector3**：`System.Numerics` 不在 ImplicitUsings 自动集（工程显式 disable），要显式 using。
+4. **newEntity 延迟落表**：实体进 `entitiesToAdd_` 队列，`findEntityByName`/C# `FindByName` 只扫 `entities_`——罐头 World 不 tick 就不 flush，按名查找族全空（组件按 id 键控的 hasComponent/getComponent 不受影响，所以出现「attach 全过、按名核全红」错位假象）。宿主终态核前显式 `flushEntityCreationAndRemoval()`。
+5. **out buf 传 null = 「跳过该字段」不是「填零」**：ModelInfo 全字段重载首版把 null 传 tint 指针，C# 侧读回恒 (0,0,0)——facade 要读就传实缓冲（stackalloc）。
+6. cwd 漂移读错树：开工实读阶段三条 grep 落主仓得出「s9/s10 不存在」假象——pwd 必看。
+
+## M-SC8 Physics 载具域（v6，ApiTable 32->37，2026-11-14）
+
+### 绑定形态（拍板 Q-SC8-1 A'：直持 DebugScene*）
+
+`driveSetScene(nl::physics::DebugScene*)`（Bindings.hpp，ecsSetWorld 模式推广）：
+绑定面**直持** M-NET2 已落的 `physics::DebugScene` PIMPL 公开类，五导出逐字透传
+`addVehicle/removeVehicle/setVehicleInput/vehicleFullPose/teleportVehicle`——
+P8-SCRIPT-PLAN L107 既定口径「直接对齐不新造」。**CameraSource 函数指针表是四模式
+相机专属形态（ViewerCamera 私有头 + orbit/free/chase/track 模式感知），DebugScene
+是单形态具体类，再包一层适配源属过度设计**——开工摆方案时曾按 M-SC7 台账「CameraSource
+式适配源」锚拍过一版函数指针表，披露计划口径冲突后重拍 A'（教训：M-SC7 下一步句
+是方向性指针不是既定拍板，与计划文档正文冲突时以计划正文为准并披露）。
+
+| 域 | 导出 | rc |
+|---|---|---|
+| Physics | physicsAddVehicle(spawnX, spawnZ) -> slot | 0=ok / 1=NoScene / 3=AddFailed（lastError 置因）|
+| Physics | physicsRemoveVehicle(slot) | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | physicsSetVehicleInput(slot, fwd, right, brake, handBrake) | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | vehicleFullPose(slot) -> pos+quat+vel | 0=ok / 1=NoScene / 2=NoSlot |
+| Physics | teleportVehicle(slot, pos, quat) | 0=ok / 1=NoScene / 2=NoSlot / 4=BadArg |
+
+- 错误码族 `kPhyOk=0 / kPhyNoScene=1 / kPhyNoSlot=2 / kPhyAddFailed=3 / kPhyBadArg=4`；
+  槽位有效性探针 = `vehicleChassisState(slot).valid`（used && chassis 同条件，
+  tombstone 后即 false——M-NET2 内部静默忽略非法槽，绑定面显式回 NoSlot）。
+- `buf4`（quat xyzw）= TYPEMAP 首个 4-float buffer；`BUF_RE` 泛型正则天然覆盖任意宽度。
+- 线程口径 = OnTick 逻辑帧约定（Q-SC8-2 A：**注册方 step**——脚本 OnTick 写四输入，
+  当帧 `physicsScene.step` 消费；runScene 组序 PrePhysics scriptTick → Physics step
+  同语义）。输入与读键解耦（Q-SC8-3 A）：Input 域读键 + `Physics.SetVehicleInput`
+  写值，映射脚本侧自由。
+
+### viewer runNormal 接线（--script 在物理训练场模式可用）
+
+runScene 的 M-GL4 装载块**复制精简**（scene 模式脚本链是已验收冻结面，零改动）：
+产物定位 / Vm::create / init / loadScript / typeName 推导同款。绑定链差异：
+`timeSetClock(&gameClock)` + scenario 2 才 `driveSetScene(&physicsScene)`；
+**ecsSetWorld / cameraSetSource 不绑**（runNormal 无 ECS World 与 ViewerCamera，
+脚本调 Ecs.*/Camera.* 得 NoWorld/NoSource = 不隐式建表拍板同构的正确语义）。
+收尾次序铁律同 runScene：解绑场景/时钟 → unloadScript → 析构 Vm。
+
+### selftest s12（drive 示例探针，真训练场）
+
+`s12a`（BoundProbe，DebugScene build(2) 真训练场 + C++ 终态核同实例）：AddVehicle
+slot=1（slot0 = 既有单车）→ 四输入写（重复写覆盖语义）→ FullPose 含 out-NULL 跳过
+路径 → Teleport 逐位读回（DontActivate）→ RemoveVehicle tombstone 后三导出全
+NoSlot 且 slot0 不波及；C++ 核 slot0 valid / 脚本车 invalid。`s12b`：driveSetScene
+(nullptr) 后五导出全 NoScene 不崩。
+
+### 踩坑存档（M-SC8 实测）
+
+1. **C# stackalloc 三元表达式**：`cond ? stackalloc float[3] : null` 推成
+   `Span<float>` 不能隐式转裸指针（CS0029）——先 stackalloc 到局部再条件赋值指针。
+2. **M-SC7 台账「下一步」句与计划正文口径冲突**：M-SC7 写「CameraSource 式适配源」，
+   P8-SCRIPT-PLAN L107 写「直接对齐 M-NET2 面不新造」——开工摆方案时先按前者拍了
+   一版，摆完才发现后者；**披露冲突重拍**（结论：计划正文赢，台账「下一步」只是
+   方向性指针）。里程碑台账的「下一步」句禁止当既定拍板引用。
+
+## M-SC10 属性面板域（v7，ApiTable 37->39，2026-11-14）
+
+### 拍板（Q-SC10-1~4 = A/A/A/A，2026-11-14）
+
+载体 = **静态字段面板**（入口脚本类 `[Prop]` 静态字段反射枚举；M-SC2b
+ScriptComponent 维持默认不做——零实例零生命周期，计划行内「C# 组件字段」
+在静态入口模型下落为「脚本类静态字段」）；类型集 = float/int/bool/string
+（kind 0..3）；挂点 = `--prop-panel` additive 独立窗口默认关（runScene/
+runNormal 通用）；交代物全要。
+
+### 双通道架构（生命周期硬规则①的落地）
+
+| 通道 | 方向 | 载体 | 生命周期 |
+|---|---|---|---|
+| 描述表 | C# → C++ | `propsPushBegin`（gen+1 = 面板重建信号）+ `propsDescAdd(kind, name, min, max, def)` 推 POD 表（`PropDesc{kind, name[64], min, max, def}`，上限 256） | C++ 只存 POD；FieldInfo 反射缓存留 script-api 程序集内随 ALC 回收 |
+| 值读写 | C++ → C# | **BootTickPtr 协议复用**——按名解析可选契约 `PropGet`/`PropSet`（public static int(IntPtr,int)），ScriptHost::propGet/propSet 包装 | 与 tickFn_ 同纪律：缺失 = 通道惰性；reload 重取；unload 前置空（thunk 保活列表 Unload 清空白得——bootstrap 零改动） |
+
+脚本侧三行契约（PropsScript 示例同款）：
+
+```csharp
+Entry 内开头：  PropsPush.PushStatic(typeof(MyScript));
+public static unsafe int PropGet(IntPtr a, int s) => PropsPush.PropGet(typeof(MyScript), a, s);
+public static unsafe int PropSet(IntPtr a, int s) => PropsPush.PropSet(typeof(MyScript), a, s);
+```
+
+- 值 ABI：buf[0..3]=int32 idx（C++ 包装填）；标量 buf[4..7]=f32/i32/b(0/1)；
+  string buf[4..259]=UTF8 尾 0（get 截断 255，set 读到首个 0）。
+- Default 不单独声明 = 推送时字段现值快照（防双源漂移）；字段序 =
+  MetadataToken 升序（GetFields 无序，取稳定序；**reload 后行序会变**——
+  面板按 gen 重建、工具侧按 kind 定位，禁硬编码 idx）。
+- `[Prop]` 无 Range 形态 = min==max = 面板退直输控件（SliderFloat/SliderInt/
+  Checkbox/InputText 四态）。
+
+### viewer 接线（--prop-panel，runScene/runNormal 共用）
+
+- 帧外持久 `PropPanel::State` + `propPanelSync()` 共用助手：描述表 gen 变化 →
+  重建行（初值经 propGet 拉）；dirty 行 → propSet 清边沿；active/状态行按
+  通道与表态回填。
+- **State 是 HudFrame 值成员**：帧前整份拷入 `hud.propPanelState`、帧后整份
+  拷回（drawWindow 编辑落在 hud 副本，不拷回 = 编辑丢失——M-T5 SignalPanel
+  教训同族：只挂指针 = 面板渲染全零）。
+- 主面板可见性：runScene 补 `hud.panelShow = o.hudEnabled`（M-C2 缺省可见
+  收敛为显式门）——`--no-hud + --prop-panel` = 只画 script props；profiling-hud
+  的 M-TR0 抑制语义不变。
+
+### selftest s13（props 示例探针）
+
+`s13a` 描述表 4 行 kind/Range/default 逐位 + 通道接通；`s13a2` 四类型值往返
++ C# 真源核（ReadField 探针经 bootstrap BootCall 读活静态字段——**禁
+getEntryPoint 直拉脚本 dll**，M-GL4 口径）；`s13b` idx 越界 rc 8 / 坏缓冲 rc 2；
+`s13c` 热重编加字段（copy → 改源 → dotnet build 同名覆盖 → reload）→ 表
+4->5 + 契约重取；`s13d` **万次 string 串往返 + GC.Collect 探针句柄漂移 <32**
+（s8f 手法扩展，生命周期账本硬规则②新域必带）；`s13e` unload 通道前置空 +
+POD 表 C++ 留存。
+
+### 踩坑存档（M-SC10 实测）
+
+1. **C++ propSet staging 拷贝源错位**：`memcpy(staging+4, buf, size-4)` 拷的是
+   调用方 buf 的 [0..3]（idx 位），而调用方 ABI 值区在 buf+4——set 全零（实测
+   propGet 回 0.0）。修 = 从 `buf+4` 取。教训：**「包装填 idx + 值区偏移 4」
+   的双段 ABI 在跨端两侧各写一遍，逐字对照必做**。
+2. **.NET 8 禁反射 Invoke `[UnmanagedCallersOnly]` 方法**（InvalidProgram:
+   attempted to call a UnmanagedCallersOnly method from managed code）——
+   BootCall/BootTickPtr 走反射的契约方法（Entry/PropGet/PropSet/探针）一律
+   **不带 UC**；UC 只用于 getEntryPoint 函数指针路径（hello EntryNative 同款
+   分工）。CreateDelegate 路径（BootTickPtr）UC 可用但非必需。
+3. **reload 后行序随 MetadataToken 变化**：热重编把新字段插在旧字段声明前 →
+   idx 位移——工具/测试按 kind 或名字定位，禁硬编码 idx（实测 4 字节 string
+   比特写进 int 字段，get 回 "leak"）。
+4. **C1090 PDB API 0x6BA** 二连：mspdbsrv 瞬时故障，重跑即绿（M-SC8 踩坑②
+   复现，非代码错）。
+
+## M-SC11 整轨收口：跨域示例脚本（v0.9.0 终态，ApiTable 39 不变，2026-11-14）
+
+### 拍板（Q-SC11-1~3 = A/A/A，2026-11-14）
+
+① 示例域集 = **五域+Props**（计划行 Time+Input+Ecs+Log+Camera 加 M-SC10
+Props；Physics 不进——训练场模式与 Camera/Ecs 互斥，见下表）；② merge 回
+master 单独拍板不入本轮（S13 教训：merge 后重跑全历史卡）；③ GUIDE = 新节
++ 既有 M-SC4~SC10 各节一致性终检。
+
+### 双模式域可用性约束（跨域示例的物理前提）
+
+| 域 | runScene（scene 模式） | runNormal（训练场模式） | 绑定点 |
+|---|---|---|---|
+| Time / Input / Log | Time+Log ✅ / Input ❌(NoSource) | 同左 | timeSetClock；Input 双模式均不绑（不隐式建表口径） |
+| Ecs（挂载） | ✅ ecsSetWorld | ❌ 不绑 | World 未绑 = EcsCode.NoWorld |
+| Camera | ✅ cameraSetSource | ❌ 不绑 | 未绑 = CameraCode.NoSource |
+| Physics | ❌ 不绑 | ✅ driveSetScene | 未绑 = PhysicsCode.NoScene |
+| Props | ✅ | ✅ | 描述表导出 + BootTickPtr 值通道 |
+
+TourScript（`script/examples/tour/`，类 `NlScript.Examples.TourScript`）=
+单模式单脚本六域打通的展示样例：Entry 装载期六域锚定（PushStatic 描述表 +
+Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + Log 固定文本锚 +
+Input NoSource **负向锚** + Time/Camera 读通），OnTick 相机环绕
+（yaw += SpinSpeed*dt，SpinEnabled 可经面板实时关停 = Props 值通道活演示）
++ sweep 周期锚（Ecs.FindByName+Exists 复核 → 固定文本 log）。
+
+### viewer 复现（m-sc11 卡）
+
+```
+viewer.exe --scene example/ecs-e1b/ecs-e1b.scene --tick parallel --fixed-dt 16.7 ^
+  --script script/examples/tour --script-bootstrap script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll ^
+  --prop-panel --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9
+```
+
+验收锚：log `tour: entry ok (props+ecs+log)` / `tour: input NoSource as
+designed` / `tour: sweep ok (…)` + `ecs scene rebuilt: 6 objects
+(frame-boundary, script attach/detach)`（M-SC7 方案 A 视觉兑现——脚本 attach
+的模型帧边界重建入镜）。130 帧版（tour-sweep 卡）相机转 ~32°，tick 0/120
+两条 sweep 锚，fixed-dt 确定性 bytes 基线双后端分文件。
+
+### 踩坑存档（M-SC11 实测）
+
+1. **scene 模式默认 `--tick off`**：不带 `--tick parallel` 则 GameClock 不
+   推进 → OnTick 零执行、ticks=0、Model 签名比对不触发、attach 的模型不入镜
+   （PNG 与无脚本版逐字节同）。脚本示例卡必须带 `--tick parallel --fixed-dt
+   16.7`（gl4 tick 卡先例同款）。
+2. **OnTick 的 args = `double*`（逻辑步长秒），size = 8，不是 ApiTable\***：
+   OnTick 里调 `Engine.Init(args)` 把 dt 位型当表指针解引用 = AV（SEH
+   0xe0434352）。Engine 静态指针由 Entry（反射通道，同 ALC 静态共享）装载期
+   初始化一次，OnTick 直接用 facade——orbit 示例同款契约。
+3. **Spawn 后按名查找必须先 Flush**：name lookup 族只扫已 flush 实体
+   （newEntity 延迟落表，s7 时代同坑）；tick 0 的 sweep 分支 `0 % N == 0`
+   首帧即触发 FindByName——Entry 尾补 `Ecs.Flush()` 根修。
+4. **白名单校验 ≠ 文件存在**：selftest 罐头名 `cube.glb` 过 M-SC7 白名单
+   （字符集校验）但 `assets/models/` 无此文件——viewer 真加载时 rebuild
+   failed。示例挂载用真实资产（TorusKnotDense.glb）。
+

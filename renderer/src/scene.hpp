@@ -70,6 +70,46 @@ struct GPUMaterial {
 static_assert(sizeof(GPUMaterial) == 32, "GPUMaterial must be 32B and match shader");
 inline constexpr std::uint32_t kMaxVisMaterials = 4;
 
+// M-WAT1（water 轨，拍板 A）：水体伪 cluster 的保留 materialId 标记（clusterMeta
+// 槽 3）。GPUMaterial 间接表不占位（kMaxVisMaterials 只装真实材质），shader 侧
+// NL_WATER_MATERIAL_ID（water_common.slangh）同值；命中标记 = 水体分支。
+inline constexpr std::uint32_t kWaterMaterialId = 0xFFFFu;
+
+// M-WAT1：Gerstner 波形参数 CPU 侧结构（osgw 式显式数组；shader 侧布局规范 =
+// water_common.slangh 头注 WaterConstants，352B volatile CB；M-WAT3 扩 336→352）。
+struct WaterWaveParams {
+    float dir[2];    // 波向 xy（单位向量）
+    float amp;       // 振幅 A（米）
+    float lambda;    // 波长 λ（米）；k = 2π/λ
+    float steep;     // 陡度 Q（osgw 逐波口径，水平位移 = Q·A·cosφ）
+};
+struct WaterConstantsCB {
+    WaterWaveParams waves[8];   // 固定 8 波（unused 波 amp=0 精确零贡献）
+    float time;                  // 固定步进累积（GameClock::kStep 锚，禁 wall-clock）
+    float baseColor[3];          // 深水基色（线性 RGB）
+    float ambient;               // 环境因子
+    float specPow;               // 太阳 Blinn-Phong 幂
+    float specGain;              // 太阳高光增益
+    float maxAmp;                // ΣA（clusterSphere 半径膨胀用）
+    // M-WAT2（拍板 Q-WA7=A）：折射/吸收/泡沫参数（wcE/wcF/wcG）。
+    float ior;                   // 水体折射率（1.333）
+    float refractStrength;       // 折射出射距离系数（米/米厚）
+    float foamThreshold;         // 泡沫波高占比阈值
+    float foamGain;              // 泡沫增益
+    float absorb[3];             // Beer-Lambert 消光系数（1/m，RGB）
+    float thickMeters;           // bilateral 无邻居时的缺省厚度（米）
+    float noReflect;             // --water-noreflect 验收旗标（1 = 反射项归零）
+    float floorY;                // 池底平面高度（composite 解析折射 ray-plane）
+    float floorHalf;             // 池底半边长（命中判定 [-floorHalf, floorHalf]²）
+    float noRefract;             // --water-norefract 验收旗标（1 = 折射路径关闭）
+    float shoreFadeDist;         // 岸线软化淡出距离（米，M-WAT3）
+    float shoreFoamDist;         // 岸线泡沫窄带宽度（米，M-WAT3）
+    float shoreFoamGain;         // 岸线泡沫增益（M-WAT3）
+    float noShore;               // --water-noshore 验收旗标（1 = fade 归 1 关闭）
+    // 布局对齐 352B = 22×float4（WC 侧 wcA[8]+wcB[8]+wcC+wcD+wcE+wcF+wcG+wcH）；
+    // CPU 结构体不直接 memcpy 上传——draw() 逐字段写 float4 数组（字节级同序）。
+};
+
 // M-E1b.4：与 model.slang 的 ShadowConstants cbuffer（b2，psScene 专用）逐字节对应。
 // 每阴影灯一个正交 lightViewProj（列主序，D3D z∈[0,1]）；params = enabled/bias/mapSize/未用。
 struct ShadowConstantsCB {
@@ -373,7 +413,10 @@ public:
     // 行为与 M4.0 逐像素一致（s4.0 回归基线依赖这条）。
     bool initCull(nvrhi::IDevice* device, const char* shaderSuffix,
                   const char* vsEntry, const char* psEntry,
-                  const char* nmeshFile, bool frustumCull, std::string& outError);
+                  const char* nmeshFile, bool frustumCull, std::string& outError,
+                  // M-WAT1：true 时追加水面伪 cluster（仅 pulling 链传入 true；
+                  // cull/hiz/rt/dag 模式缺省 false = 零扰动）。
+                  bool waterEnable = false);
 
     // M5.1（S5.1）：GPU DAG 遍历选层。nmeshFile 只取 stem（"Suzanne.nmesh" →
     // "Suzanne"），探测 <stem>.lod0..lodN.nmesh 全层驻留：顶点池/局部索引/簇元数据
@@ -403,7 +446,9 @@ public:
     // 64 位布局/打包函数唯一权威见 renderer/shaders/visbuf_common.slangh。
     bool initVisbuf(nvrhi::IDevice* device, const char* shaderSuffix,
                     const char* vsEntry, const char* psEntry,
-                    const char* nmeshFile, bool pulling, std::string& outError);
+                    const char* nmeshFile, bool pulling, std::string& outError,
+                    // M-WAT1：水体开关（仅 --mode pulling 且 --water 时 true）。
+                    bool waterEnable = false);
 
     // M-A5：CPU 蒙皮场景——rigged GLB（skin + 动画）由 nl::anim::loadGltfSkinnedModel
     // 加载进 Scene（骨架 / clips / 绑定 / bind 空间网格），白色占位贴图（标准资产
@@ -465,6 +510,8 @@ public:
     // + waitForIdle）。内存占用 = inputBytes（实际 slab 字节）+ estBytes（AS 上
     // 界估算，NVRHI 不暴露真实尺寸）双口径，日志锚 + HUD 行记录在案。
     void setClusterBlas(bool on) { clusterBlasRequested_ = on; }
+    // M-WAT1：--water 传入（backend create 阶段、Scene init 链 initVisbuf/initCull 消费）。
+    void setWaterEnable(bool on) { waterEnable_ = on; }
     // M13.1：levels 改指针+计数（initCull 链单层 &nm 直传，避免临时拷贝整份
     // NMeshData；语义不变）。
     bool initClusterBlas(nvrhi::IDevice* device,
@@ -624,6 +671,12 @@ public:
     // 合成图在本场景结构性读不到 GI 变化（M11.2 实锤）→ 验收对象必须是 GI 分量本身。
     bool drawGiDump(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                     std::string& outError);
+    // drawSSR（M-WAT0，water 轨）：SSR 屏幕空间反射全链——径向距离 min 金字塔
+    //（vis deviceZ 反投影）+ 场景色均值链 + march（UE SSRT 口径）+ 合成叠加
+    // 写回 hdrSceneColor_。仅 pulling 分支、params.ssr 开时调用（cache-viz 之后、
+    // presentTonemap 之前）；关 = 一行不执行 = 冻结基线 bytes。
+    bool drawSSR(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                 const FrameParams& params, std::string& outError);
   private:
     // 懒建 cache sets（依赖 probeDepth_ / hdrSceneColor_，句柄变了就重建——
     // set 是不可变对象，纹理重建后必须换新 set）。
@@ -631,6 +684,12 @@ public:
     // 懒建 cache 管线（shader/PSO/缓冲/CB；尺寸固定不随视口重建）。
     bool ensureCachePipelines(nvrhi::IDevice* device, const char* shaderSuffix,
                               std::string& outError);
+    // 懒建 SSR 目标（金字塔/场景色链/ssrColor_，随视口尺寸 POT 化懒建重建）。
+    bool ensureSsrTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
+                          std::string& outError);
+    // 懒建 SSR 管线（shader/PSO/CB/布局；尺寸无关不随视口重建）。
+    bool ensureSsrPipelines(nvrhi::IDevice* device, const char* shaderSuffix,
+                            std::string& outError);
   public:
     // 懒建 probe 资源（D32 自建深度 / velocityFb_ / atlas×2 parity / prevDelta /
     // sets / PSO）。baseRes 变化（ImGui）→ 参数入闸 → 纹理与 set 整组重建。
@@ -644,6 +703,9 @@ public:
     void addResolveSetItems(nvrhi::BindingSetDesc& desc) const;
     // b1 LightConstants + b2 MatResolveConstants 每帧写入（pulling / shadow 共用）。
     void writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& params);
+    // M-WAT1：水体 CB（288B）帧写入——visbuf 帧序列 raster 之前调用（VS 位移
+    // 先于首次绑定使用，否则 NVRHI 报 volatile CB 未写即用）。
+    void writeWaterConstants(nvrhi::ICommandList* cmd, const FrameParams& params);
   private:
     bool ensureRtTargets(nvrhi::IDevice* device, float viewportW, float viewportH,
                          std::string& outError);
@@ -689,6 +751,12 @@ public:
 
     // 句柄必须在 device 还活着时释放（两个后端的 shutdown 里调用）。
     void shutdown();
+
+    // M-SC7：ECS 场景资源子集释放（initScene 建立的全部句柄：场景管线/batch/
+    // 灯缓冲/中性兜底纹理/阴影链）。initScene 开头调用一次 = 可重入（运行期
+    // 脚本 attach/detach 后帧边界整场景重建，拍板方案 A）；shutdown() 复用
+    // 同一清单（不再各写一份）。仅当 device 存活期调用——T0/UAF 口径不变。
+    void shutdownEcsScene();
 
     // 用 framebuffer 的格式信息建四套 pipeline：(solid/wireframe) × (开/关背面剔除)，
     // C 键切剔除、V 键/HUD 复选框切线框；着色模式只是 cbuffer 值，与 pipeline 正交。
@@ -1073,6 +1141,11 @@ private:
     nvrhi::ShaderHandle          vsVisRaster_, psVisRaster_, vsVisViz_, psVisViz_;
     nvrhi::BufferHandle          visBuffer_;      // u64 buffer，宽×高
     nvrhi::BufferHandle          visConstants_;   // volatile CB 16B（b1）
+    // M-WAT1（拍板 A）：水体——init 期 true 时 initCull 追加水面伪 cluster 网格，
+    // visbuf/direct/material/ssr 四条管线条件加绑 WaterConstants（288B volatile）。
+    // 缺省 false = 网格不追加、CB 不建、layout 不变（全链 bytes 保形）。
+    bool                         waterEnable_ = false;
+    nvrhi::BufferHandle          waterConstants_; // volatile CB 288B（visbuf b2 / matResolve b5 / direct b7 / ssr b6）
     nvrhi::BindingLayoutHandle   visRasterLayout_; // b0 + b1 + t1..t4 + u0
     nvrhi::BindingSetHandle      visRasterSet_;
     nvrhi::BindingLayoutHandle   visVizLayout_;    // b1 + t0
@@ -1530,6 +1603,42 @@ private:
     bool                         cacheFirstClear_ = true;// 首帧清零表（uninit 内存防假命中）
     bool                         cacheLogged_ = false;   // cache 日志锚只打一次
     bool                         cacheVizLogged_ = false;// viz compose 日志锚只打一次
+
+    // ---- M-WAT0（water 轨）：SSR 本体资源（懒建，详见 scene.cpp ensureSsr*）----
+    // ssrDistPyramid_ = 径向距离 **min** 金字塔（R32F POT 全 mip；度量同 S6 hiz
+    // 线性径向距离，算子与 S6 max 相反——SSR 跳步要「区域最近表面」，见
+    // ssr.slang 文件头 §2）。ssrSceneMip_ = 场景色均值链（RGBA32F POT）。
+    // ssrColor_ = march 输出（rgba：反射辐射 + 权重）。
+    nvrhi::TextureHandle         ssrDistPyramid_;
+    nvrhi::TextureHandle         ssrSceneMip_;
+    nvrhi::TextureHandle         ssrColor_;
+    nvrhi::TextureHandle         waterBg_;               // M-WAT2：折射背景副本（hdr 同格式同尺寸）
+    std::uint32_t                ssrW_ = 0, ssrH_ = 0;   // 懒建判据（视口尺寸）
+    std::uint32_t                ssrPyrMips_ = 0;        // 金字塔 mip 数（POT 链长）
+    static constexpr std::uint32_t kSsrChainMips = 6;    // 场景色链 mip 数（POT/32）
+    nvrhi::ShaderHandle          csSsrDepth_, csSsrDown_, csSsrMip_, csSsr_, csSsrCompose_;
+    // M-WAT2（拍板 Q-WA7=A）：折射背景 copy + 水体全链合成（ssr.slang 新入口）。
+    nvrhi::ShaderHandle          csWaterCopy_, csWaterComposite_;
+    nvrhi::BindingLayoutHandle   ssrDepthLayout_, ssrDownLayout_, ssrMipLayout_,
+                                 ssrLayout_, ssrComposeLayout_;
+    nvrhi::BindingLayoutHandle   waterCopyLayout_, waterCompositeLayout_;
+    nvrhi::ComputePipelineHandle ssrDepthPSO_, ssrDownPSO_, ssrMipPSO_, ssrPSO_, ssrComposePSO_;
+    nvrhi::ComputePipelineHandle waterCopyPSO_, waterCompositePSO_;
+    nvrhi::BindingSetHandle      ssrDepthSet_, ssrSet_, ssrComposeSet_;
+    nvrhi::BindingSetHandle      waterCompositeSet_;
+    nvrhi::TextureHandle         waterCompositeSetBg_;   // composite set 依赖登记（bg 重建则 set 重建）
+    nvrhi::BindingSetHandle      waterCopySet_;          // M-WAT2 copy set（hdr 重建则 set 重建）
+    nvrhi::TextureHandle         waterCopySetHdr_;       // copy set 依赖登记
+    bool                         waterCompositeLogged_ = false;  // composite 首跑日志锚
+    nvrhi::TextureHandle         ssrComposeSetHdr_;      // compose set 依赖登记（hdr 重建则 set 重建）
+    std::vector<nvrhi::BindingSetHandle> ssrDownSets_;   // [L≥1] 金字塔逐级 set
+    std::vector<nvrhi::BindingSetHandle> ssrMipSets_;    // [L≥1] 场景色链逐级 set
+    nvrhi::BufferHandle          ssrDepthCB_;            // volatile 96B（SsrDepthConstants b4）
+    nvrhi::BufferHandle          ssrDownCB_;             // volatile 16B（SsrDownConstants b5，逐级覆写）
+    nvrhi::BufferHandle          ssrConstantsCB_;        // volatile 208B（SsrConstants b3）
+    nvrhi::BufferHandle          ssrComposeCB_;          // volatile 16B（compose dims b5）
+    bool                         ssrFailed_ = false;     // 懒建失败只报一次，后续帧跳过
+    bool                         ssrLogged_ = false;     // SSR 首跑日志锚
 };
 
 } // namespace nl::renderer::detail

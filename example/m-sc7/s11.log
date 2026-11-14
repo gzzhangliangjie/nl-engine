@@ -1,0 +1,12 @@
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine-script\script\examples\hello
+  ok  s11-pre locate ModelScript build output
+  ok  s11-pre locate model entries (UnmanagedCallersOnly)
+  ok  s11a C# BoundProbe -> 0 (got 0)
+  ok  s11a C++ capture: probeModel ModelComponent meshFile=cube.glb
+  ok  s11a C++ capture: default tint(1,1,1)/roughness 1/metallic 0
+  ok  s11b C# ErrorProbe -> 0 (got 0)
+  ok  s11c C# UnboundProbe -> 0 (got 0)
+  ok  s11d C# DetachProbe -> 0 (got 0)
+  ok  s11d C++ capture: probeModel ModelComponent removed
+  ok  s11d C++ capture: TransformComponent kept after detach
+nl-script selftest: PASS (0 failures)

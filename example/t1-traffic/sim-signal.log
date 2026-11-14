@@ -1,0 +1,10 @@
+cars        : 6
+frames      : 1800 (dt=0.0167)
+signals     : 4 (lock-only 0 / signal 4)
+moving end  : 0
+arrived     : 3 / 6
+distance    : 107.0 m
+min gap     : 2.27 m (cross-road)
+locked end  : 0
+max halt    : 20.4 s
+wrote E:\UE_STUDY_2026\nl-engine\example\t1-traffic\signal-sim.png

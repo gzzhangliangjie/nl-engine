@@ -1,0 +1,88 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] rt extensions enabled: acceleration_structure+ray_query+buffer_device_address
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|scene] blas built: Suzanne-materials.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info|scene] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info|scene] cull (vertex pulling) scene ready: Suzanne-materials.nmesh | meshlets=711 | triangles=11808 | stride=63 | frustum=off | shader=spv
+[nl:info|scene] visbuf material resolve ready: Suzanne-materials.glb | materials=3 | baseColor 1024x1024 | shader=spv
+[nl:info|scene] probe scene ready (velocity prepass + 4-level cascade placement, viz dots) | shader=spv
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
+[nl:info|viewer] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] debug layer: NVRHI validation (Vulkan, no VVL, zero vendor SDK) | active=yes
+[nl:info|viewer] mode: probe | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info|viewer] screenshot mode: 64 frames -> E:\UE_STUDY_2026\nl-engine\example\s11-bounce\seq\tmp-vk.png | cull=back | hud=off
+[nl:info|scene] tlas: per-frame rebuild active | instances=1 #1
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path) #1
+[nl:info|scene] probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64 #1
+[nl:info|scene] cache: flat hashmap active (262144 slots, lifetime 10, cell 0.5m, probe steps 3 -- Q11-0 plan A; M11.1 update+blend on) #1
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00001.png #1
+[nl:info|renderer] gpu timer resolved [frame]: 0.864224 ms (first successful NVRHI timestamp query) #2
+[nl:info|scene] probe: M11.2 bounce gate=1 cacheFrame=1 lightScale=1 #2
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00002.png #2
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00003.png #3
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00004.png #4
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00005.png #5
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00006.png #6
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00007.png #7
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00008.png #8
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00009.png #9
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00010.png #10
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00011.png #11
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00012.png #12
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00013.png #13
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00014.png #14
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00015.png #15
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00016.png #16
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00017.png #17
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00018.png #18
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00019.png #19
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00020.png #20
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00021.png #21
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00022.png #22
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00023.png #23
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00024.png #24
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00025.png #25
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00026.png #26
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00027.png #27
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00028.png #28
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00029.png #29
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00030.png #30
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00031.png #31
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00032.png #32
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00033.png #33
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00034.png #34
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00035.png #35
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00036.png #36
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00037.png #37
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00038.png #38
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00039.png #39
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00040.png #40
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00041.png #41
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00042.png #42
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00043.png #43
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00044.png #44
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00045.png #45
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00046.png #46
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00047.png #47
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00048.png #48
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00049.png #49
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00050.png #50
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00051.png #51
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00052.png #52
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00053.png #53
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00054.png #54
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00055.png #55
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00056.png #56
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00057.png #57
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00058.png #58
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00059.png #59
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00060.png #60
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00061.png #61
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00062.png #62
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00063.png #63
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/moveon-vk/f00064.png #64
+[nl:info|viewer] shutdown ok (frames=64 screenshots=64 deviceErrors=0) #64
+[nl:info|viewer] frame timing: avg 48.4066 ms  max 108.771 ms  over 64 frames (unthrottled) #64
+[nl:info|viewer] gpu timing: avg 0.695773 ms over 63 resolved frames (NVRHI timer) #64
+[nl:info] window destroyed #64

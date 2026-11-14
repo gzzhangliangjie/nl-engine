@@ -92,14 +92,19 @@ def exe_for(version: dict, backend: str, case: dict | None = None) -> Path:
     # nanite-scene/nanite-tools，渲染卡 -> viewer），但混合卡（如 ecs-parallel：
     # 3 个 selftest 文本用例 + 1 个 viewer 渲染用例）需要 per-case 覆盖。
     # 未声明 case["exe"] 时行为与旧版完全一致。
-    if case is not None:
-        tmpl = (case.get("exe") or {}).get(backend)
+    # 【2026-11-13】"{python}" token：Python 驱动脚本工具卡（w1-m0
+    # city2engine）没有 per-backend exe——exe 即当前解释器（sys.executable），
+    # 脚本本体走 args 里的 {root} 相对路径。bat 垫片方案否决（cmd GBK 输出
+    # + cwd 漂移），.py 直跑否决（WinError 193）。
+    for tmpl in (
+        (case.get("exe") or {}).get(backend) if case is not None else None,
+        version.get("exe", {}).get(backend),
+    ):
+        if tmpl == "{python}":
+            return Path(sys.executable)
         if tmpl:
             return ROOT / tmpl.replace("{tag}", version["tag"])
-    tmpl = version.get("exe", {}).get(backend)
-    if not tmpl:
-        return ROOT / "__missing__"
-    return ROOT / tmpl.replace("{tag}", version["tag"])
+    return ROOT / "__missing__"
 
 
 def baseline_for(case: dict, backend: str) -> Path | None:

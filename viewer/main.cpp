@@ -17,6 +17,7 @@
 #include "nl/core/input.hpp"       // P8 M-I2：input-hud 模式（注入路径；单消费者铁律）
 #include "nl/core/action_map.hpp"  // P8 M-I2：驾驶映射表（默认组态 + 冻结值快照）
 #include "nl/core/window.hpp"
+#include "nl/scene/AssetName.hpp"  // M-SC7：白名单单源（本 lambda 原为语义复制点）
 #include "nl/core/meshlet_io.hpp"  // M-E5：scene.getMaterials 读 .nmesh NSUB 子网格/材质表
 #include "nl/renderer/editor.hpp"
 #include "nl/renderer/nav_panel.hpp"   // P8 M-N2：--nav-panel 面板（ImGui 在 renderer 内）
@@ -34,6 +35,9 @@
 #include "nl/net/Sync.hpp"        // NET M-NET2：同步层会话（服务器权威最小闭环）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
+#include "nl/scene/TrafficCarComponent.hpp"  // P8 M-T3：--traffic-city 交通车组件
+#include "nl/scene/SignalLampComponent.hpp"  // P8 M-T4：红绿灯摆件组件
+#include "nl/traffic/TrafficCarSystem.hpp"   // P8 M-T3：ECS 交通车系统
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"         // M-GL4：--script 脚本宿主（OnTick 接逻辑帧）
 #include "nl/script/ScriptHost.hpp"
@@ -146,6 +150,8 @@ struct Options {
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
     bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
     bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
+    bool ssr = false;              // M-WAT0（water 轨）：--ssr（pulling 模式 SSR 反射，
+                                   //  缺省关 = 冻结基线 bytes）
     bool probeCacheBounce = false; // M11.2：--probe-cache-bounce（命中查缓存，默认关保形）
     float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
     // M-WEA1：天气链（Q-WE5 已拍板）。seed <0 = 关（缺省常量保形）；>=0 开启后
@@ -173,6 +179,10 @@ struct Options {
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
+    bool water = false;       // M-WAT1：--water（pulling 链水体；缺省关零扰动）
+    bool waterNoReflect = false; // M-WAT2：--water-noreflect（composite 反射项归零，验收 A/B 对比）
+    bool waterNoRefract = false; // M-WAT2：--water-norefract（折射路径关闭，验收 A/B 对比）
+    bool waterNoShore = false;   // M-WAT3：--water-noshore（岸线软化关闭，验收 A/B 对比）
     bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
     bool vsmPanel   = false;  // M15.1：--vsm-panel（VSM 页池占用面板，仅 --vsm 生效）
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
@@ -212,6 +222,15 @@ struct Options {
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
+    // P8 M-T3：--traffic-city <DIR>（DIR 含 city.scene.engine + roadnet.json，
+    // city-tools/city2engine 产物）。scenePath 自动推导为 <DIR>/city.scene.engine；
+    // runScene 反序列化后给 car_* 实体挂 TrafficCarComponent + 注册
+    // TrafficCarSystem（TRAFFIC-PLAN §11.2；不指定时逐位走原路径）。
+    std::string trafficCityDir;
+    int trafficSteps = 0;                   // --traffic-steps <N>：每渲染帧强制 N 个
+                                            // 逻辑 tick（截图确定性口径，nav-crowd-steps
+                                            // 同款；0 = GameClock 自然节奏）
+    std::uint64_t trafficSeed = 12345;      // --traffic-seed <N>：route 生成的 fnv1a64 种子
     // M-E1b.5 渲染用例：--tick off|serial|parallel。off（缺省）= 静态场景（既有
     // 基线零风险）；serial/parallel = 帧循环注册 spin+read 系统并逐帧 tick（固定
     // dt=1/60，截图确定性——parallel/serial 同帧数逐字节一致）。
@@ -249,6 +268,8 @@ struct Options {
     std::string scriptProject;                 // --script
     std::string scriptType;                    // --script-type（可省，缺省推导）
     std::string scriptBootstrap = "script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll"; // --script-bootstrap
+    // P8 M-SC10：脚本属性面板（additive 独立窗口默认关；--script 装载 [Prop] 表后生效）。
+    bool propPanelOn = false;                  // --prop-panel
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -321,6 +342,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
         else if (a == "--cache-viz-radiance") o.cacheVizRadiance = true;  // M11.1
+        else if (a == "--ssr") o.ssr = true;   // M-WAT0（water 轨）：SSR 反射开关
         // M11.2：探针命中查缓存（默认关）+ 灯强度缩放（关灯余晖取证）。
         else if (a == "--probe-cache-bounce") o.probeCacheBounce = true;
         else if (a == "--probe-light-scale" && i + 1 < argc)
@@ -375,6 +397,10 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
         else if (a == "--cluster-blas") o.clusterBlas = true;
+        else if (a == "--water") o.water = true;        // M-WAT1
+        else if (a == "--water-noreflect") o.waterNoReflect = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-norefract") o.waterNoRefract = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-noshore") o.waterNoShore = true;      // M-WAT3 验收 A/B
         else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
         else if (a == "--vsm-panel") o.vsmPanel = true;   // M15.1：VSM 占用面板（需 --vsm）
         else if (a == "--vsm-rayref") o.vsmRayRef = true; // M15.1：同 blob 射线基准（需 --vsm）
@@ -434,6 +460,42 @@ Options parseArgs(int argc, char** argv) {
             //（不是 assets 白名单资产）；ASCII + 存在性校验在 runScene 落地，
             // 失败走用法错误码 2。
             o.scenePath = argv[++i];
+        }
+        else if (a == "--traffic-city" && i + 1 < argc) {
+            // P8 M-T3：城市交通模式（TRAFFIC-PLAN §11.2）。DIR 须含
+            // city.scene.engine + roadnet.json；scenePath 推导为
+            // <DIR>/city.scene.engine，主路径校验照常生效。DIR 的 ASCII +
+            // 存在性在这里显式校验（runScene 只见推导后的 scene 路径）。
+            o.trafficCityDir = argv[++i];
+            for (const char c : o.trafficCityDir) {
+                const auto u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u > 0x7E) {
+                    std::cerr << "invalid --traffic-city: path must be printable ASCII\n";
+                    std::exit(1);
+                }
+            }
+            std::error_code ec;
+            if (!std::filesystem::is_directory(
+                    std::filesystem::path(o.trafficCityDir), ec) || ec) {
+                std::cerr << "invalid --traffic-city: not a directory: "
+                          << o.trafficCityDir << "\n";
+                std::exit(1);
+            }
+            o.scenePath =
+                (std::filesystem::path(o.trafficCityDir) /
+                 "city.scene.engine").string();
+            o.tickMode = "serial";   // 交通模式隐含逐帧 tick（§11.2）
+        }
+        else if (a == "--traffic-steps" && i + 1 < argc) {
+            const int n = std::atoi(argv[++i]);
+            if (n < 0 || n > 600) {
+                std::cerr << "invalid --traffic-steps (expected 0..600)\n";
+                std::exit(1);
+            }
+            o.trafficSteps = n;
+        }
+        else if (a == "--traffic-seed" && i + 1 < argc) {
+            o.trafficSeed = std::strtoull(argv[++i], nullptr, 10);
         }
         else if (a == "--editor" && i + 1 < argc) {
             // T1：材质图编辑器（material_graph v1 文本文件）。
@@ -594,6 +656,9 @@ Options parseArgs(int argc, char** argv) {
             o.scriptType = argv[++i];
         } else if (a == "--script-bootstrap" && i + 1 < argc) {
             o.scriptBootstrap = argv[++i];
+        } else if (a == "--prop-panel") {
+            // P8 M-SC10：脚本属性面板（additive；[Prop] 描述表 + PropGet/PropSet 通道）。
+            o.propPanelOn = true;
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -1256,6 +1321,97 @@ struct EditorEmbed {
     }
 };
 
+// ---- P8 M-SC10：属性面板同步（runScene/runNormal 共用；prop_panel.hpp 口径）----
+// 描述表 gen 变化 → 重建行（初值经 ScriptHost::propGet 拉取）；dirty 行 →
+// propSet 写回后清边沿；active/状态行按通道与表态回填。st 为帧外持久 State
+//（HudFrame 值成员整份拷入/拷回在调用方——M-T5 教训：只挂指针 = 面板全零）。
+static void propPanelSync(nl::renderer::PropPanel::State& st, std::uint32_t& builtGen,
+                          bool scriptLoaded) {
+    using nl::script::kPropKindBool;
+    using nl::script::kPropKindFloat;
+    using nl::script::kPropKindInt;
+    using nl::script::kPropKindString;
+    using nl::script::scriptProps;
+    using nl::script::scriptPropsGen;
+
+    auto& host = nl::script::ScriptHost::get();
+    const auto& tbl = scriptProps();
+    const std::uint32_t gen = scriptPropsGen();
+    st.totalProps = static_cast<int>(tbl.size());
+    st.channelAttached = host.hasProps();
+
+    if (gen != builtGen) {   // 重建（首帧 gen 1.. vs builtGen 0；reload 换表同路径）
+        builtGen = gen;
+        st = nl::renderer::PropPanel::State{};
+        st.gen = gen;
+        st.totalProps = static_cast<int>(tbl.size());
+        st.channelAttached = host.hasProps();
+        for (int r = 0; r < static_cast<int>(tbl.size()) &&
+                        r < nl::renderer::PropPanel::kMaxRows; ++r) {
+            auto& row = st.rows[st.rowCount];
+            row.kind = tbl[r].kind;
+            std::memcpy(row.name, tbl[r].name, sizeof row.name - 1);
+            row.name[sizeof row.name - 1] = '\0';
+            row.min = tbl[r].min;
+            row.max = tbl[r].max;
+            if (tbl[r].kind == kPropKindString) {
+                char buf[260] = {};
+                if (host.hasProps() && host.propGet(r, buf, sizeof buf).ok) {
+                    std::memcpy(row.s, buf + 4, sizeof row.s - 1);
+                    row.s[sizeof row.s - 1] = '\0';
+                }
+            } else {
+                std::uint8_t buf[8] = {};
+                if (host.hasProps() && host.propGet(r, buf, sizeof buf).ok) {
+                    float f;
+                    int raw;
+                    std::memcpy(&f, buf + 4, 4);
+                    std::memcpy(&raw, buf + 4, 4);
+                    if (tbl[r].kind == kPropKindFloat) row.f = f;
+                    else if (tbl[r].kind == kPropKindInt) row.i = raw;
+                    else row.b = raw != 0;
+                }
+            }
+            ++st.rowCount;
+        }
+    }
+
+    // dirty 行消费 → propSet → 清边沿（写失败 = 保留 dirty 下帧重试）。
+    for (int r = 0; r < st.rowCount; ++r) {
+        auto& row = st.rows[r];
+        if (!row.dirty) continue;
+        if (!host.hasProps()) break;
+        bool ok = false;
+        if (row.kind == kPropKindString) {
+            char buf[260] = {};
+            std::memcpy(buf + 4, row.s, sizeof row.s - 1);
+            ok = host.propSet(r, buf, sizeof buf).ok;
+        } else {
+            std::uint8_t buf[8] = {};
+            int raw = 0;
+            if (row.kind == kPropKindFloat) {
+                float f = row.f;
+                std::memcpy(buf + 4, &f, 4);
+            } else {
+                raw = row.kind == kPropKindInt ? row.i : (row.b ? 1 : 0);
+                std::memcpy(buf + 4, &raw, 4);
+            }
+            ok = host.propSet(r, buf, sizeof buf).ok;
+        }
+        if (ok) row.dirty = false;
+    }
+
+    st.active = scriptLoaded && st.totalProps > 0;
+    if (st.totalProps == 0)
+        std::snprintf(st.status, sizeof st.status,
+                      "no [Prop] fields pushed (call PropsPush.PushStatic in Entry)");
+    else if (!host.hasProps())
+        std::snprintf(st.status, sizeof st.status,
+                      "script lacks PropGet/PropSet contract (panel read-only empty)");
+    else
+        st.status[0] = '\0';
+}
+
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
               bool skinMode = false, bool hizMode = false,
@@ -1355,7 +1511,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
                                                    shadowMode, referenceMode, probeMode,
-                                                   o.clusterBlas);
+                                                   o.clusterBlas,
+                                                   o.water && pullingMode);   // M-WAT1
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -1997,7 +2154,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
     // M-I2：input-hud 模式的面板就是本体，强制开（截图回归 --hud 同口径）。
-    const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive;
+    const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive || o.propPanelOn;   // M-SC10 additive
 
     // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
     // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
@@ -2167,12 +2324,92 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
     // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
     nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
+    // ---- M-SC8：脚本宿主装载（--script，normal 模式 physics 训练场）----
+    // 复制精简自 runScene 的 M-GL4 块（scene 模式脚本链是已验收冻结面，不改一行）。
+    // 绑定链差异（拍板 Q-SC8-1 A' + Q-SC8-2 A）：
+    //   - driveSetScene(&physicsScene)：载具域目标 = 本模式训练场（仅 scenario 2
+    //     绑；其它 scenario 脚本调 Physics.* 得 kPhyNoScene 即正确语义）；
+    //   - timeSetClock(&gameClock)：Time 导出同 scene 模式；
+    //   - ecsSetWorld / cameraSetSource **不绑**（runNormal 无 ECS World 与
+    //     ViewerCamera；脚本调 Ecs.*/Camera.* 得 NoWorld/NoSource = 不隐式建表
+    //     拍板同构的正确语义）。
+    // OnTick 驱动 = 下方 Physics tick 组 lambda 内 step 之前（与 runScene 组序
+    // PrePhysics scriptTick → Physics step 同语义：OnTick 写输入，当帧 step 消费）。
+    std::unique_ptr<nl::script::Vm> scriptVmNormal;
+    bool scriptLoaded = false;
+    if (!o.scriptProject.empty()) {
+        namespace fs = std::filesystem;
+        const fs::path proj = o.scriptProject;
+        const fs::path buildDir = proj / "bin" / "Debug" / "net8.0";
+        // 产物定位（nl-script 工具同款 glob 口径，runScene 同源）：runtimeconfig
+        // 唯一，dll 名按 AssemblyName（= runtimeconfig 名）。
+        fs::path rtc, dll;
+        if (fs::is_directory(buildDir)) {
+            for (const auto& e : fs::directory_iterator(buildDir)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() >= 19 && n.rfind(".runtimeconfig.json") == n.size() - 19)
+                    rtc = e.path();
+            }
+            if (!rtc.empty()) {
+                const std::string n = rtc.filename().string();
+                dll = buildDir / (n.substr(0, n.size() - 19) + ".dll");
+            }
+        }
+        if (rtc.empty() || !fs::is_regular_file(dll)) {
+            nl::core::log::errorCh("viewer", "script: build outputs missing under ", buildDir.string(),
+                                 " (*.runtimeconfig.json + *.dll) — run: dotnet build ", proj.string());
+            return 1;
+        }
+        nl::script::Result vr;
+        scriptVmNormal = nl::script::Vm::create(fs::absolute(rtc).string(), &vr);
+        if (!scriptVmNormal) {
+            nl::core::log::errorCh("viewer", "script: Vm::create failed: ", vr.message);
+            return 1;
+        }
+        const auto ir = nl::script::ScriptHost::get().init(
+            scriptVmNormal.get(), fs::absolute(o.scriptBootstrap).string());
+        if (!ir.ok) {
+            nl::core::log::errorCh("viewer", "script: ScriptHost init failed: ", ir.message);
+            return 1;
+        }
+        // typeName 缺省推导（runScene 同款双锚约定）：类名 = 工程目录名首字母
+        // 大写 + "Script"；程序集名 = rtc 文件名去 ".runtimeconfig.json"（19 字符）。
+        std::string dirStem = proj.filename().string();
+        if (!dirStem.empty())
+            dirStem[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(dirStem[0])));
+        const std::string asmName = rtc.filename().string().substr(0, rtc.filename().string().size() - 19);
+        const std::string typeName = o.scriptType.empty()
+            ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
+        nl::script::timeSetClock(&gameClock);
+        if (o.physicsDebug && o.physicsScenario == 2)
+            nl::script::driveSetScene(&physicsScene);
+        const auto lr2 = nl::script::ScriptHost::get().loadScript(
+            fs::absolute(dll).string(), typeName);
+        if (!lr2.ok) {
+            nl::core::log::errorCh("viewer", "script: loadScript failed: ", lr2.message);
+            return 1;
+        }
+        scriptLoaded = true;
+        nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
+                            " (normal-mode OnTick in Physics tick group)");
+    }
+    // P8 M-SC10：属性面板帧外持久 State（runScene 同款拷入/拷回纪律）。
+    nl::renderer::PropPanel propPanel;
+    nl::renderer::PropPanel::State propPanelState{};
+    std::uint32_t propPanelBuiltGen = 0;
     // P8 M-GL5：物理调试 step 挂 Physics 组（TickGroup 注册制，组序契约见
     // tick_groups.hpp）。M-GL2 之前是 tick lambda 内联判断，现迁移为按组注册——
     // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
     if (o.physicsDebug) {
         gameClock.scheduler().set(nl::core::TickGroup::Physics,
-                                  [&](double, std::uint64_t tick) {
+                                  [&](double dt, std::uint64_t tick) {
+            // M-SC8：scriptTick 先行（OnTick 写四输入）→ 注册方 step 当帧消费
+            //（Q-SC8-2 A；runScene 组序 PrePhysics scriptTick → Physics step 同语义）。
+            if (scriptLoaded) {
+                const auto sr = nl::script::ScriptHost::get().scriptTick(dt);
+                if (!sr.ok)
+                    nl::core::log::errorCh("viewer", "script: ", sr.message);
+            }
             // NET M-NET2：client 不 step 物理（幽灵位走快照插值，场景全静态）；
             // 非 net 路径与 server 路径行为与既有逐位一致。
             if (!netClientMode) {
@@ -2646,11 +2883,21 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.eye[2] = vsmEye[2] + vsmFwd[2] * vsmDist;
         }
         fp.refFrames = static_cast<std::uint32_t>(o.frames);  // M9.2：reference 进度分母
+        // M-WAT1：水体时间 = 帧号 × 固定步长（GameClock::kStep 锚，禁 wall-clock
+        // ——确定性重放逐字节；--water 关时 fp.waterTime 缺省 0 无副作用）。
+        if (o.water) fp.waterTime = static_cast<float>(frame) * nl::core::GameClock::kStep;
         // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
         // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，
         // 缺省零副作用。
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
+        // M-WAT0（water 轨）：SSR 开关透传（仅 pulling 分支消费，缺省关零扰动）。
+        // M-WAT2（拍板 Q-WA7=A）：--water 强制开 SSR 链（水像素黑占位 ⇒
+        // csWaterComposite 必跑 ⇒ SSR 链是水体前置基建，§0 依赖顺序铁律同构）。
+        fp.ssr = o.ssr || o.water;
+        fp.waterNoReflect = o.waterNoReflect;
+        fp.waterNoRefract = o.waterNoRefract;
+        fp.waterNoShore = o.waterNoShore;
         if (rtMode) {
             float rtEye[3];
             camera.eyePosition(rtEye);
@@ -2874,6 +3121,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         nl::renderer::HudFrame hud{};
+        // P8 M-SC10：属性面板同步 + 挂入（runScene 同款；训练场脚本调参即本体）。
+        if (o.propPanelOn && scriptLoaded) {
+            propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
+            hud.propPanel = &propPanel;
+            hud.propPanelState = propPanelState;   // 整份拷入（M-T5 教训）
+        }
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
         // P8 M-N2：NavMesh 面板挂入 + 每帧同步（cvar <-> 面板 <-> 烘焙产物）。
         // 同步在 hud 构建前完成，画布消费本帧图元（阶段切换 / bake 都落在
@@ -2945,7 +3198,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
             hud.netStatus.lineCount = n;
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
             if (inputHud) {
                 // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
@@ -3191,12 +3444,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) ? &hud : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
+        if (hud.propPanel) propPanelState = hud.propPanelState;   // M-SC10：编辑拷回
         NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         // M-PT0：稳态机械证据——最终帧的活粒子数（固定步长下 = 帧号的纯函数；
         // run.bat 断言落在发射率×平均寿命的理论区间 [rate*lifeMin, rate*lifeMax]）。
@@ -3233,7 +3487,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) {   // 帧跑了才消费控件写回
             // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
             if (inputHud) {
                 reqState[0] = hud.inputDebug.reqW;
@@ -3454,6 +3708,16 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::core::log::errorCh("viewer", "acceptance failed: device/error counters must be zero");
         failed = true;
     }
+    // M-SC8 收尾（次序铁律同 runScene M-GL4 块）：先解绑场景/时钟（热重载窗口
+    // 兜底口径）→ 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm。
+    if (scriptLoaded) {
+        nl::script::driveSetScene(nullptr);
+        nl::script::timeSetClock(nullptr);
+        const auto ur = nl::script::ScriptHost::get().unloadScript();
+        if (!ur.ok)
+            nl::core::log::errorCh("viewer", "script: unloadScript failed: ", ur.message);
+        scriptVmNormal.reset();
+    }
     return failed ? 1 : 0;
 }
 
@@ -3528,6 +3792,56 @@ static WorldSample decomposeWorldTRS(const nl::math::Mat4& m) {
 // 与 nanite-scene deserialise-check 口径一致），O(N) 遍历实体收集
 // SceneObjectDesc / SceneLightDesc，sceneMode=true 的 Renderer + loadEcsScene。
 // ---------------------------------------------------------------------------
+
+// ---- M-SC6：相机适配源（nl::script::CameraSource 函数指针实现；ctx = &ViewerCamera）----
+// 模式感知落点（Bindings.hpp 口径）：orbit = yaw/pitch + dist=|eye|（pivot 原点球坐标
+// 口径）经 ViewerCamera::setOrbit（自带 seedFromOrbit，切姿不跳变）；free = setPose
+// 直接落；chase = snapEyeTo + setPitch（yaw 由车体航向驱动，脚本 yaw 入参忽略——
+// Chase 跟车语义）；track = 轨迹数据主权，脚本不可写 → kCamModeUnsupported。
+// setFov clamp [20,120]（OrbitCamera::setFovYDegrees 同口径）后透传（模式统一生效）。
+static void camSourceGetPose(void* ctx, float outEye[3], float* outYawDeg, float* outPitchDeg,
+                             float* outFovY, int* outMode) {
+    auto& c = *static_cast<nl::viewer::ViewerCamera*>(ctx);
+    c.eyePosition(outEye);
+    if (outYawDeg) *outYawDeg = c.yawDegrees();
+    if (outPitchDeg) *outPitchDeg = c.pitchDegrees();
+    if (outFovY) *outFovY = c.fovYDegrees();
+    if (outMode) *outMode = static_cast<int>(c.modeOf());
+}
+static int camSourceSetPose(void* ctx, const float eye[3], float yawDeg, float pitchDeg) {
+    using namespace nl::script;
+    auto& c = *static_cast<nl::viewer::ViewerCamera*>(ctx);
+    switch (c.modeOf()) {
+        case nl::viewer::CameraMode::Orbit: {
+            const float dist = std::sqrt(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]);
+            c.setOrbit(yawDeg, pitchDeg, dist);
+            return kCamOk;
+        }
+        case nl::viewer::CameraMode::Free:
+            c.director.free().setPose(eye, yawDeg, pitchDeg);
+            return kCamOk;
+        case nl::viewer::CameraMode::Chase:
+            c.director.chase().snapEyeTo(eye);
+            c.director.chase().setPitchDegrees(pitchDeg);
+            return kCamOk;
+        case nl::viewer::CameraMode::Track:
+        default:
+            return kCamModeUnsupported;
+    }
+}
+static float camSourceGetFov(void* ctx) {
+    return static_cast<nl::viewer::ViewerCamera*>(ctx)->fovYDegrees();
+}
+static void camSourceSetFov(void* ctx, float fovYDeg) {
+    constexpr float kLo = 20.0f, kHi = 120.0f;
+    static_cast<nl::viewer::ViewerCamera*>(ctx)->setFovYDegrees(
+        fovYDeg < kLo ? kLo : (fovYDeg > kHi ? kHi : fovYDeg));
+}
+// file-static：脚本 OnTick 在 runScene 主循环内逐帧调用，CameraSource 指针必须
+// 活过整个循环——ctx 在脚本装载点填（runScene 的 camera 实例活过循环）。
+static nl::script::CameraSource g_viewerCamSource{
+    nullptr, &camSourceGetPose, &camSourceSetPose, &camSourceGetFov, &camSourceSetFov};
+
 int runScene(const Options& o) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     // ---- 1. 读场景文件 + World 反序列化 ----
@@ -3579,22 +3893,195 @@ int runScene(const Options& o) {
             ambient = doc["ambient"].get<float>();
     }
 
-    // ---- 2. O(N) 遍历实体收集渲染描述 ----
-    // meshFile 白名单校验（与 renderer.cpp validAssetFileName 同一套逻辑，
-    // scene.cpp 兜底同款复制；非法 = 显式报错退出 2，不静默跳过）。
-    auto validGlbAssetName = [](const std::string& s) {
-        if (s.empty()) return false;
-        if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
-        if (s.find("..") != std::string::npos) return false;
-        const std::string ext = ".glb";
-        if (s.size() < ext.size() + 1 || s.compare(s.size() - ext.size(), ext.size(), ext) != 0)
-            return false;
-        for (const char c : s) {
-            const auto u = static_cast<unsigned char>(c);
-            if (u < 0x21 || u > 0x7E) return false;
+    // ---- M-E1b.5 渲染用例：--tick serial|parallel（帧循环逐帧 tick + 刷实例）----
+    // SpinSystem（Write<TransformComponent>）绕 Y 轴旋转，角速度按实体序号差异化
+    // （画面可辨：各物体转速不同）；ReadCountSystem（Read<TransformComponent>）
+    // 纯读统计——与 SpinSystem 无组件冲突，tickParallel 求解器让两者并行。
+    // 渲染结果只由 SpinSystem 决定：parallel 与 serial 同固定 dt 序列下
+    // 逐字节一致（浮点确定性由 tickParallel 串行对拍契约保证）。
+    // Spin 基础角速度 rad/s（首实体），逐实体 ×(1+0.5k)——转速差异画面可辨。
+    constexpr float kSpinBaseSpeed = 0.9f;
+    class SpinSystem final : public nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>> {
+    public:
+        using Base = nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>>;
+        explicit SpinSystem(nl::scene::World& w) : Base(w) {}
+        const char* getName() const override { return "Spin"; }
+        // duplicate = 无状态拷贝（SpinSystem 无数据成员）。
+        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
+            return std::make_unique<SpinSystem>(newOwner);
         }
-        return true;
+        // 局部类禁静态数据成员（C2871），基础角速度用函数级常量 kSpinBaseSpeed。
+        void tick(double dt) override {
+            const float baseAngle = static_cast<float>(dt) * kSpinBaseSpeed;
+            std::uint32_t idx = 0;
+            forEachEntity([baseAngle, &idx](nl::scene::Entity,
+                                            nl::scene::TransformComponent& t) {
+                const float angle = baseAngle * (1.0f + 0.5f * static_cast<float>(idx++));
+                const auto q = nl::math::quatFromAxisAngle(
+                    nl::math::Vec3{0.0f, 1.0f, 0.0f}, angle);
+                t.local.rotation = nl::math::mulQuat(q, t.local.rotation);
+            });
+        }
     };
+    class ReadCountSystem final : public nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>> {
+    public:
+        using Base = nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>>;
+        explicit ReadCountSystem(nl::scene::World& w) : Base(w) {}
+        const char* getName() const override { return "ReadCount"; }
+        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
+            auto copy = std::make_unique<ReadCountSystem>(newOwner);
+            copy->count = count;
+            return copy;
+        }
+        void tick(double) override {
+            count = 0;
+            forEachEntity([this](nl::scene::Entity, const nl::scene::TransformComponent&) {
+                ++count;
+            });
+        }
+        int count = 0;
+    };
+    const bool ticking = (o.tickMode != "off");
+    const bool trafficCity = !o.trafficCityDir.empty();   // P8 M-T3
+    if (ticking && !trafficCity) {
+        world.registerSystem(std::make_unique<SpinSystem>(world));
+        world.registerSystem(std::make_unique<ReadCountSystem>(world));
+        nl::core::log::infoCh("viewer", "ecs tick: ", o.tickMode,
+                            " | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>)",
+                            " | fixed dt=1/60");
+    }
+
+    // ---- P8 M-T3：--traffic-city 城市交通激活（TRAFFIC-PLAN §11.2）----
+    // ticking 已由 args 解析处隐含 serial；Spin/ReadCount 不注册（Write<Transform>
+    // 与交通系统冲突，车位姿由 sim 独占）。car_* 实体挂 TrafficCarComponent +
+    // 注册 TrafficCarSystem；roadnet.json 缺失/init 失败 = 显式报错退出 2。
+    nl::traffic::TrafficCarSystem* trafficSystem = nullptr;
+    if (trafficCity) {
+        world.getComponentLibrary().registerComponent<nl::scene::TrafficCarComponent>();
+        // 给 car_* 前缀实体挂组件（city2engine 产物命名契约 car_%02u）。
+        int carsTagged = 0;
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            if (world.getName(id).rfind("car_", 0) != 0) continue;
+            world.addComponent(
+                id, std::make_unique<nl::scene::TrafficCarComponent>(
+                        nl::scene::Entity{id, &world}));
+            ++carsTagged;
+        }
+        if (carsTagged == 0) {
+            nl::core::log::errorCh("viewer", "traffic-city: no car_* entities in ",
+                                 o.scenePath);
+            return 2;
+        }
+        // World flush（新建实体落表时序前提；组件增删即时，见 World.hpp 头注）。
+        world.flushEntityCreationAndRemoval();
+        world.registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(world));
+        trafficSystem = static_cast<nl::traffic::TrafficCarSystem*>(
+            world.findSystem(nl::traffic::TrafficCarSystem::kName));
+        // roadnet.json 读取（与 city.scene.engine 同目录，citygen 接口铁律产物）。
+        const std::string roadnetPath =
+            (std::filesystem::path(o.trafficCityDir) / "roadnet.json").string();
+        std::ifstream rf(roadnetPath, std::ios::binary);
+        if (!rf) {
+            nl::core::log::errorCh("viewer", "traffic-city: cannot open ",
+                                 roadnetPath);
+            return 2;
+        }
+        std::string jsonBytes((std::istreambuf_iterator<char>(rf)),
+                              std::istreambuf_iterator<char>());
+        nl::traffic::LaneGraph laneGraph;
+        std::string gerr;
+        if (!nl::traffic::buildLaneGraphFromRoadnetJson(
+                jsonBytes.data(), jsonBytes.size(), &laneGraph, &gerr)) {
+            nl::core::log::errorCh("viewer", "traffic-city: lane graph failed: ",
+                                 gerr);
+            return 2;
+        }
+        nl::traffic::TrafficSimParams simParams{};   // 默认 dt/accel/brake/minGap
+        simParams.loop = true;                       // §11.2：闭合 route 永续行驶
+        std::string ierr;
+        if (!trafficSystem->init(laneGraph, simParams, o.trafficSeed, ierr)) {
+            nl::core::log::errorCh("viewer", "traffic-city: system init failed: ",
+                                 ierr);
+            return 2;
+        }
+        // ---- P8 M-T4（Q-T15/16/17=A，TRAFFIC-PLAN §12）：信号挂接 + 红绿灯
+        // 摆件，默认开（修复 M-T1/T2 调度在引擎内不可见）。initControl 失败 =
+        // 显式报错退出 2；摆件 = 每受控节点 × 每进入边一盏（停车线右侧路缘外，
+        // +Z 面板向来车），SignalLampComponent 溯源 + registerLamp 显式注册。
+        if (!trafficSystem->initControl(jsonBytes.data(), jsonBytes.size(),
+                                        true, ierr)) {
+            nl::core::log::errorCh("viewer", "traffic-city: control init failed: ",
+                                 ierr);
+            return 2;
+        }
+        world.getComponentLibrary().registerComponent<nl::scene::SignalLampComponent>();
+        int lampsCreated = 0;
+        for (const nl::traffic::NodeControl& nc :
+             trafficSystem->control().nodes) {
+            if (!nc.signal) continue;   // lock-only 节点无灯
+            for (int grp = 0; grp < 2; ++grp) {
+                for (std::int32_t edgeId : nc.groups[grp]) {
+                    // 该进入边中 offset 最大的 lane = 最靠右路缘（右行口径）
+                    const nl::traffic::Lane* lane = nullptr;
+                    for (const nl::traffic::Lane& L : laneGraph.lanes) {
+                        if (L.edgeId != edgeId) continue;
+                        if (!lane || L.offset > lane->offset) lane = &L;
+                    }
+                    if (!lane || lane->points.size() < 2) continue;
+                    const auto& pts = lane->points;
+                    const float ex = pts.back().x, ez = pts.back().z;
+                    float fx = ex - pts[pts.size() - 2].x;
+                    float fz = ez - pts[pts.size() - 2].z;
+                    const float fl = std::sqrt(fx * fx + fz * fz);
+                    if (fl < 1e-6f) continue;
+                    fx /= fl; fz /= fl;               // 行进方向（指向节点）
+                    const float rx = fz, rz = -fx;    // 右行 right=(fz,-fx)
+                    const float off = lane->offset > 0.0f ? lane->offset : 0.0f;
+                    // 停车线（entryStop 距节点）右侧：路缘外 1.2m
+                    const float px = ex - fx * 2.5f + rx * (off + 1.2f);
+                    const float pz = ez - fz * 2.5f + rz * (off + 1.2f);
+                    // +Z 面板向来车 = 模型 +Z 指向 -forward
+                    const float vyaw = std::atan2(-fx, -fz) * 0.5f;
+                    auto ent = world.newEntity(
+                        "signal_" + std::to_string(nc.nodeId) + "_" +
+                        std::to_string(edgeId));
+                    auto* tr = static_cast<nl::scene::TransformComponent*>(
+                        &ent.addComponent(
+                            std::make_unique<nl::scene::TransformComponent>(
+                                ent)));
+                    tr->local.position = {px, 0.0f, pz};
+                    tr->local.rotation = {0.0f, std::sin(vyaw), 0.0f,
+                                          std::cos(vyaw)};
+                    auto* mo = static_cast<nl::scene::ModelComponent*>(
+                        &ent.addComponent(
+                            std::make_unique<nl::scene::ModelComponent>(ent)));
+                    mo->meshFile = "signal_post.glb";
+                    mo->tint = {0.10f, 0.85f, 0.15f};   // 初色绿（首 tick 覆写）
+                    ent.addComponent(
+                        std::make_unique<nl::scene::SignalLampComponent>(ent));
+                    if (!trafficSystem->registerLamp(
+                            ent.getID(), nc.nodeId, edgeId, ierr)) {
+                        nl::core::log::errorCh(
+                            "viewer", "traffic-city: registerLamp failed: ",
+                            ierr);
+                        return 2;
+                    }
+                    ++lampsCreated;
+                }
+            }
+        }
+        world.flushEntityCreationAndRemoval();   // newEntity 落表（灯实体）
+        nl::core::log::infoCh("viewer", "traffic-city: ", carsTagged,
+                            " cars registered | lanes=", laneGraph.laneCount(),
+                            " | signal lamps=", lampsCreated,
+                            " | seed=", o.trafficSeed,
+                            " | steps/frame=", o.trafficSteps);
+    }
+
+    // ---- 2. O(N) 遍历实体收集渲染描述 ----
+    // meshFile 白名单校验：M-SC7 起实现单源 = nl::scene::validGlbAssetName
+    //（本 lambda 历史上与 renderer.cpp/scene.cpp 互为复制，收编后删除）；
+    // 非法 = 显式报错退出 2，不静默跳过。
     std::vector<nl::renderer::SceneLightDesc> lights;
     std::vector<std::string> meshFiles;
     std::vector<nl::scene::EntityID> modelIds;
@@ -3644,7 +4131,7 @@ int runScene(const Options& o) {
                 nl::core::log::errorCh("viewer", "--scene: entity ", id, " has Model without Transform");
                 return 2;
             }
-            if (!validGlbAssetName(model->meshFile)) {
+            if (!nl::scene::validGlbAssetName(model->meshFile.c_str())) {
                 nl::core::log::errorCh("viewer", "--scene: entity ", id, " meshFile '",
                                      model->meshFile, "' rejected by asset whitelist (.glb)");
                 return 2;
@@ -3731,64 +4218,87 @@ int runScene(const Options& o) {
         return 1;
     }
 
-    // ---- M-E1b.5 渲染用例：--tick serial|parallel（帧循环逐帧 tick + 刷实例）----
-    // SpinSystem（Write<TransformComponent>）绕 Y 轴旋转，角速度按实体序号差异化
-    // （画面可辨：各物体转速不同）；ReadCountSystem（Read<TransformComponent>）
-    // 纯读统计——与 SpinSystem 无组件冲突，tickParallel 求解器让两者并行。
-    // 渲染结果只由 SpinSystem 决定：parallel 与 serial 同固定 dt 序列下
-    // 逐字节一致（浮点确定性由 tickParallel 串行对拍契约保证）。
-    // Spin 基础角速度 rad/s（首实体），逐实体 ×(1+0.5k)——转速差异画面可辨。
-    constexpr float kSpinBaseSpeed = 0.9f;
-    class SpinSystem final : public nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>> {
-    public:
-        using Base = nl::scene::SignedSystem<nl::scene::Write<nl::scene::TransformComponent>>;
-        explicit SpinSystem(nl::scene::World& w) : Base(w) {}
-        const char* getName() const override { return "Spin"; }
-        // duplicate = 无状态拷贝（SpinSystem 无数据成员）。
-        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
-            return std::make_unique<SpinSystem>(newOwner);
+    // ---- M-SC7：Model 集合签名 + 帧边界整场景重建（拍板方案 A）----
+    // 脚本运行期 ecsAttachModel/ecsDetachModel 只动 World 组件（binding 层已做
+    // 白名单/Transform/重复挂校验）；渲染侧每帧 tick 后比对签名（实体 ID +
+    // meshFile，按 world.getEntityIDs() 出现序稳定），变了 = 重跑收集 +
+    // loadEcsScene（initScene 已可重入：开头 shutdownEcsScene 释放上一份）。
+    // 实例矩阵每帧更新走既有 M-GL3 插值链不动。灯光集本里程碑脚本不可动
+    //（无灯导出），签名只含 Model。无脚本/无增删时每帧 O(N) 只读扫描，零重建。
+    std::vector<std::pair<unsigned long long, std::string>> modelSig;
+    auto computeModelSig = [&world]() {
+        std::vector<std::pair<unsigned long long, std::string>> sig;
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            if (const auto* m = world.getComponent<nl::scene::ModelComponent>(id))
+                sig.emplace_back(id, m->meshFile);
         }
-        // 局部类禁静态数据成员（C2871），基础角速度用函数级常量 kSpinBaseSpeed。
-        void tick(double dt) override {
-            const float baseAngle = static_cast<float>(dt) * kSpinBaseSpeed;
-            std::uint32_t idx = 0;
-            forEachEntity([baseAngle, &idx](nl::scene::Entity,
-                                            nl::scene::TransformComponent& t) {
-                const float angle = baseAngle * (1.0f + 0.5f * static_cast<float>(idx++));
-                const auto q = nl::math::quatFromAxisAngle(
-                    nl::math::Vec3{0.0f, 1.0f, 0.0f}, angle);
-                t.local.rotation = nl::math::mulQuat(q, t.local.rotation);
-            });
-        }
+        return sig;
     };
-    class ReadCountSystem final : public nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>> {
-    public:
-        using Base = nl::scene::SignedSystem<nl::scene::Read<nl::scene::TransformComponent>>;
-        explicit ReadCountSystem(nl::scene::World& w) : Base(w) {}
-        const char* getName() const override { return "ReadCount"; }
-        std::unique_ptr<nl::scene::System> duplicate(nl::scene::World& newOwner) const override {
-            auto copy = std::make_unique<ReadCountSystem>(newOwner);
-            copy->count = count;
-            return copy;
+    modelSig = computeModelSig();
+    auto rebuildSceneObjects = [&]() -> bool {
+        meshFiles.clear();
+        modelIds.clear();
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
+            if (!model) continue;
+            // 运行期防崩（不 return 2——初始 --scene 硬失败口径不适用于帧边界）：
+            // 无 Transform / 白名单拒绝 = 逐实体跳过 + 显式日志（不静默画半套）。
+            if (!world.getComponent<nl::scene::TransformComponent>(id)) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " has Model without Transform (skipped)");
+                continue;
+            }
+            if (!nl::scene::validGlbAssetName(model->meshFile.c_str())) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " meshFile '", model->meshFile,
+                                     "' rejected by asset whitelist (skipped)");
+                continue;
+            }
+            meshFiles.push_back(model->meshFile);   // 指针先落到稳定存储再填 POD
+            modelIds.push_back(id);
         }
-        void tick(double) override {
-            count = 0;
-            forEachEntity([this](nl::scene::Entity, const nl::scene::TransformComponent&) {
-                ++count;
-            });
+        objects.clear();
+        objects.reserve(modelIds.size());
+        for (std::size_t k = 0; k < modelIds.size(); ++k) {
+            const auto* model = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+            nl::renderer::SceneObjectDesc d{};
+            const auto wm = t->getWorldMatrix();
+            std::memcpy(d.world, wm.m, sizeof(d.world));
+            d.tint[0] = model->tint.x;
+            d.tint[1] = model->tint.y;
+            d.tint[2] = model->tint.z;
+            d.roughness = model->roughness;
+            d.metallic  = model->metallic;
+            d.hasPbrOverride = model->hasPbrOverride;
+            d.meshFile = meshFiles[k].c_str();
+            objects.push_back(d);
         }
-        int count = 0;
+        // M-GL3 插值样本重置：新集合没有上一 tick 样本，prev=curr=当前 TRS
+        //（从当前态起步，无历史可插——重建帧不引入毛刺，下帧起恢复正常采样）。
+        interpPrev.assign(modelIds.size(), WorldSample{});
+        interpCurr.assign(modelIds.size(), WorldSample{});
+        for (std::size_t k = 0; k < modelIds.size(); ++k) {
+            const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+            interpPrev[k] = interpCurr[k] = decomposeWorldTRS(t->getWorldMatrix());
+        }
+        if (!renderer->loadEcsScene(objects.data(),
+                                    static_cast<std::uint32_t>(objects.size()),
+                                    lights.empty() ? nullptr : lights.data(),
+                                    static_cast<std::uint32_t>(lights.size()),
+                                    ambient, sceneName.c_str())) {
+            nl::core::log::errorCh("viewer", "ecs scene rebuild failed: ", renderer->lastError());
+            return false;
+        }
+        modelSig = computeModelSig();
+        // 机器出口（run.bat findstr 断言）：重建帧对象数一行。
+        nl::core::log::infoCh("viewer", "ecs scene rebuilt: ", objects.size(),
+                            " objects (frame-boundary, script attach/detach)");
+        return true;
     };
-    const bool ticking = (o.tickMode != "off");
-    if (ticking) {
-        world.registerSystem(std::make_unique<SpinSystem>(world));
-        world.registerSystem(std::make_unique<ReadCountSystem>(world));
-        nl::core::log::infoCh("viewer", "ecs tick: ", o.tickMode,
-                            " | systems=Spin(Write<Transform>)+ReadCount(Read<Transform>)",
-                            " | fixed dt=1/60");
-    }
 
-    const bool hudOn = o.hudEnabled || o.profilingHud;   // M-TR0：独立性能窗口
+
+    const bool hudOn = o.hudEnabled || o.profilingHud || o.propPanelOn;   // M-TR0 + M-SC10 additive
     // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
     // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
     float camDist = o.distance;
@@ -3944,7 +4454,14 @@ int runScene(const Options& o) {
             ? ("NlScript.Examples." + dirStem + "Script, " + asmName) : o.scriptType;
         // World 绑定必须先于 loadScript：Entry（装载期）就会 FindByName，
         // 未绑 World = EcsCode.NoWorld → Entry 返回非 0（M-GL4 实证教训）。
+        // M-SC5：Clock 同批绑定（Time 导出）；Input 不隐式建表（拍板口径）——
+        // scene 模式无注入管线，脚本调 Input.* 得 kInputNoSource 即正确语义。
         nl::script::ecsSetWorld(&world);
+        nl::script::timeSetClock(&gameClock);
+        // M-SC6：现役相机适配源（ctx = runScene 的 ViewerCamera；orbit/free/chase
+        // 模式感知落点 + fov clamp，见 camSourceSetPose 注释；未绑 = kCamNoSource）。
+        g_viewerCamSource.ctx = &camera;
+        nl::script::cameraSetSource(&g_viewerCamSource);
         const auto lr2 = nl::script::ScriptHost::get().loadScript(
             fs::absolute(dll).string(), typeName);
         if (!lr2.ok) {
@@ -3955,6 +4472,11 @@ int runScene(const Options& o) {
         nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
                             " (host-level OnTick on logic frame)");
     }
+    // P8 M-SC10：属性面板帧外持久 State（帧前拷入 hud / 帧后拷回编辑——
+    // drawWindow 编辑落在 hud 副本，不拷回 = 编辑丢失；M-T5 SignalPanel 同族纪律）。
+    nl::renderer::PropPanel propPanel;
+    nl::renderer::PropPanel::State propPanelState{};
+    std::uint32_t propPanelBuiltGen = 0;   // 已重建的描述表代数（0 = 未重建）
     sceneConsole.registerCommand("game.script",
         "script host status (loaded dll/type, tick enabled/count); requires --script",
         [&](const std::vector<std::string>&) -> nl::core::console::CommandResult {
@@ -4116,8 +4638,39 @@ int runScene(const Options& o) {
             // M-S3 音频同步（声源随实体）。tickParallel 失败置 failed，callback 外断出。
             // P8 M-GL5：回调体迁移为 TickGroup 组注册（上方 PrePhysics/PostPhysics/
             // PostUpdateWork 三组），这里只喂时钟——组序 = 枚举序 = 旧 lambda 顺序。
-            gameClock.tick(clockDtMs);
+            // P8 M-T3：--traffic-steps N>0 = 每渲染帧强制 N 个逻辑 tick（截图
+            // 确定性口径，nav-crowd-steps 同款；0 = 时钟自然节奏，行为不变）。
+            // 每次调用钉 kStep 毫秒 = 恰出 1 逻辑步（真实 dt 抖动会让 N 次调用
+            // 产出不定步数，双跑 PNG 无法逐字节对拍）。
+            if (o.trafficSteps > 0) {
+                const double kStepMs = nl::core::GameClock::kStep * 1000.0;
+                for (int ts = 0; ts < o.trafficSteps; ++ts)
+                    gameClock.tick(kStepMs);
+            } else {
+                gameClock.tick(clockDtMs);
+            }
+            // P8 M-T3：交通 sim 日志锚（逐帧 odometer/arrived —— run.bat
+            // findstr 证据源；位移可核：odometer 随帧单调增）。
+            if (trafficSystem) {
+                char tbuf[128];
+                std::snprintf(tbuf, sizeof tbuf,
+                              "traffic-city: frame=%llu ticks=%llu odometer=%.2f m arrived=%d",
+                              static_cast<unsigned long long>(frame),
+                              static_cast<unsigned long long>(trafficSystem->stepCount()),
+                              trafficSystem->totalOdometer(),
+                              trafficSystem->arrivedCount());
+                nl::core::log::infoCh("viewer", tbuf);
+            }
             if (failed) break;
+            // M-SC7：帧边界 Model 集合签名比对——脚本 attach/detach（PrePhysics
+            // scriptTick）+ remove flush（PostPhysics tick 开头）都已落定，此处
+            // 集合稳定，重建一次供本帧渲染（实例写/render 全用新 objects/modelIds）。
+            if (auto sig = computeModelSig(); sig != modelSig) {
+                if (!rebuildSceneObjects()) {
+                    failed = true;
+                    break;
+                }
+            }
             // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
             if (audioWorld) {
                 float eye3[3];
@@ -4301,6 +4854,16 @@ int runScene(const Options& o) {
         fp.eye[0] = eye3[0]; fp.eye[1] = eye3[1]; fp.eye[2] = eye3[2];
 
         nl::renderer::HudFrame hud{};
+        // M-C2：主面板随 --hud（runScene 缺省可见语义收敛为显式门）——M-SC10
+        // additive 不连带主面板（--no-hud + --prop-panel = 只画 script props；
+        // profiling-hud 独立窗口的 M-TR0 抑制语义不变，profiling 块内再覆写）。
+        hud.panelShow = o.hudEnabled;
+        // P8 M-SC10：属性面板同步 + 挂入（additive 独立窗口默认关；hudOn 含 --prop-panel）。
+        if (o.propPanelOn && scriptLoaded) {
+            propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
+            hud.propPanel = &propPanel;
+            hud.propPanelState = propPanelState;   // 整份拷入（M-T5 教训）
+        }
         if (hudOn) {
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
@@ -4359,6 +4922,7 @@ int runScene(const Options& o) {
             break;
         }
         renderer->drainMessages();
+        if (hud.propPanel) propPanelState = hud.propPanelState;   // M-SC10：编辑拷回
         NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         if (capturePath) {
             ++screenshotsSaved;
@@ -4571,6 +5135,10 @@ void printUsage() {
               << "                                     on the NavMesh debug canvas (standalone mode)\n"
               << "  viewer.exe --nav-crowd-agents N    M-N6: agent count 1..8 (default 4)\n"
               << "  viewer.exe --nav-crowd-steps N     M-N6: fixed steps per rendered frame 1..600\n"
+              << "  viewer.exe --traffic-city DIR      M-T3: city traffic (DIR has city.scene.engine\n"
+              << "                                     + roadnet.json); implies --tick serial\n"
+              << "  viewer.exe --traffic-steps N       M-T3: logic ticks per rendered frame 0..600\n"
+              << "  viewer.exe --traffic-seed N        M-T3: fnv1a64 route seed (default 12345)\n"
               << "  viewer.exe --console on|off        M-C1 dev console (backtick ` toggles at runtime;\n"
               << "                                     ESC closes; needs --hud)\n"
               << "  viewer.exe --console-exec <line>   execute console command(s) at startup\n"
@@ -4591,6 +5159,8 @@ void printUsage() {
               << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
               << "  viewer.exe --script <projectDir>   M-GL4: load script host (scene mode); host-level\n"
               << "                                     OnTick driven by logic frame (--script-type/-bootstrap)\n"
+              << "  viewer.exe --prop-panel            M-SC10: script property panel (default off; needs\n"
+              << "                                     --script; edits [Prop] static fields live)\n"
               << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
               << "  console: game.script (M-GL4: script host status)\n"
               << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"

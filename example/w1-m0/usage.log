@@ -1,0 +1,11 @@
+city2engine - nl-engine worldgen tools (M-W1.0 engine delivery driver)
+usage:
+  city2engine.py
+  city2engine.py selftest [--verbose]
+  city2engine.py drive --src DIR --seed N --size N [--nanite EXE]
+                       [--models-out DIR] [--meshlets-out DIR]
+                       [--scene-out FILE] [--stats]
+examples:
+  city2engine.py drive --src example/w0-m3 --seed 12345 --size 6
+  city2engine.py selftest --verbose
+exit codes: 0 ok / 1 runtime failure / 2 usage or invalid arguments

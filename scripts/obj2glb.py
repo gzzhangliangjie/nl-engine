@@ -233,13 +233,26 @@ class GlbBuilder:
             "roughnessFactor": 0.9,
         }
         if texture_path is not None:
-            suffix = texture_path.suffix.lower()
-            mime = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
-            view = self.add_view(texture_path.read_bytes())
-            image = len(self.doc["images"])
-            self.doc["images"].append({"bufferView": view, "mimeType": mime})
-            texture = len(self.doc["textures"])
-            self.doc["textures"].append({"sampler": 0, "source": image})
+            # 【M-W1.1 2026-11-13】同字节 image 去重：多 submesh 共用同一贴图
+            # 文件（如 city-tools 每 block 4 楼同密度档全引 tierN.jpg）时只嵌
+            # 一份 bufferView，materials/textures 共享索引。此前每 submesh 重
+            # 嵌一份完整 JPG（36 block x 4 楼 = 78MB 膨胀）。去重键 = 文件字节
+            # 内容（跨文件名同字节同样共享）；CLI 语义不变。
+            data = texture_path.read_bytes()
+            if not hasattr(self, "_img_dedupe"):
+                self._img_dedupe = {}
+            if data in self._img_dedupe:
+                texture = self._img_dedupe[data]
+            else:
+                suffix = texture_path.suffix.lower()
+                mime = ("image/jpeg" if suffix in (".jpg", ".jpeg")
+                        else "image/png")
+                view = self.add_view(data)
+                image = len(self.doc["images"])
+                self.doc["images"].append({"bufferView": view, "mimeType": mime})
+                texture = len(self.doc["textures"])
+                self.doc["textures"].append({"sampler": 0, "source": image})
+                self._img_dedupe[data] = texture
             pbr["baseColorTexture"] = {"index": texture}
         self.doc["materials"].append({"name": name, "pbrMetallicRoughness": pbr})
         return len(self.doc["materials"]) - 1

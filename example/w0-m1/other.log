@@ -1,0 +1,5 @@
+nl-citygen M-W0.1 city top view + roadnet
+seed=12346 size=6 blocks=36
+extent: x=[-16.5,16.5] z=[-12.0,12.0] m
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\example\w0-m1\other\city_top.png (1152x864 px, scale 32 px/m)
+wrote E:\UE_STUDY_2026\nl-engine-worldgen\example\w0-m1\other\roadnet.json (nodes=49 edges=168 directed)

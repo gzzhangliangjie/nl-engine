@@ -1,0 +1,25 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info] rt extensions enabled: acceleration_structure+ray_query+buffer_device_address
+[nl:info] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info] blas built: Suzanne-materials.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info] cull (vertex pulling) scene ready: Suzanne-materials.nmesh | meshlets=711 | triangles=11808 | stride=63 | frustum=off | shader=spv
+[nl:info] visbuf material resolve ready: Suzanne-materials.glb | materials=3 | baseColor 1024x1024 | shader=spv
+[nl:info] probe scene ready (velocity prepass + 4-level cascade placement, viz dots) | shader=spv
+[nl:info] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=spv
+[nl:info] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | NVRHI validation (Vulkan, no VVL, zero vendor SDK) | swapchain 960x540
+[nl:info] backend: vulkan | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info] debug layer: NVRHI validation (Vulkan, no VVL, zero vendor SDK) | active=yes
+[nl:info] mode: cache-viz | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info] screenshot mode: 16 frames -> E:\UE_STUDY_2026\nl-engine\example\s11-hash\cacheviz-vulkan.png | cull=back | hud=off
+[nl:info] tlas: per-frame rebuild active | instances=1
+[nl:info] t0: offscreen HDR scene targets ready (raster path)
+[nl:info] probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64
+[nl:info] cache: flat hashmap active (262144 slots, lifetime 10, cell 0.5m, probe steps 3 -- Q11-0 plan A)
+[nl:info] cache: viz compose dispatch 960x540 hdr=ok set=ok
+[nl:info] gpu timer resolved [frame]: 1.05597 ms (first successful NVRHI timestamp query)
+[nl:info] screenshot written: example/s11-hash/cacheviz-vulkan.png
+[nl:info] shutdown ok (frames=16 screenshots=1 deviceErrors=0)
+[nl:info] frame timing: avg 7.90716 ms  max 79.9878 ms  over 16 frames (unthrottled)
+[nl:info] gpu timing: avg 0.209854 ms over 15 resolved frames (NVRHI timer)
+[nl:info] window destroyed

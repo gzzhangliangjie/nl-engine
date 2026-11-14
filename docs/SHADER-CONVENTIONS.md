@@ -472,3 +472,13 @@ baseColor *= lerp(1.0f, 0.65f, wetW);
 - **保形闸**：wetness=0 → wetW=0 → lerp/乘法精确恒等 → raster/compute 直光 bytes；探针 hit 侧走统一模型色非 PBR，天然零波及（湿化只影响直光 BRDF，SSC 简化项：GI 弹射面反射率不随湿度变化）。
 
 **时域 reject（渐变天气无 GI 亮度滞后）**：`g_flags.x=validHistory` 通道复用——viewer 逐帧比较天气关键参数（zenith/horizon/sunIntensity/fogDensity/wetness）max abs diff > **0.01**（`kWeatherRejectDiff`）→ `FrameParams.weatherHistoryReject=true` → drawFilterTemporal 该帧 `fcb[4]=0`（历史无效单帧清零，下一帧 alpha=max(userAlpha,1/(len+1)) 重新收敛）。渐变 20s smoothstep 每帧变化 ~1e-3 远低于阈值不触发；`--weather-t` 大步进重放触发。全局标量变化 → 全局拒绝语义正确（无逐像素局部性）。天气关缺省 false → S12 基线 bytes 保形。
+
+### 2.23 水体约定（M-WAT1 起，WATER-PLAN 拍板 A：进 vis buffer；随里程碑续写）
+
+**接线形态（2026-11-14 M-WAT1 拍板 A）**：水体 = vis buffer 正式一员（UE 同构）——① 程序化水面网格（CPU 生成 grid，不进 `.nmesh` 资产管线）占独立 visIndex 段位；② visbuf raster VS 做 Gerstner 顶点位移（**深度真实位移**：SSR march 命中面 = 波面，vis buffer 64-bit 记录形态不变）；③ `csDirect` 对水体段位 per-pixel **重算** Gerstner 位移 + 解析法线（拉出的是未位移网格顶点，位移/法线在光照时解析求出，iago 口径：法线求和定义在未位移网格坐标 P 上）；④ `csSSR` march 水面像素的法线/深度自动可用（M-WAT0 反解链零改动复用）。
+
+**Gerstner 口径（osgw/iago 参照，只读算法）**：波形参数 = CPU 侧显式数组（osgw 式：波向 2D 单位向量 / 振幅 / 波长→频率 k=2π/λ / 陡度 Q / 相速度），经 CB 进 shader；多波叠加 `P.xz += D·(Q·A·cosφ)`、`P.y += A·sinφ`，φ = k·dot(D, XZ) + ω·t；解析法线 `N = normalize(1 - Σ Q·A·k·sinφ, -Σ D.x·A·k·cosφ, -Σ D.y·A·k·cosφ)`（运算体逐波同序，CPU/GPU 若有仿真对照须同源）。
+
+**确定性铁律**：时间源 = `GameClock::kStep` 钉死的固定步进（`--water-t` 类旗标只改常数不改 dt 来源），禁 wall-clock；波形 CB 每帧全量覆写（volatile CB 铁律 §2.x 沿用）。`--water` 缺省关 = 全链 bytes 保形（visbuf/direct/SSR 三段零扰动，水体网格不画、visIndex 段位空置）。
+
+**边界**：水体不碰 GI 冻结基线与 `sky.slangh`（miss 采样复用现有公共函数）；泡沫/折射/反射合成属 M-WAT2（UE SLW 结构域）；水下体积合成远期。

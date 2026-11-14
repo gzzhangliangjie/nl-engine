@@ -1,0 +1,10 @@
+cars        : 4
+frames      : 1800 (dt=0.0167)
+signals     : 4 (lock-only 4 / signal 0)
+loop routes : 4 / 4 (closed rings)
+moving end  : 4
+arrived     : 1 / 4
+distance    : 508.1 m
+min gap     : 2.27 m (cross-road)
+locked end  : 3
+max halt    : 5.7 s

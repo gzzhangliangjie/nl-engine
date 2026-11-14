@@ -1,5 +1,7 @@
 # 水体渲染计划草案（WATER-PLAN-DRAFT，2026-11-11 深夜，纯文档轮）
 
+> **状态（2026-11-14 更新）**：已拍板立项，正式计划见 **`WATER-PLAN.md`**（方案 B：Gerstner + SSR 反射 + 折射吸收，track `water` / M-WAT0~WAT2）。本草案降级为**调研附录**（三处实读 + 开源初筛 + 代价矩阵留痕），§8 待拍板已全部清账（见 §8 末尾拍板结论）。
+
 > 与 `docs/WEATHER-PLAN-DRAFT.md` 同轮：开放调研、未分配里程碑编号、未 claim/release、零落码 / 零 shader / 零 RT·UAV·槽位 / 零 tag / 零 `kStage` / 零 example / 零回归。
 > 工作区并行会话在途改动（当日日志、MEMORY.md、S11-PLAN、gi-tools/main.cpp、s10/s11 verify 产物）一行未碰。
 > 方向口径（已给、非待拍板）：水体 = **波形几何 + 反射/折射 + 吸收散射 + 透明排序 +（可选）水下体积合成**；禁止「一张反射贴图 + 屏幕雾」贴皮；验收必须含反射/折射侧证据（关掉反射后水体感几乎不变即不合格）。
@@ -43,7 +45,7 @@
 | 需求 | 现有基建 | 缺口 |
 |---|---|---|
 | 折射「无水体场景」纹理 | T0 `hdrSceneColor_` + post-chain 离屏 RT 齐 | 需一份「跳过水体」的场景渲（深度预渲分类即可） |
-| 反射（屏幕空间） | **SSR 已排 S7 后插、预研齐、T0 基建就绪** | SSR 即水体反射的屏幕空间解法，一步两用 |
+| 反射（屏幕空间） | SSR 插点 S7 后已拍板、预研齐、T0 基建就绪；**本体未落地，由 M-WAT0 承载（2026-11-14 拍板）** | SSR 即水体反射的屏幕空间解法，一步两用 |
 | 波形法线/深度 | T0 `velocity_` + depth prepass（M10.0） | Gerstner 顶点位移须在 raster 主路径加 pass |
 | 吸收/菲涅尔/泡沫 | PBR direct 材质属性 | 水面材质函数（F0/ior/吸收系数）须新建 |
 | 水下体积 | 体积雾/God Rays（候选 B 组） | 与体积 RT 交叉，须拍板 |
@@ -78,7 +80,7 @@
 ## 6. 依赖顺序铁律
 
 **反射基础设施必须先于水体落地**：
-- SSR 已排 S7 后插、预研齐、T0 基建就绪 → 水体首版反射直接吃 SSR，免平面反射 pass。
+- SSR 插点 S7 后已拍板、预研齐、T0 基建就绪；**本体未落地，由 M-WAT0 先于水体落地（2026-11-14 拍板）** → 水体首版反射直接吃 SSR，免平面反射 pass。
 - 若用户坚持平面反射（C），须先单独立平面反射里程碑（UE `PlanarReflectionRendering` / ryzomcore 参照），否则水体反射半边返工。
 - 折射的「无水体场景」纹理复用 T0 `hdrSceneColor_` 思路，但须深度预渲分类（UE `RefractionMask` 同构）。
 
@@ -90,14 +92,14 @@
 4. M11.1 Q11-1 统计口径：带时间演化（FFT/动画波形）+ 时域重投影的效果，bytes 基线大概率不保，须固定步长/固定帧数或统计断言。**首版 Gerstner 若用固定时间步进可保 bytes；FFT（D）必走统计**。
 5. 主线在 S11 收尾、`kStage` 仍 S8.2 → 水体只能作穿插项（不占 m0.* 编号、tag 用名字、不挡主线）或扩 S14。
 
-## 8. 待拍板（未替用户定）
+## 8. 待拍板（已全部拍板，2026-11-14，详 `WATER-PLAN.md` §8 拍板记录）
 
-- `Q-WA1` 立项归属：穿插项 / S14 第六分支 / 独立 W 阶段 / A 类轨道。
-- `Q-WA2` 波形：Gerstner（B，推荐）/ FFT（D，自实现 compute FFT）。
-- `Q-WA3` 反射：SSR（复用，推荐）/ 平面反射（须先立平面反射里程碑）/ cubemap IBL（最廉价、静态）。
-- `Q-WA4` 折射：首版做不做（Beer-Lambert 吸收 + 扭曲 UV，建议做；水下体积合成留进阶）。
-- `Q-WA5` 冻结基线重拍授权（若水体反射改 `sky.slangh` 采样路径）。
-- `Q-WA6` 是否引入第三方（建议零 vendored，只读算法；kentril0 的 FFTW / deiss 的 GPL 均禁）。
+- `Q-WA1` 立项归属 → **独立轨道 feat/water**（M-WAT0~WAT2，tag 名字制，不挡主线）。
+- `Q-WA2` 波形 → **Gerstner 解析**（方案 B）；FFT（D）远期。
+- `Q-WA3` 反射 → **SSR**（复用已拍板穿插项口径；本体未落地，由 M-WAT0 承载）；平面反射（C）远期须先单独立项。
+- `Q-WA4` 折射 → **首版做**（扭曲 UV + Beer-Lambert）；水下体积合成留进阶。
+- `Q-WA5` 冻结基线重拍授权 → 预计**不触发**（SSR miss 只调用现有天空公共函数）；若必须改 `sky.slangh` → 开工前单独拍板。
+- `Q-WA6` 第三方 → **零 vendored**，只读算法参照；GPL（fftocean）/ FFTW+OpenMP（kentril0）禁入。
 
 拍板后须写回 ROADMAP/S14-PLAN + 新建任务书（如 `docs/w*/W*-PLAN.md`）+ 全仓口径同步 + SHADER-CONVENTIONS 新节，才允许落第一行码。编号用 `Q-WA*` 与同日 weather 的 `Q-WE*`、worldgen 的 `Q-W*` 区分，勿混。
 

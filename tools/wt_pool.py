@@ -124,13 +124,13 @@ TRACKS = {
                 "branches kept per PARALLEL-TRACKS 7.6; reopen via 7.1b",
     },
     "script": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "active",
-        "note": "M-SC0~SC3 merged to master 1b49b5f (tags m-sc0~m-sc3); "
-                "REOPENED 2026-11-13 by user decision to extend the glue-layer "
-                "API surface (M-SC4+: Input/Time/Log, Camera, scene+model "
-                "creation, Physics vehicle, Audio; static-facade ApiTable "
-                "tail-append unchanged); wt rebuilt at master 08a67c0",
+        "wt": "", "branch": "feat/script", "state": "closed",
+        "note": "script glue-layer track M-SC0~SC11 done (tags m-sc0~m-sc11; "
+                "M-SC0~3 merged 1b49b5f; M-SC4~SC11 merged to master 4c5c582 "
+                "2026-11-14 = script-merge tag, re-run 11 historical cards "
+                "90/90 bytes-green + 164/164 tests dual backend after merge); "
+                "wt removed same day (user instruction), junctions unlinked, "
+                "branch kept; reopen via 7.1b",
     },
     "particles": {
         "wt": "", "branch": "feat/particles", "state": "closed",
@@ -173,12 +173,14 @@ TRACKS = {
     },
     "editor": {
         "wt": "E:/UE_STUDY_2026/nl-engine-editor",
-        "branch": "feat/editor", "state": "closed",
+        "branch": "feat/editor", "state": "active",
         "note": "外置编辑器轨道（C++/ImGui 宿主 + 引擎侧 editor_bridge），独立于渲染主线；"
                 "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0~E6 全量 merge 回 "
                 "master ac50c10 + 集成修复 fc34176（tags e-m0e2-done~e-m6-done）；"
                 "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
-                "state CLOSED by user instruction 2026-11-11 17:1x",
+                "state CLOSED by user instruction 2026-11-11 17:1x; "
+                "REOPENED 2026-11-14 per §7.1b（用户拍板 M-E7 模型预览插件 / M-E8 场景树增强，"
+                "wt 重建于 feat/editor ff 至 master），参数通道拍板 = CVar + M-SC10 描述表，不另做反射层",
     },
     "logging": {
         "wt": "E:/UE_STUDY_2026/nl-engine-logging",
@@ -294,15 +296,37 @@ TRACKS = {
                 ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
     },
     "weather": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-weather",
-        "branch": "feat/weather", "state": "active",
+        "wt": "", "branch": "feat/weather", "state": "closed",
         "note": "weather interleave track (plan docs/WEATHER-PLAN.md, "
                 "M-WEA0~WEA3, tags weather-w0~weather-w3; A-plan param layer "
                 "drives Lumen, Q-WE1~WE6 settled 2026-11-12, Q-WEA0-A/B "
                 "settled 2026-11-13: discrete states + smooth transition, "
-                "nl_core module); wt built 2026-11-13 from master 6a824b1, "
-                "junction .workbuddy + thirdparty/slang/dist + skip-worktree "
-                "(9 files)",
+                "nl_core module); wt built 2026-11-13 from master 6a824b1; "
+                "M-WEA0+1 merged 4090d94, M-WEA2+3 merged ebf5f50 "
+                "(2026-11-14, 46 runs all bytes); "
+                "state CLOSED by user instruction 2026-11-14, wt removed "
+                "(2 junctions detached + robocopy /MIR + prune), branch "
+                "and tags kept; rebuild via PARALLEL-TRACKS 7.6",
+    },
+    "nightlighting": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
+        "branch": "feat/nightlighting", "state": "active",
+        "note": "night-lighting interleave track (plan docs/nl/NL-PLAN.md, "
+                "M-NL0 bloom / M-NL1 screen-space god rays / M-NL2 night "
+                "demo, tags nl0-bloom/nl1-godrays/nl-done; Q-NL1~NL6 "
+                "settled 2026-11-14: A-plan post-chain, flags default-off, "
+                "no sky.slangh touch, zero vendored); wt built 2026-11-14 "
+                "from master b150fd9, junction .workbuddy + "
+                "thirdparty/slang/dist + skip-worktree",
+    },
+    "water": {
+        "wt": "", "branch": "feat/water", "state": "closed",
+        "note": "water track M-WAT0~WAT3 done (tags water-t0~water-t3; "
+                "plan-B Gerstner + SSR + refraction/absorption/Fresnel/"
+                "foam/shoreline); merged to master 92a0863 2026-11-14 "
+                "(re-run 12/12 historical cards bytes-green after merge); "
+                "wt removed same day (user instruction), junctions "
+                "unlinked, branches kept; reopen via 7.1b",
     },
     "nightlighting": {
         "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
