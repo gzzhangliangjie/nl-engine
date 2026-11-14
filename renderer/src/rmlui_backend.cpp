@@ -320,7 +320,9 @@ struct RmlUiBackend::Impl : Rml::RenderInterface, Rml::SystemInterface, Rml::Fil
         namespace fs = std::filesystem;
         std::string s(p);
         if (!s.empty() && s.front() == '/') s.erase(s.begin());   // RmlUi 根路径约定
-        const fs::path base = fs::path(nl::core::paths::assetDir());
+        // base hop 口径：paths::assetDir() 注入 = assets/models（模型白名单域），
+        // RmlUi 世界资产根 = assets/（demo.rml/ui/ 前缀约定）——向上一级对齐。
+        const fs::path base = fs::path(nl::core::paths::assetDir()) / "..";
         fs::path cand = base / s;
         std::error_code ec;
         if (fs::exists(cand, ec)) return cand;
@@ -547,9 +549,9 @@ bool RmlUiBackend::init(nvrhi::IDevice* device, const char* shaderSuffix,
         return false;
     }
 
-    // 字体：RmlUi 无字体加载不了任何文档（M-UI0.0 硬前提）。
-    const std::string fontPath =
-        (std::filesystem::path(nl::core::paths::assetDir()) / "ui/fonts/NotoSans-Regular.ttf").string();
+    // 字体：RmlUi 无字体加载不了任何文档（M-UI0.0 硬前提）。走 FileInterface 同一
+    // resolve 通道（assets/ 根双层解析，首版误拼 assetDir()/ui 落 assets/models 实测）。
+    const std::string fontPath = impl->resolve("ui/fonts/NotoSans-Regular.ttf").string();
     if (!Rml::LoadFontFace(fontPath)) {
         outError = "RmlUiBackend: LoadFontFace failed: " + fontPath;
         Rml::Shutdown();
