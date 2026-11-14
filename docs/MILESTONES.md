@@ -3625,3 +3625,22 @@
 6. 纠偏留痕：摆方案时「runScene 一行不动」表述有误——nav-crowd 先例实为 run 函数内模式分支，实际形态 = runScene 内纯可选分支（已写入 TRAFFIC-PLAN §11.2 纠偏段）。
 
 **下一步**：T0 轨道四里程碑（T0~T3）整轨 merge 回 master 待用户指令（S13 教训：merge 后须重跑该轨全部历史版本卡）；需求感应信号进 citygen signal 填充策略归 W 轨道；TrafficControl 信号可视化（红绿灯摆件）另立项。
+
+## T0 M-T4 — 红绿灯可视化 + 信号调度接通引擎 + citygen signal 填充（feat/worldgen，2026-11-14，tag `traffic-m4`）
+
+**动作**：用户指令「继续加红绿灯吧 不然之前不是白做了」+ 中途加码「感应信号 citygen 填充 一起做吧」（拍板「A A A 默认开」，TRAFFIC-PLAN §12 + §12.5 补段）。①信号挂接：`TrafficCarSystem` 值持 `TrafficControl`，新增 `initControl(json,len,autoSignal,err)`（buildFromRoadnetJson + autoSignal 置全部受控节点 signal=true + `sim_.control` 指上）——修复 M-T3 实读发现的「`sim_.params.control` 恒 nullptr、M-T1/T2 调度在引擎内从未生效」缺陷；②摆件：`scripts/make-signal-post-glb.py` 手写最小 GLB（杆+灯箱双 primitive）→ `assets/models/signal_post.glb`，viewer `--traffic-city` 分支每受控节点×每进入边建 `signal_<node>_<edge>` 实体（Transform 停车线右侧 + Model + `SignalLampComponent` POD），`registerLamp` 显式注册，writeBack 逐灯 `stateForEdge` 写 `ModelComponent.tint`（渲染零新特性——每帧 objects 原地刷新含 tint）；激活段（Spin/ReadCount 类 + ticking + traffic-city）整体前移到渲染收集段之前（灯实体必须先于 modelIds 收集否则不渲染）；③citygen 填充：`serializeRoadnet` 按进入边>=2 填 signal=true（旧口径「citygen 恒 false」废止），t3 roadnet.json 重生成；④默认开（无关闭旗标），t3 基线重拍。
+
+**提交版本**：`feat/worldgen` M-T4 收口提交（tag `traffic-m4`）。
+
+**完成情况**：core 三新件（SignalLampComponent.hpp/.cpp + make-signal-post-glb.py/signal_post.glb）+ TrafficCarSystem 扩展（initControl/registerLamp/灯 tint writeBack/duplicate 双指针重接）+ viewer 激活段前移 + 灯创建 + citygen serializeRoadnet 填充 + selftest ⑫（traffic 5244 = 4740+504；citygen 98 = 97+1）+ example/t3-traffic-city（roadnet 重生成 + 4 图重拍 + run.bat 六段含补回的 seg4）+ cases.json t3 卡语义更新 + 锚 4740→5244 八处同步。信号生效证据：600 tick odometer **82.72m 停滞**（未挂接对照 3437m），42 车红灯首尾相接排队街景可辨，168 盏灯箱红/绿异态。回归 t3 4/4 + t2 12/12 + t0 12/12 全 bytes；ctest 双后端全绿（收口时核数）。
+
+**踩坑情况**
+1. **M-T3 遗留：t3 run.bat seg4（det 双跑段）在 seg2/3 显式化重写时被整段误删**——M-T3 收口的「ALL GREEN」实际没跑确定性对拍（靠 cases.json 回归 bytes 兜底才没漏事故）。本轮发现补回，v6 起 seg4 恢复。教训：**重写 bat 段落用 `s[:i2] + new + s[i6:]` 式拼接会静默吞掉中间段——重写后必须 diff 全文或逐段 echo 核对**。
+2. **`sim_.control` vs `sim_.params.control`**：control 挂接点在 TrafficSim 自身（TrafficSim.hpp:62），不在 params——M-T3 摆方案时口径记错，编译期 C2039 拦住。
+3. **灯实体创建位置约束**：初版放在 objects 收集段之后——灯不在 modelIds/实例表里根本不渲染；激活段整体前移到收集段之前修复。教训：**动态建实体的模式分支必须落在「实体收集」之前，renderable 实体生命周期先于实例表构建**。
+4. **Entity::addComponent 返回 Component&**：取派生类指针要 `&e.addComponent(...)`（少写 & 编译 C2440）；viewer/selftest 同犯两处。
+5. **全红窗口异态断言错**：clearS 窗口两相皆 Red，「两相恒异态」不成立——改为「不同时绿」。
+6. **42 vs 49 受控节点**：摆方案时把车数 42 误当受控节点数——size 6 全部 49 节点进入边>=2（角 2/边 3/内 4），灯 168 = Σ进入边。已在 GUIDE §10.5 纠偏留痕。
+7. CMakeLists/traffic-tools patch 三遇 CRLF 坑（\n vs \r\n 匹配失败）——python patch 一律先探文件行尾。
+
+**下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。

@@ -274,6 +274,7 @@ add_library(nl_core STATIC
     core/src/scene/Component.cpp # M-E1：TransformComponent 层级变换（复合/写回分解）
     core/src/scene/System.cpp  # M-E2：System 实体列表维护（签名匹配，World 推送口径）
     core/src/scene/TrafficCarComponent.cpp # P8 M-T3：ECS 交通车组件序列化
+    core/src/scene/SignalLampComponent.cpp  # P8 M-T4：红绿灯摆件组件序列化
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
     core/src/physics/ContactEventStream.cpp # P8 M-D1：双缓冲 ContactEventStream（bevy 两帧保活，Jolt-free）
     core/src/physics/ContactEventSystem.cpp # P8 M-D1：scene::System 消费者（owner->Entity 过滤，自足系统）

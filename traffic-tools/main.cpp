@@ -12,6 +12,7 @@
 #include "nl/traffic/TrafficSim.hpp"
 #include "nl/traffic/TrafficCarSystem.hpp"  // P8 M-T3：ECS 交通车系统 selftest ⑪
 #include "nl/scene/TrafficCarComponent.hpp" // P8 M-T3：组件序列化 roundtrip
+#include "nl/scene/SignalLampComponent.hpp" // P8 M-T4：灯组件 selftest ⑫
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION // 单 TU 实现（city-tools 先例）
 #include <stb_image_write.h>
@@ -746,6 +747,223 @@ int selftest(const std::string& emitFixture) {
             std::string ierr4;
             T0_CHECK(!sys4->init(g, sp, 12345, ierr4));
             T0_CHECK(ierr4.find("no enabled TrafficCar entities") != std::string::npos);
+        }
+    }
+
+    // --- ⑫ M-T4 信号挂接 + 红绿灯摆件（TRAFFIC-PLAN §12）：initControl + 灯 tint ---
+    {
+        // 信号化夹具（⑩ 同口径：node3 signal=true 显式；replace 长度一律
+        // needle.size()）。autoSignal=true 会把余下受控节点也置 signal=true。
+        std::string sigFix = fixture;
+        const std::string sigNeedle =
+            "\"id\": 3, \"x\": 10.0, \"z\": 10.0, \"kind\": \"intersection\", \"signal\": false";
+        sigFix.replace(sigFix.find(sigNeedle), sigNeedle.size(),
+                       "\"id\": 3, \"x\": 10.0, \"z\": 10.0, \"kind\": "
+                       "\"intersection\", \"signal\": true");
+
+        const int kCars12 = 3;
+        auto buildWorldS = [&](nl::scene::World* w) {
+            auto& clib = w->getComponentLibrary();
+            clib.registerComponent<nl::scene::TransformComponent>();
+            clib.registerComponent<nl::scene::TrafficCarComponent>();
+            clib.registerComponent<nl::scene::SignalLampComponent>();
+            for (int k = 0; k < kCars12; ++k) {
+                auto e = w->newEntity("car_0" + std::to_string(k));
+                e.addComponent(std::make_unique<nl::scene::TransformComponent>(e));
+                e.addComponent(std::make_unique<nl::scene::TrafficCarComponent>(e));
+            }
+            w->flushEntityCreationAndRemoval();
+            w->registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(*w));
+        };
+        nl::scene::World s1;
+        buildWorldS(&s1);
+        auto* sy1 = static_cast<nl::traffic::TrafficCarSystem*>(
+            s1.findSystem(nl::traffic::TrafficCarSystem::kName));
+        T0_CHECK(sy1 != nullptr);
+
+        // a) 负向：initControl before init / 空 JSON = 显式失败
+        std::string serr12;
+        T0_CHECK(!sy1->initControl(sigFix.data(), sigFix.size(), true, serr12));
+        T0_CHECK(serr12.find("before init") != std::string::npos);
+        nl::traffic::TrafficSimParams sp12{};
+        std::string ierr12;
+        T0_CHECK(sy1->init(g, sp12, 4242, ierr12));
+        T0_CHECK(!sy1->initControl(nullptr, 0, true, serr12));
+        T0_CHECK(serr12.find("empty roadnet") != std::string::npos);
+        T0_CHECK(!sy1->initControl("{bad", 5, true, serr12));
+        T0_CHECK(serr12.find("control build failed") != std::string::npos);
+        T0_CHECK(sy1->initControl(sigFix.data(), sigFix.size(), true, ierr12));
+        T0_CHECK(sy1->controlAttached());
+        T0_CHECK(!sy1->initControl(sigFix.data(), sigFix.size(), true, serr12));
+        T0_CHECK(serr12.find("twice") != std::string::npos);
+
+        // b) autoSignal 语义：4 节点全受控且 signal=true（node3 显式 + 其余补默认）
+        const nl::traffic::TrafficControl& ctl = sy1->control();
+        T0_CHECK(ctl.nodes.size() == 4u);
+        for (const nl::traffic::NodeControl& nc : ctl.nodes)
+            T0_CHECK(nc.signal);
+        // 时序缺省（autoSignal 不动时序）：8/2/1s + gap_out 0 固定周期
+        for (const nl::traffic::NodeControl& nc : ctl.nodes) {
+            T0_CHECK(std::fabs(nc.greenS - 8.0f) < 1e-5f);
+            T0_CHECK(std::fabs(nc.yellowS - 2.0f) < 1e-5f);
+            T0_CHECK(std::fabs(nc.clearS - 1.0f) < 1e-5f);
+            T0_CHECK(nc.gapOutS == 0.0f);
+        }
+
+        // c) 灯实体：4 受控节点 × 2 进入边 = 8 盏；registerLamp 后 writeBack
+        //    逐灯 stateForEdge -> tint。与 viewer 创建逻辑同构（§12.3）。
+        int lampK = 0;
+        for (const nl::traffic::NodeControl& nc : ctl.nodes) {
+            for (int grp = 0; grp < 2; ++grp) {
+                for (std::int32_t edgeId : nc.groups[grp]) {
+                    auto e = s1.newEntity("signal_" + std::to_string(nc.nodeId) +
+                                          "_" + std::to_string(edgeId));
+                    e.addComponent(
+                        std::make_unique<nl::scene::TransformComponent>(e));
+                    auto* mo = static_cast<nl::scene::ModelComponent*>(
+                        &e.addComponent(
+                            std::make_unique<nl::scene::ModelComponent>(e)));
+                    mo->meshFile = "signal_post.glb";
+                    mo->tint = {1.0f, 1.0f, 1.0f};   // 初色白（首 tick 覆写）
+                    e.addComponent(
+                        std::make_unique<nl::scene::SignalLampComponent>(e));
+                    std::string rerr;
+                    T0_CHECK(sy1->registerLamp(e.getID(), nc.nodeId, edgeId,
+                                               rerr));
+                    ++lampK;
+                }
+            }
+        }
+        s1.flushEntityCreationAndRemoval();
+        T0_CHECK(sy1->lampCount() == 8);
+        // 负向：未知节点 registerLamp 显式失败（id 用真实实体，nodeId 未知）
+        {
+            std::string rerr;
+            auto ec = s1.findEntityByName("car_00");
+            T0_CHECK(ec.has_value());
+            T0_CHECK(!sy1->registerLamp(ec->getID(), 777, 0, rerr));
+            T0_CHECK(rerr.find("not controlled") != std::string::npos);
+        }
+
+        // d) 挂接生效证据：tick N 帧 -> control.frame 同步推进（sim.step ->
+        //    control->advanceFrame 链路），灯 tint 与 stateForEdge 全程一致，
+        //    且同节点两灯异色（两相必不同时绿）。
+        const int kTicks12 = 240;   // 4s：覆盖绿/黄/全红窗口
+        for (int f = 0; f < kTicks12; ++f) {
+            s1.tick(1.0 / 60.0);
+            T0_CHECK(ctl.frame == f + 1);
+            // 全帧只锚 frame 推进；灯 tint 全查取代表性帧（0/60/120/180/239
+            // 覆盖绿/黄/全红窗口，断言规模可控）
+            if (f % 60 != 0 && f != kTicks12 - 1) continue;
+            for (const nl::traffic::NodeControl& nc : ctl.nodes) {
+                const size_t nIdx = static_cast<size_t>(ctl.findNode(nc.nodeId));
+                const nl::traffic::SignalState gA =
+                    ctl.stateForEdge(nIdx, nc.groups[0][0]);
+                const nl::traffic::SignalState gB =
+                    ctl.stateForEdge(nIdx, nc.groups[1][0]);
+                // 两相不同时绿（clearS 全红窗口两组皆 Red，恒异态不成立）
+                T0_CHECK(!(gA == nl::traffic::SignalState::Green &&
+                           gB == nl::traffic::SignalState::Green));
+                auto lo = s1.findEntityByName("signal_" +
+                                              std::to_string(nc.nodeId) + "_" +
+                                              std::to_string(nc.groups[0][0]));
+                auto lo2 = s1.findEntityByName("signal_" +
+                                               std::to_string(nc.nodeId) + "_" +
+                                               std::to_string(nc.groups[1][0]));
+                T0_CHECK(lo.has_value() && lo2.has_value());
+                const auto* m1 = s1.getComponent<nl::scene::ModelComponent>(lo->getID());
+                const auto* m2 = s1.getComponent<nl::scene::ModelComponent>(lo2->getID());
+                T0_CHECK(m1 != nullptr && m2 != nullptr);
+                const auto expect = [](nl::traffic::SignalState st, int c) {
+                    switch (st) {
+                    case nl::traffic::SignalState::Green:
+                        return c == 0 ? 0.10f : (c == 1 ? 0.85f : 0.15f);
+                    case nl::traffic::SignalState::Yellow:
+                        return c == 0 ? 1.00f : (c == 1 ? 0.75f : 0.00f);
+                    default:
+                        return c == 0 ? 0.90f : (c == 1 ? 0.10f : 0.08f);
+                    }
+                };
+                for (int cc = 0; cc < 3; ++cc) {
+                    T0_CHECK(std::fabs((&m1->tint.x)[cc] - expect(gA, cc)) < 1e-6f);
+                    T0_CHECK(std::fabs((&m2->tint.x)[cc] - expect(gB, cc)) < 1e-6f);
+                }
+            }
+        }
+
+        // e) 确定性：同 seed + initControl 同参重建双 World -> Transform+tint 逐位
+        nl::scene::World s2;
+        buildWorldS(&s2);
+        auto* sy2 = static_cast<nl::traffic::TrafficCarSystem*>(
+            s2.findSystem(nl::traffic::TrafficCarSystem::kName));
+        std::string ierr12b;
+        T0_CHECK(sy2->init(g, sp12, 4242, ierr12b));
+        T0_CHECK(sy2->initControl(sigFix.data(), sigFix.size(), true, ierr12b));
+        {
+            const nl::traffic::TrafficControl& ctl2 = sy2->control();
+            for (const nl::traffic::NodeControl& nc : ctl2.nodes) {
+                for (int grp = 0; grp < 2; ++grp) {
+                    for (std::int32_t edgeId : nc.groups[grp]) {
+                        auto e = s2.newEntity("signal_" +
+                                              std::to_string(nc.nodeId) + "_" +
+                                              std::to_string(edgeId));
+                        e.addComponent(std::make_unique<nl::scene::TransformComponent>(e));
+                        auto* mo = static_cast<nl::scene::ModelComponent*>(
+                            &e.addComponent(
+                                std::make_unique<nl::scene::ModelComponent>(e)));
+                        mo->meshFile = "signal_post.glb";
+                        mo->tint = {1.0f, 1.0f, 1.0f};
+                        e.addComponent(
+                            std::make_unique<nl::scene::SignalLampComponent>(e));
+                        std::string rerr;
+                        T0_CHECK(sy2->registerLamp(e.getID(), nc.nodeId, edgeId, rerr));
+                    }
+                }
+            }
+            s2.flushEntityCreationAndRemoval();
+        }
+        for (int f = 0; f < kTicks12; ++f) s2.tick(1.0 / 60.0);
+        for (const nl::traffic::NodeControl& nc : ctl.nodes) {
+            for (int grp = 0; grp < 2; ++grp) {
+                for (std::int32_t edgeId : nc.groups[grp]) {
+                    const std::string name = "signal_" +
+                        std::to_string(nc.nodeId) + "_" + std::to_string(edgeId);
+                    auto ea = s1.findEntityByName(name);
+                    auto eb = s2.findEntityByName(name);
+                    T0_CHECK(ea.has_value() && eb.has_value());
+                    const auto* ta = s1.getComponent<nl::scene::TransformComponent>(ea->getID());
+                    const auto* tb = s2.getComponent<nl::scene::TransformComponent>(eb->getID());
+                    T0_CHECK(std::memcmp(&ta->local, &tb->local, sizeof(ta->local)) == 0);
+                    const auto* ma = s1.getComponent<nl::scene::ModelComponent>(ea->getID());
+                    const auto* mb = s2.getComponent<nl::scene::ModelComponent>(eb->getID());
+                    T0_CHECK(std::memcmp(&ma->tint.x, &mb->tint.x, 3 * sizeof(float)) == 0);
+                }
+            }
+        }
+
+        // f) SignalLampComponent 序列化 roundtrip
+        {
+            auto ea = s1.findEntityByName("signal_3_4");
+            if (!ea.has_value()) ea = s1.findEntityByName("signal_0_1");
+            T0_CHECK(ea.has_value());
+            const auto* la = s1.getComponent<nl::scene::SignalLampComponent>(ea->getID());
+            T0_CHECK(la != nullptr);
+            const auto j = la->serialise();
+            nl::scene::SignalLampComponent lb(nl::scene::Entity{ea->getID(), &s1});
+            lb.deserialise(nlohmann::json::parse(j.dump()));
+            T0_CHECK(lb.nodeId == la->nodeId && lb.edgeId == la->edgeId);
+        }
+
+        // g) 行为门控：挂接后同 tick 数 odometer 不超过未挂接（信号只会更慢）
+        {
+            nl::scene::World s3;
+            buildWorldS(&s3);
+            auto* sy3 = static_cast<nl::traffic::TrafficCarSystem*>(
+                s3.findSystem(nl::traffic::TrafficCarSystem::kName));
+            std::string ierr12c;
+            T0_CHECK(sy3->init(g, sp12, 4242, ierr12c));   // 无 initControl
+            for (int f = 0; f < kTicks12; ++f) s3.tick(1.0 / 60.0);
+            T0_CHECK(sy1->totalOdometer() <= sy3->totalOdometer() + 1e-3);
         }
     }
 

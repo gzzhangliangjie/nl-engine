@@ -586,8 +586,9 @@ struct RoadnetNode {
     std::uint32_t id = 0;
     float x = 0.f;
     float z = 0.f;
-    // kind 恒 "intersection"、signal 恒 false（W0-PLAN §1：M-W0 首版口径，
-    // 全部节点度 >= 2，无 dead_end；signal 由第 8 步消费，citygen 恒 false）。
+    // kind 恒 "intersection"；signal = 进入边>=2（M-T4 起由 serializeRoadnet
+    // 填充，消费端 TrafficControl 受控口径同构；W0-PLAN §1「citygen 恒 false」
+    // 旧口径已废止——见 TRAFFIC-PLAN §12 补段）。
 };
 
 struct RoadnetEdge {
@@ -716,6 +717,13 @@ void generateStreetAssets(CityLayout& lay) {
 std::string serializeRoadnet(const Roadnet& net) {
     std::string s;
     char buf[160];
+    // M-T4（用户拍板「感应信号 citygen 填充 一起做吧」，TRAFFIC-PLAN §12 补）：
+    // 进入边 >= 2 的节点 signal=true（与 TrafficControl 受控口径一致——端点
+    // 死路节点进不了控制面，填 false）；时序走消费端 NodeControl 缺省
+    //（8/2/1s 固定周期），signals[] 显式条目契约不变（只加不减）。
+    std::vector<unsigned> inDeg(net.nodes.size(), 0u);
+    for (const RoadnetEdge& e : net.edges)
+        if (e.to < inDeg.size()) ++inDeg[e.to];
     s += "{\n";
     s += "  \"version\": 1,\n";
     std::snprintf(buf, sizeof buf, "  \"seed\": %llu,\n",
@@ -731,8 +739,9 @@ std::string serializeRoadnet(const Roadnet& net) {
         const RoadnetNode& n = net.nodes[i];
         std::snprintf(buf, sizeof buf,
                       "    { \"id\": %u, \"x\": %.1f, \"z\": %.1f, "
-                      "\"kind\": \"intersection\", \"signal\": false }%s\n",
+                      "\"kind\": \"intersection\", \"signal\": %s }%s\n",
                       n.id, n.x, n.z,
+                      inDeg[n.id] >= 2u ? "true" : "false",
                       i + 1 == net.nodes.size() ? "" : ",");
         s += buf;
     }
@@ -1721,6 +1730,34 @@ SelftestResult runSelftest(bool verbose) {
     }
     expect(serializeRoadnet(buildRoadnet(generateCity(p1))) != jsonA,
            "roadnet: different seed -> different JSON (seed field)");
+
+    // M-T4：signal 填充锚——进入边 >= 2 的节点 signal=true，端点（进入边 < 2）
+    // false；与 TrafficControl 受控口径同构。size 6 网格：角 2 / 边 3 / 内 4
+    // 条进入边 -> 全部 49 节点受控（viewer 灯数 = Σ进入边 = 168）。
+    {
+        std::uint32_t sigTrue = 0, sigFalse = 0;
+        std::size_t pos = 0;
+        const std::string kt = "\"signal\": true";
+        const std::string kf = "\"signal\": false";
+        while ((pos = jsonA.find(kt, pos)) != std::string::npos) {
+            ++sigTrue;
+            pos += kt.size();
+        }
+        pos = 0;
+        while ((pos = jsonA.find(kf, pos)) != std::string::npos) {
+            ++sigFalse;
+            pos += kf.size();
+        }
+        std::uint32_t inDeg2 = 0;
+        std::vector<unsigned> deg(net.nodes.size(), 0u);
+        for (const RoadnetEdge& e : net.edges)
+            if (e.to < deg.size()) ++deg[e.to];
+        for (unsigned v : deg)
+            if (v >= 2u) ++inDeg2;
+        expect(sigTrue == inDeg2 && sigTrue + sigFalse == 49u &&
+                   sigTrue == 49u,
+               "roadnet: signal fill = in-degree>=2 nodes (49 true / 0 false)");
+    }
 
     CityParams ps = p0;
     ps.size = 1;

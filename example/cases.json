@@ -12093,7 +12093,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车 4740 断言",
+     "name": "selftest：车道图/寻路/跟车 5244 断言",
      "kind": "tool",
      "note": "确定性逐位 + 几何精确浮点锚 + 连接闭合 + A* 路径锚 + 跟车平衡间距/限速帽 + 负向显式报错；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12101,7 +12101,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (4740 asserts)",
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12208,7 +12208,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车/调度器 4740 断言",
+     "name": "selftest：车道图/寻路/跟车/调度器 5244 断言",
      "kind": "tool",
      "note": "⑨ 调度器段：信号时钟帧锚 + FIFO 锁单元链 + 红灯 7.5m 逐位钳停 + 冲突串行过锁 + 跨路段互斥 + 控制全开双跑 memcmp；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12216,7 +12216,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (4740 asserts)",
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12289,7 +12289,7 @@
     "loop 锚：方格环 [e0,e4,e7,e3] 30s odometer > 50m（环长 40m）速度恒正（永不停）+ 双跑 memcmp 逐位 + loop=false 对照单程停靠",
     "转弯独占仿真锚：转弯车与跨组车串行过锁 + heldNodeCount 0 + 控制全开双跑 memcmp",
     "城市冒烟（49 lock-only 节点 32 车）：组锁吞吐 17/32 / 646.9m（M-T1 7/32 / 475.5m）+ min gap 1.35m（对向共线豁免口径修正后回基线）+ 停滞持锁 0（死锁守卫内建退出码）",
-    "交代物：example/t2-traffic/（run.bat 六段 ALL GREEN + gapout-sim/city-sim 证据图 + gap_out_s 契约夹具）+ 本卡七用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 4740 断言含 ⑩ M-T2 段）"
+    "交代物：example/t2-traffic/（run.bat 六段 ALL GREEN + gapout-sim/city-sim 证据图 + gap_out_s 契约夹具）+ 本卡七用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 5244 断言含 ⑩ M-T2 段）"
    ],
    "exe": {
     "dx12": "build/dx12/traffic-tools.exe",
@@ -12309,7 +12309,7 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：车道图/寻路/跟车/调度器/调度增强 4740 断言",
+     "name": "selftest：车道图/寻路/跟车/调度器/调度增强 5244 断言",
      "kind": "tool",
      "note": "⑩ M-T2 段：gap-out 帧跳变 481 锚 + 需求反锚 + 最短绿时防抖 + loop 环 odometer/双跑/对照 + 转弯独占串行/无泄漏/双跑；--verbose 逐条 ok 行是证据日志数据源。",
      "args": [
@@ -12317,7 +12317,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "traffic selftest: PASS (4740 asserts)",
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
      "command": "traffic-tools selftest --verbose"
     },
     {
@@ -12401,13 +12401,15 @@
    "name": "CityCar 接入 viewer（TrafficCarSystem ECS + GameClock 逻辑帧，--traffic-city）",
    "tag": "traffic-m3",
    "date": "2026-11-14",
-   "summary": "GAME-DEV-ORDER 第 9 步收口（A 类轨道 feat/worldgen，用户拍板「A A 最小集」，TRAFFIC-PLAN §11）：Q-T12=A 新 ECS 系统 TrafficCarSystem（SignedSystem<TrafficCar, Transform>，NavAgentSystem 同构——系统内持 LaneGraph+TrafficSim+固定步长累加器，位置/yaw 写回 TransformComponent，渲染实例表零改动消费）；Q-T13=A viewer --traffic-city <DIR>（DIR=city.scene.engine+roadnet.json，citygen 接口铁律兑现；car_* 实体挂 TrafficCarComponent，fnv1a64 纯函数确定性 route（闭合回路选终点，loop=true 永续），--traffic-steps 每渲染帧强制 N 逻辑 tick，--traffic-city 不给时逐位走原路径，kStage 不 bump）；Q-T14=最小集（截图+日志锚+cases 卡；信号可视化不做）。42 车城市永续车流，双跑 PNG 逐字节一致。",
+   "summary": "GAME-DEV-ORDER 第 9 步收口（A 类轨道 feat/worldgen，M-T3 拍板「A A 最小集」§11 + M-T4 拍板「A A A 默认开」§12 + 用户加码「感应信号 citygen 填充一起做」）：TrafficCarSystem ECS（SignedSystem<TrafficCar,Transform>）+ viewer --traffic-city + M-T4 信号挂接（TrafficCarSystem 值持 TrafficControl，initControl autoSignal，sim_.control 指上——修复 M-T1/T2 调度在引擎内从未生效的「白做」缺陷）+ 红绿灯摆件（citygen signal 填充：serializeRoadnet 按进入边>=2 填 signal=true，49 节点全亮；signal_post.glb 程序化杆+灯箱，SignalLampComponent 溯源 + writeBack 逐灯 stateForEdge 写 tint，168 盏三色可见）+ 默认开（无关闭旗标，基线随信号重拍）。42 车红灯排队可见，600 tick odometer 82.72m 停滞（未挂接对照 3437m），det 双跑 PNG 逐字节一致。",
    "acceptance": [
-    "TrafficCarSystem selftest ⑪：init 车数/route 落表/N tick 后 Transform 落 lane 几何+yaw 单位四元数；同 seed 重建双 World memcmp 逐位一致；serialise roundtrip 无损；卡顿帧防爆（tick 10/60 恰补 8 步）；无 enabled 实体 init 显式失败",
-    "viewer --traffic-city 42 cars registered + 逐帧 odometer 日志锚单调增；--traffic-steps 75 x 8 帧 = 600 逻辑 tick 车流位移可辨",
-    "确定性：同参数双跑 PNG fc /b 逐字节一致（DX12）",
-    "负向：roadnet.json 缺失 exit 2 + cannot open 锚；usage 含 --traffic-city 段",
-    "t3 run.bat ALL GREEN（selftest + top/street 双后端 4 图 + det 对拍 + negative + usage）"
+    "TrafficCarSystem selftest ⑫：initControl 负向（before init/空 JSON/坏 JSON/重复/registerLamp 未知节点）+ autoSignal 语义（缺省 8/2/1 时序不动）+ 灯 tint 全查（代表性帧 == stateForEdge 映射 + 两相不同时绿）+ ctl.frame 逐帧推进锚 + 双 World memcmp（Transform+tint）+ roundtrip + 行为门控不等式（挂接 odometer ≤ 未挂接）",
+    "citygen selftest 98 断言：signal fill = in-degree>=2（49 true / 0 false，size 6 网格角 2/边 3/内 4）",
+    "viewer --traffic-city 42 cars + signal lamps=168 锚；600 tick odometer 82.72m 停滞 = 红灯排队（街景截图多车首尾相接可辨）",
+    "确定性：同参数双跑 PNG fc /b 逐字节一致（run.bat seg4，M-T3 收口时被误删、本轮补回）",
+    "负向：roadnet.json 缺失 exit 2；usage exit 2（traffic-tools）",
+    "t3 run.bat 六段 ALL GREEN（selftest + top/street 双后端 4 图 + det 对拍 + negative + usage）",
+    "citygen ↔ 交通接口：t3 roadnet.json = 新 city-tools generate（seed 12345 size 6 同参数，除 signal 位逐字节同 w0-m3 产物，diff 屏蔽 signal 后 GEOMETRY IDENTICAL 实证）"
    ],
    "preview": "example/t3-traffic-city/t3-city-top.png",
    "exe": {

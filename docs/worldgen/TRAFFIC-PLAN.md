@@ -156,3 +156,62 @@ viewer 截图（双后端双机位，车位移可见）+ 日志锚（traffic-cit
 ### 11.4 冻结面
 
 M-T0/T1/T2 全部交付物语义冻结（TrafficSim 仅纯新增 `carPose`；既有 selftest 锚不变，断言总数锚随新段更新）；renderer/kStage/既有版本卡零触碰；t0/t1/t2 卡与夹具不动。
+
+## 12. M-T4 立项（2026-11-14，用户拍板「A A A 默认开」）
+
+红绿灯可视化 + 信号调度接通引擎。立项缘由：M-T3 实读发现 `TrafficCarSystem::init`
+未设 `sim_.params.control`（恒 nullptr）——viewer 模式下 M-T1/T2 的信号+占用锁+
+gap-out 全部未生效（「白做」实锤）；且 t3 的 roadnet.json 零 signal 节点（citygen
+填充挂账 W 轨）。证据（2026-11-14 实读）：UE ZoneGraph 本体无信号概念、TrafficLight
+在 City Sample 不在引擎目录（不可读，行为以 M-T1/T2 已验证 TrafficControl 契约为准）；
+bevy 无交通信号模块；Carrot System 生命周期口径 M-T3 已复核。渲染零新特性——每帧
+objects 原地刷新含 tint（viewer main.cpp updateEcsObjects 路径），变色 = 改
+ModelComponent.tint。无现成红绿灯 mesh，手写 glb 生成脚本先例充足
+（make-multi-material-glb.py 等 chunk 打包链）。
+
+### 12.1 Q-T15 信号源 —— A（采纳）
+
+`TrafficCarSystem` 扩展持 `TrafficControl`（值成员），新增 `initControl(json, len,
+autoSignal, err)`（init 之后调用：graph_ 已就绪 → `buildFromRoadnetJson` →
+autoSignal 时全部受控节点置 `signal=true`（时序用 NodeControl 缺省 8/2/1s +
+gap_out 0 固定周期）→ `sim_.params.control` 指上）。roadnet `signals[]` 条目仍优先
+消费（契约只加不减）；citygen 后续填充 signals 时自动走显式条目。B（只认 JSON 手补）
+否——49 节点手写不现实且 citygen 再生成即覆盖；C（citygen 填充）并 W 轨不在本轮。
+
+### 12.2 Q-T16 摆件形态 —— A（采纳）
+
+`scripts/make-signal-post-glb.py` 手写最小 GLB 产 `assets/models/signal_post.glb`：
+杆（0.12×3.2×0.12，baseColor 深灰）+ 灯箱（0.42×1.05×0.28，baseColor 白）双
+primitive。tint 乘色语义：灯箱白 × 红/黄/绿 tint = 纯色灯面，杆深灰 × tint ≈ 近黑
+（远观不干扰）。每受控节点 × 每进入边一盏（面向来车、停车线右侧），实体名
+`signal_<node>_<edge>`。B（球体挂节点中心）否——无方向性；C（路面色块）质感升级
+另立项。
+
+### 12.3 Q-T17 驱动与验收 —— 采纳
+
+灯实体由 viewer `--traffic-city` 分支创建（`newEntity` + Transform + Model +
+`SignalLampComponent{nodeId, edgeId}`，POD 零 nl/traffic 依赖），flush 后逐灯
+`registerLamp` 显式注册进系统（系统不自扫纪律）；`writeBack` 顺手逐灯
+`stateForEdge` 写 `ModelComponent.tint`（Green=[0.1,0.85,0.15] / Yellow=[1,0.75,0]
+/ Red=[0.9,0.1,0.08]）。**默认开**（无关闭旗标，修复白做应默认可见；t3 卡 600 tick
+位姿随红灯排队变化 → 4 张基线重拍一次 + cases.json 锚同步）。验收：selftest ⑫ 段
+（control 挂接确定性 memcmp / 灯 tint 与 stateForEdge 一致 / roundtrip /
+autoSignal 语义）+ 截图（红灯排队 + 灯箱三色可见）+ 日志锚
+（`traffic-city: N signal lamps`）+ cases.json t3 卡更新。
+
+### 12.4 冻结面
+
+t0~t2 卡与夹具零触碰（t2 sim 锚 4740 断言数随 ⑫ 段新增更新，t0/t1/t2/t3 run.bat
+selftest 锚同步）；TrafficControl 语义零改动（只读消费）；kStage 不 bump；kenny 车
+资产与 M-T3 route 生成口径不动（control 挂接只影响门控，不影响 route）。
+
+### 12.5 补段：citygen signal 填充（2026-11-14 用户中途加码「感应信号 citygen 填充 一起做吧」）
+
+原 W 轨挂账项并入 M-T4。`city-tools serializeRoadnet` 按进入边 >= 2 填
+`nodes[].signal`（与 TrafficControl 受控口径同构——端点死路进不了控制面填 false；
+size 6 网格角 2/边 3/内 4 条进入边 -> 49 节点全 true）；时序走消费端 NodeControl
+缺省（8/2/1s 固定周期），`signals[]` 显式条目契约不变（只加不减）。旧口径
+「citygen 恒 false」（W0-PLAN §1）同步废止（RoadnetNode 头注已勘误）。t3 资产
+roadnet.json 用新 city-tools 重生成（seed 12345 size 6 同参数，diff 屏蔽 signal 位
+后与 w0-m3 产物 GEOMETRY IDENTICAL 实证）；w0-m3 卡锚（intersection 计数/stats）
+不受影响零重拍。citygen selftest +1 断言（signal fill = in-degree>=2，98 断言）。

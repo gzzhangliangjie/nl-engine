@@ -132,3 +132,35 @@ ECS 写回（init 车数/route 落表/N tick Transform 落 lane 几何 + yaw 单
 - `example/t3-traffic-city/run.bat` 六段 ALL GREEN（selftest / top+street 双后端 4 图 + register/odometer 锚 / det 双跑 PNG fc 逐字节 / negative exit 2 / usage exit 2）。
 - 回归 `--only t3-traffic-city` 4/4 + `t2-traffic` 12/12 + `t0-traffic` 12/12 全 bytes；cases.json 卡 134（selftest 断言数锚 4685→4740 七处同步，t2 run.bat 锚同步）。
 - 车流证据：600 逻辑 tick odometer 3437.15m 单调；街景机位车流位移/朝向可辨（w3-m1 静态基线同机位对照无渲染回归）。
+
+## 10. M-T4 信号挂接 + 红绿灯摆件（traffic-m4，2026-11-14）
+
+拍板与证据链见 `TRAFFIC-PLAN.md` §12（Q-T15=A autoSignal / Q-T16=A signal_post.glb / Q-T17=A SignalLampComponent+系统写 tint / 默认开）。立项缘由：M-T3 实读发现 `TrafficCarSystem::init` 未挂 `sim_.params.control`——M-T1/T2 的信号+占用锁+gap-out 在引擎内从未生效。
+
+### 10.1 新增交付物（core）
+
+| 文件 | 内容 |
+|---|---|
+| `nl/scene/SignalLampComponent.hpp` + `core/src/scene/SignalLampComponent.cpp` | POD 组件（nodeId/edgeId 溯源），零 nl/traffic 依赖；serialise roundtrip |
+| `TrafficCarSystem` 扩展 | 值持 `TrafficControl`；`initControl(json,len,autoSignal,err)`（init 后调用：buildFromRoadnetJson → autoSignal 置全部受控节点 signal=true（缺省 8/2/1s 固定周期）→ `sim_.params.control` 指上）；`registerLamp(id,nodeId,edgeId,err)`（显式注册，nodeIdx 缓存）；writeBack 逐灯 `stateForEdge` → `ModelComponent.tint`（Green [0.10,0.85,0.15] / Yellow [1.0,0.75,0] / Red [0.90,0.10,0.08]）；duplicate 重接 graph+control 双指针 |
+| `scripts/make-signal-post-glb.py` → `assets/models/signal_post.glb` | 手写最小 GLB（chunk 打包先例链）：杆（0.12×3.2×0.12 深灰）+ 灯箱（0.42×1.05×0.28 白）；tint 乘色 = 箱纯色杆近黑；+Z 面板向来车 |
+
+### 10.2 viewer 接线（--traffic-city 分支，默认开）
+
+激活段（SpinSystem/ReadCountSystem 类 + ticking + traffic-city）整体前移到渲染收集段之前——灯实体必须先于 `modelIds`/objects 收集存在，否则不在实例表里不渲染（M-T4 实读发现的 M-T3 位置约束）。灯创建：每受控节点 × 每进入边一盏 `signal_<node>_<edge>`，位置 = 停车线（末端 -forward×2.5m）右侧路缘外 1.2m（offset 最大的 lane = 最靠右），yaw = atan2(-fx,-fz)（+Z 面向来车）；`newEntity` + Entity.addComponent（nav-crowd flush 前挂组件先例）+ flush。日志锚：`traffic-city: N cars registered | lanes= L | signal lamps= M | ...`。
+
+### 10.3 selftest ⑫（traffic-tools）
+
+负向（initControl before init / 空 JSON / 坏 JSON / 重复调用 / registerLamp 未知节点）／autoSignal 语义（4 节点全 signal=true + 缺省 8/2/1 时序不动）／灯 tint 全查（代表性帧窗口逐灯 == stateForEdge 映射 + 两相不同时绿）／`ctl.frame` 逐帧推进锚（挂接生效证据）／确定性（同 seed + initControl 双 World：Transform+tint 逐位 memcmp）／roundtrip／行为门控不等式（挂接 odometer ≤ 未挂接）。
+
+### 10.4 citygen signal 填充（用户加码并入）
+
+`city-tools serializeRoadnet` 按进入边 >= 2 填 `nodes[].signal`（TrafficControl 受控口径同构；时序缺省，signals[] 条目契约只加不减）；旧口径「citygen 恒 false」废止。t3 roadnet.json 重生成（同 seed/size，除 signal 位逐字节同 w0-m3 产物）；w0-m3 卡零重拍（锚不含 signal）。citygen selftest 98 断言（+1 signal fill 锚）。
+
+### 10.5 验收记录
+
+- selftest：traffic **5244 断言**（⑫ 段 504 断言）+ citygen **98 断言**（+1）双绿。
+- `example/t3-traffic-city/run.bat` 六段 ALL GREEN（含 seg4 det 双跑 PNG fc /b——**M-T3 收口时 seg4 被 seg2/3 显式化重写误删、本轮发现并补回**，此前 det 验收实际由 cases.json 回归 bytes 对拍兜底）。
+- 信号生效证据：600 逻辑 tick odometer **82.72m 停滞**（M-T3 未挂接对照 3437m）——42 车红灯首尾相接排队街景可辨；168 盏 signal_post 灯箱红/绿异态（俯视+街景四图）。
+- 回归与 ctest：见 MILESTONES M-T4 台账（收口数字）。
+- 纠偏留痕：摆件方案时「42 节点受控」表述有误——size 6 全部 49 节点进入边 >= 2（角 2/边 3/内 4），受控 49、灯 168 = Σ进入边。

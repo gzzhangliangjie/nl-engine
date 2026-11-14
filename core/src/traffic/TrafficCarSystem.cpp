@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "nl/scene/SignalLampComponent.hpp"   // P8 M-T4：灯组件（POD）
+
 namespace nl::traffic {
 namespace {
 
@@ -38,14 +40,18 @@ std::unique_ptr<nl::scene::System> TrafficCarSystem::duplicate(
     auto copy = std::make_unique<TrafficCarSystem>(newOwner);
     copy->graph_ = graph_;
     copy->sim_ = sim_;
+    copy->control_ = control_;
+    copy->controlAttached_ = controlAttached_;
     copy->fixedDt_ = fixedDt_;
     copy->accumulator_ = accumulator_;
     copy->stepCount_ = stepCount_;
     copy->ready_ = ready_;
     copy->error_ = error_;
     copy->ids_ = ids_;
-    // sim_.graph 指针指向自身 graph_ 的地址会随拷贝失效，重建：
+    copy->lamps_ = lamps_;
+    // sim_.graph / sim_.params.control 指向自身成员的地址会随拷贝失效，重建：
     if (copy->ready_) copy->sim_.graph = &copy->graph_;
+    if (copy->controlAttached_) copy->sim_.control = &copy->control_;
     return copy;
 }
 
@@ -157,6 +163,61 @@ bool TrafficCarSystem::init(const LaneGraph& graph, const TrafficSimParams& para
     return true;
 }
 
+bool TrafficCarSystem::initControl(const char* roadnetJson, size_t len,
+                                   bool autoSignal, std::string& err) {
+    error_.clear();
+    err.clear();
+    if (!ready_) {
+        err = "traffic-car system: initControl before init (graph not ready)";
+        error_ = err;
+        return false;
+    }
+    if (controlAttached_) {
+        err = "traffic-car system: initControl called twice";
+        error_ = err;
+        return false;
+    }
+    if (!roadnetJson || len == 0) {
+        err = "traffic-car system: initControl empty roadnet json";
+        error_ = err;
+        return false;
+    }
+    std::string berr;
+    if (!control_.buildFromRoadnetJson(roadnetJson, len, &graph_, &berr)) {
+        err = "traffic-car system: control build failed: " + berr;
+        error_ = err;
+        return false;
+    }
+    // Q-T15=A autoSignal：显式 signals[] 条目 build 时已消费（signal=true +
+    // 自定义时序）；这里只给余下受控节点补默认两相（缺省时序在 NodeControl
+    // 缺省值：8/2/1s + gap_out 0 = 固定周期，确定性优先于感应）。
+    if (autoSignal) {
+        for (NodeControl& n : control_.nodes) n.signal = true;
+    }
+    sim_.control = &control_;
+    controlAttached_ = true;
+    return true;
+}
+
+bool TrafficCarSystem::registerLamp(nl::scene::EntityID id, std::int32_t nodeId,
+                                    std::int32_t edgeId, std::string& err) {
+    err.clear();
+    const int32_t nIdx = control_.findNode(nodeId);
+    if (nIdx < 0) {
+        err = "traffic-car system: registerLamp node " +
+              std::to_string(nodeId) + " not controlled";
+        error_ = err;
+        return false;
+    }
+    LampRef ref;
+    ref.id = id;
+    ref.nodeId = nodeId;
+    ref.edgeId = edgeId;
+    ref.nodeIdx = static_cast<size_t>(nIdx);
+    lamps_.push_back(ref);
+    return true;
+}
+
 void TrafficCarSystem::tick(double dt) {
     if (!ready_) return;
     // NavAgent 同款累加器：每步积分恒 fixedDt_，卡顿帧 maxSteps 防爆。
@@ -192,6 +253,29 @@ void TrafficCarSystem::writeBack() {
         t->local.position = {p.x, 0.0f, p.z};
         const float hy = yaw * 0.5f;
         t->local.rotation = {0.0f, std::sin(hy), 0.0f, std::cos(hy)};
+    }
+
+    // P8 M-T4（Q-T17=A）：灯态 -> ModelComponent.tint（渲染每帧 objects 原地
+    // 刷新消费，零新渲染特性）。control 未挂接 = 灯不更新（保持初色）。
+    if (controlAttached_) {
+        for (const LampRef& lamp : lamps_) {
+            auto* m = world_.getComponent<nl::scene::ModelComponent>(lamp.id);
+            if (!m) continue;
+            const SignalState st =
+                control_.stateForEdge(lamp.nodeIdx, lamp.edgeId);
+            switch (st) {
+            case SignalState::Green:
+                m->tint = {0.10f, 0.85f, 0.15f};
+                break;
+            case SignalState::Yellow:
+                m->tint = {1.00f, 0.75f, 0.00f};
+                break;
+            case SignalState::Red:
+            default:
+                m->tint = {0.90f, 0.10f, 0.08f};
+                break;
+            }
+        }
     }
 }
 

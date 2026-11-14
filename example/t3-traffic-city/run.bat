@@ -9,7 +9,7 @@ set "TOOL=%ROOT%\build\DX12\traffic-tools.exe"
 set "CITY=%~dp0"
 set "OUT=%~dp0"
 
-echo [seg1] traffic-tools selftest (M-T3 segment 11 included)
+echo [seg1] traffic-tools selftest (M-T3/M-T4 segments 11+12 included)
 "%TOOL%" selftest > "%OUT%selftest.log" 2>&1
 findstr /c:"traffic selftest: PASS" "%OUT%selftest.log" >nul || (
     echo [ERROR] traffic selftest not PASS
@@ -19,10 +19,12 @@ findstr /c:"traffic selftest: PASS" "%OUT%selftest.log" >nul || (
 echo [seg2] viewer top-down renders (traffic driving, both backends)
 "%EXE%" --traffic-city "%CITY%." --traffic-steps 75 --no-hud --screenshot "%OUT%t3-city-top.png" --frames 8 --size 960x540 --yaw 0 --pitch -89 --dist 48 > "%OUT%t3-top-DX12.log" 2>&1
 findstr /c:"traffic-city: 42 cars registered" "%OUT%t3-top-DX12.log" >nul || ( echo [ERROR] register anchor missing DX12 & exit /b 1 )
+findstr /c:"| signal lamps=" "%OUT%t3-top-DX12.log" >nul || ( echo [ERROR] signal lamps anchor missing DX12 & exit /b 1 )
 findstr /c:"traffic-city: frame=" "%OUT%t3-top-DX12.log" >nul || ( echo [ERROR] odometer anchor missing DX12 & exit /b 1 )
 findstr /c:"screenshot written" "%OUT%t3-top-DX12.log" >nul || ( echo [ERROR] top DX12 shot missing & exit /b 1 )
 "%ROOT%\build\VULKAN\viewer.exe" --traffic-city "%CITY%." --traffic-steps 75 --no-hud --screenshot "%OUT%t3-city-top-VULKAN.png" --frames 8 --size 960x540 --yaw 0 --pitch -89 --dist 48 > "%OUT%t3-top-VULKAN.log" 2>&1
 findstr /c:"traffic-city: 42 cars registered" "%OUT%t3-top-VULKAN.log" >nul || ( echo [ERROR] register anchor missing VULKAN & exit /b 1 )
+findstr /c:"| signal lamps=" "%OUT%t3-top-VULKAN.log" >nul || ( echo [ERROR] signal lamps anchor missing VULKAN & exit /b 1 )
 findstr /c:"screenshot written" "%OUT%t3-top-VULKAN.log" >nul || ( echo [ERROR] top VULKAN shot missing & exit /b 1 )
 
 echo [seg3] viewer street renders (both backends)
@@ -30,6 +32,11 @@ echo [seg3] viewer street renders (both backends)
 findstr /c:"screenshot written" "%OUT%t3-street-DX12.log" >nul || ( echo [ERROR] street DX12 shot missing & exit /b 1 )
 "%ROOT%\build\VULKAN\viewer.exe" --traffic-city "%CITY%." --traffic-steps 75 --no-hud --screenshot "%OUT%t3-city-street-VULKAN.png" --frames 8 --size 960x540 --yaw 28 --pitch -10 --dist 30 > "%OUT%t3-street-VULKAN.log" 2>&1
 findstr /c:"screenshot written" "%OUT%t3-street-VULKAN.log" >nul || ( echo [ERROR] street VULKAN shot missing & exit /b 1 )
+
+echo [seg4] determinism: same args twice, PNG byte-identical
+"%EXE%" --traffic-city "%CITY%." --traffic-steps 75 --no-hud --screenshot "%OUT%t3-det-a.png" --frames 8 --size 960x540 --yaw 0 --pitch -89 --dist 48 > "%OUT%t3-det-a.log" 2>&1
+"%EXE%" --traffic-city "%CITY%." --traffic-steps 75 --no-hud --screenshot "%OUT%t3-det-b.png" --frames 8 --size 960x540 --yaw 0 --pitch -89 --dist 48 > "%OUT%t3-det-b.log" 2>&1
+fc /b >nul "%OUT%t3-det-a.png" "%OUT%t3-det-b.png" || ( echo [ERROR] traffic PNG not deterministic & exit /b 1 )
 
 echo [seg5] negative: missing roadnet.json (expect exit 2)
 mkdir "%OUT%empty-dir" 2>nul
