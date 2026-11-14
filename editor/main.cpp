@@ -75,6 +75,19 @@ std::string capsSummary(const RpcValue& caps) {
 
 } // namespace
 
+// M-E8：引擎 sceneChanged 推送旗标——定义须在匿名 namespace 外（plugin.hpp 的
+// extern 是全局外部链接；落进匿名 namespace = 内部链接双实体 = C2872 不明确符号）。
+std::atomic<bool> g_sceneTreeDirty{false};
+
+// M-E9/M-E10：outliner 选中实体（同 g_sceneTreeDirty 链接口径；-1 = 无选中）。
+std::atomic<long long> g_sceneSelEntity{-1};
+
+// M-E13：outliner selftest 钩子（--selftest-outliner 置 1）。离断桌面会话
+// 合成点击被 TOPMOST 遮挡窗抢走（M-E13 实证）→ 多选/框选证据走确定性路径：
+// 插件每帧检查此旗标，t>5s 自动注入多选态（真实 ImGui 帧渲染高亮/计数/按钮），
+// t>8s 自动执行批量删除（真实 RPC 链）。触发自动化、状态与渲染全真。
+std::atomic<int> g_outlinerSelftest{0};
+
 static void glfwErrCb(int code, const char* msg) {
     fprintf(stderr, "[glfw] %d: %s\n", code, msg ? msg : "(null)");
 }
@@ -84,6 +97,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--rpc-endpoint" && i + 1 < argc) endpoint = argv[++i];
+        if (a == "--selftest-outliner") g_outlinerSelftest.store(1);
     }
 
     glfwSetErrorCallback(glfwErrCb);
@@ -113,6 +127,11 @@ int main(int argc, char** argv) {
         if (p.isStr()) logf("[engine] %s", p.asStr().c_str());
     });
     g_host.registerNotify("rpc.ping", [](const RpcValue&) {}); // pong 由 host 定向回
+    // M-E8：场景变更推送 → 置 dirty 旗标，SceneOutlinerPlugin 下一帧自动刷新
+    // （拉增量 = 重发 scene.getTree；200ms 防抖在插件侧做，防引擎连变刷爆 UI）。
+    g_host.registerNotify("editor.sceneChanged", [](const RpcValue&) {
+        g_sceneTreeDirty.store(true);
+    });
 
     // M-E6：视图注册表（探针/插件可查当前连入的引擎进程）
     g_host.registerHandler("editor.views", [](const RpcValue&) -> RpcResult {

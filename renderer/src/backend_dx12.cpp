@@ -370,6 +370,12 @@ public:
         return scene_.updateObjects(device_, objects, objectCount, outError);
     }
 
+    // M-E7（Q-E7-1 拍板 A）：转发 scene_.updateLights（灯缓冲按需更新）。
+    bool updateEcsLights(const SceneLightDesc* lights, std::uint32_t lightCount,
+                         float ambient, std::string& outError) override {
+        return scene_.updateLights(device_, lights, lightCount, ambient, outError);
+    }
+
     // M-PT1：.nfx v1 加载端（转发 scene_.loadParticlesNfx；运行时零 Effekseer）。
     bool loadParticlesNfx(const char* path, std::string& outError) override {
         return scene_.loadParticlesNfx(path, outError);

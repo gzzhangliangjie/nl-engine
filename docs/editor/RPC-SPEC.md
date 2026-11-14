@@ -205,6 +205,65 @@
 
 > `editor.views` / `editor.pingView` / `editor.callView` 由 `editor/main.cpp` 注册在 host 上，供探针与插件查询/定向调用；引擎侧 handler 集合（`engine.echo` / `camera.*` / `scene.*`）M-E6 零改动。
 
+### M-E7 实装（模型预览 + cvar 反射通道）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `camera.preset` | 编辑器→引擎 | `{name:str}`：`front`(yaw0,pitch0) / `back`(180) / `left`(90) / `right`(-90) / `top`(pitch→83.0789 clamp) / `iso`(45, 35.264) | `{name,yaw,pitch,dist}`（回读实际值；`top` pitch 钳到 OrbitCamera 上限 ±1.45 rad）；未知 preset error 101 |
+| `engine.cvar.list` | 编辑器→引擎 | `{prefix?:str}` | `[{name,type,value,help}]`（Console 全量 cvar 按 prefix 过滤） |
+| `engine.cvar.get` | 编辑器→引擎 | `{name:str}` | `{name,type,value,help}`；未知 cvar error 100 |
+| `engine.cvar.set` | 编辑器→引擎 | `{name:str, value:str}`（`setFromString` 语义） | 更新后的 `{name,type,value,help}`；未知 cvar error 100、类型拒绝 error 101 |
+
+> **参数通道口径（拍板）**：`engine.cvar.*` 是反射胶水层的 RPC 面——引擎原生参数注册成 cvar（M-E7 落了 `light.sunAzimuth/sunElevation/ambient` 三个），脚本组件字段后续走 M-SC10 `[Prop]` 描述表；RPC 只做传输，不再手写每参数 handler（M-E5 的 `scene.setMaterial` 保留为既有面）。
+> **CLI 旗标（viewer）**：`--preview` = mode scene + `assets/scenes/preview.scene.json`（用户显式 `--mode`/`--scene` 优先）；`--preview-model <glb名>` = 预览场景 JSON 反序列化后按实体名 `preview-model` 覆写 meshFile（坏名 exit 2）。
+
+### M-E8 实装（场景树层级 + 变更推送）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.getTree` | 编辑器→引擎 | — | `{mode, count, nodes:[{id:u64, name:str, parent:u64(0=无父), idx:i64(-1=无 Model 实例行), kind:"model"\|"light"\|"empty", mesh?, tint?:[3], rough?, metal?, lightType?, intensity?}]}`（World 全集实体含无 Model 的灯/空实体；idx = sceneObjects 下标，仅 kind="model" 可用 focus/setMaterial；roots 由编辑器侧按 parent==0 归组，悬空父按根处理） |
+| `editor.sceneChanged` | 引擎→编辑器 notify | `{}` | —（引擎每帧对 World 全集算 FNV1a 指纹（id/name/parent + Model tint/rough/metal/mesh + Light type/intensity/color/direction），变化帧 notify 一次；**tick off 的 preview/scene 也生效**（指纹在 ticking 块外）。编辑器侧 `registerNotify` 置 `g_sceneTreeDirty`，SceneOutlinerPlugin 200ms 防抖后自动重拉 getTree，替换手动 Refresh） |
+
+> **M-E8 行为变更（覆盖 M-E5 口径）**：`scene.setMaterial` 的 tint/rough/metal 改动**写回 World `ModelComponent`**（源头单写）——M-E5 原实现只改渲染收集表 `sceneObjects`，tick 开启时下一帧即被 World 旧值冲掉、树/指纹无感；M-E8 起写回 World，帧循环自然传导、指纹捕获、scene.getTree 同步。M-E7 探针既有 setMaterial 断言复验 0 fail。
+
+### M-E9 实装（场景树编辑操作）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.rename` | 编辑器→引擎 | `{id:u64, name:str}` | `{ok:1, id, name}`；未知实体 error 100 / 参数缺失 error 101 |
+| `scene.setParent` | 编辑器→引擎 | `{id:u64, parent:u64(0=解除)}`（纯关系，不动变换） | `{ok:1, id, parent}`；未知实体/父 error 100，parent==self / 成环 error 101（World assert 的 RPC 化） |
+| `scene.reparent` | 编辑器→引擎 | `{id:u64, parent:u64(0=解除)}`（保世界变换挂父） | 同 setParent |
+| `scene.addEntity` | 编辑器→引擎 | `{name?:str, parent?:u64, kind:"empty"\|"light"\|"model", mesh?:str, lightType?:0\|1, intensity?:f}` | `{ok:1, id, name, kind}`；model 自动挂 Transform（收集段硬要求）；meshFile 白名单 + **存在性校验**（`NL_ASSET_DIR` 下 is_regular_file，防坏实体触发 rebuild → loadEcsScene 失败 → 渲染循环退出）；校验失败 error 101；未知 kind / 点光 shadow error 101；未知父 error 100；flush 即时落表 |
+| `scene.removeEntity` | 编辑器→引擎 | `{id:u64}`（父删递归删子；flush 即时落表） | `{ok:1, id}`；未知实体 error 100 |
+| `editor.sceneChanged` | 引擎→编辑器 notify | `{}` | 指纹扩域（M-E9/M-E10）：+ Light position/range/shadow + Transform position/scale/rotation |
+
+> **M-E9 渲染传导（M-SC7 块移出 ticking 扩灯集）**：集合签名 = Model(id, meshFile) + 灯实体 id 序（从 World 现算——`lightIds` 只在 rebuild 更新不能当签名源）；**签名比对移至帧尾 ticking 块外**（tick on 语义等价：集合稳定点 = 帧尾；tick off 的 preview/scene 缺省同样每帧比对）；rebuild = 重收 modelIds/objects/lights/lightIds + preview key 重注入 + loadEcsScene（initScene 可重入）+ **重建后实例数据当帧上屏**（本块在 ticking 上传点之后执行）。灯参数变更不走重建（setProp 直写 lights[i] + updateEcsLights 单 upload）。
+> **编辑 handler 仅 scene 模式注册**（bindSceneEdit；model 模式 = method not found error 100）。
+
+### M-E10 实装（对象级参数泛化面）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.getProps` | 编辑器→引擎 | `{id:u64}` | `{id, name, props:[{component:"Transform"\|"Model"\|"Light", name:str, type:"float"\|"vec3"\|"color"\|"quat"\|"int"\|"bool"\|"string", value, min?, max?}]}`（显式描述表遍历；M-SC10 PropAttribute 同构口径：name/type/Range 显式注册，Default 不注册 = 现值快照）；未知实体 error 100 |
+| `scene.setProp` | 编辑器→引擎 | `{id:u64, component:str, name:str, value}`（显式分发，反射胶水层终点——RPC 只传输） | `{ok:1, id, component, name}`；写回 World 源头单写 + 渲染直写：Transform → objects[i].world 直刷；Model 材质 → objects[i] 三字段直刷；Light → lights[i] 重算 + updateEcsLights 单 upload；meshFile → 集合签名重建。未知 prop/组件 error 100，类型不符 / 点光 range≤0 / 点光 shadow / meshFile 白名单或不存在 error 101（点光约束写前拒绝不留半态） |
+
+> **M-E10 描述表现量**（新增组件字段 = 引擎侧表加一行，面板零改动）：Transform.position/scale(vec3)/rotation(quat)、Model.meshFile(string)/tint(color)/roughness/metallic(float 0..1)、Light.type(int 0..1)/direction(vec3)/color(color)/intensity(float 0..20)/position(vec3)/range(float 0.1..100)/shadow(bool)。编辑器侧 `PropertyPanelPlugin`（Properties 面板）按 type 渲染通用控件；`SceneOutlinerPlugin` 首次拉取自动选中首个根节点（`g_sceneSelEntity` 共享选中态，离断桌面会话合成点击不可靠 → 面板证据走确定性路径）。
+
+### M-E12 实装（编辑 undo-redo）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.undo` | 编辑器→引擎 | `{}` | `{ok:1, undoDepth, redoDepth}`；栈空 error 102 / 重建失败 error 103 |
+| `scene.redo` | 编辑器→引擎 | `{}` | 同 undo |
+
+> **M-E12 命令栈语义**（viewer 侧单源，RPC 与 GUI 编辑共用；深度上限 128）：五类编辑操作成功路径记录逆操作（`editPushUndo` 清 redo 栈——新编辑作废重做分支）：Rename{sa/sb 旧新名}、Link{parent/parentNew 旧新父 + wasReparent 通道记忆}、Prop{grabProp 写前旧值 + 写后回读新值（含钳制真值），comp/name/kind 载荷}、Structural{删除**前**子树快照（拓扑+组件全字段）+ **undoIsDelete 方向位**}。Rename/Link/Prop 双向执行体同构 = 执行当前正向侧 + swap 双值 + 压对侧栈；Structural 双向 = doStructural(act)：act=true 删除（重抓快照保 removed 与 id 对齐）、act=false 重建（活父直挂/快照父映射）→ **remapStacks 修正双栈顶层与快照内部全部 id 引用**；动作由来源栈决定（undo 栈 act=undoIsDelete、redo 栈取反，执行后不翻转——同 cmd 双栈往返动作交替由栈来源天然保证）。空栈 error 102；编辑器侧 Undo/Redo 按钮 + Ctrl+Z/Ctrl+Y。
+> **闭包存活口径（本轮坑）**：bindSceneEdit 局部 lambda（snapshotSubtree/pushStructural/applyPropValue/applyPropSide/execUndo/execRedo）被 handler 捕获后随 bridge handler 表持久存活——**按引用捕获局部量 = 悬垂 UB**，全链按值捕获（M-E9 既有 handler 同口径）。
+
+### M-E13 实装（outliner 多选 + 框选）
+| 面 | 机制 | 说明 |
+|---|---|---|
+| Ctrl+点击 | `selSet_` toggle | 不驱动 focus（避免 orbit 相机乱跳）；`g_sceneSelEntity` 恒 = 最后点击（Properties 面板保持单选消费） |
+| Shift+点击 | 范围选 | nodes_ 序 between 上次点击与本次（锚 = lastClickId_） |
+| 框选拖拽 | `drawBoxSelect` | 树区左键拖 >4px 画前景 overlay 矩形；松开收集可见节点 item rect 相交（UE 同口径相交即选）；`box-selected N` 状态行 |
+| 批量操作 | Delete selected / Reparent selected | 循环走既有 scene.removeEntity / scene.reparent（viewer undo 栈逐条 push，Undo 可撤） |
+
+> **M-E13 验收口径（确定性路径拍板延续）**：SendInput 点击链被用户桌面 TOPMOST 遮挡窗抢走（2026-11-14 三轮实证，坐标本身无误——PIL 像素实测行高 17px）→ `editor --selftest-outliner` 钩子走确定性路径：t>5s addEntity 两测试实体（真实 RPC）→ 树刷新后注入双节点多选态 → t>15s 批量删除测试实体（**不删 preview-\* 基线——删空场景 rebuild 拖死 viewer，2026-11-14 实证 crash-isolation**）→ t>20s Undo 一次树复原。机械判据 = Selected 高亮行像素带（ImGuiCol_Header 实测 RGB(31,57,88)，y547-558/564-576 两带）+ `selected: 2` 计数 + 批量按钮上屏。
+
 ---
 
 ## 11. C++ 引擎侧接口契约（`editor_bridge`，vendored、零运行时依赖）

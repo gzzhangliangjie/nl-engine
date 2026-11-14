@@ -2,8 +2,13 @@
 #include "plugin.hpp"
 #include <imgui.h>
 #include <windows.h>
+#include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <set>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace nl::editor::ui {
 
@@ -120,88 +125,285 @@ private:
     float  fov_ = 60.0f, dist_ = 4.2f, yaw_ = 0.0f, pitch_ = 35.0f;
 };
 
-// M-E4d：场景树插件——scene.getState 拉实例表（mesh/pos/tint/rough/metal），
-// 点击行调 scene.focus 让引擎 orbit 相机对准该对象。model 模式引擎返回
-// mode="model" 空表，插件显示占位说明。
+// M-E4d：场景树插件（M-E8 升级：层级树 + sceneChanged 自动刷新）。
+// scene.getTree 拉 World 全集节点（id/name/parent/idx/kind/mesh/tint...），
+// 编辑器侧按 parent==0 归根递归渲染；引擎 notify editor.sceneChanged →
+// g_sceneTreeDirty 置位 → 200ms 防抖后自动重拉（替换手动 Refresh）。
+// 点击 model 节点调 scene.focus 让引擎 orbit 相机对准该对象。model 模式
+// 引擎返回 mode="model" 空节点表，插件显示占位说明。
 class SceneOutlinerPlugin : public Plugin {
 public:
     const char* name() const override { return "Scene Outliner"; }
     void draw(RpcHost* host) override {
         if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
-        // M-E4d：连接后首帧自动拉取（engine 掉线重连后 have_ 已被清，也会自动再拉）
-        if (!have_ && host->isConnected()) refresh(host);
+        // M-E8：引擎 sceneChanged 推送 → dirty 消费（200ms 防抖防连变刷爆 UI）。
+        // 只有 dirty 才自动刷；autoOn_ 关 = 全手动（Refresh 按钮）。
+        const bool dirty = g_sceneTreeDirty.exchange(false);
+        const double now = ImGui::GetTime();
+        if (dirty)
+            printf("[outliner] dirty at t=%.1f haveTree=%d auto=%d\n", now,
+                   (int)haveTree_, (int)autoOn_), fflush(stdout);
+        if (haveTree_ && dirty && autoOn_ && now - lastRefresh_ > 0.2) refresh(host);
+        else if (dirty) g_sceneTreeDirty.store(true);   // 防抖期吞掉的通知还回去
+        if (!haveTree_ && host->isConnected()) refresh(host);
         if (ImGui::Button("Refresh")) refresh(host);
         ImGui::SameLine();
-        if (!have_) {
+        ImGui::Checkbox("auto", &autoOn_);   // M-E8：推送自动刷新开关（缺省开）
+        ImGui::SameLine();
+        if (!haveTree_) {
             ImGui::TextDisabled("state: not fetched");
             return;
         }
-        ImGui::Text("mode: %s  objects: %d", mode_.c_str(), (int)rows_.size());
+        ImGui::Text("mode: %s  entities: %d", mode_.c_str(), (int)nodes_.size());
         if (mode_ == "model") {
-            ImGui::TextDisabled("(model mode: 单模型无实例表；--mode scene 可看实例树)");
+            ImGui::TextDisabled("(model mode: 单模型无实例树；--preview/--scene 可看层级)");
             return;
         }
-        if (rows_.empty()) return;
-        // 实例表：行首 # + mesh 名；点击行 = scene.focus（引擎把 orbit 相机对准该对象）
-        ImGui::BeginChild("outliner_rows", ImVec2(0, 160), ImGuiChildFlags_Borders);
-        ImGui::Columns(4, nullptr, false);
-        ImGui::SetColumnWidth(0, 28.0f);
-        ImGui::SetColumnWidth(1, 110.0f);
-        ImGui::SetColumnWidth(2, 96.0f);
-        for (int i = 0; i < (int)rows_.size(); ++i) {
-            const auto& r = rows_[i];
-            char label[24]; snprintf(label, sizeof label, "%d", i);
-            if (ImGui::Selectable(label, focusedIdx_ == i, ImGuiSelectableFlags_SpanAllColumns))
-                focus(host, i);
-            ImGui::NextColumn();
-            ImGui::TextUnformatted(r.mesh.c_str());          ImGui::NextColumn();
-            ImGui::Text("(%.1f, %.1f, %.1f)", r.x, r.y, r.z); ImGui::NextColumn();
-            ImGui::Text("r%.2f m%.2f", r.rough, r.metal);     ImGui::NextColumn();
-        }
-        ImGui::Columns(1);
+        if (nodes_.empty()) return;
+        // M-E8 层级树：parent==0 归根递归；节点徽标 [model]/[light]/[empty]；
+        // 点击 model 节点 = scene.focus（orbit 相机对准该对象）。
+        visibleRects_.clear();   // M-E13：框选用可见节点 rect（每帧重建）
+        const ImVec2 treeMin = ImGui::GetCursorScreenPos();
+        ImGui::BeginChild("outliner_tree", ImVec2(0, 200), ImGuiChildFlags_Borders);
+        for (int ri : roots_) drawNode(host, ri);
+        const ImVec2 treeMax = ImGui::GetCursorScreenPos();
         ImGui::EndChild();
+        drawBoxSelect(treeMin, treeMax);   // M-E13：树区拖拽框选
         if (!focused_.empty()) ImGui::Text("focused: %s", focused_.c_str());
+
+        // ---- M-E13：selftest 钩子（确定性路径；--selftest-outliner）----
+        // 三阶段状态机：t>5s add 两个测试实体（真实 addEntity RPC）→ 树刷新后
+        // 注入双节点多选态（Selected 高亮/selected 计数/批量按钮 = 真实 ImGui
+        // 帧渲染）→ t>9s 批量删除测试实体（真实 RPC 链，undo 栈逐条 push）。
+        // 不删 preview-* 基线实体（删空场景 rebuild 会拖死 viewer——2026-11-14
+        // 实证 crash-isolation）。触发自动化、状态与渲染全真。
+        if (g_outlinerSelftest.load() == 1 && mode_ == "scene" && haveTree_ &&
+            !nodes_.empty()) {
+            if (selftestStep_ == 0 && ImGui::GetTime() > 5.0) {
+                printf("[selftest] step0 add entities t=%.1f\n", ImGui::GetTime());
+                fflush(stdout);
+                msgpack::Map pa, pb;
+                pa["name"] = std::string("selftest-a");
+                pa["kind"] = std::string("empty");
+                pb["name"] = std::string("selftest-b");
+                pb["kind"] = std::string("empty");
+                rpcCall(host, "scene.addEntity", std::move(pa), "selftest add a");
+                rpcCall(host, "scene.addEntity", std::move(pb), "selftest add b");
+                selftestStep_ = 1;
+            } else if (selftestStep_ == 1) {
+                const Node* na = findNodeByName("selftest-a");
+                const Node* nb = findNodeByName("selftest-b");
+                if (na && nb) {   // 树已刷新（notify 自动拉取）
+                    printf("[selftest] step2 multi-select injected t=%.1f\n",
+                           ImGui::GetTime());
+                    fflush(stdout);
+                    selSet_.clear();
+                    selSet_.insert(na->id);
+                    selSet_.insert(nb->id);
+                    g_sceneSelEntity.store(na->id);
+                    boxSelMsg_ = "box-selected " + std::to_string(selSet_.size());
+                    selftestStep_ = 2;
+                }
+            } else if (selftestStep_ == 2 && ImGui::GetTime() > 15.0) {
+                for (long long id : selSet_) {
+                    msgpack::Map p;
+                    p["id"] = id;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "selftest removed");
+                }
+                selSet_.clear();
+                selftestStep_ = 3;
+            } else if (selftestStep_ == 3 && ImGui::GetTime() > 20.0) {
+                // M-E12 联动证据：批量删除后 Undo 逐条撤（05-undo.png：先撤
+                // selftest-b）→ t>25 撤第二条（selftest-a，树回 4 节点）
+                rpcCall(host, "scene.undo", msgpack::Map(), "selftest undo ok");
+                selftestStep_ = 4;
+            } else if (selftestStep_ == 4 && ImGui::GetTime() > 25.0) {
+                rpcCall(host, "scene.undo", msgpack::Map(), "selftest undo 2 ok");
+                selftestStep_ = 5;
+            }
+        }
+
+        // ---- M-E9：树编辑操作（选中节点；Properties 泛化面板消费同源 id）----
+        drawEditUi(host);
+
         ImGui::Separator();
-        ImGui::TextDisabled("click a row -> scene.focus (orbit camera aims at object)");
+        ImGui::TextDisabled("click node -> select/focus; edits call scene.* RPCs; tree auto-refreshes on engine notify");
     }
 
 private:
-    struct Row { std::string mesh; float x = 0, y = 0, z = 0, rough = 1, metal = 0; };
+    struct Node {
+        long long id = 0, parent = 0, idx = -1;
+        std::string name, kind = "empty", mesh;
+        float rough = 1.f, metal = 0.f;
+        long long lightType = 0;
+        double intensity = 0;
+        std::vector<int> children;   // nodes_ 下标
+    };
+
+    // M-E8：树节点递归渲染（TreeNodeEx 以 entity id 做 ID seed，重挂父不改展开态
+    // 的键；叶子加 Leaf 旗标；选中行高亮 = 最近 focus 的实例行）。
+    // M-E13：可见行 rect 收集（框选相交用）；Ctrl+点击 toggle 多选、Shift+点击
+    // 范围选（nodes_ 序）、普通点击单选；g_sceneSelEntity 恒 = 最后点击（Properties
+    // 泛化面板保持单选消费）。
+    void drawNode(RpcHost* host, int ni) {
+        const Node& n = nodes_[ni];
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                   ImGuiTreeNodeFlags_SpanAvailWidth |
+                                   ImGuiTreeNodeFlags_OpenOnDoubleClick;
+        if (n.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
+        if ((n.idx >= 0 && n.idx == focusedIdx_) || selSet_.count(n.id))
+            flags |= ImGuiTreeNodeFlags_Selected;
+        const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(n.id)),
+                                            flags, "%s", n.name.c_str());
+        const bool clicked = ImGui::IsItemClicked(0);
+        visibleRects_.push_back({n.id, ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
+        ImGui::SameLine();
+        if (n.kind == "model") {
+            ImGui::TextDisabled("[model] %s r%.2f m%.2f", n.mesh.c_str(), n.rough, n.metal);
+        } else if (n.kind == "light") {
+            ImGui::TextDisabled("[light%s] I=%.2f", n.lightType == 1 ? " point" : "", n.intensity);
+        } else {
+            ImGui::TextDisabled("[empty]");
+        }
+        if (clicked) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyCtrl) {
+                // Ctrl+点击：toggle 多选（不驱动 focus，避免 orbit 相机乱跳）
+                if (selSet_.count(n.id)) selSet_.erase(n.id);
+                else selSet_.insert(n.id);
+                lastClickId_ = n.id;
+            } else if (io.KeyShift && lastClickId_ > 0) {
+                // Shift+点击：nodes_ 序范围选（锚点 = 上次点击）
+                const int a = indexById(lastClickId_);
+                if (a >= 0) {
+                    for (int k = std::min(a, ni); k <= std::max(a, ni); ++k)
+                        selSet_.insert(nodes_[k].id);
+                }
+            } else {
+                selSet_.clear();
+                selSet_.insert(n.id);
+                lastClickId_ = n.id;
+                if (n.idx >= 0) focus(host, (int)n.idx);
+            }
+            g_sceneSelEntity.store(static_cast<long long>(n.id));
+        }
+        if (open) {
+            for (int ci : n.children) drawNode(host, ci);
+            ImGui::TreePop();
+        }
+    }
+
+    int indexById(long long id) const {
+        for (int i = 0; i < (int)nodes_.size(); ++i)
+            if (nodes_[i].id == id) return i;
+        return -1;
+    }
+
+    // M-E13：树区拖拽框选（child 外统一处理；位移 <4px 视为点击不触发；
+    // 可见行 rect 相交即选——UE 同口径）。
+    void drawBoxSelect(const ImVec2& treeMin, const ImVec2& treeMax) {
+        ImGuiIO& io = ImGui::GetIO();
+        const bool pressed = io.MouseDown[0];
+        if (pressed && !boxActive_) {
+            const ImVec2 mp = io.MouseClickedPos[0];
+            if (mp.x >= treeMin.x && mp.x <= treeMax.x &&
+                mp.y >= treeMin.y && mp.y <= treeMax.y) {
+                boxActive_ = true;
+                boxA_ = mp;
+            }
+        }
+        if (boxActive_ && pressed) {
+            boxB_ = io.MousePos;
+            const float dx = boxB_.x - boxA_.x, dy = boxB_.y - boxA_.y;
+            if (dx * dx + dy * dy > 16.0f) {
+                auto* dl = ImGui::GetForegroundDrawList();
+                dl->AddRectFilled(boxA_, boxB_, IM_COL32(90, 170, 255, 40));
+                dl->AddRect(boxA_, boxB_, IM_COL32(90, 170, 255, 220), 0.0f, 0, 1.5f);
+            }
+        }
+        if (boxActive_ && !pressed) {
+            boxActive_ = false;
+            const ImVec2 b = io.MousePos;
+            const float dx = b.x - boxA_.x, dy = b.y - boxA_.y;
+            if (dx * dx + dy * dy > 16.0f) {
+                const float x0 = std::min(boxA_.x, b.x), x1 = std::max(boxA_.x, b.x);
+                const float y0 = std::min(boxA_.y, b.y), y1 = std::max(boxA_.y, b.y);
+                int hits = 0;
+                for (const auto& r : visibleRects_) {
+                    if (r.mx.x < x0 || r.mn.x > x1 || r.mx.y < y0 || r.mn.y > y1) continue;
+                    selSet_.insert(r.id);
+                    ++hits;
+                }
+                if (hits) {
+                    boxSelMsg_ = "box-selected " + std::to_string(hits);
+                    if (!selSet_.empty()) g_sceneSelEntity.store(*selSet_.rbegin());
+                }
+            }
+        }
+    }
 
     void refresh(RpcHost* host) {
-        auto r = callQuick(host, "scene.getState", RpcValue());
-        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getState"); have_ = false; return; }
+        auto r = callQuick(host, "scene.getTree", RpcValue());
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getTree"); haveTree_ = false; return; }
         const auto& v = std::get<RpcValue>(r);
-        if (!v.isMap()) { have_ = false; return; }
+        if (!v.isMap()) { haveTree_ = false; return; }
         const auto& m = v.asMap();
         auto itMode = m.find("mode");
         mode_ = (itMode != m.end() && itMode->second.isStr()) ? itMode->second.asStr() : "?";
-        rows_.clear();
-        auto itObjs = m.find("objects");
-        if (itObjs != m.end() && itObjs->second.isArray()) {
-            for (const auto& o : itObjs->second.asArray()) {
+        nodes_.clear();
+        roots_.clear();
+        auto itNodes = m.find("nodes");
+        if (itNodes != m.end() && itNodes->second.isArray()) {
+            for (const auto& o : itNodes->second.asArray()) {
                 if (!o.isMap()) continue;
                 const auto& om = o.asMap();
-                Row row;
-                auto itMesh = om.find("mesh");
-                if (itMesh != om.end() && itMesh->second.isStr()) row.mesh = itMesh->second.asStr();
-                auto itPos = om.find("pos");
-                if (itPos != om.end() && itPos->second.isArray() && itPos->second.asArray().size() == 3) {
-                    const auto& pa = itPos->second.asArray();
-                    if (pa[0].isDouble()) row.x = (float)pa[0].asDouble();
-                    if (pa[1].isDouble()) row.y = (float)pa[1].asDouble();
-                    if (pa[2].isDouble()) row.z = (float)pa[2].asDouble();
-                }
-                auto getF = [&](const char* k) {
+                Node nd;
+                auto getI = [&](const char* k) -> long long {
                     auto it = om.find(k);
-                    return (it != om.end() && it->second.isDouble()) ? (float)it->second.asDouble() : 0.0f;
+                    if (it == om.end()) return 0;
+                    if (it->second.isInt()) return it->second.asInt();
+                    if (it->second.isDouble()) return (long long)it->second.asDouble();
+                    return 0;
                 };
-                row.rough = getF("rough");
-                row.metal = getF("metal");
-                rows_.push_back(std::move(row));
+                auto getF = [&](const char* k) -> double {
+                    auto it = om.find(k);
+                    if (it == om.end()) return 0.0;
+                    if (it->second.isDouble()) return it->second.asDouble();
+                    if (it->second.isInt()) return (double)it->second.asInt();
+                    return 0.0;
+                };
+                nd.id = getI("id"); nd.parent = getI("parent"); nd.idx = getI("idx");
+                nd.lightType = getI("lightType");
+                nd.intensity = getF("intensity");
+                nd.rough = (float)getF("rough"); nd.metal = (float)getF("metal");
+                auto itName = om.find("name");
+                if (itName != om.end() && itName->second.isStr()) nd.name = itName->second.asStr();
+                auto itKind = om.find("kind");
+                if (itKind != om.end() && itKind->second.isStr()) nd.kind = itKind->second.asStr();
+                auto itMesh = om.find("mesh");
+                if (itMesh != om.end() && itMesh->second.isStr()) nd.mesh = itMesh->second.asStr();
+                nodes_.push_back(std::move(nd));
             }
         }
-        have_ = true;
+        // 归根挂子：id -> 下标；父不在表内（悬空）按根处理。
+        std::unordered_map<long long, int> byId;
+        byId.reserve(nodes_.size());
+        for (int i = 0; i < (int)nodes_.size(); ++i) byId[nodes_[i].id] = i;
+        for (int i = 0; i < (int)nodes_.size(); ++i) {
+            auto it = byId.find(nodes_[i].parent);
+            if (nodes_[i].parent == 0 || it == byId.end() || it->second == i)
+                roots_.push_back(i);
+            else
+                nodes_[it->second].children.push_back(i);
+        }
+        haveTree_ = true;
+        lastRefresh_ = ImGui::GetTime();
+        printf("[outliner] refreshed nodes=%d t=%.1f\n", (int)nodes_.size(), lastRefresh_);
+        fflush(stdout);
+        // M-E9/M-E10：首次拉取自动选中首个根节点（ Properties 泛化面板随选随显；
+        // 免点击路径——离断桌面会话的合成点击不可靠，GUI 目击证据需确定性选中）。
+        if (mode_ == "scene" && !roots_.empty() && g_sceneSelEntity.load() < 0)
+            g_sceneSelEntity.store(nodes_[roots_.front()].id);
     }
 
     void focus(RpcHost* host, int i) {
@@ -226,17 +428,170 @@ private:
         ImGui::Text("[scene.focus] error %d: %s", e.code, e.message.c_str());
     }
 
+    // ---- M-E9：树编辑 UI（rename/reparent/delete/add child，全部经 scene.* RPC）----
+    // 选中态 = g_sceneSelEntity（引擎 EntityID）；操作结果进 statusMsg_ 单行。
+    const Node* findNodeById(long long id) const {
+        for (const auto& n : nodes_) if (n.id == id) return &n;
+        return nullptr;
+    }
+    const Node* findNodeByName(const std::string& nm) const {
+        for (const auto& n : nodes_) if (n.name == nm) return &n;
+        return nullptr;
+    }
+    void rpcCall(RpcHost* host, const char* method, msgpack::Map p, const char* okMsg) {
+        auto r = callQuick(host, method, RpcValue(std::move(p)));
+        if (std::holds_alternative<RpcError>(r)) {
+            const auto& e = std::get<RpcError>(r);
+            statusMsg_ = std::string("[") + method + "] error " + std::to_string(e.code) + ": " + e.message;
+        } else {
+            statusMsg_ = okMsg;
+        }
+    }
+    void drawEditUi(RpcHost* host) {
+        ImGui::Separator();
+        // M-E12：undo-redo（按钮 + Ctrl+Z/Y；引擎侧 sceneChanged notify 驱动树自动刷新）
+        const bool doUndo = ImGui::Button("Undo") ||
+                            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z);
+        ImGui::SameLine();
+        const bool doRedo = ImGui::Button("Redo") ||
+                            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y);
+        if (doUndo) rpcCall(host, "scene.undo", msgpack::Map(), "undo ok");
+        if (doRedo) rpcCall(host, "scene.redo", msgpack::Map(), "redo ok");
+        // M-E13：多选批量操作（Delete selected / Reparent selected；undo 栈逐条可撤）
+        if (!selSet_.empty()) {
+            ImGui::Text("selected: %d", (int)selSet_.size());
+            if (ImGui::Button("Delete selected")) {
+                for (long long id : selSet_) {
+                    msgpack::Map p;
+                    p["id"] = id;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "removed batch");
+                }
+                selSet_.clear();
+                g_sceneSelEntity.store(-1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reparent selected")) {
+                const long long dst = parentSel_ >= 0 ? nodes_[parentSel_].id : 0;
+                for (long long id : selSet_) {
+                    if (id == dst) continue;
+                    msgpack::Map p;
+                    p["id"] = id;
+                    p["parent"] = dst;
+                    rpcCall(host, "scene.reparent", std::move(p), "reparented batch");
+                }
+            }
+        }
+        const long long selId = g_sceneSelEntity.load();
+        const Node* sel = (selId > 0) ? findNodeById(selId) : nullptr;
+        if (ImGui::CollapsingHeader("edit selected", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (!sel) {
+                ImGui::TextDisabled("(click a node above to select)");
+            } else {
+                ImGui::Text("selected: %s (#%lld, %s)", sel->name.c_str(), sel->id, sel->kind.c_str());
+                // rename
+                ImGui::SetNextItemWidth(140);
+                bool renApply = ImGui::InputText("##rename", renameBuf_, sizeof(renameBuf_),
+                                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                renApply = ImGui::Button("Rename") || renApply;
+                if (renApply && renameBuf_[0]) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    p["name"] = std::string(renameBuf_);
+                    rpcCall(host, "scene.rename", std::move(p), "renamed");
+                }
+                // reparent（父选择 = (none) + 全节点，除自身）
+                ImGui::SetNextItemWidth(160);
+                const char* cur = parentSel_ < 0 ? "(none)" : parentLabel_.c_str();
+                if (ImGui::BeginCombo("##parent", cur)) {
+                    if (ImGui::Selectable("(none)", parentSel_ < 0)) { parentSel_ = -1; parentLabel_ = "(none)"; }
+                    for (int i = 0; i < (int)nodes_.size(); ++i) {
+                        if (nodes_[i].id == selId) continue;
+                        if (ImGui::Selectable(nodes_[i].name.c_str(), parentSel_ == i)) {
+                            parentSel_ = i;
+                            parentLabel_ = nodes_[i].name;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Reparent")) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    p["parent"] = parentSel_ >= 0 ? nodes_[parentSel_].id : (std::int64_t)0;
+                    rpcCall(host, "scene.reparent", std::move(p), "reparented");
+                }
+                if (ImGui::Button("Delete")) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "removed");
+                    g_sceneSelEntity.store(-1);
+                    renameBuf_[0] = 0;
+                }
+            }
+            // add child（空/灯/模型；model 需 mesh 名，引擎侧白名单把关）
+            ImGui::SeparatorText("add entity");
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputText("##addname", addNameBuf_, sizeof(addNameBuf_));
+            ImGui::SetNextItemWidth(90);
+            ImGui::Combo("##addkind", &addKind_, "empty\0light\0model\0");
+            if (addKind_ == 2) {
+                ImGui::SetNextItemWidth(140);
+                ImGui::InputText("##addmesh", addMeshBuf_, sizeof(addMeshBuf_));
+            }
+            if (addKind_ == 1) {
+                ImGui::SetNextItemWidth(90);
+                ImGui::Combo("##addltype", &addLightType_, "directional\0point\0");
+            }
+            ImGui::SameLine(0, 12.0f);
+            if (ImGui::Button("Add")) {
+                msgpack::Map p;
+                if (addNameBuf_[0]) p["name"] = std::string(addNameBuf_);
+                if (sel) p["parent"] = selId;
+                p["kind"] = addKind_ == 1 ? std::string("light")
+                          : addKind_ == 2 ? std::string("model") : std::string("empty");
+                if (addKind_ == 2 && addMeshBuf_[0]) p["mesh"] = std::string(addMeshBuf_);
+                if (addKind_ == 1) p["lightType"] = (std::int64_t)addLightType_;
+                rpcCall(host, "scene.addEntity", std::move(p), "added");
+            }
+        }
+        if (!boxSelMsg_.empty()) ImGui::TextDisabled("%s", boxSelMsg_.c_str());
+        if (!statusMsg_.empty()) ImGui::TextDisabled("%s", statusMsg_.c_str());
+    }
+
     static void logErr(const RpcResult& r, const char* what) {
         if (!std::holds_alternative<RpcError>(r)) return;
         const auto& e = std::get<RpcError>(r);
         ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
     }
 
-    bool have_ = false;
+    std::vector<Node> nodes_;
+    std::vector<int> roots_;
+    bool haveTree_ = false;
+    bool autoOn_ = true;            // M-E8：推送自动刷新缺省开
+    double lastRefresh_ = 0.0;
     std::string mode_ = "?";
-    std::vector<Row> rows_;
     std::string focused_;
     int focusedIdx_ = -1;
+    // M-E13：多选/框选状态（selSet_ = 选中集；visibleRects_ = 本帧可见行 rect）
+    std::set<long long> selSet_;
+    struct NodeRect { long long id; ImVec2 mn, mx; };
+    std::vector<NodeRect> visibleRects_;
+    long long lastClickId_ = 0;
+    bool boxActive_ = false;
+    ImVec2 boxA_{}, boxB_{};
+    std::string boxSelMsg_;
+    // M-E13：selftest 步进状态（--selftest-outliner；0=待 add 1=待多选 2=待删 3=完成）
+    int selftestStep_ = 0;
+    // M-E9：树编辑 UI 状态
+    char renameBuf_[64] = "";
+    int  parentSel_ = -1;           // nodes_ 下标；-1 = (none)
+    std::string parentLabel_ = "(none)";
+    char addNameBuf_[64] = "";
+    char addMeshBuf_[64] = "";
+    int  addKind_ = 0;              // 0=empty 1=light 2=model
+    int  addLightType_ = 0;
+    std::string statusMsg_;
 };
 
 // M-E5：材质检查插件——scene.getMaterials 读实例材质字段（scene 模式）或
@@ -451,11 +806,297 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> p) {
     plugins_.push_back(std::move(p));
 }
 
+// M-E7：模型预览插件——预设视角一键切换 + 光照参数面板（走 engine.cvar.* 反射
+// 层，拍板「参数设置走 CVar + 描述表，不另做一套」；编辑器侧不再逐参数手写 RPC）。
+class PreviewPlugin : public Plugin {
+public:
+    const char* name() const override { return "Preview"; }
+    void draw(RpcHost* host) override {
+        if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
+        if (ImGui::Button("Refresh")) refresh(host);
+        ImGui::SameLine();
+        if (have_) {
+            ImGui::Text("az %.1f  el %.1f  ambient %.2f", az_, el_, amb_);
+        } else {
+            ImGui::TextDisabled("light.* cvars: not fetched (engine offline?)");
+        }
+
+        // ---- 预设视角（多方位无死角；dist 由 Camera 面板滑条独立控）----
+        ImGui::Separator();
+        if (ImGui::Button("Front"))  preset(host, "front");
+        ImGui::SameLine();
+        if (ImGui::Button("Back"))   preset(host, "back");
+        ImGui::SameLine();
+        if (ImGui::Button("Left"))   preset(host, "left");
+        ImGui::SameLine();
+        if (ImGui::Button("Right"))  preset(host, "right");
+        if (ImGui::Button("Top"))    preset(host, "top");
+        ImGui::SameLine();
+        if (ImGui::Button("Iso"))    preset(host, "iso");
+        ImGui::SameLine();
+        ImGui::TextDisabled("yaw0=+Z front; iso=45/35.264");
+
+        // ---- 光照参数（light.* cvar 经 engine.cvar.set）----
+        ImGui::Separator();
+        if (have_) {
+            float v = az_;
+            if (ImGui::SliderFloat("Sun Azimuth", &v, 0.0f, 360.0f, "%.1f deg")) setLight(host, "light.sunAzimuth", v, az_);
+            v = el_;
+            if (ImGui::SliderFloat("Sun Elevation", &v, -89.0f, 89.0f, "%.1f deg")) setLight(host, "light.sunElevation", v, el_);
+            v = amb_;
+            if (ImGui::SliderFloat("Ambient", &v, 0.0f, 1.0f, "%.2f")) setLight(host, "light.ambient", v, amb_);
+        } else {
+            ImGui::TextDisabled("sliders enabled after Refresh");
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("params go through engine.cvar.* (reflection layer, no per-param RPC)");
+    }
+
+private:
+    void preset(RpcHost* host, const char* n) {
+        msgpack::Map m; m["name"] = std::string(n);
+        auto r = callQuick(host, "camera.preset", RpcValue(std::move(m)));
+        if (std::holds_alternative<RpcError>(r)) logErr(r, "camera.preset");
+    }
+
+    // cvar 现值拉取（list prefix=light.，一次往返拿全三个）
+    void refresh(RpcHost* host) {
+        msgpack::Map m; m["prefix"] = std::string("light.");
+        auto r = callQuick(host, "engine.cvar.list", RpcValue(std::move(m)));
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "engine.cvar.list"); have_ = false; return; }
+        const auto& v = std::get<RpcValue>(r);
+        if (!v.isArray()) { have_ = false; return; }
+        for (const auto& item : v.asArray()) {
+            if (!item.isMap()) continue;
+            const auto& mm = item.asMap();
+            auto nameIt = mm.find("name");
+            auto valIt  = mm.find("value");
+            if (nameIt == mm.end() || valIt == mm.end() || !valIt->second.isStr()) continue;
+            const std::string val = valIt->second.asStr();
+            const std::string& n = nameIt->second.asStr();
+            if      (n == "light.sunAzimuth")   az_  = (float)std::atof(val.c_str());
+            else if (n == "light.sunElevation") el_  = (float)std::atof(val.c_str());
+            else if (n == "light.ambient")      amb_ = (float)std::atof(val.c_str());
+        }
+        have_ = true;
+    }
+
+    void setLight(RpcHost* host, const char* cvarName, float val, float& out) {
+        msgpack::Map m;
+        m["name"]  = std::string(cvarName);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4g", (double)val);
+        m["value"] = std::string(buf);
+        auto r = callQuick(host, "engine.cvar.set", RpcValue(std::move(m)));
+        if (std::holds_alternative<RpcError>(r)) { logErr(r, "engine.cvar.set"); return; }
+        out = val;   // 引擎侧 setFromString 无 clamp（滑条已限范围），本地即权威
+    }
+
+    static void logErr(const RpcResult& r, const char* what) {
+        if (!std::holds_alternative<RpcError>(r)) return;
+        const auto& e = std::get<RpcError>(r);
+        ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
+    }
+
+    bool  have_ = false;
+    float az_ = 42.0f, el_ = 49.9f, amb_ = 0.28f;
+};
+
+// M-E10：对象级参数泛化面板——选中实体（g_sceneSelEntity）→ scene.getProps 拉
+// 显式描述表（M-SC10 PropAttribute 同构口径：name/type/Range，Default = 现值
+// 快照）→ 按类型渲染通用控件 → scene.setProp 写回（反射胶水层终点，RPC 只
+// 传输）。新增组件字段 = 引擎侧描述表加一行，本面板零改动（泛化面核心判据）。
+class PropertyPanelPlugin : public Plugin {
+public:
+    const char* name() const override { return "Properties"; }
+    void draw(RpcHost* host) override {
+        if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
+        const long long selId = g_sceneSelEntity.load();
+        if (selId != loadedId_) {
+            loadedId_ = selId;
+            refresh(host);
+        }
+        if (loadedId_ <= 0) {
+            ImGui::TextDisabled("(select an entity in Scene Outliner)");
+            return;
+        }
+        if (!haveProps_) {
+            ImGui::TextDisabled("(no props / fetch failed)");
+            return;
+        }
+        ImGui::Text("entity #%lld: %s", loadedId_, entName_.c_str());
+        ImGui::Separator();
+        for (std::size_t k = 0; k < props_.size(); ++k) {
+            Prop& pr = props_[k];
+            char label[96];
+            snprintf(label, sizeof label, "%s.%s", pr.component.c_str(), pr.name.c_str());
+            if (pr.type == "float") {
+                bool ch = pr.hasRange
+                    ? ImGui::SliderFloat(label, &pr.v[0], pr.mn, pr.mx, "%.3f")
+                    : ImGui::DragFloat(label, &pr.v[0], 0.05f);
+                if (ch) sendScalar(host, k, (double)pr.v[0]);
+            } else if (pr.type == "int") {
+                int iv = (int)pr.iv;
+                if (ImGui::SliderInt(label, &iv, (int)pr.mn, (int)pr.mx)) {
+                    pr.iv = iv;
+                    sendScalar(host, k, (double)iv);
+                }
+            } else if (pr.type == "bool") {
+                bool b = pr.iv != 0;
+                if (ImGui::Checkbox(label, &b)) {
+                    pr.iv = b ? 1 : 0;
+                    msgpack::Map p;
+                    p["id"] = loadedId_;
+                    p["component"] = pr.component;
+                    p["name"] = pr.name;
+                    p["value"] = b;
+                    rpcSet(host, std::move(p), label);
+                }
+            } else if (pr.type == "vec3") {
+                if (ImGui::DragFloat3(label, pr.v, 0.05f))
+                    sendVec(host, k, pr.v, 3);
+            } else if (pr.type == "color") {
+                if (ImGui::ColorEdit3(label, pr.v, ImGuiColorEditFlags_NoInputs))
+                    sendVec(host, k, pr.v, 3);
+            } else if (pr.type == "quat") {
+                if (ImGui::DragFloat4(label, pr.v, 0.01f))
+                    sendVec(host, k, pr.v, 4);
+            } else if (pr.type == "string") {
+                if (ImGui::InputText(label, pr.buf.data(), pr.buf.size(),
+                                     ImGuiInputTextFlags_EnterReturnsTrue))
+                    sendString(host, k, pr.buf.data());
+            } else {
+                ImGui::TextDisabled("%s: unknown type %s", label, pr.type.c_str());
+            }
+        }
+        if (!statusMsg_.empty()) ImGui::TextDisabled("%s", statusMsg_.c_str());
+    }
+
+private:
+    struct Prop {
+        std::string component, name, type;
+        bool hasRange = false;
+        float mn = 0.0f, mx = 1.0f;
+        float v[4] = {};                 // float/vec3/color/quat
+        std::int64_t iv = 0;             // int/bool
+        std::array<char, 128> buf{};     // string（定长省堆）
+    };
+
+    void refresh(RpcHost* host) {
+        haveProps_ = false;
+        props_.clear();
+        statusMsg_.clear();
+        entName_.clear();
+        if (loadedId_ <= 0) return;
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        auto r = callQuick(host, "scene.getProps", RpcValue(std::move(p)));
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getProps"); return; }
+        const auto& v = std::get<RpcValue>(r);
+        if (!v.isMap()) return;
+        const auto& m = v.asMap();
+        auto itName = m.find("name");
+        if (itName != m.end() && itName->second.isStr()) entName_ = itName->second.asStr();
+        auto itProps = m.find("props");
+        if (itProps == m.end() || !itProps->second.isArray()) return;
+        for (const auto& o : itProps->second.asArray()) {
+            if (!o.isMap()) continue;
+            const auto& om = o.asMap();
+            Prop pr;
+            auto getStr = [&](const char* k, std::string& dst) {
+                auto it = om.find(k);
+                if (it != om.end() && it->second.isStr()) dst = it->second.asStr();
+            };
+            getStr("component", pr.component);
+            getStr("name", pr.name);
+            getStr("type", pr.type);
+            auto getF = [&](const char* k) -> double {
+                auto it = om.find(k);
+                if (it == om.end()) return 0.0;
+                if (it->second.isDouble()) return it->second.asDouble();
+                if (it->second.isInt()) return (double)it->second.asInt();
+                if (it->second.isBool()) return it->second.asBool() ? 1.0 : 0.0;
+                return 0.0;
+            };
+            auto itR = om.find("min");
+            if (itR != om.end()) { pr.hasRange = true; pr.mn = (float)getF("min"); pr.mx = (float)getF("max"); }
+            auto itV = om.find("value");
+            if (itV != om.end()) {
+                const auto& val = itV->second;
+                if (val.isArray()) {
+                    const auto& a = val.asArray();
+                    for (int c = 0; c < 4 && c < (int)a.size(); ++c)
+                        if (a[c].isDouble()) pr.v[c] = (float)a[c].asDouble();
+                } else if (val.isStr()) {
+                    snprintf(pr.buf.data(), pr.buf.size(), "%s", val.asStr().c_str());
+                } else {
+                    pr.iv = (std::int64_t)getF("value");
+                    pr.v[0] = (float)getF("value");
+                }
+            }
+            props_.push_back(std::move(pr));
+        }
+        haveProps_ = true;
+    }
+    void sendScalar(RpcHost* host, std::size_t k, double d) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        p["value"] = d;
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void sendVec(RpcHost* host, std::size_t k, const float* v, int n) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        msgpack::Array a;
+        for (int c = 0; c < n; ++c) a.push_back((double)v[c]);
+        p["value"] = RpcValue(std::move(a));
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void sendString(RpcHost* host, std::size_t k, const char* s) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        p["value"] = std::string(s);
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void rpcSet(RpcHost* host, msgpack::Map p, const char* what) {
+        auto r = callQuick(host, "scene.setProp", RpcValue(std::move(p)));
+        if (std::holds_alternative<RpcError>(r)) {
+            const auto& e = std::get<RpcError>(r);
+            statusMsg_ = std::string("[scene.setProp ") + what + "] error " +
+                         std::to_string(e.code) + ": " + e.message;
+        } else {
+            statusMsg_ = std::string("set ") + what;
+        }
+    }
+    static void logErr(const RpcResult& r, const char* what) {
+        if (!std::holds_alternative<RpcError>(r)) return;
+        const auto& e = std::get<RpcError>(r);
+        ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
+    }
+
+    std::vector<Prop> props_;
+    long long loadedId_ = -1;
+    bool haveProps_ = false;
+    std::string entName_;
+    std::string statusMsg_;
+};
+
 void PluginManager::discover() {
-    // M-E3/M-E4d/M-E5 内建插件；DLL 动态加载走 discoverDlls()。
+    // M-E3/M-E4d/M-E5/M-E7 内建插件；DLL 动态加载走 discoverDlls()。
     registerPlugin(std::make_unique<CameraPlugin>());
     registerPlugin(std::make_unique<SceneOutlinerPlugin>());
     registerPlugin(std::make_unique<MaterialInspectorPlugin>());
+    registerPlugin(std::make_unique<PreviewPlugin>());
+    registerPlugin(std::make_unique<PropertyPanelPlugin>());   // M-E10
 }
 
 // M-E5：plugins/ 目录 DLL 动态扫描。exe 同目录 plugins/*.dll，C ABI 校验

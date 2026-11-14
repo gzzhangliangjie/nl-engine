@@ -9293,6 +9293,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // 会让每帧 ambient 昼因子 copyBuffer 的 require(CopyDest) 直接报错——NVRHI 对
     // permanent buffer 不插 barrier）。改走 tracking：draw 列表 require(SRV) 从
     // tracked 末态自动插 barrier；天气路径在 draw 内显式 CopyDest→copy→SRV。
+    // （editor 轨 M-E7 合并注：updateLights 运行时改灯的 writeBuffer
+    // require(CopyDest) 由上行 beginTrackingBufferState 初值覆盖，原 permanent
+    // SRV|CopyDest 方案被本 tracking 模型 supersedes——permanent 不插 barrier
+    // 与天气链 barrier 需求冲突，editor 侧运行时改灯语义不变。）
     upload->close();
     device->executeCommandList(upload);
 
@@ -9429,6 +9433,74 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
     upload->close();
     device->executeCommandList(upload);
     instanceTrackSRV_ = false;   // update 列表末态 = CopyDest（writeBuffer 无转换落盘）
+    return true;
+}
+
+// M-E7（Q-E7-1 拍板 A）：灯缓冲按需更新。与 updateObjects 严格同构：单 upload
+// 命令列表 writeBuffer；灯缓冲 permanent 位 = ShaderResource|CopyDest（initScene
+// 扩展，写路径免 barrier）。数据打包与 initScene 7597~7643 段同一规则（shadow
+// 槽位重排 / sumIntensity 只算方向灯 / pointCount）——灯数不变约束下 buffer 尺寸
+// 与 t6 绑定完全兼容。阴影灯方向变化不重算 shadowViewProj_（preview 场景无阴影
+// 灯；阴影调参属后续范围）。viewer 在 renderFrame 之前调用（同 updateObjects 时序）。
+bool Scene::updateLights(nvrhi::IDevice* device,
+                         const SceneLightDesc* lights, std::uint32_t lightCount,
+                         float ambient, std::string& outError) {
+    if (!device) { outError = "updateLights: device null"; return false; }
+    if (!sceneLights_) {
+        outError = "updateLights: scene lights not initialized (initScene first)";
+        return false;
+    }
+    if (lightCount != sceneLightCount_ || (lightCount > 0 && !lights)) {
+        outError = "updateLights: lightCount mismatch (initScene " +
+                   std::to_string(sceneLightCount_) + " vs update " +
+                   std::to_string(lightCount) + ")";
+        return false;
+    }
+    const std::uint32_t lightFloats = (1u + lightCount * 3u) * 4u;
+    std::vector<float> lightData(lightFloats, 0.0f);
+    lightData[0] = static_cast<float>(lightCount);
+    lightData[1] = ambient;
+    sceneAmbient_ = ambient;
+    std::vector<std::int32_t> lightShadowSlot(lightCount, -1);
+    std::uint32_t shadowSlotCount = 0;
+    for (std::uint32_t i = 0; i < lightCount; ++i) {
+        if (lights[i].type != 0 || !lights[i].shadow) continue;
+        if (shadowSlotCount >= Scene::kMaxShadowLights) {
+            outError = "updateLights: too many shadow-casting directional lights (max 4)";
+            return false;
+        }
+        lightShadowSlot[i] = static_cast<std::int32_t>(shadowSlotCount++);
+    }
+    shadowCount_ = shadowSlotCount;
+    float sumIntensity = 0.0f;     // 只统计方向灯：点光按绝对强度独立累加
+    std::uint32_t pointCount = 0u;
+    for (std::uint32_t i = 0; i < lightCount; ++i) {
+        float* d0 = lightData.data() + (1u + i * 3u) * 4u;
+        float* d1 = d0 + 4;
+        float* d2 = d0 + 8;
+        d0[0] = lights[i].dir[0]; d0[1] = lights[i].dir[1]; d0[2] = lights[i].dir[2];
+        d0[3] = lights[i].intensity;
+        d1[0] = lights[i].color[0]; d1[1] = lights[i].color[1]; d1[2] = lights[i].color[2];
+        d1[3] = static_cast<float>(lights[i].type);
+        d2[0] = lights[i].position[0]; d2[1] = lights[i].position[1];
+        d2[2] = lights[i].position[2];
+        if (lights[i].type == 0)
+            d2[3] = static_cast<float>(lightShadowSlot[i] + 1);
+        else
+            d2[3] = (lights[i].range > 0.0f) ? (1.0f / lights[i].range) : 0.0f;
+        if (lights[i].type == 0) sumIntensity += lights[i].intensity;
+        else ++pointCount;
+    }
+    lightData[2] = (sumIntensity > 0.0f) ? (1.0f / sumIntensity) : 0.0f;
+    lightData[3] = static_cast<float>(pointCount);
+
+    // §2.8 铁律同 updateObjects：单 upload 命令列表一次 open/close/execute，
+    // 帧内不开第二列表（viewer 帧首调用，renderFrame 随后才开 frameCmd_）。
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
+    upload->close();
+    device->executeCommandList(upload);
     return true;
 }
 

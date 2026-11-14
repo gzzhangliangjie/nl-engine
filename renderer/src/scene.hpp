@@ -483,6 +483,16 @@ public:
                        const SceneObjectDesc* objects, std::uint32_t objectCount,
                        std::string& outError);
 
+    // M-E7（Q-E7-1 拍板 A）：灯缓冲按需更新（light.* cvar 反射层 → 预览光照
+    // 面板实时生效）。与 updateObjects 严格同构：单 upload 命令列表 writeBuffer
+    // （灯缓冲 permanent 位含 CopyDest，写路径免 barrier）；不建/改任何 Buffer/
+    // BindingSet/管线。lightCount 必须与 initScene 一致；shadow/type 规则原样
+    // 重排（槽位数超限报错）；阴影灯方向变化不重算 shadowViewProj_（阴影调参
+    // 不在本接口范围）。
+    bool updateLights(nvrhi::IDevice* device,
+                      const SceneLightDesc* lights, std::uint32_t lightCount,
+                      float ambient, std::string& outError);
+
     // M8.0（S8.0）：BLAS 预建——Lumen 光追地基（S8-PLAN）。每个 mesh 一个 BLAS，
     // 几何 = .nmesh v3 'NFLB' fallback 段（S3 落定：S8 直接读，不重新生成）。
     // 零拷贝核对结论（M8.0 开工项）：MeshVertex 32B 交错、position 在偏移 0，

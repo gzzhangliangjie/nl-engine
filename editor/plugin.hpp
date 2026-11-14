@@ -11,10 +11,25 @@
 //   同一 ImGuiContext）与 nl_editor_common（共享 RpcHost 实现）。库内有任一
 //   静态副本即双 ImGuiContext / 状态分裂，属必炸路径。
 #include "rpc_host.hpp"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+
+// M-E8：引擎 sceneChanged 推送的共享 dirty 旗标——editor/main.cpp 的
+// registerNotify("editor.sceneChanged") 置 true，插件每帧消费并复位。
+// RPC host 回调跑在主线程 poll 点，无跨线程竞争，atomic 仅作防御。
+extern std::atomic<bool> g_sceneTreeDirty;
+
+// M-E9/M-E10：outliner 选中实体（引擎侧 EntityID，0/-1 = 无选中）。outliner
+// 点击节点写入，Properties 泛化面板消费（scene.getProps/setProp）。
+extern std::atomic<long long> g_sceneSelEntity;
+
+// M-E13：outliner selftest 钩子（--selftest-outliner 置 1；0 = off）。
+// 多选/框选/批量删除证据走确定性路径（TOPMOST 遮挡下合成点击不可靠），
+// 插件每帧检查：t>5s 注入多选态、t>8s 批量删除（真实 RPC 链）。
+extern std::atomic<int> g_outlinerSelftest;
 
 namespace nl::editor::ui {
 

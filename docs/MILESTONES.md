@@ -2893,6 +2893,76 @@
 
 **下一步**：editor 轨道候选 = 资源浏览器 / 序列化回写 / 多引擎场景同步（未排期）；worktree 已拆、轨道已 CLOSED、分支按 §7.6 规定保留（**editor 轨道无待拍板项**）；重开需按 §7.1b 重建 wt 并更新 TRACKS。主线下一站 M10.3 参考图对比验收。
 
+## editor轨道 M-E8：场景树层级 + 变更推送（feat/editor，2026-11-14，tag `e-m8-done`）
+
+**动作**：wt_pool claim（track editor / M-E8）→ 范围沿轨道重开拍板（层级树 + sceneChanged 推送 + cvar 泛化通道，M-SC10 描述表留接驳点，无新待拍板）→ 落码：①`scene.getTree`（bindScene 签入 World + modelIds；World 全集实体含无 Model 的灯/空实体 kind=model/light/empty + parent 链 + 组件参数快照；idx = sceneObjects 下标映射，仅 kind=model 可 focus/setMaterial）；②`editor.sceneChanged` 指纹推送（每帧 FNV1a over World 全集参数，变化帧 notify 一次，**ticking 块外**——preview/scene 缺省 tickMode=off 也生效）；③编辑器 `g_sceneTreeDirty`（extern atomic，定义在 main.cpp 匿名 namespace 外）+ SceneOutlinerPlugin 树形化（TreeNodeEx id seed + kind 徽标 + focus 联动 + auto 防抖刷新，防抖期吞掉的通知还回去）；④**`scene.setMaterial` 行为变更**：tint/rough/metal 写回 World ModelComponent（源头单写——M-E5 原实现只改 sceneObjects 渲染表，tick on 时下一帧即被 World 旧值冲掉（隐藏缺陷）且树/指纹无感）；⑤`tools/m-e8-probe.py` 三段 19 断言 + `m-e8-gui-shot.py`（PrintWindow + DPI-aware + 预置 imgui.ini——editor 缺省全部插件面板叠 (60,60) 互相遮挡）。RPC-SPEC §10 补 M-E8 实装表。
+
+**提交版本**：feat/editor commit `30709ee`（7 files +682/-58），annotated tag `e-m8-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E8 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK** + selftest **16/16 ×2**（VULKAN C1090 PDB 0x6BA 三连挂后 Stop-Process mspdbsrv 强杀重置即过——与 script wt 会话并行编译竞态）；`m-e8-probe.py` **19/19 全绿**（getTree 结构 / sceneChanged 推送正负向 / model 空树）；`m-e7-probe.py` 复验 **0 fail**；回归受影响卡双后端 **26/26 bytes 全绿**（DX12/VULKAN 各 ecs-e1b 4 + p8-ecs 4 + m0.4 5）；GUI 目击证据 `out/m-e8-outliner.png`（层级树两节点 + auto ✓ + entities:2 + PreviewPlugin 六按钮 + Connection SetParent ok）。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（editor 轨道惯例探针验收，不进 cases.json）。
+
+**踩坑情况**
+1. **⚠️ 指纹块误放 ticking 内 = 推送三段全静默**：preview/scene 缺省 tickMode=off（`ticking=false`），首版指纹+notify 在 `if (ticking)` 内从未执行；诊断（notifySceneChanged 加 connected 日志零输出）定位后移出 ticking 块。**教训：帧循环插桩先核宿主分支的执行条件（tickMode/interpOn/screenshot 门控），不許默认「帧循环 = 每帧都走」。**
+2. **setMaterial tint 分支漏置 touched**（`bool touched` 声明在 tint 之后）：第一次改 tint 无 World 写回无推送，探针「tint FAIL / rough PASS」稳定复现实锤——两字段行为分叉是查逻辑错的最好路标。
+3. **M-E5 隐藏缺陷（本轮根修）**：setMaterial 只改 sceneObjects，tick on 时下一帧即被 World 旧值冲掉——「改动可见」只在 tick off 或当帧成立；源头单写（World）后三消费端（渲染表/指纹/树）全部自洽。
+4. **探针 req() 吞 notify**：req 的响应匹配循环把路过的 sceneChanged notify 读走丢弃——等待 notify 的保活必须用一次性 notify（engine.ping），不能用 req；心跳静默断链（M-E6 踩坑③）用短 socket 超时轮询解。
+5. **editor 缺省 ImGui 布局全部插件面板叠 (60,60)**：截图需预置 imgui.ini 布局（各面板坐标写死）+ MoveWindow 放大 + PrintWindow(PW_RENDERFULLCONTENT)；`ctypes.wintypes` 无 BITMAPINFO 须手工定义 BMIH。
+6. **C1090 PDB 0x6BA 竞态三连挂**（jobs.cpp/meshlet_io.cpp/NavAgentSystem.cpp 各一次）：与 script wt 会话并行编译共享 mspdbsrv 竞态，Stop-Process 强杀重启后一次过；临时对策有效，根治需 per-tree PDB 目录（挂后续项）。
+
+**下一步**：editor 轨道 M-E0~M-E8 全部收官；候选后续 = 场景树编辑操作（reparent/改名/增删 RPC）+ M-SC10 描述表接驳 + 嵌入视口截图基建（均未排期）；整轨 merge 回 master 待用户指令。
+
+## editor轨道 M-E9+M-E10：场景树编辑 + 对象级参数泛化面（feat/editor，2026-11-14，tags `e-m9-done`+`e-m10-done`）
+
+**动作**：wt_pool claim（track editor / M-E9，2026-11-14 用户拍板遗留 ②场景树编辑 + ③对象级泛化面 同轮开工）→ **前置 = feat/editor merge 新 master**（`26bc979` 零冲突，吸收 script 整轨 M-SC7 帧边界重建/M-SC10 Prop 反射 + water 整轨；scriptapi 新鲜度闸触发跑 gen.py，生成物零漂移）→ 落码（`93ba660`，7 files +965/-16）：①编辑 RPC 五件套 `scene.rename/setParent/reparent/addEntity/removeEntity`（bindSceneEdit 仅 scene 模式；flush 即时落表；环防护 = World assert 的 RPC 化 error 101；addEntity 白名单 + **NL_ASSET_DIR 存在性双校验**）；②渲染传导 = M-SC7 签名块移出 ticking 扩灯集（灯签名从 World 现算；rebuild 补灯重收集 + preview key 重注入 + 重建后实例当帧上屏）；③`scene.getProps/setProp` 显式描述表（M-SC10 PropAttribute 同构：name/type/Range 注册、Default=现值快照、显式分发；写回三路 = Transform→objects[i].world 直刷 / Model 材质→objects[i] 直刷 / Light→lights[i] 重算 + updateEcsLights 单 upload；meshFile→集合签名重建）；④指纹扩 Transform/Light 全字段；⑤编辑器 outliner 编辑 UI + `PropertyPanelPlugin` 描述表驱动泛化面板 + 首拉自动选中首个根节点（`g_sceneSelEntity` 共享态，匿名 namespace 外定义）；⑥`m-e9-probe.py` 32 断言 + `m-e10-probe.py` 断言 + `m-e9-gui-shot.py`。RPC-SPEC §10 补 M-E9/M-E10 实装表。
+
+**提交版本**：feat/editor commit `93ba660`（落码）+ 台账 commit（本轮）。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E9+M-E10 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（DX12 selftest 16/16）；`m-e9-probe.py` **32/32 全绿**（rename/add 三 kind/reparent 环防护/remove/getMaterials 集合联动/model 模式负向）；`m-e10-probe.py` **全绿**（描述表结构/全类型 setProp/getState.pos 渲染表直读/负向九连：未知 prop·组件 100、类型不符·点光 range·点光 shadow·meshFile 白名单 101）；M-E8 探针复验 **19/19** + M-E7 探针复验 **31/31**（既有面保形）；GUI 目击证据 `out/m-e9-editor-editui.png`（edit selected 全控件 + Properties 描述表驱动属性行实锤）。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（editor 轨道惯例探针验收，不进 cases.json）。
+
+**踩坑情况**
+1. **⚠️ 白名单格式校验 ≠ 文件存在（script 轨教训第三犯）**：evil.glb 过 validGlbAssetName（只管文件名格式）→ 坏实体 rebuild → loadEcsScene 失败 → **渲染循环退出**（probe ConnectionReset 实锤）→ addEntity/setProp meshFile 补存在性校验 error 101。**教训：涉及运行期资源加载的编辑入口，格式校验后必须存在性校验，否则坏数据把渲染循环拖死。**
+2. **灯签名误用 lightIds 当签名源**：lightIds 只在 rebuild 更新 → computeLightIdsSig() != 空 lightIdsSig 每帧真 → 每次启动误重建一次；改从 World 现算 + 初值对齐。
+3. **msgpack negative fixint**：idx=-1 编码 0xE0|n（0xFF），探针解码器缺 `o >= 0xE0: return o - 256` 支路 → ValueError 0xff。
+4. **沙箱桌面会话合成点击不可靠**：窗口 rect 正常（restore 后 (0,0,1680,1050)）、坐标正确（PrintWindow/GetWindowRect 同为窗口原点坐标系——用 ClientToScreen 当基点会多加 7px 边框 + 30px 标题栏，首三拍全偏）但 ImGui 无响应；GLFW 窗常以最小化态出现（GetWindowRect = -32000 系，PrintWindow 仍能抓到完整内容极具迷惑性）→ GUI 证据改走「首拉自动选中首个根节点」确定性路径。
+5. **merge 后 scriptapi 新鲜度闸触发**：exports.api mtime 晚于 ApiTable.g.hpp → 跑 `tools/scriptapi/gen.py` 刷新（生成物与 merge 内容零漂移 = 良性）。
+
+**下一步**：editor 轨道 M-E0~M-E10 全部收官；候选后续 = 嵌入视口截图基建（BitBlt 合成）/ 编辑 undo-redo / 多选框选（均未排期待拍板）；整轨 merge 回 master 待用户指令。
+
+## editor轨道 M-E11+M-E12+M-E13：视口截图基建 + 编辑 undo-redo + outliner 多选框选（feat/editor，2026-11-14，tags `e-m11-done`+`e-m12-done`+`e-m13-done`）
+
+**动作**：wt_pool claim（track editor / M-E11，2026-11-14 用户「继续做吧」拍板三遗留同轮开工）→ 落码：①`tools/editor-viewport-shot.py` 视口截图三源择优（PrintWindow viewer 子窗 / container / BitBlt 屏幕 + std 判据 + 遮挡自检 FAIL 闸）；②viewer `EditCmd` 命令栈（Rename/Link/Prop/Structural 四类 + undoIsDelete 方向位）+ `scene.undo/redo` RPC（error 102 空栈 / 103 重建失败）+ editor Undo/Redo 按钮 + Ctrl+Z/Y；③outliner Ctrl 多选 / Shift 范围选 / 树区拖拽框选（item rect 相交收集）+ 批量 Delete selected / Reparent selected + `--selftest-outliner` 确定性路径钩子（add 测试实体 → 注入多选 → 批量删除 → 两次 Undo 全恢复）。RPC-SPEC §10 补 M-E12/M-E13 实装表。
+
+**提交版本**：feat/editor 落码 commit + 台账 commit（本轮），tags `e-m11-done`/`e-m12-done`/`e-m13-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E11~E13 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（DX12 + VULKAN，VULKAN selftest **PASS 0 failures**）；`m-e12-probe.py` **34/34 全绿**（rename/setProp undo/redo 读回、add 重建 id 变化 + 组件保形、remove 子树重建拓扑保形、级联重映射 redo→undo 闭环、空栈 102 双向）；M-E9/M-E10 探针复验 **0 fail / 0 fail**（既有面保形）；M-E13 GUI 探针 **ALL PASS**（Selected 高亮像素带 y547-558/564-576 机械实证 + 06-undo2 entities:4 双 Undo 全恢复目击）；M-E11 合成图 `out/editor-viewport.png` 产出。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（探针验收不进 cases.json）。
+
+**踩坑情况**
+1. **⚠️ Add/Remove「同构」语义错**：初版 Structural 统一「undo=重建」→ add 的 undo 把刚加的实体又建一遍（实体翻倍，探针 3 FAIL 实锤）→ `undoIsDelete` 方向位根修：动作由来源栈决定（undo 栈 act=undoIsDelete、redo 栈取反，执行后不翻转）。
+2. **remapStacks 漏快照内部引用**：多轮 undo/redo 后 Structural cmd 的 removed 快照 snap.id/snap.parent 仍是旧 id → redo 循环 rebuild failed 103 → 快照内部引用同步映射修正。
+3. **bindSceneEdit 局部 lambda 按引用捕获 = 悬垂 UB**：handler 闭包随 bridge handler 表持久存活，bindSceneEdit 返回后局部量已死（编译器不报）→ 全链按值捕获（M-E9 既有 handler 口径）。
+4. **⚠️ selftest 删空场景拖死 viewer**：selftest 批量删除 preview-* 基线实体 → ECS 空场景 rebuild → viewer 退出（crash-isolation 实证）→ 改删自建的测试实体，基线保留。
+5. **跨进程 DX12 视口取证三连败留账**：PrintWindow(viewer 子窗) 全黑（swapchain 不响应 WM_PRINT，M-E6 根因坐实）；BitBlt 屏幕 + TOPMOST 双置顶仍被用户桌面另一 TOPMOST 会话窗压住（Z 序竞争）→ 遮挡自检 FAIL 闸（diff-rate≈1.0 显式失败不落假图）；可靠取证 = 引擎侧帧 dump（`--editor-shot` 挂待拍板）。
+6. **SendInput 点击链被遮挡窗抢走**：editor 被盖后全局鼠标注入全打到遮挡窗（坐标本身无误——PIL 实测树行高 17px）→ M-E13 GUI 证据走 `--selftest-outliner` 确定性路径（M-E9 口径延续）。
+
+**下一步**：editor 轨道 M-E0~M-E13 全部收官；候选后续 = 引擎侧 `--editor-shot` 帧 dump（视口可靠取证）/ outliner 框选 overlay 交互化 / 整轨 merge 回 master（待用户指令，merge 后重跑该轨全部历史版本卡）。
+
+## editor轨道 M-E7：模型预览 + cvar 反射通道（feat/editor，2026-11-14，tag `e-m7-done`）
+
+**动作**：wt_pool claim（track editor / M-E7，§7.1b 重开后首个里程碑）→ 开工拍板四项全拍（重开 editor 轨道 M-E7→M-E8；参数通道 = **CVar + M-SC10 描述表**零新反射系统；新建专用预览小场景；实时 = 引擎推 `editor.sceneChanged`，写回 EDITOR-PLAN §3/§8）→ 落码六件套：①`assets/scenes/preview.scene.json` 预览小场景（Suzanne 主体 + ParkingLot 地面 + ambient 0.28）；②viewer `--preview`/`--preview-model` 糖旗标（mode scene + 场景 JSON；preview-model 反序列化后按实体名覆写 meshFile，坏名 exit 2）；③`light.sunAzimuth/sunElevation/ambient` 三 cvar（registerFloat + setOnChanged dirty 语义，未调光零回归）；④RPC `engine.cvar.list/get/set`（反射通道，`setFromString` 语义）+ `camera.preset` 六预设（front/back/left/right/top/iso，top 钳 ±1.45 rad 回读实际值）；⑤editor 侧 `PreviewPlugin` 内建注册（视角按钮排 + 光照滑条走 engine.cvar.set）；⑥`tools/m-e7-probe.py` 三段 31 断言。**renderer 触碰面（用户拍板 A：updateEcsLights）**：根因 = `psScene` ambient 消费灯缓冲 `g_lights[0].y`（loadEcsScene 一次性写死），每帧 CB `g_lightDir.w` 只有 probe/trace 链消费，cvar 覆写不动灯缓冲则对预览画面零效果；方案 = `updateEcsLights` 通道五文件纯新增（Renderer→backend 虚接口→DX12/Vulkan 转发→`Scene::updateLights` writeBuffer，与 updateEcsObjects 同构），存量唯一改动 = initScene 灯缓冲 permanent 位 `ShaderResource → ShaderResource|CopyDest`（NVRHI state-tracking 要求 ⊇ CopyDest）。RPC-SPEC §10 补 M-E7 实装表。
+
+**提交版本**：feat/editor commit `26d1706`（13 files +830/-4），annotated tag `e-m7-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E7 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（viewer+editor 各一）+ selftest **16/16 ×2**；`m-e7-probe.py` **31/31 全绿**（DX12，RPC 桥后端无关沿 M-E5 口径）；像素实证 `light.ambient 0/0.28/999` 全图平均亮度 40.7/42.1/91.9、999 时地面 255 纯白——**cvar→灯缓冲→psScene 覆写链实锤**；证据 `out/m-e7-ambient-{default,012}.png`。回归受影响卡双后端 **26/26 bytes 全绿**（DX12: ecs-e1b 4 + p8-ecs 4 + m0.4 5；VULKAN 同 13）。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（kStage 仍 S8.2，无新基线/版本卡，`server.py --check` 不适用——editor 轨道惯例 = 探针验收，不进 cases.json）。
+
+**踩坑情况**
+1. **psScene ambient 走灯缓冲不走每帧 CB**：光照参数 cvar 化若只在 `FrameParams.lightDir` 上覆写，scene 着色路径完全无感——shader 消费点（灯缓冲 vs 每帧 CB）必须先实证再选传导通道；用户拍板 A 放行 renderer 只增不改。
+2. **PNG 字节大小与画面亮度反相关**：过曝大片纯白压缩率高→文件反而小；探针曾误断言「ambient 覆写前后 PNG 大小必须相等」假 FAIL，像素级亮度实证（PIL avg/groundAvg 三值单调）后才定案。**教训：视觉断言用像素数据，不用文件大小猜。**
+3. **msgpack_min 字符串 API 是 `isStr()/asStr()`** 不是 `isString()/asString()`（31 个编译错误主因）+ 两处 lambda 缺捕获。
+4. **新树并行双构建撞 mspdbsrv**：C1090 PDB API 调用失败（0x6BA RPC 服务器不可用），串行重跑即过，非代码错误。
+5. **showcase 独立 exe 新树不存在**：m0.4 回归 0/5 FAIL 属环境错非回归（exe 缺失 `build/showcase/s0-model/`），`rebuild.py --tags s0-model` 补建后 5/5 秒过；`.gitignore` 粘连 bug 也由本里程碑 wt junction 首建暴露（见轨道重开段）。
+
+**下一步**：M-E8 场景树增强（ECS 层级树 + sceneChanged 推送 + M-SC10 `[Prop]` 描述表接驳）待 script 轨道 M-SC10 落码后接上；PreviewPlugin GUI 观感待用户目测。整轨 merge 回 master 待用户指令。
+
 ## M10.3：GI 参考图 + --compare 并排验收（2026-11-11，tag `s10-done`，S10 收官）
 
 **动作**：M10.3（S10 收官步；2026-11-11 用户四问 Q14-1..4 全取方案 A，拍板记录写回 `S10-PLAN.md`）落地。① Q14-1 GI 参考图 = `--mode reference-gi`（扩展 M9.2 渐进累积机制：每像素 1024 spp = 16 帧 × 64；直光段逐字同 csReference + GI 段 = 余弦加权半球 1 弹射 Malley 采样 `pdf=cos/π` 消 diffuse 积分因子，miss→skyGradient（Q12-3 天穹）/ hit→`giAlbedo × (lightCol·I·shadow(q)/π + amb)`；与探针物理逐项同口径：104-tri 粗代理 + 双 albedo（trace/gather 两侧有意双乘）+ 无 NdotL 降级 + shadow ray origin 沿弹射射线回退 bias；Q3 勘误落地：S9 参考图只算直光一跳不能当 GI 尺子，S10 自立参考图）；② Q14-2 并排对比 = viewer `--compare <png>` 右半贴片（stb_image RGBA8 → CopyDest 纹理两段式上传（M-PT2 0x87d 纪律）→ psCompare Linear clamp 采样）；③ Q14-3 `--mode probe` 一等化（ViewMode::Probe=17 恒 gather 态 + HUD 全调参面：cascade 3 滑块 + sky-bg checkbox + gather checkbox）；④ Q14-4 `--sky-bg` = csGatherCompose 天穹背景分支（bgZ≥1.0 → skyGradient，默认关保 M10.0~10.2 基线保形）。全仓扫旧口径：Q3「参考图不是 GI 裁判」副本在 ROADMAP/S10-PLAN/UE-DIFFS D11/Q4-GBUFFER-OPTIONS/MILESTONES 的 S9 表述为历史记录保留，S10 段已按新口径书写。
