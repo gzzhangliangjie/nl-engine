@@ -5761,7 +5761,9 @@ bool Scene::drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& vie
     // ---- 懒建（视口变化重建 reservoir，probe atlas 懒建同款口径）。
     if (!restirReady_ || restirResW_ != rw || restirResH_ != rh) {
         auto restirPath = [this](const char* artifact) {
-            return std::string(NL_SHADER_DIR) + "/" + artifact + "." + shaderSuffix_;
+            // B1 双层解析（M-PKG0）：不再直读 NL_SHADER_DIR 宏——M-PKG0 把该宏迁到
+            // nl_core PRIVATE 后 nl_renderer 侧看不见（首次全量编译炸出的主仓遗留）。
+            return nl::core::paths::shaderDir() + "/" + artifact + "." + shaderSuffix_;
         };
         auto loadRestirShader = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
             std::vector<std::uint8_t> blob;
