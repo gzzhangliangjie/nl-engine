@@ -135,3 +135,11 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 - 三处参考（引草案 2026-11-11 实读留痕）：UE `SingleLayerWaterRendering.h` / bevy `transmission.wesl` / Carrot 全目录 grep 零水体。
 
 > 用户实测结论优先于任何网页信息；每个里程碑开工前按铁律重读本里程碑对应三处文件。
+
+### 9b. M-WAT1 落码任务书（2026-11-16 前实读定稿；拍板 A 已写回 §5/SHADER-CONVENTIONS §2.23）
+
+**三处实读结论（M-WAT1 点名文件）**：① UE Water 插件 `WaterVertexFactory.{h,cpp}` + `SingleLayerWater*.ush` —— SLW 是着色合成（M-WAT2 域），顶点位移在 vertex factory/WPO 上游，法线进 gbuffer 供全链；② osgw `gerstner.glsl`（多波显式数组：D/A/k/Q/ω 分量式）+ iago `ocean_shader.{vert,frag}`（fBm 递推 + 黄金角波向 + 解析法线求和定义在**未位移网格坐标** P 上 + pixel-footprint 抗锯齿因子）——M-WAT1 取 osgw 显式数组结构（任务书"波形参数 CPU 侧结构"字段对齐）+ iago 的 per-pixel 解析法线口径；③ 本仓 initCull/initVisbuf/cull.slang/direct.slang/visbuf.slang 全链 —— pulling = compute vertex pulling（vis=64b：deviceZ|clusterId24|triId8），clusterMeta 槽 3 = materialId，cull 用 clusterSpheres frustum 判定。
+
+**接线（拍板 A）**：水网格 = initCull 内 CPU 程序化 grid（64x64 quad 覆盖 [-20,20]²，y=0 未位移平面）切 ≤128 tri 伪 cluster 追加进 vertexPool_/localIndices_/clusterMeta_/clusterSpheres_（radius 含 maxAmp 防位移出锥误剔），materialId = `kWaterMaterialId`（0xFFFFu 保留标记，GPUMaterial 表不占位）；`waterEnable` 布尔沿 init 参数链 viewer→backend→initVisbuf→initCull，缺省关 = 网格不追加、visIndex 段位空置。位移与法线 = `renderer/shaders/water_common.slangh`（新头，单源）：visbuf.slang `vsVisRaster` 位移（深度真实位移→SSR 命中面正确）+ direct.slang `csDirect`/`csDirectVsm` 水体分支（per-pixel 重算位移+解析法线+水体直光）+ ssr.slang 起点法线水体分支（M-WAT0 反解链零改动）。波形 CB = `WaterConstants`（新 volatile CB，8 波 × [D.xy,A,k / ω,Q] + time，160B），visbuf b2 / direct/ssr b7。时间 = `--water` 开时 viewer 固定步进（frameIdx × `GameClock::kStep`），FrameParams.waterTime 缺省 0。水体直光（M-WAT1 域）：深水基色 + N·L 漫反射 + 太阳 Blinn-Phong 高光（iago water_lighting_simple 口径，sky 反射/折射/泡沫留给 M-WAT2）。
+
+**M-WAT1 文件清单**：`renderer/shaders/water_common.slangh`（新）+ `visbuf.slang`（VS 位移）+ `direct.slang`（水体分支 ×2 入口）+ `ssr.slang`（起点法线分支）+ `scene.{hpp,cpp}`（网格追加 + WaterConstants + 绑定）+ `renderer.hpp`（init 参数 + FrameParams.waterTime）+ `backend_dx12/vulkan.cpp`（参数透传）+ `viewer/main.cpp`（`--water`）+ `CMakeLists.txt`（water_common DEPS）+ `example/water-t1/`（卡 + run.bat + 基线）+ `example/cases.json`。SM66 白名单不动（无 NonUniformResourceIndex 新增）。
