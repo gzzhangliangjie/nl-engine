@@ -3785,3 +3785,25 @@
 5. mspdbsrv PDB API RPC 挂（C1090 错误码 23）三犯——杀进程重编即绿，非代码问题。
 
 **下一步**：M-WAT2 = 折射（SceneWithoutWater + 扭曲 UV + Beer-Lambert 吸收）+ Fresnel 混合 + 波峰泡沫收口（UE SLW 结构域）；整轨 merge 回 master 待用户指令。
+
+## WAT M-WAT2 — 折射 + Beer-Lambert 吸收 + Fresnel + 泡沫（feat/water 第三里程碑，2026-11-14，tag `water-t2`）
+
+**动作**：M-WAT1 收口后「下一波」开工。三处实读（UE SLW `SingleLayerWaterComposite`+`SceneWithoutWater` copy 口径 / bevy `refracted_ray`+深度拒绝 / 本仓 M-WAT1 直光水色链）→ 任务书 §9c → **拍板 Q-WA7**（折射合成形态：UE 同构合成后移 / psMatResolve 内嵌 / 真重渲——用户拍板 **A 合成后移**，water-t1 基线重拍授权随拍板生效）→ 写回 PLAN §9c → 落码：`water_common.slangh` 单源扩展（waterFresnel Schlick F0=0.02 / waterRefractDir Snell TIR 兜底 / waterSpecular 独立化 / waterFoam 波峰白沫）→ `material.slang`+`direct.slang` 水像素黑占位（M-WAT1 直光逻辑迁移）→ `ssr.slang` 新 `csWaterCopy`（hdrSceneColor_→waterBg_）+ `csWaterComposite`（SSR 后 tonemap 前：反解 vis 判水像素 → per-pixel Gerstner → 3×3 bilateral 估厚 → B1 池底解析 ray-plane 折射 → B2 屏幕空间扭曲 4-tap 兜底（深度拒绝 bevy 口径）→ Beer-Lambert `T=exp(-absorb×thick)` + in-scatter → Fresnel 混 SSR 反射 + spec + foam 整体替换写回）→ WaterConstants 288→336B（wcE/wcF/wcG，floorY/floorHalf 单源 `kWaterFloorY/Half`）→ 池底网格 [-26,26]² 40×40 quad / 25 簇 materialId=0（6m 环带 = UE 水塘边缘同构）→ 双验收旗标 `--water-noreflect`/`--water-norefract`（wcG.x/w）→ `example/water-t2/run.bat`（七组 shot 八项检查）→ water-t2 卡双 case + water-t1 基线重拍。
+
+**提交版本**：`feat/water` M-WAT2 收口提交（tag `water-t2`，落码 @ `9977d78`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16（136 blob 全绿，ssr.cswatercopy/cswatercomposite 双后端编译通过）。
+- 🟢 `example/water-t2/run.bat verify` **ALL GREEN exit 0**：零漂移闸（water-off vs water-t0 ssr-on 冻结基线逐字节，双后端）+ **反射 A/B**（full vs noreflect 必 DIFF）+ **折射 A/B**（full vs norefract 必 DIFF）+ on/off + 波运动 f4≠f12 + 确定性双跑 + log 锚（`gerstner grid ready` + `composite ready`）+ deviceErrors=0 + 负向。
+- 🟢 跨后端 near：diff pixels=0（maxfrac=0.02）；回归 t0 2/2 + t1 2/2（重拍基线后）+ t2 4/4 全绿；cases.json 143 张。
+- 🟢 折射证据图：`refract-edge-{dx12,VULKAN}.png`（pitch8/dist30 池外机位——环带入画，波谷蓝绿 = 折射池底×吸收，波峰银白 = Fresnel 天空反射，角度依赖正确）。
+
+**踩坑**
+1. **方案 A 盲区实锤：copy 无水后内容**——池底在 vis buffer 被水面深度遮挡 → waterBg_ 水像素黑、水后永远空 → 陡视角 3×3 邻域全水 bilateral 全拒 → 折射只剩 in-scatter，「水下物体折射扭曲」任何相机不成立。根修 = **B1 解析 ray-plane**（池底已知平面 y=wcG.y，命中池内 → xz×0.25 wrap 手工 4-Load 双线性采材质 0 贴图，thick=真实光路程），零新 pass/零新资源；B2 屏幕空间兜底保留（掠射出池时环带/天空）。
+2. **验收机位几何陷阱**：pitch9/dist7 相机悬在水面范围 [-20,20]² 内部上方 → 环带不可见折射无物可采（v2/v3 hash 全同实证）；pitch8/dist24 又悬在环带正上方；**池外 pitch8/dist30 才是折射可见机位**——验收机位必须按「折射采样可达像素」几何设计，不是随手默认。
+3. **Git Bash 的 `fc` 是内建 fix-command**：所有 `fc /b` bytes 对比静默无效（exit 0 假绿）；字节对比一律 python sha256（Windows 绝对路径）。run.bat 内 cmd 环境的 fc.exe 不受影响。
+4. **bash cwd 每条命令重置回主仓**（100% 复现）→ 主仓两次误写（PLAN §9c 追加、误 grep 空），靠 pre-commit NL_COMMIT_MAINREPO 闸拦截后显式 restore；每条命令 `cd <wt> && pwd &&` 前缀保命。
+5. **常量双源漂移**：池底块局部 `kFloorY/kFloorHalf` 删声明漏改引用 → C2065 编译败两轮（连带 Tdir 声明被替换吞掉 E30015）；根修 = 文件级 `kWaterFloorY/kWaterFloorHalf` 单源 + wcG 下传 shader。
+6. **回归基线文件被 .gitignore**：`example/*/verify-*` 全 ignore（t1 先例），cases.json 基线若指向 verify-* 则新 clone 缺文件——复制为冻结名 `water-full-{dx12,VULKAN}.png` 再登记；bash 循环 `$B` 大写 DX12 与 cases.json 小写漂移一并钉死。
+
+**下一步**：M-WAT3 候选 = 深浅深度渐变吸收（真实 depth buffer 对比水厚）/ 岸线软化（soft edge）/ 水下雾；整轨 merge 回 master 待用户指令（S13 教训：merge 后重跑该轨全部历史版本卡）。
