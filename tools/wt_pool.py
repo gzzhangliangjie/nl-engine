@@ -172,15 +172,15 @@ TRACKS = {
                 "wt removed 2026-11-10, branch kept",
     },
     "editor": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-editor",
-        "branch": "feat/editor", "state": "active",
+        "wt": "", "branch": "feat/editor", "state": "closed",
         "note": "外置编辑器轨道（C++/ImGui 宿主 + 引擎侧 editor_bridge），独立于渲染主线；"
-                "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0~E6 全量 merge 回 "
-                "master ac50c10 + 集成修复 fc34176（tags e-m0e2-done~e-m6-done）；"
-                "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
-                "state CLOSED by user instruction 2026-11-11 17:1x; "
-                "REOPENED 2026-11-14 per §7.1b（用户拍板 M-E7 模型预览插件 / M-E8 场景树增强，"
-                "wt 重建于 feat/editor ff 至 master），参数通道拍板 = CVar + M-SC10 描述表，不另做反射层",
+                "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0~E6 merge ac50c10+fc34176，"
+                "M-E7~E13（模型预览/场景树 outliner+编辑 RPC/泛化面/视口截图基建/undo-redo/"
+                "多选框选批量操作，tags e-m7-done~e-m13-done）整轨 merged 回 master "
+                "77bb1c7 no-ff + 复验修复 4930104（updateLights tracking 声明根修 Device Removed；"
+                "S13 复验 10 卡全绿 + 双后端 BUILD OK）；tag editor-done + milestone/editor-done；"
+                "wt removed 2026-11-14 23:2x（user instruction，second close——M-E9 release 后 "
+                "2026-11-11 曾拆一次）；重开走 §7.1b",
     },
     "logging": {
         "wt": "E:/UE_STUDY_2026/nl-engine-logging",
