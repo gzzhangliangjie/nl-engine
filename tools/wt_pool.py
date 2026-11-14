@@ -286,14 +286,15 @@ TRACKS = {
                 "thirdparty/slang/dist + skip-worktree (9 files)",
     },
     "s14-restir": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-s14-restir",
-        "branch": "feat/s14-restir", "state": "active",
-        "note": "M14 S14-enhancement track B (ReSTIR GI final gather, "
-                "--mode restir); plan docs/s14/M14-PLAN.md, M14B0~M14B2, "
-                "closing tag s14-restir; track C (adaptive probes, M14C1, "
-                "tag s14-adaptive) will reuse this wt after B closes; "
-                "wt built 2026-11-13 from master 1892866, junction "
-                ".workbuddy + thirdparty/slang/dist + skip-worktree (9 files)",
+        "wt": "", "branch": "feat/s14-restir", "state": "closed",
+        "note": "S14 enhancement track (M14A softrast / B ReSTIR GI "
+                "M14B0~B2 / C adaptive probes M14C1~C3, closing tag "
+                "s14c-fixup @ 170417c); WHOLE TRACK merged to master "
+                "cfaf58f + merge-fix b197623 (2026-11-15, mainline "
+                "double-backend BUILD OK + regression smoke s14c/s14b "
+                "2/2+2/2 ALL GREEN bytes); wt removed 2026-11-15 (user "
+                "order), branch + tags s14-restir/s14-adaptive/s14c-spawn/"
+                "s14c-fixup kept; reopen via PARALLEL-TRACKS 7.1b",
     },
     "weather": {
         "wt": "", "branch": "feat/weather", "state": "closed",
