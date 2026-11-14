@@ -3807,3 +3807,23 @@
 6. **回归基线文件被 .gitignore**：`example/*/verify-*` 全 ignore（t1 先例），cases.json 基线若指向 verify-* 则新 clone 缺文件——复制为冻结名 `water-full-{dx12,VULKAN}.png` 再登记；bash 循环 `$B` 大写 DX12 与 cases.json 小写漂移一并钉死。
 
 **下一步**：M-WAT3 候选 = 深浅深度渐变吸收（真实 depth buffer 对比水厚）/ 岸线软化（soft edge）/ 水下雾；整轨 merge 回 master 待用户指令（S13 教训：merge 后重跑该轨全部历史版本卡）。
+
+## WAT M-WAT3 — 岸线软化 + 岸线泡沫（feat/water 第四里程碑，2026-11-14，tag `water-t3`）
+
+**动作**：M-WAT2 收口后「继续」开工。实读：UE SLW 官方文档 4.26/4.27 + 论坛 5.5（岸线软化官方路数 = Distance To Nearest Surface 接 Opacity lerp；SLW = 参与介质体积 + Opacity 混 BSDF/BRDF；折射读取可选 downsample 已同构）/ bevy SSR example water_material.wgsl（纯法线波纹，**无水体岸线口径**，纯 UE 参照）/ 本仓 M-WAT2 全链（composite 整体替换 → 交界硬边；bilateral 邻域 diff 现成可复用）。任务书 §9d → **拍板（用户）= A+B**：岸线软化 fade + 岸线泡沫窄带白沫，C（Color Scale Behind Water）不做；water-t1/t2 基线重拍授权随拍板生效。落码：`csWaterComposite` 新增 **B3 段**——`fade = saturate(diffNear/fadeDist)`（diffNear = 原位 bilateral 非水邻域平均径向差 / B2 扭曲 tap 加权差，<0 = 深水不动），`color = lerp(bg0, 水色, fade)`（bg0 = 邻域真实岸边像素色）；岸线泡沫 = `shoreBand²` × gain × (ambient+0.8·ndl) 窄带白沫；WaterConstants 336→352B（**wcH** = fadeDist/shoreFoamDist/shoreFoamGain/noShore）；`--water-noshore` 第三验收旗标；参数调优两轮（初值 fadeDist 1.2/foamDist 0.6 过窄：平坦池底 diff≈1.5m 饱和 → fade 2.2/foam 2.5）。
+
+**提交版本**：`feat/water` M-WAT3 收口提交（tag `water-t3`，落码 @ `9340213`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`example/water-t3/run.bat verify` **ALL GREEN exit 0**（零漂移 vs water-t0 冻结基线双后端逐字节 + 岸线 A/B（full vs noshore 必 DIFF）+ 波运动 + 确定性 + log 锚 + deviceErrors=0 + near diff pixels=0 + 负向）。
+- 🟢 **保形实证**：`--water-noshore` 输出与 M-WAT2 full 基线 **hash 全同**（758c0d57）——旗标关闭 = M-WAT2 输出逐字节保形。
+- 🟢 交界柔化：猴头-水面交界深色硬边消除（并排对比图实证），变化占比 0.06% 集中在交界带（rows 270-359）——零波及面。
+- 🟢 回归 t1 2/2 + t2 4/4（基线重拍后）+ t3 4/4 全绿；cases.json 144 张。
+
+**踩坑**
+1. **参数初值被场景几何骗**：fadeDist 1.2 / foamDist 0.6 按「经验窄带」取值，但平坦池底邻域 diff 恒 ≈1.5m → fade 全饱和、泡沫窄带判据打不开，首拍变化仅 0.01% 像素（python diff 定位）——**参数必须按场景实际 diff 分布标定**（fadeDist/dip > 1.5m 才可见）。
+2. **岸线软化的物理宽度由地形决定**：池底平坦 → 过渡带天然窄（每像素 diff 相同）；猴头斜面交界才是宽渐变主秀场（根部 diff→0 连续变化）。远景 cam30 仅 0.02% 变化 ≠ 失效，是场景几何使然。
+3. mspdbsrv PDB API 23 四犯——杀进程重编即绿（M-WAT1 踩坑 #5 同族）。
+4. bash 循环 `$B` 大小写漂移二犯（DX12 vs dx12，Windows 不区分大小写掩盖）——重命名钉死 + cases.json 对齐。
+
+**下一步**：water 轨视觉链（波形/折射/吸收/Fresnel/泡沫/岸线）已闭环；候选后续 = Color Scale Behind Water（UE 第 4 输入）/ 真深度吸收细化 / 水体阴影；**整轨 merge 回 master 待用户指令**（S13 教训：merge 后重跑全部历史版本卡）。
