@@ -12051,6 +12051,1238 @@
      "expectExit": 0
     }
    ]
+  },
+  {
+   "id": "w0-m0",
+   "label": "W0 M-W0.0",
+   "name": "大世界生成工具骨架（citygen 确定性地基 + 空白城俯视）",
+   "tag": "w0-m0",
+   "date": "2026-11-13",
+   "summary": "A 类并行轨道 feat/worldgen 首个里程碑：city-tools 离线 CLI（纯 CPU 零图形零引擎依赖，仅 vendored stb_image_write 出 PNG）+ 自研 pcg32 确定性 RNG（已知答案锁实现）+ 规则网格 block 布局（5.5x4.0m，bevy_city 同构）+ 空白城俯视 PNG + CityStats 计数锚骨架。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "seed 对称确定性：同 seed 双跑布局规范序列化 FNV-1a 逐字节一致、PNG 双编码逐字节一致；异 seed 必异（布局与 PNG 双验证）",
+    "pcg32 已知答案：seed 12345 前三输出 1321476956/17539747/3348728241（Python 参考实现独立复算回填）",
+    "布局锚：size 6 -> 36 cells / 36 groundTiles / 72 roadSegments / 49 crossroads；extent 33x24m；block 5.5x4.0m 契约与 roadnet.json blocks 同源",
+    "citygen selftest 23 断言全绿；ctest w0-city-* 双树各 3/3（--repeat until-pass:3）；双后端构建 OK",
+    "交代物：example/w0-m0/（run.bat 六段 ALL GREEN + city_top.png 真实工具输出证据图 + 四份日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §1"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。city-tools 纯 CPU，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 23 条断言",
+     "kind": "tool",
+     "note": "seed 对称双跑逐字节 + pcg32 已知答案 + 布局/契约/PNG 锚；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：空白城俯视 PNG + CityStats 计数",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> example/w0-m0/city_top.png（1152x864，32px/m）；stats 锚 blocks=36 groundTiles=36 roadSegments=72 crossroads=49。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w0-m1",
+   "label": "W0 M-W0.1",
+   "name": "路网拓扑 + 车道语义（roadnet.json 契约产物 + 俯视图叠加）",
+   "tag": "w0-m1",
+   "date": "2026-11-13",
+   "summary": "M-W0.1：grid 路网拓扑（(size+1)^2 交点 / 全跨度 2*size*(size+1) 路段 / 有向边 x2）+ 车道语义（lanes_per_dir=1 / speed_limit=13.9m/s / width=1.0m 与路带几何同源）→ 按 W0-PLAN §1 字段契约写 roadnet.json（citygen 与第 8 步交通的接口铁律）；俯视图叠加 roadnet 边中心线与节点标记证明 JSON 与几何同源。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "roadnet 契约 selftest：selftest 38 断言全绿（新增 15：节点/边公式锚 49/168、from/to/id 闭包、双向对称、几何恰跨一个 block 间距、横竖 84+84、角点坐标、车道属性齐同、JSON 双跑逐字节、契约头字段、文本锚、异 seed 异 JSON、size1 边界 4 节点 8 边）",
+    "证据图：city_top.png 为工具真实输出（路网叠加版，1152x864）；roadnet.json 契约锚（version/units/blocks/phases + 49 交点 + 168 有向边）由 run.bat findstr/find 逐项核过",
+    "确定性：同 seed 双跑 city_top.png + roadnet.json 双产物 fc /b 逐字节一致；异 seed roadnet.json 必异",
+    "ctest w0-city-selftest/generate/negative + w0-roadnet 双树各 3/3（--repeat until-pass:3）；双后端构建 OK 零警告",
+    "交代物：example/w0-m1/（run.bat 七段 ALL GREEN exit 0 + 4 份日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §2"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--out 说明已更新为 city_top.png + roadnet.json。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet 契约 38 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 的 23 条 + M-W0.1 roadnet 契约 15 条；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：俯视 PNG（路网叠加）+ roadnet.json + CityStats",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> example/w0-m1/city_top.png（1152x864）+ roadnet.json（nodes=49 edges=168 directed）；stats 锚含 roadnetNodes=49 roadnetEdges=168。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m1",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m1 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m1-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w0-m2",
+   "label": "W0 M-W0.2",
+   "name": "OBB 地块递归细分 + 程序化楼体 -> OBJ 中间件 + city.scene（E1 World JSON）",
+   "tag": "w0-m2",
+   "date": "2026-11-13",
+   "summary": "M-W0.2：内区 4.5x3.0 递归细分（先 x 后 z 阈值分割 -> 4 叶）+ 每叶一栋程序化楼（RNG 分档高度 {3,8,14}m x 占地两档内缩 {0.30,0.15}m，消费追加流尾，36 shade 前缀逐字节不动）-> 每 block 一份 OBJ 中间件（8 顶点 12 三角外向绕序盒，block 局部坐标）+ city.scene（E1 World JSON，M-E2 World::serialise 形态：每 block 一实体，Transform=block 世界中心，Model.mesh 引用 OBJ）。.nmesh 化走 nanite-tools/asset-ingest 通道不自写 meshing——实测通道未就绪（viewer scene 白名单只认 .glb / nanite-tools 无 OBJ 导入），缺口登记给 asset-ingest 轨道。RNG 消费序：36 shade 前缀不变，楼体 288 次消费排流尾。",
+   "acceptance": [
+    "selftest 38 -> 53 断言全绿（新增 15：RNG 前缀契约、4 栋/块、高度恰三档、占地两档内缩、足迹在内区且两两不重叠、高度混合种子敏感、OBJ 32v/48f/4o 双跑逐字节异 seed 必异、scene E1 形态锚 version/nextID37/systems、36 实体 36 mesh 引用闭合、scene seed 无关性= E1 无 seed 键）",
+    "证据图：city_top.png 楼体占地三档灰度俯视（工具真实输出 1152x864）+ city.scene 契约锚（36 实体 / 36 OBJ 引用闭合 / 36 份 OBJ 文件）由 run.bat findstr/find/dir 逐项核过",
+    "确定性：同 seed 双跑 city.scene + block_07.obj + city_top.png 三产物 fc /b 逐字节一致；异 seed OBJ+PNG 必异、scene seed 无关（E1 schema 无 seed 键）",
+    "ctest w0-city-selftest/generate/negative/w0-roadnet/w0-cityscene 双树各 5/5（--repeat until-pass:3）；双后端构建 OK 零新警告",
+    "交代物：example/w0-m2/（run.bat 七段 ALL GREEN exit 0 + 日志 + blocks/ 36 份 OBJ）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §3"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--out 说明已含 blocks/*.obj + city.scene。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet 契约 / 楼体+OBJ+scene 53 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 23 条 + M-W0.1 15 条 + M-W0.2 15 条；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：楼体 OBJ 中间件 + city.scene + 俯视 PNG（楼体占地叠加）+ roadnet",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> city_top.png + roadnet.json + blocks/block_00..35.obj（每份 4 栋）+ city.scene（entities=36 meshes=36）；stats 锚 buildings=144。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m2",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m2 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m2-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w0-m3",
+   "label": "W0 M-W0.3",
+   "name": "simplex 噪声密度分区 + 树 + 统计锚收口（M-W0 收官）",
+   "tag": "w0-m3",
+   "date": "2026-11-13",
+   "summary": "M-W0.3 收官：自研 simplex 梯度噪声（OpenSimplex 结构同构，F2/G2 数学推导常数 + 8 方向梯度表 + t^4 径向核，perm 由独立 Pcg32(noiseSeed) Fisher-Yates；Python 参考实现独立复算 eval/perm 已知答案防自证）密度分区（bevy 阈值同源 0.45/0.6/0.7 四档；noise_scale 0.025->0.06 显式偏离留档：size6 分区可见性）+ 树（forest 8 棵/块、low 4 棵/块，仅俯视+统计层，保 w0-m2 冻结基线）+ CityStats 密度档计数。RNG 流最终形态：36 shade -> 288 楼体 -> noiseSeed -> 树位置，前两段逐字节不动（重建流断言锁定）。",
+   "acceptance": [
+    "selftest 53 -> 72 断言全绿（新增 19：密度档 21/5/6/4、噪声值域/均值统计锚、eval 四点 + perm 头已知答案、noiseSeed 流段位置、树数公式与首树位置、异 seed 分布必异 19/4/4/9、size1 边界含 lo 截断口径锚）",
+    "证据图：city_top.png 密度分区可见（forest 绿 21 块 + 深绿树点 / low 浅灰 / medium 中灰 / high 深灰）+ 楼体三档灰阶 + 路网叠加完好；工具真实输出",
+    "确定性：同 seed 双跑 PNG+roadnet+scene+OBJ 四产物 fc /b 逐字节一致；异 seed PNG/OBJ 必异、密度档分布必异、scene seed 无关",
+    "ctest w0-city-selftest/generate/negative/w0-roadnet/w0-cityscene/w0-density 双树各 6/6（--repeat until-pass:3）；双后端构建 OK 零新警告",
+    "交代物：example/w0-m3/（run.bat 七段 ALL GREEN exit 0 + 日志）+ 本卡四用例 + CITY-TOOLS-GUIDE.md §4 + MILESTONES 四栏 + close 闸报告"
+   ],
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。--stats 说明含密度档。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：确定性 / 已知答案 / 布局锚 / roadnet / 楼体+scene / 噪声+密度+树 72 条断言",
+     "kind": "tool",
+     "note": "M-W0.0 23 + M-W0.1 15 + M-W0.2 15 + M-W0.3 19；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：密度分区俯视 PNG + roadnet + OBJ + city.scene + 密度统计",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> city_top.png（密度四档 21/5/6/4 + 188 树）+ roadnet.json + blocks/*.obj + city.scene；stats 锚 noiseSeed=2109909543。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w0-m3",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w0-m3 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w0-m3-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w1-m0",
+   "label": "W1 M-W1.0",
+   "name": "city2engine 引擎交付驱动步：36 OBJ -> 扁平 glb + nanite 套件 + city.scene.engine",
+   "tag": "w1-m0",
+   "date": "2026-11-13",
+   "summary": "M-W1.0：Python stdlib 驱动 scripts/city2engine.py（照 obj2glb.py 先例，in-process 复用 asset-ingest 转换器）把冻结的 city-tools 产物接进引擎——每 block 一份扁平 glb（city_block_<seed>_<size>_NN.glb，Q-W1B 白名单零改动）+ nanite-tools cluster->lod->dag 套件（assets/meshlets，W1-B 产物形态收口）+ city.scene.engine（E1 World JSON 纯文本重写，仅 meshFile 值换 glb 名，其余字节原样，Q-W1A 双轨）。确定性：nanite 调用统一 cwd=repo root + repo 相对路径（dag.json 内嵌 prefix 字段稳定），同路径双跑 146 文件聚合 sha256 一致（DX12/VULKAN 两棵工具树交叉验证）。附带修复：city-tools serializeCityScene buf[192] 截断 bug（单实体实需 ~280B，36 实体全伤、city.scene 非法 JSON；viewer M-W1.1 才是第一个 JSON 消费者所以锚全绿无人发现），selftest 72->74 补 JSON 结构硬闸。",
+   "acceptance": [
+    "selftest 21 断言全绿（命名/白名单镜像、mesh ref 解析、scene 重写其余字节保真、obj2glb 双跑逐字节、PNG 写出器确定性、size 敏感）",
+    "驱动链真实产物：36 glb（全部过扁平白名单）+ 36 nmesh/lod0/dag.json 套件 + city.scene.engine（36 引用闭合、E1 合法 JSON、Transform 完整）+ city_delivery.png 证据图（真实 glb 字节数驱动的 block 网格亮度图）",
+    "确定性：同路径双跑（DX12 vs VULKAN 工具树交叉）146 文件聚合 sha256 一致；dag.json prefix 字段经 cwd+相对路径约束稳定",
+    "city.scene 截断 bug 修复回归：w0-m2/m3 重拍仅 city.scene 变化（OBJ/PNG/roadnet 逐字节不动），--only w0-m2 --only w0-m3 8/8 bytes ALL GREEN，selftest 74 断言双树 PASS",
+    "交代物：example/w1-m0/（run.bat 七段 + w1_check.py 机检 + city.scene.engine + city_delivery.png）+ 本卡四用例（exe={python} token，showcase exe_for 2026-11-13 扩展）"
+   ],
+   "preview": "example/w1-m0/city_delivery.png",
+   "exe": {
+    "dx12": "{python}",
+    "vulkan": "{python}"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。drive 段说明 OBJ->glb->nmesh->engine 全链。",
+     "args": [
+      "{root}/scripts/city2engine.py"
+     ],
+     "expectExit": 2,
+     "expectLog": "city2engine - nl-engine worldgen tools",
+     "command": "city2engine.py (无参数)"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：命名/白名单/重写保真/obj2glb 确定性/PNG 写出器 21 条断言",
+     "kind": "tool",
+     "note": "--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "city2engine selftest: PASS",
+     "command": "city2engine.py selftest --verbose"
+    },
+    {
+     "id": "drive",
+     "name": "drive：36 OBJ -> 扁平 glb + nanite 套件 + city.scene.engine + 证据图",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> assets/models + assets/meshlets + example/w1-m0（真实产物落位，双跑确定性）；nanite 入口取 DX12 树（离线 CPU 工具与后端无关，VULKAN 树交叉验证过逐字节一致）。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "drive",
+      "--src",
+      "{root}/example/w0-m3",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--nanite",
+      "{root}/build/dx12/nanite-tools.exe"
+     ],
+     "expectExit": 0,
+     "expectLog": "city2engine drive OK: blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36",
+     "command": "city2engine.py drive --src --seed 12345 --size 6 --nanite"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何转换拒绝。",
+     "args": [
+      "{root}/scripts/city2engine.py",
+      "drive",
+      "--src",
+      "{root}/example/w0-m3",
+      "--seed",
+      "12345",
+      "--size",
+      "0",
+      "--nanite",
+      "{root}/build/dx12/nanite-tools.exe"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city2engine.py drive --src --seed 12345 --size 0 --nanite"
+    }
+   ]
+  },
+  {
+   "id": "w1-m1",
+   "label": "W1 M-W1.1",
+   "name": "城市资产进引擎消费验收：贴图化楼体 viewer --scene 渲染（俯视 + 街景）",
+   "tag": "w1-m1",
+   "date": "2026-11-13",
+   "summary": "M-W1.1：36 block 带贴图 glb（ambientCG CC0 立面纹理 3 档：Facade018A 砖墙住宅 / Facade001 幕墙办公 / Facade002 亮窗塔楼，512x512 JPG 内嵌，同字节 image 去重后每块 ~40-55KB）经 city.scene.engine 进 viewer --scene 顶点展开直渲。city-tools 本体扩展（用户拍板「city-tools 要改」）：serializeBlockObj 加 vt 立面平铺 UV（每档 kWindowUnit 米/tile）+ usemtl 密度档分组 + mtllib city.mtl；generate 增产 city.mtl + textures/（入库 JPG 逐字节拷贝）；RNG 流契约零消费零破坏；selftest 74->82。obj2glb.py 同字节 image 去重（每 block 4 楼同档共享 1 嵌入）。w0-m2/m3 产物重拍（OBJ+mtl+textures+scene tint 1.0），回归 8/8 bytes ALL GREEN。drive 修 transient 失败重试闸（沙箱连续 spawn 子进程偶发 exit 0 空输出，失败点漂移；重试 2 次即绿，ctest --repeat 同口径）。",
+   "acceptance": [
+    "双后端 --scene 渲染：city_top.png 俯视 36 规则盒楼体 + city_street.png 街景立面窗格清晰（砖墙窗/幕墙/亮窗三档可辨）",
+    "异常几何修复闭环：首轮渲染尾部 block 撕裂灰白异常 -> 定位 assets/models 残留 M-W1.0 无纹理旧 glb（drive 中途死）-> 根因 run_checked 无重试遇 transient 空输出 -> 重试闸后 36/36 全过",
+    "贴图链机检：36 glb 全检 4 submeshes + 1 image；city-tools selftest 82 断言双树 PASS（vt/usemtl/mtllib/拷贝字节保真/JPEG SOI）",
+    "w0 基线重拍回归：--only w0-m2 --only w0-m3 8/8 bytes ALL GREEN；run.bat 锚兼容（stats 数值不变）",
+    "交代物：example/w1-m1/（run.bat 七段 + 双后端 4 PNG + 4 log）+ 本卡双 image 用例 + w0-m2/m3 重拍产物"
+   ],
+   "preview": "example/w1-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：36 block 三档贴图楼体（pitch -89）",
+     "kind": "image",
+     "note": "viewer --scene 直渲 city.scene.engine；楼体全规则盒、三档纹理（顶面采样墙色微区域）。",
+     "args": [
+      "--scene",
+      "{root}/example/w1-m0/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -89 --dist 48",
+     "baselines": {
+      "dx12": "example/w1-m1/city_top.png",
+      "vulkan": "example/w1-m1/city_top-VULKAN.png"
+     }
+    },
+    {
+     "id": "city-street",
+     "name": "街景：立面窗格贴图（pitch -10）",
+     "kind": "image",
+     "note": "街景机位看立面：砖墙白窗（tier1）/ 蓝灰幕墙窗格（tier2）/ 深灰亮窗塔楼（tier3）。",
+     "args": [
+      "--scene",
+      "{root}/example/w1-m0/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "command": "viewer.exe --scene .../city.scene.engine --screenshot <out> --pitch -10 --dist 30",
+     "baselines": {
+      "dx12": "example/w1-m1/city_street.png",
+      "vulkan": "example/w1-m1/city_street-VULKAN.png"
+     }
+    }
+   ]
+  },
+  {
+   "id": "w2-m0",
+   "label": "W2 M-W2.0",
+   "name": "楼体几何变体：程序化楼型池（单盒/退台/裙楼塔/L形，FNV-1a 纯函数选型零 RNG）",
+   "tag": "w2-m0",
+   "date": "2026-11-13",
+   "summary": "M-W2.0：city-tools 楼体从单一盒体扩成程序化楼型池（用户拍板 A1 全自研 + B1 纯函数，W2-PLAN §2）。4 种形状原语：V0 单盒 / V1 退台（0.55h 处 0.62 缩放）/ V2 裙楼塔（0.30h 裙楼 + 0.55 缩放塔楼，h<6m 纯函数降级退台）/ V3 L 形（翼 x0 内缩 0.06m 消共面 z-fighting）；分档池 tier1={单盒,退台,L形} tier2/3={单盒,退台,裙楼}。变体选取 = fnv1a64(seed‖block‖building) % 3 零 RNG 消费（M-W1.1 材质档同构），RNG 流契约 ①②③④ 逐字节不动；serializeLayout 每楼追加 variant u32；serializeBlockObj 按 buildingParts 展开（每 part 8 顶点 12 三角，UV 沿 W1.1 立面平铺）；generate --stats 增 variants 分布行（纯追加锚）。selftest 82->88（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含 6 组）。bevy_city 楼型池 = kenney glb 外部资产 + rng.random_range 消费选型（assets.rs Buildings::get_random_building），本轨几何自研不走外部资产（kenney 色板图集前科 + A2 否决）。分布锚 seed12345=48/54/8/34、seed12346=49/54/10/31。w0-m2/m3 + w1-m0/m1 基线全量重拍。",
+   "acceptance": [
+    "selftest 88 断言双后端 PASS（含 6 组 M-W2.0 变体断言：池界/四形状同城出现/异 seed 分配必异/裙楼 h<6m 降级/全城 36 block OBJ v/vt/f 行数守恒/part 落原 footprint）",
+    "generate --stats 变体分布锚：variants: single=48 setback=54 podium=8 lshape=34（FNV-1a 确定性）",
+    "w2-m0 run.bat 七段 ALL GREEN：selftest/generate+variants 锚/36 OBJ+city.mtl+textures/同 seed 字节确定性/异 seed 变体分布必异/usage exit 2/negative exit 2",
+    "w0-m2/m3 + w1-m0/m1 基线重拍 ALL GREEN（OBJ/scene/PNG 锚全兼容）；ctest 151/151 双后端",
+    "viewer 消费验收见 w2-m1（俯视/街景双机位变体剪影可辨）"
+   ],
+   "preview": "example/w2-m0/city_top.png",
+   "exe": {
+    "dx12": "build/dx12/city-tools.exe",
+    "vulkan": "build/vulkan/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2（city-tools 纯 CPU，两构建树产物等价）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：97 断言（M-W3.0 街道资产组加入，82→88→97）",
+     "kind": "tool",
+     "note": "M-W2.0 新增 6 组变体断言（池界/覆盖/seed 敏感/裙楼降级/OBJ part 守恒/footprint 包含）；--verbose 逐条 ok 行是证据日志数据源。（M-W3.0 锚更新：97）",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (97 assertions)",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：变体楼型 OBJ + city.scene + 俯视 PNG + 变体分布统计",
+     "kind": "tool",
+     "note": "seed 12345 / size 6 -> 144 栋按分档池展开楼型（48/54/8/34）；variants 锚行是 M-W2.0 分布证据；产物 OBJ 含退台/裙楼/L形多段几何。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w2-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "variants: single=48 setback=54 podium=8 lshape=34",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w2-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w2-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w2-m1",
+   "label": "W2 M-W2.1",
+   "name": "变体楼型消费验收：drive 全城 + viewer --scene 变体天际线渲染（俯视 + 街景）",
+   "tag": "w2-m1",
+   "date": "2026-11-13",
+   "summary": "M-W2.1：M-W2.0 楼型池产物走全消费链——city2engine drive（36 OBJ -> 扁平 glb + nanite cluster/lod/dag + city.scene.engine，obj2glb/白名单/nanite 链零改动直接吃多段楼型几何）-> viewer --scene 顶点展开直渲。俯视可见 L 形/退台双段/裙楼加大塔 footprint；街景天际线剪影变体可辨（与 w1-m1 同机位构图，几何从纯盒阵变为混合楼型）。消费链对变体几何零适配成本是本轨验收核心判据。run_checked 加固：M-W1.1 的 retries=2+sleep 0.2s 在基线重拍实测不够（drive 108 连发下 transient 3 连挂、失败点漂移、死亡率 ~11/12，python 单项直拉 20/20 全过），加固为 retries=4 + 指数退避 0.5s->1s->2s->4s。w1_check.py hash 集合按文档口径修复（glb+meshlets+scene.engine+evidence png；旧 HERE.iterdir() 全量收录把 h1/h2 重定向文件卷进集合，时序使 run.bat seg5 确定性对拍永不通过——W1.0 潜伏 bug 基线重拍炸出）。w1-m1/w2-m1 image 卡补 baselines 登记（m0.2 老口径，W1 收官「回归 8/8」实为口径含糊，本轨勘误）。",
+   "acceptance": [
+    "drive 零闪断完成：blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36",
+    "双后端 viewer --scene 渲染 4 图（俯视 + 街景），screenshot written 锚齐，bytes 与登记基线逐字节相同",
+    "同路径双跑 delivery 集合 sha256 一致（修复后的 w1_check 口径）",
+    "回归 w2-m0 8/8 + w2-m1 4/4 + w1-m0 8/8 + w1-m1 4/4（补登记后首绿）+ w0-m2/m3 各 8/8"
+   ],
+   "preview": "example/w2-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：变体楼型 footprint（L形/退台双段/裙楼大塔）",
+     "kind": "image",
+     "note": "viewer --scene 直渲 city.scene.engine；楼顶形状四变体可辨（对比 w1-m1 纯矩形阵列）。",
+     "args": [
+      "--scene",
+      "{root}/example/w2-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w2-m1/city_top.png",
+      "vulkan": "example/w2-m1/city_top-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w2-m1/city.scene.engine (pitch -89)"
+    },
+    {
+     "id": "city-street",
+     "name": "街景：变体楼型天际线剪影（yaw 28 / pitch -10 / dist 30）",
+     "kind": "image",
+     "note": "街景机位看立面 + 天际线：退台阶梯剪影 / L 形转角 / 裙楼塔上窄下宽，三档贴图沿 W1.1 平铺。",
+     "args": [
+      "--scene",
+      "{root}/example/w2-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w2-m1/city_street.png",
+      "vulkan": "example/w2-m1/city_street-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w2-m1/city.scene.engine (street)"
+    }
+   ]
+  },
+  {
+   "id": "w3-m0",
+   "label": "W3 M-W3.0",
+   "name": "树/车/路灯资产通道：city-tools 摆放数据 + vendored 名字表（12 树池/8 车池/路灯）",
+   "tag": "w3-m0",
+   "date": "2026-11-14",
+   "summary": "M-W3.0：W3-PLAN 拍板 A1+B1+C1+D1 落码——city-tools 摆放数据 canonical 化（树沿用 M-W0.3 RNG 位置零新增消费，树型 fnv1a64(seed,'tree',idx)%12 纯函数选型；车新增 CityCar 沿路网有向边停靠 hash(seed,'car',edge)%4 命率、t∈[0.2,0.8] 避路口、垂边 0.3m 偏移、车型 hash%8、edgeId 溯源预埋 M-T0；路灯 CityProp 每路口 1 盏 hash 四角选位）。名字表 kTreeVariantNames/kCarVariantNames 与 thirdparty/{kenney-nature-kit,kenney-car-kit,poly-streetlight} 一一对应（selftest 锁白名单形态），city-tools 零资产依赖（A1：glb 本体由 drive 装配）。serializeCityScene 实体 36->315（nextID 316 锚），serializeLayout 加树 variant/cars/props 段，generate --stats 增 street: 分布行。selftest 88->97（名字表守恒/树池界+覆盖/车数界+seed 敏感/路灯恒 crossroads/scene 实体形态/nextID 恒等式）。分布锚 seed12345=42 车/49 灯/树 12 种均匀（14~18），seed12346=42 车/168 棵全均匀 14。",
+   "acceptance": [
+    "selftest 97 断言双后端 PASS（9 组 M-W3.0 断言：名字表白名单形态/树池界覆盖>=8/车数界[24,64]+seed 敏感/路灯恒 49/scene 315 实体+nextID 恒等式）",
+    "generate --stats street 锚：cars=42 lights=49 treeVariants=14,13,16,18,17,16,14,13,16,18,17,16（FNV-1a 确定性）",
+    "w3-m0 run.bat 七段 ALL GREEN（同 seed 字节确定性/异 seed street 锚/nextID 316）",
+    "w0-m2/m3 + w2-m0 基线重拍 ALL GREEN；ctest 151/151×2；city2engine selftest 32（vendored 通道 9 断言）"
+   ],
+   "preview": "example/w3-m0/city_top.png",
+   "exe": {
+    "dx12": "build/DX12/city-tools.exe",
+    "vulkan": "build/VULKAN/city-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "city-tools 纯 CPU，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "city-tools - nl-engine worldgen tools",
+     "command": "city-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：97 断言（含 M-W3.0 街道资产 9 组）",
+     "kind": "tool",
+     "note": "M-W3.0 新增：名字表守恒/树池界覆盖/车数界+seed 敏感/路灯恒 crossroads/scene 实体形态+nextID 恒等式；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (97 assertions)",
+     "command": "city-tools selftest --verbose"
+    },
+    {
+     "id": "generate",
+     "name": "generate：树/车/路灯摆放 + street 分布行 + 315 实体 scene",
+     "kind": "tool",
+     "note": "seed 12345 -> cars=42（168 边 1/4 命率）lights=49（每路口 1 盏）树 12 池均匀；city.scene nextID=316；variants 锚沿用 M-W2.0。",
+     "args": [
+      "generate",
+      "--seed",
+      "12345",
+      "--size",
+      "6",
+      "--out",
+      "{root}/example/w3-m0",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "street: cars=42 lights=49",
+     "command": "city-tools generate --seed 12345 --size 6 --out example/w3-m0 --stats"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--size 越界显式退出 2",
+     "kind": "tool",
+     "note": "--size 0 越界（1..64），参数校验先于任何生成拒绝。",
+     "args": [
+      "generate",
+      "--size",
+      "0",
+      "--out",
+      "{root}/example/w3-m0-bad"
+     ],
+     "expectExit": 2,
+     "expectLog": "invalid arguments: --size out of range (1..64)",
+     "command": "city-tools generate --size 0"
+    }
+   ]
+  },
+  {
+   "id": "w3-m1",
+   "label": "W3 M-W3.1",
+   "name": "街景资产消费验收：drive vendored 装配（21 glb）+ viewer 315 实体渲染",
+   "tag": "w3-m1",
+   "date": "2026-11-14",
+   "summary": "M-W3.1：A1 拍板 drive 层装配落地——city2engine copy_vendored_assets（scene mesh 引用解析 -> thirdparty 三目录查找 -> assets/models 同字节去重拷贝，21 件 = 12 树 + 8 车 + 路灯全池被引用）；GLB_NAME_RE 扩连字符（sedan-sports.glb，viewer 白名单允许可打印 ASCII，drive 侧保持安全子集）。viewer --scene 渲染 objects=315（36 楼块+188 树+42 车+49 路灯）batches=215，车/路灯/树 glb 全链零引擎改动直渲。**资产端变形一处**：cinevva 车包 glb 的 image 是外部 uri（Textures/colormap.png 分离残留），tinygltf 不加载外部文件 -> 渲染报错实锤 -> tools/embed_glb_textures.py 把官方 CC0 colormap.png（sz-games 镜像获取，512x512 RGBA）追加进 BIN chunk 转嵌入式 bufferView（8 车全处理，VENDOR.md 留档）。特写机位两次探针实测钻楼底（dist 21/26 < 城市半径，M-W2.1 教训复现），证据机位沿用 top/street 验证位。",
+   "acceptance": [
+    "drive vendored=21（12 树+8 车+路灯全池）+ 同路径双跑 delivery 集合 sha256 一致（w1_check 扩 vendored glb 进 hash 口径）",
+    "viewer objects=315 batches=215 双后端 4 图（top+street），车/路灯贴图渲染正常（street 图可视）",
+    "w3-m1 run.bat ALL GREEN（drive vendored=21 锚 + objects=315 锚 + screenshot written ×4）",
+    "回归 w3-m0 8/8 + w2-m0/w2-m1/w1-m0/w1-m1 + w0-m2/m3 全绿"
+   ],
+   "preview": "example/w3-m1/city_street.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "city-top",
+     "name": "俯视：315 实体城市（树/车/路灯 footprint 分布）",
+     "kind": "image",
+     "note": "viewer --scene 直渲；objects=315 锁全部街道资产装载；树冠/车顶在楼间可辨。",
+     "args": [
+      "--scene",
+      "{root}/example/w3-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w3-m1/city_top.png",
+      "vulkan": "example/w3-m1/city_top-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w3-m1/city.scene.engine (pitch -89)"
+    },
+    {
+     "id": "city-street",
+     "name": "街景：车/路灯/树（yaw 28 / pitch -10 / dist 30）",
+     "kind": "image",
+     "note": "街景机位：彩色车（嵌入 colormap）+ 路灯弯杆清晰可见；树冠在楼间草地点缀。",
+     "args": [
+      "--scene",
+      "{root}/example/w3-m1/city.scene.engine",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/w3-m1/city_street.png",
+      "vulkan": "example/w3-m1/city_street-VULKAN.png"
+     },
+     "command": "viewer.exe --scene w3-m1/city.scene.engine (street)"
+    }
+   ]
+  },
+  {
+   "id": "t0-traffic",
+   "label": "T0 M-T0.0~T0.2",
+   "name": "交通系统 lane graph（车道级展开图 + A* 寻路 + 直线跟车，traffic-tools）",
+   "tag": "traffic-m0",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 8 步交通系统整轨（A 类轨道 feat/worldgen，M-W3 edgeId 预埋消费）：core nl/traffic 车道级展开图（UE ZoneGraph 口径，roadnet.json -> 每有向边 lanes_per_dir 车道 + 折线预计算 + lane->lane 连接表禁掉头，右行几何 right=(fz,-fx)）+ A* 寻路（线性扫 open 表逐位确定，Ok/Unreachable/BadLane 显式语义）+ 直线跟车仿真（C1 拍板：恒速巡航 + 跟车律 sqrt(brake*(gap-minGap)) + route 末端停车曲线，固定 dt=1/60 车序逐位可复现）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "lane graph 确定性：同输入双跑 dump 逐字节一致、异输入必异；车道数网格公式锚（方格 8 边 -> 8 lanes）；偏移几何精确浮点锚（width 1.0 -> ±0.25，2 车道 -> 0.75/0.25）",
+    "连接闭合：outgoing/incoming 双向反查一致 + 禁掉头全图扫描 + 方格每 lane 恰 1 出链",
+    "A* 锚：方格唯一多跳路径 [e0,e4,e7,e3] 逐位一致 + 弧长 40m；剪边孤端 Unreachable 显式；越界 BadLane 显式",
+    "跟车锚：3 车混合路径 300 帧双跑 TrafficCarState memcmp 逐位一致；停车跟随平衡间距 [1.0,2.5]m 永不穿透；全帧限速帽",
+    "真实数据冒烟：seed 12345 城市路网 49 节点/168 边 -> 168 lanes / 428 links / 798m；跨城寻路 e0->e60 8 hops 36.5m；32 车 30s 行驶 967.4m",
+    "交代物：example/t0-traffic/（run.bat 七段 ALL GREEN + city-lanes/city-sim 真实工具输出证据图 + 车道图 dump）+ 本卡七用例 + TRAFFIC-TOOLS-GUIDE.md；ctest m-t0-traffic-* 9 用例双后端全绿"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t0-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。traffic-tools 只链 nl_core，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools build <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车 5244 断言",
+     "kind": "tool",
+     "note": "确定性逐位 + 几何精确浮点锚 + 连接闭合 + A* 路径锚 + 跟车平衡间距/限速帽 + 负向显式报错；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "build",
+     "name": "build：夹具路网 -> lane graph + 确定性 dump",
+     "kind": "tool",
+     "note": "方格夹具 8 lanes / 8 links / 80m + stats（offset max 0.250）；dump 产物 = 字节级对拍锚。",
+     "args": [
+      "build",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--dump",
+      "{root}/example/t0-traffic/t0-lane-graph.json",
+      "--stats"
+     ],
+     "expectExit": 0,
+     "expectLog": "lanes       : 8",
+     "command": "traffic-tools build example/t0-traffic/roadnet.json --dump example/t0-traffic/t0-lane-graph.json --stats"
+    },
+    {
+     "id": "path",
+     "name": "path：A* 唯一路径（e0 -> e3 四跳 40m）",
+     "kind": "tool",
+     "note": "方格图每节点 2 路路径唯一：e0 -> e4 -> e7 -> e3，弧长合计 40m；确定性线性扫 open 表。",
+     "args": [
+      "path",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "3"
+     ],
+     "expectExit": 0,
+     "expectLog": "hops        : 4",
+     "command": "traffic-tools path example/t0-traffic/roadnet.json --from 0 --to 3"
+    },
+    {
+     "id": "sim",
+     "name": "sim：真实城市 32 车跟车 30s + 车流终帧 PNG",
+     "kind": "tool",
+     "note": "seed 12345 城市 168 lanes，确定性派车（每边首车道出发 A* 到对侧，不可达回落单车道），固定 dt=1/60；city-sim.png = 灰车道线 + 红点车流终帧（工具真实输出）。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t0-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "cars        : 32",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t0-traffic/city-sim.png"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道，显式报错退出 1（expectExit 约定 0/1/2）。",
+     "args": [
+      "path",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t0-traffic/roadnet.json --from 0 --to 99"
+    }
+   ]
+  },
+  {
+   "id": "t1-traffic",
+   "label": "T0 M-T1.0~T1.2",
+   "name": "交通调度器（红绿灯相位 + 路口占用锁 + 避撞，traffic-tools）",
+   "tag": "traffic-m1",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 9 步调度器迭代（A 类轨道 feat/worldgen，M-T0 lane graph 消费）：TrafficControl = A2 拍板固定周期两相含黄灯信号（绿→黄→全红清空→对向，黄灯不放行新进入、持锁穿完，整数帧×dt 相位时钟逐位确定，phases 契约只加不减可选覆盖）+ B1 拍板路口占用锁（FIFO 授予、越圈释放、无前车才前瞻申请 + 出口防溢出闸 + 自适应控制几何三重死锁根修）+ C1 拍板跨路段互斥数值锚（同路段对向会车豁免，下界 1.0m 违反退出 1）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "信号时钟锚：g=0.5/y=0.2/c=0.1 帧序 0/30/42/48/78/96 绿黄红交替逐位 + 周期回卷；phases 覆盖生效 + 未知节点负向",
+    "占用锁锚：FIFO 授予序（队首优先）+ 持锁互斥 + 圈内不释放/越圈释放 + 冲突双车串行过锁（先到零停滞/后到等锁）",
+    "红灯刹停：长红窗口内停车线 7.5m 逐位钳停 + 停滞计数",
+    "控制全开双跑：TrafficCarState memcmp 逐位一致 + haltFrames 一致；跨路段最小间距全程 >= 1.0m",
+    "城市冒烟（49 lock-only 节点）：无死锁（停滞持锁退出 1；locked end 行为终态持锁节点数，M-T2 组锁后穿越持锁合法）+ min gap 1.35m + 到达>0+ min gap 1.35m + 到达>0",
+    "交代物：example/t1-traffic/（run.bat 五段 ALL GREEN + signal-sim/city-sim 信号状态着色终帧证据图 + 信号化夹具路网）+ 本卡五用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 4657 断言含 ⑨ 调度器段）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t1-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools sim <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车/调度器 5244 断言",
+     "kind": "tool",
+     "note": "⑨ 调度器段：信号时钟帧锚 + FIFO 锁单元链 + 红灯 7.5m 逐位钳停 + 冲突串行过锁 + 跨路段互斥 + 控制全开双跑 memcmp；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "sim-signal",
+     "name": "sim：信号化夹具 6 车 30s（4 信号节点默认 8/2/1 相位）",
+     "kind": "tool",
+     "note": "全部 4 节点 signal=true；终帧 PNG 含绿/黄/红相位方块；locked end 0 = 无锁泄漏；黄灯不放行新进入。",
+     "args": [
+      "sim",
+      "{root}/example/t1-traffic/signal-roadnet.json",
+      "--cars",
+      "6",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t1-traffic/signal-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "signals     : 4 (lock-only 0 / signal 4)",
+     "command": "traffic-tools sim example/t1-traffic/signal-roadnet.json --cars 6 --frames 1800 --png example/t1-traffic/signal-sim.png"
+    },
+    {
+     "id": "sim-city",
+     "name": "sim：真实城市 32 车（49 lock-only 节点）+ 跨路段互斥扫描",
+     "kind": "tool",
+     "note": "城市 signal 位全 false = lock-only 占用锁 + M-T2 组共享并行（吞吐 17/32 / 646.9m，M-T1 基线 7/32 / 475.5m）；死锁守卫内建于退出码（停滞持锁 = 退出 1）；citygen signal 恒 false，信号路径由夹具卡演示。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t1-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "distance    : 646.9 m",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t1-traffic/city-sim.png"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道显式退出 1（expectExit 约定 0/1/2）；碰撞/死锁违例同为退出 1（sim 内建）。",
+     "args": [
+      "path",
+      "{root}/example/t1-traffic/signal-roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t1-traffic/signal-roadnet.json --from 0 --to 99"
+    }
+   ]
+  },
+  {
+   "id": "t2-traffic",
+   "label": "T0 M-T2.0~T2.2",
+   "name": "调度器增强（组共享锁 + 转弯独占 + gap-out 感应信号 + 循环路线，traffic-tools）",
+   "tag": "traffic-m2",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 9 步后续迭代（A 类轨道 feat/worldgen，M-T1 机制延伸，用户拍板「开后续项 全给做了吧」）：Q-T9 锁模型升级（组共享 + 转弯独占——直行车同组并行穿路口（对向右行车道分离），转弯车独占全节点（1 车道路网左转穿对向），FIFO 队序天然防转弯饿死，非纯轴节点组锁退化单持有者保正确）+ Q-T10 gap-out 感应信号（绿相零需求持续 gap_out_s 提前切黄，整数帧跳变确定，phases 契约可选扩展 gap_out_s 缺省 0=关）+ Q-T11 循环路线（TrafficParams.loop 环闭合回绕续行，tool --loop 构造环 route）。城市组锁吞吐 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m，+143%）。工具版交代：不进 kStage / renderer / 渲染回归总闸。",
+   "acceptance": [
+    "锁单元锚：同组第二车直接共享授予；跨组互斥（g0 非空时 g1 入队）；转弯独占授予/独占期组申请入队/释放链全部按序",
+    "gap-out 时钟锚：绿相零需求 gap_out 0.5s 于 frame 481 提前切黄（固定周期应为 150）；需求反锚（持续上报不触发，frame 700 自然周期）；最短绿时防抖（minGreen 窗口内零跳帧）",
+    "loop 锚：方格环 [e0,e4,e7,e3] 30s odometer > 50m（环长 40m）速度恒正（永不停）+ 双跑 memcmp 逐位 + loop=false 对照单程停靠",
+    "转弯独占仿真锚：转弯车与跨组车串行过锁 + heldNodeCount 0 + 控制全开双跑 memcmp",
+    "城市冒烟（49 lock-only 节点 32 车）：组锁吞吐 17/32 / 646.9m（M-T1 7/32 / 475.5m）+ min gap 1.35m（对向共线豁免口径修正后回基线）+ 停滞持锁 0（死锁守卫内建退出码）",
+    "交代物：example/t2-traffic/（run.bat 六段 ALL GREEN + gapout-sim/city-sim 证据图 + gap_out_s 契约夹具）+ 本卡七用例；ctest m-t0-traffic-* 9 用例双后端全绿（selftest 5244 断言含 ⑩ M-T2 段）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/traffic-tools.exe",
+    "vulkan": "build/vulkan/traffic-tools.exe"
+   },
+   "preview": "example/t2-traffic/city-sim.png",
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数启动打印 usage 并退出 2；sim 段含 --loop / --actuated 新旗标。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "traffic-tools sim <roadnet.json>",
+     "command": "traffic-tools"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：车道图/寻路/跟车/调度器/调度增强 5244 断言",
+     "kind": "tool",
+     "note": "⑩ M-T2 段：gap-out 帧跳变 481 锚 + 需求反锚 + 最短绿时防抖 + loop 环 odometer/双跑/对照 + 转弯独占串行/无泄漏/双跑；--verbose 逐条 ok 行是证据日志数据源。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic selftest: PASS (5244 asserts)",
+     "command": "traffic-tools selftest --verbose"
+    },
+    {
+     "id": "sim-gapout",
+     "name": "sim：gap-out 感应信号夹具 6 车（phases 契约 gap_out_s=1.0）",
+     "kind": "tool",
+     "note": "4 信号节点全 gap-out 1s：绿相无等待车 1s 即提前切黄（对向有车等待时）；终帧 PNG 含相位方块；locked end 0。",
+     "args": [
+      "sim",
+      "{root}/example/t2-traffic/gapout-roadnet.json",
+      "--cars",
+      "6",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t2-traffic/gapout-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "signals     : 4 (lock-only 0 / signal 4)",
+     "command": "traffic-tools sim example/t2-traffic/gapout-roadnet.json --cars 6 --frames 1800 --png example/t2-traffic/gapout-sim.png"
+    },
+    {
+     "id": "sim-city",
+     "name": "sim：真实城市 32 车（组共享锁并行吞吐 +143%）",
+     "kind": "tool",
+     "note": "49 lock-only 节点组锁：arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m）；对向共线车道豁免口径（精确反向 + 共线 0.75m）修正后 min gap 1.35m；停滞持锁死锁守卫内建退出码。",
+     "args": [
+      "sim",
+      "{root}/example/w0-m0/roadnet.json",
+      "--cars",
+      "32",
+      "--frames",
+      "1800",
+      "--png",
+      "{root}/example/t2-traffic/city-sim.png"
+     ],
+     "expectExit": 0,
+     "expectLog": "arrived     : 17 / 32",
+     "command": "traffic-tools sim example/w0-m0/roadnet.json --cars 32 --frames 1800 --png example/t2-traffic/city-sim.png"
+    },
+    {
+     "id": "sim-loop",
+     "name": "sim：循环路线 4 车（闭环 route 永不停）",
+     "kind": "tool",
+     "note": "--loop 构造闭环 route（A->goal ⊕ goal->A 回环去尾），环上锁申请/释放循环无泄漏；终态持锁穿越车（speed>0）不算死锁。",
+     "args": [
+      "sim",
+      "{root}/example/t0-traffic/roadnet.json",
+      "--cars",
+      "4",
+      "--frames",
+      "1800",
+      "--loop"
+     ],
+     "expectExit": 0,
+     "expectLog": "loop routes : 4 / 4 (closed rings)",
+     "command": "traffic-tools sim example/t0-traffic/roadnet.json --cars 4 --frames 1800 --loop"
+    },
+    {
+     "id": "negative",
+     "name": "负向：path 未知 edgeId 显式退出 1",
+     "kind": "tool",
+     "note": "--to 99 无对应车道显式退出 1（expectExit 约定 0/1/2）；碰撞/停滞死锁违例同为退出 1（sim 内建）。",
+     "args": [
+      "path",
+      "{root}/example/t2-traffic/gapout-roadnet.json",
+      "--from",
+      "0",
+      "--to",
+      "99"
+     ],
+     "expectExit": 1,
+     "expectLog": "has no lane",
+     "command": "traffic-tools path example/t2-traffic/gapout-roadnet.json --from 0 --to 99"
+    }
+   ]
+  },
+  {
+   "id": "t3-traffic-city",
+   "label": "T0 M-T3",
+   "name": "CityCar 接入 viewer（TrafficCarSystem ECS + GameClock 逻辑帧，--traffic-city）",
+   "tag": "traffic-m3",
+   "date": "2026-11-14",
+   "summary": "GAME-DEV-ORDER 第 9 步收口（A 类轨道 feat/worldgen，M-T3 拍板「A A 最小集」§11 + M-T4 拍板「A A A 默认开」§12 + 用户加码「感应信号 citygen 填充一起做」）：TrafficCarSystem ECS（SignedSystem<TrafficCar,Transform>）+ viewer --traffic-city + M-T4 信号挂接（TrafficCarSystem 值持 TrafficControl，initControl autoSignal，sim_.control 指上——修复 M-T1/T2 调度在引擎内从未生效的「白做」缺陷）+ 红绿灯摆件（citygen signal 填充：serializeRoadnet 按进入边>=2 填 signal=true，49 节点全亮；signal_post.glb 程序化杆+灯箱，SignalLampComponent 溯源 + writeBack 逐灯 stateForEdge 写 tint，168 盏三色可见）+ 默认开（无关闭旗标，基线随信号重拍）。42 车红灯排队可见，600 tick odometer 82.72m 停滞（未挂接对照 3437m），det 双跑 PNG 逐字节一致。",
+   "acceptance": [
+    "TrafficCarSystem selftest ⑫：initControl 负向（before init/空 JSON/坏 JSON/重复/registerLamp 未知节点）+ autoSignal 语义（缺省 8/2/1 时序不动）+ 灯 tint 全查（代表性帧 == stateForEdge 映射 + 两相不同时绿）+ ctl.frame 逐帧推进锚 + 双 World memcmp（Transform+tint）+ roundtrip + 行为门控不等式（挂接 odometer ≤ 未挂接）",
+    "citygen selftest 98 断言：signal fill = in-degree>=2（49 true / 0 false，size 6 网格角 2/边 3/内 4）",
+    "viewer --traffic-city 42 cars + signal lamps=168 锚；600 tick odometer 82.72m 停滞 = 红灯排队（街景截图多车首尾相接可辨）",
+    "确定性：同参数双跑 PNG fc /b 逐字节一致（run.bat seg4，M-T3 收口时被误删、本轮补回）",
+    "负向：roadnet.json 缺失 exit 2；usage exit 2（traffic-tools）",
+    "t3 run.bat 六段 ALL GREEN（selftest + top/street 双后端 4 图 + det 对拍 + negative + usage）",
+    "citygen ↔ 交通接口：t3 roadnet.json = 新 city-tools generate（seed 12345 size 6 同参数，除 signal 位逐字节同 w0-m3 产物，diff 屏蔽 signal 后 GEOMETRY IDENTICAL 实证）"
+   ],
+   "preview": "example/t3-traffic-city/t3-city-top.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "t3-city-top",
+     "name": "俯视：42 车城市车流（600 逻辑 tick 后位姿）",
+     "kind": "image",
+     "note": "viewer --traffic-city 直渲；车沿 lane 折线行进，与 M-W3 静态停靠对照可见位移分布。",
+     "args": [
+      "--traffic-city",
+      "{root}/example/t3-traffic-city",
+      "--traffic-steps",
+      "75",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "0",
+      "--pitch",
+      "-89",
+      "--dist",
+      "48"
+     ],
+     "expectExit": 0,
+     "expectLog": "traffic-city: 42 cars registered",
+     "baselines": {
+      "dx12": "example/t3-traffic-city/t3-city-top.png",
+      "vulkan": "example/t3-traffic-city/t3-city-top-VULKAN.png"
+     },
+     "command": "viewer.exe --traffic-city t3-traffic-city (pitch -89, steps 75)"
+    },
+    {
+     "id": "t3-city-street",
+     "name": "街景：车流行进（yaw 28 / pitch -10 / dist 30）",
+     "kind": "image",
+     "note": "街景机位：车头朝向 = lane 行进方向（atan2(dx,dz) 四元数），可辨跟车间距。",
+     "args": [
+      "--traffic-city",
+      "{root}/example/t3-traffic-city",
+      "--traffic-steps",
+      "75",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "28",
+      "--pitch",
+      "-10",
+      "--dist",
+      "30"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/t3-traffic-city/t3-city-street.png",
+      "vulkan": "example/t3-traffic-city/t3-city-street-VULKAN.png"
+     },
+     "command": "viewer.exe --traffic-city t3-traffic-city (street, steps 75)"
+    }
+   ]
   }
  ]
 }

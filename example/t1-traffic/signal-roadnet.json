@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "seed": 12345,
+  "units": "meters",
+  "blocks": { "x": 5.5, "z": 4.0 },
+  "nodes": [
+    { "id": 0, "x": 0.0,  "z": 0.0,  "kind": "intersection", "signal": true },
+    { "id": 1, "x": 10.0, "z": 0.0,  "kind": "intersection", "signal": true },
+    { "id": 2, "x": 0.0,  "z": 10.0, "kind": "intersection", "signal": true },
+    { "id": 3, "x": 10.0, "z": 10.0, "kind": "intersection", "signal": true }
+  ],
+  "edges": [
+    { "id": 0, "from": 0, "to": 1, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 1, "from": 1, "to": 0, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 2, "from": 0, "to": 2, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 3, "from": 2, "to": 0, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 4, "from": 1, "to": 3, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 5, "from": 3, "to": 1, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 6, "from": 2, "to": 3, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 },
+    { "id": 7, "from": 3, "to": 2, "lanes_per_dir": 1, "speed_limit": 13.9, "width": 1.0 }
+  ],
+  "phases": []
+}

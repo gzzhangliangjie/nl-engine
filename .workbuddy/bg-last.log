@@ -1,0 +1,129 @@
+2026-11-14 04:39:36 s14c-build+selftest rc=0
+2026-11-14 04:46:08 m-sc6 regression rc=3
+2026-11-14 04:46:34 m-sc6 regression rc=2
+2026-11-14 04:46:44 m-sc6 regression rc=3
+2026-11-14 04:46:56 m-sc6 regression rc=3
+2026-11-14 04:47:09 m-sc6 regression rc=2
+2026-11-14 04:47:29 m-sc6 regression rc=2
+2026-11-14 04:48:11 m-sc6 rebuild rc=1
+2026-11-14 04:48:30 m-sc6 rebuild rc=1
+2026-11-14 04:50:18 M-T1.0/T1.1 build+ctest rc=0
+2026-11-14 04:50:19 m-sc6 rebuild rc=1
+2026-11-14 04:53:19 M-T1 rebuild rc=0
+2026-11-14 04:54:05 m-sc6 rebuild retry rc=0
+2026-11-14 04:54:36 M-T1 rebuild2 rc=0
+2026-11-14 04:55:43 m-sc6 regression rc=0
+2026-11-14 04:56:55 M-T1 vk+ctest+smoke rc=0
+2026-11-14 04:59:26 M-T1 fix1 rc=0
+2026-11-14 04:59:27 s14c-guard dx12 rc=1
+2026-11-14 05:01:50 s14c-guard vulkan rc=0
+2026-11-14 05:01:55 M-T1 fix2 spillback rc=0
+2026-11-14 05:07:51 M-T1 adaptive-geo rc=0
+2026-11-14 05:08:22 s14c-guard dx12-retry rc=0
+2026-11-14 05:10:41 M-T1.2 check+regression rc=0
+2026-11-14 05:13:08 master-merge-build DX12 rc=0 VULKAN rc=0
+2026-11-14 05:13:41 master-merge-spotcheck rc=0
+2026-11-14 05:33:14 s14c-diag vulkan rc=0
+2026-11-14 05:33:20 m-sc7 rebuild rc=1
+2026-11-14 05:34:11 m-sc7 rebuild retry rc=1
+2026-11-14 05:35:07 m-sc7 rebuild retry2 rc=1
+2026-11-14 05:36:28 m-sc7 rebuild retry3 rc=1
+2026-11-14 05:39:46 m-sc7 rebuild retry4 rc=0
+2026-11-14 05:39:46 merge-build-dx12 rc=1
+2026-11-14 05:40:38 m-sc7 acceptance chain done
+2026-11-14 05:40:55 s14c-shutdownfix vulkan rc=0
+2026-11-14 05:41:33 M-T2 build rc=0
+2026-11-14 05:42:06 s14c-shutdownfix dx12 rc=0
+2026-11-14 05:42:50 merge-build-vk rc=0
+2026-11-14 05:43:04 M-T2 rebuild rc=0
+2026-11-14 05:43:20 m-sc7 rebuild retry5 rc=0
+2026-11-14 05:44:04 m-sc7 acceptance chain done
+2026-11-14 05:45:16 M-T2 rebuild2 rc=0
+2026-11-14 05:45:34 merge-build-dx12-retry rc=0
+2026-11-14 05:45:40 m-sc7 regression rc=0
+2026-11-14 05:45:49 merge-spot-regression rc=3
+2026-11-14 05:45:57 merge-spot-regression rc=0
+2026-11-14 05:46:14 merge-spot-weather-w0 rc=0
+2026-11-14 05:46:25 M-T2 rebuild3 rc=0
+2026-11-14 05:46:26 merge-spot-weather-w1 rc=0
+2026-11-14 05:46:29 merge-spot-s15-clipmap rc=0
+2026-11-14 05:47:32 M-T2 rebuild4 rc=0
+2026-11-14 05:48:52 M-T2 rebuild5 rc=0
+2026-11-14 05:49:03 M-T2 ctest+smoke rc=0
+2026-11-14 05:51:57 M-T2 fix axispure rc=0
+2026-11-14 05:53:07 M-T2 diag rc=0
+2026-11-14 05:54:46 M-T2 fix2 opp-lane rc=0
+2026-11-14 05:55:15 M-T2 evidence rc=0
+2026-11-14 05:57:20 M-T2 close-check rc=0
+2026-11-14 11:09:20 s14c-weightfix both rc=0
+2026-11-14 12:05:45 wea2-build-dx12 rc=0
+2026-11-14 12:08:20 wea2-build-vk rc=0
+2026-11-14 12:08:46 wea2-zerodrift-s10-refgi rc=0
+2026-11-14 12:08:50 wea2-zerodrift-s11-hash rc=0
+2026-11-14 12:08:55 wea2-zerodrift-s8.2 rc=0
+2026-11-14 12:11:42 wea2b-build-dx12 rc=0
+2026-11-14 12:12:26 wea2b-build-vk rc=0
+2026-11-14 12:20:55 wea2c-build-dx12 rc=0
+2026-11-14 12:21:26 wea2c-build-vk rc=0
+2026-11-14 12:24:16 wea2d-build-dx12 rc=0
+2026-11-14 12:24:46 wea2d-build-vk rc=0
+2026-11-14 12:25:37 wea2-final-weather-w1 rc=0
+2026-11-14 12:25:51 wea2-final-weather-w2 rc=0
+2026-11-14 12:25:58 wea2-final-s10-refgi rc=0
+2026-11-14 12:26:03 wea2-final-s11-hash rc=0
+2026-11-14 12:26:10 wea2-final-s8.2 rc=0
+2026-11-14 12:52:16 M-T3 build DX12 rc=0
+2026-11-14 12:54:21 M-T3 rebuild DX12 rc=0
+2026-11-14 12:54:55 M-T3 build VULKAN rc=0
+2026-11-14 12:55:23 M-T3 rebuild VULKAN rc=0
+2026-11-14 12:59:26 M-T3 t3 run.bat rc=1
+2026-11-14 13:00:22 wea3-build-dx12 rc=1
+2026-11-14 13:00:22 wea3-build-vk rc=1
+2026-11-14 13:03:28 wea3b-build-dx12 rc=0
+2026-11-14 13:05:28 wea3b-build-vk rc=0
+2026-11-14 13:05:48 wea3-zerodrift-s10-refgi rc=0
+2026-11-14 13:05:51 wea3-zerodrift-s11-hash rc=0
+2026-11-14 13:05:56 wea3-zerodrift-s8.2 rc=0
+2026-11-14 13:05:59 wea3-zerodrift-s12-temporal rc=0
+2026-11-14 13:06:21 wea3-weather-w1 rc=0
+2026-11-14 13:06:32 wea3-weather-w2 rc=0
+2026-11-14 13:08:03 wea3c-build-dx12 rc=0
+2026-11-14 13:08:29 wea3c-build-vk rc=0
+2026-11-14 13:13:10 M-T3 t3 run.bat v2 rc=1
+2026-11-14 13:14:09 M-T3 t3 run.bat v3 rc=0
+2026-11-14 13:15:23 M-T3 regression rc=0
+2026-11-14 13:15:46 M-T3 reg t3 rc=1 t2 rc=0
+2026-11-14 13:15:47 wea3d-build-dx12 rc=0
+2026-11-14 13:16:18 wea3d-build-vk rc=0
+2026-11-14 13:18:34 M-T3 ctest DX12=0 VK=0
+2026-11-14 13:19:58 wea3e-build-dx12 rc=0
+2026-11-14 13:20:25 wea3e-build-vk rc=0
+2026-11-14 13:21:26 wea3-final-weather-w3 rc=0
+2026-11-14 13:21:33 wea3-final-s10-refgi rc=0
+2026-11-14 13:21:37 wea3-final-s11-hash rc=0
+2026-11-14 13:21:42 wea3-final-s8.2 rc=0
+2026-11-14 13:21:46 wea3-final-s12-temporal rc=0
+2026-11-14 13:21:59 wea3-final-weather-w1 rc=0
+2026-11-14 13:22:17 wea3-final-weather-w2 rc=0
+2026-11-14 14:10:23 s14c-weightfix both rc_d=0 rc_v=0
+2026-11-14 14:11:07 s14c-weightfix both rc_d=127 rc_v=127
+2026-11-14 14:11:33 s14c-weightfix both rc_d=1 rc_v=1
+2026-11-14 14:12:20 s14c-weightfix both rc_d=0 rc_v=0
+2026-11-14 14:21:07 mainrepo-merge-w23-build DX12=0 VULKAN=0
+2026-11-14 14:29:33 s14c-restoreA both done
+2026-11-14 14:30:59 M-T4 build DX12 rc=1
+2026-11-14 14:32:16 M-T4 rebuild DX12 rc=1
+2026-11-14 14:33:12 merge-reg weather-w0 rc=0
+2026-11-14 14:33:41 merge-reg weather-w1 rc=0
+2026-11-14 14:33:46 M-T4 rebuild2 DX12 rc=1
+2026-11-14 14:34:09 merge-reg weather-w2 rc=0
+2026-11-14 14:34:32 merge-reg weather-w3 rc=0
+2026-11-14 14:34:38 merge-reg s15-clipmap rc=0
+2026-11-14 14:34:47 merge-reg s10-refgi rc=0
+2026-11-14 14:35:10 M-T4 rebuild3 DX12 rc=0
+2026-11-14 14:38:49 M-T4 build VULKAN rc=0
+2026-11-14 14:39:04 M-T4 t3 run.bat v5 rc=0
+2026-11-14 14:43:13 M-T4 rebuild citygen DX12=0 VK=0
+2026-11-14 14:43:48 M-T4 t3 run.bat v6 rc=0
+2026-11-14 14:44:38 M-T4 regression 3 cards
+2026-11-14 14:45:35 M-T4 ctest DX12=0 VK=0

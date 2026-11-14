@@ -1,0 +1,13 @@
+{
+  "prefix": "assets/meshlets/city_block_12345_6_01",
+  "levels": [
+    {"level": 0, "clusters": 6, "triangles": 72, "groups": [
+      {"id": 0, "error": 14.0969, "simplifyError": 0, "sphere": [-1.95, 0, -1.2, 14.1079], "children": [0], "parents": []},
+      {"id": 1, "error": 14.0289, "simplifyError": 0, "sphere": [-1.89, 0, -1.2, 14.0544], "children": [1], "parents": []},
+      {"id": 2, "error": 8.23423, "simplifyError": 0, "sphere": [-2.1, 0, 0.15, 8.32121], "children": [2], "parents": []},
+      {"id": 3, "error": 4.6992, "simplifyError": 0, "sphere": [0.3, 0, -1.2, 4.78461], "children": [3], "parents": []},
+      {"id": 4, "error": 3.7428, "simplifyError": 0, "sphere": [1.637, 8, -1.029, 3.78417], "children": [4], "parents": []},
+      {"id": 5, "error": 8.23423, "simplifyError": 0, "sphere": [0.15, 0, 0.15, 8.32121], "children": [5], "parents": []}
+    ]}
+  ]
+}

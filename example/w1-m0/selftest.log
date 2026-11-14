@@ -1,0 +1,7 @@
+  group default            tris=12     verts=8      tex=(none)
+wrote C:\Users\zlj10\AppData\Local\Temp\tmpg4nwkhrz\a.glb (1540 bytes, BIN 400 bytes): 1 submeshes, 12 triangles, 0 images
+  group default            tris=12     verts=8      tex=(none)
+wrote C:\Users\zlj10\AppData\Local\Temp\tmpg4nwkhrz\b.glb (1540 bytes, BIN 400 bytes): 1 submeshes, 12 triangles, 0 images
+  group default            tris=12     verts=8      tex=(none)
+wrote C:\Users\zlj10\AppData\Local\Temp\tmpg4nwkhrz\c.glb (1540 bytes, BIN 400 bytes): 1 submeshes, 12 triangles, 0 images
+city2engine selftest: PASS (32 assertions)

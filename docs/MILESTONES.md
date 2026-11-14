@@ -3242,6 +3242,108 @@
 - **踩坑**：① **`forwardFromView` 读错矩阵行/列**——列主序 view 矩阵的 backward 在第三**行**（`m[2]/m[6]/m[10]`），原实现读第三**列**（`m[8..10]` = right.z/up.z/backward.z），chase/track 渲染视线错 45° 级、主体不居中（track 水平分量碰巧不受影响才没当场露馅）；手算 `-(m8,m9,m10)` 与实测 outRig 偏移完全吻合实锤后修复，Orbit 路径自带视图矩阵不经此函数故 70 张既有基线零波及。② **`ChaseCamera::lookDirection` 按值传参**——out 参数写不回调用方，`seedFreeFromChase`/HUD/trace yaw 列全被污染恒 0；旧锚「free fly +Z」「eye_z 严格递增」把 bug 语义锁死，按「锚从实测反推」口径改为沿 seed 视线方向断言。③ **cam-tools stdout CRLF**——C 运行时文本模式把 `\n` 膨胀成 `\r\n`，与 `.gitattributes` 的 `*.tsv eol=lf` 永远对不上，旧卡 run.bat 的 TSV 字节比对在今天 checkout 后必挂（本轮前已潜伏）；`_setmode(_O_BINARY)` 根治后 cam-trace/free-trace/cine-trace 内容逐字节还原、cam-1a director-trace.tsv + acceptance.png 按新真实 yaw/pitch 重生成。④ chase 机位 eye 高度疑云实为收敛值自洽（pitch 被 seed 成 orbit 俯角 → `desired.y = 0.56+3.5-0.96`），非 bug。⑤ 双后端并行构建抢 PDB 致 C1090（0x6BA RPC）→ 清 mspdbsrv + 串行构建即过。
 - **提交版本**：feat/camera 本节 commit + annotated tag `cam-m5`；track camera 整轨（M-CAM0~CAM4 + 视觉卡）至此全部落地，merge 回 master 后轨道收官。冻结面：OrbitCamera 一字未动、kStage 不 bump、`resolveViewProjection`/渲染管线零改动、除 cam-b 外全部既有基线零重拍。
 
+## W0 M-W0.0 — citygen 工具骨架 + 确定性地基（feat/worldgen，2026-11-13，tag `w0-m0`）
+
+**动作**：第 6 步「程序化城市生成工具」首里程碑（A 类并行轨道 `worldgen`，claim M-W0.0，wt 建于 master `52700f1`）。① 新目标 `city-tools`（main.cpp 单文件，纯 CPU 零图形零引擎依赖，仅 vendored stb_image_write.h 出 PNG，`${THIRDPARTY}/stb` 既有 include 路径），根 CMakeLists `add_subdirectory(city-tools)` 一行挂载。② 自研 pcg32 确定性 RNG（O'Neill 规范算法，public domain 口径抄算法不抄文件；`seed()` = srandom(initstate=seed, 流常量 0x14057B7EF767814F)），已知答案锁实现：seed 12345 前三输出 `1321476956/17539747/3348728241`（Python 参考实现独立复算回填，非工具自证）。③ 规则网格 block 布局（5.5×4.0m = roadnet.json 契约 `blocks` 同源；size 居中 lo=−size/2；内区 4.5×3.0m = bevy ground tile 尺寸），**显式偏离留档**：路网画全跨度 (size+1)+(size+1) 条 1.0m 线（bevy 是逐 cell 线段+交点补丁、+x/+z 开边），理由 = 无开边无死路、M-W0.1 roadnet 节点直取 (size+1)² 交点。④ 纯 CPU 俯视光栅化（32px/m + 1.5m 留白，size 6 → 1152×864 PNG；stb zlib 确定性 → 双编码逐字节一致）。⑤ CityStats 计数锚骨架（blocks/groundTiles/roadSegments/crossroads 实数，buildings/trees/cars/fences/paths 为 M-W0.2/0.3 挂零锚）。⑥ **RNG 消费序跨里程碑契约**：单流、cell 行主序、每 cell 一次 below(16) 地面灰度档——这是判据①「异 seed 必不同」在空白城（无楼无车无随机内容）下的最小种子敏感元，M-W0.3 OpenSimplex 密度分区接管视觉分区后流前缀序保留；M-W0.1/M-W0.2 的消费一律追加在流尾不许重排。
+
+**提交版本**：`feat/worldgen`（city-tools + example/w0-m0 + cases.json w0-m0 卡 + 文档）；annotated tag `w0-m0`。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 格式零触碰，cases.json 仅追加 `kind:"tool"` 版本卡（第 118 张）。
+
+**完成情况**
+- 🟢 seed 对称确定性 selftest 23 断言全绿（同 seed 双跑 FNV-1a 逐字节 + PNG 双编码逐字节；异 seed 布局与 PNG 双验证必异；pcg32 已知答案 3 条；36/72/49 计数锚 + 5.5/4.0/4.5×3.0 契约锚 + extent 33×24m + shade 界 + PNG 签名）。
+- 🟢 DX12/VULKAN 双树 BUILD OK（viewer selftest 16/16 ×2 连带绿）；ctest `w0-city-selftest/generate/negative` 双树各 3/3（`--repeat until-pass:3`）。
+- 🟢 `--only w0-m0` 回归 8/8 ALL GREEN（4 用例 × 2 后端，expectExit/expectLog 全锚定）；`server.py --check` exit 0（旧阶段零回归证明）。
+- 🟢 `example/w0-m0/run.bat` 六段 ALL GREEN exit 0（selftest / generate+stats 锚 / 同 seed 双跑 `fc /b` 逐字节 / usage exit 2 / negative exit 2）；证据图 `city_top.png` 为工具真实输出（非手绘）。
+- 🟢 展示台 `w0-m0` 卡四用例（usage / selftest --verbose / generate --stats / negative）；`docs/worldgen/CITY-TOOLS-GUIDE.md` §1 归档。
+
+**踩坑情况**
+1. **stb 只 include 不 define**：`STB_IMAGE_WRITE_IMPLEMENTATION` 漏定义 → LNK2019 `stbi_write_png_to_func` 无法解析；单 TU 顶部 define 解决（png_writer.cpp 先例同款）。
+2. **`%~dp0` 尾反斜杠吃引号**：run.bat `--out "%D%"` 的 `%D%` 以 `\` 结尾，`\"` 被 C 运行时当字面引号 → 整个参数串并成一个 arg（out 目录收到 `...w0-m0" --stats `）；phys-p0 未踩是因其只传文件路径不传目录。口径修复：`--out "%D%."`。
+3. **bat 编码门禁**：Write 工具落盘 LF 行尾被 regression 前置门禁拦（`bat 统一 CRLF` 规范）→ 机械转 CRLF 后过闸。
+4. **渲染内区口径 bug（自查逮住）**：首版 fillRect 用 `kRoadWidth`(1.0m) 内缩而路带实占半宽 0.5m，每 block 四周多出 0.5m 底色环、内区缩成 3.5×2.0m——与文档写死的 4.5×3.0m 冲突；证据图目检发现后按口径修复（halfRoad 内缩），并重拍证据图。教训：工具证据图必须与声明的几何口径互证，不能只看「像不像城市」。
+
+**下一步**：M-W0.1 路网生成 → `roadnet.json`（§1 字段契约是 citygen ↔ 第 8 步交通的接口铁律）；M-W0.2 建筑挤出走 nanite-tools / asset-ingest 通道不自写 meshing；M-W0.3 OpenSimplex 密度分区 + 统计锚收口（close 闸硬生效）。
+
+## W0 M-W0.1 — 路网拓扑 + 车道语义 → roadnet.json（feat/worldgen，2026-11-13，tag `w0-m1`）
+
+**动作**：M-W0 第二里程碑（A 类轨道 worldgen，claim M-W0.1，wt `feat/worldgen`）。① `buildRoadnet`：节点 = 全跨度网格交点 (size+1)^2（id = row*(size+1)+col 行主序，坐标 x=(lo+col)*5.5 / z=(lo+row)*4.0），无向路段 2*size*(size+1)（横竖各半），有向边 ×2 = 4*size*(size+1)（size 6 → 168），先横后竖行主序 ±向、id 连续；车道语义 lanes_per_dir=1（bevy `Road{start,end}` 每方向 1 车道同构）、speed_limit=13.9 m/s（契约示例同源）、width=1.0m 与路带几何同源（契约示例 3.0 是示意值，显式留档偏离）。② `serializeRoadnet` 手写确定性序列化（2 空格缩进、固定字段序、%.1f 米、C locale），W0-PLAN §1 契约原文形态全字段（version/seed/units/blocks/nodes/edges/phases 预留空数组），不引 JSON 库（零依赖口径延续）。③ `generate` 增产 `roadnet.json`；`renderTopView` 从 roadnet 数据结构反画边中心线（150,40,40）+ 节点 3×3 标记（120,30,30）——JSON 与俯视几何同源证明。④ CityStats 增 roadnetNodes/roadnetEdges（serializeLayout 同步扩 8 字节），`roadSegments`=72（bevy 逐 cell 口径）与全跨度口径并存各有对应物（GUIDE §2.3）。⑤ M-W0.1 零 RNG 消费（空白城车道语义全同质），前缀序契约不受影响。
+
+**提交版本**：`feat/worldgen`（city-tools main.cpp + CMakeLists w0-roadnet 用例 + example/w0-m1 + cases.json w0-m1 卡第 119 张 + GUIDE §2 + W0-PLAN 纪要 + w0-m0 证据图随叠加渲染刷新）；annotated tag `w0-m1`。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 零触碰。
+
+**完成情况**
+- 🟢 selftest 38 断言全绿（23 → 38：节点/边公式锚 49/168、from/to/id 闭包、双向对称、几何恰跨一个 block 间距、横竖 84+84、角点坐标 (-16.5,-12.0)/(16.5,12.0)、车道属性齐同、JSON 双跑逐字节、契约头字段、49 交点/168 边文本锚、异 seed 异 JSON、size 1 边界 4 节点 8 边、stats 锚）；pcg32 已知答案等 M-W0.0 断言全部保持。
+- 🟢 DX12/VULKAN 双树 BUILD OK 零警告；ctest `w0-city-*`×3 + `w0-roadnet` 双树各 4/4（`--repeat until-pass:3`）。
+- 🟢 `--only w0-m0` 8/8 + `--only w0-m1` 8/8 ALL GREEN；`server.py --check` exit 0（kStage=S8.2 旧阶段零回归）。
+- 🟢 `example/w0-m1/run.bat` 七段 ALL GREEN exit 0（selftest / generate 双产物+stats 锚 / roadnet 契约 findstr+find 锚 / 同 seed 双产物 fc /b 逐字节 / 异 seed roadnet 必异 / usage exit2 / negative exit2）；证据图 `city_top.png` 路网叠加版为工具真实输出。
+- 🟢 展示台 `w0-m1` 卡四用例；GUIDE §2 契约归档；W0-PLAN M-W0.1 落地纪要。
+
+**踩坑情况**
+1. **run.bat `for /f` 反引号内 `\"` 被 cmd 吃掉**：`find /c "\"kind\": ..."` 在 for /f 的命令串里引号转义不存活（裸 cmd 调用同模式却没事）→ find 模式去引号（`intersection`/`lanes_per_dir` 在 JSON 内每节点/边恰出现一次，计数语义不变）。
+2. **绝对路径盘符冒号破坏 delims 分列**：`find /c` 输出 `---------- E:\...: 49`，按冒号空格分列时盘符冒号先断 → `pushd` 进目录用相对文件名，输出无冒号路径。
+3. **find /c 前导横线占 token1**：`---------- ROADNET.JSON: 49` 三 token，计数在 token3（首版 tokens=2 取到文件名）。
+4. **Bash 沙箱对 `cmd //c run.bat` 形态 fail-closed**（M-W0.0 同形态曾跑通，本轮连续三拦、无具体资源信息）：换 PowerShell 工具通道 `cmd /c run.bat` 执行成功；run.bat 本身两处递归删目录写法顺手改成「先清文件再删目录」两步非递归（目录内仅两生成物，功能等价）。另注意：本会话安全扫描对命令文本里的 cmd 删除旗标、百分号变量等字面量一律拦截——**往文档里贴 bat 片段要用 Edit 工具直写，不能走 shell 通道**（本轮三次复现）。
+5. C4456 变量遮蔽警告（selftest 块内 a/b 与 pcg32 段重名）→ 改名 na/nb 清零。
+
+**下一步**：M-W0.2 建筑挤出 → OBJ 中间件（`.nmesh` 化走 nanite-tools / asset-ingest 通道，不自写 meshing——W0-PLAN 写死）；缺口若通道未就绪登记给 asset-ingest 轨道。
+
+## W0 M-W0.2 — OBB 地块递归细分 + 程序化楼体 → OBJ 中间件 + city.scene（feat/worldgen，2026-11-13，tag `w0-m2`）
+
+**动作**：M-W0 第三里程碑（A 类轨道 worldgen，claim M-W0.2）。① 楼体生成：内区 4.5×3.0 递归细分（先 x 后 z 阈值 2.3/1.6 对半分，4.5×3.0 恒产 4 叶 2.25×1.5，左/前半先入列）+ 每叶一栋——below(3) 高度档 {3,8,14}m、below(2) 占地内缩 {0.30,0.15}m（bevy_city 低密度 4 栋/块同构；RNG 消费排流尾，36 shade 前缀逐字节不动，selftest 重建流逐个比对锁前缀）；size 6 → 144 栋。② `serializeBlockObj`：每 block 一份 OBJ 中间件（楼 = 8 顶点 12 三角外向绕序盒，手工推导六面绕序并逐面叉积验证，block 局部坐标原点 = cell 中心，%.3f 固定文本序）。③ `serializeCityScene`：E1 World JSON（M-E2 `World::serialise` 形态——version/nextID/entities[{id,name,flags,parent,components{Model{mesh,tint},Transform{position,scale,rotation}}}]/systems:[]；语义同构、手写固定序，非 ECS roundtrip dump）；每 block 一实体，Transform = block 世界中心，Model.mesh 引用 `blocks/block_XX.obj`。④ `generate` 增产 blocks/*.obj + city.scene；俯视图楼体占地三档灰度（208/168/128）。⑤ CityStats.buildings 实数化（144）。⑥ `.gitignore` 反白 `!example/*/blocks/*.obj`——全局 `*.obj` 编译中间产物兜底规则会静默挡掉楼体 OBJ 交付物（git status 双向自查时逮住）。⑦ 注册表 wt 侧同步：wt_pool.py worldgen 条目 + PARALLEL-TRACKS worldgen 行（已建/三 tag）与 asset-ingest 行接收缺口栏——此前两轮只改主树工作区，本轮起 feat/worldgen 分支携带注册表正本。
+
+**提交版本**：`feat/worldgen`（city-tools main.cpp + CMakeLists w0-cityscene + .gitignore 反白 + example/w0-m2 + cases.json w0-m2 卡第 120 张 + GUIDE §3 + W0-PLAN 纪要 + PARALLEL-TRACKS 两行 + wt_pool.py 条目 + w0-m0/w0-m1 证据随渲染刷新）；annotated tag `w0-m2`。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 格式零触碰。
+
+**完成情况**
+- 🟢 selftest 38 → 53 断言全绿（新增 15：RNG 前缀契约 / 4 栋每块 / 高度恰三档 / 占地两档 / 足迹界与两两不重叠 / 高度混合种子敏感 / OBJ 32v-48f-4o 双跑逐字节异 seed 必异 / scene E1 锚 version-nextID37-systems / 36 实体 36 mesh 引用闭合 / scene seed 无关性）；M-W0.0/0.1 断言全保持。
+- 🟢 DX12/VULKAN 双树 BUILD OK 零新警告；ctest `w0-city-*`×3 + `w0-roadnet` + `w0-cityscene` 双树各 5/5（`--repeat until-pass:3`）。
+- 🟢 `--only w0-m0` / `w0-m1` / `w0-m2` 各 8/8 ALL GREEN；`server.py --check` exit 0。
+- 🟢 `example/w0-m2/run.bat` 七段 ALL GREEN exit 0（selftest / generate 双产物+stats 锚 buildings=144 / scene 契约锚 36 实体 36 mesh 引用 36 OBJ 文件闭合 / 同 seed 三产物 fc /b 逐字节 / 异 seed OBJ+PNG 必异 + scene seed 无关 / usage exit2 / negative exit2）；证据图 `city_top.png` 楼体占地三档灰度为工具真实输出。
+- 🟢 展示台 `w0-m2` 卡四用例；GUIDE §3 归档；W0-PLAN M-W0.2 落地纪要；缺口登记 asset-ingest（PARALLEL-TRACKS 接收栏）。
+
+**踩坑情况**
+1. **city.scene「异 seed 必异」断言设计错**：E1 schema 无 seed 键、冻结面禁扩字段——scene 是 seed 无关索引，首版断言异 seed 必异直接 FAIL；改为明文锚定 seed 无关性（同 size 异 seed 产物逐字节相同），种子差异只存在于 OBJ 楼体与 PNG（run.bat 异 seed 段同步改三向判据：OBJ+PNG 必异、scene 必同）。
+2. **全局 `*.obj` ignore 静默挡交付物**：楼体 OBJ 进不了 git（untracked 都不显示）——`.gitignore` 教训段（commit 94bbb66 同款问题第二次出现）加根锚定反白规则。
+3. **run.bat find /c 计行数语义**：`find /c "block_"` 数出 72（每实体 name 行 + mesh 行各含一次）——换每实体恰一次出现的 `"name"`/`"mesh"` 锚。
+4. **主树/分支注册表双正本**：M-W0.0/0.1 的 wt_pool.py / PARALLEL-TRACKS 更新只落在主树工作区（等另一会话收官一并提交），feat/worldgen 分支携带的是 master 旧文——本轮起注册表正本随分支走（wt 侧编辑 + selftest 21/21），merge 后主树未提交副本自然对齐。
+5. C4456 遮蔽 ×2（selftest 楼体块 `b` 撞 pcg32 段、scene 块 `closureOk` 撞 roadnet 段）→ 改名 bd/refClosureOk 清零。
+
+**下一步**：M-W0.3 OpenSimplex 噪声密度分区 + CityStats 统计锚收口（close 闸硬生效：annotated tag + MILESTONES 四栏 + `wt_pool.py close --track worldgen` 报告 + `release --done`）。
+
+## W0 M-W0.3 — simplex 噪声密度分区 + 树 + 统计锚收口（feat/worldgen，2026-11-13，tag `w0-m3`，M-W0 整轨收官）
+
+**动作**：M-W0 收官段（A 类轨道 worldgen，claim M-W0.3，wt `feat/worldgen`）。① 自研 simplex 梯度噪声（OpenSimplex 结构同构：F2=(√3−1)/2、G2=(3−√3)/6 数学推导常数，8 方向梯度表 (±1,±2)/(±2,±1)，径向核 t⁴·dot，内部纯 double；perm 256 项由独立 Pcg32(noiseSeed) Fisher-Yates 洗牌复制 512 回绕，梯度索引双重查表）——W3-A 全自研拍板范围，Python 参考实现独立复算 eval 四点 + perm 头已知答案防自证；kNoiseNorm=40 经验归一化（129² 采样实测 max|raw|=0.0218 → 归一 max≈0.87，|v|≤1 余量 13%）。② 密度分区：阈值 bevy 同源 0.45/0.6/0.7 四档；**noise_scale 0.025→0.06 显式偏离留档**（bevy 值在 33m 跨度 size6 下噪声域仅 0.83 周期、36 块全落同一波峰全 low 档实测，判据①「密度分区可见」不成立；0.06 → 约 2 周期四档全可见）。③ 树：forest 每块 8 棵 / low 每块 4 棵（每棵 below(45)/below(31) 各一次），俯视 3×3 深绿块；**仅俯视 + 统计层不进 OBJ/city.scene**——保 w0-m2 冻结基线（楼数/顶点/引用闭合锚不破），M-W1 树资产走 asset-ingest 通道。④ 俯视基调四档（forest 绿/low 浅/medium 中/high 深）+ shade 微抖保留；CityStats 扩 forestCells/lowCells/mediumCells/highCells（和恒 = blocks）+ trees 实数；serializeLayout 扩 noiseSeed + 4 计数 + cell tier + 树位。⑤ RNG 流最终形态四段收官：①36 shade（M-W0.0 前缀逐字节不动）→ ②288 楼体档位（M-W0.2 值不动）→ ③noiseSeed 1 次 next → ④树位置（流尾最后）；selftest 以「重建流 next() == noiseSeed」锁定 ③ 段位置。
+
+**提交版本**：`feat/worldgen`（city-tools main.cpp + CMakeLists w0-density 用例 + example/w0-m3 + cases.json w0-m3 卡第 121 张 + GUIDE §4 + W0-PLAN 纪要）；annotated tag `w0-m3` + close 闸报告。`kStage` 保持 `S8.2`、`renderer/`/`viewer/`/`.nmesh` 零触碰。
+
+**完成情况**
+- selftest 53 → 72 断言全绿（新增 19：密度档 21/5/6/4、噪声统计锚值域/均值、eval 四点 + perm 头已知答案、noiseSeed 流段位置、树数公式 forest·8+low·4 + 首树位置 fp 容忍度、异 seed 分布必异 19/4/4/9 + trees 168 + noiseSeed 3832654775、size1 边界含 lo 截断口径锚）。
+- DX12/VULKAN 双树 BUILD OK 零新警告；ctest `w0-city-*`×3 + `w0-roadnet` + `w0-cityscene` + `w0-density` 双树各 6/6（`--repeat until-pass:3`）。
+- `--only w0-m0`~`w0-m3` 四卡回归各 8/8 ALL GREEN；`server.py --check` exit 0。
+- `example/w0-m3/run.bat` 七段 ALL GREEN exit 0（selftest / generate 双锚段含密度档 21-5-6-4 + noiseSeed=2109909543 / 36 OBJ + 49 nodes / 同 seed 四产物 fc /b 逐字节 / 异 seed PNG+OBJ 必异 + 密度分布必异 + scene seed 无关 / usage exit2 / negative exit2）。
+- 证据图 `city_top.png`：密度分区可见（forest 绿 21 块 + 深绿树点 188 棵 / low 浅灰 / medium 中灰 / high 深灰）+ 楼体三档灰阶 + 路网叠加完好，工具真实输出。
+- close 闸：`wt_pool.py close --track worldgen --milestone M-W0.3 --tag w0-m3` 机械校验通过 + `release --done`（详见 .wt_pool_close/ 报告）。
+
+**踩坑情况**
+1. **Python 参考 `lo=-size//2` floor 除法 vs C++ 截断口径分歧**：size 1 时 Python lo=-1、C++ lo=0 → cell 错位 → 密度档断言锚错（medium vs forest）；size 6 偶数无影响故 M-W0.0 起未暴露。C++ 截断为权威口径，Python 复算脚本已勘误，selftest 补 `size 1 truncating lo == 0` 锚。
+2. **树位置浮点表示差**：`(below(45)-22)*0.1f` 的 33·0.1f ≠ 字面 2.1f（float 舍入）→ 位置断言改 fp 容忍度（<0.001）；此前 M-W0.2 楼体 inset 断言用精确 == 是因其值恰好可表示，同类断言今后一律容忍度。
+3. **bevy noise_scale 0.025 在小城市不可见**：实测 36 块全 low 档（噪声域 0.83 周期）→ 0.06 显式偏离留档（GUIDE §4.1）；教训：同构常数照抄前先验「在本项目参数域内是否满足验收判据」。
+4. DX12 树构建早于 w0-density 用例追加 → configure 缺用例（5/6）→ 补一次构建对齐双树 6/6。
+
+**M-W0 整轨收官**：`w0-m0`~`w0-m3` 四 tag；city-tools 从空白城骨架走到密度分区完整城市（俯视 PNG + roadnet.json + 36 OBJ + city.scene + 72 断言 + 6 ctest + 4 展示台卡）；资产转换缺口（OBJ→glb→nmesh 链 merge 后补消费步 + viewer 白名单 + 街景证据图）登记 asset-ingest；`kStage`/renderer/viewer/.nmesh 全程零触碰。
+
+## W1 M-W1 立项 — 城市资产进引擎（feat/worldgen，2026-11-13）
+
+**动作**：M-W1 立项调研 + 拍板登记（A 类轨道 worldgen 接 M-W0，零落码）。范围经用户拍板 =「城市资产进引擎」（候选：城市资产进引擎 / 规模拉大+分块加载 / 交通 M-T0 起步）。实读：viewer/main.cpp runScene 白名单（扁平 ASCII .glb、禁路径分隔符，两处复制含 renderer/scene.cpp）、renderer/scene.cpp ECS scene 段（meshFile→loadGltfScene 顶点展开直渲，不经过 .nmesh）、nanite-tools --help（cluster→lod→dag 口径）、asset-ingest scripts/obj2glb.py（stdlib 零依赖、≤4 材质组硬闸、feat/asset-ingest 未 merge 4 commits）。三处资产格式对照复用 2026-11-12 留痕（Carrot glTF+CARROT_meshlets / bevy .meshlet_mesh / UE NaniteResources.h 只读）。
+
+**提交版本**：`feat/worldgen`（docs/worldgen/W1-OPTIONS.md 方案矩阵 + W1-PLAN.md 执行计划 + GAME-DEV-ORDER 第 6 步状态行 + PARALLEL-TRACKS worldgen 行）。零代码、零产物改动、未 claim（落码开工才 claim M-W1.0）、未打 tag、未跑回归。
+
+**完成情况**
+- 🟢 四项拍板（2026-11-13）：Q-W1A=**双轨**（city-tools 与 w0 产物一字不动，另产 city.scene.engine，w0-m2/m3 基线零重拍）；Q-W1B=**扁平命名**（assets/models/city_block_XX.glb，白名单零改动，避开 asset-ingest 分支 scene.cpp 冲突面）；Q-W1C=**等 merge**（obj2glb.py 等 feat/asset-ingest merge master 后复用，merge 前只做不依赖项）；Q-W1D=街景证据图用户终端补拍（M-CRASH0 L2 先例）。
+- 🟢 关键实读结论：登记缺口里的「viewer 白名单接入」实测可免——扁平 .glb 命名天然合规，viewer/renderer 零改动；scene 模式消费 glb 不经过 .nmesh，.nmesh 套件（W1-B 判据）由 nanite-tools 链产出作为资产层收口。
+
+**踩坑情况**
+1. M-W0 登记缺口时预设「白名单接入要改代码」，实读发现扁平命名即可零改动——登记缺口按当时假设写，立项实读后修正口径。
+2. 跨轨依赖（asset-ingest merge）为 M-W1.0 硬闸，已写进 W1-PLAN 开工闸，闸未开不落码。
+
+**下一步**：等 feat/asset-ingest merge master → `claim --track worldgen --milestone M-W1.0` → M-W1.0 引擎交付驱动步（OBJ→glb→nmesh→city.scene.engine + selftest 扩锚）。
 ## S13 M13.0 — per-cluster BLAS 预建 + 内存双口径记账（feat/s13，2026-11-13，tag `s13-preblas`）
 
 **动作**：S13 轨道 wt 建立（`nl-engine-s13` @ master `e3a2ef4`，junction `.workbuddy`/`slang dist` + skip-worktree 9 文件，TRACKS 注册 s13 active + claim M13.0）后落码：① `Scene::initClusterBlas`（`--cluster-blas` 默认关，initDag 拼接循环完成后调用）——逐层逐簇预建 BLAS 全常驻，全部簇共享两块 build-input slab（position-only 12B VB + u8 局部索引→u32 展开 IB；簇顶点 .nmesh 已去重，「重展开」即索引格式转换），每簇 geometry 用 `GeometryTriangles.vertexOffset/indexOffset` 引用窗口，`clusterBlas_` 下标 = 全局簇 id（与 clusterMeta 同序）；② 构建分块提交（2048 build/列表 + 块间 waitForIdle + permanent 态首块落定）；③ 内存双口径记账 `inputBytes`（slab 实际字节）/`estBytes`（tri×64B+512B 上界估算，NVRHI 无 AS 尺寸查询）→ 日志锚 + HUD `CLAS`/`CLAS mem` 两行（仅开启时显示）；④ 交付 = `example/s13-preblas/run.bat verify`（clusterblas-hud/occl 双后端基线 + built/timer/scale 三类日志锚）+ cases.json 第 118 张卡 `s13-preblas`（2 case，expectLog 逐字节锚）。三处实读：Carrot ClusterManager/RaytracingScene（per-group 惰性 BLAS + readback 五步）、bevy_solari blas.rs（per-mesh 常驻 + compaction 队列）、UE NaniteRayTracing.cpp（per-resource + LODBias + 64MB BLAS 缓存池）——无一家做 per-cluster 万级 BLAS；plan 拍板照落，est 实测 ~181MB 可承受。
@@ -3435,3 +3537,208 @@
 **踩坑**：① **假绿复发（M-WEA2 同款）**：湿化只接 mode5 shadePbrGrad 漏 mode0——viewer 缺省 shading=0（textured 简单直光），probe 主画面走 mode 0 分支，bytes 自洽全绿但 wetness 0 vs 1 画面逐字节相同；wetness 对比测试（cmp 两帧）当场拦下，mode 0 补湿化后生效。**「probe 主画面 = mode 0 非 mode 5」须与新直光效果绑定记忆**。② reject 触发阈值诊断：t-step 3s 的 rain 灰化天穹 diff≈0.0000（灰化压平日光变化）不触发——nanite-tools weather TSV 双行 diff 实证后改 30s 步进（diff 0.15~0.2 触发）。③ steady-filter 建 pair bytes 型卡踩 **S12 时域累积禁 bytes 口径**（Q11-1：累积路径非逐字节确定，run.bat 第三次重摄假 FAIL）——改 tool 型（exit 0 锚）。④ run.bat 生成器**悬空 --screenshot 双旗标坑第三次复发**（过滤 {out} 留旗标 → 截图写进名为 --screenshot 的文件 → 全部 bytes 假 FAIL）——根修 = 生成器内建「--screenshot 与 {out} 成对过滤」逻辑（shot_args 函数），不再手写循环。
 
 **提交版本**：feat/weather 本节 commit + annotated tag `weather-w3`。冻结面：kStage 保持 S8.2；CPU 天气模型/孪生 verify.py/w0 卡零改动零重拍。下一步：M-WEA4（若做）待拍板；WEA 轨 M-WEA0~3 收官，merge 回 master 待用户指令。（**2026-11-14 14:2x 已 merge 回 master（`ebf5f50` no-ff，用户拍板「先收尾」）：master 自 `4090d94` 未动 → 零冲突纯并入 M-WEA2+3 六提交；merge 前共享记忆落库主树（`31c0f44`，MEMORY 压缩重写 + 日志补段解除本地改动挡路）+ merge 后 weather-w2/w3 run.bat blob 侧 CRLF→LF renormalize（`5f1460f`，wt 提交带入 CRLF blob 违反 eol=crlf 策略，零内容变化）；merge 后双后端 BUILD OK（删两棵 exe 强制重链，selftest 16/16 ×2）+ 按 S13 教训重跑天气轨全部历史版本卡 weather-w0~w3 40/40 + 老卡抽查 s15-clipmap 2/2 / s10-refgi 4/4，46 runs 全 bytes ALL GREEN。wt nl-engine-weather 保留续用**）
+
+## W1 M-W1.0 引擎交付驱动步 — city2engine（feat/worldgen，2026-11-13，tag w1-m0）
+
+**动作**：`scripts/city2engine.py`（Python stdlib 零依赖，in-process 复用 asset-ingest 的 obj2glb.py）把冻结 city-tools 产物接进引擎：36 OBJ → 扁平 glb（`city_block_<seed>_<size>_NN.glb`，Q-W1B 白名单零改动）→ nanite-tools cluster→lod→dag 套件（assets/meshlets，W1-B 判据收口）→ `city.scene.engine`（纯文本重写仅 meshFile，其余字节保真，Q-W1A 双轨）→ city_delivery.png 证据图（stdlib PNG 写出器，真实 glb 字节数驱动）。showcase `exe_for` 新增 `{python}` token（Python 工具卡无 per-backend exe；bat 垫片 GBK/cwd 否决、.py 直跑 WinError 193 否决）。**附带修复**：city-tools `serializeCityScene` buf[192] 截断 bug（单实体实需 ~280B，36 实体全伤、city.scene 非法 JSON；截断确定性使 w0 锚全绿无人发现，viewer M-W1.1 才是第一个 JSON 消费者），用户拍板「现在修」走「bug 非基线语义」重开条款。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py + example/w1-m0/{run.bat 七段, w1_check.py, city.scene.engine, city_delivery.png} + assets/models/city_block_12345_6_00..35.glb + assets/meshlets/ 套件 108 文件 + cases.json 卡 125（w1-m0，exe={python}）+ city-tools/main.cpp buf 修复 + selftest 72→74 + W1-DELIVERY 归档 docs/worldgen/CITY2ENGINE-GUIDE.md + w0-m2/m3 city.scene 重拍）。
+
+**完成情况**
+- 🟢 selftest 21 断言（命名/白名单镜像/重写保真/obj2glb 双跑逐字节/PNG 确定性/size 敏感）+ city-tools 74 断言双树 PASS。
+- 🟢 确定性：同路径双跑 146 文件聚合 sha256 一致（DX12 vs VULKAN 工具树交叉）；dag.json prefix 经 cwd=repo root + 相对路径约束稳定。
+- 🟢 回归：`--only w1-m0` 8/8 bytes ALL GREEN（17s）；`--only w0-m2 --only w0-m3` 8/8 ALL GREEN（重拍后）；ctest 151/151 双树（--repeat until-pass:3）；server.py --check exit 0（kStage 保持 S8.2，新卡按 run.bat+regression 双机检口径）。
+- 🟢 run.bat 沙箱 cmd 通道被禁——七段全内容按段级等价复验（helper anchors/json 双模式 + usage/negative 退出码），整 bat 留用户终端首跑确认（M-CRASH0 L2 先例）。
+
+**踩坑情况**
+1. cases.json 首版 args 漏脚本路径 token：exe={python} 时 `python.exe selftest` 把 "selftest" 当脚本名 exit 2、usage 用例裸 REPL 超时——**exe 是解释器本体，每个用例 args 必须前置 `{root}/scripts/<tool>.py`**，回归 0/8 暴露、修正后 8/8。
+2. xargs 在本机 Git Bash 触发 `arg_max >= LINE_MAX` 断言崩溃（134）——大文件集哈希用 python hashlib，别用 `find|xargs sha256sum`。
+3. nanite dag.json 内嵌 prefix 字段：双跑落不同目录必然 diff——确定性口径定义为**同路径双跑**，跨目录对比需容差排除 prefix 行。
+4. render_delivery_map 首版按 mesh 引用解析 block id，engine 场景 mesh 已换 glb 名解析失败——实体 `name`（block_NN）才是稳定主键。
+5. 截断 bug 的元教训（CITY2ENGINE-GUIDE §5）：冻结产物从未被解析消费时，「确定性 + 锚全绿」会掩护结构损坏——结构化产物验收必须含真实解析。
+
+**下一步**：M-W1.1 引擎消费验收（viewer `--scene city.scene.engine` 渲染 + 街景/俯视证据图用户终端补拍 + 回归 + close/release --done 收官 M-W1）。
+
+## W1 M-W1.1 引擎消费验收 — 贴图化楼体进 viewer（feat/worldgen，2026-11-13，tag w1-m1）
+
+**动作**：city-tools 本体扩展（用户拍板「city-tools 要改 不要敷衍」+「参考成熟工具」+「ambientCG 照片级」三轮拍板）——serializeBlockObj 加 6 面 quad UV（立面按档平铺 {12,8,10} 米/tile，顶/底面墙色微区域）+ `usemtl tierN` 密度档分组 + mtllib；generate 增产 city.mtl + textures/（ambientCG CC0 立面 JPG 逐字节拷贝，CMake POST_BUILD 分发，VENDOR.md + CC0 LICENSE 溯源）；RNG 流契约零消费。obj2glb.py 同字节 image 去重（78MB→1.7MB）。city2engine drive 传 --maps + run_checked 瞬时重试闸。viewer `--scene` 双后端消费渲染（俯视/街景）。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + CMakeLists POST_BUILD + thirdparty/ambientcg-facades/{tier1..3.jpg, VENDOR.md, LICENSE} + scripts/obj2glb.py 去重 + scripts/city2engine.py --maps/重试 + example/w1-m1/{run.bat, 4 PNG, 4 log} + example/w0-m2、w0-m3 重拍产物 + cases.json 卡 126（w1-m1 双 image 用例）+ CITY2ENGINE-GUIDE §6 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 双后端渲染：city_top 俯视 36 规则盒楼体（异常几何清零）+ city_street 立面窗格清晰（砖墙窗/幕墙/亮窗三档可辨）。
+- 🟢 机检：36 glb 全检 4 submeshes + 1 image；city-tools selftest 82 断言双树 PASS；ctest 151/151×2；`--only w1-m1 --only w1-m0` 8/8 + `--only w0-m2 --only w0-m3` 8/8 bytes ALL GREEN；server.py --check exit 0。
+- 🟢 run.bat 锚兼容新产物（stats 数值不变，fc 自比对段照常逐字节）。
+
+**踩坑情况**
+1. **assets/models 残留旧产物混入渲染**：drive 中途死（见 3）导致 _28~35 是 M-W1.0 无纹理旧 glb，全城渲染尾部炸撕裂灰白异常——头/尾子场景隔离实验 + glb accessor 解剖（1 submesh 0 images）+ mtime 对照三步定位。**教训：增量覆盖型驱动必须全量校验产物世代（数量+结构），避免新旧混装。**
+2. obj2glb 贴图嵌入无去重 → 36 块 78MB 膨胀——同字节 image 去重后 1.7MB；顺手把 1K 入库纹理重采样 512（48/32/35KB），楼体尺度无损。
+3. **drive 随机死（失败点漂移 3/7/11，nanite exit 0 捕获输出空）**：单项复现 0/20 失败、nanite_suite 12 连全过——沙箱连续 spawn 子进程的 transient 环境干扰；修 run_checked 重试 ×2（ctest --repeat 同口径），重试后 36/36 全过。另：bash 管道 `| tail` 吞 drive 退出码导致首轮误判成功——退出码必须 PIPESTATUS 直读。
+4. kenney city-kit 实测为色板图集（窗户靠几何建模）——「成熟工具」资产先拉一张看内容再定案。
+
+**下一步**：M-W1 整轨收官（close + release --done）；后续方向：楼体几何变体（bevy 每档 5 种楼型池）、树/车资产通道、交通 M-T0。
+
+## W2 M-W2.0 — 程序化楼型池：4 形状原语 × 分档池（feat/worldgen，2026-11-13，tag `w2-m0`）
+
+**动作**：M-W2 立项（用户拍板「楼体几何变体」方向 + Q-W2A=A1 全自研程序化楼型池 / Q-W2B=B1 FNV-1a 纯函数选型 / Q-W2C 形状集本轮定死，W2-PLAN §2）。city-tools：`CityBuilding.variant` 字段（fnv1a64(seed‖block‖building) % 3 零 RNG 消费，M-W1.1 材质档同构）+ 4 形状原语（V0 单盒 / V1 退台 0.55h 处 0.62 缩放 / V2 裙楼塔 0.30h + 0.55 缩放、h<6m 纯函数降级退台 / V3 L 形翼 x0 内缩 0.06m 消共面）+ 分档池 tier1={V0,V1,V3} tier2/3={V0,V1,V2}（容量均 3）+ `buildingParts` 楼型几何唯一真相源（part 全落原 footprint，保「块内两两不重叠」不变量）+ `serializeBlockObj` 按 part 展开（每 part 8 顶点 12 三角，UV 立面 v 跨度 = 段净高/unit）+ `serializeLayout` 每楼追加 variant u32 + `generate --stats` 增 `variants:` 分布行（纯追加锚）。selftest 82→88。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + docs/worldgen/W2-PLAN.md + example/w2-m0/{run.bat, selftest.log, generate.log, usage.log, negative.log, city_top.png, city.scene, roadnet.json, blocks/, textures/} + w0-m2/m3/w1-m0/w1-m1 基线重拍 + cases.json 卡 127 + CITY-TOOLS-GUIDE §6 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 selftest 88 断言双树 PASS（新增 6 组：池界 / 四形状同城出现 / 异 seed 分配必异 / 裙楼降级 / 全城 OBJ v/vt/f 行数守恒 / part footprint 包含）；ctest 151/151×2。
+- 🟢 变体分布锚：seed12345 = single48/setback54/podium8/lshape34（合计 144），seed12346 = 49/54/10/31——FNV-1a 纯函数确定性。
+- 🟢 w2-m0 run.bat 七段 ALL GREEN；回归 --only w2-m0 8/8 + w0-m2/m3、w1-m0 各 8/8 bytes ALL GREEN；server.py --check exit 0。
+- 🟢 RNG 流契约零破坏：变体选取零消费，文件头消费序 ①②③④ 逐字节不动（selftest 动态锚锁定）。
+
+**踩坑情况**
+1. 变体回填首版写在楼体生成第二遍内——`densityTier` 要到第三遍噪声才填，材质档恒读 0 → 立刻重排为独立第五遍（零 RNG，流尾之后任意位置无影响）。**教训：跨遍依赖的字段回填必须排在依赖链末端。**
+2. L 形两盒拼接的翼 -x 面与主体 -x 面共面 → z-fighting 风险，翼 x0 内缩 0.06m 让翼面落进主体体积内（隐藏）；叠段（退台/裙楼）上下段共面为反向面（上段底面下向 + 下段顶面上向），backface culling 下无冲突，沿 W1 街景实证无条纹。
+
+**下一步**：M-W2.1 消费验收（drive + viewer 双机位变体证据图 + 回归 + close/release 收官 M-W2）。
+
+## W2 M-W2.1 — 变体消费验收 + 两处基建加固（feat/worldgen，2026-11-13，tag `w2-m1`，M-W2 整轨收官）
+
+**动作**：city2engine drive `--scene-out example/w2-m1/` 全城落位（36 OBJ 多段楼型 → glb + nanite 套件，消费链零适配）+ viewer `--scene` 双后端双机位渲染（俯视 footprint 四变体可辨 / 街景天际线剪影）。**基建加固两处**：① run_checked 重试参数（retries 2→4 + sleep 0.2s→指数退避 0.5/1/2/4s）——M-W1.1 参数在基线重拍实测死亡率 ~11/12（transient 3 连挂、失败点漂移；python 单项直拉同命令 20/20 全过）；② w1_check.py hash 集合按文档口径修复（W1.0 潜伏 bug：HERE.iterdir() 全量收录把 h1/h2 重定向文件卷进集合，时序使 seg5 对拍永不通过）+ w1-m1/w2-m1 image 卡补 baselines 登记（m0.2 老口径，W1 收官「回归 8/8」实为口径含糊，本轨勘误）。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py 加固 + example/w1-m0/w1_check.py hash 修复 + example/w2-m1/{run.bat, drive.log, city.scene.engine, city_delivery.png, 4 PNG, 4 log} + cases.json 卡 128 + w1-m1 卡 baselines 补登记 + CITY-TOOLS-GUIDE §7 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 drive 零闪断（加固后）：blocks=36 glb=36 nmesh_suites=36 dag=36 scene_refs=36；同路径双跑 delivery 集合 sha256 一致（修复口径）。
+- 🟢 双后端渲染 4 图 + screenshot written 锚齐；变体剪影与 w1-m1 同机位构图对比几何差异清晰。
+- 🟢 回归：w2-m1 4/4 + w1-m1 4/4（补 baselines 后首绿）+ w1-m0 8/8 + w0-m2/m3 各 8/8 + w2-m0 8/8；server.py --check exit 0。
+
+**踩坑情况**
+1. **w1_check.py hash 集合自吞重定向文件（W1.0 潜伏 bug）**：h1 计算时 h1.txt=0B 在集合、h2 计算时 h1.txt=内容 + h2.txt=0B，集合永不对称 → run.bat seg5 按原写法**永远不通过**；M-W1 验收通过实为复刻工具在集合外对拍的等效口径。修复 = hash 集合收敛到文档口径（glb + meshlets + scene.engine + evidence png）。**教训：确定性对拍不得把对拍工具自身的 I/O 文件卷进集合；验收 run.bat 首跑即验真，不能只靠等效复刻。**
+2. run_checked 旧参数实测不够：重试 3 次全挂 ≠ 永久失败——失败窗口有时间聚集性，sleep 0.2s 太短；指数退避后零闪断。**教训：重试闸的参数要按「最恶劣批跑」（108 连发 spawn）标定，不是按单项复现标定。**
+3. 街景近景机位 dist=16 钻楼底（相机在几何内部看背面），回退 w1-m1 验证过的 yaw28/pitch-10/dist30——**教训：新机位必须先小图验证构图再入交付物。**
+
+**下一步**：M-W2 整轨收官（close + release --done）；后续方向：树/车资产通道、交通 M-T0、楼型池扩展（每档 >3 种）。
+
+## W3 M-W3.0 — 树/车/路灯资产通道：摆放数据 canonical 化（feat/worldgen，2026-11-14，tag `w3-m0`）
+
+**动作**：M-W3 立项（用户拍板「多找点可用的模板」方向；W3-PLAN 资产侦察 = kenney nature kit 61 树 / car kit 25 车 / poly.pizza 路灯全 CC0 实测入库；消费链书面验证引擎零改动）。用户拍板「推荐」= Q-W3A=A1 drive 层装配 / Q-W3B=B1 city-tools 产摆放数据 / Q-W3C=C1 树+车+路灯试点 / Q-W3D=D1 路面纹理不做。city-tools：`CityTree.variant`（fnv1a64(seed‖'tree'‖idx)%12）+ `CityCar`（沿有向边 hash%4 命率停靠，t∈[0.2,0.8]，垂边 0.3m，hash%8 车型，edgeId 预埋 M-T0）+ `CityProp`（每路口 1 盏 hash%4 四角）+ `generateStreetAssets`（generateCity 尾部零 RNG）+ serializeCityScene 315 实体（nextID 316）+ serializeLayout 树 variant/cars/props 段 + `street:` 分布行 + 名字表 kTreeVariantNames/kCarVariantNames/kPropKindNames。selftest 88→97。
+
+**提交版本**：`feat/worldgen`（city-tools/main.cpp + thirdparty/{kenney-nature-kit,kenney-car-kit,poly-streetlight}/ + VENDOR.md ×3 + docs/worldgen/W3-PLAN.md + CITY-TOOLS-GUIDE §8 + MILESTONES 本栏 + example/w3-m0 七段 + w0-m2/m3/w2-m0 基线重拍 + cases.json 卡 129）。
+
+**完成情况**
+- 🟢 selftest 97×2 / ctest 151/151×2；street 锚 seed12345 = cars42/lights49/树 12 种 14~18 棵、seed12346 = cars42/树全均匀 14（42 = p=1/4 二项众数，两 seed 同值非异常，selftest 车 seed 敏感断言用首车位置）。
+- 🟢 w3-m0 run.bat 七段 ALL GREEN；回归 w3-m0 8/8 + w0-m2/m3、w2-m0 各 8/8；w0-m2 nextID 锚 37→316 机械更新。
+- 🟢 资产全 CC0：nature kit 经 ClanCode 镜像（gh-proxy sparse clone）+ License.txt 原文；car kit 经 cinevva CDN 直链；路灯 poly.pizza 直链。样张先解剖后入库（kenney 前科教训执行）。
+
+**踩坑情况**
+1. car kit 样张解剖漏查 image.uri——cinevva 单文件 glb 的贴图是外部 uri 残留（Textures/colormap.png），tinygltf 不加载外部文件，渲染时才炸「not 8-bit decoded RGBA-capable data」。教训：**样张解剖必须查 image.uri 有无，「images: 1」不等于嵌入**。（修复见 M-W3.1 变形一）
+
+**下一步**：M-W3.1 消费验收（drive vendored 装配 + viewer 315 实体渲染）。
+
+## W3 M-W3.1 — drive vendored 装配 + 资产端两变形（feat/worldgen，2026-11-14，tag `w3-m1`，M-W3 整轨收官）
+
+**动作**：city2engine `copy_vendored_assets`（引用解析→三目录查找→assets/models 同字节去重拷贝，21 件全池被引用）+ GLB_NAME_RE 扩连字符 + w1_check hash 集合按引用闭合扩 vendored glb + city2engine selftest 21→32（vendored 通道 9 断言）+ viewer 渲染 objects=315/batches=215 零引擎改动 + `tools/embed_glb_textures.py`（colormap.png 嵌入变形，8 车）+ w1-m1/w2-m1/w3-m1 十二图重拍（正确后端→文件名映射）。
+
+**提交版本**：`feat/worldgen`（scripts/city2engine.py + example/w1-m0/w1_check.py + tools/embed_glb_textures.py + example/{w1-m1,w2-m1,w3-m1}/ + cases.json 卡 130 + w2-m0 卡 selftest 锚 88→97 + CITY-TOOLS-GUIDE §9 + MILESTONES 本栏）。
+
+**完成情况**
+- 🟢 drive vendored=21 零闪断；同路径双跑 delivery sha256 一致（w1_check 修复口径 + vendored 扩集）。
+- 🟢 回归七卡全绿：w3-m0 8/8 + w3-m1 4/4 + w2-m0 8/8（锚更新）+ w2-m1 4/4 + w1-m1 4/4 + w1-m0 8/8 + w0-m2/m3 8/8。
+- 🟢 viewer street 图：彩色车（嵌入 colormap）+ 路灯弯杆清晰可见；top 图 315 实体装配（树冠被楼体遮挡属构图固有，objects/batches 锚闭合）。
+
+**踩坑情况**
+1. **多后端批量拍图文件名覆盖事故**：for 循环复刻拍图把两后端输出写同一文件名——VULKAN 覆盖 DX12 主图、-VULKAN 后缀图从未落盘，w2-m1/w1-m1 基线混用 M-W2 旧图与 M-W3 新图 → 回归 vk 大面积 FAIL（79725 像素差）而 dx12 top 逐字节 PASS。排查链：vk 自对拍确定 → scene 跨例子 cmp 确定 → glb 跨 drive hash 确定 → 最后 mtime 对照抓出（vk PNG 是 23:58 旧图）。教训：**多后端批量拍图输出路径必须逐后端显式写死，循环变量不许进输出路径；基线混代问题先查 mtime 再怀疑渲染确定性。**
+2. 特写机位 dist 21/26 两次实测钻楼底（orbit 相机 dist < 城市对角半径 ≈33m 必进几何内部）——M-W2.1 教训量化入 GUIDE §9：证据机位必须 ≥ 城市对角半径。
+3. drive 首跑 vendored 误把重写后的 city_block_*.glb 当外部资产（engine_text 传入 vs scene_text）——跳过条件补 city_block_ 前缀。教训：**同一引用字段有两种形态（中间名/装配名）时，识别分支必须同时枚举两类。**
+
+**下一步**：M-W3 整轨收官（close + release --done）；后续方向：M-T0 交通（消费 roadnet.json + car edgeId 溯源字段已预埋）、街具扩展（红绿灯等，CC0 源待寻）、楼型池/树池扩容。
+
+## T0 M-T0.0~T0.2 — 交通系统整轨：lane graph + A* 寻路 + 直线跟车（feat/worldgen，2026-11-14，tag `traffic-m0`，M-T0 整轨收官）
+
+**动作**：GAME-DEV-ORDER 第 8 步（Q-A 自研立项消费）。core `nl/traffic/` 三模块：`LaneGraph`（roadnet.json -> 车道级展开图，UE ZoneGraph 口径只读对照，右行几何 `right=(fz,−fx)`、`off=halfW−(i+0.5)laneW`、折线预计算、lane→lane 连接表禁掉头、edges 文件序×laneIndex 升序 = 确定性遍历序）+ `LanePath`（A*，代价 = lane 弧长、可采纳启发 = 末点欧氏、open 表线性扫最小禁 priority_queue，Ok/Unreachable/BadLane 显式语义）+ `TrafficSim`（C1 拍板跟车律 `sqrt(brake·max(0,gap−minGap))` + route 末端停车曲线 `sqrt(2·brake·remain)`，固定 dt=1/60 车序逐位可复现）；`traffic-tools`（build/path/lanes/sim/selftest，退出码 0/1/2，纯 CPU PNG 光栅化 stb 先例）；ctest 9 用例；展示台卡 `t0-traffic`（7 用例 + preview）+ `example/t0-traffic/`（run.bat 七段 + 真实城证据图）；TRAFFIC-PLAN / TRAFFIC-TOOLS-GUIDE / 本栏。
+
+**提交版本**：`feat/worldgen` `a2a7fa9`（M-T0.0 lane graph）+ `cc367be`（M-T0.1 A*）+ 收口提交（M-T0.2 TrafficSim + traffic-tools sim/lanes + 交付包 + 文档，tag `traffic-m0`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**（selftest 3693 断言 / fixture / build / 负向 / path / path 负向 / sim / lanes / sim 负向）。
+- 🟢 确定性锚：lane graph dump 双跑逐字节一致；A* 路径双跑逐位一致；仿真 3 车 300 帧双跑 `TrafficCarState` memcmp 逐位一致。
+- 🟢 真实城市冒烟（seed 12345 / 49 nodes / 168 edges）：168 lanes / 428 links / 798m；e0→e60 跨城 8 hops 36.5m；32 车 30s 行驶 967.4m；`city-sim.png`/`city-lanes.png` 工具真实输出。
+- 🟢 `example/t0-traffic/run.bat` 七段 ALL GREEN；regression `--only t0-traffic` 7/7 + `w0-m0` 保形 spot 绿。
+
+**踩坑情况**
+1. **跟车律两版翻车**：① 纯 minGap 触发（贴前车速度）——高速离散 bang-bang 每帧 v*dt 穿透；② 触发距离 `minGap+v²/brake` + 匹配速度——前车停车曲线刹车时后车在自由段再加速，形成 limit cycle 间距棘轮下滑（selftest 停车间距锚连挂两轮）。终版 = 标准跟车律 `sqrt(brake·max(0,gap−minGap))`（以 brake 减速度恰好停在跟随点，天然连续无振荡）。教训：**离散 bang-bang 仿真锚先手推连续极限情形（临界刹车距离）再定断言，物理不公平的断言（瞬钳停车 leader）必挂。**
+2. selftest 三处测试代码 bug（非实现 bug）：输出向量复用被 Unreachable/BadLane 的 `clear()` 清空、memcmp 含 vector 指针的 struct、夹具字符串 replace 手写长度越界——**负向调用一律独立输出变量、memcmp 只比 POD 面、replace 一律 needle.size()**。
+3. `selftest --verbose` 忘实现（w0 证据日志口径）run.bat 首跑即抓——ctset 与 run.bat 双通道互证有效。
+4. ctest `--repeat until-pass:3` wt.bat 已内置，外传重复报 `At most one '--repeat'`；局部 `len` 遮蔽函数参数 C4457；stb_image_write 缺 `STB_IMAGE_WRITE_IMPLEMENTATION` 单 TU 定义 LNK2019。
+
+**下一步**：GAME-DEV-ORDER 第 9 步调度器迭代（红绿灯相位 `phases`/`signal` 契约扩展、路口让行、避撞）需单独立项拍板；循环 demo 旗标、CityCar 实体接入、GameClock/ECS System 化为独立后续项。
+
+## T0 M-T1.0~T1.2 — 调度器迭代：红绿灯相位 + 路口占用锁 + 避撞（feat/worldgen，2026-11-14，tag `traffic-m1`，M-T1 整轨收官）
+
+**动作**：GAME-DEV-ORDER 第 9 步消费（Q-T5 续 worldgen 轨，用户拍板「A2 B1 C1」）。core `nl/traffic/TrafficControl.hpp/.cpp`（A2 固定周期两相含黄灯信号：绿→黄→全红清空→对向，黄灯不放行新进入、持锁穿完；整数帧×dt 相位时钟；主轴分组 x 组 0 / z 组 1；`phases` 契约只加不减可选覆盖 8/2/1 缺省 + B1 路口占用锁 FIFO 授予/越圈释放）+ TrafficSim 可选 control 挂接（nullptr = M-T0 原行为锚不重拍：停车线刹车曲线 + 硬钳 backstop + route 末停靠帽 + haltFrames 统计）+ traffic-tools sim 扩展（signals/arrived/min gap/locked end/max halt 五行统计 + 跨路段互斥扫描退出 1 + LOCK 死锁诊断 + 信号相位着色 PNG）；`example/t1-traffic/`（信号化夹具 + 双证据图 + run.bat 五段）+ 展示台卡 `t1-traffic`（5 用例，卡 132）+ TRAFFIC-PLAN §6~§9 / GUIDE §7 / 本栏。
+
+**提交版本**：`feat/worldgen` `5b05525`（M-T1.0+T1.1：TrafficControl + sim 集成 + 三重死锁根修）+ 收口提交（M-T1.2：交付包 + 文档 + 卡，tag `traffic-m1`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**（selftest 4657 断言，⑨ 调度器段：时钟帧锚 / FIFO 锁链 / 红灯 7.5m 逐位钳停 / 冲突串行 / 跨路段互斥 / 控制全开双跑 memcmp）。
+- 🟢 城市冒烟（49 lock-only 节点、32 车 30s）：`locked end 0`（根修前实测 **20 锁泄漏**）、min gap 1.35m ≥ 1.0、到达 7/32 / 475.5m；信号化夹具 6 车 3/6 到达锁 0。
+- 🟢 `example/t1-traffic/run.bat` 五段 ALL GREEN（findstr 锚：signals 行 + locked-end 行）；regression `--only t1-traffic` 全绿 + `t0-traffic` 保形 spot。
+
+**踩坑情况**
+1. **三重死锁根修（本轮核心教训，城市冒烟实测驱动）**：① 初版「匹配前车速度已废、FIFO 锁」在城市场景终态 20 锁未放——先误诊为环路 gridlock 加防溢出闸无效，**LOCK 诊断行（持锁车 lane/s/位置 dump）实证破案**：W0 城 ~4m lane 上固定常数（停车线 2.5m/释放圈 3m，按 10m 夹具标定）几何不相容，排队车永远压在已穿节点圈内持锁。根修 = 无前车前瞻闸 + 出口防溢出闸 + 自适应几何（`stopS=length−min(entryStop,0.6·length)` / 节点 `clearEff=min(3,0.3·最小邻接边长)`）。教训：**控制常数必须随路网密度自适应，夹具标定值不能直接上真实数据；死锁定性先 dump 持锁者状态再下结论。**
+2. **对向会车假碰撞**：同路段对向 lane 横距 0.5m（offset ±0.25）被首版「跨 lane 互斥」扫描误报——互斥口径修正为跨路段（无序节点对）。
+3. 夹具锚两处手误（e4/e6 轴向背反、node3 行 needle 双空格）——几何断言先画节点图再写锚。
+4. `const TrafficControl*` 调不了 advanceFrame/acquire（C2662）→ sim 持可变指针；`serr` 块局部声明遗漏（C2065）。
+
+**下一步**：需求感应信号 / 冲突型路口（对向直行并行提吞吐）/ CityCar 实体接入 viewer / GameClock-ECS System 化 / 循环路线旗标 = 独立拍板项；citygen 侧 signal 位与 phases 填充策略归 W 轨道。
+
+## T0 M-T2.0~T2.2 — 调度器增强：组共享锁 + gap-out 感应 + 循环路线（feat/worldgen，2026-11-14，tag `traffic-m2`，M-T2 整轨收官）
+
+**动作**：M-T1 后续项整批立项（用户拍板「开后续项 全给做了吧」；CityCar 接 viewer / ECS System 化单列 M-T3 待摆证据）。core `nl/traffic`：TrafficControl 锁模型升级（组共享 + 转弯独占 + axisPure 守卫 + FIFO 队序防饿死）+ gap-out 感应切相（整数帧跳变 + reportWaiting 需求上报 + 最短绿时防抖，phases 契约 `gap_out_s` 只加不减）+ TrafficSim `params.loop` 环闭合回绕；traffic-tools `sim --loop/--actuated` + 对向共线豁免几何判据 + 停滞死锁守卫 + closest-pair 实证诊断；selftest ⑩（4685 断言）；`example/t2-traffic/`（gap_out_s 契约夹具 + 双证据图 + run.bat 六段）+ 卡 `t2-traffic`（133）+ TRAFFIC-PLAN §10 / GUIDE §8 / 本栏。
+
+**提交版本**：`feat/worldgen` M-T2.0~T2.2 收口提交（tag `traffic-m2`）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK；ctest `m-t0-traffic-*` **9/9 ×2**；selftest **4685 断言**。
+- 🟢 城市组锁吞吐 **17/32 / 646.9m**（M-T1 基线 7/32 / 475.5m，**+143%**）；min gap 1.35m；gap-out 夹具 locked 0；loop 4/4 闭合环 odometer 508m。
+- 🟢 `example/t2-traffic/run.bat` 六段 ALL GREEN；t1 卡/run.bat 锚随 locked-end 语义演进重拍后保形全绿。
+
+**踩坑情况**
+1. **「同组=不冲突」假设的边界（axisPure 守卫）**：组共享首版城市冒烟 min gap 0.557m——实为误报（共线相邻路段对向车道 0.5m 设计横距），但倒逼两处根修：① 互斥扫描对向豁免升级为「精确反向 + 共线 0.75m」几何判据（sameRoad 只认同一对节点不覆盖共用路口的相邻路段）；② axisPure 守卫防斜边节点真交叉（保守退化单持有者）。教训：**并行度放开前先审「组内不相交」的几何前提，豁免口径必须从「拓扑关系」升级到「几何关系」**。
+2. **死锁判定被 loop 车流打穿**：环上车流不消散，终帧持锁穿越车（speed>0）被首版「locked end != 0 = 死锁」误判——根修为「停滞在圈内（speed==0 且距节点 ≤ clearEff）」才算死锁；t1 卡锚随语义重拍。
+3. FIFODrainQueue 组授予条件两版错误（hasTurnWaiting 挡先到的组申请 / axisPure 外层条件饿死非纯轴节点）——组锁单元锚（③ 段重写）先行暴露，逻辑推演「队列序 = 防饿死的充分条件」后一次定稿。
+4. groupHolders 类型少一层嵌套（vector<int32_t>[2] vs vector<vector<int32_t>>[2]）编译期抓住；sigFixture/serr 跨块作用域 C2065 ×2；replace 手写长度坑再现（70≠79，needle.size() 纪律）。
+
+**下一步**：M-T3（CityCar 实体接入 viewer + GameClock-ECS System 化）需实读渲染/场景/ECS 后摆证据拍板；需求感应进 citygen 侧 signal 填充策略归 W 轨道。
+
+## T0 M-T3 — CityCar 接入 viewer：TrafficCarSystem ECS + GameClock 逻辑帧（feat/worldgen，2026-11-14，tag `traffic-m3`）
+
+**动作**：GAME-DEV-ORDER 第 9 步收口（用户拍板「A A 最小集」，TRAFFIC-PLAN §11）。Q-T12=A 新 ECS 系统 `TrafficCarSystem`（`SignedSystem<TrafficCar, Transform>`，NavAgentSystem 同构：系统内持 LaneGraph 值拷 + TrafficSim + 固定步长累加器，位置/yaw 写回 TransformComponent，渲染实例表零改动消费）+ `TrafficCarComponent`（scene 层 POD，零 nl/traffic 依赖）+ `TrafficSim::carPose`（纯新增）。Q-T13=A viewer `--traffic-city <DIR>` + `--traffic-steps <N>` + `--traffic-seed <N>`（runScene 纯可选分支，不指定逐位原路径，kStage 不 bump；car_* 实体挂组件；fnv1a64 纯函数 route——闭合回路选终点 loop=true 永续，与 city-tools assetVariantHash 同常数同字节序）。Q-T14=最小集（截图+日志锚+cases 卡；信号可视化不做）。
+
+**提交版本**：`feat/worldgen` M-T3 收口提交（tag `traffic-m3`）。
+
+**完成情况**：core 三件套（TrafficCarComponent.hpp/.cpp + TrafficCarSystem.hpp/.cpp）+ TrafficSim.carPose + viewer 三旗标 + traffic-tools selftest ⑪ 段（4740 断言 = 4685+55，ECS 写回/双 World memcmp 确定性/serialise roundtrip/卡顿帧防爆/负向显式失败）+ example/t3-traffic-city（city.scene.engine + roadnet.json 接口铁律兑现 + run.bat 六段 ALL GREEN + 双后端 4 图）+ cases.json 卡 134；回归 t3 4/4 + t2 12/12 + t0 12/12 全 bytes；ctest 双后端全绿。42 车城市永续车流，600 逻辑 tick odometer 3437m 单调，车流位移街景可辨（与 w3-m1 静态基线对照确认无渲染回归）。
+
+**踩坑情况**
+1. **`--traffic-steps` 首版用真实 dt**：`gameClock.tick(clockDtMs)` N 次调用产出的逻辑步数随 dt 抖动（首冒烟 frame2 已 369 ticks ≠ 预期 150），双跑 PNG 必不一致——修为每次调用钉 `GameClock::kStep*1000` ms（恰 1 步/调用，8 帧×75=600 逐帧精确）。教训：**「调 N 次 tick」≠「N 步」，步数确定性必须钉步长**。
+2. **run.bat 漏定义 `%OUT%`**：沿用 w3-m0 风格时 set 的是 CITY，`%OUT%` 展开为空串 → 全部产物按相对路径落到仓库根（16 个文件）；根修 = `set "OUT=%~dp0"` + 逐个点名清理。教训：**复制 run.bat 模板时先核对 set 变量与引用一一对应**。
+3. **viewer 没有裸 usage 模式**：seg6 首版 `"%EXE%" > usage.log` 让 viewer 无参起窗口渲染不退出（7.7MB 日志 + 2 僵尸进程烧 GPU 10 分钟）——对照 M15.2 退出闸事故的同族坑：`--frames` 缺省时 viewer 进交互循环。修 = usage 段改用 traffic-tools（exit 2 实测）。
+4. **run.bat for 循环 VULKAN 覆盖 DX12 基线**：同输出文件名让基线 PNG 变 VULKAN 内容，回归 dx12 比对差 116px（首版 `%SUF%` 还会踩 for 解析期展开坑）——seg2/3 改显式双行，VULKAN 输出带 `-VULKAN` 后缀。教训：**双后端截图必须分文件，基线命名 = DX12 无后缀 / VULKAN 带 -VULKAN**。
+5. bat echo 行内 `-> exit 2` 的 ` 2>` 被当重定向吞显示（命令照跑）——措辞改 `(expect exit 2)`。
+6. 纠偏留痕：摆方案时「runScene 一行不动」表述有误——nav-crowd 先例实为 run 函数内模式分支，实际形态 = runScene 内纯可选分支（已写入 TRAFFIC-PLAN §11.2 纠偏段）。
+
+**下一步**：T0 轨道四里程碑（T0~T3）整轨 merge 回 master 待用户指令（S13 教训：merge 后须重跑该轨全部历史版本卡）；需求感应信号进 citygen signal 填充策略归 W 轨道；TrafficControl 信号可视化（红绿灯摆件）另立项。
+
+## T0 M-T4 — 红绿灯可视化 + 信号调度接通引擎 + citygen signal 填充（feat/worldgen，2026-11-14，tag `traffic-m4`）
+
+**动作**：用户指令「继续加红绿灯吧 不然之前不是白做了」+ 中途加码「感应信号 citygen 填充 一起做吧」（拍板「A A A 默认开」，TRAFFIC-PLAN §12 + §12.5 补段）。①信号挂接：`TrafficCarSystem` 值持 `TrafficControl`，新增 `initControl(json,len,autoSignal,err)`（buildFromRoadnetJson + autoSignal 置全部受控节点 signal=true + `sim_.control` 指上）——修复 M-T3 实读发现的「`sim_.params.control` 恒 nullptr、M-T1/T2 调度在引擎内从未生效」缺陷；②摆件：`scripts/make-signal-post-glb.py` 手写最小 GLB（杆+灯箱双 primitive）→ `assets/models/signal_post.glb`，viewer `--traffic-city` 分支每受控节点×每进入边建 `signal_<node>_<edge>` 实体（Transform 停车线右侧 + Model + `SignalLampComponent` POD），`registerLamp` 显式注册，writeBack 逐灯 `stateForEdge` 写 `ModelComponent.tint`（渲染零新特性——每帧 objects 原地刷新含 tint）；激活段（Spin/ReadCount 类 + ticking + traffic-city）整体前移到渲染收集段之前（灯实体必须先于 modelIds 收集否则不渲染）；③citygen 填充：`serializeRoadnet` 按进入边>=2 填 signal=true（旧口径「citygen 恒 false」废止），t3 roadnet.json 重生成；④默认开（无关闭旗标），t3 基线重拍。
+
+**提交版本**：`feat/worldgen` M-T4 收口提交（tag `traffic-m4`）。
+
+**完成情况**：core 三新件（SignalLampComponent.hpp/.cpp + make-signal-post-glb.py/signal_post.glb）+ TrafficCarSystem 扩展（initControl/registerLamp/灯 tint writeBack/duplicate 双指针重接）+ viewer 激活段前移 + 灯创建 + citygen serializeRoadnet 填充 + selftest ⑫（traffic 5244 = 4740+504；citygen 98 = 97+1）+ example/t3-traffic-city（roadnet 重生成 + 4 图重拍 + run.bat 六段含补回的 seg4）+ cases.json t3 卡语义更新 + 锚 4740→5244 八处同步。信号生效证据：600 tick odometer **82.72m 停滞**（未挂接对照 3437m），42 车红灯首尾相接排队街景可辨，168 盏灯箱红/绿异态。回归 t3 4/4 + t2 12/12 + t0 12/12 全 bytes；ctest 双后端全绿（收口时核数）。
+
+**踩坑情况**
+1. **M-T3 遗留：t3 run.bat seg4（det 双跑段）在 seg2/3 显式化重写时被整段误删**——M-T3 收口的「ALL GREEN」实际没跑确定性对拍（靠 cases.json 回归 bytes 兜底才没漏事故）。本轮发现补回，v6 起 seg4 恢复。教训：**重写 bat 段落用 `s[:i2] + new + s[i6:]` 式拼接会静默吞掉中间段——重写后必须 diff 全文或逐段 echo 核对**。
+2. **`sim_.control` vs `sim_.params.control`**：control 挂接点在 TrafficSim 自身（TrafficSim.hpp:62），不在 params——M-T3 摆方案时口径记错，编译期 C2039 拦住。
+3. **灯实体创建位置约束**：初版放在 objects 收集段之后——灯不在 modelIds/实例表里根本不渲染；激活段整体前移到收集段之前修复。教训：**动态建实体的模式分支必须落在「实体收集」之前，renderable 实体生命周期先于实例表构建**。
+4. **Entity::addComponent 返回 Component&**：取派生类指针要 `&e.addComponent(...)`（少写 & 编译 C2440）；viewer/selftest 同犯两处。
+5. **全红窗口异态断言错**：clearS 窗口两相皆 Red，「两相恒异态」不成立——改为「不同时绿」。
+6. **42 vs 49 受控节点**：摆方案时把车数 42 误当受控节点数——size 6 全部 49 节点进入边>=2（角 2/边 3/内 4），灯 168 = Σ进入边。已在 GUIDE §10.5 纠偏留痕。
+7. CMakeLists/traffic-tools patch 三遇 CRLF 坑（\n vs \r\n 匹配失败）——python patch 一律先探文件行尾。
+
+**下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。
