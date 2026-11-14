@@ -29,6 +29,9 @@ def main() -> int:
         return 2
     failed = 0
     for case in ver["cases"]:
+        if "baselines" not in case:   # tool/文本型用例（expectLog 锚），无截图基线
+            print(f"[skip] {case['id']} (no baselines)")
+            continue
         for backend, exe in EXE.items():
             out = case["baselines"][backend]
             os.makedirs(os.path.dirname(out), exist_ok=True)

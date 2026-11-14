@@ -3423,3 +3423,15 @@
 **踩坑**：① **NVRHI volatile CB 上限 6/layout**：共享槽位表（addResolveLayoutItems）加 b3 → "Binding layout contains too many volatile CBs (7)" + compute layout 已有 b3 重复声明 "duplicate bindings: b3"，DX12 deviceErrors=2 全卡 acceptance 拒跑——根修 = raster 雾走 matResolve 专属 b4 新 buffer（纯 graphics 无跨阶段前科面）；② **验收闸拦假绿**：首版 w2 基线 bytes 全绿但雾肉眼不可见——probe 模式物体直光走 raster matResolve 管线（非 csDirect），b3 只覆盖 compute 路径；bytes 一致 ≠ 效果成立，亲眼验图是硬闸；③ mode 0 雾化编辑手滑改错 min 括号（逗号进乘式），当场 grep 自查修正；④ gen_card_baselines.py 新工具（cases.json args {out} 直跑 viewer 截图基线路径，重拍后必须 regression 复验）。
 
 **提交版本**：feat/weather 本节 commit + annotated tag `weather-w2`。冻结面：kStage 保持 S8.2（A 类穿插轨道）；weather-w0 工具卡/CPU 天气模型/孪生 verify.py 零改动零重拍；UE 代码零入仓。下一步：M-WEA3 湿地面+时域稳定性（需拍板）。
+
+---
+
+## WEA M-WEA3：湿材质+时域稳定——引擎级湿化（N·up 加权）+ 帧间差 reject（feat/weather，2026-11-14，tag `weather-w3`）
+
+**动作**：开工闸三处实读（wetness ODE 产出侧渲染零消费 / 双处 shadePbrGrad 独立定义 / csFilterTemporal alpha 收敛 0.1 + g_flags.x=validHistory 通道既有；UE/bevy 引擎级湿化均无对位）→ §9d 两项拍板（Q-W3-1=A2 全材质+N·up 加权 / Q-W3-2=B1 CPU 帧间差 reject）落码：① 湿材质 = 双处 shadePbrGrad + material.slang mode 0 三处同式湿化（`wetW = wetness × lerp(0.35,1,saturate(N·up))`，roughness 压 35% + albedo ×0.65；UE 材质层 WetnessMask 的引擎统一版，D24 台账超集简化）；CB 复用 fogA.z 预留分量**零扩容**（b3 cc[10] / b4 rf[2]）；② 时域 reject = viewer 帧间天气参数（zenith/horizon/sunInt/fogD/wetness）max abs diff > 0.01 → FrameParams.weatherHistoryReject → drawFilterTemporal fcb[4] 单帧清零（复用 validHistory 通道零 shader 改动）；③ 新 CLI：`--weather-t-step`（帧号驱动 t 确定性重放）+ `--weather-wetness`（cvar 手调锁湿度，同相位湿度对比锚）；④ 探针 hit 走统一模型色非 PBR 天然零波及。
+
+**完成情况**：🟢 零漂移闸 16/16 bytes（s10-refgi 4/4 + s11-hash 6/6 + s8.2 4/4 + s12-temporal 2/2 filter 态 reject 缺省 false 保形）；🟢 weather-w1/w2 基线**零重拍**（clear/overcast 雨强 0 → wetness 恒 0 → 湿化恒等，20/20 bytes）；🟢 weather-w3 新卡 5 用例双后端 10/10（wet-early 0.1 / wet-soaked 1.0 同正午相位纯湿度对比 + pviz-wet + reject-filter expectLog 锚 + steady-filter tool 型）；🟢 ctest 149/149 双后端 + w0 工具卡 10/10；🟢 run.bat verify ALL GREEN；🟢 亲眼验收：湿透暗面+雾感 vs 微湿亮面对比成立（cmp MD5 互异 + 视觉锚）。
+
+**踩坑**：① **假绿复发（M-WEA2 同款）**：湿化只接 mode5 shadePbrGrad 漏 mode0——viewer 缺省 shading=0（textured 简单直光），probe 主画面走 mode 0 分支，bytes 自洽全绿但 wetness 0 vs 1 画面逐字节相同；wetness 对比测试（cmp 两帧）当场拦下，mode 0 补湿化后生效。**「probe 主画面 = mode 0 非 mode 5」须与新直光效果绑定记忆**。② reject 触发阈值诊断：t-step 3s 的 rain 灰化天穹 diff≈0.0000（灰化压平日光变化）不触发——nanite-tools weather TSV 双行 diff 实证后改 30s 步进（diff 0.15~0.2 触发）。③ steady-filter 建 pair bytes 型卡踩 **S12 时域累积禁 bytes 口径**（Q11-1：累积路径非逐字节确定，run.bat 第三次重摄假 FAIL）——改 tool 型（exit 0 锚）。④ run.bat 生成器**悬空 --screenshot 双旗标坑第三次复发**（过滤 {out} 留旗标 → 截图写进名为 --screenshot 的文件 → 全部 bytes 假 FAIL）——根修 = 生成器内建「--screenshot 与 {out} 成对过滤」逻辑（shot_args 函数），不再手写循环。
+
+**提交版本**：feat/weather 本节 commit + annotated tag `weather-w3`。冻结面：kStage 保持 S8.2；CPU 天气模型/孪生 verify.py/w0 卡零改动零重拍。下一步：M-WEA4（若做）待拍板；WEA 轨 M-WEA0~3 收官，merge 回 master 待用户指令。

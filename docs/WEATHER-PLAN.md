@@ -150,6 +150,22 @@ M-WEA0 任务书（按上述拍板细化）：
 
 ---
 
+## 9d. M-WEA3 开工拍板（2026-11-14，三处实读后）
+
+| 编号 | 问题 | 结论 |
+|---|---|---|
+| **Q-W3-1** | 湿材质公式与作用面（wetness 渲染侧零消费，UE 无引擎级对位） | **A2 全材质 + N·up 加权**：权重 = `lerp(0.35, 1, saturate(N·up)) × wetness`（雨从上往下淋，天花板基础湿 35%）；公式 `roughness=lerp(r, r*0.35, w)`、`albedo*=lerp(1, 0.65, w)`；raster/compute 双处 shadePbrGrad 同步落（运算体逐字符同序）。A1 统一无方向加权（物理感弱）、A3 朝向二值（过渡生硬）均否。CB 复用 fogA.z 预留分量零扩容 |
+| **Q-W3-2** | 时域稳定性（csFilterTemporal alpha 0.1 亮度滞后数学存在） | **B1 CPU 帧间差 reject**：viewer 逐帧比较天气关键参数 max abs diff > 0.01 → `weatherHistoryReject` → filter 态 validHistory 单帧清零（复用 g_flags.x 通道零 shader 改动）；渐变 20s 每帧 ~1e-3 不触发正常累积。B2 只补证据（快变鬼影实存验收打折）、B3 shader 端 alpha 调制（全局标量无逐像素局部性，过度工程）均否 |
+
+**M-WEA3 任务书（按拍板细化）**：
+1. CPU：FrameParams `weatherWetness`/`weatherHistoryReject`（缺省保形）；viewer 湿度直通 + 帧间差检测（上帧快照 static，主循环单线程）；scene.cpp b3 cc[10]/b4 rf[2] 填 wetness + drawFilterTemporal fcb[4] 与 reject 相与。
+2. Shader：双处 shadePbrGrad 湿化三行（material.slang b4 / direct.slang b3，fogA.z 复用）；filter_temporal 零改动。
+3. 台账：SSC §2.22b + UE-DIFFS D24（引擎级湿化超集简化）。
+4. 零漂移闸：天气关全链 bytes（s10-refgi/s11-hash/s8.2 + s12-temporal filter 态——reject 缺省 false）；weather-w1/w2 基线合法重拍（clear 微雾 wetness 恒 0？——**wetness 只在 rain/雨后 >0**，clear 轮廓 rainIntensity=0 → wetness=0 恒等，w1/w2 基线**预期零重拍**，若 bytes 差即回归）。
+5. 新卡 weather-w3：雨中湿透（roughness 0.35 视觉锚）/ 雨停缓干（ODE 记忆态两端对比）/ filter 态天气快变无鬼影（reject 生效）。
+
+---
+
 ## 9c. M-WEA2 开工拍板（2026-11-14，三处实读后）
 
 三处实读（本轮模块 = 高度雾透射接线）：Carrot `merge-lighting.slang`（纯屏幕 lerp 雾，反面教材实锤）；bevy `fog.wesl`（逐像素解析雾 + 雾色吃直光 inscattering，froxel 体积雾属方案 B 不做）；UE `HeightFogCommon.ush`（解析指数高度雾**线积分** `CalculateLineIntegralShared`，输出 inscatter+transmittance）+ `LumenTracingCommon.ush`（逐射线应用于 Lumen miss，override origin + `SampleHeightFogOnGI` 开关）。

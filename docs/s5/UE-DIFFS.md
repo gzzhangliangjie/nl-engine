@@ -230,6 +230,16 @@
 | 升级路径 | froxel 体积雾 raymarch 属方案 B（WEATHER-PHASE2 出站条件见 WEATHER-PLAN §6）；像素 GI 贡献的相机路径透射（gather 段 ×T）留 M-WEA3+ 单独拍板。 |
 
 
+### D24 湿材质：UE 材质层 WetnessMask 手工节点 vs 本仓引擎级统一湿化（WEA M-WEA3 建档，2026-11-14；超集简化，WEATHER-PLAN §9d Q-W3-1 拍板）
+
+| | 内容 |
+|---|---|
+| UE 做法 | 引擎零湿化逻辑（`Shaders/Private` grep Wetness 零命中）——湿表面是材质作者在材质图用 WetnessMask/顶点色手工调 roughness/albedo 的节点级组合；Landscape 物理材质按层混合。无全局湿度标量。 |
+| 我们现状（M-WEA3） | 引擎级统一湿化：全局 wetness 标量（WeatherState ODE 记忆态，M-WEA0）→ 双处 shadePbrGrad 内 `wetW = wetness × lerp(0.35,1,saturate(N·up))`，roughness 压到 35% + albedo ×0.65（N·up 加权 = 雨从上往下淋近似）。本仓所有 PBR 材质统一生效，无逐材质 mask。 |
+| 定性 | **超集简化（有意）**：本仓场景无逐材质湿度 mask 需求（Suzanne 统一湿化即视觉证据）；UE 口径自由度高但需要资产端配合，引擎统一版零资产成本。GI 弹射面反射率不随湿度变化（探针 hit 走统一模型色非 PBR，天然不波及）。 |
+| 升级路径 | 逐材质湿化 mask（材质属性加 wetnessScale）留后续拍板；froxel 雨幕粒子属方案 B 远期。 |
+
+
 ## 计划内待办（非偏差，挂账防丢）
 
 - **D8 资产分页 v4**（`NPAG` 页表 + 128KiB 字节预算）：对标 UE `FStreamOutMeshDataHeader`，代码落地排在 **P9 V1**（V1 即写 v4，不破 M3.2 回归基线）。

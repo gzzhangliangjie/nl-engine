@@ -70,7 +70,7 @@ cbuffer MatResolveConstants : register(b2)
 // + compute layout b3 重复声明（2026-11-14 实测），故走 matResolve 专属 b4。
 cbuffer RasterFogConstants : register(b4)
 {
-    float4 g_rFogA;        // x = fogDensity 1/m / y = fogHeight m / zw 预留
+    float4 g_rFogA;        // x = fogDensity 1/m / y = fogHeight m / z = wetness（M-WEA3）/ w 预留
     float4 g_rFogB;        // rgb = 雾色（CPU 填 weatherHorizon 同值）/ a 预留
 };
 
@@ -149,6 +149,16 @@ float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
         .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
     float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
     float metallic  = saturate(mrTex.b * mat.mrFactor.x);
+
+    // M-WEA3（Q-W3-1=A2）：引擎级湿化（UE 无引擎级对位——材质层 WetnessMask
+    // 节点的引擎统一版，D24 台账）。雨从上往下淋：权重 = lerp(0.35, 1,
+    // saturate(N·up)) × 全局 wetness（天花板基础湿 35%、地面全湿）；湿面
+    // 趋光滑（roughness 压到 35%）+ 暗化（albedo × 0.65）。wetness=0（天气
+    // 关缺省）→ wetW=0 → lerp/乘法精确恒等 → raster 基线 bytes 保形。
+    // ⚠️ 与 direct.slang shadePbrGrad 双处同式（运算体逐字符同序，SSC §2.22b）。
+    const float wetW = g_rFogA.z * lerp(0.35f, 1.0f, saturate(n.y));
+    roughness  = lerp(roughness, roughness * 0.35f, wetW);
+    baseColor *= lerp(1.0f, 0.65f, wetW);
 
     float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float3 cDiff  = baseColor * (1.0f - metallic);
@@ -246,6 +256,13 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
     // probe-viz 场景走本 mode 0 分支（shadePbrGrad 只在 mode 5），开关必须落这；
     // g_options.z 全路径空闲（g_options.y 被 clusterCount / pbr-naive 双重占用）。
     const float amb = (g_options.z > 0.5f) ? 0.03f : g_lightDir.w;
+    // M-WEA3（Q-W3-1=A2）：mode 0 湿化——viewer 缺省 shading=0（textured 简单
+    // 直光），probe 主画面走本分支；湿化 = albedo 暗化（无 roughness/specular，
+    // 与 shadePbrGrad 的 albedo 项同式同源）。wetness=0 → 精确恒等 bytes 保形。
+    // ⚠️ M-WEA2 假绿同款教训：probe 主画面走 mode 0 非 mode 5——湿化必须双分支
+    // 同接（fog 生效 / wetness 无效的事故 = 只接 mode5 漏 mode0）。
+    const float wetW0 = g_rFogA.z * lerp(0.35f, 1.0f, saturate(n.y));
+    albedo *= lerp(1.0f, 0.65f, wetW0);
     float3 lit = min(albedo * (amb + (1.0f - amb) * ndl), 1.0f);
     // M-WEA2：probe-viz / mode 0 直光同样逐像素雾化（与 mode 5 同口径）
     const float3 toP = worldPos - g_cameraPos.xyz;

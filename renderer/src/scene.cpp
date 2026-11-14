@@ -3163,12 +3163,14 @@ void Scene::drawShadow(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffe
     // shadow 参数：x = bias（世界尺度法线偏移，防 proxy 粗代理自遮挡）；y = tMax
     //（阴影射线有限最大距离，保精度；场景半径 ~1，50 足以覆盖全部遮挡物）。
     writeResolveConstants(cmd, params);
-    // M-WEA2：[8..15] 雾 fogA=(density/height/0/0) + fogB=(地平线色 rgb/0)——
-    // 天气关缺省 density=0 → T≡1 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
+    // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
     const float cc[16] = {params.clearColor[0], params.clearColor[1],
                           params.clearColor[2], params.clearColor[3],
                           0.01f, 50.0f, 0.0f, 0.0f,
-                          params.weatherFogDensity, params.weatherFogHeight, 0.0f, 0.0f,
+                          params.weatherFogDensity, params.weatherFogHeight,
+                          params.weatherWetness, 0.0f,
                           params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
@@ -3391,12 +3393,14 @@ void Scene::drawReference(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebu
     }
 
     writeResolveConstants(cmd, params);
-    // M-WEA2：[8..15] 雾 fogA=(density/height/0/0) + fogB=(地平线色 rgb/0)——
-    // 天气关缺省 density=0 → T≡1 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA2：[8..15] 雾 fogA=(density/height/wetness/0) + fogB=(地平线色 rgb/0)——
+    // 天气关缺省 density=0/wetness=0 → T≡1 + 湿化恒等 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // M-WEA3（Q-W3-1=A2）：fogA.z = 地面湿度（湿材质直光侧消费）。
     const float cc[16] = {params.clearColor[0], params.clearColor[1],
                           params.clearColor[2], params.clearColor[3],
                           0.01f, 50.0f, 0.0f, 0.0f,
-                          params.weatherFogDensity, params.weatherFogHeight, 0.0f, 0.0f,
+                          params.weatherFogDensity, params.weatherFogHeight,
+                          params.weatherWetness, 0.0f,
                           params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
     cmd->writeBuffer(directConstants_, cc, sizeof(cc));
 
@@ -4549,7 +4553,10 @@ bool Scene::drawFilterTemporal(nvrhi::ICommandList* cmd, const nvrhi::Viewport& 
     fcb[1] = vpH;
     fcb[2] = alpha;
     fcb[3] = static_cast<float>(hmax);
-    fcb[4] = temporalHistoryValid_ ? 1.0f : 0.0f;  // validHistory
+    // M-WEA3（Q-W3-2=B1）：帧间天气差超阈值 → 本帧历史无效（单帧清零，
+    // 下一帧由 alpha=max(userAlpha,1/(len+1)) 重新收敛）。天气关缺省
+    // weatherHistoryReject=false → 与 S12 原语义逐字节保形。
+    fcb[4] = (temporalHistoryValid_ && !params.weatherHistoryReject) ? 1.0f : 0.0f;  // validHistory
     fcb[5] = params.temporalEnable ? 1.0f : 0.0f;  // 时间层（三层独立开关之一）
     fcb[6] = params.filterSpatial  ? 1.0f : 0.0f;  // 空间层（M12.1 实现）
     // M12.2：g_flags.w 同时承载「拒绝层开关 + 阈值」（0 = 层关），零 CB 扩容
@@ -5615,7 +5622,9 @@ void Scene::writeResolveConstants(nvrhi::ICommandList* cmd, const FrameParams& p
     // 直光路径 cc[16] 的雾两包同源同值；fogDensity=0（天气关）→ T≡1 保形。
     // ⚠️ 不复用 b3 DirectConstants：共享槽位表加 b3 撞 NVRHI volatile CB 上限
     //（6 个）+ compute layout b3 重复声明（2026-11-14 实测双错误）。
-    const float rf[8] = {params.weatherFogDensity, params.weatherFogHeight, 0.0f, 0.0f,
+    // M-WEA3（Q-W3-1=A2）：rf[2] = 地面湿度（fogA.z 语义与 compute b3 同）。
+    const float rf[8] = {params.weatherFogDensity, params.weatherFogHeight,
+                         params.weatherWetness, 0.0f,
                          params.weatherHorizon[0], params.weatherHorizon[1], params.weatherHorizon[2], 0.0f};
     cmd->writeBuffer(rasterFogCB_, rf, sizeof(rf));
 }

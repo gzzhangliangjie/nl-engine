@@ -69,9 +69,9 @@ cbuffer DirectConstants : register(b3)
                              // y = tMax（阴影射线最大距离，有限值保精度）
                              // z/w 预留（offset 16）
     // M-WEA2（Q-W2-2=C1）：高度雾参数 2×float4（compute-only 扩容，DirectConstants
-    // 32B compute-only 先例）。fogA = (fogDensity 1/m, fogHeight m, zw 预留)；
-    // fogB = rgb 雾色（CPU 单一事实源 = FrameParams.weatherHorizon 同值）+ a 预留。
-    // fogDensity=0（天气关缺省）→ T≡1 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    // 32B compute-only 先例）。fogA = (fogDensity 1/m, fogHeight m, wetness（M-WEA3）,
+    // 预留)；fogB = rgb 雾色（CPU 单一事实源 = FrameParams.weatherHorizon 同值）+ a 预留。
+    // fogDensity=0/wetness=0（天气关缺省）→ T≡1 + 湿化恒等 → bytes 保形（Q-WE5 闸门）。
     float4 g_directFogA;
     float4 g_directFogB;
 }
@@ -180,6 +180,13 @@ float4 shadePbrGrad(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv,
         .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
     float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
     float metallic  = saturate(mrTex.b * mat.mrFactor.x);
+
+    // M-WEA3（Q-W3-1=A2）：引擎级湿化——与 material.slang shadePbrGrad 双处
+    // 同式（运算体逐字符同序，SSC §2.22b；UE 材质层 WetnessMask 的引擎统一
+    // 版，D24 台账）。wetness=0 → wetW=0 → 精确恒等 → bytes 保形。
+    const float wetW = g_directFogA.z * lerp(0.35f, 1.0f, saturate(n.y));
+    roughness  = lerp(roughness, roughness * 0.35f, wetW);
+    baseColor *= lerp(1.0f, 0.65f, wetW);
 
     float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float3 cDiff  = baseColor * (1.0f - metallic);
@@ -409,6 +416,13 @@ float3 shadePbrLinear(GPUMaterial mat, float3 normal, float3 worldPos, float2 uv
         .SampleGrad(g_sampler, uv, ddx_uv, ddy_uv);
     float roughness = clamp(mrTex.g * mat.mrFactor.y, 0.045f, 1.0f);
     float metallic  = saturate(mrTex.b * mat.mrFactor.x);
+
+    // M-WEA3（Q-W3-1=A2）：引擎级湿化——与 material.slang shadePbrGrad 双处
+    // 同式（运算体逐字符同序，SSC §2.22b；UE 材质层 WetnessMask 的引擎统一
+    // 版，D24 台账）。wetness=0 → wetW=0 → 精确恒等 → bytes 保形。
+    const float wetW = g_directFogA.z * lerp(0.35f, 1.0f, saturate(n.y));
+    roughness  = lerp(roughness, roughness * 0.35f, wetW);
+    baseColor *= lerp(1.0f, 0.65f, wetW);
 
     float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float3 cDiff  = baseColor * (1.0f - metallic);
