@@ -2801,6 +2801,23 @@
 
 **下一步**：editor 轨道候选 = 资源浏览器 / 序列化回写 / 多引擎场景同步（未排期）；worktree 已拆、轨道已 CLOSED、分支按 §7.6 规定保留（**editor 轨道无待拍板项**）；重开需按 §7.1b 重建 wt 并更新 TRACKS。主线下一站 M10.3 参考图对比验收。
 
+## editor轨道 M-E7：模型预览 + cvar 反射通道（feat/editor，2026-11-14，tag `e-m7-done`）
+
+**动作**：wt_pool claim（track editor / M-E7，§7.1b 重开后首个里程碑）→ 开工拍板四项全拍（重开 editor 轨道 M-E7→M-E8；参数通道 = **CVar + M-SC10 描述表**零新反射系统；新建专用预览小场景；实时 = 引擎推 `editor.sceneChanged`，写回 EDITOR-PLAN §3/§8）→ 落码六件套：①`assets/scenes/preview.scene.json` 预览小场景（Suzanne 主体 + ParkingLot 地面 + ambient 0.28）；②viewer `--preview`/`--preview-model` 糖旗标（mode scene + 场景 JSON；preview-model 反序列化后按实体名覆写 meshFile，坏名 exit 2）；③`light.sunAzimuth/sunElevation/ambient` 三 cvar（registerFloat + setOnChanged dirty 语义，未调光零回归）；④RPC `engine.cvar.list/get/set`（反射通道，`setFromString` 语义）+ `camera.preset` 六预设（front/back/left/right/top/iso，top 钳 ±1.45 rad 回读实际值）；⑤editor 侧 `PreviewPlugin` 内建注册（视角按钮排 + 光照滑条走 engine.cvar.set）；⑥`tools/m-e7-probe.py` 三段 31 断言。**renderer 触碰面（用户拍板 A：updateEcsLights）**：根因 = `psScene` ambient 消费灯缓冲 `g_lights[0].y`（loadEcsScene 一次性写死），每帧 CB `g_lightDir.w` 只有 probe/trace 链消费，cvar 覆写不动灯缓冲则对预览画面零效果；方案 = `updateEcsLights` 通道五文件纯新增（Renderer→backend 虚接口→DX12/Vulkan 转发→`Scene::updateLights` writeBuffer，与 updateEcsObjects 同构），存量唯一改动 = initScene 灯缓冲 permanent 位 `ShaderResource → ShaderResource|CopyDest`（NVRHI state-tracking 要求 ⊇ CopyDest）。RPC-SPEC §10 补 M-E7 实装表。
+
+**提交版本**：feat/editor commit `26d1706`（13 files +830/-4），annotated tag `e-m7-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E7 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（viewer+editor 各一）+ selftest **16/16 ×2**；`m-e7-probe.py` **31/31 全绿**（DX12，RPC 桥后端无关沿 M-E5 口径）；像素实证 `light.ambient 0/0.28/999` 全图平均亮度 40.7/42.1/91.9、999 时地面 255 纯白——**cvar→灯缓冲→psScene 覆写链实锤**；证据 `out/m-e7-ambient-{default,012}.png`。回归受影响卡双后端 **26/26 bytes 全绿**（DX12: ecs-e1b 4 + p8-ecs 4 + m0.4 5；VULKAN 同 13）。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（kStage 仍 S8.2，无新基线/版本卡，`server.py --check` 不适用——editor 轨道惯例 = 探针验收，不进 cases.json）。
+
+**踩坑情况**
+1. **psScene ambient 走灯缓冲不走每帧 CB**：光照参数 cvar 化若只在 `FrameParams.lightDir` 上覆写，scene 着色路径完全无感——shader 消费点（灯缓冲 vs 每帧 CB）必须先实证再选传导通道；用户拍板 A 放行 renderer 只增不改。
+2. **PNG 字节大小与画面亮度反相关**：过曝大片纯白压缩率高→文件反而小；探针曾误断言「ambient 覆写前后 PNG 大小必须相等」假 FAIL，像素级亮度实证（PIL avg/groundAvg 三值单调）后才定案。**教训：视觉断言用像素数据，不用文件大小猜。**
+3. **msgpack_min 字符串 API 是 `isStr()/asStr()`** 不是 `isString()/asString()`（31 个编译错误主因）+ 两处 lambda 缺捕获。
+4. **新树并行双构建撞 mspdbsrv**：C1090 PDB API 调用失败（0x6BA RPC 服务器不可用），串行重跑即过，非代码错误。
+5. **showcase 独立 exe 新树不存在**：m0.4 回归 0/5 FAIL 属环境错非回归（exe 缺失 `build/showcase/s0-model/`），`rebuild.py --tags s0-model` 补建后 5/5 秒过；`.gitignore` 粘连 bug 也由本里程碑 wt junction 首建暴露（见轨道重开段）。
+
+**下一步**：M-E8 场景树增强（ECS 层级树 + sceneChanged 推送 + M-SC10 `[Prop]` 描述表接驳）待 script 轨道 M-SC10 落码后接上；PreviewPlugin GUI 观感待用户目测。整轨 merge 回 master 待用户指令。
+
 ## M10.3：GI 参考图 + --compare 并排验收（2026-11-11，tag `s10-done`，S10 收官）
 
 **动作**：M10.3（S10 收官步；2026-11-11 用户四问 Q14-1..4 全取方案 A，拍板记录写回 `S10-PLAN.md`）落地。① Q14-1 GI 参考图 = `--mode reference-gi`（扩展 M9.2 渐进累积机制：每像素 1024 spp = 16 帧 × 64；直光段逐字同 csReference + GI 段 = 余弦加权半球 1 弹射 Malley 采样 `pdf=cos/π` 消 diffuse 积分因子，miss→skyGradient（Q12-3 天穹）/ hit→`giAlbedo × (lightCol·I·shadow(q)/π + amb)`；与探针物理逐项同口径：104-tri 粗代理 + 双 albedo（trace/gather 两侧有意双乘）+ 无 NdotL 降级 + shadow ray origin 沿弹射射线回退 bias；Q3 勘误落地：S9 参考图只算直光一跳不能当 GI 尺子，S10 自立参考图）；② Q14-2 并排对比 = viewer `--compare <png>` 右半贴片（stb_image RGBA8 → CopyDest 纹理两段式上传（M-PT2 0x87d 纪律）→ psCompare Linear clamp 采样）；③ Q14-3 `--mode probe` 一等化（ViewMode::Probe=17 恒 gather 态 + HUD 全调参面：cascade 3 滑块 + sky-bg checkbox + gather checkbox）；④ Q14-4 `--sky-bg` = csGatherCompose 天穹背景分支（bgZ≥1.0 → skyGradient，默认关保 M10.0~10.2 基线保形）。全仓扫旧口径：Q3「参考图不是 GI 裁判」副本在 ROADMAP/S10-PLAN/UE-DIFFS D11/Q4-GBUFFER-OPTIONS/MILESTONES 的 S9 表述为历史记录保留，S10 段已按新口径书写。
