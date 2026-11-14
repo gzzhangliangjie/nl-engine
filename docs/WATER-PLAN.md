@@ -182,3 +182,10 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 **M-WAT2 文件清单**：`material.slang` + `direct.slang` + `water_common.slangh` + `ssr.slang` 或新 `water_composite.slang` + `scene.hpp/cpp`（sceneWithoutWater_ RT + copy/composite 调度）+ `CMakeLists.txt` + `example/water-t2/` + `water-t1` 基线重拍 + `cases.json` + 台账。
 
 **拍板结论（2026-11-14 用户拍板 Q-WA7 = A）**：折射合成走 UE 同构后移——水像素黑占位 + `sceneWithoutWater_` copy + `csWaterComposite` 统一合成；water-t1 基线重拍授权随拍板生效（台账记录重拍原因）。B（背景无源不可行）/ C（成本无理由）否决留痕。落码开始。
+**拍板结论（2026-11-14 用户拍板 Q-WA7 = A）**：折射合成走 UE 同构后移——水像素黑占位 + `sceneWithoutWater_` copy + `csWaterComposite` 统一合成；water-t1 基线重拍授权随拍板生效（台账记录重拍原因）。B（背景无源不可行）/ C（成本无理由）否决留痕。落码开始。
+
+**实现注记（2026-11-14 落码中实锤，§6.2 口径修正）**：
+- **方案 A 盲区实锤**：池底在 vis buffer 中被水面深度遮挡 → copy 后水像素背后无内容（UE SceneWithoutWater 是真重渲才有水后物体；copy 只有水外环带/天空/水上物体可采）→ 陡视角水像素 3×3 邻域全水 → bilateral 全拒 → 折射只剩 in-scatter，§6.2「水下物体折射扭曲可见」在任何相机都不成立。
+- **盲区补全（零新 pass/零新资源）**：池底是已知平面 → composite 内 B1 解析 ray-plane（y=wcG.y，命中 [-floorHalf,floorHalf]² → 命中点 xz×0.25 wrap 双线性采材质 0 贴图，thick = 真实光路程 → Beer-Lambert 深浅梯度天然成立）；B1 未命中（掠射出池）走 B2 屏幕空间扭曲 4-tap 兜底（原方案机制保留）。平面参数走 wcG.y/z（单源 kWaterFloorY/Half）。
+- **折射 A/B 硬闸旗标**：`--water-norefract`（wcG.w）——折射路径整体关闭（bg 归零、厚 fallback），refract = in-scatter only；run.bat 加 full vs norefract DIFF 检查（与 §6.1 noreflect 对称）。
+- **验收机位**：t2 主 case 维持 t1/t0 相机（pitch9/dist7，零漂移闸直接比 t0 基线 bytes）；池外机位（pitch8/dist30）另拍折射/环带证据图（池底贴图穿透水面可见）。

@@ -249,26 +249,13 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
         return float4(uvF, 0.0f, 1.0f);
     }
     if (mode == 5u) {                       // PBR 直光（复刻 model.slang::shadePbr）
-        // M-WAT1（拍板 A）：水体分支——per-pixel 重算 Gerstner 位移 + 解析法线
-        //（求和定义在未位移网格坐标，iago 口径；VS 侧已位移深度，光照面追位移）。
-        float3 shadePos = worldPos;
-        float3 shadeN   = normalize(normal);
         if (isWater) {
-            float3 waterDisp;
-            shadeN = waterGerstner(worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
-            shadePos = worldPos + waterDisp;
-        }
-        if (isWater) {
-            // 水体直光（waterShadeDirect：深水基色 + N·L + 太阳高光）+ 高度雾
-            //（与材质直光同口径雾化；alpha 恒 1 不透明）。
-            const float3 Vw = normalize(g_cameraPos.xyz - shadePos);
-            const float3 litW = waterShadeDirect(shadeN, Vw, 1.0f, g_lightDirW.xyz,
-                                                 g_wcC, g_wcD);
-            const float3 toPw = shadePos - g_cameraPos.xyz;
-            const float  Lw   = length(toPw);
-            const float3 colW = applyHeightFog(litW, g_cameraPos.y, toPw / max(Lw, 1.0e-4f), Lw,
-                                               g_rFogA.x, g_rFogA.y, g_rFogB.rgb, 1.0e4f);
-            return float4(colW, 1.0f);
+            // M-WAT2（拍板 Q-WA7=A）：水像素黑占位——折射需要「水像素背后的
+            // 场景色」，hdrSceneColor_ 水像素必须是占位（csWaterComposite 在
+            // SSR 后按拍板 A 统一合成折射/吸收/Fresnel/反射/泡沫，整体替换）。
+            // M-WAT1 直光逻辑（waterGerstner + waterShadeDirect）迁移进
+            // csWaterComposite（water_common 单源函数复用，一行未抄改）。
+            return float4(0.0f, 0.0f, 0.0f, 1.0f);
         }
         const float4 lit = shadePbrGrad(mat, normal, worldPos, uvF, duv_dx, duv_dy);
         // M-WEA2：raster 直光逐像素高度雾（与 csDirect 同口径；alpha 透传）

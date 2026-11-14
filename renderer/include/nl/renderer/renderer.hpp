@@ -66,6 +66,12 @@ struct FrameParams {
     // M-WAT1（water 轨，拍板 A）：水体时间（viewer 固定步进累积 = frameIdx ×
     // GameClock::kStep，禁 wall-clock；缺省 0 = 静止水面，确定性重放逐字节）。
     float waterTime          = 0.0f;
+    // M-WAT2（拍板 Q-WA7=A）：--water-noreflect 验收旗标（composite 反射项归零，
+    // WATER-PLAN §6.1「关反射水体感几乎不变即不合格」A/B 对比用；缺省 false）。
+    bool  waterNoReflect     = false;
+    // M-WAT2：--water-norefract 验收旗标（折射路径整体关闭，refract = in-scatter
+    // only；WATER-PLAN §6.2 折射 A/B 硬闸用；缺省 false）。
+    bool  waterNoRefract     = false;
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。

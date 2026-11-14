@@ -172,6 +172,8 @@ struct Options {
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
     bool water = false;       // M-WAT1：--water（pulling 链水体；缺省关零扰动）
+    bool waterNoReflect = false; // M-WAT2：--water-noreflect（composite 反射项归零，验收 A/B 对比）
+    bool waterNoRefract = false; // M-WAT2：--water-norefract（折射路径关闭，验收 A/B 对比）
     bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
     bool vsmPanel   = false;  // M15.1：--vsm-panel（VSM 页池占用面板，仅 --vsm 生效）
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
@@ -375,6 +377,8 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--tlas-probe") o.tlasProbe = true;
         else if (a == "--cluster-blas") o.clusterBlas = true;
         else if (a == "--water") o.water = true;        // M-WAT1
+        else if (a == "--water-noreflect") o.waterNoReflect = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-norefract") o.waterNoRefract = true;  // M-WAT2 验收 A/B
         else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
         else if (a == "--vsm-panel") o.vsmPanel = true;   // M15.1：VSM 占用面板（需 --vsm）
         else if (a == "--vsm-rayref") o.vsmRayRef = true; // M15.1：同 blob 射线基准（需 --vsm）
@@ -2685,7 +2689,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
         // M-WAT0（water 轨）：SSR 开关透传（仅 pulling 分支消费，缺省关零扰动）。
-        fp.ssr = o.ssr;
+        // M-WAT2（拍板 Q-WA7=A）：--water 强制开 SSR 链（水像素黑占位 ⇒
+        // csWaterComposite 必跑 ⇒ SSR 链是水体前置基建，§0 依赖顺序铁律同构）。
+        fp.ssr = o.ssr || o.water;
+        fp.waterNoReflect = o.waterNoReflect;
+        fp.waterNoRefract = o.waterNoRefract;
         if (rtMode) {
             float rtEye[3];
             camera.eyePosition(rtEye);

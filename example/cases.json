@@ -13398,6 +13398,108 @@
      "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 7, f4)"
     }
    ]
+  },
+  {
+   "id": "water-t2",
+   "label": "WAT M-WAT2",
+   "name": "折射 + Beer-Lambert 吸收 + Fresnel + 泡沫（csWaterComposite 合成后移，--water-noreflect/--water-norefract）",
+   "tag": "water-t2",
+   "date": "2026-11-14",
+   "summary": "M-WAT2（拍板 Q-WA7=A：UE 同构合成后移）。psMatResolve/csDirect 水像素黑占位 → csWaterCopy 快照 hdrSceneColor_ 到 waterBg_（水像素黑=天然无水体场景）→ csWaterComposite（SSR 后 tonemap 前）反解 vis 判水像素：per-pixel Gerstner + B1 池底解析 ray-plane 折射（vis 挡底盲区补全：池底被水面深度遮挡 copy 无水后内容，解析命中 y=wcG.y 平面 → xz×0.25 wrap 双线性采材质 0 贴图，thick=真实光路程 → Beer-Lambert 深浅梯度天然成立）→ B1 未命中走 B2 屏幕空间扭曲 4-tap 兜底（深度拒绝 bevy 口径）→ 原位 3×3 bilateral 估厚 → T=exp(-absorb×thick) 吸收 + in-scatter → Fresnel(Schlick F0=0.02) 混 SSR 反射 + 太阳 Blinn-Phong 高光 + 波峰泡沫，整体替换水像素写回。WaterConstants 288→336B（wcE=ior/refractStrength/foamThreshold/foamGain，wcF=absorb.rgb/thickMeters，wcG=noReflect/floorY/floorHalf/noRefract）。验收旗标：--water-noreflect（反射归零）/ --water-norefract（折射归零）双 A/B 硬闸。--water 缺省关 = 冻结基线 bytes 零漂移。",
+   "acceptance": [
+    "water-t2 run.bat verify ALL GREEN exit 0：双后端 full/noreflect/norefract/water-off/late/det/anchor 七组 shot + 8 项 bytes/A/B 检查 + log 锚（gerstner grid ready + composite ready）+ deviceErrors=0 + 负向坏 mode exit 1",
+    "零漂移闸：--water 关（仅 --ssr）re-shot 与 water-t0 ssr-on 冻结基线逐字节一致（DX12+VULKAN 双过）",
+    "反射 A/B：full vs --water-noreflect 必不同（双后端；水面无反射感即不合格）",
+    "折射 A/B：full vs --water-norefract 必不同（双后端；折射路径关闭后 refract= in-scatter only）",
+    "波运动 f4≠f12 + 确定性双跑 bytes 一致 + 跨后端 near 档（diff pixels=0 maxfrac=0.02）",
+    "water-t1 基线重拍（Q-WA7=A 画面必变授权）：composite 改写水像素 → water-on/water-late ×双后端重拍，重拍原因记 MILESTONES"
+   ],
+   "preview": "example/water-t2/water-full-dx12.png",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "water-t2-composite",
+     "name": "水体全链合成（折射+吸收+Fresnel+SSR 反射+泡沫，主机位 pitch9/dist7）",
+     "kind": "image",
+     "note": "viewer --mode pulling --ssr --water；composite 整体替换水像素；与 noreflect/norefract A/B 见 run.bat verify。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--water",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "water: composite ready",
+     "baselines": {
+      "dx12": "example/water-t2/water-full-dx12.png",
+      "vulkan": "example/water-t2/water-full-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 7, f4)"
+    },
+    {
+     "id": "water-t2-refract-edge",
+     "name": "池外机位折射证据（pitch8/dist30：环带入画，波谷蓝绿=折射池底×吸收）",
+     "kind": "image",
+     "note": "池外视角：近侧环带直视 + 水面波谷陡视角折射池底（Fresnel 角度依赖：波峰银白反射/波谷蓝绿折射）。",
+     "args": [
+      "--mode",
+      "pulling",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--shading",
+      "5",
+      "--ssr",
+      "--water",
+      "--frames",
+      "4",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--screenshot",
+      "--yaw",
+      "12",
+      "--pitch",
+      "8",
+      "--dist",
+      "30",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "water: composite ready",
+     "baselines": {
+      "dx12": "example/water-t2/refract-edge-dx12.png",
+      "vulkan": "example/water-t2/refract-edge-VULKAN.png"
+     },
+     "command": "viewer.exe --mode pulling --ssr --water (Suzanne-materials, dist 30 pitch 8, f4)"
+    }
+   ]
   }
  ]
 }

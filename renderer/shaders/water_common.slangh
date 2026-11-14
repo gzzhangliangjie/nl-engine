@@ -3,12 +3,15 @@
 // 声明，寄存器号随管线不同：visbuf=b2 / direct=b7 / ssr=b6，字段名与布局必须
 // 与下方「WaterConstants 规范布局」逐字一致）。
 //
-// WaterConstants 规范布局（288B，volatile）：
+// WaterConstants 规范布局（336B，volatile；M-WAT2 扩展 288→336）：
 //   wcA[0..7]  = float4(D.x, D.y, A, k)      波向 xy（单位向量）/ 振幅 / 波数 k=2π/λ
 //   wcB[0..7]  = float4(omega, Q, 0, 0)      角频率 ω / 陡度 Q（osgw 逐波口径）
 //   wcC        = float4(time, baseColor.r, baseColor.g, baseColor.b)
 //   wcD        = float4(ambient, specPow, specGain, maxAmp)
-// CPU 侧同构结构见 scene.hpp WaterWaveParams（拍板 A / WATER-PLAN §9b）。
+//   wcE        = float4(ior, refractStrength, foamThreshold, foamGain)   M-WAT2
+//   wcF        = float4(absorbR, absorbG, absorbB, thickMeters)          M-WAT2
+//   wcG        = float4(noReflect, floorY, floorHalf, noRefract)  验收旗标+池底平面 M-WAT2
+// CPU 侧同构结构见 scene.hpp WaterWaveParams（拍板 A / WATER-PLAN §9b/§9c）。
 //
 // 数学口径（osgw gerstner.glsl 显式数组结构 + iago ocean_shader 解析法线，只读算法参照）：
 //   位移  ΔP = Σ [ D.xz·(Q·A·cosφ) ; A·sinφ ]，φ = k·dot(D, XZ) + ω·t
@@ -77,6 +80,55 @@ float3 waterShadeDirect(float3 N, float3 V, float shadow, float3 lightDir,
     const float  spec   = pow(saturate(dot(N, H)), wcD.y) * wcD.z;
     const float3 ambient = base * wcD.x;
     return diff + float3(spec, spec, spec) + ambient;
+}
+
+// ============================================================================
+// M-WAT2（拍板 Q-WA7=A）：折射 / 吸收 / Fresnel / 泡沫 —— 单源函数。
+// 参照（只读算法参照，零 vendored）：
+//   Snell + 出射点 + 屏幕投影 = bevy transmission.wesl refracted_ray()；
+//   Beer-Lambert 透射/入射散射 = UE SingleLayerWaterShading.ush
+//     （Transmittance = exp(-Extinction·Depth)、in-scatter 分离合成）；
+//   Fresnel = Schlick（水 F0=0.02）；泡沫 = iago 波峰陡度口径简化。
+// ============================================================================
+
+// Schlick Fresnel（水体 F0=0.02；cosTheta = dot(V, N)）。
+float waterFresnel(float cosTheta)
+{
+    const float F0 = 0.02f;
+    return F0 + (1.0f - F0) * pow(1.0f - saturate(cosTheta), 5.0f);
+}
+
+// Snell 折射方向（bevy 口径）。I = 入射方向（指向表面内部，即 -V）；
+// eta = 1/ior。全内反射（k<0）返回 bool false、dir 置 -I 沿视线穿透兜底。
+bool waterRefractDir(float3 I, float3 N, float eta, out float3 dir)
+{
+    const float ndi = dot(N, I);
+    const float k   = 1.0f - eta * eta * (1.0f - ndi * ndi);
+    if (k < 0.0f) { dir = -I; return false; }        // TIR：沿视线兜底
+    dir = normalize(eta * I - (eta * ndi + sqrt(k)) * N);
+    return true;
+}
+
+// 太阳 Blinn-Phong 高光项（M-WAT1 waterShadeDirect 的 spec 项独立化——
+// composite 只取高光，diff/ambient 由吸收散射项承载）。
+float3 waterSpecular(float3 N, float3 V, float3 lightDir, float shadow,
+                     float4 wcD)
+{
+    const float3 L    = normalize(lightDir);
+    const float3 H    = normalize(L + V);
+    const float  spec = pow(saturate(dot(N, H)), wcD.y) * wcD.z;
+    return float3(spec, spec, spec) * saturate(dot(N, L) * shadow);
+}
+
+// 波峰白沫（iago 口径简化：波高占比超阈值 → 白化；受直光/环境调制）。
+// dispY = Gerstner 垂直位移；maxAmp = ΣA（wcD.w）。
+float3 waterFoam(float dispY, float maxAmp, float threshold, float gain,
+                 float ndl, float ambient)
+{
+    const float peak = (maxAmp > 1.0e-6f) ? saturate(dispY / maxAmp) : 0.0f;
+    const float m    = saturate((peak - threshold) / max(1.0f - threshold, 1.0e-4f));
+    const float f    = m * m * gain * (ambient * 0.5f + 0.5f * ndl + 0.5f);
+    return float3(f, f, f);
 }
 
 #endif // NL_WATER_COMMON_SLANGH

@@ -539,9 +539,13 @@ set(_ENTRIES_FILTER_SPATIAL "csFilterSpatial|csfilterspatial|compute")
 # M-WAT0（water 轨）：ssr.slang 五 compute 入口——SSR 本体（march + 深度/金字塔/
 # 场景色链/合成，详见 ssr.slang 文件头）。csSSR 用 NonUniformResourceIndex 选
 # MR 纹理槽（direct.slang 同款）→ 进 _SM66 白名单；其余纯纹理读默认 profile。
+# M-WAT2：+2 入口——csWaterCopy（折射背景 copy）/ csWaterComposite（水体全链
+# 合成；tap 里 NonUniformResourceIndex 未用，默认 profile）。
 set(_ENTRIES_SSR "csSSRDepth|csssrdepth|compute" "csSSRDown|csssrdown|compute"
                  "csSSRMip|csssrmip|compute" "csSSR|csssr|compute"
-                 "csSSRCompose|csssrcompose|compute")
+                 "csSSRCompose|csssrcompose|compute"
+                 "csWaterCopy|cswatercopy|compute"
+                 "csWaterComposite|cswatercomposite|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")

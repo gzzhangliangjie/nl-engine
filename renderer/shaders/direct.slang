@@ -270,15 +270,21 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     // initial_path.wesl 同款 ray_origin = worldPos + normal*RAY_T_MIN）发向光源，
     // 打 M8 的 TLAS（粗代理几何）。命中=被挡→shadow 0（直光乘 0）；未命中=1。
     // 背向光的面（NdotL<=0）本就无直射，ray 无意义，直接判 0。
+    // M-WAT2（拍板 Q-WA7=A）：水像素黑占位——折射需要「水像素背后的场景色」，
+    // hdrSceneColor_ 水像素必须是占位；csWaterComposite（SSR 后）统一合成
+    // 折射/吸收/Fresnel/反射/泡沫整体替换。M-WAT1 直光逻辑迁移进 composite。
+    // --water 开 ⇒ viewer 强制 SSR 链（fp.ssr = o.ssr || o.water）⇒ composite
+    // 必跑，占位黑不外泄；--water 关 = 无水簇，本分支死代码 = bytes 保形。
+    if (isWater) {
+        g_out[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return;
+    }
+
     // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
-    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。（M-WAT2 后仅非水路径
+    // 消费；水体 Gerstner 移至 csWaterComposite。）
     float3 shadePos = gbuf.worldPos;
     float3 n3 = normalize(gbuf.normal);
-    if (isWater) {
-        float3 waterDisp;
-        n3 = waterGerstner(gbuf.worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
-        shadePos = gbuf.worldPos + waterDisp;
-    }
     const float3 L  = normalize(g_lightDirW.xyz);
     float shadow = 0.0f;
     if (dot(n3, L) > 0.0f) {
@@ -300,13 +306,10 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
     // 合成后按视线到表面深度应用一次）；fogColor = 天穹地平线色（CPU 同源）。
     // alpha 语义保持（材质 alpha 透传，material.slang shadePbrGrad 返回值）。
     {
-        // M-WAT1：水体走 waterShadeDirect（解析法线直光 + 太阳高光）；普通材质
-        // 照旧 shadePbrGrad。alpha：水体不透明恒 1。
-        const float4 lit = isWater
-            ? float4(waterShadeDirect(n3, normalize(g_cameraPos.xyz - shadePos),
-                                      shadow, g_lightDirW.xyz, g_wcC, g_wcD), 1.0f)
-            : shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                           gbuf.ddxUv, gbuf.ddyUv, shadow);
+        // M-WAT2：水体已在函数头黑占位 return（isWater 死分支清除）；
+        // 普通材质照旧 shadePbrGrad。
+        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
         const float3 toP = shadePos - g_cameraPos.xyz;
         const float  L   = length(toP);
         const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
@@ -374,15 +377,21 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
         pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2],
         uv[0], uv[1], uv[2], g_mvp, g_model, fragPos, g_width, g_height);
 
+    // M-WAT2（拍板 Q-WA7=A）：水像素黑占位——折射需要「水像素背后的场景色」，
+    // hdrSceneColor_ 水像素必须是占位；csWaterComposite（SSR 后）统一合成
+    // 折射/吸收/Fresnel/反射/泡沫整体替换。M-WAT1 直光逻辑迁移进 composite。
+    // --water 开 ⇒ viewer 强制 SSR 链（fp.ssr = o.ssr || o.water）⇒ composite
+    // 必跑，占位黑不外泄；--water 关 = 无水簇，本分支死代码 = bytes 保形。
+    if (isWater) {
+        g_out[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return;
+    }
+
     // M-WAT1：水体 per-pixel 重算 Gerstner 位移 + 解析法线（求和定义在未位移
-    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。
+    // 网格坐标上，iago 口径）；普通材质照旧取插值法线。（M-WAT2 后仅非水路径
+    // 消费；水体 Gerstner 移至 csWaterComposite。）
     float3 shadePos = gbuf.worldPos;
     float3 n3 = normalize(gbuf.normal);
-    if (isWater) {
-        float3 waterDisp;
-        n3 = waterGerstner(gbuf.worldPos.xz, g_wcC.x, g_wcA, g_wcB, waterDisp);
-        shadePos = gbuf.worldPos + waterDisp;
-    }
     const float3 L  = normalize(g_lightDirW.xyz);
     float shadow = 0.0f;
     if (dot(n3, L) > 0.0f) {
@@ -415,13 +424,10 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
 
     // M-WEA2：与 csDirect 同源同序逐像素高度雾（差异仅 shadow 来源 = VSM 查表）
     {
-        // M-WAT1：水体走 waterShadeDirect（解析法线直光 + 太阳高光）；普通材质
-        // 照旧 shadePbrGrad。alpha：水体不透明恒 1。
-        const float4 lit = isWater
-            ? float4(waterShadeDirect(n3, normalize(g_cameraPos.xyz - shadePos),
-                                      shadow, g_lightDirW.xyz, g_wcC, g_wcD), 1.0f)
-            : shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                           gbuf.ddxUv, gbuf.ddyUv, shadow);
+        // M-WAT2：水体已在函数头黑占位 return（isWater 死分支清除）；
+        // 普通材质照旧 shadePbrGrad。
+        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
         const float3 toP = shadePos - g_cameraPos.xyz;
         const float  L   = length(toP);
         const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,

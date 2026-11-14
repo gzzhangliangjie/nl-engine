@@ -76,7 +76,7 @@ inline constexpr std::uint32_t kMaxVisMaterials = 4;
 inline constexpr std::uint32_t kWaterMaterialId = 0xFFFFu;
 
 // M-WAT1：Gerstner 波形参数 CPU 侧结构（osgw 式显式数组；shader 侧布局规范 =
-// water_common.slangh 头注 WaterConstants，288B volatile CB）。
+// water_common.slangh 头注 WaterConstants，336B volatile CB；M-WAT2 扩 288→336）。
 struct WaterWaveParams {
     float dir[2];    // 波向 xy（单位向量）
     float amp;       // 振幅 A（米）
@@ -91,7 +91,18 @@ struct WaterConstantsCB {
     float specPow;               // 太阳 Blinn-Phong 幂
     float specGain;              // 太阳高光增益
     float maxAmp;                // ΣA（clusterSphere 半径膨胀用）
-    // 布局对齐 288B = 18×float4（WC 侧 wcA[8]+wcB[8]+wcC+wcD）；
+    // M-WAT2（拍板 Q-WA7=A）：折射/吸收/泡沫参数（wcE/wcF/wcG）。
+    float ior;                   // 水体折射率（1.333）
+    float refractStrength;       // 折射出射距离系数（米/米厚）
+    float foamThreshold;         // 泡沫波高占比阈值
+    float foamGain;              // 泡沫增益
+    float absorb[3];             // Beer-Lambert 消光系数（1/m，RGB）
+    float thickMeters;           // bilateral 无邻居时的缺省厚度（米）
+    float noReflect;             // --water-noreflect 验收旗标（1 = 反射项归零）
+    float floorY;                // 池底平面高度（composite 解析折射 ray-plane）
+    float floorHalf;             // 池底半边长（命中判定 [-floorHalf, floorHalf]²）
+    float noRefract;             // --water-norefract 验收旗标（1 = 折射路径关闭）
+    // 布局对齐 336B = 21×float4（WC 侧 wcA[8]+wcB[8]+wcC+wcD+wcE+wcF+wcG）；
     // CPU 结构体不直接 memcpy 上传——draw() 逐字段写 float4 数组（字节级同序）。
 };
 
@@ -1506,14 +1517,24 @@ private:
     nvrhi::TextureHandle         ssrDistPyramid_;
     nvrhi::TextureHandle         ssrSceneMip_;
     nvrhi::TextureHandle         ssrColor_;
+    nvrhi::TextureHandle         waterBg_;               // M-WAT2：折射背景副本（hdr 同格式同尺寸）
     std::uint32_t                ssrW_ = 0, ssrH_ = 0;   // 懒建判据（视口尺寸）
     std::uint32_t                ssrPyrMips_ = 0;        // 金字塔 mip 数（POT 链长）
     static constexpr std::uint32_t kSsrChainMips = 6;    // 场景色链 mip 数（POT/32）
     nvrhi::ShaderHandle          csSsrDepth_, csSsrDown_, csSsrMip_, csSsr_, csSsrCompose_;
+    // M-WAT2（拍板 Q-WA7=A）：折射背景 copy + 水体全链合成（ssr.slang 新入口）。
+    nvrhi::ShaderHandle          csWaterCopy_, csWaterComposite_;
     nvrhi::BindingLayoutHandle   ssrDepthLayout_, ssrDownLayout_, ssrMipLayout_,
                                  ssrLayout_, ssrComposeLayout_;
+    nvrhi::BindingLayoutHandle   waterCopyLayout_, waterCompositeLayout_;
     nvrhi::ComputePipelineHandle ssrDepthPSO_, ssrDownPSO_, ssrMipPSO_, ssrPSO_, ssrComposePSO_;
+    nvrhi::ComputePipelineHandle waterCopyPSO_, waterCompositePSO_;
     nvrhi::BindingSetHandle      ssrDepthSet_, ssrSet_, ssrComposeSet_;
+    nvrhi::BindingSetHandle      waterCompositeSet_;
+    nvrhi::TextureHandle         waterCompositeSetBg_;   // composite set 依赖登记（bg 重建则 set 重建）
+    nvrhi::BindingSetHandle      waterCopySet_;          // M-WAT2 copy set（hdr 重建则 set 重建）
+    nvrhi::TextureHandle         waterCopySetHdr_;       // copy set 依赖登记
+    bool                         waterCompositeLogged_ = false;  // composite 首跑日志锚
     nvrhi::TextureHandle         ssrComposeSetHdr_;      // compose set 依赖登记（hdr 重建则 set 重建）
     std::vector<nvrhi::BindingSetHandle> ssrDownSets_;   // [L≥1] 金字塔逐级 set
     std::vector<nvrhi::BindingSetHandle> ssrMipSets_;    // [L≥1] 场景色链逐级 set
