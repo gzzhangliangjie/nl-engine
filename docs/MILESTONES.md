@@ -2928,6 +2928,24 @@
 
 **下一步**：editor 轨道 M-E0~M-E10 全部收官；候选后续 = 嵌入视口截图基建（BitBlt 合成）/ 编辑 undo-redo / 多选框选（均未排期待拍板）；整轨 merge 回 master 待用户指令。
 
+## editor轨道 M-E11+M-E12+M-E13：视口截图基建 + 编辑 undo-redo + outliner 多选框选（feat/editor，2026-11-14，tags `e-m11-done`+`e-m12-done`+`e-m13-done`）
+
+**动作**：wt_pool claim（track editor / M-E11，2026-11-14 用户「继续做吧」拍板三遗留同轮开工）→ 落码：①`tools/editor-viewport-shot.py` 视口截图三源择优（PrintWindow viewer 子窗 / container / BitBlt 屏幕 + std 判据 + 遮挡自检 FAIL 闸）；②viewer `EditCmd` 命令栈（Rename/Link/Prop/Structural 四类 + undoIsDelete 方向位）+ `scene.undo/redo` RPC（error 102 空栈 / 103 重建失败）+ editor Undo/Redo 按钮 + Ctrl+Z/Y；③outliner Ctrl 多选 / Shift 范围选 / 树区拖拽框选（item rect 相交收集）+ 批量 Delete selected / Reparent selected + `--selftest-outliner` 确定性路径钩子（add 测试实体 → 注入多选 → 批量删除 → 两次 Undo 全恢复）。RPC-SPEC §10 补 M-E12/M-E13 实装表。
+
+**提交版本**：feat/editor 落码 commit + 台账 commit（本轮），tags `e-m11-done`/`e-m12-done`/`e-m13-done`。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E11~E13 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（DX12 + VULKAN，VULKAN selftest **PASS 0 failures**）；`m-e12-probe.py` **34/34 全绿**（rename/setProp undo/redo 读回、add 重建 id 变化 + 组件保形、remove 子树重建拓扑保形、级联重映射 redo→undo 闭环、空栈 102 双向）；M-E9/M-E10 探针复验 **0 fail / 0 fail**（既有面保形）；M-E13 GUI 探针 **ALL PASS**（Selected 高亮像素带 y547-558/564-576 机械实证 + 06-undo2 entities:4 双 Undo 全恢复目击）；M-E11 合成图 `out/editor-viewport.png` 产出。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（探针验收不进 cases.json）。
+
+**踩坑情况**
+1. **⚠️ Add/Remove「同构」语义错**：初版 Structural 统一「undo=重建」→ add 的 undo 把刚加的实体又建一遍（实体翻倍，探针 3 FAIL 实锤）→ `undoIsDelete` 方向位根修：动作由来源栈决定（undo 栈 act=undoIsDelete、redo 栈取反，执行后不翻转）。
+2. **remapStacks 漏快照内部引用**：多轮 undo/redo 后 Structural cmd 的 removed 快照 snap.id/snap.parent 仍是旧 id → redo 循环 rebuild failed 103 → 快照内部引用同步映射修正。
+3. **bindSceneEdit 局部 lambda 按引用捕获 = 悬垂 UB**：handler 闭包随 bridge handler 表持久存活，bindSceneEdit 返回后局部量已死（编译器不报）→ 全链按值捕获（M-E9 既有 handler 口径）。
+4. **⚠️ selftest 删空场景拖死 viewer**：selftest 批量删除 preview-* 基线实体 → ECS 空场景 rebuild → viewer 退出（crash-isolation 实证）→ 改删自建的测试实体，基线保留。
+5. **跨进程 DX12 视口取证三连败留账**：PrintWindow(viewer 子窗) 全黑（swapchain 不响应 WM_PRINT，M-E6 根因坐实）；BitBlt 屏幕 + TOPMOST 双置顶仍被用户桌面另一 TOPMOST 会话窗压住（Z 序竞争）→ 遮挡自检 FAIL 闸（diff-rate≈1.0 显式失败不落假图）；可靠取证 = 引擎侧帧 dump（`--editor-shot` 挂待拍板）。
+6. **SendInput 点击链被遮挡窗抢走**：editor 被盖后全局鼠标注入全打到遮挡窗（坐标本身无误——PIL 实测树行高 17px）→ M-E13 GUI 证据走 `--selftest-outliner` 确定性路径（M-E9 口径延续）。
+
+**下一步**：editor 轨道 M-E0~M-E13 全部收官；候选后续 = 引擎侧 `--editor-shot` 帧 dump（视口可靠取证）/ outliner 框选 overlay 交互化 / 整轨 merge 回 master（待用户指令，merge 后重跑该轨全部历史版本卡）。
+
 ## editor轨道 M-E7：模型预览 + cvar 反射通道（feat/editor，2026-11-14，tag `e-m7-done`）
 
 **动作**：wt_pool claim（track editor / M-E7，§7.1b 重开后首个里程碑）→ 开工拍板四项全拍（重开 editor 轨道 M-E7→M-E8；参数通道 = **CVar + M-SC10 描述表**零新反射系统；新建专用预览小场景；实时 = 引擎推 `editor.sceneChanged`，写回 EDITOR-PLAN §3/§8）→ 落码六件套：①`assets/scenes/preview.scene.json` 预览小场景（Suzanne 主体 + ParkingLot 地面 + ambient 0.28）；②viewer `--preview`/`--preview-model` 糖旗标（mode scene + 场景 JSON；preview-model 反序列化后按实体名覆写 meshFile，坏名 exit 2）；③`light.sunAzimuth/sunElevation/ambient` 三 cvar（registerFloat + setOnChanged dirty 语义，未调光零回归）；④RPC `engine.cvar.list/get/set`（反射通道，`setFromString` 语义）+ `camera.preset` 六预设（front/back/left/right/top/iso，top 钳 ±1.45 rad 回读实际值）；⑤editor 侧 `PreviewPlugin` 内建注册（视角按钮排 + 光照滑条走 engine.cvar.set）；⑥`tools/m-e7-probe.py` 三段 31 断言。**renderer 触碰面（用户拍板 A：updateEcsLights）**：根因 = `psScene` ambient 消费灯缓冲 `g_lights[0].y`（loadEcsScene 一次性写死），每帧 CB `g_lightDir.w` 只有 probe/trace 链消费，cvar 覆写不动灯缓冲则对预览画面零效果；方案 = `updateEcsLights` 通道五文件纯新增（Renderer→backend 虚接口→DX12/Vulkan 转发→`Scene::updateLights` writeBuffer，与 updateEcsObjects 同构），存量唯一改动 = initScene 灯缓冲 permanent 位 `ShaderResource → ShaderResource|CopyDest`（NVRHI state-tracking 要求 ⊇ CopyDest）。RPC-SPEC §10 补 M-E7 实装表。

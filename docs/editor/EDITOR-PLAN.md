@@ -44,6 +44,9 @@
 - **M-E8** 场景树增强。层级树（ECS parent 链，绑定面 `ecsSetParent/ecsGetParent` 已有）；`editor.sceneChanged` 实时推送（引擎侧对象增删/参数变更 notify，编辑器收到后拉增量——替换手动 Refresh）；泛化参数读写 handler（原生参数走 cvar 通道；脚本组件字段走 M-SC10 `[Prop]` 描述表，**依赖 M-SC10 落码**，未落则先接 cvar 部分并留描述表接驳点）。 **[DONE 2026-11-14]**
 - **M-E9** 场景树编辑操作（2026-11-14 用户拍板：遗留 ②③ 同轮开工；前置 = feat/editor merge 新 master 吸收 script/water 整轨——M-SC7 帧边界重建机制是增删实体渲染传导的基座）。`scene.rename/setParent/reparent/addEntity/removeEntity` 编辑 RPC（World 全落地：flush 即时落表、环防护 RPC 化、addEntity 白名单+存在性双校验）；渲染传导 = M-SC7 签名块移出 ticking 扩灯集。 **[DONE 2026-11-14]**
 - **M-E10** 对象级参数泛化面。`scene.getProps/setProp` 显式描述表（M-SC10 PropAttribute 同构口径：name/type/Range 显式注册、Default=现值快照；RPC 只传输零新反射层——拍板「不另做一套」落点二）；编辑器 Properties 泛化面板（描述表驱动，新增组件字段=表加一行零改动面板）；指纹扩 Transform/Light 全字段。 **[DONE 2026-11-14]**
+- **M-E11** 嵌入视口截图基建（BitBlt 合成；2026-11-14 用户拍板三遗留同轮开工）。M-E6/M-E8 两次留账「PrintWindow 抓不到跨进程 DX12 子窗口 → 嵌入视口黑」的根修：`tools/editor-viewport-shot.py` = PrintWindow 抓 editor UI 层 + 视口容器屏幕矩形 `BitBlt(GetDC(NULL))` 抓 DWM 合成帧 + 视口区域叠加合成 PNG；沉淀为 M-E12/M-E13 GUI 验收共用基建。 **[DONE 2026-11-14]**
+- **M-E12** 编辑 undo-redo（2026-11-14 用户拍板）。viewer 侧命令栈：五类编辑操作（rename/link/add/remove/prop）成功路径记录逆操作 + 新编辑清 redo 栈；`scene.undo/redo` RPC（返回 undoDepth/redoDepth）；remove 的 undo = 子树快照重建（拓扑+组件全字段），重建 id 变化 → oldId→newId 映射修正双栈引用；editor 侧 Undo/Redo 按钮 + Ctrl+Z/Ctrl+Y。 **[DONE 2026-11-14]**
+- **M-E13** outliner 多选 + 框选（2026-11-14 用户拍板）。Ctrl+点击 toggle 多选（选中集 + 最后点击置 `g_sceneSelEntity` 保持 Properties 面板单选消费）、Shift+点击范围选（nodes_ 序）、树区鼠标拖拽框选（可见节点 item rect 相交收集）；批量操作 = selected N 计数 + Delete selected（循环 removeEntity，undo 栈逐条可撤）/ Reparent selected to parent combo。 **[DONE 2026-11-14]**
 
 ---
 
@@ -99,6 +102,15 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 ---
 
 ## 8. 进度台账
+
+### 2026-11-14 — M-E11 视口截图基建 + M-E12 undo-redo + M-E13 多选框选（feat/editor worktree）
+
+三遗留同轮收官（用户「继续做吧」拍板）。验收：双后端 **BUILD OK**（DX12 + VULKAN，VULKAN selftest **PASS 0 failures**）；`m-e12-probe.py` **34/34 全绿**（rename/setProp/add/remove 子树/级联重映射/空栈 102）；M-E9/M-E10 探针复验 **0 fail / 0 fail**（既有面保形）；M-E13 selftest 确定性路径 GUI 探针 **ALL PASS**（Selected 高亮像素带 y547-558/564-576 机械实证 + 06-undo2 树回 4 节点目击）；M-E11 合成图 `out/editor-viewport.png` 产出（三源择优）。
+
+- **M-E11 落码**：`tools/editor-viewport-shot.py` 三源择优 = ① PrintWindow(viewer 子窗 GLFW30, PW_RENDERFULLCONTENT)（实测对跨进程 DX12 flip-model **全黑**——swapchain 不响应 WM_PRINT，M-E6 留账根因坐实）② PrintWindow(container)（容器自身表面 = 纯色背景）③ BitBlt(GetDC(NULL)) 屏幕 + TOPMOST 置顶——**遮挡免疫失败**（用户桌面另一 TOPMOST 会话窗 Z 序竞争，两轮实证抓到遮挡物）→ 加遮挡自检（bitblt vs 容器纯色背景 diff-rate≈1.0 → 显式 FAIL 不落假图）；std 判据区分纯色/真画面。**留账**：视口内容可靠取证需引擎侧帧 dump（`--editor-shot` 离屏落盘，挂待拍板）；GUI 验收 UI 层证据（PrintWindow 主窗）不受影响。
+- **M-E12 落码**：viewer `EditCmd` 四类命令（Rename/Link/Prop/Structural）+ `scene.undo/redo` handler + editor Undo/Redo 按钮 + Ctrl+Z/Y。Structural 双向 = doStructural(act)（act 由来源栈决定，执行后不翻转）；rebuildFromSnaps 活父直挂/快照父映射 + remapStacks 修双栈顶层与快照内部引用。**踩坑**：① Add/Remove「同构」初版语义错——add 的 undo 应删除新实体而非重建（重建 = 实体翻倍，探针 3 FAIL 实锤）→ undoIsDelete 方向位根修；② remapStacks 漏快照内部引用（redo 循环 rebuild failed 103）→ snap.id/parent 同步修正；③ bindSceneEdit 局部 lambda 按引用捕获 = handler 持久存活后悬垂 UB（C4834 前 silent）→ 全链按值捕获（M-E9 口径）。
+- **M-E13 落码**：outliner Ctrl/Shift/框选 + 批量 Delete selected/Reparent selected + `--selftest-outliner` 钩子（三阶段：add 测试实体 → 注入多选 → 批量删除 → 两次 Undo 全恢复）。**踩坑**：① SendInput 点击链三轮被用户桌面 TOPMOST 遮挡窗抢走（坐标无误——PIL 实测行高 17px、高亮色 RGB(31,57,88)）→ 按 M-E9 口径走确定性路径；② selftest 删 preview-* 基线 = **空场景 rebuild 拖死 viewer**（crash-isolation 实证）→ 改删测试实体；③ M-E8 遗留「req 吞 notify」未根修但 callOn 实际已派发（editor 侧机制全通，树刷新实测正常）。
+- **证据**：`out/m-e13-02-multi.png`（双行高亮 + selected: 2 + 批量按钮）、`m-e13-04-delete.png`（批量删除后）、`m-e13-05-undo.png`（Undo ①树回 3）、`m-e13-06-undo2.png`（Undo ②树回 4）、`out/editor-viewport.png`（M-E11 合成）。
 
 ### 2026-11-14 — M-E9 场景树编辑 + M-E10 对象级参数泛化面（feat/editor worktree）
 

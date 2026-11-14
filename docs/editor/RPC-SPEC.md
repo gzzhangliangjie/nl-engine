@@ -245,6 +245,25 @@
 
 > **M-E10 描述表现量**（新增组件字段 = 引擎侧表加一行，面板零改动）：Transform.position/scale(vec3)/rotation(quat)、Model.meshFile(string)/tint(color)/roughness/metallic(float 0..1)、Light.type(int 0..1)/direction(vec3)/color(color)/intensity(float 0..20)/position(vec3)/range(float 0.1..100)/shadow(bool)。编辑器侧 `PropertyPanelPlugin`（Properties 面板）按 type 渲染通用控件；`SceneOutlinerPlugin` 首次拉取自动选中首个根节点（`g_sceneSelEntity` 共享选中态，离断桌面会话合成点击不可靠 → 面板证据走确定性路径）。
 
+### M-E12 实装（编辑 undo-redo）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.undo` | 编辑器→引擎 | `{}` | `{ok:1, undoDepth, redoDepth}`；栈空 error 102 / 重建失败 error 103 |
+| `scene.redo` | 编辑器→引擎 | `{}` | 同 undo |
+
+> **M-E12 命令栈语义**（viewer 侧单源，RPC 与 GUI 编辑共用；深度上限 128）：五类编辑操作成功路径记录逆操作（`editPushUndo` 清 redo 栈——新编辑作废重做分支）：Rename{sa/sb 旧新名}、Link{parent/parentNew 旧新父 + wasReparent 通道记忆}、Prop{grabProp 写前旧值 + 写后回读新值（含钳制真值），comp/name/kind 载荷}、Structural{删除**前**子树快照（拓扑+组件全字段）+ **undoIsDelete 方向位**}。Rename/Link/Prop 双向执行体同构 = 执行当前正向侧 + swap 双值 + 压对侧栈；Structural 双向 = doStructural(act)：act=true 删除（重抓快照保 removed 与 id 对齐）、act=false 重建（活父直挂/快照父映射）→ **remapStacks 修正双栈顶层与快照内部全部 id 引用**；动作由来源栈决定（undo 栈 act=undoIsDelete、redo 栈取反，执行后不翻转——同 cmd 双栈往返动作交替由栈来源天然保证）。空栈 error 102；编辑器侧 Undo/Redo 按钮 + Ctrl+Z/Ctrl+Y。
+> **闭包存活口径（本轮坑）**：bindSceneEdit 局部 lambda（snapshotSubtree/pushStructural/applyPropValue/applyPropSide/execUndo/execRedo）被 handler 捕获后随 bridge handler 表持久存活——**按引用捕获局部量 = 悬垂 UB**，全链按值捕获（M-E9 既有 handler 同口径）。
+
+### M-E13 实装（outliner 多选 + 框选）
+| 面 | 机制 | 说明 |
+|---|---|---|
+| Ctrl+点击 | `selSet_` toggle | 不驱动 focus（避免 orbit 相机乱跳）；`g_sceneSelEntity` 恒 = 最后点击（Properties 面板保持单选消费） |
+| Shift+点击 | 范围选 | nodes_ 序 between 上次点击与本次（锚 = lastClickId_） |
+| 框选拖拽 | `drawBoxSelect` | 树区左键拖 >4px 画前景 overlay 矩形；松开收集可见节点 item rect 相交（UE 同口径相交即选）；`box-selected N` 状态行 |
+| 批量操作 | Delete selected / Reparent selected | 循环走既有 scene.removeEntity / scene.reparent（viewer undo 栈逐条 push，Undo 可撤） |
+
+> **M-E13 验收口径（确定性路径拍板延续）**：SendInput 点击链被用户桌面 TOPMOST 遮挡窗抢走（2026-11-14 三轮实证，坐标本身无误——PIL 像素实测行高 17px）→ `editor --selftest-outliner` 钩子走确定性路径：t>5s addEntity 两测试实体（真实 RPC）→ 树刷新后注入双节点多选态 → t>15s 批量删除测试实体（**不删 preview-\* 基线——删空场景 rebuild 拖死 viewer，2026-11-14 实证 crash-isolation**）→ t>20s Undo 一次树复原。机械判据 = Selected 高亮行像素带（ImGuiCol_Header 实测 RGB(31,57,88)，y547-558/564-576 两带）+ `selected: 2` 计数 + 批量按钮上屏。
+
 ---
 
 ## 11. C++ 引擎侧接口契约（`editor_bridge`，vendored、零运行时依赖）
