@@ -207,7 +207,7 @@ add_library(nl_rmlui STATIC
     ${NL_RMLUI_DEBUG_SRCS}
 )
 target_include_directories(nl_rmlui PUBLIC ${THIRDPARTY}/rmlui/Include)
-target_compile_definitions(nl_rmlui PUBLIC RMLUI_STATIC_LIB PRIVATE RMLUI_VERSION="6.3")
+target_compile_definitions(nl_rmlui PUBLIC RMLUI_STATIC_LIB PRIVATE RMLUI_VERSION="6.3" RMLUI_FONT_ENGINE_FREETYPE=1)
 target_link_libraries(nl_rmlui PUBLIC nl_freetype)
 
 # ---- M-UI0.0：FreeType 2.13.3 vendored（FTL，RmlUi 默认字体引擎硬依赖）----
