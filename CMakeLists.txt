@@ -220,6 +220,7 @@ add_library(nl_freetype STATIC
     thirdparty/freetype/src/base/ftbbox.c
     thirdparty/freetype/src/base/ftbdf.c
     thirdparty/freetype/src/base/ftbitmap.c
+    thirdparty/freetype/src/base/ftdebug.c  # FT_Trace_Enable/Disable stub（smooth.c 引用；漏收首轮链接 LNK2019）
     thirdparty/freetype/src/base/ftcid.c
     thirdparty/freetype/src/base/ftfstype.c
     thirdparty/freetype/src/base/ftgasp.c
