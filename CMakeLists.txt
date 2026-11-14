@@ -194,7 +194,13 @@ target_link_libraries(nl_imgui_node_editor PUBLIC nl_imgui)
 # 子集冻结在 6.3：升级 = 独立里程碑重裁剪，不做 GLOB CONFIGURE_DEPENDS 追踪。
 # RMLUI_VERSION 显式传入（上游 Core.cpp 有 "custom" 兜底，保溯源真实）；
 # RMLUI_STATIC_LIB = 静态链口径。
-file(GLOB NL_RMLUI_CORE_SRCS  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/*.cpp")
+# Core 收根层 + 三个子目录（Elements/FontEngineDefault/Layout——首轮全量链接
+# LNK2019 Rml::LayoutEngine/ElementForm/LayoutPools 炸出，根层 GLOB 只有 141/191）。
+file(GLOB NL_RMLUI_CORE_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/Elements/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/FontEngineDefault/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/Layout/*.cpp")
 file(GLOB NL_RMLUI_DEBUG_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Debugger/*.cpp")
 add_library(nl_rmlui STATIC
     ${NL_RMLUI_CORE_SRCS}
