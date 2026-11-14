@@ -125,6 +125,28 @@ FFT-Tessendorf 需自实现 compute FFT（FFTW 禁入）；时间演化 + 时域
 
 ---
 
+## 9b. M-WAT0 开工实读与任务书（2026-11-14，claim 后三处重读）
+
+> claim：`wt_pool.py claim --track water --milestone M-WAT0`（2026-11-14 14:57）；wt `nl-engine-water` 建于 master `3004cb1`（junction .workbuddy + thirdparty/slang/dist + skip-worktree 13 files）。
+
+**本轮实读（模块 = SSR march 本体，一一对应）**：
+- UE（权威）：`Shaders/Private/SSRT/SSRTRayCast.ush`（march 主循环重读：UVz 三元组、4 texel 批量、`Level += (8/NumSteps)*Roughness`、容差带 hit、bUncertain 停、远平面拒绝、起点 95% 截断；tile 地平线加速段——首版不做，列升级）+ `HZB.ush`（HZB 绑定结构）+ `SSRTReflections.usf`（入口签名/`SampleScreenColor` 采样口径）。
+- bevy：无 SSR（`SSR-RESEARCH-NOTES.md` §2 实锤缺位，本轮缺位照记）。
+- Carrot：`resources/shaders/post-process/merge-lighting.slang`（全屏合成 pixel pass 结构 = SSR 合成落点参照；无 SSR 本体）。
+- 本仓：`hiz.slang`（M6.0 径向距离 max 金字塔全貌——同像素视线单调论证见 `SSR-RESEARCH-NOTES.md` §3，容差用世界空间距离表达）+ `gbuffer_common.slangh`（反解契约 `gbInterpolateVisTriangle`）+ `scene.hpp/cpp`（hdrSceneColor_ RGBA16 + hdrSceneFb_ + velocity_ + blit/tonemap 链；**hdrSceneColor_ UAV 全替换有先例**（cache viz，scene.hpp §603/608 注释））。
+
+**落码工程口径（全部有明文先例，零新拍板）**：
+1. march 对齐 UE：固定步长 + mip 按粗糙度 + 容差带 + bUncertain；复用 S6 径向距离金字塔做 Hi-Z 加速（笔记 §3 论证成立）。
+2. 法线/粗糙度 = **vis buffer 即取即算**（S16-PLAN §58 明文「SSR 亦依赖此口径」，Q4 冻结不新增属性纹理）；csSSR 绑 vis buffer 全家桶 + material 间接表，与 direct.slang 同构。
+3. 场景色 mip 链：hdrSceneColor_ 建 mip levels + 均值 down（笔记 §3.1 点名「颜色是平均语义」）；若 NVRHI 双后端无统一 generateMips 则自写 csSSRMip（均值 2x2）。
+4. 合成：march 输出独立 `ssrColor_`（反射色+强度）→ csSSRCompose 加权写回 hdrSceneColor_（UAV 全替换先例）；插点 = T0 链 tonemap 之前。
+5. 第一版确定性：静态相机 + 无 jitter（笔记 §1 时域结论）；步数 8/12/16 档；`--ssr` 缺省关，关时冻结基线 bytes。
+6. 零漂移闸：SSR 关 = 全链 bytes（s8.2/s10/s11/s12 spot）；SSR 开新卡 = water-t0（`run.bat verify` + `regression.py --only water-t0` 双重机械校验，`--check` 不覆盖新卡）。
+
+**M-WAT0 文件清单**：`renderer/shaders/ssr.slang`（新）+ `scene.hpp/cpp`（ssrColor_/mip 链/双后端 PSO/drawSSR/`--ssr`）+ `renderer/CMakeLists.txt`（shader 编译项）+ `example/water-t0/`（卡 + run.bat）+ `example/cases.json`（python json 追加）+ `docs/water/WATER-TOOLS-GUIDE.md`（收口时）。
+
+---
+
 ## 9. 边界与证据清单
 
 **冻结面（本轮纯文档，一行代码未碰）**：`renderer/` 与所有 `.slang`/`.slangh`；`CMakeLists.txt`；`example/` 与 `cases.json`；`kStage`；所有 tag / 分支 / worktree；未 claim/release、未跑回归、未打 tag。
