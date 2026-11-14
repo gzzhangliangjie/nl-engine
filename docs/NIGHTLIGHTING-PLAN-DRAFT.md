@@ -102,14 +102,14 @@
 4. M11.1 Q11-1 统计口径：God Rays 含时间抖动 + 时域重投影，bytes 基线大概率不保，须固定步长/固定帧数或统计断言；体积路线更甚。emissive-as-light 改探针/world cache 输入 → 走统计。
 5. 主线在 S11 收尾、`kStage` 仍 S8.2 → 夜景只能作穿插项（不占 m0.* 编号、tag 用名字、不挡主线）或扩 S14。
 
-## 8. 待拍板（未替用户定）
+## 8. 待拍板（✅ 2026-11-14 已全清，结论如下；落码唯一依据见 `docs/nl/NL-PLAN.md`）
 
-- `Q-NL1` 立项归属：穿插项 / S14 第七分支 / **串联验收场景**（建议）/ A 类轨道。
-- `Q-NL2` 夜景定位：独立技术里程碑 / **串联验收场景（建议，串起 bloom+体积光+自发光+夜空）** / 扩天气线。
-- `Q-NL3` 体积光柱：屏幕空间 God Rays（A，推荐，轻量）/ 体积 raymarch（B，复用天气 froxel）。
-- `Q-NL4` 自发光-as-light：首版不做（A）/ 简化版额外点光源喂 `traceCB_`（B，依赖 S11、须重拍授权）。
-- `Q-NL5` 冻结基线重拍授权（夜空/夜间天穹改 `sky.slangh`；emissive 进 GI 改探针/world cache）。
-- `Q-NL6` 是否引入第三方（建议零 vendored，只读算法；city-of-wires 的 C++20 / God Rays 的 C++20 实现均不入库）。
+- `Q-NL1` 立项归属：~~穿插项 / S14 第七分支 / 串联验收场景（建议）/ A 类轨道~~ → **拍板：串联验收场景**，独立任务书 `docs/nl/NL-PLAN.md`，不占 m0.* 编号、tag 用名字、不挡主线。
+- `Q-NL2` 夜景定位：~~独立技术里程碑 / 串联验收场景（建议，串起 bloom+体积光+自发光+夜空）/ 扩天气线~~ → **拍板：串联验收场景**（同上）。
+- `Q-NL3` 体积光柱：~~屏幕空间 God Rays（A，推荐，轻量）/ 体积 raymarch（B，复用天气 froxel）~~ → **拍板：A 屏幕空间 God Rays**（radial blur 3-pass）；B 随天气 B 组 froxel 未立项一并搁置。
+- `Q-NL4` 自发光-as-light：~~首版不做（A）/ 简化版额外点光源喂 `traceCB_`（B，依赖 S11、须重拍授权）~~ → **拍板：首版不做**；自发光只着色 + bloom。
+- `Q-NL5` 冻结基线重拍授权 → **消解**：天气线 M-WEA0~3（merge `4090d94`）已含 `sky.slangh` 9 行改动且走 Q-WE5 零漂移闸、night-sky 用例已存在；夜景只复用其产出不改采样路径；emissive 进 GI 半条随 Q-NL4 消解。若落码中发现必须动采样路径，单独申请重拍。
+- `Q-NL6` 是否引入第三方：~~建议零 vendored~~ → **拍板：零 vendored**，全部只读算法参照（city-of-wires 的 C++20 / God Rays 的 C++20 实现均不入库）。
 
 拍板后须写回 ROADMAP/S14-PLAN + 新建任务书（如 `docs/n*/NL*-PLAN.md`）+ 全仓口径同步 + SHADER-CONVENTIONS 新节，才允许落第一行码。编号用 `Q-NL*` 与同日 `Q-WE*`（天气）/`Q-WA*`（水体）/`Q-W*`（worldgen）区分，勿混。
 
