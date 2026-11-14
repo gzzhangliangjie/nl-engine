@@ -1,0 +1,255 @@
+{
+ "version": 1,
+ "nextID": 9,
+ "ambient": 0.2,
+ "entities": [
+  {
+   "id": 1,
+   "name": "road",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      -94.8,
+      0.0,
+      -180.5
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "StreetRoads.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 2,
+   "name": "lamp",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      -270.5,
+      0.0,
+      -51.9
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "NightLampPosts.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 3,
+   "name": "orb-west",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      -1.2,
+      4.4,
+      -0.8
+     ],
+     "scale": [
+      0.2,
+      0.2,
+      0.2
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "NightOrb.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 4,
+   "name": "orb-east",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      3.5,
+      1.0,
+      4.5
+     ],
+     "scale": [
+      0.14,
+      0.14,
+      0.14
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "NightOrb.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 5,
+   "name": "car",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Transform": {
+     "position": [
+      1.5,
+      0.3,
+      3.0
+     ],
+     "scale": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "Model": {
+     "mesh": "NightCar.glb",
+     "tint": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   }
+  },
+  {
+   "id": 6,
+   "name": "point-west",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Light": {
+     "direction": [
+      0.0,
+      -1.0,
+      0.0
+     ],
+     "color": [
+      3.0,
+      2.2,
+      1.2
+     ],
+     "intensity": 10.0,
+     "type": 1,
+     "position": [
+      -1.2,
+      4.0,
+      -0.8
+     ],
+     "range": 9.0
+    }
+   }
+  },
+  {
+   "id": 7,
+   "name": "point-east",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Light": {
+     "direction": [
+      0.0,
+      -1.0,
+      0.0
+     ],
+     "color": [
+      1.2,
+      2.2,
+      3.0
+     ],
+     "intensity": 8.0,
+     "type": 1,
+     "position": [
+      3.5,
+      2.5,
+      4.5
+     ],
+     "range": 8.0
+    }
+   }
+  },
+  {
+   "id": 8,
+   "name": "fill-directional",
+   "flags": 0,
+   "parent": 0,
+   "components": {
+    "Light": {
+     "direction": [
+      0.3,
+      -0.8,
+      0.5
+     ],
+     "color": [
+      0.588,
+      0.672,
+      0.84
+     ],
+     "intensity": 0.35
+    }
+   }
+  }
+ ],
+ "systems": []
+}

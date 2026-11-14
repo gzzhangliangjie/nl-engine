@@ -511,7 +511,13 @@ set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
 # 视觉调试射线留 M8.2）。Inline ray query DXIL 要 SM6.5+（进 _SM66_ARTIFACTS）。
 set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 # M8.2：rt.slang 三入口——RayQuery 每像素相机射线 compute + 调试图全屏呈现 vs/ps。
-set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment")
+set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment" "psBloomExtract|psbloomextract|fragment" "psBloomBlurH|psbloomblurh|fragment" "psBloomBlurV|psbloomblurv|fragment")
+# M-NL2-C：godrays.slang 五入口——遮挡黑 PS（与 model.slang vsShadow 配对）+
+# 光源 quad VS/PS + 全屏 quad VS + radial blur PS。
+set(_ENTRIES_GODRAYS "psGodraysBlack|psgodraysblack|fragment" "vsGodraysQuad|vsgodraysquad|vertex" "psGodraysQuad|psgodraysquad|fragment" "vsGodraysFull|vsgodraysfull|vertex" "psGodraysRadial|psgodraysradial|fragment")
+# M-NL2-C：sky_bg.slang 双入口——scene 链天穹背景全屏 pass（--sky-bg 进
+# --mode scene；独立文件 = psScene 冻结 blob 零扰动，M15.1 拆双入口同款理由）。
+set(_ENTRIES_SKY_BG "vsSkyBg|vsskybg|vertex" "psSkyBg|psskybg|fragment")
 # M10.0（S10）：velocity.slang 双入口——独立 velocity prepass（Q10-1 拍板 UE 口径：
 # 单独一条小 pass 重画几何写 velocity_，不碰 T2 场景 PSO）。
 set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|fragment")
@@ -568,6 +574,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_TLAS_PROBE}")
     elseif(_SRC_NAME STREQUAL "rt")
         set(_ENTRIES "${_ENTRIES_RT}")
+    elseif(_SRC_NAME STREQUAL "godrays")
+        set(_ENTRIES "${_ENTRIES_GODRAYS}")
+    elseif(_SRC_NAME STREQUAL "sky_bg")
+        set(_ENTRIES "${_ENTRIES_SKY_BG}")
     elseif(_SRC_NAME STREQUAL "direct")
         set(_ENTRIES "${_ENTRIES_DIRECT}")
     elseif(_SRC_NAME STREQUAL "velocity")
@@ -619,6 +629,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_viz")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
+        elseif(_SRC_NAME STREQUAL "sky_bg")
+            set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "ssr")
             set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_WATER_COMMON}")
         else()

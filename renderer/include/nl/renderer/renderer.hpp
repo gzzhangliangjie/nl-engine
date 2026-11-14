@@ -55,6 +55,10 @@ struct FrameParams {
     float weatherHorizon[3] = {0.62f, 0.71f, 0.84f};   // 地平线色（终值）
     float weatherSunCol[3]  = {1.0f, 1.0f, 1.0f};      // 太阳 RGB（色温换算）
     float weatherSunIntensity = 1.0f;                  // 0..1 直光能量（×2.5 基准强度）
+    // M-NL2 后续（拍板 B）：scene 光栅链 ambient 昼因子。viewer 天气分支写
+    // sunIntensity（0..1）；scene.cpp 渲染期把灯缓冲头 [0].y 调制为
+    // sceneAmbient_ × scale。缺省 1 = 非天气路径零写入 → 历史 bytes 保形。
+    float weatherAmbientScale = 1.0f;
     // M-WEA2（Q-W2-2=C1）：高度雾参数。缺省 0 = 雾关 → T≡1 → 全链 bytes 保形。
     // 雾色不单发：消费端取 weatherHorizon 同源（D22 ②）。
     float weatherFogDensity  = 0.0f;                   // 1/m（0 = 雾关）
@@ -64,6 +68,15 @@ struct FrameParams {
     // validHistory 单帧清零，防渐变天气 GI 亮度滞后；缺省 false 保形）。
     float weatherWetness     = 0.0f;                   // 0..1（0 = 干）
     bool  weatherHistoryReject = false;                // filter 态单帧历史拒绝
+    // M-NL1（Q-NL3 A 方案）：屏幕空间 God Rays——单光源 = 场景最强点光源
+    //（CPU 投影进 CB），缺省关 = applyGodRays 整体跳过 + 复合权重 0 保 bytes。
+    bool  godraysEnable      = false;
+    float godraysWeight      = 0.4f;                   // 复合权重（tonemap 端）
+    // M-NL0：bloom post-chain 辉光（docs/nl/NL-PLAN.md）。缺省关 → psTonemap
+    // 复合 +bloom*0 IEEE 恒等 → 历史用例 bytes 保形（M-WEA0 旗标缺省关先例）。
+    bool  bloomEnable    = false;
+    float bloomThreshold = 0.7f;                       // 亮部软阈值（亮度空间）
+    float bloomWeight    = 0.5f;                       // 复合加法权重
     // M-WAT1（water 轨，拍板 A）：水体时间（viewer 固定步进累积 = frameIdx ×
     // GameClock::kStep，禁 wall-clock；缺省 0 = 静止水面，确定性重放逐字节）。
     float waterTime          = 0.0f;
@@ -172,6 +185,9 @@ struct FrameParams {
                                       // 欧氏距离；HUD 滑条双向，viewer 持 local 回填）
     bool  probeSkyBg        = false;  // --sky-bg：背景从 clearColor 换解析天穹
                                       //（skyGradient 与探针 miss 同函数；默认关保形）
+    bool  sceneSkyBg        = false;  // M-NL2-C：--sky-bg 进 scene 链（sceneMode_
+                                      // clear 后插全屏解析天穹 pass，sky_bg.slang；
+                                      // 默认关 = 既有基线一像素不动）
 
     // ---- S11 M11.0：--mode cache-viz 世界缓存占用伪彩（probe 链之上叠加
     //  fill/decay/viz 三个 compute；其它模式不读，缺省 false 零扰动）。

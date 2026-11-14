@@ -173,7 +173,7 @@ void psBlitToHdr(VsOut i, out float4 outColor : SV_Target)
 
 // psTonemap：读离屏 HDR（hdrSceneColor_）→ 直通写到 swapchain（RGBA8_UNORM）。
 // 与 psRtPresent 同款直拷（无采样、无滤波、字节确定）；未来 TSR 在此前插入累积。
-// t0 = hdrSceneColor_ SRV。
+// t0 = hdrSceneColor_ SRV；M-NL0：t2 = bloomA_（半分辨率模糊结果）SRV 复合读。
 Texture2D<float4> g_hdrTex : register(t0);
 [shader("pixel")]
 void psTonemap(VsOut i, out float4 outColor : SV_Target)
@@ -181,7 +181,70 @@ void psTonemap(VsOut i, out float4 outColor : SV_Target)
     uint w, h;
     g_hdrTex.GetDimensions(w, h);
     int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
-    outColor = g_hdrTex.Load(int3(pix, 0));
+    float4 hdr = g_hdrTex.Load(int3(pix, 0));
+    // M-NL0 bloom 复合：--bloom 关时 CPU 侧 g_bloom.y=0 → rgb + bloom*0 = rgb
+    //（IEEE 精确，model.slang flags=0 同款论证）→ 像素与直通逐字节一致；a 原样。
+    // M-NL1 godrays 复合：--godrays 关 / 光源不可见时 CPU 侧 g_gr.x=0 → 同款恒等。
+    float3 bloom = g_bloomTex.SampleLevel(g_bloomSampler, i.uv, 0.0f).rgb;
+    float3 gr = g_grTex.SampleLevel(g_bloomSampler, i.uv, 0.0f).rgb;
+    outColor = float4(hdr.rgb + bloom * g_bloom.y + gr * g_gr.x, hdr.a);
+}
+
+// ---- M-NL0 bloom（--bloom，缺省关）：半分辨率 extract + 分离高斯 ping-pong ----
+// 链路：psBloomExtract（hdr 全分辨率读 → 半分辨率 A 亮部）→ psBloomBlurH（A→B）
+// → psBloomBlurV（B→A）→ psTonemap 复合（t2 = A）。半分辨率 RT 逐帧状态跟踪
+//（§2.15/§2.19：不设 permanent，帧首 beginTracking 声明上帧末态 SRV）。
+// 槽位：b2/t2 全新（rt.slang 已占 b0/b1/t0/t1/u0；s0 同型复用 t0×4 先例）。
+// M-NL1：+t3（godraysAccum_ 复合源）；CB 扩 g_gr = {godraysWeight, 0, 0, 0}
+//（radial 本体的 density/decay/exposure 在 godrays.slang 独立 CB，互不越界）。
+// 参数：g_bloom = {threshold, weight, 1/halfW, 1/halfH}（CPU 每帧 writeBuffer）。
+cbuffer BloomConstants : register(b2)
+{
+    float4 g_bloom;
+    float4 g_gr;
+}
+Texture2D<float4> g_bloomTex : register(t2);     // blur 源 / tonemap 复合源
+Texture2D<float4> g_grTex : register(t3);        // godraysAccum_（tonemap 复合源）
+SamplerState g_bloomSampler : register(s0);      // 线性 clamp（模糊/半分辨率上采样）
+
+// 亮部提取：亮度软阈值（lum≤threshold → 0；threshold→1 线性爬升），k 加权抑制
+// 非高亮区域（display 色空间直接提取——producer 端已烤 gamma，GPU Gems 3 同口径）。
+[shader("pixel")]
+void psBloomExtract(VsOut i, out float4 outColor : SV_Target)
+{
+    uint w, h;
+    g_hdrTex.GetDimensions(w, h);
+    int2 pix = min(int2(i.uv * float2(w, h)), int2(w, h) - 1);
+    float3 c = g_hdrTex.Load(int3(pix, 0)).rgb;
+    float lum = dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+    float k = saturate((lum - g_bloom.x) / max(1.0f - g_bloom.x, 1e-4f));
+    outColor = float4(c * k, 1.0f);
+}
+
+// 5-tap 线性采样等效 9-tap 高斯（经典可分离权重；srcUV 由半分辨率 texel 步进）。
+// dir: (1,0) 水平 / (0,1) 垂直——两入口仅方向不同，采样逻辑同函数（slang 无
+// C++ lambda，inout 参数函数是项目约定，这里直接复制展开三行更直白）。
+float3 bloomBlur9(float2 uv, float2 dir)
+{
+    float2 s = dir * g_bloom.zw;
+    float3 acc = g_bloomTex.SampleLevel(g_bloomSampler, uv, 0.0f).rgb * 0.2270270270f;
+    acc += g_bloomTex.SampleLevel(g_bloomSampler, uv + s * 1.3846153846f, 0.0f).rgb * 0.3162162162f;
+    acc += g_bloomTex.SampleLevel(g_bloomSampler, uv - s * 1.3846153846f, 0.0f).rgb * 0.3162162162f;
+    acc += g_bloomTex.SampleLevel(g_bloomSampler, uv + s * 3.2307692308f, 0.0f).rgb * 0.0702702703f;
+    acc += g_bloomTex.SampleLevel(g_bloomSampler, uv - s * 3.2307692308f, 0.0f).rgb * 0.0702702703f;
+    return acc;
+}
+
+[shader("pixel")]
+void psBloomBlurH(VsOut i, out float4 outColor : SV_Target)
+{
+    outColor = float4(bloomBlur9(i.uv, float2(1.0f, 0.0f)), 1.0f);
+}
+
+[shader("pixel")]
+void psBloomBlurV(VsOut i, out float4 outColor : SV_Target)
+{
+    outColor = float4(bloomBlur9(i.uv, float2(0.0f, 1.0f)), 1.0f);
 }
 
 // psCompare（M10.3 Q14-2）：--compare <png> 右半屏参考图贴片。CPU 侧把 viewport/

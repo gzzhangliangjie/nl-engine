@@ -97,6 +97,12 @@ RUN_TIMEOUT = 90
 # Documented rounding-noise tier (see module docstring).
 NEAR_MAX_DELTA = 1
 NEAR_MAX_PIXELS = 2
+# M-NL2-C 拍板 A（2026-11-14）：vk + --sky-bg 卡宽容档。根因实锤 = NVIDIA GLCache
+# （VK SPIR-V JIT SASS 缓存）内两版 SASS run-to-run 随机命中 → 全画面稀疏 ±1/255
+# （11~14 px，含既有 psScene 几何区，驱动 JIT 非确定，非本项目 bug；清 GLCache 后
+# 单态、重建后旧态低概率再现，DX12 DXCache 无此现象）。宽容档只放宽像素数上限，
+# maxDelta 仍锁 NEAR_MAX_DELTA=1（真数值回归 >1/255 照样 FAIL）。
+SKY_TOL_MAX_PIXELS = 16
 
 # ---- exe 新鲜度门禁（2026-11-08 固化，P8 合并总闸的假绿教训）----
 # 事故：M4.2 重拍 HUD 基线时 vulkan exe 是旧构建（面板 cap 510），dx12 用新 exe
@@ -147,8 +153,13 @@ def check_exe_freshness(backends: tuple[str, ...]) -> list[str]:
     return problems
 
 
-def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
-    """Return (verdict, detail) for one produced PNG against its baseline."""
+def judge_image(png: Path, baseline: Path | None,
+                tol_max_pixels: int = NEAR_MAX_PIXELS) -> tuple[str, str]:
+    """Return (verdict, detail) for one produced PNG against its baseline.
+
+    tol_max_pixels: near 档像素数上限（M-NL2-C 拍板 A：vk + --sky-bg 卡放宽到
+    SKY_TOL_MAX_PIXELS，容忍 NV GLCache 双态 ±1/255 稀疏差；缺省 = 既有 near 口径）。
+    """
     if not png.is_file():
         return "FAIL", "PNG 未生成"
     if baseline is None or not baseline.is_file():
@@ -164,8 +175,9 @@ def judge_image(png: Path, baseline: Path | None) -> tuple[str, str]:
     dp, md = cmp["diffPixels"], cmp["maxDelta"]
     if dp == 0:
         return "bytes", "MD5 不同但像素完全相同（PNG 编码差异）"
-    if dp <= NEAR_MAX_PIXELS and md is not None and md <= NEAR_MAX_DELTA:
-        return "near", f"GPU 取整噪声：{dp} 像素、maxDelta {md}/255"
+    if dp <= tol_max_pixels and md is not None and md <= NEAR_MAX_DELTA:
+        tag = "（M-NL2-C 宽容档：NV GLCache 双态 ±1 稀疏差容忍）" if tol_max_pixels != NEAR_MAX_PIXELS else ""
+        return "near", f"GPU 取整噪声：{dp} 像素、maxDelta {md}/255{tag}"
     return "FAIL", f"与基线像素不符：{dp} 像素、maxDelta {md}/255"
 
 
@@ -318,14 +330,16 @@ def regression_case(version: dict, case: dict, backend: str, out_png: Path) -> d
         rec["detail"] = f"{label}（exit {code}，{case.get('expectLog', 'ok')}）"
         return rec
 
-    verdict, detail = judge_image(out, show.baseline_for(case, backend))
+    # M-NL2-C 拍板 A：vk + --sky-bg 卡启用宽容档（NV GLCache 双态 ±1 稀疏差）。
+    tol_px = SKY_TOL_MAX_PIXELS if (backend == "vulkan" and "--sky-bg" in case.get("args", [])) else NEAR_MAX_PIXELS
+    verdict, detail = judge_image(out, show.baseline_for(case, backend), tol_px)
     rec["verdict"], rec["detail"] = verdict, detail
     if verdict != "FAIL":
         # resize-type cases also carry a pre-resize frame next to the main one.
         before = out.with_name(out.name + ".before.png")
         bb = show.before_baseline_for(case, backend)
         if bb and before.is_file():
-            v2, d2 = judge_image(before, bb)
+            v2, d2 = judge_image(before, bb, tol_px)
             rec["beforeVerdict"], rec["beforeDetail"] = v2, d2
             if v2 == "FAIL":
                 rec["verdict"], rec["detail"] = "FAIL", f"before 图不符：{d2}"

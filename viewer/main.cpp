@@ -169,6 +169,13 @@ struct Options {
                                        // <0 = 跟随 ODE 记忆态。同相位湿度对比用）
     bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
+    // M-NL0：bloom post-chain 辉光（--bloom，缺省关 → tonemap 复合恒等 bytes 保形）。
+    bool bloomEnable = false;      // --bloom
+    double bloomThreshold = 0.7;   // --bloom-threshold X（亮部软阈值，亮度空间）
+    double bloomWeight = 0.5;      // --bloom-weight X（复合加法权重）
+    // M-NL1：godrays 体积光柱（--godrays，缺省关；单光源 = 场景最强点光源）。
+    bool godraysEnable = false;    // --godrays
+    double godraysWeight = 0.4;    // --godrays-weight X（复合加法权重）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
@@ -376,6 +383,16 @@ Options parseArgs(int argc, char** argv) {
             o.rejectThreshold = static_cast<float>(std::atof(argv[++i]));
         // M-PERF1（Q-P5）：per-pass GPU 计时 HUD + 日志锚（默认关）。
         else if (a == "--pass-timing") o.passTiming = true;
+        // M-NL0：bloom post-chain 辉光（缺省关；参数 cvar/CLI 手调语义）。
+        else if (a == "--bloom") o.bloomEnable = true;
+        else if (a == "--bloom-threshold" && i + 1 < argc)
+            o.bloomThreshold = std::atof(argv[++i]);
+        else if (a == "--bloom-weight" && i + 1 < argc)
+            o.bloomWeight = std::atof(argv[++i]);
+        // M-NL1：godrays 体积光柱（缺省关；GPU Gems 3 屏幕空间口径）。
+        else if (a == "--godrays") o.godraysEnable = true;
+        else if (a == "--godrays-weight" && i + 1 < argc)
+            o.godraysWeight = std::atof(argv[++i]);
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -2826,6 +2843,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
+        // M-NL0：bloom（--bloom 缺省关；两处 fp 填充点同步——ecs 主链同享 post-chain）
+        fp.bloomEnable = o.bloomEnable;
+        fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
+        fp.bloomWeight = static_cast<float>(o.bloomWeight);
+        // M-NL1：godrays（--godrays 缺省关；与 ecs 主链填充点同步）
+        fp.godraysEnable = o.godraysEnable;
+        fp.godraysWeight = static_cast<float>(o.godraysWeight);
         fp.visVizMode = o.visVizMode;       // M7.0：visbuf 解码档（其它模式不读）
         fp.particles = o.particles;         // M-PT0：粒子叠加层开关（其它模式不读）
         // M-PT0：billboard 相机基向量取 view 矩阵（dag/hiz 分支已填；其它模式只有
@@ -2900,6 +2924,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeVizIrradiance = (isProbeViz && !gatherActive);
         fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull || isFilter);
         fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
+        // M-NL2-C：--sky-bg 进 scene 链（sceneMode_ 天穹背景 pass；probe 模式下
+        // sceneMode_=false 不消费，缺省关 = 既有基线保形）。
+        fp.sceneSkyBg = probeSkyBgLocal;
         std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
         // S11 M11.0：cache-viz（probe 链基建复用；gather/dots 关，伪彩即最终画面）。
@@ -2933,6 +2960,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.lightDir[1] = static_cast<float>(se);
             fp.lightDir[2] = static_cast<float>(ce * std::cos(ws.sunAzimuth));
             fp.lightDir[3] = 0.28f * static_cast<float>(ws.sunIntensity); // ambient 随昼因子
+            // M-NL2 后续（拍板 B）：scene 光栅链 ambient 昼因子（psScene 的
+            // g_lights[0].y = sceneAmbient_ × scale）。缺省 1 = 非天气 bytes 保形。
+            fp.weatherAmbientScale = static_cast<float>(std::clamp(ws.sunIntensity, 0.0, 1.0));
             fp.weatherSunIntensity = static_cast<float>(ws.sunIntensity); // 直光能量（×2.5 基准）
             // 色温 K → RGB（Krystof 简化拟合，1000K~40000K 有效；钳 [0,1]）。
             const double tk = ws.sunColorTempK / 100.0;
@@ -4780,9 +4810,44 @@ int runScene(const Options& o) {
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
         fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
+        // M-NL2 后续（拍板 B）：scene 链 ambient 昼因子——runScene 此前零天气
+        // 字段填充（Q14-4 时代口径），此处只接 ambient scale（缺省 1 保形）；
+        // 天穹/太阳仍仅 probe 链消费。
+        if (o.weatherSeed >= 0) {
+            nl::core::WeatherKind presetW = nl::core::WeatherKind::kCount;
+            if (!o.weatherPreset.empty())
+                presetW = nl::core::weatherKindFromName(o.weatherPreset.c_str());
+            const nl::core::WeatherState wsW = nl::core::evaluateWeather(
+                static_cast<std::uint64_t>(o.weatherSeed),
+                o.weatherT + o.weatherTStep * static_cast<double>(frame), presetW);
+            fp.weatherAmbientScale =
+                static_cast<float>(std::clamp(wsW.sunIntensity, 0.0, 1.0));
+            // M-NL2-C：天穹两色 + 高度雾透传（--sky-bg 天穹背景 pass 消费；与
+            // ecs 主链 2729~2740 同源表达式。scene 链此前不读，缺省终值 = 白天
+            // 蓝）。同口径 CLI >=0 锁定雾参数。
+            fp.weatherZenith[0] = static_cast<float>(wsW.skyZenithR);
+            fp.weatherZenith[1] = static_cast<float>(wsW.skyZenithG);
+            fp.weatherZenith[2] = static_cast<float>(wsW.skyZenithB);
+            fp.weatherHorizon[0] = static_cast<float>(wsW.skyHorizonR);
+            fp.weatherHorizon[1] = static_cast<float>(wsW.skyHorizonG);
+            fp.weatherHorizon[2] = static_cast<float>(wsW.skyHorizonB);
+            fp.weatherFogDensity = static_cast<float>(
+                o.weatherFogDensity >= 0.0 ? o.weatherFogDensity : wsW.fogDensity);
+            fp.weatherFogHeight  = static_cast<float>(
+                o.weatherFogHeight >= 0.0 ? o.weatherFogHeight : wsW.fogHeight);
+        }
+        // M-NL2-C：--sky-bg 进 scene 链（runScene 侧填充点；probeSkyBg 同旗标）。
+        fp.sceneSkyBg = o.skyBg;
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;
+        // M-NL0：bloom（--bloom 缺省关；与 ecs 主链填充点同步）
+        fp.bloomEnable = o.bloomEnable;
+        fp.bloomThreshold = static_cast<float>(o.bloomThreshold);
+        fp.bloomWeight = static_cast<float>(o.bloomWeight);
+        // M-NL1：godrays（--godrays 缺省关；与 ecs 主链填充点同步）
+        fp.godraysEnable = o.godraysEnable;
+        fp.godraysWeight = static_cast<float>(o.godraysWeight);
         // M-E1b.3：视向量 V 来源——真实相机世界坐标（psScene 从 b1 cameraPos 读）。
         float eye3[3];
         camera.eyePosition(eye3);

@@ -574,6 +574,16 @@ public:
     bool beginHdrSceneTarget(nvrhi::ICommandList* cmd, const float clearColor[4],
                              std::string& outError);
 
+    // ---- M-NL0：bloom（--bloom，缺省关，docs/nl/NL-PLAN.md）----
+    // 半分辨率 extract + 分离高斯 ping-pong（A→B→A）+ psTonemap 复合（t2=A）。
+    // 插在 presentTonemap 内部：raster 6 处 + rt/shadow presentRtTarget 全链一处生效。
+    // 旗标关 = applyBloom 整体跳过 + g_bloom.y=0 复合 IEEE 恒等（bytes 保形）。
+    bool applyBloom(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
+                    std::string& outError);
+    // M-NL1：godrays 三段链（遮挡预渲 → radial blur → accum），presentTonemap
+    // 在 bloom 之后调用；失败不拦路（log 后回落无 godrays，权重 0）。
+    bool applyGodRays(nvrhi::ICommandList* cmd, std::string& outError);
+
     // ---- M9.0（S9）：--mode shadow 的 compute 直光对照路径（Q4 方案 A）----
     // initShadow = initVisbuf(pulling=true) 全套 vis/材质资源 + initRtPresent 共用
     // 呈现骨架 + direct.cs compute 管线；不碰 BLAS/TLAS/rays。
@@ -994,6 +1004,15 @@ private:
     bool instanceTrackSRV_ = false;
     nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    // ---- M-NL2-C：scene 链天穹背景 pass（--sky-bg；sky_bg.slang 独立 vs/ps）----
+    // 全屏大三角画在 clear 之后、几何 draw 之前；深度测试/写入全关。缺省关 =
+    // 渲染路径零变化（历史用例 bytes 保形）。声明顺序：set 引用 layout+CB，
+    // 按声明逆序析构 = set 先死、资源后死（S15 UAF 教训口径）。
+    nvrhi::ShaderHandle        vsSkyBg_, psSkyBg_;
+    nvrhi::BindingLayoutHandle skyBgLayout_;
+    nvrhi::BufferHandle        skyBgCB_;        // volatile 144B（invVP/eye/两色/雾/宽高）
+    nvrhi::BindingSetHandle    skyBgSet_;
+    nvrhi::GraphicsPipelineHandle pipelineSkyBg_;
     // ---- M-E1b.4：方向灯 2D 阴影（最多 4 盏；R32F Texture2DArray 整数 Load 采样）----
     static constexpr std::uint32_t kMaxShadowLights = 4;
     nvrhi::ShaderHandle        vsShadow_, psShadow_;
@@ -1009,6 +1028,11 @@ private:
     float shadowBias_[kMaxShadowLights] = {};
     float         sceneAmbient_ = 0.28f;
     std::uint32_t sceneLightCount_ = 0;
+    // M-NL2 后续（拍板 B）：灯缓冲头 [0] 其余槽的 init 值快照——天气 ambient 昼
+    // 因子调制时每帧重组头部（(lightCount, ambient*scale, 1/ΣI, pointCount)）。
+    float         sceneLightInvSumI_ = 0.0f;
+    std::uint32_t sceneLightPointCount_ = 0;
+    bool sceneLightsSRV_ = false;            // 跨列表态跟踪：sceneLights_ 末态（init=CopyDest，draw 后=SRV）
     std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源
     nl::anim::Skeleton        skinSkeleton_;
     std::vector<nl::anim::AnimClip> skinClips_;
@@ -1247,6 +1271,67 @@ private:
     nvrhi::GraphicsPipelineHandle tonemapPSO_;    // 随 swapchain framebuffer 信息建
     nvrhi::BindingLayoutHandle   tonemapLayout_;
     nvrhi::BindingSetHandle      tonemapSet_;     // t0 = hdrSceneColor_ SRV
+
+    // M-NL0 bloom（--bloom，缺省关）：半分辨率 extract/blur ping-pong + 复合。
+    // A/B 逐帧状态跟踪（§2.15/§2.19）：创建态 SRV + keepInitialState（hdr 同款），
+    // 帧序 SRV→(extract 写 A)→SRV→(blurH 读 A 写 B)→SRV→(blurV 读 B 写 A)→SRV 复合。
+    // 旗标关 = 零状态变化 + g_bloom.y=0 复合恒等（bytes 保形）；纹理随视口整组重建。
+    nvrhi::TextureHandle         bloomA_;          // 半分辨率 RGBA16_FLOAT（extract/blurV 写点 + 复合源）
+    nvrhi::TextureHandle         bloomB_;          // 半分辨率 RGBA16_FLOAT（blurH 写点）
+    nvrhi::FramebufferHandle     bloomFbA_;        // 仅 bloomA_（extract/blurV 写点，无 depth）
+    nvrhi::FramebufferHandle     bloomFbB_;        // 仅 bloomB_（blurH 写点，无 depth）
+    nvrhi::ShaderHandle          psBloomExtract_;
+    nvrhi::ShaderHandle          psBloomBlurH_;
+    nvrhi::ShaderHandle          psBloomBlurV_;
+    nvrhi::GraphicsPipelineHandle bloomExtractPSO_;
+    nvrhi::GraphicsPipelineHandle bloomBlurHPSO_;
+    nvrhi::GraphicsPipelineHandle bloomBlurVPSO_;
+    nvrhi::BindingLayoutHandle   bloomLayout_;     // t2 SRV + b2 CB + s0（blur：shader 引 t2/b2/s0）
+    nvrhi::BindingLayoutHandle   bloomExtractLayout_; // t0 SRV + b2 CB（extract：shader 引 t0/b2）
+    nvrhi::BindingSetHandle      bloomSetHdr_;     // t0 = hdrSceneColor_（extract 读）
+    nvrhi::BindingSetHandle      bloomSetA_;       // t2 = bloomA_（blurH 源）
+    nvrhi::BindingSetHandle      bloomSetB_;       // t2 = bloomB_（blurV 源）
+    nvrhi::BufferHandle          bloomConstants_;  // volatile 32B（b2：threshold/weight/1/halfW/1/halfH + M-NL1 godraysWeight）
+    bool                         bloomEnable_ = false;    // 帧参数成员（Scene::draw 从 FrameParams 存）
+    float                        bloomThreshold_ = 0.7f;
+    float                        bloomWeight_ = 0.5f;
+
+    // ---- M-NL1：屏幕空间 God Rays（--godrays，缺省关；Q-NL3 A 方案）----
+    // 三段式：遮挡预渲（occlusionMask_ R8 半分辨率清黑 → 光源 quad 渲白（深度 =
+    // 光源 NDC z，Always+写深）→ 场景几何 vsShadow+psGodraysBlack 渲黑（LESS+不
+    // 写深，只盖光源前遮挡体））→ psGodraysRadial 32 步径向累积（godraysAccum_
+    // RGBA16F）→ psTonemap 复合（t3，g_gr.x 权重 0 = IEEE 恒等保 bytes）。
+    // 单光源 = 场景最强点光源（initScene 持 CPU 副本 sceneLightDescs_，Scene::draw
+    // 投影选光；光源不在视锥/在相机后 → 当帧权重 0）。几何 pass 复用 shadowLightCB_
+    //（b0 = 当帧相机 mvp）与 batch.shadowSet（t5 实例）——零新 batch set。
+    nvrhi::TextureHandle         godMask_;         // 半分辨率 R8_UNORM（遮挡 mask）
+    nvrhi::TextureHandle         godAccum_;        // 半分辨率 RGBA16_FLOAT（radial 输出，tonemap t3）
+    nvrhi::TextureHandle         godDepth_;        // 半分辨率 D32（光源 quad 写深 + 几何 LESS）
+    nvrhi::FramebufferHandle     godMaskFb_;       // mask 颜色 + godDepth_（occl/quad 写点）
+    nvrhi::FramebufferHandle     godAccumFb_;      // 仅 accum（radial 写点，无 depth）
+    nvrhi::BufferHandle          godCB_;           // volatile 64B（GodraysConstants 4×float4）
+    nvrhi::ShaderHandle          psGodraysBlack_;
+    nvrhi::ShaderHandle          vsGodraysQuad_;
+    nvrhi::ShaderHandle          psGodraysQuad_;
+    nvrhi::ShaderHandle          vsGodraysFull_;
+    nvrhi::ShaderHandle          psGodraysRadial_;
+    nvrhi::GraphicsPipelineHandle godOcclPSO_;     // vsShadow_ + psGodraysBlack_（LESS，不写深）
+    nvrhi::GraphicsPipelineHandle godQuadPSO_;     // quad（Always，写深）
+    nvrhi::GraphicsPipelineHandle godRadialPSO_;   // 全屏 radial（关深度）
+    nvrhi::BindingLayoutHandle   godQuadLayout_;   // b0 volatile CB
+    nvrhi::BindingLayoutHandle   godRadialLayout_; // b0 volatile CB + t0 SRV + s0
+    nvrhi::BindingSetHandle      godQuadSet_;      // b0 = godCB_
+    nvrhi::BindingSetHandle      godRadialSet_;    // b0 = godCB_ + t0 = godMask_ + s0 = sampler_
+    std::vector<SceneLightDesc>  sceneLightDescs_; // initScene CPU 持久副本（选最强点光）
+    // 帧内光源投影缓存（Scene::draw 算，applyGodRays 消费；不可见 = 权重 0）
+    bool                         godLightVisible_ = false;
+    float                        godViewProj_[16] = {};   // 当帧相机 mvp 快照（occl 几何 pass b0）
+    float                        godLightUv_[2] = {0.5f, 0.5f};
+    float                        godLightNdc_[3] = {0.0f, 0.0f, 0.0f};   // x/y/z
+    float                        godLightRadNdc_[2] = {0.05f, 0.05f};    // x/y（y 已含 aspect 校正的成对值）
+    float                        godLightColor_[3] = {1.0f, 1.0f, 1.0f};
+    bool                         godraysEnable_ = false;
+    float                        godraysWeight_ = 0.4f;
 
     // ---- M9.0：shadow 模式（compute 直光对照）----
     // 与其它 mode 互斥（一个 Scene 实例只跑一种）。复用面：输出 = rtTarget_ /
