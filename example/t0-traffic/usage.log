@@ -3,5 +3,6 @@ usage:
   traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>
   traffic-tools lanes <roadnet.json> --png out.png [--size WxH]
   traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]
+                                    [--loop] [--actuated] [--no-signals]
   traffic-tools selftest [--emit-fixture path]
   traffic-tools help

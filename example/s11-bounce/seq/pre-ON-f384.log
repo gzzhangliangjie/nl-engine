@@ -1,0 +1,792 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|scene] blas built: Suzanne-materials.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info|scene] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info|scene] cull (vertex pulling) scene ready: Suzanne-materials.nmesh | meshlets=711 | triangles=11808 | stride=63 | frustum=off | shader=dxil
+[nl:info|scene] visbuf material resolve ready: Suzanne-materials.glb | materials=3 | baseColor 1024x1024 | shader=dxil
+[nl:info|scene] probe scene ready (velocity prepass + 4-level cascade placement, viz dots) | shader=dxil
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info|viewer] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] debug layer: D3D12 Debug Layer (Windows SDK) + NVRHI validation | active=yes
+[nl:info|viewer] mode: probe | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info|viewer] screenshot mode: 384 frames -> E:\UE_STUDY_2026\nl-engine\example\s11-bounce\seq\pre-ON-f384.png | cull=back | hud=off
+[nl:info|scene] tlas: per-frame rebuild active | instances=1 #1
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path) #1
+[nl:info|scene] probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64 #1
+[nl:info|scene] cache: flat hashmap active (262144 slots, lifetime 10, cell 0.5m, probe steps 3 -- Q11-0 plan A; M11.1 update+blend on) #1
+[nl:debug|renderer] D3D12 info queue messages: 1 #1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #1
+[nl:info|renderer] gpu timer resolved [frame]: 0.758784 ms (first successful NVRHI timestamp query) #2
+[nl:info|scene] probe: M11.2 bounce gate=1 cacheFrame=1 lightScale=1 #2
+[nl:debug|renderer] D3D12 info queue messages: 1 #2
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #2
+[nl:debug|renderer] D3D12 info queue messages: 1 #3
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #3
+[nl:debug|renderer] D3D12 info queue messages: 1 #4
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #4
+[nl:debug|renderer] D3D12 info queue messages: 1 #5
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #5
+[nl:debug|renderer] D3D12 info queue messages: 1 #6
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #6
+[nl:debug|renderer] D3D12 info queue messages: 1 #7
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #7
+[nl:debug|renderer] D3D12 info queue messages: 1 #8
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #8
+[nl:debug|renderer] D3D12 info queue messages: 1 #9
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #9
+[nl:debug|renderer] D3D12 info queue messages: 1 #10
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #10
+[nl:debug|renderer] D3D12 info queue messages: 1 #11
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #11
+[nl:debug|renderer] D3D12 info queue messages: 1 #12
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #12
+[nl:debug|renderer] D3D12 info queue messages: 1 #13
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #13
+[nl:debug|renderer] D3D12 info queue messages: 1 #14
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #14
+[nl:debug|renderer] D3D12 info queue messages: 1 #15
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #15
+[nl:debug|renderer] D3D12 info queue messages: 1 #16
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #16
+[nl:debug|renderer] D3D12 info queue messages: 1 #17
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #17
+[nl:debug|renderer] D3D12 info queue messages: 1 #18
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #18
+[nl:debug|renderer] D3D12 info queue messages: 1 #19
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #19
+[nl:debug|renderer] D3D12 info queue messages: 1 #20
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #20
+[nl:debug|renderer] D3D12 info queue messages: 1 #21
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #21
+[nl:debug|renderer] D3D12 info queue messages: 1 #22
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #22
+[nl:debug|renderer] D3D12 info queue messages: 1 #23
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #23
+[nl:debug|renderer] D3D12 info queue messages: 1 #24
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #24
+[nl:debug|renderer] D3D12 info queue messages: 1 #25
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #25
+[nl:debug|renderer] D3D12 info queue messages: 1 #26
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #26
+[nl:debug|renderer] D3D12 info queue messages: 1 #27
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #27
+[nl:debug|renderer] D3D12 info queue messages: 1 #28
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #28
+[nl:debug|renderer] D3D12 info queue messages: 1 #29
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #29
+[nl:debug|renderer] D3D12 info queue messages: 1 #30
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #30
+[nl:debug|renderer] D3D12 info queue messages: 1 #31
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #31
+[nl:debug|renderer] D3D12 info queue messages: 1 #32
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #32
+[nl:debug|renderer] D3D12 info queue messages: 1 #33
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #33
+[nl:debug|renderer] D3D12 info queue messages: 1 #34
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #34
+[nl:debug|renderer] D3D12 info queue messages: 1 #35
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #35
+[nl:debug|renderer] D3D12 info queue messages: 1 #36
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #36
+[nl:debug|renderer] D3D12 info queue messages: 1 #37
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #37
+[nl:debug|renderer] D3D12 info queue messages: 1 #38
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #38
+[nl:debug|renderer] D3D12 info queue messages: 1 #39
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #39
+[nl:debug|renderer] D3D12 info queue messages: 1 #40
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #40
+[nl:debug|renderer] D3D12 info queue messages: 1 #41
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #41
+[nl:debug|renderer] D3D12 info queue messages: 1 #42
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #42
+[nl:debug|renderer] D3D12 info queue messages: 1 #43
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #43
+[nl:debug|renderer] D3D12 info queue messages: 1 #44
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #44
+[nl:debug|renderer] D3D12 info queue messages: 1 #45
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #45
+[nl:debug|renderer] D3D12 info queue messages: 1 #46
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #46
+[nl:debug|renderer] D3D12 info queue messages: 1 #47
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #47
+[nl:debug|renderer] D3D12 info queue messages: 1 #48
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #48
+[nl:debug|renderer] D3D12 info queue messages: 1 #49
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #49
+[nl:debug|renderer] D3D12 info queue messages: 1 #50
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #50
+[nl:debug|renderer] D3D12 info queue messages: 1 #51
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #51
+[nl:debug|renderer] D3D12 info queue messages: 1 #52
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #52
+[nl:debug|renderer] D3D12 info queue messages: 1 #53
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #53
+[nl:debug|renderer] D3D12 info queue messages: 1 #54
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #54
+[nl:debug|renderer] D3D12 info queue messages: 1 #55
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #55
+[nl:debug|renderer] D3D12 info queue messages: 1 #56
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #56
+[nl:debug|renderer] D3D12 info queue messages: 1 #57
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #57
+[nl:debug|renderer] D3D12 info queue messages: 1 #58
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #58
+[nl:debug|renderer] D3D12 info queue messages: 1 #59
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #59
+[nl:debug|renderer] D3D12 info queue messages: 1 #60
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #60
+[nl:debug|renderer] D3D12 info queue messages: 1 #61
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #61
+[nl:debug|renderer] D3D12 info queue messages: 1 #62
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #62
+[nl:debug|renderer] D3D12 info queue messages: 1 #63
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #63
+[nl:debug|renderer] D3D12 info queue messages: 1 #64
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #64
+[nl:debug|renderer] D3D12 info queue messages: 1 #65
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #65
+[nl:debug|renderer] D3D12 info queue messages: 1 #66
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #66
+[nl:debug|renderer] D3D12 info queue messages: 1 #67
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #67
+[nl:debug|renderer] D3D12 info queue messages: 1 #68
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #68
+[nl:debug|renderer] D3D12 info queue messages: 1 #69
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #69
+[nl:debug|renderer] D3D12 info queue messages: 1 #70
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #70
+[nl:debug|renderer] D3D12 info queue messages: 1 #71
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #71
+[nl:debug|renderer] D3D12 info queue messages: 1 #72
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #72
+[nl:debug|renderer] D3D12 info queue messages: 1 #73
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #73
+[nl:debug|renderer] D3D12 info queue messages: 1 #74
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #74
+[nl:debug|renderer] D3D12 info queue messages: 1 #75
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #75
+[nl:debug|renderer] D3D12 info queue messages: 1 #76
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #76
+[nl:debug|renderer] D3D12 info queue messages: 1 #77
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #77
+[nl:debug|renderer] D3D12 info queue messages: 1 #78
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #78
+[nl:debug|renderer] D3D12 info queue messages: 1 #79
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #79
+[nl:debug|renderer] D3D12 info queue messages: 1 #80
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #80
+[nl:debug|renderer] D3D12 info queue messages: 1 #81
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #81
+[nl:debug|renderer] D3D12 info queue messages: 1 #82
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #82
+[nl:debug|renderer] D3D12 info queue messages: 1 #83
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #83
+[nl:debug|renderer] D3D12 info queue messages: 1 #84
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #84
+[nl:debug|renderer] D3D12 info queue messages: 1 #85
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #85
+[nl:debug|renderer] D3D12 info queue messages: 1 #86
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #86
+[nl:debug|renderer] D3D12 info queue messages: 1 #87
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #87
+[nl:debug|renderer] D3D12 info queue messages: 1 #88
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #88
+[nl:debug|renderer] D3D12 info queue messages: 1 #89
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #89
+[nl:debug|renderer] D3D12 info queue messages: 1 #90
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #90
+[nl:debug|renderer] D3D12 info queue messages: 1 #91
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #91
+[nl:debug|renderer] D3D12 info queue messages: 1 #92
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #92
+[nl:debug|renderer] D3D12 info queue messages: 1 #93
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #93
+[nl:debug|renderer] D3D12 info queue messages: 1 #94
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #94
+[nl:debug|renderer] D3D12 info queue messages: 1 #95
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #95
+[nl:debug|renderer] D3D12 info queue messages: 1 #96
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #96
+[nl:debug|renderer] D3D12 info queue messages: 1 #97
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #97
+[nl:debug|renderer] D3D12 info queue messages: 1 #98
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #98
+[nl:debug|renderer] D3D12 info queue messages: 1 #99
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #99
+[nl:debug|renderer] D3D12 info queue messages: 1 #100
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #100
+[nl:debug|renderer] D3D12 info queue messages: 1 #101
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #101
+[nl:debug|renderer] D3D12 info queue messages: 1 #102
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #102
+[nl:debug|renderer] D3D12 info queue messages: 1 #103
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #103
+[nl:debug|renderer] D3D12 info queue messages: 1 #104
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #104
+[nl:debug|renderer] D3D12 info queue messages: 1 #105
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #105
+[nl:debug|renderer] D3D12 info queue messages: 1 #106
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #106
+[nl:debug|renderer] D3D12 info queue messages: 1 #107
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #107
+[nl:debug|renderer] D3D12 info queue messages: 1 #108
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #108
+[nl:debug|renderer] D3D12 info queue messages: 1 #109
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #109
+[nl:debug|renderer] D3D12 info queue messages: 1 #110
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #110
+[nl:debug|renderer] D3D12 info queue messages: 1 #111
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #111
+[nl:debug|renderer] D3D12 info queue messages: 1 #112
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #112
+[nl:debug|renderer] D3D12 info queue messages: 1 #113
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #113
+[nl:debug|renderer] D3D12 info queue messages: 1 #114
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #114
+[nl:debug|renderer] D3D12 info queue messages: 1 #115
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #115
+[nl:debug|renderer] D3D12 info queue messages: 1 #116
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #116
+[nl:debug|renderer] D3D12 info queue messages: 1 #117
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #117
+[nl:debug|renderer] D3D12 info queue messages: 1 #118
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #118
+[nl:debug|renderer] D3D12 info queue messages: 1 #119
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #119
+[nl:debug|renderer] D3D12 info queue messages: 1 #120
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #120
+[nl:debug|renderer] D3D12 info queue messages: 1 #121
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #121
+[nl:debug|renderer] D3D12 info queue messages: 1 #122
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #122
+[nl:debug|renderer] D3D12 info queue messages: 1 #123
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #123
+[nl:debug|renderer] D3D12 info queue messages: 1 #124
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #124
+[nl:debug|renderer] D3D12 info queue messages: 1 #125
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #125
+[nl:debug|renderer] D3D12 info queue messages: 1 #126
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #126
+[nl:debug|renderer] D3D12 info queue messages: 1 #127
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #127
+[nl:debug|renderer] D3D12 info queue messages: 1 #128
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #128
+[nl:debug|renderer] D3D12 info queue messages: 1 #129
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #129
+[nl:debug|renderer] D3D12 info queue messages: 1 #130
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #130
+[nl:debug|renderer] D3D12 info queue messages: 1 #131
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #131
+[nl:debug|renderer] D3D12 info queue messages: 1 #132
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #132
+[nl:debug|renderer] D3D12 info queue messages: 1 #133
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #133
+[nl:debug|renderer] D3D12 info queue messages: 1 #134
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #134
+[nl:debug|renderer] D3D12 info queue messages: 1 #135
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #135
+[nl:debug|renderer] D3D12 info queue messages: 1 #136
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #136
+[nl:debug|renderer] D3D12 info queue messages: 1 #137
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #137
+[nl:debug|renderer] D3D12 info queue messages: 1 #138
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #138
+[nl:debug|renderer] D3D12 info queue messages: 1 #139
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #139
+[nl:debug|renderer] D3D12 info queue messages: 1 #140
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #140
+[nl:debug|renderer] D3D12 info queue messages: 1 #141
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #141
+[nl:debug|renderer] D3D12 info queue messages: 1 #142
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #142
+[nl:debug|renderer] D3D12 info queue messages: 1 #143
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #143
+[nl:debug|renderer] D3D12 info queue messages: 1 #144
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #144
+[nl:debug|renderer] D3D12 info queue messages: 1 #145
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #145
+[nl:debug|renderer] D3D12 info queue messages: 1 #146
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #146
+[nl:debug|renderer] D3D12 info queue messages: 1 #147
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #147
+[nl:debug|renderer] D3D12 info queue messages: 1 #148
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #148
+[nl:debug|renderer] D3D12 info queue messages: 1 #149
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #149
+[nl:debug|renderer] D3D12 info queue messages: 1 #150
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #150
+[nl:debug|renderer] D3D12 info queue messages: 1 #151
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #151
+[nl:debug|renderer] D3D12 info queue messages: 1 #152
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #152
+[nl:debug|renderer] D3D12 info queue messages: 1 #153
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #153
+[nl:debug|renderer] D3D12 info queue messages: 1 #154
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #154
+[nl:debug|renderer] D3D12 info queue messages: 1 #155
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #155
+[nl:debug|renderer] D3D12 info queue messages: 1 #156
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #156
+[nl:debug|renderer] D3D12 info queue messages: 1 #157
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #157
+[nl:debug|renderer] D3D12 info queue messages: 1 #158
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #158
+[nl:debug|renderer] D3D12 info queue messages: 1 #159
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #159
+[nl:debug|renderer] D3D12 info queue messages: 1 #160
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #160
+[nl:debug|renderer] D3D12 info queue messages: 1 #161
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #161
+[nl:debug|renderer] D3D12 info queue messages: 1 #162
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #162
+[nl:debug|renderer] D3D12 info queue messages: 1 #163
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #163
+[nl:debug|renderer] D3D12 info queue messages: 1 #164
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #164
+[nl:debug|renderer] D3D12 info queue messages: 1 #165
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #165
+[nl:debug|renderer] D3D12 info queue messages: 1 #166
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #166
+[nl:debug|renderer] D3D12 info queue messages: 1 #167
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #167
+[nl:debug|renderer] D3D12 info queue messages: 1 #168
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #168
+[nl:debug|renderer] D3D12 info queue messages: 1 #169
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #169
+[nl:debug|renderer] D3D12 info queue messages: 1 #170
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #170
+[nl:debug|renderer] D3D12 info queue messages: 1 #171
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #171
+[nl:debug|renderer] D3D12 info queue messages: 1 #172
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #172
+[nl:debug|renderer] D3D12 info queue messages: 1 #173
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #173
+[nl:debug|renderer] D3D12 info queue messages: 1 #174
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #174
+[nl:debug|renderer] D3D12 info queue messages: 1 #175
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #175
+[nl:debug|renderer] D3D12 info queue messages: 1 #176
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #176
+[nl:debug|renderer] D3D12 info queue messages: 1 #177
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #177
+[nl:debug|renderer] D3D12 info queue messages: 1 #178
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #178
+[nl:debug|renderer] D3D12 info queue messages: 1 #179
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #179
+[nl:debug|renderer] D3D12 info queue messages: 1 #180
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #180
+[nl:debug|renderer] D3D12 info queue messages: 1 #181
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #181
+[nl:debug|renderer] D3D12 info queue messages: 1 #182
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #182
+[nl:debug|renderer] D3D12 info queue messages: 1 #183
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #183
+[nl:debug|renderer] D3D12 info queue messages: 1 #184
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #184
+[nl:debug|renderer] D3D12 info queue messages: 1 #185
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #185
+[nl:debug|renderer] D3D12 info queue messages: 1 #186
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #186
+[nl:debug|renderer] D3D12 info queue messages: 1 #187
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #187
+[nl:debug|renderer] D3D12 info queue messages: 1 #188
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #188
+[nl:debug|renderer] D3D12 info queue messages: 1 #189
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #189
+[nl:debug|renderer] D3D12 info queue messages: 1 #190
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #190
+[nl:debug|renderer] D3D12 info queue messages: 1 #191
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #191
+[nl:debug|renderer] D3D12 info queue messages: 1 #192
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #192
+[nl:debug|renderer] D3D12 info queue messages: 1 #193
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #193
+[nl:debug|renderer] D3D12 info queue messages: 1 #194
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #194
+[nl:debug|renderer] D3D12 info queue messages: 1 #195
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #195
+[nl:debug|renderer] D3D12 info queue messages: 1 #196
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #196
+[nl:debug|renderer] D3D12 info queue messages: 1 #197
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #197
+[nl:debug|renderer] D3D12 info queue messages: 1 #198
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #198
+[nl:debug|renderer] D3D12 info queue messages: 1 #199
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #199
+[nl:debug|renderer] D3D12 info queue messages: 1 #200
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #200
+[nl:debug|renderer] D3D12 info queue messages: 1 #201
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #201
+[nl:debug|renderer] D3D12 info queue messages: 1 #202
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #202
+[nl:debug|renderer] D3D12 info queue messages: 1 #203
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #203
+[nl:debug|renderer] D3D12 info queue messages: 1 #204
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #204
+[nl:debug|renderer] D3D12 info queue messages: 1 #205
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #205
+[nl:debug|renderer] D3D12 info queue messages: 1 #206
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #206
+[nl:debug|renderer] D3D12 info queue messages: 1 #207
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #207
+[nl:debug|renderer] D3D12 info queue messages: 1 #208
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #208
+[nl:debug|renderer] D3D12 info queue messages: 1 #209
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #209
+[nl:debug|renderer] D3D12 info queue messages: 1 #210
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #210
+[nl:debug|renderer] D3D12 info queue messages: 1 #211
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #211
+[nl:debug|renderer] D3D12 info queue messages: 1 #212
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #212
+[nl:debug|renderer] D3D12 info queue messages: 1 #213
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #213
+[nl:debug|renderer] D3D12 info queue messages: 1 #214
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #214
+[nl:debug|renderer] D3D12 info queue messages: 1 #215
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #215
+[nl:debug|renderer] D3D12 info queue messages: 1 #216
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #216
+[nl:debug|renderer] D3D12 info queue messages: 1 #217
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #217
+[nl:debug|renderer] D3D12 info queue messages: 1 #218
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #218
+[nl:debug|renderer] D3D12 info queue messages: 1 #219
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #219
+[nl:debug|renderer] D3D12 info queue messages: 1 #220
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #220
+[nl:debug|renderer] D3D12 info queue messages: 1 #221
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #221
+[nl:debug|renderer] D3D12 info queue messages: 1 #222
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #222
+[nl:debug|renderer] D3D12 info queue messages: 1 #223
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #223
+[nl:debug|renderer] D3D12 info queue messages: 1 #224
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #224
+[nl:debug|renderer] D3D12 info queue messages: 1 #225
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #225
+[nl:debug|renderer] D3D12 info queue messages: 1 #226
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #226
+[nl:debug|renderer] D3D12 info queue messages: 1 #227
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #227
+[nl:debug|renderer] D3D12 info queue messages: 1 #228
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #228
+[nl:debug|renderer] D3D12 info queue messages: 1 #229
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #229
+[nl:debug|renderer] D3D12 info queue messages: 1 #230
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #230
+[nl:debug|renderer] D3D12 info queue messages: 1 #231
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #231
+[nl:debug|renderer] D3D12 info queue messages: 1 #232
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #232
+[nl:debug|renderer] D3D12 info queue messages: 1 #233
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #233
+[nl:debug|renderer] D3D12 info queue messages: 1 #234
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #234
+[nl:debug|renderer] D3D12 info queue messages: 1 #235
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #235
+[nl:debug|renderer] D3D12 info queue messages: 1 #236
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #236
+[nl:debug|renderer] D3D12 info queue messages: 1 #237
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #237
+[nl:debug|renderer] D3D12 info queue messages: 1 #238
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #238
+[nl:debug|renderer] D3D12 info queue messages: 1 #239
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #239
+[nl:debug|renderer] D3D12 info queue messages: 1 #240
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #240
+[nl:debug|renderer] D3D12 info queue messages: 1 #241
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #241
+[nl:debug|renderer] D3D12 info queue messages: 1 #242
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #242
+[nl:debug|renderer] D3D12 info queue messages: 1 #243
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #243
+[nl:debug|renderer] D3D12 info queue messages: 1 #244
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #244
+[nl:debug|renderer] D3D12 info queue messages: 1 #245
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #245
+[nl:debug|renderer] D3D12 info queue messages: 1 #246
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #246
+[nl:debug|renderer] D3D12 info queue messages: 1 #247
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #247
+[nl:debug|renderer] D3D12 info queue messages: 1 #248
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #248
+[nl:debug|renderer] D3D12 info queue messages: 1 #249
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #249
+[nl:debug|renderer] D3D12 info queue messages: 1 #250
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #250
+[nl:debug|renderer] D3D12 info queue messages: 1 #251
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #251
+[nl:debug|renderer] D3D12 info queue messages: 1 #252
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #252
+[nl:debug|renderer] D3D12 info queue messages: 1 #253
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #253
+[nl:debug|renderer] D3D12 info queue messages: 1 #254
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #254
+[nl:debug|renderer] D3D12 info queue messages: 1 #255
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #255
+[nl:debug|renderer] D3D12 info queue messages: 1 #256
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #256
+[nl:debug|renderer] D3D12 info queue messages: 1 #257
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #257
+[nl:debug|renderer] D3D12 info queue messages: 1 #258
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #258
+[nl:debug|renderer] D3D12 info queue messages: 1 #259
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #259
+[nl:debug|renderer] D3D12 info queue messages: 1 #260
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #260
+[nl:debug|renderer] D3D12 info queue messages: 1 #261
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #261
+[nl:debug|renderer] D3D12 info queue messages: 1 #262
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #262
+[nl:debug|renderer] D3D12 info queue messages: 1 #263
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #263
+[nl:debug|renderer] D3D12 info queue messages: 1 #264
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #264
+[nl:debug|renderer] D3D12 info queue messages: 1 #265
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #265
+[nl:debug|renderer] D3D12 info queue messages: 1 #266
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #266
+[nl:debug|renderer] D3D12 info queue messages: 1 #267
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #267
+[nl:debug|renderer] D3D12 info queue messages: 1 #268
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #268
+[nl:debug|renderer] D3D12 info queue messages: 1 #269
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #269
+[nl:debug|renderer] D3D12 info queue messages: 1 #270
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #270
+[nl:debug|renderer] D3D12 info queue messages: 1 #271
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #271
+[nl:debug|renderer] D3D12 info queue messages: 1 #272
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #272
+[nl:debug|renderer] D3D12 info queue messages: 1 #273
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #273
+[nl:debug|renderer] D3D12 info queue messages: 1 #274
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #274
+[nl:debug|renderer] D3D12 info queue messages: 1 #275
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #275
+[nl:debug|renderer] D3D12 info queue messages: 1 #276
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #276
+[nl:debug|renderer] D3D12 info queue messages: 1 #277
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #277
+[nl:debug|renderer] D3D12 info queue messages: 1 #278
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #278
+[nl:debug|renderer] D3D12 info queue messages: 1 #279
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #279
+[nl:debug|renderer] D3D12 info queue messages: 1 #280
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #280
+[nl:debug|renderer] D3D12 info queue messages: 1 #281
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #281
+[nl:debug|renderer] D3D12 info queue messages: 1 #282
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #282
+[nl:debug|renderer] D3D12 info queue messages: 1 #283
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #283
+[nl:debug|renderer] D3D12 info queue messages: 1 #284
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #284
+[nl:debug|renderer] D3D12 info queue messages: 1 #285
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #285
+[nl:debug|renderer] D3D12 info queue messages: 1 #286
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #286
+[nl:debug|renderer] D3D12 info queue messages: 1 #287
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #287
+[nl:debug|renderer] D3D12 info queue messages: 1 #288
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #288
+[nl:debug|renderer] D3D12 info queue messages: 1 #289
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #289
+[nl:debug|renderer] D3D12 info queue messages: 1 #290
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #290
+[nl:debug|renderer] D3D12 info queue messages: 1 #291
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #291
+[nl:debug|renderer] D3D12 info queue messages: 1 #292
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #292
+[nl:debug|renderer] D3D12 info queue messages: 1 #293
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #293
+[nl:debug|renderer] D3D12 info queue messages: 1 #294
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #294
+[nl:debug|renderer] D3D12 info queue messages: 1 #295
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #295
+[nl:debug|renderer] D3D12 info queue messages: 1 #296
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #296
+[nl:debug|renderer] D3D12 info queue messages: 1 #297
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #297
+[nl:debug|renderer] D3D12 info queue messages: 1 #298
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #298
+[nl:debug|renderer] D3D12 info queue messages: 1 #299
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #299
+[nl:debug|renderer] D3D12 info queue messages: 1 #300
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #300
+[nl:debug|renderer] D3D12 info queue messages: 1 #301
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #301
+[nl:debug|renderer] D3D12 info queue messages: 1 #302
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #302
+[nl:debug|renderer] D3D12 info queue messages: 1 #303
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #303
+[nl:debug|renderer] D3D12 info queue messages: 1 #304
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #304
+[nl:debug|renderer] D3D12 info queue messages: 1 #305
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #305
+[nl:debug|renderer] D3D12 info queue messages: 1 #306
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #306
+[nl:debug|renderer] D3D12 info queue messages: 1 #307
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #307
+[nl:debug|renderer] D3D12 info queue messages: 1 #308
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #308
+[nl:debug|renderer] D3D12 info queue messages: 1 #309
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #309
+[nl:debug|renderer] D3D12 info queue messages: 1 #310
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #310
+[nl:debug|renderer] D3D12 info queue messages: 1 #311
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #311
+[nl:debug|renderer] D3D12 info queue messages: 1 #312
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #312
+[nl:debug|renderer] D3D12 info queue messages: 1 #313
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #313
+[nl:debug|renderer] D3D12 info queue messages: 1 #314
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #314
+[nl:debug|renderer] D3D12 info queue messages: 1 #315
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #315
+[nl:debug|renderer] D3D12 info queue messages: 1 #316
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #316
+[nl:debug|renderer] D3D12 info queue messages: 1 #317
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #317
+[nl:debug|renderer] D3D12 info queue messages: 1 #318
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #318
+[nl:debug|renderer] D3D12 info queue messages: 1 #319
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #319
+[nl:debug|renderer] D3D12 info queue messages: 1 #320
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #320
+[nl:debug|renderer] D3D12 info queue messages: 1 #321
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #321
+[nl:debug|renderer] D3D12 info queue messages: 1 #322
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #322
+[nl:debug|renderer] D3D12 info queue messages: 1 #323
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #323
+[nl:debug|renderer] D3D12 info queue messages: 1 #324
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #324
+[nl:debug|renderer] D3D12 info queue messages: 1 #325
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #325
+[nl:debug|renderer] D3D12 info queue messages: 1 #326
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #326
+[nl:debug|renderer] D3D12 info queue messages: 1 #327
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #327
+[nl:debug|renderer] D3D12 info queue messages: 1 #328
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #328
+[nl:debug|renderer] D3D12 info queue messages: 1 #329
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #329
+[nl:debug|renderer] D3D12 info queue messages: 1 #330
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #330
+[nl:debug|renderer] D3D12 info queue messages: 1 #331
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #331
+[nl:debug|renderer] D3D12 info queue messages: 1 #332
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #332
+[nl:debug|renderer] D3D12 info queue messages: 1 #333
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #333
+[nl:debug|renderer] D3D12 info queue messages: 1 #334
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #334
+[nl:debug|renderer] D3D12 info queue messages: 1 #335
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #335
+[nl:debug|renderer] D3D12 info queue messages: 1 #336
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #336
+[nl:debug|renderer] D3D12 info queue messages: 1 #337
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #337
+[nl:debug|renderer] D3D12 info queue messages: 1 #338
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #338
+[nl:debug|renderer] D3D12 info queue messages: 1 #339
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #339
+[nl:debug|renderer] D3D12 info queue messages: 1 #340
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #340
+[nl:debug|renderer] D3D12 info queue messages: 1 #341
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #341
+[nl:debug|renderer] D3D12 info queue messages: 1 #342
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #342
+[nl:debug|renderer] D3D12 info queue messages: 1 #343
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #343
+[nl:debug|renderer] D3D12 info queue messages: 1 #344
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #344
+[nl:debug|renderer] D3D12 info queue messages: 1 #345
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #345
+[nl:debug|renderer] D3D12 info queue messages: 1 #346
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #346
+[nl:debug|renderer] D3D12 info queue messages: 1 #347
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #347
+[nl:debug|renderer] D3D12 info queue messages: 1 #348
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #348
+[nl:debug|renderer] D3D12 info queue messages: 1 #349
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #349
+[nl:debug|renderer] D3D12 info queue messages: 1 #350
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #350
+[nl:debug|renderer] D3D12 info queue messages: 1 #351
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #351
+[nl:debug|renderer] D3D12 info queue messages: 1 #352
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #352
+[nl:debug|renderer] D3D12 info queue messages: 1 #353
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #353
+[nl:debug|renderer] D3D12 info queue messages: 1 #354
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #354
+[nl:debug|renderer] D3D12 info queue messages: 1 #355
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #355
+[nl:debug|renderer] D3D12 info queue messages: 1 #356
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #356
+[nl:debug|renderer] D3D12 info queue messages: 1 #357
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #357
+[nl:debug|renderer] D3D12 info queue messages: 1 #358
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #358
+[nl:debug|renderer] D3D12 info queue messages: 1 #359
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #359
+[nl:debug|renderer] D3D12 info queue messages: 1 #360
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #360
+[nl:debug|renderer] D3D12 info queue messages: 1 #361
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #361
+[nl:debug|renderer] D3D12 info queue messages: 1 #362
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #362
+[nl:debug|renderer] D3D12 info queue messages: 1 #363
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #363
+[nl:debug|renderer] D3D12 info queue messages: 1 #364
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #364
+[nl:debug|renderer] D3D12 info queue messages: 1 #365
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #365
+[nl:debug|renderer] D3D12 info queue messages: 1 #366
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #366
+[nl:debug|renderer] D3D12 info queue messages: 1 #367
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #367
+[nl:debug|renderer] D3D12 info queue messages: 1 #368
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #368
+[nl:debug|renderer] D3D12 info queue messages: 1 #369
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #369
+[nl:debug|renderer] D3D12 info queue messages: 1 #370
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #370
+[nl:debug|renderer] D3D12 info queue messages: 1 #371
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #371
+[nl:debug|renderer] D3D12 info queue messages: 1 #372
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #372
+[nl:debug|renderer] D3D12 info queue messages: 1 #373
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #373
+[nl:debug|renderer] D3D12 info queue messages: 1 #374
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #374
+[nl:debug|renderer] D3D12 info queue messages: 1 #375
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #375
+[nl:debug|renderer] D3D12 info queue messages: 1 #376
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #376
+[nl:debug|renderer] D3D12 info queue messages: 1 #377
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #377
+[nl:debug|renderer] D3D12 info queue messages: 1 #378
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #378
+[nl:debug|renderer] D3D12 info queue messages: 1 #379
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #379
+[nl:debug|renderer] D3D12 info queue messages: 1 #380
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #380
+[nl:debug|renderer] D3D12 info queue messages: 1 #381
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #381
+[nl:debug|renderer] D3D12 info queue messages: 1 #382
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #382
+[nl:debug|renderer] D3D12 info queue messages: 1 #383
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #383
+[nl:debug|renderer] D3D12 info queue messages: 1 #384
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #384
+[nl:info|viewer] screenshot written: example/s11-bounce/seq/pre-ON-f384.png #384
+[nl:info|viewer] shutdown ok (frames=384 screenshots=1 deviceErrors=0) #384
+[nl:info|viewer] frame timing: avg 1.27285 ms  max 53.5055 ms  over 384 frames (unthrottled) #384
+[nl:info|viewer] gpu timing: avg 0.152505 ms over 383 resolved frames (NVRHI timer) #384
+[nl:info] window destroyed #384

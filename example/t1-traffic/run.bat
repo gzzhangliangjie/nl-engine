@@ -40,8 +40,8 @@ if errorlevel 1 ( echo [ERROR] expected 4 signal nodes & exit /b 1 )
 findstr /C:"locked end  : 0" "%D%sim-signal.log" >nul
 if errorlevel 1 ( echo [ERROR] expected zero locks held at end & exit /b 1 )
 
-echo === sim real city 32 cars (49 lock-only nodes) + final-frame png ===
-"%EXE%" sim "%CITY%" --cars 32 --frames 1800 --png "%D%city-sim.png" > "%D%sim-city.log" 2>&1
+echo === sim real city 32 cars (--no-signals pins 49 lock-only nodes) ===
+"%EXE%" sim "%CITY%" --no-signals --cars 32 --frames 1800 --png "%D%city-sim.png" > "%D%sim-city.log" 2>&1
 if errorlevel 1 (
     type "%D%sim-city.log"
     echo [ERROR] city sim FAILED
@@ -51,6 +51,8 @@ type "%D%sim-city.log"
 rem M-T2 note: locked-end semantics now counts in-transit holders too
 rem (deadlock = stalled holder, guarded inside the tool exit code).
 rem Anchor on deterministic distance instead.
+findstr /C:"signals     : 49 (lock-only 49 / signal 0)" "%D%sim-city.log" >nul
+if errorlevel 1 ( echo [ERROR] expected lock-only 49 & exit /b 1 )
 findstr /C:"distance    : 646.9 m" "%D%sim-city.log" >nul
 if errorlevel 1 ( echo [ERROR] expected distance 646.9 m & exit /b 1 )
 

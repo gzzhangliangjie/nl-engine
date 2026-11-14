@@ -988,7 +988,7 @@ int usage() {
                  "  traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>\n"
                  "  traffic-tools lanes <roadnet.json> --png out.png [--size WxH]\n"
                  "  traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]\n"
-                 "                                    [--loop] [--actuated]\n"
+                 "                                    [--loop] [--actuated] [--no-signals]\n"
                  "  traffic-tools selftest [--emit-fixture path]\n"
                  "  traffic-tools help\n");
     return 2;
@@ -1169,7 +1169,7 @@ int main(int argc, char** argv) {
         if (argc < 3) return usage();
         const std::string roadnetPath = argv[2];
         int nCars = 4, frames = 600;
-        bool loopMode = false, actuated = false;
+        bool loopMode = false, actuated = false, noSignals = false;
         std::string pngPath;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--cars") == 0 && i + 1 < argc) {
@@ -1182,6 +1182,8 @@ int main(int argc, char** argv) {
                 loopMode = true;
             } else if (std::strcmp(argv[i], "--actuated") == 0) { // M-T2.1 gap-out 2s
                 actuated = true;
+            } else if (std::strcmp(argv[i], "--no-signals") == 0) { // M-T4.1 钉 lock-only 基线
+                noSignals = true;
             } else {
                 return usage();
             }
@@ -1213,6 +1215,9 @@ int main(int argc, char** argv) {
         if (actuated) // M-T2.1：全信号节点开 gap-out 2s（phases 契约的 CLI 等价位）
             for (nl::traffic::NodeControl& n : ctrl.nodes)
                 if (n.signal) n.gapOutS = 2.0f;
+        if (noSignals) // M-T4.1：夹具 signal 位整体压回 lock-only（信号恒绿，仅占用锁）
+            for (nl::traffic::NodeControl& n : ctrl.nodes) // —— citygen signal 填充
+                n.signal = false;                           // （§12.5）后 t1/t2 城市卡保 M-T1/T2 基线语义
         nl::traffic::TrafficSim sim;
         sim.graph = &g;
         sim.control = &ctrl; // M-T1：路口控制面（信号相位 + 占用锁）默认挂接

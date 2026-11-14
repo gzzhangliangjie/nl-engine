@@ -19,6 +19,7 @@ traffic-tools build <roadnet.json> [--dump out.json] [--stats]   # lane graph �
 traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>  # A* 寻路（edgeId = CityCar.edgeId 溯源语义）
 traffic-tools lanes <roadnet.json> --png out.png [--size WxH]    # 车道线 PNG（纯 CPU 光栅化）
 traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]  # 跟车仿真 + 车流终帧 PNG
+                                            [--loop] [--actuated] [--no-signals]          # 环线 / gap-out / 钉 lock-only
 traffic-tools selftest [--emit-fixture path] [--verbose]         # 3693 断言数值锚
 ```
 
@@ -164,3 +165,12 @@ ECS 写回（init 车数/route 落表/N tick Transform 落 lane 几何 + yaw 单
 - 信号生效证据：600 逻辑 tick odometer **82.72m 停滞**（M-T3 未挂接对照 3437m）——42 车红灯首尾相接排队街景可辨；168 盏 signal_post 灯箱红/绿异态（俯视+街景四图）。
 - 回归与 ctest：见 MILESTONES M-T4 台账（收口数字）。
 - 纠偏留痕：摆件方案时「42 节点受控」表述有误——size 6 全部 49 节点进入边 >= 2（角 2/边 3/内 4），受控 49、灯 168 = Σ进入边。
+
+### 10.6 整轨 merge 后重跑与 --no-signals 修复（M-T4.1，2026-11-14）
+
+`feat/worldgen` 整轨 merge master（`1e8f4e1` no-ff）后按 S13 教训重跑该轨全部 14 卡，两类问题被机械闸拦下：
+
+1. **w2-m0/w3-m0 selftest 锚陈旧**：citygen selftest 97 -> 98（§10.4 的 +1 断言本节已记录，但 cases.json 卡锚没同步、M-T4 收口回归只跑 t 卡没跑到）——补锚后 8/8 全 bytes。
+2. **t1/t2 sim-city 契约碰撞**：`w0-m0/generate` 案例每次回归都重生成 w0-m0/roadnet.json，§10.4 signal 填充后夹具 49 节点全 signal=true，t1/t2 城市卡「signal 位全 false = lock-only」前提失效（信号一亮 32 车停等，distance 崩到 186.9m/600f）。修复（用户拍板 A1）：traffic-tools sim 新增 **`--no-signals`**（契约只加不减；post-build 把夹具 signal 位整体压回 lock-only，同 `--actuated` 的 CLI 等价位模式）——t1/t2 命令显式钉死 M-T1/M-T2 吞吐基线语义，锚 646.9m / arrived 17/32 零改动，run.bat 加 `lock-only 49 / signal 0` 锚；信号路径仍由 sim-signal/gapout 夹具卡演示。零 core 改动，selftest 5244 不变。
+
+**终闸（merge 后全轨重跑）**：14 卡 108/108 全 bytes ALL GREEN + ctest 164/164 双后端 + t1/t2 run.bat verify ALL GREEN。

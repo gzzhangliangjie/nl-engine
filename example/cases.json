@@ -12580,7 +12580,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "citygen selftest: PASS (97 assertions)",
+     "expectLog": "citygen selftest: PASS (98 assertions)",
      "command": "city-tools selftest --verbose"
     },
     {
@@ -12740,7 +12740,7 @@
       "--verbose"
      ],
      "expectExit": 0,
-     "expectLog": "citygen selftest: PASS (97 assertions)",
+     "expectLog": "citygen selftest: PASS (98 assertions)",
      "command": "city-tools selftest --verbose"
     },
     {
@@ -12942,10 +12942,11 @@
      "id": "sim",
      "name": "sim：真实城市 32 车跟车 30s + 车流终帧 PNG",
      "kind": "tool",
-     "note": "seed 12345 城市 168 lanes，确定性派车（每边首车道出发 A* 到对侧，不可达回落单车道），固定 dt=1/60；city-sim.png = 灰车道线 + 红点车流终帧（工具真实输出）。",
+     "note": "seed 12345 城市 168 lanes，确定性派车（每边首车道出发 A* 到对侧，不可达回落单车道），固定 dt=1/60；city-sim.png = 灰车道线 + 红点车流终帧（工具真实输出）。；M-T4.1：citygen signal 填充后夹具带 49 signal 位，本卡显式 --no-signals 钉 lock-only 基线（M-T0 跟车语义），信号路径由 t1 sim-signal 夹具卡演示。",
      "args": [
       "sim",
       "{root}/example/w0-m0/roadnet.json",
+      "--no-signals",
       "--cars",
       "32",
       "--frames",
@@ -13043,10 +13044,11 @@
      "id": "sim-city",
      "name": "sim：真实城市 32 车（49 lock-only 节点）+ 跨路段互斥扫描",
      "kind": "tool",
-     "note": "城市 signal 位全 false = lock-only 占用锁 + M-T2 组共享并行（吞吐 17/32 / 646.9m，M-T1 基线 7/32 / 475.5m）；死锁守卫内建于退出码（停滞持锁 = 退出 1）；citygen signal 恒 false，信号路径由夹具卡演示。",
+     "note": "城市 signal 位全 false = lock-only 占用锁 + M-T2 组共享并行（吞吐 17/32 / 646.9m，M-T1 基线 7/32 / 475.5m）；死锁守卫内建于退出码（停滞持锁 = 退出 1）；citygen signal 恒 false，信号路径由夹具卡演示。；M-T4.1：citygen signal 填充（§12.5）后 w0-m0 夹具带 49 signal 位，本卡显式 --no-signals 钉 lock-only 基线语义（M-T1/T2 吞吐证据不变），信号路径由 sim-signal/gapout 夹具卡演示。",
      "args": [
       "sim",
       "{root}/example/w0-m0/roadnet.json",
+      "--no-signals",
       "--cars",
       "32",
       "--frames",
@@ -13144,10 +13146,11 @@
      "id": "sim-city",
      "name": "sim：真实城市 32 车（组共享锁并行吞吐 +143%）",
      "kind": "tool",
-     "note": "49 lock-only 节点组锁：arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m）；对向共线车道豁免口径（精确反向 + 共线 0.75m）修正后 min gap 1.35m；停滞持锁死锁守卫内建退出码。",
+     "note": "49 lock-only 节点组锁：arrived 17/32 / 646.9m（M-T1 基线 7/32 / 475.5m）；对向共线车道豁免口径（精确反向 + 共线 0.75m）修正后 min gap 1.35m；停滞持锁死锁守卫内建退出码。；M-T4.1：citygen signal 填充（§12.5）后 w0-m0 夹具带 49 signal 位，本卡显式 --no-signals 钉 lock-only 基线语义（M-T1/T2 吞吐证据不变），信号路径由 sim-signal/gapout 夹具卡演示。",
      "args": [
       "sim",
       "{root}/example/w0-m0/roadnet.json",
+      "--no-signals",
       "--cars",
       "32",
       "--frames",

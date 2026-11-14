@@ -44,14 +44,16 @@ if errorlevel 1 (
 )
 type "%D%path.log"
 
-echo === sim real city 32 cars 1800 frames + traffic png ===
-"%EXE%" sim "%CITY%" --cars 32 --frames 1800 --png "%D%city-sim.png" > "%D%sim.log" 2>&1
+echo === sim real city 32 cars (--no-signals pins lock-only baseline) ===
+"%EXE%" sim "%CITY%" --no-signals --cars 32 --frames 1800 --png "%D%city-sim.png" > "%D%sim.log" 2>&1
 if errorlevel 1 (
     type "%D%sim.log"
     echo [ERROR] sim FAILED
     exit /b 1
 )
 type "%D%sim.log"
+findstr /C:"signals     : 49 (lock-only 49 / signal 0)" "%D%sim.log" >nul
+if errorlevel 1 ( echo [ERROR] expected lock-only 49 & exit /b 1 )
 
 echo === lanes real city png ===
 "%EXE%" lanes "%CITY%" --png "%D%city-lanes.png" > "%D%lanes.log" 2>&1

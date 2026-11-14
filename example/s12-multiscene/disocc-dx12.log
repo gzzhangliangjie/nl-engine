@@ -1,0 +1,3 @@
+[s12-multiscene] disocc masked frac=0.0851 (705731/8294400 px)
+[s12-multiscene] masked meanMAE(on,single)=15.312 meanMAE(off,single)=20.653 ratio=0.741 (limit 0.950)
+[s12-multiscene] OK: rejection layer preserves edges in disocclusion regions (ON tracks no-history baseline)

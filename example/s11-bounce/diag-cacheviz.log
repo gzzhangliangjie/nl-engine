@@ -1,0 +1,57 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|scene] blas built: Suzanne-materials.nmesh | vertices=96 triangles=104 (build ms via GPU timer)
+[nl:info|scene] tlas created: maxInstances=16 | per-frame full rebuild (UE D-S8-1)
+[nl:info|scene] cull (vertex pulling) scene ready: Suzanne-materials.nmesh | meshlets=711 | triangles=11808 | stride=63 | frustum=off | shader=dxil
+[nl:info|scene] visbuf material resolve ready: Suzanne-materials.glb | materials=3 | baseColor 1024x1024 | shader=dxil
+[nl:info|scene] probe scene ready (velocity prepass + 4-level cascade placement, viz dots) | shader=dxil
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer (Windows SDK) + NVRHI validation | swapchain 960x540
+[nl:info|viewer] backend: dx12 | NVIDIA GeForce RTX 4060 Laptop GPU
+[nl:info|viewer] debug layer: D3D12 Debug Layer (Windows SDK) + NVRHI validation | active=yes
+[nl:info|viewer] mode: cache-viz | HUD: off | shading: textured | case: drag=orbit, wheel=zoom, C=culling, V=wire, N=shading, R=reset, SPACE=clear, F12=PNG
+[nl:info|viewer] screenshot mode: 16 frames -> E:\UE_STUDY_2026\nl-engine\example\s11-bounce\diag-cacheviz.png | cull=back | hud=off
+[nl:info|scene] tlas: per-frame rebuild active | instances=1 #1
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path) #1
+[nl:info|scene] probe: cascades=4 base=16 grid=16/8/4/2 probes=340 oct=8 raysPerProbe=64 #1
+[nl:info|scene] cache: flat hashmap active (262144 slots, lifetime 10, cell 0.5m, probe steps 3 -- Q11-0 plan A; M11.1 update+blend on) #1
+[nl:info|scene] cache: viz compose dispatch 960x540 hdr=ok set=ok #1
+[nl:debug|renderer] D3D12 info queue messages: 1 #1
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #1
+[nl:info|renderer] gpu timer resolved [frame]: 0.813056 ms (first successful NVRHI timestamp query) #2
+[nl:info|scene] probe: M11.2 bounce gate=1 cacheFrame=1 lightScale=1 #2
+[nl:debug|renderer] D3D12 info queue messages: 1 #2
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #2
+[nl:debug|renderer] D3D12 info queue messages: 1 #3
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #3
+[nl:debug|renderer] D3D12 info queue messages: 1 #4
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #4
+[nl:debug|renderer] D3D12 info queue messages: 1 #5
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #5
+[nl:debug|renderer] D3D12 info queue messages: 1 #6
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #6
+[nl:debug|renderer] D3D12 info queue messages: 1 #7
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #7
+[nl:debug|renderer] D3D12 info queue messages: 1 #8
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #8
+[nl:debug|renderer] D3D12 info queue messages: 1 #9
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #9
+[nl:debug|renderer] D3D12 info queue messages: 1 #10
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #10
+[nl:debug|renderer] D3D12 info queue messages: 1 #11
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #11
+[nl:debug|renderer] D3D12 info queue messages: 1 #12
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #12
+[nl:debug|renderer] D3D12 info queue messages: 1 #13
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #13
+[nl:debug|renderer] D3D12 info queue messages: 1 #14
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #14
+[nl:debug|renderer] D3D12 info queue messages: 1 #15
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #15
+[nl:debug|renderer] D3D12 info queue messages: 1 #16
+[nl:debug|renderer] D3D12: ID3D12CommandList::ClearRenderTargetView: The clear values do not match those passed to resource creation. The clear operation is typically slower as a result; but will still clear to the desired value. #16
+[nl:info|viewer] screenshot written: example/s11-bounce/diag-cacheviz.png #16
+[nl:info|viewer] shutdown ok (frames=16 screenshots=1 deviceErrors=0) #16
+[nl:info|viewer] frame timing: avg 4.03408 ms  max 50.3439 ms  over 16 frames (unthrottled) #16
+[nl:info|viewer] gpu timing: avg 0.268425 ms over 15 resolved frames (NVRHI timer) #16
+[nl:info] window destroyed #16

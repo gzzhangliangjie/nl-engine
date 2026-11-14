@@ -3741,4 +3741,4 @@
 6. **42 vs 49 受控节点**：摆方案时把车数 42 误当受控节点数——size 6 全部 49 节点进入边>=2（角 2/边 3/内 4），灯 168 = Σ进入边。已在 GUIDE §10.5 纠偏留痕。
 7. CMakeLists/traffic-tools patch 三遇 CRLF 坑（\n vs \r\n 匹配失败）——python patch 一律先探文件行尾。
 
-**下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。
+**下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。（**2026-11-14 15:1x 已整轨 merge 回 master（`1e8f4e1` no-ff，用户拍板「先合一波」）：W0~W3 + T0 五里程碑全量并入；4 处冲突全为台账并集型（.gitignore 双规则 / 共享 memory 日志 / MILESTONES 双边段落 / PARALLEL-TRACKS 天气+worldgen 行）。merge 后按 S13 教训重跑该轨 14 卡，机械闸拦下两类 M-T4 遗留：① w2/w3 citygen selftest 锚 97->98 未同步；② t1/t2 sim-city 契约碰撞——w0-m0/generate 每次回归重写夹具（signal 填充后 49 节点全 signal=true），lock-only 前提失效、646.9m 锚必挂——用户拍板 A1 加 `--no-signals` 旗标（零 core 改动，selftest 5244 不变），t1/t2 显式钉 lock-only 基线。修复后终闸：14 卡 108/108 全 bytes + ctest 164/164 双后端 + 双后端 BUILD OK + t1/t2 run.bat verify ALL GREEN；tag `traffic-done` + 分支 `milestone/traffic-done`。详 GUIDE §10.6**）
