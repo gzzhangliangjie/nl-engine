@@ -1,47 +1,44 @@
 # nl-engine 项目长期约定
 
-> 铁律权威落点：根 `AGENTS.md`；台账 `docs/MILESTONES.md`；并行轨道 `docs/PARALLEL-TRACKS.md`。各里程碑决策详对应 `docs/*/S*-PLAN.md` 与各 PLAN 文档。本文件只记「AGENTS.md 没写、但容易忘」的不变量与当前状态。
+> 铁律权威落点：根 `AGENTS.md`；台账 `docs/MILESTONES.md`（每里程碑四栏 + 踩坑，过程细节查这里）；并行轨道 `docs/PARALLEL-TRACKS.md`。本文件只记「AGENTS.md 没写、但容易忘」的不变量与当前状态。
 
 ## 本机环境
-- VS2022 MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版 `E:\UE_STUDY_2026\.build-tools\`。NMake 构建 `scripts/build-m0.2.bat DX12|VULKAN`；同秒 mtime 跳重链 → 删 exe 强制重链；**改 `.slang` 后必须删两棵 `build/{DX12,VULKAN}/viewer.exe` 再重链**，否则 regression exe 过期门禁拒绝出报告。裸 Git Bash configure 报 nmake not found = 环境三件套没 export，照抄 build bat 头部。
-- ctest 快进程随机丢 stdout（非回归）→ 统一 `--repeat until-pass:3`；0xC0000409 = ArmouryCrate 生态。missing anchor 先重跑再定性。
-- Bash cwd 不跨命令 → 一律 `git -C <wt>` / 绝对路径。GitHub 直连断；nl-engine 无 remote，tag/分支只落本地。
-- **构建/ctest/回归统一入口 `scripts/wt.bat <track> build|ctest|regression|clean`（2026-11-13 拍板 C+B）**：track 名显式定树，cwd 无关；`clean [DX12|VULKAN|all]` 删目标树 `build/<backend>/viewer.exe+nanite-tools.exe`——**删构建产物禁止裸 rm 相对路径**；`build-m0.2.bat` 内接 `tools/wt_gate.py`（非注册活跃 wt 拒跑 exit 3；主仓构建须显式 `set NL_BUILD_MAINREPO=1`）。cmd bat 三坑入档：① `shift` 会顶掉 `%0` → `%~dp0` 必须 bat 开头先固化进变量；② `for /f` 反引号体内参数展开不可靠 → 一律先用 `%VAR%`；③ 参数别拼进引号路径串（`python "x.py --help"` 整串当文件名）。
-- **cwd 漂移双闸 B+C（2026-11-13 拍板，master `936557f`+`80fd690`；当天三事故 = 主树产物误删×2 / cases.json 卡误写主树 / MILESTONES 误提交 master a83b8c0）**：① `wt_gate.py check-cmd [--expect-track <track>]` = cwd 敏感删/写/追加类脚本入口第一行，cwd 树非注册活跃 wt → exit 3；主仓操作 `NL_CMD_MAINREPO=1` 放行。② `.git/hooks/pre-commit`（正本 `tools/hooks/pre-commit`，改后须 cp 回 + `.gitattributes` 已锁 eol=lf；hooks 全 wt 共享）：master/main 且有 active claim → 拒提交，`NL_COMMIT_MAINREPO=1` 显式放行；feat/* 直通。每条 Bash 命令开头 `cd <wt> && pwd` 是纪律底线（pwd 输出当第一检查点，后台任务同样必带 cd）。**regression.py 已接 check-cmd 闸（2026-11-14，master `125d325` + feat/vsm `3916fcd`）——写文件类工具（regression/dump 等）一律挂闸，不再按「只读」豁免**；主仓跑回归须 `NL_CMD_MAINREPO=1`。
+- VS2022 MSVC 14.38（**C++17**，禁 C++20 API）+ Win SDK 26100；CMake 3.31.6 便携版 `E:\UE_STUDY_2026\.build-tools\`。构建 `scripts/wt.bat <track> build|ctest|regression|clean`（2026-11-13 拍板：track 名显式定树 cwd 无关；`build-m0.2.bat` 内接 wt_gate.py 非注册 wt 拒跑 exit 3，主仓须 `NL_BUILD_MAINREPO=1`）。同秒 mtime 跳重链 → 删 exe 强制重链；**改 `.slang` 后必须删两棵 `build/{DX12,VULKAN}/viewer.exe` 再重链**。裸 Git Bash configure 报 nmake not found = 环境三件套没 export。
+- cmd bat 三坑：① `shift` 顶掉 `%0` → `%~dp0` 开头先固化；② `for` 体内 `%VAR%` 解析期展开 → 循环体别用变量（显式写两遍）；③ 参数别拼进引号路径串。**run.bat 复制模板先核对 set 变量与引用一一对应**（M-T3 事故：用了 `%OUT%` 没定义，产物全落仓库根）。
+- ctest 快进程随机丢 stdout（非回归）→ 统一 `--repeat until-pass:3`；missing anchor 先重跑再定性。ctest 新增用例后必须双后端重新 configure；固定步长累加 float/double 必须同源。
+- Bash cwd 不跨命令 → 每条命令开头 `cd <wt> && pwd`，一律 `git -C <wt>` / 绝对路径。GitHub 直连断；nl-engine 无 remote，tag/分支只落本地。
+
 ## 架构不变量
 - NVRHI+Slang 通用管线；构建链禁厂商图形 SDK；OpenGL 已否决；`NL_GRAPHICS_BACKEND` 唯一开关；图形符号只在 renderer/；一份 .slang 双后端 = 验收核心。
 - SPIR-V 绑定 shift 256/0/128；禁 `[[vk::binding]]`；volatile CB `setMaxVersions(16)` 每帧全量覆写；SceneConstants 160B 禁整块 memcpy；HUD 面板高≤560、字符串 ASCII（详 `SHADER-CONVENTIONS.md` §2.7~2.19）。
-- **CB 尺寸以 `dxc -dumpbin` 反汇编 slang cbuffer Size/offset 为准**：分配小于声明 → shader 读越界得 0 → 全线程静默早退、无 validation 错；CPU 常量数组长度 = cbuffer 字节/4。root sig 反射：layout 漏 shader 实际用的槽 → PSO 失败（多于无害）。slang 无 C++ lambda → `inout` 参数函数。
-- **冻结基线的代码形态也是基线的一部分**（M11.1，`direct.slang` 0xdeadbeef 守卫等）：改基线冻结路径代码前先核是 bug 还是基线语义；重开须单独拍板 + 重拍。
+- **CB 尺寸以 `dxc -dumpbin` 反汇编 cbuffer Size/offset 为准**：分配小于声明 → shader 读越界得 0 → 全线程静默早退无报错；CPU 常量数组长度 = cbuffer 字节/4。root sig layout 漏槽 → PSO 失败（多于无害）。slang 无 C++ lambda → `inout` 参数函数。
+- **冻结基线的代码形态也是基线的一部分**（M11.1）：改冻结路径前先核 bug 还是基线语义；重开须单独拍板 + 重拍。
 - Q11-1 拍板 A：GPU 数值进断言走**统计不变量**，CPU 仿真侧保持 bytes。
-- M8.1：DX12 帧命令列表必须常驻 `frameCmd_` 成员、Vulkan per-frame 新建——两后端不对称，勿顺手统一；AS build 上传+setBufferState+build 必须同命令列表。
+- M8.1：DX12 帧命令列表常驻 `frameCmd_` 成员、Vulkan per-frame 新建——两后端不对称，勿顺手统一；AS build 上传+setBufferState+build 必须同命令列表。
+- **Scene 新增 GPU 资源必须同步进 shutdown 清单**（S15 UAF 教训：~Scene 时 VK device 已死）；**资源初值语义与消费方全集绑定**（页池未初始化被读整池 → HZB 误剔）。
+- **ECS 先例**：NavAgentSystem/TrafficCarSystem = `SignedSystem<Comp, Transform>` 固定步长累加器同构；组件只持 POD 零引擎模块依赖（防 scene→traffic/nav 反向依赖）；sim 引擎在系统内。**newEntity 延迟落表坑**：按名查找族只扫 entities_，须先 flushEntityCreationAndRemoval。
+- **viewer 无裸 usage 模式**：无参 = 起窗口渲染不退出（M-T3 事故同 M15.2 族）；工具 usage 段用各 tools exe（exit 2）。`--traffic-steps` 类「调 N 次 tick」必须钉 `GameClock::kStep*1000` ms（真实 dt 抖动 → 步数不定 → PNG 无法对拍）。
 
 ## 当前进度（2026-11-14）
-- **S15 整轨收官（feat/vsm `458d9fd` tag `s15-done`，2026-11-14）**：M15.0 页池+投影 → M15.1 clipmap+GPU 标页+CPU 分配器 → M15.2 簇间接阴影+两阶段 HZB 剔除（csCullCount/Scan/Fill 单 group scan + per-page drawIndirect + 上帧 HZB first-cull，bevy 对位）。s15 双用例双后端对 M15.1 原基线 0px 差；去闪烁证据 = 双跑 MD5 一致。**两大教训**：① Scene::shutdown 漏放新增 GPU 资源 → ~Scene 时 VK device 已死 UAF（0xC0000005；DX12 析构序不同侥幸不崩）——**Scene 新增资源必须同步进 shutdown 清单**；② 页池未初始化被 csHzb 读整池 → HZB 误剔——**资源初值语义与消费方全集绑定**（恢复 1.0 clear 后基线零差，重拍撤销）。**已 merge 回 master（`165216d`）+ wt 已拆（2026-11-14 用户指令，junction 摘除 + prune；feat/vsm + milestone/s15-done 分支与三 tag 保留，TRACKS closed @ `99b60d3`）；merge 后双后端 BUILD OK + 抽查 6/6 全绿**。
-- S0~S13 全收官（S12 收官 tag `s12` @ 4c386a6；**S13 已 merge 回 master**：merge `f07201c` 零冲突 + s13-preblas 基线重拍 `09a30d8`，tag `s13-preblas`/`s13-merge`/`s13-done` + 分支 `feat/s13`/`milestone/s13-done` 留档，**s13 wt 已拆 2026-11-13 用户指令，TRACKS closed**）；S9 Q4 = GBuffer 属性不落盘；M-LOG0~2 日志轨道收官（spdlog，stdout `[nl:level]` 契约）。`kStage` 仍 S8.2。十余条功能分支已 merge 回 master。
-- **S13 整轨教训（merge 后基线坑）**：s13-preblas 基线定格 M13.0，M13.1 HUD TLAS 行扩展 → merge 后抽查回归 4/4 像素差（54×9 HUD 文本区，场景零差异）。wt 收官只重跑当轨新卡与保形卡，没回头重拍更早里程碑旧卡。**多 milestone 轨道 merge 后必须重跑该轨全部历史版本卡**。lod-pressure dx12 偶发秒退（332ms）= 快进程抖动，复跑即绿勿定性。
-- **网络栈第 12 步整轨完成并已 merge 回 master**：M-NET0~M-NET3 收官（tag `net-m0`~`net-m3` + `net-done` + `milestone/net-done` 分支）；merge commit `9aa58df`（3 冲突解：CMakeLists crash+net 并存 / MILESTONES 两侧并序 / regression.py resume 裁剪 × version 分组融合），合并后双后端 BUILD OK + 抽查 net-m2 8/8、perf-m1 6/6 全绿；PARALLEL-TRACKS net 行已更新。ENet+bitsery vendored、服务器权威+快照插值、viewer `--net-server/--net-client`、`--interp-delay`、server 优雅关服 + client 断链边沿。踩坑：控制消息漏 proto 字段 → Input 全静默拒收；Hello 建实体必须同步建输入槽；双进程 run.bat 须 start /b + ping 延后；regression 卡 `exe` 必须双后端字典。**net wt 已拆（2026-11-13 用户指令，§7.6：junction 摘除 + robocopy /MIR 清目录 + prune；feat/net + milestone/net-done 分支与全部 tag 保留，TRACKS closed）**。权威落点 `docs/net/NETCODE-PLAN.md` / `NETCODE-OPTIONS.md` §6。
-- **M-CRASH0 收官**（tag `crash-m0`）：SEH+dbghelp dmp+json 入 nl_core；`tools/analyze-crash.py` 符号化；L2 待用户终端首跑 bat 确认（沙箱禁 GUI）。
-- **M-PERF0 收官**（tag `perf-m0`）：`tools/check-shader-uniformity.py` 59 artifacts×2 门禁零违规；**M-PERF1 已收官**（tag `perf-m1`：`PassTimers` 13 pass × 4-slot 环、`--pass-timing` 默认关零扰动、HUD 逐 pass 面板 + `[nl:info|pass-timing]` 日志锚、`tools/check-perf-m1.py` + run.bat verify 双后端 8 段 ALL GREEN；Q-P4 表已按实码回写）权威落点 `docs/perf/PERF-PLAN.md`。
-- 独立后续项（需单独拍板）：shader trace-coverage（PERF C 档）；`tools/analyze-crash.bat` UTF-8 中文 rem 潜伏违规（待拍板顺手修）；多物体场景复验保边；行驶段循环 demo 旗标。
-- **script 轨道重开（2026-11-13，M-SC4 claim；2026-11-14 用户拍板重排 M-SC4~SC11）**：**M-SC4 绑定生成器已落码收官（`59db85b`，收口流程待做）**——`exports.api` 单源 → gen.py 产 ApiTable.g.hpp/.inc/.asserts.inc + Wiring.g.cs（类型映射/生命周期 TYPEMAP 单源、编译期防漂移 static_assert、CMake 新鲜度闸、--check 自证；type 段纯 POD Blittable 一档；容器走 count+ptr 协议不过界）。随后 M-SC5 Time/Input/Log → Camera → 模型场景 → Physics 载具 → Audio → **M-SC10 属性面板**（C# [Prop] 反射 + ImGui）→ M-SC11 收口。**顺手修 reloadScript OnTick 误用 getEntryPoint（M-GL4 漏改，已改 scriptTickFn）**。事实口径：script-api 装 collectible ALC（_pinned 随 ALC 回收，无须批次归组）。wt nl-engine-script @ 08a67c0、注册表 active、拍板表在 `P8-SCRIPT-PLAN.md` 胶水层扩展节。CLOSED 轨道 claim 须 --force 且主树注册表编辑要 cp 进 wt 副本。**教训：没落码的计划条目不是「既定决策」，修订直接改计划，不摆翻盘仪式**。
-- **交通轨道 T0 收官（worldgen wt，2026-11-14）**：GAME-DEV-ORDER 第 8 步 M-T0（tag `traffic-m0` @ `66c8e22`：core `nl/traffic` 车道级展开图（UE ZoneGraph 口径）+ A* 确定性寻路 + C1 跟车律 `sqrt(brake·max(0,gap−minGap))`）+ 第 9 步 M-T1（tag `traffic-m1` @ `6e0e019`：A2 含黄灯两相信号时钟 + B1 FIFO 路口占用锁 + C1 跨路段互斥扫描）。selftest 4657 断言、ctest 9/9 ×2 双后端、卡 `t0-traffic`(131)/`t1-traffic`(132)、`example/t0-traffic`+`t1-traffic` run.bat 全绿；权威落点 `docs/worldgen/TRAFFIC-PLAN.md`/`TRAFFIC-TOOLS-GUIDE.md`。**核心教训（自适应控制几何）**：固定常数按 10m 夹具标定在 ~4m 城市路网上系统性持锁泄漏（locked end 20）——`stopS=length−min(entryStop,0.6·length)`、节点 `clearEff=min(3,0.3·最小邻接边长)` 根修归零；死锁定性先 LOCK dump 实证再改。**T0 轨道未 merge 回 master（wt 在册）**；后续：需求感应信号/冲突型路口/CityCar 接入 viewer/ECS System 化需单独拍板。
-- **WEA 天气轨 M-WEA0+WEA1 已 merge 回 master（`4090d94`，2026-11-14 05:4x 用户拍板）**：冲突仅 MILESTONES 两侧并序；merge 后双后端 BUILD OK + 抽查 weather-w0 10/10 / weather-w1 10/10 / s15-clipmap 2/2 全 bytes。wt nl-engine-weather 保留续用（M-WEA2 云透射+雾接线面需拍板）；tag `weather-w0`/`weather-w1` 在 feat/weather。权威落点 `docs/WEATHER-PLAN.md` / `docs/weather/WEATHER-TOOLS-GUIDE.md` / SSC §2.22。
+- **kStage 仍 S8.2**。**已 merge 回 master**：S0~S13、S15（`165216d`）、网络栈 net-m0~3（`9aa58df`）、寻路 nav-m0~6（`5356c80`）、天气 M-WEA0+1（`4090d94`）；相关 wt 已拆，分支与 tag 保留。
+- **未 merge 回 master（wt 在册，整轨 merge 待用户指令；S13 教训：merge 后必须重跑该轨全部历史版本卡）**：
+  - **script 轨道**（feat/script）：M-SC4~SC7 收官（tag `m-sc4`~`m-sc7`）——绑定生成器（exports.api 单源 → gen.py 五件套 + 防漂移 static_assert + CMake 新鲜度闸）→ Time/Input/Log → Camera → ECS 模型挂载（拍板 A：binding 只动组件 + Model 集合签名比对重建）。下一步 M-SC8 Physics 载具 → M-SC10 属性面板 → M-SC11 收口。**教训：没落码的计划条目不是「既定决策」**。
+  - **交通轨道 T0**（worldgen wt）：**M-T0~T3 全收官**（tag `traffic-m0`~`traffic-m3` @ `4652a16`）。M-T0 车道级展开图 + A* + C1 跟车律；M-T1 信号+占用锁；M-T2 组共享锁+gap-out+loop（城市吞吐 17/32/646.9m，+143%）；M-T3 CityCar 接 viewer（TrafficCarSystem ECS + `--traffic-city`，42 车永续车流，cases 卡 134）。**核心教训（自适应控制几何）**：固定常数按 10m 夹具标定在 ~4m 路网系统性持锁泄漏 → `stopS=length−min(entryStop,0.6·length)`、`clearEff=min(3,0.3·最小邻接边长)` 根修；死锁定性先 LOCK dump 实证再改。**T1 教训：并行度放开前先审「组内不相交」几何前提，豁免口径从拓扑升级到几何**。后续项：需求感应进 citygen signal 填充（W 轨）、红绿灯摆件可视化（另立项）、冲突型路口。
+  - **粒子轨 M-PT0~PT2 收官**（feat/particles，卡 particles-pt0~pt5）。
+  - **M-CRASH0 / M-PERF0 / M-PERF1 收官**（tags `crash-m0`/`perf-m0`/`perf-m1`；PassTimers 13 pass；权威落点 `docs/perf/PERF-PLAN.md`）。
+- 独立后续项（需单独拍板）：shader trace-coverage（PERF C 档）；M-WEA2 云透射+雾接线 / M-WEA3 湿地面；`tools/analyze-crash.bat` UTF-8 rem 违规顺手修；行驶段循环 demo 旗标。
 
 ## 工程纪律（详 AGENTS.md）
-- 收口第一屏 = 四项自查 + 三要素表格；默认不跑全量回归（`--only` 挑 2~3），全量只在 tag 收口跑一次；双后端分档 bytes/near/FAIL，禁笼统「一致」；`--only` 是单个 `version[/case]`。
+- 收口第一屏 = 四项自查 + 三要素表格；默认不跑全量回归（`--only` 挑 2~3，**是单个 `version[/case]` 不吃叠加**），全量只在 tag 收口跑一次；双后端分档 bytes/near/FAIL，禁笼统「一致」。
 - 开工闸：待拍板未清不许落码；第一屏报「待拍板 N / 已拍板 N / 冻结面」；拍板后全仓 grep 旧口径同步勘误。主线按 §1b 不建 track / 不 claim。
-- git checkout/restore/switch 前必 `status --porcelain`；还原只许显式点名。kStage bump 波及 = args 含 `--hud` 且 exe=current 用例全重拍；UE-DIFFS 台账随手追加。
-- cases.json 合并走 `merge-cases.py`；手工追加必须 python json 库 indent=1 + 尾换行 + **`open(..., 'w', encoding='utf-8', newline='\n')`**（Windows 文本模式翻 CRLF，字节级工具读工作区即假 FAIL）；**追加后必须跑一次 regression 冒烟**。工具卡必须带 case 级 `"exe"` 覆盖；子命令/参数/expectLog 锚以 `exe --help` 与实测 log 为准，禁手写。
-- **行尾根修 v2（2026-11-14 拍板 A，master `125d325` + feat/vsm `09760d8`）**：`.gitattributes` 全局 `* text=auto eol=lf` 放最前 + 现有 CRLF/binary 显式钉在后（覆盖 2026-11-10 白名单钉法，后者漏任意命名工具产物 audio-s2/debug.txt）。**「git status M 但 diff 空」= eol 类症状**，新工具产物无需再逐个钉名。
-- ctest 新增用例后必须双后端重新 configure；固定步长累加 float/double 必须同源。工具 exe = `build/{DX12,VULKAN}/nanite-tools.exe`。
-- regression.py 静默挂死已修（Popen + 临时文件重定向 + wait(timeout)）；**长任务必须设短检查点主动报进度，不能等用户问**。
-- **长任务一律后台化（2026-11-14 拍板，省积分）**：构建/回归/ctest 分钟级命令用后台任务跑、完成通知回来；禁前台 600s 阻塞等待与 sleep 空转轮询（那次烧掉 500+ 积分）；能串的命令一条后台串完只收一次结果。
-- **秒级验证命令必须带 timeout 前缀（2026-11-14 拍板「都给我兼容了」）**：预期 <1s 完成的直跑命令（viewer 冒烟、工具验证等）一律 `timeout 60 <cmd>`——超时真杀不转后台、不留僵尸；转后台只留给分钟级构建/回归。前台 120s 超时自动转后台 ≠ 完成，预期秒级任务超时即异常信号，立即查+杀。watchdog（regression 60s kill）只覆盖自己 Popen 的进程，绕道直跑全靠这条兜底。
-- **后台任务 ≠ 安全（2026-11-14 用户点破：这次僵尸就是前台超时自动转后台后被丢弃的）**：后台化只是不阻塞，不杀进程也不盯进程；挂死的后台任务永远等不到完成通知。所以：① 前台超时自动转后台一律视为异常信号立即处理，绝不当「已交付」；② 人为后台化必须带预期完成时长，超预期无通知 = 主动 TaskOutput 查一次，不许无限等；③ 本次僵尸源头 = M15.2 对话命令漏 --screenshot + 转后台后被弃——退出闸根修（574dcaf）已把「漏旗标」从源头焊死，本条管「弃养」；④ **秒级验证不串进分钟级后台链（2026-11-14 再点破「对话不知道一直在干等」）**：构建 && 构建 && 冒烟这种链会把冒烟的 1 秒失败信号埋到链尾（7 分钟构建跑完才回传）——正确形态 = 构建后台跑，完成通知回来后冒烟前台 `timeout 60` 当场收结果；⑤ 后台任务完成时长**偏离预期（过快或过慢）都先核再信**——预期 7 分钟的构建 1 秒「完成」= 异常信号，不是好消息；⑥ **后台命令尾部必须写结果锚文件（AGENTS 9b，用户拍板）**：`; rc=$?; echo "$(date '+%F %T') <任务名> rc=$rc" >> .workbuddy/bg-last.log`，长链每阶段各写一条——结果落盘不依赖通知回路，「通知到达即查」做不了硬闸（对话回合间无插桩点），锚文件就是那半步的机械替代。
+- git checkout/restore/switch 前必 `status --porcelain`；还原只许显式点名。kStage bump 波及 = args 含 `--hud` 且 exe=current 用例全重拍。
+- cases.json 手工追加必须 python json 库 indent=1 + 尾换行 + `open(..., 'w', encoding='utf-8', newline='\n')`（Windows 文本模式翻 CRLF = 字节级工具假 FAIL）；追加后必须跑 regression 冒烟；工具卡带 case 级 `"exe"` 双后端字典；expectLog 锚以实测 log 为准禁手写。**双后端截图基线必须分文件**（DX12 无后缀 / VULKAN 带 `-VULKAN`，run.bat 同名覆盖 = 假 bytes）。
+- 行尾根修 v2（2026-11-14）：`.gitattributes` 全局 `* text=auto eol=lf` 放最前 + 现有 CRLF/binary 显式钉在后；「git status M 但 diff 空」= eol 类症状。
+- regression.py 静默挂死已修；**长任务一律后台化**（分钟级命令后台跑 + 完成通知回来；禁前台 600s 阻塞与 sleep 轮询）。**秒级验证带 `timeout 60` 前缀**（超时真杀不留僵尸；前台超时自动转后台 ≠ 完成，立即查+杀）。**后台任务 ≠ 安全**：完成时长偏离预期（过快/过慢）都先核再信；后台命令尾部写结果锚 `; echo "$(date '+%F %T') <任务> rc=$rc" >> .workbuddy/bg-last.log`；秒级验证不串进分钟级后台链（冒烟失败信号会被埋到链尾）。
+- **长任务三条硬纪律**：① 后台完成通知到达 = 下一动作立即查结果报数；② 运行期间每次工具调用间主动播报进度；③ 禁阻塞等待长任务。
 
 ## .nmesh / ECS / job
 - 尾段 magic NLOD / NFLB+NSUB / NPAG；**Meshlet::triangleOffset 是字节偏移不是三角号**。ComponentOf 计数器在非模板 inline；jobgraph link 完必须 launch；jobsync 建图期全 link、放行统一 `launchAll`。⚠️ JobRuntime 析构次序：pool 声明在 adapter 之后（pool 先死）。
 
 ## 并行轨道（详 PARALLEL-TRACKS §7~8）
-- wt junction 建/删只用 PowerShell 原生 API（`New-Item -ItemType Junction` / `[IO.Directory]::Delete($p,$false)`），禁 cmd；共享 `.workbuddy` + slang dist + skip-worktree。CLOSED 轨道 = wt 移除 + 分支保留，重开走 §7.1b。树闸 `tree_gate.py`；开场 `claim` / 收尾 `release` 对称。
+- wt junction 建/删只用 PowerShell 原生 API（`New-Item -ItemType Junction` / `[IO.Directory]::Delete($p,$false)`），禁 cmd；共享 `.workbuddy` + slang dist + skip-worktree。CLOSED 轨道 = wt 移除 + 分支保留，重开走 §7.1b。树闸 `tree_gate.py`；开场 `claim` / 收尾 `release` 对称；CLOSED 轨道 claim 须 --force。
