@@ -308,17 +308,6 @@ TRACKS = {
                 "(2 junctions detached + robocopy /MIR + prune), branch "
                 "and tags kept; rebuild via PARALLEL-TRACKS 7.6",
     },
-    "nightlighting": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
-        "branch": "feat/nightlighting", "state": "active",
-        "note": "night-lighting interleave track (plan docs/nl/NL-PLAN.md, "
-                "M-NL0 bloom / M-NL1 screen-space god rays / M-NL2 night "
-                "demo, tags nl0-bloom/nl1-godrays/nl-done; Q-NL1~NL6 "
-                "settled 2026-11-14: A-plan post-chain, flags default-off, "
-                "no sky.slangh touch, zero vendored); wt built 2026-11-14 "
-                "from master b150fd9, junction .workbuddy + "
-                "thirdparty/slang/dist + skip-worktree",
-    },
     "water": {
         "wt": "", "branch": "feat/water", "state": "closed",
         "note": "water track M-WAT0~WAT3 done (tags water-t0~water-t3; "
@@ -329,15 +318,17 @@ TRACKS = {
                 "unlinked, branches kept; reopen via 7.1b",
     },
     "nightlighting": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
-        "branch": "feat/nightlighting", "state": "active",
-        "note": "night-lighting interleave track (plan docs/nl/NL-PLAN.md, "
-                "M-NL0 bloom / M-NL1 screen-space god rays / M-NL2 night "
-                "demo, tags nl0-bloom/nl1-godrays/nl-done; Q-NL1~NL6 "
-                "settled 2026-11-14: A-plan post-chain, flags default-off, "
-                "no sky.slangh touch, zero vendored); wt built 2026-11-14 "
-                "from master b150fd9, junction .workbuddy + "
-                "thirdparty/slang/dist + skip-worktree",
+        "wt": "", "branch": "feat/nightlighting", "state": "closed",
+        "note": "night-lighting track M-NL0~NL2-C done (tags nl0-bloom/"
+                "nl1-godrays/nl-done/m-nl2-c; bloom T0 post-chain + "
+                "screen-space god rays + night demo + ambient day factor + "
+                "sky-bg into scene chain + NV GLCache dual-state tolerance "
+                "tier SKY_TOL_MAX_PIXELS=16); whole-track merged to master "
+                "4da01de 2026-11-14 (pre-merged master->branch ea5d821, "
+                "branch 8 cards 52/52 + main repo 5 cards 38/38 all green); "
+                "wt removed same day (user instruction, 2 junctions "
+                "unlinked + robocopy /MIR + prune), branch and tags kept; "
+                "reopen via 7.1b",
     },
 }
 
