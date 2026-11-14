@@ -997,6 +997,7 @@ private:
     nvrhi::StagingTextureHandle  placeReadbackStaging_[2][4];
     std::uint32_t                placeReadbackSubmitted_ = 0;
     std::string                  placeReadbackPath_;
+    bool                         probeReadbackVkNotice_ = false;   // M14C2：vk readback 限界 notice 一次性
     // M14C1 诊断：gatherLinear_（csGather 原始输出 RGBA16F）回读，落
     // <path>.gather；复用 place readback 的 flag/parity/slot 时序。
     nvrhi::StagingTextureHandle  gatherReadbackStaging_[2];

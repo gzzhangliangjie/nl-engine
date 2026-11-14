@@ -213,6 +213,13 @@ void csGather(uint3 tid : SV_DispatchThreadID)
     // spacing 自标定 = 相邻均匀角点世界距均值（零新 CB 常量，CB 布局不动）；
     // d=0.5·spacing → 0.5，d=1·spacing → 1/16（主影响域 = 本格位）。非 adaptive
     // 模式此段整体跳过（保形）。
+    // M14C2（拍板 A，2026-11-14）：spacing 门降级。自标定门要求「相邻均匀角点对
+    // 双侧有效」，但 diag21/22 排查实锤：覆盖不足格位（L2 全空角点 / L3 单探针）
+    // 恰是 spawn 的服务对象——门与服务对象结构性互斥，spawn 池全帧 0 次进入。
+    // 降级：spacingN==0 时 spacing 改由像素线性视深 × 探针格屏幕角尺寸估算
+    // spacing_fb = sceneDepth·(2tan(fovY/2))/res_l（探针格铺满视口，格距 ∝ 深度×
+    // 角尺寸；2tan(fovY/2) 由 CPU 侧 g_gAdaptive.y 提供，FrameParams.projYScale
+    // 同源）。UE 无此门（自适应探针直接进 upsample 池按世界距衰减）。
     if (useAdaptive)
     {
         float  spacingSum = 0.0f;
@@ -229,8 +236,12 @@ void csGather(uint3 tid : SV_DispatchThreadID)
             if (uniOk[a] && uniOk[bV] && a < bV)
                 { spacingSum += length(uniPos[a] - uniPos[bV]); ++spacingN; }
         }
-        const float spacing = (spacingN > 0u) ? spacingSum / float(spacingN) : 0.0f;
-        if (spacing > 1e-4f)
+        const float spacing = (spacingN > 0u)
+            ? spacingSum / float(spacingN)                         // 自标定（M14C1 原语义）
+            : sceneDepth * g_gAdaptive.y / float(res);             // 降级估算（M14C2）
+        // g_gAdaptive.z = spawn 池总开关（--probe-adaptive-nospawn 置 0）：
+        // 验收门「禁 spawn adaptive ≡ u8 逐位一致」的冻结路径保形仪表。
+        if (g_gAdaptive.z > 0.5f && spacing > 1e-4f)
         {
             [loop]
             for (uint k = 4u; k < 8u; ++k)
@@ -250,11 +261,14 @@ void csGather(uint3 tid : SV_DispatchThreadID)
         }
     }
 
-    // M14C1 收口修正：spawn 候选贡献限幅（UE AdaptiveProbeAllocationFraction=0.5
-    // 字面口径）。追加形态 + 共享 corner 角权 → 失效格位 spawn 权重池结构性翻倍
-    //（实测白斑：剪影 spawn 探针的外向 texel = 天空 miss 亮值，面部像素被对半
-    // 混入）。限 spawn 总权重 ≤ 均匀 4 角权重和（50% 分配上限）。非 adaptive
-    // 模式 spawn 候选权重恒 0，此段零效果（保形）。
+    // M14C1 收口修正 + M14C2 拍板 A 修订：spawn 候选贡献限幅（UE
+    // AdaptiveProbeAllocationFraction=0.5 字面口径）。追加形态 + 共享 corner 角权
+    // → 失效格位 spawn 权重池结构性翻倍（实测白斑：剪影 spawn 探针的外向 texel =
+    // 天空 miss 亮值，面部像素被对半混入）。限 spawn 总权重 ≤ 均匀 4 角权重和
+    // （50% 分配上限）。**M14C2 修订**：限幅仅在 uniSum > 0（混合格位）生效——
+    // 均匀角全空的覆盖不足格位（spawn 的服务对象）uniSum=0 时原实现 scl=0 把
+    // spawn 一并清零，fallback 降级形同虚设；全空格位 spawn 独立生效（无双重
+    // 计权，白斑前提不成立）。非 adaptive 模式 spawn 候选权重恒 0，此段零效果。
     if (useAdaptive)
     {
         float uniSum = 0.0f;
@@ -263,7 +277,7 @@ void csGather(uint3 tid : SV_DispatchThreadID)
         float spawnSum = 0.0f;
         [unroll]
         for (uint k = 4u; k < 8u; ++k) spawnSum += weights[k];
-        if (spawnSum > uniSum && spawnSum > 0.0f)
+        if (uniSum > 0.0f && spawnSum > uniSum)
         {
             const float scl = uniSum / spawnSum;
             [unroll]
@@ -293,6 +307,8 @@ void csGather(uint3 tid : SV_DispatchThreadID)
         result /= max(sum, kMin);
     }
 
+    // 间接出射 = albedo × 入射 radiance（八面体图已烤命中 albedo，本处乘
+    // 像素侧 albedo——统一暖灰降级族，traceCB g_traceHitMat.rgb 同源）。
     // 间接出射 = albedo × 入射 radiance（八面体图已烤命中 albedo，本处乘
     // 像素侧 albedo——统一暖灰降级族，traceCB g_traceHitMat.rgb 同源）。
     g_gatherOut[tid.xy] = float4(g_gMat.rgb * result, 1.0f);

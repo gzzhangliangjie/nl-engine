@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem M14C1 (S14-C) adaptive-probe baseline + deterministic re-shot acceptance.
+rem M14C1+M14C2 (S14-C) adaptive-probe baseline + deterministic re-shot acceptance.
 rem ASCII only; CRLF; no parentheses inside echo text in blocks.
 rem Usage: run.bat verify   exit 0 = all checks green.
 rem
@@ -9,17 +9,22 @@ rem adaptive Mark uses a fixed 16x16 Hammersley grid + InterlockedMin, Spawn
 rem writes per-tile slots deterministically) so re-shot gates are bytes
 rem (fc /b), same as s10-probe.
 rem
-rem Acceptance gates (PLAN section 9, 2026-11-14):
+rem Acceptance gates (PLAN section 9, M14C2 re-scope 2026-11-14):
 rem   - adaptive re-shot on both backends exits 0; dx12 deviceErrors=0
 rem   - log anchors: probe-adaptive: active (res_eff=8 ...) + shutdown ok
-rem   - bytes gate: re-shot vs frozen baseline (both backends)
-rem   - BIT-EXACT gate (replaces the retired MSE/u32 reference gate):
-rem     adaptive default base 16 (res_eff=8) vs uniform probe
-rem     --probe-base-res 8, same effective grid, fc /b on both backends.
-rem     After the 213.8 root fix (L3 reserved-region leak, commit cc69c7d)
-rem     adaptive and uniform-8 are bit-identical; spawn GI contribution is
-rem     measured 0 in this scene (mechanism kept; sparse-grid acceptance
-rem     scene filed as a follow-up in PLAN section 9).
+rem   - bytes gate: spawn-on re-shot vs frozen baseline (both backends)
+rem   - CONSERVATION gate (replaces the M14C1 adaptive-vs-u8 bit-exact gate,
+rem     which the M14C2 spacing-gate fallback breaks BY DESIGN when the spawn
+rem     pool activates at L2/L3): adaptive --probe-adaptive-nospawn vs uniform
+rem     probe --probe-base-res 8, same effective grid, fc /b identical on both
+rem     backends. Proves the uniform interpolation path + 213.8 guard stay
+rem     bit-frozen with the spawn pool switched off.
+rem   - ACTIVATION gate: adaptive spawn-on vs adaptive nospawn MUST differ
+rem     (fc /b not identical, both backends) - mechanical proof that the
+rem     M14C2 spacing fallback actually feeds the spawn pool. Gain is MIXED
+rem     in this scene (detail-region MSE vs u32 improves up to 61%, silhouette
+rem     blocks worsen from sky-miss texel contamination); numbers recorded in
+rem     PLAN section 9, quality fix filed as follow-up.
 rem   - timing gate: csTraceProbe adaptive vs uniform-8 probe, fresh capture
 rem     in this run, ratio <= 1.5 (structural conservation + noise headroom)
 rem   - viz gate: magenta spawn dots present (both backends)
@@ -31,7 +36,7 @@ set "OUT=%~dp0"
 set "ARGS=--model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7"
 set FAIL=0
 
-echo [shot] re-shoot adaptive on both backends (dx12 log captured to verify-log.txt, doubles as adaptive timing capture)
+echo [shot] re-shoot adaptive spawn-on on both backends (dx12 log captured to verify-log.txt, doubles as adaptive timing capture)
 for %%B in (dx12 vulkan) do (
   if "%%B"=="dx12" (
     "%ROOT%\build\%%B\viewer.exe" --mode probe-adaptive --pass-timing %ARGS% --screenshot "%OUT%verify-adaptive-%%B.png" > "%OUT%verify-log.txt" 2>&1
@@ -65,6 +70,15 @@ if errorlevel 1 (
   echo [OK] shutdown ok anchor present
 )
 
+echo [shot] re-shoot adaptive nospawn on both backends (conservation-gate input)
+for %%B in (dx12 vulkan) do (
+  "%ROOT%\build\%%B\viewer.exe" --mode probe-adaptive --probe-adaptive-nospawn %ARGS% --screenshot "%OUT%verify-adaptive-nospawn-%%B.png" >nul 2>&1
+  if errorlevel 1 (
+    echo [FAIL] adaptive-nospawn-%%B viewer exited nonzero
+    set FAIL=1
+  )
+)
+
 echo [shot] re-shoot uniform-8 ref on both backends (dx12 log captured to timing-probe.log, doubles as probe timing capture)
 for %%B in (dx12 vulkan) do (
   if "%%B"=="dx12" (
@@ -78,7 +92,7 @@ for %%B in (dx12 vulkan) do (
   )
 )
 
-echo [check] bytes: re-shot vs frozen baseline
+echo [check] bytes: spawn-on re-shot vs frozen baseline
 for %%B in (dx12 vulkan) do (
   fc /b "%OUT%adaptive-%%B.png" "%OUT%verify-adaptive-%%B.png" >nul
   if errorlevel 1 (
@@ -89,14 +103,25 @@ for %%B in (dx12 vulkan) do (
   )
 )
 
-echo [check] bit-exact: adaptive vs uniform-8 same grid (213.8 root fix gate)
+echo [check] conservation: adaptive nospawn vs uniform-8 same grid, bit-identical
 for %%B in (dx12 vulkan) do (
-  fc /b "%OUT%verify-adaptive-%%B.png" "%OUT%verify-ref-u8-%%B.png" >nul
+  fc /b "%OUT%verify-adaptive-nospawn-%%B.png" "%OUT%verify-ref-u8-%%B.png" >nul
   if errorlevel 1 (
-    echo [FAIL] adaptive-%%B not bit-identical to uniform-8
+    echo [FAIL] adaptive-nospawn-%%B not bit-identical to uniform-8
     set FAIL=1
   ) else (
-    echo [OK] adaptive-%%B bit-identical to uniform-8
+    echo [OK] adaptive-nospawn-%%B bit-identical to uniform-8
+  )
+)
+
+echo [check] activation: adaptive spawn-on MUST differ from nospawn
+for %%B in (dx12 vulkan) do (
+  fc /b "%OUT%verify-adaptive-%%B.png" "%OUT%verify-adaptive-nospawn-%%B.png" >nul 2>&1
+  if errorlevel 1 (
+    echo [OK] adaptive-%%B spawn pool activated, output differs from nospawn
+  ) else (
+    echo [FAIL] adaptive-%%B spawn pool did not activate
+    set FAIL=1
   )
 )
 

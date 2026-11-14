@@ -107,3 +107,28 @@
 - **552 分解定案**：u8↔u32 结构差 338（均匀网格减半的固有逼近差，不受影响）+ 213.8（本 bug，已归零）。§8 的「回落至 ≤338」判据被本条取代。
 - **验收口径定稿（拍板）**：① adaptive↔u8 同 res（adaptive 缺省 base 16 ↔ probe `--probe-base-res 8`，res_eff=8 同网格）**逐位一致**为验收门（run.bat `fc /b` bytes 级，双后端），替代已废 MSE/u32 参照门；② spawn GI 贡献本场景实测 0（机制保留，spawn-on 复测 bit-exact）；③ viz 品红门 + timing 守恒门 + present 门 + 负向沿用。
 - **挂账（独立后续项，需单独拍板立项）**：spawn 增益验收场景——探针格稀疏/大尺度场景（均匀格欠采样时 spawn 才有正贡献）；现有 Suzanne 场景密度下增益恒 0，强行造景属于为验收而验收，不扩大本里程碑范围。
+- **排查补记（2026-11-14 晚，用户拍板排查「增益为何为 0」；diag21/22 + readback 实锤）**：增益=0 的真机制**不是**「场景平坦/密度高」，而是三层结构：① **spacing 门全帧失败**（实测 spacing>0 像素=0，spawn 池整体未进入，已占位槽位 26/8/4/1 从未被读）；② **级-数据错配**（模型像素全部落 L2/L3——L2 uniform 0/4 全空、L3 仅 1 探针；L0 密网格的 7 uniform+26 spawn 只服务天空像素；全场景 GI 实际全部来自 L3 单探针）；③ **门与服务对象互斥**（Mark 在格点探针打空处放 spawn，该处均匀角点恰为天空 → spacing 门必死；UE 无此门）。上条「本场景密度下增益恒 0」的旧表述据此勘误。修复方向待拍板：spacing 门降级 / 维持挂账 / level 分带 {3,5,7} 重审（单独拍板）。
+
+## 10. M14C2（2026-11-14 晚，用户拍板 A）：spacing 门降级落码 + spawn 激活 + 增益实测 + 验收口径 M14C2 重定
+
+**落码（拍板 A = spacing 门降级）**，probe_gather.slang csGather 两处 + CB 两槽：
+
+- **降级公式**：`spacingN==0`（无有效均匀角点对，覆盖不足格位 = spawn 的服务对象）时 `spacing = sceneDepth·g_gAdaptive.y / res_l`——线性视深 × 探针格屏幕角尺寸估算（`g_gAdaptive.y = 2tan(fovY/2)`，CPU 侧 `2/FrameParams.projYScale` 同源，144B CB 布局不动，[33]/[34] 原空槽）。量纲与自标定一致（探针格铺满视口，格距 ∝ 深度×角尺寸）；UE 无此门（自适应探针直接进 upsample 池按世界距衰减）。
+- **50% 限幅修订（M14C1 收口修正的必要修订）**：原 `spawnSum > uniSum` 无条件限幅在均匀角全空格位 `scl = 0/spawnSum = 0` 把 spawn 一并清零——不修订则降级形同虚设。改为 **`uniSum > 0` 时才限幅**：混合格位保形（白斑前提不变），全空格位 spawn 独立生效（无双重计权，白斑机理不成立）。
+- **spawn 池总开关** `--probe-adaptive-nospawn`（g_gAdaptive.z）：验收仪表，非功能旗标。
+- **diag21 残留清理**：上轮排查的 TEMP-DIAG21 计数器（声明/赋值）全部移除。
+
+**实测（Suzanne 缺省机位，DX12 全精度 RB + PNG）**：
+
+| 项 | 数值 |
+|---|---|
+| spawn 池激活 | gather diff vs u8 = 20474 px（全单向增亮），M14C1 收口版（spawn 死）diff 同数——门降级生效实锤 |
+| 保形 | `--probe-adaptive-nospawn` ≡ probe base 8 **逐位一致**（双后端 PNG fc /b）；u8 路径跨构建逐位不变（m2-u8 ≡ c22-u8） |
+| 增益（PNG MSE vs u32 参照） | 全帧 u8 190.4 vs adaptive 197.7（略劣）；**分块混合**：改善 top2 块 522→204（−61%）、1937→1682（−13%），恶化块 10 个（最大 654→1203），全部**单向过亮**（6954 px 超 u32+40，0 过暗） |
+| timing | verify 实测 ratio 0.71（adaptive trace 0.00512ms vs probe 0.00717ms，守恒门 ≤1.5） |
+
+**增益混合的根因定性（挂账后续项）**：恶化全部来自 spawn 探针烘焙辐照度的**天空 miss texel 污染**（剪影/场景边缘 spawn 探针的外向 texel = 亮 miss 值，经宽 fallback spacing 服务到远端像素；u8 在这些区域 sum<kMin 输出 0）。修复方向（miss texel 烘焙侧处理 / spawn 位置质量门 / 权重再调）**单独拍板立项**，不在本里程碑展开。
+
+**验收口径 M14C2 重定（拍板 A 内含授权）**：M14C1 的「adaptive↔u8 逐位一致」门被降级**按设计打破**（spawn 激活即有差），替代门组 = ① bytes 门（spawn-on 重拍 vs 冻结基线，双后端）；② **保形门**：`--probe-adaptive-nospawn` ≡ uniform-8 逐位一致（双后端，冻结路径保形证明）；③ **激活门**：spawn-on ≠ nospawn（fc /b 必须不同，spawn 池生效的机械证明）；④ timing/viz/present/负向沿用。run.bat verify ALL GREEN（12 门实测）。
+
+**readback 基建限界 DX12-only（M14C1 交付项修正）**：M14C1 的 `--probe-place-readback` 在 VULKAN 上**预存在段错误**——staging 环形第 3 周期崩（先 depth 通道 map 崩，depth 限界后整体仍在 f5 dump 后崩；RGBA16F 同崩；slot0 三次全活；DX12 同代码全程正常）。定性 = NVRHI vk 侧 staging 复用内部问题（本仓不可修），M14C2 限界：vk 清空 readback 路径 + 一次性 notice，全部 copy/poll 块自动失效；M14C1 档案中「两后端」表述以此为准修正（当时只在 DX12 冒烟过）。

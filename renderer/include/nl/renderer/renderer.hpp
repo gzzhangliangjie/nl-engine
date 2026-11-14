@@ -170,6 +170,10 @@ struct FrameParams {
     // 拍板：均匀网格减半 + 每格位至多 1 个自适应探针写 atlas 预留区）。仅该模式
     // 消费；缺省 false = probe/filter/restir 路径零扰动（s10-*/s12-*/s14b-* 保形）。
     bool  probeAdaptive       = false;
+    // M14C2（拍板 A）：spawn 池总开关（--probe-adaptive-nospawn 置 true = g_gAdaptive.z
+    // 置 0 跳过 spawn 池）。验收仪表：禁 spawn adaptive ≡ probe base 8 逐位一致 =
+    // 冻结路径保形门；缺省 false = spawn 池照常（spacing 门降级生效）。
+    bool  probeAdaptiveNoSpawn = false;
 
     // ---- M-PERF1：per-pass GPU 计时（Q-P5，--pass-timing 开启；默认关 = 渲染
     // 路径零变化，冻结基线 bytes 不动）。Scene 侧单向锁存（开了不关），query 懒建。

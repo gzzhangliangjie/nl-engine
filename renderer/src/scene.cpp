@@ -4136,6 +4136,12 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
         // M14C1：自适应探针插值池 4→8 开关（CB 128→144B；非 adaptive 恒 0，
         // csGather 走原 4 池逐值一致——s10-*/s12-* 冻结基线零漂）。
         gcb[32] = probeAdaptiveMode_ ? 1.0f : 0.0f;
+        // M14C2（拍板 A）：g_gAdaptive.y = 2tan(fovY/2)（spacing 门降级的深度×角
+        // 尺寸估算因子，FrameParams.projYScale = 1/tan(fovY/2) 同源）；z = spawn
+        // 池总开关（--probe-adaptive-nospawn 置 0，禁 spawn adaptive ≡ u8 逐位
+        // 一致 = 冻结路径保形验收仪表）；w = 预留。
+        gcb[33] = 2.0f / params.projYScale;
+        gcb[34] = params.probeAdaptiveNoSpawn ? 0.0f : 1.0f;
         cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
     }
 
@@ -4160,7 +4166,13 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
 
     // ---- (1.1) M14C1 诊断：probeDepth_（velocity prepass D32）回读 copy
     //（--probe-place-readback 复用 flag；slot = parity 环形防覆盖）。
-    if (!placeReadbackPath_.empty() && probeDepth_) {
+    // M14C2 实测：VULKAN 上 staging 环形第 3 周期段错误（先 depth 通道 map 崩，
+    // depth 限界后整体仍在 f5 dump 后崩——slot0/slot1 第 3 次 map 前后，RGBA16F
+    // 同崩；DX12 同代码全程正常）。定性 = NVRHI vk 侧 staging 复用内部问题，
+    // 诊断基建限界 DX12-only（五通道 DX12 验证稳定；vk 旗标打 notice 跳过）。
+    const bool readbackOk = placeReadbackPath_.empty()
+        || probeDevice_->getGraphicsAPI() != nvrhi::GraphicsAPI::VULKAN;
+    if (!placeReadbackPath_.empty() && probeDepth_ && readbackOk) {
         if (!depthReadbackStaging_[0]) {
             const nvrhi::TextureDesc dd = probeDepth_->getDesc();
             for (auto& st : depthReadbackStaging_) {
@@ -4251,6 +4263,15 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
     // map 落盘。UAV→CopySource 显式转换，copy 完转回 UAV——后续 trace set require
     // SRV 自动插 barrier 的基线行为不变（诊断代码零语义扰动）。
     if (!params.probePlaceReadback.empty() && probeAtlas_[probeParity_][0]) {
+        // M14C2：vk staging 复用第 3 周期段错误（见 (1.1) 段注释）——readback
+        // 基建限界 DX12-only，vk 清空路径 + notice，全部 copy/poll 块自动失效。
+        if (probeDevice_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN) {
+            if (!probeReadbackVkNotice_) {
+                nl::core::log::infoCh("scene",
+                    "--probe-place-readback: DX12-only (vk staging reuse segfault, see scene.cpp (1.1)); flag ignored");
+                probeReadbackVkNotice_ = true;
+            }
+        } else {
         placeReadbackPath_ = params.probePlaceReadback;
         if (!placeReadbackStaging_[0][0]) {
             for (std::uint32_t level = 0; level < 4; ++level) {
@@ -4283,6 +4304,7 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
                                      nvrhi::ResourceStates::UnorderedAccess);
             }
             ++placeReadbackSubmitted_;
+        }
         }
     }
 
