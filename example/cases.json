@@ -11655,6 +11655,213 @@
      }
     }
    ]
+  },
+  {
+   "id": "weather-w2",
+   "label": "WEA M-WEA2",
+   "name": "云透射+高度雾（解析透射进直光链 + 单层高度雾五点接线，Q-W2 拍板）",
+   "tag": "weather-w2",
+   "date": "2026-11-14",
+   "summary": "WEA 轨道第三步（M-WEA2）：① 云透射进直光确认已在 M-WEA0 链路内（weather.cpp sunIntensity = daylight×cloudTransmittance，D1 拍板零改动只补证据）；② 高度雾 = 真增量——sky.slangh 共享解析函数 heightFogTransmittance/applyHeightFog（UE HeightFogCommon CalculateLineIntegralShared 口径简化，kFogFalloff=0.05 单层近似，雾标高下密度 clamp，exp 参数 clamp ±20 防溢出），五点接线（Q-W2-1=B2 拍板）：probe_trace miss / world_cache miss（天空项先雾再×albedo）/ csReferenceGI miss（Q14-1 参考尺同源）/ probe_gather --sky-bg 相机天空像素 / csDirect+csDirectVsm 直光合成后逐像素（UE 口径，alpha 透传）。CB 扩容（Q-W2-2=C1）：traceCB 112→128B、cacheCB 192→208B、GIConstants b5 48→64B、gatherCB 160→176B、DirectConstants b3 32→64B，各 +1×float4（density/height/zw 预留）；雾色 = 天穹地平线色同源（C1 落地修正：1 float4 装不下 5 标量，D23 台账）。FrameParams 新增 weatherFogDensity/Height（缺省 0 = 雾关 → T≡1 → 全链 bytes 保形：零漂移抽查 s10-refgi 4/4 + s11-hash 6/6 + s8.2 4/4 全 bytes 实证）。viewer CLI：--weather-fog-density/--weather-fog-height 手调（cvar 语义，证据卡放大雾效；小场景天然 profile 2~8% 不可辨）。weather-w1 基线合法重拍（clear profile 微雾 0.0005/m）。SSC §2.22a + UE-DIFFS D23。已知简化：gather 前景 GI 贡献不乘相机路径透射（M-WEA3+ 拍板项）、refGI 直光 sample 不带雾（趋势尺口径）。",
+   "acceptance": [
+    "零漂移闸：天气关全链 bytes——s10-refgi 4/4 + s11-hash 6/6 + s8.2 4/4 双后端全 bytes（5 个扩容 CB 全覆盖）",
+    "weather-w1 基线合法重拍：clear profile 微雾（0.0005/m）改变天气开画面，10/10 bytes ALL GREEN（重生成后 bytes）",
+    "weather-w2 五用例双后端基线 bytes 对拍（overcast 直光暗/雾视觉锚/pviz 探针变暗/refgi 参考链/cache-viz C 值跟随）",
+    "GI 响应证据链：阴天 vs 晴天同机位（w1 noon-sky clear 对照 w2-overcast-noon）直光与间接光同步变暗；cacheviz C 值跟随",
+    "雾视觉：--weather-fog-density 0.05 手调放大（小场景天然 profile 不可辨，cvar 语义）"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "overcast-noon",
+     "name": "阴天正午：preset overcast（直光衰减 0.28 + 天空灰白）",
+     "kind": "pair",
+     "note": "对比 w1 noon-sky（同机位 clear）：直光与天穹同步变暗 = 云透射链证据。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "overcast",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --sky-bg --weather-seed 7 --weather-preset overcast --weather-t 300 --screenshot",
+     "baselines": {
+      "dx12": "example/weather-w2/overcast-noon-dx12.png",
+      "vulkan": "example/weather-w2/overcast-noon-vulkan.png"
+     }
+    },
+    {
+     "id": "fog-showcase",
+     "name": "雾视觉锚：clear + 手调雾 density 0.05 / height 8m",
+     "kind": "pair",
+     "note": "cvar 手调放大雾效（天然 profile 小场景 2~8% 不可辨）；远场灰白渐隐。",
+     "args": [
+      "--mode",
+      "probe",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--sky-bg",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "clear",
+      "--weather-t",
+      "300",
+      "--weather-fog-density",
+      "0.05",
+      "--weather-fog-height",
+      "8",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe --model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --sky-bg --weather-seed 7 --weather-preset clear --weather-t 300 --weather-fog-density 0.05 --weather-fog-height 8 --screenshot",
+     "baselines": {
+      "dx12": "example/weather-w2/fog-showcase-dx12.png",
+      "vulkan": "example/weather-w2/fog-showcase-vulkan.png"
+     }
+    },
+    {
+     "id": "pviz-overcast",
+     "name": "阴天探针辐照度 viz（间接光变暗证据）",
+     "kind": "pair",
+     "note": "探针辐照度随 miss 天空雾化同步变暗 = GI 响应判据（任务书 §7.1）。",
+     "args": [
+      "--mode",
+      "probe-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "overcast",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode probe-viz --model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --weather-seed 7 --weather-preset overcast --weather-t 300 --screenshot",
+     "baselines": {
+      "dx12": "example/weather-w2/pviz-overcast-dx12.png",
+      "vulkan": "example/weather-w2/pviz-overcast-vulkan.png"
+     }
+    },
+    {
+     "id": "refgi-overcast",
+     "name": "阴天参考 GI（参考链与探针 miss 同口径雾化）",
+     "kind": "pair",
+     "note": "Q14-1 同源口径：参考图 miss 天空与探针一致雾化，趋势门有效。",
+     "args": [
+      "--mode",
+      "reference-gi",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "overcast",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode reference-gi --model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --weather-seed 7 --weather-preset overcast --weather-t 300 --screenshot",
+     "baselines": {
+      "dx12": "example/weather-w2/refgi-overcast-dx12.png",
+      "vulkan": "example/weather-w2/refgi-overcast-vulkan.png"
+     }
+    },
+    {
+     "id": "cacheviz-overcast",
+     "name": "阴天世界缓存 viz（C 值随直光衰减跟随）",
+     "kind": "pair",
+     "note": "任务书「world cache 无突变」：cache 天空项同口径雾化，缓存平滑跟随无跳变。",
+     "args": [
+      "--mode",
+      "cache-viz",
+      "--model",
+      "Suzanne-materials.nmesh",
+      "--frames",
+      "8",
+      "--no-hud",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9",
+      "--dist",
+      "7",
+      "--weather-seed",
+      "7",
+      "--weather-preset",
+      "overcast",
+      "--weather-t",
+      "300",
+      "--screenshot",
+      "{out}"
+     ],
+     "command": "viewer.exe --mode cache-viz --model Suzanne-materials.nmesh --frames 8 --no-hud --size 960x540 --yaw 12 --pitch 9 --dist 7 --weather-seed 7 --weather-preset overcast --weather-t 300 --screenshot",
+     "baselines": {
+      "dx12": "example/weather-w2/cacheviz-overcast-dx12.png",
+      "vulkan": "example/weather-w2/cacheviz-overcast-vulkan.png"
+     }
+    }
+   ]
   }
  ]
 }

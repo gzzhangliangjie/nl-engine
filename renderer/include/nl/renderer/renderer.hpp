@@ -54,6 +54,10 @@ struct FrameParams {
     float weatherHorizon[3] = {0.62f, 0.71f, 0.84f};   // 地平线色（终值）
     float weatherSunCol[3]  = {1.0f, 1.0f, 1.0f};      // 太阳 RGB（色温换算）
     float weatherSunIntensity = 1.0f;                  // 0..1 直光能量（×2.5 基准强度）
+    // M-WEA2（Q-W2-2=C1）：高度雾参数。缺省 0 = 雾关 → T≡1 → 全链 bytes 保形。
+    // 雾色不单发：消费端取 weatherHorizon 同源（D22 ②）。
+    float weatherFogDensity  = 0.0f;                   // 1/m（0 = 雾关）
+    float weatherFogHeight   = 0.0f;                   // m
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。

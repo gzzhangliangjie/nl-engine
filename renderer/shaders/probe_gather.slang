@@ -56,6 +56,9 @@ cbuffer GatherConstants : register(b0)
     // M-WEA1（Q-WE5 已拍板）：+2×float4 天穹参数（--sky-bg 背景像素消费）。
     float4   g_gZenith;        // rgb = 天顶色 / a 预留（turbidity）
     float4   g_gHorizon;       // rgb = 地平线色 / a 预留（cloudCoverage）
+    // M-WEA2（Q-W2-2=C1）：+1×float4 高度雾（x = fogDensity / y = fogHeight /
+    // zw 预留）。相机射线天空像素（--sky-bg）与探针 miss 同口径雾化。
+    float4   g_gFog;
 }
 
 Texture2D<float4> g_place0  : register(t0);   // 布点 atlas（RGBA32F worldPos+deviceZ）
@@ -222,8 +225,12 @@ void csGatherCompose(uint3 tid : SV_DispatchThreadID)
             const float3 wpFar = gbReconstructWorldPos(tid.xy, 1.0f, float2(viewW, viewH),
                                                        g_gInvViewProj);
             const float3 vd = normalize(wpFar - g_gEye.xyz);
-            g_hdrUAV[tid.xy] = float4(skyGradientParams(vd, g_gZenith.rgb,
-                                                        g_gHorizon.rgb), 1.0f);
+            g_hdrUAV[tid.xy] = float4(applyHeightFog(
+                                          skyGradientParams(vd, g_gZenith.rgb,
+                                                            g_gHorizon.rgb),
+                                          g_gEye.y, vd, 1.0e4f,
+                                          g_gFog.x, g_gFog.y,
+                                          g_gHorizon.rgb, 500.0f), 1.0f);
             return;
         }
     }

@@ -68,6 +68,12 @@ cbuffer DirectConstants : register(b3)
     float4 g_shadowParams;   // x = bias（世界尺度法线偏移，防 proxy 自遮挡）
                              // y = tMax（阴影射线最大距离，有限值保精度）
                              // z/w 预留（offset 16）
+    // M-WEA2（Q-W2-2=C1）：高度雾参数 2×float4（compute-only 扩容，DirectConstants
+    // 32B compute-only 先例）。fogA = (fogDensity 1/m, fogHeight m, zw 预留)；
+    // fogB = rgb 雾色（CPU 单一事实源 = FrameParams.weatherHorizon 同值）+ a 预留。
+    // fogDensity=0（天气关缺省）→ T≡1 → 逐像素 bytes 保形（Q-WE5 闸门）。
+    float4 g_directFogA;
+    float4 g_directFogB;
 }
 
 // M9.2 参考累积常量（b4）。csReference 读前两项做抖动种子，psRefPresent 读第三项
@@ -95,6 +101,9 @@ cbuffer GIConstants : register(b5)
     // b4 跨 compute/graphics 有 device removed 前科禁扩——M10.3 实锤）。
     float4 g_giZenith;        // rgb = 天顶色 / a 预留（turbidity）
     float4 g_giHorizon;       // rgb = 地平线色 / a 预留（cloudCoverage）
+    // M-WEA2（Q-W2-2=C1）：+1×float4 高度雾（x = fogDensity / y = fogHeight /
+    // zw 预留）。参考图 miss 天空与探针 miss 同口径雾化（Q14-1 同源）。
+    float4 g_giFog;
 }
 
 // M15.0/M15.1（S15）：VSM 常量（b6，272B）。M15.0 与深度 pass b0 共用同一块
@@ -256,8 +265,19 @@ void csDirect(uint3 tid : SV_DispatchThreadID)
         shadow = (q.CommittedStatus() != COMMITTED_NOTHING) ? 0.0f : 1.0f;
     }
 
-    g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                                gbuf.ddxUv, gbuf.ddyUv, shadow);
+    // M-WEA2（Q-W2-1=B2）：直光合成后逐像素高度雾——UE 口径（雾在光照
+    // 合成后按视线到表面深度应用一次）；fogColor = 天穹地平线色（CPU 同源）。
+    // alpha 语义保持（材质 alpha 透传，material.slang shadePbrGrad 返回值）。
+    {
+        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
+        const float3 toP = gbuf.worldPos - g_cameraPos.xyz;
+        const float  L   = length(toP);
+        const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
+                                          g_directFogA.x, g_directFogA.y,
+                                          g_directFogB.rgb, 1.0e4f);
+        g_out[pixel] = float4(col, lit.a);
+    }
 }
 
 // M15.1（S15）：VSM 版直光 pass（--vsm 时渲染端选本入口的 blob/csDirect.csvsm）。
@@ -345,8 +365,17 @@ void csDirectVsm(uint3 tid : SV_DispatchThreadID)
         }
     }
 
-    g_out[pixel] = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
-                                gbuf.ddxUv, gbuf.ddyUv, shadow);
+    // M-WEA2：与 csDirect 同源同序逐像素高度雾（差异仅 shadow 来源 = VSM 查表）
+    {
+        const float4 lit = shadePbrGrad(mat, gbuf.normal, gbuf.worldPos, gbuf.uv,
+                                        gbuf.ddxUv, gbuf.ddyUv, shadow);
+        const float3 toP = gbuf.worldPos - g_cameraPos.xyz;
+        const float  L   = length(toP);
+        const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
+                                          g_directFogA.x, g_directFogA.y,
+                                          g_directFogB.rgb, 1.0e4f);
+        g_out[pixel] = float4(col, lit.a);
+    }
 }
 
 // ============================================================================
@@ -594,7 +623,12 @@ void csReferenceGI(uint3 tid : SV_DispatchThreadID)
             giray.Direction = d;
             giray.TMin      = 0.001f;                                  // rt.slang/bevy 口径
             giray.TMax      = 1.0e4f;                                  // 截太小漏天光（bevy 注释）
-            float3 lin = skyGradientParams(d, g_giZenith.rgb, g_giHorizon.rgb); // miss → 天穹（M-WEA1 CB 参数）
+            // miss → 天穹（M-WEA1 CB 参数）；M-WEA2：天空项先过沿程高度雾
+            //（与探针 miss 同口径 = Q14-1 参考尺同源）
+            float3 lin = applyHeightFog(
+                skyGradientParams(d, g_giZenith.rgb, g_giHorizon.rgb),
+                giray.Origin.y, d, 1.0e4f, g_giFog.x, g_giFog.y,
+                g_giHorizon.rgb, 500.0f); // miss → 天穹（M-WEA1 CB 参数）
             // Q11-2b 重开（2026-11-12 用户拍板）：命中面 GI 段原被
             // `g_refSamplesStart == 0xdeadbeefu` 守卫恒 false 跳过（s10-refgi
             // 冻结基线实为纯天穹）。现改 `if (true)` 无条件执行 = 真·单弹射

@@ -1062,6 +1062,7 @@ private:
     bool                         pulling_ = false;                 // 是否启用材质反解
     nvrhi::ShaderHandle          vsMatResolve_, psMatResolve_;
     nvrhi::BufferHandle          matResolveConstants_;             // volatile CB 16B（b2）
+    nvrhi::BufferHandle          rasterFogCB_;            // volatile CB 32B（b4：M-WEA2 raster 直光雾 fogA/fogB）
     nvrhi::BindingLayoutHandle   matResolveLayout_;                // b0+b1+b2+t0..t3+t4..t11+t12+s0
     nvrhi::BindingSetHandle      matResolveSet_;
     nvrhi::GraphicsPipelineHandle matResolvePSO_;

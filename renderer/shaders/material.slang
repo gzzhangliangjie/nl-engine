@@ -35,6 +35,7 @@
 
 #include "visbuf_common.slangh"
 #include "gbuffer_common.slangh"
+#include "sky.slangh"      // M-WEA2：applyHeightFog（raster 直光雾与 compute 同源）
 
 cbuffer SceneConstants : register(b0)
 {
@@ -60,6 +61,17 @@ cbuffer MatResolveConstants : register(b2)
     float g_width;
     float g_height;
     float2 _pad;
+};
+
+// M-WEA2（Q-W2-1=B2）：b4 RasterFog——raster matResolve 直光雾专用 32B CB
+//（纯 graphics 绑定；雾两包与 compute 直光 b3 雾同源同值，CPU writeResolveConstants
+// 统一填写）。density=0（天气关）→ T≡1 → raster 基线 bytes 保形。
+// ⚠️ 不复用 b3 DirectConstants：共享槽位表加 b3 撞 NVRHI volatile CB 上限（6 个）
+// + compute layout b3 重复声明（2026-11-14 实测），故走 matResolve 专属 b4。
+cbuffer RasterFogConstants : register(b4)
+{
+    float4 g_rFogA;        // x = fogDensity 1/m / y = fogHeight m / zw 预留
+    float4 g_rFogB;        // rgb = 雾色（CPU 填 weatherHorizon 同值）/ a 预留
 };
 
 StructuredBuffer<uint64_t> g_visSRV          : register(t0);
@@ -213,7 +225,13 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
         return float4(uvF, 0.0f, 1.0f);
     }
     if (mode == 5u) {                       // PBR 直光（复刻 model.slang::shadePbr）
-        return shadePbrGrad(mat, normal, worldPos, uvF, duv_dx, duv_dy);
+        const float4 lit = shadePbrGrad(mat, normal, worldPos, uvF, duv_dx, duv_dy);
+        // M-WEA2：raster 直光逐像素高度雾（与 csDirect 同口径；alpha 透传）
+        const float3 toP = worldPos - g_cameraPos.xyz;
+        const float  L   = length(toP);
+        const float3 col = applyHeightFog(lit.rgb, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
+                                          g_rFogA.x, g_rFogA.y, g_rFogB.rgb, 1.0e4f);
+        return float4(col, lit.a);
     }
 
     // mode 0：文本化（复刻 model.slang::shade 的 mode 0，与 M0.4 传统画法等价）。
@@ -229,5 +247,10 @@ float4 psMatResolve(float4 fragPos : SV_Position) : SV_Target
     // g_options.z 全路径空闲（g_options.y 被 clusterCount / pbr-naive 双重占用）。
     const float amb = (g_options.z > 0.5f) ? 0.03f : g_lightDir.w;
     float3 lit = min(albedo * (amb + (1.0f - amb) * ndl), 1.0f);
+    // M-WEA2：probe-viz / mode 0 直光同样逐像素雾化（与 mode 5 同口径）
+    const float3 toP = worldPos - g_cameraPos.xyz;
+    const float  L   = length(toP);
+    lit = applyHeightFog(lit, g_cameraPos.y, toP / max(L, 1.0e-4f), L,
+                         g_rFogA.x, g_rFogA.y, g_rFogB.rgb, 1.0e4f);
     return float4(lit, 1.0f);
 }
