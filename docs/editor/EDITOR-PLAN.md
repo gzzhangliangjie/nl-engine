@@ -40,6 +40,8 @@
 - **M-E4** 重连全链路 / announce caps / 焦点路由 / 场景树插件。 **[DONE 2026-11-11]**（台账见 §8 M-E4 段）
 - **M-E5** 插件 DLL 动态扫描加载 + 材质检查插件。 **[DONE 2026-11-11]**（台账见 §8 M-E5 段）
 - **M-E6** 命名管道传输（TCP 默认不变）+ 多视口（`viewId` 路由，一编辑器接纳多引擎进程）。 **[DONE 2026-11-11]** — `editor_bridge/transport.{hpp,cpp}` 抽象 TCP/命名管道双链路（endpoint 解析 + 异步重叠 IO）；`RpcHost` 多 client 化 + `callTo/notifyTo` 定向路由；`RpcBridge` 真正消费 endpoint；`EmbedWindow::announce` 带 `viewId`；viewer `--editor-endpoint` / `--view-id`，editor `--rpc-endpoint` + 多视口平铺 + `editor.views` / `editor.pingView` / `editor.callView`；插件统一 500ms 快速失败避免冻结渲染线程。验收：`rpc_self_test.exe` TCP+pipe 全绿、`tools/m-e6-probe.py` 五段 33 断言 0 fail、双视口目击证据 `out/m-e6-multiview.png`。（台账见 §8 M-E6 段）
+- **M-E7** 模型预览插件（2026-11-14 用户拍板重开 editor 轨道，§7.1b）。新建**专用预览小场景**（地面 + 环境光 + 中性背景，待预览模型居中，编辑器选模型文件加载）；`camera.preset` 预设视角一键切换（前/后/左/右/顶/等距 = 多方位无死角）；光照参数 cvar 化（太阳方位/强度/环境光 → `cvarGet/cvarSet` 既有通道）；model 模式材质写回（修复 M-E5 起 `scene.setMaterial` 在 model 模式 error 100）；editor 侧 `ModelPreviewPlugin`。**参数通道拍板：走 CVar + M-SC10 描述表既有反射层，不另做一套**。
+- **M-E8** 场景树增强。层级树（ECS parent 链，绑定面 `ecsSetParent/ecsGetParent` 已有）；`editor.sceneChanged` 实时推送（引擎侧对象增删/参数变更 notify，编辑器收到后拉增量——替换手动 Refresh）；泛化参数读写 handler（原生参数走 cvar 通道；脚本组件字段走 M-SC10 `[Prop]` 描述表，**依赖 M-SC10 落码**，未落则先接 cvar 部分并留描述表接驳点）。
 
 ---
 
@@ -95,6 +97,24 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 ---
 
 ## 8. 进度台账
+
+### 2026-11-14 — 轨道重开拍板（M-E7/M-E8 立项，§7.1b）
+
+**背景**：用户提出两个新工具需求——① 模型预览工具（对接外接编辑器、模型放预设小场景、多方位无死角预览、模型参数与光照参数设置）；② 场景树预览工具（对接外接编辑器、看到场景全部对象、实时获取与调整参数）。补充约定：**参数设置尽量走反射胶水层，不另外做一套**。
+
+**证据复核（本轮实读）**：`EDITOR-PLAN.md` + `RPC-SPEC.md` 整轨台账（M-E0~E6 已 merge master `ac50c10`，既有 camera/scene/materials 三插件与手写 handler 现状）；script wt `exports.api`（反射绑定面：cvarGet/Set/List 已实现，M-SC10 `[Prop]` 描述表已拍板未落码）；`P8-SCRIPT-PLAN.md`（M-SC10 属性面板口径）；viewer 光照代码（`FrameParams.lightDir` 非 cvar，写死在 viewer）。
+
+**用户拍板（AskUserQuestion 四项全拍）**：
+1. **轨道编排** = 重开 editor 轨道 M-E7（模型预览插件）→ M-E8（场景树增强）；
+2. **参数通道** = CVar + M-SC10 描述表（引擎原生参数注册成 cvar 走 `cvarGet/cvarSet`；脚本组件字段走 M-SC10 `[Prop]` 描述表；两层全是既有反射层，RPC 只做传输，零新反射系统）；
+3. **预设小场景** = 新建专用预览小场景（不复用现有 model 模式环境）；
+4. **实时机制** = 引擎推送 `editor.sceneChanged`（对象增删/参数变更 notify，编辑器收后拉增量）。
+
+**落地登记**：`wt_pool.py` TRACKS editor closed→active；wt 重建于 `E:/UE_STUDY_2026/nl-engine-editor`（feat/editor ff 至 master `e316938`）；junction `.workbuddy` + `thirdparty/slang/dist`（PowerShell 原生 API）重建；claim M-E7 --force。M-E7/E8 分期定义写回 §3。
+
+**顺手修复（master `e316938`）**：`.gitignore` 框线注释行粘连致 6 条规则失效（`/build/`、`/CMakeCache.txt`、`.vs/`、`thirdparty/slang/dist/`、`__pycache__/`、`script/**/bin/` 整体裸奔——主树 status 的 `?? build/`、`?? script/**/bin/` 即此症状），拆行还原并双树验证。
+
+**冻结面**：`renderer/` 图形路径、`shader/`、`example/`、`tools/regression/cases.json`、`kStage` 零触碰；M-E7 光照 cvar 化只加注册不动渲染链路。
 
 ### 2026-11-11 — M-E0 + M-E1 落地（feat/editor worktree）
 
