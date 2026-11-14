@@ -8673,6 +8673,15 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                     //（光源略出屏仍有光束贡献）。
                     if (nz > 0.0f && nz < 1.0f &&
                         std::fabs(nx) < 1.3f && std::fabs(ny) < 1.3f) {
+                        // M-NL2 诊断：首帧光源入选快照（uv/ndc/半径），定位
+                        // 「--godrays 静默无效」族（后续项：放宽出屏余量拍板）。
+                        static bool godDiagLogged_ = false;
+                        if (!godDiagLogged_) {
+                            nl::core::log::infoCh(
+                                "godrays", "light picked: pos=(%.2f,%.2f,%.2f) ndc=(%.3f,%.3f,%.3f)",
+                                x, y, z, nx, ny, nz);
+                            godDiagLogged_ = true;
+                        }
                         godLightNdc_[0] = nx; godLightNdc_[1] = ny; godLightNdc_[2] = nz;
                         godLightUv_[0] = nx * 0.5f + 0.5f;
                         godLightUv_[1] = 0.5f - ny * 0.5f;
@@ -8696,6 +8705,15 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         // 当帧相机 mvp 快照（occl 几何 pass 的 b0；applyGodRays 消费）
                         std::memcpy(godViewProj_, params.mvp, sizeof(godViewProj_));
                         godLightVisible_ = true;
+                    } else {
+                        // M-NL2 诊断：拒绝原因首帧一次（NDC 出界族定位）。
+                        static bool godRejLogged_ = false;
+                        if (!godRejLogged_) {
+                            nl::core::log::infoCh(
+                                "godrays", "light rejected: pos=(%.2f,%.2f,%.2f) cw=%.4f ndc=(%.3f,%.3f,%.3f)",
+                                x, y, z, cw, nx, ny, nz);
+                            godRejLogged_ = true;
+                        }
                     }
                 }
             }
