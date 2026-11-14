@@ -134,7 +134,7 @@
 
 **核心就三条，凡分钟级任务一律适用：**
 
-1. **长任务一律后台化，不当场等**：构建 / 回归 / ctest 这类分钟级命令用后台任务跑（`run_in_background`），跑完会主动通知回来。前台阻塞 600 秒 = 600 秒全程计费；后台跑 = 立刻结束这一轮回复，等待期不烧任何积分，通知到达后再起一轮收结果。
+1. **长任务一律后台化，禁止前台执行（2026-11-14 用户拍板硬闸）**：构建 / 回归 / ctest 这类**预期分钟级及以上**的命令**只准 `run_in_background`**，前台跑 = 违规，「看起来不会太久」不构成借口；跑完会主动通知回来。前台阻塞 600 秒 = 600 秒全程计费；后台跑 = 立刻结束这一轮回复，等待期不烧任何积分，通知到达后再起一轮收结果。
 2. **绝不 sleep 空转轮询**：需要查进度时用非阻塞查询（`block=false`）或 30~60 秒短超时，查完这轮就结束，不挂机等。连续 sleep 等待是最纯的浪费。
 3. **能合并的命令串起来**：`build && ctest --repeat until-pass:3 && regression --only xxx` 一条后台命令跑完、只收一次结果，比分段等省好几轮。
 4. **后台任务完成通知到达 = 下一动作立即查结果并报数**，不许插任何中间动作（2026-11-14 晚三次教训：通知到了不报，等用户问「卡死了吧」才看）。
@@ -146,7 +146,7 @@
 
 9b. **后台命令尾部必须写结果锚文件（2026-11-14 用户拍板，补「通知到达即查」的机械缺口）**：任何 `run_in_background` 命令尾部统一追加 `; rc=$?; echo "$(date '+%F %T') <任务名> rc=$rc" >> .workbuddy/bg-last.log`——结果落盘不依赖对话记忆与通知回路，即使通知被淹没/回合被中断，任何后续命令或下次会话读锚文件即知上次后台任务结局（成功/失败/退出码）。锚文件是追加式台账，报告结果时引用最近一条；长链命令在**每个阶段**（构建完/冒烟完）各自写一条，不只在整链尾写。
 
-9c. **流程禁手台账（2026-11-14 用户拍板，移植 rea_potato 成熟范式）**：`docs/流程禁手台账.md` 是唯一案发登记处，定规「**同类流程坑第二次触发=当场升格红线，勿等第三次**」。五步升格流程（案发即登记 / 第二次当场升格禁令措辞「禁 X」/ 同族按机制归类 / 红线再犯交付摘要单列交代 / 条目不撤销只修订）见台账头部。闸拒绝自动落账 `.workbuddy/gate-blocks.log`（被拦住 ≠ 案发，进机械拦截区）；close 报表 ③b 行挂台账与拦截计数。
+9c. **流程禁手台账（2026-11-14 用户拍板，移植 rea_potato 成熟范式）**：`docs/流程禁手台账.md` 是唯一案发登记处，定规「**同类流程坑第二次触发=当场升格红线，勿等第三次**」。五步升格流程（案发即登记 / 第二次当场升格禁令措辞「禁 X」/ 同族按机制归类 / 红线再犯交付摘要单列交代 / 条目不撤销只修订）见台账头部。闸拒绝自动落账（被拦住 ≠ 案发，进机械拦截区）；close 报表 ③b 行挂台账与拦截计数。落账两份：仓库侧 `.workbuddy/gate-blocks.log`（wt_gate/pre-commit）+ 会话级 `~/.workbuddy/hooks/gate-blocks.log`（wt_tree_gate/nl_ops_gate，含豁免）。**统计入口**：`python ~/.workbuddy/hooks/gate_report.py`——汇总两份台账，同族 ≥2 案自动标升格提示（台账升格流程第 2 步的触发器）。
 
 ---
 
@@ -218,7 +218,14 @@
 6. **收尾即同步关联文档（2026-11-08 用户拍板固化）**：worktree 内每完成一个里程碑 / 阶段，除在 track 分支写本轨道验收纪要外，**必须同步更新 master 侧关联文档**——`AGENTS.md` 实例注册表状态、`docs/PARALLEL-TRACKS.md` §7 注册表、相关候选 / 计划文档（如 `NON-RENDER-ROADMAP.md`）——不许让 master 侧文档停在过时值。注册表 / 跨轨道文档的更新在**主 worktree 提交**（避免与 feature 分支双份冲突；教训：动作系统 M-A5.1 已落地，master 侧注册表仍写「候选」，下个会话即误判进度）。
 7. **对话归属登记 = wt_pool 占坑闸（2026-11-09 用户拍板，事故防复发）**：**任务号 = 里程碑编号**（如 M-C1、S4.2，里程碑编号天然关联轨道，不另设任务编号体系）。①**每个对话开场必须声明里程碑编号**；用户没给就先提示补充，补上后立即登记归属：`python tools/wt_pool.py claim --track <轨道> --milestone <编号> --note "本对话用途"`。②**动任何 worktree（编辑 / merge / 删除 / 清理）前先过闸**：`python tools/wt_pool.py check --track <轨道> --milestone <编号>`；CLOSED 轨道一律不碰（要重开按 §7.1b 重建）；被其他里程碑占用一律停手。③锁文件 `.wt_pool_busy.json` 在主树根，全部 worktree 共享一把锁（已 .gitignore）。④工具自测 `python tools/wt_pool.py selftest`（21 项），全表 `python tools/wt_pool.py status`。本条是对话轨道边界的机械可查实现——「这个对话只处理自己轨道的东西」不再只靠自觉。
 8. **树边界闸（2026-11-10 用户拍板，防占坑会话越界污染）**：占坑会话伸手改主树 / 别的 wt（跑错树的 regression、重拍错树的 example 基线）是错乱主因，两道机械闸：①**cwd 自查**：claim 后第一步、以及任何切换目录之后跑 `python tools/wt_pool.py scope [--milestone <编号>]`——在自己 wt 内 = exit 0；在主树且锁里有活跃 claim = exit 2 警告（主线会话核实后可忽略）；在别的 track 的 wt 内 = exit 1 拒绝。②**脚本树闸**：共享入口工具（`tools/regression.py`、`tools/showcase/server.py`、`tools/reshot-hud-s71.py`，后续同类入口照接）开头已接 `tools/tree_gate.py`——**脚本所在树 ≠ cwd 所在树 → exit 2 拒绝**，跑工具一律用自己的树的副本；刻意例外（CI 沙箱 cwd 无关等）设 `NL_TREE_GATE_ALLOW=1` 放行（输出 WARN）。③`wt_pool.py` 本身不受树闸限制（它就是跨树占坑工具，锁在共享 .git）。
+9. **会话级 PreToolUse 硬闸 = dev-expert hooks 框架（2026-11-14 用户拍板固化；+57 事故：cases.json 追加命令无 cd 前缀、cwd 重置回主树误落 +57 行，仓库级三闸拦不到裸 python 命令）**：会话级工具调用拦截用 **dev-expert 技能自带 hooks 框架**——`C:\Users\zlj10\.workbuddy\skills\dev-expert\hooks.json`（模板，`{{PYTHON_BIN}}`/`{{HOOKS_DIR}}` 占位符）+ `hooks\` 脚本目录。机制：PreToolUse/PostToolUse matcher 正则匹配工具名（Bash 族 = `Bash|execute_command|run_command|run_in_terminal|terminal`，写族 = `Write|Edit|write_to_file|replace_in_file`），命中即调脚本，stdin 收事件 JSON（`tool_input.command` / `tool_input.file_path`，多字段容错），**`exit 2` = 阻断**，打印文本回给 Agent 自纠。已挂 `hooks/wt_tree_gate.py`：命令/写路径含 `cases.json` 且无 nl-engine 树锚点（nl-engine 绝对路径或 `cd <nl-engine树>` 开头）→ exit 2 阻断并打印改法；逃生口 `NL_HOOK_ALLOW=1`。**维护铁律（2026-11-14 实测）**：①WorkBuddy 运行时真正加载的入口是 **`~/.workbuddy/settings.json` 的 `hooks` 字段**（或项目级 `.codebuddy/settings.json`），dev-expert 的 `hooks.json`/`hooks.installed.json` 是 CodeBuddy CN 侧入口——两处都要维护（脚本正本 `~/.workbuddy/hooks/`，dev-expert 侧用 `install_hooks.py` 同步；改完不用重启，下一次工具调用即生效）；②skill 内嵌 hook 默认不生效需手动信任，正本放中性目录 `~/.workbuddy/hooks/`；③Windows 管道下 Python 输出默认 GBK，hook 脚本必须 `sys.stdout.reconfigure(encoding='utf-8')` 否则拦截信息乱码；④新增硬闸流程：`~/.workbuddy/hooks/` 加脚本 → settings.json 登记 matcher → 用样例命令实测（阻断 exit 2 + 放行 0 + 中文信息无乱码）→ dev-expert 侧同步。已挂 `wt_tree_gate.py` 并实测生效（探针被拦 + cd 锚点/绝对路径/逃生口三路放行）。
 
+10. **A 档纪律闸 = nl_ops_gate.py（2026-11-14 用户拍板「A档全做」，口头规范升级硬闸省钱）**：同一 hooks 框架（`~/.workbuddy/hooks/nl_ops_gate.py`，settings.json Bash matcher），四条：
+  ①**R1 回归禁全量**：命令含 regression.py 无 `--only` → 拦（AGENTS §4.4；逃生口 `NL_REG_FULL=1`）；
+  ②**R2 ctest 必带 repeat**：裸 ctest 无 `until-pass:3` → 拦；`wt.bat <track> ctest` 入口放行（内部已注入）；逃生口 `NL_CTEST_ALLOW=1`；
+  ③**R3 后台必写锚**：`run_in_background=true` 且命令无 `bg-last.log` → 拦（§9b；逃生口 `NL_HOOK_ALLOW=1`）；
+  ④**R4 递归 rm 须锚点**：`rm -r/-rf` 无树锚 → 拦并引导走 `wt.bat clean`；非递归 `rm -f`（index.lock 例行）放行。
+  12 场景离线实测 + 真实探针生效。新增硬闸照第 9 条维护铁律四步流程；逃生口一览：`NL_REG_FULL` / `NL_CTEST_ALLOW` / `NL_HOOK_ALLOW`。
 > 完整版（含占用说明、M-J0 等里程碑衔接）见 `docs/PARALLEL-TRACKS.md` §7。
 
 ---
