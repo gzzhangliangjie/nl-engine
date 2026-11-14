@@ -1248,6 +1248,53 @@ struct EditorEmbed {
     bool previewMode = false;
     nl::renderer::Renderer* editRenderer = nullptr;
 
+    // ---- M-E12：编辑 undo-redo 命令栈（viewer 侧单源；RPC 与 GUI 编辑共用）----
+    // 设计：五类编辑操作成功路径 push 逆操作记录（pushUndo 清 redo 栈——新编辑
+    // 作废重做分支）；scene.undo/redo 弹栈执行。remove 的 undo 走子树快照重建，
+    // 重建 id 变化 → oldId→newId 映射修正双栈全部引用（50 实体规模锚，O(栈×N)）。
+    struct EditCmd {
+        enum class Kind : int { Rename, Link, Prop, Structural };
+        Kind kind = Kind::Rename;
+        std::uint64_t id = 0;          // 操作主体（Structural: 根）
+        std::uint64_t parent = 0;      // Link: parent 旧值（undo 目标）
+        std::uint64_t parentNew = 0;   // Link: parent 新值（redo 目标）
+        bool wasReparent = false;      // Link: 正向经 reparent（保世界变换）则 undo/redo 同路
+        std::string sa, sb;            // Rename: 旧/新名称（undo/redo 后交换）
+        // Prop 记录（旧值/新值各一份；valueKind 区分载荷形态：vec|scalar|bool|string）
+        std::string comp, propName, propValueKind;
+        float fOld[4] = {}, fNew[4] = {};
+        double sOld = 0.0, sNew = 0.0;
+        bool bOld = false, bNew = false;
+        std::string strOld, strNew;
+        // Structural：删除前子树快照 + 方向位（undoIsDelete=true = undo 执行删除，
+        // 即正向是 add；false = undo 执行重建，即正向是 remove。执行后翻转压对侧）。
+        struct Snap {
+            std::uint64_t id = 0, parent = 0;
+            std::string name, kind, mesh;
+            bool hasTransform = false, hasModel = false, hasLight = false;
+            float tPos[3] = {}, tScale[3] = {1, 1, 1}, tRot[4] = {0, 0, 0, 1};
+            float mTint[3] = {1, 1, 1}, mRough = 1.f, mMetal = 0.f;
+            float lColor[3] = {1, 1, 1}, lDir[3] = {0, -1, 0}, lPos[3] = {};
+            double lIntensity = 1.0, lRange = 10.0;
+            int lType = 0;
+            bool lShadow = false;
+        };
+        std::vector<Snap> removed;
+        bool undoIsDelete = false;
+    };
+    std::vector<EditCmd> editUndoStack_, editRedoStack_;
+    static constexpr std::size_t kEditUndoDepth = 128;   // 上限防无界增长
+
+    template <typename Vec>
+    static void editTrimPush(Vec& v, typename Vec::value_type&& c, std::size_t cap) {
+        if (v.size() >= cap) v.erase(v.begin());
+        v.push_back(std::move(c));
+    }
+    void editPushUndo(EditCmd&& c) {
+        editRedoStack_.clear();   // 新编辑作废重做分支
+        editTrimPush(editUndoStack_, std::move(c), kEditUndoDepth);
+    }
+
     // M-E8：场景变更推送（连接未建立时静默忽略；编辑器侧 registerNotify 置
     // dirty 自动刷新 outliner，替换手动 Refresh）。
     void notifySceneChanged() {
@@ -1675,6 +1722,341 @@ struct EditorEmbed {
             return std::nullopt;
         };
 
+        // ---- M-E12：undo-redo 执行机制（数据 = EditCmd；push 点在各 handler 成功路径）----
+        // 结构命令（Add/Remove 同构）：undo 方向 = 重建快照（id 变化 → oldId→newId
+        // 映射修正双栈全部引用），redo 方向 = 再删 + 快照重抓。50 实体规模锚。
+        auto snapshotSubtree = [this](std::uint64_t root) -> std::vector<EditCmd::Snap> {
+            std::vector<EditCmd::Snap> out;
+            std::vector<std::uint64_t> live{root};
+            const auto& ids = editWorld->getEntityIDs();
+            bool grew = true;
+            while (grew) {   // 子树集合闭包（父在集合内的实体全收）
+                grew = false;
+                for (std::uint64_t e : ids) {
+                    if (std::find(live.begin(), live.end(), e) != live.end()) continue;
+                    auto par = editWorld->getParentID(static_cast<nl::scene::EntityID>(e));
+                    const std::uint64_t p = par ? static_cast<std::uint64_t>(*par) : 0;
+                    if (p && std::find(live.begin(), live.end(), p) != live.end()) {
+                        live.push_back(e);
+                        grew = true;
+                    }
+                }
+            }
+            // 重建序 = 祖先先于后代（每轮追加「父已定位」者）
+            std::vector<std::uint64_t> ordered;
+            std::vector<std::uint64_t> placed{root};
+            grew = true;
+            while (ordered.size() + 1 < live.size() && grew) {
+                grew = false;
+                for (std::uint64_t e : live) {
+                    if (e == root || std::find(ordered.begin(), ordered.end(), e) != ordered.end())
+                        continue;
+                    auto par = editWorld->getParentID(static_cast<nl::scene::EntityID>(e));
+                    const std::uint64_t p = par ? static_cast<std::uint64_t>(*par) : 0;
+                    if (p == root || std::find(placed.begin(), placed.end(), p) != placed.end()) {
+                        ordered.push_back(e);
+                        placed.push_back(e);
+                        grew = true;
+                    }
+                }
+            }
+            auto fillCommon = [&](EditCmd::Snap& s, std::uint64_t e) {
+                s.id = e;
+                auto par = editWorld->getParentID(static_cast<nl::scene::EntityID>(e));
+                s.parent = par ? static_cast<std::uint64_t>(*par) : 0;
+                s.name = editWorld->getName(static_cast<nl::scene::EntityID>(e));
+                if (auto* t = editWorld->getComponent<nl::scene::TransformComponent>(
+                        static_cast<nl::scene::EntityID>(e))) {
+                    s.hasTransform = true;
+                    s.tPos[0] = t->local.position.x; s.tPos[1] = t->local.position.y;
+                    s.tPos[2] = t->local.position.z;
+                    s.tScale[0] = t->local.scale.x; s.tScale[1] = t->local.scale.y;
+                    s.tScale[2] = t->local.scale.z;
+                    s.tRot[0] = t->local.rotation.x; s.tRot[1] = t->local.rotation.y;
+                    s.tRot[2] = t->local.rotation.z; s.tRot[3] = t->local.rotation.w;
+                }
+                if (auto* mc = editWorld->getComponent<nl::scene::ModelComponent>(
+                        static_cast<nl::scene::EntityID>(e))) {
+                    s.hasModel = true;
+                    s.kind = "model";
+                    s.mesh = mc->meshFile;
+                    s.mTint[0] = mc->tint.x; s.mTint[1] = mc->tint.y; s.mTint[2] = mc->tint.z;
+                    s.mRough = mc->roughness;
+                    s.mMetal = mc->metallic;
+                }
+                if (auto* lc = editWorld->getComponent<nl::scene::LightComponent>(
+                        static_cast<nl::scene::EntityID>(e))) {
+                    s.hasLight = true;
+                    if (s.kind.empty()) s.kind = "light";
+                    s.lType = lc->type;
+                    s.lIntensity = lc->intensity;
+                    s.lRange = lc->range;
+                    s.lShadow = lc->shadow;
+                    s.lColor[0] = lc->color.x; s.lColor[1] = lc->color.y; s.lColor[2] = lc->color.z;
+                    s.lDir[0] = lc->direction.x; s.lDir[1] = lc->direction.y;
+                    s.lDir[2] = lc->direction.z;
+                    s.lPos[0] = lc->position.x; s.lPos[1] = lc->position.y;
+                    s.lPos[2] = lc->position.z;
+                }
+                if (s.kind.empty()) s.kind = "empty";
+            };
+            EditCmd::Snap rootSnap;
+            fillCommon(rootSnap, root);
+            out.push_back(std::move(rootSnap));
+            for (std::uint64_t e : ordered) {
+                EditCmd::Snap s;
+                fillCommon(s, e);
+                out.push_back(std::move(s));
+            }
+            return out;
+        };
+        auto rebuildFromSnaps = [this](const std::vector<EditCmd::Snap>& snaps,
+                                       std::unordered_map<std::uint64_t, std::uint64_t>& idMap)
+                -> std::uint64_t {
+            std::uint64_t newRoot = 0;
+            for (const auto& s : snaps) {
+                std::uint64_t par = 0;
+                if (s.parent) {
+                    auto it = idMap.find(s.parent);
+                    if (it != idMap.end()) {
+                        par = it->second;
+                    } else if (editWorld->exists(static_cast<nl::scene::EntityID>(s.parent))) {
+                        par = s.parent;   // 活父（未删实体，如 addEntity 的挂父）→ 直接挂
+                    } else {
+                        continue;   // 父在快照内但未重建（防御；快照序正常不发生）
+                    }
+                }
+                auto ent = editWorld->newEntity(s.name);
+                if (par)
+                    editWorld->setParent(ent.getID(),
+                                         std::optional<nl::scene::EntityID>(
+                                             static_cast<nl::scene::EntityID>(par)));
+                if (s.hasTransform) {
+                    auto t = std::make_unique<nl::scene::TransformComponent>(ent);
+                    t->local.position = {s.tPos[0], s.tPos[1], s.tPos[2]};
+                    t->local.scale = {s.tScale[0], s.tScale[1], s.tScale[2]};
+                    t->local.rotation = {s.tRot[0], s.tRot[1], s.tRot[2], s.tRot[3]};
+                    ent.addComponent(std::move(t));
+                }
+                if (s.hasModel) {
+                    auto mc = std::make_unique<nl::scene::ModelComponent>(ent);
+                    mc->meshFile = s.mesh;
+                    mc->tint = {s.mTint[0], s.mTint[1], s.mTint[2]};
+                    mc->roughness = s.mRough;
+                    mc->metallic = s.mMetal;
+                    ent.addComponent(std::move(mc));
+                }
+                if (s.hasLight) {
+                    auto lc = std::make_unique<nl::scene::LightComponent>(ent);
+                    lc->type = s.lType;
+                    lc->intensity = static_cast<float>(s.lIntensity);
+                    lc->range = static_cast<float>(s.lRange);
+                    lc->shadow = s.lShadow;
+                    lc->color = {s.lColor[0], s.lColor[1], s.lColor[2]};
+                    lc->direction = {s.lDir[0], s.lDir[1], s.lDir[2]};
+                    lc->position = {s.lPos[0], s.lPos[1], s.lPos[2]};
+                    ent.addComponent(std::move(lc));
+                }
+                const std::uint64_t nid = static_cast<std::uint64_t>(ent.getID());
+                idMap[s.id] = nid;
+                if (s.id == snaps.front().id) newRoot = nid;
+            }
+            editWorld->flushEntityCreationAndRemoval();
+            return newRoot;
+        };
+        auto remapStacks = [this](const std::unordered_map<std::uint64_t, std::uint64_t>& m) {
+            auto fix = [&m](std::uint64_t& v) {
+                if (!v) return;
+                auto it = m.find(v);
+                if (it != m.end()) v = it->second;
+            };
+            for (auto& c : editUndoStack_) {
+                fix(c.id); fix(c.parent); fix(c.parentNew);
+                for (auto& s : c.removed) { fix(s.id); fix(s.parent); }   // 快照内部引用同步
+            }
+            for (auto& c : editRedoStack_) {
+                fix(c.id); fix(c.parent); fix(c.parentNew);
+                for (auto& s : c.removed) { fix(s.id); fix(s.parent); }
+            }
+        };
+        // Prop undo/redo 写回镜像（值来自此前合法写入，不再走校验；联动刷新同 setProp）。
+        auto applyPropValue = [this, refreshObjectMatrices, syncLightBuffer](
+                nl::scene::EntityID eid, const std::string& comp, const std::string& name,
+                const std::string& vk, const float* fv, double s, bool b, const std::string& str) {
+            if (comp == "Transform") {
+                auto* t = editWorld->getComponent<nl::scene::TransformComponent>(eid);
+                if (!t) return;
+                if (name == "position")       t->local.position = {fv[0], fv[1], fv[2]};
+                else if (name == "scale")     t->local.scale = {fv[0], fv[1], fv[2]};
+                else if (name == "rotation")  t->local.rotation = {fv[0], fv[1], fv[2], fv[3]};
+                refreshObjectMatrices();
+            } else if (comp == "Model") {
+                auto* mc = editWorld->getComponent<nl::scene::ModelComponent>(eid);
+                if (!mc) return;
+                if (name == "meshFile")      mc->meshFile = str;   // 集合签名变 → 帧边界重建
+                else if (name == "tint")     mc->tint = {fv[0], fv[1], fv[2]};
+                else if (name == "roughness") mc->roughness = static_cast<float>(s);
+                else if (name == "metallic") mc->metallic = static_cast<float>(s);
+            } else if (comp == "Light") {
+                auto* lc = editWorld->getComponent<nl::scene::LightComponent>(eid);
+                if (!lc) return;
+                if (name == "type")            lc->type = static_cast<int>(s);
+                else if (name == "direction")  lc->direction = {fv[0], fv[1], fv[2]};
+                else if (name == "color")      lc->color = {fv[0], fv[1], fv[2]};
+                else if (name == "position")   lc->position = {fv[0], fv[1], fv[2]};
+                else if (name == "intensity")  lc->intensity = static_cast<float>(s);
+                else if (name == "range")      lc->range = static_cast<float>(s);
+                else if (name == "shadow")     lc->shadow = b;
+            }
+            (void)vk;   // 形态标注自描述（vec=4 float / scalar / bool / string）
+        };
+        auto applyPropSide = [this, applyPropValue, syncLightBuffer](EditCmd& c, bool forward) {
+            const float* fv = forward ? c.fNew : c.fOld;
+            const double s = forward ? c.sNew : c.sOld;
+            const bool b = forward ? c.bNew : c.bOld;
+            const std::string& str = forward ? c.strNew : c.strOld;
+            applyPropValue(static_cast<nl::scene::EntityID>(c.id), c.comp, c.propName,
+                           c.propValueKind, fv, s, b, str);
+            // 灯联动（setProp 同款：槽位查找 + 单 upload）
+            if (c.comp == "Light" && sceneLightIds && sceneLights) {
+                for (std::size_t k = 0; k < sceneLightIds->size(); ++k)
+                    if ((*sceneLightIds)[k] == static_cast<nl::scene::EntityID>(c.id)) {
+                        syncLightBuffer(k);
+                        break;
+                    }
+            }
+            std::swap(c.fOld, c.fNew);
+            std::swap(c.sOld, c.sNew);
+            std::swap(c.bOld, c.bNew);
+            std::swap(c.strOld, c.strNew);
+        };
+        // undo/redo 执行（弹栈后的 cmd；Rename/Link/Prop 三类 cmd 自含旧/新双值，
+        // 两方向执行体完全同构 = 执行 c 的「当前正向侧」+ swap 双值 + 压对侧栈；
+        // Structural 两方向不对称，分写）。
+        // Structural 双向执行体：act=true = 删除（先重抓快照保证 removed 与当前
+        // id 对齐，再 remove+flush）；act=false = 重建（id 变化 → remapStacks 修正
+        // 双栈引用）。动作由来源栈决定：undo 栈 act=undoIsDelete，redo 栈取反；
+        // 执行后不翻转——同 cmd 在两栈间往返动作交替由栈来源天然保证。
+        auto doStructural = [this, snapshotSubtree, rebuildFromSnaps, remapStacks](
+                                    EditCmd& c, bool act) -> bool {
+            if (act) {
+                c.removed = snapshotSubtree(c.id);
+                editWorld->removeEntity(static_cast<nl::scene::EntityID>(c.id));
+                editWorld->flushEntityCreationAndRemoval();
+                return true;
+            }
+            if (c.removed.empty()) return false;
+            std::unordered_map<std::uint64_t, std::uint64_t> idMap;
+            const std::uint64_t newRoot = rebuildFromSnaps(c.removed, idMap);
+            if (!newRoot) return false;
+            remapStacks(idMap);
+            c.id = newRoot;
+            return true;
+        };
+        auto execUndo = [this, applyPropSide, refreshObjectMatrices, doStructural](
+                                EditCmd c) -> bool {
+            switch (c.kind) {
+            case EditCmd::Kind::Rename:
+                editWorld->updateName(static_cast<nl::scene::EntityID>(c.id), c.sa);
+                std::swap(c.sa, c.sb);
+                break;
+            case EditCmd::Kind::Link:
+                if (c.wasReparent)
+                    editWorld->reparent(static_cast<nl::scene::EntityID>(c.id),
+                                        c.parent ? std::optional<nl::scene::EntityID>(
+                                                       static_cast<nl::scene::EntityID>(c.parent))
+                                                 : std::nullopt);
+                else
+                    editWorld->setParent(static_cast<nl::scene::EntityID>(c.id),
+                                         c.parent ? std::optional<nl::scene::EntityID>(
+                                                        static_cast<nl::scene::EntityID>(c.parent))
+                                                  : std::nullopt);
+                refreshObjectMatrices();
+                std::swap(c.parent, c.parentNew);
+                break;
+            case EditCmd::Kind::Prop:
+                applyPropSide(c, false);
+                break;
+            case EditCmd::Kind::Structural:
+                if (!doStructural(c, c.undoIsDelete)) return false;
+                break;
+            }
+            editTrimPush(editRedoStack_, std::move(c), kEditUndoDepth);
+            return true;
+        };
+        auto execRedo = [this, applyPropSide, refreshObjectMatrices, doStructural](
+                                EditCmd c) -> bool {
+            switch (c.kind) {
+            case EditCmd::Kind::Rename:
+                editWorld->updateName(static_cast<nl::scene::EntityID>(c.id), c.sa);
+                std::swap(c.sa, c.sb);
+                break;
+            case EditCmd::Kind::Link:
+                if (c.wasReparent)
+                    editWorld->reparent(static_cast<nl::scene::EntityID>(c.id),
+                                        c.parent ? std::optional<nl::scene::EntityID>(
+                                                       static_cast<nl::scene::EntityID>(c.parent))
+                                                 : std::nullopt);
+                else
+                    editWorld->setParent(static_cast<nl::scene::EntityID>(c.id),
+                                         c.parent ? std::optional<nl::scene::EntityID>(
+                                                        static_cast<nl::scene::EntityID>(c.parent))
+                                                  : std::nullopt);
+                refreshObjectMatrices();
+                std::swap(c.parent, c.parentNew);
+                break;
+            case EditCmd::Kind::Prop:
+                applyPropSide(c, false);
+                break;
+            case EditCmd::Kind::Structural:
+                if (!doStructural(c, !c.undoIsDelete)) return false;
+                break;
+            }
+            editTrimPush(editUndoStack_, std::move(c), kEditUndoDepth);
+            return true;
+        };
+        bridge.registerHandler("scene.undo", [this, execUndo](const nl::editor::RpcValue&) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (editUndoStack_.empty())
+                return nl::editor::RpcError{102, "scene.undo: undo stack empty"};
+            EditCmd c = std::move(editUndoStack_.back());
+            editUndoStack_.pop_back();
+            if (!execUndo(std::move(c)))
+                return nl::editor::RpcError{103, "scene.undo: rebuild failed"};
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["undoDepth"] = (std::int64_t)editUndoStack_.size();
+            m["redoDepth"] = (std::int64_t)editRedoStack_.size();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        bridge.registerHandler("scene.redo", [this, execRedo](const nl::editor::RpcValue&) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (editRedoStack_.empty())
+                return nl::editor::RpcError{102, "scene.redo: redo stack empty"};
+            EditCmd c = std::move(editRedoStack_.back());
+            editRedoStack_.pop_back();
+            if (!execRedo(std::move(c)))
+                return nl::editor::RpcError{103, "scene.redo: rebuild failed"};
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["undoDepth"] = (std::int64_t)editUndoStack_.size();
+            m["redoDepth"] = (std::int64_t)editRedoStack_.size();
+            return nl::editor::RpcValue(std::move(m));
+        });
+
+        // 结构命令 push（undoIsDelete：add 正向 = true（undo 删新实体）；
+        // remove 正向 = false（undo 重建快照）。快照统一在「实体存在」时抓：
+        // add 调用点 = flush 后（快照 = redo 重建数据源）；remove 调用点 = 删除前
+        // （快照 = undo 重建数据源）。
+        auto pushStructural = [this, snapshotSubtree](std::uint64_t root, bool undoIsDelete) {
+            EditCmd c;
+            c.kind = EditCmd::Kind::Structural;
+            c.id = root;
+            c.undoIsDelete = undoIsDelete;
+            c.removed = snapshotSubtree(root);
+            editPushUndo(std::move(c));
+        };
+
         // ---- scene.rename {id, name} ----
         bridge.registerHandler("scene.rename", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
             if (!editWorld) return editErrNeedsWorld();
@@ -1687,7 +2069,16 @@ struct EditorEmbed {
                 return nl::editor::RpcError{101, "scene.rename: missing non-empty string field 'name'"};
             if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
                 return nl::editor::RpcError{100, "scene.rename: unknown entity"};
+            const std::string oldName = editWorld->getName(static_cast<nl::scene::EntityID>(id));
             editWorld->updateName(static_cast<nl::scene::EntityID>(id), itN->second.asStr());
+            {
+                EditCmd c;
+                c.kind = EditCmd::Kind::Rename;
+                c.id = id;
+                c.sa = oldName;
+                c.sb = itN->second.asStr();
+                editPushUndo(std::move(c));
+            }
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
             m["id"] = static_cast<std::int64_t>(id);
@@ -1704,11 +2095,20 @@ struct EditorEmbed {
             if (!editGetU64(p, "parent", parent))
                 return nl::editor::RpcError{101, "scene.setParent: missing field 'parent'"};
             if (auto e = validateLink(id, parent, "scene.setParent")) return *e;
+            auto oldPar = editWorld->getParentID(static_cast<nl::scene::EntityID>(id));
             editWorld->setParent(static_cast<nl::scene::EntityID>(id),
                                  parent ? std::optional<nl::scene::EntityID>(
                                               static_cast<nl::scene::EntityID>(parent))
                                         : std::nullopt);
             refreshObjectMatrices();
+            {
+                EditCmd c;
+                c.kind = EditCmd::Kind::Link;
+                c.id = id;
+                c.parent = oldPar ? static_cast<std::uint64_t>(*oldPar) : 0;
+                c.parentNew = parent;
+                editPushUndo(std::move(c));
+            }
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
             m["id"] = static_cast<std::int64_t>(id);
@@ -1725,11 +2125,21 @@ struct EditorEmbed {
             if (!editGetU64(p, "parent", parent))
                 return nl::editor::RpcError{101, "scene.reparent: missing field 'parent'"};
             if (auto e = validateLink(id, parent, "scene.reparent")) return *e;
+            auto oldPar = editWorld->getParentID(static_cast<nl::scene::EntityID>(id));
             editWorld->reparent(static_cast<nl::scene::EntityID>(id),
                                 parent ? std::optional<nl::scene::EntityID>(
                                              static_cast<nl::scene::EntityID>(parent))
                                        : std::nullopt);
             refreshObjectMatrices();
+            {
+                EditCmd c;
+                c.kind = EditCmd::Kind::Link;
+                c.id = id;
+                c.parent = oldPar ? static_cast<std::uint64_t>(*oldPar) : 0;
+                c.parentNew = parent;
+                c.wasReparent = true;
+                editPushUndo(std::move(c));
+            }
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
             m["id"] = static_cast<std::int64_t>(id);
@@ -1740,7 +2150,7 @@ struct EditorEmbed {
         // kind = "empty"|"light"|"model"；model 自动挂 Transform（收集段硬要求）。
         // 校验失败回滚新建实体（不留半成品）。flush 即时落表（getEntityIDs/
         // 签名/树当帧可见）。
-        bridge.registerHandler("scene.addEntity", [this, validateLink](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+        bridge.registerHandler("scene.addEntity", [this, validateLink, pushStructural](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
             if (!editWorld) return editErrNeedsWorld();
             if (!p.isMap()) return editErrMap("scene.addEntity");
             auto itKind = p.asMap().find("kind");
@@ -1806,6 +2216,7 @@ struct EditorEmbed {
                 ent.addComponent(std::move(lc));
             }
             editWorld->flushEntityCreationAndRemoval();
+            pushStructural(static_cast<std::uint64_t>(ent.getID()), true);   // M-E12：undo=删新实体
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
             m["id"] = static_cast<std::int64_t>(ent.getID());
@@ -1814,7 +2225,8 @@ struct EditorEmbed {
             return nl::editor::RpcValue(std::move(m));
         });
         // ---- scene.removeEntity {id}（父删递归删子；flush 即时落表）----
-        bridge.registerHandler("scene.removeEntity", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+        // M-E12：删除前先抓子树快照（undo 重建数据源；删后抓 = 空树假快照）。
+        bridge.registerHandler("scene.removeEntity", [this, pushStructural](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
             if (!editWorld) return editErrNeedsWorld();
             if (!p.isMap()) return editErrMap("scene.removeEntity");
             std::uint64_t id = 0;
@@ -1822,6 +2234,7 @@ struct EditorEmbed {
                 return nl::editor::RpcError{101, "scene.removeEntity: missing field 'id'"};
             if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
                 return nl::editor::RpcError{100, "scene.removeEntity: unknown entity"};
+            pushStructural(id, false);   // M-E12：删除前抓快照（undo=重建数据源）
             editWorld->removeEntity(static_cast<nl::scene::EntityID>(id));
             editWorld->flushEntityCreationAndRemoval();
             nl::editor::msgpack::Map m;
@@ -1905,6 +2318,54 @@ struct EditorEmbed {
             const std::string comp = itC->second.asStr();
             const std::string name = itN->second.asStr();
             const char* what = "scene.setProp";
+            // M-E12：组件字段抓值（写前抓旧 / 写后回读新——含钳制后真值，共用一函数）。
+            auto grabProp = [&](const nl::scene::EntityID e, const std::string& cmp,
+                                const std::string& nm, float* f4, double* s, bool* b,
+                                std::string* str, std::string* vk) -> bool {
+                auto cp3 = [](const auto& v, float* d) { d[0]=v.x; d[1]=v.y; d[2]=v.z; };
+                if (cmp == "Transform") {
+                    auto* t = editWorld->getComponent<nl::scene::TransformComponent>(e);
+                    if (!t) return false;
+                    if (nm == "position") { cp3(t->local.position, f4); *vk = "vec"; return true; }
+                    if (nm == "scale")    { cp3(t->local.scale, f4); *vk = "vec"; return true; }
+                    if (nm == "rotation") {
+                        f4[0]=t->local.rotation.x; f4[1]=t->local.rotation.y;
+                        f4[2]=t->local.rotation.z; f4[3]=t->local.rotation.w;
+                        *vk = "vec"; return true;
+                    }
+                    return false;
+                }
+                if (cmp == "Model") {
+                    auto* mc = editWorld->getComponent<nl::scene::ModelComponent>(e);
+                    if (!mc) return false;
+                    if (nm == "meshFile")  { *str = mc->meshFile; *vk = "string"; return true; }
+                    if (nm == "tint")      { cp3(mc->tint, f4); *vk = "vec"; return true; }
+                    if (nm == "roughness") { *s = mc->roughness; *vk = "scalar"; return true; }
+                    if (nm == "metallic")  { *s = mc->metallic; *vk = "scalar"; return true; }
+                    return false;
+                }
+                if (cmp == "Light") {
+                    auto* lc = editWorld->getComponent<nl::scene::LightComponent>(e);
+                    if (!lc) return false;
+                    if (nm == "type")      { *s = lc->type; *vk = "scalar"; return true; }
+                    if (nm == "direction") { cp3(lc->direction, f4); *vk = "vec"; return true; }
+                    if (nm == "color")     { cp3(lc->color, f4); *vk = "vec"; return true; }
+                    if (nm == "position")  { cp3(lc->position, f4); *vk = "vec"; return true; }
+                    if (nm == "intensity") { *s = lc->intensity; *vk = "scalar"; return true; }
+                    if (nm == "range")     { *s = lc->range; *vk = "scalar"; return true; }
+                    if (nm == "shadow")    { *b = lc->shadow; *vk = "bool"; return true; }
+                    return false;
+                }
+                return false;
+            };
+            // 写前抓旧值（分发成功才入栈；undo/redo 写回镜像复用此载荷）。
+            EditCmd undoC;
+            undoC.kind = EditCmd::Kind::Prop;
+            undoC.id = id;
+            undoC.comp = comp;
+            undoC.propName = name;
+            grabProp(eid, comp, name, undoC.fOld, &undoC.sOld, &undoC.bOld,
+                     &undoC.strOld, &undoC.propValueKind);
             float v[4] = {};
             double s = 0.0;
             // modelIds 里找到实例行（渲染表直刷落点）。
@@ -2018,6 +2479,10 @@ struct EditorEmbed {
             } else {
                 return nl::editor::RpcError{100, what + std::string(": unknown component '") + comp + "'"};
             }
+            // M-E12：写后回读新值（含钳制后真值）入栈——仅成功路径抵达此处。
+            grabProp(eid, comp, name, undoC.fNew, &undoC.sNew, &undoC.bNew,
+                     &undoC.strNew, &undoC.propValueKind);
+            editPushUndo(std::move(undoC));
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
             m["id"] = static_cast<std::int64_t>(id);

@@ -26,6 +26,11 @@ extern std::atomic<bool> g_sceneTreeDirty;
 // 点击节点写入，Properties 泛化面板消费（scene.getProps/setProp）。
 extern std::atomic<long long> g_sceneSelEntity;
 
+// M-E13：outliner selftest 钩子（--selftest-outliner 置 1；0 = off）。
+// 多选/框选/批量删除证据走确定性路径（TOPMOST 遮挡下合成点击不可靠），
+// 插件每帧检查：t>5s 注入多选态、t>8s 批量删除（真实 RPC 链）。
+extern std::atomic<int> g_outlinerSelftest;
+
 namespace nl::editor::ui {
 
 // M-E5：插件 ABI 版本。布局/语义破坏性变更时 +1，宿主对不匹配 DLL 拒载并记日志。

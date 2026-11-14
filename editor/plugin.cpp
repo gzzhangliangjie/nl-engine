@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -139,6 +140,9 @@ public:
         // 只有 dirty 才自动刷；autoOn_ 关 = 全手动（Refresh 按钮）。
         const bool dirty = g_sceneTreeDirty.exchange(false);
         const double now = ImGui::GetTime();
+        if (dirty)
+            printf("[outliner] dirty at t=%.1f haveTree=%d auto=%d\n", now,
+                   (int)haveTree_, (int)autoOn_), fflush(stdout);
         if (haveTree_ && dirty && autoOn_ && now - lastRefresh_ > 0.2) refresh(host);
         else if (dirty) g_sceneTreeDirty.store(true);   // 防抖期吞掉的通知还回去
         if (!haveTree_ && host->isConnected()) refresh(host);
@@ -158,10 +162,66 @@ public:
         if (nodes_.empty()) return;
         // M-E8 层级树：parent==0 归根递归；节点徽标 [model]/[light]/[empty]；
         // 点击 model 节点 = scene.focus（orbit 相机对准该对象）。
+        visibleRects_.clear();   // M-E13：框选用可见节点 rect（每帧重建）
+        const ImVec2 treeMin = ImGui::GetCursorScreenPos();
         ImGui::BeginChild("outliner_tree", ImVec2(0, 200), ImGuiChildFlags_Borders);
         for (int ri : roots_) drawNode(host, ri);
+        const ImVec2 treeMax = ImGui::GetCursorScreenPos();
         ImGui::EndChild();
+        drawBoxSelect(treeMin, treeMax);   // M-E13：树区拖拽框选
         if (!focused_.empty()) ImGui::Text("focused: %s", focused_.c_str());
+
+        // ---- M-E13：selftest 钩子（确定性路径；--selftest-outliner）----
+        // 三阶段状态机：t>5s add 两个测试实体（真实 addEntity RPC）→ 树刷新后
+        // 注入双节点多选态（Selected 高亮/selected 计数/批量按钮 = 真实 ImGui
+        // 帧渲染）→ t>9s 批量删除测试实体（真实 RPC 链，undo 栈逐条 push）。
+        // 不删 preview-* 基线实体（删空场景 rebuild 会拖死 viewer——2026-11-14
+        // 实证 crash-isolation）。触发自动化、状态与渲染全真。
+        if (g_outlinerSelftest.load() == 1 && mode_ == "scene" && haveTree_ &&
+            !nodes_.empty()) {
+            if (selftestStep_ == 0 && ImGui::GetTime() > 5.0) {
+                printf("[selftest] step0 add entities t=%.1f\n", ImGui::GetTime());
+                fflush(stdout);
+                msgpack::Map pa, pb;
+                pa["name"] = std::string("selftest-a");
+                pa["kind"] = std::string("empty");
+                pb["name"] = std::string("selftest-b");
+                pb["kind"] = std::string("empty");
+                rpcCall(host, "scene.addEntity", std::move(pa), "selftest add a");
+                rpcCall(host, "scene.addEntity", std::move(pb), "selftest add b");
+                selftestStep_ = 1;
+            } else if (selftestStep_ == 1) {
+                const Node* na = findNodeByName("selftest-a");
+                const Node* nb = findNodeByName("selftest-b");
+                if (na && nb) {   // 树已刷新（notify 自动拉取）
+                    printf("[selftest] step2 multi-select injected t=%.1f\n",
+                           ImGui::GetTime());
+                    fflush(stdout);
+                    selSet_.clear();
+                    selSet_.insert(na->id);
+                    selSet_.insert(nb->id);
+                    g_sceneSelEntity.store(na->id);
+                    boxSelMsg_ = "box-selected " + std::to_string(selSet_.size());
+                    selftestStep_ = 2;
+                }
+            } else if (selftestStep_ == 2 && ImGui::GetTime() > 15.0) {
+                for (long long id : selSet_) {
+                    msgpack::Map p;
+                    p["id"] = id;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "selftest removed");
+                }
+                selSet_.clear();
+                selftestStep_ = 3;
+            } else if (selftestStep_ == 3 && ImGui::GetTime() > 20.0) {
+                // M-E12 联动证据：批量删除后 Undo 逐条撤（05-undo.png：先撤
+                // selftest-b）→ t>25 撤第二条（selftest-a，树回 4 节点）
+                rpcCall(host, "scene.undo", msgpack::Map(), "selftest undo ok");
+                selftestStep_ = 4;
+            } else if (selftestStep_ == 4 && ImGui::GetTime() > 25.0) {
+                rpcCall(host, "scene.undo", msgpack::Map(), "selftest undo 2 ok");
+                selftestStep_ = 5;
+            }
+        }
 
         // ---- M-E9：树编辑操作（选中节点；Properties 泛化面板消费同源 id）----
         drawEditUi(host);
@@ -182,16 +242,21 @@ private:
 
     // M-E8：树节点递归渲染（TreeNodeEx 以 entity id 做 ID seed，重挂父不改展开态
     // 的键；叶子加 Leaf 旗标；选中行高亮 = 最近 focus 的实例行）。
+    // M-E13：可见行 rect 收集（框选相交用）；Ctrl+点击 toggle 多选、Shift+点击
+    // 范围选（nodes_ 序）、普通点击单选；g_sceneSelEntity 恒 = 最后点击（Properties
+    // 泛化面板保持单选消费）。
     void drawNode(RpcHost* host, int ni) {
         const Node& n = nodes_[ni];
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                    ImGuiTreeNodeFlags_SpanAvailWidth |
                                    ImGuiTreeNodeFlags_OpenOnDoubleClick;
         if (n.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
-        if (n.idx >= 0 && n.idx == focusedIdx_) flags |= ImGuiTreeNodeFlags_Selected;
+        if ((n.idx >= 0 && n.idx == focusedIdx_) || selSet_.count(n.id))
+            flags |= ImGuiTreeNodeFlags_Selected;
         const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(n.id)),
                                             flags, "%s", n.name.c_str());
         const bool clicked = ImGui::IsItemClicked(0);
+        visibleRects_.push_back({n.id, ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
         ImGui::SameLine();
         if (n.kind == "model") {
             ImGui::TextDisabled("[model] %s r%.2f m%.2f", n.mesh.c_str(), n.rough, n.metal);
@@ -201,12 +266,79 @@ private:
             ImGui::TextDisabled("[empty]");
         }
         if (clicked) {
-            g_sceneSelEntity.store(static_cast<long long>(n.id));   // M-E9：任意节点可选中
-            if (n.idx >= 0) focus(host, (int)n.idx);
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyCtrl) {
+                // Ctrl+点击：toggle 多选（不驱动 focus，避免 orbit 相机乱跳）
+                if (selSet_.count(n.id)) selSet_.erase(n.id);
+                else selSet_.insert(n.id);
+                lastClickId_ = n.id;
+            } else if (io.KeyShift && lastClickId_ > 0) {
+                // Shift+点击：nodes_ 序范围选（锚点 = 上次点击）
+                const int a = indexById(lastClickId_);
+                if (a >= 0) {
+                    for (int k = std::min(a, ni); k <= std::max(a, ni); ++k)
+                        selSet_.insert(nodes_[k].id);
+                }
+            } else {
+                selSet_.clear();
+                selSet_.insert(n.id);
+                lastClickId_ = n.id;
+                if (n.idx >= 0) focus(host, (int)n.idx);
+            }
+            g_sceneSelEntity.store(static_cast<long long>(n.id));
         }
         if (open) {
             for (int ci : n.children) drawNode(host, ci);
             ImGui::TreePop();
+        }
+    }
+
+    int indexById(long long id) const {
+        for (int i = 0; i < (int)nodes_.size(); ++i)
+            if (nodes_[i].id == id) return i;
+        return -1;
+    }
+
+    // M-E13：树区拖拽框选（child 外统一处理；位移 <4px 视为点击不触发；
+    // 可见行 rect 相交即选——UE 同口径）。
+    void drawBoxSelect(const ImVec2& treeMin, const ImVec2& treeMax) {
+        ImGuiIO& io = ImGui::GetIO();
+        const bool pressed = io.MouseDown[0];
+        if (pressed && !boxActive_) {
+            const ImVec2 mp = io.MouseClickedPos[0];
+            if (mp.x >= treeMin.x && mp.x <= treeMax.x &&
+                mp.y >= treeMin.y && mp.y <= treeMax.y) {
+                boxActive_ = true;
+                boxA_ = mp;
+            }
+        }
+        if (boxActive_ && pressed) {
+            boxB_ = io.MousePos;
+            const float dx = boxB_.x - boxA_.x, dy = boxB_.y - boxA_.y;
+            if (dx * dx + dy * dy > 16.0f) {
+                auto* dl = ImGui::GetForegroundDrawList();
+                dl->AddRectFilled(boxA_, boxB_, IM_COL32(90, 170, 255, 40));
+                dl->AddRect(boxA_, boxB_, IM_COL32(90, 170, 255, 220), 0.0f, 0, 1.5f);
+            }
+        }
+        if (boxActive_ && !pressed) {
+            boxActive_ = false;
+            const ImVec2 b = io.MousePos;
+            const float dx = b.x - boxA_.x, dy = b.y - boxA_.y;
+            if (dx * dx + dy * dy > 16.0f) {
+                const float x0 = std::min(boxA_.x, b.x), x1 = std::max(boxA_.x, b.x);
+                const float y0 = std::min(boxA_.y, b.y), y1 = std::max(boxA_.y, b.y);
+                int hits = 0;
+                for (const auto& r : visibleRects_) {
+                    if (r.mx.x < x0 || r.mn.x > x1 || r.mx.y < y0 || r.mn.y > y1) continue;
+                    selSet_.insert(r.id);
+                    ++hits;
+                }
+                if (hits) {
+                    boxSelMsg_ = "box-selected " + std::to_string(hits);
+                    if (!selSet_.empty()) g_sceneSelEntity.store(*selSet_.rbegin());
+                }
+            }
         }
     }
 
@@ -266,6 +398,8 @@ private:
         }
         haveTree_ = true;
         lastRefresh_ = ImGui::GetTime();
+        printf("[outliner] refreshed nodes=%d t=%.1f\n", (int)nodes_.size(), lastRefresh_);
+        fflush(stdout);
         // M-E9/M-E10：首次拉取自动选中首个根节点（ Properties 泛化面板随选随显；
         // 免点击路径——离断桌面会话的合成点击不可靠，GUI 目击证据需确定性选中）。
         if (mode_ == "scene" && !roots_.empty() && g_sceneSelEntity.load() < 0)
@@ -300,6 +434,10 @@ private:
         for (const auto& n : nodes_) if (n.id == id) return &n;
         return nullptr;
     }
+    const Node* findNodeByName(const std::string& nm) const {
+        for (const auto& n : nodes_) if (n.name == nm) return &n;
+        return nullptr;
+    }
     void rpcCall(RpcHost* host, const char* method, msgpack::Map p, const char* okMsg) {
         auto r = callQuick(host, method, RpcValue(std::move(p)));
         if (std::holds_alternative<RpcError>(r)) {
@@ -311,6 +449,38 @@ private:
     }
     void drawEditUi(RpcHost* host) {
         ImGui::Separator();
+        // M-E12：undo-redo（按钮 + Ctrl+Z/Y；引擎侧 sceneChanged notify 驱动树自动刷新）
+        const bool doUndo = ImGui::Button("Undo") ||
+                            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z);
+        ImGui::SameLine();
+        const bool doRedo = ImGui::Button("Redo") ||
+                            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y);
+        if (doUndo) rpcCall(host, "scene.undo", msgpack::Map(), "undo ok");
+        if (doRedo) rpcCall(host, "scene.redo", msgpack::Map(), "redo ok");
+        // M-E13：多选批量操作（Delete selected / Reparent selected；undo 栈逐条可撤）
+        if (!selSet_.empty()) {
+            ImGui::Text("selected: %d", (int)selSet_.size());
+            if (ImGui::Button("Delete selected")) {
+                for (long long id : selSet_) {
+                    msgpack::Map p;
+                    p["id"] = id;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "removed batch");
+                }
+                selSet_.clear();
+                g_sceneSelEntity.store(-1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reparent selected")) {
+                const long long dst = parentSel_ >= 0 ? nodes_[parentSel_].id : 0;
+                for (long long id : selSet_) {
+                    if (id == dst) continue;
+                    msgpack::Map p;
+                    p["id"] = id;
+                    p["parent"] = dst;
+                    rpcCall(host, "scene.reparent", std::move(p), "reparented batch");
+                }
+            }
+        }
         const long long selId = g_sceneSelEntity.load();
         const Node* sel = (selId > 0) ? findNodeById(selId) : nullptr;
         if (ImGui::CollapsingHeader("edit selected", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -385,6 +555,7 @@ private:
                 rpcCall(host, "scene.addEntity", std::move(p), "added");
             }
         }
+        if (!boxSelMsg_.empty()) ImGui::TextDisabled("%s", boxSelMsg_.c_str());
         if (!statusMsg_.empty()) ImGui::TextDisabled("%s", statusMsg_.c_str());
     }
 
@@ -402,6 +573,16 @@ private:
     std::string mode_ = "?";
     std::string focused_;
     int focusedIdx_ = -1;
+    // M-E13：多选/框选状态（selSet_ = 选中集；visibleRects_ = 本帧可见行 rect）
+    std::set<long long> selSet_;
+    struct NodeRect { long long id; ImVec2 mn, mx; };
+    std::vector<NodeRect> visibleRects_;
+    long long lastClickId_ = 0;
+    bool boxActive_ = false;
+    ImVec2 boxA_{}, boxB_{};
+    std::string boxSelMsg_;
+    // M-E13：selftest 步进状态（--selftest-outliner；0=待 add 1=待多选 2=待删 3=完成）
+    int selftestStep_ = 0;
     // M-E9：树编辑 UI 状态
     char renameBuf_[64] = "";
     int  parentSel_ = -1;           // nodes_ 下标；-1 = (none)
