@@ -3435,3 +3435,27 @@
 **踩坑**：① **假绿复发（M-WEA2 同款）**：湿化只接 mode5 shadePbrGrad 漏 mode0——viewer 缺省 shading=0（textured 简单直光），probe 主画面走 mode 0 分支，bytes 自洽全绿但 wetness 0 vs 1 画面逐字节相同；wetness 对比测试（cmp 两帧）当场拦下，mode 0 补湿化后生效。**「probe 主画面 = mode 0 非 mode 5」须与新直光效果绑定记忆**。② reject 触发阈值诊断：t-step 3s 的 rain 灰化天穹 diff≈0.0000（灰化压平日光变化）不触发——nanite-tools weather TSV 双行 diff 实证后改 30s 步进（diff 0.15~0.2 触发）。③ steady-filter 建 pair bytes 型卡踩 **S12 时域累积禁 bytes 口径**（Q11-1：累积路径非逐字节确定，run.bat 第三次重摄假 FAIL）——改 tool 型（exit 0 锚）。④ run.bat 生成器**悬空 --screenshot 双旗标坑第三次复发**（过滤 {out} 留旗标 → 截图写进名为 --screenshot 的文件 → 全部 bytes 假 FAIL）——根修 = 生成器内建「--screenshot 与 {out} 成对过滤」逻辑（shot_args 函数），不再手写循环。
 
 **提交版本**：feat/weather 本节 commit + annotated tag `weather-w3`。冻结面：kStage 保持 S8.2；CPU 天气模型/孪生 verify.py/w0 卡零改动零重拍。下一步：M-WEA4（若做）待拍板；WEA 轨 M-WEA0~3 收官，merge 回 master 待用户指令。（**2026-11-14 14:2x 已 merge 回 master（`ebf5f50` no-ff，用户拍板「先收尾」）：master 自 `4090d94` 未动 → 零冲突纯并入 M-WEA2+3 六提交；merge 前共享记忆落库主树（`31c0f44`，MEMORY 压缩重写 + 日志补段解除本地改动挡路）+ merge 后 weather-w2/w3 run.bat blob 侧 CRLF→LF renormalize（`5f1460f`，wt 提交带入 CRLF blob 违反 eol=crlf 策略，零内容变化）；merge 后双后端 BUILD OK（删两棵 exe 强制重链，selftest 16/16 ×2）+ 按 S13 教训重跑天气轨全部历史版本卡 weather-w0~w3 40/40 + 老卡抽查 s15-clipmap 2/2 / s10-refgi 4/4，46 runs 全 bytes ALL GREEN。wt nl-engine-weather 保留续用**）
+
+---
+
+## NL M-NL0：bloom——T0 post-chain 4 pass（feat/nightlighting，2026-11-14，tag `nl0-bloom`）
+
+**动作**：草案 `NIGHTLIGHTING-PLAN-DRAFT.md` Q-NL1~NL6 拍板全清（串联验收场景 / A 方案屏幕空间 God Rays / emissive-as-light 首版不做 / 零 vendored；Q-NL5 实测消解——天气线 `4090d94` 已把夜空做进 `sky.slangh` 且走 Q-WE5 零漂移闸）+ 任务书 `docs/nl/NL-PLAN.md` + ROADMAP 穿插项登记 → track 注册 + wt junction 建树 → 落码：rt.slang（BloomConstants b2/g_bloomTex t2/psBloomExtract 软阈值/psBloomBlurH·V 5-tap 线性等效 9-tap/psTonemap 复合）+ scene 半分辨率 RGBA16F ping-pong + presentTonemap 一处插链（raster 6 处 + rt/shadow 全模式生效）+ `--bloom/--bloom-threshold/--bloom-weight` + selftest +6（118→124）。
+
+**完成情况**：🟢 双后端 selftest 16/16 + 132/132 shader；🟢 nl0-bloom 卡 4 用例×双后端 8/8 bytes 全绿；🟢 像素 diff 定档：关态双后端 near（34px ±1 LSB）/ 默认参数 5.1% 亮部通道（max70）/ 极限参数全屏辉光（avg5.19）+ 目视确认；🟢 全量 936 跑两轮对照（M-NL0 vs 撤码基线）：剔除 nl0-bloom 后基线 FAIL 78 / M-NL0 90，集合 diff = 同批卡换错误形态（console-exec 报错时序非确定性），零功能退化；FAIL 全部位于 script 轨（未 merge）/showcase 历史 tag exe（未重建）/工具链卡；tonemap 波及面（s8/s10/s11/s12/s15/weather/traffic/particles）全 bytes 绿。
+
+**踩坑**：① **root sig 漏槽（M15.0 教训实锤复现）**：extract 复用只有 t0 的 blitLayout_ 但 shader 引 b2 → PSO 全灭——布局矩阵与 shader 静态引用逐槽对齐根修；② **volatile CB 未写先绑**：tonemap set 无条件绑 b2，旗标关也必须每帧 writeBuffer（NVRHI validation error）；③ **VULKAN 退出 0xC0000005（S15 UAF 第 N 犯）**：shutdown 清单 15 项 vs 成员 16 项——bloomExtractLayout_ 漏登记，DX12 不崩 VULKAN 必崩（3/3 确定性）；诊断路径 = M-CRASH0 dump json 实锤 + bisect 撤码对照 + 数成员名单；**验退出码必须显式 echo rc=$?（grep deviceErrors 漏看退出码的手拍轮就已在崩）**；④ LNK1136 obj 损坏（bisect 来回 checkout）：正确路径 build/VULKAN/**viewer**/CMakeFiles/viewer.dir/；⑤ cases.json 写卡 COMMON 漏 weather 三参数 → 白天场景假 FAIL——卡 args 逐参对照手拍命令。
+
+**提交版本**：feat/nightlighting `8b4d3d5`（落码）+ `d3e02ff`（修复+卡）+ annotated tag `nl0-bloom`。冻结面：sky.slangh / S10/S11 探针 / GBuffer / VSM / 各并行轨道零改动。track `nightlighting` ACTIVE 续 M-NL1。
+
+---
+
+## NL M-NL1：godrays——屏幕空间 God Rays 三段式（feat/nightlighting，2026-11-14，tag `nl1-godrays`）
+
+**动作**：三处实读（UE LightRendering.cpp 存在性核查 / bevy volumetric_fog.wesl HG 相函数留 B 方案 / Carrot 无 godrays 反面印证 + 本仓 shadow 光栅循环与 vsShadow 签名）→ 按 NL-PLAN §M-NL1 拍板口径落码：新文件 godrays.slang 五入口（psGodraysBlack 配 vsShadow / vsGodraysQuad+psGodraysQuad NDC 圆盘灯珠 / vsGodraysFull+psGodraysRadial 32 步径向累积）+ 三段链（遮挡预渲：mask R8 清黑→quad 渲白→场景几何渲染黑，深度 LESS 区分光源前后——非深度派生；radial blur → godAccum_ RGBA16F；psTonemap +t3 复合权重 0 恒等）+ 单光源 = 最强点光源（Rec.709×强度得分，CPU mvp 投影）+ occl 几何 pass 复用 shadowLightCB_/batch.shadowSet 零新 batch set + `--godrays/--godrays-weight` + selftest +10（124→134 项/142 产物）。
+
+**完成情况**：🟢 双后端 selftest 16/16 + 142/142；🟢 nl1-godrays 卡 4 用例×双后端 8/8 bytes 全绿；🟢 亲眼验收：yaw12 猴头剪影遮挡光源辉光绕边漏出（遮挡正确性）+ yaw90 圆核+径向光束（GPU Gems 3 形态）+ 极限权重显性锚；🟢 DX12 vs VULKAN 侧视开态像素级一致；🟢 全量对照（vs M-NL0 轮记录）零退化（待本轮全量跑完核实后 tag）。
+
+**踩坑**：① **R8_UNORM 采样读 .rgb = 恒 (v,0,0)**——G/B 零通道，radial 着色永远红晕；读 .r 标量 × CB 颜色；② **keepInitialState=DepthWrite 深度纹理是永驻态**（t0Depth_ 同款）：beginTracking 恒声明 DepthWrite、末态不改，声明 DepthRead = D3D12 barrier layout 报错每帧刷屏；③ **sampler_ 懒建兜底**：scene 光栅路径不建 sampler 而 tonemap set 无条件绑 s0 → 首帧 NVRHI "Null resource bindings are not allowed for samplers"；④ **density <1 时 32 步穿不到发射体 = 无光束**（采样路径长度系数，0.9 定稿）；过曝四轮收敛 0.6→0.1；灯珠半径 0.35 实测整屏淹没 → ×1/6 clamp[0.008,0.03]；⑤ shader 改后 exe 不重链 → regression 过期门禁拦——删 exe 强制重链；⑥ **per-case --yaw 放手拍命令没进卡 args**（M-NL0 weather 同款写卡坑第二犯）→ 框架默认 yaw 假 FAIL。
+
+**提交版本**：feat/nightlighting `464403a`（落码）+ `d0ddf9b`（卡）+ annotated tag `nl1-godrays`。冻结面：sky.slangh / 探针/world cache / GBuffer / VSM / 各并行轨道零改动。下一步：M-NL2 夜景串联 demo 收口（`--weather night` + 自发光资产 + 全旗标四态对比，tag `nl-done` 收官）。
