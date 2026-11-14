@@ -711,4 +711,103 @@ namespace Nl.Script.Api
             return fn(kind, NativeMarshal.Utf8Alloc(name), min, max, def);
         }
     }
+
+    /// <summary>Ui 事件回调（M-UI0；elId = 元素 id 属性，eventType = Rml 事件名如
+    /// "click"，param = onclick 属性值）。包装自身 catch 所有托管异常转 rc=1，
+    /// 不穿互操作边界。</summary>
+    public delegate void UiEventHandler(string elId, string eventType, string param);
+
+    /// <summary>Ui 事件回调原始 ABI（与 C++ UiEventFn 对齐；uiSetEventCallback 声明面）。</summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int NativeUiEventDelegate(IntPtr elId, IntPtr eventType, IntPtr param);
+
+    /// <summary>
+    /// Ui 绑定面（M-UI0，2026-11-15 拍板一步到位）。操作目标 = --rmlui-demo 时宿主
+    /// 注入的 RmlUiBackend；未绑 = rc 1（kUiNoSource，不隐式建表——全族口径）。
+    /// 文档 handle 由 LoadDocument 发放（&gt;0），失效安全：未知 handle 一律 rc 2。
+    /// elementGetText 返回串走 C++ 静态缓冲「下次同线程调用前有效」→ Utf8Read 立即拷贝。
+    /// </summary>
+    public static unsafe class Ui
+    {
+        // reverse P/Invoke 保活（consoleRegister 同款：随 collectible ALC 整体回收，
+        // C++ 侧每次事件现取指针、不缓存——热重载窗口兜底）。
+        static readonly List<NativeUiEventDelegate> _pinned = new();
+
+        /// <summary>加载 Rml 文档（assets/ 相对路径）。返回 handle（&gt;0 有效）；
+        /// 0 = 失败（未绑 UiSink / 加载失败 / 非法路径——失败细节看 C++ 侧 rmlui 日志）。</summary>
+        public static int LoadDocument(string path)
+        {
+            IntPtr pathPtr = NativeMarshal.Utf8Alloc(path);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiLoadDocumentFn>(UiWiring._uiLoadDocument);
+                return fn(pathPtr, out int handle) == 0 ? handle : 0;
+            }
+            finally { NativeMarshal.Utf8Free(pathPtr); }
+        }
+
+        /// <summary>关闭文档。rc：0=ok / 1=未绑 UiSink / 2=句柄无效。</summary>
+        public static int CloseDocument(int handle)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiCloseDocumentFn>(UiWiring._uiCloseDocument);
+            return fn(handle);
+        }
+
+        /// <summary>显示/隐藏文档。rc 同 CloseDocument。</summary>
+        public static int ShowDocument(int handle, bool show)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiShowDocumentFn>(UiWiring._uiShowDocument);
+            return fn(handle, show ? 1 : 0);
+        }
+
+        /// <summary>按 id 写元素内文（SetInnerRML 语义）。rc：0=ok / 1=未绑 / 2=句柄或元素无效 / 4=非法参数。</summary>
+        public static int ElementSetText(int handle, string elId, string text)
+        {
+            IntPtr idPtr = NativeMarshal.Utf8Alloc(elId), textPtr = NativeMarshal.Utf8Alloc(text);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiElementSetTextFn>(UiWiring._uiElementSetText);
+                return fn(handle, idPtr, textPtr);
+            }
+            finally { NativeMarshal.Utf8Free(idPtr); NativeMarshal.Utf8Free(textPtr); }
+        }
+
+        /// <summary>按 id 读元素内文（GetInnerRML 语义；返回 null = rc 非 0）。</summary>
+        public static string? ElementGetText(int handle, string elId)
+        {
+            IntPtr idPtr = NativeMarshal.Utf8Alloc(elId);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiElementGetTextFn>(UiWiring._uiElementGetText);
+                int rc = fn(handle, idPtr, out IntPtr textPtr);
+                return rc == 0 ? NativeMarshal.Utf8ReadOrEmpty(textPtr) : null;
+            }
+            finally { NativeMarshal.Utf8Free(idPtr); }
+        }
+
+        /// <summary>注册 Ui 事件回调（friendly 包装；异常转 rc=1 不穿边界）。</summary>
+        public static int SetEventCallback(UiEventHandler handler)
+        {
+            NativeUiEventDelegate adapter = (IntPtr elId, IntPtr eventType, IntPtr param) =>
+            {
+                try
+                {
+                    handler(Marshal.PtrToStringUTF8(elId) ?? "",
+                            Marshal.PtrToStringUTF8(eventType) ?? "",
+                            Marshal.PtrToStringUTF8(param) ?? "");
+                    return 0;
+                }
+                catch (Exception) { return 1; }   // 托管异常 → rc=1（不穿边界）
+            };
+            return SetEventCallbackRaw(adapter);
+        }
+
+        /// <summary>原始 ABI 注册（异常不经包装捕获 → C++ SEH 边界路径）。</summary>
+        public static int SetEventCallbackRaw(NativeUiEventDelegate raw)
+        {
+            _pinned.Add(raw);
+            var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiSetEventCallbackFn>(UiWiring._uiSetEventCallback);
+            return fn(Marshal.GetFunctionPointerForDelegate(raw));
+        }
+    }
 }

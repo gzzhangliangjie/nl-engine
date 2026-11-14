@@ -103,3 +103,15 @@ Physics | teleportVehicle | int | in int slot, in buf3 pos, in buf4 quat | 幽�
 # reload 重取、unload 前置空）。值 ABI：buf[0..3]=int32 idx；标量 buf[4..7]=f32/i32/b(0/1)；string buf[4..259]=UTF8 尾 0（get 截断 255）。
 Props | propsPushBegin | int |  | 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok
 Props | propsDescAdd | int | in int kind, in str name, in f32 min, in f32 max, in f32 def | 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）
+# ---- M-UI0 Ui 域（2026-11-15 拍板一步到位；ApiTable 尾部追加，禁中间插桩）----
+# 操作目标 = viewer --rmlui-demo 时经 uiSetSink 注入的 RmlUiBackend（未绑 = kUiNoSource，
+# 不隐式建表全族口径）。文档 handle 由 uiLoadDocument 发放（>0，脚本侧不透明）；
+# elementGetText 的 out text 指向 C++ 静态缓冲「下次同线程调用前有效」，C# 立即拷贝。
+# 事件通道 = uiSetEventCallback 注册 reverse P/Invoke（consoleRegister 同款保活）：
+# int fn(const char* elId, const char* eventType, const char* param)。
+Ui | uiLoadDocument | int | in str path, out int handle | 加载 Rml 文档（assets/ 相对路径或文档相对路径；加载成功即显示）。rc：0=ok（handle 有效，0=失败）/ 1=未绑 UiSink / 4=非法参数（path 空）
+Ui | uiCloseDocument | int | in int handle | 关闭文档（对句柄失效安全：未知 handle 回 rc=2，无副作用）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效
+Ui | uiShowDocument | int | in int handle, in int show | 显示/隐藏文档（show 0|1；非 0/1 视作 true）。rc 同 uiCloseDocument
+Ui | uiElementSetText | int | in int handle, in str elId, in str text | 按 id 写元素内文（SetInnerRML 语义；elId 空串 = BadArg）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效或元素未找到 / 4=非法参数
+Ui | uiElementGetText | int | in int handle, in str elId, out str text | 按 id 读元素内文（GetInnerRML 语义；text = 静态缓冲「下次同线程调用前有效」，C# 立即拷贝）。rc 同 uiElementSetText
+Ui | uiSetEventCallback | int | in ptr fn | 注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空）

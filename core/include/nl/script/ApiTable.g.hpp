@@ -109,6 +109,18 @@ struct ApiTable
     void* propsPushBegin;
     // Props.propsDescAdd — 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）
     void* propsDescAdd;
+    // Ui.uiLoadDocument — 加载 Rml 文档（assets/ 相对路径或文档相对路径；加载成功即显示）。rc：0=ok（handle 有效，0=失败）/ 1=未绑 UiSink / 4=非法参数（path 空）
+    void* uiLoadDocument;
+    // Ui.uiCloseDocument — 关闭文档（对句柄失效安全：未知 handle 回 rc=2，无副作用）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效
+    void* uiCloseDocument;
+    // Ui.uiShowDocument — 显示/隐藏文档（show 0|1；非 0/1 视作 true）。rc 同 uiCloseDocument
+    void* uiShowDocument;
+    // Ui.uiElementSetText — 按 id 写元素内文（SetInnerRML 语义；elId 空串 = BadArg）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效或元素未找到 / 4=非法参数
+    void* uiElementSetText;
+    // Ui.uiElementGetText — 按 id 读元素内文（GetInnerRML 语义；text = 静态缓冲「下次同线程调用前有效」，C# 立即拷贝）。rc 同 uiElementSetText
+    void* uiElementGetText;
+    // Ui.uiSetEventCallback — 注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空）
+    void* uiSetEventCallback;
 };
 
 } // namespace nl::script

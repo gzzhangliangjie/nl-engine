@@ -1,0 +1,48 @@
+/* M-UI0 demo 样式：demo.rml（C++ 文档，左上）与 scriptdoc.rml（C# 脚本文档，右上）共用。
+ * 字体名 = FreeType 从 NotoSans-Regular.ttf name table 读到的 family（"Noto Sans"）。 */
+body {
+    font-family: Noto Sans;
+}
+
+.panel {
+    position: absolute;
+    width: 340dp;
+    padding: 16dp;
+    background-color: #1a1f2bcc;
+    border-radius: 8dp;
+    border: 1dp solid #3d4557cc;
+}
+
+.demo     { left: 24dp; top: 24dp; }
+.scriptdoc { right: 24dp; top: 24dp; background-color: #16281fb8; }
+
+#title {
+    font-size: 18dp;
+    color: #e8eaf0;
+    margin-bottom: 8dp;
+}
+
+#status {
+    font-size: 13dp;
+    color: #9aa3b5;
+    margin-bottom: 8dp;
+}
+
+#tick {
+    font-size: 13dp;
+    color: #7fae8f;
+    margin-bottom: 12dp;
+}
+
+.btn {
+    display: inline-block;
+    padding: 6dp 14dp;
+    background-color: #2f6fde;
+    border-radius: 4dp;
+    color: #ffffff;
+    font-size: 13dp;
+    cursor: pointer;
+}
+
+.btn:hover  { background-color: #4a83e8; }
+.btn:active { background-color: #2657b4; }

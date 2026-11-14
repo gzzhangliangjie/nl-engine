@@ -1,0 +1,14 @@
+<rml>
+<head>
+    <link rel="stylesheet" type="text/rcss" href="ui/demo.rcss" />
+    <title>NL-Engine UiScript Document</title>
+</head>
+<body>
+    <div class="panel scriptdoc">
+        <div id="title">UiScript document</div>
+        <div id="status">loaded</div>
+        <div id="tick">tick -</div>
+        <div class="btn" onclick="ping">Ping (script doc)</div>
+    </div>
+</body>
+</rml>

@@ -145,6 +145,43 @@ struct CameraSource {
 // nullptr = 解绑（此后 Camera 导出一律 kCamNoSource——热更窗口兜底，同族口径）。
 void cameraSetSource(const CameraSource* source);
 
+// ---- M-UI0：Ui 域（v8，ApiTable 尾部追加）——RmlUi 文档生命周期 + 文本读写 + 事件转发 ----
+//
+// 依赖方向：nl_core 不反向 include renderer（CameraSource 同款纪律）。renderer 侧
+// 实现（RmlUiBackend）由 viewer --rmlui-demo 时经 UiSink 注入；未绑 = kUiNoSource，
+// 不隐式建表（全族口径）。UiSink 虚接口而非函数指针表：文档/元素操作是「对象方法
+// 族」而非多后端适配，CameraSource 的四指针形态在此属过度设计（driveSetScene 直持
+// 形态的接口版）。
+//
+// 事件通道：C# 经 uiSetEventCallback 注册 reverse P/Invoke 函数指针（consoleRegister
+// 同款：script-api 静态保活随 collectible ALC 整体回收；热重载窗口兜底 = RmlUiBackend
+// 每次调用前经 uiEventFn() 现取，C++ 侧不缓存）。ABI：
+//   int fn(const char* elId, const char* eventType, const char* param)
+// 返回值暂记日志，不参与 UI 流程（M-UI0 语义）。elId = 元素 id 属性（可空串），
+// param = onclick 属性值（可空串）。
+struct UiSink {
+    virtual ~UiSink() = default;
+    virtual int  loadDocument(const char* path) = 0;    // handle >0 / 0 = 失败
+    virtual bool closeDocument(int handle) = 0;
+    virtual bool showDocument(int handle, bool show) = 0;
+    virtual bool elementSetText(int handle, const char* elId, const char* text) = 0;
+    virtual bool elementGetText(int handle, const char* elId,
+                                const char** outText) = 0;  // outText = 静态缓冲账本
+};
+// nullptr = 解绑（此后 Ui 导出一律 kUiNoSource——热更窗口兜底）。
+void uiSetSink(UiSink* sink);
+UiSink* uiSink();
+using UiEventFn = int (*)(const char* elId, const char* eventType, const char* param);
+void uiSetEventFn(UiEventFn fn);
+UiEventFn uiEventFn();
+
+// Ui 导出错误码（v8 M-UI0）：0=ok / 1=未绑 UiSink（--rmlui-demo 未开或宿主忘
+// uiSetSink）/ 2=文档句柄无效或元素未找到 / 4=非法参数（空指针等）
+inline constexpr int kUiOk = 0;
+inline constexpr int kUiNoSource = 1;
+inline constexpr int kUiInvalid = 2;
+inline constexpr int kUiBadArg = 4;
+
 // 宿主侧载具训练场绑定（v6 M-SC8，ecsSetWorld 模式推广）：直持
 // nl::physics::DebugScene*（拍板 Q-SC8-1 A'——P8-SCRIPT-PLAN L107 既定口径
 // 「直接对齐 M-NET2 多载具 API 面不新造」；DebugScene PIMPL 已挡 Jolt，公开头

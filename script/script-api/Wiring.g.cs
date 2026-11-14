@@ -341,12 +341,54 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Ui 域接线（生成物；ApiTable 偏移 39..44 = exports.api 声明序）。</summary>
+    internal static unsafe class UiWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _uiLoadDocument, _uiCloseDocument, _uiShowDocument, _uiElementSetText, _uiElementGetText, _uiSetEventCallback;
+
+        /// <summary>加载 Rml 文档（assets/ 相对路径或文档相对路径；加载成功即显示）。rc：0=ok（handle 有效，0=失败）/ 1=未绑 UiSink / 4=非法参数（path 空）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiLoadDocumentFn(IntPtr path, out int handle);
+
+        /// <summary>关闭文档（对句柄失效安全：未知 handle 回 rc=2，无副作用）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiCloseDocumentFn(int handle);
+
+        /// <summary>显示/隐藏文档（show 0|1；非 0/1 视作 true）。rc 同 uiCloseDocument</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiShowDocumentFn(int handle, int show);
+
+        /// <summary>按 id 写元素内文（SetInnerRML 语义；elId 空串 = BadArg）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效或元素未找到 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiElementSetTextFn(int handle, IntPtr elId, IntPtr text);
+
+        /// <summary>按 id 读元素内文（GetInnerRML 语义；text = 静态缓冲「下次同线程调用前有效」，C# 立即拷贝）。rc 同 uiElementSetText</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiElementGetTextFn(int handle, IntPtr elId, out IntPtr text);
+
+        /// <summary>注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int UiSetEventCallbackFn(IntPtr fn);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _uiLoadDocument = Marshal.ReadIntPtr(table, 39 * sizeof(IntPtr));
+            _uiCloseDocument = Marshal.ReadIntPtr(table, 40 * sizeof(IntPtr));
+            _uiShowDocument = Marshal.ReadIntPtr(table, 41 * sizeof(IntPtr));
+            _uiElementSetText = Marshal.ReadIntPtr(table, 42 * sizeof(IntPtr));
+            _uiElementGetText = Marshal.ReadIntPtr(table, 43 * sizeof(IntPtr));
+            _uiSetEventCallback = Marshal.ReadIntPtr(table, 44 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props", "Ui" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd", "uiLoadDocument", "uiCloseDocument", "uiShowDocument", "uiElementSetText", "uiElementGetText", "uiSetEventCallback" };
 
         public static void InitAll(IntPtr table)
         {
@@ -358,6 +400,7 @@ namespace Nl.Script.Api
             CameraWiring.Init(table);
             PhysicsWiring.Init(table);
             PropsWiring.Init(table);
+            UiWiring.Init(table);
         }
     }
 } // namespace
