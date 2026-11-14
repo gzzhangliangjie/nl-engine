@@ -172,6 +172,9 @@ struct FrameParams {
                                       // 欧氏距离；HUD 滑条双向，viewer 持 local 回填）
     bool  probeSkyBg        = false;  // --sky-bg：背景从 clearColor 换解析天穹
                                       //（skyGradient 与探针 miss 同函数；默认关保形）
+    bool  sceneSkyBg        = false;  // M-NL2-C：--sky-bg 进 scene 链（sceneMode_
+                                      // clear 后插全屏解析天穹 pass，sky_bg.slang；
+                                      // 默认关 = 既有基线一像素不动）
 
     // ---- S11 M11.0：--mode cache-viz 世界缓存占用伪彩（probe 链之上叠加
     //  fill/decay/viz 三个 compute；其它模式不读，缺省 false 零扰动）。

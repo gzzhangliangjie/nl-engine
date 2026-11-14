@@ -6251,7 +6251,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
     // M-E1b.0：ECS 场景 pipeline（vsScene_/psScene_/sceneInputLayout_）。
     // 深度/格式/fillMode/cullMode 与既有 pipeline 建法完全同款（2×2 组合）。
     if (sceneMode_) {
-        if (pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_ && pipelineSceneWireNone_)
+        if (pipelineSceneBack_ && pipelineSceneNone_ && pipelineSceneWireBack_ && pipelineSceneWireNone_ &&
+            pipelineSkyBg_)
             return true;
         pipelineSceneBack_ = nullptr;
         pipelineSceneNone_ = nullptr;
@@ -6279,6 +6280,24 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
                 else
                     (i == 0 ? pipelineSceneWireBack_ : pipelineSceneWireNone_) = pipeline;
             }
+        }
+        // M-NL2-C：天穹背景 PSO——全屏大三角无顶点输入（SV_VertexID，无 inputLayout），
+        // 独立 skyBgLayout_（b0 volatile，与 scene 布局槽位不同）。cull=None（视口 Y
+        // 翻转朝向坑见 init 注释），深度测试/写入全关（背景在几何前画，不碰后端永驻
+        // 态 depth，t0Depth_ 永驻态注释同口径）。
+        {
+            nvrhi::GraphicsPipelineDesc sDesc;
+            sDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
+                 .setVertexShader(vsSkyBg_)
+                 .setFragmentShader(psSkyBg_)
+                 .addBindingLayout(skyBgLayout_);
+            sDesc.renderState.rasterState
+                .setFrontCounterClockwise(true)
+                .setFillMode(nvrhi::RasterFillMode::Solid)
+                .setCullMode(nvrhi::RasterCullMode::None);
+            sDesc.renderState.depthStencilState.disableDepthTest().disableDepthWrite();
+            pipelineSkyBg_ = device->createGraphicsPipeline(sDesc, hdrInfo);
+            if (!pipelineSkyBg_) { outError = "createGraphicsPipeline failed for sky bg"; return false; }
         }
         return true;
     }
@@ -6310,7 +6329,9 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
             .setFrontCounterClockwise(true)
             .setFillMode(nvrhi::RasterFillMode::Solid)
             .setCullMode(nvrhi::RasterCullMode::None);
-        // 深度测试/写入关（缺省即关）：覆盖层画在主场景之上，只读金字塔。
+        // 深度测试/写入实际未关（NVRHI DepthStencilState 缺省 depthTestEnable=
+        // true + Less，nvrhi.h:1250 实锤）——靠 VS z=0.0 过清屏深度 1.0 才工作
+        //（M-NL2-C 勘误；覆盖层画在主场景之上，只读金字塔）。
         vizPSO_ = device->createGraphicsPipeline(vDesc, hdrInfo);
         if (!vizPSO_) { outError = "createGraphicsPipeline failed for hiz viz"; return false; }
     }
@@ -6351,7 +6372,8 @@ bool Scene::ensurePipelines(nvrhi::IDevice* device, const nvrhi::FramebufferInfo
         if (!visVizPSO_) { outError = "createGraphicsPipeline failed for vis viz"; return false; }
 
         // M7.1（S7.1）：材质反解全屏 pass（pulling 模式替换 viz）。全屏三角形，
-        // 深度测试/写入关、cull none——与 viz 同款屏幕覆盖，只是片元改走材质着色。
+        // cull none——与 viz 同款屏幕覆盖（深度同为「未关靠 z=0 过 Less」口径，
+        // 见 vizPSO 处勘误），只是片元改走材质着色。
         if (pulling_) {
             nvrhi::GraphicsPipelineDesc mDesc;
             mDesc.setPrimType(nvrhi::PrimitiveType::TriangleList)
@@ -6451,6 +6473,7 @@ void Scene::invalidatePipelines() {
     pipelineSceneNone_ = nullptr;
     pipelineSceneWireBack_ = nullptr;
     pipelineSceneWireNone_ = nullptr;
+    pipelineSkyBg_ = nullptr;          // M-NL2-C：天穹背景 PSO 同格式锁定随重建
     pipelineBack_ = nullptr;
     pipelineNone_ = nullptr;
     pipelineWireBack_ = nullptr;
@@ -7781,6 +7804,52 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     psScene_ = device->createShader(psDesc, psBlob.data(), psBlob.size());
     if (!vsScene_ || !psScene_) { outError = "createShader failed for ecs scene shaders"; return false; }
 
+    // ---- 1b. M-NL2-C：天穹背景 pass 资源（--sky-bg 消费；缺省关 = 路径零变化）。
+    // 独立 blob（sky_bg.vsskybg/psskybg）——psScene 冻结 blob 零扰动（M15.1 同款
+    // 理由）。CB 144B volatile 每帧全量覆写；单一 BindingSet（b0，§2.7）。
+    {
+        const auto skyPath = [shaderSuffix](const char* artifact) {
+            return std::string(NL_SHADER_DIR) + "/sky_bg." + artifact + "." + shaderSuffix;
+        };
+        std::vector<std::uint8_t> skyVsBlob, skyPsBlob;
+        if (!readFileBytes(skyPath("vsskybg").c_str(), skyVsBlob) ||
+            !readFileBytes(skyPath("psskybg").c_str(), skyPsBlob)) {
+            outError = std::string("failed to load sky_bg shaders (") + shaderSuffix +
+                       ") from " NL_SHADER_DIR;
+            return false;
+        }
+        // 入口名传 "main"：SPIR-V 恒 main（§721 口径）。VK makeShaderStageCreateInfo
+        // 用 entryName 匹配 OpEntryPoint，传函数名 → 驱动层 VK_ERROR_INVALID_SHADER_NV
+        // 静默拒建 PSO（DX12 忽略 entryName，所以 DX12 正常 VK 失败——双后端差异根因）。
+        nvrhi::ShaderDesc skyVsDesc;
+        skyVsDesc.setShaderType(nvrhi::ShaderType::Vertex).setEntryName("main");
+        nvrhi::ShaderDesc skyPsDesc;
+        skyPsDesc.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+        vsSkyBg_ = device->createShader(skyVsDesc, skyVsBlob.data(), skyVsBlob.size());
+        psSkyBg_ = device->createShader(skyPsDesc, skyPsBlob.data(), skyPsBlob.size());
+        if (!vsSkyBg_ || !psSkyBg_) { outError = "createShader failed for sky_bg shaders"; return false; }
+
+        nvrhi::BufferDesc skyCbDesc;
+        skyCbDesc.byteSize = 144;
+        skyCbDesc.isConstantBuffer = true;
+        skyCbDesc.isVolatile = true;
+        skyCbDesc.maxVersions = 16;
+        skyCbDesc.debugName = "SkyBgCB";
+        skyBgCB_ = device->createBuffer(skyCbDesc);
+        if (!skyBgCB_) { outError = "createBuffer failed for SkyBgCB"; return false; }
+
+        nvrhi::BindingLayoutDesc skyLDesc;
+        skyLDesc.setVisibility(nvrhi::ShaderType::All)   // 缺省 None 会被 NVRHI 拒绝
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        skyBgLayout_ = device->createBindingLayout(skyLDesc);
+        if (!skyBgLayout_) { outError = "createBindingLayout failed for sky bg"; return false; }
+
+        nvrhi::BindingSetDesc skySDesc;
+        skySDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, skyBgCB_));
+        skyBgSet_ = device->createBindingSet(skySDesc, skyBgLayout_);
+        if (!skyBgSet_) { outError = "createBindingSet failed for sky bg"; return false; }
+    }
+
     // ---- 2. meshFile 白名单 + 按文件分组（保持首次出现序，稳定确定）----
     std::vector<std::string> batchFiles;
     std::vector<std::vector<std::uint32_t>> batchObjects;
@@ -8839,6 +8908,43 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             ? (params.cullBack ? pipelineSceneWireBack_ : pipelineSceneWireNone_)
             : (params.cullBack ? pipelineSceneBack_ : pipelineSceneNone_);
         if (!pipeline) return;
+
+        // ---- M-NL2-C：--sky-bg 天穹背景（clear 之后、几何之前；Q14-4 probe 链
+        // 同口径：远平面反投影 → skyGradientParams → applyHeightFog，直写不调
+        // gamma）。仅 t0Active（HDR 离屏链）生效——直渲 swapchain 回落态跳过
+        //（PSO 与 hdr 格式锁定）。缺省关 = 整块不执行，历史基线一像素不动。
+        if (t0Active && params.sceneSkyBg && pipelineSkyBg_) {
+            // 一次性条件锚（只在 pass 实跑时打——缺省关的用例日志零变化）。
+            static bool skyCondLogged = false;
+            if (!skyCondLogged) {
+                skyCondLogged = true;
+                nl::core::log::infoCh("scene", "skybg pass on: t0=1 pso=1");
+            }
+            nl::math::Mat4 vp{};
+            std::memcpy(vp.m, params.mvp, sizeof(vp.m));   // scene 链 g_mvp = viewProj
+            const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
+            float skySc[36] = {};
+            std::memcpy(skySc, invVP.m, sizeof(invVP.m));     // [0..15]
+            skySc[16] = params.eye[0]; skySc[17] = params.eye[1]; skySc[18] = params.eye[2];   // [16..19]
+            skySc[20] = params.weatherZenith[0]; skySc[21] = params.weatherZenith[1];
+            skySc[22] = params.weatherZenith[2];                                          // [20..23]
+            skySc[24] = params.weatherHorizon[0]; skySc[25] = params.weatherHorizon[1];
+            skySc[26] = params.weatherHorizon[2];                                         // [24..27]
+            skySc[28] = params.weatherFogDensity; skySc[29] = params.weatherFogHeight;       // [28..31]
+            skySc[32] = viewport.maxX - viewport.minX;
+            skySc[33] = viewport.maxY - viewport.minY;                                    // [32..35]
+            cmd->writeBuffer(skyBgCB_, skySc, sizeof(skySc));
+            nvrhi::GraphicsState sstate;
+            sstate.setPipeline(pipelineSkyBg_)
+                  .setFramebuffer(sceneFb)
+                  .addBindingSet(skyBgSet_);
+            sstate.viewport.addViewportAndScissorRect(viewport);
+            cmd->setGraphicsState(sstate);
+            nvrhi::DrawArguments sargs;
+            sargs.setVertexCount(3);   // 全屏大三角（matResolve 同款）
+            noteDraw();  // M-TR0 K1: draw-call counter
+            cmd->draw(sargs);
+        }
 
         for (const SceneMeshBatch& b : sceneBatches_) {
             nvrhi::GraphicsState state;
@@ -10694,6 +10800,13 @@ void Scene::shutdown() {
     sceneLights_ = nullptr;
     sceneInputLayout_ = nullptr;
     sceneBindingLayout_ = nullptr;
+    // M-NL2-C：天穹背景资源（set 引用 layout+CB，按声明逆序 = set 先置空）。
+    vsSkyBg_ = nullptr;
+    psSkyBg_ = nullptr;
+    skyBgSet_ = nullptr;
+    skyBgLayout_ = nullptr;
+    skyBgCB_ = nullptr;
+    pipelineSkyBg_ = nullptr;
     // P9 V2：中性 PBR 兜底纹理同样必须在 device 存活期释放——漏在此置空会拖到
     // Scene 析构（晚于 vkDestroyDevice）→ vkDestroyImage on dead device → UAF →
     // 退出段错误（139）。与上方 T0 离屏链同机理（2026-11-13 bisect 实锤：

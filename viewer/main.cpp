@@ -2677,6 +2677,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeVizIrradiance = (isProbeViz && !gatherActive);
         fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull || isFilter);
         fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
+        // M-NL2-C：--sky-bg 进 scene 链（sceneMode_ 天穹背景 pass；probe 模式下
+        // sceneMode_=false 不消费，缺省关 = 既有基线保形）。
+        fp.sceneSkyBg = probeSkyBgLocal;
         std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
         // S11 M11.0：cache-viz（probe 链基建复用；gather/dots 关，伪彩即最终画面）。
@@ -4266,7 +4269,22 @@ int runScene(const Options& o) {
                 o.weatherT + o.weatherTStep * static_cast<double>(frame), presetW);
             fp.weatherAmbientScale =
                 static_cast<float>(std::clamp(wsW.sunIntensity, 0.0, 1.0));
+            // M-NL2-C：天穹两色 + 高度雾透传（--sky-bg 天穹背景 pass 消费；与
+            // ecs 主链 2729~2740 同源表达式。scene 链此前不读，缺省终值 = 白天
+            // 蓝）。同口径 CLI >=0 锁定雾参数。
+            fp.weatherZenith[0] = static_cast<float>(wsW.skyZenithR);
+            fp.weatherZenith[1] = static_cast<float>(wsW.skyZenithG);
+            fp.weatherZenith[2] = static_cast<float>(wsW.skyZenithB);
+            fp.weatherHorizon[0] = static_cast<float>(wsW.skyHorizonR);
+            fp.weatherHorizon[1] = static_cast<float>(wsW.skyHorizonG);
+            fp.weatherHorizon[2] = static_cast<float>(wsW.skyHorizonB);
+            fp.weatherFogDensity = static_cast<float>(
+                o.weatherFogDensity >= 0.0 ? o.weatherFogDensity : wsW.fogDensity);
+            fp.weatherFogHeight  = static_cast<float>(
+                o.weatherFogHeight >= 0.0 ? o.weatherFogHeight : wsW.fogHeight);
         }
+        // M-NL2-C：--sky-bg 进 scene 链（runScene 侧填充点；probeSkyBg 同旗标）。
+        fp.sceneSkyBg = o.skyBg;
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;

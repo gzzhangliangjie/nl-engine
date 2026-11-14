@@ -936,6 +936,15 @@ private:
     bool instanceTrackSRV_ = false;
     nvrhi::GraphicsPipelineHandle pipelineSceneBack_, pipelineSceneNone_;         // solid × cull
     nvrhi::GraphicsPipelineHandle pipelineSceneWireBack_, pipelineSceneWireNone_; // wireframe × cull
+    // ---- M-NL2-C：scene 链天穹背景 pass（--sky-bg；sky_bg.slang 独立 vs/ps）----
+    // 全屏大三角画在 clear 之后、几何 draw 之前；深度测试/写入全关。缺省关 =
+    // 渲染路径零变化（历史用例 bytes 保形）。声明顺序：set 引用 layout+CB，
+    // 按声明逆序析构 = set 先死、资源后死（S15 UAF 教训口径）。
+    nvrhi::ShaderHandle        vsSkyBg_, psSkyBg_;
+    nvrhi::BindingLayoutHandle skyBgLayout_;
+    nvrhi::BufferHandle        skyBgCB_;        // volatile 144B（invVP/eye/两色/雾/宽高）
+    nvrhi::BindingSetHandle    skyBgSet_;
+    nvrhi::GraphicsPipelineHandle pipelineSkyBg_;
     // ---- M-E1b.4：方向灯 2D 阴影（最多 4 盏；R32F Texture2DArray 整数 Load 采样）----
     static constexpr std::uint32_t kMaxShadowLights = 4;
     nvrhi::ShaderHandle        vsShadow_, psShadow_;
