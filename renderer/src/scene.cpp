@@ -8183,6 +8183,9 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     // [0].w = 点光数量，仅作 uniform 分支判据（无点光时走 M-E1b.0 原表达式）。
     lightData[2] = (sumIntensity > 0.0f) ? (1.0f / sumIntensity) : 0.0f;
     lightData[3] = static_cast<float>(pointCount);
+    // M-NL2 后续（拍板 B）：头部快照——天气 ambient 昼因子调制每帧重组用。
+    sceneLightInvSumI_    = lightData[2];
+    sceneLightPointCount_ = pointCount;
 
     // ---- M-E1b.4：场景联合 AABB（世界空间）→ 每阴影灯的正交 lightViewProj ----
     // 逐实例：batch 局部包围球经世界矩阵变换（中心变换 + 半径按最大列长放大），
@@ -8447,7 +8450,10 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
-    upload->setPermanentBufferState(sceneLights_, nvrhi::ResourceStates::ShaderResource);
+    // M-NL2 后续（拍板 B）：**不设 permanent**（E1b.5 instances 同款教训：SRV 冻结
+    // 会让每帧 ambient 昼因子 copyBuffer 的 require(CopyDest) 直接报错——NVRHI 对
+    // permanent buffer 不插 barrier）。改走 tracking：draw 列表 require(SRV) 从
+    // tracked 末态自动插 barrier；天气路径在 draw 内显式 CopyDest→copy→SRV。
     upload->close();
     device->executeCommandList(upload);
 
@@ -8801,6 +8807,26 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));  // w = ambient（viewer 透传）
         cb.options[0] = 0.0f;   // psScene 不读 options；保持 0
         cmd->writeBuffer(constants_, &cb, sizeof(cb));   // volatile CB 每帧写一版（maxVersions=16）
+
+        // M-NL2 后续（拍板 B）：sceneLights_ 不设 permanent（E1b.5 instances 同款
+        // 教训）——跟踪态不跨命令列表，每个新列表在首次绑定前声明当前态。
+        cmd->beginTrackingBufferState(sceneLights_,
+            sceneLightsSRV_ ? nvrhi::ResourceStates::ShaderResource
+                            : nvrhi::ResourceStates::CopyDest);
+        // 天气激活时 scene 链 ambient 随昼因子调制——灯缓冲头 [0].y =
+        // sceneAmbient_ × scale（psScene 的 g_lights[0].y 唯一 ambient 源）。
+        // scale==1（非天气/白天全量）时零写入：灯缓冲保持 init upload 值，历史
+        // 用例 bytes 保形。writeBuffer 对非 hostAccessible buffer 走 NVRHI 内部
+        // upload 暂存 + CopyBufferRegion（require CopyDest 插 barrier）——最初
+        // 直接报错是 init 设了 permanent 拦截 require，非 writeBuffer 能力问题。
+        if (params.weatherAmbientScale != 1.0f) {
+            const float head[4] = { static_cast<float>(sceneLightCount_),
+                                    sceneAmbient_ * params.weatherAmbientScale,
+                                    sceneLightInvSumI_,
+                                    static_cast<float>(sceneLightPointCount_) };
+            cmd->writeBuffer(sceneLights_, head, sizeof(head));
+        }
+        sceneLightsSRV_ = true;   // 本列表末态 = SRV（绑定 require / 显式转换已插 barrier）
 
         // M-E1b.3：b1 每帧写相机世界坐标（psScene 视向量 V 来源）。其余字段 E1b 不用。
         LightConstants lc{};

@@ -3480,3 +3480,14 @@
 
 **提交版本**：feat/nightlighting 本轮 commit（NightLampPosts.glb + night-demo 三态 6 基线 + render-spin 2 基线 + 诊断日志修复 + 卡注记/台账）。遗留拍板项：scene 链白天表达（B ambient 昼因子 / C 天穹进 scene 链，影响面已析：B 动 ambient 接线约几行 + NL1 卡 4 用例基线重拍；C 属渲染链架构扩展建议另立项）。
 
+
+## NL M-NL2 拍板 B 轮：scene 链 ambient 昼因子接线（feat/nightlighting，2026-11-14）
+
+**动作**：用户拍板 B（「接 ambient 昼因子」）后当轮落码。① FrameParams 加 `weatherAmbientScale`（缺省 1 = 非天气零写入保形）；② viewer runScene fp 补天气分支（**runScene 此前零天气字段填充——Q14-4 时代口径的真正根因**，ecs 主链 fp 同步补）；③ scene.cpp draw 内灯缓冲头 [0].y = sceneAmbient_ × scale（psScene 的 g_lights[0].y 唯一 ambient 源）。
+
+**完成情况**：🟢 昼夜差实锤：t300 正午车身区亮度 80.3（≈旧基线 80.7，scale≈1 全量）vs t580 深夜 70.4（ambient→0 只剩点光）；🟢 受影响卡 nl1-godrays（t470 日落）+ night-demo（t580）16 基线双后端重拍，回归 bytes 全绿；🟢 保形四卡零漂移：nl0-bloom 8/8（无 weather 参数 → 缺省 1 零写入）+ s15/s12 + weather-w1 10/10（probe 链不走 scene 灯缓冲）——**38/38 ALL GREEN**；🟢 双后端 SELFTEST 16/16 ×2。
+
+**踩坑**：① **sceneLights_ 是 default heap + init 设 permanent**——writeBuffer require(CopyDest) 被 NVRHI permanent 校验直接拒（「NVRHI 对 permanent buffer 不插 barrier」，E1b.5 instances 教训同源）；先试 staging+copyBuffer 又踩 D3D12 upload heap 源状态坑——最终正解 = 解 permanent + beginTrackingBufferState 跨列表声明（sceneLightsSRV_ 布尔）+ **writeBuffer 直写**（读 NVRHI 源实锤：writeBuffer 对非 hostAccessible buffer 本就走内部 upload 暂存 + CopyBufferRegion，601 行，最初报错是 permanent 拦截而非能力缺失）；② **weather-t 语义**：kDayLength=600，t300=正午 / t580=深夜（此前误当 1200 日长解读）；③ runScene 与 ecs 主循环是两个独立 fp 作用域，天气字段要各接一遍。
+
+**提交版本**：feat/nightlighting 本轮 commit。遗留：C 方案（天穹进 scene 链）另立项挂账。
+

@@ -951,6 +951,11 @@ private:
     float shadowBias_[kMaxShadowLights] = {};
     float         sceneAmbient_ = 0.28f;
     std::uint32_t sceneLightCount_ = 0;
+    // M-NL2 后续（拍板 B）：灯缓冲头 [0] 其余槽的 init 值快照——天气 ambient 昼
+    // 因子调制时每帧重组头部（(lightCount, ambient*scale, 1/ΣI, pointCount)）。
+    float         sceneLightInvSumI_ = 0.0f;
+    std::uint32_t sceneLightPointCount_ = 0;
+    bool sceneLightsSRV_ = false;            // 跨列表态跟踪：sceneLights_ 末态（init=CopyDest，draw 后=SRV）
     std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源
     nl::anim::Skeleton        skinSkeleton_;
     std::vector<nl::anim::AnimClip> skinClips_;

@@ -54,6 +54,10 @@ struct FrameParams {
     float weatherHorizon[3] = {0.62f, 0.71f, 0.84f};   // 地平线色（终值）
     float weatherSunCol[3]  = {1.0f, 1.0f, 1.0f};      // 太阳 RGB（色温换算）
     float weatherSunIntensity = 1.0f;                  // 0..1 直光能量（×2.5 基准强度）
+    // M-NL2 后续（拍板 B）：scene 光栅链 ambient 昼因子。viewer 天气分支写
+    // sunIntensity（0..1）；scene.cpp 渲染期把灯缓冲头 [0].y 调制为
+    // sceneAmbient_ × scale。缺省 1 = 非天气路径零写入 → 历史 bytes 保形。
+    float weatherAmbientScale = 1.0f;
     // M-WEA2（Q-W2-2=C1）：高度雾参数。缺省 0 = 雾关 → T≡1 → 全链 bytes 保形。
     // 雾色不单发：消费端取 weatherHorizon 同源（D22 ②）。
     float weatherFogDensity  = 0.0f;                   // 1/m（0 = 雾关）

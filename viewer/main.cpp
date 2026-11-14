@@ -2710,6 +2710,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.lightDir[1] = static_cast<float>(se);
             fp.lightDir[2] = static_cast<float>(ce * std::cos(ws.sunAzimuth));
             fp.lightDir[3] = 0.28f * static_cast<float>(ws.sunIntensity); // ambient 随昼因子
+            // M-NL2 后续（拍板 B）：scene 光栅链 ambient 昼因子（psScene 的
+            // g_lights[0].y = sceneAmbient_ × scale）。缺省 1 = 非天气 bytes 保形。
+            fp.weatherAmbientScale = static_cast<float>(std::clamp(ws.sunIntensity, 0.0, 1.0));
             fp.weatherSunIntensity = static_cast<float>(ws.sunIntensity); // 直光能量（×2.5 基准）
             // 色温 K → RGB（Krystof 简化拟合，1000K~40000K 有效；钳 [0,1]）。
             const double tk = ws.sunColorTempK / 100.0;
@@ -4251,6 +4254,19 @@ int runScene(const Options& o) {
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
         fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
+        // M-NL2 后续（拍板 B）：scene 链 ambient 昼因子——runScene 此前零天气
+        // 字段填充（Q14-4 时代口径），此处只接 ambient scale（缺省 1 保形）；
+        // 天穹/太阳仍仅 probe 链消费。
+        if (o.weatherSeed >= 0) {
+            nl::core::WeatherKind presetW = nl::core::WeatherKind::kCount;
+            if (!o.weatherPreset.empty())
+                presetW = nl::core::weatherKindFromName(o.weatherPreset.c_str());
+            const nl::core::WeatherState wsW = nl::core::evaluateWeather(
+                static_cast<std::uint64_t>(o.weatherSeed),
+                o.weatherT + o.weatherTStep * static_cast<double>(frame), presetW);
+            fp.weatherAmbientScale =
+                static_cast<float>(std::clamp(wsW.sunIntensity, 0.0, 1.0));
+        }
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;
