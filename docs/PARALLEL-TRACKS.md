@@ -234,6 +234,7 @@
 
 | 轨道 | worktree 绝对路径 | 分支 | 计划 |
 |---|---|---|---|
+| C# 脚本 | ~~`E:/UE_STUDY_2026/nl-engine-script`~~（已拆，2026-11-14） | `feat/script` + tags `m-sc0`~`m-sc11` | `docs/p8/P8-SCRIPT-PLAN.md` + `SCRIPT-TOOLS-GUIDE.md`；M-SC0~SC3 merge `1b49b5f`，**M-SC4~SC11 整轨 merge `4c5c582`（tag `script-merge`，2026-11-14 用户指令；merge 后 11 历史卡回归 90/90 bytes 全绿 + 便携 ctest 164/164 双后端）；wt 已拆（2026-11-14 用户指令，2 junction 摘除 + prune），TRACKS CLOSED（重开走 §7.1b）** |
 | C# 脚本 | `E:/UE_STUDY_2026/nl-engine-script`（2026-11-13 重开重建） | `feat/script` + tags `m-sc0`~`m-sc3` | `docs/p8/P8-SCRIPT-PLAN.md` + `SCRIPT-TOOLS-GUIDE.md`；M-SC0~SC3 merge `1b49b5f`；**2026-11-13 拍板重开扩胶水层 API 面（M-SC4~SC9：Time/Input/Log、Camera、模型场景、Physics 载具、Audio），wt 重建于 master 08a67c0，注册表已转 active** |
 
 ### 7.2 固化文档闸

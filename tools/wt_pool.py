@@ -124,13 +124,13 @@ TRACKS = {
                 "branches kept per PARALLEL-TRACKS 7.6; reopen via 7.1b",
     },
     "script": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-script",
-        "branch": "feat/script", "state": "active",
-        "note": "M-SC0~SC3 merged to master 1b49b5f (tags m-sc0~m-sc3); "
-                "REOPENED 2026-11-13 by user decision to extend the glue-layer "
-                "API surface (M-SC4+: Input/Time/Log, Camera, scene+model "
-                "creation, Physics vehicle, Audio; static-facade ApiTable "
-                "tail-append unchanged); wt rebuilt at master 08a67c0",
+        "wt": "", "branch": "feat/script", "state": "closed",
+        "note": "script glue-layer track M-SC0~SC11 done (tags m-sc0~m-sc11; "
+                "M-SC0~3 merged 1b49b5f; M-SC4~SC11 merged to master 4c5c582 "
+                "2026-11-14 = script-merge tag, re-run 11 historical cards "
+                "90/90 bytes-green + 164/164 tests dual backend after merge); "
+                "wt removed same day (user instruction), junctions unlinked, "
+                "branch kept; reopen via 7.1b",
     },
     "particles": {
         "wt": "", "branch": "feat/particles", "state": "closed",
