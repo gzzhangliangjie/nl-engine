@@ -381,10 +381,43 @@ CASES_M_SC10 = [
      "Type inside script-api assembly -> dies with the collectible ALC."),
 ]
 
+CASES_M_SC11 = [
+    ("check-tour.log", "check-tour.png",
+     "nl-script check tour example -- compile only (exit 0)",
+     "M-SC11 cross-domain example (Time+Input+Ecs+Log+Camera+Props in one "
+     "script, Q-SC11-1 = A: five domains + Props, runScene single mode). "
+     "Entry anchors all six domains at load time: PropsPush descriptor table "
+     "+ Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + fixed Log "
+     "anchors + Input NoSource negative anchor (viewer never binds ActionMap "
+     "in either mode = designed semantics) + Time/Camera read-through. "
+     "OnTick reads args as double* dt per the orbit-example contract -- "
+     "calling Engine.Init(args) there treats dt bits as an ApiTable pointer "
+     "and faults (first-run lesson). Spawn must Flush before FindByName: "
+     "name lookup only scans flushed entities, and tick 0 hits the sweep "
+     "branch (0 % N == 0)."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- full replay s0-s13 (M-SC0..SC10 non-regression, "
+     "track-closure evidence)",
+     "M-SC11 adds zero exports and zero selftest sections; the full replay "
+     "is the whole-track closure evidence. Cross-domain semantics of the "
+     "tour example are covered by the per-domain sections (s9 Time/Input, "
+     "s10 Camera, s11 Ecs model, s13 Props); the viewer-side integration "
+     "evidence is the tour-panel / tour-sweep image cases (model-set "
+     "signature rebuild 5 -> 6 objects at frame boundary, M-SC7 plan A "
+     "visually realized)."),
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- 39 exports unchanged (M-SC11 zero API surface)",
+     "Closure self-proof: exports.api tail has no additions, golden "
+     "byte-compare green (39 exports / 1 POD / 5 files). The whole script "
+     "domain closes at v0.9.0: console 6 + ECS 13 + Time 2 + Input 5 + Log "
+     "2 + Camera 4 + Physics 5 + Props 2."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
          "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
          "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6, "m-sc7": CASES_M_SC7,
-         "m-sc8": CASES_M_SC8, "m-sc10": CASES_M_SC10}[DIR_NAME]
+         "m-sc8": CASES_M_SC8, "m-sc10": CASES_M_SC10,
+         "m-sc11": CASES_M_SC11}[DIR_NAME]
 
 
 def main():

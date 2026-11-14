@@ -11786,6 +11786,156 @@
      "command": "viewer.exe --scene ecs-e1b --script props --prop-panel (screenshot)"
     }
    ]
+  },
+  {
+   "id": "m-sc11",
+   "label": "P8 M-SC11",
+   "name": "整轨收口：跨域示例脚本 TourScript（Time+Input+Ecs+Log+Camera+Props 六域一脚本打通，拍板 A/A/A：五域+Props / merge 不入本轮 / GUIDE 新节+终检）",
+   "tag": "m-sc11",
+   "date": "2026-11-14",
+   "summary": "M-SC11 收口卡。script/examples/tour：Entry 装载期六域锚定（PropsPush 描述表 + Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + Log 固定锚 + Input NoSource 负向锚（viewer 双模式不绑 ActionMap = 既定语义）+ Time 读通 + Camera 读通），OnTick 逻辑帧相机环绕（args=double* dt 契约，**不调 Engine.Init**——dt 位型当表指针 = AV 实测坑）+ sweep 锚（固定文本）。viewer 帧边界 Model 签名比对重建 5->6 objects（M-SC7 方案 A 视觉兑现）。ApiTable 39 不变（零新导出，纯示例+文档收口）。",
+   "acceptance": "gen --check 39 exports；selftest s0~s13 全量不回归；check tour 编译闸；双后端 tour-panel（8 帧）/tour-sweep（130 帧）bytes 基线 + sweep log 锚（tick 0/120 两次）。",
+   "preview": {
+    "png": "example/m-sc11/tour-DX12.png"
+   },
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest 全量（s0~s13 不回归——整轨收官证据）",
+     "kind": "tool",
+     "note": "M-SC11 零新导出零新 selftest 段；全量重放 = M-SC0~SC10 各域验收不回归（跨域示例语义全部由既有段覆盖）。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest (s0-s13 full replay)"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：39 导出不变自证（M-SC11 零 API 面）",
+     "kind": "tool",
+     "note": "收口自证：exports.api 尾部无追加，golden 逐字节一致（39 exports / 1 POD）。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "check-tour",
+     "name": "check tour 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "跨域示例编译闸：TourScript.csproj 引 script-api；六域语义锚在 viewer 实跑（tour-panel/tour-sweep 卡）。",
+     "args": [
+      "check",
+      "{root}/script/examples/tour"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/tour"
+    },
+    {
+     "id": "tour-panel",
+     "name": "ecs-e1b 场景 + --script tour + --prop-panel：六域同屏",
+     "kind": "image",
+     "note": "script props 窗口（gen 1 / 4 props：SpinSpeed 15/SweepEvery 120/SpinEnabled/TourLabel tour）+ 脚本 attach 的 TorusKnotDense.glb（Px=5,Py=2.8 独立入镜）+ ecs-e1b 猴头群。--tick parallel + --fixed-dt 16.7 = 8 渲染帧 8 逻辑 tick（**默认 --tick off 不 tick——首版实测漏 --tick 则 ticks=0 零重建**）。tick 0 即 sweep（0%120==0）→ expectLog 锚 sweep ok。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--script",
+      "{root}/script/examples/tour",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep ok",
+     "baselines": {
+      "dx12": "example/m-sc11/tour-DX12.png",
+      "vulkan": "example/m-sc11/tour-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --tick parallel --script tour --prop-panel (screenshot)"
+    },
+    {
+     "id": "tour-sweep",
+     "name": "130 帧 sweep：OnTick 相机环绕 + 双 sweep 锚（tick 0/120）",
+     "kind": "image",
+     "note": "130 逻辑 tick：OnTick 每 tick Camera.SetPose（yaw += SpinSpeed*dt，fixed-dt 确定性）+ tick 0/120 两条 sweep 锚（FindByName+Exists 复核 → log 固定文本）。相机转 ~32°，bytes 基线双后端分文件。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--tick",
+      "parallel",
+      "--fixed-dt",
+      "16.7",
+      "--script",
+      "{root}/script/examples/tour",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "130",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "sweep ok",
+     "baselines": {
+      "dx12": "example/m-sc11/tour-sweep-DX12.png",
+      "vulkan": "example/m-sc11/tour-sweep-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --tick parallel --script tour (130 frames screenshot)"
+    }
+   ]
   }
  ]
 }

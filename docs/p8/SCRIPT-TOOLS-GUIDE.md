@@ -630,3 +630,61 @@ POD 表 C++ 留存。
    比特写进 int 字段，get 回 "leak"）。
 4. **C1090 PDB API 0x6BA** 二连：mspdbsrv 瞬时故障，重跑即绿（M-SC8 踩坑②
    复现，非代码错）。
+
+## M-SC11 整轨收口：跨域示例脚本（v0.9.0 终态，ApiTable 39 不变，2026-11-14）
+
+### 拍板（Q-SC11-1~3 = A/A/A，2026-11-14）
+
+① 示例域集 = **五域+Props**（计划行 Time+Input+Ecs+Log+Camera 加 M-SC10
+Props；Physics 不进——训练场模式与 Camera/Ecs 互斥，见下表）；② merge 回
+master 单独拍板不入本轮（S13 教训：merge 后重跑全历史卡）；③ GUIDE = 新节
++ 既有 M-SC4~SC10 各节一致性终检。
+
+### 双模式域可用性约束（跨域示例的物理前提）
+
+| 域 | runScene（scene 模式） | runNormal（训练场模式） | 绑定点 |
+|---|---|---|---|
+| Time / Input / Log | Time+Log ✅ / Input ❌(NoSource) | 同左 | timeSetClock；Input 双模式均不绑（不隐式建表口径） |
+| Ecs（挂载） | ✅ ecsSetWorld | ❌ 不绑 | World 未绑 = EcsCode.NoWorld |
+| Camera | ✅ cameraSetSource | ❌ 不绑 | 未绑 = CameraCode.NoSource |
+| Physics | ❌ 不绑 | ✅ driveSetScene | 未绑 = PhysicsCode.NoScene |
+| Props | ✅ | ✅ | 描述表导出 + BootTickPtr 值通道 |
+
+TourScript（`script/examples/tour/`，类 `NlScript.Examples.TourScript`）=
+单模式单脚本六域打通的展示样例：Entry 装载期六域锚定（PushStatic 描述表 +
+Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + Log 固定文本锚 +
+Input NoSource **负向锚** + Time/Camera 读通），OnTick 相机环绕
+（yaw += SpinSpeed*dt，SpinEnabled 可经面板实时关停 = Props 值通道活演示）
++ sweep 周期锚（Ecs.FindByName+Exists 复核 → 固定文本 log）。
+
+### viewer 复现（m-sc11 卡）
+
+```
+viewer.exe --scene example/ecs-e1b/ecs-e1b.scene --tick parallel --fixed-dt 16.7 ^
+  --script script/examples/tour --script-bootstrap script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll ^
+  --prop-panel --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 12 --pitch 9
+```
+
+验收锚：log `tour: entry ok (props+ecs+log)` / `tour: input NoSource as
+designed` / `tour: sweep ok (…)` + `ecs scene rebuilt: 6 objects
+(frame-boundary, script attach/detach)`（M-SC7 方案 A 视觉兑现——脚本 attach
+的模型帧边界重建入镜）。130 帧版（tour-sweep 卡）相机转 ~32°，tick 0/120
+两条 sweep 锚，fixed-dt 确定性 bytes 基线双后端分文件。
+
+### 踩坑存档（M-SC11 实测）
+
+1. **scene 模式默认 `--tick off`**：不带 `--tick parallel` 则 GameClock 不
+   推进 → OnTick 零执行、ticks=0、Model 签名比对不触发、attach 的模型不入镜
+   （PNG 与无脚本版逐字节同）。脚本示例卡必须带 `--tick parallel --fixed-dt
+   16.7`（gl4 tick 卡先例同款）。
+2. **OnTick 的 args = `double*`（逻辑步长秒），size = 8，不是 ApiTable\***：
+   OnTick 里调 `Engine.Init(args)` 把 dt 位型当表指针解引用 = AV（SEH
+   0xe0434352）。Engine 静态指针由 Entry（反射通道，同 ALC 静态共享）装载期
+   初始化一次，OnTick 直接用 facade——orbit 示例同款契约。
+3. **Spawn 后按名查找必须先 Flush**：name lookup 族只扫已 flush 实体
+   （newEntity 延迟落表，s7 时代同坑）；tick 0 的 sweep 分支 `0 % N == 0`
+   首帧即触发 FindByName——Entry 尾补 `Ecs.Flush()` 根修。
+4. **白名单校验 ≠ 文件存在**：selftest 罐头名 `cube.glb` 过 M-SC7 白名单
+   （字符集校验）但 `assets/models/` 无此文件——viewer 真加载时 rebuild
+   failed。示例挂载用真实资产（TorusKnotDense.glb）。
+

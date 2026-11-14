@@ -1967,6 +1967,18 @@
 **提交版本**：feat/script 本节 commit + annotated tag `m-sc10`。冻结面：M-SC0~SC8 全域零改动（exports.api 纯尾追加）；scene 模式脚本链零改动；kStage 不动（面板 = renderer additive 新文件）。下一步：M-SC11 收口（script 轨道整轨收官 + merge 回 master 待指令）。
 
 
+## M-SC11：整轨收口——跨域示例脚本 TourScript（六域一脚本打通；feat/script，2026-11-14，tag `m-sc11`）
+
+**动作**：跨域示例 `script/examples/tour/`（TourScript + csproj，ApiTable 39 不变零新导出、零新 selftest 段）。开工摆三问（用户拍板 A/A/A）：**Q-SC11-1 示例域集 = A 五域+Props**（计划行 Time+Input+Ecs+Log+Camera 加 M-SC10 Props 第六域；Physics 不进——训练场模式与 Camera/Ecs 互斥，单模式单脚本无法七域同屏）；**Q-SC11-2 merge 回 master = A 单独拍板不入本轮**（用户既有口径「整轨 merge 待指令」优先于计划行 merge 句——口径冲突显式披露后拍板，S13 教训 merge 后重跑全历史卡）；**Q-SC11-3 GUIDE = A 新节+终检**。TourScript：Entry 装载期六域锚定（PropsPush 描述表 + Spawn/Flush/AddTransform/AttachModel(TorusKnotDense.glb) + Log 固定锚 + Input NoSource 负向锚（viewer 双模式不绑 ActionMap = 既定语义）+ Time/Camera 读通），OnTick 相机环绕（args=double* dt 契约；SpinEnabled 经面板实时关停 = Props 值通道活演示）+ sweep 周期锚（FindByName+Exists 复核 → 固定文本 log）。cases.json 尾插 m-sc11 卡 5 用例（tool 3 + image 2：tour-panel 8 帧 / tour-sweep 130 帧，双后端 bytes 基线分文件）+ run.bat 四段 + make-script-evidence CASES_M_SC11 三 PNG + GUIDE M-SC11 节（双模式域可用性约束表）+ PLAN M-SC11 拍板记录块。
+**完成情况**：🟢 run.bat ALL GREEN（gen --check 39 导出不变 + selftest 全量重放 PASS 0 failures（s0~s13 整轨不回归）+ check tour PASS + evidence 3 PNG）；🟢 viewer 双后端实测 rc=0：log 锚 entry ok / input NoSource as designed / sweep ok ×2（tick 0/120）+ `ecs scene rebuilt: 6 objects`（M-SC7 方案 A 视觉兑现——脚本 attach 模型帧边界重建入镜）；🟢 m-sc11 回归卡 ALL GREEN（bytes 基线双后端）；🟢 M-SC4~SC10 各节一致性终检无口径漂移（GUIDE 踩坑存档互引 intact）。
+**踩坑情况**
+- **scene 模式默认 `--tick off`**：不带 `--tick parallel` 则 GameClock 不推进 → OnTick 零执行、ticks=0、Model 签名比对不触发、attach 模型不入镜（PNG 与无脚本版逐字节同——双跑 md5 相同才定位）。脚本示例卡必带 `--tick parallel --fixed-dt 16.7`（gl4 tick 卡先例同款）。
+- **OnTick 的 args = double\*（逻辑步长秒，size=8），不是 ApiTable\***：OnTick 里 Engine.Init(args) 把 dt 位型当表指针解引用 = AV（SEH 0xe0434352）；Engine 静态指针由 Entry（反射通道，同 ALC 静态共享）装载期初始化一次，OnTick 直接用 facade（orbit 示例同款契约）。
+- **Spawn 后按名查找必须先 Flush**：name lookup 族只扫已 flush 实体（newEntity 延迟落表坑）；tick 0 的 sweep 分支 `0 % N == 0` 首帧即触发 FindByName——Entry 尾补 Ecs.Flush() 根修（诊断期误判 GetState 失败，diag log 缺失才反推真因）。
+- **白名单校验 ≠ 文件存在**：selftest 罐头名 cube.glb 过 M-SC7 白名单（字符集校验）但 assets/models/ 无此文件——viewer 真加载 rebuild failed。示例挂载用真实资产。
+**提交版本**：feat/script 本节 commit + annotated tag `m-sc11`。冻结面：M-SC0~SC10 全域零改动（纯示例+文档+cases）；kStage 不动（零渲染改动）。**script 轨道整轨收官（M-SC0~SC11 全 tag）；merge 回 master 待用户指令（merge 后重跑该轨全部历史版本卡——S13 教训）。**
+
+
 ## P8 M-S0：vendored miniaudio + nl/audio 封装 + 离线确定性 PCM（feat/audio 轨道，2026-11-09，tag `audio-s0`）
 
 **动作**：用户「开工 M-S0 建 feat/audio」= 提前解禁音频轨道 M-S0~S2 排期闸（M-S3 场景集成仍 gate 在 P8 E1/E1b 之后，照物理 §7.1e 先例）。基于 master 建 `feat/audio` worktree（`E:/UE_STUDY_2026/nl-engine-audio`，两处 junction 共享 + skip-worktree）。三处参考实读：Carrot `engine/audio/` 对象模型（Manager→SFX/Music→Sound→SoundSource→SoundListener，AudioThread 不抄）/ bevy `bevy_audio` `audio_output.rs`（无设备 `stream: None` 优雅降级）+ `audio.rs`（无 HRTF 只左右声像）/ UE `AudioDebug.cpp`（M-S2 调试字段口径，只读不抄）；ROADMAP 对照总表无音频行（A 类轨道），按铁律就近读三处音频同类模块。
