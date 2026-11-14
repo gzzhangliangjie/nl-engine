@@ -3469,3 +3469,14 @@
 **踩坑**：① **scene 模式天气链零消费**（`fp.probeSkyBg = (probeMode && ...)` Q14-4 既有拍板）——`--weather-t 300` vs `580` 输出 MD5 全同（ecs-e1b 同样），任务书「白天基线」不可行 → 拍板 A 改夜域四态；② **街景资产 node 自带 S=0.01+T（厘米→米内建）**，scene Transform 再乘 0.01 = 路灯缩成毫米灰尘全盲（v1~v4 四轮黑屏根因）；node T 是大偏移（路面中心 (94.8,0.3,180.5)、灯柱 (270.5,4.9,51.9)），实体 position 需反向平移归位；③ **`--dist 12` 大距离 + 柱顶高光源（y=8.5）→ 光源投影 NDC y 出界（2.38@dist9 实测）→ godLightVisible_=false → godrays 静默跳过**（设计行为：视锥外当帧不可见），机位 dist10 + 光源降柱中段 y=4.0 进界根修；dist12 时另见 NDC y=9241 畸变值（疑似大 bbox 场景相机 target 自适应，挂后续项）；④ **bloom threshold 0.7 夜态无感**（夜态亮部像素少，M-NL0 默认参数不适夜景）→ 0.4/0.9 定稿；⑤ **写卡坑第三犯**：case() 生成函数 `extra` 旗标没拼进 args → nd-bloom/nd-full 卡实为无旗标 args → 回归假 FAIL 55062px——手拍三连 MD5 全同证明 bloom 链完全确定后定位，修正卡 args 后 8/8 全绿；⑥ VULKAN 基线在诊断日志重编前拍摄——log-only 改动新旧 exe MD5 四对全同实锤零影响。
 
 **提交版本**：feat/nightlighting 本轮 commit（诊断日志 + night-demo 卡 + 资产）+ annotated tag `nl-done`（整轨收官：M-NL0 bloom + M-NL1 godrays + M-NL2 串联 demo）。冻结面：sky.slangh / 探针/world cache / GBuffer / VSM / 各并行轨道零改动。后续项挂账：scene 模式 `--dist` 大值光源投影 NDC 畸变根因（诊断日志已埋）；ecs-parallel/render-spin 历史基线重拍（showcase rebuild 族）；红绿灯珠贴图色 emissive 增强（bloom 亮部面）；「白天基线」如需 scene 链表达另立项拍板（B ambient 昼因子 / C 天穹进 scene 链）。
+
+## NL M-NL2 后续项轮：挂账清偿（feat/nightlighting，2026-11-14，紧随 tag `nl-done`）
+
+**动作**：三项挂账当轮清偿（用户点名「小问题不当轮清=堆积」+「该查的查完再呈拍板」）。① ecs-parallel/render-spin 历史过期基线重拍：M-E1b.5 基线 vs 跨 S/T/NL 多版本当前 exe，双后端重拍入库，回归 bytes 全绿；② dist12「NDC 畸变」复查：13 组对照矩阵实验（高/低光源 × dist9~20 × bloom 同开 × v7 位复刻）全部正常矩阵——**9241 为不可复现瞬态，无矩阵 bug**；真实机制钉死 = 光源投影 ny>1.3 出界拒绝（设计行为），dist↑ 视角变平 ny 收敛进界（高光源 dist20 恢复 picked），低光源 y=4.0 全 dist 域 picked——M-NL2 台账里「--dist 12 畸变挂账」销案；③ 红绿灯珠 emissive：图集分析（街景共享 4096 图集，灯珠=红黄绿三圆点 UV 区）→ NightLampPosts.glb（emissive 贴图注入三圆 r=23 + emissiveFactor(1,1,1)，Q-NL4 通路复用）→ night/bloom/full 三态换柱重拍双后端 6 基线，nd-dark 保持原版柱维持全黑对照。顺手修：godrays 诊断日志 writeCh stream 风格误用 printf 格式串（格式串字面泄漏）。
+
+**完成情况**：🟢 render-spin 新基线 bytes 全绿；🟢 night-demo 8/8 全绿（新灯柱三态重拍）；🟢 nl1-godrays 8/8 保形全绿；🟢 双后端三态 near 级（99% 逐字节同 maxd≤3）；🟢 VULKAN godrays picked + dark 态新旧 exe MD5 全同（log-only 零画面影响）；🟢 诊断日志格式修复（picked/rejected 两处 stream 化）。
+
+**踩坑**：① **glb 追加 bufferView 后必须同步 `buffers[0].byteLength`**——否则 tinygltf 判 image 数据越界报「STB cannot decode」（表象误导成 PNG 格式问题，二分复制原 PNG 仍失败才定位到 buffer 声明）；② 图集共享资产不能按颜色全局判灯珠（19.7% 假阳性含砖红/黄漆），须按 UV 区域三色分团精确定位圆心；③ writeCh 是 `(os << ...)` stream 风格，printf 格式串会原样泄漏（已修 + 注释警示）。
+
+**提交版本**：feat/nightlighting 本轮 commit（NightLampPosts.glb + night-demo 三态 6 基线 + render-spin 2 基线 + 诊断日志修复 + 卡注记/台账）。遗留拍板项：scene 链白天表达（B ambient 昼因子 / C 天穹进 scene 链，影响面已析：B 动 ambient 接线约几行 + NL1 卡 4 用例基线重拍；C 属渲染链架构扩展建议另立项）。
+

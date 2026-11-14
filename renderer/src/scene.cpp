@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <vector>
 
 namespace nl::renderer::detail {
@@ -8677,9 +8678,11 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         // 「--godrays 静默无效」族（后续项：放宽出屏余量拍板）。
                         static bool godDiagLogged_ = false;
                         if (!godDiagLogged_) {
-                            nl::core::log::infoCh(
-                                "godrays", "light picked: pos=(%.2f,%.2f,%.2f) ndc=(%.3f,%.3f,%.3f)",
-                                x, y, z, nx, ny, nz);
+                            // writeCh 是 stream 风格（os << ...），禁 printf 格式串。
+                            std::ostringstream godOs;
+                            godOs << "light picked: pos=(" << x << "," << y << "," << z
+                                  << ") ndc=(" << nx << "," << ny << "," << nz << ")";
+                            nl::core::log::infoCh("godrays", godOs.str());
                             godDiagLogged_ = true;
                         }
                         godLightNdc_[0] = nx; godLightNdc_[1] = ny; godLightNdc_[2] = nz;
@@ -8709,9 +8712,10 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                         // M-NL2 诊断：拒绝原因首帧一次（NDC 出界族定位）。
                         static bool godRejLogged_ = false;
                         if (!godRejLogged_) {
-                            nl::core::log::infoCh(
-                                "godrays", "light rejected: pos=(%.2f,%.2f,%.2f) cw=%.4f ndc=(%.3f,%.3f,%.3f)",
-                                x, y, z, cw, nx, ny, nz);
+                            std::ostringstream godOs;
+                            godOs << "light rejected: pos=(" << x << "," << y << "," << z
+                                  << ") cw=" << cw << " ndc=(" << nx << "," << ny << "," << nz << ")";
+                            nl::core::log::infoCh("godrays", godOs.str());
                             godRejLogged_ = true;
                         }
                     }

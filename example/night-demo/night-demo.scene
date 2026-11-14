@@ -62,7 +62,7 @@
      ]
     },
     "Model": {
-     "mesh": "StreetLampPosts.glb",
+     "mesh": "NightLampPosts.glb",
      "tint": [
       1.0,
       1.0,
