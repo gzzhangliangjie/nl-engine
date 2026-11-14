@@ -333,13 +333,15 @@ TRACKS = {
     },
     "ui-rmlui": {
         "wt": "E:/UE_STUDY_2026/nl-engine-ui-rmlui",
-        "branch": "feat/ui-rmlui", "state": "active",
-        "note": "A-class UI track opened 2026-11-15 (M-UI0; user picked "
-                "RmlUi after comparison table 2026-11-15, decided one-shot "
-                "scope incl C# bridge); plan docs/ui/RMLUI-PLAN.md; wt "
-                "built 2026-11-15 from master 38e8db8, junctions "
-                ".workbuddy + thirdparty/slang/dist; A-class tools-grade "
-                "handoff, --rmlui-demo default off, no kStage bump",
+        "branch": "feat/ui-rmlui", "state": "closed",
+        "note": "A-class UI track M-UI0 CLOSED 2026-11-15 (tag ui-rmlui "
+                "@ 22f636d; close gate PASS + release --done): vendored "
+                "RmlUi 6.3 + FreeType 2.13.3, renderer dual-backend "
+                "integration, C# Ui domain full chain, demo+hot-reload+F8"
+                "+--rmlui-click headless acceptance; dual-backend BUILD OK "
+                "+ selftest 16/16 x2 + acceptance anchors green + "
+                "default-off zero-drift; wt KEPT pending user decision on "
+                "removal; whole-track merge to master pending user call",
     },
 }
 
