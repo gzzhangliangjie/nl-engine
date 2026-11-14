@@ -304,6 +304,17 @@ TRACKS = {
                 "junction .workbuddy + thirdparty/slang/dist + skip-worktree "
                 "(9 files)",
     },
+    "nightlighting": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-nightlighting",
+        "branch": "feat/nightlighting", "state": "active",
+        "note": "night-lighting interleave track (plan docs/nl/NL-PLAN.md, "
+                "M-NL0 bloom / M-NL1 screen-space god rays / M-NL2 night "
+                "demo, tags nl0-bloom/nl1-godrays/nl-done; Q-NL1~NL6 "
+                "settled 2026-11-14: A-plan post-chain, flags default-off, "
+                "no sky.slangh touch, zero vendored); wt built 2026-11-14 "
+                "from master b150fd9, junction .workbuddy + "
+                "thirdparty/slang/dist + skip-worktree",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
