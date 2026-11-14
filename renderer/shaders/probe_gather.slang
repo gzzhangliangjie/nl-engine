@@ -53,6 +53,11 @@ cbuffer GatherConstants : register(b0)
                                //  ⚠️ 不能用 deviceZ 分段——透视投影非线性，可见场景
                                //  deviceZ 全挤在 [0.9,1] → 全落 L3（2×2 网格），
                                //  M10.2 冒烟实锤（画面整体变暗 = ambient 白拿）。
+    // M14C1（S14-C）：[32] = 自适应探针开关（probe-adaptive 模式置 1；CB 扩容
+    // 128→144B，[33..35] 保留）。开 = 插值池 4→8（每 corner 并入归属格位的
+    // atlas 预留区槽位探针，place/irrad 同映射 (x, res+y)）；关 = 原 4 池逐值
+    // 一致（s10-*/s12-* 冻结基线零漂）。
+    float4   g_gAdaptive;
 }
 
 Texture2D<float4> g_place0  : register(t0);   // 布点 atlas（RGBA32F worldPos+deviceZ）
@@ -158,39 +163,132 @@ void csGather(uint3 tid : SV_DispatchThreadID)
     const float d2 = dot(wp, n);
     const int2 octT = octaDirToTexel(normalize(n), octRes);
 
-    float4 weights  = float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 fallback = float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 irr[4] = { float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0) };
+    // M14C1：插值池 4→8（g_gAdaptive.x 开关）。k=0..3 = 均匀 corner；k=4..7 =
+    // 同 corner 格位的自适应探针（atlas 预留区槽位 (x, res+y)，Q-C2A 布点形态）。
+    // 自适应探针 a=0（空槽/未 spawn）→ 权重 0（UE select 口径）。
+    const bool  useAdaptive = g_gAdaptive.x > 0.5f;
+    float weights[8];
+    float fallback[4];
+    float3 irr[8];
+    [unroll]
+    for (uint k = 0u; k < 8u; ++k) { weights[k] = 0.0f; irr[k] = float3(0.0f, 0.0f, 0.0f); }
+    [unroll]
+    for (uint k = 0u; k < 4u; ++k) fallback[k] = 0.0f;
 
+    // ---- 均匀 4 角（原口径逐值一致；同时收集角点世界位供 spawn 尺度自标定）----
+    float3 uniPos[4];
+    bool  uniOk[4];
+    [unroll]
+    for (uint k = 0u; k < 4u; ++k) { uniPos[k] = float3(0.0f, 0.0f, 0.0f); uniOk[k] = false; }
     [unroll]
     for (uint k = 0u; k < 4u; ++k)
     {
-        const int2 off = int2(k & 1u, k >> 1u);   // 00/10/01/11
-        const uint2 ct = tile + uint2(off);
+        const int2  off = int2(k & 1u, k >> 1u);   // 00/10/01/11
+        const uint2 ct  = tile + uint2(off);
+        // M14C1 根修（2026-11-14 拍板转正）：uniform 区越界守卫。adaptive atlas 高 ×2
+        //（下半 spawn 预留区），L3 级 res=1 时 (res,res)-2 uint 下溢使 tile 钳位失效，
+        // corner01 ct=(0,1) 落预留区槽位——spawn 探针被当 uniform corner 双线性插值
+        //（diag19/20 实锤 = adaptive≠u8 的 213.8 全部来源；guard 后 adp↔u8 逐位一致，
+        // u8 路径 c20≡d12 逐位不变，L0-2 恒 no-op）。
+        if (ct.x >= res || ct.y >= res) continue;
         const float4 probe = loadPlaceA(level, ct);
         if (probe.w <= 0.0f) continue;            // 天空探针：权重 0（UE select 口径）
 
+        uniOk[k] = true;
+        uniPos[k] = probe.xyz;
         const float planeDist = abs(dot(probe.xyz, n) - d2);
         const float rel = planeDist / max(sceneDepth, 1e-4f);
         weights[k]  = bilinear[k] * exp2(-10000.0f * rel * rel);   // 主（CVar 1.0）
+        // Fallback 权重只对均匀 4 角保留原语义（自适应探针不参与降级链，
+        // 与 UE bUseAdaptiveProbes 分支的独立池口径一致）。
         fallback[k] = bilinear[k] * exp2(-1000.0f * rel * rel);    // Fallback（0.1×）
         // 探针格基址 + border 偏移（M10.1 viz 踩坑同款：漏乘基址全黑）。
         irr[k] = loadIrradA(level, ct * (octRes + 2u) + uint2(octT) + 1u);
     }
 
+    // ---- 自适应探针（拍板 A 根修，2026-11-14）：权重 = 距离衰减 × 平面权 ----
+    // 初版借 corner 双线性权（探针实际位置在格位内部任意点 ≠ corner）→ 空间错位
+    // tile 条带污染（差异热图 + MSE 实锤：spawn 区 214 偏移且远离 u32 参照）。
+    // 改按探针真实世界位置距离衰减：w = exp2(-4·(d/spacing)²) × exp2(-10000·rel²)。
+    // spacing 自标定 = 相邻均匀角点世界距均值（零新 CB 常量，CB 布局不动）；
+    // d=0.5·spacing → 0.5，d=1·spacing → 1/16（主影响域 = 本格位）。非 adaptive
+    // 模式此段整体跳过（保形）。
+    if (useAdaptive)
+    {
+        float  spacingSum = 0.0f;
+        uint   spacingN   = 0u;
+        [unroll]
+        for (uint k = 0u; k < 4u; ++k)
+        {
+            // 相邻对：(0,1) (2,3) 横向，(0,2) (1,3) 纵向——双侧有效才算。
+            const uint a = (k & 1u) | ((k >> 1u) << 1u);          // 0,1,2,3
+            const uint bH = a ^ 1u;                                // 横向邻居
+            const uint bV = a ^ 2u;                                // 纵向邻居
+            if (uniOk[a] && uniOk[bH] && a < bH)
+                { spacingSum += length(uniPos[a] - uniPos[bH]); ++spacingN; }
+            if (uniOk[a] && uniOk[bV] && a < bV)
+                { spacingSum += length(uniPos[a] - uniPos[bV]); ++spacingN; }
+        }
+        const float spacing = (spacingN > 0u) ? spacingSum / float(spacingN) : 0.0f;
+        if (spacing > 1e-4f)
+        {
+            [loop]
+            for (uint k = 4u; k < 8u; ++k)
+            {
+                const int2  off = int2(k & 1u, (k >> 1u) & 1u);
+                const uint2 ct  = tile + uint2(off);
+                const uint2 at  = uint2(ct.x, res + ct.y);   // 预留区槽位
+                const float4 probe = loadPlaceA(level, at);
+                if (probe.w <= 0.0f) continue;               // 空槽/未 spawn
+                const float planeDist = abs(dot(probe.xyz, n) - d2);
+                const float rel = planeDist / max(sceneDepth, 1e-4f);
+                const float d   = length(wp - probe.xyz);
+                const float t   = d / spacing;
+                weights[k] = exp2(-4.0f * t * t) * exp2(-10000.0f * rel * rel);
+                irr[k] = loadIrradA(level, at * (octRes + 2u) + uint2(octT) + 1u);
+            }
+        }
+    }
+
+    // M14C1 收口修正：spawn 候选贡献限幅（UE AdaptiveProbeAllocationFraction=0.5
+    // 字面口径）。追加形态 + 共享 corner 角权 → 失效格位 spawn 权重池结构性翻倍
+    //（实测白斑：剪影 spawn 探针的外向 texel = 天空 miss 亮值，面部像素被对半
+    // 混入）。限 spawn 总权重 ≤ 均匀 4 角权重和（50% 分配上限）。非 adaptive
+    // 模式 spawn 候选权重恒 0，此段零效果（保形）。
+    if (useAdaptive)
+    {
+        float uniSum = 0.0f;
+        [unroll]
+        for (uint k = 0u; k < 4u; ++k) uniSum += weights[k];
+        float spawnSum = 0.0f;
+        [unroll]
+        for (uint k = 4u; k < 8u; ++k) spawnSum += weights[k];
+        if (spawnSum > uniSum && spawnSum > 0.0f)
+        {
+            const float scl = uniSum / spawnSum;
+            [unroll]
+            for (uint k = 4u; k < 8u; ++k) weights[k] *= scl;
+        }
+    }
+
     // UE 两级降级链（1211-1223）：主权重和 < MIN → Fallback；仍 < MIN → 全 0。
-    float sum = dot(weights, float4(1, 1, 1, 1));
+    float sum = 0.0f;
+    [unroll]
+    for (uint k = 0u; k < 8u; ++k) sum += weights[k];
     if (sum < kMin)
     {
-        weights = fallback;
-        sum = dot(weights, float4(1, 1, 1, 1));
+        [unroll]
+        for (uint k = 0u; k < 8u; ++k) weights[k] = (k < 4u) ? fallback[k] : 0.0f;
+        sum = 0.0f;
+        [unroll]
+        for (uint k = 0u; k < 8u; ++k) sum += weights[k];
     }
 
     float3 result = float3(0.0f, 0.0f, 0.0f);
     if (sum >= kMin)
     {
         [unroll]
-        for (uint k = 0u; k < 4u; ++k)
+        for (uint k = 0u; k < 8u; ++k)
             result += irr[k] * weights[k];
         result /= max(sum, kMin);
     }

@@ -489,7 +489,9 @@ set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|
 # 单独一条小 pass 重画几何写 velocity_，不碰 T2 场景 PSO）。
 set(_ENTRIES_VELOCITY "vsVelocity|vsvelocity|vertex" "psVelocity|psvelocity|fragment")
 # M10.0（S10）：probe.slang 单 compute 入口——cascade 探针布点（反投影+法线偏移）。
-set(_ENTRIES_PROBE "csPlace|csplace|compute")
+set(_ENTRIES_PROBE "csPlace|csplace|compute"
+                    "csAdaptiveMark|csadaptivemark|compute"
+                    "csAdaptiveSpawn|csadaptivespawn|compute")   # M14C1（S14-C）
 # M10.0（S10）：probe_viz.slang 双入口——探针点可视化（每探针一实例 quad + 按级着色）。
 set(_ENTRIES_PROBE_VIZ "vsProbeDots|vsprobedots|vertex" "psProbeDots|psprobedots|fragment")
 # M10.1（S10）：probe_trace.slang 单 compute 入口——探针追踪（每探针每 texel 1 条

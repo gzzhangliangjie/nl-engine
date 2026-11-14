@@ -28,6 +28,7 @@ constexpr const char* kModeNames[] = {
     "cache-viz",    // S11 M11.0：世界缓存占用伪彩（flat hashmap + life 衰减，Q11-0）
     "filter",       // S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A，三层独立开关）
     "restir",       // M14B1：ReSTIR GI 两 pass（S14-B Q-B1 GI 域 per-pixel 候选）
+    "probe-adaptive", // M14C1：探针自适应加密（S14-C Q-C1A/C2A/C3B 拍板）
 };
 
 static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) ==

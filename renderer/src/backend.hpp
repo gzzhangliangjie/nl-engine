@@ -50,7 +50,7 @@ public:
                       bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
                      bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
                      bool shadowMode, bool referenceMode, bool probeMode,
-                     bool restirMode,
+                     bool restirMode, bool probeAdaptiveMode,
                      std::string& outError) = 0;
     virtual void resize(Extent extent) = 0;
 

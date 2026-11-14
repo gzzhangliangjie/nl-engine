@@ -400,6 +400,8 @@ public:
     void pollTlasTimer(nvrhi::IDevice* device, HudFrame* hud);
     // 探针 readback 轮询（两帧延迟窗口，同 pollCullStats 纪律；--tlas-probe 才有数据）。
     void pollTlasProbe(nvrhi::IDevice* device);
+    // M14C1 诊断：place atlas level0 staging 回读轮询（--probe-place-readback）。
+    void pollPlaceReadback(nvrhi::IDevice* device);
     bool tlasReady() const { return tlasReady_; }
     int  tlasInstanceCount() const { return tlasInstanceCount_; }
 
@@ -490,6 +492,9 @@ public:
     // 缓存），替换 place/trace/gather 为 per-pixel reservoir 重采样。restirMode_
     // 由后端 init 置位（setRestirMode）。
     void setRestirMode(bool on) { restirMode_ = on; }
+    // M14C1（S14-C）：--mode probe-adaptive。probeAdaptiveMode_ 由后端 init 置位；
+    // probeAdaptiveFirst_ = 一次性日志锚；atlas/mask 随 ensureProbeTargets 懒建。
+    void setProbeAdaptiveMode(bool on) { probeAdaptiveMode_ = on; }
     bool drawRestirFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& viewport,
                          const FrameParams& params, std::string& outError);
     // S12 M12.0（Q12-A）：csFilterTemporal GI 分量时域累积。仅 filter 态在
@@ -987,6 +992,27 @@ private:
     std::uint32_t                probeSubmitted_ = 0;
     int                          probePolledSlot_ = -1;
 
+    // M14C1 诊断：place atlas 全 4 级 staging 回读环形（--probe-place-readback）。
+    // slot = parity（copy 发生在帧 N parity p → 轮询帧 N+2 同 parity p 读）。
+    nvrhi::StagingTextureHandle  placeReadbackStaging_[2][4];
+    std::uint32_t                placeReadbackSubmitted_ = 0;
+    std::string                  placeReadbackPath_;
+    // M14C1 诊断：gatherLinear_（csGather 原始输出 RGBA16F）回读，落
+    // <path>.gather；复用 place readback 的 flag/parity/slot 时序。
+    nvrhi::StagingTextureHandle  gatherReadbackStaging_[2];
+    std::uint32_t                gatherReadbackSubmitted_ = 0;
+    // M14C1 诊断：hdrSceneColor_（compose 末态）回读，落 <path>.hdr。
+    nvrhi::StagingTextureHandle  hdrReadbackStaging_[2];
+    std::uint32_t                hdrReadbackSubmitted_ = 0;
+    // M14C1 诊断：irradAtlas_[0..3]（csTrace 输出，单缓冲无 parity）回读，
+    // 落 <path>.f{n}.irrad——csGather 原始输出偶帧差的最后嫌疑输入。
+    nvrhi::StagingTextureHandle  irradReadbackStaging_[2][4];
+    std::uint32_t                irradReadbackSubmitted_ = 0;
+    // M14C1 诊断：probeDepth_（velocity prepass D32 深度）回读，落
+    // <path>.f{n}.depth——diag13 实锤 weights 差 = rel 差，最后嫌疑输入。
+    nvrhi::StagingTextureHandle  depthReadbackStaging_[2];
+    std::uint32_t                depthReadbackSubmitted_ = 0;
+
     // ---- M8.2：rt 模式（RayQuery 调试射线闭环）----
     bool                         rt_ = false;             // initRt 成功后置位
     nvrhi::IDevice*              rtDevice_ = nullptr;     // initRt 存（ensureRtTargets 用，同 hizDevice_）
@@ -1165,6 +1191,24 @@ private:
     nvrhi::BufferHandle          reservoirB_;
     std::uint32_t                restirResW_ = 0;        // reservoir 视口尺寸（变了重建）
     std::uint32_t                restirResH_ = 0;
+
+    // ---- M14C1（S14-C）：自适应探针资源（Q-C1A/C2A/C3B 拍板）----
+    bool                         probeAdaptiveMode_ = false;
+    bool                         probeAdaptiveLogged_ = false;
+    nvrhi::ShaderHandle          csAdaptiveMark_;        // probe.csadaptivemark
+    nvrhi::ShaderHandle          csAdaptiveSpawn_;       // probe.csadaptivespawn
+    nvrhi::BufferHandle          adaptiveMask_;          // RWBuffer<uint>（Σ res_l² ≤ 512 项过量分配）
+    // M14C1 收口修正：Mark/Spawn 拆两套 layout/set——同一 buffer 在同一
+    // BindingSet 里同时声明 SRV+UAV 时 nvrhi 把资源状态固化为单一 state，
+    // Mark 的 UAV 写落在 SRV 态上丢失（mask 恒 0，spawn=0 根因 #2）。
+    // 拆开后 Mark→Spawn 之间 UAV→SRV 状态转换由 require 自动插屏障。
+    nvrhi::BindingLayoutHandle   adaptiveMarkLayout_;    // b0+t0+t2..t5 SRV+u5 mask UAV
+    nvrhi::BindingLayoutHandle   adaptiveSpawnLayout_;   // b0+t0+t6 mask SRV+u0..u3 atlas UAV
+    nvrhi::BindingSetHandle      adaptiveMarkSet_[2];    // 每 parity 一份（atlas 绑定随 parity）
+    nvrhi::BindingSetHandle      adaptiveSpawnSet_[2];
+    nvrhi::ComputePipelineHandle adaptiveMarkPSO_;
+    nvrhi::ComputePipelineHandle adaptiveSpawnPSO_;
+    bool                         probeAdaptiveMaskTracked_ = false; // mask 状态跟踪一次性建立闸（wc 表同款）
     bool                         probeLogged_ = false;   // 布点日志锚只打一次
     nvrhi::IDevice*              probeDevice_ = nullptr;
     nvrhi::ShaderHandle          vsVelocity_, psVelocity_;
@@ -1187,6 +1231,7 @@ private:
     nvrhi::TextureHandle         probePrevDelta_;        // RGBA32F baseRes²（prevUV 增量）
     std::uint32_t                probeParity_ = 0;       // atlas ping-pong 帧奇偶
     std::uint32_t                probeW_ = 0, probeH_ = 0, probeBaseRes_ = 0;
+    std::uint32_t                probeAdaptiveId_ = 0;   // M14C1：adaptive 尺寸重建闸
     bool                         probeFirstFrame_ = true; // 首帧 prevViewProj = 本帧（vel=0）
     float                        probePrevViewProj_[16] = {}; // 上一帧 viewProj
 

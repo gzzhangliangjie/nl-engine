@@ -119,7 +119,14 @@ void csTraceProbe(uint3 tid : SV_DispatchThreadID)
     const uint res    = uint(g_traceParams.z) >> level;
     const uint octRes = uint(g_traceParams.w);
     const uint store  = octRes + 2u;                    // 10（core + 1 texel border）
-    if (tid.x >= res * store || tid.y >= res * store) return;
+    // M14C1：行数用 irrad atlas runtime 高度判（GetDimensions）——probe-adaptive
+    // 模式 atlas 高 ×2（预留区段 = 自适应探针），probe 模式高度 = res×store
+    // 与旧判据 tid.y >= res*store 逐值一致（s10-*/s11-*/s12-* 冻结基线零漂）。
+    // 旧判据在 adaptive 模式会把预留区段整段早退（M14C1 收口实锤：spawn 探针
+    // 全部未被追踪，irrad 预留区恒黑）。
+    float2 irradDim;
+    g_irrad0.GetDimensions(irradDim.x, irradDim.y);
+    if (tid.x >= res * store || tid.y >= uint(irradDim.y)) return;
 
     const uint2 probeT = uint2(tid.x / store, tid.y / store);
     const int2  octT   = int2(tid.x % store, tid.y % store) - 1;   // [-1, res]

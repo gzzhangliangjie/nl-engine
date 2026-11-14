@@ -133,6 +133,10 @@ struct Options {
     bool wireframe  = false;  // M0.8：线框（V 键 / --wireframe / HUD 复选框）
     bool shadingSet = false;  // 用户显式给了 --shading（lod 模式的缺省着色不同）
     bool pbrNaive   = false;  // pbr-direct：--pbr-naive 对照开关（跳过 sRGB->linear，验收证据用）
+    bool probeAdaptiveDots = false; // M14C1：--probe-adaptive-dots（adaptive 模式
+                                    // 关 gather 画布点，品红 = 自适应探针布点显示）
+    int  probeBaseRes = 16;   // M14C1：--probe-base-res N（4..32；probe(8) 同网格
+                              // 验收对照用；HUD probeBaseRes 初值同步此值）
     bool probeGather = false; // M10.2：--probe-gather（probe-viz gather 态，Q13-3；
                               // 默认关保 M10.1 probe-viz 点色行为与 s10-probe 基线保形）
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
@@ -142,6 +146,7 @@ struct Options {
     float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
     bool probeCacheDiag = false;   // M11.2：--probe-cache-diag（命中查缓存 RGB 伪彩）
     bool probeAtlasDump = false;   // M11.2：--probe-atlas-dump（irrad atlas 直出，开关自比验收）
+    std::string probePlaceReadback;   // M14C1 诊断：--probe-place-readback <path>（place atlas L0 全精度落盘）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
@@ -167,6 +172,7 @@ struct Options {
     int  resizeHeight = 0;
     int  color      = 0;
     int  frames     = 8;
+    bool framesExplicit = false;              // 显式传了 --frames（无头验证意图：到帧数即退，不依赖 --screenshot）
     float yawDeg    = 12.0f;  // 与 OrbitCamera 默认一致，默认正脸、截图可复现
     float pitchDeg  = 9.2f;
     bool distSet = false;                     // 用户显式给了 --dist（skin 模式缺省距离不同）
@@ -282,6 +288,9 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--no-debug") o.debug = false;
         else if (a == "--pbr-naive") o.pbrNaive = true;   // pbr-direct：验收对照（过亮的错误路径）
         else if (a == "--probe-gather") o.probeGather = true;   // M10.2：final gather 态
+        else if (a == "--probe-adaptive-dots") o.probeAdaptiveDots = true;  // M14C1：布点显示
+        else if (a == "--probe-base-res" && i + 1 < argc)   // M14C1：0 级 cascade 分辨率（4..32），probe(8) 同网格验收对照用
+            o.probeBaseRes = std::clamp(std::atoi(argv[++i]), 4, 32);
         // M10.3：--compare 右半参考图 / --sky-bg 解析天穹背景（Q14-2/Q14-4 拍板）。
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
@@ -292,6 +301,8 @@ Options parseArgs(int argc, char** argv) {
             o.probeLightScale = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--probe-cache-diag") o.probeCacheDiag = true;
         else if (a == "--probe-atlas-dump") o.probeAtlasDump = true;
+        else if (a == "--probe-place-readback" && i + 1 < argc)
+            o.probePlaceReadback = argv[++i];
         // S12 M12.0/M12.1：时域累积 + 空间联合双边参数（仅 --mode filter 消费；
         // 拒绝层留 M12.2，空间层默认关以保持 M12.0 基线零重拍）。
         else if (a == "--temporal-alpha" && i + 1 < argc)
@@ -534,6 +545,7 @@ Options parseArgs(int argc, char** argv) {
             o.color = std::atoi(argv[++i]) % kColorCount;
         } else if (a == "--frames" && i + 1 < argc) {
             o.frames = std::max(1, std::atoi(argv[++i]));
+            o.framesExplicit = true;
         } else if (a == "--input-demo") {
             // P8 M-I2：注入脚本开关；可选起始迭代号（1-based，缺省 5；仅 input-hud
             // 模式消费）。无值形式兼容 flag 直跟其它 --arg 的用法。
@@ -634,7 +646,7 @@ int runSelfTest() {
     check(nl::renderer::hudSelfTest(), "HUD POD + projection arithmetic");
     std::string shaderReport;
     check(nl::renderer::shaderArtifactsSelfTest(shaderReport),
-          "Slang single-source -> SPIR-V + DXIL (104 artifacts)");
+          "Slang single-source -> SPIR-V + DXIL (108 artifacts)");
     std::cout << "  shaders:" << shaderReport << '\n';
 
     // 空窗口句柄必须安全失败，不能崩、不能假装有设备
@@ -1194,7 +1206,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool visbufMode = false, bool pullingMode = false,
               bool inputHudMode = false, bool rtMode = false,
               bool shadowMode = false, bool referenceMode = false,
-              bool probeMode = false, bool restirMode = false) {
+              bool probeMode = false, bool restirMode = false,
+              bool probeAdaptiveMode = false) {
     NL_PROFILE_THREAD("Main");   // M-TR0：主线程命名
     nl::core::log::resetCounters();
     // P8 M-I2：input-hud 调试面板模式（唯一触碰渲染处，只加不改）。
@@ -1287,7 +1300,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
                                                    shadowMode, referenceMode, probeMode,
-                                                   restirMode);
+                                                   restirMode, probeAdaptiveMode);
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -2037,14 +2050,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     if (dagTop) shading = o.shadingSet ? o.shading : 1;
     bool wireframe = o.wireframe;
     // M10.0：probe-place 探针参数（HUD 滑条双向；FrameParams 缺省值已在 renderer.hpp）。
-    int probeBaseRes = 16;
+    // M14C1：初值从 --probe-base-res 来（缺省 16）。
+    int probeBaseRes = o.probeBaseRes;
     float probeNormalOffset = 0.10f;
     float probeDotSize = 3.0f;
     // M10.2：viz 三态（Q13-3）——默认关（M10.1 probe-viz 点色保形），--probe-gather
     // 或 HUD checkbox 开；probe-place 模式恒 false。
     // M10.3：--mode probe = 完整链路一等模式，恒 gather 态（无点叠加）。
     bool probeGatherMode = (o.mode == nl::core::ViewMode::ProbeViz) && o.probeGather;
-    const bool isProbeFull = (o.mode == nl::core::ViewMode::Probe);
+    // M14C1：probe-adaptive 与 probe 全同语义（恒 gather + probe 滑条族 +
+    // --sky-bg），差异在 drawProbeFrame 的 Mark/Spawn 分支与网格减半。
+    const bool isProbeFull = (o.mode == nl::core::ViewMode::Probe) ||
+                             (o.mode == nl::core::ViewMode::ProbeAdaptive);
     // S12 M12.0：filter 复用 probe 完整链路（velocity prepass + place + trace +
     // gather），恒 gather 态；差异只在 drawProbeGather 内插入一次时域累积 pass。
     const bool isFilter = (o.mode == nl::core::ViewMode::Filter);
@@ -2575,7 +2592,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const bool isProbeViz = (o.mode == nl::core::ViewMode::ProbeViz);
         const bool gatherActive = probeGatherMode || isProbeFull || isFilter;
         fp.probeVizIrradiance = (isProbeViz && !gatherActive);
-        fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull || isFilter);
+        // M14C1：--probe-adaptive-dots 关 gather 换点叠加（级别色 + 预留区品红）。
+        const bool isAdaptiveDots =
+            (o.mode == nl::core::ViewMode::ProbeAdaptive) && o.probeAdaptiveDots;
+        fp.probeGather = ((isProbeViz && gatherActive) || isProbeFull || isFilter)
+                         && !isAdaptiveDots;
         fp.probeSkyBg = (probeMode && probeSkyBgLocal);   // Q14-4：仅 probe 链消费
         std::memcpy(fp.probeLevels, probeLevels, sizeof(probeLevels));
         fp.referenceGI = (o.mode == nl::core::ViewMode::ReferenceGI);  // Q14-1
@@ -2586,6 +2607,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         fp.probeCacheBounce = o.probeCacheBounce;
         fp.probeLightScale = o.probeLightScale;
         fp.probeAtlasDump = o.probeAtlasDump;
+        fp.probePlaceReadback = o.probePlaceReadback;   // M14C1 诊断
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
         // S12 M12.0/M12.1（Q12-A + Q12-C A）：GI 分量独立时域累积 + 5x5
         // 空间联合双边。仅 filter 模式开；拒绝层留 M12.2 的可关 flag。
@@ -3219,8 +3241,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             window.setTitle(title.str());
         }
 
-        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
-        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        // M14C1 收口修正：退出判据原绑死 --screenshot（无截图的自动化运行——
+        // 如 --pass-timing 记账——永不 break，帧号冲到数万，表象即「卡死」；
+        // timing-probe16 实测 4 分钟跑 15756 帧 >> 128 目标实锤）。自动化旗标
+        // （截图 / timing 记账）任一存在即按 --frames 退出；纯交互开窗不受影响。
+        const bool autoRun = o.screenshot || o.passTiming || o.framesExplicit;
+        if (autoRun && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!autoRun) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     if (o.navCrowdOn && navCrowdSystem) {
@@ -4134,8 +4161,11 @@ int runScene(const Options& o) {
                                 " | triangles ", info.triangleCount,
                                 " | lights ", lights.size());
         }
-        if (o.screenshot && frame >= static_cast<std::uint64_t>(o.frames)) break;
-        if (!o.screenshot) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        // M14C1 收口修正：同 runNormal（退出判据绑 screenshot 的自动化运行
+        // 永不退出 bug，见上方注释）。
+        const bool autoRun2 = o.screenshot || o.passTiming || o.framesExplicit;
+        if (autoRun2 && frame >= static_cast<std::uint64_t>(o.frames)) break;
+        if (!autoRun2) std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     // M-E1b.5 机器出口（run.bat findstr 断言）：tick 模式 + 帧数 + 物体数。
@@ -4267,6 +4297,13 @@ int runMode(nl::core::ViewMode mode, const Options& o) {
                          /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
                          /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
                          /*referenceMode=*/false, /*probeMode=*/true, /*restirMode=*/true);
+    case nl::core::ViewMode::ProbeAdaptive:  // M14C1（S14-C）：探针自适应加密（probe 链复用）
+        return runNormal(o, /*cluster=*/false, /*lodMode=*/false, /*dagTop=*/false,
+                         /*cullMode=*/false, /*dagMode=*/false, /*skinMode=*/false,
+                         /*hizMode=*/false, /*visbufMode=*/true, /*pullingMode=*/true,
+                         /*inputHudMode=*/false, /*rtMode=*/false, /*shadowMode=*/false,
+                         /*referenceMode=*/false, /*probeMode=*/true,
+                         /*restirMode=*/false, /*probeAdaptiveMode=*/true);
     default: {
         const char* name = nl::core::modeName(mode);
         nl::core::log::errorCh("viewer", "mode has no implementation yet: ", name ? name : "<unknown>");
@@ -4289,7 +4326,7 @@ void printUsage() {
               << "  viewer.exe --editor-endpoint <ep>  M-E6: tcp://127.0.0.1:29110 (default) or pipe://name\n"
               << "  viewer.exe --view-id <id>          M-E6: viewport key for multi-view editors (default main)\n"
               << "  viewer.exe --screenshot <path>     render N frames, read back GPU pixels to PNG\n"
-              << "  viewer.exe --frames N              frames before screenshot (default 8)\n"
+              << "  viewer.exe --frames N              frames before screenshot (default 8); explicit --frames exits after N frames even without --screenshot\n"
               << "  viewer.exe --capture-frame N       M-TR2: launched under RenderDoc, capture frame N to .rdc\n"
               << "  viewer.exe --color 0..3            initial clear color (default 0)\n"
               << "  viewer.exe --size WxH              window size (default 1280x720; screenshot 640x360)\n"
@@ -4434,6 +4471,10 @@ int main(int argc, char** argv) {
     }
     // M14B1：restir 复用 probe 链（TLAS 需 NFLB fallback），同 filter 口径。
     if (o.mode == nl::core::ViewMode::Restir && !o.modelSet) {
+        o.modelFile = "Suzanne-materials.nmesh";
+    }
+    // M14C1：probe-adaptive 复用 probe 链（同 probe/filter/restir 口径）。
+    if (o.mode == nl::core::ViewMode::ProbeAdaptive && !o.modelSet) {
         o.modelFile = "Suzanne-materials.nmesh";
     }
     // M-A5：skin 模式缺省 rigged 资产（Khronos 经典行走用例）。

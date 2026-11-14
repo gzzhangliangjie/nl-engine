@@ -73,6 +73,7 @@ public:
               bool frustumCull, bool dagMode, bool skinMode, bool hizMode,
               bool sceneMode, bool visbufMode, bool pullingMode, bool rtMode,
               bool shadowMode, bool referenceMode, bool probeMode, bool restirMode,
+              bool probeAdaptiveMode,
               std::string& outError) override {
         if (!nativeWindow || extent.width == 0 || extent.height == 0) {
             outError = "invalid window handle or extent";
@@ -173,6 +174,16 @@ public:
         // cascade 布点，排在 visbufMode 之前（同一条链，多建 probe 管线）。
         // M14B1：restir 走同一条 initProbe 链，随后置 restirMode_（place/trace
         // 短路，gather 槽换 ReSTIR 两 pass）。
+        // M14C1（S14-C）：probe-adaptive 走同一条 initProbe 链，随后置
+        // probeAdaptiveMode_（Mark/Spawn 两 pass + 均匀网格减半 + atlas 预留区）。
+        // 2026-11-14 Vulkan teardown 崩溃根修（5/5 C0000005，dmp 定位
+        // ComputePipeline destroy → nvoglv64）：置位先于 initProbe，非 adaptive
+        // 模式不创建 Mark/Spawn 资源（与 vulkan 后端同款，保形双后端对称）。
+        else if (probeAdaptiveMode) {
+            scene_.setProbeAdaptiveMode(true);
+            sceneOk = scene_.initProbe(device_, "dxil", "vsCull", "psCull", modelFile,
+                                       outError);
+        }
         else if (restirMode) {
             sceneOk = scene_.initProbe(device_, "dxil", "vsCull", "psCull", modelFile,
                                        outError);
@@ -452,6 +463,7 @@ private:
         scene_.pollCullStats(device_);
         // M8.1：TLAS 探针 readback（--tlas-probe 才有数据；同样开列表前消费）。
         scene_.pollTlasProbe(device_);
+        scene_.pollPlaceReadback(device_);   // M14C1 诊断：place atlas 回读轮询
         info_.visibleClusters = scene_.visibleClusters();
         info_.visibleTriangles = scene_.visibleTriangles();   // M5.2
         info_.hizMipCount = scene_.hizMipCount();             // M6.0：hiz 模式非零
