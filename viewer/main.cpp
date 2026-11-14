@@ -1218,9 +1218,23 @@ struct EditorEmbed {
     // M-E4d：场景树数据源。runScene 传 &objects（每帧原地刷新，指针即实时）；
     // runNormal 传 nullptr（model 模式：单模型无实例表）。
     std::vector<nl::renderer::SceneObjectDesc>* sceneObjects = nullptr;
+    // M-E8：层级树数据源（scene 模式专用；model 模式两指针为 null）。
+    const nl::scene::World* sceneWorld = nullptr;
+    const std::vector<nl::scene::EntityID>* sceneModelIds = nullptr;
 
-    void bindScene(std::vector<nl::renderer::SceneObjectDesc>* objs) {
+    // M-E8：场景变更推送（连接未建立时静默忽略；编辑器侧 registerNotify 置
+    // dirty 自动刷新 outliner，替换手动 Refresh）。
+    void notifySceneChanged() {
+        nl::core::log::infoCh("viewer", "sceneChanged notify: connected=", bridge.isConnected());
+        bridge.notify("editor.sceneChanged", nl::editor::RpcValue());
+    }
+
+    void bindScene(std::vector<nl::renderer::SceneObjectDesc>* objs,
+                   const nl::scene::World* world = nullptr,
+                   const std::vector<nl::scene::EntityID>* modelIds = nullptr) {
         sceneObjects = objs;
+        sceneWorld = world;
+        sceneModelIds = modelIds;
         if (!camera) return;
         // getState 两模式都注册：model 模式返回 mode="model" 空表，编辑器可优雅显示
         bridge.registerHandler("scene.getState", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
@@ -1253,6 +1267,55 @@ struct EditorEmbed {
             m["yaw"]   = (double)camera->yawDegrees();
             m["pitch"] = (double)camera->pitchDegrees();
             m["dist"]  = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // M-E8：层级树数据源——World 全集实体（含无 Model 的灯/空实体）+ parent 链
+        // + 组件参数快照。idx = sceneObjects 下标（仅 kind="model" 有效，-1 = 无实例
+        // 行，focus/setMaterial 不可用）；roots 由编辑器侧按 parent==0 归组。
+        bridge.registerHandler("scene.getTree", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
+            nl::editor::msgpack::Map m;
+            nl::editor::msgpack::Array nodes;
+            if (sceneWorld) {
+                std::unordered_map<std::uint64_t, long long> idxOf;
+                for (std::size_t k = 0; k < sceneModelIds->size(); ++k)
+                    idxOf[static_cast<std::uint64_t>((*sceneModelIds)[k])] = static_cast<long long>(k);
+                const auto& ids = sceneWorld->getEntityIDs();
+                nodes.reserve(ids.size());
+                for (nl::scene::EntityID id : ids) {
+                    nl::editor::msgpack::Map n;
+                    n["id"]     = static_cast<std::int64_t>(static_cast<std::uint64_t>(id));
+                    n["name"]   = sceneWorld->getName(id);
+                    auto par    = sceneWorld->getParentID(id);
+                    n["parent"] = par ? static_cast<std::int64_t>(static_cast<std::uint64_t>(*par)) : 0;
+                    auto itIdx  = idxOf.find(static_cast<std::uint64_t>(id));
+                    n["idx"]    = itIdx == idxOf.end() ? -1 : itIdx->second;
+                    const auto* mc = sceneWorld->getComponent<nl::scene::ModelComponent>(id);
+                    if (mc) {
+                        n["kind"] = std::string("model");
+                        n["mesh"] = mc->meshFile;
+                        nl::editor::msgpack::Array tint;
+                        tint.push_back((double)mc->tint.x);
+                        tint.push_back((double)mc->tint.y);
+                        tint.push_back((double)mc->tint.z);
+                        n["tint"]  = nl::editor::RpcValue(std::move(tint));
+                        n["rough"] = (double)mc->roughness;
+                        n["metal"] = (double)mc->metallic;
+                    } else {
+                        const auto* lc = sceneWorld->getComponent<nl::scene::LightComponent>(id);
+                        if (lc) {
+                            n["kind"] = std::string("light");
+                            n["lightType"] = (std::int64_t)lc->type;
+                            n["intensity"] = (double)lc->intensity;
+                        } else {
+                            n["kind"] = std::string("empty");
+                        }
+                    }
+                    nodes.push_back(nl::editor::RpcValue(std::move(n)));
+                }
+            }
+            m["mode"]  = std::string(sceneWorld ? "scene" : "model");
+            m["count"] = (std::int64_t)nodes.size();
+            m["nodes"] = nl::editor::RpcValue(std::move(nodes));
             return nl::editor::RpcValue(std::move(m));
         });
         if (!sceneObjects) return;   // model 模式：无实例表，focus 无意义
@@ -1305,6 +1368,9 @@ struct EditorEmbed {
 
     // ---- M-E5：材质检查接口 ----
     std::string modelFile_;   // runNormal 传入（model 模式 .nmesh 探测用）；scene 模式留空
+    // M-E8：setMaterial 写回 World 的数据源（scene 模式 bindMaterials 传入）。
+    nl::scene::World* sceneWorldMut = nullptr;
+    const std::vector<nl::scene::EntityID>* sceneModelIdsMut = nullptr;
 
     // .nmesh NSUB 子网格/材质表读取（assets/meshlets/<file>；材质 id = 子网格序号，
     // M7.2 约定）。非 .nmesh 返回 nil；读取失败返回 {error: msg}。
@@ -1345,8 +1411,12 @@ struct EditorEmbed {
     // M-E5：scene.getMaterials（读）+ scene.setMaterial（写，仅 scene 模式）。
     // setMaterial 改 (*sceneObjects)[i] 的 tint/rough/metal——viewer 每帧原地刷新
     // 传给 renderer updateEcsObjects，改动下一帧可见。params 统一命名 Map，逐字段可选。
-    void bindMaterials(const char* modelFile) {
+    void bindMaterials(const char* modelFile,
+                       nl::scene::World* world = nullptr,
+                       const std::vector<nl::scene::EntityID>* modelIds = nullptr) {
         if (modelFile) modelFile_ = modelFile;
+        sceneWorldMut = world;
+        sceneModelIdsMut = modelIds;
         bridge.registerHandler("scene.getMaterials", [this](const nl::editor::RpcValue&) -> nl::editor::RpcValue {
             nl::editor::msgpack::Map m;
             if (!sceneObjects) {
@@ -1391,6 +1461,7 @@ struct EditorEmbed {
             if (idx < 0 || idx >= (long long)sceneObjects->size())
                 return nl::editor::RpcError{100, "scene.setMaterial: bad index"};
             auto& d = (*sceneObjects)[(std::size_t)idx];
+            bool touched = false;   // M-E8：任一字段改动 → World 写回 + 指纹变 → notify
             auto itTint = p.asMap().find("tint");
             if (itTint != p.asMap().end() && itTint->second.isArray() &&
                 itTint->second.asArray().size() == 3) {
@@ -1399,10 +1470,10 @@ struct EditorEmbed {
                     if (ta[c].isDouble()) {
                         d.tint[c] = (float)ta[c].asDouble();
                         d.tint[c] = std::min(1.0f, std::max(0.0f, d.tint[c]));
+                        touched = true;
                     }
                 }
             }
-            bool touched = false;
             auto itRough = p.asMap().find("rough");
             if (itRough != p.asMap().end() && itRough->second.isDouble()) {
                 d.roughness = std::min(1.0f, std::max(0.0f, (float)itRough->second.asDouble()));
@@ -1412,6 +1483,17 @@ struct EditorEmbed {
             if (itMetal != p.asMap().end() && itMetal->second.isDouble()) {
                 d.metallic = std::min(1.0f, std::max(0.0f, (float)itMetal->second.asDouble()));
                 touched = true;
+            }
+            // M-E8：写回 World ModelComponent（源头单写）——帧循环每帧从 World
+            // 重读覆盖 sceneObjects，不回写则改动当帧即被冲掉且树/指纹无感。
+            if (touched && sceneWorldMut && sceneModelIdsMut &&
+                idx < (long long)sceneModelIdsMut->size()) {
+                if (auto* mc = sceneWorldMut->getComponent<nl::scene::ModelComponent>(
+                        (*sceneModelIdsMut)[(std::size_t)idx])) {
+                    mc->tint.x = d.tint[0]; mc->tint.y = d.tint[1]; mc->tint.z = d.tint[2];
+                    mc->roughness = d.roughness;
+                    mc->metallic = d.metallic;
+                }
             }
             nl::editor::msgpack::Map m;
             m["ok"] = (std::int64_t)1;
@@ -4146,8 +4228,46 @@ int runScene(const Options& o) {
         if (m != nl::viewer::CameraMode::Orbit) camera.setMode(m);
     }
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
-    edEmbed.bindScene(&objects);          // M-E4d：场景树数据源（每帧原地刷新）
-    edEmbed.bindMaterials(nullptr);       // M-E5：材质读写（scene 模式实例表）
+    edEmbed.bindScene(&objects, &world, &modelIds);   // M-E8：场景树数据源（World 全集 + idx 映射）
+    edEmbed.bindMaterials(nullptr, &world, &modelIds);   // M-E5 材质读写 + M-E8 World 写回
+
+    // M-E8：sceneChanged 指纹——每渲染帧对 World 全集算 FNV1a（id/name/parent/
+    // Model 参数/Light 参数），变化才 notify editor.sceneChanged（编辑器置 dirty
+    // 自动刷新，替换手动 Refresh）。指纹覆盖所有变更源（脚本/系统/RPC 改参）。
+    std::uint64_t sceneFpPrev = 0;
+    bool sceneFpInit = false;
+    auto sceneFingerprint = [&world]() -> std::uint64_t {
+        std::uint64_t h = 1469598103934665603ull;
+        auto mix = [&h](std::uint64_t v) { h ^= v; h *= 1099511628211ull; };
+        auto mixF = [&mix](float f) {
+            static_assert(sizeof(float) == 4, "float32 assumed");
+            std::uint32_t b = 0;
+            std::memcpy(&b, &f, 4);
+            mix(static_cast<std::uint64_t>(b));
+        };
+        const auto& ids = world.getEntityIDs();
+        mix(static_cast<std::uint64_t>(ids.size()));
+        for (nl::scene::EntityID id : ids) {
+            mix(static_cast<std::uint64_t>(id));
+            auto par = world.getParentID(id);
+            mix(par ? static_cast<std::uint64_t>(*par) : 0ull);
+            for (char c : world.getName(id)) mix(static_cast<unsigned char>(c));
+            if (const auto* mc = world.getComponent<nl::scene::ModelComponent>(id)) {
+                mix(1);
+                for (char c : mc->meshFile) mix(static_cast<unsigned char>(c));
+                mixF(mc->tint.x); mixF(mc->tint.y); mixF(mc->tint.z);
+                mixF(mc->roughness); mixF(mc->metallic);
+            }
+            if (const auto* lc = world.getComponent<nl::scene::LightComponent>(id)) {
+                mix(2);
+                mix(static_cast<std::uint64_t>(lc->type));
+                mixF(lc->intensity);
+                mixF(lc->color.x); mixF(lc->color.y); mixF(lc->color.z);
+                mixF(lc->direction.x); mixF(lc->direction.y); mixF(lc->direction.z);
+            }
+        }
+        return h;
+    };
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;
@@ -4519,6 +4639,17 @@ int runScene(const Options& o) {
                 nl::core::log::errorCh("viewer", "ecs updateEcsObjects failed: ", renderer->lastError());
                 failed = true;
                 break;
+            }
+        }
+        // M-E8：sceneChanged 推送（指纹变化帧 notify 一次；编辑器 dirty 刷新）。
+        // 放 ticking 块外：preview/scene 缺省 tickMode=off（ticking=false），
+        // 指纹仍须每帧比对（setMaterial 写回 World 的变更不依赖 tick）。
+        {
+            const std::uint64_t fp = sceneFingerprint();
+            if (!sceneFpInit || fp != sceneFpPrev) {
+                sceneFpInit = true;
+                sceneFpPrev = fp;
+                edEmbed.notifySceneChanged();
             }
         }
 

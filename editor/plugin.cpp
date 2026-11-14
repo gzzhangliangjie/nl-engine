@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace nl::editor::ui {
 
@@ -122,88 +123,141 @@ private:
     float  fov_ = 60.0f, dist_ = 4.2f, yaw_ = 0.0f, pitch_ = 35.0f;
 };
 
-// M-E4d：场景树插件——scene.getState 拉实例表（mesh/pos/tint/rough/metal），
-// 点击行调 scene.focus 让引擎 orbit 相机对准该对象。model 模式引擎返回
-// mode="model" 空表，插件显示占位说明。
+// M-E4d：场景树插件（M-E8 升级：层级树 + sceneChanged 自动刷新）。
+// scene.getTree 拉 World 全集节点（id/name/parent/idx/kind/mesh/tint...），
+// 编辑器侧按 parent==0 归根递归渲染；引擎 notify editor.sceneChanged →
+// g_sceneTreeDirty 置位 → 200ms 防抖后自动重拉（替换手动 Refresh）。
+// 点击 model 节点调 scene.focus 让引擎 orbit 相机对准该对象。model 模式
+// 引擎返回 mode="model" 空节点表，插件显示占位说明。
 class SceneOutlinerPlugin : public Plugin {
 public:
     const char* name() const override { return "Scene Outliner"; }
     void draw(RpcHost* host) override {
         if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
-        // M-E4d：连接后首帧自动拉取（engine 掉线重连后 have_ 已被清，也会自动再拉）
-        if (!have_ && host->isConnected()) refresh(host);
+        // M-E8：引擎 sceneChanged 推送 → dirty 消费（200ms 防抖防连变刷爆 UI）。
+        // 只有 dirty 才自动刷；autoOn_ 关 = 全手动（Refresh 按钮）。
+        const bool dirty = g_sceneTreeDirty.exchange(false);
+        const double now = ImGui::GetTime();
+        if (haveTree_ && dirty && autoOn_ && now - lastRefresh_ > 0.2) refresh(host);
+        else if (dirty) g_sceneTreeDirty.store(true);   // 防抖期吞掉的通知还回去
+        if (!haveTree_ && host->isConnected()) refresh(host);
         if (ImGui::Button("Refresh")) refresh(host);
         ImGui::SameLine();
-        if (!have_) {
+        ImGui::Checkbox("auto", &autoOn_);   // M-E8：推送自动刷新开关（缺省开）
+        ImGui::SameLine();
+        if (!haveTree_) {
             ImGui::TextDisabled("state: not fetched");
             return;
         }
-        ImGui::Text("mode: %s  objects: %d", mode_.c_str(), (int)rows_.size());
+        ImGui::Text("mode: %s  entities: %d", mode_.c_str(), (int)nodes_.size());
         if (mode_ == "model") {
-            ImGui::TextDisabled("(model mode: 单模型无实例表；--mode scene 可看实例树)");
+            ImGui::TextDisabled("(model mode: 单模型无实例树；--preview/--scene 可看层级)");
             return;
         }
-        if (rows_.empty()) return;
-        // 实例表：行首 # + mesh 名；点击行 = scene.focus（引擎把 orbit 相机对准该对象）
-        ImGui::BeginChild("outliner_rows", ImVec2(0, 160), ImGuiChildFlags_Borders);
-        ImGui::Columns(4, nullptr, false);
-        ImGui::SetColumnWidth(0, 28.0f);
-        ImGui::SetColumnWidth(1, 110.0f);
-        ImGui::SetColumnWidth(2, 96.0f);
-        for (int i = 0; i < (int)rows_.size(); ++i) {
-            const auto& r = rows_[i];
-            char label[24]; snprintf(label, sizeof label, "%d", i);
-            if (ImGui::Selectable(label, focusedIdx_ == i, ImGuiSelectableFlags_SpanAllColumns))
-                focus(host, i);
-            ImGui::NextColumn();
-            ImGui::TextUnformatted(r.mesh.c_str());          ImGui::NextColumn();
-            ImGui::Text("(%.1f, %.1f, %.1f)", r.x, r.y, r.z); ImGui::NextColumn();
-            ImGui::Text("r%.2f m%.2f", r.rough, r.metal);     ImGui::NextColumn();
-        }
-        ImGui::Columns(1);
+        if (nodes_.empty()) return;
+        // M-E8 层级树：parent==0 归根递归；节点徽标 [model]/[light]/[empty]；
+        // 点击 model 节点 = scene.focus（orbit 相机对准该对象）。
+        ImGui::BeginChild("outliner_tree", ImVec2(0, 200), ImGuiChildFlags_Borders);
+        for (int ri : roots_) drawNode(host, ri);
         ImGui::EndChild();
         if (!focused_.empty()) ImGui::Text("focused: %s", focused_.c_str());
         ImGui::Separator();
-        ImGui::TextDisabled("click a row -> scene.focus (orbit camera aims at object)");
+        ImGui::TextDisabled("click a [model] node -> scene.focus; tree auto-refreshes on engine notify");
     }
 
 private:
-    struct Row { std::string mesh; float x = 0, y = 0, z = 0, rough = 1, metal = 0; };
+    struct Node {
+        long long id = 0, parent = 0, idx = -1;
+        std::string name, kind = "empty", mesh;
+        float rough = 1.f, metal = 0.f;
+        long long lightType = 0;
+        double intensity = 0;
+        std::vector<int> children;   // nodes_ 下标
+    };
+
+    // M-E8：树节点递归渲染（TreeNodeEx 以 entity id 做 ID seed，重挂父不改展开态
+    // 的键；叶子加 Leaf 旗标；选中行高亮 = 最近 focus 的实例行）。
+    void drawNode(RpcHost* host, int ni) {
+        const Node& n = nodes_[ni];
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                   ImGuiTreeNodeFlags_SpanAvailWidth |
+                                   ImGuiTreeNodeFlags_OpenOnDoubleClick;
+        if (n.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
+        if (n.idx >= 0 && n.idx == focusedIdx_) flags |= ImGuiTreeNodeFlags_Selected;
+        const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(n.id)),
+                                            flags, "%s", n.name.c_str());
+        const bool clicked = ImGui::IsItemClicked(0);
+        ImGui::SameLine();
+        if (n.kind == "model") {
+            ImGui::TextDisabled("[model] %s r%.2f m%.2f", n.mesh.c_str(), n.rough, n.metal);
+        } else if (n.kind == "light") {
+            ImGui::TextDisabled("[light%s] I=%.2f", n.lightType == 1 ? " point" : "", n.intensity);
+        } else {
+            ImGui::TextDisabled("[empty]");
+        }
+        if (clicked && n.idx >= 0) focus(host, (int)n.idx);
+        if (open) {
+            for (int ci : n.children) drawNode(host, ci);
+            ImGui::TreePop();
+        }
+    }
 
     void refresh(RpcHost* host) {
-        auto r = callQuick(host, "scene.getState", RpcValue());
-        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getState"); have_ = false; return; }
+        auto r = callQuick(host, "scene.getTree", RpcValue());
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getTree"); haveTree_ = false; return; }
         const auto& v = std::get<RpcValue>(r);
-        if (!v.isMap()) { have_ = false; return; }
+        if (!v.isMap()) { haveTree_ = false; return; }
         const auto& m = v.asMap();
         auto itMode = m.find("mode");
         mode_ = (itMode != m.end() && itMode->second.isStr()) ? itMode->second.asStr() : "?";
-        rows_.clear();
-        auto itObjs = m.find("objects");
-        if (itObjs != m.end() && itObjs->second.isArray()) {
-            for (const auto& o : itObjs->second.asArray()) {
+        nodes_.clear();
+        roots_.clear();
+        auto itNodes = m.find("nodes");
+        if (itNodes != m.end() && itNodes->second.isArray()) {
+            for (const auto& o : itNodes->second.asArray()) {
                 if (!o.isMap()) continue;
                 const auto& om = o.asMap();
-                Row row;
-                auto itMesh = om.find("mesh");
-                if (itMesh != om.end() && itMesh->second.isStr()) row.mesh = itMesh->second.asStr();
-                auto itPos = om.find("pos");
-                if (itPos != om.end() && itPos->second.isArray() && itPos->second.asArray().size() == 3) {
-                    const auto& pa = itPos->second.asArray();
-                    if (pa[0].isDouble()) row.x = (float)pa[0].asDouble();
-                    if (pa[1].isDouble()) row.y = (float)pa[1].asDouble();
-                    if (pa[2].isDouble()) row.z = (float)pa[2].asDouble();
-                }
-                auto getF = [&](const char* k) {
+                Node nd;
+                auto getI = [&](const char* k) -> long long {
                     auto it = om.find(k);
-                    return (it != om.end() && it->second.isDouble()) ? (float)it->second.asDouble() : 0.0f;
+                    if (it == om.end()) return 0;
+                    if (it->second.isInt()) return it->second.asInt();
+                    if (it->second.isDouble()) return (long long)it->second.asDouble();
+                    return 0;
                 };
-                row.rough = getF("rough");
-                row.metal = getF("metal");
-                rows_.push_back(std::move(row));
+                auto getF = [&](const char* k) -> double {
+                    auto it = om.find(k);
+                    if (it == om.end()) return 0.0;
+                    if (it->second.isDouble()) return it->second.asDouble();
+                    if (it->second.isInt()) return (double)it->second.asInt();
+                    return 0.0;
+                };
+                nd.id = getI("id"); nd.parent = getI("parent"); nd.idx = getI("idx");
+                nd.lightType = getI("lightType");
+                nd.intensity = getF("intensity");
+                nd.rough = (float)getF("rough"); nd.metal = (float)getF("metal");
+                auto itName = om.find("name");
+                if (itName != om.end() && itName->second.isStr()) nd.name = itName->second.asStr();
+                auto itKind = om.find("kind");
+                if (itKind != om.end() && itKind->second.isStr()) nd.kind = itKind->second.asStr();
+                auto itMesh = om.find("mesh");
+                if (itMesh != om.end() && itMesh->second.isStr()) nd.mesh = itMesh->second.asStr();
+                nodes_.push_back(std::move(nd));
             }
         }
-        have_ = true;
+        // 归根挂子：id -> 下标；父不在表内（悬空）按根处理。
+        std::unordered_map<long long, int> byId;
+        byId.reserve(nodes_.size());
+        for (int i = 0; i < (int)nodes_.size(); ++i) byId[nodes_[i].id] = i;
+        for (int i = 0; i < (int)nodes_.size(); ++i) {
+            auto it = byId.find(nodes_[i].parent);
+            if (nodes_[i].parent == 0 || it == byId.end() || it->second == i)
+                roots_.push_back(i);
+            else
+                nodes_[it->second].children.push_back(i);
+        }
+        haveTree_ = true;
+        lastRefresh_ = ImGui::GetTime();
     }
 
     void focus(RpcHost* host, int i) {
@@ -234,9 +288,12 @@ private:
         ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
     }
 
-    bool have_ = false;
+    std::vector<Node> nodes_;
+    std::vector<int> roots_;
+    bool haveTree_ = false;
+    bool autoOn_ = true;            // M-E8：推送自动刷新缺省开
+    double lastRefresh_ = 0.0;
     std::string mode_ = "?";
-    std::vector<Row> rows_;
     std::string focused_;
     int focusedIdx_ = -1;
 };

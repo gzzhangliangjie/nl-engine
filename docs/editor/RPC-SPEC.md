@@ -216,6 +216,14 @@
 > **参数通道口径（拍板）**：`engine.cvar.*` 是反射胶水层的 RPC 面——引擎原生参数注册成 cvar（M-E7 落了 `light.sunAzimuth/sunElevation/ambient` 三个），脚本组件字段后续走 M-SC10 `[Prop]` 描述表；RPC 只做传输，不再手写每参数 handler（M-E5 的 `scene.setMaterial` 保留为既有面）。
 > **CLI 旗标（viewer）**：`--preview` = mode scene + `assets/scenes/preview.scene.json`（用户显式 `--mode`/`--scene` 优先）；`--preview-model <glb名>` = 预览场景 JSON 反序列化后按实体名 `preview-model` 覆写 meshFile（坏名 exit 2）。
 
+### M-E8 实装（场景树层级 + 变更推送）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.getTree` | 编辑器→引擎 | — | `{mode, count, nodes:[{id:u64, name:str, parent:u64(0=无父), idx:i64(-1=无 Model 实例行), kind:"model"\|"light"\|"empty", mesh?, tint?:[3], rough?, metal?, lightType?, intensity?}]}`（World 全集实体含无 Model 的灯/空实体；idx = sceneObjects 下标，仅 kind="model" 可用 focus/setMaterial；roots 由编辑器侧按 parent==0 归组，悬空父按根处理） |
+| `editor.sceneChanged` | 引擎→编辑器 notify | `{}` | —（引擎每帧对 World 全集算 FNV1a 指纹（id/name/parent + Model tint/rough/metal/mesh + Light type/intensity/color/direction），变化帧 notify 一次；**tick off 的 preview/scene 也生效**（指纹在 ticking 块外）。编辑器侧 `registerNotify` 置 `g_sceneTreeDirty`，SceneOutlinerPlugin 200ms 防抖后自动重拉 getTree，替换手动 Refresh） |
+
+> **M-E8 行为变更（覆盖 M-E5 口径）**：`scene.setMaterial` 的 tint/rough/metal 改动**写回 World `ModelComponent`**（源头单写）——M-E5 原实现只改渲染收集表 `sceneObjects`，tick 开启时下一帧即被 World 旧值冲掉、树/指纹无感；M-E8 起写回 World，帧循环自然传导、指纹捕获、scene.getTree 同步。M-E7 探针既有 setMaterial 断言复验 0 fail。
+
 ---
 
 ## 11. C++ 引擎侧接口契约（`editor_bridge`，vendored、零运行时依赖）

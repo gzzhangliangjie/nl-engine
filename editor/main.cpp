@@ -75,6 +75,10 @@ std::string capsSummary(const RpcValue& caps) {
 
 } // namespace
 
+// M-E8：引擎 sceneChanged 推送旗标——定义须在匿名 namespace 外（plugin.hpp 的
+// extern 是全局外部链接；落进匿名 namespace = 内部链接双实体 = C2872 不明确符号）。
+std::atomic<bool> g_sceneTreeDirty{false};
+
 static void glfwErrCb(int code, const char* msg) {
     fprintf(stderr, "[glfw] %d: %s\n", code, msg ? msg : "(null)");
 }
@@ -113,6 +117,11 @@ int main(int argc, char** argv) {
         if (p.isStr()) logf("[engine] %s", p.asStr().c_str());
     });
     g_host.registerNotify("rpc.ping", [](const RpcValue&) {}); // pong 由 host 定向回
+    // M-E8：场景变更推送 → 置 dirty 旗标，SceneOutlinerPlugin 下一帧自动刷新
+    // （拉增量 = 重发 scene.getTree；200ms 防抖在插件侧做，防引擎连变刷爆 UI）。
+    g_host.registerNotify("editor.sceneChanged", [](const RpcValue&) {
+        g_sceneTreeDirty.store(true);
+    });
 
     // M-E6：视图注册表（探针/插件可查当前连入的引擎进程）
     g_host.registerHandler("editor.views", [](const RpcValue&) -> RpcResult {

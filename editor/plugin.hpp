@@ -11,10 +11,16 @@
 //   同一 ImGuiContext）与 nl_editor_common（共享 RpcHost 实现）。库内有任一
 //   静态副本即双 ImGuiContext / 状态分裂，属必炸路径。
 #include "rpc_host.hpp"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+
+// M-E8：引擎 sceneChanged 推送的共享 dirty 旗标——editor/main.cpp 的
+// registerNotify("editor.sceneChanged") 置 true，插件每帧消费并复位。
+// RPC host 回调跑在主线程 poll 点，无跨线程竞争，atomic 仅作防御。
+extern std::atomic<bool> g_sceneTreeDirty;
 
 namespace nl::editor::ui {
 
