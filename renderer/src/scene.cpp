@@ -9498,6 +9498,12 @@ bool Scene::updateLights(nvrhi::IDevice* device,
     // 帧内不开第二列表（viewer 帧首调用，renderFrame 随后才开 frameCmd_）。
     nvrhi::CommandListHandle upload = device->createCommandList();
     upload->open();
+    // editor 轨 M-E7 合并修正：initScene 的 permanent SRV|CopyDest 已被 M-NL2-C
+    // tracking 模型 supersedes（permanent 不插 barrier 与天气链冲突）——本直刷
+    // 列表须自行声明 tracking 初值 = CopyDest（writeBuffer require 覆盖；列表
+    // 末态 CopyDest，draw 列表 require(SRV) 自动插 barrier。M-E7 探针
+    // "Unknown prior state of buffer SceneLights" → Device Removed 实锤）。
+    upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
     upload->close();
     device->executeCommandList(upload);

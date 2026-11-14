@@ -54,6 +54,8 @@ def ensure_front(hwnd):
 
 def grab(hwnd, path):
     gdi32 = ctypes.windll.gdi32
+    ensure_front(hwnd)   # 每拍前 restore 循环（m-e9-gui-shot 加固先例：窗口中途
+                         # 被缩没/最小化态抓出 158x26 假图，2026-11-14 主树实证）
     r = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(r))
     w, h = r.right - r.left, r.bottom - r.top
@@ -81,19 +83,19 @@ def grab(hwnd, path):
 
 
 def selected_rows(path):
-    """树区 Selected 高亮行检测（ImGuiCol_Header 实测 RGB(31,57,88)：B>R+10 且 B>60）"""
+    """树区 Selected 高亮检测（自适应版：全图扫蓝底像素占比；不锚坐标——
+    主树/wt 窗口布局不同，wt 轮 y505-560 标定在主树失效 2026-11-14）"""
     from PIL import Image
     img = Image.open(path).convert("RGB")
+    w, h = img.size
     px = img.load()
-    rows = []
-    for y in range(490, 600):
-        hi = sum(1 for x in range(15, 190)
-                 if px[x, y][2] > px[x, y][0] + 10 and px[x, y][2] > 60)
-        if hi > 80:
-            rows.append(y)
-    return rows
-
-
+    total = 0
+    for y in range(0, h, 3):
+        for x in range(0, w, 3):
+            p = px[x, y]
+            if p[2] > p[0] + 12 and p[2] > 60 and p[1] > 30:
+                total += 1
+    return total   # 占比像素数（多选态 ≥ 数百）
 def main():
     with open(os.path.join(ROOT, "imgui.ini"), "w", encoding="utf-8", newline="\n") as f:
         f.write("""[Window][Debug##Default]
@@ -156,7 +158,7 @@ Size=1280,290
         rows02 = selected_rows(os.path.join(OUT, "m-e13-02-multi.png"))
         rows01 = selected_rows(os.path.join(OUT, "m-e13-01-baseline.png"))
         print("selected rows baseline=%s multi=%s" % (rows01, rows02), flush=True)
-        if len(rows02) >= 2 * len(rows01) and len(rows02) >= 2:
+        if rows02 >= 200 and rows02 >= 2 * max(rows01, 1):
             print("PASS  02-multi 双行 Selected 高亮（多选态真实渲染）")
         else:
             print("FAIL  02-multi 多选高亮未现 rows=%s" % rows02)
