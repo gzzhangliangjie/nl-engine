@@ -149,6 +149,8 @@ struct Options {
     std::string comparePath;  // M10.3：--compare <png>（Q14-2 右半参考图同屏贴片）
     bool skyBg       = false; // M10.3：--sky-bg（Q14-4 背景 = 解析天穹，probe 链生效）
     bool cacheVizRadiance = false; // M11.1：--cache-viz-radiance（viz 亮度=出射辐照度）
+    bool ssr = false;              // M-WAT0（water 轨）：--ssr（pulling 模式 SSR 反射，
+                                   //  缺省关 = 冻结基线 bytes）
     bool probeCacheBounce = false; // M11.2：--probe-cache-bounce（命中查缓存，默认关保形）
     float probeLightScale = 1.0f;  // M11.2：--probe-light-scale 0..1（关灯余晖序列）
     // M-WEA1：天气链（Q-WE5 已拍板）。seed <0 = 关（缺省常量保形）；>=0 开启后
@@ -169,6 +171,10 @@ struct Options {
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
     bool clusterBlas = false; // M13.0：--cluster-blas（per-cluster BLAS 预建，S13-PLAN M13.0）
+    bool water = false;       // M-WAT1：--water（pulling 链水体；缺省关零扰动）
+    bool waterNoReflect = false; // M-WAT2：--water-noreflect（composite 反射项归零，验收 A/B 对比）
+    bool waterNoRefract = false; // M-WAT2：--water-norefract（折射路径关闭，验收 A/B 对比）
+    bool waterNoShore = false;   // M-WAT3：--water-noshore（岸线软化关闭，验收 A/B 对比）
     bool vsm        = false;  // M15.0：--vsm（S15 VSM；仅 --mode shadow 生效）
     bool vsmPanel   = false;  // M15.1：--vsm-panel（VSM 页池占用面板，仅 --vsm 生效）
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
@@ -326,6 +332,7 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--compare" && i + 1 < argc) o.comparePath = argv[++i];
         else if (a == "--sky-bg") o.skyBg = true;
         else if (a == "--cache-viz-radiance") o.cacheVizRadiance = true;  // M11.1
+        else if (a == "--ssr") o.ssr = true;   // M-WAT0（water 轨）：SSR 反射开关
         // M11.2：探针命中查缓存（默认关）+ 灯强度缩放（关灯余晖取证）。
         else if (a == "--probe-cache-bounce") o.probeCacheBounce = true;
         else if (a == "--probe-light-scale" && i + 1 < argc)
@@ -370,6 +377,10 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
         else if (a == "--cluster-blas") o.clusterBlas = true;
+        else if (a == "--water") o.water = true;        // M-WAT1
+        else if (a == "--water-noreflect") o.waterNoReflect = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-norefract") o.waterNoRefract = true;  // M-WAT2 验收 A/B
+        else if (a == "--water-noshore") o.waterNoShore = true;      // M-WAT3 验收 A/B
         else if (a == "--vsm") o.vsm = true;   // M15.0：VSM（仅 --mode shadow 生效）
         else if (a == "--vsm-panel") o.vsmPanel = true;   // M15.1：VSM 占用面板（需 --vsm）
         else if (a == "--vsm-rayref") o.vsmRayRef = true; // M15.1：同 blob 射线基准（需 --vsm）
@@ -1386,7 +1397,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    /*sceneMode=*/false,
                                                    visbufMode, pullingMode, rtMode,
                                                    shadowMode, referenceMode, probeMode,
-                                                   o.clusterBlas);
+                                                   o.clusterBlas,
+                                                   o.water && pullingMode);   // M-WAT1
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -2670,11 +2682,21 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             fp.eye[2] = vsmEye[2] + vsmFwd[2] * vsmDist;
         }
         fp.refFrames = static_cast<std::uint32_t>(o.frames);  // M9.2：reference 进度分母
+        // M-WAT1：水体时间 = 帧号 × 固定步长（GameClock::kStep 锚，禁 wall-clock
+        // ——确定性重放逐字节；--water 关时 fp.waterTime 缺省 0 无副作用）。
+        if (o.water) fp.waterTime = static_cast<float>(frame) * nl::core::GameClock::kStep;
         // M8.2：rt 模式射线生成输入——viewProj（camera.viewProjection 纯 view×proj，
         // 列主序）+ 调试档 + eye（灰度参考距离 = 相机轨道距离 ×2）。其它模式不读，
         // 缺省零副作用。
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
+        // M-WAT0（water 轨）：SSR 开关透传（仅 pulling 分支消费，缺省关零扰动）。
+        // M-WAT2（拍板 Q-WA7=A）：--water 强制开 SSR 链（水像素黑占位 ⇒
+        // csWaterComposite 必跑 ⇒ SSR 链是水体前置基建，§0 依赖顺序铁律同构）。
+        fp.ssr = o.ssr || o.water;
+        fp.waterNoReflect = o.waterNoReflect;
+        fp.waterNoRefract = o.waterNoRefract;
+        fp.waterNoShore = o.waterNoShore;
         if (rtMode) {
             float rtEye[3];
             camera.eyePosition(rtEye);

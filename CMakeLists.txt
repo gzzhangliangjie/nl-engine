@@ -481,6 +481,8 @@ set(_GBUFFER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/gbuffer_common
 # M10.1：八面体映射 / 解析天穹公共头（probe_trace/probe_viz include；S12 复用）
 set(_OCTAHEDRAL_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/octahedral.slangh")
 set(_SKY_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/sky.slangh")
+# M-WAT1：水体公共头（Gerstner + 解析法线单源；visbuf/direct/material/ssr 四处 DEPS）。
+set(_WATER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/water_common.slangh")
 # M15.0（S15）：VSM 投影采样公共头（direct.slang include；vsm.slang 不 include）
 set(_VSM_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/vsm_common.slangh")
 # DXIL 需要 SM6.6 的产物白名单（SPIR-V 不需要，spike 实测直通）。
@@ -494,7 +496,9 @@ set(_SM66_ARTIFACTS "visbuf.vsvisraster" "visbuf.psvisraster"
                     "direct.csref"
                     "direct.csrefgi"
                     "probe_trace.cstrace"
-                    "world_cache.cscacheupdate")
+                    "world_cache.cscacheupdate"
+                    "ssr.csssr"
+                    "ssr.csssrdepth")
 # M6.0：hiz.slang 四入口（深度预通道 vs/ps + 金字塔 min 降采样两个 compute +
 # 层级可视化 vs/ps）。两个 compute 入口各出一份产物（hiz.cs / hiz.cstop）。
 set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
@@ -532,6 +536,16 @@ set(_ENTRIES_FILTER_TEMPORAL "csFilterTemporal|csfiltertemporal|compute")
 # S12 M12.1：filter_spatial.slang 单 compute 入口——5x5 联合双边（Q12-C A）
 #（纯纹理采样无 RayQuery → 不入 _SM66 白名单，默认 profile）。
 set(_ENTRIES_FILTER_SPATIAL "csFilterSpatial|csfilterspatial|compute")
+# M-WAT0（water 轨）：ssr.slang 五 compute 入口——SSR 本体（march + 深度/金字塔/
+# 场景色链/合成，详见 ssr.slang 文件头）。csSSR 用 NonUniformResourceIndex 选
+# MR 纹理槽（direct.slang 同款）→ 进 _SM66 白名单；其余纯纹理读默认 profile。
+# M-WAT2：+2 入口——csWaterCopy（折射背景 copy）/ csWaterComposite（水体全链
+# 合成；tap 里 NonUniformResourceIndex 未用，默认 profile）。
+set(_ENTRIES_SSR "csSSRDepth|csssrdepth|compute" "csSSRDown|csssrdown|compute"
+                 "csSSRMip|csssrmip|compute" "csSSR|csssr|compute"
+                 "csSSRCompose|csssrcompose|compute"
+                 "csWaterCopy|cswatercopy|compute"
+                 "csWaterComposite|cswatercomposite|compute")
 foreach(_SRC ${NL_SHADER_SRCS})
     get_filename_component(_SRC_NAME "${_SRC}" NAME_WE)   # 源文件名（无扩展名），如 "triangle"
     if(_SRC_NAME STREQUAL "model")
@@ -572,6 +586,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
         set(_ENTRIES "${_ENTRIES_FILTER_TEMPORAL}")
     elseif(_SRC_NAME STREQUAL "filter_spatial")
         set(_ENTRIES "${_ENTRIES_FILTER_SPATIAL}")
+    elseif(_SRC_NAME STREQUAL "ssr")
+        set(_ENTRIES "${_ENTRIES_SSR}")
     else()
         set(_ENTRIES "${_ENTRIES_DEFAULT}")
     endif()
@@ -589,10 +605,10 @@ foreach(_SRC ${NL_SHADER_SRCS})
         # 只有真正 #include 公共头的新入口需要这条依赖；老入口的构建规则保持
         # 原样（DEPENDS 列表一变，NMake 会把它们全部判为过期重编）。
         if(_SRC_NAME STREQUAL "visbuf")
-            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_WATER_COMMON}")
         elseif(_SRC_NAME STREQUAL "material" OR _SRC_NAME STREQUAL "direct"
                OR _SRC_NAME STREQUAL "probe")
-            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_VSM_COMMON}")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_VSM_COMMON}" "${_WATER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_trace")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_SKY_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_gather")
@@ -601,6 +617,8 @@ foreach(_SRC ${NL_SHADER_SRCS})
             set(_SHADER_EXTRA_DEPS "${_GBUFFER_COMMON}")
         elseif(_SRC_NAME STREQUAL "probe_viz")
             set(_SHADER_EXTRA_DEPS "${_OCTAHEDRAL_COMMON}" "${_GBUFFER_COMMON}")
+        elseif(_SRC_NAME STREQUAL "ssr")
+            set(_SHADER_EXTRA_DEPS "${_VISBUF_COMMON}" "${_GBUFFER_COMMON}" "${_SKY_COMMON}" "${_WATER_COMMON}")
         else()
             set(_SHADER_EXTRA_DEPS "")
         endif()

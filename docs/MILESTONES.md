@@ -3742,3 +3742,89 @@
 7. CMakeLists/traffic-tools patch 三遇 CRLF 坑（\n vs \r\n 匹配失败）——python patch 一律先探文件行尾。
 
 **下一步**：T0 轨道五里程碑（traffic-m0~m4）整轨 merge 回 master 待用户指令（merge 后须重跑该轨全部历史版本卡）；gap-out 感应时序的 citygen signals[] 显式条目（路口差异化配时）留 W 轨；信号灯 HUD/行人相位等质感升级另立项。（**2026-11-14 15:1x 已整轨 merge 回 master（`1e8f4e1` no-ff，用户拍板「先合一波」）：W0~W3 + T0 五里程碑全量并入；4 处冲突全为台账并集型（.gitignore 双规则 / 共享 memory 日志 / MILESTONES 双边段落 / PARALLEL-TRACKS 天气+worldgen 行）。merge 后按 S13 教训重跑该轨 14 卡，机械闸拦下两类 M-T4 遗留：① w2/w3 citygen selftest 锚 97->98 未同步；② t1/t2 sim-city 契约碰撞——w0-m0/generate 每次回归重写夹具（signal 填充后 49 节点全 signal=true），lock-only 前提失效、646.9m 锚必挂——用户拍板 A1 加 `--no-signals` 旗标（零 core 改动，selftest 5244 不变），t1/t2 显式钉 lock-only 基线。修复后终闸：14 卡 108/108 全 bytes + ctest 164/164 双后端 + 双后端 BUILD OK + t1/t2 run.bat verify ALL GREEN；tag `traffic-done` + 分支 `milestone/traffic-done`。详 GUIDE §10.6**）
+
+
+## WAT M-WAT0 — SSR 屏幕空间反射本体（feat/water 首里程碑，2026-11-14，tag `water-t0`）
+
+**动作**：用户指令「水体功能开工」→「先出方案」→ 拍板 Q-WA1~WA6（独立轨 feat/water / 方案 B Gerstner+SSR / 折射首版做 / 零 vendored）→「开通」落码。SSR 本体 = UE SSRT 口径确定性演示版，任务书 `docs/WATER-PLAN.md` §9b（三处实读零新拍板）。①径向距离 **min** 金字塔 `ssr.slang csSSRDepth/csSSRDown`（度量复用 S6 hiz 线性径向距离、算子与 S6 max 相反——SSR Hi-Z 跳步要「区域最近表面」：rayZ<区域 min 整格跳 / ≥ 降 mip 细化；深度源 = vis deviceZ 反投影（gbReconstructWorldPos + inverseMat4(mvp)），POT 化照抄 ensureHizTargets M6.0 教训）；②法线/粗糙度 vis buffer 即取即算（S16-PLAN §58 口径，Q4 冻结零新属性纹理，march 与 direct.slang 同构绑定 t0..t12/s0 + b3 SsrConstants 208B；NonUniformResourceIndex → csssr/csssrdepth 进 SM6.6 白名单）；③场景色均值链 `csSSRMip`（RGBA32F 自写 2x2 mean down，NVRHI 无双后端统一 generateMips；mip1..6 半→1/64，mip0 不建免拷贝，colorMip=mipStart+1）；④march `csSSR`（UVz 线性插值 Stachowiak + 容差带 0.25m + bUncertain 权重减半 + roughness×4 起始 mip + 步数 16 + 法线偏移 0.02 防自命中 + miss 走 sky.slangh 解析天穹——sky.slangh 一行未碰，Q-WA5 预案不触发）；⑤合成 `csSSRCompose` 加法叠加写回 hdrSceneColor_（UAV 全替换先例 cache viz / RMW 同纹理先例 csGatherCompose），插点 pulling 分支 cache-viz 后 tonemap 前。`--ssr` 缺省关 = 一行不执行。CMake `_ENTRIES_SSR` 五入口 + `_SM66` 两项；renderer.cpp kArtifacts 118→128；viewer `--ssr` 透传 FrameParams.ssr。
+
+**提交版本**：`feat/water` M-WAT0 收口提交（tag `water-t0`，wt nl-engine-water @ 3004cb1 基线）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；产物 128/128 魔数（ssr 五入口 × spv/dxil = 10 预登记）。
+- 🟢 `example/water-t0/run.bat verify` **ALL GREEN exit 0**：双后端 re-shot bytes vs 冻结基线 + ssr-off 零漂移基线 + A/B on/off 必不同 + 确定性双跑逐字节一致 + log 锚 `ssr: march chain ready` + deviceErrors=0 + 负向坏 mode exit 1。
+- 🟢 双后端 bytes 档：**ssr-on 与 ssr-off 图 DX12 vs VULKAN 逐像素 diff=0**（check-ssr.py near，float march 跨后端确定性达成）。
+- 🟢 A/B 分档：开关 13.88% 像素变化（阈值 0.5%，max 通道和差 221），变化集中模型表面、背景（VIS_EMPTY 零权重）不动。
+- 🟢 回归抽查三卡全绿：`s7.1/pulling` + `s10-probe/probe-viz` + `pbr-direct/pbr` 双后端 bytes 逐字节相同（--ssr 缺省关零扰动）；kStage 保持 S8.2 未 bump（M9.0 先例：新卡由 run.bat verify + regression --only 双重机械校验）。
+- 🟢 cases.json 141 张（python json indent=1 + 尾换行追加 water-t0 卡）。
+
+**踩坑**
+1. **NVRHI `addBindingLayout`/`addBindingSet` 是追加语义**：ComputePipelineDesc 复用同一 desc 给五个 PSO 会把前序 layout 全带上（down/mip/compose 同占 b5 → 「Same bindings defined by more than one layout」建败）；ComputeState 循环复用同理逐级累积 set。修复 = 每 PSO/每 dispatch 独立 desc/state（direct.slang 建管线的花括号分段先例其实是防这个）。
+2. **非 RT 纹理禁 setClearValue**：D3D12 `CreateCommittedResource3` 要求 pOptimizedClearValue 仅 RT/DS 资源可带，否则 0x80070057 建败（hiz 金字塔能带是因为 mip0 兼任 RT；SSR 金字塔纯 UAV/SRV 链不带，mip0 未写区域由 csSSRDepth 的 1e9 写入兜底）。
+3. **SSR 跳步金字塔算子方向**：S6 max（遮挡语义）不能直接复用——min（最近表面）才支持「rayZ<区域 min → 整格安全跳过」；复用的是径向距离度量口径而非同一张纹理（scene 模式本就不建 S6 金字塔）。SSR-RESEARCH-NOTES §3 的「同像素视线单调」论证同时覆盖两种算子，注释留痕防后人混淆。
+4. 并发构建撞车：旧码 VULKAN 构建后台未完成时又派发新码构建 → 同一 build 树 nmake 抢 obj（Permission denied C1083）。修 = 查杀残留 nmake/cl 后单跑（后台任务纪律：同树构建禁止并发派发）。
+
+**下一步**：M-WAT1 = Gerstner 波形 + 解析法线（固定步进保 bytes）；水体水面 pass 落地前 SSR 半边基建已就位（普通材质先行受益，一步两用）。
+
+## WAT M-WAT1 — Gerstner 波形 + 解析法线（feat/water 第二里程碑，2026-11-14，tag `water-t1`）
+
+**动作**：M-WAT0 收口后「下一步」开工。开工闸：任务书 M-WAT1 段核对零待拍板 → **补一轮拍板**（水体接线形态：进 vis buffer vs 独立 forward pass——用户拍板 **A 进 vis buffer**，UE 同构，SSR 水面 march 链一步到位）→ 写回 WATER-PLAN + SHADER-CONVENTIONS §2.23 水体新节（落码前硬闸）。三处实读：UE Water 插件 `WaterVertexFactory` + `SingleLayerWater*.ush`（SLW 是着色合成= M-WAT2 域，位移在 vertex factory/WPO 上游）、osgw `gerstner.glsl`（gh-proxy 浅克隆，显式数组结构）+ iago `ocean_shader.{vert,frag}`（解析法线求和定义在未位移网格坐标 + pixel-footprint 抗锯齿）、本仓 initCull/initVisbuf/cull.slang/direct.slang/visbuf.slang/material.slang 全链。落码：`water_common.slangh` 单源（Gerstner 位移 + 解析法线 + 水体直光）→ 水伪 cluster 网格（initCull 内程序化 64×64 quad / 64 簇 / materialId=0xFFFF 保留标记）→ `visbuf.slang` VS 位移（深度真实位移）→ `material.slang` psMatResolve / `direct.slang` csDirect+csDirectVsm per-pixel 重算 + 水体直光 → `ssr.slang` 起点解析法线 + 固定 0.10 粗糙度 → WaterConstants 288B volatile（8 波显式数组，ω=√(g·k)）→ viewer `--water`（时间 = 帧号 × GameClock::kStep）。
+
+**提交版本**：`feat/water` M-WAT1 收口提交（tag `water-t1`，@ `0354f8d`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`example/water-t1/run.bat verify` **ALL GREEN exit 0**（bytes 闸 + A/B + 波运动 f4≠f12 + 确定性双跑 + log 锚 `water: gerstner grid ready` + deviceErrors=0 + 负向）。
+- 🟢 **零漂移闸**：`--water` 关 re-shot 与 water-t0 ssr-on 冻结基线**逐字节一致**（DX12+VULKAN 双过——恒建恒绑恒写方案保形实证）。
+- 🟢 跨后端 near 档：water-on / water-off 双图 `check-ssr.py near` 通过；波运动 A/B f4 vs f12 必不同。
+- 🟢 回归抽查：`s7.1/pulling` + `pbr-direct/pbr` 双后端 bytes 逐字节全绿；kStage 保持 S8.2 未 bump；cases.json 142 张。
+
+**踩坑**
+1. **DX12 root signature 漏槽 = PSO 建败整屏清屏色**：shader 无条件声明的 cbuffer（WaterConstants）在 layout 缺位时，VK 宽容（未绑默认 0）DX12 `CreateGraphicsPipelineState` 直接失败（"Shader CBV descriptor range not fully bound"）且 deviceErrors 只在关闭帧浮现。修复 = **恒建恒绑恒写**（CB 内容无消费方时 bytes 保形）。
+2. **visibleList/instanceCount 用局部 `clusterCount` 漏掉伪簇**：initCull 里 `clusterCount_ = clusterCount + waterClusterCount` 后，恒等列表与 indirect args 仍读局部变量 → 水簇不画（首拍全背景实锤）。修 = 统一读成员 `clusterCount_`。
+3. **volatile CB 6 槽上限**：refComputeLayout_ 已 6 槽（b0..b5），水体 b7 加不进 → GI 入口（csRef/csRefGi）不接水体分支（GI 参考图水体像素 = 未位移平面，M-WAT2 域）；directVsmLayout_ 恰好 6 槽收口。
+4. **volatile CB 写入时机**：写晚于首次绑定消费 = NVRHI「before it was written」错误（visbuf 帧序列 raster 在 writeResolveConstants 之前）→ 抽 `writeWaterConstants` 提到 raster 前 + drawShadow/drawReference 各补一处。
+5. mspdbsrv PDB API RPC 挂（C1090 错误码 23）三犯——杀进程重编即绿，非代码问题。
+
+**下一步**：M-WAT2 = 折射（SceneWithoutWater + 扭曲 UV + Beer-Lambert 吸收）+ Fresnel 混合 + 波峰泡沫收口（UE SLW 结构域）；整轨 merge 回 master 待用户指令。
+
+## WAT M-WAT2 — 折射 + Beer-Lambert 吸收 + Fresnel + 泡沫（feat/water 第三里程碑，2026-11-14，tag `water-t2`）
+
+**动作**：M-WAT1 收口后「下一波」开工。三处实读（UE SLW `SingleLayerWaterComposite`+`SceneWithoutWater` copy 口径 / bevy `refracted_ray`+深度拒绝 / 本仓 M-WAT1 直光水色链）→ 任务书 §9c → **拍板 Q-WA7**（折射合成形态：UE 同构合成后移 / psMatResolve 内嵌 / 真重渲——用户拍板 **A 合成后移**，water-t1 基线重拍授权随拍板生效）→ 写回 PLAN §9c → 落码：`water_common.slangh` 单源扩展（waterFresnel Schlick F0=0.02 / waterRefractDir Snell TIR 兜底 / waterSpecular 独立化 / waterFoam 波峰白沫）→ `material.slang`+`direct.slang` 水像素黑占位（M-WAT1 直光逻辑迁移）→ `ssr.slang` 新 `csWaterCopy`（hdrSceneColor_→waterBg_）+ `csWaterComposite`（SSR 后 tonemap 前：反解 vis 判水像素 → per-pixel Gerstner → 3×3 bilateral 估厚 → B1 池底解析 ray-plane 折射 → B2 屏幕空间扭曲 4-tap 兜底（深度拒绝 bevy 口径）→ Beer-Lambert `T=exp(-absorb×thick)` + in-scatter → Fresnel 混 SSR 反射 + spec + foam 整体替换写回）→ WaterConstants 288→336B（wcE/wcF/wcG，floorY/floorHalf 单源 `kWaterFloorY/Half`）→ 池底网格 [-26,26]² 40×40 quad / 25 簇 materialId=0（6m 环带 = UE 水塘边缘同构）→ 双验收旗标 `--water-noreflect`/`--water-norefract`（wcG.x/w）→ `example/water-t2/run.bat`（七组 shot 八项检查）→ water-t2 卡双 case + water-t1 基线重拍。
+
+**提交版本**：`feat/water` M-WAT2 收口提交（tag `water-t2`，落码 @ `9977d78`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16（136 blob 全绿，ssr.cswatercopy/cswatercomposite 双后端编译通过）。
+- 🟢 `example/water-t2/run.bat verify` **ALL GREEN exit 0**：零漂移闸（water-off vs water-t0 ssr-on 冻结基线逐字节，双后端）+ **反射 A/B**（full vs noreflect 必 DIFF）+ **折射 A/B**（full vs norefract 必 DIFF）+ on/off + 波运动 f4≠f12 + 确定性双跑 + log 锚（`gerstner grid ready` + `composite ready`）+ deviceErrors=0 + 负向。
+- 🟢 跨后端 near：diff pixels=0（maxfrac=0.02）；回归 t0 2/2 + t1 2/2（重拍基线后）+ t2 4/4 全绿；cases.json 143 张。
+- 🟢 折射证据图：`refract-edge-{dx12,VULKAN}.png`（pitch8/dist30 池外机位——环带入画，波谷蓝绿 = 折射池底×吸收，波峰银白 = Fresnel 天空反射，角度依赖正确）。
+
+**踩坑**
+1. **方案 A 盲区实锤：copy 无水后内容**——池底在 vis buffer 被水面深度遮挡 → waterBg_ 水像素黑、水后永远空 → 陡视角 3×3 邻域全水 bilateral 全拒 → 折射只剩 in-scatter，「水下物体折射扭曲」任何相机不成立。根修 = **B1 解析 ray-plane**（池底已知平面 y=wcG.y，命中池内 → xz×0.25 wrap 手工 4-Load 双线性采材质 0 贴图，thick=真实光路程），零新 pass/零新资源；B2 屏幕空间兜底保留（掠射出池时环带/天空）。
+2. **验收机位几何陷阱**：pitch9/dist7 相机悬在水面范围 [-20,20]² 内部上方 → 环带不可见折射无物可采（v2/v3 hash 全同实证）；pitch8/dist24 又悬在环带正上方；**池外 pitch8/dist30 才是折射可见机位**——验收机位必须按「折射采样可达像素」几何设计，不是随手默认。
+3. **Git Bash 的 `fc` 是内建 fix-command**：所有 `fc /b` bytes 对比静默无效（exit 0 假绿）；字节对比一律 python sha256（Windows 绝对路径）。run.bat 内 cmd 环境的 fc.exe 不受影响。
+4. **bash cwd 每条命令重置回主仓**（100% 复现）→ 主仓两次误写（PLAN §9c 追加、误 grep 空），靠 pre-commit NL_COMMIT_MAINREPO 闸拦截后显式 restore；每条命令 `cd <wt> && pwd &&` 前缀保命。
+5. **常量双源漂移**：池底块局部 `kFloorY/kFloorHalf` 删声明漏改引用 → C2065 编译败两轮（连带 Tdir 声明被替换吞掉 E30015）；根修 = 文件级 `kWaterFloorY/kWaterFloorHalf` 单源 + wcG 下传 shader。
+6. **回归基线文件被 .gitignore**：`example/*/verify-*` 全 ignore（t1 先例），cases.json 基线若指向 verify-* 则新 clone 缺文件——复制为冻结名 `water-full-{dx12,VULKAN}.png` 再登记；bash 循环 `$B` 大写 DX12 与 cases.json 小写漂移一并钉死。
+
+**下一步**：M-WAT3 候选 = 深浅深度渐变吸收（真实 depth buffer 对比水厚）/ 岸线软化（soft edge）/ 水下雾；整轨 merge 回 master 待用户指令（S13 教训：merge 后重跑该轨全部历史版本卡）。
+
+## WAT M-WAT3 — 岸线软化 + 岸线泡沫（feat/water 第四里程碑，2026-11-14，tag `water-t3`）
+
+**动作**：M-WAT2 收口后「继续」开工。实读：UE SLW 官方文档 4.26/4.27 + 论坛 5.5（岸线软化官方路数 = Distance To Nearest Surface 接 Opacity lerp；SLW = 参与介质体积 + Opacity 混 BSDF/BRDF；折射读取可选 downsample 已同构）/ bevy SSR example water_material.wgsl（纯法线波纹，**无水体岸线口径**，纯 UE 参照）/ 本仓 M-WAT2 全链（composite 整体替换 → 交界硬边；bilateral 邻域 diff 现成可复用）。任务书 §9d → **拍板（用户）= A+B**：岸线软化 fade + 岸线泡沫窄带白沫，C（Color Scale Behind Water）不做；water-t1/t2 基线重拍授权随拍板生效。落码：`csWaterComposite` 新增 **B3 段**——`fade = saturate(diffNear/fadeDist)`（diffNear = 原位 bilateral 非水邻域平均径向差 / B2 扭曲 tap 加权差，<0 = 深水不动），`color = lerp(bg0, 水色, fade)`（bg0 = 邻域真实岸边像素色）；岸线泡沫 = `shoreBand²` × gain × (ambient+0.8·ndl) 窄带白沫；WaterConstants 336→352B（**wcH** = fadeDist/shoreFoamDist/shoreFoamGain/noShore）；`--water-noshore` 第三验收旗标；参数调优两轮（初值 fadeDist 1.2/foamDist 0.6 过窄：平坦池底 diff≈1.5m 饱和 → fade 2.2/foam 2.5）。
+
+**提交版本**：`feat/water` M-WAT3 收口提交（tag `water-t3`，落码 @ `9340213`，wt nl-engine-water）。
+
+**完成情况**
+- 🟢 双后端 BUILD OK + selftest 16/16；`example/water-t3/run.bat verify` **ALL GREEN exit 0**（零漂移 vs water-t0 冻结基线双后端逐字节 + 岸线 A/B（full vs noshore 必 DIFF）+ 波运动 + 确定性 + log 锚 + deviceErrors=0 + near diff pixels=0 + 负向）。
+- 🟢 **保形实证**：`--water-noshore` 输出与 M-WAT2 full 基线 **hash 全同**（758c0d57）——旗标关闭 = M-WAT2 输出逐字节保形。
+- 🟢 交界柔化：猴头-水面交界深色硬边消除（并排对比图实证），变化占比 0.06% 集中在交界带（rows 270-359）——零波及面。
+- 🟢 回归 t1 2/2 + t2 4/4（基线重拍后）+ t3 4/4 全绿；cases.json 144 张。
+
+**踩坑**
+1. **参数初值被场景几何骗**：fadeDist 1.2 / foamDist 0.6 按「经验窄带」取值，但平坦池底邻域 diff 恒 ≈1.5m → fade 全饱和、泡沫窄带判据打不开，首拍变化仅 0.01% 像素（python diff 定位）——**参数必须按场景实际 diff 分布标定**（fadeDist/dip > 1.5m 才可见）。
+2. **岸线软化的物理宽度由地形决定**：池底平坦 → 过渡带天然窄（每像素 diff 相同）；猴头斜面交界才是宽渐变主秀场（根部 diff→0 连续变化）。远景 cam30 仅 0.02% 变化 ≠ 失效，是场景几何使然。
+3. mspdbsrv PDB API 23 四犯——杀进程重编即绿（M-WAT1 踩坑 #5 同族）。
+4. bash 循环 `$B` 大小写漂移二犯（DX12 vs dx12，Windows 不区分大小写掩盖）——重命名钉死 + cases.json 对齐。
+
+**下一步**：water 轨视觉链（波形/折射/吸收/Fresnel/泡沫/岸线）已闭环；候选后续 = Color Scale Behind Water（UE 第 4 输入）/ 真深度吸收细化 / 水体阴影；**整轨 merge 回 master 待用户指令**（S13 教训：merge 后重跑全部历史版本卡）。

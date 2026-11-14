@@ -63,6 +63,18 @@ struct FrameParams {
     // validHistory 单帧清零，防渐变天气 GI 亮度滞后；缺省 false 保形）。
     float weatherWetness     = 0.0f;                   // 0..1（0 = 干）
     bool  weatherHistoryReject = false;                // filter 态单帧历史拒绝
+    // M-WAT1（water 轨，拍板 A）：水体时间（viewer 固定步进累积 = frameIdx ×
+    // GameClock::kStep，禁 wall-clock；缺省 0 = 静止水面，确定性重放逐字节）。
+    float waterTime          = 0.0f;
+    // M-WAT2（拍板 Q-WA7=A）：--water-noreflect 验收旗标（composite 反射项归零，
+    // WATER-PLAN §6.1「关反射水体感几乎不变即不合格」A/B 对比用；缺省 false）。
+    bool  waterNoReflect     = false;
+    // M-WAT2：--water-norefract 验收旗标（折射路径整体关闭，refract = in-scatter
+    // only；WATER-PLAN §6.2 折射 A/B 硬闸用；缺省 false）。
+    bool  waterNoRefract     = false;
+    // M-WAT3：--water-noshore 验收旗标（岸线软化关闭，fade 归 1；WATER-PLAN
+    // §9d 岸线 A/B 硬闸用；缺省 false）。
+    bool  waterNoShore       = false;
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。
@@ -170,6 +182,11 @@ struct FrameParams {
     bool  probeCacheDiag    = false;   // M11.2 调试：命中查缓存结果按 RGB 伪彩（红=命中/绿=占未中/蓝=空）
                                        //（关灯余晖序列用；1.0 = 老路径基线）
     bool  probeAtlasDump     = false;   // M11.2 验收：把 irradAtlas_[0] 直出画面，绕开 gather 做开关开/关自比
+
+    // ---- M-WAT0（water 轨）：SSR 屏幕空间反射开关（--ssr，缺省关零扰动）----
+    // 仅 pulling（matResolve→hdrSceneColor_）分支消费：march + 合成插在
+    // cache-viz 之后、tonemap 之前；关 = 全链 bytes 保形（冻结基线口径）。
+    bool  ssr               = false;
 
     // ---- S12 M12.0：GI 分量独立时域累积（Q12-A 方案 A）----
     // 仅 --mode filter 消费；缺省全关 = 非 filter 路径零扰动（T5 保形硬边界：
@@ -513,7 +530,12 @@ public:
                                             // M13.0：--cluster-blas（per-cluster BLAS
                                             // 预建；S13-PLAN M13.0，缺省关 = 既有
                                             // 模式零扰动）。
-                                            bool clusterBlas = false);
+                                            bool clusterBlas = false,
+                                            // M-WAT1（water 轨，拍板 A）：--water
+                                            // 仅 pulling 链生效（initVisbuf 追加
+                                            // 水面伪 cluster + 四管线条件加绑
+                                            // WaterConstants）；缺省 false 零扰动。
+                                            bool waterEnable = false);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
