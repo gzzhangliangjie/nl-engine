@@ -7905,7 +7905,13 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
     }
     upload->beginTrackingBufferState(sceneLights_, nvrhi::ResourceStates::CopyDest);
     upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
-    upload->setPermanentBufferState(sceneLights_, nvrhi::ResourceStates::ShaderResource);
+    // M-E7（Q-E7-1 拍板 A）：permanent 位扩为 ShaderResource|CopyDest——updateLights
+    // 的 writeBuffer require(CopyDest) 必须被 permanent 覆盖（NVRHI 校验：
+    // permanent & required == required），否则运行时改灯被 validation 拒绝。
+    // 永久免 barrier 模型不变（读写靠同队列 FIFO 序；与原 ShaderResource 单位
+    // 相比只是放行了写路径，画面 bytes 零差异）。
+    upload->setPermanentBufferState(sceneLights_,
+        nvrhi::ResourceStates::ShaderResource | nvrhi::ResourceStates::CopyDest);
     upload->close();
     device->executeCommandList(upload);
 
@@ -8042,6 +8048,74 @@ bool Scene::updateObjects(nvrhi::IDevice* device,
     upload->close();
     device->executeCommandList(upload);
     instanceTrackSRV_ = false;   // update 列表末态 = CopyDest（writeBuffer 无转换落盘）
+    return true;
+}
+
+// M-E7（Q-E7-1 拍板 A）：灯缓冲按需更新。与 updateObjects 严格同构：单 upload
+// 命令列表 writeBuffer；灯缓冲 permanent 位 = ShaderResource|CopyDest（initScene
+// 扩展，写路径免 barrier）。数据打包与 initScene 7597~7643 段同一规则（shadow
+// 槽位重排 / sumIntensity 只算方向灯 / pointCount）——灯数不变约束下 buffer 尺寸
+// 与 t6 绑定完全兼容。阴影灯方向变化不重算 shadowViewProj_（preview 场景无阴影
+// 灯；阴影调参属后续范围）。viewer 在 renderFrame 之前调用（同 updateObjects 时序）。
+bool Scene::updateLights(nvrhi::IDevice* device,
+                         const SceneLightDesc* lights, std::uint32_t lightCount,
+                         float ambient, std::string& outError) {
+    if (!device) { outError = "updateLights: device null"; return false; }
+    if (!sceneLights_) {
+        outError = "updateLights: scene lights not initialized (initScene first)";
+        return false;
+    }
+    if (lightCount != sceneLightCount_ || (lightCount > 0 && !lights)) {
+        outError = "updateLights: lightCount mismatch (initScene " +
+                   std::to_string(sceneLightCount_) + " vs update " +
+                   std::to_string(lightCount) + ")";
+        return false;
+    }
+    const std::uint32_t lightFloats = (1u + lightCount * 3u) * 4u;
+    std::vector<float> lightData(lightFloats, 0.0f);
+    lightData[0] = static_cast<float>(lightCount);
+    lightData[1] = ambient;
+    sceneAmbient_ = ambient;
+    std::vector<std::int32_t> lightShadowSlot(lightCount, -1);
+    std::uint32_t shadowSlotCount = 0;
+    for (std::uint32_t i = 0; i < lightCount; ++i) {
+        if (lights[i].type != 0 || !lights[i].shadow) continue;
+        if (shadowSlotCount >= Scene::kMaxShadowLights) {
+            outError = "updateLights: too many shadow-casting directional lights (max 4)";
+            return false;
+        }
+        lightShadowSlot[i] = static_cast<std::int32_t>(shadowSlotCount++);
+    }
+    shadowCount_ = shadowSlotCount;
+    float sumIntensity = 0.0f;     // 只统计方向灯：点光按绝对强度独立累加
+    std::uint32_t pointCount = 0u;
+    for (std::uint32_t i = 0; i < lightCount; ++i) {
+        float* d0 = lightData.data() + (1u + i * 3u) * 4u;
+        float* d1 = d0 + 4;
+        float* d2 = d0 + 8;
+        d0[0] = lights[i].dir[0]; d0[1] = lights[i].dir[1]; d0[2] = lights[i].dir[2];
+        d0[3] = lights[i].intensity;
+        d1[0] = lights[i].color[0]; d1[1] = lights[i].color[1]; d1[2] = lights[i].color[2];
+        d1[3] = static_cast<float>(lights[i].type);
+        d2[0] = lights[i].position[0]; d2[1] = lights[i].position[1];
+        d2[2] = lights[i].position[2];
+        if (lights[i].type == 0)
+            d2[3] = static_cast<float>(lightShadowSlot[i] + 1);
+        else
+            d2[3] = (lights[i].range > 0.0f) ? (1.0f / lights[i].range) : 0.0f;
+        if (lights[i].type == 0) sumIntensity += lights[i].intensity;
+        else ++pointCount;
+    }
+    lightData[2] = (sumIntensity > 0.0f) ? (1.0f / sumIntensity) : 0.0f;
+    lightData[3] = static_cast<float>(pointCount);
+
+    // §2.8 铁律同 updateObjects：单 upload 命令列表一次 open/close/execute，
+    // 帧内不开第二列表（viewer 帧首调用，renderFrame 随后才开 frameCmd_）。
+    nvrhi::CommandListHandle upload = device->createCommandList();
+    upload->open();
+    upload->writeBuffer(sceneLights_, lightData.data(), lightData.size() * sizeof(float));
+    upload->close();
+    device->executeCommandList(upload);
     return true;
 }
 

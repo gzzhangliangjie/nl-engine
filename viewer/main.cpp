@@ -208,6 +208,12 @@ struct Options {
     std::string modelFile = "Suzanne.glb";  // M0.7：--model 选 assets/ 下的资产
     bool modelSet = false;                  // M1.3：cluster 模式缺省模型是 Suzanne.nmesh
     std::string scenePath;                  // M-E1b.0：--scene <file>（World JSON，非 assets 资产）
+    // M-E7：--preview 预览小场景（拍板「新建专用预览小场景」）。糖旗标：mode 强制
+    // scene + scenePath 缺省 assets/scenes/preview.scene.json（显式 --scene 仍优先，
+    // 便于自定义预览布景）。材质写回 / 场景树 / 相机 RPC 全部复用 scene 链既有
+    // handler，零 renderer 改动；光照经 light.* cvar（反射胶水层，拍板通道）。
+    bool preview = false;
+    std::string previewModel;               // --preview-model <name>.glb：覆写 preview-model 实体 meshFile
     // P8 M-T3：--traffic-city <DIR>（DIR 含 city.scene.engine + roadnet.json，
     // city-tools/city2engine 产物）。scenePath 自动推导为 <DIR>/city.scene.engine；
     // runScene 反序列化后给 car_* 实体挂 TrafficCarComponent + 注册
@@ -429,6 +435,16 @@ Options parseArgs(int argc, char** argv) {
             //（不是 assets 白名单资产）；ASCII + 存在性校验在 runScene 落地，
             // 失败走用法错误码 2。
             o.scenePath = argv[++i];
+        }
+        else if (a == "--preview") {
+            // M-E7：预览小场景糖旗标（mode/scenePath 生效逻辑在 parseViewMode 前，
+            // 见 main() 末段；显式 --mode/--scene 仍可覆盖，便于自定义布景）。
+            o.preview = true;
+        }
+        else if (a == "--preview-model" && i + 1 < argc) {
+            // M-E7：覆写 preview-model 实体的 meshFile（.glb 白名单在 runScene
+            // 替换点校验，与 scene 链同口径；坏名 exit 1 不静默）。
+            o.previewModel = argv[++i];
         }
         else if (a == "--traffic-city" && i + 1 < argc) {
             // P8 M-T3：城市交通模式（TRAFFIC-PLAN §11.2）。DIR 须含
@@ -792,6 +808,36 @@ static auto resolveViewProjection(nl::viewer::ViewerCamera& camera,
     return camera.viewProjection();
 }
 
+// M-E7：light.* cvar → FrameParams.lightDir 覆写（反射胶水层消费链）。
+// dirty 语义：三个 cvar 全部仍等于注册初值（= FrameParams 缺省光的换算值）时
+// 不覆写 → 未调光的模式（含全部历史截图基线）bytes 逐位不变；任一被 set 过
+// （编辑器光照面板经 engine.cvar.set / 控制台 `light.ambient 0.5`）才重算：
+//   xyz = 单位指向光源向量 (cos(el)*sin(az), sin(el), cos(el)*cos(az))
+//   w   = ambient
+// 天气链（--weather-seed>=0）在其前写 fp——cvar 覆写放天气块之后 = 显式调光
+// 优先（用户意图 > 模型缺省）。
+static bool applyLightCvars(nl::renderer::FrameParams& fp) {
+    using nl::core::console::Console;
+    Console& c = Console::get();
+    const nl::core::console::CVar* az = c.findCVar("light.sunAzimuth");
+    const nl::core::console::CVar* el = c.findCVar("light.sunElevation");
+    const nl::core::console::CVar* amb = c.findCVar("light.ambient");
+    if (!az || !el || !amb) return false;
+    constexpr double kAz0 = 42.0, kEl0 = 49.9, kAmb0 = 0.28;
+    if (az->value().f == kAz0 && el->value().f == kEl0 && amb->value().f == kAmb0)
+        return false;   // 未调光：保持调用方既有值（零回归）
+    constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
+    const double azR = az->value().f * kDeg2Rad;
+    const double elR = el->value().f * kDeg2Rad;
+    const float ce = static_cast<float>(std::cos(elR));
+    const float se = static_cast<float>(std::sin(elR));
+    fp.lightDir[0] = ce * static_cast<float>(std::sin(azR));
+    fp.lightDir[1] = se;
+    fp.lightDir[2] = ce * static_cast<float>(std::cos(azR));
+    fp.lightDir[3] = static_cast<float>(amb->value().f);
+    return true;
+}
+
 std::function<void()> registerViewerConsole(nl::viewer::ViewerCamera* camera, bool* hudEnabled) {
     using namespace nl::core::console;
     Console& c = Console::get();
@@ -875,6 +921,16 @@ std::function<void()> registerViewerConsole(nl::viewer::ViewerCamera* camera, bo
     // M-LOG2 拍板 ②：log.* 四命令——实现下沉在 nl::core::console::
     // registerLogCommands（core/console.cpp，viewer 与 log-tools 共用单一事实源）。
     nl::core::console::registerLogCommands(c);
+
+    // M-E7：光照参数反射层（拍板「参数设置走 CVar + M-SC10 描述表，不另做一套」）。
+    // 初值 = FrameParams 缺省光 ({0.45,0.80,0.50,0.28}) 的 az/el 换算；未被 set 过
+    // 时不覆写 fp.lightDir（applyLightCvars 的 dirty 语义）→ 历史基线 bytes 零漂。
+    c.registerFloat("light.sunAzimuth", 42.0,
+                    "M-E7 sun azimuth (deg, toward-light dir in XZ, 0=+Z)");
+    c.registerFloat("light.sunElevation", 49.9,
+                    "M-E7 sun elevation (deg, toward-light dir Y)");
+    c.registerFloat("light.ambient", 0.28,
+                    "M-E7 ambient intensity (FrameParams.lightDir.w)");
 
     return [fov, dist, camera]() {
         g_syncing = true;
@@ -998,7 +1054,64 @@ struct EditorEmbed {
         if (!enabled) return;
         bridge.registerHandler("engine.echo",
                                [](const nl::editor::RpcValue& p) { return p; });
+        bindConsole();   // M-E7：cvar 反射层 RPC（两模式通用，不依赖相机/场景对象）
         tryConnect(/*first=*/true);
+    }
+
+    // M-E7：CVar 反射层的编辑器消费口（拍板「参数设置走反射胶水层，不另做一套」）。
+    // 光照面板/后续属性面板一律按名字寻址 cvar，不再逐参数手写 RPC handler。
+    // 语义对齐绑定面 Engine.cvarGet/cvarSet（exports.api v1 同源口径）：
+    //   engine.cvar.list {prefix?} -> [{name,type,value,help}...]
+    //   engine.cvar.get  {name}    -> {name,type,value,help}（未知名 error 100）
+    //   engine.cvar.set  {name,value} -> {name,value}（类型/格式不符 error 101）
+    void bindConsole() {
+        auto cvarToMap = [](const nl::core::console::CVar* cv) {
+            nl::editor::msgpack::Map m;
+            m["name"]  = cv->name();
+            m["type"]  = std::string(nl::core::console::cvarTypeName(cv->type()));
+            m["value"] = cv->value().toString();
+            m["help"]  = cv->help();
+            return m;
+        };
+        bridge.registerHandler("engine.cvar.list", [cvarToMap](const nl::editor::RpcValue& p) -> nl::editor::RpcValue {
+            std::string prefix;
+            if (p.isMap()) {
+                auto it = p.asMap().find("prefix");
+                if (it != p.asMap().end() && it->second.isStr()) prefix = it->second.asStr();
+            }
+            nl::editor::msgpack::Array arr;
+            for (const auto& e : nl::core::console::Console::get().allEntries()) {
+                if (!e.isCVar) continue;
+                if (!prefix.empty() && e.name.compare(0, prefix.size(), prefix) != 0) continue;
+                const auto* cv = nl::core::console::Console::get().findCVar(e.name);
+                if (!cv) continue;
+                arr.push_back(nl::editor::RpcValue(cvarToMap(cv)));
+            }
+            return nl::editor::RpcValue(std::move(arr));
+        });
+        bridge.registerHandler("engine.cvar.get", [cvarToMap](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!p.isMap()) return nl::editor::RpcError{101, "engine.cvar.get: params must be a map"};
+            auto it = p.asMap().find("name");
+            if (it == p.asMap().end() || !it->second.isStr())
+                return nl::editor::RpcError{101, "engine.cvar.get: missing string field 'name'"};
+            const auto* cv = nl::core::console::Console::get().findCVar(it->second.asStr());
+            if (!cv) return nl::editor::RpcError{100, "engine.cvar.get: unknown cvar"};
+            return nl::editor::RpcValue(cvarToMap(cv));
+        });
+        bridge.registerHandler("engine.cvar.set", [cvarToMap](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!p.isMap()) return nl::editor::RpcError{101, "engine.cvar.set: params must be a map"};
+            auto itN = p.asMap().find("name");
+            auto itV = p.asMap().find("value");
+            if (itN == p.asMap().end() || !itN->second.isStr() ||
+                itV == p.asMap().end() || !itV->second.isStr())
+                return nl::editor::RpcError{101, "engine.cvar.set: need string fields 'name' and 'value'"};
+            auto* cv = nl::core::console::Console::get().findCVar(itN->second.asStr());
+            if (!cv) return nl::editor::RpcError{100, "engine.cvar.set: unknown cvar"};
+            if (!cv->setFromString(itV->second.asStr()))
+                return nl::editor::RpcError{101, "engine.cvar.set: value rejected for type "
+                                          + std::string(nl::core::console::cvarTypeName(cv->type()))};
+            return nl::editor::RpcValue(cvarToMap(cv));
+        });
     }
 
     // M-E4a/M-E4b：连接 + announce（caps 带窗体像素尺寸与渲染后端名）。
@@ -1071,6 +1184,34 @@ struct EditorEmbed {
             camera->reset();
             nl::core::log::infoCh("viewer", "camera reset (via editor RPC)");
             return nl::editor::RpcValue();  // nil = ack
+        });
+        // M-E7：预设视角一键切换（「多方位无死角预览」）。保持当前 dist，仅落
+        // yaw/pitch；非 orbit 模式拒绝（位姿数据主权口径同 cameraSetPose 绑定面）。
+        // 约定：yaw=0 = 相机在 +Z（正视模型正面）；dist 由编辑器 dist 滑条独立控。
+        bridge.registerHandler("camera.preset", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (camera->modeOf() != nl::viewer::CameraMode::Orbit)
+                return nl::editor::RpcError{102, "camera.preset: orbit mode only"};
+            if (!p.isMap())
+                return nl::editor::RpcError{101, "camera.preset: params must be a map"};
+            auto it = p.asMap().find("name");
+            if (it == p.asMap().end() || !it->second.isStr())
+                return nl::editor::RpcError{101, "camera.preset: missing string field 'name'"};
+            const std::string n = it->second.asStr();
+            float yaw = 0.0f, pitch = 0.0f;
+            if      (n == "front") { yaw = 0.0f;   pitch = 0.0f;  }
+            else if (n == "back")  { yaw = 180.0f; pitch = 0.0f;  }
+            else if (n == "left")  { yaw = -90.0f; pitch = 0.0f;  }
+            else if (n == "right") { yaw = 90.0f;  pitch = 0.0f;  }
+            else if (n == "top")   { yaw = 0.0f;   pitch = 89.9f; }
+            else if (n == "iso")   { yaw = 45.0f;  pitch = 35.264f; }  // arctan(1/sqrt(2)) 等轴测
+            else return nl::editor::RpcError{100, "camera.preset: unknown preset '" + n
+                                             + "' (front|back|left|right|top|iso)"};
+            camera->setOrbit(yaw, pitch, camera->distance());
+            nl::editor::msgpack::Map m;
+            m["yaw"]   = (double)camera->yawDegrees();
+            m["pitch"] = (double)camera->pitchDegrees();
+            m["dist"]  = (double)camera->distance();
+            return nl::editor::RpcValue(std::move(m));
         });
     }
 
@@ -2797,6 +2938,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             wPrevWet_    = fp.weatherWetness;
             wPrevValid_  = true;
         }
+        // M-E7：light.* cvar 覆写（天气块之后 = 显式调光优先；未调光零回归）。
+        applyLightCvars(fp);
         fp.probeAtlasDump = o.probeAtlasDump;
         fp.probeCacheDiag = o.probeCacheDiag;   // M11.2 调试伪彩
         // S12 M12.0/M12.1（Q12-A + Q12-C A）：GI 分量独立时域累积 + 5x5
@@ -3595,6 +3738,36 @@ int runScene(const Options& o) {
         }
         if (doc.contains("ambient") && doc["ambient"].is_number())
             ambient = doc["ambient"].get<float>();
+
+        // M-E7：--preview-model 覆写 preview-model 实体 meshFile。白名单与 scene
+        // 收集链同口径（.glb）；实体缺失 / 白名单拒绝 = 用法错误 exit 2（不静默）。
+        if (!o.previewModel.empty()) {
+            const std::string want = o.previewModel;
+            for (const char c : want) {
+                const auto u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u > 0x7E) {
+                    nl::core::log::errorCh("viewer", "--preview-model: name must be printable ASCII");
+                    return 2;
+                }
+            }
+            auto ent = world.findEntityByName("preview-model");
+            if (!ent.has_value()) {
+                nl::core::log::errorCh("viewer", "--preview-model: no entity named 'preview-model' in scene");
+                return 2;
+            }
+            auto* model = world.getComponent<nl::scene::ModelComponent>(ent->id);
+            if (!model) {
+                nl::core::log::errorCh("viewer", "--preview-model: entity 'preview-model' has no Model component");
+                return 2;
+            }
+            if (want.size() < 5 || want.compare(want.size() - 4, 4, ".glb") != 0) {
+                nl::core::log::errorCh("viewer", "--preview-model: '", want.c_str(),
+                                     "' rejected by asset whitelist (.glb)");
+                return 2;
+            }
+            model->meshFile = want;
+            nl::core::log::infoCh("viewer", "preview-model overridden: ", want.c_str());
+        }
     }
 
     // ---- M-E1b.5 渲染用例：--tick serial|parallel（帧循环逐帧 tick + 刷实例）----
@@ -3920,17 +4093,31 @@ int runScene(const Options& o) {
     }
     const std::string sceneName =
         std::filesystem::path(scenePath).filename().string();
+    // M-E7（Q-E7-1 拍板 A）：preview 场景内建一盏方向灯（JSON 不放灯——psScene 的
+    // ambient/灯向走灯缓冲，光照实时链 = light.* cvar → updateEcsLights）。初值方向
+    // 与 light.* cvar 初值（az 42°/el 49.9°）同源换算、传播方向取反；强度/色温取
+    // ecs-e1b key-light 已知观感值。
+    if (o.preview && lights.empty()) {
+        nl::renderer::SceneLightDesc key{};
+        key.dir[0] = -0.4314f; key.dir[1] = -0.7649f; key.dir[2] = -0.4792f;  // 传播方向（向下）
+        key.color[0] = 4.2f; key.color[1] = 3.99f; key.color[2] = 3.696f;
+        key.intensity = 2.2f;
+        key.type = 0;
+        lights.push_back(key);
+        nl::core::log::infoCh("viewer", "preview: built-in key light injected (light.* cvar driven)");
+    }
     // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
     std::uint32_t pointLights = 0;
     for (const auto& l : lights) if (l.type == 1) ++pointLights;
+    // M-E7：preview 光照 cvar 变化检测缓存（-999 = 必不等于合法值 → 首帧对齐一次）。
+    double prevAz_ = -999.0, prevEl_ = -999.0, prevAmb_ = -999.0;
     nl::core::log::infoCh("viewer", "ecs scene: ", objects.size(), " objects | ", lights.size(),
                         " lights (", pointLights, " point) | ambient ", ambient);
     if (!renderer->loadEcsScene(objects.data(),
                                 static_cast<std::uint32_t>(objects.size()),
                                 lights.empty() ? nullptr : lights.data(),
                                 static_cast<std::uint32_t>(lights.size()),
-                                ambient, sceneName.c_str())) {
-        nl::core::log::errorCh("viewer", "ecs scene load failed: ", renderer->lastError());
+                                ambient, sceneName.c_str())) {        nl::core::log::errorCh("viewer", "ecs scene load failed: ", renderer->lastError());
         return 1;
     }
 
@@ -4426,6 +4613,36 @@ int runScene(const Options& o) {
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;
         fp.lightDir[3] = ambient;                    // w = ambient 透传（scene draw 也写灯缓冲）
+        // M-E7：light.* cvar 覆写（场景 JSON ambient 之上的显式调光通道；未调光零回归）。
+        applyLightCvars(fp);
+        // M-E7（Q-E7-1 拍板 A）：preview 光照实时链——psScene 的 ambient/灯向走
+        // 灯缓冲（fp.lightDir 只有 probe/trace 链消费），cvar 变化帧经
+        // updateEcsLights 重传灯缓冲（方向 = cvar 指向光源单位向量取反）。
+        // 变化检测缓存初值 = -999（必不等于合法 ambient），首帧对齐一次。
+        if (o.preview && !lights.empty()) {
+            auto& cons = nl::core::console::Console::get();
+            const auto* azv = cons.findCVar("light.sunAzimuth");
+            const auto* elv = cons.findCVar("light.sunElevation");
+            const auto* ambv = cons.findCVar("light.ambient");
+            if (azv && elv && ambv) {
+                const double azC = azv->value().f, elC = elv->value().f, ambC = ambv->value().f;
+                if (azC != prevAz_ || elC != prevEl_ || ambC != prevAmb_) {
+                    constexpr double kD2R = 3.14159265358979323846 / 180.0;
+                    const double azR = azC * kD2R, elR = elC * kD2R;
+                    const float ce = static_cast<float>(std::cos(elR));
+                    const float se = static_cast<float>(std::sin(elR));
+                    auto& key = lights.front();
+                    key.dir[0] = -ce * static_cast<float>(std::sin(azR));
+                    key.dir[1] = -se;
+                    key.dir[2] = -ce * static_cast<float>(std::cos(azR));
+                    if (renderer->updateEcsLights(lights.data(),
+                                                  static_cast<std::uint32_t>(lights.size()),
+                                                  static_cast<float>(ambC))) {
+                        prevAz_ = azC; prevEl_ = elC; prevAmb_ = ambC;
+                    }
+                }
+            }
+        }
         fp.cullBack = o.cullBack;
         fp.shading = 0;                              // psScene 固定 mode 0 风格着色
         fp.wireframe = o.wireframe;
@@ -4688,6 +4905,11 @@ void printUsage() {
               << "  viewer.exe --scene <file>          M-E1b.0: load an ECS scene JSON (World::serialise\n"
               << "                                     format); forces --mode scene. Objects/lights come\n"
               << "                                     from Model/Transform/Light components.\n"
+              << "  viewer.exe --preview               M-E7: preview stage (sugar flag = --mode scene\n"
+              << "                                     + assets/scenes/preview.scene.json; model params\n"
+              << "                                     via scene.* RPC, lighting via light.* cvars)\n"
+              << "  viewer.exe --preview-model <n.glb> M-E7: override the preview-model entity's mesh\n"
+              << "                                     (.glb whitelist; must exist in that scene JSON)\n"
               << "  viewer.exe --lod N                 lod mode: start at layer N (default 0); the\n"
               << "                                     HUD slider switches layers at runtime\n"
               << "  viewer.exe --dag-group N           dag-top mode: drill into group N of the\n"
@@ -4764,6 +4986,20 @@ int main(int argc, char** argv) {
     initRenderDocCapture();   // M-TR2：拾取 RenderDoc in-app API（无 RenderDoc 时 no-op）
     if (o.selftest) return runSelfTest();
     if (o.help) { printUsage(); return 0; }
+    // M-E7：--preview 生效逻辑（parseViewMode 前）。糖旗标 = mode scene + 内建
+    // 预览场景 JSON；用户显式给的 --mode/--scene 优先（只补缺省，不覆盖）。
+    if (o.preview) {
+        if (o.modeText == "normal") o.modeText = "scene";
+        if (o.scenePath.empty())
+            o.scenePath = "assets/scenes/preview.scene.json";
+        // 起手取景钉模型近景：scene 模式自动取景吃 scene 联合球（含 ParkingLot
+        // 大 bbox → dist 数百），预览观感烂。缺省 dist=6（用户显式 --dist 优先）。
+        if (!o.distSet) { o.distance = 6.0f; o.distSet = true; }
+        nl::core::log::infoCh("viewer", std::string("preview scene: ") + o.scenePath
+                            + (o.previewModel.empty()
+                                   ? std::string()
+                                   : std::string(" (model override: ") + o.previewModel + ")"));
+    }
     if (!nl::core::parseViewMode(o.modeText.c_str(), o.mode)) {
         std::cerr << "unknown --mode '" << o.modeText << "'. available: ";
         for (int i = 0; i < nl::core::modeCount(); ++i) {

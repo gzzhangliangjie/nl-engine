@@ -568,6 +568,15 @@ public:
     // renderFrame 之前调用：World tick（serial/parallel）→ 收集矩阵 → 这里上传。
     bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount);
 
+    // M-E7（Q-E7-1 用户拍板 A）：灯缓冲按需更新（light.* cvar 反射层 → 预览
+    // 光照面板实时生效）。与 updateEcsObjects 严格同构的数据缓冲更新：单 upload
+    // 命令列表 writeBuffer，不建/不改任何管线、BindingSet、Buffer；lightCount
+    // 必须与 loadEcsScene 一致。阴影灯方向变化不重算 shadowViewProj_（阴影调参
+    // 不在本接口范围）；灯缓冲 permanent 位扩为 ShaderResource|CopyDest（见
+    // initScene 注释），写路径免 barrier。viewer 在 renderFrame 之前调用。
+    bool updateEcsLights(const SceneLightDesc* lights, std::uint32_t lightCount,
+                         float ambient);
+
     // M-PT1：.nfx v1 加载端（viewer --nfx <path>）。转发 backend 的
     // scene_.loadParticlesNfx：解析 NFX1 JSON → 折进粒子模拟参数面。运行时
     // 零 Effekseer 依赖。失败返回 false（lastError() 带原因），legacy 喷泉不受影响。

@@ -98,6 +98,24 @@ editor_bridge/                 # 引擎侧 bridge（新增，不碰既有 render
 
 ## 8. 进度台账
 
+### 2026-11-14 — M-E7 模型预览 + cvar 反射通道落地（feat/editor worktree）
+
+**落码六件套**（9 文件改 + 2 新增，461 行）：
+1. `assets/scenes/preview.scene.json`（新增）——预览小场景：Suzanne 主体（y=0.2）+ ParkingLot 地面（y=-1.2）+ ambient 0.28；
+2. viewer `--preview` / `--preview-model <glb名>` 糖旗标——mode scene + 专用场景 JSON；`--preview-model` 在 World 反序列化后按实体名 `preview-model` 覆写 meshFile（坏名 exit 2）；
+3. `light.sunAzimuth / light.sunElevation / light.ambient` 三 cvar（Console::registerFloat + setOnChanged dirty 语义；JSON 有灯时 az/el 覆写仅当 cvar 被显式改过——零回归设计：未调光 `applyLightCvars` 原值透传）；
+4. RPC：`engine.cvar.list/get/set`（反射通道，msgpack 传输；`setFromString` 语义）+ `camera.preset` 六预设（front/back/left/right/top/iso，top 钳 OrbitCamera ±1.45 rad 上限并回读实际值）；
+5. editor 侧 `PreviewPlugin`（内建注册）：视角按钮排 + 光照滑条（RPC `engine.cvar.set` 逐帧写）；
+6. `tools/m-e7-probe.py` 三段 31 断言（场景链 / preview-model 覆写 / cvar RPC + PNG 像素差）。
+
+**renderer 触碰面（拍板 A 放行，只增不改）**：`updateEcsLights` 通道五文件纯新增（Renderer→backend 虚接口→DX12/Vulkan 转发→`Scene::updateLights` writeBuffer，与 `updateEcsObjects` 同构）；存量唯一改动 = initScene 灯缓冲 permanent 位 `ShaderResource → ShaderResource|CopyDest`（NVRHI state-tracking 校验要求 ⊇ CopyDest，免 barrier 模型不变）。根因：`psScene` ambient 消费灯缓冲 `g_lights[0].y`（loadEcsScene 一次性写死），每帧 CB `g_lightDir.w` 只有 probe/trace 链消费——cvar 覆写若不动灯缓冲对预览画面零效果。用户拍板 A（updateEcsLights）否掉 debounce 全场景重建 / 只控 ambient 两案。
+
+**验收（主树口径不适用，editor 轨道惯例 = 探针 + selftest，不进 cases.json）**：双后端 **BUILD OK**（viewer+editor 各一）+ selftest **16/16 ×2**；`m-e7-probe.py` **31/31 全绿**（DX12，RPC 桥后端无关沿用 M-E5 口径）；像素实证 `light.ambient 0/0.28/999` 全图平均亮度 40.7/42.1/91.9、999 时地面 255 纯白——**cvar→灯缓冲→psScene 覆写链实锤**；证据 `out/m-e7-ambient-{default,012}.png`。回归受影响卡双后端 **26/26 bytes 全绿**（DX12: ecs-e1b 4 + p8-ecs 4 + m0.4 5；VULKAN 同 13）；冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰。RPC-SPEC §10 补 M-E7 实装表。
+
+**踩坑**：① `.gitignore` 粘连 bug（见重开段）由本里程碑 wt junction 首建暴露；② msgpack_min 字符串 API 是 `isStr()/asStr()` 不是 `isString()/asString()`（31 错主因）；③ lambda 按 `[&]` 缺捕获补齐；④ **PNG 字节大小与画面亮度反相关**（过曝大片纯白压缩率高→文件反而小），探针曾误断言「大小必须相等」、像素实证后才定案；⑤ 新树并行双构建撞 mspdbsrv（C1090 PDB API 0x6BA RPC 不可用），串行重跑即过；⑥ showcase 独立 exe（`build/showcase/s0-model/`）新树不存在，m0.4 回归 FAIL 属环境错非回归，`rebuild.py --tags s0-model` 补建后 5/5 秒过。
+
+**遗留**：editor 侧 PreviewPlugin GUI 观感（滑条手感/视角按钮布局）待用户目测；M-E8 场景树增强（层级树 + sceneChanged 推送 + M-SC10 描述表接驳）待 M-SC10 落码。
+
 ### 2026-11-14 — 轨道重开拍板（M-E7/M-E8 立项，§7.1b）
 
 **背景**：用户提出两个新工具需求——① 模型预览工具（对接外接编辑器、模型放预设小场景、多方位无死角预览、模型参数与光照参数设置）；② 场景树预览工具（对接外接编辑器、看到场景全部对象、实时获取与调整参数）。补充约定：**参数设置尽量走反射胶水层，不另外做一套**。

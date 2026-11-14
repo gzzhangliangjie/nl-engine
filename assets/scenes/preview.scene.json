@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "nextID": 3,
+  "ambient": 0.28,
+  "entities": [
+    {
+      "id": 1,
+      "name": "preview-model",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [0.0, 0.2, 0.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "Suzanne.glb",
+          "tint": [1.0, 1.0, 1.0],
+          "roughness": 0.35,
+          "metallic": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "preview-ground",
+      "flags": 0,
+      "parent": 0,
+      "components": {
+        "Transform": {
+          "position": [0.0, -1.2, 0.0],
+          "scale": [1.0, 1.0, 1.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        },
+        "Model": {
+          "mesh": "ParkingLot.glb",
+          "tint": [0.75, 0.75, 0.78]
+        }
+      }
+    }
+  ],
+  "systems": []
+}

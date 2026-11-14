@@ -205,6 +205,17 @@
 
 > `editor.views` / `editor.pingView` / `editor.callView` 由 `editor/main.cpp` 注册在 host 上，供探针与插件查询/定向调用；引擎侧 handler 集合（`engine.echo` / `camera.*` / `scene.*`）M-E6 零改动。
 
+### M-E7 实装（模型预览 + cvar 反射通道）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `camera.preset` | 编辑器→引擎 | `{name:str}`：`front`(yaw0,pitch0) / `back`(180) / `left`(90) / `right`(-90) / `top`(pitch→83.0789 clamp) / `iso`(45, 35.264) | `{name,yaw,pitch,dist}`（回读实际值；`top` pitch 钳到 OrbitCamera 上限 ±1.45 rad）；未知 preset error 101 |
+| `engine.cvar.list` | 编辑器→引擎 | `{prefix?:str}` | `[{name,type,value,help}]`（Console 全量 cvar 按 prefix 过滤） |
+| `engine.cvar.get` | 编辑器→引擎 | `{name:str}` | `{name,type,value,help}`；未知 cvar error 100 |
+| `engine.cvar.set` | 编辑器→引擎 | `{name:str, value:str}`（`setFromString` 语义） | 更新后的 `{name,type,value,help}`；未知 cvar error 100、类型拒绝 error 101 |
+
+> **参数通道口径（拍板）**：`engine.cvar.*` 是反射胶水层的 RPC 面——引擎原生参数注册成 cvar（M-E7 落了 `light.sunAzimuth/sunElevation/ambient` 三个），脚本组件字段后续走 M-SC10 `[Prop]` 描述表；RPC 只做传输，不再手写每参数 handler（M-E5 的 `scene.setMaterial` 保留为既有面）。
+> **CLI 旗标（viewer）**：`--preview` = mode scene + `assets/scenes/preview.scene.json`（用户显式 `--mode`/`--scene` 优先）；`--preview-model <glb名>` = 预览场景 JSON 反序列化后按实体名 `preview-model` 覆写 meshFile（坏名 exit 2）。
+
 ---
 
 ## 11. C++ 引擎侧接口契约（`editor_bridge`，vendored、零运行时依赖）

@@ -76,6 +76,11 @@ public:
     virtual bool updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t objectCount,
                                   std::string& outError) = 0;
 
+    // M-E7（Q-E7-1 拍板 A）：灯缓冲按需更新（light.* cvar → 预览光照实时）。
+    // 与 updateEcsObjects 同构：单 upload 列表 writeBuffer，不改管线/拓扑。
+    virtual bool updateEcsLights(const SceneLightDesc* lights, std::uint32_t lightCount,
+                                 float ambient, std::string& outError) = 0;
+
     // M-PT1：.nfx v1 加载端（viewer --nfx）。转发 scene_.loadParticlesNfx，
     // 成功后模拟走 nfx 参数面（fp.particles 仍由 viewer 控制）。
     virtual bool loadParticlesNfx(const char* path, std::string& outError) = 0;

@@ -3,6 +3,8 @@
 #include <imgui.h>
 #include <windows.h>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <string_view>
 
 namespace nl::editor::ui {
@@ -451,11 +453,108 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> p) {
     plugins_.push_back(std::move(p));
 }
 
+// M-E7：模型预览插件——预设视角一键切换 + 光照参数面板（走 engine.cvar.* 反射
+// 层，拍板「参数设置走 CVar + 描述表，不另做一套」；编辑器侧不再逐参数手写 RPC）。
+class PreviewPlugin : public Plugin {
+public:
+    const char* name() const override { return "Preview"; }
+    void draw(RpcHost* host) override {
+        if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
+        if (ImGui::Button("Refresh")) refresh(host);
+        ImGui::SameLine();
+        if (have_) {
+            ImGui::Text("az %.1f  el %.1f  ambient %.2f", az_, el_, amb_);
+        } else {
+            ImGui::TextDisabled("light.* cvars: not fetched (engine offline?)");
+        }
+
+        // ---- 预设视角（多方位无死角；dist 由 Camera 面板滑条独立控）----
+        ImGui::Separator();
+        if (ImGui::Button("Front"))  preset(host, "front");
+        ImGui::SameLine();
+        if (ImGui::Button("Back"))   preset(host, "back");
+        ImGui::SameLine();
+        if (ImGui::Button("Left"))   preset(host, "left");
+        ImGui::SameLine();
+        if (ImGui::Button("Right"))  preset(host, "right");
+        if (ImGui::Button("Top"))    preset(host, "top");
+        ImGui::SameLine();
+        if (ImGui::Button("Iso"))    preset(host, "iso");
+        ImGui::SameLine();
+        ImGui::TextDisabled("yaw0=+Z front; iso=45/35.264");
+
+        // ---- 光照参数（light.* cvar 经 engine.cvar.set）----
+        ImGui::Separator();
+        if (have_) {
+            float v = az_;
+            if (ImGui::SliderFloat("Sun Azimuth", &v, 0.0f, 360.0f, "%.1f deg")) setLight(host, "light.sunAzimuth", v, az_);
+            v = el_;
+            if (ImGui::SliderFloat("Sun Elevation", &v, -89.0f, 89.0f, "%.1f deg")) setLight(host, "light.sunElevation", v, el_);
+            v = amb_;
+            if (ImGui::SliderFloat("Ambient", &v, 0.0f, 1.0f, "%.2f")) setLight(host, "light.ambient", v, amb_);
+        } else {
+            ImGui::TextDisabled("sliders enabled after Refresh");
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("params go through engine.cvar.* (reflection layer, no per-param RPC)");
+    }
+
+private:
+    void preset(RpcHost* host, const char* n) {
+        msgpack::Map m; m["name"] = std::string(n);
+        auto r = callQuick(host, "camera.preset", RpcValue(std::move(m)));
+        if (std::holds_alternative<RpcError>(r)) logErr(r, "camera.preset");
+    }
+
+    // cvar 现值拉取（list prefix=light.，一次往返拿全三个）
+    void refresh(RpcHost* host) {
+        msgpack::Map m; m["prefix"] = std::string("light.");
+        auto r = callQuick(host, "engine.cvar.list", RpcValue(std::move(m)));
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "engine.cvar.list"); have_ = false; return; }
+        const auto& v = std::get<RpcValue>(r);
+        if (!v.isArray()) { have_ = false; return; }
+        for (const auto& item : v.asArray()) {
+            if (!item.isMap()) continue;
+            const auto& mm = item.asMap();
+            auto nameIt = mm.find("name");
+            auto valIt  = mm.find("value");
+            if (nameIt == mm.end() || valIt == mm.end() || !valIt->second.isStr()) continue;
+            const std::string val = valIt->second.asStr();
+            const std::string& n = nameIt->second.asStr();
+            if      (n == "light.sunAzimuth")   az_  = (float)std::atof(val.c_str());
+            else if (n == "light.sunElevation") el_  = (float)std::atof(val.c_str());
+            else if (n == "light.ambient")      amb_ = (float)std::atof(val.c_str());
+        }
+        have_ = true;
+    }
+
+    void setLight(RpcHost* host, const char* cvarName, float val, float& out) {
+        msgpack::Map m;
+        m["name"]  = std::string(cvarName);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4g", (double)val);
+        m["value"] = std::string(buf);
+        auto r = callQuick(host, "engine.cvar.set", RpcValue(std::move(m)));
+        if (std::holds_alternative<RpcError>(r)) { logErr(r, "engine.cvar.set"); return; }
+        out = val;   // 引擎侧 setFromString 无 clamp（滑条已限范围），本地即权威
+    }
+
+    static void logErr(const RpcResult& r, const char* what) {
+        if (!std::holds_alternative<RpcError>(r)) return;
+        const auto& e = std::get<RpcError>(r);
+        ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
+    }
+
+    bool  have_ = false;
+    float az_ = 42.0f, el_ = 49.9f, amb_ = 0.28f;
+};
+
 void PluginManager::discover() {
-    // M-E3/M-E4d/M-E5 内建插件；DLL 动态加载走 discoverDlls()。
+    // M-E3/M-E4d/M-E5/M-E7 内建插件；DLL 动态加载走 discoverDlls()。
     registerPlugin(std::make_unique<CameraPlugin>());
     registerPlugin(std::make_unique<SceneOutlinerPlugin>());
     registerPlugin(std::make_unique<MaterialInspectorPlugin>());
+    registerPlugin(std::make_unique<PreviewPlugin>());
 }
 
 // M-E5：plugins/ 目录 DLL 动态扫描。exe 同目录 plugins/*.dll，C ABI 校验

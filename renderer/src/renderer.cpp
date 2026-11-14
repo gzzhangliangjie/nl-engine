@@ -336,6 +336,18 @@ bool Renderer::updateEcsObjects(const SceneObjectDesc* objects, std::uint32_t ob
     return true;
 }
 
+// M-E7（Q-E7-1 拍板 A）：转发 backend 的 updateEcsLights（灯缓冲按需更新）。
+bool Renderer::updateEcsLights(const SceneLightDesc* lights, std::uint32_t lightCount,
+                               float ambient) {
+    if (!impl_->backend) return false;
+    std::string err;
+    if (!impl_->backend->updateEcsLights(lights, lightCount, ambient, err)) {
+        impl_->error = err;
+        return false;
+    }
+    return true;
+}
+
 // M-PT1：.nfx v1 加载端。转发 backend 的 scene_.loadParticlesNfx（NFX1 JSON →
 // 粒子模拟参数面，运行时零 Effekseer 依赖）。失败原因进 lastError()。
 bool Renderer::loadParticlesNfx(const char* path) {
