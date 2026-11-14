@@ -2911,6 +2911,23 @@
 
 **下一步**：editor 轨道 M-E0~M-E8 全部收官；候选后续 = 场景树编辑操作（reparent/改名/增删 RPC）+ M-SC10 描述表接驳 + 嵌入视口截图基建（均未排期）；整轨 merge 回 master 待用户指令。
 
+## editor轨道 M-E9+M-E10：场景树编辑 + 对象级参数泛化面（feat/editor，2026-11-14，tags `e-m9-done`+`e-m10-done`）
+
+**动作**：wt_pool claim（track editor / M-E9，2026-11-14 用户拍板遗留 ②场景树编辑 + ③对象级泛化面 同轮开工）→ **前置 = feat/editor merge 新 master**（`26bc979` 零冲突，吸收 script 整轨 M-SC7 帧边界重建/M-SC10 Prop 反射 + water 整轨；scriptapi 新鲜度闸触发跑 gen.py，生成物零漂移）→ 落码（`93ba660`，7 files +965/-16）：①编辑 RPC 五件套 `scene.rename/setParent/reparent/addEntity/removeEntity`（bindSceneEdit 仅 scene 模式；flush 即时落表；环防护 = World assert 的 RPC 化 error 101；addEntity 白名单 + **NL_ASSET_DIR 存在性双校验**）；②渲染传导 = M-SC7 签名块移出 ticking 扩灯集（灯签名从 World 现算；rebuild 补灯重收集 + preview key 重注入 + 重建后实例当帧上屏）；③`scene.getProps/setProp` 显式描述表（M-SC10 PropAttribute 同构：name/type/Range 注册、Default=现值快照、显式分发；写回三路 = Transform→objects[i].world 直刷 / Model 材质→objects[i] 直刷 / Light→lights[i] 重算 + updateEcsLights 单 upload；meshFile→集合签名重建）；④指纹扩 Transform/Light 全字段；⑤编辑器 outliner 编辑 UI + `PropertyPanelPlugin` 描述表驱动泛化面板 + 首拉自动选中首个根节点（`g_sceneSelEntity` 共享态，匿名 namespace 外定义）；⑥`m-e9-probe.py` 32 断言 + `m-e10-probe.py` 断言 + `m-e9-gui-shot.py`。RPC-SPEC §10 补 M-E9/M-E10 实装表。
+
+**提交版本**：feat/editor commit `93ba660`（落码）+ 台账 commit（本轮）。完整产物/踩坑台账 = `docs/editor/EDITOR-PLAN.md` §8 M-E9+M-E10 段（editor 轨道权威台账）。
+
+**完成情况**：双后端 **BUILD OK**（DX12 selftest 16/16）；`m-e9-probe.py` **32/32 全绿**（rename/add 三 kind/reparent 环防护/remove/getMaterials 集合联动/model 模式负向）；`m-e10-probe.py` **全绿**（描述表结构/全类型 setProp/getState.pos 渲染表直读/负向九连：未知 prop·组件 100、类型不符·点光 range·点光 shadow·meshFile 白名单 101）；M-E8 探针复验 **19/19** + M-E7 探针复验 **31/31**（既有面保形）；GUI 目击证据 `out/m-e9-editor-editui.png`（edit selected 全控件 + Properties 描述表驱动属性行实锤）。冻结面 `shader/` `example/` `cases.json` `kStage` 零触碰（editor 轨道惯例探针验收，不进 cases.json）。
+
+**踩坑情况**
+1. **⚠️ 白名单格式校验 ≠ 文件存在（script 轨教训第三犯）**：evil.glb 过 validGlbAssetName（只管文件名格式）→ 坏实体 rebuild → loadEcsScene 失败 → **渲染循环退出**（probe ConnectionReset 实锤）→ addEntity/setProp meshFile 补存在性校验 error 101。**教训：涉及运行期资源加载的编辑入口，格式校验后必须存在性校验，否则坏数据把渲染循环拖死。**
+2. **灯签名误用 lightIds 当签名源**：lightIds 只在 rebuild 更新 → computeLightIdsSig() != 空 lightIdsSig 每帧真 → 每次启动误重建一次；改从 World 现算 + 初值对齐。
+3. **msgpack negative fixint**：idx=-1 编码 0xE0|n（0xFF），探针解码器缺 `o >= 0xE0: return o - 256` 支路 → ValueError 0xff。
+4. **沙箱桌面会话合成点击不可靠**：窗口 rect 正常（restore 后 (0,0,1680,1050)）、坐标正确（PrintWindow/GetWindowRect 同为窗口原点坐标系——用 ClientToScreen 当基点会多加 7px 边框 + 30px 标题栏，首三拍全偏）但 ImGui 无响应；GLFW 窗常以最小化态出现（GetWindowRect = -32000 系，PrintWindow 仍能抓到完整内容极具迷惑性）→ GUI 证据改走「首拉自动选中首个根节点」确定性路径。
+5. **merge 后 scriptapi 新鲜度闸触发**：exports.api mtime 晚于 ApiTable.g.hpp → 跑 `tools/scriptapi/gen.py` 刷新（生成物与 merge 内容零漂移 = 良性）。
+
+**下一步**：editor 轨道 M-E0~M-E10 全部收官；候选后续 = 嵌入视口截图基建（BitBlt 合成）/ 编辑 undo-redo / 多选框选（均未排期待拍板）；整轨 merge 回 master 待用户指令。
+
 ## editor轨道 M-E7：模型预览 + cvar 反射通道（feat/editor，2026-11-14，tag `e-m7-done`）
 
 **动作**：wt_pool claim（track editor / M-E7，§7.1b 重开后首个里程碑）→ 开工拍板四项全拍（重开 editor 轨道 M-E7→M-E8；参数通道 = **CVar + M-SC10 描述表**零新反射系统；新建专用预览小场景；实时 = 引擎推 `editor.sceneChanged`，写回 EDITOR-PLAN §3/§8）→ 落码六件套：①`assets/scenes/preview.scene.json` 预览小场景（Suzanne 主体 + ParkingLot 地面 + ambient 0.28）；②viewer `--preview`/`--preview-model` 糖旗标（mode scene + 场景 JSON；preview-model 反序列化后按实体名覆写 meshFile，坏名 exit 2）；③`light.sunAzimuth/sunElevation/ambient` 三 cvar（registerFloat + setOnChanged dirty 语义，未调光零回归）；④RPC `engine.cvar.list/get/set`（反射通道，`setFromString` 语义）+ `camera.preset` 六预设（front/back/left/right/top/iso，top 钳 ±1.45 rad 回读实际值）；⑤editor 侧 `PreviewPlugin` 内建注册（视角按钮排 + 光照滑条走 engine.cvar.set）；⑥`tools/m-e7-probe.py` 三段 31 断言。**renderer 触碰面（用户拍板 A：updateEcsLights）**：根因 = `psScene` ambient 消费灯缓冲 `g_lights[0].y`（loadEcsScene 一次性写死），每帧 CB `g_lightDir.w` 只有 probe/trace 链消费，cvar 覆写不动灯缓冲则对预览画面零效果；方案 = `updateEcsLights` 通道五文件纯新增（Renderer→backend 虚接口→DX12/Vulkan 转发→`Scene::updateLights` writeBuffer，与 updateEcsObjects 同构），存量唯一改动 = initScene 灯缓冲 permanent 位 `ShaderResource → ShaderResource|CopyDest`（NVRHI state-tracking 要求 ⊇ CopyDest）。RPC-SPEC §10 补 M-E7 实装表。

@@ -224,6 +224,27 @@
 
 > **M-E8 行为变更（覆盖 M-E5 口径）**：`scene.setMaterial` 的 tint/rough/metal 改动**写回 World `ModelComponent`**（源头单写）——M-E5 原实现只改渲染收集表 `sceneObjects`，tick 开启时下一帧即被 World 旧值冲掉、树/指纹无感；M-E8 起写回 World，帧循环自然传导、指纹捕获、scene.getTree 同步。M-E7 探针既有 setMaterial 断言复验 0 fail。
 
+### M-E9 实装（场景树编辑操作）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.rename` | 编辑器→引擎 | `{id:u64, name:str}` | `{ok:1, id, name}`；未知实体 error 100 / 参数缺失 error 101 |
+| `scene.setParent` | 编辑器→引擎 | `{id:u64, parent:u64(0=解除)}`（纯关系，不动变换） | `{ok:1, id, parent}`；未知实体/父 error 100，parent==self / 成环 error 101（World assert 的 RPC 化） |
+| `scene.reparent` | 编辑器→引擎 | `{id:u64, parent:u64(0=解除)}`（保世界变换挂父） | 同 setParent |
+| `scene.addEntity` | 编辑器→引擎 | `{name?:str, parent?:u64, kind:"empty"\|"light"\|"model", mesh?:str, lightType?:0\|1, intensity?:f}` | `{ok:1, id, name, kind}`；model 自动挂 Transform（收集段硬要求）；meshFile 白名单 + **存在性校验**（`NL_ASSET_DIR` 下 is_regular_file，防坏实体触发 rebuild → loadEcsScene 失败 → 渲染循环退出）；校验失败 error 101；未知 kind / 点光 shadow error 101；未知父 error 100；flush 即时落表 |
+| `scene.removeEntity` | 编辑器→引擎 | `{id:u64}`（父删递归删子；flush 即时落表） | `{ok:1, id}`；未知实体 error 100 |
+| `editor.sceneChanged` | 引擎→编辑器 notify | `{}` | 指纹扩域（M-E9/M-E10）：+ Light position/range/shadow + Transform position/scale/rotation |
+
+> **M-E9 渲染传导（M-SC7 块移出 ticking 扩灯集）**：集合签名 = Model(id, meshFile) + 灯实体 id 序（从 World 现算——`lightIds` 只在 rebuild 更新不能当签名源）；**签名比对移至帧尾 ticking 块外**（tick on 语义等价：集合稳定点 = 帧尾；tick off 的 preview/scene 缺省同样每帧比对）；rebuild = 重收 modelIds/objects/lights/lightIds + preview key 重注入 + loadEcsScene（initScene 可重入）+ **重建后实例数据当帧上屏**（本块在 ticking 上传点之后执行）。灯参数变更不走重建（setProp 直写 lights[i] + updateEcsLights 单 upload）。
+> **编辑 handler 仅 scene 模式注册**（bindSceneEdit；model 模式 = method not found error 100）。
+
+### M-E10 实装（对象级参数泛化面）
+| 方法 | 方向 | 参数 | 返回 |
+|---|---|---|---|
+| `scene.getProps` | 编辑器→引擎 | `{id:u64}` | `{id, name, props:[{component:"Transform"\|"Model"\|"Light", name:str, type:"float"\|"vec3"\|"color"\|"quat"\|"int"\|"bool"\|"string", value, min?, max?}]}`（显式描述表遍历；M-SC10 PropAttribute 同构口径：name/type/Range 显式注册，Default 不注册 = 现值快照）；未知实体 error 100 |
+| `scene.setProp` | 编辑器→引擎 | `{id:u64, component:str, name:str, value}`（显式分发，反射胶水层终点——RPC 只传输） | `{ok:1, id, component, name}`；写回 World 源头单写 + 渲染直写：Transform → objects[i].world 直刷；Model 材质 → objects[i] 三字段直刷；Light → lights[i] 重算 + updateEcsLights 单 upload；meshFile → 集合签名重建。未知 prop/组件 error 100，类型不符 / 点光 range≤0 / 点光 shadow / meshFile 白名单或不存在 error 101（点光约束写前拒绝不留半态） |
+
+> **M-E10 描述表现量**（新增组件字段 = 引擎侧表加一行，面板零改动）：Transform.position/scale(vec3)/rotation(quat)、Model.meshFile(string)/tint(color)/roughness/metallic(float 0..1)、Light.type(int 0..1)/direction(vec3)/color(color)/intensity(float 0..20)/position(vec3)/range(float 0.1..100)/shadow(bool)。编辑器侧 `PropertyPanelPlugin`（Properties 面板）按 type 渲染通用控件；`SceneOutlinerPlugin` 首次拉取自动选中首个根节点（`g_sceneSelEntity` 共享选中态，离断桌面会话合成点击不可靠 → 面板证据走确定性路径）。
+
 ---
 
 ## 11. C++ 引擎侧接口契约（`editor_bridge`，vendored、零运行时依赖）
