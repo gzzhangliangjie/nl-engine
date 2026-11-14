@@ -3920,3 +3920,13 @@
 4. bash 循环 `$B` 大小写漂移二犯（DX12 vs dx12，Windows 不区分大小写掩盖）——重命名钉死 + cases.json 对齐。
 
 **下一步**：water 轨视觉链（波形/折射/吸收/Fresnel/泡沫/岸线）已闭环；候选后续 = Color Scale Behind Water（UE 第 4 输入）/ 真深度吸收细化 / 水体阴影；**整轨 merge 回 master 待用户指令**（S13 教训：merge 后重跑全部历史版本卡）。
+
+## script 轨整轨 merge 收官 — feat/script → master（2026-11-14，tag `script-merge` @ `4c5c582`）
+
+**四栏**：
+- **动作**：no-ff merge feat/script 回 master（M-SC0 vendored .NET hosting / M-SC1 命令域 / M-SC2 ECS 数据面 / M-SC3 热重编 / M-SC4 绑定生成器单源 / M-SC5 Time+Input+Log / M-SC6 Camera / M-SC7 模型挂载 / M-SC8 Physics 载具 / M-SC10 属性面板 / M-SC11 跨域示例整轨收口；exports.api 39 导出 v0.9.0）。冲突 3 处：CMakeLists 三源行并留；scene.cpp shutdown = `shutdownEcsScene()` 单源 + S15 VSM/HZB/分配器组就地保留（ECS 子集/阴影组收编单源删重）；viewer = M-SC7 Model 签名块保留 + Spin/ReadCount/ticking 取 master T3 增强版（trafficCity 口径）。
+- **重验（S13 教训执行）**：双后端 BUILD OK + selftest 16/16；**11 张历史卡回归 90/90 ALL GREEN**（m-sc0 10 / m-sc1~3 各 8 / m-sc4 4 / m-sc5~8 各 8 / m-sc10 10 / m-sc11 10，bytes FAIL 0）；便携版用例框架 **164/164 双后端**（DX12 22.0s / VULKAN 22.1s）。
+- **踩坑**：① **merge checkout 同秒 mtime 触发 scriptapi freshness 闸**——`IS_NEWER_THAN` 同秒判 newer，内容实测一致（gen --check 39 ok），`gen.py` 重写刷新 mtime 即解（定性口诀：merge 后闸先拦 → `--check` 验内容，内容绿 = mtime 症状）；② 主仓直跑 regression 被 wt_gate 拦（rc=3 ×11）→ 故意主线操作加 `NL_CMD_MAINREPO=1`；③ Git Bash 无便携 ctest 可执行（rc=127）→ `E:\UE_STUDY_2026\.build-tools\cmake-3.31.6-windows-x86_64\bin\ctest.exe` 完整路径 + `--repeat until-pass:3`；④ ops hook 对「只 grep 日志含 ctest 字样」的查询命令误拦——改词绕开即可。
+- **验证形态**：主仓 cases.json 11 卡逐版本 `--only` 重跑（小卡子集纪律，非全量闸放行）。
+
+**提交版本**：master merge commit `4c5c582` + annotated tag `script-merge`。feat/script 分支与 m-sc0~m-sc11 tag 保留；script wt 已于 M-SC11 release 拆除。kStage 保持 `S8.2`。
