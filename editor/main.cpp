@@ -79,6 +79,9 @@ std::string capsSummary(const RpcValue& caps) {
 // extern 是全局外部链接；落进匿名 namespace = 内部链接双实体 = C2872 不明确符号）。
 std::atomic<bool> g_sceneTreeDirty{false};
 
+// M-E9/M-E10：outliner 选中实体（同 g_sceneTreeDirty 链接口径；-1 = 无选中）。
+std::atomic<long long> g_sceneSelEntity{-1};
+
 static void glfwErrCb(int code, const char* msg) {
     fprintf(stderr, "[glfw] %d: %s\n", code, msg ? msg : "(null)");
 }

@@ -2,6 +2,7 @@
 #include "plugin.hpp"
 #include <imgui.h>
 #include <windows.h>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -161,8 +162,12 @@ public:
         for (int ri : roots_) drawNode(host, ri);
         ImGui::EndChild();
         if (!focused_.empty()) ImGui::Text("focused: %s", focused_.c_str());
+
+        // ---- M-E9：树编辑操作（选中节点；Properties 泛化面板消费同源 id）----
+        drawEditUi(host);
+
         ImGui::Separator();
-        ImGui::TextDisabled("click a [model] node -> scene.focus; tree auto-refreshes on engine notify");
+        ImGui::TextDisabled("click node -> select/focus; edits call scene.* RPCs; tree auto-refreshes on engine notify");
     }
 
 private:
@@ -195,7 +200,10 @@ private:
         } else {
             ImGui::TextDisabled("[empty]");
         }
-        if (clicked && n.idx >= 0) focus(host, (int)n.idx);
+        if (clicked) {
+            g_sceneSelEntity.store(static_cast<long long>(n.id));   // M-E9：任意节点可选中
+            if (n.idx >= 0) focus(host, (int)n.idx);
+        }
         if (open) {
             for (int ci : n.children) drawNode(host, ci);
             ImGui::TreePop();
@@ -258,6 +266,10 @@ private:
         }
         haveTree_ = true;
         lastRefresh_ = ImGui::GetTime();
+        // M-E9/M-E10：首次拉取自动选中首个根节点（ Properties 泛化面板随选随显；
+        // 免点击路径——离断桌面会话的合成点击不可靠，GUI 目击证据需确定性选中）。
+        if (mode_ == "scene" && !roots_.empty() && g_sceneSelEntity.load() < 0)
+            g_sceneSelEntity.store(nodes_[roots_.front()].id);
     }
 
     void focus(RpcHost* host, int i) {
@@ -282,6 +294,100 @@ private:
         ImGui::Text("[scene.focus] error %d: %s", e.code, e.message.c_str());
     }
 
+    // ---- M-E9：树编辑 UI（rename/reparent/delete/add child，全部经 scene.* RPC）----
+    // 选中态 = g_sceneSelEntity（引擎 EntityID）；操作结果进 statusMsg_ 单行。
+    const Node* findNodeById(long long id) const {
+        for (const auto& n : nodes_) if (n.id == id) return &n;
+        return nullptr;
+    }
+    void rpcCall(RpcHost* host, const char* method, msgpack::Map p, const char* okMsg) {
+        auto r = callQuick(host, method, RpcValue(std::move(p)));
+        if (std::holds_alternative<RpcError>(r)) {
+            const auto& e = std::get<RpcError>(r);
+            statusMsg_ = std::string("[") + method + "] error " + std::to_string(e.code) + ": " + e.message;
+        } else {
+            statusMsg_ = okMsg;
+        }
+    }
+    void drawEditUi(RpcHost* host) {
+        ImGui::Separator();
+        const long long selId = g_sceneSelEntity.load();
+        const Node* sel = (selId > 0) ? findNodeById(selId) : nullptr;
+        if (ImGui::CollapsingHeader("edit selected", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (!sel) {
+                ImGui::TextDisabled("(click a node above to select)");
+            } else {
+                ImGui::Text("selected: %s (#%lld, %s)", sel->name.c_str(), sel->id, sel->kind.c_str());
+                // rename
+                ImGui::SetNextItemWidth(140);
+                bool renApply = ImGui::InputText("##rename", renameBuf_, sizeof(renameBuf_),
+                                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                renApply = ImGui::Button("Rename") || renApply;
+                if (renApply && renameBuf_[0]) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    p["name"] = std::string(renameBuf_);
+                    rpcCall(host, "scene.rename", std::move(p), "renamed");
+                }
+                // reparent（父选择 = (none) + 全节点，除自身）
+                ImGui::SetNextItemWidth(160);
+                const char* cur = parentSel_ < 0 ? "(none)" : parentLabel_.c_str();
+                if (ImGui::BeginCombo("##parent", cur)) {
+                    if (ImGui::Selectable("(none)", parentSel_ < 0)) { parentSel_ = -1; parentLabel_ = "(none)"; }
+                    for (int i = 0; i < (int)nodes_.size(); ++i) {
+                        if (nodes_[i].id == selId) continue;
+                        if (ImGui::Selectable(nodes_[i].name.c_str(), parentSel_ == i)) {
+                            parentSel_ = i;
+                            parentLabel_ = nodes_[i].name;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Reparent")) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    p["parent"] = parentSel_ >= 0 ? nodes_[parentSel_].id : (std::int64_t)0;
+                    rpcCall(host, "scene.reparent", std::move(p), "reparented");
+                }
+                if (ImGui::Button("Delete")) {
+                    msgpack::Map p;
+                    p["id"] = selId;
+                    rpcCall(host, "scene.removeEntity", std::move(p), "removed");
+                    g_sceneSelEntity.store(-1);
+                    renameBuf_[0] = 0;
+                }
+            }
+            // add child（空/灯/模型；model 需 mesh 名，引擎侧白名单把关）
+            ImGui::SeparatorText("add entity");
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputText("##addname", addNameBuf_, sizeof(addNameBuf_));
+            ImGui::SetNextItemWidth(90);
+            ImGui::Combo("##addkind", &addKind_, "empty\0light\0model\0");
+            if (addKind_ == 2) {
+                ImGui::SetNextItemWidth(140);
+                ImGui::InputText("##addmesh", addMeshBuf_, sizeof(addMeshBuf_));
+            }
+            if (addKind_ == 1) {
+                ImGui::SetNextItemWidth(90);
+                ImGui::Combo("##addltype", &addLightType_, "directional\0point\0");
+            }
+            ImGui::SameLine(0, 12.0f);
+            if (ImGui::Button("Add")) {
+                msgpack::Map p;
+                if (addNameBuf_[0]) p["name"] = std::string(addNameBuf_);
+                if (sel) p["parent"] = selId;
+                p["kind"] = addKind_ == 1 ? std::string("light")
+                          : addKind_ == 2 ? std::string("model") : std::string("empty");
+                if (addKind_ == 2 && addMeshBuf_[0]) p["mesh"] = std::string(addMeshBuf_);
+                if (addKind_ == 1) p["lightType"] = (std::int64_t)addLightType_;
+                rpcCall(host, "scene.addEntity", std::move(p), "added");
+            }
+        }
+        if (!statusMsg_.empty()) ImGui::TextDisabled("%s", statusMsg_.c_str());
+    }
+
     static void logErr(const RpcResult& r, const char* what) {
         if (!std::holds_alternative<RpcError>(r)) return;
         const auto& e = std::get<RpcError>(r);
@@ -296,6 +402,15 @@ private:
     std::string mode_ = "?";
     std::string focused_;
     int focusedIdx_ = -1;
+    // M-E9：树编辑 UI 状态
+    char renameBuf_[64] = "";
+    int  parentSel_ = -1;           // nodes_ 下标；-1 = (none)
+    std::string parentLabel_ = "(none)";
+    char addNameBuf_[64] = "";
+    char addMeshBuf_[64] = "";
+    int  addKind_ = 0;              // 0=empty 1=light 2=model
+    int  addLightType_ = 0;
+    std::string statusMsg_;
 };
 
 // M-E5：材质检查插件——scene.getMaterials 读实例材质字段（scene 模式）或
@@ -606,12 +721,201 @@ private:
     float az_ = 42.0f, el_ = 49.9f, amb_ = 0.28f;
 };
 
+// M-E10：对象级参数泛化面板——选中实体（g_sceneSelEntity）→ scene.getProps 拉
+// 显式描述表（M-SC10 PropAttribute 同构口径：name/type/Range，Default = 现值
+// 快照）→ 按类型渲染通用控件 → scene.setProp 写回（反射胶水层终点，RPC 只
+// 传输）。新增组件字段 = 引擎侧描述表加一行，本面板零改动（泛化面核心判据）。
+class PropertyPanelPlugin : public Plugin {
+public:
+    const char* name() const override { return "Properties"; }
+    void draw(RpcHost* host) override {
+        if (!host) { ImGui::TextDisabled("(no rpc host)"); return; }
+        const long long selId = g_sceneSelEntity.load();
+        if (selId != loadedId_) {
+            loadedId_ = selId;
+            refresh(host);
+        }
+        if (loadedId_ <= 0) {
+            ImGui::TextDisabled("(select an entity in Scene Outliner)");
+            return;
+        }
+        if (!haveProps_) {
+            ImGui::TextDisabled("(no props / fetch failed)");
+            return;
+        }
+        ImGui::Text("entity #%lld: %s", loadedId_, entName_.c_str());
+        ImGui::Separator();
+        for (std::size_t k = 0; k < props_.size(); ++k) {
+            Prop& pr = props_[k];
+            char label[96];
+            snprintf(label, sizeof label, "%s.%s", pr.component.c_str(), pr.name.c_str());
+            if (pr.type == "float") {
+                bool ch = pr.hasRange
+                    ? ImGui::SliderFloat(label, &pr.v[0], pr.mn, pr.mx, "%.3f")
+                    : ImGui::DragFloat(label, &pr.v[0], 0.05f);
+                if (ch) sendScalar(host, k, (double)pr.v[0]);
+            } else if (pr.type == "int") {
+                int iv = (int)pr.iv;
+                if (ImGui::SliderInt(label, &iv, (int)pr.mn, (int)pr.mx)) {
+                    pr.iv = iv;
+                    sendScalar(host, k, (double)iv);
+                }
+            } else if (pr.type == "bool") {
+                bool b = pr.iv != 0;
+                if (ImGui::Checkbox(label, &b)) {
+                    pr.iv = b ? 1 : 0;
+                    msgpack::Map p;
+                    p["id"] = loadedId_;
+                    p["component"] = pr.component;
+                    p["name"] = pr.name;
+                    p["value"] = b;
+                    rpcSet(host, std::move(p), label);
+                }
+            } else if (pr.type == "vec3") {
+                if (ImGui::DragFloat3(label, pr.v, 0.05f))
+                    sendVec(host, k, pr.v, 3);
+            } else if (pr.type == "color") {
+                if (ImGui::ColorEdit3(label, pr.v, ImGuiColorEditFlags_NoInputs))
+                    sendVec(host, k, pr.v, 3);
+            } else if (pr.type == "quat") {
+                if (ImGui::DragFloat4(label, pr.v, 0.01f))
+                    sendVec(host, k, pr.v, 4);
+            } else if (pr.type == "string") {
+                if (ImGui::InputText(label, pr.buf.data(), pr.buf.size(),
+                                     ImGuiInputTextFlags_EnterReturnsTrue))
+                    sendString(host, k, pr.buf.data());
+            } else {
+                ImGui::TextDisabled("%s: unknown type %s", label, pr.type.c_str());
+            }
+        }
+        if (!statusMsg_.empty()) ImGui::TextDisabled("%s", statusMsg_.c_str());
+    }
+
+private:
+    struct Prop {
+        std::string component, name, type;
+        bool hasRange = false;
+        float mn = 0.0f, mx = 1.0f;
+        float v[4] = {};                 // float/vec3/color/quat
+        std::int64_t iv = 0;             // int/bool
+        std::array<char, 128> buf{};     // string（定长省堆）
+    };
+
+    void refresh(RpcHost* host) {
+        haveProps_ = false;
+        props_.clear();
+        statusMsg_.clear();
+        entName_.clear();
+        if (loadedId_ <= 0) return;
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        auto r = callQuick(host, "scene.getProps", RpcValue(std::move(p)));
+        if (!std::holds_alternative<RpcValue>(r)) { logErr(r, "scene.getProps"); return; }
+        const auto& v = std::get<RpcValue>(r);
+        if (!v.isMap()) return;
+        const auto& m = v.asMap();
+        auto itName = m.find("name");
+        if (itName != m.end() && itName->second.isStr()) entName_ = itName->second.asStr();
+        auto itProps = m.find("props");
+        if (itProps == m.end() || !itProps->second.isArray()) return;
+        for (const auto& o : itProps->second.asArray()) {
+            if (!o.isMap()) continue;
+            const auto& om = o.asMap();
+            Prop pr;
+            auto getStr = [&](const char* k, std::string& dst) {
+                auto it = om.find(k);
+                if (it != om.end() && it->second.isStr()) dst = it->second.asStr();
+            };
+            getStr("component", pr.component);
+            getStr("name", pr.name);
+            getStr("type", pr.type);
+            auto getF = [&](const char* k) -> double {
+                auto it = om.find(k);
+                if (it == om.end()) return 0.0;
+                if (it->second.isDouble()) return it->second.asDouble();
+                if (it->second.isInt()) return (double)it->second.asInt();
+                if (it->second.isBool()) return it->second.asBool() ? 1.0 : 0.0;
+                return 0.0;
+            };
+            auto itR = om.find("min");
+            if (itR != om.end()) { pr.hasRange = true; pr.mn = (float)getF("min"); pr.mx = (float)getF("max"); }
+            auto itV = om.find("value");
+            if (itV != om.end()) {
+                const auto& val = itV->second;
+                if (val.isArray()) {
+                    const auto& a = val.asArray();
+                    for (int c = 0; c < 4 && c < (int)a.size(); ++c)
+                        if (a[c].isDouble()) pr.v[c] = (float)a[c].asDouble();
+                } else if (val.isStr()) {
+                    snprintf(pr.buf.data(), pr.buf.size(), "%s", val.asStr().c_str());
+                } else {
+                    pr.iv = (std::int64_t)getF("value");
+                    pr.v[0] = (float)getF("value");
+                }
+            }
+            props_.push_back(std::move(pr));
+        }
+        haveProps_ = true;
+    }
+    void sendScalar(RpcHost* host, std::size_t k, double d) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        p["value"] = d;
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void sendVec(RpcHost* host, std::size_t k, const float* v, int n) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        msgpack::Array a;
+        for (int c = 0; c < n; ++c) a.push_back((double)v[c]);
+        p["value"] = RpcValue(std::move(a));
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void sendString(RpcHost* host, std::size_t k, const char* s) {
+        const Prop& pr = props_[k];
+        msgpack::Map p;
+        p["id"] = loadedId_;
+        p["component"] = pr.component;
+        p["name"] = pr.name;
+        p["value"] = std::string(s);
+        rpcSet(host, std::move(p), (pr.component + "." + pr.name).c_str());
+    }
+    void rpcSet(RpcHost* host, msgpack::Map p, const char* what) {
+        auto r = callQuick(host, "scene.setProp", RpcValue(std::move(p)));
+        if (std::holds_alternative<RpcError>(r)) {
+            const auto& e = std::get<RpcError>(r);
+            statusMsg_ = std::string("[scene.setProp ") + what + "] error " +
+                         std::to_string(e.code) + ": " + e.message;
+        } else {
+            statusMsg_ = std::string("set ") + what;
+        }
+    }
+    static void logErr(const RpcResult& r, const char* what) {
+        if (!std::holds_alternative<RpcError>(r)) return;
+        const auto& e = std::get<RpcError>(r);
+        ImGui::Text("[%s] error %d: %s", what, e.code, e.message.c_str());
+    }
+
+    std::vector<Prop> props_;
+    long long loadedId_ = -1;
+    bool haveProps_ = false;
+    std::string entName_;
+    std::string statusMsg_;
+};
+
 void PluginManager::discover() {
     // M-E3/M-E4d/M-E5/M-E7 内建插件；DLL 动态加载走 discoverDlls()。
     registerPlugin(std::make_unique<CameraPlugin>());
     registerPlugin(std::make_unique<SceneOutlinerPlugin>());
     registerPlugin(std::make_unique<MaterialInspectorPlugin>());
     registerPlugin(std::make_unique<PreviewPlugin>());
+    registerPlugin(std::make_unique<PropertyPanelPlugin>());   // M-E10
 }
 
 // M-E5：plugins/ 目录 DLL 动态扫描。exe 同目录 plugins/*.dll，C ABI 校验

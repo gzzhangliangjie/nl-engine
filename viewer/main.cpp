@@ -1239,6 +1239,15 @@ struct EditorEmbed {
     const nl::scene::World* sceneWorld = nullptr;
     const std::vector<nl::scene::EntityID>* sceneModelIds = nullptr;
 
+    // M-E9：场景编辑通道数据源（bindSceneEdit 注入；model 模式保持 null =
+    // 编辑 handler 统一 error 100）。renderer/灯缓冲指针供 setProp 灯同步。
+    nl::scene::World* editWorld = nullptr;
+    std::vector<nl::renderer::SceneLightDesc>* sceneLights = nullptr;
+    std::vector<nl::scene::EntityID>* sceneLightIds = nullptr;   // lights[i] 来源实体（0=preview key）
+    float* sceneAmbient = nullptr;
+    bool previewMode = false;
+    nl::renderer::Renderer* editRenderer = nullptr;
+
     // M-E8：场景变更推送（连接未建立时静默忽略；编辑器侧 registerNotify 置
     // dirty 自动刷新 outliner，替换手动 Refresh）。
     void notifySceneChanged() {
@@ -1522,6 +1531,498 @@ struct EditorEmbed {
             m["tint"]  = nl::editor::RpcValue(std::move(tint));
             m["rough"] = (double)d.roughness;
             m["metal"] = (double)d.metallic;
+            return nl::editor::RpcValue(std::move(m));
+        });
+    }
+
+    // ---- M-E9：场景树编辑通道（rename/setParent/reparent/addEntity/removeEntity）
+    // ---- M-E10：对象级参数泛化面（getProps/setProp，显式描述表口径）----
+    // 拍板「参数设置走反射胶水层不另做一套」的落点二（其一 = engine.cvar.*，M-E7）：
+    // 对象级组件字段走显式描述表（M-SC10 PropAttribute 同构：name/type/Range 显式
+    // 注册；Default 不注册 = getProps 拉现值快照），RPC 只做传输。
+    // 全部写操作 = World 源头单写 + 渲染表直写（setMaterial M-E8 同构）：
+    //   Transform → objects[i].world 直刷；Model 材质 → objects[i] 三字段直刷；
+    //   Light → lights[i] 重算 + updateEcsLights 单 upload（M-E7 通道复用）；
+    //   集合变更（增删实体/meshFile）→ 帧边界签名重建（runScene M-SC7 块移出
+    //   ticking 版，preview tick off 也生效）。
+    static bool editGetScalar(const nl::editor::RpcValue& p, const char* k, double& out) {
+        if (!p.isMap()) return false;
+        auto it = p.asMap().find(k);
+        if (it == p.asMap().end()) return false;
+        if (it->second.isDouble()) { out = it->second.asDouble(); return true; }
+        if (it->second.isInt())    { out = (double)it->second.asInt(); return true; }
+        return false;
+    }
+    static bool editGetU64(const nl::editor::RpcValue& p, const char* k, std::uint64_t& out) {
+        double d = 0.0;
+        if (!editGetScalar(p, k, d) || d < 0.0) return false;
+        out = static_cast<std::uint64_t>(d);
+        return true;
+    }
+    static bool editGetVecN(const nl::editor::RpcValue& p, const char* k, float* out, int n) {
+        if (!p.isMap()) return false;
+        auto it = p.asMap().find(k);
+        if (it == p.asMap().end() || !it->second.isArray() ||
+            static_cast<int>(it->second.asArray().size()) != n) return false;
+        const auto& a = it->second.asArray();
+        for (int c = 0; c < n; ++c) {
+            if (a[c].isDouble())     out[c] = static_cast<float>(a[c].asDouble());
+            else if (a[c].isInt())   out[c] = static_cast<float>(a[c].asInt());
+            else return false;
+        }
+        return true;
+    }
+    // 环防护（World::setParent assert 的 RPC 化：显式 error 不 assert，探针可断言）。
+    static bool editIsDescendantOrSelf(const nl::scene::World& w,
+                                       nl::scene::EntityID ancestor,
+                                       nl::scene::EntityID node) {
+        for (int guard = 0; guard < 4096; ++guard) {
+            if (node == ancestor) return true;
+            auto p = w.getParentID(node);
+            if (!p || *p == nl::scene::kInvalidEntity) return false;
+            if (!w.exists(*p)) return false;
+            node = *p;
+        }
+        return false;
+    }
+    static nl::editor::RpcError editErrNeedsWorld() {
+        return nl::editor::RpcError{100, "scene edit: model mode has no World"};
+    }
+    static nl::editor::RpcError editErrMap(const char* what) {
+        return nl::editor::RpcError{101, std::string(what) + ": params must be a map"};
+    }
+    // M-E9：meshFile 存在性校验（白名单只管文件名格式；不存在的资产会在帧边界
+    // rebuild → loadEcsScene 失败 → 渲染循环退出——必须在建实体前拒绝）。
+    static bool editGlbAssetExists(const std::string& name) {
+        const std::string path = std::string(NL_ASSET_DIR "/") + name;
+        std::error_code ec;
+        return std::filesystem::is_regular_file(path, ec);
+    }
+    void bindSceneEdit(nl::scene::World* world,
+                       std::vector<nl::renderer::SceneLightDesc>* lights,
+                       std::vector<nl::scene::EntityID>* lightIds,
+                       float* ambient, bool preview,
+                       nl::renderer::Renderer* renderer) {
+        editWorld = world;
+        sceneLights = lights;
+        sceneLightIds = lightIds;
+        sceneAmbient = ambient;
+        previewMode = preview;
+        editRenderer = renderer;
+        if (!editWorld) return;
+        // 渲染表直刷：modelIds 全量重取世界矩阵（setParent/reparent 后子树世界
+        // 矩阵变化；50 物体规模锚，O(N) 直刷足够）。
+        auto refreshObjectMatrices = [this]() {
+            if (!sceneObjects || !sceneModelIdsMut) return;
+            for (std::size_t k = 0; k < sceneModelIdsMut->size(); ++k) {
+                const auto* t = editWorld->getComponent<nl::scene::TransformComponent>(
+                    (*sceneModelIdsMut)[k]);
+                if (!t) continue;
+                const auto wm = t->getWorldMatrix();
+                std::memcpy((*sceneObjects)[k].world, wm.m, sizeof((*sceneObjects)[k].world));
+            }
+        };
+        // 灯缓冲单 upload 同步（M-E7 updateEcsLights 通道复用；收集段镜像——
+        // 方向归一化；非法值在 setProp 分发处已拒绝，此处纯搬运）。
+        auto syncLightBuffer = [this](std::size_t k) {
+            if (!sceneLights || !sceneLightIds || !editRenderer ||
+                k >= sceneLightIds->size()) return;
+            const auto id = (*sceneLightIds)[k];
+            const auto* lc = editWorld->getComponent<nl::scene::LightComponent>(id);
+            if (!lc) return;
+            auto& l = (*sceneLights)[k];
+            const float len = std::sqrt(lc->direction.x * lc->direction.x +
+                                        lc->direction.y * lc->direction.y +
+                                        lc->direction.z * lc->direction.z);
+            if (len > 1e-8f) {
+                l.dir[0] = lc->direction.x / len;
+                l.dir[1] = lc->direction.y / len;
+                l.dir[2] = lc->direction.z / len;
+            } else {
+                l.dir[0] = l.dir[1] = l.dir[2] = 0.0f;
+            }
+            l.color[0] = lc->color.x; l.color[1] = lc->color.y; l.color[2] = lc->color.z;
+            l.intensity = lc->intensity;
+            l.type = lc->type;
+            l.position[0] = lc->position.x; l.position[1] = lc->position.y;
+            l.position[2] = lc->position.z;
+            l.range = lc->range;
+            l.shadow = lc->shadow;
+            float amb = sceneAmbient ? *sceneAmbient : 0.0f;
+            if (previewMode) {   // preview ambient 走 cvar（M-E7 口径）
+                const auto* av = nl::core::console::Console::get().findCVar("light.ambient");
+                if (av) amb = static_cast<float>(av->value().f);
+            }
+            editRenderer->updateEcsLights(sceneLights->data(),
+                                          static_cast<std::uint32_t>(sceneLights->size()),
+                                          amb);
+        };
+        // 挂接校验共用（rename/reparent 双 handler 的语义闸）。
+        auto validateLink = [this](std::uint64_t id, std::uint64_t parent, const char* what)
+                -> std::optional<nl::editor::RpcError> {
+            if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
+                return nl::editor::RpcError{100, std::string(what) + ": unknown entity"};
+            if (parent != 0) {
+                if (!editWorld->exists(static_cast<nl::scene::EntityID>(parent)))
+                    return nl::editor::RpcError{100, std::string(what) + ": unknown parent entity"};
+                if (parent == id)
+                    return nl::editor::RpcError{101, std::string(what) + ": parent == self"};
+                if (editIsDescendantOrSelf(*editWorld,
+                                           static_cast<nl::scene::EntityID>(id),
+                                           static_cast<nl::scene::EntityID>(parent)))
+                    return nl::editor::RpcError{101, std::string(what) + ": would create cycle"};
+            }
+            return std::nullopt;
+        };
+
+        // ---- scene.rename {id, name} ----
+        bridge.registerHandler("scene.rename", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.rename");
+            std::uint64_t id = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.rename: missing field 'id'"};
+            auto itN = p.asMap().find("name");
+            if (itN == p.asMap().end() || !itN->second.isStr() || itN->second.asStr().empty())
+                return nl::editor::RpcError{101, "scene.rename: missing non-empty string field 'name'"};
+            if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
+                return nl::editor::RpcError{100, "scene.rename: unknown entity"};
+            editWorld->updateName(static_cast<nl::scene::EntityID>(id), itN->second.asStr());
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(id);
+            m["name"] = itN->second.asStr();
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // ---- scene.setParent {id, parent}（纯关系，不动变换；parent 0 = 解除）----
+        bridge.registerHandler("scene.setParent", [this, validateLink, refreshObjectMatrices](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.setParent");
+            std::uint64_t id = 0, parent = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.setParent: missing field 'id'"};
+            if (!editGetU64(p, "parent", parent))
+                return nl::editor::RpcError{101, "scene.setParent: missing field 'parent'"};
+            if (auto e = validateLink(id, parent, "scene.setParent")) return *e;
+            editWorld->setParent(static_cast<nl::scene::EntityID>(id),
+                                 parent ? std::optional<nl::scene::EntityID>(
+                                              static_cast<nl::scene::EntityID>(parent))
+                                        : std::nullopt);
+            refreshObjectMatrices();
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(id);
+            m["parent"] = static_cast<std::int64_t>(parent);
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // ---- scene.reparent {id, parent}（保世界变换挂父）----
+        bridge.registerHandler("scene.reparent", [this, validateLink, refreshObjectMatrices](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.reparent");
+            std::uint64_t id = 0, parent = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.reparent: missing field 'id'"};
+            if (!editGetU64(p, "parent", parent))
+                return nl::editor::RpcError{101, "scene.reparent: missing field 'parent'"};
+            if (auto e = validateLink(id, parent, "scene.reparent")) return *e;
+            editWorld->reparent(static_cast<nl::scene::EntityID>(id),
+                                parent ? std::optional<nl::scene::EntityID>(
+                                             static_cast<nl::scene::EntityID>(parent))
+                                       : std::nullopt);
+            refreshObjectMatrices();
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(id);
+            m["parent"] = static_cast<std::int64_t>(parent);
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // ---- scene.addEntity {name?, parent?, kind, mesh?, lightType?, intensity?} ----
+        // kind = "empty"|"light"|"model"；model 自动挂 Transform（收集段硬要求）。
+        // 校验失败回滚新建实体（不留半成品）。flush 即时落表（getEntityIDs/
+        // 签名/树当帧可见）。
+        bridge.registerHandler("scene.addEntity", [this, validateLink](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.addEntity");
+            auto itKind = p.asMap().find("kind");
+            if (itKind == p.asMap().end() || !itKind->second.isStr())
+                return nl::editor::RpcError{101, "scene.addEntity: missing string field 'kind' (empty|light|model)"};
+            const std::string kind = itKind->second.asStr();
+            if (kind != "empty" && kind != "light" && kind != "model")
+                return nl::editor::RpcError{101, "scene.addEntity: unknown kind '" + kind + "' (empty|light|model)"};
+            std::string name = "entity";
+            auto itName = p.asMap().find("name");
+            if (itName != p.asMap().end() && itName->second.isStr() && !itName->second.asStr().empty())
+                name = itName->second.asStr();
+            std::uint64_t parent = 0;
+            if (auto it = p.asMap().find("parent");
+                it != p.asMap().end() && !(it->second.isNil())) {
+                if (!editGetU64(p, "parent", parent))
+                    return nl::editor::RpcError{101, "scene.addEntity: bad field 'parent'"};
+            }
+            // mesh 白名单先验（建实体前拒绝，不留回滚痕迹）。
+            std::string mesh;
+            if (kind == "model") {
+                auto itMesh = p.asMap().find("mesh");
+                if (itMesh == p.asMap().end() || !itMesh->second.isStr() || itMesh->second.asStr().empty())
+                    return nl::editor::RpcError{101, "scene.addEntity: kind=model needs string field 'mesh'"};
+                mesh = itMesh->second.asStr();
+                if (!nl::scene::validGlbAssetName(mesh.c_str()))
+                    return nl::editor::RpcError{101, "scene.addEntity: meshFile '" + mesh +
+                                                    "' rejected by asset whitelist"};
+                if (!editGlbAssetExists(mesh))
+                    return nl::editor::RpcError{101, "scene.addEntity: asset '" + mesh +
+                                                    "' not found under " + NL_ASSET_DIR};
+            }
+            double lightType = 0.0, intensity = 1.0;
+            if (kind == "light") {
+                auto itT = p.asMap().find("lightType");
+                if (itT != p.asMap().end() && !editGetScalar(p, "lightType", lightType))
+                    return nl::editor::RpcError{101, "scene.addEntity: bad field 'lightType'"};
+                if (lightType != 0.0 && lightType != 1.0)
+                    return nl::editor::RpcError{101, "scene.addEntity: lightType must be 0 (directional) or 1 (point)"};
+                auto itI = p.asMap().find("intensity");
+                if (itI != p.asMap().end() && !editGetScalar(p, "intensity", intensity))
+                    return nl::editor::RpcError{101, "scene.addEntity: bad field 'intensity'"};
+                if (intensity < 0.0)
+                    return nl::editor::RpcError{101, "scene.addEntity: intensity must be >= 0"};
+            }
+            // 新实体无环风险（尚无子链），只验 parent 存在性。
+            if (parent != 0 && !editWorld->exists(static_cast<nl::scene::EntityID>(parent)))
+                return nl::editor::RpcError{100, "scene.addEntity: unknown parent entity"};
+            auto ent = editWorld->newEntity(name);
+            if (parent != 0)
+                editWorld->setParent(ent.getID(),
+                                     std::optional<nl::scene::EntityID>(
+                                         static_cast<nl::scene::EntityID>(parent)));
+            if (kind == "model") {
+                ent.addComponent(std::make_unique<nl::scene::TransformComponent>(ent));
+                auto mc = std::make_unique<nl::scene::ModelComponent>(ent);
+                mc->meshFile = mesh;
+                ent.addComponent(std::move(mc));
+            } else if (kind == "light") {
+                auto lc = std::make_unique<nl::scene::LightComponent>(ent);
+                lc->type = static_cast<int>(lightType);
+                lc->intensity = static_cast<float>(intensity);
+                ent.addComponent(std::move(lc));
+            }
+            editWorld->flushEntityCreationAndRemoval();
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(ent.getID());
+            m["name"] = name;
+            m["kind"] = kind;
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // ---- scene.removeEntity {id}（父删递归删子；flush 即时落表）----
+        bridge.registerHandler("scene.removeEntity", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.removeEntity");
+            std::uint64_t id = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.removeEntity: missing field 'id'"};
+            if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
+                return nl::editor::RpcError{100, "scene.removeEntity: unknown entity"};
+            editWorld->removeEntity(static_cast<nl::scene::EntityID>(id));
+            editWorld->flushEntityCreationAndRemoval();
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(id);
+            return nl::editor::RpcValue(std::move(m));
+        });
+
+        // ---- M-E10：scene.getProps {id}（显式描述表遍历）----
+        bridge.registerHandler("scene.getProps", [this](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.getProps");
+            std::uint64_t id = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.getProps: missing field 'id'"};
+            if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
+                return nl::editor::RpcError{100, "scene.getProps: unknown entity"};
+            nl::editor::msgpack::Array props;
+            auto pushV = [](const float* v, int n) {
+                nl::editor::msgpack::Array a;
+                for (int c = 0; c < n; ++c) a.push_back((double)v[c]);
+                return nl::editor::RpcValue(std::move(a));
+            };
+            auto pushProp = [&](const char* comp, const char* nm, const char* ty,
+                                nl::editor::RpcValue val,
+                                double mn = 0.0, double mx = 0.0, bool hasRange = false) {
+                nl::editor::msgpack::Map m;
+                m["component"] = comp;
+                m["name"] = nm;
+                m["type"] = ty;
+                m["value"] = std::move(val);
+                if (hasRange) { m["min"] = mn; m["max"] = mx; }
+                props.push_back(nl::editor::RpcValue(std::move(m)));
+            };
+            if (auto* t = editWorld->getComponent<nl::scene::TransformComponent>(
+                    static_cast<nl::scene::EntityID>(id))) {
+                pushProp("Transform", "position", "vec3", pushV(&t->local.position.x, 3));
+                pushProp("Transform", "scale", "vec3", pushV(&t->local.scale.x, 3));
+                pushProp("Transform", "rotation", "quat", pushV(&t->local.rotation.x, 4));
+            }
+            if (auto* mc = editWorld->getComponent<nl::scene::ModelComponent>(
+                    static_cast<nl::scene::EntityID>(id))) {
+                pushProp("Model", "meshFile", "string", nl::editor::RpcValue(mc->meshFile));
+                pushProp("Model", "tint", "color", pushV(&mc->tint.x, 3));
+                pushProp("Model", "roughness", "float", (double)mc->roughness, 0.0, 1.0, true);
+                pushProp("Model", "metallic", "float", (double)mc->metallic, 0.0, 1.0, true);
+            }
+            if (auto* lc = editWorld->getComponent<nl::scene::LightComponent>(
+                    static_cast<nl::scene::EntityID>(id))) {
+                pushProp("Light", "type", "int", (double)lc->type, 0.0, 1.0, true);
+                pushProp("Light", "direction", "vec3", pushV(&lc->direction.x, 3));
+                pushProp("Light", "color", "color", pushV(&lc->color.x, 3));
+                pushProp("Light", "intensity", "float", (double)lc->intensity, 0.0, 20.0, true);
+                pushProp("Light", "position", "vec3", pushV(&lc->position.x, 3));
+                pushProp("Light", "range", "float", (double)lc->range, 0.1, 100.0, true);
+                pushProp("Light", "shadow", "bool", (double)(lc->shadow ? 1 : 0));
+            }
+            nl::editor::msgpack::Map m;
+            m["id"] = static_cast<std::int64_t>(id);
+            m["name"] = editWorld->getName(static_cast<nl::scene::EntityID>(id));
+            m["props"] = nl::editor::RpcValue(std::move(props));
+            return nl::editor::RpcValue(std::move(m));
+        });
+        // ---- M-E10：scene.setProp {id, component, name, value}（显式分发）----
+        bridge.registerHandler("scene.setProp", [this, refreshObjectMatrices, syncLightBuffer](const nl::editor::RpcValue& p) -> nl::editor::RpcResult {
+            if (!editWorld) return editErrNeedsWorld();
+            if (!p.isMap()) return editErrMap("scene.setProp");
+            std::uint64_t id = 0;
+            if (!editGetU64(p, "id", id))
+                return nl::editor::RpcError{101, "scene.setProp: missing field 'id'"};
+            auto itC = p.asMap().find("component");
+            auto itN = p.asMap().find("name");
+            if (itC == p.asMap().end() || !itC->second.isStr() ||
+                itN == p.asMap().end() || !itN->second.isStr())
+                return nl::editor::RpcError{101, "scene.setProp: need string fields 'component' and 'name'"};
+            if (p.asMap().find("value") == p.asMap().end())
+                return nl::editor::RpcError{101, "scene.setProp: missing field 'value'"};
+            if (!editWorld->exists(static_cast<nl::scene::EntityID>(id)))
+                return nl::editor::RpcError{100, "scene.setProp: unknown entity"};
+            const nl::scene::EntityID eid = static_cast<nl::scene::EntityID>(id);
+            const std::string comp = itC->second.asStr();
+            const std::string name = itN->second.asStr();
+            const char* what = "scene.setProp";
+            float v[4] = {};
+            double s = 0.0;
+            // modelIds 里找到实例行（渲染表直刷落点）。
+            auto idxOf = [this](nl::scene::EntityID e) -> long long {
+                if (!sceneModelIdsMut) return -1;
+                for (std::size_t k = 0; k < sceneModelIdsMut->size(); ++k)
+                    if ((*sceneModelIdsMut)[k] == e) return static_cast<long long>(k);
+                return -1;
+            };
+            if (comp == "Transform") {
+                auto* t = editWorld->getComponent<nl::scene::TransformComponent>(eid);
+                if (!t) return nl::editor::RpcError{100, what + std::string(": entity has no Transform component")};
+                if (name == "position" || name == "scale") {
+                    if (!editGetVecN(p, "value", v, 3))
+                        return nl::editor::RpcError{101, std::string(what) + ": value must be a 3-number array"};
+                    if (name == "position") t->local.position = {v[0], v[1], v[2]};
+                    else                    t->local.scale = {v[0], v[1], v[2]};
+                } else if (name == "rotation") {
+                    if (!editGetVecN(p, "value", v, 4))
+                        return nl::editor::RpcError{101, std::string(what) + ": rotation value must be a 4-number array (x,y,z,w)"};
+                    t->local.rotation = {v[0], v[1], v[2], v[3]};
+                } else {
+                    return nl::editor::RpcError{100, what + std::string(": unknown Transform prop '") + name + "'"};
+                }
+                refreshObjectMatrices();
+            } else if (comp == "Model") {
+                auto* mc = editWorld->getComponent<nl::scene::ModelComponent>(eid);
+                if (!mc) return nl::editor::RpcError{100, what + std::string(": entity has no Model component")};
+                if (name == "meshFile") {
+                    auto itV = p.asMap().find("value");
+                    if (!itV->second.isStr())
+                        return nl::editor::RpcError{101, std::string(what) + ": meshFile value must be a string"};
+                    if (!nl::scene::validGlbAssetName(itV->second.asStr().c_str()))
+                        return nl::editor::RpcError{101, std::string(what) + ": meshFile '" +
+                                                        itV->second.asStr() + "' rejected by asset whitelist"};
+                    if (!editGlbAssetExists(itV->second.asStr()))
+                        return nl::editor::RpcError{101, std::string(what) + ": asset '" +
+                                                        itV->second.asStr() + "' not found under " + NL_ASSET_DIR};
+                    mc->meshFile = itV->second.asStr();   // 集合签名变化 → 帧边界重建
+                } else if (name == "tint") {
+                    if (!editGetVecN(p, "value", v, 3))
+                        return nl::editor::RpcError{101, std::string(what) + ": tint value must be a 3-number array"};
+                    mc->tint = {std::min(1.0f, std::max(0.0f, v[0])),
+                                std::min(1.0f, std::max(0.0f, v[1])),
+                                std::min(1.0f, std::max(0.0f, v[2]))};
+                } else if (name == "roughness" || name == "metallic") {
+                    if (!editGetScalar(p, "value", s))
+                        return nl::editor::RpcError{101, std::string(what) + ": value must be a number"};
+                    const float f = std::min(1.0f, std::max(0.0f, static_cast<float>(s)));
+                    if (name == "roughness") mc->roughness = f; else mc->metallic = f;
+                } else {
+                    return nl::editor::RpcError{100, what + std::string(": unknown Model prop '") + name + "'"};
+                }
+                const long long k = idxOf(eid);
+                if (k >= 0 && sceneObjects) {
+                    auto& d = (*sceneObjects)[static_cast<std::size_t>(k)];
+                    d.tint[0] = mc->tint.x; d.tint[1] = mc->tint.y; d.tint[2] = mc->tint.z;
+                    d.roughness = mc->roughness;
+                    d.metallic = mc->metallic;
+                    const auto* t = editWorld->getComponent<nl::scene::TransformComponent>(eid);
+                    if (t) {
+                        const auto wm = t->getWorldMatrix();
+                        std::memcpy(d.world, wm.m, sizeof(d.world));
+                    }
+                }
+            } else if (comp == "Light") {
+                auto* lc = editWorld->getComponent<nl::scene::LightComponent>(eid);
+                if (!lc) return nl::editor::RpcError{100, what + std::string(": entity has no Light component")};
+                if (name == "type") {
+                    if (!editGetScalar(p, "value", s) || (s != 0.0 && s != 1.0))
+                        return nl::editor::RpcError{101, std::string(what) + ": type must be 0 (directional) or 1 (point)"};
+                    // 点光约束先验（写前拒绝，不留半态）。
+                    if (static_cast<int>(s) == 1 && lc->shadow)
+                        return nl::editor::RpcError{101, std::string(what) + ": point light does not support shadow (directional only)"};
+                    lc->type = static_cast<int>(s);
+                } else if (name == "direction" || name == "color" || name == "position") {
+                    if (!editGetVecN(p, "value", v, 3))
+                        return nl::editor::RpcError{101, std::string(what) + ": value must be a 3-number array"};
+                    nl::math::Vec3* dst = name == "direction" ? &lc->direction
+                                        : name == "color"     ? &lc->color
+                                                              : &lc->position;
+                    *dst = {v[0], v[1], v[2]};
+                } else if (name == "intensity" || name == "range") {
+                    if (!editGetScalar(p, "value", s))
+                        return nl::editor::RpcError{101, std::string(what) + ": value must be a number"};
+                    if (name == "intensity") {
+                        if (s < 0.0) return nl::editor::RpcError{101, std::string(what) + ": intensity must be >= 0"};
+                        lc->intensity = static_cast<float>(s);
+                    } else {
+                        if (s <= 0.0) return nl::editor::RpcError{101, std::string(what) + ": range must be > 0"};
+                        lc->range = static_cast<float>(s);
+                    }
+                } else if (name == "shadow") {
+                    const auto& val = p.asMap().find("value")->second;
+                    if (!val.isBool() && !val.isInt() && !val.isDouble())
+                        return nl::editor::RpcError{101, std::string(what) + ": shadow value must be a bool"};
+                    const bool b = val.isBool() ? val.asBool() : (val.isInt() ? val.asInt() != 0
+                                                               : val.asDouble() != 0.0);
+                    // 点光约束先验（写前拒绝，不留半态）。
+                    if (b && lc->type == 1)
+                        return nl::editor::RpcError{101, std::string(what) + ": point light does not support shadow (directional only)"};
+                    lc->shadow = b;
+                } else {
+                    return nl::editor::RpcError{100, what + std::string(": unknown Light prop '") + name + "'"};
+                }
+                // 灯缓冲单 upload 同步（集合不变——数量/槽位不动）。
+                if (sceneLightIds && sceneLights) {
+                    for (std::size_t k = 0; k < sceneLightIds->size(); ++k)
+                        if ((*sceneLightIds)[k] == eid) { syncLightBuffer(k); break; }
+                }
+            } else {
+                return nl::editor::RpcError{100, what + std::string(": unknown component '") + comp + "'"};
+            }
+            nl::editor::msgpack::Map m;
+            m["ok"] = (std::int64_t)1;
+            m["id"] = static_cast<std::int64_t>(id);
+            m["component"] = comp;
+            m["name"] = name;
             return nl::editor::RpcValue(std::move(m));
         });
     }
@@ -4308,6 +4809,7 @@ int runScene(const Options& o) {
     //（本 lambda 历史上与 renderer.cpp/scene.cpp 互为复制，收编后删除）；
     // 非法 = 显式报错退出 2，不静默跳过。
     std::vector<nl::renderer::SceneLightDesc> lights;
+    std::vector<nl::scene::EntityID> lightIds;   // M-E9：lights[i] 来源实体（0=preview key）
     std::vector<std::string> meshFiles;
     std::vector<nl::scene::EntityID> modelIds;
     for (nl::scene::EntityID id : world.getEntityIDs()) {
@@ -4349,6 +4851,7 @@ int runScene(const Options& o) {
                 return 2;
             }
             lights.push_back(l);
+            lightIds.push_back(id);
         }
         const auto* model = world.getComponent<nl::scene::ModelComponent>(id);
         if (model) {
@@ -4440,6 +4943,7 @@ int runScene(const Options& o) {
         key.intensity = 2.2f;
         key.type = 0;
         lights.push_back(key);
+        lightIds.push_back(nl::scene::kInvalidEntity);   // M-E9：key 非实体灯
         nl::core::log::infoCh("viewer", "preview: built-in key light injected (light.* cvar driven)");
     }
     // 机器出口（run.bat findstr 断言）：对象数 / 灯数（含点光计数）/ ambient 一行。
@@ -4462,8 +4966,11 @@ int runScene(const Options& o) {
     // 白名单/Transform/重复挂校验）；渲染侧每帧 tick 后比对签名（实体 ID +
     // meshFile，按 world.getEntityIDs() 出现序稳定），变了 = 重跑收集 +
     // loadEcsScene（initScene 已可重入：开头 shutdownEcsScene 释放上一份）。
-    // 实例矩阵每帧更新走既有 M-GL3 插值链不动。灯光集本里程碑脚本不可动
-    //（无灯导出），签名只含 Model。无脚本/无增删时每帧 O(N) 只读扫描，零重建。
+    // 实例矩阵每帧更新走既有 M-GL3 插值链不动。无脚本/无增删时每帧 O(N) 只读
+    // 扫描，零重建。
+    // M-E9：签名扩灯实体 id 序（编辑 RPC 增删灯实体 → 灯缓冲随 rebuild 重建；
+    // 灯参数面不走本路径——setProp 直写 lights[i] + updateEcsLights 单 upload），
+    // rebuild 补灯重收集 + preview key 重注入 + 重建后实例当帧上屏。
     std::vector<std::pair<unsigned long long, std::string>> modelSig;
     auto computeModelSig = [&world]() {
         std::vector<std::pair<unsigned long long, std::string>> sig;
@@ -4474,6 +4981,71 @@ int runScene(const Options& o) {
         return sig;
     };
     modelSig = computeModelSig();
+    std::vector<unsigned long long> lightIdsSig;
+    auto rebuildLightsFromWorld = [&]() {
+        lights.clear();
+        lightIds.clear();
+        for (nl::scene::EntityID id : world.getEntityIDs()) {
+            const auto* light = world.getComponent<nl::scene::LightComponent>(id);
+            if (!light) continue;
+            // 运行期语义（同模型段：跳过 + 显式日志，不硬退出）。
+            nl::renderer::SceneLightDesc l{};
+            const float len = std::sqrt(light->direction.x * light->direction.x +
+                                        light->direction.y * light->direction.y +
+                                        light->direction.z * light->direction.z);
+            if (len > 1e-8f) {
+                l.dir[0] = light->direction.x / len;
+                l.dir[1] = light->direction.y / len;
+                l.dir[2] = light->direction.z / len;
+            }
+            l.color[0] = light->color.x;
+            l.color[1] = light->color.y;
+            l.color[2] = light->color.z;
+            l.intensity = light->intensity;
+            l.type = light->type;
+            if (l.type != 0 && l.type != 1) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " has unknown light type ", l.type, " (skipped)");
+                continue;
+            }
+            l.position[0] = light->position.x;
+            l.position[1] = light->position.y;
+            l.position[2] = light->position.z;
+            l.range = light->range;
+            if (l.type == 1 && l.range <= 0.0f) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " point light range must be > 0 (skipped)");
+                continue;
+            }
+            l.shadow = light->shadow;
+            if (l.type == 1 && l.shadow) {
+                nl::core::log::errorCh("viewer", "ecs rebuild: entity ", id,
+                                     " point light does not support shadow (skipped)");
+                continue;
+            }
+            lights.push_back(l);
+            lightIds.push_back(id);
+        }
+        if (o.preview && lights.empty()) {   // preview key 注入语义同初始收集
+            nl::renderer::SceneLightDesc key{};
+            key.dir[0] = -0.4314f; key.dir[1] = -0.7649f; key.dir[2] = -0.4792f;
+            key.color[0] = 4.2f; key.color[1] = 3.99f; key.color[2] = 3.696f;
+            key.intensity = 2.2f;
+            key.type = 0;
+            lights.push_back(key);
+            lightIds.push_back(nl::scene::kInvalidEntity);
+        }
+    };
+    rebuildLightsFromWorld();   // M-E9：初建灯集（实体序与初始收集一致，幂等）
+    // M-E9：灯实体签名从 World 现算（lightIds 只在 rebuild 更新，不能当签名源）。
+    auto computeLightIdsSig = [&world]() {
+        std::vector<unsigned long long> sig;
+        for (nl::scene::EntityID id : world.getEntityIDs())
+            if (world.getComponent<nl::scene::LightComponent>(id))
+                sig.push_back(static_cast<unsigned long long>(id));
+        return sig;
+    };
+    lightIdsSig = computeLightIdsSig();   // 初值对齐（防首帧空签名误重建）
     auto rebuildSceneObjects = [&]() -> bool {
         meshFiles.clear();
         modelIds.clear();
@@ -4530,9 +5102,19 @@ int runScene(const Options& o) {
             return false;
         }
         modelSig = computeModelSig();
+        lightIdsSig = computeLightIdsSig();   // 纯实体 id 序（不含 preview key 哨兵）
+        // M-E9：重建后实例数据当帧上屏（本块现于 ticking 上传点之后执行——
+        // 不补一次，增删实体的本帧实例缓冲是旧集合）。
+        if (!objects.empty() &&
+            !renderer->updateEcsObjects(objects.data(),
+                                        static_cast<std::uint32_t>(objects.size()))) {
+            nl::core::log::errorCh("viewer", "ecs rebuild updateEcsObjects failed: ",
+                                 renderer->lastError());
+            return false;
+        }
         // 机器出口（run.bat findstr 断言）：重建帧对象数一行。
         nl::core::log::infoCh("viewer", "ecs scene rebuilt: ", objects.size(),
-                            " objects (frame-boundary, script attach/detach)");
+                            " objects ", lights.size(), " lights (frame-boundary rebuild)");
         return true;
     };
 
@@ -4563,6 +5145,9 @@ int runScene(const Options& o) {
     edEmbed.bindCamera(&camera);   // M-E3：相机 RPC handler（scene 模式）
     edEmbed.bindScene(&objects, &world, &modelIds);   // M-E8：场景树数据源（World 全集 + idx 映射）
     edEmbed.bindMaterials(nullptr, &world, &modelIds);   // M-E5 材质读写 + M-E8 World 写回
+    // M-E9/M-E10：场景编辑通道（编辑 RPC + 泛化描述表；灯缓冲/ambient/renderer
+    // 指针供 setProp 灯同步与集合重建联动）。
+    edEmbed.bindSceneEdit(&world, &lights, &lightIds, &ambient, o.preview, renderer.get());
 
     // M-E8：sceneChanged 指纹——每渲染帧对 World 全集算 FNV1a（id/name/parent/
     // Model 参数/Light 参数），变化才 notify editor.sceneChanged（编辑器置 dirty
@@ -4597,6 +5182,16 @@ int runScene(const Options& o) {
                 mixF(lc->intensity);
                 mixF(lc->color.x); mixF(lc->color.y); mixF(lc->color.z);
                 mixF(lc->direction.x); mixF(lc->direction.y); mixF(lc->direction.z);
+                mixF(lc->position.x); mixF(lc->position.y); mixF(lc->position.z);   // M-E10
+                mixF(lc->range);                                                    // M-E10
+                mix(lc->shadow ? 1ull : 0ull);                                      // M-E10
+            }
+            if (const auto* tc = world.getComponent<nl::scene::TransformComponent>(id)) {
+                mix(3);   // M-E10：Transform 进指纹（泛化编辑 → sceneChanged 推送）
+                mixF(tc->local.position.x); mixF(tc->local.position.y); mixF(tc->local.position.z);
+                mixF(tc->local.scale.x); mixF(tc->local.scale.y); mixF(tc->local.scale.z);
+                mixF(tc->local.rotation.x); mixF(tc->local.rotation.y);
+                mixF(tc->local.rotation.z); mixF(tc->local.rotation.w);
             }
         }
         return h;
@@ -4939,15 +5534,9 @@ int runScene(const Options& o) {
                 nl::core::log::infoCh("viewer", tbuf);
             }
             if (failed) break;
-            // M-SC7：帧边界 Model 集合签名比对——脚本 attach/detach（PrePhysics
-            // scriptTick）+ remove flush（PostPhysics tick 开头）都已落定，此处
-            // 集合稳定，重建一次供本帧渲染（实例写/render 全用新 objects/modelIds）。
-            if (auto sig = computeModelSig(); sig != modelSig) {
-                if (!rebuildSceneObjects()) {
-                    failed = true;
-                    break;
-                }
-            }
+            // M-SC7/M-E9：集合签名比对移至 ticking 块外帧边界（见帧尾块）——
+            // tick on 语义等价（集合稳定点 = 帧尾，脚本 flush 均已落定），
+            // tick off（preview/scene 缺省）RPC 增删实体同样每帧比对。
             // listener 随相机（渲染帧节奏——漫游时暂停听筒仍活；截图模式相机不动）。
             if (audioWorld) {
                 float eye3[3];
@@ -4995,6 +5584,46 @@ int runScene(const Options& o) {
                 break;
             }
         }
+        // ---- M-SC7/M-E9：帧边界集合签名比对（自 ticking 块移出）----
+        // tick on：集合稳定点 = 帧尾（脚本 attach/detach flush、RPC 编辑均已落定）；
+        // tick off（preview/scene 缺省）：RPC 增删实体/meshFile 变更同样每帧比对。
+        // 签名 = Model(id, meshFile) + 灯实体 id 序（M-E9 扩；灯参数不进签名——
+        // setProp 走 updateEcsLights 单 upload）。
+        {
+            bool needRebuild = false;
+            if (auto sig = computeModelSig(); sig != modelSig) needRebuild = true;
+            if (!needRebuild && computeLightIdsSig() != lightIdsSig) needRebuild = true;
+            if (needRebuild && !rebuildSceneObjects()) {
+                failed = true;
+                break;
+            }
+        }
+        // ---- M-E10：tick off 帧实例刷新（ticking 帧在上传点已覆盖）----
+        // preview/scene 缺省 tickMode=off——泛化 Transform/材质编辑（World 写回）
+        // 必须当帧上屏，画面才有「实时」反馈。与 ticking 帧同构（无插值——
+        // tick off 无 prev/curr 样本语义）。值与初载同源，截图字节不受影响。
+        if (!ticking && !modelIds.empty()) {
+            for (std::size_t k = 0; k < modelIds.size(); ++k) {
+                const auto* t = world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+                const auto* m = world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+                if (!t || !m) continue;
+                const auto wm = t->getWorldMatrix();
+                std::memcpy(objects[k].world, wm.m, sizeof(objects[k].world));
+                objects[k].tint[0] = m->tint.x;
+                objects[k].tint[1] = m->tint.y;
+                objects[k].tint[2] = m->tint.z;
+                objects[k].roughness = m->roughness;
+                objects[k].metallic = m->metallic;
+            }
+            if (!renderer->updateEcsObjects(objects.data(),
+                                            static_cast<std::uint32_t>(objects.size()))) {
+                nl::core::log::errorCh("viewer", "ecs tick-off updateEcsObjects failed: ",
+                                     renderer->lastError());
+                failed = true;
+                break;
+            }
+        }
+
         // M-E8：sceneChanged 推送（指纹变化帧 notify 一次；编辑器 dirty 刷新）。
         // 放 ticking 块外：preview/scene 缺省 tickMode=off（ticking=false），
         // 指纹仍须每帧比对（setMaterial 写回 World 的变更不依赖 tick）。

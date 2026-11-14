@@ -22,6 +22,10 @@
 // RPC host 回调跑在主线程 poll 点，无跨线程竞争，atomic 仅作防御。
 extern std::atomic<bool> g_sceneTreeDirty;
 
+// M-E9/M-E10：outliner 选中实体（引擎侧 EntityID，0/-1 = 无选中）。outliner
+// 点击节点写入，Properties 泛化面板消费（scene.getProps/setProp）。
+extern std::atomic<long long> g_sceneSelEntity;
+
 namespace nl::editor::ui {
 
 // M-E5：插件 ABI 版本。布局/语义破坏性变更时 +1，宿主对不匹配 DLL 拒载并记日志。
