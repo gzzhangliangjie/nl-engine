@@ -173,12 +173,14 @@ TRACKS = {
     },
     "editor": {
         "wt": "E:/UE_STUDY_2026/nl-engine-editor",
-        "branch": "feat/editor", "state": "closed",
+        "branch": "feat/editor", "state": "active",
         "note": "外置编辑器轨道（C++/ImGui 宿主 + 引擎侧 editor_bridge），独立于渲染主线；"
                 "plan docs/editor/EDITOR-PLAN.md + RPC-SPEC.md；M-E0~E6 全量 merge 回 "
                 "master ac50c10 + 集成修复 fc34176（tags e-m0e2-done~e-m6-done）；"
                 "wt removed 2026-11-11, branch kept per PARALLEL-TRACKS 7.6; "
-                "state CLOSED by user instruction 2026-11-11 17:1x",
+                "state CLOSED by user instruction 2026-11-11 17:1x; "
+                "REOPENED 2026-11-14 per §7.1b（用户拍板 M-E7 模型预览插件 / M-E8 场景树增强，"
+                "wt 重建于 feat/editor ff 至 master），参数通道拍板 = CVar + M-SC10 描述表，不另做反射层",
     },
     "logging": {
         "wt": "E:/UE_STUDY_2026/nl-engine-logging",
