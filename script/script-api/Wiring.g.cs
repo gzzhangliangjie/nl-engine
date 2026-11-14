@@ -319,12 +319,34 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Props 域接线（生成物；ApiTable 偏移 37..38 = exports.api 声明序）。</summary>
+    internal static unsafe class PropsWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _propsPushBegin, _propsDescAdd;
+
+        /// <summary>开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PropsPushBeginFn();
+
+        /// <summary>追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PropsDescAddFn(int kind, IntPtr name, float min, float max, float def);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _propsPushBegin = Marshal.ReadIntPtr(table, 37 * sizeof(IntPtr));
+            _propsDescAdd = Marshal.ReadIntPtr(table, 38 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd" };
 
         public static void InitAll(IntPtr table)
         {
@@ -335,6 +357,7 @@ namespace Nl.Script.Api
             LogWiring.Init(table);
             CameraWiring.Init(table);
             PhysicsWiring.Init(table);
+            PropsWiring.Init(table);
         }
     }
 } // namespace

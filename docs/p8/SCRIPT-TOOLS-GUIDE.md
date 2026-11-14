@@ -558,3 +558,75 @@ NoSlot 且 slot0 不波及；C++ 核 slot0 valid / 脚本车 invalid。`s12b`：
    P8-SCRIPT-PLAN L107 写「直接对齐 M-NET2 面不新造」——开工摆方案时先按前者拍了
    一版，摆完才发现后者；**披露冲突重拍**（结论：计划正文赢，台账「下一步」只是
    方向性指针）。里程碑台账的「下一步」句禁止当既定拍板引用。
+
+## M-SC10 属性面板域（v7，ApiTable 37->39，2026-11-14）
+
+### 拍板（Q-SC10-1~4 = A/A/A/A，2026-11-14）
+
+载体 = **静态字段面板**（入口脚本类 `[Prop]` 静态字段反射枚举；M-SC2b
+ScriptComponent 维持默认不做——零实例零生命周期，计划行内「C# 组件字段」
+在静态入口模型下落为「脚本类静态字段」）；类型集 = float/int/bool/string
+（kind 0..3）；挂点 = `--prop-panel` additive 独立窗口默认关（runScene/
+runNormal 通用）；交代物全要。
+
+### 双通道架构（生命周期硬规则①的落地）
+
+| 通道 | 方向 | 载体 | 生命周期 |
+|---|---|---|---|
+| 描述表 | C# → C++ | `propsPushBegin`（gen+1 = 面板重建信号）+ `propsDescAdd(kind, name, min, max, def)` 推 POD 表（`PropDesc{kind, name[64], min, max, def}`，上限 256） | C++ 只存 POD；FieldInfo 反射缓存留 script-api 程序集内随 ALC 回收 |
+| 值读写 | C++ → C# | **BootTickPtr 协议复用**——按名解析可选契约 `PropGet`/`PropSet`（public static int(IntPtr,int)），ScriptHost::propGet/propSet 包装 | 与 tickFn_ 同纪律：缺失 = 通道惰性；reload 重取；unload 前置空（thunk 保活列表 Unload 清空白得——bootstrap 零改动） |
+
+脚本侧三行契约（PropsScript 示例同款）：
+
+```csharp
+Entry 内开头：  PropsPush.PushStatic(typeof(MyScript));
+public static unsafe int PropGet(IntPtr a, int s) => PropsPush.PropGet(typeof(MyScript), a, s);
+public static unsafe int PropSet(IntPtr a, int s) => PropsPush.PropSet(typeof(MyScript), a, s);
+```
+
+- 值 ABI：buf[0..3]=int32 idx（C++ 包装填）；标量 buf[4..7]=f32/i32/b(0/1)；
+  string buf[4..259]=UTF8 尾 0（get 截断 255，set 读到首个 0）。
+- Default 不单独声明 = 推送时字段现值快照（防双源漂移）；字段序 =
+  MetadataToken 升序（GetFields 无序，取稳定序；**reload 后行序会变**——
+  面板按 gen 重建、工具侧按 kind 定位，禁硬编码 idx）。
+- `[Prop]` 无 Range 形态 = min==max = 面板退直输控件（SliderFloat/SliderInt/
+  Checkbox/InputText 四态）。
+
+### viewer 接线（--prop-panel，runScene/runNormal 共用）
+
+- 帧外持久 `PropPanel::State` + `propPanelSync()` 共用助手：描述表 gen 变化 →
+  重建行（初值经 propGet 拉）；dirty 行 → propSet 清边沿；active/状态行按
+  通道与表态回填。
+- **State 是 HudFrame 值成员**：帧前整份拷入 `hud.propPanelState`、帧后整份
+  拷回（drawWindow 编辑落在 hud 副本，不拷回 = 编辑丢失——M-T5 SignalPanel
+  教训同族：只挂指针 = 面板渲染全零）。
+- 主面板可见性：runScene 补 `hud.panelShow = o.hudEnabled`（M-C2 缺省可见
+  收敛为显式门）——`--no-hud + --prop-panel` = 只画 script props；profiling-hud
+  的 M-TR0 抑制语义不变。
+
+### selftest s13（props 示例探针）
+
+`s13a` 描述表 4 行 kind/Range/default 逐位 + 通道接通；`s13a2` 四类型值往返
++ C# 真源核（ReadField 探针经 bootstrap BootCall 读活静态字段——**禁
+getEntryPoint 直拉脚本 dll**，M-GL4 口径）；`s13b` idx 越界 rc 8 / 坏缓冲 rc 2；
+`s13c` 热重编加字段（copy → 改源 → dotnet build 同名覆盖 → reload）→ 表
+4->5 + 契约重取；`s13d` **万次 string 串往返 + GC.Collect 探针句柄漂移 <32**
+（s8f 手法扩展，生命周期账本硬规则②新域必带）；`s13e` unload 通道前置空 +
+POD 表 C++ 留存。
+
+### 踩坑存档（M-SC10 实测）
+
+1. **C++ propSet staging 拷贝源错位**：`memcpy(staging+4, buf, size-4)` 拷的是
+   调用方 buf 的 [0..3]（idx 位），而调用方 ABI 值区在 buf+4——set 全零（实测
+   propGet 回 0.0）。修 = 从 `buf+4` 取。教训：**「包装填 idx + 值区偏移 4」
+   的双段 ABI 在跨端两侧各写一遍，逐字对照必做**。
+2. **.NET 8 禁反射 Invoke `[UnmanagedCallersOnly]` 方法**（InvalidProgram:
+   attempted to call a UnmanagedCallersOnly method from managed code）——
+   BootCall/BootTickPtr 走反射的契约方法（Entry/PropGet/PropSet/探针）一律
+   **不带 UC**；UC 只用于 getEntryPoint 函数指针路径（hello EntryNative 同款
+   分工）。CreateDelegate 路径（BootTickPtr）UC 可用但非必需。
+3. **reload 后行序随 MetadataToken 变化**：热重编把新字段插在旧字段声明前 →
+   idx 位移——工具/测试按 kind 或名字定位，禁硬编码 idx（实测 4 字节 string
+   比特写进 int 字段，get 回 "leak"）。
+4. **C1090 PDB API 0x6BA** 二连：mspdbsrv 瞬时故障，重跑即绿（M-SC8 踩坑②
+   复现，非代码错）。

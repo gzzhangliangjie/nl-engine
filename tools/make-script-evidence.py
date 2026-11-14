@@ -341,10 +341,50 @@ CASES_M_SC8 = [
      "stackalloc triple-expression fix (Span cannot coerce to float*)."),
 ]
 
+CASES_M_SC10 = [
+    ("gen-check.log", "gen-check.png",
+     "gen.py --check -- golden self-verify (v7: 39 exports = 37 + props 2)",
+     "Props domain tail-append (propsPushBegin/propsDescAdd) -> 39 exports, "
+     "Api.Version 0.9.0. Descriptor table = C#-reflected [Prop] static fields "
+     "pushed as POD (lifecycle hard rule 1: FieldInfo cache stays managed-side "
+     "dies with the ALC; C++ stores POD only). gen counter bumps on pushBegin = "
+     "panel rebuild signal. Value read/write does NOT go through ApiTable: "
+     "PropGet/PropSet optional contract resolved by name via the BootTickPtr "
+     "protocol (same lifecycle as OnTick)."),
+    ("selftest.log", "selftest.png",
+     "nl-script selftest -- M-SC10 props panel (s13a-s13e, on top of s0-s5 + s6-s12)",
+     "s13a loadScript -> descriptor table (4 rows, kind/Range/default bits per "
+     "row) + channel attached. s13a2 value roundtrip float/int/bool/string via "
+     "propGet/propSet + C# cross-source check (ReadField probe through bootstrap "
+     "BootCall reads the live static field == 42). s13b negatives: idx out of "
+     "range -> rc 8 (script-side 2), bad buffer -> rc 2 C++-side. s13c hot "
+     "reload follow: add [Prop(\"Extra\", 0, 50)] field -> rebuild -> reload -> "
+     "table 4 -> 5, channel re-resolved. s13d leak section: 10k string "
+     "roundtrips + GC.Collect probe -> handle drift < 32 (s8f method extended, "
+     "lifecycle ledger hard rule 2). s13e unload: channel nulled BEFORE "
+     "scriptUnload, POD table persists C++-owned."),
+    ("s13.log", "s13.png",
+     "s13 section close-up (filtered from selftest.log)",
+     "Panel data flow: C# PropsPush.PushStatic reflects [Prop] static fields "
+     "(MetadataToken order = declaration-order stabilization) -> propsPushBegin/"
+     "propsDescAdd -> C++ POD table. Viewer --prop-panel (additive, both "
+     "runScene/runNormal) rebuilds rows on gen change, pulls initial values via "
+     "propGet, pushes edits via propSet on dirty edge. State is a HudFrame "
+     "VALUE member: viewer copies wholesale in before the frame and back after "
+     "(M-T5 lesson: pointer alone renders zeros)."),
+    ("check.log", "check.png",
+     "nl-script check props example -- compile only (exit 0)",
+     "dotnet build only; s13 probes (ReadField/GCCollect) verified in selftest "
+     "through bootstrap BootCall. C# side: PropAttribute (DisplayName/Range, "
+     "Default = field value snapshot at push time) + PropsPush helper "
+     "(PushStatic/PropGet/PropSet one-line forwards), FieldInfo cache keyed by "
+     "Type inside script-api assembly -> dies with the collectible ALC."),
+]
+
 CASES = {"m-sc0": CASES_M_SC0, "m-sc1": CASES_M_SC1, "m-sc2": CASES_M_SC2,
          "m-sc3": CASES_M_SC3, "m-sc4": CASES_M_SC4,
          "m-sc5": CASES_M_SC5, "m-sc6": CASES_M_SC6, "m-sc7": CASES_M_SC7,
-         "m-sc8": CASES_M_SC8}[DIR_NAME]
+         "m-sc8": CASES_M_SC8, "m-sc10": CASES_M_SC10}[DIR_NAME]
 
 
 def main():

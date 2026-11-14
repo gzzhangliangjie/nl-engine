@@ -152,6 +152,37 @@ void cameraSetSource(const CameraSource* source);
 // nullptr = 解绑（热更窗口兜底，此后 Physics 导出一律 kPhyNoScene）。
 void driveSetScene(physics::DebugScene* scene);
 
+// ---- M-SC10 属性面板域（v7）：描述表 POD + gen 计数 ----
+//
+// 通道分工（生命周期硬规则①「C++ 侧永不跨 reload 缓存托管引用」的落地）：
+//   - 描述表（本文件，C# 推）：C# 侧 Props.PushStatic 反射枚举 [Prop] 静态字段
+//     → propsPushBegin/propsDescAdd 推 POD 表。C++ 只存 POD（FieldInfo 等
+//     托管反射缓存全部留在脚本程序集内随 ALC 回收）；pushBegin 时 gen+1 =
+//     面板/宿主重建信号；重复 push = 覆盖（reload 幂等）。
+//   - 值读写（ScriptHost，C++ 拉）：BootTickPtr 协议复用——按名解析可选契约
+//     PropGet/PropSet（同 OnTick：缺失 = 通道惰性；reload 重取；unload 前置空）。
+//
+// 值 ABI（script-api PropsPush.PropGet/PropSet 同文锚）：buf[0..3]=int32 idx
+//（C++ 包装填）；标量 buf[4..7]=f32/i32/b(0/1)；string buf[4..259]=UTF8 尾 0
+//（get 截断 255，set 读到首个 0 上限 255）。
+inline constexpr int kPropsOk = 0;
+inline constexpr int kPropsBadArg = 2;   // kind 越界 / name 空 / 表满（kEcsBadArg 同码位）
+inline constexpr int kPropKindFloat = 0;
+inline constexpr int kPropKindInt = 1;
+inline constexpr int kPropKindBool = 2;
+inline constexpr int kPropKindString = 3;
+inline constexpr int kMaxProps = 256;
+inline constexpr int kPropNameCap = 63;      // name 截断（含尾 0 的缓冲 64）
+inline constexpr int kPropStringCap = 255;   // string 值区上限（含尾 0 的缓冲 256）
+struct PropDesc {
+    int kind;                 // kPropKind*
+    char name[kPropNameCap + 1];
+    float min, max;           // min==max = 无 Range（面板退直输控件）
+    float def;                // 推送时字段现值快照（string 恒 0，初值经通道 propGet）
+};
+const std::vector<PropDesc>& scriptProps();          // 现役描述表（只读）
+std::uint32_t scriptPropsGen();                      // 描述表代数（pushBegin +1）
+
 // ---- M-SC3 脚本命令登记（热重载解绑的 C++ 侧台账）----
 //
 // nl_consoleRegister（C# → C++ 命令注册）把命令名登记进脚本命令表；

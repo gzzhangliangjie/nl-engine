@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **37 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **39 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -105,6 +105,13 @@
 | `physicsSetVehicleInput`（偏移 34） | `int nl_physicsSetVehicleInput(int, float, float, float, float)` | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in f32 forward`：值传递；`in f32 right`：值传递；`in f32 brake`：值传递；`in f32 handBrake`：值传递 |
 | `vehicleFullPose`（偏移 35） | `int nl_vehicleFullPose(int, float*, float*, float*)` | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽 | `in int slot`：值传递；`out buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`out buf4 quat`：定长 float[4] 直传（Blittable，不跨堆）；`out buf3 vel`：定长 float[3] 直传（Blittable，不跨堆） |
 | `teleportVehicle`（偏移 36） | `int nl_teleportVehicle(int, const float*, const float*)` | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf4 quat`：定长 float[4] 直传（Blittable，不跨堆） |
+
+## Props 域（ApiTable 偏移 37..38）
+
+| 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
+|---|---|---|---|
+| `propsPushBegin`（偏移 37） | `int nl_propsPushBegin(void)` | 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok | — |
+| `propsDescAdd`（偏移 38） | `int nl_propsDescAdd(int, const char*, float, float, float)` | 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256） | `in int kind`：值传递；`in str name`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in f32 min`：值传递；`in f32 max`：值传递；`in f32 def`：值传递 |
 
 ---
 

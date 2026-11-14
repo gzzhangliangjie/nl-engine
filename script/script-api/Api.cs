@@ -16,7 +16,7 @@ namespace Nl.Script.Api
     /// <summary>脚本 API 绑定面版本锚（selftest / echo 用例用它证明 script-api 已装载）。</summary>
     public static class Api
     {
-        public const string Version = "0.8.0";   // M-SC8：Physics 载具域（v6 5 导出，ApiTable 37）
+        public const string Version = "0.9.0";   // M-SC10：属性面板域（v7 2 导出，ApiTable 39）
     }
 
     /// <summary>console.exec 结果（ExecCode 分档与 C++ core/console 一致）。</summary>
@@ -677,6 +677,38 @@ namespace Nl.Script.Api
             var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.TeleportVehicleFn>(PhysicsWiring._teleportVehicle);
             fixed (float* p = pos, q = quat)
                 return fn(slot, p, q);
+        }
+    }
+
+    /// <summary>Props 域错误码（M-SC10；kEcsBadArg 同码位）。</summary>
+    public static class PropsCode
+    {
+        public const int Ok = 0;
+        public const int BadArg = 2;   // kind 越界 / name 空 / 表满 256
+    }
+
+    /// <summary>
+    /// Props 属性面板域（M-SC10）。描述表推送通道——脚本 Entry 内经
+    /// PropsPush.PushStatic(typeof(T)) 反射 [Prop] 静态字段后调用本域两导出；
+    /// C++ 侧只存 POD 描述表（生命周期硬规则①）。值读写不经本域：走
+    /// PropGet/PropSet 可选契约（ScriptHost 经 BootTickPtr 协议按名解析）。
+    /// </summary>
+    public static class Props
+    {
+        /// <summary>开始推送描述表（清空 C++ POD 表 + gen+1 = 面板重建信号）。
+        /// rc：0=ok。</summary>
+        public static int PushBegin()
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PropsWiring.PropsPushBeginFn>(PropsWiring._propsPushBegin);
+            return fn();
+        }
+
+        /// <summary>追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；min==max =
+        /// 无 Range 退直输）。rc：0=ok / 2=BadArg。</summary>
+        public static int DescAdd(int kind, string name, float min, float max, float def)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PropsWiring.PropsDescAddFn>(PropsWiring._propsDescAdd);
+            return fn(kind, NativeMarshal.Utf8Alloc(name), min, max, def);
         }
     }
 }

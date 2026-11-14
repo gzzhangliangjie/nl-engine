@@ -41,3 +41,5 @@ static_assert(std::is_same_v<decltype(&nl_physicsRemoveVehicle), int(*)(int)>, "
 static_assert(std::is_same_v<decltype(&nl_physicsSetVehicleInput), int(*)(int, float, float, float, float)>, "exports.api drift: Physics.physicsSetVehicleInput");
 static_assert(std::is_same_v<decltype(&nl_vehicleFullPose), int(*)(int, float*, float*, float*)>, "exports.api drift: Physics.vehicleFullPose");
 static_assert(std::is_same_v<decltype(&nl_teleportVehicle), int(*)(int, const float*, const float*)>, "exports.api drift: Physics.teleportVehicle");
+static_assert(std::is_same_v<decltype(&nl_propsPushBegin), int(*)(void)>, "exports.api drift: Props.propsPushBegin");
+static_assert(std::is_same_v<decltype(&nl_propsDescAdd), int(*)(int, const char*, float, float, float)>, "exports.api drift: Props.propsDescAdd");

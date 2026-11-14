@@ -217,6 +217,8 @@ struct Options {
     std::string scriptProject;                 // --script
     std::string scriptType;                    // --script-type（可省，缺省推导）
     std::string scriptBootstrap = "script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll"; // --script-bootstrap
+    // P8 M-SC10：脚本属性面板（additive 独立窗口默认关；--script 装载 [Prop] 表后生效）。
+    bool propPanelOn = false;                  // --prop-panel
     // M-C1：开发者控制台（` 呼出）。console 开关 + 预执行命令行 + 输入行预填。
     bool consoleOpen = false;
     std::vector<std::string> consoleExecLines;  // 启动时按序执行（演示/截图证据）
@@ -533,6 +535,9 @@ Options parseArgs(int argc, char** argv) {
             o.scriptType = argv[++i];
         } else if (a == "--script-bootstrap" && i + 1 < argc) {
             o.scriptBootstrap = argv[++i];
+        } else if (a == "--prop-panel") {
+            // P8 M-SC10：脚本属性面板（additive；[Prop] 描述表 + PropGet/PropSet 通道）。
+            o.propPanelOn = true;
         } else if (a == "--screenshot" && i + 1 < argc) {
             o.screenshot = true;
             o.screenshotPath = argv[++i];
@@ -1193,6 +1198,97 @@ struct EditorEmbed {
         });
     }
 };
+
+// ---- P8 M-SC10：属性面板同步（runScene/runNormal 共用；prop_panel.hpp 口径）----
+// 描述表 gen 变化 → 重建行（初值经 ScriptHost::propGet 拉取）；dirty 行 →
+// propSet 写回后清边沿；active/状态行按通道与表态回填。st 为帧外持久 State
+//（HudFrame 值成员整份拷入/拷回在调用方——M-T5 教训：只挂指针 = 面板全零）。
+static void propPanelSync(nl::renderer::PropPanel::State& st, std::uint32_t& builtGen,
+                          bool scriptLoaded) {
+    using nl::script::kPropKindBool;
+    using nl::script::kPropKindFloat;
+    using nl::script::kPropKindInt;
+    using nl::script::kPropKindString;
+    using nl::script::scriptProps;
+    using nl::script::scriptPropsGen;
+
+    auto& host = nl::script::ScriptHost::get();
+    const auto& tbl = scriptProps();
+    const std::uint32_t gen = scriptPropsGen();
+    st.totalProps = static_cast<int>(tbl.size());
+    st.channelAttached = host.hasProps();
+
+    if (gen != builtGen) {   // 重建（首帧 gen 1.. vs builtGen 0；reload 换表同路径）
+        builtGen = gen;
+        st = nl::renderer::PropPanel::State{};
+        st.gen = gen;
+        st.totalProps = static_cast<int>(tbl.size());
+        st.channelAttached = host.hasProps();
+        for (int r = 0; r < static_cast<int>(tbl.size()) &&
+                        r < nl::renderer::PropPanel::kMaxRows; ++r) {
+            auto& row = st.rows[st.rowCount];
+            row.kind = tbl[r].kind;
+            std::memcpy(row.name, tbl[r].name, sizeof row.name - 1);
+            row.name[sizeof row.name - 1] = '\0';
+            row.min = tbl[r].min;
+            row.max = tbl[r].max;
+            if (tbl[r].kind == kPropKindString) {
+                char buf[260] = {};
+                if (host.hasProps() && host.propGet(r, buf, sizeof buf).ok) {
+                    std::memcpy(row.s, buf + 4, sizeof row.s - 1);
+                    row.s[sizeof row.s - 1] = '\0';
+                }
+            } else {
+                std::uint8_t buf[8] = {};
+                if (host.hasProps() && host.propGet(r, buf, sizeof buf).ok) {
+                    float f;
+                    int raw;
+                    std::memcpy(&f, buf + 4, 4);
+                    std::memcpy(&raw, buf + 4, 4);
+                    if (tbl[r].kind == kPropKindFloat) row.f = f;
+                    else if (tbl[r].kind == kPropKindInt) row.i = raw;
+                    else row.b = raw != 0;
+                }
+            }
+            ++st.rowCount;
+        }
+    }
+
+    // dirty 行消费 → propSet → 清边沿（写失败 = 保留 dirty 下帧重试）。
+    for (int r = 0; r < st.rowCount; ++r) {
+        auto& row = st.rows[r];
+        if (!row.dirty) continue;
+        if (!host.hasProps()) break;
+        bool ok = false;
+        if (row.kind == kPropKindString) {
+            char buf[260] = {};
+            std::memcpy(buf + 4, row.s, sizeof row.s - 1);
+            ok = host.propSet(r, buf, sizeof buf).ok;
+        } else {
+            std::uint8_t buf[8] = {};
+            int raw = 0;
+            if (row.kind == kPropKindFloat) {
+                float f = row.f;
+                std::memcpy(buf + 4, &f, 4);
+            } else {
+                raw = row.kind == kPropKindInt ? row.i : (row.b ? 1 : 0);
+                std::memcpy(buf + 4, &raw, 4);
+            }
+            ok = host.propSet(r, buf, sizeof buf).ok;
+        }
+        if (ok) row.dirty = false;
+    }
+
+    st.active = scriptLoaded && st.totalProps > 0;
+    if (st.totalProps == 0)
+        std::snprintf(st.status, sizeof st.status,
+                      "no [Prop] fields pushed (call PropsPush.PushStatic in Entry)");
+    else if (!host.hasProps())
+        std::snprintf(st.status, sizeof st.status,
+                      "script lacks PropGet/PropSet contract (panel read-only empty)");
+    else
+        st.status[0] = '\0';
+}
 
 int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
               bool dagTop = false, bool cullMode = false, bool dagMode = false,
@@ -1935,7 +2031,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
     // Options 是 const（parseArgs 定稿）；HUD 最终值 = 用户显式选择 || 编辑器强制。
     // M-I2：input-hud 模式的面板就是本体，强制开（截图回归 --hud 同口径）。
-    const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive;
+    const bool hudOn = o.hudEnabled || editorActive || inputHud || navPanelActive || o.propPanelOn;   // M-SC10 additive
 
     // M2.3：lod 模式先把 --lod N 落到具体层。层数由 renderer 扫描
     // assets/meshlets/<stem>.lodN.nmesh 得出（N 从 0 连续）；没有分层资产或
@@ -2174,6 +2270,10 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
                             " (normal-mode OnTick in Physics tick group)");
     }
+    // P8 M-SC10：属性面板帧外持久 State（runScene 同款拷入/拷回纪律）。
+    nl::renderer::PropPanel propPanel;
+    nl::renderer::PropPanel::State propPanelState{};
+    std::uint32_t propPanelBuiltGen = 0;
     // P8 M-GL5：物理调试 step 挂 Physics 组（TickGroup 注册制，组序契约见
     // tick_groups.hpp）。M-GL2 之前是 tick lambda 内联判断，现迁移为按组注册——
     // 行为逐位一致（本模式只注册 Physics 组，空组 runTick 时跳过）。
@@ -2766,6 +2866,12 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         nl::renderer::HudFrame hud{};
+        // P8 M-SC10：属性面板同步 + 挂入（runScene 同款；训练场脚本调参即本体）。
+        if (o.propPanelOn && scriptLoaded) {
+            propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
+            hud.propPanel = &propPanel;
+            hud.propPanelState = propPanelState;   // 整份拷入（M-T5 教训）
+        }
         if (!o.editorGraph.empty()) hud.editor = editor.get();   // T1：编辑器窗口挂入
         // P8 M-N2：NavMesh 面板挂入 + 每帧同步（cvar <-> 面板 <-> 烘焙产物）。
         // 同步在 hud 构建前完成，画布消费本帧图元（阶段切换 / bake 都落在
@@ -2834,7 +2940,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
             hud.netStatus.lineCount = n;
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) {
             // ---- P8 M-I2：input-hud 注入管线（见主循环前的局部变量注释）----
             if (inputHud) {
                 // ① 请求持久态 -> feed 边沿（W/A/S/D/Space/Esc 走键盘，LMB 走鼠标键）
@@ -3080,12 +3186,13 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) ? &hud : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
         }
         renderer->drainMessages();
+        if (hud.propPanel) propPanelState = hud.propPanelState;   // M-SC10：编辑拷回
         NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         // M-PT0：稳态机械证据——最终帧的活粒子数（固定步长下 = 帧号的纯函数；
         // run.bat 断言落在发射率×平均寿命的理论区间 [rate*lifeMin, rate*lifeMax]）。
@@ -3122,7 +3229,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                 cullHistory[119] = hud.cullMs;
             }
         }
-        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud) {   // 帧跑了才消费控件写回
+        if (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) {   // 帧跑了才消费控件写回
             // P8 M-I2：注入请求读回（checkbox 双向态；下一帧帧首转 feed 边沿）
             if (inputHud) {
                 reqState[0] = hud.inputDebug.reqW;
@@ -3802,7 +3909,7 @@ int runScene(const Options& o) {
                             " | fixed dt=1/60");
     }
 
-    const bool hudOn = o.hudEnabled || o.profilingHud;   // M-TR0：独立性能窗口
+    const bool hudOn = o.hudEnabled || o.profilingHud || o.propPanelOn;   // M-TR0 + M-SC10 additive
     // 相机：用 assetSphere 自动取景（未显式 --dist 时；skin 模式 skinRadius 同款
     // 系数 2.4——assetSphere 是场景联合球，N 物体铺开尺度由它自适应）。
     float camDist = o.distance;
@@ -3976,6 +4083,11 @@ int runScene(const Options& o) {
         nl::core::log::infoCh("viewer", "script: loaded ", dll.string(), " type=", typeName,
                             " (host-level OnTick on logic frame)");
     }
+    // P8 M-SC10：属性面板帧外持久 State（帧前拷入 hud / 帧后拷回编辑——
+    // drawWindow 编辑落在 hud 副本，不拷回 = 编辑丢失；M-T5 SignalPanel 同族纪律）。
+    nl::renderer::PropPanel propPanel;
+    nl::renderer::PropPanel::State propPanelState{};
+    std::uint32_t propPanelBuiltGen = 0;   // 已重建的描述表代数（0 = 未重建）
     sceneConsole.registerCommand("game.script",
         "script host status (loaded dll/type, tick enabled/count); requires --script",
         [&](const std::vector<std::string>&) -> nl::core::console::CommandResult {
@@ -4296,6 +4408,16 @@ int runScene(const Options& o) {
         fp.eye[0] = eye3[0]; fp.eye[1] = eye3[1]; fp.eye[2] = eye3[2];
 
         nl::renderer::HudFrame hud{};
+        // M-C2：主面板随 --hud（runScene 缺省可见语义收敛为显式门）——M-SC10
+        // additive 不连带主面板（--no-hud + --prop-panel = 只画 script props；
+        // profiling-hud 独立窗口的 M-TR0 抑制语义不变，profiling 块内再覆写）。
+        hud.panelShow = o.hudEnabled;
+        // P8 M-SC10：属性面板同步 + 挂入（additive 独立窗口默认关；hudOn 含 --prop-panel）。
+        if (o.propPanelOn && scriptLoaded) {
+            propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
+            hud.propPanel = &propPanel;
+            hud.propPanelState = propPanelState;   // 整份拷入（M-T5 教训）
+        }
         if (hudOn) {
             const auto e = renderer->extent();
             hud.displayWidth  = static_cast<float>(e.width);
@@ -4354,6 +4476,7 @@ int runScene(const Options& o) {
             break;
         }
         renderer->drainMessages();
+        if (hud.propPanel) propPanelState = hud.propPanelState;   // M-SC10：编辑拷回
         NL_PROFILE_FRAME();   // M-TR0：present 完成处，对齐 RenderDoc 帧边界
         if (capturePath) {
             ++screenshotsSaved;
@@ -4584,6 +4707,8 @@ void printUsage() {
               << "  viewer.exe --interp                M-GL3: render-frame interpolation (alpha = accumulator/step)\n"
               << "  viewer.exe --script <projectDir>   M-GL4: load script host (scene mode); host-level\n"
               << "                                     OnTick driven by logic frame (--script-type/-bootstrap)\n"
+              << "  viewer.exe --prop-panel            M-SC10: script property panel (default off; needs\n"
+              << "                                     --script; edits [Prop] static fields live)\n"
               << "  console: game.pause|game.timeScale|game.status (M-GL1/GL2 dual-frame)\n"
               << "  console: game.script (M-GL4: script host status)\n"
               << "  console: audio.play <wav> <entity> (M-S3: spatial source bound to entity)\n"

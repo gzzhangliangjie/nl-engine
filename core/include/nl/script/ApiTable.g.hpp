@@ -105,6 +105,10 @@ struct ApiTable
     void* vehicleFullPose;
     // Physics.teleportVehicle — 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
     void* teleportVehicle;
+    // Props.propsPushBegin — 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok
+    void* propsPushBegin;
+    // Props.propsDescAdd — 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）
+    void* propsDescAdd;
 };
 
 } // namespace nl::script

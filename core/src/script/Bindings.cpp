@@ -521,16 +521,51 @@ extern "C" int nl_teleportVehicle(int slot, const float* pos, const float* quat)
 
 } // namespace
 
-// ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
-//      签名不一致 = 编译失败。须在实现之后、namespace nl::script 内 include）----
-#include "ApiTable.g.asserts.inc"
-
 void ecsSetWorld(scene::World* world) {
     g_ecsWorld = world;
 }
 
 void driveSetScene(physics::DebugScene* scene) {
     g_driveScene = scene;
+}
+
+// ---- M-SC10 属性面板域（描述表 POD；生命周期硬规则①：C++ 只存 POD，
+//      托管反射缓存留脚本程序集随 ALC 回收——Bindings.hpp 口径）----
+
+namespace {
+
+std::vector<PropDesc> g_props;
+std::uint32_t g_propsGen = 0;
+
+} // namespace
+
+const std::vector<PropDesc>& scriptProps() {
+    return g_props;
+}
+
+std::uint32_t scriptPropsGen() {
+    return g_propsGen;
+}
+
+extern "C" int nl_propsPushBegin() {
+    g_props.clear();
+    ++g_propsGen;   // 重建信号（面板/宿主按代数比对换表）
+    return kPropsOk;
+}
+
+extern "C" int nl_propsDescAdd(int kind, const char* name, float min, float max, float def) {
+    if (kind < kPropKindFloat || kind > kPropKindString || name == nullptr || name[0] == '\0')
+        return kPropsBadArg;
+    if (g_props.size() >= kMaxProps)
+        return kPropsBadArg;
+    PropDesc d{};
+    d.kind = kind;
+    std::snprintf(d.name, sizeof d.name, "%.*s", kPropNameCap, name);
+    d.min = min;
+    d.max = max;
+    d.def = def;
+    g_props.push_back(d);
+    return kPropsOk;
 }
 
 // ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----
@@ -574,5 +609,10 @@ const ApiTable* consoleApiTable() {
     };
     return &table;
 }
+
+// ---- M-SC4 编译期签名防漂移（生成物；声明 exports.api 与上面 extern "C" 实现
+//      签名不一致 = 编译失败。须在实现之后、namespace nl::script 内 include——
+//      M-SC10 教训：props 段实现落在了 include 之后会被 decltype 判未声明）----
+#include "ApiTable.g.asserts.inc"
 
 } // namespace nl::script

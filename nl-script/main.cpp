@@ -249,7 +249,7 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
                 const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
-                const fs::path& modelDir, const fs::path& driveDir) {
+                const fs::path& modelDir, const fs::path& driveDir, const fs::path& propsDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -1180,6 +1180,244 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s13 属性面板（M-SC10；propsDir 为空 = 跳过，同 s6~s12 口径）----
+    // 载体 = 入口脚本类 [Prop] 静态字段（拍板 Q-SC10-1 A）；描述表 = C# 反射推
+    // POD（propsPushBegin/propsDescAdd，gen 计数）；值通道 = BootTickPtr 协议
+    // 复用（PropGet/PropSet 可选契约，ScriptHost 生命周期纪律同 tickFn_）。
+    if (!propsDir.empty()) {
+        if (!dotnetBuild(propsDir.string(), {})) {
+            expectTrue(false, "s13-pre dotnet build props example");
+            std::printf("nl-script selftest: FAIL (props binding build)\n");
+            return 1;
+        }
+        auto pso = locateOutput(propsDir, {});
+        expectTrue(pso.has_value(), "s13-pre locate PropsScript build output");
+        if (pso) {
+            auto& host13 = nl::script::ScriptHost::get();
+
+            // s13-pre：装载前表态（进程内无 props 推送）
+            expectTrue(nl::script::scriptProps().empty(),
+                       "s13-pre descriptor table empty before load");
+            expectTrue(!host13.hasProps(),
+                       "s13-pre props channel not attached before load");
+
+            // 热更段热拷贝工程（s8b 同款：只拷源文件 + csproj 引用绝对化）
+            std::error_code ec;
+            const fs::path hotPropsRoot = fs::temp_directory_path(ec) /
+                ("nl-script-selftest-props-" + std::to_string(_getpid()));
+            fs::remove_all(hotPropsRoot, ec);
+            fs::create_directories(hotPropsRoot / "props", ec);
+            for (const auto& entry : fs::directory_iterator(propsDir, ec)) {
+                if (!entry.is_regular_file(ec)) continue;
+                fs::copy(entry.path(), hotPropsRoot / "props" / entry.path().filename(), ec);
+            }
+            expectTrue(!ec, "s13-pre copy props project to temp (sources only)");
+            const fs::path apiCsproj13 = propsDir / "../../script-api/NlScriptApi.csproj";
+            const fs::path hotPropsCsproj = hotPropsRoot / "props" / "PropsScript.csproj";
+            {
+                std::ifstream cin13(hotPropsCsproj, std::ios::binary);
+                std::string csproj13((std::istreambuf_iterator<char>(cin13)),
+                                     std::istreambuf_iterator<char>());
+                cin13.close();
+                const std::size_t refPos13 =
+                    csproj13.find("../../script-api/NlScriptApi.csproj");
+                expectTrue(refPos13 != std::string::npos,
+                           "s13-pre locate ProjectReference in copied csproj");
+                if (refPos13 != std::string::npos) {
+                    csproj13.replace(refPos13, strlen("../../script-api/NlScriptApi.csproj"),
+                                     apiCsproj13.lexically_normal().string());
+                    std::ofstream cout13(hotPropsCsproj, std::ios::binary | std::ios::trunc);
+                    cout13 << csproj13;
+                    cout13.close();
+                }
+            }
+            const fs::path hotProps = hotPropsRoot / "props";
+            expectTrue(dotnetBuild(hotProps.string(), {}), "s13-pre dotnet build hot props (v1)");
+            auto hotPso = locateOutput(hotProps, {});
+            expectTrue(hotPso.has_value(), "s13-pre locate hot PropsScript v1 output");
+
+            if (hotPso) {
+                const std::string propsType =
+                    "NlScript.Examples.PropsScript, " + hotPso->assemblyName;
+
+                // s13a：装载（Entry 推表）→ 描述表 POD 断言 + 通道接通
+                expectTrue(host13.loadScript(hotPso->assemblyDll.string(), propsType).ok,
+                           "s13a loadScript (Entry pushes [Prop] descriptor table)");
+                const auto& tbl13 = nl::script::scriptProps();
+                expectTrue(tbl13.size() == 4,
+                           "s13a descriptor table has 4 rows ([Prop] static fields)");
+                expectTrue(nl::script::scriptPropsGen() >= 1,
+                           "s13a descriptor gen bumped by pushBegin");
+                expectTrue(host13.hasProps(),
+                           "s13a props channel attached (PropGet/PropSet resolved)");
+                if (tbl13.size() == 4) {
+                    const auto& d0 = tbl13[0];
+                    expectTrue(d0.kind == nl::script::kPropKindFloat &&
+                                   std::string(d0.name) == "Speed" &&
+                                   d0.min == 0.f && d0.max == 10.f && d0.def == 3.5f,
+                               "s13a row0 Speed kind/Range/default bits");
+                    const auto& d1 = tbl13[1];
+                    expectTrue(d1.kind == nl::script::kPropKindInt &&
+                                   std::string(d1.name) == "Count" &&
+                                   d1.min == 0.f && d1.max == 100.f && d1.def == 7.f,
+                               "s13a row1 Count kind/Range/default bits");
+                    const auto& d2 = tbl13[2];
+                    expectTrue(d2.kind == nl::script::kPropKindBool &&
+                                   std::string(d2.name) == "Enabled" && d2.def == 1.f,
+                               "s13a row2 Enabled kind/default bits");
+                    const auto& d3 = tbl13[3];
+                    expectTrue(d3.kind == nl::script::kPropKindString &&
+                                   std::string(d3.name) == "Label",
+                               "s13a row3 Label kind bits");
+                }
+
+                // s13a2：值通道往返（float/int/bool/string；C# 静态字段为真源）
+                {
+                    std::uint8_t buf8[8] = {};
+                    float fv = 0.f;
+                    expectTrue(host13.propGet(0, buf8, sizeof buf8).ok, "s13a2 propGet float ok");
+                    std::memcpy(&fv, buf8 + 4, 4);
+                    expectTrue(fv == 3.5f, "s13a2 Speed initial value 3.5 via channel");
+
+                    fv = 7.25f;
+                    std::memcpy(buf8 + 4, &fv, 4);
+                    expectTrue(host13.propSet(0, buf8, sizeof buf8).ok, "s13a2 propSet float ok");
+                    std::memset(buf8, 0, sizeof buf8);
+                    expectTrue(host13.propGet(0, buf8, sizeof buf8).ok, "s13a2 propGet float after set");
+                    std::memcpy(&fv, buf8 + 4, 4);
+                    expectTrue(fv == 7.25f, "s13a2 Speed roundtrip 7.25");
+
+                    int iv = 42;
+                    std::memcpy(buf8 + 4, &iv, 4);
+                    expectTrue(host13.propSet(1, buf8, sizeof buf8).ok, "s13a2 propSet int ok");
+                    // C# 真源核：ReadField 探针经 bootstrap BootCall 读静态字段
+                    //（collectible 正本——禁 getEntryPoint 直拉脚本 dll，M-GL4 口径）。
+                    std::int32_t fieldVal = 0;
+                    {
+                        struct ReadArgs { std::int32_t idx; std::int32_t pad; void* outRaw; }
+                        ra{1, 0, &fieldVal};   // ABI：idx@0 / outRaw@8（PropsScript.cs 同文锚）
+                        std::int32_t retR = 0;
+                        expectTrue(vm->scriptCall(propsType, "ReadField",
+                                                  &ra, sizeof ra, &retR).ok &&
+                                   retR == 0 && fieldVal == 42,
+                                   "s13a2 C# Count static field == 42 (cross-source via ReadField)");
+                    }
+                    std::memcpy(buf8 + 4, &(iv = 0), 4);
+                    expectTrue(host13.propSet(2, buf8, sizeof buf8).ok, "s13a2 propSet bool 0 ok");
+                    expectTrue(host13.propGet(2, buf8, sizeof buf8).ok, "s13a2 propGet bool ok");
+                    int rawInt13 = 0;
+                    std::memcpy(&rawInt13, buf8 + 4, 4);
+                    expectTrue(rawInt13 == 0, "s13a2 Enabled roundtrip false");
+
+                    char sbuf[260] = {};
+                    std::memcpy(sbuf + 4, "hola props", 11);
+                    expectTrue(host13.propSet(3, sbuf, sizeof sbuf).ok, "s13a2 propSet string ok");
+                    std::memset(sbuf, 0, sizeof sbuf);
+                    expectTrue(host13.propGet(3, sbuf, sizeof sbuf).ok, "s13a2 propGet string ok");
+                    expectTrue(std::string(sbuf + 4) == "hola props",
+                               "s13a2 Label roundtrip UTF8 bytes");
+                }
+
+                // s13b：负向（idx 越界 → 脚本侧 2 → rc 8；坏缓冲 → C++ 侧 BadArg 2）
+                {
+                    std::uint8_t buf8[8] = {};
+                    const auto rOob = host13.propGet(99, buf8, sizeof buf8);
+                    expectTrue(!rOob.ok && rOob.code == 8,
+                               "s13b propGet idx out of range -> rc 8 (script-side 2)");
+                    const auto rBad = host13.propSet(0, buf8, 4);
+                    expectTrue(!rBad.ok && rBad.code == 2,
+                               "s13b propSet bad buffer size -> rc 2 (C++-side BadArg)");
+                }
+
+                // s13c：热更跟随（改源加一行 [Prop] 字段 → 重编同名覆盖 → reload）
+                {
+                    const fs::path cs13 = hotProps / "PropsScript.cs";
+                    std::ifstream in13(cs13, std::ios::binary);
+                    std::string src13((std::istreambuf_iterator<char>(in13)),
+                                      std::istreambuf_iterator<char>());
+                    in13.close();
+                    const std::string anchor13 = "[Prop(\"Label\")] public static string Label";
+                    const std::size_t pos13 = src13.find(anchor13);
+                    expectTrue(pos13 != std::string::npos,
+                               "s13c locate Label anchor in copied source");
+                    if (pos13 != std::string::npos) {
+                        src13.insert(pos13,
+                                     "[Prop(\"Extra\", 0, 50)] public static int Extra = 5;\n        ");
+                        std::ofstream out13(cs13, std::ios::binary | std::ios::trunc);
+                        out13 << src13;
+                        out13.close();
+                        expectTrue(dotnetBuild(hotProps.string(), {}),
+                                   "s13c dotnet build overwrite (Extra field added)");
+                        std::string info13;
+                        expectTrue(host13.reloadScript(&info13).ok,
+                                   "s13c reloadScript (table + channel re-resolved)");
+                        if (!host13.hasProps())
+                            std::printf("  s13c detail: %s\n", info13.c_str());
+                        expectTrue(nl::script::scriptProps().size() == 5,
+                                   "s13c descriptor table follows reload (4 -> 5)");
+                        bool extraFound = false;
+                        for (const auto& d : nl::script::scriptProps())
+                            extraFound |= std::string(d.name) == "Extra" &&
+                                          d.kind == nl::script::kPropKindInt &&
+                                          d.max == 50.f;
+                        expectTrue(extraFound, "s13c Extra row present (kind int, max 50)");
+                        expectTrue(host13.hasProps(),
+                                   "s13c channel re-attached after reload");
+                    }
+                }
+
+                // s13d：泄露段（万次级 string 串往返 + GC.Collect 后句柄漂移阈值；
+                // s8f 手法扩展——生命周期账本硬规则②新域必带）
+                {
+                    // 泄露段必须打在 **string 行** 上——reload 后行序随 MetadataToken
+                    // 变化（s13c 把 Extra 插在 Label 声明前 → row3=Extra(int)），
+                    // 硬编码 idx 会把 4 字节 string 比特写进 int 字段（实测坑）。
+                    int labelIdx13 = -1;
+                    const auto& tblL = nl::script::scriptProps();
+                    for (int r = 0; r < static_cast<int>(tblL.size()); ++r)
+                        if (tblL[r].kind == nl::script::kPropKindString) labelIdx13 = r;
+                    expectTrue(labelIdx13 >= 0, "s13d string row present in reloaded table");
+                    DWORD h013 = 0, h113 = 0;
+                    GetProcessHandleCount(GetCurrentProcess(), &h013);
+                    bool loopOk = labelIdx13 >= 0;
+                    char sbuf13[260] = {};
+                    for (int i = 0; i < 10000 && loopOk; ++i) {
+                        std::snprintf(sbuf13 + 4, sizeof sbuf13 - 4, "leak-%d", i);
+                        loopOk = host13.propSet(labelIdx13, sbuf13, sizeof sbuf13).ok;
+                        if (!loopOk) break;
+                        std::memset(sbuf13, 0, sizeof sbuf13);
+                        loopOk = host13.propGet(labelIdx13, sbuf13, sizeof sbuf13).ok &&
+                                 std::memcmp(sbuf13 + 4, "leak-", 5) == 0;
+                    }
+                    expectTrue(loopOk, "s13d 10k string propGet/propSet roundtrips all ok");
+                    std::int32_t retGc = 0;
+                    expectTrue(vm->scriptCall(propsType, "GCCollect", nullptr, 0, &retGc).ok &&
+                               retGc == 0,
+                               "s13d managed GC.Collect via probe");
+                    GetProcessHandleCount(GetCurrentProcess(), &h113);
+                    const long long drift13 =
+                        static_cast<long long>(h113) - static_cast<long long>(h013);
+                    expectTrue(drift13 < 32,
+                               "s13d handle drift < 32 after 10k string roundtrips + GC");
+                    if (drift13 >= 32)
+                        std::printf("  s13d drift=%lld\n", drift13);
+                }
+
+                // s13e：卸载（通道前置空 = 铁律；描述表 POD 留存 C++ 侧）
+                {
+                    bool fully13 = false;
+                    expectTrue(host13.unloadScript(&fully13).ok && fully13,
+                               "s13e unloadScript (weakref fully unloaded)");
+                    expectTrue(!host13.hasProps(),
+                               "s13e props channel nulled before unload (lifecycle rule)");
+                    expectTrue(nl::script::scriptPropsGen() >= 2,
+                               "s13e descriptor table POD persists (C++-owned)");
+                }
+            }
+            fs::remove_all(hotPropsRoot, ec);
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -1194,7 +1432,7 @@ void usage() {
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
         "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
-        "                    [driveProjectDir]                                 full machine-checked acceptance\n"
+        "                    [driveProjectDir] [propsProjectDir]               full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -1247,7 +1485,8 @@ int main(int argc, char** argv) {
         const fs::path camDir = argc >= 8 ? fs::weakly_canonical(argv[7]) : fs::path();
         const fs::path modelDir = argc >= 9 ? fs::weakly_canonical(argv[8]) : fs::path();
         const fs::path driveDir = argc >= 10 ? fs::weakly_canonical(argv[9]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir);
+        const fs::path propsDir = argc >= 11 ? fs::weakly_canonical(argv[10]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir);
     }
     usage();
     return 2;

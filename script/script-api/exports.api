@@ -95,3 +95,11 @@ Physics | physicsRemoveVehicle | int | in int slot | tombstone 移除（约束�
 Physics | physicsSetVehicleInput | int | in int slot, in f32 forward, in f32 right, in f32 brake, in f32 handBrake | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
 Physics | vehicleFullPose | int | in int slot, out buf3 pos, out buf4 quat, out buf3 vel | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽
 Physics | teleportVehicle | int | in int slot, in buf3 pos, in buf4 quat | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在
+# ---- M-SC10 属性面板域（2026-11-14 拍板 Q-SC10-1~4 = A/A/A/A：静态字段载体 / 四基本类型 / --prop-panel additive / 交代物全要）----
+# 载体 = 入口脚本类 [Prop] 静态字段（M-SC2b ScriptComponent 维持默认不做）；C# 侧 Props.PushStatic(typeof(T))
+# 反射枚举 → 经本域两导出推 POD 描述表（生命周期硬规则①：FieldInfo 缓存留托管侧随 ALC 回收，C++ 只存 POD）。
+# 描述表 gen 计数器在 pushBegin 时 +1（面板/宿主重建信号）；重复 push = 覆盖（reload 幂等）。
+# 值读写通道不经 ApiTable：BootTickPtr 协议按名解析可选契约 PropGet/PropSet（同 OnTick：缺失 = 通道惰性、
+# reload 重取、unload 前置空）。值 ABI：buf[0..3]=int32 idx；标量 buf[4..7]=f32/i32/b(0/1)；string buf[4..259]=UTF8 尾 0（get 截断 255）。
+Props | propsPushBegin | int |  | 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok
+Props | propsDescAdd | int | in int kind, in str name, in f32 min, in f32 max, in f32 def | 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256）

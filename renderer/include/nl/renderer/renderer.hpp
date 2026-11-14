@@ -10,6 +10,7 @@
 
 #include "nl/renderer/input_debug.hpp"   // P8 M-I2：HudFrame::inputDebug 的 POD 定义
 #include "nl/renderer/nav_panel.hpp"     // P8 M-N2：HudFrame::navPanelState 的 POD 定义
+#include "nl/renderer/prop_panel.hpp"    // P8 M-SC10：HudFrame::propPanelState 的 POD 定义
 
 namespace nl::renderer {
 
@@ -353,6 +354,12 @@ struct HudFrame {
     // null = 不画。POD 状态与画布见 nav_panel.hpp，ImGui 封在 nav_panel.cpp）----
     class NavPanel* navPanel = nullptr;
     NavPanel::State navPanelState;
+
+    // P8 M-SC10：脚本属性面板（additive 独立窗口默认关；null = 不画，基线一像素
+    // 不动）。State 是值成员——viewer 帧前整份拷入、帧后整份拷回（M-T5 教训：
+    // 只挂指针不拷 State = 面板渲染全零）。
+    PropPanel* propPanel = nullptr;
+    PropPanel::State propPanelState;
     // ---- P8 M-I2：input-hud 调试面板（--mode input-hud 时 viewer 置 show；
     // false = 零布局，既有基线不动。POD 定义与绘制接口见 input_debug.hpp，
     // ImGui 符号封在 renderer/src/input_debug.cpp）----

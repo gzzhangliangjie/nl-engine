@@ -11657,6 +11657,135 @@
      }
     }
    ]
+  },
+  {
+   "id": "m-sc10",
+   "label": "P8 M-SC10",
+   "name": "属性面板域：[Prop] 静态字段反射 + POD 描述表 + ImGui 面板（拍板 A/A/A/A，ApiTable 37->39，A 类轨道）",
+   "tag": "m-sc10",
+   "date": "2026-11-14",
+   "summary": "属性面板域两导出（propsPushBegin/propsDescAdd，exports.api 尾部追加，ApiTable 37->39，Api.Version 0.9.0）。拍板 Q-SC10-1~4：A 静态字段载体（入口脚本类 [Prop] 静态字段反射，M-SC2b ScriptComponent 维持默认不做）/ A 四基本类型（float/int/bool/string，kind 0..3）/ A --prop-panel additive（runScene/runNormal 通用，SignalPanel 同款纪律 State 整份拷入 HudFrame + 帧后拷回编辑）/ A 交代物全要。描述表通道 = C# PropsPush.PushStatic 反射（MetadataToken 序声明稳定化，FieldInfo 缓存留 script-api 程序集随 ALC 回收——生命周期硬规则①）→ propsPushBegin（gen+1 = 面板重建信号）/propsDescAdd 推 POD；值通道 = BootTickPtr 协议复用（PropGet/PropSet 可选契约同 OnTick：缺失 = 惰性、reload 重取、unload 前置空，bootstrap 零改动）；值 ABI buf[0..3]=idx、标量 [4..7]、string [4..259] UTF8 尾 0。默认值 = 推送时字段现值快照（无独立 Default 声明防双源漂移）。viewer --prop-panel：描述表 gen 变化重建行（初值 propGet 拉）+ dirty 行 propSet 清边沿 + 编辑帧后拷回；热更 reload → 新 ALC 重推表 + 契约重取 = 面板自动跟随。selftest s13a（表/通道/值往返 + ReadField 经 BootCall C# 真源核）/ s13b（idx 越界 rc 8 + 坏缓冲 rc 2）/ s13c（热重编加字段 reload 表 4->5）/ s13d（10k string 往返 + GC.Collect 探针句柄漂移 <32——s8f 手法扩展，生命周期硬规则②）/ s13e（unload 通道前置空 + POD 表 C++ 留存）。",
+   "acceptance": [
+    "selftest s13a~s13e 全绿（s0~s12 零回归，PASS 0 failures）：描述表 4 行 kind/Range/default 逐位 + 值通道四类型往返 + C# 真源核 + 负向（rc 8/2）+ 热更跟随（4->5）+ 万次泄露段漂移 <32 + 卸载铁律",
+    "gen.py --check 绿（39 导出声明与 5 生成物一致，含 API.md；Api.Version 0.9.0）；check props 编译过",
+    "DX12/VULKAN 双后端 BUILD OK + viewer selftest 16/16（--prop-panel 接线零渲染回归）；props-panel 证据图（ecs-e1b 场景 + --script props + --prop-panel）双后端 bytes",
+    "四张证据图全部由工具真实输出渲染，run.bat 五段 ALL GREEN"
+   ],
+   "preview": "example/m-sc10/props-panel-DX12.png",
+   "exe": {
+    "dx12": "build/DX12/nl-script.exe",
+    "vulkan": "build/VULKAN/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest s13a~s13e：属性面板域（M-SC0~SC8 不回归）",
+     "kind": "tool",
+     "note": "s13a 描述表 4 行逐位 + 通道接通 + 四类型值往返（C# 真源核 ReadField 经 BootCall）；s13b idx 越界 rc 8 / 坏缓冲 rc 2；s13c 热重编加 [Prop(\"Extra\",0,50)] reload 表 4->5 + 契约重取；s13d 10k string 往返 + GC.Collect 句柄漂移 <32；s13e unload 通道前置空 + POD 表留存。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS",
+     "command": "nl-script selftest script/examples/hello ... script/examples/props"
+    },
+    {
+     "id": "s13",
+     "name": "s13 段特写（selftest.log 过滤 s13 锚行）",
+     "kind": "tool",
+     "note": "run.bat seg3 过滤产物 s13.log 的机械锚：s13-pre 定位 + s13a 表/通道 + s13a2 值往返 + s13b 负向 + s13c 热更跟随 + s13d 泄露段 + s13e 卸载。",
+     "args": [
+      "selftest",
+      "{root}/script/examples/hello",
+      "{root}/script/examples/console",
+      "{root}/script/examples/ecs",
+      "{root}/script/bootstrap",
+      "{root}/script/examples/timeinput",
+      "{root}/script/examples/camera",
+      "{root}/script/examples/model",
+      "{root}/script/examples/drive",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "s13a descriptor table has 4 rows",
+     "command": "nl-script selftest ... (s13 filter by run.bat)"
+    },
+    {
+     "id": "check-props",
+     "name": "check props 示例：编译过（dotnet build exit 0）",
+     "kind": "tool",
+     "note": "编译闸：PropsScript.csproj 引 script-api（0.9.0 Props facade + PropAttribute）；s13 探针（ReadField/GCCollect）语义在 selftest 全量段核。",
+     "args": [
+      "check",
+      "{root}/script/examples/props"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/props"
+    },
+    {
+     "id": "gen-check",
+     "name": "gen.py --check：golden 字节对比（39 导出 + API.md）",
+     "kind": "tool",
+     "note": "生成器自证：exports.api 单源与 5 生成物逐字节一致（39 exports / 1 POD / props 2 导出）；新鲜度闸在 CMake 侧。",
+     "args": [
+      "--check"
+     ],
+     "expectExit": 0,
+     "expectLog": "--check ok",
+     "command": "python tools/scriptapi/gen.py --check",
+     "exe": {
+      "dx12": "tools/scriptapi/gen.bat",
+      "vulkan": "tools/scriptapi/gen.bat"
+     }
+    },
+    {
+     "id": "props-panel",
+     "name": "ecs-e1b 场景 + --script props + --prop-panel：属性面板 additive 同屏",
+     "kind": "image",
+     "note": "script props 窗口（gen/props/channel 状态行 + Speed 3.5 滑条 / Count 7 / Enabled / Label 初值经 propGet 拉取）+ ecs-e1b 场景渲染。--prop-panel additive 默认关：--hud 基线零耦合。 --script-bootstrap 显式 {root} 绝对化（默认仓库根相对路径在 regression cwd 下拼错——实测坑）。",
+     "args": [
+      "--scene",
+      "{root}/example/ecs-e1b/ecs-e1b.scene",
+      "--script",
+      "{root}/script/examples/props",
+      "--script-bootstrap",
+      "{root}/script/bootstrap/bin/Debug/net8.0/NlScriptBootstrap.dll",
+      "--prop-panel",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "expectExit": 0,
+     "expectLog": "screenshot written",
+     "baselines": {
+      "dx12": "example/m-sc10/props-panel-DX12.png",
+      "vulkan": "example/m-sc10/props-panel-VULKAN.png"
+     },
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     },
+     "command": "viewer.exe --scene ecs-e1b --script props --prop-panel (screenshot)"
+    }
+   ]
   }
  ]
 }

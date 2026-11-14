@@ -1955,6 +1955,18 @@
 - **M-SC7 台账「下一步」句与计划正文冲突**：M-SC7 节写「CameraSource 式适配源」、P8-SCRIPT-PLAN L107 写「直接对齐 M-NET2 面不新造」——开工按前者拍了函数指针表，摆完才核到后者，披露冲突后重拍 A'。**里程碑台账的「下一步」句是方向性指针，禁止当既定拍板引用；与计划文档正文冲突时以正文为准并显式披露重拍。**
 **提交版本**：feat/script 本节 commit + annotated tag `m-sc8`。冻结面：scene 模式脚本链（runScene M-GL4 块）零改动；M-NET2 多载具契约/网络路径零改动；Time/Input/Log/Camera/Ecs 域零改动。下一步：M-SC10 属性面板（C# [Prop] 特性 + 反射枚举 + ImGui 通用面板）；M-SC11 收口。
 
+## M-SC10：属性面板域（[Prop] 静态字段反射 + POD 描述表 + ImGui 面板；feat/script，2026-11-14，tag `m-sc10`）
+
+**动作**：属性面板域两导出（propsPushBegin/propsDescAdd，exports.api 尾部追加，ApiTable 37->39，Api.Version 0.9.0）。开工摆四问（用户拍板 A/A/A/A）：**Q-SC10-1 载体 = A 静态字段面板**（入口脚本类 [Prop] 静态字段反射枚举——M-SC2b ScriptComponent 维持默认不做，零实例零生命周期；计划行内「C# 组件字段」在静态入口模型下落为「脚本类静态字段」）；**Q-SC10-2 类型集 = A 四基本类型**（float/int/bool/string，kind 0..3；Range = Slider、无 Range = 直输）；**Q-SC10-3 挂点 = A --prop-panel additive**（独立窗口默认关，runScene/runNormal 通用——State 帧前整份拷入 HudFrame + 帧后拷回编辑，M-T5 SignalPanel 教训同族）；**Q-SC10-4 交代物 = A 全要**（PropsScript 示例 + selftest s13 + GUIDE M-SC10 节 + cases.json 卡 + viewer 证据图）。双通道架构（生命周期硬规则①落地）：**描述表** = C# PropsPush.PushStatic 反射（MetadataToken 序声明稳定化，FieldInfo 缓存留 script-api 程序集随 ALC 回收）→ propsPushBegin（gen+1 = 面板重建信号）/propsDescAdd 推 POD；**值读写** = BootTickPtr 协议复用（PropGet/PropSet 可选契约同 OnTick：缺失 = 惰性、reload 重取、unload 前置空，bootstrap 零改动；值 ABI buf[0..3]=idx / 标量 [4..7] / string [4..259] UTF8 尾 0）。Default = 推送时字段现值快照（防双源漂移）。viewer runScene 补 hud.panelShow = o.hudEnabled 显式门（M-C2 收敛：--no-hud + --prop-panel = 只画 script props，M-TR0 抑制语义不变）。
+**完成情况**：🟢 nl-script selftest **PASS 0 failures**（s0~s12 零回归 + s13a~s13e 全绿：表/通道/四类型往返 + ReadField 经 BootCall C# 真源核 + 负向 rc 8/2 + 热重编表 4->5 跟随 + 10k string 泄露段漂移 <32 + 卸载铁律）；🟢 gen.py --check 绿（39 导出 / Api.Version 0.9.0）；🟢 DX12/VULKAN 双后端 BUILD OK；🟢 viewer --prop-panel 证据图（ecs-e1b 场景 + script props 窗口 gen 1 4/4 props channel ok + Speed/Count/Enabled/Label 控件全渲染）；cases.json 尾插 m-sc10 卡 5 条（126 版本，props-panel image 卡双后端 bytes）。
+**踩坑情况**
+- **C++ propSet staging 拷贝源错位**：memcpy(staging+4, buf, size-4) 拷的是调用方 buf[0..3]（idx 位）而值区 ABI 在 buf+4 → set 全零（propGet 回 0.0 实证）。修 = 从 buf+4 取。「包装填 idx + 值区偏移 4」双段 ABI 跨端两侧各写一遍，逐字对照必做。
+- **.NET 8 禁反射 Invoke [UnmanagedCallersOnly] 方法**（InvalidProgram 异常）——BootCall/BootTickPtr 反射路径的契约方法（Entry/PropGet/PropSet/探针）一律不带 UC；UC 只用于 getEntryPoint 函数指针路径（hello EntryNative 分工同款）。
+- **reload 后行序随 MetadataToken 变化**：热重编新字段插旧字段前 → idx 位移——按 kind/名字定位禁硬编码 idx（实测 string 比特写进 int 字段）。
+- C1090 PDB API 0x6BA 二连（mspdbsrv 瞬时故障，重跑即绿；M-SC8 踩坑②复现）。
+**提交版本**：feat/script 本节 commit + annotated tag `m-sc10`。冻结面：M-SC0~SC8 全域零改动（exports.api 纯尾追加）；scene 模式脚本链零改动；kStage 不动（面板 = renderer additive 新文件）。下一步：M-SC11 收口（script 轨道整轨收官 + merge 回 master 待指令）。
+
+
 ## P8 M-S0：vendored miniaudio + nl/audio 封装 + 离线确定性 PCM（feat/audio 轨道，2026-11-09，tag `audio-s0`）
 
 **动作**：用户「开工 M-S0 建 feat/audio」= 提前解禁音频轨道 M-S0~S2 排期闸（M-S3 场景集成仍 gate 在 P8 E1/E1b 之后，照物理 §7.1e 先例）。基于 master 建 `feat/audio` worktree（`E:/UE_STUDY_2026/nl-engine-audio`，两处 junction 共享 + skip-worktree）。三处参考实读：Carrot `engine/audio/` 对象模型（Manager→SFX/Music→Sound→SoundSource→SoundListener，AudioThread 不抄）/ bevy `bevy_audio` `audio_output.rs`（无设备 `stream: None` 优雅降级）+ `audio.rs`（无 HRTF 只左右声像）/ UE `AudioDebug.cpp`（M-S2 调试字段口径，只读不抄）；ROADMAP 对照总表无音频行（A 类轨道），按铁律就近读三处音频同类模块。

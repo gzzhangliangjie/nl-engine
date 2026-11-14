@@ -11,6 +11,7 @@
 
 #include <windows.h>   // SEH __except（Vm.cpp 同口径；EXCEPTION_EXECUTE_HANDLER）
 #include <cstdio>      // std::snprintf（SEH 异常码格式化）
+#include <cstring>     // std::memcpy（M-SC10 props 值缓冲）
 
 namespace nl::script {
 
@@ -79,6 +80,8 @@ Result ScriptHost::loadScript(const std::string& scriptDllPath, const std::strin
         // 指针生命周期铁律：tickFn_ 指向旧 ALC 内代码，unload 前先解绑。
         tickFn_ = nullptr;
         tickEnabled_ = false;
+        propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
+        propsSetFn_ = nullptr;
         scriptUnregisterAll();
         Result ur = vm_->scriptUnload(&fully);
         if (!ur.ok) return ur;
@@ -96,6 +99,8 @@ Result ScriptHost::loadScript(const std::string& scriptDllPath, const std::strin
         // 装载成功但 Entry 失败：脚本命令可能注册了一半——安全卸载回滚，不留半态。
         tickFn_ = nullptr;
         tickEnabled_ = false;
+        propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
+        propsSetFn_ = nullptr;
         scriptUnregisterAll();
         bool fully = false;
         vm_->scriptUnload(&fully);
@@ -106,6 +111,8 @@ Result ScriptHost::loadScript(const std::string& scriptDllPath, const std::strin
         // 不允许「loaded 但半初始化」假绿态（M-GL4 实证：旧版吞掉返回值）。
         tickFn_ = nullptr;
         tickEnabled_ = false;
+        propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
+        propsSetFn_ = nullptr;
         scriptUnregisterAll();
         bool fully = false;
         vm_->scriptUnload(&fully);
@@ -126,7 +133,10 @@ Result ScriptHost::loadScript(const std::string& scriptDllPath, const std::strin
     } else {
         tickFn_ = nullptr;
         tickEnabled_ = false;
+        propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
+        propsSetFn_ = nullptr;
     }
+    refreshPropsFn_(typeName);   // M-SC10：PropGet/PropSet 可选契约重取（覆盖上面置空）
     tickCount_ = 0;
 
     scriptDll_ = scriptDllPath;
@@ -142,6 +152,8 @@ Result ScriptHost::reloadScript(std::string* outInfo) {
     const auto unbound = scriptUnregisterAll();
     tickFn_ = nullptr;            // M-GL4：tick 指针与命令 thunk 同生命周期纪律
     tickEnabled_ = false;
+    propsGetFn_ = nullptr;        // M-SC10：props 指针与 tick 同生命周期纪律
+    propsSetFn_ = nullptr;
     bool fully = false;
     Result ur = vm_->scriptUnload(&fully);
     if (!ur.ok) return ur;
@@ -174,7 +186,10 @@ Result ScriptHost::reloadScript(std::string* outInfo) {
     } else {
         tickFn_ = nullptr;
         tickEnabled_ = false;
+        propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
+        propsSetFn_ = nullptr;
     }
+    refreshPropsFn_(scriptType_);   // M-SC10：热更跟随（新 ALC 契约重取）
     tickCount_ = 0;
 
     if (outInfo) {
@@ -199,6 +214,8 @@ Result ScriptHost::unloadScript(bool* fullyUnloaded) {
     const auto unbound = scriptUnregisterAll();   // 次序铁律同 reload
     tickFn_ = nullptr;                            // M-GL4：unload 前先解绑 tick 指针
     tickEnabled_ = false;
+    propsGetFn_ = nullptr;                        // M-SC10：unload 前先解绑 props 指针（同纪律）
+    propsSetFn_ = nullptr;
     bool fully = false;
     Result ur = vm_->scriptUnload(&fully);
     if (!ur.ok) return ur;
@@ -228,6 +245,59 @@ Result ScriptHost::scriptTick(double dt) {
                                    " (tick disabled; reload-script to recover)");
     }
     ++tickCount_;
+    return Result::success();
+}
+
+// ---- M-SC10：props 可选契约通道（ScriptHost.hpp 口径）----
+
+void ScriptHost::refreshPropsFn_(const std::string& typeName) {
+    propsGetFn_ = nullptr;
+    propsSetFn_ = nullptr;
+    void* pfn = nullptr;
+    if (vm_->scriptTickFn(typeName, "PropGet", &pfn).ok && pfn)
+        propsGetFn_ = reinterpret_cast<EntryPointFn>(pfn);
+    pfn = nullptr;
+    if (vm_->scriptTickFn(typeName, "PropSet", &pfn).ok && pfn)
+        propsSetFn_ = reinterpret_cast<EntryPointFn>(pfn);
+    // 缺失 = 静默置空（可选契约：面板空转，旧脚本零波及——OnTick 同款）。
+}
+
+Result ScriptHost::propGet(std::int32_t idx, void* buf, std::int32_t size) {
+    if (!vm_) return Result::fail(7, "ScriptHost: init not called");
+    if (!propsGetFn_) return Result::fail(8, "propGet: channel not attached (script lacks static PropGet)");
+    if (!buf || size < 8 || size > 4 + kPropStringCap + 1) return Result::fail(2, "propGet: bad buffer");
+    std::memcpy(buf, &idx, sizeof idx);   // ABI：buf[0..3]=idx（script-api PropsPush 同文锚）
+    std::uint32_t excCode = 0;
+    const std::int32_t ret = callTickFn(propsGetFn_, buf, size, &excCode);
+    if (ret == kTickSehSentinel) {
+        char ebuf[48];
+        std::snprintf(ebuf, sizeof ebuf, "0x%08x", excCode);
+        return Result::fail(6, std::string("propGet: SEH exception in PropGet (code=") + ebuf + ")");
+    }
+    if (ret != 0)
+        return Result::fail(8, "propGet: PropGet returned " + std::to_string(ret));
+    return Result::success();
+}
+
+Result ScriptHost::propSet(std::int32_t idx, const void* buf, std::int32_t size) {
+    if (!vm_) return Result::fail(7, "ScriptHost: init not called");
+    if (!propsSetFn_) return Result::fail(8, "propSet: channel not attached (script lacks static PropSet)");
+    if (!buf || size < 8 || size > 4 + kPropStringCap + 1) return Result::fail(2, "propSet: bad buffer");
+    std::uint8_t staging[4 + kPropStringCap + 1];
+    std::memcpy(staging, &idx, sizeof idx);
+    // 调用方 ABI：buf[0..3]=idx 位（包装填），buf[4..]=值区——staging[4..] 从
+    // buf+4 取值（M-SC10 实测坑：从 buf 起拷 = 把 idx 位当值写进字段，set 全零）。
+    std::memcpy(staging + 4, static_cast<const std::uint8_t*>(buf) + 4,
+                static_cast<size_t>(size - 4));
+    std::uint32_t excCode = 0;
+    const std::int32_t ret = callTickFn(propsSetFn_, staging, size, &excCode);
+    if (ret == kTickSehSentinel) {
+        char ebuf[48];
+        std::snprintf(ebuf, sizeof ebuf, "0x%08x", excCode);
+        return Result::fail(6, std::string("propSet: SEH exception in PropSet (code=") + ebuf + ")");
+    }
+    if (ret != 0)
+        return Result::fail(8, "propSet: PropSet returned " + std::to_string(ret));
     return Result::success();
 }
 

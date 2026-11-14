@@ -40,3 +40,5 @@ reinterpret_cast<void*>(&nl_physicsRemoveVehicle),  // Physics.physicsRemoveVehi
 reinterpret_cast<void*>(&nl_physicsSetVehicleInput),  // Physics.physicsSetVehicleInput
 reinterpret_cast<void*>(&nl_vehicleFullPose),  // Physics.vehicleFullPose
 reinterpret_cast<void*>(&nl_teleportVehicle),  // Physics.teleportVehicle
+reinterpret_cast<void*>(&nl_propsPushBegin),  // Props.propsPushBegin
+reinterpret_cast<void*>(&nl_propsDescAdd),  // Props.propsDescAdd

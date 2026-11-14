@@ -353,6 +353,7 @@ add_library(nl_renderer STATIC
     renderer/src/hud.cpp
     renderer/src/editor.cpp        # T1：材质图编辑器窗口（imgui-node-editor 接线）
     renderer/src/nav_panel.cpp     # P8 M-N2：NavMesh 调参/五阶段面板（ImDrawList 画布）
+    renderer/src/prop_panel.cpp    # P8 M-SC10：脚本属性面板（[Prop] 静态字段读写）
     renderer/src/console_ui.cpp   # P8 M-C1：开发者控制台 ImGui 前端（GLFW->ImGuiKey 映射在此）
     renderer/src/audio_debug_ui.cpp  # P8 M-S2：独立默认关的音频声源调试面板（不碰常驻 HUD）
     renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）
