@@ -11,6 +11,7 @@
 #include "nl/renderer/input_debug.hpp"   // P8 M-I2：HudFrame::inputDebug 的 POD 定义
 #include "nl/renderer/nav_panel.hpp"     // P8 M-N2：HudFrame::navPanelState 的 POD 定义
 #include "nl/renderer/prop_panel.hpp"    // P8 M-SC10：HudFrame::propPanelState 的 POD 定义
+#include "nl/sprite/sprite_desc.hpp"     // M-SP0：Sprite2DFrame 只带 core 纯 POD 指针，公开头零图形符号
 
 namespace nl::renderer {
 
@@ -473,6 +474,20 @@ struct RmlUiFrame {
     int  textCharCount  = 0;
 };
 
+// M-SP0：世界空间 2D 精灵帧描述（viewer -> renderer 单向喂，POD + 指针）。
+// 缺省 enabled=false = pass 完全不 draw，既有双后端基线一像素不动。
+// sprites 指向调用方稳定存储（游戏侧每帧的 SpriteDesc 数组）；renderer 只在
+// 本帧 build() 内读取，不持有。displayWidth/Height 为像素，cameraX/Y 与
+// pixelsPerUnit 定义正交投影，游戏侧可自由换算。
+struct Sprite2DFrame {
+    bool  enabled = false;
+    const nl::sprite::SpriteDesc* sprites = nullptr;
+    std::uint32_t spriteCount = 0;
+    float displayWidth = 0.0f, displayHeight = 0.0f;
+    float cameraX = 0.0f, cameraY = 0.0f;
+    float pixelsPerUnit = 32.0f;
+};
+
 // M-E1b.0：ECS 场景描述 POD（viewer 从 World 组件收集，renderer 转发 backend）。
 // 公开头只放 POD；meshFile 指向调用方稳定存储（viewer 侧字符串数组）。
 struct SceneObjectDesc {    float world[16];        // 列主序世界矩阵（TransformComponent::getWorldMatrix()，m[col*4+row]）
@@ -627,9 +642,11 @@ public:
     // 画一帧：清屏 + 模型绘制（MVP / 剔除开关来自 FrameParams）+（可选）ImGui HUD 叠加
     // + 可选同帧回读写 PNG + present。hud 为空时完全不碰 ImGui，历史版本的截图基线保持不变。
     // screenshotPath 非空时用 NVRHI staging texture 真回读 GPU 像素，不是 CPU 画个假图。
+    // M-SP0：sprite2d 为新增尾参且带默认值 —— 所有既有 viewer 调用点零改动，
+    // 缺省 nullptr = 2D pass 不参与本帧（历史基线不动）。
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath = nullptr, HudFrame* hud = nullptr,
-                     RmlUiFrame* rml = nullptr);
+                     RmlUiFrame* rml = nullptr, Sprite2DFrame* sprite2d = nullptr);
 
     // 把当前后端调试层里积累的消息转成日志并返回新增的设备错误数（验收要求为 0）。
     int drainMessages();

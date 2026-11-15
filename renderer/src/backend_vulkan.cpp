@@ -2,6 +2,7 @@
 #include "scene.hpp"
 #include "hud.hpp"
 #include "rmlui_backend.hpp"
+#include "sprite2d.hpp"     // M-SP0：世界空间 2D 精灵批渲染 pass
 #include "gpu_timer.hpp"
 
 #if defined(NL_BACKEND_VULKAN)
@@ -222,6 +223,7 @@ public:
         nvrhiDevice_->runGarbageCollection();
         scene_.invalidatePipelines();
         hud_.invalidatePipeline();
+        sprite2d_.invalidatePipeline();   // M-SP0：framebuffer 重建后管线需重键
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         rhiTargets_.clear();
@@ -340,6 +342,7 @@ public:
 
     bool renderFrame(ClearColor color, const FrameParams& frame,
                      const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml,
+                     Sprite2DFrame* sprite2d,
                      std::string& outError) override {
         if (!nvrhiDevice_ || !vulkanSwapchain_) { outError = "renderer not initialized"; return false; }
 
@@ -359,9 +362,9 @@ public:
         // endFrame，与 DX12 同型；acquire 与 OUT_OF_DATE 重建路径留在编排层（早退
         // 语义）。纯搬移零逻辑变化；逻辑 tick / 插值 alpha 消费留在 viewer game
         // loop（renderFrame 调用之前），beginFrame 不吞逻辑 tick（M-GL3 口径）。
-        beginFrame(hud, rml);
+        beginFrame(hud, rml, sprite2d);
         nvrhi::StagingTextureHandle staging =
-            recordFrame(color, frame, screenshotPath, hud, rml);
+            recordFrame(color, frame, screenshotPath, hud, rml, sprite2d);
         return endFrame(staging, screenshotPath, outError);
     }
 
@@ -384,7 +387,7 @@ private:
     // ---- M8.2 t0 段一：beginFrame = 回读消费只能发生在这里 ----
     // imageAvailable semaphore 等待、pipeline ensure、全部 timer poll/回读消费、
     // hud build（console/audio/inputDebug 三窗口，M-I2）、info_ 写回。
-    void beginFrame(HudFrame* hud, RmlUiFrame* rml) {
+    void beginFrame(HudFrame* hud, RmlUiFrame* rml, Sprite2DFrame* sprite2d) {
         // ---- frame in flight 同步安全网 ----
         // acquire 信号 imageAvailableSem；NVRHI 在下一次 submit 时等它。
         // 删掉这段等待 = 往仍被 present 占用的 image 里画 → 同步报错（S0-PLAN 校验点）。
@@ -442,6 +445,29 @@ private:
         // M-UI0：RmlUi CPU 侧（输入喂数 + 热重载 + Update/Render 收集 draw items）。
         // 开命令列表前消费纪律同 hud build——几何上传列表在 recordFrame 之前执行完。
         if (rml && rml->enabled) rmlui_.build(*rml);
+        // M-SP0：世界空间 2D 精灵的 CPU 侧构建 + 惰性建资源/管线。只在本帧
+        // 显式 enabled 时触碰——缺省路径连 GPU 资源都不创建，历史基线零扰动。
+        if (sprite2d && sprite2d->enabled) {
+            if (!sprite2dInited_) {
+                std::string spErr;
+                if (!sprite2d_.init(nvrhiDevice_, "spv", spErr)) {
+                    nl::core::log::deviceError("Vulkan", "sprite2d init: " + spErr);
+                } else {
+                    sprite2dInited_ = true;
+                }
+            }
+            if (sprite2dInited_ && !framebuffers_.empty() && framebuffers_[0]) {
+                std::string spErr;
+                if (!sprite2d_.ensurePipeline(nvrhiDevice_,
+                        framebuffers_[0]->getFramebufferInfo(), spErr)) {
+                    nl::core::log::deviceError("Vulkan", "sprite2d pipeline: " + spErr);
+                }
+            }
+            sprite2d_.build(sprite2d->sprites, sprite2d->spriteCount,
+                            sprite2d->displayWidth, sprite2d->displayHeight,
+                            sprite2d->cameraX, sprite2d->cameraY,
+                            sprite2d->pixelsPerUnit);
+        }
     }
 
     // ---- M8.2 t0 段二：recordFrame = 帧列表生命周期唯一落点 ----
@@ -450,7 +476,7 @@ private:
     // 各自留在自己 recordFrame 内，结构统一、语义各自落档）。返回截图 staging。
     nvrhi::StagingTextureHandle recordFrame(ClearColor color, const FrameParams& frame,
                                             const char* screenshotPath, HudFrame* hud,
-                                            RmlUiFrame* rml) {
+                                            RmlUiFrame* rml, Sprite2DFrame* sprite2d) {
         nvrhi::CommandListHandle cmd = nvrhiDevice_->createCommandList();
         cmd->open();
         scene_.resetDrawCalls();   // M-TR0 K1：帧开始清零，之后所有 scene draw 累加
@@ -503,6 +529,14 @@ private:
             } else {
                 nl::core::log::errorCh("renderer", "RmlUi pipeline: ", rmlErr);
             }
+        }
+        // M-SP0：2D 精灵画在 compare/RmlUi 之后、ImGui HUD 之前。Vulkan 帧列表
+        // 每帧新建（M8.1 两后端不对称，勿顺手统一），draw 只吃裸 ICommandList*。
+        if (sprite2d && sprite2d->enabled && sprite2dInited_ &&
+            vulkanImageIndex_ < framebuffers_.size() &&
+            framebuffers_[vulkanImageIndex_]) {
+            sprite2d_.draw(cmd, framebuffers_[vulkanImageIndex_],
+                           nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
         // M0.5：HUD 叠在模型之后、截图回读之前——PNG 里能看到的就是用户看到的画面。
         if (hud && vulkanImageIndex_ < framebuffers_.size() && framebuffers_[vulkanImageIndex_]) {
@@ -963,6 +997,7 @@ private:
         // 必须一并失效，否则 createTargets() 之后还在引用已销毁的 swapchain image。
         scene_.invalidatePipelines();
         hud_.invalidatePipeline();
+        sprite2d_.invalidatePipeline();   // M-SP0：framebuffer 重建后管线需重键
         for (auto& fb : framebuffers_) fb = nullptr;
         depth_ = nullptr;
         if (vulkanSwapchain_) {
@@ -1051,6 +1086,7 @@ private:
         // 场景 / HUD 资源（含 binding set / pipeline）必须在 device 仍存活时释放。
         scene_.shutdown();
         hud_.shutdown();
+        sprite2d_.shutdown();   // M-SP0：device 仍存活时释放 2D pass 全部资源
         rmlui_.shutdown();   // M-UI0：RmlUi context / 几何 / 纹理（device 存活期释放）
         gpuTimer_.shutdown();   // M0.6：device 仍存活时释放 timer query
         for (auto& fb : framebuffers_) fb = nullptr;
@@ -1119,6 +1155,8 @@ private:
     // ---- M0.4 场景资源：glTF 模型 / 贴图 / pipeline 由共享 Scene 管理 ----
     Scene                                 scene_;
     Hud                                   hud_;
+    nl::render::Sprite2DPass              sprite2d_;        // M-SP0：惰性 init（仅 enabled 帧）
+    bool                                  sprite2dInited_ = false;
     RmlUiBackend                          rmlui_;   // M-UI0：--rmlui-demo 才初始化
     GpuTimer                              gpuTimer_;
     float                                 gpuLastMs_ = 0.0f;  // M6.2：最近一次 resolve 的整帧 GPU 时间

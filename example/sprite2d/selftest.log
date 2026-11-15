@@ -1,0 +1,5 @@
+  [PASS] atlas grid UV rect + addressing (6 cases)
+  [PASS] flipbook timeline (loop/reverse/pause/stop/finished)
+  [PASS] sprite batch stable sort + texture buckets
+  [PASS] POD sizes (UvRect=16B)
+SELFTEST PASS (4/4)

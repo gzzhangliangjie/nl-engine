@@ -1,0 +1,6 @@
+sprite-tools (M-SP0) usage:
+  selftest
+  atlas-trace    --out <tsv> | atlas-check <tsv>
+  flipbook-trace --out <tsv> | flipbook-check <tsv>
+  batch-trace    --out <tsv> | batch-check <tsv>
+exit: 0=PASS 1=assert 2=usage

@@ -444,6 +444,7 @@ add_library(nl_renderer STATIC
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
     renderer/src/rmlui_backend.cpp  # M-UI0.1：RmlUi RenderInterface/SystemInterface/FileInterface + NVRHI 管线（--rmlui-demo）
+    renderer/src/sprite2d.cpp       # M-SP0：世界空间 2D 精灵批渲染 pass（core 纯 POD + 单源双目标 shader）
 )
 target_include_directories(nl_renderer
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
@@ -806,6 +807,7 @@ add_subdirectory(city-tools)      # W0 M-W0.0：大世界生成工具（A 类轨
 add_subdirectory(traffic-tools)   # P8 M-T0.0：交通 lane graph 工具（A 类轨道 feat/worldgen，只链 nl_core 零图形）
 add_subdirectory(gl-tools)
 add_subdirectory(input-tools)
+add_subdirectory(sprite-tools)   # M-SP0：2D 精灵 core 侧 POD 无头验收（纯 CPU 零图形）
 add_subdirectory(vfx-tools)
 add_subdirectory(cam-tools)
 add_subdirectory(gi-tools)        # S11 M11.0：世界缓存 CPU 仿真（hashmap 语义先仿真后上 GPU）
