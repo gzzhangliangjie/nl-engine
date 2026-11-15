@@ -4120,3 +4120,23 @@
 - **完成情况**：🟢 双后端 BUILD OK + selftest 16/16 ×2；🟢 Vulkan 运行时冒烟全绿（RmlUi ready + entry ok + id=btnDemo type=click param=ping + deviceErrors=0）；🟢 验收锚全绿：C# Entry 三步（SetEventCallback+LoadDocument+ElementSetText）→ `ui-script: entry ok`；C# 改文本可见（PNG "text set from C# (Entry)"）；合成点击回调（`ui-event: id=btnDemo type=click param=ping`）；OnTick 逐帧刷新（--tick serial 下 `ontick alive, tick=0..3` + PNG tick 行 "alive, tick 0 (C# OnTick)"）；🟢 `gen.py --check` 绿（45 exports / 1 POD / 5 files）；🟢 缺省关基线零漂（无 flag 运行零 RmlUi 日志、EXIT=0）；🟢 kStage 冻结不 bump（kArtifacts 158→162 仅登记）。
 - **提交版本**：feat/ui-rmlui 本条 commit，annotated tag `ui-rmlui`（建于 master 38e8db8，轨道注册 d071029）
 - **踩坑**：① **RmlUi 上游目录布局不能扁平化**：Core 源码内 `../../Include/...` 相对 include 依赖 Source/Core、Source/Debugger 原样层级；② **Core GLOB 三子目录**：Elements/FontEngineDefault/Layout 不收 = 首轮链接 LNK2019 Rml::LayoutEngine/ElementForm/LayoutPools（根层只有 141/191）；③ **FreeType ftdebug.c 必须编入**：FT_Trace_Enable/Disable stub 所在，漏收 smooth.c 链接炸；④ **RMLUI_FONT_ENGINE_FREETYPE=1 必须定义**：缺它 Initialise 报 "No font engine interface set!"（FontEngineInterfaceDefault 在 FontEngineDefault/，宏挂不上链；不是 6.x 拆接口要显式 Set）；⑤ **资产根口径**：paths::assetDir() 注入 = assets/models（模型白名单域），RmlUi 世界资产根 = assets/——resolve/字体统一 hop 一级；文档内相对路径基于**文档 URL 目录**非 assets 根（`href="ui/demo.rcss"` 变 ui/ui/ 双前缀）；⑥ **RmlUi `right` 定位实测不生效**（面板消失），改垂直排 left/top（640x360 与 1280x720 双尺寸验证）；⑦ **主仓遗留（M-PKG0 漏改）**：scene.cpp restirPath 直读 NL_SHADER_DIR 宏，该宏已迁 nl_core PRIVATE（nl_renderer 看不见），主仓旧 obj 掩盖——wt 首次全量编译炸出，改走 paths::shaderDir()；⑧ **UiSink 装配时序**：Entry（装载期）就调 Ui.*，循环内现绑 = rc 1 未绑 sink——装配提前到脚本装载之前（双模式同修）；⑨ **scene 模式 tickMode 缺省 off**：OnTick 不跑不是脚本链问题，`--tick serial` 才驱动逻辑帧（诊断黑洞先补 ScriptHost OnTick 解析失败 warn 再定位）；⑩ **typeName 推导约定**：类名 = 目录名首字母大写 + "Script"——示例目录必须叫 `ui` 不是 `uiscript`（否则 UiscriptScript -101）；⑪ Edit 工具 old_string 尾部换行消费陷阱两连（sceneConsole 拼行编译错 + M-SC8 注释行吞失）。
+
+## 待办 M-MOD0 — 顶层模块化整理：新建 modules/ 目录 + 编译开关（**未启动，闲时整理**，前期调研 2026-11-15 已完成）
+
+- **目标**：仓库根新建 `modules/`，把顶层相对独立的自研工具模块挪进去，并在根 CMakeLists 加编译开关，编译时可选带哪个模块不带哪个。
+- **调研结论（2026-11-15 已实读确认）**：17 个顶层 `*-tools` 全部是独立 `add_executable`，**只依赖 nl_core，零反向依赖**（viewer / nanite-tools / core / renderer 均不链它们）——挪动+开关不影响引擎本体。
+- **分类清单**：
+  - 纯核心（只链 nl_core，14 个，可直接挪）：anim / cam / city / gi / gl / log / material-graph / nav / net / phys / traffic / nanite-scene / nl-script / nanite-console
+  - 带第三方（可挪，开关需连带）：audio-tools（+nl_miniaudio）、vfx-tools（+nl_effekseer）
+  - 依赖渲染（可挪但不算独立模块，待定）：input-tools（链 nl_renderer）
+  - 不挪（引擎本体）：core / renderer / viewer / nanite-tools / editor / editor_bridge
+- **开关方案（待拍板二选一）**：
+  - A（推荐，最小改动）：`set(NL_MODULES "ALL" CACHE STRING "...")` 单变量列表，`-DNL_MODULES="anim;nav"` 只编指定，`ALL` 默认全编；
+  - B：每模块一个 `option(NL_MODULE_XXX ... ON)`，CMake GUI 可逐个勾选，样板代码 17 份。
+- **执行要点**：`git mv` 到 `modules/`；根 CMakeLists 的 `add_subdirectory` 改为按开关遍历 `modules/`；**同步改引用面**——docs/ 有 ~10 个文档、scripts/ 有 4 个脚本（city2engine.py / make-audio-wav.py / make-ecs-parallel-evidence.py / obj2glb.py）硬编码了 `xxx-tools` 路径；audio/vfx 开关关闭时对应 thirdparty add_subdirectory 是否也要跳过需一并处理；editor / editor_bridge 的 add_subdirectory 顺序不动。
+- **验收口径（初稿）**：`ALL` 默认全编 = 双后端 BUILD OK + selftest 16/16 + regression 冒烟零漂移；指定子集（如只编 anim;nav）BUILD OK 且目标数正确；全关子集时不产生孤儿目标/链接残缺。
+- **顺带整理项：thirdparty 规范核对（2026-11-15 实读盘点，随 M-MOD0 一起做）**：
+  - **VENDOR.md 覆盖不全**：30 个子目录里 14 个缺选型闸文档——`directx-headers / glfw / imgui / imgui-node-editor / meshoptimizer / metis / nvrhi / nvrhi-reference / slang / slang-reference / stb / tinygltf / vulkan-headers / dotnet-hosting`（jolt/effekseer/enet/miniaudio/spdlog/taskflow/tracy/rmlui/freetype/renderdoc 等后期进的都齐）。定性：VENDOR.md 规范中期才立，早期 vendored 的没补；补档时拉上游原文核版本/许可证，不许凭记忆写（M-PKG0 踩坑⑥）。
+  - **资产类内容混进 thirdparty**：`ambientcg-facades / kenney-car-kit / kenney-nature-kit / poly-streetlight` 4 个是第三方美术资产不是代码库，语义上应归 `assets/`；挪动需同步改 `tools/package.py` 的 THIRD-PARTY-NOTICES 汇总路径（M-PKG0 从 thirdparty 抽的许可段）。
+  - **vendor-ref/ 不算违规**：glTF exporter C# 参考源码，自带 VENDOR.md，"参考只读"区有意独立，保持现状。
+  - **编译链面已确认干净**：所有编译型 vendored 库都在 thirdparty/ 且 CMake 走相对路径，无散落在自研目录的情况。

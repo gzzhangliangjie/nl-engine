@@ -198,6 +198,9 @@
 | 水体渲染（B 类穿插，2026-11-14 立项方案 B） | `E:/UE_STUDY_2026/nl-engine-water`（在册） | `feat/water` + tags `water-t0`~`water-t2`，收官 `water-done` | `docs/WATER-PLAN.md`（M-WAT0 SSR 本体 / M-WAT1 Gerstner 波形 / M-WAT2 折射吸收收口；Q-WA1~WA6 已拍板 2026-11-14：SSR 本体由 M-WAT0 承载、零 vendored）；2026-11-14 建于 master `b150fd9`；验收含反射/折射侧证据（关反射水体感几乎不变即不合格） |
 | 游戏界面 RmlUi 接入（A 类，2026-11-15 立项 M-UI0） | `E:/UE_STUDY_2026/nl-engine-ui-rmlui`（**CLOSED 2026-11-15，wt 已拆除**：junction 摘除 + worktree prune + 分支删于合并后） | `feat/ui-rmlui` + tag `ui-rmlui` @ `22f636d` | M-UI0 整轨收官（M-UI0.0 vendored RmlUi 6.3+FreeType 2.13.3 / 0.1 renderer 双后端接入 / 0.2 C# Ui 域全链 + demo+热重载+F8+`--rmlui-click` 无头验收 / 收官 MILESTONES+close 闸+release --done）：双后端 BUILD OK + selftest 16/16 ×2 + 验收锚全绿（entry ok / click id=btnDemo / ontick alive）+ 缺省关基线零漂 + `gen.py --check` 绿 + kStage 不 bump；踩坑 11 条入 MILESTONES；**整轨已合并 master（--no-ff `cfe6a8f`，2026-11-15）** |
 
+| 通用物理查询 API（A 类，波 1，2026-11-15 立项 M-PQ0） | `E:/UE_STUDY_2026/nl-engine-phys-query`（在册） | `feat/phys-query` + tag `phys-query-pq0` | `docs/p8/PHYQUERY-PLAN.md` + `PHYQUERY-TOOLS-GUIDE.md`；用户拍板方案 A 最小面（3 组 Jolt-free POD + 3 函数）；冻结面 = exports.api / Bindings / viewer 一律不碰（波 0 闸等 input 轨 merge）；A 类工具版交代，不 bump `kStage` |
+| 2D 精灵批渲染（B 类穿插，波 1，2026-11-15 立项 M-SP0） | `E:/UE_STUDY_2026/nl-engine-sprite2d`（在册） | `feat/sprite2d` + tag `sprite2d-sp0` | `docs/sprite2d/SPRITE2D-PLAN.md` + `SPRITE2D-TOOLS-GUIDE.md`；用户拍板方案 A 严格切分（core POD + renderer 独立 Sprite2DPass + 一份 .slang 双后端 + 正交 + 按 textureId 分桶），目标 = 落地 Brotato 世界空间 2D；RmlUi element/scissor 桥接后置不进本里程碑；demo 旗标与 PNG 基线等波 0 |
+
 > 已建 worktree 均以 `junction` 共享主 worktree 的 `.workbuddy` 与 `thirdparty/slang/dist`，且 `.workbuddy` 已 `skip-worktree`（git status 干净，不会误把纪律源 commit 进 feature 分支）。**在册 worktree 清单与各轨道 active/closed 状态一律以 `wt_pool.py status` 为准（2026-11-13 起），本节不再维护文字版快照。**
 
 ### 7.1b 待建 worktree（已立项，执行排 P8 场景整合之后）

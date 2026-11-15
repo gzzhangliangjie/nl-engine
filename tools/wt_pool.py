@@ -162,9 +162,13 @@ TRACKS = {
         "branch": "feat/input", "state": "active",
         "note": "M-I0~M-I2 merged to master 0df16a0 (tags input-m0~input-m2) "
                 "2026-11-10. 2026-11-15 §7.1b reopen by user instruction "
-                "「键鼠操作整体 review 全做」: M-I3 脚本鼠标 API + 指针锁定 / "
-                "M-I4 屏幕拾取 / M-I5 重映射文件 + 拖拽 + 字符暴露 + 手柄; "
-                "wt rebuilt on master 3d17d42, junction .workbuddy + slang dist",
+                "「键鼠操作整体 review 全做」: M-I3/M-I4/M-I5 ALL CLOSED "
+                "(tags input-m3/input-m4/input-m5 @ bb68f6c; close gates passed, "
+                "release --done M-I3; reports .wt_pool_close/input-M-I{3,4,5}.md): "
+                "script mouse API + pointer lock + drop queue / screen pick "
+                "(pure CPU) / actions JSON + rebind + gamepad + inputTextPop; "
+                "54 exports; dual-backend ctest 164/164; RELEASED awaiting "
+                "user merge instruction",
     },
     "drive": {
         "wt": "E:/UE_STUDY_2026/nl-engine-drive",
@@ -348,6 +352,30 @@ TRACKS = {
                 "default-off zero-drift; wt REMOVED 2026-11-15 (junctions "
                 "detached + worktree prune, branch deleted post-merge, "
                 "tag ui-rmlui kept)",
+    },
+    # ---- 波 1（2026-11-15 用户拍板 A A ①）: two independent game-support tracks ----
+    "phys-query": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-phys-query",
+        "branch": "feat/phys-query", "state": "active",
+        "note": "M-PQ0 (A-class): general physics query API, Jolt-free public "
+                "POD header nl/physics/query.hpp + World.cpp narrow-phase "
+                "mapping (raycast/sweep/overlap). User decision 2026-11-15 "
+                "option A minimal surface. Plan docs/p8/PHYQUERY-PLAN.md. "
+                "Frozen: no exports.api / Bindings / viewer changes (wave 0 "
+                "gate: input track owns those files until merge).",
+    },
+    "sprite2d": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-sprite2d",
+        "branch": "feat/sprite2d", "state": "active",
+        "note": "M-SP0 (B-class interleave, user approved 2026-11-15 option ①): "
+                "2D sprite batch rendering for Brotato world-space sprites. "
+                "User decision option A strict split: core POD (atlas/flipbook/"
+                "sprite_desc) + renderer Sprite2DPass (shared quad + instance "
+                "VB + textureId binning + ortho + one sprite2d.slang dual "
+                "backend). RmlUi element/scissor bridging DEFERRED (user: "
+                "'按可以落地Brotato的目标来'), not in M-SP0 scope. "
+                "Plan docs/sprite2d/SPRITE2D-PLAN.md. Frozen: demo flag / PNG "
+                "baseline wait for wave 0 (viewer/main.cpp owned by input track).",
     },
 }
 
