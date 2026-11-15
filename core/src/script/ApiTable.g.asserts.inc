@@ -49,3 +49,12 @@ static_assert(std::is_same_v<decltype(&nl_uiShowDocument), int(*)(int, int)>, "e
 static_assert(std::is_same_v<decltype(&nl_uiElementSetText), int(*)(int, const char*, const char*)>, "exports.api drift: Ui.uiElementSetText");
 static_assert(std::is_same_v<decltype(&nl_uiElementGetText), int(*)(int, const char*, const char**)>, "exports.api drift: Ui.uiElementGetText");
 static_assert(std::is_same_v<decltype(&nl_uiSetEventCallback), int(*)(void*)>, "exports.api drift: Ui.uiSetEventCallback");
+static_assert(std::is_same_v<decltype(&nl_inputMouseIsDown), int(*)(int, int*)>, "exports.api drift: Input.inputMouseIsDown");
+static_assert(std::is_same_v<decltype(&nl_inputMouseJustPressed), int(*)(int, int*)>, "exports.api drift: Input.inputMouseJustPressed");
+static_assert(std::is_same_v<decltype(&nl_inputMouseJustReleased), int(*)(int, int*)>, "exports.api drift: Input.inputMouseJustReleased");
+static_assert(std::is_same_v<decltype(&nl_inputMouseDelta), int(*)(float*)>, "exports.api drift: Input.inputMouseDelta");
+static_assert(std::is_same_v<decltype(&nl_inputScrollDelta), int(*)(float*)>, "exports.api drift: Input.inputScrollDelta");
+static_assert(std::is_same_v<decltype(&nl_inputCursorPos), int(*)(float*, int*)>, "exports.api drift: Input.inputCursorPos");
+static_assert(std::is_same_v<decltype(&nl_inputGamepadIsDown), int(*)(int, int*)>, "exports.api drift: Input.inputGamepadIsDown");
+static_assert(std::is_same_v<decltype(&nl_inputGamepadAxis), int(*)(int, float*)>, "exports.api drift: Input.inputGamepadAxis");
+static_assert(std::is_same_v<decltype(&nl_inputTextPop), int(*)(int*)>, "exports.api drift: Input.inputTextPop");

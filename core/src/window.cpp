@@ -9,6 +9,7 @@
 #endif
 
 #include <array>
+#include <utility>
 #include <vector>
 
 namespace nl::core {
@@ -31,6 +32,7 @@ Key mapKey(int glfwKey) {
         case GLFW_KEY_GRAVE_ACCENT: return Key::Grave;  // M-C1：控制台呼出
         case GLFW_KEY_TAB:    return Key::Tab;   // M-C1：补全请求（viewer 边沿）
         case GLFW_KEY_T:      return Key::T;     // P8 M-CAM4：Chase↔Free 切换边沿（C 已被 cull 占用）
+        case GLFW_KEY_F10:    return Key::F10;   // M-I3：指针锁定切换边沿（Esc=退出约定让位）
         default:              return Key::Unknown;
     }
 }
@@ -59,6 +61,9 @@ struct Window::Impl {
 
     // P8 M-I0（增量扩展）：鼠标按键事件队列（InputState 消费通道，见 window.hpp）。
     std::vector<MouseButtonEvent> mouseButtonEvents;
+
+    // M-I5：文件拖拽队列（consumeDroppedPaths 消费制）。
+    std::vector<std::string> droppedPaths;
 
     void onKey(int glfwKey, int action, int mods) {
         // 游戏热键边沿（PRESS 才记，读一次即清）
@@ -129,6 +134,14 @@ struct Window::Impl {
             impl->scrollY += y;
         }
     }
+
+    // M-I5：文件拖拽（消费制队列；路径原样存 UTF-8/本地多字节，校验归消费方）。
+    static void dropCallback(GLFWwindow* handle, int count, const char** paths) {
+        if (auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(handle))) {
+            for (int i = 0; i < count; ++i)
+                if (paths[i]) impl->droppedPaths.emplace_back(paths[i]);
+        }
+    }
 };
 
 Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
@@ -157,6 +170,7 @@ Window::Window(const WindowDesc& desc) : impl_(std::make_unique<Impl>()) {
     glfwSetFramebufferSizeCallback(impl_->handle, &Impl::framebufferCallback);
     glfwSetCursorPosCallback(impl_->handle, &Impl::cursorCallback);
     glfwSetMouseButtonCallback(impl_->handle, &Impl::buttonCallback);
+    glfwSetDropCallback(impl_->handle, &Impl::dropCallback);   // M-I5 文件拖拽
 #if defined(_WIN32)
     // M-C1：中文 IME 会把反引号（VK_OEM_3）当编辑键抢走，WM_KEYDOWN 根本到不了
     // GLFW（插桩实证：ESC/TAB 有事件、grave 无）——viewer 全窗口解除 IME 关联。
@@ -248,6 +262,29 @@ void Window::mousePosition(float& x, float& y) const {
     if (!valid() || !impl_->haveCursor) return;
     x = static_cast<float>(impl_->lastCursorX);
     y = static_cast<float>(impl_->lastCursorY);
+}
+
+// M-I3 指针锁定：GLFW_CURSOR_DISABLED = 光标隐藏 + 原生捕获，光标回调持续吐
+// 无界虚拟坐标（consumeMouse 相对增量语义不变）；NORMAL = 恢复。CapturePermanently
+// 语义（UE GameViewportClient::SetMouseCaptureMode 口径，P8-INPUT-PLAN §7.1 实读留痕）。
+void Window::setMouseCaptured(bool on) {
+    if (!valid()) return;
+    glfwSetInputMode(impl_->handle, GLFW_CURSOR, on ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+}
+
+bool Window::mouseCaptured() const {
+    if (!valid()) return false;
+    return glfwGetInputMode(impl_->handle, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+}
+
+// M-I5：文件拖拽消费（读一次即清）+ 测试注入口（--drop-sim 与真实拖拽同一队列）。
+std::vector<std::string> Window::consumeDroppedPaths() {
+    if (!valid()) return {};
+    return std::exchange(impl_->droppedPaths, {});
+}
+
+void Window::feedDroppedPath(const std::string& path) {
+    if (valid()) impl_->droppedPaths.push_back(path);
 }
 
 void* Window::nativeHandle() const {

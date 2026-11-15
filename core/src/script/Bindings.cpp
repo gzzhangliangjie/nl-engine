@@ -9,6 +9,7 @@
 #include "nl/core/game_clock.hpp"
 #include "nl/core/input.hpp"
 #include "nl/core/action_map.hpp"
+#include "nl/core/window.hpp"       // M-I5：inputTextPop 消费 Window::consumeTextChars（完整类型）
 #include "nl/core/log.hpp"
 #include "nl/physics/World.hpp"     // M-SC8：DebugScene 载具训练场（PIMPL，Jolt 挡在 World.cpp）
 #include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源
@@ -348,6 +349,7 @@ extern "C" int nl_timeSetState(int paused, double timeScale) {
 
 core::InputState* g_inputState = nullptr;
 core::ActionMap* g_actionMap = nullptr;
+core::Window* g_window = nullptr;   // M-I5：inputTextPop 操作目标（inputSetWindow 绑定）
 
 // 动作 id 有效性 + 类型校验（name() 非法 id = nullptr 是 ActionMap 文档口径）。
 bool actionValid(core::ActionMap* map, core::ActionMap::ActionId id, core::ActionMap::Type want) {
@@ -406,6 +408,95 @@ extern "C" int nl_inputKeyIsDown(int key, int* outDown) {
     if (!g_inputState) return kInputNoSource;
     // 越界键码：InputState::isDown 防御性返回 false（文档口径），此处透传
     *outDown = g_inputState->isDown(key) ? 1 : 0;
+    return kInputOk;
+}
+
+// ---- M-I3 鼠标裸查询导出（2026-11-15；bevy ButtonInput 对称面 + Carrot 鼠标源口径）----
+// 操作目标同 v3 Input 域 = g_inputState；按钮码 = GLFW 鼠标键码（0=左/1=右/2=中），
+// 越界按钮码 InputState::mouseIsDown 防御性返回 false，此处透传（与 inputKeyIsDown 同口径）。
+// 边沿与增量字段帧末 endFrame 清（M-I0 帧节奏），宿主负责帧节奏。
+
+extern "C" int nl_inputMouseIsDown(int button, int* outDown) {
+    if (!outDown) return kInputBadArg;
+    *outDown = 0;
+    if (!g_inputState) return kInputNoSource;
+    *outDown = g_inputState->mouseIsDown(button) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputMouseJustPressed(int button, int* outPressed) {
+    if (!outPressed) return kInputBadArg;
+    *outPressed = 0;
+    if (!g_inputState) return kInputNoSource;
+    *outPressed = g_inputState->mouseJustPressed(button) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputMouseJustReleased(int button, int* outReleased) {
+    if (!outReleased) return kInputBadArg;
+    *outReleased = 0;
+    if (!g_inputState) return kInputNoSource;
+    *outReleased = g_inputState->mouseJustReleased(button) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputMouseDelta(float* outDelta2) {
+    if (!outDelta2) return kInputBadArg;
+    outDelta2[0] = outDelta2[1] = 0.0f;
+    if (!g_inputState) return kInputNoSource;
+    const auto d = g_inputState->mouseDelta();
+    outDelta2[0] = d.x;
+    outDelta2[1] = d.y;
+    return kInputOk;
+}
+
+extern "C" int nl_inputScrollDelta(float* outDelta2) {
+    if (!outDelta2) return kInputBadArg;
+    outDelta2[0] = outDelta2[1] = 0.0f;
+    if (!g_inputState) return kInputNoSource;
+    const auto s = g_inputState->scrollDelta();
+    outDelta2[0] = s.x;
+    outDelta2[1] = s.y;
+    return kInputOk;
+}
+
+extern "C" int nl_inputCursorPos(float* outPos2, int* outHasCursor) {
+    if (!outPos2 || !outHasCursor) return kInputBadArg;
+    outPos2[0] = outPos2[1] = 0.0f;
+    *outHasCursor = 0;
+    if (!g_inputState) return kInputNoSource;
+    const auto p = g_inputState->cursorPosition();
+    outPos2[0] = p.x;
+    outPos2[1] = p.y;
+    *outHasCursor = g_inputState->hasCursor() ? 1 : 0;
+    return kInputOk;
+}
+
+// ---- M-I5 手柄 / 字符导出（2026-11-15）----
+
+extern "C" int nl_inputGamepadIsDown(int button, int* outDown) {
+    if (!outDown) return kInputBadArg;
+    *outDown = 0;
+    if (!g_inputState) return kInputNoSource;
+    *outDown = g_inputState->gamepadIsDown(button) ? 1 : 0;
+    return kInputOk;
+}
+
+extern "C" int nl_inputGamepadAxis(int axis, float* outValue) {
+    if (!outValue) return kInputBadArg;
+    *outValue = 0.0f;
+    if (!g_inputState) return kInputNoSource;
+    *outValue = g_inputState->gamepadAxis(axis);
+    return kInputOk;
+}
+
+extern "C" int nl_inputTextPop(int* outCodepoint) {
+    if (!outCodepoint) return kInputBadArg;
+    *outCodepoint = -1;
+    if (!g_window) return kInputNoSource;
+    unsigned int cp = 0;
+    if (g_window->consumeTextChars(&cp, 1) == 0) return kInputOk;   // 队列空 = -1（正常空帧）
+    *outCodepoint = static_cast<int>(cp);
     return kInputOk;
 }
 
@@ -656,6 +747,14 @@ void inputSetState(core::InputState* state) {
 
 void inputSetActionMap(core::ActionMap* map) {
     g_actionMap = map;
+}
+
+// M-I5：Window 绑定（inputTextPop 的操作目标；viewer scene 模式接线，
+// nl-script selftest 无窗口只验 NoSource 负向）。g_window 声明在 v3 Input
+// 全局区（349 行旁，先于 nl_inputTextPop 使用点）。
+
+void inputSetWindow(core::Window* window) {
+    g_window = window;
 }
 
 // ---- M-SC6 宿主侧相机适配源绑定（nullptr = 解绑，导出回 kCamNoSource）----

@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **45 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **54 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -70,7 +70,7 @@
 | `timeGetState`（偏移 16） | `int nl_timeGetState(double*, double*, std::uint64_t*, int*)` | 时钟状态一次性读回（simTime 逻辑秒 / frameDt 本渲染帧缩放截断后 delta 秒 / tickCount 已执行逻辑帧 / paused 0\|1）。rc：0=ok / 1=未绑 Clock / 4=非法参数 | `out f64 simTime`：指针出参（调用期存活）；`out f64 frameDt`：指针出参（调用期存活）；`out u64 tickCount`：指针出参（调用期存活）；`out int paused`：指针出参（调用期存活） |
 | `timeSetState`（偏移 17） | `int nl_timeSetState(int, double)` | 时钟控制。paused：-1=不变 / 0=继续 / 1=暂停；timeScale：<0=不变，否则 setTimeScale 钳制口径（[0,1024]，NaN 不变——NaN>=0 恒假天然防呆）。rc：0=ok / 1=未绑 Clock | `in int paused`：值传递；`in f64 timeScale`：值传递 |
 
-## Input 域（ApiTable 偏移 18..22）
+## Input 域（ApiTable 偏移 18..53）
 
 | 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
 |---|---|---|---|
@@ -79,6 +79,15 @@
 | `inputActionFloat`（偏移 20） | `int nl_inputActionFloat(std::uint32_t, float*, float*)` | Float 动作冻结值读回（floatValue/floatDelta）。rc 同 inputActionBool（2=非法 id 或类型非 Float） | `in u32 id`：值传递；`out f32 value`：指针出参（调用期存活）；`out f32 delta`：指针出参（调用期存活） |
 | `inputActionVec2`（偏移 21） | `int nl_inputActionVec2(std::uint32_t, float*, float*)` | Vec2 动作冻结值读回（vec2Value/vec2Delta，x,y 序）。rc 同 inputActionBool（2=非法 id 或类型非 Vec2） | `in u32 id`：值传递；`out buf2 value`：定长 float[2] 直传（Blittable，不跨堆）；`out buf2 delta`：定长 float[2] 直传（Blittable，不跨堆） |
 | `inputKeyIsDown`（偏移 22） | `int nl_inputKeyIsDown(int, int*)` | InputState::isDown（GLFW 键码；越界键码 = down 0，InputState 防御性口径）。rc：0=ok / 1=未绑 InputState / 4=非法参数 | `in int key`：值传递；`out int down`：指针出参（调用期存活） |
+| `inputMouseIsDown`（偏移 45） | `int nl_inputMouseIsDown(int, int*)` | InputState::mouseIsDown（GLFW 鼠标键码；越界 = down 0 防御透传）。rc：0=ok / 1=未绑 InputState / 4=非法参数 | `in int button`：值传递；`out int down`：指针出参（调用期存活） |
+| `inputMouseJustPressed`（偏移 46） | `int nl_inputMouseJustPressed(int, int*)` | InputState::mouseJustPressed（本帧边沿）。rc 同 inputMouseIsDown | `in int button`：值传递；`out int pressed`：指针出参（调用期存活） |
+| `inputMouseJustReleased`（偏移 47） | `int nl_inputMouseJustReleased(int, int*)` | InputState::mouseJustReleased（本帧边沿）。rc 同 inputMouseIsDown | `in int button`：值传递；`out int released`：指针出参（调用期存活） |
+| `inputMouseDelta`（偏移 48） | `int nl_inputMouseDelta(float*)` | InputState::mouseDelta（光标帧增量 x,y）。rc：0=ok / 1=未绑 InputState | `out buf2 delta`：定长 float[2] 直传（Blittable，不跨堆） |
+| `inputScrollDelta`（偏移 49） | `int nl_inputScrollDelta(float*)` | InputState::scrollDelta（滚轮帧增量 x,y）。rc：0=ok / 1=未绑 InputState | `out buf2 delta`：定长 float[2] 直传（Blittable，不跨堆） |
+| `inputCursorPos`（偏移 50） | `int nl_inputCursorPos(float*, int*)` | InputState::cursorPosition + hasCursor（光标在窗口内布尔）。rc：0=ok / 1=未绑 InputState | `out buf2 pos`：定长 float[2] 直传（Blittable，不跨堆）；`out int hasCursor`：指针出参（调用期存活） |
+| `inputGamepadIsDown`（偏移 51） | `int nl_inputGamepadIsDown(int, int*)` | InputState::gamepadIsDown（GLFW standard 按钮号；越界 = down 0 防御）。rc：0=ok / 1=未绑 InputState / 4=非法参数 | `in int button`：值传递；`out int down`：指针出参（调用期存活） |
+| `inputGamepadAxis`（偏移 52） | `int nl_inputGamepadAxis(int, float*)` | InputState::gamepadAxis（轴值 -1..1 / 扳机 0..1；越界 = 0）。rc：0=ok / 1=未绑 InputState / 4=非法参数 | `in int axis`：值传递；`out f32 value`：指针出参（调用期存活） |
+| `inputTextPop`（偏移 53） | `int nl_inputTextPop(int*)` | 单码点弹出（window consumeTextChars 队列；-1 = 空）。宿主须 inputSetWindow 绑 Window（viewer scene 模式接线；nl-script selftest 只验 NoSource 负向——无窗口）。rc：0=ok（codepoint 有效）/ 1=未绑 Window / 0 且 -1 = 队列空（正常空帧） | `out int codepoint`：指针出参（调用期存活） |
 
 ## Log 域（ApiTable 偏移 23..24）
 

@@ -38,6 +38,8 @@
 // 已有 GLFW include 面）。include input.hpp 只为复用 Vec2f。
 
 #include <cstdint>
+#include <deque>
+#include <string>
 #include <vector>
 
 #include "nl/core/input.hpp"
@@ -54,9 +56,13 @@ public:
 
     enum class Type : std::uint8_t { Bool, Float, Vec2 };
 
-    // 绑定源：键 / 鼠标按键 = 布尔型源；滚轮 / 鼠标增量轴 = 浮点型源
-    //（Carrot gamepad axis 的 Float 口径在我们这里只有这四个来源）。
-    enum class Source : std::uint8_t { Key, MouseButton, ScrollX, ScrollY, DeltaX, DeltaY };
+    // 绑定源：键 / 鼠标按键 / 手柄按钮 = 布尔型源；滚轮 / 鼠标增量轴 / 手柄轴
+    // = 浮点型源（Carrot gamepad axis 的 Float 口径；M-I5 增手柄两源）。
+    enum class Source : std::uint8_t {
+        Key, MouseButton, ScrollX, ScrollY, DeltaX, DeltaY,
+        GamepadButton,   // M-I5：index = GLFW standard mapping 按钮号（0..15）
+        GamepadAxis,     // M-I5：index = GLFW 轴号（0..5，扳机 0..1 其余 -1..1）
+    };
 
     struct Binding {
         Source source;
@@ -65,7 +71,9 @@ public:
         int    vecAxis = -1;     // Vec2 动作专用：0=x 1=y；Bool/Float 动作忽略
     };
 
-    // ---- 声明（Carrot「预声明」口径：动作/组先定义后绑定，运行期不增删）----
+    // ---- 声明（Carrot「预声明」口径：动作/组先定义后绑定。M-I5 起放宽：
+    // loadFromFile/rebind 允许运行期装载与改绑——有意偏离 Carrot「poll 后
+    // 冻结」，编辑器/控制台需要，P8-INPUT-PLAN §7.3 留痕；生效点 = 下次 update()）----
     ActionId define(const char* name, Type type);
     ActionId find(const char* name) const;        // 未命中 = kInvalidAction
     const char* name(ActionId id) const;          // 非法 id = nullptr
@@ -81,6 +89,22 @@ public:
     void bindMouseDelta(ActionId id, int axis, float scale = 1.0f);   // axis 0=x 1=y
     // Vec2 专用：布尔源按轴叠加（WASD→移动向量这类）。
     void bindAxisKey(ActionId id, int glfwKey, int axis, float scale = 1.0f);
+
+    // ---- M-I5 手柄绑定（按钮 = Bool 源 / 轴 = Float 源；Carrot gamepad 口径）----
+    void bindGamepadButton(ActionId id, int button, float scale = 1.0f);
+    void bindGamepadAxis(ActionId id, int axis, float scale = 1.0f);   // 轴值乘 scale
+
+    // ---- M-I5 映射文件 + 运行时重绑定 ----
+    // loadFromFile：vendored nlohmann json（scene 序列化同款依赖，零新依赖）。
+    // 格式：{"sets":["a"],"actions":[{"name":"x","type":"bool","sets":["a"],
+    //        "binds":[{"src":"key|mouse|scrollX|scrollY|deltaX|deltaY|pad|padAxis",
+    //                 "id":int,"scale":f,"axis":0|1}]}]}
+    // 全量校验后一次性应用；任何错误 = 返回 false + outError 原因，map 不动。
+    // 与 Carrot「poll 后冻结」的有意偏离（编辑器/控制台需要，P8-INPUT-PLAN
+    // §7.3 留痕）：define/bind/update 全程可再入；rebind 生效点 = 下一次 update()。
+    bool loadFromFile(const char* path, std::string& outError);
+    // rebind：整组替换动作绑定（不是追加）；非法 id = false 不动。
+    bool rebind(ActionId id, const std::vector<Binding>& bindings);
 
     // ---- 组开关（ActionSet）----
     void setActive(SetId id, bool active);
@@ -117,6 +141,10 @@ private:
 
     std::vector<ActionDef> actions_;
     std::vector<const char*> setNames_;
+    std::deque<std::string> ownedNames_;    // M-I5：loadFromFile 的名字持有（name 是裸指针口径）。
+                                            // deque 而非 vector：push_back 不搬移已有元素，
+                                            // c_str() 取出的指针在后续装载中保持有效。
+    std::deque<std::string> ownedSetNames_; // M-I5：同上（组名）
     std::uint32_t setActiveMask_ = 0;
 };
 

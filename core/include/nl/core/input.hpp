@@ -26,8 +26,9 @@
 // （updateFromWindow）走同一更新内核 _applyKey/_applyMouseButton——合成事件序列
 // 数值锚逐位可复现（phys/audio 先例口径）。core 零图形 API 纪律不变。
 //
-// M-I0 有意不做（P8-INPUT-PLAN §4 留痕）：手柄/触摸、滚动 X 轴（GLFW 有但
-// window 底座只累积 Y，M-I0 保持）、Modifier/Trigger 链、运行时重绑定 UI。
+// M-I0 有意不做（P8-INPUT-PLAN §4 留痕）：触摸、滚动 X 轴（GLFW 有但
+// window 底座只累积 Y，M-I0 保持）、Modifier/Trigger 链。手柄 M-I5 补齐
+//（feed 注入 + pollGamepad 窗口路径）；运行时重绑定 M-I5 在 ActionMap 补齐。
 
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +45,10 @@ namespace nl::core {
 // 具体键码数值（GLFW_KEY_W==87 等），上游 bump 撞表长会在锚上炸出来。
 inline constexpr int kGlfwKeyTableSize = GLFW_KEY_LAST + 1;
 inline constexpr int kGlfwMouseButtonTableSize = GLFW_MOUSE_BUTTON_LAST + 1;
+// M-I5 手柄表长锚：GLFW standard mapping（glfwGetGamepadState 口径）
+// 16 按钮 + 6 轴（LeftX/LeftY/RightX/RightY/LeftTrigger/RightTrigger）。
+inline constexpr int kGlfwGamepadButtonTableSize = GLFW_GAMEPAD_BUTTON_LAST + 1;
+inline constexpr int kGlfwGamepadAxisCount = GLFW_GAMEPAD_AXIS_LAST + 1;
 
 // 轻量 2D 向量（core 未引 GLM——M0.4 起手写数学库口径沿用）。
 struct Vec2f {
@@ -72,6 +77,16 @@ public:
     // 修饰键注入（selftest 对称入口；窗口路径由 KeyEvent.ctrl/shift/alt 维护）。
     void feedMods(bool ctrl, bool shift, bool alt);
 
+    // ---- M-I5 手柄（GLFW standard mapping；注入路径 selftest 对称入口）----
+    // 按钮三态与键盘同构（down 持续 / pressed-released 边沿 endFrame 清）；
+    // 轴值持续态（-1..1，扳机 0..1），帧内最后写入胜。
+    void feedGamepadButton(int button, bool down);
+    void feedGamepadAxis(int axis, float value);
+
+    // 窗口路径：轮询手柄（GLFW_JOYSTICK_1；无手柄 / 未映射 = 全零不告警——
+    // 有手柄才写表，没手柄表保持全零）。selftest 手柄锚走 feedGamepad* 注入。
+    void pollGamepad(int jid);
+
     // ---- 查询（键码用 GLFW 键码常量；越界 = false）----
     bool isDown(int glfwKey) const;
     bool justPressed(int glfwKey) const;
@@ -91,12 +106,19 @@ public:
     bool shiftDown() const { return shift_; }
     bool altDown() const { return alt_; }
 
+    // ---- M-I5 手柄查询（按钮码 0..GLFW_GAMEPAD_BUTTON_LAST；越界 = false/0）----
+    bool  gamepadIsDown(int button) const;
+    bool  gamepadJustPressed(int button) const;
+    bool  gamepadJustReleased(int button) const;
+    float gamepadAxis(int axis) const;   // 轴号 0..GLFW_GAMEPAD_AXIS_LAST；越界 = 0
+
     // ---- 帧末：清边沿 + 清增量（持续态 isDown 不动，bevy ButtonInput 口径）----
     void endFrame();
 
 private:
     void applyKey(int glfwKey, bool down);
     void applyMouseButton(int button, bool down);
+    void applyGamepadButton(int button, bool down);   // M-I5 手柄内核（同构边沿语义）
 
     // 定长状态表（bevy ButtonInput 口径：数组查询 O(1)，50 物体规模不做缓存）。
     // 三个数组三态：down 持续态跨帧保留；pressed/released 是本帧边沿，endFrame 清。
@@ -114,6 +136,12 @@ private:
     bool  ctrl_ = false;
     bool  shift_ = false;
     bool  alt_ = false;
+
+    // M-I5 手柄状态表（与键/鼠标同构：down 持续、边沿 endFrame 清）。
+    bool  padDown_[kGlfwGamepadButtonTableSize]{};
+    bool  padPressed_[kGlfwGamepadButtonTableSize]{};
+    bool  padReleased_[kGlfwGamepadButtonTableSize]{};
+    float padAxis_[kGlfwGamepadAxisCount]{};
 };
 
 } // namespace nl::core

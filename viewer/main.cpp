@@ -30,6 +30,7 @@
 #include "nl/audio/DebugController.hpp"  // P8 M-S2：audio.* CVar 注册（零图形）
 #include "nl/core/camera_director.hpp"    // M-D3 Q-D3-4: ChassisState hook
 #include "camera_mode.hpp"                 // P8 M-CAM b-segment：ViewerCamera 调度封装（orbit/free/chase/track）
+#include "pick.hpp"                        // M-I4：屏幕拾取（--pick / --pick-at；纯 CPU 反投影 + slab AABB）
 #include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
@@ -219,6 +220,10 @@ struct Options {
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
                               // 与 VSM 查表同 blob 同本底；vsm-vs-ray 门的对位渲染）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
+    bool mouseCapture = false; // M-I3：--mouse-capture（指针锁定，CapturePermanently 语义；F10 切换，缺省关=零漂移）
+    bool pick = false;         // M-I4：--pick（交互拾取：左键点击反投影命中实体，log 锚）
+    std::string pickAt;        // M-I4：--pick-at <px,py>（确定性注入拾取，首帧执行；不依赖真实鼠标）
+    std::string dropSim;       // M-I5：--drop-sim <path>（模拟文件拖拽，首帧注入同一消费队列）
     bool rmluiDemo  = false;  // M-UI0：--rmlui-demo（RmlUi UI 层，默认关 = 零扰动）
     // M-UI0 验收：无头合成点击（A 类旗标缺省关）。--rmlui-click <frame>,<x>,<y>
     // = 第 frame 帧在 (x,y) 按下、frame+1 释放——走 RmlUi 完整 ProcessMouseButton
@@ -371,6 +376,16 @@ static void maybeTriggerRenderDocCapture(std::uint64_t frameOneBased, int wantFr
 
 Options parseArgs(int argc, char** argv) {
     Options o;
+    // M-I3~I5 输入轨旗标独立预扫（2026-11-15 实证：主 else-if 梯子 120 项已贴
+    // MSVC C1061 块嵌套上限 ~128，再往里加选项整条链编译爆限——新旗标一律走本环，
+    // 主梯子保持 master 原样不动）。
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--mouse-capture") o.mouseCapture = true;                 // M-I3 指针锁定
+        else if (a == "--pick") o.pick = true;                             // M-I4 交互拾取
+        else if (a == "--pick-at" && i + 1 < argc) o.pickAt = argv[++i];   // M-I4 注入拾取
+        else if (a == "--drop-sim" && i + 1 < argc) o.dropSim = argv[++i]; // M-I5 模拟拖拽
+    }
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--selftest") o.selftest = true;
@@ -2729,6 +2744,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::core::log::errorCh("viewer", "window creation failed");
         return 1;
     }
+    // M-I3 指针锁定（--mouse-capture，缺省关=零漂移）：初始捕获；F10 边沿切换。
+    if (o.mouseCapture) {
+        window.setMouseCaptured(true);
+        nl::core::log::infoCh("viewer", "mouse capture -> on (--mouse-capture)");
+    }
 
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     // 截图回归模式不启用（隐藏窗口 + 定帧退出，嵌入无意义）。
@@ -3747,6 +3767,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         if (window.keyPressed(nl::core::Key::Grave)) {
             consoleOpen = !consoleOpen;
             nl::core::log::infoCh("viewer", "console -> ", consoleOpen ? "open" : "closed");
+        }
+        if (window.keyPressed(nl::core::Key::F10)) {   // M-I3：指针锁定切换（Esc=退出约定让位，§7.3 留痕）
+            const bool nowCap = !window.mouseCaptured();
+            window.setMouseCaptured(nowCap);
+            nl::core::log::infoCh("viewer", "mouse capture -> ", nowCap ? "on (F10)" : "off (F10)");
         }
         if (window.keyPressed(nl::core::Key::Escape)) {
             if (consoleOpen) {
@@ -5503,6 +5528,11 @@ int runScene(const Options& o) {
         nl::core::log::errorCh("viewer", "window creation failed");
         return 1;
     }
+    // M-I3 指针锁定（--mouse-capture，缺省关=零漂移）：初始捕获；F10 边沿切换。
+    if (o.mouseCapture) {
+        window.setMouseCaptured(true);
+        nl::core::log::infoCh("viewer", "mouse capture -> on (--mouse-capture)");
+    }
 
     // M-E2：外置编辑器嵌入（--editor-bridge；连不上自动降级单机）。
     EditorEmbed edEmbed;
@@ -5934,6 +5964,7 @@ int runScene(const Options& o) {
         // scene 模式无注入管线，脚本调 Input.* 得 kInputNoSource 即正确语义。
         nl::script::ecsSetWorld(&world);
         nl::script::timeSetClock(&gameClock);
+        nl::script::inputSetWindow(&window);   // M-I5：inputTextPop 操作目标（scene 模式接现役窗口）
         // M-SC6：现役相机适配源（ctx = runScene 的 ViewerCamera；orbit/free/chase
         // 模式感知落点 + fov clamp，见 camSourceSetPose 注释；未绑 = kCamNoSource）。
         g_viewerCamSource.ctx = &camera;
@@ -6050,6 +6081,16 @@ int runScene(const Options& o) {
         NL_PROFILE_ZONE("viewer.frame");   // M-TR0：整帧 zone
         window.pollEvents();
         edEmbed.pump();   // M-E2：编辑器 RPC 泵（未连接时空操作）
+        if (window.keyPressed(nl::core::Key::F10)) {   // M-I3：指针锁定切换（Esc=退出约定让位，§7.3 留痕）
+            const bool nowCap = !window.mouseCaptured();
+            window.setMouseCaptured(nowCap);
+            nl::core::log::infoCh("viewer", "mouse capture -> ", nowCap ? "on (F10)" : "off (F10)");
+        }
+        // M-I5：文件拖拽消费（--drop-sim 首帧注入同一队列；真实 OS 拖拽事件不进对拍）。
+        // 消费点只出 log 锚（模型加载集成留给游戏壳/编辑器，P8-INPUT-PLAN §7.3 留痕）。
+        if (frame == 0 && !o.dropSim.empty()) window.feedDroppedPath(o.dropSim);
+        for (const auto& dropped : window.consumeDroppedPaths())
+            nl::core::log::infoCh("viewer", "drop -> ", dropped);
         if (window.keyPressed(nl::core::Key::Escape)) {
             nl::core::log::infoCh("viewer", "ESC -> exit");
             break;
@@ -6327,6 +6368,41 @@ int runScene(const Options& o) {
         camera.update(static_cast<float>(dtMs) * 0.001f);
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
+
+        // M-I4：屏幕拾取（--pick 交互 = 左键按下事件反投影；--pick-at 注入 = 首帧
+        // 定点执行）。结果只进 log 锚（"pick -> ..."），零渲染路径改动（A 类口径）。
+        if (o.pick || !o.pickAt.empty()) {
+            bool doPick = false;
+            float px = 0.0f, py = 0.0f;
+            // runScene 的 frame 是 1-based（++frame 在循环首段，尾帧锚 frame == o.frames
+            // 同口径）——首帧注入点 = frame == 1。dropSim（循环首段 ++frame 之前）才是 0。
+            if (!o.pickAt.empty() && frame == 1) {
+                if (std::sscanf(o.pickAt.c_str(), "%f,%f", &px, &py) == 2) doPick = true;
+                else nl::core::log::errorCh("viewer", "invalid --pick-at (want px,py): ", o.pickAt);
+            } else if (o.pick) {
+                nl::core::MouseButtonEvent mbEvents[8];
+                if (const std::size_t n = window.consumeMouseButtonEvents(mbEvents, 8))
+                    for (std::size_t i = 0; i < n; ++i)
+                        if (mbEvents[i].button == 0 && mbEvents[i].down) { doPick = true; break; }
+                if (doPick) window.mousePosition(px, py);
+            }
+            if (doPick) {
+                const auto fb = window.framebufferSize();
+                nl::math::Vec3 ro{}, rd{};
+                if (nl::viewer::screenRay(vp.m, fb.width, fb.height, px, py, ro, rd)) {
+                    static nl::viewer::PickContext pickCtx;   // meshFile AABB 缓存（进程级）
+                    const auto hit = pickCtx.pick(world, modelIds, ro, rd);
+                    if (hit.entityId != 0)
+                        nl::core::log::infoCh("viewer", "pick -> entity ", hit.entityId,
+                                              " name=", hit.name, " mesh=", hit.meshFile,
+                                              " t=", hit.t, " px=", px, " py=", py);
+                    else
+                        nl::core::log::infoCh("viewer", "pick -> none px=", px, " py=", py);
+                } else {
+                    nl::core::log::errorCh("viewer", "pick ray failed px=", px, " py=", py);
+                }
+            }
+        }
         // M8.2：rt 模式射线生成输入（runScene 同构接线；其它模式不读）。
         std::memcpy(fp.viewProj, vp.m, sizeof(fp.viewProj));
         fp.rtDebugMode = o.rtDebugMode;

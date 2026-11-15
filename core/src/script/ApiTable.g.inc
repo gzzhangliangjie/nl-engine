@@ -48,3 +48,12 @@ reinterpret_cast<void*>(&nl_uiShowDocument),  // Ui.uiShowDocument
 reinterpret_cast<void*>(&nl_uiElementSetText),  // Ui.uiElementSetText
 reinterpret_cast<void*>(&nl_uiElementGetText),  // Ui.uiElementGetText
 reinterpret_cast<void*>(&nl_uiSetEventCallback),  // Ui.uiSetEventCallback
+reinterpret_cast<void*>(&nl_inputMouseIsDown),  // Input.inputMouseIsDown
+reinterpret_cast<void*>(&nl_inputMouseJustPressed),  // Input.inputMouseJustPressed
+reinterpret_cast<void*>(&nl_inputMouseJustReleased),  // Input.inputMouseJustReleased
+reinterpret_cast<void*>(&nl_inputMouseDelta),  // Input.inputMouseDelta
+reinterpret_cast<void*>(&nl_inputScrollDelta),  // Input.inputScrollDelta
+reinterpret_cast<void*>(&nl_inputCursorPos),  // Input.inputCursorPos
+reinterpret_cast<void*>(&nl_inputGamepadIsDown),  // Input.inputGamepadIsDown
+reinterpret_cast<void*>(&nl_inputGamepadAxis),  // Input.inputGamepadAxis
+reinterpret_cast<void*>(&nl_inputTextPop),  // Input.inputTextPop

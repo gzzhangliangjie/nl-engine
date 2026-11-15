@@ -6786,14 +6786,14 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：7 节 39 断言全锚点",
+     "name": "selftest：7 节 39 断言全锚点（M-I5 节数 9→10：新增 actions-file）",
      "kind": "tool",
-     "note": "边沿三态/同帧组合/REPEAT/鼠标/越界/mods/确定性；注入路径与未来窗口路径共用同一更新内核。",
+     "note": "边沿三态/同帧组合/REPEAT/鼠标/越界/mods/确定性；注入路径与未来窗口路径共用同一更新内核。 M-I5 留痕：新增 actions-file 节（映射文件/rebind/手柄源），PASS 行节数 9→10，expectLog 同步演进（非 PNG bytes 面）。",
      "args": [
       "selftest"
      ],
      "expectExit": 0,
-     "expectLog": "selftest PASS (9 sections)",
+     "expectLog": "selftest PASS (10 sections)",
      "command": "input-tools selftest"
     },
     {
@@ -6857,14 +6857,14 @@
     },
     {
      "id": "selftest",
-     "name": "selftest：9 节 60 断言（含映射层 actions/actions-det）",
+     "name": "selftest：9 节 60 断言（含映射层 actions/actions-det）（M-I5 节数 9→10：新增 actions-file）",
      "kind": "tool",
-     "note": "M-I0 状态层 7 节 + M-I1 映射层 2 节；解析规则/组开关/确定性全锚点。",
+     "note": "M-I0 状态层 7 节 + M-I1 映射层 2 节；解析规则/组开关/确定性全锚点。 M-I5 留痕：新增 actions-file 节（映射文件/rebind/手柄源），PASS 行节数 9→10，expectLog 同步演进（非 PNG bytes 面）。",
      "args": [
       "selftest"
      ],
      "expectExit": 0,
-     "expectLog": "selftest PASS (9 sections)",
+     "expectLog": "selftest PASS (10 sections)",
      "preview": "example/input-m1/acceptance.png",
      "command": "input-tools selftest"
     },
@@ -14978,6 +14978,246 @@
      "args": [],
      "command": "example/s14c-adaptive/run.bat verify",
      "script": "example/s14c-adaptive/run.bat verify"
+    }
+   ]
+  },
+  {
+   "id": "input-m3",
+   "label": "M-I3",
+   "name": "脚本鼠标 API + 指针锁定 + 文件拖拽通道（M-I3）",
+   "tag": "input-m3",
+   "date": "2026-11-15",
+   "summary": "A 类输入轨道第四里程碑（计划 docs/p8/P8-INPUT-PLAN.md §7 track input，§7.1b 重开）：exports.api 单源扩 6 op（inputMouseIsDown/JustPressed/JustReleased + inputMouseDelta/inputScrollDelta + inputCursorPos，51→54 exports，gen.py 五件套 + CMake 新鲜度闸零改动沿用）→ Bindings.cpp nl_inputMouse* 六函数（g_window 经 inputSetWindow 注入，viewer runScene 接线）+ Api.cs 九 facade；core/window 增量扩 setMouseCaptured/mouseCaptured（GLFW CURSOR_DISABLED/NORMAL，F10 toggle，Esc 退出语义让位）+ consumeDroppedPaths/feedDroppedPath 拖拽消费队列（glfwSetDropCallback）；nl-script selftest 新 s14 鼠标节（BoundProbe 14 锚 + UnboundProbe 6 锚，可选目录参数口径同 s6~s13）；脚本示例 script/examples/mouse（MouseScript.cs + csproj）。指针锁定为交互态（真实设备事件不进对拍，M-NL2 教训同构），确定性验收走 --drop-sim/--pick-at 注入旗标（M-I5/M-I4 卡）。",
+   "acceptance": [
+    "gen.py --check 绿：54 导出声明与生成五件套一致；双后端 nl_scriptapi_freshness 闸过",
+    "nl-script selftest 10 目录（含 mouse）全锚 PASS：s14a C# BoundProbe -> 0（14 锚：左键 down+pressed/右键 released/越界防御/增量 3.5,-2.0/滚轮 1.25/光标 640,360）+ s14b UnboundProbe -> 0（6 NoSource）",
+    "双后端构建 + 便携 ctest 164/164（DX12 19.2s / VULKAN 20.5s）ALL GREEN",
+    "viewer --mouse-capture/--pick/--pick-at/--drop-sim 四旗标走 parseArgs 独立预扫环（主 120 项 else-if 梯子还原，C1061 块嵌套 ~128 上限坑留痕）",
+    "指针锁定 F10 toggle 交互面不进对拍（真实设备事件不进对拍口径，§7.3 留痕）"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nl-script.exe",
+    "vulkan": "build/vulkan/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest-mouse",
+     "name": "selftest 10 目录（含 mouse）：s14 C# 鼠标锚 20 断言",
+     "kind": "tool",
+     "note": "10 目录位置参数（mouseDir=argv[11]）；gamepadDir 缺省空 = s15 跳过（同 s6~s13 口径）。s14a BoundProbe 14 锚 + s14b UnboundProbe 6 锚全 ok 才 PASS。dotnet 编译 ~40s（与 M-SC 既有 script selftest 卡同重量级）。",
+     "args": [
+      "selftest",
+      "script/examples/hello",
+      "script/examples/console",
+      "script/examples/ecs",
+      "script/bootstrap",
+      "script/examples/timeinput",
+      "script/examples/camera",
+      "script/examples/model",
+      "script/examples/drive",
+      "script/examples/props",
+      "script/examples/mouse"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS (0 failures)",
+     "command": "nl-script selftest script/examples/hello ... script/examples/mouse（10 目录全参）",
+     "cwd": "{root}"
+    },
+    {
+     "id": "check-mouse",
+     "name": "check mouse：示例编译检查（exit 0）",
+     "kind": "tool",
+     "note": "dotnet build 单项目快检查（selftest 的轻量替身）；输出含绝对路径，锚取 'check: PASS' 子串。",
+     "args": [
+      "check",
+      "script/examples/mouse"
+     ],
+     "expectExit": 0,
+     "expectLog": "check: PASS",
+     "command": "nl-script check script/examples/mouse",
+     "cwd": "{root}"
+    }
+   ]
+  },
+  {
+   "id": "input-m4",
+   "label": "M-I4",
+   "name": "屏幕拾取：CPU 反投影 + glTF AABB slab 最近命中（M-I4）",
+   "tag": "input-m4",
+   "date": "2026-11-15",
+   "summary": "A 类输入轨道第五里程碑（计划 docs/p8/P8-INPUT-PLAN.md §7 track input）：viewer/pick.hpp 新模块（纯 CPU、零渲染路径改动，A 类口径）——screenRay（NDC y 翻转 + memcpy vp 进 Mat4 + inverseMat4 + near/far 反投影 + 透视除法 + 归一化方向）+ PickContext::pick（TransformComponent::getWorldMatrix × glTF 顶点 AABB 8 角 → slab 求交最近 t，modelAabb 拼接口径同 scene.cpp，meshFile AABB 进程级缓存）；结果只进 log 锚（pick -> entity/none），交付面 = log 锚 + tool 卡（§7.3 勘误留痕：放弃 HUD 行/PNG pair，保 A 类零渲染改动）；viewer 旗标 --pick（交互 = 左键按下反投影）+ --pick-at <px,py>（首帧定点注入，确定性验收）；math 类型 nl::math 命名空间定向 using（不进全局）。实锚留痕：runScene frame 1-based（++frame 在循环首段，首帧注入 = frame==1，dropSim 在 ++frame 前才是 0）——初版 frame==0 写错实锤「pick 块零输出」，诊断日志二分（prescan 有值 + pickblock frame=1/2）定位后根修。",
+   "acceptance": [
+    "pick-hit 锚：--pick-at 320,180 --screenshot 模式双后端 ×3/×2 稳定 'pick -> entity 1 name=preview-model mesh=Suzanne.glb t=385.188 px=320 py=180'（截图模式 dt 固定 → 首帧相机确定性；不带 --screenshot 时 autoFrame 相位漂移属预期）",
+    "pick-miss 锚：--pick-at 5,700 双后端稳定 'pick -> none px=5 py=700'；对称性证据：(320,540) 双后端同 t=187.196 命中 preview-ground（pick 行为双后端一致）",
+    "PNG 证据：pick-hit 截图双后端 SHA256 逐字节一致（821c27e2...），渲染路径零改动实证",
+    "负向锚：--pick-at BAD 出 error 级 'invalid --pick-at (want px,py): BAD' 且触发 --screenshot 验收 error 计数器 → exit 1（双锚：退出码 + error 行）",
+    "双后端构建 + 便携 ctest 164/164 ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/dx12/viewer.exe",
+    "vulkan": "build/vulkan/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "pick-hit",
+     "name": "pick-at 320,180：Suzanne 命中锚（双后端）",
+     "kind": "tool",
+     "note": "截图模式首帧相机确定（dt 固定）→ t=385.188 逐位锚；PNG 双后端逐字节一致（821c27e2），preview 为 DX12 实拍。",
+     "args": [
+      "--scene",
+      "assets/scenes/preview.scene.json",
+      "--pick-at",
+      "320,180",
+      "--frames",
+      "2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "pick -> entity 1 name=preview-model mesh=Suzanne.glb t=385.188 px=320 py=180",
+     "preview": "example/input-m4/acceptance.png",
+     "command": "viewer.exe --scene assets/scenes/preview.scene.json --pick-at 320,180 --frames 2 --screenshot <out.png>",
+     "cwd": "{root}"
+    },
+    {
+     "id": "pick-miss",
+     "name": "pick-at 5,700：未命中 none 锚（双后端）",
+     "kind": "tool",
+     "note": "屏角点（5,700）落空 → pick -> none；none 分支与 hit 分支双锚互补。",
+     "args": [
+      "--scene",
+      "assets/scenes/preview.scene.json",
+      "--pick-at",
+      "5,700",
+      "--frames",
+      "2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "pick -> none px=5 py=700",
+     "command": "viewer.exe --scene assets/scenes/preview.scene.json --pick-at 5,700 --frames 2 --screenshot <out.png>",
+     "cwd": "{root}"
+    },
+    {
+     "id": "pick-bad",
+     "name": "负向：--pick-at BAD 格式（error 锚，不崩）",
+     "kind": "tool",
+     "note": "sscanf %f,%f 失败 → errorCh 'invalid --pick-at (want px,py): BAD'；error 级 log 使 --screenshot 验收的 error 计数器非零 → acceptance failed exit 1（验收口径：负向锚 = exit 1 + error 行双锚，比单 log 锚更强）。",
+     "args": [
+      "--scene",
+      "assets/scenes/preview.scene.json",
+      "--pick-at",
+      "BAD",
+      "--frames",
+      "2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 1,
+     "expectLog": "invalid --pick-at (want px,py): BAD",
+     "command": "viewer.exe --scene assets/scenes/preview.scene.json --pick-at BAD --frames 2 --screenshot <out.png>",
+     "cwd": "{root}"
+    }
+   ]
+  },
+  {
+   "id": "input-m5",
+   "label": "M-I5",
+   "name": "映射文件 + 手柄源 + rebind + 字符暴露 + 拖拽消费（M-I5）",
+   "tag": "input-m5",
+   "date": "2026-11-15",
+   "summary": "A 类输入轨道第六里程碑（计划 docs/p8/P8-INPUT-PLAN.md §7 track input）：① actions JSON 映射文件（nlohmann 已在 nl_core PUBLIC tinygltf 目录——计划『core 无 JSON 解析器』初判勘误留痕 §7.3）：loadFromFile 全量校验后一次性提交（坏文件不动 map，fail-closed）+ src 全集 key|mouse|scrollX|scrollY|deltaX|deltaY|pad|padAxis + ownedNames_/ownedSetNames_ deque 持名（vector 扩容搬移 std::string 使 c_str() 悬空实锤——fire/steer find 失败而 throttle 幸存的精确症状，deque 根修）+ rebind 生效点 = 下次 update（Carrot 冻结语义有意偏离，逐位锚钉死）；② InputState 手柄域：kGlfwGamepadButtonTableSize/GLFW_GAMEPAD_AXIS_LAST+1 两表 + feedGamepadButton/Axis/pollGamepad（glfwGetGamepadstate，vendored 类型名小写 s）+ 边沿语义与鼠标同构 + endFrame 清边沿；③ exports.api 扩 inputGamepadIsDown/inputGamepadAxis/inputTextPop 三 op（54 exports）+ nl-script s15 手柄节（BoundProbe 9 锚 + UnboundProbe 3 锚）+ script/examples/gamepad；④ viewer --drop-sim <path> 首帧注入拖拽消费队列（真实 OS 拖拽事件不进对拍，M-I3 同构口径）；input-tools selftest 9→10 节（actions-file：装载/组开关/手柄两源/rebind 冻结/负向三连/手柄防御）。",
+   "acceptance": [
+    "input-tools selftest 10 节双后端 PASS（DX12+VULKAN）：actions-file 节 21 断言（正向装载/组开关清零/pad 按钮-轴两源/rebind W→S 冻结语义/负向三连 fail-closed/手柄越界防御）",
+    "nl-script selftest 11 目录全锚 PASS：s15a C# BoundProbe -> 0（9 锚：A=0 down/B tap/轴 0.75/0.5/越界/TextPop NoSource）+ s15b UnboundProbe -> 0（3 NoSource）",
+    "rebind 冻结锚逐位：replace ok → frozen until next update → S now drives throttle（W→S 改绑生效点=下次 update）",
+    "viewer --drop-sim 双后端 'drop -> <path>' 消费锚（sample.txt 原样路径回读）",
+    "双后端构建 + 便携 ctest 164/164 ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/dx12/input-tools.exe",
+    "vulkan": "build/vulkan/input-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest 10 节：actions-file 节 21 断言（M-I5 收官面）",
+     "kind": "tool",
+     "note": "M-I0 状态层 7 节 + M-I1 映射层 2 节 + M-I5 actions-file 节；与 input-m0/m1 selftest 卡同命令（节数 9→10 演进已在 M-I0/M-I1 卡 expectLog 同步留痕），本卡为 actions-file 节归属锚。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest PASS (10 sections)",
+     "command": "input-tools selftest",
+     "cwd": "{root}"
+    },
+    {
+     "id": "actions-file",
+     "name": "selftest actions-file 单节：映射文件 + rebind + 手柄源",
+     "kind": "tool",
+     "note": "临时 .actions.json 真实写入 temp dir 再装载（非内存桩）；rebind 冻结锚（frozen until next update）+ 负向三连（unknown src / unknown set / 失败 map 不动）+ 手柄越界防御。",
+     "args": [
+      "selftest",
+      "actions-file"
+     ],
+     "expectExit": 0,
+     "expectLog": "selftest PASS (10 sections)",
+     "command": "input-tools selftest actions-file",
+     "cwd": "{root}"
+    },
+    {
+     "id": "gamepad-script",
+     "name": "selftest 11 目录（含 gamepad）：s15 C# 手柄锚 12 断言",
+     "kind": "tool",
+     "note": "11 目录位置参数（gamepadDir=argv[12]）；s15a BoundProbe 9 锚 + s15b UnboundProbe 3 锚；inputSetWindow 不调 → TextPop 走 NoSource 防御面（nl-script 无窗口宿主）。",
+     "exe": {
+      "dx12": "build/dx12/nl-script.exe",
+      "vulkan": "build/vulkan/nl-script.exe"
+     },
+     "args": [
+      "selftest",
+      "script/examples/hello",
+      "script/examples/console",
+      "script/examples/ecs",
+      "script/bootstrap",
+      "script/examples/timeinput",
+      "script/examples/camera",
+      "script/examples/model",
+      "script/examples/drive",
+      "script/examples/props",
+      "script/examples/mouse",
+      "script/examples/gamepad"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS (0 failures)",
+     "command": "nl-script selftest script/examples/hello ... script/examples/gamepad（11 目录全参）",
+     "cwd": "{root}"
+    },
+    {
+     "id": "drop-sim",
+     "name": "viewer --drop-sim：拖拽消费队列注入锚（双后端）",
+     "kind": "tool",
+     "note": "首帧 feedDroppedPath 注入 + consumeDroppedPaths 消费出 log；相对路径原样回读（cwd={root}）→ 锚确定；真实 OS 拖拽不进对拍（M-NL2 口径）。",
+     "exe": {
+      "dx12": "build/dx12/viewer.exe",
+      "vulkan": "build/vulkan/viewer.exe"
+     },
+     "cwd": "{root}",
+     "args": [
+      "--scene",
+      "assets/scenes/preview.scene.json",
+      "--drop-sim",
+      "example/input-m5/sample.txt",
+      "--frames",
+      "2",
+      "--screenshot",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "drop -> example/input-m5/sample.txt",
+     "command": "viewer.exe --scene assets/scenes/preview.scene.json --drop-sim example/input-m5/sample.txt --frames 2 --screenshot <out.png>"
     }
    ]
   }

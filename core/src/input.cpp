@@ -12,6 +12,7 @@ namespace nl::core {
 namespace {
 // 越界判定统一走这一处（防御性丢弃：selftest 锚验证不崩不误伤合法键）。
 inline bool keyInTable(int key)  { return key >= 0 && key < kGlfwKeyTableSize; }
+inline bool padInTable(int b)    { return b >= 0 && b < kGlfwGamepadButtonTableSize; }
 inline bool mouseInTable(int b)  { return b >= 0 && b < kGlfwMouseButtonTableSize; }
 } // namespace
 
@@ -46,6 +47,27 @@ void InputState::feedMods(bool ctrl, bool shift, bool alt) {
     ctrl_ = ctrl;
     shift_ = shift;
     alt_ = alt;
+}
+
+// ---- M-I5 手柄（注入路径；与键/鼠标同一 endFrame 节奏）----
+
+void InputState::feedGamepadButton(int button, bool down) {
+    if (!padInTable(button)) return;
+    applyGamepadButton(button, down);
+}
+
+void InputState::feedGamepadAxis(int axis, float value) {
+    if (axis < 0 || axis >= kGlfwGamepadAxisCount) return;
+    padAxis_[static_cast<std::size_t>(axis)] = value;
+}
+
+void InputState::pollGamepad(int jid) {
+    GLFWgamepadstate state{};
+    if (!glfwGetGamepadState(jid, &state)) return;   // 无手柄 / 未映射 = 全零不告警
+    for (int b = 0; b < kGlfwGamepadButtonTableSize; ++b)
+        applyGamepadButton(b, state.buttons[b] == GLFW_PRESS);
+    for (int a = 0; a < kGlfwGamepadAxisCount; ++a)
+        feedGamepadAxis(a, state.axes[a]);
 }
 
 // ---- 窗口路径（游戏壳接线前禁用，单消费者铁律见 input.hpp 文件头）----
@@ -137,9 +159,42 @@ void InputState::endFrame() {
     std::fill(std::begin(keyReleased_), std::end(keyReleased_), false);
     std::fill(std::begin(mousePressed_), std::end(mousePressed_), false);
     std::fill(std::begin(mouseReleased_), std::end(mouseReleased_), false);
+    std::fill(std::begin(padPressed_), std::end(padPressed_), false);    // M-I5 手柄边沿
+    std::fill(std::begin(padReleased_), std::end(padReleased_), false);
     mouseDelta_ = {};
     scrollDelta_ = {};
-    // 持续态（keyDown_/mouseDown_/cursor_/mods）跨帧保留——bevy 口径。
+    // 持续态（keyDown_/mouseDown_/cursor_/mods/padDown_/padAxis_）跨帧保留——bevy 口径。
+}
+
+// ---- M-I5 手柄查询 ----
+
+bool InputState::gamepadIsDown(int button) const {
+    return padInTable(button) && padDown_[static_cast<std::size_t>(button)];
+}
+bool InputState::gamepadJustPressed(int button) const {
+    return padInTable(button) && padPressed_[static_cast<std::size_t>(button)];
+}
+bool InputState::gamepadJustReleased(int button) const {
+    return padInTable(button) && padReleased_[static_cast<std::size_t>(button)];
+}
+float InputState::gamepadAxis(int axis) const {
+    return (axis >= 0 && axis < kGlfwGamepadAxisCount)
+               ? padAxis_[static_cast<std::size_t>(axis)] : 0.0f;
+}
+
+// 手柄按钮内核（与 applyMouseButton 同构：边沿语义 + 先后抹除规则一致）。
+void InputState::applyGamepadButton(int button, bool down) {
+    if (!padInTable(button)) return;
+    const auto i = static_cast<std::size_t>(button);
+    if (down) {
+        if (!padDown_[i]) padPressed_[i] = true;
+        padDown_[i] = true;
+        padReleased_[i] = false;
+    } else {
+        if (padDown_[i]) padReleased_[i] = true;
+        padDown_[i] = false;
+        padPressed_[i] = false;
+    }
 }
 
 // ---- M-I1：默认驾驶映射表（口径见 action_map.hpp 文件头）----

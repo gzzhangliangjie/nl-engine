@@ -69,3 +69,31 @@
 
 - 2026-11-10：立项登记（用户指令「输入层扩展先给计划文档然后开 wt 开整」）；三处参考实读完成（本文件 §2）；track `input` 注册 wt_pool/PARALLEL-TRACKS/ROADMAP。
 - 与主树 M8.1 TLAS 会话的冲突面：M-I0 会改 `viewer/main.cpp` 与 `CMakeLists.txt`（接线），这两个文件主树当前有**未提交改动**（另一对话 M8.1）——本轨改动全部在 wt 内进行，merge 回 master 时等 M8.1 收口后执行，冲突预期仅此两文件。
+
+## 7. 第二批扩展：M-I3~M-I5（2026-11-15 立项，用户拍板「整体 review 全做」）
+
+> 起因：键鼠能力面整体 review（本日会话）确认 M-I0~I2 状态/映射/HUD 已通，但存在七缺口。用户拍板全做。归属 track `input` 续编号；§7.1b 重开 wt（feat/input ff 到 master `3d17d42`，junction .workbuddy + slang dist，skip-worktree 已设）。
+
+### 7.1 三处实读留痕（2026-11-15，M-I3~I5 点名文件）
+
+| 来源 | 实读证据 | 用法 |
+|---|---|---|
+| **Carrot** `engine/io/actions/Action.hpp`（291 行全读） | 绑定路径已含鼠标四源 `/user/glfw/mouse/%d` / `pos` / `delta` / `wheel` / `delta_grabbed` + 手柄三源 `gamepad/%d/button|axis|vec2/%d`；`Action::wasJustPressed` = value && !previousValue（与 M-I0 边沿语义同构） | M-I3 鼠标裸查询 ops + M-I5 手柄源的**源集合锚**：本仓 ActionMap 六源（Key/MouseButton/ScrollX/ScrollY/DeltaX/DeltaY）已覆盖鼠标，缺手柄 → M-I5 增源照此路径口径 |
+| **bevy** `crates/bevy_input/src/mouse.rs`（前 120 行定向读） | `MouseButton{Left,Right,Middle,Back,Forward,Other(u16)}` 五键枚举；`MouseMotion{delta}` 相对增量与 `MouseWheel` 分离 | M-I3 鼠标 API 面**语义锚**：按键三态 + 增量/滚轮/绝对位置三类查询（本仓 InputState M-I0 已有全部字段，只缺暴露） |
+| **UE** `Engine/Classes/Engine/GameViewportClient.h:781` + `EngineBaseTypes.h:45`（grep 实读） | `SetMouseCaptureMode(EMouseCaptureMode)`；`EMouseCaptureMode{CapturePermanently, CapturePermanently_IncludingInitialMouseDown, CaptureDuringMouseDown}`；`PlayerController.h:735 DeprojectScreenPositionToWorld` | M-I3 指针锁定**模式锚**（本仓取 CapturePermanently 语义：旗标开=持续捕获、Esc 释放）；M-I4 拾取**反投影锚**（near/far 反投影，不抄 UE 代码） |
+
+### 7.2 里程碑
+
+| 里程碑 | 内容 | 验收判据 |
+|---|---|---|
+| **M-I3** | 脚本鼠标裸查询 API（exports.api 追加 6 op：MouseIsDown/MouseJustPressed/MouseJustReleased/MouseDelta/ScrollDelta/CursorPos；gen.py 五件套重生成）+ core `Window::setMouseCaptured`（GLFW CURSOR_DISABLED，取 UE CapturePermanently 语义）+ viewer `--mouse-capture` 旗标（缺省关=零漂移）+ selftest 新节（注入 feedMouseButton/feedMouseDelta/feedScroll/feedCursor → C# rc/值锚） | selftest 新节全绿 + s0~s11 零回归；`gen.py --check` 绿；双后端 BUILD + 便携 ctest；既有 input-m0/m1/m2 卡 spot bytes；tool 卡三条（usage/正向/负向） |
+| **M-I4** | 屏幕拾取：viewer `--pick` 旗标 + `--pick-at <px,py>` 确定性注入（不依赖真实鼠标，demo 锚）；逆 VP 反投影 near/far → CPU 射线 vs 场景实体 AABB（glTF 顶点 AABB × 实体世界矩阵，slab 法）最近命中；**结果只进 log 锚（"pick -> ..."），零渲染路径改动（A 类零漂移）——M-I4 实做勘误：原计划「HUD pick 行 + PNG pair」会让拾取面触碰渲染路径，与 A 类零漂移口径矛盾，改为 log 锚 + tool 卡交代** | `--pick-at` demo 卡（image 卡跑真实场景，expectLog pick 锚）+ 未命中卡；缺省关零渲染差异（历史卡 spot bytes）；命中/未命中两态各有证据 |
+| **M-I5** | `.actions.json` 重映射文件 + `ActionMap::loadFromFile/rebind`（**有意偏离 Carrot poll 后冻结**，编辑器需要，留痕；vendored nlohmann——scene 序列化同款依赖，§7.3 的「core 无 JSON」初判已勘误：nl_core PUBLIC tinygltf 目录本就带 json.hpp）+ window 拖拽（`glfwSetDropCallback` → `consumeDroppedPaths`，viewer `--drop-sim` 确定性旗标）+ 脚本字符暴露 `inputTextPop`（Blittable 单码点，window 侧 `consumeTextChars` M-C1 已有；宿主 `inputSetWindow` 绑 Window）+ 手柄（InputState gamepad 表 + feed 注入 + `Window::pollGamepad` 窗口路径 + ActionMap Source 增 GamepadButton/GamepadAxis + 脚本 `inputGamepadIsDown/inputGamepadAxis`） | input-tools selftest 新节 `actions-file`（装载正向/负向不动 map/rebind 冻结语义/手柄防御锚）+ nl-script selftest s15（C# 手柄导出锚）+ 既有锚零回归；tool 卡 + `--drop-sim` demo 卡；M-I3 契约零回归 |
+
+### 7.3 有意决策留痕
+
+- **脚本鼠标走裸查询 op 而非新 Action 源**：ActionMap 六源已含 MouseButton/Scroll/Delta（M-I1 落地），脚本经 Action 系统读鼠标已可用；裸查询补的是「不经映射直接读」的对称面（bevy ButtonInput 同构）。M-I5 手柄才是真增源。
+- **指针锁定取 CapturePermanently 语义**（UE 三档取一）：`--mouse-capture` 开 = 获焦即捕获持续、Esc 释放重按再捕获；不做 CaptureDuringMouseDown 档（真要了再加）。
+- **拾取反投影不抄 UE**：`DeprojectScreenPositionToWorld` 只作口径锚（near/far 反投影），实现为本仓手写 4x4 逆 + slab AABB。
+- **重映射文件选 JSON 而非行式**（§7.3 初稿「core 无 JSON 解析器」已勘误）：nl_core 本就 PUBLIC tinygltf 目录（内嵌 vendored nlohmann json.hpp，P8-ECS-PLAN 拍板口径），scene 序列化先例在先——JSON 装载零新依赖且与场景文件同生态，行式格式作废。
+- **确定性验收口径**：真实鼠标/拖拽事件不可自动化 → `--pick-at` / `--drop-sim` 注入旗标（M-NL2 夜景 demo 旗标同构教训：真实设备路径不进对拍）。
