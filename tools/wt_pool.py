@@ -340,9 +340,9 @@ TRACKS = {
                 "integration, C# Ui domain full chain, demo+hot-reload+F8"
                 "+--rmlui-click headless acceptance; dual-backend BUILD OK "
                 "+ selftest 16/16 x2 + acceptance anchors green + "
-                "default-off zero-drift; wt KEPT pending user decision on "
-                "removal; whole-track MERGED to master (no-ff cfe6a8f, "
-                "2026-11-15)",
+                "default-off zero-drift; wt REMOVED 2026-11-15 (junctions "
+                "detached + worktree prune, branch deleted post-merge, "
+                "tag ui-rmlui kept)",
     },
 }
 
