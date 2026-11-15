@@ -1,0 +1,24 @@
+phys-tools - nl-engine P8 physics tools (Jolt 5.3.1, headless)
+usage:
+  phys-tools selftest [--verbose]
+  phys-tools simulate [--out <tsv>] [--frames N] [--dt S] [--gravity G]
+                      [--height H] [--radius R] [--restitution E] [--seed N]
+  phys-tools check <tsv>
+  phys-tools layers [--out <tsv>] [--frames N] [--verbose]
+  phys-tools check-layers <tsv>
+  phys-tools stack [--out <tsv>] [--frames N] [--boxes N] [--gap G]
+  phys-tools check-stack <tsv>
+  phys-tools debug [--out <tsv>] [--frames N]
+  phys-tools check-debug <tsv>
+  phys-tools character [--out <tsv>] [--frames N]
+  phys-tools check-character <tsv>
+  phys-tools check-jobs [--threads N] [--frames N]  (M-J5c JobSystem adapter)
+  phys-tools contact-trace [--out <tsv>] [--frames N]  (M-D0 contact events)
+  phys-tools contact-check <tsv>
+  phys-tools ecs-trace [--out <tsv>] [--frames N]  (M-D1 ECS consumption)
+  phys-tools ecs-check <tsv>
+  phys-tools drive-trace [--out <tsv>] [--frames N] [--accel-end N] [--turn-end N]  (M-D2 vehicle drive)
+  phys-tools drive-check <tsv>
+  phys-tools query-trace [--out <tsv>]  (M-PQ0 raycast/sweep/overlap six anchors)
+  phys-tools query-check <tsv>
+exit: 0=PASS 1=FAIL 2=usage error

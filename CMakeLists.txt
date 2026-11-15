@@ -351,6 +351,7 @@ add_library(nl_core STATIC
     core/src/scene/SignalLampComponent.cpp  # P8 M-T4：红绿灯摆件组件序列化
     core/src/scene/AssetName.cpp # M-SC7：资产文件名白名单单源（收编 renderer/scene/viewer/SceneGeo 四份复制）
     core/src/physics/World.cpp # P8 M-P0：Jolt 最小世界（PIMPL，core 内唯一 Jolt 符号面）
+    core/src/physics/Query.cpp # M-PQ0：通用物理查询 raycast/sweep/overlap（Jolt-free 公开头）
     core/src/physics/ContactEventStream.cpp # P8 M-D1：双缓冲 ContactEventStream（bevy 两帧保活，Jolt-free）
     core/src/physics/ContactEventSystem.cpp # P8 M-D1：scene::System 消费者（owner->Entity 过滤，自足系统）
     core/src/physics/Vehicle.cpp # P8 M-D2：VehicleConstraint 探针式集成（fresh world，Jolt-free 公开头）

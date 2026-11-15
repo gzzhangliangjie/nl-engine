@@ -15220,6 +15220,85 @@
      "command": "viewer.exe --scene assets/scenes/preview.scene.json --drop-sim example/input-m5/sample.txt --frames 2 --screenshot <out.png>"
     }
    ]
+  },
+  {
+   "id": "phys-query",
+   "label": "P8 M-PQ0",
+   "name": "通用物理查询 API 最小面（raycast / sweep / overlap）",
+   "tag": "phys-query-pq0",
+   "date": "2026-11-15",
+   "summary": "波 1 A 类轨 feat/phys-query 首里程碑。用户拍板 A 最小面：公开头 core/include/nl/physics/query.hpp 零 JPH 符号（QueryFilter / RayQuery / ShapeDesc / SweepQuery / OverlapQuery / QueryHit / QueryScene），唯一 Jolt 落点是 PIMPL 内的 Query.cpp：NarrowPhaseQuery 的 CastRay / CastShape / CollideShape 映射，显式 QueryLayerFilter + QueryBodyFilter 让 layerMask 与 ignoreBodyIds 真正生效，overlap 结果按 bodyId 自排序保证确定性。工具版交代：phys-tools query-trace / query-check 真实 TSV 六锚 + 四张由真实日志渲染的证据图，不进 kStage、不 bump、不碰绑定面。",
+   "acceptance": [
+    "DX12 / VULKAN 双后端各 BUILD OK + SELFTEST 16/16 + artifacts 170/170，ctest 各 167/167（三条 M-PQ0 新用例全 Passed）",
+    "六条数值锚（射线命中 / miss / layerMask / ignoreBodyIds / sweep TOI / overlap 四 body 升序）双后端一致",
+    "query-trace TSV 10 行两次逐字节一致；query-check 独立 oracle PASS (10 rows)",
+    "公开头零 JPH 符号，Jolt 只出现在 Query.cpp；不碰 exports.api 绑定面、不碰 viewer、不 bump kStage",
+    "工具版交代：example/phys-query/run.bat ALL GREEN + 4 张由真实日志/TSV 渲染的证据图"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。phys-tools 为 headless 纯 CPU 工具，两构建树产物等价。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools",
+     "preview": "example/phys-query/usage.png",
+     "script": "example/phys-query/run.bat verify"
+    },
+    {
+     "id": "query-trace",
+     "name": "query-trace：raycast / sweep / overlap 六锚 TSV",
+     "kind": "tool",
+     "note": "floor+3box+sensor 固定夹具，10 行 TSV 含 fraction/distance/命中点/法线/bodyId/layer/owner；{out} 由展示台替换为临时产物路径。",
+     "args": [
+      "query-trace",
+      "--out",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "wrote ",
+     "command": "phys-tools query-trace --out <out>",
+     "preview": "example/phys-query/query-trace.png",
+     "script": "example/phys-query/run.bat verify"
+    },
+    {
+     "id": "query-check",
+     "name": "query-check：独立 oracle 回读真实 TSV",
+     "kind": "tool",
+     "note": "读取 run.bat 产出的 query-trace.tsv 并逐行断言六锚数值，输出 PASS (10 rows)。TSV 是工具真实输出，非手写基线。",
+     "args": [
+      "query-check",
+      "{root}/example/phys-query/query-trace.tsv"
+     ],
+     "expectExit": 0,
+     "expectLog": "PASS (10 rows)",
+     "command": "phys-tools query-check example/phys-query/query-trace.tsv",
+     "preview": "example/phys-query/query-check.png",
+     "script": "example/phys-query/run.bat verify"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--out 缺路径必须显式拒绝（exit 2）",
+     "kind": "tool",
+     "note": "工具退出码约定：0=PASS / 1=FAIL / 2=usage error。缺参数必须打印 usage 并拒绝，不许静默假成功。",
+     "args": [
+      "query-trace",
+      "--out"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit: 0=PASS 1=FAIL 2=usage error",
+     "command": "phys-tools query-trace --out",
+     "preview": "example/phys-query/negative.png",
+     "script": "example/phys-query/run.bat verify"
+    }
+   ]
   }
  ]
 }

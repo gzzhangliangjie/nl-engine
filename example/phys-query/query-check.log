@@ -1,0 +1,2 @@
+phys-pq0 query-check E:\UE_STUDY_2026\nl-engine-phys-query\example\phys-query\query-trace.tsv: PASS (10 rows)
+phys-pq0 query-check: PASS (10 rows)

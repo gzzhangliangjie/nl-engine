@@ -34,6 +34,7 @@
 // TSV by the matching make-phys*-evidence.py. No hand-drawn diagrams.
 
 #include "nl/physics/World.hpp"
+#include "nl/physics/query.hpp"
 #include "nl/physics/ContactEventStream.hpp"
 #include "nl/physics/ContactEventSystem.hpp"
 #include "nl/physics/Vehicle.hpp"
@@ -48,6 +49,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -56,6 +58,12 @@ namespace {
 
 int  g_failures = 0;
 bool g_verbose  = false;
+
+// M-PQ0 query acceptance is defined at the end of this namespace; forward
+// declarations let runSelftest() share the exact same row builder + anchors.
+struct QueryRow;
+bool buildQueryRows(std::vector<QueryRow>* rows, std::string* err);
+void checkQueryRows(const std::vector<QueryRow>& rows, const char* tag);
 
 void verboseOk(const char* what) {
     if (g_verbose) std::printf("  ok %s\n", what);
@@ -89,6 +97,8 @@ void usage() {
     std::printf("  phys-tools ecs-check <tsv>\n");
     std::printf("  phys-tools drive-trace [--out <tsv>] [--frames N] [--accel-end N] [--turn-end N]  (M-D2 vehicle drive)\n");
     std::printf("  phys-tools drive-check <tsv>\n");
+    std::printf("  phys-tools query-trace [--out <tsv>]  (M-PQ0 raycast/sweep/overlap six anchors)\n");
+    std::printf("  phys-tools query-check <tsv>\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -2731,10 +2741,23 @@ int runSelftest() {
         }
     }
 
+    // ---- M-PQ0: general physics query API (shared with query-trace TSV) ----
+    {
+        std::vector<QueryRow> qr;
+        std::string qerr;
+        if (!buildQueryRows(&qr, &qerr)) {
+            std::printf("M-PQ0 query build failed: %s\n", qerr.c_str());
+            ++g_failures;
+        } else {
+            checkQueryRows(qr, "selftest");
+        }
+    }
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
+    std::printf("phys-pq0 selftest: PASS (raycast/sweep/overlap, layer+body filters, 6 anchors)\n");
     std::printf("phys-d2 vehicle: PASS (VehicleConstraint fresh world, 4 wheel rays, stream, determinism)\n");
     std::printf("phys-d1 ecs: PASS (double buffer, PostPhysics consumer, TickGroup order, zero regression)\n");
     std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
@@ -2865,6 +2888,217 @@ int runCheck(const char* path) {
     return 0;
 }
 
+// ---- M-PQ0: general physics query API (A-class tool acceptance) ------------
+// One shared row builder feeds both `query-trace` (real TSV) and `selftest`
+// (in-process). Anchors are recomputed from the fixture geometry constants,
+// never copied from a previous run's output.
+struct QueryRow {
+    std::string    name;
+    int            hit = 0;
+    float          fraction = 0.0f, distance = 0.0f;
+    float          px = 0.0f, py = 0.0f, pz = 0.0f;
+    float          nx = 0.0f, ny = 0.0f, nz = 0.0f;
+    std::uint32_t  bodyId = 0, layer = 0;
+    std::uint64_t  owner = 0;
+};
+
+QueryRow makeQueryRow(const char* name, const nl::physics::QueryHit& h) {
+    QueryRow r;
+    r.name     = name;
+    r.hit      = h.hit ? 1 : 0;
+    r.fraction = h.fraction;
+    r.distance = h.distance;
+    r.px = h.point.x;  r.py = h.point.y;  r.pz = h.point.z;
+    r.nx = h.normal.x; r.ny = h.normal.y; r.nz = h.normal.z;
+    r.bodyId = h.bodyId; r.layer = h.layer; r.owner = h.owner;
+    return r;
+}
+
+std::string queryTSV(const std::vector<QueryRow>& rows) {
+    std::ostringstream os;
+    os << "# jolt=" << nl::physics::kJoltVersion
+       << " query=M-PQ0 fixture=floor+3box+sensor\n";
+    os << "name\thit\tfraction\tdistance\tpx\tpy\tpz\tnx\tny\tnz\tbodyId\tlayer\towner\n";
+    os << std::setprecision(6) << std::fixed;
+    for (const QueryRow& r : rows) {
+        os << r.name << '\t' << r.hit << '\t' << r.fraction << '\t' << r.distance
+           << '\t' << r.px << '\t' << r.py << '\t' << r.pz
+           << '\t' << r.nx << '\t' << r.ny << '\t' << r.nz
+           << '\t' << r.bodyId << '\t' << r.layer << '\t' << r.owner << '\n';
+    }
+    return os.str();
+}
+
+bool parseQueryTSV(const char* path, std::vector<QueryRow>* rows, std::string* err) {
+    std::ifstream f(path);
+    if (!f) { *err = "cannot open"; return false; }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#' || line.rfind("name\t", 0) == 0) continue;
+        std::istringstream is(line);
+        QueryRow r;
+        std::string tok;
+        auto next = [&](std::string* out) { return bool(std::getline(is, *out, '\t')); };
+        if (!next(&tok)) continue;
+        r.name = tok;
+        auto getI = [&](int* out) { if (!next(&tok)) return false; *out = std::atoi(tok.c_str()); return true; };
+        auto getF = [&](float* out) { if (!next(&tok)) return false; *out = static_cast<float>(std::atof(tok.c_str())); return true; };
+        auto getU32 = [&](std::uint32_t* out) { if (!next(&tok)) return false; *out = static_cast<std::uint32_t>(std::strtoul(tok.c_str(), nullptr, 10)); return true; };
+        auto getU64 = [&](std::uint64_t* out) { if (!next(&tok)) return false; *out = std::strtoull(tok.c_str(), nullptr, 10); return true; };
+        if (!getI(&r.hit) || !getF(&r.fraction) || !getF(&r.distance) ||
+            !getF(&r.px) || !getF(&r.py) || !getF(&r.pz) ||
+            !getF(&r.nx) || !getF(&r.ny) || !getF(&r.nz) ||
+            !getU32(&r.bodyId) || !getU32(&r.layer) || !getU64(&r.owner)) {
+            *err = "bad TSV row: " + line;
+            return false;
+        }
+        rows->push_back(r);
+    }
+    return true;
+}
+
+bool buildQueryRows(std::vector<QueryRow>* rows, std::string* err) {
+    nl::physics::QueryScene scene;
+    if (!scene.build(err)) return false;
+
+    // 1: ray along +z from z=-10 hits boxA near face at z=4 (distance 14),
+    //    normal points back toward the shooter (-z).
+    nl::physics::RayQuery ray;
+    ray.origin = { 0.0f, 1.0f, -10.0f };
+    ray.direction = { 0.0f, 0.0f, 1.0f };
+    ray.maxT = 100.0f;
+    rows->push_back(makeQueryRow("ray_hitA", scene.raycast(ray)));
+
+    // 2: parallel miss at x=50 (floor top is y=0, ray sits at y=1).
+    ray.origin = { 50.0f, 1.0f, -10.0f };
+    rows->push_back(makeQueryRow("ray_miss", scene.raycast(ray)));
+
+    // 3: only kDebris -> skip boxA, hit boxB near face at z=9.
+    ray.origin = { 0.0f, 1.0f, -10.0f };
+    ray.filter.layerMask = 1u << nl::physics::layers::kDebris;
+    rows->push_back(makeQueryRow("ray_layerDebris", scene.raycast(ray)));
+
+    // 4: ignore boxA -> same boxB hit, proving BodyFilter is wired.
+    ray.filter.layerMask = 0x0Fu;
+    ray.filter.ignoreBodyIds.push_back(scene.bodyIdBySlot(1));
+    rows->push_back(makeQueryRow("ray_ignoreA", scene.raycast(ray)));
+
+    // 5: sphere sweep (r=0.5) from z=0 to z=30 touches boxA at center z=3.5.
+    nl::physics::SweepQuery sweep;
+    sweep.shape.kind = nl::physics::ShapeDesc::Sphere;
+    sweep.shape.dims[0] = 0.5f;
+    sweep.from = { 0.0f, 1.0f, 0.0f };
+    sweep.to   = { 0.0f, 1.0f, 30.0f };
+    rows->push_back(makeQueryRow("sweep_wall", scene.sweep(sweep)));
+
+    // 6: big slab y in [0.5,1.5] covers all 3 boxes + sensor, never the floor.
+    nl::physics::OverlapQuery overlap;
+    overlap.shape.kind = nl::physics::ShapeDesc::Box;
+    overlap.shape.dims[0] = 2.0f;
+    overlap.shape.dims[1] = 0.5f;
+    overlap.shape.dims[2] = 20.0f;
+    overlap.position = { 0.0f, 1.0f, 12.0f };
+    const std::vector<nl::physics::QueryHit> hits = scene.overlap(overlap, 16);
+    QueryRow count;
+    count.name = "overlap_count";
+    count.hit  = static_cast<int>(hits.size());
+    rows->push_back(count);
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        rows->push_back(makeQueryRow(("overlap_" + std::to_string(i)).c_str(), hits[i]));
+    }
+    return true;
+}
+
+void checkQueryRows(const std::vector<QueryRow>& rows, const char* tag) {
+    auto find = [&](const char* name) -> const QueryRow* {
+        for (const QueryRow& r : rows) if (r.name == name) return &r;
+        return nullptr;
+    };
+    auto near = [](float a, float b, float eps) { return std::fabs(a - b) <= eps; };
+
+    const QueryRow* a = find("ray_hitA");
+    expectTrue(a && a->hit == 1, "M-PQ0 ray_hitA hit");
+    if (a) {
+        expectTrue(near(a->pz, 4.0f, 0.01f) && near(a->distance, 14.0f, 0.02f),
+                   "M-PQ0 ray_hitA point.z=4 distance=14");
+        expectTrue(a->nz < -0.99f, "M-PQ0 ray_hitA normal=(0,0,-1)");
+        expectTrue(a->layer == nl::physics::layers::kDefault, "M-PQ0 ray_hitA layer");
+        expectTrue(a->owner != 0, "M-PQ0 ray_hitA owner from userData");
+    }
+    const QueryRow* miss = find("ray_miss");
+    expectTrue(miss && miss->hit == 0, "M-PQ0 ray_miss no hit");
+
+    const QueryRow* layer = find("ray_layerDebris");
+    expectTrue(layer && layer->hit == 1 && near(layer->pz, 9.0f, 0.01f),
+               "M-PQ0 layerMask skips boxA, hits boxB");
+    if (layer) expectTrue(layer->layer == nl::physics::layers::kDebris,
+                          "M-PQ0 layerMask result layer is kDebris");
+
+    const QueryRow* ignore = find("ray_ignoreA");
+    expectTrue(ignore && ignore->hit == 1 && near(ignore->pz, 9.0f, 0.01f),
+               "M-PQ0 ignoreBodyIds skips boxA, hits boxB");
+
+    const QueryRow* sw = find("sweep_wall");
+    expectTrue(sw && sw->hit == 1, "M-PQ0 sweep hit");
+    if (sw) {
+        expectTrue(near(sw->fraction, 3.5f / 30.0f, 0.005f),
+                   "M-PQ0 sweep TOI matches sphere radius");
+        expectTrue(sw->nz < -0.9f, "M-PQ0 sweep contact normal");
+    }
+
+    const QueryRow* cnt = find("overlap_count");
+    expectTrue(cnt && cnt->hit == 4, "M-PQ0 overlap returns 4 bodies");
+    std::uint32_t prev = 0;
+    bool ascending = true;
+    int overlapRows = 0;
+    for (const QueryRow& r : rows) {
+        if (r.name.rfind("overlap_", 0) != 0 || r.name == "overlap_count") continue;
+        ++overlapRows;
+        if (r.hit != 1 || (overlapRows > 1 && r.bodyId <= prev)) ascending = false;
+        prev = r.bodyId;
+    }
+    expectTrue(ascending && overlapRows == 4,
+               "M-PQ0 overlap sorted by bodyId ascending");
+    std::printf("phys-pq0 %s: %s (%zu rows)\n", tag,
+                g_failures ? "FAIL" : "PASS", rows.size());
+}
+
+int runQueryTrace(int argc, char** argv) {
+    std::string outPath = "phys-pq0-query.tsv";
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--out" && i + 1 < argc) outPath = argv[++i];
+        else { usage(); return 2; }
+    }
+    std::vector<QueryRow> rows;
+    std::string err;
+    if (!buildQueryRows(&rows, &err)) {
+        std::printf("phys-pq0 query-trace: FAIL (%s)\n", err.c_str());
+        return 1;
+    }
+    std::ofstream out(outPath, std::ios::binary);
+    if (!out) { std::printf("cannot open %s\n", outPath.c_str()); return 1; }
+    const std::string text = queryTSV(rows);
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    out.close();
+    std::printf("wrote %s (%zu rows)\n", outPath.c_str(), rows.size());
+    return 0;
+}
+
+int runQueryCheck(const char* path) {
+    std::vector<QueryRow> rows;
+    std::string err;
+    if (!parseQueryTSV(path, &rows, &err)) {
+        std::printf("phys-pq0 query-check: FAIL (%s)\n", err.c_str());
+        return 1;
+    }
+    const int before = g_failures;
+    checkQueryRows(rows, ("query-check " + std::string(path)).c_str());
+    if (g_failures != before) return 1;
+    std::printf("phys-pq0 query-check: PASS (%zu rows)\n", rows.size());
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2917,6 +3151,11 @@ int main(int argc, char** argv) {
     if (cmd == "contact-check") {
         if (argc != 3) { usage(); return 2; }
         return runContactCheck(argv[2]);
+    }
+    if (cmd == "query-trace") return runQueryTrace(argc, argv);
+    if (cmd == "query-check") {
+        if (argc != 3) { usage(); return 2; }
+        return runQueryCheck(argv[2]);
     }
     usage();
     return 2;
