@@ -43,6 +43,31 @@ if(NOT NL_BACKEND_UPPER STREQUAL "DX12" AND NOT NL_BACKEND_UPPER STREQUAL "VULKA
 endif()
 message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no network)")
 
+# ---- M-MOD0：自研模块化整理（2026-11-15）----
+# 顶层相对独立的自研工具模块统一迁入 modules/（全部独立 add_executable，
+# 只依赖 nl_core，零反向依赖——调研见 docs/MILESTONES.md M-MOD0）。
+# 编译开关：NL_MODULES = ALL（默认全编）或分号列表（只编指定），如 -DNL_MODULES="anim-tools;nav-tools"。
+# module 名 = modules/ 下目录名，一对一无映射。
+set(NL_MODULES "ALL" CACHE STRING "modules/<dir> build list: ALL (default) or semicolon list like anim-tools;nav-tools")
+set(NL_ALL_MODULES
+    anim-tools audio-tools cam-tools city-tools gi-tools gl-tools input-tools
+    log-tools material-graph-tools nav-tools net-tools phys-tools sprite-tools
+    traffic-tools vfx-tools nanite-scene nl-script nanite-console)
+
+set(_nl_modules_selected "")
+if(NL_MODULES STREQUAL "ALL")
+    set(_nl_modules_selected ${NL_ALL_MODULES})
+else()
+    foreach(_m ${NL_MODULES})
+        if(NOT _m IN_LIST NL_ALL_MODULES)
+            message(FATAL_ERROR "NL_MODULES: unknown module '${_m}'. Valid: ALL or any of ${NL_ALL_MODULES}")
+        endif()
+        list(APPEND _nl_modules_selected ${_m})
+    endforeach()
+endif()
+list(LENGTH _nl_modules_selected _nl_modules_count)
+message(STATUS "nl-engine modules: ${_nl_modules_count}/${NL_ALL_MODULES}")
+
 set(THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 # M-TR0：Tracy v0.15.0（BSD-3-Clause）性能/内存观测，**默认 OFF**。
 # 选型闸与 0.15 实测口径见 thirdparty/tracy/VENDOR.md；GUI 是进程外工具，不入库。
@@ -299,7 +324,13 @@ add_subdirectory(thirdparty/recastnavigation EXCLUDE_FROM_ALL)
 # ---- PT M-PT1：Effekseer core vendored（MIT，.efkefc 解析层，离线转换器专用）----
 # 单静态库零外部依赖（Network 子集未入库）；运行时（nl-engine）不碰它，只有
 # vfx-tools/nfx-convert 链接——运行时零新依赖铁律不破。详见 thirdparty/effekseer/VENDOR.md。
-add_subdirectory(thirdparty/effekseer EXCLUDE_FROM_ALL)
+# M-MOD0：唯一消费者是 modules/vfx-tools，vfx 不编则连带跳过（nl_miniaudio 由
+# nl_core PRIVATE 链，与 audio-tools 开关无关，不挂闸）。
+if("vfx-tools" IN_LIST _nl_modules_selected)
+    add_subdirectory(thirdparty/effekseer EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "module vfx-tools disabled: skipping thirdparty/effekseer")
+endif()
 
 # ---- NET M-NET0：ENet 1.3.18 vendored（MIT，UDP 传输：可靠/不可靠通道 + 连接管理）----
 # 符号面隔离：enet_ 类型只允许出现在 core/src/net/Net.cpp（PIMPL）；
@@ -760,8 +791,8 @@ target_compile_definitions(nl_core PRIVATE
 
 # ---- viewer 与全部工具：target 定义拆到各自目录的 CMakeLists.txt（2026-11-10）----
 # 目的：并行轨道加工具 / 加 ctest 用例不再改根文件（追加冲突源根治）。
-# 新轨道加工具 = 新建 <dir>/main.cpp + <dir>/CMakeLists.txt（照抄任一现役工具的骨架）
-# + 下面清单加一行 add_subdirectory(<dir>)。
+# 新轨道加工具 = 新建 modules/<dir>/main.cpp + modules/<dir>/CMakeLists.txt
+# （照抄任一现役工具的骨架）+ 顶部 NL_ALL_MODULES 清单加目录名（M-MOD0 起）。
 if(MSVC)
     # NVRHI 上游头文件带少量非当前代码页字符，压掉 C4819 噪音（不影响代码）
     add_compile_options(/wd4819)
@@ -794,23 +825,9 @@ add_custom_target(nl_scriptapi_freshness ALL
 
 add_subdirectory(viewer)
 add_subdirectory(nanite-tools)
-add_subdirectory(anim-tools)
-add_subdirectory(material-graph-tools)
-add_subdirectory(nanite-scene)
-add_subdirectory(nl-script)
-add_subdirectory(nanite-console)
-add_subdirectory(audio-tools)
-add_subdirectory(net-tools)
-add_subdirectory(phys-tools)
-add_subdirectory(nav-tools)
-add_subdirectory(city-tools)      # W0 M-W0.0：大世界生成工具（A 类轨道 feat/worldgen，纯 CPU 零图形）
-add_subdirectory(traffic-tools)   # P8 M-T0.0：交通 lane graph 工具（A 类轨道 feat/worldgen，只链 nl_core 零图形）
-add_subdirectory(gl-tools)
-add_subdirectory(input-tools)
-add_subdirectory(sprite-tools)   # M-SP0：2D 精灵 core 侧 POD 无头验收（纯 CPU 零图形）
-add_subdirectory(vfx-tools)
-add_subdirectory(cam-tools)
-add_subdirectory(gi-tools)        # S11 M11.0：世界缓存 CPU 仿真（hashmap 语义先仿真后上 GPU）
-add_subdirectory(log-tools)       # A 类日志轨道 M-LOG0：nl::core::log 无头验收
+# ---- M-MOD0：自研模块统一从 modules/ 按 NL_MODULES 开关装入（含 ctest 用例）----
+foreach(_m ${_nl_modules_selected})
+    add_subdirectory(modules/${_m})
+endforeach()
 add_subdirectory(editor_bridge)   # 引擎侧 bridge（静态库，M-E2 供 viewer 接线）
 add_subdirectory(editor)          # 编辑器宿主（C++/ImGui，独立进程）

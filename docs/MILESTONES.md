@@ -4142,7 +4142,13 @@
 - **提交版本**：feat/input 本条 commit，annotated tag `input-m5`
 - **踩坑**：① **vector<std::string> 扩容搬移使 c_str() 悬空**：loadFromFile 逐个 ownedNames_.push_back + back().c_str() 提交——fire/steer（先提交）find 失败而 throttle（最后提交）幸存的精确症状，`std::deque` 根修（push_back 不搬移已有元素）；**凡「容器持名 + 裸指针外借」组合，容器必须 deque/稳定地址**；② input-tools/main.cpp 缺 `<filesystem>/<cmath>/<process.h>` include 三连（std::filesystem/std::fabs/_getpid）；③ 自写 selftest 节先本地实跑再写卡——本轮 5 个 pad 锚 FAIL 是实跑抓的，不是回归闸抓的（写卡前实跑省一轮）。
 
-## 待办 M-MOD0 — 顶层模块化整理：新建 modules/ 目录 + 编译开关（**未启动，闲时整理**，前期调研 2026-11-15 已完成）
+## M-MOD0 — 顶层模块化整理：modules/ 目录 + NL_MODULES 编译开关收官（主线 master，2026-11-15，tag `modules`）
+
+- **动作**：① `git mv` 顶层 18 个相对独立自研工具模块入 `modules/`（anim/audio/cam/city/gi/gl/input/log/material-graph/nav/net/phys/sprite/traffic/vfx-tools + nanite-scene / nl-script / nanite-console；**调研漏了 sprite-tools，执行时 grep add_subdirectory 补获**，M-SP0 同构独立 exe 照挪）。② 根 CMakeLists：`NL_MODULES` CACHE STRING（ALL 默认全编 / 分号列表选编，非法名 FATAL_ERROR）+ `NL_ALL_MODULES` 白名单 + 按开关 `foreach add_subdirectory(modules/<dir>)`；effekseer add_subdirectory 挂 `vfx-tools` 开关下连带跳过（**nl_miniaudio 由 nl_core PRIVATE 链，与 audio 开关无关不挂闸**）。③ `build-m0.2.bat` 加 NL_MODULES 环境变量通道 + `%2` build 目录后缀（子集走独立目录不污染 ALL 缓存）。④ README 目录树补 modules/ 行。
+- **完成情况**：🟢 ALL 全编双后端 BUILD OK + selftest PASS（DX12 4m10s / VULKAN 4m03s，modules 18/18）；🟢 子集选编（anim;nav;vfx）：modules 3/18，产物 = 3 模块 exe + 引擎本体，其余 15 模块零产物，effekseer 连带编译 ✓；🟢 负向 configure-only（anim;nav）：`module vfx-tools disabled: skipping thirdparty/effekseer` ✓；🟢 包内确认：`out/package/nl-engine-sprite2d-sp0-5-g8f3cf073/` 22 exe ×2 后端 + 包内 selftest 16/16 ×2；🟢 引用面实核：scripts/docs 的 `xxx-tools` 引用全是叙述性提及非路径硬编码（此前调研"4 脚本 10 文档硬编码"为 grep 模糊匹配误报，未改动；MILESTONES 历史台账按纪律不改写）。
+- **踩坑**：① **bat 文件必须纯 ASCII**：bat 里写 UTF-8 中文注释，cmd 按 ANSI(GBK) 读，乱码字节炸断 rem 行把后续参数拼成命令（`'传含分号…""' 不是内部或外部命令`）——仓库历史 bat 全英文注释就是防这个；② **cmd //c 传含分号的 bat 参数会被 bash/cmd 双层引号剥坏**（`anim-tools;nav-tools` 到 bat 里散架）——含分号参数一律走环境变量；③ `ls *.exe | xargs -n1 basename` 在本机 Git Bash 触发 xargs `bc_ctl.arg_max` 断言（exit 134）——直接 ls 即可；④ cmake 不在 PATH，用便携版 `E:\UE_STUDY_2026\.build-tools\cmake-3.31.6-windows-x86_64\bin\cmake.exe`；⑤ Bash 通道 cwd 每次调用重置（本轮又踩：cmake 报 source dir 是 WorkBuddy 工作区）——**每条命令无例外显式 `cd <目标树> &&`**。
+
+## 待办归档 M-MOD0（原待办条目，2026-11-15 执行完毕，上方条目为收官记录）
 
 - **目标**：仓库根新建 `modules/`，把顶层相对独立的自研工具模块挪进去，并在根 CMakeLists 加编译开关，编译时可选带哪个模块不带哪个。
 - **调研结论（2026-11-15 已实读确认）**：17 个顶层 `*-tools` 全部是独立 `add_executable`，**只依赖 nl_core，零反向依赖**（viewer / nanite-tools / core / renderer 均不链它们）——挪动+开关不影响引擎本体。

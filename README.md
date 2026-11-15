@@ -14,6 +14,7 @@ nl-engine/
 │   ├── src/scene.cpp  ← 两后端共享：glTF 加载 / staging 上传 / 绑定集 / pipeline
 │   └── src/hud.cpp    ← 两后端共享：自写 NVRHI ImGui 渲染后端（不用官方 D3D12/VK backend）
 ├── viewer/            ← 可见用例 + --screenshot 回归 + HudFrame 双向 POD
+├── modules/           ← 自研独立工具模块（M-MOD0 起，18 个 *-tools / nanite-scene / nl-script / nanite-console；NL_MODULES=ALL 全编或 -DNL_MODULES="anim-tools;nav-tools" 选编）
 ├── assets/models/     ← Suzanne.glb（Khronos 官方样例）+ TorusKnotDense.glb / IcoSphereDense.glb（程序化致密测试资产，gen-dense-mesh.py 生成）
 ├── thirdparty/        ← glfw / nvrhi / imgui(1.91.9) / vulkan-headers / directx-headers / stb / tinygltf / meshoptimizer(v1.3 文档级对照，不入构建)（本地 vendored）
 ├── docs/
