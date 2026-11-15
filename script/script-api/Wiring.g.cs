@@ -327,11 +327,11 @@ namespace Nl.Script.Api
         }
     }
 
-    /// <summary>Physics 域接线（生成物；ApiTable 偏移 32..36 = exports.api 声明序）。</summary>
+    /// <summary>Physics 域接线（生成物；ApiTable 偏移 32..36,60..64 = exports.api 声明序）。</summary>
     internal static unsafe class PhysicsWiring
     {
         // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
-        public static IntPtr _physicsAddVehicle, _physicsRemoveVehicle, _physicsSetVehicleInput, _vehicleFullPose, _teleportVehicle;
+        public static IntPtr _physicsAddVehicle, _physicsRemoveVehicle, _physicsSetVehicleInput, _vehicleFullPose, _teleportVehicle, _queryRaycast, _querySweep, _queryOverlap, _queryOverlapHitAt, _queryBodyCount;
 
         /// <summary>训练场加车（slot 从 0 起，slot0 = build(2) 既有单车；M-NET2 同构）。rc：0=ok / 1=未绑 DebugScene（宿主忘 driveSetScene）/ 3=加车失败（lastError 置因，slot=-1）</summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -353,6 +353,26 @@ namespace Nl.Script.Api
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int TeleportVehicleFn(int slot, float* pos, float* quat);
 
+        /// <summary>射线查询（dir 须单位长，单命中；hit 0|1；out 指针 NULL = 跳过该字段）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（零向量/非有限值/maxT&lt;=0——validateRayQuery 先过）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int QueryRaycastFn(float* origin, float* dir, float maxT, uint layerMask, out int hit, float* point, float* normal, out float fraction, out float distance, out uint bodyId, out uint subShapeId, out uint layer, out ulong owner);
+
+        /// <summary>形状扫掠（单命中；shapeKind 见域头；hit 0|1）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（shapeKind 越界 / dims 非法——validateSweepQuery 先过）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int QuerySweepFn(float* dims, uint shapeKind, float* from, float* to, float* rot, uint layerMask, out int hit, float* point, float* normal, out float fraction, out float distance, out uint bodyId, out uint subShapeId, out uint layer, out ulong owner);
+
+        /// <summary>形状重叠查询（多命中收静态表，count = min(命中数, maxHits)；maxHits==0 = rc4；命中经 queryOverlapHitAt 逐条读回）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int QueryOverlapFn(float* dims, uint shapeKind, float* pos, float* rot, uint layerMask, uint maxHits, out int count);
+
+        /// <summary>读回静态表第 index 条命中（0 起；表清空时机 = 下一次同线程 query* 调用前）。rc：0=ok / 1=未绑 QueryScene / 2=索引越界或表空 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int QueryOverlapHitAtFn(int index, out int hit, float* point, float* normal, out float fraction, out float distance, out uint bodyId, out uint subShapeId, out uint layer, out ulong owner);
+
+        /// <summary>夹具世界刚体数读回（fixture 5 体）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int QueryBodyCountFn(out int count);
+
         /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
         public static void Init(IntPtr table)
         {
@@ -361,6 +381,11 @@ namespace Nl.Script.Api
             _physicsSetVehicleInput = Marshal.ReadIntPtr(table, 34 * sizeof(IntPtr));
             _vehicleFullPose = Marshal.ReadIntPtr(table, 35 * sizeof(IntPtr));
             _teleportVehicle = Marshal.ReadIntPtr(table, 36 * sizeof(IntPtr));
+            _queryRaycast = Marshal.ReadIntPtr(table, 60 * sizeof(IntPtr));
+            _querySweep = Marshal.ReadIntPtr(table, 61 * sizeof(IntPtr));
+            _queryOverlap = Marshal.ReadIntPtr(table, 62 * sizeof(IntPtr));
+            _queryOverlapHitAt = Marshal.ReadIntPtr(table, 63 * sizeof(IntPtr));
+            _queryBodyCount = Marshal.ReadIntPtr(table, 64 * sizeof(IntPtr));
         }
     }
 
@@ -428,12 +453,101 @@ namespace Nl.Script.Api
         }
     }
 
+    /// <summary>Audio 域接线（生成物；ApiTable 偏移 54..59 = exports.api 声明序）。</summary>
+    internal static unsafe class AudioWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _audioPlay, _audioStop, _audioSetGain, _audioSetSourcePosition, _audioSetListenerPose, _audioIsPlaying;
+
+        /// <summary>加载并播放一个 WAV（PCM16；离线/实时路径由宿主 AudioWorld 决定）。wavPath = assets/audio 下文件名（白名单拒绝 = rc4）。rc：0=ok（sourceId&gt;0）/ 1=未绑 AudioWorld / 3=createSource 或文件失败（error 细节走 script 日志通道） / 4=非法参数（路径白名单拒绝 / pos 指针 NULL）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioPlayFn(IntPtr wavPath, float* pos, int looping, out int sourceId);
+
+        /// <summary>停止声源（stopSource；源保留可复用）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioStopFn(int id);
+
+        /// <summary>写声源增益（configureSource 保持既有 looping；gain 非有限 = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioSetGainFn(int id, float gain);
+
+        /// <summary>写声源空间位置（setSourcePosition；需宿主 AudioWorld 开 spatialization，未开 = rc2 照实回）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效或 AudioWorld 拒绝 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioSetSourcePositionFn(int id, float* pos);
+
+        /// <summary>写监听者位姿（setListenerPosition + setListenerDirection；任一指针 NULL = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=AudioWorld 拒绝 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioSetListenerPoseFn(float* pos, float* dir);
+
+        /// <summary>播放态读回（isPlaying 0|1）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AudioIsPlayingFn(int id, out int playing);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _audioPlay = Marshal.ReadIntPtr(table, 54 * sizeof(IntPtr));
+            _audioStop = Marshal.ReadIntPtr(table, 55 * sizeof(IntPtr));
+            _audioSetGain = Marshal.ReadIntPtr(table, 56 * sizeof(IntPtr));
+            _audioSetSourcePosition = Marshal.ReadIntPtr(table, 57 * sizeof(IntPtr));
+            _audioSetListenerPose = Marshal.ReadIntPtr(table, 58 * sizeof(IntPtr));
+            _audioIsPlaying = Marshal.ReadIntPtr(table, 59 * sizeof(IntPtr));
+        }
+    }
+
+    /// <summary>Anim 域接线（生成物；ApiTable 偏移 65..71 = exports.api 声明序）。</summary>
+    internal static unsafe class AnimWiring
+    {
+        // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
+        public static IntPtr _animLoadClip, _animCreateStateMachine, _animSetParam, _animTick, _animGetPose, _animStateInfo, _animRelease;
+
+        /// <summary>加载 glTF 动画 clip（loadGltfAnim 全量后按 clipIndex 取一条；clipId &gt;0 有效）。error = 静态缓冲「下次同线程调用前有效」（加载失败细节）。rc：0=ok / 2=加载或校验失败（validateClip/loadGltfAnim error 文本）/ 4=非法参数（clipIndex 越界）/ 5=路径白名单拒绝</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimLoadClipFn(IntPtr clipPath, int clipIndex, out int clipId, out IntPtr error);
+
+        /// <summary>用已加载 clip 建单层状态机（states 自动命名；规则表驱动优先级转移；smId &gt;0 有效）。rc：0=ok / 1=clip 句柄无效 / 3=状态机 desc 校验失败（validateStateMachine） / 4=非法参数（count&lt;=0 / 数组指针 NULL / ruleCount&lt;0）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimCreateStateMachineFn(IntPtr clipIds, int count, IntPtr ruleMeta, IntPtr ruleVals, int ruleCount, out int smId);
+
+        /// <summary>写状态机标量参数（转移判据输入；idx 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimSetParamFn(int smId, int idx, float value);
+
+        /// <summary>推进状态机（update(dt, params) + evaluate 缓存最近 pose；dt 非有限按 0——nl/anim 护栏口径）。rc：0=ok / 1=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimTickFn(int smId, float dt);
+
+        /// <summary>读回最近缓存姿态单骨骼（translation xyz + quat xyzw；boneIndex 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimGetPoseFn(int smId, int boneIndex, float* pose);
+
+        /// <summary>状态机观测读回（current=当前态下标 / alpha=转移目标权重（未转移=1）/ duration=当前 crossfade 生效时长（未转移=0））。rc：0=ok / 1=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimStateInfoFn(int smId, out int current, out float alpha, out float duration);
+
+        /// <summary>显式回收句柄（clip 或状态机同表发号，双态擦除；未知 = rc1 失效安全）。rc：0=ok / 1=句柄无效 / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int AnimReleaseFn(int handle);
+
+        /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
+        public static void Init(IntPtr table)
+        {
+            _animLoadClip = Marshal.ReadIntPtr(table, 65 * sizeof(IntPtr));
+            _animCreateStateMachine = Marshal.ReadIntPtr(table, 66 * sizeof(IntPtr));
+            _animSetParam = Marshal.ReadIntPtr(table, 67 * sizeof(IntPtr));
+            _animTick = Marshal.ReadIntPtr(table, 68 * sizeof(IntPtr));
+            _animGetPose = Marshal.ReadIntPtr(table, 69 * sizeof(IntPtr));
+            _animStateInfo = Marshal.ReadIntPtr(table, 70 * sizeof(IntPtr));
+            _animRelease = Marshal.ReadIntPtr(table, 71 * sizeof(IntPtr));
+        }
+    }
+
     /// <summary>全域接线入口（声明序固化）。Engine.Init 转发；ExportOrder 供 selftest/
     /// 工具卡断言声明序未漂移。</summary>
     public static class ApiWiring
     {
-        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props", "Ui" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd", "uiLoadDocument", "uiCloseDocument", "uiShowDocument", "uiElementSetText", "uiElementGetText", "uiSetEventCallback", "inputMouseIsDown", "inputMouseJustPressed", "inputMouseJustReleased", "inputMouseDelta", "inputScrollDelta", "inputCursorPos", "inputGamepadIsDown", "inputGamepadAxis", "inputTextPop" };
+        public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props", "Ui", "Audio", "Anim" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd", "uiLoadDocument", "uiCloseDocument", "uiShowDocument", "uiElementSetText", "uiElementGetText", "uiSetEventCallback", "inputMouseIsDown", "inputMouseJustPressed", "inputMouseJustReleased", "inputMouseDelta", "inputScrollDelta", "inputCursorPos", "inputGamepadIsDown", "inputGamepadAxis", "inputTextPop", "audioPlay", "audioStop", "audioSetGain", "audioSetSourcePosition", "audioSetListenerPose", "audioIsPlaying", "queryRaycast", "querySweep", "queryOverlap", "queryOverlapHitAt", "queryBodyCount", "animLoadClip", "animCreateStateMachine", "animSetParam", "animTick", "animGetPose", "animStateInfo", "animRelease" };
 
         public static void InitAll(IntPtr table)
         {
@@ -446,6 +560,8 @@ namespace Nl.Script.Api
             PhysicsWiring.Init(table);
             PropsWiring.Init(table);
             UiWiring.Init(table);
+            AudioWiring.Init(table);
+            AnimWiring.Init(table);
         }
     }
 } // namespace

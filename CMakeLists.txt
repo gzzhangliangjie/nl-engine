@@ -401,6 +401,7 @@ add_library(nl_core STATIC
     core/src/traffic/TrafficCarSystem.cpp # P8 M-T3：ECS 交通车系统（固定步长 sim + Transform 写回，零图形 API）
     core/src/script/Vm.cpp     # M-SC0：C# hosting 内核（hostfxr/nethost，零图形 API）
     core/src/script/Bindings.cpp # M-SC1：console 绑定面（ApiTable 函数指针 + SEH 命令回调）
+    core/src/script/AnimInstances.cpp # M-W2A：Animation 域薄面句柄表（script 内部私有面，nl/anim 公开面零改动）
     core/src/script/ScriptHost.cpp # M-SC3：脚本热更编排（collectible ALC 换载 + console.reload-script）
     core/src/audio/AudioWorld.cpp  # P8 M-S0：nl/audio 薄封装（noDevice 离线 + 实时双路径）
     core/src/audio/DebugController.cpp  # P8 M-S2：调试态单例（音量/独奏/冻结/面板开关）

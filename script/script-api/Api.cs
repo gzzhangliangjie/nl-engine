@@ -774,6 +774,103 @@ namespace Nl.Script.Api
             fixed (float* p = pos, q = quat)
                 return fn(slot, p, q);
         }
+
+        // ---- M-W2A 查询域（追加到 Physics 域尾部；QueryScene 确定性夹具，非 live 世界——
+        //      live 化属 M-PQ1，见 QueryCode/WAVE2-PLAN §5.2）----
+
+        /// <summary>射线查询（dir 单位长；单命中；info.Hit 0|1）。
+        /// rc：0=ok / 1=NoScene / 3=NotReady / 4=BadArg。</summary>
+        public static int Raycast(float[] origin, float[] dir, float maxT, uint layerMask,
+                                  out PhysicsQueryHit info)
+        {
+            info = default;
+            if (origin == null || origin.Length != 3 || dir == null || dir.Length != 3)
+                return QueryCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.QueryRaycastFn>(PhysicsWiring._queryRaycast);
+            fixed (float* o = origin, d = dir)
+            {
+                float* pt = stackalloc float[3];
+                float* nm = stackalloc float[3];
+                int rc = fn(o, d, maxT, layerMask, out int hit, pt, nm,
+                            out float frac, out float dist, out uint bodyId,
+                            out uint sub, out uint layer, out ulong owner);
+                if (rc == QueryCode.Ok)
+                    info = PackQueryHit(hit, pt, nm, frac, dist, bodyId, sub, layer, owner);
+                return rc;
+            }
+        }
+
+        /// <summary>形状扫掠（shapeKind 0=Sphere/1=Box/2=Capsule；dims 语义见 exports.api）。
+        /// rc 同 Raycast（4=shapeKind 越界 / dims 非法）。</summary>
+        public static int Sweep(float[] dims, uint shapeKind, float[] from, float[] to,
+                                float[] rot, uint layerMask, out PhysicsQueryHit info)
+        {
+            info = default;
+            if (dims == null || dims.Length != 3 || from == null || from.Length != 3 ||
+                to == null || to.Length != 3 || rot == null || rot.Length != 4)
+                return QueryCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.QuerySweepFn>(PhysicsWiring._querySweep);
+            fixed (float* dm = dims, f = from, t = to, r = rot)
+            {
+                float* pt = stackalloc float[3];
+                float* nm = stackalloc float[3];
+                int rc = fn(dm, shapeKind, f, t, r, layerMask, out int hit, pt, nm,
+                            out float frac, out float dist, out uint bodyId,
+                            out uint sub, out uint layer, out ulong owner);
+                if (rc == QueryCode.Ok)
+                    info = PackQueryHit(hit, pt, nm, frac, dist, bodyId, sub, layer, owner);
+                return rc;
+            }
+        }
+
+        /// <summary>形状重叠查询（多命中收 C++ 静态表「下次同线程调用前有效」，
+        /// count = min(命中数, maxHits)；经 OverlapHitAt 逐条读回）。
+        /// rc：0=ok / 1=NoScene / 3=NotReady / 4=BadArg（maxHits==0 等）。</summary>
+        public static int Overlap(float[] dims, uint shapeKind, float[] pos, float[] rot,
+                                  uint layerMask, uint maxHits, out int count)
+        {
+            count = 0;
+            if (dims == null || dims.Length != 3 || pos == null || pos.Length != 3 ||
+                rot == null || rot.Length != 4)
+                return QueryCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.QueryOverlapFn>(PhysicsWiring._queryOverlap);
+            fixed (float* dm = dims, p = pos, r = rot)
+                return fn(dm, shapeKind, p, r, layerMask, maxHits, out count);
+        }
+
+        /// <summary>读回静态表第 index 条命中（0 起；表清空 = 下一次同线程 query* 调用前）。
+        /// rc：0=ok / 1=NoScene / 2=索引越界或表空 / 4=BadArg。</summary>
+        public static int OverlapHitAt(int index, out PhysicsQueryHit info)
+        {
+            info = default;
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.QueryOverlapHitAtFn>(PhysicsWiring._queryOverlapHitAt);
+            float* pt = stackalloc float[3];
+            float* nm = stackalloc float[3];
+            int rc = fn(index, out int hit, pt, nm, out float frac, out float dist,
+                        out uint bodyId, out uint sub, out uint layer, out ulong owner);
+            if (rc == QueryCode.Ok)
+                info = PackQueryHit(hit, pt, nm, frac, dist, bodyId, sub, layer, owner);
+            return rc;
+        }
+
+        /// <summary>夹具世界刚体数读回（fixture 5 体）。
+        /// rc：0=ok / 1=NoScene / 3=NotReady / 4=BadArg。</summary>
+        public static int BodyCount(out int count)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<PhysicsWiring.QueryBodyCountFn>(PhysicsWiring._queryBodyCount);
+            return fn(out count);
+        }
+
+        private static unsafe PhysicsQueryHit PackQueryHit(
+            int hit, float* pt, float* nm, float frac, float dist,
+            uint bodyId, uint sub, uint layer, ulong owner)
+        {
+            return new PhysicsQueryHit(
+                hit != 0,
+                new[] { pt[0], pt[1], pt[2] },
+                new[] { nm[0], nm[1], nm[2] },
+                frac, dist, bodyId, sub, layer, owner);
+        }
     }
 
     /// <summary>Props 域错误码（M-SC10；kEcsBadArg 同码位）。</summary>
@@ -904,6 +1001,251 @@ namespace Nl.Script.Api
             _pinned.Add(raw);
             var fn = Marshal.GetDelegateForFunctionPointer<UiWiring.UiSetEventCallbackFn>(UiWiring._uiSetEventCallback);
             return fn(Marshal.GetFunctionPointerForDelegate(raw));
+        }
+    }
+
+    /// <summary>Physics 查询域错误码（M-W2A；独立于载具 PhysicsCode 计数）：
+    /// BadIndex = OverlapHitAt 索引越界或静态表空；NotReady = 夹具未 build。</summary>
+    public static class QueryCode
+    {
+        public const int Ok = 0;
+        public const int NoScene = 1;     // 未绑 QueryScene（宿主忘 querySetScene）
+        public const int BadIndex = 2;    // 索引越界或表空
+        public const int NotReady = 3;    // build 未就绪
+        public const int BadArg = 4;      // validate*Query 拒绝（零向量/非有限值等）
+    }
+
+    /// <summary>查询命中快照（Raycast/Sweep/OverlapHitAt 打包；Hit 0|1）。</summary>
+    public readonly struct PhysicsQueryHit
+    {
+        public readonly bool Hit;
+        public readonly float[] Point;    // [3]
+        public readonly float[] Normal;   // [3]
+        public readonly float Fraction;   // 0..1 along query
+        public readonly float Distance;   // 世界单位
+        public readonly uint BodyId;
+        public readonly uint SubShapeId;
+        public readonly uint Layer;
+        public readonly ulong Owner;
+        public PhysicsQueryHit(bool hit, float[] point, float[] normal, float fraction,
+                               float distance, uint bodyId, uint subShapeId, uint layer,
+                               ulong owner)
+        { Hit = hit; Point = point; Normal = normal; Fraction = fraction; Distance = distance;
+          BodyId = bodyId; SubShapeId = subShapeId; Layer = layer; Owner = owner; }
+    }
+
+    /// <summary>Audio 域错误码（M-W2A / M-SC9 既定行）：Invalid = 句柄无效或
+    /// AudioWorld 拒绝（spatialization 未开等，照实回）；SourceFailed = createSource
+    /// 或复合播放链失败（细节走 script 日志通道）。</summary>
+    public static class AudioCode
+    {
+        public const int Ok = 0;
+        public const int NoWorld = 1;      // 未绑 AudioWorld（宿主忘 audioSetWorld）
+        public const int Invalid = 2;      // 句柄无效或 AudioWorld 拒绝
+        public const int SourceFailed = 3; // createSource / configure / start 失败
+        public const int BadArg = 4;       // 路径白名单拒绝 / 指针 NULL / 非有限值
+    }
+
+    /// <summary>
+    /// Audio 绑定面（M-W2A，M-SC9 既定行落地）。操作目标 = 宿主侧 audioSetWorld
+    /// 绑定的 AudioWorld（viewer scene 模式 ensureAudioWorld() 注入；未绑 = NoWorld）。
+    /// wavPath = assets/audio 下文件名（basename 白名单防穿越）；Play = createSource
+    /// -> configure -> setSourcePosition -> start 复合链（M-S3 audio.play 同款）。
+    /// </summary>
+    public static unsafe class Audio
+    {
+        /// <summary>加载并播放 WAV（PCM16）。rc：0=ok（sourceId&gt;0）/ 1=NoWorld /
+        /// 3=SourceFailed / 4=BadArg。</summary>
+        public static int Play(string wavPath, float[] pos, bool looping, out int sourceId)
+        {
+            sourceId = 0;
+            if (wavPath == null || pos == null || pos.Length != 3) return AudioCode.BadArg;
+            IntPtr pathPtr = NativeMarshal.Utf8Alloc(wavPath);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioPlayFn>(AudioWiring._audioPlay);
+                fixed (float* p = pos)
+                    return fn(pathPtr, p, looping ? 1 : 0, out sourceId);
+            }
+            finally { NativeMarshal.Utf8Free(pathPtr); }
+        }
+
+        /// <summary>停止声源（源保留可复用）。rc：0=ok / 1=NoWorld / 2=Invalid / 4=BadArg。</summary>
+        public static int Stop(int id)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioStopFn>(AudioWiring._audioStop);
+            return fn(id);
+        }
+
+        /// <summary>写声源增益（保持既有 looping）。rc：0=ok / 1=NoWorld / 2=Invalid / 4=BadArg。</summary>
+        public static int SetGain(int id, float gain)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioSetGainFn>(AudioWiring._audioSetGain);
+            return fn(id, gain);
+        }
+
+        /// <summary>写声源空间位置（需宿主 spatialization 开；未开 = Invalid 照实回）。
+        /// rc：0=ok / 1=NoWorld / 2=Invalid / 4=BadArg。</summary>
+        public static int SetSourcePosition(int id, float[] pos)
+        {
+            if (pos == null || pos.Length != 3) return AudioCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioSetSourcePositionFn>(AudioWiring._audioSetSourcePosition);
+            fixed (float* p = pos)
+                return fn(id, p);
+        }
+
+        /// <summary>写监听者位姿（position + direction）。rc：0=ok / 1=NoWorld / 2=Invalid / 4=BadArg。</summary>
+        public static int SetListenerPose(float[] pos, float[] dir)
+        {
+            if (pos == null || pos.Length != 3 || dir == null || dir.Length != 3)
+                return AudioCode.BadArg;
+            var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioSetListenerPoseFn>(AudioWiring._audioSetListenerPose);
+            fixed (float* p = pos, d = dir)
+                return fn(p, d);
+        }
+
+        /// <summary>播放态读回。rc：0=ok / 1=NoWorld / 2=Invalid / 4=BadArg。</summary>
+        public static int IsPlaying(int id, out bool playing)
+        {
+            playing = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<AudioWiring.AudioIsPlayingFn>(AudioWiring._audioIsPlaying);
+            int rc = fn(id, out int flag);
+            if (rc == AudioCode.Ok) playing = flag != 0;
+            return rc;
+        }
+    }
+
+    /// <summary>Animation 域错误码（M-W2A 薄面）：Invalid = 句柄无效（clip/sm 单源
+    /// 发号表查无）；Load = clip 加载或校验失败；Reset = 状态机 desc 校验失败；
+    /// BadAsset = 路径白名单拒绝。</summary>
+    public static class AnimCode
+    {
+        public const int Ok = 0;
+        public const int Invalid = 1;    // 句柄无效
+        public const int Load = 2;       // clip 加载或校验失败（error 文本带因）
+        public const int Reset = 3;      // validateStateMachine 失败
+        public const int BadArg = 4;     // 非法参数（clipIndex 越界 / 数组 NULL / idx 越界等）
+        public const int BadAsset = 5;   // 路径白名单拒绝
+    }
+
+    /// <summary>转移规则声明（声明序 = 优先级；判据 = params[ParamIndex] &gt;= Threshold）。</summary>
+    public readonly struct AnimRule
+    {
+        public readonly int From;
+        public readonly int To;
+        public readonly int ParamIndex;
+        public readonly float Threshold;
+        public readonly float BlendDuration;
+        public AnimRule(int from, int to, int paramIndex, float threshold, float blendDuration)
+        { From = from; To = to; ParamIndex = paramIndex; Threshold = threshold; BlendDuration = blendDuration; }
+    }
+
+    /// <summary>
+    /// Animation 绑定面（M-W2A 薄面句柄表）。clip 入口 = loadGltfAnim（M-A4b），
+    /// clipPath = assets/models 下 .glb basename（白名单防穿越）；状态转移 = C++
+    /// 侧预置规则 lambda（nl/anim 公开面零改动——transitionTo 保持 private），
+    /// 脚本只经 SetParam 写标量 + Tick 触发优先级转移；规则声明序 = 优先级。
+    /// 句柄单源发号（clip/sm 同表），Release 双态擦除失效安全；reload 后句柄清空
+    ///（脚本自有状态随换载注销——生命周期硬规则①）。
+    /// </summary>
+    public static unsafe class Anim
+    {
+        /// <summary>加载 glTF 动画 clip（按 clipIndex 取一条；clipId &gt;0 有效）。
+        /// rc：0=ok / 2=Load（error 带因）/ 4=BadArg / 5=BadAsset。</summary>
+        public static int LoadClip(string clipPath, int clipIndex, out int clipId, out string? error)
+        {
+            clipId = 0;
+            error = null;
+            if (clipPath == null || clipIndex < 0) return AnimCode.BadArg;
+            IntPtr pathPtr = NativeMarshal.Utf8Alloc(clipPath);
+            try
+            {
+                var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimLoadClipFn>(AnimWiring._animLoadClip);
+                int rc = fn(pathPtr, clipIndex, out clipId, out IntPtr errPtr);
+                if (rc != AnimCode.Ok) error = NativeMarshal.Utf8ReadOrEmpty(errPtr);
+                return rc;
+            }
+            finally { NativeMarshal.Utf8Free(pathPtr); }
+        }
+
+        /// <summary>用已加载 clip 建单层状态机（states 自动命名；规则声明序 = 优先级；
+        /// rules 允许 null/空 = 零转移规则（单态/纯采样机）；smId &gt;0 有效）。
+        /// rc：0=ok / 1=Invalid（clip 句柄查无）/ 3=Reset / 4=BadArg。</summary>
+        public static int CreateStateMachine(int[] clipIds, AnimRule[]? rules, out int smId)
+        {
+            smId = 0;
+            if (clipIds == null || clipIds.Length == 0) return AnimCode.BadArg;
+            int ruleCount = rules?.Length ?? 0;
+            int[] meta = new int[ruleCount * 3];
+            float[] vals = new float[ruleCount * 2];
+            for (int i = 0; i < ruleCount; ++i)
+            {
+                meta[i * 3 + 0] = rules![i].From;
+                meta[i * 3 + 1] = rules[i].To;
+                meta[i * 3 + 2] = rules[i].ParamIndex;
+                vals[i * 2 + 0] = rules[i].Threshold;
+                vals[i * 2 + 1] = rules[i].BlendDuration;
+            }
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimCreateStateMachineFn>(AnimWiring._animCreateStateMachine);
+            // 数组仅在调用期存活（生命周期账本：C++ 调用期拷走，不持指针）。
+            fixed (int* cp = clipIds)
+            {
+                if (ruleCount == 0)
+                    return fn((IntPtr)cp, clipIds.Length, IntPtr.Zero, IntPtr.Zero, 0, out smId);
+                fixed (int* m = meta)
+                fixed (float* v = vals)
+                    return fn((IntPtr)cp, clipIds.Length, (IntPtr)m, (IntPtr)v, ruleCount, out smId);
+            }
+        }
+
+        /// <summary>写状态机标量参数（转移判据输入；idx 越界 = BadArg）。
+        /// rc：0=ok / 1=Invalid / 4=BadArg。</summary>
+        public static int SetParam(int smId, int idx, float value)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimSetParamFn>(AnimWiring._animSetParam);
+            return fn(smId, idx, value);
+        }
+
+        /// <summary>推进状态机（update + evaluate 缓存最近 pose）。
+        /// rc：0=ok / 1=Invalid / 4=BadArg（dt 非有限——nl/anim 护栏按 0，此处照回）。</summary>
+        public static int Tick(int smId, float dt)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimTickFn>(AnimWiring._animTick);
+            return fn(smId, dt);
+        }
+
+        /// <summary>读回最近缓存姿态单骨骼（pose7 = tx ty tz qx qy qz qw；boneIndex
+        /// 越界 = BadArg）。rc：0=ok / 1=Invalid / 4=BadArg。</summary>
+        public static int GetPose(int smId, int boneIndex, out float[] pose7)
+        {
+            pose7 = new float[7];
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimGetPoseFn>(AnimWiring._animGetPose);
+            int rc;
+            unsafe
+            {
+                float* buf = stackalloc float[7];
+                rc = fn(smId, boneIndex, buf);
+                if (rc == AnimCode.Ok)
+                    for (int i = 0; i < 7; ++i) pose7[i] = buf[i];
+            }
+            return rc;
+        }
+
+        /// <summary>状态机观测读回（current=当前态下标 / alpha=转移目标权重（未转移=1）/
+        /// duration=当前 crossfade 生效时长（未转移=0））。rc：0=ok / 1=Invalid / 4=BadArg。</summary>
+        public static int StateInfo(int smId, out int current, out float alpha, out float duration)
+        {
+            current = 0; alpha = 0f; duration = 0f;
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimStateInfoFn>(AnimWiring._animStateInfo);
+            return fn(smId, out current, out alpha, out duration);
+        }
+
+        /// <summary>显式回收句柄（clip 或 sm 双态擦除；未知 = Invalid 失效安全）。
+        /// rc：0=ok / 1=Invalid / 4=BadArg。</summary>
+        public static int Release(int handle)
+        {
+            var fn = Marshal.GetDelegateForFunctionPointer<AnimWiring.AnimReleaseFn>(AnimWiring._animRelease);
+            return fn(handle);
         }
     }
 }

@@ -27,7 +27,9 @@ set_tests_properties(b3-graph-genslang PROPERTIES
 # 与 check 同源，只是走 watch 的加载 + 轮询首轮路径。不进渲染总闸，走工具版交代。
 add_test(NAME b4-graph-hot-reload
          COMMAND material-graph-tools watch
-                 ${NL_ROOT}/material-graph-tools/sample.mg --once)
+                 ${NL_ROOT}/modules/material-graph-tools/sample.mg --once)
+# M-MOD0 迁移遗留根修（M-W2A 顺手，2026-11-15）：模块目录已从根级
+# material-graph-tools/ 迁入 modules/，本用例 test path 未跟 → cannot stat 假挂。
 set_tests_properties(b4-graph-hot-reload PROPERTIES
     PASS_REGULAR_EXPRESSION "OK"
     DEPENDS b3-graph-genslang

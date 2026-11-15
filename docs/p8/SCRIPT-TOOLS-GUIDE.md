@@ -688,3 +688,108 @@ designed` / `tour: sweep ok (…)` + `ecs scene rebuilt: 6 objects
    （字符集校验）但 `assets/models/` 无此文件——viewer 真加载时 rebuild
    failed。示例挂载用真实资产（TorusKnotDense.glb）。
 
+
+## M-W2A 波 2 绑定域第一段：Audio / Physics 查询 / Animation 三域（v9，ApiTable 54→72，2026-11-15）
+
+冻结口径 `docs/script-api/WAVE2-PLAN.md`（2026-11-15 用户拍板方案①：三域一次做、
+Q1 绑 QueryScene 探针世界、Q2 Animation 薄面、主线里程碑不建 track）。本轮三域
+18 op 尾部追加，既有 54 op 语义零改动；`renderer/**`/`.slang`/`kStage`/PNG 基线
+一行未碰。
+
+### 注入点（ecsSetWorld 模式推广，nullptr = 解绑，不隐式建表全族口径）
+
+| 域 | 注入 | viewer 接线 | selftest 接线 |
+|---|---|---|---|
+| Audio | `audioSetWorld(AudioWorld*)` | scene 模式 `--script` 装载段 `ensureAudioWorld()`（设备失败降级 offline） | offline AudioWorld（spatialization 开，无设备确定性） |
+| Physics 查询 | `querySetScene(QueryScene*)` | 同批注入静态 fixture（build 失败 = 注 nullptr） | M-PQ0 夹具 `build()` 一次 |
+| Animation | 无宿主实例（句柄表在 script 内部面） | — | 探针直接建/收 |
+
+### Audio 域（6 op，M-SC9 既定行落地）
+
+`audioPlay(wavPath,pos,looping,out id)` = createSource → configure(gain=1,looping)
+→ setSourcePosition → startSource 复合链（M-S3 audio.play console 同款；失败即停
+不留半配置源）；`audioStop/audioSetGain（保持既有 looping）/audioSetSourcePosition/
+audioSetListenerPose/audioIsPlaying`。**wavPath = assets/audio 下 basename 白名单**
+（AssetName 单源 ".wav"）+ core paths 双层解析（不依赖 cwd）。错误码 kAud*：
+0=ok / 1=NoWorld / 2=句柄无效或 AudioWorld 拒绝（spatialization 未开照实回）/
+3=createSource 或文件失败（细节走 script 日志通道）/ 4=BadArg。
+
+### Physics 查询域（5 op，追加 Physics 域尾部）
+
+`queryRaycast/querySweep/queryOverlap/queryOverlapHitAt/queryBodyCount`，绑
+**M-PQ0 QueryScene 确定性夹具**（floor/boxA/boxB/boxC/sensor 5 静态体）——
+**不是 viewer 现役物理世界，live 化属 M-PQ1，本文档与 API.md 均不得暗示场景查询**。
+shapeKind 0=Sphere/1=Box/2=Capsule；quat x,y,z,w；layerMask = QueryFilter 位屏蔽
+（ignoreBodyIds 空）。多命中容器协议（P8 既有口径）：queryOverlap 收 C++ 静态表
+（「下次同线程调用前有效」，QueryScene 内部按 maxHits 截断），HitAt 按序读回。
+validate*Query 先过（零向量/shapeKind 越界/maxT<=0/dims 非法 = kQryBadArg）。
+错误码 kQry*：0=ok / 1=NoScene / 2=索引越界或表空 / 3=build 未就绪 / 4=BadArg。
+s17 逐位锚：floor 竖直射线 distance=5 / fraction=0.05 / layer=0 / owner
+`0x464c4f4f52000000`（"FLOOR"）；球扫掠命中 boxA（layer 1 / owner "BOXA"）；
+万次级串往返零漂移。
+
+### Animation 域（7 op，薄面句柄表）
+
+落点 `core/src/script/AnimInstances.hpp/.cpp`（**script 内部私有面，nl/anim 公开面
+零改动**——`AnimationStateMachine::transitionTo` 保持 private，不给 core 加
+public `requestTransition()`，那是范围外新架构判定须回拍板）。句柄单源发号
+（clip/sm 同表，>0），`animRelease` 双态擦除失效安全；clip 入口 = `loadGltfAnim`
+（M-A4b），clipPath = assets/models 下 ".glb" basename 白名单。状态转移 = C++ 侧
+按脚本规则表构造 `TransitionRule::canTake` lambda（判据 `params[paramIdx] >=
+threshold`，paramIdx 越界恒 false），**std::function 不过 blittable 边界**；脚本只
+`animSetParam` 写标量 + `animTick` 触发优先级转移（声明序 = 优先级）。规则数组协议
+（调用期存活，C# pin）：`ruleMeta = int[r*3]`（from,to,paramIdx）、
+`ruleVals = float[r*2]`（threshold,blendDuration）。pose 读回 = translation(3)+
+quat xyzw(4)，创建即评估一次（t=0 初始姿态，未 tick 也有确定值）。
+**热更钩子**：`scriptUnregisterAll()`（reloadScript 统一解绑点，s8c 全链已过）内
+`animReleaseAll()`——句柄表 = 脚本自有状态随换载清空 + 发号器重置；AudioWorld/
+QueryScene 是宿主实例**不在**此清（跨 reload 重绑定无损，s18c 复验）。
+错误码 kAnim*：0=ok / 1=句柄无效 / 2=clip 加载或校验失败 / 3=desc 校验失败 /
+4=BadArg / 5=路径白名单拒绝。
+
+### selftest 判据（s16/s17/s18 组，s0~s15 不回归）
+
+- s16a 12 断言：播放复合链 id>0 + 播放态真 + 播放中增益/位置/监听者 + 停止翻假 +
+  白名单（带分隔符）/缺文件（SourceFailed）/未知句柄（Invalid）负向；s16b 解绑
+  NoWorld 全族 6 断言。
+- s17a 19 断言：BodyCount=5 + 射线六锚 + 层屏蔽 + 扫掠 owner + 重叠容器读回 +
+  负向三连 + 万次串往返；s17b 解绑 NoScene 全族 5 断言。
+- s18a 30 断言：加载/越界 index/白名单/缺文件（error 文本账本）/建状态机/参数驱动
+  转移时序（当帧 alpha 从 0 起）/pose 手算锚（hip y=1）/万次 Tick/参数与骨骼下标
+  越界/显式回收双态/GC.Collect 句柄漂移；s18b 无效句柄 7 断言；s18c/d 换载钩子段
+  （Seed 句柄 1/2 → unregisterAll → Audio/Query 全链探针照常过 → 旧句柄失效 +
+  发号器重置回 1）。
+
+### 展示台（m-w2a-audio / m-w2a-query / m-w2a-anim 三卡）
+
+每卡 usage / 正向 selftest / 负向（目录不存在 dotnet build 失败 exit 1）三起起步；
+证据图 = `tools/make-w2a-evidence.py [domain]` 从真实 selftest stdout 渲染
+（禁手绘）。复现：`example/m-w2a-*/run.bat`（ALL GREEN）。**位置参数注意**：
+selftest 签名 audioDir=argv[13] 先于 queryDir=argv[14]，query/anim 卡必须连带
+传入前面域的目录（query 卡 13 目录、anim 卡 14 目录全参）。
+
+### 踩坑存档（M-W2A 实测）
+
+1. **ptr 参数 TYPEMAP 是 `void*` 不是 `const void*`**：asserts.inc 防漂移直接
+   static_assert 抓死（Anim.animCreateStateMachine）——in ptr 也是可写语义面，
+   照 UiSetEventCallback 先例落 `void*`。
+2. **if 块内 echo 文本带未转义括号 = cmd 静默吞块**：run.bat 首版
+   `echo ... (NL_BUILD_MAINREPO=1 ...)` 在 if 块里把 `)` 当块闭合 → 整 bat
+   秒退 rc=1 零输出。echo 文本禁裸括号（或 ^转义）。
+3. **python 循环里 `open(p,'wb')` 先截断后写**：首个文件 write 抛异常 = 该文件
+   留 0 字节（audio run.bat 被截空过一次）。批量改文件用「读全文→内存改→一次性
+   原子写」或逐文件 try 包住 open+write。
+4. **query 卡位置参数**：13 目录时 argv[13]（audio 槽）拿到 query 目录 → s16 用
+   QueryScript.dll 找 AudioScript → 0x80131522。位置参数签名扩参后各卡目录数
+   必须与签名对齐。
+5. **共享证据渲染器读别域日志**：audio 卡阶段 query.log 尚不存在 → 渲染器按域
+   参数化（`make-w2a-evidence.py audio`），单卡只渲染自己。
+6. **锚行格式**：selftest 成功断言行是 `  ok  s16a ...`（ok 后双空格），证据图
+   过滤器按 `ok + 域名包含` 匹配，别按单空格前缀。
+
+### M-MOD0 迁移遗留顺手根修（非本轮改动面，单独留痕）
+
+`modules/material-graph-tools/CMakeLists.txt` b4-graph-hot-reload 的
+`sample.mg` 路径仍指根级旧目录（M-MOD0 迁移 modules/ 时未跟）→ cannot stat
+假挂。改 `${NL_ROOT}/modules/material-graph-tools/sample.mg`，DX12/VULKAN
+重配后 ctest 176/176 ×2 全绿。

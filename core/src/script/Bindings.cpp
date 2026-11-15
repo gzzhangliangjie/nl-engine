@@ -11,12 +11,17 @@
 #include "nl/core/action_map.hpp"
 #include "nl/core/window.hpp"       // M-I5：inputTextPop 消费 Window::consumeTextChars（完整类型）
 #include "nl/core/log.hpp"
+#include "nl/core/paths.hpp"        // M-W2A：audio/anim 资产双层解析（exe 相对优先，不依赖 cwd）
 #include "nl/physics/World.hpp"     // M-SC8：DebugScene 载具训练场（PIMPL，Jolt 挡在 World.cpp）
-#include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源
+#include "nl/physics/query.hpp"     // M-W2A：QueryScene 探针世界（PIMPL，Jolt 挡在 Query.cpp）
+#include "nl/audio/AudioWorld.hpp"  // M-W2A：Audio 域操作目标（M-GL2 交付）
+#include "nl/scene/AssetName.hpp"   // M-SC7：meshFile 白名单单源（M-W2A audio/anim 路径同款）
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
+#include "AnimInstances.hpp"        // M-W2A：Animation 域句柄表（script 内部私有面）
 
 #include <objbase.h>
+#include <cmath>      // M-W2A：std::isfinite（audioSetGain / animTick 护栏）
 #include <limits>
 #include <set>
 #include <string>
@@ -735,6 +740,289 @@ extern "C" int nl_uiSetEventCallback(void* fn) {
     return kUiOk;
 }
 
+// ---- M-W2A Audio / Physics 查询 / Animation 三域（波 2 绑定域第一段；冻结口径
+//      WAVE2-PLAN §5；注入点 = audioSetWorld / querySetScene，ecsSetWorld 模式推广，
+//      nullptr = 解绑热更窗口兜底；**绑定层绝不隐式建 AudioWorld/QueryScene** 全族口径）----
+
+namespace {
+
+nl::audio::AudioWorld* g_audioWorld = nullptr;
+nl::physics::QueryScene* g_queryScene = nullptr;
+
+// queryOverlap 多命中静态表（「下次同线程调用前有效」容器协议：count + 静态表 +
+// C# 立即拷；HitAt 按序读回，表清空时机 = 下一次同线程 query* 调用前）。
+std::vector<nl::physics::QueryHit>& overlapTable() {
+    static std::vector<nl::physics::QueryHit> hits;
+    return hits;
+}
+
+// 资产解析（core paths 双层策略，不依赖 cwd）：assetDir = <root>/assets/models，
+// audio = 同级 assets/audio。basename 白名单校验在调用点（防路径穿越，AssetName 单源）。
+std::string resolveAssetSibling(const char* name, const char* subDir) {
+    std::string dir = core::paths::assetDir();   // 形如 <root>/assets/models
+    const auto pos = dir.find_last_of("/\\");
+    const std::string assetsRoot =
+        (pos != std::string::npos) ? dir.substr(0, pos) : std::string("assets");
+    return assetsRoot + "/" + subDir + "/" + name;
+}
+
+void writeQueryHit(const nl::physics::QueryHit& h, float* point, float* normal,
+                   float* fraction, float* distance, std::uint32_t* bodyId,
+                   std::uint32_t* subShapeId, std::uint32_t* layer, std::uint64_t* owner) {
+    if (point)    { point[0] = h.point.x;    point[1] = h.point.y;    point[2] = h.point.z; }
+    if (normal)   { normal[0] = h.normal.x;  normal[1] = h.normal.y;  normal[2] = h.normal.z; }
+    if (fraction) *fraction = h.fraction;
+    if (distance) *distance = h.distance;
+    if (bodyId)    *bodyId    = h.bodyId;
+    if (subShapeId) *subShapeId = h.subShapeId;
+    if (layer)    *layer    = h.layer;
+    if (owner)    *owner    = h.owner;
+}
+
+} // namespace
+
+void audioSetWorld(audio::AudioWorld* world) {
+    g_audioWorld = world;
+}
+
+void querySetScene(physics::QueryScene* scene) {
+    g_queryScene = scene;
+}
+
+// ---- Audio 域导出（6 条；wavPath = assets/audio 下 basename，白名单防穿越）----
+
+extern "C" int nl_audioPlay(const char* wavPath, const float* pos, int looping, int* sourceId) {
+    if (sourceId) *sourceId = 0;
+    if (!wavPath || !*wavPath || !pos) return kAudBadArg;
+    if (!scene::validAssetFileName(wavPath, ".wav")) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    const std::string resolved = resolveAssetSibling(wavPath, "audio");
+    std::string err;
+    const auto id = w->createSource(resolved, &err);
+    if (id == 0) {
+        core::log::warnCh("script", "audioPlay: createSource failed: ", err);
+        return kAudSource;
+    }
+    // M-S3 audio.play console 命令同款复合链路：configure -> 空间位置 -> start。
+    if (!w->configureSource(id, 1.0f, looping != 0) ||
+        !w->setSourcePosition(id, {pos[0], pos[1], pos[2]}) ||
+        !w->startSource(id)) {
+        w->stopSource(id);   // 失败即停：不留半配置源
+        return kAudSource;
+    }
+    if (sourceId) *sourceId = static_cast<int>(id);
+    return kAudOk;
+}
+
+extern "C" int nl_audioStop(int id) {
+    if (id <= 0) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    if (!w->stopSource(static_cast<std::uint32_t>(id))) return kAudInvalid;
+    return kAudOk;
+}
+
+extern "C" int nl_audioSetGain(int id, float gain) {
+    if (id <= 0) return kAudBadArg;
+    if (!std::isfinite(gain)) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    audio::SourceDesc desc;
+    if (!w->sourceDesc(static_cast<std::uint32_t>(id), &desc)) return kAudInvalid;
+    if (!w->configureSource(static_cast<std::uint32_t>(id), gain, desc.looping))
+        return kAudInvalid;
+    return kAudOk;
+}
+
+extern "C" int nl_audioSetSourcePosition(int id, const float* pos) {
+    if (id <= 0) return kAudBadArg;
+    if (!pos) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    if (!w->setSourcePosition(static_cast<std::uint32_t>(id), {pos[0], pos[1], pos[2]}))
+        return kAudInvalid;   // 句柄无效或 AudioWorld 拒绝（spatialization 未开照实回）
+    return kAudOk;
+}
+
+extern "C" int nl_audioSetListenerPose(const float* pos, const float* dir) {
+    if (!pos || !dir) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    if (!w->setListenerPosition({pos[0], pos[1], pos[2]}) ||
+        !w->setListenerDirection({dir[0], dir[1], dir[2]}))
+        return kAudInvalid;
+    return kAudOk;
+}
+
+extern "C" int nl_audioIsPlaying(int id, int* playing) {
+    if (id <= 0 || !playing) return kAudBadArg;
+    audio::AudioWorld* w = g_audioWorld;
+    if (!w) return kAudNoWorld;
+    audio::SourceDesc desc;
+    if (!w->sourceDesc(static_cast<std::uint32_t>(id), &desc)) return kAudInvalid;
+    *playing = w->isPlaying(static_cast<std::uint32_t>(id)) ? 1 : 0;
+    return kAudOk;
+}
+
+// ---- Physics 查询域导出（5 条；确定性夹具查询——live 化属 M-PQ1，见域头注释）----
+
+extern "C" int nl_queryRaycast(const float* origin, const float* dir, float maxT,
+                               std::uint32_t layerMask, int* hit, float* point, float* normal,
+                               float* fraction, float* distance, std::uint32_t* bodyId,
+                               std::uint32_t* subShapeId, std::uint32_t* layer,
+                               std::uint64_t* owner) {
+    if (hit) *hit = 0;
+    if (!origin || !dir) return kQryBadArg;
+    physics::QueryScene* s = g_queryScene;
+    if (!s) return kQryNoScene;
+    physics::RayQuery q;
+    q.origin = {origin[0], origin[1], origin[2]};
+    q.direction = {dir[0], dir[1], dir[2]};
+    q.maxT = maxT;
+    q.filter.layerMask = layerMask;
+    std::string err;
+    if (!physics::validateRayQuery(q, &err)) {
+        core::log::warnCh("script", "queryRaycast: ", err);
+        return kQryBadArg;
+    }
+    if (!s->ready()) return kQryNotReady;
+    const physics::QueryHit h = s->raycast(q);
+    if (hit) *hit = h.hit ? 1 : 0;
+    writeQueryHit(h, point, normal, fraction, distance, bodyId, subShapeId, layer, owner);
+    return kQryOk;
+}
+
+extern "C" int nl_querySweep(const float* dims, std::uint32_t shapeKind, const float* from,
+                             const float* to, const float* rot, std::uint32_t layerMask,
+                             int* hit, float* point, float* normal, float* fraction,
+                             float* distance, std::uint32_t* bodyId,
+                             std::uint32_t* subShapeId, std::uint32_t* layer,
+                             std::uint64_t* owner) {
+    if (hit) *hit = 0;
+    if (!dims || !from || !to || !rot || shapeKind > 2u) return kQryBadArg;
+    physics::QueryScene* s = g_queryScene;
+    if (!s) return kQryNoScene;
+    physics::SweepQuery q;
+    q.shape.kind = static_cast<physics::ShapeDesc::Kind>(shapeKind);
+    q.shape.dims[0] = dims[0]; q.shape.dims[1] = dims[1]; q.shape.dims[2] = dims[2];
+    q.from = {from[0], from[1], from[2]};
+    q.to = {to[0], to[1], to[2]};
+    q.rotation = {rot[0], rot[1], rot[2], rot[3]};
+    q.filter.layerMask = layerMask;
+    std::string err;
+    if (!physics::validateSweepQuery(q, &err)) {
+        core::log::warnCh("script", "querySweep: ", err);
+        return kQryBadArg;
+    }
+    if (!s->ready()) return kQryNotReady;
+    const physics::QueryHit h = s->sweep(q);
+    if (hit) *hit = h.hit ? 1 : 0;
+    writeQueryHit(h, point, normal, fraction, distance, bodyId, subShapeId, layer, owner);
+    return kQryOk;
+}
+
+extern "C" int nl_queryOverlap(const float* dims, std::uint32_t shapeKind, const float* pos,
+                               const float* rot, std::uint32_t layerMask, std::uint32_t maxHits,
+                               int* count) {
+    if (count) *count = 0;
+    if (!dims || !pos || !rot || shapeKind > 2u) return kQryBadArg;
+    physics::QueryScene* s = g_queryScene;
+    if (!s) return kQryNoScene;
+    physics::OverlapQuery q;
+    q.shape.kind = static_cast<physics::ShapeDesc::Kind>(shapeKind);
+    q.shape.dims[0] = dims[0]; q.shape.dims[1] = dims[1]; q.shape.dims[2] = dims[2];
+    q.position = {pos[0], pos[1], pos[2]};
+    q.rotation = {rot[0], rot[1], rot[2], rot[3]};
+    q.filter.layerMask = layerMask;
+    std::string err;
+    if (!physics::validateOverlapQuery(q, &err)) {
+        core::log::warnCh("script", "queryOverlap: ", err);
+        return kQryBadArg;
+    }
+    if (!s->ready()) return kQryNotReady;
+    if (maxHits == 0u) return kQryBadArg;
+    overlapTable() = s->overlap(q, maxHits);   // QueryScene 内部已按 maxHits 截断
+    if (count) *count = static_cast<int>(overlapTable().size());
+    return kQryOk;
+}
+
+extern "C" int nl_queryOverlapHitAt(int index, int* hit, float* point, float* normal,
+                                    float* fraction, float* distance, std::uint32_t* bodyId,
+                                    std::uint32_t* subShapeId, std::uint32_t* layer,
+                                    std::uint64_t* owner) {
+    if (hit) *hit = 0;
+    physics::QueryScene* s = g_queryScene;
+    if (!s) return kQryNoScene;
+    const auto& table = overlapTable();
+    if (index < 0 || static_cast<std::size_t>(index) >= table.size()) return kQryBadIndex;
+    const physics::QueryHit& h = table[static_cast<std::size_t>(index)];
+    if (hit) *hit = h.hit ? 1 : 0;
+    writeQueryHit(h, point, normal, fraction, distance, bodyId, subShapeId, layer, owner);
+    return kQryOk;
+}
+
+extern "C" int nl_queryBodyCount(int* count) {
+    if (!count) return kQryBadArg;
+    physics::QueryScene* s = g_queryScene;
+    if (!s) return kQryNoScene;
+    if (!s->ready()) return kQryNotReady;
+    *count = static_cast<int>(s->bodyCount());
+    return kQryOk;
+}
+
+// ---- Animation 域导出（7 条；句柄表在 AnimInstances，nl/anim 公开面零改动）----
+
+extern "C" int nl_animLoadClip(const char* clipPath, int clipIndex, int* clipId,
+                               const char** error) {
+    if (clipId) *clipId = 0;
+    if (error) *error = nullptr;
+    if (!clipPath || !*clipPath || clipIndex < 0) return kAnimBadArg;
+    if (!scene::validAssetFileName(clipPath, ".glb")) return kAnimBadAsset;
+    const std::string resolved = core::paths::assetDir() + "/" + clipPath;
+    std::string err;
+    int id = 0;
+    const int rc = animClipLoad(resolved, clipIndex, &id, &err);
+    if (rc != kAnimOk) {
+        if (error) *error = ownedBuffer().assign(err).c_str();   // 静态缓冲账本
+        return rc;   // kAnimBadArg（clipIndex 越界）/ kAnimLoad（加载或校验失败）
+    }
+    if (clipId) *clipId = id;
+    return kAnimOk;
+}
+
+extern "C" int nl_animCreateStateMachine(void* clipIds, int count, void* ruleMeta,
+                                         void* ruleVals, int ruleCount, int* smId) {
+    if (smId) *smId = 0;
+    std::string err;
+    const int rc = animSmCreate(static_cast<const int*>(clipIds), count,
+                                static_cast<const int*>(ruleMeta),
+                                static_cast<const float*>(ruleVals), ruleCount, smId, &err);
+    if (rc != kAnimOk && !err.empty())
+        core::log::warnCh("script", "animCreateStateMachine: ", err);
+    return rc;
+}
+
+extern "C" int nl_animSetParam(int smId, int idx, float value) {
+    return animSmSetParam(smId, idx, value);
+}
+
+extern "C" int nl_animTick(int smId, float dt) {
+    return animSmTick(smId, dt);
+}
+
+extern "C" int nl_animGetPose(int smId, int boneIndex, float* pose) {
+    return animSmGetPose(smId, boneIndex, pose);
+}
+
+extern "C" int nl_animStateInfo(int smId, int* current, float* alpha, float* duration) {
+    return animSmStateInfo(smId, current, alpha, duration);
+}
+
+extern "C" int nl_animRelease(int handle) {
+    return animRelease(handle);
+}
+
 // ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----
 
 void timeSetClock(core::GameClock* clock) {
@@ -773,6 +1061,10 @@ std::vector<std::string> scriptUnregisterAll() {
     std::vector<std::string> names(scriptCommandTable().begin(), scriptCommandTable().end());
     for (const auto& n : names) Console::get().unregisterCommand(n);   // unknown 容错跳过
     scriptCommandTable().clear();
+    // M-W2A：Animation 域句柄 = 脚本自有状态（与命令登记同生命周期）——换载
+    //（loadScript/reloadScript 均经此处）前置空，旧句柄失效安全拒绝，新脚本重载 clip。
+    // AudioWorld/QueryScene 是宿主实例，**不在**此清（跨 reload 重绑定无损——W2A 验收线）。
+    animReleaseAll();
     return names;
 }
 

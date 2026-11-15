@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **54 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **72 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -105,7 +105,7 @@
 | `cameraGetFov`（偏移 27） | `float nl_cameraGetFov(void)` | 现役相机 fovY 度读回（ViewerCamera.fovY_ 口径，track 模式随轨迹刷新）。未绑 = NaN（f32 返回无 rc 通道；C# 侧 float.IsNaN 判未绑——账本特例，导出文档写死） | — |
 | `cameraSetFov`（偏移 28） | `int nl_cameraSetFov(float)` | 现役相机 fovY 度写入（注册方 clamp [20,120] 后透传 ViewerCamera.setFovYDegrees——模式统一生效）。rc：0=ok / 1=未绑 CameraSource | `in f32 fovY`：值传递 |
 
-## Physics 域（ApiTable 偏移 32..36）
+## Physics 域（ApiTable 偏移 32..64）
 
 | 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
 |---|---|---|---|
@@ -114,6 +114,11 @@
 | `physicsSetVehicleInput`（偏移 34） | `int nl_physicsSetVehicleInput(int, float, float, float, float)` | 四输入写（Jolt 手刹 float 0..1 非 bool——UE bool 口径不抄；OnTick 逻辑帧约定）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in f32 forward`：值传递；`in f32 right`：值传递；`in f32 brake`：值传递；`in f32 handBrake`：值传递 |
 | `vehicleFullPose`（偏移 35） | `int nl_vehicleFullPose(int, float*, float*, float*)` | 单槽完整位姿回读（位置米 + quat x,y,z,w + 线速度 m/s；快照编码源同 M-NET2）。任一 out 指针可 NULL 跳过。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在或未用槽 | `in int slot`：值传递；`out buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`out buf4 quat`：定长 float[4] 直传（Blittable，不跨堆）；`out buf3 vel`：定长 float[3] 直传（Blittable，不跨堆） |
 | `teleportVehicle`（偏移 36） | `int nl_teleportVehicle(int, const float*, const float*)` | 幽灵位摆位（DontActivate；客户端不 step，刚体保持到下一次 teleport；quat x,y,z,w）。rc：0=ok / 1=未绑 DebugScene / 2=槽位不存在 | `in int slot`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf4 quat`：定长 float[4] 直传（Blittable，不跨堆） |
+| `queryRaycast`（偏移 60） | `int nl_queryRaycast(const float*, const float*, float, std::uint32_t, int*, float*, float*, float*, float*, std::uint32_t*, std::uint32_t*, std::uint32_t*, std::uint64_t*)` | 射线查询（dir 须单位长，单命中；hit 0\|1；out 指针 NULL = 跳过该字段）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（零向量/非有限值/maxT<=0——validateRayQuery 先过） | `in buf3 origin`：定长 float[3] 直传（Blittable，不跨堆）；`in buf3 dir`：定长 float[3] 直传（Blittable，不跨堆）；`in f32 maxT`：值传递；`in u32 layerMask`：值传递；`out int hit`：指针出参（调用期存活）；`out buf3 point`：定长 float[3] 直传（Blittable，不跨堆）；`out buf3 normal`：定长 float[3] 直传（Blittable，不跨堆）；`out f32 fraction`：指针出参（调用期存活）；`out f32 distance`：指针出参（调用期存活）；`out u32 bodyId`：指针出参（调用期存活）；`out u32 subShapeId`：指针出参（调用期存活）；`out u32 layer`：指针出参（调用期存活）；`out u64 owner`：指针出参（调用期存活） |
+| `querySweep`（偏移 61） | `int nl_querySweep(const float*, std::uint32_t, const float*, const float*, const float*, std::uint32_t, int*, float*, float*, float*, float*, std::uint32_t*, std::uint32_t*, std::uint32_t*, std::uint64_t*)` | 形状扫掠（单命中；shapeKind 见域头；hit 0\|1）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（shapeKind 越界 / dims 非法——validateSweepQuery 先过） | `in buf3 dims`：定长 float[3] 直传（Blittable，不跨堆）；`in u32 shapeKind`：值传递；`in buf3 from`：定长 float[3] 直传（Blittable，不跨堆）；`in buf3 to`：定长 float[3] 直传（Blittable，不跨堆）；`in buf4 rot`：定长 float[4] 直传（Blittable，不跨堆）；`in u32 layerMask`：值传递；`out int hit`：指针出参（调用期存活）；`out buf3 point`：定长 float[3] 直传（Blittable，不跨堆）；`out buf3 normal`：定长 float[3] 直传（Blittable，不跨堆）；`out f32 fraction`：指针出参（调用期存活）；`out f32 distance`：指针出参（调用期存活）；`out u32 bodyId`：指针出参（调用期存活）；`out u32 subShapeId`：指针出参（调用期存活）；`out u32 layer`：指针出参（调用期存活）；`out u64 owner`：指针出参（调用期存活） |
+| `queryOverlap`（偏移 62） | `int nl_queryOverlap(const float*, std::uint32_t, const float*, const float*, std::uint32_t, std::uint32_t, int*)` | 形状重叠查询（多命中收静态表，count = min(命中数, maxHits)；maxHits==0 = rc4；命中经 queryOverlapHitAt 逐条读回）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数 | `in buf3 dims`：定长 float[3] 直传（Blittable，不跨堆）；`in u32 shapeKind`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf4 rot`：定长 float[4] 直传（Blittable，不跨堆）；`in u32 layerMask`：值传递；`in u32 maxHits`：值传递；`out int count`：指针出参（调用期存活） |
+| `queryOverlapHitAt`（偏移 63） | `int nl_queryOverlapHitAt(int, int*, float*, float*, float*, float*, std::uint32_t*, std::uint32_t*, std::uint32_t*, std::uint64_t*)` | 读回静态表第 index 条命中（0 起；表清空时机 = 下一次同线程 query* 调用前）。rc：0=ok / 1=未绑 QueryScene / 2=索引越界或表空 / 4=非法参数 | `in int index`：值传递；`out int hit`：指针出参（调用期存活）；`out buf3 point`：定长 float[3] 直传（Blittable，不跨堆）；`out buf3 normal`：定长 float[3] 直传（Blittable，不跨堆）；`out f32 fraction`：指针出参（调用期存活）；`out f32 distance`：指针出参（调用期存活）；`out u32 bodyId`：指针出参（调用期存活）；`out u32 subShapeId`：指针出参（调用期存活）；`out u32 layer`：指针出参（调用期存活）；`out u64 owner`：指针出参（调用期存活） |
+| `queryBodyCount`（偏移 64） | `int nl_queryBodyCount(int*)` | 夹具世界刚体数读回（fixture 5 体）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数 | `out int count`：指针出参（调用期存活） |
 
 ## Props 域（ApiTable 偏移 37..38）
 
@@ -132,6 +137,29 @@
 | `uiElementSetText`（偏移 42） | `int nl_uiElementSetText(int, const char*, const char*)` | 按 id 写元素内文（SetInnerRML 语义；elId 空串 = BadArg）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效或元素未找到 / 4=非法参数 | `in int handle`：值传递；`in str elId`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in str text`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free） |
 | `uiElementGetText`（偏移 43） | `int nl_uiElementGetText(int, const char*, const char**)` | 按 id 读元素内文（GetInnerRML 语义；text = 静态缓冲「下次同线程调用前有效」，C# 立即拷贝）。rc 同 uiElementSetText | `in int handle`：值传递；`in str elId`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`out str text`：C++ 静态缓冲「下次同线程调用前有效」→ C# 立即拷贝（Utf8Read，零分配） |
 | `uiSetEventCallback`（偏移 44） | `int nl_uiSetEventCallback(void*)` | 注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空） | `in ptr fn`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收 |
+
+## Audio 域（ApiTable 偏移 54..59）
+
+| 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
+|---|---|---|---|
+| `audioPlay`（偏移 54） | `int nl_audioPlay(const char*, const float*, int, int*)` | 加载并播放一个 WAV（PCM16；离线/实时路径由宿主 AudioWorld 决定）。wavPath = assets/audio 下文件名（白名单拒绝 = rc4）。rc：0=ok（sourceId>0）/ 1=未绑 AudioWorld / 3=createSource 或文件失败（error 细节走 script 日志通道） / 4=非法参数（路径白名单拒绝 / pos 指针 NULL） | `in str wavPath`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in int looping`：值传递；`out int sourceId`：指针出参（调用期存活） |
+| `audioStop`（偏移 55） | `int nl_audioStop(int)` | 停止声源（stopSource；源保留可复用）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数 | `in int id`：值传递 |
+| `audioSetGain`（偏移 56） | `int nl_audioSetGain(int, float)` | 写声源增益（configureSource 保持既有 looping；gain 非有限 = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数 | `in int id`：值传递；`in f32 gain`：值传递 |
+| `audioSetSourcePosition`（偏移 57） | `int nl_audioSetSourcePosition(int, const float*)` | 写声源空间位置（setSourcePosition；需宿主 AudioWorld 开 spatialization，未开 = rc2 照实回）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效或 AudioWorld 拒绝 / 4=非法参数 | `in int id`：值传递；`in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆） |
+| `audioSetListenerPose`（偏移 58） | `int nl_audioSetListenerPose(const float*, const float*)` | 写监听者位姿（setListenerPosition + setListenerDirection；任一指针 NULL = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=AudioWorld 拒绝 / 4=非法参数 | `in buf3 pos`：定长 float[3] 直传（Blittable，不跨堆）；`in buf3 dir`：定长 float[3] 直传（Blittable，不跨堆） |
+| `audioIsPlaying`（偏移 59） | `int nl_audioIsPlaying(int, int*)` | 播放态读回（isPlaying 0\|1）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数 | `in int id`：值传递；`out int playing`：指针出参（调用期存活） |
+
+## Anim 域（ApiTable 偏移 65..71）
+
+| 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
+|---|---|---|---|
+| `animLoadClip`（偏移 65） | `int nl_animLoadClip(const char*, int, int*, const char**)` | 加载 glTF 动画 clip（loadGltfAnim 全量后按 clipIndex 取一条；clipId >0 有效）。error = 静态缓冲「下次同线程调用前有效」（加载失败细节）。rc：0=ok / 2=加载或校验失败（validateClip/loadGltfAnim error 文本）/ 4=非法参数（clipIndex 越界）/ 5=路径白名单拒绝 | `in str clipPath`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in int clipIndex`：值传递；`out int clipId`：指针出参（调用期存活）；`out str error`：C++ 静态缓冲「下次同线程调用前有效」→ C# 立即拷贝（Utf8Read，零分配） |
+| `animCreateStateMachine`（偏移 66） | `int nl_animCreateStateMachine(void*, int, void*, void*, int, int*)` | 用已加载 clip 建单层状态机（states 自动命名；规则表驱动优先级转移；smId >0 有效）。rc：0=ok / 1=clip 句柄无效 / 3=状态机 desc 校验失败（validateStateMachine） / 4=非法参数（count<=0 / 数组指针 NULL / ruleCount<0） | `in ptr clipIds`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收；`in int count`：值传递；`in ptr ruleMeta`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收；`in ptr ruleVals`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收；`in int ruleCount`：值传递；`out int smId`：指针出参（调用期存活） |
+| `animSetParam`（偏移 67） | `int nl_animSetParam(int, int, float)` | 写状态机标量参数（转移判据输入；idx 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数 | `in int smId`：值传递；`in int idx`：值传递；`in f32 value`：值传递 |
+| `animTick`（偏移 68） | `int nl_animTick(int, float)` | 推进状态机（update(dt, params) + evaluate 缓存最近 pose；dt 非有限按 0——nl/anim 护栏口径）。rc：0=ok / 1=句柄无效 / 4=非法参数 | `in int smId`：值传递；`in f32 dt`：值传递 |
+| `animGetPose`（偏移 69） | `int nl_animGetPose(int, int, float*)` | 读回最近缓存姿态单骨骼（translation xyz + quat xyzw；boneIndex 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数 | `in int smId`：值传递；`in int boneIndex`：值传递；`out buf7 pose`：定长 float[7] 直传（Blittable，不跨堆） |
+| `animStateInfo`（偏移 70） | `int nl_animStateInfo(int, int*, float*, float*)` | 状态机观测读回（current=当前态下标 / alpha=转移目标权重（未转移=1）/ duration=当前 crossfade 生效时长（未转移=0））。rc：0=ok / 1=句柄无效 / 4=非法参数 | `in int smId`：值传递；`out int current`：指针出参（调用期存活）；`out f32 alpha`：指针出参（调用期存活）；`out f32 duration`：指针出参（调用期存活） |
+| `animRelease`（偏移 71） | `int nl_animRelease(int)` | 显式回收句柄（clip 或状态机同表发号，双态擦除；未知 = rc1 失效安全）。rc：0=ok / 1=句柄无效 / 4=非法参数 | `in int handle`：值传递 |
 
 ---
 

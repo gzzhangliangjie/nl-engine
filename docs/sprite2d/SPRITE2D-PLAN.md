@@ -20,7 +20,7 @@
 - ECS Sprite 组件 / render graph phase（bevy 形态，超出最小面）
 - 精灵碰撞、文本渲染、UI 属性动效（RmlUi RCSS transition/@keyframes 承担）
 - `viewer/main.cpp` 的 demo 旗标与 PNG 基线（波 0 闸，见 §5）
-- `exports.api` 任何改动（波 2）
+- `exports.api` 任何改动（波 2；**已立项 M-W2A**，见 `docs/script-api/WAVE2-PLAN.md`）
 
 ## 2. 三处证据（本轮定向实读，2026-11-15）
 

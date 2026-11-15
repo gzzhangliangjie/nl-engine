@@ -1,0 +1,5 @@
+MSBUILD : error MSB1009: Project file does not exist.
+Switch: E:\UE_STUDY_2026\nl-engine\example\m-w2a-anim\no-such-dir
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine\example\m-w2a-anim\no-such-dir
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\example\m-w2a-anim\no-such-dir" -nologo -v q 
+  dotnet build failed (exit 1)

@@ -48,6 +48,8 @@ class DebugScene;
 
 namespace nl::scene { class World; }
 namespace nl::core { class GameClock; class InputState; class ActionMap; class Window; }
+namespace nl::audio { class AudioWorld; }        // M-W2A：Audio 域宿主注入目标（前向声明，nl_core 不反向 include viewer）
+namespace nl::physics { class QueryScene; }      // M-W2A：查询域宿主注入目标（M-PQ0 PIMPL 公开类，Jolt 挡在 Query.cpp）
 
 namespace nl::script {
 
@@ -105,6 +107,34 @@ inline constexpr int kPhyBadArg = 4;
 // ApiTable 结构 = 生成物（ApiTable.g.hpp，上放 include）：字段序 = exports.api 声明序，
 // 每导出带 rc 语义文档。手写结构已废——改绑定面 = 改 exports.api + 重跑 gen.py（M-SC4）。
 // v1 console 6 导出 + v2 ECS 10 导出（M-SC2 尾部追加口径，旧脚本零波及）。
+
+// ---- M-W2A Audio 域错误码（v9，尾部追加）：0=ok / 1=未绑 AudioWorld（宿主忘
+// audioSetWorld——kEcsNoWorld/kCamNoSource 同构口径）/ 2=句柄无效（sourceId 不在
+// AudioWorld 或 AudioWorld 拒绝）/ 3=createSource 或文件失败 / 4=非法参数
+inline constexpr int kAudOk = 0;
+inline constexpr int kAudNoWorld = 1;
+inline constexpr int kAudInvalid = 2;
+inline constexpr int kAudSource = 3;
+inline constexpr int kAudBadArg = 4;
+
+// ---- M-W2A Physics 查询域错误码（v9，Physics 域尾部追加；与载具码独立计数）：
+// 0=ok / 1=未绑 QueryScene（宿主忘 querySetScene）/ 2=索引越界或表空（OverlapHitAt）/
+// 3=build 未就绪（fixture 未 build）/ 4=非法参数（validate*Query 先过）
+inline constexpr int kQryOk = 0;
+inline constexpr int kQryNoScene = 1;
+inline constexpr int kQryBadIndex = 2;
+inline constexpr int kQryNotReady = 3;
+inline constexpr int kQryBadArg = 4;
+
+// ---- M-W2A Animation 域错误码（v9，尾部追加）：0=ok / 1=句柄无效（clip/sm 单源
+// 发号表查无）/ 2=clip 加载或校验失败（validateClip/loadGltfAnim error 文本）/
+// 3=状态机 desc 校验失败（validateStateMachine）/ 4=非法参数 / 5=路径白名单拒绝
+inline constexpr int kAnimOk = 0;
+inline constexpr int kAnimInvalid = 1;
+inline constexpr int kAnimLoad = 2;
+inline constexpr int kAnimReset = 3;
+inline constexpr int kAnimBadArg = 4;
+inline constexpr int kAnimBadAsset = 5;
 
 // 单例 api 表（函数指针静态填充；内容与 Bindings.cpp 的 extern "C" 实现一一对应，
 // 编译期由 ApiTable.g.asserts.inc 逐导出校验声明与实现签名一致）。
@@ -189,6 +219,16 @@ inline constexpr int kUiBadArg = 4;
 // 零新类型。CameraSource 函数指针表是四模式相机专属形态，此处属过度设计）。
 // nullptr = 解绑（热更窗口兜底，此后 Physics 导出一律 kPhyNoScene）。
 void driveSetScene(physics::DebugScene* scene);
+
+// ---- M-W2A 宿主侧活实例绑定（波 2 绑定域；ecsSetWorld 模式推广，nullptr = 解绑）----
+//   - audioSetWorld：Audio 域操作目标（M-GL2 交付的 AudioWorld；viewer scene 模式
+//     --script 装载段 ensureAudioWorld() 注入；selftest 自建 offline 实例）。**绑定层
+//     绝不隐式建 AudioWorld**（全族口径）。
+//   - querySetScene：Physics 查询域操作目标 = M-PQ0 QueryScene 探针世界（独立
+//     fixture：floor/boxA/boxB/boxC/sensor 5 静态体；**确定性夹具查询，非 viewer
+//     现役物理世界**——live 化属 M-PQ1）。viewer build() 失败注入 nullptr。
+void audioSetWorld(audio::AudioWorld* world);
+void querySetScene(physics::QueryScene* scene);
 
 // ---- M-SC10 属性面板域（v7）：描述表 POD + gen 计数 ----
 //

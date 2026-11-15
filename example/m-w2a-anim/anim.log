@@ -1,0 +1,391 @@
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.76
+nl-script selftest: project=E:\UE_STUDY_2026\nl-engine\script\examples\hello
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\hello" -nologo -v q 
+  ok  s0 locate HelloScript build output (runtimeconfig + dll)
+[hello-script] script-api v0.9.0, host says hello
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.18
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.84
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.82
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.75
+  ok  s1 Vm::create via runtimeconfig.json (hostfxr 3-export flow)
+  ok  s2 getEntryPoint Entry (default signature, UnmanagedCallersOnly)
+  ok  s3a args="ok" -> 42 (got 42)
+  ok  s3b empty args -> -1 (got -1)
+  ok  s3c args="echo" -> 0 (script-api Version printed above) (got 0)
+  ok  s3d unknown mode -> -1 (got -1)
+  ok  s4a managed exception caught at SEH boundary (process alive)
+  exception code: 0xe0434352 (CLR managed exception 0xe0434352)
+  ok  s4b entry callable again after exception (got 42)
+  ok  s5a copy example project to temp dir
+  ok  s5a2 locate ProjectReference in copied csproj
+  ok  s5a3 set hot AssemblyName in copied csproj
+  ok  s5b locate anchor "return 42;" in copied source
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-49416\hello" -nologo -v q 
+  ok  s5c dotnet build rebuilt script (HelloScriptHot)
+  ok  s5d locate rebuilt output
+  ok  s5e load rebuilt assembly in same process (no host restart)
+  ok  s5f rebuilt script behavior updated: "ok" -> 43 (got 43)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\console" -nologo -v q 
+  ok  s6a locate ConsoleScript build output
+  ok  s6a locate console binding entries (UnmanagedCallersOnly)
+  ok  s6a C# CvarSet script.count=77 -> 0 (got 0)
+  ok  s6a C++ onChanged hook fired exactly once (got 1)
+  ok  s6a onChanged captured value 77
+  ok  s6b C# ConsoleRegister script.echo -> 0 (got 0)
+  ok  s6b console exec of C#-registered command returns echo text
+  ok  s6c ExecCode alignment 0/1/2/3 across binding (mask 31) (got 31)
+  ok  s6d C# ConsoleRegisterRaw throwcmd -> 0 (got 0)
+  ok  s6d managed exception in command -> CommandFailed + SEH captured
+  ok  s6d console alive and commands still callable after exception
+  ok  s6e C++-set float read from C# + cvar.list contains script cvar (got 3)
+  ok  s6f C# ConsoleUnregister script.echo -> 0 (got 0)
+  ok  s6f exec after unregister -> UnknownCommand
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\ecs" -nologo -v q 
+  ok  s7a locate EcsScript build output
+  ok  s7a locate ecs binding entries (UnmanagedCallersOnly)
+  ok  s7-pre C++ spawn cppEnt via table (got 0)
+  ok  s7-pre C++ addTransform cppEnt (got 0)
+  ok  s7-pre C++ set anchor TRS (got 0)
+  ok  s7a C# SpawnSetup -> 0 (got 0)
+  ok  s7a host flush after script spawn (got 0)
+  ok  s7a C++ find scriptRoot (got 0)
+  ok  s7a C++ find scriptLeaf (got 0)
+  ok  s7a both entities exist with distinct ids
+  ok  s7a getparent leaf -> ok (got 0)
+  ok  s7a leaf parent == root id
+  ok  s7a transformGet scriptRoot -> 0 (got 0)
+  ok  s7a pos anchor (1,2,3) exact
+  ok  s7a quat anchor (0.5,0.5,0.5,0.5) exact
+  ok  s7a scale anchor (2,2,2) exact
+  ok  s7a transformGet scriptLeaf -> 0 (got 0)
+  ok  s7a leaf pos anchor (-1,-2,-3) exact
+  ok  s7b C# ReadVerify cppEnt anchors -> 0 (got 0)
+  ok  s7c C# InvalidProbe all rejected -> 0 (got 0)
+  ok  s7d C# RemoveSpawned(scriptLeaf) -> 0 (got 0)
+  ok  s7d deferred: still exists before flush (Carrot asymmetry)
+  ok  s7d flush -> 0 (got 0)
+  ok  s7d after flush exists -> false
+  ok  s7d TransformGet on flushed entity -> NoEntity (safe reject) (got 2)
+  ok  s7e clear parent -> 0 (got 0)
+  ok  s7e getparent root -> 0 (got 0)
+  ok  s7e root parent cleared
+  ok  s7e reparent root -> cppEnt (got 0)
+  ok  s7e root parent == cppEnt
+  ok  s7e getChildIDs(cppEnt) view contains root
+  ok  s7f deserialise world snapshot -> true
+  ok  s7f serialise roundtrip bytes equal
+  ok  s7g spawn after unbind -> NoWorld (got 1)
+  ok  s7g flush after unbind -> NoWorld (got 1)
+  ok  s7g exists after unbind -> NoWorld (got 1)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\bootstrap" -nologo -v q 
+  ok  s8-pre locate NlScriptBootstrap build output
+  ok  s8a ScriptHost::init (Vm::loadBootstrap 3 function pointers, idempotent)
+  ok  s8a2 console.reload-script registered (no-script case -> CommandFailed hint)
+  ok  s8b copy console project to temp (sources only)
+  ok  s8b2 locate ProjectRefe
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.19
+script-api v0.9.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  cvar bound to script (M-SC1 selftest)
+  script.rate = 1.5  (float)  float cvar for readback (M-SC1 selftest)
+[nl:warn|script] OnTick not resolved (optional contract; absent or resolution failed)
+rence in copied csproj
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8-49416\console" -nologo -v q 
+  ok  s8b3 dotnet build hot console (v1)
+  ok  s8b4 locate v1 build output
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.08
+script-api v0.9.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] [v2] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  cvar bound to script (M-SC1 selftest)
+  script.rate = 2.5  (float)  float cvar for readback (M-SC1 selftest)
+script-api v0.9.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] [v2] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  cvar bound to script (M-SC1 selftest)
+  script.rate = 2.5  (float)  float cvar for readback (M-SC1 selftest)
+script-api v0.9.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] [v2] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  cvar bound to script (M-SC1 selftest)
+  script.rate = 2.5  (float)  float cvar for readback (M-SC1 selftest)
+script-api v0.9.0 console binding demo
+register script.echo -> 0
+cvar.set script.count 77 -> 0
+exec script.echo -> [0] [v2] script.echo: hello from csharp
+exec cvar.set script.count 100 -> [0] script.count = 100
+cvar get script.count -> 100
+cvar list:
+  script.count = 100  (int)  cvar bound to script (M-SC1 selftest)
+  script.rate = 2.5  (float)  float cvar for readback (M-SC1 selftest)
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.88
+[nl:info|script] s9 log info anchor
+  ok  s8b5 first load via collectible ALC + Entry rebinding
+  ok  s8b6 v1 echo anchor (prefix "script.echo: ")
+  ok  s8b7 script command registered in C++ ledger
+  ok  s8-pre3 script.rate cvar present (registered by s6 host preset)
+  ok  s8-pre2 C++ state anchor: cppEntHot spawned with transform
+  ok  s8c locate echo prefix anchor in copied source
+  ok  s8c2 echo prefix replaced in both lambdas
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8-49416\console" -nologo -v q 
+  ok  s8c2 dotnet build overwrite same DLL name (file not locked by LoadFromStream)
+  ok  s8c3 ScriptHost::reloadScript (unbind -> unload -> load -> rebind)
+  reload-script: unbound 2 command(s) [script.echo, script.throwcmd], ALC fully unloaded (weakref dead), reloaded C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-hot-s8-49416\console\bin\Debug\net8.0\ConsoleScript.dll (Entry ret=0)
+  ok  s8d behavior updated after reload (echo prefix [v2])
+  ok  s8e C++ cvar state intact (script.rate == 2.5)
+  ok  s8e2 entity alive after reload (got 0)
+  ok  s8e3 entity transform bits intact (7,8,9)
+  ok  s8e4 builtin cvar.set intact after reload
+  ok  s8e5 script command re-registered by new Entry (ledger)
+  ok  s8f3 consecutive reload x3 all ok
+  handle drift over 3 reloads: 0 (h0=277 h1=277)
+  ok  s8f4 no handle leak over consecutive reloads (|drift| <= 32)
+  ok  s8g unloadScript -> weakref dead (ALC fully collected)
+  ok  s8h script command gone after unload -> UnknownCommand
+  ok  s8h2 ECS export still works (World bound in C++) (got 0)
+  ok  s8h3 C++ cvar intact after unload
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\timeinput" -nologo -v q 
+  ok  s9-pre locate TimeInputScript build output
+  ok  s9-pre locate binding entries (UnmanagedCallersOnly)
+[nl:info|script] s9 unbound still ok
+  ok  s9a C# BoundProbe -> 0 (got 0)
+  ok  s9a2 clock unpaused after script SetState(0,-1)
+  ok  s9a2 timeScale kept 2.5 (-1 sentinel)
+  ok  s9a3 C# SetFilter("nl:warn") -> global default Warn
+  ok  s9a3 filterInstruction readback norm form
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.92
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.80
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.80
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.72
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.17
+[nl:warn|script] OnTick not resolved (optional contract; absent or resolution failed)
+  ok  s9b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\camera" -nologo -v q 
+  ok  s10-pre locate CameraScript build output
+  ok  s10-pre locate camera entries (UnmanagedCallersOnly)
+  ok  s10a C# BoundProbe -> 0 (got 0)
+  ok  s10a C++ capture: script SetPose eye {4,5,6}
+  ok  s10a C++ capture: yaw 45 / pitch 15
+  ok  s10a C++ capture: SetFov(500) clamped -> 120
+  ok  s10b C# TrackProbe -> 0 (got 0)
+  ok  s10b C++ capture: SetFov(60) ok in track (mode-uniform)
+  ok  s10c C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\model" -nologo -v q 
+  ok  s11-pre locate ModelScript build output
+  ok  s11-pre locate model entries (UnmanagedCallersOnly)
+  ok  s11a C# BoundProbe -> 0 (got 0)
+  ok  s11a C++ capture: probeModel ModelComponent meshFile=cube.glb
+  ok  s11a C++ capture: default tint(1,1,1)/roughness 1/metallic 0
+  ok  s11b C# ErrorProbe -> 0 (got 0)
+  ok  s11c C# UnboundProbe -> 0 (got 0)
+  ok  s11d C# DetachProbe -> 0 (got 0)
+  ok  s11d C++ capture: probeModel ModelComponent removed
+  ok  s11d C++ capture: TransformComponent kept after detach
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\drive" -nologo -v q 
+  ok  s12-pre locate DriveScript build output
+  ok  s12-pre locate drive entries (UnmanagedCallersOnly)
+  ok  s12-pre DebugScene build(2)
+  ok  s12a C# BoundProbe -> 0 (got 0)
+  ok  s12a C++ capture: slot0 (built-in car) still valid
+  ok  s12a C++ capture: script car tombstoned (slot1 invalid)
+  ok  s12b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\props" -nologo -v q 
+  ok  s13-pre locate PropsScript build output
+  ok  s13-pre descriptor table empty before load
+  ok  s13-pre props channel not attached before load
+  ok  s13-pre copy props project to temp (sources only)
+  ok  s13-pre locate ProjectReference in copied csproj
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-props-49416\props" -nologo -v q 
+  ok  s13-pre dotnet build hot props (v1)
+  ok  s13-pre locate hot PropsScript v1 output
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.98
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.79
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.76
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.78
+[nl:warn|script] audioPlay: createSource failed: cannot open WAV: E:\UE_STUDY_2026\nl-engine\assets/audio/no-such-clip.wav
+  ok  s13a loadScript (Entry pushes [Prop] descriptor table)
+  ok  s13a descriptor table has 4 rows ([Prop] static fields)
+  ok  s13a descriptor gen bumped by pushBegin
+  ok  s13a props channel attached (PropGet/PropSet resolved)
+  ok  s13a row0 Speed kind/Range/default bits
+  ok  s13a row1 Count kind/Range/default bits
+  ok  s13a row2 Enabled kind/default bits
+  ok  s13a row3 Label kind bits
+  ok  s13a2 propGet float ok
+  ok  s13a2 Speed initial value 3.5 via channel
+  ok  s13a2 propSet float ok
+  ok  s13a2 propGet float after set
+  ok  s13a2 Speed roundtrip 7.25
+  ok  s13a2 propSet int ok
+  ok  s13a2 C# Count static field == 42 (cross-source via ReadField)
+  ok  s13a2 propSet bool 0 ok
+  ok  s13a2 propGet bool ok
+  ok  s13a2 Enabled roundtrip false
+  ok  s13a2 propSet string ok
+  ok  s13a2 propGet string ok
+  ok  s13a2 Label roundtrip UTF8 bytes
+  ok  s13b propGet idx out of range -> rc 8 (script-side 2)
+  ok  s13b propSet bad buffer size -> rc 2 (C++-side BadArg)
+  ok  s13c locate Label anchor in copied source
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "C:\Users\zlj10\AppData\Local\Temp\nl-script-selftest-props-49416\props" -nologo -v q 
+  ok  s13c dotnet build overwrite (Extra field added)
+  ok  s13c reloadScript (table + channel re-resolved)
+  ok  s13c descriptor table follows reload (4 -> 5)
+  ok  s13c Extra row present (kind int, max 50)
+  ok  s13c channel re-attached after reload
+  ok  s13d string row present in reloaded table
+  ok  s13d 10k string propGet/propSet roundtrips all ok
+  ok  s13d managed GC.Collect via probe
+  ok  s13d handle drift < 32 after 10k string roundtrips + GC
+  ok  s13e unloadScript (weakref fully unloaded)
+  ok  s13e props channel nulled before unload (lifecycle rule)
+  ok  s13e descriptor table POD persists (C++-owned)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\mouse" -nologo -v q 
+  ok  s14-pre locate MouseScript build output
+  ok  s14-pre locate mouse entries (UnmanagedCallersOnly)
+  ok  s14a C# BoundProbe -> 0 (got 0)
+  ok  s14b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\gamepad" -nologo -v q 
+  ok  s15-pre locate GamepadScript build output
+  ok  s15-pre locate gamepad entries (UnmanagedCallersOnly)
+  ok  s15a C# BoundProbe -> 0 (got 0)
+  ok  s15b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\audio" -nologo -v q 
+  ok  s16-pre locate AudioScript build output
+  ok  s16-pre locate audio entries (UnmanagedCallersOnly)
+  ok  s16-pre offline AudioWorld ok (no device)
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.85
+[nl:warn|script] queryRaycast: direction must be a finite unit vector
+  ok  s16a C# BoundProbe -> 0 (got 0)
+  ok  s16b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\query" -nologo -v q 
+  ok  s17-pre locate QueryScript build output
+  ok  s17-pre locate query entries (UnmanagedCallersOnly)
+  ok  s17-pre QueryScene fixture build
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.84
+[nl:warn|script] animCreateStateMachine: clip handle not found: 999999
+  ok  s17a C# BoundProbe -> 0 (got 0)
+  ok  s17b C# UnboundProbe -> 0 (got 0)
+  $ set DOTNET_CLI_UI_LANGUAGE=en&& dotnet build "E:\UE_STUDY_2026\nl-engine\script\examples\anim" -nologo -v q 
+  ok  s18-pre locate AnimScript build output
+  ok  s18-pre locate anim entries (UnmanagedCallersOnly)
+  ok  s18a C# BoundProbe -> 0 (got 0)
+[nl:warn|script] audioPlay: createSource failed: cannot open WAV: E:\UE_STUDY_2026\nl-engine\assets/audio/no-such-clip.wav
+  ok  s18b C# UnboundProbe -> 0 (got 0)
+  ok  s18c C# SeedProbe -> 0 (handles 1/2 alive) (got 0)
+[nl:warn|script] queryRaycast: direction must be a finite unit vector
+  ok  s18c Audio BoundProbe intact after unregisterAll (got 0)
+  ok  s18c Query BoundProbe intact after unregisterAll (got 0)
+  ok  s18d C# VerifyProbe -> 0 (anim handles cleared) (got 0)
+nl-script selftest: PASS (0 failures)

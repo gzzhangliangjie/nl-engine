@@ -53,6 +53,16 @@
 //            数据主权）+ fov 照常写（模式统一生效）/
 //        s10c 解绑路径：cameraSetSource(nullptr) -> NoSource / GetFov NaN
 //            （f32 返回无 rc 通道账本特例）
+//     s16 Audio 域（M-W2A，第 13 参 audio 示例工程目录）：
+//        s16a offline AudioWorld 注入 → 播放复合链 + 播放中控制 + 负向（白名单/
+//            缺文件/未知句柄）/ s16b 解绑 NoWorld 全族
+//     s17 Physics 查询域（M-W2A，第 14 参 query 示例工程目录）：
+//        s17a QueryScene 夹具注入 → 三族查询逐位锚（floor/boxA 层+owner）+ 层屏蔽
+//            + 容器协议 + 负向 + 万次串往返 / s17b 解绑 NoScene 全族
+//     s18 Animation 域（M-W2A 薄面句柄表，第 15 参 anim 示例工程目录）：
+//        s18a 正向全链（clip/状态机/参数驱动转移/pose/回收/GC 断言）/
+//        s18b 无效句柄失效安全 / s18c+d 换载钩子（scriptUnregisterAll 前置空
+//            句柄表 + Audio/Query 宿主绑定无损）
 //
 // 用法示例：
 //   nl-script selftest script/examples/hello script/examples/console script/examples/ecs script/bootstrap script/examples/timeinput script/examples/camera
@@ -67,6 +77,8 @@
 #include "nl/core/action_map.hpp"   // s9 ActionMap（注意：不在 input.hpp——动作映射独立头）
 #include "nl/core/console.hpp"
 #include "nl/physics/World.hpp"     // s12 载具域验收（M-SC8：DebugScene 训练场）
+#include "nl/physics/query.hpp"     // s17 查询域验收（M-W2A：QueryScene 确定性夹具）
+#include "nl/audio/AudioWorld.hpp"  // s16 Audio 域验收（M-W2A：offline 实例注入）
 #include "nl/scene/Component.hpp"
 #include "nl/scene/World.hpp"
 #include "nl/script/Vm.hpp"
@@ -250,7 +262,8 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
                 const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
                 const fs::path& modelDir, const fs::path& driveDir, const fs::path& propsDir,
-                const fs::path& mouseDir, const fs::path& gamepadDir) {
+                const fs::path& mouseDir, const fs::path& gamepadDir,
+                const fs::path& audioDir, const fs::path& queryDir, const fs::path& animDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -1532,6 +1545,181 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- M-W2A 共享设施（s16/s17/s18；函数级作用域——s18 换载钩子段复用）----
+    const nl::script::ApiTable* probeTable = nl::script::consoleApiTable();
+    auto callProbe = [&](nl::script::EntryPointFn fn) {
+        std::int32_t ret = 0;
+        std::uint32_t exc = 0;
+        const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(probeTable)),
+                                    0, &ret, &exc);
+        return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+    };
+    // 宿主活实例（static 存活到进程退）：offline AudioWorld（无设备确定性，无音频
+    // 设备也全链可断言；viewer realtime 路径由 ensureAudioWorld() 注入背书）+
+    // M-PQ0 QueryScene 确定性夹具。构造无条件（offline AudioWorld 零设备零副作用）。
+    static nl::audio::AudioConfig cfgW2A;
+    cfgW2A.offline = true;
+    cfgW2A.spatialization = true;
+    static nl::audio::AudioWorld audioWorldW2A{cfgW2A};
+    static nl::physics::QueryScene querySceneW2A;
+    nl::script::EntryPointFn audioBoundFn = nullptr;
+    nl::script::EntryPointFn queryBoundFn = nullptr;
+
+    // ---- s16 Audio 域（M-W2A；audioDir 为空 = 跳过，同 s6~s15 口径）----
+    // 注入路径验收：selftest 自建 offline AudioWorld（无设备确定性，spatialization 开）
+    // → audioSetWorld 注入 → C# 播放复合链 + 负向全族；解绑后 NoWorld（不隐式建表）。
+    if (!audioDir.empty()) {
+        if (!dotnetBuild(audioDir.string(), {})) {
+            expectTrue(false, "s16-pre dotnet build audio example");
+            std::printf("nl-script selftest: FAIL (audio binding build)\n");
+            return 1;
+        }
+        auto aso = locateOutput(audioDir, {});
+        expectTrue(aso.has_value(), "s16-pre locate AudioScript build output");
+        if (aso) {
+            const std::string audioType = "NlScript.Examples.AudioScript, " + aso->assemblyName;
+            nl::script::EntryPointFn audioBound = nullptr, audioUnbound = nullptr;
+            result = vm->getEntryPoint(aso->assemblyDll.string(), audioType, "BoundProbe", &audioBound);
+            result = vm->getEntryPoint(aso->assemblyDll.string(), audioType, "UnboundProbe", &audioUnbound);
+            expectTrue(result.ok && audioUnbound != nullptr, "s16-pre locate audio entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                audioBoundFn = audioBound;   // s18 换载钩子段复用
+                expectTrue(audioWorldW2A.ok(), "s16-pre offline AudioWorld ok (no device)");
+
+                nl::script::audioSetWorld(&audioWorldW2A);
+                {
+                    auto [hit, ret] = callProbe(audioBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s16a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s16a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s16b：解绑路径（nullptr = NoWorld 全族）
+                nl::script::audioSetWorld(nullptr);
+                {
+                    auto [hit, ret] = callProbe(audioUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s16b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
+    // ---- s17 Physics 查询域（M-W2A；queryDir 为空 = 跳过，同 s6~s16 口径）----
+    // 注入路径验收：M-PQ0 QueryScene 确定性夹具 build() → querySetScene 注入
+    // → C# 三族查询逐位锚（floor 层 0 / owner "FLOOR"；boxA 层 1 / owner "BOXA"）
+    // + 层屏蔽 + 容器协议 + 负向；解绑后 NoScene（不隐式建表）。
+    if (!queryDir.empty()) {
+        if (!dotnetBuild(queryDir.string(), {})) {
+            expectTrue(false, "s17-pre dotnet build query example");
+            std::printf("nl-script selftest: FAIL (query binding build)\n");
+            return 1;
+        }
+        auto qso = locateOutput(queryDir, {});
+        expectTrue(qso.has_value(), "s17-pre locate QueryScript build output");
+        if (qso) {
+            const std::string queryType = "NlScript.Examples.QueryScript, " + qso->assemblyName;
+            nl::script::EntryPointFn queryBound = nullptr, queryUnbound = nullptr;
+            result = vm->getEntryPoint(qso->assemblyDll.string(), queryType, "BoundProbe", &queryBound);
+            result = vm->getEntryPoint(qso->assemblyDll.string(), queryType, "UnboundProbe", &queryUnbound);
+            expectTrue(result.ok && queryUnbound != nullptr, "s17-pre locate query entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                queryBoundFn = queryBound;   // s18 换载钩子段复用
+
+                // 宿主活实例：M-PQ0 夹具世界（5 静态体，build 一次；C++ 侧 C++ API
+                // 正路径 M-PQ0 ctest 已覆盖，本段只验收绑定面透传）。
+                std::string qErr17;
+                expectTrue(querySceneW2A.build(&qErr17), "s17-pre QueryScene fixture build");
+                nl::script::querySetScene(&querySceneW2A);
+                {
+                    auto [hit, ret] = callProbe(queryBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s17a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s17a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s17b：解绑路径（nullptr = NoScene 全族）
+                nl::script::querySetScene(nullptr);
+                {
+                    auto [hit, ret] = callProbe(queryUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s17b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
+    // ---- s18 Animation 域（M-W2A 薄面句柄表；animDir 为空 = 跳过，同 s6~s17 口径）----
+    // 本域无宿主实例注入（句柄表在 script 内部面）：正向 = clip 加载/状态机/参数驱动
+    // 转移/pose 读回/显式回收；负向 = 无效句柄失效安全；换载钩子 = scriptUnregisterAll
+    //（reloadScript 统一解绑点，s8c 全链已过）前置空句柄表 + Audio/Query 宿主绑定无损。
+    if (!animDir.empty()) {
+        if (!dotnetBuild(animDir.string(), {})) {
+            expectTrue(false, "s18-pre dotnet build anim example");
+            std::printf("nl-script selftest: FAIL (anim binding build)\n");
+            return 1;
+        }
+        auto anso = locateOutput(animDir, {});
+        expectTrue(anso.has_value(), "s18-pre locate AnimScript build output");
+        if (anso) {
+            const std::string animType = "NlScript.Examples.AnimScript, " + anso->assemblyName;
+            nl::script::EntryPointFn animBound = nullptr, animUnbound = nullptr,
+                                     animSeed = nullptr, animVerify = nullptr;
+            result = vm->getEntryPoint(anso->assemblyDll.string(), animType, "BoundProbe", &animBound);
+            result = vm->getEntryPoint(anso->assemblyDll.string(), animType, "UnboundProbe", &animUnbound);
+            result = vm->getEntryPoint(anso->assemblyDll.string(), animType, "SeedProbe", &animSeed);
+            result = vm->getEntryPoint(anso->assemblyDll.string(), animType, "VerifyProbe", &animVerify);
+            expectTrue(result.ok && animVerify != nullptr, "s18-pre locate anim entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                // s18a：正向全链（加载/建状态机/参数驱动转移/pose/回收/GC 断言）
+                {
+                    auto [hit, ret] = callProbe(animBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s18a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s18a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s18b：无效句柄路径（查表失效安全）
+                {
+                    auto [hit, ret] = callProbe(animUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s18b C# UnboundProbe -> 0");
+                }
+
+                // s18c+d：换载钩子（scriptUnregisterAll = reloadScript 统一解绑点）：
+                // 清表（模拟换载前置空，发号器回 1）→ 重绑 Audio/Query → Seed 留活句柄
+                //（1/2）→ 解绑 → Audio/Query 宿主绑定无损 → 旧句柄失效安全
+                if (audioBoundFn != nullptr && queryBoundFn != nullptr) {
+                    nl::script::scriptUnregisterAll();   // 首清：句柄表空 + 发号器回 1
+                    nl::script::audioSetWorld(&audioWorldW2A);
+                    nl::script::querySetScene(&querySceneW2A);
+                    {
+                        auto [hit, ret] = callProbe(animSeed);
+                        expectInt(hit == 0 ? ret : -2000, 0, "s18c C# SeedProbe -> 0 (handles 1/2 alive)");
+                    }
+                    nl::script::scriptUnregisterAll();   // 二清：reloadScript 的统一解绑点
+                    // Audio/Query 宿主实例跨换载无损：全链探针照常过（未回 NoWorld/NoScene）
+                    {
+                        auto [hitA, retA] = callProbe(audioBoundFn);
+                        expectInt(hitA == 0 ? retA : -2000, 0, "s18c Audio BoundProbe intact after unregisterAll");
+                        auto [hitQ, retQ] = callProbe(queryBoundFn);
+                        expectInt(hitQ == 0 ? retQ : -2000, 0, "s18c Query BoundProbe intact after unregisterAll");
+                    }
+                    {
+                        auto [hit, ret] = callProbe(animVerify);
+                        expectInt(hit == 0 ? ret : -2000, 0, "s18d C# VerifyProbe -> 0 (anim handles cleared)");
+                    }
+                }
+                // 收尾解绑（对称纪律；audioWorldW2A/querySceneW2A static 存活到进程退）
+                nl::script::audioSetWorld(nullptr);
+                nl::script::querySetScene(nullptr);
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -1546,7 +1734,8 @@ void usage() {
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
         "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
-        "                    [driveProjectDir] [propsProjectDir] [mouseProjectDir] [gamepadProjectDir]  full machine-checked acceptance\n"
+        "                    [driveProjectDir] [propsProjectDir] [mouseProjectDir] [gamepadProjectDir]\n"
+        "                    [audioProjectDir] [queryProjectDir] [animProjectDir]  full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -1602,7 +1791,10 @@ int main(int argc, char** argv) {
         const fs::path propsDir = argc >= 11 ? fs::weakly_canonical(argv[10]) : fs::path();
         const fs::path mouseDir = argc >= 12 ? fs::weakly_canonical(argv[11]) : fs::path();
         const fs::path gamepadDir = argc >= 13 ? fs::weakly_canonical(argv[12]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir, mouseDir, gamepadDir);
+        const fs::path audioDir = argc >= 14 ? fs::weakly_canonical(argv[13]) : fs::path();
+        const fs::path queryDir = argc >= 15 ? fs::weakly_canonical(argv[14]) : fs::path();
+        const fs::path animDir = argc >= 16 ? fs::weakly_canonical(argv[15]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir, mouseDir, gamepadDir, audioDir, queryDir, animDir);
     }
     usage();
     return 2;

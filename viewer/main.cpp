@@ -34,6 +34,7 @@
 #include "nl/audio/AudioWorld.hpp"       // P8 M-GL2/M-S3：场景音频（声源挂实体）
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
+#include "nl/physics/query.hpp"   // M-W2A：script 查询夹具世界（QueryScene，M-PQ0 探针）
 #include "nl/net/Sync.hpp"        // NET M-NET2：同步层会话（服务器权威最小闭环）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
@@ -5965,6 +5966,17 @@ int runScene(const Options& o) {
         nl::script::ecsSetWorld(&world);
         nl::script::timeSetClock(&gameClock);
         nl::script::inputSetWindow(&window);   // M-I5：inputTextPop 操作目标（scene 模式接现役窗口）
+        // M-W2A：Audio 活实例 + 查询夹具世界（波 2 绑定域；仅 --script 装载段注入，
+        // 零渲染符号零渲染路径；ensureAudioWorld() 设备失败降级 offline 已内建）。
+        nl::script::audioSetWorld(ensureAudioWorld());
+        static nl::physics::QueryScene scriptQueryScene;   // M-PQ0 fixture（5 静态体，build 一次）
+        {
+            std::string qErr;
+            const bool qOk = scriptQueryScene.build(&qErr);
+            nl::script::querySetScene(qOk ? &scriptQueryScene : nullptr);   // 失败 = 未绑语义
+            if (!qOk)
+                nl::core::log::warnCh("viewer", "script: query fixture build failed: ", qErr);
+        }
         // M-SC6：现役相机适配源（ctx = runScene 的 ViewerCamera；orbit/free/chase
         // 模式感知落点 + fov clamp，见 camSourceSetPose 注释；未绑 = kCamNoSource）。
         g_viewerCamSource.ctx = &camera;
@@ -6605,6 +6617,9 @@ int runScene(const Options& o) {
     // 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm（hostfxr context 收官）。
     if (scriptLoaded) {
         nl::script::ecsSetWorld(nullptr);
+        // M-W2A：Audio/Query 域解绑先于 audioWorld/scriptQueryScene 析构（S15 UAF 纪律）。
+        nl::script::audioSetWorld(nullptr);
+        nl::script::querySetScene(nullptr);
         const auto ur = nl::script::ScriptHost::get().unloadScript();
         if (!ur.ok)
             nl::core::log::errorCh("viewer", "script: unloadScript failed: ", ur.message);

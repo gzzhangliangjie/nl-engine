@@ -15377,6 +15377,219 @@
      "script": "example/sprite2d/run.bat verify"
     }
    ]
+  },
+  {
+   "id": "m-w2a-audio",
+   "label": "M-W2A·Audio",
+   "name": "波 2 绑定域：Audio 域（播放/控制/监听 6 导出）",
+   "tag": "m-w2a-audio",
+   "date": "2026-11-15",
+   "summary": "M-W2A 三域第一段（docs/script-api/WAVE2-PLAN.md §5.1，M-SC9 既定行落地）：audioSetWorld 注入点（ecsSetWorld 模式推广，不隐式建表）+ audioPlay 复合链（createSource->configure->setSourcePosition->start，M-S3 audio.play console 同款）+ audioStop/SetGain/SetSourcePosition/SetListenerPose/IsPlaying；wavPath = assets/audio basename 白名单（AssetName 单源防穿越）+ core paths 双层解析（不依赖 cwd）；viewer scene 模式 --script 装载段 ensureAudioWorld() 注入（设备失败降级 offline）；selftest s16：offline AudioWorld 注入 → C# 播放复合链全锚 + 负向（白名单拒绝/缺文件 SourceFailed/未知句柄 Invalid）+ 解绑 NoWorld 全族；换载钩子（scriptUnregisterAll 内 animReleaseAll）对 Audio 宿主绑定无损（s18c 复验）。",
+   "acceptance": [
+    "s16a BoundProbe 12 断言：播放复合链 id>0 + 播放态真 + 播放中增益/位置/监听者控制 + 停止翻假 + 白名单/缺文件/未知句柄负向",
+    "s16b UnboundProbe 6 断言：audioSetWorld(nullptr) 后全族 NoWorld（不隐式建表）",
+    "双后端 BUILD OK + selftest 14 目录全参 PASS + ctest 176/176",
+    "交代物：展示台 tool 卡（usage/正向/负向）+ 真实 stdout 证据图 + run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nl-script.exe",
+    "vulkan": "build/vulkan/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数（退出码 2 = 用法错误）",
+     "kind": "tool",
+     "note": "nl-script 无参数启动打印 usage 退出 2（0=PASS / 1=fail / 2=usage 约定，与展示台 expectExit 对齐）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nl-script -- C# hosting selftest tool (nl::script, A-class track)",
+     "command": "nl-script",
+     "cwd": "{root}"
+    },
+    {
+     "id": "audio-selftest",
+     "name": "selftest s16 节：C# 探针全锚（正向）",
+     "kind": "tool",
+     "note": "位置参数目录齐套（12 目录）；s16 BoundProbe/UnboundProbe 全锚 + 未绑失效安全。导出集 54→72（M-W2A 三域 18 op）。",
+     "args": [
+      "selftest",
+      "script/examples/hello",
+      "script/examples/console",
+      "script/examples/ecs",
+      "script/bootstrap",
+      "script/examples/timeinput",
+      "script/examples/camera",
+      "script/examples/model",
+      "script/examples/drive",
+      "script/examples/props",
+      "script/examples/mouse",
+      "script/examples/gamepad",
+      "script/examples/audio"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS (0 failures)",
+     "command": "nl-script selftest script/examples/hello ... script/examples/audio（12 目录全参）",
+     "cwd": "{root}"
+    },
+    {
+     "id": "negative",
+     "name": "负向：工程目录不存在（dotnet build 失败显式退出 1）",
+     "kind": "tool",
+     "note": "selftest 前置 dotnet build 对不存在目录显式失败（MSB1009），不许静默假成功。",
+     "args": [
+      "selftest",
+      "example/m-w2a-audio/no-such-dir"
+     ],
+     "expectExit": 1,
+     "expectLog": "dotnet build failed (exit 1)",
+     "command": "nl-script selftest <missing-dir>",
+     "cwd": "{root}"
+    }
+   ]
+  },
+  {
+   "id": "m-w2a-query",
+   "label": "M-W2A·Query",
+   "name": "波 2 绑定域：Physics 查询域（raycast/sweep/overlap 5 导出）",
+   "tag": "m-w2a-query",
+   "date": "2026-11-15",
+   "summary": "M-W2A 三域第二段（WAVE2-PLAN §5.2）：querySetScene 注入点绑 M-PQ0 QueryScene 探针世界（**确定性夹具查询，非 viewer 现役物理世界——live 化属 M-PQ1**）；queryRaycast/querySweep/queryOverlap/queryOverlapHitAt/queryBodyCount 追加到既有 Physics 域尾部；多命中 = count + C++ 静态表「下次同线程调用前有效」容器协议（maxHits 截断）；validate*Query 先过（零向量/shapeKind 越界/maxT<=0 显式 BadArg）；selftest s17：夹具注入 → floor 竖直射线（distance=5/fraction=0.05/layer=0/owner \"FLOOR\" 逐位锚）+ 层屏蔽 + 球扫掠命中 boxA（owner \"BOXA\"）+ 同位重叠容器读回 + 万次级串往返 + 负向（零向量/shapeKind=9/maxHits=0）+ 解绑 NoScene 全族。",
+   "acceptance": [
+    "s17a BoundProbe 19 断言：三族查询逐位锚（层/owner/fraction/distance/point/normal）+ 容器协议 + 万次串往返零漂移",
+    "s17b UnboundProbe 5 断言：querySetScene(nullptr) 后全族 NoScene",
+    "边界写死：GUIDE/API.md 明示夹具查询非场景查询",
+    "交代物：展示台 tool 卡 + 真实 stdout 证据图 + run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nl-script.exe",
+    "vulkan": "build/vulkan/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数（退出码 2 = 用法错误）",
+     "kind": "tool",
+     "note": "nl-script 无参数启动打印 usage 退出 2（0=PASS / 1=fail / 2=usage 约定，与展示台 expectExit 对齐）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nl-script -- C# hosting selftest tool (nl::script, A-class track)",
+     "command": "nl-script",
+     "cwd": "{root}"
+    },
+    {
+     "id": "query-selftest",
+     "name": "selftest s17 节：C# 探针全锚（正向）",
+     "kind": "tool",
+     "note": "位置参数目录齐套（13 目录）；s17 BoundProbe/UnboundProbe 全锚 + 未绑失效安全。导出集 54→72（M-W2A 三域 18 op）。",
+     "args": [
+      "selftest",
+      "script/examples/hello",
+      "script/examples/console",
+      "script/examples/ecs",
+      "script/bootstrap",
+      "script/examples/timeinput",
+      "script/examples/camera",
+      "script/examples/model",
+      "script/examples/drive",
+      "script/examples/props",
+      "script/examples/mouse",
+      "script/examples/gamepad",
+      "script/examples/audio",
+      "script/examples/query"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS (0 failures)",
+     "command": "nl-script selftest script/examples/hello ... script/examples/query（13 目录全参）",
+     "cwd": "{root}"
+    },
+    {
+     "id": "negative",
+     "name": "负向：工程目录不存在（dotnet build 失败显式退出 1）",
+     "kind": "tool",
+     "note": "selftest 前置 dotnet build 对不存在目录显式失败（MSB1009），不许静默假成功。",
+     "args": [
+      "selftest",
+      "example/m-w2a-query/no-such-dir"
+     ],
+     "expectExit": 1,
+     "expectLog": "dotnet build failed (exit 1)",
+     "command": "nl-script selftest <missing-dir>",
+     "cwd": "{root}"
+    }
+   ]
+  },
+  {
+   "id": "m-w2a-anim",
+   "label": "M-W2A·Anim",
+   "name": "波 2 绑定域：Animation 薄面句柄表（7 导出）",
+   "tag": "m-w2a-anim",
+   "date": "2026-11-15",
+   "summary": "M-W2A 三域第三段（WAVE2-PLAN §5.3 薄面）：core/src/script/AnimInstances 私有句柄表（**nl/anim 公开面零改动**——transitionTo 保持 private，转移走 C++ 侧预置规则 lambda + 脚本标量参数，std::function 不过 blittable 边界）；animLoadClip（loadGltfAnim + assets/models basename 白名单）/animCreateStateMachine（clipIds+规则表调用期拷走，判据 params[idx]>=threshold，声明序=优先级）/animSetParam/animTick（update+evaluate 缓存最近 pose）/animGetPose（tx ty tz qx qy qz qw）/animStateInfo/animRelease（clip/sm 单源发号双态擦除）；热更钩子 = scriptUnregisterAll 内 animReleaseAll（换载前置空 + 发号器重置，句柄失效安全）；selftest s18：参数驱动转移（0->1 alpha 当帧从 0 起）+ pose 手算锚（hip 平移 y=1）+ 万次 Tick + GC.Collect 句柄漂移断言 + 换载钩子段（Audio/Query 宿主绑定跨换载无损 + 旧句柄清空）。",
+   "acceptance": [
+    "s18a BoundProbe 30 断言：加载/建状态机/参数驱动转移时序/pose 手算锚/显式回收/GC 句柄漂移",
+    "s18b UnboundProbe 7 断言：无效句柄全族失效安全拒绝",
+    "s18c/d 换载钩子：Seed(句柄1/2)→scriptUnregisterAll→Audio/Query 全链探针照常过（宿主绑定无损）+ 旧句柄失效 + 发号器重置",
+    "交代物：展示台 tool 卡 + 真实 stdout 证据图 + run.bat ALL GREEN"
+   ],
+   "exe": {
+    "dx12": "build/dx12/nl-script.exe",
+    "vulkan": "build/vulkan/nl-script.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：无参数（退出码 2 = 用法错误）",
+     "kind": "tool",
+     "note": "nl-script 无参数启动打印 usage 退出 2（0=PASS / 1=fail / 2=usage 约定，与展示台 expectExit 对齐）。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "nl-script -- C# hosting selftest tool (nl::script, A-class track)",
+     "command": "nl-script",
+     "cwd": "{root}"
+    },
+    {
+     "id": "anim-selftest",
+     "name": "selftest s18 节：C# 探针全锚（正向）",
+     "kind": "tool",
+     "note": "位置参数目录齐套（14 目录）；s18 BoundProbe/UnboundProbe 全锚 + 未绑失效安全。导出集 54→72（M-W2A 三域 18 op）。",
+     "args": [
+      "selftest",
+      "script/examples/hello",
+      "script/examples/console",
+      "script/examples/ecs",
+      "script/bootstrap",
+      "script/examples/timeinput",
+      "script/examples/camera",
+      "script/examples/model",
+      "script/examples/drive",
+      "script/examples/props",
+      "script/examples/mouse",
+      "script/examples/gamepad",
+      "script/examples/audio",
+      "script/examples/query",
+      "script/examples/anim"
+     ],
+     "expectExit": 0,
+     "expectLog": "nl-script selftest: PASS (0 failures)",
+     "command": "nl-script selftest script/examples/hello ... script/examples/anim（14 目录全参）",
+     "cwd": "{root}"
+    },
+    {
+     "id": "negative",
+     "name": "负向：工程目录不存在（dotnet build 失败显式退出 1）",
+     "kind": "tool",
+     "note": "selftest 前置 dotnet build 对不存在目录显式失败（MSB1009），不许静默假成功。",
+     "args": [
+      "selftest",
+      "example/m-w2a-anim/no-such-dir"
+     ],
+     "expectExit": 1,
+     "expectLog": "dotnet build failed (exit 1)",
+     "command": "nl-script selftest <missing-dir>",
+     "cwd": "{root}"
+    }
+   ]
   }
  ]
 }

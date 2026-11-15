@@ -139,6 +139,42 @@ struct ApiTable
     void* inputGamepadAxis;
     // Input.inputTextPop — 单码点弹出（window consumeTextChars 队列；-1 = 空）。宿主须 inputSetWindow 绑 Window（viewer scene 模式接线；nl-script selftest 只验 NoSource 负向——无窗口）。rc：0=ok（codepoint 有效）/ 1=未绑 Window / 0 且 -1 = 队列空（正常空帧）
     void* inputTextPop;
+    // Audio.audioPlay — 加载并播放一个 WAV（PCM16；离线/实时路径由宿主 AudioWorld 决定）。wavPath = assets/audio 下文件名（白名单拒绝 = rc4）。rc：0=ok（sourceId>0）/ 1=未绑 AudioWorld / 3=createSource 或文件失败（error 细节走 script 日志通道） / 4=非法参数（路径白名单拒绝 / pos 指针 NULL）
+    void* audioPlay;
+    // Audio.audioStop — 停止声源（stopSource；源保留可复用）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数
+    void* audioStop;
+    // Audio.audioSetGain — 写声源增益（configureSource 保持既有 looping；gain 非有限 = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数
+    void* audioSetGain;
+    // Audio.audioSetSourcePosition — 写声源空间位置（setSourcePosition；需宿主 AudioWorld 开 spatialization，未开 = rc2 照实回）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效或 AudioWorld 拒绝 / 4=非法参数
+    void* audioSetSourcePosition;
+    // Audio.audioSetListenerPose — 写监听者位姿（setListenerPosition + setListenerDirection；任一指针 NULL = rc4）。rc：0=ok / 1=未绑 AudioWorld / 2=AudioWorld 拒绝 / 4=非法参数
+    void* audioSetListenerPose;
+    // Audio.audioIsPlaying — 播放态读回（isPlaying 0|1）。rc：0=ok / 1=未绑 AudioWorld / 2=句柄无效 / 4=非法参数
+    void* audioIsPlaying;
+    // Physics.queryRaycast — 射线查询（dir 须单位长，单命中；hit 0|1；out 指针 NULL = 跳过该字段）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（零向量/非有限值/maxT<=0——validateRayQuery 先过）
+    void* queryRaycast;
+    // Physics.querySweep — 形状扫掠（单命中；shapeKind 见域头；hit 0|1）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数（shapeKind 越界 / dims 非法——validateSweepQuery 先过）
+    void* querySweep;
+    // Physics.queryOverlap — 形状重叠查询（多命中收静态表，count = min(命中数, maxHits)；maxHits==0 = rc4；命中经 queryOverlapHitAt 逐条读回）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数
+    void* queryOverlap;
+    // Physics.queryOverlapHitAt — 读回静态表第 index 条命中（0 起；表清空时机 = 下一次同线程 query* 调用前）。rc：0=ok / 1=未绑 QueryScene / 2=索引越界或表空 / 4=非法参数
+    void* queryOverlapHitAt;
+    // Physics.queryBodyCount — 夹具世界刚体数读回（fixture 5 体）。rc：0=ok / 1=未绑 QueryScene / 3=build 未就绪 / 4=非法参数
+    void* queryBodyCount;
+    // Anim.animLoadClip — 加载 glTF 动画 clip（loadGltfAnim 全量后按 clipIndex 取一条；clipId >0 有效）。error = 静态缓冲「下次同线程调用前有效」（加载失败细节）。rc：0=ok / 2=加载或校验失败（validateClip/loadGltfAnim error 文本）/ 4=非法参数（clipIndex 越界）/ 5=路径白名单拒绝
+    void* animLoadClip;
+    // Anim.animCreateStateMachine — 用已加载 clip 建单层状态机（states 自动命名；规则表驱动优先级转移；smId >0 有效）。rc：0=ok / 1=clip 句柄无效 / 3=状态机 desc 校验失败（validateStateMachine） / 4=非法参数（count<=0 / 数组指针 NULL / ruleCount<0）
+    void* animCreateStateMachine;
+    // Anim.animSetParam — 写状态机标量参数（转移判据输入；idx 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数
+    void* animSetParam;
+    // Anim.animTick — 推进状态机（update(dt, params) + evaluate 缓存最近 pose；dt 非有限按 0——nl/anim 护栏口径）。rc：0=ok / 1=句柄无效 / 4=非法参数
+    void* animTick;
+    // Anim.animGetPose — 读回最近缓存姿态单骨骼（translation xyz + quat xyzw；boneIndex 越界 = rc4）。rc：0=ok / 1=句柄无效 / 4=非法参数
+    void* animGetPose;
+    // Anim.animStateInfo — 状态机观测读回（current=当前态下标 / alpha=转移目标权重（未转移=1）/ duration=当前 crossfade 生效时长（未转移=0））。rc：0=ok / 1=句柄无效 / 4=非法参数
+    void* animStateInfo;
+    // Anim.animRelease — 显式回收句柄（clip 或状态机同表发号，双态擦除；未知 = rc1 失效安全）。rc：0=ok / 1=句柄无效 / 4=非法参数
+    void* animRelease;
 };
 
 } // namespace nl::script

@@ -1,0 +1,10 @@
+nl-script -- C# hosting selftest tool (nl::script, A-class track)
+usage:
+  nl-script check <projectDir>                       compile only (dotnet build)
+  nl-script run <projectDir> [--args <s>] [--api] [--type <ns.Class, Assembly>]
+             --api passes ApiTable* to Entry (console-binding scripts)
+  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]
+                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]
+                    [driveProjectDir] [propsProjectDir] [mouseProjectDir] [gamepadProjectDir]
+                    [audioProjectDir] [queryProjectDir] [animProjectDir]  full machine-checked acceptance
+exit codes: 0=PASS / 1=fail / 2=usage
