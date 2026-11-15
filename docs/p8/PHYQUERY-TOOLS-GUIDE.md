@@ -110,3 +110,35 @@ example\phys-query\run.bat
 `server.py --check` 退出 0（只覆盖 `S8.2` 旧卡）；`regression.py --only phys-query`
 实测 **8/8 ALL GREEN**（4 卡 × 双后端，bytes 8 / FAIL 0，2s），不手绘示意、
 不复用其他版本截图。
+
+## M-PQ1：查询接 live DebugScene（2026-11-16 归档）
+
+冻结口径 `docs/p8/PQ1-PLAN.md`（方案 A：引用 + 动态体）。核心面：
+
+- **QueryHost 内部桥**（`core/src/physics/QueryHost.hpp`，非公开）：最终只有
+  `void* system()` 一个方法——落码时确认 narrowphase 查询过滤与仿真 layer
+  matrix 正交，冻结草案里的 matrix filter 传递不需要。`DebugScene::Impl`
+  实现之（scenario 1 CharacterHarness 独立 system 不暴露，挂账 M-PQ2）。
+- **QueryScene 双模式**：`attach(host)` 后查询与注册全走 `activeSystem()`
+  （live 优先、fixture 兜底）；`detach()` 回未初始化态可 re-attach。fixture
+  六数值锚逐位保形（ctest 176/176 ×2 实证）。slot API（`bodyIdBySlot` /
+  `bodyCount`）语义仅 fixture——attach 模式恒 0。
+- **动态体注册**：`registerBody`（Static 体 + userData=owner，attached 模式写
+  共享 live system，**live 世界绝不 OptimizeBroadPhase**）+ `unregisterBody`
+  （tombstone 句柄不复用，双重注销返回 false）。
+- **viewer 注入**：runNormal `--physics-debug --physics-scenario 2` + `--script`
+  时 `QueryScene::attach(physicsScene.queryHost())` → `querySetScene(&qs)`；
+  `scriptQueryLive` 声明序先于 `physicsScene` 析构（S15 纪律），收尾解绑点在
+  `driveSetScene(nullptr)` 旁。绑定面 `querySetScene` 签名零改动。
+- **验收口径 = 结构断言**（`phys-tools query-live [--frames N]`，缺省 90）：
+  ray down hit kFloor / ray up miss / overlap ≥1 且 bodyId 升序含
+  floor+course / registerBody by owner 命中、非法层 -1、双重注销 false、
+  注销后透落地板 / detach 后 inert / re-attach 可用，共 21 条。**fraction 与
+  坐标不进锚**——live 世界动态体状态不是字节稳定锚。
+- **展示台**：`example/phys-query-pq1/run.bat`（live=0 / usage=2）+
+  cases.json `phys-query-pq1` 卡 4 用例（`--only` 8/8 ALL GREEN）；
+  selftest 内嵌 PQ1 live 节（与 CLI 同一 `checkQueryLive(90)`）。
+- **踩坑**：① cmake generate 阶段挂死新形态（"Configuring done" 后空转、
+  无 nmake/cl 进程、CPU 4s 不动）——杀 cmake 进程后 bat 链内 nmake 自动恢复，
+  两树各中一次；② viewer 注入块作用域：QueryScene 须与 physicsScene 同级
+  声明，收尾解绑在更外层作用域时局部声明会撞析构序。

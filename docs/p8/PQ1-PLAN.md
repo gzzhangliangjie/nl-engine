@@ -95,3 +95,23 @@ MILESTONES 四栏、tag `phys-query-pq1`。
 CharacterHarness（scenario 1 独立 PhysicsSystem）的查询挂接、动态体注册的
 Kinematic 变体、querySetScene 与 driveSetScene 的联合注入旗标化（当前隐含
 scenario 2 + script 同时启用才注入 live）。
+
+## 6. 实施记录（2026-11-15/16 收口回填）
+
+- **设计简化（落码时确认）**：§2.1 的 `layerFromMask` / `broadPhaseLayerFilter()` /
+  `objectLayerPairFilter()` 三个桥方法**不需要**——narrowphase 查询过滤与仿真
+  layer matrix 正交，用户 mask filter（QueryLayerFilter）即可表达意图；
+  QueryHost 最终只有一个 `void* system()`。桥面比冻结草案更薄，语义不变。
+- **交付对账**：QueryHost.hpp / query.hpp（attach/detach/registerBody/
+  unregisterBody）/ World.hpp（queryHost()）/ Query.cpp + World.cpp /
+  phys-tools（`query-live` CLI + selftest 内嵌段，同一 `checkQueryLive(90)`）/
+  viewer runNormal scenario2+script 注入（`scriptQueryLive` 声明序先于
+  `physicsScene` 析构）全部落地；`example/phys-query-pq1/run.bat` +
+  cases.json `phys-query-pq1` 卡（4 用例）。
+- **验收**：双后端 BUILD OK（errors=0）；M-PQ0 fixture 六数值锚 ctest 全绿
+  176/176 ×2（保形实证）；`query-live` 结构断言 21 条全绿 ×2；run.bat
+  live=0 / usage=2；`--only` 新卡 + phys-p0 保形冒烟全绿；`server.py --check` 0。
+- **坑**：① viewer 注入点 `QueryScene scriptQueryLive` 不能声明在 drive 段
+  作用域内（`driveSetScene(nullptr)` 收尾解绑点在更外层），提到
+  `physicsScene` 声明同级保证析构序；② `checkQueryLive` 里 forward decl
+  需带 `int` 返回类型进 phys-tools 顶部声明区（selftest 在文件前部）。

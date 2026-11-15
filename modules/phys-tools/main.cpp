@@ -64,6 +64,7 @@ bool g_verbose  = false;
 struct QueryRow;
 bool buildQueryRows(std::vector<QueryRow>* rows, std::string* err);
 void checkQueryRows(const std::vector<QueryRow>& rows, const char* tag);
+int  checkQueryLive(int frames);   // M-PQ1 live DebugScene structural check
 
 void verboseOk(const char* what) {
     if (g_verbose) std::printf("  ok %s\n", what);
@@ -99,6 +100,7 @@ void usage() {
     std::printf("  phys-tools drive-check <tsv>\n");
     std::printf("  phys-tools query-trace [--out <tsv>]  (M-PQ0 raycast/sweep/overlap six anchors)\n");
     std::printf("  phys-tools query-check <tsv>\n");
+    std::printf("  phys-tools query-live [--frames N]  (M-PQ1 live DebugScene structural anchors)\n");
     std::printf("exit: 0=PASS 1=FAIL 2=usage error\n");
 }
 
@@ -2753,6 +2755,9 @@ int runSelftest() {
         }
     }
 
+    // ---- M-PQ1: live DebugScene query (same structural check as CLI) ----
+    if (checkQueryLive(90) != 0) ++g_failures;
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
@@ -3099,6 +3104,117 @@ int runQueryCheck(const char* path) {
     return 0;
 }
 
+// ---- M-PQ1: live DebugScene query (structural anchors, no numeric TSV) -----
+// PQ1-PLAN §3: attach a scenario-2 DebugScene, step a fixed number of frames,
+// then verify STRUCTURE only (hit/layer/owner/count/sort). Fractions and hit
+// coordinates are deliberately NOT anchored -- the live world's dynamic-body
+// state is not a byte-stable anchor. Fixture anchors (M-PQ0) stay untouched.
+int checkQueryLive(int frames) {
+    const int before = g_failures;
+    std::string err;
+
+    nl::physics::DebugScene scene;
+    expectTrue(scene.build(2, 0, &err), "M-PQ1 live scene scenario 2 builds");
+
+    nl::physics::QueryScene qs;
+    expectTrue(!qs.ready(), "M-PQ1 fresh QueryScene not ready before attach");
+    expectTrue(qs.attach(scene.queryHost(), &err), "M-PQ1 attach to live scene");
+    expectTrue(qs.ready(), "M-PQ1 QueryScene ready after attach");
+    // Slot API is fixture-only: attach mode has no fixture table (PLAN ⑤).
+    expectTrue(qs.bodyIdBySlot(0) == 0u, "M-PQ1 attach mode bodyIdBySlot = 0");
+    expectTrue(qs.bodyCount() == 0u, "M-PQ1 attach mode bodyCount = 0");
+
+    for (int i = 0; i < frames; ++i) scene.step(kDebugDt);
+
+    // 1: ray down at x=-10, z=0 (clear of markers / vehicle / wall) -> floor.
+    nl::physics::RayQuery ray;
+    ray.origin    = { -10.0f, 5.0f, 0.0f };
+    ray.direction = { 0.0f, -1.0f, 0.0f };
+    ray.maxT      = 50.0f;
+    const nl::physics::QueryHit down = qs.raycast(ray);
+    expectTrue(down.hit, "M-PQ1 live ray down hits floor");
+    if (down.hit)
+        expectTrue(down.layer == nl::physics::layers::kFloor,
+                   "M-PQ1 live ray down layer = kFloor");
+
+    // 2: ray up from just above the floor -- nothing above that spot.
+    ray.origin    = { -10.0f, 0.5f, 0.0f };
+    ray.direction = { 0.0f, 1.0f, 0.0f };
+    expectTrue(!qs.raycast(ray).hit, "M-PQ1 live ray up misses");
+
+    // 3: big slab over the course overlaps static course geometry (>=1);
+    //    same collector contract as the fixture: sorted ascending by bodyId.
+    nl::physics::OverlapQuery overlap;
+    overlap.shape.kind   = nl::physics::ShapeDesc::Box;
+    overlap.shape.dims[0] = 40.0f;
+    overlap.shape.dims[1] = 4.0f;
+    overlap.shape.dims[2] = 40.0f;
+    overlap.position     = { 0.0f, 2.0f, 9.0f };
+    const std::vector<nl::physics::QueryHit> hits = qs.overlap(overlap, 64);
+    expectTrue(hits.size() >= 1, "M-PQ1 live overlap >= 1 body");
+    bool asc = true;
+    bool sawFloor = false, sawCourse = false;
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        if (i > 0 && hits[i].bodyId <= hits[i - 1].bodyId) asc = false;
+        if (hits[i].layer == nl::physics::layers::kFloor)   sawFloor  = true;
+        if (hits[i].layer == nl::physics::layers::kDefault) sawCourse = true;
+    }
+    expectTrue(asc, "M-PQ1 live overlap sorted ascending by bodyId");
+    expectTrue(sawFloor && sawCourse, "M-PQ1 live overlap sees floor + course layers");
+
+    // 4: dynamic registration into the shared live system (PLAN ④).
+    const std::uint64_t kProbeOwner = 0xA11CEull;
+    nl::physics::ShapeDesc probe;
+    probe.kind    = nl::physics::ShapeDesc::Sphere;
+    probe.dims[0] = 0.5f;
+    const float pos[3]  = { -10.0f, 5.0f, 10.0f };
+    const float quat[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    const int h1 = qs.registerBody(probe, pos, quat, nl::physics::layers::kDefault,
+                                   kProbeOwner, &err);
+    expectTrue(h1 >= 0, "M-PQ1 registerBody returns handle >= 0");
+    ray.origin    = { -10.0f, 6.0f, 10.0f };
+    ray.direction = { 0.0f, -1.0f, 0.0f };
+    ray.maxT      = 20.0f;
+    ray.filter.layerMask = 0x0Fu;
+    const nl::physics::QueryHit probeHit = qs.raycast(ray);
+    expectTrue(probeHit.hit && probeHit.owner == kProbeOwner,
+               "M-PQ1 raycast finds registered body by owner");
+    int hBad = qs.registerBody(probe, pos, quat, 99u, kProbeOwner, &err);
+    expectTrue(hBad == -1, "M-PQ1 registerBody rejects out-of-range layer");
+    expectTrue(qs.unregisterBody(h1), "M-PQ1 unregisterBody returns true");
+    expectTrue(!qs.unregisterBody(h1), "M-PQ1 double unregister = tombstone false");
+    const nl::physics::QueryHit after = qs.raycast(ray);
+    expectTrue(after.hit && after.layer == nl::physics::layers::kFloor,
+               "M-PQ1 ray after unregister falls through to floor");
+
+    // 5: detach re-arms the QueryScene; attach to a second live scene works.
+    qs.detach();
+    expectTrue(!qs.ready(), "M-PQ1 detach clears ready");
+    expectTrue(!qs.raycast(ray).hit, "M-PQ1 queries inert after detach");
+    nl::physics::DebugScene scene2;
+    expectTrue(scene2.build(2, 0, &err), "M-PQ1 second live scene builds");
+    expectTrue(qs.attach(scene2.queryHost(), &err), "M-PQ1 re-attach to new scene");
+    ray.origin = { -10.0f, 5.0f, 0.0f };
+    expectTrue(qs.raycast(ray).hit, "M-PQ1 query works after re-attach");
+
+    const int failures = g_failures - before;
+    std::printf("phys-pq1 query-live: %s (%d frames, %d checks failed)\n",
+                failures ? "FAIL" : "PASS", frames, failures);
+    return failures ? 1 : 0;
+}
+
+int runQueryLive(int argc, char** argv) {
+    int frames = 90;   // PLAN §3: 90 fixed-step frames before querying
+    for (int i = 2; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (key == "--frames" && i + 1 < argc) {
+            frames = std::atoi(argv[++i]);
+            if (frames <= 0) { std::printf("invalid arguments: bad --frames\n"); return 2; }
+        } else { usage(); return 2; }
+    }
+    return checkQueryLive(frames);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3157,6 +3273,7 @@ int main(int argc, char** argv) {
         if (argc != 3) { usage(); return 2; }
         return runQueryCheck(argv[2]);
     }
+    if (cmd == "query-live") return runQueryLive(argc, argv);
     usage();
     return 2;
 }

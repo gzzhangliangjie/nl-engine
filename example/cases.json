@@ -15670,6 +15670,76 @@
      "script": "example/sprite-m1/run.bat scene"
     }
    ]
+  },
+  {
+   "id": "phys-query-pq1",
+   "label": "P8 M-PQ1",
+   "name": "物理查询接 live DebugScene（QueryScene attach + 动态体注册）",
+   "tag": "phys-query-pq1",
+   "date": "2026-11-15",
+   "summary": "M-PQ0 确定性夹具查询世界升级为可选挂接 live DebugScene 主物理世界（方案 A 拍板）。QueryHost 内部桥（core/src/physics/QueryHost.hpp，DebugScene::Impl 实现，公开头零 Jolt）+ QueryScene::attach/detach 双模式（查询与注册全走 activeSystem，fixture 六数值锚逐位保形）+ registerBody/unregisterBody（tombstone 句柄，attached 模式写共享 live system）+ viewer runNormal scenario2+script 时 live 注入（S15 析构序纪律，绑定面 querySetScene 签名零改动）。设计简化确认：narrowphase 查询过滤与仿真 layer matrix 正交，桥只需 system 指针。验收口径 = 结构断言（hit/layer/owner/count/序），fraction 不进锚。",
+   "acceptance": [
+    "M-PQ0 fixture 六数值锚 ctest 全绿（保形）；双后端 BUILD OK",
+    "query-live 结构断言全绿：ray down hit kFloor / ray up miss / overlap >=1 且 bodyId 升序含 floor+course / registerBody by owner 命中、非法层 -1、双重注销 false、注销后透落地板 / detach 后 inert / re-attach 可用",
+    "selftest 内嵌 PQ1 live 段与 CLI 同一套 checkQueryLive",
+    "绑定面 exports.api 零改动（gen.py --check 不适用）；kStage 不 bump"
+   ],
+   "exe": {
+    "dx12": "build/dx12/phys-tools.exe",
+    "vulkan": "build/vulkan/phys-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage（含 query-live 行）退出 2。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools"
+    },
+    {
+     "id": "query-live",
+     "name": "query-live：live DebugScene 结构断言（90 帧）",
+     "kind": "tool",
+     "note": "build scenario 2 -> step 90 固定帧 -> attach 后五组结构断言（PLAN §3 ①~⑤）。fraction 不进锚。",
+     "args": [
+      "query-live",
+      "--frames",
+      "90"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-pq1 query-live: PASS",
+     "command": "phys-tools query-live --frames 90"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：全段断言（含 M-PQ1 live 节）",
+     "kind": "tool",
+     "note": "in-process 同一套 checkQueryLive(90)，输出含 phys-pq1 query-live: PASS 行。",
+     "args": [
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "phys-p0 selftest: PASS",
+     "command": "phys-tools selftest --verbose"
+    },
+    {
+     "id": "negative",
+     "name": "negative：未知旗标退出码 2",
+     "kind": "tool",
+     "note": "query-live --bogus 走 usage() 退出 2。",
+     "args": [
+      "query-live",
+      "--bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "phys-tools - nl-engine P8 physics tools",
+     "command": "phys-tools query-live --bogus"
+    }
+   ]
   }
  ]
 }
