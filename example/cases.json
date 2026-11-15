@@ -15740,6 +15740,85 @@
      "command": "phys-tools query-live --bogus"
     }
    ]
+  },
+  {
+   "id": "cov-m0",
+   "label": "M-COV0",
+   "name": "shader 静态 coverage manifest 门禁（slangc -trace-coverage，编译期 manifest v2）",
+   "tag": "cov-m0",
+   "date": "2026-11-16",
+   "summary": "M-COV0（C 轨第③项方案 A，2026-11-16 拍板）：tools/check-shader-coverage.py 解析 CMakeLists.txt 的 _ENTRIES_*/文件映射链/_SM66_ARTIFACTS（95 artifacts，逻辑与 uniformity 工具同源），逐 artifact x dxil/spirv 双 target 以 CMake 同源参数跑 slangc -trace-coverage -trace-coverage-boolean，校验编译期吐出的 v2 coverage-manifest.json（format/version/buffer/counter_count/entries 五项），汇总 counter↔源码行映射。实测 dxil/spirv 双 target 均吐 manifest，推翻旧评估「集成最重」——源码行映射由编译器自动化，无需宿主 buffer 读回。产物落 tempfile 自动清理，主构建链/运行时/冻结基线零改动零重拍。旧「宿主插桩读回」仍属范围外，单独拍板。",
+   "acceptance": "run.bat verify 四段 ALL GREEN（selftest 10 断言 / 全量 95 artifacts x2 targets PASS manifests=190 counters=2466 entries=7362 modes=boolean 18.1s / 负向 --only bogus exit 2 / usage --target bogus exit 2）；bat 编码门禁 CRLF+ASCII 达标（156 文件 0 违规）；GPU 侧零改动零重拍。",
+   "exe": {
+    "dx12": "tools/check-shader-coverage.bat",
+    "vulkan": "tools/check-shader-coverage.bat"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：manifest 校验器 + CMake 解析器自测",
+     "kind": "tool",
+     "note": "纯标准库 10 断言：合法 v2 / format 错 / version 错 / counter_count=0 / buffer stride!=8 / entries 空 / 编译 error 捕获 / informational 忽略 / 文件映射链 / _SM66_ARTIFACTS 提取。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "check-shader-coverage selftest: PASS",
+     "command": "check-shader-coverage.bat selftest",
+     "exe": {
+      "dx12": "tools/check-shader-coverage.bat",
+      "vulkan": "tools/check-shader-coverage.bat"
+     }
+    },
+    {
+     "id": "gate",
+     "name": "全量门禁：95 artifacts x dxil+spirv 合法 manifest",
+     "kind": "tool",
+     "note": "解析 CMakeLists（唯一数据源，禁手写清单），逐 artifact 以 CMake 同源参数跑 coverage 插桩并校验 v2 manifest；PASS = 190 manifests 全合法零编译错。",
+     "args": [],
+     "expectExit": 0,
+     "expectLog": "check-shader-coverage: PASS",
+     "command": "check-shader-coverage.bat",
+     "exe": {
+      "dx12": "tools/check-shader-coverage.bat",
+      "vulkan": "tools/check-shader-coverage.bat"
+     }
+    },
+    {
+     "id": "negative",
+     "name": "负向：--only 未知名（exit 2 + 锚）",
+     "kind": "tool",
+     "note": "expectLog 从实测 log 复制：[cov-m0] no artifact matches。",
+     "args": [
+      "--only",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "no artifact matches",
+     "command": "check-shader-coverage.bat --only bogus",
+     "exe": {
+      "dx12": "tools/check-shader-coverage.bat",
+      "vulkan": "tools/check-shader-coverage.bat"
+     }
+    },
+    {
+     "id": "usage",
+     "name": "usage：--target 未知名（exit 2 + 文档头锚）",
+     "kind": "tool",
+     "note": "expectLog 从实测 log 复制（doc 头 M-COV0）。",
+     "args": [
+      "--target",
+      "bogus"
+     ],
+     "expectExit": 2,
+     "expectLog": "M-COV0",
+     "command": "check-shader-coverage.bat --target bogus",
+     "exe": {
+      "dx12": "tools/check-shader-coverage.bat",
+      "vulkan": "tools/check-shader-coverage.bat"
+     }
+    }
+   ]
   }
  ]
 }

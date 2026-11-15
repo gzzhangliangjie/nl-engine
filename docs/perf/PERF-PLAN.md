@@ -20,13 +20,15 @@
 
 | 问 | 结论 |
 |---|---|
-| Q-P1 范围 | **A + B**；C（trace-coverage）挂后续单独拍板 |
+| Q-P1 范围 | **A + B**；C（trace-coverage）2026-11-16 用户拍板方案 A（工具轨），落地为 **M-COV0** / tag `cov-m0` |
 | Q-P2 编号归属 | **M-PERF0（A）→ M-PERF1（B）**，主线 master 直接做、不建 track / 不 claim，tag `perf-m0` / `perf-m1` |
 | Q-P3（A）门禁强度 | uniformity 警告出现 → **FAIL（exit 1）**（现状零警告基线干净，防退化）；非 uniformity 警告（E30081 隐式转换等）→ informational 只报告不挡 |
 | Q-P4（B）pass 清单 | 13 个命名 pass：`csCull`（视锥剔除）/ visRaster（visbuf 簇光栅）/ matResolve（material 反解）/ hizBuild / `csDirect` / `csRefGI` / `csPlace` / `csTraceProbe` / `csGather` / `csFilterTemporal` / `csFilterSpatial` / `csGatherCompose` / mainDraw（非 visbuf 主绘制）。**落码后按实码回写（2026-11-13）**：`--filter-gi-dump` 验收分支替换 compose 不计时；visbuf pulling 无独立 mainDraw（matResolve 即主绘制）；M4.2 `cullTimer_`「剔除+回读」合并口径不动，csCull/hizBuild 为并行的独立细分计时 |
 | Q-P5（B）输出形态 | `--pass-timing` CLI 开关（**默认关**）+ HUD 面板逐 pass 行 + log 可断言锚；零基线扰动（开关关 = 渲染路径零变化，冻结基线 bytes 不动） |
 
-**C 挂后续理由**：`-trace-coverage` 需宿主侧分配/绑定 `__slang_coverage` buffer + 读回 + manifest JSON 映射回源码行，集成最重；插桩字节码与冻结基线不同源，必须隔离成独立模式/产物目录。价值场景真实（死代码/未覆盖分支定位）但不阻塞主线，待单独拍板。
+**C 原挂后续理由（2026-11-13 评估，已过时）**：`-trace-coverage` 需宿主侧分配/绑定 `__slang_coverage` buffer + 读回 + manifest JSON 映射回源码行，集成最重；插桩字节码与冻结基线不同源，必须隔离成独立模式/产物目录。价值场景真实（死代码/未覆盖分支定位）但不阻塞主线。
+
+**C 实锤勘误（2026-11-16，C 轨第③项方案 A 拍板后实测）**：slangc 编译期就吐 `<out>.coverage-manifest.json`（v2：`format`/`version`/`counter_count`/`buffer{name,element_stride,space,binding}`/`entries[]{kind,counter,mode,file,line,start_column}`），源码行↔counter 映射由编译器自动化，最麻烦的映射环节不需要宿主做。实测 dxil/spirv 双 target 均支持，参数同源即可；产物落 `tempfile` 临时目录自动清理，主构建链/运行时/冻结基线零改动。代价从「高」降为「中低」（纯 Python 工具轨）。2026-11-16 用户拍板做工具化（M-COV0）：`tools/check-shader-coverage.py` + 展示台卡 + GUIDE，**不含宿主 buffer 读回运行时插桩**（仍属范围外，见下）。
 
 ## 2. 任务书
 

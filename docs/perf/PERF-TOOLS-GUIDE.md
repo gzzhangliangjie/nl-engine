@@ -79,3 +79,35 @@ python tools/check-perf-m1.py selftest
 ### 已知边界
 - csRefGI 无 run.bat 段（reference 模式帧耗时高），由 cases.json `--mode reference` 手工实证；preset 未含 reference 档。
 - 各 pass 数值异步 1~2 帧延迟（与整帧计时同款）；无空闲槽本帧跳过（4 slot 下实测未见）。
+
+## M-COV0：check-shader-coverage（静态 coverage manifest 门禁）
+
+### 是什么
+`tools/check-shader-coverage.py`（纯标准库）对 CMakeLists.txt 定义的每个 shader artifact（95 个，解析逻辑与 uniformity 工具同源）以 CMake 同源参数跑 `slangc -trace-coverage -trace-coverage-boolean`，dxil/spirv 双 target 各产出 `<out>.coverage-manifest.json`（v2）；校验结构合法性并汇总 counter↔源码行映射。产物落系统 `tempfile` 临时目录自动清理——**主构建链、运行时、冻结基线零改动、零 PNG 重拍**。这是 C 轨第③项方案 A 的工具化落地（2026-11-16 用户拍板），旧「集成最重」评估已被 slang 编译期 manifest 推翻（见 PERF-PLAN §1 C 勘误）。
+
+### 门禁口径
+- 编译 `error[...]` 或无 manifest / manifest JSON 解析失败 -> **FAIL（exit 1）**；
+- `format!='slang-coverage'` / `version!=2` / `buffer.name!='__slang_coverage'` / `element_stride!=8` / `counter_count<=0` / `entries` 空或 counter 越界 -> FAIL；
+- 其余 warning（coverage 插桩常见隐式转换）informational 不挡。
+- 合法 v2 manifest（`counter_count>0` + entry 映射非空 + buffer stride=8）-> PASS。
+
+### 用法
+```
+python tools/check-shader-coverage.py                 # 全量 95×2，exit 0/1
+python tools/check-shader-coverage.py --list          # 只列 artifact 清单
+python tools/check-shader-coverage.py --only cull.cs  # 单 artifact
+python tools/check-shader-coverage.py --target spirv  # dxil|spirv|both（默认 both）
+python tools/check-shader-coverage.py --jobs 4
+python tools/check-shader-coverage.py selftest        # 10 断言
+```
+
+### 实测基线（2026-11-16）
+95 artifacts × dxil+spirv = 190 manifests 全绿；counters=2466 / entries=7362 / modes=boolean；18.1s（--jobs 4）。selftest 10/10；bat 编码门禁 156 文件 0 违规。
+
+### 验收（example/cov-m0/run.bat verify）
+四段 ALL GREEN：selftest / 全量 95×2 PASS / 负向 `--only bogus` exit 2 / usage `--target bogus` exit 2。
+
+### 已知边界
+- 本工具只做**编译期 manifest 校验**，不做运行时 coverage buffer 分配/绑定/读回（宿主侧插桩仍属范围外，要单独拍板）。
+- `-trace-coverage-boolean` 去原子竞争，计数器为布尔型（modes=boolean）；statement/function/branch 三种 slang 模式本工具统一走默认 boolean。
+- 产物用 `tempfile` 隔离自动清理，不落 `build/`；与 uniformity 工具的 `tempfile` 口径一致。
