@@ -36,9 +36,10 @@ set "BUILDDIR=%ROOT%\build\%BACKEND%"
 
 rem M-MOD0: subset build via NL_MODULES env var (semicolon list). Optional %2 =
 rem build dir suffix (e.g. "subset" -> build\DX12-subset) to keep build\<backend>
-rem cache in ALL state. Note: bat files must stay pure ASCII - UTF-8 comments
-rem get misparsed under cmd's ANSI codepage, and semicolon args break when
-rem passed through bash/cmd quote stripping, so env var is the only channel.
+rem cache in ALL state. Note: bat encoding must match the cmd ANSI codepage (GBK
+rem on this machine) - UTF-8 Chinese comments get misparsed; this file is written
+rem by AI tooling (always UTF-8) so it stays ASCII-only. Semicolon args also break
+rem through bash/cmd quote stripping, so env var is the only subset channel.
 set "MODULE_FLAGS="
 if not "%NL_MODULES%"=="" set "MODULE_FLAGS=-DNL_MODULES=%NL_MODULES%"
 set "BUILDDIR=%ROOT%\build\%BACKEND%"
