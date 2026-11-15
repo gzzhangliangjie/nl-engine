@@ -56,7 +56,8 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // M-WAT0 ssr 五入口 ×2 → 128，M-NL0 bloom 三入口 ×2 → 134，M-NL1 godrays 五入口
 // ×2 → 144，M-NL2-C sky_bg 双入口 ×2 增至 148，M14B1 restir 双入口 ×2 → 152，
 // M14C1 adaptive Mark/Spawn 双入口 ×2 → 156，M14C3 csAdaptiveSkyFixup 单入口
-// ×2 增至 158（merge 补登——M14C3 漏登，M8.1 教训第四犯）。）
+// ×2 增至 158（merge 补登——M14C3 漏登，M8.1 教训第四犯）。M-UI0 rmlui 单对
+// 入口 ×2 增至 162（A 类缺省关，产物仍登记——M8.1 口径：新入口必须同步登记）。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -79,6 +80,10 @@ static const Artifact kArtifacts[] = {
     {"hiz.pshizviz", true}, {"hiz.pshizviz", false},
     {"hud.vs", true}, {"hud.vs", false},
     {"hud.ps", true}, {"hud.ps", false},
+    // M-UI0：rmlui.slang 单对入口（vsMain/psMain）× 双目标 = 4（缺省 --rmlui-demo
+    // 关，但产物照常编译进 shaderDir——缺失会让 demo 模式 init 失败）。
+    {"rmlui.vs", true}, {"rmlui.vs", false},
+    {"rmlui.ps", true}, {"rmlui.ps", false},
     // M-P3：debug_line 单管线（vsMain/psMain），各 × spv/dxil = 4
     {"debug_line.vs", true}, {"debug_line.vs", false},
     {"debug_line.ps", true}, {"debug_line.ps", false},
@@ -240,7 +245,9 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                            bool waterEnable,
                                            // M14B1：--mode restir / M14C1：
                                            // --mode probe-adaptive（S14 轨）。
-                                           bool restirMode, bool probeAdaptiveMode) {
+                                           bool restirMode, bool probeAdaptiveMode,
+                                           // M-UI0：--rmlui-demo（RmlUi UI 层，缺省关）。
+                                           bool rmluiMode) {
     std::unique_ptr<Renderer> r(new Renderer());
     // cull 模式（M4.0 GPU vertex pulling）、dag 模式（M5.1 多层遍历）与 hiz 模式
     // （M6.0 = dag + Hi-Z 金字塔）资产同样是 assets/meshlets/ 下的 .nmesh。
@@ -284,7 +291,7 @@ std::unique_ptr<Renderer> Renderer::create(void* nativeWindow, Extent extent,
                                  clusterMode, cullMode, frustumCull, dagMode, skinMode,
                                  hizMode, sceneMode, visbufMode, pullingMode, rtMode,
                                  shadowMode, referenceMode, probeMode, clusterBlas,
-                                 waterEnable, restirMode, probeAdaptiveMode,
+                                 waterEnable, restirMode, probeAdaptiveMode, rmluiMode,
                                  r->impl_->error)) {
         r->impl_->backend.reset();
         if (r->impl_->error.empty()) r->impl_->error = "backend init failed";
@@ -306,7 +313,7 @@ void Renderer::resize(Extent extent) {
 }
 
 bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
-                           const char* screenshotPath, HudFrame* hud) {
+                           const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml) {
     if (!impl_->backend) return false;
     // M9.0：把当帧清屏色带给 Scene（--mode shadow 的空像素写进 rtTarget_，
     // 与 psMatResolve 的 discard 等价）。只做一次 POD 浅拷贝，绝不整块 memcpy
@@ -319,7 +326,8 @@ bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
     bool ok = false;
     {
         NL_PROFILE_ZONE("backend.renderFrame");   // M-TR0：renderer 帧提交关键段
-        ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, impl_->error);
+        ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, rml,
+                                         impl_->error);
     }
     // M4.1：剔除统计（visibleClusters）由 backend 每帧 poll 后更新，回拷进
     // Renderer 缓存的 DeviceInfo，viewer 的 const 引用才能看到最新值。
@@ -329,6 +337,24 @@ bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
 
 int Renderer::drainMessages() {
     return impl_->backend ? impl_->backend->drainMessages() : 0;
+}
+
+// ---- M-UI0：UiSink 落点转发（backend 未启用/未注入时恒失败码，Bindings 回 rc）----
+
+int Renderer::rmlLoadDocument(const char* path) {
+    return impl_->backend ? impl_->backend->rmlLoadDocument(path) : 0;
+}
+bool Renderer::rmlCloseDocument(int handle) {
+    return impl_->backend && impl_->backend->rmlCloseDocument(handle);
+}
+bool Renderer::rmlShowDocument(int handle, bool show) {
+    return impl_->backend && impl_->backend->rmlShowDocument(handle, show);
+}
+bool Renderer::rmlElementSetText(int handle, const char* elId, const char* text) {
+    return impl_->backend && impl_->backend->rmlElementSetText(handle, elId, text);
+}
+bool Renderer::rmlElementGetText(int handle, const char* elId, const char** outText) {
+    return impl_->backend && impl_->backend->rmlElementGetText(handle, elId, outText);
 }
 
 bool Renderer::setLodLevel(int level) {

@@ -568,6 +568,82 @@ extern "C" int nl_propsDescAdd(int kind, const char* name, float min, float max,
     return kPropsOk;
 }
 
+// ---- M-UI0 Ui 域装配点（UiSink + 事件回调；Bindings.hpp 口径）----
+//
+// g_uiSink 由 viewer --rmlui-demo 时注入（Renderer 转发 RmlUiBackend）；nullptr =
+// 解绑，Ui 导出回 kUiNoSource。g_uiEventFn = C# reverse P/Invoke 函数指针
+//（consoleRegister 同款保活随 ALC 回收）；消费方（renderer 的 RmlUiBackend）每次
+// 事件触发时经 uiEventFn() 现取——C++ 侧不缓存托管可回收指针（热重载窗口兜底）。
+
+namespace {
+
+UiSink* g_uiSink = nullptr;
+UiEventFn g_uiEventFn = nullptr;
+
+} // namespace
+
+void uiSetSink(UiSink* sink) {
+    g_uiSink = sink;
+}
+
+UiSink* uiSink() {
+    return g_uiSink;
+}
+
+void uiSetEventFn(UiEventFn fn) {
+    g_uiEventFn = fn;
+}
+
+UiEventFn uiEventFn() {
+    return g_uiEventFn;
+}
+
+extern "C" int nl_uiLoadDocument(const char* path, int* handle) {
+    if (path == nullptr || path[0] == '\0') return kUiBadArg;
+    UiSink* sink = g_uiSink;
+    if (sink == nullptr) return kUiNoSource;
+    const int h = sink->loadDocument(path);
+    if (handle) *handle = h;
+    return h > 0 ? kUiOk : kUiInvalid;
+}
+
+extern "C" int nl_uiCloseDocument(int handle) {
+    UiSink* sink = g_uiSink;
+    if (sink == nullptr) return kUiNoSource;
+    if (!sink->closeDocument(handle)) return kUiInvalid;
+    return kUiOk;
+}
+
+extern "C" int nl_uiShowDocument(int handle, int show) {
+    UiSink* sink = g_uiSink;
+    if (sink == nullptr) return kUiNoSource;
+    if (!sink->showDocument(handle, show != 0)) return kUiInvalid;
+    return kUiOk;
+}
+
+extern "C" int nl_uiElementSetText(int handle, const char* elId, const char* text) {
+    if (elId == nullptr || elId[0] == '\0' || text == nullptr) return kUiBadArg;
+    UiSink* sink = g_uiSink;
+    if (sink == nullptr) return kUiNoSource;
+    if (!sink->elementSetText(handle, elId, text)) return kUiInvalid;
+    return kUiOk;
+}
+
+extern "C" int nl_uiElementGetText(int handle, const char* elId, const char** text) {
+    if (elId == nullptr || elId[0] == '\0' || text == nullptr) return kUiBadArg;
+    UiSink* sink = g_uiSink;
+    if (sink == nullptr) return kUiNoSource;
+    if (!sink->elementGetText(handle, elId, text)) return kUiInvalid;
+    return kUiOk;
+}
+
+extern "C" int nl_uiSetEventCallback(void* fn) {
+    if (fn == nullptr) return kUiBadArg;
+    if (g_uiSink == nullptr) return kUiNoSource;
+    uiSetEventFn(reinterpret_cast<UiEventFn>(fn));
+    return kUiOk;
+}
+
 // ---- M-SC5 宿主侧活实例绑定（Bindings.hpp 口径；nullptr = 解绑）----
 
 void timeSetClock(core::GameClock* clock) {

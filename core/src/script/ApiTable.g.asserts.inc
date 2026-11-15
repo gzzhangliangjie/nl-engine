@@ -43,3 +43,9 @@ static_assert(std::is_same_v<decltype(&nl_vehicleFullPose), int(*)(int, float*, 
 static_assert(std::is_same_v<decltype(&nl_teleportVehicle), int(*)(int, const float*, const float*)>, "exports.api drift: Physics.teleportVehicle");
 static_assert(std::is_same_v<decltype(&nl_propsPushBegin), int(*)(void)>, "exports.api drift: Props.propsPushBegin");
 static_assert(std::is_same_v<decltype(&nl_propsDescAdd), int(*)(int, const char*, float, float, float)>, "exports.api drift: Props.propsDescAdd");
+static_assert(std::is_same_v<decltype(&nl_uiLoadDocument), int(*)(const char*, int*)>, "exports.api drift: Ui.uiLoadDocument");
+static_assert(std::is_same_v<decltype(&nl_uiCloseDocument), int(*)(int)>, "exports.api drift: Ui.uiCloseDocument");
+static_assert(std::is_same_v<decltype(&nl_uiShowDocument), int(*)(int, int)>, "exports.api drift: Ui.uiShowDocument");
+static_assert(std::is_same_v<decltype(&nl_uiElementSetText), int(*)(int, const char*, const char*)>, "exports.api drift: Ui.uiElementSetText");
+static_assert(std::is_same_v<decltype(&nl_uiElementGetText), int(*)(int, const char*, const char**)>, "exports.api drift: Ui.uiElementGetText");
+static_assert(std::is_same_v<decltype(&nl_uiSetEventCallback), int(*)(void*)>, "exports.api drift: Ui.uiSetEventCallback");

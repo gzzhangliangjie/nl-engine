@@ -7,6 +7,7 @@
 #include "nl/script/ScriptHost.hpp"
 
 #include "nl/core/console.hpp"
+#include "nl/core/log.hpp"     // OnTick 解析失败 warn（惰性不静默，诊断黑洞实测教训）
 #include "nl/script/Bindings.hpp"
 
 #include <windows.h>   // SEH __except（Vm.cpp 同口径；EXCEPTION_EXECUTE_HANDLER）
@@ -135,6 +136,7 @@ Result ScriptHost::loadScript(const std::string& scriptDllPath, const std::strin
         tickEnabled_ = false;
         propsGetFn_ = nullptr;   // M-SC10：props 指针与 tick 同生命周期纪律
         propsSetFn_ = nullptr;
+        nl::core::log::warnCh("script", "OnTick not resolved (optional contract; absent or resolution failed)");
     }
     refreshPropsFn_(typeName);   // M-SC10：PropGet/PropSet 可选契约重取（覆盖上面置空）
     tickCount_ = 0;

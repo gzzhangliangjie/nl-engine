@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>NlScript.Examples</RootNamespace>
+    <!-- AssemblyName 必须 = 类名去 Script 后缀口径（viewer script 参数的 typeName 缺省
+         推导：NlScript.Examples.<目录首字母大写>Script, <AssemblyName>） -->
+    <AssemblyName>UiScript</AssemblyName>
+    <!-- FDD 硬前置：classlib 默认不产 runtimeconfig.json（M-SC0 踩坑），hostfxr 装载必须有 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <!-- unsafe：OnTick 读 dt（double 位型解引用） -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../script-api/NlScriptApi.csproj" />
+  </ItemGroup>
+
+</Project>

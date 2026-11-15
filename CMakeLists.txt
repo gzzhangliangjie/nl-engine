@@ -187,6 +187,80 @@ add_library(nl_imgui_node_editor STATIC
 target_include_directories(nl_imgui_node_editor PUBLIC ${THIRDPARTY}/imgui-node-editor)
 target_link_libraries(nl_imgui_node_editor PUBLIC nl_imgui)
 
+# ---- M-UI0.0：RmlUi 6.3 vendored（MIT，声明式游戏 UI；thirdparty/rmlui/VENDOR.md）----
+# 编译集 = Source/Core（上游客户端库本体）+ Source/Debugger（F8 调试器插件）。
+# 目录布局保持上游原样（Source/Core、Source/Debugger、Include 平级）——上游源码用
+# "../../Include/RmlUi/..." 相对路径 include，扁平化会直接编译失败（M-UI0.0 实测）。
+# 子集冻结在 6.3：升级 = 独立里程碑重裁剪，不做 GLOB CONFIGURE_DEPENDS 追踪。
+# RMLUI_VERSION 显式传入（上游 Core.cpp 有 "custom" 兜底，保溯源真实）；
+# RMLUI_STATIC_LIB = 静态链口径。
+# Core 收根层 + 三个子目录（Elements/FontEngineDefault/Layout——首轮全量链接
+# LNK2019 Rml::LayoutEngine/ElementForm/LayoutPools 炸出，根层 GLOB 只有 141/191）。
+file(GLOB NL_RMLUI_CORE_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/Elements/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/FontEngineDefault/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Core/Layout/*.cpp")
+file(GLOB NL_RMLUI_DEBUG_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rmlui/Source/Debugger/*.cpp")
+add_library(nl_rmlui STATIC
+    ${NL_RMLUI_CORE_SRCS}
+    ${NL_RMLUI_DEBUG_SRCS}
+)
+target_include_directories(nl_rmlui PUBLIC ${THIRDPARTY}/rmlui/Include)
+target_compile_definitions(nl_rmlui PUBLIC RMLUI_STATIC_LIB PRIVATE RMLUI_VERSION="6.3" RMLUI_FONT_ENGINE_FREETYPE=1)
+target_link_libraries(nl_rmlui PUBLIC nl_freetype)
+
+# ---- M-UI0.0：FreeType 2.13.3 vendored（FTL，RmlUi 默认字体引擎硬依赖）----
+# 编译集与 vendored include/freetype/config/ftmodule.h 逐项对应（官方 CMake
+# baselib 清单口径，剔除 bzip2 外部依赖项）；ftsystem 用 stdlib 版零平台特化。
+# 详见 thirdparty/freetype/VENDOR.md。
+add_library(nl_freetype STATIC
+    thirdparty/freetype/src/autofit/autofit.c
+    thirdparty/freetype/src/base/ftbase.c
+    thirdparty/freetype/src/base/ftbbox.c
+    thirdparty/freetype/src/base/ftbdf.c
+    thirdparty/freetype/src/base/ftbitmap.c
+    thirdparty/freetype/src/base/ftdebug.c  # FT_Trace_Enable/Disable stub（smooth.c 引用；漏收首轮链接 LNK2019）
+    thirdparty/freetype/src/base/ftcid.c
+    thirdparty/freetype/src/base/ftfstype.c
+    thirdparty/freetype/src/base/ftgasp.c
+    thirdparty/freetype/src/base/ftglyph.c
+    thirdparty/freetype/src/base/ftgxval.c
+    thirdparty/freetype/src/base/ftinit.c
+    thirdparty/freetype/src/base/ftmm.c
+    thirdparty/freetype/src/base/ftotval.c
+    thirdparty/freetype/src/base/ftpatent.c
+    thirdparty/freetype/src/base/ftpfr.c
+    thirdparty/freetype/src/base/ftstroke.c
+    thirdparty/freetype/src/base/ftsynth.c
+    thirdparty/freetype/src/base/ftsystem.c
+    thirdparty/freetype/src/base/fttype1.c
+    thirdparty/freetype/src/base/ftwinfnt.c
+    thirdparty/freetype/src/bdf/bdf.c
+    thirdparty/freetype/src/cache/ftcache.c
+    thirdparty/freetype/src/cff/cff.c
+    thirdparty/freetype/src/cid/type1cid.c
+    thirdparty/freetype/src/gzip/ftgzip.c
+    thirdparty/freetype/src/lzw/ftlzw.c
+    thirdparty/freetype/src/pcf/pcf.c
+    thirdparty/freetype/src/pfr/pfr.c
+    thirdparty/freetype/src/psaux/psaux.c
+    thirdparty/freetype/src/pshinter/pshinter.c
+    thirdparty/freetype/src/psnames/psnames.c
+    thirdparty/freetype/src/raster/raster.c
+    thirdparty/freetype/src/sdf/sdf.c
+    thirdparty/freetype/src/sfnt/sfnt.c
+    thirdparty/freetype/src/smooth/smooth.c
+    thirdparty/freetype/src/svg/svg.c
+    thirdparty/freetype/src/truetype/truetype.c
+    thirdparty/freetype/src/type1/type1.c
+    thirdparty/freetype/src/type42/type42.c
+    thirdparty/freetype/src/winfonts/winfnt.c
+)
+target_include_directories(nl_freetype PUBLIC ${THIRDPARTY}/freetype/include)
+target_compile_definitions(nl_freetype PUBLIC FT2_BUILD_LIBRARY)
+
+
 # ---- M2.0：METIS vendored（簇聚组图分割，nanite-tools 离线管线用）----
 add_subdirectory(thirdparty/metis EXCLUDE_FROM_ALL)
 
@@ -368,6 +442,7 @@ add_library(nl_renderer STATIC
     renderer/src/input_debug.cpp  # P8 M-I2：input-hud 调试面板（注入路径快照 + 注入按钮；默认关）
     renderer/src/backend_dx12.cpp
     renderer/src/backend_vulkan.cpp
+    renderer/src/rmlui_backend.cpp  # M-UI0.1：RmlUi RenderInterface/SystemInterface/FileInterface + NVRHI 管线（--rmlui-demo）
 )
 target_include_directories(nl_renderer
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
@@ -376,7 +451,7 @@ target_include_directories(nl_renderer
 )
 # M-TR0：nl_profiler 必须进 renderer/viewer 的链接面，否则 ON 构建下这两侧 TU 的
 # NL_TRACY 不定义、NL_PROFILE_* 全空转（等于开了也不埋点）。core 侧已在其 CMake 链接。
-target_link_libraries(nl_renderer PUBLIC nl_core nl_profiler PRIVATE nl_imgui nl_imgui_node_editor glfw)
+target_link_libraries(nl_renderer PUBLIC nl_core nl_profiler PRIVATE nl_imgui nl_imgui_node_editor nl_rmlui glfw)
 # 注1：glfw 仅 console_ui.cpp 吃 GLFW 键值常量（M-C1 键盘映射），窗口库本身仍归 core/viewer。
 target_compile_definitions(nl_renderer PRIVATE
     NL_BACKEND_${NL_BACKEND_UPPER}=1

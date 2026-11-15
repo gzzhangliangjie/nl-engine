@@ -3,7 +3,7 @@
      </auto-generated> -->
 # nl-engine 脚本绑定面 API 参考
 
-共 **39 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
+共 **45 个导出 / 1 个 POD 类型**，按域分组；偏移 = ApiTable 字段序（只许尾部追加，禁中间插桩）。C# facade = `Nl.Script.Api`（Engine/Ecs/Time/Input/Log/Camera…静态类 + `*Code` 错误码），C++ 实现体在 `core/src/script/Bindings.cpp`。
 
 ## 生命周期账本（TYPEMAP 单源渲染，全部导出统一走）
 
@@ -112,6 +112,17 @@
 |---|---|---|---|
 | `propsPushBegin`（偏移 37） | `int nl_propsPushBegin(void)` | 开始推送描述表（清空 C++ POD 表 + gen+1；Entry 内 Props.PushStatic 开头调）。rc：0=ok | — |
 | `propsDescAdd`（偏移 38） | `int nl_propsDescAdd(int, const char*, float, float, float)` | 追加一条描述（kind 0=f/1=i/2=b/3=s；name 截断 63；def = 推送时字段现值快照；min==max = 无 Range 控件退直输）。rc：0=ok / 2=BadArg（kind 越界 / name 空 / 表满 256） | `in int kind`：值传递；`in str name`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in f32 min`：值传递；`in f32 max`：值传递；`in f32 def`：值传递 |
+
+## Ui 域（ApiTable 偏移 39..44）
+
+| 导出 | C++ ABI 签名 | 说明 | 参数生命周期 |
+|---|---|---|---|
+| `uiLoadDocument`（偏移 39） | `int nl_uiLoadDocument(const char*, int*)` | 加载 Rml 文档（assets/ 相对路径或文档相对路径；加载成功即显示）。rc：0=ok（handle 有效，0=失败）/ 1=未绑 UiSink / 4=非法参数（path 空） | `in str path`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`out int handle`：指针出参（调用期存活） |
+| `uiCloseDocument`（偏移 40） | `int nl_uiCloseDocument(int)` | 关闭文档（对句柄失效安全：未知 handle 回 rc=2，无副作用）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效 | `in int handle`：值传递 |
+| `uiShowDocument`（偏移 41） | `int nl_uiShowDocument(int, int)` | 显示/隐藏文档（show 0\|1；非 0/1 视作 true）。rc 同 uiCloseDocument | `in int handle`：值传递；`in int show`：值传递 |
+| `uiElementSetText`（偏移 42） | `int nl_uiElementSetText(int, const char*, const char*)` | 按 id 写元素内文（SetInnerRML 语义；elId 空串 = BadArg）。rc：0=ok / 1=未绑 UiSink / 2=句柄无效或元素未找到 / 4=非法参数 | `in int handle`：值传递；`in str elId`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`in str text`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free） |
+| `uiElementGetText`（偏移 43） | `int nl_uiElementGetText(int, const char*, const char**)` | 按 id 读元素内文（GetInnerRML 语义；text = 静态缓冲「下次同线程调用前有效」，C# 立即拷贝）。rc 同 uiElementSetText | `in int handle`：值传递；`in str elId`：C# 分配 UTF-8（NativeMarshal.Utf8Alloc）→ finally 必释放（Utf8Free）；`out str text`：C++ 静态缓冲「下次同线程调用前有效」→ C# 立即拷贝（Utf8Read，零分配） |
+| `uiSetEventCallback`（偏移 44） | `int nl_uiSetEventCallback(void*)` | 注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空） | `in ptr fn`：不透明载荷（函数指针等），调用期存活；C# 侧 _pinned 随 collectible ALC 整体回收 |
 
 ---
 

@@ -129,6 +129,27 @@ const float kFixedCullSamples[kFixedSampleCount] = {
     0.08f, 0.09f, 0.08f, 0.10f, 0.08f, 0.09f, 0.11f, 0.08f
 };
 
+// M-UI0：UiSink 实现（转发 Renderer::rml*；--rmlui-demo 时经 uiSetSink 注入
+// Bindings，未开 = Ui 导出回 kUiNoSource 不隐式建表）。
+struct ViewerRmlUiSink final : nl::script::UiSink {
+    nl::renderer::Renderer* renderer = nullptr;
+    int loadDocument(const char* path) override {
+        return renderer ? renderer->rmlLoadDocument(path) : 0;
+    }
+    bool closeDocument(int handle) override {
+        return renderer && renderer->rmlCloseDocument(handle);
+    }
+    bool showDocument(int handle, bool show) override {
+        return renderer && renderer->rmlShowDocument(handle, show);
+    }
+    bool elementSetText(int handle, const char* elId, const char* text) override {
+        return renderer && renderer->rmlElementSetText(handle, elId, text);
+    }
+    bool elementGetText(int handle, const char* elId, const char** outText) override {
+        return renderer && renderer->rmlElementGetText(handle, elId, outText);
+    }
+};
+
 struct Options {
     bool selftest   = false;
     bool help       = false;
@@ -198,6 +219,12 @@ struct Options {
     bool vsmRayRef  = false;  // M15.1：--vsm-rayref（csDirectVsm 入口射线兜底基准渲染，
                               // 与 VSM 查表同 blob 同本底；vsm-vs-ray 门的对位渲染）
     bool inputDemo  = false;  // P8 M-I2：--input-demo（input-hud 模式的帧序号驱动注入脚本）
+    bool rmluiDemo  = false;  // M-UI0：--rmlui-demo（RmlUi UI 层，默认关 = 零扰动）
+    // M-UI0 验收：无头合成点击（A 类旗标缺省关）。--rmlui-click <frame>,<x>,<y>
+    // = 第 frame 帧在 (x,y) 按下、frame+1 释放——走 RmlUi 完整 ProcessMouseButton
+    // 管线产出 click（比 DispatchEvent 更真实：含 hover/active 状态与边沿检测）。
+    int rmluiClickFrame = -1;
+    float rmluiClickX = -100.0f, rmluiClickY = -100.0f;
     bool driveDemo  = false;  // M-D3 Q-D3-2 A：--drive-demo（帧序号驾驶脚本，确定性截图源）
     bool freeDemo   = false;  // M-CAM5：--free-demo（帧序号自由飞行脚本，确定性截图源）
     bool driveHud   = false;  // M-D3 Q-D3-3 A：--drive-hud（默认关的独立参数窗口）
@@ -627,6 +654,13 @@ Options parseArgs(int argc, char** argv) {
             o.wireframe = true;
         } else if (a == "--particles") {           // M-PT0：粒子叠加层（instanced billboard 喷泉）
             o.particles = true;
+        } else if (a == "--rmlui-demo") {         // M-UI0：RmlUi UI 层（声明式文档 + 热重载 + F8 调试器）
+            o.rmluiDemo = true;
+        } else if (a == "--rmlui-click" && i + 1 < argc) { // M-UI0：无头合成点击（验收用）
+            if (std::sscanf(argv[++i], "%d,%f,%f", &o.rmluiClickFrame, &o.rmluiClickX, &o.rmluiClickY) != 3) {
+                std::cerr << "invalid --rmlui-click (expected frame,x,y)\n";
+                std::exit(1);
+            }
         } else if (a == "--nfx" && i + 1 < argc) { // M-PT1：.nfx v1 加载（隐含 --particles）
             o.nfxPath = argv[++i];
             o.particles = true;
@@ -2716,7 +2750,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
                                                    shadowMode, referenceMode, probeMode,
                                                    o.clusterBlas,
                                                    o.water && pullingMode,   // M-WAT1
-                                                   restirMode, probeAdaptiveMode);
+                                                   restirMode, probeAdaptiveMode,
+                                                   o.rmluiDemo);   // M-UI0
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -3532,6 +3567,11 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 预执行命令行（结果留在控制台日志 = 截图证据）。
     // M-GL1：GameClock 与 game.* 命令必须在 console-exec 之前注册（预执行行才找得到）。
     nl::core::GameClock gameClock;   // 双帧模型：渲染帧喂 realDt，逻辑帧 60Hz 消费
+    // M-UI0：UiSink 装配提前到脚本装载之前——Entry（装载期）就会调
+    // Ui.SetEventCallback/LoadDocument，循环内现绑 = Entry 时 rc 1 未绑（首轮验收实测）。
+    ViewerRmlUiSink rmlUiSink;
+    rmlUiSink.renderer = renderer.get();
+    nl::script::uiSetSink(o.rmluiDemo ? &rmlUiSink : nullptr);   // M-UI0：未开 = 解绑
     // ---- M-SC8：脚本宿主装载（--script，normal 模式 physics 训练场）----
     // 复制精简自 runScene 的 M-GL4 块（scene 模式脚本链是已验收冻结面，不改一行）。
     // 绑定链差异（拍板 Q-SC8-1 A' + Q-SC8-2 A）：
@@ -4338,6 +4378,7 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         }
 
         nl::renderer::HudFrame hud{};
+        nl::renderer::RmlUiFrame rmlFrame{};   // M-UI0：--rmlui-demo 时启用并喂数
         // P8 M-SC10：属性面板同步 + 挂入（runScene 同款；训练场脚本调参即本体）。
         if (o.propPanelOn && scriptLoaded) {
             propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
@@ -4659,9 +4700,39 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             }
         }
 
+        // M-UI0：RmlUi 通道（--rmlui-demo 才 enabled；输入缓冲与 HudFrame 同源复制）。
+        if (o.rmluiDemo) {
+            rmlFrame.enabled = true;
+            rmlFrame.displayWidth = static_cast<float>(extent.width);
+            rmlFrame.displayHeight = static_cast<float>(extent.height);
+            rmlFrame.deltaSeconds = hud.deltaSeconds;
+            rmlFrame.mouseX = o.screenshot ? -100.0f : mouseX;
+            rmlFrame.mouseY = o.screenshot ? -100.0f : mouseY;
+            rmlFrame.mouseLeftDown = !o.screenshot && window.leftButtonDown();
+            if (o.rmluiClickFrame >= 0 &&
+                (frame == o.rmluiClickFrame || frame == o.rmluiClickFrame + 1)) {
+                // M-UI0：无头合成点击（frame 按下、frame+1 释放，覆盖鼠标位）。
+                rmlFrame.mouseX = o.rmluiClickX;
+                rmlFrame.mouseY = o.rmluiClickY;
+                rmlFrame.mouseLeftDown = (frame == o.rmluiClickFrame);
+            }
+            rmlFrame.mouseWheel = o.screenshot ? 0.0f : scroll;
+            for (std::size_t k = 0; k < nKeys && k < 16; ++k) {
+                rmlFrame.keyEvents[k].key = keyBuf[k].key;
+                rmlFrame.keyEvents[k].down = keyBuf[k].down;
+                rmlFrame.keyEvents[k].ctrl = keyBuf[k].ctrl;
+                rmlFrame.keyEvents[k].shift = keyBuf[k].shift;
+                rmlFrame.keyEvents[k].alt = keyBuf[k].alt;
+            }
+            rmlFrame.keyEventCount = static_cast<int>(std::min<std::size_t>(nKeys, 16));
+            for (std::size_t k = 0; k < nChars && k < 32; ++k) rmlFrame.textChars[k] = textBuf[k];
+            rmlFrame.textCharCount = static_cast<int>(std::min<std::size_t>(nChars, 32));
+        }
+
         maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
-                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) ? &hud : nullptr)) {
+                                   (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) ? &hud : nullptr,
+                                   o.rmluiDemo ? &rmlFrame : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -5448,7 +5519,13 @@ int runScene(const Options& o) {
                                                    /*cluster=*/false, /*cullMode=*/false,
                                                    /*frustumCull=*/false, /*dagMode=*/false,
                                                    /*skinMode=*/false, /*hizMode=*/false,
-                                                   /*sceneMode=*/true);
+                                                   /*sceneMode=*/true, /*visbufMode=*/false,
+                                                   /*pullingMode=*/false, /*rtMode=*/false,
+                                                   /*shadowMode=*/false, /*referenceMode=*/false,
+                                                   /*probeMode=*/false, /*clusterBlas=*/false,
+                                                   /*waterEnable=*/false, /*restirMode=*/false,
+                                                   /*probeAdaptiveMode=*/false,
+                                                   o.rmluiDemo);   // M-UI0
     if (!renderer->valid()) {
         nl::core::log::errorCh("viewer", "renderer init failed: ", renderer->lastError());
         return 1;
@@ -5722,6 +5799,10 @@ int runScene(const Options& o) {
 
     // ---- P8 M-GL2：场景模式双帧时钟 + game.* console + M-S3 音频场景集成 ----
     nl::core::GameClock gameClock;
+    // M-UI0：UiSink 装配提前到脚本装载之前（runNormal 同修——Entry 装载期就调 Ui.*）。
+    ViewerRmlUiSink rmlUiSink;
+    rmlUiSink.renderer = renderer.get();
+    nl::script::uiSetSink(o.rmluiDemo ? &rmlUiSink : nullptr);   // M-UI0：未开 = 解绑
     nl::core::console::Console& sceneConsole = nl::core::console::Console::get();
     registerGameConsole(&gameClock);          // game.pause/timeScale/status
     nl::audio::registerAudioConsole(sceneConsole);
@@ -6324,6 +6405,7 @@ int runScene(const Options& o) {
         fp.eye[0] = eye3[0]; fp.eye[1] = eye3[1]; fp.eye[2] = eye3[2];
 
         nl::renderer::HudFrame hud{};
+        nl::renderer::RmlUiFrame rmlFrame{};   // M-UI0：--rmlui-demo 时启用并喂数
         // M-C2：主面板随 --hud（runScene 缺省可见语义收敛为显式门）——M-SC10
         // additive 不连带主面板（--no-hud + --prop-panel = 只画 script props；
         // profiling-hud 独立窗口的 M-TR0 抑制语义不变，profiling 块内再覆写）。
@@ -6386,7 +6468,20 @@ int runScene(const Options& o) {
         }
 
         maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
-        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath, hudOn ? &hud : nullptr)) {
+        // M-UI0：scene 模式 RmlUi 最小喂数（该路径无交互输入——demo 文档静态展示 +
+        // C# 脚本操作；交互输入在 runNormal 主循环）。
+        if (o.rmluiDemo) {
+            rmlFrame.enabled = true;
+            const auto re = renderer->extent();
+            rmlFrame.displayWidth = static_cast<float>(re.width);
+            rmlFrame.displayHeight = static_cast<float>(re.height);
+            rmlFrame.deltaSeconds = 1.0f / 60.0f;
+            rmlFrame.mouseX = -100.0f;
+            rmlFrame.mouseY = -100.0f;
+        }
+        if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
+                                   hudOn ? &hud : nullptr,
+                                   o.rmluiDemo ? &rmlFrame : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;

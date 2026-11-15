@@ -42,3 +42,9 @@ reinterpret_cast<void*>(&nl_vehicleFullPose),  // Physics.vehicleFullPose
 reinterpret_cast<void*>(&nl_teleportVehicle),  // Physics.teleportVehicle
 reinterpret_cast<void*>(&nl_propsPushBegin),  // Props.propsPushBegin
 reinterpret_cast<void*>(&nl_propsDescAdd),  // Props.propsDescAdd
+reinterpret_cast<void*>(&nl_uiLoadDocument),  // Ui.uiLoadDocument
+reinterpret_cast<void*>(&nl_uiCloseDocument),  // Ui.uiCloseDocument
+reinterpret_cast<void*>(&nl_uiShowDocument),  // Ui.uiShowDocument
+reinterpret_cast<void*>(&nl_uiElementSetText),  // Ui.uiElementSetText
+reinterpret_cast<void*>(&nl_uiElementGetText),  // Ui.uiElementGetText
+reinterpret_cast<void*>(&nl_uiSetEventCallback),  // Ui.uiSetEventCallback

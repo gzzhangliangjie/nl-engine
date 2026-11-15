@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <link rel="stylesheet" type="text/rcss" href="demo.rcss" />
+    <title>NL-Engine RmlUi Demo</title>
+</head>
+<body>
+    <div class="panel demo">
+        <div id="title">NL-Engine · RmlUi M-UI0</div>
+        <div id="status">F8 toggles the debugger. Edit ui/demo.rml to see hot reload.</div>
+        <div class="btn" id="btnDemo" onclick="ping">Ping (demo doc)</div>
+    </div>
+</body>
+</rml>
