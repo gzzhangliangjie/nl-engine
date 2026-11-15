@@ -161,14 +161,12 @@ TRACKS = {
         "wt": "E:/UE_STUDY_2026/nl-engine-input",
         "branch": "feat/input", "state": "active",
         "note": "M-I0~M-I2 merged to master 0df16a0 (tags input-m0~input-m2) "
-                "2026-11-10. 2026-11-15 §7.1b reopen by user instruction "
-                "「键鼠操作整体 review 全做」: M-I3/M-I4/M-I5 ALL CLOSED "
-                "(tags input-m3/input-m4/input-m5 @ bb68f6c; close gates passed, "
-                "release --done M-I3; reports .wt_pool_close/input-M-I{3,4,5}.md): "
-                "script mouse API + pointer lock + drop queue / screen pick "
-                "(pure CPU) / actions JSON + rebind + gamepad + inputTextPop; "
-                "54 exports; dual-backend ctest 164/164; RELEASED awaiting "
-                "user merge instruction",
+                "2026-11-10. 2026-11-15 §7.1b reopen: M-I3/M-I4/M-I5 ALL CLOSED "
+                "and MERGED to master 8f76591 (--no-ff; tags input-m3/m4/m5 @ "
+                "bb68f6c, close gates passed, release --done): script mouse API "
+                "+ pointer lock + drop queue / screen pick (pure CPU) / actions "
+                "JSON + rebind + gamepad + inputTextPop; 54 exports; dual-backend "
+                "ctest 164/164; wt/branch disposal pending user decision",
     },
     "drive": {
         "wt": "E:/UE_STUDY_2026/nl-engine-drive",
