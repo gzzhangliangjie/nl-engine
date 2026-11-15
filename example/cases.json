@@ -15220,6 +15220,84 @@
      "command": "viewer.exe --scene assets/scenes/preview.scene.json --drop-sim example/input-m5/sample.txt --frames 2 --screenshot <out.png>"
     }
    ]
+  },
+  {
+   "id": "sprite2d",
+   "label": "M-SP0",
+   "name": "2D 精灵批渲染 core 侧最小闭环（A 严格切分）",
+   "tag": "sprite2d-sp0",
+   "date": "2026-11-15",
+   "summary": "波 1 B 类穿插轨 feat/sprite2d 首里程碑。core 三个纯 POD 头（AtlasGrid 三寻址 / Clip+FlipbookPlayer 时间轴 / SpriteDesc+SpriteBatch 稳定分桶），renderer 侧一份 sprite2d.slang 出四产物 + Sprite2DPass（沿用 particles 的 SV_VertexID 六顶点展开 + StructuredBuffer 64B，正交投影，按 textureId 稳定排序），DX12/VULKAN 两后端惰性 init/build/draw/shutdown 接线；Renderer 尾参加默认值使 viewer 零改动。按用户拍板「可以落地 Brotato」只交付世界空间 2D 战场精灵本体，RmlUi element/scissor 桥接与 --sprite-demo / PNG 基线后置 M-SP1。工具版交代：sprite-tools 真实 TSV + 四张由真实日志渲染的证据图，不进 kStage、不 bump。",
+   "acceptance": [
+    "DX12 BUILD OK + SELFTEST PASS (16/16) + shader artifacts 174/174（新增 sprite2d.vs/.ps 四产物落盘）",
+    "sprite-tools selftest 4/4：atlas 三寻址边界、flipbook 时间轴、batch 稳定排序+分桶、UvRect 16B 静态断言",
+    "三份真实 TSV 的独立 oracle check 全 PASS，两次 batch-trace 逐字节一致",
+    "新增 9 条 sp0-* 无头用例；两后端接线完整、viewer 零改动、不碰绑定面",
+    "工具版交代：example/sprite2d/run.bat ALL GREEN + 4 张由真实日志/TSV 渲染的证据图"
+   ],
+   "exe": {
+    "dx12": "build/dx12/sprite-tools.exe",
+    "vulkan": "build/vulkan/sprite-tools.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "不带参数打印 usage 并退出 2。sprite-tools 只链 nl_core，两构建树产物等价；usage 走 stderr，展示台与回归均合并 stdout+stderr 判锚。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "sprite-tools (M-SP0) usage",
+     "command": "sprite-tools",
+     "preview": "example/sprite2d/usage.png",
+     "script": "example/sprite2d/run.bat verify"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：atlas / flipbook / batch / POD 四组 oracle",
+     "kind": "tool",
+     "note": "4x4 等四种网格 × Throw/Repeat/Clamp 三寻址、loop/reverse/pause/stop/finished 时间轴、乱序 layer+textureId 稳定排序与断桶、UvRect=16B 编译期断言。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "SELFTEST PASS (4/4)",
+     "command": "sprite-tools selftest",
+     "preview": "example/sprite2d/selftest.png",
+     "script": "example/sprite2d/run.bat verify"
+    },
+    {
+     "id": "batch-trace",
+     "name": "batch-trace：稳定排序 + textureId 分桶 TSV",
+     "kind": "tool",
+     "note": "真实实例描述乱序输入，输出 S（sprite）与 B（bucket）两类行；{out} 由展示台替换为临时产物路径，产物落盘即校验。",
+     "args": [
+      "batch-trace",
+      "--out",
+      "{out}"
+     ],
+     "expectExit": 0,
+     "expectLog": "batch trace ->",
+     "command": "sprite-tools batch-trace --out <out>",
+     "preview": "example/sprite2d/batch.png",
+     "script": "example/sprite2d/run.bat verify"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--out 缺路径必须显式拒绝（exit 2）",
+     "kind": "tool",
+     "note": "工具退出码约定：0=PASS / 1=断言失败 / 2=用法错误。缺参数必须打印 usage 并拒绝，不许静默写文件。",
+     "args": [
+      "atlas-trace",
+      "--out"
+     ],
+     "expectExit": 2,
+     "expectLog": "exit: 0=PASS 1=assert 2=usage",
+     "command": "sprite-tools atlas-trace --out",
+     "preview": "example/sprite2d/negative.png",
+     "script": "example/sprite2d/run.bat verify"
+    }
+   ]
   }
  ]
 }

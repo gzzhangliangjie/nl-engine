@@ -57,7 +57,8 @@ bool shaderArtifactsSelfTest(std::string& report) {
 // ×2 → 144，M-NL2-C sky_bg 双入口 ×2 增至 148，M14B1 restir 双入口 ×2 → 152，
 // M14C1 adaptive Mark/Spawn 双入口 ×2 → 156，M14C3 csAdaptiveSkyFixup 单入口
 // ×2 增至 158（merge 补登——M14C3 漏登，M8.1 教训第四犯）。M-UI0 rmlui 单对
-// 入口 ×2 增至 162（A 类缺省关，产物仍登记——M8.1 口径：新入口必须同步登记）。）
+// 入口 ×2 增至 162（A 类缺省关，产物仍登记——M8.1 口径：新入口必须同步登记）。
+// M-SP0 sprite2d 单对入口 ×2 增至 166（B 类穿插，缺省不 draw，产物照常登记）。）
 // 清单只查列出项：新增入口必须同步登记，
 // 否则产物丢失时 selftest 仍全绿（M8.1 已踩过一次）。
 struct Artifact { const char* name; bool spv; };
@@ -190,6 +191,10 @@ static const Artifact kArtifacts[] = {
     // M14C3（S14-C）：probe.slang csAdaptiveSkyFixup 单 compute 入口（spawn 探针级
     // 天空质量门）× 双目标 = 2（merge 补登——M14C3 漏登，M8.1 教训第四犯）。
     {"probe.csadaptiveskyfixup", true}, {"probe.csadaptiveskyfixup", false},
+    // M-SP0：sprite2d.slang 单对入口（vsMain/psMain）× 双目标 = 4。缺省无
+    // sprite 帧数据（pass 不 draw），但产物照常编译并纳入 selftest（M8.1 口径）。
+    {"sprite2d.vs", true}, {"sprite2d.vs", false},
+    {"sprite2d.ps", true}, {"sprite2d.ps", false},
 };
     constexpr int kArtifactCount =
         static_cast<int>(sizeof(kArtifacts) / sizeof(kArtifacts[0]));
@@ -313,7 +318,8 @@ void Renderer::resize(Extent extent) {
 }
 
 bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
-                           const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml) {
+                           const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml,
+                           Sprite2DFrame* sprite2d) {
     if (!impl_->backend) return false;
     // M9.0：把当帧清屏色带给 Scene（--mode shadow 的空像素写进 rtTarget_，
     // 与 psMatResolve 的 discard 等价）。只做一次 POD 浅拷贝，绝不整块 memcpy
@@ -327,7 +333,7 @@ bool Renderer::renderFrame(ClearColor color, const FrameParams& frame,
     {
         NL_PROFILE_ZONE("backend.renderFrame");   // M-TR0：renderer 帧提交关键段
         ok = impl_->backend->renderFrame(color, resolved, screenshotPath, hud, rml,
-                                         impl_->error);
+                                         sprite2d, impl_->error);
     }
     // M4.1：剔除统计（visibleClusters）由 backend 每帧 poll 后更新，回拷进
     // Renderer 缓存的 DeviceInfo，viewer 的 const 引用才能看到最新值。

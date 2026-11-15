@@ -96,8 +96,11 @@ public:
     // 一帧：clear → 模型绘制（MVP / cull）→（可选）RmlUi 叠加（M-UI0，rml 非空
     // 且 enabled 时生效）→（可选）ImGui HUD 叠加 →（可选）回读 GPU 像素写 PNG →
     // present。hud 为空时不碰 ImGui，rml 为空/未启用时不碰 RmlUi（历史基线不变）。
+    // M-SP0：sprite2d 为新增尾参（在 outError 之前）。nullptr / !enabled =
+    // 2D pass 不参与本帧，历史路径一像素不动。
     virtual bool renderFrame(ClearColor color, const FrameParams& frame,
                              const char* screenshotPath, HudFrame* hud, RmlUiFrame* rml,
+                             Sprite2DFrame* sprite2d,
                              std::string& outError) = 0;
 
     // M-UI0：UiSink 落点转发（backend 未启用时恒失败码——rmlLoadDocument 回 0，
