@@ -357,17 +357,25 @@ TRACKS = {
     # ---- 波 1（2026-11-15 用户拍板 A A ①）: two independent game-support tracks ----
     "phys-query": {
         "wt": "E:/UE_STUDY_2026/nl-engine-phys-query",
-        "branch": "feat/phys-query", "state": "active",
+        "branch": "feat/phys-query", "state": "closed",
         "note": "M-PQ0 (A-class): general physics query API, Jolt-free public "
                 "POD header nl/physics/query.hpp + World.cpp narrow-phase "
                 "mapping (raycast/sweep/overlap). User decision 2026-11-15 "
                 "option A minimal surface. Plan docs/p8/PHYQUERY-PLAN.md. "
                 "Frozen: no exports.api / Bindings / viewer changes (wave 0 "
-                "gate: input track owns those files until merge).",
+                "gate: input track owns those files until merge). "
+                "M-PQ0 CLOSED 2026-11-15: dual-backend BUILD OK, selftest "
+                "16/16, artifacts 170/170, ctest 167/167, regression 8/8; "
+                "track commit 43de25f7 merged to master 991b0acb. "
+                "2026-11-15 wt DISPOSED by user instruction (junctions "
+                ".workbuddy + slang dist detached, worktree removed, "
+                "branch feat/phys-query kept); annotated tag phys-query-pq0 "
+                "@ 43de25f7 created 2026-11-15, close gate + release --done "
+                "passed; reopen via 7.1b (claim --force)",
     },
     "sprite2d": {
         "wt": "E:/UE_STUDY_2026/nl-engine-sprite2d",
-        "branch": "feat/sprite2d", "state": "active",
+        "branch": "feat/sprite2d", "state": "closed",
         "note": "M-SP0 (B-class interleave, user approved 2026-11-15 option ①): "
                 "2D sprite batch rendering for Brotato world-space sprites. "
                 "User decision option A strict split: core POD (atlas/flipbook/"
@@ -376,7 +384,17 @@ TRACKS = {
                 "backend). RmlUi element/scissor bridging DEFERRED (user: "
                 "'按可以落地Brotato的目标来'), not in M-SP0 scope. "
                 "Plan docs/sprite2d/SPRITE2D-PLAN.md. Frozen: demo flag / PNG "
-                "baseline wait for wave 0 (viewer/main.cpp owned by input track).",
+                "baseline wait for wave 0 (viewer/main.cpp owned by input track). "
+                "M-SP0 CLOSED 2026-11-15: dual-backend BUILD OK, selftest "
+                "16/16, artifacts 174/174, ctest 173/173, regression 8/8; "
+                "track commit 7f3b6068 merged to master 5c220029; wave-2 "
+                "leftovers (demo flag / PNG baseline / RmlUi element+scissor "
+                "bridge / exports bindings) NOT in scope. 2026-11-15 wt "
+                "DISPOSED by user instruction (junctions .workbuddy + slang "
+                "dist detached, worktree removed, branch feat/sprite2d kept); "
+                "annotated tag sprite2d-sp0 @ 7f3b6068 created 2026-11-15, "
+                "close gate + release --done passed; "
+                "reopen via 7.1b (claim --force)",
     },
 }
 
