@@ -24,7 +24,7 @@ current version runs from build/<backend>/viewer.exe.
 
 exe freshness gate (2026-11-08): before any run that touches current-tree
 exes, build/<backend>/*.exe must be newer than every source file they depend
-on (core/ renderer/ viewer/ nanite-tools/ material-graph-tools/). A stale exe
+on (core/ renderer/ viewer/ modules/nanite-tools/ modules/material-graph-tools/). A stale exe
 refuses to run (exit 2) — this kills the "baseline retaken with an old exe"
 false-green class (M4.2 vulkan HUD baselines incident).
 
@@ -117,7 +117,7 @@ SOURCE_EXTS = {".cpp", ".hpp", ".h", ".slang", ".py"}
 EXE_SOURCE_DIRS = {
     "viewer.exe": ("core/src", "core/include", "renderer/src", "renderer/include",
                    "renderer/shaders", "viewer"),
-    "nanite-tools.exe": ("core/src", "core/include", "nanite-tools"),
+    "nanite-tools.exe": ("core/src", "core/include", "modules/nanite-tools"),
     "material-graph-tools.exe": ("core/src", "core/include", "material-graph-tools"),
 }
 

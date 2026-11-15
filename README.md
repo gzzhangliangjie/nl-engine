@@ -14,7 +14,7 @@ nl-engine/
 │   ├── src/scene.cpp  ← 两后端共享：glTF 加载 / staging 上传 / 绑定集 / pipeline
 │   └── src/hud.cpp    ← 两后端共享：自写 NVRHI ImGui 渲染后端（不用官方 D3D12/VK backend）
 ├── viewer/            ← 可见用例 + --screenshot 回归 + HudFrame 双向 POD
-├── modules/           ← 自研独立工具模块（M-MOD0 起，18 个 *-tools / nanite-scene / nl-script / nanite-console；NL_MODULES=ALL 全编或 -DNL_MODULES="anim-tools;nav-tools" 选编）
+├── modules/           ← 自研独立工具模块（M-MOD0 起，19 个 *-tools / nanite-scene / nl-script / nanite-console；NL_MODULES=ALL 全编或 -DNL_MODULES="anim-tools;nav-tools" 选编）
 ├── assets/models/     ← Suzanne.glb（Khronos 官方样例）+ TorusKnotDense.glb / IcoSphereDense.glb（程序化致密测试资产，gen-dense-mesh.py 生成）
 ├── thirdparty/        ← glfw / nvrhi / imgui(1.91.9) / vulkan-headers / directx-headers / stb / tinygltf / meshoptimizer(v1.3 文档级对照，不入构建)（本地 vendored）
 ├── docs/
@@ -38,7 +38,6 @@ nl-engine/
 │       └── unity-handbook.html   Unity SRP 落地手册（U0~U8）
 ├── example/           ← 每个里程碑的成功用例：基线 PNG + 一键复现 run.bat + cases.json 清单
 ├── tools/showcase/    ← 成果展示台：按版本加载 example/ 用例、现场跑 viewer 看效果、双后端对比
-├── nanite-tools/      ← （S1 起）离线工具：cluster / simplify / dag / stat
 └── scripts/           ← 一键 configure+build+selftest、模型打包脚本
 ```
 

@@ -52,7 +52,7 @@ set(NL_MODULES "ALL" CACHE STRING "modules/<dir> build list: ALL (default) or se
 set(NL_ALL_MODULES
     anim-tools audio-tools cam-tools city-tools gi-tools gl-tools input-tools
     log-tools material-graph-tools nav-tools net-tools phys-tools sprite-tools
-    traffic-tools vfx-tools nanite-scene nl-script nanite-console)
+    traffic-tools vfx-tools nanite-scene nl-script nanite-console nanite-tools)
 
 set(_nl_modules_selected "")
 if(NL_MODULES STREQUAL "ALL")
@@ -824,8 +824,8 @@ add_custom_target(nl_scriptapi_freshness ALL
     COMMENT "scriptapi: exports.api vs generated freshness gate")
 
 add_subdirectory(viewer)
-add_subdirectory(nanite-tools)
-# ---- M-MOD0：自研模块统一从 modules/ 按 NL_MODULES 开关装入（含 ctest 用例）----
+# ---- M-MOD0：自研模块统一从 modules/ 按 NL_MODULES 开关装入（含 ctest 用例；----
+# ---- nanite-tools 同构并入：独立 exe 只链 nl_core，2026-11-15 M-MOD0.2 挪入）----
 foreach(_m ${_nl_modules_selected})
     add_subdirectory(modules/${_m})
 endforeach()
