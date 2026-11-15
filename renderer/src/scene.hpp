@@ -624,6 +624,19 @@ public:
     bool loadCompareImage(const char* path, std::string& outError);
     void drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
                           const nvrhi::Viewport& viewport);
+    // ---- M-RT0（后视镜，--mirror）：sceneMode 下独立半分辨率 RT 二次绘制 + 角落呈现 ----
+    // drawMirror：把 sceneBatches_ 用 params.mirrorMvp 再画一遍到 mirrorFb_；在
+    // Scene::draw 主 pass 完成后、presentTonemap 之前、同一 cmd list 内调用（§2.8
+    // 禁第二列表）。复用 constants_（写完 mirrorMvp 后本帧不再画主 pass，无冲突）。
+    // 缺省关 = 整块不进，历史路径逐字节不变。
+    void drawMirror(nvrhi::ICommandList* cmd, const FrameParams& params,
+                    float viewportW, float viewportH, std::string& outError);
+    // presentMirror：presentTonemap 之后、HUD 之前，把 mirrorTex_ blit 到右下角
+    // viewport（quad，rt.psmirror）。mirrorTexSRV_ 跨列表跟踪 RenderTarget↔SRV。
+    void presentMirror(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                       const nvrhi::Viewport& fullViewport);
+    bool mirrorReady() const { return mirrorTex_ && mirrorFb_ && !mirrorFailed_; }
+    void shutdownMirror();
     // HUD / 日志进度源（Scene::draw 不持 hud，由 backend 在 renderFrame 后取用写回）。
     bool               referenceActive() const { return reference_; }
     std::uint32_t      referenceSamplesDone() const { return samplesDone_; }
@@ -1057,6 +1070,25 @@ private:
     std::uint32_t sceneLightPointCount_ = 0;
     bool sceneLightsSRV_ = false;            // 跨列表态跟踪：sceneLights_ 末态（init=CopyDest，draw 后=SRV）
     std::uint32_t sceneInstanceCount_ = 0;   // instanceCount() 的数据源
+    // ---- M-RT0：后视镜 render-to-texture（--mirror，缺省整组不建）----
+    // 独立半分辨率 RT + 独立 D32 depth + fb，与主 pass 同 RGBA32F 格式 → 直接
+    // 复用 pipelineSceneBack_ 与各 batch 的 set（落码期勘误：Q3 默认 RGBA8，
+    // 但 scene PSO 锁 RGBA32F+D32，换格式须整套 PSO/set 重建，选同格式零新管线；
+    // 半分辨率仍省 3/4 像素）。mirrorMvp 在 Scene::draw 主 pass 完成后写进同一
+    // constants_（volatile CB 同列表写两版，maxVersions=16），不另建 CB。
+    // 呈现走 rt.psmirror + 独立 set/layout/sampler（角落 viewport quad blit）。
+    // 声明顺序：set 引用 tex/sampler，逆序析构 = set 先死资源后死（S15 UAF）。
+    nvrhi::TextureHandle       mirrorTex_;               // RGBA32F 半分辨率，RenderTarget↔SRV
+    nvrhi::TextureHandle       mirrorDepth_;             // D32 半分辨率（scene 深度独立）
+    nvrhi::FramebufferHandle   mirrorFb_;
+    nvrhi::SamplerHandle       mirrorSampler_;
+    nvrhi::BindingLayoutHandle mirrorPresentLayout_;     // t0 + s0（呈现）
+    nvrhi::BindingSetHandle    mirrorPresentSet_;
+    nvrhi::ShaderHandle        psMirror_;                // rt.psmirror（vsRtPresent_ 复用）
+    nvrhi::GraphicsPipelineHandle mirrorPresentPSO_;     // 角落 quad blit
+    std::uint32_t mirrorW_ = 0, mirrorH_ = 0;
+    bool mirrorFailed_ = false;                          // 失败只报一次
+    bool mirrorTexSRV_ = false;                          // 跨列表末态跟踪（类似 sceneLightsSRV_）
     nl::anim::Skeleton        skinSkeleton_;
     std::vector<nl::anim::AnimClip> skinClips_;
     nl::anim::SkinBinding     skinBinding_;

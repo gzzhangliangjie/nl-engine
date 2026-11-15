@@ -610,6 +610,12 @@ private:
                 nl::core::log::errorCh("renderer", "RmlUi pipeline: ", rmlErr);
             }
         }
+        // M-RT0：后视镜角落贴片（presentTonemap 之后、overlay/HUD 之前）。仅
+        // --mirror 旗标开时调；mirror pass 本体在 Scene::draw 主 pass 内已画到 RT。
+        if (frame.mirrorEnable && scene_.mirrorReady()) {
+            nvrhi::Viewport fullView(float(extent_.width), float(extent_.height));
+            scene_.presentMirror(cmd, framebuffers_[index], fullView);
+        }
         // M-SP0：2D 精灵画在 compare/RmlUi 之后、ImGui HUD 之前（世界层压在
         // 调试面板下）。仅 enabled + 资源就绪时生效，缺省零开销。
         if (sprite2d && sprite2d->enabled && sprite2dInited_ &&

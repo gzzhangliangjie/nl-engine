@@ -347,6 +347,8 @@ struct Options {
     // M-NL1：godrays 体积光柱（--godrays，缺省关；单光源 = 场景最强点光源）。
     bool godraysEnable = false;    // --godrays
     double godraysWeight = 0.4;    // --godrays-weight X（复合加法权重）
+    // M-RT0：后视镜（--mirror，缺省关 → 整条 mirror pass 不建、基线逐字节不变）。
+    bool mirrorEnable = false;     // --mirror
     std::string probePlaceReadback;   // M14C1 诊断：--probe-place-readback <path>（place atlas L0 全精度落盘）
     bool tlasSpin   = false;  // M8.1：--tlas-spin（TLAS 实例每帧 spin，光栅化不受影响）
     bool tlasProbe  = false;  // M8.1：--tlas-probe（RayQuery 探针 dispatch + hit t 读回日志）
@@ -599,6 +601,8 @@ Options parseArgs(int argc, char** argv) {
         else if (a == "--godrays") o.godraysEnable = true;
         else if (a == "--godrays-weight" && i + 1 < argc)
             o.godraysWeight = std::atof(argv[++i]);
+        // M-RT0：后视镜 render-to-texture（--mirror，缺省关）。
+        else if (a == "--mirror") o.mirrorEnable = true;
         // M8.1：TLAS 实例每帧 spin / RayQuery 探针（仅 dag/hiz 等 BLAS 就位模式生效）。
         else if (a == "--tlas-spin") o.tlasSpin = true;
         else if (a == "--tlas-probe") o.tlasProbe = true;
@@ -982,7 +986,7 @@ int runSelfTest() {
           "backend selected");
     // 锚点跟随当前 kStage 前缀；每次 kStage bump 同步改这里（M-N0 修存量债：
     // 原硬编码 "S7.2"，M8.0 bump 后从未重跑 selftest，s8-blas 收口漏网）。
-    check(std::strstr(st.stage, "S8.2") != nullptr, "S8.2 stage reported");
+    check(std::strstr(st.stage, "S8.3") != nullptr, "S8.3 stage reported");
 
     nl::renderer::FrameParams fp;
     check(fp.cullBack && sizeof(fp.mvp) == 64 && fp.lightDir[3] > 0.0f,
@@ -1044,11 +1048,28 @@ VehicleCVars registerVehicleConsole(bool* driveHudOn) {
 // M-D3 ships exactly one active source (OrbitCamera). Camera b-segment only
 // replaces the Chase return below AFTER M-D3 closes -- no camera glue, no Chase
 // baselines, no five-anchor camera acceptance in this milestone.
+// M-D3 ships exactly one active source (OrbitCamera). Camera b-segment only
+// replaces the Chase return below AFTER M-D3 closes -- no camera glue, no Chase
+// baselines, no five-anchor camera acceptance in this milestone.
 static auto resolveViewProjection(nl::viewer::ViewerCamera& camera,
                                   nl::physics::DebugScene& scene)
     -> decltype(camera.viewProjection()) {
     (void)scene;   // P8 M-CAM b-segment：chassis 钩子已在主循环每帧 feed（camera.chassis）
     return camera.viewProjection();
+}
+
+// M-RT0：后视镜 viewProj——以临时 OrbitCamera 复用现役相机绕同一 pivot 的
+// yaw+180 反向视角（Q1 拍板：真后向相机，非主相机 UV 翻转）。fov/aspect/dist
+// 与主相机同源，保证镜像画面构图一致；不改现役相机任何状态（无副作用）。
+static nl::core::Matrix4 computeMirrorViewProjection(nl::viewer::ViewerCamera& camera,
+                                                      float yawDeg, float pitchDeg,
+                                                      float dist, float aspect) {
+    nl::core::OrbitCamera mirror;
+    mirror.setAspect(aspect);
+    mirror.setFovYDegrees(2.0f * std::atan(1.0f / camera.projectionYScale())
+                          * 180.0f / 3.14159265358979323846f);
+    mirror.setOrbit(yawDeg + 180.0f, pitchDeg, dist);
+    return mirror.viewProjection();
 }
 
 // M-E7：light.* cvar → FrameParams.lightDir 覆写（反射胶水层消费链）。
@@ -4271,6 +4292,15 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         const auto model = camera.model();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
         std::memcpy(fp.model, model.m, sizeof(fp.model));
+        // M-RT0：后向相机 mvp（--mirror 开才算；缺省关闭零开销）。
+        if (o.mirrorEnable) {
+            const auto mir = computeMirrorViewProjection(camera, camera.yawDegrees(),
+                                                          camera.pitchDegrees(),
+                                                          camera.distance(),
+                                                          float(o.width) / float(o.height));
+            std::memcpy(fp.mirrorMvp, mir.m, sizeof(fp.mirrorMvp));
+            fp.mirrorEnable = true;
+        }
         fp.cullBack = cullBack;
         fp.shading = shading;
         fp.wireframe = wireframe;
@@ -6571,6 +6601,15 @@ int runScene(const Options& o) {
         camera.update(static_cast<float>(dtMs) * 0.001f);
         const auto vp = camera.viewProjection();
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));   // model = 单位阵 → mvp = viewProj
+        // M-RT0：后向相机 mvp（--mirror 开才算；缺省关闭零开销）。
+        if (o.mirrorEnable) {
+            const auto mir = computeMirrorViewProjection(camera, camera.yawDegrees(),
+                                                          camera.pitchDegrees(),
+                                                          camera.distance(),
+                                                          float(o.width) / float(o.height));
+            std::memcpy(fp.mirrorMvp, mir.m, sizeof(fp.mirrorMvp));
+            fp.mirrorEnable = true;
+        }
 
         // M-I4：屏幕拾取（--pick 交互 = 左键按下事件反投影；--pick-at 注入 = 首帧
         // 定点执行）。结果只进 log 锚（"pick -> ..."），零渲染路径改动（A 类口径）。

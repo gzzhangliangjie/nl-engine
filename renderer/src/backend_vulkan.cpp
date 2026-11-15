@@ -525,6 +525,12 @@ private:
             scene_.drawCompareImage(cmd, framebuffers_[vulkanImageIndex_],
                                     nvrhi::Viewport(float(extent_.width), float(extent_.height)));
         }
+        // M-RT0：后视镜角落贴片（presentTonemap 之后、overlay/HUD 之前）。仅
+        // --mirror 旗标开时调；mirror pass 本体在 Scene::draw 主 pass 内已画到 RT。
+        if (frame.mirrorEnable && scene_.mirrorReady()) {
+            nvrhi::Viewport fullView(float(extent_.width), float(extent_.height));
+            scene_.presentMirror(cmd, framebuffers_[vulkanImageIndex_], fullView);
+        }
         // M-UI0：RmlUi 叠加（画在 compare 之后、ImGui HUD 之前——ImGui 调试面板
         // 永远压顶；仅 rml 非空且 enabled 时生效，缺省零开销）。
         if (rml && rml->enabled && vulkanImageIndex_ < framebuffers_.size()

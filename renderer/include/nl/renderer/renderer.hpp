@@ -100,6 +100,12 @@ struct FrameParams {
     // M-WAT3：--water-noshore 验收旗标（岸线软化关闭，fade 归 1；WATER-PLAN
     // §9d 岸线 A/B 硬闸用；缺省 false）。
     bool  waterNoShore       = false;
+    // M-RT0（后视镜，2026-11-16 拍板方案②/Q1~Q5 默认）：mirrorEnable 开 = Scene
+    // 以 mirrorMvp（后向相机 yaw+180 的 viewProj，viewer 侧算好）再画一遍 sceneBatches_
+    // 到半分辨率 RT，present 阶段 quad blit 到屏幕右下角。缺省关 = 整块不执行、
+    // mirrorMvp 全零不读 → 既有模式/基线逐字节不变（同 bloom/godrays 旗标先例）。
+    bool  mirrorEnable   = false;
+    float mirrorMvp[16]  = {};   // 列主序 viewProj（后向相机）；仅 mirrorEnable 时消费
     float options[4]  = {};
     bool  cullBack    = true;   // false = 关背面剔除，能看到内壁
     // M0.8 调试着色 / 线框：缺省值 = M0.7 行为（textured + solid），历史基线不受影响。

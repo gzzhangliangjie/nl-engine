@@ -258,3 +258,16 @@ void psCompare(VsOut i, out float4 outColor : SV_Target)
 {
     outColor = g_compareTex.SampleLevel(g_compareSampler, i.uv, 0.0f);
 }
+
+// M-RT0（后视镜）：psMirror —— 半分辨率镜像 RT → 屏幕角落 quad 贴片。
+// 与 psCompare 同构（s0 Linear clamp，uv [0,1] 全幅映射到角落 viewport）；
+// 单列出来是为了独立产物锚（rt.psmirror 双目标）与后续凸面畸变留扩展点。
+// 本轮平面镜：水平不翻转——后向相机（yaw+180）已给出真实背后视角，
+// 再做 UV 翻转会把「左后」摆到右边，与真实后视镜相反。
+Texture2D<float4> g_mirrorTex : register(t0);
+SamplerState g_mirrorSampler : register(s0);
+[shader("pixel")]
+void psMirror(VsOut i, out float4 outColor : SV_Target)
+{
+    outColor = g_mirrorTex.SampleLevel(g_mirrorSampler, i.uv, 0.0f);
+}

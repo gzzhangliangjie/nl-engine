@@ -620,7 +620,9 @@ set(_ENTRIES_HIZ "vsHizDepth|vshizdepth|vertex" "psHizDepth|pshizdepth|fragment"
 # 视觉调试射线留 M8.2）。Inline ray query DXIL 要 SM6.5+（进 _SM66_ARTIFACTS）。
 set(_ENTRIES_TLAS_PROBE "csTlasProbe|cs|compute")
 # M8.2：rt.slang 三入口——RayQuery 每像素相机射线 compute + 调试图全屏呈现 vs/ps。
-set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment" "psBloomExtract|psbloomextract|fragment" "psBloomBlurH|psbloomblurh|fragment" "psBloomBlurV|psbloomblurv|fragment")
+set(_ENTRIES_RT "csRt|cs|compute" "vsRtPresent|vsrtpresent|vertex" "psRtPresent|psrtpresent|fragment" "psRefPresent|psrefpresent|fragment" "psBlitToHdr|psblittohdr|fragment" "psTonemap|pstonemap|fragment" "psCompare|pscompare|fragment" "psMirror|psmirror|fragment" "psBloomExtract|psbloomextract|fragment" "psBloomBlurH|psbloomblurh|fragment" "psBloomBlurV|psbloomblurv|fragment")
+# M-RT0: psMirror (mirror-RT corner blit for --mirror) — entry added above; _SM66_ARTIFACTS
+# listing is generated from _ENTRIES_RT, so rt.psmirror picks up both dxil+spirv artifacts.
 # M-NL2-C：godrays.slang 五入口——遮挡黑 PS（与 model.slang vsShadow 配对）+
 # 光源 quad VS/PS + 全屏 quad VS + radial blur PS。
 set(_ENTRIES_GODRAYS "psGodraysBlack|psgodraysblack|fragment" "vsGodraysQuad|vsgodraysquad|vertex" "psGodraysQuad|psgodraysquad|fragment" "vsGodraysFull|vsgodraysfull|vertex" "psGodraysRadial|psgodraysradial|fragment")

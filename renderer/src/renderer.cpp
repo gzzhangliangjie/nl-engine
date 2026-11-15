@@ -18,7 +18,7 @@ constexpr const char* kBackend = "vulkan";
 constexpr const char* kBackend = "dx12";
 #endif
 constexpr const char* kStage =
-    "S8.2 ray query debug closure (per-pixel camera rays)";
+    "S8.3 rear-view mirror render-to-texture pass";
 
 // M0.7：--model 白名单校验。M-SC7 起实现单源 = nl::scene::validAssetFileName
 //（core/src/scene/AssetName.cpp；本文件为原版语义出处，收编后留薄委托——
@@ -147,6 +147,8 @@ static const Artifact kArtifacts[] = {
     // rt.pscompare（Q14-2 --compare 右半参考图贴片）× 双目标 = 2。
     {"direct.csrefgi", true}, {"direct.csrefgi", false},
     {"rt.pscompare", true}, {"rt.pscompare", false},
+    // M-RT0：rt.psmirror（--mirror 后视镜 RT 角落贴片）× 双目标 = 2。
+    {"rt.psmirror", true}, {"rt.psmirror", false},
     // S11 M11.0：world_cache.slang 三 compute 入口（fill/decay/viz，Q11-0 方案 A）
     // × 双目标 = 6。
     {"world_cache.cscachefill", true}, {"world_cache.cscachefill", false},

@@ -4511,6 +4511,227 @@ void Scene::drawCompareImage(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* fram
 }
 
 // ============================================================================
+// M-RT0（S8.3）：后视镜 render-to-texture（--mirror，缺省整组不建）
+//   分工：drawMirror 复用 sceneBatches_ + pipelineSceneBack_ 把背面视角画进独立
+//   半分辨率 RT；presentMirror 用 rt.psmirror 把 RT 贴到屏幕右下角。
+//   格式勘误（Q3 默认 RGBA8 → 实做 RGBA32F）：scene PSO 锁 RGBA32F+D32，换格式
+//   要重建整套 PSO/set；同格式零新管线、半分辨率仍省 3/4 像素。
+//   状态纪律：mirrorTex_ 不设 permanent，逐帧 beginTracking(RenderTarget→SRV)，
+//   与 hdrSceneColor_ 同款（§2.15/§2.19）；深度自带、不碰后端永驻 depth_。
+// ============================================================================
+void Scene::drawMirror(nvrhi::ICommandList* cmd, const FrameParams& params,
+                       float viewportW, float viewportH, std::string& outError) {
+    if (!params.mirrorEnable || !sceneMode_ || sceneBatches_.empty() || !pipelineSceneBack_)
+        return;
+    nvrhi::IDevice* dev = t0Device_ ? t0Device_ : rtDevice_;
+    if (!dev) return;
+    if (mirrorFailed_) return;
+
+    const std::uint32_t w = std::max(1u, static_cast<std::uint32_t>(viewportW * 0.5f + 0.5f));
+    const std::uint32_t h = std::max(1u, static_cast<std::uint32_t>(viewportH * 0.5f + 0.5f));
+    if (mirrorTex_ && mirrorFb_ && mirrorW_ == w && mirrorH_ == h) {
+        // 复用；资源随视口 resize 懒重建（同 ensureRtTargets 口径）。
+    } else {
+        // 先释放旧句柄（device 存活期，S15 UAF 纪律）；逆序：fb → tex → depth。
+        mirrorFb_ = nullptr;
+        mirrorTex_ = nullptr;
+        mirrorDepth_ = nullptr;
+        mirrorW_ = w; mirrorH_ = h; mirrorTexSRV_ = false;
+
+        nvrhi::TextureDesc td;
+        td.width = w; td.height = h;
+        td.format = nvrhi::Format::RGBA32_FLOAT;   // 与 scene PSO hdrInfo 同格式（复用 pipelineSceneBack_）
+        td.isRenderTarget = true;
+        td.initialState = nvrhi::ResourceStates::ShaderResource;
+        td.keepInitialState = true;
+        td.setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 1.f));
+        td.debugName = "MirrorColor";
+        mirrorTex_ = dev->createTexture(td);
+        nvrhi::TextureDesc dd;
+        dd.width = w; dd.height = h;
+        dd.format = nvrhi::Format::D32;
+        dd.isRenderTarget = true;
+        dd.initialState = nvrhi::ResourceStates::DepthWrite;
+        dd.keepInitialState = true;
+        dd.setClearValue(nvrhi::Color(1.0f));
+        dd.debugName = "MirrorDepth";
+        mirrorDepth_ = dev->createTexture(dd);
+        if (!mirrorTex_ || !mirrorDepth_) {
+            nl::core::log::deviceError("mirror", "createTexture failed for mirror RT");
+            mirrorFailed_ = true; return;
+        }
+        nvrhi::FramebufferDesc fbd;
+        fbd.addColorAttachment(mirrorTex_);
+        fbd.setDepthAttachment(mirrorDepth_);
+        mirrorFb_ = dev->createFramebuffer(fbd);
+        if (!mirrorFb_) {
+            nl::core::log::deviceError("mirror", "createFramebuffer failed");
+            mirrorFailed_ = true; return;
+        }
+    }
+
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // 状态范式严格照抄 beginHdrSceneTarget（双后端零错误验证过）：资源
+    // initialState=SRV+keepInitialState → 每帧列表开头恒 SRV，故 beginTracking
+    // 恒声明 SRV（不可用 mirrorTexSRV_ 条件值——首帧 false 会声明 RT 与真实
+    // 布局错位，DX12 ClearRenderTargetView 报 barrier access deviceErrors=2）。
+    cmd->beginTrackingTextureState(mirrorTex_, allSub, nvrhi::ResourceStates::ShaderResource);
+    cmd->clearTextureFloat(mirrorTex_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 1.f));
+    cmd->clearDepthStencilTexture(mirrorDepth_, nvrhi::TextureSubresourceSet(),
+                                  true, 1.0f, false, 0);
+    cmd->setTextureState(mirrorTex_, allSub, nvrhi::ResourceStates::RenderTarget);
+
+    // mirrorMvp 写进同一 constants_（主 pass 已完成，本帧不再画主场景，无冲突）。
+    // b2 阴影常量 / sceneLights 状态已由主 pass 登记，复用即可。
+    SceneConstants cb{};
+    std::memcpy(cb.mvp, params.mirrorMvp, sizeof(cb.mvp));
+    const float identity[16] = { 1.f,0.f,0.f,0.f, 0.f,1.f,0.f,0.f,
+                                 0.f,0.f,1.f,0.f, 0.f,0.f,0.f,1.f };
+    std::memcpy(cb.model, identity, sizeof(cb.model));
+    std::memcpy(cb.lightDir, params.lightDir, sizeof(cb.lightDir));
+    cmd->writeBuffer(constants_, &cb, sizeof(cb));
+
+    // 逐 batch 绘制（与 sceneMode 主 pass 完全同款，只换 fb + viewport + mvp）。
+    const nvrhi::Viewport mView(static_cast<float>(w), static_cast<float>(h));
+    for (const SceneMeshBatch& b : sceneBatches_) {
+        nvrhi::GraphicsState bs;
+        bs.setPipeline(pipelineSceneBack_)
+          .setFramebuffer(mirrorFb_)
+          .addBindingSet(b.set)
+          .addVertexBuffer(nvrhi::VertexBufferBinding()
+              .setBuffer(b.vb).setSlot(0).setOffset(0))
+          .setIndexBuffer(nvrhi::IndexBufferBinding()
+              .setBuffer(b.ib).setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+        bs.viewport.addViewportAndScissorRect(mView);
+        cmd->setGraphicsState(bs);
+        nvrhi::DrawArguments args;
+        args.setVertexCount(b.indexCount).setInstanceCount(b.instanceCount);
+        noteDraw();
+        cmd->drawIndexed(args);
+    }
+    mirrorTexSRV_ = false;   // 本列表末态 = RenderTarget（presentMirror 会切回 SRV）
+    static bool mirrorLogged = false;
+    if (!mirrorLogged) {
+        mirrorLogged = true;
+        nl::core::log::infoCh("mirror", "mirror pass ready: ", w, "x", h,
+                              " batches=", sceneBatches_.size());
+    }
+}
+
+void Scene::presentMirror(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
+                          const nvrhi::Viewport& fullViewport) {
+    // 调用守卫在 backend（仅 frame.mirrorEnable 时调）；本函数只查资源就绪。
+    if (!mirrorTex_ || !mirrorFb_ || !framebuffer || mirrorFailed_) return;
+    nvrhi::IDevice* dev = t0Device_ ? t0Device_ : rtDevice_;
+    if (!dev) return;
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    // mirrorTex_ 末态：drawMirror 收尾是 RenderTarget → 切 SRV 供 blit 采样。
+    cmd->setTextureState(mirrorTex_, allSub, nvrhi::ResourceStates::ShaderResource);
+    mirrorTexSRV_ = true;
+
+    if (!psMirror_ || !vsRtPresent_) {
+        // vsRtPresent_ 通常由 T0 ensurePipelines 加载；t0 回落直渲时可能为空，
+        // 这里照 compare 懒建范式补齐（两后端共用同一 ps/vs 字节码）。
+        std::vector<std::uint8_t> pb, vb;
+        const std::string psPath = nl::core::paths::shaderDir() + "/rt.psmirror." + shaderSuffix_;
+        if (!readFileBytes(psPath.c_str(), pb)) {
+            nl::core::log::deviceError("mirror", "failed to load rt.psmirror");
+            mirrorFailed_ = true; return;
+        }
+        nvrhi::ShaderDesc sd;
+        sd.setShaderType(nvrhi::ShaderType::Pixel).setEntryName("main");
+        if (!psMirror_) psMirror_ = dev->createShader(sd, pb.data(), pb.size());
+        if (!vsRtPresent_) {
+            const std::string vsPath = nl::core::paths::shaderDir() + "/rt.vsrtpresent." + shaderSuffix_;
+            if (readFileBytes(vsPath.c_str(), vb)) {
+                sd.setShaderType(nvrhi::ShaderType::Vertex);
+                vsRtPresent_ = dev->createShader(sd, vb.data(), vb.size());
+            }
+        }
+        if (!psMirror_ || !vsRtPresent_) {
+            nl::core::log::deviceError("mirror", "createShader failed"); mirrorFailed_ = true; return;
+        }
+    }
+    if (!mirrorSampler_) {
+        nvrhi::SamplerDesc samDesc;
+        samDesc.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
+        mirrorSampler_ = dev->createSampler(samDesc);
+        if (!mirrorSampler_) { mirrorFailed_ = true; return; }
+    }
+    if (!mirrorPresentLayout_) {
+        nvrhi::BindingLayoutDesc ld;
+        ld.setVisibility(nvrhi::ShaderType::All)
+          .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+          .addItem(nvrhi::BindingLayoutItem::Sampler(0));
+        mirrorPresentLayout_ = dev->createBindingLayout(ld);
+        if (!mirrorPresentLayout_) { mirrorFailed_ = true; return; }
+    }
+    if (!mirrorPresentSet_) {
+        nvrhi::BindingSetDesc sd;
+        sd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, mirrorTex_))
+          .addItem(nvrhi::BindingSetItem::Sampler(0, mirrorSampler_));
+        mirrorPresentSet_ = dev->createBindingSet(sd, mirrorPresentLayout_);
+        if (!mirrorPresentSet_) {
+            // mirrorTex_ 换了句柄（resize 重建）→ set 要跟着重建：先清再建。
+            mirrorPresentSet_ = nullptr;
+            sd = nvrhi::BindingSetDesc();
+            sd.addItem(nvrhi::BindingSetItem::Texture_SRV(0, mirrorTex_))
+              .addItem(nvrhi::BindingSetItem::Sampler(0, mirrorSampler_));
+            mirrorPresentSet_ = dev->createBindingSet(sd, mirrorPresentLayout_);
+            if (!mirrorPresentSet_) { mirrorFailed_ = true; return; }
+        }
+    }
+    if (!mirrorPresentPSO_) {
+        const nvrhi::FramebufferInfo info = framebuffer->getFramebufferInfo();
+        nvrhi::GraphicsPipelineDesc pd;
+        pd.setPrimType(nvrhi::PrimitiveType::TriangleStrip)
+          .setVertexShader(vsRtPresent_)
+          .setFragmentShader(psMirror_)
+          .addBindingLayout(mirrorPresentLayout_);
+        pd.renderState.rasterState
+          .setFrontCounterClockwise(true)
+          .setFillMode(nvrhi::RasterFillMode::Solid)
+          .setCullMode(nvrhi::RasterCullMode::None);
+        pd.renderState.depthStencilState.disableDepthTest().disableDepthWrite().disableStencil();
+        mirrorPresentPSO_ = dev->createGraphicsPipeline(pd, info);
+        if (!mirrorPresentPSO_) { mirrorFailed_ = true; return; }
+    }
+    nvrhi::GraphicsState gs;
+    gs.setPipeline(mirrorPresentPSO_).setFramebuffer(framebuffer).addBindingSet(mirrorPresentSet_);
+    // 右下角贴片 = 视口的 1/4 宽 × 1/4 高，留 2% 边距。
+    // NVRHI Viewport 的 y 向下增大（minY=屏幕顶），故底边 = maxY 一侧——
+    // 第一版误用 minY 锚把贴片放到了右上角（截图实测发现，此处勘误）。
+    const float w = fullViewport.maxX - fullViewport.minX;
+    const float h = fullViewport.maxY - fullViewport.minY;
+    const float mw = w * 0.25f, mh = h * 0.25f;
+    const float mx0 = fullViewport.maxX - mw - w * 0.02f;
+    const float my0 = fullViewport.maxY - mh - h * 0.02f;
+    const nvrhi::Viewport corner(mx0, mx0 + mw, my0, my0 + mh, 0.0f, 1.0f);
+    gs.viewport.addViewportAndScissorRect(corner);
+    cmd->setGraphicsState(gs);
+    nvrhi::DrawArguments vargs; vargs.setVertexCount(4);
+    noteDraw();
+    cmd->draw(vargs);
+}
+
+void Scene::shutdownMirror() {
+    // device 存活期释放（S15 UAF）；逆序：present set → PSO → shader → layout/sampler → fb → tex/depth。
+    mirrorPresentSet_ = nullptr;
+    mirrorPresentPSO_ = nullptr;
+    psMirror_ = nullptr;
+    mirrorPresentLayout_ = nullptr;
+    mirrorSampler_ = nullptr;
+    mirrorFb_ = nullptr;
+    mirrorTex_ = nullptr;
+    mirrorDepth_ = nullptr;
+    mirrorW_ = 0; mirrorH_ = 0;
+    mirrorTexSRV_ = false;
+    mirrorFailed_ = false;
+}
+
+// ============================================================================
 // M10.0（S10）：--mode probe-place —— 屏幕探针 cascade 布点（Q10-1/Q10-2 拍板
 // UE 口径）。复用面（S10-PLAN「复用决策」同 shadow/reference 口径）：
 //   * initVisbuf(pulling=true)：M7.1/7.2 全套 vis + 材质资源（M10.1 直光查表机器
@@ -10530,6 +10751,15 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
             cmd->drawIndexed(args);
         }
         instanceTrackSRV_ = true;   // 本列表末态 = SRV（所有绑定 require 已插 barrier）
+        // M-RT0：后视镜二次绘制——主 pass 已用 constants_ 画完，这里以 mirrorMvp
+        // 覆写同一 CB 把 sceneBatches_ 再画一遍到半分辨率 mirrorFb_（旗标关 = 整块
+        // 不进，逐字节保形）。present 阶段由 backend 调 presentMirror 贴角落。
+        if (params.mirrorEnable) {
+            std::string mirrorErr;
+            drawMirror(cmd, params, viewport.maxX - viewport.minX,
+                       viewport.maxY - viewport.minY, mirrorErr);
+            if (!mirrorErr.empty()) nl::core::log::deviceError("mirror", mirrorErr);
+        }
         // T0 T2：HDR 场景色 → swapchain 直通合成（HUD/overlay 在其后叠加）。
         if (t0Active) {
             std::string tmErr;
@@ -12468,6 +12698,8 @@ void Scene::shutdown() {
     // 中性纹理与阴影组已收编其内（merge 冲突解）；master 侧 S15 VSM/HZB/分配器
     // 组不在其内，就地保留。
     shutdownEcsScene();
+    // M-RT0：后视镜 RT/present 资源（device 存活期释放，S15 UAF 纪律）。
+    shutdownMirror();
     // M15.0：VSM 资源随场景一并清空。
     vsmPagePool_ = nullptr;
     vsmPageTable_ = nullptr;

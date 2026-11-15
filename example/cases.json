@@ -15819,6 +15819,57 @@
      }
     }
    ]
+  },
+  {
+   "id": "s8.3",
+   "label": "S8.3",
+   "name": "后视镜 render-to-texture（--mirror 真后向相机 + 半分辨率 RT + 角落贴片）",
+   "tag": "s8.3",
+   "date": "2026-11-16",
+   "summary": "M-RT0（C 轨收官后 B 项引擎残留能力，2026-11-16 用户「后视镜做吧」+「按默认」拍板方案②/Q1~Q5）。推翻 P8-CAMERA-PLAN 2026-11-10「后视镜不做」的排期结论（非永久禁令），独立新里程碑。Q1 真后向相机（临时 OrbitCamera yaw+180，fov/aspect/dist 同源，UV 不翻转）；Q2 Scene::drawMirror 复用 sceneBatches_+pipelineSceneBack_ 二次绘制到独立半分辨率 RT；Q3 落码勘误 RGBA8→RGBA32F（scene PSO 锁 RGBA32F+D32，同格式零新管线、半分辨率仍省 3/4 像素）；Q4 rt.psmirror + 右下 1/4 viewport quad blit（不动 RmlUi/sprite2d）；Q5 kStage→S8.3，--mirror 缺省关=既有基线零影响。复用 T0 离屏 RT 基建（不重建）、不碰 exports/Bindings（72 条不变）。状态纪律：mirrorTex_ 逐帧 RT↔SRV（无 permanent）、独立 D32、GPU 资源进 shutdown 清单（S15 UAF）；constants_ 主 pass 后写 mirrorMvp 第二版（同 cmd list，maxVersions=16）。三处参考：UE SceneCaptureComponent2D（独立后向相机渲到纹理）、bevy ViewTarget/ManualTextureView、Carrot RenderGraph。",
+   "acceptance": "双后端 BUILD OK + selftest 16/16 + GPU 用例全绿；example/s8.3/run.bat verify 全绿（mirror-scene 双后端 bytes 对拍 + mirror pass ready log 锚）；回归 --only s8.3 双后端 ALL GREEN；展示台 --check exit 0（S8.3 卡齐）；旗标关旧 --mode scene 用例 bytes 逐字节不变。",
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "mirror-scene",
+     "name": "后视镜：真后向相机 + 右下角镜像贴片（night-demo 场景）",
+     "kind": "pair",
+     "note": "--mode scene + --mirror：主 pass 后以 yaw+180 后向相机重画 sceneBatches_ 到半分辨率 RT，present 贴右下 1/4。log 锚 mirror pass ready 首帧一次。双后端 PNG 各自基线。",
+     "baselines": {
+      "dx12": "example/s8.3/mirror-scene-dx12.png",
+      "vulkan": "example/s8.3/mirror-scene-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/night-demo/night-demo.scene",
+      "--mirror",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "40",
+      "--pitch",
+      "11",
+      "--dist",
+      "12"
+     ],
+     "command": "viewer.exe --mode scene --scene <night-demo.scene> --mirror --no-hud --screenshot <out.png> --frames 8 --size 960x540 --yaw 40 --pitch 11 --dist 12",
+     "script": "example/s8.3/run.bat verify",
+     "exe": {
+      "dx12": "build/DX12/viewer.exe",
+      "vulkan": "build/VULKAN/viewer.exe"
+     }
+    }
+   ]
   }
  ]
 }
